@@ -10,9 +10,10 @@ const workspace = resolveWorkspace(root);
 const contract = JSON.parse(
   await fs.readFile(path.join(root, "deploy/runtime-contract.json"), "utf8")
 );
-const configDir = process.argv[2]
-  ? path.resolve(root, process.argv[2])
-  : path.join(workspace, contract.paths.napcatState, "config");
+if (process.argv.length > 2) {
+  throw new Error("NapCat 配置目录由 runtime contract 固定，不接受目录参数。");
+}
+const configDir = path.join(workspace, contract.paths.napcatConfig);
 const env = dotenv.parse(
   await fs.readFile(path.join(workspace, contract.paths.secrets), "utf8")
 );

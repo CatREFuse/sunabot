@@ -161,7 +161,7 @@ Provider 请求使用应用启动时安装的统一出站 dispatcher。显式代
 - `workspace/business/config/sunabot.json`：应用配置，不保存明文密钥；
 - `workspace/business/agents/<agentId>/`：Agent 人格、提示词和人工维护文件；
 - `workspace/business/media/`：需要随业务恢复的图片和持久附件；
-- `workspace/runtime/napcat/`：QQ 登录态与 NapCat 配置；
+- `workspace/runtime/napcat/`：QQ 登录态与 NapCat 运行状态；NapCat 配置唯一目录为 `workspace/runtime/napcat/config-full`，由 runtime contract 的 `paths.napcatConfig` 固定；
 - `workspace/cache/`：可重建缓存，不进入快照；
 - Agent 人格和最终提示词：需要人工审阅和管理台编辑；
 - 单个附件 manifest、好友/群目录缓存：体积小且可重建；

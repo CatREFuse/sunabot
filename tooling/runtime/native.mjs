@@ -159,7 +159,7 @@ async function prepareNativeComponent(stage, finalPath) {
   }
   await fsPromises.rm(configPath, { recursive: true, force: true });
   await fsPromises.symlink(
-    path.join(workspace, contract.paths.napcatState, "config"),
+    path.join(workspace, contract.paths.napcatConfig),
     configPath,
     "dir"
   );
@@ -178,7 +178,7 @@ async function prepareWorkspace() {
     path.dirname(contract.paths.sessionQueue),
     contract.paths.media,
     contract.paths.napcatState,
-    path.join(contract.paths.napcatState, "config"),
+    contract.paths.napcatConfig,
     path.join(contract.paths.napcatState, "qq"),
     path.dirname(contract.paths.secrets),
     contract.paths.logs,

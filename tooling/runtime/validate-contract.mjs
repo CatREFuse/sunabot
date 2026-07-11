@@ -8,12 +8,30 @@ import { PROXY_RUNTIME_CONTRACT } from "../../packages/platform/proxy.mjs";
 const root = resolveProjectRoot(import.meta.url);
 const contractPath = path.join(root, "deploy/runtime-contract.json");
 const lockPath = path.join(root, "components/component.lock.json");
-const [contract, lock, packageJson, dockerfile, compose] = await Promise.all([
+const [
+  contract,
+  schema,
+  lock,
+  packageJson,
+  dockerfile,
+  compose,
+  supervisor,
+  nativeRuntime,
+  nativeNapcatStart,
+  configureNapcat,
+  runtimeSmokeLayout
+] = await Promise.all([
   readJson(contractPath),
+  readJson(path.join(root, "deploy/runtime-contract.schema.json")),
   readJson(lockPath),
   readJson(path.join(root, "package.json")),
   fs.readFile(path.join(root, "deploy/docker/Dockerfile"), "utf8"),
-  fs.readFile(path.join(root, "deploy/docker/compose.yml"), "utf8")
+  fs.readFile(path.join(root, "deploy/docker/compose.yml"), "utf8"),
+  fs.readFile(path.join(root, "deploy/docker/supervisor.mjs"), "utf8"),
+  fs.readFile(path.join(root, "tooling/runtime/native.mjs"), "utf8"),
+  fs.readFile(path.join(root, "deploy/native/bin/start-napcat.sh"), "utf8"),
+  fs.readFile(path.join(root, "tooling/runtime/configure-napcat-client.mjs"), "utf8"),
+  fs.readFile(path.join(root, "tooling/quality/runtime-smoke/shared.ts"), "utf8")
 ]);
 const errors = [];
 
@@ -31,6 +49,22 @@ expect(
 );
 expect(path.isAbsolute(contract.paths.workspace), "workspace path must be absolute");
 expect(path.isAbsolute(contract.paths.installPrefix), "installPrefix must be absolute");
+expect(
+  contract.paths.napcatConfig === "runtime/napcat/config-full",
+  "NapCat config must use runtime/napcat/config-full"
+);
+expect(
+  contract.paths.napcatConfig.startsWith(`${contract.paths.napcatState}/`),
+  "NapCat config must be contained by the NapCat state root"
+);
+expect(
+  schema.properties?.paths?.required?.includes("napcatConfig"),
+  "runtime contract schema must require paths.napcatConfig"
+);
+expect(
+  schema.properties?.paths?.properties?.napcatConfig?.const === contract.paths.napcatConfig,
+  "runtime contract schema must fix the NapCat config path"
+);
 
 for (const [name, value] of Object.entries(contract.paths)) {
   if (name === "workspace" || name === "installPrefix") continue;
@@ -53,6 +87,35 @@ expect(compose.includes("SUNABOT_PROXY_MODE"), "Compose must pass the outbound p
 expect(
   compose.includes("SUNABOT_PROXY_DISCOVERED_URL"),
   "Compose must pass credential-free WSL proxy discovery"
+);
+expect(
+  dockerfile.includes("napcatConfig)")
+    && dockerfile.includes('ln -s "$SUNABOT_WORKSPACE/$napcat_config" /app/napcat/config'),
+  "Docker NapCat config symlink must be resolved from paths.napcatConfig"
+);
+expect(
+  supervisor.includes("contract.paths.napcatConfig")
+    && !supervisor.includes('path.join(contract.paths.napcatState, "config")'),
+  "Docker supervisor must use paths.napcatConfig"
+);
+expect(
+  nativeRuntime.includes("contract.paths.napcatConfig")
+    && !nativeRuntime.includes('path.join(contract.paths.napcatState, "config")'),
+  "Native installer must use paths.napcatConfig"
+);
+expect(
+  nativeNapcatStart.includes('readRelativePath("napcatConfig")')
+    && !legacyNapcatConfigLiteral(nativeNapcatStart),
+  "Native NapCat start must resolve paths.napcatConfig from the runtime contract"
+);
+expect(
+  configureNapcat.includes("contract.paths.napcatConfig")
+    && !configureNapcat.includes('path.join(workspace, contract.paths.napcatState, "config")'),
+  "NapCat configure tooling must use paths.napcatConfig"
+);
+expect(
+  runtimeSmokeLayout.includes('relativeContractPath(paths.napcatConfig, "paths.napcatConfig")'),
+  "runtime smoke must load paths.napcatConfig from the runtime contract"
 );
 
 for (const [name, component] of Object.entries(lock.components ?? {})) {
@@ -102,6 +165,10 @@ function arraysEqual(left, right) {
     && Array.isArray(right)
     && left.length === right.length
     && left.every((value, index) => value === right[index]);
+}
+
+function legacyNapcatConfigLiteral(source) {
+  return /runtime[\\/]napcat[\\/]config(?!-full)(?=$|[\\/'"\s])/.test(source);
 }
 
 async function readJson(filePath) {

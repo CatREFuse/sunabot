@@ -84,7 +84,7 @@ async function prepareWorkspace() {
     path.dirname(contract.paths.sessionQueue),
     contract.paths.media,
     contract.paths.napcatState,
-    path.join(contract.paths.napcatState, "config"),
+    contract.paths.napcatConfig,
     path.join(contract.paths.napcatState, "qq"),
     path.dirname(contract.paths.secrets),
     contract.paths.logs,
@@ -99,7 +99,7 @@ async function prepareWorkspace() {
     }))
   );
 
-  const napcatConfig = path.join(workspace, contract.paths.napcatState, "config");
+  const napcatConfig = path.join(workspace, contract.paths.napcatConfig);
   if (!(await exists(path.join(napcatConfig, "napcat.json")))) {
     await fs.cp("/app/napcat-default-config", napcatConfig, {
       recursive: true,

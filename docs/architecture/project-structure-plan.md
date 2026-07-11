@@ -217,7 +217,7 @@ workspace/
 │   ├── data/                         # 主库、队列库与可恢复业务索引
 │   └── media/                        # 生成图片和持久业务附件
 ├── runtime/
-│   ├── napcat/                       # QQ 登录态与 NapCat 配置
+│   ├── napcat/                       # QQ 登录态；配置固定在 config-full/
 │   ├── logs/
 │   └── tmp/
 ├── cache/                            # 可重建附件/解析缓存
@@ -243,7 +243,7 @@ workspace/
 - release/version、支持架构和 Node 小版本；
 - 代码安装前缀和 `SUNABOT_WORKSPACE`；
 - OneBot URL、管理端口、NapCat WebUI 端口；
-- media 根、NapCat 状态根、secret 文件；
+- media 根、NapCat 状态根、唯一 NapCat 配置目录 `runtime/napcat/config-full`、secret 文件；
 - 组件版本、digest、checksum 和许可证；
 - 启动顺序、优雅停止时间、liveness、readiness 和 capability probe。
 

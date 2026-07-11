@@ -81,6 +81,8 @@ workspace/business/media/
 workspace/runtime/napcat/
 ```
 
+`workspace/runtime/napcat/config-full/` 是唯一 NapCat 配置目录；Docker 与 Native 均从 runtime contract 的 `paths.napcatConfig` 读取该路径，迁移后不得另建 `runtime/napcat/config/`。
+
 排除：
 
 ```text

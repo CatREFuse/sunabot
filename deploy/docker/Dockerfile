@@ -47,7 +47,11 @@ RUN apt-get update \
         tini=0.19.0-1 \
     && rm -rf /var/lib/apt/lists/*
 
-RUN rm -rf /app/napcat /app/.config/QQ \
+COPY --chown=1000:1000 deploy/runtime-contract.json /srv/sunabot/deploy/runtime-contract.json
+
+RUN napcat_config="$(/usr/local/bin/node -e 'const fs=require("node:fs");const contract=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));const value=contract.paths[process.argv[2]];if(typeof value!=="string"||value.startsWith("/")||value.split(/[\\/]/).includes(".."))throw new Error("invalid runtime path");process.stdout.write(value)' /srv/sunabot/deploy/runtime-contract.json napcatConfig)" \
+    && napcat_state="$(/usr/local/bin/node -e 'const fs=require("node:fs");const contract=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));const value=contract.paths[process.argv[2]];if(typeof value!=="string"||value.startsWith("/")||value.split(/[\\/]/).includes(".."))throw new Error("invalid runtime path");process.stdout.write(value)' /srv/sunabot/deploy/runtime-contract.json napcatState)" \
+    && rm -rf /app/napcat /app/.config/QQ \
     && mkdir -p \
         /app/napcat \
         /app/napcat-default-config \
@@ -56,8 +60,8 @@ RUN rm -rf /app/napcat /app/.config/QQ \
     && unzip -q /app/NapCat.Shell.zip -d /app/napcat \
     && cp -a /app/napcat/config/. /app/napcat-default-config/ \
     && rm -rf /app/napcat/config \
-    && ln -s /srv/sunabot/workspace/runtime/napcat/config /app/napcat/config \
-    && ln -s /srv/sunabot/workspace/runtime/napcat/qq /app/.config/QQ \
+    && ln -s "$SUNABOT_WORKSPACE/$napcat_config" /app/napcat/config \
+    && ln -s "$SUNABOT_WORKSPACE/$napcat_state/qq" /app/.config/QQ \
     && chown -R 1000:1000 \
         /app/napcat \
         /app/napcat-default-config \
@@ -72,7 +76,6 @@ COPY --from=build --chown=1000:1000 /srv/sunabot/AGENTS.md ./AGENTS.md
 COPY --from=build --chown=1000:1000 /srv/sunabot/node_modules ./node_modules
 COPY --from=build --chown=1000:1000 /srv/sunabot/dist ./dist
 COPY --from=build --chown=1000:1000 /srv/sunabot/apps/admin-web/dist ./apps/admin-web/dist
-COPY --chown=1000:1000 deploy/runtime-contract.json ./deploy/runtime-contract.json
 COPY --chown=1000:1000 deploy/docker/supervisor.mjs ./deploy/docker/supervisor.mjs
 COPY --chown=1000:1000 deploy/docker/healthcheck.mjs ./deploy/docker/healthcheck.mjs
 COPY --chown=1000:1000 components/component.lock.json ./components/component.lock.json

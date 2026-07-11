@@ -36,8 +36,8 @@ export async function loadRuntimeLayout(root: string): Promise<RuntimeLayout> {
   const paths = asRecord(contract.paths, "运行时契约 paths");
   const config = relativeContractPath(paths.config, "paths.config");
   const secrets = relativeContractPath(paths.secrets, "paths.secrets");
-  const napcatState = relativeContractPath(paths.napcatState, "paths.napcatState");
-  return { config, secrets, napcatConfig: path.join(napcatState, "config-full") };
+  const napcatConfig = relativeContractPath(paths.napcatConfig, "paths.napcatConfig");
+  return { config, secrets, napcatConfig };
 }
 
 export async function readEnvTextWithin(filePath: string, workspace: string, label: string) {

@@ -23,6 +23,7 @@
     "sessionQueue": "business/data/session-queue.sqlite",
     "media": "business/media/images",
     "napcatState": "runtime/napcat",
+    "napcatConfig": "runtime/napcat/config-full",
     "secrets": "secrets/runtime.env",
     "logs": "runtime/logs",
     "temporary": "runtime/tmp",

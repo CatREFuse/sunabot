@@ -65,10 +65,10 @@ Compose 只在该运行容器上发布回环管理端口；NapCat 不发布独�
 Sunabot 与 NapCat 必须运行在同一 Linux/WSL 环境，并看到同一个 `/srv/sunabot/workspace`。NapCat 的 OneBot 配置仍使用固定回环 URL：
 
 ```bash
-npm run qq:configure -- /path/to/napcat/config
+npm run qq:configure
 ```
 
-由同一 systemd 用户会话管理两个进程。Sunabot 必须先监听 8787；NapCat 可持续重连，不需要其他网络地址。
+配置固定写入 runtime contract 的 `runtime/napcat/config-full`，不接受另一套目录。由同一 systemd 用户会话管理两个进程。Sunabot 必须先监听 8787；NapCat 可持续重连，不需要其他网络地址。
 
 ## 验收
 
