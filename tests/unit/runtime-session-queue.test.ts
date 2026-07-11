@@ -7,7 +7,7 @@ import type {
   ProviderTurnResult
 } from "../../adapters/model/openaiProvider.js";
 import type { OneBotGateway } from "../../adapters/onebot/onebotGateway.js";
-import type { RenderedPromptRequest } from "../../src/promptSystem.js";
+import type { RenderedPromptRequest } from "../../services/agent/promptSystem.js";
 import { parseIncomingMessage, SunaRuntime } from "../../src/runtime.js";
 import { SessionStore } from "../../services/sessions/sessionStore.js";
 import type { ConversationRecord, OneBotEvent } from "../../src/types.js";

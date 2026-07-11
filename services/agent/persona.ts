@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { AppConfig } from "./types.js";
-import { resolveProjectPath } from "./config.js";
-import { applicationDataStore, type MemoryDataSource } from "./dataStore.js";
+import { AppConfig } from "../../src/types.js";
+import { resolveProjectPath } from "../../src/config.js";
+import { applicationDataStore, type MemoryDataSource } from "../../src/dataStore.js";
 
 interface PersonaFile {
   name: string;

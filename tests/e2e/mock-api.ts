@@ -1,7 +1,7 @@
 import type { Page, Route } from "@playwright/test";
 import sharp from "sharp";
-import { promptDefinitionById } from "../../src/promptCatalog.js";
-import { defaultPromptContent } from "../../src/promptDefaults.js";
+import { promptDefinitionById } from "../../services/agent/promptCatalog.js";
+import { defaultPromptContent } from "../../services/agent/promptDefaults.js";
 
 const imageFixture = sharp({
   create: { width: 640, height: 640, channels: 4, background: "#d71921" }

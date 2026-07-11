@@ -1,4 +1,4 @@
-import type { AppConfig } from "./types.js";
+import type { AppConfig } from "../../src/types.js";
 import type { PromptFileKind, PromptVariableDefinition } from "./promptSystem.js";
 
 export interface PromptFileDefinition {

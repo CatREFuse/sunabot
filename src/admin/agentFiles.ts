@@ -2,13 +2,13 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { loadConfig, resolveProjectPath } from "../config.js";
-import { PROMPT_FILE_DEFINITIONS, type PromptFileDefinition } from "../promptCatalog.js";
+import { PROMPT_FILE_DEFINITIONS, type PromptFileDefinition } from "../../services/agent/promptCatalog.js";
 import {
   extractPromptVariables,
   parseFinalPromptTemplate,
   PromptTemplateError,
   validatePromptContent
-} from "../promptSystem.js";
+} from "../../services/agent/promptSystem.js";
 import type { AppConfig } from "../types.js";
 import { AdminApiError, badRequest, conflict, notFound } from "./errors.js";
 import {

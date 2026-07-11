@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BotConfig, ProviderConfig } from "../../src/types.js";
-import type { RenderedPromptRequest } from "../../src/promptSystem.js";
+import type { RenderedPromptRequest } from "../../services/agent/promptSystem.js";
 
 const appendRequestLog = vi.hoisted(() => vi.fn(async () => undefined));
 const runWebsearch = vi.hoisted(() => vi.fn(async () => ({

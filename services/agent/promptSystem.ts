@@ -1,4 +1,4 @@
-import type { ChatMessage } from "./types.js";
+import type { ChatMessage } from "../../src/types.js";
 
 export type PromptFileKind = "fragment" | "final";
 

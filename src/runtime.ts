@@ -71,7 +71,7 @@ import {
   type ProviderDeferredTurn
 } from "../adapters/model/openaiProvider.js";
 import type { ProviderLogContext } from "../packages/contracts/model/modelGateway.js";
-import { loadPersona, AgentPersona } from "./persona.js";
+import { loadPersona, AgentPersona } from "../services/agent/persona.js";
 import { OneBotGateway, OneBotGatewayDelegate } from "../adapters/onebot/onebotGateway.js";
 import { appendRequestLog } from "./requestLog.js";
 import { SenderNameResolver, senderDisplayName, senderIdentity } from "../services/conversations/senderName.js";
@@ -85,15 +85,15 @@ import {
 } from "../services/sessions/sessionCoordinator.js";
 import { SessionStore, type OutboxRecord, type SessionEventRecord } from "../services/sessions/sessionStore.js";
 import { TOOL_CALL_TIMEOUT_MS } from "../services/tools/tools.js";
-import { promptDefinitionById } from "./promptCatalog.js";
-import { defaultPromptContent as defaultFinalPromptContent } from "./promptDefaults.js";
+import { promptDefinitionById } from "../services/agent/promptCatalog.js";
+import { defaultPromptContent as defaultFinalPromptContent } from "../services/agent/promptDefaults.js";
 import {
   parseFinalPromptTemplate,
   renderFinalPromptTemplate,
   type PromptVariableValue,
   type RenderedPromptRequest
-} from "./promptSystem.js";
-import { buildConversationPromptVariables } from "./persona.js";
+} from "../services/agent/promptSystem.js";
+import { buildConversationPromptVariables } from "../services/agent/persona.js";
 
 const DEFAULT_CONTEXT_MESSAGE_LIMIT = 48;
 const MAX_STORED_CONVERSATION_MESSAGES = 2000;

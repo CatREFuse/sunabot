@@ -5,7 +5,7 @@ import {
   parseFinalPromptTemplate,
   renderFinalPromptTemplate,
   validatePromptFragment
-} from "../../src/promptSystem.js";
+} from "../../services/agent/promptSystem.js";
 
 describe("prompt system", () => {
   it("renders both variable syntaxes and wraps raw prompt fragments in the final template", () => {

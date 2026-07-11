@@ -22,7 +22,7 @@ import {
   upsertLongTermMemoryFacts
 } from "../../src/memory.js";
 import type { AppConfig } from "../../src/types.js";
-import { loadPersona } from "../../src/persona.js";
+import { loadPersona } from "../../services/agent/persona.js";
 import { createAdminTestConfig } from "./admin-fixtures.js";
 
 describe("memory v2 storage", () => {

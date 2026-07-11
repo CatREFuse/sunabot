@@ -30,7 +30,7 @@ import { MemoryRecallInput } from "../../src/memory.js";
 import { appendRequestLog } from "../../src/requestLog.js";
 import { SELFIE_TOOL_NAME, SelfieRunner, selfieTool } from "../../services/tools/selfieTool.js";
 import { runWebsearch, WebsearchInput } from "./webSearchTool.js";
-import type { OpenAIToolDefinition, RenderedPromptRequest } from "../../src/promptSystem.js";
+import type { OpenAIToolDefinition, RenderedPromptRequest } from "../../services/agent/promptSystem.js";
 import { providerToolExecutionMode, resolveProviderToolDefinitions } from "../../services/tools/toolRegistry.js";
 import type { ProviderLogContext } from "../../packages/contracts/model/modelGateway.js";
 export type { ProviderLogContext } from "../../packages/contracts/model/modelGateway.js";

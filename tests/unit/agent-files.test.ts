@@ -17,7 +17,7 @@ vi.mock("../../src/config.js", () => ({
 
 import { AGENT_FILE_DEFINITIONS, AgentFileRepository } from "../../src/admin/agentFiles.js";
 import { AdminMutationMutex } from "../../src/admin/mutation.js";
-import { defaultPromptContent } from "../../src/promptDefaults.js";
+import { defaultPromptContent } from "../../services/agent/promptDefaults.js";
 
 let rootDir = "";
 let workspaceDir = "";

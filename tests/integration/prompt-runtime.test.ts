@@ -2,14 +2,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { PROMPT_FILE_DEFINITIONS } from "../../src/promptCatalog.js";
+import { PROMPT_FILE_DEFINITIONS } from "../../services/agent/promptCatalog.js";
 import {
   extractPromptVariables,
   parseFinalPromptTemplate,
   renderFinalPromptTemplate,
   validatePromptFragment,
   type PromptVariableValue
-} from "../../src/promptSystem.js";
+} from "../../services/agent/promptSystem.js";
 import { defaultConfig } from "../../src/config.js";
 
 const workspace = path.join(process.cwd(), "workspace/agents/plana");

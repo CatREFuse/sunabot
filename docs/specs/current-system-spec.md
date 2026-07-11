@@ -199,7 +199,7 @@ QQ Runtime 不支持远程 OneBot 或远程 NapCat。Docker 下 Sunabot 与 NapC
 | 联网搜索 | `adapters/model/webSearchTool.ts`, `adapters/model/webSearchSettings.ts` |
 | Bash、图像生成、自拍 | `services/tools/bashTool.ts`, `services/tools/generateImgTool.ts`, `services/tools/selfieTool.ts` |
 | 图片重试和外发 | `adapters/model/imageGenerationRetry.ts`, `services/delivery/outboundMedia.ts` |
-| 人格与提示词 | `src/persona.ts`, `src/promptCatalog.ts`, `src/promptDefaults.ts`, `src/promptSystem.ts` |
+| 人格与提示词 | `services/agent/` |
 | 记忆 CRUD、合并、召回和批次 | `src/memory.ts` |
 | 记忆调度 | `src/memoryScheduler.ts` |
 | 附件接入、解析、缓存和上下文 | `src/attachments/` |
