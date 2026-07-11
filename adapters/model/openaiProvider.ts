@@ -28,6 +28,7 @@ import { CODEX_TOOL_NAME, MEMORY_RECALL_TOOL_NAME, WEBSEARCH_TOOL_NAME } from ".
 import { GENERATE_IMG_TOOL_NAME, GenerateImageRunner, runGenerateImg, generateImgTool } from "../../services/tools/generateImgTool.js";
 import { MemoryRecallInput } from "../../services/memory/memoryService.js";
 import { appendRequestLog } from "../../src/requestLog.js";
+import { WORKSPACE_LAYOUT } from "../../packages/platform/workspaceLayout.js";
 import { SELFIE_TOOL_NAME, SelfieRunner, selfieTool } from "../../services/tools/selfieTool.js";
 import { runWebsearch, WebsearchInput } from "./webSearchTool.js";
 import type { OpenAIToolDefinition, RenderedPromptRequest } from "../../services/agent/promptSystem.js";
@@ -317,7 +318,7 @@ export class OpenAIProvider {
     if (envToken) return envToken;
     const providerToken = this.readEnvValue(resolveProjectPath(this.provider.envFile), this.provider.apiKeyEnv);
     if (providerToken) return providerToken;
-    const projectToken = this.readEnvValue(getWorkspacePath(".env"), this.provider.apiKeyEnv);
+    const projectToken = this.readEnvValue(getWorkspacePath(WORKSPACE_LAYOUT.secretsEnv), this.provider.apiKeyEnv);
     if (projectToken) return projectToken;
     const runtimeToken = process.env[this.provider.apiKeyEnv];
     if (runtimeToken) return runtimeToken;
@@ -602,7 +603,7 @@ export class OpenAIProvider {
       throw new Error(text || "没有收到生图结果。");
     }
 
-    const imageDir = getWorkspacePath("artifacts/images");
+    const imageDir = getWorkspacePath(WORKSPACE_LAYOUT.mediaImages);
     fs.mkdirSync(imageDir, { recursive: true });
     const fileName = `${new Date().toISOString().replace(/[:.]/g, "-")}-${nanoid(8)}.png`;
     const filePath = path.join(imageDir, fileName);
@@ -1121,7 +1122,7 @@ function normalizeGeminiReasoningEffort(effort: ProviderConfig["reasoningEffort"
 }
 
 export async function resolveLocalInputImage(filePath: string) {
-  const cacheRoot = getWorkspacePath("artifacts/file-cache");
+  const cacheRoot = getWorkspacePath(WORKSPACE_LAYOUT.attachmentCache);
   try {
     const sourceStats = await fs.promises.lstat(filePath);
     if (sourceStats.isSymbolicLink() || !sourceStats.isFile()) return null;

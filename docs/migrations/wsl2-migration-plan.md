@@ -73,15 +73,12 @@ Git bundle 保留提交历史和里程碑标签，避免依赖尚未配置的远
 停服并 checkpoint 后打包：
 
 ```text
-workspace/config/
-workspace/agents/
-workspace/artifacts/sunabot.sqlite
-workspace/artifacts/session-queue.sqlite
-workspace/artifacts/images/
-workspace/artifacts/file-cache/
-workspace/napcat/
-workspace/napcat/config/
-workspace/napcat/config-full/
+workspace/business/config/
+workspace/business/agents/
+workspace/business/data/sunabot.sqlite
+workspace/business/data/session-queue.sqlite
+workspace/business/media/
+workspace/runtime/napcat/
 ```
 
 排除：
@@ -93,15 +90,16 @@ workspace/napcat/config-full/
 *.out
 chrome-profile*/
 workspace/backups/
-workspace/artifacts/bot-behavior-*.png
-workspace/artifacts/qq-file-reading-smoke-test.txt
+workspace/cache/
+workspace/runtime/logs/
+workspace/runtime/tmp/
 ```
 
 NapCat 目录约 260 MB，图片约 149 MB，附件缓存约 30 MB；运行包应预留至少 1 GB 空间。传输前生成 SHA-256 清单，目标机解包后逐项核验。
 
 ### 3.3 凭据包
 
-`workspace/.env` 属于终端私有数据，不进入 Git。迁移时随 workspace 加密快照恢复到 `/srv/sunabot/workspace/.env`，权限设为 `0600`。至少包含：
+`workspace/secrets/runtime.env` 属于终端私有数据，不进入 Git，也不能混入普通业务数据包。迁移时使用独立密钥加密恢复到 `/srv/sunabot/workspace/secrets/runtime.env`，权限设为 `0600`。至少包含：
 
 ```text
 SUNABOT_HOST=0.0.0.0
@@ -187,16 +185,16 @@ docker-compose-plugin
 
 1. 把源码恢复到 `/srv/sunabot`。
 2. 把运行数据恢复到同一路径下的 `workspace/`。
-3. 恢复 `workspace/.env` 并设置 `chmod 600 workspace/.env`。
-4. 确认 `workspace/config/sunabot.json` 使用 `workspace/.env` 和 `workspace/agents/plana`。
+3. 恢复 `workspace/secrets/runtime.env` 并设置 `chmod 600 workspace/secrets/runtime.env`。
+4. 确认 `workspace/business/config/sunabot.json` 使用 `workspace/secrets/runtime.env` 和 `workspace/business/agents/plana`。
 5. 在 WSL 内执行 `npm ci`，不要复制 macOS `node_modules`。
 6. 执行 `npm run check && npm test && npm run build`。
-7. 在 `workspace/.env` 设置 `NAPCAT_ACCOUNT` 与 `ONEBOT_ACCESS_TOKEN`。
+7. 在 `workspace/secrets/runtime.env` 设置 `NAPCAT_ACCOUNT` 与 `ONEBOT_ACCESS_TOKEN`。
 8. 执行 `npm run qq:configure`，生成固定回环 OneBot 配置。
 9. 执行 `npm run qq:up`，启动 `deploy/docker/compose.yml` 定义的整个 QQ Runtime。
 10. 完成 API、管理台、OneBot、文本消息和本地路径图片实测。
 
-Compose 中 NapCat 共享 Sunabot 的网络命名空间与 `/srv/sunabot/workspace` 挂载，因此反向 WebSocket 固定为 `ws://127.0.0.1:8787/onebot/v11/ws`，图片固定使用共享绝对路径。迁移后不得恢复 `host.docker.internal`、Compose 服务名或远程 OneBot 地址。
+Compose 只有一个 `sunabot-qq-runtime` service 和一个 `/srv/sunabot/workspace` 挂载；容器内 Sunabot 与 NapCat 两个受监督进程共享网络命名空间，因此反向 WebSocket 固定为 `ws://127.0.0.1:8787/onebot/v11/ws`，图片固定使用共享绝对路径。迁移后不得恢复 `host.docker.internal`、Compose 服务名或远程 OneBot 地址。
 
 ## 6. systemd 服务
 
@@ -214,7 +212,7 @@ RemainAfterExit=yes
 User=sunabot
 Group=sunabot
 WorkingDirectory=/srv/sunabot
-EnvironmentFile=/srv/sunabot/workspace/.env
+EnvironmentFile=/srv/sunabot/workspace/secrets/runtime.env
 ExecStart=/usr/bin/npm run qq:start
 ExecStop=/usr/bin/npm run qq:down
 UMask=0077

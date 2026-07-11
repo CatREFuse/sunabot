@@ -40,7 +40,7 @@
 ## 持久化规则
 
 - 增长型业务数据必须写入 SQLite。
-- 主库是 `workspace/artifacts/sunabot.sqlite`；会话执行队列是 `workspace/artifacts/session-queue.sqlite`；附件分块是缓存项内的 `chunks.sqlite`。
+- 主库是 `workspace/business/data/sunabot.sqlite`；会话执行队列是 `workspace/business/data/session-queue.sqlite`；附件分块是缓存项内的 `chunks.sqlite`。
 - 禁止新增会话、消息、记忆、调度队列、请求日志或历史索引的 JSON/JSONL 持久化。
 - Codex JSONL 仅用于子进程协议，可以保留。
 - 配置、人格、提示词、单项 manifest 和可重建小缓存可以继续使用 JSON 或 Markdown。

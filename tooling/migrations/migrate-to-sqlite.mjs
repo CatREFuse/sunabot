@@ -6,10 +6,12 @@ import net from "node:net";
 import { getWorkspacePath, loadConfig, resolveProjectPath } from "../../dist/src/config.js";
 import { applicationDatabasePath, applicationDataStore, closeApplicationDataStores } from "../../dist/adapters/sqlite/applicationDataStore.js";
 import { SqliteChunkWriter } from "../../dist/services/media/attachments/chunks.js";
+import { WORKSPACE_LAYOUT } from "../../dist/packages/platform/workspaceLayout.js";
 import { resolveProjectRoot } from "../shared/paths.mjs";
 
 const root = resolveProjectRoot(import.meta.url);
-const artifacts = getWorkspacePath("artifacts");
+const legacyData = getWorkspacePath(WORKSPACE_LAYOUT.legacyData);
+const attachmentCache = getWorkspacePath(WORKSPACE_LAYOUT.attachmentCache);
 const config = await loadConfig();
 const agentWorkspace = resolveProjectPath(config.persona.agentWorkspace);
 if (!agentWorkspace) throw new Error("Agent workspace is not configured.");
@@ -20,27 +22,27 @@ await assertNoPendingFileTransaction(agentWorkspace);
 const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
 const backupRoot = getWorkspacePath("backups", `sqlite-migration-${timestamp}`);
 const legacy = {
-  conversations: path.join(artifacts, "conversations.json"),
-  requestLogs: path.join(artifacts, "request-bodies.jsonl"),
+  conversations: path.join(legacyData, "conversations.json"),
+  requestLogs: path.join(legacyData, "request-bodies.jsonl"),
   working: path.join(agentWorkspace, "WORKING_MEMORY.jsonl"),
   longTerm: path.join(agentWorkspace, "LONG_TERM_MEMORY.jsonl"),
   userProfile: path.join(agentWorkspace, "USER_PROFILE.jsonl"),
   transactionJournal: path.join(agentWorkspace, "MEMORY_TXN_JOURNAL.jsonl"),
   memoryScheduler: path.join(agentWorkspace, "MEMORY_SCHEDULER.json"),
-  imageHistory: path.join(artifacts, "image-history.json")
+  imageHistory: path.join(legacyData, "image-history.json")
 };
 
 const legacyFiles = Object.values(legacy).filter(await existsFilter());
 const legacyFileSet = new Set(legacyFiles);
-const chunkFiles = await findFiles(path.join(artifacts, "file-cache"), "chunks.jsonl");
+const chunkFiles = await findFiles(attachmentCache, "chunks.jsonl");
 const mainDatabasePath = applicationDatabasePath(config);
 const safetyCandidates = [
   mainDatabasePath,
   `${mainDatabasePath}-wal`,
   `${mainDatabasePath}-shm`,
-  path.join(artifacts, "session-queue.sqlite"),
-  path.join(artifacts, "session-queue.sqlite-wal"),
-  path.join(artifacts, "session-queue.sqlite-shm")
+  getWorkspacePath(WORKSPACE_LAYOUT.sessionQueue),
+  `${getWorkspacePath(WORKSPACE_LAYOUT.sessionQueue)}-wal`,
+  `${getWorkspacePath(WORKSPACE_LAYOUT.sessionQueue)}-shm`
 ];
 const safetyFiles = await existingFiles(safetyCandidates);
 await fs.mkdir(backupRoot, { recursive: true });
@@ -113,7 +115,7 @@ console.log(JSON.stringify({
 }, null, 2));
 
 async function assertServiceStopped() {
-  const pidPath = path.join(artifacts, "sunabot.pid");
+  const pidPath = getWorkspacePath(WORKSPACE_LAYOUT.runtimeTemporary, "sunabot.pid");
   try {
     const pid = Number((await fs.readFile(pidPath, "utf8")).trim());
     if (Number.isInteger(pid) && pid > 0) {

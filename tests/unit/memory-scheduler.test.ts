@@ -4,11 +4,13 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { MemorySchedulerStore, type MemoryQueuedMessage } from "../../services/memory/memoryScheduler.js";
+import { closeApplicationDataStores } from "../../adapters/sqlite/applicationDataStore.js";
 import { createAdminTestConfig } from "./admin-fixtures.js";
 
 const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
+  closeApplicationDataStores();
   await Promise.all(temporaryDirectories.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true })));
 });
 

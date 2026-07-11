@@ -7,7 +7,7 @@ import { resolveProjectRoot, resolveWorkspace } from "../shared/paths.mjs";
 const action = process.argv[2] ?? "status";
 const projectRoot = resolveProjectRoot(import.meta.url);
 const workspace = resolveWorkspace(projectRoot);
-const fusePath = path.join(workspace, "security/ADMIN_DISABLED.json");
+const fusePath = path.join(workspace, "secrets/ADMIN_DISABLED.json");
 
 if (action === "trip") {
   await fs.mkdir(path.dirname(fusePath), { recursive: true });

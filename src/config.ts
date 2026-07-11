@@ -17,12 +17,17 @@ import {
   DEFAULT_TAVILY_API_KEY_ENV,
   normalizeTavilySettings
 } from "../adapters/model/webSearchSettings.js";
+import {
+  LEGACY_WORKSPACE_LAYOUT,
+  WORKSPACE_LAYOUT,
+  workspaceRelativeReference
+} from "../packages/platform/workspaceLayout.js";
 
 const rootDir = discoverProjectRoot(path.dirname(fileURLToPath(import.meta.url)));
 const workspaceDir = resolveWorkspaceDir(process.env.SUNABOT_WORKSPACE);
 const AUTO_CODEX_EXECUTABLE = "auto";
 
-dotenv.config({ path: path.join(workspaceDir, ".env"), override: false });
+dotenv.config({ path: path.join(workspaceDir, WORKSPACE_LAYOUT.secretsEnv), override: false });
 
 export function getRootDir() {
   return rootDir;
@@ -37,13 +42,13 @@ export function getWorkspacePath(...segments: string[]) {
 }
 
 export function getConfigPath() {
-  return process.env.SUNABOT_CONFIG ?? getWorkspacePath("config/sunabot.json");
+  return process.env.SUNABOT_CONFIG ?? getWorkspacePath(WORKSPACE_LAYOUT.config);
 }
 
 export function defaultConfig(): AppConfig {
   const host = process.env.SUNABOT_HOST ?? "127.0.0.1";
   const port = Number(process.env.SUNABOT_PORT ?? "8787");
-  const planaConfigEnv = "workspace/.env";
+  const runtimeEnvReference = workspaceRelativeReference(WORKSPACE_LAYOUT.secretsEnv);
 
   const providers: ProviderConfig[] = [
     {
@@ -55,7 +60,7 @@ export function defaultConfig(): AppConfig {
       imageModel: "gpt-image-2",
       baseUrl: "https://chatgpt.com/backend-api/codex",
       apiKeyEnv: "CODEX_ACCESS_TOKEN",
-      envFile: planaConfigEnv,
+      envFile: runtimeEnvReference,
       temperature: 0.7,
       maxOutputTokens: 2400,
       reasoningEffort: "medium"
@@ -69,7 +74,7 @@ export function defaultConfig(): AppConfig {
       imageModel: "gpt-image-2",
       baseUrl: "https://api.openai.com",
       apiKeyEnv: "OPENAI_API_KEY",
-      envFile: "workspace/.env",
+      envFile: runtimeEnvReference,
       temperature: 0.7,
       maxOutputTokens: 2400,
       reasoningEffort: "medium"
@@ -80,7 +85,7 @@ export function defaultConfig(): AppConfig {
     server: { host, port },
     persona: {
       defaultAgentId: "plana",
-      agentWorkspace: "workspace/agents/plana",
+      agentWorkspace: workspaceRelativeReference(WORKSPACE_LAYOUT.defaultAgent),
       memoryLimit: 32
     },
     providers: {
@@ -153,10 +158,20 @@ export function defaultConfig(): AppConfig {
 }
 
 export async function ensureWorkspace() {
+  await assertWorkspaceLayoutReady();
   const configPath = getConfigPath();
   await fs.mkdir(path.dirname(configPath), { recursive: true });
-  await fs.mkdir(getWorkspacePath("agents/plana"), { recursive: true });
-  await fs.mkdir(getWorkspacePath("artifacts/images"), { recursive: true });
+  await Promise.all([
+    WORKSPACE_LAYOUT.defaultAgent,
+    WORKSPACE_LAYOUT.mediaImages,
+    path.dirname(WORKSPACE_LAYOUT.database),
+    WORKSPACE_LAYOUT.attachmentCache,
+    WORKSPACE_LAYOUT.runtimeLogs,
+    WORKSPACE_LAYOUT.runtimeTemporary,
+    WORKSPACE_LAYOUT.napcatState,
+    path.dirname(WORKSPACE_LAYOUT.secretsEnv),
+    WORKSPACE_LAYOUT.backups
+  ].map((relativePath) => fs.mkdir(getWorkspacePath(relativePath), { recursive: true, mode: 0o700 })));
 }
 
 export async function loadConfig(): Promise<AppConfig> {
@@ -196,10 +211,48 @@ export function resolveProjectPath(inputPath: string | undefined) {
   if (!inputPath) return undefined;
   if (path.isAbsolute(inputPath)) return inputPath;
   const normalized = inputPath.replace(/\\/g, "/");
-  if (normalized === ".env") return getWorkspacePath(".env");
+  if (normalized === ".env" || normalized === "workspace/.env") {
+    return getWorkspacePath(WORKSPACE_LAYOUT.secretsEnv);
+  }
   if (normalized === "workspace") return workspaceDir;
+  if (normalized === "workspace/agents" || normalized.startsWith("workspace/agents/")) {
+    const suffix = normalized.slice("workspace/agents".length).replace(/^\/+/, "");
+    return getWorkspacePath(WORKSPACE_LAYOUT.agentRoot, suffix);
+  }
   if (normalized.startsWith("workspace/")) return getWorkspacePath(normalized.slice("workspace/".length));
   return path.join(rootDir, inputPath);
+}
+
+async function assertWorkspaceLayoutReady() {
+  if (process.env.SUNABOT_CONFIG?.trim()) return;
+  const currentConfig = getWorkspacePath(WORKSPACE_LAYOUT.config);
+  try {
+    await fs.access(currentConfig);
+    return;
+  } catch {
+    // A fresh workspace is valid. A legacy workspace must be migrated while the service is stopped.
+  }
+
+  const legacyMarkers = [
+    LEGACY_WORKSPACE_LAYOUT.config,
+    LEGACY_WORKSPACE_LAYOUT.agentRoot,
+    LEGACY_WORKSPACE_LAYOUT.database,
+    LEGACY_WORKSPACE_LAYOUT.sessionQueue,
+    LEGACY_WORKSPACE_LAYOUT.secretsEnv,
+    LEGACY_WORKSPACE_LAYOUT.security,
+    LEGACY_WORKSPACE_LAYOUT.napcatState
+  ];
+  for (const relativePath of legacyMarkers) {
+    try {
+      await fs.access(getWorkspacePath(relativePath));
+      const error = new Error("检测到旧 workspace 布局；请停止服务后运行 npm run workspace:migrate。");
+      Object.assign(error, { code: "WORKSPACE_LAYOUT_MIGRATION_REQUIRED" });
+      throw error;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "WORKSPACE_LAYOUT_MIGRATION_REQUIRED") throw error;
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
 }
 
 function resolveWorkspaceDir(configured: string | undefined) {

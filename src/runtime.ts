@@ -75,6 +75,7 @@ import type { ProviderLogContext } from "../packages/contracts/model/modelGatewa
 import { loadPersona, AgentPersona } from "../services/agent/persona.js";
 import { OneBotGateway, OneBotGatewayDelegate } from "../adapters/onebot/onebotGateway.js";
 import { appendRequestLog } from "./requestLog.js";
+import { WORKSPACE_LAYOUT } from "../packages/platform/workspaceLayout.js";
 import { SenderNameResolver, senderDisplayName, senderIdentity } from "../services/conversations/senderName.js";
 import type { SelfieInput, SelfieRunResult } from "../services/tools/selfieTool.js";
 import { cleanupPersistedCodexProcess, CodexToolRunner } from "../adapters/codex/codexTool.js";
@@ -289,14 +290,14 @@ export class SunaRuntime implements OneBotGatewayDelegate {
     this.config = config;
     this.memoryScheduler = new MemorySchedulerStore(config);
     this.attachmentService = options.attachmentService ?? new AttachmentService(getRootDir(), {
-      cacheRoot: getWorkspacePath("artifacts/file-cache"),
+      cacheRoot: getWorkspacePath(WORKSPACE_LAYOUT.attachmentCache),
       cacheOptions: { trustedResolvedAddress: isTrustedQqFakeIp }
     });
     this.ownsSessionStore = !options.sessionStore;
     this.sessionStore = options.sessionStore ?? new SessionStore({
       databasePath: process.env.VITEST
         ? ":memory:"
-        : getWorkspacePath("artifacts/session-queue.sqlite")
+        : getWorkspacePath(WORKSPACE_LAYOUT.sessionQueue)
     });
     this.sessionCoordinator = new SessionCoordinator({
       store: this.sessionStore,
@@ -311,7 +312,7 @@ export class SunaRuntime implements OneBotGatewayDelegate {
         timeoutMs: this.config.bot.tools.codex.timeoutMs,
         maxConcurrency: this.config.bot.tools.codex.maxConcurrency,
         workspacePath: resolveProjectPath(this.config.persona.agentWorkspace) ?? getRootDir(),
-        jobRoot: getWorkspacePath("artifacts/codex-jobs")
+        jobRoot: getWorkspacePath(WORKSPACE_LAYOUT.codexJobs)
       }),
       turnTimeoutMs: DIRECT_REPLY_TIMEOUT_MS + 5_000,
       maxSessionConcurrency: 4,
@@ -4633,7 +4634,7 @@ function sanitizeErrorDetail(message: string) {
 }
 
 function conversationStorePath() {
-  return getWorkspacePath("artifacts/conversations.json");
+  return getWorkspacePath(WORKSPACE_LAYOUT.legacyData, "conversations.json");
 }
 
 function loadConversationRecords() {

@@ -14,6 +14,7 @@ import {
   writeFile
 } from "node:fs/promises";
 import path from "node:path";
+import { WORKSPACE_LAYOUT } from "../../../packages/platform/workspaceLayout.js";
 import { fileURLToPath } from "node:url";
 import { CacheStore, AttachmentCacheError, AttachmentTooLargeError, type CacheStoreOptions } from "./cache.js";
 import { readChunksSqlite, type AttachmentTextChunk } from "./chunks.js";
@@ -92,7 +93,7 @@ export class AttachmentService {
 
   constructor(rootDir: string, options: AttachmentServiceOptions = {}) {
     this.cacheRoot = path.resolve(
-      options.cacheRoot ?? path.join(rootDir, "workspace/artifacts/file-cache")
+      options.cacheRoot ?? path.join(rootDir, "workspace", WORKSPACE_LAYOUT.attachmentCache)
     );
     this.cache = options.cacheStore ?? new CacheStore(this.cacheRoot, options.cacheOptions);
     this.worker = options.workerSupervisor ?? createParserWorkerSupervisor();

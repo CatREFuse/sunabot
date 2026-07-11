@@ -9,21 +9,21 @@ Sunabot、OneBot v11 网关与 NapCat/QQ 构成一个本机 QQ Runtime。OneBot 
 ```text
 OneBot reverse WebSocket: ws://127.0.0.1:8787/onebot/v11/ws
 共享 workspace:           /srv/sunabot/workspace
-生成图片目录:             /srv/sunabot/workspace/artifacts/images
+生成图片目录:             /srv/sunabot/workspace/business/media/images
 ```
 
 生成图片以经过边界校验的绝对文件路径发送给 NapCat，不提供 OneBot 专用 HTTP 媒体回调。
 
 ## Docker 启动
 
-Compose 定义位于 `deploy/docker/compose.yml`。Sunabot 与 NapCat 使用独立容器进程，但 NapCat 共享 Sunabot 的网络命名空间；双方的 `127.0.0.1` 指向同一运行单元。workspace 在两个容器中都挂载为 `/srv/sunabot/workspace`。
+Compose 定义位于 `deploy/docker/compose.yml`。Compose 只有一个 `sunabot-qq-runtime` service；容器内由监督器管理 Sunabot 与 NapCat/QQ 两个进程，双方通过同一网络命名空间内的 `127.0.0.1` 通信，并只挂载一个 `/srv/sunabot/workspace` 数据卷。
 
 ```bash
 npm ci
 npm run workspace:init
 ```
 
-在 `workspace/.env` 至少设置：
+在 `workspace/secrets/runtime.env` 至少设置：
 
 ```text
 NAPCAT_ACCOUNT=你的QQ号
@@ -46,7 +46,7 @@ npm run qq:logs
 NapCat WebUI: http://127.0.0.1:6099/webui
 ```
 
-Compose 只在 Sunabot 容器上发布回环端口；NapCat 不发布独立 OneBot 端口，也不创建 `host.docker.internal` 映射。
+Compose 只在该运行容器上发布回环管理端口；NapCat 不发布独立 OneBot 端口，也不创建 `host.docker.internal` 映射。
 
 ## 非 Docker 启动
 

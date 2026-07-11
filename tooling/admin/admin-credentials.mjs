@@ -9,7 +9,7 @@ import { resolveProjectRoot, resolveWorkspace } from "../shared/paths.mjs";
 const scrypt = promisify(crypto.scrypt);
 const projectRoot = resolveProjectRoot(import.meta.url);
 const workspace = resolveWorkspace(projectRoot);
-const credentialsPath = path.join(workspace, "security/admin-credentials.json");
+const credentialsPath = path.join(workspace, "secrets/admin-credentials.json");
 const username = String(process.argv[2] ?? "admin").trim();
 
 if (!/^[A-Za-z0-9._-]{1,128}$/.test(username)) {

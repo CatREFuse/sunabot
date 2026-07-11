@@ -2,6 +2,7 @@ import { MonitorSettingsStore } from "./admin/monitorSettings.js";
 import { getWorkspacePath } from "./config.js";
 import { OneBotGateway } from "../adapters/onebot/onebotGateway.js";
 import { SunaRuntime } from "./runtime.js";
+import { WORKSPACE_LAYOUT } from "../packages/platform/workspaceLayout.js";
 
 const MONITOR_INTERVAL_MS = 30_000;
 const ONLINE_ANNOUNCE_COOLDOWN_MS = 5 * 60 * 1000;
@@ -26,7 +27,7 @@ export class ServiceMonitor {
   constructor(
     private readonly runtime: SunaRuntime,
     private readonly gateway: OneBotGateway,
-    private readonly settings = new MonitorSettingsStore(getWorkspacePath(".env"))
+    private readonly settings = new MonitorSettingsStore(getWorkspacePath(WORKSPACE_LAYOUT.secretsEnv))
   ) {}
 
   start() {

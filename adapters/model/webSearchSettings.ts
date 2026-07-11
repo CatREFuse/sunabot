@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import dotenv from "dotenv";
 import type { BotToolSettings } from "../../src/types.js";
+import { WORKSPACE_LAYOUT } from "../../packages/platform/workspaceLayout.js";
 
 export const DEFAULT_TAVILY_API_KEY_ENV = "TAVILY_API_KEY";
 
@@ -68,7 +69,7 @@ export function resolveTavilyApiKeys(
   if (inherited) credentials.push({ value: inherited, source: "environment" });
 
   try {
-    const parsed = dotenv.parse(fs.readFileSync(path.join(rootDir, ".env")));
+    const parsed = dotenv.parse(fs.readFileSync(path.join(rootDir, WORKSPACE_LAYOUT.secretsEnv)));
     const projectValue = String(parsed[settings.tavilyApiKeyEnv] ?? "").trim();
     if (projectValue) credentials.push({ value: projectValue, source: "project-env" });
   } catch {

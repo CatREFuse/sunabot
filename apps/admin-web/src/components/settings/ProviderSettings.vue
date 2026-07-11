@@ -75,7 +75,7 @@ function applyOfficialPreset(kind: "gemini" | "anthropic") {
     provider.apiKeyEnv = "ANTHROPIC_API_KEY";
     provider.temperature = Math.min(provider.temperature, 1);
   }
-  provider.envFile = "workspace/.env";
+  provider.envFile = "workspace/secrets/runtime.env";
   setStatus(`[${kind.toUpperCase()} OFFICIAL PRESET]`, "success");
 }
 

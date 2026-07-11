@@ -6,7 +6,7 @@ bark_icon="${BARK_ICON:-https://static.kivo.wiki/images/students/%E6%99%AE%E6%8B
 message="${*:-未知通知}"
 
 if [[ -z "$bark_url" ]]; then
-  printf 'BARK_URL is not configured; set it in workspace/.env or WebUI.\n' >&2
+  printf 'BARK_URL is not configured; set it in workspace/secrets/runtime.env or WebUI.\n' >&2
   exit 2
 fi
 

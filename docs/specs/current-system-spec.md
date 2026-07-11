@@ -24,12 +24,12 @@ QQ / NapCat ── 127.0.0.1 OneBot v11 reverse WebSocket ── OneBotGateway
               sunabot.sqlite
               会话、消息、记忆、调度、日志、图片历史
 
-NapCat ── /srv/sunabot/workspace/artifacts/images ── Sunabot
+NapCat ── /srv/sunabot/workspace/business/media/images ── Sunabot
 
 Browser ── Fastify Admin API ── Vue 管理台
 ```
 
-QQ Runtime 不支持远程 OneBot 或远程 NapCat。Docker 下 Sunabot 与 NapCat 使用独立容器进程，但共享 Sunabot 的网络命名空间与同一 workspace 挂载；非 Docker 下二者运行在同一 Linux/WSL 环境。两种方式固定使用 `127.0.0.1` 和 `/srv/sunabot/workspace`，不使用容器 DNS、宿主机网关或局域网地址。
+QQ Runtime 不支持远程 OneBot 或远程 NapCat。Docker 下 Compose 只有一个 service 和一个容器，容器内由监督器运行 Sunabot 与 NapCat/QQ 两个进程；非 Docker 下二者运行在同一 Linux/WSL 环境。两种方式固定使用 `127.0.0.1` 和 `/srv/sunabot/workspace`，不使用容器 DNS、宿主机网关或局域网地址。
 
 后端由 Node.js 24、TypeScript 和 Fastify 构建，管理台由 Vue 3、Vue Router 和 Vite 构建。生产服务由 `dist/apps/api/main.js` 启动，并提供 API、Web 静态资源、深链接回退、生成图片和 OneBot WebSocket 入口。
 
@@ -121,7 +121,7 @@ QQ Runtime 不支持远程 OneBot 或远程 NapCat。Docker 下 Sunabot 与 NapC
 
 图像生成支持尺寸、1K/2K/4K 分辨率、质量、参考图压缩、重试和 OneBot 外发。自拍必须使用角色参考图与自拍重写提示词。生成文件保存在忽略的运行目录，图片历史元数据保存在主 SQLite 数据库。
 
-出站媒体只传递经过边界校验的本地绝对路径。NapCat 与 Sunabot 必须共享 `/srv/sunabot/workspace/artifacts/images` 的同一路径视图；不提供 OneBot 专用 HTTP 媒体回调，也不得根据主机名猜测部署形态。
+出站媒体只传递经过边界校验的本地绝对路径。NapCat 与 Sunabot 必须共享 `/srv/sunabot/workspace/business/media/images` 的同一路径视图；不提供 OneBot 专用 HTTP 媒体回调，也不得根据主机名猜测部署形态。
 
 ## 7. 管理台
 
@@ -133,7 +133,7 @@ QQ Runtime 不支持远程 OneBot 或远程 NapCat。Docker 下 Sunabot 与 NapC
 
 ### 8.1 主库
 
-默认路径：`workspace/artifacts/sunabot.sqlite`。可通过 `SUNABOT_DATABASE_PATH` 覆盖。
+默认路径：`workspace/business/data/sunabot.sqlite`。可通过 `SUNABOT_DATABASE_PATH` 覆盖。
 
 主库启用 WAL、`synchronous=NORMAL`、外键和 5 秒 busy timeout。当前表如下：
 
@@ -147,14 +147,18 @@ QQ Runtime 不支持远程 OneBot 或远程 NapCat。Docker 下 Sunabot 与 NapC
 | `request_logs` | 脱敏后的模型、工具和运行日志 |
 | `image_history` | 生成图片历史元数据 |
 
-`workspace/artifacts/session-queue.sqlite` 独立保存会话事件、turn、异步任务和 outbox。附件缓存中的每个 `chunks.sqlite` 独立保存该文件的文本分块。
+`workspace/business/data/session-queue.sqlite` 独立保存会话事件、turn、异步任务和 outbox。附件缓存中的每个 `chunks.sqlite` 独立保存该文件的文本分块。
 
 ### 8.2 文件边界
 
 以下内容继续使用文件：
 
-- `workspace/.env`：本机凭据，不进入 Git；
-- `workspace/config/sunabot.json`：应用配置，不保存明文密钥；
+- `workspace/secrets/runtime.env`：本机凭据，不进入 Git；
+- `workspace/business/config/sunabot.json`：应用配置，不保存明文密钥；
+- `workspace/business/agents/<agentId>/`：Agent 人格、提示词和人工维护文件；
+- `workspace/business/media/`：需要随业务恢复的图片和持久附件；
+- `workspace/runtime/napcat/`：QQ 登录态与 NapCat 配置；
+- `workspace/cache/`：可重建缓存，不进入快照；
 - Agent 人格和最终提示词：需要人工审阅和管理台编辑；
 - 单个附件 manifest、好友/群目录缓存：体积小且可重建；
 - 图片与文档二进制：文件系统更适合流式访问；
@@ -173,9 +177,11 @@ QQ Runtime 不支持远程 OneBot 或远程 NapCat。Docker 下 Sunabot 与 NapC
 
 备份保存在 `workspace/backups/sqlite-migration-<timestamp>/`，该目录不进入 Git。
 
+旧的 `config/agents/artifacts/security/napcat/.env` 布局必须在服务停止后通过 `npm run workspace:migrate` 前向迁移。迁移器先 checkpoint 和校验 SQLite，检查目标冲突，生成带 SHA-256 manifest 的业务数据备份，再移动到 `business/runtime/secrets/cache` 边界；不会覆盖内容不同的目标文件。检测到旧布局时，生产启动直接失败，不会静默创建第二套数据库。
+
 ## 9. 配置与安全
 
-- Provider key、Tavily key、OneBot token 和自动化管理令牌只能通过 `workspace/.env` 或进程环境变量提供。
+- Provider key、Tavily key、OneBot token 和自动化管理令牌只能通过 `workspace/secrets/runtime.env` 或进程环境变量提供。
 - Git 不跟踪整个 `workspace/`，其中包括环境变量、配置、Agent 人格、SQLite、WAL、日志、缓存、QQ 登录态、生成图片和备份。
 - 浏览器管理台不得把账号、密码、Bearer Token 或会话密钥写入 localStorage/sessionStorage。
 - 请求日志递归脱敏授权、token、password、secret 和常见 key 字段，并限制长字符串。

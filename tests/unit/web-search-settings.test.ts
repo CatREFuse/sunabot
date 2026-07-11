@@ -36,7 +36,8 @@ describe("websearch settings", () => {
 
   it("resolves Tavily credentials from direct, process and project env sources", async () => {
     temporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-websearch-settings-"));
-    await fs.writeFile(path.join(temporaryDirectory, ".env"), "PROJECT_TAVILY_KEY=project-secret\n", "utf8");
+    await fs.mkdir(path.join(temporaryDirectory, "secrets"), { recursive: true });
+    await fs.writeFile(path.join(temporaryDirectory, "secrets/runtime.env"), "PROJECT_TAVILY_KEY=project-secret\n", "utf8");
 
     expect(resolveTavilyApiKey({
       tavilyApiKey: "direct-secret",

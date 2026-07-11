@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { getWorkspacePath, resolveProjectPath } from "../../src/config.js";
 import type { AppConfig, ConversationRecord, ImageHistoryRecord } from "../../src/types.js";
 import type { MemoryPersistenceProvider } from "../../services/memory/persistence.js";
+import { WORKSPACE_LAYOUT } from "../../packages/platform/workspaceLayout.js";
 
 export type MemoryDataSource = "working" | "long_term" | "user_profile";
 
@@ -15,17 +16,14 @@ const stores = new Map<string, ApplicationDataStore>();
 export function applicationDatabasePath(config?: Pick<AppConfig, "persona">) {
   const configured = process.env.SUNABOT_DATABASE_PATH?.trim();
   if (configured) return path.resolve(configured);
-  if (!config && process.env.VITEST) return ":memory:";
-  if (!config) return getWorkspacePath("artifacts/sunabot.sqlite");
-
-  const workspace = resolveProjectPath(config.persona.agentWorkspace);
-  if (!workspace) throw new Error("Agent workspace is not configured.");
-  const resolved = path.resolve(workspace);
-  const parent = path.dirname(resolved);
-  if (path.basename(parent) === "agents") {
-    return path.join(path.dirname(parent), "artifacts", "sunabot.sqlite");
+  if (process.env.VITEST) {
+    if (!config || !path.isAbsolute(config.persona.agentWorkspace)) return ":memory:";
+    const agentWorkspace = resolveProjectPath(config.persona.agentWorkspace);
+    if (!agentWorkspace) return ":memory:";
+    const parent = path.dirname(path.resolve(agentWorkspace));
+    return path.join(path.basename(parent) === "agents" ? path.dirname(parent) : parent, "data", "sunabot.sqlite");
   }
-  return path.join(parent, "artifacts", "sunabot.sqlite");
+  return getWorkspacePath(WORKSPACE_LAYOUT.database);
 }
 
 export function applicationDataStore(config?: Pick<AppConfig, "persona">) {

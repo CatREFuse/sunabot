@@ -29,7 +29,7 @@ function deferred<T>() {
 function config(adminName: string): AppConfig {
   return {
     server: { host: "127.0.0.1", port: 8787 },
-    persona: { defaultAgentId: "plana", agentWorkspace: "workspace/agents/plana", memoryLimit: 100 },
+    persona: { defaultAgentId: "plana", agentWorkspace: "workspace/business/agents/plana", memoryLimit: 100 },
     providers: { defaultProviderId: "codex", items: [] },
     bot: {
       adminQq: "1",

@@ -2,6 +2,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { getWorkspacePath } from "./config.js";
 import { applicationDatabasePath, applicationDataStore } from "../adapters/sqlite/applicationDataStore.js";
+import { WORKSPACE_LAYOUT } from "../packages/platform/workspaceLayout.js";
 
 const MAX_STRING_LENGTH = 16_000;
 
@@ -49,7 +50,7 @@ export async function readRequestLogs(options: ReadRequestLogsOptions = {}) {
 
 function requestLogStore() {
   const store = applicationDataStore();
-  store.ensureLegacyRequestLogsImported(getWorkspacePath("artifacts/request-bodies.jsonl"));
+  store.ensureLegacyRequestLogsImported(getWorkspacePath(WORKSPACE_LAYOUT.legacyData, "request-bodies.jsonl"));
   return store;
 }
 

@@ -17,7 +17,7 @@ npm ci
 npm run workspace:init
 ```
 
-需要空白实例时，编辑 `workspace/.env`，初始化管理员密码后构建启动。需要接管已有业务时，从加密快照恢复到空 workspace，并确认该终端是唯一写入者。
+需要空白实例时，编辑 `workspace/secrets/runtime.env`，初始化管理员密码后构建启动。需要接管已有业务时，从加密快照恢复到空 workspace，并确认该终端是唯一写入者。
 
 ## Pull 策略
 
@@ -38,7 +38,7 @@ npm run code:update
 C:\Users\<用户>\Documents\BaiduSyncdisk\sunabot-workspace-sync
 ```
 
-同步目录只包含 `sunabot-workspace.latest.enc` 和 SHA-256 清单。32 字节同步密钥独立保存，不进入 Git、不进入同步盘。恢复时先校验 AES-GCM 认证标签，再审计 tar 路径，最后只解压到空 workspace。
+默认只同步 `sunabot-business.latest.enc` 和 SHA-256 清单，不包含 `cache`、日志或临时文件。`--tier runtime` 可单独快照 NapCat 登录态，`--tier secrets` 必须使用 `SUNABOT_SECRETS_SYNC_KEY_FILE` 指定的独立密钥；业务、运行态和秘密不能共用一个归档。32 字节密钥不进入 Git、不进入同步盘。恢复时先校验 AES-GCM 认证标签，再审计 tar 路径，最后只解压到对应的空 tier。
 
 ## 终端角色
 

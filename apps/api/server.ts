@@ -15,7 +15,11 @@ import { AdminApiError, badRequest, notFound } from "../../src/admin/errors.js";
 import { IMAGE_MODEL_CATALOG, MODEL_CATALOG, REASONING_EFFORTS } from "../../src/admin/models.js";
 import { defaultTools } from "../../services/tools/tools.js";
 import { getConfigPath, getRootDir, getWorkspacePath, loadConfig } from "../../src/config.js";
-import { applicationDataStore, sqliteMemoryPersistence } from "../../adapters/sqlite/applicationDataStore.js";
+import {
+  applicationDataStore,
+  closeApplicationDataStores,
+  sqliteMemoryPersistence
+} from "../../adapters/sqlite/applicationDataStore.js";
 import { configureMemoryPersistence } from "../../services/memory/persistence.js";
 import { createMemoryEntry, deleteMemoryEntry, listMemoryEntries, recallMemory, updateMemoryEntry } from "../../services/memory/memoryService.js";
 import { ServiceError } from "../../packages/contracts/errors/serviceError.js";
@@ -27,6 +31,7 @@ import { isTrustedQqFakeIp } from "../../adapters/onebot/qqMedia.js";
 import { readRequestLogs, requestLogPath } from "../../src/requestLog.js";
 import { SunaRuntime } from "../../src/runtime.js";
 import { ServiceMonitor } from "../../src/serviceMonitor.js";
+import { WORKSPACE_LAYOUT } from "../../packages/platform/workspaceLayout.js";
 import {
   AppConfig,
   BotToolSettings,
@@ -63,8 +68,8 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
   let imageHistory = loadImageHistory();
 
   const adminAuth = await AdminAuthService.create({
-    credentialsPath: getWorkspacePath("security/admin-credentials.json"),
-    fusePath: getWorkspacePath("security/ADMIN_DISABLED.json"),
+    credentialsPath: getWorkspacePath(WORKSPACE_LAYOUT.adminCredentials),
+    fusePath: getWorkspacePath(WORKSPACE_LAYOUT.adminFuse),
     bearerToken: process.env.SUNABOT_ADMIN_TOKEN,
     allowedOrigins: (process.env.SUNABOT_ADMIN_ORIGINS ?? "")
       .split(",")
@@ -72,15 +77,15 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
       .filter(Boolean)
   });
   const codexAuth = new CodexAuthService({
-    codexHome: getWorkspacePath("security/codex"),
+    codexHome: getWorkspacePath(WORKSPACE_LAYOUT.codexHome),
     executable: process.env.SUNABOT_CODEX_EXECUTABLE
   });
 
   const app = Fastify({ logger: options.logger ?? false, trustProxy: false });
-  const monitorSettings = new MonitorSettingsStore(getWorkspacePath(".env"));
+  const monitorSettings = new MonitorSettingsStore(getWorkspacePath(WORKSPACE_LAYOUT.secretsEnv));
   const onebotGateway = new OneBotGateway(app.server as http.Server, config, runtime, { outboundMedia });
   const conversationDirectory = new ConversationDirectory({
-    cachePath: getWorkspacePath("artifacts/conversation-directory.json")
+    cachePath: getWorkspacePath(WORKSPACE_LAYOUT.conversationDirectoryCache)
   });
   onebotGateway.on("connected", () => runtime.resumeUserGroupOrchestrators(onebotGateway));
   onebotGateway.on("disconnected", () => runtime.suspendUserGroupOrchestrators());
@@ -91,6 +96,7 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
     codexAuth.close();
     serviceMonitor.close();
     runtime.close();
+    closeApplicationDataStores();
   });
   const agentFiles = new AgentFileRepository({ runtime });
   const configService = new ConfigService({
@@ -167,7 +173,7 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
   });
 
   await app.register(fastifyStatic, {
-    root: getWorkspacePath("artifacts/images"),
+    root: getWorkspacePath(WORKSPACE_LAYOUT.mediaImages),
     prefix: "/generated-images/",
     decorateReply: false
   });
@@ -836,7 +842,7 @@ function normalizeImageSource(value: string) {
 }
 
 function readNapcatQrImage() {
-  const filePath = getWorkspacePath("napcat/qrcode.png");
+  const filePath = getWorkspacePath(WORKSPACE_LAYOUT.napcatQrCode);
   if (!existsSync(filePath)) return null;
 
   const stats = fs.statSync(filePath);
@@ -867,7 +873,7 @@ function getNapcatWebuiUrl(options: { includeToken: boolean }) {
 }
 
 function readNapcatWebuiConfig() {
-  const filePath = getWorkspacePath("napcat/config-full/webui.json");
+  const filePath = getWorkspacePath(WORKSPACE_LAYOUT.napcatConfig, "webui.json");
   if (!existsSync(filePath)) return null;
 
   try {
@@ -917,11 +923,11 @@ function extractOneBotDataArray(result: PromiseSettledResult<unknown>) {
 }
 
 function imageDirPath() {
-  return getWorkspacePath("artifacts/images");
+  return getWorkspacePath(WORKSPACE_LAYOUT.mediaImages);
 }
 
 function imageHistoryPath() {
-  return getWorkspacePath("artifacts/image-history.json");
+  return getWorkspacePath(WORKSPACE_LAYOUT.legacyData, "image-history.json");
 }
 
 function loadImageHistory() {

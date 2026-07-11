@@ -16,10 +16,12 @@ const TAG_BYTES = 16;
 const action = process.argv[2] ?? "status";
 const root = resolveProjectRoot(import.meta.url);
 const workspace = resolvePath(option("workspace") ?? process.env.SUNABOT_WORKSPACE ?? "workspace", root);
-dotenv.config({ path: path.join(workspace, ".env"), override: false });
+dotenv.config({ path: path.join(workspace, "secrets/runtime.env"), override: false });
+const tier = option("tier") ?? "business";
+const tierConfig = resolveTier(tier);
 const syncDir = resolveOptionalPath(option("sync-dir") ?? process.env.SUNABOT_SYNC_DIR, root);
-const keyPath = resolveOptionalPath(option("key-file") ?? process.env.SUNABOT_SYNC_KEY_FILE, root);
-const archiveName = "sunabot-workspace.latest.enc";
+const keyPath = resolveOptionalPath(option("key-file") ?? process.env[tierConfig.keyEnvironment], root);
+const archiveName = tierConfig.archiveName;
 
 if (action === "init-key") {
   if (!keyPath) throw new Error("请通过 --key-file 或 SUNABOT_SYNC_KEY_FILE 指定独立密钥位置。");
@@ -29,8 +31,9 @@ if (action === "init-key") {
 } else if (action === "push") {
   assertConfigured();
   await fs.mkdir(syncDir, { recursive: true });
-  await checkpointSqlite(workspace);
-  const temporaryTar = path.join(os.tmpdir(), `sunabot-workspace-${process.pid}-${Date.now()}.tar`);
+  if (tier === "business") await checkpointSqlite(path.join(workspace, "business"));
+  await assertTierPresent(workspace, tierConfig.sources);
+  const temporaryTar = path.join(os.tmpdir(), `sunabot-${tier}-${process.pid}-${Date.now()}.tar`);
   const temporaryEncrypted = path.join(syncDir, `.${archiveName}.${process.pid}.${Date.now()}.tmp`);
   try {
     await run("tar", [
@@ -39,9 +42,8 @@ if (action === "init-key") {
       "--exclude=*.sqlite-shm",
       "--exclude=*.pid",
       "--exclude=*.out",
-      "--exclude=security/sync.key",
       "-C", workspace,
-      "."
+      ...tierConfig.sources
     ]);
     await encryptFile(temporaryTar, temporaryEncrypted, await readKey(keyPath));
     await fs.rename(temporaryEncrypted, path.join(syncDir, archiveName));
@@ -53,15 +55,14 @@ if (action === "init-key") {
   }
 } else if (action === "pull") {
   assertConfigured();
-  const entries = await readDirectorySafely(workspace);
-  if (entries.length > 0) throw new Error("目标 workspace 非空；为避免覆盖用户数据，pull 只允许恢复到空目录。");
+  await assertTierTargetsEmpty(workspace, tierConfig.sources);
   await fs.mkdir(workspace, { recursive: true });
   const encrypted = path.join(syncDir, archiveName);
   const temporaryTar = path.join(os.tmpdir(), `sunabot-workspace-restore-${process.pid}-${Date.now()}.tar`);
   try {
     await decryptFile(encrypted, temporaryTar, await readKey(keyPath));
     const listing = await run("tar", ["-tf", temporaryTar], true);
-    assertSafeArchive(listing.split(/\r?\n/).filter(Boolean));
+    assertSafeArchive(listing.split(/\r?\n/).filter(Boolean), tierConfig.sources);
     await run("tar", ["-xf", temporaryTar, "-C", workspace]);
     console.log(`workspace 已从加密快照恢复：${workspace}`);
   } finally {
@@ -70,17 +71,24 @@ if (action === "init-key") {
 } else if (action === "status") {
   console.log(JSON.stringify({
     workspace,
+    tier,
     syncDir: syncDir ?? null,
     keyPath: keyPath ?? null,
     archivePresent: Boolean(syncDir && fsSync.existsSync(path.join(syncDir, archiveName)))
   }, null, 2));
 } else {
-  throw new Error("用法：sync-workspace.mjs status|init-key|push|pull [--sync-dir PATH] [--key-file PATH] [--workspace PATH]");
+  throw new Error("用法：sync-workspace.mjs status|init-key|push|pull [--tier business|runtime|secrets] [--sync-dir PATH] [--key-file PATH] [--workspace PATH]");
 }
 
 function assertConfigured() {
   if (!syncDir) throw new Error("请配置 SUNABOT_SYNC_DIR 或 --sync-dir。");
-  if (!keyPath) throw new Error("请配置 SUNABOT_SYNC_KEY_FILE 或 --key-file。");
+  if (!keyPath) throw new Error(`请配置 ${tierConfig.keyEnvironment} 或 --key-file。`);
+  if (tier === "secrets") {
+    const businessKey = resolveOptionalPath(process.env.SUNABOT_SYNC_KEY_FILE, root);
+    if (businessKey && path.resolve(businessKey) === path.resolve(keyPath)) {
+      throw new Error("secrets 快照必须使用独立于 business 快照的密钥。");
+    }
+  }
 }
 
 async function checkpointSqlite(directory) {
@@ -97,7 +105,7 @@ async function checkpointSqlite(directory) {
 
 async function walk(directory) {
   const result = [];
-  for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+  for (const entry of await readDirectoryEntriesSafely(directory)) {
     const fullPath = path.join(directory, entry.name);
     if (entry.isDirectory()) result.push(...await walk(fullPath));
     else if (entry.isFile()) result.push(fullPath);
@@ -180,12 +188,14 @@ async function sha256File(filePath) {
   return hash.digest("hex");
 }
 
-function assertSafeArchive(entries) {
+function assertSafeArchive(entries, allowedRoots) {
   for (const entry of entries) {
     const normalized = entry.replace(/\\/g, "/");
     if (normalized.startsWith("/") || /^[A-Za-z]:/.test(normalized) || normalized.split("/").includes("..")) {
       throw new Error(`同步快照包含不安全路径：${entry}`);
     }
+    const allowed = allowedRoots.some((rootPath) => normalized === rootPath || normalized.startsWith(`${rootPath}/`));
+    if (!allowed) throw new Error(`同步快照包含 tier 之外的路径：${entry}`);
   }
 }
 
@@ -196,6 +206,44 @@ async function readDirectorySafely(directory) {
     if (error.code === "ENOENT") return [];
     throw error;
   }
+}
+
+async function readDirectoryEntriesSafely(directory) {
+  try {
+    return await fs.readdir(directory, { withFileTypes: true });
+  } catch (error) {
+    if (error.code === "ENOENT") return [];
+    throw error;
+  }
+}
+
+async function assertTierPresent(base, sources) {
+  for (const source of sources) {
+    if ((await readDirectorySafely(path.join(base, source))).length === 0) {
+      throw new Error(`${source} 不存在或为空，不能创建 ${tier} 快照。`);
+    }
+  }
+}
+
+async function assertTierTargetsEmpty(base, sources) {
+  for (const source of sources) {
+    if ((await readDirectorySafely(path.join(base, source))).length > 0) {
+      throw new Error(`目标 ${source} 非空；为避免覆盖用户数据，pull 只允许恢复到空 tier。`);
+    }
+  }
+}
+
+function resolveTier(value) {
+  if (value === "business") {
+    return { archiveName: "sunabot-business.latest.enc", keyEnvironment: "SUNABOT_SYNC_KEY_FILE", sources: ["business"] };
+  }
+  if (value === "runtime") {
+    return { archiveName: "sunabot-runtime.latest.enc", keyEnvironment: "SUNABOT_RUNTIME_SYNC_KEY_FILE", sources: ["runtime/napcat"] };
+  }
+  if (value === "secrets") {
+    return { archiveName: "sunabot-secrets.latest.enc", keyEnvironment: "SUNABOT_SECRETS_SYNC_KEY_FILE", sources: ["secrets"] };
+  }
+  throw new Error(`未知快照 tier：${value}`);
 }
 
 function run(command, args, capture = false) {

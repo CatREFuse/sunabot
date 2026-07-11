@@ -21,7 +21,7 @@ const initialConfig = {
   server: { host: "127.0.0.1", port: 8787 },
   persona: {
     defaultAgentId: "plana",
-    agentWorkspace: "workspace/agents/plana",
+    agentWorkspace: "workspace/business/agents/plana",
     memoryLimit: 32
   },
   providers: {
@@ -36,7 +36,7 @@ const initialConfig = {
         imageModel: "gpt-image-2",
         baseUrl: "https://chatgpt.com/backend-api/codex",
         apiKeyEnv: "CODEX_ACCESS_TOKEN",
-        envFile: "workspace/.env",
+        envFile: "workspace/secrets/runtime.env",
         temperature: 0.7,
         maxOutputTokens: 2400,
         reasoningEffort: "ultra"
@@ -180,7 +180,7 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
     if (pathname === "/api/status") {
       return json(route, {
         startedAt: "2026-07-10T01:00:00.000Z",
-        configPath: "/workspace/config/sunabot.json",
+        configPath: "/workspace/business/config/sunabot.json",
         onebot: {
           connected: !state.offline,
           connections: state.offline ? 0 : 1,

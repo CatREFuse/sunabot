@@ -23,6 +23,12 @@ afterEach(async () => {
 });
 
 describe("tool configuration", () => {
+  it("uses the versioned workspace layout for agents and provider secrets", () => {
+    const config = defaultConfig();
+    expect(config.persona.agentWorkspace).toBe("workspace/business/agents/plana");
+    expect(config.providers.items.every((provider) => provider.envFile === "workspace/secrets/runtime.env")).toBe(true);
+  });
+
   it("defaults websearch to Tavily and Codex to an independent worker", () => {
     expect(defaultConfig().bot.tools.websearch).toMatchObject({
       provider: "tavily",

@@ -2,7 +2,7 @@
 
 ## 认证边界
 
-管理 API、生成图片和管理台数据必须经过管理员认证。管理员账号记录保存在 `workspace/security/admin-credentials.json`，密码仅保存 scrypt 派生值。浏览器登录成功后获得随机 HttpOnly 会话 Cookie；会话空闲 30 分钟或累计 8 小时失效，服务重启也会使会话失效。
+管理 API、生成图片和管理台数据必须经过管理员认证。管理员账号记录保存在 `workspace/secrets/admin-credentials.json`，密码仅保存 scrypt 派生值。浏览器登录成功后获得随机 HttpOnly 会话 Cookie；会话空闲 30 分钟或累计 8 小时失效，服务重启也会使会话失效。
 
 Bearer Token 只保留给受控的自动化客户端。浏览器管理台不再读取或保存 Token，本机回环地址也不绕过认证。
 
@@ -31,6 +31,6 @@ npm run admin:fuse -- trip suspected-compromise
 npm run admin:fuse -- reset
 ```
 
-`trip` 会创建 `workspace/security/ADMIN_DISABLED.json` 并清空当前进程的管理会话。远程管理请求立即返回 503，QQ 业务处理继续运行。`reset` 只能在具有 workspace 文件权限的本机终端执行。
+`trip` 会创建 `workspace/secrets/ADMIN_DISABLED.json` 并清空当前进程的管理会话。远程管理请求立即返回 503，QQ 业务处理继续运行。`reset` 只能在具有 workspace 文件权限的本机终端执行。
 
 若怀疑服务器或域名已失陷，还应立即停止 SSH 反向隧道、禁用 Nginx 站点、吊销 SSH 凭据并轮换管理员密码、OneBot Token 和 Provider Key。
