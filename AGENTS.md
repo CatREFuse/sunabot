@@ -9,8 +9,9 @@
 | 文档 | 内容 | 读取时机 |
 | --- | --- | --- |
 | `docs/specs/current-system-spec.md` | 当前产品范围、业务规则、数据边界、持久化结构、功能—代码文件索引和验证标准 | 任何代码或配置修改前必读 |
-| `docs/todo.md` | 当前 P1、P2 优化目标与延后事项 | 规划迭代、选择优化任务或确认范围时读取 |
+| `docs/todo.md` | TODO-driven 架构整理、性能治理、Native/单容器交付任务、依赖与完成证据 | 规划迭代、选择任务、确认依赖或验收进度时读取 |
 | `docs/audits/2026-07-11-codebase-audit.md` | 已验证基线、问题编号、风险、优先级和优化顺序 | 修复缺陷、性能优化、解耦或可靠性改造前读取 |
+| `docs/architecture/project-structure-plan.md` | 目标项目结构、模块边界、固定协议、数据分层、Native/单容器模型和迁移顺序 | 调整目录、拆分模块、设计协议或修改运行打包前读取 |
 | `docs/migrations/wsl2-migration-plan.md` | Windows 11、Windows Server、WSL2、Docker、打包、部署、验收和回滚方案 | 迁移、打包或调整跨平台部署时读取 |
 | `docs/setup-napcat.md` | sunabot、NapCat、WebUI 和 OneBot 反向 WebSocket 的本机启动配置 | 部署、重启或排查 OneBot 连接时读取 |
 | `docs/security/admin-access.md` | 管理员账号密码、会话、CSRF、限流、熔断与公网代理边界 | 修改鉴权、WebUI 外网访问或紧急处置时读取 |

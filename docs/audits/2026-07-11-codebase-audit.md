@@ -8,7 +8,7 @@
 | 检查 | 结果 |
 | --- | --- |
 | TypeScript 与 Vue 类型检查 | 通过 |
-| 单元与集成测试 | 86 个测试文件、438 项测试通过 |
+| 单元与集成测试 | 88 个测试文件、446 项测试通过 |
 | 端到端测试 | 14 项通过，覆盖生产静态服务、鉴权、导航、主题、响应式、可访问性和核心管理操作 |
 | 视觉回归 | 浅色/深色与 4 种视口矩阵通过，抽查移动端、桌面端主要页面无布局异常 |
 | 生产构建 | Web 与 API 构建通过 |
@@ -31,13 +31,26 @@
 | AUD-006 | P1 | 性能 | 会话每次保存会序列化所有当前会话，每个会话仍以完整消息数组 JSON 存在一行 | 拆分 `conversation_messages`，按消息增量写入并建立会话时间索引 | 待优化 |
 | AUD-007 | P1 | 性能 | 记忆召回每次读取全部记录并在主线程执行 BM25 | 增加 FTS5 或预构建索引，并记录召回耗时与命中数 | 待优化 |
 | AUD-008 | P1 | 性能 | `/api/images` 会同步扫描整个图片目录并读取每个文件状态 | 图片创建时更新索引，目录核对改为启动任务或手动修复 | 待优化 |
-| AUD-009 | P1 | 耦合 | `src/runtime.ts` 约 4,700 行，同时承担接入、路由、上下文、记忆调度、工具结果和外发编排 | 按 intake、reply、memory、orchestrator、delivery 拆分服务，保持事件接口稳定 | 待优化 |
-| AUD-010 | P1 | 耦合 | `src/memory.ts` 约 1,700 行，混合 schema 规范化、合并、事务适配、召回和管理 API 模型 | 拆分 repository、normalizer、merge policy、recall 四个模块 | 待优化 |
+| AUD-009 | P1 | 耦合 | `src/runtime.ts` 4,707 行、31 个 import、104 个方法，同时承担接入、路由、上下文、记忆调度、工具结果、会话持久化、外发和自拍 | 按 messaging、conversation、reply、orchestration、memory-pipeline、delivery 拆模块，Runtime 仅保留生命周期与用例编排 | 待优化 |
+| AUD-010 | P1 | 耦合 | `src/memory.ts` 1,717 行，混合 schema 规范化、合并、事务、召回、管理 API 模型、Tool schema 和 Agent 文件 I/O | 拆分 domain、application、ports、repository、recall 与 adapter | 待优化 |
 | AUD-011 | P1 | 可靠性 | 主业务库与 session queue 是两个 SQLite 文件，跨库状态不能使用同一原子事务 | 定义 crash consistency 边界，补充故障注入测试，评估合库或 outbox 投影 | 待优化 |
 | AUD-012 | P1 | 备份 | 当前只有一次性迁移备份，没有定时 SQLite 在线备份和恢复演练 | 每日 checkpoint + backup，保留 7/30 天，季度恢复演练 | 待优化 |
 | AUD-013 | P2 | 性能 | 缺少高频群聊、2,000 消息会话、10 万日志和大附件并发基准 | 建立可重复负载脚本和 p95 延迟、RSS、数据库增长基线 | 待优化 |
 | AUD-014 | P2 | 可维护性 | 多个大模块使用宽泛 `catch` 作为降级，错误分类和观测不统一 | 统一错误码、结构日志和降级计数，避免静默吞掉非预期异常 | 待优化 |
 | AUD-015 | P2 | 运行时 | Node.js 24 当前仍会为内置 `node:sqlite` 输出实验性警告，后续小版本可能调整接口或行为 | 固定已验证的 Node.js 小版本，升级前运行迁移、完整性、性能和回归测试，并保留切换稳定 SQLite 驱动的预案 | 待优化 |
+| AUD-016 | P1 | 协议 | session event、tool completion 和 outbox payload 私藏在 Runtime 内，无 `schemaVersion` 和统一 codec，恢复时依赖强转 | 建立 versioned contract、运行时校验、未知版本隔离与前向迁移 | 待优化 |
+| AUD-017 | P1 | 耦合 | `src/openaiProvider.ts` 1,542 行，混合模型 transport、工具 dispatch、图片、重试、SSE/JWT 和日志；工具元数据与真实执行器还有两套注册源 | Provider 只实现 ModelGateway；建立单一 ToolRegistry/ToolExecutor | 待优化 |
+| AUD-018 | P1 | 耦合 | `src/server.ts` 968 行，单个组合函数注册 41 条路由并管理实例、鉴权、媒体、OneBot 和错误映射 | Composition Root 只装配，路由按领域拆 Fastify plugin 并声明 request/response schema | 待优化 |
+| AUD-019 | P1 | 架构 | OneBot delegate 把具体 Gateway 传进业务层，全局 DataStore 又横跨多个领域 | 使用 InboundMessage、MessagingPort 和 bounded-context repository port，禁止 domain 引用 adapter | 待优化 |
+| AUD-020 | P1 | 性能 | SessionCoordinator 会 claim 到队列为空，内存 actor 实际并发更低；大积压会创建无界内存项和续租 timer | 只按可用槽位 bounded prefetch，暴露 backlog、oldest-age、running 和续租 QPS | 待优化 |
+| AUD-021 | P1 | 性能 | 附件 chunks 在主线程同步全量读取后才筛选，OneBot 单帧上限 384 MiB 且缺少入口背压 | SQL top-K/FTS 或 worker 查询；缩小帧上限并增加有界 intake | 待优化 |
+| AUD-022 | P1 | 部署 | 当前 Compose 是两个容器，不满足单容器交付；Native systemd unit、NapCat 安装和 QQ 状态未纳入仓库 runtime contract | 同一 release artifact 支持入库 Native units 与单镜像/单 service 容器 | 待优化 |
+| AUD-023 | P1 | 数据边界 | workspace 混合业务数据、秘密、NapCat 状态、缓存、临时和开发产物；同步脚本接近整目录打包 | 按 business/runtime/secrets/cache/backups 分层并使用分级快照 | 待优化 |
+| AUD-024 | P1 | 运行时 | 多处以 `process.cwd()` 推导代码根和数据根；审计时 Windows 与 WSL 还同时存在 8787 listener | 代码根用安装前缀解析，数据根只用 `SUNABOT_WORKSPACE`；增加 runtime doctor 和 split-brain 门禁 | 待优化 |
+| AUD-025 | P1 | CI | `package.json` 要求 Node 24，但 GitHub Actions 使用 Node 22 | CI、Native 和 Docker 固定同一已验证 Node 24 小版本 | 待优化 |
+| AUD-026 | P2 | 可维护性 | 目录缺少架构依赖门禁，14 个运维/迁移/同步脚本平铺，Codex Web Coding 脚手架没有独立边界 | 增加 architecture test；按 tooling/codex、runtime、workspace、migration、quality 分类 | 待优化 |
+| AUD-027 | P2 | 供应链 | Node/NapCat 镜像只锁 tag，非 npm 组件没有统一 digest、checksum、license、architecture 和 SBOM 清单 | 建立 component lock 和升级/许可证门禁 | 待优化 |
+| AUD-028 | P2 | 前端性能 | 会话页固定轮询，记忆页全量加载、过滤和渲染 | cursor/SSE、single-flight、服务端分页/搜索与虚拟列表 | 待优化 |
 
 ## 优化顺序
 
@@ -45,4 +58,8 @@
 
 第二阶段处理请求日志 FTS、消息增量表和记忆索引，目标是 10 万日志与 2,000 消息会话下管理 API p95 小于 200 ms，消息持久化 p95 小于 20 ms。
 
-第三阶段拆分运行时和记忆模块，先固定事件接口与回归测试，再移动代码，避免结构调整改变回复行为。
+第三阶段先固化 versioned contracts、ToolRegistry 和 architecture gate，再拆分运行时、记忆、Provider、HTTP 路由和附件内部组件，避免目录调整改变回复行为。
+
+第四阶段把 Native 与 Docker 收敛到同一 runtime contract：先入库 Native units 和 doctor，再构建单镜像、单 service、受监督双进程容器，最后迁移 workspace 分层。
+
+目标结构、模块协议、双运行模型和完整验收门槛见 `docs/architecture/project-structure-plan.md`。
