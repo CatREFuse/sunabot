@@ -1,13 +1,25 @@
 // @vitest-environment node
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { SunaRuntime } from "../../src/runtime.js";
 import { createAdminTestConfig } from "./admin-fixtures.js";
 
-const workspaceDir = path.join(process.cwd(), "workspace/business/agents/plana");
-const runtime = new SunaRuntime(createAdminTestConfig("/tmp/sunabot-memory-prompt-test"), {
-  attachmentService: {} as never
+let root = "";
+let workspaceDir = "";
+let runtime: SunaRuntime;
+
+beforeAll(async () => {
+  root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-memory-prompt-"));
+  const config = createAdminTestConfig(root);
+  workspaceDir = config.persona.agentWorkspace;
+  runtime = new SunaRuntime(config, { attachmentService: {} as never });
+  await runtime.ensureAgentPromptFiles(config);
+});
+
+afterAll(async () => {
+  await fs.rm(root, { recursive: true, force: true });
 });
 
 const promptFiles = [

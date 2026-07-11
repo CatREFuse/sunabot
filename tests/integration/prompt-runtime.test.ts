@@ -1,8 +1,10 @@
 // @vitest-environment node
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PROMPT_FILE_DEFINITIONS } from "../../services/agent/promptCatalog.js";
+import { defaultPromptContent } from "../../services/agent/promptDefaults.js";
 import {
   extractPromptVariables,
   parseFinalPromptTemplate,
@@ -12,9 +14,25 @@ import {
 } from "../../services/agent/promptSystem.js";
 import { defaultConfig } from "../../src/config.js";
 
-const workspace = path.join(process.cwd(), "workspace/business/agents/plana");
+let root = "";
+let workspace = "";
 const config = defaultConfig();
-config.persona.agentWorkspace = workspace;
+
+beforeAll(async () => {
+  root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-prompt-runtime-"));
+  workspace = path.join(root, "business/agents/plana");
+  config.persona.agentWorkspace = workspace;
+  await fs.mkdir(workspace, { recursive: true });
+  await Promise.all(PROMPT_FILE_DEFINITIONS.map((definition) => fs.writeFile(
+    path.join(workspace, definition.fileName(config)),
+    definition.kind === "final" ? defaultPromptContent(definition.id) : `${definition.id} fixture\n`,
+    "utf8"
+  )));
+});
+
+afterAll(async () => {
+  await fs.rm(root, { recursive: true, force: true });
+});
 
 describe("workspace prompt runtime", () => {
   it("parses and resolves every final request template without leftover variables", async () => {
