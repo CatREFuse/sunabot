@@ -65,6 +65,8 @@ ws://127.0.0.1:8787/onebot/v11/ws
 
 如果 `codex` 不在服务进程的 `PATH` 中，请在 `workspace/.env` 设置 `SUNABOT_CODEX_EXECUTABLE` 为其绝对路径。
 
+WSL 中如果 Windows 侧 Clash 使用默认 HTTP 代理端口 `7890`，systemd 可将 `ExecStart` 指向 `scripts/start-wsl-service.sh`；脚本会动态识别 Windows 网关并为 Node `fetch` 启用环境代理。其他端口可通过 unit 的 `SUNABOT_WINDOWS_PROXY_PORT` 指定，完全禁用则设置 `SUNABOT_WINDOWS_PROXY_MODE=off`。
+
 ## API Provider
 
 Provider 页面提供 Google Gemini 和 Anthropic Claude 的 OpenAI 兼容预设。预设分别使用 Gemini 官方兼容端点 `https://generativelanguage.googleapis.com/v1beta/openai/` 与 Anthropic 官方端点 `https://api.anthropic.com/v1/`；密钥只需写入 `workspace/.env` 的 `GEMINI_API_KEY` 或 `ANTHROPIC_API_KEY`。参考：[Gemini OpenAI compatibility](https://ai.google.dev/gemini-api/docs/openai)、[Anthropic OpenAI SDK compatibility](https://platform.claude.com/docs/en/api/openai-sdk)。
