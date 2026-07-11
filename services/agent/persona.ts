@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { AppConfig } from "../../src/types.js";
 import { resolveProjectPath } from "../../src/config.js";
-import { memoryRepository, type MemoryDataSource } from "../memory/persistence.js";
+import { memoryRepository, type MemoryDataSource } from "../memory/public.js";
 
 interface PersonaFile {
   name: string;

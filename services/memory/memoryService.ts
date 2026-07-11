@@ -8,7 +8,7 @@ import { AsyncMutex } from "../../packages/platform/mutex.js";
 import { ServiceError } from "../../packages/contracts/errors/serviceError.js";
 import { memoryRepository, type MemoryDataSource, type MemoryRepositoryPort } from "./persistence.js";
 
-export { MEMORY_RECALL_TOOL_NAME, memoryRecallTool } from "../tools/definitions.js";
+export { MEMORY_RECALL_TOOL_NAME, memoryRecallTool } from "../tools/public.js";
 const memoryMutationMutex = new AsyncMutex();
 
 function badRequest(code: string, message: string, field?: string): never {

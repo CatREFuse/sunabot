@@ -9,23 +9,6 @@ export const architectureDebtAllowances = [
     decision: "docs/architecture/project-structure-plan.md#fixed-collaboration-protocol"
   },
 
-  ...[
-    ["services/agent/persona.ts", "services/memory/persistence.ts", "MODULE-005"],
-    ["services/agent/promptDefaults.ts", "services/tools/bashTool.ts", "CONTRACT-004"],
-    ["services/agent/promptDefaults.ts", "services/tools/definitions.ts", "CONTRACT-004"],
-    ["services/agent/promptDefaults.ts", "services/tools/generateImgTool.ts", "CONTRACT-004"],
-    ["services/agent/promptDefaults.ts", "services/tools/selfieTool.ts", "CONTRACT-004"],
-    ["services/memory/memoryService.ts", "services/tools/definitions.ts", "MODULE-005, CONTRACT-004"]
-  ].map(([source, target, tracking]) => ({
-    id: `deep-import:${source}:${target}`,
-    rule: "public-api",
-    source,
-    target,
-    reason: "A migrated service still imports another service's implementation file instead of its public entry point.",
-    tracking,
-    decision: "docs/architecture/project-structure-plan.md#target-module-boundaries"
-  })),
-
   ...["session-event", "tool-job", "outbox"].map((target) => ({
     id: `durable-codec:${target}`,
     rule: "durable-codec",
