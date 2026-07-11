@@ -20,7 +20,6 @@ import {
   sqliteMemoryPersistence
 } from "../../adapters/sqlite/applicationDataStore.js";
 import { configureMemoryPersistence } from "../../services/memory/persistence.js";
-import { createMemoryEntry, deleteMemoryEntry, listMemoryEntries, recallMemory, updateMemoryEntry } from "../../services/memory/memoryService.js";
 import { ServiceError } from "../../packages/contracts/errors/serviceError.js";
 import { ConversationDirectory } from "../../services/conversations/conversationDirectory.js";
 import { OneBotGateway } from "../../adapters/onebot/onebotGateway.js";
@@ -31,6 +30,7 @@ import { SunaRuntime } from "../../src/runtime.js";
 import { ServiceMonitor } from "../../src/serviceMonitor.js";
 import { WORKSPACE_LAYOUT } from "../../packages/platform/workspaceLayout.js";
 import { registerAuthRoutes } from "./plugins/authRoutes.js";
+import { registerMemoryRoutes } from "./plugins/memoryRoutes.js";
 import { registerOneBotRoutes } from "./plugins/onebotRoutes.js";
 import { registerProviderConfigRoutes } from "./plugins/providerConfigRoutes.js";
 import {
@@ -272,6 +272,7 @@ app.get("/api/media/qq-avatar", async (request, reply) => {
 
 registerOneBotRoutes(app, onebotGateway);
 registerProviderConfigRoutes(app, { codexAuth, configService, testProvider: options.testProvider });
+registerMemoryRoutes(app, { getConfig: () => config, runtime });
 
 app.get("/api/agent-files", async () => {
   return agentFiles.list();
@@ -291,45 +292,6 @@ app.get("/api/tools", async () => {
   return { tools: defaultTools };
 });
 
-app.get("/api/memory", async (request) => {
-  const query = request.query as { source?: string };
-  const payload = await listMemoryEntries(config, query.source);
-  return { ...payload, entries: runtime.enrichMemoryEntries(payload.entries) };
-});
-
-app.post("/api/memory/recall", async (request) => {
-  const payload = await recallMemory(config, request.body as { query?: string; source?: string; limit?: number });
-  return { ...payload, matches: runtime.enrichMemoryEntries(payload.matches) };
-});
-
-app.post("/api/memory", async (request) => {
-  const entry = await createMemoryEntry(config, request.body as {
-    source?: string;
-    text?: string;
-    userId?: string;
-    userName?: string;
-    addressName?: string;
-  });
-  await runtime.reload(config);
-  return { ok: true, entry };
-});
-
-app.put("/api/memory", async (request) => {
-  const entry = await updateMemoryEntry(config, request.body as {
-    source?: string;
-    id?: string;
-    text?: string;
-    addressName?: string;
-  });
-  await runtime.reload(config);
-  return { ok: true, entry };
-});
-
-app.delete("/api/memory", async (request) => {
-  const result = await deleteMemoryEntry(config, request.body as { source?: string; id?: string });
-  await runtime.reload(config);
-  return result;
-});
 
 app.post("/api/playground/image", async (request, reply) => {
   const body = request.body as { prompt?: string; size?: string; resolution?: string; quality?: string; providerId?: string };
