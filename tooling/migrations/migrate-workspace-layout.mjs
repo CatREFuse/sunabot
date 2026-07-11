@@ -7,6 +7,7 @@ import process from "node:process";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { resolveProjectRoot, resolveWorkspace } from "../shared/paths.mjs";
+import { migrateLegacyNapcatQrCode } from "../../packages/platform/napcatRuntimeLayout.mjs";
 
 const LAYOUT_VERSION = 1;
 const DIRECTORY_MOVES = [
@@ -76,6 +77,13 @@ export async function migrateWorkspaceLayout(options) {
     for (const [source, destination] of [...DIRECTORY_MOVES, ...FILE_MOVES]) {
       await mergeMove(path.join(workspace, source), path.join(workspace, destination));
     }
+    const qrMigration = await migrateLegacyNapcatQrCode({
+      workspace,
+      paths: {
+        napcatState: "runtime/napcat",
+        napcatQrCode: "runtime/napcat/qrcode.png"
+      }
+    });
 
     const configPath = path.join(workspace, "business/config/sunabot.json");
     if (await exists(configPath)) await rewriteConfig(configPath);
@@ -87,10 +95,11 @@ export async function migrateWorkspaceLayout(options) {
       layoutVersion: LAYOUT_VERSION,
       migratedAt: new Date().toISOString(),
       backup: backup ? path.relative(workspace, backup.directory).replace(/\\/g, "/") : undefined,
+      napcatQrMigrated: qrMigration.migrated,
       databaseIntegrity: "ok"
     };
     await atomicJson(path.join(workspace, "runtime/workspace-layout.json"), marker);
-    return { workspace, migrated: legacyPaths.length > 0, backup, marker };
+    return { workspace, migrated: legacyPaths.length > 0 || qrMigration.migrated, backup, marker };
   } finally {
     await lock.close();
     await fs.rm(lockPath, { force: true });

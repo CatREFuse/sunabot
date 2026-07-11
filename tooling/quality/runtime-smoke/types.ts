@@ -26,6 +26,7 @@ export interface RuntimeLayout {
   config: string;
   secrets: string;
   napcatConfig: string;
+  napcatQrCode: string;
 }
 
 export interface SmokeContext {

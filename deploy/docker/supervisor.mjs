@@ -3,6 +3,10 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
+import {
+  ensureNapcatCacheLink,
+  ensureNapcatWritableCaches
+} from "../../packages/platform/napcatRuntimeLayout.mjs";
 
 const releaseRoot = "/srv/sunabot";
 const contract = JSON.parse(
@@ -78,6 +82,7 @@ async function preflight() {
 }
 
 async function prepareWorkspace() {
+  await ensureNapcatWritableCaches("/app/.cache");
   const directories = [
     path.dirname(contract.paths.config),
     path.dirname(contract.paths.database),
@@ -98,6 +103,12 @@ async function prepareWorkspace() {
       mode: 0o700
     }))
   );
+
+  await ensureNapcatCacheLink({
+    workspace,
+    paths: contract.paths,
+    shellRoot: "/app/napcat"
+  });
 
   const napcatConfig = path.join(workspace, contract.paths.napcatConfig);
   if (!(await exists(path.join(napcatConfig, "napcat.json")))) {

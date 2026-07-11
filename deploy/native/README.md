@@ -1,6 +1,6 @@
 # Native deployment
 
-Native 与 Docker 读取同一 `deploy/runtime-contract.json`，使用同一 API/Web release artifact、同一 workspace 路径和同一 NapCat 组件版本。支持 Linux/amd64（含 WSL2），不支持 Windows Native。
+Native 与 Docker 读取同一 `deploy/runtime-contract.json`，使用同一 API/Web release artifact、同一 workspace 路径和同一 NapCat 组件版本。安装、升级和回滚都会把版本化 NapCat 组件的 `cache` 链接到 `workspace/runtime/napcat`，二维码固定写入 `paths.napcatQrCode` 指定的 `runtime/napcat/qrcode.png`。支持 Linux/amd64（含 WSL2），不支持 Windows Native。
 
 Native API 在应用 composition root 中解析 `workspace/secrets/runtime.env` 已注入的代理契约。WSL 可使用 `SUNABOT_PROXY_MODE=auto` 动态发现默认网关，或使用 `wsl-host` 要求探测必须成功；无需在 systemd unit 或启动脚本中固定宿主 IP。回环地址始终加入 `NO_PROXY`，NapCat 与 OneBot 仍只走 `127.0.0.1`。
 

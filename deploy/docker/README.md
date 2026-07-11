@@ -4,7 +4,7 @@ Docker 交付固定为一个 `sunabot-qq-runtime` 镜像、一个 `qq-runtime` C
 
 Node 基础镜像按 `components/component.lock.json` 固定为 24.18.0 和对应 digest。Docker 构建阶段会读取实际 Node 二进制版本并与 `NODE_VERSION` 比较，运行时监督器再次与 runtime contract 核对。
 
-NapCat shell 的 `/app/napcat/config` 只链接到 runtime contract 的 `workspace/runtime/napcat/config-full`；监督器、配置工具和 Native 运行时使用同一个 `paths.napcatConfig`，不会创建并行配置目录。
+NapCat shell 的 `/app/napcat/config` 只链接到 runtime contract 的 `workspace/runtime/napcat/config-full`；监督器、配置工具和 Native 运行时使用同一个 `paths.napcatConfig`，不会创建并行配置目录。`/app/napcat/cache` 链接到 `workspace/runtime/napcat`，因此二维码始终落在 `paths.napcatQrCode` 指定的 `runtime/napcat/qrcode.png`。镜像还为 UID/GID 1000 创建并授权 `/app/.cache/fontconfig` 与 Mesa shader cache，避免非 root NapCat 反复产生缓存权限错误。
 
 运行环境文件固定为 `workspace/secrets/runtime.env`。至少配置 `ONEBOT_ACCESS_TOKEN`，首次登录可不填 `NAPCAT_ACCOUNT` 并从 NapCat WebUI 扫码。启动前先生成 OneBot 配置：
 

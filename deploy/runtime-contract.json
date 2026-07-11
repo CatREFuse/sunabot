@@ -24,6 +24,7 @@
     "media": "business/media/images",
     "napcatState": "runtime/napcat",
     "napcatConfig": "runtime/napcat/config-full",
+    "napcatQrCode": "runtime/napcat/qrcode.png",
     "secrets": "secrets/runtime.env",
     "logs": "runtime/logs",
     "temporary": "runtime/tmp",

@@ -37,7 +37,8 @@ export async function loadRuntimeLayout(root: string): Promise<RuntimeLayout> {
   const config = relativeContractPath(paths.config, "paths.config");
   const secrets = relativeContractPath(paths.secrets, "paths.secrets");
   const napcatConfig = relativeContractPath(paths.napcatConfig, "paths.napcatConfig");
-  return { config, secrets, napcatConfig };
+  const napcatQrCode = relativeContractPath(paths.napcatQrCode, "paths.napcatQrCode");
+  return { config, secrets, napcatConfig, napcatQrCode };
 }
 
 export async function readEnvTextWithin(filePath: string, workspace: string, label: string) {

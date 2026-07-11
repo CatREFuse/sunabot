@@ -40,7 +40,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     SUNABOT_HOST=0.0.0.0 \
     SUNABOT_PORT=8787 \
     HOME=/app \
-    XDG_CONFIG_HOME=/app/.config
+    XDG_CONFIG_HOME=/app/.config \
+    XDG_CACHE_HOME=/app/.cache
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends --fix-broken \
@@ -54,23 +55,31 @@ COPY --chown=1000:1000 deploy/runtime-contract.json /srv/sunabot/deploy/runtime-
 
 RUN napcat_config="$(/usr/local/bin/node -e 'const fs=require("node:fs");const contract=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));const value=contract.paths[process.argv[2]];if(typeof value!=="string"||value.startsWith("/")||value.split(/[\\/]/).includes(".."))throw new Error("invalid runtime path");process.stdout.write(value)' /srv/sunabot/deploy/runtime-contract.json napcatConfig)" \
     && napcat_state="$(/usr/local/bin/node -e 'const fs=require("node:fs");const contract=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));const value=contract.paths[process.argv[2]];if(typeof value!=="string"||value.startsWith("/")||value.split(/[\\/]/).includes(".."))throw new Error("invalid runtime path");process.stdout.write(value)' /srv/sunabot/deploy/runtime-contract.json napcatState)" \
+    && napcat_qr="$(/usr/local/bin/node -e 'const fs=require("node:fs");const contract=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));const value=contract.paths[process.argv[2]];if(typeof value!=="string"||value.startsWith("/")||value.split(/[\\/]/).includes(".."))throw new Error("invalid runtime path");process.stdout.write(value)' /srv/sunabot/deploy/runtime-contract.json napcatQrCode)" \
+    && test "$(dirname "$napcat_qr")" = "$napcat_state" \
     && rm -rf /app/napcat /app/.config/QQ \
     && mkdir -p \
         /app/napcat \
         /app/napcat-default-config \
+        /app/.cache/fontconfig \
+        /app/.cache/mesa_shader_cache \
+        /app/.cache/mesa_shader_cache_db \
         /app/.config \
         /srv/sunabot/workspace \
     && unzip -q /app/NapCat.Shell.zip -d /app/napcat \
     && cp -a /app/napcat/config/. /app/napcat-default-config/ \
     && rm -rf /app/napcat/config \
     && ln -s "$SUNABOT_WORKSPACE/$napcat_config" /app/napcat/config \
+    && rm -rf /app/napcat/cache \
+    && ln -s "$SUNABOT_WORKSPACE/$napcat_state" /app/napcat/cache \
     && ln -s "$SUNABOT_WORKSPACE/$napcat_state/qq" /app/.config/QQ \
     && chown -R 1000:1000 \
         /app/napcat \
         /app/napcat-default-config \
+        /app/.cache \
         /app/.config \
         /srv/sunabot \
-    && chown -h 1000:1000 /app/napcat/config /app/.config/QQ
+    && chown -h 1000:1000 /app/napcat/config /app/napcat/cache /app/.config/QQ
 
 WORKDIR /srv/sunabot
 COPY --from=build --chown=1000:1000 /srv/sunabot/package.json ./package.json
@@ -81,6 +90,7 @@ COPY --from=build --chown=1000:1000 /srv/sunabot/dist ./dist
 COPY --from=build --chown=1000:1000 /srv/sunabot/apps/admin-web/dist ./apps/admin-web/dist
 COPY --chown=1000:1000 deploy/docker/supervisor.mjs ./deploy/docker/supervisor.mjs
 COPY --chown=1000:1000 deploy/docker/healthcheck.mjs ./deploy/docker/healthcheck.mjs
+COPY --chown=1000:1000 packages/platform/napcatRuntimeLayout.mjs ./packages/platform/napcatRuntimeLayout.mjs
 COPY --chown=1000:1000 components/component.lock.json ./components/component.lock.json
 
 LABEL org.opencontainers.image.title="sunabot-qq-runtime" \

@@ -30,6 +30,7 @@ describe("workspace layout migration", () => {
     await write(path.join(workspace, "artifacts/file-cache/cache-key/source.txt"), "cache");
     await write(path.join(workspace, "security/admin-credentials.json"), "{}\n");
     await write(path.join(workspace, "napcat/config-full/webui.json"), "{}\n");
+    await write(path.join(workspace, "napcat/cache/qrcode.png"), "legacy-qr");
     await createDatabase(path.join(workspace, "artifacts/sunabot.sqlite"));
     await createDatabase(path.join(workspace, "artifacts/session-queue.sqlite"));
 
@@ -47,6 +48,10 @@ describe("workspace layout migration", () => {
     await expect(fs.access(path.join(workspace, "business/data/sunabot.sqlite"))).resolves.toBeUndefined();
     await expect(fs.access(path.join(workspace, "business/data/session-queue.sqlite"))).resolves.toBeUndefined();
     await expect(fs.access(path.join(workspace, "runtime/napcat/config-full/webui.json"))).resolves.toBeUndefined();
+    await expect(fs.readFile(path.join(workspace, "runtime/napcat/qrcode.png"), "utf8"))
+      .resolves.toBe("legacy-qr");
+    await expect(fs.access(path.join(workspace, "runtime/napcat/cache/qrcode.png")))
+      .rejects.toMatchObject({ code: "ENOENT" });
     await expect(fs.access(path.join(workspace, "cache/attachments/cache-key/source.txt"))).resolves.toBeUndefined();
     const config = JSON.parse(await fs.readFile(path.join(workspace, "business/config/sunabot.json"), "utf8"));
     expect(config.persona.agentWorkspace).toBe("workspace/business/agents/plana");

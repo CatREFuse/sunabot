@@ -7,6 +7,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import process from "node:process";
 import { resolveProjectRoot } from "../shared/paths.mjs";
+import { ensureNapcatCacheLink } from "../../packages/platform/napcatRuntimeLayout.mjs";
 
 const root = resolveProjectRoot(import.meta.url);
 const contract = JSON.parse(
@@ -97,6 +98,7 @@ async function install() {
     await prepareNativeComponent(componentStage, componentFinal);
     await installImmutable(releaseStage, releaseFinal);
     await installImmutable(componentStage, componentFinal);
+    await ensureNativeNapcatCacheLink(componentFinal);
     await switchSymlink(path.join(componentBase, "current"), componentFinal);
     await switchSymlink(contract.paths.installPrefix, releaseFinal);
     await installSystemdUnits(releaseFinal);
@@ -122,6 +124,7 @@ async function rollback() {
     fsPromises.access(path.join(componentTarget, "component-manifest.json"))
   ]);
   validateReleaseManifest(releaseManifest, releaseVersion);
+  await ensureNativeNapcatCacheLink(componentTarget);
   await switchSymlink(path.join(componentBase, "current"), componentTarget);
   await switchSymlink(contract.paths.installPrefix, releaseTarget);
   await installSystemdUnits(releaseTarget);
@@ -162,12 +165,21 @@ async function prepareNativeComponent(stage, finalPath) {
     configPath,
     "dir"
   );
+  await ensureNapcatCacheLink({ workspace, paths: contract.paths, shellRoot });
   const finalShellUrl = pathToFileURL(path.join(finalPath, "app/napcat/napcat.mjs")).href;
   await fsPromises.writeFile(
     path.join(stage, "opt/QQ/resources/app/loadNapCat.js"),
     `(async () => { await import(${JSON.stringify(finalShellUrl)}); })();\n`,
     { encoding: "utf8", mode: 0o644 }
   );
+}
+
+async function ensureNativeNapcatCacheLink(componentRoot) {
+  await ensureNapcatCacheLink({
+    workspace,
+    paths: contract.paths,
+    shellRoot: path.join(componentRoot, "app/napcat")
+  });
 }
 
 async function prepareWorkspace() {

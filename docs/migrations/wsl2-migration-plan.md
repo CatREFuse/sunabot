@@ -81,7 +81,7 @@ workspace/business/media/
 workspace/runtime/napcat/
 ```
 
-`workspace/runtime/napcat/config-full/` 是唯一 NapCat 配置目录；Docker 与 Native 均从 runtime contract 的 `paths.napcatConfig` 读取该路径，迁移后不得另建 `runtime/napcat/config/`。
+`workspace/runtime/napcat/config-full/` 是唯一 NapCat 配置目录；Docker 与 Native 均从 runtime contract 的 `paths.napcatConfig` 读取该路径，迁移后不得另建 `runtime/napcat/config/`。登录二维码唯一位置为 `workspace/runtime/napcat/qrcode.png`；迁移器会保留旧 `napcat/cache/qrcode.png`，组件安装和启动会把后续 `cache/qrcode.png` 写入收口到该 workspace 路径。
 
 排除：
 

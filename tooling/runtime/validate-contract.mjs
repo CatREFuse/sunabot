@@ -22,7 +22,11 @@ const [
   nativeRuntime,
   nativeNapcatStart,
   configureNapcat,
-  runtimeSmokeLayout
+  runtimeSmokeLayout,
+  workspaceLayout,
+  onebotRoutes,
+  workspaceMigration,
+  buildRelease
 ] = await Promise.all([
   readJson(contractPath),
   readJson(path.join(root, "deploy/runtime-contract.schema.json")),
@@ -33,7 +37,11 @@ const [
   fs.readFile(path.join(root, "tooling/runtime/native.mjs"), "utf8"),
   fs.readFile(path.join(root, "deploy/native/bin/start-napcat.sh"), "utf8"),
   fs.readFile(path.join(root, "tooling/runtime/configure-napcat-client.mjs"), "utf8"),
-  fs.readFile(path.join(root, "tooling/quality/runtime-smoke/shared.ts"), "utf8")
+  fs.readFile(path.join(root, "tooling/quality/runtime-smoke/shared.ts"), "utf8"),
+  fs.readFile(path.join(root, "packages/platform/workspaceLayout.ts"), "utf8"),
+  fs.readFile(path.join(root, "apps/api/plugins/onebotRoutes.ts"), "utf8"),
+  fs.readFile(path.join(root, "tooling/migrations/migrate-workspace-layout.mjs"), "utf8"),
+  fs.readFile(path.join(root, "tooling/runtime/build-release.mjs"), "utf8")
 ]);
 const errors = [];
 errors.push(...validateNodeVersionEntrypoints(await readNodeVersionContractInputs(root)));
@@ -62,6 +70,22 @@ expect(
 expect(
   schema.properties?.paths?.properties?.napcatConfig?.const === contract.paths.napcatConfig,
   "runtime contract schema must fix the NapCat config path"
+);
+expect(
+  contract.paths.napcatQrCode === "runtime/napcat/qrcode.png",
+  "NapCat QR code must use runtime/napcat/qrcode.png"
+);
+expect(
+  path.dirname(contract.paths.napcatQrCode) === contract.paths.napcatState,
+  "NapCat QR code must be a direct child of the NapCat state root"
+);
+expect(
+  schema.properties?.paths?.required?.includes("napcatQrCode"),
+  "runtime contract schema must require paths.napcatQrCode"
+);
+expect(
+  schema.properties?.paths?.properties?.napcatQrCode?.const === contract.paths.napcatQrCode,
+  "runtime contract schema must fix the NapCat QR code path"
 );
 
 for (const [name, value] of Object.entries(contract.paths)) {
@@ -92,9 +116,28 @@ expect(
   "Docker NapCat config symlink must be resolved from paths.napcatConfig"
 );
 expect(
+  dockerfile.includes("napcatQrCode)")
+    && dockerfile.includes('ln -s "$SUNABOT_WORKSPACE/$napcat_state" /app/napcat/cache'),
+  "Docker NapCat cache must link to the workspace state containing paths.napcatQrCode"
+);
+expect(
+  dockerfile.includes("XDG_CACHE_HOME=/app/.cache")
+    && dockerfile.includes("/app/.cache/fontconfig")
+    && dockerfile.includes("/app/.cache/mesa_shader_cache")
+    && dockerfile.includes("/app/.cache/mesa_shader_cache_db")
+    && dockerfile.includes("chown -R 1000:1000"),
+  "Docker must provision writable fontconfig and shader caches for the non-root runtime"
+);
+expect(
   supervisor.includes("contract.paths.napcatConfig")
     && !supervisor.includes('path.join(contract.paths.napcatState, "config")'),
   "Docker supervisor must use paths.napcatConfig"
+);
+expect(
+  supervisor.includes("ensureNapcatCacheLink")
+    && supervisor.includes('shellRoot: "/app/napcat"')
+    && supervisor.includes('ensureNapcatWritableCaches("/app/.cache")'),
+  "Docker supervisor must validate the NapCat cache link and writable process caches"
 );
 expect(
   nativeRuntime.includes("contract.paths.napcatConfig")
@@ -107,6 +150,11 @@ expect(
   "Native NapCat start must resolve paths.napcatConfig from the runtime contract"
 );
 expect(
+  nativeRuntime.includes("ensureNapcatCacheLink")
+    && nativeNapcatStart.includes('readRelativePath("napcatQrCode")'),
+  "Native runtime must link the NapCat component cache to paths.napcatQrCode"
+);
+expect(
   configureNapcat.includes("contract.paths.napcatConfig")
     && !configureNapcat.includes('path.join(workspace, contract.paths.napcatState, "config")'),
   "NapCat configure tooling must use paths.napcatConfig"
@@ -114,6 +162,23 @@ expect(
 expect(
   runtimeSmokeLayout.includes('relativeContractPath(paths.napcatConfig, "paths.napcatConfig")'),
   "runtime smoke must load paths.napcatConfig from the runtime contract"
+);
+expect(
+  runtimeSmokeLayout.includes('relativeContractPath(paths.napcatQrCode, "paths.napcatQrCode")'),
+  "runtime smoke must load paths.napcatQrCode from the runtime contract"
+);
+expect(
+  workspaceLayout.includes('napcatQrCode: "runtime/napcat/qrcode.png"')
+    && onebotRoutes.includes("getWorkspacePath(WORKSPACE_LAYOUT.napcatQrCode)"),
+  "Admin API and workspace layout must read the contract NapCat QR code path"
+);
+expect(
+  workspaceMigration.includes("migrateLegacyNapcatQrCode"),
+  "workspace migration must preserve legacy NapCat QR codes"
+);
+expect(
+  buildRelease.includes('"packages/platform/napcatRuntimeLayout.mjs"'),
+  "Native release must include the NapCat runtime layout helper"
 );
 
 for (const [name, component] of Object.entries(lock.components ?? {})) {
