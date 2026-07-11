@@ -1,8 +1,20 @@
 {
+  "$schema": "./runtime-contract.schema.json",
   "schemaVersion": 1,
   "runtimeId": "sunabot-qq-runtime",
+  "releaseVersion": "0.1.0",
   "supportedPlatforms": ["linux/amd64"],
   "nodeVersion": "24.18.0",
+  "runtimeUsers": {
+    "docker": {
+      "name": "napcat",
+      "uid": 1000,
+      "gid": 1000
+    },
+    "native": {
+      "name": "sunabot"
+    }
+  },
   "paths": {
     "installPrefix": "/opt/sunabot/current",
     "workspace": "/srv/sunabot/workspace",
@@ -23,11 +35,44 @@
     "napcatWebuiPort": 6099,
     "onebotReverseWebSocket": "ws://127.0.0.1:8787/onebot/v11/ws"
   },
+  "processes": {
+    "startupOrder": ["sunabot", "napcat"],
+    "supervisor": "deploy/docker/supervisor.mjs",
+    "restartDelaySeconds": {
+      "sunabot": 2,
+      "napcat": 10
+    }
+  },
   "shutdownTimeoutSeconds": 30,
   "health": {
     "livenessPath": "/api/auth/session",
+    "livenessCommand": [
+      "/usr/local/bin/node",
+      "/srv/sunabot/deploy/docker/healthcheck.mjs"
+    ],
     "readinessLayers": ["api", "onebot", "qq", "provider"]
+  },
+  "capabilities": {
+    "required": ["admin-web", "onebot-v11", "image-generation", "office-documents"],
+    "optional": ["codex-cli", "websearch", "workspace-bash"]
+  },
+  "resources": {
+    "memory": "4g",
+    "cpus": 4,
+    "pids": 512,
+    "sharedMemory": "1g",
+    "logMaxSize": "20m",
+    "logMaxFiles": 5
+  },
+  "docker": {
+    "image": "sunabot-qq-runtime",
+    "composeService": "qq-runtime",
+    "workspaceMount": "/srv/sunabot/workspace"
+  },
+  "native": {
+    "apiUnit": "sunabot-api.service",
+    "napcatUnit": "sunabot-napcat.service",
+    "targetUnit": "sunabot-runtime.target"
   },
   "componentsLock": "components/component.lock.json"
 }
-

@@ -2,6 +2,7 @@
 set -euo pipefail
 
 root="${SUNABOT_RELEASE_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)}"
+workspace="${SUNABOT_WORKSPACE:?SUNABOT_WORKSPACE is required}"
 cd "$root"
 
 # Windows proxy applications are reached through WSL's current default gateway.
@@ -25,9 +26,10 @@ if [[ "$is_wsl" == "true" && "${SUNABOT_WINDOWS_PROXY_MODE:-auto}" != "off" && -
 fi
 
 node_bin="${SUNABOT_NODE_EXECUTABLE:-$(command -v node)}"
-node_major="$($node_bin -p 'Number(process.versions.node.split(".")[0])')"
-if (( node_major < 24 )); then
-  printf 'Sunabot requires Node.js 24 or newer; found %s.\n' "$($node_bin -v)" >&2
+expected_node="$($node_bin -e 'const c=require(process.argv[1]); process.stdout.write(c.nodeVersion)' "$root/deploy/runtime-contract.json")"
+actual_node="$($node_bin -p 'process.versions.node')"
+if [[ "$actual_node" != "$expected_node" ]]; then
+  printf 'Sunabot requires Node.js %s; found %s.\n' "$expected_node" "$actual_node" >&2
   exit 1
 fi
 

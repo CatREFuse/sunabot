@@ -1,51 +1,45 @@
 name: sunabot
 
 services:
-  sunabot:
+  qq-runtime:
     build:
       context: ../..
       dockerfile: deploy/docker/Dockerfile
-    image: sunabot:local
-    container_name: sunabot
+      args:
+        SUNABOT_RELEASE_VERSION: ${SUNABOT_RELEASE_VERSION:-0.1.0}
+    image: sunabot-qq-runtime:${SUNABOT_IMAGE_TAG:-local}
+    container_name: sunabot-qq-runtime
+    platform: linux/amd64
     restart: unless-stopped
-    init: true
     env_file:
-      - ${SUNABOT_WORKSPACE:-../../workspace}/.env
+      - ${SUNABOT_RUNTIME_ENV:?Set SUNABOT_RUNTIME_ENV to secrets/runtime.env}
     environment:
+      NODE_ENV: production
       SUNABOT_HOST: 0.0.0.0
       SUNABOT_PORT: 8787
       SUNABOT_WORKSPACE: /srv/sunabot/workspace
-      ONEBOT_ACCESS_TOKEN: ${ONEBOT_ACCESS_TOKEN:?Set ONEBOT_ACCESS_TOKEN in workspace/.env}
     ports:
       - "127.0.0.1:${SUNABOT_PORT:-8787}:8787"
       - "127.0.0.1:${NAPCAT_WEBUI_PORT:-6099}:6099"
     volumes:
-      - ${SUNABOT_WORKSPACE:-../../workspace}:/srv/sunabot/workspace
-    healthcheck:
-      test:
-        - CMD
-        - node
-        - -e
-        - fetch('http://127.0.0.1:8787/api/auth/session').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 30s
-
-  napcat:
-    image: mlikiowa/napcat-docker:v4.15.0
-    container_name: sunabot-napcat
-    restart: unless-stopped
-    network_mode: service:sunabot
-    depends_on:
-      sunabot:
-        condition: service_healthy
-    environment:
-      NAPCAT_UID: ${NAPCAT_UID:-1000}
-      NAPCAT_GID: ${NAPCAT_GID:-1000}
-      ACCOUNT: ${NAPCAT_ACCOUNT:?Set NAPCAT_ACCOUNT in workspace/.env}
-    volumes:
-      - ${SUNABOT_WORKSPACE:-../../workspace}:/srv/sunabot/workspace:ro
-      - ${SUNABOT_WORKSPACE:-../../workspace}/napcat:/app/.config/QQ
-      - ${SUNABOT_WORKSPACE:-../../workspace}/napcat/config-full:/app/napcat/config
+      - ${SUNABOT_WORKSPACE:?Set SUNABOT_WORKSPACE to an absolute path}:/srv/sunabot/workspace
     shm_size: 1gb
+    stop_grace_period: 35s
+    pids_limit: 512
+    mem_limit: ${SUNABOT_MEMORY_LIMIT:-4g}
+    cpus: ${SUNABOT_CPU_LIMIT:-4.0}
+    ulimits:
+      nofile:
+        soft: 8192
+        hard: 8192
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=512m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: local
+      options:
+        max-size: ${SUNABOT_LOG_MAX_SIZE:-20m}
+        max-file: ${SUNABOT_LOG_MAX_FILES:-5}

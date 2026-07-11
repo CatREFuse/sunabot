@@ -7,12 +7,17 @@ import { resolveProjectRoot, resolveWorkspace } from "../shared/paths.mjs";
 
 const root = resolveProjectRoot(import.meta.url);
 const workspace = resolveWorkspace(root);
+const contract = JSON.parse(
+  await fs.readFile(path.join(root, "deploy/runtime-contract.json"), "utf8")
+);
 const configDir = process.argv[2]
   ? path.resolve(root, process.argv[2])
-  : path.join(workspace, "napcat/config-full");
-const env = dotenv.parse(await fs.readFile(path.join(workspace, ".env"), "utf8"));
+  : path.join(workspace, contract.paths.napcatState, "config");
+const env = dotenv.parse(
+  await fs.readFile(path.join(workspace, contract.paths.secrets), "utf8")
+);
 const token = env.ONEBOT_ACCESS_TOKEN?.trim();
-if (!token) throw new Error("workspace/.env 缺少 ONEBOT_ACCESS_TOKEN。");
+if (!token) throw new Error(`${contract.paths.secrets} 缺少 ONEBOT_ACCESS_TOKEN。`);
 const account = env.NAPCAT_ACCOUNT?.trim();
 
 await fs.mkdir(configDir, { recursive: true });
@@ -37,7 +42,7 @@ for (const name of names) {
     ...template,
     name: "sunabot",
     enable: true,
-    url: "ws://127.0.0.1:8787/onebot/v11/ws",
+    url: contract.network.onebotReverseWebSocket,
     messagePostFormat: "array",
     reportSelfMessage: false,
     reconnectInterval: 5000,

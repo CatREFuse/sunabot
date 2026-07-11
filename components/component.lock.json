@@ -1,25 +1,69 @@
 {
+  "$schema": "./component-lock.schema.json",
   "schemaVersion": 1,
-  "architecture": "linux/amd64",
+  "supportedPlatforms": ["linux/amd64"],
   "components": {
     "node": {
       "version": "24.18.0",
+      "source": "https://hub.docker.com/_/node",
       "image": "docker.io/library/node:24.18.0-bookworm-slim",
       "digest": "sha256:cb4e8f7c443347358b7875e717c29e27bf9befc8f5a26cf18af3c3dec80e58c5",
-      "license": "MIT"
+      "license": "MIT",
+      "architectures": ["linux/amd64"],
+      "smoke": ["node", "--version"]
     },
     "napcat": {
       "version": "4.15.0",
-      "image": "mlikiowa/napcat-docker:v4.15.0",
+      "source": "https://github.com/NapNeko/NapCat-Docker",
+      "image": "docker.io/mlikiowa/napcat-docker:v4.15.0",
       "digest": "sha256:cde89d766604e570517e9ce66304d4222210479d2209ec04e5d58890dea087f7",
-      "licenseReview": "required-before-redistribution"
+      "license": "pending-review",
+      "redistribution": "local-build-only-pending-review",
+      "architectures": ["linux/amd64"],
+      "smoke": ["test", "-f", "/app/napcat/napcat.mjs"]
+    },
+    "qq": {
+      "version": "3.2.21-42086",
+      "source": "https://im.qq.com/linuxqq/index.shtml",
+      "integrity": "provided-by-napcat-image-digest",
+      "license": "proprietary",
+      "redistribution": "local-build-only",
+      "architectures": ["linux/amd64"],
+      "smoke": ["test", "-x", "/opt/QQ/qq"]
     },
     "libreoffice": {
-      "distribution": "debian-bookworm",
+      "version": "1:7.3.7-0ubuntu0.22.04.11",
+      "source": "http://archive.ubuntu.com/ubuntu",
       "package": "libreoffice",
-      "versionPolicy": "locked-by-image-snapshot",
-      "license": "MPL-2.0"
+      "distribution": "ubuntu-jammy",
+      "license": "MPL-2.0",
+      "architectures": ["linux/amd64"],
+      "smoke": ["libreoffice", "--version"]
+    },
+    "fonts-noto-cjk": {
+      "version": "1:20220127+repack1-1",
+      "source": "http://archive.ubuntu.com/ubuntu",
+      "package": "fonts-noto-cjk",
+      "distribution": "ubuntu-jammy",
+      "license": "OFL-1.1",
+      "architectures": ["linux/amd64"],
+      "smoke": ["test", "-d", "/usr/share/fonts/opentype/noto"]
+    },
+    "tini": {
+      "version": "0.19.0-1",
+      "source": "http://archive.ubuntu.com/ubuntu",
+      "package": "tini",
+      "distribution": "ubuntu-jammy",
+      "license": "MIT",
+      "architectures": ["linux/amd64"],
+      "smoke": ["tini", "--version"]
+    },
+    "codex-cli": {
+      "optional": true,
+      "source": "https://developers.openai.com/codex/cli",
+      "license": "Apache-2.0",
+      "architectures": ["linux/amd64"],
+      "smoke": ["codex", "--version"]
     }
   }
 }
-
