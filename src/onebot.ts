@@ -40,7 +40,6 @@ export interface OutboundImageAsset {
 
 export interface OneBotGatewayOptions {
   outboundMedia?: OutboundMediaDelivery;
-  outboundMediaBaseUrl?: string;
 }
 
 export class OneBotGateway extends EventEmitter {
@@ -225,30 +224,12 @@ export class OneBotGateway extends EventEmitter {
   private async resolveImageSources(images: OutboundImageAsset[]) {
     const sources = await Promise.all(images.map(async (image) => {
       if (image.filePath && this.options.outboundMedia) {
-        const signedPath = await this.options.outboundMedia.createSignedPath(image.filePath);
-        const configuredBaseUrl = this.options.outboundMediaBaseUrl?.trim() ||
-          process.env.SUNABOT_OUTBOUND_MEDIA_BASE_URL?.trim();
-        if (!configuredBaseUrl) return image.filePath;
-        return this.resolveOutboundMediaUrl(signedPath);
+        return this.options.outboundMedia.createReference(image.filePath);
       }
       if (image.url && /^https?:\/\//i.test(image.url)) return image.url;
-      if (image.url?.startsWith("/")) {
-        return this.resolveOutboundMediaUrl(image.url);
-      }
       return image.filePath ?? "";
     }));
     return sources.filter(Boolean);
-  }
-
-  private resolveOutboundMediaUrl(resourcePath: string) {
-    const configured = this.options.outboundMediaBaseUrl?.trim() ||
-      process.env.SUNABOT_OUTBOUND_MEDIA_BASE_URL?.trim() ||
-      `http://127.0.0.1:${this.config.server.port}`;
-    const baseUrl = new URL(configured);
-    if (!/^https?:$/.test(baseUrl.protocol) || baseUrl.username || baseUrl.password) {
-      throw new Error("Outbound media base URL must use HTTP(S) without embedded credentials.");
-    }
-    return new URL(resourcePath, `${baseUrl.origin}/`).toString();
   }
 
   private async handleMessage(ws: WebSocket, data: string) {
@@ -379,10 +360,7 @@ export function isTrustedTokenlessHost(host: string | undefined) {
   } catch {
     return false;
   }
-  return isLoopbackHost(hostname) ||
-    hostname === "host.docker.internal" ||
-    hostname === "gateway.docker.internal" ||
-    hostname === "host.lima.internal";
+  return isLoopbackHost(hostname);
 }
 
 function compactText(text: string) {

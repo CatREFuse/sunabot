@@ -28,7 +28,7 @@ Docker Desktop 官方明确不支持 Windows Server 2019/2022 等 Server 版本�
 | LibreOffice | 可迁移 | 安装 Ubuntu 的 `libreoffice`，代码已包含 `/usr/bin/soffice` 和 `/usr/bin/libreoffice` |
 | Codex CLI | 条件可用 | 在 WSL 内安装 Codex CLI，或设置 `SUNABOT_CODEX_BIN`；macOS App 内置路径不会在 Linux 分支使用 |
 | Bash 工具 | 可用但隔离较弱 | Linux 没有 macOS `sandbox-exec`；迁移初期保持管理员专用，并使用 systemd 文件系统限制 |
-| NapCat | 可迁移 | 继续运行 Linux 容器；首次启动后可能需要重新扫码登录 |
+| QQ Runtime | 可迁移 | Sunabot 与 NapCat 作为同一 Compose 项目运行，共享网络命名空间和 workspace；首次启动后可能需要重新扫码登录 |
 | Bark | 可迁移 | HTTPS 通知脚本不依赖 macOS |
 
 ## 3. 迁移包结构
@@ -191,37 +191,34 @@ docker-compose-plugin
 4. 确认 `workspace/config/sunabot.json` 使用 `workspace/.env` 和 `workspace/agents/plana`。
 5. 在 WSL 内执行 `npm ci`，不要复制 macOS `node_modules`。
 6. 执行 `npm run check && npm test && npm run build`。
-7. 执行 `docker compose -f docker-compose.napcat.yml up -d`。
-8. 在 NapCat WebUI 配置反向 WebSocket：`ws://host.docker.internal:8787/onebot/v11/ws`。
-9. 启动 sunabot，完成 API、管理台、OneBot 和 QQ 实测。
+7. 在 `workspace/.env` 设置 `NAPCAT_ACCOUNT` 与 `ONEBOT_ACCESS_TOKEN`。
+8. 执行 `npm run qq:configure`，生成固定回环 OneBot 配置。
+9. 执行 `npm run qq:up`，启动 `components/qq-runtime/compose.yml` 定义的整个 QQ Runtime。
+10. 完成 API、管理台、OneBot、文本消息和本地路径图片实测。
 
-`docker-compose.napcat.yml` 已把 `host.docker.internal` 映射到 Docker host gateway，因此 Docker Desktop 和 WSL 内原生 Docker Engine 都能使用同一地址。
+Compose 中 NapCat 共享 Sunabot 的网络命名空间与 `/srv/sunabot/workspace` 挂载，因此反向 WebSocket 固定为 `ws://127.0.0.1:8787/onebot/v11/ws`，图片固定使用共享绝对路径。迁移后不得恢复 `host.docker.internal`、Compose 服务名或远程 OneBot 地址。
 
 ## 6. systemd 服务
 
-创建 `/etc/systemd/system/sunabot.service`：
+Docker 生产模式由一个 systemd unit 管理整个 QQ Runtime，而不是分别启动 Sunabot 与 NapCat。创建 `/etc/systemd/system/sunabot-qq-runtime.service`：
 
 ```ini
 [Unit]
-Description=sunabot OneBot agent
+Description=Sunabot QQ Runtime
 After=network-online.target docker.service
-Wants=network-online.target
+Wants=network-online.target docker.service
 
 [Service]
-Type=simple
+Type=oneshot
+RemainAfterExit=yes
 User=sunabot
 Group=sunabot
 WorkingDirectory=/srv/sunabot
 EnvironmentFile=/srv/sunabot/workspace/.env
-ExecStart=/usr/bin/node /srv/sunabot/dist/server.js
-Restart=on-failure
-RestartSec=5
+ExecStart=/usr/bin/npm run qq:start
+ExecStop=/usr/bin/npm run qq:down
 UMask=0077
 NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=/srv/sunabot/workspace
 
 [Install]
 WantedBy=multi-user.target
@@ -231,9 +228,9 @@ WantedBy=multi-user.target
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable --now sunabot
-sudo systemctl status sunabot
-journalctl -u sunabot -n 200 --no-pager
+sudo systemctl enable --now sunabot-qq-runtime
+sudo systemctl status sunabot-qq-runtime
+cd /srv/sunabot && npm run qq:logs
 ```
 
 Windows 计划任务使用迁移专用 Windows 账户，在开机时运行：
@@ -242,11 +239,11 @@ Windows 计划任务使用迁移专用 Windows 账户，在开机时运行：
 wsl.exe -d Ubuntu-24.04 --exec /bin/sleep infinity
 ```
 
-该任务用于启动并保持 WSL 实例；systemd 负责启动和重启 sunabot、Docker 与 NapCat。
+该任务用于启动并保持 WSL 实例；systemd 负责启动 Docker 与整个 QQ Runtime。
 
 ## 7. 网络
 
-sunabot 在 WSL 内监听 `0.0.0.0:8787`，NapCat WebUI 使用 `6099`。Windows 11 22H2 以上可在 `.wslconfig` 启用 `networkingMode=mirrored`，以获得 localhost、IPv6、VPN 和 LAN 兼容性；外部访问仍需配置 Hyper-V/Windows 防火墙规则。[WSL 网络](https://learn.microsoft.com/en-us/windows/wsl/networking)
+QQ Runtime 内部只使用回环 OneBot 和共享文件路径。Sunabot 容器内部监听 `0.0.0.0:8787`，Compose 仅向宿主机 `127.0.0.1` 发布管理台 8787 与 NapCat WebUI 6099。Windows 11 22H2 以上可在 `.wslconfig` 启用 `networkingMode=mirrored`，以获得 localhost、IPv6、VPN 和 LAN 兼容性；外部管理入口仍需配置受控 HTTPS 代理。[WSL 网络](https://learn.microsoft.com/en-us/windows/wsl/networking)
 
 如果使用默认 NAT 并需要 LAN 访问，开机任务应读取 `wsl hostname -I`，刷新 Windows `netsh interface portproxy`，并开放 8787 与 6099。仅本机使用时不开放公网端口。
 
@@ -259,10 +256,10 @@ sunabot 在 WSL 内监听 `0.0.0.0:8787`，NapCat WebUI 使用 `6099`。Windows 
 | `npm run verify` | 全部通过 |
 | SQLite | 两个数据库 `integrity_check=ok`，记录数与源机一致 |
 | 管理台 | Windows 浏览器可访问，登录、设置、对话、记忆和图片正常 |
-| OneBot | WebSocket 已连接，私聊、群聊、@、reply、图片、文件均通过 |
+| OneBot | 回环 WebSocket 已连接，私聊、群聊、@、reply、图片、文件均通过；不存在远程 OneBot 地址 |
 | 工具 | websearch、图像生成、自拍、Codex、Bash 权限符合预期 |
 | LibreOffice | PDF、DOCX、PPTX、XLSX 解析通过 |
-| NapCat | 容器重启后自动恢复；必要时重新扫码 |
+| QQ Runtime | 两个容器共享网络命名空间和 workspace，重启后自动恢复；必要时重新扫码 |
 | 重启 | Windows 重启后 WSL、Docker、NapCat、sunabot 自动恢复 |
 | 备份 | WSL export 与 workspace 加密快照可恢复，且同步密钥独立保存 |
 

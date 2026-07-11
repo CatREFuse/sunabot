@@ -1,54 +1,70 @@
-# Sunabot NapCat Setup
+# Sunabot QQ Runtime
 
-## 启动 Sunabot
+## 运行边界
+
+Sunabot、OneBot v11 网关与 NapCat/QQ 构成一个本机 QQ Runtime。OneBot 网关属于 Sunabot 进程，NapCat 是同一运行单元内的 QQ 适配进程，不支持远程部署。
+
+固定通信参数：
+
+```text
+OneBot reverse WebSocket: ws://127.0.0.1:8787/onebot/v11/ws
+共享 workspace:           /srv/sunabot/workspace
+生成图片目录:             /srv/sunabot/workspace/artifacts/images
+```
+
+生成图片以经过边界校验的绝对文件路径发送给 NapCat，不提供 OneBot 专用 HTTP 媒体回调。
+
+## Docker 启动
+
+Compose 定义位于 `components/qq-runtime/compose.yml`。Sunabot 与 NapCat 使用独立容器进程，但 NapCat 共享 Sunabot 的网络命名空间；双方的 `127.0.0.1` 指向同一运行单元。workspace 在两个容器中都挂载为 `/srv/sunabot/workspace`。
 
 ```bash
 npm ci
 npm run workspace:init
-npm run admin:set-password -- admin
-npm run dev
 ```
 
-默认地址：
+在 `workspace/.env` 至少设置：
 
 ```text
-http://127.0.0.1:8787
-ws://127.0.0.1:8787/onebot/v11/ws
+NAPCAT_ACCOUNT=你的QQ号
+ONEBOT_ACCESS_TOKEN=随机长令牌
 ```
 
-## 启动 NapCat
+初始化 NapCat OneBot 配置并启动：
 
 ```bash
-npm run napcat:up
-npm run napcat:logs
+npm run admin:set-password -- admin
+npm run qq:configure
+npm run qq:up
+npm run qq:logs
 ```
 
-NapCat WebUI：
+本机入口：
 
 ```text
-http://127.0.0.1:6099/webui
+管理台:       http://127.0.0.1:8787
+NapCat WebUI: http://127.0.0.1:6099/webui
 ```
 
-## OneBot 连接
+Compose 只在 Sunabot 容器上发布回环端口；NapCat 不发布独立 OneBot 端口，也不创建 `host.docker.internal` 映射。
 
-在 NapCat WebUI 中添加反向 WebSocket：
+## 非 Docker 启动
 
-```text
-ws://host.docker.internal:8787/onebot/v11/ws
+Sunabot 与 NapCat 必须运行在同一 Linux/WSL 环境，并看到同一个 `/srv/sunabot/workspace`。NapCat 的 OneBot 配置仍使用固定回环 URL：
+
+```bash
+npm run qq:configure -- /path/to/napcat/config
 ```
 
-NapCat 与 Sunabot 在同一主机直接运行时使用：
+由同一 systemd 用户会话管理两个进程。Sunabot 必须先监听 8787；NapCat 可持续重连，不需要其他网络地址。
 
-```text
-ws://127.0.0.1:8787/onebot/v11/ws
-```
+## 验收
 
-NapCat 与 Sunabot 共享文件系统时，生成图片默认直接传递绝对文件路径，不设置 `SUNABOT_OUTBOUND_MEDIA_BASE_URL`。如果 NapCat 运行在 Docker 中而 Sunabot 运行在宿主机，请在 `workspace/.env` 设置签名图片回调地址：
+1. QQ 登录状态为 `online=true`。
+2. Sunabot 监听 `127.0.0.1:8787`，NapCat 与其存在回环 WebSocket 连接。
+3. OneBot 文本 action 成功返回消息 ID。
+4. 生成图片位于共享目录，OneBot image 段的 `file` 是同一绝对路径。
+5. NapCat 成功把图片上传到 QQ，outbox 状态为 `sent`。
+6. 当前 Provider 测试成功。
 
-```text
-SUNABOT_OUTBOUND_MEDIA_BASE_URL=http://host.docker.internal:8787
-```
-
-如果设置了 `ONEBOT_ACCESS_TOKEN`，在 NapCat 连接配置中填入同一个 token。
-
-管理员凭据、OneBot Token、Provider Key 和本机配置全部位于忽略的 `workspace/`。外网访问管理台时必须使用 HTTPS 反向代理并配置 `SUNABOT_ADMIN_ORIGINS`，不要直接公开 8787 或 6099。
+管理员凭据、OneBot Token、Provider Key、QQ 登录态和运行数据全部位于忽略的 `workspace/`。外网访问管理台时必须使用 HTTPS 反向代理并配置 `SUNABOT_ADMIN_ORIGINS`，不要公开 8787、6099 或 OneBot 路径。

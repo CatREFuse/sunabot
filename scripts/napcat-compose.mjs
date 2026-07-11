@@ -11,7 +11,14 @@ const workspace = configured
 const args = process.argv.slice(2);
 if (args.length === 0) throw new Error("请提供 docker compose 子命令。");
 
-const child = spawn("docker", ["compose", "-f", path.join(root, "docker-compose.napcat.yml"), ...args], {
+const child = spawn("docker", [
+  "compose",
+  "--env-file",
+  path.join(workspace, ".env"),
+  "-f",
+  path.join(root, "components/qq-runtime/compose.yml"),
+  ...args
+], {
   cwd: root,
   stdio: "inherit",
   windowsHide: true,

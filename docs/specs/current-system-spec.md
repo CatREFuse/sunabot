@@ -13,18 +13,23 @@ sunabot 是面向个人自托管场景的 QQ Agent 服务。系统通过 OneBot 
 ## 2. 运行结构
 
 ```text
-QQ / NapCat
-    │ OneBot v11 reverse WebSocket
-    ▼
-OneBotGateway ── SunaRuntime ── SessionCoordinator ── provider / tools
+QQ Runtime（单机内聚组件）
+QQ / NapCat ── 127.0.0.1 OneBot v11 reverse WebSocket ── OneBotGateway
+                                                               │
+                                                               ▼
+                SunaRuntime ── SessionCoordinator ── provider / tools
                        │                 │
                        │                 └── session-queue.sqlite
                        ▼
               sunabot.sqlite
               会话、消息、记忆、调度、日志、图片历史
 
+NapCat ── /srv/sunabot/workspace/artifacts/images ── Sunabot
+
 Browser ── Fastify Admin API ── Vue 管理台
 ```
+
+QQ Runtime 不支持远程 OneBot 或远程 NapCat。Docker 下 Sunabot 与 NapCat 使用独立容器进程，但共享 Sunabot 的网络命名空间与同一 workspace 挂载；非 Docker 下二者运行在同一 Linux/WSL 环境。两种方式固定使用 `127.0.0.1` 和 `/srv/sunabot/workspace`，不使用容器 DNS、宿主机网关或局域网地址。
 
 后端由 Node.js 24、TypeScript 和 Fastify 构建，管理台由 Vue 3、Vue Router 和 Vite 构建。生产服务由 `dist/server.js` 同时提供 API、Web 静态资源、深链接回退、生成图片和 OneBot WebSocket 入口。
 
@@ -33,6 +38,7 @@ Browser ── Fastify Admin API ── Vue 管理台
 ### 3.1 OneBot 接入
 
 - 仅接收配置路径上的 OneBot v11 反向 WebSocket。
+- NapCat 只能通过同一 QQ Runtime 的回环地址连接，不支持公开或远程 OneBot 入口。
 - 连接使用环境变量指定的 access token 校验。
 - 支持私聊、用户群聊和 bot 群聊范围识别。
 - 支持文本、CQ 码、图片、回复引用、@、QQ 文件和 OneBot action 回包。
@@ -115,6 +121,8 @@ Browser ── Fastify Admin API ── Vue 管理台
 
 图像生成支持尺寸、1K/2K/4K 分辨率、质量、参考图压缩、重试和 OneBot 外发。自拍必须使用角色参考图与自拍重写提示词。生成文件保存在忽略的运行目录，图片历史元数据保存在主 SQLite 数据库。
 
+出站媒体只传递经过边界校验的本地绝对路径。NapCat 与 Sunabot 必须共享 `/srv/sunabot/workspace/artifacts/images` 的同一路径视图；不提供 OneBot 专用 HTTP 媒体回调，也不得根据主机名猜测部署形态。
+
 ## 7. 管理台
 
 管理台包含总览、对话、图片、记忆、提示词和设置页面，支持 light、dark 和跟随系统主题，并适配桌面、平板和移动端。
@@ -171,7 +179,7 @@ Browser ── Fastify Admin API ── Vue 管理台
 - Git 不跟踪整个 `workspace/`，其中包括环境变量、配置、Agent 人格、SQLite、WAL、日志、缓存、QQ 登录态、生成图片和备份。
 - 浏览器管理台不得把账号、密码、Bearer Token 或会话密钥写入 localStorage/sessionStorage。
 - 请求日志递归脱敏授权、token、password、secret 和常见 key 字段，并限制长字符串。
-- OneBot、媒体代理、文件路径和 Agent 文件写入均执行边界校验。
+- OneBot、本地媒体路径和 Agent 文件写入均执行边界校验。
 
 ## 10. 功能—代码文件索引
 
@@ -199,6 +207,7 @@ Browser ── Fastify Admin API ── Vue 管理台
 | 管理台路由和页面 | `web/src/router.ts`, `web/src/views/` |
 | 管理台组件和状态 | `web/src/components/`, `web/src/composables/` |
 | 旧数据迁移 | `scripts/migrate-to-sqlite.mjs` |
+| QQ Runtime 打包与启动 | `components/qq-runtime/`, `scripts/napcat-compose.mjs`, `scripts/configure-napcat-client.mjs` |
 | 单元与集成测试 | `tests/unit/`, `tests/integration/` |
 | 浏览器与生产测试 | `tests/e2e/`, `playwright.config.ts` |
 

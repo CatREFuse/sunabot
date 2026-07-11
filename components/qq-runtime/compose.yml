@@ -1,0 +1,51 @@
+name: sunabot
+
+services:
+  sunabot:
+    build:
+      context: ../..
+      dockerfile: components/qq-runtime/Dockerfile
+    image: sunabot:local
+    container_name: sunabot
+    restart: unless-stopped
+    init: true
+    env_file:
+      - ${SUNABOT_WORKSPACE:-../../workspace}/.env
+    environment:
+      SUNABOT_HOST: 0.0.0.0
+      SUNABOT_PORT: 8787
+      SUNABOT_WORKSPACE: /srv/sunabot/workspace
+      ONEBOT_ACCESS_TOKEN: ${ONEBOT_ACCESS_TOKEN:?Set ONEBOT_ACCESS_TOKEN in workspace/.env}
+    ports:
+      - "127.0.0.1:${SUNABOT_PORT:-8787}:8787"
+      - "127.0.0.1:${NAPCAT_WEBUI_PORT:-6099}:6099"
+    volumes:
+      - ${SUNABOT_WORKSPACE:-../../workspace}:/srv/sunabot/workspace
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:8787/api/auth/session').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  napcat:
+    image: mlikiowa/napcat-docker:v4.15.0
+    container_name: sunabot-napcat
+    restart: unless-stopped
+    network_mode: service:sunabot
+    depends_on:
+      sunabot:
+        condition: service_healthy
+    environment:
+      NAPCAT_UID: ${NAPCAT_UID:-1000}
+      NAPCAT_GID: ${NAPCAT_GID:-1000}
+      ACCOUNT: ${NAPCAT_ACCOUNT:?Set NAPCAT_ACCOUNT in workspace/.env}
+    volumes:
+      - ${SUNABOT_WORKSPACE:-../../workspace}:/srv/sunabot/workspace:ro
+      - ${SUNABOT_WORKSPACE:-../../workspace}/napcat:/app/.config/QQ
+      - ${SUNABOT_WORKSPACE:-../../workspace}/napcat/config-full:/app/napcat/config
+    shm_size: 1gb

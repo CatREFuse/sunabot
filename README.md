@@ -4,30 +4,26 @@ sunabot 是一个面向个人自托管场景的 QQ Agent 服务：NapCat 通过 
 
 ## OneBot 与 NapCat 运行体系
 
-项目固定使用 OneBot v11 反向 WebSocket，NapCat 主动连接 Sunabot；消息事件、回复 action 和 action 回包共用这条连接。生成图片由 Sunabot 保存后交给 NapCat 发送：共享文件系统时直接传本地路径，Docker 或跨主机时使用带签名的 HTTP 地址。
+OneBot 与 NapCat 被固定为一个本机 QQ Runtime。OneBot 是 Sunabot 内部协议，不是独立服务；NapCat 主动通过回环地址连接 Sunabot，消息事件、回复 action 和 action 回包共用这条连接。生成图片只通过共享文件系统传递本地绝对路径。
 
 ```text
 QQ ↔ NapCat ── OneBot v11 reverse WebSocket ── Sunabot
                                                     ├── Provider / tools
                                                     ├── session queue / outbox
-                                                    └── local path / signed image endpoint
+                                                    └── shared workspace files
 ```
 
-NapCat 与 Sunabot 在同一 WSL 实例中直接运行时使用：
+固定通信契约：
 
 ```text
 WebSocket:      ws://127.0.0.1:8787/onebot/v11/ws
-图片传输:      NapCat 直接读取 Sunabot 生成文件的绝对路径
+共享目录:       /srv/sunabot/workspace
+图片传输:       /srv/sunabot/workspace/artifacts/images/<file>.png
 ```
 
-NapCat 在 Docker、Sunabot 在宿主机运行时使用：
+Docker 下 Sunabot 与 NapCat 是两个进程容器，但共享同一网络命名空间和同一 workspace 挂载；非 Docker 下二者必须运行在同一 Linux/WSL 环境。两种运行方式使用完全相同的地址和文件路径。不支持远程 NapCat、公开 OneBot 端口、`host.docker.internal` 或 HTTP 图片回调。
 
-```text
-WebSocket:      ws://host.docker.internal:8787/onebot/v11/ws
-图片回调地址:  http://host.docker.internal:8787
-```
-
-Docker 模式需在 `workspace/.env` 设置 `SUNABOT_OUTBOUND_MEDIA_BASE_URL=http://host.docker.internal:8787`；同一 WSL 实例直接运行时不要设置该变量。链路验收至少包括 QQ 在线、Sunabot 监听 8787、OneBot WebSocket 已连接、文本 action 成功、图片路径或回调可访问以及当前 Provider 测试成功。完整配置见 [NapCat 与 OneBot 配置](docs/setup-napcat.md)。
+组件定义、Compose 和镜像入口统一位于 [`components/qq-runtime/`](components/qq-runtime/README.md)。完整配置见 [NapCat 与 OneBot 配置](docs/setup-napcat.md)。
 
 ## 代码与数据边界
 
@@ -39,8 +35,8 @@ sunabot/
 ├── web/                       Vue 管理台
 ├── tests/                     单元、集成和端到端测试
 ├── scripts/                   初始化、更新、同步和运维命令
+├── components/qq-runtime/     OneBot + NapCat 内聚运行组件
 ├── config/env.example         环境变量模板
-├── docker-compose.napcat.yml  NapCat 容器定义
 └── workspace/                 本机用户数据，不进入 Git
     ├── .env                   密钥和终端环境变量
     ├── config/                本机应用配置
@@ -57,12 +53,12 @@ sunabot/
 
 - Node.js 24 或更新版本
 - npm
-- Docker Engine / Docker Desktop 与 Compose 插件（NapCat）
+- Docker Engine 与 Compose 插件（推荐生产运行方式）
 - LibreOffice（读取 Office 文档）
 - Chromium（仅端到端/视觉测试需要，可由 Playwright 安装）
 - Windows 推荐 WSL2；生产数据优先位于 WSL ext4
 
-## 人工启动
+## Docker 开箱启动
 
 首次终端：
 
@@ -71,13 +67,15 @@ git clone https://github.com/CatREFuse/sunabot.git
 cd sunabot
 npm ci
 npm run workspace:init
+nano workspace/.env
 npm run admin:set-password -- admin
-npm run build
-npm run napcat:up
-npm start
+npm run qq:configure
+npm run qq:up
 ```
 
-按 `config/env.example` 补充 `workspace/.env`。默认管理台和 OneBot 地址为：
+至少在 `workspace/.env` 设置 `NAPCAT_ACCOUNT` 与 `ONEBOT_ACCESS_TOKEN`。`qq:up` 会构建 Sunabot 镜像并启动整个 QQ Runtime；查看日志使用 `npm run qq:logs`，停止使用 `npm run qq:down`。
+
+默认管理台和内部 OneBot 地址为：
 
 ```text
 http://127.0.0.1:8787
@@ -85,6 +83,10 @@ ws://127.0.0.1:8787/onebot/v11/ws
 ```
 
 外网发布必须先配置 `SUNABOT_ADMIN_ORIGINS=https://你的域名`，只允许 HTTPS 反向代理访问，不直接公开 8787 或 6099。
+
+## 非 Docker 启动
+
+Sunabot 与 NapCat 必须安装在同一 Linux/WSL 环境，并共同访问 `/srv/sunabot/workspace`。先运行 `npm run qq:configure -- /path/to/napcat/config` 写入本机反向 WebSocket 配置，再分别由同一个 systemd 用户会话启动 NapCat 和 Sunabot。不得把 NapCat 或 OneBot 迁到另一台服务器。
 
 ## ChatGPT 订阅登录
 

@@ -27,9 +27,14 @@
     "admin:set-password": "node scripts/admin-credentials.mjs",
     "admin:fuse": "node scripts/admin-fuse.mjs",
     "migrate:sqlite": "npm run build:api && node scripts/migrate-to-sqlite.mjs",
-    "napcat:up": "node scripts/napcat-compose.mjs up -d",
-    "napcat:logs": "node scripts/napcat-compose.mjs logs -f napcat",
-    "napcat:configure-client": "node scripts/configure-napcat-client.mjs"
+    "qq:configure": "node scripts/configure-napcat-client.mjs",
+    "qq:up": "node scripts/napcat-compose.mjs up -d --build",
+    "qq:start": "node scripts/napcat-compose.mjs up -d",
+    "qq:down": "node scripts/napcat-compose.mjs down",
+    "qq:logs": "node scripts/napcat-compose.mjs logs -f sunabot napcat",
+    "napcat:up": "npm run qq:up",
+    "napcat:logs": "npm run qq:logs",
+    "napcat:configure-client": "npm run qq:configure"
   },
   "dependencies": {
     "@fastify/static": "^9.3.0",

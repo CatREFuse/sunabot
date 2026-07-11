@@ -20,7 +20,7 @@ import { createMemoryEntry, deleteMemoryEntry, listMemoryEntries, recallMemory, 
 import { ConversationDirectory } from "./conversationDirectory.js";
 import { OneBotGateway } from "./onebot.js";
 import { OpenAIProvider } from "./openaiProvider.js";
-import { OUTBOUND_MEDIA_ROUTE_PREFIX, OutboundMediaDelivery } from "./outboundMedia.js";
+import { OutboundMediaDelivery } from "./outboundMedia.js";
 import { isTrustedQqFakeIp } from "./qqMedia.js";
 import { readRequestLogs, requestLogPath } from "./requestLog.js";
 import { SunaRuntime } from "./runtime.js";
@@ -161,20 +161,6 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
 
   app.post("/api/monitoring/test", async () => {
     return serviceMonitor.testNotification();
-  });
-
-  app.get(`${OUTBOUND_MEDIA_ROUTE_PREFIX}/:fileName`, async (request, reply) => {
-    const params = request.params as { fileName?: string };
-    const query = request.query as { expires?: string; signature?: string };
-    const media = await outboundMedia.resolveSignedPath(params.fileName, query.expires, query.signature);
-    if (!media) {
-      return reply.status(404).send({ error: { code: "NOT_FOUND", message: "请求的资源不存在。" } });
-    }
-    reply.header("content-type", media.contentType);
-    reply.header("content-length", String(media.size));
-    reply.header("cache-control", "private, max-age=300");
-    reply.header("x-content-type-options", "nosniff");
-    return reply.send(fs.createReadStream(media.filePath));
   });
 
   await app.register(fastifyStatic, {

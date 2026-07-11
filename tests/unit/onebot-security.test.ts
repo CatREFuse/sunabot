@@ -65,7 +65,7 @@ describe("OneBot security boundaries", () => {
     expect(isLoopbackRemoteAddress(undefined)).toBe(false);
     expect(isTrustedTokenlessHost("127.0.0.1:8787")).toBe(true);
     expect(isTrustedTokenlessHost("[::1]:8787")).toBe(true);
-    expect(isTrustedTokenlessHost("host.docker.internal:8787")).toBe(true);
+    expect(isTrustedTokenlessHost("host.docker.internal:8787")).toBe(false);
     expect(isTrustedTokenlessHost("attacker.invalid:8787")).toBe(false);
   });
 
