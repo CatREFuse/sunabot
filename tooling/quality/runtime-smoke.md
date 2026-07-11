@@ -13,7 +13,16 @@
 
 ## 准备隔离 workspace
 
-先按 `deploy/runtime-contract.json` 在测试目录放置独立的 `business/config/sunabot.json`、`secrets/runtime.env`、`runtime/napcat` 状态和 Agent 文件。工具从运行时契约解析这些路径，不依赖调用目录。Provider key、OneBot token 和 QQ 登录状态不能提交 Git。然后创建隔离标记并生成测试 OneBot client：
+可从现有 workspace 只复制当前默认 Provider 的配置、凭据与 Agent 文件；脚本不会复制其他 Provider key、Bark URL、管理员凭据、OneBot token 或 QQ 登录态：
+
+```bash
+npm run smoke:prepare -- \
+  --source /srv/sunabot/workspace \
+  --destination /srv/sunabot-smoke/workspace \
+  --confirm-copy-provider-credential
+```
+
+也可按 `deploy/runtime-contract.json` 手工准备独立的 `business/config/sunabot.json`、`secrets/runtime.env`、`runtime/napcat` 状态和 Agent 文件。工具从运行时契约解析这些路径，不依赖调用目录。Provider key、OneBot token 和 QQ 登录状态不能提交 Git。然后创建隔离标记并生成测试 OneBot client：
 
 ```bash
 export SUNABOT_WORKSPACE=/srv/sunabot-smoke/workspace

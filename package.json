@@ -20,6 +20,7 @@
     "test:visual": "playwright test --project=visual-light --project=visual-dark",
     "architecture": "node tooling/quality/architecture.mjs",
     "smoke:api": "node tooling/quality/smoke-api.mjs",
+    "smoke:prepare": "node tooling/quality/prepare-runtime-smoke.mjs",
     "smoke:runtime": "node --use-env-proxy --import tsx tooling/quality/runtime-smoke.ts",
     "test:runtime-smoke": "vitest run --config tests/runtime-smoke/vitest.config.ts",
     "verify": "npm run runtime:contract && npm run architecture && npm run check && npm run test && npm run test:runtime-smoke && npm run build && npm run test:e2e",
