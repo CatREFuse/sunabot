@@ -113,7 +113,7 @@ describe("runtime reply scheduling helpers", () => {
     internals.persistConversationRecords = vi.fn();
     internals.sessionCoordinator.enqueueEvent = enqueueEvent;
 
-    await runtime.handleOneBotEvent(groupIncoming("/总结群聊").event, {} as never);
+    await runtime.handleInboundMessage(groupIncoming("/总结群聊"), {} as never);
 
     expect(enqueueEvent).not.toHaveBeenCalled();
   });
@@ -632,7 +632,7 @@ describe("runtime reply scheduling helpers", () => {
     internals.persistConversationRecords = vi.fn();
     internals.queueAmbientReply = queueAmbientReply;
 
-    await runtime.handleOneBotEvent(groupIncoming("普通群消息").event, {} as never);
+    await runtime.handleInboundMessage(groupIncoming("普通群消息"), {} as never);
     await vi.advanceTimersByTimeAsync(59_999);
     expect(queueAmbientReply).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
@@ -810,25 +810,20 @@ describe("runtime reply scheduling helpers", () => {
 
 function groupIncoming(text: string): ParsedIncomingMessage {
   return {
+    schemaVersion: 1,
     scope: "user_group",
+    messageId: 1001,
+    time: "2026-07-11T12:00:00.000Z",
     userId: 2002,
     groupId: 3003,
     selfId: 4004,
+    sender: { id: "2002", displayName: "2002" },
     text,
-    imageUrls: [],
+    media: [],
     attachments: [],
     replyMessageIds: [],
     quoteReferences: [],
-    mentionedSelf: false,
-    event: {
-      post_type: "message",
-      message_type: "group",
-      message_id: 1001,
-      user_id: 2002,
-      group_id: 3003,
-      self_id: 4004,
-      message: text
-    }
+    mentionedSelf: false
   };
 }
 

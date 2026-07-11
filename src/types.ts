@@ -1,4 +1,11 @@
-import type { ParsedAttachment } from "../services/media/attachments/types.js";
+import type { ImageResult, ParsedAttachment } from "../packages/contracts/media/media.js";
+import type { InboundMessageV1, MessageQuoteV1 } from "../packages/contracts/messaging/messages.js";
+
+export type { ImageResult, ParsedAttachment } from "../packages/contracts/media/media.js";
+export type {
+  InboundMessageV1,
+  MessageQuoteV1
+} from "../packages/contracts/messaging/messages.js";
 
 export type ProviderKind = "openai-responses" | "codex-responses" | "gemini-openai" | "anthropic-openai";
 
@@ -179,60 +186,8 @@ export interface OneBotQrLogin extends OneBotLoginCheck {
   webuiUrl?: string;
 }
 
-export interface OneBotMessageSegment {
-  type: string;
-  data?: Record<string, unknown>;
-}
-
-export interface OneBotEvent {
-  post_type?: string;
-  notice_type?: string;
-  message_type?: "private" | "group";
-  sub_type?: string;
-  message_id?: number;
-  user_id?: number;
-  group_id?: number;
-  self_id?: number;
-  raw_message?: string;
-  message?: string | OneBotMessageSegment[];
-  sender?: Record<string, unknown>;
-  file?: Record<string, unknown>;
-  time?: number;
-  echo?: string;
-  status?: string;
-  retcode?: number;
-  msg?: string;
-  wording?: string;
-  data?: unknown;
-}
-
-export interface ParsedIncomingMessage {
-  scope: "private" | "user_group" | "bot_group";
-  userId: number;
-  groupId?: number;
-  selfId?: number;
-  text: string;
-  imageUrls: string[];
-  attachments: ParsedAttachment[];
-  replyMessageIds: number[];
-  quoteReferences: ConversationMessageQuote[];
-  mentionedSelf: boolean;
-  event: OneBotEvent;
-}
-
-export interface ImageResult {
-  url: string;
-  filePath?: string;
-  revisedPrompt?: string;
-}
-
-export interface ConversationMessageQuote {
-  messageId: number;
-  text?: string;
-  imageUrls?: string[];
-  attachments?: ParsedAttachment[];
-  senderName?: string;
-}
+export type ParsedIncomingMessage = InboundMessageV1;
+export type ConversationMessageQuote = MessageQuoteV1;
 
 export interface ConversationMessageRecord {
   id: string;

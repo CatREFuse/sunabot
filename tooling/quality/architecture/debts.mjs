@@ -1,14 +1,4 @@
 export const architectureDebtAllowances = [
-  {
-    id: "contracts-session-src-types",
-    rule: "contracts-boundary",
-    source: "packages/contracts/session/runtimeMessages.ts",
-    target: "src/types.ts",
-    reason: "The first versioned session envelopes still reuse the legacy shared type bucket.",
-    tracking: "CONTRACT-002, MODULE-009",
-    decision: "docs/architecture/project-structure-plan.md#fixed-collaboration-protocol"
-  },
-
   ...["session-event", "tool-job", "outbox"].map((target) => ({
     id: `durable-codec:${target}`,
     rule: "durable-codec",

@@ -1,6 +1,7 @@
+import type { EventEmitter } from "node:events";
 import { MonitorSettingsStore } from "./admin/monitorSettings.js";
 import { getWorkspacePath } from "./config.js";
-import { OneBotGateway } from "../adapters/onebot/onebotGateway.js";
+import type { MessagingPort } from "../packages/contracts/messaging/messages.js";
 import { SunaRuntime } from "./runtime.js";
 import { WORKSPACE_LAYOUT } from "../packages/platform/workspaceLayout.js";
 
@@ -26,7 +27,7 @@ export class ServiceMonitor {
 
   constructor(
     private readonly runtime: SunaRuntime,
-    private readonly gateway: OneBotGateway,
+    private readonly gateway: MessagingPort & Pick<EventEmitter, "on" | "off">,
     private readonly settings = new MonitorSettingsStore(getWorkspacePath(WORKSPACE_LAYOUT.secretsEnv))
   ) {}
 

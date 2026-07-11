@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
-import type { ImageResult, ParsedIncomingMessage } from "../../../src/types.js";
+import type { ImageResult } from "../media/media.js";
+import {
+  decodeInboundMessageV1,
+  type InboundMessageV1
+} from "../messaging/messages.js";
 
 export interface EnvelopeV1<TType extends string, TPayload> {
   schemaVersion: 1;
@@ -16,7 +20,7 @@ export interface EnvelopeV1<TType extends string, TPayload> {
 export interface RuntimeIncomingReplyEventPayload {
   type: "incoming_reply";
   route: "direct" | "command" | "ambient";
-  incoming: ParsedIncomingMessage;
+  incoming: InboundMessageV1;
   captureSequence: number;
   preparationKey?: string;
 }
@@ -27,7 +31,7 @@ export interface AsyncToolCompletionPayload {
   providerCallId: string;
   toolName: string;
   originalRequest: {
-    incoming: ParsedIncomingMessage;
+    incoming: InboundMessageV1;
     captureSequence?: number;
   };
   arguments: unknown;
@@ -40,7 +44,7 @@ export interface AsyncToolCompletionPayload {
 
 export interface AssistantReplyOutboxPayload {
   type: "assistant_reply";
-  incoming: ParsedIncomingMessage;
+  incoming: InboundMessageV1;
   text: string;
   generatedImages: ImageResult[];
   isAdmin: boolean;
@@ -82,15 +86,31 @@ export function assistantReplyEnvelope(
 }
 
 export function decodeIncomingReply(value: unknown): RuntimeIncomingReplyEventPayload {
-  return decode(value, "runtime.incoming_reply", "incoming_reply");
+  const payload = decode(value, "runtime.incoming_reply", "incoming_reply");
+  return {
+    ...payload,
+    incoming: decodeInboundMessageV1(payload.incoming)
+  } as RuntimeIncomingReplyEventPayload;
 }
 
 export function decodeToolCompletion(value: unknown): AsyncToolCompletionPayload {
-  return decode(value, "runtime.tool_result", "tool_result");
+  const payload = decode(value, "runtime.tool_result", "tool_result");
+  const originalRequest = isRecord(payload.originalRequest) ? payload.originalRequest : {};
+  return {
+    ...payload,
+    originalRequest: {
+      ...originalRequest,
+      incoming: decodeInboundMessageV1(originalRequest.incoming)
+    }
+  } as unknown as AsyncToolCompletionPayload;
 }
 
 export function decodeAssistantReply(value: unknown): AssistantReplyOutboxPayload {
-  return decode(value, "runtime.assistant_reply", "assistant_reply");
+  const payload = decode(value, "runtime.assistant_reply", "assistant_reply");
+  return {
+    ...payload,
+    incoming: decodeInboundMessageV1(payload.incoming)
+  } as AssistantReplyOutboxPayload;
 }
 
 function envelope<TType extends string, TPayload>(
@@ -111,11 +131,11 @@ function envelope<TType extends string, TPayload>(
   };
 }
 
-function decode<TPayload extends { type: string }>(
+function decode(
   value: unknown,
   envelopeType: string,
-  legacyType: TPayload["type"]
-): TPayload {
+  legacyType: string
+): Record<string, unknown> {
   if (!isRecord(value)) throw contractError("contract_invalid", "持久化消息不是对象。");
   if ("schemaVersion" in value) {
     if (value.schemaVersion !== 1) {
@@ -127,9 +147,9 @@ function decode<TPayload extends { type: string }>(
     requiredString(value.id, "id");
     requiredString(value.occurredAt, "occurredAt");
     requiredString(value.correlationId, "correlationId");
-    return value.payload as TPayload;
+    return value.payload;
   }
-  if (value.type === legacyType) return value as TPayload;
+  if (value.type === legacyType) return value;
   throw contractError("contract_type_invalid", `旧持久化消息类型与 ${legacyType} 不匹配。`);
 }
 

@@ -9,7 +9,7 @@ import {
   isTrustedTokenlessHost,
   OneBotGateway
 } from "../../adapters/onebot/onebotGateway.js";
-import type { OneBotEvent } from "../../src/types.js";
+import type { OneBotEvent } from "../../adapters/onebot/protocol.js";
 
 const originalAccessToken = process.env.ONEBOT_ACCESS_TOKEN;
 
@@ -45,7 +45,7 @@ describe("OneBot security boundaries", () => {
     config.server.host = "0.0.0.0";
     const server = http.createServer();
     const gateway = new OneBotGateway(server, config, {
-      handleOneBotEvent: vi.fn(async () => undefined)
+      handleInboundMessage: vi.fn(async () => undefined)
     });
 
     gateway.mount();
@@ -74,7 +74,7 @@ describe("OneBot security boundaries", () => {
     const config = defaultConfig();
     const server = http.createServer();
     const gateway = new OneBotGateway(server, config, {
-      handleOneBotEvent: vi.fn(async () => undefined)
+      handleInboundMessage: vi.fn(async () => undefined)
     });
     gateway.mount();
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -100,7 +100,7 @@ describe("OneBot security boundaries", () => {
     const config = defaultConfig();
     const server = http.createServer();
     const gateway = new OneBotGateway(server, config, {
-      handleOneBotEvent: vi.fn(async () => undefined)
+      handleInboundMessage: vi.fn(async () => undefined)
     });
     gateway.mount();
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -146,7 +146,7 @@ describe("OneBot security boundaries", () => {
     const config = defaultConfig();
     const server = http.createServer();
     const gateway = new OneBotGateway(server, config, {
-      handleOneBotEvent: vi.fn(async () => undefined)
+      handleInboundMessage: vi.fn(async () => undefined)
     });
     gateway.mount();
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -188,6 +188,6 @@ describe("OneBot security boundaries", () => {
 
 function createGateway() {
   return new OneBotGateway(http.createServer(), defaultConfig(), {
-    handleOneBotEvent: vi.fn(async () => undefined)
+    handleInboundMessage: vi.fn(async () => undefined)
   });
 }

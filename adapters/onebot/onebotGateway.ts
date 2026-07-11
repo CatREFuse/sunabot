@@ -4,7 +4,23 @@ import { URL } from "node:url";
 import { nanoid } from "nanoid";
 import { WebSocket, WebSocketServer } from "ws";
 import type { OutboundMediaDelivery } from "../../services/delivery/outboundMedia.js";
-import { AppConfig, OneBotEvent } from "../../src/types.js";
+import type { AppConfig } from "../../src/types.js";
+import type {
+  InboundMessageV1,
+  MessageLookupContextV1,
+  MessagingPort,
+  MessagingReceiptV1,
+  OutboundMessageV1,
+  SenderIdentityV1,
+  SenderLookupV1
+} from "../../packages/contracts/messaging/messages.js";
+import {
+  extractOneBotMessageDetails,
+  extractOneBotReceiptMessageId,
+  extractOneBotSender,
+  parseOneBotInboundMessage
+} from "./inboundMessageAdapter.js";
+import type { OneBotEvent } from "./protocol.js";
 
 interface PendingAction {
   action: string;
@@ -30,7 +46,7 @@ export interface OneBotEventTrace {
 }
 
 export interface OneBotGatewayDelegate {
-  handleOneBotEvent(event: OneBotEvent, gateway: OneBotGateway): Promise<void>;
+  handleInboundMessage(message: InboundMessageV1, gateway: MessagingPort): Promise<void>;
 }
 
 export interface OutboundImageAsset {
@@ -42,7 +58,7 @@ export interface OneBotGatewayOptions {
   outboundMedia?: OutboundMediaDelivery;
 }
 
-export class OneBotGateway extends EventEmitter {
+export class OneBotGateway extends EventEmitter implements MessagingPort {
   private readonly wss: WebSocketServer;
   private readonly sockets = new Map<WebSocket, { selfId?: string; connectedAt: string }>();
   private readonly pending = new Map<string, PendingAction>();
@@ -221,6 +237,48 @@ export class OneBotGateway extends EventEmitter {
     return response;
   }
 
+  async send(message: OutboundMessageV1): Promise<MessagingReceiptV1> {
+    const text = sanitizeOneBotOutboundText(message.text);
+    const images: OutboundImageAsset[] = message.media.map((asset) => ({
+      url: asset.url,
+      filePath: asset.source === "shared_file" ? asset.filePath : undefined
+    }));
+    const response = message.groupId
+      ? images.length
+        ? await this.sendGroupRichMessage(message.groupId, text, images, {
+          replyToMessageId: message.replyToMessageId
+        })
+        : await this.sendGroupMessage(message.groupId, text, {
+          replyToMessageId: message.replyToMessageId
+        })
+      : images.length
+        ? await this.sendPrivateRichMessage(message.userId, text, images)
+        : await this.sendPrivateMessage(message.userId, text);
+    return {
+      accepted: true,
+      ...(extractOneBotReceiptMessageId(response) ? { messageId: extractOneBotReceiptMessageId(response) } : {})
+    };
+  }
+
+  async resolveSender(input: SenderLookupV1): Promise<SenderIdentityV1> {
+    const payload = input.groupId
+      ? await this.sendAction("get_group_member_info", {
+        group_id: input.groupId,
+        user_id: input.userId,
+        no_cache: false
+      })
+      : await this.sendAction("get_stranger_info", {
+        user_id: input.userId,
+        no_cache: false
+      });
+    return extractOneBotSender(payload, input.userId);
+  }
+
+  async getMessage(messageId: number, context: MessageLookupContextV1 = {}) {
+    const payload = await this.sendAction("get_msg", { message_id: messageId });
+    return extractOneBotMessageDetails(payload, { ...context, messageId });
+  }
+
   private async resolveImageSources(images: OutboundImageAsset[]) {
     const sources = await Promise.all(images.map(async (image) => {
       if (image.filePath && this.options.outboundMedia) {
@@ -268,7 +326,9 @@ export class OneBotGateway extends EventEmitter {
       }
       this.recordEventTrace(event, this.lastEventAtValue);
       this.emit("event", event);
-      void this.delegate.handleOneBotEvent(event, this).catch((error) => {
+      const inbound = parseOneBotInboundMessage(event);
+      if (!inbound) return;
+      void this.delegate.handleInboundMessage(inbound, this).catch((error) => {
         console.error("[onebot] event handling failed", {
           postType: event.post_type,
           messageType: event.message_type,
@@ -334,6 +394,10 @@ function eventText(event: OneBotEvent) {
 
 function redactFileSegments(text: string) {
   return text.replace(/\[CQ:file(?:,[^\]]*)?\]/gi, "[file]");
+}
+
+function sanitizeOneBotOutboundText(text: string) {
+  return text.replace(/\[CQ:image,[^\]]*\]/gi, "").trim();
 }
 
 function isLoopbackHost(host: string) {

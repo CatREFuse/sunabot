@@ -1,10 +1,10 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import type { OneBotMessageSegment } from "../../src/types.js";
+import type { OneBotMessageSegment } from "../../adapters/onebot/protocol.js";
 import {
   extractOneBotAttachments,
   sanitizeAttachmentName
-} from "../../services/media/attachments/onebot.js";
+} from "../../adapters/onebot/inboundMessageAdapter.js";
 
 describe("OneBot attachment extraction", () => {
   it("extracts and normalizes a Chinese file segment", () => {

@@ -6,11 +6,13 @@ import type {
   ProviderCompleteOptions,
   ProviderTurnResult
 } from "../../adapters/model/openaiProvider.js";
-import type { OneBotGateway } from "../../adapters/onebot/onebotGateway.js";
+import { parseOneBotInboundMessage } from "../../adapters/onebot/inboundMessageAdapter.js";
+import type { OneBotEvent } from "../../adapters/onebot/protocol.js";
+import type { MessagingPort } from "../../packages/contracts/messaging/messages.js";
 import type { RenderedPromptRequest } from "../../services/agent/promptSystem.js";
-import { parseIncomingMessage, SunaRuntime } from "../../src/runtime.js";
+import { SunaRuntime } from "../../src/runtime.js";
 import { SessionStore } from "../../services/sessions/sessionStore.js";
-import type { ConversationRecord, OneBotEvent } from "../../src/types.js";
+import type { ConversationRecord } from "../../src/types.js";
 import { createAdminTestConfig } from "./admin-fixtures.js";
 
 const appendRequestLog = vi.hoisted(() => vi.fn(async () => undefined));
@@ -54,10 +56,10 @@ describe("SunaRuntime Session queue bridge", () => {
     });
     const harness = createRuntimeHarness(completeRequestTurn);
 
-    await harness.runtime.handleOneBotEvent(groupEvent(101, 100, "first"), harness.gateway);
-    await harness.runtime.handleOneBotEvent(groupEvent(102, 100, "second"), harness.gateway);
-    await harness.runtime.handleOneBotEvent(groupEvent(103, 100, "third"), harness.gateway);
-    await harness.runtime.handleOneBotEvent(groupEvent(201, 200, "parallel"), harness.gateway);
+    await handleOneBotEvent(harness.runtime, groupEvent(101, 100, "first"), harness.gateway);
+    await handleOneBotEvent(harness.runtime, groupEvent(102, 100, "second"), harness.gateway);
+    await handleOneBotEvent(harness.runtime, groupEvent(103, 100, "third"), harness.gateway);
+    await handleOneBotEvent(harness.runtime, groupEvent(201, 200, "parallel"), harness.gateway);
 
     await waitUntil(() => starts.length === 2);
     expect(starts).toEqual(["first", "parallel"]);
@@ -127,7 +129,7 @@ describe("SunaRuntime Session queue bridge", () => {
       markerGroup.set(marker, groupId);
       markerDelay.set(marker, 1 + Math.floor(random() * 8));
       expectedByGroup.get(groupId)!.push(marker);
-      await harness.runtime.handleOneBotEvent(
+      await handleOneBotEvent(harness.runtime,
         groupEvent(10_000 + index, groupId, marker),
         harness.gateway
       );
@@ -167,13 +169,13 @@ describe("SunaRuntime Session queue bridge", () => {
     const enqueue = vi.spyOn(harness.store, "enqueueEvent")
       .mockImplementationOnce(() => { throw new Error("simulated sqlite commit failure"); });
 
-    await expect(harness.runtime.handleOneBotEvent(event, harness.gateway))
+    await expect(handleOneBotEvent(harness.runtime, event, harness.gateway))
       .rejects.toThrow("simulated sqlite commit failure");
     expect(harness.store.listEvents(sessionId)).toHaveLength(0);
     expect(runtimeConversation(harness.runtime, sessionId)).toBeUndefined();
 
     enqueue.mockRestore();
-    await harness.runtime.handleOneBotEvent(event, harness.gateway);
+    await handleOneBotEvent(harness.runtime, event, harness.gateway);
     await harness.coordinator.waitForIdle({ timeoutMs: 3_000 });
 
     expect(harness.store.listEvents(sessionId)).toHaveLength(1);
@@ -185,7 +187,7 @@ describe("SunaRuntime Session queue bridge", () => {
 
   it("recovers a committed direct event with a missing conversation message and stays idempotent on redelivery", async () => {
     const event = privateEvent(22_001, "recover-missing-user");
-    const incoming = parseIncomingMessage(event)!;
+    const incoming = parseOneBotInboundMessage(event)!;
     const completeRequestTurn = vi.fn(async (): Promise<ProviderTurnResult> => ({
       kind: "completed",
       text: "reply:recovered"
@@ -211,16 +213,16 @@ describe("SunaRuntime Session queue bridge", () => {
       .toHaveLength(1);
     expect(record?.orchestratorCheckedMessageCount).toBe(1);
     expect(completeRequestTurn).toHaveBeenCalledOnce();
-    expect(harness.gateway.sendPrivateMessage).toHaveBeenCalledOnce();
+    expect(harness.gateway.send).toHaveBeenCalledOnce();
 
     runtimeSeenIncoming(harness.runtime).clear();
-    await harness.runtime.handleOneBotEvent(event, harness.gateway);
+    await handleOneBotEvent(harness.runtime, event, harness.gateway);
     await harness.coordinator.waitForIdle({ timeoutMs: 3_000 });
 
     expect(record?.messages.filter((message) => message.role === "user" && message.id === "22001"))
       .toHaveLength(1);
     expect(completeRequestTurn).toHaveBeenCalledOnce();
-    expect(harness.gateway.sendPrivateMessage).toHaveBeenCalledOnce();
+    expect(harness.gateway.send).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -298,12 +300,12 @@ describe("SunaRuntime Session queue bridge", () => {
     const harness = createRuntimeHarness(completeRequestTurn, runner);
     const acknowledgement = "收到，任务已经开始处理，完成后我会继续回复。";
 
-    await harness.runtime.handleOneBotEvent(groupEvent(301, 300, "delegate"), harness.gateway);
+    await handleOneBotEvent(harness.runtime, groupEvent(301, 300, "delegate"), harness.gateway);
     await toolStarted.promise;
     await waitUntil(() => sentTexts(harness.gateway).includes(acknowledgement));
     expect(sentTexts(harness.gateway).filter((text) => text === acknowledgement)).toHaveLength(1);
 
-    await harness.runtime.handleOneBotEvent(groupEvent(302, 300, "later"), harness.gateway);
+    await handleOneBotEvent(harness.runtime, groupEvent(302, 300, "later"), harness.gateway);
     await waitUntil(() => sentTexts(harness.gateway).includes("later reply"));
     expect(providerStarts).toEqual(["delegate", "later"]);
     expect(sentTexts(harness.gateway)).not.toContain(finalReply);
@@ -336,7 +338,7 @@ describe("SunaRuntime Session queue bridge", () => {
 interface RuntimeHarness {
   runtime: SunaRuntime;
   store: SessionStore;
-  gateway: OneBotGateway;
+  gateway: MessagingPort;
   coordinator: {
     waitForIdle(options?: { timeoutMs?: number }): Promise<void>;
   };
@@ -428,12 +430,24 @@ function createRuntimeHarness(
 
 function fakeGateway() {
   return {
-    getStatus: vi.fn(() => ({ connected: true })),
-    sendGroupMessage: vi.fn(async () => ({ status: "ok" })),
-    sendGroupRichMessage: vi.fn(async () => ({ status: "ok" })),
-    sendPrivateMessage: vi.fn(async () => ({ status: "ok" })),
-    sendPrivateRichMessage: vi.fn(async () => ({ status: "ok" }))
-  } as unknown as OneBotGateway;
+    getStatus: vi.fn(() => ({ connected: true, connections: 1, selfIds: ["4004"] })),
+    send: vi.fn(async () => ({ accepted: true as const })),
+    resolveSender: vi.fn(async ({ userId, current }) => current ?? { id: String(userId) }),
+    getMessage: vi.fn(async () => ({
+      text: "",
+      media: [],
+      attachments: [],
+      replyMessageIds: [],
+      sender: { id: "2002" }
+    })),
+    sendAction: vi.fn(async () => ({ status: "ok" }))
+  } as unknown as MessagingPort;
+}
+
+function handleOneBotEvent(runtime: SunaRuntime, event: OneBotEvent, gateway: MessagingPort) {
+  const incoming = parseOneBotInboundMessage(event);
+  if (!incoming) throw new Error("test event did not produce an inbound message");
+  return runtime.handleInboundMessage(incoming, gateway);
 }
 
 function groupEvent(messageId: number, groupId: number, marker: string): OneBotEvent {
@@ -493,12 +507,12 @@ function findMarker(text: string, markers: string[]) {
   return marker;
 }
 
-function sentMessages(gateway: OneBotGateway) {
-  const send = gateway.sendGroupMessage as unknown as ReturnType<typeof vi.fn>;
-  return send.mock.calls.map((call) => [Number(call[0]), String(call[1])] as const);
+function sentMessages(gateway: MessagingPort) {
+  const send = gateway.send as unknown as ReturnType<typeof vi.fn>;
+  return send.mock.calls.map((call) => [Number(call[0].groupId ?? call[0].userId), String(call[0].text)] as const);
 }
 
-function sentTexts(gateway: OneBotGateway) {
+function sentTexts(gateway: MessagingPort) {
   return sentMessages(gateway).map(([, text]) => text);
 }
 

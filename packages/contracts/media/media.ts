@@ -1,0 +1,99 @@
+export type AttachmentSource = "message" | "quote" | "group_upload";
+
+export interface IncomingAttachment {
+  id: string;
+  source: AttachmentSource;
+  name: string;
+  fileId?: string;
+  sizeBytes?: number;
+  url?: string;
+  busId?: number;
+  groupId?: number;
+  userId?: number;
+}
+
+export type AttachmentStatus =
+  | "pending"
+  | "ready"
+  | "partial"
+  | "unsupported"
+  | "too_large"
+  | "failed";
+
+export interface ParsedAttachment extends IncomingAttachment {
+  status: AttachmentStatus;
+  mimeType?: string;
+  format?: string;
+  sha256?: string;
+  cacheKey?: string;
+  textPreview?: string;
+  chunkIndexPath?: string;
+  visualPagePaths?: string[];
+  visualSourcePath?: string;
+  pageCount?: number;
+  textCharacterCount?: number;
+  truncated?: boolean;
+  errorCode?: string;
+  errorMessage?: string;
+}
+
+export interface AttachmentModelContext {
+  text: string;
+  localImagePaths: string[];
+  attachments: ParsedAttachment[];
+}
+
+export interface AttachmentExtractionContext {
+  source?: AttachmentSource;
+  messageId?: string | number;
+  groupId?: number;
+  userId?: number;
+}
+
+export type MediaAssetRefV1 =
+  | {
+      schemaVersion: 1;
+      kind: "image";
+      source: "remote_url" | "inline_data";
+      url: string;
+      filePath?: never;
+    }
+  | {
+      schemaVersion: 1;
+      kind: "image";
+      source: "shared_file";
+      filePath: string;
+      url?: string;
+    };
+
+export interface ImageResult {
+  url: string;
+  filePath?: string;
+  revisedPrompt?: string;
+}
+
+export function imageMediaAsset(url: string): MediaAssetRefV1 {
+  return {
+    schemaVersion: 1,
+    kind: "image",
+    source: /^data:image\//i.test(url) ? "inline_data" : "remote_url",
+    url
+  };
+}
+
+export function generatedImageMediaAsset(image: Pick<ImageResult, "url" | "filePath">): MediaAssetRefV1 | undefined {
+  if (image.filePath) {
+    return {
+      schemaVersion: 1,
+      kind: "image",
+      source: "shared_file",
+      filePath: image.filePath,
+      ...(image.url ? { url: image.url } : {})
+    };
+  }
+  return image.url ? imageMediaAsset(image.url) : undefined;
+}
+
+export function mediaAssetUrl(asset: MediaAssetRefV1) {
+  return asset.url;
+}

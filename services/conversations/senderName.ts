@@ -1,11 +1,11 @@
-import type { OneBotEvent } from "../../src/types.js";
+import type {
+  InboundMessageV1,
+  MessagingPort,
+  SenderIdentityV1
+} from "../../packages/contracts/messaging/messages.js";
 
 const GROUP_MEMBER_NAME_CACHE_TTL_MS = 30 * 60 * 1000;
 const GROUP_MEMBER_NAME_FAILURE_TTL_MS = 60 * 1000;
-
-interface OneBotActionSender {
-  sendAction(action: string, params: Record<string, unknown>): Promise<unknown>;
-}
 
 export interface SenderIdentity {
   userId: string;
@@ -19,12 +19,12 @@ interface CachedSenderIdentity {
   expiresAt: number;
 }
 
-export function senderDisplayName(sender: Record<string, unknown> | undefined) {
+export function senderDisplayName(sender: SenderIdentityV1 | Record<string, unknown> | undefined) {
   return senderIdentity(sender).displayName;
 }
 
-export function senderIdentity(sender: Record<string, unknown> | undefined): SenderIdentity {
-  const userId = nonEmptyString(sender?.user_id);
+export function senderIdentity(sender: SenderIdentityV1 | Record<string, unknown> | undefined): SenderIdentity {
+  const userId = nonEmptyString(sender && "id" in sender ? sender.id : sender?.user_id);
   const nickname = nonEmptyString(sender?.nickname);
   const card = nonEmptyString(sender?.card);
   return { userId, nickname, card, displayName: card || nickname || userId };
@@ -34,20 +34,32 @@ export class SenderNameResolver {
   private readonly cache = new Map<string, CachedSenderIdentity>();
   private readonly pending = new Map<string, Promise<SenderIdentity>>();
 
-  async hydrate(event: OneBotEvent, gateway: OneBotActionSender) {
-    const current = senderIdentity(event.sender);
-    const userId = event.user_id || Number(current.userId);
-    const groupId = event.message_type === "group" ? event.group_id : undefined;
+  async hydrate(message: InboundMessageV1, gateway: Pick<MessagingPort, "resolveSender">) {
+    const identity = await this.resolve({
+      sender: message.sender,
+      userId: message.userId,
+      groupId: message.groupId
+    }, gateway);
+    message.sender = contractSenderIdentity(identity);
+    return identity.displayName;
+  }
+
+  async resolve(
+    input: { sender?: SenderIdentityV1; userId: number; groupId?: number },
+    gateway: Pick<MessagingPort, "resolveSender">
+  ) {
+    const current = senderIdentity(input.sender);
+    const userId = input.userId || Number(current.userId);
+    const groupId = input.groupId;
     const complete = Boolean(current.nickname) && (groupId == null || Boolean(current.card));
-    if (complete || !userId) return current.displayName;
+    if (complete || !userId) return current;
 
     const key = groupId ? `group:${groupId}:${userId}` : `user:${userId}`;
     const now = Date.now();
     const cached = this.cache.get(key);
     if (cached && cached.expiresAt > now) {
       const identity = mergeIdentity(current, cached.value);
-      this.apply(event, identity);
-      return identity.displayName;
+      return identity;
     }
     if (cached) this.cache.delete(key);
 
@@ -58,16 +70,12 @@ export class SenderNameResolver {
     }
 
     const identity = mergeIdentity(current, await request);
-    this.apply(event, identity);
-    return identity.displayName;
+    return identity;
   }
 
-  private async load(userId: number, groupId: number | undefined, gateway: OneBotActionSender, key: string) {
+  private async load(userId: number, groupId: number | undefined, gateway: Pick<MessagingPort, "resolveSender">, key: string) {
     try {
-      const payload = groupId
-        ? await gateway.sendAction("get_group_member_info", { group_id: groupId, user_id: userId, no_cache: false })
-        : await gateway.sendAction("get_stranger_info", { user_id: userId, no_cache: false });
-      const identity = senderIdentityFromPayload(payload);
+      const identity = senderIdentity(await gateway.resolveSender({ userId, groupId }));
       this.cache.set(key, {
         value: identity,
         expiresAt: Date.now() + (identity.displayName ? GROUP_MEMBER_NAME_CACHE_TTL_MS : GROUP_MEMBER_NAME_FAILURE_TTL_MS)
@@ -90,21 +98,6 @@ export class SenderNameResolver {
     }
   }
 
-  private apply(event: OneBotEvent, identity: SenderIdentity) {
-    if (!identity.displayName) return;
-    event.sender = {
-      ...event.sender,
-      user_id: event.sender?.user_id ?? event.user_id ?? identity.userId,
-      nickname: identity.nickname || event.sender?.nickname,
-      card: identity.card || event.sender?.card
-    };
-  }
-}
-
-function senderIdentityFromPayload(payload: unknown) {
-  const root = recordValue(payload);
-  const data = recordValue(root?.data);
-  return senderIdentity(data);
 }
 
 function mergeIdentity(current: SenderIdentity, resolved: SenderIdentity): SenderIdentity {
@@ -114,11 +107,15 @@ function mergeIdentity(current: SenderIdentity, resolved: SenderIdentity): Sende
   return { userId, nickname, card, displayName: card || nickname || userId };
 }
 
-function recordValue(value: unknown) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  return value as Record<string, unknown>;
-}
-
 function nonEmptyString(value: unknown) {
   return value == null ? "" : String(value).trim();
+}
+
+function contractSenderIdentity(identity: SenderIdentity): SenderIdentityV1 {
+  return {
+    id: identity.userId,
+    ...(identity.nickname ? { nickname: identity.nickname } : {}),
+    ...(identity.card ? { card: identity.card } : {}),
+    ...(identity.displayName ? { displayName: identity.displayName } : {})
+  };
 }

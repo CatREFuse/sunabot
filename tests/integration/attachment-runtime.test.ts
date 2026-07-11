@@ -1,16 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
   buildUserPrompt,
-  extractMessageDetailsFromActionPayload,
   hasIncomingReplyContent,
-  parseIncomingMessage,
   sanitizeAttachmentForPersistence,
   selectRelevantConversationAttachments
 } from "../../src/runtime.js";
+import {
+  extractOneBotMessageDetails,
+  parseOneBotInboundMessage
+} from "../../adapters/onebot/inboundMessageAdapter.js";
 import type { ParsedAttachment } from "../../services/media/attachments/types.js";
 import type {
   ConversationRecord,
-  OneBotEvent,
   ParsedIncomingMessage
 } from "../../src/types.js";
 import {
@@ -30,7 +31,7 @@ describe("attachment runtime integration", () => {
   });
 
   it("parses a current array-message file segment", () => {
-    const incoming = parseIncomingMessage({
+    const incoming = parseOneBotInboundMessage({
       post_type: "message",
       message_type: "group",
       message_id: 1001,
@@ -68,7 +69,7 @@ describe("attachment runtime integration", () => {
   });
 
   it("parses a current CQ file segment", () => {
-    const incoming = parseIncomingMessage({
+    const incoming = parseOneBotInboundMessage({
       post_type: "message",
       message_type: "private",
       message_id: 1002,
@@ -91,7 +92,7 @@ describe("attachment runtime integration", () => {
   });
 
   it("extracts a quoted file from a get_msg response", () => {
-    const details = extractMessageDetailsFromActionPayload({
+    const details = extractOneBotMessageDetails({
       status: "ok",
       data: {
         message_id: 5678,
@@ -114,7 +115,7 @@ describe("attachment runtime integration", () => {
     }, { source: "quote" });
 
     expect(details.text).toBe("原文件");
-    expect(details.senderName).toBe("引用用户");
+    expect(details.sender.displayName).toBe("引用用户");
     expect(details.attachments).toEqual([
       expect.objectContaining({
         id: expect.stringMatching(/^attachment_[a-f0-9]{20}$/),
@@ -131,7 +132,7 @@ describe("attachment runtime integration", () => {
   });
 
   it("treats a file-only message as replyable content", () => {
-    const incoming = parseIncomingMessage({
+    const incoming = parseOneBotInboundMessage({
       post_type: "message",
       message_type: "private",
       message_id: 1003,
@@ -232,22 +233,19 @@ function readyAttachment(id: string, name: string): ParsedAttachment {
 }
 
 function incomingMessage(attachments: ParsedAttachment[]): ParsedIncomingMessage {
-  const event: OneBotEvent = {
-    post_type: "message",
-    message_type: "private",
-    message_id: 99,
-    user_id: 7
-  };
   return {
+    schemaVersion: 1,
     scope: "private",
+    messageId: 99,
+    time: "2026-07-11T00:00:00.000Z",
     userId: 7,
+    sender: { id: "7", displayName: "7" },
     text: "",
-    imageUrls: [],
+    media: [],
     attachments,
     replyMessageIds: [],
     quoteReferences: [],
-    mentionedSelf: false,
-    event
+    mentionedSelf: false
   };
 }
 

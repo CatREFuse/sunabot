@@ -8,14 +8,11 @@ import {
   ConversationMessageQuote,
   ConversationRecord,
   ImageResult,
-  OneBotEvent,
-  OneBotMessageSegment,
   ParsedIncomingMessage,
   ReasoningEffort
 } from "./types.js";
 import { resolveModelReasoningEffort } from "./admin/models.js";
-import { extractOneBotAttachments } from "../services/media/attachments/onebot.js";
-import { AttachmentService, pendingAttachments } from "../services/media/attachments/service.js";
+import { AttachmentService } from "../services/media/attachments/service.js";
 import type {
   AttachmentExtractionContext,
   ParsedAttachment
@@ -72,8 +69,15 @@ import {
   type ProviderDeferredTurn
 } from "../adapters/model/openaiProvider.js";
 import type { ProviderLogContext } from "../packages/contracts/model/modelGateway.js";
+import {
+  inboundImageUrls,
+  replaceInboundImageUrls,
+  type MessageDetailsV1,
+  type MessagingPort,
+  type OutboundMessageV1
+} from "../packages/contracts/messaging/messages.js";
+import { generatedImageMediaAsset, imageMediaAsset } from "../packages/contracts/media/media.js";
 import { loadPersona, AgentPersona } from "../services/agent/persona.js";
-import { OneBotGateway, OneBotGatewayDelegate } from "../adapters/onebot/onebotGateway.js";
 import { appendRequestLog } from "./requestLog.js";
 import { WORKSPACE_LAYOUT } from "../packages/platform/workspaceLayout.js";
 import { SenderNameResolver, senderDisplayName, senderIdentity } from "../services/conversations/senderName.js";
@@ -193,7 +197,7 @@ interface ConversationReplyUpdateInput {
 interface RuntimeCommandContext {
   channelKey: string;
   incoming: ParsedIncomingMessage;
-  gateway: OneBotGateway;
+  gateway: MessagingPort;
   signal: AbortSignal;
   isCurrent: () => boolean;
   delivery?: ReplyDelivery;
@@ -221,7 +225,7 @@ interface DeferredCodexTurn {
 interface AmbientReplyJob {
   channelKey: string;
   incoming: ParsedIncomingMessage;
-  gateway: OneBotGateway;
+  gateway: MessagingPort;
   captureSequence: number;
   gate: ReplyGateSnapshot;
 }
@@ -252,7 +256,7 @@ export interface SunaRuntimeOptions {
   codexRunner?: CodexRunner;
 }
 
-export class SunaRuntime implements OneBotGatewayDelegate {
+export class SunaRuntime {
   private persona?: AgentPersona;
   private config: AppConfig;
   private readonly conversationRecords = new Map(loadConversationRecords().map((record) => [record.id, record]));
@@ -283,7 +287,7 @@ export class SunaRuntime implements OneBotGatewayDelegate {
     promise: Promise<void>;
     incoming: ParsedIncomingMessage;
   }>();
-  private activeGateway?: OneBotGateway;
+  private activeGateway?: MessagingPort;
 
   constructor(config: AppConfig, options: SunaRuntimeOptions = {}) {
     configureMemoryPersistence(sqliteMemoryPersistence);
@@ -652,7 +656,7 @@ export class SunaRuntime implements OneBotGatewayDelegate {
     };
   }
 
-  async hydrateConversationIdentities(conversationId: string, gateway: OneBotGateway) {
+  async hydrateConversationIdentities(conversationId: string, gateway: MessagingPort) {
     const record = this.conversationRecords.get(normalizeConversationId(conversationId));
     if (!record) return;
     const targets = record.messages.slice(-80).flatMap((message) => {
@@ -667,18 +671,15 @@ export class SunaRuntime implements OneBotGatewayDelegate {
     let changed = false;
     for (let offset = 0; offset < targets.length; offset += 4) {
       await Promise.all(targets.slice(offset, offset + 4).map(async ({ message, userId }) => {
-        const event: OneBotEvent = {
-          message_type: record.groupId ? "group" : "private",
-          group_id: record.groupId,
-          user_id: userId,
+        const identity = await this.senderNameResolver.resolve({
+          userId,
+          groupId: record.groupId,
           sender: {
-            user_id: userId,
-            nickname: message.senderNickname,
-            card: message.senderCard
+            id: String(userId),
+            ...(message.senderNickname ? { nickname: message.senderNickname } : {}),
+            ...(message.senderCard ? { card: message.senderCard } : {})
           }
-        };
-        await this.senderNameResolver.hydrate(event, gateway);
-        const identity = senderIdentity(event.sender);
+        }, gateway);
         if (identity.nickname && message.senderNickname !== identity.nickname) {
           message.senderNickname = identity.nickname;
           changed = true;
@@ -719,15 +720,15 @@ export class SunaRuntime implements OneBotGatewayDelegate {
     return this.publicConversationRecord(record);
   }
 
-  async announceServiceOnline(gateway: OneBotGateway, message: string) {
+  async announceServiceOnline(gateway: MessagingPort, message: string) {
     const targets = this.getActiveConversationRecords();
     let sent = 0;
     for (const record of targets) {
       try {
         if (record.groupId) {
-          await gateway.sendGroupMessage(record.groupId, message);
+          await gateway.send(outboundForRecord(record, message));
         } else {
-          await gateway.sendPrivateMessage(record.userId, message);
+          await gateway.send(outboundForRecord(record, message));
         }
         this.recordServiceMessage(record, message);
         sent += 1;
@@ -743,7 +744,7 @@ export class SunaRuntime implements OneBotGatewayDelegate {
     return { total: targets.length, sent };
   }
 
-  async hydrateConversationRecords(gateway: OneBotGateway) {
+  async hydrateConversationRecords(gateway: MessagingPort) {
     if (!this.hydrationPromise) {
       this.hydrationPromise = this.performHydrateConversationRecords(gateway)
         .finally(() => {
@@ -753,7 +754,7 @@ export class SunaRuntime implements OneBotGatewayDelegate {
     await this.hydrationPromise;
   }
 
-  private async performHydrateConversationRecords(gateway: OneBotGateway) {
+  private async performHydrateConversationRecords(gateway: MessagingPort) {
     const generation = String(gateway.getStatus().connectedAt ?? "unknown");
     if (generation !== this.hydrationGeneration) {
       this.hydrationGeneration = generation;
@@ -809,7 +810,7 @@ export class SunaRuntime implements OneBotGatewayDelegate {
         const processedAttachments = unresolvedAttachments.length
           ? await this.attachmentService.processIncoming(
             unresolvedAttachments,
-            gateway,
+            attachmentActionPort(gateway),
             details.text,
             `${target.record.id}/${target.message.id}`
           )
@@ -821,7 +822,7 @@ export class SunaRuntime implements OneBotGatewayDelegate {
         );
         quoteReferences = replaceQuoteAttachments(quoteReferences, resolvedAttachments);
         const imageUrls = uniqueStrings([
-          ...details.imageUrls,
+          ...details.media.flatMap((asset) => asset.url ? [asset.url] : []),
           ...quoteReferences.flatMap((quote) => quote.imageUrls ?? [])
         ]);
         if (mergeConversationMessageDetails(target.message, details, imageUrls, quoteReferences)) {
@@ -856,10 +857,8 @@ export class SunaRuntime implements OneBotGatewayDelegate {
     }
   }
 
-  async handleOneBotEvent(event: OneBotEvent, gateway: OneBotGateway) {
+  async handleInboundMessage(incoming: ParsedIncomingMessage, gateway: MessagingPort) {
     this.activeGateway = gateway;
-    const incoming = parseIncomingMessage(event);
-    if (!incoming) return;
     if (this.isDuplicateIncoming(incoming)) return;
 
     const channelKey = conversationRecordId(incoming);
@@ -894,7 +893,7 @@ export class SunaRuntime implements OneBotGatewayDelegate {
           preparationKey
         }, {
           conversationId: channelKey,
-          correlationId: `onebot:${incoming.event.message_id ?? preparationKey}`,
+          correlationId: `onebot:${incoming.messageId ?? preparationKey}`,
           idempotencyKey: `reply:${preparationKey}`
         })
       }, { schedule: false });
@@ -915,7 +914,7 @@ export class SunaRuntime implements OneBotGatewayDelegate {
             .catch((error) => {
               console.error("[runtime] prepare incoming message failed; continuing with degraded context", {
                 channel: channelKey,
-                messageId: incoming.event.message_id,
+                messageId: incoming.messageId,
                 error
               });
             })
@@ -940,7 +939,7 @@ export class SunaRuntime implements OneBotGatewayDelegate {
       .catch((error) => {
         console.error("[runtime] prepare incoming message failed; continuing with degraded context", {
           channel: channelKey,
-          messageId: incoming.event.message_id,
+          messageId: incoming.messageId,
           error
         });
       })
@@ -1100,9 +1099,9 @@ export class SunaRuntime implements OneBotGatewayDelegate {
         response: { status: "queued" },
         metadata: {
           conversationId: channelKey,
-          incomingMessageId: incoming.event.message_id == null
+          incomingMessageId: incoming.messageId == null
             ? undefined
-            : String(incoming.event.message_id),
+            : String(incoming.messageId),
           stage: "async_tool_submit"
         }
       });
@@ -1141,7 +1140,7 @@ export class SunaRuntime implements OneBotGatewayDelegate {
   private async handleIncomingMessage(
     channelKey: string,
     incoming: ParsedIncomingMessage,
-    gateway: OneBotGateway,
+    gateway: MessagingPort,
     captureSequence: number,
     signal: AbortSignal,
     command: CommandMatch<RuntimeCommandContext> | undefined = undefined,
@@ -1157,7 +1156,7 @@ export class SunaRuntime implements OneBotGatewayDelegate {
         console.error("[runtime] command failed", {
           commandId: command.id,
           channel: channelKey,
-          messageId: incoming.event.message_id,
+          messageId: incoming.messageId,
           error
         });
         await this.sendErrorReply(incoming, gateway, error, isCurrent, undefined, delivery);
@@ -1174,14 +1173,14 @@ export class SunaRuntime implements OneBotGatewayDelegate {
     });
   }
 
-  private async prepareIncomingMessage(incoming: ParsedIncomingMessage, gateway: OneBotGateway) {
+  private async prepareIncomingMessage(incoming: ParsedIncomingMessage, gateway: MessagingPort) {
     await withAbortTimeout(async (signal) => {
-      await this.senderNameResolver.hydrate(incoming.event, gateway);
+      await this.senderNameResolver.hydrate(incoming, gateway);
       await this.attachReplyReferences(incoming, gateway, signal);
       if (!incoming.attachments.length) return;
       incoming.attachments = await this.attachmentService.processIncoming(
         incoming.attachments,
-        gateway,
+        attachmentActionPort(gateway),
         incoming.text,
         incomingAttachmentReferenceScope(incoming)
       );
@@ -1192,7 +1191,7 @@ export class SunaRuntime implements OneBotGatewayDelegate {
   private async replyToIncoming(
     channelKey: string,
     incoming: ParsedIncomingMessage,
-    gateway: OneBotGateway,
+    gateway: MessagingPort,
     options: {
       captureSequence?: number;
       signal?: AbortSignal;
@@ -1210,7 +1209,7 @@ export class SunaRuntime implements OneBotGatewayDelegate {
     const logRunId = nanoid();
     const logContext = {
       conversationId: conversationRecordId(incoming),
-      incomingMessageId: incoming.event.message_id == null ? undefined : String(incoming.event.message_id),
+      incomingMessageId: incoming.messageId == null ? undefined : String(incoming.messageId),
       runId: logRunId,
       stage: "reply"
     };
@@ -1313,7 +1312,7 @@ export class SunaRuntime implements OneBotGatewayDelegate {
       });
       const currentUserMessage = [...promptRequest.messages].reverse().find((message) => message.role === "user");
       if (currentUserMessage) {
-        currentUserMessage.imageUrls = incoming.imageUrls.slice(0, MAX_CURRENT_CONTEXT_IMAGES);
+        currentUserMessage.imageUrls = inboundImageUrls(incoming).slice(0, MAX_CURRENT_CONTEXT_IMAGES);
         currentUserMessage.localImagePaths = attachmentContext.localImagePaths;
       }
       const selfieChatReferenceImageUrls = this.collectSelfieChatReferenceImages(incoming);
@@ -1360,7 +1359,7 @@ export class SunaRuntime implements OneBotGatewayDelegate {
         onImageGenerated: (image) => {
           generatedImages.push(image);
         },
-        referenceImageUrls: incoming.imageUrls,
+        referenceImageUrls: inboundImageUrls(incoming),
         memory: {
           enabled: true,
           recall: (input) => recallMemory(this.config, input)
@@ -1439,7 +1438,7 @@ export class SunaRuntime implements OneBotGatewayDelegate {
       }
       console.error("[runtime] reply failed", {
         channel: channelKey,
-        messageId: incoming.event.message_id,
+        messageId: incoming.messageId,
         userId: incoming.userId,
         groupId: incoming.groupId,
         error
@@ -1454,7 +1453,7 @@ export class SunaRuntime implements OneBotGatewayDelegate {
   private async replyWithGroupChatSummary(
     channelKey: string,
     incoming: ParsedIncomingMessage,
-    gateway: OneBotGateway,
+    gateway: MessagingPort,
     signal?: AbortSignal,
     isCurrent: () => boolean = () => true,
     delivery?: ReplyDelivery
@@ -1509,7 +1508,7 @@ export class SunaRuntime implements OneBotGatewayDelegate {
       if (signal?.aborted || isAbortError(error)) return;
       console.error("[runtime] group chat summary failed", {
         channel: channelKey,
-        messageId: incoming.event.message_id,
+        messageId: incoming.messageId,
         userId: incoming.userId,
         groupId: incoming.groupId,
         error
@@ -1520,7 +1519,7 @@ export class SunaRuntime implements OneBotGatewayDelegate {
 
   private async replyToToolCompletion(
     payload: AsyncToolCompletionPayload,
-    gateway: OneBotGateway,
+    gateway: MessagingPort,
     signal: AbortSignal,
     delivery: ReplyDelivery
   ) {
@@ -1543,12 +1542,12 @@ export class SunaRuntime implements OneBotGatewayDelegate {
 
   private async attachReplyReferences(
     incoming: ParsedIncomingMessage,
-    gateway: OneBotGateway,
+    gateway: MessagingPort,
     _signal?: AbortSignal
   ) {
     if (!incoming.replyMessageIds.length) return;
 
-    const imageUrls: string[] = [...incoming.imageUrls];
+    const imageUrls: string[] = inboundImageUrls(incoming);
     const quoteReferences: ConversationMessageQuote[] = [...incoming.quoteReferences];
     for (const messageId of incoming.replyMessageIds.slice(0, 2)) {
       try {
@@ -1557,7 +1556,7 @@ export class SunaRuntime implements OneBotGatewayDelegate {
           groupId: incoming.groupId,
           userId: incoming.userId
         });
-        imageUrls.push(...details.imageUrls);
+        imageUrls.push(...details.media.flatMap((asset) => asset.url ? [asset.url] : []));
         incoming.attachments.push(...details.attachments);
         quoteReferences.push(toConversationQuote(messageId, details));
       } catch (error) {
@@ -1568,25 +1567,21 @@ export class SunaRuntime implements OneBotGatewayDelegate {
       }
     }
 
-    incoming.imageUrls = uniqueStrings(imageUrls);
+    replaceInboundImageUrls(incoming, uniqueStrings(imageUrls));
     incoming.attachments = uniqueAttachments(incoming.attachments);
     incoming.quoteReferences = uniqueQuotes(quoteReferences);
   }
 
   private async loadMessageDetails(
-    gateway: OneBotGateway,
+    gateway: MessagingPort,
     messageId: number,
     context: AttachmentExtractionContext = { source: "quote" }
   ) {
-    const payload = await gateway.sendAction("get_msg", { message_id: messageId });
-    return extractMessageDetailsFromActionPayload(payload, {
-      ...context,
-      messageId
-    });
+    return gateway.getMessage(messageId, context);
   }
 
   private async loadQuoteReferences(
-    gateway: OneBotGateway,
+    gateway: MessagingPort,
     messageIds: number[],
     context: AttachmentExtractionContext = { source: "quote" }
   ) {
@@ -1639,7 +1634,7 @@ export class SunaRuntime implements OneBotGatewayDelegate {
     const record = this.conversationRecords.get(conversationRecordId(incoming));
     if (!record) return [];
 
-    const currentMessageId = incoming.event.message_id == null ? "" : String(incoming.event.message_id);
+    const currentMessageId = incoming.messageId == null ? "" : String(incoming.messageId);
     const admin = this.adminIdentity();
     const candidates = record.messages
       .filter((message) => !currentMessageId || message.id !== currentMessageId)
@@ -1679,8 +1674,8 @@ export class SunaRuntime implements OneBotGatewayDelegate {
   }
 
   private groupReplyOptions(incoming: ParsedIncomingMessage) {
-    if (!this.config.bot.quoteGroupReplies || incoming.event.message_id == null) return {};
-    return { replyToMessageId: incoming.event.message_id };
+    if (!this.config.bot.quoteGroupReplies || incoming.messageId == null) return {};
+    return { replyToMessageId: incoming.messageId };
   }
 
   private buildProviderBashOptions(incoming: ParsedIncomingMessage): ProviderBashOptions | undefined {
@@ -1779,7 +1774,7 @@ export class SunaRuntime implements OneBotGatewayDelegate {
     }
   }
 
-  resumeUserGroupOrchestrators(gateway: OneBotGateway) {
+  resumeUserGroupOrchestrators(gateway: MessagingPort) {
     this.activeGateway = gateway;
     this.sessionCoordinator.resume();
     let initialized = false;
@@ -1826,15 +1821,15 @@ export class SunaRuntime implements OneBotGatewayDelegate {
   }
 
   private patchIncomingMessage(record: ConversationRecord, incoming: ParsedIncomingMessage) {
-    const messageId = incoming.event.message_id == null ? "" : String(incoming.event.message_id);
+    const messageId = incoming.messageId == null ? "" : String(incoming.messageId);
     const message = [...record.messages].reverse().find((item) => item.role === "user" && item.id === messageId);
     if (!message) return;
-    const identity = senderIdentity(incoming.event.sender);
-    message.text = incoming.text || (incoming.imageUrls.length ? "[图片]" : incoming.attachments.length ? "[文件]" : "[消息]");
-    message.senderName = displaySenderName(incoming.event);
+    const identity = senderIdentity(incoming.sender);
+    message.text = incoming.text || (inboundImageUrls(incoming).length ? "[图片]" : incoming.attachments.length ? "[文件]" : "[消息]");
+    message.senderName = senderDisplayName(incoming.sender);
     message.senderNickname = identity.nickname || undefined;
     message.senderCard = identity.card || undefined;
-    message.imageUrls = incoming.imageUrls;
+    message.imageUrls = inboundImageUrls(incoming);
     message.attachments = persistedAttachments(incoming.attachments);
     message.replyMessageIds = incoming.replyMessageIds;
     message.quoteReferences = persistedQuoteReferences(incoming.quoteReferences);
@@ -1940,7 +1935,7 @@ export class SunaRuntime implements OneBotGatewayDelegate {
           captureSequence: job.captureSequence
         }, {
           conversationId: channelKey,
-          correlationId: `onebot:${job.incoming.event.message_id ?? persistentIncomingKey(job.incoming)}`,
+          correlationId: `onebot:${job.incoming.messageId ?? persistentIncomingKey(job.incoming)}`,
           idempotencyKey: `reply:${persistentIncomingKey(job.incoming)}`
         })
       });
@@ -1991,7 +1986,7 @@ export class SunaRuntime implements OneBotGatewayDelegate {
     const logRunId = nanoid();
     const logContext = {
       conversationId: record.id,
-      incomingMessageId: incoming.event.message_id == null ? undefined : String(incoming.event.message_id),
+      incomingMessageId: incoming.messageId == null ? undefined : String(incoming.messageId),
       runId: logRunId,
       stage: "orchestrator"
     };
@@ -2031,10 +2026,10 @@ export class SunaRuntime implements OneBotGatewayDelegate {
         currentMessage: {
           userId: incoming.userId,
           text: incoming.text,
-          imageCount: incoming.imageUrls.length,
+          imageCount: inboundImageUrls(incoming).length,
           attachmentCount: incoming.attachments.length,
           attachmentNames: incoming.attachments.map((attachment) => attachment.name),
-          at: eventTime(incoming.event)
+          at: incoming.time
         }
       };
       const promptRequest = await this.renderPromptRequest("orchestrator.user-group", {
@@ -2112,7 +2107,7 @@ export class SunaRuntime implements OneBotGatewayDelegate {
       if (options.signal?.aborted && !timedOut) return false;
       console.error("[runtime] user groupchat orchestrator failed", {
         groupId: incoming.groupId,
-        messageId: incoming.event.message_id,
+        messageId: incoming.messageId,
         error
       });
       this.recordOrchestratorDecision(record, {
@@ -2307,7 +2302,7 @@ export class SunaRuntime implements OneBotGatewayDelegate {
   private async sendAssistantReply(
     channelKey: string,
     incoming: ParsedIncomingMessage,
-    gateway: OneBotGateway,
+    gateway: MessagingPort,
     text: string,
     isAdmin: boolean,
     generatedImages: ImageResult[] = [],
@@ -2340,17 +2335,12 @@ export class SunaRuntime implements OneBotGatewayDelegate {
       return undefined;
     }
 
-    if (incoming.groupId) {
-      if (generatedImageAssets.length) {
-        await gateway.sendGroupRichMessage(incoming.groupId, replyText, generatedImageAssets, this.groupReplyOptions(incoming));
-      } else {
-        await gateway.sendGroupMessage(incoming.groupId, replyText, this.groupReplyOptions(incoming));
-      }
-    } else if (generatedImageAssets.length) {
-      await gateway.sendPrivateRichMessage(incoming.userId, replyText, generatedImageAssets);
-    } else {
-      await gateway.sendPrivateMessage(incoming.userId, replyText);
-    }
+    await gateway.send(outboundForIncoming(
+      incoming,
+      replyText,
+      generatedImageAssets,
+      this.groupReplyOptions(incoming).replyToMessageId
+    ));
 
     const record = this.recordAssistantMessage(incoming, replyText || "[图片]", generatedImageUrls, logRunId);
     if (logRunId) {
@@ -2368,7 +2358,7 @@ export class SunaRuntime implements OneBotGatewayDelegate {
         },
         metadata: {
           conversationId: conversationRecordId(incoming),
-          incomingMessageId: incoming.event.message_id == null ? undefined : String(incoming.event.message_id),
+          incomingMessageId: incoming.messageId == null ? undefined : String(incoming.messageId),
           runId: logRunId,
           stage: "reply"
         }
@@ -2403,33 +2393,23 @@ export class SunaRuntime implements OneBotGatewayDelegate {
         logRunId
       }, {
         conversationId: conversationRecordId(incoming),
-        correlationId: logRunId ?? `onebot:${incoming.event.message_id ?? persistentIncomingKey(incoming)}`,
+        correlationId: logRunId ?? `onebot:${incoming.messageId ?? persistentIncomingKey(incoming)}`,
         idempotencyKey: dedupeKey
       }),
       dedupeKey
     };
   }
 
-  private async deliverReplyOutbox(payload: AssistantReplyOutboxPayload, gateway: OneBotGateway) {
+  private async deliverReplyOutbox(payload: AssistantReplyOutboxPayload, gateway: MessagingPort) {
     const incoming = payload.incoming;
     const generatedImageAssets = payload.generatedImages.filter((image) => image.url || image.filePath);
     const generatedImageUrls = payload.generatedImages.flatMap((image) => image.url ? [image.url] : []);
-    if (incoming.groupId) {
-      if (generatedImageAssets.length) {
-        await gateway.sendGroupRichMessage(
-          incoming.groupId,
-          payload.text,
-          generatedImageAssets,
-          this.groupReplyOptions(incoming)
-        );
-      } else {
-        await gateway.sendGroupMessage(incoming.groupId, payload.text, this.groupReplyOptions(incoming));
-      }
-    } else if (generatedImageAssets.length) {
-      await gateway.sendPrivateRichMessage(incoming.userId, payload.text, generatedImageAssets);
-    } else {
-      await gateway.sendPrivateMessage(incoming.userId, payload.text);
-    }
+    await gateway.send(outboundForIncoming(
+      incoming,
+      payload.text,
+      generatedImageAssets,
+      this.groupReplyOptions(incoming).replyToMessageId
+    ));
 
     const record = this.recordAssistantMessage(
       incoming,
@@ -2452,7 +2432,7 @@ export class SunaRuntime implements OneBotGatewayDelegate {
         },
         metadata: {
           conversationId: conversationRecordId(incoming),
-          incomingMessageId: incoming.event.message_id == null ? undefined : String(incoming.event.message_id),
+          incomingMessageId: incoming.messageId == null ? undefined : String(incoming.messageId),
           runId: payload.logRunId,
           stage: "reply"
         }
@@ -2473,7 +2453,7 @@ export class SunaRuntime implements OneBotGatewayDelegate {
 
   private async sendErrorReply(
     incoming: ParsedIncomingMessage,
-    gateway: OneBotGateway,
+    gateway: MessagingPort,
     error: unknown,
     isCurrent: () => boolean = () => true,
     logRunId?: string,
@@ -2493,15 +2473,16 @@ export class SunaRuntime implements OneBotGatewayDelegate {
         ));
         return;
       }
-      if (incoming.groupId) {
-        await gateway.sendGroupMessage(incoming.groupId, message, this.groupReplyOptions(incoming));
-      } else {
-        await gateway.sendPrivateMessage(incoming.userId, message);
-      }
+      await gateway.send(outboundForIncoming(
+        incoming,
+        message,
+        [],
+        this.groupReplyOptions(incoming).replyToMessageId
+      ));
       this.recordAssistantMessage(incoming, message, [], logRunId, logRunId ? "failed" : undefined);
     } catch (error) {
       console.error("[runtime] error reply failed", {
-        messageId: incoming.event.message_id,
+        messageId: incoming.messageId,
         userId: incoming.userId,
         groupId: incoming.groupId,
         error
@@ -2511,7 +2492,7 @@ export class SunaRuntime implements OneBotGatewayDelegate {
 
   private incomingCaptureSequence(incoming: ParsedIncomingMessage) {
     const record = this.conversationRecords.get(conversationRecordId(incoming));
-    const messageId = incoming.event.message_id == null ? "" : String(incoming.event.message_id);
+    const messageId = incoming.messageId == null ? "" : String(incoming.messageId);
     const existing = messageId
       ? record?.messages.find((message) => message.role === "user" && message.id === messageId)
       : undefined;
@@ -2524,9 +2505,9 @@ export class SunaRuntime implements OneBotGatewayDelegate {
     incoming: ParsedIncomingMessage,
     options: { expectedSequence?: number; persist?: boolean } = {}
   ) {
-    const at = eventTime(incoming.event);
+    const at = incoming.time;
     const record = this.ensureConversationRecord(incoming, at);
-    const messageId = incoming.event.message_id == null ? "" : String(incoming.event.message_id);
+    const messageId = incoming.messageId == null ? "" : String(incoming.messageId);
     const existing = messageId
       ? record.messages.find((message) => message.role === "user" && message.id === messageId)
       : undefined;
@@ -2535,12 +2516,12 @@ export class SunaRuntime implements OneBotGatewayDelegate {
       record.messageCount >= options.expectedSequence
     )) return record;
 
-    const senderName = displaySenderName(incoming.event);
-    const identity = senderIdentity(incoming.event.sender);
+    const senderName = senderDisplayName(incoming.sender);
+    const identity = senderIdentity(incoming.sender);
     appendConversationMessage(record, {
       id: messageId || nanoid(),
       role: "user",
-      text: incoming.text || (incoming.imageUrls.length ? "[图片]" : incoming.attachments.length ? "[文件]" : "[消息]"),
+      text: incoming.text || (inboundImageUrls(incoming).length ? "[图片]" : incoming.attachments.length ? "[文件]" : "[消息]"),
       at,
       userId: incoming.userId,
       groupId: incoming.groupId,
@@ -2549,7 +2530,7 @@ export class SunaRuntime implements OneBotGatewayDelegate {
       senderCard: identity.card || undefined,
       isAdmin: this.isAdminUser(incoming.userId),
       selfId: incoming.selfId,
-      imageUrls: incoming.imageUrls,
+      imageUrls: inboundImageUrls(incoming),
       attachments: persistedAttachments(incoming.attachments),
       replyMessageIds: incoming.replyMessageIds,
       quoteReferences: persistedQuoteReferences(incoming.quoteReferences)
@@ -3139,7 +3120,7 @@ export class SunaRuntime implements OneBotGatewayDelegate {
 
   private collectSelfieChatReferenceImages(incoming: ParsedIncomingMessage) {
     const record = this.conversationRecords.get(conversationRecordId(incoming));
-    const currentMessageId = incoming.event.message_id == null ? "" : String(incoming.event.message_id);
+    const currentMessageId = incoming.messageId == null ? "" : String(incoming.messageId);
     const recentImages = record?.messages
       .filter((message) => message.role === "user")
       .filter((message) => !currentMessageId || message.id !== currentMessageId)
@@ -3150,7 +3131,7 @@ export class SunaRuntime implements OneBotGatewayDelegate {
         ...(message.quoteReferences ?? []).flatMap((quote) => quote.imageUrls ?? [])
       ]) ?? [];
     return uniqueStrings([
-      ...incoming.imageUrls,
+      ...inboundImageUrls(incoming),
       ...recentImages
     ]).slice(0, MAX_SELFIE_REFERENCE_IMAGES);
   }
@@ -3200,90 +3181,19 @@ export function isExplicitWakeMessage(text: string, commandPrefixes: string[], m
     mentionNames.some((name) => name && matchesMentionName(trimmed, name));
 }
 
-export function parseIncomingMessage(event: OneBotEvent): ParsedIncomingMessage | undefined {
-  if (event.post_type !== "message") return undefined;
-  if (!event.user_id || !event.message_type) return undefined;
-
-  const selfId = event.self_id;
-  const message = event.message ?? event.raw_message ?? "";
-  const text = extractText(message, selfId);
-  const imageUrls = extractImageUrls(message);
-  const attachments = pendingAttachments(extractOneBotAttachments(message, {
-    source: "message",
-    messageId: event.message_id,
-    groupId: event.group_id,
-    userId: event.user_id
-  }));
-  const replyMessageIds = extractReplyMessageIds(message);
-  const mentionedSelf = isMentioned(event.message, selfId);
-  const scope = event.message_type === "private" ? "private" : detectGroupScope(event);
-
-  return {
-    scope,
-    userId: event.user_id,
-    groupId: event.group_id,
-    selfId,
-    text,
-    imageUrls,
-    attachments,
-    replyMessageIds,
-    quoteReferences: [],
-    mentionedSelf,
-    event
-  };
-}
-
 export function hasIncomingReplyContent(incoming: ParsedIncomingMessage) {
   return Boolean(
     incoming.text.trim() ||
-    incoming.imageUrls.length ||
+    inboundImageUrls(incoming).length ||
     incoming.attachments.length ||
     incoming.mentionedSelf
   );
 }
 
-function detectGroupScope(event: OneBotEvent): "user_group" | "bot_group" {
-  const subType = String(event.sub_type ?? "");
-  const senderRole = String(event.sender?.role ?? "");
-  if (subType === "bot_group" || senderRole === "bot") return "bot_group";
-  return "user_group";
-}
-
-function extractText(message: string | OneBotMessageSegment[], selfId?: number) {
-  if (typeof message === "string") return normalizeCqMessage(message, selfId).trim();
-
-  return message
-    .map((segment) => {
-      if (segment.type === "text") return String(segment.data?.text ?? "");
-      if (segment.type === "at") {
-        const qq = String(segment.data?.qq ?? "");
-        if (selfId && qq === String(selfId)) return "";
-        return `@${qq}`;
-      }
-      if (segment.type === "image") return "";
-      if (segment.type === "record") return "[语音]";
-      if (segment.type === "video") return "[视频]";
-      if (segment.type === "file") return "";
-      return "";
-    })
-    .join("")
-    .trim();
-}
-
-function isMentioned(message: string | OneBotMessageSegment[] | undefined, selfId?: number) {
-  if (!message || !selfId) return false;
-  if (typeof message === "string") return isCqMentioned(message, selfId);
-  return message.some((segment) => {
-    if (segment.type !== "at") return false;
-    const qq = String(segment.data?.qq ?? "");
-    return qq === String(selfId) || qq === "all";
-  });
-}
-
 function collectGroupChatSummaryMessages(record: ConversationRecord | undefined, incoming: ParsedIncomingMessage) {
   if (!record) return [];
   const now = Date.now();
-  const currentMessageId = incoming.event.message_id == null ? "" : String(incoming.event.message_id);
+  const currentMessageId = incoming.messageId == null ? "" : String(incoming.messageId);
   return record.messages
     .filter((message) => message.id !== currentMessageId)
     .filter((message) => {
@@ -3355,13 +3265,13 @@ function collectBatchUsers(
 function formatIncomingUserLabel(incoming: ParsedIncomingMessage, admin: AdminIdentity) {
   const userId = String(incoming.userId);
   if (isAdminUserId(userId, admin)) return `${admin.name}(${admin.userId})`;
-  const name = normalizeParticipantName(displaySenderName(incoming.event), userId);
+  const name = normalizeParticipantName(senderDisplayName(incoming.sender), userId);
   return name ? `${name}(${userId})` : userId;
 }
 
 function buildUserProfileRecallQuery(incoming: ParsedIncomingMessage, text: string, admin: AdminIdentity) {
   const userId = String(incoming.userId);
-  const name = normalizeParticipantName(displaySenderName(incoming.event), userId);
+  const name = normalizeParticipantName(senderDisplayName(incoming.sender), userId);
   return [userId, name, isAdminUserId(userId, admin) ? admin.name : "", text].filter(Boolean).join(" ");
 }
 
@@ -3405,7 +3315,8 @@ export function buildUserPrompt(
   const scopeName = incoming.scope === "private" ? "私聊" : incoming.scope === "user_group" ? "用户群聊" : "bot群聊";
   const groupLine = incoming.groupId ? `群号：${incoming.groupId}\n` : "";
   const roleLine = isAdmin ? `角色：管理员；称呼：${admin.name}\n` : "";
-  const imageLine = incoming.imageUrls.length ? `图片：${incoming.imageUrls.length} 张，可作为生图参考图\n` : "";
+  const imageCount = inboundImageUrls(incoming).length;
+  const imageLine = imageCount ? `图片：${imageCount} 张，可作为生图参考图\n` : "";
   const quoteLine = incoming.quoteReferences.length ? `引用：${formatQuoteReferencesForContext(incoming.quoteReferences)}\n` : "";
   const attachmentLine = boundedAttachmentContext ? `文件内容：\n${boundedAttachmentContext}\n` : "";
   const memoryLine = boundedMemory ? `相关记忆：\n${boundedMemory}\n` : "";
@@ -3857,7 +3768,7 @@ function recognizableIdentity(value: unknown) {
 }
 
 function conversationTitle(incoming: ParsedIncomingMessage) {
-  if (incoming.scope === "private") return displaySenderName(incoming.event) || String(incoming.userId);
+  if (incoming.scope === "private") return senderDisplayName(incoming.sender) || String(incoming.userId);
   return String(incoming.groupId ?? "群聊");
 }
 
@@ -3867,32 +3778,26 @@ function restoredGroupIncoming(
 ): ParsedIncomingMessage | undefined {
   if (!record.groupId || !message.userId) return undefined;
   const numericMessageId = Number(message.id);
-  const event: OneBotEvent = {
-    post_type: "message",
-    message_type: "group",
-    message_id: Number.isSafeInteger(numericMessageId) ? numericMessageId : undefined,
-    user_id: message.userId,
-    group_id: record.groupId,
-    self_id: message.selfId ?? record.selfId,
-    message: message.text,
-    sender: {
-      user_id: message.userId,
-      nickname: message.senderNickname ?? message.senderName,
-      card: message.senderCard
-    }
-  };
   return {
+    schemaVersion: 1,
     scope: "user_group",
+    ...(Number.isSafeInteger(numericMessageId) && numericMessageId > 0 ? { messageId: numericMessageId } : {}),
+    time: message.at,
     userId: message.userId,
     groupId: record.groupId,
     selfId: message.selfId ?? record.selfId,
+    sender: {
+      id: String(message.userId),
+      ...(message.senderNickname ?? message.senderName ? { nickname: message.senderNickname ?? message.senderName } : {}),
+      ...(message.senderCard ? { card: message.senderCard } : {}),
+      ...(message.senderName ? { displayName: message.senderName } : {})
+    },
     text: message.text,
-    imageUrls: message.imageUrls ?? [],
+    media: (message.imageUrls ?? []).map(imageMediaAsset),
     attachments: message.attachments ?? [],
     replyMessageIds: message.replyMessageIds ?? [],
     quoteReferences: message.quoteReferences ?? [],
-    mentionedSelf: false,
-    event
+    mentionedSelf: false
   };
 }
 
@@ -3900,43 +3805,77 @@ function conversationRecordId(incoming: ParsedIncomingMessage) {
   return incoming.groupId ? `group:${incoming.groupId}` : `private:${incoming.userId}`;
 }
 
+function outboundForIncoming(
+  incoming: ParsedIncomingMessage,
+  text: string,
+  images: ImageResult[] = [],
+  replyToMessageId?: number
+): OutboundMessageV1 {
+  return {
+    schemaVersion: 1,
+    id: nanoid(),
+    conversationId: conversationRecordId(incoming),
+    scope: incoming.scope,
+    userId: incoming.userId,
+    ...(incoming.groupId ? { groupId: incoming.groupId } : {}),
+    text,
+    media: images.map(generatedImageMediaAsset).filter((asset): asset is NonNullable<typeof asset> => Boolean(asset)),
+    ...(replyToMessageId ? { replyToMessageId } : {})
+  };
+}
+
+function outboundForRecord(record: ConversationRecord, text: string): OutboundMessageV1 {
+  return {
+    schemaVersion: 1,
+    id: nanoid(),
+    conversationId: record.id,
+    scope: record.scope,
+    userId: record.userId,
+    ...(record.groupId ? { groupId: record.groupId } : {}),
+    text,
+    media: []
+  };
+}
+
+function attachmentActionPort(port: MessagingPort) {
+  const candidate = port as MessagingPort & {
+    sendAction?: (action: string, params: Record<string, unknown>) => Promise<unknown>;
+  };
+  if (typeof candidate.sendAction !== "function") {
+    throw new Error("Messaging adapter does not support attachment resolution.");
+  }
+  return candidate as MessagingPort & {
+    sendAction(action: string, params: Record<string, unknown>): Promise<unknown>;
+  };
+}
+
 function persistentIncomingKey(incoming: ParsedIncomingMessage) {
-  const messageId = incoming.event.message_id == null
-    ? `${eventTime(incoming.event)}:${incoming.userId}:${incoming.text}:${incoming.imageUrls.join(",")}`
-    : String(incoming.event.message_id);
+  const messageId = incoming.messageId == null
+    ? `${incoming.time}:${incoming.userId}:${incoming.text}:${inboundImageUrls(incoming).join(",")}`
+    : String(incoming.messageId);
   return `${incoming.selfId ?? ""}:${conversationRecordId(incoming)}:${messageId}`;
 }
 
 function queueIncomingSnapshot(incoming: ParsedIncomingMessage): ParsedIncomingMessage {
-  const event = incoming.event;
   return {
     ...incoming,
-    imageUrls: [...incoming.imageUrls],
+    sender: { ...incoming.sender },
+    media: incoming.media.map((asset) => ({ ...asset })),
     attachments: incoming.attachments.map((attachment) => ({ ...attachment })),
     replyMessageIds: [...incoming.replyMessageIds],
     quoteReferences: incoming.quoteReferences.map((quote) => ({
       ...quote,
+      media: quote.media?.map((asset) => ({ ...asset })),
       imageUrls: quote.imageUrls ? [...quote.imageUrls] : undefined,
       attachments: quote.attachments?.map((attachment) => ({ ...attachment }))
-    })),
-    event: {
-      post_type: event.post_type,
-      message_type: event.message_type,
-      sub_type: event.sub_type,
-      message_id: event.message_id,
-      user_id: event.user_id,
-      group_id: event.group_id,
-      self_id: event.self_id,
-      sender: event.sender,
-      time: event.time
-    }
+    }))
   };
 }
 
 function incomingAttachmentReferenceScope(incoming: ParsedIncomingMessage) {
-  const messageId = incoming.event.message_id == null
-    ? `event-${eventTime(incoming.event)}`
-    : String(incoming.event.message_id);
+  const messageId = incoming.messageId == null
+    ? `event-${incoming.time}`
+    : String(incoming.messageId);
   return `${conversationRecordId(incoming)}/${messageId}`;
 }
 
@@ -4006,41 +3945,10 @@ function normalizePositiveInteger(value: unknown) {
 
 function normalizeOutgoingReplyText(text: string) {
   return text
-    .replace(/\[CQ:image,[^\]]*\]/g, "")
     .replace(/file:\/\/\/?[^\s\]\)]+/g, "")
     .replace(/\/[^\s\]\)]+workspace\/artifacts\/images\/[^\s\]\)]+/g, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
-}
-
-function displaySenderName(event: OneBotEvent) {
-  return senderDisplayName(event.sender);
-}
-
-function eventTime(event: OneBotEvent) {
-  if (typeof event.time === "number" && Number.isFinite(event.time)) {
-    return new Date(event.time * 1000).toISOString();
-  }
-  return new Date().toISOString();
-}
-
-function normalizeCqMessage(message: string, selfId?: number) {
-  return message
-    .replace(/\[CQ:reply,[^\]]*\]/g, "")
-    .replace(/\[CQ:image,[^\]]*\]/g, "")
-    .replace(/\[CQ:file(?:,[^\]]*)?\]/gi, "")
-    .replace(/\[CQ:at,qq=([^\],]+)[^\]]*\]/g, (_match, qq: string) => {
-      if ((selfId && qq === String(selfId)) || qq === "all") return "";
-      return `@${qq}`;
-    });
-}
-
-function isCqMentioned(message: string, selfId: number) {
-  for (const match of message.matchAll(/\[CQ:at,qq=([^\],]+)[^\]]*\]/g)) {
-    const qq = match[1];
-    if (qq === String(selfId) || qq === "all") return true;
-  }
-  return false;
 }
 
 function matchesMentionName(text: string, name: string) {
@@ -4049,119 +3957,25 @@ function matchesMentionName(text: string, name: string) {
   return text.toLowerCase().includes(mentionName.toLowerCase());
 }
 
-function extractImageUrls(message: string | OneBotMessageSegment[]) {
-  if (typeof message === "string") return extractCqImageUrls(message);
-  return uniqueStrings(message
-    .filter((segment) => segment.type === "image")
-    .flatMap((segment) => [
-      String(segment.data?.url ?? ""),
-      String(segment.data?.file ?? "")
-    ])
-    .map((value) => value.trim())
-    .filter(isUsableImageUrl));
-}
-
-function extractReplyMessageIds(message: string | OneBotMessageSegment[]) {
-  if (typeof message === "string") return extractCqReplyMessageIds(message);
-  return uniqueNumbers(message
-    .filter((segment) => segment.type === "reply")
-    .map((segment) => Number(segment.data?.id))
-    .filter((id) => Number.isInteger(id) && id > 0));
-}
-
-function extractCqReplyMessageIds(message: string) {
-  const ids: number[] = [];
-  for (const match of message.matchAll(/\[CQ:reply,([^\]]+)\]/g)) {
-    const params = parseCqParams(match[1] ?? "");
-    const id = Number(params.id);
-    if (Number.isInteger(id) && id > 0) ids.push(id);
-  }
-  return uniqueNumbers(ids);
-}
-
-function extractCqImageUrls(message: string) {
-  const urls: string[] = [];
-  for (const match of message.matchAll(/\[CQ:image,([^\]]+)\]/g)) {
-    const params = parseCqParams(match[1] ?? "");
-    const url = params.url || params.file || "";
-    if (isUsableImageUrl(url)) urls.push(url);
-  }
-  return uniqueStrings(urls);
-}
-
-function parseCqParams(input: string) {
-  const params: Record<string, string> = {};
-  for (const part of input.split(",")) {
-    const index = part.indexOf("=");
-    if (index <= 0) continue;
-    params[part.slice(0, index)] = decodeCqValue(part.slice(index + 1));
-  }
-  return params;
-}
-
-function decodeCqValue(value: string) {
-  return value
-    .replace(/&#44;/g, ",")
-    .replace(/&#91;/g, "[")
-    .replace(/&#93;/g, "]")
-    .replace(/&amp;/g, "&");
-}
-
 function isUsableImageUrl(value: string) {
   return /^https?:\/\//i.test(value) || /^data:image\/[a-z0-9.+-]+;base64,/i.test(value);
 }
 
-export interface MessageDetails {
-  text: string;
-  imageUrls: string[];
-  attachments: ParsedAttachment[];
-  replyMessageIds: number[];
-  senderName?: string;
-  senderNickname?: string;
-  senderCard?: string;
-}
-
-export function extractMessageDetailsFromActionPayload(
-  payload: unknown,
-  context: AttachmentExtractionContext = { source: "quote" }
-): MessageDetails {
-  const root = readRecord(payload);
-  const data = readRecord(root.data);
-  const payloadSource = Object.keys(data).length ? data : root;
-  const message = readOneBotMessage(payloadSource.message) ?? readOneBotMessage(payloadSource.raw_message) ?? "";
-  const sender = readRecord(payloadSource.sender);
-  const senderName = displaySenderName({ sender });
-  const identity = senderIdentity(sender);
-  const attachmentContext: AttachmentExtractionContext = {
-    source: context.source ?? "quote",
-    messageId: context.messageId ?? positiveIntegerOrUndefined(payloadSource.message_id),
-    groupId: context.groupId ?? positiveIntegerOrUndefined(payloadSource.group_id),
-    userId: context.userId ?? positiveIntegerOrUndefined(payloadSource.user_id)
-  };
-  return {
-    text: extractText(message),
-    imageUrls: extractImageUrls(message),
-    attachments: pendingAttachments(extractOneBotAttachments(message, attachmentContext)),
-    replyMessageIds: extractReplyMessageIds(message),
-    senderName: senderName || undefined,
-    senderNickname: identity.nickname || undefined,
-    senderCard: identity.card || undefined
-  };
-}
-
-function toConversationQuote(messageId: number, details: MessageDetails): ConversationMessageQuote {
+function toConversationQuote(messageId: number, details: MessageDetailsV1): ConversationMessageQuote {
+  const imageUrls = details.media.flatMap((asset) => asset.url ? [asset.url] : []);
   return {
     messageId,
-    text: details.text || (details.imageUrls.length ? "[图片]" : details.attachments.length ? "[文件]" : undefined),
-    imageUrls: details.imageUrls,
+    text: details.text || (imageUrls.length ? "[图片]" : details.attachments.length ? "[文件]" : undefined),
+    media: details.media,
+    imageUrls,
     attachments: details.attachments,
-    senderName: details.senderName
+    senderName: details.sender.displayName
   };
 }
 
 function mergeConversationMessageDetails(
   message: ConversationRecord["messages"][number],
-  details: MessageDetails,
+  details: MessageDetailsV1,
   imageUrls: string[],
   quoteReferences: ConversationMessageQuote[]
 ) {
@@ -4171,9 +3985,9 @@ function mergeConversationMessageDetails(
     changed = true;
   }
   if (setOptionalStringArray(message, "imageUrls", imageUrls)) changed = true;
-  if (setOptionalString(message, "senderName", details.senderName)) changed = true;
-  if (setOptionalString(message, "senderNickname", details.senderNickname)) changed = true;
-  if (setOptionalString(message, "senderCard", details.senderCard)) changed = true;
+  if (setOptionalString(message, "senderName", details.sender.displayName)) changed = true;
+  if (setOptionalString(message, "senderNickname", details.sender.nickname)) changed = true;
+  if (setOptionalString(message, "senderCard", details.sender.card)) changed = true;
   if (setOptionalAttachmentArray(message, details.attachments)) changed = true;
   if (setOptionalNumberArray(message, "replyMessageIds", details.replyMessageIds)) changed = true;
   if (setOptionalQuoteArray(message, quoteReferences)) changed = true;
@@ -4248,13 +4062,6 @@ function formatQuoteReferencesForContext(references: ConversationMessageQuote[])
 function readRecord(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   return value as Record<string, unknown>;
-}
-
-function readOneBotMessage(value: unknown): string | OneBotMessageSegment[] | undefined {
-  if (typeof value === "string") return value;
-  if (!Array.isArray(value)) return undefined;
-  if (!value.every((item) => typeof readRecord(item).type === "string")) return undefined;
-  return value as OneBotMessageSegment[];
 }
 
 function isNumericMessageId(value: string) {
@@ -4473,7 +4280,7 @@ export function selectRelevantConversationAttachments(
   if (direct.length) return direct.slice(0, 4);
   if (!record) return [];
 
-  const currentMessageId = incoming.event.message_id == null ? "" : String(incoming.event.message_id);
+  const currentMessageId = incoming.messageId == null ? "" : String(incoming.messageId);
   const recentMessages = record.messages
     .filter((message) => message.role === "user")
     .filter((message) => !currentMessageId || message.id !== currentMessageId)
@@ -4587,11 +4394,13 @@ function isRuntimeIncomingMessage(value: unknown): value is ParsedIncomingMessag
     (incoming.scope === "private" || incoming.scope === "user_group" || incoming.scope === "bot_group") &&
     typeof incoming.userId === "number" &&
     typeof incoming.text === "string" &&
-    Array.isArray(incoming.imageUrls) &&
+    incoming.schemaVersion === 1 &&
+    typeof incoming.time === "string" &&
+    Array.isArray(incoming.media) &&
     Array.isArray(incoming.attachments) &&
     Array.isArray(incoming.replyMessageIds) &&
     Array.isArray(incoming.quoteReferences) &&
-    Boolean(incoming.event && typeof incoming.event === "object");
+    Boolean(incoming.sender && typeof incoming.sender === "object");
 }
 
 function buildAsyncToolCompletionPrompt(payload: AsyncToolCompletionPayload) {

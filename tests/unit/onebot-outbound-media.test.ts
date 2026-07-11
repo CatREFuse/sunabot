@@ -30,7 +30,7 @@ describe("OneBot outbound media adapter", () => {
     const gateway = new OneBotGateway(
       http.createServer(),
       defaultConfig(),
-      { handleOneBotEvent: vi.fn(async () => undefined) },
+      { handleInboundMessage: vi.fn(async () => undefined) },
       { outboundMedia: delivery }
     );
     const sendAction = vi.spyOn(gateway, "sendAction").mockResolvedValue({ status: "ok" });
@@ -54,7 +54,7 @@ describe("OneBot outbound media adapter", () => {
     const gateway = new OneBotGateway(
       http.createServer(),
       defaultConfig(),
-      { handleOneBotEvent: vi.fn(async () => undefined) },
+      { handleInboundMessage: vi.fn(async () => undefined) },
       { outboundMedia: delivery }
     );
     const sendAction = vi.spyOn(gateway, "sendAction").mockResolvedValue({ status: "ok" });
