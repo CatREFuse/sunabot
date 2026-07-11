@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, reactive, shallowRef } from "vue";
+import { computed, onMounted, reactive, shallowRef } from "vue";
 import { apiRequest } from "../../composables/useAdminApi";
 import ToggleSwitch from "../ui/ToggleSwitch.vue";
 
@@ -26,6 +26,9 @@ const busy = shallowRef(false);
 const testing = shallowRef(false);
 const message = shallowRef("");
 const error = shallowRef("");
+const barkPlaceholder = computed(() => configured.value
+  ? "••••••••（已配置，输入新地址可替换）"
+  : "https://api.day.app/你的设备密钥");
 
 onMounted(() => void load());
 
@@ -46,7 +49,7 @@ async function save() {
       body: JSON.stringify(form)
     });
     apply(result);
-    message.value = "设置已保存到 workspace/.env。";
+    message.value = "设置已保存。";
     error.value = "";
   } catch (reason) {
     error.value = errorMessage(reason, "保存监控设置失败");
@@ -89,16 +92,16 @@ function errorMessage(reason: unknown, fallback: string) {
     <div class="flex flex-wrap items-start justify-between gap-4">
       <div>
         <p class="page-kicker">SERVICE MONITOR</p>
-        <h3 class="mt-2 text-lg font-medium text-display">Bark 与 OneBot 监控</h3>
-        <p class="mt-2 max-w-2xl text-sm leading-6 text-mute">Bark 地址只保存在 workspace/.env，页面和 API 都不会回显。OneBot 断线与服务器事件分开聚合发送。</p>
+        <h3 class="mt-2 text-lg font-medium text-display">通知与连接监控</h3>
+        <p class="mt-2 max-w-2xl text-sm leading-6 text-mute">设置 Bark 后，连接异常与服务异常会自动合并提醒，减少重复消息。</p>
       </div>
-      <span class="inline-state" :data-kind="configured ? 'success' : 'warning'">{{ configured ? "[BARK CONFIGURED]" : "[BARK MISSING]" }}</span>
+      <span class="inline-state" :data-kind="configured ? 'success' : 'warning'">{{ configured ? "[已配置]" : "[未配置]" }}</span>
     </div>
 
     <div class="mt-5 grid gap-5 sm:grid-cols-2">
       <label class="field sm:col-span-2">
         <span class="field-label">Bark URL</span>
-        <input v-model.trim="form.barkUrl" class="control" type="password" autocomplete="new-password" placeholder="留空则保留现有地址">
+        <input v-model.trim="form.barkUrl" class="control" type="password" autocomplete="new-password" :placeholder="barkPlaceholder">
       </label>
       <label class="field">
         <span class="field-label">聚合窗口（秒）</span>
@@ -119,8 +122,8 @@ function errorMessage(reason: unknown, fallback: string) {
     </div>
 
     <div class="mt-5 divide-y divide-line rounded-lg border border-line px-4">
-      <ToggleSwitch v-model="form.onebotEventsEnabled" label="OneBot 连接事件" description="仅依据反向 WebSocket 连接与事件心跳判断，不再嗅探 kickoff 日志。" />
-      <ToggleSwitch v-model="form.serverEventsEnabled" label="服务器事件" description="启动、停止与未处理异常使用独立通知组。" />
+      <ToggleSwitch v-model="form.onebotEventsEnabled" label="QQ 连接状态" description="持续掉线超过宽限时间后提醒，恢复连接时再次提醒。" />
+      <ToggleSwitch v-model="form.serverEventsEnabled" label="服务运行状态" description="服务启动、停止或发生异常时提醒。" />
     </div>
 
     <p v-if="error" class="mt-4 text-sm text-accent">[ERROR: {{ error }}]</p>

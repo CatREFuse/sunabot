@@ -77,7 +77,7 @@ function stopPolling() {
       <div>
         <p class="page-kicker">CHATGPT SUBSCRIPTION</p>
         <h3 class="mt-2 text-lg font-medium text-display">Codex 订阅登录</h3>
-        <p class="mt-2 max-w-2xl text-sm leading-6 text-mute">使用官方设备授权登录。令牌只保存在服务器的 workspace/security 中，不会发送到浏览器或 Git。</p>
+        <p class="mt-2 max-w-2xl text-sm leading-6 text-mute">使用官方设备授权登录，登录信息仅保存在本机。</p>
       </div>
       <span class="inline-state" :data-kind="snapshot?.authenticated ? 'success' : 'warning'">
         {{ snapshot?.authenticated ? "[LOGGED IN]" : snapshot?.installed ? "[NOT LOGGED IN]" : "[CLI MISSING]" }}
