@@ -6,7 +6,13 @@ cd "$root"
 
 # Windows proxy applications are reached through WSL's current default gateway.
 # Node 24 only honors HTTP(S)_PROXY for fetch when --use-env-proxy is enabled.
-if [[ -n "${WSL_INTEROP:-}" && "${SUNABOT_WINDOWS_PROXY_MODE:-auto}" != "off" && -z "${HTTPS_PROXY:-}" ]]; then
+is_wsl=false
+if [[ -n "${WSL_INTEROP:-}" || -e /proc/sys/fs/binfmt_misc/WSLInterop ]] \
+  || grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null; then
+  is_wsl=true
+fi
+
+if [[ "$is_wsl" == "true" && "${SUNABOT_WINDOWS_PROXY_MODE:-auto}" != "off" && -z "${HTTPS_PROXY:-}" ]]; then
   proxy_port="${SUNABOT_WINDOWS_PROXY_PORT:-7890}"
   if [[ "$proxy_port" =~ ^[0-9]{1,5}$ ]]; then
     gateway="$(ip route show default 2>/dev/null | awk 'NR == 1 { print $3 }')"
