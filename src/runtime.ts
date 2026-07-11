@@ -33,7 +33,8 @@ import {
   type AsyncToolCompletionPayload,
   type RuntimeIncomingReplyEventPayload
 } from "../packages/contracts/session/runtimeMessages.js";
-import { applicationDataStore } from "./dataStore.js";
+import { applicationDataStore, sqliteMemoryPersistence } from "../adapters/sqlite/applicationDataStore.js";
+import { configureMemoryPersistence } from "../services/memory/persistence.js";
 import {
   ReplyGateEpochs,
   isOrchestratorReplyRateLimited,
@@ -284,6 +285,7 @@ export class SunaRuntime implements OneBotGatewayDelegate {
   private activeGateway?: OneBotGateway;
 
   constructor(config: AppConfig, options: SunaRuntimeOptions = {}) {
+    configureMemoryPersistence(sqliteMemoryPersistence);
     this.config = config;
     this.memoryScheduler = new MemorySchedulerStore(config);
     this.attachmentService = options.attachmentService ?? new AttachmentService(getRootDir(), {

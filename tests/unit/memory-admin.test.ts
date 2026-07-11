@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ServiceError } from "../../packages/contracts/errors/serviceError.js";
-import { applicationDataStore } from "../../src/dataStore.js";
+import { applicationDataStore } from "../../adapters/sqlite/applicationDataStore.js";
 import {
   appendMemoryFacts,
   createMemoryEntry,

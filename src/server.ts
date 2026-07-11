@@ -15,7 +15,8 @@ import { AdminApiError, badRequest, notFound } from "./admin/errors.js";
 import { IMAGE_MODEL_CATALOG, MODEL_CATALOG, REASONING_EFFORTS } from "./admin/models.js";
 import { defaultTools } from "../services/tools/tools.js";
 import { getConfigPath, getRootDir, getWorkspacePath, loadConfig } from "./config.js";
-import { applicationDataStore } from "./dataStore.js";
+import { applicationDataStore, sqliteMemoryPersistence } from "../adapters/sqlite/applicationDataStore.js";
+import { configureMemoryPersistence } from "../services/memory/persistence.js";
 import { createMemoryEntry, deleteMemoryEntry, listMemoryEntries, recallMemory, updateMemoryEntry } from "../services/memory/memoryService.js";
 import { ServiceError } from "../packages/contracts/errors/serviceError.js";
 import { ConversationDirectory } from "../services/conversations/conversationDirectory.js";
@@ -53,6 +54,7 @@ export interface BuiltApp {
 }
 
 export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp> {
+  configureMemoryPersistence(sqliteMemoryPersistence);
   const startedAt = new Date().toISOString();
   let config = options.config ?? await loadConfig();
   const outboundMedia = options.outboundMedia ?? new OutboundMediaDelivery({ rootDir: imageDirPath() });

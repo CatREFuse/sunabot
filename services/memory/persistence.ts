@@ -1,0 +1,44 @@
+import type { AppConfig } from "../../src/types.js";
+
+export type MemoryDataSource = "working" | "long_term" | "user_profile";
+export type MemoryRecordData = Record<string, unknown>;
+
+export interface MemoryRepositoryPort {
+  readMemory(source: MemoryDataSource): MemoryRecordData[];
+  replaceMemory(source: MemoryDataSource, records: readonly MemoryRecordData[]): void;
+  ensureLegacyMemoryImported(source: MemoryDataSource, filePath: string): void;
+  commitMemoryBatch(input: {
+    batchId: string;
+    baselineWorking: readonly MemoryRecordData[];
+    working: readonly MemoryRecordData[];
+    longTerm: readonly MemoryRecordData[];
+    userProfile: readonly MemoryRecordData[];
+    result: unknown;
+  }): { status: "existing"; result: unknown } | { status: "snapshot_conflict" } | { status: "committed"; result: unknown };
+  readMemoryBatch(batchId: string): unknown;
+  hasMemoryBatch(batchId: string): boolean;
+  readMemoryScheduler(): Record<string, object>;
+  replaceMemoryScheduler(conversations: Readonly<Record<string, object>>): void;
+  ensureLegacyMemorySchedulerImported(filePath: string): void;
+}
+
+export interface MemoryPersistenceProvider {
+  repository(config: Pick<AppConfig, "persona">): MemoryRepositoryPort;
+  databasePath(config: Pick<AppConfig, "persona">): string;
+}
+
+let provider: MemoryPersistenceProvider | undefined;
+
+export function configureMemoryPersistence(next: MemoryPersistenceProvider) {
+  provider = next;
+}
+
+export function memoryRepository(config: Pick<AppConfig, "persona">) {
+  if (!provider) throw new Error("Memory persistence provider is not configured.");
+  return provider.repository(config);
+}
+
+export function memoryDatabasePath(config: Pick<AppConfig, "persona">) {
+  if (!provider) throw new Error("Memory persistence provider is not configured.");
+  return provider.databasePath(config);
+}

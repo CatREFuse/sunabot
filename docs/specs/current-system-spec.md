@@ -188,7 +188,7 @@ QQ Runtime 不支持远程 OneBot 或远程 NapCat。Docker 下 Sunabot 与 NapC
 | 服务启动入口 | `apps/api/main.ts` |
 | API、静态站点、图片历史 | `src/server.ts` |
 | 配置加载、默认值、路径解析 | `src/config.ts`, `src/types.ts` |
-| SQLite 主库 | `src/dataStore.ts` |
+| SQLite 主库 | `adapters/sqlite/applicationDataStore.ts` |
 | OneBot 连接、事件和 action | `adapters/onebot/onebotGateway.ts`, `adapters/onebot/qqMedia.ts` |
 | 回复运行时、上下文、群聊总结 | `src/runtime.ts` |
 | 会话事件、turn、工具任务、outbox | `services/sessions/`, `packages/contracts/session/runtimeMessages.ts` |

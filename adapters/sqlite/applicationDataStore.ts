@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { getWorkspacePath, resolveProjectPath } from "./config.js";
-import type { AppConfig, ConversationRecord, ImageHistoryRecord } from "./types.js";
+import { getWorkspacePath, resolveProjectPath } from "../../src/config.js";
+import type { AppConfig, ConversationRecord, ImageHistoryRecord } from "../../src/types.js";
+import type { MemoryPersistenceProvider } from "../../services/memory/persistence.js";
 
 export type MemoryDataSource = "working" | "long_term" | "user_profile";
 
@@ -41,6 +42,11 @@ export function closeApplicationDataStores() {
   for (const store of stores.values()) store.close();
   stores.clear();
 }
+
+export const sqliteMemoryPersistence: MemoryPersistenceProvider = {
+  repository: (config) => applicationDataStore(config),
+  databasePath: (config) => applicationDatabasePath(config)
+};
 
 export class ApplicationDataStore {
   private readonly database: DatabaseSync;

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import type { AppConfig } from "../../src/types.js";
 import { resolveProjectPath } from "../../src/config.js";
-import { applicationDatabasePath, applicationDataStore } from "../../src/dataStore.js";
+import { memoryDatabasePath, memoryRepository } from "./persistence.js";
 
 export type MemorySchedulerStatus = "idle" | "queued" | "running";
 
@@ -241,7 +241,7 @@ export class MemorySchedulerStore {
   }
 
   databasePath() {
-    return applicationDatabasePath(this.config);
+    return memoryDatabasePath(this.config);
   }
 
   private async exclusive<T>(operation: () => Promise<T>): Promise<T> {
@@ -265,7 +265,7 @@ export class MemorySchedulerStore {
   }
 
   private async read(): Promise<SchedulerFile> {
-    const store = applicationDataStore(this.config);
+    const store = memoryRepository(this.config);
     store.ensureLegacyMemorySchedulerImported(this.legacyFilePath());
     return {
       version: 1,
@@ -274,7 +274,7 @@ export class MemorySchedulerStore {
   }
 
   private async write(store: SchedulerFile) {
-    applicationDataStore(this.config).replaceMemoryScheduler(store.conversations);
+    memoryRepository(this.config).replaceMemoryScheduler(store.conversations);
   }
 }
 

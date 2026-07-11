@@ -1,6 +1,9 @@
 import { config } from "@vue/test-utils";
 import { afterEach } from "vitest";
-import { closeApplicationDataStores } from "../src/dataStore.js";
+import { closeApplicationDataStores, sqliteMemoryPersistence } from "../adapters/sqlite/applicationDataStore.js";
+import { configureMemoryPersistence } from "../services/memory/persistence.js";
+
+configureMemoryPersistence(sqliteMemoryPersistence);
 
 config.global.stubs = {
   ...config.global.stubs,

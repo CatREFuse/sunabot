@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { AppConfig } from "../../src/types.js";
 import { resolveProjectPath } from "../../src/config.js";
-import { applicationDataStore, type MemoryDataSource } from "../../src/dataStore.js";
+import { memoryRepository, type MemoryDataSource } from "../memory/persistence.js";
 
 interface PersonaFile {
   name: string;
@@ -79,7 +79,7 @@ async function readOptional(filePath: string) {
 
 async function readMemoryBundle(config: AppConfig, workspace: string, limit: number) {
   const perFileLimit = Math.max(3, Math.ceil(limit / 3));
-  const store = applicationDataStore(config);
+  const store = memoryRepository(config);
   const sources: Array<[MemoryDataSource, string]> = [
     ["working", "WORKING_MEMORY.jsonl"],
     ["user_profile", "USER_PROFILE.jsonl"],

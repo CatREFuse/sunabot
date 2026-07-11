@@ -1,7 +1,7 @@
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { getWorkspacePath } from "./config.js";
-import { applicationDatabasePath, applicationDataStore } from "./dataStore.js";
+import { applicationDatabasePath, applicationDataStore } from "../adapters/sqlite/applicationDataStore.js";
 
 const MAX_STRING_LENGTH = 16_000;
 

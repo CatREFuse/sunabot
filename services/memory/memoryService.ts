@@ -6,7 +6,7 @@ import { AppConfig } from "../../src/types.js";
 import { resolveProjectPath } from "../../src/config.js";
 import { AsyncMutex } from "../../packages/platform/mutex.js";
 import { ServiceError } from "../../packages/contracts/errors/serviceError.js";
-import { applicationDataStore, type MemoryDataSource } from "../../src/dataStore.js";
+import { memoryRepository, type MemoryDataSource, type MemoryRepositoryPort } from "./persistence.js";
 
 export { MEMORY_RECALL_TOOL_NAME, memoryRecallTool } from "../tools/definitions.js";
 const memoryMutationMutex = new AsyncMutex();
@@ -145,7 +145,7 @@ interface MemoryRecord {
 }
 
 interface MemoryStorageBinding {
-  store: ReturnType<typeof applicationDataStore>;
+  store: MemoryRepositoryPort;
   source: MemoryDataSource;
 }
 
@@ -1521,7 +1521,7 @@ async function readOptional(filePath: string) {
 
 function memorySourcePath(config: AppConfig, source: SourceDefinition) {
   const legacyPath = path.join(memoryWorkspacePath(config), source.legacyFileName);
-  const store = applicationDataStore(config);
+  const store = memoryRepository(config);
   store.ensureLegacyMemoryImported(source.id, legacyPath);
   memoryStorageBindings.set(legacyPath, { store, source: source.id });
   return legacyPath;
