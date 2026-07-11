@@ -84,9 +84,7 @@ async function install() {
     await run("tar", ["-xzf", path.resolve(componentArchive), "-C", componentStage]);
     const releaseManifest = await readJson(path.join(releaseStage, "release-manifest.json"));
     const componentManifest = await readJson(path.join(componentStage, "component-manifest.json"));
-    if (releaseManifest.releaseVersion !== releaseVersion || releaseManifest.platform !== "linux/amd64") {
-      throw new Error("release artifact 与 runtime contract 不匹配。");
-    }
+    validateReleaseManifest(releaseManifest, releaseVersion);
     if (componentManifest.version !== componentVersion || componentManifest.platform !== "linux/amd64") {
       throw new Error("NapCat component artifact 与 component lock 不匹配。");
     }
@@ -119,10 +117,11 @@ async function rollback() {
   const componentVersion = requiredOption("napcat-version");
   const releaseTarget = path.join(releaseBase, safeVersion(releaseVersion));
   const componentTarget = path.join(componentBase, safeVersion(componentVersion));
-  await Promise.all([
-    fsPromises.access(path.join(releaseTarget, "release-manifest.json")),
+  const [releaseManifest] = await Promise.all([
+    readJson(path.join(releaseTarget, "release-manifest.json")),
     fsPromises.access(path.join(componentTarget, "component-manifest.json"))
   ]);
+  validateReleaseManifest(releaseManifest, releaseVersion);
   await switchSymlink(path.join(componentBase, "current"), componentTarget);
   await switchSymlink(contract.paths.installPrefix, releaseTarget);
   await installSystemdUnits(releaseTarget);
@@ -303,6 +302,16 @@ function option(name) {
 function safeVersion(value) {
   if (!/^[A-Za-z0-9._+-]+$/.test(value)) throw new Error(`无效版本：${value}`);
   return value;
+}
+
+function validateReleaseManifest(releaseManifest, releaseVersion) {
+  if (
+    releaseManifest.releaseVersion !== releaseVersion
+    || releaseManifest.platform !== "linux/amd64"
+    || releaseManifest.nodeVersion !== contract.nodeVersion
+  ) {
+    throw new Error("release artifact 与 runtime contract 不匹配。");
+  }
 }
 
 function requireRoot() {

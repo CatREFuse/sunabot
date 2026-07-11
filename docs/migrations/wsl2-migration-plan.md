@@ -20,7 +20,7 @@ Docker Desktop 官方明确不支持 Windows Server 2019/2022 等 Server 版本�
 
 | 项目 | 结论 | 处理 |
 | --- | --- | --- |
-| Node.js | 可迁移 | 使用 Node.js 24 LTS；项目要求 `>=24`，官方仍将 v24 标记为 LTS。[Node.js 发布状态](https://nodejs.org/en/about/previous-releases) |
+| Node.js | 可迁移 | 开发、CI、Native 与 Docker 统一固定 Node.js 24.18.0；Linux/WSL 是运行验收权威环境。[Node.js 发布状态](https://nodejs.org/en/about/previous-releases) |
 | SQLite | 可迁移 | 使用 Node.js 内置 `node:sqlite`，数据库放在 WSL ext4，不放在 Windows 挂载盘 |
 | sharp | 可迁移 | 锁文件包含 Linux x64、arm64 的 sharp 和 libvips 包 |
 | `@napi-rs/canvas` | 可迁移 | 锁文件包含 Linux GNU x64、arm64 预编译包 |
@@ -146,14 +146,28 @@ sudo apt update
 sudo apt install -y ca-certificates curl git xz-utils zstd build-essential python3 libreoffice fonts-noto-cjk
 ```
 
-安装 Node.js 24 LTS，并确认：
+按仓库 `.node-version` 安装 Node.js 24.18.0，并确认：
 
 ```bash
 node --version
 npm --version
+npm run runtime:contract
 ```
 
 Node.js 官方提供 Linux x64 归档和签名校验文件。[Node.js 24 下载归档](https://nodejs.org/en/download/archive/v24)
+
+### 4.3.1 Node 小版本升级回归清单
+
+Node 小版本升级必须作为独立变更执行，不能只改一个镜像 tag：
+
+1. 阅读目标版本发布说明，重点核对 `node:sqlite`、fetch/Undici、worker、ESM 和原生模块变化；记录回滚版本。
+2. 同一次变更更新 `.node-version`、`.nvmrc`、`package.json`、`package-lock.json`、`deploy/runtime-contract.json`、contract schema、`components/component.lock.json` 的 Node image/digest 和 Docker `NODE_VERSION`；CI 继续从 `.node-version` 读取。
+3. 在干净 Linux/WSL 环境确认 `node --version`，运行 `npm ci`、`npm run runtime:contract` 和 `npm run verify`。
+4. 使用复制的迁移 fixture 执行 SQLite 前向迁移、WAL checkpoint、`integrity_check`、记录数与 session queue 恢复测试；不得先在生产数据库试升级。
+5. 运行 `npm run benchmark:capacity` 并与上一个同机报告比较；发布候选还需完成目标 soak 门禁。
+6. 构建 Native release 与单容器镜像，分别核对 CI、Native release manifest、Native `node --version` 和容器 `node --version` 全部一致。
+7. 在隔离 QQ 测试账号完成 Provider 回复、OneBot 管理员消息、附件、图片和异步任务 smoke；再按受控切换流程升级生产。
+8. 保留上一版 Native release、Docker digest、数据库备份和 benchmark 报告；任一完整性、性能或 smoke 门禁失败立即回滚，不修改生产数据来迁就新运行时。
 
 ### 4.4 Docker
 
@@ -251,7 +265,7 @@ QQ Runtime 内部只使用回环 OneBot 和共享文件路径。Sunabot 容器�
 
 | 检查 | 验收结果 |
 | --- | --- |
-| `node --version` | 24.x LTS |
+| `node --version` | `v24.18.0`，且 CI、Native release manifest、Native 与 Docker 四个入口一致 |
 | `npm ci` | 无平台二进制错误 |
 | `npm run verify` | 全部通过 |
 | SQLite | 两个数据库 `integrity_check=ok`，记录数与源机一致 |

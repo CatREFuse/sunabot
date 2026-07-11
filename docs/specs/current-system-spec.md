@@ -33,7 +33,7 @@ QQ Runtime 不支持远程 OneBot 或远程 NapCat。Docker 下 Compose 只有�
 
 Provider、Codex CLI 与联网工具的出站 HTTP(S) 可独立使用代理。API 在载入 composition root 前由 `packages/platform/proxy.mjs` 解析并安装 Undici dispatcher，优先级为 `SUNABOT_PROXY_URL`、标准 `HTTP_PROXY`/`HTTPS_PROXY`、WSL 默认网关与配置端口探测。`SUNABOT_PROXY_MODE` 支持 `auto`、`env`、`wsl-host` 和 `off`；网关只从当前默认路由动态发现，不写死地址。Native、Docker 和 `qq-compose` 使用 `deploy/runtime-contract.json` 中的同一代理契约。`NO_PROXY` 必须包含 `localhost`、`127.0.0.1` 和 IPv6 回环，代理 URL 与凭据不得进入日志、状态接口或 Git。
 
-后端由 Node.js 24、TypeScript 和 Fastify 构建，管理台由 Vue 3、Vue Router 和 Vite 构建。生产服务由 `dist/apps/api/main.js` 启动，并提供 API、Web 静态资源、深链接回退、生成图片和 OneBot WebSocket 入口。
+后端固定使用 Node.js 24.18.0、TypeScript 和 Fastify，管理台由 Vue 3、Vue Router 和 Vite 构建。`.node-version`、`.nvmrc`、package/lock、CI、Native release manifest、runtime contract、component lock 和 Docker 必须保持同一 Node 版本；`npm run runtime:contract` 静态拒绝入口漂移，但不比较开发机当前进程。CI、Linux/WSL Native 构建/安装/启动与 Docker 构建/运行会执行实际版本检查。生产服务由 `dist/apps/api/main.js` 启动，并提供 API、Web 静态资源、深链接回退、生成图片和 OneBot WebSocket 入口。
 
 ## 3. 消息接入与回复
 
@@ -196,11 +196,13 @@ Provider 请求使用应用启动时安装的统一出站 dispatcher。显式代
 | 功能 | 主要代码 |
 | --- | --- |
 | 服务启动入口 | `apps/api/main.ts` |
+| Node 版本一致性门禁 | `.node-version`, `.nvmrc`, `tooling/runtime/node-version-contract.mjs`, `tooling/runtime/validate-contract.mjs` |
 | 出站代理解析与安装 | `packages/platform/proxy.mjs`, `deploy/runtime-contract.json` |
 | API 组合、静态站点、图片历史 | `apps/api/server.ts` |
 | 管理鉴权 API | `apps/api/plugins/authRoutes.ts` |
 | Provider、Codex 授权与配置 API | `apps/api/plugins/providerConfigRoutes.ts` |
 | OneBot 管理 API | `apps/api/plugins/onebotRoutes.ts` |
+| 记忆管理 API | `apps/api/plugins/memoryRoutes.ts` |
 | 配置加载、默认值、路径解析 | `src/config.ts`, `src/types.ts` |
 | SQLite 主库 | `adapters/sqlite/applicationDataStore.ts` |
 | OneBot 连接、事件和 action | `adapters/onebot/onebotGateway.ts`, `adapters/onebot/qqMedia.ts` |
@@ -214,7 +216,7 @@ Provider 请求使用应用启动时安装的统一出站 dispatcher。显式代
 | Bash、图像生成、自拍 | `services/tools/bashTool.ts`, `services/tools/generateImgTool.ts`, `services/tools/selfieTool.ts` |
 | 图片重试和外发 | `adapters/model/imageGenerationRetry.ts`, `services/delivery/outboundMedia.ts` |
 | 人格与提示词 | `services/agent/` |
-| 记忆 CRUD、合并、召回和批次 | `services/memory/memoryService.ts` |
+| 记忆 CRUD、合并、召回和批次 | `services/memory/` |
 | 记忆调度 | `services/memory/memoryScheduler.ts` |
 | 附件接入、解析、缓存和上下文 | `services/media/attachments/` |
 | 会话目录和显示名 | `services/conversations/conversationDirectory.ts`, `services/conversations/senderName.ts` |
@@ -231,6 +233,7 @@ Provider 请求使用应用启动时安装的统一出站 dispatcher。显式代
 交付前必须通过：
 
 ```bash
+npm run runtime:contract
 npm run check
 npm test
 npm run build

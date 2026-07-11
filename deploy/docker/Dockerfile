@@ -1,7 +1,10 @@
+ARG NODE_VERSION=24.18.0
 ARG NODE_IMAGE=docker.io/library/node:24.18.0-bookworm-slim@sha256:cb4e8f7c443347358b7875e717c29e27bf9befc8f5a26cf18af3c3dec80e58c5
 ARG NAPCAT_IMAGE=docker.io/mlikiowa/napcat-docker:v4.15.0@sha256:cde89d766604e570517e9ce66304d4222210479d2209ec04e5d58890dea087f7
 
 FROM ${NODE_IMAGE} AS build
+ARG NODE_VERSION
+RUN test "$(/usr/local/bin/node -p 'process.versions.node')" = "$NODE_VERSION"
 
 WORKDIR /srv/sunabot
 COPY package.json package-lock.json ./

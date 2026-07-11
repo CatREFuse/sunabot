@@ -2,6 +2,8 @@
 
 Docker 交付固定为一个 `sunabot-qq-runtime` 镜像、一个 `qq-runtime` Compose service 和一个 `/srv/sunabot/workspace` 挂载。容器内的非 root 监督器先启动 Sunabot，再启动 NapCat/QQ；两个进程只通过 `127.0.0.1` 和共享 workspace 协作。
 
+Node 基础镜像按 `components/component.lock.json` 固定为 24.18.0 和对应 digest。Docker 构建阶段会读取实际 Node 二进制版本并与 `NODE_VERSION` 比较，运行时监督器再次与 runtime contract 核对。
+
 NapCat shell 的 `/app/napcat/config` 只链接到 runtime contract 的 `workspace/runtime/napcat/config-full`；监督器、配置工具和 Native 运行时使用同一个 `paths.napcatConfig`，不会创建并行配置目录。
 
 运行环境文件固定为 `workspace/secrets/runtime.env`。至少配置 `ONEBOT_ACCESS_TOKEN`，首次登录可不填 `NAPCAT_ACCOUNT` 并从 NapCat WebUI 扫码。启动前先生成 OneBot 配置：

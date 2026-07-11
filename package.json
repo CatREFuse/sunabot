@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=24.18.0 <25"
+    "node": "24.18.0"
   },
   "scripts": {
     "dev": "concurrently -k \"npm:dev:api\" \"npm:dev:web\"",
@@ -23,12 +23,18 @@
     "smoke:prepare": "node tooling/quality/prepare-runtime-smoke.mjs",
     "smoke:runtime": "node --use-env-proxy --import tsx tooling/quality/runtime-smoke.ts",
     "test:runtime-smoke": "vitest run --config tests/runtime-smoke/vitest.config.ts",
-    "verify": "npm run runtime:contract && npm run architecture && npm run check && npm run test && npm run test:runtime-smoke && npm run benchmark:ci && npm run build && npm run test:e2e",
+    "verify": "npm run runtime:contract && npm run architecture && npm run backup:gate && npm run check && npm run test && npm run test:runtime-smoke && npm run benchmark:ci && npm run build && npm run test:e2e",
     "benchmark": "npm run benchmark:ci",
     "benchmark:check": "tsc --noEmit --project tooling/benchmarks/tsconfig.json",
     "benchmark:ci": "npm run benchmark:check && node --expose-gc --import tsx tooling/benchmarks/run.ts --profile ci",
     "benchmark:capacity": "npm run benchmark:check && node --expose-gc --import tsx tooling/benchmarks/run.ts --profile capacity",
     "benchmark:full": "npm run benchmark:check && node --expose-gc --import tsx tooling/benchmarks/run.ts --profile full",
+    "backup:create": "node tooling/workspace/sqlite-recovery-cli.mjs create",
+    "backup:verify": "node tooling/workspace/sqlite-recovery-cli.mjs verify",
+    "backup:restore": "node tooling/workspace/sqlite-recovery-cli.mjs restore",
+    "backup:prune": "node tooling/workspace/sqlite-recovery-cli.mjs prune",
+    "backup:drill": "node tooling/workspace/sqlite-recovery-cli.mjs drill",
+    "backup:gate": "vitest run tests/unit/sqlite-recovery-gate.test.ts",
     "workspace:init": "node tooling/workspace/init-workspace.mjs",
     "workspace:migrate": "node tooling/migrations/migrate-workspace-layout.mjs",
     "workspace:sync": "node tooling/workspace/sync-workspace.mjs",

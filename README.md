@@ -50,7 +50,7 @@ sunabot/
 
 ## 依赖
 
-- Node.js 24 或更新版本
+- Node.js 24.18.0（由 `.node-version`、`.nvmrc` 和 runtime contract 固定）
 - npm
 - Docker Engine 与 Compose 插件（推荐生产运行方式）
 - LibreOffice（读取 Office 文档）

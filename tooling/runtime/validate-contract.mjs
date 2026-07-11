@@ -4,6 +4,10 @@ import path from "node:path";
 import process from "node:process";
 import { resolveProjectRoot } from "../shared/paths.mjs";
 import { PROXY_RUNTIME_CONTRACT } from "../../packages/platform/proxy.mjs";
+import {
+  readNodeVersionContractInputs,
+  validateNodeVersionEntrypoints
+} from "./node-version-contract.mjs";
 
 const root = resolveProjectRoot(import.meta.url);
 const contractPath = path.join(root, "deploy/runtime-contract.json");
@@ -12,7 +16,6 @@ const [
   contract,
   schema,
   lock,
-  packageJson,
   dockerfile,
   compose,
   supervisor,
@@ -24,7 +27,6 @@ const [
   readJson(contractPath),
   readJson(path.join(root, "deploy/runtime-contract.schema.json")),
   readJson(lockPath),
-  readJson(path.join(root, "package.json")),
   fs.readFile(path.join(root, "deploy/docker/Dockerfile"), "utf8"),
   fs.readFile(path.join(root, "deploy/docker/compose.yml"), "utf8"),
   fs.readFile(path.join(root, "deploy/docker/supervisor.mjs"), "utf8"),
@@ -34,15 +36,11 @@ const [
   fs.readFile(path.join(root, "tooling/quality/runtime-smoke/shared.ts"), "utf8")
 ]);
 const errors = [];
+errors.push(...validateNodeVersionEntrypoints(await readNodeVersionContractInputs(root)));
 
 expect(contract.schemaVersion === 1, "runtime contract schemaVersion must be 1");
 expect(lock.schemaVersion === 1, "component lock schemaVersion must be 1");
 expect(contract.runtimeId === "sunabot-qq-runtime", "runtimeId must be sunabot-qq-runtime");
-expect(contract.nodeVersion === lock.components?.node?.version, "Node versions must match");
-expect(
-  packageJson.engines?.node?.includes(contract.nodeVersion),
-  "package engines must include the exact contract Node version"
-);
 expect(
   arraysEqual(contract.supportedPlatforms, lock.supportedPlatforms),
   "runtime and component platforms must match"
@@ -150,6 +148,7 @@ if (errors.length > 0) {
     ok: true,
     runtimeId: contract.runtimeId,
     releaseVersion: contract.releaseVersion,
+    nodeVersion: contract.nodeVersion,
     platforms: contract.supportedPlatforms,
     components: Object.keys(lock.components),
     composeServices: [contract.docker.composeService]
