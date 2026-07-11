@@ -135,6 +135,8 @@ npm run workspace:sync -- push
 
 命令会先 checkpoint 所有 SQLite，再排除 WAL/SHM、PID 和临时输出，最终只向同步盘写入经过认证加密的快照及 SHA-256 清单。
 
+Windows + WSL 终端应使用 `scripts/sync-workspace-wsl.ps1` 创建定时任务，确保备份的是 `/srv/sunabot/workspace` 中的实际运行数据，而不是 Windows 侧的空白副本。
+
 ## 管理台安全与熔断
 
 - 密码使用 scrypt 哈希，明文不落盘。
