@@ -46,8 +46,8 @@ export function getConfigPath() {
 }
 
 export function defaultConfig(): AppConfig {
-  const host = process.env.SUNABOT_HOST ?? "127.0.0.1";
-  const port = Number(process.env.SUNABOT_PORT ?? "8787");
+  const host = process.env.SUNABOT_HOST?.trim() || "127.0.0.1";
+  const port = runtimePort(process.env.SUNABOT_PORT);
   const runtimeEnvReference = workspaceRelativeReference(WORKSPACE_LAYOUT.secretsEnv);
 
   const providers: ProviderConfig[] = [
@@ -291,10 +291,14 @@ export function getDefaultProvider(config: AppConfig) {
 function mergeConfig(base: AppConfig, incoming: Partial<AppConfig>): AppConfig {
   const bot = mergeBotConfig(base.bot, incoming.bot as Partial<BotConfig> | undefined, incoming.onebot?.quoteGroupReplies);
   const providerItems = incoming.providers?.items?.length ? incoming.providers.items : base.providers.items;
+  const fileServer = { ...base.server, ...incoming.server };
   return {
     ...base,
     ...incoming,
-    server: { ...base.server, ...incoming.server },
+    server: {
+      host: process.env.SUNABOT_HOST == null ? fileServer.host : base.server.host,
+      port: process.env.SUNABOT_PORT == null ? fileServer.port : base.server.port
+    },
     persona: { ...base.persona, ...incoming.persona },
     providers: {
       ...base.providers,
@@ -304,6 +308,14 @@ function mergeConfig(base: AppConfig, incoming: Partial<AppConfig>): AppConfig {
     bot,
     onebot: { ...base.onebot, ...incoming.onebot, quoteGroupReplies: bot.quoteGroupReplies }
   };
+}
+
+function runtimePort(value: string | undefined) {
+  const port = Number(value ?? "8787");
+  if (!Number.isSafeInteger(port) || port < 1 || port > 65_535) {
+    throw new Error("SUNABOT_PORT 必须是 1-65535 的整数。");
+  }
+  return port;
 }
 
 function normalizeProviderReasoningEffort(provider: ProviderConfig): ProviderConfig {

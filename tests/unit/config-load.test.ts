@@ -8,21 +8,43 @@ import { defaultConfig, loadConfig } from "../../src/config.js";
 let rootDir = "";
 let configPath = "";
 let originalConfigPath: string | undefined;
+let originalHost: string | undefined;
+let originalPort: string | undefined;
 
 beforeEach(async () => {
   rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-config-load-"));
   configPath = path.join(rootDir, "sunabot.json");
   originalConfigPath = process.env.SUNABOT_CONFIG;
+  originalHost = process.env.SUNABOT_HOST;
+  originalPort = process.env.SUNABOT_PORT;
   process.env.SUNABOT_CONFIG = configPath;
+  delete process.env.SUNABOT_HOST;
+  delete process.env.SUNABOT_PORT;
 });
 
 afterEach(async () => {
   if (originalConfigPath == null) delete process.env.SUNABOT_CONFIG;
   else process.env.SUNABOT_CONFIG = originalConfigPath;
+  if (originalHost == null) delete process.env.SUNABOT_HOST;
+  else process.env.SUNABOT_HOST = originalHost;
+  if (originalPort == null) delete process.env.SUNABOT_PORT;
+  else process.env.SUNABOT_PORT = originalPort;
   await fs.rm(rootDir, { recursive: true, force: true });
 });
 
 describe("tool configuration", () => {
+  it("lets the runtime contract override a migrated file server address", async () => {
+    process.env.SUNABOT_HOST = "0.0.0.0";
+    process.env.SUNABOT_PORT = "8787";
+    await fs.writeFile(configPath, JSON.stringify({
+      server: { host: "127.0.0.1", port: 18_876 }
+    }), "utf8");
+
+    await expect(loadConfig()).resolves.toMatchObject({
+      server: { host: "0.0.0.0", port: 8_787 }
+    });
+  });
+
   it("uses the versioned workspace layout for agents and provider secrets", () => {
     const config = defaultConfig();
     expect(config.persona.agentWorkspace).toBe("workspace/business/agents/plana");
