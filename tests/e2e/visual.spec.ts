@@ -21,7 +21,6 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     state.requiredToken = "";
     state.offline = false;
-    await clearToken(page);
 
     await page.goto("/overview");
     await expect(page.getByRole("heading", { name: "运行状态" })).toBeVisible();
@@ -137,7 +136,7 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     await page.getByLabel("管理员账号").fill("admin");
     await page.getByLabel("管理员密码").fill("visual-token");
     const reloaded = page.waitForEvent("load");
-    await page.getByRole("button", { name: "登录" }).click();
+    await page.getByRole("button", { name: "登录", exact: true }).click();
     await reloaded;
     await expect(page.getByRole("heading", { name: "管理员登录" })).toBeHidden();
     await expect(page.getByRole("heading", { name: "图像", exact: true })).toBeVisible();
