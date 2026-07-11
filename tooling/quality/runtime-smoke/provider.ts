@@ -1,10 +1,12 @@
 import crypto from "node:crypto";
 import { nanoid } from "nanoid";
+import { installGlobalProxyDispatcher } from "../../../packages/platform/proxy.mjs";
 import { boundedTimeout, isolateRuntimeEnvironment } from "./shared.js";
 import type { SmokeContext } from "./types.js";
 
 export async function runProviderSmoke(context: SmokeContext) {
   isolateRuntimeEnvironment(context);
+  await installGlobalProxyDispatcher();
   const [{ loadConfig, getDefaultProvider }, { OpenAIProvider }] = await Promise.all([
     import("../../../src/config.js"),
     import("../../../adapters/model/openaiProvider.js")
