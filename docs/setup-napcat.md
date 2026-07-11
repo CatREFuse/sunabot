@@ -30,6 +30,12 @@ NAPCAT_ACCOUNT=你的QQ号
 ONEBOT_ACCESS_TOKEN=随机长令牌
 ```
 
+若该 QQ 只允许回复管理员，设置逗号分隔的私聊白名单；配置存在非法 QQ 时会安全地拒绝全部私聊回复：
+
+```text
+SUNABOT_PRIVATE_REPLY_ALLOWLIST=171419991
+```
+
 模型出口需要使用 Windows 上的 Clash 等代理时，Native 和 Docker 使用同一组环境变量：
 
 ```text

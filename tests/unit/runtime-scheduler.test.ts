@@ -13,7 +13,13 @@ vi.mock("../../src/requestLog.js", () => ({
   appendRequestLog: vi.fn(async () => undefined)
 }));
 
-afterEach(() => vi.useRealTimers());
+const originalPrivateReplyAllowlist = process.env.SUNABOT_PRIVATE_REPLY_ALLOWLIST;
+
+afterEach(() => {
+  vi.useRealTimers();
+  if (originalPrivateReplyAllowlist == null) delete process.env.SUNABOT_PRIVATE_REPLY_ALLOWLIST;
+  else process.env.SUNABOT_PRIVATE_REPLY_ALLOWLIST = originalPrivateReplyAllowlist;
+});
 
 describe("runtime reply scheduling helpers", () => {
   it("recognizes configured wake words without consulting an orchestrator", () => {
@@ -131,6 +137,24 @@ describe("runtime reply scheduling helpers", () => {
     expect(internals.resolveIncomingReplyRoute(groupIncoming("普通群消息"), false)).toBe("none");
     internals.conversationRecords.set("group:3003", { orchestratorEnabled: true });
     expect(internals.resolveIncomingReplyRoute(groupIncoming("普通群消息"), false)).toBe("ambient");
+  });
+
+  it("routes private replies only for the configured QQ allowlist", () => {
+    process.env.SUNABOT_PRIVATE_REPLY_ALLOWLIST = "171419991";
+    const runtime = new SunaRuntime(createAdminTestConfig("/tmp/sunabot-runtime-router-test"), {
+      attachmentService: {} as never
+    });
+    const internals = runtime as unknown as {
+      resolveIncomingReplyRoute(incoming: ParsedIncomingMessage, command: boolean): string;
+    };
+    const incoming = groupIncoming("私聊消息");
+    incoming.scope = "private";
+    incoming.groupId = undefined;
+
+    incoming.userId = 998877665;
+    expect(internals.resolveIncomingReplyRoute(incoming, false)).toBe("none");
+    incoming.userId = 171419991;
+    expect(internals.resolveIncomingReplyRoute(incoming, false)).toBe("direct");
   });
 
   it("preserves the default reply gate when only the group orchestrator setting changes", () => {

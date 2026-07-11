@@ -18,6 +18,7 @@ import type {
   ParsedAttachment
 } from "../services/media/attachments/types.js";
 import { CommandRouter, type CommandMatch } from "../services/messaging/commandRouter.js";
+import { isPrivateReplyAllowed } from "../services/messaging/privateReplyPolicy.js";
 import { getDefaultProvider, getRootDir, getWorkspacePath, resolveProjectPath } from "./config.js";
 import {
   assistantReplyEnvelope,
@@ -1725,7 +1726,7 @@ export class SunaRuntime {
   private resolveIncomingReplyRoute(incoming: ParsedIncomingMessage, command: boolean) {
     if (!hasIncomingReplyContent(incoming)) return "none" as const;
     if (incoming.scope === "private") {
-      if (!this.config.onebot.autoReplyPrivate) return "none" as const;
+      if (!this.config.onebot.autoReplyPrivate || !isPrivateReplyAllowed(incoming.userId)) return "none" as const;
       return command ? "command" as const : "direct" as const;
     }
     if (incoming.scope === "bot_group") {
@@ -1754,7 +1755,9 @@ export class SunaRuntime {
     if (signal?.aborted || !this.replyGates.isCurrent(gate)) return false;
     const record = this.conversationRecords.get(gate.conversationId);
     if (!record || !conversationReplyEnabled(record)) return false;
-    if (incoming.scope === "private") return this.config.onebot.autoReplyPrivate;
+    if (incoming.scope === "private") {
+      return this.config.onebot.autoReplyPrivate && isPrivateReplyAllowed(incoming.userId);
+    }
     if (incoming.scope === "bot_group") return this.config.onebot.autoReplyBotGroup;
     return this.config.onebot.autoReplyUserGroup;
   }
