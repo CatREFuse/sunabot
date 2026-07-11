@@ -18,7 +18,7 @@ import type {
   ParsedAttachment
 } from "../../services/media/attachments/types.js";
 import { CommandRouter, type CommandMatch } from "../../services/messaging/commandRouter.js";
-import { isReplySenderAllowed } from "../../services/messaging/replySenderPolicy.js";
+import { isAdminSender, isReplySenderAllowed } from "../../services/messaging/replySenderPolicy.js";
 import { getDefaultProvider, getRootDir, getWorkspacePath, resolveProjectPath } from "../config.js";
 import {
   assistantReplyEnvelope,
@@ -539,7 +539,7 @@ export function adminIdentityFromBot(bot: AppConfig["bot"]): AdminIdentity {
   };
 }
 export function isAdminUserId(value: unknown, admin: AdminIdentity) {
-  return isReplySenderAllowed(String(value ?? "").trim(), admin.userId);
+  return isAdminSender(String(value ?? "").trim(), admin.userId);
 }
 export function uniqueMemoryEntries(entries: MemoryEntry[]) {
   const seen = new Set<string>();

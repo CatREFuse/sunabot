@@ -136,7 +136,7 @@ describe("runtime reply scheduling helpers", () => {
   });
 
   it.each(["private", "user_group", "bot_group"] as const)(
-    "only routes %s replies and commands for bot.adminQq",
+    "routes %s replies and commands for any valid QQ sender",
     (scope) => {
       const config = createAdminTestConfig("/tmp/sunabot-runtime-router-test");
       config.onebot.autoReplyPrivate = true;
@@ -152,7 +152,7 @@ describe("runtime reply scheduling helpers", () => {
       incoming.scope = scope;
       incoming.groupId = scope === "private" ? undefined : 3003;
 
-      expect(internals.resolveIncomingReplyRoute(incoming, true)).toBe("none");
+      expect(internals.resolveIncomingReplyRoute(incoming, true)).toBe("command");
       incoming.userId = 171419991;
       incoming.sender = { id: "171419991", displayName: "管理员" };
       expect(internals.resolveIncomingReplyRoute(incoming, true)).toBe("command");
@@ -160,7 +160,7 @@ describe("runtime reply scheduling helpers", () => {
   );
 
   it.each(["private", "user_group", "bot_group"] as const)(
-    "silently ignores a non-admin %s command at ingress",
+    "silently ignores a %s command with an invalid sender",
     async (scope) => {
       const config = createAdminTestConfig("/tmp/sunabot-runtime-router-test");
       config.onebot.autoReplyPrivate = true;
@@ -177,7 +177,7 @@ describe("runtime reply scheduling helpers", () => {
       };
       internals.sessionCoordinator.enqueueEvent = enqueueEvent;
       internals.recordIncomingMessage = recordIncomingMessage;
-      const incoming = groupIncoming("/总结群聊", 998877665);
+      const incoming = groupIncoming("/总结群聊", 1234);
       incoming.scope = scope;
       incoming.groupId = scope === "private" ? undefined : 3003;
 
@@ -188,7 +188,7 @@ describe("runtime reply scheduling helpers", () => {
     }
   );
 
-  it("invalidates an in-flight reply when bot.adminQq changes", () => {
+  it("keeps an in-flight reply valid when bot.adminQq changes", () => {
     const config = createAdminTestConfig("/tmp/sunabot-runtime-router-test");
     const runtime = new SunaRuntime(config, {
       attachmentService: {} as never
@@ -209,22 +209,20 @@ describe("runtime reply scheduling helpers", () => {
 
     expect(internals.isReplyTaskCurrent(incoming, gate)).toBe(true);
     config.bot.adminQq = "223344556";
-    expect(internals.isReplyTaskCurrent(incoming, gate)).toBe(false);
+    expect(internals.isReplyTaskCurrent(incoming, gate)).toBe(true);
   });
 
-  it("skips a persisted outbox reply when the administrator changed before delivery", async () => {
+  it("skips a persisted outbox reply with an invalid sender", async () => {
     const config = createAdminTestConfig("/tmp/sunabot-runtime-router-test");
     const runtime = new SunaRuntime(config, { attachmentService: {} as never });
-    const incoming = groupIncoming("普通群消息", 171419991);
+    const incoming = groupIncoming("普通群消息", 1234);
     const internals = runtime as unknown as {
       replyDeliveryDraft(incoming: ParsedIncomingMessage, text: string, isAdmin: boolean): unknown;
       deliverSessionOutbox(outbox: unknown, signal: AbortSignal): Promise<unknown>;
     };
     const draft = internals.replyDeliveryDraft(incoming, "不会发送", true) as Record<string, unknown>;
-    config.bot.adminQq = "223344556";
-
     const result = await internals.deliverSessionOutbox({
-      id: "outbox-stale-admin",
+      id: "outbox-invalid-sender",
       ...draft
     }, new AbortController().signal);
 

@@ -1,17 +1,17 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { isReplySenderAllowed } from "../../services/messaging/replySenderPolicy.js";
+import { isAdminSender, isReplySenderAllowed } from "../../services/messaging/replySenderPolicy.js";
 
 describe("reply sender policy", () => {
-  it("only permits the configured administrator QQ", () => {
+  it("permits any valid QQ sender", () => {
     expect(isReplySenderAllowed(171419991, "171419991")).toBe(true);
-    expect(isReplySenderAllowed(998877665, "171419991")).toBe(false);
+    expect(isReplySenderAllowed(998877665, "171419991")).toBe(true);
   });
 
   it.each([undefined, "", "   ", "not-a-qq", "171419991,223344556", "1234"])(
-    "fails closed for a missing or invalid administrator QQ: %s",
+    "does not depend on the administrator setting: %s",
     (adminQq) => {
-      expect(isReplySenderAllowed(171419991, adminQq)).toBe(false);
+      expect(isReplySenderAllowed(171419991, adminQq)).toBe(true);
     }
   );
 
@@ -21,4 +21,10 @@ describe("reply sender policy", () => {
       expect(isReplySenderAllowed(userId, "171419991")).toBe(false);
     }
   );
+
+  it("keeps administrator identity checks exact", () => {
+    expect(isAdminSender(171419991, "171419991")).toBe(true);
+    expect(isAdminSender(998877665, "171419991")).toBe(false);
+    expect(isAdminSender(171419991, "not-a-qq")).toBe(false);
+  });
 });

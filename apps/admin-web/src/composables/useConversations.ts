@@ -78,6 +78,10 @@ export function useConversations() {
     conversation: ConversationRecord,
     changes: Pick<ConversationRecord, "replyEnabled" | "orchestratorEnabled">
   ) {
+    const previous = conversations.value;
+    conversations.value = previous.map((item) =>
+      item.id === conversation.id ? { ...item, ...changes } : item
+    );
     try {
       const payload = await apiRequest<{ conversation: ConversationRecord }>("/api/conversations/reply", {
         method: "PUT",
@@ -93,6 +97,7 @@ export function useConversations() {
       conversations.value = conversations.value.map((item) => item.id === payload.conversation.id ? payload.conversation : item);
       error.value = "";
     } catch (caught) {
+      conversations.value = previous;
       error.value = caught instanceof Error ? caught.message : "回复状态更新失败";
     }
   }
