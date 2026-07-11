@@ -6,14 +6,14 @@ export default defineConfig({
   plugins: [vue()],
   resolve: {
     alias: {
-      "@": fileURLToPath(new URL("./web/src", import.meta.url))
+      "@": fileURLToPath(new URL("./apps/admin-web/src", import.meta.url))
     }
   },
   test: {
     environment: "happy-dom",
     globals: true,
-    include: ["src/**/*.test.ts", "web/src/**/*.test.ts", "tests/unit/**/*.test.ts", "tests/integration/**/*.test.ts"],
-    exclude: ["tests/e2e/**", "node_modules/**", "dist/**", "web/dist/**"],
+    include: ["src/**/*.test.ts", "apps/admin-web/src/**/*.test.ts", "tests/unit/**/*.test.ts", "tests/integration/**/*.test.ts"],
+    exclude: ["tests/e2e/**", "node_modules/**", "dist/**", "apps/admin-web/dist/**"],
     setupFiles: ["./tests/setup.ts"],
     restoreMocks: true,
     clearMocks: true

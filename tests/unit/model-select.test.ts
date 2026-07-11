@@ -1,8 +1,8 @@
 import { mount } from "@vue/test-utils";
 import { describe, expect, it } from "vitest";
-import ModelSelect from "../../web/src/components/settings/ModelSelect.vue";
-import ReasoningEffortSelect from "../../web/src/components/settings/ReasoningEffortSelect.vue";
-import type { ModelCatalogItem } from "../../web/src/types";
+import ModelSelect from "../../apps/admin-web/src/components/settings/ModelSelect.vue";
+import ReasoningEffortSelect from "../../apps/admin-web/src/components/settings/ReasoningEffortSelect.vue";
+import type { ModelCatalogItem } from "../../apps/admin-web/src/types";
 
 const models: ModelCatalogItem[] = [
   model("gpt-5.5", "5.5", "medium", ["low", "medium", "high", "xhigh"]),

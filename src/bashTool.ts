@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { TOOL_CALL_TIMEOUT_MS } from "./tools.js";
+import { TOOL_CALL_TIMEOUT_MS } from "./toolConstants.js";
 
 export const WORKSPACE_BASH_TOOL_NAME = "workspace_bash";
 

@@ -169,7 +169,7 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
     decorateReply: false
   });
 
-  const webDist = path.join(getRootDir(), "web/dist");
+  const webDist = path.join(getRootDir(), "apps/admin-web/dist");
   if (existsSync(webDist)) {
     await app.register(fastifyStatic, {
       root: webDist,

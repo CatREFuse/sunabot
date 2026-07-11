@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
+import { existsSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
 import {
   AppConfig,
@@ -16,7 +18,7 @@ import {
   normalizeTavilySettings
 } from "./webSearchSettings.js";
 
-const rootDir = process.cwd();
+const rootDir = discoverProjectRoot(path.dirname(fileURLToPath(import.meta.url)));
 const workspaceDir = resolveWorkspaceDir(process.env.SUNABOT_WORKSPACE);
 const AUTO_CODEX_EXECUTABLE = "auto";
 
@@ -202,8 +204,27 @@ export function resolveProjectPath(inputPath: string | undefined) {
 
 function resolveWorkspaceDir(configured: string | undefined) {
   const value = configured?.trim();
-  if (!value) return path.join(rootDir, "workspace");
+  if (!value) {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("SUNABOT_WORKSPACE is required in production.");
+    }
+    return path.join(rootDir, "workspace");
+  }
   return path.isAbsolute(value) ? path.normalize(value) : path.resolve(rootDir, value);
+}
+
+function discoverProjectRoot(startDir: string) {
+  let current = path.resolve(startDir);
+  for (;;) {
+    if (existsSync(path.join(current, "package.json")) && existsSync(path.join(current, "AGENTS.md"))) {
+      return current;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      throw new Error(`Unable to locate sunabot project root from ${startDir}.`);
+    }
+    current = parent;
+  }
 }
 
 export function getDefaultProvider(config: AppConfig) {

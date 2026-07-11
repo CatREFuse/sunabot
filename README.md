@@ -32,7 +32,7 @@ NapCat 依赖定义位于 [`components/napcat/`](components/napcat/README.md)，
 ```text
 sunabot/
 ├── src/                       后端业务逻辑
-├── web/                       Vue 管理台
+├── apps/admin-web/            Vue 管理台
 ├── tests/                     单元、集成和端到端测试
 ├── components/napcat/        NapCat 外部依赖组件
 ├── deploy/                   Native 与 Docker 运行入口

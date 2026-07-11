@@ -1,7 +1,7 @@
 import type { Config } from "tailwindcss";
 
 export default {
-  content: ["./web/index.html", "./web/src/**/*.{vue,ts}"],
+  content: ["./apps/admin-web/index.html", "./apps/admin-web/src/**/*.{vue,ts}"],
   theme: {
     extend: {
       fontFamily: {

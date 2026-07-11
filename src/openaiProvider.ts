@@ -31,6 +31,7 @@ import { appendRequestLog } from "./requestLog.js";
 import { SELFIE_TOOL_NAME, SelfieRunner, selfieTool } from "./selfieTool.js";
 import { WEBSEARCH_TOOL_NAME, runWebsearch, websearchTool, WebsearchInput } from "./webSearchTool.js";
 import type { OpenAIToolDefinition, RenderedPromptRequest } from "./promptSystem.js";
+import { providerToolExecutionMode, resolveProviderToolDefinitions } from "./toolRegistry.js";
 
 const DEFAULT_IMAGE_MODEL = "gpt-image-2";
 const IMAGE_GENERATION_INSTRUCTIONS = "Generate the requested image with the hosted image_generation tool. Return the generated image only.";
@@ -805,26 +806,7 @@ function resolveResponseTools(options: ProviderCompleteOptions, definitions?: Op
 }
 
 function getResponseTools(options: ProviderCompleteOptions) {
-  const tools: Array<Record<string, unknown>> = [];
-  if (options.bash?.enabled) {
-    tools.push(createWorkspaceBashTool(options.bash));
-  }
-  if (options.bot?.tools.websearch) {
-    tools.push(websearchTool);
-  }
-  if (options.bot?.tools.generateImg) {
-    tools.push(generateImgTool);
-  }
-  if (options.selfie?.enabled) {
-    tools.push(selfieTool);
-  }
-  if (options.memory?.enabled) {
-    tools.push(memoryRecallTool);
-  }
-  if (options.asyncCodex) {
-    tools.push(codexTool);
-  }
-  return tools;
+  return resolveProviderToolDefinitions(options);
 }
 
 function readToolName(tool: Record<string, unknown>) {
@@ -900,6 +882,10 @@ async function executeFunctionCalls(calls: ResponseFunctionCallItem[], options: 
 
 async function executeFunctionCall(call: ResponseFunctionCallItem, options: ProviderCompleteOptions) {
   try {
+    const executionMode = providerToolExecutionMode(call.name);
+    if (executionMode !== "inline") {
+      return { ok: false, error: executionMode ? `Tool ${call.name} is ${executionMode}.` : `Unsupported tool: ${call.name}` };
+    }
     const args = parseJson(call.arguments);
     if (!args || typeof args !== "object") {
       return { ok: false, error: `Invalid tool arguments for ${call.name}.` };
