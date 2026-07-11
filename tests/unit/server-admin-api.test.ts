@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AGENT_FILE_DEFINITIONS } from "../../src/admin/agentFiles.js";
 import { defaultConfig, saveConfig } from "../../src/config.js";
-import { buildApp, createApp } from "../../src/server.js";
+import { buildApp, createApp } from "../../apps/api/server.js";
 import type { AppConfig } from "../../src/types.js";
 
 const ADMIN_HEADERS = { host: "127.0.0.1", authorization: "Bearer admin-secret" };

@@ -4,7 +4,7 @@ import path from "node:path";
 import type { FastifyInstance } from "fastify";
 import { expect, test } from "@playwright/test";
 import { defaultConfig, saveConfig } from "../../src/config.js";
-import { createApp } from "../../src/server.js";
+import { createApp } from "../../apps/api/server.js";
 
 let app: FastifyInstance;
 let origin = "";

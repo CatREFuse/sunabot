@@ -45,7 +45,7 @@ const lineBudgets = new Map([
   ["src/runtime.ts", 4_800],
   ["services/memory/memoryService.ts", 1_800],
   ["adapters/model/openaiProvider.ts", 1_650],
-  ["src/server.ts", 1_100]
+  ["apps/api/server.ts", 1_100]
 ]);
 for (const [relative, maximum] of lineBudgets) {
   const lines = fs.readFileSync(path.join(root, relative), "utf8").split(/\r?\n/).length;
