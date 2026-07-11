@@ -20,7 +20,7 @@ import type {
   AttachmentExtractionContext,
   ParsedAttachment
 } from "../services/media/attachments/types.js";
-import { CommandRouter, type CommandMatch } from "./commands/router.js";
+import { CommandRouter, type CommandMatch } from "../services/messaging/commandRouter.js";
 import { getDefaultProvider, getRootDir, getWorkspacePath, resolveProjectPath } from "./config.js";
 import {
   assistantReplyEnvelope,
@@ -41,7 +41,7 @@ import {
   resolveUserGroupReplyRoute,
   type ReplyGateSnapshot
 } from "../services/orchestration/groupReplyPolicy.js";
-import { HookBus } from "./hooks.js";
+import { HookBus } from "../services/messaging/hookBus.js";
 import {
   applyMemoryBatchTransaction,
   ensureAgentTextFile,

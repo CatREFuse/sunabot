@@ -193,7 +193,7 @@ QQ Runtime 不支持远程 OneBot 或远程 NapCat。Docker 下 Sunabot 与 NapC
 | 回复运行时、上下文、群聊总结 | `src/runtime.ts` |
 | 会话事件、turn、工具任务、outbox | `services/sessions/`, `packages/contracts/session/runtimeMessages.ts` |
 | 群聊门控与编排策略 | `services/orchestration/groupReplyPolicy.ts` |
-| 命令路由与钩子 | `src/commands/router.ts`, `src/hooks.ts` |
+| 命令路由与钩子 | `services/messaging/commandRouter.ts`, `services/messaging/hookBus.ts` |
 | Provider 与工具循环 | `adapters/model/openaiProvider.ts`, `services/tools/` |
 | Codex 异步工具 | `adapters/codex/codexTool.ts` |
 | 联网搜索 | `adapters/model/webSearchTool.ts`, `adapters/model/webSearchSettings.ts` |

@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
-import { CommandRouter } from "../../src/commands/router.js";
+import { CommandRouter } from "../../services/messaging/commandRouter.js";
 
 describe("CommandRouter", () => {
   it.each([
