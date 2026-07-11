@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { getConfigPath, getRootDir, getWorkspaceDir, loadConfig, saveConfig } from "../config.js";
-import { OpenAIProvider } from "../openaiProvider.js";
+import { OpenAIProvider } from "../../adapters/model/openaiProvider.js";
 import type {
   AppConfig,
   BotConfig,
@@ -19,7 +19,7 @@ import {
   isEnvironmentName,
   looksLikeDirectApiKey,
   resolveTavilyApiKeys
-} from "../webSearchSettings.js";
+} from "../../adapters/model/webSearchSettings.js";
 import {
   adminMutationMutex,
   adminRecoveryState,

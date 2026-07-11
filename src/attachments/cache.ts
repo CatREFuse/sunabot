@@ -24,7 +24,7 @@ import {
   DEFAULT_ATTACHMENT_IDLE_TIMEOUT_MS,
   FILE_SIZE_LIMIT_BYTES
 } from "./limits.js";
-import { isTrustedQqFakeIp } from "../qqMedia.js";
+import { isTrustedQqFakeIp } from "../../adapters/onebot/qqMedia.js";
 
 const CACHE_INDEX_VERSION = 1 as const;
 const ORIGINAL_FILE_NAME = "original";

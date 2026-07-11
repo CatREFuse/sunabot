@@ -5,7 +5,7 @@ import type { ProviderConfig, ProviderKind } from "../../src/types.js";
 const appendRequestLog = vi.hoisted(() => vi.fn(async () => undefined));
 vi.mock("../../src/requestLog.js", () => ({ appendRequestLog }));
 
-import { OpenAIProvider } from "../../src/openaiProvider.js";
+import { OpenAIProvider } from "../../adapters/model/openaiProvider.js";
 
 afterEach(() => vi.restoreAllMocks());
 

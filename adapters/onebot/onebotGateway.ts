@@ -3,8 +3,8 @@ import { EventEmitter } from "node:events";
 import { URL } from "node:url";
 import { nanoid } from "nanoid";
 import { WebSocket, WebSocketServer } from "ws";
-import type { OutboundMediaDelivery } from "./outboundMedia.js";
-import { AppConfig, OneBotEvent } from "./types.js";
+import type { OutboundMediaDelivery } from "../../src/outboundMedia.js";
+import { AppConfig, OneBotEvent } from "../../src/types.js";
 
 interface PendingAction {
   action: string;

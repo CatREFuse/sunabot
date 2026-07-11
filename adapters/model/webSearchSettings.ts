@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import dotenv from "dotenv";
-import type { BotToolSettings } from "./types.js";
+import type { BotToolSettings } from "../../src/types.js";
 
 export const DEFAULT_TAVILY_API_KEY_ENV = "TAVILY_API_KEY";
 

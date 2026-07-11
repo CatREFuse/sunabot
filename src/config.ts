@@ -16,7 +16,7 @@ import { isReasoningEffort, resolveModelReasoningEffort } from "./admin/models.j
 import {
   DEFAULT_TAVILY_API_KEY_ENV,
   normalizeTavilySettings
-} from "./webSearchSettings.js";
+} from "../adapters/model/webSearchSettings.js";
 
 const rootDir = discoverProjectRoot(path.dirname(fileURLToPath(import.meta.url)));
 const workspaceDir = resolveWorkspaceDir(process.env.SUNABOT_WORKSPACE);

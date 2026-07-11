@@ -8,7 +8,7 @@ import {
   isLoopbackRemoteAddress,
   isTrustedTokenlessHost,
   OneBotGateway
-} from "../../src/onebot.js";
+} from "../../adapters/onebot/onebotGateway.js";
 import type { OneBotEvent } from "../../src/types.js";
 
 const originalAccessToken = process.env.ONEBOT_ACCESS_TOKEN;

@@ -11,7 +11,7 @@ import {
   isImageGenerationCancellation,
   isRetryableImageGenerationError,
   runImageGenerationWithRetry
-} from "../../src/imageGenerationRetry.js";
+} from "../../adapters/model/imageGenerationRetry.js";
 
 describe("image generation retry policy", () => {
   it("returns immediately on the first successful attempt", async () => {

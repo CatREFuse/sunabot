@@ -7,7 +7,7 @@ import {
   type CodexProcessIdentity,
   type CodexToolInput,
   type CodexToolResult
-} from "./codexTool.js";
+} from "../adapters/codex/codexTool.js";
 import { SessionActorScheduler, SessionActorTaskTimeoutError } from "./sessionActor.js";
 import {
   type ClaimedTurn,

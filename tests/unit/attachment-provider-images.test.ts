@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   resolveLocalInputImage,
   toResponsesInputMessage
-} from "../../src/openaiProvider.js";
+} from "../../adapters/model/openaiProvider.js";
 
 const cacheRoot = path.join(process.cwd(), "workspace/artifacts/file-cache");
 const cleanupPaths: string[] = [];

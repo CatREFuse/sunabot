@@ -1,12 +1,12 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { CodexRunner, CodexToolResult } from "../../src/codexTool.js";
+import type { CodexRunner, CodexToolResult } from "../../adapters/codex/codexTool.js";
 import type {
   OpenAIProvider,
   ProviderCompleteOptions,
   ProviderTurnResult
-} from "../../src/openaiProvider.js";
-import type { OneBotGateway } from "../../src/onebot.js";
+} from "../../adapters/model/openaiProvider.js";
+import type { OneBotGateway } from "../../adapters/onebot/onebotGateway.js";
 import type { RenderedPromptRequest } from "../../src/promptSystem.js";
 import { parseIncomingMessage, SunaRuntime } from "../../src/runtime.js";
 import { SessionStore } from "../../src/sessionStore.js";

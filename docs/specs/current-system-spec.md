@@ -189,16 +189,16 @@ QQ Runtime 不支持远程 OneBot 或远程 NapCat。Docker 下 Sunabot 与 NapC
 | API、静态站点、图片历史 | `src/server.ts` |
 | 配置加载、默认值、路径解析 | `src/config.ts`, `src/types.ts` |
 | SQLite 主库 | `src/dataStore.ts` |
-| OneBot 连接、事件和 action | `src/onebot.ts`, `src/qqMedia.ts` |
+| OneBot 连接、事件和 action | `adapters/onebot/onebotGateway.ts`, `adapters/onebot/qqMedia.ts` |
 | 回复运行时、上下文、群聊总结 | `src/runtime.ts` |
 | 会话事件、turn、工具任务、outbox | `src/sessionStore.ts`, `src/sessionActor.ts`, `src/sessionCoordinator.ts`, `packages/contracts/session/runtimeMessages.ts` |
 | 群聊门控与编排策略 | `src/groupReplyPolicy.ts` |
 | 命令路由与钩子 | `src/commands/router.ts`, `src/hooks.ts` |
-| Provider 与工具循环 | `src/openaiProvider.ts`, `src/tools.ts` |
-| Codex 异步工具 | `src/codexTool.ts` |
-| 联网搜索 | `src/webSearchTool.ts`, `src/webSearchSettings.ts` |
+| Provider 与工具循环 | `adapters/model/openaiProvider.ts`, `src/tools.ts` |
+| Codex 异步工具 | `adapters/codex/codexTool.ts` |
+| 联网搜索 | `adapters/model/webSearchTool.ts`, `adapters/model/webSearchSettings.ts` |
 | Bash、图像生成、自拍 | `src/bashTool.ts`, `src/generateImgTool.ts`, `src/selfieTool.ts` |
-| 图片重试和外发 | `src/imageGenerationRetry.ts`, `src/outboundMedia.ts` |
+| 图片重试和外发 | `adapters/model/imageGenerationRetry.ts`, `src/outboundMedia.ts` |
 | 人格与提示词 | `src/persona.ts`, `src/promptCatalog.ts`, `src/promptDefaults.ts`, `src/promptSystem.ts` |
 | 记忆 CRUD、合并、召回和批次 | `src/memory.ts` |
 | 记忆调度 | `src/memoryScheduler.ts` |

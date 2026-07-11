@@ -1,9 +1,9 @@
 import { createWorkspaceBashTool, WORKSPACE_BASH_TOOL_NAME } from "./bashTool.js";
-import { CODEX_TOOL_NAME, codexTool } from "./codexTool.js";
+import { CODEX_TOOL_NAME, codexTool } from "../adapters/codex/codexTool.js";
 import { GENERATE_IMG_TOOL_NAME, generateImgTool } from "./generateImgTool.js";
 import { MEMORY_RECALL_TOOL_NAME, memoryRecallTool } from "./memory.js";
 import { SELFIE_TOOL_NAME, selfieTool } from "./selfieTool.js";
-import { WEBSEARCH_TOOL_NAME, websearchTool } from "./webSearchTool.js";
+import { WEBSEARCH_TOOL_NAME, websearchTool } from "../adapters/model/webSearchTool.js";
 
 export interface ToolAvailability {
   bash?: { enabled: boolean; workspaceOnly?: boolean; blockedKeywords?: string[] };

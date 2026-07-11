@@ -18,10 +18,10 @@ import { getConfigPath, getRootDir, getWorkspacePath, loadConfig } from "./confi
 import { applicationDataStore } from "./dataStore.js";
 import { createMemoryEntry, deleteMemoryEntry, listMemoryEntries, recallMemory, updateMemoryEntry } from "./memory.js";
 import { ConversationDirectory } from "./conversationDirectory.js";
-import { OneBotGateway } from "./onebot.js";
-import { OpenAIProvider } from "./openaiProvider.js";
+import { OneBotGateway } from "../adapters/onebot/onebotGateway.js";
+import { OpenAIProvider } from "../adapters/model/openaiProvider.js";
 import { OutboundMediaDelivery } from "./outboundMedia.js";
-import { isTrustedQqFakeIp } from "./qqMedia.js";
+import { isTrustedQqFakeIp } from "../adapters/onebot/qqMedia.js";
 import { readRequestLogs, requestLogPath } from "./requestLog.js";
 import { SunaRuntime } from "./runtime.js";
 import { ServiceMonitor } from "./serviceMonitor.js";

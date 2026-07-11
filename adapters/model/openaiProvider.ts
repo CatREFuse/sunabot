@@ -5,10 +5,10 @@ import OpenAI from "openai";
 import dotenv from "dotenv";
 import { nanoid } from "nanoid";
 import sharp from "sharp";
-import { ProviderConfig, ChatMessage, ImageResult, BotConfig, ImageQuality } from "./types.js";
-import { MAX_ATTACHMENT_VISUAL_PAGES } from "./attachments/context.js";
-import { normalizeAttachmentImage } from "./attachments/image.js";
-import { getRootDir, getWorkspacePath, resolveProjectPath } from "./config.js";
+import { ProviderConfig, ChatMessage, ImageResult, BotConfig, ImageQuality } from "../../src/types.js";
+import { MAX_ATTACHMENT_VISUAL_PAGES } from "../../src/attachments/context.js";
+import { normalizeAttachmentImage } from "../../src/attachments/image.js";
+import { getRootDir, getWorkspacePath, resolveProjectPath } from "../../src/config.js";
 import {
   ImageGenerationFailureContext,
   ImageGenerationHttpError,
@@ -23,15 +23,15 @@ import {
   createWorkspaceBashTool,
   runWorkspaceBash,
   WorkspaceBashInput
-} from "./bashTool.js";
-import { CODEX_TOOL_NAME, codexTool } from "./codexTool.js";
-import { GENERATE_IMG_TOOL_NAME, GenerateImageRunner, runGenerateImg, generateImgTool } from "./generateImgTool.js";
-import { MEMORY_RECALL_TOOL_NAME, MemoryRecallInput, memoryRecallTool } from "./memory.js";
-import { appendRequestLog } from "./requestLog.js";
-import { SELFIE_TOOL_NAME, SelfieRunner, selfieTool } from "./selfieTool.js";
+} from "../../src/bashTool.js";
+import { CODEX_TOOL_NAME, codexTool } from "../codex/codexTool.js";
+import { GENERATE_IMG_TOOL_NAME, GenerateImageRunner, runGenerateImg, generateImgTool } from "../../src/generateImgTool.js";
+import { MEMORY_RECALL_TOOL_NAME, MemoryRecallInput, memoryRecallTool } from "../../src/memory.js";
+import { appendRequestLog } from "../../src/requestLog.js";
+import { SELFIE_TOOL_NAME, SelfieRunner, selfieTool } from "../../src/selfieTool.js";
 import { WEBSEARCH_TOOL_NAME, runWebsearch, websearchTool, WebsearchInput } from "./webSearchTool.js";
-import type { OpenAIToolDefinition, RenderedPromptRequest } from "./promptSystem.js";
-import { providerToolExecutionMode, resolveProviderToolDefinitions } from "./toolRegistry.js";
+import type { OpenAIToolDefinition, RenderedPromptRequest } from "../../src/promptSystem.js";
+import { providerToolExecutionMode, resolveProviderToolDefinitions } from "../../src/toolRegistry.js";
 
 const DEFAULT_IMAGE_MODEL = "gpt-image-2";
 const IMAGE_GENERATION_INSTRUCTIONS = "Generate the requested image with the hosted image_generation tool. Return the generated image only.";

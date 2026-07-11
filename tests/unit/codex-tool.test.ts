@@ -18,7 +18,7 @@ import {
   prepareCodexRun,
   type CodexSpawn,
   type CodexSupervisorRequest
-} from "../../src/codexTool.js";
+} from "../../adapters/codex/codexTool.js";
 
 let temporaryRoot = "";
 

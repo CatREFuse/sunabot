@@ -7,7 +7,7 @@ import {
   normalizeTavilySettings,
   resolveTavilyApiKey,
   resolveTavilyApiKeys
-} from "../../src/webSearchSettings.js";
+} from "../../adapters/model/webSearchSettings.js";
 
 let temporaryDirectory = "";
 

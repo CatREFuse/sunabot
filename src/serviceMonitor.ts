@@ -1,6 +1,6 @@
 import { MonitorSettingsStore } from "./admin/monitorSettings.js";
 import { getWorkspacePath } from "./config.js";
-import { OneBotGateway } from "./onebot.js";
+import { OneBotGateway } from "../adapters/onebot/onebotGateway.js";
 import { SunaRuntime } from "./runtime.js";
 
 const MONITOR_INTERVAL_MS = 30_000;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isTrustedQqFakeIp, isTrustedQqMediaHostname } from "../../src/qqMedia.js";
+import { isTrustedQqFakeIp, isTrustedQqMediaHostname } from "../../adapters/onebot/qqMedia.js";
 
 describe("QQ media hosts", () => {
   it("recognizes official QQ image hosts and their subdomains", () => {

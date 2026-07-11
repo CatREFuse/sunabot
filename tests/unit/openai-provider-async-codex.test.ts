@@ -12,7 +12,7 @@ const runWebsearch = vi.hoisted(() => vi.fn(async () => ({
 })));
 
 vi.mock("../../src/requestLog.js", () => ({ appendRequestLog }));
-vi.mock("../../src/webSearchTool.js", () => ({
+vi.mock("../../adapters/model/webSearchTool.js", () => ({
   WEBSEARCH_TOOL_NAME: "websearch",
   websearchTool: {
     type: "function",
@@ -32,7 +32,7 @@ vi.mock("../../src/webSearchTool.js", () => ({
   runWebsearch
 }));
 
-import { OpenAIProvider } from "../../src/openaiProvider.js";
+import { OpenAIProvider } from "../../adapters/model/openaiProvider.js";
 
 describe("OpenAIProvider asynchronous Codex tool turns", () => {
   beforeEach(() => {

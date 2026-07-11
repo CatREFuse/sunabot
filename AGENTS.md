@@ -24,12 +24,12 @@
 
 | 任务 | 先读 |
 | --- | --- |
-| OneBot、消息解析、回复、群聊编排 | `src/onebot.ts`, `src/runtime.ts`, `src/groupReplyPolicy.ts` |
+| OneBot、消息解析、回复、群聊编排 | `adapters/onebot/onebotGateway.ts`, `src/runtime.ts`, `src/groupReplyPolicy.ts` |
 | 会话顺序、异步任务、outbox、断线恢复 | `src/sessionStore.ts`, `src/sessionCoordinator.ts`, `src/sessionActor.ts` |
 | 记忆、用户画像、长期记忆、压缩 | `src/memory.ts`, `src/memoryScheduler.ts`, `src/dataStore.ts` |
 | 请求日志、会话记录、图片历史 | `src/dataStore.ts`, `src/requestLog.ts`, `src/server.ts` |
 | 文件读取、PDF、Office、附件缓存 | `src/attachments/` |
-| Provider、工具调用、Codex、联网搜索 | `src/openaiProvider.ts`, `src/tools.ts`, `src/codexTool.ts`, `src/webSearchTool.ts` |
+| Provider、工具调用、Codex、联网搜索 | `adapters/model/openaiProvider.ts`, `src/tools.ts`, `adapters/codex/codexTool.ts`, `adapters/model/webSearchTool.ts` |
 | 人格和最终提示词 | `src/persona.ts`, `src/promptCatalog.ts`, `src/promptDefaults.ts`, `src/promptSystem.ts` |
 | 管理 API、设置和 Agent 文件 | `src/server.ts`, `src/admin/` |
 | 管理台页面 | `apps/admin-web/src/views/`, `apps/admin-web/src/components/`, `apps/admin-web/src/composables/` |

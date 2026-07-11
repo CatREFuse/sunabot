@@ -11,7 +11,7 @@ vi.mock("../../src/config.js", () => ({
 }));
 vi.mock("../../src/requestLog.js", () => ({ appendRequestLog }));
 
-import { runWebsearch, WEBSEARCH_TIMEOUT_MS } from "../../src/webSearchTool.js";
+import { runWebsearch, WEBSEARCH_TIMEOUT_MS } from "../../adapters/model/webSearchTool.js";
 
 beforeEach(() => {
   appendRequestLog.mockClear();

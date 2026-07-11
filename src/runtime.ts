@@ -69,14 +69,14 @@ import {
   type ProviderBashOptions,
   type ProviderCompleteOptions,
   type ProviderDeferredTurn
-} from "./openaiProvider.js";
-import type { ProviderLogContext } from "./openaiProvider.js";
+} from "../adapters/model/openaiProvider.js";
+import type { ProviderLogContext } from "../adapters/model/openaiProvider.js";
 import { loadPersona, AgentPersona } from "./persona.js";
-import { OneBotGateway, OneBotGatewayDelegate } from "./onebot.js";
+import { OneBotGateway, OneBotGatewayDelegate } from "../adapters/onebot/onebotGateway.js";
 import { appendRequestLog } from "./requestLog.js";
 import { SenderNameResolver, senderDisplayName, senderIdentity } from "./senderName.js";
 import type { SelfieInput, SelfieRunResult } from "./selfieTool.js";
-import { CodexToolRunner, type CodexRunner } from "./codexTool.js";
+import { CodexToolRunner, type CodexRunner } from "../adapters/codex/codexTool.js";
 import {
   OutboxDisconnectedError,
   SessionCoordinator,

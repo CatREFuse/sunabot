@@ -17,7 +17,7 @@ import {
   ONEBOT_AUTHENTICATED_MAX_PAYLOAD_BYTES,
   ONEBOT_LOOPBACK_MAX_PAYLOAD_BYTES,
   ONEBOT_UNAUTHENTICATED_MAX_PAYLOAD_BYTES
-} from "../../src/onebot.js";
+} from "../../adapters/onebot/onebotGateway.js";
 import { FILE_SIZE_LIMIT_BYTES } from "../../src/attachments/limits.js";
 
 describe("attachment runtime integration", () => {

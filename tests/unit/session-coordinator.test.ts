@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { CodexRunner, CodexToolResult } from "../../src/codexTool.js";
+import type { CodexRunner, CodexToolResult } from "../../adapters/codex/codexTool.js";
 import {
   OutboxDisconnectedError,
   SessionCoordinator,
