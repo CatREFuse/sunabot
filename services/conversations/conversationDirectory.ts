@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { ConversationRecord } from "./types.js";
+import type { ConversationRecord } from "../../src/types.js";
 
 const DIRECTORY_TTL_MS = 5 * 60 * 1000;
 const DIRECTORY_RETRY_MS = 3_000;

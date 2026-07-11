@@ -192,18 +192,18 @@ QQ Runtime 不支持远程 OneBot 或远程 NapCat。Docker 下 Sunabot 与 NapC
 | OneBot 连接、事件和 action | `adapters/onebot/onebotGateway.ts`, `adapters/onebot/qqMedia.ts` |
 | 回复运行时、上下文、群聊总结 | `src/runtime.ts` |
 | 会话事件、turn、工具任务、outbox | `src/sessionStore.ts`, `src/sessionActor.ts`, `src/sessionCoordinator.ts`, `packages/contracts/session/runtimeMessages.ts` |
-| 群聊门控与编排策略 | `src/groupReplyPolicy.ts` |
+| 群聊门控与编排策略 | `services/orchestration/groupReplyPolicy.ts` |
 | 命令路由与钩子 | `src/commands/router.ts`, `src/hooks.ts` |
 | Provider 与工具循环 | `adapters/model/openaiProvider.ts`, `services/tools/` |
 | Codex 异步工具 | `adapters/codex/codexTool.ts` |
 | 联网搜索 | `adapters/model/webSearchTool.ts`, `adapters/model/webSearchSettings.ts` |
 | Bash、图像生成、自拍 | `services/tools/bashTool.ts`, `services/tools/generateImgTool.ts`, `services/tools/selfieTool.ts` |
-| 图片重试和外发 | `adapters/model/imageGenerationRetry.ts`, `src/outboundMedia.ts` |
+| 图片重试和外发 | `adapters/model/imageGenerationRetry.ts`, `services/delivery/outboundMedia.ts` |
 | 人格与提示词 | `src/persona.ts`, `src/promptCatalog.ts`, `src/promptDefaults.ts`, `src/promptSystem.ts` |
 | 记忆 CRUD、合并、召回和批次 | `src/memory.ts` |
 | 记忆调度 | `src/memoryScheduler.ts` |
 | 附件接入、解析、缓存和上下文 | `src/attachments/` |
-| 会话目录和显示名 | `src/conversationDirectory.ts`, `src/senderName.ts` |
+| 会话目录和显示名 | `services/conversations/conversationDirectory.ts`, `services/conversations/senderName.ts` |
 | 管理配置和 Agent 文件 | `src/admin/` |
 | 管理台路由和页面 | `apps/admin-web/src/router.ts`, `apps/admin-web/src/views/` |
 | 管理台组件和状态 | `apps/admin-web/src/components/`, `apps/admin-web/src/composables/` |

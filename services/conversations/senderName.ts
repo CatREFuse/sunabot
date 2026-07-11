@@ -1,4 +1,4 @@
-import type { OneBotEvent } from "./types.js";
+import type { OneBotEvent } from "../../src/types.js";
 
 const GROUP_MEMBER_NAME_CACHE_TTL_MS = 30 * 60 * 1000;
 const GROUP_MEMBER_NAME_FAILURE_TTL_MS = 60 * 1000;

@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
-import { SenderNameResolver, senderDisplayName, senderIdentity } from "../../src/senderName.js";
+import { SenderNameResolver, senderDisplayName, senderIdentity } from "../../services/conversations/senderName.js";
 import type { OneBotEvent } from "../../src/types.js";
 
 describe("OneBot sender name resolution", () => {

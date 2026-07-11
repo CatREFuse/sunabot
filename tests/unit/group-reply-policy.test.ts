@@ -4,7 +4,7 @@ import {
   ReplyGateEpochs,
   isOrchestratorReplyRateLimited,
   resolveUserGroupReplyRoute
-} from "../../src/groupReplyPolicy.js";
+} from "../../services/orchestration/groupReplyPolicy.js";
 
 describe("user group reply policy", () => {
   it.each([

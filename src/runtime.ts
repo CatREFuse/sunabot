@@ -39,7 +39,7 @@ import {
   isOrchestratorReplyRateLimited,
   resolveUserGroupReplyRoute,
   type ReplyGateSnapshot
-} from "./groupReplyPolicy.js";
+} from "../services/orchestration/groupReplyPolicy.js";
 import { HookBus } from "./hooks.js";
 import {
   applyMemoryBatchTransaction,
@@ -74,7 +74,7 @@ import type { ProviderLogContext } from "../packages/contracts/model/modelGatewa
 import { loadPersona, AgentPersona } from "./persona.js";
 import { OneBotGateway, OneBotGatewayDelegate } from "../adapters/onebot/onebotGateway.js";
 import { appendRequestLog } from "./requestLog.js";
-import { SenderNameResolver, senderDisplayName, senderIdentity } from "./senderName.js";
+import { SenderNameResolver, senderDisplayName, senderIdentity } from "../services/conversations/senderName.js";
 import type { SelfieInput, SelfieRunResult } from "../services/tools/selfieTool.js";
 import { CodexToolRunner, type CodexRunner } from "../adapters/codex/codexTool.js";
 import {

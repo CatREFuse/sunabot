@@ -6,7 +6,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultConfig } from "../../src/config.js";
 import { OneBotGateway } from "../../adapters/onebot/onebotGateway.js";
-import { OutboundMediaDelivery } from "../../src/outboundMedia.js";
+import { OutboundMediaDelivery } from "../../services/delivery/outboundMedia.js";
 
 describe("OneBot outbound media adapter", () => {
   let temporaryDirectory = "";
