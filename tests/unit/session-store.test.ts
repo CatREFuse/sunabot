@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
-import { SessionStore } from "../../src/sessionStore.js";
+import { SessionStore } from "../../services/sessions/sessionStore.js";
 
 const stores: SessionStore[] = [];
 const temporaryDirectories: string[] = [];

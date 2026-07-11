@@ -76,13 +76,14 @@ import { OneBotGateway, OneBotGatewayDelegate } from "../adapters/onebot/onebotG
 import { appendRequestLog } from "./requestLog.js";
 import { SenderNameResolver, senderDisplayName, senderIdentity } from "../services/conversations/senderName.js";
 import type { SelfieInput, SelfieRunResult } from "../services/tools/selfieTool.js";
-import { CodexToolRunner, type CodexRunner } from "../adapters/codex/codexTool.js";
+import { cleanupPersistedCodexProcess, CodexToolRunner } from "../adapters/codex/codexTool.js";
+import type { CodexRunner } from "../packages/contracts/tools/codex.js";
 import {
   OutboxDisconnectedError,
   SessionCoordinator,
   type SessionHandleResult
-} from "./sessionCoordinator.js";
-import { SessionStore, type OutboxRecord, type SessionEventRecord } from "./sessionStore.js";
+} from "../services/sessions/sessionCoordinator.js";
+import { SessionStore, type OutboxRecord, type SessionEventRecord } from "../services/sessions/sessionStore.js";
 import { TOOL_CALL_TIMEOUT_MS } from "../services/tools/tools.js";
 import { promptDefinitionById } from "./promptCatalog.js";
 import { defaultPromptContent as defaultFinalPromptContent } from "./promptDefaults.js";
@@ -298,6 +299,7 @@ export class SunaRuntime implements OneBotGatewayDelegate {
       handleEvent: (event, context) => this.processSessionEvent(event, context.signal),
       deliverOutbox: (outbox, context) => this.deliverSessionOutbox(outbox, context.signal),
       codexRunner: options.codexRunner ?? new CodexToolRunner(),
+      cleanupCodexProcess: cleanupPersistedCodexProcess,
       codexSettings: () => ({
         enabled: this.config.bot.tools.codex.enabled,
         model: this.config.bot.tools.codex.model,

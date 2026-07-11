@@ -2,8 +2,8 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { CodexProcessIdentity } from "../adapters/codex/codexTool.js";
-import { toolCompletionEnvelope, type AsyncToolCompletionPayload } from "../packages/contracts/session/runtimeMessages.js";
+import type { CodexProcessIdentity } from "../../packages/contracts/tools/codex.js";
+import { toolCompletionEnvelope, type AsyncToolCompletionPayload } from "../../packages/contracts/session/runtimeMessages.js";
 
 export type SessionEventStatus = "pending" | "running" | "completed" | "dead";
 export type TurnStatus =

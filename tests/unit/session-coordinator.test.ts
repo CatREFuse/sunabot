@@ -9,8 +9,8 @@ import {
   SessionCoordinator,
   type CodexCoordinatorSettings,
   type SessionHandleResult
-} from "../../src/sessionCoordinator.js";
-import { SessionStore, type SessionEventRecord } from "../../src/sessionStore.js";
+} from "../../services/sessions/sessionCoordinator.js";
+import { SessionStore, type SessionEventRecord } from "../../services/sessions/sessionStore.js";
 
 const stores: SessionStore[] = [];
 const coordinators: SessionCoordinator[] = [];

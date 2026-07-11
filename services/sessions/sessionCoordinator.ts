@@ -1,13 +1,12 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import {
-  cleanupPersistedCodexProcess,
   type CodexRunner,
   type CodexProcessCleanupResult,
   type CodexProcessIdentity,
   type CodexToolInput,
   type CodexToolResult
-} from "../adapters/codex/codexTool.js";
+} from "../../packages/contracts/tools/codex.js";
 import { SessionActorScheduler, SessionActorTaskTimeoutError } from "./sessionActor.js";
 import {
   type ClaimedTurn,
@@ -207,7 +206,10 @@ export class SessionCoordinator {
     this.workerId = options.workerId?.trim() || `session-coordinator:${randomUUID()}`;
     this.clock = options.clock ?? Date.now;
     this.disconnectedError = options.isDisconnectedError ?? isDefaultDisconnectedError;
-    this.cleanupCodexProcess = options.cleanupCodexProcess ?? cleanupPersistedCodexProcess;
+    this.cleanupCodexProcess = options.cleanupCodexProcess ?? (async () => ({
+      status: "unverified",
+      message: "Codex process cleanup port is not configured."
+    }));
 
     this.turnActor = new SessionActorScheduler({
       maxConcurrency: positiveInteger(

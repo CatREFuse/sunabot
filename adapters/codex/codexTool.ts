@@ -6,89 +6,38 @@ import os from "node:os";
 import path from "node:path";
 import { CODEX_MAX_TASK_CHARS } from "../../services/tools/definitions.js";
 export { CODEX_MAX_TASK_CHARS, CODEX_TOOL_NAME, codexTool } from "../../services/tools/definitions.js";
+import type {
+  CodexAuthStrategy,
+  CodexProcessCleanupResult,
+  CodexProcessIdentity,
+  CodexRunner,
+  CodexSupervisor,
+  CodexSupervisorRequest,
+  CodexTaskKind,
+  CodexTaskStatus,
+  CodexToolExecutionContext,
+  CodexToolInput,
+  CodexToolResult
+} from "../../packages/contracts/tools/codex.js";
+export type {
+  CodexAuthStrategy,
+  CodexProcessCleanupResult,
+  CodexProcessIdentity,
+  CodexRunner,
+  CodexSupervisor,
+  CodexSupervisorRequest,
+  CodexTaskKind,
+  CodexTaskStatus,
+  CodexToolExecutionContext,
+  CodexToolInput,
+  CodexToolResult
+} from "../../packages/contracts/tools/codex.js";
 
 export const CODEX_DEFAULT_TIMEOUT_MS = 15 * 60 * 1000;
 export const CODEX_DEFAULT_TERMINATION_GRACE_MS = 3_000;
 export const CODEX_MAX_STDOUT_BYTES = 4 * 1024 * 1024;
 export const CODEX_MAX_JSONL_LINE_BYTES = 1024 * 1024;
 export const CODEX_MAX_STDERR_CHARS = 64 * 1024;
-
-export type CodexTaskKind = "local" | "research" | "analysis";
-export type CodexTaskStatus =
-  | "succeeded"
-  | "failed"
-  | "timed_out"
-  | "cancelled"
-  | "needs_input"
-  | "unknown";
-
-export interface CodexToolInput {
-  task?: unknown;
-  kind?: unknown;
-}
-
-export interface CodexToolError {
-  code: string;
-  message: string;
-  retryable?: boolean;
-}
-
-export interface CodexToolResult {
-  ok: boolean;
-  status: CodexTaskStatus;
-  jobId: string;
-  kind: CodexTaskKind;
-  content?: string;
-  question?: string;
-  error?: CodexToolError;
-  threadId?: string;
-  resultFile?: string;
-  usage?: Record<string, number>;
-  exitCode?: number | null;
-  signal?: NodeJS.Signals | null;
-  durationMs?: number;
-  stderr?: string;
-}
-
-export interface CodexToolExecutionContext {
-  jobId: string;
-  jobDir: string;
-  workspacePath?: string;
-  executable?: string;
-  model?: string;
-  timeoutMs?: number;
-  terminationGraceMs?: number;
-  signal?: AbortSignal;
-  resumeThreadId?: string;
-  attempt?: number;
-  runToken?: string;
-  onProcessStarted?: (identity: CodexProcessIdentity) => void;
-  ephemeral?: boolean;
-  authFile?: string;
-  authStrategy?: CodexAuthStrategy;
-}
-
-export interface CodexProcessIdentity {
-  pid: number;
-  processGroupId: number;
-  attempt: number;
-  runToken: string;
-  commandMarker: string;
-  startedAt: number;
-}
-
-export interface CodexSupervisorRequest extends CodexToolExecutionContext {
-  task: string;
-  kind: CodexTaskKind;
-}
-
-export interface CodexSupervisor {
-  run(request: CodexSupervisorRequest): Promise<CodexToolResult>;
-}
-
-export interface CodexRunner {
-  run(input: CodexToolInput, context: CodexToolExecutionContext): Promise<CodexToolResult>;
-}
 
 export class CodexToolRunner implements CodexRunner {
   constructor(private readonly supervisor: CodexSupervisor = new CodexProcessSupervisor()) {}
@@ -116,8 +65,6 @@ export function runCodexTool(
 ) {
   return runner.run(input, context);
 }
-
-export type CodexAuthStrategy = "copy" | "symlink";
 
 export interface CodexProcessSupervisorOptions {
   spawnProcess?: CodexSpawn;
@@ -1029,11 +976,6 @@ export function signalCodexProcessGroup(child: ChildProcess, signal: NodeJS.Sign
     if (code !== "EPERM") throw error;
     child.kill(signal);
   }
-}
-
-export interface CodexProcessCleanupResult {
-  status: "terminated" | "not_found" | "unverified";
-  message?: string;
 }
 
 export interface CodexProcessObservation {

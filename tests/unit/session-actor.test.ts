@@ -4,7 +4,7 @@ import {
   SessionActorScheduler,
   SessionActorTaskTimeoutError,
   type SessionActorTimers
-} from "../../src/sessionActor.js";
+} from "../../services/sessions/sessionActor.js";
 
 describe("SessionActorScheduler", () => {
   it("runs one task at a time in FIFO order within a session", async () => {

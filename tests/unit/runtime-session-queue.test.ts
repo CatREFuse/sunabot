@@ -9,7 +9,7 @@ import type {
 import type { OneBotGateway } from "../../adapters/onebot/onebotGateway.js";
 import type { RenderedPromptRequest } from "../../src/promptSystem.js";
 import { parseIncomingMessage, SunaRuntime } from "../../src/runtime.js";
-import { SessionStore } from "../../src/sessionStore.js";
+import { SessionStore } from "../../services/sessions/sessionStore.js";
 import type { ConversationRecord, OneBotEvent } from "../../src/types.js";
 import { createAdminTestConfig } from "./admin-fixtures.js";
 
