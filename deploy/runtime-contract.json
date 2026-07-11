@@ -63,8 +63,17 @@
     "readinessLayers": ["api", "onebot", "qq", "provider"]
   },
   "capabilities": {
-    "required": ["admin-web", "onebot-v11", "image-generation", "office-documents"],
-    "optional": ["codex-cli", "websearch", "workspace-bash"]
+    "required": ["admin-web", "onebot-v11", "image-generation", "office-documents", "workspace-bash"],
+    "optional": ["codex-cli", "websearch"],
+    "workspaceBash": {
+      "isolation": "bubblewrap",
+      "executable": "/usr/bin/bwrap",
+      "dockerSeccompProfile": "deploy/docker/seccomp-bwrap.json",
+      "filesystemMode": "host-readonly-workspace-readwrite",
+      "subprocessIsolation": "inherited-mount-and-pid-namespaces",
+      "capabilitiesDropped": true,
+      "failClosed": true
+    }
   },
   "resources": {
     "memory": "4g",

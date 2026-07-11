@@ -25,7 +25,7 @@
 | --- | --- | --- | --- | --- | --- |
 | AUD-001 | P0 | 安全 | `@fastify/static` 旧版本存在目录遍历和编码路径绕过公告 | 升级到 9.3.0，并验证静态资源、深链接和鉴权 | 已修复 |
 | AUD-002 | P0 | 迁移 | Provider 配置包含 macOS 绝对 `.env.local` 路径 | 统一使用项目相对 `.env` | 已修复 |
-| AUD-003 | P1 | 安全 | Linux 没有 macOS `sandbox-exec`，Bash 工具在 WSL 仅有命令和路径规则，缺少内核级写隔离 | 使用独立用户、systemd 文件限制，并评估 bubblewrap/容器沙箱 | 待优化 |
+| AUD-003 | P1 | 安全 | Linux/WSL 与 Docker 已统一使用 fail-closed bubblewrap：宿主根只读、Agent workspace 唯一可写、子进程继承 mount/PID namespace 并丢弃 capability；Native 仍由独立用户和 systemd 文件限制包围 | 保持 bubblewrap 组件锁、namespace probe 和路径/符号链接/挂载/子进程回归门禁 | 已修复 |
 | AUD-004 | P1 | 性能 | `DatabaseSync` 在主线程同步执行，请求日志和会话高频写入可能造成事件循环抖动 | 建立写入队列、批量提交和延迟指标，必要时迁到 worker | 待优化 |
 | AUD-005 | P1 | 性能 | 请求日志查询使用 `%query%`，数据增长后需要全表扫描；当前没有保留上限 | 增加 FTS5、时间范围、分页、保留天数和按类别清理 | 待优化 |
 | AUD-006 | P1 | 性能 | 会话每次保存会序列化所有当前会话，每个会话仍以完整消息数组 JSON 存在一行 | 拆分 `conversation_messages`，按消息增量写入并建立会话时间索引 | 待优化 |

@@ -89,7 +89,7 @@ Provider 请求使用应用启动时安装的统一出站 dispatcher。显式代
 
 ### 4.3 工具
 
-当前工具包括 `memory_recall`、`websearch`、`generate_img`、`selfie`、`workspace_bash` 和 Codex 异步工具。工具启用状态、权限、超时和并发由配置控制。`workspace_bash` 必须限制在工作区，群聊默认不可用，危险关键字按配置拦截。
+当前工具包括 `memory_recall`、`websearch`、`generate_img`、`selfie`、`workspace_bash` 和 Codex 异步工具。工具启用状态、权限、超时和并发由配置控制。`workspace_bash` 仅供管理员使用，Docker 与 Native 均固定通过 `/usr/bin/bwrap` 执行：宿主文件系统只读，Agent workspace 是唯一可写宿主绑定，沙箱自带的 `/dev` 仅提供非持久设备 I/O；子进程继承相同 mount/PID/IPC/UTS/cgroup 隔离且全部 capability 被丢弃。命令与路径规则只作为附加拒绝层；bubblewrap 缺失、不可执行或内核 namespace probe 失败时必须拒绝命令，不能回退到普通 Bash。群聊默认不可用。
 
 ## 5. 记忆系统
 

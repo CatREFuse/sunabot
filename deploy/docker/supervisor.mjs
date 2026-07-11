@@ -77,7 +77,8 @@ async function preflight() {
   await Promise.all([
     fs.access(path.join(releaseRoot, "dist/apps/api/main.js")),
     fs.access("/app/napcat/napcat.mjs"),
-    fs.access("/opt/QQ/qq", 1)
+    fs.access("/opt/QQ/qq", 1),
+    fs.access(contract.capabilities.workspaceBash.executable, 1)
   ]);
 }
 

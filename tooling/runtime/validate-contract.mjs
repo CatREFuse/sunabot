@@ -21,6 +21,8 @@ const [
   supervisor,
   nativeRuntime,
   nativeNapcatStart,
+  nativeSunabotStart,
+  bashSandbox,
   configureNapcat,
   runtimeSmokeLayout,
   workspaceLayout,
@@ -36,6 +38,8 @@ const [
   fs.readFile(path.join(root, "deploy/docker/supervisor.mjs"), "utf8"),
   fs.readFile(path.join(root, "tooling/runtime/native.mjs"), "utf8"),
   fs.readFile(path.join(root, "deploy/native/bin/start-napcat.sh"), "utf8"),
+  fs.readFile(path.join(root, "deploy/native/bin/start-sunabot.sh"), "utf8"),
+  fs.readFile(path.join(root, "services/tools/bashSandbox.ts"), "utf8"),
   fs.readFile(path.join(root, "tooling/runtime/configure-napcat-client.mjs"), "utf8"),
   fs.readFile(path.join(root, "tooling/quality/runtime-smoke/shared.ts"), "utf8"),
   fs.readFile(path.join(root, "packages/platform/workspaceLayout.ts"), "utf8"),
@@ -43,6 +47,9 @@ const [
   fs.readFile(path.join(root, "tooling/migrations/migrate-workspace-layout.mjs"), "utf8"),
   fs.readFile(path.join(root, "tooling/runtime/build-release.mjs"), "utf8")
 ]);
+const dockerSeccompProfile = await readJson(
+  path.join(root, contract.capabilities.workspaceBash.dockerSeccompProfile)
+);
 const errors = [];
 errors.push(...validateNodeVersionEntrypoints(await readNodeVersionContractInputs(root)));
 
@@ -105,6 +112,28 @@ expect(
   JSON.stringify(contract.outboundProxy) === JSON.stringify(PROXY_RUNTIME_CONTRACT),
   "outbound proxy runtime contract must match packages/platform"
 );
+expect(
+  contract.capabilities.required.includes("workspace-bash")
+    && !contract.capabilities.optional.includes("workspace-bash"),
+  "workspace-bash must be a required runtime capability"
+);
+expect(
+  contract.capabilities.workspaceBash.isolation === "bubblewrap"
+    && contract.capabilities.workspaceBash.executable === "/usr/bin/bwrap"
+    && contract.capabilities.workspaceBash.dockerSeccompProfile === "deploy/docker/seccomp-bwrap.json"
+    && contract.capabilities.workspaceBash.filesystemMode === "host-readonly-workspace-readwrite"
+    && contract.capabilities.workspaceBash.subprocessIsolation === "inherited-mount-and-pid-namespaces"
+    && contract.capabilities.workspaceBash.capabilitiesDropped === true
+    && contract.capabilities.workspaceBash.failClosed === true,
+  "workspace-bash must use the fail-closed bubblewrap contract"
+);
+expect(
+  schema.properties?.capabilities?.properties?.workspaceBash?.properties?.executable?.const
+    === contract.capabilities.workspaceBash.executable
+    && schema.properties?.capabilities?.properties?.workspaceBash?.properties?.dockerSeccompProfile?.const
+      === contract.capabilities.workspaceBash.dockerSeccompProfile,
+  "runtime schema must fix the workspace Bash sandbox executable and Docker seccomp profile"
+);
 expect(compose.includes("SUNABOT_PROXY_MODE"), "Compose must pass the outbound proxy mode contract");
 expect(
   compose.includes("SUNABOT_PROXY_DISCOVERED_URL"),
@@ -127,6 +156,34 @@ expect(
     && dockerfile.includes("/app/.cache/mesa_shader_cache_db")
     && dockerfile.includes("chown -R 1000:1000"),
   "Docker must provision writable fontconfig and shader caches for the non-root runtime"
+);
+expect(
+  dockerfile.includes(`bubblewrap=${lock.components.bubblewrap.version}`)
+    && compose.includes(`seccomp=${contract.capabilities.workspaceBash.dockerSeccompProfile}`)
+    && !compose.includes("seccomp=unconfined")
+    && compose.includes("cap_drop:")
+    && compose.includes("no-new-privileges:true"),
+  "Docker must install bubblewrap, permit user namespaces, and retain capability/no-new-privilege restrictions"
+);
+const bubblewrapCloneRule = dockerSeccompProfile.syscalls.find((rule) =>
+  rule.names?.length === 1
+    && rule.names[0] === "clone"
+    && rule.args?.[0]?.op === "SCMP_CMP_MASKED_EQ"
+    && rule.args[0].value === 2114060288
+    && rule.args[0].valueTwo === 1040318464
+);
+const bubblewrapMountRule = dockerSeccompProfile.syscalls.find((rule) =>
+  ["mount", "pivot_root", "umount2"].every((name) => rule.names?.includes(name))
+);
+expect(
+  dockerSeccompProfile.defaultAction === "SCMP_ACT_ERRNO"
+    && bubblewrapCloneRule?.action === "SCMP_ACT_ALLOW"
+    && bubblewrapMountRule?.action === "SCMP_ACT_ALLOW",
+  "Docker seccomp must retain the default deny profile and allow only the traced bubblewrap namespace syscalls"
+);
+expect(
+  supervisor.includes("contract.capabilities.workspaceBash.executable"),
+  "Docker supervisor must require the workspace Bash isolation executable"
 );
 expect(
   supervisor.includes("contract.paths.napcatConfig")
@@ -153,6 +210,21 @@ expect(
   nativeRuntime.includes("ensureNapcatCacheLink")
     && nativeNapcatStart.includes('readRelativePath("napcatQrCode")'),
   "Native runtime must link the NapCat component cache to paths.napcatQrCode"
+);
+expect(
+  nativeRuntime.includes("contract.capabilities.workspaceBash")
+    && nativeSunabotStart.includes("capabilities.workspaceBash.executable"),
+  "Native install and startup must require the workspace Bash sandbox"
+);
+expect(
+  [
+    '"--ro-bind", "/", "/"',
+    '"--dev", "/dev"',
+    '"--bind", workspaceRoot, workspaceRoot',
+    '"--cap-drop", "ALL"',
+    '"--unshare-pid"'
+  ].every((fragment) => bashSandbox.includes(fragment)),
+  "workspace Bash must enforce read-only host mounts, one writable workspace, and nested-process isolation"
 );
 expect(
   configureNapcat.includes("contract.paths.napcatConfig")

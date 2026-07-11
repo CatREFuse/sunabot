@@ -25,7 +25,7 @@ node tooling/runtime/native.mjs status
 node tooling/runtime/native.mjs doctor
 ```
 
-运行依赖为精确 Node 24.18.0、`xvfb-run`、FFmpeg、LibreOffice、systemd 和 tar。release manifest 会记录 Node 版本；构建、安装、回滚和服务启动都会拒绝与 runtime contract 不一致的版本。release 安装到 `/opt/sunabot/releases/<version>`，NapCat 组件安装到 `/opt/sunabot/components/napcat/<version>`；`current` 链接原子切换。
+运行依赖为精确 Node 24.18.0、component lock 固定的 bubblewrap、`xvfb-run`、FFmpeg、LibreOffice、systemd 和 tar。`/usr/bin/bwrap` 是必需 capability：管理员 Bash 在只读宿主根和唯一可写 Agent workspace 中运行，全部子进程继承同一隔离；二进制缺失或 namespace probe 失败时命令会安全拒绝，不会回退到普通 Bash。release manifest 会记录 Node 版本；构建、安装、回滚和服务启动都会拒绝与 runtime contract 不一致的版本。release 安装到 `/opt/sunabot/releases/<version>`，NapCat 组件安装到 `/opt/sunabot/components/napcat/<version>`；`current` 链接原子切换。
 
 回滚与卸载：
 

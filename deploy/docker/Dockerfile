@@ -46,6 +46,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 RUN apt-get update \
     && apt-get install -y --no-install-recommends --fix-broken \
     && apt-get install -y --no-install-recommends \
+        bubblewrap=0.6.1-1ubuntu0.1 \
         fonts-noto-cjk=1:20220127+repack1-1 \
         libreoffice=1:7.3.7-0ubuntu0.22.04.11 \
         tini=0.19.0-1 \

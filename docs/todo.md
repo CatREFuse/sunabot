@@ -47,9 +47,10 @@
   - 覆盖 kill -9、磁盘满、SQLITE_BUSY、WAL 未 checkpoint、外发成功但主库写失败。
   - 完成：RPO `≤24h`，RTO 有记录；恢复后 `integrity_check`、记录数和队列不变量通过。
 
-- [ ] **GATE-006｜P1｜Native Bash 强隔离**（AUD-003）
+- [x] **GATE-006｜P1｜Native Bash 强隔离**（AUD-003）
   - Linux/WSL 下使用独立用户、systemd 文件限制和经过验证的 bubblewrap/容器沙箱，不能只依赖字符串规则。
   - 完成：管理员 Bash 无法写出 Agent workspace，路径、符号链接、挂载和子进程绕过测试通过；Docker/Native 权限语义一致。
+  - 证据：`services/tools/bashSandbox.ts` 固定只读宿主根与唯一可写 workspace，子进程继承 mount/PID 隔离并丢弃 capability；`tests/unit/bash-sandbox.test.ts` 覆盖路径、符号链接、挂载、子进程和缺失能力 fail-closed；runtime contract、Docker、Native systemd 与组件锁统一要求 bubblewrap。
 
 - [ ] **GATE-007｜P1｜统一错误与观测协议**（AUD-014）
   - 关键降级、丢日志、队列积压、缓存淘汰、Provider/OneBot 断线和持久化失败都有稳定错误码、结构日志、计数和延迟指标。

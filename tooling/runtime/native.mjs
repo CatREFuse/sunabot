@@ -226,6 +226,14 @@ async function ensureNativeDependencies() {
   if (process.versions.node !== contract.nodeVersion) {
     throw new Error(`需要 Node ${contract.nodeVersion}，当前为 ${process.versions.node}。`);
   }
+  const bashSandbox = contract.capabilities.workspaceBash;
+  if (
+    bashSandbox.isolation !== "bubblewrap" ||
+    !path.isAbsolute(bashSandbox.executable) ||
+    !(await succeeds("test", ["-x", bashSandbox.executable]))
+  ) {
+    throw new Error(`Native Bash 隔离依赖缺失：${bashSandbox.executable}`);
+  }
   for (const executable of ["xvfb-run", "ffmpeg", "libreoffice", "systemctl", "tar"]) {
     if (!(await succeeds("sh", ["-c", `command -v ${executable} >/dev/null 2>&1`]))) {
       throw new Error(`Native 依赖缺失：${executable}`);

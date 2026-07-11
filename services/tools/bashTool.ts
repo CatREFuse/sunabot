@@ -3,6 +3,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { TOOL_CALL_TIMEOUT_MS } from "./toolConstants.js";
+import {
+  WORKSPACE_BASH_ISOLATION_ERROR,
+  buildBubblewrapInvocation,
+  ensureWorkspaceBashIsolation,
+  type WorkspaceBashSandboxOptions
+} from "./bashSandbox.js";
 
 export const WORKSPACE_BASH_TOOL_NAME = "workspace_bash";
 
@@ -28,12 +34,13 @@ export interface WorkspaceBashResult {
 export interface WorkspaceBashOptions {
   workspaceOnly?: boolean;
   blockedKeywords?: string[];
+  sandbox?: WorkspaceBashSandboxOptions;
 }
 
 export const workspaceBashTool = {
   type: "function",
   name: WORKSPACE_BASH_TOOL_NAME,
-  description: "Run a bash command in the agent workspace. The command is rejected if it tries to leave the workspace.",
+  description: "Run a bash command in a filesystem sandbox where the host filesystem is read-only outside the agent workspace.",
   parameters: {
     type: "object",
     additionalProperties: false,
@@ -54,11 +61,8 @@ export const workspaceBashTool = {
 };
 
 export function createWorkspaceBashTool(options: WorkspaceBashOptions = {}) {
-  const workspaceOnly = options.workspaceOnly !== false;
   const blockedKeywords = uniqueBlockedKeywords(options.blockedKeywords ?? []);
-  const description = workspaceOnly
-    ? "Run a bash command in the agent workspace. The command is rejected if it tries to leave the workspace."
-    : "Run a bash command from the agent workspace.";
+  const description = "Run a bash command in a filesystem sandbox where the host filesystem is read-only outside the agent workspace.";
   return {
     ...workspaceBashTool,
     description: blockedKeywords.length
@@ -86,12 +90,23 @@ export async function runWorkspaceBash(
   }
 
   await fs.mkdir(path.join(workspaceRoot, ".tmp"), { recursive: true });
-  const { file, args } = await buildBashInvocation(command, workspaceRoot, workspaceOnly);
+  const environment = buildWorkspaceEnv(workspaceRoot);
+  let sandboxExecutable: string;
+  try {
+    sandboxExecutable = await ensureWorkspaceBashIsolation(workspaceRoot, environment, options.sandbox);
+  } catch (error) {
+    return blockedResult(
+      command,
+      workspaceRoot,
+      `${WORKSPACE_BASH_ISOLATION_ERROR}: ${errorMessage(error)}`
+    );
+  }
+  const { file, args } = buildBubblewrapInvocation(command, workspaceRoot, environment, sandboxExecutable);
 
   return new Promise((resolve) => {
     execFile(file, args, {
       cwd: workspaceRoot,
-      env: buildWorkspaceEnv(workspaceRoot),
+      env: environment,
       timeout: timeoutMs,
       maxBuffer: 256 * 1024,
       killSignal: "SIGTERM"
@@ -178,35 +193,6 @@ function isWithinPath(rootPath: string, candidatePath: string) {
   return relativePath === "" || (relativePath !== ".." && !relativePath.startsWith(`..${path.sep}`) && !path.isAbsolute(relativePath));
 }
 
-async function buildBashInvocation(command: string, workspaceRoot: string, workspaceOnly: boolean) {
-  const bashArgs = ["--noprofile", "--norc", "-lc", command];
-  if (!workspaceOnly || process.platform !== "darwin") {
-    return { file: "/bin/bash", args: bashArgs };
-  }
-
-  try {
-    await fs.access("/usr/bin/sandbox-exec");
-  } catch {
-    return { file: "/bin/bash", args: bashArgs };
-  }
-
-  return {
-    file: "/usr/bin/sandbox-exec",
-    args: ["-p", sandboxProfile(workspaceRoot), "/bin/bash", ...bashArgs]
-  };
-}
-
-function sandboxProfile(workspaceRoot: string) {
-  const escapedRoot = workspaceRoot.replace(/\\/g, "\\\\").replace(/"/g, "\\\"");
-  return [
-    "(version 1)",
-    "(deny default)",
-    "(allow process*)",
-    "(allow file-read*)",
-    `(allow file-write* (subpath "${escapedRoot}") (literal "/dev/null"))`
-  ].join(" ");
-}
-
 function buildWorkspaceEnv(workspaceRoot: string) {
   const tmpDir = path.join(workspaceRoot, ".tmp");
   return {
@@ -239,4 +225,8 @@ function blockedResult(command: string, workspaceRoot: string, reason: string): 
 function truncateOutput(value: string) {
   if (value.length <= MAX_OUTPUT_CHARS) return value;
   return `${value.slice(0, MAX_OUTPUT_CHARS)}\n[truncated]`;
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error || "unknown error");
 }

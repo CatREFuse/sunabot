@@ -27,7 +27,7 @@ Docker Desktop 官方明确不支持 Windows Server 2019/2022 等 Server 版本�
 | Vite/esbuild/Rollup | 可迁移 | 锁文件包含 Linux x64、arm64 可选包；必须在 WSL 内重新 `npm ci` |
 | LibreOffice | 可迁移 | 安装 Ubuntu 的 `libreoffice`，代码已包含 `/usr/bin/soffice` 和 `/usr/bin/libreoffice` |
 | Codex CLI | 条件可用 | 在 WSL 内安装 Codex CLI，或设置 `SUNABOT_CODEX_BIN`；macOS App 内置路径不会在 Linux 分支使用 |
-| Bash 工具 | 可用但隔离较弱 | Linux 没有 macOS `sandbox-exec`；迁移初期保持管理员专用，并使用 systemd 文件系统限制 |
+| Bash 工具 | 可迁移且强隔离 | 安装 component lock 固定的 bubblewrap；Native 与 Docker 都以只读宿主根和唯一可写 Agent workspace 执行，namespace 能力不可用时拒绝命令 |
 | QQ Runtime | 可迁移 | Sunabot 与 NapCat 作为同一 Compose 项目运行，共享网络命名空间和 workspace；首次启动后可能需要重新扫码登录 |
 | Bark | 可迁移 | HTTPS 通知脚本不依赖 macOS |
 

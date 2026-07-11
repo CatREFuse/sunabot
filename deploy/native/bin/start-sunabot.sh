@@ -13,4 +13,10 @@ if [[ "$actual_node" != "$expected_node" ]]; then
   exit 1
 fi
 
+bwrap_bin="$($node_bin -e 'const c=require(process.argv[1]); process.stdout.write(c.capabilities.workspaceBash.executable)' "$root/deploy/runtime-contract.json")"
+if [[ "$bwrap_bin" != /* || ! -x "$bwrap_bin" ]]; then
+  printf 'Sunabot workspace Bash isolation is unavailable: %s\n' "$bwrap_bin" >&2
+  exit 1
+fi
+
 exec "$node_bin" "$root/dist/apps/api/main.js"

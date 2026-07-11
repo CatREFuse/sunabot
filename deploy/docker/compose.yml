@@ -40,6 +40,7 @@ services:
       - /tmp:rw,nosuid,nodev,size=512m,mode=1777
     security_opt:
       - no-new-privileges:true
+      - seccomp=deploy/docker/seccomp-bwrap.json
     cap_drop:
       - ALL
     logging:

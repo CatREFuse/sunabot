@@ -2,7 +2,7 @@
 
 Docker 交付固定为一个 `sunabot-qq-runtime` 镜像、一个 `qq-runtime` Compose service 和一个 `/srv/sunabot/workspace` 挂载。容器内的非 root 监督器先启动 Sunabot，再启动 NapCat/QQ；两个进程只通过 `127.0.0.1` 和共享 workspace 协作。
 
-Node 基础镜像按 `components/component.lock.json` 固定为 24.18.0 和对应 digest。Docker 构建阶段会读取实际 Node 二进制版本并与 `NODE_VERSION` 比较，运行时监督器再次与 runtime contract 核对。
+Node 基础镜像按 `components/component.lock.json` 固定为 24.18.0 和对应 digest。Docker 构建阶段会读取实际 Node 二进制版本并与 `NODE_VERSION` 比较，运行时监督器再次与 runtime contract 核对。镜像同时按组件锁安装 bubblewrap。`seccomp-bwrap.json` 固定自 Moby 默认 profile 的 `f9bc03ec19b2dc4c091449b08e88f85c0caa9f0b` 快照，只额外允许 bubblewrap 0.6.1 实测所需的 namespace `clone` flags、`mount`、`pivot_root` 和 `umount2`；不会关闭整个容器的 seccomp。Compose 继续保留 `cap_drop: ALL` 与 `no-new-privileges`。`workspace_bash` 与 Native 使用同一只读宿主文件系统、唯一可写 Agent workspace、子进程继承隔离的命令构造，probe 失败时拒绝执行。
 
 NapCat shell 的 `/app/napcat/config` 只链接到 runtime contract 的 `workspace/runtime/napcat/config-full`；监督器、配置工具和 Native 运行时使用同一个 `paths.napcatConfig`，不会创建并行配置目录。`/app/napcat/cache` 链接到 `workspace/runtime/napcat`，因此二维码始终落在 `paths.napcatQrCode` 指定的 `runtime/napcat/qrcode.png`。镜像还为 UID/GID 1000 创建并授权 `/app/.cache/fontconfig` 与 Mesa shader cache，避免非 root NapCat 反复产生缓存权限错误。
 

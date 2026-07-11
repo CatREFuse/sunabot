@@ -58,6 +58,15 @@
       "architectures": ["linux/amd64"],
       "smoke": ["tini", "--version"]
     },
+    "bubblewrap": {
+      "version": "0.6.1-1ubuntu0.1",
+      "source": "https://github.com/containers/bubblewrap",
+      "package": "bubblewrap",
+      "distribution": "ubuntu-jammy",
+      "license": "LGPL-2.0-or-later",
+      "architectures": ["linux/amd64"],
+      "smoke": ["bwrap", "--version"]
+    },
     "codex-cli": {
       "optional": true,
       "source": "https://developers.openai.com/codex/cli",
