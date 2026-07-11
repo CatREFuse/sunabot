@@ -144,6 +144,18 @@ describe("NapCat runtime layout", () => {
       "ONEBOT_ACCESS_TOKEN=unit-onebot-token",
       "NAPCAT_ACCOUNT=123456789"
     ].join("\n"));
+    await write(path.join(
+      workspace,
+      WORKSPACE_LAYOUT.napcatConfig,
+      "onebot11_123456789.json"
+    ), JSON.stringify({
+      network: {
+        websocketClients: [
+          { name: "sunabot-rws", enable: true, url: "ws://host.docker.internal:8787/onebot/v11/ws" },
+          { name: "remote", enable: true, url: "wss://example.invalid/onebot" }
+        ]
+      }
+    }));
 
     await execFileAsync(process.execPath, [
       path.join(root, "tooling/runtime/configure-napcat-client.mjs")

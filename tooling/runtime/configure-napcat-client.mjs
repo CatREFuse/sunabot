@@ -52,10 +52,7 @@ for (const name of names) {
     heartInterval: 30000
   };
   config.network ??= {};
-  config.network.websocketClients = [
-    ...clients.filter((item) => item?.name !== "sunabot" && !isLegacyAstrBotClient(item)),
-    client
-  ];
+  config.network.websocketClients = [client];
   const temporary = `${filePath}.${process.pid}.tmp`;
   await fs.writeFile(temporary, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
   await fs.rename(temporary, filePath);
@@ -69,10 +66,4 @@ async function readJsonOrDefault(filePath, fallback) {
     if (error.code !== "ENOENT") throw error;
     return structuredClone(fallback);
   }
-}
-
-function isLegacyAstrBotClient(item) {
-  const name = String(item?.name ?? "").toLowerCase();
-  const url = String(item?.url ?? "").toLowerCase();
-  return name.includes("astrbot") || /^wss?:\/\/(?:127\.0\.0\.1|localhost|\[::1\]):6199(?:\/|$)/.test(url);
 }
