@@ -18,7 +18,7 @@ import type {
   ParsedAttachment
 } from "../services/media/attachments/types.js";
 import { CommandRouter, type CommandMatch } from "../services/messaging/commandRouter.js";
-import { isPrivateReplyAllowed } from "../services/messaging/privateReplyPolicy.js";
+import { isReplySenderAllowed } from "../services/messaging/replySenderPolicy.js";
 import { getDefaultProvider, getRootDir, getWorkspacePath, resolveProjectPath } from "./config.js";
 import {
   assistantReplyEnvelope,
@@ -383,6 +383,11 @@ export class SunaRuntime {
     this.config = snapshot.config;
     this.memoryScheduler.setConfig(snapshot.config);
     this.persona = snapshot.persona;
+    if (previous.bot.adminQq.trim() !== this.config.bot.adminQq.trim()) {
+      this.cancelScopeReplies("private");
+      this.cancelScopeReplies("user_group");
+      this.cancelScopeReplies("bot_group");
+    }
     if (previous.onebot.autoReplyPrivate && !this.config.onebot.autoReplyPrivate) {
       this.cancelScopeReplies("private");
     }
@@ -865,6 +870,10 @@ export class SunaRuntime {
   async handleInboundMessage(incoming: ParsedIncomingMessage, gateway: MessagingPort) {
     this.activeGateway = gateway;
     if (this.isDuplicateIncoming(incoming)) return;
+    if (!this.isReplySenderAllowed(incoming.userId)) {
+      this.markIncomingSeen(incoming);
+      return;
+    }
 
     const channelKey = conversationRecordId(incoming);
     const gate = this.replyGates.capture(incoming.scope, channelKey);
@@ -1012,6 +1021,7 @@ export class SunaRuntime {
       }, coordinatorSignal);
     } catch (error) {
       if (!isAbortError(error) || !timeoutIncoming) throw error;
+      if (!this.isReplySenderAllowed(timeoutIncoming.userId)) return { status: "no_reply" };
       const message = /timed out|timeout/i.test(errorMessage(error))
         ? "请求处理超时了，请稍后再试。"
         : "请求处理已取消。";
@@ -1042,6 +1052,10 @@ export class SunaRuntime {
       ? this.incomingPreparations.get(payload.preparationKey)
       : undefined;
     const incoming = prepared?.incoming ?? payload.incoming;
+    if (!this.isReplySenderAllowed(incoming.userId)) {
+      if (payload.preparationKey) this.incomingPreparations.delete(payload.preparationKey);
+      return { status: "no_reply" };
+    }
     // A crash can happen after the Session event commit and before the JSON
     // conversation snapshot. Rebuild that user message before creating context.
     const recoveredRecord = this.recordIncomingMessage(incoming, {
@@ -1126,13 +1140,16 @@ export class SunaRuntime {
 
   private async deliverSessionOutbox(outbox: OutboxRecord, signal: AbortSignal) {
     if (signal.aborted) throw signal.reason ?? new Error("Outbox delivery aborted.");
-    const gateway = this.activeGateway;
-    if (!gateway?.getStatus().connected) throw new OutboxDisconnectedError("OneBot is not connected.");
     if (outbox.kind !== "onebot.reply") throw new Error(`不支持的 outbox 类型：${outbox.kind}`);
     const payload = decodeAssistantReply(outbox.payload);
     if (!isRuntimeIncomingMessage(payload.incoming)) {
       throw new Error(`Outbox 消息格式无效：${outbox.id}`);
     }
+    if (!this.isReplySenderAllowed(payload.incoming.userId)) {
+      return { delivered: false, skipped: "sender_not_allowed" };
+    }
+    const gateway = this.activeGateway;
+    if (!gateway?.getStatus().connected) throw new OutboxDisconnectedError("OneBot is not connected.");
     await this.deliverReplyOutbox(payload, gateway);
     return { delivered: true };
   }
@@ -1698,11 +1715,15 @@ export class SunaRuntime {
   }
 
   private isAdminUser(userId: number) {
-    return isAdminUserId(userId, this.adminIdentity());
+    return this.isReplySenderAllowed(userId);
   }
 
   private adminIdentity(): AdminIdentity {
     return adminIdentityFromBot(this.config.bot);
+  }
+
+  private isReplySenderAllowed(userId: number | string) {
+    return isReplySenderAllowed(userId, this.config.bot.adminQq);
   }
 
   private isDuplicateIncoming(incoming: ParsedIncomingMessage) {
@@ -1724,9 +1745,9 @@ export class SunaRuntime {
   }
 
   private resolveIncomingReplyRoute(incoming: ParsedIncomingMessage, command: boolean) {
-    if (!hasIncomingReplyContent(incoming)) return "none" as const;
+    if (!this.isReplySenderAllowed(incoming.userId) || !hasIncomingReplyContent(incoming)) return "none" as const;
     if (incoming.scope === "private") {
-      if (!this.config.onebot.autoReplyPrivate || !isPrivateReplyAllowed(incoming.userId)) return "none" as const;
+      if (!this.config.onebot.autoReplyPrivate) return "none" as const;
       return command ? "command" as const : "direct" as const;
     }
     if (incoming.scope === "bot_group") {
@@ -1752,12 +1773,14 @@ export class SunaRuntime {
     gate: ReplyGateSnapshot,
     signal?: AbortSignal
   ) {
-    if (signal?.aborted || !this.replyGates.isCurrent(gate)) return false;
+    if (
+      signal?.aborted ||
+      !this.isReplySenderAllowed(incoming.userId) ||
+      !this.replyGates.isCurrent(gate)
+    ) return false;
     const record = this.conversationRecords.get(gate.conversationId);
     if (!record || !conversationReplyEnabled(record)) return false;
-    if (incoming.scope === "private") {
-      return this.config.onebot.autoReplyPrivate && isPrivateReplyAllowed(incoming.userId);
-    }
+    if (incoming.scope === "private") return this.config.onebot.autoReplyPrivate;
     if (incoming.scope === "bot_group") return this.config.onebot.autoReplyBotGroup;
     return this.config.onebot.autoReplyUserGroup;
   }
@@ -1806,7 +1829,7 @@ export class SunaRuntime {
       const latest = pending.at(-1);
       if (!latest) continue;
       const incoming = restoredGroupIncoming(record, latest.message);
-      if (!incoming) continue;
+      if (!incoming || !this.isReplySenderAllowed(incoming.userId)) continue;
       const job: AmbientReplyJob = {
         channelKey: record.id,
         incoming,
@@ -1901,6 +1924,7 @@ export class SunaRuntime {
   }
 
   private queueAmbientReply(job: AmbientReplyJob) {
+    if (!this.isReplySenderAllowed(job.incoming.userId)) return;
     this.cancelAmbientIdleTimer(job.channelKey);
     const state = this.ambientReplies.get(job.channelKey) ?? { epoch: 0, running: false };
     state.next = job;
@@ -1917,7 +1941,11 @@ export class SunaRuntime {
     const record = this.conversationRecords.get(channelKey);
 
     try {
-      if (!record || isOrchestratorReplyRateLimited(record.orchestratorLastReplyAt)) return;
+      if (
+        !record ||
+        !this.isReplyTaskCurrent(job.incoming, job.gate) ||
+        isOrchestratorReplyRateLimited(record.orchestratorLastReplyAt)
+      ) return;
       state.deciding = true;
       const controller = new AbortController();
       state.controller = controller;
@@ -2317,7 +2345,7 @@ export class SunaRuntime {
     isCurrent: () => boolean = () => true,
     delivery?: ReplyDelivery
   ) {
-    if (!isCurrent()) return undefined;
+    if (!this.isReplySenderAllowed(incoming.userId) || !isCurrent()) return undefined;
     const beforeReply = await this.hooks.run("before_reply", {
       channel: channelKey,
       text,
@@ -2466,7 +2494,7 @@ export class SunaRuntime {
     logRunId?: string,
     delivery?: ReplyDelivery
   ) {
-    if (!isCurrent()) return;
+    if (!this.isReplySenderAllowed(incoming.userId) || !isCurrent()) return;
     const message = formatErrorReply(error);
     try {
       if (!isCurrent()) return;
@@ -3630,13 +3658,13 @@ function normalizeStringIds(value: unknown) {
 
 function adminIdentityFromBot(bot: AppConfig["bot"]): AdminIdentity {
   return {
-    userId: normalizeQqId(bot.adminQq),
+    userId: stringValue(bot.adminQq),
     name: stringValue(bot.adminName) || DEFAULT_ADMIN_NAME
   };
 }
 
 function isAdminUserId(value: unknown, admin: AdminIdentity) {
-  return Boolean(admin.userId && String(value ?? "").trim() === admin.userId);
+  return isReplySenderAllowed(String(value ?? "").trim(), admin.userId);
 }
 
 function uniqueMemoryEntries(entries: MemoryEntry[]) {

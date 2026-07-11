@@ -30,11 +30,7 @@ NAPCAT_ACCOUNT=你的QQ号
 ONEBOT_ACCESS_TOKEN=随机长令牌
 ```
 
-若该 QQ 只允许回复管理员，设置逗号分隔的私聊白名单；配置存在非法 QQ 时会安全地拒绝全部私聊回复：
-
-```text
-SUNABOT_PRIVATE_REPLY_ALLOWLIST=171419991
-```
+QQ 回复权限统一使用 `workspace/business/config/sunabot.json` 中的 `bot.adminQq`。私聊、用户群、bot 群、命令和异步任务都只响应这个 QQ；管理员 QQ 缺失或格式非法时会安全地拒绝全部回复。默认管理员为 `171419991`。
 
 模型出口需要使用 Windows 上的 Clash 等代理时，Native 和 Docker 使用同一组环境变量：
 
@@ -74,7 +70,7 @@ Sunabot 与 NapCat 必须运行在同一 Linux/WSL 环境，并看到同一个 `
 npm run qq:configure
 ```
 
-配置固定写入 runtime contract 的 `runtime/napcat/config-full`，不接受另一套目录。由同一 systemd 用户会话管理两个进程。Sunabot 必须先监听 8787；NapCat 可持续重连，不需要其他网络地址。
+配置固定写入 runtime contract 的 `runtime/napcat/config-full`，不接受另一套目录。登录二维码固定写入 `runtime/napcat/qrcode.png`；Docker 与 Native 安装都会把 NapCat 组件的 `cache` 链接到该 workspace 状态目录，旧 `cache/qrcode.png` 会在启动或迁移时保留到新路径。由同一 systemd 用户会话管理两个进程。Sunabot 必须先监听 8787；NapCat 可持续重连，不需要其他网络地址。
 
 ## 验收
 

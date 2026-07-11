@@ -153,7 +153,7 @@ describe("SunaRuntime Session queue bridge", () => {
   });
 
   it.each([
-    { scope: "private", event: privateEvent(21_001, "retry-private"), sessionId: "private:2002" },
+    { scope: "private", event: privateEvent(21_001, "retry-private"), sessionId: "private:171419991" },
     { scope: "bot_group", event: botGroupEvent(21_002, 602, "retry-bot-group"), sessionId: "group:602" },
     { scope: "user_group", event: groupEvent(21_003, 603, "retry-user-group"), sessionId: "group:603" }
   ])("retries the same $scope event after a pre-commit enqueue failure", async ({ event, sessionId }) => {
@@ -194,9 +194,9 @@ describe("SunaRuntime Session queue bridge", () => {
     }));
     const harness = createRuntimeHarness(completeRequestTurn);
     harness.store.enqueueEvent({
-      sessionId: "private:2002",
+      sessionId: "private:171419991",
       kind: "incoming_reply",
-      dedupeKey: "reply:4004:private:2002:22001",
+      dedupeKey: "reply:4004:private:171419991:22001",
       payload: {
         type: "incoming_reply",
         route: "direct",
@@ -208,7 +208,7 @@ describe("SunaRuntime Session queue bridge", () => {
     harness.runtime.resumeUserGroupOrchestrators(harness.gateway);
     await harness.coordinator.waitForIdle({ timeoutMs: 3_000 });
 
-    const record = runtimeConversation(harness.runtime, "private:2002");
+    const record = runtimeConversation(harness.runtime, "private:171419991");
     expect(record?.messages.filter((message) => message.role === "user" && message.id === "22001"))
       .toHaveLength(1);
     expect(record?.orchestratorCheckedMessageCount).toBe(1);
@@ -455,7 +455,7 @@ function groupEvent(messageId: number, groupId: number, marker: string): OneBotE
     post_type: "message",
     message_type: "group",
     message_id: messageId,
-    user_id: 2002,
+    user_id: 171419991,
     group_id: groupId,
     self_id: 4004,
     time: 1_788_000_000 + messageId,
@@ -477,7 +477,7 @@ function privateEvent(messageId: number, marker: string): OneBotEvent {
     post_type: "message",
     message_type: "private",
     message_id: messageId,
-    user_id: 2002,
+    user_id: 171419991,
     self_id: 4004,
     time: 1_788_000_000 + messageId,
     sender: { nickname: "private-user" },

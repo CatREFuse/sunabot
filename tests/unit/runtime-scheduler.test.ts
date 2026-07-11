@@ -13,12 +13,8 @@ vi.mock("../../src/requestLog.js", () => ({
   appendRequestLog: vi.fn(async () => undefined)
 }));
 
-const originalPrivateReplyAllowlist = process.env.SUNABOT_PRIVATE_REPLY_ALLOWLIST;
-
 afterEach(() => {
   vi.useRealTimers();
-  if (originalPrivateReplyAllowlist == null) delete process.env.SUNABOT_PRIVATE_REPLY_ALLOWLIST;
-  else process.env.SUNABOT_PRIVATE_REPLY_ALLOWLIST = originalPrivateReplyAllowlist;
 });
 
 describe("runtime reply scheduling helpers", () => {
@@ -119,7 +115,7 @@ describe("runtime reply scheduling helpers", () => {
     internals.persistConversationRecords = vi.fn();
     internals.sessionCoordinator.enqueueEvent = enqueueEvent;
 
-    await runtime.handleInboundMessage(groupIncoming("/总结群聊"), {} as never);
+    await runtime.handleInboundMessage(groupIncoming("/总结群聊", 171419991), {} as never);
 
     expect(enqueueEvent).not.toHaveBeenCalled();
   });
@@ -134,27 +130,105 @@ describe("runtime reply scheduling helpers", () => {
     };
     internals.conversationRecords.set("group:3003", { orchestratorEnabled: false });
 
-    expect(internals.resolveIncomingReplyRoute(groupIncoming("普通群消息"), false)).toBe("none");
+    expect(internals.resolveIncomingReplyRoute(groupIncoming("普通群消息", 171419991), false)).toBe("none");
     internals.conversationRecords.set("group:3003", { orchestratorEnabled: true });
-    expect(internals.resolveIncomingReplyRoute(groupIncoming("普通群消息"), false)).toBe("ambient");
+    expect(internals.resolveIncomingReplyRoute(groupIncoming("普通群消息", 171419991), false)).toBe("ambient");
   });
 
-  it("routes private replies only for the configured QQ allowlist", () => {
-    process.env.SUNABOT_PRIVATE_REPLY_ALLOWLIST = "171419991";
-    const runtime = new SunaRuntime(createAdminTestConfig("/tmp/sunabot-runtime-router-test"), {
+  it.each(["private", "user_group", "bot_group"] as const)(
+    "only routes %s replies and commands for bot.adminQq",
+    (scope) => {
+      const config = createAdminTestConfig("/tmp/sunabot-runtime-router-test");
+      config.onebot.autoReplyPrivate = true;
+      config.onebot.autoReplyUserGroup = true;
+      config.onebot.autoReplyBotGroup = true;
+      const runtime = new SunaRuntime(config, {
+        attachmentService: {} as never
+      });
+      const internals = runtime as unknown as {
+        resolveIncomingReplyRoute(incoming: ParsedIncomingMessage, command: boolean): string;
+      };
+      const incoming = groupIncoming("/总结群聊", 998877665);
+      incoming.scope = scope;
+      incoming.groupId = scope === "private" ? undefined : 3003;
+
+      expect(internals.resolveIncomingReplyRoute(incoming, true)).toBe("none");
+      incoming.userId = 171419991;
+      incoming.sender = { id: "171419991", displayName: "管理员" };
+      expect(internals.resolveIncomingReplyRoute(incoming, true)).toBe("command");
+    }
+  );
+
+  it.each(["private", "user_group", "bot_group"] as const)(
+    "silently ignores a non-admin %s command at ingress",
+    async (scope) => {
+      const config = createAdminTestConfig("/tmp/sunabot-runtime-router-test");
+      config.onebot.autoReplyPrivate = true;
+      config.onebot.autoReplyUserGroup = true;
+      config.onebot.autoReplyBotGroup = true;
+      const runtime = new SunaRuntime(config, {
+        attachmentService: {} as never
+      });
+      const enqueueEvent = vi.fn();
+      const recordIncomingMessage = vi.fn();
+      const internals = runtime as unknown as {
+        sessionCoordinator: { enqueueEvent: typeof enqueueEvent };
+        recordIncomingMessage: typeof recordIncomingMessage;
+      };
+      internals.sessionCoordinator.enqueueEvent = enqueueEvent;
+      internals.recordIncomingMessage = recordIncomingMessage;
+      const incoming = groupIncoming("/总结群聊", 998877665);
+      incoming.scope = scope;
+      incoming.groupId = scope === "private" ? undefined : 3003;
+
+      await runtime.handleInboundMessage(incoming, {} as never);
+
+      expect(enqueueEvent).not.toHaveBeenCalled();
+      expect(recordIncomingMessage).not.toHaveBeenCalled();
+    }
+  );
+
+  it("invalidates an in-flight reply when bot.adminQq changes", () => {
+    const config = createAdminTestConfig("/tmp/sunabot-runtime-router-test");
+    const runtime = new SunaRuntime(config, {
       attachmentService: {} as never
     });
     const internals = runtime as unknown as {
-      resolveIncomingReplyRoute(incoming: ParsedIncomingMessage, command: boolean): string;
+      conversationRecords: Map<string, Record<string, unknown>>;
+      replyGates: { capture(scope: "user_group", conversationId: string): unknown };
+      isReplyTaskCurrent(incoming: ParsedIncomingMessage, gate: unknown): boolean;
     };
-    const incoming = groupIncoming("私聊消息");
-    incoming.scope = "private";
-    incoming.groupId = undefined;
+    internals.conversationRecords.set("group:3003", {
+      id: "group:3003",
+      scope: "user_group",
+      replyEnabled: true,
+      messages: []
+    });
+    const incoming = groupIncoming("普通群消息", 171419991);
+    const gate = internals.replyGates.capture("user_group", "group:3003");
 
-    incoming.userId = 998877665;
-    expect(internals.resolveIncomingReplyRoute(incoming, false)).toBe("none");
-    incoming.userId = 171419991;
-    expect(internals.resolveIncomingReplyRoute(incoming, false)).toBe("direct");
+    expect(internals.isReplyTaskCurrent(incoming, gate)).toBe(true);
+    config.bot.adminQq = "223344556";
+    expect(internals.isReplyTaskCurrent(incoming, gate)).toBe(false);
+  });
+
+  it("skips a persisted outbox reply when the administrator changed before delivery", async () => {
+    const config = createAdminTestConfig("/tmp/sunabot-runtime-router-test");
+    const runtime = new SunaRuntime(config, { attachmentService: {} as never });
+    const incoming = groupIncoming("普通群消息", 171419991);
+    const internals = runtime as unknown as {
+      replyDeliveryDraft(incoming: ParsedIncomingMessage, text: string, isAdmin: boolean): unknown;
+      deliverSessionOutbox(outbox: unknown, signal: AbortSignal): Promise<unknown>;
+    };
+    const draft = internals.replyDeliveryDraft(incoming, "不会发送", true) as Record<string, unknown>;
+    config.bot.adminQq = "223344556";
+
+    const result = await internals.deliverSessionOutbox({
+      id: "outbox-stale-admin",
+      ...draft
+    }, new AbortController().signal);
+
+    expect(result).toEqual({ delivered: false, skipped: "sender_not_allowed" });
   });
 
   it("preserves the default reply gate when only the group orchestrator setting changes", () => {
@@ -484,19 +558,19 @@ describe("runtime reply scheduling helpers", () => {
     config.bot.orchestrator.enabled = true;
     config.bot.orchestrator.messageThreshold = 0;
     const runtime = new SunaRuntime(config, { attachmentService: {} as never });
-    const incoming = groupIncoming("普通群消息");
+    const incoming = groupIncoming("普通群消息", 171419991);
     const record = {
       id: "group:3003",
       scope: "user_group" as const,
       title: "群聊",
-      userId: 2002,
+      userId: 171419991,
       groupId: 3003,
       selfId: 4004,
       messageCount: 1,
       lastAt: "2026-07-10T00:01:00.000Z",
       lastText: "普通群消息",
       messages: [
-        { id: "1001", role: "user" as const, text: "普通群消息", at: "2026-07-10T00:01:00.000Z", sequence: 1, userId: 2002, groupId: 3003 }
+        { id: "1001", role: "user" as const, text: "普通群消息", at: "2026-07-10T00:01:00.000Z", sequence: 1, userId: 171419991, groupId: 3003 }
       ],
       replyEnabled: true,
       orchestratorEnabled: true,
@@ -570,7 +644,7 @@ describe("runtime reply scheduling helpers", () => {
       id: "group:3003",
       scope: "user_group" as const,
       title: "群聊",
-      userId: 2002,
+      userId: 171419991,
       groupId: 3003,
       selfId: 4004,
       messageCount: 1,
@@ -656,7 +730,7 @@ describe("runtime reply scheduling helpers", () => {
     internals.persistConversationRecords = vi.fn();
     internals.queueAmbientReply = queueAmbientReply;
 
-    await runtime.handleInboundMessage(groupIncoming("普通群消息"), {} as never);
+    await runtime.handleInboundMessage(groupIncoming("普通群消息", 171419991), {} as never);
     await vi.advanceTimersByTimeAsync(59_999);
     expect(queueAmbientReply).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
@@ -682,7 +756,7 @@ describe("runtime reply scheduling helpers", () => {
       lastAt: "2026-07-10T00:00:00.000Z",
       lastText: "待处理消息",
       messages: [
-        { id: "stored-19", role: "user" as const, text: "待处理消息", at: "2026-07-10T00:00:00.000Z", sequence: 19, userId: 2002, groupId: 3003 }
+        { id: "stored-19", role: "user" as const, text: "待处理消息", at: "2026-07-10T00:00:00.000Z", sequence: 19, userId: 171419991, groupId: 3003 }
       ],
       replyEnabled: true,
       orchestratorEnabled: true,
@@ -832,16 +906,16 @@ describe("runtime reply scheduling helpers", () => {
   });
 });
 
-function groupIncoming(text: string): ParsedIncomingMessage {
+function groupIncoming(text: string, userId = 2002): ParsedIncomingMessage {
   return {
     schemaVersion: 1,
     scope: "user_group",
     messageId: 1001,
     time: "2026-07-11T12:00:00.000Z",
-    userId: 2002,
+    userId,
     groupId: 3003,
     selfId: 4004,
-    sender: { id: "2002", displayName: "2002" },
+    sender: { id: String(userId), displayName: String(userId) },
     text,
     media: [],
     attachments: [],
