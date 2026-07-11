@@ -198,6 +198,8 @@ Provider 请求使用应用启动时安装的统一出站 dispatcher。显式代
 | 服务启动入口 | `apps/api/main.ts` |
 | 出站代理解析与安装 | `packages/platform/proxy.mjs`, `deploy/runtime-contract.json` |
 | API 组合、静态站点、图片历史 | `apps/api/server.ts` |
+| 管理鉴权 API | `apps/api/plugins/authRoutes.ts` |
+| Provider、Codex 授权与配置 API | `apps/api/plugins/providerConfigRoutes.ts` |
 | OneBot 管理 API | `apps/api/plugins/onebotRoutes.ts` |
 | 配置加载、默认值、路径解析 | `src/config.ts`, `src/types.ts` |
 | SQLite 主库 | `adapters/sqlite/applicationDataStore.ts` |

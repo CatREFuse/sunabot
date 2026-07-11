@@ -7,12 +7,11 @@ import { pathToFileURL } from "node:url";
 import Fastify, { type FastifyInstance } from "fastify";
 import fastifyStatic from "@fastify/static";
 import { AgentFileRepository } from "../../src/admin/agentFiles.js";
-import { AdminAuthService, isAdminProtectedPath } from "../../src/admin/auth.js";
-import { ConfigService, validateProviderDraft } from "../../src/admin/configService.js";
+import { AdminAuthService } from "../../src/admin/auth.js";
+import { ConfigService } from "../../src/admin/configService.js";
 import { CodexAuthService } from "../../src/admin/codexAuth.js";
 import { MonitorSettingsStore } from "../../src/admin/monitorSettings.js";
 import { AdminApiError, badRequest, notFound } from "../../src/admin/errors.js";
-import { IMAGE_MODEL_CATALOG, MODEL_CATALOG, REASONING_EFFORTS } from "../../src/admin/models.js";
 import { defaultTools } from "../../services/tools/tools.js";
 import { getConfigPath, getRootDir, getWorkspacePath, loadConfig } from "../../src/config.js";
 import {
@@ -25,14 +24,15 @@ import { createMemoryEntry, deleteMemoryEntry, listMemoryEntries, recallMemory, 
 import { ServiceError } from "../../packages/contracts/errors/serviceError.js";
 import { ConversationDirectory } from "../../services/conversations/conversationDirectory.js";
 import { OneBotGateway } from "../../adapters/onebot/onebotGateway.js";
-import { OpenAIProvider } from "../../adapters/model/openaiProvider.js";
 import { OutboundMediaDelivery } from "../../services/delivery/outboundMedia.js";
 import { isTrustedQqFakeIp } from "../../adapters/onebot/qqMedia.js";
 import { readRequestLogs, requestLogPath } from "../../src/requestLog.js";
 import { SunaRuntime } from "../../src/runtime.js";
 import { ServiceMonitor } from "../../src/serviceMonitor.js";
 import { WORKSPACE_LAYOUT } from "../../packages/platform/workspaceLayout.js";
+import { registerAuthRoutes } from "./plugins/authRoutes.js";
 import { registerOneBotRoutes } from "./plugins/onebotRoutes.js";
+import { registerProviderConfigRoutes } from "./plugins/providerConfigRoutes.js";
 import {
   AppConfig,
   BotToolSettings,
@@ -120,9 +120,7 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
     }
   });
 
-  app.addHook("onRequest", async (request) => {
-    if (isAdminProtectedPath(request.raw.url ?? request.url)) await adminAuth.authorize(request);
-  });
+  registerAuthRoutes(app, adminAuth);
 
   app.addHook("onSend", async (request, reply, payload) => {
     reply.header("x-content-type-options", "nosniff");
@@ -138,28 +136,6 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
     }
     return payload;
   });
-
-  app.get("/api/auth/session", async (request) => adminAuth.getSessionStatus(request));
-
-  app.post("/api/auth/login", async (request, reply) => adminAuth.login(request, reply, request.body));
-
-  app.post("/api/auth/logout", async (request, reply) => {
-    adminAuth.logout(request, reply);
-    return reply.status(204).send();
-  });
-
-  app.get("/api/auth/security", async () => ({ fuse: adminAuth.getFuseStatus() }));
-
-  app.post("/api/auth/fuse", async () => {
-    await adminAuth.tripFuse("webui-emergency");
-    return { ok: true, fuse: adminAuth.getFuseStatus() };
-  });
-
-  app.get("/api/codex-auth/status", async () => codexAuth.status());
-
-  app.post("/api/codex-auth/login", async () => codexAuth.startLogin());
-
-  app.post("/api/codex-auth/logout", async () => codexAuth.logout());
 
   app.get("/api/monitoring/settings", async () => monitorSettings.publicSettings());
 
@@ -295,27 +271,7 @@ app.get("/api/media/qq-avatar", async (request, reply) => {
 });
 
 registerOneBotRoutes(app, onebotGateway);
-
-app.get("/api/config", async () => {
-  return configService.readEnvelope();
-});
-
-app.patch("/api/config/group-reply", async (request) => {
-  return configService.patchGroupReply(request.body);
-});
-
-app.patch("/api/config/:section", async (request) => {
-  const params = request.params as { section?: string };
-  return configService.patch(String(params.section ?? ""), request.body);
-});
-
-app.get("/api/models", async () => {
-  return {
-    models: MODEL_CATALOG,
-    reasoningEfforts: REASONING_EFFORTS,
-    imageModels: IMAGE_MODEL_CATALOG
-  };
-});
+registerProviderConfigRoutes(app, { codexAuth, configService, testProvider: options.testProvider });
 
 app.get("/api/agent-files", async () => {
   return agentFiles.list();
@@ -373,34 +329,6 @@ app.delete("/api/memory", async (request) => {
   const result = await deleteMemoryEntry(config, request.body as { source?: string; id?: string });
   await runtime.reload(config);
   return result;
-});
-
-app.post("/api/providers/test", async (request) => {
-  const body = request.body as { provider?: unknown } | undefined;
-  if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).some((key) => key !== "provider")) {
-    badRequest("PROVIDER_TEST_INVALID", "请求体必须只包含 provider。", "provider");
-  }
-  const provider = validateProviderDraft(body.provider);
-  const started = performance.now();
-  let result: Record<string, unknown>;
-  try {
-    result = options.testProvider
-      ? await options.testProvider(provider)
-      : await new OpenAIProvider(provider).test();
-  } catch (error) {
-    throw new AdminApiError(
-      422,
-      "PROVIDER_TEST_FAILED",
-      error instanceof Error ? error.message : String(error)
-    );
-  }
-  const elapsedMs = Math.max(0, Math.round(performance.now() - started));
-  return {
-    ...result,
-    ok: true,
-    model: provider.model,
-    elapsedMs
-  };
 });
 
 app.post("/api/playground/image", async (request, reply) => {
