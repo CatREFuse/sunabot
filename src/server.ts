@@ -557,7 +557,7 @@ export async function createApp(options: CreateAppOptions = {}) {
   return (await buildApp(options)).app;
 }
 
-async function startServer() {
+export async function startServer() {
   const built = await buildApp({ logger: true });
   const config = built.getConfig();
   await built.app.listen({ host: config.server.host, port: config.server.port });

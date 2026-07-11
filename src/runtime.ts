@@ -32,7 +32,7 @@ import {
   type AssistantReplyOutboxPayload,
   type AsyncToolCompletionPayload,
   type RuntimeIncomingReplyEventPayload
-} from "./contracts/runtimeMessages.js";
+} from "../packages/contracts/session/runtimeMessages.js";
 import { applicationDataStore } from "./dataStore.js";
 import {
   ReplyGateEpochs,

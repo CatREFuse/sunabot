@@ -31,4 +31,4 @@ if (( node_major < 24 )); then
   exit 1
 fi
 
-exec "$node_bin" --use-env-proxy "$root/dist/server.js"
+exec "$node_bin" --use-env-proxy "$root/dist/apps/api/main.js"

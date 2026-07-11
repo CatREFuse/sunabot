@@ -31,7 +31,7 @@ Browser ── Fastify Admin API ── Vue 管理台
 
 QQ Runtime 不支持远程 OneBot 或远程 NapCat。Docker 下 Sunabot 与 NapCat 使用独立容器进程，但共享 Sunabot 的网络命名空间与同一 workspace 挂载；非 Docker 下二者运行在同一 Linux/WSL 环境。两种方式固定使用 `127.0.0.1` 和 `/srv/sunabot/workspace`，不使用容器 DNS、宿主机网关或局域网地址。
 
-后端由 Node.js 24、TypeScript 和 Fastify 构建，管理台由 Vue 3、Vue Router 和 Vite 构建。生产服务由 `dist/server.js` 同时提供 API、Web 静态资源、深链接回退、生成图片和 OneBot WebSocket 入口。
+后端由 Node.js 24、TypeScript 和 Fastify 构建，管理台由 Vue 3、Vue Router 和 Vite 构建。生产服务由 `dist/apps/api/main.js` 启动，并提供 API、Web 静态资源、深链接回退、生成图片和 OneBot WebSocket 入口。
 
 ## 3. 消息接入与回复
 
@@ -185,12 +185,13 @@ QQ Runtime 不支持远程 OneBot 或远程 NapCat。Docker 下 Sunabot 与 NapC
 
 | 功能 | 主要代码 |
 | --- | --- |
-| 服务启动、API、静态站点、图片历史 | `src/server.ts` |
+| 服务启动入口 | `apps/api/main.ts` |
+| API、静态站点、图片历史 | `src/server.ts` |
 | 配置加载、默认值、路径解析 | `src/config.ts`, `src/types.ts` |
 | SQLite 主库 | `src/dataStore.ts` |
 | OneBot 连接、事件和 action | `src/onebot.ts`, `src/qqMedia.ts` |
 | 回复运行时、上下文、群聊总结 | `src/runtime.ts` |
-| 会话事件、turn、工具任务、outbox | `src/sessionStore.ts`, `src/sessionActor.ts`, `src/sessionCoordinator.ts` |
+| 会话事件、turn、工具任务、outbox | `src/sessionStore.ts`, `src/sessionActor.ts`, `src/sessionCoordinator.ts`, `packages/contracts/session/runtimeMessages.ts` |
 | 群聊门控与编排策略 | `src/groupReplyPolicy.ts` |
 | 命令路由与钩子 | `src/commands/router.ts`, `src/hooks.ts` |
 | Provider 与工具循环 | `src/openaiProvider.ts`, `src/tools.ts` |

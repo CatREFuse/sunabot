@@ -5,6 +5,10 @@ COPY package.json package-lock.json ./
 RUN npm ci
 COPY AGENTS.md tsconfig.json tsconfig.web.json postcss.config.cjs tailwind.config.ts ./
 COPY src ./src
+COPY apps/api ./apps/api
+COPY services ./services
+COPY adapters ./adapters
+COPY packages ./packages
 COPY apps/admin-web ./apps/admin-web
 RUN npm run build && npm prune --omit=dev
 
@@ -30,4 +34,4 @@ COPY --from=build --chown=node:node /srv/sunabot/apps/admin-web/dist ./apps/admi
 USER node
 EXPOSE 8787
 ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["node", "dist/server.js"]
+CMD ["node", "dist/apps/api/main.js"]

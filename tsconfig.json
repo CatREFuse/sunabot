@@ -9,9 +9,9 @@
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
     "outDir": "dist",
-    "rootDir": "src",
+    "rootDir": ".",
     "resolveJsonModule": true,
     "noUncheckedIndexedAccess": true
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts", "apps/api/**/*.ts", "services/**/*.ts", "adapters/**/*.ts", "packages/**/*.ts"]
 }

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { ImageResult, ParsedIncomingMessage } from "../types.js";
+import type { ImageResult, ParsedIncomingMessage } from "../../../src/types.js";
 
 export interface EnvelopeV1<TType extends string, TPayload> {
   schemaVersion: 1;
@@ -147,4 +147,3 @@ function requiredString(value: unknown, name: string) {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
-

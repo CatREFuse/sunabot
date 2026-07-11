@@ -9,7 +9,7 @@ const port = Number(process.env.SUNABOT_SMOKE_PORT ?? "18877");
 const host = "127.0.0.1";
 
 await assertPortFree(host, port);
-const child = spawn(process.execPath, ["--use-env-proxy", path.join(root, "dist/server.js")], {
+const child = spawn(process.execPath, ["--use-env-proxy", path.join(root, "dist/apps/api/main.js")], {
   cwd: root,
   stdio: ["ignore", "pipe", "pipe"],
   windowsHide: true,

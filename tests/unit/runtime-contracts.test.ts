@@ -4,7 +4,7 @@ import {
   decodeIncomingReply,
   incomingReplyEnvelope,
   type RuntimeIncomingReplyEventPayload
-} from "../../src/contracts/runtimeMessages.js";
+} from "../../packages/contracts/session/runtimeMessages.js";
 
 const payload = {
   type: "incoming_reply",
@@ -46,4 +46,3 @@ describe("runtime persisted contracts", () => {
     })).toThrow("不支持的持久化消息版本");
   });
 });
-
