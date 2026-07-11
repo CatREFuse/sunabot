@@ -15,7 +15,7 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { CacheStore, AttachmentCacheError, AttachmentTooLargeError } from "./cache.js";
+import { CacheStore, AttachmentCacheError, AttachmentTooLargeError, type CacheStoreOptions } from "./cache.js";
 import { readChunksSqlite, type AttachmentTextChunk } from "./chunks.js";
 import { selectAttachmentContext, type AttachmentContextInput } from "./context.js";
 import { detectAttachmentType, type DetectedAttachmentType } from "./detect.js";
@@ -79,6 +79,7 @@ export interface AttachmentServiceOptions {
   cacheRoot?: string;
   cacheStore?: CacheStore;
   workerSupervisor?: AttachmentWorkerSupervisor;
+  cacheOptions?: CacheStoreOptions;
 }
 
 export class AttachmentService {
@@ -93,7 +94,7 @@ export class AttachmentService {
     this.cacheRoot = path.resolve(
       options.cacheRoot ?? path.join(rootDir, "workspace/artifacts/file-cache")
     );
-    this.cache = options.cacheStore ?? new CacheStore(this.cacheRoot);
+    this.cache = options.cacheStore ?? new CacheStore(this.cacheRoot, options.cacheOptions);
     this.worker = options.workerSupervisor ?? createParserWorkerSupervisor();
   }
 

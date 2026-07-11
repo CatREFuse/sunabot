@@ -5,7 +5,7 @@ import process from "node:process";
 import net from "node:net";
 import { getWorkspacePath, loadConfig, resolveProjectPath } from "../../dist/src/config.js";
 import { applicationDatabasePath, applicationDataStore, closeApplicationDataStores } from "../../dist/src/dataStore.js";
-import { SqliteChunkWriter } from "../../dist/src/attachments/chunks.js";
+import { SqliteChunkWriter } from "../../dist/services/media/attachments/chunks.js";
 import { resolveProjectRoot } from "../shared/paths.mjs";
 
 const root = resolveProjectRoot(import.meta.url);

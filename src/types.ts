@@ -1,4 +1,4 @@
-import type { ParsedAttachment } from "./attachments/types.js";
+import type { ParsedAttachment } from "../services/media/attachments/types.js";
 
 export type ProviderKind = "openai-responses" | "codex-responses" | "gemini-openai" | "anthropic-openai";
 

@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import sharp from "sharp";
 import { afterEach, describe, expect, it } from "vitest";
-import { normalizeAttachmentImage } from "../../src/attachments/image.js";
+import { normalizeAttachmentImage } from "../../services/media/attachments/image.js";
 
 let temporaryDirectory = "";
 

@@ -4,14 +4,14 @@ import os from "node:os";
 import path from "node:path";
 import iconv from "iconv-lite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { chunkText, readChunksSqlite, StreamingTextChunker } from "../../src/attachments/chunks.js";
+import { chunkText, readChunksSqlite, StreamingTextChunker } from "../../services/media/attachments/chunks.js";
 import {
   MAX_ATTACHMENT_BYTES,
   MAX_TEXT_INDEX_CHARACTERS,
   detectTextEncoding,
   extractTextFile,
   isAllowedAttachmentSize
-} from "../../src/attachments/text.js";
+} from "../../services/media/attachments/text.js";
 
 let temporaryDirectory = "";
 

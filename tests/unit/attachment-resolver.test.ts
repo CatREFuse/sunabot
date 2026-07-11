@@ -6,7 +6,7 @@ import {
   extractAttachmentSource,
   resolveAttachmentSource,
   type FileActionGateway
-} from "../../src/attachments/resolver.js";
+} from "../../services/media/attachments/resolver.js";
 
 describe("attachment source resolver", () => {
   it("uses a message HTTP URL without calling NapCat", async () => {

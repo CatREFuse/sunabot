@@ -202,7 +202,7 @@ QQ Runtime 不支持远程 OneBot 或远程 NapCat。Docker 下 Sunabot 与 NapC
 | 人格与提示词 | `services/agent/` |
 | 记忆 CRUD、合并、召回和批次 | `src/memory.ts` |
 | 记忆调度 | `src/memoryScheduler.ts` |
-| 附件接入、解析、缓存和上下文 | `src/attachments/` |
+| 附件接入、解析、缓存和上下文 | `services/media/attachments/` |
 | 会话目录和显示名 | `services/conversations/conversationDirectory.ts`, `services/conversations/senderName.ts` |
 | 管理配置和 Agent 文件 | `src/admin/` |
 | 管理台路由和页面 | `apps/admin-web/src/router.ts`, `apps/admin-web/src/views/` |

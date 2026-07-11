@@ -6,8 +6,8 @@ import dotenv from "dotenv";
 import { nanoid } from "nanoid";
 import sharp from "sharp";
 import { ProviderConfig, ChatMessage, ImageResult, BotConfig, ImageQuality } from "../../src/types.js";
-import { MAX_ATTACHMENT_VISUAL_PAGES } from "../../src/attachments/context.js";
-import { normalizeAttachmentImage } from "../../src/attachments/image.js";
+import { MAX_ATTACHMENT_VISUAL_PAGES } from "../../services/media/attachments/context.js";
+import { normalizeAttachmentImage } from "../../services/media/attachments/image.js";
 import { getRootDir, getWorkspacePath, resolveProjectPath } from "../../src/config.js";
 import {
   ImageGenerationFailureContext,

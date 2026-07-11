@@ -7,7 +7,7 @@ import {
   sanitizeAttachmentForPersistence,
   selectRelevantConversationAttachments
 } from "../../src/runtime.js";
-import type { ParsedAttachment } from "../../src/attachments/types.js";
+import type { ParsedAttachment } from "../../services/media/attachments/types.js";
 import type {
   ConversationRecord,
   OneBotEvent,
@@ -18,7 +18,7 @@ import {
   ONEBOT_LOOPBACK_MAX_PAYLOAD_BYTES,
   ONEBOT_UNAUTHENTICATED_MAX_PAYLOAD_BYTES
 } from "../../adapters/onebot/onebotGateway.js";
-import { FILE_SIZE_LIMIT_BYTES } from "../../src/attachments/limits.js";
+import { FILE_SIZE_LIMIT_BYTES } from "../../services/media/attachments/limits.js";
 
 describe("attachment runtime integration", () => {
   it("allows an authenticated bounded OneBot payload large enough for a 256 MiB Base64 fallback", () => {

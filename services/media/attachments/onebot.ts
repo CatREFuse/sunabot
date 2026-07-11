@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { OneBotMessageSegment } from "../types.js";
+import type { OneBotMessageSegment } from "../../../src/types.js";
 import type { AttachmentExtractionContext, IncomingAttachment } from "./types.js";
 
 const DEFAULT_ATTACHMENT_NAME = "未命名文件";

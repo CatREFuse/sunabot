@@ -5,11 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import PptxGenJS from "pptxgenjs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CacheStore } from "../../src/attachments/cache.js";
-import { findLibreOffice } from "../../src/attachments/libreoffice.js";
-import { AttachmentService } from "../../src/attachments/service.js";
-import type { FileActionGateway } from "../../src/attachments/resolver.js";
-import type { IncomingAttachment } from "../../src/attachments/types.js";
+import { CacheStore } from "../../services/media/attachments/cache.js";
+import { findLibreOffice } from "../../services/media/attachments/libreoffice.js";
+import { AttachmentService } from "../../services/media/attachments/service.js";
+import type { FileActionGateway } from "../../services/media/attachments/resolver.js";
+import type { IncomingAttachment } from "../../services/media/attachments/types.js";
 
 let temporaryDirectory = "";
 const fixtureServers: Server[] = [];

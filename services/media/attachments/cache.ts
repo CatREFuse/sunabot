@@ -24,7 +24,6 @@ import {
   DEFAULT_ATTACHMENT_IDLE_TIMEOUT_MS,
   FILE_SIZE_LIMIT_BYTES
 } from "./limits.js";
-import { isTrustedQqFakeIp } from "../../adapters/onebot/qqMedia.js";
 
 const CACHE_INDEX_VERSION = 1 as const;
 const ORIGINAL_FILE_NAME = "original";
@@ -120,6 +119,7 @@ export interface CacheStoreOptions {
   lookupImpl?: AttachmentDnsLookup;
   statfsImpl?: AttachmentStatFs;
   now?: () => Date;
+  trustedResolvedAddress?: (hostname: string, address: string) => boolean;
 }
 
 export interface AttachmentDnsLookupRecord {
@@ -197,6 +197,7 @@ export class CacheStore {
   private readonly lookupImpl: AttachmentDnsLookup;
   private readonly statfsImpl: AttachmentStatFs;
   private readonly now: () => Date;
+  private readonly trustedResolvedAddress: (hostname: string, address: string) => boolean;
   private readonly index: CacheIndex = {
     version: CACHE_INDEX_VERSION,
     entries: {}
@@ -232,6 +233,7 @@ export class CacheStore {
       nodeLookup(hostname, { all: true, verbatim: true }));
     this.statfsImpl = options.statfsImpl ?? (async (filePath) => nodeStatfs(filePath));
     this.now = options.now ?? (() => new Date());
+    this.trustedResolvedAddress = options.trustedResolvedAddress ?? (() => false);
   }
 
   initialize() {
@@ -277,6 +279,7 @@ export class CacheStore {
           fetchImpl,
           lookupImpl: this.lookupImpl,
           allowPrivateNetwork: this.allowPrivateNetwork,
+          trustedResolvedAddress: this.trustedResolvedAddress,
           pinValidatedDns: fetchImpl === DEFAULT_ATTACHMENT_FETCH,
           signal: controller.signal
         });
@@ -995,6 +998,7 @@ interface ValidatedHttpFetchInput {
   fetchImpl: typeof fetch;
   lookupImpl: AttachmentDnsLookup;
   allowPrivateNetwork: boolean;
+  trustedResolvedAddress: (hostname: string, address: string) => boolean;
   pinValidatedDns: boolean;
   signal: AbortSignal;
 }
@@ -1008,6 +1012,7 @@ async function fetchHttpWithValidatedRedirects(input: ValidatedHttpFetchInput) {
       currentUrl,
       input.lookupImpl,
       input.allowPrivateNetwork,
+      input.trustedResolvedAddress,
       input.pinValidatedDns
     );
     const dispatcher = input.pinValidatedDns && validatedAddresses.length
@@ -1062,6 +1067,7 @@ async function validateHttpTarget(
   url: URL,
   lookupImpl: AttachmentDnsLookup,
   allowPrivateNetwork: boolean,
+  trustedResolvedAddress: (hostname: string, address: string) => boolean,
   pinValidatedDns: boolean
 ) {
   if (allowPrivateNetwork && !pinValidatedDns) return [];
@@ -1087,7 +1093,7 @@ async function validateHttpTarget(
   if (
     !addresses.length ||
     (!allowPrivateNetwork && addresses.some(({ address }) =>
-      !isPublicIpAddress(address) && !isTrustedQqFakeIp(hostname, address)))
+      !isPublicIpAddress(address) && !trustedResolvedAddress(hostname, address)))
   ) {
     throw unsafeAttachmentUrl();
   }

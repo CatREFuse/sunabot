@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { AttachmentService } from "../../src/attachments/service.js";
-import type { ParsedAttachment } from "../../src/attachments/types.js";
+import { AttachmentService } from "../../services/media/attachments/service.js";
+import type { ParsedAttachment } from "../../services/media/attachments/types.js";
 
 describe("AttachmentService in-memory parse reuse", () => {
   it("keeps only the 512 most recently used parsed results", () => {

@@ -14,12 +14,12 @@ import {
   ReasoningEffort
 } from "./types.js";
 import { resolveModelReasoningEffort } from "./admin/models.js";
-import { extractOneBotAttachments } from "./attachments/onebot.js";
-import { AttachmentService, pendingAttachments } from "./attachments/service.js";
+import { extractOneBotAttachments } from "../services/media/attachments/onebot.js";
+import { AttachmentService, pendingAttachments } from "../services/media/attachments/service.js";
 import type {
   AttachmentExtractionContext,
   ParsedAttachment
-} from "./attachments/types.js";
+} from "../services/media/attachments/types.js";
 import { CommandRouter, type CommandMatch } from "./commands/router.js";
 import { getDefaultProvider, getRootDir, getWorkspacePath, resolveProjectPath } from "./config.js";
 import {
@@ -77,6 +77,7 @@ import { appendRequestLog } from "./requestLog.js";
 import { SenderNameResolver, senderDisplayName, senderIdentity } from "../services/conversations/senderName.js";
 import type { SelfieInput, SelfieRunResult } from "../services/tools/selfieTool.js";
 import { cleanupPersistedCodexProcess, CodexToolRunner } from "../adapters/codex/codexTool.js";
+import { isTrustedQqFakeIp } from "../adapters/onebot/qqMedia.js";
 import type { CodexRunner } from "../packages/contracts/tools/codex.js";
 import {
   OutboxDisconnectedError,
@@ -286,7 +287,8 @@ export class SunaRuntime implements OneBotGatewayDelegate {
     this.config = config;
     this.memoryScheduler = new MemorySchedulerStore(config);
     this.attachmentService = options.attachmentService ?? new AttachmentService(getRootDir(), {
-      cacheRoot: getWorkspacePath("artifacts/file-cache")
+      cacheRoot: getWorkspacePath("artifacts/file-cache"),
+      cacheOptions: { trustedResolvedAddress: isTrustedQqFakeIp }
     });
     this.ownsSessionStore = !options.sessionStore;
     this.sessionStore = options.sessionStore ?? new SessionStore({

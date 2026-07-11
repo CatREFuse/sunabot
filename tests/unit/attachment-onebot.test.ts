@@ -4,7 +4,7 @@ import type { OneBotMessageSegment } from "../../src/types.js";
 import {
   extractOneBotAttachments,
   sanitizeAttachmentName
-} from "../../src/attachments/onebot.js";
+} from "../../services/media/attachments/onebot.js";
 
 describe("OneBot attachment extraction", () => {
   it("extracts and normalizes a Chinese file segment", () => {

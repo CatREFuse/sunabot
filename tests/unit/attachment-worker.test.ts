@@ -9,7 +9,7 @@ import {
   AttachmentWorkerError,
   AttachmentWorkerSupervisor,
   type AttachmentWorkerTask
-} from "../../src/attachments/worker.js";
+} from "../../services/media/attachments/worker.js";
 
 let temporaryDirectory = "";
 let fixtureWorkerPath = "";
@@ -27,7 +27,7 @@ afterEach(async () => {
 
 describe("AttachmentWorkerSupervisor", () => {
   it("accepts one JSON task on worker-entry stdin", async () => {
-    const entryPath = fileURLToPath(new URL("../../src/attachments/worker-entry.ts", import.meta.url));
+    const entryPath = fileURLToPath(new URL("../../services/media/attachments/worker-entry.ts", import.meta.url));
     const child = spawn(process.execPath, ["--import", "tsx", entryPath], {
       stdio: ["pipe", "pipe", "pipe"]
     });
@@ -60,7 +60,7 @@ describe("AttachmentWorkerSupervisor", () => {
       "utf8"
     );
     const supervisor = new AttachmentWorkerSupervisor({
-      workerEntryPath: fileURLToPath(new URL("../../src/attachments/worker-entry.ts", import.meta.url)),
+      workerEntryPath: fileURLToPath(new URL("../../services/media/attachments/worker-entry.ts", import.meta.url)),
       workerExecArgv: ["--import", "tsx"]
     });
 

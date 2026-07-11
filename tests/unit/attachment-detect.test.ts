@@ -4,8 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import iconv from "iconv-lite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { detectAttachmentType, isSupportedTextFileName } from "../../src/attachments/detect.js";
-import { MAX_ATTACHMENT_BYTES } from "../../src/attachments/text.js";
+import { detectAttachmentType, isSupportedTextFileName } from "../../services/media/attachments/detect.js";
+import { MAX_ATTACHMENT_BYTES } from "../../services/media/attachments/text.js";
 
 let temporaryDirectory = "";
 

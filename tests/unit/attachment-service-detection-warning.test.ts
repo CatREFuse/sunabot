@@ -4,9 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import sharp from "sharp";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { CacheStore } from "../../src/attachments/cache.js";
-import type { FileActionGateway } from "../../src/attachments/resolver.js";
-import { AttachmentService } from "../../src/attachments/service.js";
+import { CacheStore } from "../../services/media/attachments/cache.js";
+import type { FileActionGateway } from "../../services/media/attachments/resolver.js";
+import { AttachmentService } from "../../services/media/attachments/service.js";
 
 let temporaryDirectory = "";
 

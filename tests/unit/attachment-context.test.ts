@@ -5,8 +5,8 @@ import {
   MAX_ATTACHMENT_VISUAL_PAGES,
   rankAttachmentChunks,
   selectAttachmentContext
-} from "../../src/attachments/context.js";
-import type { AttachmentTextChunk } from "../../src/attachments/chunks.js";
+} from "../../services/media/attachments/context.js";
+import type { AttachmentTextChunk } from "../../services/media/attachments/chunks.js";
 
 describe("attachment context selection", () => {
   it("ranks relevant text and keeps the shared character budget", () => {

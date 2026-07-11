@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   convertWithLibreOffice,
   findLibreOffice
-} from "../../src/attachments/libreoffice.js";
+} from "../../services/media/attachments/libreoffice.js";
 
 const temporaryDirectories: string[] = [];
 

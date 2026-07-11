@@ -19,12 +19,13 @@ import {
   AttachmentTooLargeError,
   CacheStore,
   InvalidBase64Error
-} from "../../src/attachments/cache.js";
+} from "../../services/media/attachments/cache.js";
+import { isTrustedQqFakeIp } from "../../adapters/onebot/qqMedia.js";
 import {
   CACHE_MIN_FREE_BYTES,
   CACHE_UNREFERENCED_TTL_MS,
   FILE_SIZE_LIMIT_BYTES
-} from "../../src/attachments/limits.js";
+} from "../../services/media/attachments/limits.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -655,7 +656,8 @@ describe("attachment cache", () => {
       lookupImpl,
       maxFileBytes: 1_024,
       minimumFreeBytes: 0,
-      statfsImpl: ampleStatFs
+      statfsImpl: ampleStatFs,
+      trustedResolvedAddress: isTrustedQqFakeIp
     });
 
     const cached = await store.downloadHttp("https://multimedia.nt.qq.com.cn/download?id=fixture");

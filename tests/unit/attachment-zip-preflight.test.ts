@@ -8,7 +8,7 @@ import {
   MAX_ZIP_ENTRY_UNCOMPRESSED_BYTES,
   MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES,
   preflightZipFile
-} from "../../src/attachments/zipPreflight.js";
+} from "../../services/media/attachments/zipPreflight.js";
 
 interface TestZipEntry {
   name: string;

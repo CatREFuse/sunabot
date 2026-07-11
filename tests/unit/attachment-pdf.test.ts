@@ -7,9 +7,9 @@ import {
   extractPdfTextByPage,
   renderPdfPages,
   renderPdfPagesBestEffort
-} from "../../src/attachments/pdf.js";
-import { CacheStore } from "../../src/attachments/cache.js";
-import { AttachmentService } from "../../src/attachments/service.js";
+} from "../../services/media/attachments/pdf.js";
+import { CacheStore } from "../../services/media/attachments/cache.js";
+import { AttachmentService } from "../../services/media/attachments/service.js";
 
 let temporaryDirectory = "";
 

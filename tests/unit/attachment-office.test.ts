@@ -7,8 +7,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   convertPresentationToPdf,
   extractOfficeText
-} from "../../src/attachments/office.js";
-import { extractPdfTextByPage } from "../../src/attachments/pdf.js";
+} from "../../services/media/attachments/office.js";
+import { extractPdfTextByPage } from "../../services/media/attachments/pdf.js";
 
 const temporaryDirectories: string[] = [];
 
