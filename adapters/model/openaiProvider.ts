@@ -26,7 +26,7 @@ import {
 } from "../../services/tools/bashTool.js";
 import { CODEX_TOOL_NAME, MEMORY_RECALL_TOOL_NAME, WEBSEARCH_TOOL_NAME } from "../../services/tools/definitions.js";
 import { GENERATE_IMG_TOOL_NAME, GenerateImageRunner, runGenerateImg, generateImgTool } from "../../services/tools/generateImgTool.js";
-import { MemoryRecallInput } from "../../src/memory.js";
+import { MemoryRecallInput } from "../../services/memory/memoryService.js";
 import { appendRequestLog } from "../../src/requestLog.js";
 import { SELFIE_TOOL_NAME, SelfieRunner, selfieTool } from "../../services/tools/selfieTool.js";
 import { runWebsearch, WebsearchInput } from "./webSearchTool.js";

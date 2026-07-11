@@ -16,7 +16,8 @@ import { IMAGE_MODEL_CATALOG, MODEL_CATALOG, REASONING_EFFORTS } from "./admin/m
 import { defaultTools } from "../services/tools/tools.js";
 import { getConfigPath, getRootDir, getWorkspacePath, loadConfig } from "./config.js";
 import { applicationDataStore } from "./dataStore.js";
-import { createMemoryEntry, deleteMemoryEntry, listMemoryEntries, recallMemory, updateMemoryEntry } from "./memory.js";
+import { createMemoryEntry, deleteMemoryEntry, listMemoryEntries, recallMemory, updateMemoryEntry } from "../services/memory/memoryService.js";
+import { ServiceError } from "../packages/contracts/errors/serviceError.js";
 import { ConversationDirectory } from "../services/conversations/conversationDirectory.js";
 import { OneBotGateway } from "../adapters/onebot/onebotGateway.js";
 import { OpenAIProvider } from "../adapters/model/openaiProvider.js";
@@ -514,7 +515,7 @@ app.post("/api/playground/image", async (request, reply) => {
 });
 
   app.setErrorHandler((error: unknown, request, reply) => {
-    if (error instanceof AdminApiError) {
+    if (error instanceof ServiceError) {
       if (error.statusCode === 401 && request.headers.authorization) {
         reply.header("www-authenticate", "Bearer");
       }

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { enrichMemoryEntriesWithConversations } from "../../src/runtime.js";
 import type { ConversationRecord } from "../../src/types.js";
-import type { MemoryEntry } from "../../src/memory.js";
+import type { MemoryEntry } from "../../services/memory/memoryService.js";
 
 describe("memory identity enrichment", () => {
   it("uses the latest nickname and keeps the latest card for every group", () => {

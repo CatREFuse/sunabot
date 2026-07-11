@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
-import type { AppConfig } from "./types.js";
-import { resolveProjectPath } from "./config.js";
-import { applicationDatabasePath, applicationDataStore } from "./dataStore.js";
+import type { AppConfig } from "../../src/types.js";
+import { resolveProjectPath } from "../../src/config.js";
+import { applicationDatabasePath, applicationDataStore } from "../../src/dataStore.js";
 
 export type MemorySchedulerStatus = "idle" | "queued" | "running";
 

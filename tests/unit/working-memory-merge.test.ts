@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   appendMemoryFacts,
   readMemorySourceEntries
-} from "../../src/memory.js";
+} from "../../services/memory/memoryService.js";
 import { SunaRuntime } from "../../src/runtime.js";
 import type { AppConfig, ConversationRecord } from "../../src/types.js";
 import { createAdminTestConfig } from "./admin-fixtures.js";

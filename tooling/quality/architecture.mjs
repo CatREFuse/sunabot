@@ -43,7 +43,7 @@ for (const obsolete of ["scripts", "web", "components/qq-runtime"]) {
 
 const lineBudgets = new Map([
   ["src/runtime.ts", 4_800],
-  ["src/memory.ts", 1_800],
+  ["services/memory/memoryService.ts", 1_800],
   ["adapters/model/openaiProvider.ts", 1_650],
   ["src/server.ts", 1_100]
 ]);

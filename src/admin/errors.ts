@@ -1,13 +1,6 @@
-export interface ApiErrorShape {
-  error: {
-    code: string;
-    message: string;
-    field?: string;
-    latestRevision?: string;
-  };
-}
+import { ServiceError } from "../../packages/contracts/errors/serviceError.js";
 
-export class AdminApiError extends Error {
+export class AdminApiError extends ServiceError {
   constructor(
     public readonly statusCode: number,
     public readonly code: string,
@@ -15,19 +8,8 @@ export class AdminApiError extends Error {
     public readonly field?: string,
     public readonly latestRevision?: string
   ) {
-    super(message);
+    super(statusCode, code, message, field, latestRevision);
     this.name = "AdminApiError";
-  }
-
-  toJSON(): ApiErrorShape {
-    return {
-      error: {
-        code: this.code,
-        message: this.message,
-        ...(this.field ? { field: this.field } : {}),
-        ...(this.latestRevision ? { latestRevision: this.latestRevision } : {})
-      }
-    };
   }
 }
 

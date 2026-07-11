@@ -58,12 +58,12 @@ import {
   resolveUserAddressName,
   type MemoryEntry,
   type MemoryFactInput
-} from "./memory.js";
+} from "../services/memory/memoryService.js";
 import {
   MemorySchedulerStore,
   type MemoryClaim,
   type MemoryQueuedMessage
-} from "./memoryScheduler.js";
+} from "../services/memory/memoryScheduler.js";
 import {
   OpenAIProvider,
   type ProviderBashOptions,

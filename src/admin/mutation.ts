@@ -1,21 +1,6 @@
-export class AdminMutationMutex {
-  private tail: Promise<void> = Promise.resolve();
+import { AsyncMutex } from "../../packages/platform/mutex.js";
 
-  async runExclusive<T>(operation: () => Promise<T>): Promise<T> {
-    let release!: () => void;
-    const turn = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const previous = this.tail;
-    this.tail = previous.then(() => turn, () => turn);
-    await previous;
-    try {
-      return await operation();
-    } finally {
-      release();
-    }
-  }
-}
+export class AdminMutationMutex extends AsyncMutex {}
 
 export const adminMutationMutex = new AdminMutationMutex();
 

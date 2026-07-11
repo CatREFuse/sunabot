@@ -26,7 +26,7 @@
 | --- | --- |
 | OneBot、消息解析、回复、群聊编排 | `adapters/onebot/onebotGateway.ts`, `src/runtime.ts`, `services/orchestration/groupReplyPolicy.ts` |
 | 会话顺序、异步任务、outbox、断线恢复 | `services/sessions/` |
-| 记忆、用户画像、长期记忆、压缩 | `src/memory.ts`, `src/memoryScheduler.ts`, `src/dataStore.ts` |
+| 记忆、用户画像、长期记忆、压缩 | `services/memory/`, `src/dataStore.ts` |
 | 请求日志、会话记录、图片历史 | `src/dataStore.ts`, `src/requestLog.ts`, `src/server.ts` |
 | 文件读取、PDF、Office、附件缓存 | `services/media/attachments/` |
 | Provider、工具调用、Codex、联网搜索 | `adapters/model/openaiProvider.ts`, `services/tools/`, `adapters/codex/codexTool.ts`, `adapters/model/webSearchTool.ts` |

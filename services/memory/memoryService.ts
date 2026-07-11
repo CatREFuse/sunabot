@@ -2,14 +2,18 @@ import fs from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { nanoid } from "nanoid";
-import { AppConfig } from "./types.js";
-import { resolveProjectPath } from "./config.js";
-import { AdminMutationMutex } from "./admin/mutation.js";
-import { AdminApiError, badRequest } from "./admin/errors.js";
-import { applicationDataStore, type MemoryDataSource } from "./dataStore.js";
+import { AppConfig } from "../../src/types.js";
+import { resolveProjectPath } from "../../src/config.js";
+import { AsyncMutex } from "../../packages/platform/mutex.js";
+import { ServiceError } from "../../packages/contracts/errors/serviceError.js";
+import { applicationDataStore, type MemoryDataSource } from "../../src/dataStore.js";
 
-export { MEMORY_RECALL_TOOL_NAME, memoryRecallTool } from "../services/tools/definitions.js";
-const memoryMutationMutex = new AdminMutationMutex();
+export { MEMORY_RECALL_TOOL_NAME, memoryRecallTool } from "../tools/definitions.js";
+const memoryMutationMutex = new AsyncMutex();
+
+function badRequest(code: string, message: string, field?: string): never {
+  throw new ServiceError(400, code, message, field);
+}
 
 export type MemorySourceId = "working" | "long_term" | "user_profile";
 
@@ -314,7 +318,7 @@ export async function updateMemoryEntry(config: AppConfig, input: MemoryWriteInp
   return memoryMutationMutex.runExclusive(async () => {
     const records = await readMemoryRecords(filePath);
     const record = records.find((item) => String(item.value.id ?? "") === id);
-    if (!record) throw new AdminApiError(404, "MEMORY_NOT_FOUND", "记忆不存在。", "id");
+    if (!record) throw new ServiceError(404, "MEMORY_NOT_FOUND", "记忆不存在。", "id");
 
     const nextText = source.id === "user_profile"
       ? stripUserProfileFactPrefix(text, optionalString(record.value.userId), optionalString(record.value.userName))
@@ -348,7 +352,7 @@ export async function deleteMemoryEntry(config: AppConfig, input: MemoryWriteInp
   return memoryMutationMutex.runExclusive(async () => {
     const records = await readMemoryRecords(filePath);
     const nextRecords = records.filter((item) => String(item.value.id ?? "") !== id);
-    if (nextRecords.length === records.length) throw new AdminApiError(404, "MEMORY_NOT_FOUND", "记忆不存在。", "id");
+    if (nextRecords.length === records.length) throw new ServiceError(404, "MEMORY_NOT_FOUND", "记忆不存在。", "id");
 
     await writeMemoryRecords(filePath, nextRecords.map((record, index) => ({ ...record, index })));
     return { ok: true };

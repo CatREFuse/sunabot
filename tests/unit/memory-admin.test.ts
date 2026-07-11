@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { AdminApiError } from "../../src/admin/errors.js";
+import { ServiceError } from "../../packages/contracts/errors/serviceError.js";
 import { applicationDataStore } from "../../src/dataStore.js";
 import {
   appendMemoryFacts,
@@ -11,7 +11,7 @@ import {
   readMemorySourceEntries,
   readWorkingMemorySnapshot,
   replaceWorkingMemoryFacts
-} from "../../src/memory.js";
+} from "../../services/memory/memoryService.js";
 import type { AppConfig } from "../../src/types.js";
 import { createAdminTestConfig } from "./admin-fixtures.js";
 
@@ -47,10 +47,10 @@ describe("admin memory mutations", () => {
     [{ source: "unknown", text: "value" }, "MEMORY_SOURCE_INVALID", "source"],
     [{ source: "diary", text: "value" }, "MEMORY_SOURCE_INVALID", "source"],
     [{ source: "working", text: "  " }, "MEMORY_INVALID", "text"]
-  ] as const)("returns an AdminApiError for invalid create input %#", async (input, code, field) => {
+  ] as const)("returns a ServiceError for invalid create input %#", async (input, code, field) => {
     const error = await createMemoryEntry(config, input).catch((caught: unknown) => caught);
 
-    expect(error).toBeInstanceOf(AdminApiError);
+    expect(error).toBeInstanceOf(ServiceError);
     expect(error).toMatchObject({ statusCode: 400, code, field });
   });
 

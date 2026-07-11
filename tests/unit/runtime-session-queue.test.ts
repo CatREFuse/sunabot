@@ -18,8 +18,8 @@ const recallMemory = vi.hoisted(() => vi.fn(async () => ({ ok: true, matches: []
 const readUserProfileForUser = vi.hoisted(() => vi.fn(async () => undefined));
 
 vi.mock("../../src/requestLog.js", () => ({ appendRequestLog }));
-vi.mock("../../src/memory.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../src/memory.js")>()),
+vi.mock("../../services/memory/memoryService.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../services/memory/memoryService.js")>()),
   recallMemory,
   readUserProfileForUser
 }));

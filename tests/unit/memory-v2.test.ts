@@ -20,7 +20,7 @@ import {
   resolveUserAddressName,
   updateMemoryEntry,
   upsertLongTermMemoryFacts
-} from "../../src/memory.js";
+} from "../../services/memory/memoryService.js";
 import type { AppConfig } from "../../src/types.js";
 import { loadPersona } from "../../services/agent/persona.js";
 import { createAdminTestConfig } from "./admin-fixtures.js";
