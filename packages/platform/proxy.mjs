@@ -197,7 +197,21 @@ export async function installGlobalProxyDispatcher(options = {}) {
 export function applyProxyEnvironment(configuration, env = process.env) {
   env.NO_PROXY = configuration.noProxy;
   env.no_proxy = configuration.noProxy;
-  if (!configuration.enabled) return;
+  if (!configuration.enabled) {
+    if (configuration.mode === "off") {
+      for (const name of [
+        "HTTP_PROXY",
+        "http_proxy",
+        "HTTPS_PROXY",
+        "https_proxy",
+        "ALL_PROXY",
+        "all_proxy"
+      ]) {
+        delete env[name];
+      }
+    }
+    return;
+  }
   if (configuration.httpProxy) {
     env.HTTP_PROXY = configuration.httpProxy;
     env.http_proxy = configuration.httpProxy;

@@ -126,11 +126,18 @@ describe("runtime proxy contract", () => {
 
   it("preserves a wildcard NO_PROXY and allows proxy mode to be disabled", async () => {
     expect(mergeNoProxy("*", "localhost")).toBe("*");
+    const env: Record<string, string | undefined> = {
+      SUNABOT_PROXY_MODE: "off",
+      SUNABOT_PROXY_URL: "http://proxy.example:7890",
+      HTTP_PROXY: "http://inherited.example:8001",
+      http_proxy: "http://inherited.example:8002",
+      HTTPS_PROXY: "http://inherited.example:8003",
+      https_proxy: "http://inherited.example:8004",
+      ALL_PROXY: "socks5://inherited.example:1080",
+      all_proxy: "socks5://inherited.example:1081"
+    };
     const configuration = await resolveProxyConfiguration({
-      env: {
-        SUNABOT_PROXY_MODE: "off",
-        SUNABOT_PROXY_URL: "http://proxy.example:7890"
-      }
+      env
     });
     expect(configuration).toEqual({
       enabled: false,
@@ -138,5 +145,20 @@ describe("runtime proxy contract", () => {
       source: "none",
       noProxy: "localhost,127.0.0.1,::1,[::1]"
     });
+
+    const summary = await installGlobalProxyDispatcher({ env });
+    expect(summary).toEqual({ enabled: false, mode: "off", source: "none" });
+    for (const name of [
+      "HTTP_PROXY",
+      "http_proxy",
+      "HTTPS_PROXY",
+      "https_proxy",
+      "ALL_PROXY",
+      "all_proxy"
+    ]) {
+      expect(env[name]).toBeUndefined();
+    }
+    expect(env.NO_PROXY).toBe("localhost,127.0.0.1,::1,[::1]");
+    expect(env.no_proxy).toBe(env.NO_PROXY);
   });
 });
