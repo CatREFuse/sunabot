@@ -45,7 +45,10 @@ npm run smoke:runtime -- provider --execute-provider
 
 OneBot 测试需要先启动使用该 workspace、该端口和专用测试 QQ 的隔离 NapCat。脚本会先调用 `get_login_info`，确认登录 QQ 等于隔离 `secrets/runtime.env` 中的 `NAPCAT_ACCOUNT`，再发送消息并严格校验 `status=ok`、`retcode=0`、匹配的 `echo` 和非空 `message_id`：
 
+如果测试账号是在扫码后才确定，可临时设置 `SUNABOT_SMOKE_NAPCAT_ACCOUNT`；它优先于 env 文件且不会写回 workspace。仍必须同时设置已知的 `SUNABOT_PRODUCTION_QQ`，相同账号会被拒绝。
+
 ```bash
+export SUNABOT_SMOKE_NAPCAT_ACCOUNT=专用测试QQ
 export SUNABOT_SMOKE_DEDICATED_QQ=1
 export SUNABOT_SMOKE_ALLOW_ONEBOT_SEND=1
 npm run smoke:runtime -- onebot --execute-onebot

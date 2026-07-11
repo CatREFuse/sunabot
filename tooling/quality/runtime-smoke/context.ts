@@ -74,7 +74,9 @@ export async function loadSmokeContext(options: LoadContextOptions = {}): Promis
     );
   const providerToken = String(providerEnv[provider.apiKeyEnv] ?? "").trim();
   const onebotToken = String(workspaceEnv[config.onebot.accessTokenEnv] ?? "").trim();
-  const napcatAccount = String(workspaceEnv.NAPCAT_ACCOUNT ?? "").trim();
+  const napcatAccount = String(
+    process.env.SUNABOT_SMOKE_NAPCAT_ACCOUNT ?? workspaceEnv.NAPCAT_ACCOUNT ?? ""
+  ).trim();
   rememberSecret(providerToken);
   rememberSecret(onebotToken);
 

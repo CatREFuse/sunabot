@@ -21,6 +21,7 @@ const originalPort = process.env.SUNABOT_SMOKE_ONEBOT_PORT;
 const originalConnectTimeout = process.env.SUNABOT_SMOKE_ONEBOT_CONNECT_TIMEOUT_MS;
 const originalActionTimeout = process.env.SUNABOT_SMOKE_ONEBOT_ACTION_TIMEOUT_MS;
 const originalProductionQq = process.env.SUNABOT_PRODUCTION_QQ;
+const originalSmokeNapcatAccount = process.env.SUNABOT_SMOKE_NAPCAT_ACCOUNT;
 
 afterEach(async () => {
   if (originalWorkspace === undefined) delete process.env.SUNABOT_WORKSPACE;
@@ -30,6 +31,7 @@ afterEach(async () => {
   restoreEnvironment("SUNABOT_SMOKE_ONEBOT_CONNECT_TIMEOUT_MS", originalConnectTimeout);
   restoreEnvironment("SUNABOT_SMOKE_ONEBOT_ACTION_TIMEOUT_MS", originalActionTimeout);
   restoreEnvironment("SUNABOT_PRODUCTION_QQ", originalProductionQq);
+  restoreEnvironment("SUNABOT_SMOKE_NAPCAT_ACCOUNT", originalSmokeNapcatAccount);
   await Promise.all(temporaryDirectories.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true })));
 });
 
@@ -127,6 +129,18 @@ describe.sequential("runtime smoke workspace isolation", () => {
     expect(context.onebotUrl).toBe("ws://127.0.0.1:18879/onebot/v11/ws");
     expect(context.providerToken).toBe("provider-test-token");
     expect(context.onebotToken).toBe("onebot-test-token");
+  });
+
+  it("accepts an explicit ephemeral test QQ without persisting it in the workspace", async () => {
+    const fixture = await createSmokeWorkspace();
+    process.env.SUNABOT_WORKSPACE = fixture.workspace;
+    process.env.SUNABOT_SMOKE_NAPCAT_ACCOUNT = "223344556";
+
+    const context = await loadSmokeContext({ requireOneBotCredential: true });
+
+    expect(context.napcatAccount).toBe("223344556");
+    await expect(fs.readFile(path.join(fixture.workspace, "secrets/runtime.env"), "utf8"))
+      .resolves.toContain("NAPCAT_ACCOUNT=123456789");
   });
 
   it("runs a read-only preflight without a provider request or QQ action", async () => {
