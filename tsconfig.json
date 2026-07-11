@@ -5,6 +5,7 @@
     "moduleResolution": "NodeNext",
     "lib": ["ES2022", "DOM"],
     "strict": true,
+    "allowJs": true,
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
@@ -13,5 +14,5 @@
     "resolveJsonModule": true,
     "noUncheckedIndexedAccess": true
   },
-  "include": ["src/**/*.ts", "apps/api/**/*.ts", "services/**/*.ts", "adapters/**/*.ts", "packages/**/*.ts"]
+  "include": ["src/**/*.ts", "apps/api/**/*.ts", "services/**/*.ts", "adapters/**/*.ts", "packages/**/*.ts", "packages/**/*.mjs"]
 }

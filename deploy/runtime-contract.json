@@ -35,6 +35,14 @@
     "napcatWebuiPort": 6099,
     "onebotReverseWebSocket": "ws://127.0.0.1:8787/onebot/v11/ws"
   },
+  "outboundProxy": {
+    "defaultMode": "auto",
+    "supportedModes": ["auto", "env", "wsl-host", "off"],
+    "explicitUrlEnv": "SUNABOT_PROXY_URL",
+    "modeEnv": "SUNABOT_PROXY_MODE",
+    "portsEnv": "SUNABOT_PROXY_PORTS",
+    "noProxyRequired": ["localhost", "127.0.0.1", "::1", "[::1]"]
+  },
   "processes": {
     "startupOrder": ["sunabot", "napcat"],
     "supervisor": "deploy/docker/supervisor.mjs",

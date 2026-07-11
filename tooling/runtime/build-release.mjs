@@ -54,6 +54,7 @@ try {
     "deploy/runtime-contract.json",
     "deploy/runtime-contract.schema.json",
     "deploy/native",
+    "packages/platform/proxy.mjs",
     "tooling/shared",
     "tooling/runtime",
     "components/component.lock.json",

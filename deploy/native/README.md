@@ -2,6 +2,8 @@
 
 Native 与 Docker 读取同一 `deploy/runtime-contract.json`，使用同一 API/Web release artifact、同一 workspace 路径和同一 NapCat 组件版本。支持 Linux/amd64（含 WSL2），不支持 Windows Native。
 
+Native API 在应用 composition root 中解析 `workspace/secrets/runtime.env` 已注入的代理契约。WSL 可使用 `SUNABOT_PROXY_MODE=auto` 动态发现默认网关，或使用 `wsl-host` 要求探测必须成功；无需在 systemd unit 或启动脚本中固定宿主 IP。回环地址始终加入 `NO_PROXY`，NapCat 与 OneBot 仍只走 `127.0.0.1`。
+
 先在 Linux/WSL 使用锁定的 Node 版本构建：
 
 ```bash

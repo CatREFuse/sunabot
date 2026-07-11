@@ -13,6 +13,7 @@
     "runtimeUsers",
     "paths",
     "network",
+    "outboundProxy",
     "processes",
     "shutdownTimeoutSeconds",
     "health",
@@ -100,6 +101,40 @@
         "apiPort": { "$ref": "#/$defs/port" },
         "napcatWebuiPort": { "$ref": "#/$defs/port" },
         "onebotReverseWebSocket": { "const": "ws://127.0.0.1:8787/onebot/v11/ws" }
+      }
+    },
+    "outboundProxy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "defaultMode",
+        "supportedModes",
+        "explicitUrlEnv",
+        "modeEnv",
+        "portsEnv",
+        "noProxyRequired"
+      ],
+      "properties": {
+        "defaultMode": { "const": "auto" },
+        "supportedModes": {
+          "type": "array",
+          "prefixItems": [
+            { "const": "auto" },
+            { "const": "env" },
+            { "const": "wsl-host" },
+            { "const": "off" }
+          ],
+          "items": false
+        },
+        "explicitUrlEnv": { "const": "SUNABOT_PROXY_URL" },
+        "modeEnv": { "const": "SUNABOT_PROXY_MODE" },
+        "portsEnv": { "const": "SUNABOT_PROXY_PORTS" },
+        "noProxyRequired": {
+          "type": "array",
+          "minItems": 4,
+          "uniqueItems": true,
+          "contains": { "const": "127.0.0.1" }
+        }
       }
     },
     "processes": { "type": "object" },

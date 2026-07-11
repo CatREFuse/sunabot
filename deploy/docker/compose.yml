@@ -18,6 +18,10 @@ services:
       SUNABOT_HOST: 0.0.0.0
       SUNABOT_PORT: 8787
       SUNABOT_WORKSPACE: /srv/sunabot/workspace
+      SUNABOT_PROXY_MODE: ${SUNABOT_PROXY_MODE:-auto}
+      SUNABOT_PROXY_DISCOVERED_URL: ${SUNABOT_PROXY_DISCOVERED_URL:-}
+      NO_PROXY: "${NO_PROXY:-localhost,127.0.0.1,::1,[::1]}"
+      no_proxy: "${no_proxy:-localhost,127.0.0.1,::1,[::1]}"
     ports:
       - "127.0.0.1:${SUNABOT_PORT:-8787}:8787"
       - "127.0.0.1:${NAPCAT_WEBUI_PORT:-6099}:6099"

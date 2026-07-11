@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { resolveProjectRoot } from "../shared/paths.mjs";
+import { PROXY_RUNTIME_CONTRACT } from "../../packages/platform/proxy.mjs";
 
 const root = resolveProjectRoot(import.meta.url);
 const contractPath = path.join(root, "deploy/runtime-contract.json");
@@ -44,6 +45,15 @@ expect(Number(onebot.port) === contract.network.apiPort, "OneBot URL and API por
 expect(onebot.pathname === "/onebot/v11/ws", "OneBot URL path must be fixed");
 expect(contract.docker.composeService === "qq-runtime", "Compose service name must be qq-runtime");
 expect(contract.docker.workspaceMount === contract.paths.workspace, "Docker workspace mount must match");
+expect(
+  JSON.stringify(contract.outboundProxy) === JSON.stringify(PROXY_RUNTIME_CONTRACT),
+  "outbound proxy runtime contract must match packages/platform"
+);
+expect(compose.includes("SUNABOT_PROXY_MODE"), "Compose must pass the outbound proxy mode contract");
+expect(
+  compose.includes("SUNABOT_PROXY_DISCOVERED_URL"),
+  "Compose must pass credential-free WSL proxy discovery"
+);
 
 for (const [name, component] of Object.entries(lock.components ?? {})) {
   expect(Array.isArray(component.architectures) && component.architectures.length > 0,

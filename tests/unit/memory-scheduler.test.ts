@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { MemorySchedulerStore, type MemoryQueuedMessage } from "../../services/memory/memoryScheduler.js";
+import { MemorySchedulerStore, type MemoryQueuedMessage } from "../../services/memory/public.js";
 import { closeApplicationDataStores } from "../../adapters/sqlite/applicationDataStore.js";
 import { createAdminTestConfig } from "./admin-fixtures.js";
 

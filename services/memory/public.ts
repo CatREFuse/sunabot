@@ -1,3 +1,4 @@
+export * from "./memoryApi.js";
 export {
   configureMemoryPersistence,
   memoryDatabasePath,
@@ -6,13 +7,4 @@ export {
   type MemoryPersistenceProvider,
   type MemoryRepositoryPort
 } from "./persistence.js";
-export {
-  createMemoryEntry,
-  deleteMemoryEntry,
-  listMemoryEntries,
-  recallMemory,
-  updateMemoryEntry,
-  type MemoryEntry,
-  type MemorySource,
-  type MemorySourceId
-} from "./memoryService.js";
+export { MemorySchedulerStore, type MemoryQueuedMessage } from "./memoryScheduler.js";

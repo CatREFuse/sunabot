@@ -30,6 +30,18 @@ NAPCAT_ACCOUNT=你的QQ号
 ONEBOT_ACCESS_TOKEN=随机长令牌
 ```
 
+模型出口需要使用 Windows 上的 Clash 等代理时，Native 和 Docker 使用同一组环境变量：
+
+```text
+SUNABOT_PROXY_MODE=auto
+SUNABOT_PROXY_PORTS=7890
+NO_PROXY=localhost,127.0.0.1,::1,[::1]
+```
+
+`auto` 仅在 WSL 中从当前默认路由发现 Windows 宿主地址，并依次探测配置端口，不保存固定网关 IP。必须使用代理时可设为 `wsl-host`，探测失败会阻止启动；`env` 只读取显式 `SUNABOT_PROXY_URL` 或标准 `HTTP_PROXY`、`HTTPS_PROXY`，`off` 完全禁用。带凭据的代理 URL 只能写入忽略的 `workspace/secrets/runtime.env`，运行日志和状态接口不会返回该 URL。`NO_PROXY` 会自动补齐回环地址，因此 OneBot 反向 WebSocket、NapCat WebUI 和本机健康检查不会进入代理。
+
+Docker 下通过 `npm run qq:up` 启动。包装器在 WSL 侧完成自动探测，只向 Compose 传入不含凭据的已发现地址；显式或带凭据代理仍由 `workspace/secrets/runtime.env` 传入容器。
+
 初始化 NapCat OneBot 配置并启动：
 
 ```bash

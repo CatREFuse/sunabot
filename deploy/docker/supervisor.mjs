@@ -35,7 +35,7 @@ const state = {
 await persistState();
 startManaged("sunabot", {
   command: process.execPath,
-  args: ["--use-env-proxy", path.join(releaseRoot, "dist/apps/api/main.js")],
+  args: [path.join(releaseRoot, "dist/apps/api/main.js")],
   cwd: releaseRoot,
   restartDelayMs: 2_000,
   env: {

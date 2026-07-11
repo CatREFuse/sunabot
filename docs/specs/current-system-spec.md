@@ -29,7 +29,9 @@ NapCat ── /srv/sunabot/workspace/business/media/images ── Sunabot
 Browser ── Fastify Admin API ── Vue 管理台
 ```
 
-QQ Runtime 不支持远程 OneBot 或远程 NapCat。Docker 下 Compose 只有一个 service 和一个容器，容器内由监督器运行 Sunabot 与 NapCat/QQ 两个进程；非 Docker 下二者运行在同一 Linux/WSL 环境。两种方式固定使用 `127.0.0.1` 和 `/srv/sunabot/workspace`，不使用容器 DNS、宿主机网关或局域网地址。
+QQ Runtime 不支持远程 OneBot 或远程 NapCat。Docker 下 Compose 只有一个 service 和一个容器，容器内由监督器运行 Sunabot 与 NapCat/QQ 两个进程；非 Docker 下二者运行在同一 Linux/WSL 环境。两种方式的 OneBot、NapCat 与本机健康通信固定使用 `127.0.0.1` 和 `/srv/sunabot/workspace`，不使用容器 DNS、宿主机网关或局域网地址。
+
+Provider、Codex CLI 与联网工具的出站 HTTP(S) 可独立使用代理。API 在载入 composition root 前由 `packages/platform/proxy.mjs` 解析并安装 Undici dispatcher，优先级为 `SUNABOT_PROXY_URL`、标准 `HTTP_PROXY`/`HTTPS_PROXY`、WSL 默认网关与配置端口探测。`SUNABOT_PROXY_MODE` 支持 `auto`、`env`、`wsl-host` 和 `off`；网关只从当前默认路由动态发现，不写死地址。Native、Docker 和 `qq-compose` 使用 `deploy/runtime-contract.json` 中的同一代理契约。`NO_PROXY` 必须包含 `localhost`、`127.0.0.1` 和 IPv6 回环，代理 URL 与凭据不得进入日志、状态接口或 Git。
 
 后端由 Node.js 24、TypeScript 和 Fastify 构建，管理台由 Vue 3、Vue Router 和 Vite 构建。生产服务由 `dist/apps/api/main.js` 启动，并提供 API、Web 静态资源、深链接回退、生成图片和 OneBot WebSocket 入口。
 
@@ -68,6 +70,8 @@ QQ Runtime 不支持远程 OneBot 或远程 NapCat。Docker 下 Compose 只有�
 ### 4.1 Provider
 
 支持 OpenAI Responses 和 Codex Responses。Provider 配置包含模型、图像模型、base URL、API key 环境变量、推理强度、温度和输出 token 上限。模型请求、响应、重试和工具结果写入请求日志，密钥和授权字段必须脱敏。
+
+Provider 请求使用应用启动时安装的统一出站 dispatcher。显式代理和标准代理环境变量从 `workspace/secrets/runtime.env` 或进程环境读取；WSL 自动模式仅在没有显式代理时探测当前默认网关。代理选择不改变 OneBot 回环链路。
 
 ### 4.2 最终提示词
 
@@ -192,6 +196,7 @@ QQ Runtime 不支持远程 OneBot 或远程 NapCat。Docker 下 Compose 只有�
 | 功能 | 主要代码 |
 | --- | --- |
 | 服务启动入口 | `apps/api/main.ts` |
+| 出站代理解析与安装 | `packages/platform/proxy.mjs`, `deploy/runtime-contract.json` |
 | API 组合、静态站点、图片历史 | `apps/api/server.ts` |
 | OneBot 管理 API | `apps/api/plugins/onebotRoutes.ts` |
 | 配置加载、默认值、路径解析 | `src/config.ts`, `src/types.ts` |
