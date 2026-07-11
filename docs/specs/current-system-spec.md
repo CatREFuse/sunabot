@@ -192,7 +192,8 @@ QQ Runtime 不支持远程 OneBot 或远程 NapCat。Docker 下 Compose 只有�
 | 功能 | 主要代码 |
 | --- | --- |
 | 服务启动入口 | `apps/api/main.ts` |
-| API、静态站点、图片历史 | `apps/api/server.ts` |
+| API 组合、静态站点、图片历史 | `apps/api/server.ts` |
+| OneBot 管理 API | `apps/api/plugins/onebotRoutes.ts` |
 | 配置加载、默认值、路径解析 | `src/config.ts`, `src/types.ts` |
 | SQLite 主库 | `adapters/sqlite/applicationDataStore.ts` |
 | OneBot 连接、事件和 action | `adapters/onebot/onebotGateway.ts`, `adapters/onebot/qqMedia.ts` |

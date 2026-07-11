@@ -21,13 +21,11 @@ export const architectureDebtAllowances = [
 
   ...[
     ["src/runtime.ts", 4_800, "MODULE-001 through MODULE-005"],
-    ["services/memory/memoryService.ts", 1_800, "MODULE-005"],
     ["adapters/model/openaiProvider.ts", 1_650, "MODULE-006"],
     ["services/media/attachments/cache.ts", 1_500, "MODULE-007"],
     ["services/sessions/sessionStore.ts", 1_400, "CONTRACT-003, DATA-003"],
     ["services/media/attachments/service.ts", 1_300, "MODULE-007"],
     ["adapters/codex/codexTool.ts", 1_200, "MODULE-006"],
-    ["apps/api/server.ts", 1_100, "MODULE-008"],
     ["src/admin/configService.ts", 900, "MODULE-008, MODULE-009"]
   ].map(([source, ceiling, tracking]) => ({
     id: `file-lines:${source}`,
