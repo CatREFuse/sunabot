@@ -19,6 +19,7 @@
     "test:e2e": "playwright test --project=e2e",
     "test:visual": "playwright test --project=visual-light --project=visual-dark",
     "architecture": "node tooling/quality/architecture.mjs",
+    "smoke:api": "node tooling/quality/smoke-api.mjs",
     "verify": "npm run architecture && npm run check && npm run test && npm run build && npm run test:e2e",
     "workspace:init": "node tooling/workspace/init-workspace.mjs",
     "workspace:migrate": "node tooling/migrations/migrate-workspace-layout.mjs",
