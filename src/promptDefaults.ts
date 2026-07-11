@@ -1,9 +1,7 @@
-import { workspaceBashTool } from "./bashTool.js";
-import { codexTool } from "../adapters/codex/codexTool.js";
-import { generateImgTool } from "./generateImgTool.js";
-import { memoryRecallTool } from "./memory.js";
-import { selfieTool } from "./selfieTool.js";
-import { websearchTool } from "../adapters/model/webSearchTool.js";
+import { workspaceBashTool } from "../services/tools/bashTool.js";
+import { codexTool, memoryRecallTool, websearchTool } from "../services/tools/definitions.js";
+import { generateImgTool } from "../services/tools/generateImgTool.js";
+import { selfieTool } from "../services/tools/selfieTool.js";
 import type { FinalPromptTemplate, OpenAIToolDefinition } from "./promptSystem.js";
 
 export const DEFAULT_WORK_MEMORY_COMPRESS_IN_PROMPT = [

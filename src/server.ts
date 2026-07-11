@@ -13,7 +13,7 @@ import { CodexAuthService } from "./admin/codexAuth.js";
 import { MonitorSettingsStore } from "./admin/monitorSettings.js";
 import { AdminApiError, badRequest, notFound } from "./admin/errors.js";
 import { IMAGE_MODEL_CATALOG, MODEL_CATALOG, REASONING_EFFORTS } from "./admin/models.js";
-import { defaultTools } from "./tools.js";
+import { defaultTools } from "../services/tools/tools.js";
 import { getConfigPath, getRootDir, getWorkspacePath, loadConfig } from "./config.js";
 import { applicationDataStore } from "./dataStore.js";
 import { createMemoryEntry, deleteMemoryEntry, listMemoryEntries, recallMemory, updateMemoryEntry } from "./memory.js";

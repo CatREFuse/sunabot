@@ -23,15 +23,17 @@ import {
   createWorkspaceBashTool,
   runWorkspaceBash,
   WorkspaceBashInput
-} from "../../src/bashTool.js";
-import { CODEX_TOOL_NAME, codexTool } from "../codex/codexTool.js";
-import { GENERATE_IMG_TOOL_NAME, GenerateImageRunner, runGenerateImg, generateImgTool } from "../../src/generateImgTool.js";
-import { MEMORY_RECALL_TOOL_NAME, MemoryRecallInput, memoryRecallTool } from "../../src/memory.js";
+} from "../../services/tools/bashTool.js";
+import { CODEX_TOOL_NAME, MEMORY_RECALL_TOOL_NAME, WEBSEARCH_TOOL_NAME } from "../../services/tools/definitions.js";
+import { GENERATE_IMG_TOOL_NAME, GenerateImageRunner, runGenerateImg, generateImgTool } from "../../services/tools/generateImgTool.js";
+import { MemoryRecallInput } from "../../src/memory.js";
 import { appendRequestLog } from "../../src/requestLog.js";
-import { SELFIE_TOOL_NAME, SelfieRunner, selfieTool } from "../../src/selfieTool.js";
-import { WEBSEARCH_TOOL_NAME, runWebsearch, websearchTool, WebsearchInput } from "./webSearchTool.js";
+import { SELFIE_TOOL_NAME, SelfieRunner, selfieTool } from "../../services/tools/selfieTool.js";
+import { runWebsearch, WebsearchInput } from "./webSearchTool.js";
 import type { OpenAIToolDefinition, RenderedPromptRequest } from "../../src/promptSystem.js";
-import { providerToolExecutionMode, resolveProviderToolDefinitions } from "../../src/toolRegistry.js";
+import { providerToolExecutionMode, resolveProviderToolDefinitions } from "../../services/tools/toolRegistry.js";
+import type { ProviderLogContext } from "../../packages/contracts/model/modelGateway.js";
+export type { ProviderLogContext } from "../../packages/contracts/model/modelGateway.js";
 
 const DEFAULT_IMAGE_MODEL = "gpt-image-2";
 const IMAGE_GENERATION_INSTRUCTIONS = "Generate the requested image with the hosted image_generation tool. Return the generated image only.";
@@ -70,16 +72,6 @@ export interface ProviderDeferredTurn {
 }
 
 export type ProviderTurnResult = ProviderCompletedTurn | ProviderDeferredTurn;
-
-export interface ProviderLogContext {
-  conversationId?: string;
-  incomingMessageId?: string;
-  runId?: string;
-  stage?: string;
-  attempt?: number;
-  retry?: number;
-  maxRetries?: number;
-}
 
 export interface ProviderBashOptions {
   enabled: boolean;

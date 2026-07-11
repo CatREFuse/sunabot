@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import type { BotConfig } from "../../src/types.js";
-import { runGenerateImg } from "../../src/generateImgTool.js";
+import { runGenerateImg } from "../../services/tools/generateImgTool.js";
 
 describe("generate_img quality", () => {
   it("passes an explicit high quality request to the image provider", async () => {

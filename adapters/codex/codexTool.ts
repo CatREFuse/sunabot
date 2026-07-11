@@ -4,11 +4,11 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { CODEX_MAX_TASK_CHARS } from "../../services/tools/definitions.js";
+export { CODEX_MAX_TASK_CHARS, CODEX_TOOL_NAME, codexTool } from "../../services/tools/definitions.js";
 
-export const CODEX_TOOL_NAME = "codex";
 export const CODEX_DEFAULT_TIMEOUT_MS = 15 * 60 * 1000;
 export const CODEX_DEFAULT_TERMINATION_GRACE_MS = 3_000;
-export const CODEX_MAX_TASK_CHARS = 32_000;
 export const CODEX_MAX_STDOUT_BYTES = 4 * 1024 * 1024;
 export const CODEX_MAX_JSONL_LINE_BYTES = 1024 * 1024;
 export const CODEX_MAX_STDERR_CHARS = 64 * 1024;
@@ -26,34 +26,6 @@ export interface CodexToolInput {
   task?: unknown;
   kind?: unknown;
 }
-
-export const codexTool = {
-  type: "function",
-  name: CODEX_TOOL_NAME,
-  description: [
-    "Delegate complex local inspection tasks, deep multi-source research or search tasks, and long-form analysis or reasoning to an asynchronous Codex worker.",
-    "Use websearch for ordinary web lookups and short current-information queries."
-  ].join(" "),
-  parameters: {
-    type: "object",
-    additionalProperties: false,
-    properties: {
-      task: {
-        type: "string",
-        minLength: 1,
-        maxLength: CODEX_MAX_TASK_CHARS,
-        description: "The complete, self-contained task for the Codex worker."
-      },
-      kind: {
-        type: "string",
-        enum: ["local", "research", "analysis"],
-        description: "local inspects workspace files; research performs deep web research; analysis handles long reasoning."
-      }
-    },
-    required: ["task", "kind"]
-  },
-  strict: true
-} as const;
 
 export interface CodexToolError {
   code: string;

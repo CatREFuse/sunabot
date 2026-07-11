@@ -1,4 +1,4 @@
-import { ImageQuality, ImageResult } from "./types.js";
+import { ImageQuality, ImageResult } from "../../src/types.js";
 
 export const SELFIE_TOOL_NAME = "selfie";
 

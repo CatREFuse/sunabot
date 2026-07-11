@@ -8,7 +8,7 @@ import { AdminMutationMutex } from "./admin/mutation.js";
 import { AdminApiError, badRequest } from "./admin/errors.js";
 import { applicationDataStore, type MemoryDataSource } from "./dataStore.js";
 
-export const MEMORY_RECALL_TOOL_NAME = "memory_recall";
+export { MEMORY_RECALL_TOOL_NAME, memoryRecallTool } from "../services/tools/definitions.js";
 const memoryMutationMutex = new AdminMutationMutex();
 
 export type MemorySourceId = "working" | "long_term" | "user_profile";
@@ -228,33 +228,6 @@ const sourceDefinitions: SourceDefinition[] = [
     idPrefix: "profile"
   },
 ];
-
-export const memoryRecallTool = {
-  type: "function",
-  name: MEMORY_RECALL_TOOL_NAME,
-  description: "Recall relevant persona memory using BM25 search over the agent memory files.",
-  parameters: {
-    type: "object",
-    additionalProperties: false,
-    properties: {
-      query: {
-        type: "string",
-        description: "The memory search query."
-      },
-      source: {
-        type: ["string", "null"],
-        enum: ["all", "working", "long_term", "user_profile", null],
-        description: "Memory source to search. Use null or all for every source."
-      },
-      limit: {
-        type: ["integer", "null"],
-        description: "Maximum result count from 1 to 20. Use null for the default."
-      }
-    },
-    required: ["query", "source", "limit"]
-  },
-  strict: true
-};
 
 export async function listMemoryEntries(config: AppConfig, sourceInput?: unknown) {
   const sources = selectSources(sourceInput);

@@ -3,8 +3,9 @@ import { getWorkspaceDir } from "../../src/config.js";
 import { appendRequestLog } from "../../src/requestLog.js";
 import { BotConfig } from "../../src/types.js";
 import { resolveTavilyApiKeys } from "./webSearchSettings.js";
+import { WEBSEARCH_TOOL_NAME } from "../../services/tools/definitions.js";
+export { WEBSEARCH_TOOL_NAME, websearchTool } from "../../services/tools/definitions.js";
 
-export const WEBSEARCH_TOOL_NAME = "websearch";
 export const WEBSEARCH_TIMEOUT_MS = 30_000;
 
 const MAX_QUERY_LENGTH = 1_000;
@@ -20,28 +21,6 @@ export interface WebsearchInput {
 export interface WebsearchRunOptions {
   signal?: AbortSignal;
 }
-
-export const websearchTool = {
-  type: "function",
-  name: WEBSEARCH_TOOL_NAME,
-  description: "Search the live web for current information. Returns titles, URLs, and concise result snippets.",
-  parameters: {
-    type: "object",
-    additionalProperties: false,
-    properties: {
-      query: {
-        type: "string",
-        description: "The web search query."
-      },
-      maxResults: {
-        type: ["integer", "null"],
-        description: "Maximum result count from 1 to 10. Use null for the configured default."
-      }
-    },
-    required: ["query", "maxResults"]
-  },
-  strict: true
-};
 
 export async function runWebsearch(
   input: WebsearchInput,

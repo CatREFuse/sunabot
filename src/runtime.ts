@@ -70,12 +70,12 @@ import {
   type ProviderCompleteOptions,
   type ProviderDeferredTurn
 } from "../adapters/model/openaiProvider.js";
-import type { ProviderLogContext } from "../adapters/model/openaiProvider.js";
+import type { ProviderLogContext } from "../packages/contracts/model/modelGateway.js";
 import { loadPersona, AgentPersona } from "./persona.js";
 import { OneBotGateway, OneBotGatewayDelegate } from "../adapters/onebot/onebotGateway.js";
 import { appendRequestLog } from "./requestLog.js";
 import { SenderNameResolver, senderDisplayName, senderIdentity } from "./senderName.js";
-import type { SelfieInput, SelfieRunResult } from "./selfieTool.js";
+import type { SelfieInput, SelfieRunResult } from "../services/tools/selfieTool.js";
 import { CodexToolRunner, type CodexRunner } from "../adapters/codex/codexTool.js";
 import {
   OutboxDisconnectedError,
@@ -83,7 +83,7 @@ import {
   type SessionHandleResult
 } from "./sessionCoordinator.js";
 import { SessionStore, type OutboxRecord, type SessionEventRecord } from "./sessionStore.js";
-import { TOOL_CALL_TIMEOUT_MS } from "./tools.js";
+import { TOOL_CALL_TIMEOUT_MS } from "../services/tools/tools.js";
 import { promptDefinitionById } from "./promptCatalog.js";
 import { defaultPromptContent as defaultFinalPromptContent } from "./promptDefaults.js";
 import {

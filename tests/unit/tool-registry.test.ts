@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { listToolMetadata, providerToolExecutionMode, resolveProviderToolDefinitions } from "../../src/toolRegistry.js";
+import { listToolMetadata, providerToolExecutionMode, resolveProviderToolDefinitions } from "../../services/tools/toolRegistry.js";
 
 describe("ToolRegistry", () => {
   it("uses one canonical name for metadata and the model definition", () => {

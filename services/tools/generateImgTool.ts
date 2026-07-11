@@ -1,5 +1,5 @@
-import { ImageResult, BotConfig, ImageQuality } from "./types.js";
-import type { ProviderLogContext } from "../adapters/model/openaiProvider.js";
+import { ImageResult, BotConfig, ImageQuality } from "../../src/types.js";
+import type { ProviderLogContext } from "../../packages/contracts/model/modelGateway.js";
 
 export const GENERATE_IMG_TOOL_NAME = "generate_img";
 export type ImageResolution = BotConfig["tools"]["generateImg"]["resolution"];
