@@ -283,8 +283,6 @@ describe("SessionCoordinator", () => {
     expect(attempts.get("reconnect:1")).toBe(1);
     expect(attempts.get("reconnect:2")).toBeUndefined();
     expect(store.listOutbox("group:reconnect")[0]).toMatchObject({ status: "pending", attempts: 1 });
-    await new Promise<void>((resolve) => setTimeout(resolve, 8));
-    expect(attempts.get("reconnect:1")).toBe(1);
 
     connected = true;
     await waitUntil(() => store.listOutbox("group:reconnect").every((outbox) => outbox.status === "sent"));

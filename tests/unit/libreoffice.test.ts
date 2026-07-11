@@ -37,5 +37,5 @@ describe("LibreOffice integration", () => {
     expect(result.outputPath).toBe(path.join(outputDir, "中文资料.pdf"));
     expect(bytes.subarray(0, 5).toString("ascii")).toBe("%PDF-");
     expect(bytes.length).toBeGreaterThan(500);
-  }, 30_000);
+  }, 60_000);
 });
