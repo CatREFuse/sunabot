@@ -2,6 +2,33 @@
 
 sunabot 是一个面向个人自托管场景的 QQ Agent 服务：NapCat 通过 OneBot v11 反向 WebSocket 接入 Node.js 后端，后端负责会话编排、长期记忆、文件理解、联网搜索、图像生成、Codex 异步任务和 Vue 管理台。
 
+## OneBot 与 NapCat 运行体系
+
+项目固定使用 OneBot v11 反向 WebSocket，NapCat 主动连接 Sunabot；消息事件、回复 action 和 action 回包共用这条连接。生成图片由 Sunabot 保存后，通过带签名的 HTTP 地址交给 NapCat 拉取并发送到 QQ。
+
+```text
+QQ ↔ NapCat ── OneBot v11 reverse WebSocket ── Sunabot
+                                                    ├── Provider / tools
+                                                    ├── session queue / outbox
+                                                    └── signed image endpoint
+```
+
+NapCat 与 Sunabot 在同一 WSL 实例中直接运行时使用：
+
+```text
+WebSocket:      ws://127.0.0.1:8787/onebot/v11/ws
+图片回调地址:  http://127.0.0.1:8787
+```
+
+NapCat 在 Docker、Sunabot 在宿主机运行时使用：
+
+```text
+WebSocket:      ws://host.docker.internal:8787/onebot/v11/ws
+图片回调地址:  http://host.docker.internal:8787
+```
+
+Docker 模式需在 `workspace/.env` 设置 `SUNABOT_OUTBOUND_MEDIA_BASE_URL=http://host.docker.internal:8787`；同一 WSL 实例直接运行时保留默认值即可。链路验收至少包括 QQ 在线、Sunabot 监听 8787、OneBot WebSocket 已连接、文本 action 成功、图片回调可访问以及当前 Provider 测试成功。完整配置见 [NapCat 与 OneBot 配置](docs/setup-napcat.md)。
+
 ## 代码与数据边界
 
 仓库只托管可审阅、可协作的业务代码、测试和文档。所有终端相关内容都位于 `workspace/`，并被 Git 整体忽略：
