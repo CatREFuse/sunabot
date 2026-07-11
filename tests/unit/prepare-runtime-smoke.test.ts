@@ -64,6 +64,32 @@ describe("prepare provider smoke workspace", () => {
     await expect(prepareProviderSmokeWorkspace({ source, destination, confirmCredentialCopy: true }))
       .rejects.toThrow(/不在源 workspace/);
   });
+
+  it("converts a workspace-contained Codex login into the isolated token variable", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-prepare-smoke-codex-"));
+    temporaryDirectories.push(root);
+    const source = path.join(root, "source");
+    const destination = path.join(root, "destination");
+    await write(path.join(source, "config/sunabot.json"), JSON.stringify({
+      persona: { agentWorkspace: "workspace/agents/plana" },
+      providers: {
+        defaultProviderId: "codex",
+        items: [{ id: "codex", kind: "codex-responses", model: "gpt-test", apiKeyEnv: "CODEX_ACCESS_TOKEN", envFile: ".env", enabled: true }]
+      },
+      bot: { adminQq: "171419991" },
+      onebot: { reverseWsPath: "/onebot/v11/ws", accessTokenEnv: "ONEBOT_ACCESS_TOKEN" }
+    }));
+    await write(path.join(source, ".env"), "OPEN_ARONA_CODEX_AUTH_FILE=workspace/security/codex/auth.json\n");
+    await write(path.join(source, "security/codex/auth.json"), JSON.stringify({
+      tokens: { access_token: "codex-test-access-token" }
+    }));
+
+    const result = await prepareProviderSmokeWorkspace({ source, destination, confirmCredentialCopy: true });
+    const environment = await fs.readFile(result.envPath, "utf8");
+    expect(environment).toContain("CODEX_ACCESS_TOKEN=");
+    expect(environment).toContain("codex-test-access-token");
+    expect(environment).not.toContain("OPEN_ARONA_CODEX_AUTH_FILE");
+  });
 });
 
 async function write(filePath: string, content: string) {

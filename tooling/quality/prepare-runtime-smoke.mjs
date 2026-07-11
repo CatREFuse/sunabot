@@ -25,7 +25,16 @@ export async function prepareProviderSmokeWorkspace(options) {
   const sourceEnvPath = resolveSourcePath(source, provider.envFile || "workspace/secrets/runtime.env");
   await assertFileInside(sourceEnvPath, source, "Provider 凭据文件");
   const sourceEnvironment = dotenv.parse(await fs.readFile(sourceEnvPath, "utf8"));
-  const providerToken = String(sourceEnvironment[provider.apiKeyEnv] ?? "").trim();
+  let providerToken = String(sourceEnvironment[provider.apiKeyEnv] ?? "").trim();
+  if (!providerToken && provider.kind === "codex-responses") {
+    const configuredAuthFile = String(
+      sourceEnvironment.OPEN_ARONA_CODEX_AUTH_FILE ?? "workspace/security/codex/auth.json"
+    ).trim();
+    const authFile = resolveSourcePath(source, configuredAuthFile);
+    await assertFileInside(authFile, source, "Codex 授权文件");
+    const auth = JSON.parse(await fs.readFile(authFile, "utf8"));
+    providerToken = String(auth.tokens?.access_token ?? "").trim();
+  }
   if (!providerToken) throw new Error(`源 Provider 凭据未设置 ${provider.apiKeyEnv}。`);
 
   const destinationConfigPath = path.join(destination, "business/config/sunabot.json");
