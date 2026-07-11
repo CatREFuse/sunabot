@@ -46,7 +46,7 @@ export function defaultConfig(): AppConfig {
   const providers: ProviderConfig[] = [
     {
       id: "open-arona-codex",
-      label: "ChatGPT 订阅",
+      label: "Codex 订阅",
       kind: "codex-responses",
       enabled: true,
       model: "gpt-5.5",
