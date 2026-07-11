@@ -215,7 +215,7 @@ Provider 请求使用应用启动时安装的统一出站 dispatcher。显式代
 | 会话事件、turn、工具任务、outbox | `services/sessions/`, `packages/contracts/session/runtimeMessages.ts` |
 | 群聊门控与编排策略 | `services/orchestration/groupReplyPolicy.ts` |
 | 命令路由与钩子 | `services/messaging/commandRouter.ts`, `services/messaging/hookBus.ts` |
-| Provider 与工具循环 | `adapters/model/openaiProvider.ts`, `services/tools/` |
+| Provider 与工具循环 | `adapters/model/openaiProvider.ts`, `adapters/model/provider/`, `services/tools/` |
 | Codex 异步工具 | `adapters/codex/codexTool.ts` |
 | 联网搜索 | `adapters/model/webSearchTool.ts`, `adapters/model/webSearchSettings.ts` |
 | Bash、图像生成、自拍 | `services/tools/bashTool.ts`, `services/tools/generateImgTool.ts`, `services/tools/selfieTool.ts` |

@@ -1,0 +1,296 @@
+import fs from "node:fs";
+import path from "node:path";
+import sharp from "sharp";
+import type { ChatMessage } from "../../../src/types.js";
+import { getWorkspacePath } from "../../../src/config.js";
+import { appendRequestLog } from "../../../src/requestLog.js";
+import { WORKSPACE_LAYOUT } from "../../../packages/platform/workspaceLayout.js";
+import { MAX_ATTACHMENT_VISUAL_PAGES } from "../../../services/media/attachments/context.js";
+import { normalizeAttachmentImage } from "../../../services/media/attachments/image.js";
+import { errorMessage, uniqueStrings } from "./valueUtils.js";
+
+const MAX_INPUT_IMAGE_BYTES = 8 * 1024 * 1024;
+const MAX_IMAGE_FETCH_BYTES = 64 * 1024 * 1024;
+
+export async function buildImageGenerationContent(prompt: string, referenceImageUrls: string[]) {
+  const content: Array<Record<string, unknown>> = [
+    {
+      type: "input_text",
+      text: prompt
+    }
+  ];
+
+  for (const imageUrl of uniqueStrings(referenceImageUrls).slice(0, 4)) {
+    const resolvedImageUrl = await resolveInputImageUrl(imageUrl, {
+      source: "image_generation.reference",
+      logFailures: true
+    });
+    if (!resolvedImageUrl) continue;
+    content.push({
+      type: "input_image",
+      image_url: resolvedImageUrl
+    });
+  }
+
+  return content;
+}
+
+export function countInputImages(content: Array<Record<string, unknown>>) {
+  return content.filter((item) => item.type === "input_image").length;
+}
+
+export async function toResponsesInputMessage(message: ChatMessage) {
+  const textType = message.role === "assistant" ? "output_text" : "input_text";
+  const content = [
+    {
+      type: textType,
+      text: message.content
+    }
+  ];
+
+  if (message.role === "user") {
+    for (const imageUrl of message.imageUrls ?? []) {
+      const resolvedImageUrl = await resolveInputImageUrl(imageUrl);
+      if (!resolvedImageUrl) continue;
+      content.push({
+        type: "input_image",
+        image_url: resolvedImageUrl
+      } as never);
+    }
+    for (const localImagePath of (message.localImagePaths ?? []).slice(0, MAX_ATTACHMENT_VISUAL_PAGES)) {
+      const resolvedImageUrl = await resolveLocalInputImage(localImagePath);
+      if (!resolvedImageUrl) continue;
+      content.push({
+        type: "input_image",
+        image_url: resolvedImageUrl
+      } as never);
+    }
+  }
+
+  return {
+    role: message.role,
+    content
+  };
+}
+
+export async function toChatCompletionMessage(message: ChatMessage) {
+  if (message.role !== "user" || (!(message.imageUrls?.length) && !(message.localImagePaths?.length))) {
+    return { role: message.role, content: message.content };
+  }
+  const content: Array<Record<string, unknown>> = [{ type: "text", text: message.content }];
+  for (const imageUrl of message.imageUrls ?? []) {
+    const resolved = await resolveInputImageUrl(imageUrl);
+    if (resolved) content.push({ type: "image_url", image_url: { url: resolved } });
+  }
+  for (const localPath of (message.localImagePaths ?? []).slice(0, MAX_ATTACHMENT_VISUAL_PAGES)) {
+    const resolved = await resolveLocalInputImage(localPath);
+    if (resolved) content.push({ type: "image_url", image_url: { url: resolved } });
+  }
+  return { role: message.role, content };
+}
+
+export async function resolveLocalInputImage(filePath: string) {
+  const cacheRoot = getWorkspacePath(WORKSPACE_LAYOUT.attachmentCache);
+  try {
+    const sourceStats = await fs.promises.lstat(filePath);
+    if (sourceStats.isSymbolicLink() || !sourceStats.isFile()) return null;
+    const [realRoot, realFile] = await Promise.all([
+      fs.promises.realpath(cacheRoot),
+      fs.promises.realpath(filePath)
+    ]);
+    if (!isPathInside(realRoot, realFile)) return null;
+    const normalized = await normalizeAttachmentImage(realFile, {
+      maxBytes: MAX_INPUT_IMAGE_BYTES
+    });
+    return `data:${normalized.contentType};base64,${normalized.bytes.toString("base64")}`;
+  } catch {
+    return null;
+  }
+}
+
+function isPathInside(rootPath: string, candidatePath: string) {
+  const relative = path.relative(rootPath, candidatePath);
+  return relative === "" || (
+    relative !== ".." &&
+    !relative.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relative)
+  );
+}
+
+interface ResolveInputImageOptions {
+  source?: string;
+  logFailures?: boolean;
+}
+
+async function resolveInputImageUrl(imageUrl: string, options: ResolveInputImageOptions = {}) {
+  if (/^data:image\/[a-z0-9.+-]+;base64,/i.test(imageUrl)) return imageUrl;
+  if (!/^https?:\/\//i.test(imageUrl)) {
+    await logInputImageResolveFailure(imageUrl, "unsupported_url", options);
+    return null;
+  }
+
+  try {
+    const response = await fetch(imageUrl, {
+      signal: AbortSignal.timeout(15_000)
+    });
+    if (!response.ok) {
+      await logInputImageResolveFailure(imageUrl, "http_status", options, {
+        status: response.status
+      });
+      return null;
+    }
+
+    const contentType = response.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase() || "";
+    if (!contentType.startsWith("image/")) {
+      await logInputImageResolveFailure(imageUrl, "non_image_content_type", options, {
+        contentType
+      });
+      return null;
+    }
+
+    const contentLength = Number(response.headers.get("content-length") ?? 0);
+    if (contentLength > MAX_IMAGE_FETCH_BYTES) {
+      await logInputImageResolveFailure(imageUrl, "content_length_too_large", options, {
+        contentLength,
+        maxFetchBytes: MAX_IMAGE_FETCH_BYTES
+      });
+      return null;
+    }
+
+    const bytes = Buffer.from(await response.arrayBuffer());
+    if (bytes.length > MAX_IMAGE_FETCH_BYTES) {
+      await logInputImageResolveFailure(imageUrl, "image_too_large", options, {
+        byteLength: bytes.length,
+        maxFetchBytes: MAX_IMAGE_FETCH_BYTES
+      });
+      return null;
+    }
+
+    if (bytes.length > MAX_INPUT_IMAGE_BYTES) {
+      const compressed = await compressInputImage(bytes, contentType, MAX_INPUT_IMAGE_BYTES);
+      if (!compressed) {
+        await logInputImageResolveFailure(imageUrl, "compression_failed", options, {
+          byteLength: bytes.length,
+          maxBytes: MAX_INPUT_IMAGE_BYTES
+        });
+        return null;
+      }
+      await logInputImageResolveSuccess(imageUrl, options, {
+        compressed: true,
+        originalContentType: contentType,
+        contentType: compressed.contentType,
+        originalBytes: bytes.length,
+        byteLength: compressed.bytes.length,
+        maxBytes: MAX_INPUT_IMAGE_BYTES,
+        ...compressed.details
+      });
+      return `data:${compressed.contentType};base64,${compressed.bytes.toString("base64")}`;
+    }
+
+    return `data:${contentType};base64,${bytes.toString("base64")}`;
+  } catch (error) {
+    await logInputImageResolveFailure(imageUrl, "fetch_error", options, {
+      error: errorMessage(error)
+    });
+    return null;
+  }
+}
+
+interface CompressedInputImage {
+  bytes: Buffer;
+  contentType: string;
+  details: Record<string, unknown>;
+}
+
+async function compressInputImage(bytes: Buffer, contentType: string, maxBytes: number): Promise<CompressedInputImage | null> {
+  const metadata = await sharp(bytes, { animated: false }).metadata();
+  const sourceWidth = metadata.width ?? 0;
+  const sourceHeight = metadata.height ?? 0;
+  const scaleSteps = [1, 0.9, 0.8, 0.7, 0.6, 0.5, 0.42, 0.35, 0.3, 0.25];
+  const qualitySteps = [88, 80, 72, 64, 56, 48, 40, 34, 28];
+  let best: CompressedInputImage | null = null;
+
+  for (const scale of scaleSteps) {
+    const targetWidth = sourceWidth ? Math.max(1, Math.round(sourceWidth * scale)) : undefined;
+    const targetHeight = sourceHeight ? Math.max(1, Math.round(sourceHeight * scale)) : undefined;
+    for (const quality of qualitySteps) {
+      const pipeline = sharp(bytes, { animated: false })
+        .rotate()
+        .flatten({ background: "#ffffff" });
+      if (targetWidth && targetHeight && scale < 1) {
+        pipeline.resize({
+          width: targetWidth,
+          height: targetHeight,
+          fit: "inside",
+          withoutEnlargement: true
+        });
+      }
+      const output = await pipeline
+        .jpeg({ quality, mozjpeg: true })
+        .toBuffer();
+      const candidate: CompressedInputImage = {
+        bytes: output,
+        contentType: "image/jpeg",
+        details: {
+          sourceContentType: contentType,
+          sourceWidth: sourceWidth || undefined,
+          sourceHeight: sourceHeight || undefined,
+          scale,
+          quality,
+          width: targetWidth,
+          height: targetHeight
+        }
+      };
+      if (!best || output.length < best.bytes.length) best = candidate;
+      if (output.length <= maxBytes) return candidate;
+    }
+  }
+
+  return best && best.bytes.length <= maxBytes ? best : null;
+}
+
+async function logInputImageResolveFailure(
+  imageUrl: string,
+  reason: string,
+  options: ResolveInputImageOptions,
+  details: Record<string, unknown> = {}
+) {
+  if (!options.logFailures) return;
+  await appendRequestLog({
+    category: "image.resolve",
+    action: "input_image",
+    request: {
+      url: imageUrl
+    },
+    response: {
+      ok: false,
+      reason,
+      ...details
+    },
+    metadata: {
+      source: options.source
+    }
+  });
+}
+
+async function logInputImageResolveSuccess(
+  imageUrl: string,
+  options: ResolveInputImageOptions,
+  details: Record<string, unknown>
+) {
+  if (!options.logFailures) return;
+  await appendRequestLog({
+    category: "image.resolve",
+    action: "input_image",
+    request: {
+      url: imageUrl
+    },
+    response: {
+      ok: true,
+      ...details
+    },
+    metadata: {
+      source: options.source
+    }
+  });
+}
