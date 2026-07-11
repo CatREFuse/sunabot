@@ -161,7 +161,7 @@ Provider 请求使用应用启动时安装的统一出站 dispatcher。显式代
 - `workspace/business/config/sunabot.json`：应用配置，不保存明文密钥；
 - `workspace/business/agents/<agentId>/`：Agent 人格、提示词和人工维护文件；
 - `workspace/business/media/`：需要随业务恢复的图片和持久附件；
-- `workspace/runtime/napcat/`：QQ 登录态与 NapCat 运行状态；NapCat 配置唯一目录为 `workspace/runtime/napcat/config-full`，由 runtime contract 的 `paths.napcatConfig` 固定；
+- `workspace/runtime/napcat/`：QQ 登录态与 NapCat 运行状态；NapCat 配置唯一目录为 `workspace/runtime/napcat/config-full`，由 runtime contract 的 `paths.napcatConfig` 固定；登录二维码唯一文件为 `workspace/runtime/napcat/qrcode.png`，由 `paths.napcatQrCode` 固定，管理 API、Docker 与 Native 共用该路径；
 - `workspace/cache/`：可重建缓存，不进入快照；
 - Agent 人格和最终提示词：需要人工审阅和管理台编辑；
 - 单个附件 manifest、好友/群目录缓存：体积小且可重建；
@@ -198,11 +198,15 @@ Provider 请求使用应用启动时安装的统一出站 dispatcher。显式代
 | 服务启动入口 | `apps/api/main.ts` |
 | Node 版本一致性门禁 | `.node-version`, `.nvmrc`, `tooling/runtime/node-version-contract.mjs`, `tooling/runtime/validate-contract.mjs` |
 | 出站代理解析与安装 | `packages/platform/proxy.mjs`, `deploy/runtime-contract.json` |
-| API 组合、静态站点、图片历史 | `apps/api/server.ts` |
+| API 组合、生命周期、静态站点与错误映射 | `apps/api/server.ts` |
 | 管理鉴权 API | `apps/api/plugins/authRoutes.ts` |
 | Provider、Codex 授权与配置 API | `apps/api/plugins/providerConfigRoutes.ts` |
 | OneBot 管理 API | `apps/api/plugins/onebotRoutes.ts` |
 | 记忆管理 API | `apps/api/plugins/memoryRoutes.ts` |
+| 状态与监控 API | `apps/api/plugins/monitoringRoutes.ts` |
+| 会话与会话日志 API | `apps/api/plugins/conversationRoutes.ts` |
+| 图片、媒体代理、请求日志与图片测试 API | `apps/api/plugins/mediaRoutes.ts` |
+| Agent 文件与工具目录 API | `apps/api/plugins/agentToolRoutes.ts` |
 | 配置加载、默认值、路径解析 | `src/config.ts`, `src/types.ts` |
 | SQLite 主库 | `adapters/sqlite/applicationDataStore.ts` |
 | OneBot 连接、事件和 action | `adapters/onebot/onebotGateway.ts`, `adapters/onebot/qqMedia.ts` |
