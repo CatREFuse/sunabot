@@ -40,6 +40,7 @@ export interface OutboundImageAsset {
 
 export interface OneBotGatewayOptions {
   outboundMedia?: OutboundMediaDelivery;
+  outboundMediaBaseUrl?: string;
 }
 
 export class OneBotGateway extends EventEmitter {
@@ -225,15 +226,26 @@ export class OneBotGateway extends EventEmitter {
     const sources = await Promise.all(images.map(async (image) => {
       if (image.filePath && this.options.outboundMedia) {
         const signedPath = await this.options.outboundMedia.createSignedPath(image.filePath);
-        return `http://host.docker.internal:${this.config.server.port}${signedPath}`;
+        return this.resolveOutboundMediaUrl(signedPath);
       }
       if (image.url && /^https?:\/\//i.test(image.url)) return image.url;
       if (image.url?.startsWith("/")) {
-        return `http://host.docker.internal:${this.config.server.port}${image.url}`;
+        return this.resolveOutboundMediaUrl(image.url);
       }
       return image.filePath ?? "";
     }));
     return sources.filter(Boolean);
+  }
+
+  private resolveOutboundMediaUrl(resourcePath: string) {
+    const configured = this.options.outboundMediaBaseUrl?.trim() ||
+      process.env.SUNABOT_OUTBOUND_MEDIA_BASE_URL?.trim() ||
+      `http://127.0.0.1:${this.config.server.port}`;
+    const baseUrl = new URL(configured);
+    if (!/^https?:$/.test(baseUrl.protocol) || baseUrl.username || baseUrl.password) {
+      throw new Error("Outbound media base URL must use HTTP(S) without embedded credentials.");
+    }
+    return new URL(resourcePath, `${baseUrl.origin}/`).toString();
   }
 
   private async handleMessage(ws: WebSocket, data: string) {

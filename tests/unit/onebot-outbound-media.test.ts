@@ -50,7 +50,7 @@ describe("OneBot outbound media adapter", () => {
     expect(params.group_id).toBe(42);
     expect(message.map((segment) => segment.type)).toEqual(["reply", "text", "image"]);
     const source = message[2]!.data.file;
-    expect(source).toMatch(/^http:\/\/host\.docker\.internal:8787\/outbound-media\/generated-images\/generated\.png\?/);
+    expect(source).toMatch(/^http:\/\/127\.0\.0\.1:8787\/outbound-media\/generated-images\/generated\.png\?/);
 
     const signedUrl = new URL(source);
     await expect(delivery.resolveSignedPath(
@@ -58,6 +58,27 @@ describe("OneBot outbound media adapter", () => {
       signedUrl.searchParams.get("expires"),
       signedUrl.searchParams.get("signature")
     )).resolves.toMatchObject({ filePath: imagePath });
+  });
+
+  it("supports a Docker host override for outbound media callbacks", async () => {
+    const gateway = new OneBotGateway(
+      http.createServer(),
+      defaultConfig(),
+      { handleOneBotEvent: vi.fn(async () => undefined) },
+      {
+        outboundMedia: delivery,
+        outboundMediaBaseUrl: "http://host.docker.internal:8787"
+      }
+    );
+    const sendAction = vi.spyOn(gateway, "sendAction").mockResolvedValue({ status: "ok" });
+
+    await gateway.sendPrivateRichMessage(99, "生成完成", [{ filePath: imagePath }]);
+
+    const params = sendAction.mock.calls[0]![1];
+    const message = params.message as Array<{ type: string; data: Record<string, string> }>;
+    expect(message.at(-1)?.data.file).toMatch(
+      /^http:\/\/host\.docker\.internal:8787\/outbound-media\/generated-images\/generated\.png\?/
+    );
   });
 
   it("passes external HTTP image assets through the standard OneBot interface", async () => {
