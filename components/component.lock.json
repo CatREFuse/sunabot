@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "architecture": "linux/amd64",
+  "components": {
+    "node": {
+      "version": "24.18.0",
+      "image": "docker.io/library/node:24.18.0-bookworm-slim",
+      "digest": "sha256:cb4e8f7c443347358b7875e717c29e27bf9befc8f5a26cf18af3c3dec80e58c5",
+      "license": "MIT"
+    },
+    "napcat": {
+      "version": "4.15.0",
+      "image": "mlikiowa/napcat-docker:v4.15.0",
+      "digest": "sha256:cde89d766604e570517e9ce66304d4222210479d2209ec04e5d58890dea087f7",
+      "licenseReview": "required-before-redistribution"
+    },
+    "libreoffice": {
+      "distribution": "debian-bookworm",
+      "package": "libreoffice",
+      "versionPolicy": "locked-by-image-snapshot",
+      "license": "MPL-2.0"
+    }
+  }
+}
+

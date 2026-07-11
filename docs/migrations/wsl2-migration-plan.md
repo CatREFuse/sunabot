@@ -193,7 +193,7 @@ docker-compose-plugin
 6. 执行 `npm run check && npm test && npm run build`。
 7. 在 `workspace/.env` 设置 `NAPCAT_ACCOUNT` 与 `ONEBOT_ACCESS_TOKEN`。
 8. 执行 `npm run qq:configure`，生成固定回环 OneBot 配置。
-9. 执行 `npm run qq:up`，启动 `components/qq-runtime/compose.yml` 定义的整个 QQ Runtime。
+9. 执行 `npm run qq:up`，启动 `deploy/docker/compose.yml` 定义的整个 QQ Runtime。
 10. 完成 API、管理台、OneBot、文本消息和本地路径图片实测。
 
 Compose 中 NapCat 共享 Sunabot 的网络命名空间与 `/srv/sunabot/workspace` 挂载，因此反向 WebSocket 固定为 `ws://127.0.0.1:8787/onebot/v11/ws`，图片固定使用共享绝对路径。迁移后不得恢复 `host.docker.internal`、Compose 服务名或远程 OneBot 地址。

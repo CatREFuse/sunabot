@@ -16,7 +16,7 @@ OneBot reverse WebSocket: ws://127.0.0.1:8787/onebot/v11/ws
 
 ## Docker 启动
 
-Compose 定义位于 `components/qq-runtime/compose.yml`。Sunabot 与 NapCat 使用独立容器进程，但 NapCat 共享 Sunabot 的网络命名空间；双方的 `127.0.0.1` 指向同一运行单元。workspace 在两个容器中都挂载为 `/srv/sunabot/workspace`。
+Compose 定义位于 `deploy/docker/compose.yml`。Sunabot 与 NapCat 使用独立容器进程，但 NapCat 共享 Sunabot 的网络命名空间；双方的 `127.0.0.1` 指向同一运行单元。workspace 在两个容器中都挂载为 `/srv/sunabot/workspace`。
 
 ```bash
 npm ci

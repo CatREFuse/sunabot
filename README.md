@@ -23,7 +23,7 @@ WebSocket:      ws://127.0.0.1:8787/onebot/v11/ws
 
 Docker 下 Sunabot 与 NapCat 是两个进程容器，但共享同一网络命名空间和同一 workspace 挂载；非 Docker 下二者必须运行在同一 Linux/WSL 环境。两种运行方式使用完全相同的地址和文件路径。不支持远程 NapCat、公开 OneBot 端口、`host.docker.internal` 或 HTTP 图片回调。
 
-组件定义、Compose 和镜像入口统一位于 [`components/qq-runtime/`](components/qq-runtime/README.md)。完整配置见 [NapCat 与 OneBot 配置](docs/setup-napcat.md)。
+NapCat 依赖定义位于 [`components/napcat/`](components/napcat/README.md)，Docker 入口位于 [`deploy/docker/`](deploy/docker/README.md)。完整配置见 [NapCat 与 OneBot 配置](docs/setup-napcat.md)。
 
 ## 代码与数据边界
 
@@ -34,8 +34,9 @@ sunabot/
 ├── src/                       后端业务逻辑
 ├── web/                       Vue 管理台
 ├── tests/                     单元、集成和端到端测试
-├── scripts/                   初始化、更新、同步和运维命令
-├── components/qq-runtime/     OneBot + NapCat 内聚运行组件
+├── components/napcat/        NapCat 外部依赖组件
+├── deploy/                   Native 与 Docker 运行入口
+├── tooling/                  Codex、开发、迁移与 workspace 脚手架
 ├── config/env.example         环境变量模板
 └── workspace/                 本机用户数据，不进入 Git
     ├── .env                   密钥和终端环境变量
@@ -94,7 +95,7 @@ Sunabot 与 NapCat 必须安装在同一 Linux/WSL 环境，并共同访问 `/sr
 
 如果 `codex` 不在服务进程的 `PATH` 中，请在 `workspace/.env` 设置 `SUNABOT_CODEX_EXECUTABLE` 为其绝对路径。
 
-WSL 中如果 Windows 侧 Clash 使用默认 HTTP 代理端口 `7890`，systemd 可将 `ExecStart` 指向 `scripts/start-wsl-service.sh`；脚本会动态识别 Windows 网关并为 Node `fetch` 启用环境代理。其他端口可通过 unit 的 `SUNABOT_WINDOWS_PROXY_PORT` 指定，完全禁用则设置 `SUNABOT_WINDOWS_PROXY_MODE=off`。
+WSL 中如果 Windows 侧 Clash 使用默认 HTTP 代理端口 `7890`，systemd 可将 `ExecStart` 指向 `deploy/native/bin/start-sunabot.sh`；脚本会动态识别 Windows 网关并为 Node `fetch` 启用环境代理。其他端口可通过 unit 的 `SUNABOT_WINDOWS_PROXY_PORT` 指定，完全禁用则设置 `SUNABOT_WINDOWS_PROXY_MODE=off`。
 
 ## API Provider
 
@@ -164,7 +165,7 @@ npm run workspace:sync -- push
 
 命令会先 checkpoint 所有 SQLite，再排除 WAL/SHM、PID 和临时输出，最终只向同步盘写入经过认证加密的快照及 SHA-256 清单。
 
-Windows + WSL 终端应使用 `scripts/sync-workspace-wsl.ps1` 创建定时任务，确保备份的是 `/srv/sunabot/workspace` 中的实际运行数据，而不是 Windows 侧的空白副本。
+Windows + WSL 终端应使用 `tooling/workspace/sync-workspace-wsl.ps1` 创建定时任务，确保备份的是 `/srv/sunabot/workspace` 中的实际运行数据，而不是 Windows 侧的空白副本。
 
 ## 管理台安全与熔断
 

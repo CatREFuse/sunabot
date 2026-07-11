@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "runtimeId": "sunabot-qq-runtime",
+  "supportedPlatforms": ["linux/amd64"],
+  "nodeVersion": "24.18.0",
+  "paths": {
+    "installPrefix": "/opt/sunabot/current",
+    "workspace": "/srv/sunabot/workspace",
+    "config": "business/config/sunabot.json",
+    "database": "business/data/sunabot.sqlite",
+    "sessionQueue": "business/data/session-queue.sqlite",
+    "media": "business/media/images",
+    "napcatState": "runtime/napcat",
+    "secrets": "secrets/runtime.env",
+    "logs": "runtime/logs",
+    "temporary": "runtime/tmp",
+    "cache": "cache",
+    "backups": "backups"
+  },
+  "network": {
+    "host": "127.0.0.1",
+    "apiPort": 8787,
+    "napcatWebuiPort": 6099,
+    "onebotReverseWebSocket": "ws://127.0.0.1:8787/onebot/v11/ws"
+  },
+  "shutdownTimeoutSeconds": 30,
+  "health": {
+    "livenessPath": "/api/auth/session",
+    "readinessLayers": ["api", "onebot", "qq", "provider"]
+  },
+  "componentsLock": "components/component.lock.json"
+}
+

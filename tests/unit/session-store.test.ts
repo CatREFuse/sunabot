@@ -227,14 +227,20 @@ describe("SessionStore", () => {
       [2, "incoming"],
       [3, "tool_completion"]
     ]);
-    expect(completed.event.payload).toEqual({
-      type: "tool_result",
-      toolJobId: job.id,
-      providerCallId: "call_42",
-      toolName: "codex",
-      originalRequest: { text: "first" },
-      arguments: { task: "deep research" },
-      outcome: { status: "succeeded", result: { summary: "done" }, error: null }
+    expect(completed.event.payload).toMatchObject({
+      schemaVersion: 1,
+      type: "runtime.tool_result",
+      conversationId: "group:400",
+      correlationId: "call_42",
+      payload: {
+        type: "tool_result",
+        toolJobId: job.id,
+        providerCallId: "call_42",
+        toolName: "codex",
+        originalRequest: { text: "first" },
+        arguments: { task: "deep research" },
+        outcome: { status: "succeeded", result: { summary: "done" }, error: null }
+      }
     });
 
     const next = store.claimNextTurn({ workerId: "agent-next", sessionId: "group:400" })!;

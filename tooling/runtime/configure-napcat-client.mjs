@@ -1,0 +1,72 @@
+#!/usr/bin/env node
+import fs from "node:fs/promises";
+import path from "node:path";
+import process from "node:process";
+import dotenv from "dotenv";
+import { resolveProjectRoot, resolveWorkspace } from "../shared/paths.mjs";
+
+const root = resolveProjectRoot(import.meta.url);
+const workspace = resolveWorkspace(root);
+const configDir = process.argv[2]
+  ? path.resolve(root, process.argv[2])
+  : path.join(workspace, "napcat/config-full");
+const env = dotenv.parse(await fs.readFile(path.join(workspace, ".env"), "utf8"));
+const token = env.ONEBOT_ACCESS_TOKEN?.trim();
+if (!token) throw new Error("workspace/.env 缺少 ONEBOT_ACCESS_TOKEN。");
+const account = env.NAPCAT_ACCOUNT?.trim();
+
+await fs.mkdir(configDir, { recursive: true });
+let names = (await fs.readdir(configDir))
+  .filter((name) => /^onebot11(?:_\d+)?\.json$/.test(name));
+if (names.length === 0) {
+  names = account && /^\d{5,12}$/.test(account)
+    ? [`onebot11_${account}.json`]
+    : ["onebot11.json"];
+}
+
+for (const name of names) {
+  const filePath = path.join(configDir, name);
+  const config = await readJsonOrDefault(filePath, { network: { websocketClients: [] } });
+  const clients = Array.isArray(config.network?.websocketClients)
+    ? config.network.websocketClients
+    : [];
+  const template = clients.find((item) => item?.name === "sunabot")
+    ?? clients[0]
+    ?? {};
+  const client = {
+    ...template,
+    name: "sunabot",
+    enable: true,
+    url: "ws://127.0.0.1:8787/onebot/v11/ws",
+    messagePostFormat: "array",
+    reportSelfMessage: false,
+    reconnectInterval: 5000,
+    token,
+    debug: false,
+    heartInterval: 30000
+  };
+  config.network ??= {};
+  config.network.websocketClients = [
+    ...clients.filter((item) => item?.name !== "sunabot" && !isLegacyAstrBotClient(item)),
+    client
+  ];
+  const temporary = `${filePath}.${process.pid}.tmp`;
+  await fs.writeFile(temporary, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+  await fs.rename(temporary, filePath);
+  console.log(`${name} 已配置 Sunabot 反向 WebSocket（Token 已隐藏）。`);
+}
+
+async function readJsonOrDefault(filePath, fallback) {
+  try {
+    return JSON.parse(await fs.readFile(filePath, "utf8"));
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+    return structuredClone(fallback);
+  }
+}
+
+function isLegacyAstrBotClient(item) {
+  const name = String(item?.name ?? "").toLowerCase();
+  const url = String(item?.url ?? "").toLowerCase();
+  return name.includes("astrbot") || /^wss?:\/\/(?:127\.0\.0\.1|localhost|\[::1\]):6199(?:\/|$)/.test(url);
+}

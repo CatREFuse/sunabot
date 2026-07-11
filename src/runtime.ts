@@ -22,6 +22,17 @@ import type {
 } from "./attachments/types.js";
 import { CommandRouter, type CommandMatch } from "./commands/router.js";
 import { getDefaultProvider, getRootDir, getWorkspacePath, resolveProjectPath } from "./config.js";
+import {
+  assistantReplyEnvelope,
+  decodeAssistantReply,
+  decodeIncomingReply,
+  decodeToolCompletion,
+  incomingReplyEnvelope,
+  type AssistantReplyOutboxEnvelope,
+  type AssistantReplyOutboxPayload,
+  type AsyncToolCompletionPayload,
+  type RuntimeIncomingReplyEventPayload
+} from "./contracts/runtimeMessages.js";
 import { applicationDataStore } from "./dataStore.js";
 import {
   ReplyGateEpochs,
@@ -184,18 +195,9 @@ interface RuntimeCommandContext {
   delivery?: ReplyDelivery;
 }
 
-interface AssistantReplyOutboxPayload {
-  type: "assistant_reply";
-  incoming: ParsedIncomingMessage;
-  text: string;
-  generatedImages: ImageResult[];
-  isAdmin: boolean;
-  logRunId?: string;
-}
-
 interface ReplyDeliveryDraft {
   kind: "onebot.reply";
-  payload: AssistantReplyOutboxPayload;
+  payload: AssistantReplyOutboxEnvelope;
   dedupeKey?: string;
 }
 
@@ -210,31 +212,6 @@ interface DeferredCodexTurn {
     captureSequence?: number;
   };
   acknowledgement: ReplyDeliveryDraft;
-}
-
-interface AsyncToolCompletionPayload {
-  type: "tool_result";
-  toolJobId: string;
-  providerCallId: string;
-  toolName: string;
-  originalRequest: {
-    incoming: ParsedIncomingMessage;
-    captureSequence?: number;
-  };
-  arguments: unknown;
-  outcome: {
-    status: string;
-    result: unknown;
-    error: unknown;
-  };
-}
-
-interface RuntimeIncomingReplyEventPayload {
-  type: "incoming_reply";
-  route: "direct" | "command" | "ambient";
-  incoming: ParsedIncomingMessage;
-  captureSequence: number;
-  preparationKey?: string;
 }
 
 interface AmbientReplyJob {
@@ -902,17 +879,21 @@ export class SunaRuntime implements OneBotGatewayDelegate {
         sessionId: channelKey,
         kind: "incoming_reply",
         dedupeKey: `reply:${preparationKey}`,
-        payload: {
+        payload: incomingReplyEnvelope({
           type: "incoming_reply",
           route,
           incoming: queueIncomingSnapshot(incoming),
           captureSequence: proposedCaptureSequence,
           preparationKey
-        } satisfies RuntimeIncomingReplyEventPayload
+        }, {
+          conversationId: channelKey,
+          correlationId: `onebot:${incoming.event.message_id ?? preparationKey}`,
+          idempotencyKey: `reply:${preparationKey}`
+        })
       }, { schedule: false });
 
       try {
-        const committedPayload = committed.event.payload as RuntimeIncomingReplyEventPayload;
+        const committedPayload = decodeIncomingReply(committed.event.payload);
         const captureSequence = committedPayload.captureSequence;
         const record = this.recordIncomingMessage(incoming, {
           expectedSequence: captureSequence,
@@ -982,18 +963,15 @@ export class SunaRuntime implements OneBotGatewayDelegate {
     try {
       return await withAbortTimeout(async (signal) => {
         if (event.kind === "incoming_reply") {
-          const payload = event.payload as RuntimeIncomingReplyEventPayload;
-          if (payload?.type !== "incoming_reply" || !isRuntimeIncomingMessage(payload.incoming)) {
+          const payload = decodeIncomingReply(event.payload);
+          if (!isRuntimeIncomingMessage(payload.incoming)) {
             throw new Error(`Session 事件格式无效：${event.id}`);
           }
           timeoutIncoming = payload.incoming;
           return this.processIncomingReplyEvent(event, payload, signal);
         }
         if (event.kind === "tool_completion") {
-          const payload = event.payload as AsyncToolCompletionPayload;
-          if (payload?.type !== "tool_result") {
-            throw new Error(`异步工具完成事件格式无效：${event.id}`);
-          }
+          const payload = decodeToolCompletion(event.payload);
           timeoutIncoming = payload.originalRequest?.incoming;
           await appendRequestLog({
             category: "tool.call",
@@ -1127,7 +1105,7 @@ export class SunaRuntime implements OneBotGatewayDelegate {
         arguments: deferred.deferred.toolCall.arguments,
         originalRequest: deferred.originalRequest,
         acknowledgement: deferred.acknowledgement,
-        result: { acknowledgement: deferred.acknowledgement.payload.text }
+        result: { acknowledgement: decodeAssistantReply(deferred.acknowledgement.payload).text }
       };
     }
     return delivery.outbox.length
@@ -1140,8 +1118,8 @@ export class SunaRuntime implements OneBotGatewayDelegate {
     const gateway = this.activeGateway;
     if (!gateway?.getStatus().connected) throw new OutboxDisconnectedError("OneBot is not connected.");
     if (outbox.kind !== "onebot.reply") throw new Error(`不支持的 outbox 类型：${outbox.kind}`);
-    const payload = outbox.payload as AssistantReplyOutboxPayload;
-    if (payload?.type !== "assistant_reply" || !isRuntimeIncomingMessage(payload.incoming)) {
+    const payload = decodeAssistantReply(outbox.payload);
+    if (!isRuntimeIncomingMessage(payload.incoming)) {
       throw new Error(`Outbox 消息格式无效：${outbox.id}`);
     }
     await this.deliverReplyOutbox(payload, gateway);
@@ -1948,12 +1926,16 @@ export class SunaRuntime implements OneBotGatewayDelegate {
         sessionId: channelKey,
         kind: "incoming_reply",
         dedupeKey: `reply:${persistentIncomingKey(job.incoming)}`,
-        payload: {
+        payload: incomingReplyEnvelope({
           type: "incoming_reply",
           route: "ambient",
           incoming: queueIncomingSnapshot(job.incoming),
           captureSequence: job.captureSequence
-        } satisfies RuntimeIncomingReplyEventPayload
+        }, {
+          conversationId: channelKey,
+          correlationId: `onebot:${job.incoming.event.message_id ?? persistentIncomingKey(job.incoming)}`,
+          idempotencyKey: `reply:${persistentIncomingKey(job.incoming)}`
+        })
       });
       this.consumeOrchestratorBatch(record, job.captureSequence);
       record.orchestratorLastReplyAt = new Date().toISOString();
@@ -2405,14 +2387,18 @@ export class SunaRuntime implements OneBotGatewayDelegate {
   ): ReplyDeliveryDraft {
     return {
       kind: "onebot.reply",
-      payload: {
+      payload: assistantReplyEnvelope({
         type: "assistant_reply",
         incoming: queueIncomingSnapshot(incoming),
         text,
         generatedImages,
         isAdmin,
         logRunId
-      },
+      }, {
+        conversationId: conversationRecordId(incoming),
+        correlationId: logRunId ?? `onebot:${incoming.event.message_id ?? persistentIncomingKey(incoming)}`,
+        idempotencyKey: dedupeKey
+      }),
       dedupeKey
     };
   }

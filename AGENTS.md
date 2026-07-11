@@ -33,7 +33,7 @@
 | 人格和最终提示词 | `src/persona.ts`, `src/promptCatalog.ts`, `src/promptDefaults.ts`, `src/promptSystem.ts` |
 | 管理 API、设置和 Agent 文件 | `src/server.ts`, `src/admin/` |
 | 管理台页面 | `web/src/views/`, `web/src/components/`, `web/src/composables/` |
-| 数据升级与部署 | `scripts/migrate-to-sqlite.mjs`, `docs/migrations/wsl2-migration-plan.md` |
+| 数据升级与部署 | `tooling/migrations/migrate-to-sqlite.mjs`, `deploy/`, `docs/migrations/wsl2-migration-plan.md` |
 
 完整映射见 `docs/specs/current-system-spec.md` 的“功能—代码文件索引”。
 

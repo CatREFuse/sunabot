@@ -1,0 +1,25 @@
+[Unit]
+Description=Sunabot NapCat QQ adapter
+After=network-online.target sunabot-api.service
+Wants=network-online.target
+Requires=sunabot-api.service
+
+[Service]
+Type=simple
+User=sunabot
+Group=sunabot
+WorkingDirectory=/opt/sunabot/current
+Environment=SUNABOT_WORKSPACE=/srv/sunabot/workspace
+EnvironmentFile=/srv/sunabot/workspace/secrets/runtime.env
+ExecStart=/opt/sunabot/current/deploy/native/bin/start-napcat.sh
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/srv/sunabot/workspace
+
+[Install]
+WantedBy=sunabot-runtime.target
+

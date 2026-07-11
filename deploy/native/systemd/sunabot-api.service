@@ -1,0 +1,27 @@
+[Unit]
+Description=Sunabot API and WebUI
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=sunabot
+Group=sunabot
+WorkingDirectory=/opt/sunabot/current
+Environment=NODE_ENV=production
+Environment=SUNABOT_RELEASE_ROOT=/opt/sunabot/current
+Environment=SUNABOT_WORKSPACE=/srv/sunabot/workspace
+EnvironmentFile=/srv/sunabot/workspace/secrets/runtime.env
+ExecStartPre=/usr/bin/node tooling/runtime/doctor.mjs --production --expect-free
+ExecStart=/opt/sunabot/current/deploy/native/bin/start-sunabot.sh
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/srv/sunabot/workspace
+
+[Install]
+WantedBy=sunabot-runtime.target
+

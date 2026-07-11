@@ -3,6 +3,7 @@ import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { CodexProcessIdentity } from "./codexTool.js";
+import { toolCompletionEnvelope, type AsyncToolCompletionPayload } from "./contracts/runtimeMessages.js";
 
 export type SessionEventStatus = "pending" | "running" | "completed" | "dead";
 export type TurnStatus =
@@ -576,19 +577,24 @@ export class SessionStore {
       this.ensureSession(job.sessionId, now);
       const sequence = this.allocateEventSequence(job.sessionId, now);
       const completionEventId = this.nextId();
-      const completionPayload = {
+      const completionPayload = toolCompletionEnvelope({
         type: "tool_result",
         toolJobId: job.id,
         providerCallId: job.providerCallId,
         toolName: job.toolName,
-        originalRequest: job.originalRequest,
+        originalRequest: job.originalRequest as AsyncToolCompletionPayload["originalRequest"],
         arguments: job.arguments,
         outcome: {
           status: input.status,
           result: input.result ?? null,
           error: input.error ?? null
         }
-      };
+      }, {
+        conversationId: job.sessionId,
+        correlationId: job.providerCallId,
+        causationId: job.originEventId,
+        idempotencyKey: `tool-completion:${job.id}`
+      });
       this.database.prepare(`
         INSERT INTO session_events (
           id, session_id, sequence, kind, dedupe_key, payload_json,

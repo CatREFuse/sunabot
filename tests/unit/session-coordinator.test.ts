@@ -231,9 +231,13 @@ describe("SessionCoordinator", () => {
     expect(job.status).toBe("failed");
     expect(completions).toHaveLength(1);
     expect(completions[0]).toMatchObject({
-      type: "tool_result",
-      toolJobId: job.id,
-      outcome: { status: "failed" }
+      schemaVersion: 1,
+      type: "runtime.tool_result",
+      payload: {
+        type: "tool_result",
+        toolJobId: job.id,
+        outcome: { status: "failed" }
+      }
     });
     const duplicate = store.completeToolJob({
       jobId: job.id,

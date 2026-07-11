@@ -206,8 +206,8 @@ QQ Runtime 不支持远程 OneBot 或远程 NapCat。Docker 下 Sunabot 与 NapC
 | 管理配置和 Agent 文件 | `src/admin/` |
 | 管理台路由和页面 | `web/src/router.ts`, `web/src/views/` |
 | 管理台组件和状态 | `web/src/components/`, `web/src/composables/` |
-| 旧数据迁移 | `scripts/migrate-to-sqlite.mjs` |
-| QQ Runtime 打包与启动 | `components/qq-runtime/`, `scripts/napcat-compose.mjs`, `scripts/configure-napcat-client.mjs` |
+| 旧数据迁移 | `tooling/migrations/migrate-to-sqlite.mjs` |
+| QQ Runtime 打包与启动 | `components/napcat/`, `deploy/`, `tooling/runtime/qq-compose.mjs`, `tooling/runtime/configure-napcat-client.mjs` |
 | 单元与集成测试 | `tests/unit/`, `tests/integration/` |
 | 浏览器与生产测试 | `tests/e2e/`, `playwright.config.ts` |
 
