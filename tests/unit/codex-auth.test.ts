@@ -41,6 +41,22 @@ describe("CodexAuthService", () => {
     });
     expect(JSON.stringify(snapshot)).not.toContain("super-secret-token");
   });
+
+  it("parses the current Codex CLI multiline device-code format", async () => {
+    const { service } = await fixture();
+    (service as unknown as { consumeOutput(value: string): void }).consumeOutput([
+      "Follow these steps to sign in with ChatGPT using device code authorization:",
+      "1. Open https://auth.openai.com/codex/device",
+      "2. Enter this one-time code (expires in 15 minutes)",
+      "   023I-B7M4K"
+    ].join("\n"));
+    const snapshot = await service.status();
+    expect(snapshot.login).toMatchObject({
+      state: "waiting",
+      verificationUrl: "https://auth.openai.com/codex/device",
+      userCode: "023I-B7M4K"
+    });
+  });
 });
 
 function jwt(payload: Record<string, unknown>) {

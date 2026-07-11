@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { stripVTControlCharacters } from "node:util";
 
 const OUTPUT_LIMIT = 12_000;
 const DEVICE_AUTH_DISCOVERY_MS = 5_000;
@@ -111,9 +112,11 @@ export class CodexAuthService {
 
   private consumeOutput(chunk: string) {
     this.output = `${this.output}${chunk}`.slice(-OUTPUT_LIMIT);
-    const verificationUrl = this.output.match(/https:\/\/[^\s]+(?:device|activate)[^\s]*/i)?.[0]
-      ?? this.output.match(/https:\/\/auth\.openai\.com\/[^\s]+/i)?.[0];
-    const userCode = this.output.match(/(?:code|代码)\s*[:：]?\s*([A-Z0-9]{4,}(?:-[A-Z0-9]{3,})?)/i)?.[1];
+    const cleanOutput = stripVTControlCharacters(this.output);
+    const verificationUrl = cleanOutput.match(/https:\/\/[^\s]+(?:device|activate)[^\s]*/i)?.[0]
+      ?? cleanOutput.match(/https:\/\/auth\.openai\.com\/[^\s]+/i)?.[0];
+    const userCode = cleanOutput.match(/\b[A-Z0-9]{4,}-[A-Z0-9]{4,}\b/i)?.[0]
+      ?? cleanOutput.match(/(?:code|代码)\s*[:：]?\s*([A-Z0-9]{4,})/i)?.[1];
     if (verificationUrl || userCode) {
       this.login = {
         ...this.login,
