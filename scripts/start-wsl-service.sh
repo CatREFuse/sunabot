@@ -24,4 +24,11 @@ if [[ "$is_wsl" == "true" && "${SUNABOT_WINDOWS_PROXY_MODE:-auto}" != "off" && -
   fi
 fi
 
-exec /usr/bin/node --use-env-proxy "$root/dist/server.js"
+node_bin="${SUNABOT_NODE_EXECUTABLE:-$(command -v node)}"
+node_major="$($node_bin -p 'Number(process.versions.node.split(".")[0])')"
+if (( node_major < 24 )); then
+  printf 'Sunabot requires Node.js 24 or newer; found %s.\n' "$($node_bin -v)" >&2
+  exit 1
+fi
+
+exec "$node_bin" --use-env-proxy "$root/dist/server.js"
