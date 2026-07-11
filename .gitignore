@@ -1,0 +1,13 @@
+node_modules/
+dist/
+*.tsbuildinfo
+workspace/
+.env
+.env.local
+.DS_Store
+docs/references/onebot-11/
+docs/references/onebot-12/
+*.log
+coverage/
+playwright-report/
+test-results/

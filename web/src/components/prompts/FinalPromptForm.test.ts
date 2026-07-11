@@ -1,0 +1,97 @@
+import { mount } from "@vue/test-utils";
+import { describe, expect, it } from "vitest";
+import FinalPromptForm from "./FinalPromptForm.vue";
+import FinalPromptWorkspace from "./FinalPromptWorkspace.vue";
+
+const content = `${JSON.stringify({
+  messages: [
+    { role: "system", content: "@{persona.soul}" },
+    "@{messages_64}",
+    { role: "user", content: "@{user.input}" }
+  ],
+  tools: [
+    {
+      type: "function",
+      function: {
+        name: "search_content",
+        description: "搜索内容",
+        parameters: { type: "object", properties: {}, required: [] },
+        strict: true
+      }
+    }
+  ],
+  response_format: { type: "text" },
+  temperature: 0.3
+}, null, 2)}\n`;
+
+const variables = [
+  { name: "persona.soul", description: "核心人格", type: "string" as const, source: "SOUL.md", required: true },
+  { name: "messages_64", description: "最近 64 条消息", type: "message[]" as const, source: "会话上下文", required: true },
+  { name: "user.input", description: "当前输入", type: "string" as const, source: "当前请求", required: true }
+];
+
+describe("FinalPromptForm", () => {
+  it("shows ordered messages, message groups, output format and Function Call without raw JSON", () => {
+    const wrapper = mount(FinalPromptForm, { props: { modelValue: content, variables } });
+
+    expect(wrapper.find('[aria-label="system 提示词"]').exists()).toBe(true);
+    expect(wrapper.find('[aria-label="user 提示词"]').exists()).toBe(true);
+    expect(wrapper.get('[aria-label="消息组变量"]').element).toMatchObject({ value: "messages_64" });
+    expect(wrapper.text()).toContain("Function Call");
+    expect(wrapper.text()).toContain("search_content");
+    expect(wrapper.text()).toContain("输出格式");
+    expect(wrapper.find('[aria-label="完整请求 JSON"]').exists()).toBe(false);
+    expect(wrapper.get('[data-message-drag-handle]').element.tagName).toBe("DIV");
+  });
+
+  it("adds and drag-reorders message slots in the stored messages array", async () => {
+    const wrapper = mount(FinalPromptForm, { props: { modelValue: content, variables } });
+
+    wrapper.getComponent(FinalPromptWorkspace).vm.$emit("reorder", 1, 2);
+    await wrapper.vm.$nextTick();
+    let latest = String(wrapper.emitted("update:modelValue")?.at(-1)?.[0] ?? "");
+    expect(JSON.parse(latest).messages).toEqual([
+      { role: "system", content: "@{persona.soul}" },
+      { role: "user", content: "@{user.input}" },
+      "@{messages_64}"
+    ]);
+
+    await wrapper.get('[aria-label="添加消息组"]').trigger("click");
+    latest = String(wrapper.emitted("update:modelValue")?.at(-1)?.[0] ?? "");
+    expect(JSON.parse(latest).messages.at(-1)).toBe("@{messages_64}");
+  });
+
+  it("tests OpenAI structure and keeps Function fields synchronized", async () => {
+    const wrapper = mount(FinalPromptForm, { props: { modelValue: content, variables } });
+
+    await wrapper.get('[aria-label="测试 OpenAI 格式"]').trigger("click");
+    expect(wrapper.text()).toContain("[VALID]");
+    expect(wrapper.text()).toContain("符合 OpenAI 请求结构");
+
+    const nameInput = wrapper.get('input[type="text"]');
+    await nameInput.setValue("find_article");
+
+    const latest = String(wrapper.emitted("update:modelValue")?.at(-1)?.[0] ?? "");
+    expect(JSON.parse(latest).tools[0].function.name).toBe("find_article");
+    expect(JSON.parse(latest).temperature).toBe(0.3);
+  });
+
+  it("refreshes structured fields when the backing JSON changes externally", async () => {
+    const wrapper = mount(FinalPromptForm, { props: { modelValue: content, variables } });
+    const next = `${JSON.stringify({
+      messages: [
+        { role: "system", content: "新的系统提示词" },
+        { role: "user", content: "@{user.input}" }
+      ],
+      tools: [],
+      response_format: { type: "json_object" },
+      max_output_tokens: 640
+    }, null, 2)}\n`;
+
+    await wrapper.setProps({ modelValue: next });
+
+    expect((wrapper.get('[aria-label="system 提示词"]').element as HTMLTextAreaElement).value).toBe("新的系统提示词");
+    expect(wrapper.find('[aria-label="完整请求 JSON"]').exists()).toBe(false);
+    expect(wrapper.text()).toContain("当前请求不启用 Function Call");
+  });
+});

@@ -1,0 +1,249 @@
+// @vitest-environment node
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AppConfig } from "../../src/types.js";
+import { createAdminTestConfig } from "./admin-fixtures.js";
+
+const configStore = vi.hoisted(() => ({
+  config: null as AppConfig | null,
+  configPath: "",
+  rootDir: ""
+}));
+
+vi.mock("../../src/config.js", async () => {
+  const fs = await import("node:fs/promises");
+  const path = await import("node:path");
+  return {
+    getConfigPath: () => configStore.configPath,
+    getRootDir: () => configStore.rootDir,
+    getWorkspaceDir: () => path.join(configStore.rootDir, "workspace"),
+    getWorkspacePath: (...segments: string[]) => path.join(configStore.rootDir, "workspace", ...segments),
+    resolveProjectPath: (inputPath: string | undefined) => {
+      if (!inputPath) return undefined;
+      return path.isAbsolute(inputPath) ? inputPath : path.join(configStore.rootDir, inputPath);
+    },
+    loadConfig: async () => structuredClone(configStore.config),
+    saveConfig: async (nextConfig: AppConfig) => {
+      configStore.config = structuredClone(nextConfig);
+      await fs.writeFile(configStore.configPath, `${JSON.stringify(nextConfig, null, 2)}\n`, "utf8");
+    }
+  };
+});
+
+import { ConfigService, configRevision } from "../../src/admin/configService.js";
+import { AdminMutationMutex } from "../../src/admin/mutation.js";
+
+let rootDir = "";
+
+beforeEach(async () => {
+  rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-config-service-"));
+  configStore.rootDir = rootDir;
+  configStore.configPath = path.join(rootDir, "sunabot.json");
+  configStore.config = createAdminTestConfig(rootDir);
+  delete process.env.SUNABOT_TEST_MISSING_API_KEY;
+  await fs.writeFile(configStore.configPath, `${JSON.stringify(configStore.config, null, 2)}\n`, "utf8");
+});
+
+afterEach(async () => {
+  await fs.rm(rootDir, { recursive: true, force: true });
+  configStore.config = null;
+  configStore.configPath = "";
+  configStore.rootDir = "";
+});
+
+describe("ConfigService", () => {
+  it("atomically patches the user-group gate and orchestrator settings", async () => {
+    const commit = vi.fn();
+    const service = new ConfigService({
+      prepareApply: async () => ({ commit }),
+      mutex: new AdminMutationMutex()
+    });
+    const before = currentConfig();
+
+    const result = await service.patchGroupReply({
+      revision: configRevision(before),
+      value: {
+        enabled: false,
+        orchestrator: {
+          ...before.bot.orchestrator,
+          enabled: true,
+          messageThreshold: 7
+        }
+      }
+    });
+
+    expect(result).toMatchObject({ ok: true, applyMode: "hot", restartRequiredFields: [] });
+    expect(currentConfig().onebot.autoReplyUserGroup).toBe(false);
+    expect(currentConfig().bot.orchestrator).toMatchObject({ enabled: true, messageThreshold: 7 });
+    expect(commit).toHaveBeenCalledOnce();
+  });
+
+  it("patches one section, commits the prepared runtime and persists a new revision", async () => {
+    const commit = vi.fn();
+    const prepareApply = vi.fn(async () => ({ commit }));
+    const service = new ConfigService({ prepareApply, mutex: new AdminMutationMutex() });
+    const before = currentConfig();
+    const revision = configRevision(before);
+
+    const result = await service.patch("bot", {
+      revision,
+      value: {
+        adminQq: "3971235731",
+        adminName: "Updated Admin",
+        quoteGroupReplies: false,
+        contextMessageLimit: 64
+      }
+    });
+
+    expect(prepareApply).toHaveBeenCalledOnce();
+    expect(commit).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({
+      ok: true,
+      applyMode: "hot",
+      restartRequiredFields: []
+    });
+    expect(result.revision).not.toBe(revision);
+    expect(currentConfig().bot).toMatchObject({
+      adminQq: "3971235731",
+      adminName: "Updated Admin",
+      quoteGroupReplies: false,
+      contextMessageLimit: 64
+    });
+    expect(currentConfig().onebot.quoteGroupReplies).toBe(false);
+
+    const persisted = JSON.parse(await fs.readFile(configStore.configPath, "utf8")) as AppConfig;
+    expect(persisted).toEqual(currentConfig());
+    await expect(fs.stat(`${configStore.configPath}.admin-backup`)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("rejects an extra section field before preparing or persisting", async () => {
+    const prepareApply = vi.fn(async () => ({ commit: vi.fn() }));
+    const service = new ConfigService({ prepareApply, mutex: new AdminMutationMutex() });
+    const before = currentConfig();
+
+    await expect(service.patch("server", {
+      revision: configRevision(before),
+      value: {
+        host: "127.0.0.1",
+        port: 9_999,
+        unexpected: true
+      }
+    })).rejects.toMatchObject({
+      statusCode: 400,
+      code: "CONFIG_UNKNOWN_FIELD",
+      field: "server.unexpected"
+    });
+
+    expect(prepareApply).not.toHaveBeenCalled();
+    expect(currentConfig()).toEqual(before);
+  });
+
+  it("rejects a stale revision and reports the latest revision", async () => {
+    const prepareApply = vi.fn(async () => ({ commit: vi.fn() }));
+    const service = new ConfigService({ prepareApply, mutex: new AdminMutationMutex() });
+    const latestRevision = configRevision(currentConfig());
+
+    await expect(service.patch("server", {
+      revision: "stale-revision",
+      value: {
+        host: "127.0.0.1",
+        port: 9_999
+      }
+    })).rejects.toMatchObject({
+      statusCode: 409,
+      code: "CONFIG_REVISION_CONFLICT",
+      latestRevision
+    });
+
+    expect(prepareApply).not.toHaveBeenCalled();
+  });
+
+  it("serializes concurrent patches so only one request with the same revision succeeds", async () => {
+    let releaseFirst!: () => void;
+    let markFirstPrepared!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const firstPrepared = new Promise<void>((resolve) => {
+      markFirstPrepared = resolve;
+    });
+    const prepareApply = vi.fn(async () => {
+      if (prepareApply.mock.calls.length === 1) {
+        markFirstPrepared();
+        await firstGate;
+      }
+      return { commit: vi.fn() };
+    });
+    const service = new ConfigService({ prepareApply, mutex: new AdminMutationMutex() });
+    const revision = configRevision(currentConfig());
+
+    const first = service.patch("bot", {
+      revision,
+      value: botSection("First Writer")
+    });
+    await firstPrepared;
+    const second = service.patch("bot", {
+      revision,
+      value: botSection("Second Writer")
+    });
+    releaseFirst();
+
+    const [firstResult, secondResult] = await Promise.allSettled([first, second]);
+    expect(firstResult.status).toBe("fulfilled");
+    expect(secondResult).toMatchObject({
+      status: "rejected",
+      reason: expect.objectContaining({
+        statusCode: 409,
+        code: "CONFIG_REVISION_CONFLICT"
+      })
+    });
+    expect(prepareApply).toHaveBeenCalledOnce();
+    expect(currentConfig().bot.adminName).toBe("First Writer");
+  });
+
+  it("keeps provider, memory and orchestrator reasoning efforts independent", async () => {
+    const service = new ConfigService({
+      prepareApply: async () => ({ commit: vi.fn() }),
+      mutex: new AdminMutationMutex()
+    });
+    const initial = currentConfig();
+
+    const memoryResult = await service.patch("memory", {
+      revision: configRevision(initial),
+      value: {
+        ...initial.bot.memory,
+        reasoningEffort: "low"
+      }
+    });
+    const afterMemory = currentConfig();
+    await service.patch("orchestrator", {
+      revision: memoryResult.revision,
+      value: {
+        ...afterMemory.bot.orchestrator,
+        reasoningEffort: "high"
+      }
+    });
+
+    const saved = currentConfig();
+    expect(saved.providers.items[0]?.reasoningEffort).toBe("medium");
+    expect(saved.bot.memory.reasoningEffort).toBe("low");
+    expect(saved.bot.orchestrator.reasoningEffort).toBe("high");
+  });
+});
+
+function currentConfig() {
+  if (!configStore.config) throw new Error("Test config is not initialized.");
+  return structuredClone(configStore.config);
+}
+
+function botSection(adminName: string) {
+  const bot = currentConfig().bot;
+  return {
+    adminQq: bot.adminQq,
+    adminName,
+    quoteGroupReplies: bot.quoteGroupReplies,
+    contextMessageLimit: bot.contextMessageLimit
+  };
+}

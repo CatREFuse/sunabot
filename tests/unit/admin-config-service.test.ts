@@ -1,0 +1,379 @@
+// @vitest-environment node
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AppConfig } from "../../src/types.js";
+import { createAdminTestConfig } from "./admin-fixtures.js";
+
+const configStore = vi.hoisted(() => ({
+  config: null as AppConfig | null,
+  configPath: "",
+  rootDir: ""
+}));
+
+vi.mock("../../src/config.js", async () => {
+  const fs = await import("node:fs/promises");
+  const path = await import("node:path");
+  return {
+    getConfigPath: () => configStore.configPath,
+    getRootDir: () => configStore.rootDir,
+    getWorkspaceDir: () => path.join(configStore.rootDir, "workspace"),
+    getWorkspacePath: (...segments: string[]) => path.join(configStore.rootDir, "workspace", ...segments),
+    resolveProjectPath: (inputPath: string | undefined) => {
+      if (!inputPath) return undefined;
+      return path.isAbsolute(inputPath) ? inputPath : path.join(configStore.rootDir, inputPath);
+    },
+    loadConfig: async () => structuredClone(configStore.config),
+    saveConfig: async (nextConfig: AppConfig) => {
+      configStore.config = structuredClone(nextConfig);
+      await fs.writeFile(configStore.configPath, `${JSON.stringify(nextConfig, null, 2)}\n`, "utf8");
+    }
+  };
+});
+
+import { ConfigService, configFieldStates } from "../../src/admin/configService.js";
+import { MODEL_CATALOG } from "../../src/admin/models.js";
+import { AdminMutationMutex } from "../../src/admin/mutation.js";
+
+let rootDir = "";
+let activeConfig: AppConfig;
+
+beforeEach(async () => {
+  rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-admin-config-"));
+  configStore.rootDir = rootDir;
+  configStore.configPath = path.join(rootDir, "sunabot.json");
+  configStore.config = createAdminTestConfig(rootDir);
+  activeConfig = structuredClone(configStore.config);
+  delete process.env.SUNABOT_TEST_MISSING_API_KEY;
+  await fs.writeFile(configStore.configPath, `${JSON.stringify(configStore.config, null, 2)}\n`, "utf8");
+});
+
+afterEach(async () => {
+  await fs.rm(rootDir, { recursive: true, force: true });
+  configStore.config = null;
+  configStore.configPath = "";
+  configStore.rootDir = "";
+});
+
+describe("ConfigService section semantics", () => {
+  it("reports apply state for every persisted config leaf", () => {
+    const config = structuredClone(configStore.config!);
+    const states = configFieldStates(config);
+    for (const field of leafPaths(config)) {
+      expect(states[field], field).toBeDefined();
+    }
+    expect(states["server.port"]?.applyMode).toBe("restart");
+    expect(states["onebot.accessTokenEnv"]?.applyMode).toBe("reconnect");
+  });
+
+  it("reports server changes as restart-only without replacing other sections", async () => {
+    const subject = service();
+    const envelope = await subject.readEnvelope();
+    const result = await subject.patch("server", {
+      revision: envelope.revision,
+      value: { host: "127.0.0.1", port: 9_988 }
+    });
+
+    expect(result.config.server.port).toBe(9_988);
+    expect(result.config.bot).toEqual(envelope.config.bot);
+    expect(activeConfig.server.port).toBe(9_988);
+    expect(result.applyMode).toBe("restart");
+    expect(result.restartRequiredFields).toEqual(["server.port"]);
+    const persisted = JSON.parse(await fs.readFile(configStore.configPath, "utf8")) as AppConfig;
+    expect(persisted.server.port).toBe(9_988);
+  });
+
+  it("rejects a catalog model effort that the selected model does not support", async () => {
+    const subject = service();
+    const envelope = await subject.readEnvelope();
+
+    await expect(subject.patch("memory", {
+      revision: envelope.revision,
+      value: {
+        ...envelope.config.bot.memory,
+        memoryModel: "gpt-5.4-mini",
+        reasoningEffort: "ultra"
+      }
+    })).rejects.toMatchObject({
+      statusCode: 400,
+      code: "CONFIG_INVALID",
+      field: "memory.reasoningEffort"
+    });
+  });
+
+  it("accepts every catalog model for Codex", async () => {
+    const subject = service();
+
+    for (const model of MODEL_CATALOG) {
+      const envelope = await subject.readEnvelope();
+      const result = await subject.patch("tools", {
+        revision: envelope.revision,
+        value: {
+          ...envelope.config.bot.tools,
+          codex: {
+            ...envelope.config.bot.tools.codex,
+            model: model.id
+          }
+        }
+      });
+
+      expect(result.config.bot.tools.codex.model).toBe(model.id);
+      expect(result.applyMode).toBe("hot");
+    }
+  });
+
+  it("persists a valid image quality setting", async () => {
+    const subject = service();
+    const envelope = await subject.readEnvelope();
+    const result = await subject.patch("tools", {
+      revision: envelope.revision,
+      value: {
+        ...envelope.config.bot.tools,
+        generateImg: {
+          ...envelope.config.bot.tools.generateImg,
+          quality: "auto"
+        }
+      }
+    });
+
+    expect(result.config.bot.tools.generateImg.quality).toBe("auto");
+    expect(configStore.config!.bot.tools.generateImg.quality).toBe("auto");
+  });
+
+  it("rejects an unsupported image quality setting", async () => {
+    const subject = service();
+    const envelope = await subject.readEnvelope();
+
+    await expect(subject.patch("tools", {
+      revision: envelope.revision,
+      value: {
+        ...envelope.config.bot.tools,
+        generateImg: {
+          ...envelope.config.bot.tools.generateImg,
+          quality: "maximum"
+        }
+      }
+    })).rejects.toMatchObject({
+      statusCode: 400,
+      code: "CONFIG_INVALID",
+      field: "tools.generateImg.quality"
+    });
+  });
+
+  it("redacts Tavily keys and preserves them during unrelated tools saves", async () => {
+    configStore.config!.bot.tools.websearch.tavilyApiKey = "tvly-stored-secret-1234567890";
+    const subject = service();
+    const envelope = await subject.readEnvelope();
+
+    expect(envelope.config.bot.tools.websearch.tavilyApiKey).toBe("");
+    expect(envelope.config.bot.tools.websearch.tavilyApiKeys).toEqual([]);
+    expect(envelope.fieldStates["bot.tools.websearch.tavilyApiKey"]?.secretConfigured).toBe(true);
+    expect(envelope.fieldStates["bot.tools.websearch.tavilyApiKeys"]?.storedSecretCount).toBe(1);
+
+    const result = await subject.patch("tools", {
+      revision: envelope.revision,
+      value: {
+        ...envelope.config.bot.tools,
+        websearch: {
+          ...envelope.config.bot.tools.websearch,
+          maxResults: 7
+        }
+      }
+    });
+
+    expect(configStore.config!.bot.tools.websearch.tavilyApiKey).toBe("");
+    expect(configStore.config!.bot.tools.websearch.tavilyApiKeys).toEqual(["tvly-stored-secret-1234567890"]);
+    expect(result.config.bot.tools.websearch.tavilyApiKey).toBe("");
+    expect(result.config.bot.tools.websearch.tavilyApiKeys).toEqual([]);
+  });
+
+  it("rejects the legacy Codex websearch provider", async () => {
+    const subject = service();
+    const envelope = await subject.readEnvelope();
+
+    await expect(subject.patch("tools", {
+      revision: envelope.revision,
+      value: {
+        ...envelope.config.bot.tools,
+        websearch: {
+          ...envelope.config.bot.tools.websearch,
+          provider: "codex-bash"
+        }
+      }
+    })).rejects.toMatchObject({
+      statusCode: 400,
+      code: "CONFIG_INVALID",
+      field: "tools.websearch.provider"
+    });
+  });
+
+  it("adds, removes and migrates write-only Tavily key pools", async () => {
+    configStore.config!.bot.tools.websearch.tavilyApiKeys = [
+      "tvly-old-secret-1-1234567890",
+      "tvly-old-secret-2-1234567890"
+    ];
+    const subject = service();
+    let envelope = await subject.readEnvelope();
+
+    await subject.patch("tools", {
+      revision: envelope.revision,
+      value: {
+        ...envelope.config.bot.tools,
+        websearch: {
+          ...envelope.config.bot.tools.websearch,
+          tavilyApiKeys: ["tvly-new-secret-1234567890"],
+          removeTavilyApiKeyIndexes: [0]
+        }
+      }
+    });
+    expect(configStore.config!.bot.tools.websearch.tavilyApiKeys).toEqual([
+      "tvly-old-secret-2-1234567890",
+      "tvly-new-secret-1234567890"
+    ]);
+
+    envelope = await subject.readEnvelope();
+    await subject.patch("tools", {
+      revision: envelope.revision,
+      value: {
+        ...envelope.config.bot.tools,
+        websearch: {
+          ...envelope.config.bot.tools.websearch,
+          removeTavilyApiKeyIndexes: [0, 1]
+        }
+      }
+    });
+    expect(configStore.config!.bot.tools.websearch.tavilyApiKeys).toEqual([]);
+
+    envelope = await subject.readEnvelope();
+    await subject.patch("tools", {
+      revision: envelope.revision,
+      value: {
+        ...envelope.config.bot.tools,
+        websearch: {
+          ...envelope.config.bot.tools.websearch,
+          tavilyApiKeyEnv: "tvly-migrated-secret-1234567890"
+        }
+      }
+    });
+    expect(configStore.config!.bot.tools.websearch).toMatchObject({
+      tavilyApiKey: "",
+      tavilyApiKeys: ["tvly-migrated-secret-1234567890"],
+      tavilyApiKeyEnv: "TAVILY_API_KEY"
+    });
+  });
+
+  it("rejects a Codex model outside the catalog", async () => {
+    const subject = service();
+    const envelope = await subject.readEnvelope();
+
+    await expect(subject.patch("tools", {
+      revision: envelope.revision,
+      value: {
+        ...envelope.config.bot.tools,
+        codex: {
+          ...envelope.config.bot.tools.codex,
+          model: "unknown-model"
+        }
+      }
+    })).rejects.toMatchObject({
+      statusCode: 400,
+      code: "CONFIG_INVALID",
+      field: "tools.codex.model"
+    });
+  });
+
+  it("rejects invalid Codex worker limits", async () => {
+    const subject = service();
+    const envelope = await subject.readEnvelope();
+
+    await expect(subject.patch("tools", {
+      revision: envelope.revision,
+      value: {
+        ...envelope.config.bot.tools,
+        codex: { ...envelope.config.bot.tools.codex, timeoutMs: 999 }
+      }
+    })).rejects.toMatchObject({
+      statusCode: 400,
+      code: "CONFIG_INVALID",
+      field: "tools.codex.timeoutMs"
+    });
+
+    await expect(subject.patch("tools", {
+      revision: envelope.revision,
+      value: {
+        ...envelope.config.bot.tools,
+        codex: { ...envelope.config.bot.tools.codex, maxConcurrency: 0 }
+      }
+    })).rejects.toMatchObject({
+      statusCode: 400,
+      code: "CONFIG_INVALID",
+      field: "tools.codex.maxConcurrency"
+    });
+  });
+
+  it("mirrors the authoritative bot quote setting into OneBot", async () => {
+    const subject = service();
+    const envelope = await subject.readEnvelope();
+    const result = await subject.patch("bot", {
+      revision: envelope.revision,
+      value: {
+        adminQq: envelope.config.bot.adminQq,
+        adminName: envelope.config.bot.adminName,
+        quoteGroupReplies: !envelope.config.bot.quoteGroupReplies,
+        contextMessageLimit: envelope.config.bot.contextMessageLimit
+      }
+    });
+
+    expect(result.config.onebot.quoteGroupReplies).toBe(result.config.bot.quoteGroupReplies);
+  });
+
+  it("verifies a prepared apply before writing config and leaves disk unchanged when verification fails", async () => {
+    const verify = vi.fn(async () => {
+      throw new Error("prepared state changed");
+    });
+    const commit = vi.fn();
+    const prepareApply = vi.fn(async () => ({ verify, commit }));
+    const subject = new ConfigService({
+      mutex: new AdminMutationMutex(),
+      prepareApply
+    });
+    const envelope = await subject.readEnvelope();
+    const beforeDisk = await fs.readFile(configStore.configPath, "utf8");
+    const beforeConfig = structuredClone(configStore.config);
+
+    await expect(subject.patch("server", {
+      revision: envelope.revision,
+      value: { ...envelope.config.server, port: envelope.config.server.port + 1 }
+    })).rejects.toThrow("prepared state changed");
+
+    expect(prepareApply).toHaveBeenCalledOnce();
+    expect(verify).toHaveBeenCalledOnce();
+    expect(commit).not.toHaveBeenCalled();
+    expect(configStore.config).toEqual(beforeConfig);
+    expect(await fs.readFile(configStore.configPath, "utf8")).toBe(beforeDisk);
+    await expect(fs.stat(`${configStore.configPath}.admin-backup`)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+});
+
+function leafPaths(value: unknown, prefix = ""): string[] {
+  if (Array.isArray(value)) {
+    return value.flatMap((item, index) => leafPaths(item, `${prefix}.${index}`));
+  }
+  if (value && typeof value === "object") {
+    return Object.entries(value as Record<string, unknown>)
+      .flatMap(([key, child]) => leafPaths(child, prefix ? `${prefix}.${key}` : key));
+  }
+  return [prefix];
+}
+
+function service() {
+  return new ConfigService({
+    mutex: new AdminMutationMutex(),
+    prepareApply: vi.fn(async (candidate: AppConfig) => ({
+      commit() {
+        activeConfig = structuredClone(candidate);
+      }
+    }))
+  });
+}

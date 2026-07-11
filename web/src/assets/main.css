@@ -1,0 +1,260 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root,
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --color-page: 245 245 245;
+    --color-panel: 255 255 255;
+    --color-raised: 240 240 240;
+    --color-line: 232 232 232;
+    --color-visible: 204 204 204;
+    --color-disabled: 117 117 117;
+    --color-mute: 102 102 102;
+    --color-ink: 26 26 26;
+    --color-display: 0 0 0;
+    --color-accent: 215 25 33;
+    --color-success: 57 132 74;
+    --color-warning: 160 116 25;
+    --color-interactive: 0 92 184;
+  }
+
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --color-page: 0 0 0;
+    --color-panel: 17 17 17;
+    --color-raised: 26 26 26;
+    --color-line: 34 34 34;
+    --color-visible: 51 51 51;
+    --color-disabled: 139 139 139;
+    --color-mute: 153 153 153;
+    --color-ink: 232 232 232;
+    --color-display: 255 255 255;
+    --color-accent: 215 25 33;
+    --color-success: 74 158 92;
+    --color-warning: 212 168 67;
+    --color-interactive: 91 155 246;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme]) {
+      color-scheme: dark;
+      --color-page: 0 0 0;
+      --color-panel: 17 17 17;
+      --color-raised: 26 26 26;
+      --color-line: 34 34 34;
+      --color-visible: 51 51 51;
+      --color-disabled: 139 139 139;
+      --color-mute: 153 153 153;
+      --color-ink: 232 232 232;
+      --color-display: 255 255 255;
+      --color-accent: 215 25 33;
+      --color-success: 74 158 92;
+      --color-warning: 212 168 67;
+      --color-interactive: 91 155 246;
+    }
+  }
+
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+
+  html,
+  body,
+  #app {
+    width: 100%;
+    height: 100%;
+  }
+
+  html {
+    background: rgb(var(--color-page));
+  }
+
+  body {
+    margin: 0;
+    min-width: 320px;
+    overflow: hidden;
+    background: rgb(var(--color-page));
+    color: rgb(var(--color-ink));
+    font-family: "Space Grotesk", system-ui, sans-serif;
+    font-size: 1rem;
+    line-height: 1.5;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  button,
+  input,
+  select,
+  textarea {
+    color: inherit;
+    font: inherit;
+  }
+
+  button,
+  select,
+  summary {
+    cursor: pointer;
+  }
+
+  button:disabled,
+  input:disabled,
+  select:disabled,
+  textarea:disabled {
+    cursor: not-allowed;
+    opacity: 0.4;
+  }
+
+  ::selection {
+    background: rgb(var(--color-display));
+    color: rgb(var(--color-page));
+  }
+
+  :focus-visible {
+    outline: 2px solid rgb(var(--color-display));
+    outline-offset: 3px;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    border: 3px solid rgb(var(--color-page));
+    border-radius: 999px;
+    background: rgb(var(--color-visible));
+  }
+}
+
+@layer components {
+  .page-shell {
+    @apply h-full min-h-0 min-w-0 overflow-y-auto overflow-x-hidden px-4 pb-8 pt-6 md:px-8 md:pb-10 md:pt-8 lg:px-12;
+  }
+
+  .app-main {
+    height: calc(100% - 68px - env(safe-area-inset-bottom));
+  }
+
+  @media (min-width: 1024px) {
+    .app-main { height: 100%; }
+  }
+
+  .page-frame {
+    @apply mx-auto w-full max-w-[1440px];
+  }
+
+  .page-kicker,
+  .field-label,
+  .meta-label {
+    @apply font-mono text-[11px] uppercase leading-[1.2] tracking-[0.08em] text-mute;
+  }
+
+  .page-title {
+    @apply mt-2 font-display text-[36px] font-semibold leading-[1.02] tracking-[-0.02em] text-display md:text-[48px];
+  }
+
+  .page-intro {
+    @apply mt-3 max-w-2xl text-sm leading-6 text-mute md:text-base;
+  }
+
+  .section-title {
+    @apply text-xl font-medium leading-tight tracking-[-0.01em] text-display md:text-2xl;
+  }
+
+  .surface {
+    @apply rounded-xl border border-line bg-panel;
+  }
+
+  .technical-surface {
+    @apply rounded-lg border border-visible bg-panel;
+  }
+
+  .divider-row {
+    @apply flex min-h-12 min-w-0 items-center justify-between gap-4 border-b border-line py-3 last:border-b-0;
+  }
+
+  .btn {
+    @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-full border border-visible bg-transparent px-5 font-mono text-xs uppercase tracking-[0.06em] text-ink transition-colors duration-200 hover:border-display hover:text-display focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-display;
+  }
+
+  .btn-primary {
+    @apply border-display bg-display text-page hover:border-ink hover:bg-ink hover:text-page;
+  }
+
+  .btn-ghost {
+    @apply rounded-md border-transparent px-3 text-mute hover:border-line hover:text-display;
+  }
+
+  .btn-danger {
+    @apply border-accent text-accent hover:border-accent hover:bg-accent/10 hover:text-accent;
+  }
+
+  .icon-btn {
+    @apply inline-flex size-11 shrink-0 items-center justify-center rounded-full border border-visible bg-transparent text-mute transition-colors duration-200 hover:border-display hover:text-display;
+  }
+
+  .control {
+    @apply min-h-11 w-full min-w-0 rounded-lg border border-visible bg-page px-3 py-2 font-mono text-sm text-ink transition-colors duration-200 placeholder:text-disabled hover:border-mute focus:border-display focus:outline-none;
+  }
+
+  textarea.control {
+    @apply resize-y leading-6;
+  }
+
+  .field {
+    @apply grid min-w-0 gap-2;
+  }
+
+  .inline-state {
+    @apply font-mono text-xs uppercase tracking-[0.04em] text-mute;
+  }
+
+  .inline-state[data-kind="success"] { @apply text-success; }
+  .inline-state[data-kind="warning"] { @apply text-warning; }
+  .inline-state[data-kind="error"] { @apply text-accent; }
+
+  .segmented {
+    @apply inline-flex min-h-11 rounded-full border border-visible p-1;
+  }
+
+  .segmented-button {
+    @apply min-h-9 rounded-full px-3 font-mono text-[11px] uppercase tracking-[0.06em] text-mute transition-colors duration-200 hover:text-display;
+  }
+
+  .segmented-button[aria-pressed="true"] {
+    @apply bg-display text-page;
+  }
+
+  .empty-state {
+    @apply grid min-h-64 place-items-center px-6 py-24 text-center;
+  }
+
+  .empty-state strong {
+    @apply block text-lg font-normal text-mute;
+  }
+
+  .empty-state p {
+    @apply mt-2 font-mono text-xs text-disabled;
+  }
+
+  .dot-grid {
+    background-image: radial-gradient(circle, rgb(var(--color-visible)) 1px, transparent 1px);
+    background-size: 16px 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

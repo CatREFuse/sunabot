@@ -1,0 +1,66 @@
+import { flushPromises, mount } from "@vue/test-utils";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { RuntimeStatus } from "../types";
+import OverviewView from "./OverviewView.vue";
+
+const runtime = vi.hoisted(() => ({
+  status: { value: null as RuntimeStatus | null },
+  loading: { value: false },
+  error: { value: "状态服务不可用" },
+  refresh: vi.fn().mockResolvedValue(undefined)
+}));
+const apiRequest = vi.hoisted(() => vi.fn());
+
+vi.mock("../composables/useRuntimeStatus", () => ({ useRuntimeStatus: () => runtime }));
+vi.mock("../composables/useAdminApi", () => ({ apiRequest }));
+
+describe("OverviewView", () => {
+  beforeEach(() => {
+    runtime.status.value = null;
+    runtime.error.value = "状态服务不可用";
+    runtime.refresh.mockClear();
+    apiRequest.mockImplementation((path: string) => {
+      if (path === "/api/onebot/qq-login/status") return Promise.resolve({ connected: false, online: false });
+      if (path === "/api/onebot/login-info") return Promise.resolve({ connected: false });
+      if (path === "/api/conversations") return Promise.resolve({ conversations: [] });
+      if (path === "/api/images") return Promise.resolve({ images: [] });
+      throw new Error(`Unexpected request: ${path}`);
+    });
+  });
+
+  it("shows an unknown QQ state when OneBot is connected but login lookup fails", async () => {
+    runtime.status.value = {
+      startedAt: "2026-07-10T00:00:00.000Z",
+      configPath: "/tmp/config.json",
+      onebot: { connected: true, connections: 1, selfIds: ["42"] },
+      persona: { id: "plana", name: "普拉娜", memoryItems: 0 },
+      provider: { defaultProviderId: "codex", model: "gpt-5.6-sol", imageModel: "gpt-image-2", apiKeyConfigured: true }
+    };
+    runtime.error.value = "";
+    apiRequest.mockImplementation((path: string) => {
+      if (path === "/api/onebot/qq-login/status") return Promise.resolve({ connected: true, online: false, error: "登录查询失败" });
+      if (path === "/api/onebot/login-info") return Promise.resolve({ connected: true, error: "登录查询失败" });
+      if (path === "/api/conversations") return Promise.resolve({ conversations: [] });
+      if (path === "/api/images") return Promise.resolve({ images: [] });
+      throw new Error(`Unexpected request: ${path}`);
+    });
+
+    const wrapper = mount(OverviewView);
+    await flushPromises();
+    expect(wrapper.text()).toContain("QQ 状态未知");
+    expect(wrapper.text()).toContain("ONEBOT 已连接 · QQ 未知");
+  });
+
+  it("shows the status request error and never reports a failed refresh as updated", async () => {
+    const wrapper = mount(OverviewView);
+    await flushPromises();
+    expect(wrapper.text()).toContain("[ERROR: 状态服务不可用]");
+    expect(wrapper.text()).toContain("状态服务不可用");
+
+    await wrapper.get('button[aria-label="刷新"]').trigger("click");
+    await flushPromises();
+    expect(runtime.refresh).toHaveBeenCalledOnce();
+    expect(wrapper.text()).toContain("[ERROR: 状态服务不可用]");
+    expect(wrapper.text()).not.toContain("[UPDATED]");
+  });
+});
