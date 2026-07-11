@@ -226,6 +226,9 @@ export class OneBotGateway extends EventEmitter {
     const sources = await Promise.all(images.map(async (image) => {
       if (image.filePath && this.options.outboundMedia) {
         const signedPath = await this.options.outboundMedia.createSignedPath(image.filePath);
+        const configuredBaseUrl = this.options.outboundMediaBaseUrl?.trim() ||
+          process.env.SUNABOT_OUTBOUND_MEDIA_BASE_URL?.trim();
+        if (!configuredBaseUrl) return image.filePath;
         return this.resolveOutboundMediaUrl(signedPath);
       }
       if (image.url && /^https?:\/\//i.test(image.url)) return image.url;
@@ -429,15 +432,10 @@ function richMessage(text: string, imageSources: string[], replyToMessageId?: nu
     segments.push({
       type: "image",
       data: {
-        file: normalizeImageFile(imageSource)
+        file: imageSource
       }
     });
   }
 
   return segments.length ? segments : [{ type: "text", data: { text: "" } }];
-}
-
-function normalizeImageFile(filePath: string) {
-  if (/^file:\/\//i.test(filePath) || /^https?:\/\//i.test(filePath)) return filePath;
-  return `file://${filePath}`;
 }

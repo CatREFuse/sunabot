@@ -43,7 +43,7 @@ NapCat 与 Sunabot 在同一主机直接运行时使用：
 ws://127.0.0.1:8787/onebot/v11/ws
 ```
 
-生成图片回传默认使用 `http://127.0.0.1:8787`。如果 NapCat 运行在 Docker 中而 Sunabot 运行在宿主机，请在 `workspace/.env` 设置：
+NapCat 与 Sunabot 共享文件系统时，生成图片默认直接传递绝对文件路径，不设置 `SUNABOT_OUTBOUND_MEDIA_BASE_URL`。如果 NapCat 运行在 Docker 中而 Sunabot 运行在宿主机，请在 `workspace/.env` 设置签名图片回调地址：
 
 ```text
 SUNABOT_OUTBOUND_MEDIA_BASE_URL=http://host.docker.internal:8787

@@ -29,7 +29,7 @@ describe("OneBot outbound media adapter", () => {
     await fs.rm(temporaryDirectory, { recursive: true, force: true });
   });
 
-  it("maps internal image assets to signed standard image.file segments", async () => {
+  it("maps internal image assets to local paths when NapCat shares the filesystem", async () => {
     const gateway = new OneBotGateway(
       http.createServer(),
       defaultConfig(),
@@ -50,14 +50,7 @@ describe("OneBot outbound media adapter", () => {
     expect(params.group_id).toBe(42);
     expect(message.map((segment) => segment.type)).toEqual(["reply", "text", "image"]);
     const source = message[2]!.data.file;
-    expect(source).toMatch(/^http:\/\/127\.0\.0\.1:8787\/outbound-media\/generated-images\/generated\.png\?/);
-
-    const signedUrl = new URL(source);
-    await expect(delivery.resolveSignedPath(
-      decodeURIComponent(signedUrl.pathname.split("/").at(-1) ?? ""),
-      signedUrl.searchParams.get("expires"),
-      signedUrl.searchParams.get("signature")
-    )).resolves.toMatchObject({ filePath: imagePath });
+    expect(source).toBe(imagePath);
   });
 
   it("supports a Docker host override for outbound media callbacks", async () => {
@@ -76,9 +69,16 @@ describe("OneBot outbound media adapter", () => {
 
     const params = sendAction.mock.calls[0]![1];
     const message = params.message as Array<{ type: string; data: Record<string, string> }>;
-    expect(message.at(-1)?.data.file).toMatch(
+    const source = message.at(-1)?.data.file ?? "";
+    expect(source).toMatch(
       /^http:\/\/host\.docker\.internal:8787\/outbound-media\/generated-images\/generated\.png\?/
     );
+    const signedUrl = new URL(source);
+    await expect(delivery.resolveSignedPath(
+      decodeURIComponent(signedUrl.pathname.split("/").at(-1) ?? ""),
+      signedUrl.searchParams.get("expires"),
+      signedUrl.searchParams.get("signature")
+    )).resolves.toMatchObject({ filePath: imagePath });
   });
 
   it("passes external HTTP image assets through the standard OneBot interface", async () => {
