@@ -16,6 +16,7 @@
 | `docs/setup-napcat.md` | sunabot、NapCat、WebUI 和 OneBot 反向 WebSocket 的本机启动配置 | 部署、重启或排查 OneBot 连接时读取 |
 | `docs/security/admin-access.md` | 管理员账号密码、会话、CSRF、限流、熔断与公网代理边界 | 修改鉴权、WebUI 外网访问或紧急处置时读取 |
 | `docs/deployment/distributed-workspace.md` | Git pull、新终端、workspace 分离与百度同步盘加密快照 | 多终端开发、更新或数据同步时读取 |
+| `docs/operations/sqlite-backup-recovery.md` | 主库与 session queue 一致恢复点、7/30 天保留、恢复校验、季度演练和故障门禁 | 执行每日备份、恢复、保留清理或故障演练时读取 |
 | `docs/references/README.md` | OneBot v11、v12 协议资料的来源、版本和本地入口 | 核对 OneBot 事件、消息段、动作或兼容性时读取 |
 
 新增、移动、重命名或删除 `docs/` 下的有效文档时，必须同步更新本索引。历史方案不进入当前索引。
