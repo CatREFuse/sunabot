@@ -50,6 +50,58 @@ export interface AttachmentExtractionContext {
   userId?: number;
 }
 
+export interface AttachmentResolutionInput {
+  fileId?: string;
+  file?: string;
+  url?: string;
+  busId?: number;
+  groupId?: number;
+}
+
+export interface AttachmentResolverOptions {
+  sharedRoots?: string[];
+}
+
+export type ExtractedAttachmentSource =
+  | { kind: "url"; url: string }
+  | { kind: "base64"; base64: string }
+  | { kind: "shared_path"; filePath: string };
+
+export type AttachmentResolutionStrategy = "group_file_url" | "private_file_url" | "file_content";
+
+export type ResolvedAttachmentSource =
+  | (Extract<ExtractedAttachmentSource, { kind: "url" }> & {
+      via: "message_url" | AttachmentResolutionStrategy;
+    })
+  | (Extract<ExtractedAttachmentSource, { kind: "base64" | "shared_path" }> & {
+      via: "file_content";
+    });
+
+export interface AttachmentResolutionAttempt {
+  strategy: AttachmentResolutionStrategy;
+  outcome: "error" | "empty";
+}
+
+export class AttachmentResolutionError extends Error {
+  readonly code = "attachment_unavailable";
+
+  constructor(readonly attempts: AttachmentResolutionAttempt[]) {
+    super("No usable attachment source was returned by the messaging adapter.");
+    this.name = "AttachmentResolutionError";
+  }
+}
+
+export interface AttachmentSourcePort {
+  resolveAttachment(
+    input: AttachmentResolutionInput,
+    options?: AttachmentResolverOptions
+  ): Promise<ResolvedAttachmentSource>;
+  resolveAttachmentFallback(
+    input: Pick<AttachmentResolutionInput, "fileId" | "file">,
+    options?: AttachmentResolverOptions
+  ): Promise<ResolvedAttachmentSource | undefined>;
+}
+
 export type MediaAssetRefV1 =
   | {
       schemaVersion: 1;

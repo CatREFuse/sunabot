@@ -4,8 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import sharp from "sharp";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { FakeAttachmentSourcePort } from "../../packages/testkit/fakeMessagingPort.js";
 import { CacheStore } from "../../services/media/attachments/cache.js";
-import type { FileActionGateway } from "../../services/media/attachments/resolver.js";
 import { AttachmentService } from "../../services/media/attachments/service.js";
 
 let temporaryDirectory = "";
@@ -22,9 +22,11 @@ describe("AttachmentService detection warnings", () => {
     const png = await sharp({
       create: { width: 20, height: 20, channels: 4, background: { r: 10, g: 20, b: 30, alpha: 0.5 } }
     }).png().toBuffer();
-    const gateway: FileActionGateway = {
-      sendAction: vi.fn(async () => ({ data: { base64: png.toString("base64") } }))
-    };
+    const gateway = new FakeAttachmentSourcePort({
+      kind: "base64",
+      base64: png.toString("base64"),
+      via: "file_content"
+    });
     const cacheRoot = path.join(temporaryDirectory, "cache");
     const attachmentLog = vi.spyOn(console, "info").mockImplementation(() => undefined);
     const service = new AttachmentService(temporaryDirectory, {

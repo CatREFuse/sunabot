@@ -6,6 +6,12 @@ import { WebSocket, WebSocketServer } from "ws";
 import type { OutboundMediaDelivery } from "../../services/delivery/outboundMedia.js";
 import type { AppConfig } from "../../src/types.js";
 import type {
+  AttachmentResolutionInput,
+  AttachmentResolverOptions,
+  AttachmentSourcePort
+} from "../../packages/contracts/media/media.js";
+import type {
+  ConversationDirectoryPort,
   InboundMessageV1,
   MessageLookupContextV1,
   MessagingPort,
@@ -21,6 +27,11 @@ import {
   parseOneBotInboundMessage
 } from "./inboundMessageAdapter.js";
 import type { OneBotEvent } from "./protocol.js";
+import {
+  loadOneBotConversationDirectory,
+  resolveOneBotAttachment,
+  resolveOneBotAttachmentFallback
+} from "./queryAdapter.js";
 
 interface PendingAction {
   action: string;
@@ -58,7 +69,7 @@ export interface OneBotGatewayOptions {
   outboundMedia?: OutboundMediaDelivery;
 }
 
-export class OneBotGateway extends EventEmitter implements MessagingPort {
+export class OneBotGateway extends EventEmitter implements MessagingPort, ConversationDirectoryPort, AttachmentSourcePort {
   private readonly wss: WebSocketServer;
   private readonly sockets = new Map<WebSocket, { selfId?: string; connectedAt: string }>();
   private readonly pending = new Map<string, PendingAction>();
@@ -277,6 +288,25 @@ export class OneBotGateway extends EventEmitter implements MessagingPort {
   async getMessage(messageId: number, context: MessageLookupContextV1 = {}) {
     const payload = await this.sendAction("get_msg", { message_id: messageId });
     return extractOneBotMessageDetails(payload, { ...context, messageId });
+  }
+
+  conversationDirectoryGeneration() {
+    return String(this.getStatus().connectedAt ?? "unknown");
+  }
+
+  loadConversationDirectory() {
+    return loadOneBotConversationDirectory(this);
+  }
+
+  resolveAttachment(input: AttachmentResolutionInput, options: AttachmentResolverOptions = {}) {
+    return resolveOneBotAttachment(this, input, options);
+  }
+
+  resolveAttachmentFallback(
+    input: Pick<AttachmentResolutionInput, "fileId" | "file">,
+    options: AttachmentResolverOptions = {}
+  ) {
+    return resolveOneBotAttachmentFallback(this, input, options);
   }
 
   private async resolveImageSources(images: OutboundImageAsset[]) {

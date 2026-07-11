@@ -8,7 +8,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CacheStore } from "../../services/media/attachments/cache.js";
 import { findLibreOffice } from "../../services/media/attachments/libreoffice.js";
 import { AttachmentService } from "../../services/media/attachments/service.js";
-import type { FileActionGateway } from "../../services/media/attachments/resolver.js";
+import type { AttachmentSourcePort } from "../../packages/contracts/media/media.js";
+import { FakeAttachmentSourcePort } from "../../packages/testkit/fakeMessagingPort.js";
 import type { IncomingAttachment } from "../../services/media/attachments/types.js";
 
 let temporaryDirectory = "";
@@ -96,11 +97,7 @@ describe("AttachmentService integration", () => {
     const pdf = createTextPdf(["Shared content-addressed fixture"]);
     const filePath = await writeFixture("shared-report.pdf", pdf);
     const url = await serveFixture(filePath, "application/pdf", 25);
-    const gateway: FileActionGateway = {
-      sendAction: vi.fn(async (action) => action === "get_file"
-        ? { data: { base64: pdf.toString("base64") } }
-        : { data: {} })
-    };
+    const gateway = base64Port(pdf);
     const { service } = createAttachmentService("single-flight-cache");
     const workerRun = vi.spyOn(service.worker, "run");
 
@@ -178,13 +175,13 @@ describe("AttachmentService integration", () => {
     expect(wrongSecond!.status).toBe("unsupported");
   }, 30_000);
 
-  it("falls back to get_file when a resolved download URL is unsafe", async () => {
+  it("falls back to adapter-provided file content when a resolved download URL is unsafe", async () => {
     const body = Buffer.from("Fallback content from NapCat Base64", "utf8");
-    const gateway: FileActionGateway = {
-      sendAction: vi.fn(async (action) => action === "get_file"
-        ? { data: { base64: body.toString("base64") } }
-        : { data: {} })
-    };
+    const gateway = new FakeAttachmentSourcePort(undefined, {
+      kind: "base64",
+      base64: body.toString("base64"),
+      via: "file_content"
+    });
     const fetchMock = vi.fn(async () => {
       throw new Error("Unsafe URL must be rejected before fetch.");
     });
@@ -208,18 +205,12 @@ describe("AttachmentService integration", () => {
     expect(attachment).toMatchObject({ status: "ready", format: "txt" });
     expect(context.text).toContain("Fallback content from NapCat Base64");
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(gateway.sendAction).toHaveBeenCalledWith("get_file", {
-      file_id: "fallback-file-id"
-    });
+    expect(gateway.fallbackCalls).toEqual([{ fileId: "fallback-file-id", file: "fallback.txt" }]);
   }, 30_000);
 
   it("reports cache_unavailable after a persisted text chunk index disappears", async () => {
     const text = Buffer.from("The recovery code is ORBIT-2048.", "utf8");
-    const gateway: FileActionGateway = {
-      sendAction: vi.fn(async (action) => action === "get_file"
-        ? { data: { base64: text.toString("base64") } }
-        : { data: {} })
-    };
+    const gateway = base64Port(text);
     const { service, cacheRoot } = createAttachmentService("missing-chunks-cache");
     const [attachment] = await service.processIncoming([
       incomingAttachment({ id: "missing-1", name: "recovery.txt", fileId: "recovery-file" })
@@ -259,11 +250,7 @@ describe("AttachmentService integration", () => {
     });
     await presentation.writeFile({ fileName: pptxPath });
     const pptx = await readFile(pptxPath);
-    const gateway: FileActionGateway = {
-      sendAction: vi.fn(async (action) => action === "get_file"
-        ? { data: { base64: pptx.toString("base64") } }
-        : { data: {} })
-    };
+    const gateway = base64Port(pptx);
     const { service } = createAttachmentService("pptx-cache");
 
     const [attachment] = await service.processIncoming([
@@ -306,12 +293,16 @@ function incomingAttachment(
   };
 }
 
-function unusedGateway(): FileActionGateway {
-  return {
-    sendAction: vi.fn(async () => {
-      throw new Error("Direct attachment URLs must not call the OneBot gateway.");
-    })
-  };
+function unusedGateway(): AttachmentSourcePort {
+  return new FakeAttachmentSourcePort(new Error("Direct attachment URLs must not call the messaging adapter."));
+}
+
+function base64Port(bytes: Buffer) {
+  return new FakeAttachmentSourcePort({
+    kind: "base64",
+    base64: bytes.toString("base64"),
+    via: "file_content"
+  });
 }
 
 async function writeFixture(name: string, bytes: Buffer) {

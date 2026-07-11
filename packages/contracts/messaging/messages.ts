@@ -83,6 +83,29 @@ export interface MessageDetailsV1 {
   sender: SenderIdentityV1;
 }
 
+export interface ContactIdentityV1 {
+  userId: number;
+  nickname: string;
+  remark: string;
+}
+
+export interface GroupIdentityV1 {
+  groupId: number;
+  groupName: string;
+}
+
+export interface ConversationDirectorySnapshotV1 {
+  friendsReady: boolean;
+  groupsReady: boolean;
+  friends: ContactIdentityV1[];
+  groups: GroupIdentityV1[];
+}
+
+export interface ConversationDirectoryPort {
+  conversationDirectoryGeneration(): string;
+  loadConversationDirectory(): Promise<ConversationDirectorySnapshotV1>;
+}
+
 export interface MessagingPort {
   getStatus(): MessagingStatusV1;
   send(message: OutboundMessageV1): Promise<MessagingReceiptV1>;

@@ -2,8 +2,17 @@
 import http from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import { OneBotGateway } from "../../adapters/onebot/onebotGateway.js";
-import type { MessagingPort, OutboundMessageV1 } from "../../packages/contracts/messaging/messages.js";
-import { FakeMessagingPort } from "../../packages/testkit/fakeMessagingPort.js";
+import type { AttachmentSourcePort } from "../../packages/contracts/media/media.js";
+import type {
+  ConversationDirectoryPort,
+  MessagingPort,
+  OutboundMessageV1
+} from "../../packages/contracts/messaging/messages.js";
+import {
+  FakeAttachmentSourcePort,
+  FakeConversationDirectoryPort,
+  FakeMessagingPort
+} from "../../packages/testkit/fakeMessagingPort.js";
 import { defaultConfig } from "../../src/config.js";
 
 describe("MessagingPort contract", () => {
@@ -16,9 +25,7 @@ describe("MessagingPort contract", () => {
   });
 
   it("runs the same outbound business use case through the OneBot adapter", async () => {
-    const gateway = new OneBotGateway(http.createServer(), defaultConfig(), {
-      handleInboundMessage: vi.fn(async () => undefined)
-    });
+    const gateway = oneBotGateway();
     const sendAction = vi.spyOn(gateway, "sendAction").mockResolvedValue({
       status: "ok",
       data: { message_id: 987 }
@@ -36,10 +43,55 @@ describe("MessagingPort contract", () => {
       ]
     });
   });
+
+  it("runs the same directory use case through fake and OneBot ports", async () => {
+    const expected = {
+      friendsReady: true,
+      groupsReady: true,
+      friends: [{ userId: 99, nickname: "测试用户", remark: "管理员" }],
+      groups: [{ groupId: 42, groupName: "测试群" }]
+    };
+    const fake = new FakeConversationDirectoryPort(expected);
+    const gateway = oneBotGateway();
+    vi.spyOn(gateway, "sendAction").mockImplementation(async (action) => action === "get_friend_list"
+      ? { status: "ok", data: [{ user_id: 99, nickname: "测试用户", remark: "管理员" }] }
+      : { status: "ok", data: [{ group_id: 42, group_name: "测试群" }] });
+
+    await expect(loadDirectoryUseCase(fake)).resolves.toEqual(expected);
+    await expect(loadDirectoryUseCase(gateway)).resolves.toEqual(expected);
+  });
+
+  it("runs the same attachment source use case through fake and OneBot ports", async () => {
+    const expected = {
+      kind: "url" as const,
+      url: "https://cdn.example.test/report.pdf",
+      via: "group_file_url" as const
+    };
+    const fake = new FakeAttachmentSourcePort(expected);
+    const gateway = oneBotGateway();
+    vi.spyOn(gateway, "sendAction").mockResolvedValue({ data: { url: expected.url } });
+
+    await expect(resolveAttachmentUseCase(fake)).resolves.toEqual(expected);
+    await expect(resolveAttachmentUseCase(gateway)).resolves.toEqual(expected);
+  });
 });
 
 async function sendReplyUseCase(port: MessagingPort) {
   return port.send(replyMessage());
+}
+
+function loadDirectoryUseCase(port: ConversationDirectoryPort) {
+  return port.loadConversationDirectory();
+}
+
+function resolveAttachmentUseCase(port: AttachmentSourcePort) {
+  return port.resolveAttachment({ fileId: "report-file", groupId: 42 });
+}
+
+function oneBotGateway() {
+  return new OneBotGateway(http.createServer(), defaultConfig(), {
+    handleInboundMessage: vi.fn(async () => undefined)
+  });
 }
 
 function replyMessage(): OutboundMessageV1 {

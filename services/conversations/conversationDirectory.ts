@@ -1,15 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
+import type {
+  ContactIdentityV1,
+  ConversationDirectoryPort,
+  GroupIdentityV1
+} from "../../packages/contracts/messaging/messages.js";
 import type { ConversationRecord } from "../../src/types.js";
 
 const DIRECTORY_TTL_MS = 5 * 60 * 1000;
 const DIRECTORY_RETRY_MS = 3_000;
 const DIRECTORY_STARTUP_RETRY_DELAY_MS = 300;
-
-interface OneBotDirectoryGateway {
-  getStatus(): { connectedAt?: string };
-  sendAction(action: string, params: Record<string, unknown>): Promise<unknown>;
-}
 
 interface FriendIdentity {
   nickname: string;
@@ -39,7 +39,7 @@ export class ConversationDirectory {
     this.snapshot = options.cachePath ? readCachedSnapshot(options.cachePath) : emptySnapshot();
   }
 
-  async enrich(records: readonly ConversationRecord[], gateway: OneBotDirectoryGateway) {
+  async enrich(records: readonly ConversationRecord[], gateway: ConversationDirectoryPort) {
     await this.refresh(gateway);
     if (!this.snapshot.friendsReady || !this.snapshot.groupsReady) {
       await delay(DIRECTORY_STARTUP_RETRY_DELAY_MS);
@@ -52,8 +52,8 @@ export class ConversationDirectory {
     return enrichConversationTitles(records, this.snapshot);
   }
 
-  private async refresh(gateway: OneBotDirectoryGateway, force = false) {
-    const generation = String(gateway.getStatus().connectedAt ?? "unknown");
+  private async refresh(gateway: ConversationDirectoryPort, force = false) {
+    const generation = gateway.conversationDirectoryGeneration();
     if (!force && this.snapshot.generation === generation && this.snapshot.expiresAt > Date.now()) return;
     if (!this.pending) {
       this.pending = this.load(gateway, generation).finally(() => { this.pending = undefined; });
@@ -61,24 +61,20 @@ export class ConversationDirectory {
     await this.pending;
   }
 
-  private async load(gateway: OneBotDirectoryGateway, generation: string) {
-    const [friendsResult, groupsResult] = await Promise.allSettled([
-      gateway.sendAction("get_friend_list", {}),
-      gateway.sendAction("get_group_list", {})
-    ]);
-    const friendPayload = friendsResult.status === "fulfilled"
-      ? directoryPayload(friendsResult.value)
-      : { ready: false, items: [] };
-    const groupPayload = groupsResult.status === "fulfilled"
-      ? directoryPayload(groupsResult.value)
-      : { ready: false, items: [] };
-    const friendsReady = friendPayload.ready;
-    const groupsReady = groupPayload.ready;
+  private async load(gateway: ConversationDirectoryPort, generation: string) {
+    const directory = await gateway.loadConversationDirectory().catch(() => ({
+      friendsReady: false,
+      groupsReady: false,
+      friends: [],
+      groups: []
+    }));
+    const friendsReady = directory.friendsReady;
+    const groupsReady = directory.groupsReady;
     const friends = friendsReady
-      ? mergeMaps(this.snapshot.friends, friendMap(friendPayload.items))
+      ? mergeMaps(this.snapshot.friends, friendMap(directory.friends))
       : this.snapshot.friends;
     const groups = groupsReady
-      ? mergeMaps(this.snapshot.groups, groupMap(groupPayload.items))
+      ? mergeMaps(this.snapshot.groups, groupMap(directory.groups))
       : this.snapshot.groups;
     this.snapshot = {
       generation,
@@ -149,10 +145,10 @@ function readableStoredTitle(record: ConversationRecord) {
   return title;
 }
 
-function friendMap(items: Array<Record<string, unknown>>) {
+function friendMap(items: ReadonlyArray<ContactIdentityV1 | Record<string, unknown>>) {
   const result = new Map<number, FriendIdentity>();
   for (const item of items) {
-    const userId = positiveInteger(item.user_id ?? item.userId);
+    const userId = positiveInteger(item.userId);
     if (!userId) continue;
     result.set(userId, {
       nickname: cleanText(item.nickname),
@@ -162,23 +158,14 @@ function friendMap(items: Array<Record<string, unknown>>) {
   return result;
 }
 
-function groupMap(items: Array<Record<string, unknown>>) {
+function groupMap(items: ReadonlyArray<GroupIdentityV1 | Record<string, unknown>>) {
   const result = new Map<number, string>();
   for (const item of items) {
-    const groupId = positiveInteger(item.group_id ?? item.groupId);
-    const groupName = cleanText(item.group_name ?? item.groupName);
+    const groupId = positiveInteger(item.groupId);
+    const groupName = cleanText(item.groupName);
     if (groupId && groupName) result.set(groupId, groupName);
   }
   return result;
-}
-
-function directoryPayload(value: unknown) {
-  const root = recordValue(value);
-  const data = root.data;
-  const status = cleanText(root.status).toLowerCase();
-  const retcode = root.retcode == null ? 0 : Number(root.retcode);
-  const ready = Array.isArray(data) && status !== "failed" && retcode === 0;
-  return { ready, items: ready ? recordItems(data) : [] };
 }
 
 function recordValue(value: unknown): Record<string, unknown> {

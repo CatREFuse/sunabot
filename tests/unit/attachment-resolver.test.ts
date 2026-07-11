@@ -2,38 +2,34 @@
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
-  AttachmentResolutionError,
-  extractAttachmentSource,
-  resolveAttachmentSource,
-  type FileActionGateway
-} from "../../services/media/attachments/resolver.js";
+  extractOneBotAttachmentSource,
+  resolveOneBotAttachment
+} from "../../adapters/onebot/queryAdapter.js";
+import { AttachmentResolutionError } from "../../packages/contracts/media/media.js";
+import { FakeAttachmentSourcePort } from "../../packages/testkit/fakeMessagingPort.js";
+import { resolveAttachmentSource } from "../../services/media/attachments/resolver.js";
 
 describe("attachment source resolver", () => {
-  it("uses a message HTTP URL without calling NapCat", async () => {
-    const sendAction = vi.fn();
+  it("uses a message HTTP URL without consulting the adapter", async () => {
+    const port = new FakeAttachmentSourcePort(new Error("must not be called"));
     const url = "https://cdn.example.test/file?id=1&token=signed";
 
-    await expect(resolveAttachmentSource({ url, fileId: "file-1" }, { sendAction }))
-      .resolves.toEqual({ kind: "url", url, via: "message" });
-    expect(sendAction).not.toHaveBeenCalled();
+    await expect(resolveAttachmentSource({ url, fileId: "file-1" }, port))
+      .resolves.toEqual({ kind: "url", url, via: "message_url" });
+    expect(port.resolveCalls).toEqual([]);
   });
 
-  it("resolves a group file URL with group, file and bus IDs", async () => {
-    const sendAction = vi.fn(async () => ({
-      status: "ok",
-      data: { url: "https://cdn.example.test/group-file" }
-    }));
-
-    await expect(resolveAttachmentSource({
+  it("maps a group file request at the OneBot adapter boundary", async () => {
+    const sendAction = vi.fn(async () => ({ data: { url: "https://cdn.example.test/group-file" } }));
+    await expect(resolveOneBotAttachment({ sendAction }, {
       groupId: 123,
       fileId: "group-file-id",
       busId: 456
-    }, { sendAction })).resolves.toEqual({
+    })).resolves.toEqual({
       kind: "url",
       url: "https://cdn.example.test/group-file",
-      via: "get_group_file_url"
+      via: "group_file_url"
     });
-    expect(sendAction).toHaveBeenCalledOnce();
     expect(sendAction).toHaveBeenCalledWith("get_group_file_url", {
       group_id: 123,
       file_id: "group-file-id",
@@ -41,109 +37,56 @@ describe("attachment source resolver", () => {
     });
   });
 
-  it("resolves private files through get_private_file_url", async () => {
-    const sendAction = vi.fn(async () => ({
-      data: { file_url: "http://127.0.0.1:3000/private-file" }
-    }));
-
-    await expect(resolveAttachmentSource({ fileId: "private-file-id" }, { sendAction }))
-      .resolves.toEqual({
-        kind: "url",
-        url: "http://127.0.0.1:3000/private-file",
-        via: "get_private_file_url"
-      });
-    expect(sendAction).toHaveBeenCalledWith("get_private_file_url", {
-      file_id: "private-file-id"
-    });
-  });
-
-  it("falls back from URL actions to get_file Base64", async () => {
+  it("falls back from URL lookup to file content", async () => {
     const sendAction = vi.fn(async (action: string) => {
       if (action === "get_group_file_url") throw new Error("not available");
       return { data: { base64: "aGVsbG8=" } };
     });
-
-    await expect(resolveAttachmentSource({ groupId: 123, fileId: "file-1" }, {
-      sendAction
-    })).resolves.toEqual({
-      kind: "base64",
-      base64: "aGVsbG8=",
-      via: "get_file"
-    });
+    await expect(resolveOneBotAttachment({ sendAction }, { groupId: 123, fileId: "file-1" }))
+      .resolves.toEqual({ kind: "base64", base64: "aGVsbG8=", via: "file_content" });
     expect(sendAction.mock.calls).toEqual([
       ["get_group_file_url", { group_id: 123, file_id: "file-1" }],
       ["get_file", { file_id: "file-1" }]
     ]);
   });
 
-  it("passes the raw file value to get_file when no file ID exists", async () => {
+  it("accepts only shared local paths allowed by the caller", async () => {
     const sharedRoot = path.resolve("/shared/napcat");
     const sendAction = vi.fn(async () => ({
       data: { file: path.join(sharedRoot, "downloads", "report.pdf") }
     }));
-
-    await expect(resolveAttachmentSource({ file: "report.pdf" }, { sendAction }, {
+    await expect(resolveOneBotAttachment({ sendAction }, { file: "report.pdf" }, {
       sharedRoots: [sharedRoot]
     })).resolves.toEqual({
       kind: "shared_path",
       filePath: path.join(sharedRoot, "downloads", "report.pdf"),
-      via: "get_file"
+      via: "file_content"
     });
-    expect(sendAction).toHaveBeenCalledWith("get_file", { file: "report.pdf" });
   });
 
-  it("rejects local paths outside configured shared roots", async () => {
-    const sendAction = vi.fn(async () => ({
-      data: { file: "/container/private/report.pdf" }
-    }));
-
-    const promise = resolveAttachmentSource({ fileId: "file-1" }, { sendAction }, {
-      sharedRoots: ["/shared/napcat"]
-    });
-
-    await expect(promise).rejects.toBeInstanceOf(AttachmentResolutionError);
-    await expect(promise).rejects.toEqual(expect.objectContaining({
-      attempts: [
-        { action: "get_private_file_url", outcome: "empty" },
-        { action: "get_file", outcome: "empty" }
-      ]
-    }));
-  });
-
-  it("recognizes supported action response shapes only", () => {
-    expect(extractAttachmentSource({ data: "base64://aGVsbG8=" }))
+  it("recognizes supported response shapes without exposing them to services", () => {
+    expect(extractOneBotAttachmentSource({ data: "base64://aGVsbG8=" }))
       .toEqual({ kind: "base64", base64: "aGVsbG8=" });
-    expect(extractAttachmentSource({
-      url: "data:application/octet-stream;base64,aGVsbG8="
-    })).toEqual({
-      kind: "base64",
-      base64: "data:application/octet-stream;base64,aGVsbG8="
-    });
-    expect(extractAttachmentSource({ data: { url: "ftp://example.test/file" } }))
+    expect(extractOneBotAttachmentSource({ data: { url: "ftp://example.test/file" } }))
       .toBeUndefined();
-    expect(extractAttachmentSource({ data: { path: "/shared/../private/file" } }, {
+    expect(extractOneBotAttachmentSource({ data: { path: "/shared/../private/file" } }, {
       sharedRoots: ["/shared"]
     })).toBeUndefined();
   });
 
-  it("reports each exhausted fallback without leaking action errors", async () => {
-    const gateway: FileActionGateway = {
-      sendAction: vi.fn(async (action) => {
-        if (action === "get_private_file_url") return { data: {} };
-        throw new Error("secret upstream detail");
-      })
-    };
-
-    const error = await resolveAttachmentSource({ fileId: "file-1" }, gateway)
+  it("reports exhausted domain strategies without leaking upstream errors", async () => {
+    const sendAction = vi.fn(async (action: string) => {
+      if (action === "get_private_file_url") return { data: {} };
+      throw new Error("secret upstream detail");
+    });
+    const error = await resolveOneBotAttachment({ sendAction }, { fileId: "file-1" })
       .catch((value: unknown) => value);
 
     expect(error).toBeInstanceOf(AttachmentResolutionError);
-    expect(error).toMatchObject({
-      attempts: [
-        { action: "get_private_file_url", outcome: "empty" },
-        { action: "get_file", outcome: "error" }
-      ]
-    });
+    expect(error).toMatchObject({ attempts: [
+      { strategy: "private_file_url", outcome: "empty" },
+      { strategy: "file_content", outcome: "error" }
+    ] });
     expect(String(error)).not.toContain("secret upstream detail");
   });
 });

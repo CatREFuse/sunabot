@@ -1,4 +1,12 @@
 import type {
+  AttachmentResolutionInput,
+  AttachmentResolverOptions,
+  AttachmentSourcePort,
+  ResolvedAttachmentSource
+} from "../contracts/media/media.js";
+import type {
+  ConversationDirectoryPort,
+  ConversationDirectorySnapshotV1,
   MessageDetailsV1,
   MessagingPort,
   MessagingReceiptV1,
@@ -38,6 +46,56 @@ export class FakeMessagingPort implements MessagingPort {
     if (!message) throw new Error(`Unknown fake message: ${messageId}`);
     return structuredClone(message);
   }
+}
+
+export class FakeConversationDirectoryPort implements ConversationDirectoryPort {
+  generation = "fake-generation";
+  readonly snapshots: ConversationDirectorySnapshotV1[] = [];
+  loadCount = 0;
+
+  constructor(snapshot?: ConversationDirectorySnapshotV1) {
+    if (snapshot) this.snapshots.push(snapshot);
+  }
+
+  conversationDirectoryGeneration() {
+    return this.generation;
+  }
+
+  async loadConversationDirectory() {
+    const index = Math.min(this.loadCount, Math.max(0, this.snapshots.length - 1));
+    this.loadCount += 1;
+    return structuredClone(this.snapshots[index] ?? emptyDirectorySnapshot());
+  }
+}
+
+export class FakeAttachmentSourcePort implements AttachmentSourcePort {
+  readonly resolveCalls: AttachmentResolutionInput[] = [];
+  readonly fallbackCalls: Array<Pick<AttachmentResolutionInput, "fileId" | "file">> = [];
+
+  constructor(
+    private readonly source?: ResolvedAttachmentSource | Error,
+    private readonly fallback?: ResolvedAttachmentSource | Error
+  ) {}
+
+  async resolveAttachment(input: AttachmentResolutionInput, _options: AttachmentResolverOptions = {}) {
+    this.resolveCalls.push(structuredClone(input));
+    if (this.source instanceof Error) throw this.source;
+    if (!this.source) throw new Error("Fake attachment source is not configured.");
+    return structuredClone(this.source);
+  }
+
+  async resolveAttachmentFallback(
+    input: Pick<AttachmentResolutionInput, "fileId" | "file">,
+    _options: AttachmentResolverOptions = {}
+  ) {
+    this.fallbackCalls.push(structuredClone(input));
+    if (this.fallback instanceof Error) throw this.fallback;
+    return this.fallback ? structuredClone(this.fallback) : undefined;
+  }
+}
+
+function emptyDirectorySnapshot(): ConversationDirectorySnapshotV1 {
+  return { friendsReady: false, groupsReady: false, friends: [], groups: [] };
 }
 
 function senderKey(userId: number, groupId?: number) {

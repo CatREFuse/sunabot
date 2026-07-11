@@ -76,7 +76,11 @@ import {
   type MessagingPort,
   type OutboundMessageV1
 } from "../packages/contracts/messaging/messages.js";
-import { generatedImageMediaAsset, imageMediaAsset } from "../packages/contracts/media/media.js";
+import {
+  generatedImageMediaAsset,
+  imageMediaAsset,
+  type AttachmentSourcePort
+} from "../packages/contracts/media/media.js";
 import { loadPersona, AgentPersona } from "../services/agent/persona.js";
 import { appendRequestLog } from "./requestLog.js";
 import { WORKSPACE_LAYOUT } from "../packages/platform/workspaceLayout.js";
@@ -810,7 +814,7 @@ export class SunaRuntime {
         const processedAttachments = unresolvedAttachments.length
           ? await this.attachmentService.processIncoming(
             unresolvedAttachments,
-            attachmentActionPort(gateway),
+            attachmentSourcePort(gateway),
             details.text,
             `${target.record.id}/${target.message.id}`
           )
@@ -1180,7 +1184,7 @@ export class SunaRuntime {
       if (!incoming.attachments.length) return;
       incoming.attachments = await this.attachmentService.processIncoming(
         incoming.attachments,
-        attachmentActionPort(gateway),
+        attachmentSourcePort(gateway),
         incoming.text,
         incomingAttachmentReferenceScope(incoming)
       );
@@ -3837,16 +3841,12 @@ function outboundForRecord(record: ConversationRecord, text: string): OutboundMe
   };
 }
 
-function attachmentActionPort(port: MessagingPort) {
-  const candidate = port as MessagingPort & {
-    sendAction?: (action: string, params: Record<string, unknown>) => Promise<unknown>;
-  };
-  if (typeof candidate.sendAction !== "function") {
+function attachmentSourcePort(port: MessagingPort) {
+  const candidate = port as MessagingPort & Partial<AttachmentSourcePort>;
+  if (typeof candidate.resolveAttachment !== "function" || typeof candidate.resolveAttachmentFallback !== "function") {
     throw new Error("Messaging adapter does not support attachment resolution.");
   }
-  return candidate as MessagingPort & {
-    sendAction(action: string, params: Record<string, unknown>): Promise<unknown>;
-  };
+  return candidate as MessagingPort & AttachmentSourcePort;
 }
 
 function persistentIncomingKey(incoming: ParsedIncomingMessage) {

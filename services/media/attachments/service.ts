@@ -27,9 +27,9 @@ import type {
   IndexedDocumentResult
 } from "./parser-worker-task.js";
 import {
-  resolveAttachmentGetFileFallback,
+  resolveAttachmentFallback,
   resolveAttachmentSource,
-  type FileActionGateway,
+  type AttachmentSourcePort,
   type ResolvedAttachmentSource
 } from "./resolver.js";
 import { extractTextFile } from "./text.js";
@@ -105,7 +105,7 @@ export class AttachmentService {
 
   async processIncoming(
     incoming: readonly IncomingAttachment[],
-    gateway: FileActionGateway,
+    sourcePort: AttachmentSourcePort,
     query = "",
     referenceScope = ""
   ): Promise<ParsedAttachment[]> {
@@ -136,7 +136,7 @@ export class AttachmentService {
         ? rebindParsedAttachment(existing, attachment)
         : await this.processOne(
           attachment,
-          gateway,
+          sourcePort,
           query,
           referenceScope ? `${referenceScope}/${attachment.id}` : undefined
         );
@@ -228,7 +228,7 @@ export class AttachmentService {
 
   private async processOne(
     attachment: IncomingAttachment,
-    gateway: FileActionGateway,
+    sourcePort: AttachmentSourcePort,
     query: string,
     cacheReference?: string
   ): Promise<ParsedAttachment> {
@@ -255,7 +255,7 @@ export class AttachmentService {
         url: attachment.url,
         busId: attachment.busId,
         groupId: attachment.groupId
-      }, gateway);
+      }, sourcePort);
       resolvedVia = source.via;
       sourceKind = source.kind;
       let cached;
@@ -263,12 +263,12 @@ export class AttachmentService {
         cached = await cacheResolvedAttachment(this.cache, source);
       } catch (error) {
         if (source.kind !== "url" || !shouldTryGetFileFallback(error)) throw error;
-        const fallback = await resolveAttachmentGetFileFallback({
+        const fallback = await resolveAttachmentFallback({
           fileId: attachment.fileId,
           file: attachment.name
-        }, gateway);
+        }, sourcePort);
         if (!fallback || (fallback.kind === "url" && fallback.url === source.url)) throw error;
-        resolvedVia = `${source.via}->get_file`;
+        resolvedVia = `${source.via}->file_content`;
         sourceKind = fallback.kind;
         cached = await cacheResolvedAttachment(this.cache, fallback);
       }
