@@ -3,9 +3,9 @@ FROM node:24.18.0-bookworm-slim@sha256:cb4e8f7c443347358b7875e717c29e27bf9befc8f
 WORKDIR /srv/sunabot
 COPY package.json package-lock.json ./
 RUN npm ci
-COPY tsconfig.json tsconfig.web.json postcss.config.cjs tailwind.config.ts ./
+COPY AGENTS.md tsconfig.json tsconfig.web.json postcss.config.cjs tailwind.config.ts ./
 COPY src ./src
-COPY web ./web
+COPY apps/admin-web ./apps/admin-web
 RUN npm run build && npm prune --omit=dev
 
 FROM node:24.18.0-bookworm-slim@sha256:cb4e8f7c443347358b7875e717c29e27bf9befc8f5a26cf18af3c3dec80e58c5 AS runtime
@@ -22,8 +22,10 @@ ENV NODE_ENV=production \
 
 COPY --from=build --chown=node:node /srv/sunabot/package.json ./package.json
 COPY --from=build --chown=node:node /srv/sunabot/package-lock.json ./package-lock.json
+COPY --from=build --chown=node:node /srv/sunabot/AGENTS.md ./AGENTS.md
 COPY --from=build --chown=node:node /srv/sunabot/node_modules ./node_modules
 COPY --from=build --chown=node:node /srv/sunabot/dist ./dist
+COPY --from=build --chown=node:node /srv/sunabot/apps/admin-web/dist ./apps/admin-web/dist
 
 USER node
 EXPOSE 8787
