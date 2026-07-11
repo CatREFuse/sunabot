@@ -207,7 +207,7 @@ test("管理员账号密码建立 HttpOnly 会话且不写入浏览器存储", a
   await page.getByLabel("管理员账号").fill("admin");
   await page.getByLabel("管理员密码").fill("session-secret");
   const reloaded = page.waitForEvent("load");
-  await page.getByRole("button", { name: "登录" }).click();
+  await page.getByRole("button", { name: "登录", exact: true }).click();
   await reloaded;
   await expect(page.getByRole("heading", { name: "管理员登录" })).toBeHidden();
   await expect.poll(() => page.evaluate(() => Object.keys(sessionStorage).filter((key) => key.includes("admin")))).toEqual([]);
