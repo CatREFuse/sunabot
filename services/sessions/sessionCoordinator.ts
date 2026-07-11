@@ -4,10 +4,15 @@ import {
   type CodexRunner,
   type CodexProcessCleanupResult,
   type CodexProcessIdentity,
-  type CodexToolInput,
-  type CodexToolResult
+  type CodexToolInput
 } from "../../packages/contracts/tools/codex.js";
 import { SessionActorScheduler, SessionActorTaskTimeoutError } from "./sessionActor.js";
+import { SessionToolJobProcessor } from "./sessionToolJobProcessor.js";
+import type {
+  ClaimedToolTask,
+  CodexCoordinatorSettings,
+  SessionClaimState as ClaimState
+} from "./sessionCoordinatorTypes.js";
 import {
   type ClaimedTurn,
   type EnqueueSessionEventInput,
@@ -30,16 +35,7 @@ const DEFAULT_OUTBOX_RETRY_DELAY_MS = 250;
 const DEFAULT_OUTBOX_DISCONNECTED_PROBE_DELAY_MS = 5_000;
 const IDLE_POLL_MS = 2;
 
-export interface CodexCoordinatorSettings {
-  enabled: boolean;
-  model?: string;
-  executable?: string;
-  timeoutMs: number;
-  maxConcurrency: number;
-  workspacePath: string;
-  jobRoot: string;
-  authFile?: string;
-}
+export type { CodexCoordinatorSettings } from "./sessionCoordinatorTypes.js";
 
 export interface SessionTurnContext {
   signal: AbortSignal;
@@ -108,12 +104,6 @@ export interface SessionEnqueueOptions {
   schedule?: boolean;
 }
 
-interface ClaimState {
-  readonly controller: AbortController;
-  finalized: boolean;
-  stopRenewal: () => void;
-}
-
 interface ClaimedTurnTask {
   claim: ClaimedTurn;
   state: ClaimState;
@@ -121,12 +111,6 @@ interface ClaimedTurnTask {
 
 interface ClaimedOutboxTask {
   outbox: OutboxRecord;
-  state: ClaimState;
-}
-
-interface ClaimedToolTask {
-  job: ToolJobRecord;
-  settings: CodexCoordinatorSettings;
   state: ClaimState;
 }
 
@@ -149,7 +133,6 @@ export class SessionCoordinator {
   private readonly store: SessionStore;
   private readonly handleEvent: SessionCoordinatorOptions["handleEvent"];
   private readonly deliverOutbox: SessionCoordinatorOptions["deliverOutbox"];
-  private readonly codexRunner: CodexRunner;
   private readonly codexSettings: SessionCoordinatorOptions["codexSettings"];
   private readonly turnTimeoutMs: number;
   private readonly outboxTimeoutMs: number;
@@ -160,7 +143,7 @@ export class SessionCoordinator {
   private readonly workerId: string;
   private readonly clock: () => number;
   private readonly disconnectedError: (error: unknown) => boolean;
-  private readonly cleanupCodexProcess: (identity: CodexProcessIdentity) => Promise<CodexProcessCleanupResult>;
+  private readonly toolJobProcessor: SessionToolJobProcessor;
   private readonly turnActor: SessionActorScheduler<ClaimedTurnTask>;
   private readonly outboxActor: SessionActorScheduler<ClaimedOutboxTask>;
   private readonly toolActor: SessionActorScheduler<ClaimedToolTask>;
@@ -183,7 +166,6 @@ export class SessionCoordinator {
     this.store = options.store;
     this.handleEvent = options.handleEvent;
     this.deliverOutbox = options.deliverOutbox;
-    this.codexRunner = options.codexRunner;
     this.codexSettings = options.codexSettings;
     this.turnTimeoutMs = positiveInteger(options.turnTimeoutMs, DEFAULT_TURN_TIMEOUT_MS, "turnTimeoutMs");
     this.outboxTimeoutMs = positiveInteger(options.outboxTimeoutMs, DEFAULT_OUTBOX_TIMEOUT_MS, "outboxTimeoutMs");
@@ -206,10 +188,19 @@ export class SessionCoordinator {
     this.workerId = options.workerId?.trim() || `session-coordinator:${randomUUID()}`;
     this.clock = options.clock ?? Date.now;
     this.disconnectedError = options.isDisconnectedError ?? isDefaultDisconnectedError;
-    this.cleanupCodexProcess = options.cleanupCodexProcess ?? (async () => ({
-      status: "unverified",
-      message: "Codex process cleanup port is not configured."
-    }));
+    this.toolJobProcessor = new SessionToolJobProcessor({
+      store: this.store,
+      codexRunner: options.codexRunner,
+      cleanupCodexProcess: options.cleanupCodexProcess ?? (async () => ({
+        status: "unverified",
+        message: "Codex process cleanup port is not configured."
+      })),
+      workerId: this.workerId,
+      isStopped: () => this.stopped,
+      assertClaimUsable: (state, signal) => this.assertClaimUsable(state, signal),
+      scheduleTurns: () => this.scheduleTurns(),
+      deferTurns: () => this.deferScan(() => this.scheduleTurns())
+    });
 
     this.turnActor = new SessionActorScheduler({
       maxConcurrency: positiveInteger(
@@ -234,7 +225,7 @@ export class SessionCoordinator {
     this.toolActor = new SessionActorScheduler({
       maxConcurrency: positiveInteger(initialCodex.maxConcurrency, 1, "codex.maxConcurrency"),
       timeoutMs: positiveInteger(initialCodex.timeoutMs, DEFAULT_TURN_TIMEOUT_MS, "codex.timeoutMs") + 5_000,
-      handler: (task, context) => this.processToolJob(task, context.signal)
+      handler: (task, context) => this.toolJobProcessor.process(task, context.signal)
     });
   }
 
@@ -535,7 +526,7 @@ export class SessionCoordinator {
         const actorKey = toolActorKey(job, jobSettings.workspacePath);
         void this.toolActor.enqueue(actorKey, { job, settings: jobSettings, state }, {
           timeoutMs: positiveInteger(jobSettings.timeoutMs, DEFAULT_TURN_TIMEOUT_MS, "codex.timeoutMs") + 5_000
-        }).catch((error) => this.failToolTask(job, state, error)).finally(() => {
+        }).catch((error) => this.toolJobProcessor.fail(job, state, error)).finally(() => {
           state.stopRenewal();
           this.toolClaims.delete(job.id);
           this.deferScan(() => this.scheduleTools());
@@ -543,104 +534,6 @@ export class SessionCoordinator {
       }
     } finally {
       this.scanningTools = false;
-    }
-  }
-
-  private async processToolJob(task: ClaimedToolTask, actorSignal: AbortSignal) {
-    const { job, settings, state } = task;
-    const signal = combineSignals(actorSignal, state.controller.signal);
-    const attemptToken = requiredText(job.attemptToken, "tool job attemptToken");
-    let result: CodexToolResult;
-    try {
-      if (job.processIdentity) {
-        const cleanup = await this.cleanupCodexProcess(job.processIdentity);
-        this.assertClaimUsable(state, signal);
-        if (cleanup.status === "unverified") {
-          this.store.completeToolJob({
-            jobId: job.id,
-            workerId: this.workerId,
-            attempt: job.attempts,
-            attemptToken,
-            status: "unknown",
-            error: {
-              code: "orphan_process_unverified",
-              message: cleanup.message ?? "Recovered Codex process identity could not be verified."
-            }
-          });
-          state.finalized = true;
-          return;
-        }
-        this.store.clearRecoveredToolJobProcess(
-          job.id,
-          this.workerId,
-          job.attempts,
-          attemptToken,
-          job.processIdentity.runToken
-        );
-      }
-      result = await this.codexRunner.run(job.arguments as CodexToolInput, {
-        jobId: job.id,
-        jobDir: path.join(settings.jobRoot, job.id),
-        workspacePath: settings.workspacePath,
-        executable: settings.executable,
-        model: settings.model,
-        timeoutMs: settings.timeoutMs,
-        authFile: settings.authFile,
-        signal,
-        attempt: job.attempts,
-        runToken: attemptToken,
-        onProcessStarted: (identity) => {
-          this.store.recordToolJobProcess(
-            job.id,
-            this.workerId,
-            job.attempts,
-            attemptToken,
-            identity
-          );
-        }
-      });
-      this.assertClaimUsable(state, signal);
-      this.store.completeToolJob({
-        jobId: job.id,
-        workerId: this.workerId,
-        attempt: job.attempts,
-        attemptToken,
-        status: result.status,
-        result,
-        error: result.ok ? undefined : result.error
-      });
-      state.finalized = true;
-    } catch (error) {
-      if (state.finalized || this.stopped) return;
-      this.store.completeToolJob({
-        jobId: job.id,
-        workerId: this.workerId,
-        attempt: job.attempts,
-        attemptToken,
-        status: signal.aborted ? "timed_out" : "failed",
-        error: serializeError(error)
-      });
-      state.finalized = true;
-    } finally {
-      this.deferScan(() => this.scheduleTurns());
-    }
-  }
-
-  private failToolTask(job: ToolJobRecord, state: ClaimState, error: unknown) {
-    if (state.finalized || this.stopped) return;
-    state.finalized = true;
-    try {
-      this.store.completeToolJob({
-        jobId: job.id,
-        workerId: this.workerId,
-        attempt: job.attempts,
-        attemptToken: requiredText(job.attemptToken, "tool job attemptToken"),
-        status: error instanceof SessionActorTaskTimeoutError ? "timed_out" : "failed",
-        error: serializeError(error)
-      });
-      this.scheduleTurns();
-    } catch {
-      // A concurrent terminal write or recovery owns the final state.
     }
   }
 
