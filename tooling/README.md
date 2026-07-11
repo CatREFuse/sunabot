@@ -9,4 +9,4 @@
 - `runtime/`：QQ Runtime 配置和容器控制入口。
 - `workspace/`：终端私有数据初始化、环境变量、同步和快照。
 - `shared/`：仅供 tooling 使用的路径与进程辅助。
-
+- `benchmarks/`：隔离 SQLite 性能、容量、回归比较和 72 小时 soak 门禁。

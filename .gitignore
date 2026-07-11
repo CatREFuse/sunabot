@@ -11,3 +11,4 @@ docs/references/onebot-12/
 coverage/
 playwright-report/
 test-results/
+benchmark-results/
