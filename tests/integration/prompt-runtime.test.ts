@@ -12,7 +12,7 @@ import {
 } from "../../services/agent/promptSystem.js";
 import { defaultConfig } from "../../src/config.js";
 
-const workspace = path.join(process.cwd(), "workspace/agents/plana");
+const workspace = path.join(process.cwd(), "workspace/business/agents/plana");
 const config = defaultConfig();
 config.persona.agentWorkspace = workspace;
 

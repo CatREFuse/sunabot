@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { SunaRuntime } from "../../src/runtime.js";
 import { createAdminTestConfig } from "./admin-fixtures.js";
 
-const workspaceDir = path.join(process.cwd(), "workspace/agents/plana");
+const workspaceDir = path.join(process.cwd(), "workspace/business/agents/plana");
 const runtime = new SunaRuntime(createAdminTestConfig("/tmp/sunabot-memory-prompt-test"), {
   attachmentService: {} as never
 });

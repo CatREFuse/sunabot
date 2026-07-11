@@ -9,7 +9,7 @@ import {
   toResponsesInputMessage
 } from "../../adapters/model/openaiProvider.js";
 
-const cacheRoot = path.join(process.cwd(), "workspace/artifacts/file-cache");
+const cacheRoot = path.join(process.cwd(), "workspace/cache/attachments");
 const cleanupPaths: string[] = [];
 
 afterEach(async () => {
