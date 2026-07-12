@@ -27,6 +27,7 @@ export interface ToolAvailability {
   memory?: { enabled: boolean };
   asyncCodex?: boolean;
   asyncImage?: boolean;
+  imageTools?: boolean;
 }
 
 export type ToolExecution = "inline" | "deferred";
@@ -95,7 +96,9 @@ const catalog: readonly ToolCatalogEntry[] = [
     summary: "生成图片并保存结果。",
     definition: () => generateImgTool,
     available: (options) => Boolean(
-      options.bot?.tools.generateImg && options.bot.tools.generateImg.provider !== "custom"
+      options.imageTools !== false &&
+      options.bot?.tools.generateImg &&
+      options.bot.tools.generateImg.provider !== "custom"
     ),
     unavailableReason: "当前图像生成 Provider 不可用。",
     execution: "inline"
@@ -105,7 +108,7 @@ const catalog: readonly ToolCatalogEntry[] = [
     title: "自拍",
     summary: "生成 Bot 自己的形象图。",
     definition: () => selfieTool,
-    available: (options) => options.selfie?.enabled === true,
+    available: (options) => options.imageTools !== false && options.selfie?.enabled === true,
     unavailableReason: "当前请求未启用自拍生成。",
     execution: "inline"
   },

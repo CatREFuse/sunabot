@@ -136,8 +136,10 @@ export function restoredGroupIncoming(
     mentionedSelf: false
   };
 }
+export const WEB_CHAT_CONVERSATION_ID = "web:admin";
+
 export function conversationRecordId(incoming: ParsedIncomingMessage) {
-  if (incoming.transport === "web") return "web:admin";
+  if (incoming.transport === "web") return WEB_CHAT_CONVERSATION_ID;
   return incoming.groupId ? `group:${incoming.groupId}` : `private:${incoming.userId}`;
 }
 export function outboundForIncoming(
@@ -213,6 +215,13 @@ export function conversationOrchestratorEnabled(record: Pick<ConversationRecord,
 export function normalizeConversationId(value: unknown) {
   const text = String(value ?? "").trim();
   return /^(private|group):\d+$/.test(text) ? text : "";
+}
+export function normalizeConversationLookupId(value: unknown) {
+  const text = String(value ?? "").trim();
+  return text === WEB_CHAT_CONVERSATION_ID ? text : normalizeConversationId(text);
+}
+export function isWebConversationId(value: unknown) {
+  return String(value ?? "").trim() === WEB_CHAT_CONVERSATION_ID;
 }
 export function conversationDescriptorFromInput(input: ConversationReplyUpdateInput) {
   const id = normalizeConversationId(input.id);

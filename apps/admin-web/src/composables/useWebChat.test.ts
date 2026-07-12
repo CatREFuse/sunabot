@@ -72,6 +72,35 @@ describe("useWebChat", () => {
     expect(control.draft.value).toBe("保留这段内容");
     expect(control.sending.value).toBe(false);
   });
+
+  it("keeps slow polling reads single-flight", async () => {
+    const reads = [deferred<ConversationMessagePage>(), deferred<ConversationMessagePage>()];
+    const post = deferred<ConversationMessagePage>();
+    let readIndex = 0;
+    apiRequest.mockImplementation((_path: string, init?: RequestInit) => {
+      if (init?.method === "POST") return post.promise;
+      const pending = reads[readIndex++];
+      return pending?.promise ?? Promise.resolve(completedPage());
+    });
+    const control = mountControl();
+    control.draft.value = "慢速轮询";
+    const sending = control.send();
+    await flushPromises();
+
+    expect(readIndex).toBe(1);
+    await vi.advanceTimersByTimeAsync(900);
+    expect(readIndex).toBe(1);
+
+    reads[0]!.resolve(initialPage());
+    await flushPromises();
+    await vi.advanceTimersByTimeAsync(900);
+    expect(readIndex).toBe(2);
+
+    reads[1]!.resolve(initialPage());
+    post.resolve(completedPage());
+    await sending;
+    expect(control.messages.value.at(-1)?.text).toBe("运行正常");
+  });
 });
 
 function mountControl() {

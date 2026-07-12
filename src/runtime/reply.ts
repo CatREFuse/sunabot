@@ -128,6 +128,7 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
       onDeferred?: (value: DeferredCodexTurn) => void;
       allowAsyncCodex?: boolean;
       allowAsyncImage?: boolean;
+      allowImageTools?: boolean;
       promptOverride?: string;
     } = {}
   ) {
@@ -311,6 +312,7 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
         },
         asyncCodex: (options.allowAsyncCodex ?? true) && this.config.bot.tools.codex.enabled,
         asyncImage: options.allowAsyncImage ?? true,
+        imageTools: options.allowImageTools ?? true,
         logContext
       });
       if (options.isCurrent && !options.isCurrent()) return sent;

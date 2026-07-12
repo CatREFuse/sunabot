@@ -108,6 +108,79 @@ describe("conversation API plugin", () => {
     ]);
     assertRequestAndResponseSchemas(routeSchemas);
   });
+
+  it("keeps a valid Web Chat turn alive after the HTTP request body closes", async () => {
+    const app = Fastify();
+    apps.push(app);
+    app.setErrorHandler((error, _request, reply) => error instanceof ServiceError
+      ? reply.status(error.statusCode).send(error.toJSON())
+      : reply.status(500).send({ error: { code: "INTERNAL_ERROR", message: String(error) } }));
+
+    const messages: Array<Record<string, unknown>> = [];
+    const replyToIncoming = vi.fn(async (
+      _channel: string,
+      _incoming: unknown,
+      delivery: { send(message: Record<string, unknown>): Promise<unknown> },
+      options: { signal?: AbortSignal }
+    ) => {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      if (options.signal?.aborted) throw options.signal.reason;
+      const reply = {
+        schemaVersion: 1,
+        id: "web-reply",
+        conversationId: "web:admin",
+        scope: "private",
+        userId: 171419991,
+        text: "连接正常",
+        media: []
+      };
+      await delivery.send(reply);
+      messages.push({ id: reply.id, role: "assistant", text: reply.text, at: new Date().toISOString() });
+    });
+    const runtime = {
+      adminIdentity: () => ({ userId: "171419991", name: "管理员" }),
+      incomingCaptureSequence: () => messages.length + 1,
+      recordIncomingMessage: (incoming: { messageId: number; text: string; time: string }) => {
+        messages.push({ id: String(incoming.messageId), role: "user", text: incoming.text, at: incoming.time });
+      },
+      replyToIncoming,
+      getConversationMessages: () => ({
+        conversationId: "web:admin",
+        messages: [...messages],
+        hasMore: false,
+        memberNames: {}
+      }),
+      getConversationRecords: () => [],
+      setConversationReplyEnabled: vi.fn()
+    } as unknown as SunaRuntime;
+    const onebotGateway = { getStatus: () => ({ connected: false }) } as unknown as OneBotGateway;
+    const conversationDirectory = {
+      enrich: vi.fn(),
+      describe: vi.fn((value: unknown) => value)
+    } as unknown as ConversationDirectory;
+    registerConversationRoutes(app, { runtime, onebotGateway, conversationDirectory });
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const address = app.server.address();
+    if (!address || typeof address === "string") throw new Error("Fastify test server has no TCP address.");
+
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/web-chat/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: "请确认连接" })
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      ok: true,
+      delivered: 1,
+      conversationId: "web:admin",
+      messages: [
+        { role: "user", text: "请确认连接" },
+        { role: "assistant", text: "连接正常" }
+      ]
+    });
+    expect(replyToIncoming).toHaveBeenCalledTimes(1);
+  });
 });
 
 function assertRequestAndResponseSchemas(routeSchemas: Map<string, FastifySchema>) {

@@ -19,6 +19,7 @@ export function useWebChat() {
     return text.length > 0 && text.length <= 16_000 && !sending.value;
   });
   let loadController: AbortController | undefined;
+  let loadTask: Promise<void> | undefined;
   let sendController: AbortController | undefined;
   let pollTimer: number | undefined;
   let disposed = false;
@@ -26,28 +27,35 @@ export function useWebChat() {
   onMounted(() => void load());
   onBeforeUnmount(dispose);
 
-  async function load(options: LoadOptions = {}) {
-    loadController?.abort();
+  function load(options: LoadOptions = {}) {
+    if (loadTask) return loadTask;
     const controller = new AbortController();
     loadController = controller;
-    if (!options.quiet) loading.value = true;
-    try {
-      const page = await apiRequest<ConversationMessagePage>("/api/web-chat/messages", {
-        signal: controller.signal
-      });
-      if (!disposed && loadController === controller) {
-        applyPage(page);
-        if (options.clearError !== false) error.value = "";
+    const task = (async () => {
+      if (!options.quiet) loading.value = true;
+      try {
+        const page = await apiRequest<ConversationMessagePage>("/api/web-chat/messages", {
+          signal: controller.signal
+        });
+        if (!disposed && loadController === controller) {
+          applyPage(page);
+          if (options.clearError !== false) error.value = "";
+        }
+      } catch (caught) {
+        if (isAbort(caught) || disposed) return;
+        error.value = caught instanceof Error ? caught.message : "会话读取失败";
+      } finally {
+        if (loadController === controller) {
+          loadController = undefined;
+          loading.value = false;
+        }
       }
-    } catch (caught) {
-      if (isAbort(caught) || disposed) return;
-      error.value = caught instanceof Error ? caught.message : "会话读取失败";
-    } finally {
-      if (loadController === controller) {
-        loadController = undefined;
-        loading.value = false;
-      }
-    }
+    })();
+    const currentTask = task.finally(() => {
+      if (loadTask === currentTask) loadTask = undefined;
+    });
+    loadTask = currentTask;
+    return loadTask;
   }
 
   async function send() {
@@ -78,7 +86,10 @@ export function useWebChat() {
         sending.value = false;
       }
       stopPolling();
-      if (!disposed) await load({ quiet: true, clearError: false });
+      if (!disposed) {
+        await loadTask;
+        await load({ quiet: true, clearError: false });
+      }
     }
   }
 
@@ -106,6 +117,7 @@ export function useWebChat() {
   function dispose() {
     disposed = true;
     loadController?.abort();
+    loadTask = undefined;
     sendController?.abort();
     stopPolling();
   }

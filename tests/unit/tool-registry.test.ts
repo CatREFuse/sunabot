@@ -69,6 +69,25 @@ describe("ToolRegistry", () => {
     expect(inlineParameters.required).not.toContain("dispatch_message");
   });
 
+  it("removes image tools when the delivery target cannot receive image tasks", () => {
+    const options = {
+      imageTools: false,
+      asyncImage: true,
+      bot: { tools: { generateImg: {} } },
+      selfie: { enabled: true }
+    } as unknown as ProviderCompleteOptions;
+
+    expect(resolveProviderToolDefinitions(options, [
+      staleTool("generate_img"),
+      staleTool("selfie")
+    ])).toEqual([]);
+    expect(listToolMetadata(options).filter((tool) => ["generate_img", "selfie"].includes(tool.name)))
+      .toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: "generate_img", available: false, effectiveEnabled: false }),
+        expect.objectContaining({ name: "selfie", available: false, effectiveEnabled: false })
+      ]));
+  });
+
   it("applies global description overrides after prompt definitions", () => {
     const options = {
       bot: {

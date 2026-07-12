@@ -28,6 +28,10 @@ describe("navigation theme controls", () => {
     const mobile = mount(MobileNavigation, { global: { plugins: [navigation] } });
 
     expect(desktop.get('a[href="/web-chat"]').text()).toContain("Web Chat");
+    expect(desktop.get('a[href="/web-chat"]').attributes()).toMatchObject({
+      title: "Web Chat",
+      "aria-label": "Web Chat"
+    });
     expect(mobile.get('a[href="/web-chat"]').text()).toContain("Web Chat");
   });
 

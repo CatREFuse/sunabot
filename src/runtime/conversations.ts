@@ -107,7 +107,7 @@ import {
 } from "../../services/agent/promptSystem.js";
 import { buildConversationPromptVariables } from "../../services/agent/persona.js";
 import { DEFAULT_CONTEXT_MESSAGE_LIMIT, MAX_STORED_CONVERSATION_MESSAGES, GROUP_CHAT_SUMMARY_WINDOW_MS, MAX_SELFIE_REFERENCE_IMAGES, MAX_SELFIE_WORKSPACE_REFERENCE_IMAGES, MAX_CURRENT_CONTEXT_IMAGES, MAX_HISTORY_CONTEXT_IMAGES, HYDRATE_MESSAGE_WINDOW_MS, ACTIVE_CONVERSATION_WINDOW_MS, DIRECT_REPLY_TIMEOUT_MS, AMBIENT_ORCHESTRATOR_TIMEOUT_MS, ORCHESTRATOR_MAX_RETRIES, PREPARE_TIMEOUT_MS, RECENT_CONTEXT_TOKEN_BUDGET, DEDUPE_TTL_MS, MAX_DEDUPE_KEYS, DEFAULT_ADMIN_NAME, GROUP_CHAT_SUMMARY_COMMAND, CONVERSATION_REPLY_PROMPT_FILE, SELFIE_PROMPT_FILE, GROUP_CHAT_SUMMARY_PROMPT_FILE, ADMIN_PERSONA_FILES, ADMIN_RUNTIME_PROMPT_DEFAULTS, BatchUserInfo, WorkingMemoryMergeOutput, WorkingMemoryMergeContext, personaFileNameForAdminId, AdminIdentity, ConversationReplyUpdateInput, RuntimeCommandContext, ReplyDeliveryDraft, ReplyDelivery, DeferredCodexTurn, AmbientReplyJob, AmbientReplyState, AmbientIdleTimer, RuntimeConfigSnapshot, RuntimePromptSnapshot, SunaRuntimeOptions } from "./runtimeContracts.js";
-import { conversationDescriptorFromInput, conversationRecordId, conversationReplyEnabled, normalizeConversationId, persistedAttachments, persistedQuoteReferences } from "./messagingAttachmentHelpers.js";
+import { conversationDescriptorFromInput, conversationRecordId, conversationReplyEnabled, isWebConversationId, normalizeConversationId, persistedAttachments, persistedQuoteReferences } from "./messagingAttachmentHelpers.js";
 import { appendConversationMessage } from "./conversationMemoryHelpers.js";
 import { conversationLastText, conversationTitle } from "./selfieHelpers.js";
 import { saveConversationRecords } from "./infrastructure.js";
@@ -273,6 +273,7 @@ export function runtime_markConversationMessagesAsRecordedOnly(this: RuntimeHost
 export function runtime_getActiveConversationRecords(this: RuntimeHost) {
     const now = Date.now();
     return [...this.conversationRecords.values()]
+      .filter((record) => !isWebConversationId(record.id))
       .filter((record) => record.scope === "private" && !record.groupId)
       .filter((record) => this.isAdminUser(record.userId))
       .filter((record) => conversationReplyEnabled(record))

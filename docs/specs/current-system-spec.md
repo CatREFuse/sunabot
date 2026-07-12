@@ -160,7 +160,7 @@ NapCat 上报的 QQ 文件优先通过 OneBot action 返回的受控 URL 进入 
 
 页面信息区默认通过留白、连续网格和 1px 分割线建立层级；按钮、输入控件、消息气泡和必要弹层可使用与语义相称的技术圆角。Boxicon 不使用背景、边框或圆形外壳，44px 点击热区保持透明，需要加强层级时直接放大图标。中文页面标题使用 Space Grotesk Variable 与系统中文字体，英文状态和唯一主数字在 36px 以上使用 Doto Variable，次级数字统一使用 Space Mono。
 
-Web Chat 使用固定管理员身份和 `web:admin` 会话，通过 Web delivery adapter 进入与 QQ 相同的 Agent loop、提示词、记忆和同步工具链。Web Chat 回复只能写回浏览器消息流，不能经 OneBot 外发；QQ 会话也不能出现在 Web Chat 中。当前 Web delivery 没有持久化的异步结果投递目标，因此 Web Chat 禁用 Deferred Codex 和图像任务。发送接口拒绝空白正文和超过 16,000 字符的正文，页面支持 Enter 发送、Shift+Enter 换行、发送中状态、错误恢复、消息轮询和图片缩略图。
+Web Chat 使用固定管理员身份和 `web:admin` 会话，通过 Web delivery adapter 进入与 QQ 相同的 Agent loop、提示词、记忆和同步工具链。Web Chat 回复只能写回浏览器消息流，不能经 OneBot 外发；Web Chat 也不能进入 QQ 会话目录、上线通知或 OneBot 外发目标。当前 Web delivery 没有持久化的异步结果投递目标，因此 Web Chat 不向模型提供 Codex、生图和自拍工具。已经受理的 Web Chat 回合使用服务端超时并按顺序完成，不绑定浏览器请求体或页面生命周期。发送接口拒绝空白正文和超过 16,000 字符的正文，页面支持 Enter 发送、Shift+Enter 换行、发送中状态、错误恢复、非重叠消息轮询和图片缩略图。
 
 日志页按从新到旧提供 Bot 活动终端与分页纵向时间轴，Responses、Codex Provider、Deferred Codex CLI、Chat Completions、Anthropic 和 Gemini 请求同时显示中文标题与原始 action ID，其中 Codex CLI 使用 `codex.tool.complete`。模型响应的统一 `tokenUsage` 使用独立用量条展示，原始请求、响应和 usage 字段继续使用递归结构化视图，不能退回整段 JSON 文本。日志页汇总回答、群聊编排、记忆压缩和其他模型调用的次数与 Token；记忆压缩继续区分工作记忆、长期记忆和用户画像，非私聊会话详情显示当前会话的消息数与同口径统计。记忆页一次只查看一个真实来源，单个搜索栏在本地筛选与语义召回间切换。提示词编辑器提供变量表、已使用变量状态、可选 XML 包装，以及离开前保存。
 

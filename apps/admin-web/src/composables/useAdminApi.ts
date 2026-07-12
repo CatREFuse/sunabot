@@ -51,6 +51,7 @@ export async function initializeAdminSession() {
 }
 
 export async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+  if (!isSafeMethod(init.method) && !csrfToken) await initializeAdminSession();
   const headers = new Headers(init.headers);
   headers.set("accept", "application/json");
   if (init.body != null && !(init.body instanceof FormData)) headers.set("content-type", "application/json");
@@ -68,7 +69,10 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}): Promi
 
   if (!response.ok) {
     const error = await responseError(response);
-    if (response.status === 401 || error.code === "ADMIN_SETUP_REQUIRED") applySession({ authenticated: false });
+    if (response.status === 401 || error.code === "ADMIN_SETUP_REQUIRED") {
+      initialization = undefined;
+      applySession({ authenticated: false });
+    }
     lastError.value = error.message;
     throw error;
   }

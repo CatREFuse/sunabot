@@ -37,6 +37,8 @@ const runtime = useRuntimeStatus();
         v-for="item in navItems"
         :key="item.to"
         :to="item.to"
+        :title="item.label"
+        :aria-label="item.label"
         class="desktop-nav-link group relative flex min-h-12 items-center justify-center gap-3 px-3 font-mono text-xs text-disabled transition-colors duration-200 hover:text-display xl:justify-start"
         active-class="is-active !text-display"
       >

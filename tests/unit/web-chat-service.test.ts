@@ -15,7 +15,13 @@ describe("WebChatService", () => {
       channel: string,
       message: InboundMessageV1,
       delivery: MessagingPort,
-      options: { allowAsyncCodex?: boolean; allowAsyncImage?: boolean; captureSequence?: number }
+      options: {
+        allowAsyncCodex?: boolean;
+        allowAsyncImage?: boolean;
+        allowImageTools?: boolean;
+        captureSequence?: number;
+        signal?: AbortSignal;
+      }
     ) => {
       incoming = message;
       expect(channel).toBe("web:admin");
@@ -23,8 +29,10 @@ describe("WebChatService", () => {
       expect(options).toMatchObject({
         captureSequence: 1,
         allowAsyncCodex: false,
-        allowAsyncImage: false
+        allowAsyncImage: false,
+        allowImageTools: false
       });
+      expect(options.signal?.aborted).toBe(false);
       await delivery.send({
         schemaVersion: 1,
         id: "reply-1",
@@ -68,8 +76,48 @@ describe("WebChatService", () => {
       replyToIncoming
     } as unknown as SunaRuntime;
 
-    await expect(new WebChatService(runtime).send("测试"))
-      .rejects.toThrow("请先在 Bot 设置中配置管理员 QQ。");
+    await expect(new WebChatService(runtime).send("测试")).rejects.toMatchObject({
+      statusCode: 409,
+      code: "WEB_CHAT_ADMIN_QQ_REQUIRED",
+      message: "请先在 Bot 设置中配置管理员 QQ。"
+    });
     expect(replyToIncoming).not.toHaveBeenCalled();
   });
+
+  it("serializes turns from multiple Web Chat tabs", async () => {
+    const firstTurn = deferred<void>();
+    const starts: string[] = [];
+    const runtime = {
+      adminIdentity: () => ({ userId: "171419991", name: "管理员" }),
+      incomingCaptureSequence: () => 1,
+      recordIncomingMessage: vi.fn(),
+      replyToIncoming: vi.fn(async (_channel: string, incoming: InboundMessageV1) => {
+        starts.push(incoming.text);
+        if (incoming.text === "第一条") await firstTurn.promise;
+      }),
+      getConversationMessages: () => ({
+        conversationId: "web:admin",
+        messages: [],
+        hasMore: false,
+        memberNames: {}
+      })
+    } as unknown as SunaRuntime;
+    const service = new WebChatService(runtime);
+
+    const first = service.send("第一条");
+    const second = service.send("第二条");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(starts).toEqual(["第一条"]);
+
+    firstTurn.resolve();
+    await Promise.all([first, second]);
+    expect(starts).toEqual(["第一条", "第二条"]);
+  });
 });
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}

@@ -7,6 +7,7 @@ import { useTheme } from "../../composables/useTheme";
 import AdminLoginGate from "./AdminLoginGate.vue";
 import DesktopNavigation from "./DesktopNavigation.vue";
 import MobileNavigation from "./MobileNavigation.vue";
+import RouteLoading from "../ui/RouteLoading.vue";
 
 useTheme();
 const api = useAdminApi();
@@ -27,7 +28,8 @@ onUnmounted(runtime.stop);
     <a href="#main-content" class="fixed left-3 top-3 z-[120] inline-flex min-h-11 -translate-y-20 items-center rounded-md bg-display px-4 font-mono text-xs text-page focus:translate-y-0">跳到内容</a>
     <DesktopNavigation />
     <main id="main-content" class="app-main min-h-0 min-w-0 flex-1 self-start overflow-hidden md:self-stretch">
-      <RouterView />
+      <RouteLoading v-if="!api.initialized.value" />
+      <RouterView v-else-if="!api.authorizationRequired.value" />
     </main>
     <MobileNavigation />
     <AdminLoginGate v-if="api.initialized.value && api.authorizationRequired.value" />

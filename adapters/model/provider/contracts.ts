@@ -19,6 +19,7 @@ export interface ProviderCompleteOptions {
   selfie?: ProviderSelfieOptions;
   asyncCodex?: boolean;
   asyncImage?: boolean;
+  imageTools?: boolean;
   logContext?: ProviderLogContext;
 }
 

@@ -40,7 +40,7 @@ export function registerConversationRoutes(app: FastifyInstance, options: Conver
         "text"
       );
     }
-    return webChat.send(text, request.signal);
+    return webChat.send(text);
   });
 
   app.get("/api/conversations", {
