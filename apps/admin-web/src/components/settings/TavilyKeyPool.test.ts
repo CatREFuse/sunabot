@@ -31,12 +31,12 @@ describe("TavilyKeyPool", () => {
 
     expect(wrapper.get(".key-pool__summary").text().replace(/\s+/g, " ")).toBe("2 个已保存 · 1 个环境变量来源");
     expect(wrapper.text()).toContain("Key 1");
-    expect(wrapper.text()).toContain("[SAVED]");
+    expect(wrapper.text()).toContain("已保存");
     expect(wrapper.text()).not.toContain("tvly-");
 
     await wrapper.get('button[aria-label="删除 Key 1"]').trigger("click");
     expect(draft.removeTavilyApiKeyIndexes).toEqual([0]);
-    expect(wrapper.text()).toContain("[PENDING DELETE]");
+    expect(wrapper.text()).toContain("待删除");
   });
 
   it("adds multiple write-only key inputs", async () => {

@@ -31,6 +31,7 @@ describe("MemoryEditorDialog", () => {
       global: { stubs: { DialogOverlay: { template: "<div><slot /></div>" } } }
     });
 
+    expect(wrapper.text()).not.toContain("MEMORY ENTRY");
     expect(wrapper.get('input[autocomplete="off"]').element).toHaveProperty("value", "猫老师");
     expect(wrapper.get('input[inputmode="numeric"]').attributes()).toHaveProperty("disabled");
     await wrapper.get("textarea").setValue("正文已经更新。");

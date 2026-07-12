@@ -37,8 +37,7 @@ const qualities: Array<{ value: ImageQuality; label: string }> = [
 
     <section class="grid gap-5 border-t border-line pt-7">
       <div>
-        <p class="page-kicker">WEB SEARCH</p>
-        <h3 class="section-title mt-2">Web Search</h3>
+        <h3 class="section-title">网页搜索</h3>
       </div>
       <div class="grid gap-5 sm:grid-cols-2">
         <label class="field">
@@ -59,8 +58,7 @@ const qualities: Array<{ value: ImageQuality; label: string }> = [
 
     <section class="grid gap-5 border-t border-line pt-7">
       <div>
-        <p class="page-kicker">CODEX</p>
-        <h3 class="section-title mt-2">Codex Worker</h3>
+        <h3 class="section-title">Codex 任务</h3>
       </div>
       <ToggleSwitch
         v-model="draft.codex.enabled"
@@ -91,8 +89,7 @@ const qualities: Array<{ value: ImageQuality; label: string }> = [
 
     <section class="grid gap-5 border-t border-line pt-7">
       <div>
-        <p class="page-kicker">IMAGE</p>
-        <h3 class="section-title mt-2">图像生成</h3>
+        <h3 class="section-title">图像生成</h3>
       </div>
       <div class="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
         <label class="field">

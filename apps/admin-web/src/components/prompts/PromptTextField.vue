@@ -211,6 +211,11 @@ defineExpose({ insertVariable });
 
 .prompt-field--fill .prompt-field__textarea { resize: none; }
 
+.prompt-field--fill .prompt-field__textarea,
+.prompt-field--fill .prompt-field__highlight { height: 100%; }
+
+.prompt-field--fill .prompt-field__textarea { flex: 1; }
+
 .prompt-field__editor {
   position: relative;
   min-width: 0;
@@ -259,8 +264,11 @@ defineExpose({ insertVariable });
 }
 
 .prompt-field__textarea::selection {
-  background: rgb(var(--color-accent) / 0.2);
-  -webkit-text-fill-color: transparent;
+  background: rgb(var(--color-accent) / 0.18);
+  color: rgb(var(--color-display));
+  -webkit-text-fill-color: rgb(var(--color-display));
+  -webkit-text-stroke: 0 transparent;
+  text-shadow: none;
 }
 
 .prompt-field__textarea:focus {

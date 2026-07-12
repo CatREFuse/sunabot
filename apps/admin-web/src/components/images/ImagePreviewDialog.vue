@@ -12,7 +12,7 @@ const emit = defineEmits<{ close: []; download: [image: ImageHistoryRecord] }>()
   <DialogOverlay :open="Boolean(image)" placement="full" backdrop="preview" :z-index="80" aria-label="图片预览" @close="emit('close')">
     <div v-if="image" class="mx-auto grid h-full min-h-0 w-full max-w-7xl grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded border border-white/20 bg-black text-white">
       <header class="flex items-center justify-between gap-4 border-b border-white/15 px-4 py-3">
-        <div class="min-w-0"><p class="font-mono text-[10px] tracking-[0.08em] text-white/55">PREVIEW</p><p class="truncate text-sm">{{ image.prompt || "无提示词" }}</p></div>
+        <div class="min-w-0"><p class="font-mono text-[10px] tracking-[0.08em] text-white/55">图片预览</p><p class="truncate text-sm">{{ image.prompt || "无提示词" }}</p></div>
         <button class="icon-btn text-white hover:text-white" type="button" aria-label="关闭预览" @click="emit('close')"><i class="bx bx-x text-2xl" aria-hidden="true"></i></button>
       </header>
       <div class="grid min-h-0 place-items-center overflow-auto p-3 md:p-6">

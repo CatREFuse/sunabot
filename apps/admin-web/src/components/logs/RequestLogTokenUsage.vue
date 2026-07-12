@@ -14,10 +14,10 @@ interface UsageMetric {
 
 const props = defineProps<{ usage: TokenUsageBreakdown }>();
 const metrics = computed<UsageMetric[]>(() => [
-  { id: "total", label: "总量", icon: "bx-bolt-circle", display: formatDashboardMetric(props.usage.total), detail: `${formatExactNumber(props.usage.total)} TOKEN`, tone: "neutral" },
-  { id: "input", label: "输入", icon: "bx-log-in-circle", display: formatDashboardMetric(props.usage.input), detail: `${formatExactNumber(props.usage.input)} TOKEN`, tone: "interactive" },
-  { id: "output", label: "输出", icon: "bx-log-out-circle", display: formatDashboardMetric(props.usage.output), detail: `${formatExactNumber(props.usage.output)} TOKEN`, tone: "success" },
-  { id: "cached", label: "缓存输入", icon: "bx-data", display: formatDashboardMetric(props.usage.cachedInput), detail: `${formatExactNumber(props.usage.cachedInput)} TOKEN`, tone: "warning" },
+  { id: "total", label: "总量", icon: "bx-bolt-circle", display: formatDashboardMetric(props.usage.total), detail: `${formatExactNumber(props.usage.total)} Token`, tone: "neutral" },
+  { id: "input", label: "输入", icon: "bx-log-in-circle", display: formatDashboardMetric(props.usage.input), detail: `${formatExactNumber(props.usage.input)} Token`, tone: "interactive" },
+  { id: "output", label: "输出", icon: "bx-log-out-circle", display: formatDashboardMetric(props.usage.output), detail: `${formatExactNumber(props.usage.output)} Token`, tone: "success" },
+  { id: "cached", label: "缓存输入", icon: "bx-data", display: formatDashboardMetric(props.usage.cachedInput), detail: `${formatExactNumber(props.usage.cachedInput)} Token`, tone: "warning" },
   {
     id: "rate",
     label: "缓存率",

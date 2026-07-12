@@ -13,7 +13,7 @@ function time(value: string) { return new Date(value).toLocaleString("zh-CN", { 
 
 <template>
   <section class="terminal" aria-label="Bot 活动终端">
-    <header class="terminal__header"><span>SUNABOT ACTIVITY</span><span>{{ lines.length }} LINES</span></header>
+    <header class="terminal__header"><span>Bot 活动</span><span>{{ lines.length.toLocaleString("zh-CN") }} 条</span></header>
     <div class="terminal__body" role="log">
       <p v-for="(line, index) in lines" :key="`${line.at}-${index}`"><time>{{ time(line.at) }}</time><span>&gt; {{ line.text }}</span></p>
       <p v-if="!lines.length"><span>&gt; 等待活动记录_</span></p>

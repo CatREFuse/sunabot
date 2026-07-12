@@ -59,7 +59,7 @@ function isMarkedForRemoval(index: number) {
       >
         <div class="key-pool__identity">
           <span>Key {{ index + 1 }}</span>
-          <small>{{ isMarkedForRemoval(index) ? "[PENDING DELETE]" : "[SAVED]" }}</small>
+          <small>{{ isMarkedForRemoval(index) ? "待删除" : "已保存" }}</small>
         </div>
         <span class="key-pool__masked" aria-hidden="true">•••• •••• ••••</span>
         <button
@@ -76,7 +76,7 @@ function isMarkedForRemoval(index: number) {
       <div v-for="(_, index) in draft.tavilyApiKeys" :key="`new-${index}`" class="key-pool__row key-pool__row--new">
         <span class="key-pool__identity">
           <span>新 Key {{ index + 1 }}</span>
-          <small>[UNSAVED]</small>
+          <small>未保存</small>
         </span>
         <input
           v-model.trim="draft.tavilyApiKeys[index]"

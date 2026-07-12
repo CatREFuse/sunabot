@@ -46,7 +46,7 @@ describe("model settings controls", () => {
       "max"
     ]);
     expect(wrapper.emitted("update:modelValue")?.[0]).toEqual(["medium"]);
-    expect(wrapper.text()).toContain("[ADJUSTED TO MEDIUM]");
+    expect(wrapper.text()).toContain("已切换为 medium");
   });
 
   it("keeps the full compatible effort set for a custom model", () => {

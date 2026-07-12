@@ -10,8 +10,7 @@ defineProps<{ models: readonly ModelCatalogItem[] }>();
 <template>
   <section class="grid gap-8">
     <div>
-      <p class="page-kicker">MEMORY</p>
-      <h2 class="section-title mt-2">记忆处理</h2>
+      <h2 class="section-title">记忆处理</h2>
     </div>
     <div class="grid gap-5 sm:grid-cols-2">
       <ModelSelect v-model="draft.memoryModel" :models="models" />

@@ -16,7 +16,7 @@ watch(
     if (!current || !options.value.includes(current)) {
       const next = entry.value?.defaultReasoningEffort ?? current ?? "medium";
       effort.value = next;
-      adjusted.value = `[ADJUSTED TO ${next.toUpperCase()}]`;
+      adjusted.value = `已切换为 ${next}`;
     } else {
       adjusted.value = "";
     }

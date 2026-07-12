@@ -17,8 +17,8 @@ const emit = defineEmits<{
 <template>
   <section class="mt-8 border-t border-visible pt-8">
     <div class="flex items-end justify-between gap-4">
-      <div><p class="page-kicker">HISTORY</p><h2 class="section-title mt-2">生成历史</h2></div>
-      <span class="font-mono text-[10px] text-mute">{{ images.length }} ITEMS</span>
+      <h2 class="section-title">生成历史</h2>
+      <span class="font-mono text-[10px] text-mute">{{ images.length.toLocaleString("zh-CN") }} 张</span>
     </div>
 
     <div class="mt-6 grid grid-cols-1 gap-x-5 gap-y-10 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
@@ -42,7 +42,7 @@ const emit = defineEmits<{
     </div>
 
     <div v-if="!images.length" class="empty-state">
-      <div><strong>{{ loading ? "[LOADING...]" : "没有生成记录" }}</strong><p>生成后保留在历史记录</p></div>
+      <div><strong>{{ loading ? "加载中" : "没有生成记录" }}</strong></div>
     </div>
   </section>
 </template>

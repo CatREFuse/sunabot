@@ -46,7 +46,7 @@ function updateParameters(value: string) {
   <section class="function-editor">
     <header class="function-editor__header">
       <div>
-        <span>FUNCTION {{ String(index + 1).padStart(2, "0") }}</span>
+        <span>Function {{ index + 1 }}</span>
         <strong>{{ tool.function.name || "未命名 Function" }}</strong>
       </div>
       <button class="icon-btn" type="button" :aria-label="`删除 ${tool.function.name || 'Function Call'}`" @click="emit('remove')">
@@ -61,10 +61,9 @@ function updateParameters(value: string) {
       <label class="field function-editor__wide">
         <span class="field-label">提示词内说明</span>
         <textarea class="control min-h-24 resize-y py-3" :value="tool.function.description" @input="updateFunction('description', ($event.target as HTMLTextAreaElement).value)"></textarea>
-        <small class="text-xs text-mute">全局工具说明优先。</small>
       </label>
       <label class="field function-editor__wide">
-        <span class="field-label">Parameters · JSON Schema</span>
+        <span class="field-label">参数 · JSON Schema</span>
         <textarea class="control min-h-56 resize-y py-3 font-mono text-xs leading-5" :value="parametersText" spellcheck="false" @input="updateParameters(($event.target as HTMLTextAreaElement).value)"></textarea>
         <small v-if="parametersError" class="mt-2 text-xs text-accent">{{ parametersError }}</small>
       </label>

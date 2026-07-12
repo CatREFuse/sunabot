@@ -6,11 +6,13 @@ import type { OneBotGateway } from "../../adapters/onebot/onebotGateway.js";
 import { ServiceError } from "../../packages/contracts/errors/serviceError.js";
 import type { ConversationDirectory } from "../../services/conversations/conversationDirectory.js";
 import type { SunaRuntime } from "../../src/runtime.js";
+import { closeApplicationDataStores } from "../../adapters/sqlite/applicationDataStore.js";
 
 const apps: ReturnType<typeof Fastify>[] = [];
 
 afterEach(async () => {
   await Promise.all(apps.splice(0).map((app) => app.close()));
+  closeApplicationDataStores();
 });
 
 describe("conversation API plugin", () => {
@@ -23,7 +25,7 @@ describe("conversation API plugin", () => {
       ? reply.status(error.statusCode).send(error.toJSON())
       : reply.send(error));
 
-    const records = [{ id: "private:171419991", title: "管理员" }];
+    const records = [{ id: "private:171419991", title: "管理员", messageCount: 12 }];
     const hydrateConversationRecords = vi.fn(async () => undefined);
     const hydrateConversationIdentities = vi.fn(async () => undefined);
     const getConversationMessages = vi.fn(() => ({ messages: [{ role: "user", content: "hello" }] }));
@@ -55,6 +57,15 @@ describe("conversation API plugin", () => {
     expect(getConversationMessages).toHaveBeenCalledWith("private:171419991", {
       beforeSequence: 12,
       limit: 5
+    });
+
+    expect((await app.inject({
+      method: "GET",
+      url: "/api/conversations/private%3A171419991/stats"
+    })).json()).toMatchObject({
+      conversationId: "private:171419991",
+      messages: 12,
+      modelCalls: { conversationId: "private:171419991" }
     });
 
     expect((await app.inject({ method: "GET", url: "/api/web-chat/messages" })).json())
@@ -91,6 +102,7 @@ describe("conversation API plugin", () => {
       "/api/conversations",
       "/api/conversations/:id/logs",
       "/api/conversations/:id/messages",
+      "/api/conversations/:id/stats",
       "/api/conversations/reply",
       "/api/web-chat/messages"
     ]);

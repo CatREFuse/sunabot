@@ -9,14 +9,14 @@ const emit = defineEmits<{ close: []; refresh: [] }>();
   <DialogOverlay :open="open" placement="right" :z-index="60" labelledby="onebot-chats-title" @close="emit('close')">
     <aside class="h-full w-full max-w-xl overflow-y-auto border-l border-visible bg-panel p-4 md:p-6">
       <header class="flex items-center justify-between border-b border-line pb-4">
-        <div><p class="page-kicker">ONEBOT CHATS</p><h2 id="onebot-chats-title" class="mt-1 text-xl font-medium text-display">QQ 联系人</h2></div>
+        <h2 id="onebot-chats-title" class="text-xl font-medium text-display">QQ 联系人</h2>
         <div class="flex gap-2">
           <button class="icon-btn" type="button" :disabled="loading" aria-label="刷新" @click="emit('refresh')"><i class="bx bx-refresh text-xl" aria-hidden="true"></i></button>
           <button class="icon-btn" type="button" aria-label="关闭" @click="emit('close')"><i class="bx bx-x text-2xl" aria-hidden="true"></i></button>
         </div>
       </header>
-      <p v-if="loading" class="py-12 text-center font-mono text-xs text-mute">[LOADING...]</p>
-      <p v-else-if="error" class="py-8 font-mono text-xs text-accent">[ERROR: {{ error }}]</p>
+      <p v-if="loading" class="py-12 text-center font-mono text-xs text-mute">加载中</p>
+      <p v-else-if="error" class="py-8 font-mono text-xs text-accent">{{ error }}</p>
       <template v-else>
         <section class="mt-6">
           <h3 class="field-label">好友 · {{ chats?.private.length ?? 0 }}</h3>

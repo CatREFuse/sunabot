@@ -27,11 +27,39 @@ const usedNames = computed(() => usedPromptVariableNames(content.value, props.fi
 const usageCounts = computed(() => promptVariableUsageCounts(content.value, props.file?.variables ?? []));
 const workspaceStyle = computed(() => ({ "--variable-panel-width": `${variablePanelWidth.value}px` }));
 const promptTextField = useTemplateRef<InstanceType<typeof PromptTextField>>("promptTextField");
+const finalWorkspace = useTemplateRef<HTMLElement>("finalWorkspace");
+const lastFinalTextarea = shallowRef<HTMLTextAreaElement | null>(null);
 watch(() => props.file?.id, () => { variableDrawerOpen.value = false; });
 
 function insertVariable(name: string) {
-  promptTextField.value?.insertVariable(name);
+  if (props.file?.kind === "final") insertFinalVariable(name);
+  else promptTextField.value?.insertVariable(name);
   variableDrawerOpen.value = false;
+}
+
+function rememberFinalTextarea(event: FocusEvent) {
+  if (event.target instanceof HTMLTextAreaElement) lastFinalTextarea.value = event.target;
+}
+
+function insertFinalVariable(name: string) {
+  const target = lastFinalTextarea.value;
+  if (!target || !finalWorkspace.value?.contains(target)) return;
+  const token = variableToken(name);
+  const scrollTop = target.scrollTop;
+  const scrollLeft = target.scrollLeft;
+  target.setRangeText(token, target.selectionStart, target.selectionEnd, "end");
+  target.dispatchEvent(new Event("input", { bubbles: true }));
+  target.focus({ preventScroll: true });
+  target.scrollTop = scrollTop;
+  target.scrollLeft = scrollLeft;
+}
+
+function variableToken(name: string) {
+  const token = `@{${name}}`;
+  if (!semanticXml.value) return token;
+  const normalized = name.replace(/[^A-Za-z0-9_-]+/g, "_");
+  const tag = /^[A-Za-z_]/.test(normalized) ? normalized : `variable_${normalized}`;
+  return `<${tag}>${token}</${tag}>`;
 }
 
 function resizeVariablePanel(clientX: number, target: HTMLElement) {
@@ -39,7 +67,7 @@ function resizeVariablePanel(clientX: number, target: HTMLElement) {
   if (!workspace) return;
   const rect = workspace.getBoundingClientRect();
   const maximum = Math.min(480, Math.max(264, rect.width - 480));
-  variablePanelWidth.value = Math.round(Math.min(maximum, Math.max(264, rect.right - clientX)));
+  variablePanelWidth.value = Math.round(Math.min(maximum, Math.max(264, rect.right - clientX - target.offsetWidth / 2)));
 }
 
 function startVariableResize(event: PointerEvent) {
@@ -66,13 +94,12 @@ function resetVariablePanelWidth() {
 </script>
 
 <template>
-  <section class="prompt-editor flex h-full min-h-0 min-w-0 flex-col bg-page" :class="{ 'prompt-editor--final': file?.kind === 'final' }">
+  <section class="prompt-editor flex h-full min-h-0 min-w-0 flex-col bg-page">
     <header class="flex min-h-20 flex-wrap items-center gap-3 border-b border-line px-4 py-3 md:px-6">
       <button class="icon-btn lg:hidden" type="button" aria-label="返回文件列表" @click="emit('back')">
         <i class="bx bx-left-arrow-alt text-xl" aria-hidden="true"></i>
       </button>
       <div class="min-w-0 flex-1">
-        <p class="font-mono text-[10px] uppercase tracking-[0.08em] text-mute">{{ file ? `${file.kind === "final" ? "FINAL JSON" : "MD FRAGMENT"} · ${file.category}` : "PROMPT" }}</p>
         <h2 class="truncate text-2xl font-medium tracking-[-0.02em] text-display">{{ file?.title ?? "选择提示词文件" }}</h2>
       </div>
       <div v-if="file" class="flex w-full min-w-0 items-center gap-2 sm:w-auto">
@@ -91,17 +118,16 @@ function resetVariablePanelWidth() {
       </div>
     </header>
 
-    <div v-if="loading" class="empty-state flex-1"><div><strong>[LOADING...]</strong><p>正在读取正文</p></div></div>
+    <div v-if="loading" class="empty-state flex-1"><div><strong>正在读取提示词</strong></div></div>
     <div v-else-if="!file" class="empty-state flex-1 dot-grid">
       <div class="bg-page px-5 py-3">
-        <strong :class="message ? '!text-accent' : ''">{{ message || "选择一个提示词文件" }}</strong>
-        <p v-if="!message">选择后打开正文</p>
+        <strong :class="message ? '!text-accent' : ''">{{ message || "选择一个提示词" }}</strong>
       </div>
     </div>
     <div v-else class="flex min-h-0 flex-1 flex-col p-3 md:p-6">
       <div class="prompt-editor__workspace min-h-0 flex-1" :style="workspaceStyle">
-        <div v-if="file.kind === 'final'" class="min-h-0 overflow-hidden">
-          <FinalPromptForm v-model="content" :variables="file.variables ?? []" :semantic-xml="semanticXml" />
+        <div v-if="file.kind === 'final'" ref="finalWorkspace" class="min-h-0 overflow-hidden" @focusin="rememberFinalTextarea">
+          <FinalPromptForm v-model="content" :variables="file.variables ?? []" :semantic-xml="semanticXml" :show-variables="false" />
         </div>
         <PromptTextField
           v-else
@@ -115,7 +141,6 @@ function resetVariablePanelWidth() {
           :semantic-xml="semanticXml"
         />
         <PromptVariableTable
-          v-if="file.kind !== 'final'"
           class="prompt-editor__variables min-h-0"
           :variables="file.variables ?? []"
           :used-names="usedNames"
@@ -124,7 +149,6 @@ function resetVariablePanelWidth() {
           @insert="insertVariable"
         />
         <div
-          v-if="file.kind !== 'final'"
           class="prompt-editor__splitter"
           role="separator"
           aria-label="调整可用变量宽度"
@@ -141,7 +165,7 @@ function resetVariablePanelWidth() {
       </div>
 
       <div v-if="conflict" class="mt-3 flex flex-wrap items-center justify-between gap-3 border-y border-accent py-3">
-        <span class="inline-state" data-kind="error">[CONFLICT · SERVER VERSION CHANGED]</span>
+        <span class="inline-state" data-kind="error">服务器版本已更新</span>
         <div class="flex gap-2">
           <button class="btn btn-ghost" type="button" @click="emit('keepLocal')">保留本地内容</button>
           <button class="btn" type="button" @click="emit('loadServer')">加载服务器版本</button>
@@ -150,8 +174,8 @@ function resetVariablePanelWidth() {
 
       <footer class="mt-3 flex flex-wrap items-center justify-between gap-2 font-mono text-[10px] text-mute">
         <span>{{ file.fileName }}</span>
-        <span class="inline-state" :data-kind="messageKind || undefined">{{ message || (dirty ? "[UNSAVED]" : "[SYNCED]") }}</span>
-        <span>{{ lines }} LINES · {{ characters }} CHARS · ⌘/CTRL S</span>
+        <span class="inline-state" :data-kind="messageKind || undefined">{{ message || (dirty ? "未保存" : "已同步") }}</span>
+        <span>{{ lines }} 行 · {{ characters }} 字符 · ⌘/Ctrl + S</span>
       </footer>
     </div>
 
@@ -186,50 +210,64 @@ function resetVariablePanelWidth() {
 .prompt-editor__splitter { display: none; }
 
 @container (min-width: 960px) {
-  .prompt-editor:not(.prompt-editor--final) .prompt-editor__workspace {
-    position: relative;
-    grid-template-columns: minmax(0, 1fr) var(--variable-panel-width);
+  .prompt-editor .prompt-editor__workspace {
+    grid-template-areas: "editor splitter variables";
+    grid-template-columns: minmax(0, 1fr) 16px var(--variable-panel-width);
+    overflow: hidden;
+    background: transparent;
+  }
+
+  .prompt-editor .prompt-editor__workspace > :first-child { grid-area: editor; }
+  .prompt-editor .prompt-editor__variables {
+    grid-area: variables;
+    display: flex;
     overflow: hidden;
     border: 1px solid rgb(var(--color-visible));
     border-radius: 4px;
-    background: rgb(var(--color-panel));
   }
-
-  .prompt-editor:not(.prompt-editor--final) .prompt-editor__workspace > :first-child { border: 0; border-radius: 0; }
-  .prompt-editor:not(.prompt-editor--final) .prompt-editor__variables { display: flex; border-top: 0; border-left: 1px solid rgb(var(--color-visible)); }
-  .prompt-editor:not(.prompt-editor--final) .prompt-editor__splitter {
-    position: absolute;
+  .prompt-editor .prompt-editor__splitter {
     z-index: 5;
-    top: 0;
-    bottom: 0;
-    right: calc(var(--variable-panel-width) - 4px);
-    display: block;
-    width: 8px;
+    grid-area: splitter;
+    display: grid;
+    width: 16px;
+    place-items: center;
     cursor: col-resize;
     touch-action: none;
   }
 
-  .prompt-editor:not(.prompt-editor--final) .prompt-editor__splitter::before {
-    position: absolute;
-    top: 50%;
-    left: 2px;
-    width: 3px;
-    height: 48px;
+  .prompt-editor .prompt-editor__splitter::before {
+    width: 10px;
+    height: 64px;
+    border: 1px solid rgb(var(--color-visible));
     border-radius: 999px;
-    background: rgb(var(--color-mute) / 0.5);
+    background: rgb(var(--color-panel));
     content: "";
-    transform: translateY(-50%);
+    transition: border-color 140ms ease, background-color 140ms ease;
   }
 
-  .prompt-editor:not(.prompt-editor--final) .prompt-editor__splitter:hover::before,
-  .prompt-editor:not(.prompt-editor--final) .prompt-editor__splitter:focus-visible::before {
-    background: rgb(var(--color-display));
+  .prompt-editor .prompt-editor__splitter::after {
+    position: absolute;
+    width: 2px;
+    height: 18px;
+    background: radial-gradient(circle, rgb(var(--color-mute)) 1px, transparent 1.5px) center / 2px 6px;
+    content: "";
+    transition: background-image 140ms ease;
   }
 
-  .prompt-editor:not(.prompt-editor--final) .prompt-editor__splitter:focus-visible {
-    outline: 2px solid rgb(var(--color-display));
-    outline-offset: -2px;
+  .prompt-editor .prompt-editor__splitter:hover::before,
+  .prompt-editor .prompt-editor__splitter:focus-visible::before {
+    border-color: rgb(var(--color-accent));
+    background: rgb(var(--color-accent) / 0.08);
   }
-  .prompt-editor:not(.prompt-editor--final) .variable-drawer-trigger { display: none; }
+
+  .prompt-editor .prompt-editor__splitter:hover::after,
+  .prompt-editor .prompt-editor__splitter:focus-visible::after {
+    background-image: radial-gradient(circle, rgb(var(--color-accent)) 1px, transparent 1.5px);
+  }
+
+  .prompt-editor .prompt-editor__splitter:focus-visible {
+    outline: 0;
+  }
+  .prompt-editor .variable-drawer-trigger { display: none; }
 }
 </style>

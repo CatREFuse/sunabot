@@ -10,7 +10,7 @@ defineProps<{ usage: TokenUsagePayload | null; loading: boolean }>();
 <template>
   <section class="token-section" aria-label="Token 消耗统计">
     <header class="token-section__header">
-      <div><p class="page-kicker">TOKEN USAGE</p><h2 class="section-title mt-2">Token 消耗</h2></div>
+      <h2 class="section-title">Token 消耗</h2>
       <span class="font-mono text-[10px] text-mute"><i class="bx bx-calendar mr-1" aria-hidden="true"></i>{{ usage?.today.date ?? "--" }}</span>
     </header>
     <div class="token-mosaic">
@@ -18,7 +18,7 @@ defineProps<{ usage: TokenUsagePayload | null; loading: boolean }>();
       <TokenUsageCalendar class="token-mosaic__calendar" :days="usage?.days ?? []" />
       <TokenUsageHourlyChart class="token-mosaic__chart" :hours="usage?.hours ?? []" />
     </div>
-    <p v-if="loading" class="mt-4 font-mono text-[10px] text-mute">[LOADING...]</p>
+    <p v-if="loading" class="mt-4 font-mono text-[10px] text-mute">加载中</p>
   </section>
 </template>
 

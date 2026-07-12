@@ -49,12 +49,17 @@ const qqState = computed<"online" | "offline" | "unknown">(() => {
   return qqStatus.value.online && Boolean(qqStatus.value.data?.user_id) ? "online" : "offline";
 });
 const headerMessage = computed(() => {
-  if (actionMessage.value === "[REFRESHING...]") return actionMessage.value;
-  if (runtime.error.value) return `[ERROR: ${runtime.error.value}]`;
-  if (overviewError.value) return `[ERROR: ${overviewError.value}]`;
+  if (actionMessage.value === "刷新中") return actionMessage.value;
+  if (runtime.error.value) return runtime.error.value;
+  if (overviewError.value) return overviewError.value;
   return actionMessage.value;
 });
-const headerMessageKind = computed(() => headerMessage.value.startsWith("[ERROR") ? "error" : headerMessage.value === "[UPDATED]" ? "success" : undefined);
+const headerMessageKind = computed(() => {
+  if (runtime.error.value || overviewError.value) return "error";
+  if (headerMessage.value === "已更新") return "success";
+  if (headerMessage.value && headerMessage.value !== "刷新中") return "error";
+  return undefined;
+});
 const countMetrics = computed(() => [
   { label: "记忆", icon: "bx-brain", value: runtime.status.value?.persona.memoryItems ?? 0, tone: "interactive" },
   { label: "会话", icon: "bx-message-square-dots", value: conversationCount.value, tone: "success" },
@@ -85,9 +90,9 @@ async function loadOverviewDetails() {
 }
 
 async function refreshAll() {
-  actionMessage.value = "[REFRESHING...]";
+  actionMessage.value = "刷新中";
   await Promise.all([runtime.refresh(), loadOverviewDetails()]);
-  actionMessage.value = runtime.error.value || overviewError.value ? "" : "[UPDATED]";
+  actionMessage.value = runtime.error.value || overviewError.value ? "" : "已更新";
 }
 
 async function loadChats() {
@@ -116,7 +121,7 @@ async function openNapCat(route = "/api/onebot/napcat-webui-url") {
     const result = await apiRequest<{ url: string }>(route);
     window.open(result.url, "_blank", "noopener,noreferrer");
   } catch (error) {
-    actionMessage.value = `[ERROR: ${error instanceof Error ? error.message : "NapCat 地址不可用"}]`;
+    actionMessage.value = error instanceof Error ? error.message : "NapCat 地址不可用";
   }
 }
 </script>
@@ -124,7 +129,7 @@ async function openNapCat(route = "/api/onebot/napcat-webui-url") {
 <template>
   <div class="page-shell">
     <div class="page-frame">
-      <PageHeader kicker="OVERVIEW" title="运行状态">
+      <PageHeader title="运行状态">
         <template #actions>
           <span class="inline-state" :data-kind="headerMessageKind">{{ headerMessage }}</span>
           <button class="icon-btn" type="button" :disabled="runtime.loading.value" aria-label="刷新" @click="refreshAll"><i class="bx bx-refresh text-xl" aria-hidden="true"></i></button>
@@ -149,7 +154,7 @@ async function openNapCat(route = "/api/onebot/napcat-webui-url") {
         :connected-at="runtime.status.value?.onebot.connectedAt"
         :last-event-at="runtime.status.value?.onebot.lastEventAt"
         :last-message-event-at="runtime.status.value?.onebot.lastMessageEventAt"
-        :refreshing="runtime.loading.value || actionMessage === '[REFRESHING...]'"
+        :refreshing="runtime.loading.value || actionMessage === '刷新中'"
         @refresh="refreshAll"
       />
 
@@ -160,7 +165,7 @@ async function openNapCat(route = "/api/onebot/napcat-webui-url") {
         </article>
       </section>
 
-      <TokenUsageDashboard :usage="tokenUsage" :loading="actionMessage === '[REFRESHING...]'" />
+      <TokenUsageDashboard :usage="tokenUsage" :loading="actionMessage === '刷新中'" />
 
       <section class="health-mosaic" aria-label="模型与系统状态">
         <article class="health-card">
@@ -169,7 +174,7 @@ async function openNapCat(route = "/api/onebot/napcat-webui-url") {
         </article>
         <article class="health-card">
           <span class="health-card__icon" :class="runtime.status.value?.provider.apiKeyConfigured ? 'text-success' : 'text-warning'"><i class="bx bx-key" aria-hidden="true"></i></span>
-          <div class="min-w-0"><span class="meta-label">API Key</span><strong :class="runtime.status.value?.provider.apiKeyConfigured ? 'text-success' : 'text-warning'">{{ runtime.status.value?.provider.apiKeyConfigured ? "已就绪" : "未配置" }}</strong><small>{{ runtime.status.value?.provider.apiKeyConfigured ? "Provider 可调用" : "前往设置补充" }}</small></div>
+          <div class="min-w-0"><span class="meta-label">API Key</span><strong :class="runtime.status.value?.provider.apiKeyConfigured ? 'text-success' : 'text-warning'">{{ runtime.status.value?.provider.apiKeyConfigured ? "已就绪" : "未配置" }}</strong><small>{{ runtime.status.value?.provider.apiKeyConfigured ? "可以调用" : "前往设置" }}</small></div>
         </article>
         <article class="health-card">
           <span class="health-card__icon text-success"><i class="bx bx-user-voice" aria-hidden="true"></i></span>
@@ -177,12 +182,12 @@ async function openNapCat(route = "/api/onebot/napcat-webui-url") {
         </article>
         <article class="health-card health-card--wide">
           <span class="health-card__icon text-mute"><i class="bx bx-time-five" aria-hidden="true"></i></span>
-          <div class="min-w-0"><span class="meta-label">启动时间</span><strong>{{ formatFullDateTime(runtime.status.value?.startedAt) }}</strong><small class="break-all">{{ runtime.status.value?.configPath ?? "--" }}</small></div>
+          <div class="min-w-0"><span class="meta-label">启动时间</span><strong>{{ formatFullDateTime(runtime.status.value?.startedAt) }}</strong></div>
         </article>
       </section>
 
       <section v-if="runtime.status.value?.recovery?.required" class="mt-12 border-l-2 border-accent py-4 pl-5">
-        <p class="inline-state" data-kind="error">[CONFIG RECOVERY REQUIRED]</p>
+        <p class="inline-state" data-kind="error">配置需要恢复</p>
         <p class="mt-3 text-sm text-ink">{{ runtime.status.value.recovery.message }}</p>
         <p class="mt-2 break-all font-mono text-[10px] text-mute">{{ runtime.status.value.recovery.backupPath }}</p>
       </section>

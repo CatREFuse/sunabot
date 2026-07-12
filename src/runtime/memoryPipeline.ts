@@ -494,7 +494,14 @@ export async function runtime_requestWorkingMemoryMerge(this: RuntimeHost,
         "memory.payload": payload
       });
       const output = await withAbortTimeout(
-        (signal) => this.completePrompt(provider, promptRequest, { signal }),
+        (signal) => this.completePrompt(provider, promptRequest, {
+          signal,
+          logContext: {
+            conversationId: context.conversation.id,
+            stage: "memory",
+            memoryKind: "working"
+          }
+        }),
         PREPARE_TIMEOUT_MS
       );
       return parseWorkingMemoryMergeOutput(output);
@@ -551,7 +558,14 @@ export async function runtime_compressUserProfiles(this: RuntimeHost,
         "profile.payload": payload
       });
       const output = await withAbortTimeout(
-        (signal) => this.completePrompt(provider, promptRequest, { signal }),
+        (signal) => this.completePrompt(provider, promptRequest, {
+          signal,
+          logContext: {
+            conversationId: record.id,
+            stage: "memory",
+            memoryKind: "user_profile"
+          }
+        }),
         PREPARE_TIMEOUT_MS
       );
       return parseMemoryFactOutput(output);

@@ -3,7 +3,6 @@ import { nextTick, shallowRef, watch } from "vue";
 
 export interface FinalPromptWorkspaceSection {
   id: string;
-  kicker: string;
   label: string;
   kind: "message" | "response" | "tools";
   index?: number;
@@ -244,50 +243,4 @@ function onTabKeydown(event: KeyboardEvent, index: number) {
   display: block;
 }
 
-@container final-prompt (min-width: 1080px) {
-  .prompt-workspace__toolbar {
-    justify-content: space-between;
-  }
-
-  .prompt-workspace__summary {
-    display: block;
-  }
-
-  .prompt-workspace__tabs {
-    display: none;
-  }
-
-  .prompt-workspace__grid {
-    display: grid;
-    grid-auto-columns: minmax(340px, 1fr);
-    grid-auto-flow: column;
-    gap: 0;
-    overflow-x: auto;
-    border-top: 1px solid rgb(var(--color-line));
-    border-bottom: 1px solid rgb(var(--color-line));
-    padding: 0;
-    background: transparent;
-    overscroll-behavior-x: contain;
-    scroll-snap-type: x proximity;
-  }
-
-  .prompt-workspace__panel,
-  .prompt-workspace__panel--active {
-    display: block;
-    scroll-snap-align: start;
-    border: 0;
-    border-left: 1px solid rgb(var(--color-line));
-    background: transparent;
-    padding: 24px 24px 32px;
-    transition: background-color 160ms ease, border-color 160ms ease, opacity 160ms ease;
-  }
-
-  .prompt-workspace__panel--dragging {
-    opacity: 0.42;
-  }
-
-  .prompt-workspace__panel--drag-over {
-    box-shadow: inset 2px 0 rgb(var(--color-display));
-  }
-}
 </style>

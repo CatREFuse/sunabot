@@ -130,7 +130,7 @@ test("Web Chat 以管理员身份发送并保持独立的网页消息流", async
   const state = await installMockApi(page);
   await page.goto("/web-chat");
 
-  const heading = page.getByRole("heading", { name: "WEB CHAT", exact: true });
+  const heading = page.getByRole("heading", { name: "与普拉娜对话", exact: true });
   await expect(heading).toBeVisible();
   await expect(page.getByLabel("Web Chat 消息").getByText("服务在线，今天已经处理 18 次模型请求。", { exact: true })).toBeVisible();
   await page.getByRole("textbox", { name: "消息", exact: true }).fill("继续检查网页投递");
@@ -158,7 +158,7 @@ test("Web Chat 以管理员身份发送并保持独立的网页消息流", async
 
 test("自拍参考图可独立预览、删除和上传", async ({ page }) => {
   const state = await installMockApi(page);
-  await page.goto("/settings/persona");
+  await page.goto("/images");
 
   await expect(page.getByText("3 / 3 张", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "管理参考图", exact: true }).click();
@@ -205,9 +205,9 @@ test("Provider 创建时固定类型并支持模型拉取与多模态探测", as
   await expect(page.getByLabel("Base URL")).toHaveAttribute("readonly", "");
   await expect(page.getByRole("combobox", { name: "协议" })).toHaveCount(0);
   await page.getByRole("button", { name: "拉取模型" }).click();
-  await expect(page.getByText("[7 MODELS]", { exact: true })).toBeVisible();
+  await expect(page.getByText("已读取 7 个模型", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "探测多模态" }).click();
-  await expect(page.getByText("[MULTIMODAL]", { exact: true }).last()).toBeVisible();
+  await expect(page.getByText("支持图片", { exact: true }).last()).toBeVisible();
 });
 
 test("模型下拉目录、推理强度联动与分区保存", async ({ page }) => {
@@ -223,7 +223,7 @@ test("模型下拉目录、推理强度联动与分区保存", async ({ page }) 
   ]);
 
   await page.getByRole("button", { name: "测试连接" }).click();
-  await expect(page.getByText("[CONNECTED · gpt-5.6-sol · 128MS]", { exact: true })).toBeVisible();
+  await expect(page.getByText("连接成功 · gpt-5.6-sol · 128 ms", { exact: true })).toBeVisible();
   expect(state.patchRequests).toHaveLength(0);
   await page.getByRole("button", { name: "复制 Provider" }).click();
   await expect(page.getByRole("button", { name: /Codex 副本/ })).toBeVisible();
@@ -248,7 +248,7 @@ test("模型下拉目录、推理强度联动与分区保存", async ({ page }) 
     model: "gpt-5.6-sol",
     reasoningEffort: "ultra"
   });
-  await expect(page.getByText("[SAVED]", { exact: true })).toBeVisible();
+  await expect(page.getByText("已保存", { exact: true })).toBeVisible();
 
   await page.goto("/settings/tools");
   await page.getByRole("tab", { name: "运行参数", exact: true }).click();
@@ -275,7 +275,7 @@ test("模型下拉目录、推理强度联动与分区保存", async ({ page }) 
   expect(state.config.bot.tools.websearch.tavilyApiKeys).toEqual(["tvly-e2e-secret-1234567890"]);
   await expect(page.getByLabel("Tavily API Key 1")).toHaveCount(0);
   await expect(page.getByText("1 个已保存", { exact: true })).toBeVisible();
-  await expect(page.locator(".key-pool__identity").getByText("[SAVED]", { exact: true })).toBeVisible();
+  await expect(page.locator(".key-pool__identity").getByText("已保存", { exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: "添加 Key" }).click();
   await page.getByLabel("Tavily API Key 1").fill("tvly-e2e-secret-2-1234567890");
@@ -284,7 +284,7 @@ test("模型下拉目录、推理强度联动与分区保存", async ({ page }) 
   expect(state.config.bot.tools.websearch.tavilyApiKeys).toHaveLength(2);
 
   await page.getByRole("button", { name: "删除 Key 1" }).click();
-  await expect(page.getByText("[PENDING DELETE]", { exact: true })).toBeVisible();
+  await expect(page.getByText("待删除", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "保存", exact: true }).click();
   await expect.poll(() => state.patchRequests.length).toBe(5);
   expect(state.config.bot.tools.websearch.tavilyApiKeys).toEqual(["tvly-e2e-secret-2-1234567890"]);
@@ -366,7 +366,7 @@ test("提示词库列出全部文件并支持快捷保存与冲突恢复", async
   await editor.fill("清醒、可靠、坦诚。\n");
   await editor.press("Control+s");
   await expect.poll(() => state.fileWrites.length).toBe(1);
-  await expect(page.getByText("[SAVED]", { exact: true })).toBeVisible();
+  await expect(page.getByText("已保存", { exact: true })).toBeVisible();
 
   const serverFile = state.files.find((file) => file.id === "persona.soul");
   expect(serverFile).toBeDefined();
@@ -374,13 +374,13 @@ test("提示词库列出全部文件并支持快捷保存与冲突恢复", async
   serverFile.revision = "persona.soul-server-r2";
   await editor.fill("保留本地版本。\n");
   await page.getByRole("button", { name: "保存", exact: true }).click();
-  await expect(page.getByText("[CONFLICT · SERVER VERSION CHANGED]", { exact: true })).toBeVisible();
+  await expect(page.getByText("服务器版本已更新", { exact: true }).first()).toBeVisible();
 
   await page.getByRole("button", { name: "保留本地内容" }).click();
   await expect(editor).toHaveValue("保留本地版本。\n");
   await page.getByRole("button", { name: "保存", exact: true }).click();
   await expect.poll(() => state.fileWrites.length).toBe(3);
-  await expect(page.getByText("[SAVED]", { exact: true })).toBeVisible();
+  await expect(page.getByText("已保存", { exact: true })).toBeVisible();
 
   await editor.fill("尚未保存。\n");
   await page.getByRole("link", { name: "设置" }).click();
@@ -438,7 +438,6 @@ test("最终请求支持消息组、排序、结构测试和 JSON 存储同步",
   await systemPrompt.type("\n@当前用户");
   await page.getByRole("option", { name: /当前用户/ }).click();
   await expect(systemPrompt).toHaveValue(/<user_input>@\{user\.input\}<\/user_input>/);
-  await expect(page.getByRole("tabpanel", { name: "system 消息" }).locator('.variable-context__row--used[title="插入 @{user.input}"]')).toBeVisible();
 
   await page.getByRole("tab", { name: "消息组 2" }).click();
   await expect(page.getByLabel("消息组变量")).toHaveValue("messages_64");
@@ -446,17 +445,14 @@ test("最终请求支持消息组、排序、结构测试和 JSON 存储同步",
 
   await page.getByRole("tab", { name: "user 消息" }).click();
   await expect(page.getByRole("textbox", { name: "user 提示词" })).toBeVisible();
-  await expect(
-    page.getByRole("tabpanel", { name: "user 消息" }).getByText("@{user.input}", { exact: true })
-  ).toBeVisible();
 
   await page.getByRole("button", { name: "测试 OpenAI 格式" }).click();
-  await expect(page.getByText("[VALID] 符合 OpenAI 请求结构", { exact: true })).toBeVisible();
+  await expect(page.getByText("符合 OpenAI 请求结构", { exact: true })).toBeVisible();
 
   await page.getByRole("tab", { name: "Function Call" }).click();
   await page.getByLabel("名称").first().fill("workspace_bash_v2");
   await page.getByRole("button", { name: "保存", exact: true }).click();
-  await expect(page.getByText("[SAVED]", { exact: true })).toBeVisible();
+  await expect(page.getByText("已保存", { exact: true })).toBeVisible();
 
   const saved = state.files.find((file) => file.id === "conversation.reply");
   expect(saved).toBeDefined();
@@ -467,7 +463,7 @@ test("最终请求支持消息组、排序、结构测试和 JSON 存储同步",
   expect(document.response_format).toEqual({ type: "text" });
 });
 
-test("最终提示词槽位在窄窗口使用 Tab、宽窗口纵向并列", async ({ page }) => {
+test("最终提示词在不同宽度保持单槽位双栏编辑", async ({ page }) => {
   const state = await installMockApi(page);
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto("/prompts/conversation.reply");
@@ -483,32 +479,34 @@ test("最终提示词槽位在窄窗口使用 Tab、宽窗口纵向并列", asyn
   await expect(page.getByRole("tabpanel", { name: "输出格式" })).toBeVisible();
 
   await page.setViewportSize({ width: 1920, height: 1000 });
-  await expect(tablist).toBeHidden();
-  await expect(dragHandle).toBeVisible();
-  await expect(moveButton).toBeHidden();
+  await expect(tablist).toBeVisible();
+  await expect(dragHandle).toBeHidden();
+  await page.getByRole("tab", { name: "system 消息" }).click();
+  await expect(moveButton).toBeVisible();
   const visiblePanels = page.locator(".prompt-workspace__panel:visible");
-  await expect(visiblePanels).toHaveCount(5);
-  const layout = await visiblePanels.evaluateAll((panels) => panels.map((panel) => {
-    const rect = panel.getBoundingClientRect();
-    return { x: Math.round(rect.x), y: Math.round(rect.y), height: Math.round(rect.height), scrolls: panel.scrollHeight > panel.clientHeight };
-  }));
-  expect(new Set(layout.map((panel) => panel.x)).size).toBe(5);
-  expect(new Set(layout.map((panel) => panel.y)).size).toBe(1);
-  expect(layout.every((panel) => panel.height > 700)).toBe(true);
-  expect(layout.some((panel) => panel.scrolls)).toBe(true);
+  await expect(visiblePanels).toHaveCount(1);
+  await expect(page.getByText("可用变量", { exact: true })).toBeVisible();
+  await expect(page.getByRole("separator", { name: "调整可用变量宽度" })).toBeVisible();
+  const variableTable = page.getByRole("table", { name: "提示词变量表" });
+  const beforeInsert = await page.getByRole("textbox", { name: "system 提示词" }).inputValue();
+  await page.getByRole("textbox", { name: "system 提示词" }).press("Control+End");
+  await variableTable.getByRole("button", { name: /@\{conversation\.messages\}/ }).click();
+  await expect(page.getByRole("textbox", { name: "system 提示词" })).toHaveValue(`${beforeInsert}@{conversation.messages}`);
 
-  await dragHandle.dragTo(page.getByRole("tabpanel", { name: "user 消息" }));
   await page.getByRole("button", { name: "保存", exact: true }).click();
-  await expect(page.getByText("[SAVED]", { exact: true })).toBeVisible();
+  await expect(page.getByText("已保存", { exact: true })).toBeVisible();
   const saved = state.files.find((file) => file.id === "conversation.reply");
-  expect(JSON.parse(saved?.content ?? "{}").messages[2]).toBe("@{messages_64}");
+  expect(JSON.parse(saved?.content ?? "{}").messages).toContain("@{messages_64}");
 });
 
 test("管理员账号密码建立 HttpOnly 会话且不写入浏览器存储", async ({ page }) => {
   await installMockApi(page, { requiredToken: "session-secret" });
 
   await page.goto("/overview");
+  await expect(page.getByRole("heading", { name: "Sunabot", exact: true })).toBeVisible();
+  await expect(page.getByText("管理普拉娜的会话、记忆与工具", { exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "管理员登录" })).toBeVisible();
+  await expect(page.getByText(/SECURE SESSION|ADMIN ACCESS|HttpOnly|浏览器存储/i)).toHaveCount(0);
   await page.getByLabel("管理员账号").fill("admin");
   await page.getByLabel("管理员密码").fill("session-secret");
   const reloaded = page.waitForEvent("load");
@@ -692,7 +690,7 @@ test("设置离开确认支持继续编辑、保存或放弃修改", async ({ pa
   await expect(page).toHaveURL(/\/overview$/);
 });
 
-test("图像页只保留历史、预览、下载和可见错误", async ({ page }) => {
+test("图像页提供自拍参考图、历史、预览、下载和可见错误", async ({ page }) => {
   const requests: string[] = [];
   const placeholderRequests: string[] = [];
   page.on("request", (request) => {
@@ -730,10 +728,10 @@ test("图像页只保留历史、预览、下载和可见错误", async ({ page 
   await page.getByRole("button", { name: "下载图片 image-1" }).click();
   const download = await downloadStarted;
   expect(download.suggestedFilename()).toBe("image-1.png");
-  await expect(page.getByText("[DOWNLOADED]", { exact: true })).toBeVisible();
+  await expect(page.getByText("已下载", { exact: true })).toBeVisible();
   await expect(page.getByRole("dialog", { name: "图片预览" })).toBeHidden();
 
   state.imageHistoryError = "历史加载失败";
   await page.getByRole("button", { name: "刷新历史" }).click();
-  await expect(page.getByText("[ERROR: 历史加载失败]", { exact: true })).toBeVisible();
+  await expect(page.getByText("历史加载失败", { exact: true })).toBeVisible();
 });

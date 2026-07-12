@@ -43,7 +43,7 @@ describe("ConversationOrchestratorStatus", () => {
       }
     });
 
-    expect(wrapper.text()).toContain("[判断中...]");
+    expect(wrapper.text()).toContain("判断中");
     expect(wrapper.text()).not.toContain("消息");
     expect(wrapper.text()).not.toContain("时间");
     expect(wrapper.text()).not.toContain("60+");
@@ -64,7 +64,7 @@ describe("ConversationOrchestratorStatus", () => {
       }
     });
 
-    expect(wrapper.text()).toContain("[判断中...]");
+    expect(wrapper.text()).toContain("判断中");
     expect(wrapper.text()).not.toContain("消息");
     expect(wrapper.text()).not.toContain("时间");
   });

@@ -60,6 +60,7 @@ describe("MemoryEntryRow", () => {
     expect(range.text()).toContain("发生");
     expect(range.text()).toContain("至");
     expect(range.text()).toContain("更新");
+    expect(range.text()).not.toContain("fact");
     expect(range.text()).not.toContain("--");
     expect(legacy.text()).toContain("发生 2026-07-01/2026-07-02");
   });

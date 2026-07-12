@@ -34,6 +34,15 @@ export interface ReadRequestLogPageOptions {
   pageSize?: number;
 }
 
+export const modelCallBehaviorIds = ["reply", "orchestrator", "memory", "other"] as const;
+export const memoryModelCallKindIds = ["working", "long_term", "user_profile"] as const;
+export type ModelCallBehaviorId = typeof modelCallBehaviorIds[number];
+export type MemoryModelCallKindId = typeof memoryModelCallKindIds[number];
+
+export interface ReadModelCallStatsOptions {
+  conversationId?: string;
+}
+
 export function requestLogPath() {
   return applicationDatabasePath();
 }
@@ -99,10 +108,65 @@ export function readTokenUsageSummary(timezoneOffsetMinutes = 0) {
   };
 }
 
+export function readModelCallStats(options: ReadModelCallStatsOptions = {}) {
+  const conversationId = String(options.conversationId ?? "").trim();
+  const total = emptyUsageAccumulator();
+  const behavior = Object.fromEntries(
+    modelCallBehaviorIds.map((id) => [id, emptyUsageAccumulator()])
+  ) as Record<ModelCallBehaviorId, TokenUsageAccumulator>;
+  const memory = Object.fromEntries(
+    memoryModelCallKindIds.map((id) => [id, emptyUsageAccumulator()])
+  ) as Record<MemoryModelCallKindId, TokenUsageAccumulator>;
+
+  for (const record of requestLogStore().readTokenUsageRecords("1970-01-01T00:00:00.000Z")) {
+    const usage = normalizeTokenUsageRecord(record);
+    if (!usage) continue;
+    const metadata = readMetadata(record);
+    if (conversationId && metadata.conversationId !== conversationId) continue;
+
+    const behaviorId = modelCallBehavior(metadata);
+    addUsage(total, usage);
+    addUsage(behavior[behaviorId], usage);
+    if (behaviorId === "memory") addUsage(memory[memoryModelCallKind(metadata)], usage);
+  }
+
+  return {
+    conversationId: conversationId || null,
+    total: usageBucket(total),
+    behavior: Object.fromEntries(modelCallBehaviorIds.map((id) => [id, usageBucket(behavior[id])])),
+    memory: {
+      total: usageBucket(behavior.memory),
+      kinds: Object.fromEntries(memoryModelCallKindIds.map((id) => [id, usageBucket(memory[id])]))
+    }
+  };
+}
+
 function requestLogStore() {
   const store = applicationDataStore();
   store.ensureLegacyRequestLogsImported(getWorkspacePath(WORKSPACE_LAYOUT.legacyData, "request-bodies.jsonl"));
   return store;
+}
+
+function readMetadata(record: Record<string, unknown>) {
+  if (typeof record.metadata !== "object" || record.metadata == null || Array.isArray(record.metadata)) {
+    return {} as Record<string, unknown>;
+  }
+  return record.metadata as Record<string, unknown>;
+}
+
+function modelCallBehavior(metadata: Record<string, unknown>): ModelCallBehaviorId {
+  const stage = String(metadata.stage ?? "");
+  if (stage === "reply") return "reply";
+  if (stage === "orchestrator") return "orchestrator";
+  if (stage === "memory") return "memory";
+  return "other";
+}
+
+function memoryModelCallKind(metadata: Record<string, unknown>): MemoryModelCallKindId {
+  const kind = String(metadata.memoryKind ?? "");
+  return memoryModelCallKindIds.includes(kind as MemoryModelCallKindId)
+    ? kind as MemoryModelCallKindId
+    : "long_term";
 }
 
 function normalizeLimit(value: unknown) {

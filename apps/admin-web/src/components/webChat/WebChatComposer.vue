@@ -24,7 +24,7 @@ function keydown(event: KeyboardEvent) {
   <footer class="border-t border-visible bg-panel px-4 py-4 md:px-8 md:py-5">
     <form class="mx-auto grid max-w-4xl gap-3" @submit.prevent="emit('submit')">
       <label class="grid gap-2">
-        <span class="meta-label">MESSAGE</span>
+        <span class="meta-label">消息</span>
         <span class="flex min-w-0 items-end gap-3 border-b border-visible pb-2 focus-within:border-display">
           <textarea
             v-model="model"
@@ -46,10 +46,10 @@ function keydown(event: KeyboardEvent) {
         </span>
       </label>
       <div class="flex min-h-5 flex-wrap items-center justify-between gap-2 font-mono text-[10px] uppercase tracking-[0.06em] text-disabled">
-        <span>{{ sending ? "[PROCESSING...]" : "ENTER 发送 · SHIFT + ENTER 换行" }}</span>
+        <span>{{ sending ? "正在发送" : "Enter 发送 · Shift+Enter 换行" }}</span>
         <span>{{ characterCount }} / 16,000</span>
       </div>
-      <p v-if="error" class="font-mono text-xs text-accent" role="alert">[ERROR: {{ error }}]</p>
+      <p v-if="error" class="font-mono text-xs text-accent" role="alert">{{ error }}</p>
     </form>
   </footer>
 </template>

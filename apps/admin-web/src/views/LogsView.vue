@@ -4,6 +4,7 @@ import { useRequestLogs } from "../composables/useRequestLogs";
 import PageHeader from "../components/ui/PageHeader.vue";
 import ActivityTerminal from "../components/logs/ActivityTerminal.vue";
 import RequestLogList from "../components/logs/RequestLogList.vue";
+import ModelCallStatsPanel from "../components/logs/ModelCallStatsPanel.vue";
 
 const active = shallowRef<"terminal" | "requests">("terminal");
 const data = useRequestLogs();
@@ -13,7 +14,7 @@ onMounted(() => data.load());
 <template>
   <div class="page-shell">
     <div class="page-frame">
-      <PageHeader kicker="ACTIVITY" title="日志">
+      <PageHeader title="日志">
         <template #actions><button class="icon-btn" type="button" :disabled="data.loading.value" aria-label="刷新日志" @click="data.load()"><i class="bx bx-refresh text-xl" :class="data.loading.value ? 'bx-spin' : ''" aria-hidden="true"></i></button></template>
       </PageHeader>
       <div class="mt-4 flex flex-wrap items-center justify-between gap-4 border-b border-line pb-4">
@@ -21,9 +22,10 @@ onMounted(() => data.load());
           <button class="segmented-button" type="button" :aria-pressed="active === 'terminal'" @click="active = 'terminal'"><i class="bx bx-terminal mr-1" aria-hidden="true"></i>活动终端</button>
           <button class="segmented-button" type="button" :aria-pressed="active === 'requests'" @click="active = 'requests'"><i class="bx bx-list-ul mr-1" aria-hidden="true"></i>请求日志</button>
         </div>
-        <span class="font-mono text-[10px] text-mute">{{ data.total.value.toLocaleString("zh-CN") }} 条 · NEWEST FIRST</span>
+        <span class="font-mono text-[10px] text-mute">{{ data.total.value.toLocaleString("zh-CN") }} 条 · 从新到旧</span>
       </div>
-      <p v-if="data.error.value" class="mt-6 font-mono text-xs text-accent">[ERROR: {{ data.error.value }}]</p>
+      <ModelCallStatsPanel class="mt-6" :stats="data.stats.value" :loading="data.loading.value" />
+      <p v-if="data.error.value" class="mt-6 font-mono text-xs text-accent">{{ data.error.value }}</p>
       <div v-else class="mt-6">
         <ActivityTerminal v-if="active === 'terminal'" :logs="data.logs.value" :events="data.events.value" />
         <RequestLogList v-else :logs="data.logs.value" />

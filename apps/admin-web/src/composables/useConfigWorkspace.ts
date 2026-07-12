@@ -110,7 +110,7 @@ async function save<K extends ConfigSectionKey>(key: K) {
   if (key === "onebot") {
     (submittedDraft as SectionDrafts["onebot"]).autoReplyUserGroup = baselines.onebot.autoReplyUserGroup;
   }
-  state[key] = { kind: "saving", message: "[SAVING...]" };
+  state[key] = { kind: "saving", message: "保存中" };
   try {
     const result = await apiRequest<ConfigPatchResponse>(`/api/config/${key}`, {
       method: "PATCH",
@@ -135,17 +135,17 @@ async function save<K extends ConfigSectionKey>(key: K) {
     const restart = result.applyMode === "restart" || Boolean(result.restartRequiredFields?.length);
     const hasNewEdits = key === "onebot" ? isOneBotSettingsDirty() : isDirty(key);
     state[key] = restart
-      ? { kind: "restart", message: hasNewEdits ? "[SAVED · RESTART REQUIRED · UNSAVED CHANGES]" : "[SAVED · RESTART REQUIRED]" }
+      ? { kind: "restart", message: hasNewEdits ? "已保存，重启后生效；还有未保存的修改" : "已保存，重启后生效" }
       : hasNewEdits
-        ? { kind: "idle", message: "[SAVED · UNSAVED CHANGES]" }
-        : { kind: "saved", message: "[SAVED]" };
+        ? { kind: "idle", message: "已保存，还有未保存的修改" }
+        : { kind: "saved", message: "已保存" };
   } catch (caught) {
     if (caught instanceof ApiRequestError && caught.status === 409) {
-      state[key] = { kind: "conflict", message: "[CONFLICT · LOAD LATEST CONFIG]" };
+      state[key] = { kind: "conflict", message: "设置已更新，请加载最新内容" };
     } else {
       state[key] = {
         kind: "error",
-        message: `[ERROR: ${caught instanceof Error ? caught.message : "保存失败"}]`,
+        message: caught instanceof Error ? caught.message : "保存失败",
         ...(caught instanceof ApiRequestError && caught.field ? { field: caught.field } : {})
       };
     }
@@ -157,7 +157,7 @@ async function saveGroupReply() {
   if (!current) return;
   const submittedOrchestrator = clone(drafts.orchestrator);
   const submittedEnabled = drafts.onebot.autoReplyUserGroup;
-  state.orchestrator = { kind: "saving", message: "[SAVING...]" };
+  state.orchestrator = { kind: "saving", message: "保存中" };
   try {
     const result = await apiRequest<ConfigPatchResponse>("/api/config/group-reply", {
       method: "PATCH",
@@ -194,15 +194,15 @@ async function saveGroupReply() {
     }
     const hasNewEdits = isGroupReplyDirty();
     state.orchestrator = hasNewEdits
-      ? { kind: "idle", message: "[SAVED · UNSAVED CHANGES]" }
-      : { kind: "saved", message: "[SAVED]" };
+      ? { kind: "idle", message: "已保存，还有未保存的修改" }
+      : { kind: "saved", message: "已保存" };
   } catch (caught) {
     if (caught instanceof ApiRequestError && caught.status === 409) {
-      state.orchestrator = { kind: "conflict", message: "[CONFLICT · LOAD LATEST CONFIG]" };
+      state.orchestrator = { kind: "conflict", message: "设置已更新，请加载最新内容" };
     } else {
       state.orchestrator = {
         kind: "error",
-        message: `[ERROR: ${caught instanceof Error ? caught.message : "保存失败"}]`,
+        message: caught instanceof Error ? caught.message : "保存失败",
         ...(caught instanceof ApiRequestError && caught.field ? { field: caught.field } : {})
       };
     }
@@ -226,10 +226,33 @@ function isGroupReplyDirty() {
 }
 
 function isOneBotSettingsDirty() {
-  const draft = clone(drafts.onebot);
-  const baseline = clone(baselines.onebot);
-  draft.autoReplyUserGroup = baseline.autoReplyUserGroup;
-  return JSON.stringify(draft) !== JSON.stringify(baseline);
+  return isReplyBehaviorDirty() || isOneBotConnectionDirty();
+}
+
+function isReplyBehaviorDirty() {
+  return drafts.onebot.autoReplyPrivate !== baselines.onebot.autoReplyPrivate ||
+    drafts.onebot.autoReplyBotGroup !== baselines.onebot.autoReplyBotGroup ||
+    JSON.stringify(drafts.onebot.mentionNames) !== JSON.stringify(baselines.onebot.mentionNames) ||
+    JSON.stringify(drafts.onebot.commandPrefixes) !== JSON.stringify(baselines.onebot.commandPrefixes);
+}
+
+function isOneBotConnectionDirty() {
+  return drafts.onebot.reverseWsPath !== baselines.onebot.reverseWsPath ||
+    drafts.onebot.accessTokenEnv !== baselines.onebot.accessTokenEnv;
+}
+
+function discardReplyBehavior() {
+  drafts.onebot.autoReplyPrivate = baselines.onebot.autoReplyPrivate;
+  drafts.onebot.autoReplyBotGroup = baselines.onebot.autoReplyBotGroup;
+  drafts.onebot.mentionNames = clone(baselines.onebot.mentionNames);
+  drafts.onebot.commandPrefixes = clone(baselines.onebot.commandPrefixes);
+  state.onebot = idle();
+}
+
+function discardOneBotConnection() {
+  drafts.onebot.reverseWsPath = baselines.onebot.reverseWsPath;
+  drafts.onebot.accessTokenEnv = baselines.onebot.accessTokenEnv;
+  state.onebot = idle();
 }
 
 function discardGroupReply() {
@@ -299,6 +322,10 @@ export function useConfigWorkspace() {
     discardGroupReply,
     isDirty,
     isGroupReplyDirty,
-    isOneBotSettingsDirty
+    isOneBotSettingsDirty,
+    isReplyBehaviorDirty,
+    isOneBotConnectionDirty,
+    discardReplyBehavior,
+    discardOneBotConnection
   };
 }

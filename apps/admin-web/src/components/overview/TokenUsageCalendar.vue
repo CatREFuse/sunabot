@@ -35,7 +35,7 @@ watch(() => props.days, showLatestDays);
     <header><span class="usage-card__label"><i class="bx bx-grid-alt" aria-hidden="true"></i>最近 53 周</span><span>每日总量</span></header>
     <div ref="calendarWrap" class="calendar-wrap">
       <div class="calendar" role="img" aria-label="每日 Token 消耗日历">
-        <span v-for="day in calendar" :key="day.date" :data-level="day.level" :title="`${day.date} · ${formatExactNumber(day.total)} tokens`"></span>
+        <span v-for="day in calendar" :key="day.date" :data-level="day.level" :title="`${day.date} · ${formatExactNumber(day.total)} Token`"></span>
       </div>
     </div>
   </article>

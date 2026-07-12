@@ -10,7 +10,7 @@ const emit = defineEmits<{ close: []; select: [kind: ProviderKind] }>();
   <DialogOverlay :open="open" labelledby="provider-create-title" @close="emit('close')">
     <section class="flex max-h-[calc(100dvh-32px)] w-full max-w-2xl flex-col overflow-hidden rounded border border-visible bg-panel">
       <header class="flex items-center justify-between border-b border-line p-5">
-        <div><p class="page-kicker">NEW PROVIDER</p><h2 id="provider-create-title" class="mt-2 text-xl font-medium text-display">选择 Provider 类型</h2></div>
+        <h2 id="provider-create-title" class="text-xl font-medium text-display">选择 Provider 类型</h2>
         <button class="icon-btn" type="button" aria-label="关闭" @click="emit('close')"><i class="bx bx-x text-2xl" aria-hidden="true"></i></button>
       </header>
       <div class="min-h-0 overflow-y-auto px-5 pb-5">

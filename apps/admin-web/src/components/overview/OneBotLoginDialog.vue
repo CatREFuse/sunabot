@@ -39,7 +39,6 @@ const phaseLabel = computed(() => ({
   waiting_scan: "等待扫码",
   expired: "二维码已过期"
 }[props.snapshot?.phase ?? "starting"]));
-const phaseCode = computed(() => `[${(props.snapshot?.phase ?? "starting").replace("_", " ").toUpperCase()}]`);
 const effectiveError = computed(() => props.error || props.snapshot?.loginError || props.snapshot?.error || "");
 const qq = computed(() => props.snapshot?.data?.user_id ?? "--");
 const nickname = computed(() => props.snapshot?.data?.nickname || "QQ Bot");
@@ -50,13 +49,13 @@ const avatar = computed(() => /^\d{5,12}$/.test(String(qq.value)) ? `/api/media/
   <DialogOverlay :open="open" labelledby="login-title" @close="emit('close')">
     <section class="max-h-[calc(100dvh-32px)] w-full max-w-md overflow-y-auto rounded border border-visible bg-panel">
       <header class="flex items-center justify-between border-b border-line p-4 md:p-5">
-        <div><p class="page-kicker">ONEBOT LOGIN</p><h2 id="login-title" class="mt-1 text-xl font-medium text-display">QQ 登录</h2></div>
+        <h2 id="login-title" class="text-xl font-medium text-display">QQ 登录</h2>
         <button class="icon-btn" type="button" aria-label="关闭" @click="emit('close')"><i class="bx bx-x text-2xl" aria-hidden="true"></i></button>
       </header>
       <div class="grid gap-5 p-4 md:p-5">
         <div class="flex items-center justify-between gap-3">
           <strong class="text-lg font-normal text-display">{{ phaseLabel }}</strong>
-          <span class="font-mono text-[10px]" :class="snapshot?.online ? 'text-success' : snapshot?.phase === 'expired' ? 'text-warning' : 'text-mute'">{{ checking ? "[CHECKING...]" : phaseCode }}</span>
+          <span v-if="checking" class="font-mono text-[10px] text-mute">检查中</span>
         </div>
         <div v-if="snapshot?.online" class="flex min-h-72 flex-col items-center justify-center gap-4 rounded border border-line bg-page p-6 text-center">
           <IdentityAvatar :src="avatar" :name="nickname" size="lg" />
@@ -65,9 +64,9 @@ const avatar = computed(() => /^\d{5,12}$/.test(String(qq.value)) ? `/api/media/
         </div>
         <div v-else class="grid min-h-72 place-items-center rounded border border-line bg-page p-4">
           <AuthenticatedImage v-if="qrSource" :src="qrSource" alt="QQ 登录二维码" class-name="w-full max-w-56 bg-white p-3 [image-rendering:pixelated]" />
-          <div v-else class="grid justify-items-center gap-3 text-mute"><i class="bx bx-loader-alt bx-spin text-4xl" aria-hidden="true"></i><p class="font-mono text-xs">{{ busy ? "[LOADING...]" : "[WAITING FOR QR]" }}</p></div>
+          <div v-else class="grid justify-items-center gap-3 text-mute"><i class="bx bx-loader-alt bx-spin text-4xl" aria-hidden="true"></i><p class="font-mono text-xs">{{ busy ? "加载中" : "等待二维码" }}</p></div>
         </div>
-        <p v-if="effectiveError" class="inline-state" data-kind="error">[ERROR: {{ effectiveError }}]</p>
+        <p v-if="effectiveError" class="inline-state" data-kind="error">{{ effectiveError }}</p>
         <p v-else-if="snapshot?.online" class="text-sm text-mute">可以退出当前 QQ，再扫描新的账号。</p>
         <p v-else class="text-sm text-mute">使用手机 QQ 扫码并确认，二维码会自动更新。</p>
         <span v-if="snapshot?.imageUpdatedAt && !snapshot.online" class="font-mono text-[10px] text-mute">更新于 {{ formatFullDateTime(snapshot.imageUpdatedAt) }}</span>

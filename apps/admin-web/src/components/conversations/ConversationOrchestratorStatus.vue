@@ -18,7 +18,7 @@ const judging = computed(() => props.status.active && (
 ));
 const statusLabel = computed(() => {
   if (!props.status.active) return "未激活";
-  return judging.value ? "[判断中...]" : "已激活";
+  return judging.value ? "判断中" : "已激活";
 });
 const statusTone = computed(() => judging.value || !props.status.active ? "text-warning" : "text-success");
 

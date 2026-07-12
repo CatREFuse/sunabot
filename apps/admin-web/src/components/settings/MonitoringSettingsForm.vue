@@ -88,17 +88,16 @@ function errorMessage(reason: unknown, fallback: string) {
 </script>
 
 <template>
-  <section class="border-y border-visible bg-panel py-5">
+  <section class="grid gap-8">
     <div class="flex flex-wrap items-start justify-between gap-4">
       <div>
-        <p class="page-kicker">SERVICE MONITOR</p>
-        <h3 class="mt-2 text-lg font-medium text-display">通知与连接监控</h3>
+        <h2 class="section-title">通知与连接监控</h2>
         <p class="mt-2 max-w-2xl text-sm leading-6 text-mute">设置 Bark 后，连接异常与服务异常会自动合并提醒，减少重复消息。</p>
       </div>
-      <span class="inline-state" :data-kind="configured ? 'success' : 'warning'">{{ configured ? "[已配置]" : "[未配置]" }}</span>
+      <span class="inline-state" :data-kind="configured ? 'success' : 'warning'">{{ configured ? "已配置" : "未配置" }}</span>
     </div>
 
-    <div class="mt-5 grid gap-5 sm:grid-cols-2">
+    <div class="grid gap-5 sm:grid-cols-2">
       <label class="field sm:col-span-2">
         <span class="field-label">Bark URL</span>
         <input v-model.trim="form.barkUrl" class="control" type="password" autocomplete="new-password" :placeholder="barkPlaceholder">
@@ -121,14 +120,14 @@ function errorMessage(reason: unknown, fallback: string) {
       </label>
     </div>
 
-    <div class="mt-5 divide-y divide-line border-y border-line">
+    <div class="divide-y divide-line border-y border-line">
       <ToggleSwitch v-model="form.onebotEventsEnabled" label="QQ 连接状态" description="持续掉线超过宽限时间后提醒，恢复连接时再次提醒。" />
       <ToggleSwitch v-model="form.serverEventsEnabled" label="服务运行状态" description="服务启动、停止或发生异常时提醒。" />
     </div>
 
-    <p v-if="error" class="mt-4 text-sm text-accent">[ERROR: {{ error }}]</p>
-    <p v-else-if="message" class="mt-4 text-sm text-success">{{ message }}</p>
-    <div class="mt-5 flex flex-wrap gap-2">
+    <p v-if="error" class="text-sm text-accent">{{ error }}</p>
+    <p v-else-if="message" class="text-sm text-success">{{ message }}</p>
+    <div class="flex flex-wrap gap-2">
       <button class="btn" type="button" :disabled="busy" @click="save">保存监控设置</button>
       <button class="btn btn-ghost" type="button" :disabled="testing || !configured" @click="testNotification">发送测试通知</button>
       <button class="btn btn-ghost" type="button" :disabled="busy" @click="load">刷新</button>

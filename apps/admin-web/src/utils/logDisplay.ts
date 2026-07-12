@@ -10,10 +10,21 @@ const actionNames: Record<string, string> = {
   "image.generate": "图像生成",
   "codex.image.generate": "Codex 图像生成",
   "memory.recall.before_reply": "回复前记忆召回",
+  "orchestrator.attempt": "群聊编排尝试",
+  "orchestrator.decision": "群聊编排结果",
+  "orchestrator.failed": "群聊编排失败",
   "reply.started": "开始生成回复",
   "reply.sent": "回复已发送",
   "reply.failed": "回复失败",
-  "reply.cancelled": "回复已取消"
+  "reply.cancelled": "回复已取消",
+  "assistant_text": "行动中消息",
+  "memory_recall": "记忆召回",
+  "websearch": "网页搜索",
+  "generate_img": "生图",
+  "selfie": "自拍",
+  "workspace_bash": "命令执行",
+  "codex": "Codex 异步任务",
+  "input_image": "图片输入"
 };
 
 const eventNames: Array<[RegExp, string]> = [

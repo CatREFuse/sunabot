@@ -33,10 +33,7 @@ function scopeLabel(value: ConversationRecord["scope"]) {
 <template>
   <aside class="flex h-full min-h-0 min-w-0 flex-col border-r border-line bg-panel">
     <header class="flex min-h-20 items-center justify-between gap-3 border-b border-line px-4">
-      <div>
-        <p class="page-kicker">CONVERSATIONS</p>
-        <h1 class="mt-1 text-3xl font-medium leading-none tracking-[-0.03em] text-display">会话</h1>
-      </div>
+      <h1 class="text-3xl font-medium leading-none tracking-[-0.03em] text-display">会话</h1>
       <button class="icon-btn" type="button" :disabled="loading" aria-label="刷新会话" @click="emit('refresh')">
         <i class="bx bx-refresh text-xl" aria-hidden="true"></i>
       </button>
@@ -64,10 +61,10 @@ function scopeLabel(value: ConversationRecord["scope"]) {
         <time class="font-mono text-[10px] text-disabled">{{ formatDateTime(item.lastAt) }}</time>
         <span class="truncate text-xs text-mute">{{ item.lastText || "暂无消息" }}</span>
         <span class="font-mono text-[10px] text-mute">{{ scopeLabel(item.scope) }}</span>
-        <span class="truncate font-mono text-[10px] text-disabled">{{ item.messageCount }} MSG · {{ conversationIdentityDetail(item) }}</span>
-        <span class="font-mono text-[10px]" :class="item.replyEnabled === false ? 'text-warning' : 'text-success'">{{ item.replyEnabled === false ? "PAUSED" : "ACTIVE" }}</span>
+        <span class="truncate font-mono text-[10px] text-disabled">{{ item.messageCount }} 条 · {{ conversationIdentityDetail(item) }}</span>
+        <span class="font-mono text-[10px]" :class="item.replyEnabled === false ? 'text-warning' : 'text-success'">{{ item.replyEnabled === false ? "已暂停" : "已启用" }}</span>
       </button>
-      <div v-if="!visible.length" class="empty-state"><div><strong>{{ loading ? "[LOADING...]" : "没有会话" }}</strong><p>调整筛选条件或刷新</p></div></div>
+      <div v-if="!visible.length" class="empty-state"><div><strong>{{ loading ? "加载中" : "没有会话" }}</strong><p>调整筛选条件或刷新</p></div></div>
     </div>
   </aside>
 </template>

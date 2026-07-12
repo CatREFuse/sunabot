@@ -16,6 +16,7 @@ const selectedId = computed(() => String(route.params.conversationId ?? ""));
 const selected = computed(() => data.conversations.value.find((item) => item.id === selectedId.value) ?? null);
 let listTimer: number | undefined;
 let messageTimer: number | undefined;
+let statsTimer: number | undefined;
 
 onMounted(() => {
   void data.loadList();
@@ -26,21 +27,31 @@ onMounted(() => {
 onBeforeUnmount(() => {
   if (listTimer) window.clearInterval(listTimer);
   if (messageTimer) window.clearInterval(messageTimer);
+  if (statsTimer) window.clearInterval(statsTimer);
   data.dispose();
 });
 watch(selectedId, (id) => {
   data.clearCurrent();
   if (messageTimer) window.clearInterval(messageTimer);
+  if (statsTimer) window.clearInterval(statsTimer);
   if (!id) return;
   void data.loadMessages(id, { reset: true });
+  void data.loadStats(id);
   messageTimer = window.setInterval(() => {
     if (document.visibilityState === "visible") void data.loadMessages(id);
   }, 2_000);
+  statsTimer = window.setInterval(() => {
+    if (document.visibilityState === "visible") void data.loadStats(id);
+  }, 10_000);
 }, { immediate: true });
 
 function select(id: string) { void router.push(`/conversations/${encodeURIComponent(id)}`); }
 function back() { void router.push("/conversations"); }
-function refreshMessages() { if (selectedId.value) void data.loadMessages(selectedId.value); }
+function refreshMessages() {
+  if (!selectedId.value) return;
+  void data.loadMessages(selectedId.value);
+  void data.loadStats(selectedId.value);
+}
 function older() { if (selectedId.value) void data.loadMessages(selectedId.value, { older: true }); }
 function logs(runId?: string) { if (selectedId.value) void data.loadLogs(selectedId.value, runId); }
 async function reply(enabled: boolean) { if (selected.value) await data.setReplyEnabled(selected.value, enabled); }
@@ -65,6 +76,7 @@ async function orchestrator(enabled: boolean) { if (selected.value) await data.s
       :messages="data.messages.value"
       :member-names="data.memberNames.value"
       :logs="data.logs.value"
+      :stats="data.stats.value"
       :has-more="data.hasMore.value"
       :loading-messages="data.loadingMessages.value"
       :loading-logs="data.loadingLogs.value"

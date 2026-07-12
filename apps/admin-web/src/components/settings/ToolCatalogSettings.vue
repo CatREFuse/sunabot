@@ -6,6 +6,7 @@ import ToolCatalogRow from "./ToolCatalogRow.vue";
 import ToolDetailDialog from "./ToolDetailDialog.vue";
 
 const draft = defineModel<ConfigSectionValueMap["tools"]>({ required: true });
+const bash = defineModel<ConfigSectionValueMap["bash"]>("bash", { required: true });
 const catalog = useToolCatalog();
 const query = shallowRef("");
 const selectedName = shallowRef("");
@@ -26,6 +27,8 @@ const selectedTool = computed(() => catalog.tools.value.find((tool) => tool.name
 onMounted(() => void catalog.load());
 
 function toolEnabled(tool: SunaTool) {
+  if (tool.name === "workspace_bash") return bash.value.enabled;
+  if (tool.name === "codex") return draft.value.codex.enabled;
   return draft.value.overrides[tool.name]?.enabled ?? tool.enabled;
 }
 
@@ -43,6 +46,8 @@ function hasDescriptionOverride(tool: SunaTool) {
 }
 
 function setEnabled(tool: SunaTool, enabled: boolean) {
+  if (tool.name === "workspace_bash") bash.value.enabled = enabled;
+  if (tool.name === "codex") draft.value.codex.enabled = enabled;
   const inherited = tool.promptEnabled ?? tool.inheritedEnabled ?? true;
   updateOverride(tool.name, (override) => {
     if (enabled === inherited) delete override.enabled;
@@ -70,8 +75,7 @@ function updateOverride(name: string, update: (override: ToolOverride) => void) 
   <section class="grid min-w-0 gap-6" aria-label="工具目录">
     <header class="flex min-w-0 flex-wrap items-end justify-between gap-4">
       <div>
-        <p class="page-kicker">TOOL CATALOG</p>
-        <h3 class="section-title mt-2">工具目录</h3>
+        <h3 class="section-title">工具目录</h3>
       </div>
       <div class="flex items-center gap-2">
         <span class="inline-state"><i class="bx bx-check-circle mr-1 text-success" aria-hidden="true"></i>{{ enabledCount }} / {{ catalog.tools.value.length }} 启用</span>
@@ -95,7 +99,7 @@ function updateOverride(name: string, update: (override: ToolOverride) => void) 
     </div>
 
     <div v-if="catalog.loading.value && !catalog.loaded.value" class="empty-state min-h-48 py-16">
-      <div><strong>[LOADING...]</strong><p>正在读取工具目录</p></div>
+      <div><strong>加载中</strong></div>
     </div>
     <div v-else-if="filteredTools.length" class="border-y border-line px-1 sm:px-2">
       <ToolCatalogRow

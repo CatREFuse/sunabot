@@ -9,7 +9,7 @@ import { isTrustedQqFakeIp } from "../../../adapters/onebot/qqMedia.js";
 import { WORKSPACE_LAYOUT } from "../../../packages/platform/workspaceLayout.js";
 import { AdminApiError, badRequest } from "../../../src/admin/errors.js";
 import { getWorkspacePath } from "../../../src/config.js";
-import { readRequestLogPage, readTokenUsageSummary, requestLogPath } from "../../../src/requestLog.js";
+import { readModelCallStats, readRequestLogPage, readTokenUsageSummary, requestLogPath } from "../../../src/requestLog.js";
 import type { SunaRuntime } from "../../../src/runtime.js";
 import type { AppConfig, BotToolSettings, ImageHistoryRecord } from "../../../src/types.js";
 
@@ -66,6 +66,10 @@ export function registerMediaRoutes(app: FastifyInstance, options: MediaRouteOpt
     const query = request.query as { timezoneOffset?: string };
     return readTokenUsageSummary(Number(query.timezoneOffset ?? 0));
   });
+
+  app.get("/api/model-call-stats", {
+    schema: { querystring: openObject, response: { 200: openObject } }
+  }, async () => readModelCallStats());
 
   app.get("/api/media/image", {
     schema: { querystring: remoteImageQuery, response: { 200: passthroughBody } }

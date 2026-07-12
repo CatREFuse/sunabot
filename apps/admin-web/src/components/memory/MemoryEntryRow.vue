@@ -40,13 +40,12 @@ function formatMemoryTime(value: string) {
     </div>
     <div v-else class="min-w-0">
       <span class="font-mono text-[10px] uppercase tracking-[0.06em] text-mute">{{ entry.sourceTitle }}</span>
-      <p class="mt-1 truncate font-mono text-[10px] text-disabled">{{ entry.field }}</p>
     </div>
 
     <div class="min-w-0">
       <p class="whitespace-pre-wrap break-words text-sm leading-6 text-ink">{{ entry.text }}</p>
       <div class="mt-3 flex flex-wrap gap-4 font-mono text-[10px] text-disabled">
-        <span v-if="entry.score != null">SCORE {{ entry.score.toFixed(3) }}</span>
+        <span v-if="entry.score != null">相关度 {{ entry.score.toFixed(3) }}</span>
         <span v-if="eventTime">发生 {{ eventTime }}</span>
         <span v-if="entry.updatedAt || entry.createdAt">更新 {{ formatFullDateTime(entry.updatedAt || entry.createdAt) }}</span>
       </div>

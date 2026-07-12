@@ -53,7 +53,7 @@ describe("TokenUsageDashboard", () => {
 
     expect(rateCard?.text()).toContain("--");
     expect(wrapper.findAll(".chart-point")).toHaveLength(0);
-    expect(wrapper.text()).toContain("[LOADING...]");
+    expect(wrapper.text()).toContain("加载中");
   });
 
   it("keeps the newest calendar days visible when usage updates", async () => {

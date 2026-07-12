@@ -47,7 +47,7 @@ export function registerAgentToolRoutes(app: FastifyInstance, options: AgentTool
       tools: listToolMetadata({
         onAssistantText: () => undefined,
         bash: {
-          enabled: config.bot.bash.enabled,
+          enabled: config.bot.bash.enabled && process.platform !== "darwin",
           workspaceOnly: config.bot.bash.workspaceOnly,
           blockedKeywords: config.bot.bash.blockedKeywords
         },

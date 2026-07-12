@@ -24,8 +24,8 @@ describe("DiagnosticsDrawer", () => {
 
     expect(apiRequest.mock.calls.map(([path]) => path)).toEqual(["/api/tools"]);
     expect(wrapper.text()).toContain("assistant_text");
-    expect(wrapper.text()).toContain("[READY]");
-    expect(wrapper.text()).toContain("[UNAVAILABLE]");
+    expect(wrapper.text()).toContain("可用");
+    expect(wrapper.text()).toContain("不可用");
 
     await wrapper.get("nav").findAll("button")[1]!.trigger("click");
     await flushPromises();

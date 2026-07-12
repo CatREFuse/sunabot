@@ -84,12 +84,10 @@ async function copyCode() {
   <section class="border-y border-visible bg-raised px-4 py-5">
     <div class="flex flex-wrap items-start justify-between gap-4">
       <div>
-        <p class="page-kicker">CHATGPT SUBSCRIPTION</p>
-        <h3 class="mt-2 text-lg font-medium text-display">Codex 订阅登录</h3>
-        <p class="mt-2 max-w-2xl text-sm leading-6 text-mute">使用官方设备授权登录，登录信息仅保存在本机。</p>
+        <h3 class="text-lg font-medium text-display">Codex 订阅登录</h3>
       </div>
       <span class="inline-state" :data-kind="snapshot?.authenticated ? 'success' : 'warning'">
-        {{ snapshot?.authenticated ? "[LOGGED IN]" : snapshot?.installed ? "[NOT LOGGED IN]" : "[CLI MISSING]" }}
+        {{ snapshot?.authenticated ? "已登录" : snapshot?.installed ? "未登录" : "Codex 未安装" }}
       </span>
     </div>
 
@@ -111,7 +109,7 @@ async function copyCode() {
       <p class="text-xs text-mute">{{ snapshot.login.message }}</p>
     </div>
 
-    <p v-if="error" class="mt-4 text-sm text-accent">[ERROR: {{ error }}]</p>
+    <p v-if="error" class="mt-4 text-sm text-accent">{{ error }}</p>
     <div class="mt-5 flex flex-wrap gap-2">
       <button class="btn" type="button" :disabled="busy || !snapshot?.installed" @click="startLogin"><i class="bx bx-log-in-circle" aria-hidden="true"></i>{{ snapshot?.authenticated ? "重新登录" : "开始登录" }}</button>
       <button class="btn btn-ghost" type="button" :disabled="busy || !snapshot?.authenticated" @click="logout">退出订阅</button>

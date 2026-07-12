@@ -319,6 +319,10 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
       return json(route, state.tokenUsage);
     }
 
+    if (pathname === "/api/model-call-stats") {
+      return json(route, modelCallStats());
+    }
+
     if (pathname === "/api/status") {
       return json(route, {
         startedAt: "2026-07-10T01:00:00.000Z",
@@ -548,6 +552,14 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
               metadata: { runId: "running-run", conversationId: "group:10001" }
             }]
           : []
+      });
+    }
+    if (/^\/api\/conversations\/[^/]+\/stats$/.test(pathname)) {
+      const conversationId = decodeURIComponent(pathname.split("/")[3] ?? "");
+      return json(route, {
+        conversationId,
+        messages: 24,
+        modelCalls: modelCallStats(conversationId)
       });
     }
     if (pathname === "/api/conversations/reply") {
@@ -922,6 +934,35 @@ function tokenUsageDay(
     output,
     total,
     requests
+  };
+}
+
+function modelCallStats(conversationId: string | null = null) {
+  const bucket = (requests: number, total: number) => ({
+    input: Math.round(total * 0.8),
+    output: Math.round(total * 0.2),
+    cachedInput: 0,
+    cacheRate: null,
+    total,
+    requests
+  });
+  return {
+    conversationId,
+    total: bucket(26, 128_400),
+    behavior: {
+      reply: bucket(12, 82_000),
+      orchestrator: bucket(6, 24_000),
+      memory: bucket(7, 21_600),
+      other: bucket(1, 800)
+    },
+    memory: {
+      total: bucket(7, 21_600),
+      kinds: {
+        working: bucket(3, 9_600),
+        long_term: bucket(2, 7_200),
+        user_profile: bucket(2, 4_800)
+      }
+    }
   };
 }
 

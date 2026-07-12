@@ -437,7 +437,14 @@ export async function runtime_replyWithGroupChatSummary(this: RuntimeHost,
       const promptRequest = await this.renderPromptRequest("conversation.group-summary", {
         "group.payload": payload
       });
-      const reply = await this.completePrompt(provider, promptRequest, { signal });
+      const reply = await this.completePrompt(provider, promptRequest, {
+        signal,
+        logContext: {
+          conversationId: record?.id ?? conversationRecordId(incoming),
+          incomingMessageId: incoming.messageId == null ? undefined : String(incoming.messageId),
+          stage: "reply"
+        }
+      });
       const replyRecord = await this.sendAssistantReply(
         channelKey, incoming, gateway, reply, isAdmin, [], undefined, isCurrent, delivery
       );

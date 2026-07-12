@@ -1,6 +1,6 @@
 import { readonly, shallowRef } from "vue";
 import { apiRequest } from "./useAdminApi";
-import type { ConversationLogEntry, OneBotEventTrace } from "../types";
+import type { ConversationLogEntry, ModelCallStatsPayload, OneBotEventTrace } from "../types";
 
 interface RequestLogPage {
   logs: ConversationLogEntry[];
@@ -19,21 +19,24 @@ export function useRequestLogs() {
   const pageCount = shallowRef(1);
   const loading = shallowRef(false);
   const error = shallowRef("");
+  const stats = shallowRef<ModelCallStatsPayload | null>(null);
 
   async function load(targetPage = page.value) {
     loading.value = true;
     try {
-      const [logPayload, eventPayload] = await Promise.all([
+      const [logPayload, eventPayload, statsPayload] = await Promise.all([
         apiRequest<RequestLogPage>(`/api/request-logs?page=${targetPage}&pageSize=${pageSize.value}`),
         targetPage === 1
           ? apiRequest<{ events: OneBotEventTrace[] }>("/api/onebot/events")
-          : Promise.resolve({ events: events.value })
+          : Promise.resolve({ events: events.value }),
+        apiRequest<ModelCallStatsPayload>("/api/model-call-stats")
       ]);
       logs.value = logPayload.logs;
       events.value = eventPayload.events;
       page.value = logPayload.page;
       total.value = logPayload.total;
       pageCount.value = logPayload.pageCount;
+      stats.value = statsPayload;
       error.value = "";
     } catch (reason) {
       error.value = reason instanceof Error ? reason.message : "日志读取失败";
@@ -59,6 +62,7 @@ export function useRequestLogs() {
     pageCount: readonly(pageCount),
     loading: readonly(loading),
     error: readonly(error),
+    stats: readonly(stats),
     load,
     previous,
     next

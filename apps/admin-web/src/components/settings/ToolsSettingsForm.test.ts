@@ -34,10 +34,20 @@ function toolsDraft(): BotToolSettingsDraft {
   };
 }
 
+function bashDraft() {
+  return {
+    enabled: false,
+    allowGroup: false,
+    adminOnly: true,
+    workspaceOnly: true,
+    blockedKeywords: []
+  };
+}
+
 describe("ToolsSettingsForm", () => {
   it("opens the semantic tool catalog tab by default", () => {
     const wrapper = mount(ToolsSettingsForm, {
-      props: { modelValue: toolsDraft(), models: [] }
+      props: { modelValue: toolsDraft(), bash: bashDraft(), models: [] }
     });
 
     const tabs = wrapper.findAll('[role="tab"]');
@@ -47,10 +57,11 @@ describe("ToolsSettingsForm", () => {
     expect(wrapper.get('[role="tabpanel"][aria-labelledby="tools-tab-runtime"]').attributes("hidden")).toBeDefined();
   });
 
-  it("renders Web Search and Codex as separate runtime settings", async () => {
+  it("renders web search and Codex as separate runtime settings", async () => {
     const wrapper = mount(ToolsSettingsForm, {
       props: {
         modelValue: toolsDraft(),
+        bash: bashDraft(),
         models: [{
           id: "gpt-5.4-mini",
           label: "GPT-5.4 mini",
@@ -61,7 +72,7 @@ describe("ToolsSettingsForm", () => {
     });
     await wrapper.get("#tools-tab-runtime").trigger("click");
 
-    expect(wrapper.text()).toContain("Web Search");
+    expect(wrapper.text()).toContain("网页搜索");
     expect(wrapper.text()).toContain("Tavily Key 池");
     expect(wrapper.text()).toContain("Codex");
     expect(wrapper.text()).not.toContain("Codex Search");
@@ -74,7 +85,7 @@ describe("ToolsSettingsForm", () => {
     const draft = toolsDraft();
     draft.codex.enabled = false;
     const wrapper = mount(ToolsSettingsForm, {
-      props: { modelValue: draft, models: [] }
+      props: { modelValue: draft, bash: bashDraft(), models: [] }
     });
     await wrapper.get("#tools-tab-runtime").trigger("click");
 

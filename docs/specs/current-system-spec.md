@@ -77,6 +77,8 @@ Provider 请求使用应用启动时安装的统一出站 dispatcher。显式代
 
 模型响应日志保留 Provider 返回的原始 usage，并在日志顶层写入统一的 `tokenUsage`。`tokenUsage` 字段为 `input`、`cachedInput`、`cacheRate`、`output` 和 `total`；日、小时聚合桶在此基础上增加 `requests`：
 
+模型调用通过 `metadata.stage` 归入 `reply`、`orchestrator`、`memory` 或 `other`。记忆调用通过 `metadata.memoryKind` 继续区分 `working`、`long_term` 和 `user_profile`；一次 Provider 请求只计入一个行为类别，实际重试按真实请求次数计数。全局统计读取全部模型响应，群聊统计按完整 `conversationId` 精确过滤。
+
 - OpenAI Responses/Codex 使用 `input_tokens`、`input_tokens_details.cached_tokens`、`output_tokens` 和 `total_tokens`；Chat Completions 使用对应的 `prompt_tokens`、`prompt_tokens_details.cached_tokens`、`completion_tokens` 和 `total_tokens`。输入总量已经包含缓存输入，不能重复相加。
 - Deferred Codex CLI 完成或失败后，只要结果包含 usage，就以 `model.response`、`codex.tool.complete`、`codex-cli` 写入请求日志；使用 `input_tokens`、`cached_input_tokens` 和 `output_tokens`，其中缓存输入是输入总量的子集，总量由输入与输出相加。失败状态不能丢弃已经产生的 usage。
 - Anthropic 输入总量是 `input_tokens + cache_creation_input_tokens + cache_read_input_tokens`，其中只有 `cache_read_input_tokens` 计入 `cachedInput`；缓存创建属于输入消耗，不属于缓存命中。输出使用 `output_tokens`，总量由输入与输出相加。
@@ -140,7 +142,7 @@ Agent 工具目录固定包含 `assistant_text`、`memory_recall`、`websearch`�
 
 ### 6.2 图像生成
 
-图像生成支持尺寸、1K/2K/4K 分辨率、质量、参考图压缩、重试和 OneBot 外发。自拍必须使用角色参考图与自拍重写提示词；运行时从当前 Agent workspace 的 `selfie/` 目录读取最多 3 张参考图，并为会话图片保留第 4 个参考位。管理台可在 Agent 身份设置中上传、预览和删除这 3 张图片，列表只读取展示图和低清占位图，打开预览时才读取原图。生成文件保存在忽略的运行目录，图片历史元数据保存在主 SQLite 数据库。
+图像生成支持尺寸、1K/2K/4K 分辨率、质量、参考图压缩、重试和 OneBot 外发。自拍必须使用角色参考图与自拍重写提示词；运行时从当前 Agent workspace 的 `selfie/` 目录读取最多 3 张参考图，并为会话图片保留第 4 个参考位。管理台可在图像页上传、预览和删除这 3 张图片，列表只读取展示图和低清占位图，打开预览时才读取原图。生成文件保存在忽略的运行目录，图片历史元数据保存在主 SQLite 数据库。
 
 出站媒体必须先通过生成图片根目录、直接子文件、PNG 文件名、常规文件和大小校验，再读取为 OneBot `base64://` 内联数据。Native Core 与 Docker Core 使用同一传输方式，NapCat 不读取 Core workspace，不接受共享绝对路径。超过 OneBot 内联预算的文件必须使用独立、鉴权、限流、可过期的传输协议；不能用容器路径或宿主路径作为降级。
 
@@ -150,6 +152,8 @@ NapCat 上报的 QQ 文件优先通过 OneBot action 返回的受控 URL 进入 
 
 管理台包含状态、QQ 会话、Web Chat、图片、记忆、提示词、日志和设置页面，支持 light、dark 和跟随系统主题，并适配桌面、平板和移动端。
 
+登录页使用 Sunabot 品牌 Hero 与管理员登录表单组成响应式双栏，移动端按 Hero、表单顺序纵向排列。用户可见文案只保留名称、状态、动作、结果和完成操作所需的提示；页面不得展示鉴权实现、浏览器存储方式、数据来源、区域职责、设计说明或装饰性状态代码。
+
 设置中的 Agent 工具页默认打开“工具目录”Tab，列出七个真实工具的图标、名称、Function 名、摘要、配置状态、运行能力和同步或异步方式，支持搜索、启停与刷新。详情弹层展示实际模型描述、描述来源、JSON Schema 参数与严格模式；编辑模型描述会建立全局覆盖，“恢复继承说明”会删除覆盖。“运行参数”Tab 继续管理单轮调用上限、Tavily、Codex Worker 和图像生成默认值。两个 Tab 共用当前工具配置草稿和保存栏。
 
 状态页使用响应式数据拼盘展示 QQ Bot 头像、昵称、连接状态、内容计数、Provider 健康，以及当日 Token 总量、输入、缓存输入、缓存率、输出和请求数。拼盘保留非对称网格，通过留白、分割线和连续数据区组织信息，不使用圆角卡片逐项装箱。Token 统计使用浏览器传入的时区偏移：当日小时序列固定返回 0—23 点 24 个桶，缺少的小时补零；日历固定覆盖截至当日的最近 53 周本地日期，缺少的日期补零。小时图使用 Token 总量柱形和缓存率折线，缓存率为 `null` 时显示 `--` 且折线跳过该点。四位及以上主指标使用 K 缩写，并提供千分位精确值。
@@ -158,7 +162,7 @@ NapCat 上报的 QQ 文件优先通过 OneBot action 返回的受控 URL 进入 
 
 Web Chat 使用固定管理员身份和 `web:admin` 会话，通过 Web delivery adapter 进入与 QQ 相同的 Agent loop、提示词、记忆和同步工具链。Web Chat 回复只能写回浏览器消息流，不能经 OneBot 外发；QQ 会话也不能出现在 Web Chat 中。当前 Web delivery 没有持久化的异步结果投递目标，因此 Web Chat 禁用 Deferred Codex 和图像任务。发送接口拒绝空白正文和超过 16,000 字符的正文，页面支持 Enter 发送、Shift+Enter 换行、发送中状态、错误恢复、消息轮询和图片缩略图。
 
-日志页按从新到旧提供 Bot 活动终端与分页纵向时间轴，Responses、Codex Provider、Deferred Codex CLI、Chat Completions、Anthropic 和 Gemini 请求同时显示中文标题与原始 action ID，其中 Codex CLI 使用 `codex.tool.complete`。模型响应的统一 `tokenUsage` 使用独立用量条展示，原始请求、响应和 usage 字段继续使用递归结构化视图，不能退回整段 JSON 文本。记忆页一次只查看一个真实来源，单个搜索栏在本地筛选与语义召回间切换。提示词编辑器提供变量表、已使用变量状态、可选 XML 包装，以及离开前保存。
+日志页按从新到旧提供 Bot 活动终端与分页纵向时间轴，Responses、Codex Provider、Deferred Codex CLI、Chat Completions、Anthropic 和 Gemini 请求同时显示中文标题与原始 action ID，其中 Codex CLI 使用 `codex.tool.complete`。模型响应的统一 `tokenUsage` 使用独立用量条展示，原始请求、响应和 usage 字段继续使用递归结构化视图，不能退回整段 JSON 文本。日志页汇总回答、群聊编排、记忆压缩和其他模型调用的次数与 Token；记忆压缩继续区分工作记忆、长期记忆和用户画像，非私聊会话详情显示当前会话的消息数与同口径统计。记忆页一次只查看一个真实来源，单个搜索栏在本地筛选与语义召回间切换。提示词编辑器提供变量表、已使用变量状态、可选 XML 包装，以及离开前保存。
 
 图片列表和会话正文先读取 48px 低质量 WebP 占位图并以高斯模糊显示，再淡入 480px WebP 展示图；用户打开预览或原图链接时才读取完整图片。浏览器缓存已加载资源，图片历史在短期页面切换中复用，返回图片页不重新批量请求占位图和历史数据。
 
@@ -242,7 +246,7 @@ QQ 登录由管理台完成：离线时直接显示 NapCat 当前二维码并每
 | 状态与监控 API | `apps/api/plugins/monitoringRoutes.ts` |
 | 会话与会话日志 API | `apps/api/plugins/conversationRoutes.ts` |
 | Web Chat 管理员会话与浏览器 delivery | `services/webChat/`, `apps/api/plugins/conversationRoutes.ts` |
-| 图片、缩略图、Token 统计、请求日志与图片测试 API | `apps/api/plugins/mediaRoutes.ts` |
+| 图片、缩略图、Token/模型调用统计、请求日志与图片测试 API | `apps/api/plugins/mediaRoutes.ts`, `src/requestLog.ts` |
 | Agent 文件与工具目录 API | `apps/api/plugins/agentToolRoutes.ts`, `services/tools/toolRegistry.ts` |
 | 自拍参考图 API 与受控文件仓库 | `apps/api/plugins/selfieReferenceRoutes.ts`, `src/admin/selfieReferences.ts` |
 | 配置加载、默认值、路径解析 | `src/config.ts`, `src/types.ts` |
@@ -266,7 +270,8 @@ QQ 登录由管理台完成：离线时直接显示 NapCat 当前二维码并每
 | 管理台路由和页面 | `apps/admin-web/src/router.ts`, `apps/admin-web/src/views/` |
 | 管理台组件和状态 | `apps/admin-web/src/components/`, `apps/admin-web/src/composables/` |
 | Agent 工具目录设置 | `apps/admin-web/src/components/settings/ToolsSettingsForm.vue`, `apps/admin-web/src/components/settings/ToolCatalogSettings.vue`, `apps/admin-web/src/components/settings/ToolDetailDialog.vue`, `apps/admin-web/src/components/settings/ToolRuntimeSettings.vue`, `apps/admin-web/src/composables/useToolCatalog.ts` |
-| 自拍参考图设置 | `apps/admin-web/src/components/settings/SelfieReferenceSettings.vue`, `apps/admin-web/src/components/settings/SelfieReferenceDialog.vue`, `apps/admin-web/src/composables/useSelfieReferences.ts` |
+| 自拍参考图设置 | `apps/admin-web/src/views/ImagesView.vue`, `apps/admin-web/src/components/settings/SelfieReferenceSettings.vue`, `apps/admin-web/src/components/settings/SelfieReferenceDialog.vue`, `apps/admin-web/src/composables/useSelfieReferences.ts` |
+| 日志与群聊模型调用统计 | `apps/admin-web/src/components/logs/ModelCallStatsPanel.vue`, `apps/admin-web/src/views/LogsView.vue`, `apps/admin-web/src/components/conversations/ConversationThread.vue` |
 | 旧数据迁移 | `tooling/migrations/migrate-to-sqlite.mjs` |
 | 统一运行入口与模式选择 | `sunabot.sh`, `tooling/runtime/launcher.mjs`, `tooling/runtime/launcher-core.mjs` |
 | Core 与 NapCat Docker 编排 | `deploy/docker/compose.yml`, `deploy/docker/Dockerfile`, `deploy/docker/Dockerfile.napcat`, `tooling/runtime/configure-napcat-client.mjs` |
@@ -288,6 +293,6 @@ npm run test:e2e
 
 涉及界面时还要运行视觉测试并检查截图；Web Chat 必须覆盖管理员身份、Web/QQ 外发隔离、消息轮询、发送校验、键盘操作、图片缩略图和移动端布局。涉及数据迁移时必须核对迁移脚本输出、SQLite 表记录数、旧文件备份和服务重启后的 API 与 OneBot 状态。
 
-Token 统计验收必须覆盖 OpenAI Responses、Deferred Codex CLI 成功与失败结果、Chat Completions、Anthropic 和 Gemini 的原始 usage 夹具，验证缓存输入不重复计数、Codex CLI 失败 usage 不丢失、Anthropic 三类输入求和、思考 Token 归入输出、缓存率分母只包含明确报告缓存字段的记录、无缓存字段返回 `null`、显式零缓存返回 `0`、时区跨日、24 个小时桶和最近 53 周日期范围。管理台测试必须验证 371 个日历单元、24 个小时柱、缓存率折线不产生 `NaN`/`Infinity`，并分别检查移动端与桌面端的 light/dark Token 卡片、日历、小时图和展开后的结构化 usage 日志截图。
+Token 统计验收必须覆盖 OpenAI Responses、Deferred Codex CLI 成功与失败结果、Chat Completions、Anthropic 和 Gemini 的原始 usage 夹具，验证缓存输入不重复计数、Codex CLI 失败 usage 不丢失、Anthropic 三类输入求和、思考 Token 归入输出、缓存率分母只包含明确报告缓存字段的记录、无缓存字段返回 `null`、显式零缓存返回 `0`、时区跨日、24 个小时桶和最近 53 周日期范围。行为统计必须验证回答、编排器、记忆总量与三类记忆拆分无重复计数，并验证 `conversationId` 精确隔离。管理台测试必须验证 371 个日历单元、24 个小时柱、缓存率折线不产生 `NaN`/`Infinity`，并分别检查移动端与桌面端的 light/dark Token 卡片、行为统计、群聊详情、日历、小时图和展开后的结构化 usage 日志截图。
 
 涉及跨平台运行时还要执行 `./sunabot.sh doctor`，分别验证 Native Core + NapCat Docker 与 Docker Core + NapCat Docker 的启动、停止、单实例、OneBot token、文字、图片、文件和重启恢复。contract 与测试必须拒绝 NapCat 并入 Core、OneBot 复用管理端口、跨组件共享绝对路径和旧新运行时并行。

@@ -13,7 +13,7 @@ const emit = defineEmits<{
   toggle: [enabled: boolean];
   edit: [];
 }>();
-const canToggle = computed(() => props.tool.configurable !== false && props.tool.available !== false);
+const canToggle = computed(() => props.tool.configurable !== false);
 const configuredState = computed(() => props.enabled
   ? { label: "配置已启用", icon: "bx-check-circle", kind: "success" }
   : { label: "配置已停用", icon: "bx-pause-circle", kind: "" });

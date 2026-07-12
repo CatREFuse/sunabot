@@ -29,7 +29,6 @@ const runtime = useRuntimeStatus();
       </span>
       <div class="hidden min-w-0 xl:block">
         <strong class="block text-lg font-medium tracking-[-0.02em] text-display">Sunabot</strong>
-        <span class="block font-mono text-[10px] uppercase tracking-[0.08em] text-mute">Control 01</span>
       </div>
     </div>
 
@@ -50,7 +49,7 @@ const runtime = useRuntimeStatus();
       <div class="mb-3 hidden items-center justify-between px-2 xl:flex">
         <span class="meta-label">OneBot</span>
         <span class="font-mono text-[10px]" :class="runtime.status.value?.onebot.connected ? 'text-success' : 'text-mute'">
-          {{ runtime.status.value?.onebot.connected ? "[ONLINE]" : "[OFFLINE]" }}
+          {{ runtime.status.value?.onebot.connected ? "在线" : "离线" }}
         </span>
       </div>
       <div class="grid grid-cols-1 gap-1 xl:grid-cols-3" aria-label="主题">

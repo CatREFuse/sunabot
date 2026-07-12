@@ -104,6 +104,7 @@ describe("media API plugin", () => {
       "/api/media/image",
       "/api/media/qq-avatar",
       "/api/media/thumbnail",
+      "/api/model-call-stats",
       "/api/playground/image",
       "/api/request-logs",
       "/api/token-usage"

@@ -1,12 +1,13 @@
 import { shallowReadonly, shallowRef } from "vue";
 import { apiRequest } from "./useAdminApi";
-import type { ConversationLogEntry, ConversationMessagePage, ConversationMessageRecord, ConversationRecord } from "../types";
+import type { ConversationLogEntry, ConversationMessagePage, ConversationMessageRecord, ConversationRecord, ConversationStatsPayload } from "../types";
 
 export function useConversations() {
   const conversations = shallowRef<ConversationRecord[]>([]);
   const messages = shallowRef<ConversationMessageRecord[]>([]);
   const memberNames = shallowRef<Record<string, string>>({});
   const logs = shallowRef<ConversationLogEntry[]>([]);
+  const stats = shallowRef<ConversationStatsPayload | null>(null);
   const nextBeforeSequence = shallowRef<number | undefined>();
   const hasMore = shallowRef(false);
   const loadingList = shallowRef(false);
@@ -16,6 +17,7 @@ export function useConversations() {
   let listController: AbortController | undefined;
   let messageController: AbortController | undefined;
   let logController: AbortController | undefined;
+  let statsController: AbortController | undefined;
 
   async function loadList() {
     listController?.abort();
@@ -74,6 +76,20 @@ export function useConversations() {
     }
   }
 
+  async function loadStats(id: string) {
+    statsController?.abort();
+    statsController = new AbortController();
+    try {
+      stats.value = await apiRequest<ConversationStatsPayload>(
+        `/api/conversations/${encodeURIComponent(id)}/stats`,
+        { signal: statsController.signal }
+      );
+    } catch (caught) {
+      if (isAbort(caught)) return;
+      error.value = caught instanceof Error ? caught.message : "统计读取失败";
+    }
+  }
+
   async function updateReplySettings(
     conversation: ConversationRecord,
     changes: Pick<ConversationRecord, "replyEnabled" | "orchestratorEnabled">
@@ -116,6 +132,7 @@ export function useConversations() {
     messages.value = [];
     memberNames.value = {};
     logs.value = [];
+    stats.value = null;
     hasMore.value = false;
     nextBeforeSequence.value = undefined;
   }
@@ -124,6 +141,7 @@ export function useConversations() {
     listController?.abort();
     messageController?.abort();
     logController?.abort();
+    statsController?.abort();
   }
 
   return {
@@ -131,6 +149,7 @@ export function useConversations() {
     messages: shallowReadonly(messages),
     memberNames: shallowReadonly(memberNames),
     logs: shallowReadonly(logs),
+    stats: shallowReadonly(stats),
     hasMore: shallowReadonly(hasMore),
     loadingList: shallowReadonly(loadingList),
     loadingMessages: shallowReadonly(loadingMessages),
@@ -139,6 +158,7 @@ export function useConversations() {
     loadList,
     loadMessages,
     loadLogs,
+    loadStats,
     setReplyEnabled,
     setOrchestratorEnabled,
     clearCurrent,

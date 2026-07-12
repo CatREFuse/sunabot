@@ -148,14 +148,13 @@
     @apply mx-auto w-full max-w-[1440px];
   }
 
-  .page-kicker,
   .field-label,
   .meta-label {
     @apply font-mono text-[11px] uppercase leading-[1.2] tracking-[0.08em] text-mute;
   }
 
   .page-title {
-    @apply mt-3 font-sans text-[36px] font-medium leading-none tracking-[-0.03em] text-display md:text-[48px];
+    @apply font-sans text-[36px] font-medium leading-none tracking-[-0.03em] text-display md:text-[48px];
   }
 
   .page-intro {

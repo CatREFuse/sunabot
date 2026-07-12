@@ -19,8 +19,7 @@ const isUsed = (name: string) => props.usedNames.includes(name);
   <section class="variable-catalog">
     <header class="variable-catalog__header">
       <div>
-        <p class="page-kicker">VARIABLES</p>
-        <h3 class="section-title mt-2">变量表</h3>
+        <h3 class="section-title">变量表</h3>
       </div>
       <label class="field variable-catalog__search">
         <span class="sr-only">搜索变量</span>

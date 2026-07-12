@@ -59,8 +59,7 @@ function formatBytes(bytes: number) {
     <section class="grid h-full max-h-full w-full max-w-4xl grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden border-visible bg-panel sm:h-auto sm:max-h-[calc(100dvh-32px)] sm:rounded sm:border">
       <header class="flex items-center justify-between gap-4 border-b border-line p-4 md:p-5">
         <div class="min-w-0">
-          <p class="page-kicker">SELFIE REFERENCES</p>
-          <h2 id="selfie-reference-title" class="mt-1 text-xl font-medium text-display">自拍参考图</h2>
+          <h2 id="selfie-reference-title" class="text-xl font-medium text-display">自拍参考图</h2>
         </div>
         <button class="icon-btn" type="button" aria-label="关闭" @click="emit('close')"><i class="bx bx-x text-2xl" aria-hidden="true"></i></button>
       </header>
@@ -90,7 +89,7 @@ function formatBytes(bytes: number) {
           </article>
         </div>
         <div v-else class="empty-state min-h-72">
-          <div><i class="bx bx-camera mb-3 text-3xl text-mute" aria-hidden="true"></i><strong>{{ loading ? "[LOADING...]" : "还没有参考图" }}</strong><p>添加普拉娜的正面或半身图片</p></div>
+          <div><i class="bx bx-camera mb-3 text-3xl text-mute" aria-hidden="true"></i><strong>{{ loading ? "加载中" : "还没有参考图" }}</strong><p>添加普拉娜的正面或半身图片</p></div>
         </div>
       </div>
 
@@ -119,8 +118,7 @@ function formatBytes(bytes: number) {
 
   <DialogOverlay :open="Boolean(deleteImage)" :z-index="100" labelledby="selfie-delete-title" @close="deleteImage = null">
     <section class="w-full max-w-md rounded border border-visible bg-panel p-6">
-      <p class="page-kicker">REMOVE IMAGE</p>
-      <h2 id="selfie-delete-title" class="mt-2 text-xl font-medium text-display">删除这张参考图？</h2>
+      <h2 id="selfie-delete-title" class="text-xl font-medium text-display">删除这张参考图？</h2>
       <p class="mt-3 truncate text-sm text-mute">{{ deleteImage?.fileName }}</p>
       <div class="mt-8 flex flex-wrap justify-end gap-2">
         <button class="btn btn-ghost" type="button" @click="deleteImage = null">取消</button>

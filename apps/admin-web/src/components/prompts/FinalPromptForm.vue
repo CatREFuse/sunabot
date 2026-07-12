@@ -15,7 +15,11 @@ import FinalPromptWorkspace, { type FinalPromptWorkspaceSection } from "./FinalP
 import FunctionCallEditor from "./FunctionCallEditor.vue";
 
 const model = defineModel<string>({ required: true });
-const props = withDefaults(defineProps<{ variables: readonly PromptVariableDefinition[]; semanticXml?: boolean }>(), { semanticXml: false });
+const props = withDefaults(defineProps<{
+  variables: readonly PromptVariableDefinition[];
+  semanticXml?: boolean;
+  showVariables?: boolean;
+}>(), { semanticXml: false, showVariables: true });
 const parsed = computed(() => parseFinalPromptDocument(model.value));
 const messageGroupVariables = computed(() => props.variables.filter((variable) => variable.type === "message[]"));
 const schemaText = shallowRef("");
@@ -23,20 +27,18 @@ const schemaError = shallowRef("");
 const activeSection = shallowRef("message-0");
 const validationKind = shallowRef<"" | "success" | "error">("");
 const validationMessage = shallowRef("");
-const validationLabel = computed(() => validationKind.value === "success" ? "[VALID]" : validationKind.value === "error" ? "[ERROR]" : "");
 const workspaceSections = computed<FinalPromptWorkspaceSection[]>(() => {
   const document = parsed.value.document;
   if (!document) return [];
   return [
     ...document.messages.map((message, index) => ({
       id: `message-${index}`,
-      kicker: typeof message === "string" ? "MESSAGE GROUP" : "MESSAGE",
       label: typeof message === "string" ? `消息组 ${index + 1}` : `${message.role} 消息`,
       kind: "message" as const,
       index
     })),
-    { id: "response", kicker: "RESPONSE FORMAT", label: "输出格式", kind: "response" as const },
-    { id: "tools", kicker: "TOOLS", label: "Function Call", kind: "tools" as const }
+    { id: "response", label: "输出格式", kind: "response" as const },
+    { id: "tools", label: "Function Call", kind: "tools" as const }
   ];
 });
 
@@ -188,7 +190,7 @@ function updateSchema(value: string) {
           class="final-form__validation inline-state"
           :data-kind="validationKind"
           :title="validationMessage"
-        >{{ validationLabel }} {{ validationMessage }}</span>
+        >{{ validationMessage }}</span>
         <button class="btn btn-ghost final-form__toolbar-button" type="button" aria-label="添加普通消息" @click="addMessage">
           <i class="bx bx-plus" aria-hidden="true"></i>
           <span class="final-form__action-label">添加消息</span>
@@ -222,6 +224,7 @@ function updateSchema(value: string) {
           :total="parsed.document.messages.length"
           :variables="variables"
           :semantic-xml="semanticXml"
+          :show-variables="showVariables"
           @update="updateMessage(section.index, $event)"
           @move="moveMessage(section.index, $event)"
           @remove="removeMessage(section.index)"
@@ -229,10 +232,7 @@ function updateSchema(value: string) {
 
         <template v-else-if="section.kind === 'response' && parsed.document">
           <header class="final-form__section-header">
-            <div>
-              <span>{{ section.kicker }}</span>
-              <h3>{{ section.label }}</h3>
-            </div>
+            <h3>{{ section.label }}</h3>
           </header>
           <div class="output-grid">
             <label class="field">
@@ -288,10 +288,7 @@ function updateSchema(value: string) {
 
         <template v-else-if="section.kind === 'tools' && parsed.document">
           <header class="final-form__section-header">
-            <div>
-              <span>{{ section.kicker }}</span>
-              <h3>{{ section.label }}</h3>
-            </div>
+            <h3>{{ section.label }}</h3>
             <button class="btn btn-ghost" type="button" @click="addTool">
               <i class="bx bx-plus" aria-hidden="true"></i>
               添加 Function
@@ -313,7 +310,6 @@ function updateSchema(value: string) {
     </FinalPromptWorkspace>
 
     <section v-else class="final-form__invalid">
-      <span>TEMPLATE ERROR</span>
       <h3>模板无法读取</h3>
       <p>{{ parsed.error }}</p>
       <button class="btn" type="button" @click="testTemplate">测试</button>
@@ -336,23 +332,9 @@ function updateSchema(value: string) {
   margin-bottom: 18px;
 }
 
-.final-form__section-header div {
-  min-width: 0;
-}
-
-.final-form__section-header span,
-.final-form__invalid > span {
-  display: block;
-  font-family: "Space Mono", monospace;
-  font-size: 9px;
-  letter-spacing: 0.08em;
-  color: rgb(var(--color-mute));
-}
-
 .final-form__section-header h3,
 .final-form__invalid h3 {
   overflow: hidden;
-  margin-top: 4px;
   color: rgb(var(--color-display));
   font-size: 18px;
   font-weight: 500;

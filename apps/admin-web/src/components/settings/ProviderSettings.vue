@@ -69,7 +69,7 @@ watch(() => current.value ? {
 });
 
 function beginAdd() {
-  if (providerLimitReached.value) return setStatus("[最多 64 个 Provider]", "warning");
+  if (providerLimitReached.value) return setStatus("最多可添加 64 个 Provider", "warning");
   createOpen.value = true;
 }
 
@@ -79,7 +79,7 @@ function createProvider(kind: ProviderKind) {
   selectedIndex.value = draft.value.items.length - 1;
   if (!draft.value.defaultProviderId) draft.value.defaultProviderId = id;
   createOpen.value = false;
-  setStatus("[PROVIDER ADDED]", "success");
+  setStatus("Provider 已添加", "success");
 }
 
 function copyProvider() {
@@ -90,16 +90,16 @@ function copyProvider() {
   copy.label = `${provider.label} 副本`;
   draft.value.items.push(copy);
   selectedIndex.value = draft.value.items.length - 1;
-  setStatus("[PROVIDER COPIED]", "success");
+  setStatus("Provider 已复制", "success");
 }
 
 function deleteProvider() {
   const provider = current.value;
   if (!provider) return;
-  if (draft.value.items.length <= 1) return setStatus("[至少保留一个 Provider]", "error");
-  if (draft.value.defaultProviderId === provider.id) return setStatus("[请先选择新的默认 Provider]", "warning");
+  if (draft.value.items.length <= 1) return setStatus("至少保留一个 Provider", "error");
+  if (draft.value.defaultProviderId === provider.id) return setStatus("请先选择新的默认 Provider", "warning");
   draft.value.items.splice(selectedIndex.value, 1);
-  setStatus("[PROVIDER DELETED]", "success");
+  setStatus("Provider 已删除", "success");
 }
 
 function chooseModelSource(source: "remote" | "custom") {
@@ -112,7 +112,7 @@ async function loadModels() {
   const provider = current.value;
   if (!provider) return;
   loadingModels.value = true;
-  setStatus("[READING MODELS...]", "");
+  setStatus("正在读取模型", "");
   try {
     const result = await apiRequest<{ models: string[] }>("/api/providers/models", {
       method: "POST",
@@ -120,9 +120,9 @@ async function loadModels() {
     });
     discoveredModels[provider.id] = result.models;
     if (!result.models.includes(provider.model) && result.models[0]) provider.model = result.models[0];
-    setStatus(`[${result.models.length} MODELS]`, "success");
+    setStatus(`已读取 ${result.models.length} 个模型`, "success");
   } catch (error) {
-    setStatus(`[ERROR: ${error instanceof Error ? error.message : "模型读取失败"}]`, "error");
+    setStatus(error instanceof Error ? error.message : "模型读取失败", "error");
   } finally {
     loadingModels.value = false;
   }
@@ -132,16 +132,16 @@ async function probeVision() {
   const provider = current.value;
   if (!provider) return;
   probingVision.value = true;
-  setStatus("[PROBING VISION...]", "");
+  setStatus("正在探测图片能力", "");
   try {
     const result = await apiRequest<{ multimodal: boolean; reason?: string }>("/api/providers/vision-probe", {
       method: "POST",
       body: JSON.stringify({ provider: plainProvider(provider) })
     });
     provider.detectedMultimodal = result.multimodal;
-    setStatus(result.multimodal ? "[MULTIMODAL]" : `[TEXT ONLY${result.reason ? ` · ${result.reason}` : ""}]`, result.multimodal ? "success" : "warning");
+    setStatus(result.multimodal ? "支持图片" : `仅文本${result.reason ? ` · ${result.reason}` : ""}`, result.multimodal ? "success" : "warning");
   } catch (error) {
-    setStatus(`[ERROR: ${error instanceof Error ? error.message : "探测失败"}]`, "error");
+    setStatus(error instanceof Error ? error.message : "探测失败", "error");
   } finally {
     probingVision.value = false;
   }
@@ -151,7 +151,7 @@ async function testProvider() {
   const provider = current.value;
   if (!provider) return;
   testing.value = true;
-  setStatus("[TESTING...]", "");
+  setStatus("正在测试连接", "");
   try {
     const result = await apiRequest<{ model?: string; durationMs?: number; elapsedMs?: number; multimodal?: boolean }>("/api/providers/test", {
       method: "POST",
@@ -159,9 +159,9 @@ async function testProvider() {
     });
     if (provider.multimodal === "auto" && result.multimodal != null) provider.detectedMultimodal = result.multimodal;
     const duration = result.durationMs ?? result.elapsedMs;
-    setStatus(`[CONNECTED · ${result.model ?? provider.model}${duration != null ? ` · ${duration}MS` : ""}]`, "success");
+    setStatus(`连接成功 · ${result.model ?? provider.model}${duration != null ? ` · ${duration} ms` : ""}`, "success");
   } catch (error) {
-    setStatus(`[ERROR: ${error instanceof Error ? error.message : "连接失败"}]`, "error");
+    setStatus(error instanceof Error ? error.message : "连接失败", "error");
   } finally {
     testing.value = false;
   }
@@ -187,7 +187,7 @@ function setStatus(message: string, kind: "" | "success" | "error" | "warning") 
 
 <template>
   <section class="grid gap-8">
-    <div><p class="page-kicker">PROVIDERS</p><h2 class="section-title mt-2">模型服务</h2></div>
+    <div><h2 class="section-title">模型服务</h2></div>
 
     <label class="field max-w-xl">
       <span class="field-label">默认 Provider</span>
@@ -210,7 +210,7 @@ function setStatus(message: string, kind: "" | "success" | "error" | "warning") 
 
       <div v-if="current" class="grid min-w-0 gap-2">
         <header class="flex flex-wrap items-center justify-between gap-3 border-b border-line pb-5">
-          <div class="min-w-0"><span class="inline-state"><i class="bx mr-1" :class="currentType?.icon" aria-hidden="true"></i>{{ currentType?.label }}</span><h3 class="mt-2 truncate text-lg font-medium text-display">{{ current.label || "未命名" }}</h3><p class="mt-1 truncate font-mono text-[10px] text-mute">{{ current.model || "NO MODEL" }}</p></div>
+          <div class="min-w-0"><span class="inline-state"><i class="bx mr-1" :class="currentType?.icon" aria-hidden="true"></i>{{ currentType?.label }}</span><h3 class="mt-2 truncate text-lg font-medium text-display">{{ current.label || "未命名" }}</h3><p class="mt-1 truncate font-mono text-[10px] text-mute">{{ current.model || "未选择模型" }}</p></div>
           <div class="flex gap-2"><button class="icon-btn" type="button" aria-label="复制 Provider" @click="copyProvider"><i class="bx bx-copy text-lg" aria-hidden="true"></i></button><button class="icon-btn text-accent" type="button" aria-label="删除 Provider" @click="deleteProvider"><i class="bx bx-trash text-lg" aria-hidden="true"></i></button></div>
         </header>
 
@@ -229,7 +229,7 @@ function setStatus(message: string, kind: "" | "success" | "error" | "warning") 
           <header><i class="bx bx-link" aria-hidden="true"></i><div><strong>连接</strong><span>{{ currentType?.description }}</span></div></header>
           <div class="grid gap-5 sm:grid-cols-2">
             <label class="field"><span class="field-label">类型</span><span class="control flex items-center gap-2 !bg-raised" aria-label="Provider 类型"><i class="bx" :class="currentType?.icon" aria-hidden="true"></i>{{ currentType?.label }}</span></label>
-            <label class="field"><span class="field-label">API Key 环境变量</span><input v-model.trim="current.apiKeyEnv" class="control" type="text" autocomplete="off"><small v-if="secretConfigured != null" class="font-mono text-[10px]" :class="secretConfigured ? 'text-success' : 'text-warning'">{{ secretConfigured ? "[CONFIGURED]" : "[MISSING]" }}</small></label>
+            <label class="field"><span class="field-label">API Key 环境变量</span><input v-model.trim="current.apiKeyEnv" class="control" type="text" autocomplete="off"><small v-if="secretConfigured != null" class="font-mono text-[10px]" :class="secretConfigured ? 'text-success' : 'text-warning'">{{ secretConfigured ? "已配置" : "未配置" }}</small></label>
             <label class="field sm:col-span-2"><span class="field-label">Base URL</span><input v-model.trim="current.baseUrl" class="control" type="url" :readonly="!compatibleProvider(current.kind)" autocomplete="off"><small v-if="!compatibleProvider(current.kind)" class="font-mono text-[10px] text-mute">官方地址固定</small></label>
           </div>
         </section>
@@ -252,7 +252,7 @@ function setStatus(message: string, kind: "" | "success" | "error" | "warning") 
           <header><i class="bx bx-image-alt" aria-hidden="true"></i><div><strong>多模态</strong><span>图片输入与读图辅助</span></div></header>
           <div class="grid gap-5 sm:grid-cols-2">
             <label class="field"><span class="field-label">图片能力</span><select v-model="current.multimodal" class="control"><option value="auto">自动探测</option><option value="enabled">支持图片</option><option value="disabled">仅文本</option></select></label>
-            <div class="field"><span class="field-label">探测结果</span><button class="btn justify-self-start" type="button" :disabled="probingVision" @click="probeVision"><i class="bx bx-scan" aria-hidden="true"></i>{{ probingVision ? "探测中" : "探测多模态" }}</button><small v-if="current.detectedMultimodal != null" class="font-mono text-[10px]" :class="current.detectedMultimodal ? 'text-success' : 'text-warning'">{{ current.detectedMultimodal ? "[MULTIMODAL]" : "[TEXT ONLY]" }}</small></div>
+            <div class="field"><span class="field-label">探测结果</span><button class="btn justify-self-start" type="button" :disabled="probingVision" @click="probeVision"><i class="bx bx-scan" aria-hidden="true"></i>{{ probingVision ? "探测中" : "探测多模态" }}</button><small v-if="current.detectedMultimodal != null" class="font-mono text-[10px]" :class="current.detectedMultimodal ? 'text-success' : 'text-warning'">{{ current.detectedMultimodal ? "支持图片" : "仅文本" }}</small></div>
             <template v-if="effectiveNonVision">
               <label class="field"><span class="field-label">读图辅助 Provider</span><select v-model="current.visionProviderId" class="control"><option value="">选择 Provider</option><option v-for="provider in visionProviders" :key="provider.id" :value="provider.id">{{ provider.label }}</option></select></label>
               <label class="field"><span class="field-label">读图模型</span><input v-model.trim="current.visionModel" class="control" type="text" placeholder="留空使用辅助 Provider 默认模型"></label>
@@ -262,7 +262,7 @@ function setStatus(message: string, kind: "" | "success" | "error" | "warning") 
 
         <section class="provider-group">
           <header><i class="bx bx-slider-alt" aria-hidden="true"></i><div><strong>生成参数</strong><span>输出长度与随机性</span></div></header>
-          <div class="grid gap-5 sm:grid-cols-2"><label class="field"><span class="field-label">Temperature</span><input v-model.number="current.temperature" class="control" type="number" min="0" max="2" step="0.1"></label><label class="field"><span class="field-label">Max Output Tokens</span><input v-model.number="current.maxOutputTokens" class="control" type="number" min="1" max="1000000" step="1"></label></div>
+          <div class="grid gap-5 sm:grid-cols-2"><label class="field"><span class="field-label">随机性（Temperature）</span><input v-model.number="current.temperature" class="control" type="number" min="0" max="2" step="0.1"></label><label class="field"><span class="field-label">最大输出 Token</span><input v-model.number="current.maxOutputTokens" class="control" type="number" min="1" max="1000000" step="1"></label></div>
         </section>
 
         <footer class="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-line pt-5"><span class="inline-state max-w-full break-words" :data-kind="statusKind || undefined">{{ status }}</span><button class="btn" type="button" :disabled="testing" @click="testProvider"><i class="bx bx-plug" aria-hidden="true"></i>{{ testing ? "测试中" : "测试连接" }}</button></footer>

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { applicationDataStore, closeApplicationDataStores } from "../../adapters/sqlite/applicationDataStore.js";
-import { appendRequestLog, readRequestLogPage, readTokenUsageSummary } from "../../src/requestLog.js";
+import { appendRequestLog, readModelCallStats, readRequestLogPage, readTokenUsageSummary } from "../../src/requestLog.js";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -9,6 +9,46 @@ afterEach(() => {
 });
 
 describe("request log token usage", () => {
+  it("aggregates model calls by behavior and exact conversation", async () => {
+    const conversationId = `group:${randomUUID()}`;
+    const append = (stage: string, memoryKind?: "working" | "long_term" | "user_profile") => appendRequestLog({
+      category: "model.response",
+      action: "responses.complete",
+      response: { usage: { input_tokens: 8, output_tokens: 2, total_tokens: 10 } },
+      metadata: { conversationId, stage, ...(memoryKind ? { memoryKind } : {}) }
+    });
+
+    await append("reply");
+    await append("orchestrator");
+    await append("memory", "working");
+    await append("memory", "long_term");
+    await append("memory", "user_profile");
+    await appendRequestLog({
+      category: "model.response",
+      action: "responses.complete",
+      response: { usage: { input_tokens: 80, output_tokens: 20, total_tokens: 100 } },
+      metadata: { conversationId: "group:other", stage: "reply" }
+    });
+
+    expect(readModelCallStats({ conversationId })).toMatchObject({
+      total: { requests: 5, total: 50 },
+      behavior: {
+        reply: { requests: 1, total: 10 },
+        orchestrator: { requests: 1, total: 10 },
+        memory: { requests: 3, total: 30 },
+        other: { requests: 0, total: 0 }
+      },
+      memory: {
+        total: { requests: 3, total: 30 },
+        kinds: {
+          working: { requests: 1, total: 10 },
+          long_term: { requests: 1, total: 10 },
+          user_profile: { requests: 1, total: 10 }
+        }
+      }
+    });
+  });
+
   it("aggregates Responses, Chat Completions and Gemini usage", async () => {
     await appendRequestLog({
       category: "model.response",

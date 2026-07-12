@@ -14,6 +14,7 @@ const props = defineProps<{
   total: number;
   variables: readonly PromptVariableDefinition[];
   semanticXml?: boolean;
+  showVariables?: boolean;
 }>();
 const emit = defineEmits<{
   update: [message: PromptMessage | string];
@@ -66,8 +67,7 @@ function onDragHandleKeydown(event: KeyboardEvent) {
     </div>
     <header class="message-slot__header">
       <div class="message-slot__title">
-        <span>{{ typeof message === "string" ? "MESSAGE GROUP" : "MESSAGE" }} {{ String(index + 1).padStart(2, "0") }}</span>
-        <h3>{{ typeof message === "string" ? "消息组" : `${message.role} 消息` }}</h3>
+        <h3>{{ typeof message === "string" ? `消息组 ${index + 1}` : `${message.role} 消息 ${index + 1}` }}</h3>
       </div>
       <div class="message-slot__actions">
         <button class="icon-btn message-slot__move-button" type="button" :disabled="index === 0" :aria-label="`前移消息 ${index + 1}`" @click="emit('move', -1)">
@@ -114,6 +114,7 @@ function onDragHandleKeydown(event: KeyboardEvent) {
         min-height="260px"
         fill
         :semantic-xml="semanticXml"
+        :show-variables="showVariables"
         @update:model-value="updateContent"
       />
     </div>
@@ -140,17 +141,8 @@ function onDragHandleKeydown(event: KeyboardEvent) {
   min-width: 0;
 }
 
-.message-slot__title span {
-  display: block;
-  font-family: "Space Mono", monospace;
-  font-size: 9px;
-  letter-spacing: 0.08em;
-  color: rgb(var(--color-mute));
-}
-
 .message-slot__title h3 {
   overflow: hidden;
-  margin-top: 4px;
   color: rgb(var(--color-display));
   font-size: 18px;
   font-weight: 500;
@@ -229,30 +221,4 @@ function onDragHandleKeydown(event: KeyboardEvent) {
   }
 }
 
-@container final-prompt (min-width: 1080px) {
-  .message-slot__drag-handle {
-    display: flex;
-    height: 36px;
-    align-items: center;
-    justify-content: center;
-    margin: -24px -24px 16px;
-    border-bottom: 1px solid rgb(var(--color-line));
-    transition: background-color 160ms ease;
-  }
-
-  .message-slot__drag-handle:hover,
-  .message-slot__drag-handle:focus-visible {
-    background: rgb(var(--color-raised));
-    outline: none;
-  }
-
-  .message-slot__drag-handle:focus-visible {
-    outline: 2px solid rgb(var(--color-display));
-    outline-offset: -2px;
-  }
-
-  .message-slot__move-button {
-    display: none;
-  }
-}
 </style>

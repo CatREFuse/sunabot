@@ -3,10 +3,10 @@ import { describe, expect, it, vi } from "vitest";
 import FinalPromptWorkspace from "./FinalPromptWorkspace.vue";
 
 const sections = [
-  { id: "system", kicker: "MESSAGE 01", label: "system 提示词", kind: "message" as const, index: 0 },
-  { id: "history", kicker: "MESSAGE GROUP 02", label: "消息组 2", kind: "message" as const, index: 1 },
-  { id: "response", kicker: "RESPONSE FORMAT", label: "输出格式", kind: "response" as const },
-  { id: "tools", kicker: "TOOLS", label: "Function Call", kind: "tools" as const }
+  { id: "system", label: "system 提示词", kind: "message" as const, index: 0 },
+  { id: "history", label: "消息组 2", kind: "message" as const, index: 1 },
+  { id: "response", label: "输出格式", kind: "response" as const },
+  { id: "tools", label: "Function Call", kind: "tools" as const }
 ];
 
 describe("FinalPromptWorkspace", () => {

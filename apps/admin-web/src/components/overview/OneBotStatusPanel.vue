@@ -21,6 +21,7 @@ const emit = defineEmits<{ refresh: [] }>();
 const qqStateLabel = { online: "在线", offline: "离线", unknown: "未知" } as const;
 const stateKind = computed(() => props.primaryState === "ONLINE" ? "success" : props.primaryState === "ERROR" ? "error" : "warning");
 const stateIcon = computed(() => props.primaryState === "ONLINE" ? "bx-check-shield" : props.primaryState === "ERROR" ? "bx-error" : "bx-wifi-off");
+const stateLabel = computed(() => props.primaryState === "ONLINE" ? "在线" : props.primaryState === "ERROR" ? "异常" : "离线");
 </script>
 
 <template>
@@ -31,10 +32,10 @@ const stateIcon = computed(() => props.primaryState === "ONLINE" ? "bx-check-shi
         <span class="inline-state" :data-kind="stateKind"><i class="bx" :class="stateIcon" aria-hidden="true"></i>{{ connected ? "运行正常" : primaryState === "ERROR" ? "状态异常" : "等待连接" }}</span>
       </header>
       <div class="runtime-card__body">
-        <strong class="runtime-card__state">{{ primaryState }}</strong>
+        <strong class="runtime-card__state">{{ stateLabel }}</strong>
         <p :class="stateKind === 'success' ? 'text-success' : stateKind === 'error' ? 'text-accent' : 'text-warning'">
           <i class="bx" :class="stateIcon" aria-hidden="true"></i>
-          {{ connected ? `OneBot 已连接，QQ ${qqStateLabel[qqState]}` : primaryState === "ERROR" ? "状态服务不可用" : "等待反向 WebSocket" }}
+          {{ connected ? `OneBot 已连接，QQ ${qqStateLabel[qqState]}` : primaryState === "ERROR" ? "状态服务不可用" : "等待 OneBot 连接" }}
         </p>
       </div>
       <footer class="runtime-card__footer">

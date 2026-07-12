@@ -3,6 +3,7 @@ export interface ProviderLogContext {
   incomingMessageId?: string;
   runId?: string;
   stage?: string;
+  memoryKind?: "working" | "long_term" | "user_profile";
   attempt?: number;
   retry?: number;
   maxRetries?: number;

@@ -2,18 +2,20 @@
 import { computed, shallowRef } from "vue";
 import { useChatScroll } from "../../composables/useChatScroll";
 import { conversationIdentityDetail } from "../../utils/qqIdentity";
-import type { ConversationLogEntry, ConversationMessageRecord, ConversationRecord } from "../../types";
+import type { ConversationLogEntry, ConversationMessageRecord, ConversationRecord, ConversationStatsPayload } from "../../types";
 import ToggleSwitch from "../ui/ToggleSwitch.vue";
 import DialogOverlay from "../ui/DialogOverlay.vue";
 import ConversationMessageBubble from "./ConversationMessageBubble.vue";
 import ConversationOrchestratorStatus from "./ConversationOrchestratorStatus.vue";
 import RequestLogList from "../logs/RequestLogList.vue";
+import ModelCallStatsPanel from "../logs/ModelCallStatsPanel.vue";
 
 const props = defineProps<{
   conversation: ConversationRecord | null;
   messages: readonly ConversationMessageRecord[];
   memberNames?: Readonly<Record<string, string>>;
   logs: readonly ConversationLogEntry[];
+  stats?: ConversationStatsPayload | null;
   hasMore: boolean;
   loadingMessages: boolean;
   loadingLogs: boolean;
@@ -55,8 +57,7 @@ function refreshLogs() {
     <header class="flex min-h-20 items-center gap-3 border-b border-line px-4 md:px-6">
       <button class="icon-btn lg:hidden" type="button" aria-label="返回会话列表" @click="emit('back')"><i class="bx bx-left-arrow-alt text-xl" aria-hidden="true"></i></button>
       <div class="min-w-0 flex-1">
-        <p class="page-kicker">{{ conversation?.scope?.replaceAll('_', ' ') || "CONVERSATION" }}</p>
-        <h2 class="mt-1 truncate text-2xl font-medium leading-none tracking-[-0.02em] text-display">{{ conversation?.title ?? "选择一个会话" }}</h2>
+        <h2 class="truncate text-2xl font-medium leading-none tracking-[-0.02em] text-display">{{ conversation?.title ?? "选择一个会话" }}</h2>
       </div>
       <button v-if="conversation" class="icon-btn" type="button" aria-label="刷新消息" @click="emit('refresh')"><i class="bx bx-refresh text-xl" aria-hidden="true"></i></button>
       <button v-if="conversation" class="icon-btn" type="button" aria-label="请求日志" @click="openLogs()"><i class="bx bx-file-find text-xl" aria-hidden="true"></i></button>
@@ -66,7 +67,7 @@ function refreshLogs() {
     <template v-else>
       <div class="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b border-line px-4 py-2 md:px-6">
         <div class="flex min-w-0 flex-wrap items-center gap-x-5 gap-y-1">
-          <span class="font-mono text-[10px] text-mute">{{ conversation.messageCount }} MESSAGES · {{ conversationIdentityDetail(conversation) }}</span>
+          <span class="font-mono text-[10px] text-mute">{{ conversation.messageCount }} 条消息 · {{ conversationIdentityDetail(conversation) }}</span>
           <div class="flex flex-wrap items-center gap-x-5 gap-y-1">
             <ToggleSwitch v-model="replyEnabled" label="启用" />
             <ToggleSwitch
@@ -82,6 +83,12 @@ function refreshLogs() {
           :status="conversation.orchestratorStatus"
         />
       </div>
+      <ModelCallStatsPanel
+        v-if="conversation.scope !== 'private'"
+        compact
+        :stats="stats?.modelCalls ?? null"
+        :messages="stats?.messages ?? conversation.messageCount"
+      />
       <div
         ref="messageViewport"
         data-slot="message-viewport"
@@ -95,7 +102,7 @@ function refreshLogs() {
       >
         <div ref="messageContent" data-slot="message-content" class="mx-auto max-w-4xl">
           <button v-if="hasMore" class="btn mx-auto mb-6 flex" type="button" :disabled="loadingMessages" @click="emit('older')">{{ loadingMessages ? "读取中" : "加载更早消息" }}</button>
-          <div v-if="loadingMessages && !messages.length" class="py-16 text-center font-mono text-xs text-mute">[LOADING...]</div>
+          <div v-if="loadingMessages && !messages.length" class="py-16 text-center font-mono text-xs text-mute">加载中</div>
           <ConversationMessageBubble
             v-for="message in messages"
             :key="message.id"
@@ -104,7 +111,7 @@ function refreshLogs() {
             :member-names="memberNames"
             @logs="openLogs"
           />
-          <p v-if="error" class="inline-state text-center" data-kind="error">[ERROR: {{ error }}]</p>
+          <p v-if="error" class="inline-state text-center" data-kind="error">{{ error }}</p>
         </div>
       </div>
     </template>
@@ -112,13 +119,13 @@ function refreshLogs() {
     <DialogOverlay :open="logsOpen" placement="right" :z-index="60" labelledby="request-logs-title" @close="logsOpen = false">
       <aside class="h-full w-full max-w-2xl overflow-y-auto border-l border-visible bg-panel p-4 md:p-6">
         <div class="flex items-center justify-between gap-4 border-b border-line pb-4">
-          <div><p class="page-kicker">REQUEST LOGS</p><h2 id="request-logs-title" class="mt-1 text-xl font-medium text-display">请求日志</h2></div>
+          <h2 id="request-logs-title" class="text-xl font-medium text-display">请求日志</h2>
           <div class="flex items-center gap-2">
             <button class="btn btn-ghost" type="button" :disabled="loadingLogs" @click="refreshLogs">刷新</button>
             <button class="btn btn-ghost" type="button" @click="logsOpen = false">关闭</button>
           </div>
         </div>
-        <p v-if="loadingLogs" class="py-12 text-center font-mono text-xs text-mute">[LOADING...]</p>
+        <p v-if="loadingLogs" class="py-12 text-center font-mono text-xs text-mute">加载中</p>
         <RequestLogList v-if="!loadingLogs" class="mt-5" :logs="logs" />
       </aside>
     </DialogOverlay>

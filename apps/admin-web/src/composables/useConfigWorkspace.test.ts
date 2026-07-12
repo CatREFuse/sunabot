@@ -73,7 +73,7 @@ describe("useConfigWorkspace", () => {
     expect(JSON.parse(String(apiRequest.mock.calls[1]?.[1]?.body)).value.adminName).toBe("submitted");
     expect(workspace.drafts.bot.adminName).toBe("typed while saving");
     expect(workspace.isDirty("bot")).toBe(true);
-    expect(workspace.state.bot.message).toBe("[SAVED · UNSAVED CHANGES]");
+    expect(workspace.state.bot.message).toBe("已保存，还有未保存的修改");
     expect(workspace.envelope.value?.revision).toBe("r2");
   });
 

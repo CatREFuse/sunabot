@@ -24,8 +24,7 @@ function openManager() {
   <section class="border-t border-visible pt-8">
     <div class="flex flex-wrap items-end justify-between gap-4">
       <div>
-        <p class="page-kicker">SELFIE REFERENCES</p>
-        <h2 class="section-title mt-2">自拍参考图</h2>
+        <h2 class="section-title">自拍参考图</h2>
       </div>
       <span class="inline-state" :data-kind="references.status.value.kind === 'error' ? 'error' : references.images.value.length === references.maxImages.value ? 'success' : undefined">
         <i class="bx" :class="references.images.value.length === references.maxImages.value ? 'bx-check-circle' : 'bx-images'" aria-hidden="true"></i>

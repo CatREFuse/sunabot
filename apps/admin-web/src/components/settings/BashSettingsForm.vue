@@ -14,8 +14,7 @@ const keywords = computed({
 <template>
   <section class="grid gap-8">
     <div>
-      <p class="page-kicker">BASH</p>
-      <h2 class="section-title mt-2">命令执行</h2>
+      <h2 class="section-title">命令执行</h2>
       <p class="mt-2 text-sm text-mute">扩大命令权限会增加主机风险，请保留最小访问范围。</p>
     </div>
     <div class="divide-y divide-line border-y border-line">

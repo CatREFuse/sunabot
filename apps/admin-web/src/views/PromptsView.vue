@@ -61,7 +61,7 @@ async function openFile(id: string) {
   } catch (error) {
     if (requestId !== openRequestId || id !== selectedId.value) return;
     file.value = null;
-    setMessage(`[ERROR: ${error instanceof Error ? error.message : "正文读取失败"}]`, "error");
+    setMessage(`读取失败：${error instanceof Error ? error.message : "提示词正文读取失败"}`, "error");
   } finally {
     if (requestId === openRequestId) loading.value = false;
   }
@@ -87,14 +87,14 @@ async function save(): Promise<boolean> {
     content.value = result.content;
     baseline.value = result.content;
     conflict.value = false;
-    setMessage("[SAVED]", "success");
+    setMessage("已保存", "success");
     return true;
   } catch (error) {
     if (error instanceof ApiRequestError && error.status === 409) {
       conflict.value = true;
-      setMessage("[CONFLICT]", "error");
+      setMessage("服务器版本已更新", "error");
     } else {
-      setMessage(`[ERROR: ${error instanceof Error ? error.message : "保存失败"}]`, "error");
+      setMessage(`保存失败：${error instanceof Error ? error.message : "请稍后重试"}`, "error");
     }
     return false;
   } finally {
@@ -113,7 +113,7 @@ async function saveAndContinue() {
 function discard() {
   content.value = baseline.value;
   conflict.value = false;
-  setMessage("[DISCARDED]", "warning");
+  setMessage("已撤销修改", "warning");
 }
 
 async function loadServer() {
@@ -130,9 +130,9 @@ async function keepLocal() {
     baseline.value = latest.content;
     content.value = local;
     conflict.value = false;
-    setMessage("[LOCAL RETAINED · SAVE TO APPLY]", "warning");
+    setMessage("已保留本地内容，请保存", "warning");
   } catch (error) {
-    setMessage(`[ERROR: ${error instanceof Error ? error.message : "最新版本读取失败"}]`, "error");
+    setMessage(`读取失败：${error instanceof Error ? error.message : "最新版本读取失败"}`, "error");
   }
 }
 
@@ -214,8 +214,7 @@ function setMessage(value: string, kind: "" | "success" | "error" | "warning") {
 
     <DialogOverlay :open="confirmOpen" labelledby="unsaved-title" @close="cancelNavigation">
       <section class="w-full max-w-md rounded border border-visible bg-panel p-6">
-        <p class="page-kicker">UNSAVED</p>
-        <h2 id="unsaved-title" class="mt-2 text-xl font-medium text-display">放弃未保存的修改？</h2>
+        <h2 id="unsaved-title" class="text-xl font-medium text-display">放弃未保存的修改？</h2>
         <p class="mt-3 text-sm text-mute">当前正文尚未保存，离开后无法恢复。</p>
         <div class="mt-8 flex justify-end gap-2">
           <button class="btn btn-ghost" type="button" @click="cancelNavigation">继续编辑</button>

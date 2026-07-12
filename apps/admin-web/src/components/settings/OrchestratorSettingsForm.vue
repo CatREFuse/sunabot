@@ -12,8 +12,7 @@ defineProps<{ models: readonly ModelCatalogItem[] }>();
 <template>
   <section class="grid gap-8">
     <div>
-      <p class="page-kicker">ORCHESTRATOR</p>
-      <h2 class="section-title mt-2">群聊编排器</h2>
+      <h2 class="section-title">群聊编排器</h2>
     </div>
     <div class="divide-y divide-line border-y border-line">
       <ToggleSwitch v-model="groupEnabled" label="启用" />

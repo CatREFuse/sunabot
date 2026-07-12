@@ -40,7 +40,7 @@ describe("FinalPromptForm", () => {
     expect(wrapper.text()).toContain("Function Call");
     expect(wrapper.text()).toContain("search_content");
     expect(wrapper.text()).toContain("提示词内说明");
-    expect(wrapper.text()).toContain("全局工具说明优先。");
+    expect(wrapper.text()).not.toContain("全局工具说明优先。");
     expect(wrapper.text()).toContain("输出格式");
     expect(wrapper.find('[aria-label="完整请求 JSON"]').exists()).toBe(false);
     expect(wrapper.get('[data-message-drag-handle]').element.tagName).toBe("DIV");
@@ -67,8 +67,8 @@ describe("FinalPromptForm", () => {
     const wrapper = mount(FinalPromptForm, { props: { modelValue: content, variables } });
 
     await wrapper.get('[aria-label="测试 OpenAI 格式"]').trigger("click");
-    expect(wrapper.text()).toContain("[VALID]");
     expect(wrapper.text()).toContain("符合 OpenAI 请求结构");
+    expect(wrapper.text()).not.toContain("[VALID]");
 
     const nameInput = wrapper.get('input[type="text"]');
     await nameInput.setValue("find_article");

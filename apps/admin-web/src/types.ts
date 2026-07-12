@@ -319,6 +319,22 @@ export interface TokenUsagePayload {
   hours: Array<TokenUsageBucket & { hour: number }>;
 }
 
+export interface ModelCallStatsPayload {
+  conversationId: string | null;
+  total: TokenUsageBucket;
+  behavior: Record<"reply" | "orchestrator" | "memory" | "other", TokenUsageBucket>;
+  memory: {
+    total: TokenUsageBucket;
+    kinds: Record<"working" | "long_term" | "user_profile", TokenUsageBucket>;
+  };
+}
+
+export interface ConversationStatsPayload {
+  conversationId: string;
+  messages: number;
+  modelCalls: ModelCallStatsPayload;
+}
+
 export interface ImageHistoryRecord {
   id: string;
   url: string;

@@ -50,13 +50,10 @@ function contentLoaded() {
   >
     <div class="mx-auto w-full max-w-4xl">
       <p v-if="loading && !entries.length" class="py-24 text-center font-mono text-xs uppercase tracking-[0.08em] text-mute">
-        [LOADING...]
+        加载中
       </p>
       <div v-else-if="!entries.length" class="grid min-h-64 place-items-center py-24 text-center">
-        <div>
-          <strong class="text-lg font-normal text-mute">开始对话</strong>
-          <p class="mt-2 font-mono text-xs uppercase tracking-[0.06em] text-disabled">WEB:ADMIN</p>
-        </div>
+        <strong class="text-lg font-normal text-mute">开始对话</strong>
       </div>
       <div v-else class="grid">
         <article
@@ -69,10 +66,7 @@ function contentLoaded() {
             class="flex flex-wrap items-center gap-x-3 gap-y-1"
             :class="entry.event ? 'justify-center' : entry.fromUser ? 'justify-end' : 'justify-start'"
           >
-            <strong class="text-sm font-medium text-display">{{ entry.event ? "SYSTEM" : entry.name }}</strong>
-            <span v-if="!entry.event" class="font-mono text-[10px] uppercase tracking-[0.08em] text-mute">
-              {{ entry.fromUser ? "ADMIN" : "AGENT" }}
-            </span>
+            <strong class="text-sm font-medium text-display">{{ entry.event ? "系统" : entry.name }}</strong>
             <time class="font-mono text-[10px] text-disabled">{{ formatFullDateTime(entry.message.at) }}</time>
           </header>
 
@@ -81,7 +75,7 @@ function contentLoaded() {
             class="font-mono text-xs uppercase tracking-[0.06em] text-mute"
             role="status"
           >
-            [THINKING...]
+            正在回复
           </p>
           <p
             v-else-if="entry.text"

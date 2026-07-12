@@ -51,6 +51,21 @@ describe("RequestLogList", () => {
     expect(wrapper.text()).toContain("回复已发送");
   });
 
+  it("shows specific Chinese titles for orchestration and tool activity", () => {
+    const wrapper = mount(RequestLogList, {
+      props: {
+        logs: [
+          { id: "orchestrator-1", at: "2026-07-12T08:00:00.000Z", category: "runtime.action", action: "orchestrator.decision" },
+          { id: "tool-1", at: "2026-07-12T08:01:00.000Z", category: "tool.call", action: "generate_img" }
+        ]
+      }
+    });
+
+    expect(wrapper.text()).toContain("群聊编排结果");
+    expect(wrapper.text()).toContain("生图");
+    expect(wrapper.text()).not.toContain("运行事件");
+  });
+
   it("renders a missing cache rate as unavailable", () => {
     const wrapper = mount(RequestLogList, {
       props: {

@@ -41,7 +41,7 @@ const metrics = computed<SummaryMetric[]>(() => {
     <article class="token-card token-card--hero">
       <span class="token-card__label"><i class="bx bx-bolt-circle" aria-hidden="true"></i>今日总量</span>
       <strong :title="formatExactNumber(usage?.total)">{{ formatDashboardMetric(usage?.total) }}</strong>
-      <span class="token-card__exact">{{ formatExactNumber(usage?.total) }} TOKEN</span>
+      <span class="token-card__exact">{{ formatExactNumber(usage?.total) }} Token</span>
     </article>
 
     <article

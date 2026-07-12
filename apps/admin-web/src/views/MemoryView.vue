@@ -16,6 +16,7 @@ const editing = shallowRef<MemoryEntry | null>(null);
 const editorError = shallowRef("");
 const pendingDelete = shallowRef("");
 const status = shallowRef("");
+const statusKind = shallowRef<"success" | "error" | "">("");
 const visibleEntries = computed(() => {
   const base = searchMode.value === "recall" && data.recallActive.value ? data.matches.value : data.entries.value;
   const term = searchMode.value === "filter" ? query.value.trim().toLocaleLowerCase() : "";
@@ -60,7 +61,8 @@ async function save(payload: MemoryWritePayload) {
     if (payload.id) await data.update({ ...payload, id: payload.id });
     else await data.create(payload);
     editorOpen.value = false;
-    status.value = "[SAVED]";
+    status.value = "已保存";
+    statusKind.value = "success";
   } catch (error) {
     editorError.value = error instanceof Error ? error.message : "保存失败";
   }
@@ -71,9 +73,11 @@ async function remove(entry: MemoryEntry) {
   try {
     await data.remove(entry);
     pendingDelete.value = "";
-    status.value = "[DELETED]";
+    status.value = "已删除";
+    statusKind.value = "success";
   } catch (error) {
-    status.value = `[ERROR: ${error instanceof Error ? error.message : "删除失败"}]`;
+    status.value = `删除失败：${error instanceof Error ? error.message : "请稍后重试"}`;
+    statusKind.value = "error";
   }
 }
 
@@ -81,9 +85,11 @@ async function recall() {
   if (!query.value.trim()) return;
   try {
     await data.recall(query.value.trim(), source.value, 20);
-    status.value = `[${data.matches.value.length} MATCHES]`;
+    status.value = `找到 ${data.matches.value.length} 条记忆`;
+    statusKind.value = "success";
   } catch (error) {
-    status.value = `[ERROR: ${error instanceof Error ? error.message : "召回失败"}]`;
+    status.value = `召回失败：${error instanceof Error ? error.message : "请稍后重试"}`;
+    statusKind.value = "error";
   }
 }
 
@@ -95,12 +101,12 @@ function submitSearch() {
 <template>
   <div class="page-shell">
     <div class="page-frame">
-      <PageHeader kicker="MEMORY" title="记忆">
+      <PageHeader title="记忆">
         <template #titleAfter>
           <MemorySourceTabs v-model="source" :sources="data.sources.value" />
         </template>
         <template #actions>
-          <span class="inline-state" :data-kind="status.startsWith('[ERROR') ? 'error' : status ? 'success' : undefined">{{ status }}</span>
+          <span v-if="status" class="inline-state" :data-kind="statusKind || undefined">{{ status }}</span>
           <button class="icon-btn" type="button" aria-label="刷新记忆" @click="data.load(source)"><i class="bx bx-refresh text-xl" aria-hidden="true"></i></button>
           <button class="btn btn-primary" type="button" @click="openCreate"><i class="bx bx-plus" aria-hidden="true"></i>新增</button>
         </template>
@@ -119,7 +125,7 @@ function submitSearch() {
       </section>
 
       <section class="mt-8 border-t border-visible">
-        <p v-if="data.error.value" class="border-b border-line py-4 font-mono text-xs text-accent">[ERROR: {{ data.error.value }}]</p>
+        <p v-if="data.error.value" class="border-b border-line py-4 text-xs text-accent">{{ data.error.value }}</p>
         <MemoryEntryRow
           v-for="entry in visibleEntries"
           :key="`${entry.source}-${entry.id}`"
@@ -129,7 +135,7 @@ function submitSearch() {
           @remove="remove"
         />
         <div v-if="!visibleEntries.length && !data.error.value" class="empty-state">
-          <div v-if="data.loading.value"><strong>[LOADING...]</strong></div>
+          <div v-if="data.loading.value"><strong>正在读取记忆</strong></div>
           <div v-else-if="data.recallActive.value"><strong>没有匹配的记忆</strong><p>调整召回内容后重试</p></div>
           <div v-else><strong>没有记忆</strong><p>调整筛选或新增记忆</p></div>
         </div>

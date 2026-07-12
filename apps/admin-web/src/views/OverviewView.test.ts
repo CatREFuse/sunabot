@@ -65,13 +65,13 @@ describe("OverviewView", () => {
   it("shows the status request error and never reports a failed refresh as updated", async () => {
     const wrapper = mount(OverviewView);
     await flushPromises();
-    expect(wrapper.text()).toContain("[ERROR: 状态服务不可用]");
     expect(wrapper.text()).toContain("状态服务不可用");
+    expect(wrapper.text()).not.toContain("[ERROR");
 
     await wrapper.get('button[aria-label="刷新"]').trigger("click");
     await flushPromises();
     expect(runtime.refresh).toHaveBeenCalledOnce();
-    expect(wrapper.text()).toContain("[ERROR: 状态服务不可用]");
-    expect(wrapper.text()).not.toContain("[UPDATED]");
+    expect(wrapper.text()).toContain("状态服务不可用");
+    expect(wrapper.text()).not.toContain("已更新");
   });
 });

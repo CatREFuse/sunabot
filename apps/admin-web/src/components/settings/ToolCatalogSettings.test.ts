@@ -34,6 +34,16 @@ function toolsDraft(): BotToolSettingsDraft {
   };
 }
 
+function bashDraft() {
+  return {
+    enabled: false,
+    allowGroup: false,
+    adminOnly: true,
+    workspaceOnly: true,
+    blockedKeywords: []
+  };
+}
+
 const tools = [
   {
     name: "websearch",
@@ -83,7 +93,7 @@ describe("ToolCatalogSettings", () => {
 
   it("filters the catalog and keeps configuration separate from capability", async () => {
     const wrapper = mount(ToolCatalogSettings, {
-      props: { modelValue: toolsDraft() },
+      props: { modelValue: toolsDraft(), bash: bashDraft() },
       global: { stubs: { DialogOverlay: dialogStub() } }
     });
     await flushPromises();
@@ -93,7 +103,7 @@ describe("ToolCatalogSettings", () => {
     expect(wrapper.text()).toContain("能力不可用");
     expect(wrapper.text()).toContain("当前请求未启用自拍生成。");
     const unavailableToggle = wrapper.findAll("label").find((label) => label.text().includes("启用 自拍"));
-    expect(unavailableToggle?.find('input[type="checkbox"]').attributes("disabled")).toBeDefined();
+    expect(unavailableToggle?.find('input[type="checkbox"]').attributes("disabled")).toBeUndefined();
 
     await wrapper.get('input[aria-label="搜索工具"]').setValue("selfie");
     expect(wrapper.findAll("article")).toHaveLength(1);
@@ -105,7 +115,7 @@ describe("ToolCatalogSettings", () => {
   it("writes sparse enabled and description overrides and restores inherited text", async () => {
     const draft = toolsDraft();
     const wrapper = mount(ToolCatalogSettings, {
-      props: { modelValue: draft },
+      props: { modelValue: draft, bash: bashDraft() },
       global: { stubs: { DialogOverlay: dialogStub() } }
     });
     await flushPromises();

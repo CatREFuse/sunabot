@@ -10,7 +10,6 @@ import PageHeader from "../components/ui/PageHeader.vue";
 import SettingsNavigation from "../components/settings/SettingsNavigation.vue";
 import SettingsSaveBar from "../components/settings/SettingsSaveBar.vue";
 import PersonaSettingsForm from "../components/settings/PersonaSettingsForm.vue";
-import SelfieReferenceSettings from "../components/settings/SelfieReferenceSettings.vue";
 import ProviderSettings from "../components/settings/ProviderSettings.vue";
 import BotSettingsForm from "../components/settings/BotSettingsForm.vue";
 import MemorySettingsForm from "../components/settings/MemorySettingsForm.vue";
@@ -49,12 +48,24 @@ const current = computed<ConfigSectionKey>(() => {
   const value = String(route.params.section ?? "persona") as ConfigSectionKey;
   return visibleSections.has(value) ? value : "persona";
 });
-const currentState = computed(() => workspace.state[current.value]);
+const currentState = computed(() => {
+  if (current.value === "bot" && ["saving", "error", "conflict"].includes(workspace.state.onebot.kind)) {
+    return workspace.state.onebot;
+  }
+  if (current.value === "tools" && ["saving", "error", "conflict"].includes(workspace.state.bash.kind)) {
+    return workspace.state.bash;
+  }
+  return workspace.state[current.value];
+});
 const anyDirty = computed(() => sectionKeys.some(workspace.isDirty));
 const currentDirty = computed(() => current.value === "orchestrator"
   ? workspace.isGroupReplyDirty()
+  : current.value === "bot"
+    ? workspace.isDirty("bot") || workspace.isReplyBehaviorDirty()
+  : current.value === "tools"
+    ? workspace.isDirty("tools") || workspace.isDirty("bash")
   : current.value === "onebot"
-    ? workspace.isOneBotSettingsDirty()
+    ? workspace.isOneBotConnectionDirty()
   : workspace.isDirty(current.value));
 
 onMounted(async () => {
@@ -75,14 +86,23 @@ async function loadConfig(preserveDirty = false, discardDirtySection?: ConfigSec
     await workspace.load({ preserveDirty, discardDirtySection });
     loadError.value = "";
   } catch (error) {
-    loadError.value = `[ERROR: ${error instanceof Error ? error.message : "配置读取失败"}]`;
+    loadError.value = error instanceof Error ? error.message : "配置读取失败";
   }
 }
 
 async function saveCurrent() {
-  if (current.value === "orchestrator") await workspace.saveGroupReply();
-  else await workspace.save(current.value);
-  const savedState = workspace.state[current.value];
+  if (current.value === "orchestrator") {
+    await workspace.saveGroupReply();
+  } else if (current.value === "bot") {
+    if (workspace.isDirty("bot")) await workspace.save("bot");
+    if (workspace.isReplyBehaviorDirty()) await workspace.save("onebot");
+  } else if (current.value === "tools") {
+    if (workspace.isDirty("tools")) await workspace.save("tools");
+    if (workspace.isDirty("bash")) await workspace.save("bash");
+  } else {
+    await workspace.save(current.value);
+  }
+  const savedState = currentState.value;
   if (savedState.kind !== "error" || !savedState.field || !settingsPanel.value) return;
   await nextTick();
   focusConfigField(settingsPanel.value, savedState.field);
@@ -93,17 +113,32 @@ function reloadConflict() {
     workspace.discardGroupReply();
     return loadConfig(true);
   }
+  if (current.value === "bot" && workspace.state.onebot.kind === "conflict") {
+    return loadConfig(true, "onebot");
+  }
+  if (current.value === "tools" && workspace.state.bash.kind === "conflict") {
+    return loadConfig(true, "bash");
+  }
   return loadConfig(true, current.value);
 }
 
 function discardCurrent() {
   if (current.value === "orchestrator") workspace.discardGroupReply();
+  else if (current.value === "bot") {
+    workspace.discard("bot");
+    workspace.discardReplyBehavior();
+  } else if (current.value === "tools") {
+    workspace.discard("tools");
+    workspace.discard("bash");
+  } else if (current.value === "onebot") workspace.discardOneBotConnection();
   else workspace.discard(current.value);
 }
 
 function isNavigationDirty(section: ConfigSectionKey) {
   if (section === "orchestrator") return workspace.isGroupReplyDirty();
-  if (section === "onebot") return workspace.isOneBotSettingsDirty();
+  if (section === "bot") return workspace.isDirty("bot") || workspace.isReplyBehaviorDirty();
+  if (section === "tools") return workspace.isDirty("tools") || workspace.isDirty("bash");
+  if (section === "onebot") return workspace.isOneBotConnectionDirty();
   return workspace.isDirty(section);
 }
 
@@ -178,22 +213,20 @@ async function logout() {
 <template>
   <div class="page-shell">
     <div class="page-frame">
-      <PageHeader kicker="SETTINGS" title="设置">
+      <PageHeader title="设置">
         <template #actions>
-          <span v-if="workspace.envelope.value" class="font-mono text-[10px] text-mute">REV {{ workspace.envelope.value.revision.slice(0, 8) }}</span>
           <button class="btn" type="button" :disabled="workspace.loading.value" @click="loadConfig(true)">刷新</button>
           <button class="btn btn-ghost" type="button" @click="logoutConfirmOpen = true"><i class="bx bx-log-out" aria-hidden="true"></i>退出登录</button>
         </template>
       </PageHeader>
 
-      <div v-if="workspace.loading.value && !workspace.envelope.value" class="empty-state"><div><strong>[LOADING...]</strong><p>正在读取配置</p></div></div>
-      <div v-else-if="loadError" class="empty-state"><div><strong class="!text-accent">{{ loadError }}</strong><p>检查管理 API 后重试</p></div></div>
+      <div v-if="workspace.loading.value && !workspace.envelope.value" class="empty-state"><div><strong>加载中</strong></div></div>
+      <div v-else-if="loadError" class="empty-state"><div><strong class="!text-accent">{{ loadError }}</strong><button class="btn mt-4" type="button" @click="loadConfig()">重试</button></div></div>
       <div v-else class="mt-8 grid min-w-0 gap-8 lg:grid-cols-[176px_minmax(0,1fr)] xl:grid-cols-[208px_minmax(0,880px)] xl:gap-12">
         <SettingsNavigation :current="current" :sections="sections" :dirty="isNavigationDirty" @select="selectSection" />
         <section ref="settingsPanel" class="min-w-0">
           <div v-if="current === 'persona'" class="grid gap-12">
             <PersonaSettingsForm v-model="workspace.drafts.persona" />
-            <SelfieReferenceSettings />
           </div>
           <ProviderSettings
             v-else-if="current === 'providers'"
@@ -201,7 +234,11 @@ async function logout() {
             :models="catalog.models.value"
             :field-states="workspace.envelope.value?.fieldStates"
           />
-          <BotSettingsForm v-else-if="current === 'bot'" v-model="workspace.drafts.bot" />
+          <BotSettingsForm
+            v-else-if="current === 'bot'"
+            v-model="workspace.drafts.bot"
+            v-model:reply="workspace.drafts.onebot"
+          />
           <MemorySettingsForm v-else-if="current === 'memory'" v-model="workspace.drafts.memory" :models="catalog.models.value" />
           <OrchestratorSettingsForm
             v-else-if="current === 'orchestrator'"
@@ -214,9 +251,10 @@ async function logout() {
             v-model="workspace.drafts.tools"
             :models="catalog.models.value"
             :field-states="workspace.envelope.value?.fieldStates"
+            v-model:bash="workspace.drafts.bash"
           />
           <BashSettingsForm v-else-if="current === 'bash'" v-model="workspace.drafts.bash" />
-          <div v-else class="grid gap-8">
+          <div v-else class="grid gap-12">
             <MonitoringSettingsForm />
             <OneBotSettingsForm
               v-model="workspace.drafts.onebot"
@@ -241,8 +279,7 @@ async function logout() {
 
   <DialogOverlay :open="leaveConfirmOpen" labelledby="settings-leave-title" @close="cancelLeave">
     <section class="w-full max-w-md rounded border border-visible bg-panel p-6">
-      <p class="page-kicker">UNSAVED SETTINGS</p>
-      <h2 id="settings-leave-title" class="mt-2 text-xl font-medium text-display">放弃未保存的设置？</h2>
+      <h2 id="settings-leave-title" class="text-xl font-medium text-display">放弃未保存的设置？</h2>
       <p class="mt-3 text-sm leading-6 text-mute">离开后，本次修改不会保留。</p>
       <p v-if="leaveSaveError" class="mt-4 inline-state" data-kind="error">{{ leaveSaveError }}</p>
       <div class="mt-8 flex flex-wrap justify-end gap-2">
@@ -255,8 +292,7 @@ async function logout() {
 
   <DialogOverlay :open="logoutConfirmOpen" labelledby="settings-logout-title" @close="logoutConfirmOpen = false">
     <section class="w-full max-w-md rounded border border-visible bg-panel p-6">
-      <p class="page-kicker">ACCOUNT</p>
-      <h2 id="settings-logout-title" class="mt-2 text-xl font-medium text-display">退出管理台？</h2>
+      <h2 id="settings-logout-title" class="text-xl font-medium text-display">退出管理台？</h2>
       <p class="mt-3 text-sm leading-6 text-mute">下次访问需要重新登录。</p>
       <p v-if="logoutError" class="mt-4 inline-state" data-kind="error">{{ logoutError }}</p>
       <div class="mt-8 flex flex-wrap justify-end gap-2">

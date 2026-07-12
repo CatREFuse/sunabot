@@ -2,6 +2,7 @@
 import { shallowRef } from "vue";
 import { useAdminApi } from "../../composables/useAdminApi";
 import DialogOverlay from "../ui/DialogOverlay.vue";
+import LoginHero from "./LoginHero.vue";
 
 const api = useAdminApi();
 const username = shallowRef("");
@@ -30,29 +31,25 @@ async function unlock() {
 </script>
 
 <template>
-  <DialogOverlay :open="true" class="!bg-page" :dismissible="false" :z-index="100" labelledby="login-title">
-    <form class="w-full max-w-lg px-6 py-8 md:px-8" @submit.prevent="unlock">
-      <div class="flex items-center justify-between">
+  <DialogOverlay :open="true" class="!place-items-start !bg-page overflow-y-auto md:!place-items-center" :dismissible="false" :z-index="100" labelledby="login-title">
+    <div class="grid w-full max-w-6xl overflow-hidden md:grid-cols-[minmax(0,1.15fr)_minmax(360px,0.85fr)]">
+      <LoginHero />
+      <form class="flex flex-col justify-center border-t border-visible px-6 py-8 md:min-h-[520px] md:border-l md:border-t-0 md:px-10 lg:px-12" @submit.prevent="unlock">
         <i class="bx bx-key text-[40px] text-display" aria-hidden="true"></i>
-        <span class="inline-flex items-center gap-2 font-mono text-[10px] uppercase tracking-widest text-mute">
-          <i class="bx bx-shield-quarter" aria-hidden="true"></i> Secure session
-        </span>
-      </div>
-      <p class="page-kicker mt-8">ADMIN ACCESS</p>
-      <h1 id="login-title" class="mt-3 font-sans text-[36px] font-medium leading-none tracking-[-0.03em] text-display md:text-[48px]">管理员登录</h1>
-      <p class="mt-3 text-sm leading-6 text-mute">账号密码仅用于建立受保护的 HttpOnly 会话，不会保存在浏览器存储中。</p>
-      <label class="field mt-8">
-        <span class="field-label">管理员账号</span>
-        <input v-model="username" class="control" type="text" autocomplete="username" maxlength="128" data-dialog-initial-focus>
-      </label>
-      <label class="field mt-4">
-        <span class="field-label">管理员密码</span>
-        <input v-model="password" class="control" type="password" autocomplete="current-password" maxlength="1024">
-      </label>
-      <div class="mt-6 flex items-center justify-between gap-4">
-        <span class="inline-state" :data-kind="message ? 'error' : undefined">{{ message }}</span>
-        <button class="btn btn-primary" type="submit" :disabled="busy">{{ busy ? "验证中" : "登录" }}</button>
-      </div>
-    </form>
+        <h2 id="login-title" class="mt-8 font-sans text-[36px] font-medium leading-none tracking-[-0.03em] text-display md:text-[48px]">管理员登录</h2>
+        <label class="field mt-8">
+          <span class="field-label">管理员账号</span>
+          <input v-model="username" class="control" type="text" autocomplete="username" maxlength="128" data-dialog-initial-focus>
+        </label>
+        <label class="field mt-4">
+          <span class="field-label">管理员密码</span>
+          <input v-model="password" class="control" type="password" autocomplete="current-password" maxlength="1024">
+        </label>
+        <div class="mt-6 flex items-center justify-between gap-4">
+          <span class="inline-state" :data-kind="message ? 'error' : undefined">{{ message }}</span>
+          <button class="btn btn-primary" type="submit" :disabled="busy">{{ busy ? "登录中" : "登录" }}</button>
+        </div>
+      </form>
+    </div>
   </DialogOverlay>
 </template>

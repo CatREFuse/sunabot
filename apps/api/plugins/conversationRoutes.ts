@@ -3,7 +3,7 @@ import type { OneBotGateway } from "../../../adapters/onebot/onebotGateway.js";
 import type { ConversationDirectory } from "../../../services/conversations/conversationDirectory.js";
 import { WebChatService } from "../../../services/webChat/webChatService.js";
 import { badRequest } from "../../../src/admin/errors.js";
-import { readRequestLogs } from "../../../src/requestLog.js";
+import { readModelCallStats, readRequestLogs } from "../../../src/requestLog.js";
 import type { SunaRuntime } from "../../../src/runtime.js";
 
 export interface ConversationRouteOptions {
@@ -89,6 +89,21 @@ export function registerConversationRoutes(app: FastifyInstance, options: Conver
     const q = runId || conversationId;
     return {
       logs: q ? await readRequestLogs({ query: q, limit: query.limit == null ? 200 : Number(query.limit) }) : []
+    };
+  });
+
+  app.get("/api/conversations/:id/stats", {
+    schema: {
+      params: conversationParams,
+      response: { 200: openObject }
+    }
+  }, async (request) => {
+    const conversationId = String((request.params as { id?: string }).id ?? "").trim();
+    const conversation = runtime.getConversationRecords().find((item) => item.id === conversationId);
+    return {
+      conversationId,
+      messages: conversation?.messageCount ?? 0,
+      modelCalls: readModelCallStats({ conversationId })
     };
   });
 

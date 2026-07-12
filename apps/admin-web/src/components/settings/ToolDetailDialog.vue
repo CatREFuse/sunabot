@@ -33,8 +33,7 @@ const descriptionSourceLabel = computed(() => {
         <div class="flex min-w-0 items-start gap-3">
           <i class="bx w-11 shrink-0 text-[32px] leading-[44px] text-[rgb(var(--color-interactive))]" :class="toolIcon(tool.name)" aria-hidden="true"></i>
           <div class="min-w-0">
-            <p class="page-kicker">TOOL DETAIL</p>
-            <h2 id="tool-detail-title" class="mt-1 text-xl font-medium text-display">{{ tool.title }}</h2>
+            <h2 id="tool-detail-title" class="text-xl font-medium text-display">{{ tool.title }}</h2>
             <p class="mt-1 break-all font-mono text-[10px] text-disabled">{{ tool.name }}</p>
           </div>
         </div>
@@ -100,8 +99,7 @@ const descriptionSourceLabel = computed(() => {
       <section class="mt-8" aria-labelledby="tool-parameters-title">
         <div class="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <p class="page-kicker">PARAMETERS</p>
-            <h3 id="tool-parameters-title" class="mt-1 text-lg font-medium text-display">参数</h3>
+            <h3 id="tool-parameters-title" class="text-lg font-medium text-display">参数</h3>
           </div>
           <span class="inline-state">{{ parameters.length }} 项</span>
         </div>

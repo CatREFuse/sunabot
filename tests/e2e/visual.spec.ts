@@ -24,7 +24,7 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
 
     await page.goto("/overview");
     await expect(page.getByRole("heading", { name: "运行状态" })).toBeVisible();
-    await expect(page.getByLabel("运行与 QQ 状态").getByText("在线", { exact: true })).toBeVisible();
+    await expect(page.getByLabel("运行与 QQ 状态").getByText("在线", { exact: true }).first()).toBeVisible();
     await capture(page, viewport.name, theme, "overview-online");
     await page.getByRole("button", { name: "QQ 账号", exact: true }).click();
     await expect(page.getByRole("heading", { name: "QQ 登录" })).toBeVisible();
@@ -56,7 +56,7 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     state.offline = true;
     state.qqOnline = false;
     await page.reload();
-    await expect(page.locator("main").getByText("OFFLINE", { exact: true })).toBeVisible();
+    await expect(page.locator("main").getByText("离线", { exact: true }).first()).toBeVisible();
     await capture(page, viewport.name, theme, "overview-offline");
     await page.getByRole("button", { name: "QQ 登录", exact: true }).click();
     await expect(page.getByAltText("QQ 登录二维码")).toBeVisible();
@@ -67,8 +67,9 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
 
     await page.goto("/conversations/group%3A10001");
     await expect(page.getByRole("heading", { name: "产品讨论群" })).toBeVisible();
+    await expect(page.getByLabel("模型调用统计")).toContainText("24 条消息");
     await expect(page.getByRole("status", { name: "编排器状态" })).toContainText("编排器状态");
-    await expect(page.getByRole("status", { name: "编排器状态" })).toContainText("[判断中...]");
+    await expect(page.getByRole("status", { name: "编排器状态" })).toContainText("判断中");
     await expect(page.getByRole("status", { name: "编排器状态" })).not.toContainText("消息");
     await expect(page.getByRole("status", { name: "编排器状态" })).not.toContainText("时间");
     await expect(page.getByText("用户不可见", { exact: true })).toBeVisible();
@@ -79,7 +80,7 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     await capture(page, viewport.name, theme, "conversations-detail");
 
     await page.goto("/web-chat");
-    await expect(page.getByRole("heading", { name: "WEB CHAT", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "与普拉娜对话", exact: true })).toBeVisible();
     await expect(page.getByLabel("Web Chat 消息")).toBeVisible();
     await capture(page, viewport.name, theme, "web-chat");
 
@@ -110,21 +111,23 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     if (!serverFile) throw new Error("Missing persona.soul fixture");
     serverFile.revision = `${serverFile.revision}-external`;
     await page.getByRole("button", { name: "保存", exact: true }).click();
-    await expect(page.getByText("[CONFLICT · SERVER VERSION CHANGED]", { exact: true })).toBeVisible();
+    await expect(page.getByText("服务器版本已更新", { exact: true }).first()).toBeVisible();
     await editor.evaluate((element) => {
       element.scrollTop = 0;
       element.dispatchEvent(new Event("scroll"));
     });
     await capture(page, viewport.name, theme, "prompts-dirty-conflict");
+    await editor.evaluate((element) => {
+      element.focus();
+      element.setSelectionRange(16, 62);
+    });
+    await capture(page, viewport.name, theme, "prompts-text-selection");
+    await editor.evaluate((element) => element.setSelectionRange(0, 0));
     await page.getByRole("button", { name: "加载服务器版本" }).click();
 
     await page.goto("/prompts/conversation.reply");
     await expect(page.getByRole("textbox", { name: "system 提示词" })).toBeVisible();
-    if (viewport.width >= 1920) {
-      await expect(page.getByRole("tabpanel", { name: "Function Call" })).toBeVisible();
-    } else {
-      await expect(page.getByRole("tab", { name: "Function Call" })).toBeVisible();
-    }
+    await expect(page.getByRole("tab", { name: "Function Call" })).toBeVisible();
     await capture(page, viewport.name, theme, "prompts-final-request");
     const variableTable = page.getByRole("table", { name: "提示词变量表" }).last();
     if (!await variableTable.isVisible()) await page.getByRole("button", { name: "变量表", exact: true }).click();
@@ -133,6 +136,7 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
 
     await page.goto("/logs");
     await expect(page.getByRole("heading", { name: "日志", exact: true })).toBeVisible();
+    await expect(page.getByLabel("模型调用统计")).toContainText("128.4K Token");
     await expect(page.getByLabel("Bot 活动终端")).toBeVisible();
     await capture(page, viewport.name, theme, "logs-terminal");
     await page.getByRole("button", { name: "请求日志", exact: true }).click();
@@ -146,16 +150,16 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     await responseLog.scrollIntoViewIfNeeded();
     await capture(page, viewport.name, theme, "logs-token-usage-structured");
 
-    await page.goto("/settings/persona");
+    await page.goto("/images");
     const selfieHeading = page.getByRole("heading", { name: "自拍参考图" });
     await expect(selfieHeading).toBeVisible();
     await expect(page.getByText("3 / 3 张", { exact: true })).toBeVisible();
     await selfieHeading.evaluate((element) => element.scrollIntoView({ block: "start", behavior: "auto" }));
-    await capture(page, viewport.name, theme, "settings-persona-selfie");
+    await capture(page, viewport.name, theme, "images-selfie");
     await page.getByRole("button", { name: "管理参考图", exact: true }).click();
     const selfieDialog = page.getByRole("dialog", { name: "自拍参考图" });
     await expect(selfieDialog).toBeVisible();
-    await capture(page, viewport.name, theme, "settings-persona-selfie-manager");
+    await capture(page, viewport.name, theme, "images-selfie-manager");
     await selfieDialog.getByRole("button", { name: "关闭", exact: true }).click();
 
     await page.goto("/settings/providers");
@@ -181,6 +185,11 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     await expect(page.getByText(/群聊命令需要管理员限制/)).toBeVisible();
     await capture(page, viewport.name, theme, "settings-validation-error");
     await page.getByRole("button", { name: "放弃", exact: true }).click();
+
+    await page.goto("/settings/onebot");
+    await expect(page.getByRole("heading", { name: "通知与连接监控" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "OneBot" })).toBeVisible();
+    await capture(page, viewport.name, theme, "settings-connections");
 
     await page.goto("/settings/bot");
     await page.getByLabel("管理员称呼").fill("新的管理员称呼");
@@ -216,7 +225,10 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     state.requiredToken = "visual-token";
     state.authenticated = false;
     await page.reload();
+    await expect(page.getByRole("heading", { name: "Sunabot", exact: true })).toBeVisible();
+    await expect(page.getByText("管理普拉娜的会话、记忆与工具", { exact: true })).toBeVisible();
     await expect(page.getByRole("heading", { name: "管理员登录" })).toBeVisible();
+    await expect(page.getByText(/SECURE SESSION|ADMIN ACCESS|HttpOnly|浏览器存储/i)).toHaveCount(0);
     await capture(page, viewport.name, theme, "admin-login");
     await page.getByLabel("管理员账号").fill("admin");
     await page.getByLabel("管理员密码").fill("visual-token");
@@ -249,6 +261,21 @@ test("工具目录四视口矩阵", async ({ page }, testInfo) => {
     await expect(page.getByRole("table", { name: "工具参数" })).toBeVisible();
     await capture(page, viewport.name, theme, "settings-tools-detail");
     await page.getByRole("button", { name: "关闭工具详情" }).click();
+  }
+});
+
+test("连接设置四视口矩阵", async ({ page }, testInfo) => {
+  const theme = testInfo.project.name.endsWith("dark") ? "dark" : "light";
+  await page.addInitScript((selectedTheme) => localStorage.setItem("sunabot.theme", selectedTheme), theme);
+  await page.emulateMedia({ colorScheme: theme, reducedMotion: "reduce" });
+  await installMockApi(page);
+
+  for (const viewport of viewports) {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.goto("/settings/onebot");
+    await expect(page.getByRole("heading", { name: "通知与连接监控" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "OneBot" })).toBeVisible();
+    await capture(page, viewport.name, theme, "settings-connections");
   }
 });
 

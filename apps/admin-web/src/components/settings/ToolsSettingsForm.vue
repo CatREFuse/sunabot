@@ -7,6 +7,7 @@ import ToolRuntimeSettings from "./ToolRuntimeSettings.vue";
 type ToolsTab = "catalog" | "runtime";
 
 const draft = defineModel<ConfigSectionValueMap["tools"]>({ required: true });
+const bash = defineModel<ConfigSectionValueMap["bash"]>("bash", { required: true });
 defineProps<{
   models: readonly ModelCatalogItem[];
   fieldStates?: ConfigEnvelope["fieldStates"];
@@ -40,8 +41,7 @@ function onTabKeydown(event: KeyboardEvent, index: number) {
 <template>
   <section class="grid min-w-0 gap-8">
     <header>
-      <p class="page-kicker">TOOLS</p>
-      <h2 class="section-title mt-2">Agent 工具</h2>
+      <h2 class="section-title">Agent 工具</h2>
     </header>
 
     <div class="flex min-h-12 min-w-0 overflow-x-auto border-b border-line" role="tablist" aria-label="工具设置">
@@ -69,7 +69,7 @@ function onTabKeydown(event: KeyboardEvent, index: number) {
       aria-labelledby="tools-tab-catalog"
       :hidden="activeTab !== 'catalog'"
     >
-      <ToolCatalogSettings v-model="draft" />
+      <ToolCatalogSettings v-model="draft" v-model:bash="bash" />
     </section>
     <section
       id="tools-panel-runtime"
