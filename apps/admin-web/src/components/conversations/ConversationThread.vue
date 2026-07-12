@@ -56,7 +56,7 @@ function refreshLogs() {
       <button class="icon-btn lg:hidden" type="button" aria-label="返回会话列表" @click="emit('back')"><i class="bx bx-left-arrow-alt text-xl" aria-hidden="true"></i></button>
       <div class="min-w-0 flex-1">
         <p class="page-kicker">{{ conversation?.scope?.replaceAll('_', ' ') || "CONVERSATION" }}</p>
-        <h2 class="truncate text-lg font-medium text-display">{{ conversation?.title ?? "选择一个会话" }}</h2>
+        <h2 class="mt-1 truncate text-2xl font-medium leading-none tracking-[-0.02em] text-display">{{ conversation?.title ?? "选择一个会话" }}</h2>
       </div>
       <button v-if="conversation" class="icon-btn" type="button" aria-label="刷新消息" @click="emit('refresh')"><i class="bx bx-refresh text-xl" aria-hidden="true"></i></button>
       <button v-if="conversation" class="icon-btn" type="button" aria-label="请求日志" @click="openLogs()"><i class="bx bx-file-find text-xl" aria-hidden="true"></i></button>

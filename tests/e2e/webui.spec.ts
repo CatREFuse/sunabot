@@ -126,6 +126,36 @@ test("退出登录只在设置页提供", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "管理员登录" })).toBeVisible();
 });
 
+test("Web Chat 以管理员身份发送并保持独立的网页消息流", async ({ page }) => {
+  const state = await installMockApi(page);
+  await page.goto("/web-chat");
+
+  const heading = page.getByRole("heading", { name: "WEB CHAT", exact: true });
+  await expect(heading).toBeVisible();
+  await expect(page.getByLabel("Web Chat 消息").getByText("服务在线，今天已经处理 18 次模型请求。", { exact: true })).toBeVisible();
+  await page.getByRole("textbox", { name: "消息", exact: true }).fill("继续检查网页投递");
+  await page.getByRole("button", { name: "发送", exact: true }).click();
+
+  await expect(page.getByLabel("Web Chat 消息").getByText("收到，网页会话保持在线。", { exact: true })).toBeVisible();
+  expect(state.webChatRequests).toEqual(["继续检查网页投递"]);
+
+  const titleStyle = await heading.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return { family: style.fontFamily, size: Number.parseFloat(style.fontSize) };
+  });
+  expect(titleStyle.family).toContain("Doto");
+  expect(titleStyle.size).toBeGreaterThanOrEqual(48);
+  const messageRadii = await page.getByLabel("Web Chat 消息").locator("article")
+    .evaluateAll((elements) => elements.map((element) => getComputedStyle(element).borderRadius));
+  expect(messageRadii.every((radius) => radius === "0px")).toBe(true);
+  const sendButtonStyle = await page.getByRole("button", { name: "发送", exact: true }).evaluate((element) => {
+    const style = getComputedStyle(element);
+    return { background: style.backgroundColor, borderWidth: style.borderTopWidth };
+  });
+  expect(sendButtonStyle.borderWidth).toBe("0px");
+  expect(sendButtonStyle.background).toBe("rgba(0, 0, 0, 0)");
+});
+
 test("自拍参考图可独立预览、删除和上传", async ({ page }) => {
   const state = await installMockApi(page);
   await page.goto("/settings/persona");
@@ -362,6 +392,31 @@ test("提示词库列出全部文件并支持快捷保存与冲突恢复", async
   await page.getByRole("button", { name: "保存并离开" }).click();
   await expect(page).toHaveURL(/\/settings$/);
   await expect.poll(() => state.files.find((item) => item.id === "persona.soul")?.content).toBe("尚未保存。\n");
+});
+
+test("宽屏提示词可调整变量表宽度", async ({ page }) => {
+  await installMockApi(page);
+  await page.setViewportSize({ width: 1920, height: 1000 });
+  await page.goto("/prompts/persona.soul");
+
+  const splitter = page.getByRole("separator", { name: "调整可用变量宽度" });
+  const variableTable = page.getByRole("table", { name: "提示词变量表" });
+  await expect(splitter).toBeVisible();
+  const initialBox = await variableTable.boundingBox();
+  expect(initialBox).not.toBeNull();
+
+  await splitter.focus();
+  await splitter.press("ArrowLeft");
+  const expandedBox = await variableTable.boundingBox();
+  expect(expandedBox?.width).toBeGreaterThan(initialBox?.width ?? 0);
+
+  await splitter.dblclick();
+  await expect(splitter).toHaveAttribute("aria-valuenow", "336");
+
+  await page.getByLabel("提示词正文").fill("@{persona.preference}\n@{persona.preference}\n");
+  const referencedVariable = variableTable.getByRole("button", { name: /persona\.preference/ });
+  await expect(referencedVariable).toContainText("×2");
+  await expect(variableTable).toContainText("已引用 1 / 4");
 });
 
 test("最终请求支持消息组、排序、结构测试和 JSON 存储同步", async ({ page }) => {
@@ -613,7 +668,7 @@ test("弹层约束焦点、支持 Escape 并恢复触发位置", async ({ page }
   await expect(trigger).toBeFocused();
 });
 
-test("设置离开确认沿用应用弹层并可继续编辑", async ({ page }) => {
+test("设置离开确认支持继续编辑、保存或放弃修改", async ({ page }) => {
   await installMockApi(page);
   await page.goto("/settings/bot");
   await page.getByLabel("管理员称呼").fill("新的管理员称呼");
@@ -625,6 +680,13 @@ test("设置离开确认沿用应用弹层并可继续编辑", async ({ page }) 
   await expect(page).toHaveURL(/\/settings\/bot$/);
   await expect(page.getByLabel("管理员称呼")).toHaveValue("新的管理员称呼");
 
+  await page.getByRole("link", { name: "状态", exact: true }).click();
+  await page.getByRole("button", { name: "保存并离开" }).click();
+  await expect(page).toHaveURL(/\/overview$/);
+
+  await page.goto("/settings/bot");
+  await expect(page.getByLabel("管理员称呼")).toHaveValue("新的管理员称呼");
+  await page.getByLabel("管理员称呼").fill("放弃的管理员称呼");
   await page.getByRole("link", { name: "状态", exact: true }).click();
   await page.getByRole("button", { name: "放弃并离开" }).click();
   await expect(page).toHaveURL(/\/overview$/);

@@ -211,7 +211,7 @@ function onTabKeydown(event: KeyboardEvent, index: number) {
 }
 
 .prompt-workspace__tab--active {
-  background: rgb(var(--color-raised));
+  background: transparent;
 }
 
 .prompt-workspace__tab--active::after {
@@ -261,13 +261,12 @@ function onTabKeydown(event: KeyboardEvent, index: number) {
     display: grid;
     grid-auto-columns: minmax(340px, 1fr);
     grid-auto-flow: column;
-    gap: 16px;
+    gap: 0;
     overflow-x: auto;
-    padding: 16px;
-    background-color: rgb(var(--color-raised));
-    background-image: radial-gradient(circle, rgb(var(--color-mute) / 0.24) 1px, transparent 1.2px);
-    background-position: 0 0;
-    background-size: 16px 16px;
+    border-top: 1px solid rgb(var(--color-line));
+    border-bottom: 1px solid rgb(var(--color-line));
+    padding: 0;
+    background: transparent;
     overscroll-behavior-x: contain;
     scroll-snap-type: x proximity;
   }
@@ -276,10 +275,10 @@ function onTabKeydown(event: KeyboardEvent, index: number) {
   .prompt-workspace__panel--active {
     display: block;
     scroll-snap-align: start;
-    border: 1px solid rgb(var(--color-line));
-    border-radius: 12px;
-    background: rgb(var(--color-page));
-    padding: 20px 20px 28px;
+    border: 0;
+    border-left: 1px solid rgb(var(--color-line));
+    background: transparent;
+    padding: 24px 24px 32px;
     transition: background-color 160ms ease, border-color 160ms ease, opacity 160ms ease;
   }
 
@@ -288,7 +287,7 @@ function onTabKeydown(event: KeyboardEvent, index: number) {
   }
 
   .prompt-workspace__panel--drag-over {
-    border-color: rgb(var(--color-display));
+    box-shadow: inset 2px 0 rgb(var(--color-display));
   }
 }
 </style>

@@ -3,7 +3,7 @@ defineProps<{ kicker: string; title: string; description?: string }>();
 </script>
 
 <template>
-  <header class="flex min-w-0 flex-col justify-between gap-6 border-b border-line pb-8 md:flex-row md:items-end">
+  <header class="flex min-w-0 flex-col justify-between gap-8 pb-12 md:flex-row md:items-end md:pb-14">
     <div class="min-w-0">
       <p class="page-kicker">{{ kicker }}</p>
       <div class="flex min-w-0 flex-wrap items-end gap-x-6 gap-y-4">

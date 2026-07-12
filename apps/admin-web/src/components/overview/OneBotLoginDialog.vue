@@ -48,7 +48,7 @@ const avatar = computed(() => /^\d{5,12}$/.test(String(qq.value)) ? `/api/media/
 
 <template>
   <DialogOverlay :open="open" labelledby="login-title" @close="emit('close')">
-    <section class="max-h-[calc(100dvh-32px)] w-full max-w-md overflow-y-auto rounded-2xl border border-visible bg-panel">
+    <section class="max-h-[calc(100dvh-32px)] w-full max-w-md overflow-y-auto rounded border border-visible bg-panel">
       <header class="flex items-center justify-between border-b border-line p-4 md:p-5">
         <div><p class="page-kicker">ONEBOT LOGIN</p><h2 id="login-title" class="mt-1 text-xl font-medium text-display">QQ 登录</h2></div>
         <button class="icon-btn" type="button" aria-label="关闭" @click="emit('close')"><i class="bx bx-x text-2xl" aria-hidden="true"></i></button>
@@ -58,12 +58,12 @@ const avatar = computed(() => /^\d{5,12}$/.test(String(qq.value)) ? `/api/media/
           <strong class="text-lg font-normal text-display">{{ phaseLabel }}</strong>
           <span class="font-mono text-[10px]" :class="snapshot?.online ? 'text-success' : snapshot?.phase === 'expired' ? 'text-warning' : 'text-mute'">{{ checking ? "[CHECKING...]" : phaseCode }}</span>
         </div>
-        <div v-if="snapshot?.online" class="flex min-h-72 flex-col items-center justify-center gap-4 rounded-xl border border-line bg-page p-6 text-center">
+        <div v-if="snapshot?.online" class="flex min-h-72 flex-col items-center justify-center gap-4 rounded border border-line bg-page p-6 text-center">
           <IdentityAvatar :src="avatar" :name="nickname" size="lg" />
           <div><strong class="block text-xl font-medium text-display">{{ nickname }}</strong><span class="mt-1 block font-mono text-xs text-mute">QQ {{ qq }}</span></div>
           <p class="max-w-xs text-sm text-mute">{{ snapshot.connected ? "QQ 与 OneBot 已连接。" : "QQ 已登录，正在连接 OneBot。" }}</p>
         </div>
-        <div v-else class="grid min-h-72 place-items-center rounded-xl border border-line bg-page p-4">
+        <div v-else class="grid min-h-72 place-items-center rounded border border-line bg-page p-4">
           <AuthenticatedImage v-if="qrSource" :src="qrSource" alt="QQ 登录二维码" class-name="w-full max-w-56 bg-white p-3 [image-rendering:pixelated]" />
           <div v-else class="grid justify-items-center gap-3 text-mute"><i class="bx bx-loader-alt bx-spin text-4xl" aria-hidden="true"></i><p class="font-mono text-xs">{{ busy ? "[LOADING...]" : "[WAITING FOR QR]" }}</p></div>
         </div>

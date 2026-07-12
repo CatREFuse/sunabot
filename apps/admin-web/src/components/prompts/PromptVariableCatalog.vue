@@ -94,7 +94,6 @@ const isUsed = (name: string) => props.usedNames.includes(name);
   font-size: 12px;
 }
 
-.variable-catalog__row--used { background: rgb(var(--color-success) / 0.08); }
 .variable-catalog__row--used code { color: rgb(var(--color-success)); }
 
 .variable-catalog__meta {

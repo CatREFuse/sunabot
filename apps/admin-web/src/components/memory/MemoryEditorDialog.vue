@@ -42,7 +42,7 @@ function save() {
 
 <template>
   <DialogOverlay :open="open" class="!p-0 sm:!p-4" labelledby="memory-editor-title" @close="emit('close')">
-    <form class="flex h-full max-h-full w-full max-w-2xl flex-col border-visible bg-panel sm:h-auto sm:max-h-[calc(100dvh-32px)] sm:rounded-2xl sm:border" @submit.prevent="save">
+    <form class="flex h-full max-h-full w-full max-w-2xl flex-col border-visible bg-panel sm:h-auto sm:max-h-[calc(100dvh-32px)] sm:rounded sm:border" @submit.prevent="save">
       <header class="flex items-center justify-between border-b border-line p-4 md:p-5">
         <div><p class="page-kicker">MEMORY ENTRY</p><h2 id="memory-editor-title" class="mt-1 text-xl font-medium text-display">{{ entry ? "编辑记忆" : "新增记忆" }}</h2></div>
         <button class="icon-btn" type="button" aria-label="关闭" @click="emit('close')"><i class="bx bx-x text-2xl" aria-hidden="true"></i></button>

@@ -76,7 +76,7 @@ function identityKey(value: string) {
         <time class="font-mono text-disabled">{{ formatFullDateTime(message.at) }}</time>
       </header>
 
-      <div data-slot="orchestrator-result" class="grid min-w-0 max-w-full gap-3 rounded-2xl border px-4 py-3" :class="botMessage ? 'rounded-br-md border-visible bg-display text-page' : 'rounded-bl-md border-line bg-panel text-ink'">
+      <div data-slot="orchestrator-result" class="grid min-w-0 max-w-full gap-3 rounded-lg border px-4 py-3" :class="botMessage ? 'rounded-br border-visible bg-display text-page' : 'rounded-bl border-line bg-panel text-ink'">
         <div v-if="orchestratorDecision" class="grid gap-2">
           <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
             <strong class="text-xs font-medium">编排器结果</strong>
@@ -89,7 +89,7 @@ function identityKey(value: string) {
           <p v-if="quote.displayText">{{ quote.senderName }} · {{ quote.displayText }}</p>
           <div v-if="quote.imageUrls?.length" class="grid gap-2 sm:grid-cols-2">
             <a v-for="url in quote.imageUrls" :key="`${quote.messageId}-${url}`" :href="authenticatedMediaPath(url)" target="_blank" rel="noopener noreferrer" title="打开原图">
-              <AuthenticatedImage :src="url" alt="引用图片" thumbnail class-name="max-h-64 w-full rounded-lg object-contain" />
+              <AuthenticatedImage :src="url" alt="引用图片" thumbnail class-name="max-h-64 w-full rounded object-contain" />
             </a>
           </div>
         </blockquote>
@@ -100,7 +100,7 @@ function identityKey(value: string) {
         <p v-else-if="!orchestratorDecision && messageText" class="whitespace-pre-wrap break-words text-sm leading-6">{{ messageText }}</p>
         <div v-if="!orchestratorDecision && message.imageUrls?.length" class="grid gap-2 sm:grid-cols-2">
           <a v-for="url in message.imageUrls" :key="url" :href="authenticatedMediaPath(url)" target="_blank" rel="noopener noreferrer" title="打开原图">
-            <AuthenticatedImage :src="url" alt="会话图片" thumbnail class-name="max-h-96 w-full rounded-lg object-contain" />
+            <AuthenticatedImage :src="url" alt="会话图片" thumbnail class-name="max-h-96 w-full rounded object-contain" />
           </a>
         </div>
         <button v-if="message.logRunId" class="justify-self-start font-mono text-[10px] underline underline-offset-4" type="button" @click="emit('logs', message.logRunId)">查看请求日志</button>

@@ -31,15 +31,15 @@ async function unlock() {
 
 <template>
   <DialogOverlay :open="true" class="!bg-page" :dismissible="false" :z-index="100" labelledby="login-title">
-    <form class="w-full max-w-md rounded-2xl border border-visible bg-panel p-6 md:p-8" @submit.prevent="unlock">
+    <form class="w-full max-w-lg px-6 py-8 md:px-8" @submit.prevent="unlock">
       <div class="flex items-center justify-between">
-        <i class="bx bx-key text-3xl text-display" aria-hidden="true"></i>
+        <i class="bx bx-key text-[40px] text-display" aria-hidden="true"></i>
         <span class="inline-flex items-center gap-2 font-mono text-[10px] uppercase tracking-widest text-mute">
           <i class="bx bx-shield-quarter" aria-hidden="true"></i> Secure session
         </span>
       </div>
       <p class="page-kicker mt-8">ADMIN ACCESS</p>
-      <h1 id="login-title" class="mt-2 text-3xl font-medium text-display">管理员登录</h1>
+      <h1 id="login-title" class="mt-3 font-sans text-[36px] font-medium leading-none tracking-[-0.03em] text-display md:text-[48px]">管理员登录</h1>
       <p class="mt-3 text-sm leading-6 text-mute">账号密码仅用于建立受保护的 HttpOnly 会话，不会保存在浏览器存储中。</p>
       <label class="field mt-8">
         <span class="field-label">管理员账号</span>

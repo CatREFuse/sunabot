@@ -14,3 +14,16 @@ export function usedPromptVariableNames(
   }
   return [...used];
 }
+
+export function promptVariableUsageCounts(
+  content: string,
+  variables: readonly PromptVariableDefinition[]
+) {
+  const available = new Set(variables.map((variable) => variable.name));
+  const counts: Record<string, number> = {};
+  for (const match of content.matchAll(VARIABLE_PATTERN)) {
+    const name = match[1] ?? match[2];
+    if (name && available.has(name)) counts[name] = (counts[name] ?? 0) + 1;
+  }
+  return counts;
+}

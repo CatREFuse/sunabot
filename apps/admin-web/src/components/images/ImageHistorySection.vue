@@ -15,26 +15,28 @@ const emit = defineEmits<{
 </script>
 
 <template>
-  <section class="mt-16 border-t border-visible pt-8">
+  <section class="mt-8 border-t border-visible pt-8">
     <div class="flex items-end justify-between gap-4">
       <div><p class="page-kicker">HISTORY</p><h2 class="section-title mt-2">生成历史</h2></div>
       <span class="font-mono text-[10px] text-mute">{{ images.length }} ITEMS</span>
     </div>
 
-    <div class="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-      <article v-for="image in images" :key="image.id" class="group min-w-0 overflow-hidden rounded-xl border border-line bg-panel transition-colors hover:border-visible focus-within:border-display">
+    <div class="mt-6 grid grid-cols-1 gap-x-5 gap-y-10 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+      <article v-for="image in images" :key="image.id" class="group min-w-0 overflow-hidden border-b border-line pb-4">
         <div class="relative aspect-square overflow-hidden bg-raised">
           <button class="block h-full w-full" type="button" :aria-label="`预览 ${image.prompt || '历史图像'}`" @click="emit('preview', image)">
             <AuthenticatedImage :src="image.url" :alt="image.prompt || '历史图像'" thumbnail class-name="h-full w-full object-cover transition-opacity duration-200 group-hover:opacity-85" />
           </button>
-          <div class="absolute inset-x-3 bottom-3 z-10 flex justify-end gap-2 opacity-100 transition-opacity md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100">
-            <button class="icon-btn size-11 border-white/40 bg-black/75 text-white hover:border-white hover:text-white" type="button" aria-label="预览图片" @click="emit('preview', image)"><i class="bx bx-show text-lg" aria-hidden="true"></i></button>
-            <button class="icon-btn size-11 border-white/40 bg-black/75 text-white hover:border-white hover:text-white" type="button" :aria-label="`下载图片 ${image.id}`" :disabled="downloadingId === image.id" @click="emit('download', image)"><i class="bx bx-download text-lg" aria-hidden="true"></i></button>
-          </div>
         </div>
-        <div class="grid gap-3 p-3">
+        <div class="grid gap-3 pt-4">
           <p class="line-clamp-2 min-h-10 text-xs leading-5 text-ink">{{ image.prompt || "无提示词" }}</p>
-          <p class="truncate font-mono text-[10px] text-disabled">{{ image.size || "--" }} · {{ formatFullDateTime(image.createdAt) }}</p>
+          <div class="flex min-w-0 items-center justify-between gap-3">
+            <p class="min-w-0 font-mono text-[10px] leading-4 text-disabled"><span class="block">{{ image.size || "--" }}</span><span class="block">{{ formatFullDateTime(image.createdAt) }}</span></p>
+            <div class="flex shrink-0 items-center gap-1">
+              <button class="icon-btn" type="button" aria-label="预览图片" @click="emit('preview', image)"><i class="bx bx-show" aria-hidden="true"></i></button>
+              <button class="icon-btn" type="button" :aria-label="`下载图片 ${image.id}`" :disabled="downloadingId === image.id" @click="emit('download', image)"><i class="bx bx-download" aria-hidden="true"></i></button>
+            </div>
+          </div>
         </div>
       </article>
     </div>

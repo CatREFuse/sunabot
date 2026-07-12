@@ -15,8 +15,8 @@ const emit = defineEmits<{ select: [key: ConfigSectionKey] }>();
       <template v-for="(section, index) in sections" :key="section.id">
         <p v-if="index === 0 || sections[index - 1]?.group !== section.group" class="px-3 pb-2 pt-5 font-mono text-[10px] uppercase tracking-[0.08em] text-disabled">{{ section.group }}</p>
         <button
-          class="group flex min-h-12 items-center gap-3 border-b border-line px-3 text-left transition-colors duration-200 hover:bg-raised"
-          :class="current === section.id ? 'bg-raised text-display' : 'text-mute'"
+          class="group flex min-h-12 items-center gap-3 border-b border-l-2 border-b-line px-3 text-left transition-colors duration-200 hover:text-display"
+          :class="current === section.id ? 'border-l-display text-display' : 'border-l-transparent text-mute'"
           type="button"
           @click="emit('select', section.id)"
         >

@@ -137,6 +137,7 @@ export function restoredGroupIncoming(
   };
 }
 export function conversationRecordId(incoming: ParsedIncomingMessage) {
+  if (incoming.transport === "web") return "web:admin";
   return incoming.groupId ? `group:${incoming.groupId}` : `private:${incoming.userId}`;
 }
 export function outboundForIncoming(

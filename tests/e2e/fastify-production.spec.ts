@@ -43,6 +43,10 @@ test("Fastify 生产服务提供静态资源、深链接回退与管理鉴权", 
   const html = await deepLink.text();
   expect(html).toContain('<div id="app"></div>');
 
+  const webChatDeepLink = await request.get(`${origin}/web-chat`);
+  expect(webChatDeepLink.status()).toBe(200);
+  expect(webChatDeepLink.headers()["content-type"]).toContain("text/html");
+
   const assetPath = html.match(/<script[^>]+src="([^"]*\/assets\/[^"]+\.js)"/)?.[1];
   expect(assetPath).toBeTruthy();
   const asset = await request.get(new URL(assetPath!, origin).toString());

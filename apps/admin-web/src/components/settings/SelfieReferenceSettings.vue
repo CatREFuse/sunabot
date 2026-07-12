@@ -34,7 +34,7 @@ function openManager() {
     </div>
 
     <button class="mt-5 grid w-full grid-cols-3 gap-2 text-left sm:gap-3" type="button" aria-label="管理自拍参考图" @click="openManager">
-      <span v-for="(image, index) in slots" :key="image?.id ?? `empty-${index}`" class="aspect-square min-w-0 overflow-hidden rounded-xl border border-line bg-raised transition-colors hover:border-display">
+      <span v-for="(image, index) in slots" :key="image?.id ?? `empty-${index}`" class="aspect-square min-w-0 overflow-hidden border border-line bg-raised transition-colors hover:border-display">
         <AuthenticatedImage
           v-if="image"
           :src="image.originalUrl"

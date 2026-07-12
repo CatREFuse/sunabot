@@ -181,7 +181,7 @@ async function openNapCat(route = "/api/onebot/napcat-webui-url") {
         </article>
       </section>
 
-      <section v-if="runtime.status.value?.recovery?.required" class="mt-10 rounded-xl border border-accent p-5">
+      <section v-if="runtime.status.value?.recovery?.required" class="mt-12 border-l-2 border-accent py-4 pl-5">
         <p class="inline-state" data-kind="error">[CONFIG RECOVERY REQUIRED]</p>
         <p class="mt-3 text-sm text-ink">{{ runtime.status.value.recovery.message }}</p>
         <p class="mt-2 break-all font-mono text-[10px] text-mute">{{ runtime.status.value.recovery.backupPath }}</p>
@@ -208,20 +208,36 @@ async function openNapCat(route = "/api/onebot/napcat-webui-url") {
 </template>
 
 <style scoped>
-.count-mosaic { display: grid; gap: 12px; margin-top: 12px; }
-.count-card, .health-card { min-width: 0; border: 1px solid rgb(var(--color-line)); border-radius: 14px; background: rgb(var(--color-panel)); }
-.count-card { display: flex; min-height: 124px; align-items: center; gap: 16px; padding: 18px; }
-.count-card__icon, .health-card__icon { display: grid; flex: none; place-items: center; border-radius: 10px; background: rgb(var(--color-raised)); font-size: 22px; }
-.count-card__icon { width: 44px; height: 44px; color: rgb(var(--color-interactive)); }
+.count-mosaic { display: grid; margin-top: 32px; border-block: 1px solid rgb(var(--color-line)); }
+.count-card, .health-card { min-width: 0; background: transparent; }
+.count-card { display: flex; min-height: 112px; align-items: center; gap: 18px; border-bottom: 1px solid rgb(var(--color-line)); padding: 20px 0; }
+.count-card:last-child { border-bottom: 0; }
+.count-card__icon, .health-card__icon { display: grid; flex: none; place-items: center; background: transparent; font-size: 28px; }
+.count-card__icon { width: 36px; height: 36px; color: rgb(var(--color-interactive)); }
 .count-card[data-tone="success"] .count-card__icon { color: rgb(var(--color-success)); }
 .count-card[data-tone="warning"] .count-card__icon { color: rgb(var(--color-warning)); }
-.count-card strong { display: block; margin-top: 7px; color: rgb(var(--color-display)); font-family: "Doto", "Space Mono", monospace; font-size: 30px; font-weight: 700; line-height: .9; }
+.count-card strong { display: block; margin-top: 7px; color: rgb(var(--color-display)); font-family: "Space Mono", monospace; font-size: 30px; font-weight: 700; line-height: 1; letter-spacing: -.035em; }
 .count-card small { display: block; margin-top: 6px; color: rgb(var(--color-disabled)); font-family: "Space Mono", monospace; font-size: 9px; }
-.health-mosaic { display: grid; gap: 12px; margin-top: 32px; }
-.health-card { display: flex; min-height: 112px; align-items: center; gap: 14px; padding: 16px; }
-.health-card__icon { width: 40px; height: 40px; color: rgb(var(--color-interactive)); }
+.health-mosaic { display: grid; margin-top: 48px; border-top: 1px solid rgb(var(--color-line)); }
+.health-card { display: flex; min-height: 104px; align-items: center; gap: 16px; border-bottom: 1px solid rgb(var(--color-line)); padding: 20px 0; }
+.health-card__icon { width: 32px; height: 32px; color: rgb(var(--color-interactive)); }
 .health-card strong { display: block; overflow: hidden; margin-top: 7px; color: rgb(var(--color-display)); font-size: 14px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .health-card small { display: block; overflow: hidden; margin-top: 4px; color: rgb(var(--color-mute)); font-family: "Space Mono", monospace; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
-@media (min-width: 640px) { .count-mosaic { grid-template-columns: repeat(3, minmax(0, 1fr)); } .health-mosaic { grid-template-columns: repeat(2, minmax(0,1fr)); } }
-@media (min-width: 1100px) { .health-mosaic { grid-template-columns: repeat(5, minmax(0,1fr)); } .health-card { grid-column: span 1; } .health-card--wide { grid-column: span 2; } }
+@media (min-width: 640px) {
+  .count-mosaic { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .count-card { border-bottom: 0; padding: 20px 18px; }
+  .count-card:first-child { padding-left: 0; }
+  .count-card + .count-card { border-left: 1px solid rgb(var(--color-line)); }
+  .health-mosaic { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .health-card { padding: 20px; }
+  .health-card:nth-child(odd) { padding-left: 0; }
+  .health-card:nth-child(even) { border-left: 1px solid rgb(var(--color-line)); }
+}
+@media (min-width: 1100px) {
+  .health-mosaic { grid-template-columns: repeat(5, minmax(0,1fr)); }
+  .health-card, .health-card:nth-child(odd) { grid-column: span 1; padding: 20px; }
+  .health-card:first-child { padding-left: 0; }
+  .health-card + .health-card { border-left: 1px solid rgb(var(--color-line)); }
+  .health-card--wide { grid-column: span 2; }
+}
 </style>

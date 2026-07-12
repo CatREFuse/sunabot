@@ -21,6 +21,16 @@ function router() {
 describe("navigation theme controls", () => {
   beforeEach(() => { theme.setTheme.mockReset(); });
 
+  it("keeps Web Chat visible in desktop and mobile navigation", async () => {
+    const navigation = router();
+    await navigation.push("/overview");
+    const desktop = mount(DesktopNavigation, { global: { plugins: [navigation] } });
+    const mobile = mount(MobileNavigation, { global: { plugins: [navigation] } });
+
+    expect(desktop.get('a[href="/web-chat"]').text()).toContain("Web Chat");
+    expect(mobile.get('a[href="/web-chat"]').text()).toContain("Web Chat");
+  });
+
   it("offers light, dark and system themes in the mobile More panel", async () => {
     const navigation = router();
     await navigation.push("/overview");
@@ -31,6 +41,7 @@ describe("navigation theme controls", () => {
 
     const themeButtons = wrapper.findAll('div[aria-label="主题"] button');
     expect(themeButtons.map((button) => button.text().trim())).toEqual(["浅色", "深色", "系统"]);
+    expect(themeButtons[2]!.attributes("aria-pressed")).toBe("true");
     await themeButtons[1]!.trigger("click");
     expect(theme.setTheme).toHaveBeenCalledWith("dark");
   });
@@ -42,5 +53,6 @@ describe("navigation theme controls", () => {
     const themeButtons = wrapper.findAll('div[aria-label="主题"] button');
     expect(themeButtons).toHaveLength(3);
     themeButtons.forEach((button) => expect(button.classes()).toContain("min-h-11"));
+    expect(themeButtons.every((button) => !button.classes().some((className) => className.startsWith("rounded")))).toBe(true);
   });
 });

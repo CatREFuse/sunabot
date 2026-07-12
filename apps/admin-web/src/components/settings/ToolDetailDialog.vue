@@ -28,12 +28,10 @@ const descriptionSourceLabel = computed(() => {
 
 <template>
   <DialogOverlay :open="open" labelledby="tool-detail-title" @close="emit('close')">
-    <section v-if="tool" class="max-h-[calc(100dvh-32px)] w-full max-w-2xl overflow-y-auto rounded-2xl border border-visible bg-panel p-5 sm:p-6">
+    <section v-if="tool" class="max-h-[calc(100dvh-32px)] w-full max-w-2xl overflow-y-auto rounded border border-visible bg-panel p-5 sm:p-6">
       <header class="flex min-w-0 items-start justify-between gap-4 border-b border-line pb-5">
         <div class="flex min-w-0 items-start gap-3">
-          <span class="grid size-11 shrink-0 place-items-center rounded-lg bg-raised text-[rgb(var(--color-interactive))]">
-            <i class="bx text-2xl" :class="toolIcon(tool.name)" aria-hidden="true"></i>
-          </span>
+          <i class="bx w-11 shrink-0 text-[32px] leading-[44px] text-[rgb(var(--color-interactive))]" :class="toolIcon(tool.name)" aria-hidden="true"></i>
           <div class="min-w-0">
             <p class="page-kicker">TOOL DETAIL</p>
             <h2 id="tool-detail-title" class="mt-1 text-xl font-medium text-display">{{ tool.title }}</h2>

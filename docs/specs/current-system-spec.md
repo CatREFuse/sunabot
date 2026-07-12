@@ -1,12 +1,12 @@
 # sunabot 当前系统规范
 
-版本：2026-07-12
+版本：2026-07-13
 状态：当前实现的唯一规范
 适用范围：sunabot 后端、Plana Agent、OneBot 接入、管理台、持久化、测试和部署
 
 ## 1. 产品范围
 
-sunabot 是面向个人自托管场景的 QQ Agent 服务。系统通过 OneBot v11 反向 WebSocket 接入 NapCat，以普拉娜人格处理私聊和用户群聊，支持上下文回复、群聊编排、长期记忆、用户画像、文件读取、联网搜索、图像生成、自拍、Codex 异步任务和本地管理台。
+sunabot 是面向个人自托管场景的 QQ Agent 服务。系统通过 OneBot v11 反向 WebSocket 接入 NapCat，以普拉娜人格处理私聊和用户群聊，支持上下文回复、群聊编排、长期记忆、用户画像、文件读取、联网搜索、图像生成、自拍、Codex 异步任务、本地 Web Chat 和管理台。
 
 当前运行目标是单实例、单管理员、单默认 Agent。多 Agent、多租户、完整 OneBot v12 和公网多用户管理台不属于当前版本。
 
@@ -148,11 +148,15 @@ NapCat 上报的 QQ 文件优先通过 OneBot action 返回的受控 URL 进入 
 
 ## 7. 管理台
 
-管理台包含状态、QQ 会话、图片、记忆、提示词、日志和设置页面，支持 light、dark 和跟随系统主题，并适配桌面、平板和移动端。
+管理台包含状态、QQ 会话、Web Chat、图片、记忆、提示词、日志和设置页面，支持 light、dark 和跟随系统主题，并适配桌面、平板和移动端。
 
 设置中的 Agent 工具页默认打开“工具目录”Tab，列出七个真实工具的图标、名称、Function 名、摘要、配置状态、运行能力和同步或异步方式，支持搜索、启停与刷新。详情弹层展示实际模型描述、描述来源、JSON Schema 参数与严格模式；编辑模型描述会建立全局覆盖，“恢复继承说明”会删除覆盖。“运行参数”Tab 继续管理单轮调用上限、Tavily、Codex Worker 和图像生成默认值。两个 Tab 共用当前工具配置草稿和保存栏。
 
-状态页使用响应式卡片拼盘展示 QQ Bot 头像、昵称、连接状态、内容计数、Provider 健康，以及当日 Token 总量、输入、缓存输入、缓存率、输出和请求数。Token 统计使用浏览器传入的时区偏移：当日小时序列固定返回 0—23 点 24 个桶，缺少的小时补零；日历固定覆盖截至当日的最近 53 周本地日期，缺少的日期补零。小时图使用 Token 总量柱形和缓存率折线，缓存率为 `null` 时显示 `--` 且折线跳过该点。四位及以上主指标使用 K 缩写，并提供千分位精确值。
+状态页使用响应式数据拼盘展示 QQ Bot 头像、昵称、连接状态、内容计数、Provider 健康，以及当日 Token 总量、输入、缓存输入、缓存率、输出和请求数。拼盘保留非对称网格，通过留白、分割线和连续数据区组织信息，不使用圆角卡片逐项装箱。Token 统计使用浏览器传入的时区偏移：当日小时序列固定返回 0—23 点 24 个桶，缺少的小时补零；日历固定覆盖截至当日的最近 53 周本地日期，缺少的日期补零。小时图使用 Token 总量柱形和缓存率折线，缓存率为 `null` 时显示 `--` 且折线跳过该点。四位及以上主指标使用 K 缩写，并提供千分位精确值。
+
+页面信息区默认通过留白、连续网格和 1px 分割线建立层级；按钮、输入控件、消息气泡和必要弹层可使用与语义相称的技术圆角。Boxicon 不使用背景、边框或圆形外壳，44px 点击热区保持透明，需要加强层级时直接放大图标。中文页面标题使用 Space Grotesk Variable 与系统中文字体，英文状态和唯一主数字在 36px 以上使用 Doto Variable，次级数字统一使用 Space Mono。
+
+Web Chat 使用固定管理员身份和 `web:admin` 会话，通过 Web delivery adapter 进入与 QQ 相同的 Agent loop、提示词、记忆和同步工具链。Web Chat 回复只能写回浏览器消息流，不能经 OneBot 外发；QQ 会话也不能出现在 Web Chat 中。当前 Web delivery 没有持久化的异步结果投递目标，因此 Web Chat 禁用 Deferred Codex 和图像任务。发送接口拒绝空白正文和超过 16,000 字符的正文，页面支持 Enter 发送、Shift+Enter 换行、发送中状态、错误恢复、消息轮询和图片缩略图。
 
 日志页按从新到旧提供 Bot 活动终端与分页纵向时间轴，Responses、Codex Provider、Deferred Codex CLI、Chat Completions、Anthropic 和 Gemini 请求同时显示中文标题与原始 action ID，其中 Codex CLI 使用 `codex.tool.complete`。模型响应的统一 `tokenUsage` 使用独立用量条展示，原始请求、响应和 usage 字段继续使用递归结构化视图，不能退回整段 JSON 文本。记忆页一次只查看一个真实来源，单个搜索栏在本地筛选与语义召回间切换。提示词编辑器提供变量表、已使用变量状态、可选 XML 包装，以及离开前保存。
 
@@ -237,6 +241,7 @@ QQ 登录由管理台完成：离线时直接显示 NapCat 当前二维码并每
 | 记忆管理 API | `apps/api/plugins/memoryRoutes.ts` |
 | 状态与监控 API | `apps/api/plugins/monitoringRoutes.ts` |
 | 会话与会话日志 API | `apps/api/plugins/conversationRoutes.ts` |
+| Web Chat 管理员会话与浏览器 delivery | `services/webChat/`, `apps/api/plugins/conversationRoutes.ts` |
 | 图片、缩略图、Token 统计、请求日志与图片测试 API | `apps/api/plugins/mediaRoutes.ts` |
 | Agent 文件与工具目录 API | `apps/api/plugins/agentToolRoutes.ts`, `services/tools/toolRegistry.ts` |
 | 自拍参考图 API 与受控文件仓库 | `apps/api/plugins/selfieReferenceRoutes.ts`, `src/admin/selfieReferences.ts` |
@@ -281,7 +286,7 @@ npm run build
 npm run test:e2e
 ```
 
-涉及界面时还要运行视觉测试并检查截图。涉及数据迁移时必须核对迁移脚本输出、SQLite 表记录数、旧文件备份和服务重启后的 API 与 OneBot 状态。
+涉及界面时还要运行视觉测试并检查截图；Web Chat 必须覆盖管理员身份、Web/QQ 外发隔离、消息轮询、发送校验、键盘操作、图片缩略图和移动端布局。涉及数据迁移时必须核对迁移脚本输出、SQLite 表记录数、旧文件备份和服务重启后的 API 与 OneBot 状态。
 
 Token 统计验收必须覆盖 OpenAI Responses、Deferred Codex CLI 成功与失败结果、Chat Completions、Anthropic 和 Gemini 的原始 usage 夹具，验证缓存输入不重复计数、Codex CLI 失败 usage 不丢失、Anthropic 三类输入求和、思考 Token 归入输出、缓存率分母只包含明确报告缓存字段的记录、无缓存字段返回 `null`、显式零缓存返回 `0`、时区跨日、24 个小时桶和最近 53 周日期范围。管理台测试必须验证 371 个日历单元、24 个小时柱、缓存率折线不产生 `NaN`/`Infinity`，并分别检查移动端与桌面端的 light/dark Token 卡片、日历、小时图和展开后的结构化 usage 日志截图。
 

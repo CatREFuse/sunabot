@@ -42,7 +42,7 @@ watch(() => props.days, showLatestDays);
 </template>
 
 <style scoped>
-.usage-calendar { min-width: 0; overflow: hidden; border: 1px solid rgb(var(--color-line)); border-radius: 14px; background: rgb(var(--color-panel)); padding: 16px; }
+.usage-calendar { min-width: 0; overflow: hidden; border-block: 1px solid rgb(var(--color-line)); background: transparent; padding: 20px 0; }
 .usage-calendar header { display: flex; justify-content: space-between; gap: 12px; color: rgb(var(--color-mute)); font-family: "Space Mono", monospace; font-size: 9px; }
 .usage-card__label { display: flex; align-items: center; gap: 7px; color: rgb(var(--color-mute)); font-family: "Space Mono", monospace; font-size: 10px; letter-spacing: .06em; text-transform: uppercase; }
 .calendar-wrap { margin-top: 20px; overflow-x: auto; padding-bottom: 4px; }

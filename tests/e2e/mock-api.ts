@@ -139,6 +139,37 @@ interface MockTokenUsagePayload {
   hours: Array<MockTokenUsageBucket & { hour: number }>;
 }
 
+interface MockWebChatMessage {
+  id: string;
+  sequence: number;
+  role: "user" | "assistant";
+  userId: number;
+  senderName: string;
+  text: string;
+  at: string;
+}
+
+const initialWebChatMessages: MockWebChatMessage[] = [
+  {
+    id: "web-1",
+    sequence: 1,
+    role: "user",
+    userId: 171419991,
+    senderName: "猫老师",
+    text: "检查今天的运行情况",
+    at: "2026-07-10T02:00:00.000Z"
+  },
+  {
+    id: "web-2",
+    sequence: 2,
+    role: "assistant",
+    userId: 171419991,
+    senderName: "普拉娜",
+    text: "服务在线，今天已经处理 18 次模型请求。",
+    at: "2026-07-10T02:00:03.000Z"
+  }
+];
+
 const tokenUsageFixture: MockTokenUsagePayload = {
   today: {
     date: localDateOffset(0),
@@ -184,6 +215,8 @@ export interface MockApiState {
   qqOnline: boolean;
   qrVersion: number;
   tokenUsage: MockTokenUsagePayload;
+  webChatMessages: MockWebChatMessage[];
+  webChatRequests: string[];
   selfieReferences: Array<{
     id: string;
     fileName: string;
@@ -213,6 +246,8 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
     qqOnline: true,
     qrVersion: 1,
     tokenUsage: structuredClone(tokenUsageFixture),
+    webChatMessages: structuredClone(initialWebChatMessages),
+    webChatRequests: [],
     selfieReferences: [
       selfieReference("01-neutral-face.png", 458, 501, 241_664),
       selfieReference("02-gentle-smile.png", 458, 501, 244_736),
@@ -363,6 +398,41 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
         item.updatedAt = "2026-07-10T02:30:00.000Z";
         return json(route, { ok: true, ...item });
       }
+    }
+
+    if (pathname === "/api/web-chat/messages") {
+      if (method === "POST") {
+        const body = request.postDataJSON() as { text?: string };
+        const text = String(body.text ?? "").trim();
+        state.webChatRequests.push(text);
+        const nextSequence = state.webChatMessages.length + 1;
+        state.webChatMessages.push(
+          {
+            id: `web-${nextSequence}`,
+            sequence: nextSequence,
+            role: "user",
+            userId: 171419991,
+            senderName: "猫老师",
+            text,
+            at: "2026-07-10T02:01:00.000Z"
+          },
+          {
+            id: `web-${nextSequence + 1}`,
+            sequence: nextSequence + 1,
+            role: "assistant",
+            userId: 171419991,
+            senderName: "普拉娜",
+            text: "收到，网页会话保持在线。",
+            at: "2026-07-10T02:01:02.000Z"
+          }
+        );
+      }
+      return json(route, {
+        conversationId: "web:admin",
+        messages: state.webChatMessages,
+        hasMore: false,
+        memberNames: {}
+      });
     }
 
     if (pathname === "/api/conversations") {

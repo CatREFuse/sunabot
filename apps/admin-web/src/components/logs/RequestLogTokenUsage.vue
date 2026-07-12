@@ -51,7 +51,7 @@ const metrics = computed<UsageMetric[]>(() => [
 .request-usage__item[data-tone="interactive"] dt i { color: rgb(var(--color-interactive)); }
 .request-usage__item[data-tone="success"] dt i { color: rgb(var(--color-success)); }
 .request-usage__item[data-tone="warning"] dt i { color: rgb(var(--color-warning)); }
-.request-usage dd { margin-top: 6px; overflow-wrap: anywhere; color: rgb(var(--color-display)); font-family: "Doto", "Space Mono", monospace; font-size: 18px; font-weight: 700; line-height: 1; }
+.request-usage dd { margin-top: 6px; overflow-wrap: anywhere; color: rgb(var(--color-display)); font-family: "Space Mono", monospace; font-size: 18px; font-weight: 700; line-height: 1; letter-spacing: -.03em; }
 .request-usage small { display: block; margin-top: 4px; overflow-wrap: anywhere; color: rgb(var(--color-disabled)); font-family: "Space Mono", monospace; font-size: 8px; }
 @media (min-width: 640px) {
   .request-usage { grid-template-columns: repeat(5, minmax(0, 1fr)); }

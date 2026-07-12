@@ -23,7 +23,7 @@ const draft = defineModel<ConfigSectionValueMap["bot"]>({ required: true });
         <span class="field-label">上下文消息数</span>
         <input v-model.number="draft.contextMessageLimit" class="control" type="number" min="1" max="120" step="1">
       </label>
-      <div class="rounded-lg border border-line px-4 py-2">
+      <div class="border-y border-line py-2">
         <ToggleSwitch v-model="draft.quoteGroupReplies" label="引用群聊消息" description="回复时引用触发消息" />
       </div>
     </div>

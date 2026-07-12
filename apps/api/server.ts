@@ -296,7 +296,7 @@ function requestLogError(error: unknown) {
 }
 
 function isSpaRoute(pathname: string) {
-  return pathname === "/" || ["overview", "conversations", "prompts", "memory", "images", "logs", "settings"]
+  return pathname === "/" || ["overview", "conversations", "web-chat", "prompts", "memory", "images", "logs", "settings"]
     .some((segment) => pathname === `/${segment}` || pathname.startsWith(`/${segment}/`));
 }
 

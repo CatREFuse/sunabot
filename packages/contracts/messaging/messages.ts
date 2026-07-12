@@ -21,6 +21,7 @@ export interface MessageQuoteV1 {
 
 export interface InboundMessageV1 {
   schemaVersion: 1;
+  transport?: "onebot" | "web";
   scope: MessageScopeV1;
   messageId?: number;
   time: string;
@@ -146,6 +147,7 @@ export function decodeInboundMessageV1(value: unknown): InboundMessageV1 {
 
   return {
     schemaVersion: 1,
+    ...(input.transport === "web" ? { transport: "web" as const } : {}),
     scope,
     ...(positiveInteger(input.messageId ?? legacyEvent.message_id) ? {
       messageId: positiveInteger(input.messageId ?? legacyEvent.message_id)

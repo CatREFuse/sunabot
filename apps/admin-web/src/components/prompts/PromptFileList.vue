@@ -29,7 +29,9 @@ const grouped = computed(() => {
 <template>
   <aside class="flex h-full min-h-0 min-w-0 flex-col border-r border-line bg-panel">
     <div class="border-b border-line p-4">
-      <label class="field">
+      <p class="page-kicker">PROMPTS</p>
+      <h1 class="mt-2 font-sans text-[32px] font-medium leading-none tracking-[-0.03em] text-display">提示词</h1>
+      <label class="field mt-5">
         <span class="field-label">搜索文件</span>
         <input :value="query" class="control" type="search" autocomplete="off" placeholder="名称或文件名" @input="emit('update:query', ($event.target as HTMLInputElement).value)">
       </label>

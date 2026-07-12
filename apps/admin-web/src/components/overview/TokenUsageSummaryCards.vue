@@ -42,7 +42,6 @@ const metrics = computed<SummaryMetric[]>(() => {
       <span class="token-card__label"><i class="bx bx-bolt-circle" aria-hidden="true"></i>今日总量</span>
       <strong :title="formatExactNumber(usage?.total)">{{ formatDashboardMetric(usage?.total) }}</strong>
       <span class="token-card__exact">{{ formatExactNumber(usage?.total) }} TOKEN</span>
-      <i class="bx bx-line-chart token-card__watermark" aria-hidden="true"></i>
     </article>
 
     <article
@@ -61,30 +60,32 @@ const metrics = computed<SummaryMetric[]>(() => {
 </template>
 
 <style scoped>
-.usage-summary { display: grid; min-width: 0; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-.token-card { position: relative; min-width: 0; overflow: hidden; border: 1px solid rgb(var(--color-line)); border-radius: 14px; background: rgb(var(--color-panel)); padding: 16px; }
+.usage-summary { display: grid; min-width: 0; grid-template-columns: repeat(2, minmax(0, 1fr)); border-block: 1px solid rgb(var(--color-line)); }
+.token-card { position: relative; min-width: 0; overflow: hidden; background: transparent; padding: 18px 0; }
 .token-card__label { display: flex; align-items: center; gap: 7px; color: rgb(var(--color-mute)); font-family: "Space Mono", monospace; font-size: 10px; letter-spacing: .06em; text-transform: uppercase; }
-.token-card strong { display: block; margin-top: 16px; color: rgb(var(--color-display)); font-family: "Doto", "Space Mono", monospace; font-size: 36px; font-weight: 700; line-height: .92; letter-spacing: -.035em; }
+.token-card strong { display: block; margin-top: 16px; color: rgb(var(--color-display)); font-family: "Space Mono", monospace; font-size: 32px; font-weight: 700; line-height: .92; letter-spacing: -.045em; }
 .token-card__exact { display: block; margin-top: 8px; overflow-wrap: anywhere; color: rgb(var(--color-disabled)); font-family: "Space Mono", monospace; font-size: 9px; }
-.token-card--hero { grid-column: 1 / -1; min-height: 184px; padding: 20px; background: rgb(var(--color-display)); color: rgb(var(--color-page)); }
-.token-card--hero .token-card__label, .token-card--hero .token-card__exact { color: rgb(var(--color-page) / .65); }
-.token-card--hero strong { margin-top: 24px; color: rgb(var(--color-page)); font-size: clamp(44px, 8vw, 64px); }
-.token-card__watermark { position: absolute; right: 16px; bottom: 10px; color: rgb(var(--color-page) / .12); font-size: 88px; }
-.token-card--metric { min-height: 140px; }
-.token-card--request { grid-column: 1 / -1; min-height: 112px; }
-.token-card__icon { display: grid; width: 32px; height: 32px; place-items: center; border-radius: 8px; background: rgb(var(--color-raised)); color: rgb(var(--color-mute)); font-size: 18px; }
+.token-card--hero { grid-column: 1 / -1; min-height: 172px; border-bottom: 1px solid rgb(var(--color-line)); padding: 24px 0 28px; }
+.token-card--hero strong { margin-top: 26px; font-size: clamp(48px, 8vw, 64px); }
+.token-card--metric { min-height: 132px; border-bottom: 1px solid rgb(var(--color-line)); padding: 18px 14px; }
+.token-card--metric:nth-child(odd) { border-left: 1px solid rgb(var(--color-line)); }
+.token-card--request { grid-column: 1 / -1; min-height: 112px; border-bottom: 0; border-left: 0; padding-inline: 0; }
+.token-card__icon { display: grid; width: 28px; height: 28px; place-items: center; background: transparent; color: rgb(var(--color-mute)); font-size: 25px; }
 .token-card--metric[data-tone="interactive"] .token-card__icon { color: rgb(var(--color-interactive)); }
 .token-card--metric[data-tone="success"] .token-card__icon { color: rgb(var(--color-success)); }
 .token-card--metric[data-tone="warning"] .token-card__icon { color: rgb(var(--color-warning)); }
-.token-card--metric .token-card__label { margin-top: 12px; }
-.token-card--metric strong { margin-top: 10px; font-size: 28px; }
+.token-card--metric .token-card__label { margin-top: 14px; }
+.token-card--metric strong { margin-top: 10px; font-size: 26px; }
 @media (min-width: 640px) {
   .usage-summary { grid-template-columns: repeat(5, minmax(0, 1fr)); }
   .token-card--hero { grid-column: 1 / -1; }
-  .token-card--request { grid-column: auto; min-height: 140px; }
+  .token-card--metric { min-height: 140px; border-bottom: 0; border-left: 1px solid rgb(var(--color-line)); padding: 20px 16px; }
+  .token-card--metric:nth-child(2) { border-left: 0; padding-left: 0; }
+  .token-card--request { grid-column: auto; min-height: 140px; border-left: 1px solid rgb(var(--color-line)); padding-left: 16px; }
 }
 @media (min-width: 1100px) {
   .usage-summary { grid-template-columns: repeat(7, minmax(0, 1fr)); }
-  .token-card--hero { grid-column: span 2; }
+  .token-card--hero { grid-column: span 2; border-bottom: 0; padding-right: 24px; }
+  .token-card--metric:nth-child(2) { border-left: 1px solid rgb(var(--color-line)); padding-left: 18px; }
 }
 </style>

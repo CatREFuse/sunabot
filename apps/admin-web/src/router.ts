@@ -10,6 +10,7 @@ const routeComponent = (loader: () => Promise<unknown>) => defineAsyncComponent(
 });
 const OverviewView = routeComponent(() => import("./views/OverviewView.vue"));
 const ConversationsView = routeComponent(() => import("./views/ConversationsView.vue"));
+const WebChatView = routeComponent(() => import("./views/WebChatView.vue"));
 const PromptsView = routeComponent(() => import("./views/PromptsView.vue"));
 const MemoryView = routeComponent(() => import("./views/MemoryView.vue"));
 const ImagesView = routeComponent(() => import("./views/ImagesView.vue"));
@@ -22,6 +23,7 @@ export const router = createRouter({
     { path: "/", redirect: "/overview" },
     { path: "/overview", name: "overview", component: OverviewView },
     { path: "/conversations/:conversationId?", name: "conversations", component: ConversationsView },
+    { path: "/web-chat", name: "web-chat", component: WebChatView },
     { path: "/prompts/:fileId?", name: "prompts", component: PromptsView },
     { path: "/memory", name: "memory", component: MemoryView },
     { path: "/images", name: "images", component: ImagesView },

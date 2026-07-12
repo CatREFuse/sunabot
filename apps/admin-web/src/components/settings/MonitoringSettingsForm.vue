@@ -121,7 +121,7 @@ function errorMessage(reason: unknown, fallback: string) {
       </label>
     </div>
 
-    <div class="mt-5 divide-y divide-line rounded-lg border border-line px-4">
+    <div class="mt-5 divide-y divide-line border-y border-line">
       <ToggleSwitch v-model="form.onebotEventsEnabled" label="QQ 连接状态" description="持续掉线超过宽限时间后提醒，恢复连接时再次提醒。" />
       <ToggleSwitch v-model="form.serverEventsEnabled" label="服务运行状态" description="服务启动、停止或发生异常时提醒。" />
     </div>

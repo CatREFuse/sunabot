@@ -5,8 +5,8 @@ export default {
   theme: {
     extend: {
       fontFamily: {
-        display: ["Doto", "system-ui", "sans-serif"],
-        sans: ["Space Grotesk", "system-ui", "sans-serif"],
+        display: ["Doto Variable", "Space Mono", "ui-monospace", "monospace"],
+        sans: ["Space Grotesk Variable", "PingFang SC", "Microsoft YaHei", "system-ui", "sans-serif"],
         mono: ["Space Mono", "ui-monospace", "monospace"]
       },
       colors: {

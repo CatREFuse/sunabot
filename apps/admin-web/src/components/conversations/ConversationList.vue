@@ -35,14 +35,14 @@ function scopeLabel(value: ConversationRecord["scope"]) {
     <header class="flex min-h-20 items-center justify-between gap-3 border-b border-line px-4">
       <div>
         <p class="page-kicker">CONVERSATIONS</p>
-        <h1 class="text-xl font-medium text-display">会话</h1>
+        <h1 class="mt-1 text-3xl font-medium leading-none tracking-[-0.03em] text-display">会话</h1>
       </div>
       <button class="icon-btn" type="button" :disabled="loading" aria-label="刷新会话" @click="emit('refresh')">
         <i class="bx bx-refresh text-xl" aria-hidden="true"></i>
       </button>
     </header>
     <div class="grid gap-3 border-b border-line p-4">
-      <label class="flex min-h-11 items-center gap-2 rounded-lg border border-visible bg-page px-3">
+      <label class="flex min-h-11 items-center gap-2 border-b border-visible px-1">
         <i class="bx bx-search text-lg text-mute" aria-hidden="true"></i>
         <input v-model="query" class="min-w-0 flex-1 bg-transparent font-mono text-xs outline-none placeholder:text-disabled" type="search" placeholder="搜索会话" autocomplete="off" aria-label="搜索会话">
       </label>

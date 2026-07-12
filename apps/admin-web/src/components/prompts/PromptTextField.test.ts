@@ -57,4 +57,37 @@ describe("PromptTextField", () => {
     ]);
     expect(wrapper.findAll(".variable-context__row--used").map((row) => row.text()).join(" ")).toContain("persona.soul");
   });
+
+  it("keeps the editor scroll position when a variable is inserted", async () => {
+    const content = Array.from({ length: 80 }, (_, index) => `line ${index + 1}`).join("\n");
+    const wrapper = mount(PromptTextField, {
+      props: { modelValue: content, variables, label: "系统提示词" }
+    });
+    const textarea = wrapper.get("textarea").element as HTMLTextAreaElement;
+    textarea.scrollTop = 240;
+    textarea.setSelectionRange(12, 12);
+
+    await wrapper.findAll(".variable-context__row")[0]!.trigger("click");
+
+    expect(textarea.scrollTop).toBe(240);
+    expect(wrapper.emitted("update:modelValue")?.at(-1)?.[0]).toContain("@{user.input}");
+  });
+
+  it("renders escaped Markdown and XML syntax in the highlight layer", () => {
+    const wrapper = mount(PromptTextField, {
+      props: {
+        modelValue: "# 标题\n- **重点**与*斜体*\n> 引用\n`code` <context>@{user.input}</context>",
+        variables,
+        label: "系统提示词"
+      }
+    });
+    const highlight = wrapper.get(".prompt-field__highlight");
+
+    expect(highlight.find(".markup-heading").exists()).toBe(true);
+    expect(highlight.find(".markup-bold").text()).toBe("**重点**");
+    expect(highlight.find(".markup-italic").text()).toBe("*斜体*");
+    expect(highlight.find(".markup-quote").exists()).toBe(true);
+    expect(highlight.findAll(".markup-xml")).toHaveLength(2);
+    expect(highlight.text()).toContain("@{user.input}");
+  });
 });

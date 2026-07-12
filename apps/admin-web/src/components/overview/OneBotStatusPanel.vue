@@ -66,18 +66,19 @@ const stateIcon = computed(() => props.primaryState === "ONLINE" ? "bx-check-shi
 </template>
 
 <style scoped>
-.connection-mosaic { display: grid; gap: 16px; }
-.dashboard-card { min-width: 0; overflow: hidden; border: 1px solid rgb(var(--color-line)); border-radius: 14px; background: rgb(var(--color-panel)); }
+.connection-mosaic { display: grid; border-block: 1px solid rgb(var(--color-line)); }
+.dashboard-card { min-width: 0; overflow: hidden; background: transparent; }
+.runtime-card { border-bottom: 1px solid rgb(var(--color-line)); }
 .dashboard-card__header { display: flex; min-height: 52px; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid rgb(var(--color-line)); padding: 8px 16px; }
 .runtime-card { position: relative; }
-.runtime-card::before { position: absolute; top: 0; bottom: 0; left: 0; width: 3px; background: rgb(var(--color-warning)); content: ""; }
+.runtime-card::before { position: absolute; top: 0; bottom: 0; left: 0; width: 2px; background: rgb(var(--color-warning)); content: ""; }
 .runtime-card[data-state="success"]::before { background: rgb(var(--color-success)); }
 .runtime-card[data-state="error"]::before { background: rgb(var(--color-accent)); }
-.runtime-card__body { padding: 24px 20px 28px; }
-.runtime-card__state { display: block; font-family: "Doto", "Space Mono", monospace; font-size: clamp(42px, 7vw, 64px); font-weight: 700; line-height: .9; letter-spacing: -.045em; color: rgb(var(--color-display)); }
+.runtime-card__body { padding: 32px 20px 36px; }
+.runtime-card__state { display: block; color: rgb(var(--color-display)); font-family: "Doto Variable", "Space Mono", monospace; font-size: clamp(64px, 7vw, 72px); font-weight: 650; line-height: .9; letter-spacing: -.045em; }
 .runtime-card__body p { display: flex; align-items: center; gap: 8px; margin-top: 18px; font-family: "Space Mono", monospace; font-size: 11px; }
 .runtime-card__footer { display: grid; gap: 1px; border-top: 1px solid rgb(var(--color-line)); background: rgb(var(--color-line)); }
-.runtime-card__footer span { display: flex; min-width: 0; align-items: center; gap: 8px; background: rgb(var(--color-panel)); padding: 12px 16px; color: rgb(var(--color-mute)); font-family: "Space Mono", monospace; font-size: 10px; overflow-wrap: anywhere; }
+.runtime-card__footer span { display: flex; min-width: 0; align-items: center; gap: 8px; background: rgb(var(--color-page)); padding: 12px 16px; color: rgb(var(--color-mute)); font-family: "Space Mono", monospace; font-size: 10px; overflow-wrap: anywhere; }
 .runtime-card__footer strong { color: rgb(var(--color-display)); font-size: 13px; }
 .identity-card__profile { display: flex; min-height: 112px; align-items: center; gap: 12px; padding: 20px 16px; }
 .identity-card__brand { display: none; color: rgb(var(--color-interactive)); font-size: 28px; }
@@ -87,5 +88,8 @@ const stateIcon = computed(() => props.primaryState === "ONLINE" ? "bx-check-shi
 .identity-card__facts dt { display: flex; align-items: center; gap: 6px; color: rgb(var(--color-mute)); font-family: "Space Mono", monospace; font-size: 10px; }
 .identity-card__facts dd { min-width: 0; overflow-wrap: anywhere; color: rgb(var(--color-ink)); font-family: "Space Mono", monospace; font-size: 10px; text-align: right; }
 @media (min-width: 640px) { .runtime-card__footer { grid-template-columns: 1fr 1.4fr; } .identity-card__brand { display: block; } }
-@media (min-width: 900px) { .connection-mosaic { grid-template-columns: minmax(0, 1.25fr) minmax(340px, .75fr); } }
+@media (min-width: 900px) {
+  .connection-mosaic { grid-template-columns: minmax(0, 1.25fr) minmax(340px, .75fr); }
+  .runtime-card { border-right: 1px solid rgb(var(--color-line)); border-bottom: 0; }
+}
 </style>

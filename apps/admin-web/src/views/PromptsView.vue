@@ -213,7 +213,7 @@ function setMessage(value: string, kind: "" | "success" | "error" | "warning") {
     </div>
 
     <DialogOverlay :open="confirmOpen" labelledby="unsaved-title" @close="cancelNavigation">
-      <section class="w-full max-w-md rounded-2xl border border-visible bg-panel p-6">
+      <section class="w-full max-w-md rounded border border-visible bg-panel p-6">
         <p class="page-kicker">UNSAVED</p>
         <h2 id="unsaved-title" class="mt-2 text-xl font-medium text-display">放弃未保存的修改？</h2>
         <p class="mt-3 text-sm text-mute">当前正文尚未保存，离开后无法恢复。</p>

@@ -18,7 +18,7 @@ const keywords = computed({
       <h2 class="section-title mt-2">命令执行</h2>
       <p class="mt-2 text-sm text-mute">扩大命令权限会增加主机风险，请保留最小访问范围。</p>
     </div>
-    <div class="divide-y divide-line rounded-lg border border-line px-4">
+    <div class="divide-y divide-line border-y border-line">
       <ToggleSwitch v-model="draft.enabled" label="启用 Bash" />
       <ToggleSwitch v-model="draft.allowGroup" label="允许群聊" description="群成员可触发命令执行" />
       <ToggleSwitch v-model="draft.adminOnly" label="仅管理员" />

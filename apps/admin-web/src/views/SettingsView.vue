@@ -28,6 +28,8 @@ const catalog = useModelCatalog();
 const loadError = shallowRef("");
 const leaveConfirmOpen = shallowRef(false);
 const pendingLeavePath = shallowRef("");
+const savingBeforeLeave = shallowRef(false);
+const leaveSaveError = shallowRef("");
 const logoutConfirmOpen = shallowRef(false);
 const loggingOut = shallowRef(false);
 const logoutError = shallowRef("");
@@ -116,16 +118,47 @@ function onBeforeUnload(event: BeforeUnloadEvent) {
 }
 
 function cancelLeave() {
+  if (savingBeforeLeave.value) return;
   leaveConfirmOpen.value = false;
   pendingLeavePath.value = "";
+  leaveSaveError.value = "";
 }
 
 function confirmLeave() {
+  if (savingBeforeLeave.value) return;
   const path = pendingLeavePath.value;
   for (const section of sectionKeys) workspace.discard(section);
   leaveConfirmOpen.value = false;
   pendingLeavePath.value = "";
+  leaveSaveError.value = "";
   if (path) void router.push(path);
+}
+
+async function saveAndLeave() {
+  const path = pendingLeavePath.value;
+  savingBeforeLeave.value = true;
+  leaveSaveError.value = "";
+  try {
+    if (workspace.isGroupReplyDirty()) {
+      await workspace.saveGroupReply();
+      if (workspace.isGroupReplyDirty()) throw new Error(workspace.state.orchestrator.message || "群聊编排保存失败");
+    }
+    for (const section of sectionKeys) {
+      if (section === "orchestrator") continue;
+      const dirty = section === "onebot" ? workspace.isOneBotSettingsDirty() : workspace.isDirty(section);
+      if (!dirty) continue;
+      await workspace.save(section);
+      const stillDirty = section === "onebot" ? workspace.isOneBotSettingsDirty() : workspace.isDirty(section);
+      if (stillDirty) throw new Error(workspace.state[section].message || "设置保存失败");
+    }
+    leaveConfirmOpen.value = false;
+    pendingLeavePath.value = "";
+    if (path) await router.push(path);
+  } catch (error) {
+    leaveSaveError.value = error instanceof Error ? error.message : "设置保存失败";
+  } finally {
+    savingBeforeLeave.value = false;
+  }
 }
 
 async function logout() {
@@ -207,19 +240,21 @@ async function logout() {
   </div>
 
   <DialogOverlay :open="leaveConfirmOpen" labelledby="settings-leave-title" @close="cancelLeave">
-    <section class="w-full max-w-md rounded-2xl border border-visible bg-panel p-6">
+    <section class="w-full max-w-md rounded border border-visible bg-panel p-6">
       <p class="page-kicker">UNSAVED SETTINGS</p>
       <h2 id="settings-leave-title" class="mt-2 text-xl font-medium text-display">放弃未保存的设置？</h2>
       <p class="mt-3 text-sm leading-6 text-mute">离开后，本次修改不会保留。</p>
+      <p v-if="leaveSaveError" class="mt-4 inline-state" data-kind="error">{{ leaveSaveError }}</p>
       <div class="mt-8 flex flex-wrap justify-end gap-2">
-        <button class="btn btn-ghost" type="button" @click="cancelLeave">继续编辑</button>
-        <button class="btn btn-danger" type="button" @click="confirmLeave">放弃并离开</button>
+        <button class="btn btn-ghost" type="button" :disabled="savingBeforeLeave" @click="cancelLeave">继续编辑</button>
+        <button class="btn btn-primary" type="button" :disabled="savingBeforeLeave" @click="saveAndLeave"><i class="bx bx-save" aria-hidden="true"></i>{{ savingBeforeLeave ? "保存中" : "保存并离开" }}</button>
+        <button class="btn btn-danger" type="button" :disabled="savingBeforeLeave" @click="confirmLeave">放弃并离开</button>
       </div>
     </section>
   </DialogOverlay>
 
   <DialogOverlay :open="logoutConfirmOpen" labelledby="settings-logout-title" @close="logoutConfirmOpen = false">
-    <section class="w-full max-w-md rounded-2xl border border-visible bg-panel p-6">
+    <section class="w-full max-w-md rounded border border-visible bg-panel p-6">
       <p class="page-kicker">ACCOUNT</p>
       <h2 id="settings-logout-title" class="mt-2 text-xl font-medium text-display">退出管理台？</h2>
       <p class="mt-3 text-sm leading-6 text-mute">下次访问需要重新登录。</p>

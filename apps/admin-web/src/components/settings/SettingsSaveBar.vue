@@ -4,7 +4,7 @@ const emit = defineEmits<{ save: []; discard: []; reload: [] }>();
 </script>
 
 <template>
-  <div class="relative z-20 mt-10 flex min-h-16 flex-wrap items-center justify-between gap-3 border border-visible bg-panel px-4 py-3 lg:sticky lg:bottom-4 lg:rounded-xl">
+  <div class="mt-10 flex min-h-16 flex-wrap items-center justify-between gap-3 border-t border-visible bg-transparent py-4">
     <span class="inline-state" :data-kind="kind === 'error' || kind === 'conflict' ? 'error' : kind === 'saved' ? 'success' : kind === 'restart' ? 'warning' : undefined">
       <span v-if="field" class="mr-2">{{ field }}</span>{{ message || (dirty ? "[UNSAVED]" : "[NO CHANGES]") }}
     </span>

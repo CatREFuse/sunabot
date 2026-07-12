@@ -276,7 +276,7 @@ function setStatus(message: string, kind: "" | "success" | "error" | "warning") 
 <style scoped>
 .provider-group { display: grid; gap: 20px; border-bottom: 1px solid rgb(var(--color-line)); padding: 28px 0; }
 .provider-group > header { display: flex; align-items: center; gap: 12px; }
-.provider-group > header > i { display: grid; width: 40px; height: 40px; flex: none; place-items: center; border-radius: 10px; background: rgb(var(--color-raised)); color: rgb(var(--color-interactive)); font-size: 20px; }
+.provider-group > header > i { width: 40px; flex: none; color: rgb(var(--color-interactive)); font-size: 28px; line-height: 40px; text-align: center; }
 .provider-group > header strong { display: block; color: rgb(var(--color-display)); font-size: 15px; font-weight: 500; }
 .provider-group > header span { display: block; margin-top: 2px; color: rgb(var(--color-mute)); font-size: 12px; }
 </style>

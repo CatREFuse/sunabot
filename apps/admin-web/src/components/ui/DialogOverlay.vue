@@ -172,40 +172,14 @@ function closeFromBackdrop() {
 
 <style>
 .dialog-overlay-enter-active,
-.dialog-overlay-leave-active,
-.dialog-overlay-enter-active > *,
-.dialog-overlay-leave-active > * {
-  transition-duration: 180ms;
-  transition-timing-function: ease;
-}
-
-.dialog-overlay-enter-active,
 .dialog-overlay-leave-active {
+  transition-duration: 180ms;
+  transition-timing-function: cubic-bezier(0.25, 0.1, 0.25, 1);
   transition-property: opacity;
-}
-
-.dialog-overlay-enter-active > *,
-.dialog-overlay-leave-active > * {
-  transition-property: transform;
 }
 
 .dialog-overlay-enter-from,
 .dialog-overlay-leave-to {
   opacity: 0;
-}
-
-.dialog-overlay-enter-from[data-placement="center"] > *,
-.dialog-overlay-leave-to[data-placement="center"] > * {
-  transform: translateY(8px) scale(0.985);
-}
-
-.dialog-overlay-enter-from[data-placement="right"] > *,
-.dialog-overlay-leave-to[data-placement="right"] > * {
-  transform: translateX(24px);
-}
-
-.dialog-overlay-enter-from[data-placement="bottom"] > *,
-.dialog-overlay-leave-to[data-placement="bottom"] > * {
-  transform: translateY(24px);
 }
 </style>

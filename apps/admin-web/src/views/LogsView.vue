@@ -16,7 +16,7 @@ onMounted(() => data.load());
       <PageHeader kicker="ACTIVITY" title="日志">
         <template #actions><button class="icon-btn" type="button" :disabled="data.loading.value" aria-label="刷新日志" @click="data.load()"><i class="bx bx-refresh text-xl" :class="data.loading.value ? 'bx-spin' : ''" aria-hidden="true"></i></button></template>
       </PageHeader>
-      <div class="mt-8 flex flex-wrap items-center justify-between gap-4 border-b border-line pb-4">
+      <div class="mt-4 flex flex-wrap items-center justify-between gap-4 border-b border-line pb-4">
         <div class="segmented" aria-label="日志视图">
           <button class="segmented-button" type="button" :aria-pressed="active === 'terminal'" @click="active = 'terminal'"><i class="bx bx-terminal mr-1" aria-hidden="true"></i>活动终端</button>
           <button class="segmented-button" type="button" :aria-pressed="active === 'requests'" @click="active = 'requests'"><i class="bx bx-list-ul mr-1" aria-hidden="true"></i>请求日志</button>

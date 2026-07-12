@@ -15,7 +15,7 @@ defineProps<{ models: readonly ModelCatalogItem[] }>();
       <p class="page-kicker">ORCHESTRATOR</p>
       <h2 class="section-title mt-2">群聊编排器</h2>
     </div>
-    <div class="divide-y divide-line rounded-lg border border-line px-4">
+    <div class="divide-y divide-line border-y border-line">
       <ToggleSwitch v-model="groupEnabled" label="启用" />
       <ToggleSwitch v-model="draft.enabled" label="编排器" :disabled="!groupEnabled" />
       <p v-if="groupEnabled && !draft.enabled" class="py-3 text-xs leading-5 text-mute">使用规则匹配回复</p>

@@ -25,9 +25,7 @@ const capabilityState = computed(() => props.tool.available === false
 <template>
   <article class="grid min-w-0 gap-4 border-b border-line py-5 last:border-b-0 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
     <div class="flex min-w-0 items-start gap-3">
-      <span class="grid size-10 shrink-0 place-items-center rounded-lg bg-raised text-[rgb(var(--color-interactive))]">
-        <i class="bx text-xl" :class="toolIcon(tool.name)" aria-hidden="true"></i>
-      </span>
+      <i class="bx w-10 shrink-0 text-[28px] leading-10 text-[rgb(var(--color-interactive))]" :class="toolIcon(tool.name)" aria-hidden="true"></i>
       <div class="min-w-0">
         <div class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
           <strong class="text-sm font-medium text-display">{{ tool.title }}</strong>

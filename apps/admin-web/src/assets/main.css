@@ -80,7 +80,7 @@
     overflow: hidden;
     background: rgb(var(--color-page));
     color: rgb(var(--color-ink));
-    font-family: "Space Grotesk", system-ui, sans-serif;
+    font-family: "Space Grotesk Variable", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
     font-size: 1rem;
     line-height: 1.5;
     text-rendering: optimizeLegibility;
@@ -155,7 +155,7 @@
   }
 
   .page-title {
-    @apply mt-2 font-display text-[32px] font-semibold leading-[1.05] tracking-[-0.02em] text-display md:text-[40px];
+    @apply mt-3 font-sans text-[36px] font-medium leading-none tracking-[-0.03em] text-display md:text-[48px];
   }
 
   .page-intro {
@@ -163,15 +163,15 @@
   }
 
   .section-title {
-    @apply text-xl font-medium leading-tight tracking-[-0.01em] text-display md:text-2xl;
+    @apply font-sans text-2xl font-medium leading-tight tracking-[-0.01em] text-display;
   }
 
   .surface {
-    @apply rounded-xl border border-line bg-panel;
+    @apply rounded-none border-0 bg-transparent;
   }
 
   .technical-surface {
-    @apply rounded-lg border border-visible bg-panel;
+    @apply rounded border border-visible bg-transparent;
   }
 
   .divider-row {
@@ -195,11 +195,20 @@
   }
 
   .icon-btn {
-    @apply inline-flex size-11 shrink-0 items-center justify-center rounded-full border border-visible bg-transparent text-mute transition-colors duration-200 hover:border-display hover:text-display;
+    @apply inline-flex size-11 shrink-0 items-center justify-center border-0 bg-transparent p-0 text-mute transition-colors duration-200 hover:text-display;
+    border: 0 !important;
+    border-radius: 0 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+  }
+
+  .icon-btn > .bx {
+    font-size: 26px;
+    line-height: 1;
   }
 
   .control {
-    @apply min-h-11 w-full min-w-0 rounded-lg border border-visible bg-page px-3 py-2 font-mono text-sm text-ink transition-colors duration-200 placeholder:text-disabled hover:border-mute focus:border-display focus:outline-none;
+    @apply min-h-11 w-full min-w-0 rounded border border-visible bg-page px-3 py-2 font-mono text-sm text-ink transition-colors duration-200 placeholder:text-disabled hover:border-mute focus:border-display focus:outline-none;
   }
 
   textarea.control {

@@ -1,6 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import type { OneBotGateway } from "../../../adapters/onebot/onebotGateway.js";
 import type { ConversationDirectory } from "../../../services/conversations/conversationDirectory.js";
+import { WebChatService } from "../../../services/webChat/webChatService.js";
+import { badRequest } from "../../../src/admin/errors.js";
 import { readRequestLogs } from "../../../src/requestLog.js";
 import type { SunaRuntime } from "../../../src/runtime.js";
 
@@ -21,6 +23,25 @@ const conversationParams = {
 
 export function registerConversationRoutes(app: FastifyInstance, options: ConversationRouteOptions) {
   const { runtime, onebotGateway, conversationDirectory } = options;
+  const webChat = new WebChatService(runtime);
+
+  app.get("/api/web-chat/messages", {
+    schema: { querystring: openObject, response: { 200: openObject } }
+  }, async () => webChat.messages());
+
+  app.post("/api/web-chat/messages", {
+    schema: { body: passthroughBody, response: { 200: openObject } }
+  }, async (request) => {
+    const text = String((request.body as { text?: unknown } | undefined)?.text ?? "").trim();
+    if (!text || text.length > 16_000) {
+      badRequest(
+        "WEB_CHAT_MESSAGE_INVALID",
+        text ? "消息不能超过 16000 个字符。" : "请输入消息。",
+        "text"
+      );
+    }
+    return webChat.send(text, request.signal);
+  });
 
   app.get("/api/conversations", {
     schema: { querystring: openObject, response: { 200: openObject } }

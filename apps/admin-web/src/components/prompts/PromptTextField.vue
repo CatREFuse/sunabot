@@ -2,6 +2,7 @@
 import { computed, nextTick, shallowRef, useTemplateRef } from "vue";
 import type { PromptVariableDefinition } from "../../types";
 import { usedPromptVariableNames } from "../../utils/promptVariables";
+import { highlightedPromptMarkup } from "../../utils/promptMarkupHighlight";
 import PromptVariableTable from "./PromptVariableTable.vue";
 
 const model = defineModel<string>({ required: true });
@@ -20,6 +21,7 @@ const props = withDefaults(defineProps<{
 });
 
 const textarea = useTemplateRef<HTMLTextAreaElement>("textarea");
+const highlightLayer = useTemplateRef<HTMLElement>("highlightLayer");
 const query = shallowRef("");
 const replaceStart = shallowRef(-1);
 const activeIndex = shallowRef(0);
@@ -32,6 +34,7 @@ const suggestions = computed(() => {
 });
 const suggestionsOpen = computed(() => replaceStart.value >= 0 && suggestions.value.length > 0);
 const usedNames = computed(() => usedPromptVariableNames(model.value, props.variables));
+const highlightedContent = computed(() => `${highlightedPromptMarkup(model.value)}\n`);
 const formatVariable = (name: string) => `@{${name}}`;
 
 function variableToken(name: string) {
@@ -45,6 +48,7 @@ function variableToken(name: string) {
 function onInput(event: Event) {
   model.value = (event.target as HTMLTextAreaElement).value;
   updateSuggestions(event.target as HTMLTextAreaElement);
+  syncHighlightScroll(event.target as HTMLTextAreaElement);
 }
 
 function updateSuggestions(target = textarea.value) {
@@ -91,12 +95,14 @@ function onKeydown(event: KeyboardEvent) {
 function insertVariable(name: string) {
   const target = textarea.value;
   if (!target) return;
+  const scrollTop = target.scrollTop;
+  const scrollLeft = target.scrollLeft;
   const start = replaceStart.value >= 0 ? replaceStart.value : target.selectionStart;
   const end = target.selectionStart;
   const token = variableToken(name);
   model.value = `${model.value.slice(0, start)}${token}${model.value.slice(end)}`;
   closeSuggestions();
-  void focusAt(start + token.length);
+  void focusAt(start + token.length, scrollTop, scrollLeft);
 }
 
 function insertText(text: string) {
@@ -108,10 +114,15 @@ function insertText(text: string) {
   void focusAt(start + text.length);
 }
 
-async function focusAt(position: number) {
+async function focusAt(position: number, scrollTop?: number, scrollLeft?: number) {
   await nextTick();
-  textarea.value?.focus();
-  textarea.value?.setSelectionRange(position, position);
+  const target = textarea.value;
+  if (!target) return;
+  target.focus({ preventScroll: true });
+  target.setSelectionRange(position, position);
+  if (scrollTop !== undefined) target.scrollTop = scrollTop;
+  if (scrollLeft !== undefined) target.scrollLeft = scrollLeft;
+  syncHighlightScroll(target);
 }
 
 function closeSuggestions() {
@@ -123,11 +134,20 @@ function closeSuggestions() {
 function onBlur() {
   window.setTimeout(closeSuggestions, 120);
 }
+
+function syncHighlightScroll(target = textarea.value) {
+  if (!target || !highlightLayer.value) return;
+  highlightLayer.value.scrollTop = target.scrollTop;
+  highlightLayer.value.scrollLeft = target.scrollLeft;
+}
+
+defineExpose({ insertVariable });
 </script>
 
 <template>
   <div class="prompt-field" :class="{ 'prompt-field--fill': fill }">
     <div class="prompt-field__editor">
+      <pre ref="highlightLayer" class="prompt-field__highlight" aria-hidden="true" v-html="highlightedContent"></pre>
       <textarea
         ref="textarea"
         :value="model"
@@ -139,6 +159,7 @@ function onBlur() {
         @click="updateSuggestions()"
         @keyup="updateSuggestions()"
         @keydown="onKeydown"
+        @scroll="syncHighlightScroll()"
         @blur="onBlur"
       ></textarea>
       <div v-if="suggestionsOpen" class="prompt-field__suggestions" role="listbox" :aria-label="`${label}变量`">
@@ -166,12 +187,13 @@ function onBlur() {
   position: relative;
   overflow: visible;
   border: 1px solid rgb(var(--color-visible));
-  border-radius: 8px;
+  border-radius: 4px;
   background: rgb(var(--color-panel));
 }
 
 .prompt-field--fill .prompt-field__editor,
-.prompt-field--fill .prompt-field__textarea {
+.prompt-field--fill .prompt-field__textarea,
+.prompt-field--fill .prompt-field__highlight {
   min-height: 0;
 }
 
@@ -191,27 +213,75 @@ function onBlur() {
 
 .prompt-field__editor {
   position: relative;
+  min-width: 0;
+  flex: 1;
 }
 
+.prompt-field__highlight,
 .prompt-field__textarea {
+  margin: 0;
+  padding: 20px 24px;
+  font-family: "Space Mono", monospace;
+  font-size: 13px;
+  font-variant-ligatures: none;
+  line-height: 1.6;
+  tab-size: 2;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+.prompt-field__highlight {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  overflow: auto;
+  border-radius: 4px;
+  color: rgb(var(--color-ink));
+  pointer-events: none;
+  scrollbar-width: none;
+}
+
+.prompt-field__highlight::-webkit-scrollbar { display: none; }
+
+.prompt-field__textarea {
+  position: relative;
+  z-index: 1;
   display: block;
   width: 100%;
   resize: vertical;
   border: 0;
-  border-radius: 8px 8px 0 0;
+  border-radius: 4px 4px 0 0;
   background: transparent;
-  padding: 16px;
-  font-family: "Space Mono", monospace;
-  font-size: 13px;
-  line-height: 1.6;
-  color: rgb(var(--color-ink));
+  color: transparent;
+  caret-color: rgb(var(--color-accent));
+  -webkit-text-fill-color: transparent;
   outline: none;
+}
+
+.prompt-field__textarea::selection {
+  background: rgb(var(--color-accent) / 0.2);
+  -webkit-text-fill-color: transparent;
 }
 
 .prompt-field__textarea:focus {
   outline: 1px solid rgb(var(--color-display));
   outline-offset: -1px;
 }
+
+.prompt-field__highlight :deep(.markup-heading),
+.prompt-field__highlight :deep(.markup-bold) { font-weight: 700; }
+.prompt-field__highlight :deep(.markup-italic),
+.prompt-field__highlight :deep(.markup-quote) { font-style: italic; }
+.prompt-field__highlight :deep(.markup-marker),
+.prompt-field__highlight :deep(.markup-list-marker),
+.prompt-field__highlight :deep(.markup-xml),
+.prompt-field__highlight :deep(.markup-variable) { color: rgb(var(--color-accent)); }
+.prompt-field__highlight :deep(.markup-code),
+.prompt-field__highlight :deep(.markup-code-fence) {
+  background: rgb(var(--color-accent) / 0.08);
+  color: rgb(var(--color-accent));
+}
+.prompt-field__highlight :deep(.markup-quote) { color: rgb(var(--color-mute)); }
 
 .prompt-field__suggestions {
   position: absolute;
@@ -222,7 +292,7 @@ function onBlur() {
   max-height: 288px;
   overflow-y: auto;
   border: 1px solid rgb(var(--color-visible));
-  border-radius: 8px;
+  border-radius: 4px;
   background: rgb(var(--color-panel));
 }
 

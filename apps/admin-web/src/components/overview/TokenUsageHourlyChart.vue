@@ -80,7 +80,7 @@ function barHeight(total: number) {
 </template>
 
 <style scoped>
-.usage-chart { min-width: 0; overflow: hidden; border: 1px solid rgb(var(--color-line)); border-radius: 14px; background: rgb(var(--color-panel)); padding: 16px; }
+.usage-chart { min-width: 0; overflow: hidden; border-block: 1px solid rgb(var(--color-line)); background: transparent; padding: 20px 0; }
 .usage-chart__header { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px 16px; color: rgb(var(--color-mute)); font-family: "Space Mono", monospace; font-size: 9px; }
 .usage-card__label, .chart-legend, .chart-legend span { display: flex; align-items: center; }
 .usage-card__label { gap: 7px; font-size: 10px; letter-spacing: .06em; text-transform: uppercase; }
@@ -90,9 +90,9 @@ function barHeight(total: number) {
 .chart-legend__line { color: rgb(var(--color-success)); }
 .hour-chart { display: block; width: 100%; min-height: 190px; margin-top: 8px; overflow: visible; }
 .chart-axis { stroke: rgb(var(--color-visible)); stroke-width: 1; }
-.chart-bar { fill: color-mix(in srgb, rgb(var(--color-interactive)) 40%, transparent); }
+.chart-bar { fill: color-mix(in srgb, rgb(var(--color-display)) 34%, transparent); }
 .chart-line { fill: none; stroke: rgb(var(--color-success)); stroke-width: 2; vector-effect: non-scaling-stroke; }
-.chart-point { fill: rgb(var(--color-panel)); stroke: rgb(var(--color-success)); stroke-width: 2; vector-effect: non-scaling-stroke; }
+.chart-point { fill: rgb(var(--color-page)); stroke: rgb(var(--color-success)); stroke-width: 2; vector-effect: non-scaling-stroke; }
 .chart-label, .chart-rate-label { fill: rgb(var(--color-mute)); font-family: "Space Mono", monospace; font-size: 10px; }
 .chart-rate-label { fill: rgb(var(--color-success)); font-size: 9px; }
 </style>

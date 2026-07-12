@@ -19,7 +19,7 @@ withDefaults(defineProps<{ label: string; description?: string; disabled?: boole
     <span
       data-slot="toggle-track"
       class="relative h-6 w-11 shrink-0 rounded-full border transition-colors duration-200 peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-4 peer-focus-visible:outline-[rgb(var(--color-interactive))]"
-      :class="model ? 'border-[rgb(var(--color-interactive))] bg-[rgb(var(--color-interactive))]' : 'border-visible bg-page'"
+      :class="model ? 'border-display bg-display' : 'border-visible bg-page'"
     >
       <span
         data-slot="toggle-thumb"

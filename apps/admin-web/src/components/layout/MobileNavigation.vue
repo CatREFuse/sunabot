@@ -8,6 +8,7 @@ const route = useRoute();
 const moreOpen = shallowRef(false);
 const primary: Array<{ to: string; label: string; icon: string }> = [
   { to: "/overview", label: "状态", icon: "bx-pulse" },
+  { to: "/web-chat", label: "Web Chat", icon: "bx-chat" },
   { to: "/conversations", label: "会话", icon: "bx-message-square-dots" },
   { to: "/prompts", label: "提示词", icon: "bx-bot" },
   { to: "/settings", label: "设置", icon: "bx-cog" }
@@ -27,19 +28,19 @@ const theme = useTheme();
 </script>
 
 <template>
-  <nav class="fixed inset-x-0 bottom-0 z-40 grid h-[calc(68px+env(safe-area-inset-bottom))] grid-cols-5 border-t border-visible bg-panel pb-[env(safe-area-inset-bottom)] lg:hidden" aria-label="主导航">
+  <nav class="fixed inset-x-0 bottom-0 z-40 grid h-[calc(68px+env(safe-area-inset-bottom))] grid-cols-6 border-t border-visible bg-panel pb-[env(safe-area-inset-bottom)] lg:hidden" aria-label="主导航">
     <RouterLink
       v-for="item in primary"
       :key="item.to"
       :to="item.to"
-      class="flex min-w-0 flex-col items-center justify-center gap-1 font-mono text-[10px] uppercase tracking-[0.04em] text-disabled"
-      active-class="!text-display"
+      class="mobile-nav-link relative flex min-w-0 flex-col items-center justify-center gap-1 font-mono text-[10px] uppercase tracking-[0.04em] text-disabled"
+      active-class="is-active !text-display"
     >
-      <i class="bx text-xl" :class="item.icon" aria-hidden="true"></i>
+      <i class="bx text-2xl" :class="item.icon" aria-hidden="true"></i>
       <span>{{ item.label }}</span>
     </RouterLink>
-    <button class="flex min-w-0 flex-col items-center justify-center gap-1 font-mono text-[10px] uppercase tracking-[0.04em]" :class="moreActive || moreOpen ? 'text-display' : 'text-disabled'" type="button" @click="moreOpen = true">
-      <i class="bx bx-menu text-xl" aria-hidden="true"></i>
+    <button class="mobile-nav-link relative flex min-w-0 flex-col items-center justify-center gap-1 bg-transparent font-mono text-[10px] uppercase tracking-[0.04em]" :class="moreActive || moreOpen ? 'is-active text-display' : 'text-disabled'" type="button" @click="moreOpen = true">
+      <i class="bx bx-menu text-2xl" aria-hidden="true"></i>
       <span>更多</span>
     </button>
   </nav>
@@ -72,12 +73,13 @@ const theme = useTheme();
           <button
             v-for="item in themeItems"
             :key="item.id"
-            class="flex min-h-11 items-center justify-center gap-2 rounded-lg font-mono text-[10px] text-disabled"
-            :class="theme.preference.value === item.id ? 'bg-raised text-display' : ''"
+            class="theme-icon-button relative flex min-h-11 items-center justify-center gap-2 bg-transparent font-mono text-[10px] text-disabled transition-colors duration-200"
+            :class="theme.preference.value === item.id ? 'text-display' : ''"
             type="button"
+            :aria-pressed="theme.preference.value === item.id"
             @click="theme.setTheme(item.id)"
           >
-            <i class="bx text-lg" :class="item.icon" aria-hidden="true"></i>
+            <i class="bx text-2xl" :class="item.icon" aria-hidden="true"></i>
             <span>{{ item.label }}</span>
           </button>
         </div>
@@ -85,3 +87,39 @@ const theme = useTheme();
     </section>
   </DialogOverlay>
 </template>
+
+<style scoped>
+.mobile-nav-link::before,
+.theme-icon-button::after {
+  position: absolute;
+  content: "";
+  background: rgb(var(--color-display));
+  opacity: 0;
+  transition: opacity 180ms cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+
+.mobile-nav-link::before {
+  top: 5px;
+  left: 50%;
+  width: 4px;
+  height: 4px;
+  border-radius: 999px;
+  transform: translateX(-50%);
+}
+
+.mobile-nav-link.is-active::before {
+  opacity: 1;
+}
+
+.theme-icon-button::after {
+  right: 50%;
+  bottom: 2px;
+  width: 16px;
+  height: 2px;
+  transform: translateX(50%);
+}
+
+.theme-icon-button[aria-pressed="true"]::after {
+  opacity: 1;
+}
+</style>

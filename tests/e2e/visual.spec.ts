@@ -78,6 +78,11 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     await expect(page.getByRole("button", { name: "查看请求日志" })).toHaveCount(2);
     await capture(page, viewport.name, theme, "conversations-detail");
 
+    await page.goto("/web-chat");
+    await expect(page.getByRole("heading", { name: "WEB CHAT", exact: true })).toBeVisible();
+    await expect(page.getByLabel("Web Chat 消息")).toBeVisible();
+    await capture(page, viewport.name, theme, "web-chat");
+
     await page.goto("/prompts");
     await expect(page.getByLabel("搜索文件")).toBeVisible();
     await capture(page, viewport.name, theme, "prompts-list");
@@ -85,12 +90,31 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     await page.goto("/prompts/persona.soul");
     const editor = page.getByLabel("提示词正文");
     await expect(editor).toBeVisible();
-    await editor.fill(`${Array.from({ length: 30 }, (_, index) => `第 ${index + 1} 行：保持清醒、可靠与坦诚。`).join("\n")}\n`);
+    await editor.fill([
+      "# Voice",
+      "",
+      "- **保持清醒**，可靠与坦诚。",
+      "- 使用 *克制* 且准确的表达。",
+      "- 在需要时引用 @{persona.preference}。",
+      "",
+      "> 已确认，继续执行。",
+      "",
+      "```text",
+      "status: ready",
+      "```",
+      "",
+      "<context>@{persona.user}</context>",
+      ...Array.from({ length: 18 }, (_, index) => `${index + 1}. 保持清醒、可靠与坦诚。`)
+    ].join("\n"));
     const serverFile = state.files.find((file) => file.id === "persona.soul");
     if (!serverFile) throw new Error("Missing persona.soul fixture");
     serverFile.revision = `${serverFile.revision}-external`;
     await page.getByRole("button", { name: "保存", exact: true }).click();
     await expect(page.getByText("[CONFLICT · SERVER VERSION CHANGED]", { exact: true })).toBeVisible();
+    await editor.evaluate((element) => {
+      element.scrollTop = 0;
+      element.dispatchEvent(new Event("scroll"));
+    });
     await capture(page, viewport.name, theme, "prompts-dirty-conflict");
     await page.getByRole("button", { name: "加载服务器版本" }).click();
 
@@ -102,8 +126,9 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
       await expect(page.getByRole("tab", { name: "Function Call" })).toBeVisible();
     }
     await capture(page, viewport.name, theme, "prompts-final-request");
-    await page.getByRole("button", { name: "变量表", exact: true }).click();
-    await expect(page.getByRole("table", { name: "提示词变量表" })).toBeVisible();
+    const variableTable = page.getByRole("table", { name: "提示词变量表" }).last();
+    if (!await variableTable.isVisible()) await page.getByRole("button", { name: "变量表", exact: true }).click();
+    await expect(variableTable).toBeVisible();
     await capture(page, viewport.name, theme, "prompts-variable-table");
 
     await page.goto("/logs");
@@ -156,6 +181,13 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     await expect(page.getByText(/群聊命令需要管理员限制/)).toBeVisible();
     await capture(page, viewport.name, theme, "settings-validation-error");
     await page.getByRole("button", { name: "放弃", exact: true }).click();
+
+    await page.goto("/settings/bot");
+    await page.getByLabel("管理员称呼").fill("新的管理员称呼");
+    await page.getByRole("link", { name: "状态", exact: true }).click();
+    await expect(page.getByRole("button", { name: "保存并离开" })).toBeVisible();
+    await capture(page, viewport.name, theme, "settings-unsaved-leave");
+    await page.getByRole("button", { name: "继续编辑" }).click();
 
     await page.goto("/memory");
     await expect(page.getByRole("heading", { name: "记忆", exact: true })).toBeVisible();

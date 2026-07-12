@@ -235,9 +235,8 @@ function onDragHandleKeydown(event: KeyboardEvent) {
     height: 36px;
     align-items: center;
     justify-content: center;
-    margin: -20px -20px 16px;
+    margin: -24px -24px 16px;
     border-bottom: 1px solid rgb(var(--color-line));
-    border-radius: 11px 11px 0 0;
     transition: background-color 160ms ease;
   }
 

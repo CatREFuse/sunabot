@@ -56,7 +56,7 @@ function formatBytes(bytes: number) {
 
 <template>
   <DialogOverlay :open="open" class="!p-0 sm:!p-4" labelledby="selfie-reference-title" @close="emit('close')">
-    <section class="grid h-full max-h-full w-full max-w-4xl grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden border-visible bg-panel sm:h-auto sm:max-h-[calc(100dvh-32px)] sm:rounded-2xl sm:border">
+    <section class="grid h-full max-h-full w-full max-w-4xl grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden border-visible bg-panel sm:h-auto sm:max-h-[calc(100dvh-32px)] sm:rounded sm:border">
       <header class="flex items-center justify-between gap-4 border-b border-line p-4 md:p-5">
         <div class="min-w-0">
           <p class="page-kicker">SELFIE REFERENCES</p>
@@ -67,7 +67,7 @@ function formatBytes(bytes: number) {
 
       <div class="min-h-0 overflow-y-auto p-4 md:p-5">
         <div v-if="images.length" class="grid grid-cols-2 gap-3 sm:grid-cols-3">
-          <article v-for="image in images" :key="image.id" class="group min-w-0 overflow-hidden rounded-xl border border-line bg-page transition-colors hover:border-visible focus-within:border-display">
+          <article v-for="image in images" :key="image.id" class="group min-w-0 overflow-hidden border-b border-line bg-page transition-colors focus-within:border-display">
             <div class="relative aspect-square overflow-hidden bg-raised">
               <button class="block h-full w-full" type="button" :aria-label="`查看原图 ${image.fileName}`" @click="previewImage = image">
                 <AuthenticatedImage
@@ -79,14 +79,13 @@ function formatBytes(bytes: number) {
                   class-name="h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.02]"
                 />
               </button>
-              <div class="absolute inset-x-2 bottom-2 z-10 flex justify-end gap-2">
-                <button class="icon-btn size-11 border-white/40 bg-black/75 text-white hover:border-white hover:text-white" type="button" :aria-label="`查看原图 ${image.fileName}`" @click="previewImage = image"><i class="bx bx-show text-lg" aria-hidden="true"></i></button>
-                <button class="icon-btn size-11 border-white/40 bg-black/75 text-white hover:border-white hover:text-white" type="button" :aria-label="`删除 ${image.fileName}`" :disabled="deletingId === image.id" @click="deleteImage = image"><i class="bx bx-trash text-lg" aria-hidden="true"></i></button>
-              </div>
             </div>
-            <div class="grid gap-1 p-3">
-              <strong class="truncate text-sm font-medium text-display">{{ image.fileName }}</strong>
-              <span class="font-mono text-[10px] text-mute" :title="`${formatExactNumber(image.width)} × ${formatExactNumber(image.height)} px`">{{ formatDashboardMetric(image.width) }} × {{ formatDashboardMetric(image.height) }} · {{ formatBytes(image.sizeBytes) }}</span>
+            <div class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 py-3">
+              <span class="min-w-0">
+                <strong class="block truncate text-sm font-medium text-display">{{ image.fileName }}</strong>
+                <span class="block font-mono text-[10px] text-mute" :title="`${formatExactNumber(image.width)} × ${formatExactNumber(image.height)} px`">{{ formatDashboardMetric(image.width) }} × {{ formatDashboardMetric(image.height) }} · {{ formatBytes(image.sizeBytes) }}</span>
+              </span>
+              <button class="icon-btn text-accent" type="button" :aria-label="`删除 ${image.fileName}`" :disabled="deletingId === image.id" @click="deleteImage = image"><i class="bx bx-trash" aria-hidden="true"></i></button>
             </div>
           </article>
         </div>
@@ -107,10 +106,10 @@ function formatBytes(bytes: number) {
   </DialogOverlay>
 
   <DialogOverlay :open="Boolean(previewImage)" placement="full" backdrop="preview" :z-index="90" aria-label="自拍参考图预览" @close="previewImage = null">
-    <div v-if="previewImage" class="mx-auto grid h-full min-h-0 w-full max-w-7xl grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-xl border border-white/20 bg-black text-white">
+    <div v-if="previewImage" class="mx-auto grid h-full min-h-0 w-full max-w-7xl grid-rows-[auto_minmax(0,1fr)] overflow-hidden bg-black text-white">
       <header class="flex items-center justify-between gap-4 border-b border-white/15 px-4 py-3">
         <p class="min-w-0 truncate text-sm">{{ previewImage.fileName }}</p>
-        <button class="icon-btn border-white/30 text-white hover:border-white hover:text-white" type="button" aria-label="关闭预览" @click="previewImage = null"><i class="bx bx-x text-2xl" aria-hidden="true"></i></button>
+        <button class="icon-btn text-white hover:text-white" type="button" aria-label="关闭预览" @click="previewImage = null"><i class="bx bx-x" aria-hidden="true"></i></button>
       </header>
       <div class="grid min-h-0 place-items-center overflow-auto p-3 md:p-6">
         <AuthenticatedImage :src="previewImage.originalUrl" :alt="previewImage.fileName" class-name="max-h-full max-w-full object-contain" placeholder-class-name="min-h-64 w-full" />
@@ -119,7 +118,7 @@ function formatBytes(bytes: number) {
   </DialogOverlay>
 
   <DialogOverlay :open="Boolean(deleteImage)" :z-index="100" labelledby="selfie-delete-title" @close="deleteImage = null">
-    <section class="w-full max-w-md rounded-2xl border border-visible bg-panel p-6">
+    <section class="w-full max-w-md rounded border border-visible bg-panel p-6">
       <p class="page-kicker">REMOVE IMAGE</p>
       <h2 id="selfie-delete-title" class="mt-2 text-xl font-medium text-display">删除这张参考图？</h2>
       <p class="mt-3 truncate text-sm text-mute">{{ deleteImage?.fileName }}</p>

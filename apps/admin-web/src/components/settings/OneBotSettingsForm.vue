@@ -37,7 +37,7 @@ function split(value: string) { return value.split(",").map((item) => item.trim(
         </span>
       </label>
     </div>
-    <div class="divide-y divide-line rounded-lg border border-line px-4">
+    <div class="divide-y divide-line border-y border-line">
       <ToggleSwitch v-model="draft.autoReplyPrivate" label="启用私聊" />
       <ToggleSwitch v-model="draft.autoReplyBotGroup" label="启用 Bot 群聊" />
     </div>
