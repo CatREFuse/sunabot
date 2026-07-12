@@ -656,6 +656,25 @@ test("生产构建支持深链接刷新与浏览器返回", async ({ page }) => 
   await expect(page.getByRole("heading", { name: "产品讨论群" })).toBeVisible();
 });
 
+test("页面加载完成后切换路由不再等待新的脚本分块", async ({ page }) => {
+  await installMockApi(page);
+  await page.goto("/overview");
+  await expect(page.getByRole("heading", { name: "状态" })).toBeVisible();
+
+  const lateChunks: string[] = [];
+  await page.route("**/assets/*.js", async (route) => {
+    lateChunks.push(route.request().url());
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+    await route.continue();
+  });
+
+  await page.getByRole("link", { name: "日志", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "日志" })).toBeVisible({ timeout: 750 });
+  await page.getByRole("link", { name: "图像", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "图像" })).toBeVisible({ timeout: 750 });
+  expect(lateChunks).toEqual([]);
+});
+
 test("浅色、深色与系统主题可切换并持久化", async ({ page }) => {
   await installMockApi(page);
   await page.goto("/overview");

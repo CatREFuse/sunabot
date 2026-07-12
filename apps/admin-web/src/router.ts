@@ -1,21 +1,12 @@
-import { defineAsyncComponent } from "vue";
 import { createRouter, createWebHistory } from "vue-router";
-import RouteLoading from "./components/ui/RouteLoading.vue";
-
-const routeComponent = (loader: () => Promise<unknown>) => defineAsyncComponent({
-  loader: loader as () => Promise<{ default: object }>,
-  loadingComponent: RouteLoading,
-  delay: 80,
-  timeout: 20_000
-});
-const OverviewView = routeComponent(() => import("./views/OverviewView.vue"));
-const ConversationsView = routeComponent(() => import("./views/ConversationsView.vue"));
-const WebChatView = routeComponent(() => import("./views/WebChatView.vue"));
-const PromptsView = routeComponent(() => import("./views/PromptsView.vue"));
-const MemoryView = routeComponent(() => import("./views/MemoryView.vue"));
-const ImagesView = routeComponent(() => import("./views/ImagesView.vue"));
-const LogsView = routeComponent(() => import("./views/LogsView.vue"));
-const SettingsView = routeComponent(() => import("./views/SettingsView.vue"));
+import ConversationsView from "./views/ConversationsView.vue";
+import ImagesView from "./views/ImagesView.vue";
+import LogsView from "./views/LogsView.vue";
+import MemoryView from "./views/MemoryView.vue";
+import OverviewView from "./views/OverviewView.vue";
+import PromptsView from "./views/PromptsView.vue";
+import SettingsView from "./views/SettingsView.vue";
+import WebChatView from "./views/WebChatView.vue";
 
 export const router = createRouter({
   history: createWebHistory(),
