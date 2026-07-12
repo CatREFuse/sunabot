@@ -2,6 +2,7 @@
 import { formatFullDateTime } from "../../utils/format";
 import { requestLogDirection, requestLogDisplayName } from "../../utils/logDisplay";
 import type { ConversationLogEntry } from "../../types";
+import RequestLogTokenUsage from "./RequestLogTokenUsage.vue";
 import StructuredValue from "./StructuredValue.vue";
 
 defineProps<{ logs: readonly ConversationLogEntry[] }>();
@@ -34,6 +35,8 @@ defineProps<{ logs: readonly ConversationLogEntry[] }>();
           </div>
           <time class="shrink-0 font-mono text-[10px] text-disabled">{{ formatFullDateTime(log.at) }}</time>
         </header>
+
+        <RequestLogTokenUsage v-if="log.tokenUsage" :usage="log.tokenUsage" />
 
         <details v-if="log.request !== undefined" class="request-list__details">
           <summary><i class="bx bx-upload mr-1" aria-hidden="true"></i>请求体</summary>

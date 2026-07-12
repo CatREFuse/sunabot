@@ -251,6 +251,106 @@ describe("SessionCoordinator", () => {
     expect(store.listEvents("group:failure").filter((event) => event.kind === "tool_completion")).toHaveLength(1);
   });
 
+  it("observes Codex usage once after the durable terminal write", async () => {
+    const store = trackStore(new SessionStore({ databasePath: ":memory:" }));
+    const observeCodexToolUsage = vi.fn(async () => {
+      throw new Error("log storage unavailable");
+    });
+    const runner: CodexRunner = {
+      async run(_input, context) {
+        return {
+          ok: false,
+          status: "failed",
+          jobId: context.jobId,
+          kind: "analysis",
+          error: { code: "worker_failed", message: "analysis failed" },
+          usage: {
+            input_tokens: 120,
+            cached_input_tokens: 80,
+            output_tokens: 15
+          }
+        };
+      }
+    };
+    const coordinator = trackCoordinator(createCoordinator({
+      store,
+      runner,
+      observeCodexToolUsage,
+      handleEvent: (event) => event.kind === "tool_completion"
+        ? { status: "no_reply" }
+        : {
+            status: "deferred",
+            providerCallId: "call-observed-codex",
+            toolName: "codex",
+            arguments: { task: "private task body", kind: "analysis" },
+            originalRequest: event.payload,
+            acknowledgement: { kind: "reply", payload: { text: "started" } }
+          }
+    }));
+
+    coordinator.resume();
+    coordinator.enqueueEvent({ sessionId: "group:observed", kind: "incoming", payload: { text: "run" } });
+    await coordinator.waitForIdle();
+
+    expect(store.listToolJobs("group:observed")[0]?.status).toBe("failed");
+    expect(observeCodexToolUsage).toHaveBeenCalledOnce();
+    expect(observeCodexToolUsage).toHaveBeenCalledWith({
+      jobId: expect.any(String),
+      model: undefined,
+      ok: false,
+      status: "failed",
+      usage: {
+        input_tokens: 120,
+        cached_input_tokens: 80,
+        output_tokens: 15
+      }
+    });
+    expect(JSON.stringify(observeCodexToolUsage.mock.calls[0]?.[0])).not.toContain("private task body");
+  });
+
+  it("does not observe Codex usage when this worker did not insert the terminal completion", async () => {
+    const store = trackStore(new SessionStore({ databasePath: ":memory:" }));
+    const completeToolJob = store.completeToolJob.bind(store);
+    vi.spyOn(store, "completeToolJob").mockImplementation((input) => ({
+      ...completeToolJob(input),
+      inserted: false
+    }));
+    const observeCodexToolUsage = vi.fn();
+    const coordinator = trackCoordinator(createCoordinator({
+      store,
+      observeCodexToolUsage,
+      runner: {
+        async run(_input, context) {
+          return {
+            ok: true,
+            status: "succeeded",
+            jobId: context.jobId,
+            kind: "analysis",
+            content: "done",
+            usage: { input_tokens: 50, cached_input_tokens: 25, output_tokens: 5 }
+          };
+        }
+      },
+      handleEvent: (event) => event.kind === "tool_completion"
+        ? { status: "no_reply" }
+        : {
+            status: "deferred",
+            providerCallId: "call-lost-codex-completion",
+            toolName: "codex",
+            arguments: { task: "inspect", kind: "analysis" },
+            originalRequest: event.payload,
+            acknowledgement: { kind: "reply", payload: { text: "started" } }
+          }
+    }));
+
+    coordinator.resume();
+    coordinator.enqueueEvent({ sessionId: "group:lost-completion", kind: "incoming", payload: { text: "run" } });
+    await coordinator.waitForIdle();
+
+    expect(store.listToolJobs("group:lost-completion")[0]?.status).toBe("succeeded");
+    expect(observeCodexToolUsage).not.toHaveBeenCalled();
+  });
+
   it("retries outbound delivery finitely and probes disconnected delivery without external resume", async () => {
     const store = trackStore(new SessionStore({ databasePath: ":memory:" }));
     const attempts = new Map<string, number>();
@@ -621,6 +721,7 @@ interface CoordinatorHarnessOptions {
   codexMaxConcurrency?: number;
   cleanupCodexProcess?: ConstructorParameters<typeof SessionCoordinator>[0]["cleanupCodexProcess"];
   runDeferredTool?: ConstructorParameters<typeof SessionCoordinator>[0]["runDeferredTool"];
+  observeCodexToolUsage?: ConstructorParameters<typeof SessionCoordinator>[0]["observeCodexToolUsage"];
 }
 
 function createCoordinator(options: CoordinatorHarnessOptions) {
@@ -646,6 +747,7 @@ function createCoordinator(options: CoordinatorHarnessOptions) {
     maxOutboxAttempts: options.maxOutboxAttempts,
     cleanupCodexProcess: options.cleanupCodexProcess,
     runDeferredTool: options.runDeferredTool,
+    observeCodexToolUsage: options.observeCodexToolUsage,
     leaseMs: 1_000
   });
 }

@@ -25,7 +25,7 @@ describe("OverviewView", () => {
       if (path === "/api/conversations") return Promise.resolve({ conversations: [] });
       if (path === "/api/images") return Promise.resolve({ images: [] });
       if (path.startsWith("/api/token-usage?")) return Promise.resolve({
-        today: { date: "2026-07-10", input: 0, output: 0, total: 0, requests: 0 },
+        today: { date: "2026-07-10", input: 0, output: 0, cachedInput: 0, total: 0, cacheRate: null, requests: 0 },
         days: [],
         hours: []
       });
@@ -48,7 +48,7 @@ describe("OverviewView", () => {
       if (path === "/api/conversations") return Promise.resolve({ conversations: [] });
       if (path === "/api/images") return Promise.resolve({ images: [] });
       if (path.startsWith("/api/token-usage?")) return Promise.resolve({
-        today: { date: "2026-07-10", input: 0, output: 0, total: 0, requests: 0 },
+        today: { date: "2026-07-10", input: 0, output: 0, cachedInput: 0, total: 0, cacheRate: null, requests: 0 },
         days: [],
         hours: []
       });
@@ -58,6 +58,8 @@ describe("OverviewView", () => {
     const wrapper = mount(OverviewView);
     await flushPromises();
     expect(wrapper.text()).toContain("OneBot 已连接，QQ 未知");
+    expect(wrapper.get('[aria-label="Token 消耗统计"]').text()).toContain("缓存输入");
+    expect(wrapper.get('[aria-label="Token 消耗统计"]').text()).toContain("缓存率");
   });
 
   it("shows the status request error and never reports a failed refresh as updated", async () => {

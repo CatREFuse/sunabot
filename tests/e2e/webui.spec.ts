@@ -21,7 +21,59 @@ test("QQ 账号可在 WebUI 退出、扫码并实时刷新二维码", async ({ p
   await expect(page.getByText(/更新于/)).toBeVisible();
 });
 
-test("日志使用纵向时间轴、结构化请求体并同时显示原始 ID 与中文名", async ({ page }) => {
+test("状态页展示 Token 缓存、日历与小时分布，并安全处理未报告缓存", async ({ page }) => {
+  const state = await installMockApi(page);
+  await page.goto("/overview");
+
+  const section = page.getByLabel("Token 消耗统计");
+  const summary = section.getByLabel("今日 Token 统计");
+  await expect(section).toContainText("16.1K");
+  await expect(section).toContainText("16,100");
+  await expect(summary.getByText("缓存输入", { exact: true })).toBeVisible();
+  await expect(summary.getByText("7.2K", { exact: true })).toBeVisible();
+  await expect(summary.getByText("缓存率", { exact: true })).toBeVisible();
+  await expect(summary).toContainText(/56(?:\.1)?%/);
+  const calendar = section.getByLabel("每日 Token 消耗日历");
+  await expect(calendar.locator("span")).toHaveCount(371);
+  await expect(calendar.locator('[data-level="4"]')).toHaveCount(2);
+  await expect(calendar.locator('[data-level="3"]')).toHaveCount(1);
+  const hourly = section.getByLabel("今日每小时 Token 总量与输入缓存率");
+  await expect(hourly.locator("rect")).toHaveCount(24);
+  await expect(hourly.locator("polyline")).toHaveCount(1);
+  await expect(hourly.locator("circle")).toHaveCount(24);
+  await expect(hourly).not.toContainText(/NaN|Infinity/);
+
+  state.tokenUsage.today = {
+    date: state.tokenUsage.today.date,
+    input: 0,
+    cachedInput: 0,
+    cacheRate: null,
+    output: 0,
+    total: 0,
+    requests: 1
+  };
+  state.tokenUsage.days = [{ ...state.tokenUsage.today }];
+  state.tokenUsage.hours = Array.from({ length: 24 }, (_, hour) => ({
+    hour,
+    input: 0,
+    cachedInput: 0,
+    cacheRate: null,
+    output: 0,
+    total: 0,
+    requests: 0
+  }));
+  await page.reload();
+
+  const emptyRate = page.getByLabel("今日 Token 统计").locator("article").filter({ hasText: "缓存率" });
+  await expect(emptyRate.getByText("--", { exact: true }).first()).toBeVisible();
+  const emptyHourly = page.getByLabel("今日每小时 Token 总量与输入缓存率");
+  await expect(emptyHourly.locator("circle")).toHaveCount(0);
+  await expect(emptyHourly.locator("polyline")).toHaveCount(0);
+  await expect(emptyHourly).not.toContainText(/NaN|Infinity/);
+  expect(await page.getByLabel("Token 消耗统计").innerHTML()).not.toMatch(/NaN|Infinity/);
+});
+
+test("日志使用纵向时间轴、结构化用量与原始响应，并同时显示原始 ID 与中文名", async ({ page }) => {
   await installMockApi(page);
   await page.goto("/logs");
 
@@ -31,8 +83,30 @@ test("日志使用纵向时间轴、结构化请求体并同时显示原始 ID �
   const list = page.getByLabel("请求日志列表");
   await expect(list.locator(".request-list__timeline")).toBeVisible();
   await expect(list.locator(".request-list__marker").first()).toBeVisible();
+  await expect(list.getByText("Codex 异步任务", { exact: true })).toBeVisible();
+  await expect(list.getByText("codex.tool.complete", { exact: true })).toBeVisible();
   await expect(list.getByText("Responses 模型调用", { exact: true }).first()).toBeVisible();
   await expect(list.getByText("responses.complete", { exact: true }).first()).toBeVisible();
+  await expect(list.getByText("兼容模型调用", { exact: true })).toBeVisible();
+  await expect(list.getByText("chat.completions.complete", { exact: true })).toBeVisible();
+  await expect(list.getByText("Anthropic 模型调用", { exact: true })).toBeVisible();
+  await expect(list.getByText("anthropic.messages.complete", { exact: true })).toBeVisible();
+  await expect(list.getByText("Gemini 模型调用", { exact: true })).toBeVisible();
+  await expect(list.getByText("gemini.generate-content.complete", { exact: true })).toBeVisible();
+
+  const codexCli = list.locator("article").filter({ hasText: "codex.tool.complete" });
+  await expect(codexCli.getByText("缓存输入", { exact: true })).toBeVisible();
+  await expect(codexCli.getByLabel("Token 用量").getByTitle("80 TOKEN")).toBeVisible();
+  await expect(codexCli.getByText("80%", { exact: true })).toBeVisible();
+
+  const anthropic = list.locator("article").filter({ hasText: "anthropic.messages.complete" });
+  await expect(anthropic.getByText("缓存输入", { exact: true })).toBeVisible();
+  await expect(anthropic.getByText("缓存率", { exact: true })).toBeVisible();
+  await anthropic.getByText("响应体", { exact: true }).click();
+  await anthropic.locator("summary").filter({ hasText: /^usage/ }).click();
+  await expect(anthropic.getByText("cache_creation_input_tokens", { exact: true })).toBeVisible();
+  await expect(anthropic.getByText("cache_read_input_tokens", { exact: true })).toBeVisible();
+
   await list.getByText("请求体", { exact: true }).click();
   await expect(list.getByText("model", { exact: true }).first()).toBeVisible();
   await page.getByRole("button", { name: "下一页" }).click();

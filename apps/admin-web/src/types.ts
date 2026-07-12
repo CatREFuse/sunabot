@@ -298,12 +298,18 @@ export interface ConversationLogEntry {
   request?: unknown;
   response?: unknown;
   metadata?: Record<string, unknown>;
+  tokenUsage?: TokenUsageBreakdown;
 }
 
-export interface TokenUsageBucket {
+export interface TokenUsageBreakdown {
   input: number;
   output: number;
+  cachedInput: number;
   total: number;
+  cacheRate: number | null;
+}
+
+export interface TokenUsageBucket extends TokenUsageBreakdown {
   requests: number;
 }
 

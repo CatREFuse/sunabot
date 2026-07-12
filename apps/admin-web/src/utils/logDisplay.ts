@@ -3,6 +3,7 @@ import type { ConversationLogEntry, OneBotEventTrace } from "../types";
 const actionNames: Record<string, string> = {
   "responses.complete": "Responses 模型调用",
   "codex.complete": "Codex 订阅模型调用",
+  "codex.tool.complete": "Codex 异步任务",
   "chat.completions.complete": "兼容模型调用",
   "anthropic.messages.complete": "Anthropic 模型调用",
   "gemini.generate-content.complete": "Gemini 模型调用",

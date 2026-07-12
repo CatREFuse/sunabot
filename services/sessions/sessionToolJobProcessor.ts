@@ -9,6 +9,7 @@ import type { SessionStore, ToolJobRecord } from "./sessionStore.js";
 import type {
   ClaimedToolTask,
   CodexProcessCleanup,
+  CodexToolUsageObserver,
   DeferredToolRunner,
   SessionClaimState
 } from "./sessionCoordinatorTypes.js";
@@ -18,6 +19,7 @@ export interface SessionToolJobProcessorOptions {
   codexRunner: CodexRunner;
   cleanupCodexProcess: CodexProcessCleanup;
   runDeferredTool?: DeferredToolRunner;
+  observeCodexToolUsage?: CodexToolUsageObserver;
   workerId: string;
   isStopped(): boolean;
   assertClaimUsable(state: SessionClaimState, signal: AbortSignal): void;
@@ -98,7 +100,7 @@ export class SessionToolJobProcessor {
         }
       });
       this.options.assertClaimUsable(state, signal);
-      this.options.store.completeToolJob({
+      const completion = this.options.store.completeToolJob({
         jobId: job.id,
         workerId: this.options.workerId,
         attempt: job.attempts,
@@ -108,6 +110,7 @@ export class SessionToolJobProcessor {
         error: result.ok ? undefined : result.error
       });
       state.finalized = true;
+      if (completion.inserted) await this.observeCodexToolUsage(job.id, settings.model, result);
     } catch (error) {
       if (state.finalized || this.options.isStopped()) return;
       this.options.store.completeToolJob({
@@ -121,6 +124,21 @@ export class SessionToolJobProcessor {
       state.finalized = true;
     } finally {
       this.options.deferTurns();
+    }
+  }
+
+  private async observeCodexToolUsage(jobId: string, model: string | undefined, result: CodexToolResult) {
+    if (!result.usage || !this.options.observeCodexToolUsage) return;
+    try {
+      await this.options.observeCodexToolUsage({
+        jobId,
+        model,
+        ok: result.ok,
+        status: result.status,
+        usage: { ...result.usage }
+      });
+    } catch {
+      // Observability must not change a durable tool-job terminal state.
     }
   }
 

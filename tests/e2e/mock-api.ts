@@ -124,6 +124,51 @@ const initialAgentFiles = [
   file("image.selfie-rewrite", "自拍提示词改写", "图像", "selfie_prompt_rewrite.json", defaultPromptContent("image.selfie-rewrite"))
 ];
 
+interface MockTokenUsageBucket {
+  input: number;
+  cachedInput: number;
+  cacheRate: number | null;
+  output: number;
+  total: number;
+  requests: number;
+}
+
+interface MockTokenUsagePayload {
+  today: MockTokenUsageBucket & { date: string };
+  days: Array<MockTokenUsageBucket & { date: string }>;
+  hours: Array<MockTokenUsageBucket & { hour: number }>;
+}
+
+const tokenUsageFixture: MockTokenUsagePayload = {
+  today: {
+    date: localDateOffset(0),
+    input: 12_840,
+    cachedInput: 7_200,
+    cacheRate: 7_200 / 12_840,
+    output: 3_260,
+    total: 16_100,
+    requests: 18
+  },
+  days: [
+    tokenUsageDay(2, 9_000, 4_050, 2_100, 11_100, 12),
+    tokenUsageDay(1, 11_200, 5_600, 2_800, 14_000, 15),
+    tokenUsageDay(0, 12_840, 7_200, 3_260, 16_100, 18)
+  ],
+  hours: Array.from({ length: 24 }, (_, hour) => {
+    const input = hour * 80;
+    const cachedInput = hour * 40;
+    return {
+      hour,
+      input,
+      cachedInput,
+      cacheRate: input > 0 ? cachedInput / input : 0,
+      output: hour * 20,
+      total: hour * 100,
+      requests: hour % 3
+    };
+  })
+};
+
 export interface MockApiState {
   config: typeof initialConfig;
   revision: string;
@@ -138,6 +183,7 @@ export interface MockApiState {
   imageHistoryError: string;
   qqOnline: boolean;
   qrVersion: number;
+  tokenUsage: MockTokenUsagePayload;
   selfieReferences: Array<{
     id: string;
     fileName: string;
@@ -166,6 +212,7 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
     imageHistoryError: "",
     qqOnline: true,
     qrVersion: 1,
+    tokenUsage: structuredClone(tokenUsageFixture),
     selfieReferences: [
       selfieReference("01-neutral-face.png", 458, 501, 241_664),
       selfieReference("02-gentle-smile.png", 458, 501, 244_736),
@@ -234,15 +281,7 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
     }
 
     if (pathname === "/api/token-usage") {
-      return json(route, {
-        today: { date: "2026-07-10", input: 12840, output: 3260, total: 16100, requests: 18 },
-        days: [
-          { date: "2026-07-08", input: 9000, output: 2100, total: 11100, requests: 12 },
-          { date: "2026-07-09", input: 11200, output: 2800, total: 14000, requests: 15 },
-          { date: "2026-07-10", input: 12840, output: 3260, total: 16100, requests: 18 }
-        ],
-        hours: Array.from({ length: 24 }, (_, hour) => ({ hour, input: hour * 80, output: hour * 20, total: hour * 100, requests: hour % 3 }))
-      });
+      return json(route, state.tokenUsage);
     }
 
     if (pathname === "/api/status") {
@@ -572,7 +611,56 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
     }
     if (pathname === "/api/request-logs") {
       const logs = [
-        { id: "log-52", at: "2026-07-10T02:08:00.000Z", category: "model.response", action: "responses.complete", providerId: "codex", model: "gpt-5.6-sol", response: { ok: true, summary: { usage: { input_tokens: 820, output_tokens: 160, total_tokens: 980 } } } },
+        {
+          id: "log-56",
+          at: "2026-07-10T02:12:00.000Z",
+          category: "model.response",
+          action: "codex.tool.complete",
+          providerId: "codex-cli",
+          model: "gpt-5.6-sol",
+          tokenUsage: { input: 100, cachedInput: 80, cacheRate: 0.8, output: 10, total: 110 },
+          response: { ok: true, status: "succeeded", usage: { input_tokens: 100, cached_input_tokens: 80, output_tokens: 10 } }
+        },
+        {
+          id: "log-55",
+          at: "2026-07-10T02:11:00.000Z",
+          category: "model.response",
+          action: "responses.complete",
+          providerId: "codex",
+          model: "gpt-5.6-sol",
+          tokenUsage: { input: 820, cachedInput: 640, cacheRate: 640 / 820, output: 160, total: 980 },
+          response: { ok: true, summary: { usage: { input_tokens: 820, input_tokens_details: { cached_tokens: 640 }, output_tokens: 160, total_tokens: 980 } } }
+        },
+        {
+          id: "log-54",
+          at: "2026-07-10T02:10:00.000Z",
+          category: "model.response",
+          action: "chat.completions.complete",
+          providerId: "openai-compatible",
+          model: "compatible-model",
+          tokenUsage: { input: 240, cachedInput: 120, cacheRate: 0.5, output: 60, total: 300 },
+          response: { ok: true, usage: { prompt_tokens: 240, prompt_tokens_details: { cached_tokens: 120 }, completion_tokens: 60, total_tokens: 300 } }
+        },
+        {
+          id: "log-53",
+          at: "2026-07-10T02:09:00.000Z",
+          category: "model.response",
+          action: "anthropic.messages.complete",
+          providerId: "anthropic",
+          model: "claude-sonnet",
+          tokenUsage: { input: 230, cachedInput: 120, cacheRate: 120 / 230, output: 40, total: 270 },
+          response: { ok: true, usage: { input_tokens: 30, cache_creation_input_tokens: 80, cache_read_input_tokens: 120, output_tokens: 40 } }
+        },
+        {
+          id: "log-52",
+          at: "2026-07-10T02:08:00.000Z",
+          category: "model.response",
+          action: "gemini.generate-content.complete",
+          providerId: "gemini",
+          model: "gemini-2.5-flash",
+          tokenUsage: { input: 200, cachedInput: 90, cacheRate: 0.45, output: 50, total: 250 },
+          response: { ok: true, usage: { promptTokenCount: 200, cachedContentTokenCount: 90, candidatesTokenCount: 35, thoughtsTokenCount: 15, totalTokenCount: 250 } }
+        },
         { id: "log-51", at: "2026-07-10T02:07:00.000Z", category: "model.request", action: "responses.complete", providerId: "codex", model: "gpt-5.6-sol", request: { model: "gpt-5.6-sol", input: [{ role: "user", content: "你好" }] } },
         ...Array.from({ length: 50 }, (_, index) => ({
           id: `log-${50 - index}`,
@@ -746,6 +834,36 @@ function selfieReference(fileName: string, width: number, height: number, sizeBy
     displayUrl: `${path}?variant=display`,
     placeholderUrl: `${path}?variant=placeholder`
   };
+}
+
+function tokenUsageDay(
+  daysAgo: number,
+  input: number,
+  cachedInput: number,
+  output: number,
+  total: number,
+  requests: number
+): MockTokenUsageBucket & { date: string } {
+  return {
+    date: localDateOffset(daysAgo),
+    input,
+    cachedInput,
+    cacheRate: input > 0 ? cachedInput / input : 0,
+    output,
+    total,
+    requests
+  };
+}
+
+function localDateOffset(daysAgo: number) {
+  const date = new Date();
+  date.setHours(12, 0, 0, 0);
+  date.setDate(date.getDate() - daysAgo);
+  return [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, "0"),
+    String(date.getDate()).padStart(2, "0")
+  ].join("-");
 }
 
 function model(id: string, label: string, defaultReasoningEffort: string, reasoningEfforts: string[]) {

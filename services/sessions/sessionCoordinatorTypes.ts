@@ -1,6 +1,7 @@
 import type {
   CodexProcessCleanupResult,
-  CodexProcessIdentity
+  CodexProcessIdentity,
+  CodexTaskStatus
 } from "../../packages/contracts/tools/codex.js";
 import type { ToolJobRecord } from "./sessionStore.js";
 
@@ -41,3 +42,15 @@ export type DeferredToolRunner = (
 export type CodexProcessCleanup = (
   identity: CodexProcessIdentity
 ) => Promise<CodexProcessCleanupResult>;
+
+export interface CodexToolUsageObservation {
+  jobId: string;
+  model?: string;
+  ok: boolean;
+  status: CodexTaskStatus;
+  usage: Record<string, number>;
+}
+
+export type CodexToolUsageObserver = (
+  observation: CodexToolUsageObservation
+) => unknown | Promise<unknown>;

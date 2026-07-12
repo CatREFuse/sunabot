@@ -180,6 +180,20 @@ export class SunaRuntime {
         codexRunner: options.codexRunner ?? new CodexToolRunner(),
         cleanupCodexProcess: cleanupPersistedCodexProcess,
         runDeferredTool: (job, signal) => this.processDeferredToolJob(job, signal),
+        observeCodexToolUsage: async (observation) => {
+          await appendRequestLog({
+            category: "model.response",
+            action: "codex.tool.complete",
+            providerKind: "codex-cli",
+            model: observation.model,
+            response: {
+              ok: observation.ok,
+              status: observation.status,
+              usage: observation.usage
+            },
+            metadata: { jobId: observation.jobId }
+          });
+        },
         codexSettings: () => ({
           enabled: this.config.bot.tools.codex.enabled,
           model: this.config.bot.tools.codex.model,

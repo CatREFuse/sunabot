@@ -11,6 +11,7 @@ import { SessionToolJobProcessor } from "./sessionToolJobProcessor.js";
 import type {
   ClaimedToolTask,
   CodexCoordinatorSettings,
+  CodexToolUsageObserver,
   DeferredToolRunner,
   SessionClaimState as ClaimState
 } from "./sessionCoordinatorTypes.js";
@@ -94,6 +95,7 @@ export interface SessionCoordinatorOptions {
   clock?: () => number;
   isDisconnectedError?: (error: unknown) => boolean;
   cleanupCodexProcess?: (identity: CodexProcessIdentity) => Promise<CodexProcessCleanupResult>;
+  observeCodexToolUsage?: CodexToolUsageObserver;
 }
 
 export interface SessionCoordinatorIdleOptions {
@@ -199,6 +201,7 @@ export class SessionCoordinator {
         message: "Codex process cleanup port is not configured."
       })),
       runDeferredTool: options.runDeferredTool,
+      observeCodexToolUsage: options.observeCodexToolUsage,
       workerId: this.workerId,
       isStopped: () => this.stopped,
       assertClaimUsable: (state, signal) => this.assertClaimUsable(state, signal),

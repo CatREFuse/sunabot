@@ -31,7 +31,14 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     await capture(page, viewport.name, theme, "overview-qq-account");
     await page.getByRole("button", { name: "关闭", exact: true }).click();
     await page.getByRole("heading", { name: "Token 消耗" }).scrollIntoViewIfNeeded();
+    const tokenSummary = page.getByLabel("今日 Token 统计");
+    await expect(tokenSummary.getByText("缓存输入", { exact: true })).toBeVisible();
+    await expect(tokenSummary.getByText("缓存率", { exact: true })).toBeVisible();
     await capture(page, viewport.name, theme, "overview-token-usage");
+    await page.getByLabel("每日 Token 消耗日历").scrollIntoViewIfNeeded();
+    await capture(page, viewport.name, theme, "overview-token-calendar");
+    await page.getByLabel("今日每小时 Token 总量与输入缓存率").scrollIntoViewIfNeeded();
+    await capture(page, viewport.name, theme, "overview-token-hourly");
     await page.locator(".page-shell").evaluate((element) => { element.scrollTop = 0; });
 
     await page.getByRole("button", { name: "诊断", exact: true }).click();
@@ -104,8 +111,15 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     await expect(page.getByLabel("Bot 活动终端")).toBeVisible();
     await capture(page, viewport.name, theme, "logs-terminal");
     await page.getByRole("button", { name: "请求日志", exact: true }).click();
-    await expect(page.getByLabel("请求日志列表")).toBeVisible();
+    const requestLogs = page.getByLabel("请求日志列表");
+    await expect(requestLogs).toBeVisible();
     await capture(page, viewport.name, theme, "logs-requests");
+    const responseLog = requestLogs.locator("article").filter({ hasText: "responses.complete" }).first();
+    await responseLog.getByText("响应体", { exact: true }).click();
+    await responseLog.locator("summary").filter({ hasText: /^summary/ }).click();
+    await responseLog.locator("summary").filter({ hasText: /^usage/ }).click();
+    await responseLog.scrollIntoViewIfNeeded();
+    await capture(page, viewport.name, theme, "logs-token-usage-structured");
 
     await page.goto("/settings/persona");
     const selfieHeading = page.getByRole("heading", { name: "自拍参考图" });

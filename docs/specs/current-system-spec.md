@@ -75,6 +75,14 @@ Provider 类型包括 Codex 订阅、OpenAI 官方、Anthropic 官方、Gemini �
 
 Provider 请求使用应用启动时安装的统一出站 dispatcher。显式代理和标准代理环境变量从 `workspace/secrets/runtime.env` 或进程环境读取；WSL 自动模式仅在没有显式代理时探测当前默认网关。代理选择不改变 OneBot 的 Compose 私有网络或同机宿主网关链路。
 
+模型响应日志保留 Provider 返回的原始 usage，并在日志顶层写入统一的 `tokenUsage`。`tokenUsage` 字段为 `input`、`cachedInput`、`cacheRate`、`output` 和 `total`；日、小时聚合桶在此基础上增加 `requests`：
+
+- OpenAI Responses/Codex 使用 `input_tokens`、`input_tokens_details.cached_tokens`、`output_tokens` 和 `total_tokens`；Chat Completions 使用对应的 `prompt_tokens`、`prompt_tokens_details.cached_tokens`、`completion_tokens` 和 `total_tokens`。输入总量已经包含缓存输入，不能重复相加。
+- Deferred Codex CLI 完成或失败后，只要结果包含 usage，就以 `model.response`、`codex.tool.complete`、`codex-cli` 写入请求日志；使用 `input_tokens`、`cached_input_tokens` 和 `output_tokens`，其中缓存输入是输入总量的子集，总量由输入与输出相加。失败状态不能丢弃已经产生的 usage。
+- Anthropic 输入总量是 `input_tokens + cache_creation_input_tokens + cache_read_input_tokens`，其中只有 `cache_read_input_tokens` 计入 `cachedInput`；缓存创建属于输入消耗，不属于缓存命中。输出使用 `output_tokens`，总量由输入与输出相加。
+- Gemini 输入使用已经包含缓存内容的 `promptTokenCount`，并累加 `toolUsePromptTokenCount`；缓存输入使用 `cachedContentTokenCount`，输出是 `candidatesTokenCount + thoughtsTokenCount`，总量优先使用 `totalTokenCount`，小于归一化输入与输出之和时回退为后者。
+- `cachedInput` 是 `input` 的子集，不额外计入 `total`。只有 Provider 明确返回缓存字段的记录才进入缓存率分母；单条记录或聚合桶的缓存率为这些记录的 `ΣcachedInput / Σinput` 并限制在 `0..1`。明确返回缓存字段但分母为 0 时返回 `0`；桶内全部记录都没有缓存字段时返回 `null`。缺失、负数和非有限数按 0 处理，任何 API 与界面值都不能出现 `NaN` 或 `Infinity`。
+
 ### 4.2 最终提示词
 
 最终提示词使用 JSON 文档，支持：
@@ -144,7 +152,9 @@ NapCat 上报的 QQ 文件优先通过 OneBot action 返回的受控 URL 进入 
 
 设置中的 Agent 工具页默认打开“工具目录”Tab，列出七个真实工具的图标、名称、Function 名、摘要、配置状态、运行能力和同步或异步方式，支持搜索、启停与刷新。详情弹层展示实际模型描述、描述来源、JSON Schema 参数与严格模式；编辑模型描述会建立全局覆盖，“恢复继承说明”会删除覆盖。“运行参数”Tab 继续管理单轮调用上限、Tavily、Codex Worker 和图像生成默认值。两个 Tab 共用当前工具配置草稿和保存栏。
 
-状态页使用响应式卡片拼盘展示 QQ Bot 头像、昵称、连接状态、内容计数、Provider 健康、当日 Token 输入/输出/总量、最近 53 周日历热力图和小时柱形折线图；统计同时兼容 OpenAI、Anthropic 与 Gemini 的 usage 字段，四位及以上主指标使用 K 缩写，并提供千分位精确值。日志页按从新到旧提供 Bot 活动终端与分页纵向时间轴，事件同时显示原始 ID 和中文显示名，请求与响应使用递归结构化视图。记忆页一次只查看一个真实来源，单个搜索栏在本地筛选与语义召回间切换。提示词编辑器提供变量表、已使用变量状态、可选 XML 包装，以及离开前保存。
+状态页使用响应式卡片拼盘展示 QQ Bot 头像、昵称、连接状态、内容计数、Provider 健康，以及当日 Token 总量、输入、缓存输入、缓存率、输出和请求数。Token 统计使用浏览器传入的时区偏移：当日小时序列固定返回 0—23 点 24 个桶，缺少的小时补零；日历固定覆盖截至当日的最近 53 周本地日期，缺少的日期补零。小时图使用 Token 总量柱形和缓存率折线，缓存率为 `null` 时显示 `--` 且折线跳过该点。四位及以上主指标使用 K 缩写，并提供千分位精确值。
+
+日志页按从新到旧提供 Bot 活动终端与分页纵向时间轴，Responses、Codex Provider、Deferred Codex CLI、Chat Completions、Anthropic 和 Gemini 请求同时显示中文标题与原始 action ID，其中 Codex CLI 使用 `codex.tool.complete`。模型响应的统一 `tokenUsage` 使用独立用量条展示，原始请求、响应和 usage 字段继续使用递归结构化视图，不能退回整段 JSON 文本。记忆页一次只查看一个真实来源，单个搜索栏在本地筛选与语义召回间切换。提示词编辑器提供变量表、已使用变量状态、可选 XML 包装，以及离开前保存。
 
 图片列表和会话正文先读取 48px 低质量 WebP 占位图并以高斯模糊显示，再淡入 480px WebP 展示图；用户打开预览或原图链接时才读取完整图片。浏览器缓存已加载资源，图片历史在短期页面切换中复用，返回图片页不重新批量请求占位图和历史数据。
 
@@ -169,7 +179,7 @@ QQ 登录由管理台完成：离线时直接显示 NapCat 当前二维码并每
 | `memory_records` | 工作记忆、长期记忆和用户画像 |
 | `memory_batches` | 已提交记忆批次及幂等结果 |
 | `memory_scheduler` | 各会话的记忆待处理队列与重试状态 |
-| `request_logs` | 脱敏后的模型、工具和运行日志 |
+| `request_logs` | 脱敏后的模型、工具和运行日志；保留原始 usage 与统一 `tokenUsage`，日/小时聚合在读取时派生 |
 | `image_history` | 生成图片历史元数据 |
 
 `workspace/business/data/session-queue.sqlite` 独立保存会话事件、turn、异步任务和 outbox。附件缓存中的每个 `chunks.sqlite` 独立保存该文件的文本分块。
@@ -272,5 +282,7 @@ npm run test:e2e
 ```
 
 涉及界面时还要运行视觉测试并检查截图。涉及数据迁移时必须核对迁移脚本输出、SQLite 表记录数、旧文件备份和服务重启后的 API 与 OneBot 状态。
+
+Token 统计验收必须覆盖 OpenAI Responses、Deferred Codex CLI 成功与失败结果、Chat Completions、Anthropic 和 Gemini 的原始 usage 夹具，验证缓存输入不重复计数、Codex CLI 失败 usage 不丢失、Anthropic 三类输入求和、思考 Token 归入输出、缓存率分母只包含明确报告缓存字段的记录、无缓存字段返回 `null`、显式零缓存返回 `0`、时区跨日、24 个小时桶和最近 53 周日期范围。管理台测试必须验证 371 个日历单元、24 个小时柱、缓存率折线不产生 `NaN`/`Infinity`，并分别检查移动端与桌面端的 light/dark Token 卡片、日历、小时图和展开后的结构化 usage 日志截图。
 
 涉及跨平台运行时还要执行 `./sunabot.sh doctor`，分别验证 Native Core + NapCat Docker 与 Docker Core + NapCat Docker 的启动、停止、单实例、OneBot token、文字、图片、文件和重启恢复。contract 与测试必须拒绝 NapCat 并入 Core、OneBot 复用管理端口、跨组件共享绝对路径和旧新运行时并行。

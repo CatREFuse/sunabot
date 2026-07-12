@@ -3,6 +3,12 @@ import { randomUUID } from "node:crypto";
 import { getWorkspacePath } from "./config.js";
 import { applicationDatabasePath, applicationDataStore } from "../adapters/sqlite/applicationDataStore.js";
 import { WORKSPACE_LAYOUT } from "../packages/platform/workspaceLayout.js";
+import {
+  normalizeTokenUsageRecord,
+  publicTokenUsage,
+  sumTokenCounts,
+  type TokenUsageMeasurement
+} from "./tokenUsage.js";
 
 const MAX_STRING_LENGTH = 16_000;
 
@@ -33,10 +39,12 @@ export function requestLogPath() {
 }
 
 export async function appendRequestLog(entry: RequestLogEntry) {
+  const usage = normalizeTokenUsageRecord(entry as unknown as Record<string, unknown>);
   const record = sanitizeValue({
     id: randomUUID(),
     at: new Date().toISOString(),
-    ...entry
+    ...entry,
+    ...(usage ? { tokenUsage: publicTokenUsage(usage) } : {})
   });
 
   try {
@@ -51,14 +59,15 @@ export async function readRequestLogs(options: ReadRequestLogsOptions = {}) {
   const limit = normalizeLimit(options.limit);
   const query = String(options.query ?? "").trim().toLowerCase();
 
-  return requestLogStore().readRequestLogs({ query, limit });
+  return requestLogStore().readRequestLogs({ query, limit }).map(withTokenUsage);
 }
 
 export async function readRequestLogPage(options: ReadRequestLogPageOptions = {}) {
   const page = normalizePositiveInteger(options.page, 1, 100_000);
   const pageSize = normalizePositiveInteger(options.pageSize, 50, 100);
   const query = String(options.query ?? "").trim().toLowerCase();
-  return requestLogStore().readRequestLogPage({ query, page, pageSize });
+  const result = requestLogStore().readRequestLogPage({ query, page, pageSize });
+  return { ...result, logs: result.logs.map(withTokenUsage) };
 }
 
 export function readTokenUsageSummary(timezoneOffsetMinutes = 0) {
@@ -67,26 +76,26 @@ export function readTokenUsageSummary(timezoneOffsetMinutes = 0) {
   const localNow = new Date(now - offset * 60_000);
   const today = localNow.toISOString().slice(0, 10);
   const since = new Date(now - 371 * 86_400_000).toISOString();
-  const dayTotals = new Map<string, { input: number; output: number; total: number; requests: number }>();
-  const hours = Array.from({ length: 24 }, (_, hour) => ({ hour, input: 0, output: 0, total: 0, requests: 0 }));
+  const dayTotals = new Map<string, TokenUsageAccumulator>();
+  const hours = Array.from({ length: 24 }, (_, hour) => ({ hour, ...emptyUsageAccumulator() }));
 
   for (const record of requestLogStore().readTokenUsageRecords(since)) {
-    const usage = extractTokenUsage(record);
+    const usage = normalizeTokenUsageRecord(record);
     if (!usage) continue;
     const timestamp = Date.parse(String(record.at ?? ""));
     if (!Number.isFinite(timestamp)) continue;
     const local = new Date(timestamp - offset * 60_000);
     const date = local.toISOString().slice(0, 10);
-    const day = dayTotals.get(date) ?? { input: 0, output: 0, total: 0, requests: 0 };
+    const day = dayTotals.get(date) ?? emptyUsageAccumulator();
     addUsage(day, usage);
     dayTotals.set(date, day);
     if (date === today) addUsage(hours[local.getUTCHours()]!, usage);
   }
 
   return {
-    today: { date: today, ...(dayTotals.get(today) ?? { input: 0, output: 0, total: 0, requests: 0 }) },
-    days: [...dayTotals].map(([date, usage]) => ({ date, ...usage })),
-    hours
+    today: { date: today, ...usageBucket(dayTotals.get(today) ?? emptyUsageAccumulator()) },
+    days: [...dayTotals].map(([date, usage]) => ({ date, ...usageBucket(usage) })),
+    hours: hours.map(({ hour, ...usage }) => ({ hour, ...usageBucket(usage) }))
   };
 }
 
@@ -113,35 +122,61 @@ function normalizeTimezoneOffset(value: unknown) {
   return Number.isFinite(offset) ? Math.min(Math.max(Math.trunc(offset), -840), 840) : 0;
 }
 
-function extractTokenUsage(record: Record<string, unknown>) {
-  const response = asRecord(record.response);
-  const summary = asRecord(response?.summary);
-  const usage = asRecord(summary?.usage) ?? asRecord(response?.usage);
-  if (!usage) return undefined;
-  const input = tokenNumber(usage.input_tokens ?? usage.inputTokens ?? usage.prompt_tokens ?? usage.promptTokens ?? usage.promptTokenCount);
-  const candidateTokens = tokenNumber(usage.candidatesTokenCount);
-  const output = candidateTokens > 0
-    ? candidateTokens + tokenNumber(usage.thoughtsTokenCount)
-    : tokenNumber(usage.output_tokens ?? usage.outputTokens ?? usage.completion_tokens ?? usage.completionTokens);
-  const total = tokenNumber(usage.total_tokens ?? usage.totalTokens ?? usage.totalTokenCount) || input + output;
-  if (input === 0 && output === 0 && total === 0) return undefined;
-  return { input, output, total, requests: 1 };
+interface TokenUsageAccumulator {
+  input: number;
+  output: number;
+  total: number;
+  cachedInput: number;
+  requests: number;
+  measuredInput: number;
+  measuredCachedInput: number;
+  cacheReports: number;
 }
 
-function asRecord(value: unknown) {
-  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+function emptyUsageAccumulator(): TokenUsageAccumulator {
+  return {
+    input: 0,
+    output: 0,
+    total: 0,
+    cachedInput: 0,
+    requests: 0,
+    measuredInput: 0,
+    measuredCachedInput: 0,
+    cacheReports: 0
+  };
 }
 
-function tokenNumber(value: unknown) {
-  const number = Number(value ?? 0);
-  return Number.isFinite(number) && number > 0 ? Math.trunc(number) : 0;
+function addUsage(target: TokenUsageAccumulator, usage: TokenUsageMeasurement) {
+  target.input = sumTokenCounts(target.input, usage.input);
+  target.output = sumTokenCounts(target.output, usage.output);
+  target.total = sumTokenCounts(target.total, usage.total);
+  target.cachedInput = sumTokenCounts(target.cachedInput, usage.cachedInput);
+  target.requests = sumTokenCounts(target.requests, 1);
+  if (usage.cacheReported) {
+    target.measuredInput = sumTokenCounts(target.measuredInput, usage.input);
+    target.measuredCachedInput = sumTokenCounts(target.measuredCachedInput, usage.cachedInput);
+    target.cacheReports = sumTokenCounts(target.cacheReports, 1);
+  }
 }
 
-function addUsage(target: { input: number; output: number; total: number; requests: number }, usage: { input: number; output: number; total: number; requests: number }) {
-  target.input += usage.input;
-  target.output += usage.output;
-  target.total += usage.total;
-  target.requests += usage.requests;
+function usageBucket(usage: TokenUsageAccumulator) {
+  return {
+    input: usage.input,
+    output: usage.output,
+    total: usage.total,
+    cachedInput: usage.cachedInput,
+    cacheRate: usage.cacheReports > 0
+      ? usage.measuredInput > 0
+        ? Math.min(Math.max(usage.measuredCachedInput / usage.measuredInput, 0), 1)
+        : 0
+      : null,
+    requests: usage.requests
+  };
+}
+
+function withTokenUsage(record: Record<string, unknown>) {
+  const usage = normalizeTokenUsageRecord(record);
+  return usage ? { ...record, tokenUsage: publicTokenUsage(usage) } : record;
 }
 
 function sanitizeValue(value: unknown, depth = 0): unknown {
