@@ -11,7 +11,10 @@ describe("DiagnosticsDrawer", () => {
 
   it("loads tools, request logs and OneBot events only when their tab opens", async () => {
     apiRequest.mockImplementation((path: string) => {
-      if (path === "/api/tools") return Promise.resolve({ tools: [{ name: "system.time", title: "时间", description: "读取当前时间。", enabled: true }] });
+      if (path === "/api/tools") return Promise.resolve({ tools: [
+        { name: "assistant_text", title: "行动中消息", description: "发送行动中消息。", enabled: true, available: true, effectiveEnabled: true },
+        { name: "codex", title: "Codex", description: "异步执行任务。", enabled: true, available: false, effectiveEnabled: false }
+      ] });
       if (path === "/api/request-logs?limit=100") return Promise.resolve({ filePath: "/logs/requests.jsonl", logs: [{ id: "log-1", at: "2026-07-10T00:00:00.000Z", category: "provider", action: "respond" }] });
       if (path === "/api/onebot/events") return Promise.resolve({ events: [{ receivedAt: "2026-07-10T00:00:00.000Z", postType: "message", messageType: "group", text: "hello" }] });
       throw new Error(`Unexpected request: ${path}`);
@@ -20,7 +23,9 @@ describe("DiagnosticsDrawer", () => {
     await flushPromises();
 
     expect(apiRequest.mock.calls.map(([path]) => path)).toEqual(["/api/tools"]);
-    expect(wrapper.text()).toContain("system.time");
+    expect(wrapper.text()).toContain("assistant_text");
+    expect(wrapper.text()).toContain("[READY]");
+    expect(wrapper.text()).toContain("[UNAVAILABLE]");
 
     await wrapper.get("nav").findAll("button")[1]!.trigger("click");
     await flushPromises();

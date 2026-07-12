@@ -1,116 +1,83 @@
 <script setup lang="ts">
-import { computed } from "vue";
-import ToggleSwitch from "../ui/ToggleSwitch.vue";
-import type { ConfigEnvelope, ConfigSectionValueMap, ImageQuality, ImageResolution, ImageSize, ModelCatalogItem } from "../../types";
-import TavilyKeyPool from "./TavilyKeyPool.vue";
+import { nextTick, shallowRef } from "vue";
+import type { ConfigEnvelope, ConfigSectionValueMap, ModelCatalogItem } from "../../types";
+import ToolCatalogSettings from "./ToolCatalogSettings.vue";
+import ToolRuntimeSettings from "./ToolRuntimeSettings.vue";
+
+type ToolsTab = "catalog" | "runtime";
+
 const draft = defineModel<ConfigSectionValueMap["tools"]>({ required: true });
-const props = defineProps<{
+defineProps<{
   models: readonly ModelCatalogItem[];
   fieldStates?: ConfigEnvelope["fieldStates"];
 }>();
-const tavilyFieldState = computed(() => props.fieldStates?.["bot.tools.websearch.tavilyApiKeys"]);
-const sizes: ImageSize[] = ["1024x1024", "1536x1024", "1024x1536", "2048x2048", "2048x1152", "1152x2048", "3840x2160", "2160x3840"];
-const resolutions: ImageResolution[] = ["1K", "2K", "4K"];
-const qualities: Array<{ value: ImageQuality; label: string }> = [
-  { value: "auto", label: "自动" },
-  { value: "high", label: "高" },
-  { value: "medium", label: "中" },
-  { value: "low", label: "低" }
+const activeTab = shallowRef<ToolsTab>("catalog");
+const tabs: Array<{ id: ToolsTab; label: string; icon: string }> = [
+  { id: "catalog", label: "工具目录", icon: "bx-grid-alt" },
+  { id: "runtime", label: "运行参数", icon: "bx-slider-alt" }
 ];
 
+function selectTab(tab: ToolsTab) {
+  activeTab.value = tab;
+}
+
+function onTabKeydown(event: KeyboardEvent, index: number) {
+  let nextIndex = index;
+  if (event.key === "ArrowRight") nextIndex = (index + 1) % tabs.length;
+  else if (event.key === "ArrowLeft") nextIndex = (index - 1 + tabs.length) % tabs.length;
+  else if (event.key === "Home") nextIndex = 0;
+  else if (event.key === "End") nextIndex = tabs.length - 1;
+  else return;
+  event.preventDefault();
+  const next = tabs[nextIndex];
+  if (!next) return;
+  activeTab.value = next.id;
+  const tablist = (event.currentTarget as HTMLElement | null)?.parentElement;
+  void nextTick(() => tablist?.querySelectorAll<HTMLElement>("[role='tab']")[nextIndex]?.focus());
+}
 </script>
 
 <template>
-  <section class="grid gap-8">
-    <div>
+  <section class="grid min-w-0 gap-8">
+    <header>
       <p class="page-kicker">TOOLS</p>
-      <h2 class="section-title mt-2">工具</h2>
+      <h2 class="section-title mt-2">Agent 工具</h2>
+    </header>
+
+    <div class="flex min-h-12 min-w-0 overflow-x-auto border-b border-line" role="tablist" aria-label="工具设置">
+      <button
+        v-for="(tab, index) in tabs"
+        :id="`tools-tab-${tab.id}`"
+        :key="tab.id"
+        class="relative min-h-12 shrink-0 px-4 font-mono text-xs text-mute transition-colors duration-200 hover:text-display"
+        :class="activeTab === tab.id ? 'bg-raised text-display after:absolute after:inset-x-4 after:bottom-0 after:h-0.5 after:bg-display' : ''"
+        type="button"
+        role="tab"
+        :aria-selected="activeTab === tab.id"
+        :aria-controls="`tools-panel-${tab.id}`"
+        :tabindex="activeTab === tab.id ? 0 : -1"
+        @click="selectTab(tab.id)"
+        @keydown="onTabKeydown($event, index)"
+      >
+        <i class="bx mr-2 text-base" :class="tab.icon" aria-hidden="true"></i>{{ tab.label }}
+      </button>
     </div>
-    <div class="grid gap-8">
-      <label class="field max-w-xs">
-        <span class="field-label">单轮工具调用上限</span>
-        <input v-model.number="draft.maxCalls" class="control" type="number" min="1" max="100" step="1">
-        <small class="text-xs text-mute">每次 Agent 行动最多调用 {{ draft.maxCalls }} 次工具</small>
-      </label>
-      <div class="grid gap-5">
-        <div>
-          <p class="page-kicker">WEB SEARCH</p>
-          <h3 class="section-title mt-2">Web Search</h3>
-        </div>
-        <div class="grid gap-5 sm:grid-cols-2">
-          <label class="field">
-            <span class="field-label">最大结果数</span>
-            <input v-model.number="draft.websearch.maxResults" class="control" type="number" min="1" max="10" step="1">
-          </label>
-          <TavilyKeyPool
-            v-model="draft.websearch"
-            class="sm:col-span-2"
-            :field-state="tavilyFieldState"
-          />
-          <label class="field sm:col-span-2">
-            <span class="field-label">Tavily Key 环境变量</span>
-            <input v-model.trim="draft.websearch.tavilyApiKeyEnv" class="control" type="text" autocomplete="off">
-          </label>
-        </div>
-      </div>
-      <div class="grid gap-5 border-t border-line pt-6">
-        <div>
-          <p class="page-kicker">CODEX</p>
-          <h3 class="section-title mt-2">Codex</h3>
-        </div>
-        <ToggleSwitch
-          v-model="draft.codex.enabled"
-          label="启用 Codex"
-          description="复杂本地任务、深度研究和长时间分析"
-        />
-        <div class="grid gap-5 sm:grid-cols-2">
-          <label class="field">
-            <span class="field-label">模型</span>
-            <select v-model="draft.codex.model" class="control" :disabled="!draft.codex.enabled">
-              <option v-for="model in models" :key="model.id" :value="model.id">{{ model.label }}</option>
-            </select>
-          </label>
-          <label class="field">
-            <span class="field-label">可执行文件</span>
-            <input v-model.trim="draft.codex.codexExecutable" class="control" type="text" autocomplete="off" placeholder="auto" :disabled="!draft.codex.enabled">
-          </label>
-          <label class="field">
-            <span class="field-label">任务超时（毫秒）</span>
-            <input v-model.number="draft.codex.timeoutMs" class="control" type="number" min="1000" max="86400000" step="1000" :disabled="!draft.codex.enabled">
-          </label>
-          <label class="field">
-            <span class="field-label">最大并发数</span>
-            <input v-model.number="draft.codex.maxConcurrency" class="control" type="number" min="1" max="16" step="1" :disabled="!draft.codex.enabled">
-          </label>
-        </div>
-      </div>
-      <div class="grid gap-5 border-t border-line pt-6 sm:grid-cols-2 lg:grid-cols-4">
-        <label class="field">
-          <span class="field-label">图像生成</span>
-          <select v-model="draft.generateImg.provider" class="control">
-            <option value="codex-image-gen">Codex image_gen</option>
-            <option value="custom">自定义</option>
-          </select>
-        </label>
-        <label class="field">
-          <span class="field-label">默认尺寸</span>
-          <select v-model="draft.generateImg.size" class="control">
-            <option v-for="size in sizes" :key="size" :value="size">{{ size }}</option>
-          </select>
-        </label>
-        <label class="field">
-          <span class="field-label">默认清晰度</span>
-          <select v-model="draft.generateImg.resolution" class="control">
-            <option v-for="resolution in resolutions" :key="resolution" :value="resolution">{{ resolution }}</option>
-          </select>
-        </label>
-        <label class="field">
-          <span class="field-label">默认质量</span>
-          <select v-model="draft.generateImg.quality" class="control">
-            <option v-for="quality in qualities" :key="quality.value" :value="quality.value">{{ quality.label }}</option>
-          </select>
-        </label>
-      </div>
-    </div>
+
+    <section
+      id="tools-panel-catalog"
+      role="tabpanel"
+      aria-labelledby="tools-tab-catalog"
+      :hidden="activeTab !== 'catalog'"
+    >
+      <ToolCatalogSettings v-model="draft" />
+    </section>
+    <section
+      id="tools-panel-runtime"
+      role="tabpanel"
+      aria-labelledby="tools-tab-runtime"
+      :hidden="activeTab !== 'runtime'"
+    >
+      <ToolRuntimeSettings v-model="draft" :models="models" :field-states="fieldStates" />
+    </section>
   </section>
 </template>

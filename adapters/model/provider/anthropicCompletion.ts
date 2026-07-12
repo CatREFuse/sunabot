@@ -22,7 +22,8 @@ export async function completeAnthropicMessages(
   const messages = await Promise.all(request.messages
     .filter((message) => message.role !== "system" && message.role !== "developer")
     .map(toAnthropicMessage));
-  const tools = context.toolExecutor.resolveDefinitions(options, request.tools).map((tool) => ({
+  const definitions = context.toolExecutor.resolveDefinitions(options, request.tools);
+  const tools = definitions.map((tool) => ({
     name: String(tool.name ?? ""),
     description: String(tool.description ?? ""),
     input_schema: isRecord(tool.parameters) ? tool.parameters : { type: "object", properties: {} }
@@ -70,11 +71,11 @@ export async function completeAnthropicMessages(
       return { kind: "completed", text };
     }
 
-    const deferred = context.toolExecutor.deferredTurn(calls, options);
+    const deferred = context.toolExecutor.deferredTurn(calls, options, definitions);
     if (deferred) return deferred;
     if (text && options.onAssistantText) await options.onAssistantText(text);
     messages.push({ role: "assistant", content: blocks });
-    const outputs = await context.toolExecutor.execute(calls, options);
+    const outputs = await context.toolExecutor.execute(calls, options, definitions);
     messages.push({
       role: "user",
       content: outputs.map((output) => ({ type: "tool_result", tool_use_id: output.call_id, content: String(output.output ?? "") }))

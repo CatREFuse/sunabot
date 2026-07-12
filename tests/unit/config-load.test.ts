@@ -104,6 +104,7 @@ describe("tool configuration", () => {
 
   it("defaults websearch to Tavily and Codex to an independent worker", () => {
     expect(defaultConfig().bot.tools.maxCalls).toBe(20);
+    expect(defaultConfig().bot.tools.overrides).toEqual({});
     expect(defaultConfig().bot.tools.websearch).toMatchObject({
       provider: "tavily",
       tavilyApiKey: "",
@@ -179,6 +180,29 @@ describe("tool configuration", () => {
       timeoutMs: 30_000,
       maxConcurrency: 4
     });
+  });
+
+  it("fills sparse tool overrides without changing legacy tool capability settings", async () => {
+    await fs.writeFile(configPath, JSON.stringify({
+      bot: {
+        tools: {
+          overrides: {
+            websearch: { enabled: false, description: "  Search only when explicitly enabled.  " },
+            codex: { description: "  Delegate long work.  " },
+            unknown_tool: { enabled: false }
+          },
+          codex: { enabled: false }
+        }
+      }
+    }), "utf8");
+
+    const config = await loadConfig();
+
+    expect(config.bot.tools.overrides).toEqual({
+      websearch: { enabled: false, description: "Search only when explicitly enabled." },
+      codex: { description: "Delegate long work." }
+    });
+    expect(config.bot.tools.codex.enabled).toBe(false);
   });
 
   it("migrates a direct key from the legacy Tavily env field", async () => {

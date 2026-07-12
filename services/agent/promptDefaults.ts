@@ -4,10 +4,10 @@ import {
   generateImgTool,
   memoryRecallTool,
   selfieTool,
+  withRequiredDispatchMessage,
   websearchTool,
   workspaceBashTool
 } from "../tools/public.js";
-import { withRequiredDispatchMessage } from "../tools/deferredDispatch.js";
 import type { FinalPromptTemplate, OpenAIToolDefinition } from "./promptSystem.js";
 
 export const DEFAULT_WORK_MEMORY_COMPRESS_IN_PROMPT = [

@@ -40,6 +40,7 @@ const emptyConfig: AppConfig = {
     },
     tools: {
       maxCalls: 20,
+      overrides: {},
       websearch: {
         provider: "tavily",
         tavilyApiKey: "",
@@ -252,6 +253,7 @@ function valuesFromConfig(config: AppConfig): SectionDrafts {
     orchestrator: clone(config.bot.orchestrator),
     tools: {
       ...clone(config.bot.tools),
+      overrides: clone(config.bot.tools.overrides ?? {}),
       websearch: {
         ...clone(config.bot.tools.websearch),
         removeTavilyApiKeyIndexes: []

@@ -22,6 +22,12 @@ export interface ProviderConfig {
 
 export type WebsearchToolProvider = "tavily";
 export type GenerateImgToolProvider = "codex-image-gen" | "custom";
+export type ToolName = string;
+export type ToolExecutionMode = "inline" | "deferred";
+export interface ToolOverride {
+  enabled?: boolean;
+  description?: string;
+}
 export type ImageResolution = "1K" | "2K" | "4K";
 export type ImageQuality = "auto" | "low" | "medium" | "high";
 export type ImageSize =
@@ -36,6 +42,7 @@ export type ImageSize =
 
 export interface BotToolSettings {
   maxCalls: number;
+  overrides: Record<ToolName, ToolOverride>;
   websearch: {
     provider: WebsearchToolProvider;
     tavilyApiKey: string;
@@ -173,7 +180,34 @@ export interface RuntimeStatus {
   recovery?: { required: boolean; message?: string; backupPath?: string };
 }
 
-export interface SunaTool { name: string; title: string; description: string; enabled: boolean }
+export interface ToolParameterSummary {
+  name: string;
+  type: string;
+  required: boolean;
+  description: string;
+}
+
+export interface SunaTool {
+  name: ToolName;
+  title: string;
+  summary?: string;
+  execution?: ToolExecutionMode;
+  configuredEnabled?: boolean | null;
+  inheritedEnabled?: boolean;
+  promptEnabled?: boolean;
+  available?: boolean;
+  enabled: boolean;
+  effectiveEnabled?: boolean;
+  configurable?: boolean;
+  availabilityReason?: string;
+  unavailableReason?: string;
+  defaultDescription?: string;
+  promptDescription?: string;
+  description: string;
+  descriptionSource?: string;
+  parameters?: Readonly<Record<string, unknown>> | readonly ToolParameterSummary[];
+  strict?: boolean;
+}
 
 export interface ConversationMessageQuote {
   messageId: number;

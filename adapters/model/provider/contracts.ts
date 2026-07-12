@@ -83,9 +83,14 @@ export interface ProviderToolExecutorPort {
   resolveDefinitions(options: ProviderCompleteOptions, definitions?: OpenAIToolDefinition[]): Record<string, unknown>[];
   deferredTurn(
     calls: ResponseFunctionCallItem[],
-    options: ProviderCompleteOptions
+    options: ProviderCompleteOptions,
+    definitions: readonly Record<string, unknown>[]
   ): ProviderDeferredTurn | null;
-  execute(calls: ResponseFunctionCallItem[], options: ProviderCompleteOptions): Promise<Array<Record<string, unknown>>>;
+  execute(
+    calls: ResponseFunctionCallItem[],
+    options: ProviderCompleteOptions,
+    definitions: readonly Record<string, unknown>[]
+  ): Promise<Array<Record<string, unknown>>>;
 }
 
 export interface GeneratedImageWriterPort {

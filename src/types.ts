@@ -60,6 +60,21 @@ export interface ProviderConfig {
 
 export type WebsearchToolProvider = "tavily";
 export type GenerateImgToolProvider = "codex-image-gen" | "custom";
+export const AGENT_TOOL_NAMES = [
+  "assistant_text",
+  "memory_recall",
+  "websearch",
+  "generate_img",
+  "selfie",
+  "workspace_bash",
+  "codex"
+] as const;
+export type AgentToolName = (typeof AGENT_TOOL_NAMES)[number];
+export interface BotToolOverride {
+  enabled?: boolean;
+  description?: string;
+}
+export type BotToolOverrides = Partial<Record<AgentToolName, BotToolOverride>>;
 export type ImageResolution = "1K" | "2K" | "4K";
 export type ImageQuality = "auto" | "low" | "medium" | "high";
 export type ImageSize =
@@ -74,6 +89,7 @@ export type ImageSize =
 
 export interface BotToolSettings {
   maxCalls: number;
+  overrides?: BotToolOverrides;
   websearch: {
     provider: WebsearchToolProvider;
     tavilyApiKey: string;

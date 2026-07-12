@@ -40,6 +40,7 @@ function config(adminName: string): AppConfig {
       orchestrator: { enabled: false, userGroupchatOrchestratorModel: "gpt-5.4-mini", reasoningEffort: "medium", promptFile: "orchestrator.md", messageThreshold: 10, recentMessageWindowMs: 60_000 },
       tools: {
         maxCalls: 20,
+        overrides: {},
         websearch: { provider: "tavily", tavilyApiKey: "", tavilyApiKeys: [], tavilyApiKeyEnv: "TAVILY_API_KEY", maxResults: 5 },
         codex: { enabled: true, model: "gpt-5.4-mini", codexExecutable: "auto", timeoutMs: 900_000, maxConcurrency: 2 },
         generateImg: { provider: "codex-image-gen", size: "1024x1024", resolution: "1K", quality: "high" }
@@ -85,6 +86,18 @@ describe("useConfigWorkspace", () => {
 
     await workspace.save("bot");
     expect(workspace.state.bot).toMatchObject({ kind: "error", field: "bot.adminQq" });
+  });
+
+  it("normalizes missing tool overrides without creating a dirty draft", async () => {
+    const legacy = envelope("r1", "initial");
+    delete (legacy.config.bot.tools as Partial<AppConfig["bot"]["tools"]>).overrides;
+    apiRequest.mockResolvedValueOnce(legacy);
+    const workspace = useConfigWorkspace();
+
+    await workspace.load();
+
+    expect(workspace.drafts.tools.overrides).toEqual({});
+    expect(workspace.isDirty("tools")).toBe(false);
   });
 
   it("saves the linked user-group and orchestrator controls atomically", async () => {

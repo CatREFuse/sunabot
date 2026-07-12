@@ -232,6 +232,63 @@ describe("ConfigService", () => {
     expect(saved.bot.orchestrator.reasoningEffort).toBe("high");
   });
 
+  it("persists sparse tool overrides as a hot configuration update", async () => {
+    const service = new ConfigService({
+      prepareApply: async () => ({ commit: vi.fn() }),
+      mutex: new AdminMutationMutex()
+    });
+    const initial = currentConfig();
+    const tools = structuredClone(initial.bot.tools);
+    tools.overrides = {
+      websearch: { enabled: false, description: "  Search the live web only when needed.  " },
+      codex: { description: "Delegate long-running work." }
+    };
+
+    const result = await service.patch("tools", {
+      revision: configRevision(initial),
+      value: tools
+    });
+
+    expect(result).toMatchObject({ ok: true, applyMode: "hot", restartRequiredFields: [] });
+    expect(currentConfig().bot.tools.overrides).toEqual({
+      websearch: { enabled: false, description: "Search the live web only when needed." },
+      codex: { description: "Delegate long-running work." }
+    });
+  });
+
+  it("rejects unknown tools and invalid override descriptions", async () => {
+    const prepareApply = vi.fn(async () => ({ commit: vi.fn() }));
+    const service = new ConfigService({ prepareApply, mutex: new AdminMutationMutex() });
+    const initial = currentConfig();
+    const revision = configRevision(initial);
+
+    await expect(service.patch("tools", {
+      revision,
+      value: {
+        ...initial.bot.tools,
+        overrides: { unknown_tool: { enabled: false } }
+      }
+    })).rejects.toMatchObject({
+      code: "CONFIG_UNKNOWN_FIELD",
+      field: "tools.overrides.unknown_tool"
+    });
+
+    for (const description of ["invalid\0description", "x".repeat(4_001)]) {
+      await expect(service.patch("tools", {
+        revision,
+        value: {
+          ...initial.bot.tools,
+          overrides: { websearch: { description } }
+        }
+      })).rejects.toMatchObject({
+        code: "CONFIG_INVALID",
+        field: "tools.overrides.websearch.description"
+      });
+    }
+    expect(prepareApply).not.toHaveBeenCalled();
+    expect(currentConfig()).toEqual(initial);
+  });
+
   it("keeps an existing provider type immutable", async () => {
     const service = new ConfigService({
       prepareApply: async () => ({ commit: vi.fn() }),

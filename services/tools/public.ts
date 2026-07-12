@@ -11,7 +11,9 @@ export { WORKSPACE_BASH_TOOL_NAME, createWorkspaceBashTool, workspaceBashTool } 
 export { GENERATE_IMG_TOOL_NAME, generateImgTool } from "./generateImgTool.js";
 export { SELFIE_TOOL_NAME, selfieTool } from "./selfieTool.js";
 export { ASSISTANT_TEXT_TOOL_NAME, assistantTextTool, readAssistantText } from "./assistantTextTool.js";
+export { withRequiredDispatchMessage } from "./deferredDispatch.js";
 export {
+  isProviderToolAvailable,
   listToolMetadata,
   providerToolExecutionMode,
   resolveProviderToolDefinitions

@@ -4,10 +4,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
 import {
+  AGENT_TOOL_NAMES,
   AppConfig,
   BotConfig,
   BotMemorySettings,
   BotOrchestratorSettings,
+  BotToolOverride,
   BotToolSettings,
   ProviderConfig,
   ReasoningEffort
@@ -122,6 +124,7 @@ export function defaultConfig(): AppConfig {
       },
       tools: {
         maxCalls: 20,
+        overrides: {},
         websearch: {
           provider: "tavily",
           tavilyApiKey: "",
@@ -416,6 +419,7 @@ function mergeBotToolSettings(base: BotToolSettings, incoming: Partial<BotToolSe
   }, base.websearch);
   return {
     maxCalls: normalizeInteger(incoming?.maxCalls, base.maxCalls, 1, 100),
+    overrides: mergeBotToolOverrides(base.overrides, incoming?.overrides),
     websearch: {
       provider: "tavily",
       ...tavily,
@@ -442,6 +446,41 @@ function mergeBotToolSettings(base: BotToolSettings, incoming: Partial<BotToolSe
         : base.generateImg.quality
     }
   };
+}
+
+function mergeBotToolOverrides(
+  base: BotToolSettings["overrides"],
+  incoming: BotToolSettings["overrides"] | undefined
+): NonNullable<BotToolSettings["overrides"]> {
+  const merged: NonNullable<BotToolSettings["overrides"]> = {};
+  for (const name of AGENT_TOOL_NAMES) {
+    const fallback = base?.[name];
+    const candidate = incoming?.[name];
+    const normalized = normalizeBotToolOverride(candidate, fallback);
+    if (normalized) merged[name] = normalized;
+  }
+  return merged;
+}
+
+function normalizeBotToolOverride(
+  candidate: BotToolOverride | undefined,
+  fallback: BotToolOverride | undefined
+) {
+  const enabled = typeof candidate?.enabled === "boolean" ? candidate.enabled : fallback?.enabled;
+  const candidateDescription = normalizeToolDescription(candidate?.description);
+  const fallbackDescription = normalizeToolDescription(fallback?.description);
+  const description = candidateDescription || fallbackDescription;
+  if (enabled == null && !description) return undefined;
+  return {
+    ...(enabled == null ? {} : { enabled }),
+    ...(description ? { description } : {})
+  };
+}
+
+function normalizeToolDescription(value: unknown) {
+  if (typeof value !== "string") return "";
+  const description = value.trim();
+  return description.length <= 4_000 && !description.includes("\0") ? description : "";
 }
 
 function ensureStringList(value: unknown, fallback: string[]) {

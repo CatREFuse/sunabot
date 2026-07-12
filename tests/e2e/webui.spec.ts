@@ -147,10 +147,11 @@ test("模型下拉目录、推理强度联动与分区保存", async ({ page }) 
   await expect(page.getByText("[SAVED]", { exact: true })).toBeVisible();
 
   await page.goto("/settings/tools");
+  await page.getByRole("tab", { name: "运行参数", exact: true }).click();
   const codexModelSelect = page.getByRole("combobox", { name: "模型", exact: true });
   await expect(codexModelSelect.locator("option")).toHaveText(modelCatalog.map((model) => model.label));
   await expect(page.getByLabel("可执行文件")).toHaveValue("auto");
-  await expect(page.getByLabel("启用 Codex")).toBeChecked();
+  await expect(page.getByLabel("启动 Codex Worker")).toBeChecked();
   await expect(page.getByLabel("默认质量")).toHaveValue("high");
   await codexModelSelect.selectOption("gpt-5.5");
   await page.getByLabel("默认质量").selectOption("auto");
@@ -183,6 +184,69 @@ test("模型下拉目录、推理强度联动与分区保存", async ({ page }) 
   await page.getByRole("button", { name: "保存", exact: true }).click();
   await expect.poll(() => state.patchRequests.length).toBe(5);
   expect(state.config.bot.tools.websearch.tavilyApiKeys).toEqual(["tvly-e2e-secret-2-1234567890"]);
+});
+
+test("工具目录支持启停、全局说明和继承说明恢复", async ({ page }) => {
+  const state = await installMockApi(page);
+  await page.goto("/settings/tools");
+
+  await expect(page.getByRole("tab", { name: "工具目录", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByLabel("搜索工具")).toBeVisible();
+  await expect(page.getByLabel(/^启用 /)).toHaveCount(7);
+  for (const name of [
+    "assistant_text",
+    "memory_recall",
+    "websearch",
+    "generate_img",
+    "selfie",
+    "workspace_bash",
+    "codex"
+  ]) {
+    await expect(page.getByText(name, { exact: true })).toBeVisible();
+  }
+  await expect(page.getByText("system.time", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("onebot.send_message", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("provider.test", { exact: true })).toHaveCount(0);
+
+  await page.getByLabel("启用 网页搜索").uncheck({ force: true });
+  await page.getByRole("button", { name: "查看 行动中消息 详情" }).click();
+  let dialog = page.getByRole("dialog", { name: "行动中消息" });
+  await expect(dialog.getByRole("table", { name: "工具参数" })).toBeVisible();
+  await expect(dialog.getByRole("cell", { name: "text", exact: true })).toBeVisible();
+  const defaultDescription = await dialog.getByLabel("模型描述").inputValue();
+  await dialog.getByLabel("模型描述").fill("在多轮任务中及时同步当前进展。");
+  await dialog.getByRole("button", { name: "关闭工具详情" }).click();
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+
+  await expect.poll(() => state.patchRequests.length).toBe(1);
+  expect(state.patchRequests[0]?.section).toBe("tools");
+  expect(state.config.bot.tools.overrides).toMatchObject({
+    assistant_text: { description: "在多轮任务中及时同步当前进展。" },
+    websearch: { enabled: false }
+  });
+
+  await page.getByRole("button", { name: "查看 行动中消息 详情" }).click();
+  dialog = page.getByRole("dialog", { name: "行动中消息" });
+  await expect(dialog.getByLabel("模型描述")).toHaveValue("在多轮任务中及时同步当前进展。");
+  await dialog.getByRole("button", { name: "恢复继承说明" }).click();
+  await expect(dialog.getByLabel("模型描述")).toHaveValue(defaultDescription);
+  await dialog.getByRole("button", { name: "关闭工具详情" }).click();
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+
+  await expect.poll(() => state.patchRequests.length).toBe(2);
+  expect(state.config.bot.tools.overrides.assistant_text?.description).toBeUndefined();
+  expect(state.config.bot.tools.overrides.websearch).toEqual({ enabled: false });
+
+  await page.reload();
+  await expect(page.getByLabel("启用 网页搜索")).not.toBeChecked();
+  await page.getByRole("button", { name: "查看 行动中消息 详情" }).click();
+  await expect(page.getByRole("dialog", { name: "行动中消息" }).getByLabel("模型描述"))
+    .toHaveValue(defaultDescription);
+
+  await page.getByRole("button", { name: "关闭工具详情" }).click();
+  await page.getByRole("tab", { name: "运行参数", exact: true }).click();
+  await expect(page.getByLabel("启动 Codex Worker")).toBeChecked();
+  await expect(page.getByLabel("单轮工具调用上限")).toHaveValue("20");
 });
 
 test("提示词库列出全部文件并支持快捷保存与冲突恢复", async ({ page }) => {

@@ -214,7 +214,7 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
   registerOneBotRoutes(app, onebotGateway);
   registerProviderConfigRoutes(app, { codexAuth, configService, testProvider: options.testProvider });
   registerMemoryRoutes(app, { getConfig: () => config, runtime });
-  registerAgentToolRoutes(app, { agentFiles });
+  registerAgentToolRoutes(app, { agentFiles, getConfig: () => config });
   registerSelfieReferenceRoutes(app, { repository: selfieReferences });
 
   app.setNotFoundHandler((request, reply) => {

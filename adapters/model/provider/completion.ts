@@ -85,7 +85,7 @@ async function completeOpenAIResponses(
 
     const toolCalls = extractFunctionCalls(response);
     toolCallCount = claimToolCalls(toolCallCount, toolCalls.length, maxToolCalls);
-    const deferred = context.toolExecutor.deferredTurn(toolCalls, options);
+    const deferred = context.toolExecutor.deferredTurn(toolCalls, options, tools);
     if (deferred) return deferred;
     if (!toolCalls.length) {
       const text = extractProviderText(response);
@@ -94,7 +94,7 @@ async function completeOpenAIResponses(
     }
 
     await emitIntermediateAssistantText(response, options);
-    input.push(...extractResponseOutput(response), ...(await context.toolExecutor.execute(toolCalls, options)));
+    input.push(...extractResponseOutput(response), ...(await context.toolExecutor.execute(toolCalls, options, tools)));
   }
 
   throw toolCallLimitError(maxToolCalls);
@@ -181,10 +181,10 @@ async function completeCodexResponses(
     }
 
     const streamText = extractResponsesTextFromSse(text);
-    const deferred = context.toolExecutor.deferredTurn(toolCalls, options);
+    const deferred = context.toolExecutor.deferredTurn(toolCalls, options, tools);
     if (deferred) return deferred;
     await emitIntermediateAssistantText(payload, options, streamText);
-    input.push(...extractResponseOutput(payload), ...(await context.toolExecutor.execute(toolCalls, options)));
+    input.push(...extractResponseOutput(payload), ...(await context.toolExecutor.execute(toolCalls, options, tools)));
   }
 
   throw toolCallLimitError(maxToolCalls);
@@ -197,7 +197,8 @@ async function completeChatCompletions(
 ): Promise<ProviderTurnResult> {
   const client = context.createChatClient();
   const messages: Array<Record<string, unknown>> = await Promise.all(request.messages.map(toChatCompletionMessage));
-  const tools = context.toolExecutor.resolveDefinitions(options, request.tools).map(toChatCompletionTool);
+  const definitions = context.toolExecutor.resolveDefinitions(options, request.tools);
+  const tools = definitions.map(toChatCompletionTool);
   const maxToolCalls = resolveMaxToolCalls(options);
   let toolCallCount = 0;
 
@@ -246,7 +247,7 @@ async function completeChatCompletions(
       return { kind: "completed", text };
     }
 
-    const deferred = context.toolExecutor.deferredTurn(calls, options);
+    const deferred = context.toolExecutor.deferredTurn(calls, options, definitions);
     if (deferred) return deferred;
     if (choice.content?.trim() && options.onAssistantText) await options.onAssistantText(choice.content.trim());
     messages.push({
@@ -254,7 +255,7 @@ async function completeChatCompletions(
       content: choice.content ?? null,
       tool_calls: choice.tool_calls
     });
-    const outputs = await context.toolExecutor.execute(calls, options);
+    const outputs = await context.toolExecutor.execute(calls, options, definitions);
     messages.push(...outputs.map((output) => ({
       role: "tool",
       tool_call_id: output.call_id,

@@ -21,6 +21,7 @@ import {
   readAssistantText
 } from "../../../services/tools/assistantTextTool.js";
 import {
+  isProviderToolAvailable,
   isProviderDeferredTool,
   providerToolExecutionMode,
   resolveProviderToolDefinitions
@@ -72,21 +73,7 @@ async function runAssistantText(
 
 export class RegistryProviderToolExecutor implements ProviderToolExecutorPort {
   resolveDefinitions(options: ProviderCompleteOptions, definitions?: OpenAIToolDefinition[]) {
-    const available = resolveProviderToolDefinitions(options) as Record<string, unknown>[];
-    const configured = definitions == null
-      ? available
-      : (() => {
-          const enabledNames = new Set(available.map(readToolName));
-          return definitions
-            .map((tool) => ({
-              type: "function",
-              name: tool.function.name,
-              description: tool.function.description,
-              parameters: tool.function.parameters,
-              ...(typeof tool.function.strict === "boolean" ? { strict: tool.function.strict } : {})
-            }))
-            .filter((tool) => enabledNames.has(tool.name));
-        })();
+    const configured = resolveProviderToolDefinitions(options, definitions) as Record<string, unknown>[];
     return configured.map((tool) => isProviderDeferredTool(readToolName(tool), options)
       ? withRequiredDispatchMessage(tool)
       : withoutDispatchMessage(tool));
@@ -94,10 +81,13 @@ export class RegistryProviderToolExecutor implements ProviderToolExecutorPort {
 
   deferredTurn(
     calls: ResponseFunctionCallItem[],
-    options: ProviderCompleteOptions
+    options: ProviderCompleteOptions,
+    definitions: readonly Record<string, unknown>[]
   ): ProviderDeferredTurn | null {
     if (calls.length !== 1) return null;
     const call = calls[0]!;
+    if (!isProviderToolAvailable(call.name, options)) return null;
+    if (!isToolEnabledForTurn(call.name, definitions)) return null;
     if (!isProviderDeferredTool(call.name, options)) return null;
     const args = parseJson(call.arguments);
     if (!args || typeof args !== "object" || Array.isArray(args)) return null;
@@ -114,19 +104,33 @@ export class RegistryProviderToolExecutor implements ProviderToolExecutorPort {
     };
   }
 
-  async execute(calls: ResponseFunctionCallItem[], options: ProviderCompleteOptions) {
+  async execute(
+    calls: ResponseFunctionCallItem[],
+    options: ProviderCompleteOptions,
+    definitions: readonly Record<string, unknown>[]
+  ) {
     return Promise.all(calls.map(async (call) => ({
       type: "function_call_output",
       call_id: call.call_id,
-      output: JSON.stringify(await executeFunctionCall(call, options))
+      output: JSON.stringify(await executeFunctionCall(call, options, definitions))
     })));
   }
 }
 
-async function executeFunctionCall(call: ResponseFunctionCallItem, options: ProviderCompleteOptions) {
+async function executeFunctionCall(
+  call: ResponseFunctionCallItem,
+  options: ProviderCompleteOptions,
+  definitions: readonly Record<string, unknown>[]
+) {
   try {
     const executionMode = providerToolExecutionMode(call.name, options);
     if (!executionMode) return { ok: false, error: `Unsupported tool: ${call.name}` };
+    if (!isProviderToolAvailable(call.name, options)) {
+      return { ok: false, error: `Tool ${call.name} is unavailable.` };
+    }
+    if (!isToolEnabledForTurn(call.name, definitions)) {
+      return { ok: false, error: `Tool ${call.name} is not enabled for this prompt.` };
+    }
     const args = parseJson(call.arguments);
     if (!args || typeof args !== "object") {
       return { ok: false, error: `Invalid tool arguments for ${call.name}.` };
@@ -147,6 +151,10 @@ async function executeFunctionCall(call: ResponseFunctionCallItem, options: Prov
   } catch (error) {
     return { ok: false, error: errorMessage(error) };
   }
+}
+
+function isToolEnabledForTurn(name: string, definitions: readonly Record<string, unknown>[]) {
+  return definitions.some((definition) => readToolName(definition) === name);
 }
 
 async function runBash(

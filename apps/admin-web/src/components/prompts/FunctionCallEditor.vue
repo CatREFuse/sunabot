@@ -59,8 +59,9 @@ function updateParameters(value: string) {
         <input class="control font-mono" :value="tool.function.name" type="text" @input="updateFunction('name', ($event.target as HTMLInputElement).value)">
       </label>
       <label class="field function-editor__wide">
-        <span class="field-label">说明</span>
+        <span class="field-label">提示词内说明</span>
         <textarea class="control min-h-24 resize-y py-3" :value="tool.function.description" @input="updateFunction('description', ($event.target as HTMLTextAreaElement).value)"></textarea>
+        <small class="text-xs text-mute">全局工具说明优先。</small>
       </label>
       <label class="field function-editor__wide">
         <span class="field-label">Parameters · JSON Schema</span>

@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import { getConfigPath, getWorkspaceDir, loadConfig, saveConfig } from "../config.js";
 import { OpenAIProvider } from "../../adapters/model/openaiProvider.js";
 import type {
+  AgentToolName,
   AppConfig,
   BotConfig,
   BotMemorySettings,
@@ -10,6 +11,7 @@ import type {
   BotToolSettings,
   ProviderConfig
 } from "../types.js";
+import { AGENT_TOOL_NAMES } from "../types.js";
 import { AdminApiError, badRequest, conflict } from "./errors.js";
 import { getModelCatalogEntry } from "./models.js";
 import {
@@ -509,7 +511,7 @@ function validateOrchestrator(input: unknown): BotOrchestratorSettings {
 
 function validateTools(input: unknown, current?: BotToolSettings): BotToolSettings {
   const value = object(input, "tools");
-  exactKeys(value, ["maxCalls", "websearch", "codex", "generateImg"], "tools");
+  exactKeys(value, ["maxCalls", "overrides", "websearch", "codex", "generateImg"], "tools");
   const websearch = object(value.websearch, "tools.websearch");
   exactKeys(websearch, [
     "provider", "tavilyApiKey", "tavilyApiKeys", "tavilyApiKeyEnv",
@@ -582,6 +584,9 @@ function validateTools(input: unknown, current?: BotToolSettings): BotToolSettin
   }
   return {
     maxCalls: value.maxCalls == null ? current?.maxCalls ?? 20 : integer(value.maxCalls, "tools.maxCalls", 1, 100),
+    overrides: value.overrides == null
+      ? structuredClone(current?.overrides ?? {})
+      : validateToolOverrides(value.overrides),
     websearch: {
       provider: "tavily",
       tavilyApiKey: "",
@@ -607,6 +612,36 @@ function validateTools(input: unknown, current?: BotToolSettings): BotToolSettin
       quality: generateImg.quality as BotToolSettings["generateImg"]["quality"]
     }
   };
+}
+
+function validateToolOverrides(input: unknown): NonNullable<BotToolSettings["overrides"]> {
+  if (input == null) return {};
+  const value = object(input, "tools.overrides");
+  const overrides: NonNullable<BotToolSettings["overrides"]> = {};
+  for (const [name, rawOverride] of Object.entries(value)) {
+    if (!(AGENT_TOOL_NAMES as readonly string[]).includes(name)) {
+      badRequest("CONFIG_UNKNOWN_FIELD", "包含不支持的工具。", `tools.overrides.${name}`);
+    }
+    const field = `tools.overrides.${name}`;
+    const override = object(rawOverride, field);
+    const extra = Object.keys(override).find((key) => key !== "enabled" && key !== "description");
+    if (extra) badRequest("CONFIG_UNKNOWN_FIELD", "包含不支持的字段。", `${field}.${extra}`);
+    const enabled = override.enabled == null ? undefined : boolean(override.enabled, `${field}.enabled`);
+    let description: string | undefined;
+    if (override.description != null && override.description !== "") {
+      description = requiredString(override.description, `${field}.description`, {
+        trim: true,
+        min: 1,
+        max: 4_000
+      });
+    }
+    if (enabled == null && description == null) continue;
+    overrides[name as AgentToolName] = {
+      ...(enabled == null ? {} : { enabled }),
+      ...(description == null ? {} : { description })
+    };
+  }
+  return overrides;
 }
 
 function validateBash(input: unknown): BotConfig["bash"] {

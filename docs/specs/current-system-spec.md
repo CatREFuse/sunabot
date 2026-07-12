@@ -91,7 +91,13 @@ Provider 请求使用应用启动时安装的统一出站 dispatcher。显式代
 
 ### 4.3 工具
 
-当前工具包括 `assistant_text`、`memory_recall`、`websearch`、`generate_img`、`selfie`、`workspace_bash` 和 Codex 异步工具。`dispatch_message` 负责 deferred tool 的首次受理消息，`assistant_text` 只负责开始工作后的阶段进度或补充问题，最终结果继续使用普通正文。单轮工具调用上限可配置，默认 20，最大 100；工具启用状态、权限、超时和并发由配置控制。`workspace_bash` 仅供管理员使用，Docker 与 Linux Native 均固定通过 `/usr/bin/bwrap` 执行：宿主文件系统只读，Agent workspace 是唯一可写宿主绑定，沙箱自带的 `/dev` 仅提供非持久设备 I/O；子进程继承相同 mount/PID/IPC/UTS/cgroup 隔离且全部 capability 被丢弃。macOS 原生模式强制关闭该工具。命令与路径规则只作为附加拒绝层；bubblewrap 缺失、不可执行或内核 namespace probe 失败时必须拒绝命令，不能回退到普通 Bash。群聊默认不可用。
+Agent 工具目录固定包含 `assistant_text`、`memory_recall`、`websearch`、`generate_img`、`selfie`、`workspace_bash` 和 `codex` 七项。时间读取、OneBot 消息外发和 Provider 检查属于系统或管理能力，不进入 Agent 工具目录。
+
+`bot.tools.overrides` 按工具名保存稀疏覆盖，每项只允许可选的 `enabled` 与 `description`。没有 `enabled` 覆盖时继承 `conversation.reply` 最终提示词是否包含该 Function；显式启用可恢复代码内置定义，显式停用会从模型请求中移除该工具。描述采用“配置覆盖、当前最终提示词、代码默认值”的优先级；删除描述覆盖后立即恢复当前提示词或代码默认描述。描述覆盖作用于所有 Provider 协议。
+
+工具的配置启用状态与运行能力分开计算。`enabled` 表示配置和提示词选择，`available` 表示当前运行环境、会话权限及依赖能力，`effectiveEnabled` 仅在两者都为真时成立。管理 API 必须同时返回三种状态和不可用原因；平台强制关闭或当前会话无权限时，管理台不能把工具显示成可执行。被停用或不可用的工具既不能出现在 Provider 工具定义中，也不能通过模型返回的未声明 Function Call 绕过门禁执行或派发。
+
+`dispatch_message` 负责 deferred tool 的首次受理消息，`assistant_text` 只负责开始工作后的阶段进度或补充问题，最终结果继续使用普通正文。单轮工具调用上限可配置，默认 20，最大 100；工具启用状态与描述热更新，权限、超时和并发继续由对应运行配置控制。`workspace_bash` 仅供管理员使用，Docker 与 Linux Native 均固定通过 `/usr/bin/bwrap` 执行：宿主文件系统只读，Agent workspace 是唯一可写宿主绑定，沙箱自带的 `/dev` 仅提供非持久设备 I/O；子进程继承相同 mount/PID/IPC/UTS/cgroup 隔离且全部 capability 被丢弃。macOS 原生模式强制关闭该工具。命令与路径规则只作为附加拒绝层；bubblewrap 缺失、不可执行或内核 namespace probe 失败时必须拒绝命令，不能回退到普通 Bash。群聊默认不可用。
 
 ## 5. 记忆系统
 
@@ -136,6 +142,8 @@ NapCat 上报的 QQ 文件优先通过 OneBot action 返回的受控 URL 进入 
 
 管理台包含状态、QQ 会话、图片、记忆、提示词、日志和设置页面，支持 light、dark 和跟随系统主题，并适配桌面、平板和移动端。
 
+设置中的 Agent 工具页默认打开“工具目录”Tab，列出七个真实工具的图标、名称、Function 名、摘要、配置状态、运行能力和同步或异步方式，支持搜索、启停与刷新。详情弹层展示实际模型描述、描述来源、JSON Schema 参数与严格模式；编辑模型描述会建立全局覆盖，“恢复继承说明”会删除覆盖。“运行参数”Tab 继续管理单轮调用上限、Tavily、Codex Worker 和图像生成默认值。两个 Tab 共用当前工具配置草稿和保存栏。
+
 状态页使用响应式卡片拼盘展示 QQ Bot 头像、昵称、连接状态、内容计数、Provider 健康、当日 Token 输入/输出/总量、最近 53 周日历热力图和小时柱形折线图；统计同时兼容 OpenAI、Anthropic 与 Gemini 的 usage 字段，四位及以上主指标使用 K 缩写，并提供千分位精确值。日志页按从新到旧提供 Bot 活动终端与分页纵向时间轴，事件同时显示原始 ID 和中文显示名，请求与响应使用递归结构化视图。记忆页一次只查看一个真实来源，单个搜索栏在本地筛选与语义召回间切换。提示词编辑器提供变量表、已使用变量状态、可选 XML 包装，以及离开前保存。
 
 图片列表和会话正文先读取 48px 低质量 WebP 占位图并以高斯模糊显示，再淡入 480px WebP 展示图；用户打开预览或原图链接时才读取完整图片。浏览器缓存已加载资源，图片历史在短期页面切换中复用，返回图片页不重新批量请求占位图和历史数据。
@@ -171,7 +179,7 @@ QQ 登录由管理台完成：离线时直接显示 NapCat 当前二维码并每
 以下内容继续使用文件：
 
 - `workspace/secrets/runtime.env`：本机凭据，不进入 Git；
-- `workspace/business/config/sunabot.json`：应用配置，不保存明文密钥；
+- `workspace/business/config/sunabot.json`：应用配置，包括 `bot.tools.overrides` 中的工具启用与描述稀疏覆盖，不保存明文密钥；
 - `workspace/business/agents/<agentId>/`：Agent 人格、提示词和人工维护文件；
 - `workspace/business/media/`：需要随业务恢复的图片和持久附件；
 - `workspace/runtime/napcat/`：所有平台的 NapCat Docker 配置、QQ 登录态与运行状态；配置唯一目录为 `workspace/runtime/napcat/config-full`，QQ 状态位于 `workspace/runtime/napcat/qq`，登录二维码唯一文件为 `workspace/runtime/napcat/qrcode.png`；该目录挂载给 NapCat 容器，不作为 Core 的媒体共享目录；
@@ -220,7 +228,7 @@ QQ 登录由管理台完成：离线时直接显示 NapCat 当前二维码并每
 | 状态与监控 API | `apps/api/plugins/monitoringRoutes.ts` |
 | 会话与会话日志 API | `apps/api/plugins/conversationRoutes.ts` |
 | 图片、缩略图、Token 统计、请求日志与图片测试 API | `apps/api/plugins/mediaRoutes.ts` |
-| Agent 文件与工具目录 API | `apps/api/plugins/agentToolRoutes.ts` |
+| Agent 文件与工具目录 API | `apps/api/plugins/agentToolRoutes.ts`, `services/tools/toolRegistry.ts` |
 | 自拍参考图 API 与受控文件仓库 | `apps/api/plugins/selfieReferenceRoutes.ts`, `src/admin/selfieReferences.ts` |
 | 配置加载、默认值、路径解析 | `src/config.ts`, `src/types.ts` |
 | SQLite 主库 | `adapters/sqlite/applicationDataStore.ts` |
@@ -242,6 +250,7 @@ QQ 登录由管理台完成：离线时直接显示 NapCat 当前二维码并每
 | 管理配置和 Agent 文件 | `src/admin/` |
 | 管理台路由和页面 | `apps/admin-web/src/router.ts`, `apps/admin-web/src/views/` |
 | 管理台组件和状态 | `apps/admin-web/src/components/`, `apps/admin-web/src/composables/` |
+| Agent 工具目录设置 | `apps/admin-web/src/components/settings/ToolsSettingsForm.vue`, `apps/admin-web/src/components/settings/ToolCatalogSettings.vue`, `apps/admin-web/src/components/settings/ToolDetailDialog.vue`, `apps/admin-web/src/components/settings/ToolRuntimeSettings.vue`, `apps/admin-web/src/composables/useToolCatalog.ts` |
 | 自拍参考图设置 | `apps/admin-web/src/components/settings/SelfieReferenceSettings.vue`, `apps/admin-web/src/components/settings/SelfieReferenceDialog.vue`, `apps/admin-web/src/composables/useSelfieReferences.ts` |
 | 旧数据迁移 | `tooling/migrations/migrate-to-sqlite.mjs` |
 | 统一运行入口与模式选择 | `sunabot.sh`, `tooling/runtime/launcher.mjs`, `tooling/runtime/launcher-core.mjs` |

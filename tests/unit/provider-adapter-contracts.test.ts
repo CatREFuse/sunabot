@@ -52,7 +52,7 @@ describe("provider adapter ports", () => {
       name: "unknown_tool",
       call_id: "call_unknown",
       arguments: "{}"
-    }], {});
+    }], {}, []);
 
     expect(output).toMatchObject({
       type: "function_call_output",

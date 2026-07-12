@@ -124,12 +124,13 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     await capture(page, viewport.name, theme, "settings-providers");
 
     await page.goto("/settings/tools");
+    await page.getByRole("tab", { name: "运行参数", exact: true }).click();
     const codexModel = page.getByRole("combobox", { name: "模型", exact: true });
     await expect(codexModel).toHaveValue("gpt-5.4-mini");
     await expect(page.getByText("Tavily Key 池", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "添加 Key" })).toBeVisible();
     await capture(page, viewport.name, theme, "settings-tools-codex");
-    await page.getByText("启用 Codex", { exact: true }).click();
+    await page.getByText("启动 Codex Worker", { exact: true }).click();
     await expect(codexModel).toBeDisabled();
     await capture(page, viewport.name, theme, "settings-tools-codex-disabled");
 
@@ -179,6 +180,29 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     await expect(page.getByRole("heading", { name: "管理员登录" })).toBeHidden();
     await expect(page.getByRole("heading", { name: "图像", exact: true })).toBeVisible();
     await capture(page, viewport.name, theme, "admin-restored");
+  }
+});
+
+test("工具目录四视口矩阵", async ({ page }, testInfo) => {
+  test.setTimeout(120_000);
+  const theme = testInfo.project.name.endsWith("dark") ? "dark" : "light";
+  await page.addInitScript((selectedTheme) => localStorage.setItem("sunabot.theme", selectedTheme), theme);
+  await page.emulateMedia({ colorScheme: theme, reducedMotion: "reduce" });
+  await installMockApi(page);
+
+  for (const viewport of viewports) {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.goto("/settings/tools");
+    await expect(page.getByRole("tab", { name: "工具目录", exact: true })).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByLabel("搜索工具")).toBeVisible();
+    await expect(page.getByLabel(/^启用 /)).toHaveCount(7);
+    await capture(page, viewport.name, theme, "settings-tools-catalog");
+
+    await page.getByRole("button", { name: "查看 行动中消息 详情" }).click();
+    await expect(page.getByRole("dialog", { name: "行动中消息" })).toBeVisible();
+    await expect(page.getByRole("table", { name: "工具参数" })).toBeVisible();
+    await capture(page, viewport.name, theme, "settings-tools-detail");
+    await page.getByRole("button", { name: "关闭工具详情" }).click();
   }
 });
 

@@ -27,6 +27,7 @@ const OPTIONAL_KEYS = new Set([
   "visionProviderId",
   "visionModel",
   "maxCalls",
+  "overrides",
   "clearTavilyApiKey",
   "removeTavilyApiKeyIndexes"
 ]);

@@ -39,6 +39,8 @@ describe("FinalPromptForm", () => {
     expect(wrapper.get('[aria-label="消息组变量"]').element).toMatchObject({ value: "messages_64" });
     expect(wrapper.text()).toContain("Function Call");
     expect(wrapper.text()).toContain("search_content");
+    expect(wrapper.text()).toContain("提示词内说明");
+    expect(wrapper.text()).toContain("全局工具说明优先。");
     expect(wrapper.text()).toContain("输出格式");
     expect(wrapper.find('[aria-label="完整请求 JSON"]').exists()).toBe(false);
     expect(wrapper.get('[data-message-drag-handle]').element.tagName).toBe("DIV");

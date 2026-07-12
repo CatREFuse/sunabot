@@ -1,7 +1,10 @@
 import type { Page, Route } from "@playwright/test";
 import sharp from "sharp";
+import type { AppConfig } from "../../src/types.js";
 import { promptDefinitionById } from "../../services/agent/promptCatalog.js";
 import { defaultPromptContent } from "../../services/agent/promptDefaults.js";
+import { parseFinalPromptTemplate } from "../../services/agent/promptSystem.js";
+import { listToolMetadata } from "../../services/tools/toolRegistry.js";
 
 const imageFixture = sharp({
   create: { width: 640, height: 640, channels: 4, background: "#d71921" }
@@ -69,6 +72,7 @@ const initialConfig = {
     },
     tools: {
       maxCalls: 20,
+      overrides: {} as NonNullable<AppConfig["bot"]["tools"]["overrides"]>,
       websearch: {
         provider: "tavily",
         tavilyApiKey: "",
@@ -103,7 +107,7 @@ const initialConfig = {
     mentionNames: ["普拉娜", "Plana"],
     commandPrefixes: ["/suna", "普拉娜"]
   }
-};
+} satisfies AppConfig;
 
 const initialAgentFiles = [
   file("persona.agents", "Agent 规则", "人格", "AGENTS.md", "保持专注，明确行动。\n"),
@@ -547,7 +551,25 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
       return json(route, { ok: true });
     }
 
-    if (pathname === "/api/tools") return json(route, { tools: [] });
+    if (pathname === "/api/tools") {
+      const conversationPrompt = state.files.find((file) => file.id === "conversation.reply");
+      const prompt = conversationPrompt ? parseFinalPromptTemplate(conversationPrompt.content) : undefined;
+      return json(route, {
+        tools: listToolMetadata({
+          onAssistantText: () => undefined,
+          bash: {
+            enabled: state.config.bot.bash.enabled,
+            workspaceOnly: state.config.bot.bash.workspaceOnly,
+            blockedKeywords: state.config.bot.bash.blockedKeywords
+          },
+          bot: state.config.bot,
+          selfie: { enabled: true },
+          memory: { enabled: true },
+          asyncCodex: state.config.bot.tools.codex.enabled,
+          asyncImage: true
+        }, prompt?.tools)
+      });
+    }
     if (pathname === "/api/request-logs") {
       const logs = [
         { id: "log-52", at: "2026-07-10T02:08:00.000Z", category: "model.response", action: "responses.complete", providerId: "codex", model: "gpt-5.6-sol", response: { ok: true, summary: { usage: { input_tokens: 820, output_tokens: 160, total_tokens: 980 } } } },

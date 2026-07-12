@@ -21,7 +21,8 @@ export async function completeGeminiGenerateContent(
   const contents = await Promise.all(request.messages
     .filter((message) => message.role !== "system" && message.role !== "developer")
     .map(toGeminiContent));
-  const definitions = context.toolExecutor.resolveDefinitions(options, request.tools).map((tool) => ({
+  const resolvedDefinitions = context.toolExecutor.resolveDefinitions(options, request.tools);
+  const definitions = resolvedDefinitions.map((tool) => ({
     name: String(tool.name ?? ""),
     description: String(tool.description ?? ""),
     parameters: isRecord(tool.parameters) ? tool.parameters : { type: "object", properties: {} }
@@ -75,11 +76,11 @@ export async function completeGeminiGenerateContent(
       return { kind: "completed", text };
     }
 
-    const deferred = context.toolExecutor.deferredTurn(calls, options);
+    const deferred = context.toolExecutor.deferredTurn(calls, options, resolvedDefinitions);
     if (deferred) return deferred;
     if (text && options.onAssistantText) await options.onAssistantText(text);
     contents.push({ role: "model", parts });
-    const outputs = await context.toolExecutor.execute(calls, options);
+    const outputs = await context.toolExecutor.execute(calls, options, resolvedDefinitions);
     contents.push({
       role: "user",
       parts: outputs.map((output, index) => ({
