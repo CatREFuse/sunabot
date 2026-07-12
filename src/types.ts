@@ -264,6 +264,15 @@ export interface ConversationOrchestratorStatus {
   lastCheckedAt?: string;
 }
 
+export interface ConversationMessageStats {
+  total: number;
+  retained: number;
+  visible: number;
+  user: number;
+  assistant: number;
+  internal: number;
+}
+
 export interface ConversationRecord {
   id: string;
   scope: "private" | "user_group" | "bot_group";

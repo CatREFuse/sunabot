@@ -325,13 +325,22 @@ export interface ModelCallStatsPayload {
   behavior: Record<"reply" | "orchestrator" | "memory" | "other", TokenUsageBucket>;
   memory: {
     total: TokenUsageBucket;
-    kinds: Record<"working" | "long_term" | "user_profile", TokenUsageBucket>;
+    kinds: Record<"working_long_term" | "user_profile", TokenUsageBucket>;
   };
+}
+
+export interface ConversationMessageStats {
+  total: number;
+  retained: number;
+  visible: number;
+  user: number;
+  assistant: number;
+  internal: number;
 }
 
 export interface ConversationStatsPayload {
   conversationId: string;
-  messages: number;
+  messages: ConversationMessageStats;
   modelCalls: ModelCallStatsPayload;
 }
 

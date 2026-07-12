@@ -8,14 +8,19 @@ withDefaults(defineProps<{ label: string; description?: string; disabled?: boole
 
 <template>
   <label
-    class="flex min-h-11 min-w-0 cursor-pointer items-center justify-between gap-4"
+    class="relative flex min-h-11 min-w-0 cursor-pointer items-center justify-between gap-4"
     :class="{ 'cursor-not-allowed opacity-50': disabled }"
   >
     <span class="min-w-0">
       <span class="block text-sm text-ink">{{ label }}</span>
       <span v-if="description" class="mt-1 block text-xs leading-5 text-mute">{{ description }}</span>
     </span>
-    <input v-model="model" class="peer sr-only" type="checkbox" :disabled="disabled">
+    <input
+      v-model="model"
+      class="peer absolute right-0 top-1/2 z-10 h-11 w-11 -translate-y-1/2 cursor-pointer opacity-0 disabled:cursor-not-allowed"
+      type="checkbox"
+      :disabled="disabled"
+    >
     <span
       data-slot="toggle-track"
       class="relative h-6 w-11 shrink-0 rounded-full border transition-colors duration-200 peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-4 peer-focus-visible:outline-[rgb(var(--color-interactive))]"

@@ -22,6 +22,8 @@ services:
       SUNABOT_ONEBOT_HOST: 0.0.0.0
       SUNABOT_ONEBOT_PORT: 8788
       SUNABOT_WORKSPACE: /srv/sunabot/workspace
+      SUNABOT_CODEX_EXECUTABLE: /usr/local/bin/codex
+      SUNABOT_CODEX_BIN: /usr/local/bin/codex
       HOME: /srv/sunabot/workspace/runtime/tmp/core-home
       XDG_CACHE_HOME: /srv/sunabot/workspace/cache/core
       SUNABOT_PROXY_MODE: ${SUNABOT_PROXY_MODE:-auto}

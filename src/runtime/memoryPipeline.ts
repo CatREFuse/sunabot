@@ -499,7 +499,7 @@ export async function runtime_requestWorkingMemoryMerge(this: RuntimeHost,
           logContext: {
             conversationId: context.conversation.id,
             stage: "memory",
-            memoryKind: "working"
+            memoryKind: "working_long_term"
           }
         }),
         PREPARE_TIMEOUT_MS

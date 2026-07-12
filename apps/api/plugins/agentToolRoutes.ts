@@ -3,9 +3,11 @@ import type { AgentFileRepository } from "../../../src/admin/agentFiles.js";
 import type { AppConfig } from "../../../src/types.js";
 import { parseFinalPromptTemplate } from "../../../services/agent/promptSystem.js";
 import { listToolMetadata } from "../../../services/tools/toolRegistry.js";
+import type { RuntimeToolCapabilityResolver } from "../../../services/tools/bashCapability.js";
 
 export interface AgentToolRouteOptions {
   agentFiles: AgentFileRepository;
+  resolveToolCapabilities: RuntimeToolCapabilityResolver;
   getConfig: () => AppConfig;
 }
 
@@ -43,20 +45,36 @@ export function registerAgentToolRoutes(app: FastifyInstance, options: AgentTool
     const config = options.getConfig();
     const promptFile = await options.agentFiles.get("conversation.reply", config);
     const prompt = parseFinalPromptTemplate(promptFile.content);
+    const capabilities = await options.resolveToolCapabilities();
+    const tools = listToolMetadata({
+      onAssistantText: () => undefined,
+      bash: {
+        enabled: capabilities.workspaceBash,
+        workspaceOnly: config.bot.bash.workspaceOnly,
+        blockedKeywords: config.bot.bash.blockedKeywords
+      },
+      bot: config.bot,
+      selfie: { enabled: true },
+      memory: { enabled: true },
+      asyncCodex: capabilities.codex,
+      asyncImage: true
+    }, prompt.tools).map((tool) => {
+      const configured = tool.name === "workspace_bash"
+        ? config.bot.bash.enabled
+        : tool.name === "codex"
+          ? config.bot.tools.codex.enabled
+          : undefined;
+      return configured == null
+        ? tool
+        : {
+            ...tool,
+            configuredEnabled: configured,
+            enabled: configured && tool.enabled,
+            effectiveEnabled: configured && tool.effectiveEnabled
+          };
+    });
     return {
-      tools: listToolMetadata({
-        onAssistantText: () => undefined,
-        bash: {
-          enabled: config.bot.bash.enabled && process.platform !== "darwin",
-          workspaceOnly: config.bot.bash.workspaceOnly,
-          blockedKeywords: config.bot.bash.blockedKeywords
-        },
-        bot: config.bot,
-        selfie: { enabled: true },
-        memory: { enabled: true },
-        asyncCodex: config.bot.tools.codex.enabled,
-        asyncImage: true
-      }, prompt.tools)
+      tools
     };
   });
 }

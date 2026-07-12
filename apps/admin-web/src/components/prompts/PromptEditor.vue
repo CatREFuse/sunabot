@@ -164,10 +164,18 @@ function resetVariablePanelWidth() {
         ></div>
       </div>
 
-      <div v-if="conflict" class="mt-3 flex flex-wrap items-center justify-between gap-3 border-y border-accent py-3">
-        <span class="inline-state" data-kind="error">服务器版本已更新</span>
+      <div
+        v-if="conflict"
+        class="mt-3 flex flex-wrap items-center justify-between gap-3 border-y border-accent py-3"
+        role="alert"
+        aria-label="版本冲突"
+      >
+        <div class="min-w-0">
+          <strong class="block text-sm font-medium text-accent">服务器版本已更新</strong>
+          <p class="mt-1 text-xs leading-5 text-mute">保留当前内容后可再次保存，或加载服务器版本并放弃当前修改。</p>
+        </div>
         <div class="flex gap-2">
-          <button class="btn btn-ghost" type="button" @click="emit('keepLocal')">保留本地内容</button>
+          <button class="btn btn-ghost" type="button" @click="emit('keepLocal')">保留当前内容</button>
           <button class="btn" type="button" @click="emit('loadServer')">加载服务器版本</button>
         </div>
       </div>

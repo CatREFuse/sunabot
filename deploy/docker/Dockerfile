@@ -22,6 +22,7 @@ RUN npm run build && npm prune --omit=dev
 FROM ${NODE_IMAGE} AS runtime
 ARG NODE_VERSION
 ARG SUNABOT_RELEASE_VERSION=0.1.0
+ARG CODEX_CLI_VERSION=0.139.0
 ARG BUBBLEWRAP_VERSION=0.8.0-2+deb12u1
 ARG FONTS_NOTO_CJK_VERSION=1:20220127+repack1-1
 ARG LIBREOFFICE_VERSION=4:7.4.7-1+deb12u14
@@ -48,6 +49,8 @@ RUN test "$(/usr/local/bin/node -p 'process.versions.node')" = "$NODE_VERSION" \
     && mkdir -p /srv/sunabot/workspace \
     && chown -R 1000:1000 /srv/sunabot
 RUN test -x /usr/bin/bwrap
+RUN npm install --global --omit=dev --no-audit --no-fund "@openai/codex@${CODEX_CLI_VERSION}" \
+    && test "$(codex --version)" = "codex-cli ${CODEX_CLI_VERSION}"
 
 WORKDIR /srv/sunabot
 COPY --from=build --chown=1000:1000 /srv/sunabot/package.json ./package.json

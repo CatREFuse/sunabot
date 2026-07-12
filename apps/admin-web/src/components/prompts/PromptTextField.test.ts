@@ -44,6 +44,22 @@ describe("PromptTextField", () => {
     expect(wrapper.text()).toContain("@{persona.soul}");
   });
 
+  it("lets the editor fill the entire field when the embedded variable table is hidden", () => {
+    const wrapper = mount(PromptTextField, {
+      props: {
+        modelValue: "# 完整高度",
+        variables,
+        label: "系统提示词",
+        fill: true,
+        showVariables: false
+      }
+    });
+
+    expect(wrapper.get(".prompt-field").classes()).toContain("prompt-field--fill");
+    expect(wrapper.get(".prompt-field").classes()).not.toContain("prompt-field--with-variables");
+    expect(wrapper.find('[aria-label="提示词变量表"]').exists()).toBe(false);
+  });
+
   it("optionally wraps inserted variables in semantic XML and marks variables already in use", async () => {
     const wrapper = mount(PromptTextField, {
       props: { modelValue: "{{ persona.soul }}\n", variables, label: "系统提示词", semanticXml: true }
@@ -76,7 +92,7 @@ describe("PromptTextField", () => {
   it("renders escaped Markdown and XML syntax in the highlight layer", () => {
     const wrapper = mount(PromptTextField, {
       props: {
-        modelValue: "# 标题\n- **重点**与*斜体*\n> 引用\n`code` <context>@{user.input}</context>",
+        modelValue: "# 标题\n- **重点**与*斜体*\n> 引用\n`code` <context>@{user.input}</context>\n```ts\nconst value = '<safe>';\n**代码内不是粗体**\n```",
         variables,
         label: "系统提示词"
       }
@@ -88,6 +104,10 @@ describe("PromptTextField", () => {
     expect(highlight.find(".markup-italic").text()).toBe("*斜体*");
     expect(highlight.find(".markup-quote").exists()).toBe(true);
     expect(highlight.findAll(".markup-xml")).toHaveLength(2);
+    expect(highlight.find(".markup-code-block").text()).toContain("const value = '<safe>';\n**代码内不是粗体**");
+    expect(highlight.findAll(".markup-code-fence")).toHaveLength(2);
+    expect(highlight.find(".markup-code-block").find(".markup-bold").exists()).toBe(false);
+    expect(highlight.html()).toContain("&lt;safe&gt;");
     expect(highlight.text()).toContain("@{user.input}");
   });
 });

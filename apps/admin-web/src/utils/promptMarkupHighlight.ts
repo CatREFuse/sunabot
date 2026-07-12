@@ -1,12 +1,28 @@
 const INLINE_PATTERN = /(<\/?[A-Za-z][^>\n]*>)|(`[^`\n]+`)|(\*\*[^*\n]+\*\*|__[^_\n]+__)|(\*[^*\n]+\*|_[^_\n]+_)|(@\{\s*[A-Za-z_][\w.-]*\s*\}|\{\{\s*[A-Za-z_][\w.-]*\s*\}\})/g;
 
 export function highlightedPromptMarkup(content: string) {
-  return content.split("\n").map(highlightLine).join("\n");
+  const lines = content.split("\n");
+  const highlighted: string[] = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
+    if (!isCodeFence(line)) {
+      highlighted.push(highlightLine(line));
+      continue;
+    }
+
+    const block = [line];
+    while (index + 1 < lines.length) {
+      index += 1;
+      const nextLine = lines[index] ?? "";
+      block.push(nextLine);
+      if (isCodeFence(nextLine)) break;
+    }
+    highlighted.push(highlightCodeBlock(block));
+  }
+  return highlighted.join("\n");
 }
 
 function highlightLine(line: string) {
-  if (/^\s*```/.test(line)) return wrap("markup-code-fence", line);
-
   const heading = line.match(/^(\s*)(#{1,6})(\s+)(.*)$/);
   if (heading) {
     return `${escapeHtml(heading[1] ?? "")}<span class="markup-heading"><span class="markup-marker">${escapeHtml(heading[2] ?? "")}</span>${escapeHtml(heading[3] ?? "")}${highlightInline(heading[4] ?? "")}</span>`;
@@ -23,6 +39,19 @@ function highlightLine(line: string) {
   }
 
   return highlightInline(line);
+}
+
+function highlightCodeBlock(lines: readonly string[]) {
+  const content = lines.map((line, index) => (
+    index === 0 || (index === lines.length - 1 && isCodeFence(line))
+      ? wrap("markup-code-fence", line)
+      : escapeHtml(line)
+  )).join("\n");
+  return `<span class="markup-code-block">${content}</span>`;
+}
+
+function isCodeFence(line: string) {
+  return /^\s*```/.test(line);
 }
 
 function highlightInline(value: string) {

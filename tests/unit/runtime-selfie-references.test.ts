@@ -3,7 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import sharp from "sharp";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { OpenAIProvider } from "../../adapters/model/openaiProvider.js";
 import { SunaRuntime } from "../../src/runtime.js";
 import { MAX_SELFIE_WORKSPACE_REFERENCE_IMAGES } from "../../src/runtime/runtimeContracts.js";
 import { createAdminTestConfig } from "./admin-fixtures.js";
@@ -38,5 +39,27 @@ describe("runtime selfie references", () => {
     expect(MAX_SELFIE_WORKSPACE_REFERENCE_IMAGES).toBe(3);
     expect(references).toHaveLength(3);
     expect(references.every((value) => value.startsWith("data:image/png;base64,"))).toBe(true);
+  });
+
+  it("keeps the conversation and stage context on the selfie rewrite model call", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-runtime-selfie-log-"));
+    roots.push(root);
+    const runtime = new SunaRuntime(createAdminTestConfig(root), { attachmentService: {} as never });
+    runtimes.push(runtime);
+    vi.spyOn(runtime, "renderPromptRequest").mockResolvedValue({
+      messages: [{ role: "user", content: "rewrite" }],
+      tools: [],
+      response_format: { type: "text" }
+    });
+    const completeRequest = vi.fn(async () => "rewritten selfie prompt");
+    const provider = { completeRequest } as unknown as OpenAIProvider;
+    const logContext = { conversationId: "group:7788", stage: "reply" } as const;
+
+    await expect(runtime.rewriteSelfiePrompt(provider, "自拍", "1024x1024", {
+      workspaceReferenceImageCount: 3,
+      chatReferenceImageCount: 1
+    }, logContext)).resolves.toBe("rewritten selfie prompt");
+
+    expect(completeRequest).toHaveBeenCalledWith(expect.any(Object), { logContext });
   });
 });

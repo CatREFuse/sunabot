@@ -265,9 +265,10 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
         response: { status: "running" },
         metadata: logContext
       });
+      const toolCapabilities = await this.resolveToolCapabilities();
       const turn = await this.completePromptTurn(provider, promptRequest, {
         signal: options.signal,
-        bash: this.buildProviderBashOptions(incoming),
+        bash: this.buildProviderBashOptions(incoming, toolCapabilities.workspaceBash),
         bot: this.config.bot,
         generateImage: (prompt, size, quality, referenceImageUrls, childLogContext) => provider.generateImage(
           prompt,
@@ -310,7 +311,9 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
             logContext
           })
         },
-        asyncCodex: (options.allowAsyncCodex ?? true) && this.config.bot.tools.codex.enabled,
+        asyncCodex: (options.allowAsyncCodex ?? true)
+          && this.config.bot.tools.codex.enabled
+          && toolCapabilities.codex,
         asyncImage: options.allowAsyncImage ?? true,
         imageTools: options.allowImageTools ?? true,
         logContext
@@ -674,9 +677,13 @@ export function runtime_groupReplyOptions(this: RuntimeHost, incoming: ParsedInc
     if (!this.config.bot.quoteGroupReplies || incoming.messageId == null) return {};
     return { replyToMessageId: incoming.messageId };
   }
-export function runtime_buildProviderBashOptions(this: RuntimeHost, incoming: ParsedIncomingMessage): ProviderBashOptions | undefined {
+export function runtime_buildProviderBashOptions(
+  this: RuntimeHost,
+  incoming: ParsedIncomingMessage,
+  capabilityAvailable = false
+): ProviderBashOptions | undefined {
     const bash = this.config.bot.bash;
-    if (!bash.enabled) return undefined;
+    if (!bash.enabled || !capabilityAvailable) return undefined;
     if (incoming.groupId && !bash.allowGroup) return undefined;
     if (bash.adminOnly && !this.isAdminUser(incoming.userId)) return undefined;
 

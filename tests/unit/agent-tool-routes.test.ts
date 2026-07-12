@@ -26,12 +26,14 @@ describe("agent and tool API plugin", () => {
       content: id === "conversation.reply" ? defaultPromptContent("conversation.reply") : "agent"
     }));
     const put = vi.fn(async (id: string, body: unknown) => ({ ok: true, id, body }));
+    const resolveToolCapabilities = vi.fn(async () => ({ codex: true, workspaceBash: true }));
     const config = defaultConfig();
     config.bot.tools.overrides = {
       websearch: { enabled: false, description: "Disabled search override." }
     };
     registerAgentToolRoutes(app, {
       agentFiles: { list, get, put } as unknown as AgentFileRepository,
+      resolveToolCapabilities,
       getConfig: () => config
     });
 
@@ -56,6 +58,15 @@ describe("agent and tool API plugin", () => {
       execution: "inline",
       parameters: expect.any(Object)
     });
+    expect(tools.find((tool: { name: string }) => tool.name === "codex")).toMatchObject({
+      available: true,
+      effectiveEnabled: true
+    });
+    expect(tools.find((tool: { name: string }) => tool.name === "workspace_bash")).toMatchObject({
+      available: true,
+      effectiveEnabled: true
+    });
+    expect(resolveToolCapabilities).toHaveBeenCalledOnce();
     expect(get).toHaveBeenCalledWith("conversation.reply", config);
 
     expect([...routeSchemas.keys()].sort()).toEqual([
@@ -64,6 +75,73 @@ describe("agent and tool API plugin", () => {
       "/api/tools"
     ]);
     assertRequestAndResponseSchemas(routeSchemas);
+  });
+
+  it("does not advertise Codex when the shared runtime capability is unavailable", async () => {
+    const app = Fastify();
+    apps.push(app);
+    const config = defaultConfig();
+    registerAgentToolRoutes(app, {
+      agentFiles: {
+        get: vi.fn(async () => ({ content: defaultPromptContent("conversation.reply") }))
+      } as unknown as AgentFileRepository,
+      resolveToolCapabilities: vi.fn(async () => ({ codex: false, workspaceBash: true })),
+      getConfig: () => config
+    });
+
+    const tools = (await app.inject({ method: "GET", url: "/api/tools" })).json().tools;
+    expect(tools.find((tool: { name: string }) => tool.name === "codex")).toMatchObject({
+      available: false,
+      effectiveEnabled: false,
+      availabilityReason: "Codex CLI 未安装或未登录。"
+    });
+  });
+
+  it("reports runtime capability independently from the saved tool switch", async () => {
+    const app = Fastify();
+    apps.push(app);
+    const config = defaultConfig();
+    config.bot.tools.codex.enabled = false;
+    config.bot.bash.enabled = false;
+    registerAgentToolRoutes(app, {
+      agentFiles: {
+        get: vi.fn(async () => ({ content: defaultPromptContent("conversation.reply") }))
+      } as unknown as AgentFileRepository,
+      resolveToolCapabilities: vi.fn(async () => ({ codex: true, workspaceBash: true })),
+      getConfig: () => config
+    });
+
+    const tools = (await app.inject({ method: "GET", url: "/api/tools" })).json().tools;
+    expect(tools.find((tool: { name: string }) => tool.name === "codex")).toMatchObject({
+      configuredEnabled: false,
+      available: true,
+      effectiveEnabled: false
+    });
+    expect(tools.find((tool: { name: string }) => tool.name === "workspace_bash")).toMatchObject({
+      configuredEnabled: false,
+      available: true,
+      effectiveEnabled: false
+    });
+  });
+
+  it.each([true, false])("advertises Bash only after the isolation probe returns %s", async (available) => {
+    const app = Fastify();
+    apps.push(app);
+    const config = defaultConfig();
+    config.bot.bash.enabled = true;
+    registerAgentToolRoutes(app, {
+      agentFiles: {
+        get: vi.fn(async () => ({ content: defaultPromptContent("conversation.reply") }))
+      } as unknown as AgentFileRepository,
+      resolveToolCapabilities: vi.fn(async () => ({ codex: true, workspaceBash: available })),
+      getConfig: () => config
+    });
+
+    const tools = (await app.inject({ method: "GET", url: "/api/tools" })).json().tools;
+    expect(tools.find((tool: { name: string }) => tool.name === "workspace_bash")).toMatchObject({
+      available,
+      effectiveEnabled: available
+    });
   });
 });
 

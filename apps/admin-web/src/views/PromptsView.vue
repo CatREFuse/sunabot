@@ -130,7 +130,7 @@ async function keepLocal() {
     baseline.value = latest.content;
     content.value = local;
     conflict.value = false;
-    setMessage("已保留本地内容，请保存", "warning");
+    setMessage("已保留当前内容，请保存", "warning");
   } catch (error) {
     setMessage(`读取失败：${error instanceof Error ? error.message : "最新版本读取失败"}`, "error");
   }

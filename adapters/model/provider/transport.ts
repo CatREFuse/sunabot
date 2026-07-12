@@ -22,12 +22,17 @@ export function createResponsesClient(
   });
 }
 
-export function createChatClient(provider: ProviderConfig, apiKey: string) {
+export function createChatClient(
+  provider: ProviderConfig,
+  apiKey: string,
+  options: { maxRetries?: number } = {}
+) {
   if (!apiKey) throw new Error(`Missing API key. Set ${provider.apiKeyEnv}.`);
   return new OpenAI({
     apiKey,
     baseURL: normalizeChatBaseUrl(provider),
-    defaultHeaders: undefined
+    defaultHeaders: undefined,
+    ...options
   });
 }
 
@@ -81,18 +86,67 @@ export function codexBackendHeaders(accessToken: string) {
   return headers;
 }
 
-export async function fetchWithSingleTransportRetry(
+interface TransportRetryContext {
+  attempt: number;
+  maxAttempts: number;
+  willRetry: boolean;
+  status?: number;
+  retryDelayMs: number;
+}
+
+interface TransportRetryObserver {
+  beforeAttempt?(context: { attempt: number; maxAttempts: number }): unknown | Promise<unknown>;
+  attemptFailed?(error: unknown, context: TransportRetryContext): unknown | Promise<unknown>;
+}
+
+export async function fetchTextWithTransportRetry(
   input: string,
   init: RequestInit,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  observer: TransportRetryObserver = {}
 ) {
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  const maxAttempts = 2;
+  for (let index = 0; index < maxAttempts; index += 1) {
+    const attempt = index + 1;
+    assertRequestNotAborted(signal);
+    await observer.beforeAttempt?.({ attempt, maxAttempts });
+    let response: Response | undefined;
+    let text: string;
     try {
-      return await fetch(input, init);
+      response = await fetch(input, init);
+      text = await response.text();
     } catch (error) {
-      if (signal?.aborted || attempt === 1) throw error;
-      await waitForTransportRetry(signal);
+      const willRetry = !signal?.aborted && attempt < maxAttempts;
+      const retryDelayMs = willRetry ? resolveRetryDelayMs(response?.headers, attempt) : 0;
+      await observer.attemptFailed?.(error, {
+        attempt,
+        maxAttempts,
+        willRetry,
+        ...(response ? { status: response.status } : {}),
+        retryDelayMs
+      });
+      if (!willRetry) throw error;
+      await waitForRetry(retryDelayMs, signal);
+      continue;
     }
+
+    const willRetry = !signal?.aborted
+      && attempt < maxAttempts
+      && retryableTransportStatus(response.status);
+    if (willRetry) {
+      const retryDelayMs = resolveRetryDelayMs(response.headers, attempt);
+      await observer.attemptFailed?.(new Error(`Provider request failed: ${response.status}`), {
+        attempt,
+        maxAttempts,
+        willRetry: true,
+        status: response.status,
+        retryDelayMs
+      });
+      await waitForRetry(retryDelayMs, signal);
+      continue;
+    }
+
+    return { response, text, attempt, maxAttempts };
   }
   throw new Error("transport retry exhausted");
 }
@@ -118,8 +172,31 @@ function resolveCodexAccessToken() {
   }
 }
 
-function waitForTransportRetry(signal?: AbortSignal) {
-  return new Promise<void>((resolve, reject) => {
+export function assertRequestNotAborted(signal?: AbortSignal) {
+  if (signal?.aborted) throw signal.reason ?? new Error("aborted");
+}
+
+export function resolveRetryDelayMs(source: unknown, attempt: number) {
+  const retryAfterMs = readHeader(source, "retry-after-ms");
+  if (retryAfterMs != null) {
+    const parsed = Number(retryAfterMs);
+    if (Number.isFinite(parsed) && parsed >= 0) return boundedRetryDelay(parsed);
+  }
+
+  const retryAfter = readHeader(source, "retry-after");
+  if (retryAfter != null) {
+    const seconds = Number(retryAfter);
+    if (Number.isFinite(seconds) && seconds >= 0) return boundedRetryDelay(seconds * 1_000);
+    const at = Date.parse(retryAfter);
+    if (Number.isFinite(at)) return boundedRetryDelay(Math.max(0, at - Date.now()));
+  }
+
+  return 150 * Math.max(1, attempt);
+}
+
+export async function waitForRetry(delayMs: number, signal?: AbortSignal) {
+  assertRequestNotAborted(signal);
+  await new Promise<void>((resolve, reject) => {
     const onAbort = () => {
       clearTimeout(timer);
       reject(signal?.reason ?? new Error("aborted"));
@@ -127,9 +204,30 @@ function waitForTransportRetry(signal?: AbortSignal) {
     const timer = setTimeout(() => {
       signal?.removeEventListener("abort", onAbort);
       resolve();
-    }, 150);
+    }, delayMs);
     signal?.addEventListener("abort", onAbort, { once: true });
   });
+}
+
+function retryableTransportStatus(status: number) {
+  return status === 408 || status === 409 || status === 429 || status >= 500;
+}
+
+function readHeader(source: unknown, name: string) {
+  const headers = source instanceof Headers
+    ? source
+    : source && typeof source === "object" && "headers" in source
+      ? (source as { headers?: unknown }).headers
+      : source;
+  if (headers instanceof Headers) return headers.get(name);
+  if (!headers || typeof headers !== "object") return undefined;
+  const entry = Object.entries(headers as Record<string, unknown>)
+    .find(([key]) => key.toLowerCase() === name);
+  return entry?.[1] == null ? undefined : String(entry[1]);
+}
+
+function boundedRetryDelay(value: number) {
+  return Math.min(Math.max(Math.ceil(value), 0), 60_000);
 }
 
 function expandHome(inputPath: string) {

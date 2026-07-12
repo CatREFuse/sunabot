@@ -5,6 +5,7 @@ import { nanoid } from "nanoid";
 import {
   AppConfig,
   ChatMessage,
+  ConversationMessageStats,
   ConversationMessageQuote,
   ConversationRecord,
   ImageResult,
@@ -472,6 +473,31 @@ export function runtime_getConversationMessages(this: RuntimeHost, conversationI
       memberNames: conversationMemberNames(record)
     };
   }
+export function runtime_getConversationMessageStats(this: RuntimeHost, conversationId: string): ConversationMessageStats {
+    const record = this.conversationRecords.get(normalizeConversationLookupId(conversationId));
+    if (!record) return { total: 0, retained: 0, visible: 0, user: 0, assistant: 0, internal: 0 };
+    let visible = 0;
+    let user = 0;
+    let assistant = 0;
+    let internal = 0;
+    for (const message of record.messages) {
+      if (message.visibility === "internal" || message.eventKind === "orchestrator_decision") {
+        internal += 1;
+        continue;
+      }
+      visible += 1;
+      if (message.role === "user") user += 1;
+      if (message.role === "assistant") assistant += 1;
+    }
+    return {
+      total: record.messageCount,
+      retained: record.messages.length,
+      visible,
+      user,
+      assistant,
+      internal
+    };
+  }
 export async function runtime_hydrateConversationIdentities(this: RuntimeHost, conversationId: string, gateway: MessagingPort) {
     const record = this.conversationRecords.get(normalizeConversationLookupId(conversationId));
     if (!record) return;
@@ -580,6 +606,7 @@ export class RuntimeLifecycle {
   getConversationRecords(...args: Parameters<typeof runtime_getConversationRecords>) { return runtime_getConversationRecords.call(this.host, ...args); }
   publicConversationRecord(...args: Parameters<typeof runtime_publicConversationRecord>) { return runtime_publicConversationRecord.call(this.host, ...args); }
   getConversationMessages(...args: Parameters<typeof runtime_getConversationMessages>) { return runtime_getConversationMessages.call(this.host, ...args); }
+  getConversationMessageStats(...args: Parameters<typeof runtime_getConversationMessageStats>) { return runtime_getConversationMessageStats.call(this.host, ...args); }
   hydrateConversationIdentities(...args: Parameters<typeof runtime_hydrateConversationIdentities>) { return runtime_hydrateConversationIdentities.call(this.host, ...args); }
   enrichMemoryEntries(...args: Parameters<typeof runtime_enrichMemoryEntries>) { return runtime_enrichMemoryEntries.call(this.host, ...args); }
   setConversationReplyEnabled(...args: Parameters<typeof runtime_setConversationReplyEnabled>) { return runtime_setConversationReplyEnabled.call(this.host, ...args); }

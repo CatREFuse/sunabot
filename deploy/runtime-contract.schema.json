@@ -297,7 +297,7 @@
     "capabilities": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["required", "optional", "workspaceBash"],
+      "required": ["required", "optional", "workspaceBash", "codexCli"],
       "properties": {
         "required": {
           "type": "array",
@@ -333,6 +333,18 @@
             "filesystemMode": { "const": "host-readonly-workspace-readwrite" },
             "subprocessIsolation": { "const": "inherited-mount-and-pid-namespaces" },
             "capabilitiesDropped": { "const": true },
+            "failClosed": { "const": true }
+          }
+        },
+        "codexCli": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["service", "version", "executable", "authFile", "failClosed"],
+          "properties": {
+            "service": { "const": "core" },
+            "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+            "executable": { "const": "/usr/local/bin/codex" },
+            "authFile": { "const": "secrets/codex/auth.json" },
             "failClosed": { "const": true }
           }
         }

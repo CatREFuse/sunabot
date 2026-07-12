@@ -90,6 +90,7 @@ import type { SelfieInput, SelfieRunResult } from "../../services/tools/selfieTo
 import { cleanupPersistedCodexProcess, CodexToolRunner } from "../../adapters/codex/codexTool.js";
 import { isTrustedQqFakeIp } from "../../adapters/onebot/qqMedia.js";
 import type { CodexRunner } from "../../packages/contracts/tools/codex.js";
+import type { RuntimeToolCapabilityResolver } from "../../services/tools/bashCapability.js";
 import {
   OutboxDisconnectedError,
   SessionCoordinator,
@@ -243,4 +244,5 @@ export interface SunaRuntimeOptions {
   attachmentService?: AttachmentService;
   sessionStore?: SessionStore;
   codexRunner?: CodexRunner;
+  resolveToolCapabilities?: RuntimeToolCapabilityResolver;
 }

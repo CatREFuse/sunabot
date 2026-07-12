@@ -5,11 +5,30 @@ import { getWorkspacePath, resolveProjectPath } from "../../src/config.js";
 import type { AppConfig, ConversationRecord, ImageHistoryRecord } from "../../src/types.js";
 import type { MemoryPersistenceProvider } from "../../services/memory/persistence.js";
 import { WORKSPACE_LAYOUT } from "../../packages/platform/workspaceLayout.js";
+import {
+  modelCallMeasurement,
+  type MemoryModelCallKindId,
+  type ModelCallBehaviorId,
+  type ModelCallMeasurement
+} from "../../src/modelCallStats.js";
 
 export type MemoryDataSource = "working" | "long_term" | "user_profile";
 
 type JsonObject = Record<string, unknown>;
 type SqlRow = Record<string, unknown>;
+
+export interface ModelCallAggregateRow {
+  behavior: ModelCallBehaviorId;
+  memoryKind: MemoryModelCallKindId | "";
+  input: number;
+  output: number;
+  total: number;
+  cachedInput: number;
+  requests: number;
+  measuredInput: number;
+  measuredCachedInput: number;
+  cacheReports: number;
+}
 
 const stores = new Map<string, ApplicationDataStore>();
 
@@ -251,6 +270,32 @@ export class ApplicationDataStore {
   }
 
   appendRequestLog(record: JsonObject) {
+    this.transaction(() => this.appendRequestLogUnsafe(record));
+  }
+
+  readModelCallAggregateRows(conversationId = ""): ModelCallAggregateRow[] {
+    return (this.database.prepare(`
+      SELECT behavior, memory_kind, input_tokens, output_tokens, total_tokens,
+        cached_input_tokens, requests, measured_input_tokens,
+        measured_cached_input_tokens, cache_reports
+      FROM model_call_aggregates
+      WHERE conversation_id = ?
+      ORDER BY behavior, memory_kind
+    `).all(conversationId) as SqlRow[]).map((row) => ({
+      behavior: String(row.behavior) as ModelCallBehaviorId,
+      memoryKind: String(row.memory_kind) as MemoryModelCallKindId | "",
+      input: Number(row.input_tokens ?? 0),
+      output: Number(row.output_tokens ?? 0),
+      total: Number(row.total_tokens ?? 0),
+      cachedInput: Number(row.cached_input_tokens ?? 0),
+      requests: Number(row.requests ?? 0),
+      measuredInput: Number(row.measured_input_tokens ?? 0),
+      measuredCachedInput: Number(row.measured_cached_input_tokens ?? 0),
+      cacheReports: Number(row.cache_reports ?? 0)
+    }));
+  }
+
+  private appendRequestLogUnsafe(record: JsonObject) {
     this.database.prepare(`
       INSERT INTO request_logs (id, at, category, action, search_text, data_json)
       VALUES (?, ?, ?, ?, '', ?)
@@ -261,6 +306,8 @@ export class ApplicationDataStore {
       String(record.action ?? ""),
       JSON.stringify(record)
     );
+    const measurement = modelCallMeasurement(record);
+    if (measurement) this.appendModelCallAggregateUnsafe(measurement);
   }
 
   readRequestLogs(options: { query?: string; limit: number }) {
@@ -309,7 +356,7 @@ export class ApplicationDataStore {
     const records = readJsonlObjects(filePath);
     this.transaction(() => {
       if (this.requestLogCount() === 0) {
-        for (const record of records) this.appendRequestLog(record);
+        for (const record of records) this.appendRequestLogUnsafe(record);
       }
       this.setMetadata(marker, "done");
     });
@@ -380,10 +427,75 @@ export class ApplicationDataStore {
       );
       CREATE INDEX IF NOT EXISTS request_logs_at ON request_logs(at DESC);
       CREATE INDEX IF NOT EXISTS request_logs_category_action ON request_logs(category, action, at DESC);
+      CREATE TABLE IF NOT EXISTS model_call_aggregates (
+        conversation_id TEXT NOT NULL,
+        behavior TEXT NOT NULL CHECK (behavior IN ('reply', 'orchestrator', 'memory', 'other')),
+        memory_kind TEXT NOT NULL DEFAULT '' CHECK (memory_kind IN ('', 'working_long_term', 'user_profile')),
+        input_tokens INTEGER NOT NULL DEFAULT 0,
+        output_tokens INTEGER NOT NULL DEFAULT 0,
+        total_tokens INTEGER NOT NULL DEFAULT 0,
+        cached_input_tokens INTEGER NOT NULL DEFAULT 0,
+        requests INTEGER NOT NULL DEFAULT 0,
+        measured_input_tokens INTEGER NOT NULL DEFAULT 0,
+        measured_cached_input_tokens INTEGER NOT NULL DEFAULT 0,
+        cache_reports INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (conversation_id, behavior, memory_kind)
+      );
+      CREATE INDEX IF NOT EXISTS model_call_aggregates_behavior
+        ON model_call_aggregates(behavior, memory_kind, conversation_id);
     `);
-    if (this.metadata("storage-schema-version") !== "2") {
+    const rawVersion = Number(this.metadata("storage-schema-version") ?? 0);
+    const schemaVersion = Number.isSafeInteger(rawVersion) && rawVersion >= 0 ? rawVersion : 0;
+    if (schemaVersion < 2) {
       this.database.prepare("UPDATE request_logs SET search_text = '' WHERE search_text <> ''").run();
       this.setMetadata("storage-schema-version", "2");
+    }
+    if (schemaVersion < 3) {
+      this.transaction(() => {
+        this.database.prepare("DELETE FROM model_call_aggregates").run();
+        const rows = this.database.prepare(`
+          SELECT data_json FROM request_logs WHERE category = 'model.response' ORDER BY row_id
+        `).all() as SqlRow[];
+        for (const row of rows) {
+          const measurement = modelCallMeasurement(parseObject(row.data_json));
+          if (measurement) this.appendModelCallAggregateUnsafe(measurement);
+        }
+        this.setMetadata("storage-schema-version", "3");
+      });
+    }
+  }
+
+  private appendModelCallAggregateUnsafe(measurement: ModelCallMeasurement) {
+    const upsert = this.database.prepare(`
+      INSERT INTO model_call_aggregates (
+        conversation_id, behavior, memory_kind, input_tokens, output_tokens,
+        total_tokens, cached_input_tokens, requests, measured_input_tokens,
+        measured_cached_input_tokens, cache_reports
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+      ON CONFLICT(conversation_id, behavior, memory_kind) DO UPDATE SET
+        input_tokens = MIN(9007199254740991, input_tokens + excluded.input_tokens),
+        output_tokens = MIN(9007199254740991, output_tokens + excluded.output_tokens),
+        total_tokens = MIN(9007199254740991, total_tokens + excluded.total_tokens),
+        cached_input_tokens = MIN(9007199254740991, cached_input_tokens + excluded.cached_input_tokens),
+        requests = MIN(9007199254740991, requests + 1),
+        measured_input_tokens = MIN(9007199254740991, measured_input_tokens + excluded.measured_input_tokens),
+        measured_cached_input_tokens = MIN(9007199254740991, measured_cached_input_tokens + excluded.measured_cached_input_tokens),
+        cache_reports = MIN(9007199254740991, cache_reports + excluded.cache_reports)
+    `);
+    const scopes = measurement.conversationId ? ["", measurement.conversationId] : [""];
+    for (const conversationId of scopes) {
+      upsert.run(
+        conversationId,
+        measurement.behavior,
+        measurement.memoryKind,
+        measurement.input,
+        measurement.output,
+        measurement.total,
+        measurement.cachedInput,
+        measurement.cacheReported ? measurement.input : 0,
+        measurement.cacheReported ? measurement.cachedInput : 0,
+        measurement.cacheReported ? 1 : 0
+      );
     }
   }
 

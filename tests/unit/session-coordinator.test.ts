@@ -251,7 +251,7 @@ describe("SessionCoordinator", () => {
     expect(store.listEvents("group:failure").filter((event) => event.kind === "tool_completion")).toHaveLength(1);
   });
 
-  it("observes Codex usage once after the durable terminal write", async () => {
+  it("observes Codex usage without letting observer failure change the durable terminal state", async () => {
     const store = trackStore(new SessionStore({ databasePath: ":memory:" }));
     const observeCodexToolUsage = vi.fn(async () => {
       throw new Error("log storage unavailable");
@@ -296,6 +296,8 @@ describe("SessionCoordinator", () => {
     expect(observeCodexToolUsage).toHaveBeenCalledOnce();
     expect(observeCodexToolUsage).toHaveBeenCalledWith({
       jobId: expect.any(String),
+      conversationId: "group:observed",
+      attempt: 1,
       model: undefined,
       ok: false,
       status: "failed",
@@ -308,7 +310,57 @@ describe("SessionCoordinator", () => {
     expect(JSON.stringify(observeCodexToolUsage.mock.calls[0]?.[0])).not.toContain("private task body");
   });
 
-  it("does not observe Codex usage when this worker did not insert the terminal completion", async () => {
+  it("observes a started Codex model attempt even when usage is unavailable", async () => {
+    const store = trackStore(new SessionStore({ databasePath: ":memory:" }));
+    const observeCodexToolUsage = vi.fn();
+    const coordinator = trackCoordinator(createCoordinator({
+      store,
+      observeCodexToolUsage,
+      runner: {
+        async run(_input, context) {
+          context.onProcessStarted?.({
+            pid: 12345,
+            processGroupId: 12345,
+            attempt: 1,
+            runToken: String(context.runToken),
+            commandMarker: "/tmp/codex-attempt",
+            startedAt: Date.now()
+          });
+          return {
+            ok: false,
+            status: "failed",
+            jobId: context.jobId,
+            kind: "analysis",
+            error: { code: "codex_turn_failed", message: "failed after start" }
+          };
+        }
+      },
+      handleEvent: (event) => event.kind === "tool_completion"
+        ? { status: "no_reply" }
+        : {
+            status: "deferred",
+            providerCallId: "call-no-usage",
+            toolName: "codex",
+            arguments: { task: "inspect", kind: "analysis" },
+            originalRequest: event.payload,
+            acknowledgement: { kind: "reply", payload: { text: "started" } }
+          }
+    }));
+
+    coordinator.resume();
+    coordinator.enqueueEvent({ sessionId: "group:no-usage", kind: "incoming", payload: { text: "run" } });
+    await coordinator.waitForIdle();
+
+    expect(observeCodexToolUsage).toHaveBeenCalledWith(expect.objectContaining({
+      conversationId: "group:no-usage",
+      attempt: 1,
+      ok: false,
+      status: "failed"
+    }));
+    expect(observeCodexToolUsage.mock.calls[0]?.[0]).not.toHaveProperty("usage");
+  });
+
+  it("observes Codex usage independently of terminal completion ownership", async () => {
     const store = trackStore(new SessionStore({ databasePath: ":memory:" }));
     const completeToolJob = store.completeToolJob.bind(store);
     vi.spyOn(store, "completeToolJob").mockImplementation((input) => ({
@@ -348,7 +400,14 @@ describe("SessionCoordinator", () => {
     await coordinator.waitForIdle();
 
     expect(store.listToolJobs("group:lost-completion")[0]?.status).toBe("succeeded");
-    expect(observeCodexToolUsage).not.toHaveBeenCalled();
+    expect(observeCodexToolUsage).toHaveBeenCalledOnce();
+    expect(observeCodexToolUsage).toHaveBeenCalledWith(expect.objectContaining({
+      conversationId: "group:lost-completion",
+      attempt: 1,
+      ok: true,
+      status: "succeeded",
+      usage: { input_tokens: 50, cached_input_tokens: 25, output_tokens: 5 }
+    }));
   });
 
   it("retries outbound delivery finitely and probes disconnected delivery without external resume", async () => {

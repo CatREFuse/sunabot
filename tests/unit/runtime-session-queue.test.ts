@@ -1,6 +1,8 @@
 // @vitest-environment node
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CodexRunner, CodexToolResult } from "../../adapters/codex/codexTool.js";
+import type { RuntimeToolCapabilityResolver } from "../../services/tools/bashCapability.js";
 import type {
   OpenAIProvider,
   ProviderCompleteOptions,
@@ -273,6 +275,7 @@ describe("SunaRuntime Session queue bridge", () => {
     const runner: CodexRunner = {
       async run(input, context) {
         expect(input).toEqual({ task: "perform long analysis", kind: "analysis" });
+        expect(context.authFile).toBe(path.join(process.cwd(), "workspace/secrets/codex/auth.json"));
         toolStarted.resolve();
         await toolGate.promise;
         if (toolStatus === "succeeded") {
@@ -359,6 +362,28 @@ describe("SunaRuntime Session queue bridge", () => {
     expect(completionPrompts[0]).toContain(`"status": "${toolStatus}"`);
     expect(asyncCodexFlags).toEqual([true, true, false]);
   });
+
+  it("keeps unavailable Codex and Bash capabilities out of Provider options", async () => {
+    const completeRequestTurn = vi.fn(async (
+      _request: RenderedPromptRequest,
+      options: ProviderCompleteOptions = {}
+    ): Promise<ProviderTurnResult> => {
+      expect(options.asyncCodex).toBe(false);
+      expect(options.bash).toBeUndefined();
+      return { kind: "completed", text: "capabilities closed" };
+    });
+    const harness = createRuntimeHarness(
+      completeRequestTurn,
+      undefined,
+      undefined,
+      async () => ({ codex: false, workspaceBash: false })
+    );
+
+    await handleOneBotEvent(harness.runtime, privateEvent(22_002, "capability check"), harness.gateway);
+    await harness.coordinator.waitForIdle({ timeoutMs: 3_000 });
+
+    expect(completeRequestTurn).toHaveBeenCalledOnce();
+  });
 });
 
 interface RuntimeHarness {
@@ -376,7 +401,11 @@ function createRuntimeHarness(
     options?: ProviderCompleteOptions
   ) => Promise<ProviderTurnResult>,
   codexRunner: CodexRunner | undefined = undefined,
-  configure?: (config: ReturnType<typeof createAdminTestConfig>) => void
+  configure?: (config: ReturnType<typeof createAdminTestConfig>) => void,
+  resolveToolCapabilities: RuntimeToolCapabilityResolver = async () => ({
+    codex: true,
+    workspaceBash: true
+  })
 ): RuntimeHarness {
   const resolvedCodexRunner: CodexRunner = codexRunner ?? {
     async run(_input, context) {
@@ -396,7 +425,8 @@ function createRuntimeHarness(
   const runtime = new SunaRuntime(config, {
     attachmentService: {} as never,
     sessionStore: store,
-    codexRunner: resolvedCodexRunner
+    codexRunner: resolvedCodexRunner,
+    resolveToolCapabilities
   });
   runtimes.push(runtime);
   const provider = {

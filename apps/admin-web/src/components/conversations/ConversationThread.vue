@@ -87,7 +87,7 @@ function refreshLogs() {
         v-if="conversation.scope !== 'private'"
         compact
         :stats="stats?.modelCalls ?? null"
-        :messages="stats?.messages ?? conversation.messageCount"
+        :messages="stats?.messages"
       />
       <div
         ref="messageViewport"

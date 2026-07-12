@@ -49,6 +49,10 @@ macOS 快速开发模式会启动 API watch 与 Vite：
 
 启动器依次完成 workspace 初始化、运行令牌检查、Core 启动与健康检查、NapCat OneBot 配置、NapCat 容器启动和连接状态检查。缺失 `ONEBOT_ACCESS_TOKEN` 或 `WEBUI_TOKEN` 时会生成随机令牌并写入 `workspace/secrets/runtime.env`。
 
+Core 启动还会校验固定版本的 Codex CLI；Docker Core 使用镜像内的 `/usr/local/bin/codex`，Native Core 使用 `SUNABOT_CODEX_EXECUTABLE` 或 `PATH`。Codex 授权保存在 `workspace/secrets/codex/auth.json`，未登录时可以先启动管理台完成设备授权，工具在授权完成前保持不可调用。
+
+Apple Silicon 上的 linux/amd64 Docker 模拟内核若以 `EINVAL` 拒绝 bubblewrap user namespace，启动器会停止 Docker Core 并保持 Bash 不可用。该环境需要改用能够通过 namespace probe 的 Linux/amd64 或 WSL2 主机，不能关闭隔离或回退到普通 Bash。
+
 停止、重启和诊断：
 
 ```bash
@@ -115,5 +119,6 @@ QQ 入站文件优先使用 OneBot 返回的受控 URL；启动器固定开启 `
 - QQ 登录状态为 online，或首次登录明确显示 `awaiting-login`。
 - 文本 action、图片 `base64://` 外发、QQ 文件读取和 Provider 测试成功。
 - 重启后 SQLite、outbox、NapCat 登录态和 OneBot 连接恢复。
+- doctor 中 Codex CLI 版本与 workspace 授权均通过；工具目录只在 CLI、授权和配置同时有效时显示可调用。
 
 外网访问管理台时使用 HTTPS 反向代理并配置 `SUNABOT_ADMIN_ORIGINS`。不要公开 8787、6099 或 OneBot 端口。

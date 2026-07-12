@@ -108,6 +108,11 @@ describe("unified runtime launcher", () => {
     expect(resolved.coreService).toBe("core");
     expect(resolved.coreProfile).toBe("core-docker");
     expect(resolved.napcatService).toBe("napcat");
+    expect(resolved.codexCli).toEqual({
+      version: "0.139.0",
+      executable: "/usr/local/bin/codex",
+      authFile: "secrets/codex/auth.json"
+    });
     expect(resolved.coreReadyTimeoutSeconds).toBe(60);
     expect(resolved.napcatReadyTimeoutSeconds).toBe(120);
 

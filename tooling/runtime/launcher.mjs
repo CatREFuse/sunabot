@@ -191,6 +191,7 @@ async function upDocker(context, before, secrets) {
     );
     await waitForComponentHealth(context, "core", context.contract.coreReadyTimeoutSeconds * 1_000);
     await assertDockerCoreBwrap(context);
+    await assertDockerCoreCodex(context);
     await clearNapcatLoginQr(context);
     await compose(context, [
       "--profile",
@@ -301,6 +302,8 @@ async function doctor(context) {
     const nativeCapabilities = await inspectNativeCapabilities(context);
     checks.push(check("LibreOffice", nativeCapabilities.libreOffice.ok, nativeCapabilities.libreOffice.detail));
     checks.push(check("workspace_bash", nativeCapabilities.workspaceBash.ok, nativeCapabilities.workspaceBash.detail));
+    checks.push(check("Codex CLI", nativeCapabilities.codexCli.ok, nativeCapabilities.codexCli.detail));
+    checks.push(check("Codex auth", nativeCapabilities.codexAuth.ok, nativeCapabilities.codexAuth.detail));
   } else if (process.platform === "linux") {
     checks.push(check("Docker Core architecture", process.arch === "x64", `${process.arch}; required linux/amd64`));
   }
@@ -344,6 +347,9 @@ async function doctor(context) {
       } catch (error) {
         checks.push(check("Docker workspace_bash", false, message(error)));
       }
+      const codex = await inspectDockerCodex(context);
+      checks.push(check("Docker Codex CLI", codex.cli.ok, codex.cli.detail));
+      checks.push(check("Docker Codex auth", codex.auth.ok, codex.auth.detail));
     }
   }
   if (runtime.napcat.matches.length > 0) {
@@ -547,12 +553,59 @@ async function assertDockerCoreBwrap(context) {
   const containers = await labeledContainers(context.identity);
   const core = containers.find((item) => item.component === "core" && item.state === "running");
   if (!core) throw new Error("Docker Core 未运行，无法执行 bubblewrap namespace probe。");
-  await command("docker", [
-    "exec",
-    core.id,
-    "/usr/bin/bwrap",
-    ...bubblewrapProbeArguments("/srv/sunabot/workspace")
-  ], { capture: true });
+  try {
+    await command("docker", [
+      "exec",
+      core.id,
+      "/usr/bin/bwrap",
+      ...bubblewrapProbeArguments("/srv/sunabot/workspace")
+    ], { capture: true });
+  } catch (error) {
+    const detail = message(error);
+    if (process.platform === "darwin" && process.arch === "arm64" && /invalid argument|EINVAL/i.test(detail)) {
+      throw new Error("Apple Silicon Docker 的 linux/amd64 模拟内核拒绝 bubblewrap user namespace（EINVAL）；当前环境不能安全启用 workspace_bash。");
+    }
+    throw error;
+  }
+}
+
+async function assertDockerCoreCodex(context) {
+  const codex = await inspectDockerCodex(context);
+  if (!codex.cli.ok) throw new Error(`Docker Codex CLI 不可用：${codex.cli.detail}`);
+}
+
+async function inspectDockerCodex(context) {
+  const containers = await labeledContainers(context.identity);
+  const core = containers.find((item) => item.component === "core" && item.state === "running");
+  if (!core) {
+    const detail = "Docker Core 未运行。";
+    return { cli: { ok: false, detail }, auth: { ok: false, detail } };
+  }
+  const executable = context.contract.codexCli.executable;
+  let version;
+  try {
+    version = (await command("docker", ["exec", core.id, executable, "--version"], { capture: true })).trim();
+  } catch (error) {
+    const detail = message(error);
+    return { cli: { ok: false, detail }, auth: { ok: false, detail: "Codex CLI 不可用。" } };
+  }
+  const cli = codexVersionCheck(context, version, executable);
+  if (!cli.ok) return { cli, auth: { ok: false, detail: "Codex CLI 版本不匹配。" } };
+
+  const workspace = context.contract.paths.workspace ?? "/srv/sunabot/workspace";
+  const codexHome = path.posix.join(workspace, path.posix.dirname(context.contract.codexCli.authFile));
+  try {
+    await command("docker", [
+      "exec",
+      "--env", `CODEX_HOME=${codexHome}`,
+      core.id,
+      executable,
+      "login", "status"
+    ], { capture: true });
+    return { cli, auth: { ok: true, detail: codexHome } };
+  } catch (error) {
+    return { cli, auth: { ok: false, detail: message(error) } };
+  }
 }
 
 function bubblewrapProbeArguments(workspace) {
@@ -797,10 +850,12 @@ async function ensureNativeDependencies(context) {
   const capabilities = await inspectNativeCapabilities(context);
   if (!capabilities.libreOffice.ok) throw new Error(`Native 依赖缺失：${capabilities.libreOffice.detail}`);
   if (!capabilities.workspaceBash.ok) throw new Error(`Native Bash 隔离不可用：${capabilities.workspaceBash.detail}`);
+  if (!capabilities.codexCli.ok) throw new Error(`Native Codex CLI 不可用：${capabilities.codexCli.detail}`);
 }
 
 async function inspectNativeCapabilities(context) {
   const libreOffice = await resolveLibreOfficeExecutable(context.runtimeEnvironment);
+  const codex = await inspectNativeCodex(context);
   let workspaceBash = { ok: true, detail: "disabled on macOS Native Core" };
   if (process.platform === "linux") {
     try {
@@ -814,8 +869,42 @@ async function inspectNativeCapabilities(context) {
     libreOffice: libreOffice
       ? { ok: true, detail: libreOffice }
       : { ok: false, detail: "LibreOffice executable not found" },
-    workspaceBash
+    workspaceBash,
+    codexCli: codex.cli,
+    codexAuth: codex.auth
   };
+}
+
+async function inspectNativeCodex(context) {
+  const executable = context.runtimeEnvironment.SUNABOT_CODEX_EXECUTABLE?.trim() || "codex";
+  const codexHome = path.join(context.workspace, path.dirname(context.contract.codexCli.authFile));
+  const environment = { ...nativeProcessEnvironment(context), CODEX_HOME: codexHome };
+  let version;
+  try {
+    version = (await command(executable, ["--version"], { capture: true, env: environment })).trim();
+  } catch (error) {
+    const detail = message(error);
+    return { cli: { ok: false, detail }, auth: { ok: false, detail: "Codex CLI 不可用。" } };
+  }
+  const cli = codexVersionCheck(context, version, executable);
+  if (!cli.ok) return { cli, auth: { ok: false, detail: "Codex CLI 版本不匹配。" } };
+  try {
+    await command(executable, ["login", "status"], {
+      capture: true,
+      cwd: codexHome,
+      env: environment
+    });
+    return { cli, auth: { ok: true, detail: codexHome } };
+  } catch (error) {
+    return { cli, auth: { ok: false, detail: message(error) } };
+  }
+}
+
+function codexVersionCheck(context, version, executable) {
+  const expected = `codex-cli ${context.contract.codexCli.version}`;
+  return version === expected
+    ? { ok: true, detail: `${executable} (${version})` }
+    : { ok: false, detail: `需要 ${expected}，当前为 ${version || "unknown"}` };
 }
 
 async function resolveLibreOfficeExecutable(environment = {}) {

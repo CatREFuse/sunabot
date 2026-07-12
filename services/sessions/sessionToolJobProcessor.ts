@@ -1,6 +1,7 @@
 import path from "node:path";
 import type {
   CodexRunner,
+  CodexTaskStatus,
   CodexToolInput,
   CodexToolResult
 } from "../../packages/contracts/tools/codex.js";
@@ -34,6 +35,8 @@ export class SessionToolJobProcessor {
     const { job, settings, state } = task;
     const signal = combineSignals(actorSignal, state.controller.signal);
     const attemptToken = requiredText(job.attemptToken, "tool job attemptToken");
+    let codexProcessStarted = false;
+    let codexAttemptResult: CodexToolResult | undefined;
     try {
       if (job.toolName !== "codex") {
         const runner = this.options.runDeferredTool;
@@ -90,6 +93,7 @@ export class SessionToolJobProcessor {
         attempt: job.attempts,
         runToken: attemptToken,
         onProcessStarted: (identity) => {
+          codexProcessStarted = true;
           this.options.store.recordToolJobProcess(
             job.id,
             this.options.workerId,
@@ -99,8 +103,9 @@ export class SessionToolJobProcessor {
           );
         }
       });
+      codexAttemptResult = result;
       this.options.assertClaimUsable(state, signal);
-      const completion = this.options.store.completeToolJob({
+      this.options.store.completeToolJob({
         jobId: job.id,
         workerId: this.options.workerId,
         attempt: job.attempts,
@@ -110,32 +115,46 @@ export class SessionToolJobProcessor {
         error: result.ok ? undefined : result.error
       });
       state.finalized = true;
-      if (completion.inserted) await this.observeCodexToolUsage(job.id, settings.model, result);
     } catch (error) {
+      const status: CodexTaskStatus = signal.aborted ? "timed_out" : "failed";
+      if (job.toolName === "codex" && codexProcessStarted && !codexAttemptResult) {
+        codexAttemptResult = {
+          ok: false,
+          status,
+          jobId: job.id,
+          kind: "analysis",
+          error: { code: "worker_failed", message: error instanceof Error ? error.message : String(error) }
+        };
+      }
       if (state.finalized || this.options.isStopped()) return;
       this.options.store.completeToolJob({
         jobId: job.id,
         workerId: this.options.workerId,
         attempt: job.attempts,
         attemptToken,
-        status: signal.aborted ? "timed_out" : "failed",
+        status,
         error: serializeError(error)
       });
       state.finalized = true;
     } finally {
+      if (codexAttemptResult && (codexProcessStarted || codexAttemptResult.usage)) {
+        await this.observeCodexToolUsage(job, settings.model, codexAttemptResult);
+      }
       this.options.deferTurns();
     }
   }
 
-  private async observeCodexToolUsage(jobId: string, model: string | undefined, result: CodexToolResult) {
-    if (!result.usage || !this.options.observeCodexToolUsage) return;
+  private async observeCodexToolUsage(job: ToolJobRecord, model: string | undefined, result: CodexToolResult) {
+    if (!this.options.observeCodexToolUsage) return;
     try {
       await this.options.observeCodexToolUsage({
-        jobId,
+        jobId: job.id,
+        conversationId: job.sessionId,
+        attempt: job.attempts,
         model,
         ok: result.ok,
         status: result.status,
-        usage: { ...result.usage }
+        ...(result.usage ? { usage: { ...result.usage } } : {})
       });
     } catch {
       // Observability must not change a durable tool-job terminal state.

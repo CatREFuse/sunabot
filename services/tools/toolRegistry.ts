@@ -118,7 +118,7 @@ const catalog: readonly ToolCatalogEntry[] = [
     summary: "在 Agent workspace 内执行 Bash 命令。",
     definition: (options) => createWorkspaceBashTool(options.bash),
     available: (options) => options.bash?.enabled === true,
-    unavailableReason: "命令执行未启用或当前会话无权限。",
+    unavailableReason: "当前环境未通过 Bash 隔离检查。",
     execution: "inline"
   },
   {
@@ -127,7 +127,7 @@ const catalog: readonly ToolCatalogEntry[] = [
     summary: "把长任务交给异步 Codex worker。",
     definition: () => codexTool,
     available: (options) => options.asyncCodex === true,
-    unavailableReason: "Codex worker 未启用。",
+    unavailableReason: "Codex CLI 未安装或未登录。",
     execution: "deferred"
   }
 ];

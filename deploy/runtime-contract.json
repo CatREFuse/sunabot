@@ -127,8 +127,8 @@
     }
   },
   "capabilities": {
-    "required": ["admin-web", "onebot-v11", "image-generation", "office-documents", "workspace-bash"],
-    "optional": ["codex-cli", "websearch"],
+    "required": ["admin-web", "onebot-v11", "image-generation", "office-documents", "workspace-bash", "codex-cli"],
+    "optional": ["websearch"],
     "workspaceBash": {
       "service": "core",
       "isolation": "bubblewrap",
@@ -137,6 +137,13 @@
       "filesystemMode": "host-readonly-workspace-readwrite",
       "subprocessIsolation": "inherited-mount-and-pid-namespaces",
       "capabilitiesDropped": true,
+      "failClosed": true
+    },
+    "codexCli": {
+      "service": "core",
+      "version": "0.139.0",
+      "executable": "/usr/local/bin/codex",
+      "authFile": "secrets/codex/auth.json",
       "failClosed": true
     }
   },

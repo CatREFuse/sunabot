@@ -5,13 +5,14 @@ import { appendRequestLog, readModelCallStats, readRequestLogPage, readTokenUsag
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
   closeApplicationDataStores();
 });
 
 describe("request log token usage", () => {
   it("aggregates model calls by behavior and exact conversation", async () => {
     const conversationId = `group:${randomUUID()}`;
-    const append = (stage: string, memoryKind?: "working" | "long_term" | "user_profile") => appendRequestLog({
+    const append = (stage: string, memoryKind?: "working_long_term" | "user_profile") => appendRequestLog({
       category: "model.response",
       action: "responses.complete",
       response: { usage: { input_tokens: 8, output_tokens: 2, total_tokens: 10 } },
@@ -19,34 +20,42 @@ describe("request log token usage", () => {
     });
 
     await append("reply");
+    await appendRequestLog({
+      category: "model.response",
+      action: "responses.complete",
+      response: { ok: false, error: "transport failed" },
+      metadata: { conversationId, stage: "reply", transportAttempt: 1 }
+    });
     await append("orchestrator");
-    await append("memory", "working");
-    await append("memory", "long_term");
+    await append("memory", "working_long_term");
     await append("memory", "user_profile");
+    await append("memory");
     await appendRequestLog({
       category: "model.response",
       action: "responses.complete",
       response: { usage: { input_tokens: 80, output_tokens: 20, total_tokens: 100 } },
-      metadata: { conversationId: "group:other", stage: "reply" }
+      metadata: { conversationId: `${conversationId}:other`, stage: "reply" }
     });
 
+    const fullJsonScan = vi.spyOn(applicationDataStore(), "readTokenUsageRecords")
+      .mockImplementation(() => { throw new Error("model stats must use the aggregate table"); });
     expect(readModelCallStats({ conversationId })).toMatchObject({
-      total: { requests: 5, total: 50 },
+      total: { requests: 6, total: 50 },
       behavior: {
-        reply: { requests: 1, total: 10 },
+        reply: { requests: 2, total: 10 },
         orchestrator: { requests: 1, total: 10 },
-        memory: { requests: 3, total: 30 },
-        other: { requests: 0, total: 0 }
+        memory: { requests: 2, total: 20 },
+        other: { requests: 1, total: 10 }
       },
       memory: {
-        total: { requests: 3, total: 30 },
+        total: { requests: 2, total: 20 },
         kinds: {
-          working: { requests: 1, total: 10 },
-          long_term: { requests: 1, total: 10 },
+          working_long_term: { requests: 1, total: 10 },
           user_profile: { requests: 1, total: 10 }
         }
       }
     });
+    expect(fullJsonScan).not.toHaveBeenCalled();
   });
 
   it("aggregates Responses, Chat Completions and Gemini usage", async () => {
@@ -436,5 +445,23 @@ describe("request log token usage", () => {
     expect(firstPage.logs.map((log: { action?: string }) => log.action)).toEqual(["third", "second"]);
     const filtered = await readRequestLogPage({ query: `${marker} alpha`, page: 1, pageSize: 10 });
     expect(filtered).toMatchObject({ total: 2, pageCount: 1 });
+  });
+
+  it("redacts a bare key query parameter from error strings", async () => {
+    await appendRequestLog({
+      category: "model.response",
+      action: "gemini.generate-content.complete",
+      response: {
+        ok: false,
+        error: "request failed: https://example.test/generate?key=super-secret&alt=sse"
+      }
+    });
+
+    const page = await readRequestLogPage({ page: 1, pageSize: 1 });
+    expect(page.logs[0]).toMatchObject({
+      response: {
+        error: "request failed: https://example.test/generate?key=[REDACTED]&alt=sse"
+      }
+    });
   });
 });

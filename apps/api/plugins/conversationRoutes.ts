@@ -99,10 +99,9 @@ export function registerConversationRoutes(app: FastifyInstance, options: Conver
     }
   }, async (request) => {
     const conversationId = String((request.params as { id?: string }).id ?? "").trim();
-    const conversation = runtime.getConversationRecords().find((item) => item.id === conversationId);
     return {
       conversationId,
-      messages: conversation?.messageCount ?? 0,
+      messages: runtime.getConversationMessageStats(conversationId),
       modelCalls: readModelCallStats({ conversationId })
     };
   });

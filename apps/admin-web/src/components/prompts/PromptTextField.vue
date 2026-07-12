@@ -145,7 +145,13 @@ defineExpose({ insertVariable });
 </script>
 
 <template>
-  <div class="prompt-field" :class="{ 'prompt-field--fill': fill }">
+  <div
+    class="prompt-field"
+    :class="{
+      'prompt-field--fill': fill,
+      'prompt-field--with-variables': showVariables
+    }"
+  >
     <div class="prompt-field__editor">
       <pre ref="highlightLayer" class="prompt-field__highlight" aria-hidden="true" v-html="highlightedContent"></pre>
       <textarea
@@ -198,9 +204,14 @@ defineExpose({ insertVariable });
 }
 
 .prompt-field--fill {
-  display: grid;
+  display: flex;
   min-height: 0;
   flex: 1;
+  flex-direction: column;
+}
+
+.prompt-field--fill.prompt-field--with-variables {
+  display: grid;
   grid-template-rows: minmax(180px, 3fr) minmax(160px, 2fr);
 }
 
@@ -284,11 +295,17 @@ defineExpose({ insertVariable });
 .prompt-field__highlight :deep(.markup-list-marker),
 .prompt-field__highlight :deep(.markup-xml),
 .prompt-field__highlight :deep(.markup-variable) { color: rgb(var(--color-accent)); }
-.prompt-field__highlight :deep(.markup-code),
-.prompt-field__highlight :deep(.markup-code-fence) {
+.prompt-field__highlight :deep(.markup-code) {
   background: rgb(var(--color-accent) / 0.08);
   color: rgb(var(--color-accent));
 }
+.prompt-field__highlight :deep(.markup-code-block) {
+  display: inline-block;
+  width: 100%;
+  background: rgb(var(--color-accent) / 0.08);
+  color: rgb(var(--color-ink));
+}
+.prompt-field__highlight :deep(.markup-code-fence) { color: rgb(var(--color-accent)); }
 .prompt-field__highlight :deep(.markup-quote) { color: rgb(var(--color-mute)); }
 
 .prompt-field__suggestions {

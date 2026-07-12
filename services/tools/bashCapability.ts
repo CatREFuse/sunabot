@@ -1,0 +1,72 @@
+import path from "node:path";
+import {
+  ensureWorkspaceBashIsolation,
+  type WorkspaceBashSandboxOptions
+} from "./bashSandbox.js";
+
+const DEFAULT_CAPABILITY_TTL_MS = 30_000;
+
+export interface WorkspaceBashCapabilityProbeOptions {
+  platform?: NodeJS.Platform;
+  sandbox?: WorkspaceBashSandboxOptions;
+  ttlMs?: number;
+  now?: () => number;
+}
+
+export interface RuntimeToolCapabilities {
+  workspaceBash: boolean;
+  codex: boolean;
+}
+
+export type RuntimeToolCapabilityResolver = () => Promise<RuntimeToolCapabilities>;
+
+export interface RuntimeToolCapabilityResolverOptions {
+  getCodexStatus: () => Promise<{ installed: boolean; authenticated: boolean }>;
+  getWorkspaceBashCapability: () => Promise<boolean>;
+}
+
+export function createRuntimeToolCapabilityResolver(
+  options: RuntimeToolCapabilityResolverOptions
+): RuntimeToolCapabilityResolver {
+  return async () => {
+    const [codex, workspaceBash] = await Promise.allSettled([
+      options.getCodexStatus(),
+      options.getWorkspaceBashCapability()
+    ]);
+    return {
+      codex: codex.status === "fulfilled" && codex.value.installed && codex.value.authenticated,
+      workspaceBash: workspaceBash.status === "fulfilled" && workspaceBash.value === true
+    };
+  };
+}
+
+export function createWorkspaceBashCapabilityProbe(
+  options: WorkspaceBashCapabilityProbeOptions = {}
+) {
+  const platform = options.platform ?? process.platform;
+  const ttlMs = positiveInteger(options.ttlMs, DEFAULT_CAPABILITY_TTL_MS);
+  const now = options.now ?? Date.now;
+  const cache = new Map<string, { expiresAt: number; result: Promise<boolean> }>();
+
+  return async (workspacePath: string) => {
+    if (platform !== "linux") return false;
+    const workspace = path.resolve(workspacePath);
+    const cached = cache.get(workspace);
+    const currentTime = now();
+    if (cached && cached.expiresAt > currentTime) return cached.result;
+
+    const result = ensureWorkspaceBashIsolation(workspace, {
+      PATH: process.env.PATH || "/usr/bin:/bin"
+    }, {
+      ...options.sandbox,
+      platform
+    }).then(() => true, () => false);
+    cache.set(workspace, { expiresAt: currentTime + ttlMs, result });
+    return result;
+  };
+}
+
+function positiveInteger(value: unknown, fallback: number) {
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
+}

@@ -169,7 +169,7 @@ export async function runtime_runSelfie(this: RuntimeHost,
     const rewrittenPrompt = await this.rewriteSelfiePrompt(provider, prompt, size, {
       workspaceReferenceImageCount: workspaceReferenceImageUrls.length,
       chatReferenceImageCount: chatReferenceImageUrls.length
-    });
+    }, options.logContext);
     const image = await provider.generateImage(rewrittenPrompt, size, quality, referenceImageUrls, options.logContext);
     return {
       ok: true,
@@ -189,7 +189,8 @@ export async function runtime_rewriteSelfiePrompt(this: RuntimeHost,
     provider: OpenAIProvider,
     prompt: string,
     size: string,
-    references: { workspaceReferenceImageCount: number; chatReferenceImageCount: number }
+    references: { workspaceReferenceImageCount: number; chatReferenceImageCount: number },
+    logContext?: ProviderLogContext
   ) {
     const payload = {
           request: prompt,
@@ -208,7 +209,7 @@ export async function runtime_rewriteSelfiePrompt(this: RuntimeHost,
     const promptRequest = await this.renderPromptRequest("image.selfie-rewrite", {
       "selfie.payload": payload
     });
-    const rewritten = await this.completePrompt(provider, promptRequest);
+    const rewritten = await this.completePrompt(provider, promptRequest, { logContext });
     return normalizeSelfiePrompt(rewritten) || prompt;
   }
 export function runtime_collectSelfieChatReferenceImages(this: RuntimeHost, incoming: ParsedIncomingMessage) {

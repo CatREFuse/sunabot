@@ -128,6 +128,29 @@ describe("useConfigWorkspace", () => {
     expect(workspace.state.orchestrator.kind).toBe("saved");
   });
 
+  it("keeps reply behavior and OneBot connection drafts independently discardable", async () => {
+    apiRequest.mockResolvedValueOnce(envelope("r1", "initial"));
+    const workspace = useConfigWorkspace();
+    await workspace.load();
+
+    workspace.drafts.onebot.autoReplyPrivate = false;
+    workspace.drafts.onebot.mentionNames = ["普拉娜"];
+    workspace.drafts.onebot.reverseWsPath = "/next/ws";
+    expect(workspace.isReplyBehaviorDirty()).toBe(true);
+    expect(workspace.isOneBotConnectionDirty()).toBe(true);
+
+    workspace.discardReplyBehavior();
+    expect(workspace.drafts.onebot.autoReplyPrivate).toBe(true);
+    expect(workspace.drafts.onebot.mentionNames).toEqual([]);
+    expect(workspace.drafts.onebot.reverseWsPath).toBe("/next/ws");
+    expect(workspace.isReplyBehaviorDirty()).toBe(false);
+    expect(workspace.isOneBotConnectionDirty()).toBe(true);
+
+    workspace.discardOneBotConnection();
+    expect(workspace.drafts.onebot.reverseWsPath).toBe("/onebot/v11/ws");
+    expect(workspace.isOneBotConnectionDirty()).toBe(false);
+  });
+
   it("loads the server version for a conflicted section while preserving other dirty sections", async () => {
     apiRequest.mockResolvedValueOnce(envelope("r1", "initial"));
     const workspace = useConfigWorkspace();

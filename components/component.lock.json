@@ -68,8 +68,10 @@
       "smoke": ["bwrap", "--version"]
     },
     "codex-cli": {
-      "optional": true,
+      "version": "0.139.0",
       "source": "https://developers.openai.com/codex/cli",
+      "package": "@openai/codex",
+      "integrity": "sha512-wr2fRE+fzW0CjEbfFsLh1ftarVEcw0CMLWS7QyA0nyOz5qacQPVq3cq2+/U7oEbwm1TOqoi0Fm1nxniB5FkpmA==",
       "license": "Apache-2.0",
       "architectures": ["linux/amd64"],
       "smoke": ["codex", "--version"]

@@ -29,12 +29,21 @@ describe("conversation API plugin", () => {
     const hydrateConversationRecords = vi.fn(async () => undefined);
     const hydrateConversationIdentities = vi.fn(async () => undefined);
     const getConversationMessages = vi.fn(() => ({ messages: [{ role: "user", content: "hello" }] }));
+    const messageStats = {
+      total: 12,
+      retained: 12,
+      visible: 11,
+      user: 6,
+      assistant: 5,
+      internal: 1
+    };
     const setConversationReplyEnabled = vi.fn((body: unknown) => body);
     const runtime = {
       getConversationRecords: vi.fn(() => records),
       hydrateConversationRecords,
       hydrateConversationIdentities,
       getConversationMessages,
+      getConversationMessageStats: vi.fn(() => messageStats),
       setConversationReplyEnabled
     } as unknown as SunaRuntime;
     const onebotGateway = { getStatus: vi.fn(() => ({ connected: true })) } as unknown as OneBotGateway;
@@ -64,7 +73,7 @@ describe("conversation API plugin", () => {
       url: "/api/conversations/private%3A171419991/stats"
     })).json()).toMatchObject({
       conversationId: "private:171419991",
-      messages: 12,
+      messages: messageStats,
       modelCalls: { conversationId: "private:171419991" }
     });
 

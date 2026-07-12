@@ -137,6 +137,13 @@ expect(contract.capabilities.workspaceBash.service === "core"
   && contract.capabilities.workspaceBash.isolation === "bubblewrap"
   && contract.capabilities.workspaceBash.failClosed === true,
 "workspace Bash must remain fail-closed inside Core");
+expect(contract.capabilities.required.includes("codex-cli")
+  && !contract.capabilities.optional.includes("codex-cli")
+  && contract.capabilities.codexCli.service === "core"
+  && contract.capabilities.codexCli.executable === "/usr/local/bin/codex"
+  && contract.capabilities.codexCli.authFile === "secrets/codex/auth.json"
+  && contract.capabilities.codexCli.failClosed === true,
+"Codex CLI must be a required, pinned Core capability with workspace auth");
 expect(hasBubblewrapSeccompRules(dockerSeccompProfile),
   "Docker seccomp must retain the required bubblewrap namespace rules");
 
@@ -173,6 +180,7 @@ expect(compose.includes("io.sunabot.runtime-id")
 
 const node = lock.components.node;
 const napcat = lock.components.napcat;
+const codex = lock.components["codex-cli"];
 expect(coreDockerfile.includes(`${node.image}@${node.digest}`),
   "Core Dockerfile must pin the Node image digest");
 expect(!/napcat|\/opt\/QQ|xvfb-run/i.test(coreDockerfile),
@@ -180,6 +188,18 @@ expect(!/napcat|\/opt\/QQ|xvfb-run/i.test(coreDockerfile),
 expect(coreDockerfile.includes("dist/apps/api/main.js")
   && coreDockerfile.includes(contract.capabilities.workspaceBash.executable),
 "Core image must run the API and contain bubblewrap");
+expect(codex.optional !== true
+  && codex.version === contract.capabilities.codexCli.version
+  && codex.package === "@openai/codex"
+  && /^sha512-[A-Za-z0-9+/]+=*$/.test(codex.integrity ?? ""),
+"Codex component lock must pin the required npm package and integrity");
+expect(coreDockerfile.includes(`ARG CODEX_CLI_VERSION=${codex.version}`)
+  && coreDockerfile.includes('"@openai/codex@${CODEX_CLI_VERSION}"')
+  && coreDockerfile.includes('test "$(codex --version)" = "codex-cli ${CODEX_CLI_VERSION}"'),
+"Core image must install and smoke-test the pinned Codex CLI");
+expect(coreBlock.includes("SUNABOT_CODEX_EXECUTABLE: /usr/local/bin/codex")
+  && coreBlock.includes("SUNABOT_CODEX_BIN: /usr/local/bin/codex"),
+"Docker Core must use the pinned in-image Codex executable");
 expect(napcatDockerfile.includes(`${napcat.image}@${napcat.digest}`),
   "NapCat wrapper must pin the multi-architecture upstream digest");
 expect(napcat.architectures.includes("linux/amd64") && napcat.architectures.includes("linux/arm64"),
@@ -221,6 +241,13 @@ expect(launcher.includes("waitForComponentHealth")
   && launcher.includes("docker-network-gateway")
   && launcher.includes("nativeProcessEnvironment"),
 "the launcher must enforce readiness, non-root ownership, private Native ingress and one runtime environment");
+expect(launcher.includes("assertDockerCoreCodex")
+  && launcher.includes("inspectDockerCodex")
+  && launcher.includes("inspectNativeCodex")
+  && launcher.includes("Codex auth"),
+"the launcher and doctor must validate Codex CLI and workspace auth in both Core modes");
+expect(launcher.includes("Apple Silicon Docker") && launcher.includes("EINVAL"),
+  "the launcher must preserve the observed Apple Silicon amd64 user-namespace failure detail");
 expect(agentsGuide.includes("NapCat") && agentsGuide.includes("独立 Docker")
   && !agentsGuide.includes("Linux Native/Docker 继续使用共享 workspace"),
 "AGENTS must enforce the split-runtime portability rules");

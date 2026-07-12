@@ -45,10 +45,12 @@ export type CodexProcessCleanup = (
 
 export interface CodexToolUsageObservation {
   jobId: string;
+  conversationId: string;
+  attempt: number;
   model?: string;
   ok: boolean;
   status: CodexTaskStatus;
-  usage: Record<string, number>;
+  usage?: Record<string, number>;
 }
 
 export type CodexToolUsageObserver = (

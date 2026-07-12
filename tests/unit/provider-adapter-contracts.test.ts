@@ -5,10 +5,15 @@ import {
   extractResponsesTextFromSse,
   parseResponsesSsePayload
 } from "../../adapters/model/provider/streamDecoder.js";
-import { fetchWithSingleTransportRetry } from "../../adapters/model/provider/transport.js";
+import {
+  fetchTextWithTransportRetry,
+  resolveRetryDelayMs,
+  waitForRetry
+} from "../../adapters/model/provider/transport.js";
 
 describe("provider adapter ports", () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -36,13 +41,92 @@ describe("provider adapter ports", () => {
       .mockRejectedValueOnce(new TypeError("fetch failed"))
       .mockResolvedValueOnce(response);
     const init: RequestInit = { method: "POST", body: "{}" };
+    const beforeAttempt = vi.fn();
+    const attemptFailed = vi.fn();
 
-    await expect(fetchWithSingleTransportRetry("https://example.test/responses", init)).resolves.toBe(response);
+    const result = await fetchTextWithTransportRetry("https://example.test/responses", init, undefined, {
+      beforeAttempt,
+      attemptFailed
+    });
+    expect(result).toMatchObject({ response, text: "ok", attempt: 2, maxAttempts: 2 });
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchMock.mock.calls).toEqual([
       ["https://example.test/responses", init],
       ["https://example.test/responses", init]
     ]);
+    expect(beforeAttempt.mock.calls).toEqual([
+      [{ attempt: 1, maxAttempts: 2 }],
+      [{ attempt: 2, maxAttempts: 2 }]
+    ]);
+    expect(attemptFailed).toHaveBeenCalledWith(expect.any(TypeError), {
+      attempt: 1,
+      maxAttempts: 2,
+      willRetry: true,
+      retryDelayMs: 150
+    });
+  });
+
+  it("retries a response body read failure", async () => {
+    const brokenResponse = {
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      text: vi.fn(async () => { throw new TypeError("terminated"); })
+    } as unknown as Response;
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(brokenResponse)
+      .mockResolvedValueOnce(new Response("complete", { status: 200 }));
+    const attemptFailed = vi.fn();
+
+    await expect(fetchTextWithTransportRetry("https://example.test/responses", {
+      method: "POST"
+    }, undefined, { attemptFailed })).resolves.toMatchObject({ text: "complete", attempt: 2 });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(attemptFailed).toHaveBeenCalledWith(expect.objectContaining({ message: "terminated" }), {
+      attempt: 1,
+      maxAttempts: 2,
+      willRetry: true,
+      status: 200,
+      retryDelayMs: 150
+    });
+  });
+
+  it("honors Retry-After and rejects an already aborted wait", async () => {
+    expect(resolveRetryDelayMs(new Headers({ "retry-after": "1.25" }), 1)).toBe(1_250);
+    expect(resolveRetryDelayMs({ headers: { "Retry-After-Ms": "275" } }, 1)).toBe(275);
+
+    const controller = new AbortController();
+    const reason = new Error("cancelled");
+    controller.abort(reason);
+    await expect(waitForRetry(1_000, controller.signal)).rejects.toBe(reason);
+
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    const beforeAttempt = vi.fn();
+    await expect(fetchTextWithTransportRetry("https://example.test/responses", {}, controller.signal, {
+      beforeAttempt
+    })).rejects.toBe(reason);
+    expect(beforeAttempt).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("delays an HTTP retry according to Retry-After", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response("busy", {
+        status: 503,
+        headers: { "retry-after": "1" }
+      }))
+      .mockResolvedValueOnce(new Response("complete", { status: 200 }));
+
+    const result = fetchTextWithTransportRetry("https://example.test/responses", { method: "POST" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(999);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(result).resolves.toMatchObject({ text: "complete", attempt: 2 });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("keeps unsupported tool dispatch inside the ToolExecutor boundary", async () => {

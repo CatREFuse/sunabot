@@ -10,7 +10,7 @@ import { ConfigService } from "../../src/admin/configService.js";
 import { CodexAuthService } from "../../src/admin/codexAuth.js";
 import { MonitorSettingsStore } from "../../src/admin/monitorSettings.js";
 import { SelfieReferenceRepository } from "../../src/admin/selfieReferences.js";
-import { getConfigPath, getRootDir, getWorkspacePath, loadConfig } from "../../src/config.js";
+import { getConfigPath, getRootDir, getWorkspacePath, loadConfig, resolveProjectPath } from "../../src/config.js";
 import {
   closeApplicationDataStores,
   sqliteMemoryPersistence
@@ -37,6 +37,10 @@ import { registerOneBotRoutes } from "./plugins/onebotRoutes.js";
 import { registerProviderConfigRoutes } from "./plugins/providerConfigRoutes.js";
 import { registerSelfieReferenceRoutes } from "./plugins/selfieReferenceRoutes.js";
 import type { AppConfig, ProviderConfig } from "../../src/types.js";
+import {
+  createRuntimeToolCapabilityResolver,
+  createWorkspaceBashCapabilityProbe
+} from "../../services/tools/bashCapability.js";
 
 export interface CreateAppOptions {
   config?: AppConfig;
@@ -76,7 +80,18 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
     referenceMode: outboundMediaReferenceMode(),
     maxInlineBytes: outboundMediaMaxInlineBytes()
   });
-  const runtime = new SunaRuntime(config);
+  const codexAuth = new CodexAuthService({
+    codexHome: getWorkspacePath(WORKSPACE_LAYOUT.codexHome),
+    executable: process.env.SUNABOT_CODEX_EXECUTABLE
+  });
+  const probeWorkspaceBash = createWorkspaceBashCapabilityProbe();
+  const resolveToolCapabilities = createRuntimeToolCapabilityResolver({
+    getCodexStatus: () => codexAuth.status(),
+    getWorkspaceBashCapability: () => probeWorkspaceBash(
+      resolveProjectPath(config.persona.agentWorkspace) ?? getRootDir()
+    )
+  });
+  const runtime = new SunaRuntime(config, { resolveToolCapabilities });
   if (options.initializeRuntime !== false) await runtime.initialize();
 
   const adminAuth = await AdminAuthService.create({
@@ -88,11 +103,6 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
       .map((item) => item.trim())
       .filter(Boolean)
   });
-  const codexAuth = new CodexAuthService({
-    codexHome: getWorkspacePath(WORKSPACE_LAYOUT.codexHome),
-    executable: process.env.SUNABOT_CODEX_EXECUTABLE
-  });
-
   const app = Fastify({ logger: options.logger ?? false, trustProxy: false });
   const monitorSettings = new MonitorSettingsStore(getWorkspacePath(WORKSPACE_LAYOUT.secretsEnv));
   const listenerOptions = options.onebotListener === false ? undefined : options.onebotListener;
@@ -214,7 +224,11 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
   registerOneBotRoutes(app, onebotGateway);
   registerProviderConfigRoutes(app, { codexAuth, configService, testProvider: options.testProvider });
   registerMemoryRoutes(app, { getConfig: () => config, runtime });
-  registerAgentToolRoutes(app, { agentFiles, getConfig: () => config });
+  registerAgentToolRoutes(app, {
+    agentFiles,
+    resolveToolCapabilities,
+    getConfig: () => config
+  });
   registerSelfieReferenceRoutes(app, { repository: selfieReferences });
 
   app.setNotFoundHandler((request, reply) => {

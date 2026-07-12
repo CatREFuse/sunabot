@@ -128,7 +128,7 @@ export class OpenAIProvider {
       toolExecutor: this.toolExecutor,
       imageWriter: this.imageWriter,
       createResponsesClient: (options) => this.createClient(options),
-      createChatClient: () => this.createChatClient(),
+      createChatClient: (options) => this.createChatClient(options),
       getApiKey: () => this.getApiKey()
     };
   }
@@ -137,8 +137,8 @@ export class OpenAIProvider {
     return createResponsesClient(this.provider, this.getApiKey(), options);
   }
 
-  private createChatClient(): OpenAI {
-    return createOpenAIChatClient(this.provider, this.getApiKey());
+  private createChatClient(options: { maxRetries?: number } = {}): OpenAI {
+    return createOpenAIChatClient(this.provider, this.getApiKey(), options);
   }
 
   private getApiKey() {

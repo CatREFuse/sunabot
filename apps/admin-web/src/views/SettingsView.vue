@@ -162,7 +162,10 @@ function cancelLeave() {
 function confirmLeave() {
   if (savingBeforeLeave.value) return;
   const path = pendingLeavePath.value;
-  for (const section of sectionKeys) workspace.discard(section);
+  workspace.discardGroupReply();
+  for (const section of sectionKeys) {
+    if (section !== "orchestrator") workspace.discard(section);
+  }
   leaveConfirmOpen.value = false;
   pendingLeavePath.value = "";
   leaveSaveError.value = "";

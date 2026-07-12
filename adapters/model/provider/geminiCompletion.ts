@@ -4,8 +4,8 @@ import type { ProviderAdapterContext, ProviderCompleteOptions, ProviderTurnResul
 import { toChatCompletionMessage } from "./imageInput.js";
 import { withLogContext } from "./logger.js";
 import { claimToolCalls, resolveMaxToolCalls, toolCallLimitError } from "./toolLoopLimits.js";
-import { normalizeGeminiBaseUrl } from "./transport.js";
-import { isRecord, parseJson } from "./valueUtils.js";
+import { fetchTextWithTransportRetry, normalizeGeminiBaseUrl } from "./transport.js";
+import { errorMessage, isRecord, parseJson } from "./valueUtils.js";
 
 export async function completeGeminiGenerateContent(
   context: ProviderAdapterContext,
@@ -42,20 +42,34 @@ export async function completeGeminiGenerateContent(
       }
     };
     const metadata = withLogContext({ round, toolCallCount, maxToolCalls, toolNames: definitions.map((tool) => tool.name) }, options.logContext);
-    await context.logger.request("gemini.generate-content.complete", requestBody, metadata);
     const model = context.provider.model.replace(/^models\//, "");
-    const url = `${normalizeGeminiBaseUrl(context.provider.baseUrl)}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
-    const response = await fetch(url, {
+    const url = `${normalizeGeminiBaseUrl(context.provider.baseUrl)}/models/${encodeURIComponent(model)}:generateContent`;
+    let responseMetadata = metadata;
+    const attempt = await fetchTextWithTransportRetry(url, {
       method: "POST",
       headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
       body: JSON.stringify(requestBody),
       signal: options.signal
+    }, options.signal, {
+      beforeAttempt: async ({ attempt, maxAttempts }) => {
+        responseMetadata = { ...metadata, transportAttempt: attempt, maxTransportAttempts: maxAttempts };
+        await context.logger.request("gemini.generate-content.complete", requestBody, responseMetadata);
+      },
+      attemptFailed: async (error, { attempt, maxAttempts, willRetry, status, retryDelayMs }) => {
+        await context.logger.response("gemini.generate-content.complete", {
+          ok: false,
+          ...(status == null ? {} : { status }),
+          error: errorMessage(error),
+          willRetry,
+          retryDelayMs
+        }, { ...metadata, transportAttempt: attempt, maxTransportAttempts: maxAttempts });
+      }
     });
-    const raw = await response.text();
+    const { response, text: raw } = attempt;
     const payload = parseJson(raw);
     await context.logger.response("gemini.generate-content.complete", response.ok
       ? { ok: true, usage: isRecord(payload) ? payload.usageMetadata : undefined }
-      : { ok: false, status: response.status, error: geminiError(payload, response.status) }, metadata);
+      : { ok: false, status: response.status, error: geminiError(payload, response.status), willRetry: false, retryDelayMs: 0 }, responseMetadata);
     if (!response.ok) throw new Error(geminiError(payload, response.status));
     const candidate = isRecord(payload) && Array.isArray(payload.candidates) ? payload.candidates.find(isRecord) : undefined;
     const content = candidate && isRecord(candidate.content) ? candidate.content : undefined;

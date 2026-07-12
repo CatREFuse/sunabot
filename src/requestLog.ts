@@ -1,8 +1,18 @@
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { getWorkspacePath } from "./config.js";
-import { applicationDatabasePath, applicationDataStore } from "../adapters/sqlite/applicationDataStore.js";
+import {
+  applicationDatabasePath,
+  applicationDataStore,
+  type ModelCallAggregateRow
+} from "../adapters/sqlite/applicationDataStore.js";
 import { WORKSPACE_LAYOUT } from "../packages/platform/workspaceLayout.js";
+import {
+  memoryModelCallKindIds,
+  modelCallBehaviorIds,
+  type MemoryModelCallKindId,
+  type ModelCallBehaviorId
+} from "./modelCallStats.js";
 import {
   normalizeTokenUsageRecord,
   publicTokenUsage,
@@ -34,10 +44,8 @@ export interface ReadRequestLogPageOptions {
   pageSize?: number;
 }
 
-export const modelCallBehaviorIds = ["reply", "orchestrator", "memory", "other"] as const;
-export const memoryModelCallKindIds = ["working", "long_term", "user_profile"] as const;
-export type ModelCallBehaviorId = typeof modelCallBehaviorIds[number];
-export type MemoryModelCallKindId = typeof memoryModelCallKindIds[number];
+export { memoryModelCallKindIds, modelCallBehaviorIds } from "./modelCallStats.js";
+export type { MemoryModelCallKindId, ModelCallBehaviorId } from "./modelCallStats.js";
 
 export interface ReadModelCallStatsOptions {
   conversationId?: string;
@@ -118,16 +126,10 @@ export function readModelCallStats(options: ReadModelCallStatsOptions = {}) {
     memoryModelCallKindIds.map((id) => [id, emptyUsageAccumulator()])
   ) as Record<MemoryModelCallKindId, TokenUsageAccumulator>;
 
-  for (const record of requestLogStore().readTokenUsageRecords("1970-01-01T00:00:00.000Z")) {
-    const usage = normalizeTokenUsageRecord(record);
-    if (!usage) continue;
-    const metadata = readMetadata(record);
-    if (conversationId && metadata.conversationId !== conversationId) continue;
-
-    const behaviorId = modelCallBehavior(metadata);
-    addUsage(total, usage);
-    addUsage(behavior[behaviorId], usage);
-    if (behaviorId === "memory") addUsage(memory[memoryModelCallKind(metadata)], usage);
+  for (const row of requestLogStore().readModelCallAggregateRows(conversationId)) {
+    addAggregate(total, row);
+    addAggregate(behavior[row.behavior], row);
+    if (row.behavior === "memory" && row.memoryKind) addAggregate(memory[row.memoryKind], row);
   }
 
   return {
@@ -145,28 +147,6 @@ function requestLogStore() {
   const store = applicationDataStore();
   store.ensureLegacyRequestLogsImported(getWorkspacePath(WORKSPACE_LAYOUT.legacyData, "request-bodies.jsonl"));
   return store;
-}
-
-function readMetadata(record: Record<string, unknown>) {
-  if (typeof record.metadata !== "object" || record.metadata == null || Array.isArray(record.metadata)) {
-    return {} as Record<string, unknown>;
-  }
-  return record.metadata as Record<string, unknown>;
-}
-
-function modelCallBehavior(metadata: Record<string, unknown>): ModelCallBehaviorId {
-  const stage = String(metadata.stage ?? "");
-  if (stage === "reply") return "reply";
-  if (stage === "orchestrator") return "orchestrator";
-  if (stage === "memory") return "memory";
-  return "other";
-}
-
-function memoryModelCallKind(metadata: Record<string, unknown>): MemoryModelCallKindId {
-  const kind = String(metadata.memoryKind ?? "");
-  return memoryModelCallKindIds.includes(kind as MemoryModelCallKindId)
-    ? kind as MemoryModelCallKindId
-    : "long_term";
 }
 
 function normalizeLimit(value: unknown) {
@@ -223,6 +203,17 @@ function addUsage(target: TokenUsageAccumulator, usage: TokenUsageMeasurement) {
   }
 }
 
+function addAggregate(target: TokenUsageAccumulator, row: ModelCallAggregateRow) {
+  target.input = sumTokenCounts(target.input, row.input);
+  target.output = sumTokenCounts(target.output, row.output);
+  target.total = sumTokenCounts(target.total, row.total);
+  target.cachedInput = sumTokenCounts(target.cachedInput, row.cachedInput);
+  target.requests = sumTokenCounts(target.requests, row.requests);
+  target.measuredInput = sumTokenCounts(target.measuredInput, row.measuredInput);
+  target.measuredCachedInput = sumTokenCounts(target.measuredCachedInput, row.measuredCachedInput);
+  target.cacheReports = sumTokenCounts(target.cacheReports, row.cacheReports);
+}
+
 function usageBucket(usage: TokenUsageAccumulator) {
   return {
     input: usage.input,
@@ -268,6 +259,7 @@ function sanitizeString(value: string) {
 
   const redacted = value
     .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [REDACTED]")
+    .replace(/([?&]key)=([^&#\s]+)/gi, "$1=[REDACTED]")
     .replace(/(api[_-]?key|access[_-]?token|authorization)=([^&\s]+)/gi, "$1=[REDACTED]");
 
   if (redacted.length <= MAX_STRING_LENGTH) return redacted;

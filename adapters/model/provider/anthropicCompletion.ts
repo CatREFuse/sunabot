@@ -5,8 +5,8 @@ import { toChatCompletionMessage } from "./imageInput.js";
 import { withLogContext } from "./logger.js";
 import { readToolName } from "./promptMapping.js";
 import { claimToolCalls, resolveMaxToolCalls, toolCallLimitError } from "./toolLoopLimits.js";
-import { normalizeAnthropicBaseUrl } from "./transport.js";
-import { isRecord, parseJson } from "./valueUtils.js";
+import { fetchTextWithTransportRetry, normalizeAnthropicBaseUrl } from "./transport.js";
+import { errorMessage, isRecord, parseJson } from "./valueUtils.js";
 
 export async function completeAnthropicMessages(
   context: ProviderAdapterContext,
@@ -41,8 +41,8 @@ export async function completeAnthropicMessages(
       tools: tools.length ? tools : undefined
     };
     const metadata = withLogContext({ round, toolCallCount, maxToolCalls, toolNames: tools.map(readToolName) }, options.logContext);
-    await context.logger.request("anthropic.messages.complete", requestBody, metadata);
-    const response = await fetch(`${normalizeAnthropicBaseUrl(context.provider.baseUrl)}/messages`, {
+    let responseMetadata = metadata;
+    const attempt = await fetchTextWithTransportRetry(`${normalizeAnthropicBaseUrl(context.provider.baseUrl)}/messages`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -51,12 +51,26 @@ export async function completeAnthropicMessages(
       },
       body: JSON.stringify(requestBody),
       signal: options.signal
+    }, options.signal, {
+      beforeAttempt: async ({ attempt, maxAttempts }) => {
+        responseMetadata = { ...metadata, transportAttempt: attempt, maxTransportAttempts: maxAttempts };
+        await context.logger.request("anthropic.messages.complete", requestBody, responseMetadata);
+      },
+      attemptFailed: async (error, { attempt, maxAttempts, willRetry, status, retryDelayMs }) => {
+        await context.logger.response("anthropic.messages.complete", {
+          ok: false,
+          ...(status == null ? {} : { status }),
+          error: errorMessage(error),
+          willRetry,
+          retryDelayMs
+        }, { ...metadata, transportAttempt: attempt, maxTransportAttempts: maxAttempts });
+      }
     });
-    const raw = await response.text();
+    const { response, text: raw } = attempt;
     const payload = parseJson(raw);
     await context.logger.response("anthropic.messages.complete", response.ok
       ? { ok: true, stopReason: isRecord(payload) ? payload.stop_reason : undefined, usage: isRecord(payload) ? payload.usage : undefined }
-      : { ok: false, status: response.status, error: anthropicError(payload, response.status) }, metadata);
+      : { ok: false, status: response.status, error: anthropicError(payload, response.status), willRetry: false, retryDelayMs: 0 }, responseMetadata);
     if (!response.ok) throw new Error(anthropicError(payload, response.status));
     if (!isRecord(payload) || !Array.isArray(payload.content)) throw new Error("Anthropic 没有返回消息。");
 

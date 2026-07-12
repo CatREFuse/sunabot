@@ -323,6 +323,21 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
       return json(route, modelCallStats());
     }
 
+    if (pathname === "/api/monitoring/settings") {
+      const current = {
+        barkConfigured: false,
+        aggregationWindowSeconds: 60,
+        onebotOfflineGraceSeconds: 20,
+        heartbeatStaleSeconds: 120,
+        serverEventsEnabled: true,
+        onebotEventsEnabled: true
+      };
+      if (method === "GET") return json(route, current);
+      const body = request.postDataJSON() as Partial<typeof current>;
+      return json(route, { ...current, ...body });
+    }
+    if (pathname === "/api/monitoring/test") return json(route, { ok: true });
+
     if (pathname === "/api/status") {
       return json(route, {
         startedAt: "2026-07-10T01:00:00.000Z",
@@ -558,7 +573,14 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
       const conversationId = decodeURIComponent(pathname.split("/")[3] ?? "");
       return json(route, {
         conversationId,
-        messages: 24,
+        messages: {
+          total: 24,
+          retained: 24,
+          visible: 21,
+          user: 17,
+          assistant: 4,
+          internal: 3
+        },
         modelCalls: modelCallStats(conversationId)
       });
     }
@@ -675,20 +697,35 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
     if (pathname === "/api/tools") {
       const conversationPrompt = state.files.find((file) => file.id === "conversation.reply");
       const prompt = conversationPrompt ? parseFinalPromptTemplate(conversationPrompt.content) : undefined;
+      const tools = listToolMetadata({
+        onAssistantText: () => undefined,
+        bash: {
+          enabled: true,
+          workspaceOnly: state.config.bot.bash.workspaceOnly,
+          blockedKeywords: state.config.bot.bash.blockedKeywords
+        },
+        bot: state.config.bot,
+        selfie: { enabled: true },
+        memory: { enabled: true },
+        asyncCodex: true,
+        asyncImage: true
+      }, prompt?.tools).map((tool) => {
+        const configured = tool.name === "workspace_bash"
+          ? state.config.bot.bash.enabled
+          : tool.name === "codex"
+            ? state.config.bot.tools.codex.enabled
+            : undefined;
+        return configured == null
+          ? tool
+          : {
+              ...tool,
+              configuredEnabled: configured,
+              enabled: configured && tool.enabled,
+              effectiveEnabled: configured && tool.effectiveEnabled
+            };
+      });
       return json(route, {
-        tools: listToolMetadata({
-          onAssistantText: () => undefined,
-          bash: {
-            enabled: state.config.bot.bash.enabled,
-            workspaceOnly: state.config.bot.bash.workspaceOnly,
-            blockedKeywords: state.config.bot.bash.blockedKeywords
-          },
-          bot: state.config.bot,
-          selfie: { enabled: true },
-          memory: { enabled: true },
-          asyncCodex: state.config.bot.tools.codex.enabled,
-          asyncImage: true
-        }, prompt?.tools)
+        tools
       });
     }
     if (pathname === "/api/request-logs") {
@@ -958,8 +995,7 @@ function modelCallStats(conversationId: string | null = null) {
     memory: {
       total: bucket(7, 21_600),
       kinds: {
-        working: bucket(3, 9_600),
-        long_term: bucket(2, 7_200),
+        working_long_term: bucket(5, 16_800),
         user_profile: bucket(2, 4_800)
       }
     }

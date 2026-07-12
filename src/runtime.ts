@@ -116,6 +116,7 @@ import { RuntimeDelivery } from "./runtime/delivery.js";
 import { RuntimeConversations } from "./runtime/conversations.js";
 import { RuntimeSelfie } from "./runtime/selfie.js";
 import { TaskLimiter, errorMessage, loadConversationRecords } from "./runtime/infrastructure.js";
+import type { RuntimeToolCapabilityResolver } from "../services/tools/bashCapability.js";
 export * from "./runtime/runtimeContracts.js";
 export * from "./runtime/runtimeHelpers.js";
 
@@ -146,6 +147,7 @@ export class SunaRuntime {
   readonly sessionStore: SessionStore;
   readonly ownsSessionStore: boolean;
   readonly sessionCoordinator: SessionCoordinator;
+  readonly resolveToolCapabilities: RuntimeToolCapabilityResolver;
   readonly incomingPreparations = new Map<string, {
       promise: Promise<void>;
       incoming: ParsedIncomingMessage;
@@ -162,6 +164,7 @@ export class SunaRuntime {
   constructor(config: AppConfig, options: SunaRuntimeOptions = {}) {
       configureMemoryPersistence(sqliteMemoryPersistence);
       this.config = config;
+      this.resolveToolCapabilities = failClosedToolCapabilityResolver(options.resolveToolCapabilities);
       this.memoryScheduler = new MemorySchedulerStore(config);
       this.attachmentService = options.attachmentService ?? new AttachmentService(getRootDir(), {
         cacheRoot: getWorkspacePath(WORKSPACE_LAYOUT.attachmentCache),
@@ -189,9 +192,14 @@ export class SunaRuntime {
             response: {
               ok: observation.ok,
               status: observation.status,
-              usage: observation.usage
+              ...(observation.usage ? { usage: observation.usage } : {})
             },
-            metadata: { jobId: observation.jobId }
+            metadata: {
+              jobId: observation.jobId,
+              conversationId: observation.conversationId,
+              stage: "reply",
+              attempt: observation.attempt
+            }
           });
         },
         codexSettings: () => ({
@@ -201,7 +209,8 @@ export class SunaRuntime {
           timeoutMs: this.config.bot.tools.codex.timeoutMs,
           maxConcurrency: this.config.bot.tools.codex.maxConcurrency,
           workspacePath: resolveProjectPath(this.config.persona.agentWorkspace) ?? getRootDir(),
-          jobRoot: getWorkspacePath(WORKSPACE_LAYOUT.codexJobs)
+          jobRoot: getWorkspacePath(WORKSPACE_LAYOUT.codexJobs),
+          authFile: getWorkspacePath(WORKSPACE_LAYOUT.codexHome, "auth.json")
         }),
         turnTimeoutMs: DIRECT_REPLY_TIMEOUT_MS + 5_000,
         maxSessionConcurrency: 4,
@@ -247,6 +256,7 @@ export class SunaRuntime {
   getConversationRecords(...args: Parameters<RuntimeLifecycle["getConversationRecords"]>) { return this.lifecycle.getConversationRecords(...args); }
   publicConversationRecord(...args: Parameters<RuntimeLifecycle["publicConversationRecord"]>) { return this.lifecycle.publicConversationRecord(...args); }
   getConversationMessages(...args: Parameters<RuntimeLifecycle["getConversationMessages"]>) { return this.lifecycle.getConversationMessages(...args); }
+  getConversationMessageStats(...args: Parameters<RuntimeLifecycle["getConversationMessageStats"]>) { return this.lifecycle.getConversationMessageStats(...args); }
   hydrateConversationIdentities(...args: Parameters<RuntimeLifecycle["hydrateConversationIdentities"]>) { return this.lifecycle.hydrateConversationIdentities(...args); }
   enrichMemoryEntries(...args: Parameters<RuntimeLifecycle["enrichMemoryEntries"]>) { return this.lifecycle.enrichMemoryEntries(...args); }
   setConversationReplyEnabled(...args: Parameters<RuntimeLifecycle["setConversationReplyEnabled"]>) { return this.lifecycle.setConversationReplyEnabled(...args); }
@@ -330,4 +340,21 @@ export class SunaRuntime {
   rewriteSelfiePrompt(...args: Parameters<RuntimeSelfie["rewriteSelfiePrompt"]>) { return this.selfie.rewriteSelfiePrompt(...args); }
   collectSelfieChatReferenceImages(...args: Parameters<RuntimeSelfie["collectSelfieChatReferenceImages"]>) { return this.selfie.collectSelfieChatReferenceImages(...args); }
   loadSelfieReferenceImages(...args: Parameters<RuntimeSelfie["loadSelfieReferenceImages"]>) { return this.selfie.loadSelfieReferenceImages(...args); }
+}
+
+function failClosedToolCapabilityResolver(
+  resolve: RuntimeToolCapabilityResolver | undefined
+): RuntimeToolCapabilityResolver {
+  return async () => {
+    if (!resolve) return { workspaceBash: false, codex: false };
+    try {
+      const capabilities = await resolve();
+      return {
+        workspaceBash: capabilities.workspaceBash === true,
+        codex: capabilities.codex === true
+      };
+    } catch {
+      return { workspaceBash: false, codex: false };
+    }
+  };
 }

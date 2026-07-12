@@ -78,6 +78,7 @@ export function resolveLauncherContract(contract, options) {
   const dockerServices = docker.services ?? {};
   const coreService = dockerServices.core ?? {};
   const napcatService = dockerServices.napcat ?? {};
+  const codexCli = contract.capabilities?.codexCli ?? {};
   const nativeUrls = onebot.nativeAdvertisedUrls ?? {};
   const nativeKey = options.platform === "darwin"
     ? "macos"
@@ -134,7 +135,12 @@ export function resolveLauncherContract(contract, options) {
     shutdownTimeoutSeconds: positiveInteger(
       contract.startup?.shutdownTimeoutSeconds ?? contract.shutdownTimeoutSeconds ?? 30
     ),
-    paths: contract.paths ?? {}
+    paths: contract.paths ?? {},
+    codexCli: {
+      version: String(codexCli.version ?? "").trim(),
+      executable: codexCli.executable ?? "/usr/local/bin/codex",
+      authFile: codexCli.authFile ?? "secrets/codex/auth.json"
+    }
   };
 }
 

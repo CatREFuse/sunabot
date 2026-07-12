@@ -71,7 +71,7 @@ Provider、Codex CLI 与联网工具的出站 HTTP(S) 可独立使用代理。AP
 
 ### 4.1 Provider
 
-Provider 类型包括 Codex 订阅、OpenAI 官方、Anthropic 官方、Gemini 官方，以及 OpenAI、Anthropic、Gemini 三种兼容协议。类型在创建时确定，创建后不可切换；官方地址由前后端共同固定，兼容地址可配置。Provider 支持远程拉取模型 ID 或自定义 ID，多模态能力可通过已知颜色图片的实际识别结果自动探测，也可手动指定；纯文本模型可配置独立的读图 Provider 与模型，运行时先生成图片描述再交给主模型。配置还包含图像模型、API key 环境变量、推理强度、温度和输出 token 上限。模型请求、响应、重试和工具结果写入请求日志，密钥和授权字段必须脱敏。
+Provider 类型包括 Codex 订阅、OpenAI 官方、Anthropic 官方、Gemini 官方，以及 OpenAI、Anthropic、Gemini 三种兼容协议。类型在创建时确定，创建后不可切换；官方地址由前后端共同固定，兼容地址可配置。Provider 支持远程拉取模型 ID 或自定义 ID，多模态能力可通过已知颜色图片的实际识别结果自动探测，也可手动指定；纯文本模型可配置独立的读图 Provider 与模型，运行时先生成图片描述再交给主模型。配置还包含图像模型、API key 环境变量、推理强度、温度和输出 token 上限。模型请求、响应、重试和工具结果写入请求日志，密钥和授权字段必须脱敏；Gemini API key 只能通过请求头发送，不能进入 URL。SDK 隐式重试必须关闭，发送请求与读取响应正文属于同一次显式传输尝试，正文断流按真实尝试记录并重试；取消信号在写入请求日志前检查，429/5xx 退避优先遵守 `Retry-After` 或 `Retry-After-Ms`。
 
 Provider 请求使用应用启动时安装的统一出站 dispatcher。显式代理和标准代理环境变量从 `workspace/secrets/runtime.env` 或进程环境读取；WSL 自动模式仅在没有显式代理时探测当前默认网关。代理选择不改变 OneBot 的 Compose 私有网络或同机宿主网关链路。
 
@@ -79,10 +79,10 @@ OpenAI 官方 Responses 与 Codex Responses 请求必须携带稳定、不可逆
 
 模型响应日志保留 Provider 返回的原始 usage，并在日志顶层写入统一的 `tokenUsage`。`tokenUsage` 字段为 `input`、`cachedInput`、`cacheRate`、`output` 和 `total`；日、小时聚合桶在此基础上增加 `requests`：
 
-模型调用通过 `metadata.stage` 归入 `reply`、`orchestrator`、`memory` 或 `other`。记忆调用通过 `metadata.memoryKind` 继续区分 `working`、`long_term` 和 `user_profile`；一次 Provider 请求只计入一个行为类别，实际重试按真实请求次数计数。全局统计读取全部模型响应，群聊统计按完整 `conversationId` 精确过滤。
+模型调用通过 `metadata.stage` 归入 `reply`、`orchestrator`、`memory` 或 `other`。记忆调用通过 `metadata.memoryKind` 区分 `working_long_term` 和 `user_profile`；工作记忆合并与长期记忆晋升由同一次 Provider 调用完成，因此统一展示为“工作与长期记忆”，不能虚构或重复计算独立的长期记忆调用。一次 Provider 请求只计入一个行为类别；没有 usage 的失败请求仍计入调用次数，每次实际传输重试分别计数。Deferred Codex 和自拍改写必须保留完整会话、行为阶段和尝试次数上下文。请求日志写入时同步更新 `model_call_aggregates`，全局统计读取全局聚合行，群聊统计使用完整 `conversationId` 读取精确聚合行，不扫描历史日志。
 
 - OpenAI Responses/Codex 使用 `input_tokens`、`input_tokens_details.cached_tokens`、`output_tokens` 和 `total_tokens`；Chat Completions 使用对应的 `prompt_tokens`、`prompt_tokens_details.cached_tokens`、`completion_tokens` 和 `total_tokens`。输入总量已经包含缓存输入，不能重复相加。
-- Deferred Codex CLI 完成或失败后，只要结果包含 usage，就以 `model.response`、`codex.tool.complete`、`codex-cli` 写入请求日志；使用 `input_tokens`、`cached_input_tokens` 和 `output_tokens`，其中缓存输入是输入总量的子集，总量由输入与输出相加。失败状态不能丢弃已经产生的 usage。
+- Deferred Codex CLI 进程实际启动后，无论完成或失败都以 `model.response`、`codex.tool.complete`、`codex-cli` 写入请求日志；usage 可用时使用 `input_tokens`、`cached_input_tokens` 和 `output_tokens`，其中缓存输入是输入总量的子集，总量由输入与输出相加。终态写入竞争、迟到返回和失败状态不能丢弃已经产生的 usage，同一任务尝试只能统计一次。
 - Anthropic 输入总量是 `input_tokens + cache_creation_input_tokens + cache_read_input_tokens`，其中只有 `cache_read_input_tokens` 计入 `cachedInput`；缓存创建属于输入消耗，不属于缓存命中。输出使用 `output_tokens`，总量由输入与输出相加。
 - Gemini 输入使用已经包含缓存内容的 `promptTokenCount`，并累加 `toolUsePromptTokenCount`；缓存输入使用 `cachedContentTokenCount`，输出是 `candidatesTokenCount + thoughtsTokenCount`，总量优先使用 `totalTokenCount`，小于归一化输入与输出之和时回退为后者。
 - `cachedInput` 是 `input` 的子集，不额外计入 `total`。只有 Provider 明确返回缓存字段的记录才进入缓存率分母；单条记录或聚合桶的缓存率为这些记录的 `ΣcachedInput / Σinput` 并限制在 `0..1`。明确返回缓存字段但分母为 0 时返回 `0`；桶内全部记录都没有缓存字段时返回 `null`。缺失、负数和非有限数按 0 处理，任何 API 与界面值都不能出现 `NaN` 或 `Infinity`。
@@ -110,6 +110,8 @@ Agent 工具目录固定包含 `assistant_text`、`memory_recall`、`websearch`�
 工具的配置启用状态与运行能力分开计算。`enabled` 表示配置和提示词选择，`available` 表示当前运行环境、会话权限及依赖能力，`effectiveEnabled` 仅在两者都为真时成立。管理 API 必须同时返回三种状态和不可用原因；平台强制关闭或当前会话无权限时，管理台不能把工具显示成可执行。被停用或不可用的工具既不能出现在 Provider 工具定义中，也不能通过模型返回的未声明 Function Call 绕过门禁执行或派发。
 
 `dispatch_message` 负责 deferred tool 的首次受理消息，`assistant_text` 只负责开始工作后的阶段进度或补充问题，最终结果继续使用普通正文。单轮工具调用上限可配置，默认 20，最大 100；工具启用状态与描述热更新，权限、超时和并发继续由对应运行配置控制。`workspace_bash` 仅供管理员使用，Docker 与 Linux Native 均固定通过 `/usr/bin/bwrap` 执行：宿主文件系统只读，Agent workspace 是唯一可写宿主绑定，沙箱自带的 `/dev` 仅提供非持久设备 I/O；子进程继承相同 mount/PID/IPC/UTS/cgroup 隔离且全部 capability 被丢弃。macOS 原生模式强制关闭该工具。命令与路径规则只作为附加拒绝层；bubblewrap 缺失、不可执行或内核 namespace probe 失败时必须拒绝命令，不能回退到普通 Bash。群聊默认不可用。
+
+Codex CLI 是 Core 的固定版本运行依赖，Docker Core 必须在镜像内安装并通过版本 smoke，Native Core 必须在启动时验证可执行文件。Deferred worker 只从当前 workspace 的 `secrets/codex/auth.json` 复制授权到单次任务隔离目录；管理工具目录与真实回复 Provider 共用同一能力解析器，同时检查 CLI、授权与 Bash 隔离探针并在异常时安全关闭。CLI 缺失或版本不匹配时 Core 拒绝启动，授权缺失时 Core 保持可启动以允许管理员完成设备登录，但 Codex 工具不得被标记为可调用。
 
 ## 5. 记忆系统
 
@@ -164,7 +166,7 @@ NapCat 上报的 QQ 文件优先通过 OneBot action 返回的受控 URL 进入 
 
 Web Chat 使用固定管理员身份和 `web:admin` 会话，通过 Web delivery adapter 进入与 QQ 相同的 Agent loop、提示词、记忆和同步工具链。Web Chat 回复只能写回浏览器消息流，不能经 OneBot 外发；Web Chat 也不能进入 QQ 会话目录、上线通知或 OneBot 外发目标。当前 Web delivery 没有持久化的异步结果投递目标，因此 Web Chat 不向模型提供 Codex、生图和自拍工具。已经受理的 Web Chat 回合使用服务端超时并按顺序完成，不绑定浏览器请求体或页面生命周期。发送接口拒绝空白正文和超过 16,000 字符的正文，页面支持 Enter 发送、Shift+Enter 换行、发送中状态、错误恢复、非重叠消息轮询和图片缩略图。
 
-日志页按从新到旧提供 Bot 活动终端与分页纵向时间轴，Responses、Codex Provider、Deferred Codex CLI、Chat Completions、Anthropic 和 Gemini 请求同时显示中文标题与原始 action ID，其中 Codex CLI 使用 `codex.tool.complete`。模型响应的统一 `tokenUsage` 使用独立用量条展示，原始请求、响应和 usage 字段继续使用递归结构化视图，不能退回整段 JSON 文本。日志页汇总回答、群聊编排、记忆压缩和其他模型调用的次数与 Token；记忆压缩继续区分工作记忆、长期记忆和用户画像，非私聊会话详情显示当前会话的消息数与同口径统计。记忆页一次只查看一个真实来源，单个搜索栏在本地筛选与语义召回间切换。提示词编辑器提供变量表、已使用变量状态、可选 XML 包装，以及离开前保存。
+日志页按从新到旧提供 Bot 活动终端与分页纵向时间轴，Responses、Codex Provider、Deferred Codex CLI、Chat Completions、Anthropic 和 Gemini 请求同时显示中文标题与原始 action ID，其中 Codex CLI 使用 `codex.tool.complete`。模型响应的统一 `tokenUsage` 使用独立用量条展示，原始请求、响应和 usage 字段继续使用递归结构化视图，不能退回整段 JSON 文本。日志页汇总回答、群聊编排、记忆压缩和其他模型调用的次数与 Token；记忆压缩区分工作与长期记忆、用户画像。非私聊会话详情显示会话累计消息数、当前保留消息数、可见消息数、用户消息数、回答数、内部消息数，以及同口径模型调用统计；页面可见且会话已选中时每 10 秒刷新统计。记忆页一次只查看一个真实来源，单个搜索栏在本地筛选与语义召回间切换。提示词编辑器提供变量表、已使用变量状态、可选 XML 包装，以及离开前保存。
 
 图片列表和会话正文先读取 48px 低质量 WebP 占位图并以高斯模糊显示，再淡入 480px WebP 展示图；用户打开预览或原图链接时才读取完整图片。浏览器缓存已加载资源，图片历史在短期页面切换中复用，返回图片页不重新批量请求占位图和历史数据。
 
@@ -248,7 +250,7 @@ QQ 登录由管理台完成：离线时直接显示 NapCat 当前二维码并每
 | 状态与监控 API | `apps/api/plugins/monitoringRoutes.ts` |
 | 会话与会话日志 API | `apps/api/plugins/conversationRoutes.ts` |
 | Web Chat 管理员会话与浏览器 delivery | `services/webChat/`, `apps/api/plugins/conversationRoutes.ts` |
-| 图片、缩略图、Token/模型调用统计、请求日志与图片测试 API | `apps/api/plugins/mediaRoutes.ts`, `src/requestLog.ts` |
+| 图片、缩略图、Token/模型调用统计、请求日志与图片测试 API | `apps/api/plugins/mediaRoutes.ts`, `apps/api/plugins/conversationRoutes.ts`, `src/modelCallStats.ts`, `src/requestLog.ts`, `adapters/sqlite/applicationDataStore.ts` |
 | Agent 文件与工具目录 API | `apps/api/plugins/agentToolRoutes.ts`, `services/tools/toolRegistry.ts` |
 | 自拍参考图 API 与受控文件仓库 | `apps/api/plugins/selfieReferenceRoutes.ts`, `src/admin/selfieReferences.ts` |
 | 配置加载、默认值、路径解析 | `src/config.ts`, `src/types.ts` |
@@ -295,6 +297,6 @@ npm run test:e2e
 
 涉及界面时还要运行视觉测试并检查截图；Web Chat 必须覆盖管理员身份、Web/QQ 外发隔离、消息轮询、发送校验、键盘操作、图片缩略图和移动端布局。涉及数据迁移时必须核对迁移脚本输出、SQLite 表记录数、旧文件备份和服务重启后的 API 与 OneBot 状态。
 
-Token 统计验收必须覆盖 OpenAI Responses、Deferred Codex CLI 成功与失败结果、Chat Completions、Anthropic 和 Gemini 的原始 usage 夹具，验证缓存输入不重复计数、Codex CLI 失败 usage 不丢失、Anthropic 三类输入求和、思考 Token 归入输出、缓存率分母只包含明确报告缓存字段的记录、无缓存字段返回 `null`、显式零缓存返回 `0`、时区跨日、24 个小时桶和最近 53 周日期范围。行为统计必须验证回答、编排器、记忆总量与三类记忆拆分无重复计数，并验证 `conversationId` 精确隔离。管理台测试必须验证 371 个日历单元、24 个小时柱、缓存率折线不产生 `NaN`/`Infinity`，并分别检查移动端与桌面端的 light/dark Token 卡片、行为统计、群聊详情、日历、小时图和展开后的结构化 usage 日志截图。
+Token 统计验收必须覆盖 OpenAI Responses、Deferred Codex CLI 成功与失败结果、Chat Completions、Anthropic 和 Gemini 的原始 usage 夹具，验证缓存输入不重复计数、Codex CLI 失败 usage 不丢失、Anthropic 三类输入求和、思考 Token 归入输出、缓存率分母只包含明确报告缓存字段的记录、无缓存字段返回 `null`、显式零缓存返回 `0`、时区跨日、24 个小时桶和最近 53 周日期范围。行为统计必须验证回答、编排器、记忆总量与两类真实记忆拆分无重复计数，并验证 `conversationId` 精确隔离。管理台测试必须验证 371 个日历单元、24 个小时柱、缓存率折线不产生 `NaN`/`Infinity`，并分别检查移动端与桌面端的 light/dark Token 卡片、行为统计、群聊详情、日历、小时图和展开后的结构化 usage 日志截图。
 
 涉及跨平台运行时还要执行 `./sunabot.sh doctor`，分别验证 Native Core + NapCat Docker 与 Docker Core + NapCat Docker 的启动、停止、单实例、OneBot token、文字、图片、文件和重启恢复。contract 与测试必须拒绝 NapCat 并入 Core、OneBot 复用管理端口、跨组件共享绝对路径和旧新运行时并行。

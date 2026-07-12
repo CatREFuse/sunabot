@@ -24,11 +24,14 @@ import {
   summarizeResponsesPayload
 } from "./streamDecoder.js";
 import {
+  assertRequestNotAborted,
   codexBackendHeaders,
-  fetchWithSingleTransportRetry,
-  normalizeCodexResponsesUrl
+  fetchTextWithTransportRetry,
+  normalizeCodexResponsesUrl,
+  resolveRetryDelayMs,
+  waitForRetry
 } from "./transport.js";
-import { parseJson } from "./valueUtils.js";
+import { errorMessage, parseJson } from "./valueUtils.js";
 import { completeAnthropicMessages } from "./anthropicCompletion.js";
 import { completeGeminiGenerateContent } from "./geminiCompletion.js";
 import { claimToolCalls, resolveMaxToolCalls, toolCallLimitError } from "./toolLoopLimits.js";
@@ -52,7 +55,7 @@ async function completeOpenAIResponses(
   request: RenderedPromptRequest,
   options: ProviderCompleteOptions
 ): Promise<ProviderTurnResult> {
-  const client = context.createResponsesClient();
+  const client = context.createResponsesClient({ maxRetries: 0 });
   const input: Array<Record<string, unknown>> = await Promise.all(request.messages.map(toResponsesInputMessage));
   const tools = context.toolExecutor.resolveDefinitions(options, request.tools);
   const toolNames = tools.map(readToolName);
@@ -80,12 +83,19 @@ async function completeOpenAIResponses(
       maxToolCalls,
       toolNames
     }, options.logContext);
-    await context.logger.request("responses.complete", requestBody, metadata);
-    const response = await client.responses.create(requestBody as never, { signal: options.signal });
+    const attempt = await executeSdkModelRequest(
+      context,
+      "responses.complete",
+      requestBody,
+      metadata,
+      options.signal,
+      () => client.responses.create(requestBody as never, { signal: options.signal })
+    );
+    const response = attempt.value;
     await context.logger.response("responses.complete", {
       ok: true,
       summary: summarizeResponsesPayload(response, "")
-    }, metadata);
+    }, attempt.metadata);
 
     const toolCalls = extractFunctionCalls(response);
     toolCallCount = claimToolCalls(toolCallCount, toolCalls.length, maxToolCalls);
@@ -149,8 +159,8 @@ async function completeCodexResponses(
       maxToolCalls,
       toolNames
     }, options.logContext);
-    await context.logger.request("codex.complete", requestBody, metadata);
-    const response = await fetchWithSingleTransportRetry(normalizeCodexResponsesUrl(context.provider.baseUrl), {
+    let responseMetadata = metadata;
+    const attempt = await fetchTextWithTransportRetry(normalizeCodexResponsesUrl(context.provider.baseUrl), {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -159,9 +169,22 @@ async function completeCodexResponses(
       },
       body: JSON.stringify(requestBody),
       signal: options.signal
-    }, options.signal);
-
-    const text = await response.text();
+    }, options.signal, {
+      beforeAttempt: async ({ attempt, maxAttempts }) => {
+        responseMetadata = { ...metadata, transportAttempt: attempt, maxTransportAttempts: maxAttempts };
+        await context.logger.request("codex.complete", requestBody, responseMetadata);
+      },
+      attemptFailed: async (error, { attempt, maxAttempts, willRetry, status, retryDelayMs }) => {
+        await context.logger.response("codex.complete", {
+          ok: false,
+          ...(status == null ? {} : { status }),
+          error: errorMessage(error),
+          willRetry,
+          retryDelayMs
+        }, { ...metadata, transportAttempt: attempt, maxTransportAttempts: maxAttempts });
+      }
+    });
+    const { response, text } = attempt;
     const payload = parseResponsesSsePayload(text) ?? parseJson(text);
     if (!response.ok) {
       const error = payload ?? parseJson(text);
@@ -169,15 +192,17 @@ async function completeCodexResponses(
         ok: false,
         status: response.status,
         error: error?.error?.message ?? error?.detail ?? `Codex request failed: ${response.status}`,
-        summary: summarizeResponsesPayload(payload, text)
-      }, metadata);
+        summary: summarizeResponsesPayload(payload, text),
+        willRetry: false,
+        retryDelayMs: 0
+      }, responseMetadata);
       throw new Error(error?.error?.message ?? error?.detail ?? `Codex request failed: ${response.status}`);
     }
     await context.logger.response("codex.complete", {
       ok: true,
       status: response.status,
       summary: summarizeResponsesPayload(payload, text)
-    }, metadata);
+    }, responseMetadata);
 
     const toolCalls = extractFunctionCalls(payload);
     toolCallCount = claimToolCalls(toolCallCount, toolCalls.length, maxToolCalls);
@@ -202,7 +227,7 @@ async function completeChatCompletions(
   request: RenderedPromptRequest,
   options: ProviderCompleteOptions
 ): Promise<ProviderTurnResult> {
-  const client = context.createChatClient();
+  const client = context.createChatClient({ maxRetries: 0 });
   const messages: Array<Record<string, unknown>> = await Promise.all(request.messages.map(toChatCompletionMessage));
   const definitions = context.toolExecutor.resolveDefinitions(options, request.tools);
   const tools = definitions.map(toChatCompletionTool);
@@ -226,8 +251,15 @@ async function completeChatCompletions(
       maxToolCalls,
       toolNames: tools.map((tool) => tool.function.name)
     }, options.logContext);
-    await context.logger.request("chat.completions.complete", requestBody, metadata);
-    const response = await client.chat.completions.create(requestBody as never, { signal: options.signal });
+    const attempt = await executeSdkModelRequest(
+      context,
+      "chat.completions.complete",
+      requestBody,
+      metadata,
+      options.signal,
+      () => client.chat.completions.create(requestBody as never, { signal: options.signal })
+    );
+    const response = attempt.value;
     const choice = response.choices[0]?.message;
     await context.logger.response("chat.completions.complete", {
       ok: true,
@@ -235,7 +267,7 @@ async function completeChatCompletions(
       toolCallCount: choice?.tool_calls?.length ?? 0,
       textLength: choice?.content?.length ?? 0,
       usage: response.usage
-    }, metadata);
+    }, attempt.metadata);
     if (!choice) throw new Error("模型没有返回消息。");
 
     const calls = (choice.tool_calls ?? []).flatMap((call) => {
@@ -271,4 +303,57 @@ async function completeChatCompletions(
   }
 
   throw toolCallLimitError(maxToolCalls);
+}
+
+async function executeSdkModelRequest<T>(
+  context: ProviderAdapterContext,
+  action: string,
+  request: unknown,
+  metadata: Record<string, unknown>,
+  signal: AbortSignal | undefined,
+  execute: () => Promise<T>
+) {
+  const maxAttempts = 3;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    assertRequestNotAborted(signal);
+    const attemptMetadata = { ...metadata, transportAttempt: attempt, maxTransportAttempts: maxAttempts };
+    await context.logger.request(action, request, attemptMetadata);
+    try {
+      return { value: await execute(), metadata: attemptMetadata };
+    } catch (error) {
+      const status = modelErrorStatus(error);
+      const willRetry = !signal?.aborted && attempt < maxAttempts && retryableModelError(error, status);
+      const retryDelayMs = willRetry ? resolveRetryDelayMs(error, attempt) : 0;
+      await context.logger.response(action, {
+        ok: false,
+        ...(status == null ? {} : { status }),
+        error: errorMessage(error),
+        willRetry,
+        retryDelayMs
+      }, attemptMetadata);
+      if (!willRetry) throw error;
+      await waitForRetry(retryDelayMs, signal);
+    }
+  }
+  throw new Error("model request retry exhausted");
+}
+
+function modelErrorStatus(error: unknown) {
+  if (!error || typeof error !== "object") return undefined;
+  const value = Number((error as { status?: unknown }).status);
+  return Number.isFinite(value) ? Math.trunc(value) : undefined;
+}
+
+function retryableModelError(error: unknown, status: number | undefined) {
+  if (error && typeof error === "object") {
+    const headers = (error as { headers?: unknown }).headers;
+    const retryHeader = headers instanceof Headers
+      ? headers.get("x-should-retry")
+      : headers && typeof headers === "object"
+        ? String((headers as Record<string, unknown>)["x-should-retry"] ?? "")
+        : "";
+    if (retryHeader === "true") return true;
+    if (retryHeader === "false") return false;
+  }
+  return status == null || status === 408 || status === 409 || status === 429 || status >= 500;
 }

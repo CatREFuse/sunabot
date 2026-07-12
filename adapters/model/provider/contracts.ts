@@ -100,7 +100,7 @@ export interface GeneratedImageWriterPort {
 
 export interface ProviderTransportFactories {
   createResponsesClient(options?: { maxRetries?: number }): OpenAI;
-  createChatClient(): OpenAI;
+  createChatClient(options?: { maxRetries?: number }): OpenAI;
   getApiKey(): string;
 }
 
