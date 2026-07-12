@@ -80,4 +80,21 @@ describe("RequestLogList", () => {
     const usage = wrapper.get('[aria-label="Token 用量"]');
     expect(usage.text()).toContain("缓存率--");
   });
+
+  it("shows an explicitly reported cache miss as zero percent", () => {
+    const wrapper = mount(RequestLogList, {
+      props: {
+        logs: [{
+          ...responseLog,
+          id: "response-cache-miss",
+          tokenUsage: { input: 11_939, output: 73, cachedInput: 0, total: 12_012, cacheRate: 0 }
+        }]
+      }
+    });
+
+    const usage = wrapper.get('[aria-label="Token 用量"]');
+    expect(usage.text()).toContain("缓存率0%");
+    expect(usage.text()).toContain("0 / 11,939");
+    expect(usage.text()).not.toContain("缓存率--");
+  });
 });

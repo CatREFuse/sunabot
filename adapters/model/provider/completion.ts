@@ -12,6 +12,7 @@ import {
   responseFormatFields,
   toChatCompletionTool
 } from "./promptMapping.js";
+import { promptCacheKey } from "./promptCaching.js";
 import {
   emitIntermediateAssistantText,
   extractFunctionCalls,
@@ -54,6 +55,8 @@ async function completeOpenAIResponses(
   const client = context.createResponsesClient();
   const input: Array<Record<string, unknown>> = await Promise.all(request.messages.map(toResponsesInputMessage));
   const tools = context.toolExecutor.resolveDefinitions(options, request.tools);
+  const toolNames = tools.map(readToolName);
+  const cacheKey = promptCacheKey(context.provider, options.logContext, toolNames);
   const requestFields = promptRequestFields(request);
   const maxToolCalls = resolveMaxToolCalls(options);
   let toolCallCount = 0;
@@ -66,6 +69,7 @@ async function completeOpenAIResponses(
       reasoning: context.provider.reasoningEffort ? { effort: context.provider.reasoningEffort } : undefined,
       ...requestFields,
       ...responseFormatFields(request.response_format, requestFields.text),
+      prompt_cache_key: cacheKey,
       input: input as never,
       tools: tools.length ? tools as never : undefined,
       parallel_tool_calls: tools.length ? requestFields.parallel_tool_calls ?? false : undefined
@@ -74,7 +78,7 @@ async function completeOpenAIResponses(
       round,
       toolCallCount,
       maxToolCalls,
-      toolNames: tools.map(readToolName)
+      toolNames
     }, options.logContext);
     await context.logger.request("responses.complete", requestBody, metadata);
     const response = await client.responses.create(requestBody as never, { signal: options.signal });
@@ -116,6 +120,8 @@ async function completeCodexResponses(
   const input: Array<Record<string, unknown>> = await Promise.all(
     request.messages.filter((message) => message.role !== "system").map(toResponsesInputMessage)
   );
+  const toolNames = tools.map(readToolName);
+  const cacheKey = promptCacheKey(context.provider, options.logContext, toolNames);
   const requestFields = promptRequestFields(request);
   const maxToolCalls = resolveMaxToolCalls(options);
   let toolCallCount = 0;
@@ -131,6 +137,7 @@ async function completeCodexResponses(
       include: ["reasoning.encrypted_content"],
       ...requestFields,
       ...responseFormatFields(request.response_format, requestFields.text),
+      prompt_cache_key: cacheKey,
       input,
       instructions: systemPrompt,
       tools: tools.length ? tools : undefined,
@@ -140,7 +147,7 @@ async function completeCodexResponses(
       round,
       toolCallCount,
       maxToolCalls,
-      toolNames: tools.map(readToolName)
+      toolNames
     }, options.logContext);
     await context.logger.request("codex.complete", requestBody, metadata);
     const response = await fetchWithSingleTransportRetry(normalizeCodexResponsesUrl(context.provider.baseUrl), {

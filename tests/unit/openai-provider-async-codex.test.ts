@@ -73,8 +73,10 @@ describe("OpenAIProvider asynchronous Codex tool turns", () => {
       }
     });
     expect(fetchMock).toHaveBeenCalledOnce();
-    expect(toolNames(fetchRequestBody(fetchMock, 0))).toEqual(["codex"]);
-    const codexDefinition = (fetchRequestBody(fetchMock, 0).tools as Array<Record<string, any>>)[0]!;
+    const firstRequest = fetchRequestBody(fetchMock, 0);
+    expect(toolNames(firstRequest)).toEqual(["codex"]);
+    expect(firstRequest.prompt_cache_key).toMatch(/^sunabot:[a-f0-9]{48}$/);
+    const codexDefinition = (firstRequest.tools as Array<Record<string, any>>)[0]!;
     expect(codexDefinition.parameters.required).toContain("dispatch_message");
     expect(codexDefinition.parameters.properties.dispatch_message.maxLength).toBe(200);
   });
@@ -108,6 +110,7 @@ describe("OpenAIProvider asynchronous Codex tool turns", () => {
       }
     });
     expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchRequestBody(fetchMock, 0).prompt_cache_key).toBe(fetchRequestBody(fetchMock, 1).prompt_cache_key);
     const repairInput = fetchRequestBody(fetchMock, 1).input as Array<Record<string, unknown>>;
     const errorOutput = repairInput.find((item) => item.type === "function_call_output");
     expect(errorOutput?.call_id).toBe("call_codex_missing");

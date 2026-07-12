@@ -23,8 +23,11 @@ const CACHE_READ_KEYS = [
   "cacheReadInputTokens",
   "cached_input_tokens",
   "cachedInputTokens",
-  "cachedContentTokenCount"
+  "cachedContentTokenCount",
+  "prompt_cache_hit_tokens",
+  "promptCacheHitTokens"
 ] as const;
+const CACHE_MISS_KEYS = ["prompt_cache_miss_tokens", "promptCacheMissTokens"] as const;
 const CACHE_DETAIL_READ_KEYS = ["cached_tokens", "cachedTokens", "cache_read_tokens", "cacheReadTokens"] as const;
 const CACHE_WRITE_KEYS = [
   "cache_creation_input_tokens",
@@ -63,7 +66,8 @@ export function normalizeTokenUsageRecord(record: Record<string, unknown>): Toke
   const cacheCreation = asRecord(usage.cache_creation ?? usage.cacheCreation);
   const cacheCreationBreakdown = sumPresent(cacheCreation, CACHE_CREATION_DETAIL_KEYS);
   const cacheWrite = directCacheWrite.present ? directCacheWrite : cacheCreationBreakdown;
-  const cacheReported = cacheRead.present || cacheWrite.present;
+  const cacheMiss = readFirst(usage, CACHE_MISS_KEYS);
+  const cacheReported = cacheRead.present || cacheWrite.present || cacheMiss.present;
 
   if (![
     inputValue,
@@ -73,7 +77,8 @@ export function normalizeTokenUsageRecord(record: Record<string, unknown>): Toke
     thoughtValue,
     toolInputValue,
     cacheRead,
-    cacheWrite
+    cacheWrite,
+    cacheMiss
   ].some((value) => value.present)) return undefined;
 
   const providerKind = String(record.providerKind ?? "").toLowerCase();

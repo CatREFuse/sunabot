@@ -60,7 +60,7 @@ defineProps<{ logs: readonly ConversationLogEntry[] }>();
 .request-list__timeline { position: relative; padding-left: 40px; border-top: 1px solid rgb(var(--color-line)); }
 .request-list__timeline::before { content: ""; position: absolute; top: 24px; bottom: 24px; left: 11px; width: 1px; background: rgb(var(--color-visible)); }
 .request-list__item { position: relative; padding: 20px 0; border-bottom: 1px solid rgb(var(--color-line)); }
-.request-list__marker { position: absolute; top: 20px; left: 0; z-index: 1; display: grid; width: 24px; height: 24px; place-items: center; transform: translateX(-40px); color: rgb(var(--color-mute)); font-size: 21px; }
+.request-list__marker { position: absolute; top: 20px; left: 0; z-index: 1; display: grid; width: 24px; height: 24px; place-items: center; transform: translateX(-40px); border: 1px solid currentColor; border-radius: 50%; background: rgb(var(--color-page)); color: rgb(var(--color-mute)); font-size: 17px; }
 .request-list__marker[data-kind="success"] { color: rgb(var(--color-success)); }
 .request-list__details { margin-top: 12px; border-top: 1px solid rgb(var(--color-line)); padding-top: 10px; }
 .request-list__details summary { cursor: pointer; color: rgb(var(--color-mute)); font-family: "Space Mono", monospace; font-size: 10px; }
@@ -68,6 +68,6 @@ defineProps<{ logs: readonly ConversationLogEntry[] }>();
 @media (max-width: 560px) {
   .request-list__timeline { padding-left: 32px; }
   .request-list__timeline::before { left: 9px; }
-  .request-list__marker { width: 20px; height: 20px; transform: translateX(-32px); font-size: 18px; }
+  .request-list__marker { width: 20px; height: 20px; transform: translateX(-32px); font-size: 15px; }
 }
 </style>

@@ -75,6 +75,8 @@ Provider 类型包括 Codex 订阅、OpenAI 官方、Anthropic 官方、Gemini �
 
 Provider 请求使用应用启动时安装的统一出站 dispatcher。显式代理和标准代理环境变量从 `workspace/secrets/runtime.env` 或进程环境读取；WSL 自动模式仅在没有显式代理时探测当前默认网关。代理选择不改变 OneBot 的 Compose 私有网络或同机宿主网关链路。
 
+OpenAI 官方 Responses 与 Codex Responses 请求必须携带稳定、不可逆且不包含明文身份的 `prompt_cache_key`，按 Provider、模型、行为、记忆类型、完整会话和工具集合分桶；同一工具循环的多轮请求复用同一个键。OpenAI 兼容协议不强制注入该字段，避免不支持扩展字段的服务拒绝请求。静态 system 内容保持在动态会话和用户输入之前，继续使用 Provider 的隐式缓存断点。
+
 模型响应日志保留 Provider 返回的原始 usage，并在日志顶层写入统一的 `tokenUsage`。`tokenUsage` 字段为 `input`、`cachedInput`、`cacheRate`、`output` 和 `total`；日、小时聚合桶在此基础上增加 `requests`：
 
 模型调用通过 `metadata.stage` 归入 `reply`、`orchestrator`、`memory` 或 `other`。记忆调用通过 `metadata.memoryKind` 继续区分 `working`、`long_term` 和 `user_profile`；一次 Provider 请求只计入一个行为类别，实际重试按真实请求次数计数。全局统计读取全部模型响应，群聊统计按完整 `conversationId` 精确过滤。
