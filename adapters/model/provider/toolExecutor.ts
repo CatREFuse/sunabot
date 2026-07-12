@@ -65,7 +65,7 @@ async function runAssistantText(
   const text = readAssistantText(args);
   if (!text) return { ok: false, error: "Assistant text is empty." };
   if (!options.onAssistantText) return { ok: false, error: "Assistant text delivery is not configured." };
-  await options.onAssistantText(text);
+  await options.onAssistantText(text, "assistant_text");
   const result = { ok: true, delivered: true, textLength: text.length };
   await appendToolLog(ASSISTANT_TEXT_TOOL_NAME, call, { text }, result, options);
   return result;
@@ -93,6 +93,7 @@ export class RegistryProviderToolExecutor implements ProviderToolExecutorPort {
     if (!args || typeof args !== "object" || Array.isArray(args)) return null;
     const dispatch = readDeferredDispatchMessage(args as Record<string, unknown>, call.name);
     if (!dispatch.ok) return null;
+    options.onToolCall?.(call.name);
     return {
       kind: "deferred",
       acknowledgement: dispatch.message,
@@ -147,6 +148,7 @@ async function executeFunctionCall(
     if (executionMode !== "inline") return { ok: false, error: `Tool ${call.name} is ${executionMode}.` };
     const executor = inlineExecutors.get(call.name);
     if (!executor) return { ok: false, error: `Unsupported tool: ${call.name}` };
+    options.onToolCall?.(call.name);
     return await executor(args as Record<string, unknown>, call, options);
   } catch (error) {
     return { ok: false, error: errorMessage(error) };

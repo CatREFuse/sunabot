@@ -537,7 +537,10 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
             senderCard: "普拉娜",
             selfId: 123456,
             text: "模型目录已更新。",
-            at: "2026-07-10T02:01:00.000Z"
+            at: "2026-07-10T02:01:00.000Z",
+            logRunId: "run-model-update",
+            messageOrigin: "text",
+            toolNames: ["memory_recall", "websearch", "memory_recall"]
           },
           {
             id: "m-4",
@@ -556,15 +559,16 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
       });
     }
     if (/^\/api\/conversations\/[^/]+\/logs$/.test(pathname)) {
+      const runId = url.searchParams.get("runId");
       return json(route, {
-        logs: url.searchParams.get("runId") === "running-run"
+        logs: runId === "running-run" || runId === "run-model-update"
           ? [{
-              id: "running-log",
+              id: `${runId}-log`,
               at: "2026-07-10T02:02:00.000Z",
               category: "runtime.action",
               action: "reply.started",
               response: { status: "running" },
-              metadata: { runId: "running-run", conversationId: "group:10001" }
+              metadata: { runId, conversationId: "group:10001" }
             }]
           : []
       });

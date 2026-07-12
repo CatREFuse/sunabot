@@ -288,7 +288,7 @@ async function completeChatCompletions(
 
     const deferred = context.toolExecutor.deferredTurn(calls, options, definitions);
     if (deferred) return deferred;
-    if (choice.content?.trim() && options.onAssistantText) await options.onAssistantText(choice.content.trim());
+    if (choice.content?.trim() && options.onAssistantText) await options.onAssistantText(choice.content.trim(), "text");
     messages.push({
       role: "assistant",
       content: choice.content ?? null,

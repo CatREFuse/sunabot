@@ -1,6 +1,8 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 import {
+  assistantReplyEnvelope,
+  decodeAssistantReply,
   decodeIncomingReply,
   incomingReplyEnvelope,
   type RuntimeIncomingReplyEventPayload
@@ -35,6 +37,29 @@ describe("runtime persisted contracts", () => {
     });
     expect(encoded).toMatchObject({ schemaVersion: 1, type: "runtime.incoming_reply" });
     expect(decodeIncomingReply(encoded)).toEqual(payload);
+  });
+
+  it("keeps assistant message provenance in durable outbox envelopes", () => {
+    const encoded = assistantReplyEnvelope({
+      type: "assistant_reply",
+      incoming: payload.incoming,
+      text: "生成完成。",
+      generatedImages: [],
+      isAdmin: true,
+      logRunId: "run-1",
+      messageOrigin: "async_tool_callback",
+      toolNames: ["codex", "websearch"]
+    }, {
+      conversationId: "private:10001",
+      correlationId: "run-1"
+    });
+
+    expect(decodeAssistantReply(encoded)).toMatchObject({
+      text: "生成完成。",
+      logRunId: "run-1",
+      messageOrigin: "async_tool_callback",
+      toolNames: ["codex", "websearch"]
+    });
   });
 
   it("keeps legacy rows readable during forward migration", () => {

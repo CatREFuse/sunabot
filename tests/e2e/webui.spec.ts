@@ -636,8 +636,13 @@ test("生产构建支持深链接刷新与浏览器返回", async ({ page }) => 
   await page.goto("/conversations/group%3A10001");
   await expect(page.getByRole("heading", { name: "产品讨论群" })).toBeVisible();
   await expect(page.getByText("模型目录已更新。", { exact: true })).toBeVisible();
+  const messageTrace = page.getByLabel("消息来源与工具");
+  await expect(messageTrace).toContainText("来源text");
+  await expect(messageTrace.getByText("memory_recall", { exact: true })).toHaveCount(1);
+  await expect(messageTrace.getByText("websearch", { exact: true })).toBeVisible();
+  await expect(messageTrace.getByRole("button", { name: "查看请求日志" })).toBeVisible();
   await expect(page.getByRole("status", { name: "正在输入" })).toBeVisible();
-  await page.getByRole("button", { name: "查看请求日志" }).last().click();
+  await messageTrace.getByRole("button", { name: "查看请求日志" }).click();
   await expect(page.getByRole("heading", { name: "请求日志" })).toBeVisible();
   await expect(page.getByText("开始生成回复", { exact: true })).toBeVisible();
   await expect(page.getByText("reply.started", { exact: true })).toBeVisible();

@@ -15,7 +15,7 @@ export async function emitIntermediateAssistantText(
   if (!options.onAssistantText) return;
   const text = extractResponsesText(payload) || fallbackText.trim();
   if (!text) return;
-  await options.onAssistantText(text);
+  await options.onAssistantText(text, "text");
 }
 
 export function extractResponseOutput(payload: unknown) {

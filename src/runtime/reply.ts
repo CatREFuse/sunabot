@@ -4,6 +4,7 @@ import path from "node:path";
 import { nanoid } from "nanoid";
 import {
   AppConfig,
+  AssistantMessageOrigin,
   ChatMessage,
   ConversationMessageQuote,
   ConversationRecord,
@@ -130,6 +131,8 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
       allowAsyncImage?: boolean;
       allowImageTools?: boolean;
       promptOverride?: string;
+      messageOrigin?: AssistantMessageOrigin;
+      seedToolNames?: readonly string[];
     } = {}
   ) {
     const provider = this.getProvider();
@@ -145,6 +148,18 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
     };
     let sent = false;
     let requestStarted = false;
+    const usedToolNames = new Set(options.seedToolNames ?? []);
+    const currentToolNames = () => [...usedToolNames];
+    const finalizeToolNames = () => {
+      const toolNames = currentToolNames();
+      for (const draft of options.delivery?.outbox ?? []) {
+        const payload = draft.payload.payload;
+        if (payload.logRunId !== logRunId) continue;
+        payload.toolNames = toolNames.length ? [...toolNames] : undefined;
+      }
+      this.recordAssistantTurnTools(incoming, logRunId, toolNames);
+      return toolNames;
+    };
 
     try {
       const beforeContext = await this.hooks.run("before_context", {
@@ -277,7 +292,7 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
           referenceImageUrls,
           childLogContext ?? logContext
         ),
-        onAssistantText: async (text) => {
+        onAssistantText: async (text, source = "text") => {
           if (options.isCurrent && !options.isCurrent()) return;
           const quoteReply = assistantTextCount === 0;
           assistantTextCount += 1;
@@ -291,9 +306,18 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
             logRunId,
             options.isCurrent,
             options.delivery,
-            quoteReply
+            quoteReply,
+            {
+              messageOrigin: source === "assistant_text"
+                ? "assistant_text"
+                : options.messageOrigin ?? "text",
+              toolNames: currentToolNames()
+            }
           );
           if (record) sent = true;
+        },
+        onToolCall: (name) => {
+          usedToolNames.add(name);
         },
         onImageGenerated: (image) => {
           generatedImages.push(image);
@@ -318,6 +342,8 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
         imageTools: options.allowImageTools ?? true,
         logContext
       });
+      if (turn.kind === "deferred") usedToolNames.add(turn.toolCall.name);
+      const turnToolNames = finalizeToolNames();
       if (options.isCurrent && !options.isCurrent()) return sent;
       if (turn.kind === "deferred") {
         const acknowledgement = turn.acknowledgement.trim();
@@ -334,7 +360,12 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
             isAdmin,
             [],
             logRunId,
-            `tool-ack:${turn.toolCall.name}:${turn.toolCall.callId}`
+            `tool-ack:${turn.toolCall.name}:${turn.toolCall.callId}`,
+            true,
+            {
+              messageOrigin: "async_tool_dispatch",
+              toolNames: turnToolNames
+            }
           )
         });
         return sent;
@@ -348,7 +379,12 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
         generatedImages,
         logRunId,
         options.isCurrent,
-        options.delivery
+        options.delivery,
+        true,
+        {
+          messageOrigin: options.messageOrigin ?? "text",
+          toolNames: turnToolNames
+        }
       );
       if (record) {
         sent = true;
@@ -356,6 +392,7 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
       }
       return sent;
     } catch (error) {
+      const failedToolNames = finalizeToolNames();
       const failure = options.signal?.reason ?? error;
       const aborted = options.signal?.aborted || isAbortError(error);
       await appendRequestLog({
@@ -375,7 +412,11 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
             timedOut ? "请求超时，请查看请求日志。" : "请求已取消。",
             [],
             logRunId,
-            "failed"
+            "failed",
+            {
+              messageOrigin: options.messageOrigin ?? "text",
+              toolNames: failedToolNames
+            }
           );
         }
         return sent;
@@ -388,7 +429,18 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
         error
       });
       if (!options.isCurrent || options.isCurrent()) {
-        await this.sendErrorReply(incoming, gateway, error, options.isCurrent, logRunId, options.delivery);
+        await this.sendErrorReply(
+          incoming,
+          gateway,
+          error,
+          options.isCurrent,
+          logRunId,
+          options.delivery,
+          {
+            messageOrigin: options.messageOrigin ?? "text",
+            toolNames: failedToolNames
+          }
+        );
       }
       return sent;
     }
@@ -491,7 +543,12 @@ export async function runtime_replyToToolCompletion(this: RuntimeHost,
         this.isAdminUser(incoming.userId),
         result.image ? [result.image] : [],
         undefined,
-        `tool-image:${payload.toolJobId}`
+        `tool-image:${payload.toolJobId}`,
+        true,
+        {
+          messageOrigin: "async_tool_callback",
+          toolNames: [payload.toolName]
+        }
       ));
       return;
     }
@@ -500,6 +557,8 @@ export async function runtime_replyToToolCompletion(this: RuntimeHost,
       isCurrent,
       delivery,
       allowAsyncCodex: false,
+      messageOrigin: "async_tool_callback",
+      seedToolNames: [payload.toolName],
       promptOverride: buildAsyncToolCompletionPrompt(payload)
     });
   }

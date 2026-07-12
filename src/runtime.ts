@@ -323,6 +323,7 @@ export class SunaRuntime {
   recordIncomingMessage(...args: Parameters<RuntimeConversations["recordIncomingMessage"]>) { return this.conversations.recordIncomingMessage(...args); }
   recordAssistantRequestStarted(...args: Parameters<RuntimeConversations["recordAssistantRequestStarted"]>) { return this.conversations.recordAssistantRequestStarted(...args); }
   recordAssistantMessage(...args: Parameters<RuntimeConversations["recordAssistantMessage"]>) { return this.conversations.recordAssistantMessage(...args); }
+  recordAssistantTurnTools(...args: Parameters<RuntimeConversations["recordAssistantTurnTools"]>) { return this.conversations.recordAssistantTurnTools(...args); }
   ensureConversationRecord(...args: Parameters<RuntimeConversations["ensureConversationRecord"]>) { return this.conversations.ensureConversationRecord(...args); }
   upsertConversationRecordForReplySetting(...args: Parameters<RuntimeConversations["upsertConversationRecordForReplySetting"]>) { return this.conversations.upsertConversationRecordForReplySetting(...args); }
   persistConversationRecords(...args: Parameters<RuntimeConversations["persistConversationRecords"]>) { return this.conversations.persistConversationRecords(...args); }

@@ -4,6 +4,7 @@ import path from "node:path";
 import { nanoid } from "nanoid";
 import {
   AppConfig,
+  AssistantMessageTrace,
   ChatMessage,
   ConversationMessageQuote,
   ConversationRecord,
@@ -186,7 +187,8 @@ export function runtime_recordAssistantMessage(this: RuntimeHost,
     text: string,
     imageUrls: string[] = [],
     logRunId?: string,
-    requestStatus?: "failed"
+    requestStatus?: "failed",
+    trace: AssistantMessageTrace = {}
   ) {
     const at = new Date().toISOString();
     const record = this.ensureConversationRecord(incoming, at);
@@ -201,6 +203,8 @@ export function runtime_recordAssistantMessage(this: RuntimeHost,
       selfId: incoming.selfId,
       imageUrls,
       logRunId,
+      messageOrigin: trace.messageOrigin,
+      toolNames: normalizedToolNames(trace.toolNames),
       actionSummary: logRunId ? "日志" : undefined,
       requestStatus
     } satisfies ConversationRecord["messages"][number];
@@ -218,6 +222,23 @@ export function runtime_recordAssistantMessage(this: RuntimeHost,
     }
     this.persistConversationRecords();
     return record;
+  }
+export function runtime_recordAssistantTurnTools(this: RuntimeHost,
+    incoming: ParsedIncomingMessage,
+    logRunId: string,
+    toolNames: readonly string[]
+  ) {
+    const normalized = normalizedToolNames(toolNames);
+    const record = this.conversationRecords.get(conversationRecordId(incoming));
+    if (!normalized || !record) return;
+    let changed = false;
+    for (const message of record.messages) {
+      if (message.role !== "assistant" || message.logRunId !== logRunId) continue;
+      if (sameStrings(message.toolNames, normalized)) continue;
+      message.toolNames = [...normalized];
+      changed = true;
+    }
+    if (changed) this.persistConversationRecords();
   }
 export function runtime_ensureConversationRecord(this: RuntimeHost, incoming: ParsedIncomingMessage, at: string) {
     const id = conversationRecordId(incoming);
@@ -294,10 +315,21 @@ export function runtime_recordServiceMessage(this: RuntimeHost, record: Conversa
       userId: record.userId,
       groupId: record.groupId,
       senderName: this.persona?.name ?? "普拉娜",
-      selfId: record.selfId
+      selfId: record.selfId,
+      messageOrigin: "text"
     }, this.retainedConversationMessageLimit());
     this.persistConversationRecords();
   }
+
+function normalizedToolNames(toolNames: readonly string[] | undefined) {
+  if (!toolNames?.length) return undefined;
+  const unique = [...new Set(toolNames.map((name) => name.trim()).filter(Boolean))];
+  return unique.length ? unique : undefined;
+}
+
+function sameStrings(left: readonly string[] | undefined, right: readonly string[]) {
+  return left?.length === right.length && left.every((value, index) => value === right[index]);
+}
 
 export class RuntimeConversations {
   constructor(private readonly host: RuntimeHost) {}
@@ -305,6 +337,7 @@ export class RuntimeConversations {
   recordIncomingMessage(...args: Parameters<typeof runtime_recordIncomingMessage>) { return runtime_recordIncomingMessage.call(this.host, ...args); }
   recordAssistantRequestStarted(...args: Parameters<typeof runtime_recordAssistantRequestStarted>) { return runtime_recordAssistantRequestStarted.call(this.host, ...args); }
   recordAssistantMessage(...args: Parameters<typeof runtime_recordAssistantMessage>) { return runtime_recordAssistantMessage.call(this.host, ...args); }
+  recordAssistantTurnTools(...args: Parameters<typeof runtime_recordAssistantTurnTools>) { return runtime_recordAssistantTurnTools.call(this.host, ...args); }
   ensureConversationRecord(...args: Parameters<typeof runtime_ensureConversationRecord>) { return runtime_ensureConversationRecord.call(this.host, ...args); }
   upsertConversationRecordForReplySetting(...args: Parameters<typeof runtime_upsertConversationRecordForReplySetting>) { return runtime_upsertConversationRecordForReplySetting.call(this.host, ...args); }
   persistConversationRecords(...args: Parameters<typeof runtime_persistConversationRecords>) { return runtime_persistConversationRecords.call(this.host, ...args); }

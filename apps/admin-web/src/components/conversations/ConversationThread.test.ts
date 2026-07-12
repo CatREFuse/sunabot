@@ -198,10 +198,82 @@ describe("ConversationThread", () => {
 
     expect(wrapper.get('[data-slot="typing-indicator"]').attributes("aria-label")).toBe("正在输入");
     expect(wrapper.text()).toContain("正在输入");
+    expect(wrapper.find('[data-slot="message-trace"]').exists()).toBe(false);
     expect(wrapper.get("button").text()).toBe("查看请求日志");
 
     await wrapper.get("button").trigger("click");
     expect(wrapper.emitted("logs")).toEqual([["run-search"]]);
+  });
+
+  it.each([
+    ["text", "text"],
+    ["assistant_text", "assistant_text"],
+    ["async_tool_dispatch", "dispatch_message"],
+    ["async_tool_callback", "async_tool_callback"]
+  ] as const)("renders the %s message origin", (messageOrigin, label) => {
+    const wrapper = shallowMount(ConversationMessageBubble, {
+      props: {
+        conversation: { id: "c1", scope: "private", title: "会话", userId: 1, selfId: 9, messageCount: 1, lastAt: "2026-07-10T00:00:00.000Z", lastText: "完成", messages: [] },
+        message: {
+          id: `message-${messageOrigin}`,
+          role: "assistant",
+          text: "完成",
+          at: "2026-07-10T00:00:10.000Z",
+          senderName: "普拉娜",
+          selfId: 9,
+          messageOrigin
+        }
+      }
+    });
+
+    const trace = wrapper.get('[data-slot="message-trace"]');
+    expect(trace.get('[data-slot="message-origin"]').text()).toContain(label);
+  });
+
+  it("shows unique non-text tools beside the request log entry", async () => {
+    const wrapper = shallowMount(ConversationMessageBubble, {
+      props: {
+        conversation: { id: "c1", scope: "private", title: "会话", userId: 1, selfId: 9, messageCount: 1, lastAt: "2026-07-10T00:00:00.000Z", lastText: "完成", messages: [] },
+        message: {
+          id: "message-tools",
+          role: "assistant",
+          text: "完成",
+          at: "2026-07-10T00:00:10.000Z",
+          senderName: "普拉娜",
+          selfId: 9,
+          messageOrigin: "text",
+          toolNames: ["memory_recall", "websearch", "memory_recall", "text", ""],
+          logRunId: "run-tools"
+        }
+      }
+    });
+
+    const trace = wrapper.get('[data-slot="message-trace"]');
+    expect(trace.get('[data-slot="message-origin"]').text()).toContain("text");
+    expect(trace.findAll('[data-slot="message-tool"]').map((tool) => tool.text())).toEqual(["memory_recall", "websearch"]);
+    expect(trace.text()).toContain("本轮工具");
+    expect(trace.get("button").text()).toBe("查看请求日志");
+
+    await trace.get("button").trigger("click");
+    expect(wrapper.emitted("logs")).toEqual([["run-tools"]]);
+  });
+
+  it("marks assistant messages without recorded provenance as unknown", () => {
+    const wrapper = shallowMount(ConversationMessageBubble, {
+      props: {
+        conversation: { id: "c1", scope: "private", title: "会话", userId: 1, selfId: 9, messageCount: 1, lastAt: "2026-07-10T00:00:00.000Z", lastText: "旧消息", messages: [] },
+        message: {
+          id: "legacy-message",
+          role: "assistant",
+          text: "旧消息",
+          at: "2026-07-10T00:00:10.000Z",
+          senderName: "普拉娜",
+          selfId: 9
+        }
+      }
+    });
+
+    expect(wrapper.get('[data-slot="message-origin"]').text()).toContain("未记录");
   });
 
   it("shows an independent orchestrator toggle after user-group replies are enabled", async () => {

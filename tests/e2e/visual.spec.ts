@@ -75,8 +75,13 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     await expect(page.getByText("用户不可见", { exact: true })).toBeVisible();
     await expect(page.getByText("判断失败", { exact: true })).toBeVisible();
     await expect(page.getByText("编排器判断失败，请查看请求日志。", { exact: true })).toBeVisible();
+    const messageTrace = page.getByLabel("消息来源与工具");
+    await expect(messageTrace).toContainText("来源text");
+    await expect(messageTrace.getByText("memory_recall", { exact: true })).toHaveCount(1);
+    await expect(messageTrace.getByText("websearch", { exact: true })).toBeVisible();
+    await expect(messageTrace.getByRole("button", { name: "查看请求日志" })).toBeVisible();
     await expect(page.getByRole("status", { name: "正在输入" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "查看请求日志" })).toHaveCount(2);
+    await expect(page.getByRole("button", { name: "查看请求日志" })).toHaveCount(3);
     await capture(page, viewport.name, theme, "conversations-detail");
 
     await page.goto("/web-chat");

@@ -216,6 +216,8 @@ export interface ConversationMessageQuote {
   senderName?: string;
 }
 
+export type ConversationMessageOrigin = "text" | "assistant_text" | "async_tool_dispatch" | "async_tool_callback";
+
 export interface ConversationMessageRecord {
   id: string;
   role: "user" | "assistant" | "event";
@@ -233,6 +235,8 @@ export interface ConversationMessageRecord {
   replyMessageIds?: number[];
   quoteReferences?: ConversationMessageQuote[];
   logRunId?: string;
+  messageOrigin?: ConversationMessageOrigin;
+  toolNames?: string[];
   actionSummary?: string;
   requestStatus?: "running" | "failed";
   eventKind?: "orchestrator_decision";

@@ -4,6 +4,7 @@ import { authenticatedMediaPath } from "../../composables/useAdminApi";
 import { formatFullDateTime } from "../../utils/format";
 import { displayMessageText } from "../../utils/messageText";
 import { messageQq, qqAvatarUrl } from "../../utils/qqIdentity";
+import { toolIcon } from "../../utils/toolCatalog";
 import type { ConversationMessageRecord, ConversationRecord } from "../../types";
 import AuthenticatedImage from "../ui/AuthenticatedImage.vue";
 import IdentityAvatar from "../ui/IdentityAvatar.vue";
@@ -54,6 +55,24 @@ const quotes = computed(() => orchestratorDecision.value
       displayText: displayMessageText(quote.text ?? "", quote.imageUrls, props.memberNames)
     })));
 const avatar = computed(() => qqAvatarUrl(qq.value));
+const messageTraceVisible = computed(() => assistant.value && !requestRunning.value && !orchestratorDecision.value);
+const messageOrigin = computed(() => {
+  switch (props.message.messageOrigin) {
+    case "text": return { label: "text", icon: "bx-message-square-detail" };
+    case "assistant_text": return { label: "assistant_text", icon: "bx-message-rounded-dots" };
+    case "async_tool_dispatch": return { label: "dispatch_message", icon: "bx-send" };
+    case "async_tool_callback": return { label: "async_tool_callback", icon: "bx-reply" };
+    default: return { label: "未记录", icon: "bx-history" };
+  }
+});
+const visibleToolNames = computed(() => {
+  const names = new Set<string>();
+  for (const value of props.message.toolNames ?? []) {
+    const name = value.trim();
+    if (name && name !== "text") names.add(name);
+  }
+  return [...names];
+});
 
 function identityKey(value: string) {
   return value.trim().normalize("NFKC").toLocaleLowerCase();
@@ -104,7 +123,22 @@ function identityKey(value: string) {
             <AuthenticatedImage :src="url" alt="会话图片" thumbnail class-name="max-h-96 w-full rounded object-contain" />
           </a>
         </div>
-        <button v-if="message.logRunId" class="justify-self-start font-mono text-[10px] underline underline-offset-4" type="button" @click="emit('logs', message.logRunId)">查看请求日志</button>
+        <div v-if="messageTraceVisible" data-slot="message-trace" class="flex w-full flex-wrap items-center gap-x-3 gap-y-2 border-t border-page/20 pt-3 font-mono text-[10px] text-page/65" aria-label="消息来源与工具">
+          <span data-slot="message-origin" class="inline-flex min-w-0 items-center gap-1.5">
+            <i class="bx shrink-0 text-sm text-page/85" :class="messageOrigin.icon" aria-hidden="true"></i>
+            <span>来源</span>
+            <strong class="break-all font-medium text-page">{{ messageOrigin.label }}</strong>
+          </span>
+          <span v-if="visibleToolNames.length" class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
+            <span>本轮工具</span>
+            <span v-for="name in visibleToolNames" :key="name" data-slot="message-tool" class="inline-flex min-w-0 items-center gap-1 text-page/85">
+              <i class="bx shrink-0 text-sm" :class="toolIcon(name)" aria-hidden="true"></i>
+              <code class="break-all font-mono">{{ name }}</code>
+            </span>
+          </span>
+          <button v-if="message.logRunId" class="font-mono underline underline-offset-4 sm:ml-auto" type="button" @click="emit('logs', message.logRunId)">查看请求日志</button>
+        </div>
+        <button v-else-if="message.logRunId" class="justify-self-start font-mono text-[10px] underline underline-offset-4" type="button" @click="emit('logs', message.logRunId)">查看请求日志</button>
       </div>
     </div>
   </article>

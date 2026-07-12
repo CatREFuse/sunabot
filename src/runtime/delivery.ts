@@ -4,6 +4,7 @@ import path from "node:path";
 import { nanoid } from "nanoid";
 import {
   AppConfig,
+  AssistantMessageTrace,
   ChatMessage,
   ConversationMessageQuote,
   ConversationRecord,
@@ -123,7 +124,8 @@ export async function runtime_sendAssistantReply(this: RuntimeHost,
     logRunId?: string,
     isCurrent: () => boolean = () => true,
     delivery?: ReplyDelivery,
-    quoteReply = true
+    quoteReply = true,
+    trace: AssistantMessageTrace = { messageOrigin: "text" }
   ) {
     if (!this.isReplySenderAllowed(incoming.userId) || !isCurrent()) return undefined;
     const beforeReply = await this.hooks.run("before_reply", {
@@ -147,7 +149,8 @@ export async function runtime_sendAssistantReply(this: RuntimeHost,
         generatedImageAssets,
         logRunId,
         undefined,
-        quoteReply
+        quoteReply,
+        trace
       ));
       return undefined;
     }
@@ -159,7 +162,14 @@ export async function runtime_sendAssistantReply(this: RuntimeHost,
       quoteReply ? this.groupReplyOptions(incoming).replyToMessageId : undefined
     ));
 
-    const record = this.recordAssistantMessage(incoming, replyText || "[图片]", generatedImageUrls, logRunId);
+    const record = this.recordAssistantMessage(
+      incoming,
+      replyText || "[图片]",
+      generatedImageUrls,
+      logRunId,
+      undefined,
+      trace
+    );
     if (logRunId) {
       await appendRequestLog({
         category: "runtime.action",
@@ -197,7 +207,8 @@ export function runtime_replyDeliveryDraft(this: RuntimeHost,
     generatedImages: ImageResult[] = [],
     logRunId?: string,
     dedupeKey?: string,
-    quoteReply = true
+    quoteReply = true,
+    trace: AssistantMessageTrace = { messageOrigin: "text" }
   ): ReplyDeliveryDraft {
     return {
       kind: "onebot.reply",
@@ -208,7 +219,9 @@ export function runtime_replyDeliveryDraft(this: RuntimeHost,
         generatedImages,
         isAdmin,
         quoteReply,
-        logRunId
+        logRunId,
+        messageOrigin: trace.messageOrigin ?? "text",
+        toolNames: trace.toolNames?.length ? [...new Set(trace.toolNames)] : undefined
       }, {
         conversationId: conversationRecordId(incoming),
         correlationId: logRunId ?? `onebot:${incoming.messageId ?? persistentIncomingKey(incoming)}`,
@@ -232,7 +245,12 @@ export async function runtime_deliverReplyOutbox(this: RuntimeHost, payload: Ass
       incoming,
       payload.text || "[图片]",
       generatedImageUrls,
-      payload.logRunId
+      payload.logRunId,
+      undefined,
+      {
+        messageOrigin: payload.messageOrigin,
+        toolNames: payload.toolNames
+      }
     );
     if (payload.logRunId) {
       await appendRequestLog({
@@ -273,7 +291,8 @@ export async function runtime_sendErrorReply(this: RuntimeHost,
     error: unknown,
     isCurrent: () => boolean = () => true,
     logRunId?: string,
-    delivery?: ReplyDelivery
+    delivery?: ReplyDelivery,
+    trace: AssistantMessageTrace = { messageOrigin: "text" }
   ) {
     if (!this.isReplySenderAllowed(incoming.userId) || !isCurrent()) return;
     const message = formatErrorReply(error);
@@ -285,7 +304,10 @@ export async function runtime_sendErrorReply(this: RuntimeHost,
           message,
           this.isAdminUser(incoming.userId),
           [],
-          logRunId
+          logRunId,
+          undefined,
+          true,
+          trace
         ));
         return;
       }
@@ -295,7 +317,14 @@ export async function runtime_sendErrorReply(this: RuntimeHost,
         [],
         this.groupReplyOptions(incoming).replyToMessageId
       ));
-      this.recordAssistantMessage(incoming, message, [], logRunId, logRunId ? "failed" : undefined);
+      this.recordAssistantMessage(
+        incoming,
+        message,
+        [],
+        logRunId,
+        logRunId ? "failed" : undefined,
+        trace
+      );
     } catch (error) {
       console.error("[runtime] error reply failed", {
         messageId: incoming.messageId,

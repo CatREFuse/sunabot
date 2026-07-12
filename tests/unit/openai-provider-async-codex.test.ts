@@ -189,7 +189,7 @@ describe("OpenAIProvider asynchronous Codex tool turns", () => {
 
     expect(result).toEqual({ kind: "completed", text: "检查完成。" });
     expect(onAssistantText).toHaveBeenCalledOnce();
-    expect(onAssistantText).toHaveBeenCalledWith("我正在检查。");
+    expect(onAssistantText).toHaveBeenCalledWith("我正在检查。", "assistant_text");
     expect(toolNames(fetchRequestBody(fetchMock, 0))).toContain("assistant_text");
   });
 
@@ -213,7 +213,7 @@ describe("OpenAIProvider asynchronous Codex tool turns", () => {
       onAssistantText
     });
 
-    expect(onAssistantText).toHaveBeenCalledWith("我先确认一下。");
+    expect(onAssistantText).toHaveBeenCalledWith("我先确认一下。", "assistant_text");
     expect(result).toMatchObject({
       kind: "deferred",
       acknowledgement: "我开始检查。",

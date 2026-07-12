@@ -87,7 +87,7 @@ export async function completeAnthropicMessages(
 
     const deferred = context.toolExecutor.deferredTurn(calls, options, definitions);
     if (deferred) return deferred;
-    if (text && options.onAssistantText) await options.onAssistantText(text);
+    if (text && options.onAssistantText) await options.onAssistantText(text, "text");
     messages.push({ role: "assistant", content: blocks });
     const outputs = await context.toolExecutor.execute(calls, options, definitions);
     messages.push({

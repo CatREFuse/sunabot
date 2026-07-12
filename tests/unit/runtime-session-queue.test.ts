@@ -11,8 +11,10 @@ import type {
 import { parseOneBotInboundMessage } from "../../adapters/onebot/inboundMessageAdapter.js";
 import type { OneBotEvent } from "../../adapters/onebot/protocol.js";
 import type { MessagingPort } from "../../packages/contracts/messaging/messages.js";
+import type { AsyncToolCompletionPayload } from "../../packages/contracts/session/runtimeMessages.js";
 import type { RenderedPromptRequest } from "../../services/agent/promptSystem.js";
 import { SunaRuntime } from "../../src/runtime.js";
+import type { ReplyDelivery } from "../../src/runtime/runtimeContracts.js";
 import { SessionStore } from "../../services/sessions/sessionStore.js";
 import type { ConversationRecord } from "../../src/types.js";
 import { createAdminTestConfig } from "./admin-fixtures.js";
@@ -100,8 +102,11 @@ describe("SunaRuntime Session queue bridge", () => {
       _request: RenderedPromptRequest,
       options: ProviderCompleteOptions = {}
     ): Promise<ProviderTurnResult> => {
-      await options.onAssistantText?.("第一条行动消息");
-      await options.onAssistantText?.("第二条行动消息");
+      options.onToolCall?.("assistant_text");
+      await options.onAssistantText?.("第一条行动消息", "assistant_text");
+      options.onToolCall?.("websearch");
+      options.onToolCall?.("assistant_text");
+      await options.onAssistantText?.("第二条行动消息", "assistant_text");
       return { kind: "completed", text: "最终回复" };
     });
     const harness = createRuntimeHarness(completeRequestTurn);
@@ -117,6 +122,29 @@ describe("SunaRuntime Session queue bridge", () => {
       { text: "第一条行动消息", replyToMessageId: 150 },
       { text: "第二条行动消息", replyToMessageId: undefined },
       { text: "最终回复", replyToMessageId: 150 }
+    ]);
+    expect(runtimeConversation(harness.runtime, "group:100")?.messages
+      .filter((message) => message.role === "assistant")
+      .map((message) => ({
+        text: message.text,
+        messageOrigin: message.messageOrigin,
+        toolNames: message.toolNames
+      }))).toEqual([
+      {
+        text: "第一条行动消息",
+        messageOrigin: "assistant_text",
+        toolNames: ["assistant_text", "websearch"]
+      },
+      {
+        text: "第二条行动消息",
+        messageOrigin: "assistant_text",
+        toolNames: ["assistant_text", "websearch"]
+      },
+      {
+        text: "最终回复",
+        messageOrigin: "text",
+        toolNames: ["assistant_text", "websearch"]
+      }
     ]);
   });
 
@@ -361,6 +389,89 @@ describe("SunaRuntime Session queue bridge", () => {
     expect(completionPrompts[0]).toContain('"providerCallId": "call-runtime-codex"');
     expect(completionPrompts[0]).toContain(`"status": "${toolStatus}"`);
     expect(asyncCodexFlags).toEqual([true, true, false]);
+    expect(runtimeConversation(harness.runtime, "group:300")?.messages
+      .filter((message) => message.role === "assistant")
+      .map((message) => ({
+        text: message.text,
+        messageOrigin: message.messageOrigin,
+        toolNames: message.toolNames
+      }))).toEqual([
+      {
+        text: acknowledgement,
+        messageOrigin: "async_tool_dispatch",
+        toolNames: ["codex"]
+      },
+      {
+        text: "later reply",
+        messageOrigin: "text",
+        toolNames: undefined
+      },
+      {
+        text: finalReply,
+        messageOrigin: "async_tool_callback",
+        toolNames: ["codex"]
+      }
+    ]);
+  });
+
+  it("persists asynchronous image callbacks with their source tool", async () => {
+    const harness = createRuntimeHarness(async () => ({ kind: "completed", text: "unused" }));
+    const incoming = parseOneBotInboundMessage(privateEvent(30_001, "生成一张自拍"))!;
+    harness.runtime.recordIncomingMessage(incoming);
+    const delivery = { outbox: [] } satisfies ReplyDelivery;
+    const payload = {
+      type: "tool_result",
+      toolJobId: "job-selfie-1",
+      providerCallId: "call-selfie-1",
+      toolName: "selfie",
+      originalRequest: { incoming },
+      arguments: { scene: "图书馆" },
+      outcome: {
+        status: "succeeded",
+        result: { image: { url: "https://example.test/selfie.png" } },
+        error: undefined
+      }
+    } satisfies AsyncToolCompletionPayload;
+
+    await harness.runtime.replyToToolCompletion(
+      payload,
+      harness.gateway,
+      new AbortController().signal,
+      delivery
+    );
+
+    expect(delivery.outbox).toHaveLength(1);
+    expect(delivery.outbox[0]?.payload.payload).toMatchObject({
+      messageOrigin: "async_tool_callback",
+      toolNames: ["selfie"]
+    });
+    await harness.runtime.deliverReplyOutbox(delivery.outbox[0]!.payload.payload, harness.gateway);
+    expect(runtimeConversation(harness.runtime, "private:171419991")?.messages.at(-1)).toMatchObject({
+      role: "assistant",
+      text: "[图片]",
+      imageUrls: ["https://example.test/selfie.png"],
+      messageOrigin: "async_tool_callback",
+      toolNames: ["selfie"]
+    });
+  });
+
+  it("does not guess the source of legacy outbox replies", async () => {
+    const harness = createRuntimeHarness(async () => ({ kind: "completed", text: "unused" }));
+    const incoming = parseOneBotInboundMessage(privateEvent(30_002, "旧队列消息"))!;
+    harness.runtime.recordIncomingMessage(incoming);
+
+    await harness.runtime.deliverReplyOutbox({
+      type: "assistant_reply",
+      incoming,
+      text: "旧回复",
+      generatedImages: [],
+      isAdmin: true
+    }, harness.gateway);
+
+    const message = runtimeConversation(harness.runtime, "private:171419991")?.messages.at(-1);
+    expect(message).toMatchObject({ role: "assistant", text: "旧回复" });
+    expect(message?.messageOrigin).toBeUndefined();
+    expect(message?.toolNames).toBeUndefined();
   });
 
   it("keeps unavailable Codex and Bash capabilities out of Provider options", async () => {

@@ -42,6 +42,12 @@ export interface AsyncToolCompletionPayload {
   };
 }
 
+export type AssistantMessageOrigin =
+  | "text"
+  | "assistant_text"
+  | "async_tool_dispatch"
+  | "async_tool_callback";
+
 export interface AssistantReplyOutboxPayload {
   type: "assistant_reply";
   incoming: InboundMessageV1;
@@ -50,6 +56,8 @@ export interface AssistantReplyOutboxPayload {
   isAdmin: boolean;
   quoteReply?: boolean;
   logRunId?: string;
+  messageOrigin?: AssistantMessageOrigin;
+  toolNames?: string[];
 }
 
 export type RuntimeIncomingReplyEnvelope = EnvelopeV1<"runtime.incoming_reply", RuntimeIncomingReplyEventPayload>;

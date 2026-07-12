@@ -141,7 +141,10 @@ describe("provider protocols", () => {
       content: "看图",
       imageUrls: ["data:image/png;base64,AAAA"]
     }], { onAssistantText: delivered, asyncCodex: true })).resolves.toBe("完成");
-    expect(delivered).toHaveBeenCalledWith("处理中");
+    expect(delivered.mock.calls).toEqual([
+      ["处理中", "text"],
+      ["处理中", "assistant_text"]
+    ]);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchMock.mock.calls[0]?.[0]).toBe("https://api.anthropic.com/v1/messages");
     const firstBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body));

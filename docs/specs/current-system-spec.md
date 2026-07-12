@@ -65,6 +65,7 @@ Provider、Codex CLI 与联网工具的出站 HTTP(S) 可独立使用代理。AP
 - 外发使用 outbox，支持租约、有限重试、断线恢复和幂等键。
 - Codex 与图像生成长任务先返回确认消息，任务完成后通过持久化事件恢复原会话；任务提交不能等待生成完成。所有 deferred tool 必须单独调用并携带非空 `dispatch_message`，由模型使用当前人格生成“已收到并开始处理”的短消息；该字段与任务在同一事务中落库为 acknowledgement，进入 worker 前从业务参数中删除。缺失、空白或超过 200 字时不得派发，也不得降级为同步执行。
 - `assistant_text` 允许 Agent 在工具循环中发送中间消息。群聊只引用第一条中间消息，最终正文仍引用原始消息，后续中间消息不引用。
+- 新写入的 Bot 消息持久化 `messageOrigin` 与按首次调用顺序去重的 `toolNames`。来源区分普通正文 `text`、显式 `assistant_text`、异步受理 `async_tool_dispatch` 和异步结果 `async_tool_callback`；工具清单只记录本轮实际接受的 Function Call，不能使用 Provider 请求中的可用工具定义反推。旧消息缺少来源时保持未知，不按正文、时间或日志邻近猜测。
 - 会话最多保留 2,000 条消息，最多保留最近 80 个会话。
 
 ## 4. Provider、提示词与工具
@@ -166,7 +167,7 @@ NapCat 上报的 QQ 文件优先通过 OneBot action 返回的受控 URL 进入 
 
 Web Chat 使用固定管理员身份和 `web:admin` 会话，通过 Web delivery adapter 进入与 QQ 相同的 Agent loop、提示词、记忆和同步工具链。Web Chat 回复只能写回浏览器消息流，不能经 OneBot 外发；Web Chat 也不能进入 QQ 会话目录、上线通知或 OneBot 外发目标。当前 Web delivery 没有持久化的异步结果投递目标，因此 Web Chat 不向模型提供 Codex、生图和自拍工具。已经受理的 Web Chat 回合使用服务端超时并按顺序完成，不绑定浏览器请求体或页面生命周期。发送接口拒绝空白正文和超过 16,000 字符的正文，页面支持 Enter 发送、Shift+Enter 换行、发送中状态、错误恢复、非重叠消息轮询和图片缩略图。
 
-日志页按从新到旧提供 Bot 活动终端与分页纵向时间轴，Responses、Codex Provider、Deferred Codex CLI、Chat Completions、Anthropic 和 Gemini 请求同时显示中文标题与原始 action ID，其中 Codex CLI 使用 `codex.tool.complete`。模型响应的统一 `tokenUsage` 使用独立用量条展示，原始请求、响应和 usage 字段继续使用递归结构化视图，不能退回整段 JSON 文本。日志页汇总回答、群聊编排、记忆压缩和其他模型调用的次数与 Token；记忆压缩区分工作与长期记忆、用户画像。非私聊会话详情显示会话累计消息数、当前保留消息数、可见消息数、用户消息数、回答数、内部消息数，以及同口径模型调用统计；页面可见且会话已选中时每 10 秒刷新统计。记忆页一次只查看一个真实来源，单个搜索栏在本地筛选与语义召回间切换。提示词编辑器提供变量表、已使用变量状态、可选 XML 包装，以及离开前保存。
+日志页按从新到旧提供 Bot 活动终端与分页纵向时间轴，Responses、Codex Provider、Deferred Codex CLI、Chat Completions、Anthropic 和 Gemini 请求同时显示中文标题与原始 action ID，其中 Codex CLI 使用 `codex.tool.complete`。模型响应的统一 `tokenUsage` 使用独立用量条展示，原始请求、响应和 usage 字段继续使用递归结构化视图，不能退回整段 JSON 文本。日志页汇总回答、群聊编排、记忆压缩和其他模型调用的次数与 Token；记忆压缩区分工作与长期记忆、用户画像。非私聊会话详情显示会话累计消息数、当前保留消息数、可见消息数、用户消息数、回答数、内部消息数，以及同口径模型调用统计；页面可见且会话已选中时每 10 秒刷新统计。Bot 消息气泡显示消息来源、本轮实际工具和请求日志入口，工具图标不使用背景或边框，窄屏时允许整行换行。记忆页一次只查看一个真实来源，单个搜索栏在本地筛选与语义召回间切换。提示词编辑器提供变量表、已使用变量状态、可选 XML 包装，以及离开前保存。
 
 图片列表和会话正文先读取 48px 低质量 WebP 占位图并以高斯模糊显示，再淡入 480px WebP 展示图；用户打开预览或原图链接时才读取完整图片。浏览器缓存已加载资源，图片历史在短期页面切换中复用，返回图片页不重新批量请求占位图和历史数据。
 

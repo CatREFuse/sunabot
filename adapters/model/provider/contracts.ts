@@ -12,7 +12,8 @@ export interface ProviderCompleteOptions {
   bash?: ProviderBashOptions;
   bot?: BotConfig;
   generateImage?: GenerateImageRunner;
-  onAssistantText?: (text: string) => void | Promise<void>;
+  onAssistantText?: (text: string, source?: ProviderAssistantTextSource) => void | Promise<void>;
+  onToolCall?: (name: string) => void;
   onImageGenerated?: (image: ImageResult) => void;
   referenceImageUrls?: string[];
   memory?: ProviderMemoryOptions;
@@ -22,6 +23,8 @@ export interface ProviderCompleteOptions {
   imageTools?: boolean;
   logContext?: ProviderLogContext;
 }
+
+export type ProviderAssistantTextSource = "text" | "assistant_text";
 
 export interface ProviderCompletedTurn {
   kind: "completed";

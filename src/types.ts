@@ -1,11 +1,13 @@
 import type { ImageResult, ParsedAttachment } from "../packages/contracts/media/media.js";
 import type { InboundMessageV1, MessageQuoteV1 } from "../packages/contracts/messaging/messages.js";
+import type { AssistantMessageOrigin } from "../packages/contracts/session/runtimeMessages.js";
 
 export type { ImageResult, ParsedAttachment } from "../packages/contracts/media/media.js";
 export type {
   InboundMessageV1,
   MessageQuoteV1
 } from "../packages/contracts/messaging/messages.js";
+export type { AssistantMessageOrigin } from "../packages/contracts/session/runtimeMessages.js";
 
 export type ProviderKind =
   | "codex-responses"
@@ -70,6 +72,10 @@ export const AGENT_TOOL_NAMES = [
   "codex"
 ] as const;
 export type AgentToolName = (typeof AGENT_TOOL_NAMES)[number];
+export interface AssistantMessageTrace {
+  messageOrigin?: AssistantMessageOrigin;
+  toolNames?: readonly string[];
+}
 export interface BotToolOverride {
   enabled?: boolean;
   description?: string;
@@ -241,6 +247,8 @@ export interface ConversationMessageRecord {
   replyMessageIds?: number[];
   quoteReferences?: ConversationMessageQuote[];
   logRunId?: string;
+  messageOrigin?: AssistantMessageOrigin;
+  toolNames?: string[];
   actionSummary?: string;
   requestStatus?: "running" | "failed";
   eventKind?: "orchestrator_decision";

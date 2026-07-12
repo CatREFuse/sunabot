@@ -240,8 +240,10 @@ describe("ToolRegistry", () => {
 
   it("rejects an inline call omitted by the current prompt", async () => {
     const delivered: string[] = [];
+    const used: string[] = [];
     const options = {
-      onAssistantText: (text: string) => { delivered.push(text); }
+      onAssistantText: (text: string) => { delivered.push(text); },
+      onToolCall: (name: string) => { used.push(name); }
     } as ProviderCompleteOptions;
     const executor = new RegistryProviderToolExecutor();
     const definitions = executor.resolveDefinitions(options, []);
@@ -258,10 +260,58 @@ describe("ToolRegistry", () => {
       error: "Tool assistant_text is not enabled for this prompt."
     });
     expect(delivered).toEqual([]);
+    expect(used).toEqual([]);
+  });
+
+  it("reports accepted inline and deferred tool calls with assistant message sources", async () => {
+    const used: string[] = [];
+    const delivered: Array<{ text: string; source: string | undefined }> = [];
+    const executor = new RegistryProviderToolExecutor();
+    const inlineOptions = {
+      onAssistantText: (text: string, source?: "text" | "assistant_text") => {
+        delivered.push({ text, source });
+      },
+      onToolCall: (name: string) => used.push(name)
+    } satisfies ProviderCompleteOptions;
+    const inlineDefinitions = executor.resolveDefinitions(inlineOptions, [staleTool("assistant_text")]);
+
+    await executor.execute([{
+      type: "function_call",
+      name: "assistant_text",
+      call_id: "call-assistant-text",
+      arguments: JSON.stringify({ text: "正在处理。" })
+    }], inlineOptions, inlineDefinitions);
+
+    const deferredOptions = {
+      asyncCodex: true,
+      onToolCall: (name: string) => used.push(name)
+    } satisfies ProviderCompleteOptions;
+    const deferredDefinitions = executor.resolveDefinitions(deferredOptions, [staleTool("codex")]);
+    const deferred = executor.deferredTurn([{
+      type: "function_call",
+      name: "codex",
+      call_id: "call-codex",
+      arguments: JSON.stringify({
+        task: "inspect",
+        kind: "analysis",
+        dispatch_message: "开始处理。"
+      })
+    }], deferredOptions, deferredDefinitions);
+
+    expect(delivered).toEqual([{ text: "正在处理。", source: "assistant_text" }]);
+    expect(used).toEqual(["assistant_text", "codex"]);
+    expect(deferred).toMatchObject({
+      kind: "deferred",
+      toolCall: { name: "codex", callId: "call-codex" }
+    });
   });
 
   it("rejects a deferred call omitted by the current prompt", async () => {
-    const options = { asyncCodex: true } as ProviderCompleteOptions;
+    const used: string[] = [];
+    const options = {
+      asyncCodex: true,
+      onToolCall: (name: string) => { used.push(name); }
+    } as ProviderCompleteOptions;
     const executor = new RegistryProviderToolExecutor();
     const definitions = executor.resolveDefinitions(options, []);
     const call = {
@@ -278,6 +328,7 @@ describe("ToolRegistry", () => {
       ok: false,
       error: "Tool codex is not enabled for this prompt."
     });
+    expect(used).toEqual([]);
   });
 });
 
