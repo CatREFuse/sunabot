@@ -1,6 +1,6 @@
 # TODO-driven 项目结构整理与架构演进
 
-日期：2026-07-11
+日期：2026-07-12
 目标设计：`docs/architecture/project-structure-plan.md`
 问题依据：`docs/audits/2026-07-11-codebase-audit.md`
 当前行为：`docs/specs/current-system-spec.md`
@@ -15,8 +15,8 @@
 
 ## 已有基线
 
-- [x] OneBot 与 NapCat 已按本机 QQ Runtime 使用回环 WebSocket 和共享本地图片路径。
-- [x] 当前生产代码通过 88 个测试文件、446 项单元/集成测试和 14 项 E2E。
+- [x] NapCat 已收敛为独立 Docker 组件，Core Native/Docker 共用专用 OneBot listener、token 和内联媒体契约。
+- [x] 当前生产代码通过 134 个测试文件、649 项单元/集成测试和 19 项 E2E。
 - [x] 主业务数据与 session queue 已迁移到 SQLite，并保留现有前向迁移规则。
 - [x] 目标结构、模块协议、双运行模型、审计问题和完成标准已形成文档。
 
@@ -177,30 +177,29 @@
   - Web 依赖不进入 API production closure；release artifact 明确 API node_modules 和 Web 静态文件。
   - 完成：容器内无 Vue 构建依赖，Native artifact 与 Docker 使用同一生产闭包。
 
-## M5：Native 与单容器交付同构
+## M5：Core Native/Docker 与 NapCat Docker 同构
 
 - [ ] **RUNTIME-001｜P1｜唯一 runtime contract 与组件锁**（AUD-022、AUD-027）
-  - 定义路径、端口、OneBot、media、secret、启动/停止、健康和 capability；锁 Node/NapCat/Codex/LibreOffice 版本、digest、checksum、license、architecture。
+  - 定义管理台回环端口、OneBot 专用端口、Compose 服务、宿主网关、media、secret、启动/停止、健康和 capability；锁 Node/NapCat/Codex/LibreOffice 版本、digest、checksum、license、architecture。
   - 完成：contract schema、component lock、SBOM、许可证和升级 smoke gate 入库。
 
-- [ ] **RUNTIME-002｜P1｜Native release 与 systemd 入库**（AUD-022）
-  - 同一 artifact 安装到版本目录；提供 api、napcat units、整体 target 和 install/start/stop/status/doctor/uninstall。
-  - NapCat 二进制、配置和 QQ 状态退出用户主目录，统一进入 component/workspace 边界。
-  - 完成：干净 WSL/Linux 上安装、升级、回滚、冷启动、扫码、文字和本地路径图片通过。
+- [ ] **RUNTIME-002｜P1｜Native Core 入口**（AUD-022）
+  - Core 使用同一 artifact 和 workspace；NapCat 始终由独立 Docker 服务运行，Native 入口不能安装或管理 NapCat 进程。
+  - 完成：macOS 与干净 WSL/Linux 上启动、停止、升级、冷启动、扫码、文字和 `base64://` 图片通过。
 
-- [ ] **RUNTIME-003｜P1｜单镜像、单 service、单容器**（AUD-022）
-  - multi-stage 组合 API/Web release 与 NapCat/QQ；使用 s6-overlay 或等价监督器管理两个进程。
-  - Compose 只保留一个 service、一个 workspace volume；OneBot 只走容器内回环。
-  - 完成：`docker compose config --services` 只有一个 service；SIGTERM、子进程崩溃恢复、冷启动和真实文图消息通过。
+- [ ] **RUNTIME-003｜P1｜Core/NapCat 分离交付与统一 launcher**（AUD-022）
+  - Core 镜像只包含 API/Web，NapCat 使用锁定的独立镜像；Compose 提供 `core` 与 `napcat` 两个服务。
+  - 根 `./sunabot.sh` 统一 `up|down|restart|status|logs|doctor`，并支持 `auto|native|docker` Core 模式。
+  - 完成：Docker Core 走私有网络，Native Core 走宿主网关；SIGTERM、冷启动、首次登录、真实文图消息和旧实例门禁通过。
 
 - [ ] **RUNTIME-004｜P1｜健康、资源和日志预算**（AUD-014、AUD-027）
-  - liveness 不因 QQ 临时离线重启容器；readiness 分层报告 API、OneBot、QQ、Provider。
-  - 配置 CPU/memory/pids/shm、worker、日志轮转和磁盘水位；Bark 告警使用错误码和计数。
+  - Core 与 NapCat 分别报告 liveness；readiness 分层报告 API、OneBot、QQ、Provider，QQ 临时离线不形成重启风暴。
+  - 两个组件分别配置 CPU/memory/pids/shm、日志轮转和磁盘水位；Bark 告警使用错误码和计数。
   - 完成：OOM/磁盘满/QQ 离线/Provider 离线演练不会形成重启风暴或静默故障。
 
-- [ ] **RUNTIME-005｜P1｜Native/Docker capability parity**（AUD-022、AUD-025）
+- [ ] **RUNTIME-005｜P1｜Core 模式 capability parity**（AUD-022、AUD-025）
   - 对 websearch、图片、自拍、Codex、Bash、LibreOffice、OneBot 文件和管理台建立同一 capability test。
-  - 完成：同一 release/version/workspace fixture 在 Native 与 Docker 全部通过，差异只能来自明确声明的可选 capability。
+  - 完成：同一 release/version/workspace fixture 在 Native Core 与 Docker Core 全部通过，跨组件消息不包含共享绝对路径；差异只能来自明确声明的可选 capability。
 
 ## M6：切换、清理与最终验收
 
@@ -213,7 +212,7 @@
   - 完成：管理台、私聊、群聊、@、reply、文件、图片、记忆、Provider、工具和异步任务全部通过。
 
 - [ ] **ROLLOUT-003｜P1｜删除兼容层和旧入口**
-  - 删除旧目录 facade、旧 Compose 双 service、未入库 Native unit、cwd fallback、重复脚本和旧 workspace 路径。
+  - 删除旧 QQ Runtime 入口、Core 内 NapCat 资产、Native NapCat unit、cwd fallback、重复脚本和旧 workspace 路径。
   - 完成：`rg` 无旧路径/旧工具名/旧协议类型，安装包和 Git 中只有一个受支持入口。
 
 - [ ] **ROLLOUT-004｜P1｜规范与交付收口**

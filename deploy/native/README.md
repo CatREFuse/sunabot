@@ -1,38 +1,26 @@
-# Native deployment
+# Native Core deployment
 
-Native 与 Docker 读取同一 `deploy/runtime-contract.json`，使用同一 API/Web release artifact、同一 workspace 路径和同一 NapCat 组件版本。安装、升级和回滚都会把版本化 NapCat 组件的 `cache` 链接到 `workspace/runtime/napcat`，二维码固定写入 `paths.napcatQrCode` 指定的 `runtime/napcat/qrcode.png`。支持 Linux/amd64（含 WSL2），不支持 Windows Native。
+Native 模式只在宿主环境运行 Sunabot Core。NapCat 在 macOS、WSL2 和 Linux 上始终由独立 Docker 容器运行，不能安装为 Native 组件或交给 Core systemd unit 管理。
 
-Native API 在应用 composition root 中解析 `workspace/secrets/runtime.env` 已注入的代理契约。WSL 可使用 `SUNABOT_PROXY_MODE=auto` 动态发现默认网关，或使用 `wsl-host` 要求探测必须成功；无需在 systemd unit 或启动脚本中固定宿主 IP。回环地址始终加入 `NO_PROXY`，NapCat 与 OneBot 仍只走 `127.0.0.1`。
-
-先在 Linux/WSL 使用 `.node-version` 锁定的 Node 24.18.0 构建：
+统一入口：
 
 ```bash
-npm ci
-npm run build
-npm run runtime:release -- --output=/tmp/sunabot-release
-docker build -f deploy/docker/Dockerfile -t sunabot-qq-runtime:local .
-npm run runtime:export-napcat -- --output=/tmp/sunabot-release
+SUNABOT_CORE_MODE=native ./sunabot.sh up
+./sunabot.sh status
+./sunabot.sh logs
+./sunabot.sh down
 ```
 
-准备 `/srv/sunabot/workspace/secrets/runtime.env` 后安装。安装只切换版本化链接和 systemd units，不自动启动：
+macOS 快速开发使用：
 
 ```bash
-sudo node tooling/runtime/native.mjs install \
-  --release-archive=/tmp/sunabot-release/sunabot-0.1.0-linux-amd64.tar.gz \
-  --napcat-archive=/tmp/sunabot-release/sunabot-napcat-4.15.0-linux-amd64.tar.gz
-sudo node tooling/runtime/native.mjs start
-node tooling/runtime/native.mjs status
-node tooling/runtime/native.mjs doctor
+./sunabot.sh up --dev
 ```
 
-运行依赖为精确 Node 24.18.0、component lock 固定的 bubblewrap、`xvfb-run`、FFmpeg、LibreOffice、systemd 和 tar。`/usr/bin/bwrap` 是必需 capability：管理员 Bash 在只读宿主根和唯一可写 Agent workspace 中运行，全部子进程继承同一隔离；二进制缺失或 namespace probe 失败时命令会安全拒绝，不会回退到普通 Bash。release manifest 会记录 Node 版本；构建、安装、回滚和服务启动都会拒绝与 runtime contract 不一致的版本。release 安装到 `/opt/sunabot/releases/<version>`，NapCat 组件安装到 `/opt/sunabot/components/napcat/<version>`；`current` 链接原子切换。
+Native Core 只向宿主回环发布管理台 `127.0.0.1:8787`，并在专用 `8788` listener 接收带 token 的 OneBot 反向 WebSocket。启动器负责生成 NapCat 配置和容器到宿主的可达地址。
 
-回滚与卸载：
+Core 读取当前仓库或显式 `SUNABOT_WORKSPACE`。所有业务配置、SQLite、Agent 和媒体仍保存在 workspace；NapCat 只挂载 `workspace/runtime/napcat/`。图片通过 OneBot `base64://` 传输，Native Core 不与 NapCat 共享绝对路径。
 
-```bash
-sudo node tooling/runtime/native.mjs rollback \
-  --release-version=0.1.0 --napcat-version=4.15.0
-sudo node tooling/runtime/native.mjs uninstall
-```
+Linux/WSL Native Core 需要 runtime contract 固定的 Node.js、bubblewrap 和 LibreOffice。bubblewrap 缺失或 namespace probe 失败时，`workspace_bash` 必须安全拒绝。macOS Native Core 关闭 `workspace_bash`。
 
-卸载保留 workspace、历史 release 和历史组件，不删除用户数据。生产切换前必须在隔离 QQ 账号完成扫码、文字、图片、Provider 和 OneBot action 验收。
+本目录中旧的 NapCat systemd unit、Native NapCat 导出和安装资产只用于识别旧部署，不能作为当前启动入口。旧服务端切换前阅读 `docs/migrations/one-container-to-split-runtime.md`。

@@ -1,15 +1,26 @@
 # Runtime tooling
 
-QQ Runtime 的稳定入口：
+用户稳定入口是仓库根 `./sunabot.sh`：
 
-- `validate-contract.mjs`：静态校验 `.node-version`、`.nvmrc`、package/lock、CI、Native release manifest、runtime contract、component lock、Dockerfile 和单 service Compose 不变量。
-- `qq-compose.mjs`：从任意 cwd 启动单容器 Docker runtime。
-- `configure-napcat-client.mjs`：按 runtime contract 把固定回环 OneBot v11 客户端写入 `runtime/napcat/config-full`。
-- `doctor.mjs`：检查唯一实例、端口和 workspace 身份。
-- `build-release.mjs`：生成带 checksum 的 Native API/Web artifact。
-- `export-napcat-component.mjs`：从已验证的单容器镜像导出带 checksum 的 Native NapCat 组件。
-- `native.mjs`：安装、升级、回滚、启停、诊断和卸载 Native runtime。
+```bash
+./sunabot.sh up
+./sunabot.sh down
+./sunabot.sh restart
+./sunabot.sh status
+./sunabot.sh logs
+./sunabot.sh doctor
+```
 
-这些工具均从自身位置解析代码根，生产数据根只接受显式 `SUNABOT_WORKSPACE` 或 runtime contract 固定路径。NapCat 配置目录只由 `paths.napcatConfig` 决定，不接受单独覆盖。
+`SUNABOT_CORE_MODE=auto|native|docker` 或 `--core=...` 选择 Core 形态。`auto` 在 macOS 使用 Native Core，在 WSL2/Linux 使用 Docker Core。`--dev` 或 `SUNABOT_DEV=1` 仅用于 Native Core 快速开发，启动 API watch 与 Vite。
 
-静态 contract 校验不比较执行它的开发机 Node 进程，因此 Windows 上已有的非目标小版本仍可运行代码检查；CI、Linux/WSL Native release 构建、安装、启动和 Docker 构建/运行会强制 Node 24.18.0。升级步骤与回归清单见 `docs/migrations/wsl2-migration-plan.md`。
+主要实现：
+
+- `launcher.mjs`：统一编排 workspace、令牌、Core、NapCat Docker、健康状态、日志和停止顺序。
+- `launcher-core.mjs`：参数、平台、Core 模式、workspace 身份和运行契约解析。
+- `configure-napcat-client.mjs`：按当前模式原子写入唯一 OneBot v11 反向连接。
+- `validate-contract.mjs`：校验 Node、端口、双服务 Compose、组件边界和运行入口。
+- `doctor.mjs`：检查唯一实例、端口 owner、workspace 身份、OneBot 连接和旧新运行时冲突。
+
+固定边界：管理台为宿主回环 `127.0.0.1:8787`，OneBot 为专用 `8788` listener，NapCat WebUI 为宿主回环 `127.0.0.1:6099`。NapCat 始终是独立 Docker 服务，跨组件媒体默认使用 `base64://`。
+
+`macos.mjs` 只做统一 launcher 的兼容委托。`qq-compose.mjs`、`native.mjs`、Native NapCat 导出与旧 systemd 资产只保留迁移、打包和审计用途，不能作为当前运行入口，也不能恢复单容器或 Native NapCat 架构。

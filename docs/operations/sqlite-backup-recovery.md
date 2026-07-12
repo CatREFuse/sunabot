@@ -15,13 +15,14 @@ manifest 是单项备份清单，可以使用 JSON；业务消息、日志和记
 
 ## 每日备份
 
-先停止整个 QQ Runtime，并确认没有第二个实例写数据库：
+先使用统一入口停止 Core 与 NapCat，并确认没有第二个实例写数据库。需要保持显式 Core 模式时，在停止和恢复启动时使用相同的 `SUNABOT_CORE_MODE`：
 
 ```bash
-sudo systemctl stop sunabot-runtime.target
+SUNABOT_CORE_MODE=docker ./sunabot.sh down
+./sunabot.sh doctor
 SUNABOT_WORKSPACE=/srv/sunabot/workspace npm run backup:create -- --quiesced
 SUNABOT_WORKSPACE=/srv/sunabot/workspace npm run backup:prune
-sudo systemctl start sunabot-runtime.target
+SUNABOT_CORE_MODE=docker ./sunabot.sh up
 ```
 
 `backup:prune` 默认只输出计划。人工核对后才执行：
