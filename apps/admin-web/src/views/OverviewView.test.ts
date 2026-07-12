@@ -24,6 +24,11 @@ describe("OverviewView", () => {
       if (path === "/api/onebot/login-info") return Promise.resolve({ connected: false });
       if (path === "/api/conversations") return Promise.resolve({ conversations: [] });
       if (path === "/api/images") return Promise.resolve({ images: [] });
+      if (path.startsWith("/api/token-usage?")) return Promise.resolve({
+        today: { date: "2026-07-10", input: 0, output: 0, total: 0, requests: 0 },
+        days: [],
+        hours: []
+      });
       throw new Error(`Unexpected request: ${path}`);
     });
   });
@@ -42,13 +47,17 @@ describe("OverviewView", () => {
       if (path === "/api/onebot/login-info") return Promise.resolve({ connected: true, error: "登录查询失败" });
       if (path === "/api/conversations") return Promise.resolve({ conversations: [] });
       if (path === "/api/images") return Promise.resolve({ images: [] });
+      if (path.startsWith("/api/token-usage?")) return Promise.resolve({
+        today: { date: "2026-07-10", input: 0, output: 0, total: 0, requests: 0 },
+        days: [],
+        hours: []
+      });
       throw new Error(`Unexpected request: ${path}`);
     });
 
     const wrapper = mount(OverviewView);
     await flushPromises();
-    expect(wrapper.text()).toContain("QQ 状态未知");
-    expect(wrapper.text()).toContain("ONEBOT 已连接 · QQ 未知");
+    expect(wrapper.text()).toContain("OneBot 已连接，QQ 未知");
   });
 
   it("shows the status request error and never reports a failed refresh as updated", async () => {

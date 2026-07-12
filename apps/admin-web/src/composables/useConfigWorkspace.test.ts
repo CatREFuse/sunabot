@@ -39,6 +39,7 @@ function config(adminName: string): AppConfig {
       memory: { memoryModel: "gpt-5.4-mini", reasoningEffort: "medium", messageThreshold: 48, workingMemoryMaxEntries: 100, workMemoryCompressInPrompt: "in.md", workMemoryCompressOutPrompt: "out.md", userProfilePrompt: "user.md" },
       orchestrator: { enabled: false, userGroupchatOrchestratorModel: "gpt-5.4-mini", reasoningEffort: "medium", promptFile: "orchestrator.md", messageThreshold: 10, recentMessageWindowMs: 60_000 },
       tools: {
+        maxCalls: 20,
         websearch: { provider: "tavily", tavilyApiKey: "", tavilyApiKeys: [], tavilyApiKeyEnv: "TAVILY_API_KEY", maxResults: 5 },
         codex: { enabled: true, model: "gpt-5.4-mini", codexExecutable: "auto", timeoutMs: 900_000, maxConcurrency: 2 },
         generateImg: { provider: "codex-image-gen", size: "1024x1024", resolution: "1K", quality: "high" }

@@ -238,12 +238,10 @@ export function buildUserPrompt(
   incoming: ParsedIncomingMessage,
   text: string,
   isAdmin: boolean,
-  memoryMatches: MemoryEntry[],
   admin: AdminIdentity,
   attachmentContext = ""
 ) {
   const boundedAttachmentContext = truncateToEstimatedTokens(attachmentContext, 5_120);
-  const boundedMemory = truncateToEstimatedTokens(formatMemoryMatchesForPrompt(memoryMatches), 2_048);
   const currentTextBudget = Math.max(1_024, 6_144 - estimatePromptTokens(boundedAttachmentContext));
   const boundedText = truncateToEstimatedTokens(text, currentTextBudget);
   const scopeName = incoming.scope === "private" ? "私聊" : incoming.scope === "user_group" ? "用户群聊" : "bot群聊";
@@ -253,8 +251,23 @@ export function buildUserPrompt(
   const imageLine = imageCount ? `图片：${imageCount} 张，可作为生图参考图\n` : "";
   const quoteLine = incoming.quoteReferences.length ? `引用：${formatQuoteReferencesForContext(incoming.quoteReferences)}\n` : "";
   const attachmentLine = boundedAttachmentContext ? `文件内容：\n${boundedAttachmentContext}\n` : "";
-  const memoryLine = boundedMemory ? `相关记忆：\n${boundedMemory}\n` : "";
-  return `消息场景：${scopeName}\n${groupLine}用户：${formatIncomingUserLabel(incoming, admin)}\n${roleLine}${imageLine}${quoteLine}${attachmentLine}${memoryLine}内容：${boundedText}`;
+  return `消息场景：${scopeName}\n${groupLine}用户：${formatIncomingUserLabel(incoming, admin)}\n${roleLine}${imageLine}${quoteLine}${attachmentLine}内容：${boundedText}`;
+}
+
+export function buildMemoryPromptVariables(input: {
+  working: MemoryEntry[];
+  longTerm: MemoryEntry[];
+  userProfile: MemoryEntry[];
+}) {
+  return {
+    "memory.working": formatPromptMemory(input.working),
+    "memory.long_term": formatPromptMemory(input.longTerm),
+    "memory.user_profile": formatPromptMemory(input.userProfile)
+  };
+}
+
+function formatPromptMemory(entries: MemoryEntry[]) {
+  return truncateToEstimatedTokens(formatMemoryMatchesForPrompt(entries), 2_048);
 }
 export function truncateToEstimatedTokens(text: string, budget: number) {
   if (!text || estimatePromptTokens(text) <= budget) return text;

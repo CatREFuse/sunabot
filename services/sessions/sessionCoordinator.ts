@@ -11,6 +11,7 @@ import { SessionToolJobProcessor } from "./sessionToolJobProcessor.js";
 import type {
   ClaimedToolTask,
   CodexCoordinatorSettings,
+  DeferredToolRunner,
   SessionClaimState as ClaimState
 } from "./sessionCoordinatorTypes.js";
 import {
@@ -57,7 +58,8 @@ export type SessionHandleResult =
   | {
       status: "deferred";
       providerCallId: string;
-      arguments: CodexToolInput;
+      toolName: string;
+      arguments: unknown;
       originalRequest: unknown;
       acknowledgement: OutboxDraft;
       result?: unknown;
@@ -79,6 +81,7 @@ export interface SessionCoordinatorOptions {
   ): unknown | Promise<unknown>;
   codexRunner: CodexRunner;
   codexSettings(): CodexCoordinatorSettings;
+  runDeferredTool?: DeferredToolRunner;
   turnTimeoutMs?: number;
   outboxTimeoutMs?: number;
   maxSessionConcurrency?: number;
@@ -195,6 +198,7 @@ export class SessionCoordinator {
         status: "unverified",
         message: "Codex process cleanup port is not configured."
       })),
+      runDeferredTool: options.runDeferredTool,
       workerId: this.workerId,
       isStopped: () => this.stopped,
       assertClaimUsable: (state, signal) => this.assertClaimUsable(state, signal),
@@ -337,14 +341,16 @@ export class SessionCoordinator {
       this.assertClaimUsable(state, signal);
       if (result.status === "deferred") {
         const settings = this.codexSettings();
-        if (!settings.enabled) throw new Error("Codex asynchronous work is disabled.");
+        if (result.toolName === "codex" && !settings.enabled) {
+          throw new Error("Codex asynchronous work is disabled.");
+        }
         this.store.deferTurn({
           turnId: claim.turn.id,
           workerId: this.workerId,
           job: {
             providerCallId: requiredText(result.providerCallId, "providerCallId"),
-            toolName: "codex",
-            taskKind: codexKind(result.arguments),
+            toolName: result.toolName,
+            ...(result.toolName === "codex" ? { taskKind: codexKind(result.arguments as CodexToolInput) } : {}),
             originalRequest: result.originalRequest,
             arguments: result.arguments
           },
@@ -505,8 +511,6 @@ export class SessionCoordinator {
 
   private scheduleTools() {
     if (!this.started || this.stopped || this.scanningTools) return;
-    const settings = this.codexSettings();
-    if (!settings.enabled) return;
     this.scanningTools = true;
     try {
       while (!this.stopped) {
@@ -605,6 +609,7 @@ export class SessionCoordinator {
 }
 
 function toolActorKey(job: ToolJobRecord, workspacePath: string) {
+  if (job.toolName !== "codex") return `tool:${job.toolName}:${job.id}`;
   const kind = job.taskKind ?? codexKind(job.arguments as CodexToolInput);
   return kind === "local" ? `local:${path.resolve(workspacePath)}` : `${kind}:${job.id}`;
 }

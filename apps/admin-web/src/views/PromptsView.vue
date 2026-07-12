@@ -77,8 +77,9 @@ function selectFile(id: string) {
   void router.push(`/prompts/${encodeURIComponent(id)}`);
 }
 
-async function save() {
-  if (!file.value || !dirty.value) return;
+async function save(): Promise<boolean> {
+  if (!file.value) return false;
+  if (!dirty.value) return true;
   saving.value = true;
   try {
     const result = await library.saveFile(file.value, content.value);
@@ -87,6 +88,7 @@ async function save() {
     baseline.value = result.content;
     conflict.value = false;
     setMessage("[SAVED]", "success");
+    return true;
   } catch (error) {
     if (error instanceof ApiRequestError && error.status === 409) {
       conflict.value = true;
@@ -94,9 +96,18 @@ async function save() {
     } else {
       setMessage(`[ERROR: ${error instanceof Error ? error.message : "保存失败"}]`, "error");
     }
+    return false;
   } finally {
     saving.value = false;
   }
+}
+
+async function saveAndContinue() {
+  const path = pendingPath.value;
+  if (!await save()) return;
+  confirmOpen.value = false;
+  pendingPath.value = "";
+  if (path) void router.push(path);
 }
 
 function discard() {
@@ -208,6 +219,7 @@ function setMessage(value: string, kind: "" | "success" | "error" | "warning") {
         <p class="mt-3 text-sm text-mute">当前正文尚未保存，离开后无法恢复。</p>
         <div class="mt-8 flex justify-end gap-2">
           <button class="btn btn-ghost" type="button" @click="cancelNavigation">继续编辑</button>
+          <button class="btn btn-primary" type="button" :disabled="saving" @click="saveAndContinue"><i class="bx bx-save" aria-hidden="true"></i>{{ saving ? "保存中" : "保存并离开" }}</button>
           <button class="btn btn-danger" type="button" @click="continueNavigation">放弃并离开</button>
         </div>
       </section>

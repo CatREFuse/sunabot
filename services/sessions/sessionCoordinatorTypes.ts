@@ -27,6 +27,17 @@ export interface ClaimedToolTask {
   state: SessionClaimState;
 }
 
+export interface DeferredToolRunResult {
+  status: "succeeded" | "failed" | "timed_out" | "cancelled" | "needs_input" | "unknown";
+  result?: unknown;
+  error?: unknown;
+}
+
+export type DeferredToolRunner = (
+  job: ToolJobRecord,
+  signal: AbortSignal
+) => Promise<DeferredToolRunResult>;
+
 export type CodexProcessCleanup = (
   identity: CodexProcessIdentity
 ) => Promise<CodexProcessCleanupResult>;

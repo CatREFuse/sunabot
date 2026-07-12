@@ -151,6 +151,22 @@ describe("AgentFileRepository", () => {
     expect(await fs.readFile(promptPath, "utf8")).toBe(defaultPromptContent("memory.compress-in"));
   });
 
+  it("edits the user profile extraction prompt with persona variables", async () => {
+    const filePath = path.join(workspaceDir, "user_profile_prompt.json");
+    await fs.writeFile(filePath, defaultPromptContent("memory.user-profile"), "utf8");
+    const current = await repository.get("memory.user-profile");
+    const document = JSON.parse(current.content);
+    document.messages[0].content = `<soul>@{persona.soul}</soul>\n${document.messages[0].content}`;
+
+    const saved = await repository.put("memory.user-profile", {
+      content: `${JSON.stringify(document, null, 2)}\n`,
+      revision: current.revision
+    });
+
+    expect(saved.content).toContain("@{persona.soul}");
+    expect(await fs.readFile(filePath, "utf8")).toContain("@{persona.soul}");
+  });
+
   it("resolves the current dynamic prompt path on every operation", async () => {
     const config = currentConfig();
     config.bot.memory.workMemoryCompressInPrompt = "nested/compress.json";

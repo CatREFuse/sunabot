@@ -48,6 +48,7 @@ export interface AssistantReplyOutboxPayload {
   text: string;
   generatedImages: ImageResult[];
   isAdmin: boolean;
+  quoteReply?: boolean;
   logRunId?: string;
 }
 

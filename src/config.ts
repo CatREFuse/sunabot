@@ -27,7 +27,9 @@ const rootDir = discoverProjectRoot(path.dirname(fileURLToPath(import.meta.url))
 const workspaceDir = resolveWorkspaceDir(process.env.SUNABOT_WORKSPACE);
 const AUTO_CODEX_EXECUTABLE = "auto";
 
-dotenv.config({ path: path.join(workspaceDir, WORKSPACE_LAYOUT.secretsEnv), override: false });
+if (process.env.NODE_ENV !== "test") {
+  dotenv.config({ path: path.join(workspaceDir, WORKSPACE_LAYOUT.secretsEnv), override: false });
+}
 
 export function getRootDir() {
   return rootDir;
@@ -63,12 +65,14 @@ export function defaultConfig(): AppConfig {
       envFile: runtimeEnvReference,
       temperature: 0.7,
       maxOutputTokens: 2400,
-      reasoningEffort: "medium"
+      reasoningEffort: "medium",
+      modelSource: "remote",
+      multimodal: "auto"
     },
     {
       id: "openai-api",
       label: "OpenAI API",
-      kind: "openai-responses",
+      kind: "openai-official",
       enabled: true,
       model: "gpt-5.5",
       imageModel: "gpt-image-2",
@@ -77,7 +81,9 @@ export function defaultConfig(): AppConfig {
       envFile: runtimeEnvReference,
       temperature: 0.7,
       maxOutputTokens: 2400,
-      reasoningEffort: "medium"
+      reasoningEffort: "medium",
+      modelSource: "remote",
+      multimodal: "auto"
     }
   ];
 
@@ -115,6 +121,7 @@ export function defaultConfig(): AppConfig {
         recentMessageWindowMs: 60_000
       },
       tools: {
+        maxCalls: 20,
         websearch: {
           provider: "tavily",
           tavilyApiKey: "",
@@ -137,7 +144,7 @@ export function defaultConfig(): AppConfig {
         }
       },
       bash: {
-        enabled: true,
+        enabled: process.env.SUNABOT_RUNTIME_MODE !== "macos",
         allowGroup: false,
         adminOnly: true,
         workspaceOnly: true,
@@ -169,6 +176,9 @@ export async function ensureWorkspace() {
     WORKSPACE_LAYOUT.runtimeLogs,
     WORKSPACE_LAYOUT.runtimeTemporary,
     WORKSPACE_LAYOUT.napcatState,
+    WORKSPACE_LAYOUT.napcatConfig,
+    WORKSPACE_LAYOUT.napcatQqState,
+    WORKSPACE_LAYOUT.napcatPlugins,
     path.dirname(WORKSPACE_LAYOUT.secretsEnv),
     WORKSPACE_LAYOUT.backups
   ].map((relativePath) => fs.mkdir(getWorkspacePath(relativePath), { recursive: true, mode: 0o700 })));
@@ -320,8 +330,24 @@ function runtimePort(value: string | undefined) {
 
 function normalizeProviderReasoningEffort(provider: ProviderConfig): ProviderConfig {
   const requested = isReasoningEffort(provider.reasoningEffort) ? provider.reasoningEffort : undefined;
+  const legacyKind = String(provider.kind);
+  const kind = (legacyKind === "openai-responses"
+    ? "openai-official"
+    : legacyKind === "gemini-openai"
+      ? "openai-compatible"
+      : legacyKind === "anthropic-openai"
+        ? "anthropic-official"
+        : provider.kind) as ProviderConfig["kind"];
   return {
     ...provider,
+    kind,
+    modelSource: provider.modelSource === "remote" || provider.modelSource === "custom"
+      ? provider.modelSource
+      : kind.endsWith("-compatible")
+        ? "custom"
+        : "remote",
+    multimodal: provider.multimodal === "enabled" || provider.multimodal === "disabled" ? provider.multimodal : "auto",
+    ...(typeof provider.detectedMultimodal === "boolean" ? { detectedMultimodal: provider.detectedMultimodal } : {}),
     reasoningEffort: resolveModelReasoningEffort(provider.model, requested).effort
   };
 }
@@ -337,7 +363,7 @@ function mergeBotConfig(base: BotConfig, incoming: Partial<BotConfig> | undefine
     orchestrator: mergeBotOrchestratorSettings(base.orchestrator, incoming?.orchestrator as Partial<BotOrchestratorSettings> | undefined),
     tools: mergeBotToolSettings(base.tools, incoming?.tools as Partial<BotToolSettings> | undefined),
     bash: {
-      enabled: bash?.enabled ?? base.bash.enabled,
+      enabled: process.env.SUNABOT_RUNTIME_MODE === "macos" ? false : bash?.enabled ?? base.bash.enabled,
       allowGroup: bash?.allowGroup ?? base.bash.allowGroup,
       adminOnly: bash?.adminOnly ?? base.bash.adminOnly,
       workspaceOnly: bash?.workspaceOnly ?? base.bash.workspaceOnly,
@@ -389,6 +415,7 @@ function mergeBotToolSettings(base: BotToolSettings, incoming: Partial<BotToolSe
     tavilyApiKeyEnv: legacyWebsearch?.tavilyApiKeyEnv
   }, base.websearch);
   return {
+    maxCalls: normalizeInteger(incoming?.maxCalls, base.maxCalls, 1, 100),
     websearch: {
       provider: "tavily",
       ...tavily,

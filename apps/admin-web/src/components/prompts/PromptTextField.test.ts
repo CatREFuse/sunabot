@@ -43,4 +43,18 @@ describe("PromptTextField", () => {
     expect(wrapper.text()).toContain("@{user.input}");
     expect(wrapper.text()).toContain("@{persona.soul}");
   });
+
+  it("optionally wraps inserted variables in semantic XML and marks variables already in use", async () => {
+    const wrapper = mount(PromptTextField, {
+      props: { modelValue: "{{ persona.soul }}\n", variables, label: "系统提示词", semanticXml: true }
+    });
+    const textarea = wrapper.get("textarea").element as HTMLTextAreaElement;
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    await wrapper.findAll(".variable-context__row")[0]!.trigger("click");
+
+    expect(wrapper.emitted("update:modelValue")?.at(-1)).toEqual([
+      "{{ persona.soul }}\n<user_input>@{user.input}</user_input>"
+    ]);
+    expect(wrapper.findAll(".variable-context__row--used").map((row) => row.text()).join(" ")).toContain("persona.soul");
+  });
 });

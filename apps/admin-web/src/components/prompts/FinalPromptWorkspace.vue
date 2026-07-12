@@ -280,7 +280,7 @@ function onTabKeydown(event: KeyboardEvent, index: number) {
     border-radius: 12px;
     background: rgb(var(--color-page));
     padding: 20px 20px 28px;
-    transition: background-color 160ms ease, box-shadow 160ms ease, opacity 160ms ease;
+    transition: background-color 160ms ease, border-color 160ms ease, opacity 160ms ease;
   }
 
   .prompt-workspace__panel--dragging {
@@ -288,7 +288,7 @@ function onTabKeydown(event: KeyboardEvent, index: number) {
   }
 
   .prompt-workspace__panel--drag-over {
-    box-shadow: inset 0 0 0 2px rgb(var(--color-display));
+    border-color: rgb(var(--color-display));
   }
 }
 </style>

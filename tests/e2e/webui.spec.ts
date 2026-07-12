@@ -1,12 +1,117 @@
 import { expect, test } from "@playwright/test";
 import { installMockApi, modelCatalog } from "./mock-api";
 
+test("QQ 账号可在 WebUI 退出、扫码并实时刷新二维码", async ({ page }) => {
+  const state = await installMockApi(page);
+  await page.goto("/overview");
+
+  await page.getByRole("button", { name: "QQ 账号", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "QQ 登录" })).toBeVisible();
+  await expect(page.getByLabel("QQ 登录").getByText("QQ 123456", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "退出 QQ", exact: true }).click();
+  await expect(page.getByText("确认退出当前 QQ？", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "确认退出", exact: true }).click();
+  await expect(page.getByText("等待扫码", { exact: true })).toBeVisible();
+  await expect(page.getByAltText("QQ 登录二维码")).toBeVisible();
+
+  const previousVersion = state.qrVersion;
+  await page.getByRole("button", { name: "刷新二维码", exact: true }).click();
+  await expect.poll(() => state.qrVersion).toBeGreaterThan(previousVersion);
+  await expect(page.getByText(/更新于/)).toBeVisible();
+});
+
+test("日志使用纵向时间轴、结构化请求体并同时显示原始 ID 与中文名", async ({ page }) => {
+  await installMockApi(page);
+  await page.goto("/logs");
+
+  const terminal = page.getByLabel("Bot 活动终端");
+  await expect(terminal).toContainText("[message.private] 收到私聊消息");
+  await page.getByRole("button", { name: "请求日志", exact: true }).click();
+  const list = page.getByLabel("请求日志列表");
+  await expect(list.locator(".request-list__timeline")).toBeVisible();
+  await expect(list.locator(".request-list__marker").first()).toBeVisible();
+  await expect(list.getByText("Responses 模型调用", { exact: true }).first()).toBeVisible();
+  await expect(list.getByText("responses.complete", { exact: true }).first()).toBeVisible();
+  await list.getByText("请求体", { exact: true }).click();
+  await expect(list.getByText("model", { exact: true }).first()).toBeVisible();
+  await page.getByRole("button", { name: "下一页" }).click();
+  await expect(page.getByText("2 / 2", { exact: true })).toBeVisible();
+});
+
+test("退出登录只在设置页提供", async ({ page }) => {
+  await installMockApi(page);
+  await page.goto("/overview");
+
+  await expect(page.locator("nav").getByRole("button", { name: "退出登录" })).toHaveCount(0);
+  await expect(page.locator("aside").getByRole("button", { name: "退出登录" })).toHaveCount(0);
+  await page.getByRole("link", { name: "设置", exact: true }).click();
+  await page.getByRole("button", { name: "退出登录", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "退出管理台？" })).toBeVisible();
+  await page.getByRole("button", { name: "退出登录", exact: true }).last().click();
+  await expect(page.getByRole("heading", { name: "管理员登录" })).toBeVisible();
+});
+
+test("自拍参考图可独立预览、删除和上传", async ({ page }) => {
+  const state = await installMockApi(page);
+  await page.goto("/settings/persona");
+
+  await expect(page.getByText("3 / 3 张", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "管理参考图", exact: true }).click();
+  const manager = page.getByRole("dialog", { name: "自拍参考图" });
+  await expect(manager).toBeVisible();
+
+  await manager.getByRole("button", { name: "查看原图 01-neutral-face.png" }).first().click();
+  const preview = page.getByRole("dialog", { name: "自拍参考图预览" });
+  await expect(preview).toBeVisible();
+  await expect(preview.locator('img[src*="variant=original"]')).toBeVisible();
+  await preview.getByRole("button", { name: "关闭预览" }).click();
+
+  await manager.getByRole("button", { name: "删除 01-neutral-face.png" }).click();
+  await expect(page.getByRole("heading", { name: "删除这张参考图？" })).toBeVisible();
+  await page.getByRole("button", { name: "删除", exact: true }).click();
+  await expect(manager.getByText("参考图已删除", { exact: true })).toBeVisible();
+  await expect(manager.locator("article")).toHaveCount(2);
+  expect(state.selfieReferences).toHaveLength(2);
+
+  await manager.locator('input[type="file"]').setInputFiles({
+    name: "replacement.png",
+    mimeType: "image/png",
+    buffer: Buffer.from("replacement-image")
+  });
+  await expect(manager.getByText("1 张已保存", { exact: true })).toBeVisible();
+  expect(state.selfieReferences).toHaveLength(3);
+  expect(state.patchRequests).toHaveLength(0);
+
+  await manager.getByRole("button", { name: "关闭", exact: true }).click();
+  await page.goto("/overview");
+  await expect(page.getByRole("heading", { name: "运行状态" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "放弃未保存的设置？" })).toHaveCount(0);
+});
+
+test("Provider 创建时固定类型并支持模型拉取与多模态探测", async ({ page }) => {
+  await installMockApi(page);
+  await page.goto("/settings/providers");
+
+  await page.getByRole("button", { name: "新增 Provider" }).click();
+  await expect(page.getByRole("heading", { name: "选择 Provider 类型" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /^创建 / })).toHaveCount(7);
+  await page.getByRole("button", { name: "创建 Anthropic 官方" }).click();
+  await expect(page.locator('span[aria-label="Provider 类型"]')).toHaveText("Anthropic 官方");
+  await expect(page.getByLabel("Base URL")).toHaveAttribute("readonly", "");
+  await expect(page.getByRole("combobox", { name: "协议" })).toHaveCount(0);
+  await page.getByRole("button", { name: "拉取模型" }).click();
+  await expect(page.getByText("[7 MODELS]", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "探测多模态" }).click();
+  await expect(page.getByText("[MULTIMODAL]", { exact: true }).last()).toBeVisible();
+});
+
 test("模型下拉目录、推理强度联动与分区保存", async ({ page }) => {
   const state = await installMockApi(page);
   await page.goto("/settings/providers");
 
   await expect(page.getByRole("heading", { name: "模型服务" })).toBeVisible();
-  const modelSelect = page.getByLabel("模型").first();
+  const modelSelect = page.getByRole("combobox", { name: "模型", exact: true }).first();
   await expect(modelSelect).toBeVisible();
   await expect(modelSelect.locator("option")).toHaveText([
     ...modelCatalog.map((model) => model.label),
@@ -42,7 +147,7 @@ test("模型下拉目录、推理强度联动与分区保存", async ({ page }) 
   await expect(page.getByText("[SAVED]", { exact: true })).toBeVisible();
 
   await page.goto("/settings/tools");
-  const codexModelSelect = page.getByLabel("模型");
+  const codexModelSelect = page.getByRole("combobox", { name: "模型", exact: true });
   await expect(codexModelSelect.locator("option")).toHaveText(modelCatalog.map((model) => model.label));
   await expect(page.getByLabel("可执行文件")).toHaveValue("auto");
   await expect(page.getByLabel("启用 Codex")).toBeChecked();
@@ -114,6 +219,11 @@ test("提示词库列出全部文件并支持快捷保存与冲突恢复", async
   await expect(page.getByRole("heading", { name: "放弃未保存的修改？" })).toBeVisible();
   await page.getByRole("button", { name: "继续编辑" }).click();
   await expect(page).toHaveURL(/\/prompts\/persona\.soul$/);
+
+  await page.getByRole("link", { name: "设置" }).click();
+  await page.getByRole("button", { name: "保存并离开" }).click();
+  await expect(page).toHaveURL(/\/settings$/);
+  await expect.poll(() => state.files.find((item) => item.id === "persona.soul")?.content).toBe("尚未保存。\n");
 });
 
 test("最终请求支持消息组、排序、结构测试和 JSON 存储同步", async ({ page }) => {
@@ -129,11 +239,13 @@ test("最终请求支持消息组、排序、结构测试和 JSON 存储同步",
   await expect(page.getByRole("tab", { name: "Function Call" })).toBeVisible();
   await expect(page.getByLabel("完整请求 JSON")).toHaveCount(0);
 
+  await page.getByTitle("插入变量时自动添加 XML 标签").click();
   await systemPrompt.click();
   await systemPrompt.press("Control+End");
   await systemPrompt.type("\n@当前用户");
   await page.getByRole("option", { name: /当前用户/ }).click();
-  await expect(systemPrompt).toHaveValue(/@\{user\.input\}/);
+  await expect(systemPrompt).toHaveValue(/<user_input>@\{user\.input\}<\/user_input>/);
+  await expect(page.getByRole("tabpanel", { name: "system 消息" }).locator('.variable-context__row--used[title="插入 @{user.input}"]')).toBeVisible();
 
   await page.getByRole("tab", { name: "消息组 2" }).click();
   await expect(page.getByLabel("消息组变量")).toHaveValue("messages_64");
@@ -156,7 +268,7 @@ test("最终请求支持消息组、排序、结构测试和 JSON 存储同步",
   const saved = state.files.find((file) => file.id === "conversation.reply");
   expect(saved).toBeDefined();
   const document = JSON.parse(saved?.content ?? "{}");
-  expect(document.messages[0].content).toContain("@{user.input}");
+  expect(document.messages[0].content).toContain("<user_input>@{user.input}</user_input>");
   expect(document.messages[2]).toBe("@{messages_64}");
   expect(document.tools[0].function.name).toBe("workspace_bash_v2");
   expect(document.response_format).toEqual({ type: "text" });
@@ -222,7 +334,8 @@ test("生产构建支持深链接刷新与浏览器返回", async ({ page }) => 
   await expect(page.getByRole("status", { name: "正在输入" })).toBeVisible();
   await page.getByRole("button", { name: "查看请求日志" }).last().click();
   await expect(page.getByRole("heading", { name: "请求日志" })).toBeVisible();
-  await expect(page.getByText("runtime.action · reply.started", { exact: true })).toBeVisible();
+  await expect(page.getByText("开始生成回复", { exact: true })).toBeVisible();
+  await expect(page.getByText("reply.started", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "关闭", exact: true }).click();
 
   await page.reload();
@@ -254,13 +367,15 @@ test("记忆页区分称呼与昵称、显示事件范围并保留称呼编辑",
   await page.goto("/memory");
 
   const sourceTabs = page.getByRole("navigation", { name: "记忆类别" });
-  await expect(sourceTabs.getByRole("button")).toHaveText(["全部", "工作记忆", "长期记忆", "用户画像"]);
+  await expect(sourceTabs.getByRole("button")).toHaveText(["工作记忆", "长期记忆", "用户画像"]);
+  await expect(page.getByText(/发生 .* 至 .*/)).toBeVisible();
+
+  await sourceTabs.getByRole("button", { name: "用户画像" }).click();
   await expect(page.getByText("称呼 猫老师", { exact: true })).toBeVisible();
   await expect(page.getByText("QQ 昵称 猫老师原昵称", { exact: true })).toBeVisible();
   await expect(page.getByText("群名片 猫老师 · 群 10001", { exact: true })).toBeVisible();
-  await expect(page.getByText(/发生 .* 至 .*/)).toBeVisible();
 
-  const filter = page.getByLabel("筛选记忆");
+  const filter = page.getByLabel("搜索记忆");
   await filter.fill("猫老师");
   const profileRow = page.locator("article").filter({ hasText: "称呼 猫老师" });
   await expect(profileRow).toBeVisible();
@@ -278,7 +393,6 @@ test("记忆页区分称呼与昵称、显示事件范围并保留称呼编辑",
       source: "user_profile",
       id: "profile-1",
       text: "正文已经更新。",
-      userId: "20002",
       addressName: "猫老师"
     }
   });
@@ -380,7 +494,11 @@ test("设置离开确认沿用应用弹层并可继续编辑", async ({ page }) 
 
 test("图像页只保留历史、预览、下载和可见错误", async ({ page }) => {
   const requests: string[] = [];
-  page.on("request", (request) => requests.push(new URL(request.url()).pathname));
+  const placeholderRequests: string[] = [];
+  page.on("request", (request) => {
+    requests.push(new URL(request.url()).pathname);
+    if (request.url().includes("variant=placeholder")) placeholderRequests.push(request.url());
+  });
   const state = await installMockApi(page);
   await page.goto("/images");
 
@@ -392,6 +510,16 @@ test("图像页只保留历史、预览、下载和可见错误", async ({ page 
   expect(requests).toContain("/api/images");
   expect(requests).not.toContain("/api/config");
   expect(requests).not.toContain("/api/playground/image");
+  await expect(page.locator('.authenticated-image[data-state="ready"]').first()).toBeVisible();
+  const placeholderCount = placeholderRequests.filter((url) => url.includes("image-1.png")).length;
+  const overviewImages = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/images");
+  await page.getByRole("link", { name: "状态", exact: true }).click();
+  await overviewImages;
+  const historyRequestsAfterOverview = requests.filter((pathname) => pathname === "/api/images").length;
+  await page.getByRole("link", { name: "图像", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "生成历史" })).toBeVisible();
+  expect(requests.filter((pathname) => pathname === "/api/images")).toHaveLength(historyRequestsAfterOverview);
+  expect(placeholderRequests.filter((url) => url.includes("image-1.png"))).toHaveLength(placeholderCount);
 
   await page.getByRole("button", { name: "预览 月球基地的清晨" }).click();
   await expect(page.getByRole("dialog", { name: "图片预览" })).toBeVisible();

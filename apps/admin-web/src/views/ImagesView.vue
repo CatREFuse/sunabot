@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { RefreshCw } from "lucide-vue-next";
 import { computed, onBeforeUnmount, onMounted, shallowRef } from "vue";
 import { useImageStudio } from "../composables/useImageStudio";
 import type { ImageHistoryRecord } from "../types";
@@ -33,7 +32,7 @@ async function downloadImage(image: ImageHistoryRecord) {
       <PageHeader kicker="IMAGE STUDIO" title="图像">
         <template #actions>
           <span class="inline-state" :data-kind="messageKind">{{ message }}</span>
-          <button class="icon-btn" type="button" :disabled="data.loading.value" aria-label="刷新历史" @click="data.load"><RefreshCw :size="18" :stroke-width="1.5" /></button>
+          <button class="icon-btn" type="button" :disabled="data.loading.value" aria-label="刷新历史" @click="data.load(true)"><i class="bx bx-refresh text-xl" aria-hidden="true"></i></button>
         </template>
       </PageHeader>
 

@@ -184,7 +184,6 @@ describe("attachment runtime integration", () => {
       incomingMessage([readyAttachment("current", "财务报告.pdf")]),
       "总结重点",
       false,
-      [],
       { userId: "42", name: "猫老师" },
       "【财务报告.pdf】\n第一页：年度收入增长 20%。"
     );

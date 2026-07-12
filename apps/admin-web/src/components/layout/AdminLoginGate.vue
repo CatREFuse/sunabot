@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { KeyRound, ShieldAlert } from "lucide-vue-next";
 import { shallowRef } from "vue";
 import { useAdminApi } from "../../composables/useAdminApi";
 import DialogOverlay from "../ui/DialogOverlay.vue";
@@ -34,9 +33,9 @@ async function unlock() {
   <DialogOverlay :open="true" class="!bg-page" :dismissible="false" :z-index="100" labelledby="login-title">
     <form class="w-full max-w-md rounded-2xl border border-visible bg-panel p-6 md:p-8" @submit.prevent="unlock">
       <div class="flex items-center justify-between">
-        <KeyRound :size="28" :stroke-width="1.5" class="text-display" aria-hidden="true" />
+        <i class="bx bx-key text-3xl text-display" aria-hidden="true"></i>
         <span class="inline-flex items-center gap-2 font-mono text-[10px] uppercase tracking-widest text-mute">
-          <ShieldAlert :size="14" /> Secure session
+          <i class="bx bx-shield-quarter" aria-hidden="true"></i> Secure session
         </span>
       </div>
       <p class="page-kicker mt-8">ADMIN ACCESS</p>

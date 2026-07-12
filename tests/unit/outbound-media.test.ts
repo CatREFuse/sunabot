@@ -15,7 +15,8 @@ describe("OutboundMediaDelivery", () => {
     imagePath = path.join(rootDir, "generated-image.png");
     await fs.writeFile(imagePath, Buffer.from("png-fixture"));
     delivery = new OutboundMediaDelivery({
-      rootDir
+      rootDir,
+      referenceMode: "shared-path"
     });
   });
 

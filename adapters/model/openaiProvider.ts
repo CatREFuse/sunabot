@@ -63,7 +63,7 @@ export class OpenAIProvider {
   }
 
   async test() {
-    if (this.provider.kind === "openai-responses") {
+    if (this.provider.kind === "openai-official") {
       const client = this.createClient();
       await client.models.list();
     } else {
@@ -83,7 +83,7 @@ export class OpenAIProvider {
   async completeRequest(request: RenderedPromptRequest, options: ProviderCompleteOptions = {}) {
     const result = await this.completeRequestTurn(request, options);
     if (result.kind === "deferred") {
-      throw new Error("异步 Codex Tool 只能由 Session Runtime 调度。");
+      throw new Error("异步工具只能由 Session Runtime 调度。");
     }
     return result.text;
   }
@@ -143,6 +143,10 @@ export class OpenAIProvider {
 
   private getApiKey() {
     return resolveProviderApiKey(this.provider);
+  }
+
+  configuration() {
+    return { ...this.provider };
   }
 
   private normalizeChatBaseUrl() {

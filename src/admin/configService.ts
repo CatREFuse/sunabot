@@ -59,6 +59,13 @@ export const CONFIG_SECTIONS = [
 export type ConfigSection = (typeof CONFIG_SECTIONS)[number];
 export type ApplyMode = "hot" | "reconnect" | "restart";
 
+const FIXED_PROVIDER_BASE_URLS: Partial<Record<ProviderConfig["kind"], string>> = {
+  "codex-responses": "https://chatgpt.com/backend-api/codex",
+  "openai-official": "https://api.openai.com",
+  "anthropic-official": "https://api.anthropic.com/v1",
+  "gemini-official": "https://generativelanguage.googleapis.com/v1beta"
+};
+
 export interface ConfigSectionValueMap {
   server: AppConfig["server"];
   persona: Pick<AppConfig["persona"], "agentWorkspace" | "memoryLimit">;
@@ -315,7 +322,7 @@ function validateSectionValue<S extends ConfigSection>(
   switch (section) {
     case "server": return validateServer(value) as ConfigSectionValueMap[S];
     case "persona": return validatePersona(value) as ConfigSectionValueMap[S];
-    case "providers": return validateProviders(value) as ConfigSectionValueMap[S];
+    case "providers": return validateProviders(value, current?.providers) as ConfigSectionValueMap[S];
     case "bot": return validateBot(value) as ConfigSectionValueMap[S];
     case "memory": return validateMemory(value) as ConfigSectionValueMap[S];
     case "orchestrator": return validateOrchestrator(value) as ConfigSectionValueMap[S];
@@ -343,7 +350,7 @@ function validatePersona(input: unknown): ConfigSectionValueMap["persona"] {
   };
 }
 
-function validateProviders(input: unknown): AppConfig["providers"] {
+function validateProviders(input: unknown, current?: AppConfig["providers"]): AppConfig["providers"] {
   const value = object(input, "providers");
   exactKeys(value, ["defaultProviderId", "items"], "providers");
   const defaultProviderId = requiredString(value.defaultProviderId, "providers.defaultProviderId", { trim: true, min: 1, max: 64 });
@@ -352,6 +359,12 @@ function validateProviders(input: unknown): AppConfig["providers"] {
   }
   if (value.items.length > 64) badRequest("CONFIG_INVALID", "Provider 数量不能超过 64。", "providers.items");
   const items = value.items.map((item, index) => validateProvider(item, `providers.items.${index}`));
+  for (const item of items) {
+    const previous = current?.items.find((candidate) => candidate.id === item.id);
+    if (previous && previous.kind !== item.kind) {
+      badRequest("CONFIG_INVALID", "Provider 类型在创建后不能修改。", `providers.items.${item.id}.kind`);
+    }
+  }
   const ids = new Set<string>();
   for (const provider of items) {
     if (ids.has(provider.id)) badRequest("CONFIG_INVALID", "Provider ID 不能重复。", "providers.items");
@@ -367,33 +380,57 @@ function validateProvider(input: unknown, field: string): ProviderConfig {
   const value = object(input, field);
   exactKeys(value, [
     "id", "label", "kind", "enabled", "model", "imageModel", "baseUrl", "apiKeyEnv", "envFile",
-    "temperature", "maxOutputTokens", "reasoningEffort"
+    "temperature", "maxOutputTokens", "reasoningEffort", "modelSource", "multimodal",
+    "detectedMultimodal", "visionProviderId", "visionModel"
   ], field);
   const id = requiredString(value.id, `${field}.id`, { trim: true, min: 1, max: 64 });
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id)) {
     badRequest("CONFIG_INVALID", "Provider ID 只能包含字母、数字、点、下划线和连字符。", `${field}.id`);
   }
-  const kind = value.kind;
-  if (kind !== "openai-responses" && kind !== "codex-responses" && kind !== "gemini-openai" && kind !== "anthropic-openai") {
+  const kindValue = String(value.kind);
+  if (!["codex-responses", "openai-official", "anthropic-official", "openai-compatible", "anthropic-compatible", "gemini-official", "gemini-compatible"].includes(kindValue)) {
     badRequest("CONFIG_INVALID", "Provider 协议无效。", `${field}.kind`);
   }
+  const kind = kindValue as ProviderConfig["kind"];
   const model = requiredString(value.model, `${field}.model`, { trim: true, min: 1, max: 200 });
   const reasoningEffort = optionalReasoningEffort(value.reasoningEffort, `${field}.reasoningEffort`);
   validateCatalogEffort(model, reasoningEffort, `${field}.reasoningEffort`);
-  const baseUrl = optionalString(value.baseUrl, `${field}.baseUrl`, 2_048);
-  if (baseUrl) {
+  const requestedBaseUrl = optionalString(value.baseUrl, `${field}.baseUrl`, 2_048);
+  if (requestedBaseUrl) {
     try {
-      const url = new URL(baseUrl);
+      const url = new URL(requestedBaseUrl);
       if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("protocol");
       if (url.username || url.password) throw new Error("credentials");
     } catch {
       badRequest("CONFIG_INVALID", "Base URL 必须是不含凭据的 HTTP 或 HTTPS 地址。", `${field}.baseUrl`);
     }
   }
+  const fixedBaseUrl = FIXED_PROVIDER_BASE_URLS[kind];
+  if (fixedBaseUrl && requestedBaseUrl?.replace(/\/+$/, "") !== fixedBaseUrl) {
+    badRequest("CONFIG_INVALID", "官方 Provider 地址不能修改。", `${field}.baseUrl`);
+  }
+  const baseUrl = fixedBaseUrl ?? requestedBaseUrl;
   const apiKeyEnv = requiredString(value.apiKeyEnv, `${field}.apiKeyEnv`, { trim: true, min: 1, max: 128 });
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(apiKeyEnv)) {
     badRequest("CONFIG_INVALID", "API Key 环境变量名称无效。", `${field}.apiKeyEnv`);
   }
+  const modelSource = value.modelSource == null
+    ? (kind.endsWith("-compatible") ? "custom" : "remote")
+    : value.modelSource === "remote" || value.modelSource === "custom"
+      ? value.modelSource
+      : undefined;
+  if (!modelSource) badRequest("CONFIG_INVALID", "模型 ID 来源无效。", `${field}.modelSource`);
+  const multimodal = value.multimodal == null
+    ? "auto"
+    : value.multimodal === "auto" || value.multimodal === "enabled" || value.multimodal === "disabled"
+      ? value.multimodal
+      : undefined;
+  if (!multimodal) badRequest("CONFIG_INVALID", "多模态设置无效。", `${field}.multimodal`);
+  const detectedMultimodal = value.detectedMultimodal == null
+    ? undefined
+    : boolean(value.detectedMultimodal, `${field}.detectedMultimodal`);
+  const visionProviderId = optionalString(value.visionProviderId, `${field}.visionProviderId`, 64);
+  const visionModel = optionalString(value.visionModel, `${field}.visionModel`, 200);
   return {
     id,
     label: requiredString(value.label, `${field}.label`, { trim: true, min: 1, max: 120 }),
@@ -406,7 +443,12 @@ function validateProvider(input: unknown, field: string): ProviderConfig {
     ...(value.envFile == null || value.envFile === "" ? {} : { envFile: pathString(value.envFile, `${field}.envFile`, false) }),
     temperature: finiteNumber(value.temperature, `${field}.temperature`, 0, 2),
     maxOutputTokens: integer(value.maxOutputTokens, `${field}.maxOutputTokens`, 1, 1_000_000),
-    ...(reasoningEffort ? { reasoningEffort } : {})
+    ...(reasoningEffort ? { reasoningEffort } : {}),
+    modelSource,
+    multimodal,
+    ...(detectedMultimodal == null ? {} : { detectedMultimodal }),
+    ...(visionProviderId ? { visionProviderId } : {}),
+    ...(visionModel ? { visionModel } : {})
   };
 }
 
@@ -467,7 +509,7 @@ function validateOrchestrator(input: unknown): BotOrchestratorSettings {
 
 function validateTools(input: unknown, current?: BotToolSettings): BotToolSettings {
   const value = object(input, "tools");
-  exactKeys(value, ["websearch", "codex", "generateImg"], "tools");
+  exactKeys(value, ["maxCalls", "websearch", "codex", "generateImg"], "tools");
   const websearch = object(value.websearch, "tools.websearch");
   exactKeys(websearch, [
     "provider", "tavilyApiKey", "tavilyApiKeys", "tavilyApiKeyEnv",
@@ -539,6 +581,7 @@ function validateTools(input: unknown, current?: BotToolSettings): BotToolSettin
     badRequest("CONFIG_INVALID", "图像质量无效。", "tools.generateImg.quality");
   }
   return {
+    maxCalls: value.maxCalls == null ? current?.maxCalls ?? 20 : integer(value.maxCalls, "tools.maxCalls", 1, 100),
     websearch: {
       provider: "tavily",
       tavilyApiKey: "",

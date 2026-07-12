@@ -1,38 +1,30 @@
 <script setup lang="ts">
-import { Bot, Brain, Image, LogOut, MessageSquare, Settings, SlidersHorizontal, Sun, Moon, Monitor } from "lucide-vue-next";
-import type { Component } from "vue";
 import { useRuntimeStatus } from "../../composables/useRuntimeStatus";
 import { useTheme, type ThemePreference } from "../../composables/useTheme";
-import { useAdminApi } from "../../composables/useAdminApi";
 
-const navItems: Array<{ to: string; label: string; icon: Component }> = [
-  { to: "/overview", label: "状态", icon: SlidersHorizontal },
-  { to: "/conversations", label: "会话", icon: MessageSquare },
-  { to: "/prompts", label: "提示词", icon: Bot },
-  { to: "/memory", label: "记忆", icon: Brain },
-  { to: "/images", label: "图像", icon: Image },
-  { to: "/settings", label: "设置", icon: Settings }
+const navItems: Array<{ to: string; label: string; icon: string }> = [
+  { to: "/overview", label: "状态", icon: "bx-pulse" },
+  { to: "/conversations", label: "会话", icon: "bx-message-square-dots" },
+  { to: "/prompts", label: "提示词", icon: "bx-bot" },
+  { to: "/memory", label: "记忆", icon: "bx-brain" },
+  { to: "/images", label: "图像", icon: "bx-image" },
+  { to: "/logs", label: "日志", icon: "bx-terminal" },
+  { to: "/settings", label: "设置", icon: "bx-cog" }
 ];
-const themeItems: Array<{ id: ThemePreference; label: string; icon: Component }> = [
-  { id: "light", label: "浅色", icon: Sun },
-  { id: "dark", label: "深色", icon: Moon },
-  { id: "system", label: "系统", icon: Monitor }
+const themeItems: Array<{ id: ThemePreference; label: string; icon: string }> = [
+  { id: "light", label: "浅色", icon: "bx-sun" },
+  { id: "dark", label: "深色", icon: "bx-moon" },
+  { id: "system", label: "系统", icon: "bx-desktop" }
 ];
 const theme = useTheme();
 const runtime = useRuntimeStatus();
-const api = useAdminApi();
-
-async function logout() {
-  await api.logout();
-  window.location.reload();
-}
 </script>
 
 <template>
   <aside class="hidden h-full min-h-0 w-[88px] shrink-0 flex-col border-r border-line bg-panel lg:flex xl:w-[224px]">
     <div class="flex h-24 items-center gap-3 border-b border-line px-5 lg:px-6">
       <span class="grid size-11 shrink-0 place-items-center rounded-lg bg-display text-page">
-        <Bot :size="22" :stroke-width="1.5" aria-hidden="true" />
+        <i class="bx bx-bot text-2xl" aria-hidden="true"></i>
       </span>
       <div class="hidden min-w-0 xl:block">
         <strong class="block text-lg font-medium tracking-[-0.02em] text-display">Sunabot</strong>
@@ -48,7 +40,7 @@ async function logout() {
         class="group flex min-h-12 items-center justify-center gap-3 rounded-lg px-3 font-mono text-xs text-disabled transition-colors duration-200 hover:bg-raised hover:text-display xl:justify-start"
         active-class="bg-raised !text-display"
       >
-        <component :is="item.icon" :size="20" :stroke-width="1.5" aria-hidden="true" />
+        <i class="bx text-xl" :class="item.icon" aria-hidden="true"></i>
         <span class="hidden xl:inline">{{ item.label }}</span>
       </RouterLink>
     </nav>
@@ -70,15 +62,10 @@ async function logout() {
           :title="item.label"
           @click="theme.setTheme(item.id)"
         >
-          <component :is="item.icon" :size="17" :stroke-width="1.5" aria-hidden="true" />
+          <i class="bx text-lg" :class="item.icon" aria-hidden="true"></i>
           <span class="sr-only">{{ item.label }}</span>
         </button>
       </div>
-      <button class="mt-2 flex min-h-11 w-full items-center justify-center gap-2 rounded-md font-mono text-[10px] text-disabled hover:bg-raised hover:text-display" type="button" @click="logout">
-        <LogOut :size="16" :stroke-width="1.5" />
-        <span class="hidden xl:inline">退出登录</span>
-        <span class="sr-only xl:hidden">退出登录</span>
-      </button>
     </div>
   </aside>
 </template>

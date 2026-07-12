@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { RefreshCw, Search } from "lucide-vue-next";
 import { computed } from "vue";
 import { formatDateTime } from "../../utils/format";
 import { conversationAvatarUrl, conversationIdentityDetail } from "../../utils/qqIdentity";
@@ -39,12 +38,12 @@ function scopeLabel(value: ConversationRecord["scope"]) {
         <h1 class="text-xl font-medium text-display">会话</h1>
       </div>
       <button class="icon-btn" type="button" :disabled="loading" aria-label="刷新会话" @click="emit('refresh')">
-        <RefreshCw :size="18" :stroke-width="1.5" aria-hidden="true" />
+        <i class="bx bx-refresh text-xl" aria-hidden="true"></i>
       </button>
     </header>
     <div class="grid gap-3 border-b border-line p-4">
       <label class="flex min-h-11 items-center gap-2 rounded-lg border border-visible bg-page px-3">
-        <Search :size="17" :stroke-width="1.5" class="text-mute" aria-hidden="true" />
+        <i class="bx bx-search text-lg text-mute" aria-hidden="true"></i>
         <input v-model="query" class="min-w-0 flex-1 bg-transparent font-mono text-xs outline-none placeholder:text-disabled" type="search" placeholder="搜索会话" autocomplete="off" aria-label="搜索会话">
       </label>
       <div class="segmented w-full" aria-label="会话类型">

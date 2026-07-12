@@ -95,6 +95,11 @@ export function authenticatedMediaPath(source: string) {
   return `/api/media/image?url=${encodeURIComponent(source)}`;
 }
 
+export function authenticatedThumbnailPath(source: string, variant: "display" | "placeholder" = "display") {
+  if (source.startsWith("data:") || source.startsWith("blob:")) return source;
+  return `/api/media/thumbnail?url=${encodeURIComponent(source)}&variant=${variant}`;
+}
+
 async function login(usernameValue: string, password: string) {
   const response = await fetch("/api/auth/login", {
     method: "POST",

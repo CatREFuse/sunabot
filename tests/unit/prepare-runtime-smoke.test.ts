@@ -26,8 +26,8 @@ describe("prepare provider smoke workspace", () => {
       providers: {
         defaultProviderId: "selected",
         items: [
-          { id: "selected", kind: "openai-responses", model: "test-model", apiKeyEnv: "SELECTED_KEY", envFile: "workspace/.env", enabled: true },
-          { id: "unused", kind: "openai-responses", model: "unused", apiKeyEnv: "UNUSED_KEY", enabled: true }
+          { id: "selected", kind: "openai-official", model: "test-model", apiKeyEnv: "SELECTED_KEY", envFile: "workspace/.env", enabled: true },
+          { id: "unused", kind: "openai-official", model: "unused", apiKeyEnv: "UNUSED_KEY", enabled: true }
         ]
       },
       bot: { adminQq: "171419991" },

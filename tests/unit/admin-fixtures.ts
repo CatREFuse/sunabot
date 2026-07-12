@@ -18,15 +18,17 @@ export function createAdminTestConfig(rootDir: string): AppConfig {
         {
           id: "test-provider",
           label: "Test Provider",
-          kind: "openai-responses",
+          kind: "openai-official",
           enabled: true,
           model: "gpt-5.5",
           imageModel: "gpt-image-2",
-          baseUrl: "https://example.invalid",
+          baseUrl: "https://api.openai.com",
           apiKeyEnv: "SUNABOT_TEST_MISSING_API_KEY",
           temperature: 0.7,
           maxOutputTokens: 2_400,
-          reasoningEffort: "medium"
+          reasoningEffort: "medium",
+          modelSource: "remote",
+          multimodal: "auto"
         }
       ]
     },

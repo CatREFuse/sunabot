@@ -1,14 +1,13 @@
 <script setup lang="ts">
-import { ArrowLeft, FileSearch, RefreshCw } from "lucide-vue-next";
 import { computed, shallowRef } from "vue";
 import { useChatScroll } from "../../composables/useChatScroll";
-import { formatFullDateTime } from "../../utils/format";
 import { conversationIdentityDetail } from "../../utils/qqIdentity";
 import type { ConversationLogEntry, ConversationMessageRecord, ConversationRecord } from "../../types";
 import ToggleSwitch from "../ui/ToggleSwitch.vue";
 import DialogOverlay from "../ui/DialogOverlay.vue";
 import ConversationMessageBubble from "./ConversationMessageBubble.vue";
 import ConversationOrchestratorStatus from "./ConversationOrchestratorStatus.vue";
+import RequestLogList from "../logs/RequestLogList.vue";
 
 const props = defineProps<{
   conversation: ConversationRecord | null;
@@ -49,19 +48,18 @@ function openLogs(runId?: string) {
 function refreshLogs() {
   emit("logs", activeLogRunId.value);
 }
-function json(value: unknown) { return value == null ? "" : JSON.stringify(value, null, 2); }
 </script>
 
 <template>
   <section class="flex h-full min-h-0 min-w-0 flex-col bg-page">
     <header class="flex min-h-20 items-center gap-3 border-b border-line px-4 md:px-6">
-      <button class="icon-btn lg:hidden" type="button" aria-label="返回会话列表" @click="emit('back')"><ArrowLeft :size="19" :stroke-width="1.5" /></button>
+      <button class="icon-btn lg:hidden" type="button" aria-label="返回会话列表" @click="emit('back')"><i class="bx bx-left-arrow-alt text-xl" aria-hidden="true"></i></button>
       <div class="min-w-0 flex-1">
         <p class="page-kicker">{{ conversation?.scope?.replaceAll('_', ' ') || "CONVERSATION" }}</p>
         <h2 class="truncate text-lg font-medium text-display">{{ conversation?.title ?? "选择一个会话" }}</h2>
       </div>
-      <button v-if="conversation" class="icon-btn" type="button" aria-label="刷新消息" @click="emit('refresh')"><RefreshCw :size="18" :stroke-width="1.5" /></button>
-      <button v-if="conversation" class="icon-btn" type="button" aria-label="请求日志" @click="openLogs()"><FileSearch :size="18" :stroke-width="1.5" /></button>
+      <button v-if="conversation" class="icon-btn" type="button" aria-label="刷新消息" @click="emit('refresh')"><i class="bx bx-refresh text-xl" aria-hidden="true"></i></button>
+      <button v-if="conversation" class="icon-btn" type="button" aria-label="请求日志" @click="openLogs()"><i class="bx bx-file-find text-xl" aria-hidden="true"></i></button>
     </header>
 
     <div v-if="!conversation" class="empty-state flex-1 dot-grid"><div class="bg-page px-5 py-3"><strong>选择一个会话</strong><p>选择后打开消息记录</p></div></div>
@@ -121,14 +119,7 @@ function json(value: unknown) { return value == null ? "" : JSON.stringify(value
           </div>
         </div>
         <p v-if="loadingLogs" class="py-12 text-center font-mono text-xs text-mute">[LOADING...]</p>
-        <article v-for="log in logs" :key="log.id" class="border-b border-line py-5">
-          <div class="flex flex-wrap justify-between gap-2"><strong class="text-sm font-medium text-display">{{ log.category }} · {{ log.action }}</strong><time class="font-mono text-[10px] text-disabled">{{ formatFullDateTime(log.at) }}</time></div>
-          <p class="mt-2 font-mono text-[10px] text-mute">{{ log.providerId }} · {{ log.model }}</p>
-          <details v-if="log.request != null" class="mt-4"><summary class="font-mono text-[10px] uppercase text-mute">Request</summary><pre class="mt-2 overflow-x-auto whitespace-pre-wrap break-all rounded-lg bg-page p-3 font-mono text-[10px] text-ink">{{ json(log.request) }}</pre></details>
-          <details v-if="log.response != null" class="mt-3"><summary class="font-mono text-[10px] uppercase text-mute">Response</summary><pre class="mt-2 overflow-x-auto whitespace-pre-wrap break-all rounded-lg bg-page p-3 font-mono text-[10px] text-ink">{{ json(log.response) }}</pre></details>
-          <details v-if="log.metadata != null" class="mt-3"><summary class="font-mono text-[10px] uppercase text-mute">Metadata</summary><pre class="mt-2 overflow-x-auto whitespace-pre-wrap break-all rounded-lg bg-page p-3 font-mono text-[10px] text-ink">{{ json(log.metadata) }}</pre></details>
-        </article>
-        <div v-if="!loadingLogs && !logs.length" class="empty-state"><div><strong>没有请求日志</strong></div></div>
+        <RequestLogList v-if="!loadingLogs" class="mt-5" :logs="logs" />
       </aside>
     </DialogOverlay>
   </section>

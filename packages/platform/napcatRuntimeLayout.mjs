@@ -12,14 +12,23 @@ export function resolveNapcatRuntimeLayout(workspace, paths) {
   const root = path.resolve(requiredAbsolutePath(workspace, "workspace"));
   const stateRelative = requiredRelativePath(paths?.napcatState, "paths.napcatState");
   const qrRelative = requiredRelativePath(paths?.napcatQrCode, "paths.napcatQrCode");
+  const manualLoginRelative = requiredRelativePath(
+    paths?.napcatManualLogin ?? path.join(stateRelative, "manual-login-required"),
+    "paths.napcatManualLogin"
+  );
   if (path.dirname(qrRelative) !== stateRelative) {
     throw new Error("paths.napcatQrCode must be a direct child of paths.napcatState");
   }
+  if (path.dirname(manualLoginRelative) !== stateRelative) {
+    throw new Error("paths.napcatManualLogin must be a direct child of paths.napcatState");
+  }
   const stateRoot = path.resolve(root, stateRelative);
   const qrCodePath = path.resolve(root, qrRelative);
+  const manualLoginMarkerPath = path.resolve(root, manualLoginRelative);
   assertWithin(root, stateRoot, "NapCat state");
   assertWithin(stateRoot, qrCodePath, "NapCat QR code");
-  return { workspace: root, stateRoot, qrCodePath };
+  assertWithin(stateRoot, manualLoginMarkerPath, "NapCat manual login marker");
+  return { workspace: root, stateRoot, qrCodePath, manualLoginMarkerPath };
 }
 
 export async function migrateLegacyNapcatQrCode(options) {

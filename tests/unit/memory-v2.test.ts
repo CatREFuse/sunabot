@@ -65,7 +65,7 @@ describe("memory v2 storage", () => {
     expect(persona.memoryItems.join("\n")).not.toMatch(/候选|日记|梦境/);
   });
 
-  it("normalizes salutation aliases, preserves an existing value, and enforces the configured admin name", async () => {
+  it("normalizes salutation aliases and lets the user profile override the configured admin fallback", async () => {
     await fs.writeFile(path.join(workspace, "USER_PROFILE.jsonl"), [
       JSON.stringify({
         id: "profile-admin",
@@ -91,11 +91,20 @@ describe("memory v2 storage", () => {
     }]);
     await mergeUserProfileMemory(config);
 
-    expect(await readUserProfileForUser(config, "171419991")).toMatchObject({ addressName: "Test Admin" });
+    expect(await readUserProfileForUser(config, "171419991")).toMatchObject({ addressName: "错误称呼" });
     const user = await readUserProfileForUser(config, "703084445");
     expect(user).toMatchObject({ addressName: "圆圆", userName: "新昵称" });
     expect(resolveUserAddressName(config, "703084445", user, "临时昵称")).toBe("圆圆");
-    expect(resolveUserAddressName(config, "171419991", undefined, "临时昵称")).toBe("Test Admin");
+    expect(resolveUserAddressName(config, "171419991", undefined, "临时昵称")).toBe("临时昵称");
+
+    const admin = await readUserProfileForUser(config, "171419991");
+    await updateMemoryEntry(config, {
+      source: "user_profile",
+      id: admin!.id,
+      text: admin!.text,
+      addressName: "管理台管理员称呼"
+    });
+    expect(await readUserProfileForUser(config, "171419991")).toMatchObject({ addressName: "管理台管理员称呼" });
 
     await updateMemoryEntry(config, {
       source: "user_profile",

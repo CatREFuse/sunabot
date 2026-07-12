@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import { Plus, RotateCcw, Trash2 } from "lucide-vue-next";
 import type { BotToolSettingsDraft, ConfigEnvelope } from "../../types";
 
 const draft = defineModel<BotToolSettingsDraft["websearch"]>({ required: true });
@@ -46,7 +45,7 @@ function isMarkedForRemoval(index: number) {
         </p>
       </div>
       <button class="btn btn-ghost" type="button" @click="addKey">
-        <Plus :size="16" :stroke-width="1.5" aria-hidden="true" />
+        <i class="bx bx-plus" aria-hidden="true"></i>
         添加 Key
       </button>
     </header>
@@ -69,8 +68,8 @@ function isMarkedForRemoval(index: number) {
           :aria-label="isMarkedForRemoval(index) ? `撤销删除 Key ${index + 1}` : `删除 Key ${index + 1}`"
           @click="toggleStoredKey(index)"
         >
-          <RotateCcw v-if="isMarkedForRemoval(index)" :size="16" :stroke-width="1.5" aria-hidden="true" />
-          <Trash2 v-else :size="16" :stroke-width="1.5" aria-hidden="true" />
+          <i v-if="isMarkedForRemoval(index)" class="bx bx-reset" aria-hidden="true"></i>
+          <i v-else class="bx bx-trash" aria-hidden="true"></i>
         </button>
       </div>
 
@@ -88,7 +87,7 @@ function isMarkedForRemoval(index: number) {
           placeholder="tvly-..."
         >
         <button class="icon-btn" type="button" :aria-label="`移除新 Key ${index + 1}`" @click.prevent="removeNewKey(index)">
-          <Trash2 :size="16" :stroke-width="1.5" aria-hidden="true" />
+          <i class="bx bx-trash" aria-hidden="true"></i>
         </button>
       </div>
     </div>

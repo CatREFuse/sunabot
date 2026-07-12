@@ -10,6 +10,7 @@ let configPath = "";
 let originalConfigPath: string | undefined;
 let originalHost: string | undefined;
 let originalPort: string | undefined;
+let originalRuntimeMode: string | undefined;
 
 beforeEach(async () => {
   rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-config-load-"));
@@ -17,9 +18,11 @@ beforeEach(async () => {
   originalConfigPath = process.env.SUNABOT_CONFIG;
   originalHost = process.env.SUNABOT_HOST;
   originalPort = process.env.SUNABOT_PORT;
+  originalRuntimeMode = process.env.SUNABOT_RUNTIME_MODE;
   process.env.SUNABOT_CONFIG = configPath;
   delete process.env.SUNABOT_HOST;
   delete process.env.SUNABOT_PORT;
+  delete process.env.SUNABOT_RUNTIME_MODE;
 });
 
 afterEach(async () => {
@@ -29,6 +32,8 @@ afterEach(async () => {
   else process.env.SUNABOT_HOST = originalHost;
   if (originalPort == null) delete process.env.SUNABOT_PORT;
   else process.env.SUNABOT_PORT = originalPort;
+  if (originalRuntimeMode == null) delete process.env.SUNABOT_RUNTIME_MODE;
+  else process.env.SUNABOT_RUNTIME_MODE = originalRuntimeMode;
   await fs.rm(rootDir, { recursive: true, force: true });
 });
 
@@ -51,7 +56,54 @@ describe("tool configuration", () => {
     expect(config.providers.items.every((provider) => provider.envFile === "workspace/secrets/runtime.env")).toBe(true);
   });
 
+  it("maps legacy provider kinds to the current protocol types", async () => {
+    const template = defaultConfig().providers.items[1]!;
+    await fs.writeFile(configPath, JSON.stringify({
+      providers: {
+        defaultProviderId: "legacy-openai",
+        items: [
+          { ...template, id: "legacy-openai", kind: "openai-responses" },
+          { ...template, id: "legacy-gemini", kind: "gemini-openai" },
+          { ...template, id: "legacy-anthropic", kind: "anthropic-openai" }
+        ]
+      }
+    }), "utf8");
+
+    const config = await loadConfig();
+
+    expect(config.providers.items.map((provider) => provider.kind)).toEqual([
+      "openai-official",
+      "openai-compatible",
+      "anthropic-official"
+    ]);
+  });
+
+  it("restores the model source default for legacy providers", async () => {
+    const template = defaultConfig().providers.items[1]!;
+    const official = { ...template, id: "legacy-official", kind: "anthropic-official" as const };
+    const compatible = { ...template, id: "legacy-compatible", kind: "openai-compatible" as const };
+    delete official.modelSource;
+    delete compatible.modelSource;
+    await fs.writeFile(configPath, JSON.stringify({
+      providers: {
+        defaultProviderId: official.id,
+        items: [official, compatible]
+      }
+    }), "utf8");
+
+    const config = await loadConfig();
+
+    expect(config.providers.items.map((provider) => provider.modelSource)).toEqual(["remote", "custom"]);
+  });
+
+  it("disables workspace Bash in the macOS runtime without changing other platforms", () => {
+    expect(defaultConfig().bot.bash.enabled).toBe(true);
+    process.env.SUNABOT_RUNTIME_MODE = "macos";
+    expect(defaultConfig().bot.bash.enabled).toBe(false);
+  });
+
   it("defaults websearch to Tavily and Codex to an independent worker", () => {
+    expect(defaultConfig().bot.tools.maxCalls).toBe(20);
     expect(defaultConfig().bot.tools.websearch).toMatchObject({
       provider: "tavily",
       tavilyApiKey: "",

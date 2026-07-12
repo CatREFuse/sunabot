@@ -1,14 +1,26 @@
 import fs, { existsSync } from "node:fs";
 import type { FastifyInstance } from "fastify";
+import {
+  NapcatLoginControl,
+  type NapcatLoginControlPort,
+  type NapcatLoginSnapshot
+} from "../../../adapters/onebot/napcatLoginControl.js";
 import type { OneBotGateway } from "../../../adapters/onebot/onebotGateway.js";
 import { WORKSPACE_LAYOUT } from "../../../packages/platform/workspaceLayout.js";
 import { getWorkspacePath } from "../../../src/config.js";
 import type { OneBotLoginCheck, OneBotQrLogin } from "../../../src/types.js";
-import { notFound } from "../../../src/admin/errors.js";
+import { AdminApiError, conflict, notFound } from "../../../src/admin/errors.js";
 
 const openObject = { type: "object", additionalProperties: true } as const;
 
-export function registerOneBotRoutes(app: FastifyInstance, onebotGateway: OneBotGateway) {
+export interface OneBotRouteOptions {
+  napcatLoginControl?: NapcatLoginControlPort;
+}
+
+export function registerOneBotRoutes(app: FastifyInstance, onebotGateway: OneBotGateway, options: OneBotRouteOptions = {}) {
+  const napcatLoginControl = options.napcatLoginControl ?? createNapcatLoginControl();
+  app.addHook("onClose", async () => napcatLoginControl.close());
+
   app.get("/api/onebot/login-info", { schema: { response: { 200: openObject } } }, async () => {
     const status = onebotGateway.getStatus();
     if (!status.connected) return { connected: false, error: "OneBot 未连接。" };
@@ -28,20 +40,37 @@ export function registerOneBotRoutes(app: FastifyInstance, onebotGateway: OneBot
   });
 
   app.post("/api/onebot/qq-login", { schema: { response: { 200: openObject } } }, async () => {
-    const login = await getOneBotLoginCheck(onebotGateway);
-    const localQr = readNapcatQrImage();
-    const webuiUrl = getLocalNapcatWebuiRoute();
-    const response: OneBotQrLogin = { ...login, available: Boolean(localQr || webuiUrl), webuiUrl };
-    if (localQr) return { ...response, ...localQr };
-    if (login.connected && !login.online) {
-      const actionQr = await getOneBotActionQr(onebotGateway);
-      if (actionQr) return { ...response, ...actionQr, available: true };
-    }
-    return response;
+    const current = await getQqLoginSnapshot(onebotGateway, napcatLoginControl);
+    if (current.online) return current;
+    const refreshed = await napcatLoginControl.refreshQrCode();
+    return getQqLoginSnapshot(onebotGateway, napcatLoginControl, refreshed);
   });
 
   app.get("/api/onebot/qq-login/status", { schema: { response: { 200: openObject } } }, async () => {
-    return getOneBotLoginCheck(onebotGateway);
+    return getQqLoginSnapshot(onebotGateway, napcatLoginControl);
+  });
+
+  app.post("/api/onebot/qq-logout", { schema: { response: { 200: openObject } } }, async () => {
+    const current = await getQqLoginSnapshot(onebotGateway, napcatLoginControl);
+    if (!current.online || !onebotGateway.getStatus().connected) {
+      conflict("QQ_ALREADY_OFFLINE", "QQ 当前未登录。");
+    }
+    await napcatLoginControl.beginManualLogin();
+    try {
+      await onebotGateway.dispatchAction("bot_exit", {});
+    } catch (error) {
+      await napcatLoginControl.cancelManualLogin();
+      throw new AdminApiError(502, "QQ_LOGOUT_FAILED", error instanceof Error ? error.message : "QQ 退出失败。");
+    }
+    napcatLoginControl.startLoginCompletionWatch();
+    return {
+      ok: true,
+      connected: false,
+      online: false,
+      available: true,
+      phase: "restarting",
+      webuiUrl: getLocalNapcatWebuiRoute()
+    };
   });
 
   app.get("/api/onebot/napcat-webui-url", { schema: { response: { 200: openObject } } }, async () => {
@@ -78,6 +107,40 @@ export function registerOneBotRoutes(app: FastifyInstance, onebotGateway: OneBot
   });
 }
 
+async function getQqLoginSnapshot(
+  onebotGateway: OneBotGateway,
+  napcatLoginControl: NapcatLoginControlPort,
+  napcatSnapshot?: NapcatLoginSnapshot
+): Promise<OneBotQrLogin> {
+  const [onebot, napcat] = await Promise.all([
+    getOneBotLoginCheck(onebotGateway),
+    napcatSnapshot ? Promise.resolve(napcatSnapshot) : napcatLoginControl.status()
+  ]);
+  const online = onebot.online || napcat.isLogin;
+  const data = onebot.data?.user_id ? onebot.data : napcat.data;
+  const webuiUrl = getLocalNapcatWebuiRoute();
+  return {
+    connected: onebot.connected,
+    online,
+    data,
+    available: Boolean(webuiUrl || napcat.imageDataUrl),
+    phase: loginPhase(online, onebot.connected, napcat),
+    loginError: napcat.loginError,
+    error: napcat.manualLogin ? undefined : napcat.error,
+    imageDataUrl: online ? undefined : napcat.imageDataUrl,
+    imageUpdatedAt: online ? undefined : napcat.imageUpdatedAt,
+    webuiUrl
+  };
+}
+
+function loginPhase(online: boolean, connected: boolean, napcat: NapcatLoginSnapshot): OneBotQrLogin["phase"] {
+  if (online) return connected ? "online" : "connecting";
+  if (napcat.manualLogin && !napcat.imageDataUrl) return "restarting";
+  if (napcat.loginError && /二维码.*(?:过期|失效)|(?:过期|失效).*二维码/i.test(napcat.loginError)) return "expired";
+  if (napcat.imageDataUrl || napcat.qrcodeUrl) return "waiting_scan";
+  return "starting";
+}
+
 async function getOneBotLoginCheck(onebotGateway: OneBotGateway): Promise<OneBotLoginCheck> {
   const status = onebotGateway.getStatus();
   if (!status.connected) return { connected: false, online: false };
@@ -90,64 +153,18 @@ async function getOneBotLoginCheck(onebotGateway: OneBotGateway): Promise<OneBot
   }
 }
 
-async function getOneBotActionQr(onebotGateway: OneBotGateway) {
-  for (const action of ["get_qrcode", "get_qr_code", "get_login_qrcode", "get_login_qr_code"]) {
-    try {
-      const qr = normalizeOneBotActionQr(await onebotGateway.sendAction(action, {}));
-      if (qr) return { ...qr, action };
-    } catch {
-      // This action is optional across OneBot implementations.
-    }
-  }
-  return null;
-}
-
-function normalizeOneBotActionQr(payload: unknown) {
-  const strings = collectStrings((payload as { data?: unknown })?.data ?? payload);
-  for (const value of strings) {
-    const imageSource = normalizeImageSource(value);
-    if (imageSource) return imageSource;
-  }
-  const qrcode = strings.find((value) => value.length > 12 && !value.includes("\n"));
-  return qrcode ? { qrcode } : null;
-}
-
-function collectStrings(value: unknown, output: string[] = [], seen = new Set<unknown>()) {
-  if (typeof value === "string") {
-    const text = value.trim();
-    if (text) output.push(text);
-    return output;
-  }
-  if (!value || typeof value !== "object" || seen.has(value)) return output;
-  seen.add(value);
-  if (Array.isArray(value)) value.forEach((item) => collectStrings(item, output, seen));
-  else Object.values(value as Record<string, unknown>).forEach((item) => collectStrings(item, output, seen));
-  return output;
-}
-
-function normalizeImageSource(value: string) {
-  if (/^data:image\/[a-z0-9.+-]+;base64,/i.test(value)) return { imageDataUrl: value };
-  if (/^https?:\/\//i.test(value)) return { imageUrl: value };
-  const compact = value.replace(/\s+/g, "");
-  if (compact.length > 100 && /^[A-Za-z0-9+/=]+$/.test(compact) && /^(iVBOR|\/9j\/|UklGR)/.test(compact)) {
-    return { imageDataUrl: `data:image/png;base64,${compact}` };
-  }
-  return null;
-}
-
-function readNapcatQrImage() {
-  const filePath = getWorkspacePath(WORKSPACE_LAYOUT.napcatQrCode);
-  if (!existsSync(filePath)) return null;
-  const stats = fs.statSync(filePath);
-  if (!stats.isFile() || stats.size <= 0) return null;
-  return {
-    imageDataUrl: `data:image/png;base64,${fs.readFileSync(filePath).toString("base64")}`,
-    imageUpdatedAt: stats.mtime.toISOString()
-  };
-}
-
 function getLocalNapcatWebuiRoute() {
   return getNapcatWebuiUrl({ includeToken: false }) ? "/api/onebot/napcat-webui-url" : undefined;
+}
+
+function createNapcatLoginControl() {
+  return new NapcatLoginControl({
+    webuiConfigPath: getWorkspacePath(WORKSPACE_LAYOUT.napcatConfig, "webui.json"),
+    webuiBaseUrl: process.env.SUNABOT_RUNTIME_MODE === "docker" ? "http://napcat:6099" : undefined,
+    qrCodePath: getWorkspacePath(WORKSPACE_LAYOUT.napcatQrCode),
+    manualLoginMarkerPath: getWorkspacePath(WORKSPACE_LAYOUT.napcatManualLogin),
+    runtimeEnvPath: getWorkspacePath(WORKSPACE_LAYOUT.secretsEnv)
+  });
 }
 
 function getNapcatWebuiUrl(options: { includeToken: boolean }) {

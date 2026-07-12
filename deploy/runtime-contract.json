@@ -1,15 +1,22 @@
 {
   "$schema": "./runtime-contract.schema.json",
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "runtimeId": "sunabot-qq-runtime",
   "releaseVersion": "0.1.0",
   "supportedPlatforms": ["linux/amd64"],
   "nodeVersion": "24.18.0",
   "runtimeUsers": {
     "docker": {
-      "name": "napcat",
-      "uid": 1000,
-      "gid": 1000
+      "core": {
+        "name": "node",
+        "uid": 1000,
+        "gid": 1000
+      },
+      "napcat": {
+        "name": "napcat",
+        "uid": 1000,
+        "gid": 1000
+      }
     },
     "native": {
       "name": "sunabot"
@@ -24,7 +31,10 @@
     "media": "business/media/images",
     "napcatState": "runtime/napcat",
     "napcatConfig": "runtime/napcat/config-full",
+    "napcatQqState": "runtime/napcat/qq",
+    "napcatPlugins": "runtime/napcat/plugins",
     "napcatQrCode": "runtime/napcat/qrcode.png",
+    "napcatManualLogin": "runtime/napcat/manual-login-required",
     "secrets": "secrets/runtime.env",
     "logs": "runtime/logs",
     "temporary": "runtime/tmp",
@@ -32,10 +42,47 @@
     "backups": "backups"
   },
   "network": {
-    "host": "127.0.0.1",
-    "apiPort": 8787,
-    "napcatWebuiPort": 6099,
-    "onebotReverseWebSocket": "ws://127.0.0.1:8787/onebot/v11/ws"
+    "admin": {
+      "host": "127.0.0.1",
+      "containerHost": "0.0.0.0",
+      "port": 8787
+    },
+    "onebot": {
+      "path": "/onebot/v11/ws",
+      "containerHost": "0.0.0.0",
+      "internalPort": 8788,
+      "listenerHostEnv": "SUNABOT_ONEBOT_HOST",
+      "listenerPortEnv": "SUNABOT_ONEBOT_PORT",
+      "advertisedUrlEnv": "SUNABOT_ONEBOT_ADVERTISED_URL",
+      "accessTokenRequired": true,
+      "nativeListenerHosts": {
+        "macos": "127.0.0.1",
+        "wsl": "docker-network-gateway",
+        "linux": "docker-network-gateway"
+      },
+      "nativeAdvertisedUrls": {
+        "macos": "ws://host.docker.internal:8788/onebot/v11/ws",
+        "wsl": "ws://host.docker.internal:8788/onebot/v11/ws",
+        "linux": "ws://host.docker.internal:8788/onebot/v11/ws"
+      },
+      "dockerAdvertisedUrl": "ws://core:8788/onebot/v11/ws"
+    },
+    "napcatWebui": {
+      "host": "127.0.0.1",
+      "containerHost": "0.0.0.0",
+      "port": 6099
+    }
+  },
+  "mediaTransport": {
+    "outbound": {
+      "mode": "inline-base64",
+      "onebotScheme": "base64://",
+      "sharedFilesystem": false
+    },
+    "inbound": {
+      "acceptedReferences": ["base64", "http", "https"],
+      "containerLocalPaths": false
+    }
   },
   "outboundProxy": {
     "defaultMode": "auto",
@@ -45,27 +92,45 @@
     "portsEnv": "SUNABOT_PROXY_PORTS",
     "noProxyRequired": ["localhost", "127.0.0.1", "::1", "[::1]"]
   },
-  "processes": {
-    "startupOrder": ["sunabot", "napcat"],
-    "supervisor": "deploy/docker/supervisor.mjs",
-    "restartDelaySeconds": {
-      "sunabot": 2,
-      "napcat": 10
-    }
+  "startup": {
+    "nativeCoreOrder": ["core-native", "napcat"],
+    "dockerCoreOrder": ["core", "napcat"],
+    "shutdownOrder": ["napcat", "core"],
+    "coreReadyTimeoutSeconds": 60,
+    "napcatReadyTimeoutSeconds": 120,
+    "shutdownTimeoutSeconds": 30
   },
-  "shutdownTimeoutSeconds": 30,
   "health": {
     "livenessPath": "/api/auth/session",
-    "livenessCommand": [
-      "/usr/local/bin/node",
-      "/srv/sunabot/deploy/docker/healthcheck.mjs"
-    ],
-    "readinessLayers": ["api", "onebot", "qq", "provider"]
+    "readinessLayers": ["api", "onebot", "qq", "provider"],
+    "services": {
+      "core": {
+        "livenessCommand": [
+          "/usr/local/bin/node",
+          "/srv/sunabot/deploy/docker/healthcheck.mjs"
+        ],
+        "intervalSeconds": 10,
+        "timeoutSeconds": 5,
+        "startPeriodSeconds": 45,
+        "retries": 6
+      },
+      "napcat": {
+        "livenessCommand": [
+          "CMD-SHELL",
+          "bash -ec 'exec 3<>/dev/tcp/127.0.0.1/6099'"
+        ],
+        "intervalSeconds": 10,
+        "timeoutSeconds": 5,
+        "startPeriodSeconds": 60,
+        "retries": 12
+      }
+    }
   },
   "capabilities": {
     "required": ["admin-web", "onebot-v11", "image-generation", "office-documents", "workspace-bash"],
     "optional": ["codex-cli", "websearch"],
     "workspaceBash": {
+      "service": "core",
       "isolation": "bubblewrap",
       "executable": "/usr/bin/bwrap",
       "dockerSeccompProfile": "deploy/docker/seccomp-bwrap.json",
@@ -76,22 +141,54 @@
     }
   },
   "resources": {
-    "memory": "4g",
-    "cpus": 4,
-    "pids": 512,
-    "sharedMemory": "1g",
-    "logMaxSize": "20m",
-    "logMaxFiles": 5
+    "core": {
+      "memory": "4g",
+      "cpus": 4,
+      "pids": 512,
+      "sharedMemory": "1g"
+    },
+    "napcat": {
+      "memory": "2g",
+      "cpus": 2,
+      "pids": 512,
+      "sharedMemory": "1g"
+    },
+    "logging": {
+      "maxSize": "20m",
+      "maxFiles": 5
+    }
   },
   "docker": {
-    "image": "sunabot-qq-runtime",
-    "composeService": "qq-runtime",
-    "workspaceMount": "/srv/sunabot/workspace"
+    "composeProject": "sunabot",
+    "composeFile": "deploy/docker/compose.yml",
+    "network": {
+      "name": "sunabot-runtime",
+      "nameEnv": "SUNABOT_DOCKER_NETWORK"
+    },
+    "services": {
+      "core": {
+        "name": "core",
+        "profile": "core-docker",
+        "image": "sunabot-core",
+        "workspaceMount": "/srv/sunabot/workspace"
+      },
+      "napcat": {
+        "name": "napcat",
+        "image": "sunabot-napcat",
+        "upstreamImage": "docker.io/mlikiowa/napcat-docker:v4.15.0@sha256:cde89d766604e570517e9ce66304d4222210479d2209ec04e5d58890dea087f7",
+        "stateRoot": "runtime/napcat",
+        "webuiPort": 6099
+      }
+    },
+    "labels": {
+      "runtimeId": "io.sunabot.runtime-id",
+      "workspaceId": "io.sunabot.workspace-id",
+      "component": "io.sunabot.component"
+    }
   },
   "native": {
     "apiUnit": "sunabot-api.service",
-    "napcatUnit": "sunabot-napcat.service",
-    "targetUnit": "sunabot-runtime.target"
+    "napcatManagedBy": "docker"
   },
   "componentsLock": "components/component.lock.json"
 }

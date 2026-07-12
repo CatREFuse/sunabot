@@ -32,7 +32,8 @@ export function buildConversationPromptVariables(config: AppConfig) {
     "runtime.scope_rules": "当消息来自群聊时，注意区分用户群聊与 bot 群聊；bot 群聊当前只保留上下文，不主动编排。",
     "runtime.tool_rules": [
       "当需要发出自己的形象、自拍、头像、照片或包含自身外观的图片时，调用 selfie 工具，不要用 generate_img 代替。",
-      "调用 generate_img 或 selfie 时，默认使用 1K 清晰度；只有用户明确要求更高清、更清晰、壁纸、海报、打印、2K 或 4K 时，才把 resolution 设为 2K 或 4K。"
+      "调用 generate_img 或 selfie 时，默认使用 1K 清晰度；只有用户明确要求更高清、更清晰、壁纸、海报、打印、2K 或 4K 时，才把 resolution 设为 2K 或 4K。",
+      "调用异步 codex、generate_img 或 selfie 时，必须在 dispatch_message 中用当前人格简短告知用户已收到且已经开始处理；不要承诺成功或复述完整需求，并且该异步工具必须单独调用。"
     ].join("\n")
   };
 }
@@ -122,6 +123,7 @@ function buildSystemPrompt(files: PersonaFile[], _memoryItems: string[], config:
     "当消息来自群聊时，注意区分用户群聊与 bot 群聊；bot 群聊当前只保留上下文，不主动编排。",
     "当需要发出自己的形象、自拍、头像、照片或包含自身外观的图片时，调用 selfie 工具，不要用 generate_img 代替。",
     "调用 generate_img 或 selfie 时，默认使用 1K 清晰度；只有用户明确要求更高清、更清晰、壁纸、海报、打印、2K 或 4K 时，才把 resolution 设为 2K 或 4K。",
+    "调用异步 codex、generate_img 或 selfie 时，必须在 dispatch_message 中用当前人格简短告知用户已收到且已经开始处理；不要承诺成功或复述完整需求，并且该异步工具必须单独调用。",
     sections
   ]
     .filter(Boolean)

@@ -2,13 +2,16 @@ import { createWorkspaceBashTool, WORKSPACE_BASH_TOOL_NAME } from "./bashTool.js
 import { CODEX_TOOL_NAME, codexTool, MEMORY_RECALL_TOOL_NAME, memoryRecallTool, WEBSEARCH_TOOL_NAME, websearchTool } from "./definitions.js";
 import { GENERATE_IMG_TOOL_NAME, generateImgTool } from "./generateImgTool.js";
 import { SELFIE_TOOL_NAME, selfieTool } from "./selfieTool.js";
+import { ASSISTANT_TEXT_TOOL_NAME, assistantTextTool } from "./assistantTextTool.js";
 
 export interface ToolAvailability {
+  onAssistantText?: unknown;
   bash?: { enabled: boolean; workspaceOnly?: boolean; blockedKeywords?: string[] };
   bot?: { tools: { websearch: unknown; generateImg: unknown } };
   selfie?: { enabled: boolean };
   memory?: { enabled: boolean };
   asyncCodex?: boolean;
+  asyncImage?: boolean;
 }
 
 export interface ToolMetadata {
@@ -38,6 +41,14 @@ const catalog: readonly ToolCatalogEntry[] = [
     execution: "inline"
   },
   { name: "onebot.send_message", title: "发送消息", description: "向 OneBot 私聊或群聊发送消息。", execution: "external" },
+  {
+    name: ASSISTANT_TEXT_TOOL_NAME,
+    title: "行动中消息",
+    description: "在多轮行动中发送一条助手消息。",
+    definition: () => assistantTextTool,
+    available: (options) => typeof options.onAssistantText === "function",
+    execution: "inline"
+  },
   {
     name: WEBSEARCH_TOOL_NAME,
     title: "网页搜索",
@@ -93,8 +104,16 @@ export function resolveProviderToolDefinitions(options: ToolAvailability) {
     .map((entry) => entry.definition!(options));
 }
 
-export function providerToolExecutionMode(name: string) {
-  return catalog.find((entry) => entry.name === name)?.execution;
+export function providerToolExecutionMode(name: string, options: ToolAvailability = {}) {
+  const execution = catalog.find((entry) => entry.name === name)?.execution;
+  if (options.asyncImage && (name === GENERATE_IMG_TOOL_NAME || name === SELFIE_TOOL_NAME)) {
+    return "deferred" as const;
+  }
+  return execution;
+}
+
+export function isProviderDeferredTool(name: string, options: ToolAvailability = {}) {
+  return providerToolExecutionMode(name, options) === "deferred";
 }
 
 function validateCatalog(entries: readonly ToolCatalogEntry[]) {

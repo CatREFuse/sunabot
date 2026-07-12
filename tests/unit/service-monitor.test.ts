@@ -69,4 +69,15 @@ describe("ServiceMonitor", () => {
     const decoded = decodeURIComponent(String(fetchMock.mock.calls[0]?.[0]));
     expect(decoded).toContain("event A\nevent B");
   });
+
+  it("flushes the shutdown notice without terminating the process", async () => {
+    const fetchMock = vi.fn(async () => new Response(null, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { monitor } = fixture({ serverEventsEnabled: true });
+
+    await monitor.notifyShutdown("SIGTERM");
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(decodeURIComponent(String(fetchMock.mock.calls[0]?.[0]))).toContain("正在停止");
+  });
 });

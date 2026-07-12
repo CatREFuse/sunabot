@@ -29,12 +29,12 @@ describe("useMemory", () => {
     apiRequest.mockImplementation((path: string, options?: RequestInit) => {
       if (path === "/api/memory/recall") return Promise.resolve({ ok: true, query: "missing", matches: [] });
       if (path === "/api/memory" && options?.method === "POST") return Promise.resolve({ ok: true });
-      if (path === "/api/memory") return Promise.resolve(payload);
+      if (path === "/api/memory?source=working") return Promise.resolve(payload);
       throw new Error(`Unexpected request: ${path}`);
     });
     const memory = useMemory();
     await memory.load();
-    await memory.recall("missing", "all");
+    await memory.recall("missing", "working");
 
     expect(memory.recallActive.value).toBe(true);
     expect(memory.matches.value).toEqual([]);

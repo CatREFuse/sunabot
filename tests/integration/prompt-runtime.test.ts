@@ -76,14 +76,21 @@ describe("workspace prompt runtime", () => {
         { role: "user", content: "上一条问题" },
         { role: "assistant", content: "上一条回复" }
       ],
+      "memory.working": "工作记忆 A",
+      "memory.long_term": "长期记忆 B",
+      "memory.user_profile": "画像 C",
       "user.input": "当前问题"
     });
 
     expect(rendered.messages.map((message) => message.role)).toEqual(["system", "user", "assistant", "user"]);
     expect(rendered.messages[0]?.content).toContain("<soul>");
     expect(rendered.messages[0]?.content).toContain("<output_rules>只输出正文。</output_rules>");
-    expect(rendered.messages.at(-1)?.content).toBe("当前问题");
+    expect(rendered.messages.at(-1)?.content).toContain("<working_memory>工作记忆 A</working_memory>");
+    expect(rendered.messages.at(-1)?.content).toContain("<long_term_memory>长期记忆 B</long_term_memory>");
+    expect(rendered.messages.at(-1)?.content).toContain("<user_profile>画像 C</user_profile>");
+    expect(rendered.messages.at(-1)?.content).toContain("<current_input>当前问题</current_input>");
     expect(rendered.tools?.map((tool) => tool.function.name)).toEqual([
+      "assistant_text",
       "workspace_bash",
       "websearch",
       "generate_img",
@@ -92,6 +99,35 @@ describe("workspace prompt runtime", () => {
       "codex"
     ]);
     expect(rendered.tools?.every((tool) => tool.function.description.trim().length > 0)).toBe(true);
+    for (const name of ["generate_img", "selfie", "codex"]) {
+      const tool = rendered.tools?.find((item) => item.function.name === name);
+      const parameters = tool?.function.parameters as Record<string, any>;
+      expect(parameters.properties.dispatch_message, name).toMatchObject({
+        type: "string",
+        minLength: 1,
+        maxLength: 200
+      });
+      expect(parameters.required, name).toContain("dispatch_message");
+    }
+  });
+
+  it("exposes every persona fragment to all final prompts and keeps recall sources separate", () => {
+    const personaNames = [
+      "persona.agents",
+      "persona.soul",
+      "persona.preference",
+      "persona.user",
+      "persona.relation"
+    ];
+    for (const definition of PROMPT_FILE_DEFINITIONS.filter((item) => item.kind === "final")) {
+      expect(definition.variables.map((item) => item.name), definition.id).toEqual(expect.arrayContaining(personaNames));
+    }
+    const conversation = PROMPT_FILE_DEFINITIONS.find((item) => item.id === "conversation.reply")!;
+    expect(conversation.variables.map((item) => item.name)).toEqual(expect.arrayContaining([
+      "memory.working",
+      "memory.long_term",
+      "memory.user_profile"
+    ]));
   });
 
   it("keeps reusable MD prompts raw and places their semantic wrappers in final templates", async () => {

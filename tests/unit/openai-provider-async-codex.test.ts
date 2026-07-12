@@ -44,14 +44,18 @@ describe("OpenAIProvider asynchronous Codex tool turns", () => {
     vi.restoreAllMocks();
   });
 
-  it("returns a deferred Codex call with the model acknowledgement and does not start a second round", async () => {
+  it("uses dispatch_message for a deferred Codex call and strips it from worker arguments", async () => {
     const provider = codexProvider();
-    const callArguments = {
+    const workerArguments = {
       task: "Inspect the repository and report the failing test.",
       kind: "local"
     };
+    const callArguments = {
+      ...workerArguments,
+      dispatch_message: "我已经收到，马上检查仓库。"
+    };
     const fetchMock = mockCodexToken(provider, codexSseResponse([
-      assistantMessage("已开始检查，完成后告诉你。"),
+      assistantMessage("这段顶层文本不能替代 dispatch_message。"),
       functionCall("codex", "call_codex_ack", callArguments)
     ]));
 
@@ -61,26 +65,34 @@ describe("OpenAIProvider asynchronous Codex tool turns", () => {
 
     expect(result).toEqual({
       kind: "deferred",
-      acknowledgement: "已开始检查，完成后告诉你。",
+      acknowledgement: "我已经收到，马上检查仓库。",
       toolCall: {
         name: "codex",
         callId: "call_codex_ack",
-        arguments: callArguments
+        arguments: workerArguments
       }
     });
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(toolNames(fetchRequestBody(fetchMock, 0))).toEqual(["codex"]);
+    const codexDefinition = (fetchRequestBody(fetchMock, 0).tools as Array<Record<string, any>>)[0]!;
+    expect(codexDefinition.parameters.required).toContain("dispatch_message");
+    expect(codexDefinition.parameters.properties.dispatch_message.maxLength).toBe(200);
   });
 
-  it("keeps the deferred acknowledgement empty when the model emits only a Codex call", async () => {
+  it("returns a tool error and lets the model repair a missing dispatch_message", async () => {
     const provider = codexProvider();
-    const callArguments = {
+    const workerArguments = {
       task: "Research the release history.",
       kind: "research"
     };
-    const fetchMock = mockCodexToken(provider, codexSseResponse([
-      functionCall("codex", "call_codex_silent", callArguments)
-    ]));
+    const fetchMock = mockCodexToken(
+      provider,
+      codexSseResponse([functionCall("codex", "call_codex_missing", workerArguments)]),
+      codexSseResponse([functionCall("codex", "call_codex_repaired", {
+        ...workerArguments,
+        dispatch_message: "我开始整理发布记录。"
+      })])
+    );
 
     const result = await provider.completeTurn("system", [{ role: "user", content: "查发布历史" }], {
       asyncCodex: true
@@ -88,14 +100,18 @@ describe("OpenAIProvider asynchronous Codex tool turns", () => {
 
     expect(result).toEqual({
       kind: "deferred",
-      acknowledgement: "",
+      acknowledgement: "我开始整理发布记录。",
       toolCall: {
         name: "codex",
-        callId: "call_codex_silent",
-        arguments: callArguments
+        callId: "call_codex_repaired",
+        arguments: workerArguments
       }
     });
-    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const repairInput = fetchRequestBody(fetchMock, 1).input as Array<Record<string, unknown>>;
+    const errorOutput = repairInput.find((item) => item.type === "function_call_output");
+    expect(errorOutput?.call_id).toBe("call_codex_missing");
+    expect(JSON.parse(String(errorOutput?.output)).error).toContain("dispatch_message");
   });
 
   it("does not expose the Codex tool when asynchronous Codex is disabled", async () => {
@@ -151,6 +167,184 @@ describe("OpenAIProvider asynchronous Codex tool turns", () => {
       provider: "test-websearch",
       query: "current weather"
     });
+  });
+
+  it("delivers assistant_text during a multi-round action and still returns the final text", async () => {
+    const provider = codexProvider();
+    const onAssistantText = vi.fn(async () => undefined);
+    const fetchMock = mockCodexToken(
+      provider,
+      codexSseResponse([functionCall("assistant_text", "call_assistant_text", { text: "我正在检查。" })]),
+      codexSseResponse([assistantMessage("检查完成。")])
+    );
+
+    const result = await provider.completeTurn("system", [{ role: "user", content: "检查" }], {
+      asyncCodex: false,
+      bot: websearchBotConfig(),
+      onAssistantText
+    });
+
+    expect(result).toEqual({ kind: "completed", text: "检查完成。" });
+    expect(onAssistantText).toHaveBeenCalledOnce();
+    expect(onAssistantText).toHaveBeenCalledWith("我正在检查。");
+    expect(toolNames(fetchRequestBody(fetchMock, 0))).toContain("assistant_text");
+  });
+
+  it("does not silently drop assistant_text when it appears beside a deferred call", async () => {
+    const provider = codexProvider();
+    const onAssistantText = vi.fn(async () => undefined);
+    const task = { task: "检查多工具响应", kind: "analysis" };
+    const fetchMock = mockCodexToken(
+      provider,
+      codexSseResponse([
+        functionCall("assistant_text", "call_progress", { text: "我先确认一下。" }),
+        functionCall("codex", "call_mixed_codex", { ...task, dispatch_message: "我开始检查。" })
+      ]),
+      codexSseResponse([
+        functionCall("codex", "call_single_codex", { ...task, dispatch_message: "我开始检查。" })
+      ])
+    );
+
+    const result = await provider.completeTurn("system", [{ role: "user", content: "检查" }], {
+      asyncCodex: true,
+      onAssistantText
+    });
+
+    expect(onAssistantText).toHaveBeenCalledWith("我先确认一下。");
+    expect(result).toMatchObject({
+      kind: "deferred",
+      acknowledgement: "我开始检查。",
+      toolCall: { callId: "call_single_codex", arguments: task }
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns an image task dispatch before image generation starts", async () => {
+    const provider = codexProvider();
+    const generateImage = vi.fn();
+    const fetchMock = mockCodexToken(provider, codexSseResponse([
+      functionCall("generate_img", "call_image_async", {
+        dispatch_message: "我开始画这张月球基地。",
+        prompt: "月球基地",
+        size: null,
+        resolution: "1K",
+        quality: "high",
+        referenceImageUrls: null
+      })
+    ]));
+    const config = websearchBotConfig();
+    config.tools.generateImg = {
+      provider: "codex-image-gen",
+      size: "1024x1024",
+      resolution: "1K",
+      quality: "high"
+    };
+
+    const result = await provider.completeTurn("system", [{ role: "user", content: "画图" }], {
+      bot: config,
+      asyncImage: true,
+      generateImage
+    });
+
+    expect(result).toMatchObject({
+      kind: "deferred",
+      acknowledgement: "我开始画这张月球基地。",
+      toolCall: {
+        name: "generate_img",
+        callId: "call_image_async",
+        arguments: {
+          prompt: "月球基地",
+          size: null,
+          resolution: "1K",
+          quality: "high",
+          referenceImageUrls: null
+        }
+      }
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(generateImage).not.toHaveBeenCalled();
+  });
+
+  it("never runs an asynchronous image inline when dispatch_message is missing", async () => {
+    const provider = codexProvider();
+    const generateImage = vi.fn();
+    const config = websearchBotConfig();
+    config.tools.generateImg = {
+      provider: "codex-image-gen",
+      size: "1024x1024",
+      resolution: "1K",
+      quality: "high"
+    };
+    const fetchMock = mockCodexToken(
+      provider,
+      codexSseResponse([functionCall("generate_img", "call_image_missing", {
+        prompt: "月球基地",
+        size: null,
+        resolution: "1K",
+        quality: "high",
+        referenceImageUrls: null
+      })]),
+      codexSseResponse([assistantMessage("请补充任务后再试。")])
+    );
+
+    const result = await provider.completeTurn("system", [{ role: "user", content: "画图" }], {
+      bot: config,
+      asyncImage: true,
+      generateImage
+    });
+
+    expect(result).toEqual({ kind: "completed", text: "请补充任务后再试。" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(generateImage).not.toHaveBeenCalled();
+  });
+
+  it("dispatches selfie with a persona message and keeps it out of the worker input", async () => {
+    const provider = codexProvider();
+    const runSelfie = vi.fn();
+    const args = {
+      prompt: "图书馆窗边的普拉娜",
+      size: null,
+      resolution: "1K",
+      quality: "high",
+      referenceImageUrls: null
+    };
+    const fetchMock = mockCodexToken(provider, codexSseResponse([
+      functionCall("selfie", "call_selfie_async", {
+        ...args,
+        dispatch_message: "我去窗边拍一张，很快回来。"
+      })
+    ]));
+
+    const result = await provider.completeTurn("system", [{ role: "user", content: "拍张自拍" }], {
+      asyncImage: true,
+      selfie: { enabled: true, run: runSelfie }
+    });
+
+    expect(result).toEqual({
+      kind: "deferred",
+      acknowledgement: "我去窗边拍一张，很快回来。",
+      toolCall: { name: "selfie", callId: "call_selfie_async", arguments: args }
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(runSelfie).not.toHaveBeenCalled();
+  });
+
+  it("enforces the configured tool call count instead of a fixed round constant", async () => {
+    const provider = codexProvider();
+    const config = websearchBotConfig();
+    config.tools.maxCalls = 1;
+    const onAssistantText = vi.fn(async () => undefined);
+    mockCodexToken(
+      provider,
+      codexSseResponse([functionCall("assistant_text", "call_first", { text: "第一步" })]),
+      codexSseResponse([functionCall("assistant_text", "call_second", { text: "第二步" })])
+    );
+
+    await expect(provider.completeTurn("system", [{ role: "user", content: "执行" }], {
+      bot: config,
+      onAssistantText
+    })).rejects.toThrow("工具调用超过上限：最多 1 次");
+    expect(onAssistantText).toHaveBeenCalledTimes(1);
   });
 
   it("maps the final JSON template fields into the provider request", async () => {
@@ -239,6 +433,7 @@ function providerConfig(): ProviderConfig {
 function websearchBotConfig() {
   return {
     tools: {
+      maxCalls: 20,
       websearch: {
         provider: "tavily",
         model: "gpt-5.4-mini",

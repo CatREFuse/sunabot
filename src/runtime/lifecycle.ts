@@ -69,6 +69,7 @@ import {
   type ProviderCompleteOptions,
   type ProviderDeferredTurn
 } from "../../adapters/model/openaiProvider.js";
+import { probeProviderMultimodal } from "../../adapters/model/providerDiscovery.js";
 import type { ProviderLogContext } from "../../packages/contracts/model/modelGateway.js";
 import {
   inboundImageUrls,
@@ -352,14 +353,64 @@ export async function runtime_completePromptTurn(this: RuntimeHost,
     request: RenderedPromptRequest,
     options: ProviderCompleteOptions = {}
   ) {
+    const configuration = (provider as unknown as { configuration?: () => ReturnType<OpenAIProvider["configuration"]> }).configuration?.();
+    const preparedRequest = configuration
+      ? await prepareVisionFallback(this, configuration, request, options)
+      : request;
     const completeRequestTurn = (provider as unknown as {
       completeRequestTurn?: OpenAIProvider["completeRequestTurn"];
     }).completeRequestTurn;
     if (typeof completeRequestTurn === "function") {
-      return completeRequestTurn.call(provider, request, options);
+      return completeRequestTurn.call(provider, preparedRequest, options);
     }
-    return { kind: "completed" as const, text: await this.completePrompt(provider, request, options) };
+    return { kind: "completed" as const, text: await this.completePrompt(provider, preparedRequest, options) };
   }
+
+async function prepareVisionFallback(
+  runtime: RuntimeHost,
+  providerConfig: ReturnType<OpenAIProvider["configuration"]>,
+  request: RenderedPromptRequest,
+  options: ProviderCompleteOptions
+) {
+  const hasImages = request.messages.some((message) => message.imageUrls?.length || message.localImagePaths?.length);
+  if (!hasImages) return request;
+  const detectedMultimodal = providerConfig.multimodal === "auto" && providerConfig.detectedMultimodal == null
+    ? await cachedMultimodalProbe(providerConfig)
+    : providerConfig.detectedMultimodal;
+  const needsFallback = providerConfig.multimodal === "disabled"
+    || (providerConfig.multimodal === "auto" && detectedMultimodal === false);
+  if (!needsFallback) return request;
+  const helperConfig = runtime.config.providers.items.find((item) => item.id === providerConfig.visionProviderId);
+  if (!helperConfig) throw new Error("当前模型不支持图片，请配置读图辅助 Provider。");
+  const imageUrls = request.messages.flatMap((message) => message.imageUrls ?? []);
+  const localImagePaths = request.messages.flatMap((message) => message.localImagePaths ?? []);
+  const helper = new OpenAIProvider({
+    ...helperConfig,
+    id: `${helperConfig.id}:vision-helper`,
+    model: providerConfig.visionModel?.trim() || helperConfig.model
+  });
+  const description = await helper.complete(
+    "准确描述输入图片中的主体、文字、关系和与用户请求有关的细节，不要猜测不可见内容。",
+    [{ role: "user", content: "请读取这些图片并给出可供另一个模型使用的描述。", imageUrls, localImagePaths }],
+    { signal: options.signal, logContext: options.logContext }
+  );
+  const next = structuredClone(request);
+  next.messages = next.messages.map((message) => ({ ...message, imageUrls: [], localImagePaths: [] }));
+  const lastUser = [...next.messages].reverse().find((message) => message.role === "user");
+  if (lastUser) lastUser.content = `${lastUser.content}\n\n<image_description>${description}</image_description>`;
+  return next;
+}
+
+const multimodalProbeCache = new Map<string, boolean>();
+
+async function cachedMultimodalProbe(provider: ReturnType<OpenAIProvider["configuration"]>) {
+  const key = [provider.id, provider.kind, provider.model, provider.baseUrl ?? "", provider.apiKeyEnv].join("\0");
+  const cached = multimodalProbeCache.get(key);
+  if (cached != null) return cached;
+  const result = await probeProviderMultimodal(provider);
+  multimodalProbeCache.set(key, result.multimodal);
+  return result.multimodal;
+}
 export function runtime_getConversationRecords(this: RuntimeHost) {
     return [...this.conversationRecords.values()]
       .sort((left, right) => Date.parse(right.lastAt) - Date.parse(left.lastAt))

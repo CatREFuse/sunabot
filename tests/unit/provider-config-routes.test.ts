@@ -22,6 +22,8 @@ describe("provider and config API plugin", () => {
     const patchGroupReply = vi.fn(async () => ({ ok: true, applyMode: "hot" }));
     const patch = vi.fn(async () => ({ ok: true, applyMode: "hot" }));
     const testProvider = vi.fn(async () => ({ connected: true }));
+    const listProviderModels = vi.fn(async () => ["model-a", "model-b"]);
+    const probeProviderVision = vi.fn(async () => ({ multimodal: true }));
     const authSnapshot = {
       installed: true,
       authenticated: true,
@@ -35,7 +37,9 @@ describe("provider and config API plugin", () => {
         logout: vi.fn(async () => ({ ...authSnapshot, authenticated: false }))
       },
       configService: { readEnvelope, patchGroupReply, patch },
-      testProvider
+      testProvider,
+      listProviderModels,
+      probeProviderVision
     });
 
     expect((await app.inject({ method: "GET", url: "/api/codex-auth/status" })).json())
@@ -83,6 +87,20 @@ describe("provider and config API plugin", () => {
     });
     expect(testProvider).toHaveBeenCalledWith(config.providers.items[0]);
 
+    expect((await app.inject({
+      method: "POST",
+      url: "/api/providers/models",
+      payload: { provider: config.providers.items[0] }
+    })).json()).toEqual({ ok: true, models: ["model-a", "model-b"] });
+    expect(listProviderModels).toHaveBeenCalledWith(config.providers.items[0]);
+
+    expect((await app.inject({
+      method: "POST",
+      url: "/api/providers/vision-probe",
+      payload: { provider: config.providers.items[0] }
+    })).json()).toEqual({ ok: true, multimodal: true });
+    expect(probeProviderVision).toHaveBeenCalledWith(config.providers.items[0]);
+
     expect([...routeSchemas.keys()].sort()).toEqual([
       "/api/codex-auth/login",
       "/api/codex-auth/logout",
@@ -91,7 +109,9 @@ describe("provider and config API plugin", () => {
       "/api/config/:section",
       "/api/config/group-reply",
       "/api/models",
-      "/api/providers/test"
+      "/api/providers/models",
+      "/api/providers/test",
+      "/api/providers/vision-probe"
     ]);
     for (const schema of routeSchemas.values()) {
       expect(schema.response).toBeDefined();

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
+import { authenticatedMediaPath } from "../../composables/useAdminApi";
 import { formatFullDateTime } from "../../utils/format";
 import { displayMessageText } from "../../utils/messageText";
 import { messageQq, qqAvatarUrl } from "../../utils/qqIdentity";
@@ -75,7 +76,7 @@ function identityKey(value: string) {
         <time class="font-mono text-disabled">{{ formatFullDateTime(message.at) }}</time>
       </header>
 
-      <div data-slot="orchestrator-result" class="grid min-w-0 max-w-full gap-3 rounded-2xl border px-4 py-3 shadow-[0_1px_0_rgb(var(--color-line))]" :class="botMessage ? 'rounded-br-md border-visible bg-display text-page' : 'rounded-bl-md border-line bg-panel text-ink'">
+      <div data-slot="orchestrator-result" class="grid min-w-0 max-w-full gap-3 rounded-2xl border px-4 py-3" :class="botMessage ? 'rounded-br-md border-visible bg-display text-page' : 'rounded-bl-md border-line bg-panel text-ink'">
         <div v-if="orchestratorDecision" class="grid gap-2">
           <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
             <strong class="text-xs font-medium">编排器结果</strong>
@@ -87,7 +88,9 @@ function identityKey(value: string) {
         <blockquote v-for="quote in quotes" :key="quote.messageId" class="grid gap-2 border-l-2 pl-3 text-xs" :class="botMessage ? 'border-page/40 text-page/70' : 'border-visible text-mute'">
           <p v-if="quote.displayText">{{ quote.senderName }} · {{ quote.displayText }}</p>
           <div v-if="quote.imageUrls?.length" class="grid gap-2 sm:grid-cols-2">
-            <AuthenticatedImage v-for="url in quote.imageUrls" :key="`${quote.messageId}-${url}`" :src="url" alt="引用图片" class-name="max-h-64 w-full rounded-lg object-contain" />
+            <a v-for="url in quote.imageUrls" :key="`${quote.messageId}-${url}`" :href="authenticatedMediaPath(url)" target="_blank" rel="noopener noreferrer" title="打开原图">
+              <AuthenticatedImage :src="url" alt="引用图片" thumbnail class-name="max-h-64 w-full rounded-lg object-contain" />
+            </a>
           </div>
         </blockquote>
         <div v-if="requestRunning" data-slot="typing-indicator" class="flex items-center gap-3 py-0.5" role="status" aria-live="polite" aria-label="正在输入">
@@ -96,7 +99,9 @@ function identityKey(value: string) {
         </div>
         <p v-else-if="!orchestratorDecision && messageText" class="whitespace-pre-wrap break-words text-sm leading-6">{{ messageText }}</p>
         <div v-if="!orchestratorDecision && message.imageUrls?.length" class="grid gap-2 sm:grid-cols-2">
-          <AuthenticatedImage v-for="url in message.imageUrls" :key="url" :src="url" alt="会话图片" class-name="max-h-96 w-full rounded-lg object-contain" />
+          <a v-for="url in message.imageUrls" :key="url" :href="authenticatedMediaPath(url)" target="_blank" rel="noopener noreferrer" title="打开原图">
+            <AuthenticatedImage :src="url" alt="会话图片" thumbnail class-name="max-h-96 w-full rounded-lg object-contain" />
+          </a>
         </div>
         <button v-if="message.logRunId" class="justify-self-start font-mono text-[10px] underline underline-offset-4" type="button" @click="emit('logs', message.logRunId)">查看请求日志</button>
       </div>

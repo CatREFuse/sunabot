@@ -7,7 +7,6 @@ import type {
 import { toChatCompletionMessage, toResponsesInputMessage } from "./imageInput.js";
 import { withLogContext } from "./logger.js";
 import {
-  normalizeGeminiReasoningEffort,
   promptRequestFields,
   readToolName,
   responseFormatFields,
@@ -29,8 +28,9 @@ import {
   normalizeCodexResponsesUrl
 } from "./transport.js";
 import { parseJson } from "./valueUtils.js";
-
-const MAX_TOOL_CALL_ROUNDS = 4;
+import { completeAnthropicMessages } from "./anthropicCompletion.js";
+import { completeGeminiGenerateContent } from "./geminiCompletion.js";
+import { claimToolCalls, resolveMaxToolCalls, toolCallLimitError } from "./toolLoopLimits.js";
 
 export async function completeProviderTurn(
   context: ProviderAdapterContext,
@@ -40,9 +40,9 @@ export async function completeProviderTurn(
   if (context.provider.kind === "codex-responses") {
     return completeCodexResponses(context, request, options);
   }
-  if (context.provider.kind === "gemini-openai" || context.provider.kind === "anthropic-openai") {
-    return completeChatCompletions(context, request, options);
-  }
+  if (context.provider.kind === "anthropic-official" || context.provider.kind === "anthropic-compatible") return completeAnthropicMessages(context, request, options);
+  if (context.provider.kind === "gemini-official" || context.provider.kind === "gemini-compatible") return completeGeminiGenerateContent(context, request, options);
+  if (context.provider.kind === "openai-compatible") return completeChatCompletions(context, request, options);
   return completeOpenAIResponses(context, request, options);
 }
 
@@ -55,8 +55,10 @@ async function completeOpenAIResponses(
   const input: Array<Record<string, unknown>> = await Promise.all(request.messages.map(toResponsesInputMessage));
   const tools = context.toolExecutor.resolveDefinitions(options, request.tools);
   const requestFields = promptRequestFields(request);
+  const maxToolCalls = resolveMaxToolCalls(options);
+  let toolCallCount = 0;
 
-  for (let round = 0; round <= MAX_TOOL_CALL_ROUNDS; round += 1) {
+  for (let round = 0; round <= maxToolCalls; round += 1) {
     const requestBody = {
       model: context.provider.model,
       temperature: context.provider.temperature,
@@ -70,6 +72,8 @@ async function completeOpenAIResponses(
     };
     const metadata = withLogContext({
       round,
+      toolCallCount,
+      maxToolCalls,
       toolNames: tools.map(readToolName)
     }, options.logContext);
     await context.logger.request("responses.complete", requestBody, metadata);
@@ -80,7 +84,8 @@ async function completeOpenAIResponses(
     }, metadata);
 
     const toolCalls = extractFunctionCalls(response);
-    const deferred = context.toolExecutor.deferredTurn(response, toolCalls, options);
+    toolCallCount = claimToolCalls(toolCallCount, toolCalls.length, maxToolCalls);
+    const deferred = context.toolExecutor.deferredTurn(toolCalls, options);
     if (deferred) return deferred;
     if (!toolCalls.length) {
       const text = extractProviderText(response);
@@ -92,7 +97,7 @@ async function completeOpenAIResponses(
     input.push(...extractResponseOutput(response), ...(await context.toolExecutor.execute(toolCalls, options)));
   }
 
-  throw new Error(`工具调用超过上限：${MAX_TOOL_CALL_ROUNDS + 1} 轮。`);
+  throw toolCallLimitError(maxToolCalls);
 }
 
 async function completeCodexResponses(
@@ -112,8 +117,10 @@ async function completeCodexResponses(
     request.messages.filter((message) => message.role !== "system").map(toResponsesInputMessage)
   );
   const requestFields = promptRequestFields(request);
+  const maxToolCalls = resolveMaxToolCalls(options);
+  let toolCallCount = 0;
 
-  for (let round = 0; round <= MAX_TOOL_CALL_ROUNDS; round += 1) {
+  for (let round = 0; round <= maxToolCalls; round += 1) {
     const requestBody = {
       model: context.provider.model,
       store: false,
@@ -131,6 +138,8 @@ async function completeCodexResponses(
     };
     const metadata = withLogContext({
       round,
+      toolCallCount,
+      maxToolCalls,
       toolNames: tools.map(readToolName)
     }, options.logContext);
     await context.logger.request("codex.complete", requestBody, metadata);
@@ -164,6 +173,7 @@ async function completeCodexResponses(
     }, metadata);
 
     const toolCalls = extractFunctionCalls(payload);
+    toolCallCount = claimToolCalls(toolCallCount, toolCalls.length, maxToolCalls);
     if (!toolCalls.length) {
       const outputText = extractResponsesTextFromSse(text) || extractResponsesText(payload);
       if (!outputText) throw new Error("模型没有返回可发送内容。");
@@ -171,13 +181,13 @@ async function completeCodexResponses(
     }
 
     const streamText = extractResponsesTextFromSse(text);
-    const deferred = context.toolExecutor.deferredTurn(payload, toolCalls, options, streamText);
+    const deferred = context.toolExecutor.deferredTurn(toolCalls, options);
     if (deferred) return deferred;
     await emitIntermediateAssistantText(payload, options, streamText);
     input.push(...extractResponseOutput(payload), ...(await context.toolExecutor.execute(toolCalls, options)));
   }
 
-  throw new Error(`工具调用超过上限：${MAX_TOOL_CALL_ROUNDS + 1} 轮。`);
+  throw toolCallLimitError(maxToolCalls);
 }
 
 async function completeChatCompletions(
@@ -188,24 +198,24 @@ async function completeChatCompletions(
   const client = context.createChatClient();
   const messages: Array<Record<string, unknown>> = await Promise.all(request.messages.map(toChatCompletionMessage));
   const tools = context.toolExecutor.resolveDefinitions(options, request.tools).map(toChatCompletionTool);
+  const maxToolCalls = resolveMaxToolCalls(options);
+  let toolCallCount = 0;
 
-  for (let round = 0; round <= MAX_TOOL_CALL_ROUNDS; round += 1) {
+  for (let round = 0; round <= maxToolCalls; round += 1) {
     const requestBody = {
       model: context.provider.model,
       messages,
-      temperature: context.provider.kind === "anthropic-openai"
-        ? Math.min(context.provider.temperature, 1)
-        : context.provider.temperature,
+      temperature: context.provider.temperature,
       max_completion_tokens: context.provider.maxOutputTokens,
-      reasoning_effort: context.provider.kind === "gemini-openai"
-        ? normalizeGeminiReasoningEffort(context.provider.reasoningEffort)
-        : undefined,
+      reasoning_effort: undefined,
       tools: tools.length ? tools : undefined,
       parallel_tool_calls: tools.length ? false : undefined,
       response_format: request.response_format?.type === "text" ? undefined : request.response_format
     };
     const metadata = withLogContext({
       round,
+      toolCallCount,
+      maxToolCalls,
       toolNames: tools.map((tool) => tool.function.name)
     }, options.logContext);
     await context.logger.request("chat.completions.complete", requestBody, metadata);
@@ -215,7 +225,8 @@ async function completeChatCompletions(
       ok: true,
       finishReason: response.choices[0]?.finish_reason,
       toolCallCount: choice?.tool_calls?.length ?? 0,
-      textLength: choice?.content?.length ?? 0
+      textLength: choice?.content?.length ?? 0,
+      usage: response.usage
     }, metadata);
     if (!choice) throw new Error("模型没有返回消息。");
 
@@ -228,18 +239,14 @@ async function completeChatCompletions(
         arguments: call.function.arguments
       }];
     });
+    toolCallCount = claimToolCalls(toolCallCount, calls.length, maxToolCalls);
     if (!calls.length) {
       const text = choice.content?.trim();
       if (!text) throw new Error("模型没有返回可发送内容。");
       return { kind: "completed", text };
     }
 
-    const deferred = context.toolExecutor.deferredTurn(
-      { output: calls, output_text: choice.content ?? "" },
-      calls,
-      options,
-      choice.content ?? ""
-    );
+    const deferred = context.toolExecutor.deferredTurn(calls, options);
     if (deferred) return deferred;
     if (choice.content?.trim() && options.onAssistantText) await options.onAssistantText(choice.content.trim());
     messages.push({
@@ -255,5 +262,5 @@ async function completeChatCompletions(
     })));
   }
 
-  throw new Error(`工具调用超过上限：${MAX_TOOL_CALL_ROUNDS + 1} 轮。`);
+  throw toolCallLimitError(maxToolCalls);
 }

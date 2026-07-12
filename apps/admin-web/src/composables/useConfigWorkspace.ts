@@ -39,6 +39,7 @@ const emptyConfig: AppConfig = {
       recentMessageWindowMs: 60_000
     },
     tools: {
+      maxCalls: 20,
       websearch: {
         provider: "tavily",
         tavilyApiKey: "",

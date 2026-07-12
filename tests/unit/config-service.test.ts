@@ -231,6 +231,45 @@ describe("ConfigService", () => {
     expect(saved.bot.memory.reasoningEffort).toBe("low");
     expect(saved.bot.orchestrator.reasoningEffort).toBe("high");
   });
+
+  it("keeps an existing provider type immutable", async () => {
+    const service = new ConfigService({
+      prepareApply: async () => ({ commit: vi.fn() }),
+      mutex: new AdminMutationMutex()
+    });
+    const initial = currentConfig();
+    const providers = structuredClone(initial.providers);
+    providers.items[0]!.kind = "anthropic-official";
+    providers.items[0]!.baseUrl = "https://api.anthropic.com/v1";
+
+    await expect(service.patch("providers", {
+      revision: configRevision(initial),
+      value: providers
+    })).rejects.toMatchObject({
+      statusCode: 400,
+      code: "CONFIG_INVALID",
+      field: "providers.items.test-provider.kind"
+    });
+  });
+
+  it("keeps official provider addresses fixed", async () => {
+    const service = new ConfigService({
+      prepareApply: async () => ({ commit: vi.fn() }),
+      mutex: new AdminMutationMutex()
+    });
+    const initial = currentConfig();
+    const providers = structuredClone(initial.providers);
+    providers.items[0]!.baseUrl = "https://proxy.example.com/v1";
+
+    await expect(service.patch("providers", {
+      revision: configRevision(initial),
+      value: providers
+    })).rejects.toMatchObject({
+      statusCode: 400,
+      code: "CONFIG_INVALID",
+      field: "providers.items.0.baseUrl"
+    });
+  });
 });
 
 function currentConfig() {

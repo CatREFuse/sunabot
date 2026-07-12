@@ -27,9 +27,7 @@ export function createChatClient(provider: ProviderConfig, apiKey: string) {
   return new OpenAI({
     apiKey,
     baseURL: normalizeChatBaseUrl(provider),
-    defaultHeaders: provider.kind === "gemini-openai"
-      ? { "x-goog-api-client": "catrefuse-sunabot-oai/0.1.0" }
-      : undefined
+    defaultHeaders: undefined
   });
 }
 
@@ -52,10 +50,17 @@ export function normalizeOpenAiBaseUrl(baseUrl?: string) {
 }
 
 export function normalizeChatBaseUrl(provider: ProviderConfig) {
-  const fallback = provider.kind === "gemini-openai"
-    ? "https://generativelanguage.googleapis.com/v1beta/openai"
-    : "https://api.anthropic.com/v1";
-  return String(provider.baseUrl || fallback).replace(/\/+$/, "");
+  return String(provider.baseUrl || "https://api.openai.com/v1").replace(/\/+$/, "");
+}
+
+export function normalizeAnthropicBaseUrl(baseUrl?: string) {
+  const value = String(baseUrl || "https://api.anthropic.com/v1").replace(/\/+$/, "");
+  return value.endsWith("/v1") ? value : `${value}/v1`;
+}
+
+export function normalizeGeminiBaseUrl(baseUrl?: string) {
+  const value = String(baseUrl || "https://generativelanguage.googleapis.com/v1beta").replace(/\/+$/, "");
+  return /\/v\d+(?:beta\d*)?$/.test(value) ? value : `${value}/v1beta`;
 }
 
 export function normalizeCodexResponsesUrl(baseUrl?: string) {

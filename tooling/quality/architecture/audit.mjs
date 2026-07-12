@@ -212,10 +212,10 @@ export function auditArchitecture(projectRoot, overrides = {}) {
     } else {
       try {
         const contract = JSON.parse(fs.readFileSync(absolute, "utf8"));
-        if (contract.schemaVersion !== 1) report({
+        if (contract.schemaVersion !== 2) report({
           rule: "runtime-contract",
           source: runtimeContractPath,
-          message: `${runtimeContractPath} must declare schemaVersion 1`
+          message: `${runtimeContractPath} must declare schemaVersion 2`
         });
       } catch (error) {
         report({

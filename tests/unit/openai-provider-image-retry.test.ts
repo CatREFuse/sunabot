@@ -124,7 +124,7 @@ describe("OpenAIProvider image generation retries", () => {
   });
 
   it("disables SDK retries and applies the same three-attempt cap", async () => {
-    const provider = new OpenAIProvider(providerConfig("openai-responses"), { imageRetrySleep: sleep });
+    const provider = new OpenAIProvider(providerConfig("openai-official"), { imageRetrySleep: sleep });
     const create = vi.fn()
       .mockRejectedValueOnce(new APIConnectionError({ message: "network", cause: networkError("ECONNRESET") }))
       .mockResolvedValueOnce(imagePayload());
@@ -145,7 +145,7 @@ describe("OpenAIProvider image generation retries", () => {
   });
 
   it("never exceeds three SDK image requests", async () => {
-    const provider = new OpenAIProvider(providerConfig("openai-responses"), { imageRetrySleep: sleep });
+    const provider = new OpenAIProvider(providerConfig("openai-official"), { imageRetrySleep: sleep });
     const lastError = new APIConnectionError({ message: "last network failure", cause: networkError("ETIMEDOUT") });
     const create = vi.fn()
       .mockRejectedValueOnce(new APIConnectionError({ message: "network one", cause: networkError("ECONNRESET") }))

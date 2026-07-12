@@ -466,7 +466,7 @@ export async function runtime_processIncomingReplyEvent(this: RuntimeHost,
     if (deferred) {
       await appendRequestLog({
         category: "tool.call",
-        action: "codex",
+        action: deferred.deferred.toolCall.name,
         request: {
           callId: deferred.deferred.toolCall.callId,
           arguments: deferred.deferred.toolCall.arguments
@@ -483,6 +483,7 @@ export async function runtime_processIncomingReplyEvent(this: RuntimeHost,
       return {
         status: "deferred",
         providerCallId: deferred.deferred.toolCall.callId,
+        toolName: deferred.deferred.toolCall.name,
         arguments: deferred.deferred.toolCall.arguments,
         originalRequest: deferred.originalRequest,
         acknowledgement: deferred.acknowledgement,

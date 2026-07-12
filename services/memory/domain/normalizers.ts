@@ -121,7 +121,7 @@ export function readAddressName(value: Record<string, unknown>) {
 export function configuredAddressName(config: MemoryIdentityConfig, userId: string, requested: string) {
   const adminQq = normalizeUserId(config.bot.adminQq);
   if (userId && adminQq && userId === adminQq) {
-    return normalizeAddressName(config.bot.adminName) || "猫老师";
+    return requested || normalizeAddressName(config.bot.adminName) || "猫老师";
   }
   return requested;
 }

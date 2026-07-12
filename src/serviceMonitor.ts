@@ -39,8 +39,6 @@ export class ServiceMonitor {
     this.gateway.on("error", this.onGatewayError);
     process.on("unhandledRejection", this.onUnhandledRejection);
     process.on("uncaughtException", this.onUncaughtException);
-    process.once("SIGINT", this.onSigint);
-    process.once("SIGTERM", this.onSigterm);
 
     this.timer = setInterval(() => void this.checkOneBotState(), MONITOR_INTERVAL_MS);
     this.timer.unref();
@@ -59,8 +57,11 @@ export class ServiceMonitor {
     this.gateway.off("error", this.onGatewayError);
     process.off("unhandledRejection", this.onUnhandledRejection);
     process.off("uncaughtException", this.onUncaughtException);
-    process.off("SIGINT", this.onSigint);
-    process.off("SIGTERM", this.onSigterm);
+  }
+
+  async notifyShutdown(signal: NodeJS.Signals) {
+    if (this.timer) clearInterval(this.timer);
+    await this.enqueue("server", `服务收到 ${signal}，正在停止。`, true);
   }
 
   private readonly onConnected = () => {
@@ -93,9 +94,6 @@ export class ServiceMonitor {
     void this.enqueue("server", `Uncaught exception：${errorMessage(error)}`, true).finally(() => process.exit(1));
   };
 
-  private readonly onSigint = () => void this.handleShutdownSignal("SIGINT");
-  private readonly onSigterm = () => void this.handleShutdownSignal("SIGTERM");
-
   private async checkOneBotState() {
     const status = this.gateway.getStatus();
     if (!status.connected) return;
@@ -122,12 +120,6 @@ export class ServiceMonitor {
     if (now - this.lastOnlineAnnouncementAt < ONLINE_ANNOUNCE_COOLDOWN_MS) return;
     this.lastOnlineAnnouncementAt = now;
     await this.runtime.announceServiceOnline(this.gateway, ONLINE_MESSAGE);
-  }
-
-  private async handleShutdownSignal(signal: NodeJS.Signals) {
-    if (this.timer) clearInterval(this.timer);
-    await this.enqueue("server", `服务收到 ${signal}，正在停止。`, true);
-    process.exit(0);
   }
 
   private async enqueue(channel: MonitorChannel, message: string, flushNow = false, force = false) {

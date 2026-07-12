@@ -7,7 +7,17 @@ export type {
   MessageQuoteV1
 } from "../packages/contracts/messaging/messages.js";
 
-export type ProviderKind = "openai-responses" | "codex-responses" | "gemini-openai" | "anthropic-openai";
+export type ProviderKind =
+  | "codex-responses"
+  | "openai-official"
+  | "anthropic-official"
+  | "openai-compatible"
+  | "anthropic-compatible"
+  | "gemini-official"
+  | "gemini-compatible";
+
+export type ProviderModelSource = "remote" | "custom";
+export type ProviderMultimodalMode = "auto" | "enabled" | "disabled";
 
 export type ReasoningEffort =
   | "none"
@@ -41,6 +51,11 @@ export interface ProviderConfig {
   temperature: number;
   maxOutputTokens: number;
   reasoningEffort?: ReasoningEffort;
+  modelSource?: ProviderModelSource;
+  multimodal?: ProviderMultimodalMode;
+  detectedMultimodal?: boolean;
+  visionProviderId?: string;
+  visionModel?: string;
 }
 
 export type WebsearchToolProvider = "tavily";
@@ -58,6 +73,7 @@ export type ImageSize =
   | "2160x3840";
 
 export interface BotToolSettings {
+  maxCalls: number;
   websearch: {
     provider: WebsearchToolProvider;
     tavilyApiKey: string;
@@ -178,6 +194,8 @@ export interface OneBotLoginCheck {
 
 export interface OneBotQrLogin extends OneBotLoginCheck {
   available: boolean;
+  phase?: "online" | "connecting" | "restarting" | "starting" | "waiting_scan" | "expired";
+  loginError?: string;
   action?: string;
   imageDataUrl?: string;
   imageUrl?: string;

@@ -1,6 +1,7 @@
 // @vitest-environment node
 import path from "node:path";
 import Fastify, { type FastifySchema } from "fastify";
+import sharp from "sharp";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerMediaRoutes } from "../../apps/api/plugins/mediaRoutes.js";
 import { closeApplicationDataStores } from "../../adapters/sqlite/applicationDataStore.js";
@@ -51,6 +52,32 @@ describe("media API plugin", () => {
       redirect: "manual"
     }));
 
+    const source = await sharp({ create: { width: 800, height: 600, channels: 3, background: "#d71921" } }).png().toBuffer();
+    fetchMock.mockResolvedValueOnce(new Response(source, {
+      status: 200,
+      headers: { "content-type": "image/png", "content-length": String(source.length) }
+    }));
+    const thumbnail = await app.inject({
+      method: "GET",
+      url: `/api/media/thumbnail?url=${encodeURIComponent("https://8.8.8.8/large.png")}`
+    });
+    expect(thumbnail.statusCode).toBe(200);
+    expect(thumbnail.headers["content-type"]).toContain("image/webp");
+    expect(await sharp(thumbnail.rawPayload).metadata()).toMatchObject({ width: 480, height: 360, format: "webp" });
+
+    fetchMock.mockResolvedValueOnce(new Response(source, {
+      status: 200,
+      headers: { "content-type": "image/png", "content-length": String(source.length) }
+    }));
+    const placeholder = await app.inject({
+      method: "GET",
+      url: `/api/media/thumbnail?variant=placeholder&url=${encodeURIComponent("https://8.8.8.8/placeholder.png")}`
+    });
+    expect(placeholder.statusCode).toBe(200);
+    expect(await sharp(placeholder.rawPayload).metadata()).toMatchObject({ width: 48, height: 48, format: "webp" });
+    expect(placeholder.rawPayload.byteLength).toBeLessThan(8 * 1024);
+    expect(placeholder.headers["cache-control"]).toContain("max-age=604800");
+
     const generated = await app.inject({
       method: "POST",
       url: "/api/playground/image",
@@ -76,8 +103,10 @@ describe("media API plugin", () => {
       "/api/images",
       "/api/media/image",
       "/api/media/qq-avatar",
+      "/api/media/thumbnail",
       "/api/playground/image",
-      "/api/request-logs"
+      "/api/request-logs",
+      "/api/token-usage"
     ]);
     assertRequestAndResponseSchemas(routeSchemas);
   });

@@ -3,7 +3,7 @@ export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "
 export interface ProviderConfig {
   id: string;
   label: string;
-  kind: "openai-responses" | "codex-responses" | "gemini-openai" | "anthropic-openai";
+  kind: "codex-responses" | "openai-official" | "anthropic-official" | "openai-compatible" | "anthropic-compatible" | "gemini-official" | "gemini-compatible";
   enabled: boolean;
   model: string;
   imageModel: string;
@@ -13,6 +13,11 @@ export interface ProviderConfig {
   temperature: number;
   maxOutputTokens: number;
   reasoningEffort?: ReasoningEffort;
+  modelSource?: "remote" | "custom";
+  multimodal?: "auto" | "enabled" | "disabled";
+  detectedMultimodal?: boolean;
+  visionProviderId?: string;
+  visionModel?: string;
 }
 
 export type WebsearchToolProvider = "tavily";
@@ -30,6 +35,7 @@ export type ImageSize =
   | "2160x3840";
 
 export interface BotToolSettings {
+  maxCalls: number;
   websearch: {
     provider: WebsearchToolProvider;
     tavilyApiKey: string;
@@ -260,6 +266,19 @@ export interface ConversationLogEntry {
   metadata?: Record<string, unknown>;
 }
 
+export interface TokenUsageBucket {
+  input: number;
+  output: number;
+  total: number;
+  requests: number;
+}
+
+export interface TokenUsagePayload {
+  today: TokenUsageBucket & { date: string };
+  days: Array<TokenUsageBucket & { date: string }>;
+  hours: Array<TokenUsageBucket & { hour: number }>;
+}
+
 export interface ImageHistoryRecord {
   id: string;
   url: string;
@@ -270,6 +289,23 @@ export interface ImageHistoryRecord {
   providerId?: string;
   model?: string;
   createdAt: string;
+}
+
+export interface SelfieReferenceImage {
+  id: string;
+  fileName: string;
+  sizeBytes: number;
+  width: number;
+  height: number;
+  updatedAt: string;
+  originalUrl: string;
+  displayUrl: string;
+  placeholderUrl: string;
+}
+
+export interface SelfieReferencePayload {
+  images: SelfieReferenceImage[];
+  maxImages: number;
 }
 
 export interface ImageResult { url: string; model?: string; providerId?: string }
@@ -328,6 +364,8 @@ export interface OneBotLoginCheck {
 }
 export interface OneBotQrLogin extends OneBotLoginCheck {
   available: boolean;
+  phase?: "online" | "connecting" | "restarting" | "starting" | "waiting_scan" | "expired";
+  loginError?: string;
   action?: string;
   imageDataUrl?: string;
   imageUrl?: string;

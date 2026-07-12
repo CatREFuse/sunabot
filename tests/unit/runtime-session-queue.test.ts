@@ -93,6 +93,31 @@ describe("SunaRuntime Session queue bridge", () => {
     ]);
   });
 
+  it("quotes only the first assistant_text message and the final group reply", async () => {
+    const completeRequestTurn = vi.fn(async (
+      _request: RenderedPromptRequest,
+      options: ProviderCompleteOptions = {}
+    ): Promise<ProviderTurnResult> => {
+      await options.onAssistantText?.("第一条行动消息");
+      await options.onAssistantText?.("第二条行动消息");
+      return { kind: "completed", text: "最终回复" };
+    });
+    const harness = createRuntimeHarness(completeRequestTurn);
+
+    await handleOneBotEvent(harness.runtime, groupEvent(150, 100, "assistant-text"), harness.gateway);
+    await harness.coordinator.waitForIdle({ timeoutMs: 3_000 });
+
+    const send = harness.gateway.send as unknown as ReturnType<typeof vi.fn>;
+    expect(send.mock.calls.map((call) => ({
+      text: call[0].text,
+      replyToMessageId: call[0].replyToMessageId
+    }))).toEqual([
+      { text: "第一条行动消息", replyToMessageId: 150 },
+      { text: "第二条行动消息", replyToMessageId: undefined },
+      { text: "最终回复", replyToMessageId: 150 }
+    ]);
+  });
+
   it("preserves per-group FIFO without loss or duplication across 100 deterministically interleaved turns", async () => {
     const random = seededRandom(0x5eedc0de);
     const groupIds = [410, 420, 430, 440, 450];
@@ -283,7 +308,7 @@ describe("SunaRuntime Session queue bridge", () => {
         providerStarts.push("delegate");
         return {
           kind: "deferred",
-          acknowledgement: "",
+          acknowledgement: "我收到委托，开始检查。",
           toolCall: {
             name: "codex",
             callId: "call-runtime-codex",
@@ -298,12 +323,13 @@ describe("SunaRuntime Session queue bridge", () => {
       throw new Error(`Unexpected provider request: ${userText}`);
     });
     const harness = createRuntimeHarness(completeRequestTurn, runner);
-    const acknowledgement = "收到，任务已经开始处理，完成后我会继续回复。";
+    const acknowledgement = "我收到委托，开始检查。";
 
     await handleOneBotEvent(harness.runtime, groupEvent(301, 300, "delegate"), harness.gateway);
     await toolStarted.promise;
     await waitUntil(() => sentTexts(harness.gateway).includes(acknowledgement));
     expect(sentTexts(harness.gateway).filter((text) => text === acknowledgement)).toHaveLength(1);
+    expect(harness.store.listToolJobs("group:300")[0]?.arguments).not.toHaveProperty("dispatch_message");
 
     await handleOneBotEvent(harness.runtime, groupEvent(302, 300, "later"), harness.gateway);
     await waitUntil(() => sentTexts(harness.gateway).includes("later reply"));

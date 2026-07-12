@@ -2,6 +2,7 @@
 import Fastify from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerOneBotRoutes } from "../../apps/api/plugins/onebotRoutes.js";
+import type { NapcatLoginControlPort } from "../../adapters/onebot/napcatLoginControl.js";
 import type { OneBotGateway } from "../../adapters/onebot/onebotGateway.js";
 
 const apps: ReturnType<typeof Fastify>[] = [];
@@ -53,4 +54,75 @@ describe("OneBot API plugin", () => {
       .toEqual({ connected: false, private: [], groups: [] });
     expect(sendAction).not.toHaveBeenCalled();
   });
+
+  it("refreshes a NapCat QR without requiring a OneBot connection", async () => {
+    const control = loginControl({
+      status: vi.fn(async () => ({ isLogin: false, manualLogin: false })),
+      refreshQrCode: vi.fn(async () => ({
+        isLogin: false,
+        manualLogin: false,
+        qrcodeUrl: "https://txz.qq.com/example",
+        imageDataUrl: "data:image/png;base64,AAAA",
+        imageUpdatedAt: "2026-07-12T00:00:00.000Z"
+      }))
+    });
+    const app = Fastify();
+    apps.push(app);
+    registerOneBotRoutes(app, {
+      getStatus: () => ({ connected: false }),
+      getRecentEvents: () => [],
+      sendAction: vi.fn()
+    } as unknown as OneBotGateway, { napcatLoginControl: control });
+
+    const response = await app.inject({ method: "POST", url: "/api/onebot/qq-login" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      connected: false,
+      online: false,
+      available: true,
+      phase: "waiting_scan",
+      imageDataUrl: "data:image/png;base64,AAAA"
+    });
+    expect(control.refreshQrCode).toHaveBeenCalledOnce();
+  });
+
+  it("marks manual login before dispatching bot_exit", async () => {
+    const control = loginControl({
+      status: vi.fn(async () => ({
+        isLogin: true,
+        manualLogin: false,
+        data: { user_id: 985436737, nickname: "测试 Bot" }
+      }))
+    });
+    const dispatchAction = vi.fn(async () => undefined);
+    const app = Fastify();
+    apps.push(app);
+    registerOneBotRoutes(app, {
+      getStatus: () => ({ connected: true }),
+      getRecentEvents: () => [],
+      sendAction: vi.fn(async () => ({ data: { user_id: 985436737, nickname: "测试 Bot" } })),
+      dispatchAction
+    } as unknown as OneBotGateway, { napcatLoginControl: control });
+
+    const response = await app.inject({ method: "POST", url: "/api/onebot/qq-logout" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ ok: true, online: false, phase: "restarting" });
+    expect(control.beginManualLogin).toHaveBeenCalledOnce();
+    expect(dispatchAction).toHaveBeenCalledWith("bot_exit", {});
+    expect(control.startLoginCompletionWatch).toHaveBeenCalledOnce();
+  });
 });
+
+function loginControl(overrides: Partial<NapcatLoginControlPort> = {}): NapcatLoginControlPort {
+  return {
+    status: vi.fn(async () => ({ isLogin: false, manualLogin: false })),
+    refreshQrCode: vi.fn(async () => ({ isLogin: false, manualLogin: false })),
+    beginManualLogin: vi.fn(async () => undefined),
+    cancelManualLogin: vi.fn(async () => undefined),
+    startLoginCompletionWatch: vi.fn(),
+    close: vi.fn(),
+    ...overrides
+  };
+}

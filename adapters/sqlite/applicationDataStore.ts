@@ -264,17 +264,43 @@ export class ApplicationDataStore {
   }
 
   readRequestLogs(options: { query?: string; limit: number }) {
+    return this.readRequestLogPage({ query: options.query, page: 1, pageSize: options.limit }).logs;
+  }
+
+  readRequestLogPage(options: { query?: string; page: number; pageSize: number }) {
     const query = String(options.query ?? "").trim().toLowerCase();
+    const offset = (options.page - 1) * options.pageSize;
     const rows = query
       ? this.database.prepare(`
           SELECT data_json FROM request_logs
           WHERE LOWER(data_json) LIKE ? ESCAPE '\\'
-          ORDER BY at DESC, row_id DESC LIMIT ?
-        `).all(`%${escapeLike(query)}%`, options.limit)
+          ORDER BY at DESC, row_id DESC LIMIT ? OFFSET ?
+        `).all(`%${escapeLike(query)}%`, options.pageSize, offset)
       : this.database.prepare(`
-          SELECT data_json FROM request_logs ORDER BY at DESC, row_id DESC LIMIT ?
-        `).all(options.limit);
-    return rows.map((row) => JSON.parse(String((row as SqlRow).data_json)));
+          SELECT data_json FROM request_logs ORDER BY at DESC, row_id DESC LIMIT ? OFFSET ?
+        `).all(options.pageSize, offset);
+    const countRow = query
+      ? this.database.prepare(`
+          SELECT COUNT(*) AS count FROM request_logs
+          WHERE LOWER(data_json) LIKE ? ESCAPE '\\'
+        `).get(`%${escapeLike(query)}%`) as SqlRow
+      : this.database.prepare("SELECT COUNT(*) AS count FROM request_logs").get() as SqlRow;
+    const total = Number(countRow.count ?? 0);
+    return {
+      logs: rows.map((row) => JSON.parse(String((row as SqlRow).data_json))),
+      page: options.page,
+      pageSize: options.pageSize,
+      total,
+      pageCount: Math.max(1, Math.ceil(total / options.pageSize))
+    };
+  }
+
+  readTokenUsageRecords(since: string) {
+    return this.database.prepare(`
+      SELECT data_json FROM request_logs
+      WHERE category = 'model.response' AND at >= ?
+      ORDER BY at ASC, row_id ASC
+    `).all(since).map((row) => JSON.parse(String((row as SqlRow).data_json)) as JsonObject);
   }
 
   ensureLegacyRequestLogsImported(filePath: string) {

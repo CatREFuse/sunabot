@@ -18,6 +18,7 @@ interface CodexAuthSnapshot {
 const snapshot = shallowRef<CodexAuthSnapshot>();
 const busy = shallowRef(false);
 const error = shallowRef("");
+const copied = shallowRef(false);
 let pollTimer: number | undefined;
 
 onMounted(() => void refresh());
@@ -69,10 +70,18 @@ function stopPolling() {
   window.clearInterval(pollTimer);
   pollTimer = undefined;
 }
+
+async function copyCode() {
+  const code = snapshot.value?.login.userCode;
+  if (!code) return;
+  await navigator.clipboard.writeText(code);
+  copied.value = true;
+  window.setTimeout(() => { copied.value = false; }, 1_500);
+}
 </script>
 
 <template>
-  <section class="rounded-xl border border-visible bg-panel p-5">
+  <section class="border-y border-visible bg-raised px-4 py-5">
     <div class="flex flex-wrap items-start justify-between gap-4">
       <div>
         <p class="page-kicker">CHATGPT SUBSCRIPTION</p>
@@ -84,8 +93,14 @@ function stopPolling() {
       </span>
     </div>
 
-    <div v-if="snapshot?.login.verificationUrl || snapshot?.login.userCode" class="mt-5 grid gap-3 rounded-lg border border-line bg-raised p-4">
-      <p v-if="snapshot.login.userCode" class="font-mono text-xl tracking-[0.18em] text-display">{{ snapshot.login.userCode }}</p>
+    <div v-if="snapshot?.login.verificationUrl || snapshot?.login.userCode" class="mt-5 grid gap-3 border-l-2 border-display bg-panel p-4">
+      <div v-if="snapshot.login.userCode" class="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <span class="meta-label">授权码</span>
+          <p class="mt-1 font-mono text-2xl tracking-[0.18em] text-display">{{ snapshot.login.userCode }}</p>
+        </div>
+        <button class="btn btn-ghost" type="button" @click="copyCode"><i class="bx bx-copy" aria-hidden="true"></i>{{ copied ? "已复制" : "复制授权码" }}</button>
+      </div>
       <a
         v-if="snapshot.login.verificationUrl"
         class="text-sm text-accent underline underline-offset-4"
@@ -98,7 +113,7 @@ function stopPolling() {
 
     <p v-if="error" class="mt-4 text-sm text-accent">[ERROR: {{ error }}]</p>
     <div class="mt-5 flex flex-wrap gap-2">
-      <button class="btn" type="button" :disabled="busy || !snapshot?.installed" @click="startLogin">重新登录</button>
+      <button class="btn" type="button" :disabled="busy || !snapshot?.installed" @click="startLogin"><i class="bx bx-log-in-circle" aria-hidden="true"></i>{{ snapshot?.authenticated ? "重新登录" : "开始登录" }}</button>
       <button class="btn btn-ghost" type="button" :disabled="busy || !snapshot?.authenticated" @click="logout">退出订阅</button>
       <button class="btn btn-ghost" type="button" :disabled="busy" @click="refresh">刷新状态</button>
     </div>

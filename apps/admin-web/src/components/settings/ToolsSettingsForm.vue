@@ -27,6 +27,11 @@ const qualities: Array<{ value: ImageQuality; label: string }> = [
       <h2 class="section-title mt-2">工具</h2>
     </div>
     <div class="grid gap-8">
+      <label class="field max-w-xs">
+        <span class="field-label">单轮工具调用上限</span>
+        <input v-model.number="draft.maxCalls" class="control" type="number" min="1" max="100" step="1">
+        <small class="text-xs text-mute">每次 Agent 行动最多调用 {{ draft.maxCalls }} 次工具</small>
+      </label>
       <div class="grid gap-5">
         <div>
           <p class="page-kicker">WEB SEARCH</p>

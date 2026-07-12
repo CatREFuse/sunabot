@@ -24,7 +24,7 @@ afterEach(async () => {
 });
 
 describe("NapCat runtime layout", () => {
-  it("fixes config-full and the QR artifact in the runtime contract, schema and workspace layout", async () => {
+  it("fixes config-full and QQ login artifacts in the runtime contract, schema and workspace layout", async () => {
     const [contract, schema] = await Promise.all([
       readJson(path.join(root, "deploy/runtime-contract.json")),
       readJson(path.join(root, "deploy/runtime-contract.schema.json"))
@@ -44,6 +44,12 @@ describe("NapCat runtime layout", () => {
     expect(schemaPaths.required).toContain("napcatQrCode");
     expect(schemaPathProperties.napcatQrCode).toEqual({
       const: "runtime/napcat/qrcode.png"
+    });
+    expect(paths.napcatManualLogin).toBe("runtime/napcat/manual-login-required");
+    expect(paths.napcatManualLogin).toBe(WORKSPACE_LAYOUT.napcatManualLogin);
+    expect(schemaPaths.required).toContain("napcatManualLogin");
+    expect(schemaPathProperties.napcatManualLogin).toEqual({
+      const: "runtime/napcat/manual-login-required"
     });
   });
 
@@ -109,15 +115,42 @@ describe("NapCat runtime layout", () => {
       .rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("provisions writable Docker font and shader cache paths for UID 1000", async () => {
-    const dockerfile = await fs.readFile(path.join(root, "deploy/docker/Dockerfile"), "utf8");
-    expect(dockerfile).toContain("XDG_CACHE_HOME=/app/.cache");
-    expect(dockerfile).toContain("/app/.cache/fontconfig");
-    expect(dockerfile).toContain("/app/.cache/mesa_shader_cache");
-    expect(dockerfile).toContain("/app/.cache/mesa_shader_cache_db");
-    expect(dockerfile).toContain('ln -s "$SUNABOT_WORKSPACE/$napcat_state" /app/napcat/cache');
-    expect(dockerfile).toMatch(/chown -R 1000:1000[\s\S]*\/app\/\.cache/);
+  it("keeps the Core image free of NapCat and confines NapCat mounts to runtime state", async () => {
+    const [coreDockerfile, napcatDockerfile, compose, entrypoint] = await Promise.all([
+      fs.readFile(path.join(root, "deploy/docker/Dockerfile"), "utf8"),
+      fs.readFile(path.join(root, "deploy/docker/Dockerfile.napcat"), "utf8"),
+      fs.readFile(path.join(root, "deploy/docker/compose.yml"), "utf8"),
+      fs.readFile(path.join(root, "deploy/docker/napcat-entrypoint.sh"), "utf8")
+    ]);
+    expect(coreDockerfile).toContain('org.opencontainers.image.title="sunabot-core"');
+    expect(coreDockerfile).toContain('bubblewrap="${BUBBLEWRAP_VERSION}"');
+    expect(coreDockerfile).toContain('libreoffice="${LIBREOFFICE_VERSION}"');
+    expect(coreDockerfile).not.toContain("mlikiowa/napcat-docker");
+    expect(coreDockerfile).not.toContain("/opt/QQ");
+    expect(coreDockerfile).not.toContain("/app/napcat");
 
+    expect(napcatDockerfile).toContain("mlikiowa/napcat-docker:v4.15.0@sha256:");
+    expect(napcatDockerfile).toContain("sunabot-napcat-entrypoint");
+    expect(entrypoint).toContain('cp -an "$temporary_root/config/." "$config_root/"');
+    expect(entrypoint).toContain('if [[ -f "$manual_login_marker" ]]');
+    expect(entrypoint).toContain("export ACCOUNT=");
+
+    const coreService = compose.slice(compose.indexOf("  core:"), compose.indexOf("  napcat:"));
+    const napcatService = compose.slice(
+      compose.indexOf("  napcat:"),
+      compose.lastIndexOf("\nnetworks:\n")
+    );
+    expect(coreService).toContain('profiles: ["core-docker"]');
+    expect(coreService).toContain(":/srv/sunabot/workspace");
+    expect(napcatService).not.toContain("platform: linux/amd64");
+    expect(napcatService).not.toContain("env_file:");
+    expect(napcatService).toContain("/runtime/napcat/config-full:/app/napcat/config");
+    expect(napcatService).toContain("/runtime/napcat/qq:/app/.config/QQ");
+    expect(napcatService).toContain("/runtime/napcat/plugins:/app/napcat/plugins");
+    expect(napcatService).toContain("/runtime/napcat:/app/napcat/cache");
+  });
+
+  it("provisions writable native component cache paths", async () => {
     const rootDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-napcat-writable-cache-"));
     temporaryDirectories.push(rootDirectory);
     const cacheRoot = path.join(rootDirectory, ".cache");
@@ -133,8 +166,6 @@ describe("NapCat runtime layout", () => {
       expect(await fs.readFile(probe, "utf8")).toBe("ok");
     }));
 
-    const supervisor = await fs.readFile(path.join(root, "deploy/docker/supervisor.mjs"), "utf8");
-    expect(supervisor).toContain('ensureNapcatWritableCaches("/app/.cache")');
   });
 
   it("configures OneBot only in the contract NapCat config directory", async () => {
@@ -171,11 +202,12 @@ describe("NapCat runtime layout", () => {
     );
     const config = await readJson(configPath);
     const network = asRecord(config.network);
+    expect(config.enableLocalFile2Url).toBe(true);
     expect(network.websocketClients).toEqual([
       expect.objectContaining({
         name: "sunabot",
         enable: true,
-        url: "ws://127.0.0.1:8787/onebot/v11/ws",
+        url: "ws://host.docker.internal:8788/onebot/v11/ws",
         token: "unit-onebot-token"
       })
     ]);

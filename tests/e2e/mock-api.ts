@@ -39,7 +39,9 @@ const initialConfig = {
         envFile: "workspace/secrets/runtime.env",
         temperature: 0.7,
         maxOutputTokens: 2400,
-        reasoningEffort: "ultra"
+        reasoningEffort: "ultra",
+        modelSource: "remote" as const,
+        multimodal: "auto" as const
       }
     ]
   },
@@ -66,6 +68,7 @@ const initialConfig = {
       recentMessageWindowMs: 60_000
     },
     tools: {
+      maxCalls: 20,
       websearch: {
         provider: "tavily",
         tavilyApiKey: "",
@@ -129,6 +132,19 @@ export interface MockApiState {
   authenticated: boolean;
   nextPatchError: string;
   imageHistoryError: string;
+  qqOnline: boolean;
+  qrVersion: number;
+  selfieReferences: Array<{
+    id: string;
+    fileName: string;
+    sizeBytes: number;
+    width: number;
+    height: number;
+    updatedAt: string;
+    originalUrl: string;
+    displayUrl: string;
+    placeholderUrl: string;
+  }>;
 }
 
 export async function installMockApi(page: Page, options: { requiredToken?: string } = {}): Promise<MockApiState> {
@@ -143,7 +159,14 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
     requiredToken: options.requiredToken ?? "",
     authenticated: !options.requiredToken,
     nextPatchError: "",
-    imageHistoryError: ""
+    imageHistoryError: "",
+    qqOnline: true,
+    qrVersion: 1,
+    selfieReferences: [
+      selfieReference("01-neutral-face.png", 458, 501, 241_664),
+      selfieReference("02-gentle-smile.png", 458, 501, 244_736),
+      selfieReference("03-full-outfit.jpg", 1200, 1393, 441_344)
+    ]
   };
 
   await page.route("**/api/**", async (route) => {
@@ -166,6 +189,10 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
       }
       return json(route, { error: { code: "ADMIN_UNAUTHORIZED", message: "管理员账号或密码无效。" } }, 401);
     }
+    if (pathname === "/api/auth/logout" && method === "POST") {
+      state.authenticated = false;
+      return route.fulfill({ status: 204 });
+    }
 
     if (state.requiredToken && !state.authenticated) {
       return json(route, {
@@ -173,8 +200,45 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
       }, 401);
     }
 
-    if (pathname === "/api/media/image" || pathname === "/api/media/qq-avatar") {
+    if (pathname === "/api/media/image" || pathname === "/api/media/qq-avatar" || pathname === "/api/media/thumbnail") {
       return route.fulfill({ status: 200, contentType: "image/png", body: await imageFixture });
+    }
+
+    if (/^\/api\/selfie-references\/[^/]+\/content$/.test(pathname)) {
+      return route.fulfill({ status: 200, contentType: "image/png", body: await imageFixture });
+    }
+    if (pathname === "/api/selfie-references" && method === "GET") {
+      return json(route, { images: state.selfieReferences, maxImages: 3 });
+    }
+    if (pathname === "/api/selfie-references" && method === "POST") {
+      if (state.selfieReferences.length >= 3) {
+        return json(route, { error: { code: "SELFIE_REFERENCE_LIMIT", message: "最多保留 3 张参考图。" } }, 409);
+      }
+      const body = request.postDataJSON() as { fileName?: string };
+      state.selfieReferences.push(selfieReference(body.fileName || "reference.png", 640, 640, 16_384));
+      return json(route, { images: state.selfieReferences, maxImages: 3 }, 201);
+    }
+    const selfieReferenceMatch = pathname.match(/^\/api\/selfie-references\/([^/]+)$/);
+    if (selfieReferenceMatch && method === "DELETE") {
+      const id = decodeURIComponent(selfieReferenceMatch[1]);
+      state.selfieReferences = state.selfieReferences.filter((image) => image.id !== id);
+      return route.fulfill({ status: 204 });
+    }
+
+    if (pathname === "/api/codex-auth/status") {
+      return json(route, { installed: true, authenticated: false, login: { state: "idle" } });
+    }
+
+    if (pathname === "/api/token-usage") {
+      return json(route, {
+        today: { date: "2026-07-10", input: 12840, output: 3260, total: 16100, requests: 18 },
+        days: [
+          { date: "2026-07-08", input: 9000, output: 2100, total: 11100, requests: 12 },
+          { date: "2026-07-09", input: 11200, output: 2800, total: 14000, requests: 15 },
+          { date: "2026-07-10", input: 12840, output: 3260, total: 16100, requests: 18 }
+        ],
+        hours: Array.from({ length: 24 }, (_, hour) => ({ hour, input: hour * 80, output: hour * 20, total: hour * 100, requests: hour % 3 }))
+      });
     }
 
     if (pathname === "/api/status") {
@@ -484,17 +548,66 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
     }
 
     if (pathname === "/api/tools") return json(route, { tools: [] });
-    if (pathname === "/api/request-logs") return json(route, { filePath: "/data/sunabot.sqlite", logs: [] });
+    if (pathname === "/api/request-logs") {
+      const logs = [
+        { id: "log-52", at: "2026-07-10T02:08:00.000Z", category: "model.response", action: "responses.complete", providerId: "codex", model: "gpt-5.6-sol", response: { ok: true, summary: { usage: { input_tokens: 820, output_tokens: 160, total_tokens: 980 } } } },
+        { id: "log-51", at: "2026-07-10T02:07:00.000Z", category: "model.request", action: "responses.complete", providerId: "codex", model: "gpt-5.6-sol", request: { model: "gpt-5.6-sol", input: [{ role: "user", content: "你好" }] } },
+        ...Array.from({ length: 50 }, (_, index) => ({
+          id: `log-${50 - index}`,
+          at: new Date(Date.UTC(2026, 6, 10, 2, 6, 59 - index)).toISOString(),
+          category: "runtime.action",
+          action: index % 2 ? "reply.sent" : "reply.started",
+          metadata: { sequence: 50 - index }
+        }))
+      ];
+      const pageNumber = Math.max(1, Number(url.searchParams.get("page") ?? 1));
+      const pageSize = Math.max(1, Number(url.searchParams.get("pageSize") ?? url.searchParams.get("limit") ?? 50));
+      const start = (pageNumber - 1) * pageSize;
+      return json(route, {
+        filePath: "/data/sunabot.sqlite",
+        page: pageNumber,
+        pageSize,
+        total: logs.length,
+        pageCount: Math.ceil(logs.length / pageSize),
+        logs: logs.slice(start, start + pageSize)
+      });
+    }
     if (pathname === "/api/providers/test") {
       return json(route, { ok: true, model: "gpt-5.6-sol", elapsedMs: 128 });
     }
-    if (pathname === "/api/onebot/login-info") {
-      return json(route, { connected: true, data: { user_id: 123456, nickname: "普拉娜" } });
+    if (pathname === "/api/providers/models") {
+      return json(route, { ok: true, models: modelCatalog.map((model) => model.id) });
     }
-    if (pathname === "/api/onebot/events") return json(route, { events: [] });
+    if (pathname === "/api/providers/vision-probe") {
+      return json(route, { ok: true, multimodal: true });
+    }
+    if (pathname === "/api/onebot/login-info") {
+      return json(route, state.qqOnline
+        ? { connected: true, data: { user_id: 123456, nickname: "普拉娜" } }
+        : { connected: false, error: "OneBot 未连接。" });
+    }
+    if (pathname === "/api/onebot/events") return json(route, { events: [{ receivedAt: "2026-07-10T02:06:00.000Z", postType: "message", messageType: "private", text: "收到管理员消息" }] });
     if (pathname === "/api/onebot/chats") return json(route, { connected: true, private: [], groups: [] });
+    if (pathname === "/api/onebot/qq-logout" && method === "POST") {
+      state.qqOnline = false;
+      state.offline = true;
+      state.qrVersion += 1;
+      return json(route, { connected: false, online: false, available: true, phase: "restarting" });
+    }
     if (pathname === "/api/onebot/qq-login" || pathname === "/api/onebot/qq-login/status") {
-      return json(route, { connected: true, online: true, available: false, data: { user_id: 123456, nickname: "普拉娜" } });
+      if (state.qqOnline) {
+        return json(route, { connected: true, online: true, available: true, phase: "online", data: { user_id: 123456, nickname: "普拉娜" } });
+      }
+      if (method === "POST") state.qrVersion += 1;
+      const qr = (await imageFixture).toString("base64");
+      return json(route, {
+        connected: false,
+        online: false,
+        available: true,
+        phase: "waiting_scan",
+        imageDataUrl: `data:image/png;base64,${qr}`,
+        imageUpdatedAt: new Date(Date.UTC(2026, 6, 12, 0, 0, state.qrVersion)).toISOString()
+      });
     }
     if (pathname === "/api/onebot/napcat-webui-url") {
       return json(route, { url: "http://127.0.0.1:6099" });
@@ -595,6 +708,22 @@ function applySection(config: typeof initialConfig, section: string, value: unkn
 
 async function json(route: Route, body: unknown, status = 200) {
   await route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
+}
+
+function selfieReference(fileName: string, width: number, height: number, sizeBytes: number) {
+  const id = fileName;
+  const path = `/api/selfie-references/${encodeURIComponent(id)}/content`;
+  return {
+    id,
+    fileName,
+    sizeBytes,
+    width,
+    height,
+    updatedAt: "2026-07-12T10:00:00.000Z",
+    originalUrl: `${path}?variant=original`,
+    displayUrl: `${path}?variant=display`,
+    placeholderUrl: `${path}?variant=placeholder`
+  };
 }
 
 function model(id: string, label: string, defaultReasoningEffort: string, reasoningEfforts: string[]) {

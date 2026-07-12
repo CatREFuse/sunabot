@@ -179,6 +179,7 @@ export class SunaRuntime {
         deliverOutbox: (outbox, context) => this.deliverSessionOutbox(outbox, context.signal),
         codexRunner: options.codexRunner ?? new CodexToolRunner(),
         cleanupCodexProcess: cleanupPersistedCodexProcess,
+        runDeferredTool: (job, signal) => this.processDeferredToolJob(job, signal),
         codexSettings: () => ({
           enabled: this.config.bot.tools.codex.enabled,
           model: this.config.bot.tools.codex.model,
@@ -248,6 +249,7 @@ export class SunaRuntime {
   replyToIncoming(...args: Parameters<RuntimeReply["replyToIncoming"]>) { return this.reply.replyToIncoming(...args); }
   replyWithGroupChatSummary(...args: Parameters<RuntimeReply["replyWithGroupChatSummary"]>) { return this.reply.replyWithGroupChatSummary(...args); }
   replyToToolCompletion(...args: Parameters<RuntimeReply["replyToToolCompletion"]>) { return this.reply.replyToToolCompletion(...args); }
+  processDeferredToolJob(...args: Parameters<RuntimeReply["processDeferredToolJob"]>) { return this.reply.processDeferredToolJob(...args); }
   attachReplyReferences(...args: Parameters<RuntimeReply["attachReplyReferences"]>) { return this.reply.attachReplyReferences(...args); }
   loadMessageDetails(...args: Parameters<RuntimeReply["loadMessageDetails"]>) { return this.reply.loadMessageDetails(...args); }
   loadQuoteReferences(...args: Parameters<RuntimeReply["loadQuoteReferences"]>) { return this.reply.loadQuoteReferences(...args); }

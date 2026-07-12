@@ -1,0 +1,10 @@
+ARG NAPCAT_IMAGE=docker.io/mlikiowa/napcat-docker:v4.15.0@sha256:cde89d766604e570517e9ce66304d4222210479d2209ec04e5d58890dea087f7
+FROM ${NAPCAT_IMAGE}
+
+COPY deploy/docker/napcat-entrypoint.sh /usr/local/bin/sunabot-napcat-entrypoint
+RUN chmod 0755 /usr/local/bin/sunabot-napcat-entrypoint
+
+LABEL org.opencontainers.image.title="sunabot-napcat" \
+      org.opencontainers.image.description="Thin Sunabot wrapper for the pinned NapCat/QQ runtime"
+
+ENTRYPOINT ["/usr/local/bin/sunabot-napcat-entrypoint"]

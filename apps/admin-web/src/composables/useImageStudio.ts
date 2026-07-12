@@ -2,6 +2,10 @@ import { readonly, shallowRef } from "vue";
 import { apiBlob, apiRequest, authenticatedMediaPath } from "./useAdminApi";
 import type { ImageHistoryRecord } from "../types";
 
+let cachedHistory: ImageHistoryRecord[] | undefined;
+let cachedAt = 0;
+const HISTORY_CACHE_MS = 60_000;
+
 export function useImageStudio() {
   const images = shallowRef<ImageHistoryRecord[]>([]);
   const loading = shallowRef(false);
@@ -9,13 +13,20 @@ export function useImageStudio() {
   const error = shallowRef("");
   let controller: AbortController | undefined;
 
-  async function load() {
+  async function load(force = false) {
+    if (!force && cachedHistory && Date.now() - cachedAt < HISTORY_CACHE_MS) {
+      images.value = cachedHistory;
+      error.value = "";
+      return;
+    }
     controller?.abort();
     controller = new AbortController();
     loading.value = true;
     try {
       const history = await apiRequest<{ images: ImageHistoryRecord[] }>("/api/images", { signal: controller.signal });
       images.value = history.images;
+      cachedHistory = history.images;
+      cachedAt = Date.now();
       error.value = "";
     } catch (caught) {
       if (caught instanceof DOMException && caught.name === "AbortError") return;

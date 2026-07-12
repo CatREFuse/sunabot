@@ -5,7 +5,6 @@ import type { MemoryRecallInput } from "../../../services/memory/memoryService.j
 import type { GenerateImageRunner } from "../../../services/tools/generateImgTool.js";
 import type { SelfieRunner } from "../../../services/tools/selfieTool.js";
 import type { ProviderLogContext } from "../../../packages/contracts/model/modelGateway.js";
-import type { CODEX_TOOL_NAME } from "../../../services/tools/definitions.js";
 import type { ImageGenerationFailureContext } from "../imageGenerationRetry.js";
 
 export interface ProviderCompleteOptions {
@@ -19,6 +18,7 @@ export interface ProviderCompleteOptions {
   memory?: ProviderMemoryOptions;
   selfie?: ProviderSelfieOptions;
   asyncCodex?: boolean;
+  asyncImage?: boolean;
   logContext?: ProviderLogContext;
 }
 
@@ -31,7 +31,7 @@ export interface ProviderDeferredTurn {
   kind: "deferred";
   acknowledgement: string;
   toolCall: {
-    name: typeof CODEX_TOOL_NAME;
+    name: string;
     callId: string;
     arguments: Record<string, unknown>;
   };
@@ -82,10 +82,8 @@ export interface ProviderLoggerPort {
 export interface ProviderToolExecutorPort {
   resolveDefinitions(options: ProviderCompleteOptions, definitions?: OpenAIToolDefinition[]): Record<string, unknown>[];
   deferredTurn(
-    payload: unknown,
     calls: ResponseFunctionCallItem[],
-    options: ProviderCompleteOptions,
-    fallbackText?: string
+    options: ProviderCompleteOptions
   ): ProviderDeferredTurn | null;
   execute(calls: ResponseFunctionCallItem[], options: ProviderCompleteOptions): Promise<Array<Record<string, unknown>>>;
 }

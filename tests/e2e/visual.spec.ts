@@ -24,8 +24,15 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
 
     await page.goto("/overview");
     await expect(page.getByRole("heading", { name: "运行状态" })).toBeVisible();
-    await expect(page.getByText("QQ 状态", { exact: true }).locator("..").getByText("在线", { exact: true })).toBeVisible();
+    await expect(page.getByLabel("运行与 QQ 状态").getByText("在线", { exact: true })).toBeVisible();
     await capture(page, viewport.name, theme, "overview-online");
+    await page.getByRole("button", { name: "QQ 账号", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "QQ 登录" })).toBeVisible();
+    await capture(page, viewport.name, theme, "overview-qq-account");
+    await page.getByRole("button", { name: "关闭", exact: true }).click();
+    await page.getByRole("heading", { name: "Token 消耗" }).scrollIntoViewIfNeeded();
+    await capture(page, viewport.name, theme, "overview-token-usage");
+    await page.locator(".page-shell").evaluate((element) => { element.scrollTop = 0; });
 
     await page.getByRole("button", { name: "诊断", exact: true }).click();
     await expect(page.getByRole("heading", { name: "诊断", exact: true })).toBeVisible();
@@ -40,10 +47,16 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     }
 
     state.offline = true;
+    state.qqOnline = false;
     await page.reload();
     await expect(page.locator("main").getByText("OFFLINE", { exact: true })).toBeVisible();
     await capture(page, viewport.name, theme, "overview-offline");
+    await page.getByRole("button", { name: "QQ 登录", exact: true }).click();
+    await expect(page.getByAltText("QQ 登录二维码")).toBeVisible();
+    await capture(page, viewport.name, theme, "overview-qq-login");
+    await page.getByRole("button", { name: "关闭", exact: true }).click();
     state.offline = false;
+    state.qqOnline = true;
 
     await page.goto("/conversations/group%3A10001");
     await expect(page.getByRole("heading", { name: "产品讨论群" })).toBeVisible();
@@ -82,18 +95,42 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
       await expect(page.getByRole("tab", { name: "Function Call" })).toBeVisible();
     }
     await capture(page, viewport.name, theme, "prompts-final-request");
+    await page.getByRole("button", { name: "变量表", exact: true }).click();
+    await expect(page.getByRole("table", { name: "提示词变量表" })).toBeVisible();
+    await capture(page, viewport.name, theme, "prompts-variable-table");
+
+    await page.goto("/logs");
+    await expect(page.getByRole("heading", { name: "日志", exact: true })).toBeVisible();
+    await expect(page.getByLabel("Bot 活动终端")).toBeVisible();
+    await capture(page, viewport.name, theme, "logs-terminal");
+    await page.getByRole("button", { name: "请求日志", exact: true }).click();
+    await expect(page.getByLabel("请求日志列表")).toBeVisible();
+    await capture(page, viewport.name, theme, "logs-requests");
+
+    await page.goto("/settings/persona");
+    const selfieHeading = page.getByRole("heading", { name: "自拍参考图" });
+    await expect(selfieHeading).toBeVisible();
+    await expect(page.getByText("3 / 3 张", { exact: true })).toBeVisible();
+    await selfieHeading.evaluate((element) => element.scrollIntoView({ block: "start", behavior: "auto" }));
+    await capture(page, viewport.name, theme, "settings-persona-selfie");
+    await page.getByRole("button", { name: "管理参考图", exact: true }).click();
+    const selfieDialog = page.getByRole("dialog", { name: "自拍参考图" });
+    await expect(selfieDialog).toBeVisible();
+    await capture(page, viewport.name, theme, "settings-persona-selfie-manager");
+    await selfieDialog.getByRole("button", { name: "关闭", exact: true }).click();
 
     await page.goto("/settings/providers");
     await expect(page.getByRole("heading", { name: "模型服务" })).toBeVisible();
     await capture(page, viewport.name, theme, "settings-providers");
 
     await page.goto("/settings/tools");
-    await expect(page.getByLabel("模型")).toHaveValue("gpt-5.4-mini");
+    const codexModel = page.getByRole("combobox", { name: "模型", exact: true });
+    await expect(codexModel).toHaveValue("gpt-5.4-mini");
     await expect(page.getByText("Tavily Key 池", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "添加 Key" })).toBeVisible();
     await capture(page, viewport.name, theme, "settings-tools-codex");
     await page.getByText("启用 Codex", { exact: true }).click();
-    await expect(page.getByLabel("模型")).toBeDisabled();
+    await expect(codexModel).toBeDisabled();
     await capture(page, viewport.name, theme, "settings-tools-codex-disabled");
 
     await page.goto("/settings/bash");
@@ -112,6 +149,7 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     await expect(page.getByRole("heading", { name: "新增记忆" })).toBeVisible();
     await capture(page, viewport.name, theme, "memory-editor");
     await page.getByRole("button", { name: "关闭" }).click();
+    await page.getByRole("button", { name: "用户画像" }).click();
     const profileRow = page.locator("article").filter({ hasText: "称呼 猫老师" });
     await profileRow.getByRole("button", { name: "编辑记忆" }).click();
     await expect(page.getByLabel("称呼")).toHaveValue("猫老师");

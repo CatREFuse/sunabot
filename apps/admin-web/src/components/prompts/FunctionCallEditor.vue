@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, shallowRef, watch } from "vue";
-import { Trash2 } from "lucide-vue-next";
 
 interface FunctionTool {
   type: "function";
@@ -51,7 +50,7 @@ function updateParameters(value: string) {
         <strong>{{ tool.function.name || "未命名 Function" }}</strong>
       </div>
       <button class="icon-btn" type="button" :aria-label="`删除 ${tool.function.name || 'Function Call'}`" @click="emit('remove')">
-        <Trash2 :size="17" :stroke-width="1.5" aria-hidden="true" />
+        <i class="bx bx-trash text-lg" aria-hidden="true"></i>
       </button>
     </header>
     <div class="function-editor__grid">

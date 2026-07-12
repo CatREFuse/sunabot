@@ -40,7 +40,6 @@ describe("MemoryEditorDialog", () => {
       source: "user_profile",
       id: "profile-1",
       text: "正文已经更新。",
-      userId: "171419991",
       addressName: "猫老师"
     });
   });

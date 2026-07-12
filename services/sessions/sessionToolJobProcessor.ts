@@ -9,6 +9,7 @@ import type { SessionStore, ToolJobRecord } from "./sessionStore.js";
 import type {
   ClaimedToolTask,
   CodexProcessCleanup,
+  DeferredToolRunner,
   SessionClaimState
 } from "./sessionCoordinatorTypes.js";
 
@@ -16,6 +17,7 @@ export interface SessionToolJobProcessorOptions {
   store: SessionStore;
   codexRunner: CodexRunner;
   cleanupCodexProcess: CodexProcessCleanup;
+  runDeferredTool?: DeferredToolRunner;
   workerId: string;
   isStopped(): boolean;
   assertClaimUsable(state: SessionClaimState, signal: AbortSignal): void;
@@ -30,8 +32,24 @@ export class SessionToolJobProcessor {
     const { job, settings, state } = task;
     const signal = combineSignals(actorSignal, state.controller.signal);
     const attemptToken = requiredText(job.attemptToken, "tool job attemptToken");
-    let result: CodexToolResult;
     try {
+      if (job.toolName !== "codex") {
+        const runner = this.options.runDeferredTool;
+        if (!runner) throw new Error(`Deferred tool runner is not configured for ${job.toolName}.`);
+        const outcome = await runner(job, signal);
+        this.options.assertClaimUsable(state, signal);
+        this.options.store.completeToolJob({
+          jobId: job.id,
+          workerId: this.options.workerId,
+          attempt: job.attempts,
+          attemptToken,
+          status: outcome.status,
+          result: outcome.result,
+          error: outcome.error
+        });
+        state.finalized = true;
+        return;
+      }
       if (job.processIdentity) {
         const cleanup = await this.options.cleanupCodexProcess(job.processIdentity);
         this.options.assertClaimUsable(state, signal);
@@ -58,7 +76,7 @@ export class SessionToolJobProcessor {
           job.processIdentity.runToken
         );
       }
-      result = await this.options.codexRunner.run(job.arguments as CodexToolInput, {
+      const result: CodexToolResult = await this.options.codexRunner.run(job.arguments as CodexToolInput, {
         jobId: job.id,
         jobDir: path.join(settings.jobRoot, job.id),
         workspacePath: settings.workspacePath,

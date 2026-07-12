@@ -32,7 +32,7 @@ export function assertNotProductionWorkspace(root: string, workspace: string) {
 export async function loadRuntimeLayout(root: string): Promise<RuntimeLayout> {
   const contractPath = path.join(root, "deploy", "runtime-contract.json");
   const contract = asRecord(await readJson(contractPath), "运行时契约");
-  if (contract.schemaVersion !== 1) throw new Error("运行时契约版本不受支持。");
+  if (contract.schemaVersion !== 2) throw new Error("运行时契约版本不受支持。");
   const paths = asRecord(contract.paths, "运行时契约 paths");
   const config = relativeContractPath(paths.config, "paths.config");
   const secrets = relativeContractPath(paths.secrets, "paths.secrets");

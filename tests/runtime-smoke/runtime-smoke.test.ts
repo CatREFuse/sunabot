@@ -203,7 +203,8 @@ describe.sequential("runtime smoke workspace isolation", () => {
 });
 
 async function createSmokeWorkspace() {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-runtime-smoke-"));
+  const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-runtime-smoke-"));
+  const root = await fs.realpath(temporaryRoot);
   temporaryDirectories.push(root);
   const workspace = path.join(root, "workspace");
   await Promise.all([
@@ -221,7 +222,7 @@ async function createSmokeWorkspace() {
       items: [{
         id: "test-provider",
         label: "Test Provider",
-        kind: "openai-responses",
+        kind: "openai-official",
         enabled: true,
         model: "test-model",
         apiKeyEnv: "TEST_PROVIDER_KEY",

@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { RefreshCw, X } from "lucide-vue-next";
 import { reactive, shallowRef, watch } from "vue";
 import { apiRequest } from "../../composables/useAdminApi";
 import { formatFullDateTime } from "../../utils/format";
+import { oneBotEventDisplayName, oneBotEventId } from "../../utils/logDisplay";
 import type { ConversationLogEntry, OneBotEventTrace, SunaTool } from "../../types";
 import DialogOverlay from "../ui/DialogOverlay.vue";
+import RequestLogList from "../logs/RequestLogList.vue";
+import StructuredValue from "../logs/StructuredValue.vue";
 
 type DiagnosticTab = "tools" | "logs" | "events";
 
@@ -60,13 +62,6 @@ async function load(tab: DiagnosticTab = active.value, force = false) {
   }
 }
 
-function json(value: unknown) {
-  return JSON.stringify(value, null, 2);
-}
-
-function eventTitle(event: OneBotEventTrace) {
-  return [event.postType, event.messageType, event.detailType].filter(Boolean).join(" · ") || "OneBot";
-}
 </script>
 
 <template>
@@ -75,8 +70,8 @@ function eventTitle(event: OneBotEventTrace) {
       <header class="flex min-h-20 items-center justify-between gap-4 border-b border-line px-4 md:px-6">
         <div><p class="page-kicker">DIAGNOSTICS</p><h2 id="diagnostics-title" class="mt-1 text-xl font-medium text-display">诊断</h2></div>
         <div class="flex items-center gap-2">
-          <button class="icon-btn" type="button" :disabled="loading[active]" aria-label="刷新诊断" @click="load(active, true)"><RefreshCw :size="18" :stroke-width="1.5" /></button>
-          <button class="icon-btn" type="button" aria-label="关闭诊断" @click="emit('close')"><X :size="19" :stroke-width="1.5" /></button>
+          <button class="icon-btn" type="button" :disabled="loading[active]" aria-label="刷新诊断" @click="load(active, true)"><i class="bx bx-refresh text-xl" aria-hidden="true"></i></button>
+          <button class="icon-btn" type="button" aria-label="关闭诊断" @click="emit('close')"><i class="bx bx-x text-2xl" aria-hidden="true"></i></button>
         </div>
       </header>
 
@@ -105,20 +100,15 @@ function eventTitle(event: OneBotEventTrace) {
 
         <section v-else-if="active === 'logs'" aria-label="请求日志列表">
           <p v-if="logPath" class="truncate border-b border-line py-3 font-mono text-[10px] text-disabled">{{ logPath }}</p>
-          <article v-for="log in logs" :key="log.id" class="border-b border-line py-5">
-            <div class="flex min-w-0 flex-wrap items-start justify-between gap-2"><strong class="text-sm font-medium text-display">{{ log.category }} · {{ log.action }}</strong><time class="font-mono text-[10px] text-disabled">{{ formatFullDateTime(log.at) }}</time></div>
-            <p v-if="log.providerId || log.model" class="mt-2 font-mono text-[10px] text-mute">{{ [log.providerId, log.model].filter(Boolean).join(" · ") }}</p>
-            <details class="mt-3"><summary class="font-mono text-[10px] uppercase text-mute">详情</summary><pre class="mt-2 overflow-x-auto whitespace-pre-wrap break-all rounded-lg bg-page p-3 font-mono text-[10px] text-ink">{{ json(log) }}</pre></details>
-          </article>
-          <div v-if="!logs.length" class="empty-state"><div><strong>没有请求日志</strong></div></div>
+          <RequestLogList class="mt-5" :logs="logs" />
         </section>
 
         <section v-else aria-label="OneBot 事件列表">
           <article v-for="(event, index) in events" :key="`${event.receivedAt}-${event.messageId ?? index}`" class="border-b border-line py-5">
-            <div class="flex min-w-0 flex-wrap items-start justify-between gap-2"><strong class="text-sm font-medium text-display">{{ eventTitle(event) }}</strong><time class="font-mono text-[10px] text-disabled">{{ formatFullDateTime(event.receivedAt) }}</time></div>
+            <div class="flex min-w-0 flex-wrap items-start justify-between gap-2"><div><strong class="text-sm font-medium text-display">{{ oneBotEventDisplayName(event) }}</strong><p class="mt-1 font-mono text-[10px] text-mute">{{ oneBotEventId(event) }}</p></div><time class="font-mono text-[10px] text-disabled">{{ formatFullDateTime(event.receivedAt) }}</time></div>
             <p v-if="event.text" class="mt-2 whitespace-pre-wrap break-words text-xs leading-5 text-ink">{{ event.text }}</p>
             <p v-if="event.userId || event.groupId" class="mt-2 font-mono text-[10px] text-mute">{{ event.groupId ? `GROUP ${event.groupId}` : `USER ${event.userId}` }}</p>
-            <details class="mt-3"><summary class="font-mono text-[10px] uppercase text-mute">详情</summary><pre class="mt-2 overflow-x-auto whitespace-pre-wrap break-all rounded-lg bg-page p-3 font-mono text-[10px] text-ink">{{ json(event) }}</pre></details>
+            <details class="mt-3"><summary class="font-mono text-[10px] uppercase text-mute">结构化详情</summary><div class="mt-2"><StructuredValue :value="event" /></div></details>
           </article>
           <div v-if="!events.length" class="empty-state"><div><strong>没有 OneBot 事件</strong></div></div>
         </section>

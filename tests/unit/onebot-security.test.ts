@@ -9,6 +9,7 @@ import {
   isTrustedTokenlessHost,
   OneBotGateway
 } from "../../adapters/onebot/onebotGateway.js";
+import { assertOneBotAccessToken } from "../../apps/api/server.js";
 import type { OneBotEvent } from "../../adapters/onebot/protocol.js";
 
 const originalAccessToken = process.env.ONEBOT_ACCESS_TOKEN;
@@ -38,20 +39,14 @@ describe("OneBot security boundaries", () => {
     expect(JSON.stringify(gateway.getRecentEvents())).not.toContain("private-id");
   });
 
-  it("warns when an unauthenticated reverse WebSocket listens beyond loopback", () => {
+  it("refuses to start a split OneBot listener without a shared token", () => {
     delete process.env.ONEBOT_ACCESS_TOKEN;
-    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const config = defaultConfig();
-    config.server.host = "0.0.0.0";
-    const server = http.createServer();
-    const gateway = new OneBotGateway(server, config, {
-      handleInboundMessage: vi.fn(async () => undefined)
-    });
-
-    gateway.mount();
-
-    expect(warning).toHaveBeenCalledWith(expect.stringContaining("ONEBOT_ACCESS_TOKEN"));
-    server.removeAllListeners();
+    expect(() => assertOneBotAccessToken(config)).toThrow(
+      "Cannot start the OneBot listener: ONEBOT_ACCESS_TOKEN is required"
+    );
+    process.env.ONEBOT_ACCESS_TOKEN = "unit-onebot-token";
+    expect(() => assertOneBotAccessToken(config)).not.toThrow();
   });
 
   it("recognizes only loopback peers for tokenless reverse WebSocket access", () => {
@@ -69,8 +64,8 @@ describe("OneBot security boundaries", () => {
     expect(isTrustedTokenlessHost("attacker.invalid:8787")).toBe(false);
   });
 
-  it("rejects browser-origin WebSocket handshakes when no token is configured", async () => {
-    delete process.env.ONEBOT_ACCESS_TOKEN;
+  it("rejects browser-origin WebSocket handshakes even with a valid token", async () => {
+    process.env.ONEBOT_ACCESS_TOKEN = "unit-onebot-token";
     const config = defaultConfig();
     const server = http.createServer();
     const gateway = new OneBotGateway(server, config, {
@@ -83,7 +78,7 @@ describe("OneBot security boundaries", () => {
 
     const status = await new Promise<number>((resolve, reject) => {
       const client = new WebSocket(
-        `ws://127.0.0.1:${address.port}${config.onebot.reverseWsPath}`,
+        `ws://127.0.0.1:${address.port}${config.onebot.reverseWsPath}?access_token=unit-onebot-token`,
         { origin: "https://attacker.invalid" }
       );
       client.once("unexpected-response", (_request, response) => resolve(response.statusCode ?? 0));
@@ -92,6 +87,39 @@ describe("OneBot security boundaries", () => {
     });
 
     expect(status).toBe(403);
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  it("permits exactly one authenticated OneBot connection", async () => {
+    process.env.ONEBOT_ACCESS_TOKEN = "unit-onebot-token";
+    const config = defaultConfig();
+    const server = http.createServer();
+    const gateway = new OneBotGateway(server, config, {
+      handleInboundMessage: vi.fn(async () => undefined)
+    });
+    gateway.mount();
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Test server has no TCP address.");
+    const url = `ws://127.0.0.1:${address.port}${config.onebot.reverseWsPath}?access_token=unit-onebot-token`;
+    const first = new WebSocket(url);
+    await new Promise<void>((resolve, reject) => {
+      first.once("open", resolve);
+      first.once("error", reject);
+    });
+
+    const secondStatus = await new Promise<number>((resolve, reject) => {
+      const second = new WebSocket(url);
+      second.once("unexpected-response", (_request, response) => resolve(response.statusCode ?? 0));
+      second.once("open", () => reject(new Error("A second OneBot connection was accepted.")));
+      second.once("error", () => undefined);
+    });
+
+    expect(secondStatus).toBe(409);
+    expect(gateway.getStatus().connections).toBe(1);
+    first.terminate();
+    await new Promise<void>((resolve) => first.once("close", resolve));
+    await gateway.close();
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 

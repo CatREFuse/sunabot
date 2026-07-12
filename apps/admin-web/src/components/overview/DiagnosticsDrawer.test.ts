@@ -25,11 +25,13 @@ describe("DiagnosticsDrawer", () => {
     await wrapper.get("nav").findAll("button")[1]!.trigger("click");
     await flushPromises();
     expect(apiRequest.mock.calls.map(([path]) => path)).toEqual(["/api/tools", "/api/request-logs?limit=100"]);
-    expect(wrapper.text()).toContain("provider · respond");
+    expect(wrapper.text()).toContain("运行事件");
+    expect(wrapper.text()).toContain("respond");
 
     await wrapper.get("nav").findAll("button")[2]!.trigger("click");
     await flushPromises();
     expect(apiRequest.mock.calls.map(([path]) => path)).toEqual(["/api/tools", "/api/request-logs?limit=100", "/api/onebot/events"]);
-    expect(wrapper.text()).toContain("message · group");
+    expect(wrapper.text()).toContain("收到群聊消息");
+    expect(wrapper.text()).toContain("message.group");
   });
 });

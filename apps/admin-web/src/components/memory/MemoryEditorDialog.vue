@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { X } from "lucide-vue-next";
 import { computed, reactive, watch } from "vue";
 import type { MemoryEntry, MemorySource, MemorySourceId, MemoryWritePayload } from "../../types";
 import DialogOverlay from "../ui/DialogOverlay.vue";
@@ -34,7 +33,7 @@ function save() {
     text: form.text.trim()
   };
   if (userProfile.value) {
-    payload.userId = form.userId.trim() || undefined;
+    if (!props.entry) payload.userId = form.userId.trim() || undefined;
     payload.addressName = form.addressName.trim() || undefined;
   }
   emit("save", payload);
@@ -46,7 +45,7 @@ function save() {
     <form class="flex h-full max-h-full w-full max-w-2xl flex-col border-visible bg-panel sm:h-auto sm:max-h-[calc(100dvh-32px)] sm:rounded-2xl sm:border" @submit.prevent="save">
       <header class="flex items-center justify-between border-b border-line p-4 md:p-5">
         <div><p class="page-kicker">MEMORY ENTRY</p><h2 id="memory-editor-title" class="mt-1 text-xl font-medium text-display">{{ entry ? "编辑记忆" : "新增记忆" }}</h2></div>
-        <button class="icon-btn" type="button" aria-label="关闭" @click="emit('close')"><X :size="19" :stroke-width="1.5" /></button>
+        <button class="icon-btn" type="button" aria-label="关闭" @click="emit('close')"><i class="bx bx-x text-2xl" aria-hidden="true"></i></button>
       </header>
       <div class="grid min-h-0 flex-1 gap-5 overflow-y-auto p-4 md:p-5">
         <label class="field">

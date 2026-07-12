@@ -1,8 +1,10 @@
 // @vitest-environment node
+import http from "node:http";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { WebSocket } from "ws";
 import { AGENT_FILE_DEFINITIONS } from "../../src/admin/agentFiles.js";
 import { defaultConfig, saveConfig } from "../../src/config.js";
 import { buildApp, createApp } from "../../apps/api/server.js";
@@ -14,11 +16,13 @@ describe("admin API smoke", () => {
   let temporaryDirectory = "";
   let previousConfigPath: string | undefined;
   let previousAdminToken: string | undefined;
+  let previousOneBotToken: string | undefined;
   let config: AppConfig;
 
   beforeEach(async () => {
     previousConfigPath = process.env.SUNABOT_CONFIG;
     previousAdminToken = process.env.SUNABOT_ADMIN_TOKEN;
+    previousOneBotToken = process.env.ONEBOT_ACCESS_TOKEN;
     process.env.SUNABOT_ADMIN_TOKEN = "admin-secret";
     temporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-api-test-"));
     process.env.SUNABOT_CONFIG = path.join(temporaryDirectory, "sunabot.json");
@@ -38,6 +42,8 @@ describe("admin API smoke", () => {
     else process.env.SUNABOT_CONFIG = previousConfigPath;
     if (previousAdminToken == null) delete process.env.SUNABOT_ADMIN_TOKEN;
     else process.env.SUNABOT_ADMIN_TOKEN = previousAdminToken;
+    if (previousOneBotToken == null) delete process.env.ONEBOT_ACCESS_TOKEN;
+    else process.env.ONEBOT_ACCESS_TOKEN = previousOneBotToken;
     await fs.rm(temporaryDirectory, { recursive: true, force: true });
   });
 
@@ -62,6 +68,61 @@ describe("admin API smoke", () => {
       ])
     }));
     await app.close();
+  });
+
+  it("runs OneBot on an injected listener and closes it with the admin service", async () => {
+    process.env.ONEBOT_ACCESS_TOKEN = "listener-test-token";
+    const injectedServer = http.createServer();
+    const built = await buildApp({
+      config,
+      initializeRuntime: false,
+      onebotListener: { server: injectedServer, host: "127.0.0.1", port: 0 }
+    });
+
+    const onebotAddress = await built.startOneBotListener();
+    const adminOrigin = await built.app.listen({ host: "127.0.0.1", port: 0 });
+    const adminPort = Number(new URL(adminOrigin).port);
+    expect(built.onebotServer).toBe(injectedServer);
+    expect(onebotAddress.port).not.toBe(adminPort);
+
+    const websocket = new WebSocket(
+      `ws://127.0.0.1:${onebotAddress.port}${config.onebot.reverseWsPath}?access_token=listener-test-token`
+    );
+    await new Promise<void>((resolve, reject) => {
+      websocket.once("open", resolve);
+      websocket.once("error", reject);
+    });
+    expect(built.onebotGateway.getStatus().connections).toBe(1);
+
+    const websocketClosed = new Promise<void>((resolve) => websocket.once("close", resolve));
+    await built.app.close();
+    await websocketClosed;
+    expect(injectedServer.listening).toBe(false);
+    expect(built.app.server.listening).toBe(false);
+  });
+
+  it("allows tests to disable the OneBot listener", async () => {
+    const built = await buildApp({ config, initializeRuntime: false, onebotListener: false });
+    expect(built.onebotServer).toBeUndefined();
+    await expect(built.startOneBotListener()).rejects.toThrow("disabled");
+    await built.app.close();
+  });
+
+  it("exposes only an empty liveness endpoint on the dedicated OneBot HTTP listener", async () => {
+    process.env.ONEBOT_ACCESS_TOKEN = "listener-test-token";
+    const built = await buildApp({ config, initializeRuntime: false });
+    const address = await built.startOneBotListener({ host: "127.0.0.1", port: 0 });
+    const origin = `http://127.0.0.1:${address.port}`;
+
+    const health = await fetch(`${origin}/healthz`);
+    const unknown = await fetch(`${origin}/api/status`);
+    expect(health.status).toBe(204);
+    expect(await health.text()).toBe("");
+    expect(unknown.status).toBe(404);
+    expect(await unknown.text()).toBe("ONEBOT_WEBSOCKET_UPGRADE_REQUIRED\n");
+
+    await built.app.close();
+    expect(built.onebotServer?.listening).toBe(false);
   });
 
   it("tests a complete provider draft without changing disk config", async () => {

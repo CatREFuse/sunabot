@@ -1,5 +1,6 @@
 import http from "node:http";
 import { EventEmitter } from "node:events";
+import type { Duplex } from "node:stream";
 import { URL } from "node:url";
 import { nanoid } from "nanoid";
 import { WebSocket, WebSocketServer } from "ws";
@@ -76,6 +77,10 @@ export class OneBotGateway extends EventEmitter implements MessagingPort, Conver
   private readonly recentEvents: OneBotEventTrace[] = [];
   private lastEventAtValue?: string;
   private lastMessageEventAtValue?: string;
+  private mounted = false;
+  private upgradePending = false;
+  private closing = false;
+  private closePromise?: Promise<void>;
 
   constructor(
     private readonly server: http.Server,
@@ -93,55 +98,10 @@ export class OneBotGateway extends EventEmitter implements MessagingPort, Conver
   }
 
   mount() {
-    if (
-      !process.env[this.config.onebot.accessTokenEnv] &&
-      !isLoopbackHost(this.config.server.host)
-    ) {
-      console.warn(
-        `[onebot] ${this.config.onebot.accessTokenEnv} is unset while listening on ${this.config.server.host}; ` +
-        "configure the same access token in Sunabot and NapCat before exposing this endpoint."
-      );
-    }
-    this.server.on("upgrade", (request, socket, head) => {
-      const rejectUpgrade = (status: string) => {
-        socket.end(
-          `HTTP/1.1 ${status}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`,
-          () => socket.destroy()
-        );
-      };
-      let requestUrl: URL;
-      try {
-        requestUrl = new URL(request.url ?? "/", "http://localhost");
-      } catch {
-        rejectUpgrade("400 Bad Request");
-        return;
-      }
-      if (requestUrl.pathname !== this.config.onebot.reverseWsPath) {
-        rejectUpgrade("404 Not Found");
-        return;
-      }
-
-      const token = process.env[this.config.onebot.accessTokenEnv];
-      if (!token && (
-        !isLoopbackRemoteAddress(request.socket.remoteAddress) ||
-        Boolean(request.headers.origin) ||
-        !isTrustedTokenlessHost(request.headers.host)
-      )) {
-        rejectUpgrade("403 Forbidden");
-        return;
-      }
-      const queryToken = requestUrl.searchParams.get("access_token");
-      const headerToken = request.headers.authorization?.replace(/^Bearer\s+/i, "");
-      if (token && token !== queryToken && token !== headerToken) {
-        rejectUpgrade("401 Unauthorized");
-        return;
-      }
-
-      this.wss.handleUpgrade(request, socket, head, (ws) => {
-        const selfId = request.headers["x-self-id"] ? String(request.headers["x-self-id"]) : undefined;
-        this.wss.emit("connection", ws, request, selfId);
-      });
-    });
+    if (this.closing) throw new Error("OneBot gateway is closing or already closed.");
+    if (this.mounted) return;
+    this.mounted = true;
+    this.server.on("upgrade", this.handleUpgrade);
 
     this.wss.on("connection", (ws, _request, selfId?: string) => {
       const wasDisconnected = this.sockets.size === 0;
@@ -156,8 +116,8 @@ export class OneBotGateway extends EventEmitter implements MessagingPort, Conver
       });
 
       ws.on("close", () => {
-        this.sockets.delete(ws);
-        if (this.sockets.size === 0) {
+        const removed = this.sockets.delete(ws);
+        if (removed && this.sockets.size === 0 && !this.closing) {
           this.emit("disconnected", { at: new Date().toISOString() });
         }
       });
@@ -168,6 +128,79 @@ export class OneBotGateway extends EventEmitter implements MessagingPort, Conver
       });
     });
   }
+
+  close() {
+    if (this.closePromise) return this.closePromise;
+    this.closing = true;
+    if (this.mounted) {
+      this.server.off("upgrade", this.handleUpgrade);
+      this.mounted = false;
+    }
+    this.upgradePending = false;
+    const wasConnected = this.sockets.size > 0;
+    for (const socket of this.sockets.keys()) socket.terminate();
+    this.sockets.clear();
+    if (wasConnected) this.emit("disconnected", { at: new Date().toISOString() });
+    for (const [echo, pending] of this.pending) {
+      clearTimeout(pending.timer);
+      pending.reject(new Error(`OneBot connection closed before action completed: ${pending.action}`));
+      this.pending.delete(echo);
+    }
+    this.closePromise = new Promise<void>((resolve, reject) => {
+      this.wss.close((error) => error ? reject(error) : resolve());
+    });
+    return this.closePromise;
+  }
+
+  private readonly handleUpgrade = (request: http.IncomingMessage, socket: Duplex, head: Buffer) => {
+    const reject = (status: string, code: string) => rejectUpgrade(socket, status, code);
+    let requestUrl: URL;
+    try {
+      requestUrl = new URL(request.url ?? "/", "http://localhost");
+    } catch {
+      reject("400 Bad Request", "ONEBOT_INVALID_URL");
+      return;
+    }
+    if (requestUrl.pathname !== this.config.onebot.reverseWsPath) {
+      reject("404 Not Found", "ONEBOT_PATH_NOT_FOUND");
+      return;
+    }
+    if (request.headers.origin) {
+      reject("403 Forbidden", "ONEBOT_BROWSER_ORIGIN_REJECTED");
+      return;
+    }
+
+    const token = process.env[this.config.onebot.accessTokenEnv];
+    if (!token && (
+      !isLoopbackRemoteAddress(request.socket.remoteAddress) ||
+      !isTrustedTokenlessHost(request.headers.host)
+    )) {
+      reject("403 Forbidden", "ONEBOT_TOKEN_REQUIRED");
+      return;
+    }
+    const queryToken = requestUrl.searchParams.get("access_token");
+    const headerToken = request.headers.authorization?.replace(/^Bearer\s+/i, "");
+    if (token && token !== queryToken && token !== headerToken) {
+      reject("401 Unauthorized", "ONEBOT_TOKEN_INVALID");
+      return;
+    }
+    if (this.sockets.size > 0 || this.upgradePending) {
+      reject("409 Conflict", "ONEBOT_CONNECTION_ALREADY_ACTIVE");
+      return;
+    }
+
+    this.upgradePending = true;
+    try {
+      this.wss.handleUpgrade(request, socket, head, (ws) => {
+        this.upgradePending = false;
+        const selfId = request.headers["x-self-id"] ? String(request.headers["x-self-id"]) : undefined;
+        this.wss.emit("connection", ws, request, selfId);
+      });
+    } catch {
+      this.upgradePending = false;
+      reject("400 Bad Request", "ONEBOT_UPGRADE_FAILED");
+    }
+  };
 
   updateConfig(config: AppConfig) {
     this.config = config;
@@ -217,6 +250,18 @@ export class OneBotGateway extends EventEmitter implements MessagingPort, Conver
     return this.sendAction("send_group_msg", {
       group_id: groupId,
       message: richMessage(text, imageSources, options.replyToMessageId)
+    });
+  }
+
+  async dispatchAction(action: string, params: Record<string, unknown>) {
+    const ws = [...this.sockets.keys()].find((socket) => socket.readyState === WebSocket.OPEN);
+    if (!ws) throw new Error("OneBot is not connected.");
+    const payload = JSON.stringify({ action, params });
+    await new Promise<void>((resolve, reject) => {
+      ws.send(payload, (error) => {
+        if (error) reject(error instanceof Error ? error : new Error(String(error)));
+        else resolve();
+      });
     });
   }
 
@@ -433,6 +478,17 @@ function sanitizeOneBotOutboundText(text: string) {
 function isLoopbackHost(host: string) {
   const normalized = host.trim().toLowerCase().replace(/^\[|\]$/g, "");
   return normalized === "127.0.0.1" || normalized === "::1" || normalized === "localhost";
+}
+
+function rejectUpgrade(socket: Duplex, status: string, code: string) {
+  const body = `${code}\n`;
+  socket.end(
+    `HTTP/1.1 ${status}\r\n` +
+    "Connection: close\r\n" +
+    "Content-Type: text/plain; charset=utf-8\r\n" +
+    `Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`,
+    () => socket.destroy()
+  );
 }
 
 export function isLoopbackRemoteAddress(address: string | undefined) {

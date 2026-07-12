@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import fs from "node:fs/promises";
 import path from "node:path";
-import process from "node:process";
 import { resolveProjectRoot } from "../shared/paths.mjs";
 import { PROXY_RUNTIME_CONTRACT } from "../../packages/platform/proxy.mjs";
 import {
@@ -10,290 +9,259 @@ import {
 } from "./node-version-contract.mjs";
 
 const root = resolveProjectRoot(import.meta.url);
-const contractPath = path.join(root, "deploy/runtime-contract.json");
-const lockPath = path.join(root, "components/component.lock.json");
 const [
   contract,
   schema,
   lock,
-  dockerfile,
+  coreDockerfile,
+  napcatDockerfile,
+  napcatEntrypoint,
   compose,
-  supervisor,
-  nativeRuntime,
-  nativeNapcatStart,
-  nativeSunabotStart,
-  bashSandbox,
-  configureNapcat,
-  runtimeSmokeLayout,
+  coreHealthcheck,
+  outboundMedia,
+  apiServer,
   workspaceLayout,
-  onebotRoutes,
-  workspaceMigration,
-  buildRelease
+  launcher,
+  launcherCore,
+  launcherShell,
+  agentsGuide,
+  dockerSeccompProfile
 ] = await Promise.all([
-  readJson(contractPath),
-  readJson(path.join(root, "deploy/runtime-contract.schema.json")),
-  readJson(lockPath),
-  fs.readFile(path.join(root, "deploy/docker/Dockerfile"), "utf8"),
-  fs.readFile(path.join(root, "deploy/docker/compose.yml"), "utf8"),
-  fs.readFile(path.join(root, "deploy/docker/supervisor.mjs"), "utf8"),
-  fs.readFile(path.join(root, "tooling/runtime/native.mjs"), "utf8"),
-  fs.readFile(path.join(root, "deploy/native/bin/start-napcat.sh"), "utf8"),
-  fs.readFile(path.join(root, "deploy/native/bin/start-sunabot.sh"), "utf8"),
-  fs.readFile(path.join(root, "services/tools/bashSandbox.ts"), "utf8"),
-  fs.readFile(path.join(root, "tooling/runtime/configure-napcat-client.mjs"), "utf8"),
-  fs.readFile(path.join(root, "tooling/quality/runtime-smoke/shared.ts"), "utf8"),
-  fs.readFile(path.join(root, "packages/platform/workspaceLayout.ts"), "utf8"),
-  fs.readFile(path.join(root, "apps/api/plugins/onebotRoutes.ts"), "utf8"),
-  fs.readFile(path.join(root, "tooling/migrations/migrate-workspace-layout.mjs"), "utf8"),
-  fs.readFile(path.join(root, "tooling/runtime/build-release.mjs"), "utf8")
+  readJson("deploy/runtime-contract.json"),
+  readJson("deploy/runtime-contract.schema.json"),
+  readJson("components/component.lock.json"),
+  read("deploy/docker/Dockerfile"),
+  read("deploy/docker/Dockerfile.napcat"),
+  read("deploy/docker/napcat-entrypoint.sh"),
+  read("deploy/docker/compose.yml"),
+  read("deploy/docker/healthcheck.mjs"),
+  read("services/delivery/outboundMedia.ts"),
+  read("apps/api/server.ts"),
+  read("packages/platform/workspaceLayout.ts"),
+  read("tooling/runtime/launcher.mjs"),
+  read("tooling/runtime/launcher-core.mjs"),
+  read("sunabot.sh"),
+  read("AGENTS.md"),
+  readJson("deploy/docker/seccomp-bwrap.json")
 ]);
-const dockerSeccompProfile = await readJson(
-  path.join(root, contract.capabilities.workspaceBash.dockerSeccompProfile)
-);
-const errors = [];
-errors.push(...validateNodeVersionEntrypoints(await readNodeVersionContractInputs(root)));
 
-expect(contract.schemaVersion === 1, "runtime contract schemaVersion must be 1");
-expect(lock.schemaVersion === 1, "component lock schemaVersion must be 1");
-expect(contract.runtimeId === "sunabot-qq-runtime", "runtimeId must be sunabot-qq-runtime");
-expect(
-  arraysEqual(contract.supportedPlatforms, lock.supportedPlatforms),
-  "runtime and component platforms must match"
-);
-expect(path.isAbsolute(contract.paths.workspace), "workspace path must be absolute");
-expect(path.isAbsolute(contract.paths.installPrefix), "installPrefix must be absolute");
-expect(
-  contract.paths.napcatConfig === "runtime/napcat/config-full",
-  "NapCat config must use runtime/napcat/config-full"
-);
-expect(
-  contract.paths.napcatConfig.startsWith(`${contract.paths.napcatState}/`),
-  "NapCat config must be contained by the NapCat state root"
-);
-expect(
-  schema.properties?.paths?.required?.includes("napcatConfig"),
-  "runtime contract schema must require paths.napcatConfig"
-);
-expect(
-  schema.properties?.paths?.properties?.napcatConfig?.const === contract.paths.napcatConfig,
-  "runtime contract schema must fix the NapCat config path"
-);
-expect(
-  contract.paths.napcatQrCode === "runtime/napcat/qrcode.png",
-  "NapCat QR code must use runtime/napcat/qrcode.png"
-);
-expect(
-  path.dirname(contract.paths.napcatQrCode) === contract.paths.napcatState,
-  "NapCat QR code must be a direct child of the NapCat state root"
-);
-expect(
-  schema.properties?.paths?.required?.includes("napcatQrCode"),
-  "runtime contract schema must require paths.napcatQrCode"
-);
-expect(
-  schema.properties?.paths?.properties?.napcatQrCode?.const === contract.paths.napcatQrCode,
-  "runtime contract schema must fix the NapCat QR code path"
-);
+const errors = [
+  ...validateNodeVersionEntrypoints(await readNodeVersionContractInputs(root))
+];
+const expect = (condition, message) => {
+  if (!condition) errors.push(message);
+};
 
+expect(contract.schemaVersion === 2, "runtime contract schemaVersion must be 2");
+expect(schema.properties?.schemaVersion?.const === 2, "runtime schema must fix schemaVersion 2");
+expect(contract.runtimeId === "sunabot-qq-runtime", "runtimeId must stay sunabot-qq-runtime");
+expect(contract.releaseVersion === "0.1.0", "runtime release version must match package version");
+expect(contract.nodeVersion === "24.18.0", "runtime must use the pinned Node version");
+expect(arraysEqual(contract.supportedPlatforms, lock.supportedPlatforms),
+  "runtime and component platforms must match");
+expect(contract.supportedPlatforms.includes("linux/amd64"),
+  "the production Core image must declare linux/amd64 support");
+
+expect(path.isAbsolute(contract.paths.workspace), "contract workspace must be absolute");
+expect(path.isAbsolute(contract.paths.installPrefix), "contract install prefix must be absolute");
 for (const [name, value] of Object.entries(contract.paths)) {
   if (name === "workspace" || name === "installPrefix") continue;
-  expect(!path.isAbsolute(value), `${name} must be relative to workspace`);
-  expect(!value.split(/[\\/]/).includes(".."), `${name} must not escape workspace`);
+  expect(typeof value === "string" && !path.isAbsolute(value), `${name} must be workspace-relative`);
+  expect(!String(value).split(/[\\/]/).includes(".."), `${name} must not escape workspace`);
 }
+expect(contract.paths.napcatConfig === "runtime/napcat/config-full",
+  "NapCat config path must remain canonical");
+expect(contract.paths.napcatQqState === "runtime/napcat/qq",
+  "NapCat QQ state path must remain canonical");
+expect(contract.paths.napcatPlugins === "runtime/napcat/plugins",
+  "NapCat plugin path must remain canonical");
+expect(contract.paths.napcatQrCode === "runtime/napcat/qrcode.png",
+  "NapCat QR path must remain canonical");
+expect(contract.paths.napcatManualLogin === "runtime/napcat/manual-login-required",
+  "NapCat manual login marker must remain canonical");
+for (const key of ["napcatConfig", "napcatQqState", "napcatPlugins", "napcatQrCode", "napcatManualLogin"]) {
+  expect(schema.properties?.paths?.required?.includes(key), `runtime schema must require paths.${key}`);
+  expect(schema.properties?.paths?.properties?.[key]?.const === contract.paths[key],
+    `runtime schema must fix paths.${key}`);
+}
+expect(workspaceLayout.includes('napcatConfig: "runtime/napcat/config-full"')
+  && workspaceLayout.includes('napcatQqState: "runtime/napcat/qq"')
+  && workspaceLayout.includes('napcatPlugins: "runtime/napcat/plugins"')
+  && workspaceLayout.includes('napcatQrCode: "runtime/napcat/qrcode.png"')
+  && workspaceLayout.includes('napcatManualLogin: "runtime/napcat/manual-login-required"'),
+"workspace layout must match the runtime contract");
 
-const onebot = new URL(contract.network.onebotReverseWebSocket);
-expect(onebot.protocol === "ws:", "OneBot URL must use ws on the local runtime");
-expect(onebot.hostname === contract.network.host, "OneBot URL must use the contract loopback host");
-expect(Number(onebot.port) === contract.network.apiPort, "OneBot URL and API port must match");
-expect(onebot.pathname === "/onebot/v11/ws", "OneBot URL path must be fixed");
-expect(contract.docker.composeService === "qq-runtime", "Compose service name must be qq-runtime");
-expect(contract.docker.workspaceMount === contract.paths.workspace, "Docker workspace mount must match");
-expect(
-  JSON.stringify(contract.outboundProxy) === JSON.stringify(PROXY_RUNTIME_CONTRACT),
-  "outbound proxy runtime contract must match packages/platform"
-);
-expect(
-  contract.capabilities.required.includes("workspace-bash")
-    && !contract.capabilities.optional.includes("workspace-bash"),
-  "workspace-bash must be a required runtime capability"
-);
-expect(
-  contract.capabilities.workspaceBash.isolation === "bubblewrap"
-    && contract.capabilities.workspaceBash.executable === "/usr/bin/bwrap"
-    && contract.capabilities.workspaceBash.dockerSeccompProfile === "deploy/docker/seccomp-bwrap.json"
-    && contract.capabilities.workspaceBash.filesystemMode === "host-readonly-workspace-readwrite"
-    && contract.capabilities.workspaceBash.subprocessIsolation === "inherited-mount-and-pid-namespaces"
-    && contract.capabilities.workspaceBash.capabilitiesDropped === true
-    && contract.capabilities.workspaceBash.failClosed === true,
-  "workspace-bash must use the fail-closed bubblewrap contract"
-);
-expect(
-  schema.properties?.capabilities?.properties?.workspaceBash?.properties?.executable?.const
-    === contract.capabilities.workspaceBash.executable
-    && schema.properties?.capabilities?.properties?.workspaceBash?.properties?.dockerSeccompProfile?.const
-      === contract.capabilities.workspaceBash.dockerSeccompProfile,
-  "runtime schema must fix the workspace Bash sandbox executable and Docker seccomp profile"
-);
-expect(compose.includes("SUNABOT_PROXY_MODE"), "Compose must pass the outbound proxy mode contract");
-expect(
-  compose.includes("SUNABOT_PROXY_DISCOVERED_URL"),
-  "Compose must pass credential-free WSL proxy discovery"
-);
-expect(
-  dockerfile.includes("napcatConfig)")
-    && dockerfile.includes('ln -s "$SUNABOT_WORKSPACE/$napcat_config" /app/napcat/config'),
-  "Docker NapCat config symlink must be resolved from paths.napcatConfig"
-);
-expect(
-  dockerfile.includes("napcatQrCode)")
-    && dockerfile.includes('ln -s "$SUNABOT_WORKSPACE/$napcat_state" /app/napcat/cache'),
-  "Docker NapCat cache must link to the workspace state containing paths.napcatQrCode"
-);
-expect(
-  dockerfile.includes("XDG_CACHE_HOME=/app/.cache")
-    && dockerfile.includes("/app/.cache/fontconfig")
-    && dockerfile.includes("/app/.cache/mesa_shader_cache")
-    && dockerfile.includes("/app/.cache/mesa_shader_cache_db")
-    && dockerfile.includes("chown -R 1000:1000"),
-  "Docker must provision writable fontconfig and shader caches for the non-root runtime"
-);
-expect(
-  dockerfile.includes(`bubblewrap=${lock.components.bubblewrap.version}`)
-    && compose.includes(`seccomp=${contract.capabilities.workspaceBash.dockerSeccompProfile}`)
-    && !compose.includes("seccomp=unconfined")
-    && compose.includes("cap_drop:")
-    && compose.includes("no-new-privileges:true"),
-  "Docker must install bubblewrap, permit user namespaces, and retain capability/no-new-privilege restrictions"
-);
-const bubblewrapCloneRule = dockerSeccompProfile.syscalls.find((rule) =>
-  rule.names?.length === 1
-    && rule.names[0] === "clone"
-    && rule.args?.[0]?.op === "SCMP_CMP_MASKED_EQ"
-    && rule.args[0].value === 2114060288
-    && rule.args[0].valueTwo === 1040318464
-);
-const bubblewrapMountRule = dockerSeccompProfile.syscalls.find((rule) =>
-  ["mount", "pivot_root", "umount2"].every((name) => rule.names?.includes(name))
-);
-expect(
-  dockerSeccompProfile.defaultAction === "SCMP_ACT_ERRNO"
-    && bubblewrapCloneRule?.action === "SCMP_ACT_ALLOW"
-    && bubblewrapMountRule?.action === "SCMP_ACT_ALLOW",
-  "Docker seccomp must retain the default deny profile and allow only the traced bubblewrap namespace syscalls"
-);
-expect(
-  supervisor.includes("contract.capabilities.workspaceBash.executable"),
-  "Docker supervisor must require the workspace Bash isolation executable"
-);
-expect(
-  supervisor.includes("contract.paths.napcatConfig")
-    && !supervisor.includes('path.join(contract.paths.napcatState, "config")'),
-  "Docker supervisor must use paths.napcatConfig"
-);
-expect(
-  supervisor.includes("ensureNapcatCacheLink")
-    && supervisor.includes('shellRoot: "/app/napcat"')
-    && supervisor.includes('ensureNapcatWritableCaches("/app/.cache")'),
-  "Docker supervisor must validate the NapCat cache link and writable process caches"
-);
-expect(
-  nativeRuntime.includes("contract.paths.napcatConfig")
-    && !nativeRuntime.includes('path.join(contract.paths.napcatState, "config")'),
-  "Native installer must use paths.napcatConfig"
-);
-expect(
-  nativeNapcatStart.includes('readRelativePath("napcatConfig")')
-    && !legacyNapcatConfigLiteral(nativeNapcatStart),
-  "Native NapCat start must resolve paths.napcatConfig from the runtime contract"
-);
-expect(
-  nativeRuntime.includes("ensureNapcatCacheLink")
-    && nativeNapcatStart.includes('readRelativePath("napcatQrCode")'),
-  "Native runtime must link the NapCat component cache to paths.napcatQrCode"
-);
-expect(
-  nativeRuntime.includes("contract.capabilities.workspaceBash")
-    && nativeSunabotStart.includes("capabilities.workspaceBash.executable"),
-  "Native install and startup must require the workspace Bash sandbox"
-);
-expect(
-  [
-    '"--ro-bind", "/", "/"',
-    '"--dev", "/dev"',
-    '"--bind", workspaceRoot, workspaceRoot',
-    '"--cap-drop", "ALL"',
-    '"--unshare-pid"'
-  ].every((fragment) => bashSandbox.includes(fragment)),
-  "workspace Bash must enforce read-only host mounts, one writable workspace, and nested-process isolation"
-);
-expect(
-  configureNapcat.includes("contract.paths.napcatConfig")
-    && !configureNapcat.includes('path.join(workspace, contract.paths.napcatState, "config")'),
-  "NapCat configure tooling must use paths.napcatConfig"
-);
-expect(
-  runtimeSmokeLayout.includes('relativeContractPath(paths.napcatConfig, "paths.napcatConfig")'),
-  "runtime smoke must load paths.napcatConfig from the runtime contract"
-);
-expect(
-  runtimeSmokeLayout.includes('relativeContractPath(paths.napcatQrCode, "paths.napcatQrCode")'),
-  "runtime smoke must load paths.napcatQrCode from the runtime contract"
-);
-expect(
-  workspaceLayout.includes('napcatQrCode: "runtime/napcat/qrcode.png"')
-    && onebotRoutes.includes("getWorkspacePath(WORKSPACE_LAYOUT.napcatQrCode)"),
-  "Admin API and workspace layout must read the contract NapCat QR code path"
-);
-expect(
-  workspaceMigration.includes("migrateLegacyNapcatQrCode"),
-  "workspace migration must preserve legacy NapCat QR codes"
-);
-expect(
-  buildRelease.includes('"packages/platform/napcatRuntimeLayout.mjs"'),
-  "Native release must include the NapCat runtime layout helper"
-);
+const admin = contract.network.admin;
+const onebot = contract.network.onebot;
+const webui = contract.network.napcatWebui;
+expect(admin.host === "127.0.0.1" && admin.port === 8787,
+  "admin must publish only on host loopback port 8787");
+expect(onebot.path === "/onebot/v11/ws" && onebot.internalPort === 8788,
+  "OneBot must use the dedicated internal port 8788 and fixed path");
+expect(onebot.accessTokenRequired === true, "OneBot access token must be mandatory");
+expect(onebot.nativeListenerHosts.macos === "127.0.0.1"
+  && onebot.nativeListenerHosts.wsl === "docker-network-gateway"
+  && onebot.nativeListenerHosts.linux === "docker-network-gateway",
+"Native OneBot listeners must stay on loopback or the private Compose gateway");
+expect(webui.host === "127.0.0.1" && webui.port === 6099,
+  "NapCat WebUI must publish only on host loopback port 6099");
+for (const value of Object.values(onebot.nativeAdvertisedUrls ?? {})) {
+  const url = validWebSocketUrl(value);
+  expect(url?.hostname === "host.docker.internal" && Number(url?.port) === onebot.internalPort,
+    "Native Core must advertise a container-reachable host.docker.internal OneBot URL");
+  expect(url?.pathname === onebot.path, "Native OneBot URL must use the fixed path");
+}
+const dockerOnebot = validWebSocketUrl(onebot.dockerAdvertisedUrl);
+expect(dockerOnebot?.hostname === contract.docker.services.core.name,
+  "Docker NapCat must address Core by Compose service DNS");
+expect(Number(dockerOnebot?.port) === onebot.internalPort && dockerOnebot?.pathname === onebot.path,
+  "Docker OneBot URL must match the internal port and path");
+
+expect(contract.mediaTransport.outbound.mode === "inline-base64"
+  && contract.mediaTransport.outbound.sharedFilesystem === false,
+"cross-component outbound media must default to inline base64 without a shared filesystem");
+expect(contract.mediaTransport.inbound.containerLocalPaths === false,
+  "container-local inbound paths must be rejected");
+expect(outboundMedia.includes('|| "inline-base64"')
+  && outboundMedia.includes("SUNABOT_MEDIA_MAX_INLINE_BYTES")
+  && outboundMedia.includes('if (value === "inline-base64") return value;')
+  && !outboundMedia.includes('value === "shared-path" ||')
+  && !outboundMedia.includes('platform === "darwin"'),
+"media delivery must be topology-configured, bounded and platform-independent");
+
+expect(JSON.stringify(contract.outboundProxy) === JSON.stringify(PROXY_RUNTIME_CONTRACT),
+  "outbound proxy runtime contract must match packages/platform");
+expect(contract.native.napcatManagedBy === "docker",
+  "NapCat must be Docker-managed in every Core mode");
+expect(contract.capabilities.workspaceBash.service === "core"
+  && contract.capabilities.workspaceBash.isolation === "bubblewrap"
+  && contract.capabilities.workspaceBash.failClosed === true,
+"workspace Bash must remain fail-closed inside Core");
+expect(hasBubblewrapSeccompRules(dockerSeccompProfile),
+  "Docker seccomp must retain the required bubblewrap namespace rules");
+
+const servicesBlock = compose.slice(compose.indexOf("services:"), compose.indexOf("\nnetworks:"));
+const serviceNames = servicesBlock
+  .split(/\r?\n/)
+  .flatMap((line) => /^  ([A-Za-z0-9_-]+):\s*$/.exec(line)?.[1] ?? []);
+expect(arraysEqual(serviceNames, ["core", "napcat"]),
+  "Compose must declare exactly the independent core and napcat services");
+const coreBlock = serviceBlock(compose, "core", "napcat");
+const napcatBlock = serviceBlock(compose, "napcat", undefined);
+expect(coreBlock.includes('profiles: ["core-docker"]'), "Core Docker service must be profile-controlled");
+expect(coreBlock.includes("127.0.0.1:8787:8787"),
+  "Core admin port must publish to host loopback only");
+expect(coreBlock.includes('expose:\n      - "8788"') && !coreBlock.includes(":8788:8788"),
+  "OneBot port must stay inside the Compose network");
+expect(napcatBlock.includes("127.0.0.1:6099:6099"),
+  "NapCat WebUI must publish to host loopback only");
+expect(napcatBlock.includes("host.docker.internal:host-gateway"),
+  "NapCat must have the Linux host-gateway compatibility mapping");
+expect(!napcatBlock.includes("env_file:"), "NapCat must not receive Core/provider secrets");
+for (const relative of [
+  contract.paths.napcatConfig,
+  contract.paths.napcatQqState,
+  contract.paths.napcatPlugins,
+  contract.paths.napcatState
+]) {
+  expect(napcatBlock.includes(relative), `NapCat must mount only its ${relative} state boundary`);
+}
+expect(compose.includes("io.sunabot.runtime-id")
+  && compose.includes("io.sunabot.workspace-id")
+  && compose.includes("io.sunabot.component"),
+"both services and the network must carry runtime ownership labels");
+
+const node = lock.components.node;
+const napcat = lock.components.napcat;
+expect(coreDockerfile.includes(`${node.image}@${node.digest}`),
+  "Core Dockerfile must pin the Node image digest");
+expect(!/napcat|\/opt\/QQ|xvfb-run/i.test(coreDockerfile),
+  "Core Dockerfile must not contain QQ or NapCat");
+expect(coreDockerfile.includes("dist/apps/api/main.js")
+  && coreDockerfile.includes(contract.capabilities.workspaceBash.executable),
+"Core image must run the API and contain bubblewrap");
+expect(napcatDockerfile.includes(`${napcat.image}@${napcat.digest}`),
+  "NapCat wrapper must pin the multi-architecture upstream digest");
+expect(napcat.architectures.includes("linux/amd64") && napcat.architectures.includes("linux/arm64"),
+  "NapCat lock must cover amd64 and arm64");
+expect(napcatEntrypoint.includes("cp -an") && napcatEntrypoint.includes("/app/entrypoint.sh"),
+  "NapCat wrapper must seed missing defaults without replacing launcher configuration");
+expect(launcher.includes("config.enableLocalFile2Url = true"),
+  "the launcher must configure a Base64 get_file fallback across the component boundary");
+expect(!coreHealthcheck.includes("supervisor-state")
+  && coreHealthcheck.includes("contract.network.admin.port")
+  && coreHealthcheck.includes("contract.network.onebot.internalPort"),
+  "Core healthcheck must not depend on the removed combined supervisor");
 
 for (const [name, component] of Object.entries(lock.components ?? {})) {
   expect(Array.isArray(component.architectures) && component.architectures.length > 0,
     `${name} must declare architectures`);
   expect(Array.isArray(component.smoke) && component.smoke.length > 0,
     `${name} must declare a smoke command`);
-  expect(Boolean(component.source), `${name} must declare a source`);
-  expect(Boolean(component.license), `${name} must declare a license status`);
+  expect(Boolean(component.source) && Boolean(component.license),
+    `${name} must declare source and license status`);
   if (component.image) {
     expect(/^sha256:[a-f0-9]{64}$/.test(component.digest ?? ""),
-      `${name} image must have a sha256 digest`);
-    expect(dockerfile.includes(`${component.image}@${component.digest}`),
-      `${name} image digest must be used by Dockerfile`);
+      `${name} image must pin a sha256 digest`);
   }
 }
 
-const serviceLines = compose
-  .split(/\r?\n/)
-  .filter((line) => /^  [A-Za-z0-9_-]+:\s*$/.test(line));
-expect(serviceLines.length === 1 && serviceLines[0].trim() === "qq-runtime:",
-  "Compose must declare exactly one qq-runtime service");
-expect((compose.match(/\/srv\/sunabot\/workspace/g) ?? []).length >= 1,
-  "Compose must mount the contract workspace");
-expect(!compose.includes("network_mode: service:"), "Compose must not emulate a shared namespace with a second service");
+expect(apiServer.includes("SUNABOT_ONEBOT_HOST")
+  && apiServer.includes("SUNABOT_ONEBOT_PORT")
+  && apiServer.includes("assertOneBotAccessToken")
+  && apiServer.includes('request.url?.split("?", 1)[0] === "/healthz"'),
+"Core must expose a separate authenticated OneBot listener with liveness");
+expect(`${launcher}\n${launcherCore}`.includes("SUNABOT_CORE_MODE")
+  && launcherCore.includes("nativeAdvertisedUrls")
+  && launcher.includes("configureNapcat")
+  && launcherShell.includes("tooling/runtime/launcher.mjs"),
+"the root launcher must select the Core mode and configure independent NapCat");
+expect(launcher.includes("waitForComponentHealth")
+  && launcher.includes("assertNonRootRuntimeUser")
+  && launcher.includes("docker-network-gateway")
+  && launcher.includes("nativeProcessEnvironment"),
+"the launcher must enforce readiness, non-root ownership, private Native ingress and one runtime environment");
+expect(agentsGuide.includes("NapCat") && agentsGuide.includes("独立 Docker")
+  && !agentsGuide.includes("Linux Native/Docker 继续使用共享 workspace"),
+"AGENTS must enforce the split-runtime portability rules");
 
 if (errors.length > 0) {
   process.stderr.write(`${errors.map((error) => `- ${error}`).join("\n")}\n`);
   process.exitCode = 1;
 } else {
-  process.stdout.write(JSON.stringify({
+  process.stdout.write(`${JSON.stringify({
     ok: true,
     runtimeId: contract.runtimeId,
+    schemaVersion: contract.schemaVersion,
     releaseVersion: contract.releaseVersion,
     nodeVersion: contract.nodeVersion,
     platforms: contract.supportedPlatforms,
     components: Object.keys(lock.components),
-    composeServices: [contract.docker.composeService]
-  }, null, 2) + "\n");
+    composeServices: serviceNames
+  }, null, 2)}\n`);
 }
 
-function expect(condition, message) {
-  if (!condition) errors.push(message);
+function serviceBlock(source, name, nextName) {
+  const start = source.indexOf(`\n  ${name}:`);
+  const end = nextName ? source.indexOf(`\n  ${nextName}:`, start + 1) : source.indexOf("\nnetworks:", start + 1);
+  return start >= 0 ? source.slice(start, end >= 0 ? end : undefined) : "";
+}
+
+function validWebSocketUrl(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === "ws:" || url.protocol === "wss:" ? url : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function hasBubblewrapSeccompRules(profile) {
+  const clone = profile.syscalls?.find((rule) => rule.names?.includes("clone") && rule.action === "SCMP_ACT_ALLOW");
+  const mount = profile.syscalls?.find((rule) =>
+    ["mount", "pivot_root", "umount2"].every((name) => rule.names?.includes(name))
+  );
+  return profile.defaultAction === "SCMP_ACT_ERRNO" && Boolean(clone) && mount?.action === "SCMP_ACT_ALLOW";
 }
 
 function arraysEqual(left, right) {
@@ -303,10 +271,10 @@ function arraysEqual(left, right) {
     && left.every((value, index) => value === right[index]);
 }
 
-function legacyNapcatConfigLiteral(source) {
-  return /runtime[\\/]napcat[\\/]config(?!-full)(?=$|[\\/'"\s])/.test(source);
+async function read(relativePath) {
+  return fs.readFile(path.join(root, relativePath), "utf8");
 }
 
-async function readJson(filePath) {
-  return JSON.parse(await fs.readFile(filePath, "utf8"));
+async function readJson(relativePath) {
+  return JSON.parse(await read(relativePath));
 }

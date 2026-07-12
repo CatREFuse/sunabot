@@ -95,8 +95,10 @@ import {
   SessionCoordinator,
   type SessionHandleResult
 } from "../../services/sessions/sessionCoordinator.js";
-import { SessionStore, type OutboxRecord, type SessionEventRecord } from "../../services/sessions/sessionStore.js";
+import { SessionStore, type OutboxRecord, type SessionEventRecord, type ToolJobRecord } from "../../services/sessions/sessionStore.js";
 import { TOOL_CALL_TIMEOUT_MS } from "../../services/tools/tools.js";
+import { GENERATE_IMG_TOOL_NAME, runGenerateImg } from "../../services/tools/generateImgTool.js";
+import { SELFIE_TOOL_NAME } from "../../services/tools/selfieTool.js";
 import { promptDefinitionById } from "../../services/agent/promptCatalog.js";
 import { defaultPromptContent as defaultFinalPromptContent } from "../../services/agent/promptDefaults.js";
 import {
@@ -107,7 +109,7 @@ import {
 } from "../../services/agent/promptSystem.js";
 import { buildConversationPromptVariables } from "../../services/agent/persona.js";
 import { DEFAULT_CONTEXT_MESSAGE_LIMIT, MAX_STORED_CONVERSATION_MESSAGES, GROUP_CHAT_SUMMARY_WINDOW_MS, MAX_SELFIE_REFERENCE_IMAGES, MAX_SELFIE_WORKSPACE_REFERENCE_IMAGES, MAX_CURRENT_CONTEXT_IMAGES, MAX_HISTORY_CONTEXT_IMAGES, HYDRATE_MESSAGE_WINDOW_MS, ACTIVE_CONVERSATION_WINDOW_MS, DIRECT_REPLY_TIMEOUT_MS, AMBIENT_ORCHESTRATOR_TIMEOUT_MS, ORCHESTRATOR_MAX_RETRIES, PREPARE_TIMEOUT_MS, RECENT_CONTEXT_TOKEN_BUDGET, DEDUPE_TTL_MS, MAX_DEDUPE_KEYS, DEFAULT_ADMIN_NAME, GROUP_CHAT_SUMMARY_COMMAND, CONVERSATION_REPLY_PROMPT_FILE, SELFIE_PROMPT_FILE, GROUP_CHAT_SUMMARY_PROMPT_FILE, ADMIN_PERSONA_FILES, ADMIN_RUNTIME_PROMPT_DEFAULTS, BatchUserInfo, WorkingMemoryMergeOutput, WorkingMemoryMergeContext, personaFileNameForAdminId, AdminIdentity, ConversationReplyUpdateInput, RuntimeCommandContext, ReplyDeliveryDraft, ReplyDelivery, DeferredCodexTurn, AmbientReplyJob, AmbientReplyState, AmbientIdleTimer, RuntimeConfigSnapshot, RuntimePromptSnapshot, SunaRuntimeOptions } from "./runtimeContracts.js";
-import { buildUserProfileRecallQuery, buildUserPrompt, buildWorkingMemoryRecallQuery, clampInteger, collectGroupChatSummaryMessages, estimatePromptTokens, isAdminUserId, toContextChatMessage, uniqueMemoryEntries } from "./conversationMemoryHelpers.js";
+import { buildMemoryPromptVariables, buildUserProfileRecallQuery, buildUserPrompt, buildWorkingMemoryRecallQuery, clampInteger, collectGroupChatSummaryMessages, estimatePromptTokens, isAdminUserId, toContextChatMessage, uniqueMemoryEntries } from "./conversationMemoryHelpers.js";
 import { conversationMessageAttachments, conversationRecordId, queueIncomingSnapshot, selectRelevantConversationAttachments, toConversationQuote, uniqueAttachments, uniqueQuotes, uniqueStrings } from "./messagingAttachmentHelpers.js";
 import { buildAsyncToolCompletionPrompt, errorMessage, isAbortError, isRuntimeIncomingMessage, sanitizeErrorDetail } from "./infrastructure.js";
 
@@ -125,6 +127,7 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
       delivery?: ReplyDelivery;
       onDeferred?: (value: DeferredCodexTurn) => void;
       allowAsyncCodex?: boolean;
+      allowAsyncImage?: boolean;
       promptOverride?: string;
     } = {}
   ) {
@@ -226,12 +229,16 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
           incoming,
           afterContext.text,
           isAdmin,
-          memoryMatches,
           admin,
           attachmentContext.text
         );
       const promptRequest = await this.renderPromptRequest("conversation.reply", {
         ...buildConversationPromptVariables(this.config),
+        ...buildMemoryPromptVariables({
+          working: workingMemoryMatches,
+          longTerm: longTermMemoryMatches,
+          userProfile: userProfileMemoryMatches
+        }),
         "messages_64": this.buildRecentContextMessages(incoming, options.captureSequence, 64),
         "conversation.messages": this.buildRecentContextMessages(incoming, options.captureSequence),
         "user.input": prompt
@@ -243,6 +250,7 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
       }
       const selfieChatReferenceImageUrls = this.collectSelfieChatReferenceImages(incoming);
       const generatedImages: ImageResult[] = [];
+      let assistantTextCount = 0;
       this.recordAssistantRequestStarted(incoming, logRunId);
       requestStarted = true;
       await appendRequestLog({
@@ -269,6 +277,8 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
         ),
         onAssistantText: async (text) => {
           if (options.isCurrent && !options.isCurrent()) return;
+          const quoteReply = assistantTextCount === 0;
+          assistantTextCount += 1;
           const record = await this.sendAssistantReply(
             channelKey,
             incoming,
@@ -278,7 +288,8 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
             [],
             logRunId,
             options.isCurrent,
-            options.delivery
+            options.delivery,
+            quoteReply
           );
           if (record) sent = true;
         },
@@ -299,11 +310,13 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
           })
         },
         asyncCodex: (options.allowAsyncCodex ?? true) && this.config.bot.tools.codex.enabled,
+        asyncImage: options.allowAsyncImage ?? true,
         logContext
       });
       if (options.isCurrent && !options.isCurrent()) return sent;
       if (turn.kind === "deferred") {
-        const acknowledgement = turn.acknowledgement.trim() || "收到，任务已经开始处理，完成后我会继续回复。";
+        const acknowledgement = turn.acknowledgement.trim();
+        if (!acknowledgement) throw new Error("异步工具缺少 dispatch_message。");
         options.onDeferred?.({
           deferred: turn,
           originalRequest: {
@@ -316,7 +329,7 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
             isAdmin,
             [],
             logRunId,
-            `codex-ack:${turn.toolCall.callId}`
+            `tool-ack:${turn.toolCall.name}:${turn.toolCall.callId}`
           )
         });
         return sent;
@@ -455,6 +468,21 @@ export async function runtime_replyToToolCompletion(this: RuntimeHost,
     const gate = this.replyGates.capture(incoming.scope, channelKey);
     const isCurrent = () => this.isReplyTaskCurrent(incoming, gate, signal);
     if (!isCurrent()) return;
+    if (payload.toolName === GENERATE_IMG_TOOL_NAME || payload.toolName === SELFIE_TOOL_NAME) {
+      const result = readDeferredImageResult(payload.outcome.result);
+      const text = result.image
+        ? ""
+        : `图片生成失败：${sanitizeErrorDetail(result.error || "没有可用图片")}`;
+      delivery.outbox.push(this.replyDeliveryDraft(
+        incoming,
+        text,
+        this.isAdminUser(incoming.userId),
+        result.image ? [result.image] : [],
+        undefined,
+        `tool-image:${payload.toolJobId}`
+      ));
+      return;
+    }
     await this.replyToIncoming(channelKey, incoming, gateway, {
       signal,
       isCurrent,
@@ -463,6 +491,51 @@ export async function runtime_replyToToolCompletion(this: RuntimeHost,
       promptOverride: buildAsyncToolCompletionPrompt(payload)
     });
   }
+export async function runtime_processDeferredToolJob(this: RuntimeHost, job: ToolJobRecord, signal: AbortSignal) {
+    if (signal.aborted) throw signal.reason ?? new Error("异步工具任务已取消。");
+    const originalRequest = job.originalRequest as { incoming?: unknown };
+    const incoming = originalRequest.incoming;
+    if (!isRuntimeIncomingMessage(incoming)) {
+      return { status: "failed" as const, error: { message: "异步图片任务缺少原始请求。" } };
+    }
+    const provider = this.getProvider();
+    const logContext = {
+      conversationId: conversationRecordId(incoming),
+      incomingMessageId: incoming.messageId == null ? undefined : String(incoming.messageId),
+      runId: job.id,
+      stage: "async_image_tool"
+    };
+    const input = job.arguments && typeof job.arguments === "object" && !Array.isArray(job.arguments)
+      ? job.arguments as Record<string, unknown>
+      : {};
+    const result = job.toolName === GENERATE_IMG_TOOL_NAME
+      ? await runGenerateImg(input, this.config.bot, (prompt, size, quality, referenceImageUrls, childLogContext) =>
+          provider.generateImage(prompt, size, quality, referenceImageUrls, childLogContext ?? logContext), {
+          referenceImageUrls: inboundImageUrls(incoming),
+          logContext
+        })
+      : job.toolName === SELFIE_TOOL_NAME
+        ? await this.runSelfie(input, provider, {
+            chatReferenceImageUrls: this.collectSelfieChatReferenceImages(incoming),
+            logContext
+          })
+        : { ok: false, error: `不支持的异步工具：${job.toolName}` };
+    const record = result as { ok?: unknown; error?: unknown };
+    return record.ok === true
+      ? { status: "succeeded" as const, result }
+      : { status: "failed" as const, result, error: { message: String(record.error ?? "图片生成失败。") } };
+  }
+
+function readDeferredImageResult(value: unknown) {
+  const result = value && typeof value === "object" && !Array.isArray(value)
+    ? value as { image?: ImageResult; error?: unknown }
+    : {};
+  const image = result.image;
+  return {
+    image: image && (image.url || image.filePath) ? image : undefined,
+    error: typeof result.error === "string" ? result.error : ""
+  };
+}
 export async function runtime_attachReplyReferences(this: RuntimeHost,
     incoming: ParsedIncomingMessage,
     gateway: MessagingPort,
@@ -614,6 +687,7 @@ export class RuntimeReply {
   replyToIncoming(...args: Parameters<typeof runtime_replyToIncoming>) { return runtime_replyToIncoming.call(this.host, ...args); }
   replyWithGroupChatSummary(...args: Parameters<typeof runtime_replyWithGroupChatSummary>) { return runtime_replyWithGroupChatSummary.call(this.host, ...args); }
   replyToToolCompletion(...args: Parameters<typeof runtime_replyToToolCompletion>) { return runtime_replyToToolCompletion.call(this.host, ...args); }
+  processDeferredToolJob(...args: Parameters<typeof runtime_processDeferredToolJob>) { return runtime_processDeferredToolJob.call(this.host, ...args); }
   attachReplyReferences(...args: Parameters<typeof runtime_attachReplyReferences>) { return runtime_attachReplyReferences.call(this.host, ...args); }
   loadMessageDetails(...args: Parameters<typeof runtime_loadMessageDetails>) { return runtime_loadMessageDetails.call(this.host, ...args); }
   loadQuoteReferences(...args: Parameters<typeof runtime_loadQuoteReferences>) { return runtime_loadQuoteReferences.call(this.host, ...args); }

@@ -8,7 +8,6 @@ import {
   type WorkspaceBashInput
 } from "../../../services/tools/bashTool.js";
 import {
-  CODEX_TOOL_NAME,
   MEMORY_RECALL_TOOL_NAME,
   WEBSEARCH_TOOL_NAME
 } from "../../../services/tools/definitions.js";
@@ -18,9 +17,19 @@ import {
 } from "../../../services/tools/generateImgTool.js";
 import { SELFIE_TOOL_NAME } from "../../../services/tools/selfieTool.js";
 import {
+  ASSISTANT_TEXT_TOOL_NAME,
+  readAssistantText
+} from "../../../services/tools/assistantTextTool.js";
+import {
+  isProviderDeferredTool,
   providerToolExecutionMode,
   resolveProviderToolDefinitions
 } from "../../../services/tools/toolRegistry.js";
+import {
+  readDeferredDispatchMessage,
+  withRequiredDispatchMessage,
+  withoutDispatchMessage
+} from "../../../services/tools/deferredDispatch.js";
 import { runWebsearch, type WebsearchInput } from "../webSearchTool.js";
 import type {
   ProviderCompleteOptions,
@@ -30,7 +39,6 @@ import type {
 } from "./contracts.js";
 import { logContextMetadata } from "./logger.js";
 import { readToolName } from "./promptMapping.js";
-import { extractResponsesText } from "./streamDecoder.js";
 import { errorMessage, parseJson } from "./valueUtils.js";
 
 type InlineExecutor = (
@@ -40,6 +48,7 @@ type InlineExecutor = (
 ) => Promise<unknown>;
 
 const inlineExecutors: ReadonlyMap<string, InlineExecutor> = new Map([
+  [ASSISTANT_TEXT_TOOL_NAME, runAssistantText],
   [WORKSPACE_BASH_TOOL_NAME, runBash],
   [WEBSEARCH_TOOL_NAME, runWebSearch],
   [GENERATE_IMG_TOOL_NAME, runImageGeneration],
@@ -47,40 +56,60 @@ const inlineExecutors: ReadonlyMap<string, InlineExecutor> = new Map([
   [MEMORY_RECALL_TOOL_NAME, runMemoryRecall]
 ]);
 
+async function runAssistantText(
+  args: Record<string, unknown>,
+  call: ResponseFunctionCallItem,
+  options: ProviderCompleteOptions
+) {
+  const text = readAssistantText(args);
+  if (!text) return { ok: false, error: "Assistant text is empty." };
+  if (!options.onAssistantText) return { ok: false, error: "Assistant text delivery is not configured." };
+  await options.onAssistantText(text);
+  const result = { ok: true, delivered: true, textLength: text.length };
+  await appendToolLog(ASSISTANT_TEXT_TOOL_NAME, call, { text }, result, options);
+  return result;
+}
+
 export class RegistryProviderToolExecutor implements ProviderToolExecutorPort {
   resolveDefinitions(options: ProviderCompleteOptions, definitions?: OpenAIToolDefinition[]) {
     const available = resolveProviderToolDefinitions(options) as Record<string, unknown>[];
-    if (definitions == null) return available;
-    const enabledNames = new Set(available.map(readToolName));
-    return definitions
-      .map((tool) => ({
-        type: "function",
-        name: tool.function.name,
-        description: tool.function.description,
-        parameters: tool.function.parameters,
-        ...(typeof tool.function.strict === "boolean" ? { strict: tool.function.strict } : {})
-      }))
-      .filter((tool) => enabledNames.has(tool.name));
+    const configured = definitions == null
+      ? available
+      : (() => {
+          const enabledNames = new Set(available.map(readToolName));
+          return definitions
+            .map((tool) => ({
+              type: "function",
+              name: tool.function.name,
+              description: tool.function.description,
+              parameters: tool.function.parameters,
+              ...(typeof tool.function.strict === "boolean" ? { strict: tool.function.strict } : {})
+            }))
+            .filter((tool) => enabledNames.has(tool.name));
+        })();
+    return configured.map((tool) => isProviderDeferredTool(readToolName(tool), options)
+      ? withRequiredDispatchMessage(tool)
+      : withoutDispatchMessage(tool));
   }
 
   deferredTurn(
-    payload: unknown,
     calls: ResponseFunctionCallItem[],
-    options: ProviderCompleteOptions,
-    fallbackText = ""
+    options: ProviderCompleteOptions
   ): ProviderDeferredTurn | null {
-    if (!options.asyncCodex) return null;
-    const call = calls.find((item) => item.name === CODEX_TOOL_NAME);
-    if (!call) return null;
+    if (calls.length !== 1) return null;
+    const call = calls[0]!;
+    if (!isProviderDeferredTool(call.name, options)) return null;
     const args = parseJson(call.arguments);
     if (!args || typeof args !== "object" || Array.isArray(args)) return null;
+    const dispatch = readDeferredDispatchMessage(args as Record<string, unknown>, call.name);
+    if (!dispatch.ok) return null;
     return {
       kind: "deferred",
-      acknowledgement: extractResponsesText(payload) || fallbackText.trim(),
+      acknowledgement: dispatch.message,
       toolCall: {
-        name: CODEX_TOOL_NAME,
+        name: call.name,
         callId: call.call_id,
-        arguments: args as Record<string, unknown>
+        arguments: dispatch.workerArguments
       }
     };
   }
@@ -96,17 +125,22 @@ export class RegistryProviderToolExecutor implements ProviderToolExecutorPort {
 
 async function executeFunctionCall(call: ResponseFunctionCallItem, options: ProviderCompleteOptions) {
   try {
-    const executionMode = providerToolExecutionMode(call.name);
-    if (executionMode !== "inline") {
-      return {
-        ok: false,
-        error: executionMode ? `Tool ${call.name} is ${executionMode}.` : `Unsupported tool: ${call.name}`
-      };
-    }
+    const executionMode = providerToolExecutionMode(call.name, options);
+    if (!executionMode) return { ok: false, error: `Unsupported tool: ${call.name}` };
     const args = parseJson(call.arguments);
     if (!args || typeof args !== "object") {
       return { ok: false, error: `Invalid tool arguments for ${call.name}.` };
     }
+    if (executionMode === "deferred") {
+      const dispatch = readDeferredDispatchMessage(args as Record<string, unknown>, call.name);
+      return {
+        ok: false,
+        error: dispatch.ok
+          ? `Deferred tool ${call.name} must be called alone in a separate model response.`
+          : dispatch.error
+      };
+    }
+    if (executionMode !== "inline") return { ok: false, error: `Tool ${call.name} is ${executionMode}.` };
     const executor = inlineExecutors.get(call.name);
     if (!executor) return { ok: false, error: `Unsupported tool: ${call.name}` };
     return await executor(args as Record<string, unknown>, call, options);

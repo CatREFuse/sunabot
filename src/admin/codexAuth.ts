@@ -115,8 +115,7 @@ export class CodexAuthService {
     const cleanOutput = stripVTControlCharacters(this.output);
     const verificationUrl = cleanOutput.match(/https:\/\/[^\s]+(?:device|activate)[^\s]*/i)?.[0]
       ?? cleanOutput.match(/https:\/\/auth\.openai\.com\/[^\s]+/i)?.[0];
-    const userCode = cleanOutput.match(/\b[A-Z0-9]{4,}-[A-Z0-9]{4,}\b/i)?.[0]
-      ?? cleanOutput.match(/(?:code|代码)\s*[:：]?\s*([A-Z0-9]{4,})/i)?.[1];
+    const userCode = extractDeviceUserCode(cleanOutput);
     if (verificationUrl || userCode) {
       this.login = {
         ...this.login,
@@ -196,4 +195,17 @@ function safeMessage(message: string) {
 
 function trimPunctuation(value: string) {
   return value.replace(/[),.;]+$/, "");
+}
+
+function extractDeviceUserCode(output: string) {
+  const lines = output.split(/\r?\n/);
+  for (let index = 0; index < lines.length; index += 1) {
+    if (!/(?:enter(?:\s+this)?(?:\s+one-time)?\s+code|one-time\s+code|输入[^\r\n]{0,40}代码)/i.test(lines[index] ?? "")) continue;
+    const window = lines.slice(index, index + 4).join("\n");
+    const candidates = window.match(/\b[A-Z0-9]{6,12}\b|\b[A-Z0-9]{4,6}-[A-Z0-9]{4,6}\b/gi) ?? [];
+    const usable = candidates.filter((candidate) => !/^(?:MINUTES?|DEVICE|AUTHORIZATION|OPENAI|ENTERING)$/i.test(candidate));
+    const code = usable.find((candidate) => candidate.includes("-")) ?? usable.at(-1);
+    if (code) return code.toUpperCase();
+  }
+  return output.match(/(?:code|代码)\s*[:：]\s*([A-Z0-9]{6,12}|[A-Z0-9]{4,6}-[A-Z0-9]{4,6})\b/i)?.[1]?.toUpperCase();
 }

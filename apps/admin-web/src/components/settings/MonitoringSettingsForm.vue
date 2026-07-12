@@ -88,7 +88,7 @@ function errorMessage(reason: unknown, fallback: string) {
 </script>
 
 <template>
-  <section class="rounded-xl border border-visible bg-panel p-5">
+  <section class="border-y border-visible bg-panel py-5">
     <div class="flex flex-wrap items-start justify-between gap-4">
       <div>
         <p class="page-kicker">SERVICE MONITOR</p>

@@ -3,13 +3,14 @@ import { computed, nextTick, onBeforeUnmount, onMounted, shallowRef, useTemplate
 import { onBeforeRouteLeave, useRoute, useRouter } from "vue-router";
 import { useConfigWorkspace, sectionKeys } from "../composables/useConfigWorkspace";
 import { useModelCatalog } from "../composables/useModelCatalog";
+import { apiRequest } from "../composables/useAdminApi";
 import type { ConfigSectionKey } from "../types";
 import { focusConfigField } from "../utils/configFieldFocus";
 import PageHeader from "../components/ui/PageHeader.vue";
 import SettingsNavigation from "../components/settings/SettingsNavigation.vue";
 import SettingsSaveBar from "../components/settings/SettingsSaveBar.vue";
-import ServerSettingsForm from "../components/settings/ServerSettingsForm.vue";
 import PersonaSettingsForm from "../components/settings/PersonaSettingsForm.vue";
+import SelfieReferenceSettings from "../components/settings/SelfieReferenceSettings.vue";
 import ProviderSettings from "../components/settings/ProviderSettings.vue";
 import BotSettingsForm from "../components/settings/BotSettingsForm.vue";
 import MemorySettingsForm from "../components/settings/MemorySettingsForm.vue";
@@ -27,21 +28,24 @@ const catalog = useModelCatalog();
 const loadError = shallowRef("");
 const leaveConfirmOpen = shallowRef(false);
 const pendingLeavePath = shallowRef("");
+const logoutConfirmOpen = shallowRef(false);
+const loggingOut = shallowRef(false);
+const logoutError = shallowRef("");
 const settingsPanel = useTemplateRef<HTMLElement>("settingsPanel");
-const sections: Array<{ id: ConfigSectionKey; label: string; meta: string }> = [
-  { id: "server", label: "服务", meta: "01" },
-  { id: "persona", label: "Agent", meta: "02" },
-  { id: "providers", label: "Provider", meta: "03" },
-  { id: "bot", label: "Bot", meta: "04" },
-  { id: "memory", label: "记忆", meta: "05" },
-  { id: "orchestrator", label: "编排器", meta: "06" },
-  { id: "tools", label: "工具", meta: "07" },
-  { id: "bash", label: "Bash", meta: "08" },
-  { id: "onebot", label: "OneBot", meta: "09" }
+const sections: Array<{ id: ConfigSectionKey; label: string; group: string; icon: string }> = [
+  { id: "persona", label: "Agent 身份", group: "Agent", icon: "bx-user-voice" },
+  { id: "bot", label: "回复行为", group: "Agent", icon: "bx-bot" },
+  { id: "providers", label: "模型服务", group: "模型与记忆", icon: "bx-chip" },
+  { id: "memory", label: "记忆处理", group: "模型与记忆", icon: "bx-brain" },
+  { id: "orchestrator", label: "群聊编排", group: "模型与记忆", icon: "bx-git-branch" },
+  { id: "tools", label: "Agent 工具", group: "工具", icon: "bx-wrench" },
+  { id: "bash", label: "命令执行", group: "工具", icon: "bx-terminal" },
+  { id: "onebot", label: "连接与通知", group: "系统", icon: "bx-link" }
 ];
+const visibleSections = new Set(sections.map((section) => section.id));
 const current = computed<ConfigSectionKey>(() => {
-  const value = String(route.params.section ?? "server") as ConfigSectionKey;
-  return sectionKeys.includes(value) ? value : "server";
+  const value = String(route.params.section ?? "persona") as ConfigSectionKey;
+  return visibleSections.has(value) ? value : "persona";
 });
 const currentState = computed(() => workspace.state[current.value]);
 const anyDirty = computed(() => sectionKeys.some(workspace.isDirty));
@@ -123,6 +127,19 @@ function confirmLeave() {
   pendingLeavePath.value = "";
   if (path) void router.push(path);
 }
+
+async function logout() {
+  loggingOut.value = true;
+  logoutError.value = "";
+  try {
+    await apiRequest<void>("/api/auth/logout", { method: "POST" });
+    window.location.reload();
+  } catch (error) {
+    logoutError.value = error instanceof Error ? error.message : "退出失败";
+  } finally {
+    loggingOut.value = false;
+  }
+}
 </script>
 
 <template>
@@ -132,6 +149,7 @@ function confirmLeave() {
         <template #actions>
           <span v-if="workspace.envelope.value" class="font-mono text-[10px] text-mute">REV {{ workspace.envelope.value.revision.slice(0, 8) }}</span>
           <button class="btn" type="button" :disabled="workspace.loading.value" @click="loadConfig(true)">刷新</button>
+          <button class="btn btn-ghost" type="button" @click="logoutConfirmOpen = true"><i class="bx bx-log-out" aria-hidden="true"></i>退出登录</button>
         </template>
       </PageHeader>
 
@@ -140,8 +158,10 @@ function confirmLeave() {
       <div v-else class="mt-8 grid min-w-0 gap-8 lg:grid-cols-[176px_minmax(0,1fr)] xl:grid-cols-[208px_minmax(0,880px)] xl:gap-12">
         <SettingsNavigation :current="current" :sections="sections" :dirty="isNavigationDirty" @select="selectSection" />
         <section ref="settingsPanel" class="min-w-0">
-          <ServerSettingsForm v-if="current === 'server'" v-model="workspace.drafts.server" />
-          <PersonaSettingsForm v-else-if="current === 'persona'" v-model="workspace.drafts.persona" />
+          <div v-if="current === 'persona'" class="grid gap-12">
+            <PersonaSettingsForm v-model="workspace.drafts.persona" />
+            <SelfieReferenceSettings />
+          </div>
           <ProviderSettings
             v-else-if="current === 'providers'"
             v-model="workspace.drafts.providers"
@@ -194,6 +214,19 @@ function confirmLeave() {
       <div class="mt-8 flex flex-wrap justify-end gap-2">
         <button class="btn btn-ghost" type="button" @click="cancelLeave">继续编辑</button>
         <button class="btn btn-danger" type="button" @click="confirmLeave">放弃并离开</button>
+      </div>
+    </section>
+  </DialogOverlay>
+
+  <DialogOverlay :open="logoutConfirmOpen" labelledby="settings-logout-title" @close="logoutConfirmOpen = false">
+    <section class="w-full max-w-md rounded-2xl border border-visible bg-panel p-6">
+      <p class="page-kicker">ACCOUNT</p>
+      <h2 id="settings-logout-title" class="mt-2 text-xl font-medium text-display">退出管理台？</h2>
+      <p class="mt-3 text-sm leading-6 text-mute">下次访问需要重新登录。</p>
+      <p v-if="logoutError" class="mt-4 inline-state" data-kind="error">{{ logoutError }}</p>
+      <div class="mt-8 flex flex-wrap justify-end gap-2">
+        <button class="btn btn-ghost" type="button" :disabled="loggingOut" @click="logoutConfirmOpen = false">取消</button>
+        <button class="btn btn-danger" type="button" :disabled="loggingOut" @click="logout"><i class="bx bx-log-out" aria-hidden="true"></i>{{ loggingOut ? "正在退出" : "退出登录" }}</button>
       </div>
     </section>
   </DialogOverlay>

@@ -6,9 +6,11 @@ import { resolveProjectRoot, resolveWorkspace } from "../shared/paths.mjs";
 const root = resolveProjectRoot(import.meta.url);
 const workspace = resolveWorkspace(root, { requireExplicit: true });
 const port = Number(process.env.SUNABOT_SMOKE_PORT ?? "18877");
+const onebotPort = Number(process.env.SUNABOT_SMOKE_ONEBOT_PORT ?? String(port + 1));
 const host = "127.0.0.1";
 
 await assertPortFree(host, port);
+await assertPortFree(host, onebotPort);
 const child = spawn(process.execPath, [path.join(root, "dist/apps/api/main.js")], {
   cwd: root,
   stdio: ["ignore", "pipe", "pipe"],
@@ -18,6 +20,9 @@ const child = spawn(process.execPath, [path.join(root, "dist/apps/api/main.js")]
     NODE_ENV: "production",
     SUNABOT_HOST: host,
     SUNABOT_PORT: String(port),
+    SUNABOT_ONEBOT_HOST: host,
+    SUNABOT_ONEBOT_PORT: String(onebotPort),
+    ONEBOT_ACCESS_TOKEN: "sunabot-api-smoke-onebot-token",
     SUNABOT_WORKSPACE: workspace
   }
 });

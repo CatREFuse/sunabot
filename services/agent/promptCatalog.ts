@@ -20,14 +20,16 @@ const fragmentVariables = [
 ] as const;
 
 const conversationVariables = [
-  ...fragmentVariables,
   variable("runtime.output_rules", "最终回复的通用输出规则", "string", "运行时"),
   variable("runtime.address_rules", "根据管理员配置生成的称呼规则", "string", "运行时"),
   variable("runtime.scope_rules", "私聊、用户群聊和 Bot 群聊的处理规则", "string", "运行时"),
   variable("runtime.tool_rules", "图像与自拍工具的调用规则", "string", "运行时"),
   variable("messages_64", "当前消息之前最近最多 64 条会话消息", "message[]", "会话上下文"),
   variable("conversation.messages", "当前消息之前可直接发送给模型的会话消息", "message[]", "会话上下文"),
-  variable("user.input", "当前用户消息、召回记忆和附件正文组成的输入", "string", "当前请求")
+  variable("memory.working", "工作记忆召回结果", "string", "记忆召回"),
+  variable("memory.long_term", "长期记忆召回结果", "string", "记忆召回"),
+  variable("memory.user_profile", "用户画像召回结果", "string", "记忆召回"),
+  variable("user.input", "当前用户消息和附件正文组成的输入", "string", "当前请求")
 ] as const;
 
 export const PROMPT_FILE_DEFINITIONS = [
@@ -116,7 +118,23 @@ function final(
   fileName: (config: AppConfig) => string,
   variables: readonly PromptVariableDefinition[]
 ): PromptFileDefinition {
-  return { id, title, category, kind: "final", allowBlank: false, variables, fileName };
+  return {
+    id,
+    title,
+    category,
+    kind: "final",
+    allowBlank: false,
+    variables: mergeVariables(fragmentVariables, variables),
+    fileName
+  };
+}
+
+function mergeVariables(...groups: ReadonlyArray<readonly PromptVariableDefinition[]>) {
+  const values = new Map<string, PromptVariableDefinition>();
+  for (const group of groups) {
+    for (const item of group) values.set(item.name, item);
+  }
+  return [...values.values()];
 }
 
 function variable(

@@ -1,13 +1,18 @@
 <script setup lang="ts">
 import type { PromptVariableDefinition } from "../../types";
 
-defineProps<{ variables: readonly PromptVariableDefinition[] }>();
+const props = withDefaults(defineProps<{
+  variables: readonly PromptVariableDefinition[];
+  usedNames?: readonly string[];
+  fill?: boolean;
+}>(), { usedNames: () => [], fill: false });
 const emit = defineEmits<{ insert: [name: string] }>();
 const formatVariable = (name: string) => `@{${name}}`;
+const isUsed = (name: string) => props.usedNames.includes(name);
 </script>
 
 <template>
-  <div class="variable-context">
+  <div class="variable-context" :class="{ 'variable-context--fill': fill }">
     <div class="variable-context__heading">
       <span>可用变量</span>
       <span>{{ variables.length }}</span>
@@ -17,11 +22,12 @@ const formatVariable = (name: string) => `@{${name}}`;
         v-for="variable in variables"
         :key="variable.name"
         class="variable-context__row"
+        :class="{ 'variable-context__row--used': isUsed(variable.name) }"
         type="button"
         :title="`插入 @{${variable.name}}`"
         @click="emit('insert', variable.name)"
       >
-        <code>{{ formatVariable(variable.name) }}</code>
+        <code><i v-if="isUsed(variable.name)" class="bx bx-check-circle" aria-hidden="true"></i>{{ formatVariable(variable.name) }}</code>
         <span>{{ variable.description }}</span>
         <small>{{ variable.source }}</small>
       </button>
@@ -36,6 +42,8 @@ const formatVariable = (name: string) => `@{${name}}`;
   border-top: 1px solid rgb(var(--color-line));
   background: rgb(var(--color-raised));
 }
+
+.variable-context--fill { display: flex; min-height: 0; flex-direction: column; }
 
 .variable-context__heading {
   display: flex;
@@ -52,6 +60,8 @@ const formatVariable = (name: string) => `@{${name}}`;
   overflow-y: auto;
   border-top: 1px solid rgb(var(--color-line));
 }
+
+.variable-context--fill .variable-context__table { min-height: 0; max-height: none; flex: 1; }
 
 .variable-context__row {
   display: grid;
@@ -70,6 +80,9 @@ const formatVariable = (name: string) => `@{${name}}`;
 .variable-context__row:focus-visible {
   background: rgb(var(--color-panel));
 }
+
+.variable-context__row--used { background: rgb(var(--color-success) / 0.09); }
+.variable-context__row--used code { color: rgb(var(--color-success)); }
 
 .variable-context__row code {
   overflow: hidden;

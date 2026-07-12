@@ -5,6 +5,7 @@ import ToolsSettingsForm from "./ToolsSettingsForm.vue";
 
 function toolsDraft(): BotToolSettingsDraft {
   return {
+    maxCalls: 20,
     websearch: {
       provider: "tavily",
       tavilyApiKey: "",

@@ -1,37 +1,29 @@
 <script setup lang="ts">
-import { Bot, Brain, Image, LogOut, Menu, MessageSquare, Monitor, Moon, Settings, SlidersHorizontal, Sun, X } from "lucide-vue-next";
-import { computed, shallowRef, type Component } from "vue";
+import { computed, shallowRef } from "vue";
 import { useRoute } from "vue-router";
 import { useTheme, type ThemePreference } from "../../composables/useTheme";
-import { useAdminApi } from "../../composables/useAdminApi";
 import DialogOverlay from "../ui/DialogOverlay.vue";
 
 const route = useRoute();
 const moreOpen = shallowRef(false);
-const primary: Array<{ to: string; label: string; icon: Component }> = [
-  { to: "/overview", label: "状态", icon: SlidersHorizontal },
-  { to: "/conversations", label: "会话", icon: MessageSquare },
-  { to: "/prompts", label: "提示词", icon: Bot },
-  { to: "/settings", label: "设置", icon: Settings }
+const primary: Array<{ to: string; label: string; icon: string }> = [
+  { to: "/overview", label: "状态", icon: "bx-pulse" },
+  { to: "/conversations", label: "会话", icon: "bx-message-square-dots" },
+  { to: "/prompts", label: "提示词", icon: "bx-bot" },
+  { to: "/settings", label: "设置", icon: "bx-cog" }
 ];
-const moreItems: Array<{ to: string; label: string; description: string; icon: Component }> = [
-  { to: "/memory", label: "记忆", description: "检索与维护六类记忆", icon: Brain },
-  { to: "/images", label: "图像", description: "查看图像历史", icon: Image }
+const moreItems: Array<{ to: string; label: string; description: string; icon: string }> = [
+  { to: "/memory", label: "记忆", description: "检索与维护记忆", icon: "bx-brain" },
+  { to: "/images", label: "图像", description: "查看图像历史", icon: "bx-image" },
+  { to: "/logs", label: "日志", description: "活动终端与请求日志", icon: "bx-terminal" }
 ];
-const themeItems: Array<{ id: ThemePreference; label: string; icon: Component }> = [
-  { id: "light", label: "浅色", icon: Sun },
-  { id: "dark", label: "深色", icon: Moon },
-  { id: "system", label: "系统", icon: Monitor }
+const themeItems: Array<{ id: ThemePreference; label: string; icon: string }> = [
+  { id: "light", label: "浅色", icon: "bx-sun" },
+  { id: "dark", label: "深色", icon: "bx-moon" },
+  { id: "system", label: "系统", icon: "bx-desktop" }
 ];
-const moreActive = computed(() => route.path.startsWith("/memory") || route.path.startsWith("/images"));
+const moreActive = computed(() => ["/memory", "/images", "/logs"].some((path) => route.path.startsWith(path)));
 const theme = useTheme();
-const api = useAdminApi();
-
-async function logout() {
-  moreOpen.value = false;
-  await api.logout();
-  window.location.reload();
-}
 </script>
 
 <template>
@@ -43,11 +35,11 @@ async function logout() {
       class="flex min-w-0 flex-col items-center justify-center gap-1 font-mono text-[10px] uppercase tracking-[0.04em] text-disabled"
       active-class="!text-display"
     >
-      <component :is="item.icon" :size="20" :stroke-width="1.5" aria-hidden="true" />
+      <i class="bx text-xl" :class="item.icon" aria-hidden="true"></i>
       <span>{{ item.label }}</span>
     </RouterLink>
     <button class="flex min-w-0 flex-col items-center justify-center gap-1 font-mono text-[10px] uppercase tracking-[0.04em]" :class="moreActive || moreOpen ? 'text-display' : 'text-disabled'" type="button" @click="moreOpen = true">
-      <Menu :size="20" :stroke-width="1.5" aria-hidden="true" />
+      <i class="bx bx-menu text-xl" aria-hidden="true"></i>
       <span>更多</span>
     </button>
   </nav>
@@ -58,7 +50,7 @@ async function logout() {
       <div class="mb-4 flex items-center justify-between">
         <h2 id="mobile-more-title" class="text-xl font-medium text-display">更多</h2>
         <button class="icon-btn" type="button" aria-label="关闭" @click="moreOpen = false">
-          <X :size="20" :stroke-width="1.5" aria-hidden="true" />
+          <i class="bx bx-x text-2xl" aria-hidden="true"></i>
         </button>
       </div>
       <RouterLink
@@ -68,7 +60,7 @@ async function logout() {
         class="flex min-h-16 items-center gap-4 border-t border-line px-1 text-ink first:border-t-0"
         @click="moreOpen = false"
       >
-        <component :is="item.icon" :size="22" :stroke-width="1.5" class="text-mute" aria-hidden="true" />
+        <i class="bx text-2xl text-mute" :class="item.icon" aria-hidden="true"></i>
         <span class="min-w-0">
           <strong class="block font-normal text-display">{{ item.label }}</strong>
           <small class="block text-xs text-mute">{{ item.description }}</small>
@@ -85,14 +77,11 @@ async function logout() {
             type="button"
             @click="theme.setTheme(item.id)"
           >
-            <component :is="item.icon" :size="17" :stroke-width="1.5" aria-hidden="true" />
+            <i class="bx text-lg" :class="item.icon" aria-hidden="true"></i>
             <span>{{ item.label }}</span>
           </button>
         </div>
       </div>
-      <button class="mt-4 flex min-h-11 w-full items-center justify-center gap-2 rounded-lg border border-visible font-mono text-xs text-mute" type="button" @click="logout">
-        <LogOut :size="17" />退出登录
-      </button>
     </section>
   </DialogOverlay>
 </template>

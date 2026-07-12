@@ -45,17 +45,31 @@ describe("CodexAuthService", () => {
   it("parses the current Codex CLI multiline device-code format", async () => {
     const { service } = await fixture();
     (service as unknown as { consumeOutput(value: string): void }).consumeOutput([
+      "Welcome to Codex [v0.139.0]",
+      "OpenAI's command-line coding agent",
+      "",
       "Follow these steps to sign in with ChatGPT using device code authorization:",
       "1. Open https://auth.openai.com/codex/device",
       "2. Enter this one-time code (expires in 15 minutes)",
-      "   023I-B7M4K"
+      "   158E-8N34D"
     ].join("\n"));
     const snapshot = await service.status();
     expect(snapshot.login).toMatchObject({
       state: "waiting",
       verificationUrl: "https://auth.openai.com/codex/device",
-      userCode: "023I-B7M4K"
+      userCode: "158E-8N34D"
     });
+    expect(snapshot.login.userCode).not.toBe("command-line");
+  });
+
+  it("parses a device code without a hyphen", async () => {
+    const { service } = await fixture();
+    (service as unknown as { consumeOutput(value: string): void }).consumeOutput([
+      "Open https://auth.openai.com/codex/device",
+      "Enter this one-time code",
+      "AB12CD34"
+    ].join("\n"));
+    expect((await service.status()).login.userCode).toBe("AB12CD34");
   });
 });
 

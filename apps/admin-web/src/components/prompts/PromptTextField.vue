@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, shallowRef, useTemplateRef } from "vue";
 import type { PromptVariableDefinition } from "../../types";
+import { usedPromptVariableNames } from "../../utils/promptVariables";
 import PromptVariableTable from "./PromptVariableTable.vue";
 
 const model = defineModel<string>({ required: true });
@@ -10,10 +11,12 @@ const props = withDefaults(defineProps<{
   minHeight?: string;
   fill?: boolean;
   showVariables?: boolean;
+  semanticXml?: boolean;
 }>(), {
   minHeight: "160px",
   fill: false,
-  showVariables: true
+  showVariables: true,
+  semanticXml: false
 });
 
 const textarea = useTemplateRef<HTMLTextAreaElement>("textarea");
@@ -28,7 +31,16 @@ const suggestions = computed(() => {
   return matches.slice(0, 8);
 });
 const suggestionsOpen = computed(() => replaceStart.value >= 0 && suggestions.value.length > 0);
+const usedNames = computed(() => usedPromptVariableNames(model.value, props.variables));
 const formatVariable = (name: string) => `@{${name}}`;
+
+function variableToken(name: string) {
+  const token = formatVariable(name);
+  if (!props.semanticXml) return token;
+  const normalized = name.replace(/[^A-Za-z0-9_-]+/g, "_");
+  const tag = /^[A-Za-z_]/.test(normalized) ? normalized : `variable_${normalized}`;
+  return `<${tag}>${token}</${tag}>`;
+}
 
 function onInput(event: Event) {
   model.value = (event.target as HTMLTextAreaElement).value;
@@ -81,7 +93,7 @@ function insertVariable(name: string) {
   if (!target) return;
   const start = replaceStart.value >= 0 ? replaceStart.value : target.selectionStart;
   const end = target.selectionStart;
-  const token = `@{${name}}`;
+  const token = variableToken(name);
   model.value = `${model.value.slice(0, start)}${token}${model.value.slice(end)}`;
   closeSuggestions();
   void focusAt(start + token.length);
@@ -145,7 +157,7 @@ function onBlur() {
         </button>
       </div>
     </div>
-    <PromptVariableTable v-if="showVariables" :variables="variables" @insert="insertVariable" />
+    <PromptVariableTable v-if="showVariables" :variables="variables" :used-names="usedNames" :fill="fill" @insert="insertVariable" />
   </div>
 </template>
 
@@ -158,21 +170,24 @@ function onBlur() {
   background: rgb(var(--color-panel));
 }
 
-.prompt-field--fill,
 .prompt-field--fill .prompt-field__editor,
 .prompt-field--fill .prompt-field__textarea {
   min-height: 0;
-  flex: 1;
 }
 
 .prompt-field--fill {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  min-height: 0;
+  flex: 1;
+  grid-template-rows: minmax(180px, 3fr) minmax(160px, 2fr);
 }
 
 .prompt-field--fill .prompt-field__editor {
   display: flex;
+  overflow: hidden;
 }
+
+.prompt-field--fill .prompt-field__textarea { resize: none; }
 
 .prompt-field__editor {
   position: relative;
@@ -194,7 +209,8 @@ function onBlur() {
 }
 
 .prompt-field__textarea:focus {
-  box-shadow: inset 0 0 0 1px rgb(var(--color-display));
+  outline: 1px solid rgb(var(--color-display));
+  outline-offset: -1px;
 }
 
 .prompt-field__suggestions {
@@ -208,7 +224,6 @@ function onBlur() {
   border: 1px solid rgb(var(--color-visible));
   border-radius: 8px;
   background: rgb(var(--color-panel));
-  box-shadow: 0 16px 40px rgb(0 0 0 / 0.18);
 }
 
 .prompt-field__suggestion {

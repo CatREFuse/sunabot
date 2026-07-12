@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { OpenAIProvider } from "../../../adapters/model/openaiProvider.js";
+import { discoverProviderModels, probeProviderMultimodal } from "../../../adapters/model/providerDiscovery.js";
 import { ConfigService, validateProviderDraft } from "../../../src/admin/configService.js";
 import type { CodexAuthService } from "../../../src/admin/codexAuth.js";
 import { AdminApiError, badRequest } from "../../../src/admin/errors.js";
@@ -7,11 +8,15 @@ import { IMAGE_MODEL_CATALOG, MODEL_CATALOG, REASONING_EFFORTS } from "../../../
 import type { ProviderConfig } from "../../../src/types.js";
 
 export type ProviderTestRunner = (provider: ProviderConfig) => Promise<Record<string, unknown>>;
+export type ProviderModelsRunner = (provider: ProviderConfig) => Promise<string[]>;
+export type ProviderVisionProbeRunner = (provider: ProviderConfig) => Promise<{ multimodal: boolean; reason?: string }>;
 
 export interface ProviderConfigRouteOptions {
   codexAuth: Pick<CodexAuthService, "status" | "startLogin" | "logout">;
   configService: Pick<ConfigService, "readEnvelope" | "patchGroupReply" | "patch">;
   testProvider?: ProviderTestRunner;
+  listProviderModels?: ProviderModelsRunner;
+  probeProviderVision?: ProviderVisionProbeRunner;
 }
 
 const openObject = { type: "object", additionalProperties: true } as const;
@@ -86,6 +91,14 @@ export function registerProviderConfigRoutes(
         error instanceof Error ? error.message : String(error)
       );
     }
+    if (provider.multimodal === "auto") {
+      try {
+        const vision = await (options.probeProviderVision ?? probeProviderMultimodal)(provider);
+        result = { ...result, multimodal: vision.multimodal, ...(vision.reason ? { visionReason: vision.reason } : {}) };
+      } catch (error) {
+        result = { ...result, multimodal: false, visionReason: error instanceof Error ? error.message : String(error) };
+      }
+    }
     const elapsedMs = Math.max(0, Math.round(performance.now() - started));
     return {
       ...result,
@@ -94,4 +107,31 @@ export function registerProviderConfigRoutes(
       elapsedMs
     };
   });
+
+  app.post("/api/providers/models", {
+    schema: { body: passthroughBody, response: { 200: openObject } }
+  }, async (request) => {
+    const provider = providerFromBody(request.body, "PROVIDER_MODELS_INVALID");
+    try {
+      const models = await (options.listProviderModels ?? discoverProviderModels)(provider);
+      return { ok: true, models };
+    } catch (error) {
+      throw new AdminApiError(422, "PROVIDER_MODELS_FAILED", error instanceof Error ? error.message : String(error));
+    }
+  });
+
+  app.post("/api/providers/vision-probe", {
+    schema: { body: passthroughBody, response: { 200: openObject } }
+  }, async (request) => {
+    const provider = providerFromBody(request.body, "PROVIDER_VISION_INVALID");
+    const result = await (options.probeProviderVision ?? probeProviderMultimodal)(provider);
+    return { ok: true, ...result };
+  });
+}
+
+function providerFromBody(body: unknown, code: string) {
+  if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).some((key) => key !== "provider")) {
+    badRequest(code, "请求体必须只包含 provider。", "provider");
+  }
+  return validateProviderDraft((body as { provider?: unknown }).provider);
 }

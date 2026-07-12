@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, shallowRef, watch } from "vue";
-import { ListPlus, Plus, TestTube2 } from "lucide-vue-next";
 import type { PromptVariableDefinition } from "../../types";
 import {
   isRecord,
@@ -16,7 +15,7 @@ import FinalPromptWorkspace, { type FinalPromptWorkspaceSection } from "./FinalP
 import FunctionCallEditor from "./FunctionCallEditor.vue";
 
 const model = defineModel<string>({ required: true });
-const props = defineProps<{ variables: readonly PromptVariableDefinition[] }>();
+const props = withDefaults(defineProps<{ variables: readonly PromptVariableDefinition[]; semanticXml?: boolean }>(), { semanticXml: false });
 const parsed = computed(() => parseFinalPromptDocument(model.value));
 const messageGroupVariables = computed(() => props.variables.filter((variable) => variable.type === "message[]"));
 const schemaText = shallowRef("");
@@ -191,7 +190,7 @@ function updateSchema(value: string) {
           :title="validationMessage"
         >{{ validationLabel }} {{ validationMessage }}</span>
         <button class="btn btn-ghost final-form__toolbar-button" type="button" aria-label="添加普通消息" @click="addMessage">
-          <Plus :size="16" :stroke-width="1.5" aria-hidden="true" />
+          <i class="bx bx-plus" aria-hidden="true"></i>
           <span class="final-form__action-label">添加消息</span>
         </button>
         <button
@@ -201,11 +200,11 @@ function updateSchema(value: string) {
           :disabled="!messageGroupVariables.length"
           @click="addMessageGroup"
         >
-          <ListPlus :size="16" :stroke-width="1.5" aria-hidden="true" />
+          <i class="bx bx-list-plus" aria-hidden="true"></i>
           <span class="final-form__action-label">添加消息组</span>
         </button>
         <button class="btn btn-ghost final-form__toolbar-button" type="button" aria-label="测试 OpenAI 格式" @click="testTemplate">
-          <TestTube2 :size="16" :stroke-width="1.5" aria-hidden="true" />
+          <i class="bx bx-test-tube" aria-hidden="true"></i>
           <span class="final-form__action-label">测试</span>
         </button>
       </template>
@@ -222,6 +221,7 @@ function updateSchema(value: string) {
           :index="section.index"
           :total="parsed.document.messages.length"
           :variables="variables"
+          :semantic-xml="semanticXml"
           @update="updateMessage(section.index, $event)"
           @move="moveMessage(section.index, $event)"
           @remove="removeMessage(section.index)"
@@ -293,7 +293,7 @@ function updateSchema(value: string) {
               <h3>{{ section.label }}</h3>
             </div>
             <button class="btn btn-ghost" type="button" @click="addTool">
-              <Plus :size="16" :stroke-width="1.5" aria-hidden="true" />
+              <i class="bx bx-plus" aria-hidden="true"></i>
               添加 Function
             </button>
           </header>

@@ -122,7 +122,8 @@ export async function runtime_sendAssistantReply(this: RuntimeHost,
     generatedImages: ImageResult[] = [],
     logRunId?: string,
     isCurrent: () => boolean = () => true,
-    delivery?: ReplyDelivery
+    delivery?: ReplyDelivery,
+    quoteReply = true
   ) {
     if (!this.isReplySenderAllowed(incoming.userId) || !isCurrent()) return undefined;
     const beforeReply = await this.hooks.run("before_reply", {
@@ -144,7 +145,9 @@ export async function runtime_sendAssistantReply(this: RuntimeHost,
         replyText,
         isAdmin,
         generatedImageAssets,
-        logRunId
+        logRunId,
+        undefined,
+        quoteReply
       ));
       return undefined;
     }
@@ -153,7 +156,7 @@ export async function runtime_sendAssistantReply(this: RuntimeHost,
       incoming,
       replyText,
       generatedImageAssets,
-      this.groupReplyOptions(incoming).replyToMessageId
+      quoteReply ? this.groupReplyOptions(incoming).replyToMessageId : undefined
     ));
 
     const record = this.recordAssistantMessage(incoming, replyText || "[图片]", generatedImageUrls, logRunId);
@@ -193,7 +196,8 @@ export function runtime_replyDeliveryDraft(this: RuntimeHost,
     isAdmin: boolean,
     generatedImages: ImageResult[] = [],
     logRunId?: string,
-    dedupeKey?: string
+    dedupeKey?: string,
+    quoteReply = true
   ): ReplyDeliveryDraft {
     return {
       kind: "onebot.reply",
@@ -203,6 +207,7 @@ export function runtime_replyDeliveryDraft(this: RuntimeHost,
         text,
         generatedImages,
         isAdmin,
+        quoteReply,
         logRunId
       }, {
         conversationId: conversationRecordId(incoming),
@@ -220,7 +225,7 @@ export async function runtime_deliverReplyOutbox(this: RuntimeHost, payload: Ass
       incoming,
       payload.text,
       generatedImageAssets,
-      this.groupReplyOptions(incoming).replyToMessageId
+      payload.quoteReply === false ? undefined : this.groupReplyOptions(incoming).replyToMessageId
     ));
 
     const record = this.recordAssistantMessage(

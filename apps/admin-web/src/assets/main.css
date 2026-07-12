@@ -155,7 +155,7 @@
   }
 
   .page-title {
-    @apply mt-2 font-display text-[36px] font-semibold leading-[1.02] tracking-[-0.02em] text-display md:text-[48px];
+    @apply mt-2 font-display text-[32px] font-semibold leading-[1.05] tracking-[-0.02em] text-display md:text-[40px];
   }
 
   .page-intro {

@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import { ArrowLeft, ArrowRight, Trash2 } from "lucide-vue-next";
 import type { PromptVariableDefinition } from "../../types";
 import {
   messageGroupToken,
@@ -14,6 +13,7 @@ const props = defineProps<{
   index: number;
   total: number;
   variables: readonly PromptVariableDefinition[];
+  semanticXml?: boolean;
 }>();
 const emit = defineEmits<{
   update: [message: PromptMessage | string];
@@ -71,13 +71,13 @@ function onDragHandleKeydown(event: KeyboardEvent) {
       </div>
       <div class="message-slot__actions">
         <button class="icon-btn message-slot__move-button" type="button" :disabled="index === 0" :aria-label="`前移消息 ${index + 1}`" @click="emit('move', -1)">
-          <ArrowLeft :size="17" :stroke-width="1.5" aria-hidden="true" />
+          <i class="bx bx-left-arrow-alt text-lg" aria-hidden="true"></i>
         </button>
         <button class="icon-btn message-slot__move-button" type="button" :disabled="index === total - 1" :aria-label="`后移消息 ${index + 1}`" @click="emit('move', 1)">
-          <ArrowRight :size="17" :stroke-width="1.5" aria-hidden="true" />
+          <i class="bx bx-right-arrow-alt text-lg" aria-hidden="true"></i>
         </button>
         <button class="icon-btn" type="button" :aria-label="`删除消息 ${index + 1}`" @click="emit('remove')">
-          <Trash2 :size="17" :stroke-width="1.5" aria-hidden="true" />
+          <i class="bx bx-trash text-lg" aria-hidden="true"></i>
         </button>
       </div>
     </header>
@@ -112,6 +112,8 @@ function onDragHandleKeydown(event: KeyboardEvent) {
         :variables="variables"
         :label="`${message.role} 提示词`"
         min-height="260px"
+        fill
+        :semantic-xml="semanticXml"
         @update:model-value="updateContent"
       />
     </div>
@@ -120,7 +122,10 @@ function onDragHandleKeydown(event: KeyboardEvent) {
 
 <style scoped>
 .message-slot {
+  display: flex;
+  height: 100%;
   min-width: 0;
+  flex-direction: column;
 }
 
 .message-slot__header {
@@ -182,6 +187,8 @@ function onDragHandleKeydown(event: KeyboardEvent) {
   gap: 16px;
 }
 
+.message-slot__message { min-height: 0; flex: 1; grid-template-rows: auto minmax(0, 1fr); }
+
 .message-slot__role {
   width: min(220px, 100%);
 }
@@ -241,7 +248,8 @@ function onDragHandleKeydown(event: KeyboardEvent) {
   }
 
   .message-slot__drag-handle:focus-visible {
-    box-shadow: inset 0 0 0 2px rgb(var(--color-display));
+    outline: 2px solid rgb(var(--color-display));
+    outline-offset: -2px;
   }
 
   .message-slot__move-button {

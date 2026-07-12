@@ -30,8 +30,8 @@ export async function generateProviderImage(
   referenceImageUrls: string[] = [],
   logContext?: ProviderLogContext
 ): Promise<ImageResult> {
-  if (context.provider.kind === "gemini-openai" || context.provider.kind === "anthropic-openai") {
-    throw new Error("当前兼容 Provider 仅支持 Chat Completions；请为生图选择 OpenAI Responses 或 Codex Provider。");
+  if (context.provider.kind !== "openai-official" && context.provider.kind !== "codex-responses") {
+    throw new Error("当前 Provider 不支持 Responses 图像生成；请使用 OpenAI 官方或 Codex 订阅。");
   }
   const imageModel = context.provider.imageModel?.trim() || DEFAULT_IMAGE_MODEL;
   const imageSize = normalizeImageSize(size);

@@ -1,4 +1,5 @@
 import {
+  assistantTextTool,
   codexTool,
   generateImgTool,
   memoryRecallTool,
@@ -6,6 +7,7 @@ import {
   websearchTool,
   workspaceBashTool
 } from "../tools/public.js";
+import { withRequiredDispatchMessage } from "../tools/deferredDispatch.js";
 import type { FinalPromptTemplate, OpenAIToolDefinition } from "./promptSystem.js";
 
 export const DEFAULT_WORK_MEMORY_COMPRESS_IN_PROMPT = [
@@ -169,9 +171,25 @@ export function defaultFinalPromptTemplate(id: string): FinalPromptTemplate | un
           ].join("\n\n")
         },
         "@{messages_64}",
-        { role: "user", content: "@{user.input}" }
+        {
+          role: "user",
+          content: [
+            "<working_memory>@{memory.working}</working_memory>",
+            "<long_term_memory>@{memory.long_term}</long_term_memory>",
+            "<user_profile>@{memory.user_profile}</user_profile>",
+            "<current_input>@{user.input}</current_input>"
+          ].join("\n\n")
+        }
       ],
-      tools: [workspaceBashTool, websearchTool, generateImgTool, selfieTool, memoryRecallTool, codexTool].map(toOpenAITool),
+      tools: [
+        assistantTextTool,
+        workspaceBashTool,
+        websearchTool,
+        withRequiredDispatchMessage(generateImgTool),
+        withRequiredDispatchMessage(selfieTool),
+        memoryRecallTool,
+        withRequiredDispatchMessage(codexTool)
+      ].map(toOpenAITool),
       response_format: JSON_TEXT_FORMAT
     };
   }

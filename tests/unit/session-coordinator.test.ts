@@ -135,6 +135,7 @@ describe("SessionCoordinator", () => {
           return {
             status: "deferred",
             providerCallId: "call-codex-1",
+            toolName: "codex",
             arguments: { task: "perform deep research", kind: "research" },
             originalRequest: event.payload,
             acknowledgement: { kind: "reply", payload: { text: "task started" } }
@@ -216,6 +217,7 @@ describe("SessionCoordinator", () => {
         return {
           status: "deferred",
           providerCallId: "call-failure",
+          toolName: "codex",
           arguments: { task: "long analysis", kind: "analysis" },
           originalRequest: event.payload,
           acknowledgement: { kind: "reply", payload: { text: "started" } }
@@ -544,6 +546,7 @@ describe("SessionCoordinator", () => {
         return {
           status: "deferred",
           providerCallId: `call:${payload.task}`,
+          toolName: "codex",
           arguments: payload,
           originalRequest: payload,
           acknowledgement: { kind: "reply", payload: { text: `started:${payload.task}` } }
@@ -570,6 +573,41 @@ describe("SessionCoordinator", () => {
     await coordinator.waitForIdle();
     expect(starts).toEqual(["local one", "research", "local two"]);
   });
+
+  it("persists an image dispatch, acknowledges immediately, and completes it through the generic tool runner", async () => {
+    const store = trackStore(new SessionStore({ databasePath: ":memory:" }));
+    const runDeferredTool = vi.fn(async () => ({
+      status: "succeeded" as const,
+      result: { ok: true, image: { url: "/generated-images/async.png" } }
+    }));
+    const deliveries: string[] = [];
+    const coordinator = trackCoordinator(createCoordinator({
+      store,
+      runDeferredTool,
+      handleEvent: (event) => event.kind === "tool_completion"
+        ? completedReply("image completed")
+        : {
+            status: "deferred",
+            providerCallId: "call-image-1",
+            toolName: "generate_img",
+            arguments: { prompt: "月球基地" },
+            originalRequest: event.payload,
+            acknowledgement: { kind: "reply", payload: { text: "image queued" } }
+          },
+      deliverOutbox: (outbox) => deliveries.push((outbox.payload as { text: string }).text)
+    }));
+
+    coordinator.resume();
+    coordinator.enqueueEvent({ sessionId: "private:image", kind: "incoming", payload: { text: "draw" } });
+    await coordinator.waitForIdle();
+
+    expect(deliveries).toEqual(["image queued", "image completed"]);
+    expect(runDeferredTool).toHaveBeenCalledOnce();
+    expect(store.listToolJobs("private:image")[0]).toMatchObject({
+      toolName: "generate_img",
+      status: "succeeded"
+    });
+  });
 });
 
 interface CoordinatorHarnessOptions {
@@ -582,6 +620,7 @@ interface CoordinatorHarnessOptions {
   outboxDisconnectedProbeDelayMs?: number;
   codexMaxConcurrency?: number;
   cleanupCodexProcess?: ConstructorParameters<typeof SessionCoordinator>[0]["cleanupCodexProcess"];
+  runDeferredTool?: ConstructorParameters<typeof SessionCoordinator>[0]["runDeferredTool"];
 }
 
 function createCoordinator(options: CoordinatorHarnessOptions) {
@@ -606,6 +645,7 @@ function createCoordinator(options: CoordinatorHarnessOptions) {
     outboxDisconnectedProbeDelayMs: options.outboxDisconnectedProbeDelayMs,
     maxOutboxAttempts: options.maxOutboxAttempts,
     cleanupCodexProcess: options.cleanupCodexProcess,
+    runDeferredTool: options.runDeferredTool,
     leaseMs: 1_000
   });
 }

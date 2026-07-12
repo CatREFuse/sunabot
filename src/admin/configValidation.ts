@@ -21,6 +21,12 @@ const OPTIONAL_KEYS = new Set([
   "baseUrl",
   "envFile",
   "reasoningEffort",
+  "modelSource",
+  "multimodal",
+  "detectedMultimodal",
+  "visionProviderId",
+  "visionModel",
+  "maxCalls",
   "clearTavilyApiKey",
   "removeTavilyApiKeyIndexes"
 ]);

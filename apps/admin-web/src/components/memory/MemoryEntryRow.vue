@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { Pencil, Trash2 } from "lucide-vue-next";
 import { computed } from "vue";
 import { formatFullDateTime } from "../../utils/format";
 import { qqAvatarUrl } from "../../utils/qqIdentity";
@@ -54,8 +53,8 @@ function formatMemoryTime(value: string) {
     </div>
 
     <div v-if="entry.editable" class="flex items-center justify-end gap-2">
-      <button class="icon-btn" type="button" aria-label="编辑记忆" @click="emit('edit', entry)"><Pencil :size="16" :stroke-width="1.5" /></button>
-      <button class="btn px-3" :class="pendingDelete ? 'btn-danger' : 'btn-ghost'" type="button" @click="emit('remove', entry)"><Trash2 :size="15" :stroke-width="1.5" />{{ pendingDelete ? "确认删除" : "删除" }}</button>
+      <button class="icon-btn" type="button" aria-label="编辑记忆" @click="emit('edit', entry)"><i class="bx bx-edit text-lg" aria-hidden="true"></i></button>
+      <button class="btn px-3" :class="pendingDelete ? 'btn-danger' : 'btn-ghost'" type="button" @click="emit('remove', entry)"><i class="bx bx-trash" aria-hidden="true"></i>{{ pendingDelete ? "确认删除" : "删除" }}</button>
     </div>
   </article>
 </template>

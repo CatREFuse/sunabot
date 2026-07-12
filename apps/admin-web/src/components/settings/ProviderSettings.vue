@@ -1,12 +1,13 @@
 <script setup lang="ts">
-import { Copy, Plus, Trash2 } from "lucide-vue-next";
-import { computed, shallowRef, toRaw, watch } from "vue";
+import { computed, reactive, shallowRef, toRaw, watch } from "vue";
 import { apiRequest } from "../../composables/useAdminApi";
 import type { ConfigSectionValueMap, ModelCatalogItem, ProviderConfig } from "../../types";
 import ToggleSwitch from "../ui/ToggleSwitch.vue";
 import ModelSelect from "./ModelSelect.vue";
 import ReasoningEffortSelect from "./ReasoningEffortSelect.vue";
 import CodexSubscriptionAuth from "./CodexSubscriptionAuth.vue";
+import ProviderCreateDialog from "./ProviderCreateDialog.vue";
+import { compatibleProvider, providerPreset, providerType, type ProviderKind } from "./providerPresets";
 
 const draft = defineModel<ConfigSectionValueMap["providers"]>({ required: true });
 const props = defineProps<{ models: readonly ModelCatalogItem[]; fieldStates?: Record<string, { secretConfigured?: boolean }> }>();
@@ -14,78 +15,76 @@ const selectedIndex = shallowRef(0);
 const status = shallowRef("");
 const statusKind = shallowRef<"" | "success" | "error" | "warning">("");
 const testing = shallowRef(false);
-const imageChoice = shallowRef("catalog");
+const loadingModels = shallowRef(false);
+const probingVision = shallowRef(false);
+const createOpen = shallowRef(false);
+const discoveredModels = reactive<Record<string, string[]>>({});
 const providerLimitReached = computed(() => draft.value.items.length >= 64);
 const current = computed(() => draft.value.items[selectedIndex.value]);
+const currentType = computed(() => current.value ? providerType(current.value.kind) : null);
 const enabledProviders = computed(() => draft.value.items.filter((provider) => provider.enabled));
+const visionProviders = computed(() => draft.value.items.filter((provider) => provider.enabled
+  && provider.id !== current.value?.id
+  && provider.multimodal !== "disabled"
+  && !(provider.multimodal === "auto" && provider.detectedMultimodal === false)));
 const secretConfigured = computed(() => {
   const provider = current.value;
-  if (!provider) return undefined;
-  return props.fieldStates?.[`providers.items.${provider.id}.apiKeyEnv`]?.secretConfigured;
+  return provider ? props.fieldStates?.[`providers.items.${provider.id}.apiKeyEnv`]?.secretConfigured : undefined;
+});
+const effectiveNonVision = computed(() => current.value?.multimodal === "disabled"
+  || (current.value?.multimodal === "auto" && current.value.detectedMultimodal === false));
+const remoteModelItems = computed<ModelCatalogItem[]>(() => {
+  const provider = current.value;
+  if (!provider) return [];
+  const ids = discoveredModels[provider.id]
+    ?? (provider.kind === "codex-responses" ? props.models.map((model) => model.id) : [provider.model]);
+  return [...new Set(ids.filter(Boolean))].map((id) => props.models.find((model) => model.id === id) ?? ({
+    id,
+    label: id,
+    defaultReasoningEffort: "medium",
+    supportedReasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
+  }));
 });
 
-watch(
-  () => draft.value.items.length,
-  (length) => {
-    if (selectedIndex.value >= length) selectedIndex.value = Math.max(0, length - 1);
-  }
-);
-watch(() => current.value?.imageModel, (value) => (imageChoice.value = value === "gpt-image-2" ? "catalog" : "custom"), { immediate: true });
-
-function addProvider() {
-  if (providerLimitReached.value) {
-    setStatus("[最多 64 个 Provider]", "warning");
-    return;
-  }
-  const id = uniqueId("provider");
-  draft.value.items.push({
-    id,
-    label: "新 Provider",
-    kind: "codex-responses",
-    enabled: true,
-    model: "gpt-5.6-sol",
-    imageModel: "gpt-image-2",
-    baseUrl: "https://chatgpt.com/backend-api/codex",
-    apiKeyEnv: "OPENAI_API_KEY",
-    envFile: "",
-    temperature: 0.7,
-    maxOutputTokens: 8192,
-    reasoningEffort: "low"
-  });
-  selectedIndex.value = draft.value.items.length - 1;
-  if (!draft.value.defaultProviderId) draft.value.defaultProviderId = id;
-  setStatus("[PROVIDER ADDED]", "success");
+function supportsReasoningEffort(kind: ProviderKind) {
+  return kind === "codex-responses" || kind === "openai-official";
 }
 
-function applyOfficialPreset(kind: "gemini" | "anthropic") {
-  const provider = current.value;
-  if (!provider) return;
-  if (kind === "gemini") {
-    provider.kind = "gemini-openai";
-    provider.label = "Google Gemini";
-    provider.model = "gemini-3.5-flash";
-    provider.baseUrl = "https://generativelanguage.googleapis.com/v1beta/openai";
-    provider.apiKeyEnv = "GEMINI_API_KEY";
-    provider.temperature = 0.7;
-  } else {
-    provider.kind = "anthropic-openai";
-    provider.label = "Anthropic Claude";
-    provider.model = "claude-sonnet-4-6";
-    provider.baseUrl = "https://api.anthropic.com/v1";
-    provider.apiKeyEnv = "ANTHROPIC_API_KEY";
-    provider.temperature = Math.min(provider.temperature, 1);
-  }
-  provider.envFile = "workspace/secrets/runtime.env";
-  setStatus(`[${kind.toUpperCase()} OFFICIAL PRESET]`, "success");
+watch(() => draft.value.items.length, (length) => {
+  if (selectedIndex.value >= length) selectedIndex.value = Math.max(0, length - 1);
+});
+watch(() => current.value?.id, () => {
+  if (!current.value) return;
+  current.value.modelSource ??= compatibleProvider(current.value.kind) ? "custom" : "remote";
+  current.value.multimodal ??= "auto";
+}, { immediate: true });
+watch(() => current.value ? {
+  id: current.value.id,
+  model: current.value.model,
+  baseUrl: current.value.baseUrl,
+  apiKeyEnv: current.value.apiKeyEnv
+} : null, (next, previous) => {
+  if (!next || !previous || next.id !== previous.id) return;
+  current.value!.detectedMultimodal = undefined;
+});
+
+function beginAdd() {
+  if (providerLimitReached.value) return setStatus("[最多 64 个 Provider]", "warning");
+  createOpen.value = true;
+}
+
+function createProvider(kind: ProviderKind) {
+  const id = uniqueId(kind.replace(/-(official|compatible|responses)$/, "") || "provider");
+  draft.value.items.push(providerPreset(kind, id));
+  selectedIndex.value = draft.value.items.length - 1;
+  if (!draft.value.defaultProviderId) draft.value.defaultProviderId = id;
+  createOpen.value = false;
+  setStatus("[PROVIDER ADDED]", "success");
 }
 
 function copyProvider() {
   const provider = current.value;
-  if (!provider) return;
-  if (providerLimitReached.value) {
-    setStatus("[最多 64 个 Provider]", "warning");
-    return;
-  }
+  if (!provider || providerLimitReached.value) return;
   const copy = plainProvider(provider);
   copy.id = uniqueId(`${provider.id}-copy`);
   copy.label = `${provider.label} 副本`;
@@ -97,34 +96,55 @@ function copyProvider() {
 function deleteProvider() {
   const provider = current.value;
   if (!provider) return;
-  if (draft.value.items.length <= 1) {
-    setStatus("[至少保留一个 Provider]", "error");
-    return;
-  }
-  if (draft.value.defaultProviderId === provider.id) {
-    setStatus("[请先选择新的默认 Provider]", "warning");
-    return;
-  }
+  if (draft.value.items.length <= 1) return setStatus("[至少保留一个 Provider]", "error");
+  if (draft.value.defaultProviderId === provider.id) return setStatus("[请先选择新的默认 Provider]", "warning");
   draft.value.items.splice(selectedIndex.value, 1);
   setStatus("[PROVIDER DELETED]", "success");
 }
 
-function updateId(event: Event) {
-  const provider = current.value;
-  if (!provider) return;
-  const previous = provider.id;
-  const next = (event.target as HTMLInputElement).value;
-  provider.id = next;
-  if (draft.value.defaultProviderId === previous) draft.value.defaultProviderId = next;
+function chooseModelSource(source: "remote" | "custom") {
+  if (!current.value) return;
+  current.value.modelSource = source;
+  if (source === "remote" && !discoveredModels[current.value.id] && current.value.kind !== "codex-responses") void loadModels();
 }
 
-function setImageChoice(event: Event) {
+async function loadModels() {
   const provider = current.value;
   if (!provider) return;
-  const value = (event.target as HTMLSelectElement).value;
-  imageChoice.value = value;
-  if (value === "catalog") provider.imageModel = "gpt-image-2";
-  else if (provider.imageModel === "gpt-image-2") provider.imageModel = "";
+  loadingModels.value = true;
+  setStatus("[READING MODELS...]", "");
+  try {
+    const result = await apiRequest<{ models: string[] }>("/api/providers/models", {
+      method: "POST",
+      body: JSON.stringify({ provider: plainProvider(provider) })
+    });
+    discoveredModels[provider.id] = result.models;
+    if (!result.models.includes(provider.model) && result.models[0]) provider.model = result.models[0];
+    setStatus(`[${result.models.length} MODELS]`, "success");
+  } catch (error) {
+    setStatus(`[ERROR: ${error instanceof Error ? error.message : "模型读取失败"}]`, "error");
+  } finally {
+    loadingModels.value = false;
+  }
+}
+
+async function probeVision() {
+  const provider = current.value;
+  if (!provider) return;
+  probingVision.value = true;
+  setStatus("[PROBING VISION...]", "");
+  try {
+    const result = await apiRequest<{ multimodal: boolean; reason?: string }>("/api/providers/vision-probe", {
+      method: "POST",
+      body: JSON.stringify({ provider: plainProvider(provider) })
+    });
+    provider.detectedMultimodal = result.multimodal;
+    setStatus(result.multimodal ? "[MULTIMODAL]" : `[TEXT ONLY${result.reason ? ` · ${result.reason}` : ""}]`, result.multimodal ? "success" : "warning");
+  } catch (error) {
+    setStatus(`[ERROR: ${error instanceof Error ? error.message : "探测失败"}]`, "error");
+  } finally {
+    probingVision.value = false;
+  }
 }
 
 async function testProvider() {
@@ -133,10 +153,11 @@ async function testProvider() {
   testing.value = true;
   setStatus("[TESTING...]", "");
   try {
-    const result = await apiRequest<{ ok: boolean; model?: string; durationMs?: number; elapsedMs?: number }>("/api/providers/test", {
+    const result = await apiRequest<{ model?: string; durationMs?: number; elapsedMs?: number; multimodal?: boolean }>("/api/providers/test", {
       method: "POST",
       body: JSON.stringify({ provider: plainProvider(provider) })
     });
+    if (provider.multimodal === "auto" && result.multimodal != null) provider.detectedMultimodal = result.multimodal;
     const duration = result.durationMs ?? result.elapsedMs;
     setStatus(`[CONNECTED · ${result.model ?? provider.model}${duration != null ? ` · ${duration}MS` : ""}]`, "success");
   } catch (error) {
@@ -166,11 +187,7 @@ function setStatus(message: string, kind: "" | "success" | "error" | "warning") 
 
 <template>
   <section class="grid gap-8">
-    <CodexSubscriptionAuth />
-    <div>
-      <p class="page-kicker">PROVIDERS</p>
-      <h2 class="section-title mt-2">模型服务</h2>
-    </div>
+    <div><p class="page-kicker">PROVIDERS</p><h2 class="section-title mt-2">模型服务</h2></div>
 
     <label class="field max-w-xl">
       <span class="field-label">默认 Provider</span>
@@ -181,106 +198,85 @@ function setStatus(message: string, kind: "" | "success" | "error" | "warning") 
 
     <div class="grid min-w-0 gap-6 xl:grid-cols-[240px_minmax(0,1fr)]">
       <aside class="min-w-0 border-y border-line xl:border-y-0 xl:border-r xl:pr-5">
-        <div class="flex items-center justify-between py-3">
-          <span class="field-label">Provider 列表</span>
-          <button class="icon-btn" type="button" title="新增 Provider" aria-label="新增 Provider" :disabled="providerLimitReached" @click="addProvider">
-            <Plus :size="17" :stroke-width="1.5" aria-hidden="true" />
-          </button>
-        </div>
+        <div class="flex items-center justify-between py-3"><span class="field-label">Provider 列表</span><button class="icon-btn" type="button" aria-label="新增 Provider" :disabled="providerLimitReached" @click="beginAdd"><i class="bx bx-plus text-xl" aria-hidden="true"></i></button></div>
         <div class="max-h-72 overflow-y-auto xl:max-h-none">
-          <button
-            v-for="(provider, index) in draft.items"
-            :key="`${index}-${provider.id}`"
-            class="flex min-h-14 w-full min-w-0 items-center gap-3 border-t border-line px-2 text-left first:border-t-0"
-            :class="selectedIndex === index ? 'bg-raised text-display' : 'text-mute'"
-            type="button"
-            @click="selectedIndex = index"
-          >
-            <span class="shrink-0 font-mono text-[10px]" :class="provider.enabled ? 'text-success' : 'text-disabled'">{{ provider.enabled ? "ON" : "OFF" }}</span>
-            <span class="min-w-0 flex-1">
-              <strong class="block truncate text-sm font-normal">{{ provider.label }}</strong>
-              <small class="block truncate font-mono text-[10px] text-disabled">{{ provider.id }}</small>
-            </span>
-            <span v-if="draft.defaultProviderId === provider.id" class="font-mono text-[10px] text-mute">DEFAULT</span>
+          <button v-for="(provider, index) in draft.items" :key="provider.id" class="flex min-h-16 w-full min-w-0 items-center gap-3 border-t border-line px-2 text-left first:border-t-0" :class="selectedIndex === index ? 'bg-raised text-display' : 'text-mute'" type="button" @click="selectedIndex = index">
+            <i class="bx shrink-0 text-xl" :class="providerType(provider.kind).icon" aria-hidden="true"></i>
+            <span class="min-w-0 flex-1"><strong class="block truncate text-sm font-normal">{{ provider.label }}</strong><small class="block truncate font-mono text-[9px] text-disabled">{{ providerType(provider.kind).label }} · {{ provider.id }}</small></span>
+            <i class="bx text-sm" :class="provider.enabled ? 'bx-check-circle text-success' : 'bx-minus-circle text-disabled'" aria-hidden="true"></i>
           </button>
         </div>
       </aside>
 
-      <div v-if="current" class="grid min-w-0 gap-6">
-        <div class="flex flex-wrap items-center justify-between gap-3 border-b border-line pb-4">
-          <div>
-            <strong class="text-lg font-medium text-display">{{ current.label || "未命名" }}</strong>
-            <p class="mt-1 font-mono text-[10px] text-mute">{{ current.model || "NO MODEL" }}</p>
+      <div v-if="current" class="grid min-w-0 gap-2">
+        <header class="flex flex-wrap items-center justify-between gap-3 border-b border-line pb-5">
+          <div class="min-w-0"><span class="inline-state"><i class="bx mr-1" :class="currentType?.icon" aria-hidden="true"></i>{{ currentType?.label }}</span><h3 class="mt-2 truncate text-lg font-medium text-display">{{ current.label || "未命名" }}</h3><p class="mt-1 truncate font-mono text-[10px] text-mute">{{ current.model || "NO MODEL" }}</p></div>
+          <div class="flex gap-2"><button class="icon-btn" type="button" aria-label="复制 Provider" @click="copyProvider"><i class="bx bx-copy text-lg" aria-hidden="true"></i></button><button class="icon-btn text-accent" type="button" aria-label="删除 Provider" @click="deleteProvider"><i class="bx bx-trash text-lg" aria-hidden="true"></i></button></div>
+        </header>
+
+        <CodexSubscriptionAuth v-if="current.kind === 'codex-responses'" class="mt-4" />
+
+        <section class="provider-group">
+          <header><i class="bx bx-id-card" aria-hidden="true"></i><div><strong>身份</strong><span>名称与固定标识</span></div></header>
+          <div class="grid gap-5 sm:grid-cols-2">
+            <label class="field"><span class="field-label">ID</span><input :value="current.id" class="control" type="text" readonly></label>
+            <label class="field"><span class="field-label">名称</span><input v-model.trim="current.label" class="control" type="text" autocomplete="off"></label>
           </div>
-          <div class="flex gap-2">
-            <button class="icon-btn" type="button" title="复制" aria-label="复制 Provider" :disabled="providerLimitReached" @click="copyProvider"><Copy :size="17" :stroke-width="1.5" /></button>
-            <button class="icon-btn text-accent" type="button" title="删除" aria-label="删除 Provider" @click="deleteProvider"><Trash2 :size="17" :stroke-width="1.5" /></button>
+          <ToggleSwitch v-model="current.enabled" label="启用 Provider" :disabled="draft.defaultProviderId === current.id" description="默认 Provider 保持启用" />
+        </section>
+
+        <section class="provider-group">
+          <header><i class="bx bx-link" aria-hidden="true"></i><div><strong>连接</strong><span>{{ currentType?.description }}</span></div></header>
+          <div class="grid gap-5 sm:grid-cols-2">
+            <label class="field"><span class="field-label">类型</span><span class="control flex items-center gap-2 !bg-raised" aria-label="Provider 类型"><i class="bx" :class="currentType?.icon" aria-hidden="true"></i>{{ currentType?.label }}</span></label>
+            <label class="field"><span class="field-label">API Key 环境变量</span><input v-model.trim="current.apiKeyEnv" class="control" type="text" autocomplete="off"><small v-if="secretConfigured != null" class="font-mono text-[10px]" :class="secretConfigured ? 'text-success' : 'text-warning'">{{ secretConfigured ? "[CONFIGURED]" : "[MISSING]" }}</small></label>
+            <label class="field sm:col-span-2"><span class="field-label">Base URL</span><input v-model.trim="current.baseUrl" class="control" type="url" :readonly="!compatibleProvider(current.kind)" autocomplete="off"><small v-if="!compatibleProvider(current.kind)" class="font-mono text-[10px] text-mute">官方地址固定</small></label>
           </div>
-        </div>
+        </section>
 
-        <div class="rounded-lg border border-line px-4 py-2">
-          <ToggleSwitch v-model="current.enabled" label="启用 Provider" :disabled="draft.defaultProviderId === current.id" description="默认 Provider 必须保持启用" />
-        </div>
-
-        <div class="flex flex-wrap items-center gap-2 rounded-lg border border-line bg-raised p-3">
-          <span class="mr-auto font-mono text-[10px] text-mute">OFFICIAL BASE URL PRESETS</span>
-          <button class="btn btn-ghost" type="button" @click="applyOfficialPreset('gemini')">Google Gemini</button>
-          <button class="btn btn-ghost" type="button" @click="applyOfficialPreset('anthropic')">Anthropic Claude</button>
-        </div>
-
-        <div class="grid gap-5 sm:grid-cols-2">
-          <label class="field">
-            <span class="field-label">ID</span>
-            <input :value="current.id" class="control" type="text" autocomplete="off" @input="updateId">
-          </label>
-          <label class="field">
-            <span class="field-label">名称</span>
-            <input v-model.trim="current.label" class="control" type="text" autocomplete="off">
-          </label>
-          <label class="field">
-            <span class="field-label">协议</span>
-            <select v-model="current.kind" class="control">
-              <option value="codex-responses">codex-responses</option>
-              <option value="openai-responses">openai-responses</option>
-              <option value="gemini-openai">gemini-openai</option>
-              <option value="anthropic-openai">anthropic-openai</option>
-            </select>
-          </label>
-          <ModelSelect v-model="current.model" :models="models" />
-          <ReasoningEffortSelect v-model="current.reasoningEffort" :model="current.model" :models="models" />
-          <div class="field">
-            <span class="field-label">图像模型</span>
-            <label class="field"><span class="sr-only">图像模型类型</span><select :value="imageChoice" class="control" aria-label="图像模型" @change="setImageChoice"><option value="catalog">gpt-image-2</option><option value="custom">自定义</option></select></label>
-            <label v-if="imageChoice === 'custom'" class="field"><span class="sr-only">自定义图像模型 ID</span><input v-model.trim="current.imageModel" class="control" type="text" placeholder="输入图像模型 ID" aria-label="自定义图像模型 ID"></label>
+        <section class="provider-group">
+          <header><i class="bx bx-chip" aria-hidden="true"></i><div><strong>模型</strong><span>远程目录或自定义 ID</span></div></header>
+          <div class="flex flex-wrap items-center gap-2">
+            <div class="segmented" aria-label="模型来源"><button class="segmented-button" type="button" :aria-pressed="current.modelSource !== 'custom'" @click="chooseModelSource('remote')">远程目录</button><button class="segmented-button" type="button" :aria-pressed="current.modelSource === 'custom'" @click="chooseModelSource('custom')">自定义 ID</button></div>
+            <button v-if="current.modelSource !== 'custom'" class="btn btn-ghost" type="button" :disabled="loadingModels" @click="loadModels"><i class="bx bx-refresh" :class="loadingModels ? 'bx-spin' : ''" aria-hidden="true"></i>拉取模型</button>
           </div>
-          <label class="field sm:col-span-2">
-            <span class="field-label">Base URL</span>
-            <input v-model.trim="current.baseUrl" class="control" type="url" autocomplete="off">
-          </label>
-          <label class="field">
-            <span class="field-label">API Key Env</span>
-            <input v-model.trim="current.apiKeyEnv" class="control" type="text" autocomplete="off">
-            <small v-if="secretConfigured != null" class="font-mono text-[10px]" :class="secretConfigured ? 'text-success' : 'text-warning'">{{ secretConfigured ? "[CONFIGURED]" : "[MISSING]" }}</small>
-          </label>
-          <label class="field">
-            <span class="field-label">Env File</span>
-            <input v-model.trim="current.envFile" class="control" type="text" autocomplete="off">
-          </label>
-          <label class="field">
-            <span class="field-label">Temperature</span>
-            <input v-model.number="current.temperature" class="control" type="number" min="0" max="2" step="0.1">
-          </label>
-          <label class="field">
-            <span class="field-label">Max Output Tokens</span>
-            <input v-model.number="current.maxOutputTokens" class="control" type="number" min="1" max="1000000" step="1">
-          </label>
-        </div>
+          <div class="grid gap-5 sm:grid-cols-2">
+            <ModelSelect v-if="current.modelSource !== 'custom'" v-model="current.model" :models="remoteModelItems" />
+            <label v-else class="field"><span class="field-label">模型</span><input v-model.trim="current.model" class="control" type="text" aria-label="模型" autocomplete="off"></label>
+            <ReasoningEffortSelect v-if="supportsReasoningEffort(current.kind)" v-model="current.reasoningEffort" :model="current.model" :models="props.models" />
+            <label v-if="current.kind === 'codex-responses' || current.kind === 'openai-official'" class="field"><span class="field-label">图像模型</span><input v-model.trim="current.imageModel" class="control" type="text" autocomplete="off"></label>
+          </div>
+        </section>
 
-        <div class="flex flex-wrap items-center justify-between gap-3 border-t border-line pt-5">
-          <span class="inline-state" :data-kind="statusKind || undefined">{{ status }}</span>
-          <button class="btn" type="button" :disabled="testing" @click="testProvider">{{ testing ? "测试中" : "测试连接" }}</button>
-        </div>
+        <section class="provider-group">
+          <header><i class="bx bx-image-alt" aria-hidden="true"></i><div><strong>多模态</strong><span>图片输入与读图辅助</span></div></header>
+          <div class="grid gap-5 sm:grid-cols-2">
+            <label class="field"><span class="field-label">图片能力</span><select v-model="current.multimodal" class="control"><option value="auto">自动探测</option><option value="enabled">支持图片</option><option value="disabled">仅文本</option></select></label>
+            <div class="field"><span class="field-label">探测结果</span><button class="btn justify-self-start" type="button" :disabled="probingVision" @click="probeVision"><i class="bx bx-scan" aria-hidden="true"></i>{{ probingVision ? "探测中" : "探测多模态" }}</button><small v-if="current.detectedMultimodal != null" class="font-mono text-[10px]" :class="current.detectedMultimodal ? 'text-success' : 'text-warning'">{{ current.detectedMultimodal ? "[MULTIMODAL]" : "[TEXT ONLY]" }}</small></div>
+            <template v-if="effectiveNonVision">
+              <label class="field"><span class="field-label">读图辅助 Provider</span><select v-model="current.visionProviderId" class="control"><option value="">选择 Provider</option><option v-for="provider in visionProviders" :key="provider.id" :value="provider.id">{{ provider.label }}</option></select></label>
+              <label class="field"><span class="field-label">读图模型</span><input v-model.trim="current.visionModel" class="control" type="text" placeholder="留空使用辅助 Provider 默认模型"></label>
+            </template>
+          </div>
+        </section>
+
+        <section class="provider-group">
+          <header><i class="bx bx-slider-alt" aria-hidden="true"></i><div><strong>生成参数</strong><span>输出长度与随机性</span></div></header>
+          <div class="grid gap-5 sm:grid-cols-2"><label class="field"><span class="field-label">Temperature</span><input v-model.number="current.temperature" class="control" type="number" min="0" max="2" step="0.1"></label><label class="field"><span class="field-label">Max Output Tokens</span><input v-model.number="current.maxOutputTokens" class="control" type="number" min="1" max="1000000" step="1"></label></div>
+        </section>
+
+        <footer class="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-line pt-5"><span class="inline-state max-w-full break-words" :data-kind="statusKind || undefined">{{ status }}</span><button class="btn" type="button" :disabled="testing" @click="testProvider"><i class="bx bx-plug" aria-hidden="true"></i>{{ testing ? "测试中" : "测试连接" }}</button></footer>
       </div>
     </div>
+
+    <ProviderCreateDialog :open="createOpen" @close="createOpen = false" @select="createProvider" />
   </section>
 </template>
+
+<style scoped>
+.provider-group { display: grid; gap: 20px; border-bottom: 1px solid rgb(var(--color-line)); padding: 28px 0; }
+.provider-group > header { display: flex; align-items: center; gap: 12px; }
+.provider-group > header > i { display: grid; width: 40px; height: 40px; flex: none; place-items: center; border-radius: 10px; background: rgb(var(--color-raised)); color: rgb(var(--color-interactive)); font-size: 20px; }
+.provider-group > header strong { display: block; color: rgb(var(--color-display)); font-size: 15px; font-weight: 500; }
+.provider-group > header span { display: block; margin-top: 2px; color: rgb(var(--color-mute)); font-size: 12px; }
+</style>

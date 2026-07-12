@@ -6,7 +6,11 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultConfig } from "../../src/config.js";
 import { OneBotGateway } from "../../adapters/onebot/onebotGateway.js";
-import { OutboundMediaDelivery } from "../../services/delivery/outboundMedia.js";
+import {
+  OutboundMediaDelivery,
+  outboundMediaMaxInlineBytes,
+  outboundMediaReferenceMode
+} from "../../services/delivery/outboundMedia.js";
 
 describe("OneBot outbound media adapter", () => {
   let temporaryDirectory = "";
@@ -18,7 +22,8 @@ describe("OneBot outbound media adapter", () => {
     imagePath = path.join(temporaryDirectory, "generated.png");
     await fs.writeFile(imagePath, Buffer.from("generated-image"));
     delivery = new OutboundMediaDelivery({
-      rootDir: temporaryDirectory
+      rootDir: temporaryDirectory,
+      referenceMode: "shared-path"
     });
   });
 
@@ -67,5 +72,35 @@ describe("OneBot outbound media adapter", () => {
       type: "image",
       data: { file: "https://cdn.example.test/image.png" }
     });
+  });
+
+  it("uses bounded inline OneBot image data by default in every topology", async () => {
+    const inlineDelivery = new OutboundMediaDelivery({
+      rootDir: temporaryDirectory
+    });
+
+    await expect(inlineDelivery.createReference(imagePath)).resolves.toBe(
+      `base64://${Buffer.from("generated-image").toString("base64")}`
+    );
+    expect(outboundMediaReferenceMode({})).toBe("inline-base64");
+    expect(() => outboundMediaReferenceMode({ SUNABOT_MEDIA_TRANSPORT: "shared-path" })).toThrow(
+      "do not share a filesystem"
+    );
+  });
+
+  it("rejects invalid transport configuration and oversized inline files", async () => {
+    expect(() => outboundMediaReferenceMode({ SUNABOT_MEDIA_TRANSPORT: "platform-default" })).toThrow(
+      "SUNABOT_MEDIA_TRANSPORT"
+    );
+    expect(() => outboundMediaMaxInlineBytes({ SUNABOT_MEDIA_MAX_INLINE_BYTES: "0" })).toThrow(
+      "SUNABOT_MEDIA_MAX_INLINE_BYTES"
+    );
+    const boundedDelivery = new OutboundMediaDelivery({
+      rootDir: temporaryDirectory,
+      maxInlineBytes: 4
+    });
+    await expect(boundedDelivery.createReference(imagePath)).rejects.toThrow(
+      "exceeds the inline Base64 limit of 4 bytes"
+    );
   });
 });

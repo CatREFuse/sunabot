@@ -1,6 +1,7 @@
 import net from "node:net";
 import path from "node:path";
 import fs, { existsSync } from "node:fs";
+import sharp from "sharp";
 import { lookup } from "node:dns/promises";
 import type { FastifyInstance } from "fastify";
 import { applicationDataStore } from "../../../adapters/sqlite/applicationDataStore.js";
@@ -8,7 +9,7 @@ import { isTrustedQqFakeIp } from "../../../adapters/onebot/qqMedia.js";
 import { WORKSPACE_LAYOUT } from "../../../packages/platform/workspaceLayout.js";
 import { AdminApiError, badRequest } from "../../../src/admin/errors.js";
 import { getWorkspacePath } from "../../../src/config.js";
-import { readRequestLogs, requestLogPath } from "../../../src/requestLog.js";
+import { readRequestLogPage, readTokenUsageSummary, requestLogPath } from "../../../src/requestLog.js";
 import type { SunaRuntime } from "../../../src/runtime.js";
 import type { AppConfig, BotToolSettings, ImageHistoryRecord } from "../../../src/types.js";
 
@@ -24,6 +25,7 @@ const remoteImageQuery = {
   properties: { url: { type: "string" } },
   additionalProperties: true
 } as const;
+const thumbnailCache = new Map<string, Buffer>();
 const qqAvatarQuery = {
   type: "object",
   properties: {
@@ -46,14 +48,23 @@ export function registerMediaRoutes(app: FastifyInstance, options: MediaRouteOpt
   app.get("/api/request-logs", {
     schema: { querystring: openObject, response: { 200: openObject } }
   }, async (request) => {
-    const query = request.query as { q?: string; limit?: string };
+    const query = request.query as { q?: string; limit?: string; page?: string; pageSize?: string };
+    const page = await readRequestLogPage({
+      query: query.q,
+      page: Number(query.page ?? 1),
+      pageSize: Number(query.pageSize ?? query.limit ?? 50)
+    });
     return {
       filePath: requestLogPath(),
-      logs: await readRequestLogs({
-        query: query.q,
-        limit: query.limit == null ? undefined : Number(query.limit)
-      })
+      ...page
     };
+  });
+
+  app.get("/api/token-usage", {
+    schema: { querystring: openObject, response: { 200: openObject } }
+  }, async (request) => {
+    const query = request.query as { timezoneOffset?: string };
+    return readTokenUsageSummary(Number(query.timezoneOffset ?? 0));
   });
 
   app.get("/api/media/image", {
@@ -67,9 +78,28 @@ export function registerMediaRoutes(app: FastifyInstance, options: MediaRouteOpt
 
     const { bytes, contentType } = await loadRemoteImage(imageUrl);
     reply.header("content-type", contentType);
-    reply.header("cache-control", "private, max-age=300");
+    reply.header("cache-control", "private, max-age=86400, stale-while-revalidate=604800");
     reply.header("vary", "Authorization");
     reply.header("x-content-type-options", "nosniff");
+    return bytes;
+  });
+
+  app.get("/api/media/thumbnail", {
+    schema: { querystring: remoteImageQuery, response: { 200: passthroughBody } }
+  }, async (request, reply) => {
+    const query = request.query as { url?: string; variant?: string };
+    const source = String(query.url ?? "");
+    const variant = query.variant === "placeholder" ? "placeholder" : "display";
+    const cacheKey = `${variant}:${source}`;
+    const cached = thumbnailCache.get(cacheKey);
+    const bytes = cached ?? await createThumbnail(source, variant);
+    if (!cached) {
+      if (thumbnailCache.size >= 200) thumbnailCache.delete(thumbnailCache.keys().next().value ?? "");
+      thumbnailCache.set(cacheKey, bytes);
+    }
+    reply.header("content-type", "image/webp");
+    reply.header("cache-control", "private, max-age=604800, stale-while-revalidate=604800");
+    reply.header("vary", "Authorization");
     return bytes;
   });
 
@@ -126,6 +156,40 @@ export function registerMediaRoutes(app: FastifyInstance, options: MediaRouteOpt
     imageHistory = saveImageHistory([record, ...imageHistory]);
     return result;
   });
+}
+
+async function createThumbnail(source: string, variant: "display" | "placeholder") {
+  let bytes: Buffer;
+  if (source.startsWith("/generated-images/")) {
+    const fileName = decodeURIComponent(source.slice("/generated-images/".length));
+    if (!fileName || path.basename(fileName) !== fileName || !/\.(?:png|jpe?g|webp)$/i.test(fileName)) {
+      badRequest("IMAGE_URL_INVALID", "图片地址无效。", "url");
+    }
+    const filePath = path.join(imageDirPath(), fileName);
+    const stats = await fs.promises.stat(filePath).catch(() => undefined);
+    if (!stats?.isFile() || stats.size > REMOTE_IMAGE_MAX_BYTES) {
+      throw new AdminApiError(stats ? 413 : 404, stats ? "IMAGE_TOO_LARGE" : "IMAGE_NOT_FOUND", stats ? "图片超过 12 MiB 限制。" : "图片不存在。");
+    }
+    bytes = await fs.promises.readFile(filePath);
+  } else {
+    if (!isProxyableImageUrl(source)) badRequest("IMAGE_URL_INVALID", "图片地址无效。", "url");
+    bytes = (await loadRemoteImage(source)).bytes;
+  }
+  try {
+    const pipeline = sharp(bytes, { animated: false, limitInputPixels: 64_000_000 }).rotate();
+    if (variant === "placeholder") {
+      return await pipeline
+        .resize({ width: 48, height: 48, fit: "cover", withoutEnlargement: true })
+        .webp({ quality: 24, effort: 4 })
+        .toBuffer();
+    }
+    return await pipeline
+      .resize({ width: 480, height: 480, fit: "inside", withoutEnlargement: true })
+      .webp({ quality: 72, effort: 4 })
+      .toBuffer();
+  } catch {
+    throw new AdminApiError(415, "IMAGE_THUMBNAIL_FAILED", "无法生成图片缩略图。");
+  }
 }
 
 function isProxyableImageUrl(value: string) {

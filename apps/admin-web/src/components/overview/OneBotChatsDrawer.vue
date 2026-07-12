@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { RefreshCw, X } from "lucide-vue-next";
 import type { OneBotChatList } from "../../types";
 import DialogOverlay from "../ui/DialogOverlay.vue";
 defineProps<{ open: boolean; chats: OneBotChatList | null; loading: boolean; error: string }>();
@@ -12,8 +11,8 @@ const emit = defineEmits<{ close: []; refresh: [] }>();
       <header class="flex items-center justify-between border-b border-line pb-4">
         <div><p class="page-kicker">ONEBOT CHATS</p><h2 id="onebot-chats-title" class="mt-1 text-xl font-medium text-display">QQ 联系人</h2></div>
         <div class="flex gap-2">
-          <button class="icon-btn" type="button" :disabled="loading" aria-label="刷新" @click="emit('refresh')"><RefreshCw :size="18" :stroke-width="1.5" /></button>
-          <button class="icon-btn" type="button" aria-label="关闭" @click="emit('close')"><X :size="18" :stroke-width="1.5" /></button>
+          <button class="icon-btn" type="button" :disabled="loading" aria-label="刷新" @click="emit('refresh')"><i class="bx bx-refresh text-xl" aria-hidden="true"></i></button>
+          <button class="icon-btn" type="button" aria-label="关闭" @click="emit('close')"><i class="bx bx-x text-2xl" aria-hidden="true"></i></button>
         </div>
       </header>
       <p v-if="loading" class="py-12 text-center font-mono text-xs text-mute">[LOADING...]</p>

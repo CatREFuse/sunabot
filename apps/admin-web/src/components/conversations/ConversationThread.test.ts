@@ -6,6 +6,7 @@ import ToggleSwitch from "../ui/ToggleSwitch.vue";
 import ConversationMessageBubble from "./ConversationMessageBubble.vue";
 import ConversationOrchestratorStatus from "./ConversationOrchestratorStatus.vue";
 import ConversationThread from "./ConversationThread.vue";
+import RequestLogList from "../logs/RequestLogList.vue";
 
 describe("ConversationThread", () => {
   it("scrolls to the latest message when a conversation first loads", async () => {
@@ -69,8 +70,9 @@ describe("ConversationThread", () => {
     expect(renderedBubble.text()).toContain("QQ 昵称 好吃的猫头菇");
     expect(renderedBubble.text()).toContain("QQ 1");
     await wrapper.get('button[aria-label="请求日志"]').trigger("click");
-    expect(wrapper.text()).toContain("Metadata");
-    expect(wrapper.text()).toContain('"traceId": "trace-7"');
+    expect(wrapper.getComponent(RequestLogList).props("logs")).toEqual([
+      expect.objectContaining({ metadata: { traceId: "trace-7", retries: 1 } })
+    ]);
   });
 
   it("does not repeat a nickname or QQ number already used as the primary name", () => {

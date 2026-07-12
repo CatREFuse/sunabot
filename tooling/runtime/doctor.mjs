@@ -30,8 +30,10 @@ async function runDoctor() {
   const packageManifest = await readJson(path.join(root, "package.json"));
   const workspace = resolveWorkspace(root);
   const configuredWorkspace = process.env.SUNABOT_WORKSPACE?.trim();
-  const host = option("host") ?? contract.network.host;
-  const port = positivePort(option("port") ?? process.env.SUNABOT_PORT ?? contract.network.apiPort);
+  const host = option("host") ?? contract.network.admin?.host ?? contract.network.host ?? "127.0.0.1";
+  const port = positivePort(
+    option("port") ?? process.env.SUNABOT_PORT ?? contract.network.admin?.port ?? contract.network.apiPort ?? 8787
+  );
   const domain = await localDomain();
   const workspaceIdentity = await pathIdentity(workspace);
   const expectedWorkspace = production

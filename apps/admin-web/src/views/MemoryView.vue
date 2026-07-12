@@ -1,6 +1,5 @@
 <script setup lang="ts">
-import { Plus, RefreshCw, Search } from "lucide-vue-next";
-import { computed, onBeforeUnmount, onMounted, shallowRef } from "vue";
+import { computed, onBeforeUnmount, onMounted, shallowRef, watch } from "vue";
 import { useMemory } from "../composables/useMemory";
 import type { MemoryEntry, MemorySourceId, MemoryWritePayload } from "../types";
 import PageHeader from "../components/ui/PageHeader.vue";
@@ -9,19 +8,19 @@ import MemoryEntryRow from "../components/memory/MemoryEntryRow.vue";
 import MemorySourceTabs from "../components/memory/MemorySourceTabs.vue";
 
 const data = useMemory();
-const source = shallowRef<MemorySourceId | "all">("all");
+const source = shallowRef<MemorySourceId>("working");
 const query = shallowRef("");
-const recallQuery = shallowRef("");
+const searchMode = shallowRef<"filter" | "recall">("filter");
 const editorOpen = shallowRef(false);
 const editing = shallowRef<MemoryEntry | null>(null);
 const editorError = shallowRef("");
 const pendingDelete = shallowRef("");
 const status = shallowRef("");
 const visibleEntries = computed(() => {
-  const base = data.recallActive.value ? data.matches.value : data.entries.value;
-  const term = query.value.trim().toLocaleLowerCase();
+  const base = searchMode.value === "recall" && data.recallActive.value ? data.matches.value : data.entries.value;
+  const term = searchMode.value === "filter" ? query.value.trim().toLocaleLowerCase() : "";
   return base.filter((entry) => {
-    if (source.value !== "all" && entry.source !== source.value) return false;
+    if (entry.source !== source.value) return false;
     const groupCards = entry.groupCards?.flatMap((card) => [card.card, card.groupId]).join(" ") ?? "";
     const searchable = [
       entry.text,
@@ -40,8 +39,17 @@ const visibleEntries = computed(() => {
   });
 });
 
-onMounted(() => void data.load());
+onMounted(() => void data.load(source.value));
 onBeforeUnmount(data.dispose);
+watch(source, (next) => {
+  query.value = "";
+  data.clearMatches();
+  void data.load(next);
+});
+watch(searchMode, () => {
+  query.value = "";
+  data.clearMatches();
+});
 
 function openCreate() { editing.value = null; editorError.value = ""; editorOpen.value = true; }
 function openEdit(entry: MemoryEntry) { editing.value = entry; editorError.value = ""; editorOpen.value = true; }
@@ -70,13 +78,17 @@ async function remove(entry: MemoryEntry) {
 }
 
 async function recall() {
-  if (!recallQuery.value.trim()) return;
+  if (!query.value.trim()) return;
   try {
-    await data.recall(recallQuery.value.trim(), source.value, 20);
+    await data.recall(query.value.trim(), source.value, 20);
     status.value = `[${data.matches.value.length} MATCHES]`;
   } catch (error) {
     status.value = `[ERROR: ${error instanceof Error ? error.message : "召回失败"}]`;
   }
+}
+
+function submitSearch() {
+  if (searchMode.value === "recall") void recall();
 }
 </script>
 
@@ -85,24 +97,26 @@ async function recall() {
     <div class="page-frame">
       <PageHeader kicker="MEMORY" title="记忆">
         <template #titleAfter>
-          <MemorySourceTabs v-model="source" :sources="data.sources.value" @update:model-value="data.clearMatches" />
+          <MemorySourceTabs v-model="source" :sources="data.sources.value" />
         </template>
         <template #actions>
           <span class="inline-state" :data-kind="status.startsWith('[ERROR') ? 'error' : status ? 'success' : undefined">{{ status }}</span>
-          <button class="icon-btn" type="button" aria-label="刷新记忆" @click="data.load()"><RefreshCw :size="18" :stroke-width="1.5" /></button>
-          <button class="btn btn-primary" type="button" @click="openCreate"><Plus :size="16" :stroke-width="1.5" />新增</button>
+          <button class="icon-btn" type="button" aria-label="刷新记忆" @click="data.load(source)"><i class="bx bx-refresh text-xl" aria-hidden="true"></i></button>
+          <button class="btn btn-primary" type="button" @click="openCreate"><i class="bx bx-plus" aria-hidden="true"></i>新增</button>
         </template>
       </PageHeader>
 
-      <section class="mt-8 grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto]">
-        <label class="field"><span class="field-label">召回</span><span class="flex min-w-0 gap-2"><input v-model="recallQuery" class="control" type="search" placeholder="输入语义查询" @keyup.enter="recall"><button class="icon-btn" type="button" aria-label="召回" @click="recall"><Search :size="18" :stroke-width="1.5" /></button></span></label>
-        <button v-if="data.recallActive.value" class="btn self-end" type="button" @click="data.clearMatches">清除召回</button>
+      <section class="mt-8 flex min-h-12 min-w-0 flex-col gap-2 border-y border-visible py-2 sm:flex-row sm:items-center">
+        <div class="segmented shrink-0" aria-label="搜索方式">
+          <button class="segmented-button" type="button" :aria-pressed="searchMode === 'filter'" @click="searchMode = 'filter'"><i class="bx bx-filter-alt mr-1" aria-hidden="true"></i>筛选</button>
+          <button class="segmented-button" type="button" :aria-pressed="searchMode === 'recall'" @click="searchMode = 'recall'"><i class="bx bx-brain mr-1" aria-hidden="true"></i>语义召回</button>
+        </div>
+        <label class="flex min-h-11 min-w-0 flex-1 items-center gap-2 px-2">
+          <i class="bx bx-search text-lg text-mute" aria-hidden="true"></i>
+          <input v-model="query" class="min-w-0 flex-1 bg-transparent font-mono text-xs outline-none placeholder:text-disabled" type="search" :placeholder="searchMode === 'filter' ? '筛选当前记忆' : '输入要回想的内容'" aria-label="搜索记忆" @keyup.enter="submitSearch">
+        </label>
+        <button v-if="searchMode === 'recall'" class="btn btn-primary shrink-0" type="button" :disabled="!query.trim() || data.loading.value" @click="recall"><i class="bx bx-search" aria-hidden="true"></i>召回</button>
       </section>
-
-      <label class="mt-5 flex min-h-11 items-center gap-2 rounded-lg border border-visible bg-panel px-3">
-        <Search :size="17" :stroke-width="1.5" class="text-mute" aria-hidden="true" />
-        <input v-model="query" class="min-w-0 flex-1 bg-transparent font-mono text-xs outline-none placeholder:text-disabled" type="search" placeholder="筛选当前结果" aria-label="筛选记忆">
-      </label>
 
       <section class="mt-8 border-t border-visible">
         <p v-if="data.error.value" class="border-b border-line py-4 font-mono text-xs text-accent">[ERROR: {{ data.error.value }}]</p>

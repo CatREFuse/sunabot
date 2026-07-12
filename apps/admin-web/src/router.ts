@@ -1,11 +1,20 @@
+import { defineAsyncComponent } from "vue";
 import { createRouter, createWebHistory } from "vue-router";
+import RouteLoading from "./components/ui/RouteLoading.vue";
 
-const OverviewView = () => import("./views/OverviewView.vue");
-const ConversationsView = () => import("./views/ConversationsView.vue");
-const PromptsView = () => import("./views/PromptsView.vue");
-const MemoryView = () => import("./views/MemoryView.vue");
-const ImagesView = () => import("./views/ImagesView.vue");
-const SettingsView = () => import("./views/SettingsView.vue");
+const routeComponent = (loader: () => Promise<unknown>) => defineAsyncComponent({
+  loader: loader as () => Promise<{ default: object }>,
+  loadingComponent: RouteLoading,
+  delay: 80,
+  timeout: 20_000
+});
+const OverviewView = routeComponent(() => import("./views/OverviewView.vue"));
+const ConversationsView = routeComponent(() => import("./views/ConversationsView.vue"));
+const PromptsView = routeComponent(() => import("./views/PromptsView.vue"));
+const MemoryView = routeComponent(() => import("./views/MemoryView.vue"));
+const ImagesView = routeComponent(() => import("./views/ImagesView.vue"));
+const LogsView = routeComponent(() => import("./views/LogsView.vue"));
+const SettingsView = routeComponent(() => import("./views/SettingsView.vue"));
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -16,6 +25,7 @@ export const router = createRouter({
     { path: "/prompts/:fileId?", name: "prompts", component: PromptsView },
     { path: "/memory", name: "memory", component: MemoryView },
     { path: "/images", name: "images", component: ImagesView },
+    { path: "/logs", name: "logs", component: LogsView },
     { path: "/settings/:section?", name: "settings", component: SettingsView },
     { path: "/:pathMatch(.*)*", redirect: "/overview" }
   ],
