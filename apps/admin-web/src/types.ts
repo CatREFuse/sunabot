@@ -125,6 +125,7 @@ export interface AppConfig {
 }
 
 export type ConfigSectionKey = "server" | "persona" | "providers" | "bot" | "memory" | "orchestrator" | "tools" | "bash" | "onebot";
+export type SettingsSectionKey = ConfigSectionKey | "security";
 export type ApplyMode = "hot" | "reconnect" | "restart";
 
 export interface ConfigEnvelope {

@@ -196,6 +196,10 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     await expect(page.getByRole("heading", { name: "OneBot" })).toBeVisible();
     await capture(page, viewport.name, theme, "settings-connections");
 
+    await page.goto("/settings/security");
+    await expect(page.getByRole("heading", { name: "管理员密码", exact: true })).toBeVisible();
+    await capture(page, viewport.name, theme, "settings-security");
+
     await page.goto("/settings/bot");
     await page.getByLabel("管理员称呼").fill("新的管理员称呼");
     await page.getByRole("link", { name: "状态", exact: true }).click();

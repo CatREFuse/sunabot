@@ -20,6 +20,12 @@ describe("admin auth API plugin", () => {
     const logout = vi.fn();
     const tripFuse = vi.fn(async () => undefined);
     const getFuseStatus = vi.fn(() => ({ manual: false, automatic: false }));
+    const changePassword = vi.fn(async () => ({
+      authenticated: true,
+      username: "admin",
+      csrfToken: "rotated-csrf-token",
+      expiresAt: "2026-08-11T00:00:00.000Z"
+    }));
     registerAuthRoutes(app, {
       authorize,
       getSessionStatus: vi.fn(() => ({ authenticated: false })),
@@ -30,6 +36,7 @@ describe("admin auth API plugin", () => {
         expiresAt: "2026-07-11T00:00:00.000Z"
       })),
       logout,
+      changePassword,
       getFuseStatus,
       tripFuse
     });
@@ -43,6 +50,11 @@ describe("admin auth API plugin", () => {
     const security = await app.inject({ method: "GET", url: "/api/auth/security" });
     const fuse = await app.inject({ method: "POST", url: "/api/auth/fuse" });
     const logoutResponse = await app.inject({ method: "POST", url: "/api/auth/logout" });
+    const password = await app.inject({
+      method: "POST",
+      url: "/api/auth/password",
+      payload: { currentPassword: "old-password", newPassword: "new-password-value", confirmPassword: "new-password-value" }
+    });
 
     expect(session.json()).toEqual({ authenticated: false });
     expect(login.json()).toMatchObject({ authenticated: true, username: "admin", csrfToken: "csrf-token" });
@@ -50,14 +62,17 @@ describe("admin auth API plugin", () => {
     expect(fuse.json()).toEqual({ ok: true, fuse: { manual: false, automatic: false } });
     expect(logoutResponse.statusCode).toBe(204);
     expect(logoutResponse.body).toBe("");
+    expect(password.json()).toMatchObject({ authenticated: true, csrfToken: "rotated-csrf-token" });
     expect(authorize).toHaveBeenCalled();
     expect(tripFuse).toHaveBeenCalledWith("webui-emergency");
     expect(logout).toHaveBeenCalledOnce();
+    expect(changePassword).toHaveBeenCalledOnce();
 
     expect([...routeSchemas.keys()].sort()).toEqual([
       "/api/auth/fuse",
       "/api/auth/login",
       "/api/auth/logout",
+      "/api/auth/password",
       "/api/auth/security",
       "/api/auth/session"
     ]);

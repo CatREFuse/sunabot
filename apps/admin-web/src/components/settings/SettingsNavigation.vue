@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import type { ConfigSectionKey } from "../../types";
+import type { SettingsSectionKey } from "../../types";
 
 defineProps<{
-  current: ConfigSectionKey;
-  sections: Array<{ id: ConfigSectionKey; label: string; group: string; icon: string }>;
-  dirty: (key: ConfigSectionKey) => boolean;
+  current: SettingsSectionKey;
+  sections: Array<{ id: SettingsSectionKey; label: string; group: string; icon: string }>;
+  dirty: (key: SettingsSectionKey) => boolean;
 }>();
-const emit = defineEmits<{ select: [key: ConfigSectionKey] }>();
+const emit = defineEmits<{ select: [key: SettingsSectionKey] }>();
 </script>
 
 <template>
@@ -30,7 +30,7 @@ const emit = defineEmits<{ select: [key: ConfigSectionKey] }>();
 
   <label class="field lg:hidden">
     <span class="field-label">设置分区</span>
-    <select :value="current" class="control" @change="emit('select', ($event.target as HTMLSelectElement).value as ConfigSectionKey)">
+    <select :value="current" class="control" @change="emit('select', ($event.target as HTMLSelectElement).value as SettingsSectionKey)">
       <optgroup v-for="group in [...new Set(sections.map((section) => section.group))]" :key="group" :label="group">
         <option v-for="section in sections.filter((item) => item.group === group)" :key="section.id" :value="section.id">{{ section.label }}{{ dirty(section.id) ? " · 未保存" : "" }}</option>
       </optgroup>

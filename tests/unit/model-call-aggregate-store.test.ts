@@ -52,7 +52,7 @@ describe("model call SQLite aggregates", () => {
 
     const database = new DatabaseSync(databasePath);
     expect(database.prepare("SELECT value FROM app_metadata WHERE key = 'storage-schema-version'").get())
-      .toMatchObject({ value: "3" });
+      .toMatchObject({ value: "4" });
     const indexes = database.prepare("PRAGMA index_list('model_call_aggregates')").all() as Array<{ name?: unknown }>;
     expect(indexes.map((row) => String(row.name))).toContain("model_call_aggregates_behavior");
     database.close();

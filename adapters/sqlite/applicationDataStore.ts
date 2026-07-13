@@ -443,6 +443,15 @@ export class ApplicationDataStore {
       );
       CREATE INDEX IF NOT EXISTS model_call_aggregates_behavior
         ON model_call_aggregates(behavior, memory_kind, conversation_id);
+      CREATE TABLE IF NOT EXISTS admin_sessions (
+        token_hash TEXT PRIMARY KEY,
+        csrf_token TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        last_seen_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS admin_sessions_expiry
+        ON admin_sessions(expires_at, last_seen_at);
     `);
     const rawVersion = Number(this.metadata("storage-schema-version") ?? 0);
     const schemaVersion = Number.isSafeInteger(rawVersion) && rawVersion >= 0 ? rawVersion : 0;
@@ -463,6 +472,7 @@ export class ApplicationDataStore {
         this.setMetadata("storage-schema-version", "3");
       });
     }
+    if (schemaVersion < 4) this.setMetadata("storage-schema-version", "4");
   }
 
   private appendModelCallAggregateUnsafe(measurement: ModelCallMeasurement) {

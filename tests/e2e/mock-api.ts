@@ -210,6 +210,8 @@ export interface MockApiState {
   offline: boolean;
   requiredToken: string;
   authenticated: boolean;
+  adminPassword: string;
+  passwordChanges: Array<{ currentPassword: string; newPassword: string; confirmPassword: string }>;
   nextPatchError: string;
   imageHistoryError: string;
   qqOnline: boolean;
@@ -241,6 +243,8 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
     offline: false,
     requiredToken: options.requiredToken ?? "",
     authenticated: !options.requiredToken,
+    adminPassword: options.requiredToken || "session-secret",
+    passwordChanges: [],
     nextPatchError: "",
     imageHistoryError: "",
     qqOnline: true,
@@ -269,7 +273,8 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
 
     if (pathname === "/api/auth/login" && method === "POST") {
       const body = request.postDataJSON() as { username?: string; password?: string };
-      if (body.username === "admin" && body.password === state.requiredToken) {
+      const expectedPassword = state.requiredToken || state.adminPassword;
+      if (body.username === "admin" && body.password === expectedPassword) {
         state.authenticated = true;
         return json(route, { authenticated: true, username: "admin", csrfToken: "mock-csrf", expiresAt: "2099-01-01T00:00:00.000Z" });
       }
@@ -278,6 +283,21 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
     if (pathname === "/api/auth/logout" && method === "POST") {
       state.authenticated = false;
       return route.fulfill({ status: 204 });
+    }
+    if (pathname === "/api/auth/password" && method === "POST") {
+      const body = request.postDataJSON() as { currentPassword: string; newPassword: string; confirmPassword: string };
+      if (body.currentPassword !== state.adminPassword) {
+        return json(route, { error: { code: "ADMIN_CURRENT_PASSWORD_INVALID", message: "当前密码不正确。", field: "currentPassword" } }, 400);
+      }
+      if (body.newPassword.length < 12) {
+        return json(route, { error: { code: "ADMIN_PASSWORD_TOO_SHORT", message: "新密码至少需要 12 个字符。", field: "newPassword" } }, 400);
+      }
+      if (body.newPassword !== body.confirmPassword) {
+        return json(route, { error: { code: "ADMIN_PASSWORD_MISMATCH", message: "两次输入的新密码不一致。", field: "confirmPassword" } }, 400);
+      }
+      state.passwordChanges.push(body);
+      state.adminPassword = body.newPassword;
+      return json(route, { authenticated: true, username: "admin", csrfToken: "rotated-mock-csrf", expiresAt: "2099-02-01T00:00:00.000Z" });
     }
 
     if (state.requiredToken && !state.authenticated) {

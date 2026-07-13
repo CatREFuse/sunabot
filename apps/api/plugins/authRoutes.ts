@@ -3,7 +3,7 @@ import { type AdminAuthService, isAdminProtectedPath } from "../../../src/admin/
 
 type AuthRouteService = Pick<
   AdminAuthService,
-  "authorize" | "getSessionStatus" | "login" | "logout" | "getFuseStatus" | "tripFuse"
+  "authorize" | "getSessionStatus" | "login" | "logout" | "changePassword" | "getFuseStatus" | "tripFuse"
 >;
 
 const openObject = { type: "object", additionalProperties: true } as const;
@@ -28,6 +28,10 @@ export function registerAuthRoutes(app: FastifyInstance, adminAuth: AuthRouteSer
     adminAuth.logout(request, reply);
     return reply.status(204).send();
   });
+
+  app.post("/api/auth/password", {
+    schema: { body: passthroughBody, response: { 200: openObject } }
+  }, async (request, reply) => adminAuth.changePassword(request, reply, request.body));
 
   app.get("/api/auth/security", {
     schema: { querystring: openObject, response: { 200: openObject } }

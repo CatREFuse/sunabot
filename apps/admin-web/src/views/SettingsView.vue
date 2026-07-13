@@ -4,7 +4,7 @@ import { onBeforeRouteLeave, useRoute, useRouter } from "vue-router";
 import { useConfigWorkspace, sectionKeys } from "../composables/useConfigWorkspace";
 import { useModelCatalog } from "../composables/useModelCatalog";
 import { apiRequest } from "../composables/useAdminApi";
-import type { ConfigSectionKey } from "../types";
+import type { ConfigSectionKey, SettingsSectionKey } from "../types";
 import { focusConfigField } from "../utils/configFieldFocus";
 import PageHeader from "../components/ui/PageHeader.vue";
 import SettingsNavigation from "../components/settings/SettingsNavigation.vue";
@@ -19,6 +19,7 @@ import BashSettingsForm from "../components/settings/BashSettingsForm.vue";
 import OneBotSettingsForm from "../components/settings/OneBotSettingsForm.vue";
 import MonitoringSettingsForm from "../components/settings/MonitoringSettingsForm.vue";
 import DialogOverlay from "../components/ui/DialogOverlay.vue";
+import AdminPasswordForm from "../components/settings/AdminPasswordForm.vue";
 
 const route = useRoute();
 const router = useRouter();
@@ -33,7 +34,7 @@ const logoutConfirmOpen = shallowRef(false);
 const loggingOut = shallowRef(false);
 const logoutError = shallowRef("");
 const settingsPanel = useTemplateRef<HTMLElement>("settingsPanel");
-const sections: Array<{ id: ConfigSectionKey; label: string; group: string; icon: string }> = [
+const sections: Array<{ id: SettingsSectionKey; label: string; group: string; icon: string }> = [
   { id: "persona", label: "Agent 身份", group: "Agent", icon: "bx-user-voice" },
   { id: "bot", label: "回复行为", group: "Agent", icon: "bx-bot" },
   { id: "providers", label: "模型服务", group: "模型与记忆", icon: "bx-chip" },
@@ -41,21 +42,24 @@ const sections: Array<{ id: ConfigSectionKey; label: string; group: string; icon
   { id: "orchestrator", label: "群聊编排", group: "模型与记忆", icon: "bx-git-branch" },
   { id: "tools", label: "Agent 工具", group: "工具", icon: "bx-wrench" },
   { id: "bash", label: "命令执行", group: "工具", icon: "bx-terminal" },
+  { id: "security", label: "账户安全", group: "系统", icon: "bx-lock-alt" },
   { id: "onebot", label: "连接与通知", group: "系统", icon: "bx-link" }
 ];
 const visibleSections = new Set(sections.map((section) => section.id));
-const current = computed<ConfigSectionKey>(() => {
-  const value = String(route.params.section ?? "persona") as ConfigSectionKey;
+const configSections = new Set<ConfigSectionKey>(sectionKeys);
+const current = computed<SettingsSectionKey>(() => {
+  const value = String(route.params.section ?? "persona") as SettingsSectionKey;
   return visibleSections.has(value) ? value : "persona";
 });
 const currentState = computed(() => {
-  if (current.value === "bot" && ["saving", "error", "conflict"].includes(workspace.state.onebot.kind)) {
+  const section = isConfigSection(current.value) ? current.value : "persona";
+  if (section === "bot" && ["saving", "error", "conflict"].includes(workspace.state.onebot.kind)) {
     return workspace.state.onebot;
   }
-  if (current.value === "tools" && ["saving", "error", "conflict"].includes(workspace.state.bash.kind)) {
+  if (section === "tools" && ["saving", "error", "conflict"].includes(workspace.state.bash.kind)) {
     return workspace.state.bash;
   }
-  return workspace.state[current.value];
+  return workspace.state[section];
 });
 const anyDirty = computed(() => sectionKeys.some(workspace.isDirty));
 const currentDirty = computed(() => current.value === "orchestrator"
@@ -66,7 +70,7 @@ const currentDirty = computed(() => current.value === "orchestrator"
     ? workspace.isDirty("tools") || workspace.isDirty("bash")
   : current.value === "onebot"
     ? workspace.isOneBotConnectionDirty()
-  : workspace.isDirty(current.value));
+  : isConfigSection(current.value) ? workspace.isDirty(current.value) : false);
 
 onMounted(async () => {
   window.addEventListener("beforeunload", onBeforeUnload);
@@ -91,6 +95,7 @@ async function loadConfig(preserveDirty = false, discardDirtySection?: ConfigSec
 }
 
 async function saveCurrent() {
+  if (!isConfigSection(current.value)) return;
   if (current.value === "orchestrator") {
     await workspace.saveGroupReply();
   } else if (current.value === "bot") {
@@ -109,6 +114,7 @@ async function saveCurrent() {
 }
 
 function reloadConflict() {
+  if (!isConfigSection(current.value)) return;
   if (current.value === "orchestrator") {
     workspace.discardGroupReply();
     return loadConfig(true);
@@ -123,6 +129,7 @@ function reloadConflict() {
 }
 
 function discardCurrent() {
+  if (!isConfigSection(current.value)) return;
   if (current.value === "orchestrator") workspace.discardGroupReply();
   else if (current.value === "bot") {
     workspace.discard("bot");
@@ -134,7 +141,8 @@ function discardCurrent() {
   else workspace.discard(current.value);
 }
 
-function isNavigationDirty(section: ConfigSectionKey) {
+function isNavigationDirty(section: SettingsSectionKey) {
+  if (!isConfigSection(section)) return false;
   if (section === "orchestrator") return workspace.isGroupReplyDirty();
   if (section === "bot") return workspace.isDirty("bot") || workspace.isReplyBehaviorDirty();
   if (section === "tools") return workspace.isDirty("tools") || workspace.isDirty("bash");
@@ -142,8 +150,12 @@ function isNavigationDirty(section: ConfigSectionKey) {
   return workspace.isDirty(section);
 }
 
-function selectSection(section: ConfigSectionKey) {
+function selectSection(section: SettingsSectionKey) {
   void router.push(`/settings/${section}`);
+}
+
+function isConfigSection(section: SettingsSectionKey): section is ConfigSectionKey {
+  return configSections.has(section as ConfigSectionKey);
 }
 
 function onBeforeUnload(event: BeforeUnloadEvent) {
@@ -257,6 +269,7 @@ async function logout() {
             v-model:bash="workspace.drafts.bash"
           />
           <BashSettingsForm v-else-if="current === 'bash'" v-model="workspace.drafts.bash" />
+          <AdminPasswordForm v-else-if="current === 'security'" />
           <div v-else class="grid gap-12">
             <MonitoringSettingsForm />
             <OneBotSettingsForm
@@ -266,6 +279,7 @@ async function logout() {
           </div>
 
           <SettingsSaveBar
+            v-if="current !== 'security'"
             :dirty="currentDirty"
             :busy="currentState.kind === 'saving'"
             :message="currentState.message"

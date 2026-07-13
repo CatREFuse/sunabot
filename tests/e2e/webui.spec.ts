@@ -137,6 +137,33 @@ test("退出登录只在设置页提供", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "管理员登录" })).toBeVisible();
 });
 
+test("账户安全可修改管理员密码并保持当前登录", async ({ page }) => {
+  const state = await installMockApi(page);
+  await page.goto("/settings/security");
+
+  await expect(page.getByRole("heading", { name: "管理员密码", exact: true })).toBeVisible();
+  await page.getByLabel("当前密码").fill("session-secret");
+  await page.getByLabel("新密码", { exact: true }).fill("new-session-secret-2026");
+  await page.getByLabel("确认新密码").fill("different-session-secret");
+  await page.getByRole("button", { name: "修改密码", exact: true }).click();
+  await expect(page.getByText("两次输入的新密码不一致。", { exact: true })).toBeVisible();
+  expect(state.passwordChanges).toHaveLength(0);
+
+  await page.getByLabel("当前密码").fill("wrong-session-secret");
+  await page.getByLabel("确认新密码").fill("new-session-secret-2026");
+  await page.getByRole("button", { name: "修改密码", exact: true }).click();
+  await expect(page.getByText("当前密码不正确。", { exact: true })).toBeVisible();
+
+  await page.getByLabel("当前密码").fill("session-secret");
+  await page.getByRole("button", { name: "修改密码", exact: true }).click();
+  await expect(page.getByText("密码已更新", { exact: true })).toBeVisible();
+  expect(state.passwordChanges).toHaveLength(1);
+  await expect(page.getByLabel("当前密码")).toHaveValue("");
+  await expect(page.getByLabel("新密码", { exact: true })).toHaveValue("");
+  await expect(page.getByLabel("确认新密码")).toHaveValue("");
+  await expect(page.getByRole("heading", { name: "管理员登录" })).toBeHidden();
+});
+
 test("Web Chat 以管理员身份发送并保持独立的网页消息流", async ({ page }) => {
   const state = await installMockApi(page);
   await page.goto("/web-chat");

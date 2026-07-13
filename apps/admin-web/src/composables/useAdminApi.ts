@@ -122,6 +122,14 @@ async function logout() {
   applySession({ authenticated: false });
 }
 
+async function changePassword(input: { currentPassword: string; newPassword: string; confirmPassword: string }) {
+  const session = await apiRequest<AdminSession>("/api/auth/password", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+  return applySession(session);
+}
+
 function applySession(session: AdminSession) {
   authorizationRequired.value = !session.authenticated;
   username.value = session.username ?? "";
@@ -168,6 +176,7 @@ export function useAdminApi() {
     initialize: initializeAdminSession,
     login,
     logout,
+    changePassword,
     clearAuthorizationError,
     request: apiRequest,
     blob: apiBlob

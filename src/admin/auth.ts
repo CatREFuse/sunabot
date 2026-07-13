@@ -7,8 +7,9 @@ import { AdminApiError } from "./errors.js";
 
 const FORWARDED_HEADERS = ["forwarded", "x-forwarded-for", "x-real-ip"] as const;
 const SESSION_COOKIE = "sunabot_admin_session";
-const SESSION_IDLE_MS = 30 * 60_000;
-const SESSION_MAX_MS = 8 * 60 * 60_000;
+const SESSION_IDLE_MS = 7 * 24 * 60 * 60_000;
+const SESSION_MAX_MS = 30 * 24 * 60 * 60_000;
+const SESSION_TOUCH_INTERVAL_MS = 60_000;
 const FAILURE_WINDOW_MS = 15 * 60_000;
 const FAILURE_LOCK_MS = 30 * 60_000;
 const GLOBAL_FAILURE_WINDOW_MS = 10 * 60_000;
@@ -29,12 +30,20 @@ export interface AdminCredentialRecord {
   updatedAt: string;
 }
 
-interface AdminSession {
-  id: string;
+export interface AdminSessionRecord {
+  tokenHash: string;
   csrfToken: string;
   createdAt: number;
   lastSeenAt: number;
   expiresAt: number;
+}
+
+export interface AdminSessionStore {
+  readAdminSession(tokenHash: string): AdminSessionRecord | undefined;
+  saveAdminSession(session: AdminSessionRecord): void;
+  deleteAdminSession(tokenHash: string): void;
+  clearAdminSessions(): void;
+  pruneAdminSessions(now: number, idleCutoff: number, maxSessions: number): void;
 }
 
 interface FailureBucket {
@@ -48,6 +57,7 @@ export interface AdminAuthOptions {
   bearerToken?: string;
   allowedOrigins?: string[];
   now?: () => number;
+  sessionStore?: AdminSessionStore;
 }
 
 export interface AdminSessionStatus {
@@ -71,7 +81,7 @@ export function isAdminPublicPath(url: string) {
 }
 
 export class AdminAuthService {
-  private readonly sessions = new Map<string, AdminSession>();
+  private readonly sessions = new Map<string, AdminSessionRecord>();
   private readonly failures = new Map<string, FailureBucket>();
   private readonly globalFailures: number[] = [];
   private readonly now: () => number;
@@ -157,18 +167,48 @@ export class AdminAuthService {
     this.failures.delete(source);
     const session = this.createSession(now);
     reply.header("set-cookie", serializeSessionCookie(session.id, request, SESSION_MAX_MS));
-    return {
-      authenticated: true,
-      username: this.credentials.username,
-      csrfToken: session.csrfToken,
-      expiresAt: new Date(session.expiresAt).toISOString()
-    };
+    return this.sessionStatus(session.record);
   }
 
   logout(request: FastifyRequest, reply: FastifyReply) {
     const id = cookieValue(request.headers.cookie, SESSION_COOKIE);
-    if (id) this.sessions.delete(id);
+    if (id) this.deleteSession(sessionTokenHash(id));
     reply.header("set-cookie", clearSessionCookie(request));
+  }
+
+  async changePassword(request: FastifyRequest, reply: FastifyReply, body: unknown): Promise<AdminSessionStatus> {
+    if (!this.credentials) {
+      throw new AdminApiError(503, "ADMIN_SETUP_REQUIRED", "管理员账号尚未初始化，请先在本机执行初始化命令。");
+    }
+    const value = body as { currentPassword?: unknown; newPassword?: unknown; confirmPassword?: unknown } | null;
+    const currentPassword = typeof value?.currentPassword === "string" ? value.currentPassword : "";
+    const newPassword = typeof value?.newPassword === "string" ? value.newPassword : "";
+    const confirmPassword = typeof value?.confirmPassword === "string" ? value.confirmPassword : "";
+    if (!await verifyAdminPassword(currentPassword, this.credentials)) {
+      throw new AdminApiError(400, "ADMIN_CURRENT_PASSWORD_INVALID", "当前密码不正确。", "currentPassword");
+    }
+    if (newPassword.length < 12) {
+      throw new AdminApiError(400, "ADMIN_PASSWORD_TOO_SHORT", "新密码至少需要 12 个字符。", "newPassword");
+    }
+    if (newPassword.length > 1024) {
+      throw new AdminApiError(400, "ADMIN_PASSWORD_TOO_LONG", "新密码过长。", "newPassword");
+    }
+    if (newPassword !== confirmPassword) {
+      throw new AdminApiError(400, "ADMIN_PASSWORD_MISMATCH", "两次输入的新密码不一致。", "confirmPassword");
+    }
+
+    const now = this.now();
+    const next: AdminCredentialRecord = {
+      ...this.credentials,
+      password: await hashAdminPassword(newPassword),
+      updatedAt: new Date(now).toISOString()
+    };
+    await writeCredentialRecord(this.options.credentialsPath, next);
+    this.credentials = next;
+    this.clearSessions();
+    const session = this.createSession(now);
+    reply.header("set-cookie", serializeSessionCookie(session.id, request, SESSION_MAX_MS));
+    return this.sessionStatus(session.record);
   }
 
   async tripFuse(reason = "manual") {
@@ -179,7 +219,7 @@ export class AdminAuthService {
       mode: 0o600
     });
     await fs.rename(temporary, this.options.fusePath);
-    this.sessions.clear();
+    this.clearSessions();
   }
 
   getFuseStatus() {
@@ -194,38 +234,71 @@ export class AdminAuthService {
   private readSession(request: FastifyRequest) {
     const id = cookieValue(request.headers.cookie, SESSION_COOKIE);
     if (!id) return undefined;
-    const session = this.sessions.get(id);
+    const tokenHash = sessionTokenHash(id);
+    const session = this.options.sessionStore?.readAdminSession(tokenHash) ?? this.sessions.get(tokenHash);
     if (!session) return undefined;
     const now = this.now();
     if (session.expiresAt <= now || now - session.lastSeenAt > SESSION_IDLE_MS) {
-      this.sessions.delete(id);
+      this.deleteSession(tokenHash);
       return undefined;
     }
-    session.lastSeenAt = now;
+    if (now - session.lastSeenAt >= SESSION_TOUCH_INTERVAL_MS) {
+      session.lastSeenAt = now;
+      this.saveSession(session);
+    }
     return session;
   }
 
   private createSession(now: number) {
     this.pruneSessions(now);
-    const session: AdminSession = {
-      id: crypto.randomBytes(32).toString("base64url"),
+    const id = crypto.randomBytes(32).toString("base64url");
+    const record: AdminSessionRecord = {
+      tokenHash: sessionTokenHash(id),
       csrfToken: crypto.randomBytes(24).toString("base64url"),
       createdAt: now,
       lastSeenAt: now,
       expiresAt: now + SESSION_MAX_MS
     };
-    this.sessions.set(session.id, session);
-    if (this.sessions.size > MAX_SESSIONS) {
-      const oldest = [...this.sessions.values()].sort((left, right) => left.lastSeenAt - right.lastSeenAt)[0];
-      if (oldest) this.sessions.delete(oldest.id);
-    }
-    return session;
+    this.saveSession(record);
+    this.pruneSessions(now);
+    return { id, record };
   }
 
   private pruneSessions(now: number) {
+    this.options.sessionStore?.pruneAdminSessions(now, now - SESSION_IDLE_MS, MAX_SESSIONS);
     for (const session of this.sessions.values()) {
-      if (session.expiresAt <= now || now - session.lastSeenAt > SESSION_IDLE_MS) this.sessions.delete(session.id);
+      if (session.expiresAt <= now || now - session.lastSeenAt > SESSION_IDLE_MS) this.sessions.delete(session.tokenHash);
     }
+    if (this.sessions.size > MAX_SESSIONS) {
+      const excess = [...this.sessions.values()]
+        .sort((left, right) => right.lastSeenAt - left.lastSeenAt)
+        .slice(MAX_SESSIONS);
+      for (const session of excess) this.sessions.delete(session.tokenHash);
+    }
+  }
+
+  private saveSession(session: AdminSessionRecord) {
+    if (this.options.sessionStore) this.options.sessionStore.saveAdminSession(session);
+    else this.sessions.set(session.tokenHash, session);
+  }
+
+  private deleteSession(tokenHash: string) {
+    if (this.options.sessionStore) this.options.sessionStore.deleteAdminSession(tokenHash);
+    else this.sessions.delete(tokenHash);
+  }
+
+  private clearSessions() {
+    if (this.options.sessionStore) this.options.sessionStore.clearAdminSessions();
+    this.sessions.clear();
+  }
+
+  private sessionStatus(session: AdminSessionRecord): AdminSessionStatus {
+    return {
+      authenticated: true,
+      username: this.credentials?.username,
+      csrfToken: session.csrfToken,
+      expiresAt: new Date(session.expiresAt).toISOString()
+    };
   }
 
   private recordFailure(source: string, bucket: FailureBucket, now: number) {
@@ -239,7 +312,7 @@ export class AdminAuthService {
     if (this.globalFailures.length >= GLOBAL_FAILURE_LIMIT) {
       this.automaticFuseUntil = now + AUTOMATIC_FUSE_MS;
       this.globalFailures.length = 0;
-      this.sessions.clear();
+      this.clearSessions();
     }
   }
 
@@ -421,6 +494,22 @@ function constantTimeEqual(left: string, right: string) {
 function constantTimeEqualBytes(left: Buffer, right: Buffer) {
   if (left.length !== right.length) return false;
   return crypto.timingSafeEqual(left, right);
+}
+
+function sessionTokenHash(token: string) {
+  return crypto.createHash("sha256").update(token, "utf8").digest("base64url");
+}
+
+async function writeCredentialRecord(filePath: string, record: AdminCredentialRecord) {
+  await fs.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
+  const temporary = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    await fs.writeFile(temporary, `${JSON.stringify(record, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+    await fs.rename(temporary, filePath);
+  } catch (error) {
+    await fs.rm(temporary, { force: true }).catch(() => undefined);
+    throw error;
+  }
 }
 
 function derivePassword(password: string, salt: string, keyLength: number) {

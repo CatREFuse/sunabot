@@ -12,9 +12,11 @@ import { MonitorSettingsStore } from "../../src/admin/monitorSettings.js";
 import { SelfieReferenceRepository } from "../../src/admin/selfieReferences.js";
 import { getConfigPath, getRootDir, getWorkspacePath, loadConfig, resolveProjectPath } from "../../src/config.js";
 import {
+  applicationDatabasePath,
   closeApplicationDataStores,
   sqliteMemoryPersistence
 } from "../../adapters/sqlite/applicationDataStore.js";
+import { SqliteAdminSessionStore } from "../../adapters/sqlite/adminSessionStore.js";
 import { configureMemoryPersistence } from "../../services/memory/persistence.js";
 import { ServiceError } from "../../packages/contracts/errors/serviceError.js";
 import { ConversationDirectory } from "../../services/conversations/conversationDirectory.js";
@@ -94,6 +96,7 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
   const runtime = new SunaRuntime(config, { resolveToolCapabilities });
   if (options.initializeRuntime !== false) await runtime.initialize();
 
+  const adminSessionStore = new SqliteAdminSessionStore(applicationDatabasePath(config));
   const adminAuth = await AdminAuthService.create({
     credentialsPath: getWorkspacePath(WORKSPACE_LAYOUT.adminCredentials),
     fusePath: getWorkspacePath(WORKSPACE_LAYOUT.adminFuse),
@@ -101,7 +104,8 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
     allowedOrigins: (process.env.SUNABOT_ADMIN_ORIGINS ?? "")
       .split(",")
       .map((item) => item.trim())
-      .filter(Boolean)
+      .filter(Boolean),
+    sessionStore: adminSessionStore
   });
   const app = Fastify({ logger: options.logger ?? false, trustProxy: false });
   const monitorSettings = new MonitorSettingsStore(getWorkspacePath(WORKSPACE_LAYOUT.secretsEnv));
@@ -123,6 +127,7 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
     await onebotGateway.close();
     await closeHttpServer(onebotServer);
     codexAuth.close();
+    adminSessionStore.close();
     serviceMonitor.close();
     runtime.close();
     closeApplicationDataStores();
