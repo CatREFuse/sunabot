@@ -73,11 +73,7 @@
         "sessionQueue",
         "media",
         "napcatState",
-        "napcatConfig",
-        "napcatQqState",
-        "napcatPlugins",
-        "napcatQrCode",
-        "napcatManualLogin",
+        "napcatAccounts",
         "secrets",
         "logs",
         "temporary",
@@ -92,11 +88,7 @@
         "sessionQueue": { "$ref": "#/$defs/relativePath" },
         "media": { "$ref": "#/$defs/relativePath" },
         "napcatState": { "const": "runtime/napcat" },
-        "napcatConfig": { "const": "runtime/napcat/config-full" },
-        "napcatQqState": { "const": "runtime/napcat/qq" },
-        "napcatPlugins": { "const": "runtime/napcat/plugins" },
-        "napcatQrCode": { "const": "runtime/napcat/qrcode.png" },
-        "napcatManualLogin": { "const": "runtime/napcat/manual-login-required" },
+        "napcatAccounts": { "const": "runtime/napcat/accounts" },
         "secrets": { "$ref": "#/$defs/relativePath" },
         "logs": { "$ref": "#/$defs/relativePath" },
         "temporary": { "$ref": "#/$defs/relativePath" },
@@ -432,9 +424,8 @@
     "native": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["apiUnit", "napcatManagedBy"],
+      "required": ["napcatManagedBy"],
       "properties": {
-        "apiUnit": { "const": "sunabot-api.service" },
         "napcatManagedBy": { "const": "docker" }
       }
     },

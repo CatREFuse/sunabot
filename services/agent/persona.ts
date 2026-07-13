@@ -10,14 +10,21 @@ interface PersonaFile {
 }
 
 export interface AgentPersona {
-  id: "plana";
+  id: string;
   name: string;
   files: PersonaFile[];
   memoryItems: string[];
   systemPrompt: string;
 }
 
-const personaFiles = ["AGENTS.md", "SOUL.md", "PREFERENCE.md", "USER.md", "RELATION.md"];
+const personaFiles = [
+  "AGENTS.md",
+  "SOUL.md",
+  "PREFERENCE.md",
+  "DIALOGUE_STYLE_EXAMPLES.md",
+  "USER.md",
+  "RELATION.md"
+];
 const outputRules = [
   "输出格式必须极其干净：只给最终要发送给用户的回复文本。",
   "禁止在回复开头或正文中加入时间戳、日期、发言人名称、角色名、系统标签、来源标签、引用标签或类似前缀。",
@@ -31,6 +38,7 @@ export function buildConversationPromptVariables(config: AppConfig) {
     "runtime.address_rules": buildAddressRules(config),
     "runtime.scope_rules": "当消息来自群聊时，注意区分用户群聊与 bot 群聊；bot 群聊当前只保留上下文，不主动编排。",
     "runtime.tool_rules": [
+      "当本轮没有必要回复、话题已经自然结束，或继续回应其他 Bot 的称呼可能引起循环广播时，单独调用 no_reply；必须在发送 assistant_text 或调用其他工具前决定，并且调用后不要输出正文。",
       "当需要发出自己的形象、自拍、头像、照片或包含自身外观的图片时，调用 selfie 工具，不要用 generate_img 代替。",
       "调用 generate_img 或 selfie 时，默认使用 1K 清晰度；只有用户明确要求更高清、更清晰、壁纸、海报、打印、2K 或 4K 时，才把 resolution 设为 2K 或 4K。",
       "调用异步 codex、generate_img 或 selfie 时，必须在 dispatch_message 中用当前人格简短告知用户已收到且已经开始处理；不要承诺成功或复述完整需求，并且该异步工具必须单独调用。"
@@ -57,12 +65,12 @@ export async function loadPersona(
     }
   }
 
-  const memoryItems = await readMemoryBundle(config, workspace, config.persona.memoryLimit);
-  const prompt = buildSystemPrompt(files, memoryItems, config);
+  const memoryItems = await readMemoryBundle(config, workspace);
+  const prompt = buildSystemPrompt(files, config);
 
   return {
-    id: "plana",
-    name: "普拉娜",
+    id: config.persona.defaultAgentId,
+    name: config.persona.name,
     files,
     memoryItems,
     systemPrompt: prompt
@@ -78,8 +86,7 @@ async function readOptional(filePath: string) {
   }
 }
 
-async function readMemoryBundle(config: AppConfig, workspace: string, limit: number) {
-  const perFileLimit = Math.max(3, Math.ceil(limit / 3));
+async function readMemoryBundle(config: AppConfig, workspace: string) {
   const store = memoryRepository(config);
   const sources: Array<[MemoryDataSource, string]> = [
     ["working", "WORKING_MEMORY.jsonl"],
@@ -88,10 +95,10 @@ async function readMemoryBundle(config: AppConfig, workspace: string, limit: num
   ];
   const bundles = sources.map(([source, fileName]) => {
     store.ensureLegacyMemoryImported(source, path.join(workspace, fileName));
-    return store.readMemory(source).slice(-perFileLimit).map(formatMemoryItem);
+    return store.readMemory(source).map(formatMemoryItem);
   });
 
-  return bundles.flat().filter(Boolean).slice(-limit);
+  return bundles.flat().filter(Boolean);
 }
 
 function formatMemoryItem(value: Record<string, unknown>) {
@@ -112,15 +119,16 @@ function formatMemoryUserLabel(value: Record<string, unknown>) {
   return "";
 }
 
-function buildSystemPrompt(files: PersonaFile[], _memoryItems: string[], config: AppConfig) {
+function buildSystemPrompt(files: PersonaFile[], config: AppConfig) {
   const sections = files.map((file) => `## ${file.name}\n${file.content}`).join("\n\n");
 
   return truncateToEstimatedTokens([
-    "你是普拉娜。保持 Open Arona 中定义的人设、关系、偏好和记忆。",
+    `你是${config.persona.name}。保持 Agent 工作区中定义的人设、关系、偏好和记忆。`,
     "你在 OneBot 会话中回复用户，只输出可直接发送给用户的内容。",
     outputRules,
     buildAddressRules(config),
     "当消息来自群聊时，注意区分用户群聊与 bot 群聊；bot 群聊当前只保留上下文，不主动编排。",
+    "当本轮没有必要回复、话题已经自然结束，或继续回应其他 Bot 的称呼可能引起循环广播时，单独调用 no_reply；必须在发送 assistant_text 或调用其他工具前决定，并且调用后不要输出正文。",
     "当需要发出自己的形象、自拍、头像、照片或包含自身外观的图片时，调用 selfie 工具，不要用 generate_img 代替。",
     "调用 generate_img 或 selfie 时，默认使用 1K 清晰度；只有用户明确要求更高清、更清晰、壁纸、海报、打印、2K 或 4K 时，才把 resolution 设为 2K 或 4K。",
     "调用异步 codex、generate_img 或 selfie 时，必须在 dispatch_message 中用当前人格简短告知用户已收到且已经开始处理；不要承诺成功或复述完整需求，并且该异步工具必须单独调用。",
@@ -146,7 +154,7 @@ function buildAddressRules(config: AppConfig) {
   const adminQq = String(config.bot.adminQq ?? "").trim();
   const adminName = String(config.bot.adminName ?? "").trim() || "猫老师";
   const adminRule = adminQq
-    ? `QQ ${adminQq} 是普拉娜唯一的老师和管理员，称呼为${adminName}。`
+    ? `QQ ${adminQq} 是${config.persona.name}唯一的老师和管理员，称呼为${adminName}。`
     : "当前没有配置老师和管理员 QQ，不要把任何用户称为老师或管理员。";
   return [
     "用户身份以 QQ 号为准，群名片和昵称只作为称呼名；同一 QQ 改名后仍视为同一个人。",
@@ -159,12 +167,12 @@ function buildAddressRules(config: AppConfig) {
 
 function fallbackPersona(config: AppConfig): AgentPersona {
   return {
-    id: "plana",
-    name: "普拉娜",
+    id: config.persona.defaultAgentId,
+    name: config.persona.name,
     files: [],
     memoryItems: [],
     systemPrompt: [
-      "你是普拉娜。保持冷静、克制、可靠，只输出可直接发送给用户的内容。",
+      `你是${config.persona.name}。只输出可直接发送给用户的内容。`,
       outputRules,
       buildAddressRules(config),
       "调用 generate_img 或 selfie 时，默认使用 1K 清晰度；只有用户明确要求更高清、更清晰、壁纸、海报、打印、2K 或 4K 时，才把 resolution 设为 2K 或 4K。"

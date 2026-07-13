@@ -42,12 +42,11 @@
     "code:update": "node tooling/dev/update-code.mjs",
     "admin:set-password": "node tooling/admin/admin-credentials.mjs",
     "admin:fuse": "node tooling/admin/admin-fuse.mjs",
-    "migrate:sqlite": "npm run build:api && node tooling/migrations/migrate-to-sqlite.mjs",
-    "qq:configure": "node tooling/runtime/configure-napcat-client.mjs",
+    "migrate:sqlite": "node tooling/migrations/run-built-migration.mjs migrate-to-sqlite.mjs",
+    "migrate:multi-agent": "node tooling/migrations/run-built-migration.mjs migrate-single-agent-to-multi-agent.mjs",
     "runtime:doctor": "./sunabot.sh doctor",
     "runtime:contract": "node tooling/runtime/validate-contract.mjs",
     "runtime:release": "node tooling/runtime/build-release.mjs",
-    "runtime:export-napcat": "node tooling/runtime/export-napcat-component.mjs",
     "runtime:native": "./sunabot.sh up --core=native",
     "runtime:macos": "node tooling/runtime/macos.mjs",
     "macos:start": "node tooling/runtime/macos.mjs start",
@@ -56,8 +55,7 @@
     "runtime:up": "./sunabot.sh up",
     "runtime:down": "./sunabot.sh down",
     "runtime:status": "./sunabot.sh status",
-    "runtime:logs": "./sunabot.sh logs",
-    "napcat:configure-client": "npm run qq:configure"
+    "runtime:logs": "./sunabot.sh logs"
   },
   "dependencies": {
     "@fastify/static": "^9.3.0",
@@ -68,6 +66,7 @@
     "boxicons": "^2.1.4",
     "chardet": "^2.2.0",
     "dotenv": "^16.4.7",
+    "echarts": "^6.1.0",
     "fastify": "^5.2.1",
     "file-type": "^22.0.1",
     "iconv-lite": "^0.7.3",

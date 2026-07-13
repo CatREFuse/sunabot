@@ -3,6 +3,7 @@ import {
   codexTool,
   generateImgTool,
   memoryRecallTool,
+  noReplyTool,
   selfieTool,
   withRequiredDispatchMessage,
   websearchTool,
@@ -27,7 +28,7 @@ export const DEFAULT_WORK_MEMORY_COMPRESS_IN_PROMPT = [
   "晋升事实必须提供受控 eventType 和稳定 subjectKey。eventType 只允许 task、decision、commitment、milestone、incident、relationship_change、status_change、other。subjectKey 描述不随“开始、进行中、完成、失败”等进展词变化的同一事件主体，优先使用任务号、Issue/PR、明确命名事项或“动作 + 目标”；仓库路径、文件名和地点不能单独构成主体。非晋升事实的 eventType 使用 other，subjectKey 使用空字符串。",
   "longTermId 只复用输入中真实存在、与本事实参与者一致的长期记忆 id；无法可靠匹配时返回 null，禁止编造 id。已有工作事实中的 promoteToLongTerm、longTermId、eventType 和 subjectKey 在仍有效时必须保留。",
   "输入 payload 会给出 admin.userId 和 admin.name；该 QQ 是普拉娜唯一的老师和管理员。这些字段只用于校验用户身份，不构成需要写入工作记忆的事件。如果 admin.userId 为空，不要记录任何老师或管理员身份；其他用户不得写成老师或管理员。",
-  "提取颗粒度应该粗一些。连续十几条聊天围绕同一件事时，使用一句话总结。",
+  "提取颗粒度应该粗一些。连续十几条聊天围绕同一件事时，合并为一条完整概述。",
   "输出严格 JSON 对象，不要输出 Markdown、解释或额外文字。",
   "格式为 {\"facts\":[{\"id\":\"可复用的原记忆 id 或 null\",\"fact\":\"包含相关用户 QQ 号的事实内容\",\"occurredAt\":\"单个 ISO 时间或 null\",\"occurredEndAt\":\"单个 ISO 时间或 null\",\"userIds\":[\"QQ号\"],\"userName\":\"当前昵称或群名片\",\"promoteToLongTerm\":true,\"longTermId\":\"已有长期记忆 id 或 null\",\"eventType\":\"task\",\"subjectKey\":\"稳定事件主体\"}],\"allPreviousMemoriesInvalidated\":false}。新增事实的 id 返回 null。",
   "通常 allPreviousMemoriesInvalidated 为 false。只有 messages 明确证明全部原记忆都已失效或错误，或者全部原记忆都是应转入用户画像的纯人物属性，并且 facts 为空时，才设为 true。",
@@ -147,13 +148,19 @@ const LONG_TERM_MEMORY_FACT_SCHEMA = {
   required: ["fact", "occurredAt", "occurredEndAt", "userIds", "userName", "eventType", "subjectKey"]
 };
 
-export function defaultPromptContent(id: string) {
+export function defaultPromptContent(id: string, agentName = "普拉娜") {
   const template = defaultFinalPromptTemplate(id);
-  return template ? `${JSON.stringify(template, null, 2)}\n` : "";
+  if (!template) return "";
+  const encodedAgentName = JSON.stringify(agentName).slice(1, -1);
+  return `${JSON.stringify(template, null, 2).replaceAll("普拉娜", encodedAgentName)}\n`;
 }
 
 export function defaultFinalPromptTemplate(id: string): FinalPromptTemplate | undefined {
-  if (id === "conversation.reply") {
+  if (
+    id === "conversation.private-reply" ||
+    id === "conversation.group-reply" ||
+    id === "conversation.reply"
+  ) {
     return {
       messages: [
         {
@@ -162,6 +169,7 @@ export function defaultFinalPromptTemplate(id: string): FinalPromptTemplate | un
             "<agent_rules>@{persona.agents}</agent_rules>",
             "<soul>@{persona.soul}</soul>",
             "<preference>@{persona.preference}</preference>",
+            "<dialogue_style_examples>@{persona.dialogue_style_examples}</dialogue_style_examples>",
             "<user_context>@{persona.user}</user_context>",
             "<relation>@{persona.relation}</relation>",
             "<output_rules>@{runtime.output_rules}</output_rules>",
@@ -183,6 +191,7 @@ export function defaultFinalPromptTemplate(id: string): FinalPromptTemplate | un
       ],
       tools: [
         assistantTextTool,
+        noReplyTool,
         workspaceBashTool,
         websearchTool,
         withRequiredDispatchMessage(generateImgTool),
@@ -254,7 +263,12 @@ export function defaultFinalPromptTemplate(id: string): FinalPromptTemplate | un
   }
   if (id === "conversation.group-summary") {
     return textRequest(
-      ["<soul>@{persona.soul}</soul>", "<preference>@{persona.preference}</preference>", DEFAULT_GROUP_CHAT_SUMMARY_PROMPT].join("\n\n"),
+      [
+        "<soul>@{persona.soul}</soul>",
+        "<preference>@{persona.preference}</preference>",
+        "<dialogue_style_examples>@{persona.dialogue_style_examples}</dialogue_style_examples>",
+        DEFAULT_GROUP_CHAT_SUMMARY_PROMPT
+      ].join("\n\n"),
       "group.payload"
     );
   }

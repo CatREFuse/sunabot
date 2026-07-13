@@ -161,15 +161,23 @@ function readEnvValue(filePath: string | undefined, key: string) {
 }
 
 function resolveCodexAccessToken() {
-  const authFile = process.env.OPEN_ARONA_CODEX_AUTH_FILE || path.join(process.env.CODEX_HOME || homedir(), ".codex/auth.json");
+  const authFile = resolveCodexAuthFile();
   try {
-    const payload = JSON.parse(fs.readFileSync(expandHome(authFile), "utf8")) as { tokens?: { access_token?: string } };
+    const payload = JSON.parse(fs.readFileSync(authFile, "utf8")) as { tokens?: { access_token?: string } };
     const token = String(payload.tokens?.access_token ?? "").trim();
     if (!token || isJwtExpired(token)) return "";
     return token;
   } catch {
     return "";
   }
+}
+
+function resolveCodexAuthFile() {
+  const configured = process.env.OPEN_ARONA_CODEX_AUTH_FILE?.trim();
+  if (!configured) return getWorkspacePath(WORKSPACE_LAYOUT.codexHome, "auth.json");
+  const expanded = expandHome(configured);
+  if (path.isAbsolute(expanded)) return expanded;
+  return resolveProjectPath(expanded) ?? path.resolve(expanded);
 }
 
 export function assertRequestNotAborted(signal?: AbortSignal) {

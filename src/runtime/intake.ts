@@ -24,6 +24,7 @@ import {
   assistantReplyEnvelope,
   decodeAssistantReply,
   decodeIncomingReply,
+  decodeNoReplyPoke,
   decodeToolCompletion,
   incomingReplyEnvelope,
   type AssistantReplyOutboxEnvelope,
@@ -36,6 +37,7 @@ import { configureMemoryPersistence } from "../../services/memory/persistence.js
 import {
   ReplyGateEpochs,
   isOrchestratorReplyRateLimited,
+  readReplyGateSnapshot,
   resolveUserGroupReplyRoute,
   type ReplyGateSnapshot
 } from "../../services/orchestration/groupReplyPolicy.js";
@@ -154,6 +156,7 @@ export async function runtime_performHydrateConversationRecords(this: RuntimeHos
       try {
         const messageId = Number(target.message.id);
         const details = await this.loadMessageDetails(gateway, messageId, {
+          ...(target.record.accountId ? { accountId: target.record.accountId } : {}),
           source: "message",
           groupId: target.record.groupId,
           userId: target.message.userId ?? target.record.userId
@@ -162,6 +165,7 @@ export async function runtime_performHydrateConversationRecords(this: RuntimeHos
           gateway,
           details.replyMessageIds,
           {
+            ...(target.record.accountId ? { accountId: target.record.accountId } : {}),
             source: "quote",
             groupId: target.record.groupId,
             userId: target.message.userId ?? target.record.userId
@@ -350,6 +354,11 @@ export async function runtime_processSessionEvent(this: RuntimeHost,
         if (event.kind === "tool_completion") {
           const payload = decodeToolCompletion(event.payload);
           timeoutIncoming = payload.originalRequest?.incoming;
+          if (
+            !timeoutIncoming ||
+            !this.replySuppression.canReplyTo(timeoutIncoming.time) ||
+            !this.isReplySenderAllowed(timeoutIncoming.userId)
+          ) return { status: "no_reply" };
           await appendRequestLog({
             category: "tool.call",
             action: payload.toolName,
@@ -378,7 +387,10 @@ export async function runtime_processSessionEvent(this: RuntimeHost,
       }, coordinatorSignal);
     } catch (error) {
       if (!isAbortError(error) || !timeoutIncoming) throw error;
-      if (!this.isReplySenderAllowed(timeoutIncoming.userId)) return { status: "no_reply" };
+      if (
+        !this.replySuppression.canReplyTo(timeoutIncoming.time) ||
+        !this.isReplySenderAllowed(timeoutIncoming.userId)
+      ) return { status: "no_reply" };
       const message = /timed out|timeout/i.test(errorMessage(error))
         ? "请求处理超时了，请稍后再试。"
         : "请求处理已取消。";
@@ -490,19 +502,74 @@ export async function runtime_processIncomingReplyEvent(this: RuntimeHost,
         result: { acknowledgement: decodeAssistantReply(deferred.acknowledgement.payload).text }
       };
     }
+    if (delivery.terminalStatus === "no_reply") {
+      return { status: "no_reply", ...(delivery.outbox.length ? { outbox: delivery.outbox } : {}) };
+    }
     return delivery.outbox.length
       ? { status: "completed", outbox: delivery.outbox }
       : { status: "no_reply" };
   }
 export async function runtime_deliverSessionOutbox(this: RuntimeHost, outbox: OutboxRecord, signal: AbortSignal) {
     if (signal.aborted) throw signal.reason ?? new Error("Outbox delivery aborted.");
+    if (outbox.kind === "onebot.poke") {
+      const payload = decodeNoReplyPoke(outbox.payload);
+      if (!isRuntimeIncomingMessage(payload.incoming)) {
+        throw new Error(`Outbox 消息格式无效：${outbox.id}`);
+      }
+      if (!this.replySuppression.canReplyTo(payload.incoming.time)) {
+        return { delivered: false, skipped: "reply_suppressed" };
+      }
+      if (!this.isReplySenderAllowed(payload.incoming.userId)) {
+        return { delivered: false, skipped: "sender_not_allowed" };
+      }
+      const conversationId = conversationRecordId(payload.incoming);
+      const gate = readReplyGateSnapshot(payload.replyGate, payload.incoming.scope, conversationId) ??
+        this.replyGates.capture(payload.incoming.scope, conversationId);
+      if (!this.isReplyTaskCurrent(payload.incoming, gate, signal)) {
+        return { delivered: false, skipped: "reply_gate_closed" };
+      }
+      const gateway = this.activeGateway;
+      if (!gateway?.getStatus().connected) throw new OutboxDisconnectedError("OneBot is not connected.");
+      if (!gateway.poke) throw new Error("当前消息适配器不支持戳一戳。");
+      await gateway.poke({
+        ...(payload.incoming.accountId ? { accountId: payload.incoming.accountId } : {}),
+        userId: payload.incoming.userId,
+        ...(payload.incoming.groupId ? { groupId: payload.incoming.groupId } : {})
+      });
+      await appendRequestLog({
+        category: "runtime.action",
+        action: "reply.no_reply.poke.sent",
+        request: {
+          scope: payload.incoming.scope,
+          userId: payload.incoming.userId,
+          groupId: payload.incoming.groupId
+        },
+        response: { status: "sent" },
+        metadata: {
+          conversationId: conversationRecordId(payload.incoming),
+          incomingMessageId: payload.incoming.messageId == null ? undefined : String(payload.incoming.messageId),
+          runId: payload.logRunId,
+          stage: "reply"
+        }
+      });
+      return { delivered: true };
+    }
     if (outbox.kind !== "onebot.reply") throw new Error(`不支持的 outbox 类型：${outbox.kind}`);
     const payload = decodeAssistantReply(outbox.payload);
     if (!isRuntimeIncomingMessage(payload.incoming)) {
       throw new Error(`Outbox 消息格式无效：${outbox.id}`);
     }
+    if (!this.replySuppression.canReplyTo(payload.incoming.time)) {
+      return { delivered: false, skipped: "reply_suppressed" };
+    }
     if (!this.isReplySenderAllowed(payload.incoming.userId)) {
       return { delivered: false, skipped: "sender_not_allowed" };
+    }
+    const conversationId = conversationRecordId(payload.incoming);
+    const gate = readReplyGateSnapshot(payload.replyGate, payload.incoming.scope, conversationId) ??
+      this.replyGates.capture(payload.incoming.scope, conversationId);
+    if (!this.isReplyTaskCurrent(payload.incoming, gate, signal)) {
+      return { delivered: false, skipped: "reply_gate_closed" };
     }
     const gateway = this.activeGateway;
     if (!gateway?.getStatus().connected) throw new OutboxDisconnectedError("OneBot is not connected.");

@@ -7,11 +7,13 @@ import net from "node:net";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import { DatabaseSync } from "node:sqlite";
 import dotenv from "dotenv";
 import { resolveProxyConfiguration } from "../../packages/platform/proxy.mjs";
 import { resolveProjectRoot, resolveWorkspace } from "../shared/paths.mjs";
 import {
   composeProjectName,
+  databasePathOverrideConfigured,
   ensureRuntimeSecrets,
   envValue,
   isWslRuntime,
@@ -50,6 +52,7 @@ export async function runLauncher(argv = process.argv.slice(2), environment = pr
     contract,
     identity,
     project,
+    environment,
     runtimeEnv: path.join(workspace, contract.paths.secrets ?? "secrets/runtime.env"),
     statePath: path.join(workspace, "runtime/launcher-state.json"),
     coreLog: path.join(workspace, contract.paths.logs ?? "runtime/logs", parsed.dev ? "core-dev.log" : "core.log"),
@@ -83,6 +86,9 @@ export async function runLauncher(argv = process.argv.slice(2), environment = pr
 }
 
 async function up(context) {
+  if (databasePathOverrideConfigured(context.environment, context.runtimeEnvironment)) {
+    throw new Error("SUNABOT_DATABASE_PATH 已停止支持；主库固定为 workspace/business/data/sunabot.sqlite。");
+  }
   assertNonRootRuntimeUser();
   await assertDockerAvailable();
   const initial = await inspectRuntime(context);
@@ -91,6 +97,7 @@ async function up(context) {
   const secrets = await prepareSecrets(context);
   await ensureAdminCredentials(context);
   await assertComposeServices(context);
+  await ensureRuntimeNetwork(context);
   const before = await inspectRuntime(context);
   assertExpectedProject(context, before);
 
@@ -127,7 +134,6 @@ async function upNative(context, before, secrets) {
   await ensureNativeDependencies(context);
   if (!context.dev) await ensureNativeBuild(context);
   await compose(context, ["build", context.contract.napcatService]);
-  await compose(context, ["create", context.contract.napcatService]);
   const onebotListenHost = await resolveNativeOnebotListenHost(context);
   if (await tcpOpen(onebotListenHost, context.contract.onebotPort)) {
     throw new Error(`${onebotListenHost}:${context.contract.onebotPort} 已被非当前 launcher 管理的进程占用。`);
@@ -147,23 +153,19 @@ async function upNative(context, before, secrets) {
     }
 
     const reverseWebSocket = await probeNativeOneBot(context);
-    await configureNapcat(context, reverseWebSocket, secrets);
-    await clearNapcatLoginQr(context);
-    await compose(context, ["up", "-d", context.contract.napcatService]);
-    await waitForComponentHealth(
-      context,
-      "napcat",
-      context.contract.napcatReadyTimeoutSeconds * 1_000
-    );
+    const accounts = await loadNapcatAccounts(context);
+    await startNapcatAccounts(context, accounts, reverseWebSocket, secrets);
     await writeState(context, {
       ...(await readState(context.statePath)),
       mode: "native",
       dev: context.dev,
       reverseWebSocket,
+      accounts: accounts.map(({ id, webuiPort }) => ({ id, webuiPort })),
       onebotListenHost,
       core: native.record
     });
   } catch (error) {
+    await stopNapcatContainers(context).catch(() => {});
     await compose(context, ["--profile", context.contract.coreProfile, "down", "--remove-orphans"]).catch(() => {});
     await stopNativeCore(context, native.record, { removeState: true }).catch(() => {});
     throw error;
@@ -176,7 +178,6 @@ async function upDocker(context, before, secrets) {
   }
   try {
     await prepareWslDockerProxy(context);
-    await configureNapcat(context, context.contract.dockerReverseWebSocket, secrets);
     await compose(context, [
       "--profile",
       context.contract.coreProfile,
@@ -192,26 +193,16 @@ async function upDocker(context, before, secrets) {
     await waitForComponentHealth(context, "core", context.contract.coreReadyTimeoutSeconds * 1_000);
     await assertDockerCoreBwrap(context);
     await assertDockerCoreCodex(context);
-    await clearNapcatLoginQr(context);
-    await compose(context, [
-      "--profile",
-      context.contract.coreProfile,
-      "up",
-      "-d",
-      "--build",
-      context.contract.napcatService
-    ]);
-    await waitForComponentHealth(
-      context,
-      "napcat",
-      context.contract.napcatReadyTimeoutSeconds * 1_000
-    );
+    const accounts = await loadNapcatAccounts(context);
+    await startNapcatAccounts(context, accounts, context.contract.dockerReverseWebSocket, secrets);
     await writeState(context, {
       mode: "docker",
       dev: false,
-      reverseWebSocket: context.contract.dockerReverseWebSocket
+      reverseWebSocket: context.contract.dockerReverseWebSocket,
+      accounts: accounts.map(({ id, webuiPort }) => ({ id, webuiPort }))
     });
   } catch (error) {
+    await stopNapcatContainers(context).catch(() => {});
     await compose(context, ["--profile", context.contract.coreProfile, "down", "--remove-orphans"]).catch(() => {});
     await fs.rm(context.statePath, { force: true });
     throw error;
@@ -231,7 +222,10 @@ async function down(context) {
     throw new Error(`Native PID ${runtime.native.pid} 与 launcher 记录不匹配；未发送停止信号。`);
   }
   if (runtime.napcat.matches.length > 0) {
-    await compose(context, ["--profile", context.contract.coreProfile, "stop", "--timeout", String(context.contract.shutdownTimeoutSeconds), context.contract.napcatService]);
+    for (const container of runtime.napcat.matches) {
+      await command("docker", ["stop", "--timeout", String(context.contract.shutdownTimeoutSeconds), container.id]).catch(() => {});
+      await command("docker", ["rm", container.id]).catch(() => {});
+    }
   }
   if (runtime.native.running) {
     await stopNativeCore(context, runtime.state.core, { removeState: false });
@@ -241,6 +235,7 @@ async function down(context) {
   if (runtime.containers.length > 0) {
     await compose(context, ["--profile", context.contract.coreProfile, "down", "--remove-orphans"]);
   }
+  await cleanupRemovedNapcatAccounts(context);
   await fs.rm(context.statePath, { force: true });
   console.log("Sunabot Core 与 NapCat 已停止。");
 }
@@ -259,10 +254,13 @@ async function printStatus(context) {
   console.log(`Core: ${coreMode}${runtime.native.running ? ` (PID ${runtime.native.pid})` : ""}`);
   console.log(`API: ${api ? "ready" : "unavailable"} http://127.0.0.1:${context.contract.adminPort}`);
   console.log(`OneBot ingress: ${runtime.dockerCore.running ? "internal" : nativeOnebot ? "ready" : "unavailable"}`);
-  console.log(`NapCat: ${runtime.napcat.running ? "running" : "stopped"}`);
+  console.log(`NapCat: ${runtime.napcat.matches.filter((item) => item.state === "running").length}/${runtime.napcat.matches.length} running`);
   if (runtime.state?.dev && runtime.native.running) console.log("Frontend: http://127.0.0.1:5173");
-  console.log(`NapCat WebUI: http://127.0.0.1:${context.contract.webuiPort}/webui`);
-  if (runtime.napcat.running && await awaitingLogin(context)) console.log("QQ: awaiting-login");
+  const accountState = runtime.state?.accounts ?? [];
+  for (const account of accountState) {
+    const running = runtime.napcat.matches.some((item) => item.accountId === account.id && item.state === "running");
+    console.log(`NapCat ${account.id}: ${running ? "running" : "stopped"} http://127.0.0.1:${account.webuiPort}/webui`);
+  }
   if (runtime.foreignProjects.length > 0) {
     console.log(`Conflict: workspace labels also appear in ${runtime.foreignProjects.join(", ")}`);
     process.exitCode = 1;
@@ -288,6 +286,11 @@ async function doctor(context) {
   checks.push(check("Node", !context.contract.nodeVersion || process.versions.node === context.contract.nodeVersion, process.versions.node));
   checks.push(check("Workspace", await exists(context.workspace), context.workspace));
   checks.push(check("runtime.env", await exists(context.runtimeEnv), context.runtimeEnv));
+  checks.push(check(
+    "Database path",
+    !databasePathOverrideConfigured(context.environment, context.runtimeEnvironment),
+    "workspace/business/data/sunabot.sqlite"
+  ));
   let source = "";
   if (await exists(context.runtimeEnv)) source = await fs.readFile(context.runtimeEnv, "utf8");
   try {
@@ -352,9 +355,9 @@ async function doctor(context) {
       checks.push(check("Docker Codex auth", codex.auth.ok, codex.auth.detail));
     }
   }
-  if (runtime.napcat.matches.length > 0) {
-    const status = await componentHealthStatus(runtime.napcat.matches[0].id);
-    checks.push(check("NapCat health", status === "healthy", status));
+  for (const container of runtime.napcat.matches) {
+    const status = await componentHealthStatus(container.id);
+    checks.push(check(`NapCat ${container.accountId || "unknown"} health`, status === "healthy", status));
   }
   for (const item of checks) console.log(`${item.ok ? "[OK]" : "[FAIL]"} ${item.name}: ${item.detail}`);
   if (legacyStopped.length > 0) console.log("[OK] Legacy rollback container: retained (stopped)");
@@ -372,10 +375,12 @@ async function logs(context) {
   }
   if (runtime.containers.length > 0) {
     const services = [
-      ...(runtime.dockerCore.running ? [context.contract.coreService] : []),
-      ...(runtime.napcat.running ? [context.contract.napcatService] : [])
+      ...(runtime.dockerCore.running ? [context.contract.coreService] : [])
     ];
-    children.push(spawnCompose(context, ["--profile", context.contract.coreProfile, "logs", "-f", ...services]));
+    if (services.length) children.push(spawnCompose(context, ["--profile", context.contract.coreProfile, "logs", "-f", ...services]));
+    for (const container of runtime.napcat.matches.filter((item) => item.state === "running")) {
+      children.push(spawn("docker", ["logs", "-f", "--tail", "120", container.id], { stdio: "inherit" }));
+    }
   }
   await followChildren(children);
 }
@@ -416,15 +421,25 @@ async function ensureAdminCredentials(context) {
   });
 }
 
-async function configureNapcat(context, reverseWebSocket, secrets) {
-  const configDir = path.join(context.workspace, context.contract.paths.napcatConfig ?? "runtime/napcat/config-full");
+async function startNapcatAccounts(context, accounts, reverseWebSocket, secrets) {
+  for (const account of accounts) {
+    await configureNapcat(context, reverseWebSocket, secrets, account);
+    await clearNapcatLoginQr(context, account);
+    await napcatCompose(context, account, ["up", "-d", "--build", context.contract.napcatService]);
+    await waitForNapcatAccountHealth(context, account.id, context.contract.napcatReadyTimeoutSeconds * 1_000);
+  }
+}
+
+async function configureNapcat(context, reverseWebSocket, secrets, account) {
+  const accountRoot = path.join(context.workspace, "runtime/napcat/accounts", account.id);
+  const configDir = path.join(accountRoot, "config-full");
   await fs.mkdir(configDir, { recursive: true, mode: 0o700 });
   let names = (await fs.readdir(configDir)).filter((name) => /^onebot11(?:_\d+)?\.json$/.test(name));
   if (names.length === 0) {
-    const source = await fs.readFile(context.runtimeEnv, "utf8");
-    const account = envValue(source, "NAPCAT_ACCOUNT");
-    names = /^\d{5,12}$/.test(account) ? [`onebot11_${account}.json`] : ["onebot11.json"];
+    names = /^\d{5,20}$/.test(account.qqId ?? "") ? [`onebot11_${account.qqId}.json`] : ["onebot11.json"];
   }
+  const url = new URL(reverseWebSocket);
+  url.searchParams.set("account_id", account.id);
   let changed = false;
   for (const name of names) {
     const filePath = path.join(configDir, name);
@@ -434,7 +449,7 @@ async function configureNapcat(context, reverseWebSocket, secrets) {
     config.network.websocketClients = [{
       name: "sunabot",
       enable: true,
-      url: reverseWebSocket,
+      url: url.toString(),
       messagePostFormat: "array",
       reportSelfMessage: false,
       reconnectInterval: 5000,
@@ -449,13 +464,34 @@ async function configureNapcat(context, reverseWebSocket, secrets) {
   Object.assign(webui, {
     host: "0.0.0.0",
     prefix: typeof webui.prefix === "string" ? webui.prefix : "",
-    port: context.contract.webuiPort,
+    port: 6099,
     token: secrets.WEBUI_TOKEN,
     loginRate: Number.isInteger(webui.loginRate) ? webui.loginRate : 3
   });
   changed = await atomicJsonIfChanged(webuiPath, webui) || changed;
-  console.log(`NapCat 已配置：${names.join(", ")}（Token 已隐藏）。`);
+  const accountEnv = account.qqId ? `NAPCAT_ACCOUNT=${account.qqId}\n` : "";
+  await atomicWrite(path.join(accountRoot, "account.env"), accountEnv, 0o600);
+  console.log(`NapCat ${account.id} 已配置：${names.join(", ")}（Token 已隐藏）。`);
   return changed;
+}
+
+async function loadNapcatAccounts(context) {
+  const databasePath = path.join(context.workspace, "business/data/sunabot.sqlite");
+  if (!await exists(databasePath)) return [{ id: "primary", qqId: undefined, webuiPort: context.contract.webuiPort }];
+  const database = new DatabaseSync(databasePath, { readOnly: true });
+  try {
+    const rows = database.prepare(`
+      SELECT id, qq_id, webui_port
+      FROM agent_accounts
+      WHERE enabled = 1
+      ORDER BY created_at, id
+    `).all();
+    return rows.length > 0
+      ? rows.map((row) => ({ id: String(row.id), qqId: row.qq_id == null ? undefined : String(row.qq_id), webuiPort: Number(row.webui_port) }))
+      : [{ id: "primary", qqId: undefined, webuiPort: context.contract.webuiPort }];
+  } finally {
+    database.close();
+  }
 }
 
 async function probeNativeOneBot(context) {
@@ -510,6 +546,38 @@ async function resolveNativeOnebotListenHost(context) {
   return gateway;
 }
 
+async function ensureRuntimeNetwork(context) {
+  const network = `${context.project}-runtime`;
+  if (await commandSucceeds("docker", ["network", "inspect", network])) return;
+  await command("docker", [
+    "network", "create",
+    "--label", `io.sunabot.runtime-id=${context.contract.runtimeId}`,
+    "--label", `io.sunabot.workspace-id=${context.identity}`,
+    "--label", "io.sunabot.component=runtime-network",
+    network
+  ]);
+}
+
+async function stopNapcatContainers(context) {
+  const containers = (await labeledContainers(context.identity)).filter((item) => item.component === "napcat");
+  for (const container of containers) {
+    await command("docker", ["stop", "--timeout", String(context.contract.shutdownTimeoutSeconds), container.id]).catch(() => {});
+    await command("docker", ["rm", container.id]).catch(() => {});
+  }
+}
+
+async function cleanupRemovedNapcatAccounts(context) {
+  const accountsRoot = path.join(context.workspace, "runtime/napcat/accounts");
+  if (!await exists(accountsRoot)) return;
+  const entries = await fs.readdir(accountsRoot, { withFileTypes: true });
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const accountRoot = path.join(accountsRoot, entry.name);
+    if (!await exists(path.join(accountRoot, ".remove-on-stop"))) continue;
+    await fs.rm(accountRoot, { recursive: true, force: true });
+  }
+}
+
 async function prepareWslDockerProxy(context) {
   if (!context.wsl || context.mode !== "docker") return;
   const proxy = await resolveProxyConfiguration({
@@ -537,6 +605,24 @@ async function waitForComponentHealth(context, component, timeoutMs) {
     await delay(250);
   }
   throw new Error(`${component} 容器健康检查超时：${lastStatus}`);
+}
+
+async function waitForNapcatAccountHealth(context, accountId, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  let lastStatus = "missing";
+  while (Date.now() < deadline) {
+    const match = (await labeledContainers(context.identity))
+      .find((item) => item.component === "napcat" && item.accountId === accountId);
+    if (match) {
+      lastStatus = await componentHealthStatus(match.id).catch(() => "inspect-error");
+      if (lastStatus === "healthy") return;
+      if (["unhealthy", "exited", "dead"].includes(lastStatus)) {
+        throw new Error(`NapCat ${accountId} 容器健康检查失败：${lastStatus}`);
+      }
+    }
+    await delay(250);
+  }
+  throw new Error(`NapCat ${accountId} 容器健康检查超时：${lastStatus}`);
 }
 
 async function componentHealthStatus(containerId) {
@@ -714,7 +800,7 @@ async function inspectRuntime(context) {
   const napcat = componentStatus(containers, "napcat");
   const foreignProjects = [...new Set(containers
     .map((item) => item.project)
-    .filter((project) => project && project !== context.project))];
+    .filter((project) => project && project !== context.project && !project.startsWith(`${context.project}-napcat-`)))];
   return { state, native, containers, legacyContainers, dockerCore, napcat, foreignProjects };
 }
 
@@ -724,7 +810,9 @@ async function labeledContainers(identity) {
     '{{.ID}}',
     '{{.Label "io.sunabot.component"}}',
     '{{.State}}',
-    '{{.Label "com.docker.compose.project"}}'
+    '{{.Label "com.docker.compose.project"}}',
+    '{{.Label "io.sunabot.account-id"}}',
+    '{{.Label "com.docker.compose.oneoff"}}'
   ].join("\t");
   const output = await command("docker", [
     "ps", "-a",
@@ -732,9 +820,9 @@ async function labeledContainers(identity) {
     "--format", format
   ], { capture: true });
   return output.split(/\r?\n/).filter(Boolean).map((line) => {
-    const [id, component, state, project] = line.split("\t");
-    return { id, component, state: state?.toLowerCase(), project };
-  });
+    const [id, component, state, project, accountId, oneoff] = line.split("\t");
+    return { id, component, state: state?.toLowerCase(), project, accountId, oneoff };
+  }).filter((item) => item.oneoff?.toLowerCase() !== "true");
 }
 
 async function findLegacyContainers() {
@@ -789,6 +877,20 @@ async function compose(context, args, options = {}) {
   });
 }
 
+async function napcatCompose(context, account, args, options = {}) {
+  const project = `${context.project}-napcat-${account.id.toLowerCase().replace(/[^a-z0-9_-]+/g, "-")}`;
+  return command("docker", composeArgs(context, args, project), {
+    capture: options.capture,
+    cwd: context.root,
+    env: {
+      ...composeEnvironment(context, project),
+      NAPCAT_ACCOUNT_ID: account.id,
+      NAPCAT_ACCOUNT: account.qqId ?? "",
+      NAPCAT_WEBUI_PORT: String(account.webuiPort)
+    }
+  });
+}
+
 function spawnCompose(context, args) {
   return spawn("docker", composeArgs(context, args), {
     cwd: context.root,
@@ -797,10 +899,10 @@ function spawnCompose(context, args) {
   });
 }
 
-function composeArgs(context, args) {
+function composeArgs(context, args, project = context.project) {
   return [
     "compose",
-    "--project-name", context.project,
+    "--project-name", project,
     "--env-file", context.runtimeEnv,
     "--project-directory", context.root,
     "-f", context.contract.composeFile,
@@ -808,13 +910,13 @@ function composeArgs(context, args) {
   ];
 }
 
-function composeEnvironment(context) {
+function composeEnvironment(context, project = context.project) {
   return {
     ...process.env,
     ...context.runtimeEnvironment,
     ...context.composeOverrides,
-    COMPOSE_PROJECT_NAME: context.project,
-    SUNABOT_COMPOSE_PROJECT: context.project,
+    COMPOSE_PROJECT_NAME: project,
+    SUNABOT_COMPOSE_PROJECT: project,
     SUNABOT_DOCKER_NETWORK: `${context.project}-runtime`,
     SUNABOT_RUNTIME_ID: context.contract.runtimeId,
     SUNABOT_RUNTIME_UID: String(process.getuid?.() ?? 1000),
@@ -969,17 +1071,8 @@ async function treeNewerThan(directory, cutoff) {
   return false;
 }
 
-async function awaitingLogin(context) {
-  const qrPath = path.join(context.workspace, context.contract.paths.napcatQrCode ?? "runtime/napcat/qrcode.png");
-  const manualLoginPath = path.join(context.workspace, context.contract.paths.napcatManualLogin ?? "runtime/napcat/manual-login-required");
-  if (await exists(manualLoginPath)) return true;
-  if (await exists(qrPath)) return true;
-  const source = await fs.readFile(context.runtimeEnv, "utf8").catch(() => "");
-  return !envValue(source, "NAPCAT_ACCOUNT");
-}
-
-async function clearNapcatLoginQr(context) {
-  const qrPath = path.join(context.workspace, context.contract.paths.napcatQrCode ?? "runtime/napcat/qrcode.png");
+async function clearNapcatLoginQr(context, account) {
+  const qrPath = path.join(context.workspace, "runtime/napcat/accounts", account.id, "qrcode.png");
   await fs.rm(qrPath, { force: true });
 }
 

@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import {
   composeProjectName,
   composeServiceRunning,
+  databasePathOverrideConfigured,
   ensureRuntimeSecrets,
   parseComposePs,
   parseLauncherArguments,
@@ -89,6 +90,12 @@ describe("unified runtime launcher", () => {
       dev: true
     });
     expect(parseLauncherArguments(["doctor"], { SUNABOT_DEV: "1" }).dev).toBe(true);
+  });
+
+  it("detects the retired external main database override from either environment source", () => {
+    expect(databasePathOverrideConfigured({}, {})).toBe(false);
+    expect(databasePathOverrideConfigured({ SUNABOT_DATABASE_PATH: "/tmp/external.sqlite" }, {})).toBe(true);
+    expect(databasePathOverrideConfigured({}, { SUNABOT_DATABASE_PATH: "/tmp/external.sqlite" })).toBe(true);
   });
 
   it("uses schema v2 network and Docker service fields", async () => {

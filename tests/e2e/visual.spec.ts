@@ -1,7 +1,12 @@
 import path from "node:path";
 import { mkdir } from "node:fs/promises";
 import { expect, test } from "@playwright/test";
+import sharp from "sharp";
 import { installMockApi } from "./mock-api";
+
+const avatarCropFixture = sharp({
+  create: { width: 900, height: 600, channels: 4, background: "#d71921" }
+}).png().toBuffer();
 
 const viewports = [
   { name: "390x844", width: 390, height: 844 },
@@ -35,8 +40,10 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     await expect(tokenSummary.getByText("缓存输入", { exact: true })).toBeVisible();
     await expect(tokenSummary.getByText("缓存率", { exact: true })).toBeVisible();
     await capture(page, viewport.name, theme, "overview-token-usage");
+    await page.getByRole("button", { name: "日", exact: true }).click();
     await page.getByLabel("每日 Token 消耗日历").scrollIntoViewIfNeeded();
     await capture(page, viewport.name, theme, "overview-token-calendar");
+    await page.getByRole("button", { name: "小时", exact: true }).click();
     await page.getByLabel("今日每小时 Token 总量与输入缓存率").scrollIntoViewIfNeeded();
     await capture(page, viewport.name, theme, "overview-token-hourly");
     await page.locator(".page-shell").evaluate((element) => { element.scrollTop = 0; });
@@ -65,9 +72,18 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     state.offline = false;
     state.qqOnline = true;
 
+    await page.goto("/agents");
+    await page.getByRole("button", { name: "选择 阿罗娜" }).click();
+    await expect(page.getByRole("heading", { name: "阿罗娜", exact: true })).toBeVisible();
+    await expect(page.getByText("阿罗娜主账号", { exact: true })).toBeVisible();
+    await capture(page, viewport.name, theme, "agents-arona");
+    await page.getByRole("button", { name: "选择 普拉娜" }).click();
+
     await page.goto("/conversations/group%3A10001");
     await expect(page.getByRole("heading", { name: "产品讨论群" })).toBeVisible();
     await expect(page.getByLabel("模型调用统计")).toContainText("24 条消息");
+    await page.getByLabel("筛选模型").selectOption("gpt-5.4-mini");
+    await expect(page.getByLabel("模型调用统计")).toContainText("96K Token");
     await expect(page.getByRole("status", { name: "编排器状态" })).toContainText("编排器状态");
     await expect(page.getByRole("status", { name: "编排器状态" })).toContainText("判断中");
     await expect(page.getByRole("status", { name: "编排器状态" })).not.toContainText("消息");
@@ -89,11 +105,11 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     await expect(page.getByLabel("Web Chat 消息")).toBeVisible();
     await capture(page, viewport.name, theme, "web-chat");
 
-    await page.goto("/prompts");
+    await page.goto("/agent-prompts");
     await expect(page.getByLabel("搜索文件")).toBeVisible();
     await capture(page, viewport.name, theme, "prompts-list");
 
-    await page.goto("/prompts/persona.soul");
+    await page.goto("/agent-prompts/persona.soul");
     const editor = page.getByLabel("提示词正文");
     await expect(editor).toBeVisible();
     await editor.fill([
@@ -130,7 +146,7 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     await editor.evaluate((element) => element.setSelectionRange(0, 0));
     await page.getByRole("button", { name: "加载服务器版本" }).click();
 
-    await page.goto("/prompts/conversation.reply");
+    await page.goto("/system-prompts/conversation.private-reply");
     await expect(page.getByRole("textbox", { name: "system 提示词" })).toBeVisible();
     await expect(page.getByRole("tab", { name: "Function Call" })).toBeVisible();
     await capture(page, viewport.name, theme, "prompts-final-request");
@@ -171,18 +187,29 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     await expect(page.getByRole("heading", { name: "模型服务" })).toBeVisible();
     await capture(page, viewport.name, theme, "settings-providers");
 
-    await page.goto("/settings/tools");
+    await page.goto("/settings/broadcastStorm");
+    await expect(page.getByRole("heading", { name: "广播风暴" })).toBeVisible();
+    await expect(page.getByLabel("广播风暴嗅探")).toBeChecked();
+    await capture(page, viewport.name, theme, "settings-broadcast-storm");
+
+    await page.goto("/agent-settings/persona");
+    await expect(page.getByRole("heading", { name: "Agent 身份" })).toBeVisible();
+    await capture(page, viewport.name, theme, "settings-agent-identity");
+
+    await page.goto("/agent-settings/tools");
     await page.getByRole("tab", { name: "运行参数", exact: true }).click();
     const codexModel = page.getByRole("combobox", { name: "模型", exact: true });
     await expect(codexModel).toHaveValue("gpt-5.4-mini");
     await expect(page.getByText("Tavily Key 池", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "添加 Key" })).toBeVisible();
     await capture(page, viewport.name, theme, "settings-tools-codex");
-    await page.getByText("启动 Codex Worker", { exact: true }).click();
+    await page.getByRole("tab", { name: "工具目录", exact: true }).click();
+    await page.getByLabel("启用 Codex").uncheck();
+    await page.getByRole("tab", { name: "运行参数", exact: true }).click();
     await expect(codexModel).toBeDisabled();
     await capture(page, viewport.name, theme, "settings-tools-codex-disabled");
 
-    await page.goto("/settings/bash");
+    await page.goto("/agent-settings/bash");
     await expect(page.getByRole("heading", { name: "命令执行" })).toBeVisible();
     await page.getByLabel("允许群聊").check({ force: true });
     state.nextPatchError = "群聊命令需要管理员限制。";
@@ -200,7 +227,9 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     await expect(page.getByRole("heading", { name: "管理员密码", exact: true })).toBeVisible();
     await capture(page, viewport.name, theme, "settings-security");
 
-    await page.goto("/settings/bot");
+    await page.goto("/agent-settings/bot");
+    await expect(page.getByLabel("过滤名单")).toBeVisible();
+    await capture(page, viewport.name, theme, "settings-reply-behavior");
     await page.getByLabel("管理员称呼").fill("新的管理员称呼");
     await page.getByRole("link", { name: "状态", exact: true }).click();
     await expect(page.getByRole("button", { name: "保存并离开" })).toBeVisible();
@@ -235,7 +264,7 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     state.authenticated = false;
     await page.reload();
     await expect(page.getByRole("heading", { name: "Sunabot", exact: true })).toBeVisible();
-    await expect(page.getByText("管理普拉娜的会话、记忆与工具", { exact: true })).toBeVisible();
+    await expect(page.getByText("管理 Agent、QQ 账号、会话与记忆", { exact: true })).toBeVisible();
     await expect(page.getByRole("heading", { name: "管理员登录" })).toBeVisible();
     await expect(page.getByText(/SECURE SESSION|ADMIN ACCESS|HttpOnly|浏览器存储/i)).toHaveCount(0);
     await capture(page, viewport.name, theme, "admin-login");
@@ -250,6 +279,29 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
   }
 });
 
+test("头像裁图四视口矩阵", async ({ page }, testInfo) => {
+  test.setTimeout(120_000);
+  const theme = testInfo.project.name.endsWith("dark") ? "dark" : "light";
+  await page.addInitScript((selectedTheme) => localStorage.setItem("sunabot.theme", selectedTheme), theme);
+  await page.emulateMedia({ colorScheme: theme, reducedMotion: "reduce" });
+  await installMockApi(page);
+
+  for (const viewport of viewports) {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.goto("/agent-settings/persona");
+    await expect(page.getByRole("heading", { name: "Agent 身份" })).toBeVisible();
+    await page.getByLabel("选择 WebUI 头像").setInputFiles({
+      name: "plana.png",
+      mimeType: "image/png",
+      buffer: await avatarCropFixture
+    });
+    const cropDialog = page.getByRole("dialog", { name: "裁剪头像" });
+    await expect(cropDialog).toBeVisible();
+    await capture(page, viewport.name, theme, "settings-agent-avatar-crop");
+    await cropDialog.getByRole("button", { name: "取消", exact: true }).click();
+  }
+});
+
 test("工具目录四视口矩阵", async ({ page }, testInfo) => {
   test.setTimeout(120_000);
   const theme = testInfo.project.name.endsWith("dark") ? "dark" : "light";
@@ -259,10 +311,10 @@ test("工具目录四视口矩阵", async ({ page }, testInfo) => {
 
   for (const viewport of viewports) {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
-    await page.goto("/settings/tools");
+    await page.goto("/agent-settings/tools");
     await expect(page.getByRole("tab", { name: "工具目录", exact: true })).toHaveAttribute("aria-selected", "true");
     await expect(page.getByLabel("搜索工具")).toBeVisible();
-    await expect(page.getByLabel(/^启用 /)).toHaveCount(7);
+    await expect(page.getByLabel(/^启用 /)).toHaveCount(8);
     await capture(page, viewport.name, theme, "settings-tools-catalog");
 
     await page.getByRole("button", { name: "查看 行动中消息 详情" }).click();
@@ -270,6 +322,12 @@ test("工具目录四视口矩阵", async ({ page }, testInfo) => {
     await expect(page.getByRole("table", { name: "工具参数" })).toBeVisible();
     await capture(page, viewport.name, theme, "settings-tools-detail");
     await page.getByRole("button", { name: "关闭工具详情" }).click();
+
+    await page.getByRole("button", { name: "查看 静默结束 详情" }).click();
+    const noReplyDialog = page.getByRole("dialog", { name: "静默结束" });
+    await expect(noReplyDialog.getByLabel("no_reply 时戳一戳")).toBeVisible();
+    await capture(page, viewport.name, theme, "settings-tools-no-reply-detail");
+    await noReplyDialog.getByRole("button", { name: "关闭工具详情" }).click();
   }
 });
 

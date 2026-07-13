@@ -3,6 +3,7 @@ export interface ProviderLogContext {
   incomingMessageId?: string;
   runId?: string;
   stage?: string;
+  promptFamily?: string;
   memoryKind?: "working_long_term" | "user_profile";
   attempt?: number;
   retry?: number;

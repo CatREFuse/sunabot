@@ -23,4 +23,4 @@ Core 读取当前仓库或显式 `SUNABOT_WORKSPACE`。所有业务配置、SQLi
 
 Linux/WSL Native Core 需要 runtime contract 固定的 Node.js、bubblewrap 和 LibreOffice。bubblewrap 缺失或 namespace probe 失败时，`workspace_bash` 必须安全拒绝。macOS Native Core 关闭 `workspace_bash`。
 
-本目录中旧的 NapCat systemd unit、Native NapCat 导出和安装资产只用于识别旧部署，不能作为当前启动入口。旧服务端切换前阅读 `docs/migrations/one-container-to-split-runtime.md`。
+Linux 发行包同时携带统一 launcher 与 Docker Compose；解压后仍使用根目录 `./sunabot.sh`。`bin/start-sunabot.sh` 仅供 launcher 或进程管理器启动 Core，不启动 NapCat。旧服务端切换前阅读 `docs/migrations/one-container-to-split-runtime.md`。

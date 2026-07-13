@@ -10,18 +10,32 @@
 | --- | --- | --- |
 | `docs/specs/current-system-spec.md` | 当前产品范围、业务规则、数据边界、持久化结构、功能—代码文件索引和验证标准 | 任何代码或配置修改前必读 |
 | `docs/todo.md` | TODO-driven 架构整理、性能治理、分离运行时交付任务、依赖与完成证据 | 规划迭代、选择任务、确认依赖或验收进度时读取 |
-| `docs/audits/2026-07-11-codebase-audit.md` | 已验证基线、问题编号、风险、优先级和优化顺序 | 修复缺陷、性能优化、解耦或可靠性改造前读取 |
+| `docs/audits/2026-07-11-codebase-audit.md` | 历史基线、原始问题编号、风险和当时的优化顺序 | 对照旧问题来源或比较历史实现时读取 |
+| `docs/audits/2026-07-14-business-flow-audit.md` | 异步投递、媒体历史、首次运行、迁移门禁、账号调和与 readiness 的已修复项和开放问题 | 修改 outbox、Provider 工具循环、首次接入、迁移或运行检查前读取 |
 | `docs/design/settings-information-architecture.md` | 管理台设置的信息层级、Provider 类型、字段归属与交互约束 | 调整设置页、Provider 配置或账号操作前读取 |
+| `docs/design/multi-agent-information-architecture.md` | 多 Agent、多 QQ、管理台导航、Agent 工作区与统计口径 | 新增 Agent、调整 Agent 切换、多 QQ 接入或按 Agent 隔离数据前读取 |
 | `docs/architecture/project-structure-plan.md` | 目标项目结构、模块边界、组件通信、数据分层、Core Native/Docker 模型和迁移顺序 | 调整目录、拆分模块、设计协议或修改运行打包前读取 |
 | `docs/migrations/wsl2-migration-plan.md` | Windows 11、Windows Server、WSL2、Docker、打包、部署、验收和回滚方案 | 迁移、打包或调整跨平台部署时读取 |
 | `docs/migrations/one-container-to-split-runtime.md` | 现有单容器服务端拉取新代码后的停服、备份、切换、验证和回滚备忘录 | 旧服务端首次升级到 NapCat 独立容器前必读 |
+| `docs/migrations/single-agent-to-multi-agent.md` | 单 Agent 工作区迁移到 Plana、primary 和多 Agent 注册结构的预检、备份、执行、验收与回滚 | 首次启用多 Agent、多 QQ 前必读 |
 | `docs/setup-napcat.md` | sunabot、NapCat、WebUI 和 OneBot 反向 WebSocket 的本机启动配置 | 部署、重启或排查 OneBot 连接时读取 |
 | `docs/security/admin-access.md` | 管理员账号密码、会话、CSRF、限流、熔断与公网代理边界 | 修改鉴权、WebUI 外网访问或紧急处置时读取 |
 | `docs/deployment/distributed-workspace.md` | Git pull、新终端、workspace 分离、主实例切换与离线备份边界 | 多终端开发、更新或迁移 workspace 时读取 |
-| `docs/operations/sqlite-backup-recovery.md` | 主库与 session queue 一致恢复点、7/30 天保留、恢复校验、季度演练和故障门禁 | 执行每日备份、恢复、保留清理或故障演练时读取 |
+| `docs/operations/sqlite-backup-recovery.md` | 默认 Plana 与全部 Agent 业务库/queue 数据库对的一致恢复点、7/30 天保留、恢复校验、季度演练和故障门禁 | 执行每日备份、恢复、保留清理或故障演练时读取 |
 | `docs/references/README.md` | OneBot v11、v12 协议资料的来源、版本和本地入口 | 核对 OneBot 事件、消息段、动作或兼容性时读取 |
 
 新增、移动、重命名或删除 `docs/` 下的有效文档时，必须同步更新本索引。历史方案不进入当前索引。
+
+## 全局 TODO
+
+| 优先级 | 当前开放工作 |
+| --- | --- |
+| P1 | `FLOW-001` 按 QQ 隔离 outbox 断连分区；`FLOW-002` 远端发送与本地 settle 两阶段化 |
+| P1 | `MIG-001` SQLite 迁移恢复边界；`MIG-002` workspace 布局迁移完整回滚 |
+| P1 | `ONBOARD-002` 统一 readiness/doctor；`ONBOARD-003` 新 QQ runtime reconciler；`ONBOARD-004` 空 workspace 首次运行 E2E 与各持久化边界中断续跑/回滚 |
+| P2 | `FLOW-003` Provider 跨轮 `TurnToolState`；`RECOVERY-001` 中断恢复续跑/回滚；`ONBOARD-005` help 与只读 CLI 零安装 |
+
+任务状态、实施方法和验收证据统一维护在 `docs/todo.md`；业务影响与故障复现见 `docs/audits/2026-07-14-business-flow-audit.md`。
 
 ## 索引入口
 
@@ -30,20 +44,21 @@
 | OneBot、消息解析、回复、群聊编排 | `adapters/onebot/onebotGateway.ts`, `src/runtime.ts`, `services/orchestration/groupReplyPolicy.ts` |
 | 会话顺序、异步任务、outbox、断线恢复 | `services/sessions/` |
 | 记忆、用户画像、长期记忆、压缩 | `services/memory/`, `adapters/sqlite/applicationDataStore.ts` |
-| 请求日志、会话记录、图片历史 | `adapters/sqlite/applicationDataStore.ts`, `src/requestLog.ts`, `apps/api/plugins/conversationRoutes.ts`, `apps/api/plugins/mediaRoutes.ts` |
+| 请求日志、会话记录、图片历史 | `adapters/sqlite/applicationDataStore.ts`, `adapters/sqlite/modelCallStore.ts`, `src/requestLog.ts`, `apps/api/plugins/conversationRoutes.ts`, `apps/api/plugins/mediaRoutes.ts` |
 | 文件读取、PDF、Office、附件缓存 | `services/media/attachments/` |
 | Provider、工具调用、Codex、联网搜索 | `adapters/model/openaiProvider.ts`, `services/tools/`, `adapters/codex/codexTool.ts`, `adapters/model/webSearchTool.ts` |
 | 人格和最终提示词 | `services/agent/` |
 | 管理 API、设置和 Agent 文件 | `apps/api/plugins/`, `apps/api/server.ts`, `src/admin/` |
 | 管理台页面 | `apps/admin-web/src/views/`, `apps/admin-web/src/components/`, `apps/admin-web/src/composables/` |
-| 数据升级与部署 | `tooling/migrations/migrate-to-sqlite.mjs`, `deploy/`, `docs/migrations/wsl2-migration-plan.md` |
+| 数据升级与部署 | `packages/platform/multiAgentMigrationGate.mjs`, `tooling/migrations/`, `deploy/`, `docs/migrations/` |
 
 完整映射见 `docs/specs/current-system-spec.md` 的“功能—代码文件索引”。
 
 ## 持久化规则
 
 - 增长型业务数据必须写入 SQLite。
-- 主库是 `workspace/business/data/sunabot.sqlite`；会话执行队列是 `workspace/business/data/session-queue.sqlite`；附件分块是缓存项内的 `chunks.sqlite`。
+- 默认 Plana 的注册/业务主库是 `workspace/business/data/sunabot.sqlite`，会话执行队列是 `workspace/business/data/session-queue.sqlite`。
+- 其他 Agent 的业务主库与队列分别是 `workspace/business/agents/<agentId>/data/sunabot.sqlite` 和 `workspace/business/agents/<agentId>/data/session-queue.sqlite`；附件分块是缓存项内的 `chunks.sqlite`。
 - 禁止新增会话、消息、记忆、调度队列、请求日志或历史索引的 JSON/JSONL 持久化。
 - Codex JSONL 仅用于子进程协议，可以保留。
 - 配置、人格、提示词、单项 manifest 和可重建小缓存可以继续使用 JSON 或 Markdown。
@@ -77,10 +92,7 @@
 基础验证：
 
 ```bash
-npm run check
-npm test
-npm run build
-npm run test:e2e
+npm run verify
 ```
 
-界面变更还需运行 `npm run test:visual` 并检查截图。数据迁移必须在服务停止后执行 `npm run migrate:sqlite`，确认备份、记录数校验、SQLite checkpoint 和重启后的 API 状态。
+界面变更还需运行 `npm run test:visual` 并检查截图。数据迁移必须在服务停止后执行对应的 `npm run migrate:sqlite` 或 `npm run migrate:multi-agent` 流程，确认恢复点、记录数校验、SQLite checkpoint 和重启后的 API 状态。

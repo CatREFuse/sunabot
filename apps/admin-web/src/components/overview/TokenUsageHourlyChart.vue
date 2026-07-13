@@ -1,98 +1,138 @@
 <script setup lang="ts">
 import { computed } from "vue";
+import { BarChart, LineChart } from "echarts/charts";
+import { AriaComponent, GridComponent, LegendComponent, TooltipComponent } from "echarts/components";
+import { use, type EChartsCoreOption } from "echarts/core";
+import { SVGRenderer } from "echarts/renderers";
 import type { TokenUsagePayload } from "../../types";
 import { formatExactNumber, formatPercent } from "../../utils/numberFormat";
+import { useTheme } from "../../composables/useTheme";
+import EChart from "../ui/EChart.vue";
 
-const PLOT_BOTTOM = 210;
-const PLOT_HEIGHT = 176;
-const HOUR_STEP = 29;
+use([BarChart, LineChart, AriaComponent, GridComponent, LegendComponent, TooltipComponent, SVGRenderer]);
 
 const props = defineProps<{ hours: TokenUsagePayload["hours"] }>();
-const maxTotal = computed(() => Math.max(1, ...props.hours.map((hour) => hour.total)));
-const ratePoints = computed(() => props.hours.flatMap((hour, index) => {
-  if (hour.cacheRate == null) return [];
-  const rate = clampRate(hour.cacheRate);
-  return [{ key: `${hour.hour}-${index}`, hour: hour.hour, rate, x: hourX(index), y: rateY(rate) }];
-}));
-const lineSegments = computed(() => {
-  const segments: string[] = [];
-  let current: string[] = [];
-  for (let index = 0; index < props.hours.length; index += 1) {
-    const hour = props.hours[index]!;
-    if (hour.cacheRate == null) {
-      if (current.length > 1) segments.push(current.join(" "));
-      current = [];
-      continue;
-    }
-    current.push(`${hourX(index)},${rateY(clampRate(hour.cacheRate))}`);
-  }
-  if (current.length > 1) segments.push(current.join(" "));
-  return segments;
-});
+const { effectiveTheme } = useTheme();
 
 function clampRate(rate: number) {
   return Math.min(Math.max(rate, 0), 1);
 }
 
-function hourX(index: number) {
-  return 18 + index * HOUR_STEP;
-}
+const option = computed<EChartsCoreOption>(() => {
+  const dark = effectiveTheme.value === "dark";
+  const colors = {
+    text: dark ? "#999999" : "#666666",
+    line: dark ? "#333333" : "#cccccc",
+    bar: dark ? "#b8b8b8" : "#7d7d7d",
+    success: dark ? "#4a9e5c" : "#39844a",
+    page: dark ? "#000000" : "#f5f5f5",
+    tooltip: dark ? "#111111" : "#ffffff",
+    display: dark ? "#ffffff" : "#000000"
+  };
 
-function rateY(rate: number) {
-  return PLOT_BOTTOM - rate * PLOT_HEIGHT;
-}
-
-function barHeight(total: number) {
-  return total / maxTotal.value * PLOT_HEIGHT;
-}
+  return {
+    animation: false,
+    aria: { enabled: true, description: "今日每小时 Token 总量与输入缓存率" },
+    grid: { top: 42, right: 44, bottom: 30, left: 8, outerBoundsMode: "same" },
+    legend: {
+      top: 0,
+      right: 0,
+      itemWidth: 12,
+      itemHeight: 7,
+      textStyle: { color: colors.text, fontFamily: "Space Mono", fontSize: 10 },
+      data: ["总 Token", "缓存率"]
+    },
+    tooltip: {
+      trigger: "axis",
+      backgroundColor: colors.tooltip,
+      borderColor: colors.line,
+      borderWidth: 1,
+      textStyle: { color: colors.display, fontFamily: "Space Mono", fontSize: 11 },
+      axisPointer: { type: "shadow", shadowStyle: { color: dark ? "rgba(255,255,255,.05)" : "rgba(0,0,0,.035)" } },
+      formatter: (params: Array<{ seriesName: string; value: number | null; axisValue: string }>) => {
+        const hour = params[0]?.axisValue ?? "";
+        const rows = params.flatMap((item) => item.value == null ? [] : [
+          `${item.seriesName}　${item.seriesName === "缓存率" ? formatPercent(item.value) : `${formatExactNumber(item.value)} Token`}`
+        ]);
+        return [`${hour}:00`, ...rows].join("<br>");
+      }
+    },
+    xAxis: {
+      type: "category",
+      data: props.hours.map((hour) => String(hour.hour)),
+      axisLine: { lineStyle: { color: colors.line } },
+      axisTick: { show: false },
+      axisLabel: {
+        color: colors.text,
+        fontFamily: "Space Mono",
+        fontSize: 10,
+        interval: 0,
+        formatter: (value: string) => ["0", "6", "12", "18", "23"].includes(value) ? value : ""
+      }
+    },
+    yAxis: [
+      {
+        type: "value",
+        min: 0,
+        splitNumber: 3,
+        axisLabel: { show: false },
+        axisLine: { show: false },
+        axisTick: { show: false },
+        splitLine: { lineStyle: { color: colors.line, opacity: 0.38, type: "dashed" } }
+      },
+      {
+        type: "value",
+        min: 0,
+        max: 1,
+        interval: 1,
+        axisLabel: {
+          color: colors.success,
+          fontFamily: "Space Mono",
+          fontSize: 10,
+          formatter: (value: number) => formatPercent(value)
+        },
+        axisLine: { show: false },
+        axisTick: { show: false },
+        splitLine: { show: false }
+      }
+    ],
+    series: [
+      {
+        name: "总 Token",
+        type: "bar",
+        data: props.hours.map((hour) => hour.total),
+        barMaxWidth: 22,
+        itemStyle: { color: colors.bar, opacity: dark ? 0.72 : 0.62 }
+      },
+      {
+        name: "缓存率",
+        type: "line",
+        yAxisIndex: 1,
+        data: props.hours.map((hour) => hour.cacheRate == null ? null : clampRate(hour.cacheRate)),
+        connectNulls: false,
+        symbol: "circle",
+        symbolSize: 7,
+        lineStyle: { color: colors.success, width: 2.5 },
+        itemStyle: { color: colors.page, borderColor: colors.success, borderWidth: 2.5 },
+        emphasis: { scale: 1.25 }
+      }
+    ]
+  };
+});
 </script>
 
 <template>
   <article class="usage-chart">
     <header class="usage-chart__header">
       <span class="usage-card__label"><i class="bx bx-bar-chart-alt-2" aria-hidden="true"></i>今日小时分布</span>
-      <span class="chart-legend" aria-label="图例">
-        <span><i class="bx bx-bar-chart-alt-2 chart-legend__bar" aria-hidden="true"></i>总 Token</span>
-        <span><i class="bx bx-trending-up chart-legend__line" aria-hidden="true"></i>缓存率</span>
-      </span>
     </header>
-    <svg class="hour-chart" viewBox="0 0 720 240" role="img" aria-label="今日每小时 Token 总量与输入缓存率">
-      <title>今日每小时 Token 与缓存率</title>
-      <line x1="0" :y1="PLOT_BOTTOM" x2="720" :y2="PLOT_BOTTOM" class="chart-axis" />
-      <rect
-        v-for="(hour, index) in hours"
-        :key="hour.hour"
-        :x="8 + index * HOUR_STEP"
-        :y="PLOT_BOTTOM - barHeight(hour.total)"
-        width="19"
-        :height="barHeight(hour.total)"
-        class="chart-bar"
-      ><title>{{ hour.hour }}:00 · {{ formatExactNumber(hour.total) }} Token · 缓存率 {{ formatPercent(hour.cacheRate) }}</title></rect>
-      <polyline v-for="(points, index) in lineSegments" :key="index" :points="points" class="chart-line" />
-      <circle v-for="point in ratePoints" :key="point.key" :cx="point.x" :cy="point.y" r="2.5" class="chart-point">
-        <title>{{ point.hour }}:00 · 缓存率 {{ formatPercent(point.rate) }}</title>
-      </circle>
-      <text x="710" y="31" text-anchor="end" class="chart-rate-label">100%</text>
-      <text x="710" y="207" text-anchor="end" class="chart-rate-label">0%</text>
-      <text v-for="hour in [0, 6, 12, 18, 23]" :key="hour" :x="8 + hour * HOUR_STEP" y="232" class="chart-label">{{ hour }}</text>
-    </svg>
+    <EChart class="hour-chart" :option="option" accessible-label="今日每小时 Token 总量与输入缓存率" />
   </article>
 </template>
 
 <style scoped>
 .usage-chart { min-width: 0; overflow: hidden; border-block: 1px solid rgb(var(--color-line)); background: transparent; padding: 20px 0; }
-.usage-chart__header { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px 16px; color: rgb(var(--color-mute)); font-family: "Space Mono", monospace; font-size: 9px; }
-.usage-card__label, .chart-legend, .chart-legend span { display: flex; align-items: center; }
-.usage-card__label { gap: 7px; font-size: 10px; letter-spacing: .06em; text-transform: uppercase; }
-.chart-legend { flex-wrap: wrap; gap: 12px; }
-.chart-legend span { gap: 4px; }
-.chart-legend__bar { color: rgb(var(--color-interactive)); }
-.chart-legend__line { color: rgb(var(--color-success)); }
-.hour-chart { display: block; width: 100%; min-height: 190px; margin-top: 8px; overflow: visible; }
-.chart-axis { stroke: rgb(var(--color-visible)); stroke-width: 1; }
-.chart-bar { fill: color-mix(in srgb, rgb(var(--color-display)) 34%, transparent); }
-.chart-line { fill: none; stroke: rgb(var(--color-success)); stroke-width: 2; vector-effect: non-scaling-stroke; }
-.chart-point { fill: rgb(var(--color-page)); stroke: rgb(var(--color-success)); stroke-width: 2; vector-effect: non-scaling-stroke; }
-.chart-label, .chart-rate-label { fill: rgb(var(--color-mute)); font-family: "Space Mono", monospace; font-size: 10px; }
-.chart-rate-label { fill: rgb(var(--color-success)); font-size: 9px; }
+.usage-chart__header { display: flex; color: rgb(var(--color-mute)); font-family: "Space Mono", monospace; font-size: 9px; }
+.usage-card__label { display: flex; align-items: center; gap: 7px; font-size: 10px; letter-spacing: .06em; text-transform: uppercase; }
+.hour-chart { width: 100%; height: 240px; margin-top: 8px; }
 </style>

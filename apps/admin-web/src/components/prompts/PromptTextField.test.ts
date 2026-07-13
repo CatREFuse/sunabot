@@ -110,4 +110,20 @@ describe("PromptTextField", () => {
     expect(highlight.html()).toContain("&lt;safe&gt;");
     expect(highlight.text()).toContain("@{user.input}");
   });
+
+  it("styles only available variable references like inline code", () => {
+    const wrapper = mount(PromptTextField, {
+      props: {
+        modelValue: "`inline` @{user.input} @{missing.value}",
+        variables,
+        label: "系统提示词"
+      }
+    });
+    const highlight = wrapper.get(".prompt-field__highlight");
+
+    expect(highlight.findAll(".markup-code")).toHaveLength(2);
+    expect(highlight.get(".markup-variable.markup-code").text()).toBe("@{user.input}");
+    expect(highlight.findAll(".markup-variable")).toHaveLength(1);
+    expect(highlight.text()).toContain("@{missing.value}");
+  });
 });

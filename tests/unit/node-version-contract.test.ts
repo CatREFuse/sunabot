@@ -10,7 +10,7 @@ import {
 const root = fileURLToPath(new URL("../..", import.meta.url));
 
 describe("pinned Node runtime contract", () => {
-  it("keeps development, package, CI, Native and Docker on Node 24.18.0", async () => {
+  it("keeps development, package, CI, Native release and Docker on Node 24.18.0", async () => {
     const input = await readNodeVersionContractInputs(root);
     expect(input.contract.nodeVersion).toBe("24.18.0");
     expect(validateNodeVersionEntrypoints(input)).toEqual([]);
@@ -46,12 +46,6 @@ describe("pinned Node runtime contract", () => {
     }],
     ["Native manifest", (input: Awaited<ReturnType<typeof readNodeVersionContractInputs>>) => {
       input.buildRelease = input.buildRelease.replace("nodeVersion: contract.nodeVersion", "nodeVersion: process.versions.node");
-    }],
-    ["Native install", (input: Awaited<ReturnType<typeof readNodeVersionContractInputs>>) => {
-      input.nativeRuntime = input.nativeRuntime.replace(
-        "releaseManifest.nodeVersion !== contract.nodeVersion",
-        "false"
-      );
     }]
   ])("rejects %s Node version drift without inspecting the current process", async (_name, mutate) => {
     const input = await readNodeVersionContractInputs(root);

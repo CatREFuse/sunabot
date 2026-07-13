@@ -87,6 +87,10 @@ import { appendRequestLog } from "../requestLog.js";
 import { WORKSPACE_LAYOUT } from "../../packages/platform/workspaceLayout.js";
 import { SenderNameResolver, senderDisplayName, senderIdentity } from "../../services/conversations/senderName.js";
 import type { SelfieInput, SelfieRunResult } from "../../services/tools/selfieTool.js";
+import {
+  resolveGenerateImgReferences,
+  type GenerateImgReferenceContext
+} from "../../services/tools/generateImgTool.js";
 import { cleanupPersistedCodexProcess, CodexToolRunner } from "../../adapters/codex/codexTool.js";
 import { isTrustedQqFakeIp } from "../../adapters/onebot/qqMedia.js";
 import type { CodexRunner } from "../../packages/contracts/tools/codex.js";
@@ -138,7 +142,11 @@ export async function runtime_readRelevantUserProfiles(this: RuntimeHost, partic
 export async function runtime_runSelfie(this: RuntimeHost,
     input: SelfieInput,
     provider: OpenAIProvider,
-    options: { chatReferenceImageUrls?: string[]; logContext?: ProviderLogContext } = {}
+    options: {
+      chatReferenceImageUrls?: string[];
+      imageReferences?: GenerateImgReferenceContext;
+      logContext?: ProviderLogContext;
+    } = {}
   ): Promise<SelfieRunResult> {
     if (this.config.bot.tools.generateImg.provider === "custom") {
       return { ok: false, error: "自定义生图暂不支持。" };
@@ -154,11 +162,12 @@ export async function runtime_runSelfie(this: RuntimeHost,
       return { ok: false, error: "Selfie reference images are not configured." };
     }
 
-    const explicitChatReferenceImageUrls = normalizeSelfieReferenceImageUrls(input.referenceImageUrls);
     const defaultChatReferenceImageUrls = normalizeSelfieReferenceImageUrls(options.chatReferenceImageUrls);
     const availableChatReferenceSlots = Math.max(0, MAX_SELFIE_REFERENCE_IMAGES - workspaceReferenceImageUrls.length);
-    const chatReferenceImageUrls = (explicitChatReferenceImageUrls.length ? explicitChatReferenceImageUrls : defaultChatReferenceImageUrls)
-      .slice(0, availableChatReferenceSlots);
+    const chatReferenceImageUrls = resolveGenerateImgReferences(input, {
+      referenceImageUrls: defaultChatReferenceImageUrls,
+      imageReferences: options.imageReferences
+    }).referenceImageUrls.slice(0, availableChatReferenceSlots);
     const referenceImageUrls = uniqueStrings([
       ...workspaceReferenceImageUrls,
       ...chatReferenceImageUrls
@@ -209,7 +218,9 @@ export async function runtime_rewriteSelfiePrompt(this: RuntimeHost,
     const promptRequest = await this.renderPromptRequest("image.selfie-rewrite", {
       "selfie.payload": payload
     });
-    const rewritten = await this.completePrompt(provider, promptRequest, { logContext });
+    const rewritten = await this.completePrompt(provider, promptRequest, {
+      logContext: { ...logContext, promptFamily: "image.selfie-rewrite" }
+    });
     return normalizeSelfiePrompt(rewritten) || prompt;
   }
 export function runtime_collectSelfieChatReferenceImages(this: RuntimeHost, incoming: ParsedIncomingMessage) {

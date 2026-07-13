@@ -5,35 +5,52 @@ import os from "node:os";
 import path from "node:path";
 import { backup, DatabaseSync } from "node:sqlite";
 
-export const RECOVERY_MANIFEST_VERSION = 1;
+export const RECOVERY_MANIFEST_VERSION = 2;
 export const DEFAULT_HOT_RETENTION_DAYS = 7;
 export const DEFAULT_ARCHIVE_RETENTION_DAYS = 30;
 
+const LEGACY_RECOVERY_MANIFEST_VERSION = 1;
 const RECOVERY_DIRECTORY_PREFIX = "sqlite-recovery-";
 const PARTIAL_DIRECTORY_PREFIX = ".partial-sqlite-recovery-";
 const MANIFEST_FILE = "manifest.json";
 const MANIFEST_CHECKSUM_FILE = "manifest.sha256";
 const LOCK_FILE = ".sqlite-recovery.lock";
-const DATABASE_DEFINITIONS = [
+const DEFAULT_AGENT_ID = "plana";
+const AGENT_ID_PATTERN = /^[a-z][a-z0-9-]{1,31}$/;
+const LEGACY_APPLICATION_REQUIRED_TABLES = [
+  "app_metadata",
+  "conversations",
+  "image_history",
+  "memory_batches",
+  "memory_records",
+  "memory_scheduler",
+  "request_logs"
+];
+const CURRENT_APPLICATION_REQUIRED_TABLES = [
+  ...LEGACY_APPLICATION_REQUIRED_TABLES,
+  "admin_sessions",
+  "agent_accounts",
+  "agents",
+  "model_call_aggregates",
+  "model_call_model_aggregates"
+];
+const QUEUE_REQUIRED_TABLES = ["outbox", "schema_migrations", "session_events", "sessions", "tool_jobs", "turns"];
+const LEGACY_DATABASE_DEFINITIONS = [
   {
     id: "application",
+    agentId: DEFAULT_AGENT_ID,
+    kind: "application",
     source: "business/data/sunabot.sqlite",
     file: "application.sqlite",
-    requiredTables: [
-      "app_metadata",
-      "conversations",
-      "image_history",
-      "memory_batches",
-      "memory_records",
-      "memory_scheduler",
-      "request_logs"
-    ]
+    requiredTables: LEGACY_APPLICATION_REQUIRED_TABLES
   },
   {
     id: "session_queue",
+    agentId: DEFAULT_AGENT_ID,
+    kind: "session_queue",
     source: "business/data/session-queue.sqlite",
     file: "session-queue.sqlite",
-    requiredTables: ["outbox", "schema_migrations", "session_events", "sessions", "tool_jobs", "turns"]
+    requiredTables: QUEUE_REQUIRED_TABLES
   }
 ];
 
@@ -51,7 +68,7 @@ export async function createRecoveryPoint(options) {
   if (options.quiesced !== true) {
     throw new RecoveryGateError(
       "QUIESCENCE_REQUIRED",
-      "双库恢复点只能在 Sunabot 与 NapCat 已停止写入后创建；请显式确认 quiesced。"
+      "全 Agent SQLite 恢复点只能在 Sunabot 与 NapCat 已停止写入后创建；请显式确认 quiesced。"
     );
   }
   const backupsRoot = absolutePath(
@@ -75,11 +92,14 @@ export async function createRecoveryPoint(options) {
     await assertMissing(finalDirectory, "BACKUP_ALREADY_EXISTS");
     await fs.mkdir(partialDirectory, { recursive: false, mode: 0o700 });
 
-    const sources = DATABASE_DEFINITIONS.map((definition) => ({
+    const definitions = await discoverWorkspaceDatabaseDefinitions(workspace);
+    const sources = definitions.map((definition) => ({
       definition,
-      sourcePath: path.join(workspace, ...definition.source.split("/"))
+      sourcePath: safeWorkspaceChild(workspace, definition.source)
     }));
-    for (const source of sources) await assertRegularFile(source.sourcePath, "SOURCE_DATABASE_MISSING");
+    for (const source of sources) {
+      await assertWorkspaceDatabaseSource(workspace, source.definition, "SOURCE_DATABASE_MISSING");
+    }
 
     const checkpointResults = [];
     for (const source of sources) {
@@ -96,7 +116,7 @@ export async function createRecoveryPoint(options) {
       try {
         lock.exec("BEGIN EXCLUSIVE");
       } catch (error) {
-        throw sqliteGateError(error, `无法锁定 ${DATABASE_DEFINITIONS[index].id} 数据库`);
+        throw sqliteGateError(error, `无法锁定 ${sources[index].definition.id} 数据库`);
       }
     }
     await invokeFault(faultInjector, "after-locks");
@@ -111,6 +131,9 @@ export async function createRecoveryPoint(options) {
         const fileStat = await fs.stat(destination);
         const entry = {
           id: source.definition.id,
+          agentId: source.definition.agentId,
+          kind: source.definition.kind,
+          schemaProfile: source.definition.schemaProfile,
           source: source.definition.source,
           file: source.definition.file,
           bytes: fileStat.size,
@@ -127,7 +150,10 @@ export async function createRecoveryPoint(options) {
       } finally {
         sourceDatabase.close();
       }
-      await invokeFault(faultInjector, `after-${source.definition.id}-backup`);
+      await invokeFault(
+        faultInjector,
+        `after-${source.definition.agentId}-${source.definition.kind}-backup`
+      );
     }
 
     const manifest = {
@@ -153,7 +179,7 @@ export async function createRecoveryPoint(options) {
         archiveDays: DEFAULT_ARCHIVE_RETENTION_DAYS
       },
       databases: databaseEntries,
-      crossDatabaseInvariants: buildCrossDatabaseInvariants(databaseEntries)
+      crossDatabaseInvariants: buildCrossDatabaseInvariants(databaseEntries, RECOVERY_MANIFEST_VERSION)
     };
     await invokeFault(faultInjector, "before-manifest");
     await writeManifest(partialDirectory, manifest);
@@ -200,9 +226,10 @@ export async function verifyRecoveryPoint(backupDirectoryInput) {
     throw new RecoveryGateError("BACKUP_MANIFEST_INVALID", `备份 manifest 不是有效 JSON：${error.message}`);
   }
   validateManifestShape(manifest);
+  const definitions = databaseDefinitionsForManifest(manifest);
 
   const inspections = [];
-  for (const definition of DATABASE_DEFINITIONS) {
+  for (const definition of definitions) {
     const expected = manifest.databases.find((entry) => entry.id === definition.id);
     if (!expected) throw new RecoveryGateError("BACKUP_DATABASE_MISSING", `manifest 缺少 ${definition.id} 数据库。`);
     const databasePath = safeManifestChild(backupDirectory, expected.file);
@@ -216,13 +243,22 @@ export async function verifyRecoveryPoint(backupDirectoryInput) {
       throw new RecoveryGateError("BACKUP_CHECKSUM_MISMATCH", `${definition.id} 数据库校验和不匹配。`);
     }
     const inspection = verifyDatabaseFile(databasePath, definition, expected);
-    inspections.push({ id: definition.id, ...inspection });
+    inspections.push({
+      id: definition.id,
+      agentId: definition.agentId,
+      kind: definition.kind,
+      ...inspection
+    });
   }
-  const crossDatabaseInvariants = buildCrossDatabaseInvariants(
-    inspections.map((inspection) => ({ id: inspection.id, invariants: inspection.invariants }))
-  );
+  if (manifest.schemaVersion === RECOVERY_MANIFEST_VERSION) {
+    verifyV2ManifestAgentSet(backupDirectory, manifest);
+  }
+  const crossDatabaseInvariants = buildCrossDatabaseInvariants(inspections, manifest.schemaVersion);
   if (stableJson(crossDatabaseInvariants) !== stableJson(manifest.crossDatabaseInvariants)) {
-    throw new RecoveryGateError("BACKUP_CROSS_DATABASE_INVARIANT_MISMATCH", "双库恢复不变量与 manifest 不一致。");
+    throw new RecoveryGateError(
+      "BACKUP_CROSS_DATABASE_INVARIANT_MISMATCH",
+      "Agent 数据库恢复不变量与 manifest 不一致。"
+    );
   }
   return { ok: true, directory: backupDirectory, manifest, inspections };
 }
@@ -230,19 +266,30 @@ export async function verifyRecoveryPoint(backupDirectoryInput) {
 export async function restoreRecoveryPoint(options) {
   const backup = await verifyRecoveryPoint(options.backupDirectory);
   const targetWorkspace = absolutePath(options.targetWorkspace, "targetWorkspace");
-  const dataDirectory = path.join(targetWorkspace, "business", "data");
-  await fs.mkdir(dataDirectory, { recursive: true, mode: 0o700 });
+  const definitions = databaseDefinitionsForManifest(backup.manifest);
+  await fs.mkdir(targetWorkspace, { recursive: true, mode: 0o700 });
+  if (await directoryState(targetWorkspace) !== "directory") {
+    throw new RecoveryGateError("RESTORE_PATH_INVALID", "恢复目标 workspace 必须是普通目录。");
+  }
+  const existingTargetEntries = await fs.readdir(targetWorkspace);
+  if (existingTargetEntries.length > 0) {
+    throw new RecoveryGateError(
+      "RESTORE_TARGET_NOT_EMPTY",
+      `恢复目标 workspace 必须为空；发现：${existingTargetEntries.sort().join(", ")}`
+    );
+  }
 
-  const targets = DATABASE_DEFINITIONS.map((definition) => ({
+  const targets = definitions.map((definition) => ({
     definition,
-    destination: path.join(targetWorkspace, ...definition.source.split("/")),
+    destination: safeWorkspaceChild(targetWorkspace, definition.source),
     source: safeManifestChild(
       backup.directory,
       backup.manifest.databases.find((entry) => entry.id === definition.id).file
     )
   }));
   for (const target of targets) {
-    if (fsSync.existsSync(target.destination)) {
+    await ensureSafeWorkspaceDirectory(targetWorkspace, path.posix.dirname(target.definition.source));
+    if (await databaseFileState(target.destination) !== "missing") {
       throw new RecoveryGateError(
         "RESTORE_TARGET_EXISTS",
         `恢复目标已存在：${target.destination}。请先停服并将旧数据库移动到独立回滚目录。`
@@ -250,8 +297,8 @@ export async function restoreRecoveryPoint(options) {
     }
   }
 
-  const stagingDirectory = path.join(dataDirectory, `.restore-${backup.manifest.backupId}-${process.pid}`);
-  const intentPath = path.join(dataDirectory, `.restore-${backup.manifest.backupId}.json`);
+  const stagingDirectory = path.join(targetWorkspace, `.restore-${backup.manifest.backupId}-${process.pid}`);
+  const intentPath = path.join(targetWorkspace, `.restore-${backup.manifest.backupId}.json`);
   await fs.mkdir(stagingDirectory, { recursive: false, mode: 0o700 });
   const intent = {
     schemaVersion: 1,
@@ -259,13 +306,13 @@ export async function restoreRecoveryPoint(options) {
     createdAt: new Date().toISOString(),
     files: targets.map((target) => ({
       source: path.basename(target.source),
-      staged: path.relative(dataDirectory, path.join(stagingDirectory, path.basename(target.destination))),
-      destination: path.basename(target.destination)
+      staged: path.relative(targetWorkspace, path.join(stagingDirectory, target.definition.file)),
+      destination: target.definition.source
     }))
   };
   try {
     for (const target of targets) {
-      const staged = path.join(stagingDirectory, path.basename(target.destination));
+      const staged = path.join(stagingDirectory, target.definition.file);
       await fs.copyFile(target.source, staged, fsSync.constants.COPYFILE_EXCL);
       await syncFile(staged);
       const expected = backup.manifest.databases.find((entry) => entry.id === target.definition.id);
@@ -273,12 +320,15 @@ export async function restoreRecoveryPoint(options) {
     }
     await writeJsonAtomic(intentPath, intent);
     for (const target of targets) {
-      const staged = path.join(stagingDirectory, path.basename(target.destination));
+      const staged = path.join(stagingDirectory, target.definition.file);
       await fs.rename(staged, target.destination);
     }
     await fs.rm(stagingDirectory, { recursive: true, force: true });
     await fs.rm(intentPath, { force: true });
-    await syncDirectory(dataDirectory);
+    for (const directory of new Set(targets.map((target) => path.dirname(target.destination)))) {
+      await syncDirectory(directory);
+    }
+    await syncDirectory(targetWorkspace);
   } catch (error) {
     throw normalizeGateError(error, "RESTORE_FAILED");
   }
@@ -289,19 +339,27 @@ export async function restoreRecoveryPoint(options) {
 
 export async function verifyWorkspaceDatabases(workspaceInput, expectedManifest) {
   const workspace = absolutePath(workspaceInput, "workspace");
+  if (expectedManifest) validateManifestShape(expectedManifest);
+  const definitions = expectedManifest
+    ? databaseDefinitionsForManifest(expectedManifest)
+    : await discoverWorkspaceDatabaseDefinitions(workspace);
   const inspections = [];
-  for (const definition of DATABASE_DEFINITIONS) {
-    const databasePath = path.join(workspace, ...definition.source.split("/"));
-    await assertRegularFile(databasePath, "RESTORED_DATABASE_MISSING");
+  for (const definition of definitions) {
+    const databasePath = safeWorkspaceChild(workspace, definition.source);
+    await assertWorkspaceDatabaseSource(workspace, definition, "RESTORED_DATABASE_MISSING");
     const expected = expectedManifest?.databases?.find((entry) => entry.id === definition.id);
-    inspections.push({ id: definition.id, ...verifyDatabaseFile(databasePath, definition, expected) });
+    inspections.push({
+      id: definition.id,
+      agentId: definition.agentId,
+      kind: definition.kind,
+      ...verifyDatabaseFile(databasePath, definition, expected)
+    });
   }
-  const crossDatabaseInvariants = buildCrossDatabaseInvariants(
-    inspections.map((inspection) => ({ id: inspection.id, invariants: inspection.invariants }))
-  );
+  const manifestVersion = expectedManifest?.schemaVersion ?? RECOVERY_MANIFEST_VERSION;
+  const crossDatabaseInvariants = buildCrossDatabaseInvariants(inspections, manifestVersion);
   if (expectedManifest
     && stableJson(crossDatabaseInvariants) !== stableJson(expectedManifest.crossDatabaseInvariants)) {
-    throw new RecoveryGateError("RESTORE_INVARIANT_MISMATCH", "恢复后的双库不变量与恢复点不一致。");
+    throw new RecoveryGateError("RESTORE_INVARIANT_MISMATCH", "恢复后的 Agent 数据库不变量与恢复点不一致。");
   }
   return { ok: true, inspections, crossDatabaseInvariants };
 }
@@ -382,6 +440,256 @@ export async function applyRetention(options) {
   return { applied: options.apply === true, plan };
 }
 
+async function discoverWorkspaceDatabaseDefinitions(workspace) {
+  const defaultDefinitions = databaseDefinitionsForAgent(DEFAULT_AGENT_ID);
+  for (const definition of defaultDefinitions) {
+    await assertWorkspaceDatabaseSource(workspace, definition, "SOURCE_DATABASE_MISSING");
+  }
+
+  const registryInspection = readRegisteredAgents(safeWorkspaceChild(workspace, defaultDefinitions[0].source));
+  const registry = registryInspection.agents;
+  if (!registry.has(DEFAULT_AGENT_ID)) registry.set(DEFAULT_AGENT_ID, true);
+  const filesystemAgents = await readFilesystemAgentDatabasePairs(workspace);
+  if (registryInspection.legacySingleAgent) {
+    const agentManifest = safeWorkspaceChild(
+      workspace,
+      `business/agents/${DEFAULT_AGENT_ID}/agent.json`
+    );
+    if (await databaseFileState(agentManifest) !== "missing") {
+      throw new RecoveryGateError(
+        "AGENT_REGISTRY_INVALID",
+        "当前 Agent workspace 缺少注册表 schema，不能按旧单 Agent 数据库处理。"
+      );
+    }
+  }
+
+  if (filesystemAgents.has(DEFAULT_AGENT_ID)) {
+    throw new RecoveryGateError(
+      "AGENT_DATABASE_ORPHAN",
+      `默认 Agent ${DEFAULT_AGENT_ID} 的数据库只能位于 business/data，拒绝重复的 Agent 数据目录。`
+    );
+  }
+  for (const agentId of filesystemAgents) {
+    if (!registry.has(agentId)) {
+      throw new RecoveryGateError(
+        "AGENT_DATABASE_ORPHAN",
+        `文件系统存在未注册 Agent ${agentId} 的数据库。`
+      );
+    }
+  }
+  for (const agentId of registry.keys()) {
+    if (agentId !== DEFAULT_AGENT_ID && !filesystemAgents.has(agentId)) {
+      throw new RecoveryGateError(
+        "AGENT_DATABASE_PAIR_MISSING",
+        `已注册 Agent ${agentId} 缺少业务库与 session queue 数据库。`
+      );
+    }
+  }
+
+  return [...registry.keys()]
+    .sort(compareAgentIds)
+    .flatMap((agentId) => databaseDefinitionsForAgent(agentId, {
+      legacyApplicationSchema: registryInspection.legacySingleAgent && agentId === DEFAULT_AGENT_ID
+    }));
+}
+
+function readRegisteredAgents(databasePath) {
+  let database;
+  try {
+    database = new DatabaseSync(databasePath, { readOnly: true });
+    const registryTables = new Set(database.prepare(`
+      SELECT name FROM sqlite_schema
+      WHERE type = 'table' AND name IN ('agents', 'agent_accounts')
+    `).all().map((row) => String(row.name)));
+    if (registryTables.size === 0) return { agents: new Map(), legacySingleAgent: true };
+    if (!registryTables.has("agents") || !registryTables.has("agent_accounts")) {
+      throw new RecoveryGateError("AGENT_REGISTRY_INVALID", "Agent 注册表 schema 不完整。");
+    }
+    const rows = database.prepare("SELECT id, enabled FROM agents ORDER BY id").all();
+    const agents = new Map();
+    for (const row of rows) {
+      const agentId = String(row.id ?? "");
+      if (!AGENT_ID_PATTERN.test(agentId)) {
+        throw new RecoveryGateError("AGENT_ID_INVALID", `注册表包含非法 Agent ID：${agentId || "<empty>"}`);
+      }
+      agents.set(agentId, Number(row.enabled) !== 0);
+    }
+    return { agents, legacySingleAgent: false };
+  } catch (error) {
+    if (error instanceof RecoveryGateError) throw error;
+    throw normalizeGateError(
+      new RecoveryGateError("AGENT_REGISTRY_INVALID", `无法读取 Agent 注册表：${error.message}`)
+    );
+  } finally {
+    if (database?.isOpen) database.close();
+  }
+}
+
+async function readFilesystemAgentDatabasePairs(workspace) {
+  const agentsRoot = safeWorkspaceChild(workspace, "business/agents");
+  const agentsRootState = await directoryState(agentsRoot);
+  if (agentsRootState === "missing") return new Set();
+  if (agentsRootState !== "directory") {
+    throw new RecoveryGateError("AGENT_DATABASE_PATH_INVALID", "business/agents 必须是普通目录。");
+  }
+  let entries;
+  try {
+    entries = await fs.readdir(agentsRoot, { withFileTypes: true });
+  } catch (error) {
+    if (error.code === "ENOENT") return new Set();
+    throw error;
+  }
+
+  const agents = new Set();
+  for (const entry of entries) {
+    if (entry.isSymbolicLink()) {
+      throw new RecoveryGateError(
+        "AGENT_DATABASE_PATH_INVALID",
+        `Agent 根目录不能包含符号链接：business/agents/${entry.name}`
+      );
+    }
+    if (!entry.isDirectory()) continue;
+
+    const dataDirectory = path.join(agentsRoot, entry.name, "data");
+    const dataDirectoryState = await directoryState(dataDirectory);
+    if (dataDirectoryState === "missing") continue;
+    if (dataDirectoryState !== "directory") {
+      throw new RecoveryGateError(
+        "AGENT_DATABASE_PATH_INVALID",
+        `Agent ${entry.name} 的 data 路径必须是普通目录。`
+      );
+    }
+    const applicationPath = path.join(dataDirectory, "sunabot.sqlite");
+    const queuePath = path.join(dataDirectory, "session-queue.sqlite");
+    const applicationState = await databaseFileState(applicationPath);
+    const queueState = await databaseFileState(queuePath);
+    const hasDatabasePath = applicationState !== "missing" || queueState !== "missing";
+    if (!hasDatabasePath) continue;
+
+    if (!AGENT_ID_PATTERN.test(entry.name)) {
+      throw new RecoveryGateError(
+        "AGENT_DATABASE_PATH_INVALID",
+        `Agent 数据库目录无效：business/agents/${entry.name}`
+      );
+    }
+    if (applicationState === "invalid" || queueState === "invalid") {
+      throw new RecoveryGateError(
+        "AGENT_DATABASE_PATH_INVALID",
+        `Agent ${entry.name} 的数据库路径必须是普通目录中的普通文件。`
+      );
+    }
+    if (applicationState !== queueState) {
+      throw new RecoveryGateError(
+        "AGENT_DATABASE_PAIR_INCOMPLETE",
+        `Agent ${entry.name} 的业务库与 session queue 必须同时存在。`
+      );
+    }
+    agents.add(entry.name);
+  }
+  return agents;
+}
+
+async function databaseFileState(filePath) {
+  try {
+    const stat = await fs.lstat(filePath);
+    return stat.isFile() ? "file" : "invalid";
+  } catch (error) {
+    if (error.code === "ENOENT") return "missing";
+    throw error;
+  }
+}
+
+async function directoryState(directory) {
+  try {
+    const stat = await fs.lstat(directory);
+    return stat.isDirectory() ? "directory" : "invalid";
+  } catch (error) {
+    if (error.code === "ENOENT") return "missing";
+    throw error;
+  }
+}
+
+function databaseDefinitionsForAgent(agentId, options = {}) {
+  if (!AGENT_ID_PATTERN.test(agentId)) {
+    throw new RecoveryGateError("AGENT_ID_INVALID", `Agent ID 无效：${agentId}`);
+  }
+  const dataRoot = agentId === DEFAULT_AGENT_ID
+    ? "business/data"
+    : `business/agents/${agentId}/data`;
+  return [
+    {
+      id: `agent:${agentId}:application`,
+      agentId,
+      kind: "application",
+      schemaProfile: options.legacyApplicationSchema ? "legacy-single-agent" : "current",
+      source: `${dataRoot}/sunabot.sqlite`,
+      file: `agent-${agentId}-application.sqlite`,
+      requiredTables: options.legacyApplicationSchema
+        ? LEGACY_APPLICATION_REQUIRED_TABLES
+        : CURRENT_APPLICATION_REQUIRED_TABLES
+    },
+    {
+      id: `agent:${agentId}:session_queue`,
+      agentId,
+      kind: "session_queue",
+      schemaProfile: "current",
+      source: `${dataRoot}/session-queue.sqlite`,
+      file: `agent-${agentId}-session-queue.sqlite`,
+      requiredTables: QUEUE_REQUIRED_TABLES
+    }
+  ];
+}
+
+function databaseDefinitionsForManifest(manifest) {
+  if (manifest.schemaVersion === LEGACY_RECOVERY_MANIFEST_VERSION) {
+    return LEGACY_DATABASE_DEFINITIONS;
+  }
+  const agentIds = [...new Set(manifest.databases.map((entry) => entry.agentId))].sort(compareAgentIds);
+  return agentIds.flatMap((agentId) => {
+    const application = manifest.databases.find((entry) =>
+      entry.agentId === agentId && entry.kind === "application"
+    );
+    return databaseDefinitionsForAgent(agentId, {
+      legacyApplicationSchema: application?.schemaProfile === "legacy-single-agent"
+    });
+  });
+}
+
+function verifyV2ManifestAgentSet(backupDirectory, manifest) {
+  const application = manifest.databases.find((entry) =>
+    entry.agentId === DEFAULT_AGENT_ID && entry.kind === "application"
+  );
+  if (!application) {
+    throw new RecoveryGateError("BACKUP_MANIFEST_INVALID", "v2 manifest 缺少 Plana 注册主库。");
+  }
+  const registryInspection = readRegisteredAgents(safeManifestChild(backupDirectory, application.file));
+  const registeredAgentIds = new Set(registryInspection.agents.keys());
+  registeredAgentIds.add(DEFAULT_AGENT_ID);
+  const manifestAgentIds = new Set(manifest.databases.map((entry) => entry.agentId));
+  const registered = [...registeredAgentIds].sort(compareAgentIds);
+  const listed = [...manifestAgentIds].sort(compareAgentIds);
+  if (stableJson(registered) !== stableJson(listed)) {
+    throw new RecoveryGateError(
+      "BACKUP_AGENT_SET_MISMATCH",
+      `manifest Agent 集合与 Plana 注册表不一致：registered=${registered.join(",")} manifest=${listed.join(",")}`
+    );
+  }
+  const expectedProfile = registryInspection.legacySingleAgent ? "legacy-single-agent" : "current";
+  if (application.schemaProfile !== expectedProfile) {
+    throw new RecoveryGateError(
+      "BACKUP_MANIFEST_INVALID",
+      `Plana schema profile 与注册主库不一致：${application.schemaProfile}`
+    );
+  }
+}
+
+function compareAgentIds(left, right) {
+  if (left === DEFAULT_AGENT_ID) return right === DEFAULT_AGENT_ID ? 0 : -1;
+  if (right === DEFAULT_AGENT_ID) return 1;
+  if (left === right) return 0;
+  return left < right ? -1 : 1;
+}
+
 function checkpointDatabase(database, id) {
   let row;
   try {
@@ -455,7 +763,7 @@ function inspectDatabase(database, definition) {
     pageCount: Number(database.prepare("PRAGMA page_count").get()?.page_count ?? 0),
     userVersion: Number(database.prepare("PRAGMA user_version").get()?.user_version ?? 0),
     tables,
-    invariants: definition.id === "session_queue"
+    invariants: definition.kind === "session_queue"
       ? inspectQueueInvariants(database)
       : { integrityCheck: "ok", foreignKeyViolations: 0 }
   };
@@ -509,14 +817,40 @@ function inspectQueueInvariants(database) {
   };
 }
 
-function buildCrossDatabaseInvariants(entries) {
-  const queue = entries.find((entry) => entry.id === "session_queue")?.invariants;
-  if (!queue) throw new RecoveryGateError("QUEUE_INVARIANT_MISSING", "恢复点缺少 session queue 不变量。");
+function buildCrossDatabaseInvariants(entries, manifestVersion) {
+  if (manifestVersion === LEGACY_RECOVERY_MANIFEST_VERSION) {
+    const queue = entries.find((entry) => entry.id === "session_queue")?.invariants;
+    if (!queue) throw new RecoveryGateError("QUEUE_INVARIANT_MISSING", "恢复点缺少 session queue 不变量。");
+    return {
+      queueAuthoritativeForDelivery: true,
+      mainProjectionMayLagAfterExternalSend: true,
+      outboxStatusCounts: queue.outboxStatusCounts,
+      terminalOutboxDigest: queue.terminalOutboxDigest
+    };
+  }
+
+  const agentIds = [...new Set(entries.map((entry) => entry.agentId))].sort(compareAgentIds);
+  const agents = {};
+  for (const agentId of agentIds) {
+    const application = entries.find((entry) => entry.agentId === agentId && entry.kind === "application");
+    const queue = entries.find((entry) => entry.agentId === agentId && entry.kind === "session_queue");
+    if (!application || !queue?.invariants) {
+      throw new RecoveryGateError(
+        "QUEUE_INVARIANT_MISSING",
+        `${agentId} 恢复点缺少完整业务库或 session queue 不变量。`
+      );
+    }
+    agents[agentId] = {
+      applicationDatabaseId: application.id,
+      sessionQueueDatabaseId: queue.id,
+      outboxStatusCounts: queue.invariants.outboxStatusCounts,
+      terminalOutboxDigest: queue.invariants.terminalOutboxDigest
+    };
+  }
   return {
     queueAuthoritativeForDelivery: true,
     mainProjectionMayLagAfterExternalSend: true,
-    outboxStatusCounts: queue.outboxStatusCounts,
-    terminalOutboxDigest: queue.terminalOutboxDigest
+    agents
   };
 }
 
@@ -579,15 +913,109 @@ function validateManifestShape(manifest) {
   if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
     throw new RecoveryGateError("BACKUP_MANIFEST_INVALID", "备份 manifest 必须是对象。");
   }
-  if (manifest.schemaVersion !== RECOVERY_MANIFEST_VERSION) {
+  if (![LEGACY_RECOVERY_MANIFEST_VERSION, RECOVERY_MANIFEST_VERSION].includes(manifest.schemaVersion)) {
     throw new RecoveryGateError("BACKUP_MANIFEST_VERSION", `不支持 manifest 版本 ${manifest.schemaVersion}。`);
   }
   assertBackupId(manifest.backupId);
   if (!Number.isFinite(Date.parse(manifest.createdAt))) {
     throw new RecoveryGateError("BACKUP_MANIFEST_INVALID", "manifest.createdAt 无效。");
   }
-  if (!Array.isArray(manifest.databases) || manifest.databases.length !== DATABASE_DEFINITIONS.length) {
+  if (!Array.isArray(manifest.databases)) {
     throw new RecoveryGateError("BACKUP_MANIFEST_INVALID", "manifest.databases 不完整。");
+  }
+  if (!manifest.crossDatabaseInvariants
+    || typeof manifest.crossDatabaseInvariants !== "object"
+    || Array.isArray(manifest.crossDatabaseInvariants)) {
+    throw new RecoveryGateError("BACKUP_MANIFEST_INVALID", "manifest.crossDatabaseInvariants 无效。");
+  }
+
+  const definitions = manifest.schemaVersion === LEGACY_RECOVERY_MANIFEST_VERSION
+    ? LEGACY_DATABASE_DEFINITIONS
+    : validateV2AgentDatabaseEntries(manifest.databases);
+  if (manifest.databases.length !== definitions.length) {
+    throw new RecoveryGateError("BACKUP_MANIFEST_INVALID", "manifest.databases 不完整。");
+  }
+  const ids = new Set();
+  const sources = new Set();
+  const files = new Set();
+  for (const definition of definitions) {
+    const entry = manifest.databases.find((candidate) => candidate?.id === definition.id);
+    if (!entry) {
+      throw new RecoveryGateError("BACKUP_MANIFEST_INVALID", `manifest 缺少 ${definition.id} 数据库。`);
+    }
+    validateManifestDatabaseEntry(entry, definition);
+    for (const [values, value, field] of [
+      [ids, entry.id, "id"],
+      [sources, entry.source, "source"],
+      [files, entry.file, "file"]
+    ]) {
+      if (values.has(value)) {
+        throw new RecoveryGateError("BACKUP_MANIFEST_INVALID", `manifest 数据库 ${field} 重复：${value}`);
+      }
+      values.add(value);
+    }
+  }
+}
+
+function validateV2AgentDatabaseEntries(entries) {
+  if (entries.length < 2 || entries.length % 2 !== 0) {
+    throw new RecoveryGateError("BACKUP_MANIFEST_INVALID", "v2 manifest 必须包含完整的 Agent 数据库对。");
+  }
+  const agentIds = new Set();
+  for (const entry of entries) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry) || !AGENT_ID_PATTERN.test(entry.agentId ?? "")) {
+      throw new RecoveryGateError("BACKUP_MANIFEST_INVALID", "v2 manifest 包含非法 Agent ID。");
+    }
+    if (entry.kind !== "application" && entry.kind !== "session_queue") {
+      throw new RecoveryGateError("BACKUP_MANIFEST_INVALID", `v2 manifest 数据库类型无效：${entry.kind}`);
+    }
+    if (entry.schemaProfile !== "current" && entry.schemaProfile !== "legacy-single-agent") {
+      throw new RecoveryGateError("BACKUP_MANIFEST_INVALID", `v2 manifest schema profile 无效：${entry.schemaProfile}`);
+    }
+    if (entry.kind === "session_queue" && entry.schemaProfile !== "current") {
+      throw new RecoveryGateError("BACKUP_MANIFEST_INVALID", "session queue 不能使用旧业务库 schema profile。");
+    }
+    agentIds.add(entry.agentId);
+  }
+  if (!agentIds.has(DEFAULT_AGENT_ID)) {
+    throw new RecoveryGateError("BACKUP_MANIFEST_INVALID", `v2 manifest 缺少默认 Agent ${DEFAULT_AGENT_ID}。`);
+  }
+  const legacyApplication = entries.find((entry) => entry.schemaProfile === "legacy-single-agent");
+  if (legacyApplication
+    && (legacyApplication.agentId !== DEFAULT_AGENT_ID
+      || legacyApplication.kind !== "application"
+      || agentIds.size !== 1)) {
+    throw new RecoveryGateError("BACKUP_MANIFEST_INVALID", "旧单 Agent schema profile 只能用于 Plana 单 Agent 恢复点。");
+  }
+  return [...agentIds].sort(compareAgentIds).flatMap((agentId) => databaseDefinitionsForAgent(agentId, {
+    legacyApplicationSchema: legacyApplication?.agentId === agentId
+  }));
+}
+
+function validateManifestDatabaseEntry(entry, definition) {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    throw new RecoveryGateError("BACKUP_MANIFEST_INVALID", `${definition.id} 数据库条目无效。`);
+  }
+  if (entry.id !== definition.id || entry.source !== definition.source || entry.file !== definition.file) {
+    throw new RecoveryGateError("BACKUP_MANIFEST_INVALID", `${definition.id} 数据库路径或标识无效。`);
+  }
+  if (definition.agentId !== entry.agentId && entry.agentId !== undefined) {
+    throw new RecoveryGateError("BACKUP_MANIFEST_INVALID", `${definition.id} 的 Agent 标识无效。`);
+  }
+  if (definition.kind !== entry.kind && entry.kind !== undefined) {
+    throw new RecoveryGateError("BACKUP_MANIFEST_INVALID", `${definition.id} 的数据库类型无效。`);
+  }
+  if (definition.schemaProfile !== entry.schemaProfile && entry.schemaProfile !== undefined) {
+    throw new RecoveryGateError("BACKUP_MANIFEST_INVALID", `${definition.id} 的 schema profile 无效。`);
+  }
+  if (!Number.isInteger(entry.bytes) || entry.bytes <= 0 || !/^[a-f0-9]{64}$/.test(entry.sha256 ?? "")) {
+    throw new RecoveryGateError("BACKUP_MANIFEST_INVALID", `${definition.id} 的文件校验信息无效。`);
+  }
+  if (!Number.isInteger(entry.pageSize) || entry.pageSize <= 0
+    || !Number.isInteger(entry.pageCount) || entry.pageCount <= 0
+    || !entry.tables || typeof entry.tables !== "object" || Array.isArray(entry.tables)
+    || !entry.invariants || typeof entry.invariants !== "object" || Array.isArray(entry.invariants)) {
+    throw new RecoveryGateError("BACKUP_MANIFEST_INVALID", `${definition.id} 的 SQLite 检查信息无效。`);
   }
 }
 
@@ -600,6 +1028,67 @@ function safeManifestChild(directory, fileName) {
     throw new RecoveryGateError("BACKUP_PATH_INVALID", "manifest 数据库路径越界。");
   }
   return resolved;
+}
+
+function safeWorkspaceChild(workspace, relativePath) {
+  if (typeof relativePath !== "string"
+    || !relativePath
+    || relativePath.includes("\\")
+    || path.posix.isAbsolute(relativePath)) {
+    throw new RecoveryGateError("BACKUP_PATH_INVALID", "workspace 数据库路径无效。");
+  }
+  const segments = relativePath.split("/");
+  if (segments.some((segment) => !segment || segment === "." || segment === "..")) {
+    throw new RecoveryGateError("BACKUP_PATH_INVALID", "workspace 数据库路径越界。");
+  }
+  const root = path.resolve(workspace);
+  const resolved = path.resolve(root, ...segments);
+  const relative = path.relative(root, resolved);
+  if (!relative || relative.startsWith(`..${path.sep}`) || relative === ".." || path.isAbsolute(relative)) {
+    throw new RecoveryGateError("BACKUP_PATH_INVALID", "workspace 数据库路径越界。");
+  }
+  return resolved;
+}
+
+async function assertWorkspaceDatabaseSource(workspace, definition, code) {
+  if (await directoryState(workspace) !== "directory") {
+    throw new RecoveryGateError(code, `workspace 不是普通目录：${workspace}`);
+  }
+  const directorySegments = definition.source.split("/").slice(0, -1);
+  let current = path.resolve(workspace);
+  for (const segment of directorySegments) {
+    current = path.join(current, segment);
+    if (await directoryState(current) !== "directory") {
+      throw new RecoveryGateError(code, `数据库目录不存在或不安全：${current}`);
+    }
+  }
+  const databasePath = safeWorkspaceChild(workspace, definition.source);
+  if (await databaseFileState(databasePath) !== "file") {
+    throw new RecoveryGateError(code, `数据库文件不存在或不安全：${databasePath}`);
+  }
+}
+
+async function ensureSafeWorkspaceDirectory(workspace, relativeDirectory) {
+  const target = safeWorkspaceChild(workspace, relativeDirectory);
+  let current = path.resolve(workspace);
+  for (const segment of relativeDirectory.split("/")) {
+    current = path.join(current, segment);
+    let state = await directoryState(current);
+    if (state === "missing") {
+      try {
+        await fs.mkdir(current, { mode: 0o700 });
+      } catch (error) {
+        if (error.code !== "EEXIST") throw error;
+      }
+      state = await directoryState(current);
+    }
+    if (state !== "directory") {
+      throw new RecoveryGateError("RESTORE_PATH_INVALID", `恢复目录不是普通目录：${current}`);
+    }
+  }
+  if (path.resolve(current) !== target) {
+    throw new RecoveryGateError("RESTORE_PATH_INVALID", "恢复目录路径无效。");
+  }
 }
 
 function recoveryPointId(now) {
@@ -718,7 +1207,7 @@ function absolutePath(value, field) {
 
 async function assertRegularFile(filePath, code) {
   try {
-    const stat = await fs.stat(filePath);
+    const stat = await fs.lstat(filePath);
     if (!stat.isFile()) throw new Error("not a regular file");
   } catch (error) {
     throw new RecoveryGateError(code, `文件不存在或不可读：${filePath}（${error.message}）`);

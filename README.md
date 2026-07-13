@@ -1,41 +1,81 @@
 # sunabot
 
-sunabot 是面向个人自托管场景的 QQ Agent 服务。NapCat 通过 OneBot v11 接入 Sunabot Core，提供私聊与群聊回复、长期记忆、文件理解、联网搜索、图像生成、异步任务和本地管理台。
+sunabot 是面向个人自托管场景的多 Agent QQ 服务。每个 Agent 可以绑定多个 QQ 账号，并拥有独立的人格、记忆、会话、图片和工具配置；Provider、系统提示词与管理安全由同一个 Sunabot Core 统一管理。
 
 ## 功能
 
-- QQ 私聊、群聊、@、引用回复、文件和图片消息
-- 单会话顺序执行、持久化 outbox、断线恢复和异步任务回传
+- QQ 私聊、群聊、@、引用回复、戳一戳、文件和图片消息
+- 多 Agent、多 QQ，以及按 Agent 隔离的会话、记忆、图片和任务
+- 单会话顺序执行、SQLite outbox、断线恢复和异步任务回传
 - 工作记忆、长期记忆、用户画像和 BM25 召回
-- Plana 人格文件、结构化提示词和管理台热更新
-- OpenAI Responses、Codex Responses、Gemini 与 Anthropic 兼容 Provider
-- 联网搜索、图像生成、自拍、Codex 异步任务和管理员工作区工具
-- 文本、代码、图片、PDF、DOCX、PPTX、XLSX 等附件解析
-- 会话、记忆、请求日志、图片历史和任务队列的 SQLite 持久化
-- Vue 管理台，支持桌面与移动端、浅色、深色和跟随系统主题
-- 管理员会话鉴权、CSRF、Origin 校验、登录限流和远程入口熔断
+- OpenAI、Codex 订阅、Gemini、Anthropic 与 OpenAI 兼容 Provider
+- 联网搜索、图像生成、自拍、Codex 任务和管理员工作区工具
+- PDF、DOCX、PPTX、XLSX、代码、文本和图片附件解析
+- 桌面与移动端管理台，支持浅色、深色和跟随系统主题
+- 管理员会话、CSRF、Origin 校验、登录限流和远程入口熔断
 
-## 平台部署
+## 运行结构
 
-所有平台使用同一个入口：
+| 组件 | 运行方式 | 数据边界 |
+| --- | --- | --- |
+| Sunabot Core | macOS 默认 Native；WSL2/Linux 默认 Docker | 配置、Agent、SQLite、媒体与管理 API |
+| NapCat | 每个 QQ 一个独立 Docker 容器 | QQ 登录态、OneBot 配置、插件与缓存 |
+| 管理台 | 由 Core 提供 | `http://127.0.0.1:8787` |
+
+NapCat 通过带 access token 的 OneBot v11 反向 WebSocket 连接 Core。Core 与 NapCat 之间的图片使用 `base64://` 传输，不依赖共享绝对路径。
+
+所有平台使用同一个运行入口：
 
 ```bash
 ./sunabot.sh up
 ```
 
-NapCat 始终运行在独立 Docker 容器中。Sunabot Core 支持 Native 与 Docker 两种模式：
-
-| 平台 | `auto` 默认模式 | 可选模式 |
+| 平台 | `auto` 模式 | 支持范围 |
 | --- | --- | --- |
-| macOS | Native Core + NapCat Docker | Docker Core + NapCat Docker（需 Docker VM 支持 user namespace） |
-| Windows 11 / Windows Server WSL2 | Docker Core + NapCat Docker | Native Core + NapCat Docker |
-| Linux x86_64 | Docker Core + NapCat Docker | Native Core + NapCat Docker |
+| macOS | Native Core + NapCat Docker | Intel 与 Apple Silicon；`workspace_bash` 安全关闭 |
+| Windows 11 / Windows Server | WSL2 Docker Core + NapCat Docker | 在 Ubuntu WSL2 终端运行，Windows Native 不受支持 |
+| Linux x86_64 | Docker Core + NapCat Docker | 可切换 Linux Native Core |
 
-Windows Native 不在支持范围内，请在 WSL2 终端执行脚本。
+当前 Docker Core 交付目标是 `linux/amd64`。
 
-### 准备
+## 环境要求
 
-安装 Git、Node.js `24.18.0`、Docker Engine 与 Docker Compose，并使用拥有仓库和 workspace 的非 root 用户执行脚本。macOS 和 Windows 11 可以使用 Docker Desktop；Windows Server 在 WSL2 发行版内安装 Docker Engine。当前 Docker Core 生产镜像目标为 `linux/amd64`。
+所有模式需要：
+
+- Node.js `24.18.0`
+- Docker Engine 与 Docker Compose 插件，或 Docker Desktop
+- 拥有仓库与 workspace 的非 root 用户
+
+源码安装和后续 `git pull` 需要 Git。解压后的 Linux 发行包不包含 `.git`，运行与迁移不需要 Git。
+
+Native Core 还需要：
+
+- LibreOffice
+- Codex CLI `0.139.0`
+- Linux/WSL2 Native Core：`bubblewrap`
+
+Codex CLI 可以通过 npm 安装：
+
+```bash
+npm install -g @openai/codex@0.139.0
+```
+
+macOS 可安装 Docker Desktop 与 LibreOffice：
+
+```bash
+brew install --cask docker libreoffice
+```
+
+Ubuntu WSL2 或 Linux Native Core 可安装宿主依赖：
+
+```bash
+sudo apt update
+sudo apt install -y ca-certificates git build-essential python3 libreoffice fonts-noto-cjk bubblewrap
+```
+
+WSL2 默认使用 Docker Core，镜像已经包含 LibreOffice、Codex CLI、字体与 bubblewrap。Windows 11 可使用 Docker Desktop WSL2 后端；Windows Server 需要在 WSL2 发行版内安装 Docker Engine 与 Compose 插件。
+
+## 首次启动
 
 ```bash
 git clone https://github.com/CatREFuse/sunabot.git
@@ -43,92 +83,66 @@ cd sunabot
 ./sunabot.sh up
 ```
 
-首次启动会初始化 `workspace/`，并为 OneBot 与 NapCat WebUI 生成随机令牌。根据需要编辑 `workspace/secrets/runtime.env`：
+启动脚本会校验 Node 版本、按需执行 `npm ci`、初始化 `workspace/`、生成 OneBot 与 NapCat WebUI 令牌，并在当前终端要求设置管理员账号密码。密码至少 12 个字符。
 
-```text
-NAPCAT_ACCOUNT=你的QQ号
-OPENAI_API_KEY=你的Provider密钥
+如果 `up` 将在无 TTY 环境运行，请在有 TTY 的终端提前创建管理员凭据：
+
+```bash
+npm run workspace:init
+npm run admin:set-password -- admin
+./sunabot.sh up
 ```
 
-也可以在管理台完成 Provider 配置。首次 QQ 登录未完成时，启动状态会显示 `awaiting-login`；访问 `http://127.0.0.1:6099/webui` 完成登录后，NapCat 会自动连接 Core。
-
-本机入口：
+服务启动后打开：
 
 ```text
 管理台:        http://127.0.0.1:8787
-NapCat WebUI: http://127.0.0.1:6099/webui
+首个 NapCat:  http://127.0.0.1:6099/webui
 ```
 
-### macOS
+NapCat WebUI 用于故障诊断，日常 QQ 登录在管理台完成。
 
-安装 LibreOffice，确保 Docker Desktop 已启动，再执行：
+## 配置 Provider
 
-```bash
-brew install --cask libreoffice
+打开 `http://127.0.0.1:8787/settings/providers`。
+
+使用 Codex 订阅时，选择“Codex 订阅”，点击“开始登录”，在 OpenAI 设备授权页面输入管理台显示的授权码；登录完成后测试连接并保存。授权文件保存在当前 workspace 的 `secrets/codex/auth.json`。
+
+使用 API Provider 时，把密钥写入 `workspace/secrets/runtime.env` 对应字段，例如：
+
+```text
+OPENAI_API_KEY=
+GEMINI_API_KEY=
+ANTHROPIC_API_KEY=
 ```
 
-```bash
-./sunabot.sh up
+修改环境变量后执行 `./sunabot.sh restart`，随后在“模型服务”中启用目标 Provider、选择默认 Provider、拉取或填写模型、测试连接并保存。仅填写 API Key 不会自动切换默认 Provider。
+
+## 登录 QQ
+
+首次启动会创建 Plana 和“主账号”。打开 `http://127.0.0.1:8787/agents`，选择 Plana，在“QQ 账号”中点击“登录”并扫描二维码。管理台会持续刷新登录状态。主账号可以退出 QQ 登录，不能移除；其他离线账号可以移除。
+
+管理员 QQ 默认为空。QQ 登录完成后，在“Agent 设置 → 回复行为”填写管理员 QQ；管理员工作区工具只接受该 QQ 的指令。
+
+每个 Agent 可以添加多个 QQ：
+
+1. 在 Agent 页面点击“新增 QQ”并填写账号名称。
+2. 执行 `./sunabot.sh restart` 启动新增账号的 NapCat 容器。
+3. 返回 Agent 页面点击“登录”并扫码。
+
+每个账号使用独立 WebUI 端口，首个账号从 `6099` 开始。账号运行目录位于：
+
+```text
+workspace/runtime/napcat/accounts/<accountId>/
 ```
 
-`auto` 使用 Native Core。快速开发模式会启动 API watch 与 Vite：
+## 创建 Agent
 
-```bash
-./sunabot.sh up --dev
-```
+在管理台的“Agent”页面点击“新增 Agent”，填写不可变的 Agent ID、名称和可选头像。新 Agent 会获得独立的人格文件、配置、双 SQLite 数据库、媒体目录和 QQ 账号列表，并继承公共 Provider 与系统提示词。
 
-开发管理台地址为 `http://127.0.0.1:5173`，API 仍为 `http://127.0.0.1:8787`。
+创建完成后添加 QQ、重启 Sunabot、完成扫码，再进入“Agent 设置”配置管理员 QQ、回复行为、记忆、工具和群聊编排。
 
-生产式 Native 启动使用 `./sunabot.sh up`。需要验证完整容器部署且 Docker VM 支持 bubblewrap user namespace 时使用：
-
-```bash
-SUNABOT_CORE_MODE=docker ./sunabot.sh up
-```
-
-若 Docker VM 禁止嵌套 user namespace，启动器会在 bubblewrap probe 阶段停止并清理容器；macOS 开发使用默认 Native Core。
-
-macOS Native Core 会安全关闭 `workspace_bash`，其他业务功能、SQLite 和 OneBot 消息格式与生产模式一致。
-
-### Windows / WSL2
-
-在 Ubuntu WSL2 的 Linux 文件系统中保存仓库和 workspace，例如 `~/sunabot` 或 `/srv/sunabot`，避免放入 `/mnt/c`。确保 Docker Desktop 已启用该发行版的 WSL Integration，或已在发行版内启动 Docker Engine。
-
-```bash
-./sunabot.sh up
-```
-
-`auto` 使用 Docker Core。需要在 WSL2 中直接运行 Core 时使用：
-
-```bash
-SUNABOT_CORE_MODE=native ./sunabot.sh up
-```
-
-### Linux
-
-安装并启动 Docker Engine 与 Compose 插件后执行：
-
-```bash
-./sunabot.sh up
-```
-
-`auto` 使用 Docker Core。需要 Native Core 时，还需安装 runtime contract 要求的 Node.js、bubblewrap 和 LibreOffice：
-
-```bash
-SUNABOT_CORE_MODE=native ./sunabot.sh up
-```
-
-### 更新
-
-`workspace/` 已被 Git 整体忽略，拉取代码不会覆盖 SQLite、配置、凭据或 NapCat 登录态。
-
-```bash
-git pull --ff-only
-./sunabot.sh up
-```
-
-从旧单容器版本升级时，按 [单容器服务端迁移备忘录](docs/migrations/one-container-to-split-runtime.md) 执行，旧运行时与新运行时不能同时启动。
-
-### 运行命令
+## 运行命令
 
 ```bash
 ./sunabot.sh up
@@ -139,4 +153,63 @@ git pull --ff-only
 ./sunabot.sh doctor
 ```
 
-运行模式可以通过 `SUNABOT_CORE_MODE=auto|native|docker` 或 `--core=auto|native|docker` 选择。Native Core 可使用 `--dev` 或 `SUNABOT_DEV=1` 启动开发服务。管理台始终只发布到宿主回环 `127.0.0.1:8787`；不要直接向局域网或公网公开管理端口、NapCat WebUI 或 OneBot 端口。
+Core 模式可以通过环境变量或参数选择：
+
+```bash
+SUNABOT_CORE_MODE=native ./sunabot.sh up
+SUNABOT_CORE_MODE=docker ./sunabot.sh up
+./sunabot.sh up --core=native
+./sunabot.sh up --core=docker
+```
+
+macOS 开发模式会启动 API watch 与 Vite：
+
+```bash
+./sunabot.sh up --dev
+```
+
+开发管理台位于 `http://127.0.0.1:5173`，API 继续使用 `127.0.0.1:8787`。
+
+## 更新与迁移
+
+常规更新：
+
+```bash
+git pull --ff-only
+./sunabot.sh up
+```
+
+`workspace/` 整体不进入 Git，更新代码不会覆盖配置、数据库、凭据、媒体或 QQ 登录态。
+
+遇到以下旧实例时，必须停服并完成对应迁移，再启动当前版本：
+
+- 旧 `sunabot-qq-runtime` 容器或 `qq-runtime` Compose service：[单容器到分离运行时](docs/migrations/one-container-to-split-runtime.md)
+- 旧单 Agent workspace：[单 Agent 到多 Agent](docs/migrations/single-agent-to-multi-agent.md)
+- Windows/WSL2 迁移：[WSL2 部署与迁移](docs/migrations/wsl2-migration-plan.md)
+
+launcher 会在写入 workspace 前校验 `business/migrations/multi-agent-v1.json`。真正空目录会自动创建首次安装标记；主库出现后，门禁会核对全部 Agent 的 manifest 与双库、全部 QQ 的归属与运行目录、Plana/primary 基线，以及所有必需路径。完成标记还绑定迁移目标的 workspace 和 primary 端口。既有目录缺少标记、状态漂移或路径含符号链接时停止启动；结构已就绪但未标记的 workspace 仍需停服执行 `migrate:multi-agent --apply --quiesced`，由迁移器在确认全部账号端口和当前 workspace 的活动容器已经停止后创建恢复点、四类复制/保留证据、迁移报告和完成标记。
+
+备份、验证、恢复和演练命令见 [SQLite 备份与恢复](docs/operations/sqlite-backup-recovery.md)。运行中的旧实例与新实例不能同时连接同一 QQ 或写入同一个 workspace。
+
+## 端口与安全
+
+| 端口 | 用途 | 暴露范围 |
+| --- | --- | --- |
+| `8787` | 管理台与管理 API | 宿主回环 |
+| `8788` | OneBot v11 | Compose 私有网络或同机容器到宿主网关 |
+| `6099+` | 各 QQ 的 NapCat WebUI | 宿主回环 |
+
+不要把管理台、NapCat WebUI 或 OneBot 端口直接发布到局域网或公网。远程访问管理台时使用 HTTPS 反向代理，并在 `workspace/secrets/runtime.env` 中配置精确的 `SUNABOT_ADMIN_ORIGINS`。
+
+凭据、QQ 登录态、SQLite、请求日志、生成图片和备份都保存在 `workspace/`，不得提交到 Git。运行与迁移命令不得使用 root。
+
+## 验证
+
+```bash
+npm run verify
+npm run test:visual
+./sunabot.sh doctor
+./sunabot.sh status
+```
+
+界面截图需要人工检查。运行契约、架构门禁、恢复门禁、类型检查、单元与集成测试、运行时 smoke、容量基线、生产构建和 E2E 都包含在 `npm run verify` 中。

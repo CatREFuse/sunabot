@@ -11,7 +11,9 @@ export interface MonitoringRouteOptions {
   monitorSettings: MonitorSettingsStore;
   serviceMonitor: ServiceMonitor;
   onebotGateway: OneBotGateway;
+  getOnebotStatus?: (agentId: string) => ReturnType<OneBotGateway["getStatus"]>;
   runtime: SunaRuntime;
+  getRuntime?: (agentId: string) => SunaRuntime;
   configService: ConfigService;
 }
 
@@ -33,12 +35,21 @@ export function registerMonitoringRoutes(app: FastifyInstance, options: Monitori
 
   app.get("/api/status", {
     schema: { querystring: openObject, response: { 200: openObject } }
-  }, async () => ({
+  }, async (request) => {
+    const agentId = requestAgentId(request.query);
+    const runtime = options.getRuntime?.(agentId) ?? options.runtime;
+    return {
     startedAt: options.startedAt,
     configPath: options.getConfigPath(),
-    onebot: options.onebotGateway.getStatus(),
-    persona: options.runtime.getPersonaStatus(),
-    provider: options.runtime.getProviderStatus(),
+    onebot: options.getOnebotStatus?.(agentId) ?? options.onebotGateway.getStatus(),
+    persona: runtime.getPersonaStatus(),
+    provider: runtime.getProviderStatus(),
     recovery: options.configService.getRecoveryStatus()
-  }));
+    };
+  });
+}
+
+function requestAgentId(query: unknown) {
+  const value = query && typeof query === "object" ? (query as { agentId?: unknown }).agentId : undefined;
+  return String(value ?? "plana").trim() || "plana";
 }

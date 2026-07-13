@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { computed, onMounted, shallowRef } from "vue";
+import { useRouter } from "vue-router";
 import { apiRequest } from "../composables/useAdminApi";
 import { useQqLogin } from "../composables/useQqLogin";
 import { useRuntimeStatus } from "../composables/useRuntimeStatus";
+import { useAgents } from "../composables/useAgents";
 import { formatFullDateTime } from "../utils/format";
 import { formatDashboardMetric, formatExactNumber } from "../utils/numberFormat";
-import type { ConversationRecord, ImageHistoryRecord, OneBotChatList, OneBotLoginCheck, OneBotLoginInfo, OneBotQrLogin, TokenUsagePayload } from "../types";
+import type { ConversationRecord, ImageHistoryRecord, OneBotChatList, OneBotLoginCheck, TokenUsageFilters, TokenUsagePayload } from "../types";
 import PageHeader from "../components/ui/PageHeader.vue";
 import DiagnosticsDrawer from "../components/overview/DiagnosticsDrawer.vue";
 import OneBotLoginDialog from "../components/overview/OneBotLoginDialog.vue";
@@ -14,7 +16,9 @@ import OneBotStatusPanel from "../components/overview/OneBotStatusPanel.vue";
 import TokenUsageDashboard from "../components/overview/TokenUsageDashboard.vue";
 
 const runtime = useRuntimeStatus();
-const loginInfo = shallowRef<OneBotLoginInfo | null>(null);
+const agentsState = useAgents();
+const router = useRouter();
+const usageScope = shallowRef<"all" | "agent">("agent");
 const qqStatus = shallowRef<OneBotLoginCheck | null>(null);
 const chats = shallowRef<OneBotChatList | null>(null);
 const conversationCount = shallowRef(0);
@@ -26,7 +30,20 @@ const actionMessage = shallowRef("");
 const overviewError = shallowRef("");
 const diagnosticsOpen = shallowRef(false);
 const tokenUsage = shallowRef<TokenUsagePayload | null>(null);
+const tokenUsageModel = shallowRef("");
+const tokenUsageBehavior = shallowRef<TokenUsageFilters["behavior"]>("");
+const tokenUsageLoading = shallowRef(false);
+let tokenUsageRequestId = 0;
+const selectedAccount = computed(() => agentsState.currentAgent.value?.accounts[0]);
+const accountApiBase = computed(() => selectedAccount.value
+  ? `/api/agents/${encodeURIComponent(selectedAccount.value.agentId)}/accounts/${encodeURIComponent(selectedAccount.value.id)}`
+  : "");
 const qqLogin = useQqLogin({
+  paths: () => ({
+    status: `${accountApiBase.value}/login/status`,
+    login: `${accountApiBase.value}/login`,
+    logout: `${accountApiBase.value}/logout`
+  }),
   onStatus(snapshot) {
     qqStatus.value = snapshot;
   },
@@ -38,10 +55,10 @@ const qqLogin = useQqLogin({
 const connected = computed(() => runtime.status.value?.onebot.connected ?? false);
 const primaryState = computed(() => runtime.error.value && !runtime.status.value ? "ERROR" : connected.value ? "ONLINE" : "OFFLINE");
 const qqIdentity = computed(() => {
-  const value = loginInfo.value?.data?.user_id ?? qqStatus.value?.data?.user_id ?? runtime.status.value?.onebot.selfIds.join(", ");
+  const value = qqStatus.value?.data?.user_id ?? selectedAccount.value?.qqId ?? runtime.status.value?.onebot.selfIds.join(", ");
   return value || "--";
 });
-const qqNickname = computed(() => loginInfo.value?.data?.nickname ?? qqStatus.value?.data?.nickname ?? "--");
+const qqNickname = computed(() => qqStatus.value?.data?.nickname ?? selectedAccount.value?.label ?? "--");
 const qqState = computed<"online" | "offline" | "unknown">(() => {
   if (!connected.value) return "offline";
   if (qqStatus.value?.error) return "unknown";
@@ -60,33 +77,70 @@ const headerMessageKind = computed(() => {
   if (headerMessage.value && headerMessage.value !== "刷新中") return "error";
   return undefined;
 });
-const countMetrics = computed(() => [
+const countMetrics = computed(() => usageScope.value === "all" ? [
+  { label: "Agent", icon: "bx-bot", value: agentsState.agents.value.length, tone: "interactive" },
+  { label: "在线 Agent", icon: "bx-pulse", value: agentsState.agents.value.filter((agent) => agent.accounts.some((account) => account.connected)).length, tone: "success" },
+  { label: "在线 QQ", icon: "bxl-qq", value: agentsState.agents.value.flatMap((agent) => agent.accounts).filter((account) => account.connected).length, tone: "warning" }
+] : [
   { label: "记忆", icon: "bx-brain", value: runtime.status.value?.persona.memoryItems ?? 0, tone: "interactive" },
   { label: "会话", icon: "bx-message-square-dots", value: conversationCount.value, tone: "success" },
   { label: "图像", icon: "bx-image", value: imageCount.value, tone: "warning" }
 ]);
 
-onMounted(() => {
-  void loadOverviewDetails();
+onMounted(async () => {
+  await agentsState.load().catch(() => undefined);
+  await loadOverviewDetails();
 });
 
 async function loadOverviewDetails() {
   const results = await Promise.allSettled([
-    apiRequest<OneBotLoginCheck>("/api/onebot/qq-login/status"),
-    apiRequest<OneBotLoginInfo>("/api/onebot/login-info"),
+    selectedAccount.value
+      ? apiRequest<OneBotLoginCheck>(`${accountApiBase.value}/login/status`)
+      : Promise.resolve({ connected: false, online: false } as OneBotLoginCheck),
     apiRequest<{ conversations: ConversationRecord[] }>("/api/conversations"),
     apiRequest<{ images: ImageHistoryRecord[] }>("/api/images"),
-    Promise.resolve().then(() => apiRequest<TokenUsagePayload>(`/api/token-usage?timezoneOffset=${new Date().getTimezoneOffset()}`))
+    Promise.resolve().then(() => apiRequest<TokenUsagePayload>(tokenUsageUrl()))
   ]);
   if (results[0].status === "fulfilled") qqStatus.value = results[0].value;
-  if (results[1].status === "fulfilled") loginInfo.value = results[1].value;
-  if (results[2].status === "fulfilled") conversationCount.value = results[2].value.conversations.length;
-  if (results[3].status === "fulfilled") imageCount.value = results[3].value.images.length;
-  if (results[4].status === "fulfilled") tokenUsage.value = results[4].value;
-  const names = ["QQ 状态", "QQ 身份", "会话", "图像", "Token"];
+  if (results[1].status === "fulfilled") conversationCount.value = results[1].value.conversations.length;
+  if (results[2].status === "fulfilled") imageCount.value = results[2].value.images.length;
+  if (results[3].status === "fulfilled") tokenUsage.value = results[3].value;
+  const names = ["QQ 状态", "会话", "图像", "Token"];
   overviewError.value = results.flatMap((result, index) => result.status === "rejected"
     ? [`${names[index]}: ${result.reason instanceof Error ? result.reason.message : "读取失败"}`]
     : []).join(" · ");
+}
+
+function tokenUsageUrl() {
+  const query = new URLSearchParams({ timezoneOffset: String(new Date().getTimezoneOffset()) });
+  if (usageScope.value === "all") query.set("agentId", "all");
+  if (tokenUsageModel.value) query.set("model", tokenUsageModel.value);
+  if (tokenUsageBehavior.value) query.set("behavior", tokenUsageBehavior.value);
+  return `/api/token-usage?${query}`;
+}
+
+async function setUsageScope(scope: "all" | "agent") {
+  usageScope.value = scope;
+  tokenUsageModel.value = "";
+  tokenUsageBehavior.value = "";
+  await loadOverviewDetails();
+}
+
+async function applyTokenUsageFilters(filters: TokenUsageFilters) {
+  tokenUsageModel.value = filters.model;
+  tokenUsageBehavior.value = filters.behavior;
+  const requestId = ++tokenUsageRequestId;
+  tokenUsageLoading.value = true;
+  try {
+    const result = await apiRequest<TokenUsagePayload>(tokenUsageUrl());
+    if (requestId === tokenUsageRequestId) tokenUsage.value = result;
+  } catch (error) {
+    if (requestId === tokenUsageRequestId) {
+      overviewError.value = `Token: ${error instanceof Error ? error.message : "读取失败"}`;
+    }
+  } finally {
+    if (requestId === tokenUsageRequestId) tokenUsageLoading.value = false;
+  }
 }
 
 async function refreshAll() {
@@ -99,7 +153,9 @@ async function loadChats() {
   loadingChats.value = true;
   chatsError.value = "";
   try {
-    chats.value = await apiRequest<OneBotChatList>("/api/onebot/chats");
+    chats.value = selectedAccount.value
+      ? await apiRequest<OneBotChatList>(`${accountApiBase.value}/chats`)
+      : { connected: false, private: [], groups: [] };
   } catch (error) {
     chatsError.value = error instanceof Error ? error.message : "联系人读取失败";
   } finally {
@@ -110,6 +166,11 @@ async function loadChats() {
 function openChats() {
   chatsOpen.value = true;
   if (!chats.value) void loadChats();
+}
+
+function openAccount() {
+  if (selectedAccount.value) void qqLogin.openDialog();
+  else void router.push("/agents");
 }
 
 async function openNapCat(route = "/api/onebot/napcat-webui-url") {
@@ -124,6 +185,14 @@ async function openNapCat(route = "/api/onebot/napcat-webui-url") {
     actionMessage.value = error instanceof Error ? error.message : "NapCat 地址不可用";
   }
 }
+
+function openCurrentNapCat() {
+  if (!selectedAccount.value) {
+    actionMessage.value = "还没有 QQ 账号";
+    return;
+  }
+  void openNapCat(`${accountApiBase.value}/napcat-webui-url`);
+}
 </script>
 
 <template>
@@ -136,10 +205,15 @@ async function openNapCat(route = "/api/onebot/napcat-webui-url") {
         </template>
       </PageHeader>
 
+      <div class="mt-6 segmented" aria-label="统计范围">
+        <button class="segmented-button" type="button" :aria-pressed="usageScope === 'agent'" @click="setUsageScope('agent')">{{ agentsState.currentAgent.value?.name || "当前 Agent" }}</button>
+        <button class="segmented-button" type="button" :aria-pressed="usageScope === 'all'" @click="setUsageScope('all')">全部 Agent</button>
+      </div>
+
       <div class="mt-8 flex flex-wrap gap-2">
-        <button class="btn btn-primary" type="button" @click="qqLogin.openDialog"><i class="bx bxl-qq" aria-hidden="true"></i>{{ qqState === "online" ? "QQ 账号" : "QQ 登录" }}</button>
-        <button class="btn" type="button" @click="openChats"><i class="bx bx-group" aria-hidden="true"></i>联系人</button>
-        <button class="btn btn-ghost" type="button" @click="openNapCat()"><i class="bx bx-link-external" aria-hidden="true"></i>NapCat</button>
+        <button class="btn btn-primary" type="button" @click="openAccount"><i class="bx bxl-qq" aria-hidden="true"></i>{{ selectedAccount ? qqState === "online" ? "QQ 账号" : "QQ 登录" : "新增 QQ" }}</button>
+        <button class="btn" type="button" :disabled="!selectedAccount" @click="openChats"><i class="bx bx-group" aria-hidden="true"></i>联系人</button>
+        <button class="btn btn-ghost" type="button" :disabled="!selectedAccount" @click="openCurrentNapCat"><i class="bx bx-link-external" aria-hidden="true"></i>NapCat</button>
         <button class="btn btn-ghost" type="button" @click="diagnosticsOpen = true"><i class="bx bx-pulse" aria-hidden="true"></i>诊断</button>
       </div>
 
@@ -165,7 +239,13 @@ async function openNapCat(route = "/api/onebot/napcat-webui-url") {
         </article>
       </section>
 
-      <TokenUsageDashboard :usage="tokenUsage" :loading="actionMessage === '刷新中'" />
+      <TokenUsageDashboard
+        :usage="tokenUsage"
+        :loading="tokenUsageLoading || actionMessage === '刷新中'"
+        :model="tokenUsageModel"
+        :behavior="tokenUsageBehavior"
+        @filters-change="applyTokenUsageFilters"
+      />
 
       <section class="health-mosaic" aria-label="模型与系统状态">
         <article class="health-card">

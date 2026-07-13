@@ -9,8 +9,10 @@ export function createAdminTestConfig(rootDir: string): AppConfig {
     },
     persona: {
       defaultAgentId: "plana",
+      name: "普拉娜",
       agentWorkspace: path.join(rootDir, "agent-workspace"),
-      memoryLimit: 32
+      systemPromptWorkspace: path.join(rootDir, "system-prompts"),
+      systemPromptOverride: false
     },
     providers: {
       defaultProviderId: "test-provider",
@@ -32,10 +34,18 @@ export function createAdminTestConfig(rootDir: string): AppConfig {
         }
       ]
     },
+    broadcastStorm: {
+      enabled: true,
+      windowMinutes: 2,
+      replyThreshold: 3,
+      cooldownMinutes: 1
+    },
     bot: {
       adminQq: "171419991",
       adminName: "Test Admin",
+      pokeOnNoReply: false,
       quoteGroupReplies: true,
+      quoteGroupReplyExcludedUserIds: [],
       contextMessageLimit: 48,
       memory: {
         memoryModel: "gpt-5.4-mini",

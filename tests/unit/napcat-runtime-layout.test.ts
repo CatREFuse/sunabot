@@ -1,9 +1,7 @@
 // @vitest-environment node
-import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -12,7 +10,6 @@ import {
 } from "../../packages/platform/napcatRuntimeLayout.mjs";
 import { WORKSPACE_LAYOUT } from "../../packages/platform/workspaceLayout.js";
 
-const execFileAsync = promisify(execFile);
 const root = fileURLToPath(new URL("../..", import.meta.url));
 const temporaryDirectories: string[] = [];
 
@@ -24,7 +21,7 @@ afterEach(async () => {
 });
 
 describe("NapCat runtime layout", () => {
-  it("fixes config-full and QQ login artifacts in the runtime contract, schema and workspace layout", async () => {
+  it("fixes the account-scoped NapCat root in the runtime contract and isolates legacy migration paths", async () => {
     const [contract, schema] = await Promise.all([
       readJson(path.join(root, "deploy/runtime-contract.json")),
       readJson(path.join(root, "deploy/runtime-contract.schema.json"))
@@ -33,24 +30,17 @@ describe("NapCat runtime layout", () => {
     const schemaPaths = asRecord(asRecord(schema.properties).paths);
     const schemaPathProperties = asRecord(schemaPaths.properties);
 
-    expect(paths.napcatConfig).toBe("runtime/napcat/config-full");
-    expect(paths.napcatConfig).toBe(WORKSPACE_LAYOUT.napcatConfig);
-    expect(schemaPaths.required).toContain("napcatConfig");
-    expect(schemaPathProperties.napcatConfig).toEqual({
-      const: "runtime/napcat/config-full"
-    });
-    expect(paths.napcatQrCode).toBe("runtime/napcat/qrcode.png");
-    expect(paths.napcatQrCode).toBe(WORKSPACE_LAYOUT.napcatQrCode);
-    expect(schemaPaths.required).toContain("napcatQrCode");
-    expect(schemaPathProperties.napcatQrCode).toEqual({
-      const: "runtime/napcat/qrcode.png"
-    });
-    expect(paths.napcatManualLogin).toBe("runtime/napcat/manual-login-required");
-    expect(paths.napcatManualLogin).toBe(WORKSPACE_LAYOUT.napcatManualLogin);
-    expect(schemaPaths.required).toContain("napcatManualLogin");
-    expect(schemaPathProperties.napcatManualLogin).toEqual({
-      const: "runtime/napcat/manual-login-required"
-    });
+    expect(paths.napcatAccounts).toBe("runtime/napcat/accounts");
+    expect(paths.napcatAccounts).toBe(WORKSPACE_LAYOUT.napcatAccounts);
+    expect(schemaPaths.required).toContain("napcatAccounts");
+    expect(schemaPathProperties.napcatAccounts).toEqual({ const: "runtime/napcat/accounts" });
+    for (const retired of ["napcatConfig", "napcatQqState", "napcatPlugins", "napcatQrCode", "napcatManualLogin"]) {
+      expect(paths).not.toHaveProperty(retired);
+      expect(schemaPaths.required).not.toContain(retired);
+      expect(schemaPathProperties).not.toHaveProperty(retired);
+    }
+    expect(WORKSPACE_LAYOUT.legacyNapcatConfig).toBe("runtime/napcat/config-full");
+    expect(WORKSPACE_LAYOUT.legacyNapcatQqState).toBe("runtime/napcat/qq");
   });
 
   it("migrates an old component QR and links all future cache writes into workspace state", async () => {
@@ -144,10 +134,10 @@ describe("NapCat runtime layout", () => {
     expect(coreService).toContain(":/srv/sunabot/workspace");
     expect(napcatService).not.toContain("platform: linux/amd64");
     expect(napcatService).not.toContain("env_file:");
-    expect(napcatService).toContain("/runtime/napcat/config-full:/app/napcat/config");
-    expect(napcatService).toContain("/runtime/napcat/qq:/app/.config/QQ");
-    expect(napcatService).toContain("/runtime/napcat/plugins:/app/napcat/plugins");
-    expect(napcatService).toContain("/runtime/napcat:/app/napcat/cache");
+    expect(napcatService).toContain("/runtime/napcat/accounts/${NAPCAT_ACCOUNT_ID:-primary}/config-full:/app/napcat/config");
+    expect(napcatService).toContain("/runtime/napcat/accounts/${NAPCAT_ACCOUNT_ID:-primary}/qq:/app/.config/QQ");
+    expect(napcatService).toContain("/runtime/napcat/accounts/${NAPCAT_ACCOUNT_ID:-primary}/plugins:/app/napcat/plugins");
+    expect(napcatService).toContain("/runtime/napcat/accounts/${NAPCAT_ACCOUNT_ID:-primary}:/app/napcat/cache");
   });
 
   it("provisions writable native component cache paths", async () => {
@@ -168,53 +158,6 @@ describe("NapCat runtime layout", () => {
 
   });
 
-  it("configures OneBot only in the contract NapCat config directory", async () => {
-    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-napcat-layout-"));
-    temporaryDirectories.push(workspace);
-    await write(path.join(workspace, "secrets/runtime.env"), [
-      "ONEBOT_ACCESS_TOKEN=unit-onebot-token",
-      "NAPCAT_ACCOUNT=123456789"
-    ].join("\n"));
-    await write(path.join(
-      workspace,
-      WORKSPACE_LAYOUT.napcatConfig,
-      "onebot11_123456789.json"
-    ), JSON.stringify({
-      network: {
-        websocketClients: [
-          { name: "sunabot-rws", enable: true, url: "ws://host.docker.internal:8787/onebot/v11/ws" },
-          { name: "remote", enable: true, url: "wss://example.invalid/onebot" }
-        ]
-      }
-    }));
-
-    await execFileAsync(process.execPath, [
-      path.join(root, "tooling/runtime/configure-napcat-client.mjs")
-    ], {
-      cwd: os.tmpdir(),
-      env: { ...process.env, SUNABOT_WORKSPACE: workspace }
-    });
-
-    const configPath = path.join(
-      workspace,
-      WORKSPACE_LAYOUT.napcatConfig,
-      "onebot11_123456789.json"
-    );
-    const config = await readJson(configPath);
-    const network = asRecord(config.network);
-    expect(config.enableLocalFile2Url).toBe(true);
-    expect(network.websocketClients).toEqual([
-      expect.objectContaining({
-        name: "sunabot",
-        enable: true,
-        url: "ws://host.docker.internal:8788/onebot/v11/ws",
-        token: "unit-onebot-token"
-      })
-    ]);
-    await expect(fs.access(path.join(workspace, "runtime/napcat/config"))).rejects.toMatchObject({
-      code: "ENOENT"
-    });
-  });
 });
 
 async function readJson(filePath: string) {

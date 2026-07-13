@@ -25,6 +25,14 @@ export interface RuntimeIncomingReplyEventPayload {
   preparationKey?: string;
 }
 
+export interface ReplyGateSnapshotV1 {
+  generation: string;
+  scope: "private" | "user_group" | "bot_group";
+  conversationId: string;
+  scopeEpoch: number;
+  conversationEpoch: number;
+}
+
 export interface AsyncToolCompletionPayload {
   type: "tool_result";
   toolJobId: string;
@@ -33,6 +41,7 @@ export interface AsyncToolCompletionPayload {
   originalRequest: {
     incoming: InboundMessageV1;
     captureSequence?: number;
+    replyGate?: ReplyGateSnapshotV1;
   };
   arguments: unknown;
   outcome: {
@@ -58,11 +67,20 @@ export interface AssistantReplyOutboxPayload {
   logRunId?: string;
   messageOrigin?: AssistantMessageOrigin;
   toolNames?: string[];
+  replyGate?: ReplyGateSnapshotV1;
+}
+
+export interface NoReplyPokeOutboxPayload {
+  type: "no_reply_poke";
+  incoming: InboundMessageV1;
+  logRunId?: string;
+  replyGate?: ReplyGateSnapshotV1;
 }
 
 export type RuntimeIncomingReplyEnvelope = EnvelopeV1<"runtime.incoming_reply", RuntimeIncomingReplyEventPayload>;
 export type AsyncToolCompletionEnvelope = EnvelopeV1<"runtime.tool_result", AsyncToolCompletionPayload>;
 export type AssistantReplyOutboxEnvelope = EnvelopeV1<"runtime.assistant_reply", AssistantReplyOutboxPayload>;
+export type NoReplyPokeOutboxEnvelope = EnvelopeV1<"runtime.no_reply_poke", NoReplyPokeOutboxPayload>;
 
 interface EnvelopeOptions {
   conversationId?: string;
@@ -94,6 +112,13 @@ export function assistantReplyEnvelope(
   return envelope("runtime.assistant_reply", payload, options);
 }
 
+export function noReplyPokeEnvelope(
+  payload: NoReplyPokeOutboxPayload,
+  options: EnvelopeOptions
+): NoReplyPokeOutboxEnvelope {
+  return envelope("runtime.no_reply_poke", payload, options);
+}
+
 export function decodeIncomingReply(value: unknown): RuntimeIncomingReplyEventPayload {
   const payload = decode(value, "runtime.incoming_reply", "incoming_reply");
   return {
@@ -120,6 +145,14 @@ export function decodeAssistantReply(value: unknown): AssistantReplyOutboxPayloa
     ...payload,
     incoming: decodeInboundMessageV1(payload.incoming)
   } as AssistantReplyOutboxPayload;
+}
+
+export function decodeNoReplyPoke(value: unknown): NoReplyPokeOutboxPayload {
+  const payload = decode(value, "runtime.no_reply_poke", "no_reply_poke");
+  return {
+    ...payload,
+    incoming: decodeInboundMessageV1(payload.incoming)
+  } as NoReplyPokeOutboxPayload;
 }
 
 function envelope<TType extends string, TPayload>(

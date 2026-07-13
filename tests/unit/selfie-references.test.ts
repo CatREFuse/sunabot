@@ -166,6 +166,58 @@ describe("selfie reference routes", () => {
     expect((await app.inject({ method: "GET", url: "/api/selfie-references" })).json()).toEqual({ images: [], maxImages: 3 });
     await app.close();
   });
+
+  it("routes reference storage and content URLs by Agent ID", async () => {
+    const planaWorkspace = path.join(root, "agents", "plana");
+    const aronaWorkspace = path.join(root, "agents", "arona");
+    await Promise.all([
+      fs.mkdir(planaWorkspace, { recursive: true }),
+      fs.mkdir(aronaWorkspace, { recursive: true })
+    ]);
+    const repositoryFor = (agentId: string) => new SelfieReferenceRepository({
+      getConfig: () => ({
+        ...createAdminTestConfig(root),
+        persona: {
+          ...createAdminTestConfig(root).persona,
+          defaultAgentId: agentId,
+          agentWorkspace: agentId === "arona" ? aronaWorkspace : planaWorkspace
+        }
+      }),
+      mutex: new AdminMutationMutex()
+    });
+    const repositories = {
+      plana: repositoryFor("plana"),
+      arona: repositoryFor("arona")
+    };
+    const app = Fastify();
+    registerSelfieReferenceRoutes(app, {
+      repository: repositories.plana,
+      getRepository: (agentId) => {
+        const selected = repositories[agentId as keyof typeof repositories];
+        if (!selected) throw new Error(`Unknown test Agent: ${agentId}`);
+        return selected;
+      }
+    });
+
+    const bytes = await image(64, 64, "#d9f1ff");
+    const uploaded = await app.inject({
+      method: "POST",
+      url: "/api/selfie-references?agentId=arona",
+      payload: { fileName: "arona.png", dataBase64: bytes.toString("base64") }
+    });
+    expect(uploaded.statusCode).toBe(201);
+    const reference = uploaded.json().images[0];
+    expect(reference.displayUrl).toBe(
+      `/api/selfie-references/${reference.id}/content?variant=display&agentId=arona`
+    );
+    expect(await fs.readdir(path.join(aronaWorkspace, "selfie"))).toHaveLength(1);
+    await expect(fs.readdir(path.join(planaWorkspace, "selfie"))).rejects.toMatchObject({ code: "ENOENT" });
+
+    const display = await app.inject({ method: "GET", url: reference.displayUrl });
+    expect(display.statusCode).toBe(200);
+    expect(display.headers["content-type"]).toContain("image/webp");
+    await app.close();
+  });
 });
 
 async function image(width: number, height: number, background: string) {

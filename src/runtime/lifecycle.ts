@@ -43,12 +43,10 @@ import {
 import { HookBus } from "../../services/messaging/hookBus.js";
 import {
   applyMemoryBatchTransaction,
-  ensureAgentTextFile,
   formatMemoryMatchesForPrompt,
   isMemoryBatchCommitted,
   mergeUserProfileMemory,
   normalizeEventMemorySchema,
-  readAgentTextFile,
   readMemorySourceEntries,
   readUserProfileForUser,
   readWorkingMemorySnapshot,
@@ -101,6 +99,7 @@ import { SessionStore, type OutboxRecord, type SessionEventRecord } from "../../
 import { TOOL_CALL_TIMEOUT_MS } from "../../services/tools/tools.js";
 import { promptDefinitionById } from "../../services/agent/promptCatalog.js";
 import { defaultPromptContent as defaultFinalPromptContent } from "../../services/agent/promptDefaults.js";
+import { ensurePromptTextFile, readPromptTextFile } from "../../services/agent/promptWorkspace.js";
 import {
   parseFinalPromptTemplate,
   renderFinalPromptTemplate,
@@ -108,7 +107,7 @@ import {
   type RenderedPromptRequest
 } from "../../services/agent/promptSystem.js";
 import { buildConversationPromptVariables } from "../../services/agent/persona.js";
-import { DEFAULT_CONTEXT_MESSAGE_LIMIT, MAX_STORED_CONVERSATION_MESSAGES, GROUP_CHAT_SUMMARY_WINDOW_MS, MAX_SELFIE_REFERENCE_IMAGES, MAX_SELFIE_WORKSPACE_REFERENCE_IMAGES, MAX_CURRENT_CONTEXT_IMAGES, MAX_HISTORY_CONTEXT_IMAGES, HYDRATE_MESSAGE_WINDOW_MS, ACTIVE_CONVERSATION_WINDOW_MS, DIRECT_REPLY_TIMEOUT_MS, AMBIENT_ORCHESTRATOR_TIMEOUT_MS, ORCHESTRATOR_MAX_RETRIES, PREPARE_TIMEOUT_MS, RECENT_CONTEXT_TOKEN_BUDGET, DEDUPE_TTL_MS, MAX_DEDUPE_KEYS, DEFAULT_ADMIN_NAME, GROUP_CHAT_SUMMARY_COMMAND, CONVERSATION_REPLY_PROMPT_FILE, SELFIE_PROMPT_FILE, GROUP_CHAT_SUMMARY_PROMPT_FILE, ADMIN_PERSONA_FILES, ADMIN_RUNTIME_PROMPT_DEFAULTS, BatchUserInfo, WorkingMemoryMergeOutput, WorkingMemoryMergeContext, personaFileNameForAdminId, AdminIdentity, ConversationReplyUpdateInput, RuntimeCommandContext, ReplyDeliveryDraft, ReplyDelivery, DeferredCodexTurn, AmbientReplyJob, AmbientReplyState, AmbientIdleTimer, RuntimeConfigSnapshot, RuntimePromptSnapshot, SunaRuntimeOptions } from "./runtimeContracts.js";
+import { DEFAULT_CONTEXT_MESSAGE_LIMIT, MAX_STORED_CONVERSATION_MESSAGES, GROUP_CHAT_SUMMARY_WINDOW_MS, MAX_SELFIE_REFERENCE_IMAGES, MAX_SELFIE_WORKSPACE_REFERENCE_IMAGES, MAX_CURRENT_CONTEXT_IMAGES, MAX_HISTORY_CONTEXT_IMAGES, HYDRATE_MESSAGE_WINDOW_MS, ACTIVE_CONVERSATION_WINDOW_MS, DIRECT_REPLY_TIMEOUT_MS, AMBIENT_ORCHESTRATOR_TIMEOUT_MS, ORCHESTRATOR_MAX_RETRIES, PREPARE_TIMEOUT_MS, RECENT_CONTEXT_TOKEN_BUDGET, DEDUPE_TTL_MS, MAX_DEDUPE_KEYS, DEFAULT_ADMIN_NAME, GROUP_CHAT_SUMMARY_COMMAND, CONVERSATION_REPLY_PROMPT_FILE, PRIVATE_CONVERSATION_REPLY_PROMPT_FILE, GROUP_CONVERSATION_REPLY_PROMPT_FILE, SELFIE_PROMPT_FILE, GROUP_CHAT_SUMMARY_PROMPT_FILE, ADMIN_PERSONA_FILES, ADMIN_RUNTIME_PROMPT_DEFAULTS, BatchUserInfo, WorkingMemoryMergeOutput, WorkingMemoryMergeContext, personaFileNameForAdminId, AdminIdentity, ConversationReplyUpdateInput, RuntimeCommandContext, ReplyDeliveryDraft, ReplyDelivery, DeferredCodexTurn, AmbientReplyJob, AmbientReplyState, AmbientIdleTimer, RuntimeConfigSnapshot, RuntimePromptSnapshot, SunaRuntimeOptions } from "./runtimeContracts.js";
 import { clampInteger, indexedConversationMessages } from "./conversationMemoryHelpers.js";
 import { conversationOrchestratorEnabled, conversationReplyEnabled, enrichMemoryEntriesWithConversations, isWebConversationId, normalizeConversationId, normalizeConversationLookupId, outboundForRecord } from "./messagingAttachmentHelpers.js";
 import { conversationMemberNames } from "./selfieHelpers.js";
@@ -156,6 +155,9 @@ export function runtime_commitReload(this: RuntimeHost, snapshot: RuntimeConfigS
     this.config = snapshot.config;
     this.memoryScheduler.setConfig(snapshot.config);
     this.persona = snapshot.persona;
+    if (previous.bot.memory.messageThreshold !== this.config.bot.memory.messageThreshold) {
+      this.scheduleMemoryDrain();
+    }
     if (previous.bot.adminQq.trim() !== this.config.bot.adminQq.trim()) {
       this.cancelScopeReplies("private");
       this.cancelScopeReplies("user_group");
@@ -263,39 +265,58 @@ export function runtime_getProviderForModel(this: RuntimeHost, model: string, re
     });
   }
 export async function runtime_ensureAgentPromptFiles(this: RuntimeHost, config = this.config) {
+    const legacyConversationPrompt = await readPromptTextFile(
+      config,
+      "system",
+      CONVERSATION_REPLY_PROMPT_FILE,
+      ADMIN_RUNTIME_PROMPT_DEFAULTS["conversation.private-reply"] ?? ""
+    );
     await Promise.all([
-      ensureAgentTextFile(
+      ensurePromptTextFile(
         config,
-        CONVERSATION_REPLY_PROMPT_FILE,
-        ADMIN_RUNTIME_PROMPT_DEFAULTS["conversation.reply"] ?? ""
+        "system",
+        PRIVATE_CONVERSATION_REPLY_PROMPT_FILE,
+        legacyConversationPrompt
       ),
-      ensureAgentTextFile(
+      ensurePromptTextFile(
         config,
+        "system",
+        GROUP_CONVERSATION_REPLY_PROMPT_FILE,
+        legacyConversationPrompt
+      ),
+      ensurePromptTextFile(
+        config,
+        "system",
         config.bot.memory.workMemoryCompressInPrompt,
         ADMIN_RUNTIME_PROMPT_DEFAULTS["memory.compress-in"] ?? ""
       ),
-      ensureAgentTextFile(
+      ensurePromptTextFile(
         config,
+        "system",
         config.bot.memory.workMemoryCompressOutPrompt,
         ADMIN_RUNTIME_PROMPT_DEFAULTS["memory.compress-out"] ?? ""
       ),
-      ensureAgentTextFile(
+      ensurePromptTextFile(
         config,
+        "system",
         config.bot.memory.userProfilePrompt,
         ADMIN_RUNTIME_PROMPT_DEFAULTS["memory.user-profile"] ?? ""
       ),
-      ensureAgentTextFile(
+      ensurePromptTextFile(
         config,
+        "system",
         config.bot.orchestrator.promptFile,
         ADMIN_RUNTIME_PROMPT_DEFAULTS["orchestrator.user-group"] ?? ""
       ),
-      ensureAgentTextFile(
+      ensurePromptTextFile(
         config,
+        "system",
         GROUP_CHAT_SUMMARY_PROMPT_FILE,
         ADMIN_RUNTIME_PROMPT_DEFAULTS["conversation.group-summary"] ?? ""
       ),
-      ensureAgentTextFile(
+      ensurePromptTextFile(
         config,
+        "persona",
         SELFIE_PROMPT_FILE,
         ADMIN_RUNTIME_PROMPT_DEFAULTS["image.selfie-rewrite"] ?? ""
       )
@@ -312,8 +333,9 @@ export async function runtime_renderPromptRequest(this: RuntimeHost,
     if (!definition || definition.kind !== "final") {
       throw new Error(`Unknown final prompt: ${id}`);
     }
-    const content = await readAgentTextFile(
+    const content = await readPromptTextFile(
       this.config,
+      definition.scope,
       definition.fileName(this.config),
       ADMIN_RUNTIME_PROMPT_DEFAULTS[id]
     );
@@ -514,6 +536,7 @@ export async function runtime_hydrateConversationIdentities(this: RuntimeHost, c
     for (let offset = 0; offset < targets.length; offset += 4) {
       await Promise.all(targets.slice(offset, offset + 4).map(async ({ message, userId }) => {
         const identity = await this.senderNameResolver.resolve({
+          ...(record.accountId ? { accountId: record.accountId } : {}),
           userId,
           groupId: record.groupId,
           sender: {

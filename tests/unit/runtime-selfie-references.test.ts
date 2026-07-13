@@ -60,6 +60,53 @@ describe("runtime selfie references", () => {
       chatReferenceImageCount: 1
     }, logContext)).resolves.toBe("rewritten selfie prompt");
 
-    expect(completeRequest).toHaveBeenCalledWith(expect.any(Object), { logContext });
+    expect(completeRequest).toHaveBeenCalledWith(expect.any(Object), {
+      logContext: { ...logContext, promptFamily: "image.selfie-rewrite" }
+    });
+  });
+
+  it("prioritizes a dispatch-time media handle for the fourth selfie reference slot", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-runtime-selfie-handle-"));
+    roots.push(root);
+    const runtime = new SunaRuntime(createAdminTestConfig(root), { attachmentService: {} as never });
+    runtimes.push(runtime);
+    const workspaceReferences = [
+      "data:image/png;base64,stored-1",
+      "data:image/png;base64,stored-2",
+      "data:image/png;base64,stored-3"
+    ];
+    vi.spyOn(runtime, "loadSelfieReferenceImages").mockResolvedValue(workspaceReferences);
+    vi.spyOn(runtime, "rewriteSelfiePrompt").mockResolvedValue("rewritten selfie prompt");
+    const generateImage = vi.fn(async () => ({
+      url: "/generated-images/agents/arona/selfie.png",
+      filePath: "/tmp/selfie.png"
+    }));
+    const provider = { generateImage } as unknown as OpenAIProvider;
+
+    await runtime.runSelfie({
+      prompt: "adjust the previous selfie",
+      size: null,
+      resolution: "1K",
+      quality: "high",
+      referenceImageUrls: null,
+      referenceMediaHandles: ["message:generated:image:0"],
+      referenceImageSource: "none"
+    }, provider, {
+      chatReferenceImageUrls: ["https://example.test/current.png"],
+      imageReferences: {
+        currentImageUrls: ["https://example.test/current.png"],
+        mediaByHandle: {
+          "message:generated:image:0": "/generated-images/agents/arona/previous.png"
+        }
+      }
+    });
+
+    expect(generateImage).toHaveBeenCalledWith(
+      "rewritten selfie prompt",
+      expect.any(String),
+      "high",
+      [...workspaceReferences, "/generated-images/agents/arona/previous.png"],
+      undefined
+    );
   });
 });

@@ -1,6 +1,7 @@
 import type { Page, Route } from "@playwright/test";
 import sharp from "sharp";
 import type { AppConfig } from "../../src/types.js";
+import type { AgentAccount, AgentSummary } from "../../apps/admin-web/src/types.js";
 import { promptDefinitionById } from "../../services/agent/promptCatalog.js";
 import { defaultPromptContent } from "../../services/agent/promptDefaults.js";
 import { parseFinalPromptTemplate } from "../../services/agent/promptSystem.js";
@@ -24,8 +25,10 @@ const initialConfig = {
   server: { host: "127.0.0.1", port: 8787 },
   persona: {
     defaultAgentId: "plana",
+    name: "普拉娜",
     agentWorkspace: "workspace/business/agents/plana",
-    memoryLimit: 32
+    systemPromptWorkspace: "workspace/business/prompts",
+    systemPromptOverride: false
   },
   providers: {
     defaultProviderId: "codex",
@@ -48,10 +51,18 @@ const initialConfig = {
       }
     ]
   },
+  broadcastStorm: {
+    enabled: true,
+    windowMinutes: 2,
+    replyThreshold: 3,
+    cooldownMinutes: 1
+  },
   bot: {
     adminQq: "171419991",
     adminName: "猫老师",
+    pokeOnNoReply: false,
     quoteGroupReplies: true,
+    quoteGroupReplyExcludedUserIds: [],
     contextMessageLimit: 48,
     memory: {
       memoryModel: "gpt-5.4-mini",
@@ -113,15 +124,83 @@ const initialAgentFiles = [
   file("persona.agents", "Agent 规则", "人格", "AGENTS.md", "保持专注，明确行动。\n"),
   file("persona.soul", "核心人格", "人格", "SOUL.md", "冷静、诚实、可靠。\n"),
   file("persona.preference", "偏好", "人格", "PREFERENCE.md", "使用简洁中文。\n"),
+  file(
+    "persona.dialogue_style_examples",
+    "对话风格示例",
+    "人格",
+    "DIALOGUE_STYLE_EXAMPLES.md",
+    "用户：处理完成了吗？\nAgent：已完成。\n"
+  ),
   file("persona.user", "用户关系", "人格", "USER.md", "称呼用户为猫老师。\n"),
   file("persona.relation", "关系", "人格", "RELATION.md", "长期协作伙伴。\n"),
-  file("conversation.reply", "对话回复", "对话", "conversation_reply.json", defaultPromptContent("conversation.reply")),
+  file(
+    "conversation.private-reply",
+    "单聊回复",
+    "对话",
+    "conversation_private_reply.json",
+    defaultPromptContent("conversation.private-reply")
+  ),
+  file(
+    "conversation.group-reply",
+    "群聊回复",
+    "对话",
+    "conversation_group_reply.json",
+    defaultPromptContent("conversation.group-reply")
+  ),
   file("memory.compress-in", "工作记忆提取", "记忆", "work_memory_compress_in.json", defaultPromptContent("memory.compress-in")),
   file("memory.compress-out", "长期记忆压缩", "记忆", "work_memory_compress_out.json", defaultPromptContent("memory.compress-out")),
   file("memory.user-profile", "用户画像提取", "记忆", "user_profile_prompt.json", defaultPromptContent("memory.user-profile")),
   file("orchestrator.user-group", "群聊编排", "编排器", "user_groupchat_orchestrator.json", defaultPromptContent("orchestrator.user-group")),
   file("conversation.group-summary", "群聊总结", "对话", "group_chat_summary.json", defaultPromptContent("conversation.group-summary")),
   file("image.selfie-rewrite", "自拍提示词改写", "图像", "selfie_prompt_rewrite.json", defaultPromptContent("image.selfie-rewrite"))
+];
+
+type MockAgent = Omit<AgentSummary, "accounts"> & { accounts: AgentAccount[] };
+
+const initialAgents: MockAgent[] = [
+  {
+    id: "plana",
+    name: "普拉娜",
+    enabled: true,
+    workspace: "workspace/business/agents/plana",
+    createdAt: "2026-07-01T00:00:00.000Z",
+    updatedAt: "2026-07-10T00:00:00.000Z",
+    runtime: { loaded: true, persona: { id: "plana", name: "普拉娜", memoryItems: 128 } },
+    accounts: [{
+      id: "primary",
+      agentId: "plana",
+      label: "主账号",
+      qqId: "123456",
+      enabled: true,
+      webuiPort: 6099,
+      connected: true,
+      runtimeReady: true,
+      selfId: "123456",
+      createdAt: "2026-07-01T00:00:00.000Z",
+      updatedAt: "2026-07-10T00:00:00.000Z"
+    }]
+  },
+  {
+    id: "arona",
+    name: "阿罗娜",
+    enabled: true,
+    workspace: "workspace/business/agents/arona",
+    avatarPath: "assets/avatar.png",
+    createdAt: "2026-07-10T00:00:00.000Z",
+    updatedAt: "2026-07-10T00:00:00.000Z",
+    runtime: { loaded: true, persona: { id: "arona", name: "阿罗娜", memoryItems: 36 } },
+    accounts: [{
+      id: "qq_arona_main",
+      agentId: "arona",
+      label: "阿罗娜主账号",
+      enabled: true,
+      webuiPort: 6100,
+      connected: false,
+      runtimeReady: true,
+      createdAt: "2026-07-10T00:00:00.000Z",
+      updatedAt: "2026-07-10T00:00:00.000Z"
+    }]
+  }
 ];
 
 interface MockTokenUsageBucket {
@@ -137,6 +216,7 @@ interface MockTokenUsagePayload {
   today: MockTokenUsageBucket & { date: string };
   days: Array<MockTokenUsageBucket & { date: string }>;
   hours: Array<MockTokenUsageBucket & { hour: number }>;
+  filters: { models: string[]; model: string; behavior: string };
 }
 
 interface MockWebChatMessage {
@@ -197,13 +277,35 @@ const tokenUsageFixture: MockTokenUsagePayload = {
       total: hour * 100,
       requests: hour % 3
     };
-  })
+  }),
+  filters: { models: ["gpt-5.4-mini", "gpt-5.6-terra", "__unlabeled__"], model: "", behavior: "" }
 };
+
+function filteredTokenUsage(payload: MockTokenUsagePayload, model: string, behavior: string): MockTokenUsagePayload {
+  const factor = (model ? 0.5 : 1) * (behavior ? 0.5 : 1);
+  const scale = <T extends MockTokenUsageBucket>(bucket: T): T => ({
+    ...bucket,
+    input: Math.round(bucket.input * factor),
+    cachedInput: Math.round(bucket.cachedInput * factor),
+    output: Math.round(bucket.output * factor),
+    total: Math.round(bucket.total * factor),
+    requests: Math.round(bucket.requests * factor)
+  });
+  return {
+    today: scale(payload.today),
+    days: payload.days.map(scale),
+    hours: payload.hours.map(scale),
+    filters: { ...payload.filters, model, behavior }
+  };
+}
 
 export interface MockApiState {
   config: typeof initialConfig;
   revision: string;
   files: typeof initialAgentFiles;
+  agents: MockAgent[];
+  avatarUpdates: Array<{ agentId: string; fileName: string; dataBase64: string }>;
+  promptOverrides: Record<string, boolean>;
   patchRequests: Array<{ section: string; body: unknown }>;
   fileWrites: Array<{ id: string; body: unknown }>;
   memoryWrites: Array<{ method: string; body: unknown }>;
@@ -217,6 +319,7 @@ export interface MockApiState {
   qqOnline: boolean;
   qrVersion: number;
   tokenUsage: MockTokenUsagePayload;
+  tokenUsageRequests: string[];
   webChatMessages: MockWebChatMessage[];
   webChatRequests: string[];
   selfieReferences: Array<{
@@ -237,6 +340,9 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
     config: structuredClone(initialConfig),
     revision: "config-r1",
     files: structuredClone(initialAgentFiles),
+    agents: structuredClone(initialAgents),
+    avatarUpdates: [],
+    promptOverrides: { plana: false, arona: false },
     patchRequests: [],
     fileWrites: [],
     memoryWrites: [],
@@ -250,6 +356,7 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
     qqOnline: true,
     qrVersion: 1,
     tokenUsage: structuredClone(tokenUsageFixture),
+    tokenUsageRequests: [],
     webChatMessages: structuredClone(initialWebChatMessages),
     webChatRequests: [],
     selfieReferences: [
@@ -306,6 +413,121 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
       }, 401);
     }
 
+    if (pathname === "/api/agents" && method === "GET") return json(route, { agents: state.agents });
+    if (pathname === "/api/agents" && method === "POST") {
+      const body = request.postDataJSON() as {
+        id: string;
+        name: string;
+        avatar?: { fileName?: string; dataBase64?: string };
+      };
+      const created: MockAgent = {
+        id: body.id,
+        name: body.name,
+        enabled: true,
+        workspace: `workspace/business/agents/${body.id}`,
+        ...(body.avatar ? { avatarPath: "assets/avatar.png" } : {}),
+        createdAt: "2026-07-13T08:00:00.000Z",
+        updatedAt: "2026-07-13T08:00:00.000Z",
+        runtime: { loaded: true, persona: { id: body.id, name: body.name, memoryItems: 0 } },
+        accounts: []
+      };
+      state.agents.push(created);
+      return json(route, created);
+    }
+    const agentPromptSettingsMatch = pathname.match(/^\/api\/agents\/([^/]+)\/prompt-settings$/);
+    if (agentPromptSettingsMatch) {
+      const agentId = decodeURIComponent(agentPromptSettingsMatch[1]);
+      if (method === "GET") return json(route, { overrideSystem: state.promptOverrides[agentId] === true });
+      if (method === "PATCH") {
+        const body = request.postDataJSON() as { overrideSystem?: boolean };
+        state.promptOverrides[agentId] = body.overrideSystem === true;
+        return json(route, { overrideSystem: state.promptOverrides[agentId] });
+      }
+    }
+    const agentAvatarMatch = pathname.match(/^\/api\/agents\/([^/]+)\/avatar$/);
+    if (agentAvatarMatch && method === "PUT") {
+      const agentId = decodeURIComponent(agentAvatarMatch[1]);
+      const agent = state.agents.find((item) => item.id === agentId);
+      if (!agent) return json(route, { error: { code: "AGENT_NOT_FOUND", message: "Agent 不存在。" } }, 404);
+      const body = request.postDataJSON() as { avatar: { fileName: string; dataBase64: string } };
+      state.avatarUpdates.push({ agentId, fileName: body.avatar.fileName, dataBase64: body.avatar.dataBase64 });
+      agent.avatarPath = `assets/avatar-${state.avatarUpdates.length}.png`;
+      agent.updatedAt = `2026-07-13T08:00:0${state.avatarUpdates.length}.000Z`;
+      return json(route, agent);
+    }
+    if (agentAvatarMatch && method === "GET") {
+      return route.fulfill({ status: 200, contentType: "image/png", body: await imageFixture });
+    }
+    const agentAccountCollectionMatch = pathname.match(/^\/api\/agents\/([^/]+)\/accounts$/);
+    if (agentAccountCollectionMatch && method === "POST") {
+      const agentId = decodeURIComponent(agentAccountCollectionMatch[1]);
+      const agent = state.agents.find((item) => item.id === agentId);
+      if (!agent) return json(route, { error: { code: "AGENT_NOT_FOUND", message: "Agent 不存在。" } }, 404);
+      const body = request.postDataJSON() as { label: string };
+      const account = {
+        id: `qq_mock_${state.agents.flatMap((item) => item.accounts).length + 1}`,
+        agentId,
+        label: body.label,
+        enabled: true,
+        webuiPort: 6099 + state.agents.flatMap((item) => item.accounts).length,
+        connected: false,
+        runtimeReady: false,
+        createdAt: "2026-07-13T08:00:00.000Z",
+        updatedAt: "2026-07-13T08:00:00.000Z"
+      };
+      agent.accounts.push(account);
+      return json(route, account);
+    }
+    const agentAccountMatch = pathname.match(/^\/api\/agents\/([^/]+)\/accounts\/([^/]+)$/);
+    if (agentAccountMatch && method === "DELETE") {
+      const agentId = decodeURIComponent(agentAccountMatch[1]);
+      const accountId = decodeURIComponent(agentAccountMatch[2]);
+      const agent = state.agents.find((item) => item.id === agentId);
+      if (agent) agent.accounts = agent.accounts.filter((item) => item.id !== accountId);
+      return json(route, { ok: true });
+    }
+    const agentLoginMatch = pathname.match(/^\/api\/agents\/([^/]+)\/accounts\/([^/]+)\/login(?:\/status)?$/);
+    if (agentLoginMatch) {
+      const accountId = decodeURIComponent(agentLoginMatch[2]);
+      const account = state.agents.flatMap((item) => item.accounts).find((item) => item.id === accountId);
+      const online = Boolean(account?.connected && !(account.id === "primary" && state.offline));
+      if (method === "POST" && !online) state.qrVersion += 1;
+      const qr = (await imageFixture).toString("base64");
+      return json(route, {
+        connected: online,
+        online,
+        available: true,
+        phase: online ? "online" : "waiting_scan",
+        ...(account?.qqId ? { data: { user_id: Number(account.qqId), nickname: account.label } } : {}),
+        ...(online ? {} : { imageDataUrl: `data:image/png;base64,${qr}`, imageUpdatedAt: "2026-07-13T08:00:00.000Z" })
+      });
+    }
+    const agentLogoutMatch = pathname.match(/^\/api\/agents\/([^/]+)\/accounts\/([^/]+)\/logout$/);
+    if (agentLogoutMatch && method === "POST") {
+      const accountId = decodeURIComponent(agentLogoutMatch[2]);
+      const account = state.agents.flatMap((item) => item.accounts).find((item) => item.id === accountId);
+      if (account) account.connected = false;
+      state.qqOnline = false;
+      state.offline = true;
+      state.qrVersion += 1;
+      return json(route, { connected: false, online: false, available: true, phase: "restarting" });
+    }
+    const agentChatsMatch = pathname.match(/^\/api\/agents\/([^/]+)\/accounts\/([^/]+)\/chats$/);
+    if (agentChatsMatch) return json(route, { connected: false, private: [], groups: [] });
+    const agentNapcatMatch = pathname.match(/^\/api\/agents\/([^/]+)\/accounts\/([^/]+)\/napcat-webui-url$/);
+    if (agentNapcatMatch) return json(route, { url: "http://127.0.0.1:6100/webui/" });
+    const agentMatch = pathname.match(/^\/api\/agents\/([^/]+)$/);
+    if (agentMatch) {
+      const id = decodeURIComponent(agentMatch[1]);
+      const agent = state.agents.find((item) => item.id === id);
+      if (!agent) return json(route, { error: { code: "AGENT_NOT_FOUND", message: "Agent 不存在。" } }, 404);
+      if (method === "PATCH") {
+        const body = request.postDataJSON() as { name?: string; enabled?: boolean };
+        Object.assign(agent, body, { updatedAt: "2026-07-13T08:01:00.000Z" });
+      }
+      return json(route, agent);
+    }
+
     if (pathname === "/api/media/image" || pathname === "/api/media/qq-avatar" || pathname === "/api/media/thumbnail") {
       return route.fulfill({ status: 200, contentType: "image/png", body: await imageFixture });
     }
@@ -336,7 +558,10 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
     }
 
     if (pathname === "/api/token-usage") {
-      return json(route, state.tokenUsage);
+      const model = url.searchParams.get("model") ?? "";
+      const behavior = url.searchParams.get("behavior") ?? "";
+      state.tokenUsageRequests.push(url.search);
+      return json(route, filteredTokenUsage(state.tokenUsage, model, behavior));
     }
 
     if (pathname === "/api/model-call-stats") {
@@ -415,9 +640,17 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
     }
 
     if (pathname === "/api/agent-files" && method === "GET") {
-      return json(route, { files: state.files.map(({ content: _content, ...metadata }) => metadata) });
+      const agentId = url.searchParams.get("agentId") || "plana";
+      const visible = state.promptOverrides[agentId]
+        ? state.files
+        : state.files.filter((item) => item.kind === "fragment" || item.id === "image.selfie-rewrite");
+      return json(route, { files: visible.map(({ content: _content, ...metadata }) => metadata) });
     }
-    const fileMatch = pathname.match(/^\/api\/agent-files\/(.+)$/);
+    if (pathname === "/api/system-prompt-files" && method === "GET") {
+      const files = state.files.filter((item) => item.kind === "final" && item.id !== "image.selfie-rewrite");
+      return json(route, { files: files.map(({ content: _content, ...metadata }) => metadata) });
+    }
+    const fileMatch = pathname.match(/^\/api\/(?:agent-files|system-prompt-files)\/(.+)$/);
     if (fileMatch) {
       const id = decodeURIComponent(fileMatch[1]);
       const item = state.files.find((entry) => entry.id === id);
@@ -719,10 +952,11 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
     }
 
     if (pathname === "/api/tools") {
-      const conversationPrompt = state.files.find((file) => file.id === "conversation.reply");
+      const conversationPrompt = state.files.find((file) => file.id === "conversation.private-reply");
       const prompt = conversationPrompt ? parseFinalPromptTemplate(conversationPrompt.content) : undefined;
       const tools = listToolMetadata({
         onAssistantText: () => undefined,
+        allowNoReply: true,
         bash: {
           enabled: true,
           workspaceOnly: state.config.bot.bash.workspaceOnly,
@@ -912,7 +1146,7 @@ function configEnvelope(state: MockApiState) {
 
 function applySection(config: typeof initialConfig, section: string, value: unknown) {
   const next = structuredClone(value) as Record<string, unknown>;
-  if (section === "server" || section === "providers") {
+  if (section === "server" || section === "providers" || section === "broadcastStorm") {
     Object.assign(config[section], next);
     return;
   }
@@ -1022,7 +1256,43 @@ function modelCallStats(conversationId: string | null = null) {
         working_long_term: bucket(5, 16_800),
         user_profile: bucket(2, 4_800)
       }
-    }
+    },
+    models: [
+      {
+        model: "gpt-5.4-mini",
+        total: bucket(20, 96_000),
+        behavior: {
+          reply: bucket(10, 64_000),
+          orchestrator: bucket(4, 16_000),
+          memory: bucket(5, 15_200),
+          other: bucket(1, 800)
+        },
+        memory: {
+          total: bucket(5, 15_200),
+          kinds: {
+            working_long_term: bucket(4, 12_000),
+            user_profile: bucket(1, 3_200)
+          }
+        }
+      },
+      {
+        model: "gpt-5.6-terra",
+        total: bucket(6, 32_400),
+        behavior: {
+          reply: bucket(2, 18_000),
+          orchestrator: bucket(2, 8_000),
+          memory: bucket(2, 6_400),
+          other: bucket(0, 0)
+        },
+        memory: {
+          total: bucket(2, 6_400),
+          kinds: {
+            working_long_term: bucket(1, 4_800),
+            user_profile: bucket(1, 1_600)
+          }
+        }
+      }
+    ]
   };
 }
 

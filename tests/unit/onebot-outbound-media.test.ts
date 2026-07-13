@@ -15,12 +15,16 @@ import {
 describe("OneBot outbound media adapter", () => {
   let temporaryDirectory = "";
   let imagePath = "";
+  let agentImagePath = "";
   let delivery: OutboundMediaDelivery;
 
   beforeEach(async () => {
     temporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-onebot-media-"));
     imagePath = path.join(temporaryDirectory, "generated.png");
+    agentImagePath = path.join(temporaryDirectory, "agents", "arona", "generated.png");
+    await fs.mkdir(path.dirname(agentImagePath), { recursive: true });
     await fs.writeFile(imagePath, Buffer.from("generated-image"));
+    await fs.writeFile(agentImagePath, Buffer.from("agent-generated-image"));
     delivery = new OutboundMediaDelivery({
       rootDir: temporaryDirectory,
       referenceMode: "shared-path"
@@ -81,6 +85,9 @@ describe("OneBot outbound media adapter", () => {
 
     await expect(inlineDelivery.createReference(imagePath)).resolves.toBe(
       `base64://${Buffer.from("generated-image").toString("base64")}`
+    );
+    await expect(inlineDelivery.createReference(agentImagePath)).resolves.toBe(
+      `base64://${Buffer.from("agent-generated-image").toString("base64")}`
     );
     expect(outboundMediaReferenceMode({})).toBe("inline-base64");
     expect(() => outboundMediaReferenceMode({ SUNABOT_MEDIA_TRANSPORT: "shared-path" })).toThrow(

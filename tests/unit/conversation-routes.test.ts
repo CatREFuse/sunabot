@@ -1,17 +1,23 @@
 // @vitest-environment node
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import Fastify, { type FastifySchema } from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerConversationRoutes } from "../../apps/api/plugins/conversationRoutes.js";
 import type { OneBotGateway } from "../../adapters/onebot/onebotGateway.js";
 import { ServiceError } from "../../packages/contracts/errors/serviceError.js";
 import type { ConversationDirectory } from "../../services/conversations/conversationDirectory.js";
-import type { SunaRuntime } from "../../src/runtime.js";
-import { closeApplicationDataStores } from "../../adapters/sqlite/applicationDataStore.js";
+import { SunaRuntime } from "../../src/runtime.js";
+import { appendRequestLog } from "../../src/requestLog.js";
+import { applicationDataStore, closeApplicationDataStores } from "../../adapters/sqlite/applicationDataStore.js";
+import { createAdminTestConfig } from "./admin-fixtures.js";
 
 const apps: ReturnType<typeof Fastify>[] = [];
 
 afterEach(async () => {
   await Promise.all(apps.splice(0).map((app) => app.close()));
+  vi.restoreAllMocks();
   closeApplicationDataStores();
 });
 
@@ -190,6 +196,165 @@ describe("conversation API plugin", () => {
     });
     expect(replyToIncoming).toHaveBeenCalledTimes(1);
   });
+
+  it("serializes concurrent HTTP sends with stable per-Agent Web Chat message ids", async () => {
+    const app = Fastify();
+    apps.push(app);
+    const releaseFirst = deferred<void>();
+    const firstStarted = deferred<void>();
+    const secondRuntimeLookup = deferred<void>();
+    const started: string[] = [];
+    const messageIds: number[] = [];
+    vi.spyOn(Date, "now").mockReturnValue(1_750_000_000_000);
+
+    const runtime = {
+      adminIdentity: () => ({ userId: "171419991", name: "管理员" }),
+      incomingCaptureSequence: () => 1,
+      recordIncomingMessage: (incoming: { messageId: number }) => {
+        messageIds.push(incoming.messageId);
+      },
+      replyToIncoming: vi.fn(async (_channel: string, incoming: { text: string }) => {
+        started.push(incoming.text);
+        if (incoming.text === "第一条") {
+          firstStarted.resolve();
+          await releaseFirst.promise;
+        }
+      }),
+      getConversationMessages: () => ({
+        conversationId: "web:admin",
+        messages: [],
+        hasMore: false,
+        memberNames: {}
+      }),
+      getConversationRecords: () => [],
+      setConversationReplyEnabled: vi.fn()
+    } as unknown as SunaRuntime;
+    const onebotGateway = { getStatus: () => ({ connected: false }) } as unknown as OneBotGateway;
+    const conversationDirectory = {
+      enrich: vi.fn(),
+      describe: vi.fn((value: unknown) => value)
+    } as unknown as ConversationDirectory;
+    let runtimeLookups = 0;
+    registerConversationRoutes(app, {
+      runtime,
+      getRuntime: () => {
+        runtimeLookups += 1;
+        if (runtimeLookups === 2) secondRuntimeLookup.resolve();
+        return runtime;
+      },
+      onebotGateway,
+      conversationDirectory
+    });
+
+    const first = app.inject({
+      method: "POST",
+      url: "/api/web-chat/messages",
+      payload: { text: "第一条" }
+    });
+    await firstStarted.promise;
+    const second = app.inject({
+      method: "POST",
+      url: "/api/web-chat/messages",
+      payload: { text: "第二条" }
+    });
+    await secondRuntimeLookup.promise;
+    await Promise.resolve();
+    await Promise.resolve();
+    const startedBeforeRelease = [...started];
+    const messageIdsBeforeRelease = [...messageIds];
+    releaseFirst.resolve();
+    const responses = await Promise.all([first, second]);
+
+    expect(startedBeforeRelease).toEqual(["第一条"]);
+    expect(messageIdsBeforeRelease).toEqual([1_750_000_000_000_000]);
+    expect(responses.map((response) => response.statusCode)).toEqual([200, 200]);
+    expect(started).toEqual(["第一条", "第二条"]);
+    expect(messageIds).toEqual([
+      1_750_000_000_000_000,
+      1_750_000_000_000_001
+    ]);
+  });
+
+  it("writes Arona Web Chat request logs and token aggregates to the Arona database", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-web-chat-agent-"));
+    const app = Fastify();
+    apps.push(app);
+    const planaConfig = createAdminTestConfig(root);
+    planaConfig.persona.agentWorkspace = path.join(root, "business", "agents", "plana");
+    const aronaConfig = structuredClone(planaConfig);
+    aronaConfig.persona = {
+      ...aronaConfig.persona,
+      defaultAgentId: "arona",
+      name: "阿罗娜",
+      agentWorkspace: path.join(root, "business", "agents", "arona")
+    };
+    const aronaRuntime = new SunaRuntime(aronaConfig, { attachmentService: {} as never });
+    const internals = aronaRuntime as unknown as {
+      reply: {
+        replyToIncoming(): Promise<void>;
+      };
+      adminIdentity(): { userId: string; name: string };
+      incomingCaptureSequence(): number;
+      recordIncomingMessage(): void;
+      getConversationMessages(): Record<string, unknown>;
+    };
+    internals.reply = {
+      replyToIncoming: async () => {
+        await appendRequestLog({
+          category: "model.response",
+          action: "responses.complete",
+          model: "gpt-arona",
+          response: { usage: { input_tokens: 8, output_tokens: 2, total_tokens: 10 } },
+          metadata: { conversationId: "web:admin", stage: "reply" }
+        });
+      }
+    };
+    internals.adminIdentity = () => ({ userId: "171419991", name: "管理员" });
+    internals.incomingCaptureSequence = () => 1;
+    internals.recordIncomingMessage = () => undefined;
+    internals.getConversationMessages = () => ({
+      conversationId: "web:admin",
+      messages: [],
+      hasMore: false,
+      memberNames: {}
+    });
+
+    const planaRuntime = {
+      config: planaConfig
+    } as unknown as SunaRuntime;
+    const getRuntime = vi.fn((agentId: string) => agentId === "arona" ? aronaRuntime : planaRuntime);
+    const onebotGateway = { getStatus: () => ({ connected: false }) } as unknown as OneBotGateway;
+    const conversationDirectory = {
+      enrich: vi.fn(),
+      describe: vi.fn((value: unknown) => value)
+    } as unknown as ConversationDirectory;
+    registerConversationRoutes(app, {
+      runtime: planaRuntime,
+      getRuntime,
+      onebotGateway,
+      conversationDirectory
+    });
+
+    try {
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/web-chat/messages?agentId=arona",
+        payload: { text: "测试选库" }
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(getRuntime).toHaveBeenCalledWith("arona");
+      expect(applicationDataStore(aronaConfig).readRequestLogs({ query: "web:admin", limit: 20 }))
+        .toEqual([expect.objectContaining({ action: "responses.complete", model: "gpt-arona" })]);
+      expect(applicationDataStore(aronaConfig).readModelCallAggregateRows("web:admin"))
+        .toEqual([expect.objectContaining({ behavior: "reply", requests: 1, total: 10 })]);
+      expect(applicationDataStore(planaConfig).readRequestLogs({ query: "web:admin", limit: 20 })).toEqual([]);
+    } finally {
+      aronaRuntime.close();
+      closeApplicationDataStores();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 function assertRequestAndResponseSchemas(routeSchemas: Map<string, FastifySchema>) {
@@ -197,4 +362,10 @@ function assertRequestAndResponseSchemas(routeSchemas: Map<string, FastifySchema
     expect(schema.response).toBeDefined();
     expect(schema.body ?? schema.querystring ?? schema.params).toBeDefined();
   }
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
 }

@@ -65,6 +65,21 @@ describe("memory v2 storage", () => {
     expect(persona.memoryItems.join("\n")).not.toMatch(/候选|日记|梦境/);
   });
 
+  it("reports every active memory record without the retired persona cap", async () => {
+    const records = (prefix: string) => Array.from({ length: 40 }, (_, index) => (
+      JSON.stringify({ fact: `${prefix}-${index}` })
+    )).join("\n") + "\n";
+    await Promise.all([
+      fs.writeFile(path.join(workspace, "WORKING_MEMORY.jsonl"), records("working")),
+      fs.writeFile(path.join(workspace, "LONG_TERM_MEMORY.jsonl"), records("long-term")),
+      fs.writeFile(path.join(workspace, "USER_PROFILE.jsonl"), records("profile"))
+    ]);
+
+    const persona = await loadPersona(config);
+
+    expect(persona.memoryItems).toHaveLength(120);
+  });
+
   it("normalizes salutation aliases and lets the user profile override the configured admin fallback", async () => {
     await fs.writeFile(path.join(workspace, "USER_PROFILE.jsonl"), [
       JSON.stringify({

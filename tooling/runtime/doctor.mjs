@@ -40,18 +40,14 @@ async function runDoctor() {
     ? await pathIdentity(contract.paths.workspace)
     : workspaceIdentity;
   const releaseIdentity = await pathIdentity(root);
-  const databasePath = process.env.SUNABOT_DATABASE_PATH?.trim()
-    ? path.resolve(process.env.SUNABOT_DATABASE_PATH.trim())
-    : path.join(workspace, contract.paths.database);
+  const databasePathOverride = Boolean(process.env.SUNABOT_DATABASE_PATH?.trim());
+  const databasePath = path.join(workspace, contract.paths.database);
 
   const databases = await Promise.all([
     databaseFact("main", true, "runtime", databasePath),
     databaseFact("queue", true, "runtime", path.join(workspace, contract.paths.sessionQueue)),
     databaseFact("main", false, "legacy", path.join(workspace, "artifacts/sunabot.sqlite")),
     databaseFact("queue", false, "legacy", path.join(workspace, "artifacts/session-queue.sqlite")),
-    ...(databasePath === path.join(workspace, contract.paths.database)
-      ? []
-      : [databaseFact("main", false, "contract", path.join(workspace, contract.paths.database))])
   ]);
 
   const network = await collectNetworkFacts({
@@ -87,6 +83,10 @@ async function runDoctor() {
     databases,
     listener: network.listener,
     onebot: network.onebot,
+    configurationErrors: databasePathOverride ? [{
+      code: "DATABASE_PATH_OVERRIDE_UNSUPPORTED",
+      message: "SUNABOT_DATABASE_PATH 已停止支持；主库固定为 workspace/business/data/sunabot.sqlite。"
+    }] : [],
     collectionWarnings: network.warnings
   });
 }

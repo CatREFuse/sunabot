@@ -1,4 +1,5 @@
 import fs, { existsSync } from "node:fs";
+import path from "node:path";
 import type { FastifyInstance } from "fastify";
 import {
   NapcatLoginControl,
@@ -10,16 +11,34 @@ import { WORKSPACE_LAYOUT } from "../../../packages/platform/workspaceLayout.js"
 import { getWorkspacePath } from "../../../src/config.js";
 import type { OneBotLoginCheck, OneBotQrLogin } from "../../../src/types.js";
 import { AdminApiError, conflict, notFound } from "../../../src/admin/errors.js";
+import type { AgentRegistry } from "../../../services/agents/agentRegistry.js";
+import type { AgentAccountRegistryRow } from "../../../adapters/sqlite/applicationDataStore.js";
+import { applicationDataStore } from "../../../adapters/sqlite/applicationDataStore.js";
 
 const openObject = { type: "object", additionalProperties: true } as const;
 
 export interface OneBotRouteOptions {
   napcatLoginControl?: NapcatLoginControlPort;
+  napcatLoginControlFactory?: (accountId: string, webuiPort?: number) => NapcatLoginControlPort;
+  agentRegistry?: AgentRegistry;
 }
 
 export function registerOneBotRoutes(app: FastifyInstance, onebotGateway: OneBotGateway, options: OneBotRouteOptions = {}) {
-  const napcatLoginControl = options.napcatLoginControl ?? createNapcatLoginControl();
-  app.addHook("onClose", async () => napcatLoginControl.close());
+  const loginControlFactory = options.napcatLoginControlFactory ?? createNapcatLoginControl;
+  const primaryWebuiPort = options.agentRegistry?.account("primary")?.webuiPort;
+  const napcatLoginControl = options.napcatLoginControl ?? loginControlFactory("primary", primaryWebuiPort);
+  const accountControls = new Map<string, NapcatLoginControlPort>([["primary", napcatLoginControl]]);
+  const accountControl = (account: AgentAccountRegistryRow) => {
+    let control = accountControls.get(account.id);
+    if (!control) {
+      control = loginControlFactory(account.id, account.webuiPort);
+      accountControls.set(account.id, control);
+    }
+    return control;
+  };
+  app.addHook("onClose", async () => {
+    for (const control of accountControls.values()) control.close();
+  });
 
   app.get("/api/onebot/login-info", { schema: { response: { 200: openObject } } }, async () => {
     const status = onebotGateway.getStatus();
@@ -40,24 +59,24 @@ export function registerOneBotRoutes(app: FastifyInstance, onebotGateway: OneBot
   });
 
   app.post("/api/onebot/qq-login", { schema: { response: { 200: openObject } } }, async () => {
-    const current = await getQqLoginSnapshot(onebotGateway, napcatLoginControl);
+    const current = await getQqLoginSnapshot(onebotGateway, napcatLoginControl, "primary");
     if (current.online) return current;
     const refreshed = await napcatLoginControl.refreshQrCode();
-    return getQqLoginSnapshot(onebotGateway, napcatLoginControl, refreshed);
+    return getQqLoginSnapshot(onebotGateway, napcatLoginControl, "primary", refreshed);
   });
 
   app.get("/api/onebot/qq-login/status", { schema: { response: { 200: openObject } } }, async () => {
-    return getQqLoginSnapshot(onebotGateway, napcatLoginControl);
+    return getQqLoginSnapshot(onebotGateway, napcatLoginControl, "primary");
   });
 
   app.post("/api/onebot/qq-logout", { schema: { response: { 200: openObject } } }, async () => {
-    const current = await getQqLoginSnapshot(onebotGateway, napcatLoginControl);
+    const current = await getQqLoginSnapshot(onebotGateway, napcatLoginControl, "primary");
     if (!current.online || !onebotGateway.getStatus().connected) {
       conflict("QQ_ALREADY_OFFLINE", "QQ 当前未登录。");
     }
     await napcatLoginControl.beginManualLogin();
     try {
-      await onebotGateway.dispatchAction("bot_exit", {});
+      await onebotGateway.dispatchAction("bot_exit", {}, "primary");
     } catch (error) {
       await napcatLoginControl.cancelManualLogin();
       throw new AdminApiError(502, "QQ_LOGOUT_FAILED", error instanceof Error ? error.message : "QQ 退出失败。");
@@ -69,56 +88,132 @@ export function registerOneBotRoutes(app: FastifyInstance, onebotGateway: OneBot
       online: false,
       available: true,
       phase: "restarting",
-      webuiUrl: getLocalNapcatWebuiRoute()
+      webuiUrl: getLocalNapcatWebuiRoute("primary")
     };
   });
 
   app.get("/api/onebot/napcat-webui-url", { schema: { response: { 200: openObject } } }, async () => {
-    const webuiUrl = getNapcatWebuiUrl({ includeToken: true });
+    const webuiUrl = getNapcatWebuiUrl("primary", { includeToken: true });
     if (!webuiUrl) notFound("NAPCAT_WEBUI_NOT_FOUND", "NapCat WebUI 未配置。");
     return { url: webuiUrl };
   });
+
+  if (options.agentRegistry) {
+    const registry = options.agentRegistry;
+    const resolveAccount = (params: unknown) => {
+      const { agentId, accountId } = params as { agentId: string; accountId: string };
+      const account = registry.account(accountId);
+      if (!account || account.agentId !== agentId) notFound("AGENT_ACCOUNT_NOT_FOUND", "QQ 账号不存在。");
+      return account;
+    };
+    const snapshot = async (account: AgentAccountRegistryRow, refreshed?: NapcatLoginSnapshot) => {
+      const result = await getQqLoginSnapshot(onebotGateway, accountControl(account), account.id, refreshed);
+      if (result.data?.user_id && String(result.data.user_id) !== account.qqId) {
+        await registry.updateAccountIdentity(account.id, String(result.data.user_id));
+      }
+      return result;
+    };
+
+    app.get("/api/agents/:agentId/accounts/:accountId/login/status", { schema: { response: { 200: openObject } } }, async (request) => {
+      const account = resolveAccount(request.params);
+      return snapshot(account);
+    });
+
+    app.post("/api/agents/:agentId/accounts/:accountId/login", { schema: { response: { 200: openObject } } }, async (request) => {
+      const account = resolveAccount(request.params);
+      const current = await snapshot(account);
+      if (current.online) return current;
+      return snapshot(account, await accountControl(account).refreshQrCode());
+    });
+
+    app.post("/api/agents/:agentId/accounts/:accountId/logout", { schema: { response: { 200: openObject } } }, async (request) => {
+      const account = resolveAccount(request.params);
+      const control = accountControl(account);
+      const current = await snapshot(account);
+      if (!current.online) conflict("QQ_ALREADY_OFFLINE", "QQ 当前未登录。");
+      await control.beginManualLogin();
+      try {
+        await onebotGateway.dispatchAction("bot_exit", {}, account.id);
+      } catch (error) {
+        await control.cancelManualLogin();
+        throw new AdminApiError(502, "QQ_LOGOUT_FAILED", error instanceof Error ? error.message : "QQ 退出失败。");
+      }
+      await registry.clearAccountIdentity(account.id);
+      control.startLoginCompletionWatch();
+      return {
+        ok: true,
+        connected: false,
+        online: false,
+        available: true,
+        phase: "restarting",
+        webuiUrl: getLocalNapcatWebuiRoute(account.id)
+      };
+    });
+
+    app.get("/api/agents/:agentId/accounts/:accountId/napcat-webui-url", { schema: { response: { 200: openObject } } }, async (request) => {
+      const account = resolveAccount(request.params);
+      const url = getNapcatWebuiUrl(account.id, { includeToken: true });
+      if (!url) notFound("NAPCAT_WEBUI_NOT_FOUND", "NapCat WebUI 未配置。");
+      return { url };
+    });
+
+    app.get("/api/agents/:agentId/accounts/:accountId/chats", { schema: { response: { 200: openObject } } }, async (request) => {
+      const account = resolveAccount(request.params);
+      return getOneBotChats(onebotGateway, account.id);
+    });
+  }
 
   app.get("/api/onebot/events", { schema: { response: { 200: openObject } } }, async () => {
     return { events: onebotGateway.getRecentEvents() };
   });
 
   app.get("/api/onebot/chats", { schema: { response: { 200: openObject } } }, async () => {
-    const status = onebotGateway.getStatus();
-    if (!status.connected) return { connected: false, private: [], groups: [] };
-    const [friendResult, groupResult] = await Promise.allSettled([
-      onebotGateway.sendAction("get_friend_list", {}),
-      onebotGateway.sendAction("get_group_list", {})
-    ]);
-    return {
-      connected: true,
-      private: extractOneBotDataArray(friendResult).map((item) => ({
-        userId: Number(item.user_id ?? item.userId ?? 0),
-        nickname: String(item.nickname ?? item.remark ?? item.user_id ?? ""),
-        remark: String(item.remark ?? "")
-      })).filter((item) => item.userId > 0),
-      groups: extractOneBotDataArray(groupResult).map((item) => ({
-        groupId: Number(item.group_id ?? item.groupId ?? 0),
-        groupName: String(item.group_name ?? item.groupName ?? item.group_id ?? ""),
-        memberCount: Number(item.member_count ?? item.memberCount ?? 0),
-        maxMemberCount: Number(item.max_member_count ?? item.maxMemberCount ?? 0)
-      })).filter((item) => item.groupId > 0)
-    };
+    return getOneBotChats(onebotGateway);
   });
+}
+
+async function getOneBotChats(onebotGateway: OneBotGateway, accountId?: string) {
+  const status = onebotGateway.getStatus();
+  const connected = accountId
+    ? Boolean(status.accounts?.some((account) => account.accountId === accountId))
+    : status.connected;
+  if (!connected) return { connected: false, private: [], groups: [] };
+  const send = (action: string) => accountId
+    ? onebotGateway.sendAction(action, {}, accountId)
+    : onebotGateway.sendAction(action, {});
+  const [friendResult, groupResult] = await Promise.allSettled([
+    send("get_friend_list"),
+    send("get_group_list")
+  ]);
+  return {
+    connected: true,
+    private: extractOneBotDataArray(friendResult).map((item) => ({
+      userId: Number(item.user_id ?? item.userId ?? 0),
+      nickname: String(item.nickname ?? item.remark ?? item.user_id ?? ""),
+      remark: String(item.remark ?? "")
+    })).filter((item) => item.userId > 0),
+    groups: extractOneBotDataArray(groupResult).map((item) => ({
+      groupId: Number(item.group_id ?? item.groupId ?? 0),
+      groupName: String(item.group_name ?? item.groupName ?? item.group_id ?? ""),
+      memberCount: Number(item.member_count ?? item.memberCount ?? 0),
+      maxMemberCount: Number(item.max_member_count ?? item.maxMemberCount ?? 0)
+    })).filter((item) => item.groupId > 0)
+  };
 }
 
 async function getQqLoginSnapshot(
   onebotGateway: OneBotGateway,
   napcatLoginControl: NapcatLoginControlPort,
+  accountId: string,
   napcatSnapshot?: NapcatLoginSnapshot
 ): Promise<OneBotQrLogin> {
   const [onebot, napcat] = await Promise.all([
-    getOneBotLoginCheck(onebotGateway),
+    getOneBotLoginCheck(onebotGateway, accountId),
     napcatSnapshot ? Promise.resolve(napcatSnapshot) : napcatLoginControl.status()
   ]);
   const online = onebot.online || napcat.isLogin;
   const data = onebot.data?.user_id ? onebot.data : napcat.data;
-  const webuiUrl = getLocalNapcatWebuiRoute();
+  const webuiUrl = getLocalNapcatWebuiRoute(accountId);
   return {
     connected: onebot.connected,
     online,
@@ -141,11 +236,12 @@ function loginPhase(online: boolean, connected: boolean, napcat: NapcatLoginSnap
   return "starting";
 }
 
-async function getOneBotLoginCheck(onebotGateway: OneBotGateway): Promise<OneBotLoginCheck> {
+async function getOneBotLoginCheck(onebotGateway: OneBotGateway, accountId: string): Promise<OneBotLoginCheck> {
   const status = onebotGateway.getStatus();
-  if (!status.connected) return { connected: false, online: false };
+  const connected = Boolean(status.accounts?.some((account) => account.accountId === accountId));
+  if (!connected) return { connected: false, online: false };
   try {
-    const payload = await onebotGateway.sendAction("get_login_info", {});
+    const payload = await onebotGateway.sendAction("get_login_info", {}, accountId);
     const response = payload as { data?: { user_id?: number; nickname?: string } };
     return { connected: true, online: Boolean(response.data?.user_id), data: response.data ?? {} };
   } catch (error) {
@@ -153,23 +249,34 @@ async function getOneBotLoginCheck(onebotGateway: OneBotGateway): Promise<OneBot
   }
 }
 
-function getLocalNapcatWebuiRoute() {
-  return getNapcatWebuiUrl({ includeToken: false }) ? "/api/onebot/napcat-webui-url" : undefined;
+function getLocalNapcatWebuiRoute(accountId: string) {
+  if (!getNapcatWebuiUrl(accountId, { includeToken: false })) return undefined;
+  if (accountId === "primary") return "/api/onebot/napcat-webui-url";
+  const account = applicationDataStore().readAgentAccount(accountId);
+  return account
+    ? `/api/agents/${encodeURIComponent(account.agentId)}/accounts/${encodeURIComponent(account.id)}/napcat-webui-url`
+    : undefined;
 }
 
-function createNapcatLoginControl() {
+function createNapcatLoginControl(accountId: string, webuiPort?: number) {
+  const accountRoot = getWorkspacePath(WORKSPACE_LAYOUT.napcatAccounts, accountId);
   return new NapcatLoginControl({
-    webuiConfigPath: getWorkspacePath(WORKSPACE_LAYOUT.napcatConfig, "webui.json"),
-    webuiBaseUrl: process.env.SUNABOT_RUNTIME_MODE === "docker" ? "http://napcat:6099" : undefined,
-    qrCodePath: getWorkspacePath(WORKSPACE_LAYOUT.napcatQrCode),
-    manualLoginMarkerPath: getWorkspacePath(WORKSPACE_LAYOUT.napcatManualLogin),
-    runtimeEnvPath: getWorkspacePath(WORKSPACE_LAYOUT.secretsEnv)
+    webuiConfigPath: path.join(accountRoot, "config-full", "webui.json"),
+    webuiBaseUrl: process.env.SUNABOT_RUNTIME_MODE === "docker"
+      ? `http://napcat-${accountId}:6099`
+      : typeof webuiPort === "number" && Number.isInteger(webuiPort) && webuiPort > 0
+        ? `http://127.0.0.1:${webuiPort}`
+        : undefined,
+    qrCodePath: path.join(accountRoot, "qrcode.png"),
+    manualLoginMarkerPath: path.join(accountRoot, "manual-login-required"),
+    runtimeEnvPath: path.join(accountRoot, "account.env")
   });
 }
 
-function getNapcatWebuiUrl(options: { includeToken: boolean }) {
-  const webuiConfig = readNapcatWebuiConfig();
-  const port = Number(webuiConfig?.port ?? 6099);
+function getNapcatWebuiUrl(accountId: string, options: { includeToken: boolean }) {
+  const webuiConfig = readNapcatWebuiConfig(accountId);
+  const account = applicationDataStore().readAgentAccount(accountId);
+  const port = Number(account?.webuiPort ?? webuiConfig?.port ?? 6099);
   if (!Number.isFinite(port) || port <= 0) return undefined;
   const url = new URL(`http://127.0.0.1:${port}/webui/`);
   const token = typeof webuiConfig?.token === "string" ? webuiConfig.token.trim() : "";
@@ -177,8 +284,8 @@ function getNapcatWebuiUrl(options: { includeToken: boolean }) {
   return url.toString();
 }
 
-function readNapcatWebuiConfig() {
-  const filePath = getWorkspacePath(WORKSPACE_LAYOUT.napcatConfig, "webui.json");
+function readNapcatWebuiConfig(accountId: string) {
+  const filePath = getWorkspacePath(WORKSPACE_LAYOUT.napcatAccounts, accountId, "config-full", "webui.json");
   if (!existsSync(filePath)) return null;
   try {
     return JSON.parse(fs.readFileSync(filePath, "utf8")) as { port?: number; token?: string };

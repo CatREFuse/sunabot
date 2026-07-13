@@ -61,6 +61,10 @@ export function workspaceIdentity(workspace) {
   return crypto.createHash("sha256").update(normalized).digest("hex").slice(0, 16);
 }
 
+export function databasePathOverrideConfigured(...environments) {
+  return environments.some((environment) => Boolean(environment?.SUNABOT_DATABASE_PATH?.trim()));
+}
+
 export function composeProjectName(baseName, identity) {
   const base = String(baseName || "sunabot")
     .toLowerCase()

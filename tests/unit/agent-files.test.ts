@@ -27,8 +27,9 @@ let repository: AgentFileRepository;
 beforeEach(async () => {
   rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-agent-files-"));
   const config = createAdminTestConfig(rootDir);
-  configStore.config = config;
   workspaceDir = config.persona.agentWorkspace;
+  config.persona.systemPromptWorkspace = workspaceDir;
+  configStore.config = config;
   await fs.mkdir(workspaceDir, { recursive: true });
   reloadPrompts = vi.fn(async (_config: AppConfig) => undefined);
   repository = new AgentFileRepository({
@@ -43,14 +44,45 @@ afterEach(async () => {
 });
 
 describe("AgentFileRepository", () => {
+  it("keeps persona files in the Agent workspace and system prompts in the configured shared workspace", async () => {
+    const config = currentConfig();
+    const systemPromptWorkspace = path.join(rootDir, "shared-prompts");
+    config.persona.systemPromptWorkspace = systemPromptWorkspace;
+    configStore.config = config;
+    await fs.mkdir(systemPromptWorkspace, { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "Agent persona\n", "utf8");
+    await fs.writeFile(
+      path.join(workspaceDir, "selfie_prompt_rewrite.json"),
+      defaultPromptContent("image.selfie-rewrite"),
+      "utf8"
+    );
+    await fs.writeFile(
+      path.join(systemPromptWorkspace, "conversation_private_reply.json"),
+      defaultPromptContent("conversation.private-reply"),
+      "utf8"
+    );
+
+    await expect(repository.get("persona.soul")).resolves.toMatchObject({ content: "Agent persona\n" });
+    await expect(repository.get("conversation.private-reply")).resolves.toMatchObject({
+      content: defaultPromptContent("conversation.private-reply")
+    });
+    const personaFiles = (await repository.list(config, "persona")).files;
+    const systemFiles = (await repository.list(config, "system")).files;
+    expect(personaFiles.filter((file) => file.kind === "fragment")).toHaveLength(6);
+    expect(personaFiles).toContainEqual(expect.objectContaining({ id: "image.selfie-rewrite", kind: "final" }));
+    expect(systemFiles).not.toContainEqual(expect.objectContaining({ id: "image.selfie-rewrite" }));
+  });
+
   it("maps all prompt fragments and final request files", async () => {
     const expectedMappings = [
       ["persona.agents", "AGENTS.md"],
       ["persona.soul", "SOUL.md"],
       ["persona.preference", "PREFERENCE.md"],
+      ["persona.dialogue_style_examples", "DIALOGUE_STYLE_EXAMPLES.md"],
       ["persona.user", "USER.md"],
       ["persona.relation", "RELATION.md"],
-      ["conversation.reply", "conversation_reply.json"],
+      ["conversation.private-reply", "conversation_private_reply.json"],
+      ["conversation.group-reply", "conversation_group_reply.json"],
       ["memory.compress-in", "work_memory_compress_in.json"],
       ["memory.compress-out", "work_memory_compress_out.json"],
       ["memory.user-profile", "user_profile_prompt.json"],
@@ -106,6 +138,30 @@ describe("AgentFileRepository", () => {
     expect(await fs.readFile(filePath, "utf8")).toBe("updated soul\n");
   });
 
+  it("saves system prompts without replacing an Agent runtime configuration", async () => {
+    const filePath = path.join(workspaceDir, "conversation_private_reply.json");
+    await fs.writeFile(filePath, defaultPromptContent("conversation.private-reply"), "utf8");
+    const current = await repository.get("conversation.private-reply");
+    const preparePromptReload = vi.fn(async () => ({ prepared: true }));
+    const commitPromptReload = vi.fn();
+    const systemRepository = new AgentFileRepository({
+      runtime: { reloadPrompts, preparePromptReload, commitPromptReload },
+      mutex: new AdminMutationMutex()
+    });
+    const document = JSON.parse(current.content);
+    document.messages[0].content = `${document.messages[0].content}\n公共系统提示词更新`;
+
+    await systemRepository.put("conversation.private-reply", {
+      content: `${JSON.stringify(document, null, 2)}\n`,
+      revision: current.revision
+    });
+
+    expect(preparePromptReload).not.toHaveBeenCalled();
+    expect(commitPromptReload).not.toHaveBeenCalled();
+    expect(reloadPrompts).not.toHaveBeenCalled();
+    expect(await fs.readFile(filePath, "utf8")).toContain("公共系统提示词更新");
+  });
+
   it("accepts raw MD fragments and requires valid non-empty final JSON", async () => {
     const persona = await repository.get("persona.preference");
     await expect(repository.put("persona.preference", {
@@ -139,12 +195,12 @@ describe("AgentFileRepository", () => {
       revision: prompt.revision
     })).rejects.toMatchObject({ code: "PROMPT_MESSAGES_INVALID", field: "messages" });
 
-    const conversationPath = path.join(workspaceDir, "conversation_reply.json");
-    await fs.writeFile(conversationPath, defaultPromptContent("conversation.reply"), "utf8");
-    const conversation = await repository.get("conversation.reply");
+    const conversationPath = path.join(workspaceDir, "conversation_private_reply.json");
+    await fs.writeFile(conversationPath, defaultPromptContent("conversation.private-reply"), "utf8");
+    const conversation = await repository.get("conversation.private-reply");
     const wrongGroup = JSON.parse(conversation.content);
     wrongGroup.messages[1] = "@{user.input}";
-    await expect(repository.put("conversation.reply", {
+    await expect(repository.put("conversation.private-reply", {
       content: `${JSON.stringify(wrongGroup, null, 2)}\n`,
       revision: conversation.revision
     })).rejects.toMatchObject({ code: "PROMPT_MESSAGE_GROUP_TYPE_INVALID", field: "user.input" });

@@ -30,11 +30,7 @@
     "sessionQueue": "business/data/session-queue.sqlite",
     "media": "business/media/images",
     "napcatState": "runtime/napcat",
-    "napcatConfig": "runtime/napcat/config-full",
-    "napcatQqState": "runtime/napcat/qq",
-    "napcatPlugins": "runtime/napcat/plugins",
-    "napcatQrCode": "runtime/napcat/qrcode.png",
-    "napcatManualLogin": "runtime/napcat/manual-login-required",
+    "napcatAccounts": "runtime/napcat/accounts",
     "secrets": "secrets/runtime.env",
     "logs": "runtime/logs",
     "temporary": "runtime/tmp",
@@ -194,7 +190,6 @@
     }
   },
   "native": {
-    "apiUnit": "sunabot-api.service",
     "napcatManagedBy": "docker"
   },
   "componentsLock": "components/component.lock.json"

@@ -78,14 +78,14 @@ services:
       NAPCAT_GID: ${SUNABOT_RUNTIME_GID:-1000}
       TZ: ${TZ:-Asia/Shanghai}
     ports:
-      - "127.0.0.1:6099:6099"
+      - "127.0.0.1:${NAPCAT_WEBUI_PORT:-6099}:6099"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      - ${SUNABOT_WORKSPACE:?Set SUNABOT_WORKSPACE to an absolute path}/runtime/napcat/config-full:/app/napcat/config
-      - ${SUNABOT_WORKSPACE:?Set SUNABOT_WORKSPACE to an absolute path}/runtime/napcat/qq:/app/.config/QQ
-      - ${SUNABOT_WORKSPACE:?Set SUNABOT_WORKSPACE to an absolute path}/runtime/napcat/plugins:/app/napcat/plugins
-      - ${SUNABOT_WORKSPACE:?Set SUNABOT_WORKSPACE to an absolute path}/runtime/napcat:/app/napcat/cache
+      - ${SUNABOT_WORKSPACE:?Set SUNABOT_WORKSPACE to an absolute path}/runtime/napcat/accounts/${NAPCAT_ACCOUNT_ID:-primary}/config-full:/app/napcat/config
+      - ${SUNABOT_WORKSPACE:?Set SUNABOT_WORKSPACE to an absolute path}/runtime/napcat/accounts/${NAPCAT_ACCOUNT_ID:-primary}/qq:/app/.config/QQ
+      - ${SUNABOT_WORKSPACE:?Set SUNABOT_WORKSPACE to an absolute path}/runtime/napcat/accounts/${NAPCAT_ACCOUNT_ID:-primary}/plugins:/app/napcat/plugins
+      - ${SUNABOT_WORKSPACE:?Set SUNABOT_WORKSPACE to an absolute path}/runtime/napcat/accounts/${NAPCAT_ACCOUNT_ID:-primary}:/app/napcat/cache
     shm_size: 1gb
     stop_grace_period: 35s
     pids_limit: 512
@@ -118,19 +118,18 @@ services:
       io.sunabot.runtime-id: ${SUNABOT_RUNTIME_ID:-sunabot-qq-runtime}
       io.sunabot.workspace-id: ${SUNABOT_WORKSPACE_ID:?Set SUNABOT_WORKSPACE_ID through the launcher}
       io.sunabot.component: napcat
+      io.sunabot.account-id: ${NAPCAT_ACCOUNT_ID:-primary}
     logging:
       driver: local
       options:
         max-size: ${SUNABOT_LOG_MAX_SIZE:-20m}
         max-file: ${SUNABOT_LOG_MAX_FILES:-5}
     networks:
-      - runtime
+      runtime:
+        aliases:
+          - napcat-${NAPCAT_ACCOUNT_ID:-primary}
 
 networks:
   runtime:
     name: ${SUNABOT_DOCKER_NETWORK:-sunabot-runtime}
-    driver: bridge
-    labels:
-      io.sunabot.runtime-id: ${SUNABOT_RUNTIME_ID:-sunabot-qq-runtime}
-      io.sunabot.workspace-id: ${SUNABOT_WORKSPACE_ID:?Set SUNABOT_WORKSPACE_ID through the launcher}
-      io.sunabot.component: runtime-network
+    external: true

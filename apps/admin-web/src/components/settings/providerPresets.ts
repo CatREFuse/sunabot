@@ -8,13 +8,13 @@ export const providerTypeOptions: Array<{
   description: string;
   icon: string;
 }> = [
-  { kind: "codex-responses", label: "Codex 订阅", description: "使用本机 Codex 登录状态", icon: "bx-terminal" },
-  { kind: "openai-official", label: "OpenAI 官方", description: "OpenAI Responses API", icon: "bx-bot" },
-  { kind: "anthropic-official", label: "Anthropic 官方", description: "Anthropic Messages API", icon: "bx-message-rounded-detail" },
-  { kind: "gemini-official", label: "Gemini 官方", description: "Google generateContent API", icon: "bx-diamond" },
-  { kind: "openai-compatible", label: "OpenAI 兼容", description: "兼容 Chat Completions 的服务", icon: "bx-transfer" },
-  { kind: "anthropic-compatible", label: "Anthropic 兼容", description: "兼容 Messages API 的服务", icon: "bx-transfer-alt" },
-  { kind: "gemini-compatible", label: "Gemini 兼容", description: "兼容 generateContent 的服务", icon: "bx-shape-circle" }
+  { kind: "codex-responses", label: "Codex 订阅", description: "本机 Codex 登录", icon: "bx-terminal" },
+  { kind: "openai-official", label: "OpenAI 官方", description: "Responses API", icon: "bx-bot" },
+  { kind: "anthropic-official", label: "Anthropic 官方", description: "Messages API", icon: "bx-message-rounded-detail" },
+  { kind: "gemini-official", label: "Gemini 官方", description: "GenerateContent API", icon: "bx-diamond" },
+  { kind: "openai-compatible", label: "OpenAI 兼容", description: "Chat Completions", icon: "bx-transfer" },
+  { kind: "anthropic-compatible", label: "Anthropic 兼容", description: "Messages 兼容", icon: "bx-transfer-alt" },
+  { kind: "gemini-compatible", label: "Gemini 兼容", description: "GenerateContent 兼容", icon: "bx-shape-circle" }
 ];
 
 export function providerType(kind: ProviderKind) {

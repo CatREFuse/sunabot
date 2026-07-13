@@ -6,4 +6,4 @@ NapCat 在 macOS、WSL2 和 Linux 上使用同一个锁定的多架构上游镜�
 
 NapCat 只挂载 `workspace/runtime/napcat/` 下的配置、QQ 登录态、插件和缓存。它不能挂载 Core 的业务数据库、Agent 或媒体目录。出站图片通过 OneBot `base64://` 交付，不使用共享绝对路径。
 
-`tooling/runtime/export-napcat-component.mjs` 和 Native NapCat 归档属于旧交付资产，不用于当前部署。当前生命周期由根入口 `./sunabot.sh` 管理。
+NapCat 生命周期由根入口 `./sunabot.sh` 管理，不提供并行的 Native 启动器或独立归档入口。

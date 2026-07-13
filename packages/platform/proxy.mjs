@@ -84,9 +84,9 @@ export async function resolveProxyConfiguration(options = {}) {
     return enabled(mode, "environment", httpProxy, httpsProxy, noProxy);
   }
 
-  // qq-compose sets this credential-free value after resolving the WSL host
-  // outside the container. It must never accept userinfo because Compose may
-  // render the value during diagnostics.
+  // The runtime launcher sets this credential-free value after resolving the
+  // WSL host outside the container. It must never accept userinfo because
+  // Compose may render the value during diagnostics.
   const discovered = nonEmpty(env.SUNABOT_PROXY_DISCOVERED_URL);
   if (discovered) {
     const proxyUrl = normalizeProxyUrl(discovered, "SUNABOT_PROXY_DISCOVERED_URL");

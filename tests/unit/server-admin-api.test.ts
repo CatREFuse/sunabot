@@ -8,6 +8,7 @@ import { WebSocket } from "ws";
 import { AGENT_FILE_DEFINITIONS } from "../../src/admin/agentFiles.js";
 import { defaultConfig, saveConfig } from "../../src/config.js";
 import { buildApp, createApp } from "../../apps/api/server.js";
+import type { CreateAppOptions } from "../../apps/api/server.js";
 import type { AppConfig } from "../../src/types.js";
 
 const ADMIN_HEADERS = { host: "127.0.0.1", authorization: "Bearer admin-secret" };
@@ -19,6 +20,18 @@ describe("admin API smoke", () => {
   let previousOneBotToken: string | undefined;
   let config: AppConfig;
 
+  function testAppOptions(options: CreateAppOptions = {}): CreateAppOptions {
+    return {
+      config,
+      initializeRuntime: false,
+      agentRegistry: {
+        workspaceRoot: temporaryDirectory,
+        allowUnmarkedMigration: true
+      },
+      ...options
+    };
+  }
+
   beforeEach(async () => {
     previousConfigPath = process.env.SUNABOT_CONFIG;
     previousAdminToken = process.env.SUNABOT_ADMIN_TOKEN;
@@ -28,9 +41,16 @@ describe("admin API smoke", () => {
     process.env.SUNABOT_CONFIG = path.join(temporaryDirectory, "sunabot.json");
     config = defaultConfig();
     config.persona.agentWorkspace = path.join(temporaryDirectory, "agent");
-    await fs.mkdir(config.persona.agentWorkspace, { recursive: true });
+    config.persona.systemPromptWorkspace = path.join(temporaryDirectory, "system-prompts");
+    await Promise.all([
+      fs.mkdir(config.persona.agentWorkspace, { recursive: true }),
+      fs.mkdir(config.persona.systemPromptWorkspace, { recursive: true })
+    ]);
     for (const definition of AGENT_FILE_DEFINITIONS) {
-      const filePath = path.join(config.persona.agentWorkspace, definition.fileName(config));
+      const workspace = definition.scope === "system"
+        ? config.persona.systemPromptWorkspace
+        : config.persona.agentWorkspace;
+      const filePath = path.join(workspace, definition.fileName(config));
       await fs.mkdir(path.dirname(filePath), { recursive: true });
       await fs.writeFile(filePath, `${definition.id}\n`, "utf8");
     }
@@ -48,36 +68,75 @@ describe("admin API smoke", () => {
   });
 
   it("serves the model catalog, config envelope and all prompt files", async () => {
-    const app = await createApp({ config, initializeRuntime: false });
+    const app = await createApp(testAppOptions());
     const headers = ADMIN_HEADERS;
     const models = await app.inject({ method: "GET", url: "/api/models", headers });
     const envelope = await app.inject({ method: "GET", url: "/api/config", headers });
     const files = await app.inject({ method: "GET", url: "/api/agent-files", headers });
+    const systemFiles = await app.inject({ method: "GET", url: "/api/system-prompt-files", headers });
     expect(models.statusCode).toBe(200);
     expect(models.json().models).toHaveLength(7);
     expect(envelope.statusCode).toBe(200);
     expect(envelope.json().revision).toMatch(/^[a-f0-9]{64}$/);
     expect(files.statusCode).toBe(200);
-    expect(files.json().files).toHaveLength(12);
-    expect(files.json().files).toContainEqual(expect.objectContaining({
-      id: "conversation.reply",
+    expect(files.json().files).toHaveLength(7);
+    expect(systemFiles.statusCode).toBe(200);
+    expect(systemFiles.json().files).toHaveLength(7);
+    expect(systemFiles.json().files).toContainEqual(expect.objectContaining({
+      id: "conversation.private-reply",
       kind: "final",
-      fileName: "conversation_reply.json",
+      fileName: "conversation_private_reply.json",
       variables: expect.arrayContaining([
+        expect.objectContaining({ name: "persona.dialogue_style_examples", description: expect.any(String) }),
         expect.objectContaining({ name: "user.input", description: expect.any(String) })
       ])
     }));
+    expect(files.json().files).toContainEqual(expect.objectContaining({ id: "image.selfie-rewrite" }));
+    expect(systemFiles.json().files).not.toContainEqual(expect.objectContaining({ id: "image.selfie-rewrite" }));
+    for (const [endpoint, summaries] of [
+      ["/api/agent-files", files.json().files],
+      ["/api/system-prompt-files", systemFiles.json().files]
+    ] as const) {
+      for (const summary of summaries) {
+        const detail = await app.inject({ method: "GET", url: `${endpoint}/${summary.id}`, headers });
+        expect(detail.statusCode, `${endpoint}/${summary.id}`).toBe(200);
+        expect(detail.json()).toMatchObject({ id: summary.id, content: expect.any(String) });
+      }
+    }
+    await app.close();
+  });
+
+  it("updates and serves the current Agent WebUI avatar", async () => {
+    const app = await createApp(testAppOptions());
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const update = await app.inject({
+      method: "PUT",
+      url: "/api/agents/plana/avatar",
+      headers: ADMIN_HEADERS,
+      payload: {
+        avatar: { fileName: "plana.png", dataBase64: bytes.toString("base64") }
+      }
+    });
+
+    expect(update.statusCode).toBe(200);
+    expect(update.json().avatarPath).toMatch(/^assets\/avatar-[A-Za-z0-9_-]+\.png$/);
+    const image = await app.inject({
+      method: "GET",
+      url: "/api/agents/plana/avatar",
+      headers: ADMIN_HEADERS
+    });
+    expect(image.statusCode).toBe(200);
+    expect(image.headers["content-type"]).toContain("image/png");
+    expect(image.rawPayload).toEqual(bytes);
     await app.close();
   });
 
   it("runs OneBot on an injected listener and closes it with the admin service", async () => {
     process.env.ONEBOT_ACCESS_TOKEN = "listener-test-token";
     const injectedServer = http.createServer();
-    const built = await buildApp({
-      config,
-      initializeRuntime: false,
+    const built = await buildApp(testAppOptions({
       onebotListener: { server: injectedServer, host: "127.0.0.1", port: 0 }
-    });
+    }));
 
     const onebotAddress = await built.startOneBotListener();
     const adminOrigin = await built.app.listen({ host: "127.0.0.1", port: 0 });
@@ -102,7 +161,7 @@ describe("admin API smoke", () => {
   });
 
   it("allows tests to disable the OneBot listener", async () => {
-    const built = await buildApp({ config, initializeRuntime: false, onebotListener: false });
+    const built = await buildApp(testAppOptions({ onebotListener: false }));
     expect(built.onebotServer).toBeUndefined();
     await expect(built.startOneBotListener()).rejects.toThrow("disabled");
     await built.app.close();
@@ -110,7 +169,7 @@ describe("admin API smoke", () => {
 
   it("exposes only an empty liveness endpoint on the dedicated OneBot HTTP listener", async () => {
     process.env.ONEBOT_ACCESS_TOKEN = "listener-test-token";
-    const built = await buildApp({ config, initializeRuntime: false });
+    const built = await buildApp(testAppOptions());
     const address = await built.startOneBotListener({ host: "127.0.0.1", port: 0 });
     const origin = `http://127.0.0.1:${address.port}`;
 
@@ -126,11 +185,9 @@ describe("admin API smoke", () => {
   });
 
   it("tests a complete provider draft without changing disk config", async () => {
-    const app = await createApp({
-      config,
-      initializeRuntime: false,
+    const app = await createApp(testAppOptions({
       testProvider: async () => ({ connected: true })
-    });
+    }));
     const headers = ADMIN_HEADERS;
     const before = await fs.readFile(process.env.SUNABOT_CONFIG!, "utf8");
     const response = await app.inject({
@@ -145,10 +202,10 @@ describe("admin API smoke", () => {
     expect(response.json().elapsedMs).toEqual(expect.any(Number));
     expect(after).toBe(before);
     await app.close();
-  });
+  }, 10_000);
 
   it("enforces auth for forwarded requests and accepts a valid bearer token", async () => {
-    const app = await createApp({ config, initializeRuntime: false });
+    const app = await createApp(testAppOptions());
     let response = await app.inject({
       method: "GET",
       url: "/api/status",
@@ -171,7 +228,7 @@ describe("admin API smoke", () => {
   });
 
   it("reloads the config envelope from disk after an external edit", async () => {
-    const app = await createApp({ config, initializeRuntime: false });
+    const app = await createApp(testAppOptions());
     config.server.port = 9123;
     await saveConfig(config);
     const response = await app.inject({ method: "GET", url: "/api/config", headers: ADMIN_HEADERS });
@@ -180,8 +237,8 @@ describe("admin API smoke", () => {
     await app.close();
   });
 
-  it("creates editable default runtime prompts when the agent workspace changes", async () => {
-    const app = await createApp({ config, initializeRuntime: false });
+  it("rejects changing the fixed Plana workspace", async () => {
+    const app = await createApp(testAppOptions());
     const headers = ADMIN_HEADERS;
     const envelope = await app.inject({ method: "GET", url: "/api/config", headers });
     const nextWorkspace = path.join(temporaryDirectory, "new-agent");
@@ -192,17 +249,20 @@ describe("admin API smoke", () => {
       payload: {
         revision: envelope.json().revision,
         value: {
-          agentWorkspace: nextWorkspace,
-          memoryLimit: config.persona.memoryLimit
+          agentWorkspace: nextWorkspace
         }
       }
     });
 
-    expect(response.statusCode).toBe(200);
-    for (const definition of AGENT_FILE_DEFINITIONS.slice(5)) {
-      const content = await fs.readFile(path.join(nextWorkspace, definition.fileName(response.json().config)), "utf8");
-      expect(content.trim()).not.toBe("");
-    }
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({
+      error: {
+        code: "CONFIG_INVALID",
+        field: "persona.agentWorkspace"
+      }
+    });
+    await expect(fs.access(path.join(nextWorkspace, "conversation_private_reply.json")))
+      .rejects.toMatchObject({ code: "ENOENT" });
     await app.close();
   });
 
@@ -213,7 +273,7 @@ describe("admin API smoke", () => {
     "http://192.168.1.10/image.png",
     "http://[::1]/image.png"
   ])("rejects private image proxy targets: %s", async (imageUrl) => {
-    const app = await createApp({ config, initializeRuntime: false });
+    const app = await createApp(testAppOptions());
     const response = await app.inject({
       method: "GET",
       url: `/api/media/image?url=${encodeURIComponent(imageUrl)}`,
@@ -233,7 +293,7 @@ describe("admin API smoke", () => {
       status: 200,
       headers: { "content-type": "image/jpeg", "content-length": "3" }
     }));
-    const app = await createApp({ config, initializeRuntime: false });
+    const app = await createApp(testAppOptions());
     const response = await app.inject({
       method: "GET",
       url: `/api/media/image?url=${encodeURIComponent(imageUrl)}`,
@@ -252,7 +312,7 @@ describe("admin API smoke", () => {
       status: 401,
       headers: { "content-type": "text/plain" }
     }));
-    const app = await createApp({ config, initializeRuntime: false });
+    const app = await createApp(testAppOptions());
     const response = await app.inject({
       method: "GET",
       url: `/api/media/image?url=${encodeURIComponent("https://8.8.8.8/image.png")}`,
@@ -271,7 +331,7 @@ describe("admin API smoke", () => {
       status: 200,
       headers: { "content-type": "image/jpeg", "content-length": "3" }
     }));
-    const app = await createApp({ config, initializeRuntime: false });
+    const app = await createApp(testAppOptions());
 
     const user = await app.inject({
       method: "GET",
@@ -303,7 +363,7 @@ describe("admin API smoke", () => {
   });
 
   it("converts image resolution to the actual size and stores the provider image model", async () => {
-    const built = await buildApp({ config, initializeRuntime: false });
+    const built = await buildApp(testAppOptions());
     const generateImage = vi.fn(async () => ({
       url: "/generated-images/playground-test.png",
       filePath: path.join(temporaryDirectory, "playground-test.png"),

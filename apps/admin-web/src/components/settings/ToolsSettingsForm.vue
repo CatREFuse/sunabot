@@ -8,6 +8,7 @@ type ToolsTab = "catalog" | "runtime";
 
 const draft = defineModel<ConfigSectionValueMap["tools"]>({ required: true });
 const bash = defineModel<ConfigSectionValueMap["bash"]>("bash", { required: true });
+const pokeOnNoReply = defineModel<boolean>("pokeOnNoReply", { default: false });
 defineProps<{
   models: readonly ModelCatalogItem[];
   fieldStates?: ConfigEnvelope["fieldStates"];
@@ -69,7 +70,7 @@ function onTabKeydown(event: KeyboardEvent, index: number) {
       aria-labelledby="tools-tab-catalog"
       :hidden="activeTab !== 'catalog'"
     >
-      <ToolCatalogSettings v-model="draft" v-model:bash="bash" />
+      <ToolCatalogSettings v-model="draft" v-model:bash="bash" v-model:poke-on-no-reply="pokeOnNoReply" />
     </section>
     <section
       id="tools-panel-runtime"

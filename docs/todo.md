@@ -1,8 +1,8 @@
 # TODO-driven 项目结构整理与架构演进
 
-日期：2026-07-13
+日期：2026-07-14
 目标设计：`docs/architecture/project-structure-plan.md`
-问题依据：`docs/audits/2026-07-11-codebase-audit.md`
+问题依据：`docs/audits/2026-07-11-codebase-audit.md`、`docs/audits/2026-07-14-business-flow-audit.md`
 当前行为：`docs/specs/current-system-spec.md`
 
 ## 使用规则
@@ -16,9 +16,79 @@
 ## 已有基线
 
 - [x] NapCat 已收敛为独立 Docker 组件，Core Native/Docker 共用专用 OneBot listener、token 和内联媒体契约。
-- [x] 当前生产代码通过 151 个测试文件、743 项单元/集成测试、25 项 E2E 和 6 项明暗主题视觉矩阵测试。
+- [x] 当前 `npm run verify` 通过 165 个 Vitest 文件、910 项单元/集成测试、独立 runtime smoke 的 14 项测试和 33 项 E2E；当前视觉回归 8/8 通过，并已检查桌面/移动端、light/dark 的状态、Agent 和 Provider 截图。
 - [x] 主业务数据与 session queue 已迁移到 SQLite，并保留现有前向迁移规则。
-- [x] 目标结构、模块协议、双运行模型、审计问题和完成标准已形成文档。
+- [x] `npm run architecture` 已进入 `npm run verify`，当前依赖边界、public API、durable codec、ToolRegistry 与尺寸预算门禁通过。
+- [x] SQLite 恢复点 manifest v2 已覆盖默认 Plana 与全部注册/磁盘发现 Agent 双库，`npm run backup:gate` 17 项通过并兼容 v1。
+- [x] 目标结构、模块协议、双运行模型、业务流程审计和完成标准已形成文档。
+
+## 2026-07-14 业务流程优先队列
+
+完整证据、影响和验收方法见 `docs/audits/2026-07-14-business-flow-audit.md`。
+
+- [x] **FLOW-FIX-001｜持久化回复门控**
+  - reply、`no_reply` 戳一戳和 deferred completion 持久化门控快照，投递前重新校验抑制状态、发送者、epoch 和取消信号。
+  - 证据：关闭/重开队列、关闭后重新启用、正文、戳一戳与异步结果回归通过。
+
+- [x] **MEDIA-FIX-001｜历史图片引用与 Agent 图片历史**
+  - 上下文使用稳定媒体句柄，异步任务保存 dispatch 快照，同用户自动历史、Agent 图片目录和生成图路径边界均有回归。
+
+- [x] **ONBOARD-FIX-001｜空 workspace 人格与 Codex 授权**
+  - 新 Plana/Agent 以 write-if-missing 创建人格与提示词；Codex 默认授权路径绑定外置 `SUNABOT_WORKSPACE`。
+
+- [x] **ONBOARD-FIX-002｜清空管理员 QQ 默认值与多账号初始化**
+  - 默认 `bot.adminQq` 为空；workspace 只初始化 `runtime/napcat/accounts/`，不再创建旧单账号目录。
+
+- [x] **ONBOARD-FIX-003｜显式单 Agent 迁移启动门禁**
+  - workspace 初始化、API 组合根与 AgentRegistry 在写入前校验版本化标记；主库出现后核对全部 Agent/账号状态与 Plana/primary 基线，完成标记额外绑定目标 workspace 和端口，未标记既有目录、篡改标记、注册漂移和符号链接路径拒绝启动且零补建。
+  - 证据：空目录写入 `fresh-install` 标记并可恢复 marker 发布中断；完成标记绑定恢复点 ID、恢复 manifest、报告、源状态和目标注册哈希；结构已就绪但未标记时要求停服、检查配置与固定端口、全部账号端口及带 workspace 标签的全部活动容器并重建恢复点；迁移报告区分 runtime/prompt 的 copied 与 preserved 两侧哈希；默认与显式配置 API 直启、初始化、AgentRegistry 和单 Agent 迁移回归通过。
+
+- [x] **RELEASE-FIX-001｜Linux 双模式发行与迁移资产闭环**
+  - Linux 归档携带 Docker Core 构建上下文、预构建 Native Core、生产依赖、迁移脚本、门禁模块与迁移文档；发行入口要求干净且 revision 稳定的源码并重新生产构建，发行包迁移复算 schema v2 manifest 绑定的完整 `dist/`、`tooling/`、生产 `node_modules/` 与锁文件哈希后使用随包构建。
+  - 证据：runtime contract 校验发行清单包含完整源上下文和迁移 wrapper；manifest 核对 runtime contract、版本、Node、真实 Linux/x64、source commit、文件集合与 SHA-256，篡改依赖、锁文件和陈旧构建 fixture 失败关闭；Linux/amd64 Node 24.18.0 独立构建验证无 `.git` 的生产归档、迁移 dry-run、全部资产与 18/18 Compose/Docker 构建目标；旧单账号配置命令已移除，当前契约与 runtime smoke 只使用 `runtime/napcat/accounts/primary/`。
+
+- [x] **FLOW-FIX-002｜多 Agent Web Chat 顺序与选库**
+  - 每个 Agent 复用 Web Chat 顺序状态，模型调用进入 Agent 运行上下文；并发回合、连续 ID、Arona 日志与 Token 聚合选库回归通过。
+
+- [x] **FLOW-FIX-003｜secondary 账号恢复、引用与身份路由**
+  - 重启编排、引用与附件查询、嵌套引用、发送者身份缓存和历史身份补全全程携带 account ID。
+
+- [x] **ONBOARD-FIX-004｜兼容注销定向与 Agent 创建补偿**
+  - primary 兼容注销只定向 primary；primary 可以退出 QQ 登录但不能移除，API 返回 `PRIMARY_ACCOUNT_REQUIRED` 且管理台隐藏移除入口；Agent 运行时初始化失败时删除注册记录、workspace 与临时回滚目录。
+
+- [ ] **FLOW-001｜P1｜按 QQ 账号隔离 outbox 断连状态**
+  - outbox 持久化 `deliveryPartition=accountId`，claim 跳过离线分区，断连探针与恢复按分区维护。
+  - 验收：同 Agent 一个 QQ 离线时，其他在线 QQ 继续按序投递，重连只恢复目标分区。
+
+- [ ] **FLOW-002｜P1｜远端发送与本地 settle 两阶段化**
+  - OneBot 成功后持久化 remote receipt，再幂等完成会话、日志与 hook；未知结果进入 `delivery_unknown`，不自动重复发送。
+  - 验收：远端成功后的任一本地故障和重启都不会产生第二条 QQ 消息。
+
+- [ ] **MIG-001｜P1｜SQLite 旧数据迁移恢复边界**
+  - 备份路径改为 workspace 相对且拒绝逃逸；主库、queue、附件 chunks 使用统一 manifest、哈希、记录数和 restore/drill 门禁。
+
+- [ ] **MIG-002｜P1｜workspace 布局迁移完整回滚**
+  - 敏感内容必须拥有受控离线恢复副本；所有移动项记录源/目标哈希，使用 staged copy、校验和原子切换。
+
+- [ ] **ONBOARD-002｜P1｜统一 readiness 与 doctor 协议**
+  - CLI、管理 API 和平台入口共用只读 probe，分别报告 Core、OneBot、每个 QQ、Provider、Codex、LibreOffice、bubblewrap、workspace 和迁移状态。
+
+- [ ] **ONBOARD-003｜P1｜新 QQ 运行时调和**
+  - 增加 account reconciler 与期望/实际状态；新增、停用和删除账号只操作目标 NapCat，失败原因在管理台可见。
+
+- [ ] **ONBOARD-004｜P1｜空 workspace 首次运行 E2E**
+  - 覆盖管理员设置、默认 Provider 选择、Agent/QQ 创建、扫码前状态、运行调和和首条回复；在 marker、主库、queue、manifest、注册行和账号目录的每个持久化边界注入终止，补齐幂等 resume/rollback；README 只保留该门禁验证过的步骤。
+  - 验收：主库出现后的半初始化可以明确继续或回滚，不删除未知文件、不补空库；macOS Native 与 Linux/WSL Docker Core 完整通过首次运行。
+
+- [ ] **FLOW-003｜P2｜Provider 跨轮 TurnToolState**
+  - 各协议共享本轮 `assistant_text`、工具、deferred 与 `no_reply` 状态，拒绝跨轮非法顺序。
+
+- [ ] **RECOVERY-001｜P2｜中断恢复可继续或回滚**
+  - restore 每次文件替换写入可 fsync 的 journal，重跑按 per-file 状态幂等 resume/rollback；也可使用完整 staging tree 校验后原子切换。
+  - 验收：每个 rename 前后终止进程，原目标仍可恢复，重跑不会覆盖未知文件，全部 Agent 双库和 queue 不变量最终通过。
+
+- [ ] **ONBOARD-005｜P2｜只读 CLI 不安装依赖**
+  - help 成功退出；`status|doctor|logs` 零写入、零 `npm ci`，只有启动、重启或显式 bootstrap 可以安装依赖。
 
 ## 2026-07-13 WebUI 修复 TODO
 
@@ -71,7 +141,7 @@
   - 日志按回答、编排器、记忆压缩和其他统计调用次数与 Token；记忆拆分为工作与长期记忆、用户画像。工作记忆合并和长期记忆晋升由同一次模型调用完成，不重复虚构长期记忆调用。
   - 群聊详情展示累计、保留、可见、用户、回答和内部消息数，并显示同口径模型调用统计；页面可见且已选中会话时每 10 秒刷新。
   - 完成：失败且无 usage 的请求仍计入调用次数，显式传输重试逐次计数；Deferred Codex 和自拍改写保留会话、阶段与尝试上下文；统计写入 SQLite 聚合表并按完整会话 ID 精确读取。
-  - 证据：SQLite 聚合、精确会话筛选、失败调用、显式重试、Retry-After、正文断流、取消预检、Deferred Codex 终态竞争、自拍改写、会话消息分解和响应式面板均有回归测试；全量 151 个测试文件 743 项测试通过。
+  - 证据：SQLite 聚合、精确会话筛选、失败调用、显式重试、Retry-After、正文断流、取消预检、Deferred Codex 终态竞争、自拍改写、会话消息分解和响应式面板均有回归测试；当前全量 165 个 Vitest 文件、910 项测试通过。
 
 - [x] **WEBUI-FIX-011｜Bash 与 Codex 能力状态**
   - 工具开关始终可配置；配置启用、运行能力和最终可用状态分别展示；Codex Worker 可执行；Bash 仅在通过 bubblewrap 隔离探针的运行环境可执行。
@@ -81,24 +151,26 @@
 - [x] **WEBUI-FIX-012｜规范与完整验证**
   - 当前系统规范、功能索引、Mock API 和测试与修复后的行为一致。
   - 验收：`npm run runtime:contract`、`npm run check`、`npm test`、`npm run build`、`npm run test:e2e`、`npm run test:visual` 和 `./sunabot.sh doctor` 全部通过，并人工检查关键截图。
-  - 证据：运行契约、架构门禁、类型检查、151 个测试文件 743 项测试、生产构建、25 项 E2E、6 项视觉矩阵和 Native doctor 全部通过；人工检查提示词、工具目录、连接设置与群聊详情关键截图。
+  - 证据：运行契约、架构门禁、备份门禁、类型检查、165 个 Vitest 文件 910 项测试、14 项 runtime smoke、生产构建、33 项 E2E 和 8 项视觉矩阵通过；人工检查桌面/移动端、light/dark 的状态、Agent 和 Provider 关键截图。
 
 ## M0：先建立不可回退的门禁
 
-- [ ] **GATE-001｜P0｜统一 Node 与 CI 运行时**（AUD-015、AUD-025）
+- [x] **GATE-001｜P0｜统一 Node 与 CI 运行时**（AUD-015、AUD-025）
   - 固定经过验证的 Node 24 小版本；`package.json`、CI、Native manifest 和 Docker 使用同一版本。
   - 完成：CI `npm run verify` 全绿，`node --version` 在四个入口一致，升级流程有回归清单。
+  - 证据：`.node-version`、`.nvmrc`、package/lock、GitHub Actions、runtime contract、component lock、Core Dockerfile 和 release 统一为 Node `24.18.0`；版本漂移 fixture、runtime contract 和本地完整 `npm run verify` 通过。远端 GitHub Actions 将在本次推送后重新执行同一门禁。
 
 - [ ] **GATE-002｜P0｜runtime doctor 与唯一实例门禁**（AUD-024）
   - 检查端口 owner、进程来源、release version、workspace realpath、数据库路径/inode、OneBot connection owner 和重复实例。
   - 启动/升级前发现 Windows/WSL 或 Native/Docker split-brain 时必须失败退出，不自动抢占数据。
   - 完成：正常、重复监听、错误 workspace、双数据库、僵尸 OneBot 五类 fixture 通过。
 
-- [ ] **GATE-003｜P0｜架构依赖门禁**（AUD-009、AUD-010、AUD-016～019、AUD-026）
+- [x] **GATE-003｜P0｜架构依赖门禁**（AUD-009、AUD-010、AUD-016～019、AUD-026）
   - 检查 services 不能导入 adapters/admin/deploy/tooling，跨模块只能导入 `public` API，无可执行循环。
   - 持久化 event/job/outbox 必须经过 versioned codec；工具 definition 与 executor 必须一一对应。
   - 文件原则上 `<800` 行、类 `<500` 行；超限必须有 ADR 和可追踪拆分 TODO。
-  - 完成：`npm run check:architecture` 进入 `npm run verify`，并有故意违规的失败测试。
+  - 完成：`npm run architecture` 进入 `npm run verify`，并有故意违规的失败测试。
+  - 证据：Agent config/repository、messaging contract、SQLite schema/model-call store、config revision 和 reply context 已按边界拆分；`architecture-gate` 违规 fixture 与当前仓库门禁通过，无活动债务例外。
 
 - [ ] **GATE-004｜P0｜性能与容量基线**（AUD-013）
   - 建立 2,000 消息会话、80 会话并发、10 万/100 万日志、10 万记忆、10 万 queue backlog、20M 字符附件、1 万图片和 72 小时 soak 场景。
@@ -109,6 +181,7 @@
   - 建立主库与 queue DB 的一致恢复点、每日备份、7/30 天保留和季度恢复演练。
   - 覆盖 kill -9、磁盘满、SQLITE_BUSY、WAL 未 checkpoint、外发成功但主库写失败。
   - 完成：RPO `≤24h`，RTO 有记录；恢复后 `integrity_check`、记录数和队列不变量通过。
+  - 阶段证据：manifest v2 已覆盖默认 Plana 和全部 Agent 双库，拒绝缺库、单边库、孤儿库、非法 ID 与路径逃逸；v1 兼容、验证、恢复和 17 项 gate 通过。每日调度、7/30 天保留、RTO 实测、restore 中断续跑和完整故障注入仍待完成。
 
 - [x] **GATE-006｜P1｜Native Bash 强隔离**（AUD-003）
   - Linux/WSL 下使用独立用户、systemd 文件限制和经过验证的 bubblewrap/容器沙箱，不能只依赖字符串规则。
@@ -166,7 +239,7 @@
   - 请求日志按回答、编排器、记忆压缩和其他记录模型调用；记忆压缩使用工作与长期记忆、用户画像两个真实调用类别，兼容旧 `working`、`long_term` 日志但不重复计数。
   - 日志页展示全局调用次数与 Token；每个群聊详情展示累计、保留、可见、用户、回答和内部消息数，以及 Token 和模型调用分类。
   - 完成：`model_call_aggregates` 与请求日志在同一事务增量写入，旧库前向重建聚合，分类总量无重复计数，按完整会话 ID 精确聚合，失败请求和实际传输重试如实计数。
-  - 证据：聚合前向迁移、缓存 Token、失败调用、Provider 状态与正文重试、Deferred Codex 迟到用量、自拍改写、会话统计与响应式面板全部通过回归；全量 151 个测试文件 743 项测试通过。
+  - 证据：聚合前向迁移、缓存 Token、失败调用、Provider 状态与正文重试、Deferred Codex 迟到用量、自拍改写、会话统计与响应式面板全部通过回归；当前全量 165 个 Vitest 文件、910 项测试通过。
 
 - [ ] **DATA-005｜P1｜记忆索引与管理分页**（AUD-007）
   - FTS5 或增量常驻索引，管理 API 不再全量读取；保持现有召回语义。
@@ -251,15 +324,18 @@
 - [ ] **RUNTIME-001｜P1｜唯一 runtime contract 与组件锁**（AUD-022、AUD-027）
   - 定义管理台回环端口、OneBot 专用端口、Compose 服务、宿主网关、media、secret、启动/停止、健康和 capability；锁 Node/NapCat/Codex/LibreOffice 版本、digest、checksum、license、architecture。
   - 完成：contract schema、component lock、SBOM、许可证和升级 smoke gate 入库。
+  - 阶段证据：runtime contract、schema、component lock、Node/NapCat/Codex/LibreOffice/bubblewrap 版本与多架构信息已入库并通过静态门禁；SBOM 产物、全部许可证复核和升级 smoke 仍待完成。
 
 - [ ] **RUNTIME-002｜P1｜Native Core 入口**（AUD-022）
   - Core 使用同一 artifact 和 workspace；NapCat 始终由独立 Docker 服务运行，Native 入口不能安装或管理 NapCat 进程。
   - 完成：macOS 与干净 WSL/Linux 上启动、停止、升级、冷启动、扫码、文字和 `base64://` 图片通过。
+  - 阶段证据：旧 Native NapCat 启动脚本和 systemd unit 已删除，Native Core 只通过统一 launcher 管理独立 NapCat Docker；macOS 本机检查通过，干净 WSL/Linux 实机消息矩阵仍待完成。
 
 - [ ] **RUNTIME-003｜P1｜Core/NapCat 分离交付与统一 launcher**（AUD-022）
   - Core 镜像只包含 API/Web，NapCat 使用锁定的独立镜像；Compose 提供 `core` 与 `napcat` 两个服务。
   - 根 `./sunabot.sh` 统一 `up|down|restart|status|logs|doctor`，并支持 `auto|native|docker` Core 模式。
   - 完成：Docker Core 走私有网络，Native Core 走宿主网关；SIGTERM、冷启动、首次登录、真实文图消息和旧实例门禁通过。
+  - 阶段证据：统一 launcher、多账号 NapCat 编排、专用 OneBot 端口、私有网络和 release 入口已实现；新增账号运行时调和、readiness 统一协议与 Native/Docker 双形态真实多账号 smoke 仍待完成。
 
 - [ ] **RUNTIME-004｜P1｜健康、资源和日志预算**（AUD-014、AUD-027）
   - Core 与 NapCat 分别报告 liveness；readiness 分层报告 API、OneBot、QQ、Provider，QQ 临时离线不形成重启风暴。
@@ -283,6 +359,7 @@
 - [ ] **ROLLOUT-003｜P1｜删除兼容层和旧入口**
   - 删除旧 QQ Runtime 入口、Core 内 NapCat 资产、Native NapCat unit、cwd fallback、重复脚本和旧 workspace 路径。
   - 完成：`rg` 无旧路径/旧工具名/旧协议类型，安装包和 Git 中只有一个受支持入口。
+  - 阶段证据：旧 Native NapCat unit、`native.mjs`、`qq-compose.mjs` 和 NapCat component 导出入口已删除，workspace init 不再创建旧单账号目录；迁移器仍保留受控 legacy 路径识别，完整 release 内容审计和兼容 facade 清理仍待完成。
 
 - [ ] **ROLLOUT-004｜P1｜规范与交付收口**
   - 更新当前系统规范、功能—代码索引、README、部署、迁移、备份、安全和 AGENTS 文档索引。
@@ -291,6 +368,6 @@
 ## 延后事项
 
 - 完整 OneBot v12：当前生产协议是 OneBot v11。
-- 多 Agent bot 群：当前范围是单默认 Agent。
+- bot 群主动编排：当前只记录上下文，不主动回复。
 - 多用户管理台权限：当前是单管理员自托管模式。
 - 把业务模块拆成独立网络微服务：只有容量或故障隔离数据证明必要时再做，不作为本轮目录整理目标。

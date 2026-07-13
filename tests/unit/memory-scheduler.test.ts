@@ -18,13 +18,15 @@ describe("MemorySchedulerStore", () => {
   it("persists a stable full batch and removes it only after completion", async () => {
     const scheduler = await createScheduler();
     const messages = Array.from({ length: 3 }, (_, index) => message(index + 1));
-    await scheduler.enqueue(conversation(), messages, { idleDelayMs: 60_000 });
+    await scheduler.enqueue(conversation(), messages);
 
     const claim = await scheduler.claimNext(3, Date.now());
     expect(claim?.messages.map((item) => item.sequence)).toEqual([1, 2, 3]);
     expect(claim?.batchId).toMatch(/^sha256:/);
 
     const recovered = await createSchedulerFrom(scheduler);
+    expect(await recovered.claimNext(3, Date.now())).toBeUndefined();
+    await recovered.enqueue(conversation(), [message(4), message(5), message(6)]);
     const replay = await recovered.claimNext(3, Date.now());
     expect(replay?.batchId).toBe(claim?.batchId);
     expect(replay?.messageIds).toEqual(claim?.messageIds);
@@ -33,52 +35,69 @@ describe("MemorySchedulerStore", () => {
     expect(await recovered.claimNext(3, Date.now())).toBeUndefined();
   });
 
-  it("flushes a partial batch after the durable silence deadline", async () => {
+  it("does not flush a partial batch after a silence deadline", async () => {
     const scheduler = await createScheduler();
     const now = Date.now();
-    await scheduler.enqueue(conversation(), [message(1, new Date(now - 10_000).toISOString())], {
-      idleDelayMs: 1
-    });
+    await scheduler.enqueue(conversation(), [message(1, new Date(now - 10_000).toISOString())]);
 
-    const claim = await scheduler.claimNext(48, now);
-    expect(claim?.messages).toHaveLength(1);
+    const claim = await scheduler.claimNext(5, now);
+    expect(claim).toBeUndefined();
+    expect(await scheduler.nextWakeAt(5)).toBeUndefined();
+  });
+
+  it("uses the configured message threshold as the compression window", async () => {
+    const scheduler = await createScheduler();
+    await scheduler.enqueue(conversation(), Array.from({ length: 7 }, (_, index) => message(index + 1)));
+
+    const first = await scheduler.claimNext(5);
+    expect(first?.messages.map((item) => item.sequence)).toEqual([1, 2, 3, 4, 5]);
+    await scheduler.complete(first!);
+    expect(await scheduler.claimNext(5)).toBeUndefined();
+
+    await scheduler.enqueue(conversation(), [message(8), message(9), message(10)]);
+    expect((await scheduler.claimNext(5))?.messages.map((item) => item.sequence)).toEqual([6, 7, 8, 9, 10]);
   });
 
   it("retains messages arriving while a batch is running", async () => {
     const scheduler = await createScheduler();
-    await scheduler.enqueue(conversation(), [message(1), message(2)], { idleDelayMs: 60_000 });
+    await scheduler.enqueue(conversation(), [message(1), message(2)]);
     const claim = await scheduler.claimNext(2);
-    await scheduler.enqueue(conversation(), [message(3)], { idleDelayMs: 60_000 });
+    await scheduler.enqueue(conversation(), [message(3)]);
     await scheduler.complete(claim!);
 
     const snapshot = await scheduler.snapshot();
     expect(snapshot.conversations[conversation().id]?.pendingMessages.map((item) => item.sequence)).toEqual([3]);
   });
 
-  it("persists retry backoff across restart and resets it after success", async () => {
+  it("spends one full message window before retrying a failed batch", async () => {
     const scheduler = await createScheduler();
-    await scheduler.enqueue(conversation(), [message(1)], { idleDelayMs: 0 });
-    const claim = await scheduler.claimNext(1, 1_000);
+    await scheduler.enqueue(conversation(), [message(1), message(2)]);
+    const claim = await scheduler.claimNext(2, 1_000);
     await scheduler.fail(claim!, 1_000);
 
     const recovered = await createSchedulerFrom(scheduler);
-    expect(await recovered.claimNext(1, 30_999)).toBeUndefined();
-    const retry = await recovered.claimNext(1, 31_000);
+    expect(await recovered.claimNext(2, 999_999)).toBeUndefined();
+    await recovered.enqueue(conversation(), [message(3)]);
+    expect(await recovered.claimNext(2, 999_999)).toBeUndefined();
+    await recovered.enqueue(conversation(), [message(4)]);
+    const retry = await recovered.claimNext(2, 1_000_000);
     expect(retry?.batchId).toBe(claim?.batchId);
-    await recovered.complete(retry!, 31_001);
+    await recovered.complete(retry!, 1_000_001);
 
     const snapshot = await recovered.snapshot();
     expect(snapshot.conversations[conversation().id]?.failureCount).toBe(0);
+    expect(await recovered.claimNext(2, 1_000_002)).toBeUndefined();
+    await recovered.enqueue(conversation(), [message(5), message(6)]);
+    expect((await recovered.claimNext(2, 1_000_003))?.messages.map((item) => item.sequence)).toEqual([3, 4]);
   });
 
   it("does not re-enqueue messages at or before the committed cursor", async () => {
     const scheduler = await createScheduler();
-    await scheduler.enqueue(conversation(), [message(8), message(9), message(10)], {
-      committedThrough: 9,
-      idleDelayMs: 0
+    await scheduler.enqueue(conversation(), Array.from({ length: 50 }, (_, index) => message(index + 8)), {
+      committedThrough: 9
     });
     const claim = await scheduler.claimNext(48);
-    expect(claim?.messages.map((item) => item.sequence)).toEqual([10]);
+    expect(claim?.messages.map((item) => item.sequence)).toEqual(Array.from({ length: 48 }, (_, index) => index + 10));
   });
 });
 

@@ -8,6 +8,7 @@ import type { SunaRuntime } from "../../../src/runtime.js";
 
 export interface ConversationRouteOptions {
   runtime: SunaRuntime;
+  getRuntime?: (agentId: string) => SunaRuntime;
   onebotGateway: OneBotGateway;
   conversationDirectory: ConversationDirectory;
 }
@@ -22,16 +23,26 @@ const conversationParams = {
 } as const;
 
 export function registerConversationRoutes(app: FastifyInstance, options: ConversationRouteOptions) {
-  const { runtime, onebotGateway, conversationDirectory } = options;
-  const webChat = new WebChatService(runtime);
+  const { onebotGateway, conversationDirectory } = options;
+  const runtimeFor = (request: { query: unknown }) => options.getRuntime?.(requestAgentId(request.query)) ?? options.runtime;
+  const webChats = new WeakMap<SunaRuntime, WebChatService>();
+  const webChatFor = (request: { query: unknown }) => {
+    const runtime = runtimeFor(request);
+    const existing = webChats.get(runtime);
+    if (existing) return existing;
+    const webChat = new WebChatService(runtime);
+    webChats.set(runtime, webChat);
+    return webChat;
+  };
 
   app.get("/api/web-chat/messages", {
     schema: { querystring: openObject, response: { 200: openObject } }
-  }, async () => webChat.messages());
+  }, async (request) => webChatFor(request).messages());
 
   app.post("/api/web-chat/messages", {
     schema: { body: passthroughBody, response: { 200: openObject } }
   }, async (request) => {
+    const webChat = webChatFor(request);
     const text = String((request.body as { text?: unknown } | undefined)?.text ?? "").trim();
     if (!text || text.length > 16_000) {
       badRequest(
@@ -45,7 +56,8 @@ export function registerConversationRoutes(app: FastifyInstance, options: Conver
 
   app.get("/api/conversations", {
     schema: { querystring: openObject, response: { 200: openObject } }
-  }, async () => {
+  }, async (request) => {
+    const runtime = runtimeFor(request);
     const records = runtime.getConversationRecords();
     if (onebotGateway.getStatus().connected) {
       void runtime.hydrateConversationRecords(onebotGateway).catch((error) => {
@@ -63,6 +75,7 @@ export function registerConversationRoutes(app: FastifyInstance, options: Conver
       response: { 200: openObject }
     }
   }, async (request) => {
+    const runtime = runtimeFor(request);
     const params = request.params as { id?: string };
     const query = request.query as { before?: string; limit?: string };
     const conversationId = String(params.id ?? "");
@@ -82,13 +95,14 @@ export function registerConversationRoutes(app: FastifyInstance, options: Conver
       response: { 200: openObject }
     }
   }, async (request) => {
+    const runtime = runtimeFor(request);
     const params = request.params as { id?: string };
     const query = request.query as { runId?: string; limit?: string };
     const runId = String(query.runId ?? "").trim();
     const conversationId = String(params.id ?? "").trim();
     const q = runId || conversationId;
     return {
-      logs: q ? await readRequestLogs({ query: q, limit: query.limit == null ? 200 : Number(query.limit) }) : []
+      logs: q ? await readRequestLogs({ query: q, limit: query.limit == null ? 200 : Number(query.limit), config: runtime.config }) : []
     };
   });
 
@@ -98,17 +112,19 @@ export function registerConversationRoutes(app: FastifyInstance, options: Conver
       response: { 200: openObject }
     }
   }, async (request) => {
+    const runtime = runtimeFor(request);
     const conversationId = String((request.params as { id?: string }).id ?? "").trim();
     return {
       conversationId,
       messages: runtime.getConversationMessageStats(conversationId),
-      modelCalls: readModelCallStats({ conversationId })
+      modelCalls: readModelCallStats({ conversationId, config: runtime.config })
     };
   });
 
   app.put("/api/conversations/reply", {
     schema: { body: passthroughBody, response: { 200: openObject } }
   }, async (request) => {
+    const runtime = runtimeFor(request);
     const conversation = runtime.setConversationReplyEnabled(request.body as {
       id?: string;
       scope?: string;
@@ -120,4 +136,9 @@ export function registerConversationRoutes(app: FastifyInstance, options: Conver
     });
     return { ok: true, conversation };
   });
+}
+
+function requestAgentId(query: unknown) {
+  const value = query && typeof query === "object" ? (query as { agentId?: unknown }).agentId : undefined;
+  return String(value ?? "plana").trim() || "plana";
 }

@@ -6,8 +6,10 @@ import {
   SunaRuntime
 } from "../../src/runtime.js";
 import { appendRequestLog } from "../../src/requestLog.js";
+import { noReplyPokeEnvelope } from "../../packages/contracts/session/runtimeMessages.js";
 import { createAdminTestConfig } from "./admin-fixtures.js";
 import type { ParsedIncomingMessage } from "../../src/types.js";
+import { BroadcastStormDetector } from "../../services/orchestration/broadcastStormDetector.js";
 
 vi.mock("../../src/requestLog.js", () => ({
   appendRequestLog: vi.fn(async () => undefined)
@@ -227,6 +229,136 @@ describe("runtime reply scheduling helpers", () => {
     }, new AbortController().signal);
 
     expect(result).toEqual({ delivered: false, skipped: "sender_not_allowed" });
+  });
+
+  it("drops persisted replies created before a broadcast storm cooldown ends", async () => {
+    let now = Date.parse("2026-07-14T00:00:00.000Z");
+    const detector = new BroadcastStormDetector({
+      enabled: true,
+      windowMinutes: 2,
+      replyThreshold: 1,
+      cooldownMinutes: 1
+    }, () => now);
+    const config = createAdminTestConfig("/tmp/sunabot-runtime-router-test");
+    const runtime = new SunaRuntime(config, {
+      attachmentService: {} as never,
+      replySuppression: detector
+    });
+    const incoming = groupIncoming("普通群消息", 171419991);
+    incoming.time = "2026-07-14T00:00:00.000Z";
+    const internals = runtime as unknown as {
+      replyDeliveryDraft(incoming: ParsedIncomingMessage, text: string, isAdmin: boolean): unknown;
+      deliverSessionOutbox(outbox: unknown, signal: AbortSignal): Promise<unknown>;
+    };
+    const draft = internals.replyDeliveryDraft(incoming, "不会发送", true) as Record<string, unknown>;
+    detector.observe({
+      messageKey: "storm-trigger",
+      groupId: 3003,
+      sourceAgentId: "plana",
+      targetAgentId: "arona"
+    });
+    now += 61_000;
+
+    const result = await internals.deliverSessionOutbox({
+      id: "outbox-before-broadcast-storm",
+      ...draft
+    }, new AbortController().signal);
+
+    expect(result).toEqual({ delivered: false, skipped: "reply_suppressed" });
+  });
+
+  it.each(["private", "user_group", "bot_group"] as const)(
+    "routes %s messages to record-only mode during a broadcast storm cooldown",
+    (scope) => {
+      const detector = new BroadcastStormDetector({
+        enabled: true,
+        windowMinutes: 2,
+        replyThreshold: 1,
+        cooldownMinutes: 1
+      });
+      const runtime = new SunaRuntime(createAdminTestConfig("/tmp/sunabot-runtime-router-test"), {
+        attachmentService: {} as never,
+        replySuppression: detector
+      });
+      const incoming = groupIncoming("普拉娜，回复我", 171419991);
+      incoming.scope = scope;
+      if (scope === "private") delete incoming.groupId;
+      detector.observe({
+        messageKey: "storm-trigger",
+        groupId: 3003,
+        sourceAgentId: "plana",
+        targetAgentId: "arona"
+      });
+
+      expect(runtime.resolveIncomingReplyRoute(incoming, true)).toBe("none");
+      runtime.close();
+    }
+  );
+
+  it("skips a persisted reply after the conversation reply gate closes and reopens", async () => {
+    const config = createAdminTestConfig("/tmp/sunabot-runtime-router-test");
+    const runtime = new SunaRuntime(config, { attachmentService: {} as never });
+    const incoming = groupIncoming("普通群消息", 171419991);
+    const internals = runtime as unknown as {
+      conversationRecords: Map<string, Record<string, unknown>>;
+      replyGates: { invalidateConversation(conversationId: string): void };
+      replyDeliveryDraft(incoming: ParsedIncomingMessage, text: string, isAdmin: boolean): unknown;
+      deliverSessionOutbox(outbox: unknown, signal: AbortSignal): Promise<unknown>;
+    };
+    internals.conversationRecords.set("group:3003", {
+      id: "group:3003",
+      scope: "user_group",
+      replyEnabled: true,
+      messages: []
+    });
+    const draft = internals.replyDeliveryDraft(incoming, "不会发送", false) as Record<string, unknown>;
+    internals.replyGates.invalidateConversation("group:3003");
+
+    const result = await internals.deliverSessionOutbox({
+      id: "outbox-closed-conversation",
+      ...draft
+    }, new AbortController().signal);
+
+    expect(result).toEqual({ delivered: false, skipped: "reply_gate_closed" });
+  });
+
+  it("skips a persisted no_reply poke after the scope reply gate closes and reopens", async () => {
+    const config = createAdminTestConfig("/tmp/sunabot-runtime-router-test");
+    config.onebot.autoReplyUserGroup = true;
+    const runtime = new SunaRuntime(config, { attachmentService: {} as never });
+    const incoming = groupIncoming("普通群消息", 171419991);
+    const internals = runtime as unknown as {
+      conversationRecords: Map<string, Record<string, unknown>>;
+      replyGates: {
+        capture(scope: "user_group", conversationId: string): ReturnType<SunaRuntime["replyGates"]["capture"]>;
+        invalidateScope(scope: "user_group"): void;
+      };
+      deliverSessionOutbox(outbox: unknown, signal: AbortSignal): Promise<unknown>;
+    };
+    internals.conversationRecords.set("group:3003", {
+      id: "group:3003",
+      scope: "user_group",
+      replyEnabled: true,
+      messages: []
+    });
+    const replyGate = internals.replyGates.capture("user_group", "group:3003");
+    internals.replyGates.invalidateScope("user_group");
+
+    const result = await internals.deliverSessionOutbox({
+      id: "outbox-closed-scope-poke",
+      kind: "onebot.poke",
+      payload: noReplyPokeEnvelope({
+        type: "no_reply_poke",
+        incoming,
+        logRunId: "run-closed-scope",
+        replyGate
+      }, {
+        conversationId: "group:3003",
+        correlationId: "run-closed-scope"
+      })
+    }, new AbortController().signal);
+
+    expect(result).toEqual({ delivered: false, skipped: "reply_gate_closed" });
   });
 
   it("preserves the default reply gate when only the group orchestrator setting changes", () => {
@@ -735,7 +867,7 @@ describe("runtime reply scheduling helpers", () => {
     expect(queueAmbientReply).toHaveBeenCalledOnce();
   });
 
-  it("restores an expired pending batch when OneBot reconnects", async () => {
+  it("restores an expired pending batch with its Agent and account routing when OneBot reconnects", async () => {
     vi.useFakeTimers();
     vi.setSystemTime("2026-07-10T00:02:00.000Z");
     const config = createAdminTestConfig("/tmp/sunabot-runtime-router-test");
@@ -744,7 +876,9 @@ describe("runtime reply scheduling helpers", () => {
     const runtime = new SunaRuntime(config, { attachmentService: {} as never });
     const queueAmbientReply = vi.fn();
     const record = {
-      id: "group:3003",
+      id: "account:secondary-a:group:3003",
+      agentId: "arona",
+      accountId: "secondary-a",
       scope: "user_group" as const,
       title: "群聊",
       userId: 2002,
@@ -774,9 +908,14 @@ describe("runtime reply scheduling helpers", () => {
 
     expect(queueAmbientReply).toHaveBeenCalledOnce();
     expect(queueAmbientReply.mock.calls[0]?.[0]).toMatchObject({
-      channelKey: "group:3003",
+      channelKey: "account:secondary-a:group:3003",
       captureSequence: 19,
-      incoming: { text: "待处理消息", groupId: 3003 }
+      incoming: {
+        agentId: "arona",
+        accountId: "secondary-a",
+        text: "待处理消息",
+        groupId: 3003
+      }
     });
   });
 
@@ -901,6 +1040,31 @@ describe("runtime reply scheduling helpers", () => {
     expect(controller.signal.aborted).toBe(true);
     expect(ambientController.signal.aborted).toBe(true);
     expect(internals.replyGates.isCurrent(stale)).toBe(false);
+  });
+
+  it("applies the memory compression threshold setting immediately after a hot reload", async () => {
+    const config = createAdminTestConfig("/tmp/sunabot-runtime-router-test");
+    const runtime = new SunaRuntime(config, { attachmentService: {} as never });
+    const scheduleMemoryDrain = vi.fn();
+    const claimNext = vi.fn(async () => undefined);
+    const internals = runtime as unknown as {
+      scheduleMemoryDrain: typeof scheduleMemoryDrain;
+      memoryScheduler: { claimNext: typeof claimNext };
+    };
+    internals.scheduleMemoryDrain = scheduleMemoryDrain;
+    internals.memoryScheduler.claimNext = claimNext;
+    const nextConfig = structuredClone(config);
+    nextConfig.bot.memory.messageThreshold = 17;
+
+    runtime.commitReload({
+      config: nextConfig,
+      persona: { id: "plana", name: "普拉娜", files: [], memoryItems: [], systemPrompt: "" }
+    });
+    await runtime.drainMemoryScheduler();
+
+    expect(scheduleMemoryDrain).toHaveBeenCalledOnce();
+    expect(claimNext).toHaveBeenCalledWith(17);
+    runtime.close();
   });
 });
 

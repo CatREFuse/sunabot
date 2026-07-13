@@ -37,6 +37,7 @@ export class SenderNameResolver {
   async hydrate(message: InboundMessageV1, gateway: Pick<MessagingPort, "resolveSender">) {
     const identity = await this.resolve({
       sender: message.sender,
+      accountId: message.accountId,
       userId: message.userId,
       groupId: message.groupId
     }, gateway);
@@ -45,7 +46,7 @@ export class SenderNameResolver {
   }
 
   async resolve(
-    input: { sender?: SenderIdentityV1; userId: number; groupId?: number },
+    input: { sender?: SenderIdentityV1; accountId?: string; userId: number; groupId?: number },
     gateway: Pick<MessagingPort, "resolveSender">
   ) {
     const current = senderIdentity(input.sender);
@@ -54,7 +55,10 @@ export class SenderNameResolver {
     const complete = Boolean(current.nickname) && (groupId == null || Boolean(current.card));
     if (complete || !userId) return current;
 
-    const key = groupId ? `group:${groupId}:${userId}` : `user:${userId}`;
+    const accountKey = input.accountId || "primary";
+    const key = groupId
+      ? `account:${accountKey}:group:${groupId}:${userId}`
+      : `account:${accountKey}:user:${userId}`;
     const now = Date.now();
     const cached = this.cache.get(key);
     if (cached && cached.expiresAt > now) {
@@ -65,7 +69,7 @@ export class SenderNameResolver {
 
     let request = this.pending.get(key);
     if (!request) {
-      request = this.load(userId, groupId, gateway, key);
+      request = this.load(input.accountId, userId, groupId, gateway, key);
       this.pending.set(key, request);
     }
 
@@ -73,9 +77,19 @@ export class SenderNameResolver {
     return identity;
   }
 
-  private async load(userId: number, groupId: number | undefined, gateway: Pick<MessagingPort, "resolveSender">, key: string) {
+  private async load(
+    accountId: string | undefined,
+    userId: number,
+    groupId: number | undefined,
+    gateway: Pick<MessagingPort, "resolveSender">,
+    key: string
+  ) {
     try {
-      const identity = senderIdentity(await gateway.resolveSender({ userId, groupId }));
+      const identity = senderIdentity(await gateway.resolveSender({
+        ...(accountId ? { accountId } : {}),
+        userId,
+        groupId
+      }));
       this.cache.set(key, {
         value: identity,
         expiresAt: Date.now() + (identity.displayName ? GROUP_MEMBER_NAME_CACHE_TTL_MS : GROUP_MEMBER_NAME_FAILURE_TTL_MS)
@@ -88,6 +102,7 @@ export class SenderNameResolver {
         expiresAt: Date.now() + GROUP_MEMBER_NAME_FAILURE_TTL_MS
       });
       console.warn("[runtime] resolve sender identity failed; using stored identity", {
+        accountId,
         groupId,
         userId,
         error

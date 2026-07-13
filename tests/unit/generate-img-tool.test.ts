@@ -15,7 +15,9 @@ describe("generate_img quality", () => {
       size: null,
       resolution: null,
       quality: "high",
-      referenceImageUrls: null
+      referenceImageUrls: null,
+      referenceMediaHandles: null,
+      referenceImageSource: "none"
     }, botConfig("medium"), generateImage);
 
     expect(generateImage).toHaveBeenCalledWith(
@@ -41,6 +43,69 @@ describe("generate_img quality", () => {
 
     expect(generateImage.mock.calls[0]?.[2]).toBe("low");
     expect(result).toMatchObject({ ok: true, quality: "low" });
+  });
+
+  it("prioritizes exact media handles before explicit URLs and the selected source", async () => {
+    const generateImage = vi.fn(async () => ({
+      url: "/generated-images/test.png",
+      filePath: "/tmp/test.png"
+    }));
+
+    const result = await runGenerateImg({
+      prompt: "continue the previous edit",
+      size: null,
+      resolution: "1K",
+      quality: "high",
+      referenceImageUrls: ["https://example.test/explicit.png"],
+      referenceMediaHandles: ["message:generated-1:image:0"],
+      referenceImageSource: "previous_output"
+    }, botConfig("high"), generateImage, {
+      imageReferences: {
+        currentImageUrls: ["https://example.test/current.png"],
+        previousOutputImageUrls: ["/generated-images/previous.png"],
+        historyImageUrls: ["/generated-images/previous.png", "https://example.test/original.png"],
+        mediaByHandle: {
+          "message:generated-1:image:0": "/generated-images/handled.png"
+        }
+      }
+    });
+
+    expect(generateImage.mock.calls[0]?.[3]).toEqual([
+      "/generated-images/handled.png",
+      "https://example.test/explicit.png",
+      "/generated-images/previous.png"
+    ]);
+    expect(result).toMatchObject({
+      referenceImageSource: "previous_output",
+      referenceMediaHandleCount: 1,
+      resolvedReferenceMediaHandleCount: 1,
+      referenceImageCount: 3
+    });
+  });
+
+  it("honors the model choice to generate without automatic reference images", async () => {
+    const generateImage = vi.fn(async () => ({
+      url: "/generated-images/test.png",
+      filePath: "/tmp/test.png"
+    }));
+
+    await runGenerateImg({
+      prompt: "new image",
+      size: null,
+      resolution: "1K",
+      quality: "high",
+      referenceImageUrls: null,
+      referenceMediaHandles: null,
+      referenceImageSource: "none"
+    }, botConfig("high"), generateImage, {
+      imageReferences: {
+        currentImageUrls: ["https://example.test/current.png"],
+        previousOutputImageUrls: ["/generated-images/previous.png"],
+        historyImageUrls: ["https://example.test/history.png"]
+      }
+    });
+
+    expect(generateImage.mock.calls[0]?.[3]).toEqual([]);
   });
 });
 

@@ -38,6 +38,7 @@ describe("PromptsView", () => {
     const first = deferred<ReturnType<typeof file>>();
     const second = deferred<ReturnType<typeof file>>();
     apiRequest.mockImplementation((path: string) => {
+      if (path === "/api/agents/plana/prompt-settings") return Promise.resolve({ overrideSystem: false });
       if (path === "/api/agent-files") return Promise.resolve({ files: [] });
       if (path.endsWith("persona.soul")) return first.promise;
       if (path.endsWith("persona.user")) return second.promise;
@@ -46,14 +47,14 @@ describe("PromptsView", () => {
 
     const router = createRouter({
       history: createMemoryHistory(),
-      routes: [{ path: "/prompts/:fileId?", component: PromptsView }]
+      routes: [{ path: "/agent-prompts/:fileId?", component: PromptsView }]
     });
-    await router.push("/prompts/persona.soul");
+    await router.push("/agent-prompts/persona.soul");
     await router.isReady();
     const wrapper = mount(RouterView, { global: { plugins: [router] }, attachTo: document.body });
     await flushPromises();
 
-    await router.push("/prompts/persona.user");
+    await router.push("/agent-prompts/persona.user");
     await flushPromises();
     second.resolve(file("persona.user", "new route content"));
     await flushPromises();
@@ -62,6 +63,37 @@ describe("PromptsView", () => {
 
     expect((wrapper.get("textarea").element as HTMLTextAreaElement).value).toBe("new route content");
     expect(wrapper.text()).not.toContain("stale route content");
+    wrapper.unmount();
+  });
+
+  it("loads the selfie prompt through the Agent resource API", async () => {
+    apiRequest.mockImplementation((path: string) => {
+      if (path === "/api/agents/plana/prompt-settings") return Promise.resolve({ overrideSystem: false });
+      if (path === "/api/agent-files") return Promise.resolve({ files: [] });
+      if (path === "/api/agent-files/image.selfie-rewrite") {
+        return Promise.resolve({
+          ...file("image.selfie-rewrite", `${JSON.stringify({
+            messages: [{ role: "system", content: "自拍提示词" }],
+            response_format: { type: "text" }
+          }, null, 2)}\n`),
+          kind: "final",
+          fileName: "selfie_prompt_rewrite.json"
+        });
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    });
+
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: "/agent-prompts/:fileId?", component: PromptsView }]
+    });
+    await router.push("/agent-prompts/image.selfie-rewrite");
+    await router.isReady();
+    const wrapper = mount(RouterView, { global: { plugins: [router] }, attachTo: document.body });
+    await flushPromises();
+
+    expect(apiRequest).toHaveBeenCalledWith("/api/agent-files/image.selfie-rewrite");
+    expect((wrapper.get("textarea").element as HTMLTextAreaElement).value).toBe("自拍提示词");
     wrapper.unmount();
   });
 });

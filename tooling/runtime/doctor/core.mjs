@@ -25,6 +25,13 @@ export function evaluateRuntimeSnapshot(snapshot) {
   const databases = (snapshot.databases ?? []).map(publicDatabase);
   checkDatabases(databases, expectation, addError);
 
+  for (const error of snapshot.configurationErrors ?? []) {
+    addError(
+      safeCode(error?.code, "RUNTIME_CONFIGURATION_INVALID"),
+      safeString(error?.message) ?? "runtime 配置无效。"
+    );
+  }
+
   const listenerOwners = uniqueProcesses(snapshot.listener?.owners ?? []).map(publicProcess);
   const listenerProxies = uniqueProcesses(snapshot.listener?.proxies ?? []).map(publicProcess);
   const listener = {

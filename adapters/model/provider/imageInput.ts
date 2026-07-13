@@ -39,12 +39,22 @@ export function countInputImages(content: Array<Record<string, unknown>>) {
   return content.filter((item) => item.type === "input_image").length;
 }
 
-export async function toResponsesInputMessage(message: ChatMessage) {
+export interface ResponsesInputMessageOptions {
+  promptCacheBreakpoint?: boolean;
+}
+
+export async function toResponsesInputMessage(
+  message: ChatMessage,
+  options: ResponsesInputMessageOptions = {}
+) {
   const textType = message.role === "assistant" ? "output_text" : "input_text";
-  const content = [
+  const content: Array<Record<string, unknown>> = [
     {
       type: textType,
-      text: message.content
+      text: message.content,
+      ...(options.promptCacheBreakpoint && textType === "input_text"
+        ? { prompt_cache_breakpoint: { mode: "explicit" } }
+        : {})
     }
   ];
 
@@ -55,7 +65,7 @@ export async function toResponsesInputMessage(message: ChatMessage) {
       content.push({
         type: "input_image",
         image_url: resolvedImageUrl
-      } as never);
+      });
     }
     for (const localImagePath of (message.localImagePaths ?? []).slice(0, MAX_ATTACHMENT_VISUAL_PAGES)) {
       const resolvedImageUrl = await resolveLocalInputImage(localImagePath);
@@ -63,7 +73,7 @@ export async function toResponsesInputMessage(message: ChatMessage) {
       content.push({
         type: "input_image",
         image_url: resolvedImageUrl
-      } as never);
+      });
     }
   }
 
@@ -91,14 +101,30 @@ export async function toChatCompletionMessage(message: ChatMessage) {
 
 export async function resolveLocalInputImage(filePath: string) {
   const cacheRoot = getWorkspacePath(WORKSPACE_LAYOUT.attachmentCache);
+  return resolveBoundedLocalInputImage(filePath, cacheRoot);
+}
+
+async function resolveGeneratedInputImage(imageUrl: string, generatedImageRoot?: string) {
+  const relativePath = generatedImageRelativePath(imageUrl);
+  if (!relativePath) return null;
+  const root = generatedImageRoot ?? getWorkspacePath(WORKSPACE_LAYOUT.mediaImages);
+  return resolveBoundedLocalInputImage(path.resolve(root, relativePath), root);
+}
+
+async function resolveBoundedLocalInputImage(filePath: string, rootPath: string) {
   try {
+    const resolvedRoot = path.resolve(rootPath);
+    const resolvedFile = path.resolve(filePath);
+    if (!isPathInside(resolvedRoot, resolvedFile)) return null;
     const sourceStats = await fs.promises.lstat(filePath);
     if (sourceStats.isSymbolicLink() || !sourceStats.isFile()) return null;
     const [realRoot, realFile] = await Promise.all([
-      fs.promises.realpath(cacheRoot),
+      fs.promises.realpath(resolvedRoot),
       fs.promises.realpath(filePath)
     ]);
     if (!isPathInside(realRoot, realFile)) return null;
+    const relativePath = path.relative(resolvedRoot, resolvedFile);
+    if (realFile !== path.resolve(realRoot, relativePath)) return null;
     const normalized = await normalizeAttachmentImage(realFile, {
       maxBytes: MAX_INPUT_IMAGE_BYTES
     });
@@ -117,13 +143,19 @@ function isPathInside(rootPath: string, candidatePath: string) {
   );
 }
 
-interface ResolveInputImageOptions {
+export interface ResolveInputImageOptions {
   source?: string;
   logFailures?: boolean;
+  generatedImageRoot?: string;
 }
 
-async function resolveInputImageUrl(imageUrl: string, options: ResolveInputImageOptions = {}) {
+export async function resolveInputImageUrl(imageUrl: string, options: ResolveInputImageOptions = {}) {
   if (/^data:image\/[a-z0-9.+-]+;base64,/i.test(imageUrl)) return imageUrl;
+  if (imageUrl.startsWith("/generated-images/")) {
+    const resolved = await resolveGeneratedInputImage(imageUrl, options.generatedImageRoot);
+    if (!resolved) await logInputImageResolveFailure(imageUrl, "generated_image_unavailable", options);
+    return resolved;
+  }
   if (!/^https?:\/\//i.test(imageUrl)) {
     await logInputImageResolveFailure(imageUrl, "unsupported_url", options);
     return null;
@@ -194,6 +226,41 @@ async function resolveInputImageUrl(imageUrl: string, options: ResolveInputImage
     });
     return null;
   }
+}
+
+function generatedImageRelativePath(imageUrl: string) {
+  const prefix = "/generated-images/";
+  if (!imageUrl.startsWith(prefix) || imageUrl.includes("?") || imageUrl.includes("#")) return undefined;
+  const encodedSegments = imageUrl.slice(prefix.length).split("/");
+  let segments: string[];
+  try {
+    segments = encodedSegments.map((segment) => decodeURIComponent(segment));
+  } catch {
+    return undefined;
+  }
+  if (segments.length === 1 && isSafeGeneratedImageFileName(segments[0] ?? "")) {
+    return segments[0];
+  }
+  if (
+    segments.length === 3 &&
+    segments[0] === "agents" &&
+    isSafeAgentId(segments[1] ?? "") &&
+    isSafeGeneratedImageFileName(segments[2] ?? "")
+  ) {
+    return path.join("agents", segments[1]!, segments[2]!);
+  }
+  return undefined;
+}
+
+function isSafeAgentId(value: string) {
+  return /^[a-z][a-z0-9-]{1,31}$/.test(value);
+}
+
+function isSafeGeneratedImageFileName(value: string) {
+  return /^[A-Za-z0-9][A-Za-z0-9._-]*\.png$/i.test(value) &&
+    path.basename(value) === value &&
+    !value.includes("/") &&
+    !value.includes("\\");
 }
 
 interface CompressedInputImage {

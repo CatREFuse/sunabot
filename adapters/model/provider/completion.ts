@@ -12,7 +12,11 @@ import {
   responseFormatFields,
   toChatCompletionTool
 } from "./promptMapping.js";
-import { promptCacheKey } from "./promptCaching.js";
+import {
+  promptCacheKey,
+  supportsExplicitPromptCaching,
+  supportsStablePrefixCaching
+} from "./promptCaching.js";
 import {
   emitIntermediateAssistantText,
   extractFunctionCalls,
@@ -56,10 +60,20 @@ async function completeOpenAIResponses(
   options: ProviderCompleteOptions
 ): Promise<ProviderTurnResult> {
   const client = context.createResponsesClient({ maxRetries: 0 });
-  const input: Array<Record<string, unknown>> = await Promise.all(request.messages.map(toResponsesInputMessage));
   const tools = context.toolExecutor.resolveDefinitions(options, request.tools);
   const toolNames = tools.map(readToolName);
-  const cacheKey = promptCacheKey(context.provider, options.logContext, toolNames);
+  const explicitCache = supportsExplicitPromptCaching(context.provider);
+  const instructionBoundary = leadingInstructionBoundary(request.messages);
+  const input: Array<Record<string, unknown>> = await Promise.all(request.messages.map((message, index) => (
+    toResponsesInputMessage(message, {
+      promptCacheBreakpoint: explicitCache && index === instructionBoundary
+    })
+  )));
+  const cacheKey = promptCacheKey(context.provider, options.logContext, {
+    staticPrefix: request.messages.slice(0, Math.max(0, instructionBoundary + 1)),
+    tools,
+    responseFormat: request.response_format
+  });
   const requestFields = promptRequestFields(request);
   const maxToolCalls = resolveMaxToolCalls(options);
   let toolCallCount = 0;
@@ -101,6 +115,8 @@ async function completeOpenAIResponses(
     toolCallCount = claimToolCalls(toolCallCount, toolCalls.length, maxToolCalls);
     const deferred = context.toolExecutor.deferredTurn(toolCalls, options, tools);
     if (deferred) return deferred;
+    const noReply = context.toolExecutor.noReplyTurn(toolCalls, options, tools);
+    if (noReply) return noReply;
     if (!toolCalls.length) {
       const text = extractProviderText(response);
       if (!text) throw new Error("模型没有返回可发送内容。");
@@ -127,11 +143,24 @@ async function completeCodexResponses(
     .filter((message) => message.role === "system")
     .map((message) => message.content)
     .join("\n\n");
-  const input: Array<Record<string, unknown>> = await Promise.all(
-    request.messages.filter((message) => message.role !== "system").map(toResponsesInputMessage)
+  const conversationInput: Array<Record<string, unknown>> = await Promise.all(
+    request.messages
+      .filter((message) => message.role !== "system")
+      .map((message) => toResponsesInputMessage(message))
   );
   const toolNames = tools.map(readToolName);
-  const cacheKey = promptCacheKey(context.provider, options.logContext, toolNames);
+  const stableInputCache = supportsStablePrefixCaching(context.provider) && systemPrompt.trim().length > 0;
+  const staticSystemInput = stableInputCache
+    ? await toResponsesInputMessage(
+      { role: "developer", content: systemPrompt }
+    )
+    : undefined;
+  const input = staticSystemInput ? [staticSystemInput, ...conversationInput] : conversationInput;
+  const cacheKey = promptCacheKey(context.provider, options.logContext, {
+    staticPrefix: systemPrompt,
+    tools,
+    responseFormat: request.response_format
+  });
   const requestFields = promptRequestFields(request);
   const maxToolCalls = resolveMaxToolCalls(options);
   let toolCallCount = 0;
@@ -149,7 +178,7 @@ async function completeCodexResponses(
       ...responseFormatFields(request.response_format, requestFields.text),
       prompt_cache_key: cacheKey,
       input,
-      instructions: systemPrompt,
+      instructions: stableInputCache ? undefined : systemPrompt,
       tools: tools.length ? tools : undefined,
       parallel_tool_calls: tools.length ? requestFields.parallel_tool_calls ?? false : undefined
     };
@@ -188,15 +217,16 @@ async function completeCodexResponses(
     const payload = parseResponsesSsePayload(text) ?? parseJson(text);
     if (!response.ok) {
       const error = payload ?? parseJson(text);
+      const detail = error?.error?.message ?? error?.detail ?? `Codex request failed: ${response.status}`;
       await context.logger.response("codex.complete", {
         ok: false,
         status: response.status,
-        error: error?.error?.message ?? error?.detail ?? `Codex request failed: ${response.status}`,
+        error: detail,
         summary: summarizeResponsesPayload(payload, text),
         willRetry: false,
         retryDelayMs: 0
       }, responseMetadata);
-      throw new Error(error?.error?.message ?? error?.detail ?? `Codex request failed: ${response.status}`);
+      throw new Error(detail);
     }
     await context.logger.response("codex.complete", {
       ok: true,
@@ -215,11 +245,23 @@ async function completeCodexResponses(
     const streamText = extractResponsesTextFromSse(text);
     const deferred = context.toolExecutor.deferredTurn(toolCalls, options, tools);
     if (deferred) return deferred;
+    const noReply = context.toolExecutor.noReplyTurn(toolCalls, options, tools);
+    if (noReply) return noReply;
     await emitIntermediateAssistantText(payload, options, streamText);
     input.push(...extractResponseOutput(payload), ...(await context.toolExecutor.execute(toolCalls, options, tools)));
   }
 
   throw toolCallLimitError(maxToolCalls);
+}
+
+function leadingInstructionBoundary(messages: RenderedPromptRequest["messages"]) {
+  let boundary = -1;
+  for (let index = 0; index < messages.length; index += 1) {
+    const role = messages[index]?.role;
+    if (role !== "system" && role !== "developer") break;
+    boundary = index;
+  }
+  return boundary;
 }
 
 async function completeChatCompletions(
@@ -288,6 +330,8 @@ async function completeChatCompletions(
 
     const deferred = context.toolExecutor.deferredTurn(calls, options, definitions);
     if (deferred) return deferred;
+    const noReply = context.toolExecutor.noReplyTurn(calls, options, definitions);
+    if (noReply) return noReply;
     if (choice.content?.trim() && options.onAssistantText) await options.onAssistantText(choice.content.trim(), "text");
     messages.push({
       role: "assistant",

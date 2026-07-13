@@ -10,9 +10,36 @@ const runtime = vi.hoisted(() => ({
   refresh: vi.fn().mockResolvedValue(undefined)
 }));
 const apiRequest = vi.hoisted(() => vi.fn());
+const agentsState = vi.hoisted(() => ({
+  agents: { value: [{
+    id: "plana",
+    name: "普拉娜",
+    enabled: true,
+    workspace: "workspace/business/agents/plana",
+    createdAt: "2026-07-10T00:00:00.000Z",
+    updatedAt: "2026-07-10T00:00:00.000Z",
+    accounts: [{
+      id: "primary",
+      agentId: "plana",
+      label: "主账号",
+      enabled: true,
+      webuiPort: 6099,
+      createdAt: "2026-07-10T00:00:00.000Z",
+      updatedAt: "2026-07-10T00:00:00.000Z"
+    }]
+  }] },
+  currentAgent: { value: null as null | {
+    id: string;
+    name: string;
+    accounts: Array<{ id: string; agentId: string; label: string; qqId?: string }>;
+  } },
+  load: vi.fn().mockResolvedValue(undefined)
+}));
+agentsState.currentAgent.value = agentsState.agents.value[0];
 
 vi.mock("../composables/useRuntimeStatus", () => ({ useRuntimeStatus: () => runtime }));
 vi.mock("../composables/useAdminApi", () => ({ apiRequest }));
+vi.mock("../composables/useAgents", () => ({ useAgents: () => agentsState }));
 
 describe("OverviewView", () => {
   beforeEach(() => {
@@ -20,7 +47,7 @@ describe("OverviewView", () => {
     runtime.error.value = "状态服务不可用";
     runtime.refresh.mockClear();
     apiRequest.mockImplementation((path: string) => {
-      if (path === "/api/onebot/qq-login/status") return Promise.resolve({ connected: false, online: false });
+      if (path === "/api/agents/plana/accounts/primary/login/status") return Promise.resolve({ connected: false, online: false });
       if (path === "/api/onebot/login-info") return Promise.resolve({ connected: false });
       if (path === "/api/conversations") return Promise.resolve({ conversations: [] });
       if (path === "/api/images") return Promise.resolve({ images: [] });
@@ -43,7 +70,7 @@ describe("OverviewView", () => {
     };
     runtime.error.value = "";
     apiRequest.mockImplementation((path: string) => {
-      if (path === "/api/onebot/qq-login/status") return Promise.resolve({ connected: true, online: false, error: "登录查询失败" });
+      if (path === "/api/agents/plana/accounts/primary/login/status") return Promise.resolve({ connected: true, online: false, error: "登录查询失败" });
       if (path === "/api/onebot/login-info") return Promise.resolve({ connected: true, error: "登录查询失败" });
       if (path === "/api/conversations") return Promise.resolve({ conversations: [] });
       if (path === "/api/images") return Promise.resolve({ images: [] });

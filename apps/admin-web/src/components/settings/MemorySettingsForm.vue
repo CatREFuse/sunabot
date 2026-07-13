@@ -30,17 +30,17 @@ defineProps<{ models: readonly ModelCatalogItem[] }>();
         <label class="field">
           <span class="field-label">写入压缩</span>
           <input v-model.trim="draft.workMemoryCompressInPrompt" class="control" type="text">
-          <RouterLink class="font-mono text-[11px] text-[rgb(var(--color-interactive))]" to="/prompts/memory.compress-in">编辑正文 →</RouterLink>
+          <RouterLink class="font-mono text-[11px] text-[rgb(var(--color-interactive))]" to="/system-prompts/memory.compress-in">编辑正文 →</RouterLink>
         </label>
         <label class="field">
           <span class="field-label">归档压缩</span>
           <input v-model.trim="draft.workMemoryCompressOutPrompt" class="control" type="text">
-          <RouterLink class="font-mono text-[11px] text-[rgb(var(--color-interactive))]" to="/prompts/memory.compress-out">编辑正文 →</RouterLink>
+          <RouterLink class="font-mono text-[11px] text-[rgb(var(--color-interactive))]" to="/system-prompts/memory.compress-out">编辑正文 →</RouterLink>
         </label>
         <label class="field">
           <span class="field-label">用户画像</span>
           <input v-model.trim="draft.userProfilePrompt" class="control" type="text">
-          <RouterLink class="font-mono text-[11px] text-[rgb(var(--color-interactive))]" to="/prompts/memory.user-profile">编辑正文 →</RouterLink>
+          <RouterLink class="font-mono text-[11px] text-[rgb(var(--color-interactive))]" to="/system-prompts/memory.user-profile">编辑正文 →</RouterLink>
         </label>
       </div>
     </div>

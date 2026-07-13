@@ -29,6 +29,7 @@ import {
   type AssistantReplyOutboxEnvelope,
   type AssistantReplyOutboxPayload,
   type AsyncToolCompletionPayload,
+  type NoReplyPokeOutboxEnvelope,
   type RuntimeIncomingReplyEventPayload
 } from "../../packages/contracts/session/runtimeMessages.js";
 import { applicationDataStore, sqliteMemoryPersistence } from "../../adapters/sqlite/applicationDataStore.js";
@@ -91,6 +92,7 @@ import { cleanupPersistedCodexProcess, CodexToolRunner } from "../../adapters/co
 import { isTrustedQqFakeIp } from "../../adapters/onebot/qqMedia.js";
 import type { CodexRunner } from "../../packages/contracts/tools/codex.js";
 import type { RuntimeToolCapabilityResolver } from "../../services/tools/bashCapability.js";
+import type { ReplySuppression } from "../../services/orchestration/broadcastStormDetector.js";
 import {
   OutboxDisconnectedError,
   SessionCoordinator,
@@ -127,17 +129,21 @@ export const MAX_DEDUPE_KEYS = 20_000;
 export const DEFAULT_ADMIN_NAME = "猫老师";
 export const GROUP_CHAT_SUMMARY_COMMAND = "/总结群聊";
 export const CONVERSATION_REPLY_PROMPT_FILE = "conversation_reply.json";
+export const PRIVATE_CONVERSATION_REPLY_PROMPT_FILE = "conversation_private_reply.json";
+export const GROUP_CONVERSATION_REPLY_PROMPT_FILE = "conversation_group_reply.json";
 export const SELFIE_PROMPT_FILE = "selfie_prompt_rewrite.json";
 export const GROUP_CHAT_SUMMARY_PROMPT_FILE = "group_chat_summary.json";
 export const ADMIN_PERSONA_FILES: Readonly<Record<string, string>> = {
   "persona.agents": "AGENTS.md",
   "persona.soul": "SOUL.md",
   "persona.preference": "PREFERENCE.md",
+  "persona.dialogue_style_examples": "DIALOGUE_STYLE_EXAMPLES.md",
   "persona.user": "USER.md",
   "persona.relation": "RELATION.md"
 };
 export const ADMIN_RUNTIME_PROMPT_DEFAULTS: Readonly<Record<string, string>> = {
-  "conversation.reply": defaultFinalPromptContent("conversation.reply"),
+  "conversation.private-reply": defaultFinalPromptContent("conversation.private-reply"),
+  "conversation.group-reply": defaultFinalPromptContent("conversation.group-reply"),
   "memory.compress-in": defaultFinalPromptContent("memory.compress-in"),
   "memory.compress-out": defaultFinalPromptContent("memory.compress-out"),
   "memory.user-profile": defaultFinalPromptContent("memory.user-profile"),
@@ -206,14 +212,21 @@ export interface ReplyDeliveryDraft {
   payload: AssistantReplyOutboxEnvelope;
   dedupeKey?: string;
 }
+export interface NoReplyPokeDeliveryDraft {
+  kind: "onebot.poke";
+  payload: NoReplyPokeOutboxEnvelope;
+  dedupeKey?: string;
+}
 export interface ReplyDelivery {
-  outbox: ReplyDeliveryDraft[];
+  outbox: Array<ReplyDeliveryDraft | NoReplyPokeDeliveryDraft>;
+  terminalStatus?: "no_reply";
 }
 export interface DeferredCodexTurn {
   deferred: ProviderDeferredTurn;
   originalRequest: {
     incoming: ParsedIncomingMessage;
     captureSequence?: number;
+    replyGate?: ReplyGateSnapshot;
   };
   acknowledgement: ReplyDeliveryDraft;
 }
@@ -245,4 +258,5 @@ export interface SunaRuntimeOptions {
   sessionStore?: SessionStore;
   codexRunner?: CodexRunner;
   resolveToolCapabilities?: RuntimeToolCapabilityResolver;
+  replySuppression?: ReplySuppression;
 }

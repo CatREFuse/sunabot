@@ -2,6 +2,22 @@ import { ImageResult, BotConfig, ImageQuality } from "../../src/types.js";
 import type { ProviderLogContext } from "../../packages/contracts/model/modelGateway.js";
 
 export const GENERATE_IMG_TOOL_NAME = "generate_img";
+export const GENERATE_IMG_REFERENCE_SOURCES = [
+  "none",
+  "current",
+  "previous_output",
+  "history",
+  "current_and_history"
+] as const;
+export type GenerateImgReferenceSource = typeof GENERATE_IMG_REFERENCE_SOURCES[number];
+
+export interface GenerateImgReferenceContext {
+  currentImageUrls?: readonly string[];
+  previousOutputImageUrls?: readonly string[];
+  historyImageUrls?: readonly string[];
+  mediaByHandle?: Readonly<Record<string, string>>;
+}
+
 export type ImageResolution = BotConfig["tools"]["generateImg"]["resolution"];
 
 export interface GenerateImgInput {
@@ -10,6 +26,8 @@ export interface GenerateImgInput {
   resolution?: unknown;
   quality?: unknown;
   referenceImageUrls?: unknown;
+  referenceMediaHandles?: unknown;
+  referenceImageSource?: unknown;
 }
 
 export type GenerateImageRunner = (
@@ -22,13 +40,21 @@ export type GenerateImageRunner = (
 
 export interface GenerateImgRunOptions {
   referenceImageUrls?: string[];
+  imageReferences?: GenerateImgReferenceContext;
   logContext?: ProviderLogContext;
+}
+
+export interface ResolvedGenerateImgReferences {
+  referenceImageSource: GenerateImgReferenceSource;
+  referenceMediaHandles: string[];
+  resolvedHandleImageUrls: string[];
+  referenceImageUrls: string[];
 }
 
 export const generateImgTool = {
   type: "function",
   name: GENERATE_IMG_TOOL_NAME,
-  description: "Generate or edit an image from a prompt. Default clarity is 1K. Use resolution 2K or 4K only when the user asks for higher resolution, clearer output, wallpaper, poster, print, or explicitly says 2K/4K. Current and quoted message images are supplied as reference images when available. Returns the saved image metadata. The system sends generated images separately; do not print local file paths or CQ codes.",
+  description: "Generate or edit an image from a prompt. The model must decide every image parameter and whether reference media is needed. Prefer exact historical media handles shown in conversation history; use referenceImageSource as a fallback when no exact handle is suitable. Use previous_output for edits or retries of the last generated image, history for earlier same-user media, current for current or quoted media, current_and_history to combine them, and none for a fresh image. Resolved historical media handles have highest priority. Default clarity is 1K. Use resolution 2K or 4K only when the user asks for higher resolution, clearer output, wallpaper, poster, print, or explicitly says 2K/4K. Returns the saved image metadata. The system sends generated images separately; do not print local file paths or CQ codes.",
   parameters: {
     type: "object",
     additionalProperties: false,
@@ -66,10 +92,29 @@ export const generateImgTool = {
         type: ["array", "null"],
         items: { type: "string" },
         maxItems: 4,
-        description: "Reference image URLs to use. Use null to use the current message images."
+        description: "Exact reference image URLs explicitly present in the request. Use null when selecting conversation media through referenceMediaHandles or referenceImageSource. Do not invent URLs."
+      },
+      referenceMediaHandles: {
+        type: ["array", "null"],
+        items: { type: "string" },
+        maxItems: 4,
+        description: "Exact historical media handles shown in conversation history, such as message:<message-id>:image:<index>. Prefer these handles when the user refers to a specific earlier image. Use null when no exact historical image is needed. Do not invent handles."
+      },
+      referenceImageSource: {
+        type: "string",
+        enum: GENERATE_IMG_REFERENCE_SOURCES,
+        description: "Fallback reference source chosen by the model: none uses no automatic media; current uses current and quoted images; previous_output uses the same user's latest generated output; history uses recent same-user conversation media; current_and_history combines current and recent same-user media."
       }
     },
-    required: ["prompt", "size", "resolution", "quality", "referenceImageUrls"]
+    required: [
+      "prompt",
+      "size",
+      "resolution",
+      "quality",
+      "referenceImageUrls",
+      "referenceMediaHandles",
+      "referenceImageSource"
+    ]
   },
   strict: true
 };
@@ -95,9 +140,8 @@ export async function runGenerateImg(
   const resolution = normalizeImageResolution(input.resolution, botConfig.tools.generateImg.resolution);
   const size = normalizeImageSize(input.size, botConfig.tools.generateImg.size, resolution);
   const quality = normalizeImageQuality(input.quality, botConfig.tools.generateImg.quality);
-  const explicitReferenceImageUrls = normalizeReferenceImageUrls(input.referenceImageUrls);
-  const referenceImageUrls = explicitReferenceImageUrls.length ? explicitReferenceImageUrls : normalizeReferenceImageUrls(options.referenceImageUrls);
-  const image = await generateImage(prompt, size, quality, referenceImageUrls, options.logContext);
+  const references = resolveGenerateImgReferences(input, options);
+  const image = await generateImage(prompt, size, quality, references.referenceImageUrls, options.logContext);
   return {
     ok: true,
     provider: "codex-image-gen",
@@ -105,8 +149,43 @@ export async function runGenerateImg(
     size,
     resolution,
     quality,
-    referenceImageCount: referenceImageUrls.length,
+    referenceImageSource: references.referenceImageSource,
+    referenceMediaHandleCount: references.referenceMediaHandles.length,
+    resolvedReferenceMediaHandleCount: references.resolvedHandleImageUrls.length,
+    referenceImageCount: references.referenceImageUrls.length,
     image
+  };
+}
+
+export function resolveGenerateImgReferences(
+  input: Pick<GenerateImgInput, "referenceImageUrls" | "referenceMediaHandles" | "referenceImageSource">,
+  options: GenerateImgRunOptions = {}
+): ResolvedGenerateImgReferences {
+  const explicitReferenceImageUrls = normalizeReferenceImageUrls(input.referenceImageUrls);
+  const referenceMediaHandles = normalizeReferenceMediaHandles(input.referenceMediaHandles);
+  const referenceImageSource = normalizeReferenceImageSource(input.referenceImageSource);
+  const configuredReferences = options.imageReferences ?? {
+    currentImageUrls: options.referenceImageUrls
+  };
+  const imageReferences = input.referenceImageSource == null && options.referenceImageUrls?.length
+    ? { ...configuredReferences, currentImageUrls: options.referenceImageUrls }
+    : configuredReferences;
+  const resolvedHandleImageUrls = normalizeReferenceImageUrls(referenceMediaHandles
+    .map((handle) => imageReferences.mediaByHandle?.[handle]));
+  const automaticReferenceImageUrls = selectedAutomaticReferenceImageUrls(
+    referenceImageSource,
+    imageReferences,
+    input.referenceImageSource == null && explicitReferenceImageUrls.length > 0
+  );
+  return {
+    referenceImageSource,
+    referenceMediaHandles,
+    resolvedHandleImageUrls,
+    referenceImageUrls: normalizeReferenceImageUrls([
+      ...resolvedHandleImageUrls,
+      ...explicitReferenceImageUrls,
+      ...automaticReferenceImageUrls
+    ])
   };
 }
 
@@ -162,4 +241,39 @@ function normalizeReferenceImageUrls(value: unknown) {
     .map((item) => String(item ?? "").trim())
     .filter(Boolean))]
     .slice(0, 4);
+}
+
+function normalizeReferenceMediaHandles(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value
+    .map((item) => String(item ?? "").trim())
+    .filter(Boolean))]
+    .slice(0, 4);
+}
+
+function normalizeReferenceImageSource(value: unknown): GenerateImgReferenceSource {
+  if ((GENERATE_IMG_REFERENCE_SOURCES as readonly unknown[]).includes(value)) {
+    return value as GenerateImgReferenceSource;
+  }
+  return value == null ? "current" : "none";
+}
+
+function selectedAutomaticReferenceImageUrls(
+  source: GenerateImgReferenceSource,
+  references: GenerateImgReferenceContext,
+  preserveLegacyExplicitOverride: boolean
+) {
+  if (preserveLegacyExplicitOverride) return [];
+  const current = normalizeReferenceImageUrls(references.currentImageUrls);
+  const previousOutput = normalizeReferenceImageUrls(references.previousOutputImageUrls);
+  const history = normalizeReferenceImageUrls(references.historyImageUrls);
+  if (source === "current") return current;
+  if (source === "previous_output") return previousOutput;
+  if (source === "history") return history;
+  if (source === "current_and_history") return normalizeReferenceImageUrls([...current, ...history]);
+  return [];
+}
+
+export function generateImgMediaHandle(messageId: string, imageIndex: number) {
+  return `message:${encodeURIComponent(messageId)}:image:${imageIndex}`;
 }

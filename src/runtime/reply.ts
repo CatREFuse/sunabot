@@ -19,7 +19,7 @@ import type {
   ParsedAttachment
 } from "../../services/media/attachments/types.js";
 import { CommandRouter, type CommandMatch } from "../../services/messaging/commandRouter.js";
-import { isReplySenderAllowed } from "../../services/messaging/replySenderPolicy.js";
+import { isAdminSender } from "../../services/messaging/replySenderPolicy.js";
 import { getDefaultProvider, getRootDir, getWorkspacePath, resolveProjectPath } from "../config.js";
 import {
   assistantReplyEnvelope,
@@ -27,6 +27,7 @@ import {
   decodeIncomingReply,
   decodeToolCompletion,
   incomingReplyEnvelope,
+  noReplyPokeEnvelope,
   type AssistantReplyOutboxEnvelope,
   type AssistantReplyOutboxPayload,
   type AsyncToolCompletionPayload,
@@ -37,6 +38,7 @@ import { configureMemoryPersistence } from "../../services/memory/persistence.js
 import {
   ReplyGateEpochs,
   isOrchestratorReplyRateLimited,
+  readReplyGateSnapshot,
   resolveUserGroupReplyRoute,
   type ReplyGateSnapshot
 } from "../../services/orchestration/groupReplyPolicy.js";
@@ -98,7 +100,12 @@ import {
 } from "../../services/sessions/sessionCoordinator.js";
 import { SessionStore, type OutboxRecord, type SessionEventRecord, type ToolJobRecord } from "../../services/sessions/sessionStore.js";
 import { TOOL_CALL_TIMEOUT_MS } from "../../services/tools/tools.js";
-import { GENERATE_IMG_TOOL_NAME, runGenerateImg } from "../../services/tools/generateImgTool.js";
+import {
+  GENERATE_IMG_TOOL_NAME,
+  generateImgMediaHandle,
+  runGenerateImg,
+  type GenerateImgReferenceContext
+} from "../../services/tools/generateImgTool.js";
 import { SELFIE_TOOL_NAME } from "../../services/tools/selfieTool.js";
 import { promptDefinitionById } from "../../services/agent/promptCatalog.js";
 import { defaultPromptContent as defaultFinalPromptContent } from "../../services/agent/promptDefaults.js";
@@ -113,6 +120,35 @@ import { DEFAULT_CONTEXT_MESSAGE_LIMIT, MAX_STORED_CONVERSATION_MESSAGES, GROUP_
 import { buildMemoryPromptVariables, buildUserProfileRecallQuery, buildUserPrompt, buildWorkingMemoryRecallQuery, clampInteger, collectGroupChatSummaryMessages, estimatePromptTokens, isAdminUserId, toContextChatMessage, uniqueMemoryEntries } from "./conversationMemoryHelpers.js";
 import { conversationMessageAttachments, conversationRecordId, queueIncomingSnapshot, selectRelevantConversationAttachments, toConversationQuote, uniqueAttachments, uniqueQuotes, uniqueStrings } from "./messagingAttachmentHelpers.js";
 import { buildAsyncToolCompletionPrompt, errorMessage, isAbortError, isRuntimeIncomingMessage, sanitizeErrorDetail } from "./infrastructure.js";
+import {
+  runtime_attachReplyReferences,
+  runtime_buildProviderBashOptions,
+  runtime_buildRecentContextMessages,
+  runtime_contextMessageLimit,
+  runtime_generateImgReferenceContext,
+  runtime_groupReplyOptions,
+  runtime_isAdminUser,
+  runtime_loadMessageDetails,
+  runtime_loadQuoteReferences,
+  runtime_refreshAttachmentCacheReferences,
+  runtime_retainedConversationMessageLimit,
+  runtime_selectRelevantAttachments
+} from "./replyContext.js";
+
+export {
+  runtime_attachReplyReferences,
+  runtime_buildProviderBashOptions,
+  runtime_buildRecentContextMessages,
+  runtime_contextMessageLimit,
+  runtime_generateImgReferenceContext,
+  runtime_groupReplyOptions,
+  runtime_isAdminUser,
+  runtime_loadMessageDetails,
+  runtime_loadQuoteReferences,
+  runtime_refreshAttachmentCacheReferences,
+  runtime_retainedConversationMessageLimit,
+  runtime_selectRelevantAttachments
+};
 
 import type { SunaRuntime } from "../runtime.js";
 type RuntimeHost = SunaRuntime;
@@ -139,12 +175,16 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
     const persona = this.persona ?? (await loadPersona(this.config));
     const admin = this.adminIdentity();
     const isAdmin = isAdminUserId(incoming.userId, admin);
+    const promptId = incoming.scope === "private"
+      ? "conversation.private-reply"
+      : "conversation.group-reply";
     const logRunId = nanoid();
     const logContext = {
       conversationId: conversationRecordId(incoming),
       incomingMessageId: incoming.messageId == null ? undefined : String(incoming.messageId),
       runId: logRunId,
-      stage: "reply"
+      stage: "reply",
+      promptFamily: promptId
     };
     let sent = false;
     let requestStarted = false;
@@ -154,6 +194,7 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
       const toolNames = currentToolNames();
       for (const draft of options.delivery?.outbox ?? []) {
         const payload = draft.payload.payload;
+        if (payload.type !== "assistant_reply") continue;
         if (payload.logRunId !== logRunId) continue;
         payload.toolNames = toolNames.length ? [...toolNames] : undefined;
       }
@@ -187,11 +228,14 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
         limit: 6
       });
       const userProfileMemoryMatches = userProfileResult.ok ? userProfileResult.matches : [];
-      const memoryMatches = uniqueMemoryEntries([
+      const currentUserProfileMemoryMatches = uniqueMemoryEntries([
         ...(exactUserProfile ? [exactUserProfile] : []),
+        ...userProfileMemoryMatches
+      ]);
+      const memoryMatches = uniqueMemoryEntries([
         ...workingMemoryMatches,
         ...longTermMemoryMatches,
-        ...userProfileMemoryMatches
+        ...currentUserProfileMemoryMatches
       ]);
       await appendRequestLog({
         category: "runtime.action",
@@ -228,7 +272,7 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
             text: item.text,
             score: item.score
           })),
-          userProfileMemoryMatches: userProfileMemoryMatches.map((item) => ({
+          userProfileMemoryMatches: currentUserProfileMemoryMatches.map((item) => ({
             id: item.id,
             text: item.text,
             score: item.score
@@ -248,12 +292,12 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
           admin,
           attachmentContext.text
         );
-      const promptRequest = await this.renderPromptRequest("conversation.reply", {
+      const promptRequest = await this.renderPromptRequest(promptId, {
         ...buildConversationPromptVariables(this.config),
         ...buildMemoryPromptVariables({
           working: workingMemoryMatches,
           longTerm: longTermMemoryMatches,
-          userProfile: userProfileMemoryMatches
+          userProfile: currentUserProfileMemoryMatches
         }),
         "messages_64": this.buildRecentContextMessages(incoming, options.captureSequence, 64),
         "conversation.messages": this.buildRecentContextMessages(incoming, options.captureSequence),
@@ -265,6 +309,11 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
         currentUserMessage.localImagePaths = attachmentContext.localImagePaths;
       }
       const selfieChatReferenceImageUrls = this.collectSelfieChatReferenceImages(incoming);
+      const generateImgReferenceContext = runtime_generateImgReferenceContext.call(
+        this,
+        incoming,
+        options.captureSequence
+      );
       const generatedImages: ImageResult[] = [];
       let assistantTextCount = 0;
       this.recordAssistantRequestStarted(incoming, logRunId);
@@ -283,6 +332,7 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
       const toolCapabilities = await this.resolveToolCapabilities();
       const turn = await this.completePromptTurn(provider, promptRequest, {
         signal: options.signal,
+        allowNoReply: true,
         bash: this.buildProviderBashOptions(incoming, toolCapabilities.workspaceBash),
         bot: this.config.bot,
         generateImage: (prompt, size, quality, referenceImageUrls, childLogContext) => provider.generateImage(
@@ -323,6 +373,7 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
           generatedImages.push(image);
         },
         referenceImageUrls: inboundImageUrls(incoming),
+        imageReferences: generateImgReferenceContext,
         memory: {
           enabled: true,
           recall: (input) => recallMemory(this.config, input)
@@ -332,6 +383,7 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
           referenceImageUrls: selfieChatReferenceImageUrls,
           run: (input) => this.runSelfie(input, provider, {
             chatReferenceImageUrls: selfieChatReferenceImageUrls,
+            imageReferences: generateImgReferenceContext,
             logContext
           })
         },
@@ -345,15 +397,72 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
       if (turn.kind === "deferred") usedToolNames.add(turn.toolCall.name);
       const turnToolNames = finalizeToolNames();
       if (options.isCurrent && !options.isCurrent()) return sent;
+      if (turn.kind === "no_reply") {
+        this.discardAssistantRequest(incoming, logRunId);
+        if (options.delivery) options.delivery.terminalStatus = "no_reply";
+        if (this.config.bot.pokeOnNoReply && gateway.poke) {
+          const target = {
+            ...(incoming.accountId ? { accountId: incoming.accountId } : {}),
+            userId: incoming.userId,
+            ...(incoming.groupId ? { groupId: incoming.groupId } : {})
+          };
+          if (options.delivery) {
+            const dedupeKey = incoming.messageId == null
+              ? undefined
+              : `no-reply-poke:${incoming.accountId ?? "primary"}:${incoming.messageId}`;
+            options.delivery.outbox.push({
+              kind: "onebot.poke",
+              payload: noReplyPokeEnvelope({
+                type: "no_reply_poke",
+                incoming: queueIncomingSnapshot(incoming),
+                logRunId,
+                replyGate: this.replyGates.capture(incoming.scope, conversationRecordId(incoming))
+              }, {
+                conversationId: conversationRecordId(incoming),
+                correlationId: logRunId,
+                idempotencyKey: dedupeKey
+              }),
+              dedupeKey
+            });
+          } else {
+            try {
+              await gateway.poke(target);
+            } catch (error) {
+              await appendRequestLog({
+                category: "runtime.action",
+                action: "reply.no_reply.poke.failed",
+                request: target,
+                response: { error: sanitizeErrorDetail(errorMessage(error)) },
+                metadata: logContext
+              });
+            }
+          }
+        }
+        await appendRequestLog({
+          category: "runtime.action",
+          action: "reply.no_reply",
+          request: {
+            scope: incoming.scope,
+            userId: incoming.userId,
+            groupId: incoming.groupId
+          },
+          response: { status: "no_reply" },
+          metadata: logContext
+        });
+        return sent;
+      }
       if (turn.kind === "deferred") {
         const acknowledgement = turn.acknowledgement.trim();
         if (!acknowledgement) throw new Error("异步工具缺少 dispatch_message。");
+        const originalRequest = {
+          incoming: queueIncomingSnapshot(incoming),
+          captureSequence: options.captureSequence,
+          imageReferences: generateImgReferenceContext,
+          replyGate: this.replyGates.capture(incoming.scope, conversationRecordId(incoming))
+        };
         options.onDeferred?.({
           deferred: turn,
-          originalRequest: {
-            incoming: queueIncomingSnapshot(incoming),
-            captureSequence: options.captureSequence
-          },
+          originalRequest,
           acknowledgement: this.replyDeliveryDraft(
             incoming,
             acknowledgement,
@@ -499,7 +608,8 @@ export async function runtime_replyWithGroupChatSummary(this: RuntimeHost,
         logContext: {
           conversationId: record?.id ?? conversationRecordId(incoming),
           incomingMessageId: incoming.messageId == null ? undefined : String(incoming.messageId),
-          stage: "reply"
+          stage: "reply",
+          promptFamily: "conversation.group-summary"
         }
       });
       const replyRecord = await this.sendAssistantReply(
@@ -529,7 +639,8 @@ export async function runtime_replyToToolCompletion(this: RuntimeHost,
       throw new Error(`异步工具结果缺少原始请求：${payload.toolJobId}`);
     }
     const channelKey = conversationRecordId(incoming);
-    const gate = this.replyGates.capture(incoming.scope, channelKey);
+    const gate = readReplyGateSnapshot(payload.originalRequest.replyGate, incoming.scope, channelKey) ??
+      this.replyGates.capture(incoming.scope, channelKey);
     const isCurrent = () => this.isReplyTaskCurrent(incoming, gate, signal);
     if (!isCurrent()) return;
     if (payload.toolName === GENERATE_IMG_TOOL_NAME || payload.toolName === SELFIE_TOOL_NAME) {
@@ -564,7 +675,11 @@ export async function runtime_replyToToolCompletion(this: RuntimeHost,
   }
 export async function runtime_processDeferredToolJob(this: RuntimeHost, job: ToolJobRecord, signal: AbortSignal) {
     if (signal.aborted) throw signal.reason ?? new Error("异步工具任务已取消。");
-    const originalRequest = job.originalRequest as { incoming?: unknown };
+    const originalRequest = job.originalRequest as {
+      incoming?: unknown;
+      captureSequence?: unknown;
+      imageReferences?: unknown;
+    };
     const incoming = originalRequest.incoming;
     if (!isRuntimeIncomingMessage(incoming)) {
       return { status: "failed" as const, error: { message: "异步图片任务缺少原始请求。" } };
@@ -579,15 +694,23 @@ export async function runtime_processDeferredToolJob(this: RuntimeHost, job: Too
     const input = job.arguments && typeof job.arguments === "object" && !Array.isArray(job.arguments)
       ? job.arguments as Record<string, unknown>
       : {};
+    const captureSequence = typeof originalRequest.captureSequence === "number" &&
+      Number.isFinite(originalRequest.captureSequence)
+      ? originalRequest.captureSequence
+      : undefined;
+    const imageReferences = readGenerateImgReferenceContext(originalRequest.imageReferences) ??
+      runtime_generateImgReferenceContext.call(this, incoming, captureSequence);
     const result = job.toolName === GENERATE_IMG_TOOL_NAME
       ? await runGenerateImg(input, this.config.bot, (prompt, size, quality, referenceImageUrls, childLogContext) =>
           provider.generateImage(prompt, size, quality, referenceImageUrls, childLogContext ?? logContext), {
           referenceImageUrls: inboundImageUrls(incoming),
+          imageReferences,
           logContext
         })
       : job.toolName === SELFIE_TOOL_NAME
         ? await this.runSelfie(input, provider, {
             chatReferenceImageUrls: this.collectSelfieChatReferenceImages(incoming),
+            imageReferences,
             logContext
           })
         : { ok: false, error: `不支持的异步工具：${job.toolName}` };
@@ -607,156 +730,31 @@ function readDeferredImageResult(value: unknown) {
     error: typeof result.error === "string" ? result.error : ""
   };
 }
-export async function runtime_attachReplyReferences(this: RuntimeHost,
-    incoming: ParsedIncomingMessage,
-    gateway: MessagingPort,
-    _signal?: AbortSignal
-  ) {
-    if (!incoming.replyMessageIds.length) return;
 
-    const imageUrls: string[] = inboundImageUrls(incoming);
-    const quoteReferences: ConversationMessageQuote[] = [...incoming.quoteReferences];
-    for (const messageId of incoming.replyMessageIds.slice(0, 2)) {
-      try {
-        const details = await this.loadMessageDetails(gateway, messageId, {
-          source: "quote",
-          groupId: incoming.groupId,
-          userId: incoming.userId
-        });
-        imageUrls.push(...details.media.flatMap((asset) => asset.url ? [asset.url] : []));
-        incoming.attachments.push(...details.attachments);
-        quoteReferences.push(toConversationQuote(messageId, details));
-      } catch (error) {
-        console.error("[runtime] load replied message failed", {
-          messageId,
-          error
-        });
-      }
-    }
+function readGenerateImgReferenceContext(value: unknown): GenerateImgReferenceContext | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const mediaByHandleValue = record.mediaByHandle;
+  const mediaByHandle = mediaByHandleValue && typeof mediaByHandleValue === "object" && !Array.isArray(mediaByHandleValue)
+    ? Object.fromEntries(Object.entries(mediaByHandleValue)
+        .filter((entry): entry is [string, string] => typeof entry[1] === "string" && Boolean(entry[1].trim())))
+    : {};
+  return {
+    currentImageUrls: readReferenceImageUrls(record.currentImageUrls),
+    previousOutputImageUrls: readReferenceImageUrls(record.previousOutputImageUrls),
+    historyImageUrls: readReferenceImageUrls(record.historyImageUrls),
+    mediaByHandle
+  };
+}
 
-    replaceInboundImageUrls(incoming, uniqueStrings(imageUrls));
-    incoming.attachments = uniqueAttachments(incoming.attachments);
-    incoming.quoteReferences = uniqueQuotes(quoteReferences);
-  }
-export async function runtime_loadMessageDetails(this: RuntimeHost,
-    gateway: MessagingPort,
-    messageId: number,
-    context: AttachmentExtractionContext = { source: "quote" }
-  ) {
-    return gateway.getMessage(messageId, context);
-  }
-export async function runtime_loadQuoteReferences(this: RuntimeHost,
-    gateway: MessagingPort,
-    messageIds: number[],
-    context: AttachmentExtractionContext = { source: "quote" }
-  ) {
-    const quoteReferences: ConversationMessageQuote[] = [];
-    for (const messageId of messageIds.slice(0, 2)) {
-      try {
-        const details = await this.loadMessageDetails(gateway, messageId, context);
-        quoteReferences.push(toConversationQuote(messageId, details));
-      } catch (error) {
-        console.error("[runtime] load quote reference failed", {
-          messageId,
-          error
-        });
-      }
-    }
-    return uniqueQuotes(quoteReferences);
-  }
-export function runtime_selectRelevantAttachments(this: RuntimeHost, incoming: ParsedIncomingMessage, query: string) {
-    const record = this.conversationRecords.get(conversationRecordId(incoming));
-    return selectRelevantConversationAttachments(
-      incoming,
-      record,
-      this.contextMessageLimit(),
-      query
-    );
-  }
-export async function runtime_refreshAttachmentCacheReferences(this: RuntimeHost) {
-    const references: Array<{ cacheKey: string; reference: string }> = [];
-    for (const record of this.conversationRecords.values()) {
-      for (const message of record.messages.slice(-this.contextMessageLimit())) {
-        for (const attachment of conversationMessageAttachments(message)) {
-          if (!attachment.cacheKey) continue;
-          references.push({
-            cacheKey: attachment.cacheKey,
-            reference: `${record.id}/${message.id}/${attachment.id}`
-          });
-        }
-      }
-    }
-    await this.attachmentService.cache.rebuildReferences(references);
-  }
-export function runtime_buildRecentContextMessages(this: RuntimeHost,
-    incoming: ParsedIncomingMessage,
-    captureSequence?: number,
-    messageLimit = this.contextMessageLimit()
-  ): ChatMessage[] {
-    const record = this.conversationRecords.get(conversationRecordId(incoming));
-    if (!record) return [];
-
-    const currentMessageId = incoming.messageId == null ? "" : String(incoming.messageId);
-    const admin = this.adminIdentity();
-    const candidates = record.messages
-      .filter((message) => !currentMessageId || message.id !== currentMessageId)
-      .filter((message) => message.role === "user" || message.role === "assistant")
-      .filter((message) => captureSequence == null || Number(message.sequence ?? 0) < captureSequence)
-      .slice(-clampInteger(messageLimit, this.contextMessageLimit(), 1, 120))
-      .map((message) => toContextChatMessage(message, isAdminUserId(message.userId, admin), admin));
-    const selected: ChatMessage[] = [];
-    let usedTokens = 0;
-    for (const message of candidates.reverse()) {
-      const messageTokens = estimatePromptTokens(message.content);
-      if (selected.length && usedTokens + messageTokens > RECENT_CONTEXT_TOKEN_BUDGET) break;
-      selected.unshift(message);
-      usedTokens += messageTokens;
-    }
-    let remainingImages = MAX_HISTORY_CONTEXT_IMAGES;
-    const boundedImages = selected.map((message) => ({ ...message, imageUrls: [] as string[] }));
-    for (let index = boundedImages.length - 1; index >= 0; index -= 1) {
-      const message = selected[index]!;
-      const imageUrls = (message.imageUrls ?? []).slice(0, remainingImages);
-      remainingImages -= imageUrls.length;
-      boundedImages[index] = { ...message, imageUrls };
-    }
-    return boundedImages;
-  }
-export function runtime_contextMessageLimit(this: RuntimeHost) {
-    return clampInteger(this.config.bot.contextMessageLimit, DEFAULT_CONTEXT_MESSAGE_LIMIT, 1, 120);
-  }
-export function runtime_retainedConversationMessageLimit(this: RuntimeHost) {
-    return Math.max(
-      MAX_STORED_CONVERSATION_MESSAGES,
-      this.contextMessageLimit() * 2,
-      this.config.bot.memory.messageThreshold * 2 + 8
-    );
-  }
-export function runtime_groupReplyOptions(this: RuntimeHost, incoming: ParsedIncomingMessage) {
-    if (!this.config.bot.quoteGroupReplies || incoming.messageId == null) return {};
-    return { replyToMessageId: incoming.messageId };
-  }
-export function runtime_buildProviderBashOptions(
-  this: RuntimeHost,
-  incoming: ParsedIncomingMessage,
-  capabilityAvailable = false
-): ProviderBashOptions | undefined {
-    const bash = this.config.bot.bash;
-    if (!bash.enabled || !capabilityAvailable) return undefined;
-    if (incoming.groupId && !bash.allowGroup) return undefined;
-    if (bash.adminOnly && !this.isAdminUser(incoming.userId)) return undefined;
-
-    return {
-      enabled: true,
-      workspacePath: resolveProjectPath(this.config.persona.agentWorkspace) ?? getRootDir(),
-      workspaceOnly: bash.workspaceOnly,
-      blockedKeywords: bash.blockedKeywords
-    };
-  }
-export function runtime_isAdminUser(this: RuntimeHost, userId: number) {
-    return this.isReplySenderAllowed(userId);
-  }
-
+function readReferenceImageUrls(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return uniqueStrings(value
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => item.trim())
+    .filter(Boolean))
+    .slice(0, 4);
+}
 export class RuntimeReply {
   constructor(private readonly host: RuntimeHost) {}
   replyToIncoming(...args: Parameters<typeof runtime_replyToIncoming>) { return runtime_replyToIncoming.call(this.host, ...args); }

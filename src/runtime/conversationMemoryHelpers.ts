@@ -87,6 +87,7 @@ import { appendRequestLog } from "../requestLog.js";
 import { WORKSPACE_LAYOUT } from "../../packages/platform/workspaceLayout.js";
 import { SenderNameResolver, senderDisplayName, senderIdentity } from "../../services/conversations/senderName.js";
 import type { SelfieInput, SelfieRunResult } from "../../services/tools/selfieTool.js";
+import { generateImgMediaHandle } from "../../services/tools/generateImgTool.js";
 import { cleanupPersistedCodexProcess, CodexToolRunner } from "../../adapters/codex/codexTool.js";
 import { isTrustedQqFakeIp } from "../../adapters/onebot/qqMedia.js";
 import type { CodexRunner } from "../../packages/contracts/tools/codex.js";
@@ -284,7 +285,10 @@ export function truncateToEstimatedTokens(text: string, budget: number) {
 export function toContextChatMessage(message: ConversationRecord["messages"][number], isAdmin: boolean, admin: AdminIdentity): ChatMessage {
   const speaker = formatContextSpeaker(message, isAdmin, admin);
   const quoteText = message.quoteReferences?.length ? ` 引用：${formatQuoteReferencesForContext(message.quoteReferences)}` : "";
-  const imageText = message.imageUrls?.length ? ` 图片：${message.imageUrls.length} 张` : "";
+  const imageHandles = (message.imageUrls ?? []).map((_, index) => generateImgMediaHandle(message.id, index));
+  const imageText = imageHandles.length
+    ? ` 图片：${imageHandles.length} 张（媒体句柄：${imageHandles.join("、")}）`
+    : "";
   const attachmentText = message.attachments?.length
     ? ` 文件：${formatAttachmentListForContext(message.attachments)}`
     : "";

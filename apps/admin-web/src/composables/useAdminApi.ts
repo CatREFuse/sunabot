@@ -1,5 +1,6 @@
 import { readonly, shallowRef } from "vue";
 import type { ApiErrorBody } from "../types";
+import { agentScopedPath } from "./agentScope";
 
 export interface AdminSession {
   authenticated: boolean;
@@ -51,6 +52,14 @@ export async function initializeAdminSession() {
 }
 
 export async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+  return request<T>(scopedApiPath(path), init);
+}
+
+export async function apiRequestUnscoped<T>(path: string, init: RequestInit = {}): Promise<T> {
+  return request<T>(path, init);
+}
+
+async function request<T>(path: string, init: RequestInit): Promise<T> {
   if (!isSafeMethod(init.method) && !csrfToken) await initializeAdminSession();
   const headers = new Headers(init.headers);
   headers.set("accept", "application/json");
@@ -83,6 +92,7 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}): Promi
 }
 
 export async function apiBlob(path: string, init: RequestInit = {}): Promise<Blob> {
+  path = scopedApiPath(path);
   const headers = new Headers(init.headers);
   if (!isSafeMethod(init.method) && csrfToken) headers.set("x-sunabot-csrf", csrfToken);
   const response = await fetch(path, { ...init, headers, credentials: "same-origin", cache: "no-store" });
@@ -94,8 +104,36 @@ export async function apiBlob(path: string, init: RequestInit = {}): Promise<Blo
   return response.blob();
 }
 
+const agentScopedPrefixes = [
+  "/api/web-chat",
+  "/api/conversations",
+  "/api/memory",
+  "/api/images",
+  "/api/request-logs",
+  "/api/token-usage",
+  "/api/model-call-stats",
+  "/api/playground/image",
+  "/api/agent-files",
+  "/api/tools",
+  "/api/config",
+  "/api/status",
+  "/api/selfie-references"
+];
+
+function scopedApiPath(path: string) {
+  const pathname = path.split("?", 1)[0] ?? path;
+  return agentScopedPrefixes.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`))
+    ? agentScopedPath(path)
+    : path;
+}
+
 export function authenticatedMediaPath(source: string) {
-  if (source.startsWith("/api/") || source.startsWith("/generated-images/")) return source;
+  if (
+    source.startsWith("data:")
+    || source.startsWith("blob:")
+    || source.startsWith("/api/")
+    || source.startsWith("/generated-images/")
+  ) return source;
   return `/api/media/image?url=${encodeURIComponent(source)}`;
 }
 

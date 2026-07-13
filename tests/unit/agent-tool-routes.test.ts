@@ -20,10 +20,10 @@ describe("agent and tool API plugin", () => {
     apps.push(app);
     app.addHook("onRoute", (route) => routeSchemas.set(route.url, route.schema ?? {}));
 
-    const list = vi.fn(async () => ({ files: [{ id: "AGENTS" }] }));
+    const list = vi.fn(async () => ({ files: [{ id: "persona.agents" }] }));
     const get = vi.fn(async (id: string) => ({
       id,
-      content: id === "conversation.reply" ? defaultPromptContent("conversation.reply") : "agent"
+      content: id === "conversation.private-reply" ? defaultPromptContent("conversation.private-reply") : "agent"
     }));
     const put = vi.fn(async (id: string, body: unknown) => ({ ok: true, id, body }));
     const resolveToolCapabilities = vi.fn(async () => ({ codex: true, workspaceBash: true }));
@@ -38,13 +38,13 @@ describe("agent and tool API plugin", () => {
     });
 
     expect((await app.inject({ method: "GET", url: "/api/agent-files" })).json())
-      .toEqual({ files: [{ id: "AGENTS" }] });
-    expect((await app.inject({ method: "GET", url: "/api/agent-files/AGENTS" })).json())
-      .toEqual({ id: "AGENTS", content: "agent" });
+      .toEqual({ files: [{ id: "persona.agents" }] });
+    expect((await app.inject({ method: "GET", url: "/api/agent-files/persona.agents" })).json())
+      .toEqual({ id: "persona.agents", content: "agent" });
     const body = { content: "updated", revision: "rev" };
-    expect((await app.inject({ method: "PUT", url: "/api/agent-files/AGENTS", payload: body })).json())
-      .toEqual({ ok: true, id: "AGENTS", body });
-    expect(put).toHaveBeenCalledWith("AGENTS", body);
+    expect((await app.inject({ method: "PUT", url: "/api/agent-files/persona.agents", payload: body })).json())
+      .toEqual({ ok: true, id: "persona.agents", body });
+    expect(put).toHaveBeenCalledWith("persona.agents", body);
     const tools = (await app.inject({ method: "GET", url: "/api/tools" })).json().tools;
     expect(tools.map((tool: { name: string }) => tool.name)).toEqual(AGENT_TOOL_NAMES);
     expect(tools.find((tool: { name: string }) => tool.name === "websearch")).toMatchObject({
@@ -66,12 +66,20 @@ describe("agent and tool API plugin", () => {
       available: true,
       effectiveEnabled: true
     });
+    expect(tools.find((tool: { name: string }) => tool.name === "no_reply")).toMatchObject({
+      configuredEnabled: null,
+      promptEnabled: true,
+      available: true,
+      effectiveEnabled: true
+    });
     expect(resolveToolCapabilities).toHaveBeenCalledOnce();
-    expect(get).toHaveBeenCalledWith("conversation.reply", config);
+    expect(get).toHaveBeenCalledWith("conversation.private-reply", config);
 
     expect([...routeSchemas.keys()].sort()).toEqual([
       "/api/agent-files",
       "/api/agent-files/:id",
+      "/api/system-prompt-files",
+      "/api/system-prompt-files/:id",
       "/api/tools"
     ]);
     assertRequestAndResponseSchemas(routeSchemas);
@@ -83,7 +91,7 @@ describe("agent and tool API plugin", () => {
     const config = defaultConfig();
     registerAgentToolRoutes(app, {
       agentFiles: {
-        get: vi.fn(async () => ({ content: defaultPromptContent("conversation.reply") }))
+        get: vi.fn(async () => ({ content: defaultPromptContent("conversation.private-reply") }))
       } as unknown as AgentFileRepository,
       resolveToolCapabilities: vi.fn(async () => ({ codex: false, workspaceBash: true })),
       getConfig: () => config
@@ -105,7 +113,7 @@ describe("agent and tool API plugin", () => {
     config.bot.bash.enabled = false;
     registerAgentToolRoutes(app, {
       agentFiles: {
-        get: vi.fn(async () => ({ content: defaultPromptContent("conversation.reply") }))
+        get: vi.fn(async () => ({ content: defaultPromptContent("conversation.private-reply") }))
       } as unknown as AgentFileRepository,
       resolveToolCapabilities: vi.fn(async () => ({ codex: true, workspaceBash: true })),
       getConfig: () => config
@@ -131,7 +139,7 @@ describe("agent and tool API plugin", () => {
     config.bot.bash.enabled = true;
     registerAgentToolRoutes(app, {
       agentFiles: {
-        get: vi.fn(async () => ({ content: defaultPromptContent("conversation.reply") }))
+        get: vi.fn(async () => ({ content: defaultPromptContent("conversation.private-reply") }))
       } as unknown as AgentFileRepository,
       resolveToolCapabilities: vi.fn(async () => ({ codex: true, workspaceBash: available })),
       getConfig: () => config

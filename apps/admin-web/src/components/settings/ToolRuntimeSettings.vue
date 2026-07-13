@@ -8,7 +8,6 @@ import type {
   ImageSize,
   ModelCatalogItem
 } from "../../types";
-import ToggleSwitch from "../ui/ToggleSwitch.vue";
 import TavilyKeyPool from "./TavilyKeyPool.vue";
 
 const draft = defineModel<ConfigSectionValueMap["tools"]>({ required: true });
@@ -57,14 +56,12 @@ const qualities: Array<{ value: ImageQuality; label: string }> = [
     </section>
 
     <section class="grid gap-5 border-t border-line pt-7">
-      <div>
+      <div class="flex flex-wrap items-center justify-between gap-3">
         <h3 class="section-title">Codex 任务</h3>
+        <span class="inline-state" :data-kind="draft.codex.enabled ? 'success' : undefined">
+          {{ draft.codex.enabled ? "已启用" : "已停用" }}
+        </span>
       </div>
-      <ToggleSwitch
-        v-model="draft.codex.enabled"
-        label="启动 Codex Worker"
-        description="复杂本地任务、深度研究和长时间分析"
-      />
       <div class="grid gap-5 sm:grid-cols-2">
         <label class="field">
           <span class="field-label">模型</span>

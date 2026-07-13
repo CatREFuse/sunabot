@@ -12,7 +12,12 @@ import { parseOneBotInboundMessage } from "../../adapters/onebot/inboundMessageA
 import type { OneBotEvent } from "../../adapters/onebot/protocol.js";
 import type { MessagingPort } from "../../packages/contracts/messaging/messages.js";
 import type { AsyncToolCompletionPayload } from "../../packages/contracts/session/runtimeMessages.js";
-import type { RenderedPromptRequest } from "../../services/agent/promptSystem.js";
+import { defaultFinalPromptTemplate } from "../../services/agent/promptDefaults.js";
+import {
+  renderFinalPromptTemplate,
+  type RenderedPromptRequest
+} from "../../services/agent/promptSystem.js";
+import type { MemoryEntry } from "../../services/memory/types.js";
 import { SunaRuntime } from "../../src/runtime.js";
 import type { ReplyDelivery } from "../../src/runtime/runtimeContracts.js";
 import { SessionStore } from "../../services/sessions/sessionStore.js";
@@ -39,6 +44,147 @@ afterEach(() => {
 });
 
 describe("SunaRuntime Session queue bridge", () => {
+  it("finishes a no_reply turn without outbound text or a placeholder assistant message", async () => {
+    const completeRequestTurn = vi.fn(async (
+      _request: RenderedPromptRequest,
+      options: ProviderCompleteOptions = {}
+    ): Promise<ProviderTurnResult> => {
+      expect(options.allowNoReply).toBe(true);
+      options.onToolCall?.("no_reply");
+      return { kind: "no_reply" };
+    });
+    const harness = createRuntimeHarness(completeRequestTurn);
+
+    await handleOneBotEvent(harness.runtime, privateEvent(20_000, "话题到这里就好"), harness.gateway);
+    await harness.coordinator.waitForIdle({ timeoutMs: 3_000 });
+
+    expect(sentTexts(harness.gateway)).toEqual([]);
+    expect(harness.gateway.poke).not.toHaveBeenCalled();
+    expect(harness.store.listTurns("private:171419991").map((turn) => turn.status)).toEqual(["no_reply"]);
+    expect(runtimeConversation(harness.runtime, "private:171419991")?.messages.map((message) => ({
+      role: message.role,
+      text: message.text,
+      requestStatus: message.requestStatus
+    }))).toEqual([{
+      role: "user",
+      text: "话题到这里就好",
+      requestStatus: undefined
+    }]);
+    expect(appendRequestLog).toHaveBeenCalledWith(expect.objectContaining({
+      category: "runtime.action",
+      action: "reply.no_reply",
+      response: { status: "no_reply" }
+    }));
+  });
+
+  it.each([
+    {
+      scope: "private",
+      event: privateEvent(20_010, "不用继续回复"),
+      sessionId: "private:171419991",
+      accountId: undefined,
+      target: { userId: 171419991 }
+    },
+    {
+      scope: "group",
+      event: groupEvent(20_011, 602, "不用继续回复"),
+      sessionId: "account:account-b:group:602",
+      accountId: "account-b",
+      target: { accountId: "account-b", userId: 171419991, groupId: 602 }
+    }
+  ])("delivers a durable poke for a no_reply $scope turn when enabled", async ({ event, sessionId, accountId, target }) => {
+    const harness = createRuntimeHarness(async () => ({ kind: "no_reply" }), undefined, (config) => {
+      config.bot.pokeOnNoReply = true;
+    });
+
+    await handleOneBotEvent(harness.runtime, event, harness.gateway, accountId);
+    await harness.coordinator.waitForIdle({ timeoutMs: 3_000 });
+
+    expect(sentTexts(harness.gateway)).toEqual([]);
+    expect(harness.gateway.poke).toHaveBeenCalledOnce();
+    expect(harness.gateway.poke).toHaveBeenCalledWith(target);
+    expect(harness.store.listTurns(sessionId).map((turn) => turn.status)).toEqual(["no_reply"]);
+    expect(runtimeConversation(harness.runtime, sessionId)?.messages.some((message) => message.role === "assistant")).toBe(false);
+    expect(appendRequestLog).toHaveBeenCalledWith(expect.objectContaining({
+      category: "runtime.action",
+      action: "reply.no_reply.poke.sent",
+      response: { status: "sent" }
+    }));
+  });
+
+  it("injects recalled working memory and the exact current-user profile into the Provider request", async () => {
+    const workingMemory = memoryEntry({
+      id: "working-current",
+      source: "working",
+      sourceTitle: "工作记忆",
+      text: "猫老师正在检查记忆端点。"
+    });
+    const exactUserProfile = memoryEntry({
+      id: "profile-current",
+      source: "user_profile",
+      sourceTitle: "用户画像",
+      text: "喜欢验证真实运行链路。",
+      userId: "171419991",
+      addressName: "猫老师"
+    });
+    readUserProfileForUser.mockImplementationOnce(async () => exactUserProfile as never);
+    recallMemory
+      .mockImplementationOnce(async () => ({ ok: true, query: "current", matches: [] }) as never)
+      .mockImplementationOnce(async () => ({ ok: true, query: "current", matches: [workingMemory] }) as never)
+      .mockImplementationOnce(async () => ({ ok: true, query: "current", matches: [] }) as never);
+
+    let providerRequest: RenderedPromptRequest | undefined;
+    const harness = createRuntimeHarness(async (request) => {
+      providerRequest = request;
+      return { kind: "completed", text: "memory injected" };
+    });
+    (harness.runtime as unknown as {
+      renderPromptRequest(id: string, variables: Record<string, unknown>): Promise<RenderedPromptRequest>;
+    }).renderPromptRequest = async (id, variables) => {
+      expect(id).toBe("conversation.private-reply");
+      return renderFinalPromptTemplate(defaultFinalPromptTemplate(id)!, {
+        "persona.agents": "",
+        "persona.soul": "",
+        "persona.preference": "",
+        "persona.dialogue_style_examples": "",
+        "persona.user": "",
+        "persona.relation": "",
+        ...variables
+      });
+    };
+
+    await handleOneBotEvent(harness.runtime, privateEvent(20_001, "memory endpoint"), harness.gateway);
+    await harness.coordinator.waitForIdle({ timeoutMs: 3_000 });
+
+    const endpointInput = lastUserText(providerRequest!);
+    expect(endpointInput).toContain("<working_memory>工作记忆：猫老师正在检查记忆端点。</working_memory>");
+    expect(endpointInput).toContain("<user_profile>用户画像 称呼：猫老师：喜欢验证真实运行链路。</user_profile>");
+  });
+
+  it("routes private and group replies to independent prompt families", async () => {
+    const promptIds: string[] = [];
+    const harness = createRuntimeHarness(async () => ({ kind: "completed", text: "routed" }));
+    (harness.runtime as unknown as {
+      renderPromptRequest(id: string, variables: Record<string, unknown>): Promise<RenderedPromptRequest>;
+    }).renderPromptRequest = async (id, variables) => {
+      promptIds.push(id);
+      return {
+        messages: [
+          { role: "system", content: id },
+          { role: "user", content: String(variables["user.input"] ?? "") }
+        ],
+        response_format: { type: "text" }
+      };
+    };
+
+    await handleOneBotEvent(harness.runtime, privateEvent(20_002, "private endpoint"), harness.gateway);
+    await harness.coordinator.waitForIdle({ timeoutMs: 3_000 });
+    await handleOneBotEvent(harness.runtime, groupEvent(20_003, 602, "group endpoint"), harness.gateway);
+    await harness.coordinator.waitForIdle({ timeoutMs: 3_000 });
+
+    expect(promptIds).toEqual(["conversation.private-reply", "conversation.group-reply"]);
+  });
+
   it("keeps model starts and sends FIFO in one group while another group progresses", async () => {
     const gates = new Map([
       ["first", deferred<void>()],
@@ -145,6 +291,32 @@ describe("SunaRuntime Session queue bridge", () => {
         messageOrigin: "text",
         toolNames: ["assistant_text", "websearch"]
       }
+    ]);
+  });
+
+  it("does not quote messages from users in the group reply filter", async () => {
+    const completeRequestTurn = vi.fn(async (
+      _request: RenderedPromptRequest,
+      options: ProviderCompleteOptions = {}
+    ): Promise<ProviderTurnResult> => {
+      options.onToolCall?.("assistant_text");
+      await options.onAssistantText?.("处理中", "assistant_text");
+      return { kind: "completed", text: "处理完成" };
+    });
+    const harness = createRuntimeHarness(completeRequestTurn, undefined, (config) => {
+      config.bot.quoteGroupReplyExcludedUserIds = ["20002"];
+    });
+
+    await handleOneBotEvent(harness.runtime, groupEvent(151, 100, "filtered", 20_002), harness.gateway);
+    await harness.coordinator.waitForIdle({ timeoutMs: 3_000 });
+
+    const send = harness.gateway.send as unknown as ReturnType<typeof vi.fn>;
+    expect(send.mock.calls.map((call) => ({
+      text: call[0].text,
+      replyToMessageId: call[0].replyToMessageId
+    }))).toEqual([
+      { text: "处理中", replyToMessageId: undefined },
+      { text: "处理完成", replyToMessageId: undefined }
     ]);
   });
 
@@ -607,22 +779,23 @@ function fakeGateway() {
       replyMessageIds: [],
       sender: { id: "2002" }
     })),
-    sendAction: vi.fn(async () => ({ status: "ok" }))
+    poke: vi.fn(async () => ({ accepted: true as const }))
   } as unknown as MessagingPort;
 }
 
-function handleOneBotEvent(runtime: SunaRuntime, event: OneBotEvent, gateway: MessagingPort) {
+function handleOneBotEvent(runtime: SunaRuntime, event: OneBotEvent, gateway: MessagingPort, accountId?: string) {
   const incoming = parseOneBotInboundMessage(event);
   if (!incoming) throw new Error("test event did not produce an inbound message");
+  if (accountId) incoming.accountId = accountId;
   return runtime.handleInboundMessage(incoming, gateway);
 }
 
-function groupEvent(messageId: number, groupId: number, marker: string): OneBotEvent {
+function groupEvent(messageId: number, groupId: number, marker: string, userId = 171419991): OneBotEvent {
   return {
     post_type: "message",
     message_type: "group",
     message_id: messageId,
-    user_id: 171419991,
+    user_id: userId,
     group_id: groupId,
     self_id: 4004,
     time: 1_788_000_000 + messageId,
@@ -681,6 +854,18 @@ function sentMessages(gateway: MessagingPort) {
 
 function sentTexts(gateway: MessagingPort) {
   return sentMessages(gateway).map(([, text]) => text);
+}
+
+function memoryEntry(input: Pick<MemoryEntry, "id" | "source" | "sourceTitle" | "text">
+  & Partial<MemoryEntry>): MemoryEntry {
+  return {
+    fileName: `${input.source}.json`,
+    editable: true,
+    key: input.id,
+    value: input.text,
+    field: "fact",
+    ...input
+  };
 }
 
 function deferred<T>() {

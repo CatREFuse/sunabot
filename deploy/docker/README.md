@@ -16,7 +16,7 @@ Docker 运行时由两个独立服务组成：
 ./sunabot.sh down
 ```
 
-Docker Core 模式下，两个服务位于 Compose 私有网络，NapCat 连接 `ws://core:8788/onebot/v11/ws`。OneBot 端口不发布到宿主；管理台只发布到 `127.0.0.1:8787`，NapCat WebUI 只发布到 `127.0.0.1:6099`。
+Docker Core 模式下，两个服务位于 Compose 私有网络，NapCat 连接 `ws://core:8788/onebot/v11/ws`。OneBot 端口不发布到宿主；管理台只发布到 `127.0.0.1:8787`，各账号 NapCat WebUI 从宿主回环 `127.0.0.1:6099` 起分配独立端口。
 
 Native Core 模式下，只启动 `napcat` 服务。NapCat 通过 `host.docker.internal` 与 host-gateway 映射连接宿主 Core 的专用 `8788` listener。管理台继续只监听宿主回环。
 
@@ -27,10 +27,10 @@ core:
   workspace/ -> /srv/sunabot/workspace
 
 napcat:
-  workspace/runtime/napcat/config-full -> /app/napcat/config
-  workspace/runtime/napcat/qq          -> /app/.config/QQ
-  workspace/runtime/napcat/plugins     -> /app/napcat/plugins
-  workspace/runtime/napcat             -> /app/napcat/cache
+  workspace/runtime/napcat/accounts/<accountId>/config-full -> /app/napcat/config
+  workspace/runtime/napcat/accounts/<accountId>/qq          -> /app/.config/QQ
+  workspace/runtime/napcat/accounts/<accountId>/plugins     -> /app/napcat/plugins
+  workspace/runtime/napcat/accounts/<accountId>             -> /app/napcat/cache
 ```
 
 NapCat 不挂载 `workspace/business/`、SQLite、Agent 或 Core 媒体目录。跨组件图片使用 OneBot `base64://`，不能依赖共享绝对路径。

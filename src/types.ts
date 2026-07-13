@@ -64,6 +64,7 @@ export type WebsearchToolProvider = "tavily";
 export type GenerateImgToolProvider = "codex-image-gen" | "custom";
 export const AGENT_TOOL_NAMES = [
   "assistant_text",
+  "no_reply",
   "memory_recall",
   "websearch",
   "generate_img",
@@ -137,10 +138,19 @@ export interface BotOrchestratorSettings {
   recentMessageWindowMs: number;
 }
 
+export interface BroadcastStormConfig {
+  enabled: boolean;
+  windowMinutes: number;
+  replyThreshold: number;
+  cooldownMinutes: number;
+}
+
 export interface BotConfig {
   adminQq: string;
   adminName: string;
+  pokeOnNoReply: boolean;
   quoteGroupReplies: boolean;
+  quoteGroupReplyExcludedUserIds: string[];
   contextMessageLimit: number;
   memory: BotMemorySettings;
   orchestrator: BotOrchestratorSettings;
@@ -160,14 +170,18 @@ export interface AppConfig {
     port: number;
   };
   persona: {
-    defaultAgentId: "plana";
+    defaultAgentId: string;
+    name: string;
     agentWorkspace: string;
-    memoryLimit: number;
+    systemPromptWorkspace: string;
+    systemPromptOverride: boolean;
+    avatarPath?: string;
   };
   providers: {
     defaultProviderId: string;
     items: ProviderConfig[];
   };
+  broadcastStorm: BroadcastStormConfig;
   bot: BotConfig;
   onebot: {
     reverseWsPath: string;
@@ -283,6 +297,8 @@ export interface ConversationMessageStats {
 
 export interface ConversationRecord {
   id: string;
+  agentId?: string;
+  accountId?: string;
   scope: "private" | "user_group" | "bot_group";
   title: string;
   nickname?: string;

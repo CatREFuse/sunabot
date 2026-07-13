@@ -7,6 +7,7 @@ const LOGIN_POLL_INTERVAL_MS = 2_000;
 interface UseQqLoginOptions {
   onStatus?: (snapshot: OneBotQrLogin) => void;
   onOnline?: (snapshot: OneBotQrLogin) => void | Promise<void>;
+  paths?: () => { status: string; login: string; logout: string };
 }
 
 export function useQqLogin(options: UseQqLoginOptions = {}) {
@@ -19,6 +20,11 @@ export function useQqLogin(options: UseQqLoginOptions = {}) {
   let pollTimer: number | undefined;
 
   const online = computed(() => snapshot.value?.online === true);
+  const paths = () => options.paths?.() ?? {
+    status: "/api/onebot/qq-login/status",
+    login: "/api/onebot/qq-login",
+    logout: "/api/onebot/qq-logout"
+  };
 
   async function openDialog() {
     open.value = true;
@@ -28,7 +34,7 @@ export function useQqLogin(options: UseQqLoginOptions = {}) {
     busy.value = true;
     let refreshAfterStatus = false;
     try {
-      const current = await apiRequest<OneBotQrLogin>("/api/onebot/qq-login/status");
+      const current = await apiRequest<OneBotQrLogin>(paths().status);
       await applySnapshot(current);
       refreshAfterStatus = !current.online;
     } catch (cause) {
@@ -45,7 +51,7 @@ export function useQqLogin(options: UseQqLoginOptions = {}) {
     busy.value = true;
     error.value = "";
     try {
-      const next = await apiRequest<OneBotQrLogin>("/api/onebot/qq-login", {
+      const next = await apiRequest<OneBotQrLogin>(paths().login, {
         method: "POST",
         body: JSON.stringify({})
       });
@@ -72,7 +78,7 @@ export function useQqLogin(options: UseQqLoginOptions = {}) {
     busy.value = true;
     error.value = "";
     try {
-      const next = await apiRequest<OneBotQrLogin>("/api/onebot/qq-logout", {
+      const next = await apiRequest<OneBotQrLogin>(paths().logout, {
         method: "POST",
         body: JSON.stringify({})
       });
@@ -104,7 +110,7 @@ export function useQqLogin(options: UseQqLoginOptions = {}) {
     checking.value = true;
     let refreshExpired = false;
     try {
-      const next = await apiRequest<OneBotQrLogin>("/api/onebot/qq-login/status");
+      const next = await apiRequest<OneBotQrLogin>(paths().status);
       await applySnapshot(next);
       error.value = next.error ?? "";
       refreshExpired = next.phase === "expired";

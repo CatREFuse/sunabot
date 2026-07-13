@@ -84,10 +84,19 @@ export interface BotOrchestratorSettings {
   recentMessageWindowMs: number;
 }
 
+export interface BroadcastStormConfig {
+  enabled: boolean;
+  windowMinutes: number;
+  replyThreshold: number;
+  cooldownMinutes: number;
+}
+
 export interface BotConfig {
   adminQq: string;
   adminName: string;
+  pokeOnNoReply: boolean;
   quoteGroupReplies: boolean;
+  quoteGroupReplyExcludedUserIds: string[];
   contextMessageLimit: number;
   memory: BotMemorySettings;
   orchestrator: BotOrchestratorSettings;
@@ -109,8 +118,16 @@ export interface BotToolSettingsDraft extends BotToolSettings {
 
 export interface AppConfig {
   server: { host: string; port: number };
-  persona: { defaultAgentId: "plana"; agentWorkspace: string; memoryLimit: number };
+  persona: {
+    defaultAgentId: string;
+    name?: string;
+    avatarPath?: string;
+    agentWorkspace: string;
+    systemPromptWorkspace: string;
+    systemPromptOverride: boolean;
+  };
   providers: { defaultProviderId: string; items: ProviderConfig[] };
+  broadcastStorm: BroadcastStormConfig;
   bot: BotConfig;
   onebot: {
     reverseWsPath: string;
@@ -124,7 +141,41 @@ export interface AppConfig {
   };
 }
 
-export type ConfigSectionKey = "server" | "persona" | "providers" | "bot" | "memory" | "orchestrator" | "tools" | "bash" | "onebot";
+export interface AgentAccount {
+  id: string;
+  agentId: string;
+  label: string;
+  qqId?: string;
+  enabled: boolean;
+  webuiPort: number;
+  connected?: boolean;
+  selfId?: string;
+  runtimeReady?: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AgentSummary {
+  id: string;
+  name: string;
+  enabled: boolean;
+  workspace: string;
+  avatarPath?: string;
+  createdAt: string;
+  updatedAt: string;
+  accounts: readonly AgentAccount[];
+  runtime?: {
+    loaded: boolean;
+    persona?: { id: string; name: string; memoryItems: number };
+  };
+}
+
+export interface AgentAvatarInput {
+  fileName: string;
+  dataBase64: string;
+}
+
+export type ConfigSectionKey = "server" | "persona" | "providers" | "broadcastStorm" | "bot" | "memory" | "orchestrator" | "tools" | "bash" | "onebot";
 export type SettingsSectionKey = ConfigSectionKey | "security";
 export type ApplyMode = "hot" | "reconnect" | "restart";
 
@@ -141,9 +192,10 @@ export interface ConfigEnvelope {
 
 export interface ConfigSectionValueMap {
   server: AppConfig["server"];
-  persona: Pick<AppConfig["persona"], "agentWorkspace" | "memoryLimit">;
+  persona: Pick<AppConfig["persona"], "agentWorkspace">;
   providers: AppConfig["providers"];
-  bot: Pick<BotConfig, "adminQq" | "adminName" | "quoteGroupReplies" | "contextMessageLimit">;
+  broadcastStorm: BroadcastStormConfig;
+  bot: Pick<BotConfig, "adminQq" | "adminName" | "pokeOnNoReply" | "quoteGroupReplies" | "quoteGroupReplyExcludedUserIds" | "contextMessageLimit">;
   memory: BotMemorySettings;
   orchestrator: BotOrchestratorSettings;
   tools: BotToolSettingsDraft;
@@ -318,20 +370,32 @@ export interface TokenUsageBucket extends TokenUsageBreakdown {
   requests: number;
 }
 
+export type TokenUsageBehavior = "" | "reply" | "orchestrator" | "memory" | "other";
+
+export interface TokenUsageFilters {
+  model: string;
+  behavior: TokenUsageBehavior;
+}
+
 export interface TokenUsagePayload {
   today: TokenUsageBucket & { date: string };
   days: Array<TokenUsageBucket & { date: string }>;
   hours: Array<TokenUsageBucket & { hour: number }>;
+  filters?: TokenUsageFilters & { models: string[] };
 }
 
-export interface ModelCallStatsPayload {
-  conversationId: string | null;
+export interface ModelCallStatsBreakdown {
   total: TokenUsageBucket;
   behavior: Record<"reply" | "orchestrator" | "memory" | "other", TokenUsageBucket>;
   memory: {
     total: TokenUsageBucket;
     kinds: Record<"working_long_term" | "user_profile", TokenUsageBucket>;
   };
+}
+
+export interface ModelCallStatsPayload extends ModelCallStatsBreakdown {
+  conversationId: string | null;
+  models?: ReadonlyArray<ModelCallStatsBreakdown & { model: string }>;
 }
 
 export interface ConversationMessageStats {

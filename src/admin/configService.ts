@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import { getConfigPath, getWorkspaceDir, loadConfig, saveConfig } from "../config.js";
 import { OpenAIProvider } from "../../adapters/model/openaiProvider.js";
@@ -9,6 +8,7 @@ import type {
   BotMemorySettings,
   BotOrchestratorSettings,
   BotToolSettings,
+  BroadcastStormConfig,
   ProviderConfig
 } from "../types.js";
 import { AGENT_TOOL_NAMES } from "../types.js";
@@ -20,6 +20,7 @@ import {
   looksLikeDirectApiKey,
   resolveTavilyApiKeys
 } from "../../adapters/model/webSearchSettings.js";
+import { WORKSPACE_LAYOUT, workspaceRelativeReference } from "../../packages/platform/workspaceLayout.js";
 import {
   adminMutationMutex,
   adminRecoveryState,
@@ -45,11 +46,13 @@ import {
   uniqueStrings,
   validateCatalogEffort
 } from "./configValidation.js";
-
+import { configRevision } from "./configRevision.js";
+export { configRevision, stableJson } from "./configRevision.js";
 export const CONFIG_SECTIONS = [
   "server",
   "persona",
   "providers",
+  "broadcastStorm",
   "bot",
   "memory",
   "orchestrator",
@@ -60,19 +63,20 @@ export const CONFIG_SECTIONS = [
 
 export type ConfigSection = (typeof CONFIG_SECTIONS)[number];
 export type ApplyMode = "hot" | "reconnect" | "restart";
-
 const FIXED_PROVIDER_BASE_URLS: Partial<Record<ProviderConfig["kind"], string>> = {
   "codex-responses": "https://chatgpt.com/backend-api/codex",
   "openai-official": "https://api.openai.com",
   "anthropic-official": "https://api.anthropic.com/v1",
   "gemini-official": "https://generativelanguage.googleapis.com/v1beta"
 };
+const DEFAULT_AGENT_WORKSPACE = workspaceRelativeReference(WORKSPACE_LAYOUT.defaultAgent);
 
 export interface ConfigSectionValueMap {
   server: AppConfig["server"];
-  persona: Pick<AppConfig["persona"], "agentWorkspace" | "memoryLimit">;
+  persona: Pick<AppConfig["persona"], "agentWorkspace">;
   providers: AppConfig["providers"];
-  bot: Pick<BotConfig, "adminQq" | "adminName" | "quoteGroupReplies" | "contextMessageLimit">;
+  broadcastStorm: BroadcastStormConfig;
+  bot: Pick<BotConfig, "adminQq" | "adminName" | "pokeOnNoReply" | "quoteGroupReplies" | "quoteGroupReplyExcludedUserIds" | "contextMessageLimit">;
   memory: BotMemorySettings;
   orchestrator: BotOrchestratorSettings;
   tools: BotToolSettings;
@@ -126,11 +130,11 @@ export class ConfigService {
   }
 
   async patch(sectionInput: string, body: unknown) {
-    const section = parseSection(sectionInput);
+    const section = parseConfigSection(sectionInput);
     const request = parsePatchRequest(body);
     return this.applyMutation(request, (current) => {
-      const value = validateSectionValue(section, request.value, current);
-      const candidate = mergeSection(current, section, value);
+      const value = validateConfigSectionValue(section, request.value, current);
+      const candidate = mergeConfigSection(current, section, value);
       return {
         candidate,
         applyMode: sectionApplyMode(section, current, candidate),
@@ -211,10 +215,6 @@ export class ConfigService {
   }
 }
 
-export function configRevision(config: AppConfig) {
-  return crypto.createHash("sha256").update(stableJson(config), "utf8").digest("hex");
-}
-
 function redactConfigSecrets(config: AppConfig) {
   const redacted = structuredClone(config);
   redacted.bot.tools.websearch.tavilyApiKey = "";
@@ -222,23 +222,12 @@ function redactConfigSecrets(config: AppConfig) {
   return redacted;
 }
 
-export function stableJson(value: unknown): string {
-  if (value === undefined) return "null";
-  if (value === null || typeof value !== "object") return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map((item) => stableJson(item)).join(",")}]`;
-  const record = value as Record<string, unknown>;
-  return `{${Object.keys(record)
-    .filter((key) => record[key] !== undefined)
-    .sort()
-    .map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`)
-    .join(",")}}`;
-}
-
 export function configFieldStates(config: AppConfig): ConfigEnvelope["fieldStates"] {
   const states: ConfigEnvelope["fieldStates"] = {};
   addFieldStates(states, config.server, "server", "restart");
   addFieldStates(states, config.persona, "persona", "hot");
   addFieldStates(states, config.providers, "providers", "hot");
+  addFieldStates(states, config.broadcastStorm, "broadcastStorm", "hot");
   addFieldStates(states, config.bot, "bot", "hot");
   addFieldStates(states, config.onebot, "onebot", "hot");
 
@@ -293,7 +282,7 @@ export function validateProviderDraft(input: unknown): ProviderConfig {
   return validateProvider(input, "provider");
 }
 
-function parseSection(value: string): ConfigSection {
+export function parseConfigSection(value: string): ConfigSection {
   if (!(CONFIG_SECTIONS as readonly string[]).includes(value)) {
     throw new AdminApiError(404, "CONFIG_SECTION_NOT_FOUND", "配置分区不存在。");
   }
@@ -316,7 +305,7 @@ function validateGroupReplyValue(input: unknown) {
   };
 }
 
-function validateSectionValue<S extends ConfigSection>(
+export function validateConfigSectionValue<S extends ConfigSection>(
   section: S,
   value: unknown,
   current?: AppConfig
@@ -325,6 +314,7 @@ function validateSectionValue<S extends ConfigSection>(
     case "server": return validateServer(value) as ConfigSectionValueMap[S];
     case "persona": return validatePersona(value) as ConfigSectionValueMap[S];
     case "providers": return validateProviders(value, current?.providers) as ConfigSectionValueMap[S];
+    case "broadcastStorm": return validateBroadcastStorm(value) as ConfigSectionValueMap[S];
     case "bot": return validateBot(value) as ConfigSectionValueMap[S];
     case "memory": return validateMemory(value) as ConfigSectionValueMap[S];
     case "orchestrator": return validateOrchestrator(value) as ConfigSectionValueMap[S];
@@ -332,6 +322,17 @@ function validateSectionValue<S extends ConfigSection>(
     case "bash": return validateBash(value) as ConfigSectionValueMap[S];
     case "onebot": return validateOnebot(value) as ConfigSectionValueMap[S];
   }
+}
+
+function validateBroadcastStorm(input: unknown): BroadcastStormConfig {
+  const value = object(input, "broadcastStorm");
+  exactKeys(value, ["enabled", "windowMinutes", "replyThreshold", "cooldownMinutes"], "broadcastStorm");
+  return {
+    enabled: boolean(value.enabled, "broadcastStorm.enabled"),
+    windowMinutes: integer(value.windowMinutes, "broadcastStorm.windowMinutes", 1, 1_440),
+    replyThreshold: integer(value.replyThreshold, "broadcastStorm.replyThreshold", 1, 100),
+    cooldownMinutes: integer(value.cooldownMinutes, "broadcastStorm.cooldownMinutes", 1, 1_440)
+  };
 }
 
 function validateServer(input: unknown): AppConfig["server"] {
@@ -345,10 +346,9 @@ function validateServer(input: unknown): AppConfig["server"] {
 
 function validatePersona(input: unknown): ConfigSectionValueMap["persona"] {
   const value = object(input, "persona");
-  exactKeys(value, ["agentWorkspace", "memoryLimit"], "persona");
+  exactKeys(value, ["agentWorkspace"], "persona");
   return {
-    agentWorkspace: pathString(value.agentWorkspace, "persona.agentWorkspace", false),
-    memoryLimit: integer(value.memoryLimit, "persona.memoryLimit", 1, 10_000)
+    agentWorkspace: pathString(value.agentWorkspace, "persona.agentWorkspace", false)
   };
 }
 
@@ -456,13 +456,31 @@ function validateProvider(input: unknown, field: string): ProviderConfig {
 
 function validateBot(input: unknown): ConfigSectionValueMap["bot"] {
   const value = object(input, "bot");
-  exactKeys(value, ["adminQq", "adminName", "quoteGroupReplies", "contextMessageLimit"], "bot");
+  exactKeys(value, [
+    "adminQq", "adminName", "pokeOnNoReply", "quoteGroupReplies", "quoteGroupReplyExcludedUserIds", "contextMessageLimit"
+  ], "bot");
   const adminQq = requiredString(value.adminQq, "bot.adminQq", { trim: true, min: 0, max: 32, allowEmpty: true });
   if (adminQq && !/^\d+$/.test(adminQq)) badRequest("CONFIG_INVALID", "管理员 QQ 必须是数字。", "bot.adminQq");
+  const quoteGroupReplyExcludedUserIds = stringArray(
+    value.quoteGroupReplyExcludedUserIds,
+    "bot.quoteGroupReplyExcludedUserIds",
+    100,
+    32
+  );
+  const invalidIndex = quoteGroupReplyExcludedUserIds.findIndex((userId) => !/^\d+$/.test(userId));
+  if (invalidIndex >= 0) {
+    badRequest(
+      "CONFIG_INVALID",
+      "过滤名单中的 QQ 必须是数字。",
+      `bot.quoteGroupReplyExcludedUserIds.${invalidIndex}`
+    );
+  }
   return {
     adminQq,
     adminName: requiredString(value.adminName, "bot.adminName", { trim: true, min: 1, max: 80 }),
+    pokeOnNoReply: boolean(value.pokeOnNoReply, "bot.pokeOnNoReply"),
     quoteGroupReplies: boolean(value.quoteGroupReplies, "bot.quoteGroupReplies"),
+    quoteGroupReplyExcludedUserIds: uniqueStrings(quoteGroupReplyExcludedUserIds),
     contextMessageLimit: integer(value.contextMessageLimit, "bot.contextMessageLimit", 1, 120)
   };
 }
@@ -626,7 +644,9 @@ function validateToolOverrides(input: unknown): NonNullable<BotToolSettings["ove
     const override = object(rawOverride, field);
     const extra = Object.keys(override).find((key) => key !== "enabled" && key !== "description");
     if (extra) badRequest("CONFIG_UNKNOWN_FIELD", "包含不支持的字段。", `${field}.${extra}`);
-    const enabled = override.enabled == null ? undefined : boolean(override.enabled, `${field}.enabled`);
+    const enabled = name === "workspace_bash" || name === "codex" || override.enabled == null
+      ? undefined
+      : boolean(override.enabled, `${field}.enabled`);
     let description: string | undefined;
     if (override.description != null && override.description !== "") {
       description = requiredString(override.description, `${field}.description`, {
@@ -686,15 +706,18 @@ function validateCompleteConfig(config: AppConfig) {
     badRequest("CONFIG_INVALID", "defaultAgentId 必须为 plana。", "persona.defaultAgentId");
   }
   validateServer(config.server);
-  validatePersona({
-    agentWorkspace: config.persona.agentWorkspace,
-    memoryLimit: config.persona.memoryLimit
-  });
+  const persona = validatePersona({ agentWorkspace: config.persona.agentWorkspace });
+  if (persona.agentWorkspace !== DEFAULT_AGENT_WORKSPACE) {
+    badRequest("CONFIG_INVALID", `Agent workspace 仅支持 ${DEFAULT_AGENT_WORKSPACE}。`, "persona.agentWorkspace");
+  }
   validateProviders(config.providers);
+  validateBroadcastStorm(config.broadcastStorm);
   validateBot({
     adminQq: config.bot.adminQq,
     adminName: config.bot.adminName,
+    pokeOnNoReply: config.bot.pokeOnNoReply,
     quoteGroupReplies: config.bot.quoteGroupReplies,
+    quoteGroupReplyExcludedUserIds: config.bot.quoteGroupReplyExcludedUserIds,
     contextMessageLimit: config.bot.contextMessageLimit
   });
   validateMemory(config.bot.memory);
@@ -707,8 +730,7 @@ function validateCompleteConfig(config: AppConfig) {
     badRequest("CONFIG_INVALID", "引用回复镜像字段不一致。", "onebot.quoteGroupReplies");
   }
 }
-
-function mergeSection<S extends ConfigSection>(
+export function mergeConfigSection<S extends ConfigSection>(
   current: AppConfig,
   section: S,
   value: ConfigSectionValueMap[S]
@@ -718,6 +740,7 @@ function mergeSection<S extends ConfigSection>(
     case "server": candidate.server = value as ConfigSectionValueMap["server"]; break;
     case "persona": candidate.persona = { ...candidate.persona, ...(value as ConfigSectionValueMap["persona"]) }; break;
     case "providers": candidate.providers = value as ConfigSectionValueMap["providers"]; break;
+    case "broadcastStorm": candidate.broadcastStorm = value as ConfigSectionValueMap["broadcastStorm"]; break;
     case "bot": {
       candidate.bot = { ...candidate.bot, ...(value as ConfigSectionValueMap["bot"]) };
       candidate.onebot.quoteGroupReplies = candidate.bot.quoteGroupReplies;

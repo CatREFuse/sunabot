@@ -210,7 +210,7 @@ async function createSmokeWorkspace() {
   await Promise.all([
     fs.mkdir(path.join(workspace, "business/config"), { recursive: true }),
     fs.mkdir(path.join(workspace, "secrets"), { recursive: true }),
-    fs.mkdir(path.join(workspace, "runtime/napcat/config-full"), { recursive: true })
+    fs.mkdir(path.join(workspace, "runtime/napcat/accounts/primary/config-full"), { recursive: true })
   ]);
   await fs.writeFile(path.join(workspace, ".sunabot-smoke-workspace.json"), JSON.stringify({
     schemaVersion: 1,
@@ -240,7 +240,7 @@ async function createSmokeWorkspace() {
   ].join("\n"), "utf8");
   const napcat = buildNapCatSmokeConfig({}, "ws://127.0.0.1:18879/onebot/v11/ws", "onebot-test-token");
   await fs.writeFile(
-    path.join(workspace, "runtime/napcat/config-full/onebot11_123456789.json"),
+    path.join(workspace, "runtime/napcat/accounts/primary/config-full/onebot11_123456789.json"),
     JSON.stringify(napcat),
     "utf8"
   );

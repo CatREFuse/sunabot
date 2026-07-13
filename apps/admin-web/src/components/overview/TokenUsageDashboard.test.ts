@@ -2,6 +2,7 @@ import { mount } from "@vue/test-utils";
 import { nextTick } from "vue";
 import { describe, expect, it } from "vitest";
 import type { TokenUsageBucket, TokenUsagePayload } from "../../types";
+import EChart from "../ui/EChart.vue";
 import TokenUsageDashboard from "./TokenUsageDashboard.vue";
 
 const emptyBucket: TokenUsageBucket = {
@@ -21,12 +22,13 @@ function usagePayload(): TokenUsagePayload {
   return {
     today: { date: "2026-07-12", input: 12_840, output: 3_260, cachedInput: 6_420, total: 16_100, cacheRate: 0.5, requests: 18 },
     days: [{ date: "2026-07-12", input: 12_840, output: 3_260, cachedInput: 6_420, total: 16_100, cacheRate: 0.5, requests: 18 }],
-    hours
+    hours,
+    filters: { models: ["gpt-5.4-mini", "__unlabeled__"], model: "", behavior: "" }
   };
 }
 
 describe("TokenUsageDashboard", () => {
-  it("renders cached input, cache rate and separate hourly cache-rate segments", () => {
+  it("switches between hourly and daily ECharts views", async () => {
     const wrapper = mount(TokenUsageDashboard, { props: { usage: usagePayload(), loading: false } });
     const summary = wrapper.get('[aria-label="今日 Token 统计"]');
 
@@ -39,12 +41,40 @@ describe("TokenUsageDashboard", () => {
     expect(summary.get('strong[title="50%"]')).toBeTruthy();
     expect(summary.text()).not.toContain("6,420 / 12,840");
 
-    const chart = wrapper.get('[aria-label="今日每小时 Token 总量与输入缓存率"]');
-    expect(chart.findAll(".chart-point")).toHaveLength(3);
-    expect(chart.findAll(".chart-line")).toHaveLength(1);
-    expect(chart.get(".chart-line").attributes("points")).toBe("47,166 76,122");
-    expect(wrapper.get('[aria-label="图例"]').text()).toContain("总 Token");
-    expect(wrapper.get('[aria-label="图例"]').text()).toContain("缓存率");
+    const hourly = wrapper.findAllComponents(EChart)
+      .find((chart) => chart.props("accessibleLabel") === "今日每小时 Token 总量与输入缓存率");
+    const hourlySeries = hourly?.props("option").series as Array<{ type: string; data: Array<number | null>; connectNulls?: boolean }>;
+
+    expect(hourlySeries[0]?.type).toBe("bar");
+    expect(hourlySeries[0]?.data).toHaveLength(24);
+    expect(hourlySeries[1]?.type).toBe("line");
+    expect(hourlySeries[1]?.connectNulls).toBe(false);
+    expect(hourlySeries[1]?.data.filter((rate) => rate != null)).toEqual([0.25, 0.5, 0.75]);
+    expect(wrapper.find('[aria-label="每日 Token 消耗日历"]').exists()).toBe(false);
+
+    await wrapper.get('[aria-label="时间粒度"] button:last-child').trigger("click");
+    const calendar = wrapper.findAllComponents(EChart)
+      .find((chart) => chart.props("accessibleLabel") === "每日 Token 消耗日历");
+    const calendarSeries = calendar?.props("option").series as Array<{ type: string; data: Array<[string, number]> }>;
+    expect(calendarSeries[0]?.type).toBe("heatmap");
+    expect(calendarSeries[0]?.data).toHaveLength(371);
+    expect(JSON.stringify([hourly?.props("option"), calendar?.props("option")])).not.toMatch(/NaN|Infinity/);
+  });
+
+  it("emits model and function filters while preserving the other dimension", async () => {
+    const wrapper = mount(TokenUsageDashboard, {
+      props: { usage: usagePayload(), loading: false, model: "", behavior: "reply" }
+    });
+
+    await wrapper.get('[aria-label="筛选 Token 模型"]').setValue("gpt-5.4-mini");
+    await wrapper.setProps({ model: "gpt-5.4-mini", behavior: "reply" });
+    await wrapper.get('[aria-label="筛选 Token 功能"]').setValue("memory");
+
+    expect(wrapper.emitted("filtersChange")).toEqual([
+      [{ model: "gpt-5.4-mini", behavior: "reply" }],
+      [{ model: "gpt-5.4-mini", behavior: "memory" }]
+    ]);
+    expect(wrapper.get('[aria-label="筛选 Token 模型"]').text()).toContain("未标注模型");
   });
 
   it("shows an empty cache rate without treating missing input as a zero-percent hit", () => {
@@ -52,12 +82,16 @@ describe("TokenUsageDashboard", () => {
     const rateCard = wrapper.findAll(".token-card--metric").find((card) => card.text().includes("缓存率"));
 
     expect(rateCard?.text()).toContain("--");
-    expect(wrapper.findAll(".chart-point")).toHaveLength(0);
+    const hourly = wrapper.findAllComponents(EChart)
+      .find((chart) => chart.props("accessibleLabel") === "今日每小时 Token 总量与输入缓存率");
+    const series = hourly?.props("option").series as Array<{ data: Array<number | null> }>;
+    expect(series[1]?.data.every((rate) => rate == null)).toBe(true);
     expect(wrapper.text()).toContain("加载中");
   });
 
   it("keeps the newest calendar days visible when usage updates", async () => {
     const wrapper = mount(TokenUsageDashboard, { props: { usage: null, loading: true } });
+    await wrapper.get('[aria-label="时间粒度"] button:last-child').trigger("click");
     const scrollContainer = wrapper.get<HTMLElement>(".calendar-wrap").element;
     Object.defineProperty(scrollContainer, "scrollWidth", { configurable: true, value: 689 });
 

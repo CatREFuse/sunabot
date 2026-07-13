@@ -18,6 +18,39 @@ afterEach(() => {
 });
 
 describe("provider protocols", () => {
+  it("marks the final leading instruction message for GPT-5.6 OpenAI Responses", async () => {
+    const provider = new OpenAIProvider({
+      ...providerConfig("openai-official"),
+      model: "gpt-5.6-terra"
+    });
+    const create = vi.fn(async () => ({
+      output_text: "OK",
+      output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "OK" }] }],
+      usage: { input_tokens: 100, input_tokens_details: { cached_tokens: 0 }, output_tokens: 2, total_tokens: 102 }
+    }));
+    vi.spyOn(provider as never, "createClient").mockReturnValue({ responses: { create } });
+
+    await expect(provider.completeRequest({
+      messages: [
+        { role: "system", content: "system rules" },
+        { role: "developer", content: "developer rules" },
+        { role: "user", content: "ping" }
+      ],
+      response_format: { type: "text" }
+    }, {
+      logContext: { stage: "reply", promptFamily: "conversation.reply" }
+    })).resolves.toBe("OK");
+
+    const body = create.mock.calls[0]?.[0] as Record<string, any>;
+    expect(body.input[0].content[0]).toEqual({ type: "input_text", text: "system rules" });
+    expect(body.input[1].content[0]).toEqual({
+      type: "input_text",
+      text: "developer rules",
+      prompt_cache_breakpoint: { mode: "explicit" }
+    });
+    expect(body.input[2].content[0]).toEqual({ type: "input_text", text: "ping" });
+  });
+
   it("logs every visible SDK retry and disables hidden client retries", async () => {
     appendRequestLog.mockClear();
     const provider = new OpenAIProvider(providerConfig("openai-compatible"));

@@ -11,6 +11,7 @@ import SettingsNavigation from "../components/settings/SettingsNavigation.vue";
 import SettingsSaveBar from "../components/settings/SettingsSaveBar.vue";
 import PersonaSettingsForm from "../components/settings/PersonaSettingsForm.vue";
 import ProviderSettings from "../components/settings/ProviderSettings.vue";
+import BroadcastStormSettingsForm from "../components/settings/BroadcastStormSettingsForm.vue";
 import BotSettingsForm from "../components/settings/BotSettingsForm.vue";
 import MemorySettingsForm from "../components/settings/MemorySettingsForm.vue";
 import OrchestratorSettingsForm from "../components/settings/OrchestratorSettingsForm.vue";
@@ -20,10 +21,13 @@ import OneBotSettingsForm from "../components/settings/OneBotSettingsForm.vue";
 import MonitoringSettingsForm from "../components/settings/MonitoringSettingsForm.vue";
 import DialogOverlay from "../components/ui/DialogOverlay.vue";
 import AdminPasswordForm from "../components/settings/AdminPasswordForm.vue";
+import { activeAgentId } from "../composables/agentScope";
+
+const props = withDefaults(defineProps<{ scope?: "agent" | "system" }>(), { scope: "agent" });
 
 const route = useRoute();
 const router = useRouter();
-const workspace = useConfigWorkspace();
+const workspace = useConfigWorkspace(props.scope);
 const catalog = useModelCatalog();
 const loadError = shallowRef("");
 const leaveConfirmOpen = shallowRef(false);
@@ -34,22 +38,25 @@ const logoutConfirmOpen = shallowRef(false);
 const loggingOut = shallowRef(false);
 const logoutError = shallowRef("");
 const settingsPanel = useTemplateRef<HTMLElement>("settingsPanel");
-const sections: Array<{ id: SettingsSectionKey; label: string; group: string; icon: string }> = [
-  { id: "persona", label: "Agent 身份", group: "Agent", icon: "bx-user-voice" },
-  { id: "bot", label: "回复行为", group: "Agent", icon: "bx-bot" },
-  { id: "providers", label: "模型服务", group: "模型与记忆", icon: "bx-chip" },
-  { id: "memory", label: "记忆处理", group: "模型与记忆", icon: "bx-brain" },
-  { id: "orchestrator", label: "群聊编排", group: "模型与记忆", icon: "bx-git-branch" },
-  { id: "tools", label: "Agent 工具", group: "工具", icon: "bx-wrench" },
-  { id: "bash", label: "命令执行", group: "工具", icon: "bx-terminal" },
-  { id: "security", label: "账户安全", group: "系统", icon: "bx-lock-alt" },
-  { id: "onebot", label: "连接与通知", group: "系统", icon: "bx-link" }
+const allSections: Array<{ id: SettingsSectionKey; label: string; group: string; icon: string; scope: "agent" | "system" }> = [
+  { id: "persona", label: "Agent 身份", group: "Agent", icon: "bx-user-voice", scope: "agent" },
+  { id: "bot", label: "回复行为", group: "Agent", icon: "bx-bot", scope: "agent" },
+  { id: "memory", label: "记忆处理", group: "记忆与编排", icon: "bx-brain", scope: "agent" },
+  { id: "orchestrator", label: "群聊编排", group: "记忆与编排", icon: "bx-git-branch", scope: "agent" },
+  { id: "tools", label: "Agent 工具", group: "工具", icon: "bx-wrench", scope: "agent" },
+  { id: "bash", label: "命令执行", group: "工具", icon: "bx-terminal", scope: "agent" },
+  { id: "providers", label: "模型服务", group: "公共系统", icon: "bx-chip", scope: "system" },
+  { id: "broadcastStorm", label: "广播风暴", group: "公共系统", icon: "bx-shield-quarter", scope: "system" },
+  { id: "security", label: "账户安全", group: "公共系统", icon: "bx-lock-alt", scope: "system" },
+  { id: "onebot", label: "连接与通知", group: "公共系统", icon: "bx-link", scope: "system" }
 ];
-const visibleSections = new Set(sections.map((section) => section.id));
+const sections = computed(() => allSections.filter((section) => section.scope === props.scope));
+const visibleSections = computed(() => new Set(sections.value.map((section) => section.id)));
 const configSections = new Set<ConfigSectionKey>(sectionKeys);
 const current = computed<SettingsSectionKey>(() => {
-  const value = String(route.params.section ?? "persona") as SettingsSectionKey;
-  return visibleSections.has(value) ? value : "persona";
+  const fallback = props.scope === "agent" ? "persona" : "providers";
+  const value = String(route.params.section ?? fallback) as SettingsSectionKey;
+  return visibleSections.value.has(value) ? value : fallback;
 });
 const currentState = computed(() => {
   const section = isConfigSection(current.value) ? current.value : "persona";
@@ -59,15 +66,18 @@ const currentState = computed(() => {
   if (section === "tools" && ["saving", "error", "conflict"].includes(workspace.state.bash.kind)) {
     return workspace.state.bash;
   }
+  if (section === "tools" && ["saving", "error", "conflict"].includes(workspace.state.bot.kind)) {
+    return workspace.state.bot;
+  }
   return workspace.state[section];
 });
-const anyDirty = computed(() => sectionKeys.some(workspace.isDirty));
+const anyDirty = computed(() => sections.value.some((section) => isNavigationDirty(section.id)));
 const currentDirty = computed(() => current.value === "orchestrator"
   ? workspace.isGroupReplyDirty()
   : current.value === "bot"
     ? workspace.isDirty("bot") || workspace.isReplyBehaviorDirty()
   : current.value === "tools"
-    ? workspace.isDirty("tools") || workspace.isDirty("bash")
+    ? workspace.isDirty("tools") || workspace.isDirty("bash") || workspace.isNoReplyPokeDirty()
   : current.value === "onebot"
     ? workspace.isOneBotConnectionDirty()
   : isConfigSection(current.value) ? workspace.isDirty(current.value) : false);
@@ -104,6 +114,7 @@ async function saveCurrent() {
   } else if (current.value === "tools") {
     if (workspace.isDirty("tools")) await workspace.save("tools");
     if (workspace.isDirty("bash")) await workspace.save("bash");
+    if (workspace.isNoReplyPokeDirty()) await workspace.save("bot");
   } else {
     await workspace.save(current.value);
   }
@@ -125,6 +136,9 @@ function reloadConflict() {
   if (current.value === "tools" && workspace.state.bash.kind === "conflict") {
     return loadConfig(true, "bash");
   }
+  if (current.value === "tools" && workspace.state.bot.kind === "conflict") {
+    return loadConfig(true, "bot");
+  }
   return loadConfig(true, current.value);
 }
 
@@ -137,6 +151,7 @@ function discardCurrent() {
   } else if (current.value === "tools") {
     workspace.discard("tools");
     workspace.discard("bash");
+    workspace.discardNoReplyPoke();
   } else if (current.value === "onebot") workspace.discardOneBotConnection();
   else workspace.discard(current.value);
 }
@@ -145,13 +160,13 @@ function isNavigationDirty(section: SettingsSectionKey) {
   if (!isConfigSection(section)) return false;
   if (section === "orchestrator") return workspace.isGroupReplyDirty();
   if (section === "bot") return workspace.isDirty("bot") || workspace.isReplyBehaviorDirty();
-  if (section === "tools") return workspace.isDirty("tools") || workspace.isDirty("bash");
+  if (section === "tools") return workspace.isDirty("tools") || workspace.isDirty("bash") || workspace.isNoReplyPokeDirty();
   if (section === "onebot") return workspace.isOneBotConnectionDirty();
   return workspace.isDirty(section);
 }
 
 function selectSection(section: SettingsSectionKey) {
-  void router.push(`/settings/${section}`);
+  void router.push(`/${props.scope === "agent" ? "agent-settings" : "settings"}/${section}`);
 }
 
 function isConfigSection(section: SettingsSectionKey): section is ConfigSectionKey {
@@ -228,7 +243,7 @@ async function logout() {
 <template>
   <div class="page-shell">
     <div class="page-frame">
-      <PageHeader title="设置">
+      <PageHeader :title="props.scope === 'agent' ? 'Agent 设置' : '系统设置'">
         <template #actions>
           <button class="btn" type="button" :disabled="workspace.loading.value" @click="loadConfig(true)">刷新</button>
           <button class="btn btn-ghost" type="button" @click="logoutConfirmOpen = true"><i class="bx bx-log-out" aria-hidden="true"></i>退出登录</button>
@@ -241,13 +256,17 @@ async function logout() {
         <SettingsNavigation :current="current" :sections="sections" :dirty="isNavigationDirty" @select="selectSection" />
         <section ref="settingsPanel" class="min-w-0">
           <div v-if="current === 'persona'" class="grid gap-12">
-            <PersonaSettingsForm v-model="workspace.drafts.persona" />
+            <PersonaSettingsForm :agent-id="activeAgentId()" />
           </div>
           <ProviderSettings
             v-else-if="current === 'providers'"
             v-model="workspace.drafts.providers"
             :models="catalog.models.value"
             :field-states="workspace.envelope.value?.fieldStates"
+          />
+          <BroadcastStormSettingsForm
+            v-else-if="current === 'broadcastStorm'"
+            v-model="workspace.drafts.broadcastStorm"
           />
           <BotSettingsForm
             v-else-if="current === 'bot'"
@@ -267,6 +286,7 @@ async function logout() {
             :models="catalog.models.value"
             :field-states="workspace.envelope.value?.fieldStates"
             v-model:bash="workspace.drafts.bash"
+            v-model:poke-on-no-reply="workspace.drafts.bot.pokeOnNoReply"
           />
           <BashSettingsForm v-else-if="current === 'bash'" v-model="workspace.drafts.bash" />
           <AdminPasswordForm v-else-if="current === 'security'" />
@@ -279,7 +299,7 @@ async function logout() {
           </div>
 
           <SettingsSaveBar
-            v-if="current !== 'security'"
+            v-if="current !== 'security' && current !== 'persona'"
             :dirty="currentDirty"
             :busy="currentState.kind === 'saving'"
             :message="currentState.message"

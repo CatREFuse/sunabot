@@ -8,6 +8,7 @@ export type MemoryModelCallKindId = typeof memoryModelCallKindIds[number];
 
 export interface ModelCallMeasurement {
   conversationId: string;
+  model: string;
   behavior: ModelCallBehaviorId;
   memoryKind: MemoryModelCallKindId | "";
   input: number;
@@ -32,6 +33,7 @@ export function modelCallMeasurement(record: Record<string, unknown>): ModelCall
   const usage = normalizeTokenUsageRecord(record);
   return {
     conversationId: String(metadata?.conversationId ?? "").trim(),
+    model: String(record.model ?? "").trim(),
     behavior,
     memoryKind: behavior === "memory" ? memoryKind ?? "" : "",
     input: usage?.input ?? 0,

@@ -1,4 +1,5 @@
 import { ImageQuality, ImageResult } from "../../src/types.js";
+import { GENERATE_IMG_REFERENCE_SOURCES } from "./generateImgTool.js";
 
 export const SELFIE_TOOL_NAME = "selfie";
 
@@ -8,6 +9,8 @@ export interface SelfieInput {
   resolution?: unknown;
   quality?: unknown;
   referenceImageUrls?: unknown;
+  referenceMediaHandles?: unknown;
+  referenceImageSource?: unknown;
 }
 
 export type SelfieRunner = (input: SelfieInput) => Promise<SelfieRunResult>;
@@ -34,7 +37,7 @@ export type SelfieRunResult =
 export const selfieTool = {
   type: "function",
   name: SELFIE_TOOL_NAME,
-  description: "Generate a selfie or broad image of the bot's own appearance. Use when the user asks the bot to show itself, take a selfie, make an avatar, make a photo with the bot, or make the bot hold/wear/use something from chat images. A selfie can be interpreted broadly as any image where the bot's own appearance is present, not only a phone selfie pose. Stored bot selfie references are always supplied; current, quoted, and recent chat images are also supplied when available. Do not print local file paths or CQ codes.",
+  description: "Generate a selfie or broad image of the bot's own appearance. Use when the user asks the bot to show itself, take a selfie, make an avatar, make a photo with the bot, or make the bot hold/wear/use something from chat images. A selfie can be interpreted broadly as any image where the bot's own appearance is present, not only a phone selfie pose. Stored bot selfie references are always supplied. The model decides whether an additional chat reference is needed: prefer an exact historical media handle shown in conversation history, then use referenceImageSource as a fallback. Use previous_output for edits or retries of the latest generated image, history for earlier same-user media, current for current or quoted media, current_and_history to combine them, and none when only the stored bot references are needed. Do not print local file paths or CQ codes.",
   parameters: {
     type: "object",
     additionalProperties: false,
@@ -72,10 +75,29 @@ export const selfieTool = {
         type: ["array", "null"],
         items: { type: "string" },
         maxItems: 4,
-        description: "Optional chat reference image URLs. Use null to use current, quoted, and recent chat images automatically."
+        description: "Exact chat reference image URLs explicitly present in the request. Use null when selecting conversation media through referenceMediaHandles or referenceImageSource. Do not invent URLs."
+      },
+      referenceMediaHandles: {
+        type: ["array", "null"],
+        items: { type: "string" },
+        maxItems: 4,
+        description: "Exact historical media handles shown in conversation history, such as message:<message-id>:image:<index>. Prefer these handles when the user refers to a specific earlier image. Use null when no exact chat image is needed. Do not invent handles."
+      },
+      referenceImageSource: {
+        type: "string",
+        enum: GENERATE_IMG_REFERENCE_SOURCES,
+        description: "Fallback chat reference source chosen by the model: none adds no chat media; current uses current and quoted images; previous_output uses the same user's latest generated output; history uses recent same-user conversation media; current_and_history combines current and recent same-user media. Stored bot selfie references are always retained."
       }
     },
-    required: ["prompt", "size", "resolution", "quality", "referenceImageUrls"]
+    required: [
+      "prompt",
+      "size",
+      "resolution",
+      "quality",
+      "referenceImageUrls",
+      "referenceMediaHandles",
+      "referenceImageSource"
+    ]
   },
   strict: true
 };

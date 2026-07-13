@@ -1,8 +1,0 @@
-[Unit]
-Description=Sunabot QQ Runtime
-Wants=sunabot-api.service sunabot-napcat.service
-After=network-online.target
-
-[Install]
-WantedBy=multi-user.target
-

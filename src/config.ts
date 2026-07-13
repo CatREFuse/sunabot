@@ -11,6 +11,7 @@ import {
   BotOrchestratorSettings,
   BotToolOverride,
   BotToolSettings,
+  BroadcastStormConfig,
   ProviderConfig,
   ReasoningEffort
 } from "./types.js";
@@ -93,17 +94,27 @@ export function defaultConfig(): AppConfig {
     server: { host, port },
     persona: {
       defaultAgentId: "plana",
+      name: "普拉娜",
       agentWorkspace: workspaceRelativeReference(WORKSPACE_LAYOUT.defaultAgent),
-      memoryLimit: 32
+      systemPromptWorkspace: workspaceRelativeReference(WORKSPACE_LAYOUT.systemPrompts),
+      systemPromptOverride: false
     },
     providers: {
       defaultProviderId: providers[0]?.id ?? "open-arona-codex",
       items: providers
     },
+    broadcastStorm: {
+      enabled: true,
+      windowMinutes: 2,
+      replyThreshold: 3,
+      cooldownMinutes: 1
+    },
     bot: {
-      adminQq: "171419991",
+      adminQq: "",
       adminName: "猫老师",
+      pokeOnNoReply: false,
       quoteGroupReplies: true,
+      quoteGroupReplyExcludedUserIds: [],
       contextMessageLimit: 48,
       memory: {
         memoryModel: "gpt-5.4-mini",
@@ -178,10 +189,7 @@ export async function ensureWorkspace() {
     WORKSPACE_LAYOUT.attachmentCache,
     WORKSPACE_LAYOUT.runtimeLogs,
     WORKSPACE_LAYOUT.runtimeTemporary,
-    WORKSPACE_LAYOUT.napcatState,
-    WORKSPACE_LAYOUT.napcatConfig,
-    WORKSPACE_LAYOUT.napcatQqState,
-    WORKSPACE_LAYOUT.napcatPlugins,
+    WORKSPACE_LAYOUT.napcatAccounts,
     path.dirname(WORKSPACE_LAYOUT.secretsEnv),
     WORKSPACE_LAYOUT.backups
   ].map((relativePath) => fs.mkdir(getWorkspacePath(relativePath), { recursive: true, mode: 0o700 })));
@@ -234,6 +242,20 @@ export function resolveProjectPath(inputPath: string | undefined) {
   }
   if (normalized.startsWith("workspace/")) return getWorkspacePath(normalized.slice("workspace/".length));
   return path.join(rootDir, inputPath);
+}
+
+export function getAgentSessionQueuePath(config: Pick<AppConfig, "persona">) {
+  if (config.persona.defaultAgentId === "plana") return getWorkspacePath(WORKSPACE_LAYOUT.sessionQueue);
+  const agentWorkspace = resolveProjectPath(config.persona.agentWorkspace);
+  if (!agentWorkspace) throw new Error(`Agent workspace is invalid: ${config.persona.agentWorkspace}`);
+  return path.join(agentWorkspace, "data", "session-queue.sqlite");
+}
+
+export function getAgentPrivatePath(config: Pick<AppConfig, "persona">, globalPath: string, ...segments: string[]) {
+  if (config.persona.defaultAgentId === "plana") return getWorkspacePath(globalPath, ...segments);
+  const agentWorkspace = resolveProjectPath(config.persona.agentWorkspace);
+  if (!agentWorkspace) throw new Error(`Agent workspace is invalid: ${config.persona.agentWorkspace}`);
+  return path.join(agentWorkspace, ...segments);
 }
 
 async function assertWorkspaceLayoutReady() {
@@ -312,14 +334,34 @@ function mergeConfig(base: AppConfig, incoming: Partial<AppConfig>): AppConfig {
       host: process.env.SUNABOT_HOST == null ? fileServer.host : base.server.host,
       port: process.env.SUNABOT_PORT == null ? fileServer.port : base.server.port
     },
-    persona: { ...base.persona, ...incoming.persona },
+    persona: {
+      defaultAgentId: incoming.persona?.defaultAgentId ?? base.persona.defaultAgentId,
+      name: incoming.persona?.name ?? base.persona.name,
+      agentWorkspace: base.persona.agentWorkspace,
+      systemPromptWorkspace: incoming.persona?.systemPromptWorkspace ?? base.persona.systemPromptWorkspace,
+      systemPromptOverride: incoming.persona?.systemPromptOverride ?? base.persona.systemPromptOverride,
+      ...(incoming.persona?.avatarPath ? { avatarPath: incoming.persona.avatarPath } : {})
+    },
     providers: {
       ...base.providers,
       ...incoming.providers,
       items: providerItems.map(normalizeProviderReasoningEffort)
     },
+    broadcastStorm: mergeBroadcastStormConfig(base.broadcastStorm, incoming.broadcastStorm),
     bot,
     onebot: { ...base.onebot, ...incoming.onebot, quoteGroupReplies: bot.quoteGroupReplies }
+  };
+}
+
+function mergeBroadcastStormConfig(
+  base: BroadcastStormConfig,
+  incoming: Partial<BroadcastStormConfig> | undefined
+): BroadcastStormConfig {
+  return {
+    enabled: incoming?.enabled ?? base.enabled,
+    windowMinutes: normalizeInteger(incoming?.windowMinutes, base.windowMinutes, 1, 1_440),
+    replyThreshold: normalizeInteger(incoming?.replyThreshold, base.replyThreshold, 1, 100),
+    cooldownMinutes: normalizeInteger(incoming?.cooldownMinutes, base.cooldownMinutes, 1, 1_440)
   };
 }
 
@@ -360,7 +402,12 @@ function mergeBotConfig(base: BotConfig, incoming: Partial<BotConfig> | undefine
   return {
     adminQq: typeof incoming?.adminQq === "string" ? incoming.adminQq.trim() : base.adminQq,
     adminName: normalizeString(incoming?.adminName, base.adminName),
+    pokeOnNoReply: incoming?.pokeOnNoReply ?? base.pokeOnNoReply,
     quoteGroupReplies: incoming?.quoteGroupReplies ?? legacyQuoteGroupReplies ?? base.quoteGroupReplies,
+    quoteGroupReplyExcludedUserIds: normalizeQqList(
+      incoming?.quoteGroupReplyExcludedUserIds,
+      base.quoteGroupReplyExcludedUserIds
+    ),
     contextMessageLimit: normalizeInteger(incoming?.contextMessageLimit, base.contextMessageLimit, 1, 120),
     memory: mergeBotMemorySettings(base.memory, incoming?.memory as Partial<BotMemorySettings> | undefined),
     orchestrator: mergeBotOrchestratorSettings(base.orchestrator, incoming?.orchestrator as Partial<BotOrchestratorSettings> | undefined),
@@ -457,7 +504,13 @@ function mergeBotToolOverrides(
     const fallback = base?.[name];
     const candidate = incoming?.[name];
     const normalized = normalizeBotToolOverride(candidate, fallback);
-    if (normalized) merged[name] = normalized;
+    if (!normalized) continue;
+    if (name === "workspace_bash" || name === "codex") {
+      const { enabled: _legacyEnabled, ...descriptionOnly } = normalized;
+      if (descriptionOnly.description) merged[name] = descriptionOnly;
+      continue;
+    }
+    merged[name] = normalized;
   }
   return merged;
 }
@@ -486,6 +539,13 @@ function normalizeToolDescription(value: unknown) {
 function ensureStringList(value: unknown, fallback: string[]) {
   if (!Array.isArray(value)) return fallback;
   return value.map(String).map((item) => item.trim()).filter(Boolean);
+}
+
+function normalizeQqList(value: unknown, fallback: string[]) {
+  const items = ensureStringList(value, fallback)
+    .filter((item) => /^\d{1,32}$/.test(item))
+    .slice(0, 100);
+  return [...new Set(items)];
 }
 
 function normalizeString(value: unknown, fallback: string) {

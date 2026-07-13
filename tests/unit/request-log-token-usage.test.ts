@@ -15,6 +15,7 @@ describe("request log token usage", () => {
     const append = (stage: string, memoryKind?: "working_long_term" | "user_profile") => appendRequestLog({
       category: "model.response",
       action: "responses.complete",
+      model: stage === "reply" ? "gpt-reply" : "gpt-shared",
       response: { usage: { input_tokens: 8, output_tokens: 2, total_tokens: 10 } },
       metadata: { conversationId, stage, ...(memoryKind ? { memoryKind } : {}) }
     });
@@ -23,6 +24,7 @@ describe("request log token usage", () => {
     await appendRequestLog({
       category: "model.response",
       action: "responses.complete",
+      model: "gpt-reply",
       response: { ok: false, error: "transport failed" },
       metadata: { conversationId, stage: "reply", transportAttempt: 1 }
     });
@@ -53,7 +55,18 @@ describe("request log token usage", () => {
           working_long_term: { requests: 1, total: 10 },
           user_profile: { requests: 1, total: 10 }
         }
-      }
+      },
+      models: expect.arrayContaining([
+        expect.objectContaining({
+          model: "gpt-reply",
+          total: expect.objectContaining({ requests: 2, total: 10 }),
+          behavior: expect.objectContaining({ reply: expect.objectContaining({ requests: 2, total: 10 }) })
+        }),
+        expect.objectContaining({
+          model: "gpt-shared",
+          total: expect.objectContaining({ requests: 4, total: 40 })
+        })
+      ])
     });
     expect(fullJsonScan).not.toHaveBeenCalled();
   });
@@ -83,6 +96,86 @@ describe("request log token usage", () => {
       cacheRate: null,
       requests: 3
     });
+  });
+
+  it("counts failed model responses without usage while leaving token totals unchanged", async () => {
+    await appendRequestLog({
+      category: "model.response",
+      action: "responses.complete",
+      model: "gpt-cache-test",
+      response: {
+        summary: {
+          usage: {
+            input_tokens: 100,
+            input_tokens_details: { cached_tokens: 40 },
+            output_tokens: 10,
+            total_tokens: 110
+          }
+        }
+      }
+    });
+    await appendRequestLog({
+      category: "model.response",
+      action: "responses.complete",
+      model: "gpt-cache-test",
+      response: { ok: false, status: 500, error: "transport failed" }
+    });
+
+    expect(readTokenUsageSummary(new Date().getTimezoneOffset()).today).toMatchObject({
+      input: 100,
+      cachedInput: 40,
+      output: 10,
+      total: 110,
+      cacheRate: 0.4,
+      requests: 2
+    });
+  });
+
+  it("exposes missing model ids with a selectable unlabeled sentinel", async () => {
+    await appendRequestLog({
+      category: "model.response",
+      action: "responses.complete",
+      response: { usage: { input_tokens: 8, output_tokens: 2, total_tokens: 10 } },
+      metadata: { stage: "reply" }
+    });
+
+    expect(readModelCallStats().models).toEqual([
+      expect.objectContaining({ model: "__unlabeled__", total: expect.objectContaining({ requests: 1, total: 10 }) })
+    ]);
+  });
+
+  it("filters timeline usage by model and function without changing available models", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-13T08:00:00.000Z"));
+    const append = (model: string | undefined, stage: string, total: number) => appendRequestLog({
+      category: "model.response",
+      action: "responses.complete",
+      ...(model == null ? {} : { model }),
+      response: { usage: { input_tokens: total - 10, output_tokens: 10, total_tokens: total } },
+      metadata: { stage, ...(stage === "memory" ? { memoryKind: "working_long_term" } : {}) }
+    });
+
+    await append("gpt-alpha", "reply", 100);
+    await append("gpt-beta", "memory", 40);
+    await append(undefined, "orchestrator", 20);
+
+    const all = readTokenUsageSummary(0);
+    const model = readTokenUsageSummary(0, { model: "gpt-alpha" });
+    const behavior = readTokenUsageSummary(0, { behavior: "memory" });
+    const combined = readTokenUsageSummary(0, { model: "gpt-alpha", behavior: "memory" });
+    const unlabeled = readTokenUsageSummary(0, { model: "__unlabeled__" });
+
+    expect(all.today).toMatchObject({ total: 160, requests: 3 });
+    expect(all.filters).toEqual({
+      models: ["gpt-alpha", "gpt-beta", "__unlabeled__"],
+      model: "",
+      behavior: ""
+    });
+    expect(model.today).toMatchObject({ total: 100, requests: 1 });
+    expect(model.filters.models).toEqual(all.filters.models);
+    expect(behavior.today).toMatchObject({ total: 40, requests: 1 });
+    expect(combined.today).toMatchObject({ total: 0, requests: 0 });
+    expect(unlabeled.today).toMatchObject({ total: 20, requests: 1 });
   });
 
   it("normalizes cached input across provider protocols without double counting", async () => {

@@ -76,6 +76,11 @@ describe("OpenAIProvider asynchronous Codex tool turns", () => {
     const firstRequest = fetchRequestBody(fetchMock, 0);
     expect(toolNames(firstRequest)).toEqual(["codex"]);
     expect(firstRequest.prompt_cache_key).toMatch(/^sunabot:[a-f0-9]{48}$/);
+    expect(firstRequest.instructions).toBeUndefined();
+    expect((firstRequest.input as Array<Record<string, any>>)[0]).toEqual({
+      role: "developer",
+      content: [{ type: "input_text", text: "system" }]
+    });
     const codexDefinition = (firstRequest.tools as Array<Record<string, any>>)[0]!;
     expect(codexDefinition.parameters.required).toContain("dispatch_message");
     expect(codexDefinition.parameters.properties.dispatch_message.maxLength).toBe(200);
@@ -111,6 +116,8 @@ describe("OpenAIProvider asynchronous Codex tool turns", () => {
     });
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchRequestBody(fetchMock, 0).prompt_cache_key).toBe(fetchRequestBody(fetchMock, 1).prompt_cache_key);
+    expect((fetchRequestBody(fetchMock, 0).input as unknown[])[0])
+      .toEqual((fetchRequestBody(fetchMock, 1).input as unknown[])[0]);
     const repairInput = fetchRequestBody(fetchMock, 1).input as Array<Record<string, unknown>>;
     const errorOutput = repairInput.find((item) => item.type === "function_call_output");
     expect(errorOutput?.call_id).toBe("call_codex_missing");
@@ -384,7 +391,13 @@ describe("OpenAIProvider asynchronous Codex tool turns", () => {
     await provider.completeRequest(request, { bot: websearchBotConfig() });
 
     const body = fetchRequestBody(fetchMock, 0);
-    expect(body.instructions).toBe("模板系统提示词");
+    expect(body.instructions).toBeUndefined();
+    expect(body.prompt_cache_options).toBeUndefined();
+    expect(JSON.stringify(body)).not.toContain("prompt_cache_breakpoint");
+    expect((body.input as Array<Record<string, any>>)[0]).toEqual({
+      role: "developer",
+      content: [{ type: "input_text", text: "模板系统提示词" }]
+    });
     expect(body.temperature).toBe(0.1);
     expect(body.max_output_tokens).toBe(99);
     expect(body.tools).toEqual([
@@ -402,10 +415,38 @@ describe("OpenAIProvider asynchronous Codex tool turns", () => {
       }
     });
   });
+
+  it("keeps the legacy instructions request shape for models before GPT-5.6", async () => {
+    const provider = codexProvider("gpt-5.4-mini");
+    const fetchMock = mockCodexToken(provider, codexSseResponse([assistantMessage("完成")]));
+
+    await provider.complete("legacy system", [{ role: "user", content: "ping" }]);
+
+    const body = fetchRequestBody(fetchMock, 0);
+    expect(body.instructions).toBe("legacy system");
+    expect(body.input).toEqual([{
+      role: "user",
+      content: [{ type: "input_text", text: "ping" }]
+    }]);
+  });
+
+  it("uses an implicit stable developer prefix without unsupported explicit fields for GPT-5.6 Codex", async () => {
+    const provider = codexProvider();
+    const fetchMock = mockCodexToken(provider, codexSseResponse([assistantMessage("完成")]));
+
+    await expect(provider.complete("stable system", [{ role: "user", content: "ping" }])).resolves.toBe("完成");
+
+    const body = fetchRequestBody(fetchMock, 0);
+    expect(body.instructions).toBeUndefined();
+    expect((body.input as Array<Record<string, any>>)[0]).toEqual({
+      role: "developer",
+      content: [{ type: "input_text", text: "stable system" }]
+    });
+  });
 });
 
-function codexProvider() {
-  return new OpenAIProvider(providerConfig());
+function codexProvider(model = "gpt-5.6-terra") {
+  return new OpenAIProvider({ ...providerConfig(), model });
 }
 
 function mockCodexToken(provider: OpenAIProvider, ...responses: Response[]) {

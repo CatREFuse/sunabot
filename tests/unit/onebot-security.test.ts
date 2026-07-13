@@ -123,6 +123,74 @@ describe("OneBot security boundaries", () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
+  it("keeps two registered QQ connections and targeted actions isolated", async () => {
+    process.env.ONEBOT_ACCESS_TOKEN = "unit-onebot-token";
+    const config = defaultConfig();
+    const server = http.createServer();
+    const handleInboundMessage = vi.fn(async () => undefined);
+    const gateway = new OneBotGateway(server, config, { handleInboundMessage }, {
+      isAccountAllowed: (accountId) => accountId === "account-a" || accountId === "account-b"
+    });
+    gateway.mount();
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Test server has no TCP address.");
+    const connect = async (accountId: string) => {
+      const client = new WebSocket(
+        `ws://127.0.0.1:${address.port}${config.onebot.reverseWsPath}` +
+        `?access_token=unit-onebot-token&account_id=${accountId}`
+      );
+      await new Promise<void>((resolve, reject) => {
+        client.once("open", resolve);
+        client.once("error", reject);
+      });
+      return client;
+    };
+    const first = await connect("account-a");
+    const second = await connect("account-b");
+
+    expect(gateway.getStatus()).toMatchObject({
+      connections: 2,
+      accounts: expect.arrayContaining([
+        expect.objectContaining({ accountId: "account-a" }),
+        expect.objectContaining({ accountId: "account-b" })
+      ])
+    });
+
+    second.once("message", (raw) => {
+      const request = JSON.parse(raw.toString()) as { action: string; echo: string };
+      second.send(JSON.stringify({ status: "ok", retcode: 0, data: { user_id: 22222 }, echo: request.echo }));
+    });
+    const firstMessage = vi.fn();
+    first.on("message", firstMessage);
+    await expect(gateway.sendAction("get_login_info", {}, "account-b")).resolves.toMatchObject({
+      data: { user_id: 22222 }
+    });
+    expect(firstMessage).not.toHaveBeenCalled();
+
+    second.send(JSON.stringify({
+      post_type: "message",
+      message_type: "private",
+      self_id: 22222,
+      user_id: 33333,
+      message_id: 1,
+      time: 1,
+      message: "你好",
+      raw_message: "你好"
+    }));
+    await vi.waitFor(() => expect(handleInboundMessage).toHaveBeenCalledOnce());
+    expect(handleInboundMessage.mock.calls[0]?.[2]).toMatchObject({ accountId: "account-b", selfId: "22222" });
+
+    first.terminate();
+    second.terminate();
+    await Promise.all([
+      new Promise<void>((resolve) => first.once("close", resolve)),
+      new Promise<void>((resolve) => second.once("close", resolve))
+    ]);
+    await gateway.close();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
   it("closes WebSocket upgrades sent to an unknown path", async () => {
     delete process.env.ONEBOT_ACCESS_TOKEN;
     const config = defaultConfig();

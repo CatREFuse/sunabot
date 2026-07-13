@@ -19,7 +19,7 @@ import type {
 } from "../services/media/attachments/types.js";
 import { CommandRouter, type CommandMatch } from "../services/messaging/commandRouter.js";
 import { isReplySenderAllowed } from "../services/messaging/replySenderPolicy.js";
-import { getDefaultProvider, getRootDir, getWorkspacePath, resolveProjectPath } from "./config.js";
+import { getAgentPrivatePath, getAgentSessionQueuePath, getDefaultProvider, getRootDir, getWorkspacePath, resolveProjectPath } from "./config.js";
 import {
   assistantReplyEnvelope,
   decodeAssistantReply,
@@ -117,13 +117,15 @@ import { RuntimeConversations } from "./runtime/conversations.js";
 import { RuntimeSelfie } from "./runtime/selfie.js";
 import { TaskLimiter, errorMessage, loadConversationRecords } from "./runtime/infrastructure.js";
 import type { RuntimeToolCapabilityResolver } from "../services/tools/bashCapability.js";
+import type { ReplySuppression } from "../services/orchestration/broadcastStormDetector.js";
+import { runWithAgentRuntimeContext } from "../packages/platform/runtimeAgentContext.js";
 export * from "./runtime/runtimeContracts.js";
 export * from "./runtime/runtimeHelpers.js";
 
 export class SunaRuntime {
   persona?: AgentPersona;
   config: AppConfig;
-  readonly conversationRecords = new Map(loadConversationRecords().map((record) => [record.id, record]));
+  readonly conversationRecords: Map<string, ConversationRecord>;
   readonly activeDirectControllers = new Map<string, AbortController>();
   readonly ambientReplies = new Map<string, AmbientReplyState>();
   readonly ambientIdleTimers = new Map<string, AmbientIdleTimer>();
@@ -148,6 +150,7 @@ export class SunaRuntime {
   readonly ownsSessionStore: boolean;
   readonly sessionCoordinator: SessionCoordinator;
   readonly resolveToolCapabilities: RuntimeToolCapabilityResolver;
+  readonly replySuppression: ReplySuppression;
   readonly incomingPreparations = new Map<string, {
       promise: Promise<void>;
       incoming: ParsedIncomingMessage;
@@ -164,26 +167,28 @@ export class SunaRuntime {
   constructor(config: AppConfig, options: SunaRuntimeOptions = {}) {
       configureMemoryPersistence(sqliteMemoryPersistence);
       this.config = config;
+      this.conversationRecords = new Map(loadConversationRecords(config).map((record) => [record.id, record]));
       this.resolveToolCapabilities = failClosedToolCapabilityResolver(options.resolveToolCapabilities);
+      this.replySuppression = options.replySuppression ?? { canReplyTo: () => true };
       this.memoryScheduler = new MemorySchedulerStore(config);
       this.attachmentService = options.attachmentService ?? new AttachmentService(getRootDir(), {
-        cacheRoot: getWorkspacePath(WORKSPACE_LAYOUT.attachmentCache),
+        cacheRoot: getAgentPrivatePath(config, WORKSPACE_LAYOUT.attachmentCache, "cache", "attachments"),
         cacheOptions: { trustedResolvedAddress: isTrustedQqFakeIp }
       });
       this.ownsSessionStore = !options.sessionStore;
       this.sessionStore = options.sessionStore ?? new SessionStore({
         databasePath: process.env.VITEST
           ? ":memory:"
-          : getWorkspacePath(WORKSPACE_LAYOUT.sessionQueue)
+          : getAgentSessionQueuePath(config)
       });
       this.sessionCoordinator = new SessionCoordinator({
         store: this.sessionStore,
-        handleEvent: (event, context) => this.processSessionEvent(event, context.signal),
-        deliverOutbox: (outbox, context) => this.deliverSessionOutbox(outbox, context.signal),
+        handleEvent: (event, context) => this.inAgentContext(() => this.processSessionEvent(event, context.signal)),
+        deliverOutbox: (outbox, context) => this.inAgentContext(() => this.deliverSessionOutbox(outbox, context.signal)),
         codexRunner: options.codexRunner ?? new CodexToolRunner(),
         cleanupCodexProcess: cleanupPersistedCodexProcess,
-        runDeferredTool: (job, signal) => this.processDeferredToolJob(job, signal),
-        observeCodexToolUsage: async (observation) => {
+        runDeferredTool: (job, signal) => this.inAgentContext(() => this.processDeferredToolJob(job, signal)),
+        observeCodexToolUsage: (observation) => this.inAgentContext(async () => {
           await appendRequestLog({
             category: "model.response",
             action: "codex.tool.complete",
@@ -201,7 +206,7 @@ export class SunaRuntime {
               attempt: observation.attempt
             }
           });
-        },
+        }),
         codexSettings: () => ({
           enabled: this.config.bot.tools.codex.enabled,
           model: this.config.bot.tools.codex.model,
@@ -209,7 +214,7 @@ export class SunaRuntime {
           timeoutMs: this.config.bot.tools.codex.timeoutMs,
           maxConcurrency: this.config.bot.tools.codex.maxConcurrency,
           workspacePath: resolveProjectPath(this.config.persona.agentWorkspace) ?? getRootDir(),
-          jobRoot: getWorkspacePath(WORKSPACE_LAYOUT.codexJobs),
+          jobRoot: getAgentPrivatePath(this.config, WORKSPACE_LAYOUT.codexJobs, "runtime", "codex-jobs"),
           authFile: getWorkspacePath(WORKSPACE_LAYOUT.codexHome, "auth.json")
         }),
         turnTimeoutMs: DIRECT_REPLY_TIMEOUT_MS + 5_000,
@@ -235,20 +240,21 @@ export class SunaRuntime {
       this.conversations = new RuntimeConversations(this);
       this.selfie = new RuntimeSelfie(this);
   }
-  initialize(...args: Parameters<RuntimeLifecycle["initialize"]>) { return this.lifecycle.initialize(...args); }
-  close(...args: Parameters<RuntimeLifecycle["close"]>) { return this.lifecycle.close(...args); }
-  reload(...args: Parameters<RuntimeLifecycle["reload"]>) { return this.lifecycle.reload(...args); }
-  prepareReload(...args: Parameters<RuntimeLifecycle["prepareReload"]>) { return this.lifecycle.prepareReload(...args); }
-  commitReload(...args: Parameters<RuntimeLifecycle["commitReload"]>) { return this.lifecycle.commitReload(...args); }
-  reloadPrompts(...args: Parameters<RuntimeLifecycle["reloadPrompts"]>) { return this.lifecycle.reloadPrompts(...args); }
-  preparePromptReload(...args: Parameters<RuntimeLifecycle["preparePromptReload"]>) { return this.lifecycle.preparePromptReload(...args); }
-  commitPromptReload(...args: Parameters<RuntimeLifecycle["commitPromptReload"]>) { return this.lifecycle.commitPromptReload(...args); }
+  private inAgentContext<T>(operation: () => T): T { return runWithAgentRuntimeContext(this.config, operation); }
+  initialize(...args: Parameters<RuntimeLifecycle["initialize"]>) { return this.inAgentContext(() => this.lifecycle.initialize(...args)); }
+  close(...args: Parameters<RuntimeLifecycle["close"]>) { return this.inAgentContext(() => this.lifecycle.close(...args)); }
+  reload(...args: Parameters<RuntimeLifecycle["reload"]>) { return this.inAgentContext(() => this.lifecycle.reload(...args)); }
+  prepareReload(...args: Parameters<RuntimeLifecycle["prepareReload"]>) { return this.inAgentContext(() => this.lifecycle.prepareReload(...args)); }
+  commitReload(...args: Parameters<RuntimeLifecycle["commitReload"]>) { return this.inAgentContext(() => this.lifecycle.commitReload(...args)); }
+  reloadPrompts(...args: Parameters<RuntimeLifecycle["reloadPrompts"]>) { return this.inAgentContext(() => this.lifecycle.reloadPrompts(...args)); }
+  preparePromptReload(...args: Parameters<RuntimeLifecycle["preparePromptReload"]>) { return this.inAgentContext(() => this.lifecycle.preparePromptReload(...args)); }
+  commitPromptReload(...args: Parameters<RuntimeLifecycle["commitPromptReload"]>) { return this.inAgentContext(() => this.lifecycle.commitPromptReload(...args)); }
   getPersonaStatus(...args: Parameters<RuntimeLifecycle["getPersonaStatus"]>) { return this.lifecycle.getPersonaStatus(...args); }
   getProviderStatus(...args: Parameters<RuntimeLifecycle["getProviderStatus"]>) { return this.lifecycle.getProviderStatus(...args); }
-  consolidateWorkingMemory(...args: Parameters<RuntimeLifecycle["consolidateWorkingMemory"]>) { return this.lifecycle.consolidateWorkingMemory(...args); }
+  consolidateWorkingMemory(...args: Parameters<RuntimeLifecycle["consolidateWorkingMemory"]>) { return this.inAgentContext(() => this.lifecycle.consolidateWorkingMemory(...args)); }
   getProvider(...args: Parameters<RuntimeLifecycle["getProvider"]>) { return this.lifecycle.getProvider(...args); }
   getProviderForModel(...args: Parameters<RuntimeLifecycle["getProviderForModel"]>) { return this.lifecycle.getProviderForModel(...args); }
-  ensureAgentPromptFiles(...args: Parameters<RuntimeLifecycle["ensureAgentPromptFiles"]>) { return this.lifecycle.ensureAgentPromptFiles(...args); }
+  ensureAgentPromptFiles(...args: Parameters<RuntimeLifecycle["ensureAgentPromptFiles"]>) { return this.inAgentContext(() => this.lifecycle.ensureAgentPromptFiles(...args)); }
   defaultPromptContent(...args: Parameters<RuntimeLifecycle["defaultPromptContent"]>) { return this.lifecycle.defaultPromptContent(...args); }
   renderPromptRequest(...args: Parameters<RuntimeLifecycle["renderPromptRequest"]>) { return this.lifecycle.renderPromptRequest(...args); }
   completePrompt(...args: Parameters<RuntimeLifecycle["completePrompt"]>) { return this.lifecycle.completePrompt(...args); }
@@ -256,24 +262,24 @@ export class SunaRuntime {
   getConversationRecords(...args: Parameters<RuntimeLifecycle["getConversationRecords"]>) { return this.lifecycle.getConversationRecords(...args); }
   publicConversationRecord(...args: Parameters<RuntimeLifecycle["publicConversationRecord"]>) { return this.lifecycle.publicConversationRecord(...args); }
   getConversationMessages(...args: Parameters<RuntimeLifecycle["getConversationMessages"]>) { return this.lifecycle.getConversationMessages(...args); }
-  getConversationMessageStats(...args: Parameters<RuntimeLifecycle["getConversationMessageStats"]>) { return this.lifecycle.getConversationMessageStats(...args); }
+  getConversationMessageStats(...args: Parameters<RuntimeLifecycle["getConversationMessageStats"]>) { return this.inAgentContext(() => this.lifecycle.getConversationMessageStats(...args)); }
   hydrateConversationIdentities(...args: Parameters<RuntimeLifecycle["hydrateConversationIdentities"]>) { return this.lifecycle.hydrateConversationIdentities(...args); }
   enrichMemoryEntries(...args: Parameters<RuntimeLifecycle["enrichMemoryEntries"]>) { return this.lifecycle.enrichMemoryEntries(...args); }
   setConversationReplyEnabled(...args: Parameters<RuntimeLifecycle["setConversationReplyEnabled"]>) { return this.lifecycle.setConversationReplyEnabled(...args); }
   announceServiceOnline(...args: Parameters<RuntimeLifecycle["announceServiceOnline"]>) { return this.lifecycle.announceServiceOnline(...args); }
   hydrateConversationRecords(...args: Parameters<RuntimeIntake["hydrateConversationRecords"]>) { return this.intake.hydrateConversationRecords(...args); }
   performHydrateConversationRecords(...args: Parameters<RuntimeIntake["performHydrateConversationRecords"]>) { return this.intake.performHydrateConversationRecords(...args); }
-  handleInboundMessage(...args: Parameters<RuntimeIntake["handleInboundMessage"]>) { return this.intake.handleInboundMessage(...args); }
-  processSessionEvent(...args: Parameters<RuntimeIntake["processSessionEvent"]>) { return this.intake.processSessionEvent(...args); }
-  processIncomingReplyEvent(...args: Parameters<RuntimeIntake["processIncomingReplyEvent"]>) { return this.intake.processIncomingReplyEvent(...args); }
-  deliverSessionOutbox(...args: Parameters<RuntimeIntake["deliverSessionOutbox"]>) { return this.intake.deliverSessionOutbox(...args); }
+  handleInboundMessage(...args: Parameters<RuntimeIntake["handleInboundMessage"]>) { return this.inAgentContext(() => this.intake.handleInboundMessage(...args)); }
+  processSessionEvent(...args: Parameters<RuntimeIntake["processSessionEvent"]>) { return this.inAgentContext(() => this.intake.processSessionEvent(...args)); }
+  processIncomingReplyEvent(...args: Parameters<RuntimeIntake["processIncomingReplyEvent"]>) { return this.inAgentContext(() => this.intake.processIncomingReplyEvent(...args)); }
+  deliverSessionOutbox(...args: Parameters<RuntimeIntake["deliverSessionOutbox"]>) { return this.inAgentContext(() => this.intake.deliverSessionOutbox(...args)); }
   requireActiveGateway(...args: Parameters<RuntimeIntake["requireActiveGateway"]>) { return this.intake.requireActiveGateway(...args); }
-  handleIncomingMessage(...args: Parameters<RuntimeIntake["handleIncomingMessage"]>) { return this.intake.handleIncomingMessage(...args); }
+  handleIncomingMessage(...args: Parameters<RuntimeIntake["handleIncomingMessage"]>) { return this.inAgentContext(() => this.intake.handleIncomingMessage(...args)); }
   prepareIncomingMessage(...args: Parameters<RuntimeIntake["prepareIncomingMessage"]>) { return this.intake.prepareIncomingMessage(...args); }
-  replyToIncoming(...args: Parameters<RuntimeReply["replyToIncoming"]>) { return this.reply.replyToIncoming(...args); }
+  replyToIncoming(...args: Parameters<RuntimeReply["replyToIncoming"]>) { return this.inAgentContext(() => this.reply.replyToIncoming(...args)); }
   replyWithGroupChatSummary(...args: Parameters<RuntimeReply["replyWithGroupChatSummary"]>) { return this.reply.replyWithGroupChatSummary(...args); }
   replyToToolCompletion(...args: Parameters<RuntimeReply["replyToToolCompletion"]>) { return this.reply.replyToToolCompletion(...args); }
-  processDeferredToolJob(...args: Parameters<RuntimeReply["processDeferredToolJob"]>) { return this.reply.processDeferredToolJob(...args); }
+  processDeferredToolJob(...args: Parameters<RuntimeReply["processDeferredToolJob"]>) { return this.inAgentContext(() => this.reply.processDeferredToolJob(...args)); }
   attachReplyReferences(...args: Parameters<RuntimeReply["attachReplyReferences"]>) { return this.reply.attachReplyReferences(...args); }
   loadMessageDetails(...args: Parameters<RuntimeReply["loadMessageDetails"]>) { return this.reply.loadMessageDetails(...args); }
   loadQuoteReferences(...args: Parameters<RuntimeReply["loadQuoteReferences"]>) { return this.reply.loadQuoteReferences(...args); }
@@ -292,16 +298,17 @@ export class SunaRuntime {
   resolveIncomingReplyRoute(...args: Parameters<RuntimeOrchestration["resolveIncomingReplyRoute"]>) { return this.orchestration.resolveIncomingReplyRoute(...args); }
   isReplyTaskCurrent(...args: Parameters<RuntimeOrchestration["isReplyTaskCurrent"]>) { return this.orchestration.isReplyTaskCurrent(...args); }
   cancelScopeReplies(...args: Parameters<RuntimeOrchestration["cancelScopeReplies"]>) { return this.orchestration.cancelScopeReplies(...args); }
+  cancelAllReplies(...args: Parameters<RuntimeOrchestration["cancelAllReplies"]>) { return this.orchestration.cancelAllReplies(...args); }
   cancelAllAmbientReplies(...args: Parameters<RuntimeOrchestration["cancelAllAmbientReplies"]>) { return this.orchestration.cancelAllAmbientReplies(...args); }
-  resumeUserGroupOrchestrators(...args: Parameters<RuntimeOrchestration["resumeUserGroupOrchestrators"]>) { return this.orchestration.resumeUserGroupOrchestrators(...args); }
-  suspendUserGroupOrchestrators(...args: Parameters<RuntimeOrchestration["suspendUserGroupOrchestrators"]>) { return this.orchestration.suspendUserGroupOrchestrators(...args); }
+  resumeUserGroupOrchestrators(...args: Parameters<RuntimeOrchestration["resumeUserGroupOrchestrators"]>) { return this.inAgentContext(() => this.orchestration.resumeUserGroupOrchestrators(...args)); }
+  suspendUserGroupOrchestrators(...args: Parameters<RuntimeOrchestration["suspendUserGroupOrchestrators"]>) { return this.inAgentContext(() => this.orchestration.suspendUserGroupOrchestrators(...args)); }
   patchIncomingMessage(...args: Parameters<RuntimeOrchestration["patchIncomingMessage"]>) { return this.orchestration.patchIncomingMessage(...args); }
   shouldRunUserGroupchatOrchestrator(...args: Parameters<RuntimeOrchestration["shouldRunUserGroupchatOrchestrator"]>) { return this.orchestration.shouldRunUserGroupchatOrchestrator(...args); }
   pendingOrchestratorUserMessages(...args: Parameters<RuntimeOrchestration["pendingOrchestratorUserMessages"]>) { return this.orchestration.pendingOrchestratorUserMessages(...args); }
   scheduleAmbientIdleReply(...args: Parameters<RuntimeOrchestration["scheduleAmbientIdleReply"]>) { return this.orchestration.scheduleAmbientIdleReply(...args); }
   cancelAmbientIdleTimer(...args: Parameters<RuntimeOrchestration["cancelAmbientIdleTimer"]>) { return this.orchestration.cancelAmbientIdleTimer(...args); }
   queueAmbientReply(...args: Parameters<RuntimeOrchestration["queueAmbientReply"]>) { return this.orchestration.queueAmbientReply(...args); }
-  pumpAmbientReply(...args: Parameters<RuntimeOrchestration["pumpAmbientReply"]>) { return this.orchestration.pumpAmbientReply(...args); }
+  pumpAmbientReply(...args: Parameters<RuntimeOrchestration["pumpAmbientReply"]>) { return this.inAgentContext(() => this.orchestration.pumpAmbientReply(...args)); }
   isAmbientReplyCurrent(...args: Parameters<RuntimeOrchestration["isAmbientReplyCurrent"]>) { return this.orchestration.isAmbientReplyCurrent(...args); }
   cancelAmbientReply(...args: Parameters<RuntimeOrchestration["cancelAmbientReply"]>) { return this.orchestration.cancelAmbientReply(...args); }
   runUserGroupchatOrchestrator(...args: Parameters<RuntimeOrchestration["runUserGroupchatOrchestrator"]>) { return this.orchestration.runUserGroupchatOrchestrator(...args); }
@@ -313,7 +320,7 @@ export class SunaRuntime {
   enqueueConversationMemory(...args: Parameters<RuntimeMemoryPipeline["enqueueConversationMemory"]>) { return this.memory.enqueueConversationMemory(...args); }
   scheduleMemoryDrain(...args: Parameters<RuntimeMemoryPipeline["scheduleMemoryDrain"]>) { return this.memory.scheduleMemoryDrain(...args); }
   armMemoryWakeTimer(...args: Parameters<RuntimeMemoryPipeline["armMemoryWakeTimer"]>) { return this.memory.armMemoryWakeTimer(...args); }
-  drainMemoryScheduler(...args: Parameters<RuntimeMemoryPipeline["drainMemoryScheduler"]>) { return this.memory.drainMemoryScheduler(...args); }
+  drainMemoryScheduler(...args: Parameters<RuntimeMemoryPipeline["drainMemoryScheduler"]>) { return this.inAgentContext(() => this.memory.drainMemoryScheduler(...args)); }
   projectMemoryCursor(...args: Parameters<RuntimeMemoryPipeline["projectMemoryCursor"]>) { return this.memory.projectMemoryCursor(...args); }
   sendAssistantReply(...args: Parameters<RuntimeDelivery["sendAssistantReply"]>) { return this.delivery.sendAssistantReply(...args); }
   replyDeliveryDraft(...args: Parameters<RuntimeDelivery["replyDeliveryDraft"]>) { return this.delivery.replyDeliveryDraft(...args); }
@@ -324,21 +331,22 @@ export class SunaRuntime {
   recordAssistantRequestStarted(...args: Parameters<RuntimeConversations["recordAssistantRequestStarted"]>) { return this.conversations.recordAssistantRequestStarted(...args); }
   recordAssistantMessage(...args: Parameters<RuntimeConversations["recordAssistantMessage"]>) { return this.conversations.recordAssistantMessage(...args); }
   recordAssistantTurnTools(...args: Parameters<RuntimeConversations["recordAssistantTurnTools"]>) { return this.conversations.recordAssistantTurnTools(...args); }
+  discardAssistantRequest(...args: Parameters<RuntimeConversations["discardAssistantRequest"]>) { return this.conversations.discardAssistantRequest(...args); }
   ensureConversationRecord(...args: Parameters<RuntimeConversations["ensureConversationRecord"]>) { return this.conversations.ensureConversationRecord(...args); }
   upsertConversationRecordForReplySetting(...args: Parameters<RuntimeConversations["upsertConversationRecordForReplySetting"]>) { return this.conversations.upsertConversationRecordForReplySetting(...args); }
-  persistConversationRecords(...args: Parameters<RuntimeConversations["persistConversationRecords"]>) { return this.conversations.persistConversationRecords(...args); }
+  persistConversationRecords(...args: Parameters<RuntimeConversations["persistConversationRecords"]>) { return this.inAgentContext(() => this.conversations.persistConversationRecords(...args)); }
   markConversationMessagesAsRecordedOnly(...args: Parameters<RuntimeConversations["markConversationMessagesAsRecordedOnly"]>) { return this.conversations.markConversationMessagesAsRecordedOnly(...args); }
   getActiveConversationRecords(...args: Parameters<RuntimeConversations["getActiveConversationRecords"]>) { return this.conversations.getActiveConversationRecords(...args); }
   recordServiceMessage(...args: Parameters<RuntimeConversations["recordServiceMessage"]>) { return this.conversations.recordServiceMessage(...args); }
-  processMemoryClaim(...args: Parameters<RuntimeMemoryPipeline["processMemoryClaim"]>) { return this.memory.processMemoryClaim(...args); }
+  processMemoryClaim(...args: Parameters<RuntimeMemoryPipeline["processMemoryClaim"]>) { return this.inAgentContext(() => this.memory.processMemoryClaim(...args)); }
   enrichParticipantAddressNames(...args: Parameters<RuntimeMemoryPipeline["enrichParticipantAddressNames"]>) { return this.memory.enrichParticipantAddressNames(...args); }
-  mergeConversationWorkingMemory(...args: Parameters<RuntimeMemoryPipeline["mergeConversationWorkingMemory"]>) { return this.memory.mergeConversationWorkingMemory(...args); }
-  mergeWorkingMemory(...args: Parameters<RuntimeMemoryPipeline["mergeWorkingMemory"]>) { return this.memory.mergeWorkingMemory(...args); }
-  requestWorkingMemoryMerge(...args: Parameters<RuntimeMemoryPipeline["requestWorkingMemoryMerge"]>) { return this.memory.requestWorkingMemoryMerge(...args); }
-  compressUserProfiles(...args: Parameters<RuntimeMemoryPipeline["compressUserProfiles"]>) { return this.memory.compressUserProfiles(...args); }
+  mergeConversationWorkingMemory(...args: Parameters<RuntimeMemoryPipeline["mergeConversationWorkingMemory"]>) { return this.inAgentContext(() => this.memory.mergeConversationWorkingMemory(...args)); }
+  mergeWorkingMemory(...args: Parameters<RuntimeMemoryPipeline["mergeWorkingMemory"]>) { return this.inAgentContext(() => this.memory.mergeWorkingMemory(...args)); }
+  requestWorkingMemoryMerge(...args: Parameters<RuntimeMemoryPipeline["requestWorkingMemoryMerge"]>) { return this.inAgentContext(() => this.memory.requestWorkingMemoryMerge(...args)); }
+  compressUserProfiles(...args: Parameters<RuntimeMemoryPipeline["compressUserProfiles"]>) { return this.inAgentContext(() => this.memory.compressUserProfiles(...args)); }
   readRelevantUserProfiles(...args: Parameters<RuntimeSelfie["readRelevantUserProfiles"]>) { return this.selfie.readRelevantUserProfiles(...args); }
-  runSelfie(...args: Parameters<RuntimeSelfie["runSelfie"]>) { return this.selfie.runSelfie(...args); }
-  rewriteSelfiePrompt(...args: Parameters<RuntimeSelfie["rewriteSelfiePrompt"]>) { return this.selfie.rewriteSelfiePrompt(...args); }
+  runSelfie(...args: Parameters<RuntimeSelfie["runSelfie"]>) { return this.inAgentContext(() => this.selfie.runSelfie(...args)); }
+  rewriteSelfiePrompt(...args: Parameters<RuntimeSelfie["rewriteSelfiePrompt"]>) { return this.inAgentContext(() => this.selfie.rewriteSelfiePrompt(...args)); }
   collectSelfieChatReferenceImages(...args: Parameters<RuntimeSelfie["collectSelfieChatReferenceImages"]>) { return this.selfie.collectSelfieChatReferenceImages(...args); }
   loadSelfieReferenceImages(...args: Parameters<RuntimeSelfie["loadSelfieReferenceImages"]>) { return this.selfie.loadSelfieReferenceImages(...args); }
 }

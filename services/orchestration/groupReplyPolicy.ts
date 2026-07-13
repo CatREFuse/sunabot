@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 export type UserGroupReplyRoute = "none" | "command" | "direct" | "ambient";
 export type ReplyGateScope = "private" | "user_group" | "bot_group";
 
@@ -9,6 +11,7 @@ export interface UserGroupReplyPolicyInput {
 }
 
 export interface ReplyGateSnapshot {
+  generation: string;
   scope: ReplyGateScope;
   conversationId: string;
   scopeEpoch: number;
@@ -30,11 +33,13 @@ export function isOrchestratorReplyRateLimited(lastReplyAt: string | undefined, 
 }
 
 export class ReplyGateEpochs {
+  private readonly generation = randomUUID();
   private readonly scopeEpochs = new Map<ReplyGateScope, number>();
   private readonly conversationEpochs = new Map<string, number>();
 
   capture(scope: ReplyGateScope, conversationId: string): ReplyGateSnapshot {
     return {
+      generation: this.generation,
       scope,
       conversationId,
       scopeEpoch: this.scopeEpochs.get(scope) ?? 0,
@@ -51,7 +56,31 @@ export class ReplyGateEpochs {
   }
 
   isCurrent(snapshot: ReplyGateSnapshot) {
+    if (snapshot.generation !== this.generation) return true;
     return snapshot.scopeEpoch === (this.scopeEpochs.get(snapshot.scope) ?? 0) &&
       snapshot.conversationEpoch === (this.conversationEpochs.get(snapshot.conversationId) ?? 0);
   }
+}
+
+export function readReplyGateSnapshot(
+  value: unknown,
+  expectedScope: ReplyGateScope,
+  expectedConversationId: string
+): ReplyGateSnapshot | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const gate = value as Record<string, unknown>;
+  if (
+    typeof gate.generation !== "string" || !gate.generation.trim() ||
+    gate.scope !== expectedScope ||
+    gate.conversationId !== expectedConversationId ||
+    !Number.isSafeInteger(gate.scopeEpoch) || Number(gate.scopeEpoch) < 0 ||
+    !Number.isSafeInteger(gate.conversationEpoch) || Number(gate.conversationEpoch) < 0
+  ) return undefined;
+  return {
+    generation: gate.generation,
+    scope: expectedScope,
+    conversationId: expectedConversationId,
+    scopeEpoch: Number(gate.scopeEpoch),
+    conversationEpoch: Number(gate.conversationEpoch)
+  };
 }

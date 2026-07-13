@@ -162,8 +162,7 @@ export async function runtime_enqueueConversationMemory(this: RuntimeHost, recor
       userId: record.userId,
       groupId: record.groupId
     }, messages, {
-      committedThrough: record.memoryCompressedThroughMessageCount,
-      idleDelayMs: 5 * 60 * 1000
+      committedThrough: record.memoryCompressedThroughMessageCount
     });
   }
 export function runtime_scheduleMemoryDrain(this: RuntimeHost) {
@@ -203,7 +202,7 @@ export async function runtime_drainMemoryScheduler(this: RuntimeHost) {
       const claim = await this.memoryScheduler.claimNext(threshold);
       if (!claim) return;
       if (await isMemoryBatchCommitted(this.config, claim.batchId)) {
-        await this.memoryScheduler.complete(claim);
+        await this.memoryScheduler.complete(claim, Date.now(), { refundAttempt: true });
         this.projectMemoryCursor(claim);
         continue;
       }
@@ -499,6 +498,7 @@ export async function runtime_requestWorkingMemoryMerge(this: RuntimeHost,
           logContext: {
             conversationId: context.conversation.id,
             stage: "memory",
+            promptFamily: "memory.compress-in",
             memoryKind: "working_long_term"
           }
         }),
@@ -563,6 +563,7 @@ export async function runtime_compressUserProfiles(this: RuntimeHost,
           logContext: {
             conversationId: record.id,
             stage: "memory",
+            promptFamily: "memory.user-profile",
             memoryKind: "user_profile"
           }
         }),

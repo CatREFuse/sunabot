@@ -225,9 +225,9 @@ export function sanitizeErrorDetail(message: string) {
 export function conversationStorePath() {
   return getWorkspacePath(WORKSPACE_LAYOUT.legacyData, "conversations.json");
 }
-export function loadConversationRecords() {
+export function loadConversationRecords(config?: Pick<AppConfig, "persona">) {
   try {
-    const store = applicationDataStore();
+    const store = applicationDataStore(config);
     store.ensureLegacyConversationsImported(conversationStorePath());
     return store.readConversations().filter(isConversationRecord).map((record) => ({
       ...record,
@@ -240,7 +240,7 @@ export function loadConversationRecords() {
     return [];
   }
 }
-export function saveConversationRecords(records: ConversationRecord[]) {
+export function saveConversationRecords(records: ConversationRecord[], config?: Pick<AppConfig, "persona">) {
   const sorted = records
     .slice()
     .sort((left, right) => Date.parse(right.lastAt) - Date.parse(left.lastAt))
@@ -253,7 +253,7 @@ export function saveConversationRecords(records: ConversationRecord[]) {
     }));
 
   try {
-    applicationDataStore().replaceConversations(sorted);
+    applicationDataStore(config).replaceConversations(sorted);
   } catch (error) {
     console.error("[runtime] save conversation records failed", error);
   }

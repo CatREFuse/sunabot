@@ -31,6 +31,7 @@ export interface MemoryClaim {
   batchId: string;
   messageIds: string[];
   messages: MemoryQueuedMessage[];
+  attemptMessageCount: number;
 }
 
 interface StoredBatch {
@@ -45,9 +46,8 @@ interface StoredConversation {
   pendingMessages: MemoryQueuedMessage[];
   currentBatch?: StoredBatch;
   dirty: boolean;
-  silenceDueAt?: string;
   failureCount: number;
-  nextRetryAt?: string;
+  unattemptedMessageCount?: number;
   lastCommittedSequence: number;
   updatedAt: string;
 }
@@ -56,8 +56,6 @@ interface SchedulerFile {
   version: 1;
   conversations: Record<string, StoredConversation>;
 }
-
-const FAILURE_DELAYS_MS = [30_000, 120_000, 600_000] as const;
 
 export class MemorySchedulerStore {
   private config: AppConfig;
@@ -76,11 +74,26 @@ export class MemorySchedulerStore {
       const store = await this.read();
       let changed = false;
       for (const conversation of Object.values(store.conversations)) {
-        if (conversation.state !== "running") continue;
-        conversation.state = "queued";
-        conversation.dirty = true;
-        conversation.updatedAt = new Date().toISOString();
-        changed = true;
+        if (conversation.unattemptedMessageCount == null) {
+          conversation.unattemptedMessageCount = conversation.currentBatch || conversation.failureCount > 0
+            ? 0
+            : conversation.pendingMessages.length;
+          changed = true;
+        }
+        if (conversation.state === "running") {
+          conversation.state = "queued";
+          conversation.dirty = true;
+          conversation.updatedAt = new Date().toISOString();
+          changed = true;
+        }
+        if ("silenceDueAt" in conversation) {
+          delete (conversation as StoredConversation & { silenceDueAt?: string }).silenceDueAt;
+          changed = true;
+        }
+        if ("nextRetryAt" in conversation) {
+          delete (conversation as StoredConversation & { nextRetryAt?: string }).nextRetryAt;
+          changed = true;
+        }
       }
       if (changed) await this.write(store);
       return store;
@@ -90,7 +103,7 @@ export class MemorySchedulerStore {
   async enqueue(
     conversation: MemoryConversationDescriptor,
     messages: MemoryQueuedMessage[],
-    options: { committedThrough?: number; idleDelayMs?: number } = {}
+    options: { committedThrough?: number } = {}
   ) {
     return this.exclusive(async () => {
       const store = await this.read();
@@ -117,10 +130,7 @@ export class MemorySchedulerStore {
       }
       existing.pendingMessages = [...byKey.values()].sort(compareMessages);
       if (added) {
-        const last = existing.pendingMessages[existing.pendingMessages.length - 1];
-        const receivedAt = last ? Date.parse(last.at) : now.getTime();
-        const base = Number.isFinite(receivedAt) ? receivedAt : now.getTime();
-        existing.silenceDueAt = new Date(base + (options.idleDelayMs ?? 300_000)).toISOString();
+        existing.unattemptedMessageCount = (existing.unattemptedMessageCount ?? 0) + added;
         if (existing.state === "running") existing.dirty = true;
         else existing.state = "queued";
       }
@@ -136,8 +146,7 @@ export class MemorySchedulerStore {
       const store = await this.read();
       const candidates = Object.values(store.conversations)
         .filter((item) => item.pendingMessages.length > 0 && item.state !== "running")
-        .filter((item) => !item.nextRetryAt || Date.parse(item.nextRetryAt) <= nowMs)
-        .filter((item) => item.pendingMessages.length >= threshold || dueAt(item) <= nowMs)
+        .filter((item) => (item.unattemptedMessageCount ?? 0) >= threshold)
         .sort((left, right) => {
           const leftAt = left.pendingMessages[0]?.at ?? left.updatedAt;
           const rightAt = right.pendingMessages[0]?.at ?? right.updatedAt;
@@ -170,18 +179,20 @@ export class MemorySchedulerStore {
       }
       selected.state = "running";
       selected.dirty = false;
+      selected.unattemptedMessageCount = Math.max(0, (selected.unattemptedMessageCount ?? 0) - threshold);
       selected.updatedAt = new Date(nowMs).toISOString();
       await this.write(store);
       return {
         conversation: selected.conversation,
         batchId,
         messageIds: messages.map(messageKey),
-        messages
+        messages,
+        attemptMessageCount: threshold
       };
     });
   }
 
-  async complete(claim: MemoryClaim, nowMs = Date.now()) {
+  async complete(claim: MemoryClaim, nowMs = Date.now(), options: { refundAttempt?: boolean } = {}) {
     return this.exclusive(async () => {
       const store = await this.read();
       const conversation = store.conversations[claim.conversation.id];
@@ -195,7 +206,9 @@ export class MemorySchedulerStore {
       );
       conversation.currentBatch = undefined;
       conversation.failureCount = 0;
-      conversation.nextRetryAt = undefined;
+      if (options.refundAttempt) {
+        conversation.unattemptedMessageCount = (conversation.unattemptedMessageCount ?? 0) + claim.attemptMessageCount;
+      }
       conversation.dirty = false;
       conversation.state = conversation.pendingMessages.length ? "queued" : "idle";
       conversation.updatedAt = new Date(nowMs).toISOString();
@@ -209,8 +222,6 @@ export class MemorySchedulerStore {
       const conversation = store.conversations[claim.conversation.id];
       if (!conversation) return;
       conversation.failureCount += 1;
-      const delay = FAILURE_DELAYS_MS[Math.min(conversation.failureCount - 1, FAILURE_DELAYS_MS.length - 1)]!;
-      conversation.nextRetryAt = new Date(nowMs + delay).toISOString();
       conversation.state = "queued";
       conversation.dirty = true;
       conversation.updatedAt = new Date(nowMs).toISOString();
@@ -221,18 +232,11 @@ export class MemorySchedulerStore {
   async nextWakeAt(threshold: number) {
     return this.exclusive(async () => {
       const store = await this.read();
-      let next = Number.POSITIVE_INFINITY;
       for (const conversation of Object.values(store.conversations)) {
         if (!conversation.pendingMessages.length || conversation.state === "running") continue;
-        const retry = conversation.nextRetryAt ? Date.parse(conversation.nextRetryAt) : 0;
-        if (retry > Date.now()) {
-          next = Math.min(next, retry);
-          continue;
-        }
-        if (conversation.pendingMessages.length >= threshold) return Date.now();
-        next = Math.min(next, dueAt(conversation));
+        if ((conversation.unattemptedMessageCount ?? 0) >= threshold) return Date.now();
       }
-      return Number.isFinite(next) ? next : undefined;
+      return undefined;
     });
   }
 
@@ -289,6 +293,7 @@ function newConversationState(
     pendingMessages: [],
     dirty: false,
     failureCount: 0,
+    unattemptedMessageCount: 0,
     lastCommittedSequence: committedThrough,
     updatedAt: now
   };
@@ -305,9 +310,4 @@ function messageKey(message: MemoryQueuedMessage) {
 
 function compareMessages(left: MemoryQueuedMessage, right: MemoryQueuedMessage) {
   return left.sequence - right.sequence || left.id.localeCompare(right.id);
-}
-
-function dueAt(conversation: StoredConversation) {
-  const due = conversation.silenceDueAt ? Date.parse(conversation.silenceDueAt) : Number.POSITIVE_INFINITY;
-  return Number.isFinite(due) ? due : Number.POSITIVE_INFINITY;
 }

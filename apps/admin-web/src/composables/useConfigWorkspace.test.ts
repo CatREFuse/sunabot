@@ -17,7 +17,8 @@ vi.mock("./useAdminApi", () => ({
       this.field = options.field;
     }
   },
-  apiRequest
+  apiRequest,
+  apiRequestUnscoped: apiRequest
 }));
 
 function deferred<T>() {
@@ -29,12 +30,21 @@ function deferred<T>() {
 function config(adminName: string): AppConfig {
   return {
     server: { host: "127.0.0.1", port: 8787 },
-    persona: { defaultAgentId: "plana", agentWorkspace: "workspace/business/agents/plana", memoryLimit: 100 },
+    persona: {
+      defaultAgentId: "plana",
+      name: "普拉娜",
+      agentWorkspace: "workspace/business/agents/plana",
+      systemPromptWorkspace: "workspace/business/prompts",
+      systemPromptOverride: false
+    },
     providers: { defaultProviderId: "codex", items: [] },
+    broadcastStorm: { enabled: true, windowMinutes: 2, replyThreshold: 3, cooldownMinutes: 1 },
     bot: {
       adminQq: "1",
       adminName,
+      pokeOnNoReply: false,
       quoteGroupReplies: true,
+      quoteGroupReplyExcludedUserIds: [],
       contextMessageLimit: 48,
       memory: { memoryModel: "gpt-5.4-mini", reasoningEffort: "medium", messageThreshold: 48, workingMemoryMaxEntries: 100, workMemoryCompressInPrompt: "in.md", workMemoryCompressOutPrompt: "out.md", userProfilePrompt: "user.md" },
       orchestrator: { enabled: false, userGroupchatOrchestratorModel: "gpt-5.4-mini", reasoningEffort: "medium", promptFile: "orchestrator.md", messageThreshold: 10, recentMessageWindowMs: 60_000 },

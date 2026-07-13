@@ -7,6 +7,7 @@ import ToolDetailDialog from "./ToolDetailDialog.vue";
 
 const draft = defineModel<ConfigSectionValueMap["tools"]>({ required: true });
 const bash = defineModel<ConfigSectionValueMap["bash"]>("bash", { required: true });
+const pokeOnNoReply = defineModel<boolean>("pokeOnNoReply", { default: false });
 const catalog = useToolCatalog();
 const query = shallowRef("");
 const selectedName = shallowRef("");
@@ -46,8 +47,12 @@ function hasDescriptionOverride(tool: SunaTool) {
 }
 
 function setEnabled(tool: SunaTool, enabled: boolean) {
-  if (tool.name === "workspace_bash") bash.value.enabled = enabled;
-  if (tool.name === "codex") draft.value.codex.enabled = enabled;
+  if (tool.name === "workspace_bash" || tool.name === "codex") {
+    if (tool.name === "workspace_bash") bash.value.enabled = enabled;
+    else draft.value.codex.enabled = enabled;
+    updateOverride(tool.name, (override) => { delete override.enabled; });
+    return;
+  }
   const inherited = tool.promptEnabled ?? tool.inheritedEnabled ?? true;
   updateOverride(tool.name, (override) => {
     if (enabled === inherited) delete override.enabled;
@@ -122,7 +127,9 @@ function updateOverride(name: string, update: (override: ToolOverride) => void) 
       :enabled="selectedTool ? toolEnabled(selectedTool) : false"
       :description="selectedTool ? descriptionFor(selectedTool) : ''"
       :description-overridden="selectedTool ? hasDescriptionOverride(selectedTool) : false"
+      :poke-on-no-reply="pokeOnNoReply"
       @close="selectedName = ''"
+      @update:poke-on-no-reply="pokeOnNoReply = $event"
       @update-description="selectedTool && setDescription(selectedTool, $event)"
       @reset-description="selectedTool && resetDescription(selectedTool)"
     />

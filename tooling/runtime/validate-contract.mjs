@@ -25,7 +25,9 @@ const [
   launcherCore,
   launcherShell,
   agentsGuide,
-  dockerSeccompProfile
+  dockerSeccompProfile,
+  buildRelease,
+  packageManifest
 ] = await Promise.all([
   readJson("deploy/runtime-contract.json"),
   readJson("deploy/runtime-contract.schema.json"),
@@ -42,7 +44,9 @@ const [
   read("tooling/runtime/launcher-core.mjs"),
   read("sunabot.sh"),
   read("AGENTS.md"),
-  readJson("deploy/docker/seccomp-bwrap.json")
+  readJson("deploy/docker/seccomp-bwrap.json"),
+  read("tooling/runtime/build-release.mjs"),
+  readJson("package.json")
 ]);
 
 const errors = [
@@ -62,6 +66,24 @@ expect(arraysEqual(contract.supportedPlatforms, lock.supportedPlatforms),
 expect(contract.supportedPlatforms.includes("linux/amd64"),
   "the production Core image must declare linux/amd64 support");
 
+for (const required of [
+  '"src"',
+  '"services"',
+  '"adapters"',
+  '"packages"',
+  '"apps/api"',
+  '"apps/admin-web/src"',
+  '"tooling/migrations"',
+  '"tooling/quality"',
+  '"docs"'
+]) {
+  expect(buildRelease.includes(required), `release bundle must include ${required}`);
+}
+expect(packageManifest.scripts?.["migrate:sqlite"]?.includes("run-built-migration.mjs"),
+  "SQLite migration must support the prebuilt release bundle");
+expect(packageManifest.scripts?.["migrate:multi-agent"]?.includes("run-built-migration.mjs"),
+  "multi-Agent migration must support the prebuilt release bundle");
+
 expect(path.isAbsolute(contract.paths.workspace), "contract workspace must be absolute");
 expect(path.isAbsolute(contract.paths.installPrefix), "contract install prefix must be absolute");
 for (const [name, value] of Object.entries(contract.paths)) {
@@ -69,27 +91,21 @@ for (const [name, value] of Object.entries(contract.paths)) {
   expect(typeof value === "string" && !path.isAbsolute(value), `${name} must be workspace-relative`);
   expect(!String(value).split(/[\\/]/).includes(".."), `${name} must not escape workspace`);
 }
-expect(contract.paths.napcatConfig === "runtime/napcat/config-full",
-  "NapCat config path must remain canonical");
-expect(contract.paths.napcatQqState === "runtime/napcat/qq",
-  "NapCat QQ state path must remain canonical");
-expect(contract.paths.napcatPlugins === "runtime/napcat/plugins",
-  "NapCat plugin path must remain canonical");
-expect(contract.paths.napcatQrCode === "runtime/napcat/qrcode.png",
-  "NapCat QR path must remain canonical");
-expect(contract.paths.napcatManualLogin === "runtime/napcat/manual-login-required",
-  "NapCat manual login marker must remain canonical");
-for (const key of ["napcatConfig", "napcatQqState", "napcatPlugins", "napcatQrCode", "napcatManualLogin"]) {
+expect(contract.paths.napcatAccounts === "runtime/napcat/accounts",
+  "NapCat account root must remain canonical");
+for (const key of ["napcatAccounts"]) {
   expect(schema.properties?.paths?.required?.includes(key), `runtime schema must require paths.${key}`);
   expect(schema.properties?.paths?.properties?.[key]?.const === contract.paths[key],
     `runtime schema must fix paths.${key}`);
 }
-expect(workspaceLayout.includes('napcatConfig: "runtime/napcat/config-full"')
-  && workspaceLayout.includes('napcatQqState: "runtime/napcat/qq"')
-  && workspaceLayout.includes('napcatPlugins: "runtime/napcat/plugins"')
-  && workspaceLayout.includes('napcatQrCode: "runtime/napcat/qrcode.png"')
-  && workspaceLayout.includes('napcatManualLogin: "runtime/napcat/manual-login-required"'),
-"workspace layout must match the runtime contract");
+for (const retired of ["napcatConfig", "napcatQqState", "napcatPlugins", "napcatQrCode", "napcatManualLogin"]) {
+  expect(!(retired in contract.paths), `runtime contract must not expose legacy paths.${retired}`);
+  expect(!schema.properties?.paths?.required?.includes(retired), `runtime schema must retire paths.${retired}`);
+}
+expect(workspaceLayout.includes('napcatAccounts: "runtime/napcat/accounts"')
+  && workspaceLayout.includes('legacyNapcatConfig: "runtime/napcat/config-full"')
+  && workspaceLayout.includes('legacyNapcatQqState: "runtime/napcat/qq"'),
+"workspace layout must separate current account paths from legacy migration paths");
 
 const admin = contract.network.admin;
 const onebot = contract.network.onebot;
@@ -160,19 +176,19 @@ expect(coreBlock.includes("127.0.0.1:8787:8787"),
   "Core admin port must publish to host loopback only");
 expect(coreBlock.includes('expose:\n      - "8788"') && !coreBlock.includes(":8788:8788"),
   "OneBot port must stay inside the Compose network");
-expect(napcatBlock.includes("127.0.0.1:6099:6099"),
-  "NapCat WebUI must publish to host loopback only");
+expect(napcatBlock.includes('127.0.0.1:${NAPCAT_WEBUI_PORT:-6099}:6099'),
+  "each NapCat WebUI must publish its assigned host loopback port");
 expect(napcatBlock.includes("host.docker.internal:host-gateway"),
   "NapCat must have the Linux host-gateway compatibility mapping");
 expect(!napcatBlock.includes("env_file:"), "NapCat must not receive Core/provider secrets");
-for (const relative of [
-  contract.paths.napcatConfig,
-  contract.paths.napcatQqState,
-  contract.paths.napcatPlugins,
-  contract.paths.napcatState
-]) {
-  expect(napcatBlock.includes(relative), `NapCat must mount only its ${relative} state boundary`);
-}
+expect(napcatBlock.includes(`${contract.paths.napcatAccounts}/\${NAPCAT_ACCOUNT_ID:-primary}/config-full`)
+  && napcatBlock.includes(`${contract.paths.napcatAccounts}/\${NAPCAT_ACCOUNT_ID:-primary}/qq`)
+  && napcatBlock.includes(`${contract.paths.napcatAccounts}/\${NAPCAT_ACCOUNT_ID:-primary}/plugins`),
+"NapCat must mount only its account-scoped state boundary");
+expect(napcatBlock.includes("io.sunabot.account-id")
+  && napcatBlock.includes("napcat-${NAPCAT_ACCOUNT_ID:-primary}"),
+"NapCat must expose a stable account label and private DNS alias");
+expect(compose.includes("external: true"), "the shared Core/NapCat network must be launcher-owned");
 expect(compose.includes("io.sunabot.runtime-id")
   && compose.includes("io.sunabot.workspace-id")
   && compose.includes("io.sunabot.component"),
@@ -208,6 +224,8 @@ expect(napcatEntrypoint.includes("cp -an") && napcatEntrypoint.includes("/app/en
   "NapCat wrapper must seed missing defaults without replacing launcher configuration");
 expect(launcher.includes("config.enableLocalFile2Url = true"),
   "the launcher must configure a Base64 get_file fallback across the component boundary");
+expect(launcher.includes("loadNapcatAccounts") && launcher.includes('url.searchParams.set("account_id", account.id)'),
+  "the launcher must discover and route every registered NapCat account");
 expect(!coreHealthcheck.includes("supervisor-state")
   && coreHealthcheck.includes("contract.network.admin.port")
   && coreHealthcheck.includes("contract.network.onebot.internalPort"),

@@ -2,7 +2,6 @@ const labels: Record<string, string> = {
   "server.host": "Host",
   "server.port": "Port",
   "persona.agentWorkspace": "工作目录",
-  "persona.memoryLimit": "记忆上限",
   "providers.defaultProviderId": "默认 Provider",
   "providers.items": "Provider 列表",
   "providers.items.*.id": "ID",
@@ -17,10 +16,17 @@ const labels: Record<string, string> = {
   "providers.items.*.envFile": "Env File",
   "providers.items.*.temperature": "随机性（Temperature）",
   "providers.items.*.maxOutputTokens": "最大输出 Token",
+  "broadcastStorm.enabled": "广播风暴嗅探",
+  "broadcastStorm.windowMinutes": "检测窗口（分钟）",
+  "broadcastStorm.replyThreshold": "回复次数",
+  "broadcastStorm.cooldownMinutes": "静默时长（分钟）",
   "bot.adminQq": "管理员 QQ",
   "bot.adminName": "管理员称呼",
   "bot.contextMessageLimit": "上下文消息数",
+  "bot.pokeOnNoReply": "no_reply 时戳一戳",
   "bot.quoteGroupReplies": "引用群聊消息",
+  "bot.quoteGroupReplyExcludedUserIds": "过滤名单",
+  "bot.quoteGroupReplyExcludedUserIds.*": "过滤名单",
   "memory.memoryModel": "模型",
   "memory.reasoningEffort": "推理强度",
   "memory.messageThreshold": "压缩阈值",
@@ -72,7 +78,9 @@ export function focusConfigField(root: HTMLElement, field: string) {
   const directTarget = asTarget(direct);
   if (directTarget) return focus(directTarget);
 
-  const normalized = field.replace(/^providers\.items\.\d+\./, "providers.items.*.");
+  const normalized = field
+    .replace(/^providers\.items\.\d+\./, "providers.items.*.")
+    .replace(/^bot\.quoteGroupReplyExcludedUserIds\.\d+$/, "bot.quoteGroupReplyExcludedUserIds.*");
   const label = labels[normalized];
   if (!label) return false;
 

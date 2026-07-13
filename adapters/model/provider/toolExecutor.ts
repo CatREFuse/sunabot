@@ -20,6 +20,7 @@ import {
   ASSISTANT_TEXT_TOOL_NAME,
   readAssistantText
 } from "../../../services/tools/assistantTextTool.js";
+import { NO_REPLY_TOOL_NAME } from "../../../services/tools/noReplyTool.js";
 import {
   isProviderToolAvailable,
   isProviderDeferredTool,
@@ -105,11 +106,34 @@ export class RegistryProviderToolExecutor implements ProviderToolExecutorPort {
     };
   }
 
+  noReplyTurn(
+    calls: ResponseFunctionCallItem[],
+    options: ProviderCompleteOptions,
+    definitions: readonly Record<string, unknown>[]
+  ) {
+    if (calls.length !== 1) return null;
+    const call = calls[0]!;
+    if (call.name !== NO_REPLY_TOOL_NAME) return null;
+    if (!isProviderToolAvailable(call.name, options)) return null;
+    if (!isToolEnabledForTurn(call.name, definitions)) return null;
+    const args = parseJson(call.arguments);
+    if (!args || typeof args !== "object" || Array.isArray(args) || Object.keys(args).length) return null;
+    options.onToolCall?.(call.name);
+    return { kind: "no_reply" as const };
+  }
+
   async execute(
     calls: ResponseFunctionCallItem[],
     options: ProviderCompleteOptions,
     definitions: readonly Record<string, unknown>[]
   ) {
+    if (calls.length > 1 && calls.some((call) => call.name === NO_REPLY_TOOL_NAME)) {
+      return calls.map((call) => ({
+        type: "function_call_output",
+        call_id: call.call_id,
+        output: JSON.stringify({ ok: false, error: "no_reply must be called alone before any other tool." })
+      }));
+    }
     return Promise.all(calls.map(async (call) => ({
       type: "function_call_output",
       call_id: call.call_id,
@@ -146,6 +170,9 @@ async function executeFunctionCall(
       };
     }
     if (executionMode !== "inline") return { ok: false, error: `Tool ${call.name} is ${executionMode}.` };
+    if (call.name === NO_REPLY_TOOL_NAME) {
+      return { ok: false, error: "no_reply must be called alone with an empty object." };
+    }
     const executor = inlineExecutors.get(call.name);
     if (!executor) return { ok: false, error: `Unsupported tool: ${call.name}` };
     options.onToolCall?.(call.name);
@@ -197,6 +224,7 @@ async function runImageGeneration(
   try {
     result = await runGenerateImg(args, options.bot, options.generateImage, {
       referenceImageUrls: options.referenceImageUrls,
+      imageReferences: options.imageReferences,
       logContext: options.logContext
     });
   } catch (error) {
@@ -204,7 +232,8 @@ async function runImageGeneration(
   }
   await appendToolLog(GENERATE_IMG_TOOL_NAME, call, {
     ...args,
-    defaultReferenceImageUrls: options.referenceImageUrls ?? []
+    defaultReferenceImageUrls: options.referenceImageUrls ?? [],
+    availableHistoricalReferenceImageCount: options.imageReferences?.historyImageUrls?.length ?? 0
   }, pickToolLogResult(result), options);
   if (isGeneratedImageResult(result)) options.onImageGenerated?.(result.image);
   return result;

@@ -81,7 +81,7 @@ describe("ToolsSettingsForm", () => {
     expect((wrapper.find('input[type="number"][max="16"]').element as HTMLInputElement).value).toBe("2");
   });
 
-  it("disables Codex worker settings when Codex is disabled", async () => {
+  it("shows Codex status and disables its parameters when Codex is disabled", async () => {
     const draft = toolsDraft();
     draft.codex.enabled = false;
     const wrapper = mount(ToolsSettingsForm, {
@@ -89,8 +89,7 @@ describe("ToolsSettingsForm", () => {
     });
     await wrapper.get("#tools-tab-runtime").trigger("click");
 
-    const workerToggle = wrapper.findAll("label").find((label) => label.text().includes("启动 Codex Worker"));
-    expect(workerToggle?.find('input[type="checkbox"]').attributes("disabled")).toBeUndefined();
+    expect(wrapper.text()).toContain("已停用");
     expect(wrapper.find('input[placeholder="auto"]').attributes("disabled")).toBeDefined();
     expect(wrapper.find('input[type="number"][max="86400000"]').attributes("disabled")).toBeDefined();
   });

@@ -98,6 +98,21 @@ describe("runtime doctor fixtures", () => {
     ]));
   });
 
+  it("rejects the retired external main database override", () => {
+    const fixture = healthyFixture();
+    Object.assign(fixture, {
+      configurationErrors: [{
+        code: "DATABASE_PATH_OVERRIDE_UNSUPPORTED",
+        message: "SUNABOT_DATABASE_PATH 已停止支持。"
+      }]
+    });
+
+    const report = evaluateRuntimeSnapshot(fixture);
+
+    expect(report.ok).toBe(false);
+    expect(errorCodes(report)).toContain("DATABASE_PATH_OVERRIDE_UNSUPPORTED");
+  });
+
   it("rejects a zombie OneBot connection and owner process", () => {
     const fixture = healthyFixture();
     fixture.onebot.candidates[0]!.alive = false;

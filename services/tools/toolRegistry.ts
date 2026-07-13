@@ -17,10 +17,12 @@ import {
 import { GENERATE_IMG_TOOL_NAME, generateImgTool } from "./generateImgTool.js";
 import { SELFIE_TOOL_NAME, selfieTool } from "./selfieTool.js";
 import { ASSISTANT_TEXT_TOOL_NAME, assistantTextTool } from "./assistantTextTool.js";
+import { NO_REPLY_TOOL_NAME, noReplyTool } from "./noReplyTool.js";
 import { withRequiredDispatchMessage, withoutDispatchMessage } from "./deferredDispatch.js";
 
 export interface ToolAvailability {
   onAssistantText?: unknown;
+  allowNoReply?: boolean;
   bash?: { enabled: boolean; workspaceOnly?: boolean; blockedKeywords?: string[] };
   bot?: Pick<BotConfig, "tools">;
   selfie?: { enabled: boolean };
@@ -59,6 +61,7 @@ interface ToolCatalogEntry {
   definition: (options: ToolAvailability) => Record<string, unknown>;
   available?: (options: ToolAvailability) => boolean;
   unavailableReason?: string;
+  defaultEnabled?: boolean;
   execution: ToolExecution;
 }
 
@@ -70,6 +73,16 @@ const catalog: readonly ToolCatalogEntry[] = [
     definition: () => assistantTextTool,
     available: (options) => typeof options.onAssistantText === "function",
     unavailableReason: "当前会话不支持行动中消息。",
+    execution: "inline"
+  },
+  {
+    name: NO_REPLY_TOOL_NAME,
+    title: "静默结束",
+    summary: "结束本轮且不发送任何消息。",
+    definition: () => noReplyTool,
+    available: (options) => options.allowNoReply === true,
+    unavailableReason: "当前请求不支持静默结束。",
+    defaultEnabled: true,
     execution: "inline"
   },
   {
@@ -148,12 +161,15 @@ export function listToolMetadata(
     const prompt = promptByName?.get(entry.name);
     const override = toolOverride(options, entry.name);
     const available = entry.available?.(options) ?? true;
-    const promptEnabled = promptByName == null || Boolean(prompt);
+    const promptEnabled = promptByName == null || Boolean(prompt) || entry.defaultEnabled === true;
     const enabled = override?.enabled ?? promptEnabled;
-    const selected = prompt ?? canonical;
+    const selected = applyRuntimeToolContract(entry, prompt ?? canonical, canonical);
     const defaultDescription = readDescription(canonical);
     const promptDescription = prompt ? readDescription(prompt) : undefined;
-    const description = normalizedDescription(override?.description) ?? promptDescription ?? defaultDescription;
+    const description = runtimeToolDescription(
+      entry,
+      normalizedDescription(override?.description) ?? promptDescription ?? defaultDescription
+    );
     const descriptionSource: ToolDescriptionSource = normalizedDescription(override?.description)
       ? "override"
       : promptDescription != null
@@ -192,9 +208,13 @@ export function resolveProviderToolDefinitions(
     const override = toolOverride(options, entry.name);
     if (override?.enabled === false) return [];
     const prompt = promptByName?.get(entry.name);
-    if (promptByName && !prompt && override?.enabled !== true) return [];
-    const definition = prompt ?? entry.definition(options);
-    const description = normalizedDescription(override?.description) ?? readDescription(definition);
+    if (promptByName && !prompt && override?.enabled !== true && entry.defaultEnabled !== true) return [];
+    const canonical = entry.definition(options);
+    const definition = applyRuntimeToolContract(entry, prompt ?? canonical, canonical);
+    const description = runtimeToolDescription(
+      entry,
+      normalizedDescription(override?.description) ?? readDescription(definition)
+    );
     return [{ ...definition, description }];
   });
 }
@@ -227,7 +247,9 @@ function promptDefinitionMap(definitions: OpenAIToolDefinition[] | undefined) {
 }
 
 function toolOverride(options: ToolAvailability, name: AgentToolName): BotToolOverride | undefined {
-  return options.bot?.tools.overrides?.[name];
+  const override = options.bot?.tools.overrides?.[name];
+  if (!override || (name !== WORKSPACE_BASH_TOOL_NAME && name !== CODEX_TOOL_NAME)) return override;
+  return override.description == null ? undefined : { description: override.description };
 }
 
 function effectiveExecution(entry: ToolCatalogEntry, options: ToolAvailability): ToolExecution {
@@ -235,6 +257,29 @@ function effectiveExecution(entry: ToolCatalogEntry, options: ToolAvailability):
     return "deferred";
   }
   return entry.execution;
+}
+
+function applyRuntimeToolContract(
+  entry: ToolCatalogEntry,
+  selected: Record<string, unknown>,
+  canonical: Record<string, unknown>
+) {
+  if (entry.name !== GENERATE_IMG_TOOL_NAME && entry.name !== SELFIE_TOOL_NAME) return selected;
+  return {
+    ...selected,
+    parameters: readParameters(canonical),
+    strict: canonical.strict === true
+  };
+}
+
+function runtimeToolDescription(entry: ToolCatalogEntry, description: string) {
+  if (
+    (entry.name !== GENERATE_IMG_TOOL_NAME && entry.name !== SELFIE_TOOL_NAME) ||
+    description.includes("historical media handles")
+  ) {
+    return description;
+  }
+  return `${description.trim()} Prefer exact historical media handles shown in conversation history; use the reference source only as a fallback.`.trim();
 }
 
 function applyDispatchSchema(tool: Record<string, unknown>, execution: ToolExecution) {

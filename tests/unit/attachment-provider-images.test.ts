@@ -20,6 +20,24 @@ afterEach(async () => {
 });
 
 describe("attachment provider images", () => {
+  it("marks only non-assistant text blocks as explicit prompt cache breakpoints", async () => {
+    const developer = await toResponsesInputMessage({
+      role: "developer",
+      content: "稳定系统提示词"
+    }, { promptCacheBreakpoint: true });
+    const assistant = await toResponsesInputMessage({
+      role: "assistant",
+      content: "历史回复"
+    }, { promptCacheBreakpoint: true });
+
+    expect(developer.content[0]).toEqual({
+      type: "input_text",
+      text: "稳定系统提示词",
+      prompt_cache_breakpoint: { mode: "explicit" }
+    });
+    expect(assistant.content[0]).toEqual({ type: "output_text", text: "历史回复" });
+  });
+
   it("converts a cache-contained local image to a bounded data URL", async () => {
     await mkdir(cacheRoot, { recursive: true });
     const directory = await mkdtemp(path.join(cacheRoot, "provider-test-"));

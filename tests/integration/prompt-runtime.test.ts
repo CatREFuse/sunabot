@@ -16,15 +16,18 @@ import { defaultConfig } from "../../src/config.js";
 
 let root = "";
 let workspace = "";
+let systemWorkspace = "";
 const config = defaultConfig();
 
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-prompt-runtime-"));
   workspace = path.join(root, "business/agents/plana");
+  systemWorkspace = path.join(root, "business/prompts");
   config.persona.agentWorkspace = workspace;
-  await fs.mkdir(workspace, { recursive: true });
+  config.persona.systemPromptWorkspace = systemWorkspace;
+  await Promise.all([fs.mkdir(workspace, { recursive: true }), fs.mkdir(systemWorkspace, { recursive: true })]);
   await Promise.all(PROMPT_FILE_DEFINITIONS.map((definition) => fs.writeFile(
-    path.join(workspace, definition.fileName(config)),
+    path.join(definition.scope === "system" ? systemWorkspace : workspace, definition.fileName(config)),
     definition.kind === "final" ? defaultPromptContent(definition.id) : `${definition.id} fixture\n`,
     "utf8"
   )));
@@ -39,7 +42,8 @@ describe("workspace prompt runtime", () => {
     const fragmentValues = await readFragments();
 
     for (const definition of PROMPT_FILE_DEFINITIONS.filter((item) => item.kind === "final")) {
-      const content = await fs.readFile(path.join(workspace, definition.fileName(config)), "utf8");
+      const promptWorkspace = definition.scope === "system" ? systemWorkspace : workspace;
+      const content = await fs.readFile(path.join(promptWorkspace, definition.fileName(config)), "utf8");
       const template = parseFinalPromptTemplate(content);
       const variables: Record<string, PromptVariableValue> = { ...fragmentValues };
       for (const variable of definition.variables) {
@@ -62,9 +66,9 @@ describe("workspace prompt runtime", () => {
   });
 
   it("assembles the conversation request in system, history and current-user order", async () => {
-    const definition = PROMPT_FILE_DEFINITIONS.find((item) => item.id === "conversation.reply")!;
+    const definition = PROMPT_FILE_DEFINITIONS.find((item) => item.id === "conversation.private-reply")!;
     const template = parseFinalPromptTemplate(
-      await fs.readFile(path.join(workspace, definition.fileName(config)), "utf8")
+      await fs.readFile(path.join(systemWorkspace, definition.fileName(config)), "utf8")
     );
     const rendered = renderFinalPromptTemplate(template, {
       ...await readFragments(),
@@ -91,6 +95,7 @@ describe("workspace prompt runtime", () => {
     expect(rendered.messages.at(-1)?.content).toContain("<current_input>当前问题</current_input>");
     expect(rendered.tools?.map((tool) => tool.function.name)).toEqual([
       "assistant_text",
+      "no_reply",
       "workspace_bash",
       "websearch",
       "generate_img",
@@ -116,13 +121,14 @@ describe("workspace prompt runtime", () => {
       "persona.agents",
       "persona.soul",
       "persona.preference",
+      "persona.dialogue_style_examples",
       "persona.user",
       "persona.relation"
     ];
     for (const definition of PROMPT_FILE_DEFINITIONS.filter((item) => item.kind === "final")) {
       expect(definition.variables.map((item) => item.name), definition.id).toEqual(expect.arrayContaining(personaNames));
     }
-    const conversation = PROMPT_FILE_DEFINITIONS.find((item) => item.id === "conversation.reply")!;
+    const conversation = PROMPT_FILE_DEFINITIONS.find((item) => item.id === "conversation.private-reply")!;
     expect(conversation.variables.map((item) => item.name)).toEqual(expect.arrayContaining([
       "memory.working",
       "memory.long_term",
@@ -135,6 +141,7 @@ describe("workspace prompt runtime", () => {
       "persona.agents": "agent_rules",
       "persona.soul": "soul",
       "persona.preference": "preference",
+      "persona.dialogue_style_examples": "dialogue_style_examples",
       "persona.user": "user_context",
       "persona.relation": "relation"
     };
@@ -145,7 +152,7 @@ describe("workspace prompt runtime", () => {
     }
 
     const conversation = parseFinalPromptTemplate(
-      await fs.readFile(path.join(workspace, "conversation_reply.json"), "utf8")
+      await fs.readFile(path.join(systemWorkspace, "conversation_private_reply.json"), "utf8")
     );
     const system = conversation.messages[0] as Record<string, unknown>;
     for (const [id, tag] of Object.entries(outerTags)) {

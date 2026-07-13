@@ -1,12 +1,12 @@
 const INLINE_PATTERN = /(<\/?[A-Za-z][^>\n]*>)|(`[^`\n]+`)|(\*\*[^*\n]+\*\*|__[^_\n]+__)|(\*[^*\n]+\*|_[^_\n]+_)|(@\{\s*[A-Za-z_][\w.-]*\s*\}|\{\{\s*[A-Za-z_][\w.-]*\s*\}\})/g;
 
-export function highlightedPromptMarkup(content: string) {
+export function highlightedPromptMarkup(content: string, variableNames?: ReadonlySet<string>) {
   const lines = content.split("\n");
   const highlighted: string[] = [];
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index] ?? "";
     if (!isCodeFence(line)) {
-      highlighted.push(highlightLine(line));
+      highlighted.push(highlightLine(line, variableNames));
       continue;
     }
 
@@ -22,23 +22,23 @@ export function highlightedPromptMarkup(content: string) {
   return highlighted.join("\n");
 }
 
-function highlightLine(line: string) {
+function highlightLine(line: string, variableNames?: ReadonlySet<string>) {
   const heading = line.match(/^(\s*)(#{1,6})(\s+)(.*)$/);
   if (heading) {
-    return `${escapeHtml(heading[1] ?? "")}<span class="markup-heading"><span class="markup-marker">${escapeHtml(heading[2] ?? "")}</span>${escapeHtml(heading[3] ?? "")}${highlightInline(heading[4] ?? "")}</span>`;
+    return `${escapeHtml(heading[1] ?? "")}<span class="markup-heading"><span class="markup-marker">${escapeHtml(heading[2] ?? "")}</span>${escapeHtml(heading[3] ?? "")}${highlightInline(heading[4] ?? "", variableNames)}</span>`;
   }
 
   const quote = line.match(/^(\s*)(>)(\s?)(.*)$/);
   if (quote) {
-    return `${escapeHtml(quote[1] ?? "")}<span class="markup-quote"><span class="markup-marker">${escapeHtml(quote[2] ?? "")}</span>${escapeHtml(quote[3] ?? "")}${highlightInline(quote[4] ?? "")}</span>`;
+    return `${escapeHtml(quote[1] ?? "")}<span class="markup-quote"><span class="markup-marker">${escapeHtml(quote[2] ?? "")}</span>${escapeHtml(quote[3] ?? "")}${highlightInline(quote[4] ?? "", variableNames)}</span>`;
   }
 
   const list = line.match(/^(\s*)([-+*]|\d+\.)(\s+)(.*)$/);
   if (list) {
-    return `${escapeHtml(list[1] ?? "")}<span class="markup-list-marker">${escapeHtml(list[2] ?? "")}</span>${escapeHtml(list[3] ?? "")}${highlightInline(list[4] ?? "")}`;
+    return `${escapeHtml(list[1] ?? "")}<span class="markup-list-marker">${escapeHtml(list[2] ?? "")}</span>${escapeHtml(list[3] ?? "")}${highlightInline(list[4] ?? "", variableNames)}`;
   }
 
-  return highlightInline(line);
+  return highlightInline(line, variableNames);
 }
 
 function highlightCodeBlock(lines: readonly string[]) {
@@ -54,7 +54,7 @@ function isCodeFence(line: string) {
   return /^\s*```/.test(line);
 }
 
-function highlightInline(value: string) {
+function highlightInline(value: string, variableNames?: ReadonlySet<string>) {
   let result = "";
   let cursor = 0;
   for (const match of value.matchAll(INLINE_PATTERN)) {
@@ -65,10 +65,20 @@ function highlightInline(value: string) {
     else if (match[2]) result += wrap("markup-code", token);
     else if (match[3]) result += wrap("markup-bold", token);
     else if (match[4]) result += wrap("markup-italic", token);
-    else result += wrap("markup-variable", token);
+    else {
+      const name = promptVariableName(token);
+      result += name && (!variableNames || variableNames.has(name))
+        ? wrap("markup-variable markup-code", token)
+        : escapeHtml(token);
+    }
     cursor = index + token.length;
   }
   return result + escapeHtml(value.slice(cursor));
+}
+
+function promptVariableName(value: string) {
+  return value.match(/^@\{\s*([A-Za-z_][\w.-]*)\s*\}$/)?.[1]
+    ?? value.match(/^\{\{\s*([A-Za-z_][\w.-]*)\s*\}\}$/)?.[1];
 }
 
 function wrap(className: string, value: string) {

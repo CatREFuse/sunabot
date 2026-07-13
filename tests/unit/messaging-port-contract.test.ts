@@ -44,6 +44,22 @@ describe("MessagingPort contract", () => {
     });
   });
 
+  it("maps private and group pokes to the NapCat send_poke action", async () => {
+    const gateway = oneBotGateway();
+    const sendAction = vi.spyOn(gateway, "sendAction").mockResolvedValue({ status: "ok" });
+
+    await gateway.poke({ accountId: "account-b", userId: 99, groupId: 42 });
+    await gateway.poke({ userId: 100 });
+
+    expect(sendAction).toHaveBeenNthCalledWith(1, "send_poke", {
+      group_id: 42,
+      user_id: 99
+    }, "account-b");
+    expect(sendAction).toHaveBeenNthCalledWith(2, "send_poke", {
+      user_id: 100
+    });
+  });
+
   it("runs the same directory use case through fake and OneBot ports", async () => {
     const expected = {
       friendsReady: true,

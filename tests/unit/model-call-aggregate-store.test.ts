@@ -48,22 +48,50 @@ describe("model call SQLite aggregates", () => {
       expect.objectContaining({ behavior: "memory", requests: 1, total: 10 }),
       expect.objectContaining({ behavior: "reply", requests: 3, total: 110 })
     ]));
+    expect(store.readModelCallModelAggregateRows("group:7")).toEqual(expect.arrayContaining([
+      expect.objectContaining({ model: "gpt-test", behavior: "reply", requests: 2, total: 10 }),
+      expect.objectContaining({ model: "gpt-test", behavior: "memory", requests: 1, total: 10 })
+    ]));
     store.close();
 
     const database = new DatabaseSync(databasePath);
     expect(database.prepare("SELECT value FROM app_metadata WHERE key = 'storage-schema-version'").get())
-      .toMatchObject({ value: "4" });
+      .toMatchObject({ value: "8" });
     const indexes = database.prepare("PRAGMA index_list('model_call_aggregates')").all() as Array<{ name?: unknown }>;
     expect(indexes.map((row) => String(row.name))).toContain("model_call_aggregates_behavior");
+    const modelIndexes = database.prepare("PRAGMA index_list('model_call_model_aggregates')").all() as Array<{ name?: unknown }>;
+    expect(modelIndexes.map((row) => String(row.name))).toContain("model_call_model_aggregates_lookup");
+    database.close();
+  });
+
+  it("repairs model aggregates when a version-six database is stale", () => {
+    const databasePath = path.join(root, "sunabot.sqlite");
+    seedDatabase(databasePath, 6, [
+      response("late-reply", "group:8", "reply", undefined, { input_tokens: 80, output_tokens: 20, total_tokens: 100 })
+    ]);
+
+    const store = new ApplicationDataStore(databasePath);
+    expect(store.readModelCallModelAggregateRows("group:8")).toEqual([
+      expect.objectContaining({ model: "gpt-test", behavior: "reply", requests: 1, total: 100 })
+    ]);
+    store.close();
+
+    const database = new DatabaseSync(databasePath);
+    expect(database.prepare("SELECT value FROM app_metadata WHERE key = 'storage-schema-version'").get())
+      .toMatchObject({ value: "6" });
     database.close();
   });
 });
 
 function seedVersionTwoDatabase(databasePath: string, records: Array<Record<string, unknown>>) {
+  seedDatabase(databasePath, 2, records);
+}
+
+function seedDatabase(databasePath: string, version: number, records: Array<Record<string, unknown>>) {
   const database = new DatabaseSync(databasePath);
   database.exec(`
     CREATE TABLE app_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-    INSERT INTO app_metadata (key, value) VALUES ('storage-schema-version', '2');
+    INSERT INTO app_metadata (key, value) VALUES ('storage-schema-version', '${version}');
     CREATE TABLE request_logs (
       row_id INTEGER PRIMARY KEY AUTOINCREMENT,
       id TEXT NOT NULL UNIQUE,
@@ -94,6 +122,7 @@ function response(
     at: "2026-07-13T00:00:00.000Z",
     category: "model.response",
     action: "responses.complete",
+    model: "gpt-test",
     response: usage ? { usage } : { ok: false, error: "failed" },
     metadata: { conversationId, stage, ...(memoryKind ? { memoryKind } : {}) }
   };

@@ -1,5 +1,103 @@
 import { expect, test } from "@playwright/test";
+import sharp from "sharp";
 import { installMockApi, modelCatalog } from "./mock-api";
+
+test("Agent 可新增、隔离切换并添加独立 QQ", async ({ page }) => {
+  const state = await installMockApi(page);
+  await page.goto("/agents");
+
+  await expect(page.getByRole("heading", { name: "Agent", exact: true }).first()).toBeVisible();
+  await page.getByRole("button", { name: "选择 阿罗娜" }).click();
+  await expect(page.getByRole("heading", { name: "阿罗娜", exact: true })).toBeVisible();
+  await expect(page.getByText("阿罗娜主账号", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "新增", exact: true }).click();
+  const createAgent = page.getByRole("dialog", { name: "新增 Agent" });
+  await createAgent.getByLabel("名称").fill("圣娅");
+  await createAgent.getByLabel("Agent ID").fill("seia");
+  await createAgent.getByRole("button", { name: "创建 Agent", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "圣娅", exact: true })).toBeVisible();
+  expect(state.agents.some((agent) => agent.id === "seia")).toBe(true);
+
+  await page.getByRole("button", { name: "新增 QQ", exact: true }).click();
+  const createAccount = page.getByRole("dialog", { name: "新增 QQ" });
+  await createAccount.getByLabel("账号名称").fill("圣娅主账号");
+  await createAccount.getByRole("button", { name: "新增 QQ", exact: true }).click();
+  await expect(page.getByText("圣娅主账号", { exact: true })).toBeVisible();
+  await expect(page.getByText("待启动", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "重启后登录", exact: true })).toBeDisabled();
+
+  await page.getByRole("button", { name: "选择 阿罗娜" }).click();
+  const promptRequest = page.waitForRequest((request) => request.url().includes("/api/agent-files?agentId=arona"));
+  await page.getByRole("link", { name: "Agent 提示词", exact: true }).click();
+  await promptRequest;
+});
+
+test("Agent 身份页可设置 WebUI 头像并立即刷新", async ({ page }) => {
+  const state = await installMockApi(page);
+  await page.goto("/agent-settings/persona");
+
+  await expect(page.getByText("WebUI 头像", { exact: true })).toBeVisible();
+  const source = await sharp({
+    create: { width: 900, height: 600, channels: 4, background: "#d71921" }
+  }).png().toBuffer();
+  await page.getByLabel("选择 WebUI 头像").setInputFiles({
+    name: "plana.png",
+    mimeType: "image/png",
+    buffer: source
+  });
+
+  const cropDialog = page.getByRole("dialog", { name: "裁剪头像" });
+  await expect(cropDialog).toBeVisible();
+  await cropDialog.getByLabel("缩放头像").fill("1.4");
+  const cropCanvas = cropDialog.getByLabel("头像裁剪区域");
+  const bounds = await cropCanvas.boundingBox();
+  if (!bounds) throw new Error("Missing avatar crop canvas bounds");
+  await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(bounds.x + bounds.width / 2 + 28, bounds.y + bounds.height / 2);
+  await page.mouse.up();
+  await cropDialog.getByRole("button", { name: "使用头像", exact: true }).click();
+  await expect(page.getByText("头像已更新", { exact: true })).toBeVisible();
+  expect(state.avatarUpdates).toHaveLength(1);
+  expect(state.avatarUpdates[0]).toMatchObject({ agentId: "plana", fileName: "avatar.png" });
+  const encoded = state.avatarUpdates[0]!.dataBase64.split(",")[1];
+  const cropped = await sharp(Buffer.from(encoded!, "base64")).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  expect(cropped.info).toMatchObject({ width: 384, height: 384, channels: 4 });
+  expect(pixelAlpha(cropped.data, cropped.info.width, cropped.info.channels, 0, 0)).toBe(0);
+  expect(pixelAlpha(cropped.data, cropped.info.width, cropped.info.channels, 192, 192)).toBe(255);
+  await expect(page.getByAltText("普拉娜的头像").first()).toHaveAttribute(
+    "src",
+    "/api/agents/plana/avatar?v=assets%2Favatar-1.png"
+  );
+});
+
+test("Agent 设置只保留有效且唯一的配置入口", async ({ page }) => {
+  await installMockApi(page);
+
+  await page.goto("/agent-settings/persona");
+  await expect(page.getByText("Agent ID", { exact: true })).toBeVisible();
+  await expect(page.getByText("工作目录", { exact: true })).toBeVisible();
+  await expect(page.getByText("记忆上限", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "保存", exact: true })).toHaveCount(0);
+
+  await page.goto("/agent-settings/memory");
+  await expect(page.getByLabel("工作记忆上限")).toHaveCount(1);
+
+  await page.goto("/agent-settings/tools");
+  await expect(page.getByLabel("启用 Bash")).toBeVisible();
+  await expect(page.getByLabel("启用 Codex")).toBeVisible();
+  await page.getByRole("tab", { name: "运行参数", exact: true }).click();
+  await expect(page.getByLabel("启动 Codex Worker")).toHaveCount(0);
+
+  await page.goto("/agent-settings/bash");
+  await expect(page.getByLabel("启用 Bash")).toHaveCount(0);
+  await expect(page.getByLabel("仅管理员")).toBeVisible();
+});
+
+function pixelAlpha(data: Buffer, width: number, channels: number, x: number, y: number) {
+  return data[(y * width + x) * channels + 3];
+}
 
 test("QQ 账号可在 WebUI 退出、扫码并实时刷新二维码", async ({ page }) => {
   const state = await installMockApi(page);
@@ -43,15 +141,18 @@ test("状态页展示 Token 缓存、日历与小时分布，并安全处理未�
   await expect(summary.getByText("7.2K", { exact: true })).toBeVisible();
   await expect(summary.getByText("缓存率", { exact: true })).toBeVisible();
   await expect(summary).toContainText(/56(?:\.1)?%/);
-  const calendar = section.getByLabel("每日 Token 消耗日历");
-  await expect(calendar.locator("span")).toHaveCount(371);
-  await expect(calendar.locator('[data-level="4"]')).toHaveCount(2);
-  await expect(calendar.locator('[data-level="3"]')).toHaveCount(1);
+  await expect(section.getByLabel("筛选 Token 模型")).toContainText("gpt-5.4-mini");
+  await expect(section.getByLabel("筛选 Token 功能")).toContainText("编排器");
   const hourly = section.getByLabel("今日每小时 Token 总量与输入缓存率");
-  await expect(hourly.locator("rect")).toHaveCount(24);
-  await expect(hourly.locator("polyline")).toHaveCount(1);
-  await expect(hourly.locator("circle")).toHaveCount(24);
-  await expect(hourly).not.toContainText(/NaN|Infinity/);
+  await expect(hourly).toBeVisible();
+  await section.getByRole("button", { name: "日", exact: true }).click();
+  const calendar = section.getByLabel("每日 Token 消耗日历");
+  await expect(calendar).toBeVisible();
+  await section.getByLabel("筛选 Token 模型").selectOption("gpt-5.4-mini");
+  await section.getByLabel("筛选 Token 功能").selectOption("memory");
+  await expect.poll(() => state.tokenUsageRequests.at(-1)).toContain("model=gpt-5.4-mini&behavior=memory");
+  await expect(summary).toContainText("4K");
+  await expect(section).not.toContainText(/NaN|Infinity/);
 
   state.tokenUsage.today = {
     date: state.tokenUsage.today.date,
@@ -77,7 +178,7 @@ test("状态页展示 Token 缓存、日历与小时分布，并安全处理未�
   const emptyRate = page.getByLabel("今日 Token 统计").locator("article").filter({ hasText: "缓存率" });
   await expect(emptyRate.getByText("--", { exact: true }).first()).toBeVisible();
   const emptyHourly = page.getByLabel("今日每小时 Token 总量与输入缓存率");
-  await expect(emptyHourly.locator("circle")).toHaveCount(0);
+  await expect(emptyHourly).toBeVisible();
   await expect(emptyHourly.locator("polyline")).toHaveCount(0);
   await expect(emptyHourly).not.toContainText(/NaN|Infinity/);
   expect(await page.getByLabel("Token 消耗统计").innerHTML()).not.toMatch(/NaN|Infinity/);
@@ -130,7 +231,7 @@ test("退出登录只在设置页提供", async ({ page }) => {
 
   await expect(page.locator("nav").getByRole("button", { name: "退出登录" })).toHaveCount(0);
   await expect(page.locator("aside").getByRole("button", { name: "退出登录" })).toHaveCount(0);
-  await page.getByRole("link", { name: "设置", exact: true }).click();
+  await page.getByRole("link", { name: "系统设置", exact: true }).click();
   await page.getByRole("button", { name: "退出登录", exact: true }).click();
   await expect(page.getByRole("heading", { name: "退出管理台？" })).toBeVisible();
   await page.getByRole("button", { name: "退出登录", exact: true }).last().click();
@@ -181,8 +282,8 @@ test("Web Chat 以管理员身份发送并保持独立的网页消息流", async
     const style = getComputedStyle(element);
     return { family: style.fontFamily, size: Number.parseFloat(style.fontSize) };
   });
-  expect(titleStyle.family).toContain("Doto");
-  expect(titleStyle.size).toBeGreaterThanOrEqual(48);
+  expect(titleStyle.family).toContain("Space Grotesk");
+  expect(titleStyle.size).toBe(48);
   const messageRadii = await page.getByLabel("Web Chat 消息").locator("article")
     .evaluateAll((elements) => elements.map((element) => getComputedStyle(element).borderRadius));
   expect(messageRadii.every((radius) => radius === "0px")).toBe(true);
@@ -288,12 +389,12 @@ test("模型下拉目录、推理强度联动与分区保存", async ({ page }) 
   });
   await expect(page.getByText("已保存", { exact: true })).toBeVisible();
 
-  await page.goto("/settings/tools");
+  await page.goto("/agent-settings/tools");
   await page.getByRole("tab", { name: "运行参数", exact: true }).click();
   const codexModelSelect = page.getByRole("combobox", { name: "模型", exact: true });
   await expect(codexModelSelect.locator("option")).toHaveText(modelCatalog.map((model) => model.label));
   await expect(page.getByLabel("可执行文件")).toHaveValue("auto");
-  await expect(page.getByLabel("启动 Codex Worker")).toBeChecked();
+  await expect(page.getByText("已启用", { exact: true })).toBeVisible();
   await expect(page.getByLabel("默认质量")).toHaveValue("high");
   await codexModelSelect.selectOption("gpt-5.5");
   await page.getByLabel("默认质量").selectOption("auto");
@@ -330,7 +431,7 @@ test("模型下拉目录、推理强度联动与分区保存", async ({ page }) 
 
 test("回复开关、名称和命令前缀只在回复行为分区编辑", async ({ page }) => {
   const state = await installMockApi(page);
-  await page.goto("/settings/bot");
+  await page.goto("/agent-settings/bot");
 
   await expect(page.getByRole("heading", { name: "回复行为" })).toBeVisible();
   await expect(page.getByLabel("启用私聊")).toBeChecked();
@@ -339,12 +440,14 @@ test("回复开关、名称和命令前缀只在回复行为分区编辑", async
   await page.getByLabel("启用 Bot 群聊").check();
   await expect(page.getByLabel("启用私聊")).not.toBeChecked();
   await expect(page.getByLabel("启用 Bot 群聊")).toBeChecked();
+  await page.getByLabel("过滤名单").fill("20001, 20002, 20001");
   await page.getByLabel("名称").fill("普拉娜, Plana, Arona");
   await page.getByLabel("命令前缀").fill("/suna, /sunabot");
   await page.getByRole("button", { name: "保存", exact: true }).click();
 
-  await expect.poll(() => state.patchRequests.length).toBe(1);
-  expect(state.patchRequests[0]?.section).toBe("onebot");
+  await expect.poll(() => state.patchRequests.length).toBe(2);
+  expect(state.patchRequests.map((request) => request.section)).toEqual(["bot", "onebot"]);
+  expect(state.config.bot.quoteGroupReplyExcludedUserIds).toEqual(["20001", "20002"]);
   expect(state.config.onebot).toMatchObject({
     autoReplyPrivate: false,
     autoReplyBotGroup: true,
@@ -357,17 +460,54 @@ test("回复开关、名称和命令前缀只在回复行为分区编辑", async
   await expect(page.getByLabel("启用 Bot 群聊")).toHaveCount(0);
   await expect(page.getByLabel("名称")).toHaveCount(0);
   await expect(page.getByLabel("命令前缀")).toHaveCount(0);
+  await expect(page.getByLabel("过滤名单")).toHaveCount(0);
+});
+
+test("系统设置可配置广播风暴嗅探参数", async ({ page }) => {
+  const state = await installMockApi(page);
+  await page.goto("/settings/broadcastStorm");
+
+  await expect(page.getByRole("heading", { name: "广播风暴" })).toBeVisible();
+  await expect(page.getByLabel("广播风暴嗅探")).toBeChecked();
+  await expect(page.getByLabel("检测窗口（分钟）")).toHaveValue("2");
+  await expect(page.getByLabel("回复次数")).toHaveValue("3");
+  await expect(page.getByLabel("静默时长（分钟）")).toHaveValue("1");
+
+  await page.getByLabel("检测窗口（分钟）").fill("5");
+  await page.getByLabel("回复次数").fill("6");
+  await page.getByLabel("静默时长（分钟）").fill("7");
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+
+  await expect.poll(() => state.patchRequests.length).toBe(1);
+  expect(state.patchRequests[0]).toMatchObject({
+    section: "broadcastStorm",
+    body: {
+      value: {
+        enabled: true,
+        windowMinutes: 5,
+        replyThreshold: 6,
+        cooldownMinutes: 7
+      }
+    }
+  });
+  expect(state.config.broadcastStorm).toEqual({
+    enabled: true,
+    windowMinutes: 5,
+    replyThreshold: 6,
+    cooldownMinutes: 7
+  });
 });
 
 test("工具目录支持启停、全局说明和继承说明恢复", async ({ page }) => {
   const state = await installMockApi(page);
-  await page.goto("/settings/tools");
+  await page.goto("/agent-settings/tools");
 
   await expect(page.getByRole("tab", { name: "工具目录", exact: true })).toHaveAttribute("aria-selected", "true");
   await expect(page.getByLabel("搜索工具")).toBeVisible();
-  await expect(page.getByLabel(/^启用 /)).toHaveCount(7);
+  await expect(page.getByLabel(/^启用 /)).toHaveCount(8);
   for (const name of [
     "assistant_text",
+    "no_reply",
     "memory_recall",
     "websearch",
     "generate_img",
@@ -428,17 +568,48 @@ test("工具目录支持启停、全局说明和继承说明恢复", async ({ pa
 
   await page.getByRole("button", { name: "关闭工具详情" }).click();
   await page.getByRole("tab", { name: "运行参数", exact: true }).click();
-  await expect(page.getByLabel("启动 Codex Worker")).toBeChecked();
+  await expect(page.getByText("已启用", { exact: true })).toBeVisible();
   await expect(page.getByLabel("单轮工具调用上限")).toHaveValue("20");
+});
+
+test("no_reply 与回复行为共用戳一戳设置", async ({ page }) => {
+  const state = await installMockApi(page);
+  await page.goto("/agent-settings/tools");
+
+  await page.getByRole("button", { name: "查看 静默结束 详情" }).click();
+  let dialog = page.getByRole("dialog", { name: "静默结束" });
+  await dialog.getByLabel("no_reply 时戳一戳").check();
+  await dialog.getByRole("button", { name: "关闭工具详情" }).click();
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+
+  await expect.poll(() => state.patchRequests.length).toBe(1);
+  expect(state.patchRequests[0]?.section).toBe("bot");
+  expect(state.config.bot.pokeOnNoReply).toBe(true);
+
+  await page.goto("/agent-settings/bot");
+  await expect(page.getByLabel("no_reply 时戳一戳")).toBeChecked();
+  await page.getByLabel("no_reply 时戳一戳").uncheck();
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await expect.poll(() => state.patchRequests.length).toBe(2);
+  expect(state.config.bot.pokeOnNoReply).toBe(false);
+
+  await page.goto("/agent-settings/tools");
+  await page.getByRole("button", { name: "查看 静默结束 详情" }).click();
+  dialog = page.getByRole("dialog", { name: "静默结束" });
+  await expect(dialog.getByLabel("no_reply 时戳一戳")).not.toBeChecked();
 });
 
 test("提示词库列出全部文件并支持快捷保存与冲突恢复", async ({ page }) => {
   const state = await installMockApi(page);
-  await page.goto("/prompts/persona.soul");
+  await page.goto("/agent-prompts/persona.soul");
 
   await expect(page.getByRole("heading", { name: "核心人格" })).toBeVisible();
   const fileList = page.locator("aside").filter({ has: page.getByLabel("搜索文件") });
-  await expect(fileList.getByRole("button")).toHaveCount(12);
+  await expect(fileList.getByRole("button")).toHaveCount(7);
+  await expect(fileList.getByRole("button", { name: /自拍提示词改写/ })).toBeVisible();
+  await page.getByLabel("覆盖系统提示词").check();
+  await expect(fileList.getByRole("button")).toHaveCount(14);
+  expect(state.promptOverrides.plana).toBe(true);
   const editor = page.getByLabel("提示词正文");
   await expect(editor).toHaveValue(/冷静、诚实、可靠/);
 
@@ -475,12 +646,12 @@ test("提示词库列出全部文件并支持快捷保存与冲突恢复", async
   await expect(page.getByRole("button", { name: "保存", exact: true })).toBeDisabled();
 
   await editor.fill("尚未保存。\n");
-  await page.getByRole("link", { name: "设置" }).click();
+  await page.getByRole("link", { name: "系统设置" }).click();
   await expect(page.getByRole("heading", { name: "放弃未保存的修改？" })).toBeVisible();
   await page.getByRole("button", { name: "继续编辑" }).click();
-  await expect(page).toHaveURL(/\/prompts\/persona\.soul$/);
+  await expect(page).toHaveURL(/\/agent-prompts\/persona\.soul$/);
 
-  await page.getByRole("link", { name: "设置" }).click();
+  await page.getByRole("link", { name: "系统设置" }).click();
   await page.getByRole("button", { name: "保存并离开" }).click();
   await expect(page).toHaveURL(/\/settings$/);
   await expect.poll(() => state.files.find((item) => item.id === "persona.soul")?.content).toBe("尚未保存。\n");
@@ -489,7 +660,7 @@ test("提示词库列出全部文件并支持快捷保存与冲突恢复", async
 test("宽屏提示词可调整变量表宽度", async ({ page }) => {
   await installMockApi(page);
   await page.setViewportSize({ width: 1920, height: 1000 });
-  await page.goto("/prompts/persona.soul");
+  await page.goto("/agent-prompts/persona.soul");
 
   const splitter = page.getByRole("separator", { name: "调整可用变量宽度" });
   const variableTable = page.getByRole("table", { name: "提示词变量表" });
@@ -554,14 +725,14 @@ test("宽屏提示词可调整变量表宽度", async ({ page }) => {
   await expect.poll(() => editor.evaluate((element) => element.scrollTop)).toBe(scrollTop);
   const referencedVariable = variableTable.getByRole("button", { name: /persona\.preference/ });
   await expect(referencedVariable).toContainText("×2");
-  await expect(variableTable).toContainText("已引用 2 / 4");
+  await expect(variableTable).toContainText("已引用 2 / 5");
 });
 
 test("最终请求支持消息组、排序、结构测试和 JSON 存储同步", async ({ page }) => {
   const state = await installMockApi(page);
-  await page.goto("/prompts/conversation.reply");
+  await page.goto("/system-prompts/conversation.private-reply");
 
-  await expect(page.getByRole("heading", { name: "对话回复" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "单聊回复" })).toBeVisible();
   const systemPrompt = page.getByRole("textbox", { name: "system 提示词" });
   await expect(systemPrompt).toBeVisible();
   await expect(page.getByRole("tab", { name: "消息组 2" })).toBeVisible();
@@ -592,7 +763,7 @@ test("最终请求支持消息组、排序、结构测试和 JSON 存储同步",
   await page.getByRole("button", { name: "保存", exact: true }).click();
   await expect(page.getByText("已保存", { exact: true })).toBeVisible();
 
-  const saved = state.files.find((file) => file.id === "conversation.reply");
+  const saved = state.files.find((file) => file.id === "conversation.private-reply");
   expect(saved).toBeDefined();
   const document = JSON.parse(saved?.content ?? "{}");
   expect(document.messages[0].content).toContain("<user_input>@{user.input}</user_input>");
@@ -604,7 +775,7 @@ test("最终请求支持消息组、排序、结构测试和 JSON 存储同步",
 test("最终提示词在不同宽度保持单槽位双栏编辑", async ({ page }) => {
   const state = await installMockApi(page);
   await page.setViewportSize({ width: 1280, height: 800 });
-  await page.goto("/prompts/conversation.reply");
+  await page.goto("/system-prompts/conversation.private-reply");
 
   const tablist = page.getByRole("tablist", { name: "最终提示词槽位" });
   const dragHandle = page.locator('[aria-label="拖动消息 2 排序"]');
@@ -647,7 +818,7 @@ test("最终提示词在不同宽度保持单槽位双栏编辑", async ({ page 
 
   await page.getByRole("button", { name: "保存", exact: true }).click();
   await expect(page.getByText("已保存", { exact: true })).toBeVisible();
-  const saved = state.files.find((file) => file.id === "conversation.reply");
+  const saved = state.files.find((file) => file.id === "conversation.private-reply");
   expect(JSON.parse(saved?.content ?? "{}").messages).toContain("@{messages_64}");
 });
 
@@ -656,7 +827,7 @@ test("管理员账号密码建立 HttpOnly 会话且不写入浏览器存储", a
 
   await page.goto("/overview");
   await expect(page.getByRole("heading", { name: "Sunabot", exact: true })).toBeVisible();
-  await expect(page.getByText("管理普拉娜的会话、记忆与工具", { exact: true })).toBeVisible();
+  await expect(page.getByText("管理 Agent、QQ 账号、会话与记忆", { exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "管理员登录" })).toBeVisible();
   await expect(page.getByText(/SECURE SESSION|ADMIN ACCESS|HttpOnly|浏览器存储/i)).toHaveCount(0);
   await page.getByLabel("管理员账号").fill("admin");
@@ -688,7 +859,7 @@ test("生产构建支持深链接刷新与浏览器返回", async ({ page }) => 
 
   await page.reload();
   await expect(page.getByRole("heading", { name: "产品讨论群" })).toBeVisible();
-  await page.goto("/settings/memory");
+  await page.goto("/agent-settings/memory");
   await expect(page.getByRole("heading", { name: "记忆处理" })).toBeVisible();
   await page.goBack();
   await expect(page.getByRole("heading", { name: "产品讨论群" })).toBeVisible();
@@ -812,7 +983,7 @@ test("平板宽度使用单工作区并保留完整导航", async ({ page }) => 
   await expect(page.getByLabel("搜索会话")).toBeHidden();
   await expect(page.getByRole("button", { name: "更多", exact: true })).toBeVisible();
 
-  await page.goto("/prompts/persona.soul");
+  await page.goto("/agent-prompts/persona.soul");
   await expect(page.getByRole("button", { name: "返回文件列表" })).toBeVisible();
   await expect(page.getByLabel("提示词正文")).toBeVisible();
   await expect(page.getByLabel("搜索文件")).toBeHidden();
@@ -844,33 +1015,33 @@ test("弹层约束焦点、支持 Escape 并恢复触发位置", async ({ page }
 
 test("设置离开确认支持继续编辑、保存或放弃修改", async ({ page }) => {
   const state = await installMockApi(page);
-  await page.goto("/settings/bot");
+  await page.goto("/agent-settings/bot");
   await page.getByLabel("管理员称呼").fill("新的管理员称呼");
 
   await page.getByRole("link", { name: "状态", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "放弃未保存的设置？" });
   await expect(dialog).toBeVisible();
   await page.getByRole("button", { name: "继续编辑" }).click();
-  await expect(page).toHaveURL(/\/settings\/bot$/);
+  await expect(page).toHaveURL(/\/agent-settings\/bot$/);
   await expect(page.getByLabel("管理员称呼")).toHaveValue("新的管理员称呼");
 
   await page.getByRole("link", { name: "状态", exact: true }).click();
   await page.getByRole("button", { name: "保存并离开" }).click();
   await expect(page).toHaveURL(/\/overview$/);
 
-  await page.goto("/settings/bot");
+  await page.goto("/agent-settings/bot");
   await expect(page.getByLabel("管理员称呼")).toHaveValue("新的管理员称呼");
   await page.getByLabel("管理员称呼").fill("放弃的管理员称呼");
   await page.getByRole("link", { name: "状态", exact: true }).click();
   await page.getByRole("button", { name: "放弃并离开" }).click();
   await expect(page).toHaveURL(/\/overview$/);
 
-  await page.goto("/settings/bot");
+  await page.goto("/agent-settings/bot");
   await page.getByLabel("管理员称呼").fill("保存失败时保留");
   state.nextPatchError = "管理员称呼保存失败。";
   await page.getByRole("link", { name: "状态", exact: true }).click();
   await page.getByRole("button", { name: "保存并离开" }).click();
-  await expect(page).toHaveURL(/\/settings\/bot$/);
+  await expect(page).toHaveURL(/\/agent-settings\/bot$/);
   const failedSaveDialog = page.getByRole("dialog", { name: "放弃未保存的设置？" });
   await expect(failedSaveDialog).toBeVisible();
   await expect(failedSaveDialog.getByText("管理员称呼保存失败。", { exact: true })).toBeVisible();

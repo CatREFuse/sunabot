@@ -25,7 +25,15 @@ describe("selfie reference server registration", () => {
   it("protects the registered API and exposes the WebUI envelope", async () => {
     const config = createAdminTestConfig(root);
     await fs.mkdir(config.persona.agentWorkspace, { recursive: true });
-    const app = await createApp({ config, initializeRuntime: false, onebotListener: false });
+    const app = await createApp({
+      config,
+      initializeRuntime: false,
+      onebotListener: false,
+      agentRegistry: {
+        workspaceRoot: path.dirname(config.persona.agentWorkspace),
+        allowUnmarkedMigration: true
+      }
+    });
 
     const unauthorized = await app.inject({
       method: "GET",

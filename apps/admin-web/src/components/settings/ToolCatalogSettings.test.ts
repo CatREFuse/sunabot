@@ -85,6 +85,58 @@ const tools = [
   }
 ];
 
+const directRuntimeTools = [
+  {
+    name: "workspace_bash",
+    title: "Bash",
+    summary: "执行 workspace 命令。",
+    execution: "inline",
+    configuredEnabled: false,
+    promptEnabled: true,
+    enabled: false,
+    available: true,
+    effectiveEnabled: false,
+    defaultDescription: "Run workspace commands.",
+    description: "Run workspace commands.",
+    descriptionSource: "default",
+    parameters: { type: "object", properties: {}, required: [] },
+    strict: true
+  },
+  {
+    name: "codex",
+    title: "Codex",
+    summary: "执行异步任务。",
+    execution: "deferred",
+    configuredEnabled: true,
+    promptEnabled: true,
+    enabled: true,
+    available: true,
+    effectiveEnabled: true,
+    defaultDescription: "Delegate long work.",
+    description: "Delegate long work.",
+    descriptionSource: "default",
+    parameters: { type: "object", properties: {}, required: [] },
+    strict: true
+  }
+];
+
+const noReplyTool = {
+  name: "no_reply",
+  title: "不回复",
+  summary: "结束本轮且不发送文字。",
+  execution: "inline",
+  configuredEnabled: null,
+  promptEnabled: true,
+  enabled: true,
+  available: true,
+  effectiveEnabled: true,
+  defaultDescription: "End the turn without a text reply.",
+  description: "End the turn without a text reply.",
+  descriptionSource: "default",
+  parameters: { type: "object", properties: {}, required: [] },
+  strict: true
+};
+
 describe("ToolCatalogSettings", () => {
   beforeEach(() => {
     apiRequest.mockReset();
@@ -141,6 +193,51 @@ describe("ToolCatalogSettings", () => {
 
     await websearchToggle!.find('input[type="checkbox"]').setValue(true);
     expect(draft.overrides.websearch).toBeUndefined();
+  });
+
+  it("uses direct runtime switches for Bash and Codex without enabled overrides", async () => {
+    apiRequest.mockResolvedValueOnce({ tools: directRuntimeTools });
+    const draft = toolsDraft();
+    draft.overrides.codex = { enabled: false, description: "Codex 说明" };
+    draft.overrides.workspace_bash = { enabled: true, description: "Bash 说明" };
+    const bash = bashDraft();
+    const wrapper = mount(ToolCatalogSettings, {
+      props: { modelValue: draft, bash },
+      global: { stubs: { DialogOverlay: dialogStub() } }
+    });
+    await flushPromises();
+
+    const bashToggle = wrapper.findAll("label").find((label) => label.text().includes("启用 Bash"));
+    const codexToggle = wrapper.findAll("label").find((label) => label.text().includes("启用 Codex"));
+    await bashToggle!.get('input[type="checkbox"]').setValue(true);
+    await codexToggle!.get('input[type="checkbox"]').setValue(false);
+
+    expect(bash.enabled).toBe(true);
+    expect(draft.codex.enabled).toBe(false);
+    expect(draft.overrides.workspace_bash).toEqual({ description: "Bash 说明" });
+    expect(draft.overrides.codex).toEqual({ description: "Codex 说明" });
+  });
+
+  it("edits the shared no_reply poke setting from the tool detail", async () => {
+    apiRequest.mockResolvedValueOnce({ tools: [noReplyTool] });
+    const updates: boolean[] = [];
+    const wrapper = mount(ToolCatalogSettings, {
+      props: {
+        modelValue: toolsDraft(),
+        bash: bashDraft(),
+        pokeOnNoReply: false,
+        "onUpdate:pokeOnNoReply": (enabled: boolean) => updates.push(enabled)
+      },
+      global: { stubs: { DialogOverlay: dialogStub() } }
+    });
+    await flushPromises();
+
+    await wrapper.get('button[aria-label="查看 不回复 详情"]').trigger("click");
+    const pokeToggle = wrapper.findAll("label")
+      .find((label) => label.text().includes("no_reply 时戳一戳"));
+    await pokeToggle!.get('input[type="checkbox"]').setValue(true);
+
+    expect(updates).toEqual([true]);
   });
 });
 

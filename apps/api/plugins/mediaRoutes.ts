@@ -7,6 +7,7 @@ import type { FastifyInstance } from "fastify";
 import { applicationDataStore } from "../../../adapters/sqlite/applicationDataStore.js";
 import { isTrustedQqFakeIp } from "../../../adapters/onebot/qqMedia.js";
 import { WORKSPACE_LAYOUT } from "../../../packages/platform/workspaceLayout.js";
+import { runWithAgentRuntimeContext } from "../../../packages/platform/runtimeAgentContext.js";
 import { AdminApiError, badRequest } from "../../../src/admin/errors.js";
 import { getWorkspacePath } from "../../../src/config.js";
 import { readModelCallStats, readRequestLogPage, readTokenUsageSummary, requestLogPath } from "../../../src/requestLog.js";
@@ -16,6 +17,8 @@ import type { AppConfig, BotToolSettings, ImageHistoryRecord } from "../../../sr
 export interface MediaRouteOptions {
   getConfig(): AppConfig;
   runtime: SunaRuntime;
+  getAgentContext?: (agentId: string) => { config: AppConfig; runtime: SunaRuntime };
+  getAllAgentConfigs?: () => Promise<AppConfig[]>;
 }
 
 const openObject = { type: "object", additionalProperties: true } as const;
@@ -36,26 +39,35 @@ const qqAvatarQuery = {
 } as const;
 
 export function registerMediaRoutes(app: FastifyInstance, options: MediaRouteOptions) {
-  let imageHistory = loadImageHistory();
+  const histories = new Map<string, ImageHistoryRecord[]>();
+  const contextFor = (request: { query: unknown }) => options.getAgentContext?.(requestAgentId(request.query)) ?? {
+    config: options.getConfig(),
+    runtime: options.runtime
+  };
+  const historyFor = (config: AppConfig) => histories.get(config.persona.defaultAgentId) ?? loadImageHistory(config);
 
   app.get("/api/images", {
     schema: { querystring: openObject, response: { 200: openObject } }
-  }, async () => {
-    imageHistory = mergeImageHistoryWithFiles(imageHistory);
+  }, async (request) => {
+    const { config } = contextFor(request);
+    const imageHistory = mergeImageHistoryWithFiles(historyFor(config), config);
+    histories.set(config.persona.defaultAgentId, imageHistory);
     return { images: imageHistory };
   });
 
   app.get("/api/request-logs", {
     schema: { querystring: openObject, response: { 200: openObject } }
   }, async (request) => {
+    const { config } = contextFor(request);
     const query = request.query as { q?: string; limit?: string; page?: string; pageSize?: string };
     const page = await readRequestLogPage({
       query: query.q,
       page: Number(query.page ?? 1),
-      pageSize: Number(query.pageSize ?? query.limit ?? 50)
+      pageSize: Number(query.pageSize ?? query.limit ?? 50),
+      config
     });
     return {
-      filePath: requestLogPath(),
+      filePath: requestLogPath(config),
       ...page
     };
   });
@@ -63,13 +75,28 @@ export function registerMediaRoutes(app: FastifyInstance, options: MediaRouteOpt
   app.get("/api/token-usage", {
     schema: { querystring: openObject, response: { 200: openObject } }
   }, async (request) => {
-    const query = request.query as { timezoneOffset?: string };
-    return readTokenUsageSummary(Number(query.timezoneOffset ?? 0));
+    const agentId = requestAgentId(request.query);
+    const config = agentId === "all" ? options.getConfig() : contextFor(request).config;
+    const configs = agentId === "all" ? await options.getAllAgentConfigs?.() : undefined;
+    const query = request.query as { timezoneOffset?: string; model?: string; behavior?: string };
+    return readTokenUsageSummary(Number(query.timezoneOffset ?? 0), {
+      model: query.model,
+      behavior: query.behavior === "reply" || query.behavior === "orchestrator" || query.behavior === "memory" || query.behavior === "other"
+        ? query.behavior
+        : "",
+      config,
+      ...(configs ? { configs } : {})
+    });
   });
 
   app.get("/api/model-call-stats", {
     schema: { querystring: openObject, response: { 200: openObject } }
-  }, async () => readModelCallStats());
+  }, async (request) => {
+    const agentId = requestAgentId(request.query);
+    const config = agentId === "all" ? options.getConfig() : contextFor(request).config;
+    const configs = agentId === "all" ? await options.getAllAgentConfigs?.() : undefined;
+    return readModelCallStats({ config, ...(configs ? { configs } : {}) });
+  });
 
   app.get("/api/media/image", {
     schema: { querystring: remoteImageQuery, response: { 200: passthroughBody } }
@@ -131,7 +158,7 @@ export function registerMediaRoutes(app: FastifyInstance, options: MediaRouteOpt
   app.post("/api/playground/image", {
     schema: { body: passthroughBody, response: { 200: openObject } }
   }, async (request) => {
-    const config = options.getConfig();
+    const { config, runtime } = contextFor(request);
     const body = request.body as { prompt?: string; size?: string; resolution?: string; quality?: string; providerId?: string };
     const prompt = String(body?.prompt ?? "").trim();
     const resolution = isImageResolution(body?.resolution) ? body.resolution : config.bot.tools.generateImg.resolution;
@@ -144,8 +171,8 @@ export function registerMediaRoutes(app: FastifyInstance, options: MediaRouteOpt
       badRequest("IMAGE_PROMPT_EMPTY", "请输入提示词。", "prompt");
     }
 
-    const provider = options.runtime.getProvider(providerId);
-    const result = await provider.generateImage(prompt, size, quality);
+    const provider = runtime.getProvider(providerId);
+    const result = await runWithAgentRuntimeContext(config, () => provider.generateImage(prompt, size, quality));
     const record: ImageHistoryRecord = {
       id: path.basename(result.url),
       url: result.url,
@@ -157,7 +184,7 @@ export function registerMediaRoutes(app: FastifyInstance, options: MediaRouteOpt
       model: provider.getModelInfo().imageModel,
       createdAt: new Date().toISOString()
     };
-    imageHistory = saveImageHistory([record, ...imageHistory]);
+    histories.set(config.persona.defaultAgentId, saveImageHistory([record, ...historyFor(config)], config));
     return result;
   });
 }
@@ -165,11 +192,15 @@ export function registerMediaRoutes(app: FastifyInstance, options: MediaRouteOpt
 async function createThumbnail(source: string, variant: "display" | "placeholder") {
   let bytes: Buffer;
   if (source.startsWith("/generated-images/")) {
-    const fileName = decodeURIComponent(source.slice("/generated-images/".length));
-    if (!fileName || path.basename(fileName) !== fileName || !/\.(?:png|jpe?g|webp)$/i.test(fileName)) {
+    const relativePath = decodeURIComponent(source.slice("/generated-images/".length));
+    if (!relativePath || path.isAbsolute(relativePath) || !/\.(?:png|jpe?g|webp)$/i.test(relativePath)) {
       badRequest("IMAGE_URL_INVALID", "图片地址无效。", "url");
     }
-    const filePath = path.join(imageDirPath(), fileName);
+    const root = path.resolve(imageDirPath());
+    const filePath = path.resolve(root, relativePath);
+    if (filePath === root || !filePath.startsWith(`${root}${path.sep}`)) {
+      badRequest("IMAGE_URL_INVALID", "图片地址无效。", "url");
+    }
     const stats = await fs.promises.stat(filePath).catch(() => undefined);
     if (!stats?.isFile() || stats.size > REMOTE_IMAGE_MAX_BYTES) {
       throw new AdminApiError(stats ? 413 : 404, stats ? "IMAGE_TOO_LARGE" : "IMAGE_NOT_FOUND", stats ? "图片超过 12 MiB 限制。" : "图片不存在。");
@@ -392,33 +423,39 @@ function imageAspect(size: string) {
   return "square";
 }
 
-function imageDirPath() {
-  return getWorkspacePath(WORKSPACE_LAYOUT.mediaImages);
+function imageDirPath(config?: Pick<AppConfig, "persona">) {
+  const agentId = config?.persona.defaultAgentId.trim() || "plana";
+  return agentId === "plana"
+    ? getWorkspacePath(WORKSPACE_LAYOUT.mediaImages)
+    : getWorkspacePath(WORKSPACE_LAYOUT.mediaImages, "agents", agentId);
 }
 
 function imageHistoryPath() {
   return getWorkspacePath(WORKSPACE_LAYOUT.legacyData, "image-history.json");
 }
 
-function loadImageHistory() {
+function loadImageHistory(config?: Pick<AppConfig, "persona">) {
   const historyFile = imageHistoryPath();
   try {
-    const store = applicationDataStore();
-    store.ensureLegacyImageHistoryImported(historyFile);
-    return mergeImageHistoryWithFiles(store.readImageHistory());
+    const store = applicationDataStore(config);
+    if (!config || config.persona.defaultAgentId === "plana") store.ensureLegacyImageHistoryImported(historyFile);
+    return mergeImageHistoryWithFiles(store.readImageHistory(), config);
   } catch {
-    return mergeImageHistoryWithFiles([]);
+    return mergeImageHistoryWithFiles([], config);
   }
 }
 
-function mergeImageHistoryWithFiles(records: ImageHistoryRecord[]) {
+function mergeImageHistoryWithFiles(records: ImageHistoryRecord[], config?: Pick<AppConfig, "persona">) {
   const byUrl = new Map(records.map((record) => [record.url, record]));
-  const dir = imageDirPath();
+  const dir = imageDirPath(config);
   if (!existsSync(dir)) return normalizeImageHistory([...byUrl.values()]);
 
   for (const fileName of fs.readdirSync(dir)) {
     if (!/\.(png|jpe?g|webp)$/i.test(fileName)) continue;
-    const url = `/generated-images/${fileName}`;
+    const agentId = config?.persona.defaultAgentId.trim() || "plana";
+    const url = agentId === "plana"
+      ? `/generated-images/${fileName}`
+      : `/generated-images/agents/${encodeURIComponent(agentId)}/${fileName}`;
     if (byUrl.has(url)) continue;
     const filePath = path.join(dir, fileName);
     const stats = fs.statSync(filePath);
@@ -440,8 +477,13 @@ function normalizeImageHistory(records: ImageHistoryRecord[]) {
     .slice(0, 80);
 }
 
-function saveImageHistory(records: ImageHistoryRecord[]) {
+function saveImageHistory(records: ImageHistoryRecord[], config?: Pick<AppConfig, "persona">) {
   const normalized = normalizeImageHistory(records);
-  applicationDataStore().replaceImageHistory(normalized);
+  applicationDataStore(config).replaceImageHistory(normalized);
   return normalized;
+}
+
+function requestAgentId(query: unknown) {
+  const value = query && typeof query === "object" ? (query as { agentId?: unknown }).agentId : undefined;
+  return String(value ?? "plana").trim() || "plana";
 }

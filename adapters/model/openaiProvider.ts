@@ -30,6 +30,7 @@ export type {
   ProviderCompleteOptions,
   ProviderCompletedTurn,
   ProviderDeferredTurn,
+  ProviderNoReplyTurn,
   ProviderMemoryOptions,
   ProviderSelfieOptions,
   ProviderTurnResult
@@ -84,6 +85,9 @@ export class OpenAIProvider {
     const result = await this.completeRequestTurn(request, options);
     if (result.kind === "deferred") {
       throw new Error("异步工具只能由 Session Runtime 调度。");
+    }
+    if (result.kind === "no_reply") {
+      throw new Error("no_reply 只能由 Session Runtime 处理。");
     }
     return result.text;
   }

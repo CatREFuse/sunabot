@@ -72,7 +72,7 @@ const metrics = computed<SummaryMetric[]>(() => {
 .token-card--metric[data-tone="success"] .token-card__icon { color: rgb(var(--color-success)); }
 .token-card--metric[data-tone="warning"] .token-card__icon { color: rgb(var(--color-warning)); }
 .token-card--metric .token-card__label { margin-top: 14px; }
-.token-card--metric strong { margin-top: 10px; font-size: 26px; }
+.token-card--metric strong { margin-top: 10px; font-family: "Doto Variable", "Space Mono", monospace; font-size: 26px; letter-spacing: -.035em; }
 @media (min-width: 640px) {
   .usage-summary { grid-template-columns: repeat(5, minmax(0, 1fr)); }
   .token-card--hero { grid-column: 1 / -1; }

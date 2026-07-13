@@ -349,7 +349,9 @@ function normalizeWebUiBaseUrl(value: string | undefined) {
   const source = value?.trim();
   if (!source) return undefined;
   const url = new URL(source);
-  if (url.protocol !== "http:" || !["127.0.0.1", "localhost", "napcat"].includes(url.hostname)) {
+  if (url.protocol !== "http:" || !(
+    ["127.0.0.1", "localhost", "napcat"].includes(url.hostname) || /^napcat-[a-z0-9_-]{1,64}$/i.test(url.hostname)
+  )) {
     throw new Error("NapCat WebUI 地址无效。");
   }
   if (url.username || url.password || (url.pathname !== "/" && url.pathname !== "") || url.search || url.hash) {

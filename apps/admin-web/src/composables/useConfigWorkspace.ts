@@ -1,5 +1,5 @@
 import { reactive, readonly, shallowRef, toRaw } from "vue";
-import { ApiRequestError, apiRequest } from "./useAdminApi";
+import { ApiRequestError, apiRequest, apiRequestUnscoped } from "./useAdminApi";
 import type {
   AppConfig,
   ConfigEnvelope,
@@ -11,15 +11,29 @@ import type {
 type SectionDrafts = { [K in ConfigSectionKey]: ConfigSectionValueMap[K] };
 type StateKind = "idle" | "saving" | "saved" | "error" | "conflict" | "restart";
 interface SectionState { kind: StateKind; message: string; field?: string }
+export type ConfigWorkspaceScope = "agent" | "system";
 
 const emptyConfig: AppConfig = {
   server: { host: "127.0.0.1", port: 8787 },
-  persona: { defaultAgentId: "plana", agentWorkspace: "", memoryLimit: 100 },
+  persona: {
+    defaultAgentId: "plana",
+    agentWorkspace: "",
+    systemPromptWorkspace: "workspace/business/prompts",
+    systemPromptOverride: false
+  },
   providers: { defaultProviderId: "", items: [] },
+  broadcastStorm: {
+    enabled: true,
+    windowMinutes: 2,
+    replyThreshold: 3,
+    cooldownMinutes: 1
+  },
   bot: {
     adminQq: "",
     adminName: "",
+    pokeOnNoReply: false,
     quoteGroupReplies: true,
+    quoteGroupReplyExcludedUserIds: [],
     contextMessageLimit: 48,
     memory: {
       memoryModel: "gpt-5.4-mini",
@@ -75,12 +89,15 @@ const envelope = shallowRef<ConfigEnvelope | null>(null);
 const loading = shallowRef(false);
 const state = reactive<Record<ConfigSectionKey, SectionState>>({
   server: idle(), persona: idle(), providers: idle(), bot: idle(), memory: idle(),
-  orchestrator: idle(), tools: idle(), bash: idle(), onebot: idle()
+  broadcastStorm: idle(), orchestrator: idle(), tools: idle(), bash: idle(), onebot: idle()
 });
 const drafts = reactive<SectionDrafts>(valuesFromConfig(emptyConfig));
 const baselines = reactive<SectionDrafts>(valuesFromConfig(emptyConfig));
 
-async function load(options: { preserveDirty?: boolean; discardDirtySection?: ConfigSectionKey } = {}) {
+async function load(
+  options: { preserveDirty?: boolean; discardDirtySection?: ConfigSectionKey } = {},
+  scope: ConfigWorkspaceScope = "agent"
+) {
   const dirtyBefore = new Map<ConfigSectionKey, boolean>();
   const savedDrafts = new Map<ConfigSectionKey, unknown>();
   for (const key of sectionKeys) {
@@ -89,7 +106,7 @@ async function load(options: { preserveDirty?: boolean; discardDirtySection?: Co
   }
   loading.value = true;
   try {
-    const result = await apiRequest<ConfigEnvelope>("/api/config");
+    const result = await requestFor(scope)<ConfigEnvelope>("/api/config");
     envelope.value = result;
     const values = valuesFromConfig(result.config);
     for (const key of sectionKeys) {
@@ -103,7 +120,7 @@ async function load(options: { preserveDirty?: boolean; discardDirtySection?: Co
   }
 }
 
-async function save<K extends ConfigSectionKey>(key: K) {
+async function save<K extends ConfigSectionKey>(key: K, scope: ConfigWorkspaceScope = "agent") {
   const current = envelope.value;
   if (!current) return;
   const submittedDraft = clone(drafts[key]);
@@ -112,7 +129,7 @@ async function save<K extends ConfigSectionKey>(key: K) {
   }
   state[key] = { kind: "saving", message: "保存中" };
   try {
-    const result = await apiRequest<ConfigPatchResponse>(`/api/config/${key}`, {
+    const result = await requestFor(scope)<ConfigPatchResponse>(`/api/config/${key}`, {
       method: "PATCH",
       body: JSON.stringify({ revision: current.revision, value: submittedDraft })
     });
@@ -152,14 +169,14 @@ async function save<K extends ConfigSectionKey>(key: K) {
   }
 }
 
-async function saveGroupReply() {
+async function saveGroupReply(scope: ConfigWorkspaceScope = "agent") {
   const current = envelope.value;
   if (!current) return;
   const submittedOrchestrator = clone(drafts.orchestrator);
   const submittedEnabled = drafts.onebot.autoReplyUserGroup;
   state.orchestrator = { kind: "saving", message: "保存中" };
   try {
-    const result = await apiRequest<ConfigPatchResponse>("/api/config/group-reply", {
+    const result = await requestFor(scope)<ConfigPatchResponse>("/api/config/group-reply", {
       method: "PATCH",
       body: JSON.stringify({
         revision: current.revision,
@@ -236,6 +253,15 @@ function isReplyBehaviorDirty() {
     JSON.stringify(drafts.onebot.commandPrefixes) !== JSON.stringify(baselines.onebot.commandPrefixes);
 }
 
+function isNoReplyPokeDirty() {
+  return drafts.bot.pokeOnNoReply !== baselines.bot.pokeOnNoReply;
+}
+
+function discardNoReplyPoke() {
+  drafts.bot.pokeOnNoReply = baselines.bot.pokeOnNoReply;
+  state.bot = idle();
+}
+
 function isOneBotConnectionDirty() {
   return drafts.onebot.reverseWsPath !== baselines.onebot.reverseWsPath ||
     drafts.onebot.accessTokenEnv !== baselines.onebot.accessTokenEnv;
@@ -264,12 +290,15 @@ function discardGroupReply() {
 function valuesFromConfig(config: AppConfig): SectionDrafts {
   return {
     server: clone(config.server),
-    persona: { agentWorkspace: config.persona.agentWorkspace, memoryLimit: config.persona.memoryLimit },
+    persona: { agentWorkspace: config.persona.agentWorkspace },
     providers: clone(config.providers),
+    broadcastStorm: clone(config.broadcastStorm),
     bot: {
       adminQq: config.bot.adminQq,
       adminName: config.bot.adminName,
+      pokeOnNoReply: config.bot.pokeOnNoReply,
       quoteGroupReplies: config.bot.quoteGroupReplies,
+      quoteGroupReplyExcludedUserIds: [...(config.bot.quoteGroupReplyExcludedUserIds ?? [])],
       contextMessageLimit: config.bot.contextMessageLimit
     },
     memory: clone(config.bot.memory),
@@ -307,24 +336,30 @@ function idle() {
   return { kind: "idle" as const, message: "" };
 }
 
-export const sectionKeys: ConfigSectionKey[] = ["server", "persona", "providers", "bot", "memory", "orchestrator", "tools", "bash", "onebot"];
+export const sectionKeys: ConfigSectionKey[] = ["server", "persona", "providers", "broadcastStorm", "bot", "memory", "orchestrator", "tools", "bash", "onebot"];
 
-export function useConfigWorkspace() {
+function requestFor(scope: ConfigWorkspaceScope) {
+  return scope === "system" ? apiRequestUnscoped : apiRequest;
+}
+
+export function useConfigWorkspace(scope: ConfigWorkspaceScope = "agent") {
   return {
     envelope: readonly(envelope),
     drafts,
     state,
     loading: readonly(loading),
-    load,
-    save,
-    saveGroupReply,
+    load: (options?: { preserveDirty?: boolean; discardDirtySection?: ConfigSectionKey }) => load(options, scope),
+    save: <K extends ConfigSectionKey>(key: K) => save(key, scope),
+    saveGroupReply: () => saveGroupReply(scope),
     discard,
     discardGroupReply,
     isDirty,
     isGroupReplyDirty,
     isOneBotSettingsDirty,
     isReplyBehaviorDirty,
+    isNoReplyPokeDirty,
     isOneBotConnectionDirty,
+    discardNoReplyPoke,
     discardReplyBehavior,
     discardOneBotConnection
   };

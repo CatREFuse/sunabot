@@ -4,6 +4,7 @@ import { nanoid } from "nanoid";
 import type { ImageResult } from "../../../src/types.js";
 import { getWorkspacePath } from "../../../src/config.js";
 import { WORKSPACE_LAYOUT } from "../../../packages/platform/workspaceLayout.js";
+import { currentAgentRuntimeConfig } from "../../../packages/platform/runtimeAgentContext.js";
 import type { GeneratedImageWriterPort } from "./contracts.js";
 import { extractResponsesText } from "./streamDecoder.js";
 
@@ -15,13 +16,18 @@ export class FileGeneratedImageWriter implements GeneratedImageWriterPort {
       throw new Error(text || "没有收到生图结果。");
     }
 
-    const imageDir = getWorkspacePath(WORKSPACE_LAYOUT.mediaImages);
+    const agentId = currentAgentRuntimeConfig()?.persona.defaultAgentId.trim() || "plana";
+    const imageDir = agentId === "plana"
+      ? getWorkspacePath(WORKSPACE_LAYOUT.mediaImages)
+      : getWorkspacePath(WORKSPACE_LAYOUT.mediaImages, "agents", agentId);
     fs.mkdirSync(imageDir, { recursive: true });
     const fileName = `${new Date().toISOString().replace(/[:.]/g, "-")}-${nanoid(8)}.png`;
     const filePath = path.join(imageDir, fileName);
     fs.writeFileSync(filePath, Buffer.from(stripDataUrlPrefix(image.b64Json), "base64"));
     return {
-      url: `/generated-images/${fileName}`,
+      url: agentId === "plana"
+        ? `/generated-images/${fileName}`
+        : `/generated-images/agents/${encodeURIComponent(agentId)}/${fileName}`,
       filePath,
       revisedPrompt: `${imageModel} ${size}`
     };

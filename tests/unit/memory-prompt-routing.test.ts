@@ -7,18 +7,19 @@ import { SunaRuntime } from "../../src/runtime.js";
 import { createAdminTestConfig } from "./admin-fixtures.js";
 
 let root = "";
-let workspaceDir = "";
+let systemPromptDir = "";
 let runtime: SunaRuntime;
 
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-memory-prompt-"));
   const config = createAdminTestConfig(root);
-  workspaceDir = config.persona.agentWorkspace;
+  systemPromptDir = config.persona.systemPromptWorkspace;
   runtime = new SunaRuntime(config, { attachmentService: {} as never });
   await runtime.ensureAgentPromptFiles(config);
 });
 
 afterAll(async () => {
+  runtime.close();
   await fs.rm(root, { recursive: true, force: true });
 });
 
@@ -29,8 +30,29 @@ const promptFiles = [
 ] as const;
 
 describe("memory prompt routing contract", () => {
+  it("copies the legacy shared reply prompt into independent private and group files", async () => {
+    const migrationRoot = path.join(root, "legacy-split");
+    const config = createAdminTestConfig(migrationRoot);
+    await fs.mkdir(config.persona.systemPromptWorkspace, { recursive: true });
+    const legacyContent = `${runtime.defaultPromptContent("conversation.private-reply").trim()}\n`;
+    await fs.writeFile(path.join(config.persona.systemPromptWorkspace, "conversation_reply.json"), legacyContent, "utf8");
+    const migrationRuntime = new SunaRuntime(config, { attachmentService: {} as never });
+
+    await migrationRuntime.ensureAgentPromptFiles(config);
+
+    await expect(fs.readFile(
+      path.join(config.persona.systemPromptWorkspace, "conversation_private_reply.json"),
+      "utf8"
+    )).resolves.toBe(legacyContent);
+    await expect(fs.readFile(
+      path.join(config.persona.systemPromptWorkspace, "conversation_group_reply.json"),
+      "utf8"
+    )).resolves.toBe(legacyContent);
+    migrationRuntime.close();
+  });
+
   it.each(promptFiles)("keeps %s aligned with %s", async (id, fileName) => {
-    const workspacePrompt = await fs.readFile(path.join(workspaceDir, fileName), "utf8");
+    const workspacePrompt = await fs.readFile(path.join(systemPromptDir, fileName), "utf8");
     expect(JSON.parse(workspacePrompt)).toEqual(JSON.parse(runtime.defaultPromptContent(id)));
   });
 
@@ -55,6 +77,6 @@ describe("memory prompt routing contract", () => {
 });
 
 async function readPrompt(fileName: string) {
-  const document = JSON.parse(await fs.readFile(path.join(workspaceDir, fileName), "utf8"));
+  const document = JSON.parse(await fs.readFile(path.join(systemPromptDir, fileName), "utf8"));
   return document.messages.find((message: { role?: string }) => message.role === "system")?.content ?? "";
 }

@@ -1,5 +1,9 @@
 // @vitest-environment node
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ProviderConfig } from "../../src/types.js";
 import { RegistryProviderToolExecutor } from "../../adapters/model/provider/toolExecutor.js";
 import {
   extractResponsesTextFromSse,
@@ -15,6 +19,50 @@ describe("provider adapter ports", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
+
+  it("reads Codex UI authorization from an external Sunabot workspace", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-provider-workspace-"));
+    const workspace = path.join(root, "external-workspace");
+    const authFile = path.join(workspace, "secrets", "codex", "auth.json");
+    const token = "external-workspace-token";
+    try {
+      await fs.mkdir(path.dirname(authFile), { recursive: true });
+      await fs.writeFile(authFile, JSON.stringify({ tokens: { access_token: token } }), "utf8");
+      vi.stubEnv("SUNABOT_WORKSPACE", workspace);
+      vi.stubEnv("OPEN_ARONA_CODEX_AUTH_FILE", "");
+      vi.stubEnv("SUNABOT_TEST_CODEX_ACCESS_TOKEN", "");
+      vi.resetModules();
+      const { resolveProviderApiKey } = await import("../../adapters/model/provider/transport.js");
+
+      expect(resolveProviderApiKey(codexProvider())).toBe(token);
+      vi.stubEnv("OPEN_ARONA_CODEX_AUTH_FILE", "workspace/secrets/codex/auth.json");
+      expect(resolveProviderApiKey(codexProvider())).toBe(token);
+    } finally {
+      vi.resetModules();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps an explicit absolute Codex authorization path", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-provider-auth-"));
+    const workspace = path.join(root, "external-workspace");
+    const authFile = path.join(root, "custom-codex-auth.json");
+    const token = "absolute-auth-token";
+    try {
+      await fs.writeFile(authFile, JSON.stringify({ tokens: { access_token: token } }), "utf8");
+      vi.stubEnv("SUNABOT_WORKSPACE", workspace);
+      vi.stubEnv("OPEN_ARONA_CODEX_AUTH_FILE", authFile);
+      vi.stubEnv("SUNABOT_TEST_CODEX_ACCESS_TOKEN", "");
+      vi.resetModules();
+      const { resolveProviderApiKey } = await import("../../adapters/model/provider/transport.js");
+
+      expect(resolveProviderApiKey(codexProvider())).toBe(token);
+    } finally {
+      vi.resetModules();
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 
   it("decodes Codex SSE output items and completed text", () => {
@@ -148,3 +196,17 @@ describe("provider adapter ports", () => {
     });
   });
 });
+
+function codexProvider(): ProviderConfig {
+  return {
+    id: "codex-test",
+    label: "Codex Test",
+    kind: "codex-responses",
+    enabled: true,
+    model: "gpt-test",
+    imageModel: "gpt-image-test",
+    apiKeyEnv: "SUNABOT_TEST_CODEX_ACCESS_TOKEN",
+    temperature: 0.7,
+    maxOutputTokens: 100
+  };
+}

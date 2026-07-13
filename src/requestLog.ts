@@ -1,14 +1,17 @@
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { getWorkspacePath } from "./config.js";
+import type { AppConfig } from "./types.js";
 import {
   applicationDatabasePath,
   applicationDataStore,
-  type ModelCallAggregateRow
+  type ModelCallAggregateRow,
+  type ModelCallModelAggregateRow
 } from "../adapters/sqlite/applicationDataStore.js";
 import { WORKSPACE_LAYOUT } from "../packages/platform/workspaceLayout.js";
 import {
   memoryModelCallKindIds,
+  modelCallMeasurement,
   modelCallBehaviorIds,
   type MemoryModelCallKindId,
   type ModelCallBehaviorId
@@ -36,12 +39,14 @@ export interface RequestLogEntry {
 export interface ReadRequestLogsOptions {
   query?: string;
   limit?: number;
+  config?: Pick<AppConfig, "persona">;
 }
 
 export interface ReadRequestLogPageOptions {
   query?: string;
   page?: number;
   pageSize?: number;
+  config?: Pick<AppConfig, "persona">;
 }
 
 export { memoryModelCallKindIds, modelCallBehaviorIds } from "./modelCallStats.js";
@@ -49,10 +54,21 @@ export type { MemoryModelCallKindId, ModelCallBehaviorId } from "./modelCallStat
 
 export interface ReadModelCallStatsOptions {
   conversationId?: string;
+  config?: Pick<AppConfig, "persona">;
+  configs?: Array<Pick<AppConfig, "persona">>;
 }
 
-export function requestLogPath() {
-  return applicationDatabasePath();
+export interface ReadTokenUsageSummaryOptions {
+  model?: string;
+  behavior?: ModelCallBehaviorId | "";
+  config?: Pick<AppConfig, "persona">;
+  configs?: Array<Pick<AppConfig, "persona">>;
+}
+
+export const unlabeledTokenUsageModel = "__unlabeled__";
+
+export function requestLogPath(config?: Pick<AppConfig, "persona">) {
+  return applicationDatabasePath(config);
 }
 
 export async function appendRequestLog(entry: RequestLogEntry) {
@@ -76,48 +92,92 @@ export async function readRequestLogs(options: ReadRequestLogsOptions = {}) {
   const limit = normalizeLimit(options.limit);
   const query = String(options.query ?? "").trim().toLowerCase();
 
-  return requestLogStore().readRequestLogs({ query, limit }).map(withTokenUsage);
+  return requestLogStore(options.config).readRequestLogs({ query, limit }).map(withTokenUsage);
 }
 
 export async function readRequestLogPage(options: ReadRequestLogPageOptions = {}) {
   const page = normalizePositiveInteger(options.page, 1, 100_000);
   const pageSize = normalizePositiveInteger(options.pageSize, 50, 100);
   const query = String(options.query ?? "").trim().toLowerCase();
-  const result = requestLogStore().readRequestLogPage({ query, page, pageSize });
+  const result = requestLogStore(options.config).readRequestLogPage({ query, page, pageSize });
   return { ...result, logs: result.logs.map(withTokenUsage) };
 }
 
-export function readTokenUsageSummary(timezoneOffsetMinutes = 0) {
+export function readTokenUsageSummary(
+  timezoneOffsetMinutes = 0,
+  options: ReadTokenUsageSummaryOptions = {}
+) {
   const offset = normalizeTimezoneOffset(timezoneOffsetMinutes);
+  const selectedModel = String(options.model ?? "").trim();
+  const selectedBehavior = normalizeBehaviorFilter(options.behavior);
   const now = Date.now();
   const localNow = new Date(now - offset * 60_000);
   const today = localNow.toISOString().slice(0, 10);
   const since = new Date(now - 371 * 86_400_000).toISOString();
   const dayTotals = new Map<string, TokenUsageAccumulator>();
   const hours = Array.from({ length: 24 }, (_, hour) => ({ hour, ...emptyUsageAccumulator() }));
+  const models = new Set<string>();
 
-  for (const record of requestLogStore().readTokenUsageRecords(since)) {
-    const usage = normalizeTokenUsageRecord(record);
-    if (!usage) continue;
+  const records = (options.configs?.length ? options.configs : [options.config])
+    .flatMap((config) => requestLogStore(config).readTokenUsageRecords(since));
+  for (const record of records) {
+    const measurement = modelCallMeasurement(record);
+    const model = measurement?.model || unlabeledTokenUsageModel;
+    models.add(model);
+    if (selectedModel && model !== selectedModel) continue;
+    if (selectedBehavior && measurement?.behavior !== selectedBehavior) continue;
     const timestamp = Date.parse(String(record.at ?? ""));
     if (!Number.isFinite(timestamp)) continue;
     const local = new Date(timestamp - offset * 60_000);
     const date = local.toISOString().slice(0, 10);
     const day = dayTotals.get(date) ?? emptyUsageAccumulator();
-    addUsage(day, usage);
+    day.requests = sumTokenCounts(day.requests, 1);
+    const usage = normalizeTokenUsageRecord(record);
+    if (usage) addUsage(day, usage);
     dayTotals.set(date, day);
-    if (date === today) addUsage(hours[local.getUTCHours()]!, usage);
+    if (date === today) {
+      const hour = hours[local.getUTCHours()]!;
+      hour.requests = sumTokenCounts(hour.requests, 1);
+      if (usage) addUsage(hour, usage);
+    }
   }
 
   return {
     today: { date: today, ...usageBucket(dayTotals.get(today) ?? emptyUsageAccumulator()) },
     days: [...dayTotals].map(([date, usage]) => ({ date, ...usageBucket(usage) })),
-    hours: hours.map(({ hour, ...usage }) => ({ hour, ...usageBucket(usage) }))
+    hours: hours.map(({ hour, ...usage }) => ({ hour, ...usageBucket(usage) })),
+    filters: {
+      models: [...models].sort((left, right) => {
+        if (left === unlabeledTokenUsageModel) return 1;
+        if (right === unlabeledTokenUsageModel) return -1;
+        return left.localeCompare(right);
+      }),
+      model: selectedModel,
+      behavior: selectedBehavior
+    }
   };
 }
 
 export function readModelCallStats(options: ReadModelCallStatsOptions = {}) {
   const conversationId = String(options.conversationId ?? "").trim();
+  const stores = (options.configs?.length ? options.configs : [options.config]).map((config) => requestLogStore(config));
+  const summary = aggregateModelCallRows(stores.flatMap((store) => store.readModelCallAggregateRows(conversationId)));
+  const modelRows = stores.flatMap((store) => store.readModelCallModelAggregateRows(conversationId)).map((row) => ({
+    ...row,
+    model: row.model || unlabeledTokenUsageModel
+  }));
+  const models = [...new Set(modelRows.map((row) => row.model))]
+    .map((model) => ({ model, ...aggregateModelCallRows(modelRows.filter((row) => row.model === model)) }))
+    .sort((left, right) => right.total.total - left.total.total || left.model.localeCompare(right.model));
+
+  return {
+    conversationId: conversationId || null,
+    ...summary,
+    models
+  };
+}
+
+function aggregateModelCallRows(rows: Array<ModelCallAggregateRow | ModelCallModelAggregateRow>) {
   const total = emptyUsageAccumulator();
   const behavior = Object.fromEntries(
     modelCallBehaviorIds.map((id) => [id, emptyUsageAccumulator()])
@@ -126,14 +186,13 @@ export function readModelCallStats(options: ReadModelCallStatsOptions = {}) {
     memoryModelCallKindIds.map((id) => [id, emptyUsageAccumulator()])
   ) as Record<MemoryModelCallKindId, TokenUsageAccumulator>;
 
-  for (const row of requestLogStore().readModelCallAggregateRows(conversationId)) {
+  for (const row of rows) {
     addAggregate(total, row);
     addAggregate(behavior[row.behavior], row);
     if (row.behavior === "memory" && row.memoryKind) addAggregate(memory[row.memoryKind], row);
   }
 
   return {
-    conversationId: conversationId || null,
     total: usageBucket(total),
     behavior: Object.fromEntries(modelCallBehaviorIds.map((id) => [id, usageBucket(behavior[id])])),
     memory: {
@@ -143,9 +202,11 @@ export function readModelCallStats(options: ReadModelCallStatsOptions = {}) {
   };
 }
 
-function requestLogStore() {
-  const store = applicationDataStore();
-  store.ensureLegacyRequestLogsImported(getWorkspacePath(WORKSPACE_LAYOUT.legacyData, "request-bodies.jsonl"));
+function requestLogStore(config?: Pick<AppConfig, "persona">) {
+  const store = applicationDataStore(config);
+  if (!config || config.persona.defaultAgentId === "plana") {
+    store.ensureLegacyRequestLogsImported(getWorkspacePath(WORKSPACE_LAYOUT.legacyData, "request-bodies.jsonl"));
+  }
   return store;
 }
 
@@ -164,6 +225,13 @@ function normalizePositiveInteger(value: unknown, fallback: number, maximum: num
 function normalizeTimezoneOffset(value: unknown) {
   const offset = Number(value);
   return Number.isFinite(offset) ? Math.min(Math.max(Math.trunc(offset), -840), 840) : 0;
+}
+
+function normalizeBehaviorFilter(value: unknown): ModelCallBehaviorId | "" {
+  const behavior = String(value ?? "");
+  return modelCallBehaviorIds.includes(behavior as ModelCallBehaviorId)
+    ? behavior as ModelCallBehaviorId
+    : "";
 }
 
 interface TokenUsageAccumulator {
@@ -195,7 +263,6 @@ function addUsage(target: TokenUsageAccumulator, usage: TokenUsageMeasurement) {
   target.output = sumTokenCounts(target.output, usage.output);
   target.total = sumTokenCounts(target.total, usage.total);
   target.cachedInput = sumTokenCounts(target.cachedInput, usage.cachedInput);
-  target.requests = sumTokenCounts(target.requests, 1);
   if (usage.cacheReported) {
     target.measuredInput = sumTokenCounts(target.measuredInput, usage.input);
     target.measuredCachedInput = sumTokenCounts(target.measuredCachedInput, usage.cachedInput);

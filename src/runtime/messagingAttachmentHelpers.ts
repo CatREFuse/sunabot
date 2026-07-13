@@ -116,6 +116,8 @@ export function restoredGroupIncoming(
   const numericMessageId = Number(message.id);
   return {
     schemaVersion: 1,
+    ...(record.agentId ? { agentId: record.agentId } : {}),
+    ...(record.accountId ? { accountId: record.accountId } : {}),
     scope: "user_group",
     ...(Number.isSafeInteger(numericMessageId) && numericMessageId > 0 ? { messageId: numericMessageId } : {}),
     time: message.at,
@@ -140,7 +142,10 @@ export const WEB_CHAT_CONVERSATION_ID = "web:admin";
 
 export function conversationRecordId(incoming: ParsedIncomingMessage) {
   if (incoming.transport === "web") return WEB_CHAT_CONVERSATION_ID;
-  return incoming.groupId ? `group:${incoming.groupId}` : `private:${incoming.userId}`;
+  const localId = incoming.groupId ? `group:${incoming.groupId}` : `private:${incoming.userId}`;
+  return incoming.accountId && incoming.accountId !== "primary"
+    ? `account:${incoming.accountId}:${localId}`
+    : localId;
 }
 export function outboundForIncoming(
   incoming: ParsedIncomingMessage,
@@ -152,6 +157,8 @@ export function outboundForIncoming(
     schemaVersion: 1,
     id: nanoid(),
     conversationId: conversationRecordId(incoming),
+    ...(incoming.agentId ? { agentId: incoming.agentId } : {}),
+    ...(incoming.accountId ? { accountId: incoming.accountId } : {}),
     scope: incoming.scope,
     userId: incoming.userId,
     ...(incoming.groupId ? { groupId: incoming.groupId } : {}),
@@ -165,6 +172,8 @@ export function outboundForRecord(record: ConversationRecord, text: string): Out
     schemaVersion: 1,
     id: nanoid(),
     conversationId: record.id,
+    ...(record.agentId ? { agentId: record.agentId } : {}),
+    ...(record.accountId ? { accountId: record.accountId } : {}),
     scope: record.scope,
     userId: record.userId,
     ...(record.groupId ? { groupId: record.groupId } : {}),
@@ -214,7 +223,7 @@ export function conversationOrchestratorEnabled(record: Pick<ConversationRecord,
 }
 export function normalizeConversationId(value: unknown) {
   const text = String(value ?? "").trim();
-  return /^(private|group):\d+$/.test(text) ? text : "";
+  return /^(?:account:[A-Za-z0-9_-]+:)?(?:private|group):\d+$/.test(text) ? text : "";
 }
 export function normalizeConversationLookupId(value: unknown) {
   const text = String(value ?? "").trim();
@@ -230,10 +239,13 @@ export function conversationDescriptorFromInput(input: ConversationReplyUpdateIn
   const userId = normalizePositiveInteger(input.userId) || parsedId?.userId || 0;
   const groupId = normalizePositiveInteger(input.groupId) || parsedId?.groupId;
   const title = String(input.title ?? "").trim();
+  const accountPrefix = parsedId?.accountId && parsedId.accountId !== "primary"
+    ? `account:${parsedId.accountId}:`
+    : "";
 
   if (scope === "private" && userId > 0) {
     return {
-      id: `private:${userId}`,
+      id: `${accountPrefix}private:${userId}`,
       scope,
       title: title || String(userId),
       userId,
@@ -242,7 +254,7 @@ export function conversationDescriptorFromInput(input: ConversationReplyUpdateIn
   }
   if ((scope === "user_group" || scope === "bot_group") && groupId && groupId > 0) {
     return {
-      id: `group:${groupId}`,
+      id: `${accountPrefix}group:${groupId}`,
       scope,
       title: title || String(groupId),
       userId: userId > 0 ? userId : 0,
@@ -253,14 +265,19 @@ export function conversationDescriptorFromInput(input: ConversationReplyUpdateIn
   throw new Error("会话无效。");
 }
 export function parseConversationId(id: string) {
-  const match = id.match(/^(private|group):(\d+)$/);
+  const match = id.match(/^(?:account:([A-Za-z0-9_-]+):)?(private|group):(\d+)$/);
   if (!match) return null;
-  const numberValue = Number(match[2]);
+  const accountId = match[1];
+  const numberValue = Number(match[3]);
   if (!Number.isFinite(numberValue) || numberValue <= 0) return null;
-  if (match[1] === "private") {
-    return { scope: "private" as const, userId: numberValue, groupId: undefined };
+  if (match[2] === "private") {
+    return { scope: "private" as const, userId: numberValue, groupId: undefined, accountId };
   }
-  return { scope: "user_group" as const, userId: 0, groupId: numberValue };
+  return { scope: "user_group" as const, userId: 0, groupId: numberValue, accountId };
+}
+
+export function conversationAccountId(conversationId: string) {
+  return parseConversationId(conversationId)?.accountId ?? "primary";
 }
 export function normalizeConversationScope(value: unknown): ConversationRecord["scope"] | undefined {
   return value === "private" || value === "user_group" || value === "bot_group" ? value : undefined;

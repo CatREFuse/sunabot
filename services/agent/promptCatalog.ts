@@ -6,6 +6,7 @@ export interface PromptFileDefinition {
   title: string;
   category: string;
   kind: PromptFileKind;
+  scope: "persona" | "system";
   allowBlank: boolean;
   variables: readonly PromptVariableDefinition[];
   fileName(config: AppConfig): string;
@@ -15,6 +16,12 @@ const fragmentVariables = [
   variable("persona.agents", "Agent 工作区规则", "string", "AGENTS.md"),
   variable("persona.soul", "角色身份、性格与表达方式", "string", "SOUL.md"),
   variable("persona.preference", "角色偏好与行为边界", "string", "PREFERENCE.md"),
+  variable(
+    "persona.dialogue_style_examples",
+    "角色必须严格遵从的对话风格示例",
+    "string",
+    "DIALOGUE_STYLE_EXAMPLES.md"
+  ),
   variable("persona.user", "角色对用户的称呼和认知", "string", "USER.md"),
   variable("persona.relation", "角色与其他人物的关系", "string", "RELATION.md")
 ] as const;
@@ -36,9 +43,16 @@ export const PROMPT_FILE_DEFINITIONS = [
   fragment("persona.agents", "Agent 规则", "人格", "AGENTS.md"),
   fragment("persona.soul", "核心人格", "人格", "SOUL.md"),
   fragment("persona.preference", "偏好", "人格", "PREFERENCE.md"),
+  fragment(
+    "persona.dialogue_style_examples",
+    "对话风格示例",
+    "人格",
+    "DIALOGUE_STYLE_EXAMPLES.md"
+  ),
   fragment("persona.user", "用户关系", "人格", "USER.md"),
   fragment("persona.relation", "关系", "人格", "RELATION.md"),
-  final("conversation.reply", "对话回复", "对话", () => "conversation_reply.json", conversationVariables),
+  final("conversation.private-reply", "单聊回复", "对话", () => "conversation_private_reply.json", conversationVariables),
+  final("conversation.group-reply", "群聊回复", "对话", () => "conversation_group_reply.json", conversationVariables),
   final(
     "memory.compress-in",
     "工作记忆提取",
@@ -85,7 +99,8 @@ export const PROMPT_FILE_DEFINITIONS = [
     [
       ...fragmentVariables,
       variable("selfie.payload", "自拍要求、尺寸和参考图信息", "json", "自拍工具")
-    ]
+    ],
+    "persona"
   )
 ] as const satisfies readonly PromptFileDefinition[];
 
@@ -105,6 +120,7 @@ function fragment(id: string, title: string, category: string, fileName: string)
     title,
     category,
     kind: "fragment",
+    scope: "persona",
     allowBlank: false,
     variables: fragmentVariables.filter((item) => item.name !== id),
     fileName: () => fileName
@@ -116,13 +132,15 @@ function final(
   title: string,
   category: string,
   fileName: (config: AppConfig) => string,
-  variables: readonly PromptVariableDefinition[]
+  variables: readonly PromptVariableDefinition[],
+  scope: PromptFileDefinition["scope"] = "system"
 ): PromptFileDefinition {
   return {
     id,
     title,
     category,
     kind: "final",
+    scope,
     allowBlank: false,
     variables: mergeVariables(fragmentVariables, variables),
     fileName

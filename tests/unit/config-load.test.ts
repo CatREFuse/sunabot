@@ -54,6 +54,32 @@ describe("tool configuration", () => {
     const config = defaultConfig();
     expect(config.persona.agentWorkspace).toBe("workspace/business/agents/plana");
     expect(config.providers.items.every((provider) => provider.envFile === "workspace/secrets/runtime.env")).toBe(true);
+    expect(config.bot.adminQq).toBe("");
+  });
+
+  it("normalizes retired custom Plana workspace paths to the canonical workspace", async () => {
+    await fs.writeFile(configPath, JSON.stringify({
+      persona: {
+        agentWorkspace: path.join(rootDir, "custom-agent-workspace")
+      }
+    }), "utf8");
+
+    await expect(loadConfig()).resolves.toMatchObject({
+      persona: { agentWorkspace: "workspace/business/agents/plana" }
+    });
+  });
+
+  it("drops the retired persona memory limit while loading old config", async () => {
+    await fs.writeFile(configPath, JSON.stringify({
+      persona: {
+        agentWorkspace: "workspace/business/agents/plana",
+        memoryLimit: 12
+      }
+    }), "utf8");
+
+    const config = await loadConfig();
+
+    expect(Object.hasOwn(config.persona, "memoryLimit")).toBe(false);
   });
 
   it("maps legacy provider kinds to the current protocol types", async () => {
@@ -103,6 +129,13 @@ describe("tool configuration", () => {
   });
 
   it("defaults websearch to Tavily and Codex to an independent worker", () => {
+    expect(defaultConfig().bot.pokeOnNoReply).toBe(false);
+    expect(defaultConfig().broadcastStorm).toEqual({
+      enabled: true,
+      windowMinutes: 2,
+      replyThreshold: 3,
+      cooldownMinutes: 1
+    });
     expect(defaultConfig().bot.tools.maxCalls).toBe(20);
     expect(defaultConfig().bot.tools.overrides).toEqual({});
     expect(defaultConfig().bot.tools.websearch).toMatchObject({
@@ -188,7 +221,8 @@ describe("tool configuration", () => {
         tools: {
           overrides: {
             websearch: { enabled: false, description: "  Search only when explicitly enabled.  " },
-            codex: { description: "  Delegate long work.  " },
+            codex: { enabled: false, description: "  Delegate long work.  " },
+            workspace_bash: { enabled: true, description: "  Run workspace commands.  " },
             unknown_tool: { enabled: false }
           },
           codex: { enabled: false }
@@ -200,7 +234,8 @@ describe("tool configuration", () => {
 
     expect(config.bot.tools.overrides).toEqual({
       websearch: { enabled: false, description: "Search only when explicitly enabled." },
-      codex: { description: "Delegate long work." }
+      codex: { description: "Delegate long work." },
+      workspace_bash: { description: "Run workspace commands." }
     });
     expect(config.bot.tools.codex.enabled).toBe(false);
   });

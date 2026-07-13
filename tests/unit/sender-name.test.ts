@@ -1,6 +1,10 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
-import type { InboundMessageV1, SenderIdentityV1 } from "../../packages/contracts/messaging/messages.js";
+import type {
+  InboundMessageV1,
+  SenderIdentityV1,
+  SenderLookupV1
+} from "../../packages/contracts/messaging/messages.js";
 import { SenderNameResolver, senderDisplayName, senderIdentity } from "../../services/conversations/senderName.js";
 
 describe("sender name resolution", () => {
@@ -45,6 +49,36 @@ describe("sender name resolution", () => {
     });
   });
 
+  it("targets sender lookups and caches identities independently for each account", async () => {
+    const resolver = new SenderNameResolver();
+    const gateway = {
+      resolveSender: vi.fn(async (input: SenderLookupV1) => ({
+        id: String(input.userId),
+        nickname: input.accountId === "secondary-b" ? "账号 B 昵称" : "账号 A 昵称",
+        card: input.accountId === "secondary-b" ? "账号 B 群名片" : "账号 A 群名片"
+      }))
+    };
+    const accountA = groupMessage(undefined, "secondary-a");
+    const accountB = groupMessage(undefined, "secondary-b");
+    const accountAAgain = groupMessage(undefined, "secondary-a");
+
+    await expect(resolver.hydrate(accountA, gateway)).resolves.toBe("账号 A 群名片");
+    await expect(resolver.hydrate(accountB, gateway)).resolves.toBe("账号 B 群名片");
+    await expect(resolver.hydrate(accountAAgain, gateway)).resolves.toBe("账号 A 群名片");
+
+    expect(gateway.resolveSender).toHaveBeenCalledTimes(2);
+    expect(gateway.resolveSender).toHaveBeenNthCalledWith(1, {
+      accountId: "secondary-a",
+      userId: 841623333,
+      groupId: 1030412235
+    });
+    expect(gateway.resolveSender).toHaveBeenNthCalledWith(2, {
+      accountId: "secondary-b",
+      userId: 841623333,
+      groupId: 1030412235
+    });
+  });
+
   it("loads a missing private nickname without a group lookup", async () => {
     const resolver = new SenderNameResolver();
     const gateway = senderGateway({ id: "841623333", nickname: "私聊昵称" });
@@ -73,9 +107,10 @@ function senderGateway(identity: SenderIdentityV1 = { id: "841623333" }) {
   return { resolveSender: vi.fn(async () => identity) };
 }
 
-function groupMessage(sender: SenderIdentityV1 | undefined): InboundMessageV1 {
+function groupMessage(sender: SenderIdentityV1 | undefined, accountId?: string): InboundMessageV1 {
   return {
     schemaVersion: 1,
+    ...(accountId ? { accountId } : {}),
     scope: "user_group",
     messageId: 1001,
     time: "2026-07-11T12:00:00.000Z",

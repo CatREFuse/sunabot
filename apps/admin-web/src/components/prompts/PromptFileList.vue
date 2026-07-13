@@ -2,7 +2,13 @@
 import { computed } from "vue";
 import type { AgentFileSummary } from "../../types";
 
-const props = defineProps<{ files: readonly AgentFileSummary[]; selectedId: string; query: string; error?: string }>();
+const props = withDefaults(defineProps<{
+  files: readonly AgentFileSummary[];
+  selectedId: string;
+  query: string;
+  title?: string;
+  error?: string;
+}>(), { title: "提示词", error: "" });
 const emit = defineEmits<{ select: [id: string]; "update:query": [value: string] }>();
 const categoryNames: Record<string, string> = {
   persona: "人格",
@@ -29,7 +35,8 @@ const grouped = computed(() => {
 <template>
   <aside class="flex h-full min-h-0 min-w-0 flex-col border-r border-line bg-panel">
     <div class="border-b border-line p-4">
-      <h1 class="font-sans text-[32px] font-medium leading-none tracking-[-0.03em] text-display">提示词</h1>
+      <h1 class="font-sans text-[32px] font-medium leading-none tracking-[-0.03em] text-display">{{ title }}</h1>
+      <slot name="headerAfter" />
       <label class="field mt-5">
         <span class="field-label">搜索文件</span>
         <input :value="query" class="control" type="search" autocomplete="off" placeholder="名称或文件名" @input="emit('update:query', ($event.target as HTMLInputElement).value)">

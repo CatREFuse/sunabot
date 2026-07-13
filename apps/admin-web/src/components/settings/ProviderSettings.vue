@@ -22,6 +22,8 @@ const discoveredModels = reactive<Record<string, string[]>>({});
 const providerLimitReached = computed(() => draft.value.items.length >= 64);
 const current = computed(() => draft.value.items[selectedIndex.value]);
 const currentType = computed(() => current.value ? providerType(current.value.kind) : null);
+const currentIsDefault = computed(() => Boolean(current.value && draft.value.defaultProviderId === current.value.id));
+const currentEnabledDescription = computed(() => currentIsDefault.value ? "默认" : "");
 const enabledProviders = computed(() => draft.value.items.filter((provider) => provider.enabled));
 const visionProviders = computed(() => draft.value.items.filter((provider) => provider.enabled
   && provider.id !== current.value?.id
@@ -210,32 +212,32 @@ function setStatus(message: string, kind: "" | "success" | "error" | "warning") 
 
       <div v-if="current" class="grid min-w-0 gap-2">
         <header class="flex flex-wrap items-center justify-between gap-3 border-b border-line pb-5">
-          <div class="min-w-0"><span class="inline-state"><i class="bx mr-1" :class="currentType?.icon" aria-hidden="true"></i>{{ currentType?.label }}</span><h3 class="mt-2 truncate text-lg font-medium text-display">{{ current.label || "未命名" }}</h3><p class="mt-1 truncate font-mono text-[10px] text-mute">{{ current.model || "未选择模型" }}</p></div>
+          <div class="min-w-0"><h3 class="truncate text-lg font-medium text-display">{{ current.label || "未命名" }}</h3><p class="mt-1 truncate font-mono text-[10px] text-mute">{{ current.model || "未选择模型" }}</p></div>
           <div class="flex gap-2"><button class="icon-btn" type="button" aria-label="复制 Provider" @click="copyProvider"><i class="bx bx-copy text-lg" aria-hidden="true"></i></button><button class="icon-btn text-accent" type="button" aria-label="删除 Provider" @click="deleteProvider"><i class="bx bx-trash text-lg" aria-hidden="true"></i></button></div>
         </header>
 
         <CodexSubscriptionAuth v-if="current.kind === 'codex-responses'" class="mt-4" />
 
         <section class="provider-group">
-          <header><i class="bx bx-id-card" aria-hidden="true"></i><div><strong>身份</strong><span>名称与固定标识</span></div></header>
+          <header><i class="bx bx-id-card" aria-hidden="true"></i><div><strong>身份</strong><span>名称与 ID</span></div></header>
           <div class="grid gap-5 sm:grid-cols-2">
             <label class="field"><span class="field-label">ID</span><input :value="current.id" class="control" type="text" readonly></label>
             <label class="field"><span class="field-label">名称</span><input v-model.trim="current.label" class="control" type="text" autocomplete="off"></label>
           </div>
-          <ToggleSwitch v-model="current.enabled" label="启用 Provider" :disabled="draft.defaultProviderId === current.id" description="默认 Provider 保持启用" />
+          <ToggleSwitch v-model="current.enabled" label="启用" :disabled="currentIsDefault" :description="currentEnabledDescription" />
         </section>
 
         <section class="provider-group">
           <header><i class="bx bx-link" aria-hidden="true"></i><div><strong>连接</strong><span>{{ currentType?.description }}</span></div></header>
           <div class="grid gap-5 sm:grid-cols-2">
             <label class="field"><span class="field-label">类型</span><span class="control flex items-center gap-2 !bg-raised" aria-label="Provider 类型"><i class="bx" :class="currentType?.icon" aria-hidden="true"></i>{{ currentType?.label }}</span></label>
-            <label class="field"><span class="field-label">API Key 环境变量</span><input v-model.trim="current.apiKeyEnv" class="control" type="text" autocomplete="off"><small v-if="secretConfigured != null" class="font-mono text-[10px]" :class="secretConfigured ? 'text-success' : 'text-warning'">{{ secretConfigured ? "已配置" : "未配置" }}</small></label>
-            <label class="field sm:col-span-2"><span class="field-label">Base URL</span><input v-model.trim="current.baseUrl" class="control" type="url" :readonly="!compatibleProvider(current.kind)" autocomplete="off"><small v-if="!compatibleProvider(current.kind)" class="font-mono text-[10px] text-mute">官方地址固定</small></label>
+            <label class="field"><span class="field-label flex items-center justify-between gap-3"><span>API Key 环境变量</span><small v-if="secretConfigured != null" class="font-mono text-[10px]" :class="secretConfigured ? 'text-success' : 'text-warning'">{{ secretConfigured ? "已配置" : "未配置" }}</small></span><input v-model.trim="current.apiKeyEnv" class="control" type="text" autocomplete="off"></label>
+            <label class="field sm:col-span-2"><span class="field-label flex items-center justify-between gap-3"><span>Base URL</span><small v-if="!compatibleProvider(current.kind)" class="font-mono text-[10px] text-mute">固定</small></span><input v-model.trim="current.baseUrl" class="control" type="url" :readonly="!compatibleProvider(current.kind)" autocomplete="off"></label>
           </div>
         </section>
 
         <section class="provider-group">
-          <header><i class="bx bx-chip" aria-hidden="true"></i><div><strong>模型</strong><span>远程目录或自定义 ID</span></div></header>
+          <header><i class="bx bx-chip" aria-hidden="true"></i><div><strong>模型</strong><span>模型 ID</span></div></header>
           <div class="flex flex-wrap items-center gap-2">
             <div class="segmented" aria-label="模型来源"><button class="segmented-button" type="button" :aria-pressed="current.modelSource !== 'custom'" @click="chooseModelSource('remote')">远程目录</button><button class="segmented-button" type="button" :aria-pressed="current.modelSource === 'custom'" @click="chooseModelSource('custom')">自定义 ID</button></div>
             <button v-if="current.modelSource !== 'custom'" class="btn btn-ghost" type="button" :disabled="loadingModels" @click="loadModels"><i class="bx bx-refresh" :class="loadingModels ? 'bx-spin' : ''" aria-hidden="true"></i>拉取模型</button>
@@ -249,19 +251,19 @@ function setStatus(message: string, kind: "" | "success" | "error" | "warning") 
         </section>
 
         <section class="provider-group">
-          <header><i class="bx bx-image-alt" aria-hidden="true"></i><div><strong>多模态</strong><span>图片输入与读图辅助</span></div></header>
+          <header><i class="bx bx-image-alt" aria-hidden="true"></i><div><strong>多模态</strong><span>图片能力</span></div></header>
           <div class="grid gap-5 sm:grid-cols-2">
             <label class="field"><span class="field-label">图片能力</span><select v-model="current.multimodal" class="control"><option value="auto">自动探测</option><option value="enabled">支持图片</option><option value="disabled">仅文本</option></select></label>
             <div class="field"><span class="field-label">探测结果</span><button class="btn justify-self-start" type="button" :disabled="probingVision" @click="probeVision"><i class="bx bx-scan" aria-hidden="true"></i>{{ probingVision ? "探测中" : "探测多模态" }}</button><small v-if="current.detectedMultimodal != null" class="font-mono text-[10px]" :class="current.detectedMultimodal ? 'text-success' : 'text-warning'">{{ current.detectedMultimodal ? "支持图片" : "仅文本" }}</small></div>
             <template v-if="effectiveNonVision">
               <label class="field"><span class="field-label">读图辅助 Provider</span><select v-model="current.visionProviderId" class="control"><option value="">选择 Provider</option><option v-for="provider in visionProviders" :key="provider.id" :value="provider.id">{{ provider.label }}</option></select></label>
-              <label class="field"><span class="field-label">读图模型</span><input v-model.trim="current.visionModel" class="control" type="text" placeholder="留空使用辅助 Provider 默认模型"></label>
+              <label class="field"><span class="field-label">读图模型</span><input v-model.trim="current.visionModel" class="control" type="text" placeholder="留空使用默认模型"></label>
             </template>
           </div>
         </section>
 
         <section class="provider-group">
-          <header><i class="bx bx-slider-alt" aria-hidden="true"></i><div><strong>生成参数</strong><span>输出长度与随机性</span></div></header>
+          <header><i class="bx bx-slider-alt" aria-hidden="true"></i><div><strong>生成参数</strong><span>输出参数</span></div></header>
           <div class="grid gap-5 sm:grid-cols-2"><label class="field"><span class="field-label">随机性（Temperature）</span><input v-model.number="current.temperature" class="control" type="number" min="0" max="2" step="0.1"></label><label class="field"><span class="field-label">最大输出 Token</span><input v-model.number="current.maxOutputTokens" class="control" type="number" min="1" max="1000000" step="1"></label></div>
         </section>
 

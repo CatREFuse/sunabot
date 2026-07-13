@@ -7,12 +7,21 @@ import fastifyStatic from "@fastify/static";
 import { AgentFileRepository } from "../../src/admin/agentFiles.js";
 import { AdminAuthService } from "../../src/admin/auth.js";
 import { ConfigService } from "../../src/admin/configService.js";
+import { AgentConfigService } from "../../src/admin/agentConfigService.js";
 import { CodexAuthService } from "../../src/admin/codexAuth.js";
 import { MonitorSettingsStore } from "../../src/admin/monitorSettings.js";
 import { SelfieReferenceRepository } from "../../src/admin/selfieReferences.js";
-import { getConfigPath, getRootDir, getWorkspacePath, loadConfig, resolveProjectPath } from "../../src/config.js";
+import {
+  getConfigPath,
+  getRootDir,
+  getWorkspaceDir,
+  getWorkspacePath,
+  loadConfig,
+  resolveProjectPath
+} from "../../src/config.js";
 import {
   applicationDatabasePath,
+  applicationDataStore,
   closeApplicationDataStores,
   sqliteMemoryPersistence
 } from "../../adapters/sqlite/applicationDataStore.js";
@@ -30,6 +39,7 @@ import { SunaRuntime } from "../../src/runtime.js";
 import { ServiceMonitor } from "../../src/serviceMonitor.js";
 import { WORKSPACE_LAYOUT } from "../../packages/platform/workspaceLayout.js";
 import { registerAgentToolRoutes } from "./plugins/agentToolRoutes.js";
+import { registerAgentRoutes } from "./plugins/agentRoutes.js";
 import { registerAuthRoutes } from "./plugins/authRoutes.js";
 import { registerConversationRoutes } from "./plugins/conversationRoutes.js";
 import { registerMediaRoutes } from "./plugins/mediaRoutes.js";
@@ -39,10 +49,14 @@ import { registerOneBotRoutes } from "./plugins/onebotRoutes.js";
 import { registerProviderConfigRoutes } from "./plugins/providerConfigRoutes.js";
 import { registerSelfieReferenceRoutes } from "./plugins/selfieReferenceRoutes.js";
 import type { AppConfig, ProviderConfig } from "../../src/types.js";
+import { AgentRegistry, type AgentRegistryOptions } from "../../services/agents/agentRegistry.js";
+import { AgentRuntimeManager } from "../../services/agents/agentRuntimeManager.js";
+import { BroadcastStormDetector } from "../../services/orchestration/public.js";
 import {
   createRuntimeToolCapabilityResolver,
   createWorkspaceBashCapabilityProbe
 } from "../../services/tools/bashCapability.js";
+import { inspectMultiAgentMigrationGate } from "../../packages/platform/multiAgentMigrationGate.mjs";
 
 export interface CreateAppOptions {
   config?: AppConfig;
@@ -55,6 +69,7 @@ export interface CreateAppOptions {
     port?: number;
   };
   testProvider?: (provider: ProviderConfig) => Promise<Record<string, unknown>>;
+  agentRegistry?: Pick<AgentRegistryOptions, "workspaceRoot" | "allowUnmarkedMigration">;
 }
 
 export interface OneBotListenerAddress {
@@ -69,14 +84,51 @@ export interface BuiltApp {
   onebotServer?: http.Server;
   outboundMedia: OutboundMediaDelivery;
   serviceMonitor: ServiceMonitor;
+  agentRegistry: AgentRegistry;
+  agentRuntimeManager: AgentRuntimeManager;
   getConfig(): AppConfig;
   startOneBotListener(address?: Partial<OneBotListenerAddress>): Promise<OneBotListenerAddress>;
 }
 
 export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp> {
+  const skipWorkspaceMigrationGate = options.agentRegistry?.allowUnmarkedMigration === true;
+  if (!skipWorkspaceMigrationGate) await assertRuntimeWorkspaceMigrationGate();
   configureMemoryPersistence(sqliteMemoryPersistence);
   const startedAt = new Date().toISOString();
   let config = options.config ?? await loadConfig();
+  if (!skipWorkspaceMigrationGate) {
+    const configuredAgentWorkspace = config.persona.agentWorkspace.replaceAll("\\", "/");
+    const configuredSystemPrompts = config.persona.systemPromptWorkspace.replaceAll("\\", "/");
+    if (
+      config.persona.defaultAgentId !== "plana"
+      || configuredAgentWorkspace !== `workspace/${WORKSPACE_LAYOUT.defaultAgent}`
+      || configuredSystemPrompts !== `workspace/${WORKSPACE_LAYOUT.systemPrompts}`
+    ) {
+      throw new ServiceError(
+        409,
+        "AGENT_WORKSPACE_UNSUPPORTED",
+        "Plana 与公共系统提示词必须使用标准 workspace 路径。"
+      );
+    }
+    const activeDatabase = applicationDatabasePath(config);
+    const canonicalDatabase = getWorkspacePath(WORKSPACE_LAYOUT.database);
+    if (path.resolve(activeDatabase) !== path.resolve(canonicalDatabase)) {
+      throw new ServiceError(
+        409,
+        "DATABASE_PATH_UNSUPPORTED",
+        "主库必须位于 workspace/business/data/sunabot.sqlite。"
+      );
+    }
+  }
+  const agentRegistry = new AgentRegistry(config, {
+    store: applicationDataStore(config),
+    workspaceRoot: options.agentRegistry?.workspaceRoot ?? getWorkspacePath(WORKSPACE_LAYOUT.agentRoot),
+    allowUnmarkedMigration: skipWorkspaceMigrationGate,
+    workspaceGateAlreadyChecked: !skipWorkspaceMigrationGate
+  });
+  await agentRegistry.initialize();
+  const defaultAgentConfig = await agentRegistry.config(config.persona.defaultAgentId, config);
+  const broadcastStormDetector = new BroadcastStormDetector(config.broadcastStorm);
   const outboundMedia = options.outboundMedia ?? new OutboundMediaDelivery({
     rootDir: getWorkspacePath(WORKSPACE_LAYOUT.mediaImages),
     referenceMode: outboundMediaReferenceMode(),
@@ -87,14 +139,29 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
     executable: process.env.SUNABOT_CODEX_EXECUTABLE
   });
   const probeWorkspaceBash = createWorkspaceBashCapabilityProbe();
-  const resolveToolCapabilities = createRuntimeToolCapabilityResolver({
+  const toolCapabilitiesFor = (agentConfig: AppConfig) => createRuntimeToolCapabilityResolver({
     getCodexStatus: () => codexAuth.status(),
     getWorkspaceBashCapability: () => probeWorkspaceBash(
-      resolveProjectPath(config.persona.agentWorkspace) ?? getRootDir()
+      resolveProjectPath(agentConfig.persona.agentWorkspace) ?? getRootDir()
     )
   });
-  const runtime = new SunaRuntime(config, { resolveToolCapabilities });
+  const resolveToolCapabilities = toolCapabilitiesFor(defaultAgentConfig);
+  const createRuntime = (agentConfig: AppConfig) => new SunaRuntime(agentConfig, {
+    resolveToolCapabilities: toolCapabilitiesFor(agentConfig),
+    replySuppression: broadcastStormDetector
+  });
+  const runtime = new SunaRuntime(defaultAgentConfig, {
+    resolveToolCapabilities,
+    replySuppression: broadcastStormDetector
+  });
   if (options.initializeRuntime !== false) await runtime.initialize();
+  const agentRuntimeManager = new AgentRuntimeManager(agentRegistry, {
+    defaultRuntime: runtime,
+    createRuntime,
+    initializeRuntime: options.initializeRuntime !== false,
+    broadcastStormDetector
+  });
+  await agentRuntimeManager.initialize();
 
   const adminSessionStore = new SqliteAdminSessionStore(applicationDatabasePath(config));
   const adminAuth = await AdminAuthService.create({
@@ -114,12 +181,15 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
     ? undefined
     : listenerOptions?.server ?? createOneBotHttpServer();
   const gatewayServer = onebotServer ?? http.createServer();
-  const onebotGateway = new OneBotGateway(gatewayServer, config, runtime, { outboundMedia });
+  const onebotGateway = new OneBotGateway(gatewayServer, config, agentRuntimeManager, {
+    outboundMedia,
+    isAccountAllowed: (accountId) => Boolean(agentRegistry.account(accountId))
+  });
   const conversationDirectory = new ConversationDirectory({
     cachePath: getWorkspacePath(WORKSPACE_LAYOUT.conversationDirectoryCache)
   });
-  onebotGateway.on("connected", () => runtime.resumeUserGroupOrchestrators(onebotGateway));
-  onebotGateway.on("disconnected", () => runtime.suspendUserGroupOrchestrators());
+  onebotGateway.on("connected", () => agentRuntimeManager.resumeUserGroupOrchestrators(onebotGateway));
+  onebotGateway.on("disconnected", () => agentRuntimeManager.suspendUserGroupOrchestrators());
   if (onebotServer) onebotGateway.mount();
   const activeReverseWsPath = config.onebot.reverseWsPath;
   const serviceMonitor = new ServiceMonitor(runtime, onebotGateway, monitorSettings);
@@ -129,32 +199,63 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
     codexAuth.close();
     adminSessionStore.close();
     serviceMonitor.close();
-    runtime.close();
+    await agentRuntimeManager.close();
     closeApplicationDataStores();
   });
   const agentFiles = new AgentFileRepository({ runtime });
-  const selfieReferences = new SelfieReferenceRepository({ getConfig: () => config });
+  const selfieReferences = new Map<string, SelfieReferenceRepository>();
+  const selfieReferencesFor = (agentId: string) => {
+    const existing = selfieReferences.get(agentId);
+    if (existing) return existing;
+    const repository = new SelfieReferenceRepository({
+      getConfig: () => agentId === config.persona.defaultAgentId
+        ? config
+        : agentRuntimeManager.require(agentId).config
+    });
+    selfieReferences.set(agentId, repository);
+    return repository;
+  };
   const configService = new ConfigService({
     prepareApply: async (candidate) => {
-      await agentFiles.validateConfig(candidate);
-      const agentFileRevisions = await agentFiles.captureConfigRevisions(candidate);
-      const snapshot = await runtime.prepareReload(candidate);
+      const defaultCandidate = await agentRegistry.config(runtime.config.persona.defaultAgentId, candidate);
+      await agentFiles.validateConfig(defaultCandidate);
+      const agentFileRevisions = await agentFiles.captureConfigRevisions(defaultCandidate);
+      const snapshot = await runtime.prepareReload(defaultCandidate);
+      const custom = await Promise.all(agentRuntimeManager.entries()
+        .filter(([agentId]) => agentId !== runtime.config.persona.defaultAgentId)
+        .map(async ([agentId, agentRuntime]) => {
+          const agentConfig = await agentRegistry.config(agentId, candidate);
+          const repository = new AgentFileRepository({ runtime: agentRuntime });
+          await repository.validateConfig(agentConfig);
+          return {
+            agentConfig,
+            agentRuntime,
+            repository,
+            revisions: await repository.captureConfigRevisions(agentConfig),
+            snapshot: await agentRuntime.prepareReload(agentConfig)
+          };
+        }));
       return {
-        verify() {
-          return agentFiles.assertConfigRevisions(candidate, agentFileRevisions);
+        async verify() {
+          await agentFiles.assertConfigRevisions(defaultCandidate, agentFileRevisions);
+          await Promise.all(custom.map((item) => item.repository.assertConfigRevisions(item.agentConfig, item.revisions)));
         },
         async commit() {
-          await runtime.ensureAgentPromptFiles(candidate);
+          await runtime.ensureAgentPromptFiles(defaultCandidate);
           runtime.commitReload(snapshot);
+          for (const item of custom) item.agentRuntime.commitReload(item.snapshot);
           onebotGateway.updateConfig({
             ...candidate,
             onebot: { ...candidate.onebot, reverseWsPath: activeReverseWsPath }
           });
+          broadcastStormDetector.updateConfig(candidate.broadcastStorm);
+          agentRegistry.updateSharedConfig(candidate);
           config = candidate;
         }
       };
     }
   });
+  const agentConfigService = new AgentConfigService(agentRegistry, agentRuntimeManager, configService);
 
   app.setErrorHandler((error: unknown, request, reply) => {
     if (error instanceof ServiceError) {
@@ -200,7 +301,20 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
     monitorSettings,
     serviceMonitor,
     onebotGateway,
+    getOnebotStatus: (agentId) => {
+      const status = onebotGateway.getStatus();
+      const accounts = (status.accounts ?? []).filter((account) => agentRegistry.account(account.accountId)?.agentId === agentId);
+      return {
+        ...status,
+        connected: accounts.length > 0,
+        connections: accounts.length,
+        selfIds: accounts.flatMap((account) => account.selfId ? [account.selfId] : []),
+        accounts,
+        connectedAt: accounts[0]?.connectedAt
+      };
+    },
     runtime,
+    getRuntime: (agentId) => agentRuntimeManager.require(agentId),
     configService
   });
 
@@ -224,17 +338,64 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
     });
   }
 
-  registerConversationRoutes(app, { runtime, onebotGateway, conversationDirectory });
-  registerMediaRoutes(app, { getConfig: () => config, runtime });
-  registerOneBotRoutes(app, onebotGateway);
-  registerProviderConfigRoutes(app, { codexAuth, configService, testProvider: options.testProvider });
-  registerMemoryRoutes(app, { getConfig: () => config, runtime });
+  registerConversationRoutes(app, {
+    runtime,
+    getRuntime: (agentId) => agentRuntimeManager.require(agentId),
+    onebotGateway,
+    conversationDirectory
+  });
+  registerAgentRoutes(app, agentRegistry, {
+    decorateAgents: (agents) => agentRuntimeManager.decorateAgents(agents, onebotGateway.getStatus()),
+    onAgentCreated: async (agentId) => {
+      await agentRuntimeManager.start(agentId);
+    },
+    onAgentUpdated: async (agentId, enabled) => {
+      if (enabled) await agentRuntimeManager.start(agentId);
+      else await agentRuntimeManager.stop(agentId);
+    },
+    onPromptSettingsUpdated: async (agentId) => {
+      await agentRuntimeManager.require(agentId).reload(await agentRegistry.config(agentId));
+    },
+    isAccountConnected: (accountId) => Boolean(onebotGateway.getStatus().accounts?.some((account) => account.accountId === accountId))
+  });
+  registerMediaRoutes(app, {
+    getConfig: () => config,
+    runtime,
+    getAgentContext: (agentId) => {
+      const agentRuntime = agentRuntimeManager.require(agentId);
+      return { config: agentRuntime.config, runtime: agentRuntime };
+    },
+    getAllAgentConfigs: async () => Promise.all((await agentRegistry.list())
+      .filter((agent) => agent.enabled)
+      .map((agent) => agentRegistry.config(agent.id)))
+  });
+  registerOneBotRoutes(app, onebotGateway, { agentRegistry });
+  registerProviderConfigRoutes(app, { codexAuth, configService, agentConfigService, testProvider: options.testProvider });
+  registerMemoryRoutes(app, {
+    getConfig: () => config,
+    runtime,
+    getAgentContext: (agentId) => {
+      const agentRuntime = agentRuntimeManager.require(agentId);
+      return { config: agentRuntime.config, runtime: agentRuntime };
+    }
+  });
   registerAgentToolRoutes(app, {
     agentFiles,
     resolveToolCapabilities,
-    getConfig: () => config
+    getConfig: () => config,
+    getAgentContext: (agentId) => {
+      const agentRuntime = agentRuntimeManager.require(agentId);
+      return {
+        config: agentRuntime.config,
+        agentFiles: new AgentFileRepository({ runtime: agentRuntime }),
+        resolveToolCapabilities: toolCapabilitiesFor(agentRuntime.config)
+      };
+    }
   });
-  registerSelfieReferenceRoutes(app, { repository: selfieReferences });
+  registerSelfieReferenceRoutes(app, {
+    repository: selfieReferencesFor(runtime.config.persona.defaultAgentId),
+    getRepository: selfieReferencesFor
+  });
 
   app.setNotFoundHandler((request, reply) => {
     const pathname = request.url.split("?", 1)[0] ?? "";
@@ -252,6 +413,8 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
     onebotServer,
     outboundMedia,
     serviceMonitor,
+    agentRegistry,
+    agentRuntimeManager,
     getConfig: () => config,
     async startOneBotListener(address = {}) {
       if (!onebotServer) {
@@ -280,6 +443,7 @@ export async function createApp(options: CreateAppOptions = {}) {
 }
 
 export async function startServer() {
+  await assertRuntimeWorkspaceMigrationGate();
   const config = await loadConfig();
   assertOneBotAccessToken(config);
   const built = await buildApp({ config, logger: true });
@@ -300,6 +464,17 @@ export async function startServer() {
   }
 }
 
+async function assertRuntimeWorkspaceMigrationGate() {
+  const gate = await inspectMultiAgentMigrationGate(getWorkspaceDir());
+  if (gate.state !== "trusted") {
+    throw new ServiceError(
+      409,
+      "MULTI_AGENT_MIGRATION_REQUIRED",
+      "现有 workspace 缺少可信多 Agent 迁移标记；请通过 ./sunabot.sh up 初始化空目录，或停服执行单 Agent 迁移。"
+    );
+  }
+}
+
 const isDirectExecution = process.argv[1]
   ? import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
   : false;
@@ -315,7 +490,20 @@ function requestLogError(error: unknown) {
 }
 
 function isSpaRoute(pathname: string) {
-  return pathname === "/" || ["overview", "conversations", "web-chat", "prompts", "memory", "images", "logs", "settings"]
+  return pathname === "/" || [
+    "overview",
+    "conversations",
+    "web-chat",
+    "agent-prompts",
+    "system-prompts",
+    "prompts",
+    "memory",
+    "images",
+    "logs",
+    "agents",
+    "agent-settings",
+    "settings"
+  ]
     .some((segment) => pathname === `/${segment}` || pathname.startsWith(`/${segment}/`));
 }
 

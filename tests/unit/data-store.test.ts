@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { applicationDataStore } from "../../adapters/sqlite/applicationDataStore.js";
+import { applicationDatabasePath, applicationDataStore } from "../../adapters/sqlite/applicationDataStore.js";
 import { createAdminTestConfig } from "./admin-fixtures.js";
 
 describe("application SQLite data store", () => {
@@ -63,6 +63,17 @@ describe("application SQLite data store", () => {
       memorySchedulerConversations: 1,
       imageHistory: 1
     });
+  });
+
+  it("rejects the retired external main database override", () => {
+    const previous = process.env.SUNABOT_DATABASE_PATH;
+    process.env.SUNABOT_DATABASE_PATH = path.join(root, "external.sqlite");
+    try {
+      expect(() => applicationDatabasePath()).toThrow("SUNABOT_DATABASE_PATH 已停止支持");
+    } finally {
+      if (previous == null) delete process.env.SUNABOT_DATABASE_PATH;
+      else process.env.SUNABOT_DATABASE_PATH = previous;
+    }
   });
 });
 

@@ -127,7 +127,11 @@ export async function runtime_sendAssistantReply(this: RuntimeHost,
     quoteReply = true,
     trace: AssistantMessageTrace = { messageOrigin: "text" }
   ) {
-    if (!this.isReplySenderAllowed(incoming.userId) || !isCurrent()) return undefined;
+    if (
+      !this.replySuppression.canReplyTo(incoming.time) ||
+      !this.isReplySenderAllowed(incoming.userId) ||
+      !isCurrent()
+    ) return undefined;
     const beforeReply = await this.hooks.run("before_reply", {
       channel: channelKey,
       text,
@@ -221,7 +225,8 @@ export function runtime_replyDeliveryDraft(this: RuntimeHost,
         quoteReply,
         logRunId,
         messageOrigin: trace.messageOrigin ?? "text",
-        toolNames: trace.toolNames?.length ? [...new Set(trace.toolNames)] : undefined
+        toolNames: trace.toolNames?.length ? [...new Set(trace.toolNames)] : undefined,
+        replyGate: this.replyGates.capture(incoming.scope, conversationRecordId(incoming))
       }, {
         conversationId: conversationRecordId(incoming),
         correlationId: logRunId ?? `onebot:${incoming.messageId ?? persistentIncomingKey(incoming)}`,
@@ -294,7 +299,11 @@ export async function runtime_sendErrorReply(this: RuntimeHost,
     delivery?: ReplyDelivery,
     trace: AssistantMessageTrace = { messageOrigin: "text" }
   ) {
-    if (!this.isReplySenderAllowed(incoming.userId) || !isCurrent()) return;
+    if (
+      !this.replySuppression.canReplyTo(incoming.time) ||
+      !this.isReplySenderAllowed(incoming.userId) ||
+      !isCurrent()
+    ) return;
     const message = formatErrorReply(error);
     try {
       if (!isCurrent()) return;

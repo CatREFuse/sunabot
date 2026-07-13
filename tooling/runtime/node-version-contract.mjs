@@ -13,8 +13,7 @@ export async function readNodeVersionContractInputs(root) {
     workflow,
     dockerfile,
     nativeStart,
-    buildRelease,
-    nativeRuntime
+    buildRelease
   ] = await Promise.all([
     readJson(path.join(root, "deploy/runtime-contract.json")),
     readJson(path.join(root, "deploy/runtime-contract.schema.json")),
@@ -26,8 +25,7 @@ export async function readNodeVersionContractInputs(root) {
     fs.readFile(path.join(root, ".github/workflows/verify.yml"), "utf8"),
     fs.readFile(path.join(root, "deploy/docker/Dockerfile"), "utf8"),
     fs.readFile(path.join(root, "deploy/native/bin/start-sunabot.sh"), "utf8"),
-    fs.readFile(path.join(root, "tooling/runtime/build-release.mjs"), "utf8"),
-    fs.readFile(path.join(root, "tooling/runtime/native.mjs"), "utf8")
+    fs.readFile(path.join(root, "tooling/runtime/build-release.mjs"), "utf8")
   ]);
   return {
     contract,
@@ -40,8 +38,7 @@ export async function readNodeVersionContractInputs(root) {
     workflow,
     dockerfile,
     nativeStart,
-    buildRelease,
-    nativeRuntime
+    buildRelease
   };
 }
 
@@ -89,10 +86,6 @@ export function validateNodeVersionEntrypoints(input) {
     input.buildRelease.includes("process.versions.node !== contract.nodeVersion")
       && input.buildRelease.includes("nodeVersion: contract.nodeVersion"),
     "Native release build and manifest must use the runtime contract Node version"
-  );
-  expect(
-    input.nativeRuntime.includes("releaseManifest.nodeVersion !== contract.nodeVersion"),
-    "Native install and rollback must reject release manifests with a different Node version"
   );
   return errors;
 

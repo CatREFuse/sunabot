@@ -3,6 +3,7 @@ import { computed } from "vue";
 import type { SunaTool } from "../../types";
 import { toolExecutionLabel, toolIcon, toolParameterRows } from "../../utils/toolCatalog";
 import DialogOverlay from "../ui/DialogOverlay.vue";
+import ToggleSwitch from "../ui/ToggleSwitch.vue";
 
 const props = defineProps<{
   open: boolean;
@@ -10,9 +11,11 @@ const props = defineProps<{
   enabled: boolean;
   description: string;
   descriptionOverridden: boolean;
+  pokeOnNoReply: boolean;
 }>();
 const emit = defineEmits<{
   close: [];
+  "update:pokeOnNoReply": [enabled: boolean];
   updateDescription: [description: string];
   resetDescription: [];
 }>();
@@ -74,6 +77,15 @@ const descriptionSourceLabel = computed(() => {
           <dd class="inline-state">{{ descriptionSourceLabel }}</dd>
         </div>
       </dl>
+
+      <div v-if="tool.name === 'no_reply'" class="border-b border-line py-3">
+        <ToggleSwitch
+          :model-value="pokeOnNoReply"
+          label="no_reply 时戳一戳"
+          description="Agent 结束本轮时戳一戳对方"
+          @update:model-value="emit('update:pokeOnNoReply', $event)"
+        />
+      </div>
 
       <label class="field mt-6">
         <span class="flex items-center justify-between gap-3">

@@ -54,15 +54,17 @@ export class OutboundMediaDelivery {
     if (!relativePath || relativePath.startsWith(`..${path.sep}`) || relativePath === ".." || path.isAbsolute(relativePath)) {
       throw new Error("Outbound media file is outside the outbound media root.");
     }
-    if (relativePath.includes(path.sep)) {
+    const fileName = generatedImageFileName(relativePath);
+    if (!fileName) {
       throw new Error("Outbound media file must be a direct child of the outbound media root.");
     }
-    if (!isSafePngFileName(relativePath)) {
+    if (!isSafePngFileName(fileName)) {
       throw new Error("Outbound media file must be a PNG image.");
     }
 
     const stats = await regularFileStats(resolvedPath);
     if (!stats) throw new Error("Outbound media file is not a regular file.");
+    await assertUnredirectedPath(this.rootDir, resolvedPath, relativePath);
     if (this.referenceMode === "inline-base64") {
       if (stats.size > this.maxInlineBytes) {
         throw new Error(
@@ -81,6 +83,23 @@ export class OutboundMediaDelivery {
   }
 }
 
+function generatedImageFileName(relativePath: string) {
+  const segments = relativePath.split(path.sep);
+  if (segments.length === 1) return segments[0];
+  if (
+    segments.length === 3 &&
+    segments[0] === "agents" &&
+    isSafeAgentId(segments[1] ?? "")
+  ) {
+    return segments[2];
+  }
+  return undefined;
+}
+
+function isSafeAgentId(value: string) {
+  return /^[a-z][a-z0-9-]{1,31}$/.test(value);
+}
+
 function isSafePngFileName(fileName: string) {
   return /^[A-Za-z0-9][A-Za-z0-9._-]*\.png$/i.test(fileName) &&
     path.basename(fileName) === fileName &&
@@ -95,5 +114,12 @@ async function regularFileStats(filePath: string) {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw error;
+  }
+}
+
+async function assertUnredirectedPath(rootDir: string, filePath: string, relativePath: string) {
+  const [realRoot, realFile] = await Promise.all([fs.realpath(rootDir), fs.realpath(filePath)]);
+  if (realFile !== path.resolve(realRoot, relativePath)) {
+    throw new Error("Outbound media file path must not contain symbolic links.");
   }
 }

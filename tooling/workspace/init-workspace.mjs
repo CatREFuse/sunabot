@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { prepareFreshInstallMarker } from "../../packages/platform/multiAgentMigrationGate.mjs";
 import { resolveProjectRoot, resolveWorkspace } from "../shared/paths.mjs";
 
 const WORKSPACE_DIRECTORIES = [
@@ -12,9 +13,7 @@ const WORKSPACE_DIRECTORIES = [
   "cache/attachments",
   "backups",
   "runtime/logs",
-  "runtime/napcat/config-full",
-  "runtime/napcat/plugins",
-  "runtime/napcat/qq",
+  "runtime/napcat/accounts",
   "runtime/tmp",
   "secrets"
 ];
@@ -22,6 +21,7 @@ const WORKSPACE_DIRECTORIES = [
 export async function initializeWorkspace(options = {}) {
   const root = options.root ?? resolveProjectRoot(import.meta.url);
   const workspace = options.workspace ?? resolveWorkspace(root);
+  await prepareFreshInstallMarker(workspace, options.now);
   await fs.mkdir(workspace, { recursive: true, mode: 0o700 });
   await fs.chmod(workspace, 0o700);
   await Promise.all(workspaceDirectoryHierarchy().map(async (directory) => {

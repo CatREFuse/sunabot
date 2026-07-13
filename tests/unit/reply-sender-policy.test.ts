@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 import { isAdminSender, isReplySenderAllowed } from "../../services/messaging/replySenderPolicy.js";
+import { runtime_isAdminUser } from "../../src/runtime/reply.js";
 
 describe("reply sender policy", () => {
   it("permits any valid QQ sender", () => {
@@ -26,5 +27,11 @@ describe("reply sender policy", () => {
     expect(isAdminSender(171419991, "171419991")).toBe(true);
     expect(isAdminSender(998877665, "171419991")).toBe(false);
     expect(isAdminSender(171419991, "not-a-qq")).toBe(false);
+  });
+
+  it("applies the exact administrator check to runtime restrictions", () => {
+    const runtime = { config: { bot: { adminQq: "171419991" } } };
+    expect(runtime_isAdminUser.call(runtime as never, 171419991)).toBe(true);
+    expect(runtime_isAdminUser.call(runtime as never, 998877665)).toBe(false);
   });
 });

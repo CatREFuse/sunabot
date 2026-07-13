@@ -29,7 +29,9 @@ onUnmounted(runtime.stop);
     <DesktopNavigation />
     <main id="main-content" class="app-main min-h-0 min-w-0 flex-1 self-start overflow-hidden md:self-stretch">
       <RouteLoading v-if="!api.initialized.value" />
-      <RouterView v-else-if="!api.authorizationRequired.value" />
+      <RouterView v-else-if="!api.authorizationRequired.value" v-slot="{ Component, route }">
+        <component :is="Component" :key="String(route.name ?? route.path)" />
+      </RouterView>
     </main>
     <MobileNavigation />
     <AdminLoginGate v-if="api.initialized.value && api.authorizationRequired.value" />

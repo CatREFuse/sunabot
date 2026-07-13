@@ -10,6 +10,7 @@ import {
   validatePromptContent
 } from "../../services/agent/promptSystem.js";
 import type { AppConfig } from "../types.js";
+import type { PromptWorkspaceScope } from "../../services/agent/promptWorkspace.js";
 import { AdminApiError, badRequest, conflict, notFound } from "./errors.js";
 import {
   adminMutationMutex,
@@ -83,10 +84,13 @@ export class AgentFileRepository {
     }
   }
 
-  async list(config?: AppConfig) {
+  async list(config?: AppConfig, scope?: PromptWorkspaceScope) {
     const activeConfig = config ?? await loadConfig();
+    const definitions = scope
+      ? AGENT_FILE_DEFINITIONS.filter((definition) => definition.scope === scope)
+      : AGENT_FILE_DEFINITIONS;
     return {
-      files: await Promise.all(AGENT_FILE_DEFINITIONS.map(async (definition) => {
+      files: await Promise.all(definitions.map(async (definition) => {
         const resolved = await resolveAgentFile(activeConfig, definition);
         const state = withRuntimeDefault(await readFileState(resolved), definition, this.options.runtime);
         return publicMetadata(resolved, state);
@@ -104,7 +108,7 @@ export class AgentFileRepository {
     };
   }
 
-  async put(id: string, body: unknown) {
+  async put(id: string, body: unknown, config?: AppConfig) {
     const definition = definitionById(id);
     const request = parseWriteRequest(body, definition);
 
@@ -113,8 +117,8 @@ export class AgentFileRepository {
       if (recoveryError) {
         throw new AdminApiError(503, "CONFIG_RECOVERY_REQUIRED", recoveryError);
       }
-      const config = await loadConfig();
-      const resolved = await resolveAgentFile(config, definition);
+      const activeConfig = config ?? await loadConfig();
+      const resolved = await resolveAgentFile(activeConfig, definition);
       const current = await readFileState(resolved);
       if (request.revision !== current.revision) {
         conflict("AGENT_FILE_REVISION_CONFLICT", "文件已被其他操作修改，请重新载入。", current.revision);
@@ -126,8 +130,9 @@ export class AgentFileRepository {
         conflict("AGENT_FILE_REVISION_CONFLICT", "文件已在外部修改，请重新载入。", latest.revision);
       }
 
-      const preparedPrompt = this.options.runtime.preparePromptReload
-        ? await this.options.runtime.preparePromptReload(id, request.content, config)
+      const reloadRuntime = definition.scope === "persona";
+      const preparedPrompt = reloadRuntime && this.options.runtime.preparePromptReload
+        ? await this.options.runtime.preparePromptReload(id, request.content, activeConfig)
         : undefined;
 
       const temporaryPath = path.join(
@@ -157,10 +162,12 @@ export class AgentFileRepository {
       }
       try {
         await fs.rename(temporaryPath, resolved.filePath);
-        if (preparedPrompt !== undefined && this.options.runtime.commitPromptReload) {
-          this.options.runtime.commitPromptReload(preparedPrompt);
-        } else {
-          await this.options.runtime.reloadPrompts(config);
+        if (reloadRuntime) {
+          if (preparedPrompt !== undefined && this.options.runtime.commitPromptReload) {
+            this.options.runtime.commitPromptReload(preparedPrompt);
+          } else {
+            await this.options.runtime.reloadPrompts(activeConfig);
+          }
         }
       } catch (error) {
         await fs.rm(temporaryPath, { force: true });
@@ -170,7 +177,7 @@ export class AgentFileRepository {
           } else {
             await fs.rm(resolved.filePath, { force: true });
           }
-          await this.options.runtime.reloadPrompts(config);
+          if (reloadRuntime) await this.options.runtime.reloadPrompts(activeConfig);
           await fs.rm(backupPath, { force: true }).catch(() => undefined);
         } catch (rollbackError) {
           const message = `提示词提交失败且自动恢复失败。备份：${backupPath}。${errorMessage(rollbackError)}`;
@@ -198,12 +205,25 @@ function definitionById(id: string) {
 }
 
 async function resolveAgentFile(config: AppConfig, definition: AgentFileDefinition): Promise<ResolvedAgentFile> {
-  const configuredWorkspace = resolveProjectPath(config.persona.agentWorkspace);
-  if (!configuredWorkspace) badRequest("AGENT_WORKSPACE_INVALID", "Agent workspace 未配置。", "persona.agentWorkspace");
+  const workspaceField = definition.scope === "system" ? "systemPromptWorkspace" : "agentWorkspace";
+  const configuredWorkspace = resolveProjectPath(config.persona[workspaceField]);
+  if (!configuredWorkspace) {
+    badRequest(
+      "AGENT_WORKSPACE_INVALID",
+      definition.scope === "system" ? "系统提示词 workspace 未配置。" : "Agent workspace 未配置。",
+      `persona.${workspaceField}`
+    );
+  }
   let workspacePath = path.resolve(configuredWorkspace);
   try {
     const stats = await fs.stat(configuredWorkspace);
-    if (!stats.isDirectory()) badRequest("AGENT_WORKSPACE_INVALID", "Agent workspace 不是目录。", "persona.agentWorkspace");
+    if (!stats.isDirectory()) {
+      badRequest(
+        "AGENT_WORKSPACE_INVALID",
+        definition.scope === "system" ? "系统提示词 workspace 不是目录。" : "Agent workspace 不是目录。",
+        `persona.${workspaceField}`
+      );
+    }
     workspacePath = await fs.realpath(configuredWorkspace);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;

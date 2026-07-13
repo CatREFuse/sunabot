@@ -14,6 +14,11 @@ export type ProviderVisionProbeRunner = (provider: ProviderConfig) => Promise<{ 
 export interface ProviderConfigRouteOptions {
   codexAuth: Pick<CodexAuthService, "status" | "startLogin" | "logout">;
   configService: Pick<ConfigService, "readEnvelope" | "patchGroupReply" | "patch">;
+  agentConfigService?: {
+    readEnvelope(agentId: string): ReturnType<ConfigService["readEnvelope"]>;
+    patchGroupReply(agentId: string, body: unknown): Promise<unknown>;
+    patch(agentId: string, section: string, body: unknown): Promise<unknown>;
+  };
   testProvider?: ProviderTestRunner;
   listProviderModels?: ProviderModelsRunner;
   probeProviderVision?: ProviderVisionProbeRunner;
@@ -40,11 +45,21 @@ export function registerProviderConfigRoutes(
 
   app.get("/api/config", {
     schema: { querystring: openObject, response: { 200: openObject } }
-  }, async () => options.configService.readEnvelope());
+  }, async (request) => {
+    const agentId = requestAgentId(request.query);
+    return agentId === "plana" || !options.agentConfigService
+      ? options.configService.readEnvelope()
+      : options.agentConfigService.readEnvelope(agentId);
+  });
 
   app.patch("/api/config/group-reply", {
     schema: { body: passthroughBody, response: { 200: openObject } }
-  }, async (request) => options.configService.patchGroupReply(request.body));
+  }, async (request) => {
+    const agentId = requestAgentId(request.query);
+    return agentId === "plana" || !options.agentConfigService
+      ? options.configService.patchGroupReply(request.body)
+      : options.agentConfigService.patchGroupReply(agentId, request.body);
+  });
 
   app.patch("/api/config/:section", {
     schema: {
@@ -59,7 +74,10 @@ export function registerProviderConfigRoutes(
     }
   }, async (request) => {
     const params = request.params as { section?: string };
-    return options.configService.patch(String(params.section ?? ""), request.body);
+    const agentId = requestAgentId(request.query);
+    return agentId === "plana" || !options.agentConfigService
+      ? options.configService.patch(String(params.section ?? ""), request.body)
+      : options.agentConfigService.patch(agentId, String(params.section ?? ""), request.body);
   });
 
   app.get("/api/models", {
@@ -127,6 +145,11 @@ export function registerProviderConfigRoutes(
     const result = await (options.probeProviderVision ?? probeProviderMultimodal)(provider);
     return { ok: true, ...result };
   });
+}
+
+function requestAgentId(query: unknown) {
+  const value = query && typeof query === "object" ? (query as { agentId?: unknown }).agentId : undefined;
+  return String(value ?? "plana").trim() || "plana";
 }
 
 function providerFromBody(body: unknown, code: string) {

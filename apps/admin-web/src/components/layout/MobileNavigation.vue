@@ -3,6 +3,7 @@ import { computed, shallowRef } from "vue";
 import { useRoute } from "vue-router";
 import { useTheme, type ThemePreference } from "../../composables/useTheme";
 import DialogOverlay from "../ui/DialogOverlay.vue";
+import AgentSwitcher from "../agents/AgentSwitcher.vue";
 
 const route = useRoute();
 const moreOpen = shallowRef(false);
@@ -10,20 +11,37 @@ const primary: Array<{ to: string; label: string; icon: string }> = [
   { to: "/overview", label: "状态", icon: "bx-pulse" },
   { to: "/web-chat", label: "Web Chat", icon: "bx-chat" },
   { to: "/conversations", label: "会话", icon: "bx-message-square-dots" },
-  { to: "/prompts", label: "提示词", icon: "bx-bot" },
-  { to: "/settings", label: "设置", icon: "bx-cog" }
+  { to: "/agent-prompts", label: "提示词", icon: "bx-bot" },
+  { to: "/agent-settings", label: "Agent", icon: "bx-slider-alt" }
 ];
-const moreItems: Array<{ to: string; label: string; description: string; icon: string }> = [
-  { to: "/memory", label: "记忆", description: "检索与维护记忆", icon: "bx-brain" },
-  { to: "/images", label: "图像", description: "查看图像历史", icon: "bx-image" },
-  { to: "/logs", label: "日志", description: "活动终端与请求日志", icon: "bx-terminal" }
+const moreSections: Array<{
+  label: string;
+  items: Array<{ to: string; label: string; description: string; icon: string }>;
+}> = [
+  {
+    label: "Agent",
+    items: [
+      { to: "/memory", label: "记忆", description: "检索与维护记忆", icon: "bx-brain" },
+      { to: "/images", label: "图像", description: "查看图像历史", icon: "bx-image" },
+      { to: "/logs", label: "日志", description: "活动终端与请求日志", icon: "bx-terminal" }
+    ]
+  },
+  {
+    label: "公共系统",
+    items: [
+      { to: "/settings", label: "系统设置", description: "模型、账户与连接", icon: "bx-cog" },
+      { to: "/system-prompts", label: "系统提示词", description: "所有 Agent 的默认提示词", icon: "bx-file" }
+    ]
+  }
 ];
 const themeItems: Array<{ id: ThemePreference; label: string; icon: string }> = [
   { id: "light", label: "浅色", icon: "bx-sun" },
   { id: "dark", label: "深色", icon: "bx-moon" },
   { id: "system", label: "系统", icon: "bx-desktop" }
 ];
-const moreActive = computed(() => ["/memory", "/images", "/logs"].some((path) => route.path.startsWith(path)));
+const moreActive = computed(() => moreSections.some((section) => (
+  section.items.some((item) => route.path.startsWith(item.to))
+)));
 const theme = useTheme();
 </script>
 
@@ -54,19 +72,25 @@ const theme = useTheme();
           <i class="bx bx-x text-2xl" aria-hidden="true"></i>
         </button>
       </div>
-      <RouterLink
-        v-for="item in moreItems"
-        :key="item.to"
-        :to="item.to"
-        class="flex min-h-16 items-center gap-4 border-t border-line px-1 text-ink first:border-t-0"
-        @click="moreOpen = false"
-      >
-        <i class="bx text-2xl text-mute" :class="item.icon" aria-hidden="true"></i>
-        <span class="min-w-0">
-          <strong class="block font-normal text-display">{{ item.label }}</strong>
-          <small class="block text-xs text-mute">{{ item.description }}</small>
-        </span>
-      </RouterLink>
+      <section v-for="section in moreSections" :key="section.label" class="border-t border-line py-3 first:border-t-0 first:pt-0">
+        <h3 class="meta-label px-1 pb-2">{{ section.label }}</h3>
+        <div v-if="section.label === 'Agent'" class="mb-2 border-y border-line py-2">
+          <AgentSwitcher expanded />
+        </div>
+        <RouterLink
+          v-for="item in section.items"
+          :key="item.to"
+          :to="item.to"
+          class="flex min-h-16 items-center gap-4 border-t border-line px-1 text-ink first:border-t-0"
+          @click="moreOpen = false"
+        >
+          <i class="bx text-2xl text-mute" :class="item.icon" aria-hidden="true"></i>
+          <span class="min-w-0">
+            <strong class="block font-normal text-display">{{ item.label }}</strong>
+            <small class="block text-xs text-mute">{{ item.description }}</small>
+          </span>
+        </RouterLink>
+      </section>
       <div class="mt-2 border-t border-line pt-4">
         <span class="meta-label">主题</span>
         <div class="mt-3 grid grid-cols-3 gap-2" aria-label="主题">

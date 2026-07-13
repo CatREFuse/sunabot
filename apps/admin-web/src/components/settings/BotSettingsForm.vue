@@ -12,7 +12,13 @@ const prefixes = computed({
   get: () => reply.value.commandPrefixes.join(", "),
   set: (value: string) => (reply.value.commandPrefixes = split(value))
 });
-function split(value: string) { return value.split(",").map((item) => item.trim()).filter(Boolean); }
+const quoteFilter = computed({
+  get: () => draft.value.quoteGroupReplyExcludedUserIds.join(", "),
+  set: (value: string) => (draft.value.quoteGroupReplyExcludedUserIds = split(value))
+});
+function split(value: string) {
+  return [...new Set(value.split(/[,，\s]+/).map((item) => item.trim()).filter(Boolean))];
+}
 </script>
 
 <template>
@@ -33,11 +39,23 @@ function split(value: string) { return value.split(",").map((item) => item.trim(
         <span class="field-label">上下文消息数</span>
         <input v-model.number="draft.contextMessageLimit" class="control" type="number" min="1" max="120" step="1">
       </label>
-      <div class="border-y border-line py-2">
+      <div class="grid gap-4 border-y border-line py-3 sm:col-span-2 sm:grid-cols-2 sm:items-center sm:gap-6">
         <ToggleSwitch v-model="draft.quoteGroupReplies" label="引用群聊消息" description="回复时引用触发消息" />
+        <label class="field">
+          <span class="field-label">过滤名单</span>
+          <input
+            v-model="quoteFilter"
+            class="control"
+            type="text"
+            autocomplete="off"
+            placeholder="123456789, 987654321"
+          >
+          <span class="text-xs leading-5 text-mute">回复这些 QQ 时不引用消息</span>
+        </label>
       </div>
     </div>
     <div class="divide-y divide-line border-y border-line">
+      <ToggleSwitch v-model="draft.pokeOnNoReply" label="no_reply 时戳一戳" description="Agent 结束本轮时戳一戳对方" />
       <ToggleSwitch v-model="reply.autoReplyPrivate" label="启用私聊" />
       <ToggleSwitch v-model="reply.autoReplyBotGroup" label="启用 Bot 群聊" />
     </div>

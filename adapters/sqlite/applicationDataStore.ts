@@ -5,43 +5,63 @@ import { getWorkspacePath, resolveProjectPath } from "../../src/config.js";
 import type { AppConfig, ConversationRecord, ImageHistoryRecord } from "../../src/types.js";
 import type { MemoryPersistenceProvider } from "../../services/memory/persistence.js";
 import { WORKSPACE_LAYOUT } from "../../packages/platform/workspaceLayout.js";
+import { currentAgentRuntimeConfig } from "../../packages/platform/runtimeAgentContext.js";
+import { migrateApplicationDataSchema } from "./applicationDataSchema.js";
 import {
-  modelCallMeasurement,
-  type MemoryModelCallKindId,
-  type ModelCallBehaviorId,
-  type ModelCallMeasurement
-} from "../../src/modelCallStats.js";
+  ModelCallStore,
+  type ModelCallAggregateRow,
+  type ModelCallModelAggregateRow
+} from "./modelCallStore.js";
+
+export type { ModelCallAggregateRow, ModelCallModelAggregateRow } from "./modelCallStore.js";
 
 export type MemoryDataSource = "working" | "long_term" | "user_profile";
 
 type JsonObject = Record<string, unknown>;
 type SqlRow = Record<string, unknown>;
 
-export interface ModelCallAggregateRow {
-  behavior: ModelCallBehaviorId;
-  memoryKind: MemoryModelCallKindId | "";
-  input: number;
-  output: number;
-  total: number;
-  cachedInput: number;
-  requests: number;
-  measuredInput: number;
-  measuredCachedInput: number;
-  cacheReports: number;
+export interface AgentRegistryRow {
+  id: string;
+  name: string;
+  enabled: boolean;
+  workspace: string;
+  avatarPath?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AgentAccountRegistryRow {
+  id: string;
+  agentId: string;
+  label: string;
+  qqId?: string;
+  enabled: boolean;
+  webuiPort: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
 const stores = new Map<string, ApplicationDataStore>();
 
 export function applicationDatabasePath(config?: Pick<AppConfig, "persona">) {
+  const activeConfig = config ?? currentAgentRuntimeConfig();
+  const agentId = activeConfig?.persona.defaultAgentId.trim() || "plana";
+  if (activeConfig && agentId !== "plana") {
+    const agentWorkspace = resolveProjectPath(activeConfig.persona.agentWorkspace);
+    if (!agentWorkspace) throw new Error(`Agent workspace is invalid: ${activeConfig.persona.agentWorkspace}`);
+    return path.join(agentWorkspace, "data", "sunabot.sqlite");
+  }
   const configured = process.env.SUNABOT_DATABASE_PATH?.trim();
-  if (configured) return path.resolve(configured);
-  if (process.env.VITEST) {
-    if (!config || !path.isAbsolute(config.persona.agentWorkspace)) return ":memory:";
+  if (configured) {
+    throw new Error("SUNABOT_DATABASE_PATH 已停止支持；主库固定为 workspace/business/data/sunabot.sqlite。");
+  }
+  if (process.env.VITEST && config && path.isAbsolute(config.persona.agentWorkspace)) {
     const agentWorkspace = resolveProjectPath(config.persona.agentWorkspace);
     if (!agentWorkspace) return ":memory:";
     const parent = path.dirname(path.resolve(agentWorkspace));
     return path.join(path.basename(parent) === "agents" ? path.dirname(parent) : parent, "data", "sunabot.sqlite");
   }
+  if (process.env.VITEST) return ":memory:";
   return getWorkspacePath(WORKSPACE_LAYOUT.database);
 }
 
@@ -67,6 +87,7 @@ export const sqliteMemoryPersistence: MemoryPersistenceProvider = {
 
 export class ApplicationDataStore {
   private readonly database: DatabaseSync;
+  private readonly modelCalls: ModelCallStore;
 
   constructor(readonly databasePath: string) {
     if (databasePath !== ":memory:") {
@@ -77,7 +98,8 @@ export class ApplicationDataStore {
     this.database.exec("PRAGMA synchronous = NORMAL");
     this.database.exec("PRAGMA foreign_keys = ON");
     this.database.exec("PRAGMA busy_timeout = 5000");
-    this.migrate();
+    this.modelCalls = new ModelCallStore(this.database);
+    migrateApplicationDataSchema(this.database, this.modelCalls);
   }
 
   close() {
@@ -90,6 +112,102 @@ export class ApplicationDataStore {
 
   compact() {
     this.database.exec("VACUUM");
+  }
+
+  readAgents(): AgentRegistryRow[] {
+    return (this.database.prepare(`
+      SELECT id, name, enabled, workspace, avatar_path, created_at, updated_at
+      FROM agents ORDER BY created_at, id
+    `).all() as SqlRow[]).map(mapAgentRegistryRow);
+  }
+
+  readAgent(id: string): AgentRegistryRow | undefined {
+    const row = this.database.prepare(`
+      SELECT id, name, enabled, workspace, avatar_path, created_at, updated_at
+      FROM agents WHERE id = ?
+    `).get(id) as SqlRow | undefined;
+    return row ? mapAgentRegistryRow(row) : undefined;
+  }
+
+  createAgent(record: AgentRegistryRow) {
+    this.database.prepare(`
+      INSERT INTO agents (id, name, enabled, workspace, avatar_path, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      record.id,
+      record.name,
+      record.enabled ? 1 : 0,
+      record.workspace,
+      record.avatarPath ?? null,
+      record.createdAt,
+      record.updatedAt
+    );
+  }
+
+  updateAgent(record: Pick<AgentRegistryRow, "id" | "name" | "enabled" | "avatarPath" | "updatedAt">) {
+    const result = this.database.prepare(`
+      UPDATE agents SET name = ?, enabled = ?, avatar_path = ?, updated_at = ? WHERE id = ?
+    `).run(record.name, record.enabled ? 1 : 0, record.avatarPath ?? null, record.updatedAt, record.id);
+    return Number(result.changes) > 0;
+  }
+
+  deleteAgent(id: string) {
+    return Number(this.database.prepare("DELETE FROM agents WHERE id = ?").run(id).changes) > 0;
+  }
+
+  readAgentAccounts(agentId?: string): AgentAccountRegistryRow[] {
+    const rows = agentId
+      ? this.database.prepare(`
+          SELECT id, agent_id, label, qq_id, enabled, webui_port, created_at, updated_at
+          FROM agent_accounts WHERE agent_id = ? ORDER BY created_at, id
+        `).all(agentId)
+      : this.database.prepare(`
+          SELECT id, agent_id, label, qq_id, enabled, webui_port, created_at, updated_at
+          FROM agent_accounts ORDER BY agent_id, created_at, id
+        `).all();
+    return (rows as SqlRow[]).map(mapAgentAccountRegistryRow);
+  }
+
+  readAgentAccount(id: string): AgentAccountRegistryRow | undefined {
+    const row = this.database.prepare(`
+      SELECT id, agent_id, label, qq_id, enabled, webui_port, created_at, updated_at
+      FROM agent_accounts WHERE id = ?
+    `).get(id) as SqlRow | undefined;
+    return row ? mapAgentAccountRegistryRow(row) : undefined;
+  }
+
+  createAgentAccount(record: AgentAccountRegistryRow) {
+    this.database.prepare(`
+      INSERT INTO agent_accounts (id, agent_id, label, qq_id, enabled, webui_port, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      record.id,
+      record.agentId,
+      record.label,
+      record.qqId ?? null,
+      record.enabled ? 1 : 0,
+      record.webuiPort,
+      record.createdAt,
+      record.updatedAt
+    );
+  }
+
+  updateAgentAccount(record: Pick<AgentAccountRegistryRow, "id" | "label" | "qqId" | "enabled" | "updatedAt">) {
+    const result = this.database.prepare(`
+      UPDATE agent_accounts SET label = ?, qq_id = ?, enabled = ?, updated_at = ? WHERE id = ?
+    `).run(record.label, record.qqId ?? null, record.enabled ? 1 : 0, record.updatedAt, record.id);
+    return Number(result.changes) > 0;
+  }
+
+  deleteAgentAccount(id: string) {
+    return Number(this.database.prepare("DELETE FROM agent_accounts WHERE id = ?").run(id).changes) > 0;
+  }
+
+  nextAgentAccountWebuiPort() {
+    const row = this.database.prepare("SELECT COALESCE(MAX(webui_port), 6098) AS port FROM agent_accounts").get() as SqlRow;
+    const port = Math.max(6098, Number(row.port ?? 6098)) + 1;
+    if (port > 65_535) throw new Error("NapCat WebUI port range is exhausted.");
+    return port;
   }
 
   readMemory(source: MemoryDataSource) {
@@ -270,84 +388,27 @@ export class ApplicationDataStore {
   }
 
   appendRequestLog(record: JsonObject) {
-    this.transaction(() => this.appendRequestLogUnsafe(record));
+    this.modelCalls.appendRequestLog(record);
   }
 
   readModelCallAggregateRows(conversationId = ""): ModelCallAggregateRow[] {
-    return (this.database.prepare(`
-      SELECT behavior, memory_kind, input_tokens, output_tokens, total_tokens,
-        cached_input_tokens, requests, measured_input_tokens,
-        measured_cached_input_tokens, cache_reports
-      FROM model_call_aggregates
-      WHERE conversation_id = ?
-      ORDER BY behavior, memory_kind
-    `).all(conversationId) as SqlRow[]).map((row) => ({
-      behavior: String(row.behavior) as ModelCallBehaviorId,
-      memoryKind: String(row.memory_kind) as MemoryModelCallKindId | "",
-      input: Number(row.input_tokens ?? 0),
-      output: Number(row.output_tokens ?? 0),
-      total: Number(row.total_tokens ?? 0),
-      cachedInput: Number(row.cached_input_tokens ?? 0),
-      requests: Number(row.requests ?? 0),
-      measuredInput: Number(row.measured_input_tokens ?? 0),
-      measuredCachedInput: Number(row.measured_cached_input_tokens ?? 0),
-      cacheReports: Number(row.cache_reports ?? 0)
-    }));
+    return this.modelCalls.readAggregateRows(conversationId);
   }
 
-  private appendRequestLogUnsafe(record: JsonObject) {
-    this.database.prepare(`
-      INSERT INTO request_logs (id, at, category, action, search_text, data_json)
-      VALUES (?, ?, ?, ?, '', ?)
-    `).run(
-      String(record.id ?? ""),
-      String(record.at ?? new Date().toISOString()),
-      String(record.category ?? ""),
-      String(record.action ?? ""),
-      JSON.stringify(record)
-    );
-    const measurement = modelCallMeasurement(record);
-    if (measurement) this.appendModelCallAggregateUnsafe(measurement);
+  readModelCallModelAggregateRows(conversationId = ""): ModelCallModelAggregateRow[] {
+    return this.modelCalls.readModelAggregateRows(conversationId);
   }
 
   readRequestLogs(options: { query?: string; limit: number }) {
-    return this.readRequestLogPage({ query: options.query, page: 1, pageSize: options.limit }).logs;
+    return this.modelCalls.readRequestLogs(options);
   }
 
   readRequestLogPage(options: { query?: string; page: number; pageSize: number }) {
-    const query = String(options.query ?? "").trim().toLowerCase();
-    const offset = (options.page - 1) * options.pageSize;
-    const rows = query
-      ? this.database.prepare(`
-          SELECT data_json FROM request_logs
-          WHERE LOWER(data_json) LIKE ? ESCAPE '\\'
-          ORDER BY at DESC, row_id DESC LIMIT ? OFFSET ?
-        `).all(`%${escapeLike(query)}%`, options.pageSize, offset)
-      : this.database.prepare(`
-          SELECT data_json FROM request_logs ORDER BY at DESC, row_id DESC LIMIT ? OFFSET ?
-        `).all(options.pageSize, offset);
-    const countRow = query
-      ? this.database.prepare(`
-          SELECT COUNT(*) AS count FROM request_logs
-          WHERE LOWER(data_json) LIKE ? ESCAPE '\\'
-        `).get(`%${escapeLike(query)}%`) as SqlRow
-      : this.database.prepare("SELECT COUNT(*) AS count FROM request_logs").get() as SqlRow;
-    const total = Number(countRow.count ?? 0);
-    return {
-      logs: rows.map((row) => JSON.parse(String((row as SqlRow).data_json))),
-      page: options.page,
-      pageSize: options.pageSize,
-      total,
-      pageCount: Math.max(1, Math.ceil(total / options.pageSize))
-    };
+    return this.modelCalls.readRequestLogPage(options);
   }
 
   readTokenUsageRecords(since: string) {
-    return this.database.prepare(`
-      SELECT data_json FROM request_logs
-      WHERE category = 'model.response' AND at >= ?
-      ORDER BY at ASC, row_id ASC
-    `).all(since).map((row) => JSON.parse(String((row as SqlRow).data_json)) as JsonObject);
+    return this.modelCalls.readTokenUsageRecords(since);
   }
 
   ensureLegacyRequestLogsImported(filePath: string) {
@@ -356,7 +417,7 @@ export class ApplicationDataStore {
     const records = readJsonlObjects(filePath);
     this.transaction(() => {
       if (this.requestLogCount() === 0) {
-        for (const record of records) this.appendRequestLogUnsafe(record);
+        for (const record of records) this.modelCalls.appendRequestLogUnsafe(record);
       }
       this.setMetadata(marker, "done");
     });
@@ -373,140 +434,6 @@ export class ApplicationDataStore {
       memorySchedulerConversations: this.memorySchedulerCount(),
       imageHistory: this.imageHistoryCount()
     };
-  }
-
-  private migrate() {
-    this.database.exec(`
-      CREATE TABLE IF NOT EXISTS app_metadata (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS memory_records (
-        row_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        source TEXT NOT NULL CHECK (source IN ('working', 'long_term', 'user_profile')),
-        position INTEGER NOT NULL,
-        record_id TEXT,
-        data_json TEXT NOT NULL CHECK (json_valid(data_json))
-      );
-      CREATE UNIQUE INDEX IF NOT EXISTS memory_records_source_record_id
-        ON memory_records(source, record_id) WHERE record_id IS NOT NULL AND record_id <> '';
-      CREATE INDEX IF NOT EXISTS memory_records_source_position
-        ON memory_records(source, position);
-      CREATE TABLE IF NOT EXISTS memory_batches (
-        batch_id TEXT PRIMARY KEY,
-        result_json TEXT NOT NULL CHECK (json_valid(result_json)),
-        committed_at TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS memory_scheduler (
-        conversation_id TEXT PRIMARY KEY,
-        updated_at TEXT NOT NULL,
-        data_json TEXT NOT NULL CHECK (json_valid(data_json))
-      );
-      CREATE INDEX IF NOT EXISTS memory_scheduler_updated_at ON memory_scheduler(updated_at);
-      CREATE TABLE IF NOT EXISTS conversations (
-        id TEXT PRIMARY KEY,
-        last_at TEXT NOT NULL,
-        data_json TEXT NOT NULL CHECK (json_valid(data_json))
-      );
-      CREATE INDEX IF NOT EXISTS conversations_last_at ON conversations(last_at DESC);
-      CREATE TABLE IF NOT EXISTS image_history (
-        id TEXT PRIMARY KEY,
-        url TEXT NOT NULL UNIQUE,
-        created_at TEXT NOT NULL,
-        data_json TEXT NOT NULL CHECK (json_valid(data_json))
-      );
-      CREATE INDEX IF NOT EXISTS image_history_created_at ON image_history(created_at DESC);
-      CREATE TABLE IF NOT EXISTS request_logs (
-        row_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        id TEXT NOT NULL UNIQUE,
-        at TEXT NOT NULL,
-        category TEXT NOT NULL,
-        action TEXT NOT NULL,
-        search_text TEXT NOT NULL DEFAULT '',
-        data_json TEXT NOT NULL CHECK (json_valid(data_json))
-      );
-      CREATE INDEX IF NOT EXISTS request_logs_at ON request_logs(at DESC);
-      CREATE INDEX IF NOT EXISTS request_logs_category_action ON request_logs(category, action, at DESC);
-      CREATE TABLE IF NOT EXISTS model_call_aggregates (
-        conversation_id TEXT NOT NULL,
-        behavior TEXT NOT NULL CHECK (behavior IN ('reply', 'orchestrator', 'memory', 'other')),
-        memory_kind TEXT NOT NULL DEFAULT '' CHECK (memory_kind IN ('', 'working_long_term', 'user_profile')),
-        input_tokens INTEGER NOT NULL DEFAULT 0,
-        output_tokens INTEGER NOT NULL DEFAULT 0,
-        total_tokens INTEGER NOT NULL DEFAULT 0,
-        cached_input_tokens INTEGER NOT NULL DEFAULT 0,
-        requests INTEGER NOT NULL DEFAULT 0,
-        measured_input_tokens INTEGER NOT NULL DEFAULT 0,
-        measured_cached_input_tokens INTEGER NOT NULL DEFAULT 0,
-        cache_reports INTEGER NOT NULL DEFAULT 0,
-        PRIMARY KEY (conversation_id, behavior, memory_kind)
-      );
-      CREATE INDEX IF NOT EXISTS model_call_aggregates_behavior
-        ON model_call_aggregates(behavior, memory_kind, conversation_id);
-      CREATE TABLE IF NOT EXISTS admin_sessions (
-        token_hash TEXT PRIMARY KEY,
-        csrf_token TEXT NOT NULL,
-        created_at INTEGER NOT NULL,
-        last_seen_at INTEGER NOT NULL,
-        expires_at INTEGER NOT NULL
-      );
-      CREATE INDEX IF NOT EXISTS admin_sessions_expiry
-        ON admin_sessions(expires_at, last_seen_at);
-    `);
-    const rawVersion = Number(this.metadata("storage-schema-version") ?? 0);
-    const schemaVersion = Number.isSafeInteger(rawVersion) && rawVersion >= 0 ? rawVersion : 0;
-    if (schemaVersion < 2) {
-      this.database.prepare("UPDATE request_logs SET search_text = '' WHERE search_text <> ''").run();
-      this.setMetadata("storage-schema-version", "2");
-    }
-    if (schemaVersion < 3) {
-      this.transaction(() => {
-        this.database.prepare("DELETE FROM model_call_aggregates").run();
-        const rows = this.database.prepare(`
-          SELECT data_json FROM request_logs WHERE category = 'model.response' ORDER BY row_id
-        `).all() as SqlRow[];
-        for (const row of rows) {
-          const measurement = modelCallMeasurement(parseObject(row.data_json));
-          if (measurement) this.appendModelCallAggregateUnsafe(measurement);
-        }
-        this.setMetadata("storage-schema-version", "3");
-      });
-    }
-    if (schemaVersion < 4) this.setMetadata("storage-schema-version", "4");
-  }
-
-  private appendModelCallAggregateUnsafe(measurement: ModelCallMeasurement) {
-    const upsert = this.database.prepare(`
-      INSERT INTO model_call_aggregates (
-        conversation_id, behavior, memory_kind, input_tokens, output_tokens,
-        total_tokens, cached_input_tokens, requests, measured_input_tokens,
-        measured_cached_input_tokens, cache_reports
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
-      ON CONFLICT(conversation_id, behavior, memory_kind) DO UPDATE SET
-        input_tokens = MIN(9007199254740991, input_tokens + excluded.input_tokens),
-        output_tokens = MIN(9007199254740991, output_tokens + excluded.output_tokens),
-        total_tokens = MIN(9007199254740991, total_tokens + excluded.total_tokens),
-        cached_input_tokens = MIN(9007199254740991, cached_input_tokens + excluded.cached_input_tokens),
-        requests = MIN(9007199254740991, requests + 1),
-        measured_input_tokens = MIN(9007199254740991, measured_input_tokens + excluded.measured_input_tokens),
-        measured_cached_input_tokens = MIN(9007199254740991, measured_cached_input_tokens + excluded.measured_cached_input_tokens),
-        cache_reports = MIN(9007199254740991, cache_reports + excluded.cache_reports)
-    `);
-    const scopes = measurement.conversationId ? ["", measurement.conversationId] : [""];
-    for (const conversationId of scopes) {
-      upsert.run(
-        conversationId,
-        measurement.behavior,
-        measurement.memoryKind,
-        measurement.input,
-        measurement.output,
-        measurement.total,
-        measurement.cachedInput,
-        measurement.cacheReported ? measurement.input : 0,
-        measurement.cacheReported ? measurement.cachedInput : 0,
-        measurement.cacheReported ? 1 : 0
-      );
-    }
   }
 
   private replaceMemoryUnsafe(source: MemoryDataSource, records: readonly JsonObject[]) {
@@ -567,6 +494,31 @@ export class ApplicationDataStore {
 
 function count(row: unknown) {
   return Number((row as SqlRow | undefined)?.count ?? 0);
+}
+
+function mapAgentRegistryRow(row: SqlRow): AgentRegistryRow {
+  return {
+    id: String(row.id),
+    name: String(row.name),
+    enabled: Number(row.enabled) === 1,
+    workspace: String(row.workspace),
+    ...(row.avatar_path == null || String(row.avatar_path).trim() === "" ? {} : { avatarPath: String(row.avatar_path) }),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at)
+  };
+}
+
+function mapAgentAccountRegistryRow(row: SqlRow): AgentAccountRegistryRow {
+  return {
+    id: String(row.id),
+    agentId: String(row.agent_id),
+    label: String(row.label),
+    ...(row.qq_id == null || String(row.qq_id).trim() === "" ? {} : { qqId: String(row.qq_id) }),
+    enabled: Number(row.enabled) === 1,
+    webuiPort: Number(row.webui_port),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at)
+  };
 }
 
 function parseObject(value: unknown) {
@@ -630,8 +582,4 @@ function readImageHistoryJson(filePath: string) {
     typeof (record as ImageHistoryRecord).url === "string" &&
     typeof (record as ImageHistoryRecord).createdAt === "string"
   ));
-}
-
-function escapeLike(value: string) {
-  return value.replace(/[\\%_]/g, (match) => `\\${match}`);
 }

@@ -3,6 +3,11 @@ import { imageMediaAsset } from "../media/media.js";
 
 export type MessageScopeV1 = "private" | "user_group" | "bot_group";
 
+export interface MessagingConnectionContextV1 {
+  accountId: string;
+  selfId?: string;
+}
+
 export interface SenderIdentityV1 {
   id: string;
   nickname?: string;
@@ -22,6 +27,8 @@ export interface MessageQuoteV1 {
 export interface InboundMessageV1 {
   schemaVersion: 1;
   transport?: "onebot" | "web";
+  agentId?: string;
+  accountId?: string;
   scope: MessageScopeV1;
   messageId?: number;
   time: string;
@@ -41,6 +48,8 @@ export interface OutboundMessageV1 {
   schemaVersion: 1;
   id: string;
   conversationId: string;
+  agentId?: string;
+  accountId?: string;
   scope: MessageScopeV1;
   userId: number;
   groupId?: number;
@@ -54,6 +63,7 @@ export interface MessagingStatusV1 {
   connected: boolean;
   connections: number;
   selfIds: string[];
+  accounts?: Array<{ accountId: string; selfId?: string; connectedAt: string }>;
   connectedAt?: string;
   lastEventAt?: string;
   lastMessageEventAt?: string;
@@ -64,13 +74,21 @@ export interface MessagingReceiptV1 {
   messageId?: string;
 }
 
+export interface PokeTargetV1 {
+  accountId?: string;
+  userId: number;
+  groupId?: number;
+}
+
 export interface SenderLookupV1 {
+  accountId?: string;
   userId: number;
   groupId?: number;
   current?: SenderIdentityV1;
 }
 
 export interface MessageLookupContextV1 {
+  accountId?: string;
   source?: "message" | "quote" | "group_upload";
   groupId?: number;
   userId?: number;
@@ -110,6 +128,7 @@ export interface ConversationDirectoryPort {
 export interface MessagingPort {
   getStatus(): MessagingStatusV1;
   send(message: OutboundMessageV1): Promise<MessagingReceiptV1>;
+  poke?(target: PokeTargetV1): Promise<MessagingReceiptV1>;
   resolveSender(input: SenderLookupV1): Promise<SenderIdentityV1>;
   getMessage(messageId: number, context?: MessageLookupContextV1): Promise<MessageDetailsV1>;
 }
@@ -148,6 +167,8 @@ export function decodeInboundMessageV1(value: unknown): InboundMessageV1 {
   return {
     schemaVersion: 1,
     ...(input.transport === "web" ? { transport: "web" as const } : {}),
+    ...(typeof input.agentId === "string" && input.agentId.trim() ? { agentId: input.agentId.trim() } : {}),
+    ...(typeof input.accountId === "string" && input.accountId.trim() ? { accountId: input.accountId.trim() } : {}),
     scope,
     ...(positiveInteger(input.messageId ?? legacyEvent.message_id) ? {
       messageId: positiveInteger(input.messageId ?? legacyEvent.message_id)

@@ -240,6 +240,31 @@ export function runtime_recordAssistantTurnTools(this: RuntimeHost,
     }
     if (changed) this.persistConversationRecords();
   }
+export function runtime_discardAssistantRequest(this: RuntimeHost,
+    incoming: ParsedIncomingMessage,
+    logRunId: string
+  ) {
+    const record = this.conversationRecords.get(conversationRecordId(incoming));
+    if (!record) return false;
+    const index = record.messages.findIndex((message) => (
+      message.role === "assistant"
+      && message.logRunId === logRunId
+      && message.requestStatus === "running"
+    ));
+    if (index < 0) return false;
+    const [removed] = record.messages.splice(index, 1);
+    if (removed?.sequence === record.messageCount) {
+      record.messageCount = Math.max(0, record.messageCount - 1);
+    }
+    const last = record.messages.at(-1);
+    if (last) {
+      record.lastAt = last.at;
+      record.lastText = conversationLastText(last);
+      record.selfId = last.selfId ?? record.selfId;
+    }
+    this.persistConversationRecords();
+    return true;
+  }
 export function runtime_ensureConversationRecord(this: RuntimeHost, incoming: ParsedIncomingMessage, at: string) {
     const id = conversationRecordId(incoming);
     const existing = this.conversationRecords.get(id);
@@ -247,6 +272,8 @@ export function runtime_ensureConversationRecord(this: RuntimeHost, incoming: Pa
 
     const record: ConversationRecord = {
       id,
+      agentId: incoming.agentId,
+      accountId: incoming.accountId,
       scope: incoming.scope,
       title: conversationTitle(incoming),
       userId: incoming.userId,
@@ -338,6 +365,7 @@ export class RuntimeConversations {
   recordAssistantRequestStarted(...args: Parameters<typeof runtime_recordAssistantRequestStarted>) { return runtime_recordAssistantRequestStarted.call(this.host, ...args); }
   recordAssistantMessage(...args: Parameters<typeof runtime_recordAssistantMessage>) { return runtime_recordAssistantMessage.call(this.host, ...args); }
   recordAssistantTurnTools(...args: Parameters<typeof runtime_recordAssistantTurnTools>) { return runtime_recordAssistantTurnTools.call(this.host, ...args); }
+  discardAssistantRequest(...args: Parameters<typeof runtime_discardAssistantRequest>) { return runtime_discardAssistantRequest.call(this.host, ...args); }
   ensureConversationRecord(...args: Parameters<typeof runtime_ensureConversationRecord>) { return runtime_ensureConversationRecord.call(this.host, ...args); }
   upsertConversationRecordForReplySetting(...args: Parameters<typeof runtime_upsertConversationRecordForReplySetting>) { return runtime_upsertConversationRecordForReplySetting.call(this.host, ...args); }
   persistConversationRecords(...args: Parameters<typeof runtime_persistConversationRecords>) { return runtime_persistConversationRecords.call(this.host, ...args); }

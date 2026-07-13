@@ -42,6 +42,7 @@ beforeEach(async () => {
   configStore.rootDir = rootDir;
   configStore.configPath = path.join(rootDir, "sunabot.json");
   configStore.config = createAdminTestConfig(rootDir);
+  configStore.config.persona.agentWorkspace = "workspace/business/agents/plana";
   delete process.env.SUNABOT_TEST_MISSING_API_KEY;
   await fs.writeFile(configStore.configPath, `${JSON.stringify(configStore.config, null, 2)}\n`, "utf8");
 });
@@ -92,7 +93,9 @@ describe("ConfigService", () => {
       value: {
         adminQq: "3971235731",
         adminName: "Updated Admin",
+        pokeOnNoReply: true,
         quoteGroupReplies: false,
+        quoteGroupReplyExcludedUserIds: ["20001", "20002"],
         contextMessageLimit: 64
       }
     });
@@ -108,7 +111,9 @@ describe("ConfigService", () => {
     expect(currentConfig().bot).toMatchObject({
       adminQq: "3971235731",
       adminName: "Updated Admin",
+      pokeOnNoReply: true,
       quoteGroupReplies: false,
+      quoteGroupReplyExcludedUserIds: ["20001", "20002"],
       contextMessageLimit: 64
     });
     expect(currentConfig().onebot.quoteGroupReplies).toBe(false);
@@ -135,6 +140,26 @@ describe("ConfigService", () => {
       code: "CONFIG_UNKNOWN_FIELD",
       field: "server.unexpected"
     });
+
+    expect(prepareApply).not.toHaveBeenCalled();
+    expect(currentConfig()).toEqual(before);
+  });
+
+  it("rejects arbitrary and absolute Plana workspace paths before preparing or persisting", async () => {
+    const prepareApply = vi.fn(async () => ({ commit: vi.fn() }));
+    const service = new ConfigService({ prepareApply, mutex: new AdminMutationMutex() });
+    const before = currentConfig();
+
+    for (const agentWorkspace of ["workspace/agents/plana", path.join(rootDir, "agent-workspace")]) {
+      await expect(service.patch("persona", {
+        revision: configRevision(before),
+        value: { agentWorkspace }
+      })).rejects.toMatchObject({
+        statusCode: 400,
+        code: "CONFIG_INVALID",
+        field: "persona.agentWorkspace"
+      });
+    }
 
     expect(prepareApply).not.toHaveBeenCalled();
     expect(currentConfig()).toEqual(before);
@@ -339,7 +364,9 @@ function botSection(adminName: string) {
   return {
     adminQq: bot.adminQq,
     adminName,
+    pokeOnNoReply: bot.pokeOnNoReply,
     quoteGroupReplies: bot.quoteGroupReplies,
+    quoteGroupReplyExcludedUserIds: bot.quoteGroupReplyExcludedUserIds,
     contextMessageLimit: bot.contextMessageLimit
   };
 }

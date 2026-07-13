@@ -9,6 +9,7 @@ export function formatExactNumber(value: number | null | undefined) {
 export function formatDashboardMetric(value: number | null | undefined) {
   const normalized = normalizeMetric(value);
   if (Math.abs(normalized) < 1_000) return exactNumber.format(normalized);
+  if (Math.abs(normalized) >= 1_000_000) return `${compactNumber.format(normalized / 1_000_000)}M`;
   return `${compactNumber.format(normalized / 1_000)}K`;
 }
 

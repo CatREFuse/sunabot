@@ -2,13 +2,17 @@ import type OpenAI from "openai";
 import type { BotConfig, ImageResult, ProviderConfig } from "../../../src/types.js";
 import type { OpenAIToolDefinition } from "../../../services/agent/promptSystem.js";
 import type { MemoryRecallInput } from "../../../services/memory/memoryService.js";
-import type { GenerateImageRunner } from "../../../services/tools/generateImgTool.js";
+import type {
+  GenerateImageRunner,
+  GenerateImgReferenceContext
+} from "../../../services/tools/generateImgTool.js";
 import type { SelfieRunner } from "../../../services/tools/selfieTool.js";
 import type { ProviderLogContext } from "../../../packages/contracts/model/modelGateway.js";
 import type { ImageGenerationFailureContext } from "../imageGenerationRetry.js";
 
 export interface ProviderCompleteOptions {
   signal?: AbortSignal;
+  allowNoReply?: boolean;
   bash?: ProviderBashOptions;
   bot?: BotConfig;
   generateImage?: GenerateImageRunner;
@@ -16,6 +20,7 @@ export interface ProviderCompleteOptions {
   onToolCall?: (name: string) => void;
   onImageGenerated?: (image: ImageResult) => void;
   referenceImageUrls?: string[];
+  imageReferences?: GenerateImgReferenceContext;
   memory?: ProviderMemoryOptions;
   selfie?: ProviderSelfieOptions;
   asyncCodex?: boolean;
@@ -41,7 +46,11 @@ export interface ProviderDeferredTurn {
   };
 }
 
-export type ProviderTurnResult = ProviderCompletedTurn | ProviderDeferredTurn;
+export interface ProviderNoReplyTurn {
+  kind: "no_reply";
+}
+
+export type ProviderTurnResult = ProviderCompletedTurn | ProviderDeferredTurn | ProviderNoReplyTurn;
 
 export interface ProviderBashOptions {
   enabled: boolean;
@@ -90,6 +99,11 @@ export interface ProviderToolExecutorPort {
     options: ProviderCompleteOptions,
     definitions: readonly Record<string, unknown>[]
   ): ProviderDeferredTurn | null;
+  noReplyTurn(
+    calls: ResponseFunctionCallItem[],
+    options: ProviderCompleteOptions,
+    definitions: readonly Record<string, unknown>[]
+  ): ProviderNoReplyTurn | null;
   execute(
     calls: ResponseFunctionCallItem[],
     options: ProviderCompleteOptions,

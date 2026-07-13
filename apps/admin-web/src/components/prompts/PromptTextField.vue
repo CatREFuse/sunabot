@@ -34,7 +34,8 @@ const suggestions = computed(() => {
 });
 const suggestionsOpen = computed(() => replaceStart.value >= 0 && suggestions.value.length > 0);
 const usedNames = computed(() => usedPromptVariableNames(model.value, props.variables));
-const highlightedContent = computed(() => `${highlightedPromptMarkup(model.value)}\n`);
+const variableNames = computed(() => new Set(props.variables.map((variable) => variable.name)));
+const highlightedContent = computed(() => `${highlightedPromptMarkup(model.value, variableNames.value)}\n`);
 const formatVariable = (name: string) => `@{${name}}`;
 
 function variableToken(name: string) {

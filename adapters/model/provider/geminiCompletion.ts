@@ -92,6 +92,8 @@ export async function completeGeminiGenerateContent(
 
     const deferred = context.toolExecutor.deferredTurn(calls, options, resolvedDefinitions);
     if (deferred) return deferred;
+    const noReply = context.toolExecutor.noReplyTurn(calls, options, resolvedDefinitions);
+    if (noReply) return noReply;
     if (text && options.onAssistantText) await options.onAssistantText(text, "text");
     contents.push({ role: "model", parts });
     const outputs = await context.toolExecutor.execute(calls, options, resolvedDefinitions);

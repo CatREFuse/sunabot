@@ -38,7 +38,7 @@ defineProps<{ models: readonly ModelCatalogItem[] }>();
       <label class="field sm:col-span-2">
         <span class="field-label">提示词文件</span>
         <input v-model.trim="draft.promptFile" class="control" type="text">
-        <RouterLink class="font-mono text-[11px] text-[rgb(var(--color-interactive))]" to="/prompts/orchestrator.user-group">编辑正文 →</RouterLink>
+        <RouterLink class="font-mono text-[11px] text-[rgb(var(--color-interactive))]" to="/system-prompts/orchestrator.user-group">编辑正文 →</RouterLink>
       </label>
     </fieldset>
   </section>

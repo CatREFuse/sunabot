@@ -6,11 +6,19 @@ import { usePromptLibrary } from "../composables/usePromptLibrary";
 import PromptEditor from "../components/prompts/PromptEditor.vue";
 import PromptFileList from "../components/prompts/PromptFileList.vue";
 import DialogOverlay from "../components/ui/DialogOverlay.vue";
+import ToggleSwitch from "../components/ui/ToggleSwitch.vue";
 import type { AgentFileDetail } from "../types";
+import { apiRequest } from "../composables/useAdminApi";
+import { activeAgentId } from "../composables/agentScope";
+
+const props = withDefaults(defineProps<{ scope?: "persona" | "system" }>(), { scope: "persona" });
 
 const route = useRoute();
 const router = useRouter();
-const library = usePromptLibrary();
+const overrideSystem = shallowRef(false);
+const overrideSaving = shallowRef(false);
+const overrideError = shallowRef("");
+const library = usePromptLibrary(props.scope, () => overrideSystem.value);
 const query = shallowRef("");
 const file = shallowRef<AgentFileDetail | null>(null);
 const content = shallowRef("");
@@ -23,11 +31,14 @@ const conflict = shallowRef(false);
 const confirmOpen = shallowRef(false);
 const pendingPath = shallowRef("");
 const selectedId = computed(() => String(route.params.fileId ?? ""));
+const basePath = computed(() => props.scope === "system" ? "/system-prompts" : "/agent-prompts");
+const pageTitle = computed(() => props.scope === "system" ? "系统提示词" : "人格提示词");
 const dirty = computed(() => content.value !== baseline.value);
 let openRequestId = 0;
 
-onMounted(() => {
-  void library.loadList();
+onMounted(async () => {
+  if (props.scope === "persona") await loadPromptSettings();
+  await library.loadList();
   window.addEventListener("keydown", onShortcut);
   window.addEventListener("beforeunload", onBeforeUnload);
 });
@@ -70,11 +81,11 @@ async function openFile(id: string) {
 function selectFile(id: string) {
   if (id === selectedId.value) return;
   if (dirty.value) {
-    pendingPath.value = `/prompts/${encodeURIComponent(id)}`;
+    pendingPath.value = `${basePath.value}/${encodeURIComponent(id)}`;
     confirmOpen.value = true;
     return;
   }
-  void router.push(`/prompts/${encodeURIComponent(id)}`);
+  void router.push(`${basePath.value}/${encodeURIComponent(id)}`);
 }
 
 async function save(): Promise<boolean> {
@@ -171,9 +182,46 @@ function cancelNavigation() {
 
 function backToList() {
   if (dirty.value) {
-    pendingPath.value = "/prompts";
+    pendingPath.value = basePath.value;
     confirmOpen.value = true;
-  } else void router.push("/prompts");
+  } else void router.push(basePath.value);
+}
+
+async function loadPromptSettings() {
+  try {
+    const settings = await apiRequest<{ overrideSystem: boolean }>(
+      `/api/agents/${encodeURIComponent(activeAgentId())}/prompt-settings`
+    );
+    overrideSystem.value = settings.overrideSystem;
+    overrideError.value = "";
+  } catch (error) {
+    overrideError.value = error instanceof Error ? error.message : "设置读取失败";
+  }
+}
+
+async function setSystemOverride(value: boolean) {
+  if (overrideSaving.value || value === overrideSystem.value) return;
+  if (dirty.value) {
+    overrideError.value = "请先保存或撤销当前修改";
+    return;
+  }
+  overrideSaving.value = true;
+  overrideError.value = "";
+  try {
+    const settings = await apiRequest<{ overrideSystem: boolean }>(
+      `/api/agents/${encodeURIComponent(activeAgentId())}/prompt-settings`,
+      { method: "PATCH", body: JSON.stringify({ overrideSystem: value }) }
+    );
+    overrideSystem.value = settings.overrideSystem;
+    if (!settings.overrideSystem && selectedId.value && !selectedId.value.startsWith("persona.")) {
+      await router.push(basePath.value);
+    }
+    await library.loadList();
+  } catch (error) {
+    overrideError.value = error instanceof Error ? error.message : "设置保存失败";
+  } finally {
+    overrideSaving.value = false;
+  }
 }
 
 function setMessage(value: string, kind: "" | "success" | "error" | "warning") {
@@ -191,9 +239,23 @@ function setMessage(value: string, kind: "" | "success" | "error" | "warning") {
         :selected-id="selectedId"
         :query="query"
         :error="library.listError.value"
+        :title="pageTitle"
         @select="selectFile"
         @update:query="query = $event"
-      />
+      >
+        <template v-if="props.scope === 'persona'" #headerAfter>
+          <div class="mt-4 border-y border-line py-2">
+            <ToggleSwitch
+              :model-value="overrideSystem"
+              label="覆盖系统提示词"
+              description="为当前 Agent 使用独立系统提示词"
+              :disabled="overrideSaving"
+              @update:model-value="setSystemOverride"
+            />
+          </div>
+          <p v-if="overrideError" class="mt-3 text-xs text-accent">{{ overrideError }}</p>
+        </template>
+      </PromptFileList>
       <PromptEditor
         :class="selectedId ? 'flex' : 'hidden lg:flex'"
         v-model="content"

@@ -44,6 +44,7 @@ beforeEach(async () => {
   configStore.rootDir = rootDir;
   configStore.configPath = path.join(rootDir, "sunabot.json");
   configStore.config = createAdminTestConfig(rootDir);
+  configStore.config.persona.agentWorkspace = "workspace/business/agents/plana";
   activeConfig = structuredClone(configStore.config);
   delete process.env.SUNABOT_TEST_MISSING_API_KEY;
   await fs.writeFile(configStore.configPath, `${JSON.stringify(configStore.config, null, 2)}\n`, "utf8");
@@ -320,12 +321,78 @@ describe("ConfigService section semantics", () => {
       value: {
         adminQq: envelope.config.bot.adminQq,
         adminName: envelope.config.bot.adminName,
+        pokeOnNoReply: envelope.config.bot.pokeOnNoReply,
         quoteGroupReplies: !envelope.config.bot.quoteGroupReplies,
+        quoteGroupReplyExcludedUserIds: ["20001", "20001", "20002"],
         contextMessageLimit: envelope.config.bot.contextMessageLimit
       }
     });
 
     expect(result.config.onebot.quoteGroupReplies).toBe(result.config.bot.quoteGroupReplies);
+    expect(result.config.bot.quoteGroupReplyExcludedUserIds).toEqual(["20001", "20002"]);
+  });
+
+  it("rejects non-numeric QQ values in the quote filter", async () => {
+    const subject = service();
+    const envelope = await subject.readEnvelope();
+
+    await expect(subject.patch("bot", {
+      revision: envelope.revision,
+      value: {
+        adminQq: envelope.config.bot.adminQq,
+        adminName: envelope.config.bot.adminName,
+        pokeOnNoReply: envelope.config.bot.pokeOnNoReply,
+        quoteGroupReplies: envelope.config.bot.quoteGroupReplies,
+        quoteGroupReplyExcludedUserIds: ["20001", "another-bot"],
+        contextMessageLimit: envelope.config.bot.contextMessageLimit
+      }
+    })).rejects.toMatchObject({
+      statusCode: 400,
+      code: "CONFIG_INVALID",
+      field: "bot.quoteGroupReplyExcludedUserIds.1"
+    });
+  });
+
+  it("hot-applies the system broadcast storm settings", async () => {
+    const subject = service();
+    const envelope = await subject.readEnvelope();
+
+    const result = await subject.patch("broadcastStorm", {
+      revision: envelope.revision,
+      value: {
+        enabled: false,
+        windowMinutes: 5,
+        replyThreshold: 6,
+        cooldownMinutes: 7
+      }
+    });
+
+    expect(result.applyMode).toBe("hot");
+    expect(result.config.broadcastStorm).toEqual({
+      enabled: false,
+      windowMinutes: 5,
+      replyThreshold: 6,
+      cooldownMinutes: 7
+    });
+  });
+
+  it("rejects invalid broadcast storm parameters", async () => {
+    const subject = service();
+    const envelope = await subject.readEnvelope();
+
+    await expect(subject.patch("broadcastStorm", {
+      revision: envelope.revision,
+      value: {
+        enabled: true,
+        windowMinutes: 0,
+        replyThreshold: 3,
+        cooldownMinutes: 1
+      }
+    })).rejects.toMatchObject({
+      statusCode: 400,
+      code: "CONFIG_INVALID",
+      field: "broadcastStorm.windowMinutes"
+    });
   });
 
   it("verifies a prepared apply before writing config and leaves disk unchanged when verification fails", async () => {

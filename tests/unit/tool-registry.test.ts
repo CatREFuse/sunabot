@@ -37,6 +37,76 @@ describe("ToolRegistry", () => {
     expect(providerToolExecutionMode("assistant_text")).toBe("inline");
   });
 
+  it("injects no_reply into legacy reply prompts and accepts it only as a terminal solo call", () => {
+    const used: string[] = [];
+    const options = {
+      allowNoReply: true,
+      onToolCall: (name: string) => used.push(name)
+    } satisfies ProviderCompleteOptions;
+    const executor = new RegistryProviderToolExecutor();
+    const definitions = executor.resolveDefinitions(options, []);
+    const call = {
+      type: "function_call" as const,
+      name: "no_reply",
+      call_id: "call-no-reply",
+      arguments: "{}"
+    };
+
+    expect(definitions).toEqual([
+      expect.objectContaining({
+        name: "no_reply",
+        strict: true,
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          properties: {},
+          required: []
+        }
+      })
+    ]);
+    expect(listToolMetadata(options, []).find((tool) => tool.name === "no_reply")).toMatchObject({
+      promptEnabled: true,
+      enabled: true,
+      available: true,
+      effectiveEnabled: true,
+      execution: "inline"
+    });
+    expect(executor.noReplyTurn([call], options, definitions)).toEqual({ kind: "no_reply" });
+    expect(used).toEqual(["no_reply"]);
+  });
+
+  it("rejects no_reply mixed with another tool without executing either call", async () => {
+    const delivered: string[] = [];
+    const used: string[] = [];
+    const options = {
+      allowNoReply: true,
+      onAssistantText: (text: string) => { delivered.push(text); },
+      onToolCall: (name: string) => { used.push(name); }
+    } satisfies ProviderCompleteOptions;
+    const executor = new RegistryProviderToolExecutor();
+    const definitions = executor.resolveDefinitions(options, [staleTool("assistant_text")]);
+    const calls = [{
+      type: "function_call" as const,
+      name: "no_reply",
+      call_id: "call-no-reply-mixed",
+      arguments: "{}"
+    }, {
+      type: "function_call" as const,
+      name: "assistant_text",
+      call_id: "call-assistant-text-mixed",
+      arguments: JSON.stringify({ text: "不应发送" })
+    }];
+
+    expect(executor.noReplyTurn(calls, options, definitions)).toBeNull();
+    const outputs = await executor.execute(calls, options, definitions);
+    expect(outputs.map((output) => JSON.parse(String(output.output)))).toEqual([
+      { ok: false, error: "no_reply must be called alone before any other tool." },
+      { ok: false, error: "no_reply must be called alone before any other tool." }
+    ]);
+    expect(delivered).toEqual([]);
+    expect(used).toEqual([]);
+  });
+
   it("forces dispatch_message into deferred definitions after prompt overrides", () => {
     const executor = new RegistryProviderToolExecutor();
     const [codex] = executor.resolveDefinitions({ asyncCodex: true }, [staleTool("codex")]);
@@ -67,6 +137,65 @@ describe("ToolRegistry", () => {
     expect(deferredParameters.required).toContain("dispatch_message");
     expect(inlineParameters.properties.dispatch_message).toBeUndefined();
     expect(inlineParameters.required).not.toContain("dispatch_message");
+  });
+
+  it("restores the canonical history-reference contract over stale prompt schemas", () => {
+    const executor = new RegistryProviderToolExecutor();
+    const options = {
+      bot: { tools: { generateImg: {} } },
+      asyncImage: true
+    } as unknown as ProviderCompleteOptions;
+    const definition = executor.resolveDefinitions(options, [staleTool("generate_img")])
+      .find((item) => item.name === "generate_img");
+    const parameters = definition?.parameters as Record<string, any>;
+
+    expect(definition?.description).toContain("historical media handles");
+    expect(parameters.properties.referenceMediaHandles).toMatchObject({
+      type: ["array", "null"],
+      maxItems: 4
+    });
+    expect(parameters.properties.referenceImageSource.enum).toEqual([
+      "none",
+      "current",
+      "previous_output",
+      "history",
+      "current_and_history"
+    ]);
+    expect(parameters.required).toEqual(expect.arrayContaining([
+      "referenceMediaHandles",
+      "referenceImageSource",
+      "dispatch_message"
+    ]));
+    expect(parameters.properties.task).toBeUndefined();
+  });
+
+  it("restores the canonical history-reference contract for selfie", () => {
+    const executor = new RegistryProviderToolExecutor();
+    const options = {
+      selfie: { enabled: true },
+      asyncImage: true
+    } as unknown as ProviderCompleteOptions;
+    const definition = executor.resolveDefinitions(options, [staleTool("selfie")])
+      .find((item) => item.name === "selfie");
+    const parameters = definition?.parameters as Record<string, any>;
+
+    expect(definition?.description).toContain("historical media handles");
+    expect(parameters.properties.referenceMediaHandles).toMatchObject({
+      type: ["array", "null"],
+      maxItems: 4
+    });
+    expect(parameters.properties.referenceImageSource.enum).toEqual([
+      "none",
+      "current",
+      "previous_output",
+      "history",
+      "current_and_history"
+    ]);
+    expect(parameters.required).toEqual(expect.arrayContaining([
+      "referenceMediaHandles",
+      "referenceImageSource",
+      "dispatch_message"
+    ]));
   });
 
   it("removes image tools when the delivery target cannot receive image tasks", () => {
@@ -138,31 +267,24 @@ describe("ToolRegistry", () => {
     });
   });
 
-  it("hard-disables provider schemas, deferred dispatch and execution", async () => {
+  it("ignores generic enabled overrides for direct-runtime tools", () => {
     const options = {
       asyncCodex: true,
       bot: {
         tools: {
           websearch: {},
           generateImg: {},
-          overrides: { codex: { enabled: false } }
+          overrides: { codex: { enabled: false, description: "Direct Codex description." } }
         }
       }
     } as unknown as ProviderCompleteOptions;
 
-    expect(resolveProviderToolDefinitions(options, [staleTool("codex")])).toEqual([]);
-    expect(providerToolExecutionMode("codex", options)).toBeUndefined();
-    const executor = new RegistryProviderToolExecutor();
-    const call = {
-      type: "function_call" as const,
-      name: "codex",
-      call_id: "call-disabled",
-      arguments: JSON.stringify({ task: "inspect", kind: "analysis", dispatch_message: "开始处理。" })
-    };
-    const definitions = executor.resolveDefinitions(options, [staleTool("codex")]);
-    expect(executor.deferredTurn([call], options, definitions)).toBeNull();
-    const [output] = await executor.execute([call], options, definitions);
-    expect(JSON.parse(String(output?.output))).toEqual({ ok: false, error: "Unsupported tool: codex" });
+    expect(resolveProviderToolDefinitions(options, [staleTool("codex")])).toEqual([
+      expect.objectContaining({ name: "codex", description: "Direct Codex description." })
+    ]);
+    expect(providerToolExecutionMode("codex", options)).toBe("deferred");
+    expect(listToolMetadata(options, [staleTool("codex")]).find((tool) => tool.name === "codex"))
+      .toMatchObject({ configuredEnabled: null, enabled: true });
   });
 
   it("does not dispatch or execute a deferred tool whose runtime capability is unavailable", async () => {
