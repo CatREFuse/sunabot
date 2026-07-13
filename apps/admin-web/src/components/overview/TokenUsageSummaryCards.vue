@@ -66,7 +66,7 @@ const metrics = computed<SummaryMetric[]>(() => {
 .token-card strong { display: block; margin-top: 16px; color: rgb(var(--color-display)); font-family: "Space Mono", monospace; font-size: 32px; font-weight: 700; line-height: .92; letter-spacing: -.045em; }
 .token-card__exact { display: block; margin-top: 8px; overflow-wrap: anywhere; color: rgb(var(--color-disabled)); font-family: "Space Mono", monospace; font-size: 9px; }
 .token-card--hero { grid-column: 1 / -1; min-height: 172px; border-bottom: 1px solid rgb(var(--color-line)); padding: 24px 0 28px; }
-.token-card--hero strong { margin-top: 26px; font-size: clamp(48px, 8vw, 64px); }
+.token-card--hero strong { margin-top: 26px; font-family: "Doto Variable", "Space Mono", monospace; font-size: clamp(48px, 8vw, 64px); }
 .token-card--metric { min-height: 132px; border-bottom: 1px solid rgb(var(--color-line)); padding: 18px 14px; }
 .token-card--metric:nth-child(odd) { border-left: 1px solid rgb(var(--color-line)); }
 .token-card--request { grid-column: 1 / -1; min-height: 112px; border-bottom: 0; border-left: 0; padding-inline: 0; }

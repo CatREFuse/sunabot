@@ -29,6 +29,8 @@ test("状态页展示 Token 缓存、日历与小时分布，并安全处理未�
   const summary = section.getByLabel("今日 Token 统计");
   await expect(section).toContainText("16.1K");
   await expect(section).toContainText("16,100");
+  const heroFont = await summary.locator(".token-card--hero strong").evaluate((element) => getComputedStyle(element).fontFamily);
+  expect(heroFont).toContain("Doto Variable");
   await expect(summary.getByText("缓存输入", { exact: true })).toBeVisible();
   await expect(summary.getByText("7.2K", { exact: true })).toBeVisible();
   await expect(summary.getByText("缓存率", { exact: true })).toBeVisible();
