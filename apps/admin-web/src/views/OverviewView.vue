@@ -221,7 +221,7 @@ async function openNapCat(route = "/api/onebot/napcat-webui-url") {
 .count-card__icon { width: 36px; height: 36px; color: rgb(var(--color-interactive)); }
 .count-card[data-tone="success"] .count-card__icon { color: rgb(var(--color-success)); }
 .count-card[data-tone="warning"] .count-card__icon { color: rgb(var(--color-warning)); }
-.count-card strong { display: block; margin-top: 7px; color: rgb(var(--color-display)); font-family: "Space Mono", monospace; font-size: 30px; font-weight: 700; line-height: 1; letter-spacing: -.035em; }
+.count-card strong { display: block; margin-top: 7px; color: rgb(var(--color-display)); font-family: "Doto Variable", "Space Mono", monospace; font-size: 30px; font-weight: 700; line-height: 1; letter-spacing: -.035em; }
 .count-card small { display: block; margin-top: 6px; color: rgb(var(--color-disabled)); font-family: "Space Mono", monospace; font-size: 9px; }
 .health-mosaic { display: grid; margin-top: 48px; border-top: 1px solid rgb(var(--color-line)); }
 .health-card { display: flex; min-height: 104px; align-items: center; gap: 16px; border-bottom: 1px solid rgb(var(--color-line)); padding: 20px 0; }
