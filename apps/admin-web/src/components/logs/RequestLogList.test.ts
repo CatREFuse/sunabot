@@ -94,7 +94,7 @@ describe("RequestLogList", () => {
 
     const usage = wrapper.get('[aria-label="Token 用量"]');
     expect(usage.text()).toContain("缓存率0%");
-    expect(usage.text()).toContain("0 / 11,939");
+    expect(usage.get('[data-metric="rate"] dd').attributes("title")).toBe("0 / 11,939");
     expect(usage.text()).not.toContain("缓存率--");
   });
 });

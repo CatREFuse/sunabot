@@ -28,7 +28,10 @@ test("状态页展示 Token 缓存、日历与小时分布，并安全处理未�
   const section = page.getByLabel("Token 消耗统计");
   const summary = section.getByLabel("今日 Token 统计");
   await expect(section).toContainText("16.1K");
-  await expect(section).toContainText("16,100");
+  await expect(summary.locator(".token-card--hero strong")).toHaveAttribute("title", "16,100");
+  await expect(summary.locator(".token-card__exact")).toHaveCount(0);
+  await expect(page.locator(".count-card small")).toHaveCount(0);
+  await expect(page.locator(".count-card strong").first()).toHaveAttribute("title", "128");
   const metricFonts = await summary.locator(".token-card strong").evaluateAll((elements) => elements.map((element) => getComputedStyle(element).fontFamily));
   expect(metricFonts.every((font) => font.includes("Doto Variable"))).toBe(true);
   const countFonts = await page.locator(".count-card strong").evaluateAll((elements) => elements.map((element) => getComputedStyle(element).fontFamily));
@@ -109,6 +112,7 @@ test("日志使用纵向时间轴、结构化用量与原始响应，并同时�
   const anthropic = list.locator("article").filter({ hasText: "anthropic.messages.complete" });
   await expect(anthropic.getByText("缓存输入", { exact: true })).toBeVisible();
   await expect(anthropic.getByText("缓存率", { exact: true })).toBeVisible();
+  await expect(anthropic.locator(".request-usage small")).toHaveCount(0);
   await anthropic.getByText("响应体", { exact: true }).click();
   await anthropic.locator("summary").filter({ hasText: /^usage/ }).click();
   await expect(anthropic.getByText("cache_creation_input_tokens", { exact: true })).toBeVisible();

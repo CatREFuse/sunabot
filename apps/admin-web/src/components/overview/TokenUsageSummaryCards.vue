@@ -41,7 +41,6 @@ const metrics = computed<SummaryMetric[]>(() => {
     <article class="token-card token-card--hero">
       <span class="token-card__label"><i class="bx bx-bolt-circle" aria-hidden="true"></i>今日总量</span>
       <strong :title="formatExactNumber(usage?.total)">{{ formatDashboardMetric(usage?.total) }}</strong>
-      <span class="token-card__exact">{{ formatExactNumber(usage?.total) }} Token</span>
     </article>
 
     <article
@@ -54,7 +53,6 @@ const metrics = computed<SummaryMetric[]>(() => {
       <span class="token-card__icon"><i class="bx" :class="metric.icon" aria-hidden="true"></i></span>
       <span class="token-card__label">{{ metric.label }}</span>
       <strong :title="metric.exact || metric.display">{{ metric.display }}</strong>
-      <span v-if="metric.exact" class="token-card__exact">{{ metric.exact }}</span>
     </article>
   </section>
 </template>
@@ -64,7 +62,6 @@ const metrics = computed<SummaryMetric[]>(() => {
 .token-card { position: relative; min-width: 0; overflow: hidden; background: transparent; padding: 18px 0; }
 .token-card__label { display: flex; align-items: center; gap: 7px; color: rgb(var(--color-mute)); font-family: "Space Mono", monospace; font-size: 10px; letter-spacing: .06em; text-transform: uppercase; }
 .token-card strong { display: block; margin-top: 16px; color: rgb(var(--color-display)); font-family: "Doto Variable", "Space Mono", monospace; font-size: 32px; font-weight: 700; line-height: .92; letter-spacing: -.045em; }
-.token-card__exact { display: block; margin-top: 8px; overflow-wrap: anywhere; color: rgb(var(--color-disabled)); font-family: "Space Mono", monospace; font-size: 9px; }
 .token-card--hero { grid-column: 1 / -1; min-height: 172px; border-bottom: 1px solid rgb(var(--color-line)); padding: 24px 0 28px; }
 .token-card--hero strong { margin-top: 26px; font-size: clamp(48px, 8vw, 64px); }
 .token-card--metric { min-height: 132px; border-bottom: 1px solid rgb(var(--color-line)); padding: 18px 14px; }

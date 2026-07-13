@@ -161,7 +161,7 @@ async function openNapCat(route = "/api/onebot/napcat-webui-url") {
       <section class="count-mosaic" aria-label="内容统计">
         <article v-for="metric in countMetrics" :key="metric.label" class="count-card" :data-tone="metric.tone">
           <span class="count-card__icon"><i class="bx" :class="metric.icon" aria-hidden="true"></i></span>
-          <div class="min-w-0"><span class="meta-label">{{ metric.label }}</span><strong :title="formatExactNumber(metric.value)">{{ formatDashboardMetric(metric.value) }}</strong><small>{{ formatExactNumber(metric.value) }} 条</small></div>
+          <div class="min-w-0"><span class="meta-label">{{ metric.label }}</span><strong :title="formatExactNumber(metric.value)">{{ formatDashboardMetric(metric.value) }}</strong></div>
         </article>
       </section>
 
@@ -222,7 +222,6 @@ async function openNapCat(route = "/api/onebot/napcat-webui-url") {
 .count-card[data-tone="success"] .count-card__icon { color: rgb(var(--color-success)); }
 .count-card[data-tone="warning"] .count-card__icon { color: rgb(var(--color-warning)); }
 .count-card strong { display: block; margin-top: 7px; color: rgb(var(--color-display)); font-family: "Doto Variable", "Space Mono", monospace; font-size: 30px; font-weight: 700; line-height: 1; letter-spacing: -.035em; }
-.count-card small { display: block; margin-top: 6px; color: rgb(var(--color-disabled)); font-family: "Space Mono", monospace; font-size: 9px; }
 .health-mosaic { display: grid; margin-top: 48px; border-top: 1px solid rgb(var(--color-line)); }
 .health-card { display: flex; min-height: 104px; align-items: center; gap: 16px; border-bottom: 1px solid rgb(var(--color-line)); padding: 20px 0; }
 .health-card__icon { width: 32px; height: 32px; color: rgb(var(--color-interactive)); }
