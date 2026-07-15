@@ -27,6 +27,297 @@ afterEach(async () => {
 });
 
 describe("SessionCoordinator", () => {
+  it("keeps probing a paused partition after remote success followed by settle failure", async () => {
+    const store = trackStore(new SessionStore({ databasePath: ":memory:" }));
+    let attempts = 0;
+    let remoteSends = 0;
+    let failSettle = true;
+    const coordinator = trackCoordinator(createCoordinator({
+      store,
+      outboxRetryDelayMs: 0,
+      outboxDisconnectedProbeDelayMs: 5,
+      handleEvent: (event) => ({
+        status: "completed",
+        outbox: [{
+          kind: "onebot.reply",
+          deliveryPartition: "qq-probe",
+          payload: event.payload
+        }]
+      }),
+      deliverOutbox: async (_outbox, context) => {
+        attempts += 1;
+        if (attempts === 1) throw new OutboxDisconnectedError();
+        if (context.phase === "send") {
+          await context.sendRemote(async () => {
+            remoteSends += 1;
+            return { accepted: true };
+          });
+        }
+        await context.settleStep("projection", () => {
+          if (failSettle) {
+            failSettle = false;
+            throw new Error("settle once");
+          }
+        });
+      }
+    }));
+
+    coordinator.resume();
+    coordinator.enqueueEvent({ sessionId: "group:probe:1", kind: "incoming", payload: { text: "first" } });
+    coordinator.enqueueEvent({ sessionId: "group:probe:2", kind: "incoming", payload: { text: "second" } });
+
+    await waitUntil(() => store.listOutbox("group:probe:2")[0]?.status === "sent");
+    expect(remoteSends).toBe(2);
+    expect(store.listOutbox("group:probe:1")[0]).toMatchObject({ status: "sent", settleAttempts: 1 });
+  });
+
+  it.each(["delivery_unknown", "pre_remote"] as const)(
+    "reschedules a paused partition after a %s probe terminal",
+    async (probeTerminal) => {
+      const store = trackStore(new SessionStore({ databasePath: ":memory:" }));
+      let attempts = 0;
+      const coordinator = trackCoordinator(createCoordinator({
+        store,
+        outboxRetryDelayMs: 0,
+        outboxDisconnectedProbeDelayMs: 5,
+        handleEvent: (event) => ({
+          status: "completed",
+          outbox: [{ kind: "onebot.reply", deliveryPartition: "qq-probe-terminal", payload: event.payload }]
+        }),
+        deliverOutbox: async (outbox, context) => {
+          const text = (outbox.payload as { text: string }).text;
+          if (text === "first") {
+            attempts += 1;
+            if (attempts === 1) throw new OutboxDisconnectedError();
+            if (attempts === 2 && probeTerminal === "delivery_unknown") {
+              await context.sendRemote(() => { throw new Error("transport result unknown"); });
+            }
+            if (attempts === 2 && probeTerminal === "pre_remote") throw new Error("failed before transport");
+          }
+          if (context.phase === "send") await context.sendRemote(() => ({ accepted: true }));
+        }
+      }));
+
+      coordinator.resume();
+      coordinator.enqueueEvent({ sessionId: "group:probe-terminal:1", kind: "incoming", payload: { text: "first" } });
+      coordinator.enqueueEvent({ sessionId: "group:probe-terminal:2", kind: "incoming", payload: { text: "second" } });
+
+      await waitUntil(() => store.listOutbox("group:probe-terminal:2")[0]?.status === "sent");
+      expect(store.listOutbox("group:probe-terminal:1")[0]?.status).toBe(
+        probeTerminal === "delivery_unknown" ? "delivery_unknown" : "sent"
+      );
+    }
+  );
+
+  it("isolates disconnected delivery partitions while online accounts keep FIFO progress", async () => {
+    const store = trackStore(new SessionStore({ databasePath: ":memory:" }));
+    const connected = new Map([["qq-offline", false], ["qq-online", true]]);
+    const attempts: string[] = [];
+    const coordinator = trackCoordinator(createCoordinator({
+      store,
+      outboxDisconnectedProbeDelayMs: 500,
+      handleEvent: (event) => ({
+        status: "completed",
+        outbox: [{
+          kind: "onebot.reply",
+          deliveryPartition: (event.payload as { accountId: string }).accountId,
+          payload: event.payload
+        }]
+      }),
+      deliverOutbox: async (outbox, context) => {
+        const accountId = outbox.deliveryPartition;
+        attempts.push(`${accountId}:${(outbox.payload as { text: string }).text}`);
+        if (!connected.get(accountId)) throw new OutboxDisconnectedError();
+        await context.sendRemote(async () => ({ accepted: true, messageId: outbox.id }));
+      }
+    }));
+
+    coordinator.resume();
+    coordinator.enqueueEvent({
+      sessionId: "group:offline:1",
+      kind: "incoming",
+      payload: { accountId: "qq-offline", text: "offline-1" }
+    });
+    coordinator.enqueueEvent({
+      sessionId: "group:offline:2",
+      kind: "incoming",
+      payload: { accountId: "qq-offline", text: "offline-2" }
+    });
+    coordinator.enqueueEvent({
+      sessionId: "group:online:1",
+      kind: "incoming",
+      payload: { accountId: "qq-online", text: "online-1" }
+    });
+    coordinator.enqueueEvent({
+      sessionId: "group:online:2",
+      kind: "incoming",
+      payload: { accountId: "qq-online", text: "online-2" }
+    });
+
+    await waitUntil(() => store.listOutbox("group:online:2")[0]?.status === "sent");
+    expect(attempts.filter((value) => value.startsWith("qq-online"))).toEqual([
+      "qq-online:online-1",
+      "qq-online:online-2"
+    ]);
+    expect(attempts.filter((value) => value.startsWith("qq-offline"))).toEqual([
+      "qq-offline:offline-1"
+    ]);
+
+    connected.set("qq-offline", true);
+    coordinator.resume("qq-offline");
+    await waitUntil(() => store.listOutbox("group:offline:2")[0]?.status === "sent");
+    expect(attempts.filter((value) => value.startsWith("qq-offline"))).toEqual([
+      "qq-offline:offline-1",
+      "qq-offline:offline-1",
+      "qq-offline:offline-2"
+    ]);
+  });
+
+  it.each([
+    "conversation_projection",
+    "request_log",
+    "after_reply"
+  ])("does not repeat remote delivery when the %s settle step fails", async (failingStep) => {
+    const store = trackStore(new SessionStore({ databasePath: ":memory:" }));
+    let remoteSends = 0;
+    let injected = false;
+    const completedSteps: string[] = [];
+    const coordinator = trackCoordinator(createCoordinator({
+      store,
+      outboxRetryDelayMs: 0,
+      handleEvent: () => ({
+        status: "completed",
+        outbox: [{
+          kind: "onebot.reply",
+          deliveryPartition: "qq-1",
+          payload: { text: "once" }
+        }]
+      }),
+      deliverOutbox: async (_outbox, context) => {
+        if (context.phase === "send") {
+          await context.sendRemote(async () => {
+            remoteSends += 1;
+            return { accepted: true, messageId: "remote-1" };
+          });
+        }
+        for (const step of ["conversation_projection", "request_log", "after_reply"]) {
+          await context.settleStep(step, async () => {
+            if (step === failingStep && !injected) {
+              injected = true;
+              throw new Error(`injected:${step}`);
+            }
+            completedSteps.push(step);
+          });
+        }
+      }
+    }));
+
+    coordinator.resume();
+    coordinator.enqueueEvent({ sessionId: `group:settle:${failingStep}`, kind: "incoming", payload: {} });
+    await waitUntil(() => store.listOutbox(`group:settle:${failingStep}`)[0]?.status === "sent");
+    const outbox = store.listOutbox(`group:settle:${failingStep}`)[0]!;
+    expect(remoteSends).toBe(1);
+    expect(outbox).toMatchObject({
+      status: "sent",
+      remoteReceipt: { accepted: true, messageId: "remote-1" },
+      completedSettleSteps: ["conversation_projection", "request_log", "after_reply"]
+    });
+    expect(completedSteps).toEqual(["conversation_projection", "request_log", "after_reply"]);
+  });
+
+  it("quarantines an unknown transport result without automatic redelivery", async () => {
+    const store = trackStore(new SessionStore({ databasePath: ":memory:" }));
+    let remoteSends = 0;
+    const coordinator = trackCoordinator(createCoordinator({
+      store,
+      outboxRetryDelayMs: 0,
+      handleEvent: () => ({
+        status: "completed",
+        outbox: [{
+          kind: "onebot.reply",
+          deliveryPartition: "qq-timeout",
+          payload: { text: "timeout" }
+        }]
+      }),
+      deliverOutbox: async (_outbox, context) => {
+        await context.sendRemote(async () => {
+          remoteSends += 1;
+          throw new Error("OneBot action timeout");
+        });
+      }
+    }));
+
+    coordinator.resume();
+    coordinator.enqueueEvent({ sessionId: "group:unknown-transport", kind: "incoming", payload: {} });
+    await waitUntil(() => store.listOutbox("group:unknown-transport")[0]?.status === "delivery_unknown");
+    await new Promise<void>((resolve) => setTimeout(resolve, 30));
+    expect(remoteSends).toBe(1);
+    expect(store.listOutbox("group:unknown-transport")[0]).toMatchObject({
+      status: "delivery_unknown",
+      attempts: 1
+    });
+  });
+
+  it("restarts a sent_remote item in settle phase without calling the transport again", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-coordinator-settle-restart-"));
+    temporaryDirectories.push(directory);
+    const databasePath = path.join(directory, "sessions.sqlite");
+    let remoteSends = 0;
+
+    const beforeStore = trackStore(new SessionStore({ databasePath }));
+    const before = trackCoordinator(createCoordinator({
+      store: beforeStore,
+      outboxRetryDelayMs: 60_000,
+      handleEvent: () => ({
+        status: "completed",
+        outbox: [{
+          kind: "onebot.reply",
+          deliveryPartition: "qq-restart",
+          payload: { text: "restart" }
+        }]
+      }),
+      deliverOutbox: async (_outbox, context) => {
+        await context.sendRemote(async () => {
+          remoteSends += 1;
+          return { accepted: true, messageId: "restart-remote" };
+        });
+        await context.settleStep("conversation_projection", () => {
+          throw new Error("stop before settle");
+        });
+      }
+    }));
+    before.resume();
+    before.enqueueEvent({ sessionId: "group:settle-restart", kind: "incoming", payload: {} });
+    await waitUntil(() => beforeStore.listOutbox("group:settle-restart")[0]?.status === "sent_remote");
+    before.stop();
+    beforeStore.close();
+
+    const afterStore = trackStore(new SessionStore({ databasePath, recoverOnOpen: "all" }));
+    const phases: string[] = [];
+    const after = trackCoordinator(createCoordinator({
+      store: afterStore,
+      deliverOutbox: async (_outbox, context) => {
+        phases.push(context.phase);
+        if (context.phase === "send") {
+          await context.sendRemote(async () => {
+            remoteSends += 1;
+            return { accepted: true, messageId: "duplicate" };
+          });
+        }
+        await context.settleStep("conversation_projection", () => undefined);
+      }
+    }));
+    after.resume();
+    await waitUntil(() => afterStore.listOutbox("group:settle-restart")[0]?.status === "sent");
+
+    expect(remoteSends).toBe(1);
+    expect(phases).toEqual(["settle"]);
+    expect(afterStore.listOutbox("group:settle-restart")[0]).toMatchObject({
+      remoteReceipt: { accepted: true, messageId: "restart-remote" },
+      completedSettleSteps: ["conversation_projection"]
+    });
+  });
+
   it("keeps committed turns and outbound replies FIFO per Session while other Sessions progress", async () => {
     const store = trackStore(new SessionStore({ databasePath: ":memory:" }));
     const firstGate = deferred<void>();
@@ -438,7 +729,7 @@ describe("SessionCoordinator", () => {
     coordinator.enqueueEvent({ sessionId: "group:unknown", kind: "incoming", payload: { text: "unknown" } });
     await coordinator.waitForIdle();
     expect(store.listOutbox("group:retry")[0]).toMatchObject({ status: "sent", attempts: 3 });
-    expect(store.listOutbox("group:unknown")[0]).toMatchObject({ status: "unknown", attempts: 3 });
+    expect(store.listOutbox("group:unknown")[0]).toMatchObject({ status: "dead", attempts: 3 });
 
     connected = false;
     coordinator.enqueueEvent({ sessionId: "group:reconnect", kind: "incoming", payload: { text: "reconnect:1" } });
@@ -772,7 +1063,7 @@ describe("SessionCoordinator", () => {
 interface CoordinatorHarnessOptions {
   store: SessionStore;
   handleEvent?: (event: SessionEventRecord) => SessionHandleResult | Promise<SessionHandleResult>;
-  deliverOutbox?: (outbox: Parameters<ConstructorParameters<typeof SessionCoordinator>[0]["deliverOutbox"]>[0]) => unknown;
+  deliverOutbox?: ConstructorParameters<typeof SessionCoordinator>[0]["deliverOutbox"];
   runner?: CodexRunner;
   maxOutboxAttempts?: number;
   outboxRetryDelayMs?: number;

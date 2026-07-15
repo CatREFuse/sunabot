@@ -188,12 +188,18 @@ export function runtime_recordAssistantMessage(this: RuntimeHost,
     imageUrls: string[] = [],
     logRunId?: string,
     requestStatus?: "failed",
-    trace: AssistantMessageTrace = {}
+    trace: AssistantMessageTrace = {},
+    options: { persist?: boolean; messageId?: string } = {}
   ) {
     const at = new Date().toISOString();
     const record = this.ensureConversationRecord(incoming, at);
+    const stableMessageId = options.messageId?.trim();
+    if (stableMessageId) {
+      const existing = record.messages.find((item) => item.role === "assistant" && item.id === stableMessageId);
+      if (existing) return record;
+    }
     const message = {
-      id: nanoid(),
+      id: stableMessageId || nanoid(),
       role: "assistant",
       text,
       at,
@@ -213,14 +219,14 @@ export function runtime_recordAssistantMessage(this: RuntimeHost,
       : undefined;
     if (pending) {
       const sequence = pending.sequence;
-      Object.assign(pending, message, { id: pending.id, sequence });
+      Object.assign(pending, message, { id: stableMessageId || pending.id, sequence });
       record.lastAt = at;
       record.lastText = conversationLastText(pending);
       record.selfId = incoming.selfId ?? record.selfId;
     } else {
       appendConversationMessage(record, message, this.retainedConversationMessageLimit());
     }
-    this.persistConversationRecords();
+    if (options.persist !== false) this.persistConversationRecords();
     return record;
   }
 export function runtime_recordAssistantTurnTools(this: RuntimeHost,

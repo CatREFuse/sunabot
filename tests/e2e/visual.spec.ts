@@ -77,6 +77,27 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     await expect(page.getByRole("heading", { name: "阿罗娜", exact: true })).toBeVisible();
     await expect(page.getByText("阿罗娜主账号", { exact: true })).toBeVisible();
     await capture(page, viewport.name, theme, "agents-arona");
+    const aronaAccount = state.agents.find((agent) => agent.id === "arona")?.accounts[0];
+    if (!aronaAccount) throw new Error("Arona account fixture is missing");
+    Object.assign(aronaAccount, {
+      connected: false,
+      runtimeReady: false,
+      desiredState: "running",
+      observedState: "missing",
+      reconcileRequired: false,
+      lastError: null
+    });
+    await page.reload();
+    const runAccount = page.getByRole("button", { name: "运行", exact: true });
+    await expect(runAccount).toBeVisible();
+    await runAccount.scrollIntoViewIfNeeded();
+    await capture(page, viewport.name, theme, "agents-arona-container-stopped");
+    Object.assign(aronaAccount, {
+      runtimeReady: true,
+      desiredState: "running",
+      observedState: "running",
+      reconcileRequired: false
+    });
     await page.getByRole("button", { name: "选择 普拉娜" }).click();
 
     await page.goto("/conversations/group%3A10001");
@@ -186,6 +207,11 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     await page.goto("/settings/providers");
     await expect(page.getByRole("heading", { name: "模型服务" })).toBeVisible();
     await capture(page, viewport.name, theme, "settings-providers");
+
+    await page.goto("/settings/normalReply");
+    await expect(page.getByRole("heading", { name: "正常回复" })).toBeVisible();
+    await expect(page.getByLabel("失败重试次数")).toHaveValue("3");
+    await capture(page, viewport.name, theme, "settings-normal-reply");
 
     await page.goto("/settings/broadcastStorm");
     await expect(page.getByRole("heading", { name: "广播风暴" })).toBeVisible();

@@ -7,12 +7,15 @@ import {
   type CodexToolInput
 } from "../../packages/contracts/tools/codex.js";
 import { SessionActorScheduler, SessionActorTaskTimeoutError } from "./sessionActor.js";
+import { createOutboxDeliveryContext } from "./outboxDeliveryContext.js";
+import { OutboxPartitionScheduler } from "./outboxPartitionScheduler.js";
 import { SessionToolJobProcessor } from "./sessionToolJobProcessor.js";
 import type {
   ClaimedToolTask,
   CodexCoordinatorSettings,
   CodexToolUsageObserver,
   DeferredToolRunner,
+  OutboxDeliveryContext,
   SessionClaimState as ClaimState
 } from "./sessionCoordinatorTypes.js";
 import {
@@ -37,7 +40,7 @@ const DEFAULT_OUTBOX_RETRY_DELAY_MS = 250;
 const DEFAULT_OUTBOX_DISCONNECTED_PROBE_DELAY_MS = 5_000;
 const IDLE_POLL_MS = 2;
 
-export type { CodexCoordinatorSettings } from "./sessionCoordinatorTypes.js";
+export type { CodexCoordinatorSettings, OutboxDeliveryContext } from "./sessionCoordinatorTypes.js";
 
 export interface SessionTurnContext {
   signal: AbortSignal;
@@ -65,10 +68,6 @@ export type SessionHandleResult =
       acknowledgement: OutboxDraft;
       result?: unknown;
     };
-
-export interface OutboxDeliveryContext {
-  signal: AbortSignal;
-}
 
 export interface SessionCoordinatorOptions {
   store: SessionStore;
@@ -144,6 +143,7 @@ export class SessionCoordinator {
   private readonly maxOutboxAttempts: number;
   private readonly outboxRetryDelayMs: number;
   private readonly outboxDisconnectedProbeDelayMs: number;
+  private readonly outboxPartitions: OutboxPartitionScheduler;
   private readonly leaseMs: number;
   private readonly workerId: string;
   private readonly clock: () => number;
@@ -154,6 +154,7 @@ export class SessionCoordinator {
   private readonly toolActor: SessionActorScheduler<ClaimedToolTask>;
   private readonly turnClaims = new Map<string, ClaimState>();
   private readonly outboxClaims = new Map<string, ClaimState>();
+  private readonly outboxClaimPartitions = new Map<string, string>();
   private readonly toolClaims = new Map<string, ClaimState>();
   private readonly wakeTimers = new Set<ReturnType<typeof setTimeout>>();
   private scanningTurns = false;
@@ -161,11 +162,6 @@ export class SessionCoordinator {
   private scanningTools = false;
   private started = false;
   private stopped = false;
-  // A disconnected transport admits one canary delivery per probe interval.
-  // Any successful delivery clears this mode and releases the normal pump.
-  private outboxPaused = false;
-  private outboxProbeReady = false;
-  private outboxProbeTimer?: ReturnType<typeof setTimeout>;
 
   constructor(options: SessionCoordinatorOptions) {
     this.store = options.store;
@@ -188,6 +184,11 @@ export class SessionCoordinator {
       options.outboxDisconnectedProbeDelayMs,
       DEFAULT_OUTBOX_DISCONNECTED_PROBE_DELAY_MS,
       "outboxDisconnectedProbeDelayMs"
+    );
+    this.outboxPartitions = new OutboxPartitionScheduler(
+      this.outboxDisconnectedProbeDelayMs,
+      () => !this.started || this.stopped,
+      () => this.scheduleOutbox()
     );
     this.leaseMs = positiveInteger(options.leaseMs, DEFAULT_LEASE_MS, "leaseMs");
     this.workerId = options.workerId?.trim() || `session-coordinator:${randomUUID()}`;
@@ -246,12 +247,10 @@ export class SessionCoordinator {
     return result;
   }
 
-  /** Recover abandoned work on startup, or resume outbound delivery after reconnect. */
-  resume() {
+  /** Recover abandoned work on startup, or resume one outbound transport partition after reconnect. */
+  resume(deliveryPartition?: string) {
     this.ensureStarted();
-    this.outboxPaused = false;
-    this.outboxProbeReady = false;
-    this.clearOutboxProbe();
+    if (deliveryPartition != null) this.outboxPartitions.resume(requiredText(deliveryPartition, "deliveryPartition"));
     this.scheduleAll();
   }
 
@@ -261,7 +260,7 @@ export class SessionCoordinator {
    */
   stop() {
     this.stopped = true;
-    this.clearOutboxProbe();
+    this.outboxPartitions.stop();
     for (const timer of this.wakeTimers) clearTimeout(timer);
     this.wakeTimers.clear();
     for (const state of [...this.turnClaims.values(), ...this.outboxClaims.values(), ...this.toolClaims.values()]) {
@@ -407,37 +406,42 @@ export class SessionCoordinator {
   }
 
   private scheduleOutbox() {
-    if (
-      !this.started ||
-      this.stopped ||
-      (this.outboxPaused && !this.outboxProbeReady) ||
-      this.scanningOutbox
-    ) return;
+    if (!this.started || this.stopped || this.scanningOutbox) return;
     this.scanningOutbox = true;
     try {
-      while (!this.stopped && (!this.outboxPaused || this.outboxProbeReady)) {
-        const outbox = this.store.claimNextOutbox({ workerId: this.workerId, leaseMs: this.leaseMs });
+      while (!this.stopped) {
+        let probePartition: string | undefined;
+        let outbox = this.store.claimNextOutbox({
+          workerId: this.workerId,
+          leaseMs: this.leaseMs,
+          excludedDeliveryPartitions: this.outboxPartitions.excluded(this.outboxClaimPartitions.values())
+        });
         if (!outbox) {
-          if (this.outboxPaused) {
-            this.outboxProbeReady = false;
-            this.scheduleOutboxProbe();
+          probePartition = this.outboxPartitions.takeReady();
+          if (probePartition) {
+            outbox = this.store.claimNextOutbox({
+              workerId: this.workerId,
+              leaseMs: this.leaseMs,
+              deliveryPartition: probePartition,
+              excludedDeliveryPartitions: [...this.outboxClaimPartitions.values()]
+            });
+            if (!outbox) this.outboxPartitions.retry(probePartition);
           }
-          break;
         }
-        const isProbe = this.outboxPaused;
-        if (isProbe) this.outboxProbeReady = false;
+        if (!outbox) break;
         const state = this.createClaimState(
           () => this.store.renewOutboxLease(outbox.id, this.workerId, this.leaseMs)
         );
         this.outboxClaims.set(outbox.id, state);
+        this.outboxClaimPartitions.set(outbox.id, outbox.deliveryPartition);
         void this.outboxActor.enqueue(outbox.sessionId, { outbox, state }, {
           timeoutMs: this.outboxTimeoutMs
         }).catch((error) => this.failOutboxTask(outbox, state, error)).finally(() => {
           state.stopRenewal();
           this.outboxClaims.delete(outbox.id);
+          this.outboxClaimPartitions.delete(outbox.id);
           this.deferScan(() => this.scheduleOutbox());
         });
-        if (isProbe) break;
       }
     } finally {
       this.scanningOutbox = false;
@@ -447,8 +451,15 @@ export class SessionCoordinator {
   private async processOutbox(task: ClaimedOutboxTask, actorSignal: AbortSignal) {
     const { outbox, state } = task;
     const signal = combineSignals(actorSignal, state.controller.signal);
+    const delivery = createOutboxDeliveryContext({
+      outbox,
+      store: this.store,
+      workerId: this.workerId,
+      signal,
+      assertUsable: () => this.assertClaimUsable(state, signal)
+    });
     try {
-      const result = await this.deliverOutbox(outbox, { signal });
+      const result = await this.deliverOutbox(outbox, delivery.context);
       this.assertClaimUsable(state, signal);
       this.store.finishOutbox({
         outboxId: outbox.id,
@@ -457,14 +468,14 @@ export class SessionCoordinator {
         result
       });
       state.finalized = true;
-      if (this.outboxPaused) {
-        this.outboxPaused = false;
-        this.outboxProbeReady = false;
-        this.clearOutboxProbe();
-        this.deferScan(() => this.scheduleOutbox());
+      if (delivery.remoteSucceeded() || outbox.status === "sending") {
+        this.outboxPartitions.resume(outbox.deliveryPartition);
       }
+      this.deferScan(() => this.scheduleOutbox());
     } catch (error) {
       this.finishOutboxFailure(outbox, state, error);
+    } finally {
+      this.outboxPartitions.completeAttempt(outbox.deliveryPartition, delivery.remoteSucceeded());
     }
   }
 
@@ -476,6 +487,40 @@ export class SessionCoordinator {
     if (state.finalized || this.stopped) return;
     state.finalized = true;
     try {
+      const current = this.store.getOutbox(outbox.id);
+      if (!current || current.status === "sent" || current.status === "dead" || current.status === "delivery_unknown") {
+        return;
+      }
+      if (current.uncertainSettleStep) {
+        this.store.finishOutbox({
+          outboxId: outbox.id,
+          workerId: this.workerId,
+          outcome: "delivery_unknown",
+          error: serializeError(error)
+        });
+        return;
+      }
+      if (current.status === "sent_remote") {
+        const availableAt = this.clock() + this.outboxRetryDelayMs;
+        this.store.finishOutbox({
+          outboxId: outbox.id,
+          workerId: this.workerId,
+          outcome: "retry",
+          error: serializeError(error),
+          availableAt
+        });
+        this.wakeAt(availableAt, () => this.scheduleOutbox());
+        return;
+      }
+      if (current.transportStartedAt != null) {
+        this.store.finishOutbox({
+          outboxId: outbox.id,
+          workerId: this.workerId,
+          outcome: "delivery_unknown",
+          error: serializeError(error)
+        });
+        return;
+      }
       if (this.disconnectedError(error)) {
         this.store.finishOutbox({
           outboxId: outbox.id,
@@ -484,7 +529,7 @@ export class SessionCoordinator {
           error: serializeError(error),
           availableAt: this.clock()
         });
-        this.pauseOutboxUntilProbe();
+        this.outboxPartitions.pause(outbox.deliveryPartition);
         return;
       }
       if (outbox.attempts < this.maxOutboxAttempts) {
@@ -497,16 +542,14 @@ export class SessionCoordinator {
           availableAt
         });
         this.wakeAt(availableAt, () => this.scheduleOutbox());
-        if (this.outboxPaused) this.scheduleOutboxProbe();
         return;
       }
       this.store.finishOutbox({
         outboxId: outbox.id,
         workerId: this.workerId,
-        outcome: "unknown",
+        outcome: "dead",
         error: serializeError(error)
       });
-      if (this.outboxPaused) this.scheduleOutboxProbe();
     } catch {
       // Recovery will reclaim the lease if persistence itself is unavailable.
     }
@@ -579,31 +622,6 @@ export class SessionCoordinator {
     }, Math.max(0, availableAt - this.clock()));
     timer.unref?.();
     this.wakeTimers.add(timer);
-  }
-
-  private pauseOutboxUntilProbe() {
-    this.outboxPaused = true;
-    this.outboxProbeReady = false;
-    this.scheduleOutboxProbe();
-  }
-
-  private scheduleOutboxProbe() {
-    if (this.outboxProbeTimer) return;
-    const timer = setTimeout(() => {
-      if (this.outboxProbeTimer !== timer) return;
-      this.outboxProbeTimer = undefined;
-      if (!this.started || this.stopped || !this.outboxPaused) return;
-      this.outboxProbeReady = true;
-      this.scheduleOutbox();
-    }, this.outboxDisconnectedProbeDelayMs);
-    timer.unref?.();
-    this.outboxProbeTimer = timer;
-  }
-
-  private clearOutboxProbe() {
-    if (!this.outboxProbeTimer) return;
-    clearTimeout(this.outboxProbeTimer);
-    this.outboxProbeTimer = undefined;
   }
 
   private deferScan(callback: () => void) {

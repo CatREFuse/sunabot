@@ -135,6 +135,12 @@ export function renderFinalPromptTemplate(
   return { ...rendered, messages } as RenderedPromptRequest;
 }
 
+export function buildPromptUtilityVariables() {
+  return {
+    "utils.roll": Math.floor(Math.random() * 100) + 1
+  };
+}
+
 function createVariableResolver(variables: Readonly<Record<string, PromptVariableValue>>) {
   const cache = new Map<string, PromptVariableValue>();
   const resolving: string[] = [];

@@ -107,7 +107,11 @@ export function defaultConfig(): AppConfig {
       enabled: true,
       windowMinutes: 2,
       replyThreshold: 3,
-      cooldownMinutes: 1
+      cooldownMinutes: 1,
+      additionalQqIds: []
+    },
+    normalReply: {
+      maxRetries: 3
     },
     bot: {
       adminQq: "",
@@ -348,6 +352,9 @@ function mergeConfig(base: AppConfig, incoming: Partial<AppConfig>): AppConfig {
       items: providerItems.map(normalizeProviderReasoningEffort)
     },
     broadcastStorm: mergeBroadcastStormConfig(base.broadcastStorm, incoming.broadcastStorm),
+    normalReply: {
+      maxRetries: normalizeInteger(incoming.normalReply?.maxRetries, base.normalReply.maxRetries, 0, 10)
+    },
     bot,
     onebot: { ...base.onebot, ...incoming.onebot, quoteGroupReplies: bot.quoteGroupReplies }
   };
@@ -361,7 +368,8 @@ function mergeBroadcastStormConfig(
     enabled: incoming?.enabled ?? base.enabled,
     windowMinutes: normalizeInteger(incoming?.windowMinutes, base.windowMinutes, 1, 1_440),
     replyThreshold: normalizeInteger(incoming?.replyThreshold, base.replyThreshold, 1, 100),
-    cooldownMinutes: normalizeInteger(incoming?.cooldownMinutes, base.cooldownMinutes, 1, 1_440)
+    cooldownMinutes: normalizeInteger(incoming?.cooldownMinutes, base.cooldownMinutes, 1, 1_440),
+    additionalQqIds: normalizeQqList(incoming?.additionalQqIds, base.additionalQqIds)
   };
 }
 

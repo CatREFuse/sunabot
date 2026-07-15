@@ -23,6 +23,7 @@ const [
   workspaceLayout,
   launcher,
   launcherCore,
+  dockerRecovery,
   launcherShell,
   agentsGuide,
   dockerSeccompProfile,
@@ -42,6 +43,7 @@ const [
   read("packages/platform/workspaceLayout.ts"),
   read("tooling/runtime/launcher.mjs"),
   read("tooling/runtime/launcher-core.mjs"),
+  read("tooling/runtime/docker-recovery.mjs"),
   read("sunabot.sh"),
   read("AGENTS.md"),
   readJson("deploy/docker/seccomp-bwrap.json"),
@@ -259,10 +261,14 @@ expect(launcher.includes("waitForComponentHealth")
   && launcher.includes("docker-network-gateway")
   && launcher.includes("nativeProcessEnvironment"),
 "the launcher must enforce readiness, non-root ownership, private Native ingress and one runtime environment");
+expect(launcher.includes("recoverStaleDockerOneoffs")
+  && dockerRecovery.includes("com.docker.compose.oneoff=true")
+  && dockerRecovery.includes("colima restart"),
+  "the launcher must detect stale Compose probes and keep Colima recovery interactive");
 expect(launcher.includes("assertDockerCoreCodex")
   && launcher.includes("inspectDockerCodex")
   && launcher.includes("inspectNativeCodex")
-  && launcher.includes("Codex auth"),
+  && launcher.includes("codexAuth"),
 "the launcher and doctor must validate Codex CLI and workspace auth in both Core modes");
 expect(launcher.includes("Apple Silicon Docker") && launcher.includes("EINVAL"),
   "the launcher must preserve the observed Apple Silicon amd64 user-namespace failure detail");

@@ -115,7 +115,7 @@ import {
   type PromptVariableValue,
   type RenderedPromptRequest
 } from "../../services/agent/promptSystem.js";
-import { buildConversationPromptVariables } from "../../services/agent/persona.js";
+import { buildCommonPromptVariables, buildConversationPromptVariables } from "../../services/agent/persona.js";
 import { DEFAULT_CONTEXT_MESSAGE_LIMIT, MAX_STORED_CONVERSATION_MESSAGES, GROUP_CHAT_SUMMARY_WINDOW_MS, MAX_SELFIE_REFERENCE_IMAGES, MAX_SELFIE_WORKSPACE_REFERENCE_IMAGES, MAX_CURRENT_CONTEXT_IMAGES, MAX_HISTORY_CONTEXT_IMAGES, HYDRATE_MESSAGE_WINDOW_MS, ACTIVE_CONVERSATION_WINDOW_MS, DIRECT_REPLY_TIMEOUT_MS, AMBIENT_ORCHESTRATOR_TIMEOUT_MS, ORCHESTRATOR_MAX_RETRIES, PREPARE_TIMEOUT_MS, RECENT_CONTEXT_TOKEN_BUDGET, DEDUPE_TTL_MS, MAX_DEDUPE_KEYS, DEFAULT_ADMIN_NAME, GROUP_CHAT_SUMMARY_COMMAND, CONVERSATION_REPLY_PROMPT_FILE, SELFIE_PROMPT_FILE, GROUP_CHAT_SUMMARY_PROMPT_FILE, ADMIN_PERSONA_FILES, ADMIN_RUNTIME_PROMPT_DEFAULTS, BatchUserInfo, WorkingMemoryMergeOutput, WorkingMemoryMergeContext, personaFileNameForAdminId, AdminIdentity, ConversationReplyUpdateInput, RuntimeCommandContext, ReplyDeliveryDraft, ReplyDelivery, DeferredCodexTurn, AmbientReplyJob, AmbientReplyState, AmbientIdleTimer, RuntimeConfigSnapshot, RuntimePromptSnapshot, SunaRuntimeOptions } from "./runtimeContracts.js";
 import { buildMemoryPromptVariables, buildUserProfileRecallQuery, buildUserPrompt, buildWorkingMemoryRecallQuery, clampInteger, collectGroupChatSummaryMessages, estimatePromptTokens, isAdminUserId, toContextChatMessage, uniqueMemoryEntries } from "./conversationMemoryHelpers.js";
 import { conversationMessageAttachments, conversationRecordId, queueIncomingSnapshot, selectRelevantConversationAttachments, toConversationQuote, uniqueAttachments, uniqueQuotes, uniqueStrings } from "./messagingAttachmentHelpers.js";
@@ -293,6 +293,10 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
           attachmentContext.text
         );
       const promptRequest = await this.renderPromptRequest(promptId, {
+        ...buildCommonPromptVariables(this.config, {
+          scope: incoming.scope,
+          userName: senderDisplayName(incoming.sender) || String(incoming.userId)
+        }),
         ...buildConversationPromptVariables(this.config),
         ...buildMemoryPromptVariables({
           working: workingMemoryMatches,
@@ -332,6 +336,7 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
       const toolCapabilities = await this.resolveToolCapabilities();
       const turn = await this.completePromptTurn(provider, promptRequest, {
         signal: options.signal,
+        modelRequestMaxRetries: this.config.normalReply.maxRetries,
         allowNoReply: true,
         bash: this.buildProviderBashOptions(incoming, toolCapabilities.workspaceBash),
         bot: this.config.bot,

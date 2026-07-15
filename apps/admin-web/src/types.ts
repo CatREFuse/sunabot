@@ -89,6 +89,11 @@ export interface BroadcastStormConfig {
   windowMinutes: number;
   replyThreshold: number;
   cooldownMinutes: number;
+  additionalQqIds: string[];
+}
+
+export interface NormalReplyConfig {
+  maxRetries: number;
 }
 
 export interface BotConfig {
@@ -128,6 +133,7 @@ export interface AppConfig {
   };
   providers: { defaultProviderId: string; items: ProviderConfig[] };
   broadcastStorm: BroadcastStormConfig;
+  normalReply: NormalReplyConfig;
   bot: BotConfig;
   onebot: {
     reverseWsPath: string;
@@ -151,6 +157,10 @@ export interface AgentAccount {
   connected?: boolean;
   selfId?: string;
   runtimeReady?: boolean;
+  desiredState?: "running" | "stopped";
+  observedState?: "running" | "stopped" | "missing" | "unknown";
+  reconcileRequired?: boolean;
+  lastError?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -175,7 +185,7 @@ export interface AgentAvatarInput {
   dataBase64: string;
 }
 
-export type ConfigSectionKey = "server" | "persona" | "providers" | "broadcastStorm" | "bot" | "memory" | "orchestrator" | "tools" | "bash" | "onebot";
+export type ConfigSectionKey = "server" | "persona" | "providers" | "broadcastStorm" | "normalReply" | "bot" | "memory" | "orchestrator" | "tools" | "bash" | "onebot";
 export type SettingsSectionKey = ConfigSectionKey | "security";
 export type ApplyMode = "hot" | "reconnect" | "restart";
 
@@ -195,6 +205,7 @@ export interface ConfigSectionValueMap {
   persona: Pick<AppConfig["persona"], "agentWorkspace">;
   providers: AppConfig["providers"];
   broadcastStorm: BroadcastStormConfig;
+  normalReply: NormalReplyConfig;
   bot: Pick<BotConfig, "adminQq" | "adminName" | "pokeOnNoReply" | "quoteGroupReplies" | "quoteGroupReplyExcludedUserIds" | "contextMessageLimit">;
   memory: BotMemorySettings;
   orchestrator: BotOrchestratorSettings;
@@ -217,6 +228,40 @@ export interface ModelCatalogItem {
   reasoningEfforts?: ReasoningEffort[];
 }
 
+export type RuntimeProbeCheckKind = "liveness" | "readiness" | "capability";
+export type RuntimeProbeCheckStatus = "pass" | "warn" | "fail" | "unknown";
+
+export interface RuntimeProbeCheck {
+  id: string;
+  kind: RuntimeProbeCheckKind;
+  status: RuntimeProbeCheckStatus;
+  code: string | null;
+  path: string | null;
+  action: string | null;
+  detail: string;
+}
+
+export interface RuntimeProbe {
+  schemaVersion: 1;
+  generatedAt: string;
+  summary: {
+    liveness: "live" | "dead";
+    readiness: "ready" | "degraded" | "not_ready";
+    capability: "ready" | "degraded";
+  };
+  checks: RuntimeProbeCheck[];
+  accounts: Array<{
+    id: string;
+    agentId: string;
+    desiredState: "running" | "stopped";
+    observedState: "running" | "stopped" | "missing" | "unknown";
+    connected: boolean | null;
+    reconcileRequired: boolean;
+    lastError: string | null;
+    path: string | null;
+  }>;
+}
+
 export interface RuntimeStatus {
   startedAt: string;
   configPath: string;
@@ -229,7 +274,15 @@ export interface RuntimeStatus {
     lastMessageEventAt?: string;
   };
   persona: { id: string; name: string; memoryItems: number };
-  provider: { defaultProviderId: string; model: string; imageModel: string; apiKeyConfigured: boolean };
+  provider: {
+    defaultProviderId: string;
+    model: string;
+    imageModel: string;
+    apiKeyConfigured: boolean;
+    configured?: boolean;
+    verifiedAvailable?: boolean;
+  };
+  probe?: RuntimeProbe;
   recovery?: { required: boolean; message?: string; backupPath?: string };
 }
 

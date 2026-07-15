@@ -6,6 +6,7 @@ import {
   applyRetention,
   createRecoveryPoint,
   drillRecoveryPoint,
+  rollbackRecoveryPointRestore,
   restoreRecoveryPoint,
   verifyRecoveryPoint
 } from "./sqlite-recovery.mjs";
@@ -29,6 +30,11 @@ try {
     result = await verifyRecoveryPoint(requiredPath("backup"));
   } else if (command === "restore") {
     result = await restoreRecoveryPoint({
+      backupDirectory: requiredPath("backup"),
+      targetWorkspace: requiredPath("target-workspace")
+    });
+  } else if (command === "rollback") {
+    result = await rollbackRecoveryPointRestore({
       backupDirectory: requiredPath("backup"),
       targetWorkspace: requiredPath("target-workspace")
     });
@@ -114,6 +120,7 @@ function printUsage() {
   sqlite-recovery-cli.mjs create --workspace PATH --quiesced [--backup-root PATH]
   sqlite-recovery-cli.mjs verify --backup PATH
   sqlite-recovery-cli.mjs restore --backup PATH --target-workspace EMPTY_PATH
+  sqlite-recovery-cli.mjs rollback --backup PATH --target-workspace PATH
   sqlite-recovery-cli.mjs prune --workspace PATH [--apply] [--hot-days 7] [--archive-days 30]
   sqlite-recovery-cli.mjs drill --backup PATH [--report PATH] [--target-workspace EMPTY_PATH]
 

@@ -55,7 +55,11 @@ const initialConfig = {
     enabled: true,
     windowMinutes: 2,
     replyThreshold: 3,
-    cooldownMinutes: 1
+    cooldownMinutes: 1,
+    additionalQqIds: []
+  },
+  normalReply: {
+    maxRetries: 3
   },
   bot: {
     adminQq: "171419991",
@@ -464,18 +468,49 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
       const agent = state.agents.find((item) => item.id === agentId);
       if (!agent) return json(route, { error: { code: "AGENT_NOT_FOUND", message: "Agent 不存在。" } }, 404);
       const body = request.postDataJSON() as { label: string };
-      const account = {
-        id: `qq_mock_${state.agents.flatMap((item) => item.accounts).length + 1}`,
+      const accountId = `qq_mock_${state.agents.flatMap((item) => item.accounts).length + 1}`;
+      const registeredAccount = {
+        id: accountId,
         agentId,
         label: body.label,
         enabled: true,
         webuiPort: 6099 + state.agents.flatMap((item) => item.accounts).length,
-        connected: false,
-        runtimeReady: false,
         createdAt: "2026-07-13T08:00:00.000Z",
         updatedAt: "2026-07-13T08:00:00.000Z"
       };
+      const runtimeState = {
+        schemaVersion: 1,
+        accountId,
+        desiredState: "running" as const,
+        observedState: "missing" as const,
+        reconcileRequired: true,
+        lastError: null,
+        updatedAt: "2026-07-13T08:00:00.000Z"
+      };
+      const account = {
+        ...registeredAccount,
+        ...runtimeState,
+        connected: false,
+        runtimeReady: false
+      };
       agent.accounts.push(account);
+      return json(route, { ...registeredAccount, ...runtimeState });
+    }
+    const agentAccountRuntimeStartMatch = pathname.match(/^\/api\/agents\/([^/]+)\/accounts\/([^/]+)\/runtime\/start$/);
+    if (agentAccountRuntimeStartMatch && method === "POST") {
+      const agentId = decodeURIComponent(agentAccountRuntimeStartMatch[1]);
+      const accountId = decodeURIComponent(agentAccountRuntimeStartMatch[2]);
+      const account = state.agents.find((item) => item.id === agentId)?.accounts.find((item) => item.id === accountId);
+      if (!account) return json(route, { error: { code: "AGENT_ACCOUNT_NOT_FOUND", message: "QQ 账号不存在。" } }, 404);
+      Object.assign(account, {
+        enabled: true,
+        desiredState: "running",
+        observedState: "running",
+        reconcileRequired: false,
+        runtimeReady: true,
+        lastError: null,
+        updatedAt: "2026-07-13T08:00:01.000Z"
+      });
       return json(route, account);
     }
     const agentAccountMatch = pathname.match(/^\/api\/agents\/([^/]+)\/accounts\/([^/]+)$/);
@@ -1146,7 +1181,7 @@ function configEnvelope(state: MockApiState) {
 
 function applySection(config: typeof initialConfig, section: string, value: unknown) {
   const next = structuredClone(value) as Record<string, unknown>;
-  if (section === "server" || section === "providers" || section === "broadcastStorm") {
+  if (section === "server" || section === "providers" || section === "broadcastStorm" || section === "normalReply") {
     Object.assign(config[section], next);
     return;
   }

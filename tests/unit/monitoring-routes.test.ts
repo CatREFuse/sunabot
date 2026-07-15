@@ -58,6 +58,7 @@ describe("monitoring API plugin", () => {
     expect([...routeSchemas.keys()].sort()).toEqual([
       "/api/monitoring/settings",
       "/api/monitoring/test",
+      "/api/readiness",
       "/api/status"
     ]);
     assertRequestAndResponseSchemas(routeSchemas);

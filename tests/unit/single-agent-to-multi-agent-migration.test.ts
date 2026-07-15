@@ -469,6 +469,18 @@ describe("single Agent to multi-Agent migration", () => {
     await expect(inspectMultiAgentMigrationGate(workspace)).resolves.toMatchObject({ state: "trusted" });
   });
 
+  it("accepts a trusted fresh-install marker through the controlled /tmp alias", async () => {
+    const workspace = await fs.mkdtemp("/tmp/sunabot-multi-agent-alias-");
+    temporaryDirectories.push(workspace);
+
+    await prepareFreshInstallMarker(workspace, new Date("2026-07-13T09:00:00.000Z"));
+
+    await expect(inspectMultiAgentMigrationGate(workspace)).resolves.toMatchObject({
+      state: "trusted",
+      workspace
+    });
+  });
+
   it("refuses to write a completed marker when a registered secondary workspace is incomplete", async () => {
     const fixture = await createSingleAgentFixture();
     await initializeFixture({ workspace: fixture.workspace });
@@ -659,6 +671,25 @@ describe("single Agent to multi-Agent migration", () => {
       if (previous == null) delete process.env.SUNABOT_DATABASE_PATH;
       else process.env.SUNABOT_DATABASE_PATH = previous;
     }
+  });
+
+  it("rejects a symbolic-link workspace parent before migration writes", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-single-agent-parent-link-"));
+    temporaryDirectories.push(root);
+    const external = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-single-agent-external-"));
+    temporaryDirectories.push(external);
+    const linkedParent = path.join(root, "linked-parent");
+    await fs.symlink(external, linkedParent, "dir");
+
+    await expect(migrateSingleAgentToMultiAgent({
+      workspace: path.join(linkedParent, "workspace"),
+      apply: true,
+      quiesced: true,
+      allowRoot: true,
+      skipServiceCheck: true
+    })).rejects.toMatchObject({ code: "WORKSPACE_INVALID" });
+
+    await expect(fs.readdir(external)).resolves.toEqual([]);
   });
 
   it("rejects the runtime.env database override before database prerequisites", async () => {

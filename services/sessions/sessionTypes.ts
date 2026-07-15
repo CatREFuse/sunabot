@@ -18,7 +18,13 @@ export type ToolJobStatus =
   | "timed_out"
   | "cancelled"
   | "unknown";
-export type OutboxStatus = "pending" | "sending" | "sent" | "dead" | "unknown";
+export type OutboxStatus =
+  | "pending"
+  | "sending"
+  | "sent_remote"
+  | "sent"
+  | "dead"
+  | "delivery_unknown";
 
 export interface SessionStoreOptions {
   databasePath: string;
@@ -101,14 +107,22 @@ export interface OutboxRecord {
   kind: string;
   dedupeKey?: string;
   payload: unknown;
+  deliveryPartition: string;
+  partitionSequence: number;
   status: OutboxStatus;
   attempts: number;
+  settleAttempts: number;
   availableAt: number;
   workerId?: string;
   leaseUntil?: number;
   result?: unknown;
   error?: unknown;
+  remoteReceipt?: unknown;
+  completedSettleSteps: string[];
+  uncertainSettleStep?: string;
   createdAt: number;
+  transportStartedAt?: number;
+  remoteSentAt?: number;
   sentAt?: number;
   finishedAt?: number;
 }
@@ -130,6 +144,8 @@ export interface ClaimOptions {
   workerId: string;
   leaseMs?: number;
   sessionId?: string;
+  deliveryPartition?: string;
+  excludedDeliveryPartitions?: readonly string[];
 }
 
 export interface ClaimedTurn {
@@ -140,6 +156,7 @@ export interface ClaimedTurn {
 export interface OutboxDraft {
   kind: string;
   payload: unknown;
+  deliveryPartition?: string;
   dedupeKey?: string;
   availableAt?: number;
 }
@@ -201,10 +218,21 @@ export interface CompleteToolJobResult {
 export interface FinishOutboxInput {
   outboxId: string;
   workerId: string;
-  outcome: "sent" | "dead" | "unknown" | "retry";
+  outcome: "sent" | "dead" | "delivery_unknown" | "retry";
   result?: unknown;
   error?: unknown;
   availableAt?: number;
+}
+
+export interface ReplayUnknownOutboxInput {
+  outboxId: string;
+  confirmedNotSent: true;
+}
+
+export interface ResolveUnknownSettleInput {
+  outboxId: string;
+  settleStep: string;
+  confirmed: "applied" | "not_applied";
 }
 
 export interface RecoveryResult {

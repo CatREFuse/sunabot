@@ -22,7 +22,12 @@ import {
 const root = fileURLToPath(new URL("../..", import.meta.url));
 
 describe("unified runtime launcher", () => {
-  it("installs dependencies before loading the launcher in a clean checkout", async () => {
+  it.each([
+    { args: ["up"], invocation: "up" },
+    { args: ["--core=docker"], invocation: "--core=docker" },
+    { args: ["--core", "docker"], invocation: "--core docker" },
+    { args: ["--dev"], invocation: "--dev" }
+  ])("installs dependencies before starting with $invocation in a clean checkout", async ({ args, invocation }) => {
     const fixture = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-launcher-"));
     try {
       const bin = path.join(fixture, "bin");
@@ -50,7 +55,7 @@ describe("unified runtime launcher", () => {
         "touch node_modules/.package-lock.json"
       ].join("\n"), { mode: 0o755 });
 
-      const result = spawnSync(path.join(fixture, "sunabot.sh"), ["status"], {
+      const result = spawnSync(path.join(fixture, "sunabot.sh"), args, {
         cwd: path.parse(fixture).root,
         encoding: "utf8",
         env: {
@@ -63,9 +68,71 @@ describe("unified runtime launcher", () => {
       expect(result.status, result.stderr).toBe(0);
       await expect(fs.readFile(trace, "utf8")).resolves.toBe([
         `npm:${fixture}:ci`,
-        `node:${launcher} status`,
+        `node:${launcher} ${invocation}`,
         ""
       ].join("\n"));
+    } finally {
+      await fs.rm(fixture, { recursive: true, force: true });
+    }
+  }, 10_000);
+
+  it.each(["status", "doctor", "logs", "down"])("keeps %s read-only when dependencies are missing", async (command) => {
+    const fixture = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-launcher-readonly-"));
+    try {
+      const bin = path.join(fixture, "bin");
+      const launcher = path.join(fixture, "tooling/runtime/launcher.mjs");
+      const trace = path.join(fixture, "trace.log");
+      await fs.mkdir(path.dirname(launcher), { recursive: true });
+      await fs.mkdir(bin, { recursive: true });
+      await fs.copyFile(path.join(root, "sunabot.sh"), path.join(fixture, "sunabot.sh"));
+      await fs.chmod(path.join(fixture, "sunabot.sh"), 0o755);
+      await fs.writeFile(path.join(fixture, ".node-version"), `${process.versions.node}\n`);
+      await fs.writeFile(path.join(fixture, "package-lock.json"), "{}\n");
+      await fs.writeFile(launcher, "");
+      await fs.writeFile(path.join(bin, "node"), [
+        "#!/bin/sh",
+        "if [ \"${1:-}\" = \"-p\" ]; then",
+        `  printf '%s\\n' '${process.versions.node}'`,
+        "  exit 0",
+        "fi",
+        "printf 'node:%s\\n' \"$*\" >> \"$TRACE_FILE\""
+      ].join("\n"), { mode: 0o755 });
+      await fs.writeFile(path.join(bin, "npm"), [
+        "#!/bin/sh",
+        "printf 'npm:%s\\n' \"$*\" >> \"$TRACE_FILE\""
+      ].join("\n"), { mode: 0o755 });
+
+      const before = await treeSnapshot(fixture);
+      const result = spawnSync(path.join(fixture, "sunabot.sh"), [command], {
+        cwd: path.parse(fixture).root,
+        encoding: "utf8",
+        env: { ...process.env, PATH: `${bin}:/usr/bin:/bin`, TRACE_FILE: trace }
+      });
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("DEPENDENCIES_MISSING");
+      await expect(fs.access(trace)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await treeSnapshot(fixture)).toEqual(before);
+    } finally {
+      await fs.rm(fixture, { recursive: true, force: true });
+    }
+  });
+
+  it("prints help successfully without Node or installed dependencies", async () => {
+    const fixture = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-launcher-help-"));
+    try {
+      await fs.copyFile(path.join(root, "sunabot.sh"), path.join(fixture, "sunabot.sh"));
+      await fs.chmod(path.join(fixture, "sunabot.sh"), 0o755);
+      await fs.writeFile(path.join(fixture, ".node-version"), `${process.versions.node}\n`);
+      await fs.writeFile(path.join(fixture, "package-lock.json"), "{}\n");
+      const result = spawnSync(path.join(fixture, "sunabot.sh"), ["--help"], {
+        cwd: path.parse(fixture).root,
+        encoding: "utf8",
+        env: { ...process.env, PATH: "/usr/bin:/bin" }
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain("./sunabot.sh <命令>");
+      await expect(fs.access(path.join(fixture, "node_modules"))).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
       await fs.rm(fixture, { recursive: true, force: true });
     }
@@ -90,6 +157,12 @@ describe("unified runtime launcher", () => {
       dev: true
     });
     expect(parseLauncherArguments(["doctor"], { SUNABOT_DEV: "1" }).dev).toBe(true);
+    expect(parseLauncherArguments(["--help"], {}).command).toBe("help");
+    expect(parseLauncherArguments(["reconcile-account", "--account=qq_arona"], {})).toMatchObject({
+      command: "reconcile-account",
+      accountId: "qq_arona"
+    });
+    expect(parseLauncherArguments(["probe-runtime"], {}).command).toBe("probe-runtime");
   });
 
   it("detects the retired external main database override from either environment source", () => {
@@ -189,3 +262,16 @@ describe("unified runtime launcher", () => {
     )).toBe("ws://172.18.0.1:8788/onebot/v11/ws");
   });
 });
+
+async function treeSnapshot(directory: string) {
+  const entries: string[] = [];
+  async function walk(current: string) {
+    for (const entry of await fs.readdir(current, { withFileTypes: true })) {
+      const target = path.join(current, entry.name);
+      entries.push(`${path.relative(directory, target)}:${entry.isDirectory() ? "dir" : "file"}`);
+      if (entry.isDirectory()) await walk(target);
+    }
+  }
+  await walk(directory);
+  return entries.sort();
+}

@@ -24,7 +24,13 @@ export type ToolJobTerminalStatus =
   | "cancelled"
   | "unknown";
 
-export type OutboxDeliveryOutcome = "sent" | "dead" | "unknown" | "retry" | "recovered";
+export type OutboxDeliveryOutcome =
+  | "sent"
+  | "dead"
+  | "delivery_unknown"
+  | "unknown"
+  | "retry"
+  | "recovered";
 
 export interface TurnRequestedPayloadV1 {
   kind: string;
@@ -80,6 +86,18 @@ export interface OutboxDeliveryPayloadV1 {
 }
 
 export type OutboxDeliveryV1 = EnvelopeV1<"session.outbox_delivery", OutboxDeliveryPayloadV1>;
+
+export interface OutboxRemoteReceiptPayloadV1 {
+  receipt: unknown;
+}
+
+export type OutboxRemoteReceiptV1 = EnvelopeV1<"session.outbox_remote_receipt", OutboxRemoteReceiptPayloadV1>;
+
+export interface OutboxSettleProgressPayloadV1 {
+  completedSteps: string[];
+}
+
+export type OutboxSettleProgressV1 = EnvelopeV1<"session.outbox_settle_progress", OutboxSettleProgressPayloadV1>;
 
 export interface DurableCodecContext {
   id: string;
@@ -233,6 +251,67 @@ export function decodeOutboxDelivery(resultValue: unknown, errorValue: unknown) 
   return { result: payload.result, error: payload.error };
 }
 
+export function encodeOutboxRemoteReceipt(receipt: unknown, context: DurableCodecContext) {
+  return stringifyEnvelope(envelope("session.outbox_remote_receipt", { receipt }, context));
+}
+
+export function decodeOutboxRemoteReceipt(value: unknown) {
+  if (value == null) return undefined;
+  const parsed = parseStoredJson(value, "outbox-remote-receipt");
+  const envelopeValue = decodeEnvelope(
+    parsed,
+    "session.outbox_remote_receipt",
+    "outbox-remote-receipt"
+  );
+  if (!envelopeValue) return parsed;
+  return requiredRecord(envelopeValue.payload, "outbox-remote-receipt", "payload").receipt;
+}
+
+export function encodeOutboxSettleProgress(completedSteps: readonly string[], context: DurableCodecContext) {
+  const normalized = completedSteps.map((step) => requiredText(
+    step,
+    "outbox-settle-progress",
+    "payload.completedSteps"
+  ));
+  if (new Set(normalized).size !== normalized.length) {
+    throw invalid("outbox-settle-progress", "outbox-settle-progress contains duplicate steps.");
+  }
+  return stringifyEnvelope(envelope("session.outbox_settle_progress", {
+    completedSteps: normalized
+  }, context));
+}
+
+export function decodeOutboxSettleProgress(value: unknown) {
+  if (value == null) return [];
+  const parsed = parseStoredJson(value, "outbox-settle-progress");
+  const envelopeValue = decodeEnvelope(
+    parsed,
+    "session.outbox_settle_progress",
+    "outbox-settle-progress"
+  );
+  if (!envelopeValue) {
+    if (!Array.isArray(parsed)) throw invalid("outbox-settle-progress", "outbox-settle-progress is invalid.");
+    const completedSteps = parsed.map((step) => requiredText(step, "outbox-settle-progress", "step"));
+    if (new Set(completedSteps).size !== completedSteps.length) {
+      throw invalid("outbox-settle-progress", "outbox-settle-progress contains duplicate steps.");
+    }
+    return completedSteps;
+  }
+  const payload = requiredRecord(envelopeValue.payload, "outbox-settle-progress", "payload");
+  if (!Array.isArray(payload.completedSteps)) {
+    throw invalid("outbox-settle-progress", "outbox-settle-progress field completedSteps is invalid.");
+  }
+  const completedSteps = payload.completedSteps.map((step) => requiredText(
+    step,
+    "outbox-settle-progress",
+    "payload.completedSteps"
+  ));
+  if (new Set(completedSteps).size !== completedSteps.length) {
+    throw invalid("outbox-settle-progress", "outbox-settle-progress contains duplicate steps.");
+  }
+  return completedSteps;
+}
+
 function envelope<TType extends string, TPayload>(
   type: TType,
   payload: TPayload,
@@ -317,6 +396,7 @@ function requiredOutboxOutcome(value: unknown, family: string): OutboxDeliveryOu
   switch (value) {
     case "sent": return "sent";
     case "dead": return "dead";
+    case "delivery_unknown": return "delivery_unknown";
     case "unknown": return "unknown";
     case "retry": return "retry";
     case "recovered": return "recovered";

@@ -49,6 +49,38 @@ afterEach(async () => {
 });
 
 describe("AgentRegistry", () => {
+  it("rejects a symbolic-link workspace parent before registry or filesystem writes", async () => {
+    const unsafeRoot = path.join(temporaryDirectory, "unsafe-root");
+    const external = path.join(temporaryDirectory, "external");
+    const linkedParent = path.join(unsafeRoot, "linked-parent");
+    await fs.mkdir(unsafeRoot, { recursive: true });
+    await fs.mkdir(external, { recursive: true });
+    await fs.symlink(external, linkedParent, "dir");
+    const createAgent = vi.fn();
+    const registry = new AgentRegistry(createAdminTestConfig(temporaryDirectory), {
+      workspaceRoot: path.join(linkedParent, "workspace/business/agents"),
+      allowUnmarkedMigration: true,
+      store: {
+        readAgents: () => [],
+        readAgent: () => undefined,
+        createAgent,
+        updateAgent: () => false,
+        deleteAgent: () => false,
+        readAgentAccounts: () => [],
+        readAgentAccount: () => undefined,
+        createAgentAccount: vi.fn(),
+        updateAgentAccount: () => false,
+        deleteAgentAccount: () => false,
+        nextAgentAccountWebuiPort: () => 6100
+      }
+    });
+
+    await expect(registry.initialize()).rejects.toMatchObject({ code: "WORKSPACE_INVALID" });
+
+    expect(createAgent).not.toHaveBeenCalled();
+    await expect(fs.readdir(external)).resolves.toEqual([]);
+  });
+
   it("rejects an unmarked workspace before creating the default Agent", async () => {
     const config = createAdminTestConfig(temporaryDirectory);
     const agentDirectory = path.join(testPaths.workspace, "business", "agents", "plana");
@@ -424,6 +456,87 @@ describe("AgentRegistry", () => {
       ))).rejects.toMatchObject({ code: "ENOENT" });
       expect((await fs.readdir(path.join(testPaths.workspace, "business", "agents")))
         .some((entry) => entry.startsWith(".rollback-arona-"))).toBe(false);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("reconciles only the target QQ after create, disable, and remove", async () => {
+    const config = createAdminTestConfig(temporaryDirectory);
+    config.persona.agentWorkspace = path.join(testPaths.workspace, "business", "agents", "plana");
+    const registry = new AgentRegistry(config, {
+      workspaceRoot: path.join(testPaths.workspace, "business", "agents"),
+      store,
+      allowUnmarkedMigration: true
+    });
+    await registry.initialize();
+    const reconciled: string[] = [];
+    const reconcileAccount = vi.fn(async (accountId: string) => {
+      reconciled.push(accountId);
+      const desiredState = registry.account(accountId)?.enabled === false || !registry.account(accountId)
+        ? "stopped" as const
+        : "running" as const;
+      return {
+        schemaVersion: 1 as const,
+        accountId,
+        desiredState,
+        observedState: desiredState === "running" ? "running" as const : "missing" as const,
+        reconcileRequired: false,
+        lastError: null,
+        updatedAt: "2026-07-14T12:00:00.000Z"
+      };
+    });
+    const app = Fastify();
+    registerAgentRoutes(app, registry, { reconcileAccount });
+
+    try {
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/agents/plana/accounts",
+        payload: { label: "备用账号" }
+      });
+      expect(created.statusCode).toBe(200);
+      expect(created.json()).toMatchObject({
+        desiredState: "running",
+        observedState: "running",
+        reconcileRequired: false
+      });
+      const accountId = created.json().id as string;
+      expect(reconciled).toEqual([accountId]);
+      expect(registry.account("primary")?.enabled).toBe(true);
+
+      const disabled = await app.inject({
+        method: "PATCH",
+        url: `/api/agents/plana/accounts/${accountId}`,
+        payload: { enabled: false }
+      });
+      expect(disabled.json()).toMatchObject({ desiredState: "stopped", observedState: "missing" });
+      expect(registry.account(accountId)?.enabled).toBe(false);
+      expect(registry.account("primary")?.enabled).toBe(true);
+
+      const started = await app.inject({
+        method: "POST",
+        url: `/api/agents/plana/accounts/${accountId}/runtime/start`
+      });
+      expect(started.statusCode).toBe(200);
+      expect(started.json()).toMatchObject({
+        id: accountId,
+        enabled: true,
+        desiredState: "running",
+        observedState: "running",
+        reconcileRequired: false
+      });
+      expect(registry.account(accountId)?.enabled).toBe(true);
+      expect(registry.account("primary")?.enabled).toBe(true);
+
+      const removed = await app.inject({
+        method: "DELETE",
+        url: `/api/agents/plana/accounts/${accountId}`
+      });
+      expect(removed.json()).toMatchObject({ ok: true });
+      expect(registry.account(accountId)).toBeUndefined();
+      expect(registry.account("primary")?.enabled).toBe(true);
+      expect(reconciled).toEqual([accountId, accountId, accountId, accountId, accountId]);
     } finally {
       await app.close();
     }

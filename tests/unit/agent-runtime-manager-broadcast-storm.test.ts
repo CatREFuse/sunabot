@@ -7,7 +7,7 @@ import { BroadcastStormDetector } from "../../services/orchestration/broadcastSt
 import { createAdminTestConfig } from "./admin-fixtures.js";
 
 describe("AgentRuntimeManager broadcast storm integration", () => {
-  it("resolves cross-Agent quoted replies, deduplicates the event, and cancels every runtime", async () => {
+  it("resolves cross-Agent quoted replies, deduplicates the event, and leaves dispatched work running", async () => {
     const planaConfig = createAdminTestConfig("/tmp/sunabot-broadcast-storm-plana");
     const aronaConfig = structuredClone(planaConfig);
     aronaConfig.persona.defaultAgentId = "arona";
@@ -18,7 +18,8 @@ describe("AgentRuntimeManager broadcast storm integration", () => {
       enabled: true,
       windowMinutes: 2,
       replyThreshold: 1,
-      cooldownMinutes: 1
+      cooldownMinutes: 1,
+      additionalQqIds: []
     });
     const registry = {
       list: vi.fn(async () => [agent("plana"), agent("arona")]),
@@ -64,10 +65,63 @@ describe("AgentRuntimeManager broadcast storm integration", () => {
     await manager.handleInboundMessage(message, gateway, { accountId: "primary", selfId: "10001" });
 
     expect(gateway.getMessage).toHaveBeenCalledTimes(2);
-    expect(planaRuntime.cancelAllReplies).toHaveBeenCalledOnce();
-    expect(aronaRuntime.cancelAllReplies).toHaveBeenCalledOnce();
     expect(detector.status().blocked).toBe(true);
     expect(planaRuntime.handleInboundMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it("counts a supplemental monitored QQ replying to a registered Agent", async () => {
+    const config = createAdminTestConfig("/tmp/sunabot-broadcast-storm-supplemental");
+    const runtimeInstance = runtime(config);
+    const detector = new BroadcastStormDetector({
+      enabled: true,
+      windowMinutes: 2,
+      replyThreshold: 1,
+      cooldownMinutes: 1,
+      additionalQqIds: ["30003"]
+    });
+    const registry = {
+      list: vi.fn(async () => [agent("plana")]),
+      config: vi.fn(async () => config),
+      account: vi.fn(() => ({ id: "primary", agentId: "plana", enabled: true, qqId: "10001" })),
+      get: vi.fn(async () => ({ ...agent("plana"), enabled: true })),
+      updateAccountIdentity: vi.fn(),
+      agentIdForQqId: vi.fn((qqId: string) => qqId === "10001" ? "plana" : undefined)
+    } as unknown as AgentRegistry;
+    const manager = new AgentRuntimeManager(registry, {
+      defaultRuntime: runtimeInstance,
+      createRuntime: () => runtimeInstance,
+      initializeRuntime: false,
+      broadcastStormDetector: detector
+    });
+    await manager.initialize();
+    const gateway = {
+      getMessage: vi.fn(async () => ({
+        text: "上一条",
+        media: [],
+        attachments: [],
+        replyMessageIds: [],
+        sender: { id: "10001" }
+      }))
+    } as unknown as MessagingPort;
+
+    await manager.handleInboundMessage({
+      schemaVersion: 1,
+      scope: "user_group",
+      messageId: 9002,
+      time: new Date().toISOString(),
+      userId: 30003,
+      groupId: 30004,
+      sender: { id: "30003" },
+      text: "继续",
+      media: [],
+      attachments: [],
+      replyMessageIds: [8002],
+      quoteReferences: [],
+      mentionedSelf: false
+    }, gateway, { accountId: "primary", selfId: "10001" });
+
+    expect(detector.status().blocked).toBe(true);
+    expect(runtimeInstance.handleInboundMessage).toHaveBeenCalledOnce();
   });
 });
 
@@ -75,12 +129,10 @@ function runtime(config: ReturnType<typeof createAdminTestConfig>) {
   return {
     config,
     handleInboundMessage: vi.fn(),
-    cancelAllReplies: vi.fn(),
     close: vi.fn(),
     getPersonaStatus: vi.fn()
   } as unknown as SunaRuntime & {
     handleInboundMessage: ReturnType<typeof vi.fn>;
-    cancelAllReplies: ReturnType<typeof vi.fn>;
   };
 }
 

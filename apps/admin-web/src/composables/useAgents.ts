@@ -83,6 +83,15 @@ export function useAgents() {
     return account;
   }
 
+  async function startAccountRuntime(agentId: string, accountId: string) {
+    const account = await apiRequest<AgentAccount>(
+      `/api/agents/${encodeURIComponent(agentId)}/accounts/${encodeURIComponent(accountId)}/runtime/start`,
+      { method: "POST" }
+    );
+    await load({ force: true });
+    return account;
+  }
+
   async function removeAccount(agentId: string, accountId: string) {
     await apiRequest(`/api/agents/${encodeURIComponent(agentId)}/accounts/${encodeURIComponent(accountId)}`, {
       method: "DELETE"
@@ -102,6 +111,7 @@ export function useAgents() {
     update,
     updateAvatar,
     createAccount,
+    startAccountRuntime,
     removeAccount
   };
 }

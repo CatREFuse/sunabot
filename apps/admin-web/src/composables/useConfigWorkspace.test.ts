@@ -38,7 +38,8 @@ function config(adminName: string): AppConfig {
       systemPromptOverride: false
     },
     providers: { defaultProviderId: "codex", items: [] },
-    broadcastStorm: { enabled: true, windowMinutes: 2, replyThreshold: 3, cooldownMinutes: 1 },
+    broadcastStorm: { enabled: true, windowMinutes: 2, replyThreshold: 3, cooldownMinutes: 1, additionalQqIds: [] },
+    normalReply: { maxRetries: 3 },
     bot: {
       adminQq: "1",
       adminName,
@@ -96,6 +97,27 @@ describe("useConfigWorkspace", () => {
 
     await workspace.save("bot");
     expect(workspace.state.bot).toMatchObject({ kind: "error", field: "bot.adminQq" });
+  });
+
+  it("saves the shared normal reply retry limit as its own section", async () => {
+    apiRequest.mockResolvedValueOnce(envelope("r1", "initial"));
+    const workspace = useConfigWorkspace("system");
+    await workspace.load();
+    workspace.drafts.normalReply.maxRetries = 6;
+    const saved = envelope("r2", "initial");
+    saved.config.normalReply.maxRetries = 6;
+    apiRequest.mockResolvedValueOnce({ ...saved, applyMode: "hot" });
+
+    await workspace.save("normalReply");
+
+    expect(apiRequest).toHaveBeenNthCalledWith(2, "/api/config/normalReply", expect.objectContaining({
+      method: "PATCH"
+    }));
+    expect(JSON.parse(String(apiRequest.mock.calls[1]?.[1]?.body))).toMatchObject({
+      revision: "r1",
+      value: { maxRetries: 6 }
+    });
+    expect(workspace.isDirty("normalReply")).toBe(false);
   });
 
   it("normalizes missing tool overrides without creating a dirty draft", async () => {

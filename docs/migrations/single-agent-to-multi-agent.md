@@ -37,7 +37,7 @@
 
 ## 启动门禁
 
-workspace 初始化与 API 组合根会在任何业务写入前校验 `business/migrations/multi-agent-v1.json`；AgentRegistry 在自身文件和注册写入前复核，或接收同一组合根已经完成的校验。真正空目录会先原子写入 `fresh-install` 标记；主库尚未出现时只允许受控 marker 目录和临时文件，主库出现后 fresh 与 completed 状态都必须校验完整注册集合。完整集合包含规范主双库、每个 Agent 的规范 workspace 与 manifest、全部非 Plana Agent 的双库、每个 QQ 的 Agent 归属、唯一 WebUI 端口和 `config-full/qq/plugins` 目录，以及 Plana/primary 基线与 primary `6099` 端口；所有必需路径逐段拒绝符号链接。完成标记额外核对迁移目标 workspace 和端口。任何缺失、摘要或格式无效、注册状态漂移与符号链接都会稳定拒绝且不补建当前结构。
+workspace 初始化、launcher、probe、API 组合根、AgentRegistry 和迁移器会在任何业务写入前逐级校验 workspace 完整父目录链，并校验 `business/migrations/multi-agent-v1.json`。真正空目录会先原子写入 `fresh-install` 标记；主库尚未出现时只允许受控 marker 目录和临时文件，主库出现后 fresh 与 completed 状态都必须校验完整注册集合。完整集合包含规范主双库、每个 Agent 的规范 workspace 与 manifest、全部非 Plana Agent 的双库、每个 QQ 的 Agent 归属、唯一 WebUI 端口和 `config-full/qq/plugins` 目录，以及 Plana/primary 基线与 primary `6099` 端口；所有必需路径逐段拒绝符号链接。完成标记额外核对迁移目标 workspace 和端口。任何缺失、摘要或格式无效、注册状态漂移与符号链接都会稳定拒绝且不补建当前结构。
 
 现有单 Agent workspace 在首次启动新代码前，必须人工完成本文的 dry-run、停服 apply、恢复点与迁移报告复验。结构已经就绪但缺少标记时，dry-run 仍返回 `ready`，apply 会重新创建恢复点并写入完成标记；只有完成标记及其目标状态全部通过校验时才返回 `already-migrated`。
 
@@ -258,7 +258,7 @@ npm run backup:verify -- --backup "/absolute/path/from/recoveryPoint"
 
 迁移器在恢复点创建后失败时，错误 JSON 的 `details.recoveryPoint` 指向可恢复的双库备份。旧 NapCat 根目录仍然保留。目标目录中的复制文件属于可重复执行的兼容副本，修复冲突后可以重新运行 dry-run 和 apply。
 
-首次安装当前只对 marker 目录与临时 marker 文件的发布中断提供自动清理和重试。规范主库一旦出现，若队列库、manifest、账号目录或注册关系仍不完整，后续初始化与迁移都会以 `MULTI_AGENT_MIGRATION_STATE_INVALID` 失败关闭；此时必须核对 SQLite、marker 和创建日志后选择受控恢复，不能删除目录或补空库绕过门禁。各持久化边界的故障注入、幂等续跑与回滚由 `ONBOARD-004` 跟踪。
+首次安装为 marker、主库、queue、manifest、注册行和账号目录写入带 HMAC 的 durable journal。任一边界中断后，再次执行 `./sunabot.sh up` 会按 journal 幂等继续；执行 `./sunabot.sh rollback-first-run` 会逐项回滚已知产物并保留未知文件。完成前必须通过主库 schema 9、queue schema 4、关键表列、约束、外键、索引、完整注册关系和父链路径校验；损坏库、旧 schema、伪造最小表或用户符号链接都会失败关闭，不能通过补空库绕过门禁。
 
 以下情况禁止启动服务：
 

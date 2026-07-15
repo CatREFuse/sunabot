@@ -163,7 +163,7 @@ up | down | restart | status | logs | doctor
 
 当前启动顺序：迁移标记门禁与空目录首次标记 → workspace 布局初始化 → 密钥与管理凭据 → Core 启动与健康检查 → 从注册主库读取已启用 QQ 账号 → 逐账号写入 OneBot 配置并启动 NapCat 容器 → 写入 launcher state。停止顺序为全部 NapCat 账号 → Core → 清理 launcher state。
 
-新增 QQ 账号后，当前需要执行 `./sunabot.sh restart` 才会实例化对应 NapCat 容器。管理台在容器尚未存在时显示重启提示，不应伪造二维码就绪状态。
+新增、启停或移除 QQ 账号后，宿主 account runtime daemon 按注册表调和目标 NapCat 容器；Docker Core 通过 workspace request/result bridge 请求宿主执行，不挂载 Docker socket。管理台显示期望状态、实际状态、调和需求和最近错误，容器尚未进入扫码态时不能伪造二维码就绪状态。注册库不可读时必须失败关闭，不能生成停止或删除计划。
 
 ## 7. Native 与发行边界
 
@@ -186,7 +186,7 @@ Native 模式只在宿主环境运行 Sunabot Core。`deploy/native/bin/start-su
 
 ## 9. 迁移启动门禁
 
-- workspace 初始化与 API 组合根会在配置、目录或 SQLite 业务写入前校验 `business/migrations/multi-agent-v1.json`；AgentRegistry 在自身文件和注册写入前复核，或接收同一组合根已经完成的检查结果。真正空目录先原子写入 `fresh-install` 标记，marker 目录与临时 marker 的受控中断残留可以重试；主库一旦出现，后续门禁要求完整注册状态。主库出现后的半初始化当前安全拒绝且需要人工恢复，完整的持久化边界故障注入与幂等续跑/回滚由 `ONBOARD-004` 跟踪。既有目录缺少标记、标记格式或摘要无效、标记路径含符号链接、任一注册 Agent 或 QQ 的必需状态不一致时稳定拒绝，且不补建当前结构。
+- workspace 初始化、launcher、probe、API 组合根、AgentRegistry、first-run、账号 daemon 和单 Agent 迁移器在 marker、配置、凭据、SQLite、注册表或运行目录写入前共用完整父链路径门禁，并校验 `business/migrations/multi-agent-v1.json`。真正空目录原子写入 `fresh-install` 标记；首次运行用 HMAC journal 记录 marker、主库、queue、manifest、注册行和账号目录边界，受控中断后可以继续或回滚，未知文件保持原样。完成前必须校验当前主库与 queue schema、关键表列、约束、外键、索引、全部 Agent/QQ 注册状态和 Plana/primary 基线。既有目录缺少标记、标记格式或摘要无效、父链或必需路径含用户符号链接、任一注册状态不一致时稳定拒绝，且不补建当前结构。
 - 完整注册状态包含每个 Agent 的规范 workspace 与 manifest、非 Plana Agent 的双库、每个 QQ 的三个 NapCat 运行目录，以及不可删除的 Plana/primary 基线。`completed-migration` 还固定核对目标 Agent workspace 和 primary WebUI 端口，所有必需路径都拒绝符号链接穿越；迁移后新增的合法 Agent 与账号继续纳入完整集合校验。
 - `migrate:multi-agent --apply --quiesced` 在写入业务结构前核对 Native PID、配置与固定端口、全部账号端口和当前 workspace 的全部活动容器，再创建并复验 SQLite 恢复点；完成记录数、文件哈希、SQLite 与完整注册状态校验后写入迁移报告，再原子写入绑定恢复点 ID、恢复 manifest、报告、源状态与目标注册信息的 `completed-migration` 标记。报告分别以 `copiedRuntimeEntries`、`preservedRuntimeDivergences`、`copiedSystemPrompts` 与 `preservedSystemPromptDivergences` 记录实际复制和保留差异，运行目录差异绑定旧源与当前目标两侧类型及哈希，apply 后复验目标未变化。
 - 结构已经就绪但缺少标记时，dry-run 仍返回 `ready`。操作者必须停服执行 apply，重新建立恢复点并封存完成标记；`already-migrated` 只在标记、全部 Agent manifest 与双库、注册表和全部账号运行目录同时通过校验后返回。

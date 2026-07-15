@@ -98,10 +98,11 @@ describe("provider adapter ports", () => {
     });
     expect(result).toMatchObject({ response, text: "ok", attempt: 2, maxAttempts: 2 });
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(fetchMock.mock.calls).toEqual([
-      ["https://example.test/responses", init],
-      ["https://example.test/responses", init]
-    ]);
+    for (const [url, requestInit] of fetchMock.mock.calls) {
+      expect(url).toBe("https://example.test/responses");
+      expect(requestInit).toMatchObject(init);
+      expect(requestInit?.signal).toBeInstanceOf(AbortSignal);
+    }
     expect(beforeAttempt.mock.calls).toEqual([
       [{ attempt: 1, maxAttempts: 2 }],
       [{ attempt: 2, maxAttempts: 2 }]
@@ -112,6 +113,23 @@ describe("provider adapter ports", () => {
       willRetry: true,
       retryDelayMs: 150
     });
+  });
+
+  it("uses a caller-provided transport attempt limit", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockRejectedValueOnce(new TypeError("network 1"))
+      .mockRejectedValueOnce(new TypeError("network 2"))
+      .mockRejectedValueOnce(new TypeError("network 3"))
+      .mockResolvedValueOnce(new Response("complete", { status: 200 }));
+
+    const result = fetchTextWithTransportRetry("https://example.test/responses", {}, undefined, {
+      maxAttempts: 4
+    });
+    await vi.runAllTimersAsync();
+
+    await expect(result).resolves.toMatchObject({ text: "complete", attempt: 4, maxAttempts: 4 });
+    expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
   it("retries a response body read failure", async () => {
@@ -137,6 +155,74 @@ describe("provider adapter ports", () => {
       willRetry: true,
       status: 200,
       retryDelayMs: 150
+    });
+  });
+
+  it("retries a response body that exceeds the per-attempt timeout", async () => {
+    vi.useFakeTimers();
+    const stalledResponse = {
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      text: vi.fn(() => new Promise<string>(() => {}))
+    } as unknown as Response;
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(stalledResponse)
+      .mockResolvedValueOnce(new Response("complete", { status: 200 }));
+    const attemptFailed = vi.fn();
+
+    const result = fetchTextWithTransportRetry("https://example.test/responses", {
+      method: "POST"
+    }, undefined, { attemptTimeoutMs: 100, attemptFailed });
+    await vi.advanceTimersByTimeAsync(100);
+    await vi.advanceTimersByTimeAsync(150);
+
+    await expect(result).resolves.toMatchObject({ text: "complete", attempt: 2 });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(attemptFailed).toHaveBeenCalledWith(expect.objectContaining({
+      name: "TimeoutError",
+      message: "Provider transport attempt timed out after 100ms"
+    }), {
+      attempt: 1,
+      maxAttempts: 2,
+      willRetry: true,
+      status: 200,
+      retryDelayMs: 150
+    });
+  });
+
+  it("does not retry a stalled response body after caller cancellation", async () => {
+    let markBodyStarted: (() => void) | undefined;
+    const bodyStarted = new Promise<void>((resolve) => { markBodyStarted = resolve; });
+    const stalledResponse = {
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      text: vi.fn(() => {
+        markBodyStarted?.();
+        return new Promise<string>(() => {});
+      })
+    } as unknown as Response;
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(stalledResponse);
+    const attemptFailed = vi.fn();
+    const controller = new AbortController();
+    const reason = new Error("caller cancelled");
+
+    const result = fetchTextWithTransportRetry("https://example.test/responses", {
+      method: "POST",
+      signal: controller.signal
+    }, controller.signal, { attemptTimeoutMs: 100, attemptFailed });
+    await bodyStarted;
+    controller.abort(reason);
+
+    await expect(result).rejects.toBe(reason);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(attemptFailed).toHaveBeenCalledWith(reason, {
+      attempt: 1,
+      maxAttempts: 2,
+      willRetry: false,
+      status: 200,
+      retryDelayMs: 0
     });
   });
 

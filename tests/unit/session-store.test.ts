@@ -18,6 +18,196 @@ afterEach(async () => {
 });
 
 describe("SessionStore", () => {
+  it("gates an interrupted non-idempotent settle effect until explicit resolution", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-session-effect-unknown-"));
+    temporaryDirectories.push(directory);
+    const databasePath = path.join(directory, "sessions.sqlite");
+    const before = new SessionStore({ databasePath });
+    storeForCleanup(before);
+    before.enqueueEvent({ sessionId: "group:effect", kind: "incoming", payload: {} });
+    const turn = before.claimNextTurn({ workerId: "turn" })!;
+    before.finishTurn({
+      turnId: turn.turn.id,
+      workerId: "turn",
+      outcome: "replied",
+      outbox: [{ kind: "onebot.reply", deliveryPartition: "qq-effect", payload: { text: "hello" } }]
+    });
+    const sending = before.claimNextOutbox({ workerId: "sender" })!;
+    before.markOutboxTransportStarted(sending.id, "sender");
+    before.markOutboxRemoteSent(sending.id, "sender", { accepted: true });
+    before.beginOutboxSettleEffect(sending.id, "sender", "after_reply:audit");
+    before.close();
+    stores.splice(stores.indexOf(before), 1);
+
+    const after = new SessionStore({ databasePath, recoverOnOpen: "all" });
+    storeForCleanup(after);
+    expect(after.getOutbox(sending.id)).toMatchObject({
+      status: "delivery_unknown",
+      uncertainSettleStep: "after_reply:audit",
+      completedSettleSteps: []
+    });
+    expect(after.claimNextOutbox({ workerId: "automatic" })).toBeNull();
+    expect(() => after.replayUnknownOutbox({
+      outboxId: sending.id,
+      confirmedNotSent: true
+    })).toThrow("settle effect");
+    expect(() => after.resolveUnknownSettle({
+      outboxId: sending.id,
+      settleStep: "after_reply:audit",
+      confirmed: "unknown"
+    } as never)).toThrow("confirmed");
+    expect(() => after.resolveUnknownSettle({
+      outboxId: sending.id,
+      settleStep: "",
+      confirmed: "applied"
+    })).toThrow("settleStep");
+    expect(() => after.resolveUnknownSettle({
+      outboxId: sending.id,
+      settleStep: "after_reply:wrong",
+      confirmed: "applied"
+    })).toThrow("unknown settle effect is after_reply:audit");
+
+    const resumed = after.resolveUnknownSettle({
+      outboxId: sending.id,
+      settleStep: "after_reply:audit",
+      confirmed: "applied"
+    });
+    expect(resumed).toMatchObject({
+      status: "sent_remote",
+      uncertainSettleStep: undefined,
+      completedSettleSteps: ["after_reply:audit"]
+    });
+    expect(() => after.resolveUnknownSettle({
+      outboxId: sending.id,
+      settleStep: "after_reply:audit",
+      confirmed: "applied"
+    })).toThrow("does not have an unknown settle effect");
+    expect(after.claimNextOutbox({ workerId: "settler" })).toMatchObject({ id: sending.id });
+  });
+
+  it("persists delivery partitions and excludes only paused partitions from claims", async () => {
+    const { store } = await createHarness();
+    for (const [sessionId, accountId] of [["group:offline", "qq-offline"], ["group:online", "qq-online"]]) {
+      store.enqueueEvent({ sessionId, kind: "incoming", payload: {} });
+      const turn = store.claimNextTurn({ workerId: `turn:${accountId}`, sessionId })!;
+      store.finishTurn({
+        turnId: turn.turn.id,
+        workerId: `turn:${accountId}`,
+        outcome: "replied",
+        outbox: [{
+          kind: "onebot.reply",
+          deliveryPartition: accountId,
+          payload: { text: accountId }
+        }]
+      });
+    }
+
+    expect(() => store.claimNextOutbox({
+      workerId: "sender",
+      excludedDeliveryPartitions: [""]
+    })).toThrow("excludedDeliveryPartitions");
+
+    const claimed = store.claimNextOutbox({
+      workerId: "sender",
+      excludedDeliveryPartitions: ["qq-offline"]
+    });
+    expect(claimed).toMatchObject({
+      sessionId: "group:online",
+      deliveryPartition: "qq-online"
+    });
+    expect(store.listOutbox("group:offline")[0]).toMatchObject({
+      status: "pending",
+      deliveryPartition: "qq-offline"
+    });
+  });
+
+  it("persists remote receipts before idempotent settlement and resumes settlement after reopening", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-session-settle-"));
+    temporaryDirectories.push(directory);
+    const databasePath = path.join(directory, "sessions.sqlite");
+    const before = new SessionStore({ databasePath });
+    storeForCleanup(before);
+    before.enqueueEvent({ sessionId: "group:settle", kind: "incoming", payload: {} });
+    const turn = before.claimNextTurn({ workerId: "turn" })!;
+    before.finishTurn({
+      turnId: turn.turn.id,
+      workerId: "turn",
+      outcome: "replied",
+      outbox: [{ kind: "onebot.reply", deliveryPartition: "qq-1", payload: { text: "hello" } }]
+    });
+    const sending = before.claimNextOutbox({ workerId: "sender" })!;
+    expect(() => before.markOutboxRemoteSent(
+      sending.id,
+      "sender",
+      { accepted: true }
+    )).toThrow("transport has not started");
+    before.markOutboxTransportStarted(sending.id, "sender");
+    before.markOutboxRemoteSent(sending.id, "sender", { accepted: true, messageId: "9001" });
+    expect(() => before.completeOutboxSettleStep(sending.id, "sender", "")).toThrow("settleStep");
+    before.completeOutboxSettleStep(sending.id, "sender", "conversation_projection");
+    expect(before.getOutbox(sending.id)).toMatchObject({
+      status: "sent_remote",
+      remoteReceipt: { accepted: true, messageId: "9001" },
+      completedSettleSteps: ["conversation_projection"]
+    });
+    before.close();
+    stores.splice(stores.indexOf(before), 1);
+
+    const after = new SessionStore({ databasePath, recoverOnOpen: "all" });
+    storeForCleanup(after);
+    const settlement = after.claimNextOutbox({ workerId: "settler" });
+    expect(settlement).toMatchObject({
+      id: sending.id,
+      status: "sent_remote",
+      attempts: 1,
+      settleAttempts: 1,
+      remoteReceipt: { accepted: true, messageId: "9001" },
+      completedSettleSteps: ["conversation_projection"]
+    });
+  });
+
+  it("quarantines a recovered in-flight transport and requires explicit not-sent confirmation to replay", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-session-unknown-recovery-"));
+    temporaryDirectories.push(directory);
+    const databasePath = path.join(directory, "sessions.sqlite");
+    const before = new SessionStore({ databasePath });
+    storeForCleanup(before);
+    before.enqueueEvent({ sessionId: "group:unknown", kind: "incoming", payload: {} });
+    const turn = before.claimNextTurn({ workerId: "turn" })!;
+    before.finishTurn({
+      turnId: turn.turn.id,
+      workerId: "turn",
+      outcome: "replied",
+      outbox: [{ kind: "onebot.reply", deliveryPartition: "qq-unknown", payload: { text: "maybe" } }]
+    });
+    const sending = before.claimNextOutbox({ workerId: "sender" })!;
+    before.markOutboxTransportStarted(sending.id, "sender");
+    before.close();
+    stores.splice(stores.indexOf(before), 1);
+
+    const after = new SessionStore({ databasePath, recoverOnOpen: "all" });
+    storeForCleanup(after);
+    expect(after.getOutbox(sending.id)).toMatchObject({
+      status: "delivery_unknown",
+      attempts: 1,
+      error: { code: "delivery_recovered_unknown" }
+    });
+    expect(after.claimNextOutbox({ workerId: "automatic-retry" })).toBeNull();
+    expect(() => after.replayUnknownOutbox({
+      outboxId: sending.id,
+      confirmedNotSent: false
+    } as never)).toThrow("confirmedNotSent");
+
+    const replay = after.replayUnknownOutbox({ outboxId: sending.id, confirmedNotSent: true });
+    expect(replay).toMatchObject({
+      status: "pending",
+      deliveryPartition: "qq-unknown",
+      partitionSequence: 2,
+      attempts: 0
+    });
+    expect(replay.id).not.toBe(sending.id);
+  });
+
   it("migrates an existing v1 database with attempt fencing columns", async () => {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-session-v1-"));
     temporaryDirectories.push(directory);
@@ -30,6 +220,16 @@ describe("SessionStore", () => {
       ) STRICT;
       INSERT INTO schema_migrations(version, applied_at) VALUES (1, 1);
       CREATE TABLE tool_jobs (id TEXT PRIMARY KEY) STRICT;
+      CREATE TABLE outbox (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        sequence INTEGER NOT NULL,
+        kind TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        status TEXT NOT NULL,
+        available_at INTEGER NOT NULL,
+        created_at INTEGER NOT NULL
+      ) STRICT;
     `);
     legacy.close();
 
@@ -43,7 +243,145 @@ describe("SessionStore", () => {
     inspection.close();
 
     expect(columns).toEqual(expect.arrayContaining(["attempt_token", "process_identity_json"]));
-    expect(version.version).toBe(2);
+    expect(version.version).toBe(4);
+  });
+
+  it("migrates v2 outbox rows into stable OneBot and Web delivery partitions", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-session-v2-outbox-"));
+    temporaryDirectories.push(directory);
+    const databasePath = path.join(directory, "sessions.sqlite");
+    const legacy = new DatabaseSync(databasePath);
+    legacy.exec(`
+      CREATE TABLE schema_migrations (
+        version INTEGER PRIMARY KEY,
+        applied_at INTEGER NOT NULL
+      ) STRICT;
+      INSERT INTO schema_migrations(version, applied_at) VALUES (2, 1);
+      CREATE TABLE sessions (
+        session_id TEXT PRIMARY KEY,
+        next_event_sequence INTEGER NOT NULL DEFAULT 0,
+        completed_event_sequence INTEGER NOT NULL DEFAULT 0,
+        next_outbox_sequence INTEGER NOT NULL DEFAULT 0,
+        completed_outbox_sequence INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      ) STRICT;
+      INSERT INTO sessions (
+        session_id, next_outbox_sequence, completed_outbox_sequence, created_at, updated_at
+      ) VALUES ('group:migrating', 2, 0, 1, 1);
+      CREATE TABLE turns (
+        id TEXT PRIMARY KEY,
+        status TEXT NOT NULL,
+        lease_until INTEGER,
+        started_at INTEGER NOT NULL
+      ) STRICT;
+      CREATE TABLE tool_jobs (
+        id TEXT PRIMARY KEY,
+        status TEXT NOT NULL,
+        worker_id TEXT,
+        lease_until INTEGER,
+        available_at INTEGER NOT NULL,
+        attempt_token TEXT,
+        process_identity_json TEXT
+      ) STRICT;
+      CREATE TABLE outbox (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        sequence INTEGER NOT NULL,
+        origin_turn_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        dedupe_key TEXT,
+        payload_json TEXT NOT NULL,
+        status TEXT NOT NULL,
+        attempts INTEGER NOT NULL,
+        available_at INTEGER NOT NULL,
+        worker_id TEXT,
+        lease_until INTEGER,
+        result_json TEXT,
+        error_json TEXT,
+        created_at INTEGER NOT NULL,
+        sent_at INTEGER,
+        finished_at INTEGER
+      ) STRICT;
+    `);
+    const payload = (id: string, transport: "onebot" | "web", accountId?: string) => JSON.stringify({
+      schemaVersion: 1,
+      id,
+      type: "session.outbox_message",
+      occurredAt: "2026-07-14T00:00:00.000Z",
+      conversationId: `group:${id}`,
+      correlationId: `turn:${id}`,
+      payload: {
+        kind: "onebot.reply",
+        value: {
+          schemaVersion: 1,
+          id: `runtime:${id}`,
+          type: "runtime.assistant_reply",
+          occurredAt: "2026-07-14T00:00:00.000Z",
+          correlationId: `message:${id}`,
+          payload: {
+            incoming: { transport, ...(accountId ? { accountId } : {}) }
+          }
+        }
+      }
+    });
+    const insert = legacy.prepare(`
+      INSERT INTO outbox (
+        id, session_id, sequence, origin_turn_id, kind, payload_json,
+        status, attempts, available_at, created_at
+      ) VALUES (?, ?, 1, ?, 'onebot.reply', ?, ?, 1, 1, ?)
+    `);
+    insert.run("onebot", "group:onebot", "turn:onebot", payload("onebot", "onebot", "account-secondary"), "unknown", 1);
+    insert.run("web", "web:admin", "turn:web", payload("web", "web"), "pending", 2);
+    legacy.prepare(`
+      INSERT INTO outbox (
+        id, session_id, sequence, origin_turn_id, kind, payload_json,
+        status, attempts, available_at, worker_id, lease_until, created_at
+      ) VALUES (?, 'group:migrating', ?, ?, 'onebot.reply', ?, ?, 1, 1, ?, 999999, ?)
+    `).run(
+      "legacy-sending",
+      1,
+      "turn:legacy-sending",
+      payload("legacy-sending", "onebot", "account-migrating"),
+      "sending",
+      "legacy-worker",
+      3
+    );
+    legacy.prepare(`
+      INSERT INTO outbox (
+        id, session_id, sequence, origin_turn_id, kind, payload_json,
+        status, attempts, available_at, created_at
+      ) VALUES (?, 'group:migrating', ?, ?, 'onebot.reply', ?, 'pending', 0, 1, ?)
+    `).run(
+      "legacy-next",
+      2,
+      "turn:legacy-next",
+      payload("legacy-next", "onebot", "account-migrating"),
+      4
+    );
+    legacy.close();
+
+    const migrated = new SessionStore({ databasePath, recoverOnOpen: "all" });
+    storeForCleanup(migrated);
+    expect(migrated.getOutbox("onebot")).toMatchObject({
+      deliveryPartition: "account-secondary",
+      partitionSequence: 1,
+      status: "delivery_unknown"
+    });
+    expect(migrated.getOutbox("web")).toMatchObject({
+      deliveryPartition: "web",
+      partitionSequence: 1,
+      status: "pending"
+    });
+    expect(migrated.getOutbox("legacy-sending")).toMatchObject({
+      status: "delivery_unknown",
+      error: { code: "legacy_transport_migration_unknown" }
+    });
+    expect(migrated.getSessionState("group:migrating")?.completedOutboxSequence).toBe(1);
+    expect(migrated.claimNextOutbox({ workerId: "post-migration" })).toMatchObject({
+      id: "legacy-next",
+      status: "sending"
+    });
   });
 
   it("uses WAL, deduplicates intake, and leases FIFO turns independently per session", async () => {

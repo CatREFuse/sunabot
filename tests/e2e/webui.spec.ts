@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import sharp from "sharp";
 import { installMockApi, modelCatalog } from "./mock-api";
 
-test("Agent 可新增、隔离切换并添加独立 QQ", async ({ page }) => {
+test("Agent 可新增、隔离切换并运行独立 NapCat QQ Docker", async ({ page }) => {
   const state = await installMockApi(page);
   await page.goto("/agents");
 
@@ -19,13 +19,36 @@ test("Agent 可新增、隔离切换并添加独立 QQ", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "圣娅", exact: true })).toBeVisible();
   expect(state.agents.some((agent) => agent.id === "seia")).toBe(true);
 
-  await page.getByRole("button", { name: "新增 QQ", exact: true }).click();
-  const createAccount = page.getByRole("dialog", { name: "新增 QQ" });
-  await createAccount.getByLabel("账号名称").fill("圣娅主账号");
-  await createAccount.getByRole("button", { name: "新增 QQ", exact: true }).click();
+  await page.getByRole("button", { name: "新建 NapCat QQ Docker", exact: true }).click();
+  const createAccount = page.getByRole("dialog", { name: "新建 NapCat QQ Docker" });
+  await createAccount.getByLabel("名称").fill("圣娅主账号");
+  await createAccount.getByRole("button", { name: "新建", exact: true }).click();
   await expect(page.getByText("圣娅主账号", { exact: true })).toBeVisible();
-  await expect(page.getByText("待启动", { exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "重启后登录", exact: true })).toBeDisabled();
+  const createdAccount = state.agents.find((agent) => agent.id === "seia")?.accounts[0];
+  expect(createdAccount).toMatchObject({
+    desiredState: "running",
+    observedState: "missing",
+    reconcileRequired: true,
+    runtimeReady: false,
+    connected: false,
+    lastError: null
+  });
+  await expect(page.getByText("需要处理", { exact: true })).toBeVisible();
+  const run = page.getByRole("button", { name: "运行", exact: true });
+  await expect(run).toBeEnabled();
+  await run.click();
+  expect(createdAccount).toMatchObject({
+    desiredState: "running",
+    observedState: "running",
+    reconcileRequired: false,
+    runtimeReady: true
+  });
+  await expect(page.getByText("待登录", { exact: true })).toBeVisible();
+  const login = page.getByRole("button", { name: "登录", exact: true });
+  await expect(login).toBeEnabled();
+  await login.click();
+  await expect(page.getByRole("heading", { name: "QQ 登录" })).toBeVisible();
+  await page.getByRole("button", { name: "关闭", exact: true }).click();
 
   await page.getByRole("button", { name: "选择 阿罗娜" }).click();
   const promptRequest = page.waitForRequest((request) => request.url().includes("/api/agent-files?agentId=arona"));
@@ -472,10 +495,12 @@ test("系统设置可配置广播风暴嗅探参数", async ({ page }) => {
   await expect(page.getByLabel("检测窗口（分钟）")).toHaveValue("2");
   await expect(page.getByLabel("回复次数")).toHaveValue("3");
   await expect(page.getByLabel("静默时长（分钟）")).toHaveValue("1");
+  await expect(page.getByLabel("补充嗅探账号")).toHaveValue("");
 
   await page.getByLabel("检测窗口（分钟）").fill("5");
   await page.getByLabel("回复次数").fill("6");
   await page.getByLabel("静默时长（分钟）").fill("7");
+  await page.getByLabel("补充嗅探账号").fill("10001, 20002");
   await page.getByRole("button", { name: "保存", exact: true }).click();
 
   await expect.poll(() => state.patchRequests.length).toBe(1);
@@ -486,7 +511,8 @@ test("系统设置可配置广播风暴嗅探参数", async ({ page }) => {
         enabled: true,
         windowMinutes: 5,
         replyThreshold: 6,
-        cooldownMinutes: 7
+        cooldownMinutes: 7,
+        additionalQqIds: ["10001", "20002"]
       }
     }
   });
@@ -494,8 +520,27 @@ test("系统设置可配置广播风暴嗅探参数", async ({ page }) => {
     enabled: true,
     windowMinutes: 5,
     replyThreshold: 6,
-    cooldownMinutes: 7
+    cooldownMinutes: 7,
+    additionalQqIds: ["10001", "20002"]
   });
+});
+
+test("系统设置可配置正常回复重试次数", async ({ page }) => {
+  const state = await installMockApi(page);
+  await page.goto("/settings/normalReply");
+
+  await expect(page.getByRole("heading", { name: "正常回复" })).toBeVisible();
+  await expect(page.getByLabel("失败重试次数")).toHaveValue("3");
+
+  await page.getByLabel("失败重试次数").fill("6");
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+
+  await expect.poll(() => state.patchRequests.length).toBe(1);
+  expect(state.patchRequests[0]).toMatchObject({
+    section: "normalReply",
+    body: { value: { maxRetries: 6 } }
+  });
+  expect(state.config.normalReply).toEqual({ maxRetries: 6 });
 });
 
 test("工具目录支持启停、全局说明和继承说明恢复", async ({ page }) => {
@@ -725,7 +770,7 @@ test("宽屏提示词可调整变量表宽度", async ({ page }) => {
   await expect.poll(() => editor.evaluate((element) => element.scrollTop)).toBe(scrollTop);
   const referencedVariable = variableTable.getByRole("button", { name: /persona\.preference/ });
   await expect(referencedVariable).toContainText("×2");
-  await expect(variableTable).toContainText("已引用 2 / 5");
+  await expect(variableTable).toContainText("已引用 2 / 9");
 });
 
 test("最终请求支持消息组、排序、结构测试和 JSON 存储同步", async ({ page }) => {

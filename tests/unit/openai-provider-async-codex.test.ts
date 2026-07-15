@@ -200,7 +200,7 @@ describe("OpenAIProvider asynchronous Codex tool turns", () => {
     expect(toolNames(fetchRequestBody(fetchMock, 0))).toContain("assistant_text");
   });
 
-  it("does not silently drop assistant_text when it appears beside a deferred call", async () => {
+  it("rejects deferred completion after assistant_text was accepted in an earlier round", async () => {
     const provider = codexProvider();
     const onAssistantText = vi.fn(async () => undefined);
     const task = { task: "检查多工具响应", kind: "analysis" };
@@ -212,7 +212,8 @@ describe("OpenAIProvider asynchronous Codex tool turns", () => {
       ]),
       codexSseResponse([
         functionCall("codex", "call_single_codex", { ...task, dispatch_message: "我开始检查。" })
-      ])
+      ]),
+      codexSseResponse([assistantMessage("检查完成。")])
     );
 
     const result = await provider.completeTurn("system", [{ role: "user", content: "检查" }], {
@@ -221,12 +222,11 @@ describe("OpenAIProvider asynchronous Codex tool turns", () => {
     });
 
     expect(onAssistantText).toHaveBeenCalledWith("我先确认一下。", "assistant_text");
-    expect(result).toMatchObject({
-      kind: "deferred",
-      acknowledgement: "我开始检查。",
-      toolCall: { callId: "call_single_codex", arguments: task }
-    });
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result).toEqual({ kind: "completed", text: "检查完成。" });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    const thirdInput = fetchRequestBody(fetchMock, 2).input as Array<Record<string, unknown>>;
+    const rejected = thirdInput.find((item) => item.type === "function_call_output" && item.call_id === "call_single_codex");
+    expect(JSON.parse(String(rejected?.output)).error).toContain("before assistant text or any other tool");
   });
 
   it("returns an image task dispatch before image generation starts", async () => {

@@ -2,7 +2,8 @@ import type { RenderedPromptRequest } from "../../../services/agent/promptSystem
 import type {
   ProviderAdapterContext,
   ProviderCompleteOptions,
-  ProviderTurnResult
+  ProviderTurnResult,
+  TurnToolState
 } from "./contracts.js";
 import { toChatCompletionMessage, toResponsesInputMessage } from "./imageInput.js";
 import { withLogContext } from "./logger.js";
@@ -32,6 +33,7 @@ import {
   codexBackendHeaders,
   fetchTextWithTransportRetry,
   normalizeCodexResponsesUrl,
+  resolveModelRequestMaxAttempts,
   resolveRetryDelayMs,
   waitForRetry
 } from "./transport.js";
@@ -39,25 +41,32 @@ import { errorMessage, parseJson } from "./valueUtils.js";
 import { completeAnthropicMessages } from "./anthropicCompletion.js";
 import { completeGeminiGenerateContent } from "./geminiCompletion.js";
 import { claimToolCalls, resolveMaxToolCalls, toolCallLimitError } from "./toolLoopLimits.js";
+import {
+  createTurnToolState,
+  withTurnToolState
+} from "./turnToolState.js";
 
 export async function completeProviderTurn(
   context: ProviderAdapterContext,
   request: RenderedPromptRequest,
   options: ProviderCompleteOptions
 ): Promise<ProviderTurnResult> {
+  const state = createTurnToolState();
+  const turnOptions = withTurnToolState(options, state);
   if (context.provider.kind === "codex-responses") {
-    return completeCodexResponses(context, request, options);
+    return completeCodexResponses(context, request, turnOptions, state);
   }
-  if (context.provider.kind === "anthropic-official" || context.provider.kind === "anthropic-compatible") return completeAnthropicMessages(context, request, options);
-  if (context.provider.kind === "gemini-official" || context.provider.kind === "gemini-compatible") return completeGeminiGenerateContent(context, request, options);
-  if (context.provider.kind === "openai-compatible") return completeChatCompletions(context, request, options);
-  return completeOpenAIResponses(context, request, options);
+  if (context.provider.kind === "anthropic-official" || context.provider.kind === "anthropic-compatible") return completeAnthropicMessages(context, request, turnOptions, state);
+  if (context.provider.kind === "gemini-official" || context.provider.kind === "gemini-compatible") return completeGeminiGenerateContent(context, request, turnOptions, state);
+  if (context.provider.kind === "openai-compatible") return completeChatCompletions(context, request, turnOptions, state);
+  return completeOpenAIResponses(context, request, turnOptions, state);
 }
 
 async function completeOpenAIResponses(
   context: ProviderAdapterContext,
   request: RenderedPromptRequest,
-  options: ProviderCompleteOptions
+  options: ProviderCompleteOptions,
+  state: TurnToolState
 ): Promise<ProviderTurnResult> {
   const client = context.createResponsesClient({ maxRetries: 0 });
   const tools = context.toolExecutor.resolveDefinitions(options, request.tools);
@@ -76,7 +85,6 @@ async function completeOpenAIResponses(
   });
   const requestFields = promptRequestFields(request);
   const maxToolCalls = resolveMaxToolCalls(options);
-  let toolCallCount = 0;
 
   for (let round = 0; round <= maxToolCalls; round += 1) {
     const requestBody = {
@@ -93,7 +101,7 @@ async function completeOpenAIResponses(
     };
     const metadata = withLogContext({
       round,
-      toolCallCount,
+      toolCallCount: state.toolCallCount,
       maxToolCalls,
       toolNames
     }, options.logContext);
@@ -103,6 +111,7 @@ async function completeOpenAIResponses(
       requestBody,
       metadata,
       options.signal,
+      options.modelRequestMaxRetries,
       () => client.responses.create(requestBody as never, { signal: options.signal })
     );
     const response = attempt.value;
@@ -112,10 +121,10 @@ async function completeOpenAIResponses(
     }, attempt.metadata);
 
     const toolCalls = extractFunctionCalls(response);
-    toolCallCount = claimToolCalls(toolCallCount, toolCalls.length, maxToolCalls);
-    const deferred = context.toolExecutor.deferredTurn(toolCalls, options, tools);
+    state.toolCallCount = claimToolCalls(state.toolCallCount, toolCalls.length, maxToolCalls);
+    const deferred = context.toolExecutor.deferredTurn(toolCalls, options, tools, state);
     if (deferred) return deferred;
-    const noReply = context.toolExecutor.noReplyTurn(toolCalls, options, tools);
+    const noReply = context.toolExecutor.noReplyTurn(toolCalls, options, tools, state);
     if (noReply) return noReply;
     if (!toolCalls.length) {
       const text = extractProviderText(response);
@@ -124,7 +133,7 @@ async function completeOpenAIResponses(
     }
 
     await emitIntermediateAssistantText(response, options);
-    input.push(...extractResponseOutput(response), ...(await context.toolExecutor.execute(toolCalls, options, tools)));
+    input.push(...extractResponseOutput(response), ...(await context.toolExecutor.execute(toolCalls, options, tools, state)));
   }
 
   throw toolCallLimitError(maxToolCalls);
@@ -133,7 +142,8 @@ async function completeOpenAIResponses(
 async function completeCodexResponses(
   context: ProviderAdapterContext,
   request: RenderedPromptRequest,
-  options: ProviderCompleteOptions
+  options: ProviderCompleteOptions,
+  state: TurnToolState
 ): Promise<ProviderTurnResult> {
   const apiKey = context.getApiKey();
   if (!apiKey) throw new Error("Codex 未登录。请先运行 codex login，或设置 CODEX_ACCESS_TOKEN。");
@@ -163,7 +173,6 @@ async function completeCodexResponses(
   });
   const requestFields = promptRequestFields(request);
   const maxToolCalls = resolveMaxToolCalls(options);
-  let toolCallCount = 0;
 
   for (let round = 0; round <= maxToolCalls; round += 1) {
     const requestBody = {
@@ -184,7 +193,7 @@ async function completeCodexResponses(
     };
     const metadata = withLogContext({
       round,
-      toolCallCount,
+      toolCallCount: state.toolCallCount,
       maxToolCalls,
       toolNames
     }, options.logContext);
@@ -199,6 +208,7 @@ async function completeCodexResponses(
       body: JSON.stringify(requestBody),
       signal: options.signal
     }, options.signal, {
+      maxAttempts: resolveModelRequestMaxAttempts(options.modelRequestMaxRetries, 1),
       beforeAttempt: async ({ attempt, maxAttempts }) => {
         responseMetadata = { ...metadata, transportAttempt: attempt, maxTransportAttempts: maxAttempts };
         await context.logger.request("codex.complete", requestBody, responseMetadata);
@@ -235,7 +245,7 @@ async function completeCodexResponses(
     }, responseMetadata);
 
     const toolCalls = extractFunctionCalls(payload);
-    toolCallCount = claimToolCalls(toolCallCount, toolCalls.length, maxToolCalls);
+    state.toolCallCount = claimToolCalls(state.toolCallCount, toolCalls.length, maxToolCalls);
     if (!toolCalls.length) {
       const outputText = extractResponsesTextFromSse(text) || extractResponsesText(payload);
       if (!outputText) throw new Error("模型没有返回可发送内容。");
@@ -243,12 +253,12 @@ async function completeCodexResponses(
     }
 
     const streamText = extractResponsesTextFromSse(text);
-    const deferred = context.toolExecutor.deferredTurn(toolCalls, options, tools);
+    const deferred = context.toolExecutor.deferredTurn(toolCalls, options, tools, state);
     if (deferred) return deferred;
-    const noReply = context.toolExecutor.noReplyTurn(toolCalls, options, tools);
+    const noReply = context.toolExecutor.noReplyTurn(toolCalls, options, tools, state);
     if (noReply) return noReply;
     await emitIntermediateAssistantText(payload, options, streamText);
-    input.push(...extractResponseOutput(payload), ...(await context.toolExecutor.execute(toolCalls, options, tools)));
+    input.push(...extractResponseOutput(payload), ...(await context.toolExecutor.execute(toolCalls, options, tools, state)));
   }
 
   throw toolCallLimitError(maxToolCalls);
@@ -267,14 +277,14 @@ function leadingInstructionBoundary(messages: RenderedPromptRequest["messages"])
 async function completeChatCompletions(
   context: ProviderAdapterContext,
   request: RenderedPromptRequest,
-  options: ProviderCompleteOptions
+  options: ProviderCompleteOptions,
+  state: TurnToolState
 ): Promise<ProviderTurnResult> {
   const client = context.createChatClient({ maxRetries: 0 });
   const messages: Array<Record<string, unknown>> = await Promise.all(request.messages.map(toChatCompletionMessage));
   const definitions = context.toolExecutor.resolveDefinitions(options, request.tools);
   const tools = definitions.map(toChatCompletionTool);
   const maxToolCalls = resolveMaxToolCalls(options);
-  let toolCallCount = 0;
 
   for (let round = 0; round <= maxToolCalls; round += 1) {
     const requestBody = {
@@ -289,7 +299,7 @@ async function completeChatCompletions(
     };
     const metadata = withLogContext({
       round,
-      toolCallCount,
+      toolCallCount: state.toolCallCount,
       maxToolCalls,
       toolNames: tools.map((tool) => tool.function.name)
     }, options.logContext);
@@ -299,6 +309,7 @@ async function completeChatCompletions(
       requestBody,
       metadata,
       options.signal,
+      options.modelRequestMaxRetries,
       () => client.chat.completions.create(requestBody as never, { signal: options.signal })
     );
     const response = attempt.value;
@@ -321,16 +332,16 @@ async function completeChatCompletions(
         arguments: call.function.arguments
       }];
     });
-    toolCallCount = claimToolCalls(toolCallCount, calls.length, maxToolCalls);
+    state.toolCallCount = claimToolCalls(state.toolCallCount, calls.length, maxToolCalls);
     if (!calls.length) {
       const text = choice.content?.trim();
       if (!text) throw new Error("模型没有返回可发送内容。");
       return { kind: "completed", text };
     }
 
-    const deferred = context.toolExecutor.deferredTurn(calls, options, definitions);
+    const deferred = context.toolExecutor.deferredTurn(calls, options, definitions, state);
     if (deferred) return deferred;
-    const noReply = context.toolExecutor.noReplyTurn(calls, options, definitions);
+    const noReply = context.toolExecutor.noReplyTurn(calls, options, definitions, state);
     if (noReply) return noReply;
     if (choice.content?.trim() && options.onAssistantText) await options.onAssistantText(choice.content.trim(), "text");
     messages.push({
@@ -338,7 +349,7 @@ async function completeChatCompletions(
       content: choice.content ?? null,
       tool_calls: choice.tool_calls
     });
-    const outputs = await context.toolExecutor.execute(calls, options, definitions);
+    const outputs = await context.toolExecutor.execute(calls, options, definitions, state);
     messages.push(...outputs.map((output) => ({
       role: "tool",
       tool_call_id: output.call_id,
@@ -355,9 +366,10 @@ async function executeSdkModelRequest<T>(
   request: unknown,
   metadata: Record<string, unknown>,
   signal: AbortSignal | undefined,
+  maxRetries: number | undefined,
   execute: () => Promise<T>
 ) {
-  const maxAttempts = 3;
+  const maxAttempts = resolveModelRequestMaxAttempts(maxRetries, 2);
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     assertRequestNotAborted(signal);
     const attemptMetadata = { ...metadata, transportAttempt: attempt, maxTransportAttempts: maxAttempts };

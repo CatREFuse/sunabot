@@ -84,7 +84,7 @@ import {
   type AttachmentSourcePort
 } from "../../packages/contracts/media/media.js";
 import { loadPersona, AgentPersona } from "../../services/agent/persona.js";
-import { appendRequestLog } from "../requestLog.js";
+import { appendRequestLog, appendRequestLogStrict } from "../requestLog.js";
 import { WORKSPACE_LAYOUT } from "../../packages/platform/workspaceLayout.js";
 import { SenderNameResolver, senderDisplayName, senderIdentity } from "../../services/conversations/senderName.js";
 import type { SelfieInput, SelfieRunResult } from "../../services/tools/selfieTool.js";
@@ -94,6 +94,7 @@ import type { CodexRunner } from "../../packages/contracts/tools/codex.js";
 import {
   OutboxDisconnectedError,
   SessionCoordinator,
+  type OutboxDeliveryContext,
   type SessionHandleResult
 } from "../../services/sessions/sessionCoordinator.js";
 import { SessionStore, type OutboxRecord, type SessionEventRecord } from "../../services/sessions/sessionStore.js";
@@ -109,7 +110,7 @@ import {
 import { buildConversationPromptVariables } from "../../services/agent/persona.js";
 import { DEFAULT_CONTEXT_MESSAGE_LIMIT, MAX_STORED_CONVERSATION_MESSAGES, GROUP_CHAT_SUMMARY_WINDOW_MS, MAX_SELFIE_REFERENCE_IMAGES, MAX_SELFIE_WORKSPACE_REFERENCE_IMAGES, MAX_CURRENT_CONTEXT_IMAGES, MAX_HISTORY_CONTEXT_IMAGES, HYDRATE_MESSAGE_WINDOW_MS, ACTIVE_CONVERSATION_WINDOW_MS, DIRECT_REPLY_TIMEOUT_MS, AMBIENT_ORCHESTRATOR_TIMEOUT_MS, ORCHESTRATOR_MAX_RETRIES, PREPARE_TIMEOUT_MS, RECENT_CONTEXT_TOKEN_BUDGET, DEDUPE_TTL_MS, MAX_DEDUPE_KEYS, DEFAULT_ADMIN_NAME, GROUP_CHAT_SUMMARY_COMMAND, CONVERSATION_REPLY_PROMPT_FILE, SELFIE_PROMPT_FILE, GROUP_CHAT_SUMMARY_PROMPT_FILE, ADMIN_PERSONA_FILES, ADMIN_RUNTIME_PROMPT_DEFAULTS, BatchUserInfo, WorkingMemoryMergeOutput, WorkingMemoryMergeContext, personaFileNameForAdminId, AdminIdentity, ConversationReplyUpdateInput, RuntimeCommandContext, ReplyDeliveryDraft, ReplyDelivery, DeferredCodexTurn, AmbientReplyJob, AmbientReplyState, AmbientIdleTimer, RuntimeConfigSnapshot, RuntimePromptSnapshot, SunaRuntimeOptions } from "./runtimeContracts.js";
 import { conversationRecordId, normalizeOutgoingReplyText, outboundForIncoming, persistentIncomingKey, queueIncomingSnapshot } from "./messagingAttachmentHelpers.js";
-import { formatErrorReply } from "./infrastructure.js";
+import { formatErrorReply, saveConversationRecordsStrict } from "./infrastructure.js";
 
 import type { SunaRuntime } from "../runtime.js";
 type RuntimeHost = SunaRuntime;
@@ -128,7 +129,6 @@ export async function runtime_sendAssistantReply(this: RuntimeHost,
     trace: AssistantMessageTrace = { messageOrigin: "text" }
   ) {
     if (
-      !this.replySuppression.canReplyTo(incoming.time) ||
       !this.isReplySenderAllowed(incoming.userId) ||
       !isCurrent()
     ) return undefined;
@@ -235,30 +235,58 @@ export function runtime_replyDeliveryDraft(this: RuntimeHost,
       dedupeKey
     };
   }
-export async function runtime_deliverReplyOutbox(this: RuntimeHost, payload: AssistantReplyOutboxPayload, gateway: MessagingPort) {
+export async function runtime_deliverReplyOutbox(
+  this: RuntimeHost,
+  payload: AssistantReplyOutboxPayload,
+  gateway: MessagingPort | undefined,
+  delivery?: OutboxDeliveryContext
+) {
     const incoming = payload.incoming;
     const generatedImageAssets = payload.generatedImages.filter((image) => image.url || image.filePath);
     const generatedImageUrls = payload.generatedImages.flatMap((image) => image.url ? [image.url] : []);
-    await gateway.send(outboundForIncoming(
-      incoming,
-      payload.text,
-      generatedImageAssets,
-      payload.quoteReply === false ? undefined : this.groupReplyOptions(incoming).replyToMessageId
-    ));
+    if (delivery?.phase === "send" || !delivery) {
+      if (!gateway) throw new OutboxDisconnectedError("OneBot is not connected.");
+      const sendReply = () => gateway.send(outboundForIncoming(
+        incoming,
+        payload.text,
+        generatedImageAssets,
+        payload.quoteReply === false ? undefined : this.groupReplyOptions(incoming).replyToMessageId
+      ));
+      if (delivery) await delivery.sendRemote(sendReply);
+      else await sendReply();
+    }
 
-    const record = this.recordAssistantMessage(
-      incoming,
-      payload.text || "[图片]",
-      generatedImageUrls,
-      payload.logRunId,
-      undefined,
-      {
-        messageOrigin: payload.messageOrigin,
-        toolNames: payload.toolNames
+    const settleConversation = (idempotencyKey?: string) => {
+      const record = this.recordAssistantMessage(
+        incoming,
+        payload.text || "[图片]",
+        generatedImageUrls,
+        payload.logRunId,
+        undefined,
+        {
+          messageOrigin: payload.messageOrigin,
+          toolNames: payload.toolNames
+        },
+        idempotencyKey ? { persist: false, messageId: idempotencyKey } : undefined
+      );
+      if (idempotencyKey) {
+        saveConversationRecordsStrict([...this.conversationRecords.values()], idempotencyKey);
+      } else {
+        this.scheduleMemoryCompression(record);
       }
-    );
-    if (payload.logRunId) {
-      await appendRequestLog({
+      return record;
+    };
+    if (delivery) {
+      await delivery.settleStep("conversation_projection", settleConversation);
+      await delivery.settleStep("memory_enqueue", async () => {
+        const record = this.conversationRecords.get(conversationRecordId(incoming));
+        if (!record) throw new Error(`Conversation projection is missing: ${conversationRecordId(incoming)}`);
+        await this.enqueueConversationMemory(record);
+        this.scheduleMemoryDrain();
+      });
+    } else settleConversation();
+
+    const settleRequestLog = () => payload.logRunId ? appendRequestLog({
         category: "runtime.action",
         action: "reply.sent",
         request: {
@@ -276,9 +304,31 @@ export async function runtime_deliverReplyOutbox(this: RuntimeHost, payload: Ass
           runId: payload.logRunId,
           stage: "reply"
         }
-      });
-    }
-    await this.hooks.run("after_reply", {
+      }) : undefined;
+    if (delivery) await delivery.settleStep("request_log", (idempotencyKey) => payload.logRunId
+      ? appendRequestLogStrict({
+          category: "runtime.action",
+          action: "reply.sent",
+          request: {
+            scope: incoming.scope,
+            userId: incoming.userId,
+            groupId: incoming.groupId
+          },
+          response: {
+            textChars: payload.text.length,
+            generatedImageCount: generatedImageUrls.length
+          },
+          metadata: {
+            conversationId: conversationRecordId(incoming),
+            incomingMessageId: incoming.messageId == null ? undefined : String(incoming.messageId),
+            runId: payload.logRunId,
+            stage: "reply"
+          }
+        }, idempotencyKey)
+      : undefined);
+    else await settleRequestLog();
+
+    const afterReplyPayload = {
       channel: conversationRecordId(incoming),
       text: payload.text,
       context: {
@@ -287,8 +337,15 @@ export async function runtime_deliverReplyOutbox(this: RuntimeHost, payload: Ass
         groupId: incoming.groupId,
         isAdmin: payload.isAdmin
       }
-    });
-    this.scheduleMemoryCompression(record);
+    };
+    if (delivery) {
+      await this.hooks.runEach("after_reply", afterReplyPayload, async (handlerId, invoke) => {
+        await delivery.settleEffectStep(`after_reply:${handlerId}`, (idempotencyKey) => invoke({
+          ...afterReplyPayload,
+          context: { ...afterReplyPayload.context, idempotencyKey }
+        }));
+      });
+    } else await this.hooks.run("after_reply", afterReplyPayload);
   }
 export async function runtime_sendErrorReply(this: RuntimeHost,
     incoming: ParsedIncomingMessage,
@@ -300,7 +357,6 @@ export async function runtime_sendErrorReply(this: RuntimeHost,
     trace: AssistantMessageTrace = { messageOrigin: "text" }
   ) {
     if (
-      !this.replySuppression.canReplyTo(incoming.time) ||
       !this.isReplySenderAllowed(incoming.userId) ||
       !isCurrent()
     ) return;

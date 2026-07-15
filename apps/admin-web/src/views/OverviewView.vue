@@ -86,6 +86,21 @@ const countMetrics = computed(() => usageScope.value === "all" ? [
   { label: "会话", icon: "bx-message-square-dots", value: conversationCount.value, tone: "success" },
   { label: "图像", icon: "bx-image", value: imageCount.value, tone: "warning" }
 ]);
+const providerProbe = computed(() => runtime.status.value?.probe?.checks.find((check) => check.id === "provider"));
+const providerReadiness = computed(() => {
+  const provider = runtime.status.value?.provider;
+  if (providerProbe.value?.status === "pass") {
+    return { label: "已验证可用", detail: "连接正常", tone: "text-success" };
+  }
+  const configured = provider?.configured ?? provider?.apiKeyConfigured ?? false;
+  if (!providerProbe.value && provider?.verifiedAvailable === true) {
+    return { label: "已验证可用", detail: "连接正常", tone: "text-success" };
+  }
+  if (configured) {
+    return { label: "当前不可用", detail: "已配置", tone: "text-warning" };
+  }
+  return { label: "未配置", detail: "前往设置", tone: "text-warning" };
+});
 
 onMounted(async () => {
   await agentsState.load().catch(() => undefined);
@@ -253,8 +268,8 @@ function openCurrentNapCat() {
           <div class="min-w-0"><span class="meta-label">Provider</span><strong>{{ runtime.status.value?.provider.defaultProviderId ?? "--" }}</strong><small>{{ runtime.status.value?.provider.model ?? "--" }}</small></div>
         </article>
         <article class="health-card">
-          <span class="health-card__icon" :class="runtime.status.value?.provider.apiKeyConfigured ? 'text-success' : 'text-warning'"><i class="bx bx-key" aria-hidden="true"></i></span>
-          <div class="min-w-0"><span class="meta-label">API Key</span><strong :class="runtime.status.value?.provider.apiKeyConfigured ? 'text-success' : 'text-warning'">{{ runtime.status.value?.provider.apiKeyConfigured ? "已就绪" : "未配置" }}</strong><small>{{ runtime.status.value?.provider.apiKeyConfigured ? "可以调用" : "前往设置" }}</small></div>
+          <span class="health-card__icon" :class="providerReadiness.tone"><i class="bx bx-key" aria-hidden="true"></i></span>
+          <div class="min-w-0"><span class="meta-label">Provider 状态</span><strong :class="providerReadiness.tone">{{ providerReadiness.label }}</strong><small>{{ providerReadiness.detail }}</small></div>
         </article>
         <article class="health-card">
           <span class="health-card__icon text-success"><i class="bx bx-user-voice" aria-hidden="true"></i></span>

@@ -3,7 +3,15 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { applicationDatabasePath, applicationDataStore } from "../../adapters/sqlite/applicationDataStore.js";
+import {
+  applicationDatabasePath,
+  applicationDataStore,
+  closeApplicationDataStores
+} from "../../adapters/sqlite/applicationDataStore.js";
+import { MemorySchedulerStore } from "../../services/memory/memoryScheduler.js";
+import { runWithAgentRuntimeContext } from "../../packages/platform/runtimeAgentContext.js";
+import { appendRequestLogStrict } from "../../src/requestLog.js";
+import { saveConversationRecordsStrict } from "../../src/runtime/infrastructure.js";
 import { createAdminTestConfig } from "./admin-fixtures.js";
 
 describe("application SQLite data store", () => {
@@ -14,7 +22,61 @@ describe("application SQLite data store", () => {
   });
 
   afterEach(async () => {
+    closeApplicationDataStores();
     await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("deduplicates outbox conversation projection and request logs atomically", () => {
+    const store = applicationDataStore(createAdminTestConfig(root));
+    expect(store.replaceConversationsIdempotent("outbox:1:conversation", [
+      conversation("private:1", "2026-07-10T01:00:00.000Z")
+    ])).toBe(true);
+    expect(store.replaceConversationsIdempotent("outbox:1:conversation", [
+      conversation("private:2", "2026-07-10T02:00:00.000Z")
+    ])).toBe(false);
+    expect(store.readConversations().map((record) => record.id)).toEqual(["private:1"]);
+
+    expect(store.appendRequestLogIdempotent(log(
+      "outbox:1:request-log",
+      "2026-07-10T01:00:00.000Z",
+      "first"
+    ))).toBe(true);
+    expect(store.appendRequestLogIdempotent(log(
+      "outbox:1:request-log",
+      "2026-07-10T02:00:00.000Z",
+      "duplicate"
+    ))).toBe(false);
+    expect(store.counts().requestLogs).toBe(1);
+  });
+
+  it("throws real SQLite failures from strict settle persistence", async () => {
+    const config = createAdminTestConfig(root);
+    const store = applicationDataStore(config);
+    const scheduler = new MemorySchedulerStore(config);
+    store.close();
+
+    expect(() => saveConversationRecordsStrict([
+      conversation("private:1", "2026-07-10T01:00:00.000Z")
+    ], "outbox:closed:conversation", config)).toThrow();
+    await expect(runWithAgentRuntimeContext(config, () => appendRequestLogStrict({
+      category: "test",
+      action: "closed"
+    }, "outbox:closed:request-log"))).rejects.toThrow();
+    await expect(scheduler.enqueue({
+      id: "private:1",
+      scope: "private",
+      title: "private:1",
+      userId: 1
+    }, [{
+      id: "message-1",
+      sequence: 1,
+      role: "assistant",
+      text: "hello",
+      at: "2026-07-10T01:00:00.000Z",
+      userId: 1,
+      imageCount: 0,
+      quoteCount: 0
+    }])).rejects.toThrow();
   });
 
   it("imports legacy memory once and keeps subsequent SQLite writes authoritative", async () => {

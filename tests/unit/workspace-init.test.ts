@@ -40,6 +40,45 @@ describe("workspace initialization", () => {
     expect((await fs.stat(result.runtimeEnv)).mode & 0o777).toBe(0o600);
   });
 
+  it("rejects a missing workspace below a symbolic-link parent before any external write", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-workspace-parent-link-"));
+    temporaryDirectories.push(root);
+    const external = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-workspace-external-"));
+    temporaryDirectories.push(external);
+    const linkedParent = path.join(root, "linked-parent");
+    const workspace = path.join(linkedParent, "workspace");
+    await fs.mkdir(path.join(root, "config"), { recursive: true });
+    await fs.writeFile(path.join(root, "config/env.example"), "ONEBOT_ACCESS_TOKEN=\n", "utf8");
+    await fs.symlink(external, linkedParent, "dir");
+
+    await expect(initializeWorkspace({ root, workspace })).rejects.toMatchObject({
+      code: "WORKSPACE_INVALID"
+    });
+
+    await expect(fs.readdir(external)).resolves.toEqual([]);
+
+    const projectRoot = fileURLToPath(new URL("../..", import.meta.url));
+    const result = spawnSync(process.execPath, [
+      "--import",
+      "tsx",
+      path.join(projectRoot, "apps/api/main.ts")
+    ], {
+      cwd: projectRoot,
+      encoding: "utf8",
+      timeout: 15_000,
+      env: {
+        ...process.env,
+        NODE_ENV: "production",
+        SUNABOT_WORKSPACE: workspace,
+        SUNABOT_CONFIG: path.join(workspace, "business/config/sunabot.json")
+      }
+    });
+
+    expect(result.status).toBe(1);
+    expect(`${result.stdout}${result.stderr}`).toContain("WORKSPACE_INVALID");
+    await expect(fs.readdir(external)).resolves.toEqual([]);
+  });
+
   it("preserves existing runtime secrets while repairing their permissions", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-workspace-init-existing-"));
     temporaryDirectories.push(root);

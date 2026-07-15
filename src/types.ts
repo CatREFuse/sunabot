@@ -143,6 +143,11 @@ export interface BroadcastStormConfig {
   windowMinutes: number;
   replyThreshold: number;
   cooldownMinutes: number;
+  additionalQqIds: string[];
+}
+
+export interface NormalReplyConfig {
+  maxRetries: number;
 }
 
 export interface BotConfig {
@@ -182,6 +187,7 @@ export interface AppConfig {
     items: ProviderConfig[];
   };
   broadcastStorm: BroadcastStormConfig;
+  normalReply: NormalReplyConfig;
   bot: BotConfig;
   onebot: {
     reverseWsPath: string;

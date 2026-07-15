@@ -13,6 +13,7 @@ import {
   applyRetention,
   createRecoveryPoint,
   drillRecoveryPoint,
+  rollbackRecoveryPointRestore,
   restoreRecoveryPoint,
   verifyRecoveryPoint
 } from "../../tooling/workspace/sqlite-recovery.mjs";
@@ -436,6 +437,105 @@ describe("SQLite recovery and fault-injection gate", () => {
     })).rejects.toMatchObject({ code: "RESTORE_TARGET_NOT_EMPTY" });
   });
 
+  it("resumes idempotently after every durable rename boundary and removes the journal only after full verification", async () => {
+    const fixture = await createFixture({
+      agents: [{ id: "arona", enabled: true, databases: "both" }]
+    });
+    const created = await createRecoveryPoint({ workspace: fixture.workspace, quiesced: true });
+    const failureSteps = [
+      "after-restore-rename-plana-application",
+      "after-restore-rename-plana-session_queue",
+      "after-restore-rename-arona-application",
+      "after-restore-rename-arona-session_queue"
+    ];
+    for (const [index, failureStep] of failureSteps.entries()) {
+      const targetWorkspace = path.join(fixture.root, `interrupted-restore-${index}`);
+      const interrupted = Object.assign(new Error("simulated kill after rename"), { preservePartial: true });
+      await expect(restoreRecoveryPoint({
+        backupDirectory: created.directory,
+        targetWorkspace,
+        faultInjector(step: string) {
+          if (step === failureStep) throw interrupted;
+        }
+      })).rejects.toThrow("simulated kill after rename");
+
+      const intentPath = path.join(targetWorkspace, `.restore-${created.manifest.backupId}.json`);
+      await expect(fs.access(intentPath)).resolves.toBeUndefined();
+      const resumed = await restoreRecoveryPoint({ backupDirectory: created.directory, targetWorkspace });
+      expect(resumed.verification.inspections).toHaveLength(4);
+      await expect(fs.access(intentPath)).rejects.toMatchObject({ code: "ENOENT" });
+      expect((await fs.readdir(targetWorkspace)).some((name) => name.startsWith(".restore-"))).toBe(false);
+    }
+  });
+
+  it.each([
+    "after-restore-intent",
+    "after-restore-copy-plana-application"
+  ])("resumes from the durable restore journal after %s", async (failureStep) => {
+    const fixture = await createFixture();
+    const created = await createRecoveryPoint({ workspace: fixture.workspace, quiesced: true });
+    const targetWorkspace = path.join(fixture.root, `copy-resume-${failureStep}`);
+    await expect(restoreRecoveryPoint({
+      backupDirectory: created.directory,
+      targetWorkspace,
+      faultInjector(step: string) {
+        if (step === failureStep) throw new Error(`stop:${step}`);
+      }
+    })).rejects.toThrow(`stop:${failureStep}`);
+
+    const intentPath = path.join(targetWorkspace, `.restore-${created.manifest.backupId}.json`);
+    await expect(fs.access(intentPath)).resolves.toBeUndefined();
+    const resumed = await restoreRecoveryPoint({ backupDirectory: created.directory, targetWorkspace });
+    expect(resumed.verification.inspections).toHaveLength(2);
+    await expect(fs.access(intentPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("rolls back a restore stopped after its first staged copy", async () => {
+    const fixture = await createFixture();
+    const created = await createRecoveryPoint({ workspace: fixture.workspace, quiesced: true });
+    const targetWorkspace = path.join(fixture.root, "copy-rollback");
+    await expect(restoreRecoveryPoint({
+      backupDirectory: created.directory,
+      targetWorkspace,
+      faultInjector(step: string) {
+        if (step === "after-restore-copy-plana-application") throw new Error("stop after copy");
+      }
+    })).rejects.toThrow("stop after copy");
+
+    await expect(rollbackRecoveryPointRestore({
+      backupDirectory: created.directory,
+      targetWorkspace
+    })).resolves.toMatchObject({ ok: true, rolledBack: true });
+    expect(await fs.readdir(targetWorkspace)).toEqual([]);
+  });
+
+  it("rolls back an interrupted restore without deleting an unknown replacement", async () => {
+    const fixture = await createFixture();
+    const created = await createRecoveryPoint({ workspace: fixture.workspace, quiesced: true });
+    const targetWorkspace = path.join(fixture.root, "rollback-restore");
+    await expect(restoreRecoveryPoint({
+      backupDirectory: created.directory,
+      targetWorkspace,
+      faultInjector(step: string) {
+        if (step === "after-restore-rename-plana-application") throw new Error("stop after first rename");
+      }
+    })).rejects.toThrow("stop after first rename");
+
+    const destination = path.join(targetWorkspace, "business/data/sunabot.sqlite");
+    const original = await fs.readFile(destination);
+    await fs.writeFile(destination, Buffer.from("unknown replacement", "utf8"));
+    await expect(rollbackRecoveryPointRestore({
+      backupDirectory: created.directory,
+      targetWorkspace
+    })).rejects.toMatchObject({ code: "RESTORE_DESTINATION_CONFLICT" });
+    await expect(fs.readFile(destination, "utf8")).resolves.toBe("unknown replacement");
+
+    await fs.writeFile(destination, original);
+    const rolledBack = await rollbackRecoveryPointRestore({ backupDirectory: created.directory, targetWorkspace });
+    expect(rolledBack).toMatchObject({ ok: true, rolledBack: true });
+    expect(await fs.readdir(targetWorkspace)).toEqual([]);
+  });
+
   it("keeps sent outbox terminal when the post-send main projection write fails", async () => {
     const fixture = await createFixture();
     const main = new DatabaseSync(fixture.mainDatabasePath);
@@ -503,6 +603,83 @@ describe("SQLite recovery and fault-injection gate", () => {
     expect(report.rpoHours).toBeLessThanOrEqual(24);
     expect(report.rtoMilliseconds).toBeGreaterThanOrEqual(0);
   });
+
+  it("does not follow a symlinked recovery root during retention pruning", async () => {
+    const fixture = await createFixture();
+    const realBackupsRoot = path.join(fixture.root, "external-retention", "sqlite-recovery");
+    const created = await createRecoveryPoint({
+      workspace: fixture.workspace,
+      backupsRoot: realBackupsRoot,
+      quiesced: true,
+      now: new Date("2026-05-01T00:00:00.000Z")
+    });
+    const linkedRoot = path.join(fixture.root, "linked-retention-root");
+    await fs.symlink(realBackupsRoot, linkedRoot);
+
+    await expect(applyRetention({
+      backupsRoot: linkedRoot,
+      now: new Date("2026-07-14T00:00:00.000Z"),
+      apply: true
+    })).rejects.toMatchObject({ code: "RECOVERY_PATH_UNSAFE" });
+    await expect(fs.access(created.directory)).resolves.toBeUndefined();
+  });
+
+  it("does not follow a symlinked target parent during restore rollback", async () => {
+    const fixture = await createFixture();
+    const created = await createRecoveryPoint({ workspace: fixture.workspace, quiesced: true });
+    const externalTarget = path.join(fixture.root, "external-rollback-target");
+    await expect(restoreRecoveryPoint({
+      backupDirectory: created.directory,
+      targetWorkspace: externalTarget,
+      faultInjector(step: string) {
+        if (step === "after-restore-rename-plana-application") throw new Error("stop rollback fixture");
+      }
+    })).rejects.toThrow("stop rollback fixture");
+    const restoredDatabase = path.join(externalTarget, "business/data/sunabot.sqlite");
+    const restoredBytes = await fs.readFile(restoredDatabase);
+    const linkedParent = path.join(fixture.root, "linked-rollback-parent");
+    await fs.symlink(fixture.root, linkedParent);
+
+    await expect(rollbackRecoveryPointRestore({
+      backupDirectory: created.directory,
+      targetWorkspace: path.join(linkedParent, path.basename(externalTarget))
+    })).rejects.toMatchObject({ code: "RECOVERY_PATH_UNSAFE" });
+    expect(await fs.readFile(restoredDatabase)).toEqual(restoredBytes);
+  });
+
+  it("does not follow a symlinked target parent during a restore drill", async () => {
+    const fixture = await createFixture();
+    const created = await createRecoveryPoint({ workspace: fixture.workspace, quiesced: true });
+    const externalTarget = path.join(fixture.root, "external-drill-target");
+    await fs.mkdir(externalTarget);
+    const sentinel = path.join(fixture.root, "drill-sentinel.txt");
+    await fs.writeFile(sentinel, "keep\n");
+    const linkedParent = path.join(fixture.root, "linked-drill-parent");
+    await fs.symlink(fixture.root, linkedParent);
+
+    await expect(drillRecoveryPoint({
+      backupDirectory: created.directory,
+      targetWorkspace: path.join(linkedParent, path.basename(externalTarget))
+    })).rejects.toMatchObject({ code: "RECOVERY_PATH_UNSAFE" });
+    expect(await fs.readdir(externalTarget)).toEqual([]);
+    await expect(fs.readFile(sentinel, "utf8")).resolves.toBe("keep\n");
+  });
+
+  it("preserves external content when interrupted-backup cleanup finds a symlink", async () => {
+    const fixture = await createFixture();
+    const external = path.join(fixture.root, "external-partial-content");
+    await fs.mkdir(external);
+    const sentinel = path.join(external, "sentinel.txt");
+    await fs.writeFile(sentinel, "keep\n");
+    await fs.mkdir(fixture.backupsRoot, { recursive: true });
+    await fs.symlink(external, path.join(fixture.backupsRoot, ".partial-sqlite-recovery-hostile"));
+
+    await expect(createRecoveryPoint({
+      workspace: fixture.workspace,
+      quiesced: true
+    })).rejects.toMatchObject({ code: "RECOVERY_PATH_UNSAFE" });
+    await expect(fs.readFile(sentinel, "utf8")).resolves.toBe("keep\n");
+  });
 });
 
 interface FixtureAgentOptions {
@@ -512,7 +689,7 @@ interface FixtureAgentOptions {
 }
 
 async function createFixture(options: { agents?: FixtureAgentOptions[] } = {}) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-recovery-gate-"));
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-recovery-gate-")));
   temporaryDirectories.push(root);
   const workspace = path.join(root, "workspace");
   const dataDirectory = path.join(workspace, "business", "data");

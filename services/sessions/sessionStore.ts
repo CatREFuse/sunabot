@@ -3,7 +3,7 @@ import type { RecoveryResult, SessionStoreOptions } from "./sessionTypes.js";
 
 export * from "./sessionTypes.js";
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 4;
 
 export class SessionStore extends SessionTurnStore {
   constructor(options: SessionStoreOptions) {
@@ -42,6 +42,18 @@ export class SessionStore extends SessionTurnStore {
     if (currentVersion < 2) this.transaction(() => {
       this.migrateToolJobSchemaV2();
       this.recordSchemaMigration(2);
+    });
+    currentVersion = Math.max(currentVersion, 2);
+
+    if (currentVersion < 3) this.transaction(() => {
+      this.migrateOutboxSchemaV3();
+      this.recordSchemaMigration(3);
+    });
+    currentVersion = Math.max(currentVersion, 3);
+
+    if (currentVersion < 4) this.transaction(() => {
+      this.migrateOutboxSchemaV4();
+      this.recordSchemaMigration(4);
     });
   }
 

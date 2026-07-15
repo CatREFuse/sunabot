@@ -89,6 +89,33 @@ describe("provider protocols", () => {
     ]);
   });
 
+  it("uses the configured normal reply retry limit for SDK requests", async () => {
+    vi.useFakeTimers();
+    const provider = new OpenAIProvider(providerConfig("openai-compatible"));
+    const retryableError = Object.assign(new Error("temporarily unavailable"), { status: 503 });
+    const create = vi.fn()
+      .mockRejectedValueOnce(retryableError)
+      .mockRejectedValueOnce(retryableError)
+      .mockRejectedValueOnce(retryableError)
+      .mockResolvedValueOnce({
+        id: "chatcmpl-configured-retry",
+        object: "chat.completion",
+        created: 1,
+        model: "compatible-model",
+        choices: [{ index: 0, finish_reason: "stop", message: { role: "assistant", content: "OK" } }]
+      });
+    vi.spyOn(provider as never, "createChatClient")
+      .mockReturnValue({ chat: { completions: { create } } });
+
+    const completion = provider.complete("system", [{ role: "user", content: "ping" }], {
+      modelRequestMaxRetries: 3
+    });
+    await vi.runAllTimersAsync();
+
+    await expect(completion).resolves.toBe("OK");
+    expect(create).toHaveBeenCalledTimes(4);
+  });
+
   it("uses Chat Completions for OpenAI-compatible providers", async () => {
     const provider = new OpenAIProvider(providerConfig("openai-compatible"));
     const create = vi.fn(async () => ({
@@ -246,6 +273,34 @@ describe("provider protocols", () => {
         metadata: expect.objectContaining({ transportAttempt: 2 })
       })
     ]);
+  });
+
+  it.each([
+    ["anthropic-official" as const, () => jsonResponse({
+      content: [{ type: "text", text: "OK" }],
+      stop_reason: "end_turn"
+    })],
+    ["gemini-official" as const, () => jsonResponse({
+      candidates: [{ content: { role: "model", parts: [{ text: "OK" }] } }]
+    })],
+    ["codex-responses" as const, () => codexTextResponse("OK")]
+  ])("uses the configured normal reply retry limit for %s HTTP requests", async (kind, successfulResponse) => {
+    vi.useFakeTimers();
+    const provider = new OpenAIProvider(providerConfig(kind));
+    vi.spyOn(provider as never, "getApiKey").mockReturnValue("provider-key");
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockRejectedValueOnce(new TypeError("network 1"))
+      .mockRejectedValueOnce(new TypeError("network 2"))
+      .mockRejectedValueOnce(new TypeError("network 3"))
+      .mockResolvedValueOnce(successfulResponse());
+
+    const completion = provider.complete("system", [{ role: "user", content: "ping" }], {
+      modelRequestMaxRetries: 3
+    });
+    await vi.runAllTimersAsync();
+
+    await expect(completion).resolves.toBe("OK");
+    expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
   it("does not route non-Responses providers through image generation", async () => {

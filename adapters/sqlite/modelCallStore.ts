@@ -33,6 +33,26 @@ export class ModelCallStore {
     this.transaction(() => this.appendRequestLogUnsafe(record));
   }
 
+  appendRequestLogIdempotent(record: JsonObject) {
+    return this.transaction(() => {
+      const result = this.database.prepare(`
+        INSERT INTO request_logs (id, at, category, action, search_text, data_json)
+        VALUES (?, ?, ?, ?, '', ?)
+        ON CONFLICT(id) DO NOTHING
+      `).run(
+        String(record.id ?? ""),
+        String(record.at ?? new Date().toISOString()),
+        String(record.category ?? ""),
+        String(record.action ?? ""),
+        JSON.stringify(record)
+      );
+      if (Number(result.changes) !== 1) return false;
+      const measurement = modelCallMeasurement(record);
+      if (measurement) this.appendModelCallAggregateUnsafe(measurement);
+      return true;
+    });
+  }
+
   appendRequestLogUnsafe(record: JsonObject) {
     this.database.prepare(`
       INSERT INTO request_logs (id, at, category, action, search_text, data_json)

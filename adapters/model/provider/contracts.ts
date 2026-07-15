@@ -12,6 +12,7 @@ import type { ImageGenerationFailureContext } from "../imageGenerationRetry.js";
 
 export interface ProviderCompleteOptions {
   signal?: AbortSignal;
+  modelRequestMaxRetries?: number;
   allowNoReply?: boolean;
   bash?: ProviderBashOptions;
   bot?: BotConfig;
@@ -30,6 +31,13 @@ export interface ProviderCompleteOptions {
 }
 
 export type ProviderAssistantTextSource = "text" | "assistant_text";
+
+export interface TurnToolState {
+  toolCallCount: number;
+  assistantTextSent: boolean;
+  acceptedToolNames: string[];
+  terminal?: "deferred" | "no_reply";
+}
 
 export interface ProviderCompletedTurn {
   kind: "completed";
@@ -97,17 +105,20 @@ export interface ProviderToolExecutorPort {
   deferredTurn(
     calls: ResponseFunctionCallItem[],
     options: ProviderCompleteOptions,
-    definitions: readonly Record<string, unknown>[]
+    definitions: readonly Record<string, unknown>[],
+    state?: TurnToolState
   ): ProviderDeferredTurn | null;
   noReplyTurn(
     calls: ResponseFunctionCallItem[],
     options: ProviderCompleteOptions,
-    definitions: readonly Record<string, unknown>[]
+    definitions: readonly Record<string, unknown>[],
+    state?: TurnToolState
   ): ProviderNoReplyTurn | null;
   execute(
     calls: ResponseFunctionCallItem[],
     options: ProviderCompleteOptions,
-    definitions: readonly Record<string, unknown>[]
+    definitions: readonly Record<string, unknown>[],
+    state?: TurnToolState
   ): Promise<Array<Record<string, unknown>>>;
 }
 

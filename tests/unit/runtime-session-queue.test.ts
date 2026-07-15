@@ -1,4 +1,5 @@
 // @vitest-environment node
+import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CodexRunner, CodexToolResult } from "../../adapters/codex/codexTool.js";
@@ -20,7 +21,12 @@ import {
 import type { MemoryEntry } from "../../services/memory/types.js";
 import { SunaRuntime } from "../../src/runtime.js";
 import type { ReplyDelivery } from "../../src/runtime/runtimeContracts.js";
+import type { OutboxDeliveryContext } from "../../services/sessions/sessionCoordinator.js";
 import { SessionStore } from "../../services/sessions/sessionStore.js";
+import {
+  applicationDataStore,
+  closeApplicationDataStores
+} from "../../adapters/sqlite/applicationDataStore.js";
 import type { ConversationRecord } from "../../src/types.js";
 import { createAdminTestConfig } from "./admin-fixtures.js";
 
@@ -28,7 +34,10 @@ const appendRequestLog = vi.hoisted(() => vi.fn(async () => undefined));
 const recallMemory = vi.hoisted(() => vi.fn(async () => ({ ok: true, matches: [] })));
 const readUserProfileForUser = vi.hoisted(() => vi.fn(async () => undefined));
 
-vi.mock("../../src/requestLog.js", () => ({ appendRequestLog }));
+vi.mock("../../src/requestLog.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/requestLog.js")>()),
+  appendRequestLog
+}));
 vi.mock("../../services/memory/memoryService.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../services/memory/memoryService.js")>()),
   recallMemory,
@@ -37,13 +46,36 @@ vi.mock("../../services/memory/memoryService.js", async (importOriginal) => ({
 
 const runtimes: SunaRuntime[] = [];
 const stores: SessionStore[] = [];
+const runtimeRoots: string[] = [];
+let runtimeRootSequence = 0;
 
 afterEach(() => {
   for (const runtime of runtimes.splice(0)) runtime.close();
   for (const store of stores.splice(0)) store.close();
+  closeApplicationDataStores();
+  for (const root of runtimeRoots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
 describe("SunaRuntime Session queue bridge", () => {
+  it("passes the shared normal reply retry limit to the provider request", async () => {
+    const completeRequestTurn = vi.fn(async (
+      _request: RenderedPromptRequest,
+      options: ProviderCompleteOptions = {}
+    ): Promise<ProviderTurnResult> => {
+      expect(options.modelRequestMaxRetries).toBe(6);
+      return { kind: "completed", text: "已完成" };
+    });
+    const harness = createRuntimeHarness(completeRequestTurn, undefined, (config) => {
+      config.normalReply.maxRetries = 6;
+    });
+
+    await handleOneBotEvent(harness.runtime, privateEvent(19_999, "检查重试设置"), harness.gateway);
+    await harness.coordinator.waitForIdle({ timeoutMs: 3_000 });
+
+    expect(completeRequestTurn).toHaveBeenCalledOnce();
+    expect(sentTexts(harness.gateway)).toEqual(["已完成"]);
+  });
+
   it("finishes a no_reply turn without outbound text or a placeholder assistant message", async () => {
     const completeRequestTurn = vi.fn(async (
       _request: RenderedPromptRequest,
@@ -104,12 +136,17 @@ describe("SunaRuntime Session queue bridge", () => {
     expect(harness.gateway.poke).toHaveBeenCalledOnce();
     expect(harness.gateway.poke).toHaveBeenCalledWith(target);
     expect(harness.store.listTurns(sessionId).map((turn) => turn.status)).toEqual(["no_reply"]);
+    expect(harness.store.listOutbox(sessionId)[0]).toMatchObject({
+      deliveryPartition: accountId ?? "primary",
+      status: "sent"
+    });
     expect(runtimeConversation(harness.runtime, sessionId)?.messages.some((message) => message.role === "assistant")).toBe(false);
-    expect(appendRequestLog).toHaveBeenCalledWith(expect.objectContaining({
-      category: "runtime.action",
-      action: "reply.no_reply.poke.sent",
-      response: { status: "sent" }
-    }));
+    expect(applicationDataStore(harness.runtime.config).readRequestLogs({ query: "", limit: 100 }))
+      .toContainEqual(expect.objectContaining({
+        category: "runtime.action",
+        action: "reply.no_reply.poke.sent",
+        response: { status: "sent" }
+      }));
   });
 
   it("injects recalled working memory and the exact current-user profile into the Provider request", async () => {
@@ -241,6 +278,210 @@ describe("SunaRuntime Session queue bridge", () => {
       "replied",
       "replied"
     ]);
+  });
+
+  it.each([
+    "conversation_projection",
+    "after_reply"
+  ])("settles a remote reply once when the %s step fails locally", async (failingStep) => {
+    const harness = createRuntimeHarness(async () => ({ kind: "completed", text: "unused" }));
+    const send = harness.gateway.send as unknown as ReturnType<typeof vi.fn>;
+    send.mockResolvedValue({ accepted: true, messageId: "remote-9001" });
+    const incoming = parseOneBotInboundMessage(privateEvent(16_000, failingStep))!;
+    harness.runtime.recordIncomingMessage(incoming);
+    let injected = false;
+    let phase: OutboxDeliveryContext["phase"] = "send";
+    let remoteReceipt: unknown;
+    const completedSteps = new Set<string>();
+    const context: OutboxDeliveryContext = {
+      signal: new AbortController().signal,
+      get phase() { return phase; },
+      get remoteReceipt() { return remoteReceipt; },
+      async sendRemote(operation) {
+        const receipt = await operation();
+        remoteReceipt = receipt;
+        phase = "settle";
+        return receipt;
+      },
+      async settleStep(step, operation) {
+        if (completedSteps.has(step)) return undefined;
+        const value = await operation(`outbox:test:settle:${step}`);
+        completedSteps.add(step);
+        return value;
+      },
+      async settleEffectStep(step, operation) {
+        if (completedSteps.has(step)) return undefined;
+        const value = await operation(`outbox:test:settle:${step}`);
+        completedSteps.add(step);
+        return value;
+      }
+    };
+
+    if (failingStep === "conversation_projection") {
+      vi.spyOn(harness.runtime, "recordAssistantMessage")
+        .mockImplementationOnce(() => { throw new Error("injected:conversation_projection"); });
+    } else {
+      const hooks = (harness.runtime as unknown as {
+        hooks: { register(name: "after_reply", id: string, handler: (payload: unknown) => unknown): void };
+      }).hooks;
+      hooks.register("after_reply", "audit", (payload) => {
+        if (!injected) {
+          injected = true;
+          throw new Error("injected:after_reply");
+        }
+        return payload;
+      });
+    }
+
+    try {
+      const delivery = () => harness.runtime.deliverReplyOutbox({
+        type: "assistant_reply",
+        incoming,
+        text: `settle:${failingStep}`,
+        generatedImages: [],
+        isAdmin: true,
+        logRunId: "settle-run"
+      }, harness.gateway, context);
+      await expect(delivery()).rejects.toThrow(`injected:${failingStep}`);
+      await expect(delivery()).resolves.toBeUndefined();
+
+      expect(send).toHaveBeenCalledOnce();
+      expect(remoteReceipt).toEqual({ accepted: true, messageId: "remote-9001" });
+      expect([...completedSteps]).toEqual([
+        "conversation_projection",
+        "memory_enqueue",
+        "request_log",
+        ...(failingStep === "after_reply" ? ["after_reply:audit"] : [])
+      ]);
+    } finally {
+      appendRequestLog.mockImplementation(async () => undefined);
+    }
+  });
+
+  it.each([
+    "conversation_projection",
+    "memory_enqueue",
+    "request_log"
+  ])("deduplicates the real %s side effect when its settle checkpoint fails", async (failingStep) => {
+    const harness = createRuntimeHarness(async () => ({ kind: "completed", text: "durable reply" }));
+    vi.spyOn(harness.runtime, "scheduleMemoryDrain").mockImplementation(() => undefined);
+    const completeStep = harness.store.completeOutboxSettleStep.bind(harness.store);
+    let injected = false;
+    vi.spyOn(harness.store, "completeOutboxSettleStep").mockImplementation((outboxId, workerId, step) => {
+      if (!injected && step === failingStep) {
+        injected = true;
+        throw new Error(`checkpoint:${step}`);
+      }
+      return completeStep(outboxId, workerId, step);
+    });
+
+    await handleOneBotEvent(harness.runtime, privateEvent(16_100, failingStep), harness.gateway);
+    await waitUntil(() => injected);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    harness.runtime.sessionCoordinator.resume();
+    await waitUntil(() => {
+      const outbox = harness.store.listOutbox("private:171419991")[0];
+      if (outbox?.status === "delivery_unknown" || outbox?.status === "dead") {
+        throw new Error(JSON.stringify(outbox));
+      }
+      return outbox?.status === "sent";
+    }, 5_000);
+
+    const conversationId = "private:171419991";
+    expect(harness.gateway.send).toHaveBeenCalledOnce();
+    expect(harness.store.listOutbox(conversationId)[0]).toMatchObject({
+      status: "sent",
+      completedSettleSteps: ["conversation_projection", "memory_enqueue", "request_log"]
+    });
+    const assistantMessages = runtimeConversation(harness.runtime, conversationId)?.messages
+      .filter((message) => message.role === "assistant" && message.text === "durable reply") ?? [];
+    expect(assistantMessages).toHaveLength(1);
+
+    const dataStore = applicationDataStore(harness.runtime.config);
+    expect(dataStore.readRequestLogs({ query: "", limit: 100 })
+      .filter((record) => record.action === "reply.sent")).toHaveLength(1);
+    const scheduler = dataStore.readMemoryScheduler()[conversationId] as {
+      pendingMessages?: Array<{ role?: string; text?: string }>;
+    } | undefined;
+    expect(scheduler?.pendingMessages?.filter((message) => (
+      message.role === "assistant" && message.text === "durable reply"
+    ))).toHaveLength(1);
+  });
+
+  it("quarantines an after_reply crash before the handler and resumes only after not-applied confirmation", async () => {
+    const harness = createRuntimeHarness(async () => ({ kind: "completed", text: "hook before" }));
+    vi.spyOn(harness.runtime, "scheduleMemoryDrain").mockImplementation(() => undefined);
+    let handlerRuns = 0;
+    harness.runtime.hooks.register("after_reply", "audit", (payload) => {
+      handlerRuns += 1;
+      return payload;
+    });
+    const beginEffect = harness.store.beginOutboxSettleEffect.bind(harness.store);
+    let injected = false;
+    vi.spyOn(harness.store, "beginOutboxSettleEffect").mockImplementation((outboxId, workerId, step) => {
+      const started = beginEffect(outboxId, workerId, step);
+      if (!injected && step === "after_reply:audit") {
+        injected = true;
+        throw new Error("crash after write-ahead");
+      }
+      return started;
+    });
+
+    await handleOneBotEvent(harness.runtime, privateEvent(16_110, "hook-before"), harness.gateway);
+    await waitUntil(() => harness.store.listOutbox("private:171419991")[0]?.status === "delivery_unknown");
+    const unknown = harness.store.listOutbox("private:171419991")[0]!;
+    expect(handlerRuns).toBe(0);
+    expect(unknown.uncertainSettleStep).toBe("after_reply:audit");
+
+    harness.store.resolveUnknownSettle({
+      outboxId: unknown.id,
+      settleStep: "after_reply:audit",
+      confirmed: "not_applied"
+    });
+    harness.runtime.sessionCoordinator.resume();
+    await harness.coordinator.waitForIdle({ timeoutMs: 3_000 });
+    expect(handlerRuns).toBe(1);
+    expect(harness.store.getOutbox(unknown.id)?.status).toBe("sent");
+  });
+
+  it("does not repeat completed after_reply handlers after a later handler becomes uncertain", async () => {
+    const harness = createRuntimeHarness(async () => ({ kind: "completed", text: "hook partial" }));
+    vi.spyOn(harness.runtime, "scheduleMemoryDrain").mockImplementation(() => undefined);
+    const runs = new Map<string, number>();
+    const register = (id: string, fail = false) => harness.runtime.hooks.register("after_reply", id, (payload) => {
+      const key = String(payload.context.idempotencyKey ?? "");
+      if (!key) throw new Error("missing idempotency key");
+      if (!runs.has(key)) runs.set(key, 1);
+      if (fail) throw new Error("external hook result unknown");
+      return payload;
+    });
+    register("first");
+    register("second", true);
+    register("third");
+
+    await handleOneBotEvent(harness.runtime, privateEvent(16_120, "hook-partial"), harness.gateway);
+    await waitUntil(() => harness.store.listOutbox("private:171419991")[0]?.status === "delivery_unknown");
+    const unknown = harness.store.listOutbox("private:171419991")[0]!;
+    expect(unknown).toMatchObject({
+      uncertainSettleStep: "after_reply:second",
+      completedSettleSteps: expect.arrayContaining(["after_reply:first"])
+    });
+    expect([...runs.keys()].some((key) => key.endsWith("after_reply:third"))).toBe(false);
+
+    harness.store.resolveUnknownSettle({
+      outboxId: unknown.id,
+      settleStep: "after_reply:second",
+      confirmed: "applied"
+    });
+    harness.runtime.sessionCoordinator.resume();
+    await harness.coordinator.waitForIdle({ timeoutMs: 3_000 });
+
+    expect(harness.store.getOutbox(unknown.id)?.status).toBe("sent");
+    expect([...runs.entries()]).toEqual(expect.arrayContaining([
+      [expect.stringContaining("after_reply:first"), 1],
+      [expect.stringContaining("after_reply:second"), 1],
+      [expect.stringContaining("after_reply:third"), 1]
+    ]));
   });
 
   it("quotes only the first assistant_text message and the final group reply", async () => {
@@ -703,7 +944,9 @@ function createRuntimeHarness(
   };
   const store = new SessionStore({ databasePath: ":memory:" });
   stores.push(store);
-  const config = createAdminTestConfig("/tmp/sunabot-runtime-session-queue");
+  const runtimeRoot = path.join("/tmp", `sunabot-runtime-session-queue-${process.pid}-${++runtimeRootSequence}`);
+  runtimeRoots.push(runtimeRoot);
+  const config = createAdminTestConfig(runtimeRoot);
   configure?.(config);
   const runtime = new SunaRuntime(config, {
     attachmentService: {} as never,

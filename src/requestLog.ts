@@ -72,13 +72,7 @@ export function requestLogPath(config?: Pick<AppConfig, "persona">) {
 }
 
 export async function appendRequestLog(entry: RequestLogEntry) {
-  const usage = normalizeTokenUsageRecord(entry as unknown as Record<string, unknown>);
-  const record = sanitizeValue({
-    id: randomUUID(),
-    at: new Date().toISOString(),
-    ...entry,
-    ...(usage ? { tokenUsage: publicTokenUsage(usage) } : {})
-  });
+  const record = requestLogRecord(entry, randomUUID());
 
   try {
     const store = requestLogStore();
@@ -86,6 +80,22 @@ export async function appendRequestLog(entry: RequestLogEntry) {
   } catch (error) {
     console.error("[request-log] append failed", error);
   }
+}
+
+export async function appendRequestLogStrict(entry: RequestLogEntry, idempotencyKey: string) {
+  const key = typeof idempotencyKey === "string" ? idempotencyKey.trim() : "";
+  if (!key) throw new Error("idempotencyKey is required.");
+  return requestLogStore().appendRequestLogIdempotent(requestLogRecord(entry, key) as Record<string, unknown>);
+}
+
+function requestLogRecord(entry: RequestLogEntry, id: string) {
+  const usage = normalizeTokenUsageRecord(entry as unknown as Record<string, unknown>);
+  return sanitizeValue({
+    id,
+    at: new Date().toISOString(),
+    ...entry,
+    ...(usage ? { tokenUsage: publicTokenUsage(usage) } : {})
+  });
 }
 
 export async function readRequestLogs(options: ReadRequestLogsOptions = {}) {

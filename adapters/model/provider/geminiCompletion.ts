@@ -1,16 +1,17 @@
 import type { RenderedPromptRequest } from "../../../services/agent/promptSystem.js";
 import type { ChatMessage } from "../../../src/types.js";
-import type { ProviderAdapterContext, ProviderCompleteOptions, ProviderTurnResult, ResponseFunctionCallItem } from "./contracts.js";
+import type { ProviderAdapterContext, ProviderCompleteOptions, ProviderTurnResult, ResponseFunctionCallItem, TurnToolState } from "./contracts.js";
 import { toChatCompletionMessage } from "./imageInput.js";
 import { withLogContext } from "./logger.js";
 import { claimToolCalls, resolveMaxToolCalls, toolCallLimitError } from "./toolLoopLimits.js";
-import { fetchTextWithTransportRetry, normalizeGeminiBaseUrl } from "./transport.js";
+import { fetchTextWithTransportRetry, normalizeGeminiBaseUrl, resolveModelRequestMaxAttempts } from "./transport.js";
 import { errorMessage, isRecord, parseJson } from "./valueUtils.js";
 
 export async function completeGeminiGenerateContent(
   context: ProviderAdapterContext,
   request: RenderedPromptRequest,
-  options: ProviderCompleteOptions
+  options: ProviderCompleteOptions,
+  state: TurnToolState
 ): Promise<ProviderTurnResult> {
   const apiKey = context.getApiKey();
   if (!apiKey) throw new Error(`Missing API key. Set ${context.provider.apiKeyEnv}.`);
@@ -28,7 +29,6 @@ export async function completeGeminiGenerateContent(
     parameters: isRecord(tool.parameters) ? tool.parameters : { type: "object", properties: {} }
   }));
   const maxToolCalls = resolveMaxToolCalls(options);
-  let toolCallCount = 0;
 
   for (let round = 0; round <= maxToolCalls; round += 1) {
     const requestBody = {
@@ -41,7 +41,7 @@ export async function completeGeminiGenerateContent(
         ...(request.response_format?.type !== "text" ? { responseMimeType: "application/json" } : {})
       }
     };
-    const metadata = withLogContext({ round, toolCallCount, maxToolCalls, toolNames: definitions.map((tool) => tool.name) }, options.logContext);
+    const metadata = withLogContext({ round, toolCallCount: state.toolCallCount, maxToolCalls, toolNames: definitions.map((tool) => tool.name) }, options.logContext);
     const model = context.provider.model.replace(/^models\//, "");
     const url = `${normalizeGeminiBaseUrl(context.provider.baseUrl)}/models/${encodeURIComponent(model)}:generateContent`;
     let responseMetadata = metadata;
@@ -51,6 +51,7 @@ export async function completeGeminiGenerateContent(
       body: JSON.stringify(requestBody),
       signal: options.signal
     }, options.signal, {
+      maxAttempts: resolveModelRequestMaxAttempts(options.modelRequestMaxRetries, 1),
       beforeAttempt: async ({ attempt, maxAttempts }) => {
         responseMetadata = { ...metadata, transportAttempt: attempt, maxTransportAttempts: maxAttempts };
         await context.logger.request("gemini.generate-content.complete", requestBody, responseMetadata);
@@ -84,19 +85,19 @@ export async function completeGeminiGenerateContent(
           arguments: JSON.stringify(isRecord(part.functionCall.args) ? part.functionCall.args : {})
         }]
       : []);
-    toolCallCount = claimToolCalls(toolCallCount, calls.length, maxToolCalls);
+    state.toolCallCount = claimToolCalls(state.toolCallCount, calls.length, maxToolCalls);
     if (!calls.length) {
       if (!text) throw new Error("模型没有返回可发送内容。");
       return { kind: "completed", text };
     }
 
-    const deferred = context.toolExecutor.deferredTurn(calls, options, resolvedDefinitions);
+    const deferred = context.toolExecutor.deferredTurn(calls, options, resolvedDefinitions, state);
     if (deferred) return deferred;
-    const noReply = context.toolExecutor.noReplyTurn(calls, options, resolvedDefinitions);
+    const noReply = context.toolExecutor.noReplyTurn(calls, options, resolvedDefinitions, state);
     if (noReply) return noReply;
     if (text && options.onAssistantText) await options.onAssistantText(text, "text");
     contents.push({ role: "model", parts });
-    const outputs = await context.toolExecutor.execute(calls, options, resolvedDefinitions);
+    const outputs = await context.toolExecutor.execute(calls, options, resolvedDefinitions, state);
     contents.push({
       role: "user",
       parts: outputs.map((output, index) => ({

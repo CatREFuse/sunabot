@@ -19,12 +19,34 @@ import type {
   DeferTurnResult,
   FinishTurnInput,
   FinishTurnResult,
+  ReplayUnknownOutboxInput,
   SqlRow,
   TurnRecord,
   TurnStatus
 } from "./sessionTypes.js";
 
 export abstract class SessionTurnStore extends SessionOutboxStore {
+  replayUnknownOutbox(input: ReplayUnknownOutboxInput) {
+    if (input.confirmedNotSent !== true) {
+      throw new Error("confirmedNotSent must be true before replaying delivery_unknown.");
+    }
+    const now = this.now();
+    return this.transaction(() => {
+      const outbox = this.requireOutbox(requiredText(input.outboxId, "outboxId"));
+      if (outbox.status !== "delivery_unknown") {
+        throw new Error(`Outbox ${outbox.id} is ${outbox.status}, not delivery_unknown.`);
+      }
+      if (outbox.uncertainSettleStep) {
+        throw new Error(`Outbox ${outbox.id} has an unknown settle effect and cannot be replayed.`);
+      }
+      return this.insertOutbox(this.requireTurn(outbox.originTurnId), {
+        kind: outbox.kind,
+        payload: outbox.payload,
+        deliveryPartition: outbox.deliveryPartition
+      }, now);
+    });
+  }
+
   claimNextTurn(options: ClaimOptions): ClaimedTurn | null {
     const workerId = requiredText(options.workerId, "workerId");
     const leaseMs = positiveInteger(options.leaseMs, this.defaultLeaseMs, "leaseMs");

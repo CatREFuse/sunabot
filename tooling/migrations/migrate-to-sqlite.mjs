@@ -1,15 +1,23 @@
 #!/usr/bin/env node
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import net from "node:net";
+import { DatabaseSync } from "node:sqlite";
 import { getWorkspacePath, loadConfig, resolveProjectPath } from "../../dist/src/config.js";
 import { applicationDatabasePath, applicationDataStore, closeApplicationDataStores } from "../../dist/adapters/sqlite/applicationDataStore.js";
 import { SqliteChunkWriter } from "../../dist/services/media/attachments/chunks.js";
 import { WORKSPACE_LAYOUT } from "../../dist/packages/platform/workspaceLayout.js";
-import { resolveProjectRoot } from "../shared/paths.mjs";
+import {
+  createSqliteMigrationRecoveryPoint,
+  drillSqliteMigrationRecoveryPoint,
+  finalizeSqliteMigrationRecoveryPoint,
+  verifySqliteMigrationRecoveryPoint
+} from "./sqlite-migration-recovery.mjs";
+import { importLegacyApplicationData } from "./sqlite-legacy-import.mjs";
 
-const root = resolveProjectRoot(import.meta.url);
+const workspace = getWorkspacePath();
 const legacyData = getWorkspacePath(WORKSPACE_LAYOUT.legacyData);
 const attachmentCache = getWorkspacePath(WORKSPACE_LAYOUT.attachmentCache);
 const config = await loadConfig();
@@ -20,7 +28,7 @@ await assertServiceStopped();
 await assertNoPendingFileTransaction(agentWorkspace);
 
 const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-const backupRoot = getWorkspacePath("backups", `sqlite-migration-${timestamp}`);
+const backupId = `sqlite-migration-${timestamp}`;
 const legacy = {
   conversations: path.join(legacyData, "conversations.json"),
   requestLogs: path.join(legacyData, "request-bodies.jsonl"),
@@ -33,8 +41,8 @@ const legacy = {
 };
 
 const legacyFiles = Object.values(legacy).filter(await existsFilter());
-const legacyFileSet = new Set(legacyFiles);
 const chunkFiles = await findFiles(attachmentCache, "chunks.jsonl");
+const existingChunkDatabases = await findFiles(attachmentCache, "chunks.sqlite");
 const mainDatabasePath = applicationDatabasePath(config);
 const safetyCandidates = [
   mainDatabasePath,
@@ -45,45 +53,24 @@ const safetyCandidates = [
   `${getWorkspacePath(WORKSPACE_LAYOUT.sessionQueue)}-shm`
 ];
 const safetyFiles = await existingFiles(safetyCandidates);
-await fs.mkdir(backupRoot, { recursive: true });
-for (const filePath of [...legacyFiles, ...chunkFiles, ...safetyFiles]) await backupFile(filePath, backupRoot);
+const sourceDescriptors = await migrationSourceDescriptors(legacy, legacyFiles, chunkFiles);
+const databaseDescriptors = [...safetyFiles, ...existingChunkDatabases]
+  .filter((filePath) => filePath.endsWith(".sqlite"))
+  .map(databaseDescriptor);
+const recovery = await createSqliteMigrationRecoveryPoint({
+  workspace,
+  backupId,
+  sources: sourceDescriptors,
+  databases: databaseDescriptors
+});
 
 const store = applicationDataStore(config);
-const sourceCounts = {
-  conversations: await countConversationRecords(legacy.conversations),
-  requestLogs: (await readJsonl(legacy.requestLogs)).length,
-  workingMemory: (await readJsonl(legacy.working)).length,
-  longTermMemory: (await readJsonl(legacy.longTerm)).length,
-  userProfiles: (await readJsonl(legacy.userProfile)).length,
-  memorySchedulerConversations: await countSchedulerConversations(legacy.memoryScheduler),
-  imageHistory: await countJsonArray(legacy.imageHistory)
-};
-
-store.ensureLegacyConversationsImported(legacy.conversations);
-store.ensureLegacyRequestLogsImported(legacy.requestLogs);
-store.ensureLegacyMemoryImported("working", legacy.working);
-store.ensureLegacyMemoryImported("long_term", legacy.longTerm);
-store.ensureLegacyMemoryImported("user_profile", legacy.userProfile);
-store.ensureLegacyMemorySchedulerImported(legacy.memoryScheduler);
-store.ensureLegacyImageHistoryImported(legacy.imageHistory);
-
-const databaseCounts = store.counts();
-const verificationPaths = {
-  conversations: legacy.conversations,
-  requestLogs: legacy.requestLogs,
-  workingMemory: legacy.working,
-  longTermMemory: legacy.longTerm,
-  userProfiles: legacy.userProfile,
-  memorySchedulerConversations: legacy.memoryScheduler,
-  imageHistory: legacy.imageHistory
-};
-for (const [key, expected] of Object.entries(sourceCounts)) {
-  if (!legacyFileSet.has(verificationPaths[key])) continue;
-  const actual = databaseCounts[key];
-  if (actual !== expected) throw new Error(`SQLite verification failed for ${key}: expected ${expected}, got ${actual}`);
-}
+const imported = await importLegacyApplicationData({ store, databasePath: mainDatabasePath, legacy });
+const sourceCounts = imported.sourceCounts;
+const databaseCounts = imported.databaseCounts;
 
 let attachmentChunks = 0;
+const attachmentChunksBySource = {};
 for (const sourcePath of chunkFiles) {
   const chunks = await readJsonl(sourcePath);
   const targetPath = path.join(path.dirname(sourcePath), "chunks.sqlite");
@@ -95,20 +82,51 @@ for (const sourcePath of chunkFiles) {
     await writer.abort();
     throw error;
   }
+  const chunkDatabase = new DatabaseSync(targetPath, { readOnly: true });
+  try {
+    const integrity = chunkDatabase.prepare("PRAGMA integrity_check").get();
+    const actual = Number(chunkDatabase.prepare("SELECT COUNT(*) AS count FROM attachment_chunks").get()?.count ?? -1);
+    if (String(integrity?.integrity_check ?? "") !== "ok" || actual !== chunks.length) {
+      throw new Error(`SQLite attachment verification failed for ${sourcePath}: expected ${chunks.length}, got ${actual}`);
+    }
+  } finally {
+    chunkDatabase.close();
+  }
   attachmentChunks += chunks.length;
+  attachmentChunksBySource[path.relative(workspace, sourcePath).replace(/\\/g, "/")] = chunks.length;
 }
+sourceCounts.attachmentChunksBySource = attachmentChunksBySource;
 
 store.checkpoint();
 store.compact();
 store.checkpoint();
+closeApplicationDataStores();
+
+const chunkTargets = chunkFiles.map((sourcePath) => path.join(path.dirname(sourcePath), "chunks.sqlite"));
+const targetPaths = [...new Set(await existingFiles([
+  mainDatabasePath,
+  getWorkspacePath(WORKSPACE_LAYOUT.sessionQueue),
+  ...existingChunkDatabases,
+  ...chunkTargets
+]))];
+await finalizeSqliteMigrationRecoveryPoint({
+  directory: recovery.directory,
+  workspace,
+  sourceCounts,
+  databaseCounts,
+  imports: imported.imports,
+  targets: targetPaths.map(databaseDescriptor)
+});
+await verifySqliteMigrationRecoveryPoint(recovery.directory);
+await drillSqliteMigrationRecoveryPoint({ directory: recovery.directory });
 for (const filePath of [...legacyFiles, ...chunkFiles]) await fs.rm(filePath, { force: true });
 await fs.rm(path.join(agentWorkspace, ".memory-transactions"), { recursive: true, force: true });
-closeApplicationDataStores();
+await verifySqliteMigrationRecoveryPoint(recovery.directory);
 
 console.log(JSON.stringify({
   ok: true,
   databasePath: store.databasePath,
-  backupRoot,
+  backupRoot: recovery.directory,
   counts: databaseCounts,
   attachmentIndexes: chunkFiles.length,
   attachmentChunks
@@ -157,42 +175,6 @@ async function assertNoPendingFileTransaction(workspace) {
   }
 }
 
-async function countConversationRecords(filePath) {
-  try {
-    const parsed = JSON.parse(await fs.readFile(filePath, "utf8"));
-    const records = Array.isArray(parsed) ? parsed : parsed.conversations;
-    if (!Array.isArray(records)) throw new Error(`Invalid conversation store: ${filePath}`);
-    return records.length;
-  } catch (error) {
-    if (error?.code === "ENOENT") return 0;
-    throw error;
-  }
-}
-
-async function countSchedulerConversations(filePath) {
-  try {
-    const parsed = JSON.parse(await fs.readFile(filePath, "utf8"));
-    if (parsed.version !== 1 || !parsed.conversations || typeof parsed.conversations !== "object") {
-      throw new Error(`Invalid memory scheduler store: ${filePath}`);
-    }
-    return Object.keys(parsed.conversations).length;
-  } catch (error) {
-    if (error?.code === "ENOENT") return 0;
-    throw error;
-  }
-}
-
-async function countJsonArray(filePath) {
-  try {
-    const parsed = JSON.parse(await fs.readFile(filePath, "utf8"));
-    if (!Array.isArray(parsed)) throw new Error(`Invalid JSON array store: ${filePath}`);
-    return parsed.length;
-  } catch (error) {
-    if (error?.code === "ENOENT") return 0;
-    throw error;
-  }
-}
-
 async function readJsonl(filePath) {
   try {
     const raw = await fs.readFile(filePath, "utf8");
@@ -227,11 +209,72 @@ async function findFiles(directory, fileName) {
   }
 }
 
-async function backupFile(filePath, destinationRoot) {
-  const relative = path.relative(root, filePath);
-  const destination = path.join(destinationRoot, relative);
-  await fs.mkdir(path.dirname(destination), { recursive: true });
-  await fs.copyFile(filePath, destination);
+async function migrationSourceDescriptors(legacyPaths, legacyFilePaths, chunkFilePaths) {
+  const descriptors = [];
+  const present = new Set(legacyFilePaths);
+  for (const [name, filePath] of Object.entries(legacyPaths)) {
+    if (!present.has(filePath)) continue;
+    const records = await legacyRecords(name, filePath);
+    descriptors.push({
+      id: `legacy:${name}`,
+      kind: name === "transactionJournal" ? "transaction-journal" : "legacy-source",
+      path: filePath,
+      recordCount: records.length,
+      idempotencyKeys: records.map((record, index) => recordIdentity(record, index))
+    });
+  }
+  for (const filePath of chunkFilePaths) {
+    const records = await readJsonl(filePath);
+    descriptors.push({
+      id: `attachment:${path.relative(workspace, filePath).replace(/\\/g, "/")}`,
+      kind: "attachment-chunks-source",
+      path: filePath,
+      recordCount: records.length,
+      idempotencyKeys: records.map((record, index) => String(record.index ?? index))
+    });
+  }
+  return descriptors;
+}
+
+async function legacyRecords(name, filePath) {
+  if (["requestLogs", "working", "longTerm", "userProfile", "transactionJournal"].includes(name)) {
+    return readJsonl(filePath);
+  }
+  const parsed = JSON.parse(await fs.readFile(filePath, "utf8"));
+  if (name === "conversations") {
+    const records = Array.isArray(parsed) ? parsed : parsed.conversations;
+    if (!Array.isArray(records)) throw new Error(`Invalid conversation store: ${filePath}`);
+    return records;
+  }
+  if (name === "memoryScheduler") {
+    if (parsed.version !== 1 || !parsed.conversations || typeof parsed.conversations !== "object") {
+      throw new Error(`Invalid memory scheduler store: ${filePath}`);
+    }
+    return Object.entries(parsed.conversations).map(([id, value]) => ({ id, value }));
+  }
+  if (!Array.isArray(parsed)) throw new Error(`Invalid JSON array store: ${filePath}`);
+  return parsed;
+}
+
+function recordIdentity(record, index) {
+  for (const key of ["id", "transactionId", "conversationId", "requestId", "index"]) {
+    const value = record?.[key];
+    if (typeof value === "string" && value.trim()) return `${key}:${value.trim()}`;
+    if (Number.isSafeInteger(value)) return `${key}:${value}`;
+  }
+  return `row:${index}:${createHash("sha256").update(JSON.stringify(record)).digest("hex")}`;
+}
+
+function databaseDescriptor(filePath) {
+  if (filePath === mainDatabasePath) return { id: "application", kind: "application", path: filePath };
+  if (filePath === getWorkspacePath(WORKSPACE_LAYOUT.sessionQueue)) {
+    return { id: "session_queue", kind: "session_queue", path: filePath };
+  }
+  return {
+    id: `attachment_chunks:${path.relative(workspace, filePath).replace(/\\/g, "/")}`,
+    kind: "attachment_chunks",
+    path: filePath
+  };
 }
 
 async function existsFilter() {

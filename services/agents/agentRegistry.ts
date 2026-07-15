@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { nanoid } from "nanoid";
 import { ServiceError } from "../../packages/contracts/errors/serviceError.js";
-import { inspectMultiAgentMigrationGate } from "../../packages/platform/multiAgentMigrationGate.mjs";
+import { inspectMultiAgentMigrationGate, validateMultiAgentWorkspacePath } from "../../packages/platform/multiAgentMigrationGate.mjs";
 import { WORKSPACE_LAYOUT, workspaceRelativeReference } from "../../packages/platform/workspaceLayout.js";
 import {
   defaultPromptContent,
@@ -42,6 +42,10 @@ export interface AgentAccount extends AgentAccountRegistryRow {
   connected?: boolean;
   selfId?: string;
   runtimeReady?: boolean;
+  desiredState?: "running" | "stopped";
+  observedState?: "running" | "stopped" | "missing" | "unknown";
+  reconcileRequired?: boolean;
+  lastError?: string | null;
 }
 
 export interface AgentSummary extends AgentRegistryRow {
@@ -77,10 +81,11 @@ export class AgentRegistry {
   }
 
   async initialize() {
-    if (!this.allowUnmarkedMigration && !this.workspaceGateAlreadyChecked) {
+    if (!this.workspaceGateAlreadyChecked) {
       const workspace = path.resolve(this.workspaceRoot, "../..");
-      const gate = await inspectMultiAgentMigrationGate(workspace);
-      if (gate.state !== "trusted") {
+      if (this.allowUnmarkedMigration) {
+        await validateMultiAgentWorkspacePath(workspace);
+      } else if ((await inspectMultiAgentMigrationGate(workspace)).state !== "trusted") {
         throw new ServiceError(
           409,
           "MULTI_AGENT_MIGRATION_REQUIRED",
@@ -276,6 +281,14 @@ export class AgentRegistry {
       qqId: undefined,
       updatedAt: this.now().toISOString()
     };
+    this.store.updateAgentAccount(updated);
+    return updated;
+  }
+
+  async updateAccountEnabled(agentId: string, accountId: string, enabled: boolean) {
+    const current = this.store.readAgentAccount(accountId);
+    if (!current || current.agentId !== agentId) notFound("AGENT_ACCOUNT_NOT_FOUND", "QQ 账号不存在。");
+    const updated = { ...current, enabled, updatedAt: this.now().toISOString() };
     this.store.updateAgentAccount(updated);
     return updated;
   }

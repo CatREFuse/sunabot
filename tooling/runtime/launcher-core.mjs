@@ -2,12 +2,28 @@ import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 
-export const LAUNCHER_COMMANDS = new Set(["up", "down", "restart", "status", "logs", "doctor"]);
+export const LAUNCHER_COMMANDS = new Set([
+  "up",
+  "down",
+  "restart",
+  "status",
+  "logs",
+  "doctor",
+  "bootstrap",
+  "help",
+  "reconcile-account",
+  "probe-runtime",
+  "rollback-first-run"
+]);
 export const CORE_MODES = new Set(["auto", "native", "docker"]);
 
 export function parseLauncherArguments(argv, environment = {}) {
   const values = [...argv];
   let command = "up";
+  if (["-h", "--help"].includes(values[0])) {
+    values.shift();
+    command = "help";
+  }
   if (values[0] && !values[0].startsWith("-")) command = values.shift();
   if (!LAUNCHER_COMMANDS.has(command)) {
     throw new Error(`未知命令 ${command}。可用命令：${[...LAUNCHER_COMMANDS].join(", ")}。`);
@@ -15,6 +31,7 @@ export function parseLauncherArguments(argv, environment = {}) {
 
   let requestedMode = environment.SUNABOT_CORE_MODE?.trim() || "auto";
   let dev = /^(?:1|true|yes)$/i.test(environment.SUNABOT_DEV?.trim() || "");
+  let accountId;
   while (values.length > 0) {
     const value = values.shift();
     if (value === "--dev") {
@@ -29,12 +46,26 @@ export function parseLauncherArguments(argv, environment = {}) {
       requestedMode = value.slice("--core=".length);
       continue;
     }
-    throw new Error(`不支持的参数 ${value}。仅支持 --core=auto|native|docker 和 --dev。`);
+    if (value === "--account") {
+      accountId = values.shift() ?? "";
+      continue;
+    }
+    if (value?.startsWith("--account=")) {
+      accountId = value.slice("--account=".length);
+      continue;
+    }
+    throw new Error(`不支持的参数 ${value}。仅支持 --core=auto|native|docker、--dev 和 --account=<id>。`);
   }
   if (!CORE_MODES.has(requestedMode)) {
     throw new Error(`SUNABOT_CORE_MODE 必须是 auto、native 或 docker，当前为 ${requestedMode || "空值"}。`);
   }
-  return { command, requestedMode, dev };
+  if (command === "reconcile-account" && !/^[A-Za-z0-9_-]{1,64}$/.test(accountId ?? "")) {
+    throw new Error("reconcile-account 需要合法的 --account=<id>。");
+  }
+  if (command !== "reconcile-account" && accountId != null) {
+    throw new Error("--account 仅支持 reconcile-account。");
+  }
+  return { command, requestedMode, dev, ...(accountId ? { accountId } : {}) };
 }
 
 export function isWslRuntime(options = {}) {

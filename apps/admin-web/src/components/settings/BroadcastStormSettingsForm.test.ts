@@ -10,7 +10,8 @@ describe("BroadcastStormSettingsForm", () => {
           enabled: true,
           windowMinutes: 2,
           replyThreshold: 3,
-          cooldownMinutes: 1
+          cooldownMinutes: 1,
+          additionalQqIds: ["10001", "20002"]
         }
       }
     });
@@ -19,6 +20,7 @@ describe("BroadcastStormSettingsForm", () => {
     expect(wrapper.text()).toContain("检测窗口（分钟）");
     expect(wrapper.text()).toContain("回复次数");
     expect(wrapper.text()).toContain("静默时长（分钟）");
+    expect(wrapper.get('input[type="text"]').element).toHaveProperty("value", "10001, 20002");
     expect(wrapper.findAll('input[type="number"]').map((input) => (
       (input.element as HTMLInputElement).value
     ))).toEqual(["2", "3", "1"]);
@@ -31,7 +33,8 @@ describe("BroadcastStormSettingsForm", () => {
           enabled: false,
           windowMinutes: 2,
           replyThreshold: 3,
-          cooldownMinutes: 1
+          cooldownMinutes: 1,
+          additionalQqIds: []
         }
       }
     });

@@ -6,7 +6,7 @@ sunabot 是面向个人自托管场景的多 Agent QQ 服务。每个 Agent 可�
 
 - QQ 私聊、群聊、@、引用回复、戳一戳、文件和图片消息
 - 多 Agent、多 QQ，以及按 Agent 隔离的会话、记忆、图片和任务
-- 单会话顺序执行、SQLite outbox、断线恢复和异步任务回传
+- 单会话顺序执行、按 QQ 隔离的 SQLite outbox、两阶段外发、断线恢复和异步任务回传
 - 工作记忆、长期记忆、用户画像和 BM25 召回
 - OpenAI、Codex 订阅、Gemini、Anthropic 与 OpenAI 兼容 Provider
 - 联网搜索、图像生成、自拍、Codex 任务和管理员工作区工具
@@ -85,6 +85,8 @@ cd sunabot
 
 启动脚本会校验 Node 版本、按需执行 `npm ci`、初始化 `workspace/`、生成 OneBot 与 NapCat WebUI 令牌，并在当前终端要求设置管理员账号密码。密码至少 12 个字符。
 
+首次运行会在每个持久化边界记录可校验 journal。中断后再次执行 `./sunabot.sh up` 会继续；需要放弃未完成的首次运行时执行 `./sunabot.sh rollback-first-run`，未知文件会保留。
+
 如果 `up` 将在无 TTY 环境运行，请在有 TTY 的终端提前创建管理员凭据：
 
 ```bash
@@ -127,8 +129,10 @@ ANTHROPIC_API_KEY=
 每个 Agent 可以添加多个 QQ：
 
 1. 在 Agent 页面点击“新增 QQ”并填写账号名称。
-2. 执行 `./sunabot.sh restart` 启动新增账号的 NapCat 容器。
-3. 返回 Agent 页面点击“登录”并扫码。
+2. 等待账号状态进入扫码态。
+3. 点击“登录”并扫码。
+
+宿主账号调和进程会按注册表启动、停止或移除目标 NapCat；Docker Core 不挂载 Docker socket。管理台会显示期望状态、实际状态、是否仍需调和和最近错误。注册库不可读时不会停止或删除现有容器。
 
 每个账号使用独立 WebUI 端口，首个账号从 `6099` 开始。账号运行目录位于：
 
@@ -140,7 +144,7 @@ workspace/runtime/napcat/accounts/<accountId>/
 
 在管理台的“Agent”页面点击“新增 Agent”，填写不可变的 Agent ID、名称和可选头像。新 Agent 会获得独立的人格文件、配置、双 SQLite 数据库、媒体目录和 QQ 账号列表，并继承公共 Provider 与系统提示词。
 
-创建完成后添加 QQ、重启 Sunabot、完成扫码，再进入“Agent 设置”配置管理员 QQ、回复行为、记忆、工具和群聊编排。
+创建完成后添加 QQ、完成扫码，再进入“Agent 设置”配置管理员 QQ、回复行为、记忆、工具和群聊编排。
 
 ## 运行命令
 
@@ -151,7 +155,12 @@ workspace/runtime/napcat/accounts/<accountId>/
 ./sunabot.sh status
 ./sunabot.sh logs
 ./sunabot.sh doctor
+./sunabot.sh bootstrap
+./sunabot.sh rollback-first-run
+./sunabot.sh --help
 ```
+
+`status`、`doctor`、`logs` 和 `down` 不安装依赖。`bootstrap` 显式安装锁定依赖；`up` 与 `restart` 在需要时执行安装。`status`、`doctor` 与管理 API 共用同一只读探针，分别报告 Core、OneBot、每个 QQ、Provider、Codex、LibreOffice、bubblewrap、workspace 和迁移状态。Provider 状态区分“已验证可用”“当前不可用”和“未配置”。
 
 Core 模式可以通过环境变量或参数选择：
 
@@ -189,6 +198,8 @@ git pull --ff-only
 
 launcher 会在写入 workspace 前校验 `business/migrations/multi-agent-v1.json`。真正空目录会自动创建首次安装标记；主库出现后，门禁会核对全部 Agent 的 manifest 与双库、全部 QQ 的归属与运行目录、Plana/primary 基线，以及所有必需路径。完成标记还绑定迁移目标的 workspace 和 primary 端口。既有目录缺少标记、状态漂移或路径含符号链接时停止启动；结构已就绪但未标记的 workspace 仍需停服执行 `migrate:multi-agent --apply --quiesced`，由迁移器在确认全部账号端口和当前 workspace 的活动容器已经停止后创建恢复点、四类复制/保留证据、迁移报告和完成标记。
 
+workspace、恢复点与恢复目标的绝对路径会逐级检查父目录；用户创建的符号链接路径会在任何 marker、配置、凭据、SQLite 或注册表写入前拒绝。迁移与恢复先持久化 journal intent，中断后可继续或回滚；未知替换不会被自动删除。
+
 备份、验证、恢复和演练命令见 [SQLite 备份与恢复](docs/operations/sqlite-backup-recovery.md)。运行中的旧实例与新实例不能同时连接同一 QQ 或写入同一个 workspace。
 
 ## 端口与安全
@@ -213,3 +224,5 @@ npm run test:visual
 ```
 
 界面截图需要人工检查。运行契约、架构门禁、恢复门禁、类型检查、单元与集成测试、运行时 smoke、容量基线、生产构建和 E2E 都包含在 `npm run verify` 中。
+
+跨平台发布前还需要在真实 macOS Native Core + 多 NapCat Docker 与 Linux/WSL Docker Core + 多 NapCat Docker 环境完成双 QQ 登录、账号定向文字/图片/文件外发和重启恢复。

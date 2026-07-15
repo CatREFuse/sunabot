@@ -55,8 +55,8 @@ export function applicationDatabasePath(config?: Pick<AppConfig, "persona">) {
   if (configured) {
     throw new Error("SUNABOT_DATABASE_PATH 已停止支持；主库固定为 workspace/business/data/sunabot.sqlite。");
   }
-  if (process.env.VITEST && config && path.isAbsolute(config.persona.agentWorkspace)) {
-    const agentWorkspace = resolveProjectPath(config.persona.agentWorkspace);
+  if (process.env.VITEST && activeConfig && path.isAbsolute(activeConfig.persona.agentWorkspace)) {
+    const agentWorkspace = resolveProjectPath(activeConfig.persona.agentWorkspace);
     if (!agentWorkspace) return ":memory:";
     const parent = path.dirname(path.resolve(agentWorkspace));
     return path.join(path.basename(parent) === "agents" ? path.dirname(parent) : parent, "data", "sunabot.sqlite");
@@ -322,20 +322,20 @@ export class ApplicationDataStore {
   }
 
   replaceConversations(records: readonly ConversationRecord[]) {
-    this.transaction(() => {
-      const ids = new Set(records.map((record) => record.id));
-      const upsert = this.database.prepare(`
-        INSERT INTO conversations (id, last_at, data_json) VALUES (?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET
-          last_at = excluded.last_at,
-          data_json = excluded.data_json
-        WHERE conversations.data_json <> excluded.data_json
-      `);
-      for (const record of records) upsert.run(record.id, record.lastAt, JSON.stringify(record));
-      for (const row of this.database.prepare("SELECT id FROM conversations").all() as SqlRow[]) {
-        const id = String(row.id);
-        if (!ids.has(id)) this.database.prepare("DELETE FROM conversations WHERE id = ?").run(id);
-      }
+    this.transaction(() => this.replaceConversationsUnsafe(records));
+  }
+
+  replaceConversationsIdempotent(idempotencyKey: string, records: readonly ConversationRecord[]) {
+    const key = requiredIdempotencyKey(idempotencyKey);
+    return this.transaction(() => {
+      const inserted = this.database.prepare(`
+        INSERT INTO outbox_local_effects (idempotency_key, effect_kind, created_at)
+        VALUES (?, 'conversation_projection', ?)
+        ON CONFLICT(idempotency_key) DO NOTHING
+      `).run(key, new Date().toISOString());
+      if (Number(inserted.changes) !== 1) return false;
+      this.replaceConversationsUnsafe(records);
+      return true;
     });
   }
 
@@ -391,6 +391,10 @@ export class ApplicationDataStore {
     this.modelCalls.appendRequestLog(record);
   }
 
+  appendRequestLogIdempotent(record: JsonObject) {
+    return this.modelCalls.appendRequestLogIdempotent(record);
+  }
+
   readModelCallAggregateRows(conversationId = ""): ModelCallAggregateRow[] {
     return this.modelCalls.readAggregateRows(conversationId);
   }
@@ -434,6 +438,22 @@ export class ApplicationDataStore {
       memorySchedulerConversations: this.memorySchedulerCount(),
       imageHistory: this.imageHistoryCount()
     };
+  }
+
+  private replaceConversationsUnsafe(records: readonly ConversationRecord[]) {
+    const ids = new Set(records.map((record) => record.id));
+    const upsert = this.database.prepare(`
+      INSERT INTO conversations (id, last_at, data_json) VALUES (?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        last_at = excluded.last_at,
+        data_json = excluded.data_json
+      WHERE conversations.data_json <> excluded.data_json
+    `);
+    for (const record of records) upsert.run(record.id, record.lastAt, JSON.stringify(record));
+    for (const row of this.database.prepare("SELECT id FROM conversations").all() as SqlRow[]) {
+      const id = String(row.id);
+      if (!ids.has(id)) this.database.prepare("DELETE FROM conversations WHERE id = ?").run(id);
+    }
   }
 
   private replaceMemoryUnsafe(source: MemoryDataSource, records: readonly JsonObject[]) {
@@ -494,6 +514,11 @@ export class ApplicationDataStore {
 
 function count(row: unknown) {
   return Number((row as SqlRow | undefined)?.count ?? 0);
+}
+
+function requiredIdempotencyKey(value: string) {
+  if (typeof value !== "string" || !value.trim()) throw new Error("idempotencyKey is required.");
+  return value.trim();
 }
 
 function mapAgentRegistryRow(row: SqlRow): AgentRegistryRow {

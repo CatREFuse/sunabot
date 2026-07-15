@@ -5,6 +5,15 @@ import type {
 } from "../../packages/contracts/tools/codex.js";
 import type { ToolJobRecord } from "./sessionStore.js";
 
+export interface OutboxDeliveryContext {
+  signal: AbortSignal;
+  readonly phase: "send" | "settle";
+  readonly remoteReceipt: unknown;
+  sendRemote<T>(operation: () => T | Promise<T>): Promise<T>;
+  settleStep<T>(step: string, operation: (idempotencyKey: string) => T | Promise<T>): Promise<T | undefined>;
+  settleEffectStep<T>(step: string, operation: (idempotencyKey: string) => T | Promise<T>): Promise<T | undefined>;
+}
+
 export interface CodexCoordinatorSettings {
   enabled: boolean;
   model?: string;

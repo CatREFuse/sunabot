@@ -1,8 +1,17 @@
 <script setup lang="ts">
+import { computed } from "vue";
 import ToggleSwitch from "../ui/ToggleSwitch.vue";
 import type { ConfigSectionValueMap } from "../../types";
 
 const draft = defineModel<ConfigSectionValueMap["broadcastStorm"]>({ required: true });
+const additionalQqIds = computed({
+  get: () => draft.value.additionalQqIds.join(", "),
+  set: (value: string) => {
+    draft.value.additionalQqIds = [...new Set(
+      value.split(/[,，\s]+/).map((item) => item.trim()).filter(Boolean)
+    )];
+  }
+});
 </script>
 
 <template>
@@ -46,6 +55,17 @@ const draft = defineModel<ConfigSectionValueMap["broadcastStorm"]>({ required: t
           max="1440"
           step="1"
         >
+      </label>
+      <label class="field sm:col-span-3">
+        <span class="field-label">补充嗅探账号</span>
+        <input
+          v-model="additionalQqIds"
+          class="control"
+          type="text"
+          autocomplete="off"
+          placeholder="123456789, 987654321"
+        >
+        <span class="text-xs leading-5 text-mute">用逗号或空格分隔 QQ</span>
       </label>
     </fieldset>
   </section>

@@ -241,7 +241,24 @@ export function loadConversationRecords(config?: Pick<AppConfig, "persona">) {
   }
 }
 export function saveConversationRecords(records: ConversationRecord[], config?: Pick<AppConfig, "persona">) {
-  const sorted = records
+  try {
+    applicationDataStore(config).replaceConversations(normalizedConversationRecords(records));
+  } catch (error) {
+    console.error("[runtime] save conversation records failed", error);
+  }
+}
+export function saveConversationRecordsStrict(
+  records: ConversationRecord[],
+  idempotencyKey: string,
+  config?: Pick<AppConfig, "persona">
+) {
+  return applicationDataStore(config).replaceConversationsIdempotent(
+    idempotencyKey,
+    normalizedConversationRecords(records)
+  );
+}
+function normalizedConversationRecords(records: ConversationRecord[]) {
+  return records
     .slice()
     .sort((left, right) => Date.parse(right.lastAt) - Date.parse(left.lastAt))
     .slice(0, 80)
@@ -251,12 +268,6 @@ export function saveConversationRecords(records: ConversationRecord[], config?: 
         .slice(-MAX_STORED_CONVERSATION_MESSAGES)
         .map(persistedConversationMessage)
     }));
-
-  try {
-    applicationDataStore(config).replaceConversations(sorted);
-  } catch (error) {
-    console.error("[runtime] save conversation records failed", error);
-  }
 }
 export function persistedConversationMessage(
   message: ConversationRecord["messages"][number]

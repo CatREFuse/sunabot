@@ -26,8 +26,10 @@ const emptyConfig: AppConfig = {
     enabled: true,
     windowMinutes: 2,
     replyThreshold: 3,
-    cooldownMinutes: 1
+    cooldownMinutes: 1,
+    additionalQqIds: []
   },
+  normalReply: { maxRetries: 3 },
   bot: {
     adminQq: "",
     adminName: "",
@@ -88,7 +90,7 @@ const emptyConfig: AppConfig = {
 const envelope = shallowRef<ConfigEnvelope | null>(null);
 const loading = shallowRef(false);
 const state = reactive<Record<ConfigSectionKey, SectionState>>({
-  server: idle(), persona: idle(), providers: idle(), bot: idle(), memory: idle(),
+  server: idle(), persona: idle(), providers: idle(), normalReply: idle(), bot: idle(), memory: idle(),
   broadcastStorm: idle(), orchestrator: idle(), tools: idle(), bash: idle(), onebot: idle()
 });
 const drafts = reactive<SectionDrafts>(valuesFromConfig(emptyConfig));
@@ -293,6 +295,7 @@ function valuesFromConfig(config: AppConfig): SectionDrafts {
     persona: { agentWorkspace: config.persona.agentWorkspace },
     providers: clone(config.providers),
     broadcastStorm: clone(config.broadcastStorm),
+    normalReply: clone(config.normalReply),
     bot: {
       adminQq: config.bot.adminQq,
       adminName: config.bot.adminName,
@@ -336,7 +339,7 @@ function idle() {
   return { kind: "idle" as const, message: "" };
 }
 
-export const sectionKeys: ConfigSectionKey[] = ["server", "persona", "providers", "broadcastStorm", "bot", "memory", "orchestrator", "tools", "bash", "onebot"];
+export const sectionKeys: ConfigSectionKey[] = ["server", "persona", "providers", "broadcastStorm", "normalReply", "bot", "memory", "orchestrator", "tools", "bash", "onebot"];
 
 function requestFor(scope: ConfigWorkspaceScope) {
   return scope === "system" ? apiRequestUnscoped : apiRequest;

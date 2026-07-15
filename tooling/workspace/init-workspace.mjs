@@ -20,8 +20,8 @@ const WORKSPACE_DIRECTORIES = [
 
 export async function initializeWorkspace(options = {}) {
   const root = options.root ?? resolveProjectRoot(import.meta.url);
-  const workspace = options.workspace ?? resolveWorkspace(root);
-  await prepareFreshInstallMarker(workspace, options.now);
+  const requestedWorkspace = options.workspace ?? resolveWorkspace(root);
+  const { workspace } = await prepareFreshInstallMarker(requestedWorkspace, options.now);
   await fs.mkdir(workspace, { recursive: true, mode: 0o700 });
   await fs.chmod(workspace, 0o700);
   await Promise.all(workspaceDirectoryHierarchy().map(async (directory) => {

@@ -73,7 +73,8 @@ export class SingleAgentMigrationError extends Error {
 }
 
 export async function inspectSingleAgentMigration(workspaceInput) {
-  const workspace = absolutePath(workspaceInput, "workspace");
+  const migrationGate = await inspectMultiAgentMigrationGate(workspaceInput);
+  const workspace = migrationGate.workspace;
   await assertWorkspaceDirectory(workspace);
   await assertStandardDatabasePath(workspace);
   const configPath = path.join(workspace, CONFIG_RELATIVE);
@@ -122,7 +123,6 @@ export async function inspectSingleAgentMigration(workspaceInput) {
       { paths: prompts.divergent.map((entry) => entry.destination) }
     );
   }
-  const migrationGate = await inspectMultiAgentMigrationGate(workspace);
   const identity = await inspectPrimaryIdentity(workspace, registry.primary, structuralReady);
   const identityReady = !identity.desiredQqId || (
     registry.primary?.qqId === identity.desiredQqId && identity.accountEnvQqId === identity.desiredQqId

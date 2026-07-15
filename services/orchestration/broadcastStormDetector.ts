@@ -1,10 +1,10 @@
 import type { BroadcastStormConfig } from "../../src/types.js";
 
-export interface CrossAgentReplyObservation {
+export interface CrossAccountReplyObservation {
   messageKey: string;
   groupId: number;
-  sourceAgentId: string;
-  targetAgentId: string;
+  sourceActorId: string;
+  targetActorId: string;
   occurredAt?: string;
 }
 
@@ -14,16 +14,16 @@ export interface BroadcastStormObservationResult {
   blockedUntil?: string;
 }
 
-export interface ReplySuppression {
-  canReplyTo(occurredAt: string): boolean;
+export interface ReplyTaskGate {
+  canCreateTaskFor(occurredAt: string): boolean;
 }
 
 const MINUTE_MS = 60_000;
 const MAX_SEEN_MESSAGES = 20_000;
 
-export class BroadcastStormDetector implements ReplySuppression {
+export class BroadcastStormDetector implements ReplyTaskGate {
   private config: BroadcastStormConfig;
-  private readonly replyTimes = new Map<string, number[]>();
+  private readonly replyTimes = new Map<number, number[]>();
   private readonly seenMessages = new Map<string, number>();
   private blockedUntil = 0;
   private lastBlockedUntil = 0;
@@ -49,30 +49,32 @@ export class BroadcastStormDetector implements ReplySuppression {
     return this.config.enabled;
   }
 
-  observe(input: CrossAgentReplyObservation): BroadcastStormObservationResult {
+  isAdditionalQqId(qqId: string) {
+    return this.config.additionalQqIds.includes(qqId.trim());
+  }
+
+  observe(input: CrossAccountReplyObservation): BroadcastStormObservationResult {
     const now = this.now();
     this.pruneSeenMessages(now);
     if (
       !this.config.enabled ||
       now < this.blockedUntil ||
-      input.sourceAgentId === input.targetAgentId ||
+      input.sourceActorId === input.targetActorId ||
       this.seenMessages.has(input.messageKey)
     ) {
       return { counted: false, triggered: false, ...this.blockStatus(now) };
     }
 
     this.seenMessages.set(input.messageKey, now);
-    const pair = [input.sourceAgentId, input.targetAgentId].sort().join(":");
-    const interactionKey = `${input.groupId}:${pair}`;
     const windowStart = now - this.config.windowMinutes * MINUTE_MS;
     const occurredAt = Date.parse(input.occurredAt ?? "");
     const observationTime = Number.isFinite(occurredAt) ? Math.min(occurredAt, now) : now;
     if (observationTime < windowStart) return { counted: false, triggered: false };
-    const replyTimes = (this.replyTimes.get(interactionKey) ?? []).filter((time) => time >= windowStart);
+    const replyTimes = (this.replyTimes.get(input.groupId) ?? []).filter((time) => time >= windowStart);
     replyTimes.push(observationTime);
 
     if (replyTimes.length < this.config.replyThreshold) {
-      this.replyTimes.set(interactionKey, replyTimes);
+      this.replyTimes.set(input.groupId, replyTimes);
       return { counted: true, triggered: false };
     }
 
@@ -86,7 +88,7 @@ export class BroadcastStormDetector implements ReplySuppression {
     };
   }
 
-  canReplyTo(occurredAt: string) {
+  canCreateTaskFor(occurredAt: string) {
     if (!this.config.enabled) return true;
     const now = this.now();
     if (now < this.blockedUntil) return false;

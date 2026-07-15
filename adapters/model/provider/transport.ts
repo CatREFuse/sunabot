@@ -95,9 +95,13 @@ interface TransportRetryContext {
 }
 
 interface TransportRetryObserver {
+  maxAttempts?: number;
+  attemptTimeoutMs?: number;
   beforeAttempt?(context: { attempt: number; maxAttempts: number }): unknown | Promise<unknown>;
   attemptFailed?(error: unknown, context: TransportRetryContext): unknown | Promise<unknown>;
 }
+
+export const PROVIDER_TRANSPORT_ATTEMPT_TIMEOUT_MS = 60_000;
 
 export async function fetchTextWithTransportRetry(
   input: string,
@@ -105,18 +109,30 @@ export async function fetchTextWithTransportRetry(
   signal?: AbortSignal,
   observer: TransportRetryObserver = {}
 ) {
-  const maxAttempts = 2;
+  const maxAttempts = normalizeMaxAttempts(observer.maxAttempts, 2);
+  const attemptTimeoutMs = normalizeAttemptTimeout(observer.attemptTimeoutMs);
+  const callerSignal = signal ?? init.signal ?? undefined;
   for (let index = 0; index < maxAttempts; index += 1) {
     const attempt = index + 1;
-    assertRequestNotAborted(signal);
+    assertRequestNotAborted(callerSignal);
     await observer.beforeAttempt?.({ attempt, maxAttempts });
     let response: Response | undefined;
     let text: string;
+    const attemptController = new AbortController();
+    const attemptSignal = callerSignal
+      ? AbortSignal.any([callerSignal, attemptController.signal])
+      : attemptController.signal;
+    const attemptTimer = setTimeout(() => {
+      const error = new Error(`Provider transport attempt timed out after ${attemptTimeoutMs}ms`);
+      error.name = "TimeoutError";
+      attemptController.abort(error);
+    }, attemptTimeoutMs);
     try {
-      response = await fetch(input, init);
-      text = await response.text();
+      response = await abortable(fetch(input, { ...init, signal: attemptSignal }), attemptSignal);
+      text = await abortable(response.text(), attemptSignal);
     } catch (error) {
-      const willRetry = !signal?.aborted && attempt < maxAttempts;
+      clearTimeout(attemptTimer);
+      const willRetry = !callerSignal?.aborted && attempt < maxAttempts;
       const retryDelayMs = willRetry ? resolveRetryDelayMs(response?.headers, attempt) : 0;
       await observer.attemptFailed?.(error, {
         attempt,
@@ -126,11 +142,13 @@ export async function fetchTextWithTransportRetry(
         retryDelayMs
       });
       if (!willRetry) throw error;
-      await waitForRetry(retryDelayMs, signal);
+      await waitForRetry(retryDelayMs, callerSignal);
       continue;
+    } finally {
+      clearTimeout(attemptTimer);
     }
 
-    const willRetry = !signal?.aborted
+    const willRetry = !callerSignal?.aborted
       && attempt < maxAttempts
       && retryableTransportStatus(response.status);
     if (willRetry) {
@@ -142,13 +160,42 @@ export async function fetchTextWithTransportRetry(
         status: response.status,
         retryDelayMs
       });
-      await waitForRetry(retryDelayMs, signal);
+      await waitForRetry(retryDelayMs, callerSignal);
       continue;
     }
 
     return { response, text, attempt, maxAttempts };
   }
   throw new Error("transport retry exhausted");
+}
+
+export function resolveModelRequestMaxAttempts(maxRetries: unknown, defaultRetries: number) {
+  const retries = Number.isSafeInteger(maxRetries) && Number(maxRetries) >= 0 && Number(maxRetries) <= 10
+    ? Number(maxRetries)
+    : defaultRetries;
+  return retries + 1;
+}
+
+function normalizeMaxAttempts(value: unknown, fallback: number) {
+  return Number.isSafeInteger(value) && Number(value) >= 1 && Number(value) <= 11
+    ? Number(value)
+    : fallback;
+}
+
+function normalizeAttemptTimeout(value: unknown) {
+  const timeout = Number(value);
+  return Number.isFinite(timeout) && timeout > 0
+    ? Math.trunc(timeout)
+    : PROVIDER_TRANSPORT_ATTEMPT_TIMEOUT_MS;
+}
+
+function abortable<T>(operation: Promise<T>, signal: AbortSignal) {
+  if (signal.aborted) return Promise.reject(signal.reason ?? new Error("aborted"));
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason ?? new Error("aborted"));
+    signal.addEventListener("abort", onAbort, { once: true });
+    operation.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+  });
 }
 
 function readEnvValue(filePath: string | undefined, key: string) {

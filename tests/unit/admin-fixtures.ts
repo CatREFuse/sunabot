@@ -38,7 +38,11 @@ export function createAdminTestConfig(rootDir: string): AppConfig {
       enabled: true,
       windowMinutes: 2,
       replyThreshold: 3,
-      cooldownMinutes: 1
+      cooldownMinutes: 1,
+      additionalQqIds: []
+    },
+    normalReply: {
+      maxRetries: 3
     },
     bot: {
       adminQq: "171419991",

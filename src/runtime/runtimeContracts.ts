@@ -92,7 +92,7 @@ import { cleanupPersistedCodexProcess, CodexToolRunner } from "../../adapters/co
 import { isTrustedQqFakeIp } from "../../adapters/onebot/qqMedia.js";
 import type { CodexRunner } from "../../packages/contracts/tools/codex.js";
 import type { RuntimeToolCapabilityResolver } from "../../services/tools/bashCapability.js";
-import type { ReplySuppression } from "../../services/orchestration/broadcastStormDetector.js";
+import type { ReplyTaskGate } from "../../services/orchestration/broadcastStormDetector.js";
 import {
   OutboxDisconnectedError,
   SessionCoordinator,
@@ -258,5 +258,5 @@ export interface SunaRuntimeOptions {
   sessionStore?: SessionStore;
   codexRunner?: CodexRunner;
   resolveToolCapabilities?: RuntimeToolCapabilityResolver;
-  replySuppression?: ReplySuppression;
+  replyTaskGate?: ReplyTaskGate;
 }

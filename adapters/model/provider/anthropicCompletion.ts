@@ -1,17 +1,18 @@
 import type { RenderedPromptRequest } from "../../../services/agent/promptSystem.js";
 import type { ChatMessage } from "../../../src/types.js";
-import type { ProviderAdapterContext, ProviderCompleteOptions, ProviderTurnResult, ResponseFunctionCallItem } from "./contracts.js";
+import type { ProviderAdapterContext, ProviderCompleteOptions, ProviderTurnResult, ResponseFunctionCallItem, TurnToolState } from "./contracts.js";
 import { toChatCompletionMessage } from "./imageInput.js";
 import { withLogContext } from "./logger.js";
 import { readToolName } from "./promptMapping.js";
 import { claimToolCalls, resolveMaxToolCalls, toolCallLimitError } from "./toolLoopLimits.js";
-import { fetchTextWithTransportRetry, normalizeAnthropicBaseUrl } from "./transport.js";
+import { fetchTextWithTransportRetry, normalizeAnthropicBaseUrl, resolveModelRequestMaxAttempts } from "./transport.js";
 import { errorMessage, isRecord, parseJson } from "./valueUtils.js";
 
 export async function completeAnthropicMessages(
   context: ProviderAdapterContext,
   request: RenderedPromptRequest,
-  options: ProviderCompleteOptions
+  options: ProviderCompleteOptions,
+  state: TurnToolState
 ): Promise<ProviderTurnResult> {
   const apiKey = context.getApiKey();
   if (!apiKey) throw new Error(`Missing API key. Set ${context.provider.apiKeyEnv}.`);
@@ -29,7 +30,6 @@ export async function completeAnthropicMessages(
     input_schema: isRecord(tool.parameters) ? tool.parameters : { type: "object", properties: {} }
   }));
   const maxToolCalls = resolveMaxToolCalls(options);
-  let toolCallCount = 0;
 
   for (let round = 0; round <= maxToolCalls; round += 1) {
     const requestBody = {
@@ -40,7 +40,7 @@ export async function completeAnthropicMessages(
       max_tokens: context.provider.maxOutputTokens,
       tools: tools.length ? tools : undefined
     };
-    const metadata = withLogContext({ round, toolCallCount, maxToolCalls, toolNames: tools.map(readToolName) }, options.logContext);
+    const metadata = withLogContext({ round, toolCallCount: state.toolCallCount, maxToolCalls, toolNames: tools.map(readToolName) }, options.logContext);
     let responseMetadata = metadata;
     const attempt = await fetchTextWithTransportRetry(`${normalizeAnthropicBaseUrl(context.provider.baseUrl)}/messages`, {
       method: "POST",
@@ -52,6 +52,7 @@ export async function completeAnthropicMessages(
       body: JSON.stringify(requestBody),
       signal: options.signal
     }, options.signal, {
+      maxAttempts: resolveModelRequestMaxAttempts(options.modelRequestMaxRetries, 1),
       beforeAttempt: async ({ attempt, maxAttempts }) => {
         responseMetadata = { ...metadata, transportAttempt: attempt, maxTransportAttempts: maxAttempts };
         await context.logger.request("anthropic.messages.complete", requestBody, responseMetadata);
@@ -79,19 +80,19 @@ export async function completeAnthropicMessages(
     const calls: ResponseFunctionCallItem[] = blocks.flatMap((block) => block.type === "tool_use" && block.id && block.name
       ? [{ type: "function_call", call_id: String(block.id), name: String(block.name), arguments: JSON.stringify(isRecord(block.input) ? block.input : {}) }]
       : []);
-    toolCallCount = claimToolCalls(toolCallCount, calls.length, maxToolCalls);
+    state.toolCallCount = claimToolCalls(state.toolCallCount, calls.length, maxToolCalls);
     if (!calls.length) {
       if (!text) throw new Error("模型没有返回可发送内容。");
       return { kind: "completed", text };
     }
 
-    const deferred = context.toolExecutor.deferredTurn(calls, options, definitions);
+    const deferred = context.toolExecutor.deferredTurn(calls, options, definitions, state);
     if (deferred) return deferred;
-    const noReply = context.toolExecutor.noReplyTurn(calls, options, definitions);
+    const noReply = context.toolExecutor.noReplyTurn(calls, options, definitions, state);
     if (noReply) return noReply;
     if (text && options.onAssistantText) await options.onAssistantText(text, "text");
     messages.push({ role: "assistant", content: blocks });
-    const outputs = await context.toolExecutor.execute(calls, options, definitions);
+    const outputs = await context.toolExecutor.execute(calls, options, definitions, state);
     messages.push({
       role: "user",
       content: outputs.map((output) => ({ type: "tool_result", tool_use_id: output.call_id, content: String(output.output ?? "") }))

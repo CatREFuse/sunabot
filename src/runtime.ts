@@ -117,7 +117,7 @@ import { RuntimeConversations } from "./runtime/conversations.js";
 import { RuntimeSelfie } from "./runtime/selfie.js";
 import { TaskLimiter, errorMessage, loadConversationRecords } from "./runtime/infrastructure.js";
 import type { RuntimeToolCapabilityResolver } from "../services/tools/bashCapability.js";
-import type { ReplySuppression } from "../services/orchestration/broadcastStormDetector.js";
+import type { ReplyTaskGate } from "../services/orchestration/broadcastStormDetector.js";
 import { runWithAgentRuntimeContext } from "../packages/platform/runtimeAgentContext.js";
 export * from "./runtime/runtimeContracts.js";
 export * from "./runtime/runtimeHelpers.js";
@@ -150,7 +150,7 @@ export class SunaRuntime {
   readonly ownsSessionStore: boolean;
   readonly sessionCoordinator: SessionCoordinator;
   readonly resolveToolCapabilities: RuntimeToolCapabilityResolver;
-  readonly replySuppression: ReplySuppression;
+  readonly replyTaskGate: ReplyTaskGate;
   readonly incomingPreparations = new Map<string, {
       promise: Promise<void>;
       incoming: ParsedIncomingMessage;
@@ -169,7 +169,7 @@ export class SunaRuntime {
       this.config = config;
       this.conversationRecords = new Map(loadConversationRecords(config).map((record) => [record.id, record]));
       this.resolveToolCapabilities = failClosedToolCapabilityResolver(options.resolveToolCapabilities);
-      this.replySuppression = options.replySuppression ?? { canReplyTo: () => true };
+      this.replyTaskGate = options.replyTaskGate ?? { canCreateTaskFor: () => true };
       this.memoryScheduler = new MemorySchedulerStore(config);
       this.attachmentService = options.attachmentService ?? new AttachmentService(getRootDir(), {
         cacheRoot: getAgentPrivatePath(config, WORKSPACE_LAYOUT.attachmentCache, "cache", "attachments"),
@@ -184,7 +184,7 @@ export class SunaRuntime {
       this.sessionCoordinator = new SessionCoordinator({
         store: this.sessionStore,
         handleEvent: (event, context) => this.inAgentContext(() => this.processSessionEvent(event, context.signal)),
-        deliverOutbox: (outbox, context) => this.inAgentContext(() => this.deliverSessionOutbox(outbox, context.signal)),
+        deliverOutbox: (outbox, context) => this.inAgentContext(() => this.deliverSessionOutbox(outbox, context)),
         codexRunner: options.codexRunner ?? new CodexToolRunner(),
         cleanupCodexProcess: cleanupPersistedCodexProcess,
         runDeferredTool: (job, signal) => this.inAgentContext(() => this.processDeferredToolJob(job, signal)),
@@ -298,7 +298,6 @@ export class SunaRuntime {
   resolveIncomingReplyRoute(...args: Parameters<RuntimeOrchestration["resolveIncomingReplyRoute"]>) { return this.orchestration.resolveIncomingReplyRoute(...args); }
   isReplyTaskCurrent(...args: Parameters<RuntimeOrchestration["isReplyTaskCurrent"]>) { return this.orchestration.isReplyTaskCurrent(...args); }
   cancelScopeReplies(...args: Parameters<RuntimeOrchestration["cancelScopeReplies"]>) { return this.orchestration.cancelScopeReplies(...args); }
-  cancelAllReplies(...args: Parameters<RuntimeOrchestration["cancelAllReplies"]>) { return this.orchestration.cancelAllReplies(...args); }
   cancelAllAmbientReplies(...args: Parameters<RuntimeOrchestration["cancelAllAmbientReplies"]>) { return this.orchestration.cancelAllAmbientReplies(...args); }
   resumeUserGroupOrchestrators(...args: Parameters<RuntimeOrchestration["resumeUserGroupOrchestrators"]>) { return this.inAgentContext(() => this.orchestration.resumeUserGroupOrchestrators(...args)); }
   suspendUserGroupOrchestrators(...args: Parameters<RuntimeOrchestration["suspendUserGroupOrchestrators"]>) { return this.inAgentContext(() => this.orchestration.suspendUserGroupOrchestrators(...args)); }

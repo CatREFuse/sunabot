@@ -51,12 +51,26 @@ import { registerSelfieReferenceRoutes } from "./plugins/selfieReferenceRoutes.j
 import type { AppConfig, ProviderConfig } from "../../src/types.js";
 import { AgentRegistry, type AgentRegistryOptions } from "../../services/agents/agentRegistry.js";
 import { AgentRuntimeManager } from "../../services/agents/agentRuntimeManager.js";
+import {
+  AccountRuntimeReconciler,
+  type AccountRuntimeReconcilerPort,
+  RuntimeProbeClient,
+  type RuntimeProbeClientPort
+} from "../../services/agents/accountRuntimeReconciler.js";
 import { BroadcastStormDetector } from "../../services/orchestration/public.js";
 import {
   createRuntimeToolCapabilityResolver,
   createWorkspaceBashCapabilityProbe
 } from "../../services/tools/bashCapability.js";
-import { inspectMultiAgentMigrationGate } from "../../packages/platform/multiAgentMigrationGate.mjs";
+import {
+  inspectMultiAgentMigrationGate,
+  validateMultiAgentWorkspacePath
+} from "../../packages/platform/multiAgentMigrationGate.mjs";
+import {
+  completeFirstRunBootstrap,
+  inspectFirstRunBootstrap
+} from "../../tooling/runtime/first-run-state.mjs";
+import { collectWorkspaceProbeFacts } from "../../tooling/runtime/probe.mjs";
 
 export interface CreateAppOptions {
   config?: AppConfig;
@@ -70,6 +84,8 @@ export interface CreateAppOptions {
   };
   testProvider?: (provider: ProviderConfig) => Promise<Record<string, unknown>>;
   agentRegistry?: Pick<AgentRegistryOptions, "workspaceRoot" | "allowUnmarkedMigration">;
+  accountRuntimeReconciler?: false | AccountRuntimeReconcilerPort;
+  runtimeProbeClient?: false | RuntimeProbeClientPort;
 }
 
 export interface OneBotListenerAddress {
@@ -92,7 +108,8 @@ export interface BuiltApp {
 
 export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp> {
   const skipWorkspaceMigrationGate = options.agentRegistry?.allowUnmarkedMigration === true;
-  if (!skipWorkspaceMigrationGate) await assertRuntimeWorkspaceMigrationGate();
+  if (skipWorkspaceMigrationGate) await validateMultiAgentWorkspacePath(getWorkspaceDir());
+  else await assertRuntimeWorkspaceMigrationGate();
   configureMemoryPersistence(sqliteMemoryPersistence);
   const startedAt = new Date().toISOString();
   let config = options.config ?? await loadConfig();
@@ -148,11 +165,11 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
   const resolveToolCapabilities = toolCapabilitiesFor(defaultAgentConfig);
   const createRuntime = (agentConfig: AppConfig) => new SunaRuntime(agentConfig, {
     resolveToolCapabilities: toolCapabilitiesFor(agentConfig),
-    replySuppression: broadcastStormDetector
+    replyTaskGate: broadcastStormDetector
   });
   const runtime = new SunaRuntime(defaultAgentConfig, {
     resolveToolCapabilities,
-    replySuppression: broadcastStormDetector
+    replyTaskGate: broadcastStormDetector
   });
   if (options.initializeRuntime !== false) await runtime.initialize();
   const agentRuntimeManager = new AgentRuntimeManager(agentRegistry, {
@@ -162,6 +179,16 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
     broadcastStormDetector
   });
   await agentRuntimeManager.initialize();
+  if (options.initializeRuntime !== false) {
+    const firstRun = await completeFirstRunBootstrap(getWorkspaceDir());
+    if (firstRun.state === "pending" && "missing" in firstRun && Array.isArray(firstRun.missing)) {
+      throw new ServiceError(
+        409,
+        "FIRST_RUN_BOOTSTRAP_INCOMPLETE",
+        `首次运行仍缺少持久化边界：${firstRun.missing.join(", ")}。`
+      );
+    }
+  }
 
   const adminSessionStore = new SqliteAdminSessionStore(applicationDatabasePath(config));
   const adminAuth = await AdminAuthService.create({
@@ -256,6 +283,12 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
     }
   });
   const agentConfigService = new AgentConfigService(agentRegistry, agentRuntimeManager, configService);
+  const accountRuntimeReconciler = options.accountRuntimeReconciler === false
+    ? undefined
+    : options.accountRuntimeReconciler ?? new AccountRuntimeReconciler();
+  const runtimeProbeClient = options.runtimeProbeClient === false
+    ? undefined
+    : options.runtimeProbeClient ?? new RuntimeProbeClient();
 
   app.setErrorHandler((error: unknown, request, reply) => {
     if (error instanceof ServiceError) {
@@ -295,6 +328,8 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
     return payload;
   });
 
+  app.get("/healthz/runtime", async () => ({ schemaVersion: 1, live: true }));
+
   registerMonitoringRoutes(app, {
     startedAt,
     getConfigPath,
@@ -315,7 +350,51 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
     },
     runtime,
     getRuntime: (agentId) => agentRuntimeManager.require(agentId),
-    configService
+    configService,
+    getRuntimeProbeFacts: async (agentId) => {
+      agentRuntimeManager.require(agentId);
+      const status = onebotGateway.getStatus();
+      const connectedAccountIds = (status.accounts ?? []).map((account) => account.accountId);
+      if (runtimeProbeClient) {
+        try {
+          return await runtimeProbeClient.collectFacts({ connectedAccountIds });
+        } catch (error) {
+          console.error("[runtime-probe] host probe failed", error instanceof Error ? error.message : String(error));
+        }
+      }
+      const facts = await collectWorkspaceProbeFacts({
+        workspace: getWorkspaceDir(),
+        connectedAccountIds,
+        conflicts: [{
+          id: "host-runtime-probe",
+          code: "HOST_RUNTIME_PROBE_UNAVAILABLE",
+          path: getWorkspacePath("runtime/launcher-state.json"),
+          action: "./sunabot.sh restart",
+          detail: "host runtime probe is unavailable"
+        }]
+      });
+      const codex = await codexAuth.status();
+      return {
+        ...facts,
+        core: {
+          mode: process.env.SUNABOT_RUNTIME_MODE ?? "api",
+          running: true,
+          apiReady: true,
+          onebotReady: onebotServer?.listening ?? false,
+          apiPath: `http://${config.server.host}:${config.server.port}/api/auth/session`,
+          onebotPath: activeReverseWsPath
+        },
+        dependencies: {
+          node: { ok: process.versions.node === "24.18.0", detail: process.versions.node }
+        },
+        capabilities: {
+          ...facts.capabilities,
+          codexCli: { ok: codex.installed, detail: codex.installed ? "available" : "unavailable" },
+          codexAuth: { ok: codex.authenticated, detail: codex.authenticated ? "authenticated" : "not authenticated" },
+          accountReconciler: { ok: false, detail: "host reconciler is not running" }
+        }
+      };
+    }
   });
 
   await app.register(fastifyStatic, {
@@ -352,11 +431,18 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
     onAgentUpdated: async (agentId, enabled) => {
       if (enabled) await agentRuntimeManager.start(agentId);
       else await agentRuntimeManager.stop(agentId);
+      if (accountRuntimeReconciler) {
+        const agent = await agentRegistry.get(agentId);
+        await Promise.all(agent.accounts.map((account) => accountRuntimeReconciler.reconcile(account.id)));
+      }
     },
     onPromptSettingsUpdated: async (agentId) => {
       await agentRuntimeManager.require(agentId).reload(await agentRegistry.config(agentId));
     },
-    isAccountConnected: (accountId) => Boolean(onebotGateway.getStatus().accounts?.some((account) => account.accountId === accountId))
+    isAccountConnected: (accountId) => Boolean(onebotGateway.getStatus().accounts?.some((account) => account.accountId === accountId)),
+    reconcileAccount: accountRuntimeReconciler
+      ? (accountId) => accountRuntimeReconciler.reconcile(accountId)
+      : undefined
   });
   registerMediaRoutes(app, {
     getConfig: () => config,
@@ -465,7 +551,15 @@ export async function startServer() {
 }
 
 async function assertRuntimeWorkspaceMigrationGate() {
-  const gate = await inspectMultiAgentMigrationGate(getWorkspaceDir());
+  let gate;
+  try {
+    gate = await inspectMultiAgentMigrationGate(getWorkspaceDir());
+  } catch (error) {
+    if ((error as { code?: string }).code !== "MULTI_AGENT_MIGRATION_STATE_INVALID") throw error;
+    const firstRun = await inspectFirstRunBootstrap(getWorkspaceDir());
+    if (firstRun.state === "active") return;
+    throw error;
+  }
   if (gate.state !== "trusted") {
     throw new ServiceError(
       409,

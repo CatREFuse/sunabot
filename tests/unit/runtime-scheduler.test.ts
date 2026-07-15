@@ -231,40 +231,53 @@ describe("runtime reply scheduling helpers", () => {
     expect(result).toEqual({ delivered: false, skipped: "sender_not_allowed" });
   });
 
-  it("drops persisted replies created before a broadcast storm cooldown ends", async () => {
-    let now = Date.parse("2026-07-14T00:00:00.000Z");
+  it("keeps an already dispatched reply task and outbox active after a broadcast storm starts", async () => {
     const detector = new BroadcastStormDetector({
       enabled: true,
       windowMinutes: 2,
       replyThreshold: 1,
-      cooldownMinutes: 1
-    }, () => now);
+      cooldownMinutes: 1,
+      additionalQqIds: []
+    });
     const config = createAdminTestConfig("/tmp/sunabot-runtime-router-test");
     const runtime = new SunaRuntime(config, {
       attachmentService: {} as never,
-      replySuppression: detector
+      replyTaskGate: detector
     });
     const incoming = groupIncoming("普通群消息", 171419991);
-    incoming.time = "2026-07-14T00:00:00.000Z";
     const internals = runtime as unknown as {
+      conversationRecords: Map<string, Record<string, unknown>>;
+      replyGates: { capture(scope: "user_group", conversationId: string): unknown };
+      isReplyTaskCurrent(incoming: ParsedIncomingMessage, gate: unknown): boolean;
+      activeGateway: { getStatus(): { connected: boolean } };
       replyDeliveryDraft(incoming: ParsedIncomingMessage, text: string, isAdmin: boolean): unknown;
+      deliverReplyOutbox: ReturnType<typeof vi.fn>;
       deliverSessionOutbox(outbox: unknown, signal: AbortSignal): Promise<unknown>;
     };
-    const draft = internals.replyDeliveryDraft(incoming, "不会发送", true) as Record<string, unknown>;
+    internals.conversationRecords.set("group:3003", {
+      id: "group:3003",
+      scope: "user_group",
+      replyEnabled: true,
+      messages: []
+    });
+    const gate = internals.replyGates.capture("user_group", "group:3003");
+    const draft = internals.replyDeliveryDraft(incoming, "继续发送", false) as Record<string, unknown>;
+    internals.activeGateway = { getStatus: () => ({ connected: true }) };
+    internals.deliverReplyOutbox = vi.fn(async () => undefined);
+
     detector.observe({
       messageKey: "storm-trigger",
       groupId: 3003,
-      sourceAgentId: "plana",
-      targetAgentId: "arona"
+      sourceActorId: "agent:plana",
+      targetActorId: "agent:arona"
     });
-    now += 61_000;
 
-    const result = await internals.deliverSessionOutbox({
-      id: "outbox-before-broadcast-storm",
+    expect(internals.isReplyTaskCurrent(incoming, gate)).toBe(true);
+    await expect(internals.deliverSessionOutbox({
+      id: "outbox-dispatched-before-storm",
       ...draft
-    }, new AbortController().signal);
-
-    expect(result).toEqual({ delivered: false, skipped: "reply_suppressed" });
+    }, new AbortController().signal)).resolves.toEqual({ delivered: true });
+    expect(internals.deliverReplyOutbox).toHaveBeenCalledOnce();
   });
 
   it.each(["private", "user_group", "bot_group"] as const)(
@@ -274,11 +287,12 @@ describe("runtime reply scheduling helpers", () => {
         enabled: true,
         windowMinutes: 2,
         replyThreshold: 1,
-        cooldownMinutes: 1
+        cooldownMinutes: 1,
+        additionalQqIds: []
       });
       const runtime = new SunaRuntime(createAdminTestConfig("/tmp/sunabot-runtime-router-test"), {
         attachmentService: {} as never,
-        replySuppression: detector
+        replyTaskGate: detector
       });
       const incoming = groupIncoming("普拉娜，回复我", 171419991);
       incoming.scope = scope;
@@ -286,8 +300,8 @@ describe("runtime reply scheduling helpers", () => {
       detector.observe({
         messageKey: "storm-trigger",
         groupId: 3003,
-        sourceAgentId: "plana",
-        targetAgentId: "arona"
+        sourceActorId: "agent:plana",
+        targetActorId: "agent:arona"
       });
 
       expect(runtime.resolveIncomingReplyRoute(incoming, true)).toBe("none");

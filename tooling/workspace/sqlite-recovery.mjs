@@ -4,6 +4,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { backup, DatabaseSync } from "node:sqlite";
+import {
+  AbsolutePathSafetyError,
+  ensureSafeAbsoluteDirectory,
+  ensureSafeAbsoluteParent
+} from "../shared/safe-absolute-path.mjs";
 
 export const RECOVERY_MANIFEST_VERSION = 2;
 export const DEFAULT_HOT_RETENTION_DAYS = 7;
@@ -83,7 +88,8 @@ export async function createRecoveryPoint(options) {
   const busyTimeoutMs = positiveInteger(options.busyTimeoutMs ?? 5_000, "busyTimeoutMs");
   const faultInjector = options.faultInjector ?? (() => undefined);
 
-  await fs.mkdir(backupsRoot, { recursive: true, mode: 0o700 });
+  await safeRecoveryDirectory(workspace);
+  await safeRecoveryDirectory(backupsRoot, { create: true });
   const releaseLock = await acquireRecoveryLock(backupsRoot, now);
   const locks = [];
   let preservePartial = false;
@@ -191,7 +197,7 @@ export async function createRecoveryPoint(options) {
     return { directory: finalDirectory, manifest };
   } catch (error) {
     preservePartial = error?.preservePartial === true;
-    if (!preservePartial) await fs.rm(partialDirectory, { recursive: true, force: true });
+    if (!preservePartial) await removeSafeRecoveryDirectory(partialDirectory);
     throw normalizeGateError(error);
   } finally {
     for (const lock of locks.reverse()) {
@@ -209,6 +215,7 @@ export async function createRecoveryPoint(options) {
 
 export async function verifyRecoveryPoint(backupDirectoryInput) {
   const backupDirectory = absolutePath(backupDirectoryInput, "backupDirectory");
+  await safeRecoveryDirectory(backupDirectory);
   const manifestPath = path.join(backupDirectory, MANIFEST_FILE);
   const checksumPath = path.join(backupDirectory, MANIFEST_CHECKSUM_FILE);
   await assertRegularFile(manifestPath, "BACKUP_MANIFEST_MISSING");
@@ -267,18 +274,10 @@ export async function restoreRecoveryPoint(options) {
   const backup = await verifyRecoveryPoint(options.backupDirectory);
   const targetWorkspace = absolutePath(options.targetWorkspace, "targetWorkspace");
   const definitions = databaseDefinitionsForManifest(backup.manifest);
-  await fs.mkdir(targetWorkspace, { recursive: true, mode: 0o700 });
-  if (await directoryState(targetWorkspace) !== "directory") {
-    throw new RecoveryGateError("RESTORE_PATH_INVALID", "恢复目标 workspace 必须是普通目录。");
-  }
-  const existingTargetEntries = await fs.readdir(targetWorkspace);
-  if (existingTargetEntries.length > 0) {
-    throw new RecoveryGateError(
-      "RESTORE_TARGET_NOT_EMPTY",
-      `恢复目标 workspace 必须为空；发现：${existingTargetEntries.sort().join(", ")}`
-    );
-  }
-
+  const stagingDirectory = path.join(targetWorkspace, `.restore-${backup.manifest.backupId}.staging`);
+  const intentPath = path.join(targetWorkspace, `.restore-${backup.manifest.backupId}.json`);
+  const faultInjector = options.faultInjector ?? (() => undefined);
+  await safeRecoveryDirectory(targetWorkspace, { create: true });
   const targets = definitions.map((definition) => ({
     definition,
     destination: safeWorkspaceChild(targetWorkspace, definition.source),
@@ -287,58 +286,291 @@ export async function restoreRecoveryPoint(options) {
       backup.manifest.databases.find((entry) => entry.id === definition.id).file
     )
   }));
-  for (const target of targets) {
-    await ensureSafeWorkspaceDirectory(targetWorkspace, path.posix.dirname(target.definition.source));
-    if (await databaseFileState(target.destination) !== "missing") {
-      throw new RecoveryGateError(
-        "RESTORE_TARGET_EXISTS",
-        `恢复目标已存在：${target.destination}。请先停服并将旧数据库移动到独立回滚目录。`
-      );
-    }
-  }
-
-  const stagingDirectory = path.join(targetWorkspace, `.restore-${backup.manifest.backupId}-${process.pid}`);
-  const intentPath = path.join(targetWorkspace, `.restore-${backup.manifest.backupId}.json`);
-  await fs.mkdir(stagingDirectory, { recursive: false, mode: 0o700 });
-  const intent = {
-    schemaVersion: 1,
-    backupId: backup.manifest.backupId,
-    createdAt: new Date().toISOString(),
-    files: targets.map((target) => ({
-      source: path.basename(target.source),
-      staged: path.relative(targetWorkspace, path.join(stagingDirectory, target.definition.file)),
-      destination: target.definition.source
-    }))
-  };
+  let intent = await readRestoreIntent(intentPath, backup, targetWorkspace, targets);
   try {
+    if (!intent) {
+      const existingTargetEntries = await fs.readdir(targetWorkspace);
+      if (existingTargetEntries.length > 0) {
+        throw new RecoveryGateError(
+          "RESTORE_TARGET_NOT_EMPTY",
+          `恢复目标 workspace 必须为空；发现：${existingTargetEntries.sort().join(", ")}`
+        );
+      }
+      intent = buildRestoreIntent(backup, targetWorkspace, targets, stagingDirectory);
+      await writeJsonAtomic(intentPath, intent);
+      await invokeFault(faultInjector, "after-restore-intent");
+    }
+
+    const stagingState = await directoryState(stagingDirectory);
+    if (stagingState === "missing") {
+      await fs.mkdir(stagingDirectory, { recursive: false, mode: 0o700 });
+      await syncDirectory(targetWorkspace);
+    } else if (stagingState !== "directory") {
+      throw new RecoveryGateError("RESTORE_STAGING_CONFLICT", `恢复暂存路径类型异常：${stagingDirectory}`);
+    }
+
     for (const target of targets) {
-      const staged = path.join(stagingDirectory, target.definition.file);
-      await fs.copyFile(target.source, staged, fsSync.constants.COPYFILE_EXCL);
-      await syncFile(staged);
-      const expected = backup.manifest.databases.find((entry) => entry.id === target.definition.id);
+      const entry = restoreIntentEntry(intent, target.definition.id);
+      const staged = safeWorkspaceChild(targetWorkspace, entry.staged);
+      const destinationState = await databaseFileState(target.destination);
+      const stagedState = await databaseFileState(staged);
+      if (destinationState === "file") {
+        await assertRestoreFileMatches(target.destination, entry, "RESTORE_DESTINATION_CONFLICT");
+        if (!intent.copied.includes(target.definition.id)) {
+          intent.copied.push(target.definition.id);
+          await writeJsonAtomic(intentPath, intent);
+        }
+        continue;
+      }
+      if (destinationState !== "missing") {
+        throw new RecoveryGateError("RESTORE_DESTINATION_CONFLICT", `恢复目标路径类型异常：${target.destination}`);
+      }
+      if (stagedState === "invalid") {
+        throw new RecoveryGateError("RESTORE_STAGING_CONFLICT", `恢复暂存路径类型异常：${staged}`);
+      }
+      if (stagedState === "missing") {
+        await fs.copyFile(target.source, staged, fsSync.constants.COPYFILE_EXCL);
+        await syncFile(staged);
+      }
+      await assertRestoreFileMatches(staged, entry, "RESTORE_STAGING_CONFLICT");
+      const expected = backup.manifest.databases.find((candidate) => candidate.id === target.definition.id);
       verifyDatabaseFile(staged, target.definition, expected);
+      await removeTransientRestoreSidecars(staged);
+      if (!intent.copied.includes(target.definition.id)) {
+        intent.copied.push(target.definition.id);
+        await writeJsonAtomic(intentPath, intent);
+        await invokeFault(faultInjector, `after-restore-copy-${target.definition.agentId}-${target.definition.kind}`);
+      }
     }
-    await writeJsonAtomic(intentPath, intent);
+    await syncDirectory(stagingDirectory);
+
     for (const target of targets) {
-      const staged = path.join(stagingDirectory, target.definition.file);
+      const entry = restoreIntentEntry(intent, target.definition.id);
+      const staged = safeWorkspaceChild(targetWorkspace, entry.staged);
+      await ensureSafeWorkspaceDirectory(targetWorkspace, path.posix.dirname(target.definition.source));
+      const destinationState = await databaseFileState(target.destination);
+      const stagedState = await databaseFileState(staged);
+      if (destinationState === "file") {
+        await assertRestoreFileMatches(target.destination, entry, "RESTORE_DESTINATION_CONFLICT");
+        if (stagedState === "file") {
+          await assertRestoreFileMatches(staged, entry, "RESTORE_STAGING_CONFLICT");
+          await fs.rm(staged);
+        } else if (stagedState !== "missing") {
+          throw new RecoveryGateError("RESTORE_STAGING_CONFLICT", `恢复暂存路径类型异常：${staged}`);
+        }
+        if (!intent.completed.includes(target.definition.id)) {
+          intent.completed.push(target.definition.id);
+          await writeJsonAtomic(intentPath, intent);
+        }
+        continue;
+      }
+      if (destinationState !== "missing") {
+        throw new RecoveryGateError("RESTORE_DESTINATION_CONFLICT", `恢复目标路径类型异常：${target.destination}`);
+      }
+      if (stagedState !== "file") {
+        throw new RecoveryGateError("RESTORE_STAGING_MISSING", `恢复暂存文件缺失：${staged}`);
+      }
+      await assertRestoreFileMatches(staged, entry, "RESTORE_STAGING_CONFLICT");
+      await invokeFault(faultInjector, `before-restore-rename-${target.definition.agentId}-${target.definition.kind}`);
       await fs.rename(staged, target.destination);
+      await syncDirectory(path.dirname(target.destination));
+      await invokeFault(faultInjector, `after-restore-rename-${target.definition.agentId}-${target.definition.kind}`);
+      if (!intent.completed.includes(target.definition.id)) intent.completed.push(target.definition.id);
+      await writeJsonAtomic(intentPath, intent);
     }
-    await fs.rm(stagingDirectory, { recursive: true, force: true });
-    await fs.rm(intentPath, { force: true });
-    for (const directory of new Set(targets.map((target) => path.dirname(target.destination)))) {
-      await syncDirectory(directory);
-    }
-    await syncDirectory(targetWorkspace);
   } catch (error) {
     throw normalizeGateError(error, "RESTORE_FAILED");
   }
 
   const verification = await verifyWorkspaceDatabases(targetWorkspace, backup.manifest);
+  await fs.rmdir(stagingDirectory).catch((error) => {
+    if (error?.code !== "ENOENT") throw error;
+  });
+  await fs.rm(intentPath, { force: true });
+  await syncDirectory(targetWorkspace);
   return { ok: true, targetWorkspace, backupId: backup.manifest.backupId, verification };
+}
+
+export async function rollbackRecoveryPointRestore(options) {
+  const backup = await verifyRecoveryPoint(options.backupDirectory);
+  const targetWorkspace = absolutePath(options.targetWorkspace, "targetWorkspace");
+  await safeRecoveryDirectory(targetWorkspace);
+  const definitions = databaseDefinitionsForManifest(backup.manifest);
+  const targets = definitions.map((definition) => ({
+    definition,
+    destination: safeWorkspaceChild(targetWorkspace, definition.source),
+    source: safeManifestChild(
+      backup.directory,
+      backup.manifest.databases.find((entry) => entry.id === definition.id).file
+    )
+  }));
+  const intentPath = path.join(targetWorkspace, `.restore-${backup.manifest.backupId}.json`);
+  const intent = await readRestoreIntent(intentPath, backup, targetWorkspace, targets);
+  if (!intent) {
+    throw new RecoveryGateError("RESTORE_INTENT_MISSING", "没有可回滚的恢复事务。");
+  }
+  for (const target of [...targets].reverse()) {
+    const entry = restoreIntentEntry(intent, target.definition.id);
+    const destinationState = await databaseFileState(target.destination);
+    if (destinationState === "file") {
+      await assertRestoreFileMatches(target.destination, entry, "RESTORE_DESTINATION_CONFLICT");
+      await fs.rm(target.destination);
+      await syncDirectory(path.dirname(target.destination));
+    } else if (destinationState !== "missing") {
+      throw new RecoveryGateError("RESTORE_DESTINATION_CONFLICT", `恢复目标路径类型异常：${target.destination}`);
+    }
+  }
+  const stagingDirectory = safeWorkspaceChild(targetWorkspace, intent.stagingDirectory);
+  for (const entry of [...intent.files].reverse()) {
+    const staged = safeWorkspaceChild(targetWorkspace, entry.staged);
+    const stagedState = await databaseFileState(staged);
+    if (stagedState === "file") {
+      await assertRestoreFileMatches(staged, entry, "RESTORE_STAGING_CONFLICT");
+      await fs.rm(staged);
+    } else if (stagedState !== "missing") {
+      throw new RecoveryGateError("RESTORE_STAGING_CONFLICT", `恢复暂存路径类型异常：${staged}`);
+    }
+  }
+  await fs.rmdir(stagingDirectory).catch((error) => {
+    if (error?.code === "ENOENT") return;
+    if (error?.code === "ENOTEMPTY") {
+      throw new RecoveryGateError("RESTORE_STAGING_CONFLICT", `恢复暂存目录包含未知文件：${stagingDirectory}`);
+    }
+    throw error;
+  });
+  await fs.rm(intentPath, { force: true });
+  await removeEmptyRestoreDirectories(targetWorkspace, targets);
+  await syncDirectory(targetWorkspace);
+  return { ok: true, rolledBack: true, targetWorkspace, backupId: backup.manifest.backupId };
+}
+
+function buildRestoreIntent(backup, targetWorkspace, targets, stagingDirectory) {
+  return {
+    schemaVersion: 2,
+    backupId: backup.manifest.backupId,
+    recoveryPointId: backup.manifest.recoveryPointId ?? null,
+    createdAt: new Date().toISOString(),
+    stagingDirectory: path.relative(targetWorkspace, stagingDirectory).replace(/\\/g, "/"),
+    copied: [],
+    completed: [],
+    files: targets.map((target) => {
+      const expected = backup.manifest.databases.find((entry) => entry.id === target.definition.id);
+      return {
+        id: target.definition.id,
+        source: path.basename(target.source),
+        staged: path.posix.join(path.relative(targetWorkspace, stagingDirectory).replace(/\\/g, "/"), target.definition.file),
+        destination: target.definition.source,
+        bytes: expected.bytes,
+        sha256: expected.sha256
+      };
+    })
+  };
+}
+
+async function readRestoreIntent(intentPath, backup, targetWorkspace, targets) {
+  let intent;
+  try {
+    const intentStats = await fs.lstat(intentPath);
+    if (!intentStats.isFile() || intentStats.isSymbolicLink()) {
+      throw new RecoveryGateError("RESTORE_INTENT_INVALID", "恢复事务 journal 必须是普通文件。");
+    }
+    intent = JSON.parse(await fs.readFile(intentPath, "utf8"));
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw new RecoveryGateError("RESTORE_INTENT_INVALID", `恢复事务 journal 无效：${error.message}`);
+  }
+  if (intent?.schemaVersion !== 2
+    || intent.backupId !== backup.manifest.backupId
+    || intent.recoveryPointId !== (backup.manifest.recoveryPointId ?? null)
+    || !Array.isArray(intent.files)
+    || !Array.isArray(intent.copied)
+    || !Array.isArray(intent.completed)
+    || typeof intent.stagingDirectory !== "string") {
+    throw new RecoveryGateError("RESTORE_INTENT_INVALID", "恢复事务 journal 与恢复点不匹配。");
+  }
+  const expectedIds = targets.map((target) => target.definition.id).sort();
+  const intentIds = intent.files.map((entry) => entry?.id).sort();
+  if (stableJson(expectedIds) !== stableJson(intentIds)
+    || intent.copied.some((id) => !expectedIds.includes(id))
+    || intent.completed.some((id) => !expectedIds.includes(id))) {
+    throw new RecoveryGateError("RESTORE_INTENT_INVALID", "恢复事务 journal 文件集合不匹配。");
+  }
+  const expectedStagingDirectory = `.restore-${backup.manifest.backupId}.staging`;
+  const stagingState = intent.stagingDirectory === expectedStagingDirectory
+    ? await directoryState(safeWorkspaceChild(targetWorkspace, intent.stagingDirectory))
+    : "invalid";
+  if (stagingState === "missing") {
+    if (intent.copied.length === 0 && intent.completed.length === 0) return intent;
+    for (const target of targets) {
+      const entry = restoreIntentEntry(intent, target.definition.id);
+      if (await databaseFileState(target.destination) !== "file") {
+        throw new RecoveryGateError("RESTORE_INTENT_INVALID", "恢复事务暂存目录缺失且目标尚未完成。");
+      }
+      await assertRestoreFileMatches(target.destination, entry, "RESTORE_DESTINATION_CONFLICT");
+    }
+  } else if (stagingState !== "directory") {
+    throw new RecoveryGateError("RESTORE_INTENT_INVALID", "恢复事务暂存目录无效。");
+  }
+  for (const target of targets) {
+    const entry = restoreIntentEntry(intent, target.definition.id);
+    const expected = backup.manifest.databases.find((candidate) => candidate.id === target.definition.id);
+    if (entry.source !== path.basename(target.source)
+      || entry.destination !== target.definition.source
+      || entry.bytes !== expected.bytes
+      || entry.sha256 !== expected.sha256) {
+      throw new RecoveryGateError("RESTORE_INTENT_INVALID", `恢复事务 journal 条目不匹配：${target.definition.id}`);
+    }
+    safeWorkspaceChild(targetWorkspace, entry.staged);
+    safeWorkspaceChild(targetWorkspace, entry.destination);
+  }
+  return intent;
+}
+
+function restoreIntentEntry(intent, id) {
+  const entry = intent.files.find((candidate) => candidate?.id === id);
+  if (!entry) throw new RecoveryGateError("RESTORE_INTENT_INVALID", `恢复事务 journal 缺少 ${id}。`);
+  return entry;
+}
+
+async function assertRestoreFileMatches(filePath, entry, code) {
+  const stat = await fs.stat(filePath);
+  if (!stat.isFile() || stat.size !== entry.bytes || await sha256File(filePath) !== entry.sha256) {
+    throw new RecoveryGateError(code, `恢复事务文件与 journal 不匹配：${filePath}`);
+  }
+}
+
+async function removeTransientRestoreSidecars(databasePath) {
+  for (const suffix of ["-wal", "-shm"]) {
+    const sidecar = `${databasePath}${suffix}`;
+    const state = await databaseFileState(sidecar);
+    if (state === "file") await fs.rm(sidecar);
+    else if (state !== "missing") {
+      throw new RecoveryGateError("RESTORE_STAGING_CONFLICT", `恢复暂存 SQLite sidecar 类型异常：${sidecar}`);
+    }
+  }
+}
+
+async function removeEmptyRestoreDirectories(targetWorkspace, targets) {
+  const candidates = new Set();
+  for (const target of targets) {
+    let current = path.dirname(target.destination);
+    while (current !== targetWorkspace && current.startsWith(`${targetWorkspace}${path.sep}`)) {
+      candidates.add(current);
+      current = path.dirname(current);
+    }
+  }
+  for (const directory of [...candidates].sort((left, right) => right.length - left.length)) {
+    try {
+      await fs.rmdir(directory);
+    } catch (error) {
+      if (!["ENOENT", "ENOTEMPTY"].includes(error?.code)) throw error;
+    }
+  }
 }
 
 export async function verifyWorkspaceDatabases(workspaceInput, expectedManifest) {
   const workspace = absolutePath(workspaceInput, "workspace");
+  await safeRecoveryDirectory(workspace);
   if (expectedManifest) validateManifestShape(expectedManifest);
   const definitions = expectedManifest
     ? databaseDefinitionsForManifest(expectedManifest)
@@ -369,8 +601,9 @@ export async function drillRecoveryPoint(options) {
   const backup = await verifyRecoveryPoint(options.backupDirectory);
   const drillRoot = options.targetWorkspace
     ? absolutePath(options.targetWorkspace, "targetWorkspace")
-    : await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-recovery-drill-"));
+    : await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "sunabot-recovery-drill-"));
   const cleanup = !options.targetWorkspace;
+  await safeRecoveryDirectory(drillRoot, { create: true });
   try {
     const restore = await restoreRecoveryPoint({
       backupDirectory: backup.directory,
@@ -388,10 +621,14 @@ export async function drillRecoveryPoint(options) {
       restoredCounts: Object.fromEntries(restore.verification.inspections.map((entry) => [entry.id, entry.tables])),
       queueInvariants: restore.verification.crossDatabaseInvariants
     };
-    if (options.reportPath) await writeJsonAtomic(absolutePath(options.reportPath, "reportPath"), report);
+    if (options.reportPath) {
+      const reportPath = absolutePath(options.reportPath, "reportPath");
+      await safeRecoveryParent(reportPath, { create: true });
+      await writeJsonAtomic(reportPath, report);
+    }
     return report;
   } finally {
-    if (cleanup) await fs.rm(drillRoot, { recursive: true, force: true });
+    if (cleanup) await removeSafeRecoveryDirectory(drillRoot);
   }
 }
 
@@ -419,6 +656,7 @@ export function classifyRetention(entries, nowInput = new Date(), options = {}) 
 
 export async function applyRetention(options) {
   const backupsRoot = absolutePath(options.backupsRoot, "backupsRoot");
+  await safeRecoveryDirectory(backupsRoot);
   const entries = [];
   for (const directoryName of await readDirectoryNames(backupsRoot)) {
     if (!directoryName.startsWith(RECOVERY_DIRECTORY_PREFIX)) continue;
@@ -434,6 +672,7 @@ export async function applyRetention(options) {
   if (options.apply === true) {
     for (const entry of plan.filter((item) => item.action === "prune")) {
       assertSafePublishedBackup(backupsRoot, entry.directory);
+      await safeRecoveryDirectory(entry.directory);
       await fs.rm(entry.directory, { recursive: true, force: false });
     }
   }
@@ -873,15 +1112,27 @@ async function acquireRecoveryLock(backupsRoot, now) {
       await handle.writeFile(`${JSON.stringify({ pid: process.pid, startedAt: now.toISOString() })}\n`);
       await handle.sync();
       await handle.close();
-      return async () => fs.rm(lockPath, { force: true });
+      return async () => removeRecoveryLock(lockPath);
     } catch (error) {
       if (error.code !== "EEXIST") throw error;
+      if (await databaseFileState(lockPath) !== "file") {
+        throw new RecoveryGateError("RECOVERY_PATH_UNSAFE", `SQLite 恢复锁路径不安全：${lockPath}`);
+      }
       const stale = await lockIsStale(lockPath);
       if (!stale) throw new RecoveryGateError("BACKUP_LOCKED", "另一个备份/恢复进程持有 SQLite 恢复锁。");
-      await fs.rm(lockPath, { force: true });
+      await removeRecoveryLock(lockPath);
     }
   }
   throw new RecoveryGateError("BACKUP_LOCKED", "无法获取 SQLite 恢复锁。");
+}
+
+async function removeRecoveryLock(lockPath) {
+  const state = await databaseFileState(lockPath);
+  if (state === "missing") return;
+  if (state !== "file") {
+    throw new RecoveryGateError("RECOVERY_PATH_UNSAFE", `SQLite 恢复锁路径不安全：${lockPath}`);
+  }
+  await fs.rm(lockPath);
 }
 
 async function lockIsStale(lockPath) {
@@ -901,10 +1152,11 @@ async function lockIsStale(lockPath) {
 }
 
 async function removeInterruptedPartials(backupsRoot) {
-  for (const name of await readDirectoryNames(backupsRoot)) {
-    if (!name.startsWith(PARTIAL_DIRECTORY_PREFIX)) continue;
-    const candidate = path.join(backupsRoot, name);
+  for (const entry of await fs.readdir(backupsRoot, { withFileTypes: true })) {
+    if (!entry.name.startsWith(PARTIAL_DIRECTORY_PREFIX)) continue;
+    const candidate = path.join(backupsRoot, entry.name);
     if (path.dirname(candidate) !== backupsRoot) continue;
+    await safeRecoveryDirectory(candidate);
     await fs.rm(candidate, { recursive: true, force: true });
   }
 }
@@ -1119,6 +1371,35 @@ function normalizeGateError(error, fallbackCode = "BACKUP_FAILED") {
   const normalized = buildError(error?.code || fallbackCode, "SQLite 恢复门禁失败", error);
   if (error?.preservePartial === true) normalized.preservePartial = true;
   return normalized;
+}
+
+async function safeRecoveryDirectory(directory, options = {}) {
+  try {
+    return await ensureSafeAbsoluteDirectory(directory, options);
+  } catch (error) {
+    if (error instanceof AbsolutePathSafetyError) {
+      throw new RecoveryGateError("RECOVERY_PATH_UNSAFE", error.message, { path: error.candidate });
+    }
+    throw error;
+  }
+}
+
+async function safeRecoveryParent(candidate, options = {}) {
+  try {
+    return await ensureSafeAbsoluteParent(candidate, options);
+  } catch (error) {
+    if (error instanceof AbsolutePathSafetyError) {
+      throw new RecoveryGateError("RECOVERY_PATH_UNSAFE", error.message, { path: error.candidate });
+    }
+    throw error;
+  }
+}
+
+async function removeSafeRecoveryDirectory(directory) {
+  const state = await directoryState(directory);
+  if (state === "missing") return;
+  await safeRecoveryDirectory(directory);
+  await fs.rm(directory, { recursive: true, force: true });
 }
 
 async function invokeFault(faultInjector, step) {

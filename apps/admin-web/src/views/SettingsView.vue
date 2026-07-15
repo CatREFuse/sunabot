@@ -12,6 +12,7 @@ import SettingsSaveBar from "../components/settings/SettingsSaveBar.vue";
 import PersonaSettingsForm from "../components/settings/PersonaSettingsForm.vue";
 import ProviderSettings from "../components/settings/ProviderSettings.vue";
 import BroadcastStormSettingsForm from "../components/settings/BroadcastStormSettingsForm.vue";
+import NormalReplySettingsForm from "../components/settings/NormalReplySettingsForm.vue";
 import BotSettingsForm from "../components/settings/BotSettingsForm.vue";
 import MemorySettingsForm from "../components/settings/MemorySettingsForm.vue";
 import OrchestratorSettingsForm from "../components/settings/OrchestratorSettingsForm.vue";
@@ -46,6 +47,7 @@ const allSections: Array<{ id: SettingsSectionKey; label: string; group: string;
   { id: "tools", label: "Agent 工具", group: "工具", icon: "bx-wrench", scope: "agent" },
   { id: "bash", label: "命令执行", group: "工具", icon: "bx-terminal", scope: "agent" },
   { id: "providers", label: "模型服务", group: "公共系统", icon: "bx-chip", scope: "system" },
+  { id: "normalReply", label: "回复重试", group: "公共系统", icon: "bx-refresh", scope: "system" },
   { id: "broadcastStorm", label: "广播风暴", group: "公共系统", icon: "bx-shield-quarter", scope: "system" },
   { id: "security", label: "账户安全", group: "公共系统", icon: "bx-lock-alt", scope: "system" },
   { id: "onebot", label: "连接与通知", group: "公共系统", icon: "bx-link", scope: "system" }
@@ -267,6 +269,10 @@ async function logout() {
           <BroadcastStormSettingsForm
             v-else-if="current === 'broadcastStorm'"
             v-model="workspace.drafts.broadcastStorm"
+          />
+          <NormalReplySettingsForm
+            v-else-if="current === 'normalReply'"
+            v-model="workspace.drafts.normalReply"
           />
           <BotSettingsForm
             v-else-if="current === 'bot'"

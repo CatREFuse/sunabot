@@ -47,12 +47,15 @@ import {
   validateCatalogEffort
 } from "./configValidation.js";
 import { configRevision } from "./configRevision.js";
+import { validateBroadcastStormConfig } from "./broadcastStormConfig.js";
+import { validateNormalReplyConfig } from "./normalReplyConfig.js";
 export { configRevision, stableJson } from "./configRevision.js";
 export const CONFIG_SECTIONS = [
   "server",
   "persona",
   "providers",
   "broadcastStorm",
+  "normalReply",
   "bot",
   "memory",
   "orchestrator",
@@ -76,6 +79,7 @@ export interface ConfigSectionValueMap {
   persona: Pick<AppConfig["persona"], "agentWorkspace">;
   providers: AppConfig["providers"];
   broadcastStorm: BroadcastStormConfig;
+  normalReply: AppConfig["normalReply"];
   bot: Pick<BotConfig, "adminQq" | "adminName" | "pokeOnNoReply" | "quoteGroupReplies" | "quoteGroupReplyExcludedUserIds" | "contextMessageLimit">;
   memory: BotMemorySettings;
   orchestrator: BotOrchestratorSettings;
@@ -228,6 +232,7 @@ export function configFieldStates(config: AppConfig): ConfigEnvelope["fieldState
   addFieldStates(states, config.persona, "persona", "hot");
   addFieldStates(states, config.providers, "providers", "hot");
   addFieldStates(states, config.broadcastStorm, "broadcastStorm", "hot");
+  addFieldStates(states, config.normalReply, "normalReply", "hot");
   addFieldStates(states, config.bot, "bot", "hot");
   addFieldStates(states, config.onebot, "onebot", "hot");
 
@@ -314,7 +319,8 @@ export function validateConfigSectionValue<S extends ConfigSection>(
     case "server": return validateServer(value) as ConfigSectionValueMap[S];
     case "persona": return validatePersona(value) as ConfigSectionValueMap[S];
     case "providers": return validateProviders(value, current?.providers) as ConfigSectionValueMap[S];
-    case "broadcastStorm": return validateBroadcastStorm(value) as ConfigSectionValueMap[S];
+    case "broadcastStorm": return validateBroadcastStormConfig(value) as ConfigSectionValueMap[S];
+    case "normalReply": return validateNormalReplyConfig(value) as ConfigSectionValueMap[S];
     case "bot": return validateBot(value) as ConfigSectionValueMap[S];
     case "memory": return validateMemory(value) as ConfigSectionValueMap[S];
     case "orchestrator": return validateOrchestrator(value) as ConfigSectionValueMap[S];
@@ -322,17 +328,6 @@ export function validateConfigSectionValue<S extends ConfigSection>(
     case "bash": return validateBash(value) as ConfigSectionValueMap[S];
     case "onebot": return validateOnebot(value) as ConfigSectionValueMap[S];
   }
-}
-
-function validateBroadcastStorm(input: unknown): BroadcastStormConfig {
-  const value = object(input, "broadcastStorm");
-  exactKeys(value, ["enabled", "windowMinutes", "replyThreshold", "cooldownMinutes"], "broadcastStorm");
-  return {
-    enabled: boolean(value.enabled, "broadcastStorm.enabled"),
-    windowMinutes: integer(value.windowMinutes, "broadcastStorm.windowMinutes", 1, 1_440),
-    replyThreshold: integer(value.replyThreshold, "broadcastStorm.replyThreshold", 1, 100),
-    cooldownMinutes: integer(value.cooldownMinutes, "broadcastStorm.cooldownMinutes", 1, 1_440)
-  };
 }
 
 function validateServer(input: unknown): AppConfig["server"] {
@@ -711,7 +706,8 @@ function validateCompleteConfig(config: AppConfig) {
     badRequest("CONFIG_INVALID", `Agent workspace 仅支持 ${DEFAULT_AGENT_WORKSPACE}。`, "persona.agentWorkspace");
   }
   validateProviders(config.providers);
-  validateBroadcastStorm(config.broadcastStorm);
+  validateBroadcastStormConfig(config.broadcastStorm);
+  validateNormalReplyConfig(config.normalReply);
   validateBot({
     adminQq: config.bot.adminQq,
     adminName: config.bot.adminName,
@@ -741,6 +737,7 @@ export function mergeConfigSection<S extends ConfigSection>(
     case "persona": candidate.persona = { ...candidate.persona, ...(value as ConfigSectionValueMap["persona"]) }; break;
     case "providers": candidate.providers = value as ConfigSectionValueMap["providers"]; break;
     case "broadcastStorm": candidate.broadcastStorm = value as ConfigSectionValueMap["broadcastStorm"]; break;
+    case "normalReply": candidate.normalReply = value as ConfigSectionValueMap["normalReply"]; break;
     case "bot": {
       candidate.bot = { ...candidate.bot, ...(value as ConfigSectionValueMap["bot"]) };
       candidate.onebot.quoteGroupReplies = candidate.bot.quoteGroupReplies;

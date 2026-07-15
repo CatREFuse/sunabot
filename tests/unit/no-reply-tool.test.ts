@@ -134,6 +134,115 @@ describe("no_reply provider termination", () => {
   });
 });
 
+describe("cross-round no_reply ordering", () => {
+  it("returns a tool error after OpenAI Responses already delivered assistant_text", async () => {
+    const provider = new OpenAIProvider(providerConfig("openai-official"));
+    const create = vi.fn()
+      .mockResolvedValueOnce({ output: [responseFunctionCall("call-progress", "assistant_text", { text: "处理中" })] })
+      .mockResolvedValueOnce({ output: [responseFunctionCall("call-late-no-reply")] })
+      .mockResolvedValueOnce({ output: [responseMessage("处理完成")] });
+    vi.spyOn(provider as never, "createClient").mockReturnValue({ responses: { create } });
+    const onAssistantText = vi.fn();
+
+    await expect(provider.completeTurn("system", [{ role: "user", content: "执行任务" }], {
+      allowNoReply: true,
+      onAssistantText
+    })).resolves.toEqual({ kind: "completed", text: "处理完成" });
+
+    expect(onAssistantText).toHaveBeenCalledWith("处理中", "assistant_text");
+    expect(create).toHaveBeenCalledTimes(3);
+    expect(readResponsesToolError(create.mock.calls[2]?.[0], "call-late-no-reply"))
+      .toContain("before assistant text or any other tool");
+  });
+
+  it("returns a tool error after Chat Completions already delivered assistant_text", async () => {
+    const provider = new OpenAIProvider(providerConfig("openai-compatible"));
+    const create = vi.fn()
+      .mockResolvedValueOnce(chatToolResponse("call-progress", "assistant_text", { text: "处理中" }))
+      .mockResolvedValueOnce(chatToolResponse("call-late-no-reply", "no_reply", {}))
+      .mockResolvedValueOnce(chatTextResponse("处理完成"));
+    vi.spyOn(provider as never, "createChatClient").mockReturnValue({ chat: { completions: { create } } });
+
+    await expect(provider.completeTurn("system", [{ role: "user", content: "执行任务" }], {
+      allowNoReply: true,
+      onAssistantText: vi.fn()
+    })).resolves.toEqual({ kind: "completed", text: "处理完成" });
+
+    const thirdBody = create.mock.calls[2]?.[0] as Record<string, any>;
+    expect(JSON.parse(String(thirdBody.messages.find((message: Record<string, unknown>) => (
+      message.role === "tool" && message.tool_call_id === "call-late-no-reply"
+    ))?.content)).error).toContain("before assistant text or any other tool");
+  });
+
+  it("returns a tool error after Codex Responses already delivered assistant_text", async () => {
+    const provider = new OpenAIProvider(providerConfig("codex-responses"));
+    vi.spyOn(provider as never, "getApiKey").mockReturnValue("codex-token");
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(codexResponse([responseFunctionCall("call-progress", "assistant_text", { text: "处理中" })]))
+      .mockResolvedValueOnce(codexResponse([responseFunctionCall("call-late-no-reply")]))
+      .mockResolvedValueOnce(codexResponse([responseMessage("处理完成")]));
+
+    await expect(provider.completeTurn("system", [{ role: "user", content: "执行任务" }], {
+      allowNoReply: true,
+      onAssistantText: vi.fn()
+    })).resolves.toEqual({ kind: "completed", text: "处理完成" });
+
+    const thirdBody = JSON.parse(String(fetchMock.mock.calls[2]?.[1]?.body));
+    expect(readResponsesToolError(thirdBody, "call-late-no-reply"))
+      .toContain("before assistant text or any other tool");
+  });
+
+  it("returns a tool error after Anthropic already delivered assistant_text", async () => {
+    const provider = new OpenAIProvider(providerConfig("anthropic-official"));
+    vi.spyOn(provider as never, "getApiKey").mockReturnValue("anthropic-key");
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({
+        content: [{ type: "tool_use", id: "call-progress", name: "assistant_text", input: { text: "处理中" } }],
+        stop_reason: "tool_use"
+      }))
+      .mockResolvedValueOnce(jsonResponse({
+        content: [{ type: "tool_use", id: "call-late-no-reply", name: "no_reply", input: {} }],
+        stop_reason: "tool_use"
+      }))
+      .mockResolvedValueOnce(jsonResponse({ content: [{ type: "text", text: "处理完成" }], stop_reason: "end_turn" }));
+
+    await expect(provider.completeTurn("system", [{ role: "user", content: "执行任务" }], {
+      allowNoReply: true,
+      onAssistantText: vi.fn()
+    })).resolves.toEqual({ kind: "completed", text: "处理完成" });
+
+    const thirdBody = JSON.parse(String(fetchMock.mock.calls[2]?.[1]?.body)) as Record<string, any>;
+    const toolResult = thirdBody.messages.flatMap((message: Record<string, any>) => (
+      Array.isArray(message.content) ? message.content : []
+    )).find((block: Record<string, unknown>) => block.tool_use_id === "call-late-no-reply");
+    expect(JSON.parse(String(toolResult?.content)).error).toContain("before assistant text or any other tool");
+  });
+
+  it("returns a tool error after Gemini already delivered assistant_text", async () => {
+    const provider = new OpenAIProvider(providerConfig("gemini-official"));
+    vi.spyOn(provider as never, "getApiKey").mockReturnValue("gemini-key");
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ candidates: [{ content: { role: "model", parts: [
+        { functionCall: { name: "assistant_text", args: { text: "处理中" } } }
+      ] } }] }))
+      .mockResolvedValueOnce(jsonResponse({ candidates: [{ content: { role: "model", parts: [
+        { functionCall: { name: "no_reply", args: {} } }
+      ] } }] }))
+      .mockResolvedValueOnce(jsonResponse({ candidates: [{ content: { role: "model", parts: [{ text: "处理完成" }] } }] }));
+
+    await expect(provider.completeTurn("system", [{ role: "user", content: "执行任务" }], {
+      allowNoReply: true,
+      onAssistantText: vi.fn()
+    })).resolves.toEqual({ kind: "completed", text: "处理完成" });
+
+    const thirdBody = JSON.parse(String(fetchMock.mock.calls[2]?.[1]?.body)) as Record<string, any>;
+    const response = thirdBody.contents.flatMap((content: Record<string, any>) => content.parts ?? [])
+      .map((part: Record<string, any>) => part.functionResponse)
+      .find((item: Record<string, unknown> | undefined) => item?.name === "no_reply");
+    expect(response.response.error).toContain("before assistant text or any other tool");
+  });
+});
+
 function providerConfig(kind: ProviderKind): ProviderConfig {
   const model = kind.startsWith("anthropic")
     ? "claude-sonnet-4-6"
@@ -165,13 +274,44 @@ function responseMessage(text: string) {
   };
 }
 
-function responseFunctionCall(callId: string) {
+function responseFunctionCall(
+  callId: string,
+  name = "no_reply",
+  args: Record<string, unknown> = {}
+) {
   return {
     type: "function_call",
-    name: "no_reply",
+    name,
     call_id: callId,
-    arguments: "{}",
+    arguments: JSON.stringify(args),
     status: "completed"
+  };
+}
+
+function readResponsesToolError(body: unknown, callId: string) {
+  const input = (body as Record<string, any>)?.input;
+  const output = Array.isArray(input)
+    ? input.find((item: Record<string, unknown>) => item.type === "function_call_output" && item.call_id === callId)
+    : undefined;
+  return String(JSON.parse(String(output?.output)).error ?? "");
+}
+
+function chatToolResponse(callId: string, name: string, args: Record<string, unknown>) {
+  return {
+    choices: [{
+      finish_reason: "tool_calls",
+      message: {
+        role: "assistant",
+        content: null,
+        tool_calls: [{ id: callId, type: "function", function: { name, arguments: JSON.stringify(args) } }]
+      }
+    }]
+  };
+}
+
+function chatTextResponse(text: string) {
+  return {
+    choices: [{ finish_reason: "stop", message: { role: "assistant", content: text } }]
   };
 }
 

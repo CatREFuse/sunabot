@@ -11,7 +11,7 @@ import {
 } from "./configService.js";
 import { badRequest, conflict } from "./errors.js";
 
-const GLOBAL_SECTIONS = new Set<ConfigSection>(["server", "providers", "broadcastStorm"]);
+const GLOBAL_SECTIONS = new Set<ConfigSection>(["server", "providers", "broadcastStorm", "normalReply"]);
 
 export class AgentConfigService {
   constructor(
@@ -78,6 +78,7 @@ export class AgentConfigService {
 function preserveSharedAndIdentity(current: AppConfig, candidate: AppConfig) {
   candidate.server = structuredClone(current.server);
   candidate.providers = structuredClone(current.providers);
+  candidate.normalReply = structuredClone(current.normalReply);
   candidate.persona.defaultAgentId = current.persona.defaultAgentId;
   candidate.persona.name = current.persona.name;
   candidate.persona.agentWorkspace = current.persona.agentWorkspace;

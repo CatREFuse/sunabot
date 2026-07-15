@@ -37,11 +37,18 @@ import type {
   ProviderCompleteOptions,
   ProviderDeferredTurn,
   ProviderToolExecutorPort,
-  ResponseFunctionCallItem
+  ResponseFunctionCallItem,
+  TurnToolState
 } from "./contracts.js";
 import { logContextMetadata } from "./logger.js";
 import { readToolName } from "./promptMapping.js";
 import { errorMessage, parseJson } from "./valueUtils.js";
+import {
+  createTurnToolState,
+  hasAcceptedTurnActivity,
+  markAcceptedTool,
+  toolOrderingError
+} from "./turnToolState.js";
 
 type InlineExecutor = (
   args: Record<string, unknown>,
@@ -83,7 +90,8 @@ export class RegistryProviderToolExecutor implements ProviderToolExecutorPort {
   deferredTurn(
     calls: ResponseFunctionCallItem[],
     options: ProviderCompleteOptions,
-    definitions: readonly Record<string, unknown>[]
+    definitions: readonly Record<string, unknown>[],
+    state: TurnToolState = createTurnToolState()
   ): ProviderDeferredTurn | null {
     if (calls.length !== 1) return null;
     const call = calls[0]!;
@@ -94,7 +102,10 @@ export class RegistryProviderToolExecutor implements ProviderToolExecutorPort {
     if (!args || typeof args !== "object" || Array.isArray(args)) return null;
     const dispatch = readDeferredDispatchMessage(args as Record<string, unknown>, call.name);
     if (!dispatch.ok) return null;
+    if (hasAcceptedTurnActivity(state)) return null;
     options.onToolCall?.(call.name);
+    markAcceptedTool(state, call.name);
+    state.terminal = "deferred";
     return {
       kind: "deferred",
       acknowledgement: dispatch.message,
@@ -109,7 +120,8 @@ export class RegistryProviderToolExecutor implements ProviderToolExecutorPort {
   noReplyTurn(
     calls: ResponseFunctionCallItem[],
     options: ProviderCompleteOptions,
-    definitions: readonly Record<string, unknown>[]
+    definitions: readonly Record<string, unknown>[],
+    state: TurnToolState = createTurnToolState()
   ) {
     if (calls.length !== 1) return null;
     const call = calls[0]!;
@@ -118,14 +130,18 @@ export class RegistryProviderToolExecutor implements ProviderToolExecutorPort {
     if (!isToolEnabledForTurn(call.name, definitions)) return null;
     const args = parseJson(call.arguments);
     if (!args || typeof args !== "object" || Array.isArray(args) || Object.keys(args).length) return null;
+    if (hasAcceptedTurnActivity(state)) return null;
     options.onToolCall?.(call.name);
+    markAcceptedTool(state, call.name);
+    state.terminal = "no_reply";
     return { kind: "no_reply" as const };
   }
 
   async execute(
     calls: ResponseFunctionCallItem[],
     options: ProviderCompleteOptions,
-    definitions: readonly Record<string, unknown>[]
+    definitions: readonly Record<string, unknown>[],
+    state: TurnToolState = createTurnToolState()
   ) {
     if (calls.length > 1 && calls.some((call) => call.name === NO_REPLY_TOOL_NAME)) {
       return calls.map((call) => ({
@@ -137,7 +153,7 @@ export class RegistryProviderToolExecutor implements ProviderToolExecutorPort {
     return Promise.all(calls.map(async (call) => ({
       type: "function_call_output",
       call_id: call.call_id,
-      output: JSON.stringify(await executeFunctionCall(call, options, definitions))
+      output: JSON.stringify(await executeFunctionCall(call, options, definitions, state))
     })));
   }
 }
@@ -145,7 +161,8 @@ export class RegistryProviderToolExecutor implements ProviderToolExecutorPort {
 async function executeFunctionCall(
   call: ResponseFunctionCallItem,
   options: ProviderCompleteOptions,
-  definitions: readonly Record<string, unknown>[]
+  definitions: readonly Record<string, unknown>[],
+  state: TurnToolState
 ) {
   try {
     const executionMode = providerToolExecutionMode(call.name, options);
@@ -165,17 +182,25 @@ async function executeFunctionCall(
       return {
         ok: false,
         error: dispatch.ok
-          ? `Deferred tool ${call.name} must be called alone in a separate model response.`
+          ? hasAcceptedTurnActivity(state)
+            ? toolOrderingError(call.name)
+            : `Deferred tool ${call.name} must be called alone in a separate model response.`
           : dispatch.error
       };
     }
     if (executionMode !== "inline") return { ok: false, error: `Tool ${call.name} is ${executionMode}.` };
     if (call.name === NO_REPLY_TOOL_NAME) {
-      return { ok: false, error: "no_reply must be called alone with an empty object." };
+      return {
+        ok: false,
+        error: hasAcceptedTurnActivity(state)
+          ? toolOrderingError(call.name)
+          : "no_reply must be called alone with an empty object."
+      };
     }
     const executor = inlineExecutors.get(call.name);
     if (!executor) return { ok: false, error: `Unsupported tool: ${call.name}` };
     options.onToolCall?.(call.name);
+    markAcceptedTool(state, call.name);
     return await executor(args as Record<string, unknown>, call, options);
   } catch (error) {
     return { ok: false, error: errorMessage(error) };

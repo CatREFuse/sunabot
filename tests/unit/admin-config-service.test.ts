@@ -363,7 +363,8 @@ describe("ConfigService section semantics", () => {
         enabled: false,
         windowMinutes: 5,
         replyThreshold: 6,
-        cooldownMinutes: 7
+        cooldownMinutes: 7,
+        additionalQqIds: ["10001", "10001", "20002"]
       }
     });
 
@@ -372,7 +373,35 @@ describe("ConfigService section semantics", () => {
       enabled: false,
       windowMinutes: 5,
       replyThreshold: 6,
-      cooldownMinutes: 7
+      cooldownMinutes: 7,
+      additionalQqIds: ["10001", "20002"]
+    });
+  });
+
+  it("hot-applies the system normal reply retry limit", async () => {
+    const subject = service();
+    const envelope = await subject.readEnvelope();
+
+    const result = await subject.patch("normalReply", {
+      revision: envelope.revision,
+      value: { maxRetries: 6 }
+    });
+
+    expect(result.applyMode).toBe("hot");
+    expect(result.config.normalReply).toEqual({ maxRetries: 6 });
+  });
+
+  it.each([-1, 11, 1.5])("rejects invalid normal reply retry limits: %s", async (maxRetries) => {
+    const subject = service();
+    const envelope = await subject.readEnvelope();
+
+    await expect(subject.patch("normalReply", {
+      revision: envelope.revision,
+      value: { maxRetries }
+    })).rejects.toMatchObject({
+      statusCode: 400,
+      code: "CONFIG_INVALID",
+      field: "normalReply.maxRetries"
     });
   });
 
@@ -386,12 +415,33 @@ describe("ConfigService section semantics", () => {
         enabled: true,
         windowMinutes: 0,
         replyThreshold: 3,
-        cooldownMinutes: 1
+        cooldownMinutes: 1,
+        additionalQqIds: []
       }
     })).rejects.toMatchObject({
       statusCode: 400,
       code: "CONFIG_INVALID",
       field: "broadcastStorm.windowMinutes"
+    });
+  });
+
+  it("rejects non-numeric supplemental broadcast storm accounts", async () => {
+    const subject = service();
+    const envelope = await subject.readEnvelope();
+
+    await expect(subject.patch("broadcastStorm", {
+      revision: envelope.revision,
+      value: {
+        enabled: true,
+        windowMinutes: 2,
+        replyThreshold: 3,
+        cooldownMinutes: 1,
+        additionalQqIds: ["10001", "another-bot"]
+      }
+    })).rejects.toMatchObject({
+      statusCode: 400,
+      code: "CONFIG_INVALID",
+      field: "broadcastStorm.additionalQqIds.1"
     });
   });
 

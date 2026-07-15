@@ -55,6 +55,11 @@ export function migrateApplicationDataSchema(database: DatabaseSync, modelCalls:
     );
     CREATE INDEX IF NOT EXISTS request_logs_at ON request_logs(at DESC);
     CREATE INDEX IF NOT EXISTS request_logs_category_action ON request_logs(category, action, at DESC);
+    CREATE TABLE IF NOT EXISTS outbox_local_effects (
+      idempotency_key TEXT PRIMARY KEY,
+      effect_kind TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS model_call_aggregates (
       conversation_id TEXT NOT NULL,
       behavior TEXT NOT NULL CHECK (behavior IN ('reply', 'orchestrator', 'memory', 'other')),
@@ -154,6 +159,7 @@ export function migrateApplicationDataSchema(database: DatabaseSync, modelCalls:
     database.exec("CREATE UNIQUE INDEX IF NOT EXISTS agent_accounts_webui_port ON agent_accounts(webui_port)");
     setMetadata(database, "storage-schema-version", "8");
   }
+  if (schemaVersion < 9) setMetadata(database, "storage-schema-version", "9");
   modelCalls.repairModelAggregatesIfStale();
 }
 

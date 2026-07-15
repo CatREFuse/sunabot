@@ -61,6 +61,19 @@ async function createAccount(label: string) {
   }
 }
 
+async function runAccount(accountId: string) {
+  if (!selected.value) return;
+  busy.value = true;
+  error.value = "";
+  try {
+    await state.startAccountRuntime(selected.value.id, accountId);
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : "QQ 运行容器启动失败";
+  } finally {
+    busy.value = false;
+  }
+}
+
 async function removeAccount(accountId: string) {
   if (!selected.value) return;
   busy.value = true;
@@ -106,7 +119,7 @@ async function removeAccount(accountId: string) {
             </div>
           </dl>
 
-          <AgentAccountList :agent-id="selected.id" :accounts="selected.accounts" :busy="busy" @create="createAccount" @remove="removeAccount" @refresh="state.load({ force: true })" />
+          <AgentAccountList :agent-id="selected.id" :accounts="selected.accounts" :busy="busy" @create="createAccount" @run="runAccount" @remove="removeAccount" @refresh="state.load({ force: true })" />
 
           <section class="mt-10 border-t border-line pt-6">
             <span class="meta-label">工作区</span>

@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import type {
   InboundMessageV1,
@@ -97,11 +97,11 @@ export class AgentRuntimeManager {
   private async observeBroadcastStorm(message: InboundMessageV1, gateway: MessagingPort) {
     const detector = this.options.broadcastStormDetector;
     if (!detector.enabled() || !message.groupId || !message.replyMessageIds.length) return;
-    const sourceAgentId = this.registry.agentIdForQqId(String(message.userId));
-    if (!sourceAgentId) return;
+    const sourceActorId = this.broadcastStormActorId(String(message.userId));
+    if (!sourceActorId) return;
 
     for (const replyMessageId of message.replyMessageIds) {
-      let targetAgentId: string | undefined;
+      let targetActorId: string | undefined;
       try {
         const quoted = await gateway.getMessage(replyMessageId, {
           ...(message.accountId ? { accountId: message.accountId } : {}),
@@ -109,7 +109,7 @@ export class AgentRuntimeManager {
           groupId: message.groupId,
           userId: message.userId
         });
-        targetAgentId = this.registry.agentIdForQqId(quoted.sender.id);
+        targetActorId = this.broadcastStormActorId(quoted.sender.id);
       } catch (error) {
         console.error("[broadcast-storm] quoted message lookup failed", {
           groupId: message.groupId,
@@ -119,28 +119,35 @@ export class AgentRuntimeManager {
         });
         continue;
       }
-      if (!targetAgentId || targetAgentId === sourceAgentId) continue;
+      if (!targetActorId || targetActorId === sourceActorId) continue;
 
       const result = detector.observe({
         messageKey: `${message.groupId}:${message.messageId ?? `${message.userId}:${message.time}:${replyMessageId}`}`,
         groupId: message.groupId,
-        sourceAgentId,
-        targetAgentId,
+        sourceActorId,
+        targetActorId,
         occurredAt: message.time
       });
       if (result.triggered) {
-        console.warn("[broadcast-storm] reply suppression activated", {
+        console.warn("[broadcast-storm] new reply task gate activated", {
           groupId: message.groupId,
-          sourceAgentId,
-          targetAgentId,
+          sourceActorId,
+          targetActorId,
           blockedUntil: result.blockedUntil
         });
-        for (const runtime of this.runtimes.values()) {
-          runtime.cancelAllReplies("broadcast storm detected");
-        }
       }
       return;
     }
+  }
+
+  private broadcastStormActorId(qqId: string) {
+    const normalized = qqId.trim();
+    if (!normalized) return undefined;
+    const agentId = this.registry.agentIdForQqId(normalized);
+    if (agentId) return `agent:${agentId}`;
+    return this.options.broadcastStormDetector.isAdditionalQqId(normalized)
+      ? `qq:${normalized}`
+      : undefined;
   }
 
   resumeUserGroupOrchestrators(gateway: MessagingPort) {
@@ -165,15 +172,47 @@ export class AgentRuntimeManager {
         persona: this.runtimes.get(agent.id)?.getPersonaStatus()
       },
       accounts: agent.accounts.map((account) => ({
-        ...account,
-        connected: connected.has(account.id),
-        selfId: connected.get(account.id)?.selfId,
-        runtimeReady: connected.has(account.id) || existsSync(path.join(
-          getWorkspacePath(WORKSPACE_LAYOUT.napcatAccounts, account.id),
-          "config-full",
-          "webui.json"
-        ))
+        ...decorateAccountRuntime(agent.enabled, account, connected.get(account.id))
       }))
     }));
+  }
+}
+
+function decorateAccountRuntime(
+  agentEnabled: boolean,
+  account: AgentSummary["accounts"][number],
+  connection: { accountId: string; selfId?: string; connectedAt: string } | undefined
+) {
+  const accountRoot = getWorkspacePath(WORKSPACE_LAYOUT.napcatAccounts, account.id);
+  const state = readAccountRuntimeState(path.join(accountRoot, "runtime-state.json"));
+  const connected = Boolean(connection);
+  const desiredState = account.enabled && agentEnabled ? "running" : "stopped";
+  const observedState = connected ? "running" : state?.observedState ?? (
+    existsSync(path.join(accountRoot, "config-full", "webui.json")) ? "unknown" : "missing"
+  );
+  return {
+    ...account,
+    connected,
+    selfId: connection?.selfId,
+    desiredState,
+    observedState,
+    reconcileRequired: state?.reconcileRequired === true || (
+      desiredState === "running" ? observedState === "missing" || observedState === "stopped" : observedState === "running"
+    ),
+    lastError: state?.lastError ?? null,
+    runtimeReady: connected || observedState === "running"
+  };
+}
+
+function readAccountRuntimeState(filePath: string): {
+  observedState?: "running" | "stopped" | "missing" | "unknown";
+  reconcileRequired?: boolean;
+  lastError?: string | null;
+} | undefined {
+  try {
+    const value = JSON.parse(readFileSync(filePath, "utf8"));
+    return value?.schemaVersion === 1 ? value : undefined;
+  } catch {
+    return undefined;
   }
 }

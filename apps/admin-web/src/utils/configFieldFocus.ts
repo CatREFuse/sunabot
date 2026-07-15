@@ -20,6 +20,9 @@ const labels: Record<string, string> = {
   "broadcastStorm.windowMinutes": "检测窗口（分钟）",
   "broadcastStorm.replyThreshold": "回复次数",
   "broadcastStorm.cooldownMinutes": "静默时长（分钟）",
+  "broadcastStorm.additionalQqIds": "补充嗅探账号",
+  "broadcastStorm.additionalQqIds.*": "补充嗅探账号",
+  "normalReply.maxRetries": "失败重试次数",
   "bot.adminQq": "管理员 QQ",
   "bot.adminName": "管理员称呼",
   "bot.contextMessageLimit": "上下文消息数",
@@ -80,6 +83,7 @@ export function focusConfigField(root: HTMLElement, field: string) {
 
   const normalized = field
     .replace(/^providers\.items\.\d+\./, "providers.items.*.")
+    .replace(/^broadcastStorm\.additionalQqIds\.\d+$/, "broadcastStorm.additionalQqIds.*")
     .replace(/^bot\.quoteGroupReplyExcludedUserIds\.\d+$/, "bot.quoteGroupReplyExcludedUserIds.*");
   const label = labels[normalized];
   if (!label) return false;

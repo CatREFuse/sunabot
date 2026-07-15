@@ -5,7 +5,7 @@
 ## 一致性边界
 
 - 每个 Agent 的 `session-queue.sqlite` 是该 Agent 事件、turn、tool job 和 outbox 投递状态的权威来源。
-- 每个 Agent 的 `sunabot.sqlite` 保存该 Agent 的会话和日志；外发成功后若业务库投影写失败，对应 queue 中的 `sent` 状态仍然有效，恢复后不得重新发送。
+- 每个 Agent 的 `sunabot.sqlite` 保存该 Agent 的会话和日志；OneBot 远端成功后，queue 先保存 receipt 与 `sent_remote`，业务库投影、请求日志、记忆和 hook 只继续本地 settle，恢复后不得再次外发。
 - 多个 SQLite 文件不能共享一个原子事务。因此备份只允许在 Sunabot 与全部 NapCat 已停止写入的离线静默窗口执行。
 - 创建恢复点时先读取注册主库和 Agent 数据目录的并集。注册 Agent 缺库、单边数据库、未注册 Agent 数据库、非法 ID 或不安全路径都会终止备份。
 - 所有数据库依次执行 `wal_checkpoint(TRUNCATE)`，随后全部持有 `BEGIN EXCLUSIVE` 写锁，再使用 SQLite backup API 复制。
@@ -49,13 +49,23 @@ SUNABOT_WORKSPACE=/srv/sunabot/workspace npm run backup:prune -- --apply
 npm run backup:verify -- --backup /srv/sunabot/workspace/backups/sqlite-recovery/<backup-id>
 ```
 
-恢复命令只接受一个完全空的目标 workspace，不覆盖现有文件或数据库；孤儿库、单边数据库和上次中断留下的 intent/staging 都会使恢复拒绝启动：
+首次恢复只接受完全空的目标 workspace，不覆盖现有文件或数据库。命令在复制前持久化 fsync intent，并逐文件记录 copied、replaced 和 completed；进程中断后以相同 backup 和 target 再次执行会按 journal 继续，未知文件、孤儿库和单边数据库都会失败关闭：
 
 ```bash
 npm run backup:restore -- \
   --backup /srv/sunabot/workspace/backups/sqlite-recovery/<backup-id> \
   --target-workspace /srv/sunabot/restore-staging
 ```
+
+需要放弃未完成的恢复时执行：
+
+```bash
+node tooling/workspace/sqlite-recovery-cli.mjs rollback \
+  --backup /srv/sunabot/workspace/backups/sqlite-recovery/<backup-id> \
+  --target-workspace /srv/sunabot/restore-staging
+```
+
+回滚只删除 journal 中记录且类型、大小、SHA-256 仍匹配的恢复产物；未知替换保持原样并返回冲突。恢复、回滚、演练、保留清理和 stale partial 清理都会逐级检查绝对路径父链，用户符号链接路径不会写入或删除外部内容。
 
 校验通过后，再在服务停止状态下把旧 `business/data` 与 `business/agents/*/data` 移入独立回滚目录，并切换已验证的恢复目录。不得删除旧数据库，也不得在运行中的数据库上原地覆盖。
 
@@ -90,6 +100,7 @@ npm run backup:gate
 该门禁只使用临时 workspace，覆盖：
 
 - 备份中断或进程强杀后遗留的 lock/partial 恢复；
+- intent 写入后、复制前、复制后和 rename 后的幂等继续与安全回滚；
 - 模拟 `ENOSPC` 时不发布恢复点；
 - `SQLITE_BUSY` 时失败退出而不绕过活动写入；
 - WAL 尚未 checkpoint 时，已提交帧仍进入完整恢复点；
@@ -101,3 +112,4 @@ npm run backup:gate
 - manifest v1 旧恢复点继续校验和恢复；
 - OneBot 外发成功但主库投影写失败后，恢复的 outbox 保持 `sent` 且不可再次 claim；
 - 7/30 天分层保留和隔离季度恢复演练。
+- backup、recovery root 与 target workspace 的父链符号链接攻击拒绝；macOS 根级 `/tmp` 与 `/var` 系统别名保持可用。

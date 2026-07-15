@@ -1,6 +1,6 @@
 export { BroadcastStormDetector } from "./broadcastStormDetector.js";
 export type {
   BroadcastStormObservationResult,
-  CrossAgentReplyObservation,
-  ReplySuppression
+  CrossAccountReplyObservation,
+  ReplyTaskGate
 } from "./broadcastStormDetector.js";

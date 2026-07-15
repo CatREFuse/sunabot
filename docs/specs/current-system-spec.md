@@ -1,6 +1,6 @@
 # sunabot 当前系统规范
 
-版本：2026-07-14
+版本：2026-07-15
 状态：当前实现的唯一规范
 适用范围：sunabot 后端、多 Agent 运行时、OneBot 接入、管理台、持久化、测试和部署
 
@@ -8,7 +8,7 @@
 
 sunabot 是面向个人自托管场景的 QQ 多 Agent 服务。系统通过 OneBot v11 反向 WebSocket 接入多个独立 NapCat 账号，每个 QQ 账号归属一个 Agent；各 Agent 以独立人格处理私聊和用户群聊，支持上下文回复、群聊编排、长期记忆、用户画像、文件读取、联网搜索、图像生成、自拍、Codex 异步任务、本地 Web Chat 和管理台。
 
-当前运行目标是单实例、单管理员、多 Agent，每个 Agent 可接入多个 QQ。多租户、完整 OneBot v12 和公网多用户管理台不属于当前版本。模型、共用开关和公共系统提示词由所有 Agent 共享；Bot 行为、人格提示词、自拍提示词改写、可选系统提示词覆盖、记忆、会话、图片历史、异步队列和 Agent workspace 按 Agent 隔离。
+当前运行目标是单实例、单管理员、多 Agent，每个 Agent 可接入多个 QQ。多租户、完整 OneBot v12 和公网多用户管理台不属于当前版本。模型、正常回复重试、共用开关和公共系统提示词由所有 Agent 共享；Bot 行为、人格提示词、自拍提示词改写、可选系统提示词覆盖、记忆、会话、图片历史、异步队列和 Agent workspace 按 Agent 隔离。
 
 ## 2. 运行结构
 
@@ -27,6 +27,12 @@ sunabot 是面向个人自托管场景的 QQ 多 Agent 服务。系统通过 One
 ```
 
 NapCat 在 macOS、WSL2 和 Linux 上始终运行于独立 Docker 容器。Sunabot Core 可以在宿主环境 Native 运行，也可以作为独立 Core 容器运行；根目录 `./sunabot.sh` 统一负责初始化、配置、启动顺序、健康检查、停止和日志。`SUNABOT_CORE_MODE=auto` 在 macOS 选择 Native Core，在 WSL2/Linux 选择 Docker Core，也可显式选择 `native` 或 `docker`。
+
+`status`、`doctor`、管理 API 和平台入口共用 schema v1 的只读运行探针，分别报告 liveness、readiness 与 capability。探针统一核对 workspace、迁移状态、Core、OneBot、每个 QQ、Provider、Codex、LibreOffice 和 bubblewrap；QQ 临时离线只降低 readiness，不把 Core 判为死亡。Provider readiness 同时区分配置完成和有界健康请求验证成功，密钥只进入对应鉴权请求头。公开 `/healthz/runtime` 只返回 schema 与 liveness，账号和能力明细只通过管理员鉴权接口返回。
+
+首次运行使用带 HMAC 的持久 journal；workspace 完整父目录链在 marker、配置、凭据、SQLite、注册表或运行目录写入前逐级拒绝用户符号链接。主库 schema、队列 schema、关键表列、约束、外键和索引全部通过后才能完成首次运行；每个持久化边界支持幂等继续或受控回滚，回滚保留未知文件。`help` 成功退出且不安装依赖；`status`、`doctor`、`logs` 和 `down` 保持只读，只有 `up`、`restart` 或显式 `bootstrap` 可以安装依赖。
+
+统一 launcher 在 `up`、`down` 和 `restart` 的运行状态检查前核对当前 workspace 的 NapCat Compose one-off 探针。Docker `ps` 仍报告探针存在而 `inspect` 返回对象不存在时，macOS Colima 的交互终端必须在明确告知其他 Docker 容器会短暂中断后取得确认，随后重启 Colima、等待 Docker Engine 就绪并复验悬空记录消失；非交互命令和其他 Docker Engine 必须失败关闭并返回明确操作。该恢复不能自动执行数据迁移，也不能放宽活动容器、端口、恢复点或迁移标记门禁。
 
 管理 API 只发布到宿主回环 `127.0.0.1:8787`。OneBot 使用专用 `8788` 端口并强制校验 access token：Docker Core 模式通过共享的私有运行网络和 `core` 服务名连接；Native Core 模式由启动器配置容器可达的宿主网关。OneBot 不直接发布到局域网或公网。每个 NapCat WebUI 使用注册表分配的独立端口，仅发布到宿主回环，首个账号默认使用 `127.0.0.1:6099`。
 
@@ -63,15 +69,17 @@ Linux Native release 必须保留根 `sunabot.sh`、Node 版本文件、生产�
 
 全局开关、群类型开关、会话开关、连接状态和编排器 epoch 共同构成回复门控。门控关闭后，旧的在途编排结果不能继续外发。回复、戳一戳与 deferred 任务的原始请求在进入持久化队列时保存 `ReplyGateSnapshotV1`，其中包含会话范围、会话 ID、scope epoch、conversation epoch 和本次 Core 进程的 generation。同一进程内关闭后再开启仍会拒绝旧快照；重启后的 generation 变化和旧版无快照记录都按当前开关重新校验，避免进程内旧任务复活，同时保留升级与重启恢复能力。
 
-广播风暴嗅探是系统级回复门控。开启后，同一群内同一对不同 Agent 的 QQ 账号发生显式引用回复时记一次；同一条消息经多个 NapCat 连接重复到达只计一次。任意一对 Agent 在配置的 m 分钟窗口内累计 n 次后触发风暴，所有 Agent 立即取消在途回复，并在 k 分钟内拒绝私聊、群聊、命令、Web Chat、`no_reply` 戳一戳和异步回调等一切回复。静默期内消息继续进入对应 Agent 的会话记录；静默期结束后只处理新消息，风暴触发前或静默期内形成的旧 outbox 不得补发。默认开启，m=2、n=3、k=1；开关及 m/n/k 在系统设置中热更新并保存到公共配置。
+广播风暴嗅探是系统级新任务门控。受监控账号包含所有已启用 Agent 绑定的已启用 QQ，以及公共配置中的补充嗅探 QQ；同一 Agent 绑定的多个 QQ 视为同一参与者，每个补充 QQ 视为一个参与者。开启后，同一群内任意两个不同受监控参与者发生显式引用回复时记一次，同一条消息经多个 NapCat 连接重复到达只计一次；同群内不同 Agent 对之间的次数共同累计，不同群分别计数。在配置的 m 分钟窗口内累计 n 次后触发风暴，k 分钟内所有 Agent 对新收到的私聊、群聊、命令和 Web Chat 消息只记录而不创建回复任务。触发前已经 dispatch 的直接回复、群聊编排、deferred tool completion、`no_reply` 戳一戳和 outbox 继续执行与投递，不取消、不失效。静默期结束后恢复为新消息创建任务，静默期内收到的消息不得延迟补建任务。默认开启，m=2、n=3、k=1，补充嗅探账号默认为空；开关、m/n/k 与补充账号名单在系统设置中热更新并保存到公共配置。
 
 ### 3.3 会话执行
 
 - 每个会话拥有有序事件流，事件、turn、异步工具任务和 outbox 使用 SQLite 持久化。
 - 同一会话按序处理；不同会话允许受控并发。
-- 外发使用 outbox，支持租约、有限重试、断线恢复和幂等键。
+- 外发使用 outbox，支持租约、有限重试、断线恢复和幂等键。OneBot outbox 按 account ID 持久化投递分区；离线分区暂停时，其他账号继续按各自 FIFO 投递，探针和恢复只作用于目标分区。
+- OneBot 发送和本地 settle 使用持久化两阶段。远端成功后先记录 receipt 并进入 `sent_remote`，会话投影、请求日志、记忆入队和逐 handler `after_reply` 使用稳定 settle key 继续执行；任何不确定传输或 hook 副作用进入 `delivery_unknown`，只接受人工 `applied` 或 `not_applied` 确认，不能自动重复外发。旧 schema 中无法判断远端结果的 `sending` 记录迁移为 `delivery_unknown`，并安全推进连续终态 cursor。
 - Codex 与图像生成长任务先返回确认消息，任务完成后通过持久化事件恢复原会话；任务提交不能等待生成完成。所有 deferred tool 必须单独调用并携带非空 `dispatch_message`，由模型使用当前人格生成“已收到并开始处理”的短消息；该字段与任务在同一事务中落库为 acknowledgement，进入 worker 前从业务参数中删除。缺失、空白或超过 200 字时不得派发，也不得降级为同步执行。
 - `assistant_text` 允许 Agent 在工具循环中发送中间消息。群聊只引用第一条中间消息，最终正文仍引用原始消息，后续中间消息不引用。
+- 一次 Provider completion 共享同一个 `TurnToolState`，跨模型轮次记录已发送的 `assistant_text`、已接受工具、deferred 状态和调用次数。Responses、Chat Completions、Anthropic、Gemini 和 Codex 均拒绝 `assistant_text → no_reply`、普通工具 → `no_reply` 和 `assistant_text → deferred` 等非法顺序，合法的首轮独立 `no_reply` 与 deferred 调用保持原行为。
 - `no_reply` 允许 Agent 在本轮无需回复、话题已经自然结束，或继续回应其他 Bot 可能引起循环广播时静默结束。该工具必须在发送任何中间消息或调用其他工具前单独调用；接受后本轮直接以 `no_reply` 结束，不生成 Bot 消息，也不发送文字或错误回复。`bot.pokeOnNoReply` 默认关闭；开启后仅为当前 QQ 账号与触发者创建 `onebot.poke` outbox，群聊携带原群号，私聊不携带群号，turn 状态仍为 `no_reply`。
 - `bot.quoteGroupReplyExcludedUserIds` 按 Agent 保存 QQ 号过滤名单。开启群聊引用时，回复名单中的发送者仍正常发送正文，但第一条中间消息、最终正文和错误回复都不引用触发消息；其他发送者维持原引用行为。
 - 新写入的 Bot 消息持久化 `messageOrigin` 与按首次调用顺序去重的 `toolNames`。来源区分普通正文 `text`、显式 `assistant_text`、异步受理 `async_tool_dispatch` 和异步结果 `async_tool_callback`；工具清单只记录本轮实际接受的 Function Call，不能使用 Provider 请求中的可用工具定义反推。旧消息缺少来源时保持未知，不按正文、时间或日志邻近猜测。
@@ -81,7 +89,9 @@ Linux Native release 必须保留根 `sunabot.sh`、Node 版本文件、生产�
 
 ### 4.1 Provider
 
-Provider 类型包括 Codex 订阅、OpenAI 官方、Anthropic 官方、Gemini 官方，以及 OpenAI、Anthropic、Gemini 三种兼容协议。类型在创建时确定，创建后不可切换；官方地址由前后端共同固定，兼容地址可配置。Provider 支持远程拉取模型 ID 或自定义 ID，多模态能力可通过已知颜色图片的实际识别结果自动探测，也可手动指定；纯文本模型可配置独立的读图 Provider 与模型，运行时先生成图片描述再交给主模型。配置还包含图像模型、API key 环境变量、推理强度、温度和输出 token 上限。模型请求、响应、重试和工具结果写入请求日志，密钥和授权字段必须脱敏；Gemini API key 只能通过请求头发送，不能进入 URL。SDK 隐式重试必须关闭，发送请求与读取响应正文属于同一次显式传输尝试，正文断流按真实尝试记录并重试；取消信号在写入请求日志前检查，429/5xx 退避优先遵守 `Retry-After` 或 `Retry-After-Ms`。
+Provider 类型包括 Codex 订阅、OpenAI 官方、Anthropic 官方、Gemini 官方，以及 OpenAI、Anthropic、Gemini 三种兼容协议。类型在创建时确定，创建后不可切换；官方地址由前后端共同固定，兼容地址可配置。Provider 支持远程拉取模型 ID 或自定义 ID，多模态能力可通过已知颜色图片的实际识别结果自动探测，也可手动指定；纯文本模型可配置独立的读图 Provider 与模型，运行时先生成图片描述再交给主模型。配置还包含图像模型、API key 环境变量、推理强度、温度和输出 token 上限。模型请求、响应、重试和工具结果写入请求日志，密钥和授权字段必须脱敏；Gemini API key 只能通过请求头发送，不能进入 URL。SDK 隐式重试必须关闭，发送请求与读取响应正文属于同一次显式传输尝试，正文断流按真实尝试记录并重试；由 `fetchTextWithTransportRetry` 管理的单次传输最多等待 60 秒，未指定调用级重试次数时仅在调用方仍有效的情况下重试一次，调用方取消不能触发重试；取消信号在写入请求日志前检查，429/5xx 退避优先遵守 `Retry-After` 或 `Retry-After-Ms`。
+
+正常回复的每轮 Provider 请求使用公共 `normalReply.maxRetries`，值表示首次失败后的额外重试次数，默认 3、允许 0—10，因此默认最多执行 4 次相同请求。该设置热更新并由全部 Agent 共用，只作用于 `replyToIncoming` 的普通回复、群聊总结和异步结果回复，不改变编排器、记忆、生图、工具任务、outbox 或 Provider 健康检查的重试策略。显式请求必须复用同一请求体，只重试网络错误、正文读取错误、408、409、429 和 5xx；调用方取消或非重试状态立即停止。每次真实尝试分别写入请求日志，并记录当前尝试序号与最大尝试次数。
 
 Provider 请求使用应用启动时安装的统一出站 dispatcher。显式代理和标准代理环境变量从 `workspace/secrets/runtime.env` 或进程环境读取；WSL 自动模式仅在没有显式代理时探测当前默认网关。代理选择不改变 OneBot 的 Compose 私有网络或同机宿主网关链路。
 
@@ -105,6 +115,7 @@ GPT-5.6 及后续支持该协议的 OpenAI 官方 Responses 请求必须在最�
 
 - 多条 system、user、assistant 消息；
 - 变量槽位；
+- 所有提示词模板都可使用 `bot.name`、`user.name`、`runtime.current_time` 和 `utils.roll` 四项通用变量；`user.name` 仅在私聊回复中提供当前用户显示名，其他场景为空字符串；系统时间使用 ISO 8601；`utils.roll` 在每次模板请求时生成一个 1～100 的随机整数，同一次渲染内重复引用保持一致；
 - 人格变量在所有最终提示词中可用；工作记忆、长期记忆和用户画像召回结果分别使用独立变量；
 - function tools；
 - JSON Schema response format；
@@ -168,9 +179,9 @@ NapCat 上报的 QQ 文件优先通过 OneBot action 返回的受控 URL 进入 
 
 管理台侧栏分为“Agent”和“公共系统”。Agent 区包含当前 Agent 切换器、Agent 设置、状态、Web Chat、会话、Agent 提示词、记忆、图像和日志；公共系统区包含系统设置和系统提示词。Agent 提示词页显示当前 Agent 的六个人格文件和自拍提示词改写，并提供“覆盖系统提示词”开关；开启后同页增加该 Agent 的系统提示词覆盖入口。系统提示词页只编辑公共版本，不显示自拍提示词改写。管理台支持 light、dark 和跟随系统主题，并适配桌面、平板和移动端。切换 Agent 后，会话、Web Chat、图片、记忆、Agent 提示词、Agent 工具和 Bot 配置只读写所选 Agent；模型配置、共用开关和公共系统提示词保持全局一致。回复行为中的群聊引用过滤名单接受 QQ 号，命中后仅取消引用，不关闭回复。`no_reply` 工具详情与回复行为页的“no_reply 时戳一戳”共同编辑 `bot.pokeOnNoReply`，任一入口保存后另一入口显示同一值。
 
-系统设置的“广播风暴”页编辑公共 `broadcastStorm` 配置，包含“广播风暴嗅探”“检测窗口（分钟）”“回复次数”和“静默时长（分钟）”。该配置由全部 Agent 共用，不写入单个 Agent manifest。
+系统设置的“回复重试”页编辑公共 `normalReply.maxRetries`，字段为“失败重试次数”，默认 3，允许 0—10；保存后热更新全部 Agent。系统设置的“广播风暴”页编辑公共 `broadcastStorm` 配置，包含“广播风暴嗅探”“检测窗口（分钟）”“回复次数”“静默时长（分钟）”和“补充嗅探账号”。补充账号与已启用 Agent 的 QQ 合并参与检测；两项公共配置均由全部 Agent 共用，不写入单个 Agent manifest。
 
-Agent 页面以列表和详情双栏管理 Agent，支持新建 Agent、启停、查看隔离 workspace 与新增多个 QQ 账号。Agent ID 创建后保持稳定，名称可以修改；Agent 身份页可上传或更换仅用于管理台展示的 WebUI 头像，支持 PNG、JPEG、WebP，不限制原图文件大小。选择图片后必须通过圆形裁图弹层调整位置和缩放，保存透明圆形头像；QQ 头像保持独立。新增 QQ 后由下一次 `./sunabot.sh restart` 启动独立 NapCat 容器，管理台在容器尚未准备时显示“重启后登录”；每个账号独立扫码、退出和打开对应 NapCat WebUI。Plana 的 `primary` 是固定基线账号，可以退出 QQ 登录，不能从注册表移除；管理 API 对移除请求返回 `PRIMARY_ACCOUNT_REQUIRED`，管理台不显示移除入口，其他离线账号可以移除。
+Agent 页面以列表和详情双栏管理 Agent，支持新建 Agent、启停、查看隔离 workspace 与新增多个 QQ 账号。Agent ID 创建后保持稳定，名称可以修改；Agent 身份页可上传或更换仅用于管理台展示的 WebUI 头像，支持 PNG、JPEG、WebP，不限制原图文件大小。选择图片后必须通过圆形裁图弹层调整位置和缩放，保存透明圆形头像；QQ 头像保持独立。QQ 容器区使用“新建 NapCat QQ Docker”入口；新增、启停或移除 QQ 后，由宿主 account runtime daemon 按注册表调和目标 NapCat 容器，Docker Core 通过 workspace request/result bridge 请求宿主执行且不挂载 Docker socket。未运行账号始终显示“运行”，调用单账号启动接口后创建或启动对应 Compose project；成功后刷新为“待登录”，不能要求重启全部 Sunabot。管理台显示期望状态、实际状态、是否仍需调和和最近错误。注册库不可读时调和失败关闭，不能生成停止或删除计划。每个账号独立扫码、退出和打开对应 NapCat WebUI。Plana 的 `primary` 是固定基线账号，可以退出 QQ 登录，不能从注册表移除；管理 API 对移除请求返回 `PRIMARY_ACCOUNT_REQUIRED`，管理台不显示移除入口，其他离线账号可以移除。
 
 登录页使用 Sunabot 品牌 Hero 与管理员登录表单组成响应式双栏，移动端按 Hero、表单顺序纵向排列。用户可见文案只保留名称、状态、动作、结果和完成操作所需的提示；页面不得展示鉴权实现、浏览器存储方式、数据来源、区域职责、设计说明或装饰性状态代码。
 
@@ -178,7 +189,7 @@ Agent 页面以列表和详情双栏管理 Agent，支持新建 Agent、启停�
 
 Agent 身份页只编辑 WebUI 头像，Agent ID 与工作目录只读展示。可配置的记忆容量只有“记忆处理”中的工作记忆上限；长期记忆和用户画像当前不设数量上限。Bash 与 Codex 的启停只在工具目录出现；命令执行页和运行参数页只编辑各自的约束与参数。`workspace_bash` 与 `codex` 的工具说明允许覆盖，启停状态不能再写入通用工具覆盖。
 
-状态页使用响应式数据拼盘展示所选 Agent 的 QQ 账号、连接状态、内容计数、Provider 健康，以及当日 Token 总量、输入、缓存输入、缓存率、输出和请求数，并可切换“当前 Agent”与“全部 Agent”。全部 Agent 视图只汇总 Token、请求数、在线 Agent 和在线 QQ 数，不混合展示会话、记忆或人格数据。拼盘保留非对称网格，通过留白、分割线和连续数据区组织信息，不使用圆角卡片逐项装箱。Token 统计使用浏览器传入的时区偏移：当日小时序列固定返回 0—23 点 24 个桶，缺少的小时补零；日视图固定覆盖截至当日的最近 53 周本地日期，缺少的日期补零。用户可在小时图与日历热力图之间切换，并按模型和回答、编排器、记忆、其他功能组合筛选；汇总指标与当前图表始终使用同一筛选范围，未标注模型作为独立选项。小时图使用 Token 总量柱形和缓存率折线，缓存率为 `null` 时显示 `--` 且折线跳过该点。四位到六位主指标使用 K 缩写，百万级主指标使用 M 缩写，千分位精确值保留在主数字的悬停提示中，不在数字下方重复显示。
+状态页使用响应式数据拼盘展示所选 Agent 的 QQ 账号、连接状态、内容计数、Provider 健康，以及当日 Token 总量、输入、缓存输入、缓存率、输出和请求数，并可切换“当前 Agent”与“全部 Agent”。Provider 状态使用统一 probe，显示“已验证可用”“当前不可用”或“未配置”，已保存密钥不能覆盖失败的健康结果。全部 Agent 视图只汇总 Token、请求数、在线 Agent 和在线 QQ 数，不混合展示会话、记忆或人格数据。拼盘保留非对称网格，通过留白、分割线和连续数据区组织信息，不使用圆角卡片逐项装箱。Token 统计使用浏览器传入的时区偏移：当日小时序列固定返回 0—23 点 24 个桶，缺少的小时补零；日视图固定覆盖截至当日的最近 53 周本地日期，缺少的日期补零。用户可在小时图与日历热力图之间切换，并按模型和回答、编排器、记忆、其他功能组合筛选；汇总指标与当前图表始终使用同一筛选范围，未标注模型作为独立选项。小时图使用 Token 总量柱形和缓存率折线，缓存率为 `null` 时显示 `--` 且折线跳过该点。四位到六位主指标使用 K 缩写，百万级主指标使用 M 缩写，千分位精确值保留在主数字的悬停提示中，不在数字下方重复显示。
 
 页面信息区默认通过留白、连续网格和 1px 分割线建立层级；按钮、输入控件、消息气泡和必要弹层可使用与语义相称的技术圆角。Boxicon 不使用背景、边框或圆形外壳，44px 点击热区保持透明，需要加强层级时直接放大图标。中文页面标题使用 Space Grotesk Variable 与系统中文字体，运行主状态使用英文并以 Doto Variable 显示，状态页所有大号统计数字统一使用 Doto Variable，标签和元数据使用 Space Mono。
 
@@ -190,7 +201,7 @@ Web Chat 使用固定管理员身份和 `web:admin` 会话，通过 Web delivery
 
 图片列表和会话正文先读取 48px 低质量 WebP 占位图并以高斯模糊显示，再淡入 480px WebP 展示图；用户打开预览或原图链接时才读取完整图片。浏览器缓存已加载资源，图片历史在短期页面切换中复用，返回图片页不重新批量请求占位图和历史数据。
 
-QQ 登录由管理台按 Agent 和账号完成：离线时直接显示对应 NapCat 的当前二维码并每 2 秒拉取新状态，二维码轮换后页面自动替换；用户可以主动刷新二维码。在线时显示当前账号并提供带确认的退出操作，退出后对应 NapCat 自动回到扫码态。扫码成功后 Core 把 QQ 号写入 `agent_accounts`，NapCat 把快速登录账号写入该账号目录的 `account.env`，并清理临时二维码和手动登录标记，后续重启恢复快速登录。原生 WebUI 只保留为故障诊断入口。
+QQ 登录由管理台按 Agent 和账号完成：容器未运行时先显示“运行”，启动成功后显示“登录”；离线时直接显示对应 NapCat 的当前二维码并每 2 秒拉取新状态，二维码轮换后页面自动替换；用户可以主动刷新二维码。在线时显示当前账号并提供带确认的退出操作，退出后对应 NapCat 自动回到扫码态。扫码成功后 Core 把 QQ 号写入 `agent_accounts`，NapCat 把快速登录账号写入该账号目录的 `account.env`，并清理临时二维码和手动登录标记，后续重启恢复快速登录。原生 WebUI 只保留为故障诊断入口。
 
 管理台页面脚本随主应用一次加载，路由切换不得再请求页面脚本分块；鉴权启动期间使用统一加载状态。字体与图标由构建产物本地提供，不依赖外网字体服务；带内容哈希的构建资源使用长期缓存，入口 HTML 禁止长期缓存。浏览器不得因等待脚本或原图而表现为点击无响应。
 
@@ -223,12 +234,14 @@ Plana 的 `workspace/business/data/session-queue.sqlite` 与其他 Agent 的 `wo
 
 离线 SQLite 恢复点必须覆盖默认 Plana 与注册表中全部启用或停用 Agent 的业务库和队列库。创建恢复点时以注册主库和 `business/agents/<agentId>/data` 文件系统扫描结果的并集核对范围；注册 Agent 缺少数据库、单边数据库、未注册 Agent 孤儿库、非法 ID 或越界路径时失败。新恢复点使用 manifest v2，按 Agent 保存业务库与 queue 的 schema profile、校验信息和投递不变量；正常 v2 业务库必须包含当前统计、管理员会话和 Agent 注册表。校验时 manifest Agent 集合必须与备份内 Plana 注册表完全一致，恢复只接受完全空的目标 workspace，并由 manifest 清单安全重建嵌套目录。仅当 `agents`、`agent_accounts`、`agent.json` 和二级 Agent 数据库都不存在时，迁移前数据库才使用旧单 Agent schema profile。旧 manifest v1 仍可校验和恢复，范围仅包含默认 Plana 双库。
 
+旧数据迁移按幂等键集合验证来源、导入前、导入后和真实增量，不能用总数相同替代记录身份一致。workspace 布局迁移和恢复先持久化 fsync journal intent，再逐文件记录复制、替换与完成状态；中断后可以继续或回滚，删除目标前必须复验类型、大小和 SHA-256，未知替换保持原样并失败关闭。数据库迁移在 checkpoint 后持有独占锁，活动写事务停止迁移。恢复、演练、保留清理和 stale partial 清理对绝对路径完整父链逐级检查，仅允许 macOS 根级 `/tmp` 与 `/var` 指向系统 canonical 目录的受控别名。
+
 ### 8.2 文件边界
 
 以下内容继续使用文件：
 
 - `workspace/secrets/runtime.env`：本机凭据，不进入 Git；
-- `workspace/business/config/sunabot.json`：模型、共用开关和默认 Plana 配置，不保存明文密钥；
+- `workspace/business/config/sunabot.json`：模型、正常回复重试、共用开关和默认 Plana 配置，不保存明文密钥；
 - `workspace/business/migrations/multi-agent-v1.json`：首次安装或单 Agent 迁移完成标记，保存完整性摘要和迁移证据摘要；
 - `workspace/business/prompts/`：所有 Agent 默认使用的公共系统提示词；
 - `workspace/business/agents/<agentId>/agent.json`：Agent 名称、启用状态、系统提示词覆盖开关、Bot 行为、工具覆盖与 OneBot 行为配置；
@@ -282,11 +295,11 @@ Plana 的 `workspace/business/data/session-queue.sqlite` 与其他 Agent 的 `wo
 | API 组合、生命周期、静态站点与错误映射 | `apps/api/server.ts` |
 | 管理鉴权 API | `apps/api/plugins/authRoutes.ts` |
 | Provider、Codex 授权与配置 API | `apps/api/plugins/providerConfigRoutes.ts` |
-| Agent 注册、账号与头像 API | `apps/api/plugins/agentRoutes.ts`, `services/agents/agentRegistry.ts` |
+| Agent 注册、账号调和与头像 API | `apps/api/plugins/agentRoutes.ts`, `services/agents/agentRegistry.ts`, `services/agents/accountRuntimeReconciler.ts`, `tooling/runtime/account-runtime-daemon.mjs` |
 | 多 Agent 运行时与配置热更新 | `services/agents/agentRuntimeManager.ts`, `src/admin/agentConfigService.ts`, `packages/platform/runtimeAgentContext.ts` |
 | OneBot 管理 API | `apps/api/plugins/onebotRoutes.ts` |
 | 记忆管理 API | `apps/api/plugins/memoryRoutes.ts` |
-| 状态与监控 API | `apps/api/plugins/monitoringRoutes.ts` |
+| 状态、readiness 与监控 API | `apps/api/plugins/monitoringRoutes.ts`, `tooling/runtime/probe.mjs` |
 | 会话与会话日志 API | `apps/api/plugins/conversationRoutes.ts` |
 | Web Chat 管理员会话与浏览器 delivery | `services/webChat/`, `apps/api/plugins/conversationRoutes.ts` |
 | 图片、缩略图、Token/模型调用统计、请求日志与图片测试 API | `apps/api/plugins/mediaRoutes.ts`, `apps/api/plugins/conversationRoutes.ts`, `src/modelCallStats.ts`, `src/requestLog.ts`, `adapters/sqlite/modelCallStore.ts` |
@@ -294,7 +307,8 @@ Plana 的 `workspace/business/data/session-queue.sqlite` 与其他 Agent 的 `wo
 | 自拍参考图 API 与受控文件仓库 | `apps/api/plugins/selfieReferenceRoutes.ts`, `src/admin/selfieReferences.ts` |
 | 配置加载、默认值、路径解析 | `src/config.ts`, `src/types.ts` |
 | SQLite schema、业务数据与模型聚合 | `adapters/sqlite/applicationDataSchema.ts`, `adapters/sqlite/applicationDataStore.ts`, `adapters/sqlite/modelCallStore.ts` |
-| 旧数据、workspace 与单 Agent 迁移门禁 | `packages/platform/multiAgentMigrationGate.mjs`, `tooling/workspace/init-workspace.mjs`, `tooling/migrations/migrate-to-sqlite.mjs`, `tooling/migrations/migrate-workspace-layout.mjs`, `tooling/migrations/migrate-single-agent-to-multi-agent.mjs` |
+| 旧数据、workspace、首次运行与单 Agent 迁移门禁 | `packages/platform/multiAgentMigrationGate.mjs`, `tooling/shared/safe-absolute-path.mjs`, `tooling/workspace/init-workspace.mjs`, `tooling/runtime/first-run-state.mjs`, `tooling/migrations/migrate-to-sqlite.mjs`, `tooling/migrations/migrate-workspace-layout.mjs`, `tooling/migrations/migrate-single-agent-to-multi-agent.mjs` |
+| SQLite 恢复点、迁移恢复与 journal | `tooling/workspace/sqlite-recovery.mjs`, `tooling/migrations/sqlite-migration-recovery.mjs`, `tooling/migrations/sqlite-legacy-import.mjs` |
 | OneBot 连接、事件和 action | `adapters/onebot/onebotGateway.ts`, `adapters/onebot/qqMedia.ts` |
 | 回复运行时、上下文、投递与群聊总结 | `src/runtime.ts`, `src/runtime/reply.ts`, `src/runtime/replyContext.ts`, `src/runtime/delivery.ts`, `src/runtime/intake.ts` |
 | 会话事件、turn、工具任务、outbox | `services/sessions/`, `packages/contracts/session/runtimeMessages.ts` |
@@ -334,20 +348,14 @@ npm run verify
 
 `verify` 依次执行 runtime contract、architecture、SQLite recovery、类型检查、单元与集成测试、独立 runtime smoke、CI 容量基线、生产构建和 E2E。
 
-涉及界面时还要运行视觉测试并检查截图；Web Chat 必须覆盖管理员身份、每 Agent 顺序执行、连续消息 ID、目标 Agent 日志与 Token 选库、Web/QQ 外发隔离、消息轮询、发送校验、键盘操作、图片缩略图和移动端布局。多 Agent 测试必须覆盖 Agent 原子创建与运行时失败补偿、路径校验、独立 SQLite 与队列、独立人格、公共系统提示词继承、Agent 系统提示词覆盖、QQ 唯一归属、WebUI 端口唯一性、primary 不可移除、同一 OneBot listener 的多账号并发连接、重启恢复、secondary 账号引用与身份查询、primary 兼容接口定向 action、Agent 级和全部 Agent Token 汇总。广播风暴测试必须覆盖同群同一 Agent 不计数、不同群和不同 Agent 对分开计数、重复 OneBot 事件去重、m 窗口淘汰、n 阈值触发、k 静默期、所有 Agent 在途任务失效、静默期消息只记录、旧 outbox 不补发、自动恢复、关闭功能与配置热更新。涉及数据迁移时必须核对默认与显式配置 API 直启的写入前零变更门禁、fresh-install 与 completed-migration 标记、首次 marker 发布中断、主库出现后的半初始化拒绝、标记篡改、全部注册 Agent/账号状态漂移、目标 workspace 与端口漂移、必需路径符号链接穿越、外部数据库覆盖、secondary 账号监听、全部账号端口、带标签的各种活动容器、迁移报告四类 copied/preserved 证据、SQLite 表记录数、公共系统提示词哈希、旧文件备份和服务重启后的 API 与 OneBot 状态。Linux 发行验收还要核对干净源码门禁与重新生产构建，预构建 Native Core、生产依赖、Docker Core 构建上下文、迁移 wrapper、门禁模块和迁移文档均存在；在无 `.git`、无开发依赖的解包目录复验真实平台、runtime contract、完整 `dist/`、`tooling/`、生产 `node_modules/` 与锁文件的文件集合及哈希后完成 dry-run，并用篡改 fixture 证明失败关闭。
+涉及界面时还要运行视觉测试并检查截图；正常回复重试必须覆盖默认 3 次、0—10 配置校验、公共分区热更新、SDK 与原生 HTTP Provider 的相同请求重试、取消后停止、请求日志尝试序号，以及 light/dark 和移动端设置页。Web Chat 必须覆盖管理员身份、每 Agent 顺序执行、连续消息 ID、目标 Agent 日志与 Token 选库、Web/QQ 外发隔离、消息轮询、发送校验、键盘操作、图片缩略图和移动端布局。多 Agent 测试必须覆盖 Agent 原子创建与运行时失败补偿、路径校验、独立 SQLite 与队列、独立人格、公共系统提示词继承、Agent 系统提示词覆盖、QQ 唯一归属、WebUI 端口唯一性、primary 不可移除、同一 OneBot listener 的多账号并发连接、重启恢复、secondary 账号引用与身份查询、primary 兼容接口定向 action、Agent 级和全部 Agent Token 汇总。广播风暴测试必须覆盖同一 Agent 不计数、同群所有不同 Agent 对共同累计、不同群分开计数、补充嗅探账号、重复 OneBot 事件去重、m 窗口淘汰、n 阈值触发、k 静默期、静默期不创建新任务、已 dispatch 任务与 outbox 不受影响、静默期消息只记录、自动恢复、关闭功能与配置热更新。涉及数据迁移时必须核对默认与显式配置 API 直启的写入前零变更门禁、fresh-install 与 completed-migration 标记、首次 marker 发布中断、主库出现后的半初始化拒绝、标记篡改、全部注册 Agent/账号状态漂移、目标 workspace 与端口漂移、必需路径符号链接穿越、外部数据库覆盖、secondary 账号监听、全部账号端口、带标签的各种活动容器、迁移报告四类 copied/preserved 证据、SQLite 表记录数、公共系统提示词哈希、旧文件备份和服务重启后的 API 与 OneBot 状态。Linux 发行验收还要核对干净源码门禁与重新生产构建，预构建 Native Core、生产依赖、Docker Core 构建上下文、迁移 wrapper、门禁模块和迁移文档均存在；在无 `.git`、无开发依赖的解包目录复验真实平台、runtime contract、完整 `dist/`、`tooling/`、生产 `node_modules/` 与锁文件的文件集合及哈希后完成 dry-run，并用篡改 fixture 证明失败关闭。
 
 Token 统计验收必须覆盖 OpenAI Responses、Deferred Codex CLI 成功与失败结果、Chat Completions、Anthropic 和 Gemini 的原始 usage 夹具，验证缓存输入不重复计数、Codex CLI 失败 usage 不丢失、Anthropic 三类输入求和、思考 Token 归入输出、缓存率分母只包含明确报告缓存字段的记录、无缓存字段返回 `null`、显式零缓存返回 `0`、时区跨日、24 个小时桶、最近 53 周日期范围，以及模型与功能组合筛选不改变可选模型集合。行为统计必须验证回答、编排器、记忆总量与两类真实记忆拆分无重复计数，并验证 `conversationId` 精确隔离。管理台测试必须验证小时/日切换、模型/功能筛选、371 个日历单元、24 个小时柱、缓存率折线不产生 `NaN`/`Infinity`，并分别检查移动端与桌面端的 light/dark Token 卡片、行为统计、群聊详情、日历、小时图和展开后的结构化 usage 日志截图。
 
 Prompt Cache 验收必须分别执行 OpenAI 官方 Responses 与 Codex Responses 的两轮真实连续对话：两轮使用同一模型、提示词家族和稳定 system/developer 前缀，第二轮追加第一轮用户消息与助手回复；逐轮记录 Provider 实际返回的原始 `input_tokens`、`cached_tokens` 和可用的 `cache_write_tokens`。OpenAI 官方 GPT-5.6 及后续支持显式断点的暖请求必须命中前导稳定前缀；Codex GPT-5.6 及后续请求必须以首个 developer input 承载合并 system 文本，不发送 `instructions`、`prompt_cache_breakpoint` 或 `prompt_cache_options`，并如实记录后端机会性隐式缓存结果，不能把未报告的缓存写入或偶发命中推算成稳定缓存率。旧模型、未知模型和兼容 Provider 请求体不得出现显式断点字段。测试还必须验证 system/developer 前缀、完整工具定义或输出 schema 变化会切换缓存键，动态历史、记忆和当前输入变化不会改变稳定前缀键；协议映射前后的语义内容、非 system 输入顺序、图片、工具和输出 schema 必须一致。
 
-涉及跨平台运行时还要执行 `./sunabot.sh doctor`，分别验证 Native Core + 多 NapCat Docker 与 Docker Core + 多 NapCat Docker 的启动、停止、单实例、OneBot token、两个 QQ 同时在线、文字、图片、文件、账号定向外发和重启恢复。contract 与测试必须拒绝 NapCat 并入 Core、多个账号复用同一 WebUI 端口、OneBot 复用管理端口、跨组件共享绝对路径和旧新运行时并行。
+涉及跨平台运行时还要执行 `./sunabot.sh doctor`，分别验证 Native Core + 多 NapCat Docker 与 Docker Core + 多 NapCat Docker 的启动、停止、单实例、管理台单账号“运行”、OneBot token、两个 QQ 同时在线、文字、图片、文件、账号定向外发和重启恢复。contract 与测试必须拒绝 NapCat 并入 Core、多个账号复用同一 WebUI 端口、OneBot 复用管理端口、跨组件共享绝对路径和旧新运行时并行。
 
-## 12. 已知实现限制
+## 12. 已知验收限制
 
-以下行为已经通过本轮审计确认，当前代码尚未完成目标契约；实施方法和验收条件统一维护在 `docs/audits/2026-07-14-business-flow-audit.md` 与 `docs/todo.md`：
-
-- `FLOW-001`：同一 Agent 的一个 QQ 断连可能暂停该 Agent 的整个 outbox pump，尚未按 account ID 分区隔离。
-- `FLOW-002`：OneBot 远端发送与本地 settle 尚未拆为持久化两阶段，远端成功后的本地失败可能触发重复外发。
-- `FLOW-003`：Provider 工具循环尚未跨模型轮次共享 `TurnToolState`，`assistant_text`、`no_reply` 与 deferred tool 的跨轮顺序仍需统一门禁。
-- `RECOVERY-001`：restore intent 在部分 rename 后会通过非空目标安全拒绝重试，尚未提供自动续作或回滚。
-- `ONBOARD-002` 至 `ONBOARD-005`：readiness/doctor、账号运行时调和、真正空 workspace E2E，以及 help/只读 CLI 零安装仍待完成。
+`FLOW-001`、`FLOW-002`、`FLOW-003`、`MIG-001`、`MIG-002`、`RECOVERY-001` 与 `ONBOARD-002` 至 `ONBOARD-005` 的代码、故障注入和受控 E2E 已完成。真实 macOS Native Core + 多 NapCat Docker 与 Linux/WSL Docker Core + 多 NapCat Docker 的双 QQ 首次运行、账号定向文字/图片/文件外发和重启恢复仍需在具备两套运行环境与真实 QQ 登录态时执行；在该验收完成前，不能把受控 Provider/OneBot fixture 视为真实部署证据。

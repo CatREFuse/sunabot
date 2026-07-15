@@ -130,11 +130,13 @@ describe("tool configuration", () => {
 
   it("defaults websearch to Tavily and Codex to an independent worker", () => {
     expect(defaultConfig().bot.pokeOnNoReply).toBe(false);
+    expect(defaultConfig().normalReply).toEqual({ maxRetries: 3 });
     expect(defaultConfig().broadcastStorm).toEqual({
       enabled: true,
       windowMinutes: 2,
       replyThreshold: 3,
-      cooldownMinutes: 1
+      cooldownMinutes: 1,
+      additionalQqIds: []
     });
     expect(defaultConfig().bot.tools.maxCalls).toBe(20);
     expect(defaultConfig().bot.tools.overrides).toEqual({});
@@ -150,6 +152,16 @@ describe("tool configuration", () => {
       codexExecutable: "auto",
       timeoutMs: 900_000,
       maxConcurrency: 2
+    });
+  });
+
+  it("loads a persisted normal reply retry limit", async () => {
+    await fs.writeFile(configPath, JSON.stringify({
+      normalReply: { maxRetries: 7 }
+    }), "utf8");
+
+    await expect(loadConfig()).resolves.toMatchObject({
+      normalReply: { maxRetries: 7 }
     });
   });
 

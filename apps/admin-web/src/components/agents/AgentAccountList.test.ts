@@ -33,4 +33,40 @@ describe("AgentAccountList", () => {
     await removeSecondary.trigger("click");
     expect(wrapper.emitted("remove")).toEqual([["secondary"]]);
   });
+
+  it("shows a run action for a newly registered container before runtime state is ready", async () => {
+    const pending = account({ id: "secondary", agentId: "plana", label: "备用账号", webuiPort: 6100 });
+    pending.runtimeReady = false;
+    pending.desiredState = "running";
+    pending.observedState = "missing";
+    pending.reconcileRequired = false;
+    const wrapper = shallowMount(AgentAccountList, {
+      props: { agentId: "plana", accounts: [pending] }
+    });
+
+    expect(wrapper.text()).toContain("新建 NapCat QQ Docker");
+    expect(wrapper.text()).toContain("未运行");
+    const run = wrapper.findAll("button").find((button) => button.text() === "运行");
+    expect(run).toBeDefined();
+    expect(run?.attributes("disabled")).toBeUndefined();
+    await run?.trigger("click");
+    expect(wrapper.emitted("run")).toEqual([["secondary"]]);
+  });
+
+  it("keeps the run action available after a stable reconciliation failure", () => {
+    const failed = account({ id: "secondary", agentId: "plana", label: "备用账号", webuiPort: 6100 });
+    failed.runtimeReady = false;
+    failed.desiredState = "running";
+    failed.observedState = "missing";
+    failed.reconcileRequired = true;
+    failed.lastError = "Docker Engine 不可用";
+    const wrapper = shallowMount(AgentAccountList, {
+      props: { agentId: "plana", accounts: [failed] }
+    });
+
+    expect(wrapper.text()).toContain("需要处理");
+    expect(wrapper.text()).toContain("备用账号：Docker Engine 不可用");
+    expect(wrapper.findAll("button").some((button) => button.text() === "运行")).toBe(true);
+    expect(wrapper.text()).not.toContain("重启后登录");
+  });
 });

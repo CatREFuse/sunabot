@@ -227,6 +227,55 @@ describe("admin API smoke", () => {
     await app.close();
   });
 
+  it("protects readiness while reusing the host probe facts and keeps runtime liveness secret-free", async () => {
+    const collectFacts = vi.fn(async () => ({
+      workspace: { exists: true, migrationState: "trusted", path: temporaryDirectory },
+      core: { mode: "native", running: true, apiReady: true, onebotReady: true },
+      dependencies: { node: { ok: true, detail: process.versions.node } },
+      capabilities: { provider: { ok: true, detail: "test-provider" } },
+      accounts: [{
+        id: "primary",
+        desiredState: "running",
+        observedState: "running",
+        connected: false,
+        reconcileRequired: false,
+        lastError: null
+      }]
+    }));
+    const app = await createApp(testAppOptions({
+      onebotListener: false,
+      runtimeProbeClient: { collectFacts }
+    }));
+
+    const unauthorized = await app.inject({
+      method: "GET",
+      url: "/api/readiness",
+      headers: { host: "127.0.0.1" }
+    });
+    const readiness = await app.inject({
+      method: "GET",
+      url: "/api/readiness",
+      headers: ADMIN_HEADERS
+    });
+    const liveness = await app.inject({
+      method: "GET",
+      url: "/healthz/runtime",
+      headers: { host: "127.0.0.1" }
+    });
+
+    expect(unauthorized.statusCode).toBe(401);
+    expect(readiness.statusCode).toBe(200);
+    expect(readiness.json()).toMatchObject({
+      schemaVersion: 1,
+      summary: { liveness: "live", readiness: "degraded" },
+      accounts: [{ id: "primary", connected: false }]
+    });
+    expect(collectFacts).toHaveBeenCalledWith({ connectedAccountIds: [] });
+    expect(liveness.json()).toEqual({ schemaVersion: 1, live: true });
+    expect(liveness.body).not.toContain("test-provider");
+    await app.close();
+  });
+
   it("reloads the config envelope from disk after an external edit", async () => {
     const app = await createApp(testAppOptions());
     config.server.port = 9123;

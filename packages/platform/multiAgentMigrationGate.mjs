@@ -2,11 +2,16 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import {
+  AbsolutePathSafetyError,
+  ensureSafeAbsoluteDirectory,
+  ensureSafeAbsoluteParent
+} from "../../tooling/shared/safe-absolute-path.mjs";
 
 export const MULTI_AGENT_MIGRATION_MARKER = "business/migrations/multi-agent-v1.json";
 
 export async function inspectMultiAgentMigrationGate(workspaceInput) {
-  const workspace = absoluteWorkspace(workspaceInput);
+  const workspace = await validateMultiAgentWorkspacePath(workspaceInput);
   const markerPath = path.join(workspace, MULTI_AGENT_MIGRATION_MARKER);
   let workspaceStat;
   try {
@@ -38,6 +43,29 @@ export async function inspectMultiAgentMigrationGate(workspaceInput) {
   return { state: "migration-required", workspace, markerPath, existingEntries };
 }
 
+export async function validateMultiAgentWorkspacePath(workspaceInput) {
+  const workspace = absoluteWorkspace(workspaceInput);
+  let workspaceStat;
+  try {
+    workspaceStat = await fs.lstat(workspace);
+    if (!workspaceStat.isDirectory() || workspaceStat.isSymbolicLink()) {
+      throw gateError("WORKSPACE_INVALID", `workspace 必须是普通目录且不能是符号链接：${workspace}。`);
+    }
+    await ensureSafeAbsoluteDirectory(workspace);
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      try {
+        await ensureSafeAbsoluteParent(workspace);
+      } catch (parentError) {
+        throw normalizeWorkspacePathError(parentError, workspace);
+      }
+    } else {
+      throw normalizeWorkspacePathError(error, workspace);
+    }
+  }
+  return workspace;
+}
+
 export async function prepareFreshInstallMarker(workspaceInput, now = new Date()) {
   const gate = await inspectMultiAgentMigrationGate(workspaceInput);
   if (gate.state === "trusted") return gate;
@@ -60,7 +88,7 @@ export async function prepareFreshInstallMarker(workspaceInput, now = new Date()
 }
 
 export async function writeCompletedMigrationMarker(options) {
-  const workspace = absoluteWorkspace(options.workspace);
+  const workspace = await validateMultiAgentWorkspacePath(options.workspace);
   const markerPath = path.join(workspace, MULTI_AGENT_MIGRATION_MARKER);
   const marker = signedMarker({
     schemaVersion: 1,
@@ -419,6 +447,14 @@ function absoluteWorkspace(value) {
     throw gateError("WORKSPACE_INVALID", "workspace 必须是绝对路径。");
   }
   return path.normalize(value);
+}
+
+function normalizeWorkspacePathError(error, workspace) {
+  if (error?.code === "WORKSPACE_INVALID") return error;
+  if (error instanceof AbsolutePathSafetyError || error?.code === "ABSOLUTE_PATH_UNSAFE") {
+    return gateError("WORKSPACE_INVALID", `workspace 父链必须全部是普通目录：${workspace}。`);
+  }
+  return error;
 }
 
 function sha256(value) {

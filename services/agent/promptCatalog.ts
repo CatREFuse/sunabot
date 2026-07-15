@@ -12,6 +12,13 @@ export interface PromptFileDefinition {
   fileName(config: AppConfig): string;
 }
 
+const commonVariables = [
+  variable("bot.name", "Bot 名字", "string", "Agent 配置"),
+  variable("user.name", "私聊中的用户名字；非私聊为空", "string", "当前会话"),
+  variable("runtime.current_time", "当前系统时间（ISO 8601）", "string", "系统时钟"),
+  variable("utils.roll", "本次提示词调用生成的 1～100 随机整数", "number", "运行时工具变量")
+] as const;
+
 const fragmentVariables = [
   variable("persona.agents", "Agent 工作区规则", "string", "AGENTS.md"),
   variable("persona.soul", "角色身份、性格与表达方式", "string", "SOUL.md"),
@@ -122,7 +129,7 @@ function fragment(id: string, title: string, category: string, fileName: string)
     kind: "fragment",
     scope: "persona",
     allowBlank: false,
-    variables: fragmentVariables.filter((item) => item.name !== id),
+    variables: mergeVariables(commonVariables, fragmentVariables.filter((item) => item.name !== id)),
     fileName: () => fileName
   };
 }
@@ -142,7 +149,7 @@ function final(
     kind: "final",
     scope,
     allowBlank: false,
-    variables: mergeVariables(fragmentVariables, variables),
+    variables: mergeVariables(commonVariables, fragmentVariables, variables),
     fileName
   };
 }

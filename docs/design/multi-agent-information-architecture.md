@@ -125,13 +125,13 @@ Agent 列表行只显示头像、名称、在线账号数和启用状态。详�
 | 区域 | 内容 | 操作 |
 | --- | --- | --- |
 | 身份 | 头像、名称、Agent ID、状态 | 编辑名称与头像、启用或停用 |
-| QQ 账号 | 账号名称、QQ 号、登录状态、NapCat 状态 | 新增账号、登录、退出、查看 WebUI、移除未登录账号 |
+| QQ 账号 | 账号名称、QQ 号、登录状态、NapCat 状态 | 新建 NapCat QQ Docker、运行、登录、退出、查看 WebUI、移除未登录账号 |
 | 用量 | 今日 Token、请求数、上下文缓存 | 查看完整统计 |
 | 工作区 | 提示词、记忆、图像、文件入口 | 打开对应页面 |
 
 新增 Agent 使用模态表单，字段为“名称”“Agent ID”“头像”。Agent ID 根据名称生成，可在创建前修改，只允许小写字母、数字和连字符。提交按钮文案为“创建 Agent”。成功后切换到新 Agent 详情。
 
-新增 QQ 账号使用模态表单，字段为“账号名称”。创建后生成稳定 `accountId` 并进入扫码登录状态，QQ 号在 NapCat 登录成功后回填。按钮文案为“新增 QQ”。
+新增 QQ 账号使用“新建 NapCat QQ Docker”模态表单，字段为“名称”。创建后生成稳定 `accountId`；容器未运行时显示“运行”，启动成功后进入扫码登录状态，QQ 号在 NapCat 登录成功后回填。
 
 ### 状态与统计
 
@@ -168,7 +168,7 @@ AppShell
         └── CreateAgentAccountDialog
 ```
 
-- `useAgents` 负责列表、当前 Agent、创建、更新与 API 错误状态。
+- `useAgents` 负责列表、当前 Agent、创建、单账号容器启动、更新与 API 错误状态。
 - `AgentSwitcher` 只接收 Agent 列表和当前 ID，通过事件请求切换。
 - `AgentsView` 组合列表与详情，不直接实现 API 请求。
 - 创建表单独立为模态组件，关闭时清空草稿。
@@ -196,6 +196,7 @@ AppShell
 | `PATCH` | `/api/agents/:agentId/prompt-settings` | 开启或关闭系统提示词覆盖 |
 | `GET` | `/api/agents/:agentId/accounts` | QQ 账号列表 |
 | `POST` | `/api/agents/:agentId/accounts` | 新增 QQ 账号 |
+| `POST` | `/api/agents/:agentId/accounts/:accountId/runtime/start` | 创建或启动目标 NapCat QQ Docker |
 | `DELETE` | `/api/agents/:agentId/accounts/:accountId` | 移除未登录账号 |
 | `POST` | `/api/agents/:agentId/accounts/:accountId/login` | 刷新二维码 |
 | `POST` | `/api/agents/:agentId/accounts/:accountId/logout` | 退出 QQ |
@@ -216,6 +217,7 @@ AppShell
 - 普拉娜与阿罗娜可以同时存在，切换后人格提示词、记忆、图片和设置互不串读。
 - 未开启覆盖的 Agent 同时读取公共系统提示词；开启覆盖后只读取私有副本，关闭后恢复公共版本且不删除私有副本。
 - 一个 Agent 可以绑定两个 QQ，两个账号同时在线且回复动作回到原账号。
+- 未运行账号显示“运行”；启动请求只创建或启动目标账号的 Compose project，其他 QQ 容器保持运行。
 - 新增 Agent 后目录和 SQLite 注册信息同时创建，任一步失败时事务性回滚。
 - 全局 Token 等于各 Agent Token 之和，单 Agent 筛选不包含其他 Agent。
 - Native Core 与 Docker Core 均能连接多个独立 NapCat 容器。

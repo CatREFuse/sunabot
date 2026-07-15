@@ -8,6 +8,8 @@ import {
   DurableContractError,
   decodeOutboxDelivery,
   decodeOutboxPayload,
+  decodeOutboxRemoteReceipt,
+  decodeOutboxSettleProgress,
   decodeSessionEventPayload,
   decodeToolJobCompletion,
   decodeToolJobProcess,
@@ -15,6 +17,8 @@ import {
   decodeTurnOutcome,
   encodeOutboxDelivery,
   encodeOutboxPayload,
+  encodeOutboxRemoteReceipt,
+  encodeOutboxSettleProgress,
   encodeSessionEventPayload,
   encodeToolJobCompletion,
   encodeToolJobProcess,
@@ -70,8 +74,10 @@ describe("durable session codecs", () => {
     const process = encodeToolJobProcess(identity, context);
     const outbox = encodeOutboxPayload({ text: "ready" }, "onebot.group", context);
     const delivery = encodeOutboxDelivery({ outcome: "sent", result: { messageId: 7 } }, context);
+    const receipt = encodeOutboxRemoteReceipt({ accepted: true, messageId: "7" }, context);
+    const settlement = encodeOutboxSettleProgress(["conversation_projection", "request_log"], context);
 
-    for (const encoded of [event, turn, request, completion, process, outbox, delivery]) {
+    for (const encoded of [event, turn, request, completion, process, outbox, delivery, receipt, settlement]) {
       expect(JSON.parse(encoded)).toMatchObject({ schemaVersion: 1, correlationId: "correlation-1" });
     }
     expect(decodeSessionEventPayload(event)).toEqual({ text: "hello" });
@@ -87,6 +93,11 @@ describe("durable session codecs", () => {
     expect(decodeToolJobProcess(process)).toEqual(identity);
     expect(decodeOutboxPayload(outbox)).toEqual({ text: "ready" });
     expect(decodeOutboxDelivery(delivery, null)).toEqual({ result: { messageId: 7 }, error: undefined });
+    expect(decodeOutboxRemoteReceipt(receipt)).toEqual({ accepted: true, messageId: "7" });
+    expect(decodeOutboxSettleProgress(settlement)).toEqual(["conversation_projection", "request_log"]);
+    expect(() => encodeOutboxSettleProgress(["request_log", "request_log"], context)).toThrow(
+      "duplicate steps"
+    );
   });
 
   it("reads legacy raw JSON and existing runtime envelopes as v0 data", () => {

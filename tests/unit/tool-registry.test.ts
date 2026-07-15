@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { RegistryProviderToolExecutor } from "../../adapters/model/provider/toolExecutor.js";
+import { createTurnToolState } from "../../adapters/model/provider/turnToolState.js";
 import type { ProviderCompleteOptions } from "../../adapters/model/openaiProvider.js";
 import type { OpenAIToolDefinition } from "../../services/agent/promptSystem.js";
 import { AGENT_TOOL_NAMES } from "../../src/types.js";
@@ -105,6 +106,39 @@ describe("ToolRegistry", () => {
     ]);
     expect(delivered).toEqual([]);
     expect(used).toEqual([]);
+  });
+
+  it("rejects no_reply after an ordinary tool was accepted in an earlier model round", async () => {
+    const executor = new RegistryProviderToolExecutor();
+    const state = createTurnToolState();
+    const options = {
+      allowNoReply: true,
+      memory: {
+        enabled: true,
+        recall: async () => ({ ok: true })
+      }
+    } satisfies ProviderCompleteOptions;
+    const definitions = executor.resolveDefinitions(options, [staleTool("memory_recall")]);
+    const [memoryOutput] = await executor.execute([{
+      type: "function_call",
+      name: "memory_recall",
+      call_id: "call-memory",
+      arguments: JSON.stringify({ query: "current context", limit: 3 })
+    }], options, definitions, state);
+    const noReplyCall = {
+      type: "function_call" as const,
+      name: "no_reply",
+      call_id: "call-late-no-reply",
+      arguments: "{}"
+    };
+
+    expect(JSON.parse(String(memoryOutput?.output))).toEqual({ ok: true });
+    expect(executor.noReplyTurn([noReplyCall], options, definitions, state)).toBeNull();
+    const [noReplyOutput] = await executor.execute([noReplyCall], options, definitions, state);
+    expect(JSON.parse(String(noReplyOutput?.output))).toEqual({
+      ok: false,
+      error: "no_reply must be called before assistant text or any other tool."
+    });
   });
 
   it("forces dispatch_message into deferred definitions after prompt overrides", () => {

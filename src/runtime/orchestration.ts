@@ -139,7 +139,7 @@ export function runtime_markIncomingSeen(this: RuntimeHost, incoming: ParsedInco
   }
 export function runtime_resolveIncomingReplyRoute(this: RuntimeHost, incoming: ParsedIncomingMessage, command: boolean) {
     if (
-      !this.replySuppression.canReplyTo(incoming.time) ||
+      !this.replyTaskGate.canCreateTaskFor(incoming.time) ||
       !this.isReplySenderAllowed(incoming.userId) ||
       !hasIncomingReplyContent(incoming)
     ) return "none" as const;
@@ -171,7 +171,6 @@ export function runtime_isReplyTaskCurrent(this: RuntimeHost,
   ) {
     if (
       signal?.aborted ||
-      !this.replySuppression.canReplyTo(incoming.time) ||
       !this.isReplySenderAllowed(incoming.userId) ||
       !this.replyGates.isCurrent(gate)
     ) return false;
@@ -188,17 +187,6 @@ export function runtime_cancelScopeReplies(this: RuntimeHost, scope: ParsedIncom
       this.activeDirectControllers.get(record.id)?.abort(new Error(`${scope} replies disabled`));
       this.cancelAmbientReply(record.id);
     }
-  }
-export function runtime_cancelAllReplies(this: RuntimeHost, reason = "all replies suppressed") {
-    for (const scope of ["private", "user_group", "bot_group"] as const) {
-      this.replyGates.invalidateScope(scope);
-    }
-    const abortError = new Error(reason);
-    abortError.name = "AbortError";
-    for (const controller of this.activeDirectControllers.values()) {
-      controller.abort(abortError);
-    }
-    this.cancelAllAmbientReplies();
   }
 export function runtime_cancelAllAmbientReplies(this: RuntimeHost) {
     const channelKeys = new Set([
@@ -610,7 +598,6 @@ export class RuntimeOrchestration {
   resolveIncomingReplyRoute(...args: Parameters<typeof runtime_resolveIncomingReplyRoute>) { return runtime_resolveIncomingReplyRoute.call(this.host, ...args); }
   isReplyTaskCurrent(...args: Parameters<typeof runtime_isReplyTaskCurrent>) { return runtime_isReplyTaskCurrent.call(this.host, ...args); }
   cancelScopeReplies(...args: Parameters<typeof runtime_cancelScopeReplies>) { return runtime_cancelScopeReplies.call(this.host, ...args); }
-  cancelAllReplies(...args: Parameters<typeof runtime_cancelAllReplies>) { return runtime_cancelAllReplies.call(this.host, ...args); }
   cancelAllAmbientReplies(...args: Parameters<typeof runtime_cancelAllAmbientReplies>) { return runtime_cancelAllAmbientReplies.call(this.host, ...args); }
   resumeUserGroupOrchestrators(...args: Parameters<typeof runtime_resumeUserGroupOrchestrators>) { return runtime_resumeUserGroupOrchestrators.call(this.host, ...args); }
   suspendUserGroupOrchestrators(...args: Parameters<typeof runtime_suspendUserGroupOrchestrators>) { return runtime_suspendUserGroupOrchestrators.call(this.host, ...args); }

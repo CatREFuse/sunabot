@@ -56,39 +56,49 @@
 - [x] **ONBOARD-FIX-004｜兼容注销定向与 Agent 创建补偿**
   - primary 兼容注销只定向 primary；primary 可以退出 QQ 登录但不能移除，API 返回 `PRIMARY_ACCOUNT_REQUIRED` 且管理台隐藏移除入口；Agent 运行时初始化失败时删除注册记录、workspace 与临时回滚目录。
 
-- [ ] **FLOW-001｜P1｜按 QQ 账号隔离 outbox 断连状态**
+- [x] **FLOW-001｜P1｜按 QQ 账号隔离 outbox 断连状态**
   - outbox 持久化 `deliveryPartition=accountId`，claim 跳过离线分区，断连探针与恢复按分区维护。
   - 验收：同 Agent 一个 QQ 离线时，其他在线 QQ 继续按序投递，重连只恢复目标分区。
+  - 证据：断连、探针远端成功后 settle 失败、`delivery_unknown`、传输前失败和跨分区 FIFO 回归通过；v2 `sending` 升级为人工确认状态，不自动重发。
 
-- [ ] **FLOW-002｜P1｜远端发送与本地 settle 两阶段化**
+- [x] **FLOW-002｜P1｜远端发送与本地 settle 两阶段化**
   - OneBot 成功后持久化 remote receipt，再幂等完成会话、日志与 hook；未知结果进入 `delivery_unknown`，不自动重复发送。
   - 验收：远端成功后的任一本地故障和重启都不会产生第二条 QQ 消息。
+  - 证据：会话投影、请求日志、记忆和逐 handler hook 使用稳定 settle key；真实 SQLite 关闭、hook 两侧崩溃、多 handler 部分成功及人工 `applied/not_applied` 回归通过。
 
-- [ ] **MIG-001｜P1｜SQLite 旧数据迁移恢复边界**
+- [x] **MIG-001｜P1｜SQLite 旧数据迁移恢复边界**
   - 备份路径改为 workspace 相对且拒绝逃逸；主库、queue、附件 chunks 使用统一 manifest、哈希、记录数和 restore/drill 门禁。
+  - 证据：同计数异 ID、重复导入、活动 WAL、外置 workspace、完整父链符号链接和 macOS `/tmp`/`/var` 受控别名回归通过。
 
-- [ ] **MIG-002｜P1｜workspace 布局迁移完整回滚**
+- [x] **MIG-002｜P1｜workspace 布局迁移完整回滚**
   - 敏感内容必须拥有受控离线恢复副本；所有移动项记录源/目标哈希，使用 staged copy、校验和原子切换。
+  - 证据：未知目标替换、预存相同目标 rewrite 失败、复制与 rename 边界中断、retention/cleanup 外部路径攻击和安全回滚回归通过。
 
-- [ ] **ONBOARD-002｜P1｜统一 readiness 与 doctor 协议**
+- [x] **ONBOARD-002｜P1｜统一 readiness 与 doctor 协议**
   - CLI、管理 API 和平台入口共用只读 probe，分别报告 Core、OneBot、每个 QQ、Provider、Codex、LibreOffice、bubblewrap、workspace 和迁移状态。
+  - 证据：schema v1 probe、管理员 readiness、最小公开 health、Provider 凭据与有界健康请求、Gemini header 密钥边界、状态页三态及 8 个视觉用例通过。
 
-- [ ] **ONBOARD-003｜P1｜新 QQ 运行时调和**
-  - 增加 account reconciler 与期望/实际状态；新增、停用和删除账号只操作目标 NapCat，失败原因在管理台可见。
+- [x] **ONBOARD-003｜P1｜新 QQ 运行时调和**
+  - 增加 account reconciler 与期望/实际状态；新增、运行、停用和删除账号只操作目标 NapCat，失败原因在管理台可见。
+  - 证据：Docker Core workspace bridge、管理台单账号“运行”接口、daemon 缺失/超时持久状态、重复调和、目标账号隔离和注册库不可读零容器操作回归通过。
 
-- [ ] **ONBOARD-004｜P1｜空 workspace 首次运行 E2E**
+- [x] **ONBOARD-004｜P1｜空 workspace 首次运行 E2E**
   - 覆盖管理员设置、默认 Provider 选择、Agent/QQ 创建、扫码前状态、运行调和和首条回复；在 marker、主库、queue、manifest、注册行和账号目录的每个持久化边界注入终止，补齐幂等 resume/rollback；README 只保留该门禁验证过的步骤。
-  - 验收：主库出现后的半初始化可以明确继续或回滚，不删除未知文件、不补空库；macOS Native 与 Linux/WSL Docker Core 完整通过首次运行。
+  - 验收：主库出现后的半初始化可以明确继续或回滚，不删除未知文件、不补空库。
+  - 证据：Cookie+CSRF、Provider HTTP、OneBot WebSocket 入站到 QQ 回复受控 E2E，以及 6 个边界各 resume/rollback 的 12 次真实子进程 SIGKILL 通过；真实 macOS Native 与 Linux/WSL Docker Core 双 QQ 验收继续由 `DEPLOY-FIX-005` 跟踪。
 
-- [ ] **FLOW-003｜P2｜Provider 跨轮 TurnToolState**
+- [x] **FLOW-003｜P2｜Provider 跨轮 TurnToolState**
   - 各协议共享本轮 `assistant_text`、工具、deferred 与 `no_reply` 状态，拒绝跨轮非法顺序。
+  - 证据：Responses、Chat Completions、Anthropic、Gemini 和 Codex 覆盖跨轮非法顺序，合法首轮 `no_reply` 与 deferred 保持通过。
 
-- [ ] **RECOVERY-001｜P2｜中断恢复可继续或回滚**
+- [x] **RECOVERY-001｜P2｜中断恢复可继续或回滚**
   - restore 每次文件替换写入可 fsync 的 journal，重跑按 per-file 状态幂等 resume/rollback；也可使用完整 staging tree 校验后原子切换。
   - 验收：每个 rename 前后终止进程，原目标仍可恢复，重跑不会覆盖未知文件，全部 Agent 双库和 queue 不变量最终通过。
+  - 证据：intent 先于 staging、复制与 rename 边界续跑/回滚、未知替换保留、完成后 SHA-256/SQLite/表计数复验和完整父链门禁通过。
 
-- [ ] **ONBOARD-005｜P2｜只读 CLI 不安装依赖**
-  - help 成功退出；`status|doctor|logs` 零写入、零 `npm ci`，只有启动、重启或显式 bootstrap 可以安装依赖。
+- [x] **ONBOARD-005｜P2｜只读 CLI 不安装依赖**
+  - help 成功退出；`status|doctor|logs|down` 零写入、零 `npm ci`，只有启动、重启或显式 bootstrap 可以安装依赖。
+  - 证据：help、option-first `up`、`--core=docker`、`--core docker`、`--dev` 和缺依赖只读命令回归通过。
 
 ## 2026-07-13 WebUI 修复 TODO
 
@@ -335,7 +345,7 @@
   - Core 镜像只包含 API/Web，NapCat 使用锁定的独立镜像；Compose 提供 `core` 与 `napcat` 两个服务。
   - 根 `./sunabot.sh` 统一 `up|down|restart|status|logs|doctor`，并支持 `auto|native|docker` Core 模式。
   - 完成：Docker Core 走私有网络，Native Core 走宿主网关；SIGTERM、冷启动、首次登录、真实文图消息和旧实例门禁通过。
-  - 阶段证据：统一 launcher、多账号 NapCat 编排、专用 OneBot 端口、私有网络和 release 入口已实现；新增账号运行时调和、readiness 统一协议与 Native/Docker 双形态真实多账号 smoke 仍待完成。
+  - 阶段证据：统一 launcher、多账号 NapCat 编排、专用 OneBot 端口、私有网络、release 入口、账号运行时调和和 readiness 统一协议已实现；Native/Docker 双形态真实多账号 smoke 仍待完成。
 
 - [ ] **RUNTIME-004｜P1｜健康、资源和日志预算**（AUD-014、AUD-027）
   - Core 与 NapCat 分别报告 liveness；readiness 分层报告 API、OneBot、QQ、Provider，QQ 临时离线不形成重启风暴。

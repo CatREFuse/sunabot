@@ -17,6 +17,12 @@ export interface AgentPersona {
   systemPrompt: string;
 }
 
+export interface CommonPromptVariableContext {
+  scope?: "private" | "user_group" | "bot_group";
+  userName?: string;
+  now?: Date;
+}
+
 const personaFiles = [
   "AGENTS.md",
   "SOUL.md",
@@ -45,6 +51,18 @@ export function buildConversationPromptVariables(config: AppConfig) {
     ].join("\n")
   };
 }
+
+export function buildCommonPromptVariables(
+  config: AppConfig,
+  context: CommonPromptVariableContext = {}
+) {
+  return {
+    "bot.name": String(config.persona.name ?? "").trim(),
+    "user.name": context.scope === "private" ? String(context.userName ?? "").trim() : "",
+    "runtime.current_time": (context.now ?? new Date()).toISOString()
+  };
+}
+
 export async function loadPersona(
   config: AppConfig,
   contentOverrides: Readonly<Record<string, string>> = {}

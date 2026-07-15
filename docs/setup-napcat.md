@@ -65,11 +65,13 @@ Apple Silicon 上的 linux/amd64 Docker 模拟内核若以 `EINVAL` 拒绝 bubbl
 
 不要直接执行旧的 `npm run qq:*`、单容器 Compose 或 Native NapCat systemd 命令。运行模式切换前使用 `./sunabot.sh down`，同一个 workspace 只能由当前 launcher 管理一个 Core 和注册表中的 NapCat 账号容器。
 
+`up`、`down` 和 `restart` 会预检当前 workspace 的 Compose one-off 探针。若 Docker 列表仍显示探针运行，但 `docker inspect` 已返回容器不存在，macOS Colima 的交互终端会提示重启 Colima，并明确说明其他 Docker 容器会短暂中断；确认后启动器重启 Colima、等待 Docker Engine 恢复、复验悬空记录已消失，再继续原命令。非交互命令或其他 Docker Engine 保持失败关闭，并返回 `colima restart` 或重启当前 Docker Engine 的操作提示。该修复不绕过停服、迁移、恢复点或数据库完整性门禁。
+
 ## QQ 登录
 
 首次启动会为 Plana 创建“主账号”。打开管理台 `http://127.0.0.1:8787/agents`，选择 Agent 后进入对应账号登录；管理台每 2 秒同步登录状态，二维码轮换后自动更新，也可以主动刷新。
 
-每个 Agent 可以新增多个 QQ。新增账号写入注册表和隔离目录后，执行 `./sunabot.sh restart` 启动对应 NapCat；管理台在启动前显示“重启后登录”。QQ 在线后，账号弹窗提供退出操作；确认退出后该 NapCat 自动回到扫码态，扫描新账号成功后保存 QQ 号供后续快速登录。各 NapCat 原生 WebUI 只作为故障诊断入口。
+每个 Agent 可以新增多个 QQ。管理台使用“新建 NapCat QQ Docker”登记账号，未运行时点击“运行”创建或启动对应独立容器，成功后点击“登录”扫码。新增、启停、运行或移除账号写入注册表后，宿主 account runtime daemon 只调和对应 NapCat；Docker Core 通过 workspace request/result bridge 请求宿主执行，不挂载 Docker socket。管理台显示期望状态、实际状态、是否仍需调和和最近错误；注册库不可读、daemon 缺失或请求超时时失败关闭，不停止或删除其他容器。QQ 在线后，账号弹窗提供退出操作；确认退出后该 NapCat 自动回到扫码态，扫描新账号成功后保存 QQ 号供后续快速登录。各 NapCat 原生 WebUI 只作为故障诊断入口。
 
 完成扫码后可以执行：
 
@@ -111,6 +113,7 @@ QQ 入站文件优先使用 OneBot 返回的受控 URL；启动器固定开启 `
 - 每个 NapCat WebUI 使用独立端口，并且只监听宿主回环。
 - OneBot 使用专用 `8788` 端口和 access token。
 - 当前 workspace 只有一个 Core，每个已启用 QQ 账号只有一个 NapCat 容器。
+- 管理台“运行”只创建或启动目标 QQ 容器，其他 NapCat 不重启。
 - 两个 QQ 可以同时在线，并且分别路由到所属 Agent。
 - 文本 action、图片 `base64://` 外发、QQ 文件读取和 Provider 测试成功。
 - 重启后 SQLite、outbox、NapCat 登录态和 OneBot 连接恢复。
