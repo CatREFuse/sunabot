@@ -243,6 +243,14 @@ describe("durable session codecs", () => {
       },
       acknowledgement: { kind: "onebot.group", payload: { text: "working" } }
     });
+    const outbox = store.claimNextOutbox({ workerId: "outbox-worker" })!;
+    expect(outbox.id).toBe(deferred.acknowledgement.id);
+    store.finishOutbox({
+      outboxId: outbox.id,
+      workerId: "outbox-worker",
+      outcome: "sent",
+      result: { messageId: 42 }
+    });
     const job = store.claimNextToolJob({ workerId: "tool-worker" })!;
     store.recordToolJobProcess(job.id, "tool-worker", job.attempts, job.attemptToken!, {
       pid: 31,
@@ -266,14 +274,6 @@ describe("durable session codecs", () => {
       attemptToken: job.attemptToken,
       status: "succeeded",
       result: { image: "artifact.png" }
-    });
-    const outbox = store.claimNextOutbox({ workerId: "outbox-worker" })!;
-    expect(outbox.id).toBe(deferred.acknowledgement.id);
-    store.finishOutbox({
-      outboxId: outbox.id,
-      workerId: "outbox-worker",
-      outcome: "sent",
-      result: { messageId: 42 }
     });
 
     const terminalInspection = new DatabaseSync(databasePath, { readOnly: true });
@@ -346,8 +346,21 @@ describe("durable session codecs", () => {
       workerId: "future-turn",
       sessionId: "group:future"
     }), "needs-migration");
-    expectContractFailure(() => reopened.claimNextToolJob({ workerId: "future-tool" }), "needs-migration");
     expectContractFailure(() => reopened.claimNextOutbox({ workerId: "future-outbox" }), "needs-migration");
+
+    reopened.close();
+    stores.splice(stores.indexOf(reopened), 1);
+    const releaseFixture = new DatabaseSync(databasePath);
+    releaseFixture.prepare(`
+      UPDATE outbox
+      SET status = 'sent', delivery_state = 'sent', sent_at = 1, finished_at = 1
+      WHERE id = ?
+    `).run(deferred.acknowledgement.id);
+    releaseFixture.close();
+
+    const released = new SessionStore({ databasePath });
+    stores.push(released);
+    expectContractFailure(() => released.claimNextToolJob({ workerId: "future-tool" }), "needs-migration");
 
     const inspection = new DatabaseSync(databasePath, { readOnly: true });
     expect(inspection.prepare("SELECT status, attempts FROM session_events WHERE id = ?")
@@ -355,7 +368,7 @@ describe("durable session codecs", () => {
     expect(inspection.prepare("SELECT status, attempts FROM tool_jobs WHERE id = ?")
       .get(deferred.job.id)).toMatchObject({ status: "queued", attempts: 0 });
     expect(inspection.prepare("SELECT status, attempts FROM outbox WHERE id = ?")
-      .get(deferred.acknowledgement.id)).toMatchObject({ status: "pending", attempts: 0 });
+      .get(deferred.acknowledgement.id)).toMatchObject({ status: "sent", attempts: 0 });
     inspection.close();
   });
 });

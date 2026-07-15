@@ -241,6 +241,8 @@ function claimCodexJob(store: SessionStore, sessionId: string): ToolJobRecord {
     },
     acknowledgement: { kind: "reply", payload: { text: "started" } }
   });
+  const acknowledgement = store.claimNextOutbox({ workerId: "ack-worker", sessionId })!;
+  store.finishOutbox({ outboxId: acknowledgement.id, workerId: "ack-worker", outcome: "sent" });
   return store.claimNextToolJob({ workerId: TOOL_WORKER_ID, sessionId })!;
 }
 

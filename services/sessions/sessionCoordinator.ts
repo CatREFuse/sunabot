@@ -468,6 +468,7 @@ export class SessionCoordinator {
         result
       });
       state.finalized = true;
+      this.scheduleTools();
       if (delivery.remoteSucceeded() || outbox.status === "sending") {
         this.outboxPartitions.resume(outbox.deliveryPartition);
       }

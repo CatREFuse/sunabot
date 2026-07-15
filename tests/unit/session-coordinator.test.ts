@@ -800,7 +800,7 @@ describe("SessionCoordinator", () => {
 
     oldStore.enqueueEvent({ sessionId: "group:tool", kind: "incoming", payload: { text: "old tool" } });
     const toolTurn = oldStore.claimNextTurn({ workerId: "old-turn", sessionId: "group:tool" })!;
-    oldStore.deferTurn({
+    const deferredTool = oldStore.deferTurn({
       turnId: toolTurn.turn.id,
       workerId: "old-turn",
       job: {
@@ -810,8 +810,13 @@ describe("SessionCoordinator", () => {
         originalRequest: toolTurn.event.payload,
         arguments: { task: "recover me", kind: "local" }
       },
-      acknowledgement: { kind: "reply", payload: { text: "old ack" } }
+      acknowledgement: {
+        kind: "reply",
+        deliveryPartition: "qq-tool-recovery",
+        payload: { text: "old ack" }
+      }
     });
+    deliverPersistedOutbox(oldStore, deferredTool.acknowledgement.id, "old-ack");
     oldStore.claimNextToolJob({ workerId: "old-tool", sessionId: "group:tool" });
     oldStore.close();
     stores.splice(stores.indexOf(oldStore), 1);
@@ -842,7 +847,8 @@ describe("SessionCoordinator", () => {
     coordinator.resume();
     await coordinator.waitForIdle();
     expect(seen).toEqual(expect.arrayContaining(["pending turn", "tool_completion"]));
-    expect(delivered).toEqual(expect.arrayContaining(["recover delivery", "old ack", "pending turn"]));
+    expect(delivered).toEqual(expect.arrayContaining(["recover delivery", "pending turn"]));
+    expect(delivered).not.toContain("old ack");
     expect(store.listOutbox("group:outbox")[0]?.status).toBe("sent");
     expect(store.listToolJobs("group:tool")[0]?.status).toBe("succeeded");
     expect(store.listEvents("group:tool").map((event) => event.kind)).toEqual([
@@ -867,6 +873,7 @@ describe("SessionCoordinator", () => {
       },
       acknowledgement: { kind: "reply", payload: { text: "old ack" } }
     });
+    deliverPersistedOutbox(store, deferred.acknowledgement.id, "old-ack");
     const oldClaim = store.claimNextToolJob({ workerId: "old-tool" })!;
     const oldIdentity = {
       pid: 4242,
@@ -935,6 +942,7 @@ describe("SessionCoordinator", () => {
       },
       acknowledgement: { kind: "reply", payload: {} }
     });
+    deliverPersistedOutbox(store, deferred.acknowledgement.id, "old-ack");
     const oldClaim = store.claimNextToolJob({ workerId: "old-tool" })!;
     store.recordToolJobProcess(oldClaim.id, "old-tool", oldClaim.attempts, oldClaim.attemptToken!, {
       pid: 4242,
@@ -1058,6 +1066,57 @@ describe("SessionCoordinator", () => {
       status: "succeeded"
     });
   });
+
+  it("does not start a deferred tool until its dispatch acknowledgement is delivered", async () => {
+    const store = trackStore(new SessionStore({ databasePath: ":memory:" }));
+    const dispatchDeliveryStarted = deferred<void>();
+    const releaseDispatchDelivery = deferred<void>();
+    let toolStarted = false;
+    const deliveries: string[] = [];
+    const coordinator = trackCoordinator(createCoordinator({
+      store,
+      runDeferredTool: async () => {
+        toolStarted = true;
+        return { status: "succeeded", result: { ok: true } };
+      },
+      handleEvent: (event) => event.kind === "tool_completion"
+        ? completedReply("callback complete")
+        : {
+            status: "deferred",
+            providerCallId: "call-dispatch-before-worker",
+            toolName: "generate_img",
+            arguments: { prompt: "月球基地" },
+            originalRequest: event.payload,
+            acknowledgement: { kind: "reply", payload: { text: "dispatch started" } }
+          },
+      deliverOutbox: async (outbox) => {
+        const text = (outbox.payload as { text: string }).text;
+        if (text === "dispatch started") {
+          dispatchDeliveryStarted.resolve();
+          await releaseDispatchDelivery.promise;
+        }
+        deliveries.push(text);
+      }
+    }));
+
+    coordinator.resume();
+    coordinator.enqueueEvent({
+      sessionId: "private:dispatch-before-worker",
+      kind: "incoming",
+      payload: { text: "draw" }
+    });
+
+    await dispatchDeliveryStarted.promise;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(toolStarted).toBe(false);
+    expect(store.listToolJobs("private:dispatch-before-worker")[0]).toMatchObject({ status: "queued" });
+
+    releaseDispatchDelivery.resolve();
+    await coordinator.waitForIdle();
+
+    expect(deliveries).toEqual(["dispatch started", "callback complete"]);
+    expect(store.listToolJobs("private:dispatch-before-worker")[0]).toMatchObject({ status: "succeeded" });
+  });
 });
 
 interface CoordinatorHarnessOptions {
@@ -1120,6 +1179,13 @@ function successfulCodex(
 function trackStore(store: SessionStore) {
   stores.push(store);
   return store;
+}
+
+function deliverPersistedOutbox(store: SessionStore, outboxId: string, workerId: string) {
+  const outbox = store.getOutbox(outboxId)!;
+  const claimed = store.claimNextOutbox({ workerId, sessionId: outbox.sessionId })!;
+  expect(claimed.id).toBe(outboxId);
+  store.finishOutbox({ outboxId, workerId, outcome: "sent" });
 }
 
 function trackCoordinator(coordinator: SessionCoordinator) {

@@ -518,6 +518,14 @@ describe("SessionStore", () => {
     expect(duplicate.duplicate).toBe(true);
     expect(duplicate.job.id).toBe(deferred.job.id);
     expect(store.listOutbox("group:300")).toHaveLength(1);
+    expect(store.claimNextToolJob({ workerId: "blocked-worker" })).toBeNull();
+    expect(store.claimToolJob(deferred.job.id, { workerId: "blocked-direct-worker" })).toBeNull();
+
+    deliverPersistedOutbox(store, deferred.acknowledgement.id, "ack-worker");
+    expect(store.claimNextToolJob({ workerId: "released-worker" })).toMatchObject({
+      id: deferred.job.id,
+      status: "running"
+    });
   });
 
   it("appends one idempotent tool completion event at the session tail", async () => {
@@ -541,6 +549,7 @@ describe("SessionStore", () => {
       payload: { text: "arrived while the tool ran" }
     });
 
+    deliverPersistedOutbox(store, deferred.acknowledgement.id, "ack-worker");
     const job = store.claimNextToolJob({ workerId: "codex-worker" })!;
     expect(job.id).toBe(deferred.job.id);
     const completed = store.completeToolJob({
@@ -608,6 +617,7 @@ describe("SessionStore", () => {
       },
       acknowledgement: { kind: "ack", payload: {} }
     });
+    deliverPersistedOutbox(store, deferred.acknowledgement.id, "ack-worker");
     store.claimNextToolJob({ workerId: "old-job", leaseMs: 50, sessionId: "group:job" });
 
     store.enqueueEvent({ sessionId: "group:outbox", kind: "incoming", payload: {} });
@@ -656,6 +666,7 @@ describe("SessionStore", () => {
       },
       acknowledgement: { kind: "ack", payload: {} }
     });
+    deliverPersistedOutbox(store, deferred.acknowledgement.id, "ack-worker");
     const first = store.claimNextToolJob({ workerId: "same-worker" })!;
     const firstToken = first.attemptToken!;
     store.recordToolJobProcess(first.id, "same-worker", first.attempts, firstToken, {
@@ -722,8 +733,22 @@ describe("SessionStore", () => {
       },
       acknowledgement: { kind: "ack", payload: {} }
     });
+    deliverPersistedOutbox(before, deferred.acknowledgement.id, "ack-worker");
     before.claimNextToolJob({ workerId: "old-job", leaseMs: 60_000, sessionId: "group:job" });
-    const ack = before.claimNextOutbox({ workerId: "old-sender", leaseMs: 60_000, sessionId: "group:job" })!;
+    before.enqueueEvent({ sessionId: "group:outbox", kind: "incoming", payload: {} });
+    const outboxTurn = before.claimNextTurn({ workerId: "outbox-turn", sessionId: "group:outbox" })!;
+    const pendingOutbox = before.finishTurn({
+      turnId: outboxTurn.turn.id,
+      workerId: "outbox-turn",
+      outcome: "replied",
+      outbox: [{ kind: "reply", payload: {} }]
+    }).outbox[0]!;
+    const sendingOutbox = before.claimNextOutbox({
+      workerId: "old-sender",
+      leaseMs: 60_000,
+      sessionId: "group:outbox"
+    })!;
+    expect(sendingOutbox.id).toBe(pendingOutbox.id);
     before.close();
     stores.splice(stores.indexOf(before), 1);
 
@@ -732,13 +757,13 @@ describe("SessionStore", () => {
     expect(after.getTurn(runningTurn.turn.id)?.status).toBe("interrupted");
     expect(after.getEvent(runningTurn.event.id)?.status).toBe("pending");
     expect(after.getToolJob(deferred.job.id)?.status).toBe("queued");
-    expect(after.getOutbox(ack.id)?.status).toBe("pending");
+    expect(after.getOutbox(sendingOutbox.id)?.status).toBe("pending");
 
     expect(after.claimNextTurn({ workerId: "new-turn", sessionId: "group:turn" }))
       .toMatchObject({ turn: { attempt: 2 } });
     expect(after.claimNextToolJob({ workerId: "new-job", sessionId: "group:job" }))
       .toMatchObject({ attempts: 2 });
-    expect(after.claimNextOutbox({ workerId: "new-sender", sessionId: "group:job" }))
+    expect(after.claimNextOutbox({ workerId: "new-sender", sessionId: "group:outbox" }))
       .toMatchObject({ attempts: 2 });
   });
 });
@@ -765,4 +790,11 @@ async function createHarness() {
 function storeForCleanup(store: SessionStore) {
   stores.push(store);
   return store;
+}
+
+function deliverPersistedOutbox(store: SessionStore, outboxId: string, workerId: string) {
+  const outbox = store.getOutbox(outboxId)!;
+  const claimed = store.claimNextOutbox({ workerId, sessionId: outbox.sessionId })!;
+  expect(claimed.id).toBe(outboxId);
+  store.finishOutbox({ outboxId, workerId, outcome: "sent" });
 }
