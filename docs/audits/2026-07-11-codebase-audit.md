@@ -4,7 +4,7 @@
 范围：功能缺陷、依赖安全、性能、持久化、模块耦合和 WSL2 可迁移性
 状态：历史基线；表内测量、路径与状态记录截至 2026-07-11，不代表当前工作树
 
-当前实现与开放状态以 `docs/specs/current-system-spec.md`、`docs/audits/2026-07-14-business-flow-audit.md` 和 `docs/todo.md` 为准。本文保留原始问题编号、当时证据和优化理由，便于追溯；关于组合镜像、旧文件路径、模块行数、Node/CI、architecture gate 和 Native systemd 的描述均按历史记录阅读。
+当前实现与开放状态以 `docs/specs/index.md` 所索引的当前规范、`docs/audits/2026-07-14-business-flow-audit.md` 和 `docs/todo.md` 为准。本文保留原始问题编号、当时证据和优化理由，便于追溯；关于组合镜像、旧文件路径、模块行数、Node/CI、architecture gate 和 Native systemd 的描述均按历史记录阅读。
 
 ## 已验证
 

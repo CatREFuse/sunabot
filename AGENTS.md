@@ -2,13 +2,13 @@
 
 ## 唯一规范
 
-开始修改前读取 `docs/specs/current-system-spec.md`。该文件是当前业务逻辑、数据边界和功能—代码文件索引的唯一规范。旧设计和实施计划只存在于 Git 历史，不得按历史方案恢复 JSON/JSONL 持久化。
+开始修改前读取 `docs/specs/index.md`，再按索引读取与修改范围对应的模块。该索引及其模块是当前业务逻辑、数据边界和功能—代码文件索引的唯一规范。旧设计和实施计划只存在于 Git 历史，不得按历史方案恢复 JSON/JSONL 持久化。
 
 ## Docs 文档索引
 
 | 文档 | 内容 | 读取时机 |
 | --- | --- | --- |
-| `docs/specs/current-system-spec.md` | 当前产品范围、业务规则、数据边界、持久化结构、功能—代码文件索引和验证标准 | 任何代码或配置修改前必读 |
+| `docs/specs/index.md` | 当前系统规范入口与模块索引 | 任何代码或配置修改前必读，并继续读取对应模块 |
 | `docs/todo.md` | TODO-driven 架构整理、性能治理、分离运行时交付任务、依赖与完成证据 | 规划迭代、选择任务、确认依赖或验收进度时读取 |
 | `docs/audits/2026-07-11-codebase-audit.md` | 历史基线、原始问题编号、风险和当时的优化顺序 | 对照旧问题来源或比较历史实现时读取 |
 | `docs/audits/2026-07-14-business-flow-audit.md` | 异步投递、媒体历史、首次运行、迁移门禁、账号调和与 readiness 的问题、修复结果和验收边界 | 修改 outbox、Provider 工具循环、首次接入、迁移或运行检查前读取 |
@@ -49,7 +49,7 @@
 | 管理台页面 | `apps/admin-web/src/views/`, `apps/admin-web/src/components/`, `apps/admin-web/src/composables/` |
 | 数据升级与部署 | `packages/platform/multiAgentMigrationGate.mjs`, `tooling/migrations/`, `deploy/`, `docs/migrations/` |
 
-完整映射见 `docs/specs/current-system-spec.md` 的“功能—代码文件索引”。
+完整映射见 `docs/specs/07-code-map.md`；规范模块入口见 `docs/specs/index.md`。
 
 ## 持久化规则
 

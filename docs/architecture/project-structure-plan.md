@@ -2,7 +2,7 @@
 
 日期：2026-07-14
 状态：当前多 Agent、多 QQ 架构与后续收口计划
-唯一业务规范：`docs/specs/current-system-spec.md`
+唯一业务规范入口：`docs/specs/index.md`
 执行任务：`docs/todo.md`
 
 ## 1. 架构目标

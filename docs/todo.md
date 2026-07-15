@@ -3,7 +3,7 @@
 日期：2026-07-14
 目标设计：`docs/architecture/project-structure-plan.md`
 问题依据：`docs/audits/2026-07-11-codebase-audit.md`、`docs/audits/2026-07-14-business-flow-audit.md`
-当前行为：`docs/specs/current-system-spec.md`
+当前行为：`docs/specs/index.md`
 
 ## 使用规则
 
