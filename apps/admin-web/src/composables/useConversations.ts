@@ -110,7 +110,13 @@ export function useConversations() {
           ...changes
         })
       });
-      conversations.value = conversations.value.map((item) => item.id === payload.conversation.id ? payload.conversation : item);
+      conversations.value = conversations.value.map((item) => item.id === payload.conversation.id
+        ? {
+            ...item,
+            replyEnabled: payload.conversation.replyEnabled,
+            orchestratorEnabled: payload.conversation.orchestratorEnabled
+          }
+        : item);
       error.value = "";
     } catch (caught) {
       conversations.value = previous;

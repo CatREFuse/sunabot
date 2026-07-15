@@ -10,7 +10,8 @@ import { useConversations } from "./useConversations";
 const conversation: ConversationRecord = {
   id: "group:7",
   scope: "user_group",
-  title: "群聊",
+  title: "测试群聊",
+  groupName: "测试群聊",
   userId: 1,
   groupId: 7,
   messageCount: 1,
@@ -22,7 +23,7 @@ const conversation: ConversationRecord = {
 };
 
 describe("useConversations reply settings", () => {
-  it("updates a switch immediately and keeps the server result", async () => {
+  it("updates a switch without replacing the directory group name", async () => {
     let resolveUpdate!: (value: unknown) => void;
     apiRequest
       .mockResolvedValueOnce({ conversations: [conversation] })
@@ -34,9 +35,18 @@ describe("useConversations reply settings", () => {
 
     expect(state.conversations.value[0]?.replyEnabled).toBe(false);
 
-    resolveUpdate({ conversation: { ...conversation, replyEnabled: false } });
+    resolveUpdate({
+      conversation: {
+        ...conversation,
+        title: "7",
+        groupName: undefined,
+        replyEnabled: false
+      }
+    });
     await saving;
     expect(state.conversations.value[0]?.replyEnabled).toBe(false);
+    expect(state.conversations.value[0]?.title).toBe("测试群聊");
+    expect(state.conversations.value[0]?.groupName).toBe("测试群聊");
   });
 
   it("rolls back the switch when saving fails", async () => {
