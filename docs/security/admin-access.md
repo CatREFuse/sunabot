@@ -8,6 +8,14 @@
 
 Bearer Token 只保留给受控的自动化客户端。浏览器管理台不再读取或保存 Token，本机回环地址也不绕过认证。
 
+## 配置医生安全边界
+
+配置医生只访问 `workspace/business/config/sunabot.json`。`GET /api/config-doctor/scan`、`POST /api/config-doctor/propose` 和 `POST /api/config-doctor/apply` 都属于管理员保护 API；两个 POST 请求同时要求有效 CSRF Token 与可信 Origin。浏览器发起 AI 建议时只提交源文件 revision，应用时只提交服务端生成的 proposal ID 与 source revision，不能直接提交 patch 或候选配置。
+
+本地确定性扫描先于 AI 诊断。发送给默认 Provider 的配置会脱敏凭据、身份、QQ、Provider 地址、workspace、可执行文件和提示词路径；问题列表只使用本次实际失败的白名单路径和固定文案。单次模型请求不提供任何工具，并用结构化输出约束 `add`/`replace` 建议。服务端随后再次执行当前问题路径、字段白名单、JSON Pointer、数量、大小、重复路径、原型污染和完整配置校验，模型输出不能直接写入文件，确认页中的目标值说明由服务端计算。
+
+AI 建议只在进程内保存 10 分钟并绑定原始文件 SHA-256 revision，连续建议至少间隔 10 秒；文件变化后旧方案立即拒绝应用。修复前会在 `workspace/backups/config-doctor/<repairId>/` 持久保存原始配置和 manifest，应用过程使用互斥锁、原子写入与写后复验，失败时自动恢复原始字节和活动配置。当前管理台没有用户主动回滚入口，`./sunabot.sh doctor` 继续保持只读，也没有配置医生 CLI 离线修复入口。
+
 ## 外网访问要求
 
 1. sunabot 只监听 `127.0.0.1:8787`。

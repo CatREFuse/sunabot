@@ -12,6 +12,7 @@
 | API 组合、生命周期、静态站点与错误映射 | `apps/api/server.ts` |
 | 管理鉴权 API | `apps/api/plugins/authRoutes.ts` |
 | Provider、Codex 授权与配置 API | `apps/api/plugins/providerConfigRoutes.ts` |
+| 配置医生扫描、AI 建议与应用 API | `apps/api/plugins/configDoctorRoutes.ts`, `src/admin/configDoctor.ts`, `src/admin/configDoctorFile.ts`, `src/admin/configDoctorModel.ts`, `src/admin/configDoctorPatch.ts`, `src/admin/configDoctorApply.ts`, `src/admin/configService.ts` |
 | Agent 注册、账号调和与头像 API | `apps/api/plugins/agentRoutes.ts`, `services/agents/agentRegistry.ts`, `services/agents/accountRuntimeReconciler.ts`, `tooling/runtime/account-runtime-daemon.mjs` |
 | 多 Agent 运行时与配置热更新 | `services/agents/agentRuntimeManager.ts`, `src/admin/agentConfigService.ts`, `packages/platform/runtimeAgentContext.ts` |
 | OneBot 管理 API | `apps/api/plugins/onebotRoutes.ts` |
@@ -22,7 +23,7 @@
 | 图片、缩略图、Token/模型调用统计、请求日志与图片测试 API | `apps/api/plugins/mediaRoutes.ts`, `apps/api/plugins/conversationRoutes.ts`, `src/modelCallStats.ts`, `src/requestLog.ts`, `adapters/sqlite/modelCallStore.ts` |
 | Agent 文件与工具目录 API | `apps/api/plugins/agentToolRoutes.ts`, `services/tools/toolRegistry.ts` |
 | 自拍参考图 API 与受控文件仓库 | `apps/api/plugins/selfieReferenceRoutes.ts`, `src/admin/selfieReferences.ts` |
-| 配置加载、默认值、路径解析 | `src/config.ts`, `src/types.ts` |
+| 配置 schemaVersion、加载、归一化、默认值与路径解析 | `src/config.ts`, `src/types.ts` |
 | SQLite schema、业务数据与模型聚合 | `adapters/sqlite/applicationDataSchema.ts`, `adapters/sqlite/applicationDataStore.ts`, `adapters/sqlite/modelCallStore.ts` |
 | 旧数据、workspace、首次运行与单 Agent 迁移门禁 | `packages/platform/multiAgentMigrationGate.mjs`, `tooling/shared/safe-absolute-path.mjs`, `tooling/workspace/init-workspace.mjs`, `tooling/runtime/first-run-state.mjs`, `tooling/migrations/migrate-to-sqlite.mjs`, `tooling/migrations/migrate-workspace-layout.mjs`, `tooling/migrations/migrate-single-agent-to-multi-agent.mjs` |
 | SQLite 恢复点、迁移恢复与 journal | `tooling/workspace/sqlite-recovery.mjs`, `tooling/migrations/sqlite-migration-recovery.mjs`, `tooling/migrations/sqlite-legacy-import.mjs` |
@@ -41,9 +42,10 @@
 | 记忆调度 | `services/memory/memoryScheduler.ts` |
 | 附件接入、解析、缓存和上下文 | `services/media/attachments/` |
 | 会话目录和显示名 | `services/conversations/conversationDirectory.ts`, `services/conversations/senderName.ts` |
-| 管理配置和 Agent 文件 | `src/admin/` |
+| 管理配置、字段状态和 Agent 文件 | `src/admin/configService.ts`, `src/admin/configFieldStates.ts`, `src/admin/agentFiles.ts` |
 | 管理台路由和页面 | `apps/admin-web/src/router.ts`, `apps/admin-web/src/views/` |
 | 管理台组件和状态 | `apps/admin-web/src/components/`, `apps/admin-web/src/composables/` |
+| 配置医生页面与状态 | `apps/admin-web/src/views/ConfigDoctorView.vue`, `apps/admin-web/src/components/settings/ConfigDoctorPanel.vue`, `apps/admin-web/src/components/settings/ConfigDoctorRepairDialog.vue`, `apps/admin-web/src/composables/useConfigDoctor.ts` |
 | Agent 管理与全局切换 | `apps/admin-web/src/views/AgentsView.vue`, `apps/admin-web/src/components/agents/`, `apps/admin-web/src/composables/useAgents.ts`, `apps/admin-web/src/composables/agentScope.ts` |
 | Agent 工具目录设置 | `apps/admin-web/src/components/settings/ToolsSettingsForm.vue`, `apps/admin-web/src/components/settings/ToolCatalogSettings.vue`, `apps/admin-web/src/components/settings/ToolDetailDialog.vue`, `apps/admin-web/src/components/settings/ToolRuntimeSettings.vue`, `apps/admin-web/src/composables/useToolCatalog.ts` |
 | 自拍参考图设置 | `apps/admin-web/src/views/ImagesView.vue`, `apps/admin-web/src/components/settings/SelfieReferenceSettings.vue`, `apps/admin-web/src/components/settings/SelfieReferenceDialog.vue`, `apps/admin-web/src/composables/useSelfieReferences.ts` |

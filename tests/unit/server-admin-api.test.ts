@@ -106,6 +106,30 @@ describe("admin API smoke", () => {
     await app.close();
   });
 
+  it("protects the config doctor and keeps AI calls behind an explicit authorized request", async () => {
+    const configDoctorModelRunner = vi.fn(async () => JSON.stringify({ summary: "ok", operations: [] }));
+    const app = await createApp(testAppOptions({ configDoctorModelRunner }));
+
+    const unauthorizedScan = await app.inject({ method: "GET", url: "/api/config-doctor/scan" });
+    const unauthorizedAi = await app.inject({
+      method: "POST",
+      url: "/api/config-doctor/propose",
+      payload: { sourceRevision: "unknown" }
+    });
+    const scan = await app.inject({
+      method: "GET",
+      url: "/api/config-doctor/scan",
+      headers: ADMIN_HEADERS
+    });
+
+    expect(unauthorizedScan.statusCode).toBe(401);
+    expect(unauthorizedAi.statusCode).toBe(401);
+    expect(scan.statusCode).toBe(200);
+    expect(scan.json()).toMatchObject({ schemaVersion: 1, sourceRevision: expect.any(String) });
+    expect(configDoctorModelRunner).not.toHaveBeenCalled();
+    await app.close();
+  });
+
   it("updates and serves the current Agent WebUI avatar", async () => {
     const app = await createApp(testAppOptions());
     const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);

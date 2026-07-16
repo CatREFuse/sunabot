@@ -7,6 +7,7 @@ import fastifyStatic from "@fastify/static";
 import { AgentFileRepository } from "../../src/admin/agentFiles.js";
 import { AdminAuthService } from "../../src/admin/auth.js";
 import { ConfigService } from "../../src/admin/configService.js";
+import { ConfigDoctorService, type ConfigDoctorModelRunner } from "../../src/admin/configDoctor.js";
 import { AgentConfigService } from "../../src/admin/agentConfigService.js";
 import { CodexAuthService } from "../../src/admin/codexAuth.js";
 import { MonitorSettingsStore } from "../../src/admin/monitorSettings.js";
@@ -42,6 +43,7 @@ import { registerAgentToolRoutes } from "./plugins/agentToolRoutes.js";
 import { registerAgentRoutes } from "./plugins/agentRoutes.js";
 import { registerAuthRoutes } from "./plugins/authRoutes.js";
 import { registerConversationRoutes } from "./plugins/conversationRoutes.js";
+import { registerConfigDoctorRoutes } from "./plugins/configDoctorRoutes.js";
 import { registerMediaRoutes } from "./plugins/mediaRoutes.js";
 import { registerMemoryRoutes } from "./plugins/memoryRoutes.js";
 import { registerMonitoringRoutes } from "./plugins/monitoringRoutes.js";
@@ -49,6 +51,7 @@ import { registerOneBotRoutes } from "./plugins/onebotRoutes.js";
 import { registerProviderConfigRoutes } from "./plugins/providerConfigRoutes.js";
 import { registerSelfieReferenceRoutes } from "./plugins/selfieReferenceRoutes.js";
 import type { AppConfig, ProviderConfig } from "../../src/types.js";
+import { OpenAIProvider } from "../../adapters/model/openaiProvider.js";
 import { AgentRegistry, type AgentRegistryOptions } from "../../services/agents/agentRegistry.js";
 import { AgentRuntimeManager } from "../../services/agents/agentRuntimeManager.js";
 import {
@@ -83,6 +86,7 @@ export interface CreateAppOptions {
     port?: number;
   };
   testProvider?: (provider: ProviderConfig) => Promise<Record<string, unknown>>;
+  configDoctorModelRunner?: ConfigDoctorModelRunner;
   agentRegistry?: Pick<AgentRegistryOptions, "workspaceRoot" | "allowUnmarkedMigration">;
   accountRuntimeReconciler?: false | AccountRuntimeReconcilerPort;
   runtimeProbeClient?: false | RuntimeProbeClientPort;
@@ -243,6 +247,7 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
     return repository;
   };
   const configService = new ConfigService({
+    getActiveConfig: () => config,
     prepareApply: async (candidate) => {
       const defaultCandidate = await agentRegistry.config(runtime.config.persona.defaultAgentId, candidate);
       await agentFiles.validateConfig(defaultCandidate);
@@ -281,6 +286,18 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
         }
       };
     }
+  });
+  const configDoctorService = new ConfigDoctorService({
+    configService,
+    getActiveConfig: () => config,
+    isModelAvailable: (provider) => new OpenAIProvider(provider).hasApiKey(),
+    runModel: options.configDoctorModelRunner ?? (async ({ provider, request, signal }) => (
+      new OpenAIProvider(provider).completeRequest(request, {
+        signal,
+        modelRequestMaxRetries: 0,
+        logContext: { stage: "config_doctor", promptFamily: "config_doctor" }
+      })
+    ))
   });
   const agentConfigService = new AgentConfigService(agentRegistry, agentRuntimeManager, configService);
   const accountRuntimeReconciler = options.accountRuntimeReconciler === false
@@ -457,6 +474,7 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
   });
   registerOneBotRoutes(app, onebotGateway, { agentRegistry });
   registerProviderConfigRoutes(app, { codexAuth, configService, agentConfigService, testProvider: options.testProvider });
+  registerConfigDoctorRoutes(app, configDoctorService);
   registerMemoryRoutes(app, {
     getConfig: () => config,
     runtime,
@@ -596,7 +614,8 @@ function isSpaRoute(pathname: string) {
     "logs",
     "agents",
     "agent-settings",
-    "settings"
+    "settings",
+    "config-doctor"
   ]
     .some((segment) => pathname === `/${segment}` || pathname.startsWith(`/${segment}/`));
 }

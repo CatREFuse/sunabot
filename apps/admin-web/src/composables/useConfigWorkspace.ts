@@ -14,6 +14,7 @@ interface SectionState { kind: StateKind; message: string; field?: string }
 export type ConfigWorkspaceScope = "agent" | "system";
 
 const emptyConfig: AppConfig = {
+  schemaVersion: 1,
   server: { host: "127.0.0.1", port: 8787 },
   persona: {
     defaultAgentId: "plana",

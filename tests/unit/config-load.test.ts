@@ -52,9 +52,16 @@ describe("tool configuration", () => {
 
   it("uses the versioned workspace layout for agents and provider secrets", () => {
     const config = defaultConfig();
+    expect(config.schemaVersion).toBe(1);
     expect(config.persona.agentWorkspace).toBe("workspace/business/agents/plana");
     expect(config.providers.items.every((provider) => provider.envFile === "workspace/secrets/runtime.env")).toBe(true);
     expect(config.bot.adminQq).toBe("");
+  });
+
+  it("rejects a configuration written by a newer schema", async () => {
+    await fs.writeFile(configPath, JSON.stringify({ schemaVersion: 2 }), "utf8");
+
+    await expect(loadConfig()).rejects.toMatchObject({ code: "CONFIG_SCHEMA_VERSION_UNSUPPORTED" });
   });
 
   it("normalizes retired custom Plana workspace paths to the canonical workspace", async () => {

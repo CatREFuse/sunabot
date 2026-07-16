@@ -4,9 +4,11 @@
 
 ## 7. 管理台
 
-管理台侧栏分为“Agent”和“公共系统”。Agent 区包含当前 Agent 切换器、Agent 设置、状态、Web Chat、会话、Agent 提示词、记忆、图像和日志；公共系统区包含系统设置和系统提示词。Agent 提示词页显示当前 Agent 的六个人格文件和自拍提示词改写，并提供“覆盖系统提示词”开关；开启后同页增加该 Agent 的系统提示词覆盖入口。系统提示词页只编辑公共版本，不显示自拍提示词改写。管理台支持 light、dark 和跟随系统主题，并适配桌面、平板和移动端。切换 Agent 后，会话、Web Chat、图片、记忆、Agent 提示词、Agent 工具和 Bot 配置只读写所选 Agent；模型配置、共用开关和公共系统提示词保持全局一致。回复行为中的群聊引用过滤名单接受 QQ 号，命中后仅取消引用，不关闭回复。`no_reply` 工具详情与回复行为页的“no_reply 时戳一戳”共同编辑 `bot.pokeOnNoReply`，任一入口保存后另一入口显示同一值。
+管理台侧栏分为“Agent”和“公共系统”。Agent 区包含当前 Agent 切换器、Agent 设置、状态、Web Chat、会话、Agent 提示词、记忆、图像和日志；公共系统区依次包含系统设置、配置医生和系统提示词，配置医生使用独立 `/config-doctor` 页面并位于系统设置下方。Agent 提示词页显示当前 Agent 的六个人格文件和自拍提示词改写，并提供“覆盖系统提示词”开关；开启后同页增加该 Agent 的系统提示词覆盖入口。系统提示词页只编辑公共版本，不显示自拍提示词改写。管理台支持 light、dark 和跟随系统主题，并适配桌面、平板和移动端。切换 Agent 后，会话、Web Chat、图片、记忆、Agent 提示词、Agent 工具和 Bot 配置只读写所选 Agent；模型配置、共用开关和公共系统提示词保持全局一致。回复行为中的群聊引用过滤名单接受 QQ 号，命中后仅取消引用，不关闭回复。`no_reply` 工具详情与回复行为页的“no_reply 时戳一戳”共同编辑 `bot.pokeOnNoReply`，任一入口保存后另一入口显示同一值。
 
 系统设置的“回复重试”页编辑公共 `normalReply.maxRetries`，字段为“失败重试次数”，默认 3，允许 0—10；保存后热更新全部 Agent。系统设置的“广播风暴”页编辑公共 `broadcastStorm` 配置，包含“广播风暴嗅探”“检测窗口（分钟）”“回复次数”“静默时长（分钟）”和“补充嗅探账号”。补充账号与已启用 Agent 的 QQ 合并参与检测；两项公共配置均由全部 Agent 共用，不写入单个 Agent manifest。管理台读取旧版配置响应时，缺失的 `normalReply` 使用当前默认值，不得因新增配置段缺失导致整个设置页进入错误态。
+
+配置医生页面只检查全局 `workspace/business/config/sunabot.json`，进入页面后通过 `GET /api/config-doctor/scan` 显示“配置正常”“发现可修复问题”或“需要手动处理”，并区分本地规则、语法检查和 AI 诊断来源。本地规则可以形成待确认方案；管理员可通过 `POST /api/config-doctor/propose` 显式请求 AI 复核，并在确认弹层中查看每项路径、动作、服务端计算的目标值和风险后通过 `POST /api/config-doctor/apply` 应用服务端保存的方案。方案绑定源文件 revision、有效期为 10 分钟；配置变化、方案过期或仍有不可修复问题时必须重新检查。页面显示 AI 使用的 Provider、模型和请求目标，应用成功后显示持久备份路径；方案内字段会热更新到当前活动配置，磁盘中方案外的合法变更只落盘并提示重启。当前不提供用户主动回滚操作。
 
 Agent 页面以列表和详情双栏管理 Agent，支持新建 Agent、启停、查看隔离 workspace 与新增多个 QQ 账号。Agent ID 创建后保持稳定，名称可以修改；Agent 身份页可上传或更换仅用于管理台展示的 WebUI 头像，支持 PNG、JPEG、WebP，不限制原图文件大小。选择图片后必须通过圆形裁图弹层调整位置和缩放，保存透明圆形头像；QQ 头像保持独立。QQ 容器区使用“新建 NapCat QQ Docker”入口；新增、启停或移除 QQ 后，由宿主 account runtime daemon 按注册表调和目标 NapCat 容器，Docker Core 通过 workspace request/result bridge 请求宿主执行且不挂载 Docker socket。未运行账号始终显示“运行”，调用单账号启动接口后创建或启动对应 Compose project；成功后刷新为“待登录”，不能要求重启全部 Sunabot。管理台显示期望状态、实际状态、是否仍需调和和最近错误。注册库不可读时调和失败关闭，不能生成停止或删除计划。每个账号独立扫码、退出和打开对应 NapCat WebUI。Plana 的 `primary` 是固定基线账号，可以退出 QQ 登录，不能从注册表移除；管理 API 对移除请求返回 `PRIMARY_ACCOUNT_REQUIRED`，管理台不显示移除入口，其他离线账号可以移除。
 

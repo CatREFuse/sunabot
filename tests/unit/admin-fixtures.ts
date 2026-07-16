@@ -3,6 +3,7 @@ import type { AppConfig } from "../../src/types.js";
 
 export function createAdminTestConfig(rootDir: string): AppConfig {
   return {
+    schemaVersion: 1,
     server: {
       host: "127.0.0.1",
       port: 8787

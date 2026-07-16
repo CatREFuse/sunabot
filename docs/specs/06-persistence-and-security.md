@@ -36,7 +36,7 @@ Plana 的 `workspace/business/data/session-queue.sqlite` 与其他 Agent 的 `wo
 以下内容继续使用文件：
 
 - `workspace/secrets/runtime.env`：本机凭据，不进入 Git；
-- `workspace/business/config/sunabot.json`：模型、正常回复重试、共用开关和默认 Plana 配置，不保存明文密钥；
+- `workspace/business/config/sunabot.json`：schemaVersion 1 的模型、正常回复重试、共用开关和默认 Plana 配置，不保存明文密钥；缺失的小型允许字段由配置归一化与配置医生规则补齐，不支持的显式 schemaVersion 失败关闭；
 - `workspace/business/migrations/multi-agent-v1.json`：首次安装或单 Agent 迁移完成标记，保存完整性摘要和迁移证据摘要；
 - `workspace/business/prompts/`：所有 Agent 默认使用的公共系统提示词；
 - `workspace/business/agents/<agentId>/agent.json`：Agent 名称、启用状态、系统提示词覆盖开关、Bot 行为、工具覆盖与 OneBot 行为配置；
@@ -49,6 +49,10 @@ Plana 的 `workspace/business/data/session-queue.sqlite` 与其他 Agent 的 `wo
 - 单个附件 manifest、好友/群目录缓存：体积小且可重建；
 - 图片与文档二进制：文件系统更适合流式访问；
 - Codex JSONL：子进程通信协议，不是持久化引擎。
+
+配置医生当前仅检查和修复 `workspace/business/config/sunabot.json`，不会扫描或修改 Agent `agent.json`、公共或 Agent 提示词、人格文件、`runtime.env`、管理员凭据、SQLite、NapCat 状态或其他 workspace 内容。扫描直接读取原始文件并限制为普通非符号链接、有效 UTF-8、最大 512 KiB；本地规则可清理 UTF-8 BOM、JSON 末尾逗号、已退役字段和白名单内缺失或无效的小型设置，其余语法、重复字段、根结构和受保护字段问题进入手动处理。
+
+每次应用修复前按原始文件 SHA-256 revision 复核源版本，并与普通设置写入共用互斥锁。服务端在 `workspace/backups/config-doctor/<repairId>/` 持久保存权限为 0600 的 `before.json` 与 schemaVersion 1 `manifest.json`，manifest 记录修复来源、前后摘要和修改路径；备份不会在成功后删除。候选配置经过完整校验、运行时预检、原子写入、写后摘要复验和重新加载后才提交热更新；若磁盘还包含方案外合法变更，修复只将方案字段合入当前活动配置，其余磁盘变更保持待加载并返回 `restartRequired: true`。持久化之后任一步失败时自动以原始字节原子恢复配置并恢复原运行配置，双重恢复失败才进入 `CONFIG_RECOVERY_REQUIRED`。当前备份用于审计和自动故障恢复，没有用户主动回滚入口。
 
 ### 8.3 旧数据迁移
 
@@ -78,4 +82,6 @@ Plana 的 `workspace/business/data/session-queue.sqlite` 与其他 Agent 的 `wo
 - Git 不跟踪整个 `workspace/`，其中包括环境变量、配置、Agent 人格、SQLite、WAL、日志、缓存、QQ 登录态、生成图片和备份。
 - 浏览器管理台不得把账号、密码、Bearer Token 或会话密钥写入 localStorage/sessionStorage。
 - 请求日志递归脱敏授权、token、password、secret 和常见 key 字段，并限制长字符串。
+- 配置医生发送给模型的配置先按敏感键以及身份、QQ、Provider 地址、workspace、可执行文件和提示词路径脱敏；问题列表只包含本次实际校验失败的固定白名单路径和服务端固定文案，模型只能对这些路径提出 `add` 或 `replace`，不接收工具权限。服务端限制 AI 输出大小、操作数、JSON Pointer 深度和值大小，并拒绝原型污染字段、重复路径和越权路径；用户确认页的目标值说明由服务端生成，不采用模型理由代替实际修改内容。
+- 配置医生 AI 提案只保存在进程内 10 分钟并绑定原始文件 revision；连续 AI 诊断至少间隔 10 秒。浏览器应用时只提交 proposal ID 与 source revision，不能提交或替换服务端 patch。
 - OneBot、跨组件媒体和 Agent 文件写入均执行身份、大小与路径边界校验；OneBot action 不能携带 Core 或 NapCat 的绝对文件路径。

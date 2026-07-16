@@ -22,6 +22,7 @@ export const modelCatalog = [
 ];
 
 const initialConfig = {
+  schemaVersion: 1,
   server: { host: "127.0.0.1", port: 8787 },
   persona: {
     defaultAgentId: "plana",
@@ -306,6 +307,10 @@ function filteredTokenUsage(payload: MockTokenUsagePayload, model: string, behav
 export interface MockApiState {
   config: typeof initialConfig;
   revision: string;
+  doctorRevision: string;
+  doctorHealthy: boolean;
+  doctorProposalSource: "rules" | "ai";
+  doctorRequests: Array<{ method: string; path: string; body?: unknown }>;
   files: typeof initialAgentFiles;
   agents: MockAgent[];
   avatarUpdates: Array<{ agentId: string; fileName: string; dataBase64: string }>;
@@ -343,6 +348,10 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
   const state: MockApiState = {
     config: structuredClone(initialConfig),
     revision: "config-r1",
+    doctorRevision: "doctor-r1",
+    doctorHealthy: false,
+    doctorProposalSource: "rules",
+    doctorRequests: [],
     files: structuredClone(initialAgentFiles),
     agents: structuredClone(initialAgents),
     avatarUpdates: [],
@@ -637,6 +646,51 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
           apiKeyConfigured: true
         },
         recovery: { required: false }
+      });
+    }
+
+    if (pathname === "/api/config-doctor/scan" && method === "GET") {
+      state.doctorRequests.push({ method, path: pathname });
+      return json(route, configDoctorReport(state));
+    }
+    if (pathname === "/api/config-doctor/propose" && method === "POST") {
+      const body = request.postDataJSON() as { sourceRevision?: string };
+      state.doctorRequests.push({ method, path: pathname, body });
+      if (body.sourceRevision !== state.doctorRevision) {
+        return json(route, {
+          error: {
+            code: "CONFIG_REVISION_CONFLICT",
+            message: "配置已变化，请重新检查。",
+            latestRevision: state.doctorRevision
+          }
+        }, 409);
+      }
+      state.doctorProposalSource = "ai";
+      return json(route, configDoctorReport(state));
+    }
+    if (pathname === "/api/config-doctor/apply" && method === "POST") {
+      const body = request.postDataJSON() as Record<string, unknown>;
+      state.doctorRequests.push({ method, path: pathname, body });
+      const expectedProposalId = state.doctorProposalSource === "ai" ? "doctor-ai-r1" : "doctor-rules-r1";
+      if (
+        Object.keys(body).length !== 2
+        || body.proposalId !== expectedProposalId
+        || body.sourceRevision !== state.doctorRevision
+      ) {
+        return json(route, {
+          error: { code: "CONFIG_DOCTOR_REQUEST_INVALID", message: "修复请求无效。" }
+        }, 400);
+      }
+      state.doctorHealthy = true;
+      state.doctorRevision = "doctor-r2";
+      return json(route, {
+        ok: true,
+        repairId: "repair-e2e-1",
+        repairedAt: "2026-07-16T08:02:00.000Z",
+        sourceRevision: state.doctorRevision,
+        backupPath: "backups/config-doctor/repair-e2e-1/before.json",
+        restartRequired: false,
+        appliedChanges: 1
       });
     }
 
@@ -1176,6 +1230,57 @@ function configEnvelope(state: MockApiState) {
       "bot.tools.websearch.tavilyApiKeys": tavilyFieldState,
       "bot.tools.websearch.tavilyApiKeyEnv": tavilyFieldState
     }
+  };
+}
+
+function configDoctorReport(state: MockApiState) {
+  const provider = {
+    label: "Codex",
+    model: "gpt-5.6-sol",
+    destination: "chatgpt.com"
+  };
+  if (state.doctorHealthy) {
+    return {
+      schemaVersion: 1,
+      generatedAt: "2026-07-16T08:02:01.000Z",
+      sourceRevision: state.doctorRevision,
+      status: "healthy",
+      issues: [],
+      ai: { available: true, provider }
+    };
+  }
+  const proposalSource = state.doctorProposalSource;
+  return {
+    schemaVersion: 1,
+    generatedAt: proposalSource === "ai" ? "2026-07-16T08:01:00.000Z" : "2026-07-16T08:00:00.000Z",
+    sourceRevision: state.doctorRevision,
+    status: "repairable",
+    issues: [{
+      id: proposalSource === "ai" ? "CONFIG_AI_SUGGESTION_1" : "CONFIG_RULE_REPAIR_1",
+      path: "/normalReply/maxRetries",
+      message: proposalSource === "ai"
+        ? "补齐缺失的正常回复重试次数"
+        : "字段 /normalReply/maxRetries 缺失，将使用当前默认值。",
+      severity: "warning",
+      repairable: true,
+      source: proposalSource === "ai" ? "ai" : "rules"
+    }],
+    proposal: {
+      id: proposalSource === "ai" ? "doctor-ai-r1" : "doctor-rules-r1",
+      sourceRevision: state.doctorRevision,
+      expiresAt: "2026-07-16T08:10:00.000Z",
+      risk: "low",
+      source: proposalSource,
+      changes: [{
+        path: "/normalReply/maxRetries",
+        action: "add",
+        summary: proposalSource === "ai"
+          ? "AI 建议补充失败重试次数 3"
+          : "补齐字段 /normalReply/maxRetries",
+        risk: "low"
+      }]
+    },
+    ai: { available: true, provider }
   };
 }
 

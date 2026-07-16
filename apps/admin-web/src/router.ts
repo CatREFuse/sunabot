@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from "vue-router";
 import ConversationsView from "./views/ConversationsView.vue";
+import ConfigDoctorView from "./views/ConfigDoctorView.vue";
 import ImagesView from "./views/ImagesView.vue";
 import LogsView from "./views/LogsView.vue";
 import MemoryView from "./views/MemoryView.vue";
@@ -28,6 +29,7 @@ export const router = createRouter({
     { path: "/agents", name: "agents", component: AgentsView },
     { path: "/agent-settings/:section?", name: "agent-settings", component: SettingsView, props: { scope: "agent" } },
     { path: "/settings/:section?", name: "settings", component: SettingsView, props: { scope: "system" } },
+    { path: "/config-doctor", name: "config-doctor", component: ConfigDoctorView },
     { path: "/:pathMatch(.*)*", redirect: "/overview" }
   ],
   scrollBehavior: () => ({ top: 0 })

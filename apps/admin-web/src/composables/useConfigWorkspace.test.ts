@@ -29,6 +29,7 @@ function deferred<T>() {
 
 function config(adminName: string): AppConfig {
   return {
+    schemaVersion: 1,
     server: { host: "127.0.0.1", port: 8787 },
     persona: {
       defaultAgentId: "plana",

@@ -30,6 +30,7 @@ const moreSections: Array<{
     label: "公共系统",
     items: [
       { to: "/settings", label: "系统设置", description: "模型、账户与连接", icon: "bx-cog" },
+      { to: "/config-doctor", label: "配置医生", description: "检查并修复配置", icon: "bx-first-aid" },
       { to: "/system-prompts", label: "系统提示词", description: "所有 Agent 的默认提示词", icon: "bx-file" }
     ]
   }

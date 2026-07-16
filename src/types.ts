@@ -170,6 +170,7 @@ export interface BotConfig {
 }
 
 export interface AppConfig {
+  schemaVersion: 1;
   server: {
     host: string;
     port: number;

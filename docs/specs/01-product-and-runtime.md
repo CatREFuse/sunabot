@@ -28,6 +28,8 @@ NapCat 在 macOS、WSL2 和 Linux 上始终运行于独立 Docker 容器。Sunab
 
 `status`、`doctor`、管理 API 和平台入口共用 schema v1 的只读运行探针，分别报告 liveness、readiness 与 capability。探针统一核对 workspace、迁移状态、Core、OneBot、每个 QQ、Provider、Codex、LibreOffice 和 bubblewrap；QQ 临时离线只降低 readiness，不把 Core 判为死亡。Provider readiness 同时区分配置完成和有界健康请求验证成功，密钥只进入对应鉴权请求头。公开 `/healthz/runtime` 只返回 schema 与 liveness，账号和能力明细只通过管理员鉴权接口返回。
 
+管理台“配置医生”是独立于运行探针的系统配置检查与修复能力，当前只处理 `workspace/business/config/sunabot.json`。它先执行本地确定性扫描，再允许管理员显式发起一次无工具的 AI 结构化建议，并在确认后通过管理 API 应用受限修改；Agent manifest、提示词、凭据、SQLite 和其他 workspace 文件不在当前范围内。该能力不改变 `./sunabot.sh doctor` 的只读语义，当前也没有配置医生 CLI 离线修复入口。
+
 首次运行使用带 HMAC 的持久 journal；workspace 完整父目录链在 marker、配置、凭据、SQLite、注册表或运行目录写入前逐级拒绝用户符号链接。主库 schema、队列 schema、关键表列、约束、外键和索引全部通过后才能完成首次运行；每个持久化边界支持幂等继续或受控回滚，回滚保留未知文件。`help` 成功退出且不安装依赖；`status`、`doctor`、`logs` 和 `down` 保持只读，只有 `up`、`restart` 或显式 `bootstrap` 可以安装依赖。
 
 统一 launcher 在 `up`、`down` 和 `restart` 的运行状态检查前核对当前 workspace 的 NapCat Compose one-off 探针。Docker `ps` 仍报告探针存在而 `inspect` 返回对象不存在时，macOS Colima 的交互终端必须在明确告知其他 Docker 容器会短暂中断后取得确认，随后重启 Colima、等待 Docker Engine 就绪并复验悬空记录消失；非交互命令和其他 Docker Engine 必须失败关闭并返回明确操作。该恢复不能自动执行数据迁移，也不能放宽活动容器、端口、恢复点或迁移标记门禁。

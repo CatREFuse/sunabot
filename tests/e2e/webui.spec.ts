@@ -554,6 +554,72 @@ test("旧版系统配置缺少回复重试时仍可打开设置页", async ({ pa
   await expect(page.getByText('"undefined" is not valid JSON', { exact: true })).toHaveCount(0);
 });
 
+test("配置医生独立检查、显式 AI 诊断并只提交方案标识", async ({ page }) => {
+  const state = await installMockApi(page);
+  await page.goto("/overview");
+
+  const desktopNavigation = page.getByRole("navigation", { name: "主导航" });
+  const desktopItems = await desktopNavigation.getByRole("link").evaluateAll((links) => (
+    links.map((link) => link.getAttribute("href") ?? "")
+  ));
+  expect(desktopItems.indexOf("/settings")).toBeLessThan(desktopItems.indexOf("/config-doctor"));
+  expect(desktopItems.indexOf("/config-doctor")).toBeLessThan(desktopItems.indexOf("/system-prompts"));
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("button", { name: "更多", exact: true }).click();
+  const moreDialog = page.getByRole("dialog", { name: "更多" });
+  const mobileItems = await moreDialog.getByRole("link").evaluateAll((links) => (
+    links.map((link) => link.getAttribute("href") ?? "")
+  ));
+  expect(mobileItems.indexOf("/settings")).toBeLessThan(mobileItems.indexOf("/config-doctor"));
+  expect(mobileItems.indexOf("/config-doctor")).toBeLessThan(mobileItems.indexOf("/system-prompts"));
+  await moreDialog.getByRole("button", { name: "关闭", exact: true }).click();
+
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/config-doctor");
+  await expect(page.getByRole("heading", { name: "配置医生", exact: true })).toBeVisible();
+  await expect(page.getByText("发现 1 项可修复问题", { exact: true })).toBeVisible();
+  await expect(page.getByText("本地规则 · 可修复", { exact: true })).toBeVisible();
+  await expect(page.getByText("/normalReply/maxRetries", { exact: true }).first()).toBeVisible();
+  await expect.poll(() => state.doctorRequests).toEqual([
+    { method: "GET", path: "/api/config-doctor/scan" }
+  ]);
+  expect(state.patchRequests).toEqual([]);
+
+  await page.getByRole("button", { name: "AI 诊断", exact: true }).click();
+  await expect(page.getByText("AI 诊断已完成", { exact: true })).toBeVisible();
+  await expect(page.getByText("AI 诊断 · 可修复", { exact: true })).toBeVisible();
+  await expect.poll(() => state.doctorRequests.filter((request) => request.path.endsWith("/propose")).length).toBe(1);
+  expect(state.doctorRequests.find((request) => request.path.endsWith("/propose"))?.body).toEqual({
+    sourceRevision: "doctor-r1"
+  });
+
+  await page.getByRole("button", { name: "应用修复", exact: true }).click();
+  let repairDialog = page.getByRole("dialog", { name: "应用这些修复？" });
+  await expect(repairDialog).toBeVisible();
+  await repairDialog.getByRole("button", { name: "取消", exact: true }).click();
+  await expect(repairDialog).toBeHidden();
+  expect(state.doctorRequests.filter((request) => request.path.endsWith("/apply"))).toEqual([]);
+
+  await page.getByRole("button", { name: "应用修复", exact: true }).click();
+  repairDialog = page.getByRole("dialog", { name: "应用这些修复？" });
+  await repairDialog.getByRole("button", { name: "应用修复", exact: true }).click();
+  await expect(page.getByText("配置正常", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "配置已修复", exact: true })).toBeVisible();
+
+  const applyRequest = state.doctorRequests.find((request) => request.path.endsWith("/apply"));
+  expect(applyRequest?.body).toEqual({
+    proposalId: "doctor-ai-r1",
+    sourceRevision: "doctor-r1"
+  });
+  expect(Object.keys(applyRequest?.body as Record<string, unknown>).sort()).toEqual([
+    "proposalId",
+    "sourceRevision"
+  ]);
+  expect(state.patchRequests).toEqual([]);
+  expect(state.doctorRequests.filter((request) => request.path.endsWith("/scan"))).toHaveLength(2);
+});
+
 test("工具目录支持启停、全局说明和继承说明恢复", async ({ page }) => {
   const state = await installMockApi(page);
   await page.goto("/agent-settings/tools");

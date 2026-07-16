@@ -29,6 +29,7 @@ import {
 const rootDir = discoverProjectRoot(path.dirname(fileURLToPath(import.meta.url)));
 const workspaceDir = resolveWorkspaceDir(process.env.SUNABOT_WORKSPACE);
 const AUTO_CODEX_EXECUTABLE = "auto";
+export const CONFIG_SCHEMA_VERSION = 1 as const;
 
 if (process.env.NODE_ENV !== "test") {
   dotenv.config({ path: path.join(workspaceDir, WORKSPACE_LAYOUT.secretsEnv), override: false });
@@ -91,6 +92,7 @@ export function defaultConfig(): AppConfig {
   ];
 
   return {
+    schemaVersion: CONFIG_SCHEMA_VERSION,
     server: { host, port },
     persona: {
       defaultAgentId: "plana",
@@ -205,7 +207,7 @@ export async function loadConfig(): Promise<AppConfig> {
 
   try {
     const raw = await fs.readFile(configPath, "utf8");
-    return mergeConfig(defaultConfig(), JSON.parse(raw) as Partial<AppConfig>);
+    return normalizeConfigDocument(JSON.parse(raw));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
       throw error;
@@ -223,12 +225,31 @@ export async function saveConfig(config: AppConfig) {
     path.dirname(configPath),
     `.${path.basename(configPath)}.${process.pid}.${Date.now()}.tmp`
   );
-  await fs.writeFile(temporaryPath, `${JSON.stringify(config, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
   try {
+    const handle = await fs.open(temporaryPath, "wx", 0o600);
+    try {
+      await handle.writeFile(`${JSON.stringify(config, null, 2)}\n`, { encoding: "utf8" });
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
     await fs.rename(temporaryPath, configPath);
+    await syncDirectory(path.dirname(configPath));
   } catch (error) {
     await fs.rm(temporaryPath, { force: true });
     throw error;
+  }
+}
+
+async function syncDirectory(directory: string) {
+  let handle;
+  try {
+    handle = await fs.open(directory, "r");
+    await handle.sync();
+  } catch {
+    // Directory fsync is unavailable on some supported filesystems; the file itself is already synced.
+  } finally {
+    await handle?.close().catch(() => undefined);
   }
 }
 
@@ -327,16 +348,35 @@ export function getDefaultProvider(config: AppConfig) {
   );
 }
 
-function mergeConfig(base: AppConfig, incoming: Partial<AppConfig>): AppConfig {
+export function normalizeConfigDocument(
+  input: unknown,
+  options: { applyRuntimeOverrides?: boolean } = {}
+): AppConfig {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new Error("系统配置必须是 JSON 对象。");
+  }
+  const incoming = input as Partial<AppConfig> & { schemaVersion?: unknown };
+  if (incoming.schemaVersion != null && incoming.schemaVersion !== CONFIG_SCHEMA_VERSION) {
+    const error = new Error(`不支持的系统配置版本：${String(incoming.schemaVersion)}。`);
+    Object.assign(error, { code: "CONFIG_SCHEMA_VERSION_UNSUPPORTED" });
+    throw error;
+  }
+  return mergeConfig(defaultConfig(), incoming, options.applyRuntimeOverrides !== false);
+}
+
+function mergeConfig(
+  base: AppConfig,
+  incoming: Partial<AppConfig>,
+  applyRuntimeOverrides: boolean
+): AppConfig {
   const bot = mergeBotConfig(base.bot, incoming.bot as Partial<BotConfig> | undefined, incoming.onebot?.quoteGroupReplies);
   const providerItems = incoming.providers?.items?.length ? incoming.providers.items : base.providers.items;
   const fileServer = { ...base.server, ...incoming.server };
   return {
-    ...base,
-    ...incoming,
+    schemaVersion: CONFIG_SCHEMA_VERSION,
     server: {
-      host: process.env.SUNABOT_HOST == null ? fileServer.host : base.server.host,
-      port: process.env.SUNABOT_PORT == null ? fileServer.port : base.server.port
+      host: !applyRuntimeOverrides || process.env.SUNABOT_HOST == null ? fileServer.host : base.server.host,
+      port: !applyRuntimeOverrides || process.env.SUNABOT_PORT == null ? fileServer.port : base.server.port
     },
     persona: {
       defaultAgentId: incoming.persona?.defaultAgentId ?? base.persona.defaultAgentId,

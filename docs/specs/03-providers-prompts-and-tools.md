@@ -12,6 +12,8 @@ Provider 类型包括 Codex 订阅、OpenAI 官方、Anthropic 官方、Gemini �
 
 Provider 请求使用应用启动时安装的统一出站 dispatcher。显式代理和标准代理环境变量从 `workspace/secrets/runtime.env` 或进程环境读取；WSL 自动模式仅在没有显式代理时探测当前默认网关。代理选择不改变 OneBot 的 Compose 私有网络或同机宿主网关链路。
 
+配置医生的 AI 诊断只在管理员显式请求时使用当前运行配置的默认 Provider，单次调用不提供任何 Function Tool，不执行多轮工具循环，并以严格 JSON Schema 请求结构化的 `add`/`replace` 建议。调用关闭 SDK 级重试，使用 `config_doctor` 阶段和提示词家族写入请求日志；服务端仍会重新解析、校验并按固定字段白名单过滤模型输出。AI 建议只补充本地规则尚未覆盖的允许字段，不能修改 `schemaVersion`、Provider、身份、路径、凭据或其他受保护配置，也不能直接写入配置文件。
+
 OpenAI 官方 Responses 与 Codex Responses 请求必须携带稳定、不可逆且不包含明文身份的 `prompt_cache_key`。缓存键绑定 Provider、模型、行为、提示词家族、记忆类型、稳定 system/developer 前缀、完整工具定义和输出 schema；经验证支持稳定前缀缓存且实际存在静态前缀的模型按该前缀跨会话复用，其余请求继续包含完整会话 ID。同一工具循环的多轮请求复用同一个键。OpenAI 兼容协议不强制注入该字段，避免不支持扩展字段的服务拒绝请求。
 
 GPT-5.6 及后续支持该协议的 OpenAI 官方 Responses 请求必须在最后一段前导静态 system/developer `input_text` 上设置显式 `prompt_cache_breakpoint`，并保留 Provider 默认的最新消息隐式断点。当前 Codex Responses 后端拒绝 `prompt_cache_breakpoint` 和 `prompt_cache_options`；GPT-5.6 及后续 Codex 请求不发送这些字段，将原有合并后的 system 文本映射为首个 developer input，不再同时发送 `instructions`，仅使用 `prompt_cache_key` 与精确前缀参与后端隐式缓存。原有非 system 输入的内容与顺序、工具定义和输出 schema 保持不变。旧模型、未知模型和兼容 Provider 不发送显式断点字段。静态前缀变化时缓存键自动变化；动态历史、召回记忆和当前输入不能进入稳定前缀哈希。

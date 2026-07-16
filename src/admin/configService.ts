@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
-import { getConfigPath, getWorkspaceDir, loadConfig, saveConfig } from "../config.js";
-import { OpenAIProvider } from "../../adapters/model/openaiProvider.js";
+import { getConfigPath, loadConfig, saveConfig } from "../config.js";
 import type {
   AgentToolName,
   AppConfig,
@@ -17,8 +16,7 @@ import { getModelCatalogEntry } from "./models.js";
 import {
   DEFAULT_TAVILY_API_KEY_ENV,
   isEnvironmentName,
-  looksLikeDirectApiKey,
-  resolveTavilyApiKeys
+  looksLikeDirectApiKey
 } from "../../adapters/model/webSearchSettings.js";
 import { WORKSPACE_LAYOUT, workspaceRelativeReference } from "../../packages/platform/workspaceLayout.js";
 import {
@@ -49,6 +47,10 @@ import {
 import { configRevision } from "./configRevision.js";
 import { validateBroadcastStormConfig } from "./broadcastStormConfig.js";
 import { validateNormalReplyConfig } from "./normalReplyConfig.js";
+import { ConfigDoctorApplyService, type DoctorCandidateInput } from "./configDoctorApply.js";
+import { configFieldStates, type ConfigFieldStates } from "./configFieldStates.js";
+export type { DoctorCandidateInput } from "./configDoctorApply.js";
+export { configFieldStates } from "./configFieldStates.js";
 export { configRevision, stableJson } from "./configRevision.js";
 export const CONFIG_SECTIONS = [
   "server",
@@ -91,12 +93,7 @@ export interface ConfigSectionValueMap {
 export interface ConfigEnvelope {
   config: AppConfig;
   revision: string;
-  fieldStates: Record<string, {
-    applyMode: ApplyMode;
-    secretConfigured?: boolean;
-    secretCount?: number;
-    storedSecretCount?: number;
-  }>;
+  fieldStates: ConfigFieldStates;
 }
 
 export interface PreparedConfigApply {
@@ -106,6 +103,8 @@ export interface PreparedConfigApply {
 
 export interface ConfigServiceOptions {
   prepareApply: (candidate: AppConfig) => Promise<PreparedConfigApply>;
+  getActiveConfig?: () => AppConfig;
+  doctorBackupRoot?: string;
   mutex?: AdminMutationMutex;
   recoveryState?: AdminRecoveryState;
 }
@@ -113,10 +112,19 @@ export interface ConfigServiceOptions {
 export class ConfigService {
   private readonly mutex: AdminMutationMutex;
   private readonly recoveryState: AdminRecoveryState;
+  private readonly doctorApply: ConfigDoctorApplyService;
 
   constructor(private readonly options: ConfigServiceOptions) {
     this.mutex = options.mutex ?? adminMutationMutex;
     this.recoveryState = options.recoveryState ?? adminRecoveryState;
+    this.doctorApply = new ConfigDoctorApplyService({
+      prepareApply: options.prepareApply,
+      validate: validateCompleteConfig,
+      getActiveConfig: options.getActiveConfig,
+      backupRoot: options.doctorBackupRoot,
+      mutex: this.mutex,
+      recoveryState: this.recoveryState
+    });
   }
 
   async readEnvelope(config?: AppConfig): Promise<ConfigEnvelope> {
@@ -156,6 +164,10 @@ export class ConfigService {
       candidate.bot.orchestrator = value.orchestrator;
       return { candidate, applyMode: "hot", restartRequiredFields: [] };
     });
+  }
+
+  async applyDoctorCandidate(input: DoctorCandidateInput) {
+    return this.doctorApply.apply(input);
   }
 
   private async applyMutation(
@@ -224,63 +236,6 @@ function redactConfigSecrets(config: AppConfig) {
   redacted.bot.tools.websearch.tavilyApiKey = "";
   redacted.bot.tools.websearch.tavilyApiKeys = [];
   return redacted;
-}
-
-export function configFieldStates(config: AppConfig): ConfigEnvelope["fieldStates"] {
-  const states: ConfigEnvelope["fieldStates"] = {};
-  addFieldStates(states, config.server, "server", "restart");
-  addFieldStates(states, config.persona, "persona", "hot");
-  addFieldStates(states, config.providers, "providers", "hot");
-  addFieldStates(states, config.broadcastStorm, "broadcastStorm", "hot");
-  addFieldStates(states, config.normalReply, "normalReply", "hot");
-  addFieldStates(states, config.bot, "bot", "hot");
-  addFieldStates(states, config.onebot, "onebot", "hot");
-
-  states["onebot.reverseWsPath"] = { applyMode: "restart" };
-  states["onebot.accessTokenEnv"] = {
-    applyMode: "reconnect",
-    secretConfigured: Boolean(process.env[config.onebot.accessTokenEnv])
-  };
-  const tavilyCredentials = resolveTavilyApiKeys(config.bot.tools.websearch, getWorkspaceDir());
-  const storedTavilyKeys = uniqueStrings([
-    ...(config.bot.tools.websearch.tavilyApiKeys ?? []),
-    config.bot.tools.websearch.tavilyApiKey
-  ]);
-  states["bot.tools.websearch.tavilyApiKeyEnv"] = {
-    applyMode: "hot",
-    secretConfigured: tavilyCredentials.length > 0,
-    secretCount: tavilyCredentials.length,
-    storedSecretCount: storedTavilyKeys.length
-  };
-  states["bot.tools.websearch.tavilyApiKey"] = states["bot.tools.websearch.tavilyApiKeyEnv"]!;
-  states["bot.tools.websearch.tavilyApiKeys"] = states["bot.tools.websearch.tavilyApiKeyEnv"]!;
-  states["bot.tools.codex.maxConcurrency"] = { applyMode: "restart" };
-  for (const [index, provider] of config.providers.items.entries()) {
-    states[`providers.items.${provider.id}`] = { applyMode: "hot" };
-    states[`providers.items.${provider.id}.apiKeyEnv`] = {
-      applyMode: "hot",
-      secretConfigured: new OpenAIProvider(provider).hasApiKey()
-    };
-    states[`providers.items.${index}.apiKeyEnv`] = states[`providers.items.${provider.id}.apiKeyEnv`]!;
-  }
-  return states;
-}
-
-function addFieldStates(
-  states: ConfigEnvelope["fieldStates"],
-  value: unknown,
-  prefix: string,
-  applyMode: ApplyMode
-) {
-  states[prefix] = { applyMode };
-  if (Array.isArray(value)) {
-    value.forEach((item, index) => addFieldStates(states, item, `${prefix}.${index}`, applyMode));
-    return;
-  }
-  if (!value || typeof value !== "object") return;
-  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-    addFieldStates(states, child, `${prefix}.${key}`, applyMode);
-  }
 }
 
 export function validateProviderDraft(input: unknown): ProviderConfig {
@@ -696,7 +651,10 @@ function validateOnebot(input: unknown): ConfigSectionValueMap["onebot"] {
   };
 }
 
-function validateCompleteConfig(config: AppConfig) {
+export function validateCompleteConfig(config: AppConfig) {
+  if (config.schemaVersion !== 1) {
+    badRequest("CONFIG_INVALID", "系统配置版本无效。", "schemaVersion");
+  }
   if (config.persona.defaultAgentId !== "plana") {
     badRequest("CONFIG_INVALID", "defaultAgentId 必须为 plana。", "persona.defaultAgentId");
   }

@@ -213,6 +213,18 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     await expect(page.getByLabel("失败重试次数")).toHaveValue("3");
     await capture(page, viewport.name, theme, "settings-normal-reply");
 
+    if (viewport.width === 390 || viewport.width === 1440) {
+      await page.goto("/config-doctor");
+      await expect(page.getByRole("heading", { name: "配置医生", exact: true })).toBeVisible();
+      await expect(page.getByText("发现 1 项可修复问题", { exact: true })).toBeVisible();
+      await capture(page, viewport.name, theme, "settings-config-doctor-report");
+      await page.getByRole("button", { name: "应用修复", exact: true }).click();
+      const doctorDialog = page.getByRole("dialog", { name: "应用这些修复？" });
+      await expect(doctorDialog).toBeVisible();
+      await capture(page, viewport.name, theme, "settings-config-doctor-confirm");
+      await doctorDialog.getByRole("button", { name: "取消", exact: true }).click();
+    }
+
     await page.goto("/settings/broadcastStorm");
     await expect(page.getByRole("heading", { name: "广播风暴" })).toBeVisible();
     await expect(page.getByLabel("广播风暴嗅探")).toBeChecked();

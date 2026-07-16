@@ -51,15 +51,22 @@ describe("admin request authorization", () => {
     await expect(service.authorize(request({ url: "/api/status", cookie }))).resolves.toBeUndefined();
     await expect(service.authorize(request({
       method: "POST",
-      url: "/api/config",
+      url: "/api/config-doctor/propose",
       origin: "http://127.0.0.1:8787",
       cookie,
       csrf: status.csrfToken
     }))).resolves.toBeUndefined();
-    await expect(service.authorize(request({ method: "POST", url: "/api/config", cookie }))).rejects.toMatchObject({
+    await expect(service.authorize(request({ method: "POST", url: "/api/config-doctor/apply", cookie }))).rejects.toMatchObject({
       statusCode: 403,
       code: "ADMIN_CSRF_INVALID"
     });
+    await expect(service.authorize(request({
+      method: "POST",
+      url: "/api/config-doctor/apply",
+      origin: "https://untrusted.example.test",
+      cookie,
+      csrf: status.csrfToken
+    }))).rejects.toMatchObject({ statusCode: 403, code: "ADMIN_ORIGIN_REJECTED" });
   });
 
   it("keeps bearer authentication for non-browser automation but removes loopback bypass", async () => {

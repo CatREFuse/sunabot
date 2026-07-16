@@ -122,6 +122,7 @@ export interface BotToolSettingsDraft extends BotToolSettings {
 }
 
 export interface AppConfig {
+  schemaVersion: 1;
   server: { host: string; port: number };
   persona: {
     defaultAgentId: string;
@@ -218,6 +219,65 @@ export interface ConfigPatchResponse extends ConfigEnvelope {
   ok?: boolean;
   applyMode?: ApplyMode;
   restartRequiredFields?: string[];
+}
+
+export type ConfigDoctorStatus = "healthy" | "repairable" | "manual";
+export type ConfigDoctorSeverity = "warning" | "error";
+export type ConfigDoctorIssueSource = "rules" | "syntax" | "ai";
+export type ConfigDoctorRisk = "low" | "medium";
+
+export interface ConfigDoctorIssue {
+  id: string;
+  path: string;
+  message: string;
+  severity: ConfigDoctorSeverity;
+  repairable: boolean;
+  source: ConfigDoctorIssueSource;
+}
+
+export interface ConfigDoctorChange {
+  path: string;
+  action: "add" | "replace" | "remove";
+  summary: string;
+  risk: ConfigDoctorRisk;
+}
+
+export interface ConfigDoctorProposal {
+  id: string;
+  sourceRevision: string;
+  expiresAt: string;
+  risk: ConfigDoctorRisk;
+  source: "rules" | "ai";
+  changes: readonly ConfigDoctorChange[];
+}
+
+export interface ConfigDoctorProvider {
+  label: string;
+  model: string;
+  destination: string;
+}
+
+export interface ConfigDoctorReport {
+  schemaVersion: 1;
+  generatedAt: string;
+  sourceRevision: string;
+  status: ConfigDoctorStatus;
+  issues: readonly ConfigDoctorIssue[];
+  proposal?: ConfigDoctorProposal;
+  ai: {
+    available: boolean;
+    provider?: ConfigDoctorProvider;
+  };
+}
+
+export interface ConfigDoctorApplyResult {
+  ok: boolean;
+  repairId: string;
+  repairedAt: string;
+  sourceRevision: string;
+  backupPath: string;
+  restartRequired: boolean;
+  appliedChanges: number;
 }
 
 export interface ModelCatalogItem {
