@@ -1,4 +1,6 @@
 import path from "node:path";
+import { resolveAgentWorkbench } from "../agents/public.js";
+import type { BashExecutionBackend } from "./bashAudit.js";
 import {
   ensureWorkspaceBashIsolation,
   type WorkspaceBashSandboxOptions
@@ -8,6 +10,8 @@ const DEFAULT_CAPABILITY_TTL_MS = 30_000;
 
 export interface WorkspaceBashCapabilityProbeOptions {
   platform?: NodeJS.Platform;
+  backend?: BashExecutionBackend;
+  runtimeMode?: string;
   sandbox?: WorkspaceBashSandboxOptions;
   ttlMs?: number;
   now?: () => number;
@@ -44,24 +48,29 @@ export function createWorkspaceBashCapabilityProbe(
   options: WorkspaceBashCapabilityProbeOptions = {}
 ) {
   const platform = options.platform ?? process.platform;
+  const backend = options.backend ?? "native";
+  const runtimeMode = options.runtimeMode ?? process.env.SUNABOT_RUNTIME_MODE ?? "native";
   const ttlMs = positiveInteger(options.ttlMs, DEFAULT_CAPABILITY_TTL_MS);
   const now = options.now ?? Date.now;
   const cache = new Map<string, { expiresAt: number; result: Promise<boolean> }>();
 
   return async (workspacePath: string) => {
-    if (platform !== "linux") return false;
     const workspace = path.resolve(workspacePath);
-    const cached = cache.get(workspace);
+    const cacheKey = `${backend}\0${runtimeMode}\0${workspace}`;
+    const cached = cache.get(cacheKey);
     const currentTime = now();
     if (cached && cached.expiresAt > currentTime) return cached.result;
 
-    const result = ensureWorkspaceBashIsolation(workspace, {
-      PATH: process.env.PATH || "/usr/bin:/bin"
-    }, {
-      ...options.sandbox,
-      platform
-    }).then(() => true, () => false);
-    cache.set(workspace, { expiresAt: currentTime + ttlMs, result });
+    const result = resolveAgentWorkbench(workspace)
+      .then((workbench) => ensureWorkspaceBashIsolation(backend, workbench, {
+        PATH: process.env.PATH || "/usr/bin:/bin"
+      }, {
+        ...options.sandbox,
+        platform,
+        runtimeMode
+      }))
+      .then(() => true, () => false);
+    cache.set(cacheKey, { expiresAt: currentTime + ttlMs, result });
     return result;
   };
 }

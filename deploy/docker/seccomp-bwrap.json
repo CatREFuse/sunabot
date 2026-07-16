@@ -67,12 +67,12 @@
       "args": [
         {
           "index": 0,
-          "value": 2114060288,
-          "valueTwo": 1040318464,
+          "value": 2114060416,
+          "valueTwo": 2114060288,
           "op": "SCMP_CMP_MASKED_EQ"
         }
       ],
-      "comment": "Allow exactly the bubblewrap namespace set (mnt,cgroup,uts,ipc,user,pid), never CLONE_NEWNET."
+      "comment": "Allow exactly the bubblewrap namespace set (mnt,cgroup,uts,ipc,user,pid,net); no additional namespace or time flag."
     },
     {
       "names": [
@@ -698,7 +698,7 @@
       "args": [
         {
           "index": 0,
-          "value": 2114060288,
+          "value": 2114060416,
           "op": "SCMP_CMP_MASKED_EQ"
         }
       ],
@@ -720,7 +720,7 @@
       "args": [
         {
           "index": 1,
-          "value": 2114060288,
+          "value": 2114060416,
           "op": "SCMP_CMP_MASKED_EQ"
         }
       ],
