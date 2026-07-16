@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { nanoid } from "nanoid";
 import {
   AppConfig,
@@ -126,7 +127,8 @@ export async function runtime_sendAssistantReply(this: RuntimeHost,
     isCurrent: () => boolean = () => true,
     delivery?: ReplyDelivery,
     quoteReply = true,
-    trace: AssistantMessageTrace = { messageOrigin: "text" }
+    trace: AssistantMessageTrace = { messageOrigin: "text" },
+    deliveryTiming: "buffered" | "immediate" = "buffered"
   ) {
     if (
       !this.isReplySenderAllowed(incoming.userId) ||
@@ -146,7 +148,7 @@ export async function runtime_sendAssistantReply(this: RuntimeHost,
     if (!isCurrent()) return undefined;
 
     if (delivery) {
-      delivery.outbox.push(this.replyDeliveryDraft(
+      const draft = this.replyDeliveryDraft(
         incoming,
         replyText,
         isAdmin,
@@ -155,7 +157,19 @@ export async function runtime_sendAssistantReply(this: RuntimeHost,
         undefined,
         quoteReply,
         trace
-      ));
+      );
+      if (deliveryTiming === "immediate" && delivery.emitOutbox) {
+        draft.dedupeFingerprint = immediateReplyFingerprint(
+          incoming,
+          replyText,
+          generatedImageAssets,
+          quoteReply,
+          trace
+        );
+        await delivery.emitOutbox(draft);
+      } else {
+        delivery.outbox.push(draft);
+      }
       return undefined;
     }
 
@@ -406,4 +420,28 @@ export class RuntimeDelivery {
   replyDeliveryDraft(...args: Parameters<typeof runtime_replyDeliveryDraft>) { return runtime_replyDeliveryDraft.call(this.host, ...args); }
   deliverReplyOutbox(...args: Parameters<typeof runtime_deliverReplyOutbox>) { return runtime_deliverReplyOutbox.call(this.host, ...args); }
   sendErrorReply(...args: Parameters<typeof runtime_sendErrorReply>) { return runtime_sendErrorReply.call(this.host, ...args); }
+}
+
+function immediateReplyFingerprint(
+  incoming: ParsedIncomingMessage,
+  text: string,
+  generatedImages: ImageResult[],
+  quoteReply: boolean,
+  trace: AssistantMessageTrace
+) {
+  return createHash("sha256").update(JSON.stringify({
+    target: {
+      scope: incoming.scope,
+      messageId: incoming.messageId,
+      userId: incoming.userId,
+      groupId: incoming.groupId,
+      selfId: incoming.selfId,
+      accountId: incoming.accountId,
+      agentId: incoming.agentId
+    },
+    text,
+    generatedImages: generatedImages.map(({ url, filePath }) => ({ url, filePath })),
+    quoteReply,
+    messageOrigin: trace.messageOrigin
+  })).digest("hex");
 }

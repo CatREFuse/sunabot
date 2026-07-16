@@ -13,6 +13,8 @@ import {
   requiredText
 } from "./sessionStoreBackend.js";
 import type {
+  AppendTurnOutboxInput,
+  AppendTurnOutboxResult,
   ClaimedTurn,
   ClaimOptions,
   DeferTurnInput,
@@ -101,6 +103,52 @@ export abstract class SessionTurnStore extends SessionOutboxStore {
       WHERE id = ? AND status = 'running' AND worker_id = ?
     `).run(now + positiveInteger(leaseMs, this.defaultLeaseMs, "leaseMs"), turnId, workerId);
     return Number(result.changes) === 1;
+  }
+
+  appendTurnOutbox(input: AppendTurnOutboxInput): AppendTurnOutboxResult {
+    const turnId = requiredText(input.turnId, "turnId");
+    const workerId = requiredText(input.workerId, "workerId");
+    const dedupeKey = requiredText(input.dedupeKey, "dedupeKey");
+    const dedupeFingerprint = requiredText(input.draft.dedupeFingerprint, "outbox.dedupeFingerprint");
+    const persistedDedupeKey = `${dedupeKey}:${dedupeFingerprint}`;
+    const now = this.now();
+
+    return this.transaction(() => {
+      const turn = this.requireTurn(turnId);
+      if (turn.status !== "running") {
+        throw new Error(`Turn ${turn.id} is ${turn.status}, not running.`);
+      }
+      this.assertWorker(turn.workerId, workerId, `turn ${turn.id}`);
+      const event = this.requireEvent(turn.eventId);
+      this.assertHeadEvent(event);
+
+      const existingRow = this.database.prepare(`
+        SELECT id FROM outbox
+        WHERE session_id = ?
+          AND (dedupe_key = ? OR (
+            instr(dedupe_key, ?) = 1
+            AND substr(dedupe_key, length(?) + 1, 1) = ':'
+          ))
+      `).get(turn.sessionId, dedupeKey, dedupeKey, dedupeKey) as SqlRow | undefined;
+      if (existingRow) {
+        const existing = this.requireOutbox(String(existingRow.id));
+        const originTurn = this.requireTurn(existing.originTurnId);
+        if (originTurn.eventId !== event.id) {
+          throw new Error(
+            `Outbox dedupe key ${dedupeKey} belongs to event ${originTurn.eventId}, not ${event.id}.`
+          );
+        }
+        if (existing.dedupeKey !== persistedDedupeKey) {
+          throw new Error(`Outbox dedupe fingerprint changed for ${dedupeKey}.`);
+        }
+        return { outbox: existing, inserted: false };
+      }
+
+      return {
+        outbox: this.insertOutbox(turn, { ...input.draft, dedupeKey: persistedDedupeKey }, now),
+        inserted: true
+      };
+    });
   }
 
   finishTurn(input: FinishTurnInput): FinishTurnResult {

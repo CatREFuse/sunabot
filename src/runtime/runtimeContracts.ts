@@ -211,6 +211,7 @@ export interface ReplyDeliveryDraft {
   kind: "onebot.reply";
   payload: AssistantReplyOutboxEnvelope;
   dedupeKey?: string;
+  dedupeFingerprint?: string;
 }
 export interface NoReplyPokeDeliveryDraft {
   kind: "onebot.poke";
@@ -219,6 +220,7 @@ export interface NoReplyPokeDeliveryDraft {
 }
 export interface ReplyDelivery {
   outbox: Array<ReplyDeliveryDraft | NoReplyPokeDeliveryDraft>;
+  emitOutbox?: (draft: ReplyDeliveryDraft | NoReplyPokeDeliveryDraft) => Promise<unknown>;
   terminalStatus?: "no_reply";
 }
 export interface DeferredCodexTurn {

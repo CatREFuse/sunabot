@@ -10,7 +10,7 @@
 npm run verify
 ```
 
-`verify` 依次执行 runtime contract、architecture、SQLite recovery、类型检查、单元与集成测试、独立 runtime smoke、CI 容量基线、生产构建和 E2E。
+`verify` 依次执行 runtime contract、architecture、SQLite recovery、类型检查、单元与集成测试、独立 runtime smoke、CI 容量基线、生产构建和 E2E。消息专项回归必须证明 `assistant_text` 在当前 turn 未完成且 inline 工具尚未继续时已经写入 durable outbox 并远端发送，最终正文随后按 FIFO 投递；事件重试不能重复发送已提交的中间消息，deferred `dispatch_message` 仍保持 acknowledgement 送达后才允许 worker claim。
 
 涉及界面时还要运行视觉测试并检查截图；正常回复重试必须覆盖默认 3 次、0—10 配置校验、公共分区热更新、SDK 与原生 HTTP Provider 的相同请求重试、取消后停止、请求日志尝试序号，以及 light/dark 和移动端设置页。Web Chat 必须覆盖管理员身份、每 Agent 顺序执行、连续消息 ID、目标 Agent 日志与 Token 选库、Web/QQ 外发隔离、消息轮询、发送校验、键盘操作、图片缩略图和移动端布局。多 Agent 测试必须覆盖 Agent 原子创建与运行时失败补偿、路径校验、独立 SQLite 与队列、独立人格、公共系统提示词继承、Agent 系统提示词覆盖、QQ 唯一归属、WebUI 端口唯一性、primary 不可移除、同一 OneBot listener 的多账号并发连接、重启恢复、secondary 账号引用与身份查询、primary 兼容接口定向 action、Agent 级和全部 Agent Token 汇总。广播风暴测试必须覆盖同一 Agent 不计数、同群所有不同 Agent 对共同累计、不同群分开计数、补充嗅探账号、重复 OneBot 事件去重、m 窗口淘汰、n 阈值触发、k 静默期、静默期不创建新任务、已 dispatch 任务与 outbox 不受影响、静默期消息只记录、自动恢复、关闭功能与配置热更新。涉及数据迁移时必须核对默认与显式配置 API 直启的写入前零变更门禁、fresh-install 与 completed-migration 标记、首次 marker 发布中断、主库出现后的半初始化拒绝、标记篡改、全部注册 Agent/账号状态漂移、目标 workspace 与端口漂移、必需路径符号链接穿越、外部数据库覆盖、secondary 账号监听、全部账号端口、带标签的各种活动容器、迁移报告四类 copied/preserved 证据、SQLite 表记录数、公共系统提示词哈希、旧文件备份和服务重启后的 API 与 OneBot 状态。Linux 发行验收还要核对干净源码门禁与重新生产构建，预构建 Native Core、生产依赖、Docker Core 构建上下文、迁移 wrapper、门禁模块和迁移文档均存在；在无 `.git`、无开发依赖的解包目录复验真实平台、runtime contract、完整 `dist/`、`tooling/`、生产 `node_modules/` 与锁文件的文件集合及哈希后完成 dry-run，并用篡改 fixture 证明失败关闭。
 

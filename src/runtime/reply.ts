@@ -367,7 +367,8 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
                 ? "assistant_text"
                 : options.messageOrigin ?? "text",
               toolNames: currentToolNames()
-            }
+            },
+            "immediate"
           );
           if (record) sent = true;
         },

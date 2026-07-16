@@ -535,6 +535,36 @@ describe("SunaRuntime Session queue bridge", () => {
     ]);
   });
 
+  it("delivers assistant_text before continuing an inline tool round", async () => {
+    const releaseInlineWork = deferred<void>();
+    let assistantTextDelivered = false;
+    const completeRequestTurn = vi.fn(async (
+      _request: RenderedPromptRequest,
+      options: ProviderCompleteOptions = {}
+    ): Promise<ProviderTurnResult> => {
+      options.onToolCall?.("assistant_text");
+      await options.onAssistantText?.("正在搜索城市范围", "assistant_text");
+      assistantTextDelivered = true;
+      await releaseInlineWork.promise;
+      options.onToolCall?.("websearch");
+      return { kind: "completed", text: "搜索完成" };
+    });
+    const harness = createRuntimeHarness(completeRequestTurn);
+
+    await handleOneBotEvent(harness.runtime, groupEvent(150_001, 100, "inline-progress"), harness.gateway);
+    await waitUntil(() => assistantTextDelivered);
+
+    expect(sentTexts(harness.gateway)).toEqual(["正在搜索城市范围"]);
+    expect(harness.store.listOutbox("group:100")).toHaveLength(1);
+    expect(harness.store.listOutbox("group:100")[0]).toMatchObject({ status: "sent" });
+    expect(harness.store.listTurns("group:100")[0]).toMatchObject({ status: "running" });
+
+    releaseInlineWork.resolve();
+    await harness.coordinator.waitForIdle({ timeoutMs: 3_000 });
+
+    expect(sentTexts(harness.gateway)).toEqual(["正在搜索城市范围", "搜索完成"]);
+  });
+
   it("does not quote messages from users in the group reply filter", async () => {
     const completeRequestTurn = vi.fn(async (
       _request: RenderedPromptRequest,

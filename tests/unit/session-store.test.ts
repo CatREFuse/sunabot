@@ -458,6 +458,83 @@ describe("SessionStore", () => {
     });
   });
 
+  it("appends a running turn outbox idempotently across attempts and rejects key collisions", async () => {
+    const { store } = await createHarness();
+    const firstEvent = store.enqueueEvent({
+      sessionId: "group:active-outbox",
+      kind: "incoming",
+      payload: { text: "first" }
+    });
+    store.enqueueEvent({
+      sessionId: "group:active-outbox",
+      kind: "incoming",
+      payload: { text: "second" }
+    });
+    const firstAttempt = store.claimNextTurn({ workerId: "worker:first" })!;
+    const input = {
+      turnId: firstAttempt.turn.id,
+      workerId: "worker:first",
+      dedupeKey: `turn-outbox:${firstEvent.event.id}:1`,
+      draft: {
+        kind: "reply",
+        payload: { text: "dispatch now" },
+        dedupeFingerprint: "dispatch-now"
+      }
+    };
+
+    expect(() => store.appendTurnOutbox({ ...input, workerId: "worker:wrong" }))
+      .toThrow("does not own turn");
+    const inserted = store.appendTurnOutbox(input);
+    const duplicate = store.appendTurnOutbox({
+      ...input,
+      draft: { ...input.draft }
+    });
+    expect(inserted).toMatchObject({
+      inserted: true,
+      outbox: {
+        status: "pending",
+        dedupeKey: `${input.dedupeKey}:dispatch-now`,
+        payload: { text: "dispatch now" }
+      }
+    });
+    expect(duplicate).toEqual({ outbox: inserted.outbox, inserted: false });
+    expect(() => store.appendTurnOutbox({
+      ...input,
+      draft: {
+        kind: "reply",
+        payload: { text: "changed dispatch" },
+        dedupeFingerprint: "changed-dispatch"
+      }
+    })).toThrow("dedupe fingerprint changed");
+
+    expect(store.recoverAllLeases().turns).toBe(1);
+    const retry = store.claimNextTurn({ workerId: "worker:retry" })!;
+    const repeatedAttempt = store.appendTurnOutbox({
+      ...input,
+      turnId: retry.turn.id,
+      workerId: "worker:retry"
+    });
+    expect(repeatedAttempt).toEqual({ outbox: inserted.outbox, inserted: false });
+    expect(store.listOutbox("group:active-outbox")).toHaveLength(1);
+
+    store.finishTurn({
+      turnId: retry.turn.id,
+      workerId: "worker:retry",
+      outcome: "no_reply"
+    });
+    const secondTurn = store.claimNextTurn({ workerId: "worker:second" })!;
+    expect(() => store.appendTurnOutbox({
+      turnId: secondTurn.turn.id,
+      workerId: "worker:second",
+      dedupeKey: input.dedupeKey,
+      draft: {
+        kind: "reply",
+        payload: { text: "collision" },
+        dedupeFingerprint: "collision"
+      }
+    })).toThrow(`belongs to event ${firstEvent.event.id}`);
+  });
+
   it("atomically defers a turn into a queued tool job and acknowledgement", async () => {
     const { store } = await createHarness();
     const incoming = store.enqueueEvent({

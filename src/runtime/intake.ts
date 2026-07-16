@@ -96,7 +96,8 @@ import {
   OutboxDisconnectedError,
   SessionCoordinator,
   type OutboxDeliveryContext,
-  type SessionHandleResult
+  type SessionHandleResult,
+  type SessionTurnContext
 } from "../../services/sessions/sessionCoordinator.js";
 import { SessionStore, type OutboxRecord, type SessionEventRecord } from "../../services/sessions/sessionStore.js";
 import { TOOL_CALL_TIMEOUT_MS } from "../../services/tools/tools.js";
@@ -338,8 +339,9 @@ export async function runtime_handleInboundMessage(this: RuntimeHost, incoming: 
   }
 export async function runtime_processSessionEvent(this: RuntimeHost,
     event: SessionEventRecord,
-    coordinatorSignal: AbortSignal
+    turnContext: SessionTurnContext
   ): Promise<SessionHandleResult> {
+    const coordinatorSignal = turnContext.signal;
     let timeoutIncoming: ParsedIncomingMessage | undefined;
     let controller: AbortController | undefined;
     try {
@@ -350,7 +352,7 @@ export async function runtime_processSessionEvent(this: RuntimeHost,
             throw new Error(`Session 事件格式无效：${event.id}`);
           }
           timeoutIncoming = payload.incoming;
-          return this.processIncomingReplyEvent(event, payload, signal);
+          return this.processIncomingReplyEvent(event, payload, signal, turnContext.emitOutbox);
         }
         if (event.kind === "tool_completion") {
           const payload = decodeToolCompletion(event.payload);
@@ -374,7 +376,7 @@ export async function runtime_processSessionEvent(this: RuntimeHost,
             }
           });
           const gateway = this.requireActiveGateway();
-          const delivery: ReplyDelivery = { outbox: [] };
+          const delivery: ReplyDelivery = { outbox: [], emitOutbox: turnContext.emitOutbox };
           await this.replyToToolCompletion(payload, gateway, signal, delivery);
           return delivery.outbox.length
             ? { status: "completed", outbox: delivery.outbox }
@@ -411,7 +413,8 @@ export async function runtime_processSessionEvent(this: RuntimeHost,
 export async function runtime_processIncomingReplyEvent(this: RuntimeHost,
     event: SessionEventRecord,
     payload: RuntimeIncomingReplyEventPayload,
-    signal: AbortSignal
+    signal: AbortSignal,
+    emitOutbox?: ReplyDelivery["emitOutbox"]
   ): Promise<SessionHandleResult> {
     const gateway = this.requireActiveGateway();
     const captureSequence = payload.captureSequence;
@@ -461,7 +464,7 @@ export async function runtime_processIncomingReplyEvent(this: RuntimeHost,
         incoming.selfId == null ? "" : String(incoming.selfId)
       ]))
       : undefined;
-    const delivery: ReplyDelivery = { outbox: [] };
+    const delivery: ReplyDelivery = { outbox: [], emitOutbox };
     let deferred: DeferredCodexTurn | undefined;
     await this.handleIncomingMessage(
       channelKey,

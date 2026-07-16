@@ -8,7 +8,8 @@ import {
   OutboxDisconnectedError,
   SessionCoordinator,
   type CodexCoordinatorSettings,
-  type SessionHandleResult
+  type SessionHandleResult,
+  type SessionTurnContext
 } from "../../services/sessions/sessionCoordinator.js";
 import { SessionStore, type SessionEventRecord } from "../../services/sessions/sessionStore.js";
 
@@ -394,6 +395,144 @@ describe("SessionCoordinator", () => {
     coordinator.resume();
     await coordinator.waitForIdle();
     expect(handled).toEqual(["durable first"]);
+  });
+
+  it("delivers an emitted outbox while its event handler is still running", async () => {
+    const store = trackStore(new SessionStore({ databasePath: ":memory:" }));
+    const releaseHandler = deferred<void>();
+    const deliveryObserved = deferred<void>();
+    let handlerReturned = false;
+    const coordinator = trackCoordinator(createCoordinator({
+      store,
+      handleEvent: async (_event, context) => {
+        await context.emitOutbox({
+          kind: "reply",
+          payload: { text: "dispatch immediately" },
+          dedupeFingerprint: "dispatch-immediately"
+        });
+        deliveryObserved.resolve();
+        await releaseHandler.promise;
+        handlerReturned = true;
+        return { status: "no_reply" };
+      },
+      deliverOutbox: (outbox) => ({
+        messageId: (outbox.payload as { text: string }).text
+      })
+    }));
+
+    coordinator.resume();
+    coordinator.enqueueEvent({
+      sessionId: "group:active-delivery",
+      kind: "incoming",
+      payload: { text: "start" }
+    });
+
+    await deliveryObserved.promise;
+    expect(handlerReturned).toBe(false);
+    expect(store.listTurns("group:active-delivery")[0]).toMatchObject({ status: "running" });
+    expect(store.listOutbox("group:active-delivery")[0]).toMatchObject({
+      status: "sent",
+      result: { messageId: "dispatch immediately" }
+    });
+
+    releaseHandler.resolve();
+    await coordinator.waitForIdle();
+    expect(handlerReturned).toBe(true);
+  });
+
+  it("waits for immediate dispatch delivery before continuing into deferred tool work", async () => {
+    const store = trackStore(new SessionStore({ databasePath: ":memory:" }));
+    const dispatchStarted = deferred<void>();
+    const releaseDispatch = deferred<void>();
+    let toolStarted = false;
+    const deliveries: string[] = [];
+    const coordinator = trackCoordinator(createCoordinator({
+      store,
+      runDeferredTool: async () => {
+        toolStarted = true;
+        return { status: "succeeded", result: { ok: true } };
+      },
+      handleEvent: async (event, context) => {
+        if (event.kind === "tool_completion") return { status: "no_reply" };
+        await context.emitOutbox({
+          kind: "reply",
+          payload: { text: "dispatch now" },
+          dedupeFingerprint: "dispatch-now"
+        });
+        return {
+          status: "deferred",
+          providerCallId: "call-active-dispatch",
+          toolName: "generate_img",
+          arguments: { prompt: "杭州" },
+          originalRequest: event.payload,
+          acknowledgement: { kind: "reply", payload: { text: "worker released" } }
+        };
+      },
+      deliverOutbox: async (outbox) => {
+        const text = (outbox.payload as { text: string }).text;
+        if (text === "dispatch now") {
+          dispatchStarted.resolve();
+          await releaseDispatch.promise;
+        }
+        deliveries.push(text);
+      }
+    }));
+
+    coordinator.resume();
+    coordinator.enqueueEvent({
+      sessionId: "group:active-tool-gate",
+      kind: "incoming",
+      payload: { text: "search" }
+    });
+
+    await dispatchStarted.promise;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(toolStarted).toBe(false);
+    expect(store.listToolJobs("group:active-tool-gate")).toEqual([]);
+
+    releaseDispatch.resolve();
+    await coordinator.waitForIdle();
+    expect(toolStarted).toBe(true);
+    expect(deliveries.slice(0, 2)).toEqual(["dispatch now", "worker released"]);
+  });
+
+  it("retries one stable immediate outbox without appending a duplicate", async () => {
+    const store = trackStore(new SessionStore({ databasePath: ":memory:" }));
+    let attempts = 0;
+    const coordinator = trackCoordinator(createCoordinator({
+      store,
+      outboxRetryDelayMs: 0,
+      handleEvent: async (_event, context) => {
+        await context.emitOutbox({
+          kind: "reply",
+          payload: { text: "retry dispatch" },
+          dedupeFingerprint: "retry-dispatch"
+        });
+        return { status: "no_reply" };
+      },
+      deliverOutbox: () => {
+        attempts += 1;
+        if (attempts === 1) throw new Error("retry before transport");
+        return { accepted: true };
+      }
+    }));
+
+    coordinator.resume();
+    const enqueued = coordinator.enqueueEvent({
+      sessionId: "group:active-retry",
+      kind: "incoming",
+      payload: { text: "start" }
+    });
+    await coordinator.waitForIdle();
+
+    expect(attempts).toBe(2);
+    expect(store.listOutbox("group:active-retry")).toEqual([
+      expect.objectContaining({
+        status: "sent",
+        attempts: 2,
+        dedupeKey: `turn-outbox:${enqueued.event.id}:1:retry-dispatch`
+      })
+    ]);
   });
 
   it("atomically acknowledges a deferred Codex job, releases the Session, and appends completion at the tail", async () => {
@@ -1121,7 +1260,10 @@ describe("SessionCoordinator", () => {
 
 interface CoordinatorHarnessOptions {
   store: SessionStore;
-  handleEvent?: (event: SessionEventRecord) => SessionHandleResult | Promise<SessionHandleResult>;
+  handleEvent?: (
+    event: SessionEventRecord,
+    context: SessionTurnContext
+  ) => SessionHandleResult | Promise<SessionHandleResult>;
   deliverOutbox?: ConstructorParameters<typeof SessionCoordinator>[0]["deliverOutbox"];
   runner?: CodexRunner;
   maxOutboxAttempts?: number;

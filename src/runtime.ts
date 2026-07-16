@@ -183,7 +183,7 @@ export class SunaRuntime {
       });
       this.sessionCoordinator = new SessionCoordinator({
         store: this.sessionStore,
-        handleEvent: (event, context) => this.inAgentContext(() => this.processSessionEvent(event, context.signal)),
+        handleEvent: (event, context) => this.inAgentContext(() => this.processSessionEvent(event, context)),
         deliverOutbox: (outbox, context) => this.inAgentContext(() => this.deliverSessionOutbox(outbox, context)),
         codexRunner: options.codexRunner ?? new CodexToolRunner(),
         cleanupCodexProcess: cleanupPersistedCodexProcess,

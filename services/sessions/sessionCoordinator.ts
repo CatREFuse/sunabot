@@ -10,6 +10,7 @@ import { SessionActorScheduler, SessionActorTaskTimeoutError } from "./sessionAc
 import { createOutboxDeliveryContext } from "./outboxDeliveryContext.js";
 import { OutboxPartitionScheduler } from "./outboxPartitionScheduler.js";
 import { SessionToolJobProcessor } from "./sessionToolJobProcessor.js";
+import { emitTurnOutbox } from "./turnOutboxEmitter.js";
 import type {
   ClaimedToolTask,
   CodexCoordinatorSettings,
@@ -45,6 +46,7 @@ export type { CodexCoordinatorSettings, OutboxDeliveryContext } from "./sessionC
 export interface SessionTurnContext {
   signal: AbortSignal;
   turn: TurnRecord;
+  emitOutbox(draft: OutboxDraft): Promise<OutboxRecord>;
 }
 
 export type SessionHandleResult =
@@ -294,7 +296,6 @@ export class SessionCoordinator {
       await delay(IDLE_POLL_MS);
     }
   }
-
   private ensureStarted() {
     if (this.started && !this.stopped) return;
     if (this.stopped) throw new Error("SessionCoordinator has been stopped.");
@@ -338,8 +339,12 @@ export class SessionCoordinator {
   private async processTurn(task: ClaimedTurnTask, actorSignal: AbortSignal) {
     const { claim, state } = task;
     const signal = combineSignals(actorSignal, state.controller.signal);
+    let outboxOrdinal = 0;
     try {
-      const result = await this.handleEvent(claim.event, { signal, turn: claim.turn });
+      const emitOutbox = (draft: OutboxDraft) => emitTurnOutbox(
+        this.store, claim, this.workerId, signal, ++outboxOrdinal, draft,
+        () => this.assertClaimUsable(state, signal), () => this.scheduleOutbox());
+      const result = await this.handleEvent(claim.event, { signal, turn: claim.turn, emitOutbox });
       this.assertClaimUsable(state, signal);
       if (result.status === "deferred") {
         const settings = this.codexSettings();

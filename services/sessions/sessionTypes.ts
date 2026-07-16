@@ -158,7 +158,20 @@ export interface OutboxDraft {
   payload: unknown;
   deliveryPartition?: string;
   dedupeKey?: string;
+  dedupeFingerprint?: string;
   availableAt?: number;
+}
+
+export interface AppendTurnOutboxInput {
+  turnId: string;
+  workerId: string;
+  dedupeKey: string;
+  draft: OutboxDraft;
+}
+
+export interface AppendTurnOutboxResult {
+  outbox: OutboxRecord;
+  inserted: boolean;
 }
 
 export interface FinishTurnInput {
