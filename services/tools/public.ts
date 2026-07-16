@@ -24,6 +24,28 @@ export {
   type SystemConfigTurn,
   type SystemConfigTurnContext
 } from "./systemConfigTool.js";
+export {
+  READ_FILE_TOOL_NAME,
+  WRITE_FILE_TOOL_NAME,
+  WORKBENCH_FILE_MAX_BYTES,
+  WORKBENCH_FILE_MAX_CONTENT_LENGTH,
+  WORKBENCH_FILE_PATH_MAX_BYTES,
+  isWorkbenchFileRelativePath,
+  isWorkbenchFileToolName,
+  isWellFormedUtf16,
+  readFileTool,
+  validateReadFileInput,
+  validateWorkbenchFileText,
+  validateWriteFileInput,
+  workbenchFilePublicMessage,
+  writeFileTool,
+  type WorkbenchFileErrorCode,
+  type WorkbenchFileInputValidation,
+  type WorkbenchFileResult,
+  type WorkbenchFileTextValidation,
+  type WorkbenchFileToolPort
+} from "./workbenchFileTool.js";
+export { createWorkbenchFileToolPort } from "./workbenchFileStore.js";
 export { withRequiredDispatchMessage } from "./deferredDispatch.js";
 export {
   isProviderToolAvailable,

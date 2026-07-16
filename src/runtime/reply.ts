@@ -118,6 +118,7 @@ import { DEFAULT_CONTEXT_MESSAGE_LIMIT, MAX_STORED_CONVERSATION_MESSAGES, GROUP_
 import { buildMemoryPromptVariables, buildUserProfileRecallQuery, buildUserPrompt, buildWorkingMemoryRecallQuery, clampInteger, collectGroupChatSummaryMessages, estimatePromptTokens, isAdminUserId, toContextChatMessage, uniqueMemoryEntries } from "./conversationMemoryHelpers.js";
 import { conversationMessageAttachments, conversationRecordId, queueIncomingSnapshot, selectRelevantConversationAttachments, toConversationQuote, uniqueAttachments, uniqueQuotes, uniqueStrings } from "./messagingAttachmentHelpers.js";
 import { errorMessage, isAbortError, isRuntimeIncomingMessage, sanitizeErrorDetail } from "./infrastructure.js";
+import { providerWorkbenchFilesForIncoming } from "./workbenchFiles.js";
 import {
   runtime_attachReplyReferences,
   runtime_buildProviderBashOptions,
@@ -141,7 +142,6 @@ import { runtime_replyToToolCompletion } from "./replyDebounceDispatch.js";
 import * as systemConfigReply from "./systemConfigReply.js";
 
 export { runtime_replyToToolCompletion };
-
 export {
   runtime_attachReplyReferences,
   runtime_buildProviderBashOptions,
@@ -206,7 +206,6 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
       this.recordAssistantTurnTools(incoming, logRunId, toolNames);
       return toolNames;
     };
-
     try {
       const beforeContext = await this.hooks.run("before_context", {
         channel: channelKey,
@@ -350,6 +349,7 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
         signal: options.signal,
         modelRequestMaxRetries: this.config.normalReply.maxRetries,
         allowNoReply: true,
+        workbenchFiles: providerWorkbenchFilesForIncoming(this.config, incoming, options.promptOverride),
         bash: this.buildProviderBashOptions(incoming, toolCapabilities.workspaceBash),
         bot: this.config.bot,
         generateImage: (prompt, size, quality, referenceImageUrls, childLogContext) => provider.generateImage(

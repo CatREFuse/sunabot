@@ -80,6 +80,14 @@ describe("agent and tool API plugin", () => {
       effectiveEnabled: true,
       execution: "inline"
     });
+    expect(tools.find((tool: { name: string }) => tool.name === "read_file")).toMatchObject({
+      available: false,
+      effectiveEnabled: false
+    });
+    expect(tools.find((tool: { name: string }) => tool.name === "write_file")).toMatchObject({
+      available: false,
+      effectiveEnabled: false
+    });
     expect(resolveToolCapabilities).toHaveBeenCalledOnce();
     expect(get).toHaveBeenCalledWith("conversation.private-reply", config);
 

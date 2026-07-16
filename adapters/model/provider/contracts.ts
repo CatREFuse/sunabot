@@ -15,6 +15,7 @@ export interface ProviderCompleteOptions {
   signal?: AbortSignal;
   modelRequestMaxRetries?: number;
   allowNoReply?: boolean;
+  workbenchFiles?: ProviderWorkbenchFileOptions;
   bash?: ProviderBashOptions;
   bot?: BotConfig;
   generateImage?: GenerateImageRunner;
@@ -67,6 +68,11 @@ export interface ProviderBashOptions {
   workspacePath: string;
   workspaceOnly: boolean;
   blockedKeywords: string[];
+}
+
+export interface ProviderWorkbenchFileOptions {
+  read(input: unknown): Promise<unknown>;
+  write(input: unknown): Promise<unknown>;
 }
 
 export interface ProviderMemoryOptions {

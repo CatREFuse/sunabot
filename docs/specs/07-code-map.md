@@ -39,6 +39,7 @@
 | Codex 异步工具 | `adapters/codex/codexTool.ts` |
 | 联网搜索 | `adapters/model/webSearchTool.ts`, `adapters/model/webSearchSettings.ts` |
 | Bash、图像生成、历史媒体解析、自拍 | `services/tools/bashTool.ts`, `services/tools/generateImgTool.ts`, `src/runtime/reply.ts`, `adapters/model/provider/imageInput.ts`, `services/tools/selfieTool.ts` |
+| Agent workbench 路径与文本文件工具 | `services/agents/agentWorkbench.ts`, `services/tools/workbenchFileTool.ts`, `services/tools/workbenchFileStore.ts`, `src/runtime/workbenchFiles.ts`, `adapters/model/provider/toolExecutor.ts` |
 | 图片重试和外发 | `adapters/model/imageGenerationRetry.ts`, `services/delivery/outboundMedia.ts` |
 | 人格、公共系统提示词与 Agent 覆盖 | `services/agent/`, `src/admin/agentFiles.ts`, `services/agents/agentRegistry.ts` |
 | 记忆 CRUD、合并、召回和批次 | `services/memory/` |

@@ -44,6 +44,7 @@ Plana 的 `workspace/business/data/session-queue.sqlite` 与其他 Agent 的 `wo
 - `workspace/business/prompts/`：所有 Agent 默认使用的公共系统提示词；
 - `workspace/business/agents/<agentId>/agent.json`：Agent 名称、启用状态、系统提示词覆盖开关、Bot 行为、工具覆盖、管理员私聊 Bash backend 偏好与 OneBot 行为配置；
 - `workspace/business/agents/<agentId>/`：Agent 人格、`selfie_prompt_rewrite.json`、可选 `system-prompts/` 覆盖、自拍参考图、私有数据和人工维护文件；
+- `workspace/business/agents/<agentId>/workbench/`：当前 Agent 的文件工具与 Bash 共用私有目录；内容不会自动进入模型请求，只有经过管理员私聊能力门禁和逐次路径、身份、类型及大小复验的文本文件可以按请求读取或原子写入；
 - `workspace/business/media/`：需要随业务恢复的图片和持久附件；
 - `workspace/runtime/napcat/accounts/<accountId>/`：单个 QQ 的 NapCat Docker 配置、登录态、二维码、`account.env` 和运行标记；该目录只挂载给对应 NapCat 容器，不作为 Core 的媒体共享目录；
 - `workspace/runtime/napcat/accounts/<accountId>/manual-login-required`：用户从管理台退出该 QQ 后的临时标记；对应 NapCat 重启时据此跳过快速登录，扫码成功后自动删除；
@@ -89,3 +90,5 @@ Plana 的 `workspace/business/data/session-queue.sqlite` 与其他 Agent 的 `wo
 - 配置医生发送给模型的配置先按敏感键以及身份、QQ、Provider 地址、workspace、可执行文件和提示词路径脱敏；问题列表只包含本次实际校验失败的固定白名单路径和服务端固定文案，模型只能对这些路径提出 `add` 或 `replace`，不接收工具权限。服务端限制 AI 输出大小、操作数、JSON Pointer 深度和值大小，并拒绝原型污染字段、重复路径和越权路径；用户确认页的目标值说明由服务端生成，不采用模型理由代替实际修改内容。
 - 配置医生 AI 提案只保存在进程内 10 分钟并绑定原始文件 revision；连续 AI 诊断至少间隔 10 秒。浏览器应用时只提交 proposal ID 与 source revision，不能提交或替换服务端 patch。
 - OneBot、跨组件媒体和 Agent 文件写入均执行身份、大小与路径边界校验；OneBot action 不能携带 Core 或 NapCat 的绝对文件路径。
+- `read_file` 与 `write_file` 只接受真实 OneBot 管理员私聊且 `promptOverride` 未设置的当前 Agent 入站消息。能力判断在创建 workbench 或解析文件之前完成；普通用户、群聊、Web Chat、伪造 Function Call 和缺失运行端口均失败关闭。Provider 在调用运行端口前按封闭字段集合复验参数并重建请求；成功结果必须使用封闭结构，绑定原请求路径与正文 UTF-8 大小，读取正文还要通过同一 Unicode/控制字符合同，不能信任端口返回的额外路径、正文或错误文本。
+- Node.js 在 macOS 与 Linux 上没有可移植的文件描述符定向 rename/link 发布接口，因此最终临时文件复验与路径发布之间仍以运行 Core 的同一宿主 UID 为受信边界。测试 hook 必须全部位于最终复验之前并被确定性拦截；外部同 UID 在最终复验后主动改写路径属于受信运维主体越界，能力不声称消除该窗口。发布后仍复验目标身份和内容，发现变化时失败关闭。

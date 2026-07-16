@@ -69,6 +69,8 @@ export const AGENT_TOOL_NAMES = [
   "websearch",
   "generate_img",
   "selfie",
+  "read_file",
+  "write_file",
   "workspace_bash",
   "codex",
   "system_config"

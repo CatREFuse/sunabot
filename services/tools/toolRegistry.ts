@@ -23,11 +23,21 @@ import {
   systemConfigTool,
   type SystemConfigToolPort
 } from "./systemConfigTool.js";
+import {
+  READ_FILE_TOOL_NAME,
+  WRITE_FILE_TOOL_NAME,
+  readFileTool,
+  writeFileTool
+} from "./workbenchFileTool.js";
 import { withRequiredDispatchMessage, withoutDispatchMessage } from "./deferredDispatch.js";
 
 export interface ToolAvailability {
   onAssistantText?: unknown;
   allowNoReply?: boolean;
+  workbenchFiles?: {
+    read(input: unknown): Promise<unknown>;
+    write(input: unknown): Promise<unknown>;
+  };
   bash?: { enabled: boolean; workspaceOnly?: boolean; blockedKeywords?: string[] };
   bot?: Pick<BotConfig, "tools">;
   selfie?: { enabled: boolean };
@@ -129,6 +139,26 @@ const catalog: readonly ToolCatalogEntry[] = [
     definition: () => selfieTool,
     available: (options) => options.imageTools !== false && options.selfie?.enabled === true,
     unavailableReason: "当前请求未启用自拍生成。",
+    execution: "inline"
+  },
+  {
+    name: READ_FILE_TOOL_NAME,
+    title: "读取文件",
+    summary: "读取当前 Agent workbench 内的 UTF-8 文本文件。",
+    definition: () => readFileTool,
+    available: (options) => typeof options.workbenchFiles?.read === "function",
+    unavailableReason: "当前会话不允许读取 Agent workbench 文件。",
+    defaultEnabled: true,
+    execution: "inline"
+  },
+  {
+    name: WRITE_FILE_TOOL_NAME,
+    title: "写入文件",
+    summary: "原子写入当前 Agent workbench 内的 UTF-8 文本文件。",
+    definition: () => writeFileTool,
+    available: (options) => typeof options.workbenchFiles?.write === "function",
+    unavailableReason: "当前会话不允许写入 Agent workbench 文件。",
+    defaultEnabled: true,
     execution: "inline"
   },
   {
@@ -280,14 +310,13 @@ function applyRuntimeToolContract(
   selected: Record<string, unknown>,
   canonical: Record<string, unknown>
 ) {
-  if (entry.name === SYSTEM_CONFIG_TOOL_NAME) {
-    return {
-      ...selected,
-      parameters: readParameters(canonical),
-      strict: canonical.strict === true
-    };
-  }
-  if (entry.name !== GENERATE_IMG_TOOL_NAME && entry.name !== SELFIE_TOOL_NAME) return selected;
+  if (
+    entry.name !== SYSTEM_CONFIG_TOOL_NAME
+    && entry.name !== GENERATE_IMG_TOOL_NAME
+    && entry.name !== SELFIE_TOOL_NAME
+    && entry.name !== READ_FILE_TOOL_NAME
+    && entry.name !== WRITE_FILE_TOOL_NAME
+  ) return selected;
   return {
     ...selected,
     parameters: readParameters(canonical),

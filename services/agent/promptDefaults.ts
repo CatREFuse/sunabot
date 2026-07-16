@@ -4,11 +4,13 @@ import {
   generateImgTool,
   memoryRecallTool,
   noReplyTool,
+  readFileTool,
   selfieTool,
   systemConfigTool,
   withRequiredDispatchMessage,
   websearchTool,
-  workspaceBashTool
+  workspaceBashTool,
+  writeFileTool
 } from "../tools/public.js";
 import type { FinalPromptTemplate, OpenAIToolDefinition } from "./promptSystem.js";
 
@@ -221,6 +223,8 @@ export function defaultFinalPromptTemplate(id: string): FinalPromptTemplate | un
       tools: [
         assistantTextTool,
         noReplyTool,
+        readFileTool,
+        writeFileTool,
         workspaceBashTool,
         websearchTool,
         withRequiredDispatchMessage(generateImgTool),

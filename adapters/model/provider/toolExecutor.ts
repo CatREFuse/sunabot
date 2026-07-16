@@ -26,6 +26,18 @@ import {
   runSystemConfig
 } from "../../../services/tools/systemConfigTool.js";
 import {
+  READ_FILE_TOOL_NAME,
+  WRITE_FILE_TOOL_NAME,
+  WORKBENCH_FILE_MAX_BYTES,
+  isWorkbenchFileRelativePath,
+  isWorkbenchFileToolName,
+  validateReadFileInput,
+  validateWorkbenchFileText,
+  validateWriteFileInput,
+  workbenchFilePublicMessage,
+  type WorkbenchFileErrorCode
+} from "../../../services/tools/public.js";
+import {
   isProviderToolAvailable,
   isProviderDeferredTool,
   providerToolExecutionMode,
@@ -69,6 +81,8 @@ const SYSTEM_CONFIG_TURN_SOLO_ERROR =
 
 const inlineExecutors: ReadonlyMap<string, InlineExecutor> = new Map([
   [ASSISTANT_TEXT_TOOL_NAME, runAssistantText],
+  [READ_FILE_TOOL_NAME, runReadFile],
+  [WRITE_FILE_TOOL_NAME, runWriteFile],
   [WORKSPACE_BASH_TOOL_NAME, runBash],
   [WEBSEARCH_TOOL_NAME, runWebSearch],
   [GENERATE_IMG_TOOL_NAME, runImageGeneration],
@@ -179,6 +193,13 @@ export class RegistryProviderToolExecutor implements ProviderToolExecutorPort {
       rejectSystemConfigTurn(options);
       return toolCallErrors(calls, SYSTEM_CONFIG_TURN_SOLO_ERROR);
     }
+    if (calls.length > 1 && calls.some((call) => isWorkbenchFileToolName(call.name))) {
+      return calls.map((call) => ({
+        type: "function_call_output",
+        call_id: call.call_id,
+        output: JSON.stringify({ ok: false, error: "read_file and write_file must be called alone before any other tool." })
+      }));
+    }
     if (calls.length > 1 && calls.some((call) => call.name === NO_REPLY_TOOL_NAME)) {
       return toolCallErrors(calls, "no_reply must be called alone before any other tool.");
     }
@@ -231,6 +252,12 @@ async function executeFunctionCall(
       };
     }
     if (executionMode !== "inline") return { ok: false, error: `Tool ${call.name} is ${executionMode}.` };
+    if (
+      (isWorkbenchFileToolName(call.name) && hasAcceptedTurnActivity(state))
+      || state.acceptedToolNames.some(isWorkbenchFileToolName)
+    ) {
+      return { ok: false, error: "read_file and write_file must be called before assistant text or any other tool." };
+    }
     if (call.name === NO_REPLY_TOOL_NAME) {
       return {
         ok: false,
@@ -247,6 +274,180 @@ async function executeFunctionCall(
   } catch (error) {
     return { ok: false, error: errorMessage(error) };
   }
+}
+
+async function runReadFile(
+  args: Record<string, unknown>,
+  call: ResponseFunctionCallItem,
+  options: ProviderCompleteOptions
+) {
+  if (!options.workbenchFiles) return { ok: false, error: "File tools are not enabled." };
+  const validated = validateReadFileInput(args);
+  if (!validated.ok) return await rejectFileToolArguments(READ_FILE_TOOL_NAME, call, args, false, options);
+  const result = await safeFileToolCall(
+    "read",
+    validated.input.path,
+    undefined,
+    () => options.workbenchFiles!.read(validated.input)
+  );
+  await appendToolLog(READ_FILE_TOOL_NAME, call, safeFileArguments(args, false), fileToolLogResult(result), options)
+    .catch(() => undefined);
+  return result;
+}
+
+async function runWriteFile(
+  args: Record<string, unknown>,
+  call: ResponseFunctionCallItem,
+  options: ProviderCompleteOptions
+) {
+  if (!options.workbenchFiles) return { ok: false, error: "File tools are not enabled." };
+  const validated = validateWriteFileInput(args);
+  if (!validated.ok) return await rejectFileToolArguments(WRITE_FILE_TOOL_NAME, call, args, true, options);
+  const result = await safeFileToolCall(
+    "write",
+    validated.input.path,
+    validated.byteLength,
+    () => options.workbenchFiles!.write(validated.input)
+  );
+  await appendToolLog(WRITE_FILE_TOOL_NAME, call, safeFileArguments(args, true), fileToolLogResult(result), options)
+    .catch(() => undefined);
+  return result;
+}
+
+async function rejectFileToolArguments(
+  toolName: typeof READ_FILE_TOOL_NAME | typeof WRITE_FILE_TOOL_NAME,
+  call: ResponseFunctionCallItem,
+  args: Record<string, unknown>,
+  write: boolean,
+  options: ProviderCompleteOptions
+) {
+  const result = fileToolArgumentsInvalid();
+  await appendToolLog(toolName, call, safeFileArguments(args, write), fileToolLogResult(result), options)
+    .catch(() => undefined);
+  return result;
+}
+
+async function safeFileToolCall(
+  kind: "read" | "write",
+  requestPath: string,
+  requestByteLength: number | undefined,
+  operation: () => Promise<unknown>
+) {
+  try {
+    return normalizedFileToolResult(kind, requestPath, requestByteLength, await operation());
+  } catch {
+    return fileToolUnavailable();
+  }
+}
+
+function safeFileArguments(args: Record<string, unknown>, write: boolean) {
+  return {
+    path: safeFileLogPath(args.path),
+    ...(write ? {
+      overwrite: args.overwrite === true,
+      contentByteLength: typeof args.content === "string" ? Buffer.byteLength(args.content, "utf8") : 0
+    } : {})
+  };
+}
+
+function fileToolLogResult(value: unknown) {
+  const result = value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+  return {
+    ok: result.ok,
+    path: safeFileLogPath(result.path),
+    byteLength: result.byteLength,
+    created: result.created,
+    overwritten: result.overwritten,
+    code: result.code
+  };
+}
+
+function normalizedFileToolResult(
+  kind: "read" | "write",
+  requestPath: string,
+  requestByteLength: number | undefined,
+  value: unknown
+) {
+  const result = value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+  if (result.ok === false && isWorkbenchFileErrorCode(result.code)) {
+    return {
+      ok: false,
+      code: result.code,
+      error: workbenchFilePublicMessage(result.code)
+    };
+  }
+  const successKeys = kind === "read"
+    ? ["byteLength", "content", "ok", "path"]
+    : ["byteLength", "created", "ok", "overwritten", "path"];
+  if (!hasExactKeys(result, successKeys)) return fileToolUnavailable();
+  const byteLength = result.byteLength;
+  if (
+    result.ok !== true
+    || !isWorkbenchFileRelativePath(result.path)
+    || result.path !== requestPath
+    || !Number.isSafeInteger(byteLength)
+    || Number(byteLength) < 0
+    || Number(byteLength) > WORKBENCH_FILE_MAX_BYTES
+  ) return fileToolUnavailable();
+  if (kind === "read") {
+    const content = validateWorkbenchFileText(result.content);
+    if (!content.ok || content.byteLength !== byteLength) return fileToolUnavailable();
+    return { ok: true, path: requestPath, byteLength, content: content.content };
+  }
+  if (
+    requestByteLength === undefined
+    || byteLength !== requestByteLength
+    || typeof result.created !== "boolean"
+    || typeof result.overwritten !== "boolean"
+    || result.created === result.overwritten
+  ) {
+    return fileToolUnavailable();
+  }
+  return {
+    ok: true,
+    path: requestPath,
+    byteLength,
+    created: result.created,
+    overwritten: result.overwritten
+  };
+}
+
+function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]) {
+  const actual = Object.keys(value).sort();
+  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+}
+
+function safeFileLogPath(value: unknown) {
+  return isWorkbenchFileRelativePath(value) ? value : "[invalid]";
+}
+
+function isWorkbenchFileErrorCode(value: unknown): value is WorkbenchFileErrorCode {
+  return typeof value === "string" && [
+    "WORKBENCH_FILE_PATH_INVALID",
+    "WORKBENCH_FILE_ARGUMENTS_INVALID",
+    "WORKBENCH_FILE_NOT_FOUND",
+    "WORKBENCH_FILE_EXISTS",
+    "WORKBENCH_FILE_CONFLICT",
+    "WORKBENCH_FILE_TOO_LARGE",
+    "WORKBENCH_FILE_TEXT_INVALID",
+    "WORKBENCH_FILE_FORBIDDEN",
+    "WORKBENCH_FILE_UNSAFE",
+    "WORKBENCH_FILE_UNAVAILABLE"
+  ].includes(value);
+}
+
+function fileToolUnavailable() {
+  const code = "WORKBENCH_FILE_UNAVAILABLE" as const;
+  return { ok: false, code, error: workbenchFilePublicMessage(code) };
+}
+
+function fileToolArgumentsInvalid() {
+  const code = "WORKBENCH_FILE_ARGUMENTS_INVALID" as const;
+  return { ok: false, code, error: workbenchFilePublicMessage(code) };
 }
 
 function isToolEnabledForTurn(name: string, definitions: readonly Record<string, unknown>[]) {

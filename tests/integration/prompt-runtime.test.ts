@@ -96,6 +96,8 @@ describe("workspace prompt runtime", () => {
     expect(rendered.tools?.map((tool) => tool.function.name)).toEqual([
       "assistant_text",
       "no_reply",
+      "read_file",
+      "write_file",
       "workspace_bash",
       "websearch",
       "generate_img",
