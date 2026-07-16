@@ -7,7 +7,8 @@
 - 不得把生产 `/srv/sunabot/workspace` 或主工作树的 `workspace` 用作测试目录。
 - OneBot 测试必须使用独立 NapCat 状态和专用测试 QQ；不得让生产 QQ 在第二个 NapCat 中重复登录。
 - 若已知生产 bot QQ，执行时同时设置 `SUNABOT_PRODUCTION_QQ`；脚本发现测试账号与其相同会拒绝发送。
-- 测试 NapCat 只保留名为 `sunabot-smoke` 的反向 WebSocket client，固定连接独立回环端口，不能同时连接生产 8787 或远程地址。
+- 测试 NapCat 只保留名为 `sunabot-smoke` 的反向 WebSocket client。advertised host 默认是 `127.0.0.1`；Docker 内测试 NapCat 可显式使用精确的 `host.docker.internal`，受控 QA 网络只接受 canonical RFC1918 dotted-decimal IPv4。变量只接受 host，不接受协议、端口、路径、用户信息、查询、片段、DNS 名、IPv6、Unicode、percent 编码或非标准 IPv4；Token 始终使用独立字段，不进入 URL。
+- OneBot 端口只读取 `SUNABOT_SMOKE_ONEBOT_PORT`，必须是 1024—65535 的 canonical 十进制文本，且不能使用管理端口 `8787`、生产 OneBot 端口 `8788` 或固定 NapCat WebUI 端口 `6099`。空白、正号、前导零、十六进制、指数和浮点写法都会失败关闭；smoke server 继续只监听宿主 `127.0.0.1`。
 - `preflight` 只读文件并短暂检查本机端口，不访问模型、不连接 QQ、不发送消息。
 - 真实 Provider 和 OneBot 测试分别有命令行参数与临时环境变量两道执行闸门。
 
@@ -31,6 +32,16 @@ npm run smoke:runtime -- init --confirm-isolated-workspace
 npm run smoke:runtime -- configure-onebot --confirm-isolated-workspace
 npm run smoke:runtime -- preflight
 ```
+
+当测试 NapCat 位于 Docker 容器时，在 `configure-onebot`、`preflight` 和后续 `onebot`/`all` 命令期间保持同一个 advertised host：
+
+```bash
+export SUNABOT_SMOKE_ONEBOT_ADVERTISED_HOST=host.docker.internal
+npm run smoke:runtime -- configure-onebot --confirm-isolated-workspace
+npm run smoke:runtime -- preflight
+```
+
+受控 QA 主机可使用 canonical RFC1918 地址（`10/8`、`172.16/12`、`192.168/16`）。除精确的 `host.docker.internal` 外，V1 不接受其他 DNS 主机名；如后续确需 QA DNS，必须新增独立、显式的精确 allowlist 合同。公共 IP、其他 DNS、IPv6、非标准 IPv4 和完整 URL 均会失败关闭。
 
 测试 Provider 的 `apiKeyEnv` 必须存在于该 Provider 的 workspace 内 env 文件中。Codex 订阅也必须把短期测试凭据放入隔离 `secrets/runtime.env`，脚本不会回退读取生产进程环境或全局登录凭据。测试结束后删除隔离凭据。
 

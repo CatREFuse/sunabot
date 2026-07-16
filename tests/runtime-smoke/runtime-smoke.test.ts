@@ -18,6 +18,7 @@ import { runOneBotSmoke } from "../../tooling/quality/runtime-smoke/onebot.js";
 const temporaryDirectories: string[] = [];
 const originalWorkspace = process.env.SUNABOT_WORKSPACE;
 const originalPort = process.env.SUNABOT_SMOKE_ONEBOT_PORT;
+const originalAdvertisedHost = process.env.SUNABOT_SMOKE_ONEBOT_ADVERTISED_HOST;
 const originalConnectTimeout = process.env.SUNABOT_SMOKE_ONEBOT_CONNECT_TIMEOUT_MS;
 const originalActionTimeout = process.env.SUNABOT_SMOKE_ONEBOT_ACTION_TIMEOUT_MS;
 const originalProductionQq = process.env.SUNABOT_PRODUCTION_QQ;
@@ -28,6 +29,7 @@ afterEach(async () => {
   else process.env.SUNABOT_WORKSPACE = originalWorkspace;
   if (originalPort === undefined) delete process.env.SUNABOT_SMOKE_ONEBOT_PORT;
   else process.env.SUNABOT_SMOKE_ONEBOT_PORT = originalPort;
+  restoreEnvironment("SUNABOT_SMOKE_ONEBOT_ADVERTISED_HOST", originalAdvertisedHost);
   restoreEnvironment("SUNABOT_SMOKE_ONEBOT_CONNECT_TIMEOUT_MS", originalConnectTimeout);
   restoreEnvironment("SUNABOT_SMOKE_ONEBOT_ACTION_TIMEOUT_MS", originalActionTimeout);
   restoreEnvironment("SUNABOT_PRODUCTION_QQ", originalProductionQq);
@@ -129,6 +131,134 @@ describe.sequential("runtime smoke workspace isolation", () => {
     expect(context.onebotUrl).toBe("ws://127.0.0.1:18879/onebot/v11/ws");
     expect(context.providerToken).toBe("provider-test-token");
     expect(context.onebotToken).toBe("onebot-test-token");
+  });
+
+  it.each([
+    "host.docker.internal",
+    "10.23.45.67",
+    "172.20.0.1",
+    "192.168.50.10"
+  ])("writes a container-reachable URL for an explicitly allowed advertised host: %s", async (host) => {
+    const fixture = await createSmokeWorkspace();
+    process.env.SUNABOT_WORKSPACE = fixture.workspace;
+    process.env.SUNABOT_SMOKE_ONEBOT_PORT = "18881";
+    process.env.SUNABOT_SMOKE_ONEBOT_ADVERTISED_HOST = host;
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    await expect(main(["configure-onebot", "--confirm-isolated-workspace"])).resolves.toBeUndefined();
+
+    const configured = JSON.parse(await fs.readFile(
+      path.join(fixture.workspace, "runtime/napcat/accounts/primary/config-full/onebot11_123456789.json"),
+      "utf8"
+    )) as { network: { websocketClients: Array<{ url: string; token: string }> } };
+    expect(configured.network.websocketClients[0]?.url).not.toContain("onebot-test-token");
+    expect(configured.network.websocketClients).toEqual([
+      expect.objectContaining({
+        url: `ws://${host}:18881/onebot/v11/ws`,
+        token: "onebot-test-token"
+      })
+    ]);
+  });
+
+  it.each([
+    "ws://host.docker.internal",
+    "https://smoke-core.qa.internal",
+    "host.docker.internal:18881",
+    "host.docker.internal/onebot",
+    "user@host.docker.internal",
+    "host.docker.internal?target=production",
+    "host.docker.internal#fragment",
+    "host.docker.internal\\onebot",
+    "onebot-test-token@host.docker.internal",
+    "attacker.internal",
+    "127.0.0.1.internal",
+    "xn--smoke-9za.internal",
+    "测试.internal",
+    "::1",
+    "[::1]",
+    "HOST.DOCKER.INTERNAL",
+    "host.docker.internal.",
+    "host.docker.internal\t",
+    "host.docker.internal\u007f",
+    "host%2edocker%2einternal",
+    "${SUNABOT_SMOKE_HOST}",
+    "8.8.8.8",
+    "example.com",
+    "172.15.0.1",
+    "172.32.0.1",
+    "10",
+    "10.1",
+    "10.1.2",
+    "167772161",
+    "0x0a000001",
+    "012.0.0.1",
+    "10.0.01.1",
+    "10.0.0.1\n",
+    "10.0.0.1\u001f",
+    "10.0.0.1\u0085",
+    "127.000.000.001",
+    "smoke_core.qa.internal",
+    "smoke-core.qa.internal.",
+    "smoke-core..qa.internal",
+    "",
+    " smoke-core.qa.internal",
+    "smoke-core.qa.internal\n"
+  ])("rejects an unsafe advertised host before writing NapCat config: %j", async (host) => {
+    const fixture = await createSmokeWorkspace();
+    process.env.SUNABOT_WORKSPACE = fixture.workspace;
+    process.env.SUNABOT_SMOKE_ONEBOT_ADVERTISED_HOST = host;
+
+    await expect(loadSmokeContext({ requireOneBotCredential: true })).rejects.toThrow(
+      "SUNABOT_SMOKE_ONEBOT_ADVERTISED_HOST"
+    );
+  });
+
+  it.each(["1024", "18878", "65535"])("accepts a canonical decimal OneBot port: %s", async (port) => {
+    const fixture = await createSmokeWorkspace();
+    process.env.SUNABOT_WORKSPACE = fixture.workspace;
+    process.env.SUNABOT_SMOKE_ONEBOT_PORT = port;
+    process.env.SUNABOT_SMOKE_ONEBOT_ADVERTISED_HOST = "host.docker.internal";
+
+    await expect(loadSmokeContext({ requireOneBotCredential: true })).resolves.toMatchObject({
+      onebotPort: Number(port),
+      onebotUrl: `ws://host.docker.internal:${port}/onebot/v11/ws`
+    });
+  });
+
+  it.each(["6099", "8787", "8788"])("rejects a production or launcher-reserved port: %s", async (port) => {
+    const fixture = await createSmokeWorkspace();
+    process.env.SUNABOT_WORKSPACE = fixture.workspace;
+    process.env.SUNABOT_SMOKE_ONEBOT_PORT = port;
+
+    await expect(loadSmokeContext({ requireOneBotCredential: true })).rejects.toThrow("SUNABOT_SMOKE_ONEBOT_PORT");
+  });
+
+  it.each([
+    "",
+    " 18878",
+    "18878 ",
+    "18878\n",
+    "+18878",
+    "018878",
+    "0001",
+    "0x49be",
+    "1e4",
+    "18878.0",
+    "-1",
+    "0",
+    "1",
+    "22",
+    "80",
+    "1023",
+    "65536",
+    "NaN",
+    "Infinity"
+  ])("rejects a non-canonical or out-of-range OneBot port: %j", async (port) => {
+    const fixture = await createSmokeWorkspace();
+    process.env.SUNABOT_WORKSPACE = fixture.workspace;
+    process.env.SUNABOT_SMOKE_ONEBOT_PORT = port;
+
+    await expect(loadSmokeContext({ requireOneBotCredential: true })).rejects.toThrow("SUNABOT_SMOKE_ONEBOT_PORT");
   });
 
   it("accepts an explicit ephemeral test QQ without persisting it in the workspace", async () => {

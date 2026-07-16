@@ -64,3 +64,4 @@
 | 全 Agent SQLite 恢复点 | `tooling/workspace/sqlite-recovery.mjs`, `tooling/workspace/sqlite-recovery-cli.mjs` |
 | 单元与集成测试 | `tests/unit/`, `tests/integration/` |
 | 浏览器与生产测试 | `tests/e2e/`, `playwright.config.ts` |
+| 隔离 Provider/OneBot 运行时冒烟 | `tooling/quality/runtime-smoke.ts`, `tooling/quality/runtime-smoke/`, `tests/runtime-smoke/` |

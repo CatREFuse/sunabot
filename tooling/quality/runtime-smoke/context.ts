@@ -20,7 +20,8 @@ import type { LoadContextOptions, RawProviderConfig, RawSmokeConfig, SmokeContex
 const MARKER_FILE = ".sunabot-smoke-workspace.json";
 const MARKER_PURPOSE = "sunabot-runtime-smoke";
 const DEFAULT_ONEBOT_PORT = 18_878;
-const RESERVED_PORTS = new Set([6_099, 8_787]);
+const DEFAULT_ONEBOT_ADVERTISED_HOST = "127.0.0.1";
+const RESERVED_PORTS = new Set([6_099, 8_787, 8_788]);
 
 export async function initializeSmokeWorkspace() {
   const { root, configuredWorkspace } = explicitWorkspace(import.meta.url);
@@ -94,7 +95,8 @@ export async function loadSmokeContext(options: LoadContextOptions = {}): Promis
   if (!/^\d{5,12}$/.test(adminQq)) throw new Error("测试配置中的 bot.adminQq 无效。");
   const onebotPath = normalizeOneBotPath(config.onebot.reverseWsPath);
   const onebotPort = smokeOneBotPort();
-  const onebotUrl = `ws://127.0.0.1:${onebotPort}${onebotPath}`;
+  const onebotAdvertisedHost = smokeOneBotAdvertisedHost();
+  const onebotUrl = `ws://${onebotAdvertisedHost}:${onebotPort}${onebotPath}`;
   const context: SmokeContext = {
     root,
     workspace,
@@ -250,9 +252,45 @@ function normalizeOneBotPath(value: string) {
 }
 
 function smokeOneBotPort() {
-  const value = Number(process.env.SUNABOT_SMOKE_ONEBOT_PORT ?? DEFAULT_ONEBOT_PORT);
-  if (!Number.isSafeInteger(value) || value < 1_024 || value > 65_535 || RESERVED_PORTS.has(value)) {
-    throw new Error("SUNABOT_SMOKE_ONEBOT_PORT 必须是非生产的 1024-65535 端口。");
+  const raw = process.env.SUNABOT_SMOKE_ONEBOT_PORT ?? String(DEFAULT_ONEBOT_PORT);
+  if (!isCanonicalUnsignedDecimal(raw, 5, false)) {
+    throw new Error("SUNABOT_SMOKE_ONEBOT_PORT 必须是 1024-65535 的 canonical 十进制端口，且不能使用 6099、8787 或 8788。");
+  }
+  const value = Number(raw);
+  if (value < 1_024 || value > 65_535 || RESERVED_PORTS.has(value)) {
+    throw new Error("SUNABOT_SMOKE_ONEBOT_PORT 必须是 1024-65535 的 canonical 十进制端口，且不能使用 6099、8787 或 8788。");
   }
   return value;
+}
+
+function smokeOneBotAdvertisedHost() {
+  const value = process.env.SUNABOT_SMOKE_ONEBOT_ADVERTISED_HOST ?? DEFAULT_ONEBOT_ADVERTISED_HOST;
+  if (value === DEFAULT_ONEBOT_ADVERTISED_HOST || value === "host.docker.internal") return value;
+  if (isPrivateIpv4(value)) return value;
+  throw new Error(
+    "SUNABOT_SMOKE_ONEBOT_ADVERTISED_HOST 必须是 127.0.0.1、host.docker.internal 或 canonical RFC1918 IPv4。"
+  );
+}
+
+function isPrivateIpv4(value: string) {
+  const parts = value.split(".");
+  if (parts.length !== 4 || parts.some((part) => !isCanonicalUnsignedDecimal(part, 3, true))) return false;
+  const octets = parts.map(Number);
+  if (octets.some((octet) => octet > 255)) return false;
+  const [first, second] = octets;
+  return first === 10 ||
+    (first === 172 && second !== undefined && second >= 16 && second <= 31) ||
+    (first === 192 && second === 168);
+}
+
+function isCanonicalUnsignedDecimal(value: string, maximumDigits: number, allowZero: boolean) {
+  if (value === "0") return allowZero;
+  if (value.length < 1 || value.length > maximumDigits) return false;
+  const first = value.charCodeAt(0);
+  if (first < 49 || first > 57) return false;
+  for (let index = 1; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code < 48 || code > 57) return false;
+  }
+  return true;
 }
