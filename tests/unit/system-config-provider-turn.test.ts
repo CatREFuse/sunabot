@@ -158,7 +158,9 @@ function mutationInput() {
     orchestratorEnabled: null,
     searchImplementation: null,
     bashAdminBackend: null,
-    conversationId: null
+    conversationId: null,
+    groupCursor: null,
+    groupLimit: null
   };
 }
 

@@ -161,12 +161,17 @@ describe("ToolRegistry", () => {
     expect(staleParameters.properties.operation.enum).toEqual([
       "get_settings",
       "get_status",
+      "list_groups",
       "set_auto_reply",
       "set_orchestrator",
       "set_search",
       "set_bash_admin_backend",
       "set_group_reply"
     ]);
+    expect(staleParameters.required).toEqual(expect.arrayContaining([
+      "groupCursor",
+      "groupLimit"
+    ]));
     expect(staleParameters.properties.task).toBeUndefined();
     expect(staleParameters).toEqual(legacyParameters);
     expect(listToolMetadata(options, []).find((tool) => tool.name === "system_config")).toMatchObject({
