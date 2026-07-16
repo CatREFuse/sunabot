@@ -292,11 +292,50 @@ export function toContextChatMessage(message: ConversationRecord["messages"][num
   const attachmentText = message.attachments?.length
     ? ` 文件：${formatAttachmentListForContext(message.attachments)}`
     : "";
+  const body = `${message.text}${quoteText}${imageText}${attachmentText}`;
   return {
     role: message.role === "assistant" ? "assistant" : "user",
-    content: `${formatContextTime(message.at)} ${speaker}：${message.text}${quoteText}${imageText}${attachmentText}`,
+    content: message.groupId == null
+      ? `${formatContextTime(message.at)} ${speaker}：${body}`
+      : `${formatGroupContextMessageHeader(message)}\n${body}`,
     imageUrls: message.imageUrls
   };
+}
+export function formatGroupContextMessageHeader(message: ConversationRecord["messages"][number]) {
+  const uid = message.role === "assistant"
+    ? message.selfId ?? message.userId
+    : message.userId;
+  const displayName = String(message.senderName || "").trim() || (message.role === "assistant" ? "助手" : "用户");
+  const replyToMessageId = message.replyMessageIds?.[0] ?? message.quoteReferences?.[0]?.messageId;
+  const fields = [
+    `timestamp=${formatGroupContextMetadataValue(formatContextTime(message.at) || message.at)}`,
+    `sequence=${formatGroupContextMetadataValue(message.sequence ?? "unknown")}`,
+    `message_id=${formatGroupContextMetadataValue(message.id)}`,
+    `display_name=${formatGroupContextMetadataValue(displayName)}`,
+    `uid=${formatGroupContextMetadataValue(uid ?? "unknown")}`
+  ];
+  if (replyToMessageId != null) {
+    fields.push(`reply_to_message_id=${formatGroupContextMetadataValue(replyToMessageId)}`);
+  }
+  return `[${fields.join(" | ")}]`;
+}
+export function formatGroupContextMetadataValue(value: unknown) {
+  return String(value)
+    .replaceAll("%", "%25")
+    .replaceAll("|", "%7C")
+    .replaceAll("[", "%5B")
+    .replaceAll("]", "%5D")
+    .replaceAll("\r", "%0D")
+    .replaceAll("\n", "%0A");
+}
+export function parseGroupContextMetadataValue(value: string) {
+  return value
+    .replaceAll("%0D", "\r")
+    .replaceAll("%0A", "\n")
+    .replaceAll("%7C", "|")
+    .replaceAll("%5B", "[")
+    .replaceAll("%5D", "]")
+    .replaceAll("%25", "%");
 }
 export function formatContextSpeaker(message: ConversationRecord["messages"][number], isAdmin: boolean, admin: AdminIdentity) {
   const name = String(message.senderName || "").trim();

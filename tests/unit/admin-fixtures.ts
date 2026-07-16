@@ -64,6 +64,7 @@ export function createAdminTestConfig(rootDir: string): AppConfig {
       orchestrator: {
         enabled: false,
         userGroupchatOrchestratorModel: "gpt-5.4-mini",
+        groupThreadModel: "gpt-5.4-mini",
         reasoningEffort: "medium",
         promptFile: "user_groupchat_orchestrator.json",
         messageThreshold: 10,

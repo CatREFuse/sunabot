@@ -29,6 +29,7 @@ import {
   type AssistantReplyOutboxEnvelope,
   type AssistantReplyOutboxPayload,
   type AsyncToolCompletionPayload,
+  type GroupThreadContextSnapshotV1,
   type NoReplyPokeOutboxEnvelope,
   type RuntimeIncomingReplyEventPayload
 } from "../../packages/contracts/session/runtimeMessages.js";
@@ -133,6 +134,7 @@ export const PRIVATE_CONVERSATION_REPLY_PROMPT_FILE = "conversation_private_repl
 export const GROUP_CONVERSATION_REPLY_PROMPT_FILE = "conversation_group_reply.json";
 export const SELFIE_PROMPT_FILE = "selfie_prompt_rewrite.json";
 export const GROUP_CHAT_SUMMARY_PROMPT_FILE = "group_chat_summary.json";
+export const GROUP_THREAD_CONTEXT_PROMPT_FILE = "group_thread_context.json";
 export const ADMIN_PERSONA_FILES: Readonly<Record<string, string>> = {
   "persona.agents": "AGENTS.md",
   "persona.soul": "SOUL.md",
@@ -148,6 +150,7 @@ export const ADMIN_RUNTIME_PROMPT_DEFAULTS: Readonly<Record<string, string>> = {
   "memory.compress-out": defaultFinalPromptContent("memory.compress-out"),
   "memory.user-profile": defaultFinalPromptContent("memory.user-profile"),
   "orchestrator.user-group": defaultFinalPromptContent("orchestrator.user-group"),
+  "orchestrator.group-thread": defaultFinalPromptContent("orchestrator.group-thread"),
   "conversation.group-summary": defaultFinalPromptContent("conversation.group-summary"),
   "image.selfie-rewrite": defaultFinalPromptContent("image.selfie-rewrite")
 };
@@ -229,6 +232,7 @@ export interface DeferredCodexTurn {
     incoming: ParsedIncomingMessage;
     captureSequence?: number;
     replyGate?: ReplyGateSnapshot;
+    threadContext?: GroupThreadContextSnapshotV1;
   };
   acknowledgement: ReplyDeliveryDraft;
 }

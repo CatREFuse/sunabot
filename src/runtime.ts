@@ -115,6 +115,7 @@ import { RuntimeMemoryPipeline } from "./runtime/memoryPipeline.js";
 import { RuntimeDelivery } from "./runtime/delivery.js";
 import { RuntimeConversations } from "./runtime/conversations.js";
 import { RuntimeSelfie } from "./runtime/selfie.js";
+import { RuntimeGroupThreads } from "./runtime/groupThreadPipeline.js";
 import { TaskLimiter, errorMessage, loadConversationRecords } from "./runtime/infrastructure.js";
 import type { RuntimeToolCapabilityResolver } from "../services/tools/bashCapability.js";
 import type { ReplyTaskGate } from "../services/orchestration/broadcastStormDetector.js";
@@ -164,6 +165,7 @@ export class SunaRuntime {
   private readonly delivery: RuntimeDelivery;
   private readonly conversations: RuntimeConversations;
   private readonly selfie: RuntimeSelfie;
+  private readonly groupThreads: RuntimeGroupThreads;
   constructor(config: AppConfig, options: SunaRuntimeOptions = {}) {
       configureMemoryPersistence(sqliteMemoryPersistence);
       this.config = config;
@@ -239,6 +241,7 @@ export class SunaRuntime {
       this.delivery = new RuntimeDelivery(this);
       this.conversations = new RuntimeConversations(this);
       this.selfie = new RuntimeSelfie(this);
+      this.groupThreads = new RuntimeGroupThreads(this);
   }
   private inAgentContext<T>(operation: () => T): T { return runWithAgentRuntimeContext(this.config, operation); }
   initialize(...args: Parameters<RuntimeLifecycle["initialize"]>) { return this.inAgentContext(() => this.lifecycle.initialize(...args)); }
@@ -348,6 +351,9 @@ export class SunaRuntime {
   rewriteSelfiePrompt(...args: Parameters<RuntimeSelfie["rewriteSelfiePrompt"]>) { return this.inAgentContext(() => this.selfie.rewriteSelfiePrompt(...args)); }
   collectSelfieChatReferenceImages(...args: Parameters<RuntimeSelfie["collectSelfieChatReferenceImages"]>) { return this.selfie.collectSelfieChatReferenceImages(...args); }
   loadSelfieReferenceImages(...args: Parameters<RuntimeSelfie["loadSelfieReferenceImages"]>) { return this.selfie.loadSelfieReferenceImages(...args); }
+  prepareGroupThreadContext(...args: Parameters<RuntimeGroupThreads["prepareGroupThreadContext"]>) { return this.inAgentContext(() => this.groupThreads.prepareGroupThreadContext(...args)); }
+  groupThreadPromptContext(...args: Parameters<RuntimeGroupThreads["promptContext"]>) { return this.groupThreads.promptContext(...args); }
+  ensureGroupThreadPromptRequest(...args: Parameters<RuntimeGroupThreads["ensurePromptRequest"]>) { return this.groupThreads.ensurePromptRequest(...args); }
 }
 
 function failClosedToolCapabilityResolver(

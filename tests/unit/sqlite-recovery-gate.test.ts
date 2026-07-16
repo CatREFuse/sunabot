@@ -119,10 +119,85 @@ describe("SQLite recovery and fault-injection gate", () => {
   it("requires every current application schema table before publishing", async () => {
     const fixture = await createFixture();
     const damagedMain = new DatabaseSync(fixture.mainDatabasePath);
-    damagedMain.exec("DROP TABLE model_call_model_aggregates;");
+    damagedMain.exec("DROP TABLE conversation_thread_states;");
     damagedMain.close();
 
     await expect(createRecoveryPoint({ workspace: fixture.workspace, quiesced: true })).rejects.toMatchObject({
+      code: "SQLITE_SCHEMA_INCOMPLETE"
+    });
+  });
+
+  it("creates, verifies, and restores a v2 current-schema recovery point from storage schema 9", async () => {
+    const fixture = await createFixture({
+      agents: [{ id: "arona", enabled: false, databases: "both" }]
+    });
+    downgradeApplicationToStorageSchema9(fixture.mainDatabasePath);
+
+    const created = await createRecoveryPoint({ workspace: fixture.workspace, quiesced: true });
+    const planaApplication = created.manifest.databases.find((entry: {
+      agentId: string;
+      kind: string;
+    }) => entry.agentId === "plana" && entry.kind === "application");
+    const aronaApplication = created.manifest.databases.find((entry: {
+      agentId: string;
+      kind: string;
+    }) => entry.agentId === "arona" && entry.kind === "application");
+
+    expect(planaApplication).toMatchObject({ schemaProfile: "current" });
+    expect(planaApplication.tables).not.toHaveProperty("conversation_thread_states");
+    expect(aronaApplication.tables).toHaveProperty("conversation_thread_states", 0);
+    await expect(verifyRecoveryPoint(created.directory)).resolves.toMatchObject({ ok: true });
+
+    const targetWorkspace = path.join(fixture.root, "storage-schema-9-restored");
+    await expect(restoreRecoveryPoint({
+      backupDirectory: created.directory,
+      targetWorkspace
+    })).resolves.toMatchObject({ ok: true });
+    const restoredMain = new DatabaseSync(path.join(
+      targetWorkspace,
+      "business",
+      "data",
+      "sunabot.sqlite"
+    ), { readOnly: true });
+    try {
+      expect(restoredMain.prepare(`
+        SELECT value FROM app_metadata WHERE key = 'storage-schema-version'
+      `).get()).toEqual({ value: "9" });
+      expect(restoredMain.prepare(`
+        SELECT COUNT(*) AS count FROM sqlite_schema
+        WHERE type = 'table' AND name = 'conversation_thread_states'
+      `).get()).toEqual({ count: 0 });
+    } finally {
+      restoredMain.close();
+    }
+  });
+
+  it("rejects a pre-Thread v2 manifest when its database no longer reports storage schema 9", async () => {
+    const fixture = await createFixture();
+    downgradeApplicationToStorageSchema9(fixture.mainDatabasePath);
+    const created = await createRecoveryPoint({ workspace: fixture.workspace, quiesced: true });
+    const application = created.manifest.databases.find((entry: { kind: string }) => entry.kind === "application");
+    if (!application) throw new Error("application backup entry is missing");
+    const tampered = path.join(fixture.root, "schema-version-tampered");
+    await fs.cp(created.directory, tampered, { recursive: true });
+    const databasePath = path.join(tampered, application.file);
+    const database = new DatabaseSync(databasePath);
+    try {
+      database.prepare(`
+        UPDATE app_metadata SET value = '10' WHERE key = 'storage-schema-version'
+      `).run();
+    } finally {
+      database.close();
+    }
+    const databaseBytes = await fs.readFile(databasePath);
+    const databaseSha256 = createHash("sha256").update(databaseBytes).digest("hex");
+    await rewriteManifest(tampered, (manifest) => {
+      const entry = manifest.databases.find((item: { id: string }) => item.id === application.id);
+      entry.sha256 = databaseSha256;
+      entry.bytes = databaseBytes.length;
+    });
+
+    await expect(verifyRecoveryPoint(tampered)).rejects.toMatchObject({
       code: "SQLITE_SCHEMA_INCOMPLETE"
     });
   });
@@ -748,6 +823,18 @@ async function createAgentDatabases(
     return createQueueFixture(path.join(dataDirectory, "session-queue.sqlite"), agentId);
   }
   return undefined;
+}
+
+function downgradeApplicationToStorageSchema9(databasePath: string) {
+  const database = new DatabaseSync(databasePath);
+  try {
+    database.exec("DROP TABLE conversation_thread_states;");
+    database.prepare(`
+      UPDATE app_metadata SET value = '9' WHERE key = 'storage-schema-version'
+    `).run();
+  } finally {
+    database.close();
+  }
 }
 
 async function createQueueFixture(queueDatabasePath: string, agentId: string) {

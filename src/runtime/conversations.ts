@@ -189,7 +189,7 @@ export function runtime_recordAssistantMessage(this: RuntimeHost,
     logRunId?: string,
     requestStatus?: "failed",
     trace: AssistantMessageTrace = {},
-    options: { persist?: boolean; messageId?: string } = {}
+    options: { persist?: boolean; messageId?: string; replyMessageIds?: number[] } = {}
   ) {
     const at = new Date().toISOString();
     const record = this.ensureConversationRecord(incoming, at);
@@ -208,6 +208,7 @@ export function runtime_recordAssistantMessage(this: RuntimeHost,
       senderName: this.persona?.name ?? "普拉娜",
       selfId: incoming.selfId,
       imageUrls,
+      replyMessageIds: options.replyMessageIds,
       logRunId,
       messageOrigin: trace.messageOrigin,
       toolNames: normalizedToolNames(trace.toolNames),

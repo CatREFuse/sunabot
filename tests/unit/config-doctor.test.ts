@@ -44,6 +44,30 @@ describe("ConfigDoctorService", () => {
     ]));
   });
 
+  it("repairs a missing group thread model with the normalized default", async () => {
+    const document = structuredClone(defaultConfig());
+    delete (document.bot.orchestrator as Partial<typeof document.bot.orchestrator>).groupThreadModel;
+    await writeDocument(document);
+
+    const doctor = createDoctor();
+    const report = await doctor.scan();
+
+    expect(report.status).toBe("repairable");
+    expect(report.proposal?.source).toBe("rules");
+    expect(report.proposal?.changes).toContainEqual(expect.objectContaining({
+      path: "/bot/orchestrator/groupThreadModel",
+      action: "add",
+      summary: expect.stringContaining("gpt-5.4-mini")
+    }));
+    await doctor.apply({
+      proposalId: report.proposal!.id,
+      sourceRevision: report.sourceRevision
+    });
+    await expect(fs.readFile(configPath, "utf8").then(JSON.parse)).resolves.toMatchObject({
+      bot: { orchestrator: { groupThreadModel: "gpt-5.4-mini" } }
+    });
+  });
+
   it("keeps invalid JSON local and refuses an AI request", async () => {
     await fs.writeFile(configPath, "{\"normalReply\": undefined}", "utf8");
     const runModel = vi.fn();

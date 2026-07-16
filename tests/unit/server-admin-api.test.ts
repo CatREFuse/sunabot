@@ -81,7 +81,7 @@ describe("admin API smoke", () => {
     expect(files.statusCode).toBe(200);
     expect(files.json().files).toHaveLength(7);
     expect(systemFiles.statusCode).toBe(200);
-    expect(systemFiles.json().files).toHaveLength(7);
+    expect(systemFiles.json().files).toHaveLength(8);
     expect(systemFiles.json().files).toContainEqual(expect.objectContaining({
       id: "conversation.private-reply",
       kind: "final",
@@ -92,6 +92,7 @@ describe("admin API smoke", () => {
       ])
     }));
     expect(files.json().files).toContainEqual(expect.objectContaining({ id: "image.selfie-rewrite" }));
+    expect(systemFiles.json().files).toContainEqual(expect.objectContaining({ id: "orchestrator.group-thread" }));
     expect(systemFiles.json().files).not.toContainEqual(expect.objectContaining({ id: "image.selfie-rewrite" }));
     for (const [endpoint, summaries] of [
       ["/api/agent-files", files.json().files],

@@ -24,11 +24,12 @@
 | Agent 文件与工具目录 API | `apps/api/plugins/agentToolRoutes.ts`, `services/tools/toolRegistry.ts` |
 | 自拍参考图 API 与受控文件仓库 | `apps/api/plugins/selfieReferenceRoutes.ts`, `src/admin/selfieReferences.ts` |
 | 配置 schemaVersion、加载、归一化、默认值与路径解析 | `src/config.ts`, `src/types.ts` |
-| SQLite schema、业务数据与模型聚合 | `adapters/sqlite/applicationDataSchema.ts`, `adapters/sqlite/applicationDataStore.ts`, `adapters/sqlite/modelCallStore.ts` |
+| SQLite schema、业务数据、Thread 状态与模型聚合 | `adapters/sqlite/applicationDataSchema.ts`, `adapters/sqlite/applicationDataStore.ts`, `adapters/sqlite/groupThreadStateStore.ts`, `adapters/sqlite/modelCallStore.ts` |
 | 旧数据、workspace、首次运行与单 Agent 迁移门禁 | `packages/platform/multiAgentMigrationGate.mjs`, `tooling/shared/safe-absolute-path.mjs`, `tooling/workspace/init-workspace.mjs`, `tooling/runtime/first-run-state.mjs`, `tooling/migrations/migrate-to-sqlite.mjs`, `tooling/migrations/migrate-workspace-layout.mjs`, `tooling/migrations/migrate-single-agent-to-multi-agent.mjs` |
 | SQLite 恢复点、迁移恢复与 journal | `tooling/workspace/sqlite-recovery.mjs`, `tooling/migrations/sqlite-migration-recovery.mjs`, `tooling/migrations/sqlite-legacy-import.mjs` |
 | OneBot 连接、事件和 action | `adapters/onebot/onebotGateway.ts`, `adapters/onebot/qqMedia.ts` |
 | 回复运行时、上下文、投递与群聊总结 | `src/runtime.ts`, `src/runtime/reply.ts`, `src/runtime/replyContext.ts`, `src/runtime/delivery.ts`, `src/runtime/intake.ts` |
+| 群聊消息元数据、Thread 领域规则与前置节点 | `src/runtime/conversationMemoryHelpers.ts`, `services/conversations/groupThreadContext.ts`, `src/runtime/groupThreadPipeline.ts` |
 | 会话事件、turn、工具任务、outbox | `services/sessions/`, `packages/contracts/session/runtimeMessages.ts` |
 | 群聊门控、广播风暴嗅探与编排策略 | `services/orchestration/groupReplyPolicy.ts`, `services/orchestration/broadcastStormDetector.ts`, `services/agents/agentRuntimeManager.ts` |
 | 命令路由与钩子 | `services/messaging/commandRouter.ts`, `services/messaging/hookBus.ts` |
@@ -45,6 +46,7 @@
 | 管理配置、字段状态和 Agent 文件 | `src/admin/configService.ts`, `src/admin/configFieldStates.ts`, `src/admin/agentFiles.ts` |
 | 管理台路由和页面 | `apps/admin-web/src/router.ts`, `apps/admin-web/src/views/` |
 | 管理台组件和状态 | `apps/admin-web/src/components/`, `apps/admin-web/src/composables/` |
+| 群聊编排与 Thread 模型设置 | `apps/admin-web/src/components/settings/OrchestratorSettingsForm.vue`, `src/admin/configService.ts` |
 | 配置医生页面与状态 | `apps/admin-web/src/views/ConfigDoctorView.vue`, `apps/admin-web/src/components/settings/ConfigDoctorPanel.vue`, `apps/admin-web/src/components/settings/ConfigDoctorRepairDialog.vue`, `apps/admin-web/src/composables/useConfigDoctor.ts` |
 | Agent 管理与全局切换 | `apps/admin-web/src/views/AgentsView.vue`, `apps/admin-web/src/components/agents/`, `apps/admin-web/src/composables/useAgents.ts`, `apps/admin-web/src/composables/agentScope.ts` |
 | Agent 工具目录设置 | `apps/admin-web/src/components/settings/ToolsSettingsForm.vue`, `apps/admin-web/src/components/settings/ToolCatalogSettings.vue`, `apps/admin-web/src/components/settings/ToolDetailDialog.vue`, `apps/admin-web/src/components/settings/ToolRuntimeSettings.vue`, `apps/admin-web/src/composables/useToolCatalog.ts` |

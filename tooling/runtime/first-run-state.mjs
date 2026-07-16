@@ -13,13 +13,14 @@ export const FIRST_RUN_JOURNAL = "runtime/first-run-bootstrap.json";
 const FIRST_RUN_SIGNING_KEY = "secrets/first-run-bootstrap.key";
 const COMPLETED_REPORT = "runtime/first-run-bootstrap.completed.json";
 const BOUNDARIES = ["marker", "main", "queue", "manifest", "registration", "account-runtime"];
-const MAIN_SCHEMA_VERSION = 9;
+const MAIN_SCHEMA_VERSION = 10;
 const QUEUE_SCHEMA_VERSION = 4;
 const MAIN_TABLES = [
   "admin_sessions",
   "agent_accounts",
   "agents",
   "app_metadata",
+  "conversation_thread_states",
   "conversations",
   "image_history",
   "memory_batches",
@@ -262,6 +263,10 @@ function validateMainSchema(database) {
   requireColumns(database, "agent_accounts", [
     "id", "agent_id", "label", "qq_id", "enabled", "webui_port", "created_at", "updated_at"
   ]);
+  requireColumns(database, "conversation_thread_states", [
+    "conversation_id", "state_schema_version", "revision", "processed_through_sequence",
+    "last_run_key", "classifier_model", "prompt_revision", "state_json", "created_at", "updated_at"
+  ]);
   requireIndexes(database, "agent_accounts", ["agent_accounts_agent", "agent_accounts_webui_port"]);
   const foreignKeys = database.prepare("PRAGMA foreign_key_list(agent_accounts)").all();
   if (!foreignKeys.some((row) => (
@@ -273,11 +278,28 @@ function validateMainSchema(database) {
   ))) {
     throw new Error("agent_accounts foreign key is invalid");
   }
+  const threadForeignKeys = database.prepare("PRAGMA foreign_key_list(conversation_thread_states)").all();
+  if (!threadForeignKeys.some((row) => (
+    row.table === "conversations"
+    && row.from === "conversation_id"
+    && row.to === "id"
+    && row.on_update === "CASCADE"
+    && row.on_delete === "CASCADE"
+  ))) {
+    throw new Error("conversation_thread_states foreign key is invalid");
+  }
   requireSchemaSql(database, "agents", ["check (enabled in (0, 1))", "workspace text not null unique"]);
   requireSchemaSql(database, "agent_accounts", [
     "check (enabled in (0, 1))",
     "check (webui_port between 1 and 65535)",
     "unique (webui_port)"
+  ]);
+  requireSchemaSql(database, "conversation_thread_states", [
+    "strict",
+    "check (state_schema_version = 1)",
+    "check (revision >= 1)",
+    "check (processed_through_sequence >= 0)",
+    "check (json_valid(state_json))"
   ]);
 }
 

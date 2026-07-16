@@ -9,6 +9,7 @@ describe("focusConfigField", () => {
     root.innerHTML = `
       <label><span class="field-label">管理员 QQ</span><input id="admin"></label>
       <label><span class="field-label">过滤名单</span><input id="quote-filter"></label>
+      <label><span class="field-label">Thread 拆分模型</span><select id="thread-model"></select></label>
       <label data-config-field="server.port"><input id="port"></label>
     `;
     document.body.append(root);
@@ -19,6 +20,8 @@ describe("focusConfigField", () => {
     expect(document.activeElement?.id).toBe("port");
     expect(focusConfigField(root, "bot.quoteGroupReplyExcludedUserIds.1")).toBe(true);
     expect(document.activeElement?.id).toBe("quote-filter");
-    expect(scrollIntoView).toHaveBeenCalledTimes(3);
+    expect(focusConfigField(root, "orchestrator.groupThreadModel")).toBe(true);
+    expect(document.activeElement?.id).toBe("thread-model");
+    expect(scrollIntoView).toHaveBeenCalledTimes(4);
   });
 });

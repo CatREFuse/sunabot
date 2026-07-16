@@ -171,7 +171,7 @@ describe("AgentRegistry", () => {
     await expect(fs.access(path.join(external, "compress.json"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("loads legacy Agent manifests with no_reply poke disabled and an empty group quote filter", async () => {
+  it("loads legacy Agent manifests with current defaults for missing Bot fields", async () => {
     const config = createAdminTestConfig(temporaryDirectory);
     config.persona.agentWorkspace = path.join(testPaths.workspace, "business", "agents", "plana");
     const registry = new AgentRegistry(config, {
@@ -184,10 +184,37 @@ describe("AgentRegistry", () => {
     const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8")) as Record<string, unknown>;
     delete (manifest.bot as Record<string, unknown>).pokeOnNoReply;
     delete (manifest.bot as Record<string, unknown>).quoteGroupReplyExcludedUserIds;
+    delete ((manifest.bot as Record<string, unknown>).orchestrator as Record<string, unknown>).groupThreadModel;
     await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
 
     await expect(registry.config("plana", config)).resolves.toMatchObject({
-      bot: { pokeOnNoReply: false, quoteGroupReplyExcludedUserIds: [] }
+      bot: {
+        pokeOnNoReply: false,
+        quoteGroupReplyExcludedUserIds: [],
+        orchestrator: { groupThreadModel: "gpt-5.4-mini" }
+      }
+    });
+  });
+
+  it("uses shared Thread model updates for Plana without overriding custom Agents", async () => {
+    const config = createAdminTestConfig(temporaryDirectory);
+    config.persona.agentWorkspace = path.join(testPaths.workspace, "business", "agents", "plana");
+    config.bot.orchestrator.groupThreadModel = "initial-thread-model";
+    const registry = new AgentRegistry(config, {
+      workspaceRoot: path.join(testPaths.workspace, "business", "agents"),
+      store,
+      allowUnmarkedMigration: true
+    });
+    await registry.initialize();
+    await registry.create({ id: "arona", name: "阿罗娜" });
+    const updatedShared = structuredClone(config);
+    updatedShared.bot.orchestrator.groupThreadModel = "updated-thread-model";
+
+    await expect(registry.config("plana", updatedShared)).resolves.toMatchObject({
+      bot: { orchestrator: { groupThreadModel: "updated-thread-model" } }
+    });
+    await expect(registry.config("arona", updatedShared)).resolves.toMatchObject({
+      bot: { orchestrator: { groupThreadModel: "initial-thread-model" } }
     });
   });
 

@@ -38,7 +38,7 @@ const conversationVariables = [
   variable("runtime.address_rules", "根据管理员配置生成的称呼规则", "string", "运行时"),
   variable("runtime.scope_rules", "私聊、用户群聊和 Bot 群聊的处理规则", "string", "运行时"),
   variable("runtime.tool_rules", "图像与自拍工具的调用规则", "string", "运行时"),
-  variable("messages_64", "当前消息之前最近最多 64 条会话消息", "message[]", "会话上下文"),
+  variable("messages_64", "当前消息之前最近最多 64 条完整会话消息；群聊消息包含时间、顺序、消息 ID、显示名、uid 和引用目标", "message[]", "会话上下文"),
   variable("conversation.messages", "当前消息之前可直接发送给模型的会话消息", "message[]", "会话上下文"),
   variable("memory.working", "工作记忆召回结果", "string", "记忆召回"),
   variable("memory.long_term", "长期记忆召回结果", "string", "记忆召回"),
@@ -87,6 +87,13 @@ export const PROMPT_FILE_DEFINITIONS = [
     "编排器",
     (config) => config.bot.orchestrator.promptFile,
     [variable("orchestrator.payload", "群聊触发条件、上下文和当前消息", "json", "群聊编排器")]
+  ),
+  final(
+    "orchestrator.group-thread",
+    "群聊 Thread 拆分",
+    "编排器",
+    () => "group_thread_context.json",
+    [variable("thread.payload", "已有 Thread 状态和本次新增的完整群聊消息", "json", "群聊上下文前置节点")]
   ),
   final(
     "conversation.group-summary",

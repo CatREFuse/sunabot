@@ -37,6 +37,18 @@ export function migrateApplicationDataSchema(database: DatabaseSync, modelCalls:
       data_json TEXT NOT NULL CHECK (json_valid(data_json))
     );
     CREATE INDEX IF NOT EXISTS conversations_last_at ON conversations(last_at DESC);
+    CREATE TABLE IF NOT EXISTS conversation_thread_states (
+      conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON UPDATE CASCADE ON DELETE CASCADE,
+      state_schema_version INTEGER NOT NULL CHECK (state_schema_version = 1),
+      revision INTEGER NOT NULL CHECK (revision >= 1),
+      processed_through_sequence INTEGER NOT NULL CHECK (processed_through_sequence >= 0),
+      last_run_key TEXT NOT NULL CHECK (length(trim(last_run_key)) > 0),
+      classifier_model TEXT NOT NULL CHECK (length(trim(classifier_model)) > 0),
+      prompt_revision TEXT NOT NULL CHECK (length(trim(prompt_revision)) > 0),
+      state_json TEXT NOT NULL CHECK (json_valid(state_json)),
+      created_at TEXT NOT NULL CHECK (length(trim(created_at)) > 0),
+      updated_at TEXT NOT NULL CHECK (length(trim(updated_at)) > 0)
+    ) STRICT;
     CREATE TABLE IF NOT EXISTS image_history (
       id TEXT PRIMARY KEY,
       url TEXT NOT NULL UNIQUE,
@@ -161,6 +173,10 @@ export function migrateApplicationDataSchema(database: DatabaseSync, modelCalls:
   }
   if (schemaVersion < 9) setMetadata(database, "storage-schema-version", "9");
   modelCalls.repairModelAggregatesIfStale();
+  const repairedVersion = Number(metadata(database, "storage-schema-version") ?? 0);
+  if (!Number.isSafeInteger(repairedVersion) || repairedVersion < 10) {
+    setMetadata(database, "storage-schema-version", "10");
+  }
 }
 
 function transaction<T>(database: DatabaseSync, operation: () => T) {

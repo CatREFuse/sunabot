@@ -176,6 +176,14 @@ describe("first-run bootstrap journal", () => {
       }
     },
     {
+      label: "missing group thread state table",
+      mutate(workspace: string) {
+        const database = new DatabaseSync(path.join(workspace, "business/data/sunabot.sqlite"));
+        database.exec("DROP TABLE conversation_thread_states");
+        database.close();
+      }
+    },
+    {
       label: "stale queue schema version",
       mutate(workspace: string) {
         const database = new DatabaseSync(path.join(workspace, "business/data/session-queue.sqlite"));

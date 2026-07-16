@@ -8,12 +8,23 @@ import { WORKSPACE_LAYOUT } from "../../packages/platform/workspaceLayout.js";
 import { currentAgentRuntimeConfig } from "../../packages/platform/runtimeAgentContext.js";
 import { migrateApplicationDataSchema } from "./applicationDataSchema.js";
 import {
+  GroupThreadStateStore,
+  type CommitGroupThreadStateInput,
+  type CommitGroupThreadStateResult,
+  type GroupThreadStateRecord
+} from "./groupThreadStateStore.js";
+import {
   ModelCallStore,
   type ModelCallAggregateRow,
   type ModelCallModelAggregateRow
 } from "./modelCallStore.js";
 
 export type { ModelCallAggregateRow, ModelCallModelAggregateRow } from "./modelCallStore.js";
+export type {
+  CommitGroupThreadStateInput,
+  CommitGroupThreadStateResult,
+  GroupThreadStateRecord
+} from "./groupThreadStateStore.js";
 
 export type MemoryDataSource = "working" | "long_term" | "user_profile";
 
@@ -87,6 +98,7 @@ export const sqliteMemoryPersistence: MemoryPersistenceProvider = {
 
 export class ApplicationDataStore {
   private readonly database: DatabaseSync;
+  private readonly groupThreads: GroupThreadStateStore;
   private readonly modelCalls: ModelCallStore;
 
   constructor(readonly databasePath: string) {
@@ -100,6 +112,7 @@ export class ApplicationDataStore {
     this.database.exec("PRAGMA busy_timeout = 5000");
     this.modelCalls = new ModelCallStore(this.database);
     migrateApplicationDataSchema(this.database, this.modelCalls);
+    this.groupThreads = new GroupThreadStateStore(this.database);
   }
 
   close() {
@@ -323,6 +336,14 @@ export class ApplicationDataStore {
 
   replaceConversations(records: readonly ConversationRecord[]) {
     this.transaction(() => this.replaceConversationsUnsafe(records));
+  }
+
+  readGroupThreadState(conversationId: string): GroupThreadStateRecord | undefined {
+    return this.groupThreads.read(conversationId);
+  }
+
+  commitGroupThreadState(input: CommitGroupThreadStateInput): CommitGroupThreadStateResult {
+    return this.groupThreads.commit(input);
   }
 
   replaceConversationsIdempotent(idempotencyKey: string, records: readonly ConversationRecord[]) {

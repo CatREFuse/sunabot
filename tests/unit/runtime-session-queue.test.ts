@@ -12,7 +12,10 @@ import type {
 import { parseOneBotInboundMessage } from "../../adapters/onebot/inboundMessageAdapter.js";
 import type { OneBotEvent } from "../../adapters/onebot/protocol.js";
 import type { MessagingPort } from "../../packages/contracts/messaging/messages.js";
-import type { AsyncToolCompletionPayload } from "../../packages/contracts/session/runtimeMessages.js";
+import type {
+  AsyncToolCompletionPayload,
+  GroupThreadContextSnapshotV1
+} from "../../packages/contracts/session/runtimeMessages.js";
 import { defaultFinalPromptTemplate } from "../../services/agent/promptDefaults.js";
 import {
   renderFinalPromptTemplate,
@@ -200,10 +203,35 @@ describe("SunaRuntime Session queue bridge", () => {
 
   it("routes private and group replies to independent prompt families", async () => {
     const promptIds: string[] = [];
+    const classifierModels: Array<{ model: string; effort?: string }> = [];
     const harness = createRuntimeHarness(async () => ({ kind: "completed", text: "routed" }));
-    (harness.runtime as unknown as {
+    const internals = harness.runtime as unknown as {
       renderPromptRequest(id: string, variables: Record<string, unknown>): Promise<RenderedPromptRequest>;
-    }).renderPromptRequest = async (id, variables) => {
+      getProviderForModel(model: string, effort?: string): OpenAIProvider;
+      completePrompt(provider: OpenAIProvider, request: RenderedPromptRequest): Promise<string>;
+    };
+    internals.getProviderForModel = (model, effort) => {
+      classifierModels.push({ model, effort });
+      return {} as OpenAIProvider;
+    };
+    internals.completePrompt = async () => JSON.stringify({
+      schema_version: 1,
+      active_thread_key: "routing",
+      threads: [{
+        thread_key: "routing",
+        existing_thread_id: null,
+        topic: "群成员正在确认私聊和群聊分别使用哪个提示词。",
+        status: "active"
+      }],
+      message_assignments: [{
+        message_id: "20003",
+        primary_thread_key: "routing",
+        related_thread_keys: [],
+        relation: "new",
+        confidence: 0.99
+      }]
+    });
+    internals.renderPromptRequest = async (id, variables) => {
       promptIds.push(id);
       return {
         messages: [
@@ -219,7 +247,65 @@ describe("SunaRuntime Session queue bridge", () => {
     await handleOneBotEvent(harness.runtime, groupEvent(20_003, 602, "group endpoint"), harness.gateway);
     await harness.coordinator.waitForIdle({ timeoutMs: 3_000 });
 
-    expect(promptIds).toEqual(["conversation.private-reply", "conversation.group-reply"]);
+    expect(promptIds).toEqual([
+      "conversation.private-reply",
+      "orchestrator.group-thread",
+      "conversation.group-reply"
+    ]);
+    expect(classifierModels).toEqual([{ model: "gpt-5.4-mini", effort: "low" }]);
+  });
+
+  it("keeps the complete ordered group context when the thread classifier fails", async () => {
+    const mainRequests: RenderedPromptRequest[] = [];
+    const completeRequestTurn = vi.fn(async (request: RenderedPromptRequest): Promise<ProviderTurnResult> => {
+      mainRequests.push(request);
+      return { kind: "completed", text: `raw reply ${mainRequests.length}` };
+    });
+    const harness = createRuntimeHarness(completeRequestTurn);
+    const classifierFailure = vi.fn(async () => {
+      throw new Error("thread classifier unavailable");
+    });
+    const internals = harness.runtime as unknown as {
+      getProviderForModel(model: string, effort?: string): OpenAIProvider;
+      completePrompt(provider: OpenAIProvider, request: RenderedPromptRequest): Promise<string>;
+      renderPromptRequest(id: string, variables: Record<string, unknown>): Promise<RenderedPromptRequest>;
+    };
+    internals.getProviderForModel = () => ({} as OpenAIProvider);
+    internals.completePrompt = classifierFailure;
+    internals.renderPromptRequest = async (id, variables) => {
+      if (id === "orchestrator.group-thread") {
+        return {
+          messages: [{ role: "user", content: JSON.stringify(variables["thread.payload"]) }],
+          response_format: { type: "text" }
+        };
+      }
+      return {
+        messages: [
+          { role: "system", content: id },
+          ...((variables["messages_64"] ?? []) as RenderedPromptRequest["messages"]),
+          { role: "user", content: String(variables["user.input"] ?? "") }
+        ],
+        response_format: { type: "text" }
+      };
+    };
+
+    await handleOneBotEvent(harness.runtime, groupEvent(20_004, 603, "first raw message"), harness.gateway);
+    await harness.coordinator.waitForIdle({ timeoutMs: 3_000 });
+    await handleOneBotEvent(harness.runtime, groupEvent(20_005, 603, "second raw message"), harness.gateway);
+    await harness.coordinator.waitForIdle({ timeoutMs: 3_000 });
+
+    expect(classifierFailure).toHaveBeenCalledTimes(2);
+    expect(sentTexts(harness.gateway)).toEqual(["raw reply 1", "raw reply 2"]);
+    const secondRequest = mainRequests[1]!;
+    const firstHistoryIndex = secondRequest.messages.findIndex((message) => message.content.includes("message_id=20004"));
+    const assistantHistoryIndex = secondRequest.messages.findIndex((message) => message.content.includes("raw reply 1"));
+    const threadContextIndex = secondRequest.messages.findIndex((message) => message.content.includes("<thread_context>"));
+    const currentInputIndex = secondRequest.messages.findLastIndex((message) => message.role === "user");
+    expect(firstHistoryIndex).toBeGreaterThan(0);
+    expect(assistantHistoryIndex).toBeGreaterThan(firstHistoryIndex);
+    expect(threadContextIndex).toBeGreaterThan(assistantHistoryIndex);
+    expect(currentInputIndex).toBeGreaterThan(threadContextIndex);
+    expect(secondRequest.messages[threadContextIndex]?.content).toContain('"active_thread_id":null');
   });
 
   it("keeps model starts and sends FIFO in one group while another group progresses", async () => {
@@ -515,22 +601,26 @@ describe("SunaRuntime Session queue bridge", () => {
       .map((message) => ({
         text: message.text,
         messageOrigin: message.messageOrigin,
-        toolNames: message.toolNames
+        toolNames: message.toolNames,
+        replyMessageIds: message.replyMessageIds
       }))).toEqual([
       {
         text: "第一条行动消息",
         messageOrigin: "assistant_text",
-        toolNames: ["assistant_text", "websearch"]
+        toolNames: ["assistant_text", "websearch"],
+        replyMessageIds: [150]
       },
       {
         text: "第二条行动消息",
         messageOrigin: "assistant_text",
-        toolNames: ["assistant_text", "websearch"]
+        toolNames: ["assistant_text", "websearch"],
+        replyMessageIds: undefined
       },
       {
         text: "最终回复",
         messageOrigin: "text",
-        toolNames: ["assistant_text", "websearch"]
+        toolNames: ["assistant_text", "websearch"],
+        replyMessageIds: [150]
       }
     ]);
   });
@@ -762,6 +852,7 @@ describe("SunaRuntime Session queue bridge", () => {
     const toolGate = deferred<void>();
     const toolStarted = deferred<void>();
     const completionPrompts: string[] = [];
+    const completionThreadContexts: string[] = [];
     const providerStarts: string[] = [];
     const asyncCodexFlags: Array<boolean | undefined> = [];
     const runner: CodexRunner = {
@@ -797,6 +888,9 @@ describe("SunaRuntime Session queue bridge", () => {
       if (userText.includes("<tool_result>")) {
         providerStarts.push("tool_completion");
         completionPrompts.push(userText);
+        completionThreadContexts.push(request.messages.find((message) => (
+          message.role === "developer" && message.content.includes("<thread_context>")
+        ))?.content ?? "");
         return { kind: "completed", text: finalReply };
       }
       if (userText.includes("delegate")) {
@@ -818,6 +912,20 @@ describe("SunaRuntime Session queue bridge", () => {
       throw new Error(`Unexpected provider request: ${userText}`);
     });
     const harness = createRuntimeHarness(completeRequestTurn, runner);
+    const dispatchThreadContext = runtimeThreadSnapshot(
+      "群成员正在委托 Agent 执行一项耗时分析任务。",
+      301
+    );
+    const laterThreadContext = runtimeThreadSnapshot(
+      "群成员正在任务执行期间讨论另一条后来消息。",
+      302
+    );
+    const prepareGroupThreadContext = vi.fn(async (incoming: { messageId?: number }) => (
+      incoming.messageId === 301 ? dispatchThreadContext : laterThreadContext
+    ));
+    (harness.runtime as unknown as {
+      prepareGroupThreadContext: typeof prepareGroupThreadContext;
+    }).prepareGroupThreadContext = prepareGroupThreadContext;
     const acknowledgement = "我收到委托，开始检查。";
 
     await handleOneBotEvent(harness.runtime, groupEvent(301, 300, "delegate"), harness.gateway);
@@ -825,6 +933,10 @@ describe("SunaRuntime Session queue bridge", () => {
     await waitUntil(() => sentTexts(harness.gateway).includes(acknowledgement));
     expect(sentTexts(harness.gateway).filter((text) => text === acknowledgement)).toHaveLength(1);
     expect(harness.store.listToolJobs("group:300")[0]?.arguments).not.toHaveProperty("dispatch_message");
+    expect(harness.store.listToolJobs("group:300")[0]?.originalRequest).toMatchObject({
+      captureSequence: 1,
+      threadContext: dispatchThreadContext
+    });
 
     await handleOneBotEvent(harness.runtime, groupEvent(302, 300, "later"), harness.gateway);
     await waitUntil(() => sentTexts(harness.gateway).includes("later reply"));
@@ -852,6 +964,9 @@ describe("SunaRuntime Session queue bridge", () => {
     expect(completionPrompts).toHaveLength(1);
     expect(completionPrompts[0]).toContain('"providerCallId": "call-runtime-codex"');
     expect(completionPrompts[0]).toContain(`"status": "${toolStatus}"`);
+    expect(completionThreadContexts[0]).toContain("群成员正在委托 Agent 执行一项耗时分析任务。");
+    expect(completionThreadContexts[0]).not.toContain("后来消息");
+    expect(prepareGroupThreadContext.mock.calls.map(([incoming]) => incoming.messageId)).toEqual([301, 302]);
     expect(asyncCodexFlags).toEqual([true, true, false]);
     expect(runtimeConversation(harness.runtime, "group:300")?.messages
       .filter((message) => message.role === "assistant")
@@ -919,6 +1034,48 @@ describe("SunaRuntime Session queue bridge", () => {
     });
   });
 
+  it("uses an empty thread sidecar for legacy group callbacks without a captured snapshot", async () => {
+    let callbackRequest: RenderedPromptRequest | undefined;
+    const harness = createRuntimeHarness(async (request) => {
+      callbackRequest = request;
+      return { kind: "completed", text: "legacy callback reply" };
+    });
+    const incoming = parseOneBotInboundMessage(groupEvent(30_003, 304, "legacy callback"))!;
+    harness.runtime.recordIncomingMessage(incoming);
+    const prepareGroupThreadContext = vi.fn(async () => {
+      throw new Error("legacy callbacks must not rebuild thread context");
+    });
+    (harness.runtime as unknown as {
+      prepareGroupThreadContext: typeof prepareGroupThreadContext;
+    }).prepareGroupThreadContext = prepareGroupThreadContext;
+    const delivery = { outbox: [] } satisfies ReplyDelivery;
+    const payload = {
+      type: "tool_result",
+      toolJobId: "job-legacy-group",
+      providerCallId: "call-legacy-group",
+      toolName: "codex",
+      originalRequest: { incoming, captureSequence: 1 },
+      arguments: { task: "legacy" },
+      outcome: {
+        status: "succeeded",
+        result: { content: "legacy result" },
+        error: undefined
+      }
+    } satisfies AsyncToolCompletionPayload;
+
+    await harness.runtime.replyToToolCompletion(
+      payload,
+      harness.gateway,
+      new AbortController().signal,
+      delivery
+    );
+
+    expect(prepareGroupThreadContext).not.toHaveBeenCalled();
+    expect(callbackRequest?.messages.find((message) => message.role === "developer")?.content)
+      .toContain('"active_thread_id":null');
+    expect(delivery.outbox).toHaveLength(1);
+  });
+
   it("does not guess the source of legacy outbox replies", async () => {
     const harness = createRuntimeHarness(async () => ({ kind: "completed", text: "unused" }));
     const incoming = parseOneBotInboundMessage(privateEvent(30_002, "旧队列消息"))!;
@@ -936,6 +1093,56 @@ describe("SunaRuntime Session queue bridge", () => {
     expect(message).toMatchObject({ role: "assistant", text: "旧回复" });
     expect(message?.messageOrigin).toBeUndefined();
     expect(message?.toolNames).toBeUndefined();
+  });
+
+  it("records the transport message ID so later explicit replies can inherit its thread", async () => {
+    const harness = createRuntimeHarness(async () => ({ kind: "completed", text: "unused" }));
+    const incoming = parseOneBotInboundMessage(groupEvent(30_004, 305, "发送一条可引用回复"))!;
+    harness.runtime.recordIncomingMessage(incoming);
+    (harness.gateway.send as unknown as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({ accepted: true, messageId: "880088" });
+
+    await harness.runtime.deliverReplyOutbox({
+      type: "assistant_reply",
+      incoming,
+      text: "可以引用这条消息。",
+      generatedImages: [],
+      isAdmin: false
+    }, harness.gateway);
+
+    expect(runtimeConversation(harness.runtime, "group:305")?.messages.at(-1)).toMatchObject({
+      id: "880088",
+      role: "assistant",
+      text: "可以引用这条消息。",
+      replyMessageIds: [30_004]
+    });
+  });
+
+  it("keeps the durable reply target stable when quote settings change before outbox delivery", async () => {
+    const harness = createRuntimeHarness(async () => ({ kind: "completed", text: "unused" }));
+    const incoming = parseOneBotInboundMessage(groupEvent(30_005, 306, "持久引用目标"))!;
+    harness.runtime.recordIncomingMessage(incoming);
+    const draft = harness.runtime.replyDeliveryDraft(
+      incoming,
+      "引用目标不能漂移。",
+      false
+    );
+    expect(draft.payload.payload.replyToMessageId).toBe(30_005);
+    (harness.runtime as unknown as {
+      config: { bot: { quoteGroupReplies: boolean } };
+    }).config.bot.quoteGroupReplies = false;
+    (harness.gateway.send as unknown as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({ accepted: true, messageId: "880089" });
+
+    await harness.runtime.deliverReplyOutbox(draft.payload.payload, harness.gateway);
+
+    expect(harness.gateway.send).toHaveBeenCalledWith(expect.objectContaining({
+      replyToMessageId: 30_005
+    }));
+    expect(runtimeConversation(harness.runtime, "group:306")?.messages.at(-1)).toMatchObject({
+      id: "880089",
+      replyMessageIds: [30_005]
+    });
   });
 
   it("keeps unavailable Codex and Bash capabilities out of Provider options", async () => {
@@ -1159,6 +1366,31 @@ function memoryEntry(input: Pick<MemoryEntry, "id" | "source" | "sourceTitle" | 
     value: input.text,
     field: "fact",
     ...input
+  };
+}
+
+function runtimeThreadSnapshot(topic: string, processedThroughSequence: number): GroupThreadContextSnapshotV1 {
+  const threadId = "thread:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+  return {
+    schemaVersion: 1,
+    revision: processedThroughSequence,
+    processedThroughSequence,
+    activeThreadId: threadId,
+    threads: [{
+      threadId,
+      topic,
+      status: "active",
+      participantUids: ["171419991"],
+      messageIds: [String(processedThroughSequence)]
+    }],
+    messageAssignments: [{
+      messageId: String(processedThroughSequence),
+      sequence: processedThroughSequence,
+      primaryThreadId: threadId,
+      relatedThreadIds: [],
+      relation: "continue",
+      confidence: 0.95
+    }]
   };
 }
 

@@ -507,8 +507,10 @@ export class AgentRegistry {
 export function configFromManifest(shared: AppConfig, manifest: AgentManifest): AppConfig {
   const workspace = workspaceRelativeReference(path.posix.join(WORKSPACE_LAYOUT.agentRoot, manifest.id));
   const systemPromptWorkspace = manifest.prompts.overrideSystem
-    ? workspaceRelativeReference(path.posix.join(WORKSPACE_LAYOUT.agentRoot, manifest.id, "system-prompts"))
-    : workspaceRelativeReference(WORKSPACE_LAYOUT.systemPrompts);
+    ? workspaceRelativeReference(path.posix.join(WORKSPACE_LAYOUT.agentRoot, manifest.id, "system-prompts")) : workspaceRelativeReference(WORKSPACE_LAYOUT.systemPrompts);
+  const bot = structuredClone(manifest.bot);
+  bot.orchestrator = { ...structuredClone(shared.bot.orchestrator), ...structuredClone(bot.orchestrator),
+    groupThreadModel: manifest.id === shared.persona.defaultAgentId ? shared.bot.orchestrator.groupThreadModel : bot.orchestrator?.groupThreadModel?.trim() || shared.bot.orchestrator.groupThreadModel };
   return {
     ...structuredClone(shared),
     persona: {
@@ -519,15 +521,14 @@ export function configFromManifest(shared: AppConfig, manifest: AgentManifest): 
       systemPromptOverride: manifest.prompts.overrideSystem,
       ...(manifest.avatarPath ? { avatarPath: manifest.avatarPath } : {})
     },
-    bot: structuredClone(manifest.bot),
+    bot,
     onebot: {
       ...structuredClone(shared.onebot),
       ...structuredClone(manifest.onebot),
-      quoteGroupReplies: manifest.bot.quoteGroupReplies
+      quoteGroupReplies: bot.quoteGroupReplies
     }
   };
 }
-
 function createManifest(
   shared: AppConfig,
   input: { id: string; name: string; createdAt: string; avatarPath?: string }

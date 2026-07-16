@@ -34,6 +34,10 @@ export interface RenderedPromptRequest extends Record<string, unknown> {
   response_format: Record<string, unknown>;
 }
 
+export interface PromptRenderOptions {
+  opaqueVariables?: ReadonlySet<string> | readonly string[];
+}
+
 export type PromptVariableValue = string | number | boolean | null | Record<string, unknown> | unknown[];
 
 export class PromptTemplateError extends Error {
@@ -124,9 +128,10 @@ export function extractPromptVariables(content: string) {
 
 export function renderFinalPromptTemplate(
   template: FinalPromptTemplate,
-  variables: Readonly<Record<string, PromptVariableValue>>
+  variables: Readonly<Record<string, PromptVariableValue>>,
+  options: PromptRenderOptions = {}
 ): RenderedPromptRequest {
-  const resolve = createVariableResolver(variables);
+  const resolve = createVariableResolver(variables, new Set(options.opaqueVariables ?? []));
   const rendered = renderValue(template, resolve, "") as Record<string, unknown>;
   const messages = normalizeRenderedMessages(rendered.messages);
   if (!messages.length) {
@@ -141,7 +146,10 @@ export function buildPromptUtilityVariables() {
   };
 }
 
-function createVariableResolver(variables: Readonly<Record<string, PromptVariableValue>>) {
+function createVariableResolver(
+  variables: Readonly<Record<string, PromptVariableValue>>,
+  opaqueVariables: ReadonlySet<string>
+) {
   const cache = new Map<string, PromptVariableValue>();
   const resolving: string[] = [];
 
@@ -158,7 +166,9 @@ function createVariableResolver(variables: Readonly<Record<string, PromptVariabl
       );
     }
     resolving.push(name);
-    const value = renderValue(variables[name], resolve, name) as PromptVariableValue;
+    const value = (opaqueVariables.has(name)
+      ? structuredClone(variables[name])
+      : renderValue(variables[name], resolve, name)) as PromptVariableValue;
     resolving.pop();
     cache.set(name, value);
     return value;

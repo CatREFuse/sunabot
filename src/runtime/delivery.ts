@@ -173,11 +173,12 @@ export async function runtime_sendAssistantReply(this: RuntimeHost,
       return undefined;
     }
 
-    await gateway.send(outboundForIncoming(
+    const replyToMessageId = quoteReply ? this.groupReplyOptions(incoming).replyToMessageId : undefined;
+    const receipt = await gateway.send(outboundForIncoming(
       incoming,
       replyText,
       generatedImageAssets,
-      quoteReply ? this.groupReplyOptions(incoming).replyToMessageId : undefined
+      replyToMessageId
     ));
 
     const record = this.recordAssistantMessage(
@@ -186,7 +187,11 @@ export async function runtime_sendAssistantReply(this: RuntimeHost,
       generatedImageUrls,
       logRunId,
       undefined,
-      trace
+      trace,
+      {
+        ...(receipt.messageId ? { messageId: receipt.messageId } : {}),
+        ...(replyToMessageId == null ? {} : { replyMessageIds: [replyToMessageId] })
+      }
     );
     if (logRunId) {
       await appendRequestLog({
@@ -228,6 +233,7 @@ export function runtime_replyDeliveryDraft(this: RuntimeHost,
     quoteReply = true,
     trace: AssistantMessageTrace = { messageOrigin: "text" }
   ): ReplyDeliveryDraft {
+    const replyToMessageId = quoteReply ? this.groupReplyOptions(incoming).replyToMessageId : undefined;
     return {
       kind: "onebot.reply",
       payload: assistantReplyEnvelope({
@@ -237,6 +243,7 @@ export function runtime_replyDeliveryDraft(this: RuntimeHost,
         generatedImages,
         isAdmin,
         quoteReply,
+        replyToMessageId: replyToMessageId ?? null,
         logRunId,
         messageOrigin: trace.messageOrigin ?? "text",
         toolNames: trace.toolNames?.length ? [...new Set(trace.toolNames)] : undefined,
@@ -255,22 +262,25 @@ export async function runtime_deliverReplyOutbox(
   gateway: MessagingPort | undefined,
   delivery?: OutboxDeliveryContext
 ) {
-    const incoming = payload.incoming;
-    const generatedImageAssets = payload.generatedImages.filter((image) => image.url || image.filePath);
-    const generatedImageUrls = payload.generatedImages.flatMap((image) => image.url ? [image.url] : []);
-    if (delivery?.phase === "send" || !delivery) {
+  const incoming = payload.incoming;
+  const replyToMessageId = durableReplyToMessageId(this, payload, incoming);
+  const generatedImageAssets = payload.generatedImages.filter((image) => image.url || image.filePath);
+  const generatedImageUrls = payload.generatedImages.flatMap((image) => image.url ? [image.url] : []);
+  let remoteReceipt = delivery?.remoteReceipt;
+  if (delivery?.phase === "send" || !delivery) {
       if (!gateway) throw new OutboxDisconnectedError("OneBot is not connected.");
       const sendReply = () => gateway.send(outboundForIncoming(
         incoming,
         payload.text,
         generatedImageAssets,
-        payload.quoteReply === false ? undefined : this.groupReplyOptions(incoming).replyToMessageId
+        replyToMessageId
       ));
-      if (delivery) await delivery.sendRemote(sendReply);
-      else await sendReply();
-    }
+    if (delivery) remoteReceipt = await delivery.sendRemote(sendReply);
+    else remoteReceipt = await sendReply();
+  }
 
     const settleConversation = (idempotencyKey?: string) => {
+      const outboundMessageId = messagingReceiptMessageId(delivery?.remoteReceipt ?? remoteReceipt);
       const record = this.recordAssistantMessage(
         incoming,
         payload.text || "[图片]",
@@ -281,7 +291,12 @@ export async function runtime_deliverReplyOutbox(
           messageOrigin: payload.messageOrigin,
           toolNames: payload.toolNames
         },
-        idempotencyKey ? { persist: false, messageId: idempotencyKey } : undefined
+        {
+          ...(idempotencyKey
+            ? { persist: false, messageId: outboundMessageId ?? idempotencyKey }
+            : outboundMessageId ? { messageId: outboundMessageId } : {}),
+          ...(replyToMessageId == null ? {} : { replyMessageIds: [replyToMessageId] })
+        }
       );
       if (idempotencyKey) {
         saveConversationRecordsStrict([...this.conversationRecords.values()], idempotencyKey);
@@ -390,11 +405,12 @@ export async function runtime_sendErrorReply(this: RuntimeHost,
         ));
         return;
       }
-      await gateway.send(outboundForIncoming(
+      const replyToMessageId = this.groupReplyOptions(incoming).replyToMessageId;
+      const receipt = await gateway.send(outboundForIncoming(
         incoming,
         message,
         [],
-        this.groupReplyOptions(incoming).replyToMessageId
+        replyToMessageId
       ));
       this.recordAssistantMessage(
         incoming,
@@ -402,7 +418,11 @@ export async function runtime_sendErrorReply(this: RuntimeHost,
         [],
         logRunId,
         logRunId ? "failed" : undefined,
-        trace
+        trace,
+        {
+          ...(receipt.messageId ? { messageId: receipt.messageId } : {}),
+          ...(replyToMessageId == null ? {} : { replyMessageIds: [replyToMessageId] })
+        }
       );
     } catch (error) {
       console.error("[runtime] error reply failed", {
@@ -420,6 +440,25 @@ export class RuntimeDelivery {
   replyDeliveryDraft(...args: Parameters<typeof runtime_replyDeliveryDraft>) { return runtime_replyDeliveryDraft.call(this.host, ...args); }
   deliverReplyOutbox(...args: Parameters<typeof runtime_deliverReplyOutbox>) { return runtime_deliverReplyOutbox.call(this.host, ...args); }
   sendErrorReply(...args: Parameters<typeof runtime_sendErrorReply>) { return runtime_sendErrorReply.call(this.host, ...args); }
+}
+
+function messagingReceiptMessageId(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const messageId = (value as { messageId?: unknown }).messageId;
+  return typeof messageId === "string" && messageId.trim() ? messageId.trim() : undefined;
+}
+
+function durableReplyToMessageId(
+  runtime: RuntimeHost,
+  payload: AssistantReplyOutboxPayload,
+  incoming: ParsedIncomingMessage
+) {
+  if (Object.hasOwn(payload, "replyToMessageId")) {
+    return Number.isSafeInteger(payload.replyToMessageId) && Number(payload.replyToMessageId) > 0
+      ? Number(payload.replyToMessageId)
+      : undefined;
+  }
+  return payload.quoteReply === false ? undefined : runtime.groupReplyOptions(incoming).replyToMessageId;
 }
 
 function immediateReplyFingerprint(

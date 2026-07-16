@@ -81,6 +81,7 @@ const initialConfig = {
     orchestrator: {
       enabled: true,
       userGroupchatOrchestratorModel: "gpt-5.6-luna",
+      groupThreadModel: "gpt-5.4-mini",
       reasoningEffort: "max",
       promptFile: "user_groupchat_orchestrator.json",
       messageThreshold: 10,

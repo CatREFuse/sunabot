@@ -14,6 +14,9 @@ defineProps<{ models: readonly ModelCatalogItem[] }>();
     <div>
       <h2 class="section-title">群聊编排器</h2>
     </div>
+    <div class="grid gap-5 sm:grid-cols-2">
+      <ModelSelect v-model="draft.groupThreadModel" :models="models" label="Thread 拆分模型" />
+    </div>
     <div class="divide-y divide-line border-y border-line">
       <ToggleSwitch v-model="groupEnabled" label="启用" />
       <ToggleSwitch v-model="draft.enabled" label="编排器" :disabled="!groupEnabled" />

@@ -49,7 +49,7 @@ function config(adminName: string): AppConfig {
       quoteGroupReplyExcludedUserIds: [],
       contextMessageLimit: 48,
       memory: { memoryModel: "gpt-5.4-mini", reasoningEffort: "medium", messageThreshold: 48, workingMemoryMaxEntries: 100, workMemoryCompressInPrompt: "in.md", workMemoryCompressOutPrompt: "out.md", userProfilePrompt: "user.md" },
-      orchestrator: { enabled: false, userGroupchatOrchestratorModel: "gpt-5.4-mini", reasoningEffort: "medium", promptFile: "orchestrator.md", messageThreshold: 10, recentMessageWindowMs: 60_000 },
+      orchestrator: { enabled: false, userGroupchatOrchestratorModel: "gpt-5.4-mini", groupThreadModel: "gpt-5.4-mini", reasoningEffort: "medium", promptFile: "orchestrator.md", messageThreshold: 10, recentMessageWindowMs: 60_000 },
       tools: {
         maxCalls: 20,
         overrides: {},
@@ -143,6 +143,18 @@ describe("useConfigWorkspace", () => {
 
     expect(workspace.drafts.normalReply).toEqual({ maxRetries: 3 });
     expect(workspace.isDirty("normalReply")).toBe(false);
+  });
+
+  it("loads a legacy config without a group thread model", async () => {
+    const legacy = envelope("r1", "initial");
+    delete (legacy.config.bot.orchestrator as Partial<AppConfig["bot"]["orchestrator"]>).groupThreadModel;
+    apiRequest.mockResolvedValueOnce(legacy);
+    const workspace = useConfigWorkspace();
+
+    await workspace.load();
+
+    expect(workspace.drafts.orchestrator.groupThreadModel).toBe("gpt-5.4-mini");
+    expect(workspace.isDirty("orchestrator")).toBe(false);
   });
 
   it("saves the linked user-group and orchestrator controls atomically", async () => {

@@ -50,6 +50,7 @@ const emptyConfig: AppConfig = {
     orchestrator: {
       enabled: false,
       userGroupchatOrchestratorModel: "gpt-5.4-mini",
+      groupThreadModel: "gpt-5.4-mini",
       reasoningEffort: "medium",
       promptFile: "user_groupchat_orchestrator.json",
       messageThreshold: 10,
@@ -306,7 +307,10 @@ function valuesFromConfig(config: AppConfig): SectionDrafts {
       contextMessageLimit: config.bot.contextMessageLimit
     },
     memory: clone(config.bot.memory),
-    orchestrator: clone(config.bot.orchestrator),
+    orchestrator: {
+      ...clone(config.bot.orchestrator),
+      groupThreadModel: config.bot.orchestrator.groupThreadModel?.trim() || emptyConfig.bot.orchestrator.groupThreadModel
+    },
     tools: {
       ...clone(config.bot.tools),
       overrides: clone(config.bot.tools.overrides ?? {}),

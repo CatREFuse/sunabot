@@ -87,6 +87,7 @@ describe("AgentFileRepository", () => {
       ["memory.compress-out", "work_memory_compress_out.json"],
       ["memory.user-profile", "user_profile_prompt.json"],
       ["orchestrator.user-group", "user_groupchat_orchestrator.json"],
+      ["orchestrator.group-thread", "group_thread_context.json"],
       ["conversation.group-summary", "group_chat_summary.json"],
       ["image.selfie-rewrite", "selfie_prompt_rewrite.json"]
     ] as const;

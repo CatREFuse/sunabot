@@ -16,6 +16,7 @@
 | `agents` | Agent ID、名称、启用状态、workspace 与头像路径 |
 | `agent_accounts` | QQ 接入账号、所属 Agent、QQ 号、启用状态与独立 WebUI 端口 |
 | `conversations` | 会话及其消息数组，每个会话一行 |
+| `conversation_thread_states` | 群聊 Thread 增量状态、处理游标、模型和提示词 revision，每个会话至多一行 |
 | `memory_records` | 工作记忆、长期记忆和用户画像 |
 | `memory_batches` | 已提交记忆批次及幂等结果 |
 | `memory_scheduler` | 各会话的记忆待处理队列与重试状态 |
@@ -24,6 +25,8 @@
 | `model_call_model_aggregates` | 当前 Agent 按会话、模型、行为和记忆类型聚合的调用总量 |
 | `image_history` | 生成图片历史元数据 |
 | `admin_sessions` | 管理 Cookie 哈希、CSRF Token、访问时间与有效期 |
+
+当前业务主库 schema 版本是 10。`conversation_thread_states` 使用 STRICT 表和 `conversations.id` 外键，删除会话时级联删除 Thread 状态；`state_schema_version` 当前为 1。写入以 revision CAS、单调 `processed_through_sequence` 和 `last_run_key` 幂等约束防止旧快照覆盖新状态，读取和写入都执行完整领域结构校验。message assignment、Thread message ID 和已无保留消息的非活动 Thread 随 `conversations` 的消息保留边界清理，单 Thread participant uid 最多保留 256 个；原始会话消息不由 Thread 节点删除。模型输出、提示词和运行时错误不能回退游标或破坏已提交状态；Thread 状态仍属于业务库恢复范围，不新增 JSON/JSONL 增长型持久化。异步 Thread 快照读取时复核字符串长度、稳定 Thread ID、active/primary/related 引用、唯一性、sequence 和提示词容量边界；损坏或旧格式快照降级为空 sidecar。恢复门禁只允许 `app_metadata.storage-schema-version=9` 的旧 current 恢复点缺少该表，并在恢复时复核实际数据库版本；schema 10 缺表继续判定为不完整。
 
 Plana 的 `workspace/business/data/session-queue.sqlite` 与其他 Agent 的 `workspace/business/agents/<agentId>/data/session-queue.sqlite` 分别保存所属 Agent 的会话事件、turn、异步任务和 outbox。附件缓存中的每个 `chunks.sqlite` 独立保存该文件的文本分块。
 

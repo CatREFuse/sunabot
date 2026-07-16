@@ -8,6 +8,29 @@ import { SessionStore } from "../../services/sessions/sessionStore.js";
 
 const stores: SessionStore[] = [];
 const temporaryDirectories: string[] = [];
+const THREAD_ID = "thread:22222222222222222222222222222222";
+
+const threadContextSnapshot = {
+  schemaVersion: 1,
+  revision: 4,
+  processedThroughSequence: 17,
+  activeThreadId: THREAD_ID,
+  threads: [{
+    threadId: THREAD_ID,
+    topic: "群成员正在检查异步工具执行期间的上下文是否保持一致。",
+    status: "active",
+    participantUids: ["171419991"],
+    messageIds: ["4004"]
+  }],
+  messageAssignments: [{
+    messageId: "4004",
+    sequence: 17,
+    primaryThreadId: THREAD_ID,
+    relatedThreadIds: [],
+    relation: "continue",
+    confidence: 0.96
+  }]
+} as const;
 
 afterEach(async () => {
   for (const store of stores.splice(0)) store.close();
@@ -606,13 +629,18 @@ describe("SessionStore", () => {
     const { store } = await createHarness();
     store.enqueueEvent({ sessionId: "group:400", kind: "incoming", payload: { text: "first" } });
     const origin = store.claimNextTurn({ workerId: "agent" })!;
+    const originalRequest = {
+      text: "first",
+      captureSequence: 17,
+      threadContext: threadContextSnapshot
+    };
     const deferred = store.deferTurn({
       turnId: origin.turn.id,
       workerId: "agent",
       job: {
         providerCallId: "call_42",
         toolName: "codex",
-        originalRequest: { text: "first" },
+        originalRequest,
         arguments: { task: "deep research" }
       },
       acknowledgement: { kind: "onebot.group", payload: { text: "开始研究。" } }
@@ -626,6 +654,7 @@ describe("SessionStore", () => {
     deliverPersistedOutbox(store, deferred.acknowledgement.id, "ack-worker");
     const job = store.claimNextToolJob({ workerId: "codex-worker" })!;
     expect(job.id).toBe(deferred.job.id);
+    expect(job.originalRequest).toEqual(originalRequest);
     const completed = store.completeToolJob({
       jobId: job.id,
       workerId: "codex-worker",
@@ -658,7 +687,7 @@ describe("SessionStore", () => {
         toolJobId: job.id,
         providerCallId: "call_42",
         toolName: "codex",
-        originalRequest: { text: "first" },
+        originalRequest,
         arguments: { task: "deep research" },
         outcome: { status: "succeeded", result: { summary: "done" }, error: null }
       }

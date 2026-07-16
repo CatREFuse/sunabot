@@ -31,6 +31,7 @@ import {
   type AssistantReplyOutboxEnvelope,
   type AssistantReplyOutboxPayload,
   type AsyncToolCompletionPayload,
+  type GroupThreadContextSnapshotV1,
   type RuntimeIncomingReplyEventPayload
 } from "../../packages/contracts/session/runtimeMessages.js";
 import { applicationDataStore, sqliteMemoryPersistence } from "../../adapters/sqlite/applicationDataStore.js";
@@ -149,10 +150,8 @@ export {
   runtime_retainedConversationMessageLimit,
   runtime_selectRelevantAttachments
 };
-
 import type { SunaRuntime } from "../runtime.js";
 type RuntimeHost = SunaRuntime;
-
 export async function runtime_replyToIncoming(this: RuntimeHost,
     channelKey: string,
     incoming: ParsedIncomingMessage,
@@ -169,6 +168,8 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
       promptOverride?: string;
       messageOrigin?: AssistantMessageOrigin;
       seedToolNames?: readonly string[];
+      threadContext?: GroupThreadContextSnapshotV1;
+      skipGroupThreadPreparation?: boolean;
     } = {}
   ) {
     const provider = this.getProvider();
@@ -188,6 +189,7 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
     };
     let sent = false;
     let requestStarted = false;
+    let threadContext = options.threadContext;
     const usedToolNames = new Set(options.seedToolNames ?? []);
     const currentToolNames = () => [...usedToolNames];
     const finalizeToolNames = () => {
@@ -208,6 +210,13 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
         text: options.promptOverride ?? incoming.text,
         context: { scope: incoming.scope, userId: incoming.userId, groupId: incoming.groupId, isAdmin }
       });
+      if (incoming.scope !== "private" && !threadContext && !options.skipGroupThreadPreparation) {
+        threadContext = await this.prepareGroupThreadContext(incoming, {
+          captureSequence: options.captureSequence,
+          signal: options.signal
+        });
+      }
+      const threadPromptContext = this.groupThreadPromptContext(threadContext);
 
       const exactUserProfile = await readUserProfileForUser(this.config, String(incoming.userId));
       const memoryResult = await recallMemory(this.config, {
@@ -292,21 +301,25 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
           admin,
           attachmentContext.text
         );
-      const promptRequest = await this.renderPromptRequest(promptId, {
-        ...buildCommonPromptVariables(this.config, {
-          scope: incoming.scope,
-          userName: senderDisplayName(incoming.sender) || String(incoming.userId)
-        }),
+      const messages64 = this.buildRecentContextMessages(incoming, options.captureSequence, 64);
+      const conversationMessages = this.buildRecentContextMessages(incoming, options.captureSequence), markerId = nanoid();
+      const currentInputMarker = incoming.scope === "private" ? undefined : {
+        start: `\uE000sunabot-current-input:${markerId}:start\uE001`, end: `\uE000sunabot-current-input:${markerId}:end\uE001`
+      };
+      let promptRequest = await this.renderPromptRequest(promptId, {
+        ...buildCommonPromptVariables(this.config, { scope: incoming.scope,
+          userName: senderDisplayName(incoming.sender) || String(incoming.userId) }),
         ...buildConversationPromptVariables(this.config),
-        ...buildMemoryPromptVariables({
-          working: workingMemoryMatches,
-          longTerm: longTermMemoryMatches,
-          userProfile: currentUserProfileMemoryMatches
-        }),
-        "messages_64": this.buildRecentContextMessages(incoming, options.captureSequence, 64),
-        "conversation.messages": this.buildRecentContextMessages(incoming, options.captureSequence),
-        "user.input": prompt
+        ...buildMemoryPromptVariables({ working: workingMemoryMatches,
+          longTerm: longTermMemoryMatches, userProfile: currentUserProfileMemoryMatches }),
+        "messages_64": messages64,
+        "conversation.messages": conversationMessages,
+        "conversation.group.thread_context": "",
+        "user.input": currentInputMarker ? `${currentInputMarker.start}${prompt}${currentInputMarker.end}` : prompt
       });
+      if (incoming.scope !== "private") promptRequest = this.ensureGroupThreadPromptRequest(
+        promptRequest, threadPromptContext, messages64, [conversationMessages], currentInputMarker
+      );
       const currentUserMessage = [...promptRequest.messages].reverse().find((message) => message.role === "user");
       if (currentUserMessage) {
         currentUserMessage.imageUrls = inboundImageUrls(incoming).slice(0, MAX_CURRENT_CONTEXT_IMAGES);
@@ -464,7 +477,8 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
           incoming: queueIncomingSnapshot(incoming),
           captureSequence: options.captureSequence,
           imageReferences: generateImgReferenceContext,
-          replyGate: this.replyGates.capture(incoming.scope, conversationRecordId(incoming))
+          replyGate: this.replyGates.capture(incoming.scope, conversationRecordId(incoming)),
+          ...(threadContext ? { threadContext } : {})
         };
         options.onDeferred?.({
           deferred: turn,
@@ -674,6 +688,9 @@ export async function runtime_replyToToolCompletion(this: RuntimeHost,
       isCurrent,
       delivery,
       allowAsyncCodex: false,
+      captureSequence: payload.originalRequest.captureSequence,
+      threadContext: payload.originalRequest.threadContext,
+      skipGroupThreadPreparation: true,
       messageOrigin: "async_tool_callback",
       seedToolNames: [payload.toolName],
       promptOverride: buildAsyncToolCompletionPrompt(payload)

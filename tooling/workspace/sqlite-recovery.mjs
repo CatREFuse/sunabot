@@ -36,9 +36,14 @@ const CURRENT_APPLICATION_REQUIRED_TABLES = [
   "admin_sessions",
   "agent_accounts",
   "agents",
+  "conversation_thread_states",
   "model_call_aggregates",
   "model_call_model_aggregates"
 ];
+const PRE_THREAD_APPLICATION_STORAGE_SCHEMA_VERSION = 9;
+const PRE_THREAD_APPLICATION_REQUIRED_TABLES = CURRENT_APPLICATION_REQUIRED_TABLES.filter(
+  (table) => table !== "conversation_thread_states"
+);
 const QUEUE_REQUIRED_TABLES = ["outbox", "schema_migrations", "session_events", "sessions", "tool_jobs", "turns"];
 const LEGACY_DATABASE_DEFINITIONS = [
   {
@@ -727,9 +732,39 @@ async function discoverWorkspaceDatabaseDefinitions(workspace) {
 
   return [...registry.keys()]
     .sort(compareAgentIds)
-    .flatMap((agentId) => databaseDefinitionsForAgent(agentId, {
-      legacyApplicationSchema: registryInspection.legacySingleAgent && agentId === DEFAULT_AGENT_ID
-    }));
+    .flatMap((agentId) => {
+      const legacyApplicationSchema = registryInspection.legacySingleAgent && agentId === DEFAULT_AGENT_ID;
+      const applicationSource = databaseDefinitionsForAgent(agentId)[0].source;
+      const storageSchemaVersion = legacyApplicationSchema
+        ? undefined
+        : readApplicationStorageSchemaVersion(safeWorkspaceChild(workspace, applicationSource));
+      return databaseDefinitionsForAgent(agentId, {
+        legacyApplicationSchema,
+        preThreadApplicationSchema:
+          storageSchemaVersion === PRE_THREAD_APPLICATION_STORAGE_SCHEMA_VERSION
+      });
+    });
+}
+
+function readApplicationStorageSchemaVersion(databasePath) {
+  let database;
+  try {
+    database = new DatabaseSync(databasePath, { readOnly: true });
+    const hasMetadata = database.prepare(`
+      SELECT COUNT(*) AS count FROM sqlite_schema
+      WHERE type = 'table' AND name = 'app_metadata'
+    `).get();
+    if (Number(hasMetadata?.count ?? 0) !== 1) return undefined;
+    const row = database.prepare(`
+      SELECT value FROM app_metadata WHERE key = 'storage-schema-version'
+    `).get();
+    const version = Number(row?.value);
+    return Number.isInteger(version) ? version : undefined;
+  } catch {
+    return undefined;
+  } finally {
+    if (database?.isOpen) database.close();
+  }
 }
 
 function readRegisteredAgents(databasePath) {
@@ -861,11 +896,16 @@ function databaseDefinitionsForAgent(agentId, options = {}) {
       agentId,
       kind: "application",
       schemaProfile: options.legacyApplicationSchema ? "legacy-single-agent" : "current",
+      expectedStorageSchemaVersion: options.preThreadApplicationSchema
+        ? PRE_THREAD_APPLICATION_STORAGE_SCHEMA_VERSION
+        : undefined,
       source: `${dataRoot}/sunabot.sqlite`,
       file: `agent-${agentId}-application.sqlite`,
       requiredTables: options.legacyApplicationSchema
         ? LEGACY_APPLICATION_REQUIRED_TABLES
-        : CURRENT_APPLICATION_REQUIRED_TABLES
+        : options.preThreadApplicationSchema
+          ? PRE_THREAD_APPLICATION_REQUIRED_TABLES
+          : CURRENT_APPLICATION_REQUIRED_TABLES
     },
     {
       id: `agent:${agentId}:session_queue`,
@@ -889,9 +929,16 @@ function databaseDefinitionsForManifest(manifest) {
       entry.agentId === agentId && entry.kind === "application"
     );
     return databaseDefinitionsForAgent(agentId, {
-      legacyApplicationSchema: application?.schemaProfile === "legacy-single-agent"
+      legacyApplicationSchema: application?.schemaProfile === "legacy-single-agent",
+      preThreadApplicationSchema: isPreThreadCurrentApplicationEntry(application)
     });
   });
+}
+
+function isPreThreadCurrentApplicationEntry(entry) {
+  return entry?.schemaProfile === "current"
+    && entry.tables
+    && !Object.hasOwn(entry.tables, "conversation_thread_states");
 }
 
 function verifyV2ManifestAgentSet(backupDirectory, manifest) {
@@ -992,6 +1039,17 @@ function inspectDatabase(database, definition) {
   const missingTables = definition.requiredTables.filter((table) => !tableNames.includes(table));
   if (missingTables.length) {
     throw new RecoveryGateError("SQLITE_SCHEMA_INCOMPLETE", `${definition.id} 缺少表：${missingTables.join(", ")}`);
+  }
+  if (definition.expectedStorageSchemaVersion !== undefined) {
+    const row = database.prepare(`
+      SELECT value FROM app_metadata WHERE key = 'storage-schema-version'
+    `).get();
+    if (Number(row?.value) !== definition.expectedStorageSchemaVersion) {
+      throw new RecoveryGateError(
+        "SQLITE_SCHEMA_INCOMPLETE",
+        `${definition.id} 缺少 conversation_thread_states 时 storage-schema-version 必须为 ${definition.expectedStorageSchemaVersion}。`
+      );
+    }
   }
   const tables = Object.fromEntries(tableNames.map((table) => {
     const row = database.prepare(`SELECT COUNT(*) AS count FROM ${quoteIdentifier(table)}`).get();
@@ -1240,7 +1298,10 @@ function validateV2AgentDatabaseEntries(entries) {
     throw new RecoveryGateError("BACKUP_MANIFEST_INVALID", "旧单 Agent schema profile 只能用于 Plana 单 Agent 恢复点。");
   }
   return [...agentIds].sort(compareAgentIds).flatMap((agentId) => databaseDefinitionsForAgent(agentId, {
-    legacyApplicationSchema: legacyApplication?.agentId === agentId
+    legacyApplicationSchema: legacyApplication?.agentId === agentId,
+    preThreadApplicationSchema: isPreThreadCurrentApplicationEntry(entries.find((entry) =>
+      entry.agentId === agentId && entry.kind === "application"
+    ))
   }));
 }
 

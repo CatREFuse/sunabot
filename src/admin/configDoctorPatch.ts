@@ -25,6 +25,7 @@ const RULE_REPAIRABLE_PATHS = new Set([
   "/bot/memory/messageThreshold",
   "/bot/memory/workingMemoryMaxEntries",
   "/bot/orchestrator/enabled",
+  "/bot/orchestrator/groupThreadModel",
   "/bot/orchestrator/reasoningEffort",
   "/bot/orchestrator/messageThreshold",
   "/bot/orchestrator/recentMessageWindowMs",
@@ -64,6 +65,7 @@ const NUMBER_REPAIR_PATHS = new Set([
 ]);
 const STRING_REPAIR_PATHS = new Set([
   "/bot/memory/reasoningEffort",
+  "/bot/orchestrator/groupThreadModel",
   "/bot/orchestrator/reasoningEffort",
   "/bot/tools/generateImg/provider",
   "/bot/tools/generateImg/size",

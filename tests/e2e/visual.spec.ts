@@ -230,6 +230,13 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     await expect(page.getByLabel("广播风暴嗅探")).toBeChecked();
     await capture(page, viewport.name, theme, "settings-broadcast-storm");
 
+    await page.goto("/agent-settings/orchestrator");
+    await expect(page.getByRole("heading", { name: "群聊编排器" })).toBeVisible();
+    await page.getByLabel("编排器", { exact: true }).uncheck();
+    await expect(page.getByLabel("Thread 拆分模型")).toBeEnabled();
+    await capture(page, viewport.name, theme, "settings-orchestrator-disabled");
+    await page.getByRole("button", { name: "放弃", exact: true }).click();
+
     await page.goto("/agent-settings/persona");
     await expect(page.getByRole("heading", { name: "Agent 身份" })).toBeVisible();
     await capture(page, viewport.name, theme, "settings-agent-identity");

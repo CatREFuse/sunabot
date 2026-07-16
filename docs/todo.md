@@ -53,6 +53,11 @@
 - [x] **FLOW-FIX-003｜secondary 账号恢复、引用与身份路由**
   - 重启编排、引用与附件查询、嵌套引用、发送者身份缓存和历史身份补全全程携带 account ID。
 
+- [x] **FLOW-FIX-004｜群聊 Thread 上下文前置节点**
+  - 原始 `messages_64` 保持时间顺序、数量和正文，完整元数据用于索引；增量 Thread 状态进入 SQLite，显式引用由宿主继承，歧义由独立低成本模型分类，动态 sidecar 在主回复前受管注入。
+  - Thread 模型在每个 Agent 的“群聊编排”设置中独立配置；旧 Agent manifest 回退 `gpt-5.4-mini`。模板渲染不依赖动态 sidecar 占位，分类失败和异步旧任务均保留原始消息并继续回复。
+  - 证据：相关 20 个测试文件 280/280、runtime smoke 14/14、Thread 首次运行门禁、TypeScript/Vue 类型检查、runtime contract、architecture、生产构建、benchmark、E2E 36/36 和 light/dark 视觉回归 8/8 通过；真实 Native Core 重启后 readiness 为 ready，旧模板缺变量已用实际渲染器复现并修复，22:09 的真实群消息已成功写入 assistant 回复。
+
 - [x] **ONBOARD-FIX-004｜兼容注销定向与 Agent 创建补偿**
   - primary 兼容注销只定向 primary；primary 可以退出 QQ 登录但不能移除，API 返回 `PRIMARY_ACCOUNT_REQUIRED` 且管理台隐藏移除入口；Agent 运行时初始化失败时删除注册记录、workspace 与临时回滚目录。
 

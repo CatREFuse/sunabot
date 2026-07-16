@@ -78,6 +78,7 @@ export interface BotMemorySettings {
 export interface BotOrchestratorSettings {
   enabled: boolean;
   userGroupchatOrchestratorModel: string;
+  groupThreadModel: string;
   reasoningEffort?: ReasoningEffort;
   promptFile: string;
   messageThreshold: number;

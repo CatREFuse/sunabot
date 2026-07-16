@@ -55,6 +55,29 @@ describe("prompt system", () => {
     });
   });
 
+  it("keeps opaque runtime message and user values byte-for-byte instead of resolving their tokens", () => {
+    const template = parseFinalPromptTemplate(JSON.stringify({
+      messages: [
+        { role: "system", content: "系统" },
+        "@{messages_64}",
+        { role: "user", content: "@{user.input}" }
+      ],
+      response_format: { type: "text" }
+    }));
+    const rawHistory = "正文 @{bot.name} @{messages_64} @{conversation.group.thread_context}";
+    const rawInput = "当前输入 @{bot.name}";
+
+    const rendered = renderFinalPromptTemplate(template, {
+      messages_64: [{ role: "user", content: rawHistory }],
+      "user.input": rawInput,
+      "bot.name": "普拉娜",
+      "conversation.group.thread_context": ""
+    }, { opaqueVariables: new Set(["messages_64", "user.input"]) });
+
+    expect(rendered.messages[1]?.content).toBe(rawHistory);
+    expect(rendered.messages[2]?.content).toBe(rawInput);
+  });
+
   it("rejects missing variables, cycles and malformed templates", () => {
     const template = parseFinalPromptTemplate(JSON.stringify({
       messages: [{ role: "system", content: "@{a}" }, { role: "user", content: "用户" }],
