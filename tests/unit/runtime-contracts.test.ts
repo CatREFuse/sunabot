@@ -6,7 +6,9 @@ import {
 } from "../../packages/contracts/messaging/commands.js";
 import {
   assistantReplyEnvelope,
+  conversationAssetEnvelope,
   decodeAssistantReply,
+  decodeConversationAsset,
   decodeIncomingReply,
   decodeReplyDebounce,
   decodeToolCompletion,
@@ -49,6 +51,48 @@ const commandInvocation = {
   invokedName: "总结群聊",
   args: "最近三小时",
   rawText: commandIncoming.text
+};
+
+const ASSET_REPLY_GATE = {
+  generation: "asset-generation-1",
+  scope: "private" as const,
+  conversationId: "private:10001",
+  scopeEpoch: 0,
+  conversationEpoch: 0
+};
+const ASSET_TARGET = {
+  transport: "onebot" as const,
+  agentId: "plana",
+  accountId: "primary",
+  scope: "private" as const,
+  userId: 10001,
+  groupId: null,
+  messageId: 42,
+  selfId: null,
+  conversationId: "private:10001"
+};
+const ASSET_ROOT_IDENTITY = {
+  dev: "1",
+  ino: "2",
+  ctimeNs: "3"
+};
+const ASSET_INCOMING_FINGERPRINT = "b".repeat(64);
+const ASSET_IDEMPOTENCY_KEY = `conversation-asset:${"c".repeat(64)}`;
+const ASSET_PAYLOAD = {
+  type: "conversation_asset" as const,
+  target: ASSET_TARGET,
+  incomingFingerprint: ASSET_INCOMING_FINGERPRINT,
+  toolName: "send_file" as const,
+  asset: {
+    path: "exports/report.pdf",
+    kind: "file" as const,
+    name: "report.pdf",
+    byteLength: 123,
+    sha256: "a".repeat(64),
+    rootIdentity: ASSET_ROOT_IDENTITY
+  },
+  logRunId: "run-asset-1",
+  replyGate: ASSET_REPLY_GATE
 };
 
 const payload = {
@@ -634,6 +678,165 @@ describe("runtime persisted contracts", () => {
       messageOrigin: "async_tool_callback",
       toolNames: ["codex", "websearch"]
     });
+  });
+
+  it("keeps only a workbench-relative path and content snapshot in asset outbox envelopes", () => {
+    const encoded = conversationAssetEnvelope(ASSET_PAYLOAD, {
+      conversationId: "private:10001",
+      correlationId: "run-asset-1",
+      idempotencyKey: ASSET_IDEMPOTENCY_KEY
+    });
+
+    expect(encoded).toMatchObject({ schemaVersion: 2, type: "runtime.conversation_asset" });
+    expect(encoded).not.toHaveProperty("payload.asset.source");
+    expect(decodeConversationAsset(encoded)).toMatchObject({
+      target: ASSET_TARGET,
+      incomingFingerprint: ASSET_INCOMING_FINGERPRINT,
+      toolName: "send_file",
+      asset: {
+        path: "exports/report.pdf",
+        kind: "file",
+        name: "report.pdf",
+        byteLength: 123,
+        sha256: "a".repeat(64),
+        rootIdentity: ASSET_ROOT_IDENTITY
+      },
+      replyGate: ASSET_REPLY_GATE
+    });
+  });
+
+  it("rejects unsafe or corrupted conversation asset outbox payloads", () => {
+    const base = {
+      ...ASSET_PAYLOAD,
+      asset: { ...ASSET_PAYLOAD.asset },
+      logRunId: "run-asset-corrupt",
+      replyGate: ASSET_REPLY_GATE
+    };
+    const encoded = (asset: typeof base.asset & { source?: string }) => conversationAssetEnvelope({
+      ...base,
+      asset
+    }, {
+      conversationId: "private:10001",
+      correlationId: "run-asset-corrupt",
+      idempotencyKey: ASSET_IDEMPOTENCY_KEY
+    });
+
+    expect(() => decodeConversationAsset(encoded({ ...base.asset, path: "../secret.txt" }))).toThrow("path");
+    expect(() => decodeConversationAsset(encoded({ ...base.asset, path: "exports\\report.pdf" }))).toThrow("path");
+    expect(() => decodeConversationAsset(encoded({ ...base.asset, sha256: "invalid" }))).toThrow("sha256");
+    expect(() => decodeConversationAsset(encoded({ ...base.asset, name: "." }))).toThrow("name");
+    expect(() => decodeConversationAsset(encoded({ ...base.asset, name: ".." }))).toThrow("name");
+    expect(() => decodeConversationAsset(encoded({
+      ...base.asset,
+      source: "base64://c2VjcmV0"
+    }))).toThrow("未知字段");
+  });
+
+  it.each([
+    {
+      label: "envelope extra",
+      mutate(envelope: Record<string, any>) { envelope.hostPath = "/private/envelope-secret"; }
+    },
+    {
+      label: "payload extra",
+      mutate(envelope: Record<string, any>) { envelope.payload.hostPath = "/private/payload-secret"; }
+    },
+    {
+      label: "target extra",
+      mutate(envelope: Record<string, any>) { envelope.payload.target.hostPath = "/private/target-secret"; }
+    },
+    {
+      label: "non-OneBot target",
+      mutate(envelope: Record<string, any>) { envelope.payload.target.transport = "web"; }
+    },
+    {
+      label: "asset extra",
+      mutate(envelope: Record<string, any>) { envelope.payload.asset.source = "base64://c2VjcmV0"; }
+    },
+    {
+      label: "root identity extra",
+      mutate(envelope: Record<string, any>) { envelope.payload.asset.rootIdentity.path = "/private/root-secret"; }
+    },
+    {
+      label: "invalid root identity decimal",
+      mutate(envelope: Record<string, any>) { envelope.payload.asset.rootIdentity.ino = "01"; }
+    },
+    {
+      label: "reply gate extra",
+      mutate(envelope: Record<string, any>) { envelope.payload.replyGate.hostPath = "/private/gate-secret"; }
+    }
+  ])("rejects conversation asset $label", ({ mutate }) => {
+    const encoded = conversationAssetEnvelope(structuredClone(ASSET_PAYLOAD), {
+      conversationId: "private:10001",
+      correlationId: "run-asset-1",
+      idempotencyKey: ASSET_IDEMPOTENCY_KEY
+    }) as unknown as Record<string, any>;
+    mutate(encoded);
+    expect(() => decodeConversationAsset(encoded)).toThrowError(expect.objectContaining({
+      code: "contract_field_invalid"
+    }));
+  });
+
+  it.each([
+    {
+      label: "missing gate",
+      replyGate: undefined
+    },
+    {
+      label: "invalid generation",
+      replyGate: { ...ASSET_REPLY_GATE, generation: " " }
+    },
+    {
+      label: "invalid scope",
+      replyGate: { ...ASSET_REPLY_GATE, scope: "other" }
+    },
+    {
+      label: "mismatched payload scope",
+      replyGate: { ...ASSET_REPLY_GATE, scope: "user_group" }
+    },
+    {
+      label: "mismatched conversation",
+      replyGate: { ...ASSET_REPLY_GATE, conversationId: "private:99999" }
+    },
+    {
+      label: "invalid scope epoch",
+      replyGate: { ...ASSET_REPLY_GATE, scopeEpoch: -1 }
+    },
+    {
+      label: "invalid conversation epoch",
+      replyGate: { ...ASSET_REPLY_GATE, conversationEpoch: Number.MAX_SAFE_INTEGER + 1 }
+    }
+  ])("rejects conversation asset outbox with $label", ({ replyGate }) => {
+    const encoded = conversationAssetEnvelope({
+      ...ASSET_PAYLOAD,
+      logRunId: "run-invalid-gate",
+      replyGate: replyGate as typeof ASSET_REPLY_GATE
+    }, {
+      conversationId: "private:10001",
+      correlationId: "run-invalid-gate",
+      idempotencyKey: ASSET_IDEMPOTENCY_KEY
+    });
+
+    expect(() => decodeConversationAsset(encoded)).toThrowError(expect.objectContaining({
+      code: "contract_field_invalid"
+    }));
+  });
+
+  it("rejects bare legacy conversation asset payloads", () => {
+    expect(() => decodeConversationAsset({
+      type: "conversation_asset",
+      incoming: payload.incoming,
+      toolName: "send_file",
+      asset: {
+        path: "exports/report.pdf",
+        kind: "file",
+        name: "report.pdf",
+        byteLength: 123,
+        sha256: "a".repeat(64)
+      },
+      logRunId: "legacy",
+      replyGate: ASSET_REPLY_GATE
+    })).toThrow("版本化");
   });
 
   it("round-trips a valid thread snapshot through assistant and tool-completion envelopes", () => {

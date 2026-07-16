@@ -102,6 +102,7 @@ describe("workspace prompt runtime", () => {
       "websearch",
       "generate_img",
       "selfie",
+      "send_file",
       "memory_recall",
       "codex",
       "system_config"

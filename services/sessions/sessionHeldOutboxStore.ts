@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import {
   decodeAssistantReply,
@@ -124,7 +125,7 @@ export function appendHeldTurnOutbox(
 export function replayUnknownOutbox(
   backend: Pick<
     HeldTurnOutboxBackend,
-    "database" | "now" | "transaction" | "requireOutbox" | "requireTurn" | "insertOutbox"
+    "database" | "now" | "transaction" | "requireOutbox" | "requireTurn" | "requireEvent" | "insertOutbox"
   >,
   input: ReplayUnknownOutboxInput
 ) {
@@ -174,11 +175,67 @@ export function replayUnknownOutbox(
         dedupeKey: replayDedupeKey
       }, now, held);
     }
-    return backend.insertOutbox(backend.requireTurn(outbox.originTurnId), {
+    const turn = backend.requireTurn(outbox.originTurnId);
+    const event = backend.requireEvent(turn.eventId);
+    if (turn.sessionId !== outbox.sessionId || event.sessionId !== outbox.sessionId) {
+      throw replayProvenanceError();
+    }
+    const replayPrefix = `outbox-replay:${outbox.id}:`;
+    const replayKey = replayUnknownOutboxDedupeKey(outbox);
+    const existingRow = backend.database.prepare(`
+      SELECT id FROM outbox
+      WHERE id <> ? AND instr(dedupe_key, ?) = 1
+      ORDER BY sequence
+      LIMIT 1
+    `).get(outbox.id, replayPrefix) as SqlRow | undefined;
+    if (existingRow) {
+      const existing = backend.requireOutbox(String(existingRow.id));
+      if (
+        existing.dedupeKey !== replayKey ||
+        existing.sessionId !== outbox.sessionId ||
+        existing.originTurnId !== outbox.originTurnId ||
+        existing.kind !== outbox.kind ||
+        existing.deliveryPartition !== outbox.deliveryPartition ||
+        JSON.stringify(existing.payload) !== JSON.stringify(outbox.payload)
+      ) {
+        throw replayProvenanceError();
+      }
+      return existing;
+    }
+    return backend.insertOutbox(turn, {
       kind: outbox.kind,
       payload: outbox.payload,
-      deliveryPartition: outbox.deliveryPartition
+      deliveryPartition: outbox.deliveryPartition,
+      dedupeKey: replayKey
     }, now);
+  });
+}
+
+export function replayUnknownOutboxDedupeKey(outbox: {
+  id: string;
+  sessionId: string;
+  originTurnId: string;
+  kind: string;
+  dedupeKey?: string;
+  deliveryPartition: string;
+  payload: unknown;
+}) {
+  const fingerprint = createHash("sha256").update(JSON.stringify({
+    schemaVersion: 1,
+    id: outbox.id,
+    sessionId: outbox.sessionId,
+    originTurnId: outbox.originTurnId,
+    kind: outbox.kind,
+    dedupeKey: outbox.dedupeKey ?? null,
+    deliveryPartition: outbox.deliveryPartition,
+    payload: outbox.payload
+  })).digest("hex");
+  return `outbox-replay:${outbox.id}:${fingerprint}`;
+}
+
+function replayProvenanceError() {
+  return Object.assign(new Error("Outbox replay provenance is invalid."), {
+    code: "OUTBOX_REPLAY_PROVENANCE_INVALID"
   });
 }
 

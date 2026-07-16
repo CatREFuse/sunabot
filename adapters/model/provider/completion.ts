@@ -46,6 +46,7 @@ import {
   shouldEmitIntermediateAssistantText,
   withTurnToolState
 } from "./turnToolState.js";
+import { rejectExclusiveToolSiblingText } from "./toolExecutor.js";
 
 export async function completeProviderTurn(
   context: ProviderAdapterContext,
@@ -123,20 +124,29 @@ async function completeOpenAIResponses(
 
     const toolCalls = extractFunctionCalls(response);
     state.toolCallCount = claimToolCalls(state.toolCallCount, toolCalls.length, maxToolCalls);
-    const deferred = context.toolExecutor.deferredTurn(toolCalls, options, tools, state);
-    if (deferred) return deferred;
-    const noReply = context.toolExecutor.noReplyTurn(toolCalls, options, tools, state);
-    if (noReply) return noReply;
     if (!toolCalls.length) {
       const text = extractProviderText(response);
       if (!text) throw new Error("模型没有返回可发送内容。");
       return { kind: "completed", text };
     }
 
-    if (shouldEmitIntermediateAssistantText(toolCalls, options, state, Boolean(extractProviderText(response)))) {
-      await emitIntermediateAssistantText(response, options);
+    const siblingText = extractProviderText(response);
+    const emitAssistantText = shouldEmitIntermediateAssistantText(
+      toolCalls,
+      options,
+      state,
+      Boolean(siblingText)
+    );
+    const rejected = rejectExclusiveToolSiblingText(toolCalls, siblingText, options);
+    if (!rejected) {
+      const deferred = context.toolExecutor.deferredTurn(toolCalls, options, tools, state);
+      if (deferred) return deferred;
+      const noReply = context.toolExecutor.noReplyTurn(toolCalls, options, tools, state);
+      if (noReply) return noReply;
+      if (emitAssistantText) await emitIntermediateAssistantText(response, options);
     }
-    input.push(...extractResponseOutput(response), ...(await context.toolExecutor.execute(toolCalls, options, tools, state)));
+    const outputs = rejected ?? await context.toolExecutor.execute(toolCalls, options, tools, state);
+    input.push(...extractResponseOutput(response), ...outputs);
   }
 
   throw toolCallLimitError(maxToolCalls);
@@ -256,14 +266,27 @@ async function completeCodexResponses(
     }
 
     const streamText = extractResponsesTextFromSse(text);
-    const deferred = context.toolExecutor.deferredTurn(toolCalls, options, tools, state);
-    if (deferred) return deferred;
-    const noReply = context.toolExecutor.noReplyTurn(toolCalls, options, tools, state);
-    if (noReply) return noReply;
-    if (shouldEmitIntermediateAssistantText(toolCalls, options, state, Boolean(streamText))) {
-      await emitIntermediateAssistantText(payload, options, streamText);
+    const siblingText = streamText || extractResponsesText(payload);
+    const emitAssistantText = shouldEmitIntermediateAssistantText(
+      toolCalls,
+      options,
+      state,
+      Boolean(siblingText)
+    );
+    const rejected = rejectExclusiveToolSiblingText(
+      toolCalls,
+      siblingText,
+      options
+    );
+    if (!rejected) {
+      const deferred = context.toolExecutor.deferredTurn(toolCalls, options, tools, state);
+      if (deferred) return deferred;
+      const noReply = context.toolExecutor.noReplyTurn(toolCalls, options, tools, state);
+      if (noReply) return noReply;
+      if (emitAssistantText) await emitIntermediateAssistantText(payload, options, streamText);
     }
-    input.push(...extractResponseOutput(payload), ...(await context.toolExecutor.execute(toolCalls, options, tools, state)));
+    const outputs = rejected ?? await context.toolExecutor.execute(toolCalls, options, tools, state);
+    input.push(...extractResponseOutput(payload), ...outputs);
   }
 
   throw toolCallLimitError(maxToolCalls);
@@ -344,22 +367,29 @@ async function completeChatCompletions(
       return { kind: "completed", text };
     }
 
-    const deferred = context.toolExecutor.deferredTurn(calls, options, definitions, state);
-    if (deferred) return deferred;
-    const noReply = context.toolExecutor.noReplyTurn(calls, options, definitions, state);
-    if (noReply) return noReply;
+    const siblingText = choice.content?.trim() ?? "";
     const emitAssistantText = shouldEmitIntermediateAssistantText(
-      calls, options, state, Boolean(choice.content?.trim())
+      calls,
+      options,
+      state,
+      Boolean(siblingText)
     );
-    if (choice.content?.trim() && options.onAssistantText && emitAssistantText) {
-      await options.onAssistantText(choice.content.trim(), "text");
+    const rejected = rejectExclusiveToolSiblingText(calls, siblingText, options);
+    if (!rejected) {
+      const deferred = context.toolExecutor.deferredTurn(calls, options, definitions, state);
+      if (deferred) return deferred;
+      const noReply = context.toolExecutor.noReplyTurn(calls, options, definitions, state);
+      if (noReply) return noReply;
+      if (siblingText && options.onAssistantText && emitAssistantText) {
+        await options.onAssistantText(siblingText, "text");
+      }
     }
     messages.push({
       role: "assistant",
       content: choice.content ?? null,
       tool_calls: choice.tool_calls
     });
-    const outputs = await context.toolExecutor.execute(calls, options, definitions, state);
+    const outputs = rejected ?? await context.toolExecutor.execute(calls, options, definitions, state);
     messages.push(...outputs.map((output) => ({
       role: "tool",
       tool_call_id: output.call_id,

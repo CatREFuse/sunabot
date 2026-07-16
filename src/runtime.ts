@@ -117,6 +117,7 @@ import { RuntimeConversations } from "./runtime/conversations.js";
 import { RuntimeSelfie } from "./runtime/selfie.js";
 import { RuntimeGroupThreads } from "./runtime/groupThreadPipeline.js";
 import { DEFAULT_REPLY_DEBOUNCE_MS, RuntimeReplyDebounce } from "./runtime/replyDebounce.js";
+import { RuntimeConversationAssets } from "./runtime/conversationAssets.js";
 import { TaskLimiter, errorMessage, loadConversationRecords } from "./runtime/infrastructure.js";
 import type { RuntimeToolCapabilityResolver } from "../services/tools/bashCapability.js";
 import type { SystemConfigRuntimePort } from "../services/tools/systemConfigTool.js";
@@ -170,6 +171,7 @@ export class SunaRuntime {
   private readonly selfie: RuntimeSelfie;
   private readonly groupThreads: RuntimeGroupThreads;
   private readonly replyDebounce: RuntimeReplyDebounce;
+  private readonly conversationAssets: RuntimeConversationAssets;
   constructor(config: AppConfig, options: SunaRuntimeOptions = {}) {
       configureMemoryPersistence(sqliteMemoryPersistence);
       this.config = config;
@@ -275,6 +277,7 @@ export class SunaRuntime {
         this,
         nonNegativeReplyDebounceMs(options.replyDebounceMs)
       );
+      this.conversationAssets = new RuntimeConversationAssets(this);
   }
   private inAgentContext<T>(operation: () => T): T { return runWithAgentRuntimeContext(this.config, operation); }
   initialize(...args: Parameters<RuntimeLifecycle["initialize"]>) { return this.inAgentContext(() => this.lifecycle.initialize(...args)); }
@@ -309,6 +312,9 @@ export class SunaRuntime {
   processSessionEvent(...args: Parameters<RuntimeIntake["processSessionEvent"]>) { return this.inAgentContext(() => this.intake.processSessionEvent(...args)); }
   processIncomingReplyEvent(...args: Parameters<RuntimeIntake["processIncomingReplyEvent"]>) { return this.inAgentContext(() => this.intake.processIncomingReplyEvent(...args)); }
   deliverSessionOutbox(...args: Parameters<RuntimeIntake["deliverSessionOutbox"]>) { return this.inAgentContext(() => this.intake.deliverSessionOutbox(...args)); }
+  conversationAssetProviderOptions(...args: Parameters<RuntimeConversationAssets["providerOptions"]>) { return this.conversationAssets.providerOptions(...args); }
+  queueConversationAsset(...args: Parameters<RuntimeConversationAssets["queue"]>) { return this.inAgentContext(() => this.conversationAssets.queue(...args)); }
+  deliverConversationAssetOutbox(...args: Parameters<RuntimeConversationAssets["deliver"]>) { return this.inAgentContext(() => this.conversationAssets.deliver(...args)); }
   requireActiveGateway(...args: Parameters<RuntimeIntake["requireActiveGateway"]>) { return this.intake.requireActiveGateway(...args); }
   handleIncomingMessage(...args: Parameters<RuntimeIntake["handleIncomingMessage"]>) { return this.inAgentContext(() => this.intake.handleIncomingMessage(...args)); }
   prepareIncomingMessage(...args: Parameters<RuntimeIntake["prepareIncomingMessage"]>) { return this.intake.prepareIncomingMessage(...args); }

@@ -18,11 +18,13 @@ import type {
   MessagingConnectionContextV1,
   MessagingPort,
   MessagingReceiptV1,
+  OutboundConversationAssetV1,
   OutboundMessageV1,
   PokeTargetV1,
   SenderIdentityV1,
   SenderLookupV1
 } from "../../packages/contracts/messaging/messages.js";
+import { MAX_OUTBOUND_CONVERSATION_ASSET_INLINE_BYTES } from "../../packages/contracts/messaging/messages.js";
 import {
   extractOneBotMessageDetails,
   extractOneBotReceiptMessageId,
@@ -359,6 +361,37 @@ export class OneBotGateway extends EventEmitter implements MessagingPort, Conver
     return { accepted: true };
   }
 
+  async sendConversationAsset(message: OutboundConversationAssetV1): Promise<MessagingReceiptV1> {
+    const accountId = message.accountId?.trim();
+    if (!accountId) throw new Error("Outbound conversation asset requires an explicit accountId.");
+    const { asset } = message;
+    assertInlineConversationAsset(asset);
+    if (message.scope !== "private" && !message.groupId) {
+      throw new Error("Outbound group conversation asset requires groupId.");
+    }
+    const response = asset.kind === "file"
+      ? message.scope === "private"
+        ? await this.sendTargetedAction("upload_private_file", {
+          user_id: message.userId,
+          file: asset.source,
+          name: asset.name
+        }, accountId)
+        : await this.sendTargetedAction("upload_group_file", {
+          group_id: message.groupId,
+          file: asset.source,
+          name: asset.name
+        }, accountId)
+      : await this.sendTargetedAction(message.scope === "private" ? "send_private_msg" : "send_group_msg", {
+        ...(message.scope === "private" ? { user_id: message.userId } : { group_id: message.groupId }),
+        message: [{
+          type: asset.kind === "image" ? "image" : "record",
+          data: { file: asset.source }
+        }]
+      }, accountId);
+    const messageId = extractOneBotReceiptMessageId(response);
+    return { accepted: true, ...(messageId ? { messageId } : {}) };
+  }
+
   async resolveSender(input: SenderLookupV1): Promise<SenderIdentityV1> {
     const payload = input.groupId
       ? await this.sendAction("get_group_member_info", {
@@ -627,4 +660,77 @@ function richMessage(text: string, imageSources: string[], replyToMessageId?: nu
   }
 
   return segments.length ? segments : [{ type: "text", data: { text: "" } }];
+}
+
+function assertInlineConversationAsset(asset: OutboundConversationAssetV1["asset"]) {
+  if (asset.kind !== "file" && asset.kind !== "image" && asset.kind !== "voice") {
+    throw new Error("Outbound conversation asset kind is invalid.");
+  }
+  if (
+    !asset.name ||
+    asset.name.length > 255 ||
+    /[\0-\x1f\x7f/\\]/.test(asset.name) ||
+    pathLikeBaseName(asset.name) !== asset.name
+  ) {
+    throw new Error("Outbound conversation asset name is invalid.");
+  }
+  if (!Number.isSafeInteger(asset.byteLength) || asset.byteLength < 0) {
+    throw new Error("Outbound conversation asset byte length is invalid.");
+  }
+  if (asset.byteLength > MAX_OUTBOUND_CONVERSATION_ASSET_INLINE_BYTES) {
+    throw inlineConversationAssetLimitError();
+  }
+  if (!asset.source.startsWith("base64://")) {
+    throw new Error("Outbound conversation asset must use bounded inline Base64 data.");
+  }
+  const encoded = asset.source.slice("base64://".length);
+  const maxEncodedLength = Math.ceil(MAX_OUTBOUND_CONVERSATION_ASSET_INLINE_BYTES / 3) * 4;
+  if (encoded.length > maxEncodedLength) throw inlineConversationAssetLimitError();
+  if (!isCanonicalBase64(encoded, asset.byteLength)) {
+    throw new Error("Outbound conversation asset must use bounded inline Base64 data.");
+  }
+  if (asset.sha256 != null && !/^[a-f0-9]{64}$/.test(asset.sha256)) {
+    throw new Error("Outbound conversation asset digest is invalid.");
+  }
+}
+
+function isCanonicalBase64(value: string, byteLength: number) {
+  const expectedLength = Math.ceil(byteLength / 3) * 4;
+  if (value.length !== expectedLength || value.length % 4 !== 0) return false;
+  if (!value) return byteLength === 0;
+
+  const expectedPadding = byteLength % 3 === 0 ? 0 : 3 - (byteLength % 3);
+  const dataLength = value.length - expectedPadding;
+  for (let index = 0; index < dataLength; index += 1) {
+    if (base64Value(value.charCodeAt(index)) < 0) return false;
+  }
+  for (let index = dataLength; index < value.length; index += 1) {
+    if (value.charCodeAt(index) !== 61) return false;
+  }
+  if (expectedPadding === 2 && (base64Value(value.charCodeAt(dataLength - 1)) & 0x0f) !== 0) {
+    return false;
+  }
+  if (expectedPadding === 1 && (base64Value(value.charCodeAt(dataLength - 1)) & 0x03) !== 0) {
+    return false;
+  }
+  return true;
+}
+
+function base64Value(code: number) {
+  if (code >= 65 && code <= 90) return code - 65;
+  if (code >= 97 && code <= 122) return code - 71;
+  if (code >= 48 && code <= 57) return code + 4;
+  if (code === 43) return 62;
+  if (code === 47) return 63;
+  return -1;
+}
+
+function inlineConversationAssetLimitError() {
+  return new Error(
+    `Outbound conversation asset exceeds the inline Base64 limit of ${MAX_OUTBOUND_CONVERSATION_ASSET_INLINE_BYTES} bytes.`
+  );
+}
+
+function pathLikeBaseName(value: string) {
+  return value.split(/[\\/]/).at(-1) ?? "";
 }

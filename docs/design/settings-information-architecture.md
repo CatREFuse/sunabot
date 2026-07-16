@@ -8,7 +8,7 @@
 | --- | --- | --- | --- |
 | Agent 设置 | Agent | Agent 身份、回复行为 | WebUI 头像、只读 Agent ID 与工作目录、管理员 QQ、管理员称呼、上下文、引用与过滤名单、回复范围、名称与命令前缀 |
 | Agent 设置 | 记忆与编排 | 记忆处理、群聊编排 | 记忆模型、阈值、容量、Thread 拆分模型、主动回复编排模型与窗口 |
-| Agent 设置 | 工具 | Agent 工具、命令执行 | 八项 Agent 工具目录、运行参数、联网、Codex Worker、图像与隔离命令 |
+| Agent 设置 | 工具 | Agent 工具、命令执行 | 十项 Agent 工具目录、运行参数、联网、Codex Worker、图像、文件外发与隔离命令 |
 | 系统设置 | 公共系统 | 模型服务、回复重试、广播风暴、账户安全、连接与通知 | Provider、正常回复失败重试次数、广播风暴嗅探、m/n/k 参数与补充账号名单、管理员密码、Bark 监控、OneBot WebSocket 路径与 Access Token 状态 |
 | 配置医生 | 公共系统 | 配置检查与修复 | 本地规则检查、显式 AI 诊断、修复方案确认与持久备份结果；入口紧邻系统设置下方 |
 
@@ -50,7 +50,7 @@ Provider 类型在创建时选择，保存后只显示类型摘要，不提供�
 
 ## Agent 工具
 
-Agent 工具页分为“工具目录”和“运行参数”两个 Tab。工具目录固定展示 `assistant_text`、`memory_recall`、`websearch`、`generate_img`、`selfie`、`workspace_bash`、`codex`；运行参数保留单轮调用上限、Tavily、Codex Worker 和图像默认值。
+Agent 工具页分为“工具目录”和“运行参数”两个 Tab。工具目录固定展示 `assistant_text`、`no_reply`、`memory_recall`、`websearch`、`generate_img`、`selfie`、`send_file`、`send_voice_message`、`workspace_bash`、`codex`；运行参数保留单轮调用上限、Tavily、Codex Worker 和图像默认值。`send_file` 分别展示配置状态与实时 OneBot 能力状态，不提供账号或目标参数；`send_voice_message` 当前固定显示不可用，不能通过配置启用。
 
 | 区域 | 内容 | 交互 |
 | --- | --- | --- |

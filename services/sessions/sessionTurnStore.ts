@@ -3,10 +3,7 @@ import {
   encodeTurnOutcome
 } from "../../packages/contracts/session/durableQueue.js";
 import { SessionOutboxStore } from "./sessionOutboxStore.js";
-import {
-  appendHeldTurnOutbox as persistHeldTurnOutbox,
-  replayUnknownOutbox as persistUnknownOutboxReplay
-} from "./sessionHeldOutboxStore.js";
+import { appendHeldTurnOutbox as persistHeldTurnOutbox } from "./sessionHeldOutboxStore.js";
 import {
   integerTimestamp,
   nullableNumber,
@@ -32,7 +29,6 @@ import type {
   InterruptTurnInput,
   InterruptTurnResult,
   OutboxRecord,
-  ReplayUnknownOutboxInput,
   SessionEventRecord,
   SqlRow,
   TurnRecord,
@@ -40,16 +36,6 @@ import type {
 } from "./sessionTypes.js";
 
 export abstract class SessionTurnStore extends SessionOutboxStore {
-  replayUnknownOutbox(input: ReplayUnknownOutboxInput) {
-    return persistUnknownOutboxReplay({
-      database: this.database,
-      now: () => this.now(),
-      transaction: (operation) => this.transaction(operation),
-      requireOutbox: (id) => this.requireOutbox(id),
-      requireTurn: (id) => this.requireTurn(id),
-      insertOutbox: (turn, draft, now, held) => this.insertOutbox(turn, draft, now, held)
-    }, input);
-  }
   claimNextTurn(options: ClaimOptions): ClaimedTurn | null {
     const workerId = requiredText(options.workerId, "workerId");
     const leaseMs = positiveInteger(options.leaseMs, this.defaultLeaseMs, "leaseMs");

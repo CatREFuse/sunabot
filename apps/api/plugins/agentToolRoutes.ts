@@ -10,11 +10,13 @@ import { badRequest, notFound } from "../../../src/admin/errors.js";
 export interface AgentToolRouteOptions {
   agentFiles: AgentFileRepository;
   resolveToolCapabilities: RuntimeToolCapabilityResolver;
+  resolveConversationAssetCapability?: () => boolean | Promise<boolean>;
   getConfig: () => AppConfig;
   getAgentContext?: (agentId: string) => {
     config: AppConfig;
     agentFiles: AgentFileRepository;
     resolveToolCapabilities: RuntimeToolCapabilityResolver;
+    resolveConversationAssetCapability?: () => boolean | Promise<boolean>;
   };
 }
 
@@ -31,7 +33,8 @@ export function registerAgentToolRoutes(app: FastifyInstance, options: AgentTool
   const contextFor = (request: { query: unknown }) => options.getAgentContext?.(requestAgentId(request.query)) ?? {
     config: options.getConfig(),
     agentFiles: options.agentFiles,
-    resolveToolCapabilities: options.resolveToolCapabilities
+    resolveToolCapabilities: options.resolveToolCapabilities,
+    resolveConversationAssetCapability: options.resolveConversationAssetCapability
   };
   app.get("/api/agent-files", {
     schema: { querystring: openObject, response: { 200: openObject } }
@@ -86,6 +89,12 @@ export function registerAgentToolRoutes(app: FastifyInstance, options: AgentTool
     const promptFile = await context.agentFiles.get("conversation.private-reply", config);
     const prompt = parseFinalPromptTemplate(promptFile.content);
     const capabilities = await context.resolveToolCapabilities();
+    let conversationAssetsAvailable = false;
+    try {
+      conversationAssetsAvailable = await context.resolveConversationAssetCapability?.() ?? false;
+    } catch {
+      conversationAssetsAvailable = false;
+    }
     const tools = listToolMetadata({
       onAssistantText: () => undefined,
       allowNoReply: true,
@@ -96,6 +105,7 @@ export function registerAgentToolRoutes(app: FastifyInstance, options: AgentTool
       },
       bot: config.bot,
       selfie: { enabled: true },
+      conversationAssets: { enabled: conversationAssetsAvailable },
       memory: { enabled: true },
       asyncCodex: capabilities.codex,
       asyncImage: true,

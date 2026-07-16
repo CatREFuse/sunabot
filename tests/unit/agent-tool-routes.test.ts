@@ -27,6 +27,7 @@ describe("agent and tool API plugin", () => {
     }));
     const put = vi.fn(async (id: string, body: unknown) => ({ ok: true, id, body }));
     const resolveToolCapabilities = vi.fn(async () => ({ codex: true, workspaceBash: true }));
+    const resolveConversationAssetCapability = vi.fn(async () => true);
     const config = defaultConfig();
     config.bot.tools.overrides = {
       websearch: { enabled: false, description: "Disabled search override." }
@@ -34,6 +35,7 @@ describe("agent and tool API plugin", () => {
     registerAgentToolRoutes(app, {
       agentFiles: { list, get, put } as unknown as AgentFileRepository,
       resolveToolCapabilities,
+      resolveConversationAssetCapability,
       getConfig: () => config
     });
 
@@ -80,6 +82,11 @@ describe("agent and tool API plugin", () => {
       effectiveEnabled: true,
       execution: "inline"
     });
+    expect(tools.find((tool: { name: string }) => tool.name === "send_file")).toMatchObject({
+      available: true,
+      effectiveEnabled: true,
+      execution: "inline"
+    });
     expect(tools.find((tool: { name: string }) => tool.name === "read_file")).toMatchObject({
       available: false,
       effectiveEnabled: false
@@ -88,7 +95,12 @@ describe("agent and tool API plugin", () => {
       available: false,
       effectiveEnabled: false
     });
+    expect(tools.find((tool: { name: string }) => tool.name === "send_voice_message")).toMatchObject({
+      available: false,
+      effectiveEnabled: false
+    });
     expect(resolveToolCapabilities).toHaveBeenCalledOnce();
+    expect(resolveConversationAssetCapability).toHaveBeenCalledOnce();
     expect(get).toHaveBeenCalledWith("conversation.private-reply", config);
 
     expect([...routeSchemas.keys()].sort()).toEqual([
@@ -118,6 +130,52 @@ describe("agent and tool API plugin", () => {
       available: false,
       effectiveEnabled: false,
       availabilityReason: "Codex CLI 未安装或未登录。"
+    });
+  });
+
+  it("does not advertise send_file without a live conversation asset capability", async () => {
+    const app = Fastify();
+    apps.push(app);
+    const config = defaultConfig();
+    registerAgentToolRoutes(app, {
+      agentFiles: {
+        get: vi.fn(async () => ({ content: defaultPromptContent("conversation.private-reply") }))
+      } as unknown as AgentFileRepository,
+      resolveToolCapabilities: vi.fn(async () => ({ codex: true, workspaceBash: true })),
+      resolveConversationAssetCapability: vi.fn(async () => false),
+      getConfig: () => config
+    });
+
+    const tools = (await app.inject({ method: "GET", url: "/api/tools" })).json().tools;
+    expect(tools.find((tool: { name: string }) => tool.name === "send_file")).toMatchObject({
+      available: false,
+      effectiveEnabled: false,
+      availabilityReason: "当前会话不支持文件发送。"
+    });
+  });
+
+  it("keeps the tool catalog available when the conversation asset resolver fails", async () => {
+    const app = Fastify();
+    apps.push(app);
+    const config = defaultConfig();
+    registerAgentToolRoutes(app, {
+      agentFiles: {
+        get: vi.fn(async () => ({ content: defaultPromptContent("conversation.private-reply") }))
+      } as unknown as AgentFileRepository,
+      resolveToolCapabilities: vi.fn(async () => ({ codex: true, workspaceBash: true })),
+      resolveConversationAssetCapability: vi.fn(async () => {
+        throw new Error("injected:conversation-asset-capability");
+      }),
+      getConfig: () => config
+    });
+
+    const response = await app.inject({ method: "GET", url: "/api/tools" });
+    expect(response.statusCode).toBe(200);
+    const tools = response.json().tools;
+    expect(tools.find((tool: { name: string }) => tool.name === "send_file")).toMatchObject({
+      available: false,
+      effectiveEnabled: false,
+      availabilityReason: "当前会话不支持文件发送。"
     });
   });
 

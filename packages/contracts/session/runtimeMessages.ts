@@ -13,6 +13,16 @@ import {
   inboundMessageIdentityV1
 } from "../messaging/incomingIdentity.js";
 
+export {
+  conversationAssetEnvelope,
+  decodeConversationAsset,
+  type ConversationAssetOutboxEnvelope,
+  type ConversationAssetOutboxPayload,
+  type ConversationAssetTargetV1,
+  type QueuedConversationAssetRootIdentityV1,
+  type QueuedConversationAssetV2
+} from "./conversationAssetRuntimeMessages.js";
+
 export const MAX_RUNTIME_REPLY_FOLLOW_UP_SNAPSHOTS = 64;
 export const SYSTEM_CONFIG_NEUTRAL_CONFIRMATION_TEXT = "设置结果未确认，请重新查询当前设置";
 

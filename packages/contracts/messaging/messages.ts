@@ -74,6 +74,27 @@ export interface MessagingReceiptV1 {
   messageId?: string;
 }
 
+export type OutboundConversationAssetKindV1 = "file" | "image" | "voice";
+
+export const MAX_OUTBOUND_CONVERSATION_ASSET_INLINE_BYTES = 32 * 1024 * 1024;
+
+export interface PreparedOutboundConversationAssetV1 {
+  kind: OutboundConversationAssetKindV1;
+  name: string;
+  source: string;
+  byteLength: number;
+  sha256?: string;
+  mimeType?: string;
+}
+
+export interface OutboundConversationAssetV1 {
+  accountId?: string;
+  scope: MessageScopeV1;
+  userId: number;
+  groupId?: number;
+  asset: PreparedOutboundConversationAssetV1;
+}
+
 export interface PokeTargetV1 {
   accountId?: string;
   userId: number;
@@ -128,6 +149,7 @@ export interface ConversationDirectoryPort {
 export interface MessagingPort {
   getStatus(): MessagingStatusV1;
   send(message: OutboundMessageV1): Promise<MessagingReceiptV1>;
+  sendConversationAsset?(message: OutboundConversationAssetV1): Promise<MessagingReceiptV1>;
   poke?(target: PokeTargetV1): Promise<MessagingReceiptV1>;
   resolveSender(input: SenderLookupV1): Promise<SenderIdentityV1>;
   getMessage(messageId: number, context?: MessageLookupContextV1): Promise<MessageDetailsV1>;

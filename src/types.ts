@@ -71,6 +71,8 @@ export const AGENT_TOOL_NAMES = [
   "selfie",
   "read_file",
   "write_file",
+  "send_file",
+  "send_voice_message",
   "workspace_bash",
   "codex",
   "system_config"

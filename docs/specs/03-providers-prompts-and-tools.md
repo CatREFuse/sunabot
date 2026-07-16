@@ -49,7 +49,7 @@ GPT-5.6 及后续支持该协议的 OpenAI 官方 Responses 请求必须在最�
 
 ### 4.3 工具
 
-Agent 工具目录固定包含 `assistant_text`、`no_reply`、`memory_recall`、`websearch`、`generate_img`、`selfie`、`read_file`、`write_file`、`workspace_bash`、`codex` 和 `system_config` 十一项。时间读取、OneBot 消息外发和 Provider 检查属于系统或管理能力，不进入 Agent 工具目录。`no_reply`、`read_file`、`write_file` 与 `system_config` 是向后兼容的内置默认工具，旧提示词没有定义时仍会注入代码内置定义；显式停用后从模型请求中移除。文件工具始终使用代码内置的严格参数 schema，旧提示词不能恢复宿主绝对路径参数或放宽字段集合。
+Agent 工具目录固定包含 `assistant_text`、`no_reply`、`memory_recall`、`websearch`、`generate_img`、`selfie`、`read_file`、`write_file`、`send_file`、`send_voice_message`、`workspace_bash`、`codex` 和 `system_config` 十三项。时间读取、任意目标 OneBot 消息外发和 Provider 检查属于系统或管理能力，不进入 Agent 工具目录。`no_reply`、`read_file`、`write_file`、`send_file` 与 `system_config` 是向后兼容的内置默认工具，旧非空提示词没有定义时，只要对应运行能力可用，仍会注入代码内置定义；显式停用后从模型请求中移除。文件工具始终使用代码内置的严格参数 schema，旧提示词不能恢复宿主绝对路径、账号或会话目标参数，也不能放宽字段集合。
 
 `system_config` 只查询或修改当前 Agent。`get_settings` 返回自动回复、群聊编排、搜索、Bash 偏好、最多 100 个已知群聊的摘要和工具有效状态；`get_status` 返回运行时间、OneBot、人格、Provider、恢复门禁和安全裁剪后的探针结果。`list_groups` 按完整 conversation ID 的二进制字典序分页查询当前 Agent 的全部已知 `user_group`/`bot_group`，`groupCursor` 是上一页最后一个完整 conversation ID，`groupLimit` 允许 1—100、`null` 默认 50，响应返回 `total`、`items`、`nextCursor` 和 `hasMore`；格式合法但当前不存在的游标继续返回字典序更大的记录，并发插入不提供快照分页保证。群聊项只包含 conversation ID、账号、群号、标题、范围、回复开关、编排器开关和最后活动时间。响应不得包含密钥、环境变量名、绝对路径、原始消息、Provider 地址或探针诊断正文。修改操作包括自动回复范围、主动群聊编排器、Tavily 搜索开关、管理员私聊 Bash backend 偏好，以及任意真实完整 conversation ID 对应的已知群聊回复/编排器开关；`set_group_reply` 不受查询页大小限制。搜索实现当前只接受 `tavily`；未知群聊、裸 group ID、多余字段、缺失字段和不匹配参数均失败关闭。
 
@@ -57,10 +57,16 @@ Agent 工具目录固定包含 `assistant_text`、`no_reply`、`memory_recall`�
 
 `bot.tools.overrides` 按工具名保存稀疏覆盖，每项允许可选的 `description`；除 `workspace_bash` 与 `codex` 外，其他工具还允许可选的 `enabled`。没有 `enabled` 覆盖时继承当前单聊或群聊回复提示词是否包含该 Function；显式启用可恢复代码内置定义，显式停用会从模型请求中移除该工具。`workspace_bash` 的启停只写入 `bot.bash.enabled`，`codex` 的启停只写入 `bot.tools.codex.enabled`，通用覆盖中的同名 `enabled` 会被移除。描述采用“配置覆盖、当前端点提示词、代码默认值”的优先级；删除描述覆盖后立即恢复当前端点提示词或代码默认描述。描述覆盖作用于所有 Provider 协议。
 
+`send_file` 的模型定义始终由代码侧 canonical strict schema 覆盖：对象只允许且必须包含 `path`、`kind`、`name` 三个键，`name` 可以为 `null`，并固定 `additionalProperties: false`。陈旧或恶意提示词不能改变该参数边界，账号、QQ 号、群号和其他额外字段一律拒绝。`send_file` 必须独占一次模型 response；与 `assistant_text`、系统配置、Bash、deferred tool、其他 Function Call 或原始 assistant 文本同时出现时，OpenAI Responses、Codex Responses、Chat Completions、Anthropic 与 Gemini/兼容协议都必须在任何 intermediate text callback、文件解析、queue 和 outbox 前拒绝整份 response。
+
 工具的配置启用状态与运行能力分开计算。`enabled` 表示配置和提示词选择，`available` 表示当前运行环境、会话权限及依赖能力，`effectiveEnabled` 仅在两者都为真时成立。管理 API 必须同时返回三种状态和不可用原因；平台强制关闭或当前会话无权限时，管理台不能把工具显示成可执行。被停用或不可用的工具既不能出现在 Provider 工具定义中，也不能通过模型返回的未声明 Function Call 绕过门禁执行或派发。
 
 `read_file` 与 `write_file` V1 仅向当前 Agent 的真实 OneBot 管理员私聊开放；群聊、Web Chat、普通用户、缺少账号或消息身份、Agent 不匹配以及任何 `promptOverride` 请求都不获得运行端口。工具只接受当前 Agent `workbench/` 内的 POSIX 相对路径，分别读取有界 UTF-8 文本或以 0600 临时文件原子发布完整 UTF-8 文本；不接受账号、会话、宿主路径、建目录或追加写入参数。同一模型 Function Call 批次包含文件工具与任意其他工具时必须整批零副作用拒绝；文件工具前后出现已接受的助手消息、inline 或 deferred 工具时也必须拒绝。各 Provider 协议在发送同响应的普通 assistant 文本前还必须执行相同的整轮独占门禁。
 
+`/api/tools` 与 Provider 使用同一实时能力来源计算 `send_file.available`：OneBot adapter 必须提供会话资源外发能力，且当前 Agent 至少有一个归属账号在线；resolver 缺失或异常时安全返回不可用。配置启用状态与实时能力状态分别返回，不能把 `available` 固定为真。
+
 `dispatch_message` 负责 deferred tool 的首次受理消息，`assistant_text` 负责 inline 工具开始前的进度或补充问题，最终结果继续使用普通正文。两类消息写入 durable outbox 后立即调度发送，Provider inline 工具与 deferred worker 随后独立执行，不等待远端发送结果；发送失败继续由 outbox 重试，callback 与最终正文保持同一会话 FIFO。单轮工具调用上限可配置，默认 20，最大 100；工具启用状态与描述热更新，权限、超时和并发继续由对应运行配置控制。`workspace_bash` 仅供管理员使用，Docker 与 Linux Native 均固定通过 `/usr/bin/bwrap` 执行：宿主文件系统只读，Agent workspace 是唯一可写宿主绑定，沙箱自带的 `/dev` 仅提供非持久设备 I/O；子进程继承相同 mount/PID/IPC/UTS/cgroup 隔离且全部 capability 被丢弃。macOS 原生模式强制关闭该工具。命令与路径规则只作为附加拒绝层；bubblewrap 缺失、不可执行或内核 namespace probe 失败时必须拒绝命令，不能回退到普通 Bash。群聊默认不可用。
+
+`send_file` 是当前会话定向的 inline 工具，只接收当前 Agent `workbench/` 内的相对路径、发送模式和可选显示名，不接受账号、QQ 号或群号。只有当前入站用户是已配置管理员，且当前 transport 同时提供 OneBot 文件能力与 durable outbox callback 时，Provider 才能声明该工具；真实 OneBot 入站允许既有 parser 产生的 `transport` 缺省值，显式 `web` 必须拒绝。普通私聊用户、普通群成员和伪造 Function Call 均不可用，运行时 queue 还要在任何文件解析前再次执行同一管理员门禁。Provider 执行时固定文件类型、名称、大小、SHA-256 和 workbench 根 dev/ino/ctime 身份；durable outbox 只写入严格的当前目标、不可变 origin identity 的 SHA-256 fingerprint、文件元数据、根身份和 reply gate，不复制正文、sender、引用、媒体、附件、Base64 或宿主路径。实际发送前重新通过统一 workbench 路径解析器解析同一相对路径，以 `O_NOFOLLOW` 文件描述符打开，以排队时文件大小分配有界 Buffer 并在读取前后复验普通文件、单硬链接、根身份、dev、ino、大小和摘要，再转换为 `base64://` 交给 OneBot。群聊、单聊和显式 `accountId` 全部来自触发工具调用的入站消息，缺省账号冻结为 `primary`，模型不能改投其他目标。`send_voice_message` 保留独立 schema 与 OneBot 底层 `record` 能力，但当前运行能力固定不可用，不进入 Provider 工具定义；伪造 Function Call、内部 voice queue 或 durable voice outbox 均须明确拒绝。
 
 Codex CLI 是 Core 的固定版本运行依赖，Docker Core 必须在镜像内安装并通过版本 smoke，Native Core 必须在启动时验证可执行文件。Deferred worker 只从当前 workspace 的 `secrets/codex/auth.json` 复制授权到单次任务隔离目录；管理工具目录与真实回复 Provider 共用同一能力解析器，同时检查 CLI、授权与 Bash 隔离探针并在异常时安全关闭。CLI 缺失或版本不匹配时 Core 拒绝启动，授权缺失时 Core 保持可启动以允许管理员完成设备登录，但 Codex 工具不得被标记为可调用。

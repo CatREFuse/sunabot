@@ -509,13 +509,23 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
   registerAgentToolRoutes(app, {
     agentFiles,
     resolveToolCapabilities,
+    resolveConversationAssetCapability: () => conversationAssetCapabilityFor(
+      config.persona.defaultAgentId,
+      onebotGateway,
+      agentRegistry
+    ),
     getConfig: () => config,
     getAgentContext: (agentId) => {
       const agentRuntime = agentRuntimeManager.require(agentId);
       return {
         config: agentRuntime.config,
         agentFiles: new AgentFileRepository({ runtime: agentRuntime }),
-        resolveToolCapabilities: toolCapabilitiesFor(agentRuntime.config)
+        resolveToolCapabilities: toolCapabilitiesFor(agentRuntime.config),
+        resolveConversationAssetCapability: () => conversationAssetCapabilityFor(
+          agentId,
+          onebotGateway,
+          agentRegistry
+        )
       };
     }
   });
@@ -563,6 +573,18 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
       return { host, port: boundAddress.port };
     }
   };
+}
+
+function conversationAssetCapabilityFor(
+  agentId: string,
+  gateway: OneBotGateway,
+  registry: AgentRegistry
+) {
+  if (typeof gateway.sendConversationAsset !== "function") return false;
+  const status = gateway.getStatus();
+  return status.connected && (status.accounts ?? []).some(
+    (account) => registry.account(account.accountId)?.agentId === agentId
+  );
 }
 
 export async function createApp(options: CreateAppOptions = {}) {

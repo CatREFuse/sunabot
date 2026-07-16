@@ -5,6 +5,7 @@ import {
   memoryRecallTool,
   noReplyTool,
   readFileTool,
+  sendFileTool,
   selfieTool,
   systemConfigTool,
   withRequiredDispatchMessage,
@@ -229,6 +230,7 @@ export function defaultFinalPromptTemplate(id: string): FinalPromptTemplate | un
         websearchTool,
         withRequiredDispatchMessage(generateImgTool),
         withRequiredDispatchMessage(selfieTool),
+        sendFileTool,
         memoryRecallTool,
         withRequiredDispatchMessage(codexTool),
         ...(!isGroupReply ? [systemConfigTool] : [])

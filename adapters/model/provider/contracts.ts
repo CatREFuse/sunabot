@@ -8,6 +8,7 @@ import type {
 } from "../../../services/tools/generateImgTool.js";
 import type { SelfieRunner } from "../../../services/tools/selfieTool.js";
 import type { SystemConfigToolPort } from "../../../services/tools/systemConfigTool.js";
+import type { PrepareOutboundConversationAssetInput } from "../../../services/delivery/public.js";
 import type { ProviderLogContext } from "../../../packages/contracts/model/modelGateway.js";
 import type { ImageGenerationFailureContext } from "../imageGenerationRetry.js";
 
@@ -26,6 +27,7 @@ export interface ProviderCompleteOptions {
   imageReferences?: GenerateImgReferenceContext;
   memory?: ProviderMemoryOptions;
   selfie?: ProviderSelfieOptions;
+  conversationAssets?: ProviderConversationAssetOptions;
   asyncCodex?: boolean;
   asyncImage?: boolean;
   imageTools?: boolean;
@@ -84,6 +86,14 @@ export interface ProviderSelfieOptions {
   enabled: boolean;
   referenceImageUrls?: string[];
   run: SelfieRunner;
+}
+
+export interface ProviderConversationAssetOptions {
+  enabled: boolean;
+  send: (
+    input: PrepareOutboundConversationAssetInput,
+    context: { callId: string; toolName: "send_file" }
+  ) => Promise<unknown>;
 }
 
 export interface OpenAIProviderOptions {

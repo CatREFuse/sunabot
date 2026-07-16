@@ -351,6 +351,13 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
         allowNoReply: true,
         workbenchFiles: providerWorkbenchFilesForIncoming(this.config, incoming, options.promptOverride),
         bash: this.buildProviderBashOptions(incoming, toolCapabilities.workspaceBash),
+        conversationAssets: this.conversationAssetProviderOptions(
+          incoming,
+          gateway,
+          logRunId,
+          options.isCurrent,
+          options.delivery
+        ),
         bot: this.config.bot,
         generateImage: (prompt, size, quality, referenceImageUrls, childLogContext) => provider.generateImage(
           prompt,

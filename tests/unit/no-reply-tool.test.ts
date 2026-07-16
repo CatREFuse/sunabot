@@ -134,6 +134,106 @@ describe("no_reply provider termination", () => {
   });
 });
 
+describe("send_file provider response exclusivity", () => {
+  it("rejects OpenAI Responses sibling text before text or file callbacks", async () => {
+    const provider = new OpenAIProvider(providerConfig("openai-official"));
+    const create = vi.fn()
+      .mockResolvedValueOnce({ output: [
+        responseMessage("这段正文不应发送"),
+        responseFunctionCall("call-openai-send-file", "send_file", sendFileArguments())
+      ] })
+      .mockResolvedValueOnce({ output: [responseMessage("已取消冲突调用")] });
+    vi.spyOn(provider as never, "createClient").mockReturnValue({ responses: { create } });
+    const callbacks = sendFileCallbacks();
+
+    await expect(provider.completeTurn("system", [{ role: "user", content: "发送报告" }], callbacks.options))
+      .resolves.toEqual({ kind: "completed", text: "已取消冲突调用" });
+    assertSendFileCallbacksWereNotCalled(callbacks);
+  });
+
+  it("rejects Codex Responses sibling text before text or file callbacks", async () => {
+    const provider = new OpenAIProvider(providerConfig("codex-responses"));
+    vi.spyOn(provider as never, "getApiKey").mockReturnValue("codex-token");
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(codexResponse([
+        responseMessage("这段正文不应发送"),
+        responseFunctionCall("call-codex-send-file", "send_file", sendFileArguments())
+      ]))
+      .mockResolvedValueOnce(codexResponse([responseMessage("已取消冲突调用")]));
+    const callbacks = sendFileCallbacks();
+
+    await expect(provider.completeTurn("system", [{ role: "user", content: "发送报告" }], callbacks.options))
+      .resolves.toEqual({ kind: "completed", text: "已取消冲突调用" });
+    assertSendFileCallbacksWereNotCalled(callbacks);
+  });
+
+  it("rejects Chat Completions sibling text before text or file callbacks", async () => {
+    const provider = new OpenAIProvider(providerConfig("openai-compatible"));
+    const create = vi.fn()
+      .mockResolvedValueOnce({
+        choices: [{
+          finish_reason: "tool_calls",
+          message: {
+            role: "assistant",
+            content: "这段正文不应发送",
+            tool_calls: [{
+              id: "call-chat-send-file",
+              type: "function",
+              function: { name: "send_file", arguments: JSON.stringify(sendFileArguments()) }
+            }]
+          }
+        }]
+      })
+      .mockResolvedValueOnce(chatTextResponse("已取消冲突调用"));
+    vi.spyOn(provider as never, "createChatClient").mockReturnValue({ chat: { completions: { create } } });
+    const callbacks = sendFileCallbacks();
+
+    await expect(provider.completeTurn("system", [{ role: "user", content: "发送报告" }], callbacks.options))
+      .resolves.toEqual({ kind: "completed", text: "已取消冲突调用" });
+    assertSendFileCallbacksWereNotCalled(callbacks);
+  });
+
+  it("rejects Anthropic sibling text before text or file callbacks", async () => {
+    const provider = new OpenAIProvider(providerConfig("anthropic-official"));
+    vi.spyOn(provider as never, "getApiKey").mockReturnValue("anthropic-key");
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({
+        content: [
+          { type: "text", text: "这段正文不应发送" },
+          { type: "tool_use", id: "call-anthropic-send-file", name: "send_file", input: sendFileArguments() }
+        ],
+        stop_reason: "tool_use"
+      }))
+      .mockResolvedValueOnce(jsonResponse({
+        content: [{ type: "text", text: "已取消冲突调用" }],
+        stop_reason: "end_turn"
+      }));
+    const callbacks = sendFileCallbacks();
+
+    await expect(provider.completeTurn("system", [{ role: "user", content: "发送报告" }], callbacks.options))
+      .resolves.toEqual({ kind: "completed", text: "已取消冲突调用" });
+    assertSendFileCallbacksWereNotCalled(callbacks);
+  });
+
+  it("rejects Gemini sibling text before text or file callbacks", async () => {
+    const provider = new OpenAIProvider(providerConfig("gemini-official"));
+    vi.spyOn(provider as never, "getApiKey").mockReturnValue("gemini-key");
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ candidates: [{ content: { role: "model", parts: [
+        { text: "这段正文不应发送" },
+        { functionCall: { name: "send_file", args: sendFileArguments() } }
+      ] } }] }))
+      .mockResolvedValueOnce(jsonResponse({ candidates: [{ content: { role: "model", parts: [
+        { text: "已取消冲突调用" }
+      ] } }] }));
+    const callbacks = sendFileCallbacks();
+
+    await expect(provider.completeTurn("system", [{ role: "user", content: "发送报告" }], callbacks.options))
+      .resolves.toEqual({ kind: "completed", text: "已取消冲突调用" });
+    assertSendFileCallbacksWereNotCalled(callbacks);
+  });
+});
+
 describe("cross-round no_reply ordering", () => {
   it("returns a tool error after OpenAI Responses already delivered assistant_text", async () => {
     const provider = new OpenAIProvider(providerConfig("openai-official"));
@@ -286,6 +386,32 @@ function responseFunctionCall(
     arguments: JSON.stringify(args),
     status: "completed"
   };
+}
+
+function sendFileArguments() {
+  return { path: "exports/report.txt", kind: "file", name: null };
+}
+
+function sendFileCallbacks() {
+  const send = vi.fn(async () => ({ ok: true, queued: true }));
+  const onAssistantText = vi.fn();
+  const onToolCall = vi.fn();
+  return {
+    send,
+    onAssistantText,
+    onToolCall,
+    options: {
+      onAssistantText,
+      onToolCall,
+      conversationAssets: { enabled: true, send }
+    }
+  };
+}
+
+function assertSendFileCallbacksWereNotCalled(callbacks: ReturnType<typeof sendFileCallbacks>) {
+  expect(callbacks.onAssistantText).not.toHaveBeenCalled();
+  expect(callbacks.onToolCall).not.toHaveBeenCalled();
+  expect(callbacks.send).not.toHaveBeenCalled();
 }
 
 function readResponsesToolError(body: unknown, callId: string) {

@@ -7,6 +7,7 @@ import { claimToolCalls, resolveMaxToolCalls, toolCallLimitError } from "./toolL
 import { fetchTextWithTransportRetry, normalizeGeminiBaseUrl, resolveModelRequestMaxAttempts } from "./transport.js";
 import { errorMessage, isRecord, parseJson } from "./valueUtils.js";
 import { shouldEmitIntermediateAssistantText } from "./turnToolState.js";
+import { rejectExclusiveToolSiblingText } from "./toolExecutor.js";
 
 export async function completeGeminiGenerateContent(
   context: ProviderAdapterContext,
@@ -92,16 +93,19 @@ export async function completeGeminiGenerateContent(
       return { kind: "completed", text };
     }
 
-    const deferred = context.toolExecutor.deferredTurn(calls, options, resolvedDefinitions, state);
-    if (deferred) return deferred;
-    const noReply = context.toolExecutor.noReplyTurn(calls, options, resolvedDefinitions, state);
-    if (noReply) return noReply;
     const emitAssistantText = shouldEmitIntermediateAssistantText(calls, options, state, Boolean(text));
-    if (text && options.onAssistantText && emitAssistantText) {
-      await options.onAssistantText(text, "text");
+    const rejected = rejectExclusiveToolSiblingText(calls, text, options);
+    if (!rejected) {
+      const deferred = context.toolExecutor.deferredTurn(calls, options, resolvedDefinitions, state);
+      if (deferred) return deferred;
+      const noReply = context.toolExecutor.noReplyTurn(calls, options, resolvedDefinitions, state);
+      if (noReply) return noReply;
+      if (text && options.onAssistantText && emitAssistantText) {
+        await options.onAssistantText(text, "text");
+      }
     }
     contents.push({ role: "model", parts });
-    const outputs = await context.toolExecutor.execute(calls, options, resolvedDefinitions, state);
+    const outputs = rejected ?? await context.toolExecutor.execute(calls, options, resolvedDefinitions, state);
     contents.push({
       role: "user",
       parts: outputs.map((output, index) => ({

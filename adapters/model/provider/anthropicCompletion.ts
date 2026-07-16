@@ -8,6 +8,7 @@ import { claimToolCalls, resolveMaxToolCalls, toolCallLimitError } from "./toolL
 import { fetchTextWithTransportRetry, normalizeAnthropicBaseUrl, resolveModelRequestMaxAttempts } from "./transport.js";
 import { errorMessage, isRecord, parseJson } from "./valueUtils.js";
 import { shouldEmitIntermediateAssistantText } from "./turnToolState.js";
+import { rejectExclusiveToolSiblingText } from "./toolExecutor.js";
 
 export async function completeAnthropicMessages(
   context: ProviderAdapterContext,
@@ -87,16 +88,19 @@ export async function completeAnthropicMessages(
       return { kind: "completed", text };
     }
 
-    const deferred = context.toolExecutor.deferredTurn(calls, options, definitions, state);
-    if (deferred) return deferred;
-    const noReply = context.toolExecutor.noReplyTurn(calls, options, definitions, state);
-    if (noReply) return noReply;
     const emitAssistantText = shouldEmitIntermediateAssistantText(calls, options, state, Boolean(text));
-    if (text && options.onAssistantText && emitAssistantText) {
-      await options.onAssistantText(text, "text");
+    const rejected = rejectExclusiveToolSiblingText(calls, text, options);
+    if (!rejected) {
+      const deferred = context.toolExecutor.deferredTurn(calls, options, definitions, state);
+      if (deferred) return deferred;
+      const noReply = context.toolExecutor.noReplyTurn(calls, options, definitions, state);
+      if (noReply) return noReply;
+      if (text && options.onAssistantText && emitAssistantText) {
+        await options.onAssistantText(text, "text");
+      }
     }
     messages.push({ role: "assistant", content: blocks });
-    const outputs = await context.toolExecutor.execute(calls, options, definitions, state);
+    const outputs = rejected ?? await context.toolExecutor.execute(calls, options, definitions, state);
     messages.push({
       role: "user",
       content: outputs.map((output) => ({ type: "tool_result", tool_use_id: output.call_id, content: String(output.output ?? "") }))

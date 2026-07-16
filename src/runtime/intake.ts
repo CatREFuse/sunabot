@@ -589,6 +589,9 @@ export async function runtime_deliverSessionOutbox(
     }
     outbox = canonical;
   }
+  if (outbox.kind === "onebot.conversation_asset") {
+    return this.deliverConversationAssetOutbox(outbox, delivery);
+  }
     if (outbox.kind === "onebot.poke") {
       const payload = decodeNoReplyPoke(outbox.payload);
       if (!isRuntimeIncomingMessage(payload.incoming)) {

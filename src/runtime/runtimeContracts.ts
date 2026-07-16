@@ -29,6 +29,7 @@ import {
   type AssistantReplyOutboxEnvelope,
   type AssistantReplyOutboxPayload,
   type AsyncToolCompletionPayload,
+  type ConversationAssetOutboxEnvelope,
   type GroupThreadContextSnapshotV1,
   type NoReplyPokeOutboxEnvelope,
   type ReplyQuoteSnapshotV1,
@@ -236,9 +237,18 @@ export interface SystemConfigHeldConfirmationPort {
     options: { mutationFingerprint: string }
   ): Promise<SystemConfigHeldConfirmationHandle>;
 }
+export interface ConversationAssetDeliveryDraft {
+  kind: "onebot.conversation_asset";
+  payload: ConversationAssetOutboxEnvelope;
+  deliveryPartition: string;
+  dedupeKey: string;
+  dedupeFingerprint: string;
+}
 export interface ReplyDelivery {
-  outbox: Array<ReplyDeliveryDraft | NoReplyPokeDeliveryDraft>;
-  emitOutbox?: (draft: ReplyDeliveryDraft | NoReplyPokeDeliveryDraft) => Promise<unknown>;
+  outbox: Array<ReplyDeliveryDraft | NoReplyPokeDeliveryDraft | ConversationAssetDeliveryDraft>;
+  emitOutbox?: (
+    draft: ReplyDeliveryDraft | NoReplyPokeDeliveryDraft | ConversationAssetDeliveryDraft
+  ) => Promise<unknown>;
   replyQuote?: ReplyQuoteSnapshotV1;
   systemConfigHeld?: SystemConfigHeldConfirmationPort;
   terminalStatus?: "no_reply" | "replied";

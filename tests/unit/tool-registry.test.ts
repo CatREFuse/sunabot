@@ -3,6 +3,7 @@ import { RegistryProviderToolExecutor } from "../../adapters/model/provider/tool
 import { createTurnToolState } from "../../adapters/model/provider/turnToolState.js";
 import type { ProviderCompleteOptions } from "../../adapters/model/openaiProvider.js";
 import type { OpenAIToolDefinition } from "../../services/agent/promptSystem.js";
+import { sendFileTool } from "../../services/tools/sendConversationAssetTool.js";
 import { AGENT_TOOL_NAMES } from "../../src/types.js";
 import {
   listToolMetadata,
@@ -36,6 +37,162 @@ describe("ToolRegistry", () => {
     expect(resolveProviderToolDefinitions({ onAssistantText: () => undefined }).map((tool) => tool.name))
       .toEqual(["assistant_text"]);
     expect(providerToolExecutionMode("assistant_text")).toBe("inline");
+  });
+
+  it("exposes send_file only with current-conversation delivery and keeps voice unavailable", async () => {
+    const send = async () => ({
+      ok: true as const,
+      queued: true as const,
+      kind: "file" as const,
+      name: "report.pdf",
+      byteLength: 123
+    });
+    const options = {
+      conversationAssets: { enabled: true, send }
+    } satisfies ProviderCompleteOptions;
+    const executor = new RegistryProviderToolExecutor();
+    const definitions = executor.resolveDefinitions(options, [
+      staleTool("send_file"),
+      staleTool("send_voice_message")
+    ]);
+
+    expect(definitions.map((definition) => definition.name)).toEqual(["send_file"]);
+    expect(definitions[0]).toMatchObject({
+      strict: true,
+      parameters: sendFileTool.parameters
+    });
+    expect((definitions[0]?.parameters as Record<string, any>).properties.task).toBeUndefined();
+    expect(providerToolExecutionMode("send_file", options)).toBe("inline");
+    expect(listToolMetadata(options, [staleTool("send_file")]).find((tool) => tool.name === "send_file"))
+      .toMatchObject({ available: true, effectiveEnabled: true, execution: "inline" });
+    expect(listToolMetadata(options).find((tool) => tool.name === "send_voice_message"))
+      .toMatchObject({ available: false, effectiveEnabled: false });
+
+    const [fileOutput] = await executor.execute([{
+      type: "function_call",
+      name: "send_file",
+      call_id: "call-send-file",
+      arguments: JSON.stringify({ path: "exports/report.pdf", kind: "file", name: null })
+    }], options, definitions);
+    expect(JSON.parse(String(fileOutput?.output))).toMatchObject({
+      ok: true,
+      queued: true,
+      kind: "file",
+      name: "report.pdf"
+    });
+
+    let forgedSideEffects = 0;
+    const forgedOptions = {
+      conversationAssets: {
+        enabled: true,
+        send: async () => { forgedSideEffects += 1; return { ok: true }; }
+      }
+    } satisfies ProviderCompleteOptions;
+    const forgedDefinitions = executor.resolveDefinitions(forgedOptions, [staleTool("send_file")]);
+    const [forgedOutput] = await executor.execute([{
+      type: "function_call",
+      name: "send_file",
+      call_id: "call-send-file-forged-target",
+      arguments: JSON.stringify({
+        path: "exports/report.pdf",
+        kind: "file",
+        name: null,
+        accountId: "account-b",
+        groupId: 602
+      })
+    }], forgedOptions, forgedDefinitions);
+    expect(JSON.parse(String(forgedOutput?.output))).toEqual({
+      ok: false,
+      error: "send_file arguments contain unsupported fields."
+    });
+    expect(forgedSideEffects).toBe(0);
+
+    for (const [label, argumentsValue] of [
+      ["missing-name", { path: "exports/report.pdf", kind: "file" }],
+      ["blank-name", { path: "exports/report.pdf", kind: "file", name: "   " }],
+      ["long-name", { path: "exports/report.pdf", kind: "file", name: "a".repeat(256) }],
+      ["unsafe-name", { path: "exports/report.pdf", kind: "file", name: "other/report.pdf" }]
+    ] as const) {
+      const [invalidOutput] = await executor.execute([{
+        type: "function_call",
+        name: "send_file",
+        call_id: `call-send-file-${label}`,
+        arguments: JSON.stringify(argumentsValue)
+      }], forgedOptions, forgedDefinitions);
+      expect(JSON.parse(String(invalidOutput?.output))).toMatchObject({ ok: false });
+    }
+    expect(forgedSideEffects).toBe(0);
+
+    const [voiceOutput] = await executor.execute([{
+      type: "function_call",
+      name: "send_voice_message",
+      call_id: "call-send-voice",
+      arguments: JSON.stringify({ path: "audio/reply.amr" })
+    }], options, definitions);
+    expect(JSON.parse(String(voiceOutput?.output))).toEqual({
+      ok: false,
+      error: "Tool send_voice_message is unavailable."
+    });
+  });
+
+  it("injects send_file into legacy non-empty prompts while preserving an explicit off switch", () => {
+    const executor = new RegistryProviderToolExecutor();
+    const available = {
+      conversationAssets: { enabled: true, send: async () => ({ ok: true }) }
+    } satisfies ProviderCompleteOptions;
+
+    expect(executor.resolveDefinitions(available, [staleTool("assistant_text")]))
+      .toEqual([expect.objectContaining({ name: "send_file", strict: true })]);
+
+    const disabled = {
+      ...available,
+      bot: {
+        tools: {
+          overrides: { send_file: { enabled: false } }
+        }
+      }
+    } as unknown as ProviderCompleteOptions;
+    expect(executor.resolveDefinitions(disabled, [staleTool("assistant_text")])).toEqual([]);
+    expect(listToolMetadata(disabled, [staleTool("assistant_text")]).find((tool) => tool.name === "send_file"))
+      .toMatchObject({ configuredEnabled: false, enabled: false, available: true, effectiveEnabled: false });
+  });
+
+  it("rejects a send_file batch before any tool can produce a side effect", async () => {
+    const sentFiles: unknown[] = [];
+    const sentText: string[] = [];
+    const options = {
+      conversationAssets: {
+        enabled: true,
+        send: async (input: unknown) => {
+          sentFiles.push(input);
+          return { ok: true };
+        }
+      },
+      onAssistantText: async (text: string) => { sentText.push(text); }
+    } satisfies ProviderCompleteOptions;
+    const executor = new RegistryProviderToolExecutor();
+    const definitions = executor.resolveDefinitions(options, [staleTool("send_file"), staleTool("assistant_text")]);
+
+    for (const mixedTool of ["system_config", "workspace_bash", "assistant_text", "codex"]) {
+      const outputs = await executor.execute([{
+        type: "function_call",
+        name: "send_file",
+        call_id: `call-send-file-mixed-${mixedTool}`,
+        arguments: JSON.stringify({ path: "exports/report.pdf", kind: "file", name: null })
+      }, {
+        type: "function_call",
+        name: mixedTool,
+        call_id: `call-${mixedTool}-mixed-with-file`,
+        arguments: JSON.stringify({ text: "不应执行", command: "printf blocked" })
+      }], options, definitions);
+
+      expect(outputs.map((output) => JSON.parse(String(output.output)))).toEqual([
+        { ok: false, error: "send_file must be called alone before any other tool." },
+        { ok: false, error: "send_file must be called alone before any other tool." }
+      ]);
+    }
+    expect(sentFiles).toEqual([]);
+    expect(sentText).toEqual([]);
   });
 
   it("injects no_reply into legacy reply prompts and accepts it only as a terminal solo call", () => {

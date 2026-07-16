@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CodexRunner, CodexToolResult } from "../../adapters/codex/codexTool.js";
+import { RegistryProviderToolExecutor } from "../../adapters/model/provider/toolExecutor.js";
 import type { RuntimeToolCapabilityResolver } from "../../services/tools/bashCapability.js";
 import type {
   OpenAIProvider,
@@ -28,6 +29,7 @@ import { SunaRuntime } from "../../src/runtime.js";
 import type { ReplyDelivery } from "../../src/runtime/runtimeContracts.js";
 import type { OutboxDeliveryContext } from "../../services/sessions/sessionCoordinator.js";
 import { SessionStore } from "../../services/sessions/sessionStore.js";
+import { sendFileTool } from "../../services/tools/sendConversationAssetTool.js";
 import {
   applicationDataStore,
   closeApplicationDataStores
@@ -83,6 +85,143 @@ describe("SunaRuntime Session queue bridge", () => {
     expect(sentTexts(harness.gateway)).toEqual(["已完成"]);
   });
 
+  it.each([
+    {
+      label: "private",
+      event: privateEvent(19_980, "发送报告"),
+      accountId: undefined,
+      sessionId: "private:171419991",
+      target: { accountId: "primary", scope: "private", userId: 171419991 }
+    },
+    {
+      label: "group",
+      event: groupEvent(19_981, 602, "发送报告"),
+      accountId: "account-b",
+      sessionId: "account:account-b:group:602",
+      target: { accountId: "account-b", scope: "user_group", userId: 171419991, groupId: 602 }
+    }
+  ])("queues send_file for the current $label conversation and account", async ({
+    event,
+    accountId,
+    sessionId,
+    target
+  }) => {
+    expect(parseOneBotInboundMessage(event)?.transport).toBeUndefined();
+    const harness = createRuntimeHarness(async (
+      _request: RenderedPromptRequest,
+      options: ProviderCompleteOptions = {}
+    ): Promise<ProviderTurnResult> => {
+      expect(options.conversationAssets?.enabled).toBe(true);
+      options.onToolCall?.("send_file");
+      await expect(options.conversationAssets!.send({
+        path: "exports/report.txt",
+        kind: "file"
+      }, {
+        callId: `call-send-file-${accountId ?? "primary"}`,
+        toolName: "send_file"
+      })).resolves.toMatchObject({
+        ok: true,
+        queued: true,
+        kind: "file",
+        name: "report.txt",
+        byteLength: 6
+      });
+      return { kind: "completed", text: "文件已发送" };
+    });
+    const workbench = path.join(harness.runtime.config.persona.agentWorkspace, "workbench", "exports");
+    fs.mkdirSync(workbench, { recursive: true });
+    fs.writeFileSync(path.join(workbench, "report.txt"), "report");
+
+    await handleOneBotEvent(harness.runtime, event, harness.gateway, accountId);
+    await harness.coordinator.waitForIdle({ timeoutMs: 3_000 });
+
+    const sendConversationAsset = harness.gateway.sendConversationAsset as unknown as ReturnType<typeof vi.fn>;
+    expect(sendConversationAsset).toHaveBeenCalledOnce();
+    expect(sendConversationAsset).toHaveBeenCalledWith({
+      ...target,
+      asset: expect.objectContaining({
+        kind: "file",
+        name: "report.txt",
+        source: `base64://${Buffer.from("report").toString("base64")}`,
+        byteLength: 6
+      })
+    });
+    expect(harness.store.listOutbox(sessionId).map((outbox) => outbox.kind)).toContain(
+      "onebot.conversation_asset"
+    );
+    expect(harness.store.listOutbox(sessionId).find((outbox) => outbox.kind === "onebot.conversation_asset"))
+      .toMatchObject({ deliveryPartition: accountId ?? "primary" });
+    expect(sentTexts(harness.gateway)).toEqual(["文件已发送"]);
+  });
+
+  it("delivers send_file after preparation mutates non-identity incoming fields", async () => {
+    const harness = createRuntimeHarness(async (
+      _request: RenderedPromptRequest,
+      options: ProviderCompleteOptions = {}
+    ): Promise<ProviderTurnResult> => {
+      expect(options.conversationAssets?.enabled).toBe(true);
+      await expect(options.conversationAssets!.send({
+        path: "exports/report.txt",
+        kind: "file"
+      }, {
+        callId: "call-prepared-send-file",
+        toolName: "send_file"
+      })).resolves.toMatchObject({ ok: true, queued: true });
+      return { kind: "completed", text: "文件已发送" };
+    });
+    const internals = harness.runtime as unknown as {
+      prepareIncomingMessage(incoming: Record<string, any>, gateway: MessagingPort): Promise<void>;
+      attachmentService: {
+        buildModelContext(attachments: unknown[]): Promise<{
+          text: string;
+          localImagePaths: string[];
+          attachments: unknown[];
+        }>;
+      };
+    };
+    internals.attachmentService = {
+      buildModelContext: async (attachments) => ({ text: "", localImagePaths: [], attachments })
+    };
+    internals.prepareIncomingMessage = async (incoming) => {
+      incoming.sender = {
+        ...incoming.sender,
+        nickname: "prepared-nickname",
+        displayName: "prepared-display-name"
+      };
+      incoming.media = [{
+        schemaVersion: 1,
+        kind: "image",
+        source: "inline_data",
+        url: "data:image/png;base64,cHJlcGFyZWQ="
+      }];
+      incoming.attachments = [{
+        id: "prepared-attachment",
+        source: "message",
+        name: "prepared.pdf",
+        status: "ready",
+        chunkIndexPath: "/private/prepared/chunks.sqlite"
+      }];
+      incoming.quoteReferences = [{
+        messageId: 19_970,
+        text: "prepared quote",
+        imageUrls: ["https://private.example.invalid/prepared.png"]
+      }];
+    };
+    const workbench = path.join(harness.runtime.config.persona.agentWorkspace, "workbench", "exports");
+    fs.mkdirSync(workbench, { recursive: true });
+    fs.writeFileSync(path.join(workbench, "report.txt"), "report");
+    const event = privateEvent(19_982, "发送准备后的报告");
+    expect(parseOneBotInboundMessage(event)?.transport).toBeUndefined();
+
+    await handleOneBotEvent(harness.runtime, event, harness.gateway);
+    await harness.coordinator.waitForIdle({ timeoutMs: 3_000 });
+
+    expect(harness.gateway.sendConversationAsset).toHaveBeenCalledOnce();
+    expect(harness.store.listOutbox("private:171419991").find((outbox) => (
+      outbox.kind === "onebot.conversation_asset"
+    ))).toMatchObject({ status: "sent", deliveryPartition: "primary" });
+  });
+
   it("finishes a no_reply turn without outbound text or a placeholder assistant message", async () => {
     const completeRequestTurn = vi.fn(async (
       _request: RenderedPromptRequest,
@@ -122,7 +261,7 @@ describe("SunaRuntime Session queue bridge", () => {
       event: privateEvent(20_010, "不用继续回复"),
       sessionId: "private:171419991",
       accountId: undefined,
-      target: { userId: 171419991 }
+      target: { accountId: "primary", userId: 171419991 }
     },
     {
       scope: "group",
@@ -1491,6 +1630,72 @@ describe("SunaRuntime Session queue bridge", () => {
 
     expect(completeRequestTurn).toHaveBeenCalledOnce();
   });
+
+  it("omits send_file when the current transport has no durable asset bridge", async () => {
+    const completeRequestTurn = vi.fn(async (
+      _request: RenderedPromptRequest,
+      options: ProviderCompleteOptions = {}
+    ): Promise<ProviderTurnResult> => {
+      expect(options.conversationAssets).toBeUndefined();
+      return { kind: "completed", text: "asset capability closed" };
+    });
+    const harness = createRuntimeHarness(completeRequestTurn);
+    harness.gateway.sendConversationAsset = undefined;
+
+    await handleOneBotEvent(harness.runtime, privateEvent(22_003, "asset capability check"), harness.gateway);
+    await harness.coordinator.waitForIdle({ timeoutMs: 3_000 });
+
+    expect(completeRequestTurn).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    {
+      label: "private user",
+      event: privateEvent(22_004, "ordinary private asset request", 998_101),
+      sessionId: "private:998101"
+    },
+    {
+      label: "group member",
+      event: groupEvent(22_005, 604, "ordinary group asset request", 998_102),
+      sessionId: "group:604"
+    }
+  ])("keeps send_file definitions and forged calls unavailable for an ordinary $label", async ({
+    event,
+    sessionId
+  }) => {
+    const completeRequestTurn = vi.fn(async (
+      _request: RenderedPromptRequest,
+      options: ProviderCompleteOptions = {}
+    ): Promise<ProviderTurnResult> => {
+      expect(options.conversationAssets).toBeUndefined();
+      const executor = new RegistryProviderToolExecutor();
+      const definitions = executor.resolveDefinitions(options, [{ type: "function", function: sendFileTool }]);
+      expect(definitions.map((definition) => definition.name)).not.toContain("send_file");
+      const [output] = await executor.execute([{
+        type: "function_call",
+        name: "send_file",
+        call_id: "forged-ordinary-send-file",
+        arguments: JSON.stringify({ path: "exports/report.txt", kind: "file", name: null })
+      }], options, definitions);
+      expect(JSON.parse(String(output?.output))).toEqual({
+        ok: false,
+        error: "Tool send_file is unavailable."
+      });
+      return { kind: "completed", text: "asset capability closed" };
+    });
+    const harness = createRuntimeHarness(completeRequestTurn);
+    const workbench = path.join(harness.runtime.config.persona.agentWorkspace, "workbench", "exports");
+    fs.mkdirSync(workbench, { recursive: true });
+    fs.writeFileSync(path.join(workbench, "report.txt"), "report");
+
+    await handleOneBotEvent(harness.runtime, event, harness.gateway);
+    await harness.coordinator.waitForIdle({ timeoutMs: 3_000 });
+
+    expect(completeRequestTurn).toHaveBeenCalledOnce();
+    expect(harness.gateway.sendConversationAsset).not.toHaveBeenCalled();
+    expect(harness.store.listOutbox(sessionId).some((outbox) => outbox.kind === "onebot.conversation_asset"))
+      .toBe(false);
+  });
 });
 
 interface RuntimeHarness {
@@ -1599,6 +1804,7 @@ function fakeGateway() {
   return {
     getStatus: vi.fn(() => ({ connected: true, connections: 1, selfIds: ["4004"] })),
     send: vi.fn(async () => ({ accepted: true as const })),
+    sendConversationAsset: vi.fn(async () => ({ accepted: true as const })),
     resolveSender: vi.fn(async ({ userId, current }) => current ?? { id: String(userId) }),
     getMessage: vi.fn(async () => ({
       text: "",
@@ -1614,7 +1820,8 @@ function fakeGateway() {
 function handleOneBotEvent(runtime: SunaRuntime, event: OneBotEvent, gateway: MessagingPort, accountId?: string) {
   const incoming = parseOneBotInboundMessage(event);
   if (!incoming) throw new Error("test event did not produce an inbound message");
-  if (accountId) incoming.accountId = accountId;
+  incoming.agentId = runtime.config.persona.defaultAgentId;
+  incoming.accountId = accountId ?? "primary";
   return runtime.handleInboundMessage(incoming, gateway);
 }
 
@@ -1640,12 +1847,12 @@ function botGroupEvent(messageId: number, groupId: number, marker: string): OneB
   };
 }
 
-function privateEvent(messageId: number, marker: string): OneBotEvent {
+function privateEvent(messageId: number, marker: string, userId = 171419991): OneBotEvent {
   return {
     post_type: "message",
     message_type: "private",
     message_id: messageId,
-    user_id: 171419991,
+    user_id: userId,
     self_id: 4004,
     time: 1_788_000_000 + messageId,
     sender: { nickname: "private-user" },

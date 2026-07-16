@@ -29,6 +29,12 @@ import {
   readFileTool,
   writeFileTool
 } from "./workbenchFileTool.js";
+import {
+  SEND_FILE_TOOL_NAME,
+  SEND_VOICE_MESSAGE_TOOL_NAME,
+  sendFileTool,
+  sendVoiceMessageTool
+} from "./sendConversationAssetTool.js";
 import { withRequiredDispatchMessage, withoutDispatchMessage } from "./deferredDispatch.js";
 
 export interface ToolAvailability {
@@ -42,6 +48,7 @@ export interface ToolAvailability {
   bot?: Pick<BotConfig, "tools">;
   selfie?: { enabled: boolean };
   memory?: { enabled: boolean };
+  conversationAssets?: { enabled: boolean };
   asyncCodex?: boolean;
   asyncImage?: boolean;
   imageTools?: boolean;
@@ -159,6 +166,25 @@ const catalog: readonly ToolCatalogEntry[] = [
     available: (options) => typeof options.workbenchFiles?.write === "function",
     unavailableReason: "当前会话不允许写入 Agent workbench 文件。",
     defaultEnabled: true,
+    execution: "inline"
+  },
+  {
+    name: SEND_FILE_TOOL_NAME,
+    title: "发送文件",
+    summary: "向当前单聊或群聊发送 Agent workbench 中的文件或图片。",
+    definition: () => sendFileTool,
+    available: (options) => options.conversationAssets?.enabled === true,
+    unavailableReason: "当前会话不支持文件发送。",
+    defaultEnabled: true,
+    execution: "inline"
+  },
+  {
+    name: SEND_VOICE_MESSAGE_TOOL_NAME,
+    title: "发送语音",
+    summary: "向当前单聊或群聊发送 Agent workbench 中的语音。",
+    definition: () => sendVoiceMessageTool,
+    available: () => false,
+    unavailableReason: "语音消息工具尚未启用。",
     execution: "inline"
   },
   {
@@ -316,6 +342,7 @@ function applyRuntimeToolContract(
     && entry.name !== SELFIE_TOOL_NAME
     && entry.name !== READ_FILE_TOOL_NAME
     && entry.name !== WRITE_FILE_TOOL_NAME
+    && entry.name !== SEND_FILE_TOOL_NAME
   ) return selected;
   return {
     ...selected,

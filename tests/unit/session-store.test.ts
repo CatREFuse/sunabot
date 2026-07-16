@@ -235,6 +235,96 @@ describe("SessionStore", () => {
       attempts: 0
     });
     expect(replay.id).not.toBe(sending.id);
+    expect(after.replayUnknownOutbox({
+      outboxId: sending.id,
+      confirmedNotSent: true
+    }).id).toBe(replay.id);
+    const replayClaim = after.claimNextOutbox({ workerId: "replay-sender" });
+    expect(replayClaim).toMatchObject({ id: replay.id, status: "sending" });
+    after.finishOutbox({
+      outboxId: replay.id,
+      workerId: "replay-sender",
+      outcome: "sent"
+    });
+    expect(after.replayUnknownOutbox({
+      outboxId: sending.id,
+      confirmedNotSent: true
+    })).toMatchObject({ id: replay.id, status: "sent" });
+    expect(after.listOutbox("group:unknown")).toHaveLength(2);
+    expect(after.claimNextOutbox({ workerId: "must-not-resend" })).toBeNull();
+  });
+
+  it("replays recovered conversation assets through one stable idempotent row", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-session-asset-unknown-"));
+    temporaryDirectories.push(directory);
+    const databasePath = path.join(directory, "sessions.sqlite");
+    const before = new SessionStore({ databasePath });
+    storeForCleanup(before);
+    before.enqueueEvent({ sessionId: "private:asset-unknown", kind: "incoming", payload: {} });
+    const turn = before.claimNextTurn({ workerId: "turn" })!;
+    before.finishTurn({
+      turnId: turn.turn.id,
+      workerId: "turn",
+      outcome: "replied",
+      outbox: [{
+        kind: "onebot.conversation_asset",
+        deliveryPartition: "primary",
+        payload: { fixture: true }
+      }]
+    });
+    const sending = before.claimNextOutbox({ workerId: "sender" })!;
+    before.markOutboxTransportStarted(sending.id, "sender");
+    before.close();
+    stores.splice(stores.indexOf(before), 1);
+
+    const after = new SessionStore({ databasePath, recoverOnOpen: "all" });
+    storeForCleanup(after);
+    expect(after.getOutbox(sending.id)).toMatchObject({ status: "delivery_unknown" });
+    const replay = after.replayUnknownOutbox({
+      outboxId: sending.id,
+      confirmedNotSent: true
+    });
+    expect(replay).toMatchObject({
+      status: "pending",
+      kind: "onebot.conversation_asset",
+      deliveryPartition: "primary",
+      payload: { fixture: true }
+    });
+    expect(replay.dedupeKey).toMatch(new RegExp(`^outbox-replay:${sending.id}:[a-f0-9]{64}$`));
+    expect(after.replayUnknownOutbox({
+      outboxId: sending.id,
+      confirmedNotSent: true
+    }).id).toBe(replay.id);
+    const replayClaim = after.claimNextOutbox({ workerId: "asset-replay-unknown" });
+    expect(replayClaim).toMatchObject({ id: replay.id, status: "sending" });
+    after.markOutboxTransportStarted(replay.id, "asset-replay-unknown");
+    after.finishOutbox({
+      outboxId: replay.id,
+      workerId: "asset-replay-unknown",
+      outcome: "delivery_unknown"
+    });
+    const nestedReplay = after.replayUnknownOutbox({
+      outboxId: replay.id,
+      confirmedNotSent: true
+    });
+    expect(nestedReplay.dedupeKey).toMatch(new RegExp(`^outbox-replay:${replay.id}:[a-f0-9]{64}$`));
+    expect(after.replayUnknownOutbox({
+      outboxId: replay.id,
+      confirmedNotSent: true
+    }).id).toBe(nestedReplay.id);
+    expect(after.listOutbox("private:asset-unknown")).toHaveLength(3);
+
+    after.enqueueEvent({ sessionId: "private:asset-replay-tamper", kind: "incoming", payload: {} });
+    const inspection = new DatabaseSync(databasePath);
+    inspection.exec("PRAGMA foreign_keys = ON");
+    inspection.prepare("UPDATE outbox SET session_id = ? WHERE id = ?")
+      .run("private:asset-replay-tamper", nestedReplay.id);
+    expect(() => after.replayUnknownOutbox({
+      outboxId: replay.id,
+      confirmedNotSent: true
+    })).toThrow("Outbox replay provenance is invalid.");
+    expect((inspection.prepare("SELECT COUNT(*) AS count FROM outbox").get() as { count: number }).count).toBe(3);
+    inspection.close();
   });
 
   it("replays released held outbox with bounded trusted lineage and a stable dedupe key", async () => {

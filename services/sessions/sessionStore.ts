@@ -1,11 +1,14 @@
 import { SessionTurnStore } from "./sessionTurnStore.js";
+import { replayUnknownOutbox as persistUnknownOutboxReplay } from "./sessionHeldOutboxStore.js";
 import type {
   HeldOutboxReplyGateResolver,
+  ReplayUnknownOutboxInput,
   RecoveryResult,
   SessionStoreOptions
 } from "./sessionTypes.js";
 
 export * from "./sessionTypes.js";
+export { replayUnknownOutboxDedupeKey } from "./sessionHeldOutboxStore.js";
 
 const SCHEMA_VERSION = 5;
 
@@ -24,6 +27,18 @@ export class SessionStore extends SessionTurnStore {
       this.close();
       throw error;
     }
+  }
+
+  replayUnknownOutbox(input: ReplayUnknownOutboxInput) {
+    return persistUnknownOutboxReplay({
+      database: this.database,
+      now: () => this.now(),
+      transaction: (operation) => this.transaction(operation),
+      requireOutbox: (id) => this.requireOutbox(id),
+      requireTurn: (id) => this.requireTurn(id),
+      requireEvent: (id) => this.requireEvent(id),
+      insertOutbox: (turn, draft, now, held) => this.insertOutbox(turn, draft, now, held)
+    }, input);
   }
 
   recoverExpiredLeases(resolveHeldReplyGate?: HeldOutboxReplyGateResolver): RecoveryResult {

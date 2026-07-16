@@ -46,6 +46,12 @@ export {
   type WorkbenchFileToolPort
 } from "./workbenchFileTool.js";
 export { createWorkbenchFileToolPort } from "./workbenchFileStore.js";
+export {
+  SEND_FILE_TOOL_NAME,
+  SEND_VOICE_MESSAGE_TOOL_NAME,
+  sendFileTool,
+  sendVoiceMessageTool
+} from "./sendConversationAssetTool.js";
 export { withRequiredDispatchMessage } from "./deferredDispatch.js";
 export {
   isProviderToolAvailable,
