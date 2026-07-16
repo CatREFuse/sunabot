@@ -342,7 +342,7 @@ export class SessionCoordinator {
     let outboxOrdinal = 0;
     try {
       const emitOutbox = (draft: OutboxDraft) => emitTurnOutbox(
-        this.store, claim, this.workerId, signal, ++outboxOrdinal, draft,
+        this.store, claim, this.workerId, ++outboxOrdinal, draft,
         () => this.assertClaimUsable(state, signal), () => this.scheduleOutbox());
       const result = await this.handleEvent(claim.event, { signal, turn: claim.turn, emitOutbox });
       this.assertClaimUsable(state, signal);

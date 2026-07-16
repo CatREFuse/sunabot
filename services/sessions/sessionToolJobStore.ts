@@ -51,9 +51,7 @@ export abstract class SessionToolJobStore extends SessionEventStore {
     return this.transaction(() => {
       const row = this.database.prepare(`
         SELECT jobs.* FROM tool_jobs jobs
-        JOIN outbox acknowledgement ON acknowledgement.id = jobs.ack_outbox_id
         WHERE jobs.status = 'queued' AND jobs.available_at <= ?
-          AND acknowledgement.delivery_state = 'sent'
           AND (? IS NULL OR jobs.session_id = ?)
         ORDER BY jobs.available_at, jobs.created_at, jobs.id
         LIMIT 1
@@ -83,11 +81,6 @@ export abstract class SessionToolJobStore extends SessionEventStore {
         SET status = 'running', attempts = attempts + 1, worker_id = ?,
             lease_until = ?, started_at = COALESCE(started_at, ?), attempt_token = ?
         WHERE id = ? AND status = 'queued' AND available_at <= ?
-          AND EXISTS (
-            SELECT 1 FROM outbox acknowledgement
-            WHERE acknowledgement.id = tool_jobs.ack_outbox_id
-              AND acknowledgement.delivery_state = 'sent'
-          )
       `).run(workerId, now + leaseMs, now, attemptToken, id, now);
       return Number(updated.changes) === 1 ? this.requireToolJob(id) : null;
     });

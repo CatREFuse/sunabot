@@ -595,14 +595,11 @@ describe("SessionStore", () => {
     expect(duplicate.duplicate).toBe(true);
     expect(duplicate.job.id).toBe(deferred.job.id);
     expect(store.listOutbox("group:300")).toHaveLength(1);
-    expect(store.claimNextToolJob({ workerId: "blocked-worker" })).toBeNull();
-    expect(store.claimToolJob(deferred.job.id, { workerId: "blocked-direct-worker" })).toBeNull();
-
-    deliverPersistedOutbox(store, deferred.acknowledgement.id, "ack-worker");
-    expect(store.claimNextToolJob({ workerId: "released-worker" })).toMatchObject({
+    expect(store.claimToolJob(deferred.job.id, { workerId: "tool-worker" })).toMatchObject({
       id: deferred.job.id,
       status: "running"
     });
+    expect(store.getOutbox(deferred.acknowledgement.id)).toMatchObject({ status: "pending" });
   });
 
   it("appends one idempotent tool completion event at the session tail", async () => {

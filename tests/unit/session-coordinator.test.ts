@@ -428,6 +428,7 @@ describe("SessionCoordinator", () => {
     });
 
     await deliveryObserved.promise;
+    await waitUntil(() => store.listOutbox("group:active-delivery")[0]?.status === "sent");
     expect(handlerReturned).toBe(false);
     expect(store.listTurns("group:active-delivery")[0]).toMatchObject({ status: "running" });
     expect(store.listOutbox("group:active-delivery")[0]).toMatchObject({
@@ -440,32 +441,26 @@ describe("SessionCoordinator", () => {
     expect(handlerReturned).toBe(true);
   });
 
-  it("waits for immediate dispatch delivery before continuing into deferred tool work", async () => {
+  it("continues the turn after durable dispatch while delivery remains in flight", async () => {
     const store = trackStore(new SessionStore({ databasePath: ":memory:" }));
     const dispatchStarted = deferred<void>();
     const releaseDispatch = deferred<void>();
-    let toolStarted = false;
+    const handlerContinued = deferred<void>();
+    const releaseHandler = deferred<void>();
     const deliveries: string[] = [];
     const coordinator = trackCoordinator(createCoordinator({
       store,
-      runDeferredTool: async () => {
-        toolStarted = true;
-        return { status: "succeeded", result: { ok: true } };
-      },
-      handleEvent: async (event, context) => {
-        if (event.kind === "tool_completion") return { status: "no_reply" };
+      handleEvent: async (_event, context) => {
         await context.emitOutbox({
           kind: "reply",
           payload: { text: "dispatch now" },
           dedupeFingerprint: "dispatch-now"
         });
+        handlerContinued.resolve();
+        await releaseHandler.promise;
         return {
-          status: "deferred",
-          providerCallId: "call-active-dispatch",
-          toolName: "generate_img",
-          arguments: { prompt: "杭州" },
-          originalRequest: event.payload,
-          acknowledgement: { kind: "reply", payload: { text: "worker released" } }
+          status: "completed",
+          outbox: [{ kind: "reply", payload: { text: "final reply" } }]
         };
       },
       deliverOutbox: async (outbox) => {
@@ -486,14 +481,22 @@ describe("SessionCoordinator", () => {
     });
 
     await dispatchStarted.promise;
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    expect(toolStarted).toBe(false);
-    expect(store.listToolJobs("group:active-tool-gate")).toEqual([]);
+    await handlerContinued.promise;
+    expect(store.listTurns("group:active-tool-gate")[0]).toMatchObject({ status: "running" });
+    expect(store.listOutbox("group:active-tool-gate")).toEqual([
+      expect.objectContaining({ status: "sending", payload: { text: "dispatch now" } })
+    ]);
 
+    releaseHandler.resolve();
+    await waitUntil(() => store.listOutbox("group:active-tool-gate").length === 2);
+    expect(store.listTurns("group:active-tool-gate")[0]).toMatchObject({ status: "replied" });
+    expect(store.listOutbox("group:active-tool-gate")[1]).toMatchObject({
+      status: "pending",
+      payload: { text: "final reply" }
+    });
     releaseDispatch.resolve();
     await coordinator.waitForIdle();
-    expect(toolStarted).toBe(true);
-    expect(deliveries.slice(0, 2)).toEqual(["dispatch now", "worker released"]);
+    expect(deliveries).toEqual(["dispatch now", "final reply"]);
   });
 
   it("retries one stable immediate outbox without appending a duplicate", async () => {
@@ -1206,16 +1209,16 @@ describe("SessionCoordinator", () => {
     });
   });
 
-  it("does not start a deferred tool until its dispatch acknowledgement is delivered", async () => {
+  it("starts a deferred tool while its dispatch acknowledgement remains in flight", async () => {
     const store = trackStore(new SessionStore({ databasePath: ":memory:" }));
     const dispatchDeliveryStarted = deferred<void>();
     const releaseDispatchDelivery = deferred<void>();
-    let toolStarted = false;
+    const toolStarted = deferred<void>();
     const deliveries: string[] = [];
     const coordinator = trackCoordinator(createCoordinator({
       store,
       runDeferredTool: async () => {
-        toolStarted = true;
+        toolStarted.resolve();
         return { status: "succeeded", result: { ok: true } };
       },
       handleEvent: (event) => event.kind === "tool_completion"
@@ -1246,9 +1249,14 @@ describe("SessionCoordinator", () => {
     });
 
     await dispatchDeliveryStarted.promise;
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    expect(toolStarted).toBe(false);
-    expect(store.listToolJobs("private:dispatch-before-worker")[0]).toMatchObject({ status: "queued" });
+    await toolStarted.promise;
+    await waitUntil(() => store.listOutbox("private:dispatch-before-worker").length === 2);
+    expect(store.listToolJobs("private:dispatch-before-worker")[0]).toMatchObject({ status: "succeeded" });
+    expect(store.listOutbox("private:dispatch-before-worker")).toEqual([
+      expect.objectContaining({ status: "sending", payload: { text: "dispatch started" } }),
+      expect.objectContaining({ status: "pending", payload: { text: "callback complete" } })
+    ]);
+    expect(deliveries).toEqual([]);
 
     releaseDispatchDelivery.resolve();
     await coordinator.waitForIdle();

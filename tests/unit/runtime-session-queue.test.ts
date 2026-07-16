@@ -535,31 +535,52 @@ describe("SunaRuntime Session queue bridge", () => {
     ]);
   });
 
-  it("delivers assistant_text before continuing an inline tool round", async () => {
+  it("continues an inline tool round while assistant_text delivery remains in flight", async () => {
     const releaseInlineWork = deferred<void>();
-    let assistantTextDelivered = false;
+    const dispatchDeliveryStarted = deferred<void>();
+    const releaseDispatchDelivery = deferred<void>();
+    let inlineWorkStarted = false;
     const completeRequestTurn = vi.fn(async (
       _request: RenderedPromptRequest,
       options: ProviderCompleteOptions = {}
     ): Promise<ProviderTurnResult> => {
       options.onToolCall?.("assistant_text");
       await options.onAssistantText?.("正在搜索城市范围", "assistant_text");
-      assistantTextDelivered = true;
+      inlineWorkStarted = true;
       await releaseInlineWork.promise;
       options.onToolCall?.("websearch");
       return { kind: "completed", text: "搜索完成" };
     });
     const harness = createRuntimeHarness(completeRequestTurn);
+    const send = harness.gateway.send as unknown as ReturnType<typeof vi.fn>;
+    send.mockImplementation(async (message: { text: string }) => {
+      if (message.text === "正在搜索城市范围") {
+        dispatchDeliveryStarted.resolve();
+        await releaseDispatchDelivery.promise;
+      }
+      return { accepted: true as const };
+    });
 
     await handleOneBotEvent(harness.runtime, groupEvent(150_001, 100, "inline-progress"), harness.gateway);
-    await waitUntil(() => assistantTextDelivered);
+    await dispatchDeliveryStarted.promise;
+    await waitUntil(() => inlineWorkStarted);
 
-    expect(sentTexts(harness.gateway)).toEqual(["正在搜索城市范围"]);
     expect(harness.store.listOutbox("group:100")).toHaveLength(1);
-    expect(harness.store.listOutbox("group:100")[0]).toMatchObject({ status: "sent" });
+    expect(harness.store.listOutbox("group:100")[0]).toMatchObject({
+      status: "sending",
+      remoteSentAt: undefined
+    });
     expect(harness.store.listTurns("group:100")[0]).toMatchObject({ status: "running" });
 
     releaseInlineWork.resolve();
+    await waitUntil(() => harness.store.listOutbox("group:100").length === 2);
+    expect(harness.store.listOutbox("group:100")[1]).toMatchObject({
+      status: "pending",
+      payload: expect.objectContaining({
+        payload: expect.objectContaining({ text: "搜索完成" })
+      })
+    });
+    releaseDispatchDelivery.resolve();
     await harness.coordinator.waitForIdle({ timeoutMs: 3_000 });
 
     expect(sentTexts(harness.gateway)).toEqual(["正在搜索城市范围", "搜索完成"]);
