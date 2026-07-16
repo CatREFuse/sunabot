@@ -295,7 +295,7 @@ function valuesFromConfig(config: AppConfig): SectionDrafts {
     persona: { agentWorkspace: config.persona.agentWorkspace },
     providers: clone(config.providers),
     broadcastStorm: clone(config.broadcastStorm),
-    normalReply: clone(config.normalReply),
+    normalReply: clone(config.normalReply ?? emptyConfig.normalReply),
     bot: {
       adminQq: config.bot.adminQq,
       adminName: config.bot.adminName,

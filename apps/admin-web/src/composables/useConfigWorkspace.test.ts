@@ -132,6 +132,18 @@ describe("useConfigWorkspace", () => {
     expect(workspace.isDirty("tools")).toBe(false);
   });
 
+  it("loads a legacy config without normal reply settings", async () => {
+    const legacy = envelope("r1", "initial");
+    delete (legacy.config as Partial<AppConfig>).normalReply;
+    apiRequest.mockResolvedValueOnce(legacy);
+    const workspace = useConfigWorkspace("system");
+
+    await workspace.load();
+
+    expect(workspace.drafts.normalReply).toEqual({ maxRetries: 3 });
+    expect(workspace.isDirty("normalReply")).toBe(false);
+  });
+
   it("saves the linked user-group and orchestrator controls atomically", async () => {
     apiRequest.mockResolvedValueOnce(envelope("r1", "initial"));
     const workspace = useConfigWorkspace();

@@ -543,6 +543,17 @@ test("系统设置可配置正常回复重试次数", async ({ page }) => {
   expect(state.config.normalReply).toEqual({ maxRetries: 6 });
 });
 
+test("旧版系统配置缺少回复重试时仍可打开设置页", async ({ page }) => {
+  const state = await installMockApi(page);
+  delete (state.config as Partial<typeof state.config>).normalReply;
+
+  await page.goto("/settings/normalReply");
+
+  await expect(page.getByRole("heading", { name: "正常回复" })).toBeVisible();
+  await expect(page.getByLabel("失败重试次数")).toHaveValue("3");
+  await expect(page.getByText('"undefined" is not valid JSON', { exact: true })).toHaveCount(0);
+});
+
 test("工具目录支持启停、全局说明和继承说明恢复", async ({ page }) => {
   const state = await installMockApi(page);
   await page.goto("/agent-settings/tools");
