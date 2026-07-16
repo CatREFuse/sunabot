@@ -134,6 +134,7 @@ export interface AssistantReplyOutboxPayload {
   logRunId?: string;
   messageOrigin?: AssistantMessageOrigin;
   toolNames?: string[];
+  deliverySemantics?: "system_config_confirmation";
   replyGate?: ReplyGateSnapshotV1;
   threadContext?: GroupThreadContextSnapshotV1;
 }
@@ -307,8 +308,12 @@ export function decodeAssistantReply(value: unknown): AssistantReplyOutboxPayloa
   const {
     threadContext: rawThreadContext,
     replyToMessageId: rawReplyToMessageId,
+    deliverySemantics: rawDeliverySemantics,
     ...payloadFields
   } = payload;
+  if (rawDeliverySemantics !== undefined && rawDeliverySemantics !== "system_config_confirmation") {
+    throw contractError("contract_field_invalid", "持久化消息字段 deliverySemantics 无效。");
+  }
   const threadContext = readGroupThreadContextSnapshot(rawThreadContext);
   const hasReplyTargetField = Object.hasOwn(payload, "replyToMessageId");
   const replyToMessageId = rawReplyToMessageId === null
@@ -318,6 +323,9 @@ export function decodeAssistantReply(value: unknown): AssistantReplyOutboxPayloa
     ...payloadFields,
     incoming: decodeInboundMessageV1(payloadFields.incoming),
     ...(hasReplyTargetField ? { replyToMessageId } : {}),
+    ...(rawDeliverySemantics === "system_config_confirmation"
+      ? { deliverySemantics: rawDeliverySemantics }
+      : {}),
     ...(threadContext ? { threadContext } : {})
   } as AssistantReplyOutboxPayload;
 }

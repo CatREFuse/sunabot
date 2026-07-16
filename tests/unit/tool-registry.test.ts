@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { RegistryProviderToolExecutor } from "../../adapters/model/provider/toolExecutor.js";
 import { createTurnToolState } from "../../adapters/model/provider/turnToolState.js";
 import type { ProviderCompleteOptions } from "../../adapters/model/openaiProvider.js";
@@ -139,6 +139,149 @@ describe("ToolRegistry", () => {
       ok: false,
       error: "no_reply must be called before assistant text or any other tool."
     });
+  });
+
+  it("injects system_config for an authorized legacy prompt and locks its canonical schema", () => {
+    const options = {
+      systemConfig: {
+        execute: async () => ({ ok: true }),
+        mutationStaged: () => false,
+        rejectTurn: () => undefined,
+        turnRejected: () => false
+      }
+    } satisfies ProviderCompleteOptions;
+    const executor = new RegistryProviderToolExecutor();
+    const [legacyDefinition] = executor.resolveDefinitions(options, []);
+    const [staleDefinition] = executor.resolveDefinitions(options, [staleTool("system_config")]);
+    const legacyParameters = legacyDefinition?.parameters as Record<string, any>;
+    const staleParameters = staleDefinition?.parameters as Record<string, any>;
+
+    expect(legacyDefinition?.name).toBe("system_config");
+    expect(staleDefinition).toMatchObject({ name: "system_config", strict: true });
+    expect(staleParameters.properties.operation.enum).toEqual([
+      "get_settings",
+      "get_status",
+      "set_auto_reply",
+      "set_orchestrator",
+      "set_search",
+      "set_bash_admin_backend",
+      "set_group_reply"
+    ]);
+    expect(staleParameters.properties.task).toBeUndefined();
+    expect(staleParameters).toEqual(legacyParameters);
+    expect(listToolMetadata(options, []).find((tool) => tool.name === "system_config")).toMatchObject({
+      promptEnabled: true,
+      available: true,
+      effectiveEnabled: true,
+      execution: "inline"
+    });
+  });
+
+  it("does not expose or execute system_config without an authorized runtime port", async () => {
+    const executor = new RegistryProviderToolExecutor();
+    const definitions = executor.resolveDefinitions({}, [staleTool("system_config")]);
+    const [output] = await executor.execute([{
+      type: "function_call",
+      name: "system_config",
+      call_id: "call-forged-system-config",
+      arguments: JSON.stringify({})
+    }], {}, definitions);
+
+    expect(definitions).toEqual([]);
+    expect(listToolMetadata().find((tool) => tool.name === "system_config")).toMatchObject({
+      available: false,
+      effectiveEnabled: false
+    });
+    expect(JSON.parse(String(output?.output))).toEqual({
+      ok: false,
+      error: "Tool system_config is unavailable."
+    });
+  });
+
+  it("rejects a system_config call mixed with another tool without executing either", async () => {
+    const executed: unknown[] = [];
+    const delivered: string[] = [];
+    let rejected = false;
+    const rejectTurn = vi.fn(() => {
+      rejected = true;
+    });
+    const onToolCall = vi.fn();
+    const options = {
+      systemConfig: {
+        execute: async (input: unknown) => { executed.push(input); return { ok: true }; },
+        mutationStaged: () => false,
+        rejectTurn,
+        turnRejected: () => rejected
+      },
+      onAssistantText: (text: string) => { delivered.push(text); },
+      onToolCall
+    } satisfies ProviderCompleteOptions;
+    const executor = new RegistryProviderToolExecutor();
+    const definitions = executor.resolveDefinitions(options, [staleTool("assistant_text")]);
+    const state = createTurnToolState();
+    const outputs = await executor.execute([{
+      type: "function_call",
+      name: "system_config",
+      call_id: "call-system-config-mixed",
+      arguments: JSON.stringify({})
+    }, {
+      type: "function_call",
+      name: "assistant_text",
+      call_id: "call-assistant-text-mixed-with-config",
+      arguments: JSON.stringify({ text: "不应发送" })
+    }], options, definitions, state);
+
+    expect(outputs.map((output) => JSON.parse(String(output.output)))).toEqual([
+      { ok: false, error: "system_config must be called alone in a model tool-call batch." },
+      { ok: false, error: "system_config must be called alone in a model tool-call batch." }
+    ]);
+    expect(executed).toEqual([]);
+    expect(delivered).toEqual([]);
+    expect(rejectTurn).toHaveBeenCalledOnce();
+    expect(onToolCall).not.toHaveBeenCalled();
+    expect(state.acceptedToolNames).toEqual([]);
+  });
+
+  it("rejects every later tool call after a system configuration mutation is staged", async () => {
+    const delivered: string[] = [];
+    let staged = true;
+    let rejected = false;
+    const rejectTurn = vi.fn(() => {
+      staged = false;
+      rejected = true;
+    });
+    const onToolCall = vi.fn();
+    const options = {
+      systemConfig: {
+        execute: async () => ({ ok: true }),
+        mutationStaged: () => staged,
+        rejectTurn,
+        turnRejected: () => rejected
+      },
+      onAssistantText: (text: string) => { delivered.push(text); },
+      onToolCall
+    } satisfies ProviderCompleteOptions;
+    const executor = new RegistryProviderToolExecutor();
+    const definitions = executor.resolveDefinitions(options, [staleTool("assistant_text")]);
+    const state = createTurnToolState();
+    state.acceptedToolNames.push("system_config");
+    const [output] = await executor.execute([{
+      type: "function_call",
+      name: "assistant_text",
+      call_id: "call-after-system-config",
+      arguments: JSON.stringify({ text: "不应发送" })
+    }], options, definitions, state);
+
+    expect(JSON.parse(String(output?.output))).toEqual({
+      ok: false,
+      error: "A system_config change is already staged; send the final confirmation without calling another tool."
+    });
+    expect(delivered).toEqual([]);
+    expect(rejectTurn).toHaveBeenCalledOnce();
+    expect(staged).toBe(false);
+    expect(rejected).toBe(true);
+    expect(onToolCall).not.toHaveBeenCalled();
+    expect(state.acceptedToolNames).toEqual(["system_config"]);
   });
 
   it("forces dispatch_message into deferred definitions after prompt overrides", () => {

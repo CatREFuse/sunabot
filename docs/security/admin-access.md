@@ -16,6 +16,12 @@ Bearer Token 只保留给受控的自动化客户端。浏览器管理台不再�
 
 AI 建议只在进程内保存 10 分钟并绑定原始文件 SHA-256 revision，连续建议至少间隔 10 秒；文件变化后旧方案立即拒绝应用。修复前会在 `workspace/backups/config-doctor/<repairId>/` 持久保存原始配置和 manifest，应用过程使用互斥锁、原子写入与写后复验，失败时自动恢复原始字节和活动配置。当前管理台没有用户主动回滚入口，`./sunabot.sh doctor` 继续保持只读，也没有配置医生 CLI 离线修复入口。
 
+## Agent 自助设置安全边界
+
+`system_config` 由宿主按会话注入，只允许当前 Agent 的管理员 QQ 私聊修改配置；群聊、普通私聊、prompt override 和 Web Chat 修改均失败关闭，Web Chat 只允许查询。查询响应使用固定白名单投影，不能包含密钥、环境变量名、绝对路径、原始消息、Provider 地址或探针诊断正文。Bash backend 仅是配置偏好，不能绕过 capability 探针；macOS Native 缺少 bubblewrap 或等价强隔离时保持关闭，Docker backend 不能使用 Docker socket 或宿主 Bash fallback。
+
+修改在模型回合中暂存，只有绑定当前管理员、完整会话与规范化 mutation 的 held confirmation 成功写入 durable outbox 后才提交。特殊 delivery 语义由宿主生成并在实际投递时重新验证管理员与纯文本唯一工具 trace，模型参数、普通正文、图片、deferred 和外部 API payload 均不能设置。commit 失败只能释放固定中性通知；任何原子更新失败都保持 held，防止尚未生效的设置以成功文案外发。
+
 ## 外网访问要求
 
 1. sunabot 只监听 `127.0.0.1:8787`。

@@ -7,6 +7,7 @@ import { readToolName } from "./promptMapping.js";
 import { claimToolCalls, resolveMaxToolCalls, toolCallLimitError } from "./toolLoopLimits.js";
 import { fetchTextWithTransportRetry, normalizeAnthropicBaseUrl, resolveModelRequestMaxAttempts } from "./transport.js";
 import { errorMessage, isRecord, parseJson } from "./valueUtils.js";
+import { shouldEmitIntermediateAssistantText } from "./turnToolState.js";
 
 export async function completeAnthropicMessages(
   context: ProviderAdapterContext,
@@ -90,7 +91,10 @@ export async function completeAnthropicMessages(
     if (deferred) return deferred;
     const noReply = context.toolExecutor.noReplyTurn(calls, options, definitions, state);
     if (noReply) return noReply;
-    if (text && options.onAssistantText) await options.onAssistantText(text, "text");
+    const emitAssistantText = shouldEmitIntermediateAssistantText(calls, options, state, Boolean(text));
+    if (text && options.onAssistantText && emitAssistantText) {
+      await options.onAssistantText(text, "text");
+    }
     messages.push({ role: "assistant", content: blocks });
     const outputs = await context.toolExecutor.execute(calls, options, definitions, state);
     messages.push({

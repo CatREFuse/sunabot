@@ -42,7 +42,7 @@ Plana 的 `workspace/business/data/session-queue.sqlite` 与其他 Agent 的 `wo
 - `workspace/business/config/sunabot.json`：schemaVersion 1 的模型、正常回复重试、共用开关和默认 Plana 配置，不保存明文密钥；缺失的小型允许字段由配置归一化与配置医生规则补齐，不支持的显式 schemaVersion 失败关闭；
 - `workspace/business/migrations/multi-agent-v1.json`：首次安装或单 Agent 迁移完成标记，保存完整性摘要和迁移证据摘要；
 - `workspace/business/prompts/`：所有 Agent 默认使用的公共系统提示词；
-- `workspace/business/agents/<agentId>/agent.json`：Agent 名称、启用状态、系统提示词覆盖开关、Bot 行为、工具覆盖与 OneBot 行为配置；
+- `workspace/business/agents/<agentId>/agent.json`：Agent 名称、启用状态、系统提示词覆盖开关、Bot 行为、工具覆盖、管理员私聊 Bash backend 偏好与 OneBot 行为配置；
 - `workspace/business/agents/<agentId>/`：Agent 人格、`selfie_prompt_rewrite.json`、可选 `system-prompts/` 覆盖、自拍参考图、私有数据和人工维护文件；
 - `workspace/business/media/`：需要随业务恢复的图片和持久附件；
 - `workspace/runtime/napcat/accounts/<accountId>/`：单个 QQ 的 NapCat Docker 配置、登录态、二维码、`account.env` 和运行标记；该目录只挂载给对应 NapCat 容器，不作为 Core 的媒体共享目录；
@@ -85,6 +85,7 @@ Plana 的 `workspace/business/data/session-queue.sqlite` 与其他 Agent 的 `wo
 - Git 不跟踪整个 `workspace/`，其中包括环境变量、配置、Agent 人格、SQLite、WAL、日志、缓存、QQ 登录态、生成图片和备份。
 - 浏览器管理台不得把账号、密码、Bearer Token 或会话密钥写入 localStorage/sessionStorage。
 - 请求日志递归脱敏授权、token、password、secret 和常见 key 字段，并限制长字符串。
+- `system_config` 只向模型返回固定白名单内的当前 Agent 设置与状态投影，不返回密钥、环境变量名、路径、原始消息、Provider 地址或探针诊断正文。修改只对运行时重新确认的当前管理员 QQ 私聊开放；Web Chat 只读。修改 fingerprint 只保存规范化非敏感字段的 SHA-256，不保存凭据明文；模型参数和外部 API 不能写入确认 outbox 的特殊 delivery 语义。
 - 配置医生发送给模型的配置先按敏感键以及身份、QQ、Provider 地址、workspace、可执行文件和提示词路径脱敏；问题列表只包含本次实际校验失败的固定白名单路径和服务端固定文案，模型只能对这些路径提出 `add` 或 `replace`，不接收工具权限。服务端限制 AI 输出大小、操作数、JSON Pointer 深度和值大小，并拒绝原型污染字段、重复路径和越权路径；用户确认页的目标值说明由服务端生成，不采用模型理由代替实际修改内容。
 - 配置医生 AI 提案只保存在进程内 10 分钟并绑定原始文件 revision；连续 AI 诊断至少间隔 10 秒。浏览器应用时只提交 proposal ID 与 source revision，不能提交或替换服务端 patch。
 - OneBot、跨组件媒体和 Agent 文件写入均执行身份、大小与路径边界校验；OneBot action 不能携带 Core 或 NapCat 的绝对文件路径。

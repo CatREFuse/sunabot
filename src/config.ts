@@ -165,7 +165,10 @@ export function defaultConfig(): AppConfig {
         }
       },
       bash: {
-        enabled: process.env.SUNABOT_RUNTIME_MODE !== "macos",
+        enabled: false,
+        adminPrivateBackend: "native",
+        auditModel: "gpt-5.4-mini",
+        strictMode: true,
         allowGroup: false,
         adminOnly: true,
         workspaceOnly: true,
@@ -462,7 +465,10 @@ function mergeBotConfig(base: BotConfig, incoming: Partial<BotConfig> | undefine
     orchestrator: mergeBotOrchestratorSettings(base.orchestrator, incoming?.orchestrator as Partial<BotOrchestratorSettings> | undefined),
     tools: mergeBotToolSettings(base.tools, incoming?.tools as Partial<BotToolSettings> | undefined),
     bash: {
-      enabled: process.env.SUNABOT_RUNTIME_MODE === "macos" ? false : bash?.enabled ?? base.bash.enabled,
+      enabled: bash?.enabled ?? base.bash.enabled,
+      adminPrivateBackend: bash?.adminPrivateBackend === "docker" ? "docker" : "native",
+      auditModel: normalizeModelName(bash?.auditModel, base.bash.auditModel),
+      strictMode: bash?.strictMode ?? base.bash.strictMode,
       allowGroup: bash?.allowGroup ?? base.bash.allowGroup,
       adminOnly: bash?.adminOnly ?? base.bash.adminOnly,
       workspaceOnly: bash?.workspaceOnly ?? base.bash.workspaceOnly,

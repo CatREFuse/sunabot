@@ -43,6 +43,7 @@ import { completeGeminiGenerateContent } from "./geminiCompletion.js";
 import { claimToolCalls, resolveMaxToolCalls, toolCallLimitError } from "./toolLoopLimits.js";
 import {
   createTurnToolState,
+  shouldEmitIntermediateAssistantText,
   withTurnToolState
 } from "./turnToolState.js";
 
@@ -132,7 +133,9 @@ async function completeOpenAIResponses(
       return { kind: "completed", text };
     }
 
-    await emitIntermediateAssistantText(response, options);
+    if (shouldEmitIntermediateAssistantText(toolCalls, options, state, Boolean(extractProviderText(response)))) {
+      await emitIntermediateAssistantText(response, options);
+    }
     input.push(...extractResponseOutput(response), ...(await context.toolExecutor.execute(toolCalls, options, tools, state)));
   }
 
@@ -257,7 +260,9 @@ async function completeCodexResponses(
     if (deferred) return deferred;
     const noReply = context.toolExecutor.noReplyTurn(toolCalls, options, tools, state);
     if (noReply) return noReply;
-    await emitIntermediateAssistantText(payload, options, streamText);
+    if (shouldEmitIntermediateAssistantText(toolCalls, options, state, Boolean(streamText))) {
+      await emitIntermediateAssistantText(payload, options, streamText);
+    }
     input.push(...extractResponseOutput(payload), ...(await context.toolExecutor.execute(toolCalls, options, tools, state)));
   }
 
@@ -343,7 +348,12 @@ async function completeChatCompletions(
     if (deferred) return deferred;
     const noReply = context.toolExecutor.noReplyTurn(calls, options, definitions, state);
     if (noReply) return noReply;
-    if (choice.content?.trim() && options.onAssistantText) await options.onAssistantText(choice.content.trim(), "text");
+    const emitAssistantText = shouldEmitIntermediateAssistantText(
+      calls, options, state, Boolean(choice.content?.trim())
+    );
+    if (choice.content?.trim() && options.onAssistantText && emitAssistantText) {
+      await options.onAssistantText(choice.content.trim(), "text");
+    }
     messages.push({
       role: "assistant",
       content: choice.content ?? null,

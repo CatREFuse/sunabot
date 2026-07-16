@@ -622,9 +622,18 @@ function validateToolOverrides(input: unknown): NonNullable<BotToolSettings["ove
 
 function validateBash(input: unknown): BotConfig["bash"] {
   const value = object(input, "bash");
-  exactKeys(value, ["enabled", "allowGroup", "adminOnly", "workspaceOnly", "blockedKeywords"], "bash");
+  exactKeys(value, [
+    "enabled", "adminPrivateBackend", "auditModel", "strictMode",
+    "allowGroup", "adminOnly", "workspaceOnly", "blockedKeywords"
+  ], "bash");
+  if (value.adminPrivateBackend !== "native" && value.adminPrivateBackend !== "docker") {
+    badRequest("CONFIG_INVALID", "管理员私聊 Bash 后端无效。", "bash.adminPrivateBackend");
+  }
   return {
     enabled: boolean(value.enabled, "bash.enabled"),
+    adminPrivateBackend: value.adminPrivateBackend,
+    auditModel: requiredString(value.auditModel, "bash.auditModel", { trim: true, min: 1, max: 200 }),
+    strictMode: boolean(value.strictMode, "bash.strictMode"),
     allowGroup: boolean(value.allowGroup, "bash.allowGroup"),
     adminOnly: boolean(value.adminOnly, "bash.adminOnly"),
     workspaceOnly: boolean(value.workspaceOnly, "bash.workspaceOnly"),

@@ -7,6 +7,7 @@ import type {
   GenerateImgReferenceContext
 } from "../../../services/tools/generateImgTool.js";
 import type { SelfieRunner } from "../../../services/tools/selfieTool.js";
+import type { SystemConfigToolPort } from "../../../services/tools/systemConfigTool.js";
 import type { ProviderLogContext } from "../../../packages/contracts/model/modelGateway.js";
 import type { ImageGenerationFailureContext } from "../imageGenerationRetry.js";
 
@@ -27,6 +28,7 @@ export interface ProviderCompleteOptions {
   asyncCodex?: boolean;
   asyncImage?: boolean;
   imageTools?: boolean;
+  systemConfig?: SystemConfigToolPort;
   logContext?: ProviderLogContext;
 }
 

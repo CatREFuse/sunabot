@@ -98,7 +98,13 @@ export function registerAgentToolRoutes(app: FastifyInstance, options: AgentTool
       selfie: { enabled: true },
       memory: { enabled: true },
       asyncCodex: capabilities.codex,
-      asyncImage: true
+      asyncImage: true,
+      systemConfig: {
+        execute: async () => ({ ok: false, error: "System configuration is not executable from the tool catalog." }),
+        mutationStaged: () => false,
+        rejectTurn: () => undefined,
+        turnRejected: () => false
+      }
     }, prompt.tools).map((tool) => {
       const configured = tool.name === "workspace_bash"
         ? config.bot.bash.enabled

@@ -63,14 +63,22 @@ describe("agent and tool API plugin", () => {
       effectiveEnabled: true
     });
     expect(tools.find((tool: { name: string }) => tool.name === "workspace_bash")).toMatchObject({
+      configuredEnabled: false,
       available: true,
-      effectiveEnabled: true
+      effectiveEnabled: false
     });
     expect(tools.find((tool: { name: string }) => tool.name === "no_reply")).toMatchObject({
       configuredEnabled: null,
       promptEnabled: true,
       available: true,
       effectiveEnabled: true
+    });
+    expect(tools.find((tool: { name: string }) => tool.name === "system_config")).toMatchObject({
+      configuredEnabled: null,
+      promptEnabled: true,
+      available: true,
+      effectiveEnabled: true,
+      execution: "inline"
     });
     expect(resolveToolCapabilities).toHaveBeenCalledOnce();
     expect(get).toHaveBeenCalledWith("conversation.private-reply", config);

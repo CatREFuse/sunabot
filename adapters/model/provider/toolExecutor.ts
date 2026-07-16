@@ -22,6 +22,10 @@ import {
 } from "../../../services/tools/assistantTextTool.js";
 import { NO_REPLY_TOOL_NAME } from "../../../services/tools/noReplyTool.js";
 import {
+  SYSTEM_CONFIG_TOOL_NAME,
+  runSystemConfig
+} from "../../../services/tools/systemConfigTool.js";
+import {
   isProviderToolAvailable,
   isProviderDeferredTool,
   providerToolExecutionMode,
@@ -56,13 +60,21 @@ type InlineExecutor = (
   options: ProviderCompleteOptions
 ) => Promise<unknown>;
 
+const SYSTEM_CONFIG_SOLO_ERROR =
+  "system_config must be called alone in a model tool-call batch.";
+const SYSTEM_CONFIG_MUTATION_STAGED_ERROR =
+  "A system_config change is already staged; send the final confirmation without calling another tool.";
+const SYSTEM_CONFIG_TURN_SOLO_ERROR =
+  "system_config must be the only accepted tool activity in the provider turn.";
+
 const inlineExecutors: ReadonlyMap<string, InlineExecutor> = new Map([
   [ASSISTANT_TEXT_TOOL_NAME, runAssistantText],
   [WORKSPACE_BASH_TOOL_NAME, runBash],
   [WEBSEARCH_TOOL_NAME, runWebSearch],
   [GENERATE_IMG_TOOL_NAME, runImageGeneration],
   [SELFIE_TOOL_NAME, runSelfie],
-  [MEMORY_RECALL_TOOL_NAME, runMemoryRecall]
+  [MEMORY_RECALL_TOOL_NAME, runMemoryRecall],
+  [SYSTEM_CONFIG_TOOL_NAME, runSystemConfigTool]
 ]);
 
 async function runAssistantText(
@@ -93,6 +105,7 @@ export class RegistryProviderToolExecutor implements ProviderToolExecutorPort {
     definitions: readonly Record<string, unknown>[],
     state: TurnToolState = createTurnToolState()
   ): ProviderDeferredTurn | null {
+    if (systemConfigTurnLocked(options, state)) return null;
     if (calls.length !== 1) return null;
     const call = calls[0]!;
     if (!isProviderToolAvailable(call.name, options)) return null;
@@ -123,6 +136,7 @@ export class RegistryProviderToolExecutor implements ProviderToolExecutorPort {
     definitions: readonly Record<string, unknown>[],
     state: TurnToolState = createTurnToolState()
   ) {
+    if (systemConfigTurnLocked(options, state)) return null;
     if (calls.length !== 1) return null;
     const call = calls[0]!;
     if (call.name !== NO_REPLY_TOOL_NAME) return null;
@@ -143,12 +157,30 @@ export class RegistryProviderToolExecutor implements ProviderToolExecutorPort {
     definitions: readonly Record<string, unknown>[],
     state: TurnToolState = createTurnToolState()
   ) {
+    if (options.systemConfig?.turnRejected()) {
+      return toolCallErrors(calls, SYSTEM_CONFIG_TURN_SOLO_ERROR);
+    }
+    if (options.systemConfig?.mutationStaged()) {
+      rejectSystemConfigTurn(options);
+      return toolCallErrors(calls, SYSTEM_CONFIG_MUTATION_STAGED_ERROR);
+    }
+    if (calls.length > 1 && calls.some((call) => call.name === SYSTEM_CONFIG_TOOL_NAME)) {
+      rejectSystemConfigTurn(options);
+      return toolCallErrors(calls, SYSTEM_CONFIG_SOLO_ERROR);
+    }
+    if (
+      calls.some((call) => call.name === SYSTEM_CONFIG_TOOL_NAME) &&
+      hasAcceptedTurnActivity(state)
+    ) {
+      rejectSystemConfigTurn(options);
+      return toolCallErrors(calls, SYSTEM_CONFIG_TURN_SOLO_ERROR);
+    }
+    if (state.acceptedToolNames.includes(SYSTEM_CONFIG_TOOL_NAME)) {
+      rejectSystemConfigTurn(options);
+      return toolCallErrors(calls, SYSTEM_CONFIG_TURN_SOLO_ERROR);
+    }
     if (calls.length > 1 && calls.some((call) => call.name === NO_REPLY_TOOL_NAME)) {
-      return calls.map((call) => ({
-        type: "function_call_output",
-        call_id: call.call_id,
-        output: JSON.stringify({ ok: false, error: "no_reply must be called alone before any other tool." })
-      }));
+      return toolCallErrors(calls, "no_reply must be called alone before any other tool.");
     }
     return Promise.all(calls.map(async (call) => ({
       type: "function_call_output",
@@ -156,6 +188,16 @@ export class RegistryProviderToolExecutor implements ProviderToolExecutorPort {
       output: JSON.stringify(await executeFunctionCall(call, options, definitions, state))
     })));
   }
+}
+
+function systemConfigTurnLocked(options: ProviderCompleteOptions, state: TurnToolState) {
+  return options.systemConfig?.mutationStaged() === true ||
+    options.systemConfig?.turnRejected() === true ||
+    state.acceptedToolNames.includes(SYSTEM_CONFIG_TOOL_NAME);
+}
+
+function rejectSystemConfigTurn(options: ProviderCompleteOptions) {
+  if (!options.systemConfig?.turnRejected()) options.systemConfig?.rejectTurn();
 }
 
 async function executeFunctionCall(
@@ -293,6 +335,27 @@ async function runMemoryRecall(
   const result = await options.memory.recall(args as unknown as MemoryRecallInput);
   await appendToolLog(MEMORY_RECALL_TOOL_NAME, call, args, result, options);
   return result;
+}
+
+async function runSystemConfigTool(
+  args: Record<string, unknown>,
+  call: ResponseFunctionCallItem,
+  options: ProviderCompleteOptions
+) {
+  if (!options.systemConfig) {
+    return { ok: false, error: "System configuration is unavailable." };
+  }
+  const result = await runSystemConfig(args, options.systemConfig);
+  await appendToolLog(SYSTEM_CONFIG_TOOL_NAME, call, args, result, options);
+  return result;
+}
+
+function toolCallErrors(calls: ResponseFunctionCallItem[], error: string) {
+  return calls.map((call) => ({
+    type: "function_call_output",
+    call_id: call.call_id,
+    output: JSON.stringify({ ok: false, error })
+  }));
 }
 
 async function appendToolLog(

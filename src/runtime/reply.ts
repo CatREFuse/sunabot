@@ -138,6 +138,7 @@ import {
   type ReplyDebounceContextOptions
 } from "./replyDebounceContext.js";
 import { runtime_replyToToolCompletion } from "./replyDebounceDispatch.js";
+import * as systemConfigReply from "./systemConfigReply.js";
 
 export { runtime_replyToToolCompletion };
 
@@ -191,6 +192,7 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
     };
     let sent = false;
     let requestStarted = false;
+    let systemConfigLifecycle: systemConfigReply.SystemConfigReplyLifecycle | undefined;
     const usedToolNames = new Set(options.seedToolNames ?? []);
     const currentToolNames = () => [...usedToolNames];
     const finalizeToolNames = () => {
@@ -314,6 +316,9 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
       if (incoming.scope !== "private") promptRequest = this.ensureGroupThreadPromptRequest(
         promptRequest, threadPromptContext, messages64, [conversationMessages], currentInputMarker
       );
+      systemConfigLifecycle = systemConfigReply.createSystemConfigReplyLifecycle(
+        this, incoming, isAdmin, options.promptOverride, promptRequest
+      );
       const currentUserMessage = [...promptRequest.messages].reverse().find((message) => message.role === "user");
       if (currentUserMessage) {
         currentUserMessage.imageUrls = debounceContext.currentImageUrls().slice(0, MAX_CURRENT_CONTEXT_IMAGES);
@@ -405,11 +410,16 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
           && toolCapabilities.codex,
         asyncImage: options.allowAsyncImage ?? true,
         imageTools: options.allowImageTools ?? true,
+        systemConfig: systemConfigLifecycle?.toolPort,
         logContext
       });
       if (turn.kind === "deferred") usedToolNames.add(turn.toolCall.name);
       const turnToolNames = finalizeToolNames();
-      if (options.isCurrent && !options.isCurrent()) return sent;
+      if (turn.kind !== "completed") systemConfigLifecycle?.discard();
+      if (options.isCurrent && !options.isCurrent()) {
+        systemConfigLifecycle?.discard();
+        return sent;
+      }
       if (turn.kind === "no_reply") {
         this.discardAssistantRequest(incoming, logRunId);
         if (options.delivery) options.delivery.terminalStatus = "no_reply";
@@ -496,28 +506,17 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
         });
         return sent;
       }
-      const record = await this.sendAssistantReply(
-        channelKey,
-        incoming,
-        gateway,
-        turn.text,
-        isAdmin,
-        generatedImages,
-        logRunId,
-        options.isCurrent,
-        options.delivery,
-        true,
-        {
-          messageOrigin: options.messageOrigin ?? "text",
-          toolNames: turnToolNames
-        }
-      );
-      if (record) {
-        sent = true;
-        this.scheduleMemoryCompression(record);
-      }
+      sent = await systemConfigReply.sendSystemConfigAwareFinalReply(this, {
+        lifecycle: systemConfigLifecycle,
+        channelKey, incoming, gateway, text: turn.text, isAdmin,
+        generatedImages, logRunId, isCurrent: options.isCurrent,
+        delivery: options.delivery,
+        messageOrigin: options.messageOrigin ?? "text",
+        toolNames: turnToolNames
+      }) || sent;
       return sent;
     } catch (error) {
+      systemConfigLifecycle?.discard();
       const failedToolNames = finalizeToolNames();
       const failure = options.signal?.reason ?? error;
       const aborted = options.signal?.aborted || isAbortError(error);
@@ -554,6 +553,7 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
         groupId: incoming.groupId,
         error
       });
+      if (systemConfigReply.shouldSuppressSystemConfigFailureReply(error)) return sent;
       if (!options.isCurrent || options.isCurrent()) {
         await this.sendErrorReply(
           incoming,

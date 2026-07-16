@@ -6,6 +6,7 @@ import { withLogContext } from "./logger.js";
 import { claimToolCalls, resolveMaxToolCalls, toolCallLimitError } from "./toolLoopLimits.js";
 import { fetchTextWithTransportRetry, normalizeGeminiBaseUrl, resolveModelRequestMaxAttempts } from "./transport.js";
 import { errorMessage, isRecord, parseJson } from "./valueUtils.js";
+import { shouldEmitIntermediateAssistantText } from "./turnToolState.js";
 
 export async function completeGeminiGenerateContent(
   context: ProviderAdapterContext,
@@ -95,7 +96,10 @@ export async function completeGeminiGenerateContent(
     if (deferred) return deferred;
     const noReply = context.toolExecutor.noReplyTurn(calls, options, resolvedDefinitions, state);
     if (noReply) return noReply;
-    if (text && options.onAssistantText) await options.onAssistantText(text, "text");
+    const emitAssistantText = shouldEmitIntermediateAssistantText(calls, options, state, Boolean(text));
+    if (text && options.onAssistantText && emitAssistantText) {
+      await options.onAssistantText(text, "text");
+    }
     contents.push({ role: "model", parts });
     const outputs = await context.toolExecutor.execute(calls, options, resolvedDefinitions, state);
     contents.push({

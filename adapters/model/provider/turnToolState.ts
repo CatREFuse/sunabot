@@ -1,6 +1,7 @@
 import type {
   ProviderAssistantTextSource,
   ProviderCompleteOptions,
+  ResponseFunctionCallItem,
   TurnToolState
 } from "./contracts.js";
 
@@ -33,6 +34,25 @@ export function hasAcceptedTurnActivity(state: TurnToolState) {
 
 export function markAcceptedTool(state: TurnToolState, name: string) {
   state.acceptedToolNames.push(name);
+}
+
+export function shouldEmitIntermediateAssistantText(
+  calls: readonly ResponseFunctionCallItem[],
+  options: ProviderCompleteOptions,
+  state: TurnToolState,
+  assistantTextPresent: boolean
+) {
+  if (
+    assistantTextPresent &&
+    calls.some((call) => call.name === "system_config") &&
+    !options.systemConfig?.turnRejected()
+  ) {
+    options.systemConfig?.rejectTurn();
+  }
+  return !options.systemConfig?.mutationStaged() &&
+    !options.systemConfig?.turnRejected() &&
+    !state.acceptedToolNames.includes("system_config") &&
+    !calls.some((call) => call.name === "system_config");
 }
 
 export function toolOrderingError(name: string) {

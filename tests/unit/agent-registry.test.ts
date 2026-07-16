@@ -185,13 +185,21 @@ describe("AgentRegistry", () => {
     delete (manifest.bot as Record<string, unknown>).pokeOnNoReply;
     delete (manifest.bot as Record<string, unknown>).quoteGroupReplyExcludedUserIds;
     delete ((manifest.bot as Record<string, unknown>).orchestrator as Record<string, unknown>).groupThreadModel;
+    delete ((manifest.bot as Record<string, unknown>).bash as Record<string, unknown>).adminPrivateBackend;
+    delete ((manifest.bot as Record<string, unknown>).bash as Record<string, unknown>).auditModel;
+    delete ((manifest.bot as Record<string, unknown>).bash as Record<string, unknown>).strictMode;
     await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
 
     await expect(registry.config("plana", config)).resolves.toMatchObject({
       bot: {
         pokeOnNoReply: false,
         quoteGroupReplyExcludedUserIds: [],
-        orchestrator: { groupThreadModel: "gpt-5.4-mini" }
+        orchestrator: { groupThreadModel: "gpt-5.4-mini" },
+        bash: {
+          adminPrivateBackend: "native",
+          auditModel: "gpt-5.4-mini",
+          strictMode: true
+        }
       }
     });
   });

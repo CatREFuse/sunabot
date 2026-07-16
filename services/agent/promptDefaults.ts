@@ -5,6 +5,7 @@ import {
   memoryRecallTool,
   noReplyTool,
   selfieTool,
+  systemConfigTool,
   withRequiredDispatchMessage,
   websearchTool,
   workspaceBashTool
@@ -225,7 +226,8 @@ export function defaultFinalPromptTemplate(id: string): FinalPromptTemplate | un
         withRequiredDispatchMessage(generateImgTool),
         withRequiredDispatchMessage(selfieTool),
         memoryRecallTool,
-        withRequiredDispatchMessage(codexTool)
+        withRequiredDispatchMessage(codexTool),
+        ...(!isGroupReply ? [systemConfigTool] : [])
       ].map(toOpenAITool),
       response_format: JSON_TEXT_FORMAT
     };

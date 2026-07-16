@@ -129,10 +129,42 @@ describe("tool configuration", () => {
     expect(config.providers.items.map((provider) => provider.modelSource)).toEqual(["remote", "custom"]);
   });
 
-  it("disables workspace Bash in the macOS runtime without changing other platforms", () => {
-    expect(defaultConfig().bot.bash.enabled).toBe(true);
+  it("defaults workspace Bash to disabled with a native strict administrator backend", () => {
+    expect(defaultConfig().bot.bash).toMatchObject({
+      enabled: false,
+      adminPrivateBackend: "native",
+      auditModel: "gpt-5.4-mini",
+      strictMode: true
+    });
     process.env.SUNABOT_RUNTIME_MODE = "macos";
     expect(defaultConfig().bot.bash.enabled).toBe(false);
+  });
+
+  it("loads the administrator private Bash backend from sparse legacy-compatible config", async () => {
+    await fs.writeFile(configPath, JSON.stringify({
+      bot: {
+        bash: {
+          enabled: true,
+          adminPrivateBackend: "docker",
+          auditModel: "gpt-5.5",
+          strictMode: false
+        }
+      }
+    }), "utf8");
+
+    await expect(loadConfig()).resolves.toMatchObject({
+      bot: {
+        bash: {
+          enabled: true,
+          adminPrivateBackend: "docker",
+          auditModel: "gpt-5.5",
+          strictMode: false,
+          allowGroup: false,
+          adminOnly: true,
+          workspaceOnly: true
+        }
+      }
+    });
   });
 
   it("defaults websearch to Tavily and Codex to an independent worker", () => {

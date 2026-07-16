@@ -643,7 +643,13 @@ export async function runtime_deliverSessionOutbox(
     const conversationId = conversationRecordId(payload.incoming);
     const gate = readReplyGateSnapshot(payload.replyGate, payload.incoming.scope, conversationId) ??
       this.replyGates.capture(payload.incoming.scope, conversationId);
-    if (context?.phase !== "settle" && !this.isReplyTaskCurrent(payload.incoming, gate, signal)) {
+    const isSystemConfigConfirmation = isPrivateGateClosingSystemConfigConfirmation.call(this, payload);
+    if (
+      context?.phase !== "settle" &&
+      (isSystemConfigConfirmation
+        ? !isHeldSystemConfigConfirmationCurrent.call(this, conversationId, signal)
+        : !this.isReplyTaskCurrent(payload.incoming, gate, signal))
+    ) {
       return { delivered: false, skipped: "reply_gate_closed" };
     }
     const gateway = this.activeGateway;
@@ -658,6 +664,33 @@ export async function runtime_deliverSessionOutbox(
 
 function isOutboxDeliveryContext(value: OutboxDeliveryContext | AbortSignal): value is OutboxDeliveryContext {
   return typeof (value as OutboxDeliveryContext).sendRemote === "function";
+}
+
+function isPrivateGateClosingSystemConfigConfirmation(
+  this: RuntimeHost,
+  payload: AssistantReplyOutboxPayload
+) {
+  return payload.deliverySemantics === "system_config_confirmation" &&
+    payload.incoming.transport !== "web" &&
+    payload.incoming.scope === "private" &&
+    payload.incoming.groupId == null &&
+    payload.isAdmin === true &&
+    this.isAdminUser(payload.incoming.userId) &&
+    payload.messageOrigin === "text" &&
+    payload.generatedImages.length === 0 &&
+    payload.text.trim().length > 0 &&
+    payload.toolNames?.length === 1 &&
+    payload.toolNames[0] === "system_config";
+}
+
+function isHeldSystemConfigConfirmationCurrent(
+  this: RuntimeHost,
+  conversationId: string,
+  signal: AbortSignal
+) {
+  if (signal.aborted) return false;
+  const record = this.conversationRecords.get(conversationId);
+  return Boolean(record && conversationReplyEnabled(record));
 }
 
 function isOutboxAccountConnected(gateway: MessagingPort, accountId?: string) {

@@ -18,6 +18,11 @@ import { GENERATE_IMG_TOOL_NAME, generateImgTool } from "./generateImgTool.js";
 import { SELFIE_TOOL_NAME, selfieTool } from "./selfieTool.js";
 import { ASSISTANT_TEXT_TOOL_NAME, assistantTextTool } from "./assistantTextTool.js";
 import { NO_REPLY_TOOL_NAME, noReplyTool } from "./noReplyTool.js";
+import {
+  SYSTEM_CONFIG_TOOL_NAME,
+  systemConfigTool,
+  type SystemConfigToolPort
+} from "./systemConfigTool.js";
 import { withRequiredDispatchMessage, withoutDispatchMessage } from "./deferredDispatch.js";
 
 export interface ToolAvailability {
@@ -30,6 +35,7 @@ export interface ToolAvailability {
   asyncCodex?: boolean;
   asyncImage?: boolean;
   imageTools?: boolean;
+  systemConfig?: SystemConfigToolPort;
 }
 
 export type ToolExecution = "inline" | "deferred";
@@ -142,6 +148,16 @@ const catalog: readonly ToolCatalogEntry[] = [
     available: (options) => options.asyncCodex === true,
     unavailableReason: "Codex CLI 未安装或未登录。",
     execution: "deferred"
+  },
+  {
+    name: SYSTEM_CONFIG_TOOL_NAME,
+    title: "系统设置",
+    summary: "查询状态并调整当前 Agent 的受控行为设置。",
+    definition: () => systemConfigTool,
+    available: (options) => Boolean(options.systemConfig),
+    unavailableReason: "仅管理员私聊和管理员 Web Chat 可以使用。",
+    defaultEnabled: true,
+    execution: "inline"
   }
 ];
 
@@ -264,6 +280,13 @@ function applyRuntimeToolContract(
   selected: Record<string, unknown>,
   canonical: Record<string, unknown>
 ) {
+  if (entry.name === SYSTEM_CONFIG_TOOL_NAME) {
+    return {
+      ...selected,
+      parameters: readParameters(canonical),
+      strict: canonical.strict === true
+    };
+  }
   if (entry.name !== GENERATE_IMG_TOOL_NAME && entry.name !== SELFIE_TOOL_NAME) return selected;
   return {
     ...selected,

@@ -9,6 +9,7 @@ import { AdminAuthService } from "../../src/admin/auth.js";
 import { ConfigService } from "../../src/admin/configService.js";
 import { ConfigDoctorService, type ConfigDoctorModelRunner } from "../../src/admin/configDoctor.js";
 import { AgentConfigService } from "../../src/admin/agentConfigService.js";
+import { SystemConfigService } from "../../src/admin/systemConfigService.js";
 import { CodexAuthService } from "../../src/admin/codexAuth.js";
 import { MonitorSettingsStore } from "../../src/admin/monitorSettings.js";
 import { SelfieReferenceRepository } from "../../src/admin/selfieReferences.js";
@@ -74,6 +75,8 @@ import {
   inspectFirstRunBootstrap
 } from "../../tooling/runtime/first-run-state.mjs";
 import { collectWorkspaceProbeFacts } from "../../tooling/runtime/probe.mjs";
+import { buildRuntimeProbe } from "../../tooling/runtime/probe.mjs";
+import type { SystemConfigRuntimePort } from "../../services/tools/systemConfigTool.js";
 
 export interface CreateAppOptions {
   config?: AppConfig;
@@ -167,12 +170,21 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
     )
   });
   const resolveToolCapabilities = toolCapabilitiesFor(defaultAgentConfig);
+  let systemConfigService: SystemConfigService | undefined;
+  const systemConfigRuntime: SystemConfigRuntimePort = {
+    createTurn(context) {
+      if (!systemConfigService) throw new Error("System configuration service is not ready.");
+      return systemConfigService.createTurn(context);
+    }
+  };
   const createRuntime = (agentConfig: AppConfig) => new SunaRuntime(agentConfig, {
     resolveToolCapabilities: toolCapabilitiesFor(agentConfig),
+    systemConfig: systemConfigRuntime,
     replyTaskGate: broadcastStormDetector
   });
   const runtime = new SunaRuntime(defaultAgentConfig, {
     resolveToolCapabilities,
+    systemConfig: systemConfigRuntime,
     replyTaskGate: broadcastStormDetector
   });
   if (options.initializeRuntime !== false) await runtime.initialize();
@@ -306,6 +318,71 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
   const runtimeProbeClient = options.runtimeProbeClient === false
     ? undefined
     : options.runtimeProbeClient ?? new RuntimeProbeClient();
+  const getOnebotStatus = (agentId: string) => {
+    const status = onebotGateway.getStatus();
+    const accounts = (status.accounts ?? []).filter((account) => agentRegistry.account(account.accountId)?.agentId === agentId);
+    return {
+      ...status,
+      connected: accounts.length > 0,
+      connections: accounts.length,
+      selfIds: accounts.flatMap((account) => account.selfId ? [account.selfId] : []),
+      accounts,
+      connectedAt: accounts[0]?.connectedAt
+    };
+  };
+  const getRuntimeProbeFacts = async (agentId: string) => {
+    agentRuntimeManager.require(agentId);
+    const status = onebotGateway.getStatus();
+    const connectedAccountIds = (status.accounts ?? []).map((account) => account.accountId);
+    if (runtimeProbeClient) {
+      try {
+        return await runtimeProbeClient.collectFacts({ connectedAccountIds });
+      } catch (error) {
+        console.error("[runtime-probe] host probe failed", error instanceof Error ? error.message : String(error));
+      }
+    }
+    const facts = await collectWorkspaceProbeFacts({
+      workspace: getWorkspaceDir(),
+      connectedAccountIds,
+      conflicts: [{
+        id: "host-runtime-probe",
+        code: "HOST_RUNTIME_PROBE_UNAVAILABLE",
+        path: getWorkspacePath("runtime/launcher-state.json"),
+        action: "./sunabot.sh restart",
+        detail: "host runtime probe is unavailable"
+      }]
+    });
+    const codex = await codexAuth.status();
+    return {
+      ...facts,
+      core: {
+        mode: process.env.SUNABOT_RUNTIME_MODE ?? "api",
+        running: true,
+        apiReady: true,
+        onebotReady: onebotServer?.listening ?? false,
+        apiPath: `http://${config.server.host}:${config.server.port}/api/auth/session`,
+        onebotPath: activeReverseWsPath
+      },
+      dependencies: {
+        node: { ok: process.versions.node === "24.18.0", detail: process.versions.node }
+      },
+      capabilities: {
+        ...facts.capabilities,
+        codexCli: { ok: codex.installed, detail: codex.installed ? "available" : "unavailable" },
+        codexAuth: { ok: codex.authenticated, detail: codex.authenticated ? "authenticated" : "not authenticated" },
+        accountReconciler: { ok: false, detail: "host reconciler is not running" }
+      }
+    };
+  };
+  systemConfigService = new SystemConfigService({
+    registry: agentRegistry,
+    agentConfigService,
+    getRuntime: (agentId) => agentRuntimeManager.require(agentId),
+    getOnebotStatus,
+    getRuntimeProbe: async (agentId) => buildRuntimeProbe(await getRuntimeProbeFacts(agentId)),
+    getRecoveryStatus: () => configService.getRecoveryStatus(),
+    startedAt
+  });
 
   app.setErrorHandler((error: unknown, request, reply) => {
     if (error instanceof ServiceError) {
@@ -353,65 +430,11 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
     monitorSettings,
     serviceMonitor,
     onebotGateway,
-    getOnebotStatus: (agentId) => {
-      const status = onebotGateway.getStatus();
-      const accounts = (status.accounts ?? []).filter((account) => agentRegistry.account(account.accountId)?.agentId === agentId);
-      return {
-        ...status,
-        connected: accounts.length > 0,
-        connections: accounts.length,
-        selfIds: accounts.flatMap((account) => account.selfId ? [account.selfId] : []),
-        accounts,
-        connectedAt: accounts[0]?.connectedAt
-      };
-    },
+    getOnebotStatus,
     runtime,
     getRuntime: (agentId) => agentRuntimeManager.require(agentId),
     configService,
-    getRuntimeProbeFacts: async (agentId) => {
-      agentRuntimeManager.require(agentId);
-      const status = onebotGateway.getStatus();
-      const connectedAccountIds = (status.accounts ?? []).map((account) => account.accountId);
-      if (runtimeProbeClient) {
-        try {
-          return await runtimeProbeClient.collectFacts({ connectedAccountIds });
-        } catch (error) {
-          console.error("[runtime-probe] host probe failed", error instanceof Error ? error.message : String(error));
-        }
-      }
-      const facts = await collectWorkspaceProbeFacts({
-        workspace: getWorkspaceDir(),
-        connectedAccountIds,
-        conflicts: [{
-          id: "host-runtime-probe",
-          code: "HOST_RUNTIME_PROBE_UNAVAILABLE",
-          path: getWorkspacePath("runtime/launcher-state.json"),
-          action: "./sunabot.sh restart",
-          detail: "host runtime probe is unavailable"
-        }]
-      });
-      const codex = await codexAuth.status();
-      return {
-        ...facts,
-        core: {
-          mode: process.env.SUNABOT_RUNTIME_MODE ?? "api",
-          running: true,
-          apiReady: true,
-          onebotReady: onebotServer?.listening ?? false,
-          apiPath: `http://${config.server.host}:${config.server.port}/api/auth/session`,
-          onebotPath: activeReverseWsPath
-        },
-        dependencies: {
-          node: { ok: process.versions.node === "24.18.0", detail: process.versions.node }
-        },
-        capabilities: {
-          ...facts.capabilities,
-          codexCli: { ok: codex.installed, detail: codex.installed ? "available" : "unavailable" },
-          codexAuth: { ok: codex.authenticated, detail: codex.authenticated ? "authenticated" : "not authenticated" },
-          accountReconciler: { ok: false, detail: "host reconciler is not running" }
-        }
-      };
-    }
+    getRuntimeProbeFacts
   });
 
   await app.register(fastifyStatic, {

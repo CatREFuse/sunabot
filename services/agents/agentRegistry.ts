@@ -16,6 +16,7 @@ import type {
   AgentRegistryRepository,
   AgentRegistryRow
 } from "./agentRegistryRepository.js";
+import { mergeManifestBotConfig } from "./agentConfigProjection.js";
 
 const MANIFEST_FILE = "agent.json";
 const AGENT_ID_PATTERN = /^[a-z][a-z0-9-]{1,31}$/;
@@ -508,9 +509,7 @@ export function configFromManifest(shared: AppConfig, manifest: AgentManifest): 
   const workspace = workspaceRelativeReference(path.posix.join(WORKSPACE_LAYOUT.agentRoot, manifest.id));
   const systemPromptWorkspace = manifest.prompts.overrideSystem
     ? workspaceRelativeReference(path.posix.join(WORKSPACE_LAYOUT.agentRoot, manifest.id, "system-prompts")) : workspaceRelativeReference(WORKSPACE_LAYOUT.systemPrompts);
-  const bot = structuredClone(manifest.bot);
-  bot.orchestrator = { ...structuredClone(shared.bot.orchestrator), ...structuredClone(bot.orchestrator),
-    groupThreadModel: manifest.id === shared.persona.defaultAgentId ? shared.bot.orchestrator.groupThreadModel : bot.orchestrator?.groupThreadModel?.trim() || shared.bot.orchestrator.groupThreadModel };
+  const bot = mergeManifestBotConfig(shared.bot, manifest.bot, manifest.id === shared.persona.defaultAgentId);
   return {
     ...structuredClone(shared),
     persona: {

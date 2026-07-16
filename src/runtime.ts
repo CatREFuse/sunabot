@@ -119,6 +119,7 @@ import { RuntimeGroupThreads } from "./runtime/groupThreadPipeline.js";
 import { DEFAULT_REPLY_DEBOUNCE_MS, RuntimeReplyDebounce } from "./runtime/replyDebounce.js";
 import { TaskLimiter, errorMessage, loadConversationRecords } from "./runtime/infrastructure.js";
 import type { RuntimeToolCapabilityResolver } from "../services/tools/bashCapability.js";
+import type { SystemConfigRuntimePort } from "../services/tools/systemConfigTool.js";
 import type { ReplyTaskGate } from "../services/orchestration/broadcastStormDetector.js";
 import { runWithAgentRuntimeContext } from "../packages/platform/runtimeAgentContext.js";
 export * from "./runtime/runtimeContracts.js";
@@ -152,6 +153,7 @@ export class SunaRuntime {
   readonly ownsSessionStore: boolean;
   readonly sessionCoordinator: SessionCoordinator;
   readonly resolveToolCapabilities: RuntimeToolCapabilityResolver;
+  readonly systemConfig?: SystemConfigRuntimePort;
   readonly replyTaskGate: ReplyTaskGate;
   readonly incomingPreparations = new Map<string, {
       promise: Promise<void>;
@@ -173,6 +175,7 @@ export class SunaRuntime {
       this.config = config;
       this.conversationRecords = new Map(loadConversationRecords(config).map((record) => [record.id, record]));
       this.resolveToolCapabilities = failClosedToolCapabilityResolver(options.resolveToolCapabilities);
+      this.systemConfig = options.systemConfig;
       this.replyTaskGate = options.replyTaskGate ?? { canCreateTaskFor: () => true };
       this.memoryScheduler = new MemorySchedulerStore(config);
       this.attachmentService = options.attachmentService ?? new AttachmentService(getRootDir(), {

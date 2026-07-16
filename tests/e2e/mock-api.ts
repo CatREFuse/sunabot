@@ -108,6 +108,9 @@ const initialConfig = {
     },
     bash: {
       enabled: true,
+      adminPrivateBackend: "native",
+      auditModel: "gpt-5.4-mini",
+      strictMode: true,
       allowGroup: false,
       adminOnly: true,
       workspaceOnly: true,

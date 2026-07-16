@@ -94,6 +94,7 @@ import { cleanupPersistedCodexProcess, CodexToolRunner } from "../../adapters/co
 import { isTrustedQqFakeIp } from "../../adapters/onebot/qqMedia.js";
 import type { CodexRunner } from "../../packages/contracts/tools/codex.js";
 import type { RuntimeToolCapabilityResolver } from "../../services/tools/bashCapability.js";
+import type { SystemConfigRuntimePort } from "../../services/tools/systemConfigTool.js";
 import type { ReplyTaskGate } from "../../services/orchestration/broadcastStormDetector.js";
 import {
   OutboxDisconnectedError,
@@ -223,10 +224,22 @@ export interface NoReplyPokeDeliveryDraft {
   payload: NoReplyPokeOutboxEnvelope;
   dedupeKey?: string;
 }
+export interface SystemConfigHeldConfirmationHandle {
+  release(): Promise<void>;
+  neutralizeAndRelease(): Promise<void>;
+}
+export const SYSTEM_CONFIG_NEUTRAL_CONFIRMATION_TEXT = "设置结果未确认，请重新查询当前设置";
+export interface SystemConfigHeldConfirmationPort {
+  appendHeld(
+    draft: ReplyDeliveryDraft,
+    options: { mutationFingerprint: string }
+  ): Promise<SystemConfigHeldConfirmationHandle>;
+}
 export interface ReplyDelivery {
   outbox: Array<ReplyDeliveryDraft | NoReplyPokeDeliveryDraft>;
   emitOutbox?: (draft: ReplyDeliveryDraft | NoReplyPokeDeliveryDraft) => Promise<unknown>;
   replyQuote?: ReplyQuoteSnapshotV1;
+  systemConfigHeld?: SystemConfigHeldConfirmationPort;
   terminalStatus?: "no_reply";
 }
 export interface DeferredCodexTurn {
@@ -269,6 +282,7 @@ export interface SunaRuntimeOptions {
   sessionStore?: SessionStore;
   codexRunner?: CodexRunner;
   resolveToolCapabilities?: RuntimeToolCapabilityResolver;
+  systemConfig?: SystemConfigRuntimePort;
   replyTaskGate?: ReplyTaskGate;
   replyDebounceMs?: number;
 }

@@ -70,7 +70,8 @@ export const AGENT_TOOL_NAMES = [
   "generate_img",
   "selfie",
   "workspace_bash",
-  "codex"
+  "codex",
+  "system_config"
 ] as const;
 export type AgentToolName = (typeof AGENT_TOOL_NAMES)[number];
 export interface AssistantMessageTrace {
@@ -163,6 +164,9 @@ export interface BotConfig {
   tools: BotToolSettings;
   bash: {
     enabled: boolean;
+    adminPrivateBackend: "native" | "docker";
+    auditModel: string;
+    strictMode: boolean;
     allowGroup: boolean;
     adminOnly: boolean;
     workspaceOnly: boolean;

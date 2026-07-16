@@ -13,7 +13,7 @@
 | 管理鉴权 API | `apps/api/plugins/authRoutes.ts` |
 | Provider、Codex 授权与配置 API | `apps/api/plugins/providerConfigRoutes.ts` |
 | 配置医生扫描、AI 建议与应用 API | `apps/api/plugins/configDoctorRoutes.ts`, `src/admin/configDoctor.ts`, `src/admin/configDoctorFile.ts`, `src/admin/configDoctorModel.ts`, `src/admin/configDoctorPatch.ts`, `src/admin/configDoctorApply.ts`, `src/admin/configService.ts` |
-| Agent 注册、账号调和与头像 API | `apps/api/plugins/agentRoutes.ts`, `services/agents/agentRegistry.ts`, `services/agents/accountRuntimeReconciler.ts`, `tooling/runtime/account-runtime-daemon.mjs` |
+| Agent 注册、配置继承、账号调和与头像 API | `apps/api/plugins/agentRoutes.ts`, `services/agents/agentRegistry.ts`, `services/agents/agentConfigProjection.ts`, `services/agents/accountRuntimeReconciler.ts`, `tooling/runtime/account-runtime-daemon.mjs` |
 | 多 Agent 运行时与配置热更新 | `services/agents/agentRuntimeManager.ts`, `src/admin/agentConfigService.ts`, `packages/platform/runtimeAgentContext.ts` |
 | OneBot 管理 API | `apps/api/plugins/onebotRoutes.ts` |
 | 记忆管理 API | `apps/api/plugins/memoryRoutes.ts` |
@@ -28,13 +28,14 @@
 | 旧数据、workspace、首次运行与单 Agent 迁移门禁 | `packages/platform/multiAgentMigrationGate.mjs`, `tooling/shared/safe-absolute-path.mjs`, `tooling/workspace/init-workspace.mjs`, `tooling/runtime/first-run-state.mjs`, `tooling/migrations/migrate-to-sqlite.mjs`, `tooling/migrations/migrate-workspace-layout.mjs`, `tooling/migrations/migrate-single-agent-to-multi-agent.mjs` |
 | SQLite 恢复点、迁移恢复与 journal | `tooling/workspace/sqlite-recovery.mjs`, `tooling/migrations/sqlite-migration-recovery.mjs`, `tooling/migrations/sqlite-legacy-import.mjs` |
 | OneBot 连接、事件和 action | `adapters/onebot/onebotGateway.ts`, `adapters/onebot/qqMedia.ts` |
-| 回复运行时、上下文、投递与群聊总结 | `src/runtime.ts`, `src/runtime/reply.ts`, `src/runtime/replyContext.ts`, `src/runtime/delivery.ts`, `src/runtime/intake.ts` |
+| 回复运行时、上下文、投递与群聊总结 | `src/runtime.ts`, `src/runtime/reply.ts`, `src/runtime/systemConfigReply.ts`, `src/runtime/replyContext.ts`, `src/runtime/delivery.ts`, `src/runtime/intake.ts` |
 | 按发送者回复防抖、入站身份、durable 窗口快照、冻结引用/命令、current batch 与 ambient 交接 | `packages/contracts/messaging/incomingIdentity.ts`, `packages/contracts/messaging/commands.ts`, `packages/contracts/session/runtimeMessages.ts`, `src/runtime/replyDebounce.ts`, `src/runtime/replyDebounceContext.ts`, `src/runtime/replyDebounceDispatch.ts`, `src/runtime/intake.ts`, `src/runtime/orchestration.ts`, `src/runtime/reply.ts`, `src/runtime/replyContext.ts`, `src/runtime/delivery.ts`, `src/runtime/groupThreadPipeline.ts`, `src/runtime/conversations.ts`, `src/runtime/infrastructure.ts`, `src/runtime/runtimeContracts.ts`, `adapters/sqlite/applicationDataStore.ts` |
 | 群聊消息元数据、Thread 领域规则与前置节点 | `src/runtime/conversationMemoryHelpers.ts`, `services/conversations/groupThreadContext.ts`, `src/runtime/groupThreadPipeline.ts` |
 | 会话事件、turn、工具任务、outbox、未来事件唤醒与原子 handoff | `services/sessions/sessionCoordinator.ts`, `services/sessions/sessionEventStore.ts`, `services/sessions/sessionTurnStore.ts`, `services/sessions/sessionTurnWake.ts`, `services/sessions/sessionTurnResultCoordinator.ts`, `services/sessions/sessionTurnServices.ts`, `services/sessions/sessionTypes.ts`, `packages/contracts/session/runtimeMessages.ts` |
 | 群聊门控、广播风暴嗅探与编排策略 | `services/orchestration/groupReplyPolicy.ts`, `services/orchestration/broadcastStormDetector.ts`, `services/agents/agentRuntimeManager.ts` |
 | 命令路由、冻结命令调用与钩子 | `services/messaging/commandRouter.ts`, `packages/contracts/messaging/commands.ts`, `services/messaging/hookBus.ts` |
 | Provider、模型发现、多模态探测与工具循环 | `adapters/model/openaiProvider.ts`, `adapters/model/providerDiscovery.ts`, `adapters/model/provider/`, `services/tools/` |
+| Agent 自助设置与状态工具 | `services/tools/systemConfigTool.ts`, `src/admin/systemConfigService.ts`, `src/runtime/systemConfigReply.ts`, `apps/api/server.ts` |
 | Codex 异步工具 | `adapters/codex/codexTool.ts` |
 | 联网搜索 | `adapters/model/webSearchTool.ts`, `adapters/model/webSearchSettings.ts` |
 | Bash、图像生成、历史媒体解析、自拍 | `services/tools/bashTool.ts`, `services/tools/generateImgTool.ts`, `src/runtime/reply.ts`, `adapters/model/provider/imageInput.ts`, `services/tools/selfieTool.ts` |

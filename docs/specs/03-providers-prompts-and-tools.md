@@ -49,7 +49,11 @@ GPT-5.6 及后续支持该协议的 OpenAI 官方 Responses 请求必须在最�
 
 ### 4.3 工具
 
-Agent 工具目录固定包含 `assistant_text`、`no_reply`、`memory_recall`、`websearch`、`generate_img`、`selfie`、`workspace_bash` 和 `codex` 八项。时间读取、OneBot 消息外发和 Provider 检查属于系统或管理能力，不进入 Agent 工具目录。`no_reply` 是向后兼容的内置默认工具，旧提示词没有定义时仍会注入代码内置定义；显式停用后从模型请求中移除。
+Agent 工具目录固定包含 `assistant_text`、`no_reply`、`memory_recall`、`websearch`、`generate_img`、`selfie`、`workspace_bash`、`codex` 和 `system_config` 九项。时间读取、OneBot 消息外发和 Provider 检查属于系统或管理能力，不进入 Agent 工具目录。`no_reply` 与 `system_config` 是向后兼容的内置默认工具，旧提示词没有定义时仍会注入代码内置定义；`no_reply` 显式停用后从模型请求中移除。
+
+`system_config` 只查询或修改当前 Agent。`get_settings` 返回自动回复、群聊编排、搜索、Bash 偏好、已知群聊和工具有效状态；`get_status` 返回运行时间、OneBot、人格、Provider、恢复门禁和安全裁剪后的探针结果。响应不得包含密钥、环境变量名、绝对路径、原始消息、Provider 地址或探针诊断正文。修改操作包括自动回复范围、主动群聊编排器、Tavily 搜索开关、管理员私聊 Bash backend 偏好，以及完整 conversation ID 对应的已知群聊回复/编排器开关。搜索实现当前只接受 `tavily`；未知群聊、裸 group ID、多余字段、缺失字段和不匹配参数均失败关闭。
+
+配置修改只对无 prompt override 的当前管理员 QQ 私聊开放，并从下一轮生效；查询也可在同权限 QQ 私聊和管理 Web Chat 使用。Web Chat 没有 durable delivery，因此所有修改在暂存前返回 `SYSTEM_CONFIG_DURABLE_DELIVERY_REQUIRED`，查询保持可用。一次成功的 `system_config` 调用必须独占整个 Provider turn；同批或跨模型轮次混入正文、图片、deferred 或其他工具时，Provider 适配器拒绝整轮并清除 staged mutation。Bash backend 只保存 `native` 或 `docker` 偏好，实际可用性继续由 capability 探针决定；macOS Native 缺少 bubblewrap 或等价强隔离时 effective 状态为关闭，不能回退普通宿主 Bash，Docker backend 也不能通过 Docker socket 放宽隔离。
 
 `bot.tools.overrides` 按工具名保存稀疏覆盖，每项允许可选的 `description`；除 `workspace_bash` 与 `codex` 外，其他工具还允许可选的 `enabled`。没有 `enabled` 覆盖时继承当前单聊或群聊回复提示词是否包含该 Function；显式启用可恢复代码内置定义，显式停用会从模型请求中移除该工具。`workspace_bash` 的启停只写入 `bot.bash.enabled`，`codex` 的启停只写入 `bot.tools.codex.enabled`，通用覆盖中的同名 `enabled` 会被移除。描述采用“配置覆盖、当前端点提示词、代码默认值”的优先级；删除描述覆盖后立即恢复当前端点提示词或代码默认描述。描述覆盖作用于所有 Provider 协议。
 
