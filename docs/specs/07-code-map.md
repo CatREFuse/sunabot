@@ -22,6 +22,7 @@
 | Web Chat 管理员会话与浏览器 delivery | `services/webChat/`, `apps/api/plugins/conversationRoutes.ts` |
 | 图片、缩略图、Token/模型调用统计、请求日志与图片测试 API | `apps/api/plugins/mediaRoutes.ts`, `apps/api/plugins/conversationRoutes.ts`, `src/modelCallStats.ts`, `src/requestLog.ts`, `adapters/sqlite/modelCallStore.ts` |
 | Agent 文件与工具目录 API | `apps/api/plugins/agentToolRoutes.ts`, `services/tools/toolRegistry.ts` |
+| Agent 扩展安全存储与复制预览基础层（plugin 尚未接入组合根） | `packages/contracts/extensions/agentExtensions.ts`, `services/extensions/`, `adapters/filesystem/agentExtension*.ts`, `adapters/filesystem/agentSkill*.ts`, `adapters/filesystem/parentBoundFs.ts`, `adapters/filesystem/parentBoundFsWorkerSource.ts`, `adapters/filesystem/parentBoundFsWorkerOperationsSource.ts`, `adapters/filesystem/skillArchive.ts`, `apps/api/plugins/agentExtensionRoutes.ts` |
 | 自拍参考图 API 与受控文件仓库 | `apps/api/plugins/selfieReferenceRoutes.ts`, `src/admin/selfieReferences.ts` |
 | 配置 schemaVersion、加载、归一化、默认值与路径解析 | `src/config.ts`, `src/types.ts` |
 | SQLite schema、业务数据、Thread 状态与模型聚合 | `adapters/sqlite/applicationDataSchema.ts`, `adapters/sqlite/applicationDataStore.ts`, `adapters/sqlite/groupThreadStateStore.ts`, `adapters/sqlite/modelCallStore.ts` |

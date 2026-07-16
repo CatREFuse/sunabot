@@ -43,6 +43,8 @@ Plana 的 `workspace/business/data/session-queue.sqlite` 与其他 Agent 的 `wo
 - `workspace/business/migrations/multi-agent-v1.json`：首次安装或单 Agent 迁移完成标记，保存完整性摘要和迁移证据摘要；
 - `workspace/business/prompts/`：所有 Agent 默认使用的公共系统提示词；
 - `workspace/business/agents/<agentId>/agent.json`：Agent 名称、启用状态、系统提示词覆盖开关、Bot 行为、工具覆盖、管理员私聊 Bash backend 偏好与 OneBot 行为配置；
+- `workspace/business/agents/<agentId>/extensions/skills/`：schemaVersion 1 Skill 索引、已验证 Skill 包、事务日志、隔离目录与墓碑；
+- `workspace/business/agents/<agentId>/extensions/mcp/servers.json`：schemaVersion 1 MCP 描述符索引，只保存受限命令、可审计参数和 `envKeys` 引用，不保存环境变量值；
 - `workspace/business/agents/<agentId>/`：Agent 人格、`selfie_prompt_rewrite.json`、可选 `system-prompts/` 覆盖、自拍参考图、私有数据和人工维护文件；
 - `workspace/business/agents/<agentId>/workbench/`：当前 Agent 的文件工具与 Bash 共用私有目录；内容不会自动进入模型请求，只有经过管理员私聊能力门禁和逐次路径、身份、类型及大小复验的文本文件可以按请求读取或原子写入；
 - `workspace/business/media/`：需要随业务恢复的图片和持久附件；
@@ -53,6 +55,10 @@ Plana 的 `workspace/business/data/session-queue.sqlite` 与其他 Agent 的 `wo
 - 单个附件 manifest、好友/群目录缓存：体积小且可重建；
 - 图片与文档二进制：文件系统更适合流式访问；
 - Codex JSONL：子进程通信协议，不是持久化引擎。
+
+Agent 扩展存储当前是未接入 API 组合根的 W1 基础层。Skill ZIP 只接受普通文件和目录，限制归档、条目、单文件、总展开体积、压缩比与深度，拒绝链接、设备、FIFO、路径穿越和跨平台冲突名称；单层包装目录在暂存时规范化为包根，索引以内容摘要和 revision 绑定已安装目录。MCP 描述符只允许受限容器绝对可执行路径、可审计参数和 `/workbench` 虚拟路径，逐段检查可执行文件名与参数中的嵌入值，拒绝 C0/C1 控制字符、非法 Unicode、Unix/Windows/UNC/`file:` 宿主路径、超过有界解码深度的输入、重复 percent/Base64 编码秘密及长 hex、base32、高熵或低字符类不透明值；overview 与复制预览只返回 `envKeys` 的 configured/missing 状态，不接收或返回秘密值。
+
+Agent 根目录及 `extensions`、`skills`、`mcp` 控制目录必须是当前用户拥有的 0700 单一目录对象，索引与日志为 0600。所有 mkdir、创建、原子替换、锁、暂存写入、发布、隔离、墓碑和目录同步都通过绝对 `process.execPath` 启动的固定无 shell 子进程完成，子进程环境为空、工作目录固定为已验证父目录；ready 握手复核启动 realpath 与 bigint dev/ino/ctime，执行前和完成后以 dev/ino 复核 cwd，最终操作数只使用 NFC 安全 basename。配置替换与首次创建使用父进程生成的不可预测 operation token、命令摘要、0600 intent 和新 inode evidence；mutation 前后分别 fsync，worker 在 fsync 后至 stdout 前被 SIGKILL、输出被截断或 create link 后留下 nlink=2 时，必须由新 worker 在相同父 inode 内按 token 对账，不能由父进程按可见路径回滚。配置替换先为旧 inode 建立同目录保留链接，再以同目录 rename 发布新文件；rename、目标复验、证据复验、目录同步或响应返回失败时，只能在确认目标仍是本次新 inode 后恢复原 inode 或原本不存在的状态，无法证明恢复结果时进入 `BOUND_RECOVERY_REQUIRED`。成功结果只有在 finalize 已清理 intent/evidence 且目标仍匹配 primary 返回 identity 后才能向调用方返回；finalize 自身丢失响应时必须由后继 worker重新证明终态。Skill 事务先写 `prepared` 日志，成功或完整回滚后转换为独立命名的 `committed` 或 `rolled_back` 终态审计；active recovery 入口固定 `skills` 的 realpath/dev/ino/ctime，并将该 lineage 传入日志替换、目录移动、bind、终态 rename 与目录同步，目录被等权限新 inode 替换时失败关闭且替换目录零写。active 的三种状态都必须按索引、目标、隔离目录或墓碑证据恢复并终态化，source 与 terminal 同时存在、同时缺失或内容冲突时进入 `SKILL_TRANSACTION_RECOVERY_REQUIRED`。损坏的历史终态审计不参与 active 恢复。隔离目录、墓碑、锁墓碑和终态日志目前没有自动 GC。
 
 配置医生当前仅检查和修复 `workspace/business/config/sunabot.json`，不会扫描或修改 Agent `agent.json`、公共或 Agent 提示词、人格文件、`runtime.env`、管理员凭据、SQLite、NapCat 状态或其他 workspace 内容。扫描直接读取原始文件并限制为普通非符号链接、有效 UTF-8、最大 512 KiB；本地规则可清理 UTF-8 BOM、JSON 末尾逗号、已退役字段和白名单内缺失或无效的小型设置，其余语法、重复字段、根结构和受保护字段问题进入手动处理。
 
