@@ -14,6 +14,7 @@ import {
 } from "../messaging/incomingIdentity.js";
 
 export const MAX_RUNTIME_REPLY_FOLLOW_UP_SNAPSHOTS = 64;
+export const SYSTEM_CONFIG_NEUTRAL_CONFIRMATION_TEXT = "设置结果未确认，请重新查询当前设置";
 
 export interface EnvelopeV1<TType extends string, TPayload> {
   schemaVersion: 1;

@@ -18,6 +18,14 @@ import type {
 } from "./runtimeContracts.js";
 import { conversationRecordId } from "./messagingAttachmentHelpers.js";
 import type { RenderedPromptRequest } from "../../services/agent/promptSystem.js";
+import type { SessionTurnContext } from "../../services/sessions/sessionCoordinator.js";
+import type { OutboxRecord } from "../../services/sessions/sessionStore.js";
+import { readReplyGateSnapshot } from "../../services/orchestration/groupReplyPolicy.js";
+import {
+  SYSTEM_CONFIG_NEUTRAL_CONFIRMATION_TEXT,
+  type AssistantReplyOutboxPayload
+} from "../../packages/contracts/session/runtimeMessages.js";
+import { conversationReplyEnabled } from "./messagingAttachmentHelpers.js";
 
 interface SystemConfigReplyBinding {
   agentId: string;
@@ -46,6 +54,7 @@ export class SystemConfigReplyLifecycle {
   private heldHandle: SystemConfigHeldConfirmationHandle | undefined;
   private mutationPrepared = false;
   private discarded = false;
+  private protectCurrentReplyFromGateClosure = false;
 
   constructor(
     turn: SystemConfigTurn,
@@ -99,6 +108,7 @@ export class SystemConfigReplyLifecycle {
           }
           if (marksPrivateGateClosingConfirmation(draft, descriptor, this.binding)) {
             draft.payload.payload.deliverySemantics = "system_config_confirmation";
+            this.protectCurrentReplyFromGateClosure = true;
           }
           this.heldHandle = await heldPort.appendHeld(draft, { mutationFingerprint });
         }
@@ -143,6 +153,10 @@ export class SystemConfigReplyLifecycle {
   suppressesOrdinaryFailureReply() {
     return this.mutationPrepared || this.appendStarted || this.toolPort.turnRejected();
   }
+
+  protectsCurrentPrivateReplyFromGateClosure() {
+    return this.protectCurrentReplyFromGateClosure;
+  }
 }
 
 export function createSystemConfigReplyLifecycle(
@@ -167,6 +181,174 @@ export function createSystemConfigReplyLifecycle(
   return new SystemConfigReplyLifecycle(turn, binding);
 }
 
+export function createSystemConfigHeldConfirmationPort(
+  host: Pick<SunaRuntime, "replyGates">,
+  appendHeldOutbox: SessionTurnContext["appendHeldOutbox"] | undefined
+): ReplyDelivery["systemConfigHeld"] {
+  if (!appendHeldOutbox) return undefined;
+  return {
+    appendHeld: async (draft, options) => {
+      const payload = decodeHeldConfirmationPayload(draft);
+      const conversationId = conversationRecordId(payload.incoming);
+      const originalReplyGate = readReplyGateSnapshot(
+        payload.replyGate,
+        payload.incoming.scope,
+        conversationId
+      );
+      if (!originalReplyGate) {
+        throw lifecycleError("配置确认缺少可信回复门禁快照。");
+      }
+      const releasePolicy = payload.deliverySemantics === "system_config_confirmation"
+        ? "private_scope_plus_one" as const
+        : "unchanged" as const;
+      const handle = await appendHeldOutbox(draft, {
+        mutationFingerprint: options.mutationFingerprint,
+        semantics: "system_config_confirmation",
+        originalReplyGate,
+        releasePolicy
+      });
+      const currentGate = () => host.replyGates.capture(
+        originalReplyGate.scope,
+        originalReplyGate.conversationId
+      );
+      return {
+        release: async () => { await handle.release(currentGate()); },
+        neutralizeAndRelease: async () => { await handle.neutralizeAndRelease(currentGate()); }
+      };
+    }
+  };
+}
+
+export function validateHeldSystemConfigConfirmation(
+  host: SunaRuntime,
+  outbox: OutboxRecord,
+  payload: AssistantReplyOutboxPayload,
+  checkCurrent: boolean,
+  signal: AbortSignal
+) {
+  if (!outbox.holdState || outbox.holdState === "none") return undefined;
+  if (outbox.holdState === "held") {
+    throw new Error(`Held outbox ${outbox.id} cannot be delivered before release.`);
+  }
+  const hold = outbox.holdProvenance;
+  const release = outbox.releaseProvenance;
+  if (!hold || !release || !outbox.mutationFingerprint ||
+    hold.semantics !== "system_config_confirmation" ||
+    release.outcome !== outbox.holdState) {
+    throw new Error(`Held outbox ${outbox.id} provenance is invalid.`);
+  }
+  validateHeldOutboxLineage(host, outbox);
+  const conversationId = conversationRecordId(payload.incoming);
+  if (
+    payload.incoming.transport === "web" ||
+    payload.incoming.scope !== "private" ||
+    payload.incoming.groupId != null ||
+    payload.isAdmin !== true ||
+    !host.isAdminUser(payload.incoming.userId) ||
+    payload.messageOrigin !== "text" ||
+    payload.toolNames?.length !== 1 ||
+    payload.toolNames[0] !== SYSTEM_CONFIG_TOOL_NAME ||
+    hold.originalReplyGate.scope !== "private" ||
+    hold.originalReplyGate.conversationId !== conversationId ||
+    outbox.sessionId !== conversationId ||
+    outbox.deliveryPartition !== (payload.incoming.accountId ?? "primary") ||
+    !sameReplyGateSnapshot(payload.replyGate, hold.originalReplyGate)
+  ) {
+    throw new Error(`Held outbox ${outbox.id} confirmation shape is invalid.`);
+  }
+  const closingPrivateGate = hold.releasePolicy === "private_scope_plus_one";
+  if (outbox.holdState === "released") {
+    if (closingPrivateGate !== (payload.deliverySemantics === "system_config_confirmation") ||
+      !validHeldReleaseTransition(hold.originalReplyGate, release.replyGate, closingPrivateGate, false)) {
+      throw new Error(`Held outbox ${outbox.id} release provenance is invalid.`);
+    }
+  } else if (
+    payload.deliverySemantics !== undefined ||
+    payload.text !== SYSTEM_CONFIG_NEUTRAL_CONFIRMATION_TEXT ||
+    payload.generatedImages.length !== 0 ||
+    !validHeldReleaseTransition(hold.originalReplyGate, release.replyGate, closingPrivateGate, true)
+  ) {
+    throw new Error(`Held outbox ${outbox.id} fallback provenance is invalid.`);
+  }
+  if (!checkCurrent) return { current: true };
+  if (signal.aborted) return { current: false };
+  const currentGate = host.replyGates.capture("private", conversationId);
+  const gateCurrent = currentGate.generation === release.replyGate.generation
+    ? sameReplyGateSnapshot(currentGate, release.replyGate)
+    : currentGate.scopeEpoch === 0 && currentGate.conversationEpoch === 0;
+  if (!gateCurrent) return { current: false };
+  const record = host.conversationRecords.get(conversationId);
+  if (!record || !conversationReplyEnabled(record)) return { current: false };
+  if (closingPrivateGate) return { current: true };
+  return { current: host.isReplyTaskCurrent(payload.incoming, release.replyGate, signal) };
+}
+
+export function sameCanonicalOutbox(canonical: OutboxRecord, claimed: OutboxRecord) {
+  return canonical.id === claimed.id && canonical.sessionId === claimed.sessionId &&
+    canonical.sequence === claimed.sequence && canonical.originTurnId === claimed.originTurnId &&
+    canonical.kind === claimed.kind && canonical.dedupeKey === claimed.dedupeKey &&
+    canonical.deliveryPartition === claimed.deliveryPartition &&
+    canonical.partitionSequence === claimed.partitionSequence && canonical.status === claimed.status &&
+    canonical.holdState === (claimed.holdState ?? "none") &&
+    canonical.mutationFingerprint === claimed.mutationFingerprint &&
+    JSON.stringify(canonical.payload) === JSON.stringify(claimed.payload) &&
+    JSON.stringify(canonical.holdProvenance) === JSON.stringify(claimed.holdProvenance) &&
+    JSON.stringify(canonical.releaseProvenance) === JSON.stringify(claimed.releaseProvenance);
+}
+
+function validHeldReleaseTransition(
+  original: NonNullable<OutboxRecord["holdProvenance"]>["originalReplyGate"],
+  release: NonNullable<OutboxRecord["releaseProvenance"]>["replyGate"],
+  closingPrivateGate: boolean,
+  fallback: boolean
+) {
+  if (original.scope !== release.scope || original.conversationId !== release.conversationId) return false;
+  if (original.generation !== release.generation) {
+    return fallback && release.scopeEpoch === 0 && release.conversationEpoch === 0;
+  }
+  if (original.conversationEpoch !== release.conversationEpoch) return false;
+  if (!closingPrivateGate) return original.scopeEpoch === release.scopeEpoch;
+  return release.scopeEpoch === original.scopeEpoch + 1 ||
+    (fallback && release.scopeEpoch === original.scopeEpoch);
+}
+
+function validateHeldOutboxLineage(host: SunaRuntime, outbox: OutboxRecord) {
+  const lineage = outbox.holdProvenance?.lineage ?? [];
+  if (lineage.length === 0) {
+    const turn = host.sessionStore.getTurn(outbox.originTurnId);
+    if (!turn || !outbox.dedupeKey?.startsWith(`turn-outbox:${turn.eventId}:`)) {
+      throw new Error(`Held outbox ${outbox.id} origin ordinal is invalid.`);
+    }
+  } else {
+    const source = lineage.at(-1)!;
+    if (outbox.dedupeKey !== `outbox-replay:${source.outboxId}:${source.mutationFingerprint}`) {
+      throw new Error(`Held outbox ${outbox.id} replay dedupe key is invalid.`);
+    }
+  }
+  for (const [index, entry] of lineage.entries()) {
+    const source = host.sessionStore.getOutbox(entry.outboxId);
+    if (!source || source.status !== "delivery_unknown" || source.uncertainSettleStep ||
+      source.sessionId !== outbox.sessionId || source.originTurnId !== outbox.originTurnId ||
+      source.kind !== outbox.kind || source.deliveryPartition !== outbox.deliveryPartition ||
+      source.mutationFingerprint !== entry.mutationFingerprint ||
+      source.holdState !== entry.holdState ||
+      JSON.stringify(source.payload) !== JSON.stringify(outbox.payload) ||
+      JSON.stringify(source.releaseProvenance) !== JSON.stringify(outbox.releaseProvenance) ||
+      JSON.stringify(source.holdProvenance?.lineage) !== JSON.stringify(lineage.slice(0, index))) {
+      throw new Error(`Held outbox ${outbox.id} replay lineage is invalid.`);
+    }
+  }
+}
+
+function sameReplyGateSnapshot(
+  left: AssistantReplyOutboxPayload["replyGate"],
+  right: NonNullable<AssistantReplyOutboxPayload["replyGate"]>
+) {
+  return left?.generation === right.generation && left.scope === right.scope &&
+    left.conversationId === right.conversationId && left.scopeEpoch === right.scopeEpoch &&
+    left.conversationEpoch === right.conversationEpoch;
+}
+
 export async function sendSystemConfigAwareFinalReply(
   host: SunaRuntime,
   input: SystemConfigFinalReplyInput
@@ -188,7 +370,13 @@ export async function sendSystemConfigAwareFinalReply(
       { messageOrigin: input.messageOrigin, toolNames: [...input.toolNames] },
       prepared?.timing ?? "buffered"
     );
+    if (prepared?.timing === "immediate" && input.lifecycle?.protectsCurrentPrivateReplyFromGateClosure()) {
+      host.activeDirectControllers.delete(input.channelKey);
+    }
     await input.lifecycle?.commitAndRelease();
+    if (prepared?.timing === "immediate" && input.delivery) {
+      input.delivery.terminalStatus = "replied";
+    }
     if (record) host.scheduleMemoryCompression(record);
     return Boolean(record);
   } catch (error) {
@@ -247,6 +435,13 @@ function marksPrivateGateClosingConfirmation(
     payload.text.trim().length > 0 &&
     payload.toolNames?.length === 1 &&
     payload.toolNames[0] === SYSTEM_CONFIG_TOOL_NAME;
+}
+
+function decodeHeldConfirmationPayload(draft: ReplyDeliveryDraft) {
+  if (draft.kind !== "onebot.reply") {
+    throw lifecycleError("配置确认投递类型无效。");
+  }
+  return draft.payload.payload;
 }
 
 class SystemConfigReplyLifecycleError extends Error {

@@ -7,6 +7,7 @@ import { SessionActorTaskTimeoutError } from "./sessionActor.js";
 import {
   type ClaimedTurn,
   type EnqueueSessionEventInput,
+  type HeldOutboxReplyGateResolver,
   type OutboxDraft,
   SessionStore
 } from "./sessionStore.js";
@@ -47,6 +48,7 @@ interface SessionTurnResultCoordinatorOptions {
   scheduleOutbox: () => void;
   scheduleTools: () => void;
   serializeError: (error: unknown) => unknown;
+  resolveHeldReplyGate?: HeldOutboxReplyGateResolver;
 }
 
 export class SessionTurnResultCoordinator {
@@ -75,7 +77,8 @@ export class SessionTurnResultCoordinator {
           arguments: result.arguments
         },
         acknowledgement: result.acknowledgement,
-        result: result.result
+        result: result.result,
+        resolveHeldReplyGate: this.options.resolveHeldReplyGate
       });
       state.finalized = true;
       this.options.scheduleOutbox();
@@ -89,7 +92,8 @@ export class SessionTurnResultCoordinator {
       outcome: result.status === "completed" ? "replied" : result.status,
       result: result.result,
       error: result.status === "failed" ? result.error : undefined,
-      outbox: result.outbox
+      outbox: result.outbox,
+      resolveHeldReplyGate: this.options.resolveHeldReplyGate
     });
     state.finalized = true;
     this.options.scheduleOutbox();
@@ -101,9 +105,11 @@ export class SessionTurnResultCoordinator {
       turnId: claim.turn.id,
       workerId: this.options.workerId,
       outcome: signal.aborted ? "timed_out" : "failed",
-      error: this.options.serializeError(error)
+      error: this.options.serializeError(error),
+      resolveHeldReplyGate: this.options.resolveHeldReplyGate
     });
     state.finalized = true;
+    this.options.scheduleOutbox();
   }
 
   failActorTask(claim: ClaimedTurn, state: ClaimState, error: unknown) {
@@ -114,8 +120,10 @@ export class SessionTurnResultCoordinator {
         turnId: claim.turn.id,
         workerId: this.options.workerId,
         outcome: error instanceof SessionActorTaskTimeoutError ? "timed_out" : "failed",
-        error: this.options.serializeError(error)
+        error: this.options.serializeError(error),
+        resolveHeldReplyGate: this.options.resolveHeldReplyGate
       });
+      this.options.scheduleOutbox();
     } catch {
       // A late handler may have committed between the actor timeout and here.
     }
@@ -132,7 +140,8 @@ export class SessionTurnResultCoordinator {
         workerId: this.options.workerId,
         targetEvent: result.targetEvent,
         expectedSourceAvailableAt: result.expectedSourceAvailableAt,
-        result: result.result
+        result: result.result,
+        resolveHeldReplyGate: this.options.resolveHeldReplyGate
       });
       state.finalized = true;
     } catch (error) {
@@ -149,7 +158,8 @@ export class SessionTurnResultCoordinator {
         error: {
           code: "handoff_failed",
           cause: this.options.serializeError(error)
-        }
+        },
+        resolveHeldReplyGate: this.options.resolveHeldReplyGate
       });
       state.finalized = true;
     } catch {

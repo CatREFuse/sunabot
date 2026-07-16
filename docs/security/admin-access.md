@@ -20,7 +20,9 @@ AI 建议只在进程内保存 10 分钟并绑定原始文件 SHA-256 revision�
 
 `system_config` 由宿主按会话注入，只允许当前 Agent 的管理员 QQ 私聊修改配置；群聊、普通私聊、prompt override 和 Web Chat 修改均失败关闭，Web Chat 只允许查询。查询响应使用固定白名单投影，不能包含密钥、环境变量名、绝对路径、原始消息、Provider 地址或探针诊断正文。Bash backend 仅是配置偏好，不能绕过 capability 探针；macOS Native 缺少 bubblewrap 或等价强隔离时保持关闭，Docker backend 不能使用 Docker socket 或宿主 Bash fallback。
 
-修改在模型回合中暂存，只有绑定当前管理员、完整会话与规范化 mutation 的 held confirmation 成功写入 durable outbox 后才提交。特殊 delivery 语义由宿主生成并在实际投递时重新验证管理员与纯文本唯一工具 trace，模型参数、普通正文、图片、deferred 和外部 API payload 均不能设置。commit 失败只能释放固定中性通知；任何原子更新失败都保持 held，防止尚未生效的设置以成功文案外发。
+修改在模型回合中暂存，只有绑定当前管理员、完整会话与规范化 mutation 的 held confirmation 成功写入 durable outbox 后才提交。特殊 delivery 语义由宿主生成并在实际投递时重新验证管理员与纯文本唯一工具 trace，模型参数、普通正文、图片、deferred 和外部 API payload 均不能设置。投递必须读取 store 中可信的 `released`/`fallback_released` provenance 与 mutation fingerprint；仅有 payload marker 或普通 outbox 状态不能获得旁路。commit 失败只能原子释放固定中性通知；任何更新失败都保持原成功文案 held 且不可 claim。
+
+release provenance 绑定 append 时的 ReplyGate 与提交后的当前 ReplyGate。同一 runtime generation 中，只允许 private scope epoch 因关闭当前私聊回复恰好增加 1，conversation epoch 必须不变；其他设置要求两个 epoch 都不变。跨 generation 恢复只接受新 runtime 当前 private scope/conversation epoch 为 0/0；不匹配时遗留 held 继续不可 claim，旧 released 记录也拒绝投递。启动恢复、turn 完成、失败和 deferred 交接都必须终结 origin turn/event，不能再次执行未知 mutation；人工 replay 只保留最多 8 层可信 released/fallback lineage，普通 marker、未释放 held 或 provenance 漂移不能升格。
 
 ## 外网访问要求
 

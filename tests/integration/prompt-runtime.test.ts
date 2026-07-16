@@ -101,7 +101,8 @@ describe("workspace prompt runtime", () => {
       "generate_img",
       "selfie",
       "memory_recall",
-      "codex"
+      "codex",
+      "system_config"
     ]);
     expect(rendered.tools?.every((tool) => tool.function.description.trim().length > 0)).toBe(true);
     for (const name of ["generate_img", "selfie", "codex"]) {

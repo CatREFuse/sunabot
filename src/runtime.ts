@@ -226,6 +226,14 @@ export class SunaRuntime {
         }),
         turnTimeoutMs: DIRECT_REPLY_TIMEOUT_MS + 5_000,
         maxSessionConcurrency: 4,
+        resolveHeldReplyGate: (outbox) => {
+          const provenance = outbox.holdProvenance;
+          if (provenance?.semantics !== "system_config_confirmation") return undefined;
+          return this.replyGates.capture(
+            provenance.originalReplyGate.scope,
+            provenance.originalReplyGate.conversationId
+          );
+        },
         isDisconnectedError: (error) => error instanceof OutboxDisconnectedError ||
           /OneBot is not connected|websocket.*closed/i.test(errorMessage(error))
       });

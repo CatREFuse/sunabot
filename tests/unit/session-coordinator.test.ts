@@ -3,6 +3,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  assistantReplyEnvelope,
+  decodeAssistantReply,
+  SYSTEM_CONFIG_NEUTRAL_CONFIRMATION_TEXT,
+  type ReplyGateSnapshotV1
+} from "../../packages/contracts/session/runtimeMessages.js";
 import type { CodexRunner, CodexToolResult } from "../../adapters/codex/codexTool.js";
 import {
   OutboxDisconnectedError,
@@ -1600,6 +1606,228 @@ describe("SessionCoordinator", () => {
     expect(deliveries).toEqual(["dispatch started", "callback complete"]);
     expect(store.listToolJobs("private:dispatch-before-worker")[0]).toMatchObject({ status: "succeeded" });
   });
+
+  it("exposes a held turn port that releases before delivery and shares the turn ordinal", async () => {
+    const store = trackStore(new SessionStore({ databasePath: ":memory:", clock: () => 1_000 }));
+    const gate = coordinatorHeldGate();
+    let currentGate = gate;
+    const delivered: Array<{ text: string; holdState: string }> = [];
+    const coordinator = trackCoordinator(createCoordinator({
+      store,
+      resolveHeldReplyGate: () => currentGate,
+      handleEvent: async (event, context) => {
+        const held = await context.appendHeldOutbox(
+          coordinatorHeldDraft(gate, "private_scope_plus_one"),
+          coordinatorHeldOptions(gate, "private_scope_plus_one")
+        );
+        expect(store.claimNextOutbox({ workerId: "must-remain-held" })).toBeNull();
+        currentGate = { ...gate, scopeEpoch: gate.scopeEpoch + 1 };
+        await held.release(currentGate);
+        await context.emitOutbox({
+          kind: "audit",
+          deliveryPartition: "audit",
+          dedupeFingerprint: "audit-fingerprint",
+          payload: { text: "ordinal two" }
+        });
+        return { status: "completed", result: { eventId: event.id } };
+      },
+      deliverOutbox: (outbox) => {
+        const text = outbox.kind === "onebot.reply"
+          ? decodeAssistantReply(outbox.payload).text
+          : (outbox.payload as { text: string }).text;
+        delivered.push({ text, holdState: outbox.holdState });
+      }
+    }));
+
+    coordinator.resume();
+    coordinator.enqueueEvent({ sessionId: "private:held-port", kind: "incoming", payload: {} });
+    await coordinator.waitForIdle();
+
+    const outbox = store.listOutbox("private:held-port");
+    expect(outbox[0]?.dedupeKey).toMatch(/:1:reply-fingerprint$/u);
+    expect(outbox[1]?.dedupeKey).toMatch(/:2:audit-fingerprint$/u);
+    expect(outbox[0]).toMatchObject({ holdState: "released", status: "sent" });
+    expect(outbox[1]).toMatchObject({ holdState: "none", status: "sent" });
+    expect(delivered).toEqual([
+      { text: "设置已经保存。", holdState: "released" },
+      { text: "ordinal two", holdState: "none" }
+    ]);
+  });
+
+  it("preserves and schedules a released confirmation when the release response is lost", async () => {
+    const store = trackStore(new SessionStore({ databasePath: ":memory:", clock: () => 1_000 }));
+    const gate = coordinatorHeldGate();
+    const releaseGate = { ...gate, scopeEpoch: gate.scopeEpoch + 1 };
+    const delivered: string[] = [];
+    let originRuns = 0;
+    const coordinator = trackCoordinator(createCoordinator({
+      store,
+      resolveHeldReplyGate: () => releaseGate,
+      handleEvent: async (_event, context) => {
+        originRuns += 1;
+        const held = await context.appendHeldOutbox(
+          coordinatorHeldDraft(gate, "private_scope_plus_one"),
+          coordinatorHeldOptions(gate, "private_scope_plus_one")
+        );
+        await held.release(releaseGate);
+        throw new Error("release response was lost");
+      },
+      deliverOutbox: (outbox) => delivered.push(decodeAssistantReply(outbox.payload).text)
+    }));
+
+    coordinator.resume();
+    const event = coordinator.enqueueEvent({
+      sessionId: gate.conversationId,
+      kind: "incoming",
+      payload: {}
+    }).event;
+    await coordinator.waitForIdle();
+
+    expect(originRuns).toBe(1);
+    expect(store.getEvent(event.id)).toMatchObject({ status: "completed", attempts: 1 });
+    expect(store.listTurns(gate.conversationId)).toEqual([
+      expect.objectContaining({ status: "replied", error: undefined })
+    ]);
+    expect(store.listOutbox(gate.conversationId)[0]).toMatchObject({
+      holdState: "released",
+      status: "sent",
+      releaseProvenance: { replyGate: releaseGate }
+    });
+    expect(delivered).toEqual(["设置已经保存。"]);
+  });
+
+  it("atomically falls back and schedules an unreleased confirmation when the turn finishes", async () => {
+    const store = trackStore(new SessionStore({ databasePath: ":memory:", clock: () => 1_000 }));
+    const gate = coordinatorHeldGate();
+    const delivered: string[] = [];
+    let originRuns = 0;
+    const coordinator = trackCoordinator(createCoordinator({
+      store,
+      resolveHeldReplyGate: () => gate,
+      handleEvent: async (_event, context) => {
+        originRuns += 1;
+        await context.appendHeldOutbox(
+          coordinatorHeldDraft(gate, "private_scope_plus_one"),
+          coordinatorHeldOptions(gate, "private_scope_plus_one")
+        );
+        return { status: "completed", result: { handled: true } };
+      },
+      deliverOutbox: (outbox) => delivered.push(decodeAssistantReply(outbox.payload).text)
+    }));
+
+    coordinator.resume();
+    const event = coordinator.enqueueEvent({
+      sessionId: gate.conversationId,
+      kind: "incoming",
+      payload: {}
+    }).event;
+    await coordinator.waitForIdle();
+
+    expect(originRuns).toBe(1);
+    expect(store.getEvent(event.id)).toMatchObject({ status: "completed", attempts: 1 });
+    expect(store.listTurns(gate.conversationId)[0]).toMatchObject({ status: "replied", attempt: 1 });
+    expect(store.listOutbox(gate.conversationId)[0]).toMatchObject({
+      holdState: "fallback_released",
+      status: "sent"
+    });
+    expect(delivered).toEqual([SYSTEM_CONFIG_NEUTRAL_CONFIRMATION_TEXT]);
+  });
+
+  it("atomically falls back an unreleased held confirmation when the turn fails", async () => {
+    const store = trackStore(new SessionStore({ databasePath: ":memory:", clock: () => 1_000 }));
+    const gate = coordinatorHeldGate();
+    let currentGate = gate;
+    const delivered: string[] = [];
+    const coordinator = trackCoordinator(createCoordinator({
+      store,
+      resolveHeldReplyGate: () => currentGate,
+      handleEvent: async (_event, context) => {
+        await context.appendHeldOutbox(
+          coordinatorHeldDraft(gate, "private_scope_plus_one"),
+          coordinatorHeldOptions(gate, "private_scope_plus_one")
+        );
+        currentGate = { ...gate, scopeEpoch: gate.scopeEpoch + 1 };
+        throw new Error("handler failed before release");
+      },
+      deliverOutbox: (outbox) => delivered.push(decodeAssistantReply(outbox.payload).text)
+    }));
+
+    coordinator.resume();
+    const event = coordinator.enqueueEvent({
+      sessionId: "private:held-failure",
+      kind: "incoming",
+      payload: {}
+    }).event;
+    await coordinator.waitForIdle();
+
+    expect(store.getEvent(event.id)).toMatchObject({ status: "completed", attempts: 1 });
+    expect(store.listTurns("private:held-failure")).toEqual([
+      expect.objectContaining({ status: "failed", attempt: 1 })
+    ]);
+    expect(store.listOutbox("private:held-failure")[0]).toMatchObject({
+      holdState: "fallback_released",
+      status: "sent",
+      releaseProvenance: { replyGate: currentGate }
+    });
+    expect(delivered).toEqual([SYSTEM_CONFIG_NEUTRAL_CONFIRMATION_TEXT]);
+  });
+
+  it("atomically falls back and schedules held delivery when a turn defers", async () => {
+    const store = trackStore(new SessionStore({ databasePath: ":memory:", clock: () => 1_000 }));
+    const gate = coordinatorHeldGate();
+    const delivered: string[] = [];
+    let originRuns = 0;
+    const coordinator = trackCoordinator(createCoordinator({
+      store,
+      resolveHeldReplyGate: () => gate,
+      handleEvent: async (event, context) => {
+        if (event.kind === "tool_completion") return { status: "no_reply" };
+        originRuns += 1;
+        await context.appendHeldOutbox(
+          coordinatorHeldDraft(gate, "private_scope_plus_one"),
+          coordinatorHeldOptions(gate, "private_scope_plus_one")
+        );
+        return {
+          status: "deferred",
+          providerCallId: "held-defer-call",
+          toolName: "codex",
+          arguments: { task: "complete later", kind: "analysis" },
+          originalRequest: event.payload,
+          acknowledgement: {
+            kind: "ack",
+            deliveryPartition: "primary",
+            payload: { text: "任务已经开始。" }
+          }
+        } satisfies SessionHandleResult;
+      },
+      deliverOutbox: (outbox) => {
+        delivered.push(outbox.kind === "onebot.reply"
+          ? decodeAssistantReply(outbox.payload).text
+          : String((outbox.payload as { text: string }).text));
+      }
+    }));
+
+    coordinator.resume();
+    const event = coordinator.enqueueEvent({
+      sessionId: gate.conversationId,
+      kind: "incoming",
+      payload: { text: "defer safely" }
+    }).event;
+    await coordinator.waitForIdle();
+
+    expect(originRuns).toBe(1);
+    expect(store.getEvent(event.id)).toMatchObject({ status: "completed", attempts: 1 });
+    expect(store.listTurns(gate.conversationId).find((turn) => turn.eventId === event.id))
+      .toMatchObject({ status: "deferred", attempt: 1 });
+    expect(store.listOutbox(gate.conversationId)).toEqual([
+      expect.objectContaining({ holdState: "fallback_released", status: "sent" }),
+      expect.objectContaining({ holdState: "none", status: "sent" })
+    ]);
+    expect(delivered).toEqual([
+      SYSTEM_CONFIG_NEUTRAL_CONFIRMATION_TEXT,
+      "任务已经开始。"
+    ]);
+  });
 });
 
 interface CoordinatorHarnessOptions {
@@ -1617,6 +1845,7 @@ interface CoordinatorHarnessOptions {
   cleanupCodexProcess?: ConstructorParameters<typeof SessionCoordinator>[0]["cleanupCodexProcess"];
   runDeferredTool?: ConstructorParameters<typeof SessionCoordinator>[0]["runDeferredTool"];
   observeCodexToolUsage?: ConstructorParameters<typeof SessionCoordinator>[0]["observeCodexToolUsage"];
+  resolveHeldReplyGate?: ConstructorParameters<typeof SessionCoordinator>[0]["resolveHeldReplyGate"];
 }
 
 function createCoordinator(options: CoordinatorHarnessOptions) {
@@ -1643,6 +1872,7 @@ function createCoordinator(options: CoordinatorHarnessOptions) {
     cleanupCodexProcess: options.cleanupCodexProcess,
     runDeferredTool: options.runDeferredTool,
     observeCodexToolUsage: options.observeCodexToolUsage,
+    resolveHeldReplyGate: options.resolveHeldReplyGate,
     leaseMs: 1_000
   });
 }
@@ -1695,4 +1925,72 @@ async function waitUntil(predicate: () => boolean, timeoutMs = 2_000) {
     if (Date.now() >= deadline) throw new Error("Condition was not met before timeout.");
     await new Promise<void>((resolve) => setTimeout(resolve, 2));
   }
+}
+
+const COORDINATOR_MUTATION_FINGERPRINT = `sha256:${"c".repeat(64)}`;
+
+function coordinatorHeldGate(): ReplyGateSnapshotV1 {
+  return {
+    generation: "coordinator-held-generation",
+    scope: "private",
+    conversationId: "private:171419991",
+    scopeEpoch: 2,
+    conversationEpoch: 3
+  };
+}
+
+function coordinatorHeldOptions(
+  originalReplyGate: ReplyGateSnapshotV1,
+  releasePolicy: "unchanged" | "private_scope_plus_one"
+) {
+  return {
+    mutationFingerprint: COORDINATOR_MUTATION_FINGERPRINT,
+    semantics: "system_config_confirmation" as const,
+    originalReplyGate,
+    releasePolicy
+  };
+}
+
+function coordinatorHeldDraft(
+  replyGate: ReplyGateSnapshotV1,
+  releasePolicy: "unchanged" | "private_scope_plus_one"
+) {
+  return {
+    kind: "onebot.reply" as const,
+    deliveryPartition: "primary",
+    dedupeFingerprint: "reply-fingerprint",
+    payload: assistantReplyEnvelope({
+      type: "assistant_reply",
+      incoming: {
+        schemaVersion: 1,
+        transport: "onebot",
+        agentId: "plana",
+        accountId: "primary",
+        scope: "private",
+        messageId: 6001,
+        time: "2026-07-17T00:00:00.000Z",
+        userId: 171419991,
+        selfId: 20002,
+        sender: { id: "171419991" },
+        text: "关闭私聊回复",
+        media: [],
+        attachments: [],
+        replyMessageIds: [],
+        quoteReferences: [],
+        mentionedSelf: false
+      },
+      text: "设置已经保存。",
+      generatedImages: [],
+      isAdmin: true,
+      messageOrigin: "text",
+      toolNames: ["system_config"],
+      ...(releasePolicy === "private_scope_plus_one"
+        ? { deliverySemantics: "system_config_confirmation" as const }
+        : {}),
+      replyGate
+    }, {
+      conversationId: replyGate.conversationId,
+      correlationId: "coordinator-held-run"
+    })
+  };
 }

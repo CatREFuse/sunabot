@@ -16,8 +16,16 @@ import {
 } from "./outboxSettleStore.js";
 import {
   migrateOutboxSchemaV3 as migrateOutboxDeliverySchema,
-  migrateOutboxSchemaV4 as migrateOutboxSettleSchema
+  migrateOutboxSchemaV4 as migrateOutboxSettleSchema,
+  migrateOutboxSchemaV5 as migrateOutboxHeldSchema
 } from "./outboxSchemaMigration.js";
+import {
+  decodeHeldOutboxMetadata,
+  releaseHeldOutbox as persistHeldOutboxRelease,
+  releaseHeldOutboxInTransaction,
+  type HeldOutboxInsertMetadata,
+  type HeldOutboxStoreBackend
+} from "./sessionHeldOutboxStore.js";
 import { SessionToolJobStore } from "./sessionToolJobStore.js";
 import {
   integerTimestamp,
@@ -31,9 +39,11 @@ import {
 import type {
   ClaimOptions,
   FinishOutboxInput,
+  HeldOutboxReplyGateResolver,
   OutboxDraft,
   OutboxRecord,
   OutboxStatus,
+  ReleaseHeldOutboxInput,
   ResolveUnknownSettleInput,
   SqlRow,
   TurnRecord
@@ -55,6 +65,7 @@ export abstract class SessionOutboxStore extends SessionToolJobStore {
         FROM outbox o
         JOIN sessions s ON s.session_id = o.session_id
         WHERE o.delivery_state IN ('pending', 'sent_remote')
+          AND o.hold_state IN ('none', 'released', 'fallback_released')
           AND o.available_at <= ?
           AND o.sequence = s.completed_outbox_sequence + 1
           AND NOT EXISTS (
@@ -180,6 +191,17 @@ export abstract class SessionOutboxStore extends SessionToolJobStore {
 
   resolveUnknownSettle(input: ResolveUnknownSettleInput) {
     return persistUnknownSettleResolution(this.outboxSettleBackend(), input);
+  }
+
+  releaseHeldOutbox(input: ReleaseHeldOutboxInput) { return persistHeldOutboxRelease(this.heldOutboxBackend(), input, "released"); }
+  neutralizeAndReleaseHeldOutbox(input: ReleaseHeldOutboxInput) { return persistHeldOutboxRelease(this.heldOutboxBackend(), input, "fallback_released"); }
+  private heldOutboxBackend(): HeldOutboxStoreBackend {
+    return {
+      database: this.database,
+      now: () => this.now(),
+      transaction: (operation) => this.transaction(operation),
+      requireOutbox: (id) => this.requireOutbox(id)
+    };
   }
 
   private outboxSettleBackend(): OutboxSettleStoreBackend {
@@ -317,7 +339,12 @@ export abstract class SessionOutboxStore extends SessionToolJobStore {
     `);
   }
 
-  protected insertOutbox(turn: TurnRecord, draft: OutboxDraft, now: number) {
+  protected insertOutbox(
+    turn: TurnRecord,
+    draft: OutboxDraft,
+    now: number,
+    held?: HeldOutboxInsertMetadata
+  ) {
     const id = this.nextId();
     const sequence = this.allocateOutboxSequence(turn.sessionId, now);
     const kind = requiredText(draft.kind, "outbox.kind");
@@ -338,8 +365,9 @@ export abstract class SessionOutboxStore extends SessionToolJobStore {
       INSERT INTO outbox (
         id, session_id, sequence, origin_turn_id, kind, dedupe_key,
         payload_json, status, delivery_partition, partition_sequence, delivery_state,
-        attempts, settle_attempts, available_at, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, 'pending', 0, 0, ?, ?)
+        attempts, settle_attempts, available_at, created_at,
+        hold_state, mutation_fingerprint, hold_provenance_json, release_provenance_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, 'pending', 0, 0, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       turn.sessionId,
@@ -351,7 +379,11 @@ export abstract class SessionOutboxStore extends SessionToolJobStore {
       deliveryPartition,
       partitionSequence,
       integerTimestamp(draft.availableAt, now, "outbox.availableAt"),
-      now
+      now,
+      held?.holdState ?? "none",
+      held?.mutationFingerprint ?? null,
+      held?.holdProvenanceJson ?? null,
+      held?.releaseProvenanceJson ?? null
     );
     return this.requireOutbox(id);
   }
@@ -366,6 +398,28 @@ export abstract class SessionOutboxStore extends SessionToolJobStore {
     return (this.database.prepare(`
       SELECT * FROM outbox WHERE origin_turn_id = ? ORDER BY sequence
     `).all(turnId) as SqlRow[]).map(mapOutbox);
+  }
+
+  protected neutralizeHeldOutboxForTurnInTransaction(
+    turnId: string,
+    resolveReplyGate: HeldOutboxReplyGateResolver | undefined
+  ) {
+    const held = this.listOutboxForTurn(turnId).filter((outbox) => outbox.holdState === "held");
+    if (held.length > 0 && !resolveReplyGate) {
+      throw new Error(`Turn ${turnId} has held outbox without a reply gate resolver.`);
+    }
+    for (const outbox of held) {
+      const replyGate = resolveReplyGate!(outbox);
+      if (!replyGate) {
+        throw new Error(`Held outbox ${outbox.id} reply gate is unavailable.`);
+      }
+      releaseHeldOutboxInTransaction(this.heldOutboxBackend(), {
+        outboxId: outbox.id,
+        mutationFingerprint: outbox.mutationFingerprint!,
+        replyGate
+      }, "fallback_released");
+    }
+    return held.length;
   }
 
   protected recoverOutboxLeases(all: boolean, now: number) {
@@ -434,12 +488,40 @@ export abstract class SessionOutboxStore extends SessionToolJobStore {
     return recovered;
   }
 
+  protected recoverTerminalHeldOutbox(resolveReplyGate?: HeldOutboxReplyGateResolver) {
+    const rows = this.database.prepare(`
+      SELECT o.*
+      FROM outbox o
+      JOIN turns t ON t.id = o.origin_turn_id
+      WHERE o.hold_state = 'held' AND t.status != 'running'
+      ORDER BY o.created_at, o.id
+    `).all() as SqlRow[];
+    if (rows.length > 0 && !resolveReplyGate) {
+      throw new Error("Terminal turn has held outbox without a reply gate resolver.");
+    }
+    for (const row of rows) {
+      const outbox = mapOutbox(row);
+      const replyGate = resolveReplyGate!(outbox);
+      if (!replyGate) throw new Error(`Held outbox ${outbox.id} reply gate is unavailable.`);
+      releaseHeldOutboxInTransaction(this.heldOutboxBackend(), {
+        outboxId: outbox.id,
+        mutationFingerprint: outbox.mutationFingerprint!,
+        replyGate
+      }, "fallback_released");
+    }
+    return rows.length;
+  }
+
   protected migrateOutboxSchemaV3() {
     migrateOutboxDeliverySchema(this.database, this.now());
   }
 
   protected migrateOutboxSchemaV4() {
     migrateOutboxSettleSchema(this.database);
+  }
+
+  protected migrateOutboxSchemaV5() {
+    migrateOutboxHeldSchema(this.database);
   }
 
   private advanceOutboxCursor(outbox: OutboxRecord, now: number) {
@@ -468,6 +550,7 @@ export abstract class SessionOutboxStore extends SessionToolJobStore {
 
 function mapOutbox(row: SqlRow): OutboxRecord {
   const delivery = decodeOutboxDelivery(row.result_json, row.error_json);
+  const held = decodeHeldOutboxMetadata(row);
   return {
     id: String(row.id),
     sessionId: String(row.session_id),
@@ -489,6 +572,7 @@ function mapOutbox(row: SqlRow): OutboxRecord {
     remoteReceipt: decodeOutboxRemoteReceipt(row.remote_receipt_json),
     completedSettleSteps: decodeOutboxSettleProgress(row.settle_steps_json),
     uncertainSettleStep: nullableString(row.settle_started_step),
+    ...held,
     createdAt: numberValue(row.created_at),
     transportStartedAt: nullableNumber(row.transport_started_at),
     remoteSentAt: nullableNumber(row.remote_sent_at),

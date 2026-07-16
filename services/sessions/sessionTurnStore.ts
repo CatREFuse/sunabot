@@ -4,6 +4,10 @@ import {
 } from "../../packages/contracts/session/durableQueue.js";
 import { SessionOutboxStore } from "./sessionOutboxStore.js";
 import {
+  appendHeldTurnOutbox as persistHeldTurnOutbox,
+  replayUnknownOutbox as persistUnknownOutboxReplay
+} from "./sessionHeldOutboxStore.js";
+import {
   integerTimestamp,
   nullableNumber,
   nullableString,
@@ -15,6 +19,7 @@ import {
 import type {
   AppendTurnOutboxInput,
   AppendTurnOutboxResult,
+  AppendHeldTurnOutboxInput,
   ClaimedTurn,
   ClaimOptions,
   DeferTurnInput,
@@ -23,8 +28,10 @@ import type {
   FinishTurnResult,
   HandoffTurnInput,
   HandoffTurnResult,
+  HeldOutboxReplyGateResolver,
   InterruptTurnInput,
   InterruptTurnResult,
+  OutboxRecord,
   ReplayUnknownOutboxInput,
   SessionEventRecord,
   SqlRow,
@@ -34,26 +41,15 @@ import type {
 
 export abstract class SessionTurnStore extends SessionOutboxStore {
   replayUnknownOutbox(input: ReplayUnknownOutboxInput) {
-    if (input.confirmedNotSent !== true) {
-      throw new Error("confirmedNotSent must be true before replaying delivery_unknown.");
-    }
-    const now = this.now();
-    return this.transaction(() => {
-      const outbox = this.requireOutbox(requiredText(input.outboxId, "outboxId"));
-      if (outbox.status !== "delivery_unknown") {
-        throw new Error(`Outbox ${outbox.id} is ${outbox.status}, not delivery_unknown.`);
-      }
-      if (outbox.uncertainSettleStep) {
-        throw new Error(`Outbox ${outbox.id} has an unknown settle effect and cannot be replayed.`);
-      }
-      return this.insertOutbox(this.requireTurn(outbox.originTurnId), {
-        kind: outbox.kind,
-        payload: outbox.payload,
-        deliveryPartition: outbox.deliveryPartition
-      }, now);
-    });
+    return persistUnknownOutboxReplay({
+      database: this.database,
+      now: () => this.now(),
+      transaction: (operation) => this.transaction(operation),
+      requireOutbox: (id) => this.requireOutbox(id),
+      requireTurn: (id) => this.requireTurn(id),
+      insertOutbox: (turn, draft, now, held) => this.insertOutbox(turn, draft, now, held)
+    }, input);
   }
-
   claimNextTurn(options: ClaimOptions): ClaimedTurn | null {
     const workerId = requiredText(options.workerId, "workerId");
     const leaseMs = positiveInteger(options.leaseMs, this.defaultLeaseMs, "leaseMs");
@@ -100,7 +96,6 @@ export abstract class SessionTurnStore extends SessionOutboxStore {
       };
     });
   }
-
   renewTurnLease(turnId: string, workerId: string, leaseMs = this.defaultLeaseMs) {
     const now = this.now();
     const result = this.database.prepare(`
@@ -109,7 +104,6 @@ export abstract class SessionTurnStore extends SessionOutboxStore {
     `).run(now + positiveInteger(leaseMs, this.defaultLeaseMs, "leaseMs"), turnId, workerId);
     return Number(result.changes) === 1;
   }
-
   appendTurnOutbox(input: AppendTurnOutboxInput): AppendTurnOutboxResult {
     const turnId = requiredText(input.turnId, "turnId");
     const workerId = requiredText(input.workerId, "workerId");
@@ -156,13 +150,28 @@ export abstract class SessionTurnStore extends SessionOutboxStore {
     });
   }
 
+  appendHeldTurnOutbox(input: AppendHeldTurnOutboxInput): AppendTurnOutboxResult {
+    return persistHeldTurnOutbox({
+      database: this.database,
+      now: () => this.now(),
+      transaction: (operation) => this.transaction(operation),
+      requireOutbox: (id) => this.requireOutbox(id),
+      requireTurn: (id) => this.requireTurn(id),
+      requireEvent: (id) => this.requireEvent(id),
+      assertWorker: (actual, expected, label) => this.assertWorker(actual, expected, label),
+      assertHeadEvent: (event) => this.assertHeadEvent(event),
+      insertOutbox: (turn, draft, now, held) => this.insertOutbox(turn, draft, now, held)
+    }, input);
+  }
+
   finishTurn(input: FinishTurnInput): FinishTurnResult {
     const now = this.now();
     const outboxDrafts = input.outbox ?? [];
     return this.transaction(() => {
       const turn = this.requireTurn(input.turnId);
+      const completion = heldAwareTurnCompletion(input, this.listOutboxForTurn(turn.id));
       if (turn.status !== "running") {
-        if (turn.status === input.outcome) {
+        if (turn.status === completion.outcome) {
           return {
             turn,
             outbox: this.listOutboxForTurn(turn.id),
@@ -174,9 +183,10 @@ export abstract class SessionTurnStore extends SessionOutboxStore {
       this.assertWorker(turn.workerId, input.workerId, `turn ${turn.id}`);
       const event = this.requireEvent(turn.eventId);
       this.assertHeadEvent(event);
+      this.neutralizeHeldOutboxForTurnInTransaction(turn.id, input.resolveHeldReplyGate);
 
       const outbox = outboxDrafts.map((draft) => this.insertOutbox(turn, draft, now));
-      const encodedOutcome = encodeTurnOutcome(input.outcome, input.result, input.error, {
+      const encodedOutcome = encodeTurnOutcome(completion.outcome, input.result, completion.error, {
         id: turn.id,
         sessionId: turn.sessionId,
         occurredAt: now,
@@ -188,7 +198,7 @@ export abstract class SessionTurnStore extends SessionOutboxStore {
         SET status = ?, worker_id = NULL, lease_until = NULL,
             result_json = ?, error_json = NULL, finished_at = ?
         WHERE id = ? AND status = 'running'
-      `).run(input.outcome, encodedOutcome, now, turn.id);
+      `).run(completion.outcome, encodedOutcome, now, turn.id);
       this.completeEvent(event, now);
       return {
         turn: this.requireTurn(turn.id),
@@ -230,6 +240,7 @@ export abstract class SessionTurnStore extends SessionOutboxStore {
       this.assertWorker(turn.workerId, input.workerId, `turn ${turn.id}`);
       const sourceEvent = this.requireEvent(turn.eventId);
       this.assertHeadEvent(sourceEvent);
+      this.neutralizeHeldOutboxForTurnInTransaction(turn.id, input.resolveHeldReplyGate);
 
       if (
         sourceEvent.availableAt !== expectedSourceAvailableAt ||
@@ -302,6 +313,7 @@ export abstract class SessionTurnStore extends SessionOutboxStore {
       this.assertWorker(turn.workerId, input.workerId, `turn ${turn.id}`);
       const event = this.requireEvent(turn.eventId);
       this.assertHeadEvent(event);
+      this.neutralizeHeldOutboxForTurnInTransaction(turn.id, input.resolveHeldReplyGate);
       const interrupted = this.interruptRunningTurn(turn, event, now, input.error);
       return { ...interrupted, duplicate: false };
     });
@@ -329,6 +341,7 @@ export abstract class SessionTurnStore extends SessionOutboxStore {
       this.assertWorker(turn.workerId, input.workerId, `turn ${turn.id}`);
       const event = this.requireEvent(turn.eventId);
       this.assertHeadEvent(event);
+      this.neutralizeHeldOutboxForTurnInTransaction(turn.id, input.resolveHeldReplyGate);
 
       const jobId = optionalText(input.job.id) ?? this.nextId();
       const acknowledgement = this.insertOutbox(turn, input.acknowledgement, now);
@@ -414,7 +427,11 @@ export abstract class SessionTurnStore extends SessionOutboxStore {
     return value;
   }
 
-  protected recoverTurnLeases(all: boolean, now: number) {
+  protected recoverTurnLeases(
+    all: boolean,
+    now: number,
+    resolveHeldReplyGate?: HeldOutboxReplyGateResolver
+  ) {
     const rows = this.database.prepare(`
       SELECT * FROM turns
       WHERE status = 'running' AND (? = 1 OR lease_until IS NULL OR lease_until <= ?)
@@ -422,6 +439,42 @@ export abstract class SessionTurnStore extends SessionOutboxStore {
     `).all(all ? 1 : 0, now) as SqlRow[];
     for (const row of rows) {
       const turn = mapTurn(row);
+      const heldLifecycle = this.listOutboxForTurn(turn.id)
+        .filter((outbox) => outbox.holdState !== "none");
+      if (heldLifecycle.some((outbox) => outbox.holdState === "held")) {
+        if (!resolveHeldReplyGate) throw new Error(`Turn ${turn.id} has held outbox without a reply gate resolver.`);
+        this.neutralizeHeldOutboxForTurnInTransaction(turn.id, resolveHeldReplyGate);
+      }
+      if (heldLifecycle.length > 0) {
+        const event = this.requireEvent(turn.eventId);
+        this.assertHeadEvent(event);
+        const hasReleasedSuccess = this.listOutboxForTurn(turn.id)
+          .some((outbox) => outbox.holdState === "released");
+        const outcome = hasReleasedSuccess ? "replied" : "failed";
+        const encodedOutcome = encodeTurnOutcome(
+          outcome,
+          undefined,
+          hasReleasedSuccess ? undefined : {
+            code: "held_confirmation_recovered",
+            message: "Held confirmation was recovered as a neutral notification."
+          },
+          {
+            id: turn.id,
+            sessionId: turn.sessionId,
+            occurredAt: now,
+            correlationId: turn.id,
+            causationId: turn.eventId
+          }
+        );
+        this.database.prepare(`
+          UPDATE turns
+          SET status = ?, worker_id = NULL, lease_until = NULL,
+              result_json = ?, error_json = NULL, finished_at = ?
+          WHERE id = ? AND status = 'running'
+        `).run(outcome, encodedOutcome, now, turn.id);
+        this.completeEvent(event, now);
+        continue;
+      }
       const encodedOutcome = encodeTurnOutcome(
         "interrupted",
         undefined,
@@ -446,7 +499,7 @@ export abstract class SessionTurnStore extends SessionOutboxStore {
         WHERE id = ? AND status = 'running'
       `).run(now, turn.eventId);
     }
-    return rows.length;
+    return rows.filter((row) => this.getTurn(String(row.id))?.status !== "running").length;
   }
 
   private interruptRunningTurn(
@@ -484,6 +537,15 @@ export abstract class SessionTurnStore extends SessionOutboxStore {
       event: this.requireEvent(event.id)
     };
   }
+}
+
+function heldAwareTurnCompletion(
+  input: Pick<FinishTurnInput, "outcome" | "error">,
+  outbox: readonly Pick<OutboxRecord, "holdState">[]
+) {
+  return outbox.some((item) => item.holdState === "released")
+    ? { outcome: "replied" as const, error: undefined }
+    : { outcome: input.outcome, error: input.error };
 }
 
 function mapTurn(row: SqlRow): TurnRecord {

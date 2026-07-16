@@ -28,7 +28,6 @@ import {
   decodeToolCompletion,
   incomingReplyEnvelope,
   type AssistantReplyOutboxEnvelope,
-  type AssistantReplyOutboxPayload,
   type AsyncToolCompletionPayload,
   type ReplyQuoteSnapshotV1,
   type RuntimeIncomingReplyEventPayload
@@ -115,6 +114,11 @@ import { DEFAULT_CONTEXT_MESSAGE_LIMIT, MAX_STORED_CONVERSATION_MESSAGES, GROUP_
 import { attachmentSourcePort, conversationMessageAttachments, conversationRecordId, conversationReplyEnabled, incomingAttachmentReferenceScope, incomingConversationMessageId, isNumericMessageId, isRecentMessageForHydration, mergeAttachments, mergeConversationMessageDetails, persistentIncomingKey, queueIncomingSnapshot, replaceQuoteAttachments, uniqueAttachments, uniqueStrings } from "./messagingAttachmentHelpers.js";
 import { conversationLastText } from "./selfieHelpers.js";
 import { errorMessage, isAbortError, isRuntimeIncomingMessage, withAbortTimeout } from "./infrastructure.js";
+import {
+  createSystemConfigHeldConfirmationPort,
+  sameCanonicalOutbox,
+  validateHeldSystemConfigConfirmation
+} from "./systemConfigReply.js";
 
 import type { SunaRuntime } from "../runtime.js";
 type RuntimeHost = SunaRuntime;
@@ -394,7 +398,13 @@ export async function runtime_processSessionEvent(this: RuntimeHost,
           }
           timeoutIncoming = payload.incoming;
           timeoutReplyQuote = payload.replyQuote;
-          return this.processIncomingReplyEvent(event, payload, signal, turnContext.emitOutbox);
+          return this.processIncomingReplyEvent(
+            event,
+            payload,
+            signal,
+            turnContext.emitOutbox,
+            turnContext.appendHeldOutbox
+          );
         }
         if (event.kind === "tool_completion") {
           const payload = decodeToolCompletion(event.payload);
@@ -467,7 +477,8 @@ export async function runtime_processIncomingReplyEvent(this: RuntimeHost,
     event: SessionEventRecord,
     payload: RuntimeIncomingReplyEventPayload,
     signal: AbortSignal,
-    emitOutbox?: ReplyDelivery["emitOutbox"]
+    emitOutbox?: ReplyDelivery["emitOutbox"],
+    appendHeldOutbox?: SessionTurnContext["appendHeldOutbox"]
   ): Promise<SessionHandleResult> {
     const gateway = this.requireActiveGateway();
     const captureSequence = payload.captureSequence;
@@ -512,7 +523,8 @@ export async function runtime_processIncomingReplyEvent(this: RuntimeHost,
     const delivery: ReplyDelivery = {
       outbox: [],
       emitOutbox,
-      replyQuote: payload.replyQuote
+      replyQuote: payload.replyQuote,
+      systemConfigHeld: createSystemConfigHeldConfirmationPort(this, appendHeldOutbox)
     };
     let deferred: DeferredCodexTurn | undefined;
     await this.handleIncomingMessage(
@@ -557,6 +569,7 @@ export async function runtime_processIncomingReplyEvent(this: RuntimeHost,
     if (delivery.terminalStatus === "no_reply") {
       return { status: "no_reply", ...(delivery.outbox.length ? { outbox: delivery.outbox } : {}) };
     }
+    if (delivery.terminalStatus === "replied") return { status: "completed" };
     return delivery.outbox.length
       ? { status: "completed", outbox: delivery.outbox }
       : { status: "no_reply" };
@@ -566,9 +579,16 @@ export async function runtime_deliverSessionOutbox(
   outbox: OutboxRecord,
   delivery: OutboxDeliveryContext | AbortSignal
 ) {
-    const context = isOutboxDeliveryContext(delivery) ? delivery : undefined;
-    const signal = context?.signal ?? delivery as AbortSignal;
-    if (signal.aborted) throw signal.reason ?? new Error("Outbox delivery aborted.");
+  const context = isOutboxDeliveryContext(delivery) ? delivery : undefined;
+  const signal = context?.signal ?? delivery as AbortSignal;
+  if (signal.aborted) throw signal.reason ?? new Error("Outbox delivery aborted.");
+  if (context) {
+    const canonical = this.sessionStore.getOutbox(outbox.id);
+    if (!canonical || !sameCanonicalOutbox(canonical, outbox)) {
+      throw new Error(`Outbox ${outbox.id} canonical record changed before delivery.`);
+    }
+    outbox = canonical;
+  }
     if (outbox.kind === "onebot.poke") {
       const payload = decodeNoReplyPoke(outbox.payload);
       if (!isRuntimeIncomingMessage(payload.incoming)) {
@@ -643,11 +663,17 @@ export async function runtime_deliverSessionOutbox(
     const conversationId = conversationRecordId(payload.incoming);
     const gate = readReplyGateSnapshot(payload.replyGate, payload.incoming.scope, conversationId) ??
       this.replyGates.capture(payload.incoming.scope, conversationId);
-    const isSystemConfigConfirmation = isPrivateGateClosingSystemConfigConfirmation.call(this, payload);
+    const heldSystemConfig = validateHeldSystemConfigConfirmation(
+      this,
+      outbox,
+      payload,
+      context?.phase !== "settle",
+      signal
+    );
     if (
       context?.phase !== "settle" &&
-      (isSystemConfigConfirmation
-        ? !isHeldSystemConfigConfirmationCurrent.call(this, conversationId, signal)
+      (heldSystemConfig
+        ? !heldSystemConfig.current
         : !this.isReplyTaskCurrent(payload.incoming, gate, signal))
     ) {
       return { delivered: false, skipped: "reply_gate_closed" };
@@ -664,33 +690,6 @@ export async function runtime_deliverSessionOutbox(
 
 function isOutboxDeliveryContext(value: OutboxDeliveryContext | AbortSignal): value is OutboxDeliveryContext {
   return typeof (value as OutboxDeliveryContext).sendRemote === "function";
-}
-
-function isPrivateGateClosingSystemConfigConfirmation(
-  this: RuntimeHost,
-  payload: AssistantReplyOutboxPayload
-) {
-  return payload.deliverySemantics === "system_config_confirmation" &&
-    payload.incoming.transport !== "web" &&
-    payload.incoming.scope === "private" &&
-    payload.incoming.groupId == null &&
-    payload.isAdmin === true &&
-    this.isAdminUser(payload.incoming.userId) &&
-    payload.messageOrigin === "text" &&
-    payload.generatedImages.length === 0 &&
-    payload.text.trim().length > 0 &&
-    payload.toolNames?.length === 1 &&
-    payload.toolNames[0] === "system_config";
-}
-
-function isHeldSystemConfigConfirmationCurrent(
-  this: RuntimeHost,
-  conversationId: string,
-  signal: AbortSignal
-) {
-  if (signal.aborted) return false;
-  const record = this.conversationRecords.get(conversationId);
-  return Boolean(record && conversationReplyEnabled(record));
 }
 
 function isOutboxAccountConnected(gateway: MessagingPort, accountId?: string) {

@@ -1,24 +1,37 @@
 import { SessionTurnStore } from "./sessionTurnStore.js";
-import type { RecoveryResult, SessionStoreOptions } from "./sessionTypes.js";
+import type {
+  HeldOutboxReplyGateResolver,
+  RecoveryResult,
+  SessionStoreOptions
+} from "./sessionTypes.js";
 
 export * from "./sessionTypes.js";
 
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 
 export class SessionStore extends SessionTurnStore {
   constructor(options: SessionStoreOptions) {
     super(options);
     this.migrate();
-    if (options.recoverOnOpen === "expired") this.recoverExpiredLeases();
-    if (options.recoverOnOpen === "all") this.recoverAllLeases();
+    try {
+      if (options.recoverOnOpen === "expired") {
+        this.recoverExpiredLeases(options.resolveHeldReplyGate);
+      }
+      if (options.recoverOnOpen === "all") {
+        this.recoverAllLeases(options.resolveHeldReplyGate);
+      }
+    } catch (error) {
+      this.close();
+      throw error;
+    }
   }
 
-  recoverExpiredLeases(): RecoveryResult {
-    return this.recoverLeases(false);
+  recoverExpiredLeases(resolveHeldReplyGate?: HeldOutboxReplyGateResolver): RecoveryResult {
+    return this.recoverLeases(false, resolveHeldReplyGate);
   }
 
-  recoverAllLeases(): RecoveryResult {
-    return this.recoverLeases(true);
+  recoverAllLeases(resolveHeldReplyGate?: HeldOutboxReplyGateResolver): RecoveryResult {
+    return this.recoverLeases(true, resolveHeldReplyGate);
   }
 
   private migrate() {
@@ -55,14 +68,22 @@ export class SessionStore extends SessionTurnStore {
       this.migrateOutboxSchemaV4();
       this.recordSchemaMigration(4);
     });
+    currentVersion = Math.max(currentVersion, 4);
+
+    if (currentVersion < 5) this.transaction(() => {
+      this.migrateOutboxSchemaV5();
+      this.recordSchemaMigration(5);
+    });
   }
 
-  private recoverLeases(all: boolean): RecoveryResult {
+  private recoverLeases(all: boolean, resolveHeldReplyGate?: HeldOutboxReplyGateResolver): RecoveryResult {
     const now = this.now();
-    return this.transaction(() => ({
-      turns: this.recoverTurnLeases(all, now),
-      toolJobs: this.recoverToolJobLeases(all, now),
-      outbox: this.recoverOutboxLeases(all, now)
-    }));
+    return this.transaction(() => {
+      const turns = this.recoverTurnLeases(all, now, resolveHeldReplyGate);
+      const toolJobs = this.recoverToolJobLeases(all, now);
+      const outbox = this.recoverOutboxLeases(all, now) +
+        this.recoverTerminalHeldOutbox(resolveHeldReplyGate);
+      return { turns, toolJobs, outbox };
+    });
   }
 }

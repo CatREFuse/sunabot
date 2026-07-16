@@ -4,6 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  assistantReplyEnvelope,
+  decodeAssistantReply,
+  SYSTEM_CONFIG_NEUTRAL_CONFIRMATION_TEXT,
+  type ReplyGateSnapshotV1
+} from "../../packages/contracts/session/runtimeMessages.js";
 import { SessionStore } from "../../services/sessions/sessionStore.js";
 
 const stores: SessionStore[] = [];
@@ -231,6 +237,156 @@ describe("SessionStore", () => {
     expect(replay.id).not.toBe(sending.id);
   });
 
+  it("replays released held outbox with bounded trusted lineage and a stable dedupe key", async () => {
+    const { store } = await createHarness();
+    const gate = heldReplyGate();
+    const { turn, event } = createClaimedHeldTurn(store, "private:held-replay", "held-replay-turn");
+    const held = store.appendHeldTurnOutbox({
+      turnId: turn.id,
+      workerId: "held-replay-turn",
+      dedupeKey: `turn-outbox:${event.id}:1`,
+      draft: heldReplyDraft(gate, "unchanged"),
+      hold: heldOptions(gate, "unchanged")
+    }).outbox;
+    store.releaseHeldOutbox({
+      outboxId: held.id,
+      mutationFingerprint: TEST_MUTATION_FINGERPRINT,
+      replyGate: gate
+    });
+    store.finishTurn({
+      turnId: turn.id,
+      workerId: "held-replay-turn",
+      outcome: "replied"
+    });
+    quarantineOutbox(store, held.id, "held-replay-sender-0");
+
+    const firstReplay = store.replayUnknownOutbox({
+      outboxId: held.id,
+      confirmedNotSent: true
+    });
+    expect(firstReplay).toMatchObject({
+      holdState: "released",
+      mutationFingerprint: TEST_MUTATION_FINGERPRINT,
+      dedupeKey: `outbox-replay:${held.id}:${TEST_MUTATION_FINGERPRINT}`,
+      holdProvenance: {
+        lineage: [{
+          outboxId: held.id,
+          mutationFingerprint: TEST_MUTATION_FINGERPRINT,
+          holdState: "released"
+        }]
+      },
+      releaseProvenance: { outcome: "released", replyGate: gate }
+    });
+    expect(store.replayUnknownOutbox({
+      outboxId: held.id,
+      confirmedNotSent: true
+    })).toEqual(firstReplay);
+
+    let source = firstReplay;
+    for (let depth = 1; depth < 8; depth += 1) {
+      quarantineOutbox(store, source.id, `held-replay-sender-${depth}`);
+      source = store.replayUnknownOutbox({ outboxId: source.id, confirmedNotSent: true });
+      expect(source.holdProvenance?.lineage).toHaveLength(depth + 1);
+    }
+    quarantineOutbox(store, source.id, "held-replay-sender-limit");
+    expect(() => store.replayUnknownOutbox({
+      outboxId: source.id,
+      confirmedNotSent: true
+    })).toThrow("lineage exceeds its maximum depth");
+  });
+
+  it("does not upgrade ordinary markers, replay held rows, or accept a cross-session replay collision", async () => {
+    const { store } = await createHarness();
+    const gate = heldReplyGate();
+    const ordinaryClaim = createClaimedHeldTurn(
+      store,
+      "private:ordinary-marker-replay",
+      "ordinary-marker-turn"
+    );
+    const markerDraft = heldReplyDraft(gate, "private_scope_plus_one");
+    const ordinary = store.finishTurn({
+      turnId: ordinaryClaim.turn.id,
+      workerId: "ordinary-marker-turn",
+      outcome: "replied",
+      outbox: [{ ...markerDraft, deliveryPartition: "ordinary-marker" }]
+    }).outbox[0]!;
+    quarantineOutbox(store, ordinary.id, "ordinary-marker-sender");
+    const ordinaryReplay = store.replayUnknownOutbox({
+      outboxId: ordinary.id,
+      confirmedNotSent: true
+    });
+    expect(ordinaryReplay).toMatchObject({ holdState: "none" });
+    expect(ordinaryReplay.mutationFingerprint).toBeUndefined();
+
+    const heldClaim = createClaimedHeldTurn(store, "private:held-no-replay", "held-no-replay-turn");
+    const stillHeld = store.appendHeldTurnOutbox({
+      turnId: heldClaim.turn.id,
+      workerId: "held-no-replay-turn",
+      dedupeKey: `turn-outbox:${heldClaim.event.id}:1`,
+      draft: heldReplyDraft(gate, "unchanged"),
+      hold: heldOptions(gate, "unchanged")
+    }).outbox;
+    const database = (store as unknown as { database: DatabaseSync }).database;
+    database.prepare(`
+      UPDATE outbox
+      SET status = 'unknown', delivery_state = 'delivery_unknown', finished_at = 1000
+      WHERE id = ?
+    `).run(stillHeld.id);
+    expect(() => store.replayUnknownOutbox({
+      outboxId: stillHeld.id,
+      confirmedNotSent: true
+    })).toThrow("cannot be replayed before release");
+
+    const sourceClaim = createClaimedHeldTurn(
+      store,
+      "private:held-global-collision-source",
+      "held-global-source-turn"
+    );
+    const source = store.appendHeldTurnOutbox({
+      turnId: sourceClaim.turn.id,
+      workerId: "held-global-source-turn",
+      dedupeKey: `turn-outbox:${sourceClaim.event.id}:1`,
+      draft: heldReplyDraft(gate, "unchanged"),
+      hold: heldOptions(gate, "unchanged")
+    }).outbox;
+    store.releaseHeldOutbox({
+      outboxId: source.id,
+      mutationFingerprint: TEST_MUTATION_FINGERPRINT,
+      replyGate: gate
+    });
+    store.finishTurn({
+      turnId: sourceClaim.turn.id,
+      workerId: "held-global-source-turn",
+      outcome: "replied"
+    });
+    quarantineOutbox(store, source.id, "held-global-source-sender");
+
+    const collisionClaim = createClaimedHeldTurn(
+      store,
+      "private:held-global-collision-foreign",
+      "held-global-foreign-turn"
+    );
+    store.finishTurn({
+      turnId: collisionClaim.turn.id,
+      workerId: "held-global-foreign-turn",
+      outcome: "replied",
+      outbox: [{
+        kind: "reply",
+        deliveryPartition: "foreign-partition",
+        dedupeKey: `outbox-replay:${source.id}:${TEST_MUTATION_FINGERPRINT}`,
+        payload: { text: "foreign collision" }
+      }]
+    });
+    const countBefore = store.listOutbox("private:held-global-collision-source").length +
+      store.listOutbox("private:held-global-collision-foreign").length;
+    expect(() => store.replayUnknownOutbox({
+      outboxId: source.id,
+      confirmedNotSent: true
+    })).toThrow("conflicts with its original row");
+    expect(store.listOutbox("private:held-global-collision-source").length +
+      store.listOutbox("private:held-global-collision-foreign").length).toBe(countBefore);
+  });
+
   it("migrates an existing v1 database with attempt fencing columns", async () => {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-session-v1-"));
     temporaryDirectories.push(directory);
@@ -263,10 +419,18 @@ describe("SessionStore", () => {
     const version = inspection.prepare("SELECT MAX(version) AS version FROM schema_migrations").get() as unknown as {
       version: number;
     };
+    const outboxColumns = inspection.prepare("PRAGMA table_info(outbox)").all()
+      .map((row) => String((row as { name: unknown }).name));
     inspection.close();
 
     expect(columns).toEqual(expect.arrayContaining(["attempt_token", "process_identity_json"]));
-    expect(version.version).toBe(4);
+    expect(outboxColumns).toEqual(expect.arrayContaining([
+      "hold_state",
+      "mutation_fingerprint",
+      "hold_provenance_json",
+      "release_provenance_json"
+    ]));
+    expect(version.version).toBe(5);
   });
 
   it("migrates v2 outbox rows into stable OneBot and Web delivery partitions", async () => {
@@ -389,7 +553,8 @@ describe("SessionStore", () => {
     expect(migrated.getOutbox("onebot")).toMatchObject({
       deliveryPartition: "account-secondary",
       partitionSequence: 1,
-      status: "delivery_unknown"
+      status: "delivery_unknown",
+      holdState: "none"
     });
     expect(migrated.getOutbox("web")).toMatchObject({
       deliveryPartition: "web",
@@ -1192,6 +1357,381 @@ describe("SessionStore", () => {
     })).toThrow(`belongs to event ${firstEvent.event.id}`);
   });
 
+  it("inserts held outbox directly and blocks its Session and delivery partition FIFO", async () => {
+    const { store } = await createHarness();
+    const gate = heldReplyGate();
+    store.enqueueEvent({ sessionId: "private:held", kind: "incoming", payload: {} });
+    const heldTurn = store.claimNextTurn({ workerId: "held-turn", sessionId: "private:held" })!;
+    const database = (store as unknown as { database: DatabaseSync }).database;
+    const appendInput = {
+      turnId: heldTurn.turn.id,
+      workerId: "held-turn",
+      dedupeKey: `turn-outbox:${heldTurn.event.id}:1`,
+      draft: heldReplyDraft(gate, "private_scope_plus_one"),
+      hold: heldOptions(gate, "private_scope_plus_one")
+    };
+    database.exec(`
+      CREATE TRIGGER inject_held_insert_failure
+      BEFORE INSERT ON outbox
+      WHEN NEW.hold_state = 'held'
+      BEGIN
+        SELECT RAISE(ABORT, 'injected held insert failure');
+      END;
+    `);
+    expect(() => store.appendHeldTurnOutbox(appendInput)).toThrow("injected held insert failure");
+    expect(store.listOutbox("private:held")).toEqual([]);
+    expect(store.getSessionState("private:held")?.nextOutboxSequence).toBe(0);
+    database.exec("DROP TRIGGER inject_held_insert_failure");
+    database.exec(`
+      CREATE TRIGGER reject_two_phase_hold
+      BEFORE UPDATE OF hold_state ON outbox
+      WHEN NEW.hold_state = 'held'
+      BEGIN
+        SELECT RAISE(ABORT, 'held must be inserted directly');
+      END;
+    `);
+
+    const held = store.appendHeldTurnOutbox(appendInput);
+    expect(held).toMatchObject({
+      inserted: true,
+      outbox: {
+        holdState: "held",
+        mutationFingerprint: TEST_MUTATION_FINGERPRINT,
+        status: "pending",
+        holdProvenance: {
+          schemaVersion: 1,
+          releasePolicy: "private_scope_plus_one",
+          originalReplyGate: gate,
+          lineage: []
+        }
+      }
+    });
+    expect(held.outbox.releaseProvenance).toBeUndefined();
+    expect(store.appendHeldTurnOutbox({
+      turnId: heldTurn.turn.id,
+      workerId: "held-turn",
+      dedupeKey: `turn-outbox:${heldTurn.event.id}:1`,
+      draft: heldReplyDraft(gate, "private_scope_plus_one"),
+      hold: heldOptions(gate, "private_scope_plus_one")
+    })).toEqual({ outbox: held.outbox, inserted: false });
+    expect(store.claimNextOutbox({ workerId: "blocked", sessionId: "private:held" })).toBeNull();
+
+    store.enqueueEvent({ sessionId: "private:same-partition", kind: "incoming", payload: {} });
+    const samePartitionTurn = store.claimNextTurn({
+      workerId: "same-partition-turn",
+      sessionId: "private:same-partition"
+    })!;
+    store.finishTurn({
+      turnId: samePartitionTurn.turn.id,
+      workerId: "same-partition-turn",
+      outcome: "replied",
+      outbox: [{ kind: "reply", deliveryPartition: "primary", payload: { text: "behind held" } }]
+    });
+    expect(store.claimNextOutbox({
+      workerId: "partition-blocked",
+      sessionId: "private:same-partition"
+    })).toBeNull();
+
+    store.enqueueEvent({ sessionId: "private:other-partition", kind: "incoming", payload: {} });
+    const otherTurn = store.claimNextTurn({
+      workerId: "other-turn",
+      sessionId: "private:other-partition"
+    })!;
+    store.finishTurn({
+      turnId: otherTurn.turn.id,
+      workerId: "other-turn",
+      outcome: "replied",
+      outbox: [{ kind: "reply", deliveryPartition: "secondary", payload: { text: "independent" } }]
+    });
+    expect(store.claimNextOutbox({ workerId: "other-sender" })).toMatchObject({
+      sessionId: "private:other-partition",
+      deliveryPartition: "secondary"
+    });
+
+    expect(() => store.appendHeldTurnOutbox({
+      turnId: heldTurn.turn.id,
+      workerId: "held-turn",
+      dedupeKey: `turn-outbox:${heldTurn.event.id}:1`,
+      draft: heldReplyDraft(gate, "private_scope_plus_one"),
+      hold: {
+        ...heldOptions(gate, "private_scope_plus_one"),
+        mutationFingerprint: `sha256:${"b".repeat(64)}`
+      }
+    })).toThrow("mutation fingerprint changed");
+  });
+
+  it("releases held outbox only for the recorded gate transition and stays idempotent", async () => {
+    const { store } = await createHarness();
+    const gate = heldReplyGate();
+    const { turn, event } = createClaimedHeldTurn(store, "private:release", "release-turn");
+    const held = store.appendHeldTurnOutbox({
+      turnId: turn.id,
+      workerId: "release-turn",
+      dedupeKey: `turn-outbox:${event.id}:1`,
+      draft: heldReplyDraft(gate, "private_scope_plus_one"),
+      hold: heldOptions(gate, "private_scope_plus_one")
+    }).outbox;
+
+    expect(() => store.releaseHeldOutbox({
+      outboxId: held.id,
+      mutationFingerprint: TEST_MUTATION_FINGERPRINT,
+      replyGate: { ...gate, scopeEpoch: gate.scopeEpoch + 2 }
+    })).toThrow("release gate");
+    expect(() => store.releaseHeldOutbox({
+      outboxId: held.id,
+      mutationFingerprint: TEST_MUTATION_FINGERPRINT,
+      replyGate: { ...gate, generation: "other-generation", scopeEpoch: 0, conversationEpoch: 0 }
+    })).toThrow("generation changed");
+    expect(() => store.neutralizeAndReleaseHeldOutbox({
+      outboxId: held.id,
+      mutationFingerprint: TEST_MUTATION_FINGERPRINT,
+      replyGate: { ...gate, generation: "other-generation", scopeEpoch: 0, conversationEpoch: 1 }
+    })).toThrow("generation changed");
+    expect(store.getOutbox(held.id)).toMatchObject({ holdState: "held" });
+
+    const releaseGate = { ...gate, scopeEpoch: gate.scopeEpoch + 1 };
+    const database = (store as unknown as { database: DatabaseSync }).database;
+    database.exec(`
+      CREATE TRIGGER inject_release_failure
+      BEFORE UPDATE OF hold_state ON outbox
+      WHEN NEW.hold_state = 'released'
+      BEGIN
+        SELECT RAISE(ABORT, 'injected release failure');
+      END;
+    `);
+    expect(() => store.releaseHeldOutbox({
+      outboxId: held.id,
+      mutationFingerprint: TEST_MUTATION_FINGERPRINT,
+      replyGate: releaseGate
+    })).toThrow("injected release failure");
+    expect(store.getOutbox(held.id)).toMatchObject({ holdState: "held" });
+    expect(store.getOutbox(held.id)?.releaseProvenance).toBeUndefined();
+    database.exec("DROP TRIGGER inject_release_failure");
+    const released = store.releaseHeldOutbox({
+      outboxId: held.id,
+      mutationFingerprint: TEST_MUTATION_FINGERPRINT,
+      replyGate: releaseGate
+    });
+    expect(released).toMatchObject({
+      holdState: "released",
+      releaseProvenance: {
+        schemaVersion: 1,
+        outcome: "released",
+        replyGate: releaseGate,
+        releasedAt: 1_000
+      }
+    });
+    expect(store.releaseHeldOutbox({
+      outboxId: held.id,
+      mutationFingerprint: TEST_MUTATION_FINGERPRINT,
+      replyGate: releaseGate
+    })).toEqual(released);
+    expect(() => store.releaseHeldOutbox({
+      outboxId: held.id,
+      mutationFingerprint: TEST_MUTATION_FINGERPRINT,
+      replyGate: { ...releaseGate, conversationEpoch: 1 }
+    })).toThrow("release provenance changed");
+    expect(store.claimNextOutbox({ workerId: "released-sender" })).toMatchObject({
+      id: held.id,
+      holdState: "released"
+    });
+  });
+
+  it("atomically neutralizes a held confirmation and leaves the success payload unreachable on failure", async () => {
+    const { store } = await createHarness();
+    const gate = heldReplyGate();
+    const { turn, event } = createClaimedHeldTurn(store, "private:fallback", "fallback-turn");
+    const held = store.appendHeldTurnOutbox({
+      turnId: turn.id,
+      workerId: "fallback-turn",
+      dedupeKey: `turn-outbox:${event.id}:1`,
+      draft: heldReplyDraft(gate, "unchanged"),
+      hold: heldOptions(gate, "unchanged")
+    }).outbox;
+    const database = (store as unknown as { database: DatabaseSync }).database;
+    database.exec(`
+      CREATE TRIGGER inject_neutralize_failure
+      BEFORE UPDATE OF hold_state ON outbox
+      WHEN NEW.hold_state = 'fallback_released'
+      BEGIN
+        SELECT RAISE(ABORT, 'injected neutralize failure');
+      END;
+    `);
+    expect(() => store.neutralizeAndReleaseHeldOutbox({
+      outboxId: held.id,
+      mutationFingerprint: TEST_MUTATION_FINGERPRINT,
+      replyGate: gate
+    })).toThrow("injected neutralize failure");
+    expect(store.getOutbox(held.id)).toMatchObject({ holdState: "held" });
+    expect(store.getOutbox(held.id)?.releaseProvenance).toBeUndefined();
+    expect(decodeAssistantReply(store.getOutbox(held.id)!.payload)).toMatchObject({
+      text: "设置已经保存。",
+      generatedImages: [{ url: "https://example.invalid/success.png" }]
+    });
+
+    database.exec("DROP TRIGGER inject_neutralize_failure");
+    const fallback = store.neutralizeAndReleaseHeldOutbox({
+      outboxId: held.id,
+      mutationFingerprint: TEST_MUTATION_FINGERPRINT,
+      replyGate: gate
+    });
+    expect(fallback).toMatchObject({
+      holdState: "fallback_released",
+      releaseProvenance: { outcome: "fallback_released", replyGate: gate }
+    });
+    expect(decodeAssistantReply(fallback.payload)).toMatchObject({
+      text: SYSTEM_CONFIG_NEUTRAL_CONFIRMATION_TEXT,
+      generatedImages: [],
+      messageOrigin: "text",
+      toolNames: ["system_config"]
+    });
+    expect(decodeAssistantReply(fallback.payload).deliverySemantics).toBeUndefined();
+    expect(store.neutralizeAndReleaseHeldOutbox({
+      outboxId: held.id,
+      mutationFingerprint: TEST_MUTATION_FINGERPRINT,
+      replyGate: gate
+    })).toEqual(fallback);
+  });
+
+  it("rejects non-canonical held provenance even when the stored JSON is valid", async () => {
+    const { store } = await createHarness();
+    const gate = heldReplyGate();
+    const { turn, event } = createClaimedHeldTurn(store, "private:strict-held", "strict-held-turn");
+    const held = store.appendHeldTurnOutbox({
+      turnId: turn.id,
+      workerId: "strict-held-turn",
+      dedupeKey: `turn-outbox:${event.id}:1`,
+      draft: heldReplyDraft(gate, "unchanged"),
+      hold: heldOptions(gate, "unchanged")
+    }).outbox;
+    const database = (store as unknown as { database: DatabaseSync }).database;
+    database.prepare(`
+      UPDATE outbox
+      SET hold_provenance_json = json_set(hold_provenance_json, '$.unexpected', 1)
+      WHERE id = ?
+    `).run(held.id);
+    expect(() => store.getOutbox(held.id)).toThrow("hold provenance fields are invalid");
+    expect(() => database.prepare(`
+      UPDATE outbox SET mutation_fingerprint = 'sha256:bad' WHERE id = ?
+    `).run(held.id)).toThrow();
+    expect(() => database.prepare(`
+      UPDATE outbox SET mutation_fingerprint = ? WHERE id = ?
+    `).run(`sha256:${"z".repeat(64)}`, held.id)).toThrow();
+  });
+
+  it("neutralizes held outbox in the same transaction that finishes its origin turn", async () => {
+    const { store } = await createHarness();
+    const gate = heldReplyGate();
+    const { turn, event } = createClaimedHeldTurn(store, "private:finish-held", "finish-held-turn");
+    const held = store.appendHeldTurnOutbox({
+      turnId: turn.id,
+      workerId: "finish-held-turn",
+      dedupeKey: `turn-outbox:${event.id}:1`,
+      draft: heldReplyDraft(gate, "private_scope_plus_one"),
+      hold: heldOptions(gate, "private_scope_plus_one")
+    }).outbox;
+    const database = (store as unknown as { database: DatabaseSync }).database;
+    database.exec(`
+      CREATE TRIGGER inject_finish_held_failure
+      BEFORE UPDATE OF hold_state ON outbox
+      WHEN NEW.hold_state = 'fallback_released'
+      BEGIN
+        SELECT RAISE(ABORT, 'injected finish held failure');
+      END;
+    `);
+    const finishInput = {
+      turnId: turn.id,
+      workerId: "finish-held-turn",
+      outcome: "failed" as const,
+      error: { code: "handler_failed" },
+      resolveHeldReplyGate: () => gate
+    };
+    expect(() => store.finishTurn(finishInput)).toThrow("injected finish held failure");
+    expect(store.getTurn(turn.id)).toMatchObject({ status: "running" });
+    expect(store.getEvent(event.id)).toMatchObject({ status: "running" });
+    expect(store.getOutbox(held.id)).toMatchObject({ holdState: "held" });
+
+    database.exec("DROP TRIGGER inject_finish_held_failure");
+    expect(store.finishTurn(finishInput)).toMatchObject({
+      turn: { status: "failed" },
+      duplicate: false
+    });
+    expect(store.getEvent(event.id)).toMatchObject({ status: "completed" });
+    expect(store.getOutbox(held.id)).toMatchObject({
+      holdState: "fallback_released",
+      releaseProvenance: { replyGate: gate }
+    });
+  });
+
+  it("recovers held and released unfinished turns without rerunning their origin events", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-held-v5-recovery-"));
+    temporaryDirectories.push(directory);
+    const databasePath = path.join(directory, "sessions.sqlite");
+    let id = 0;
+    const before = new SessionStore({
+      databasePath,
+      idFactory: () => `held-recovery-${++id}`,
+      clock: () => 1_000
+    });
+    storeForCleanup(before);
+    const gate = heldReplyGate();
+    const heldClaim = createClaimedHeldTurn(before, "private:recover-held", "recover-held-turn");
+    const held = before.appendHeldTurnOutbox({
+      turnId: heldClaim.turn.id,
+      workerId: "recover-held-turn",
+      dedupeKey: `turn-outbox:${heldClaim.event.id}:1`,
+      draft: heldReplyDraft(gate, "private_scope_plus_one"),
+      hold: heldOptions(gate, "private_scope_plus_one")
+    }).outbox;
+    const releasedClaim = createClaimedHeldTurn(before, "private:recover-released", "recover-released-turn");
+    const releasedHeld = before.appendHeldTurnOutbox({
+      turnId: releasedClaim.turn.id,
+      workerId: "recover-released-turn",
+      dedupeKey: `turn-outbox:${releasedClaim.event.id}:1`,
+      draft: heldReplyDraft(gate, "unchanged"),
+      hold: heldOptions(gate, "unchanged")
+    }).outbox;
+    before.releaseHeldOutbox({
+      outboxId: releasedHeld.id,
+      mutationFingerprint: TEST_MUTATION_FINGERPRINT,
+      replyGate: gate
+    });
+    before.close();
+    stores.splice(stores.indexOf(before), 1);
+
+    const restartedGate = {
+      ...gate,
+      generation: "generation-after-restart",
+      scopeEpoch: 0,
+      conversationEpoch: 0
+    };
+    expect(() => new SessionStore({ databasePath, recoverOnOpen: "all" }))
+      .toThrow("held outbox without a reply gate resolver");
+    const after = new SessionStore({
+      databasePath,
+      recoverOnOpen: "all",
+      resolveHeldReplyGate: () => restartedGate
+    });
+    storeForCleanup(after);
+    expect(after.getTurn(heldClaim.turn.id)).toMatchObject({ status: "failed" });
+    expect(after.getEvent(heldClaim.event.id)).toMatchObject({ status: "completed" });
+    expect(after.getOutbox(held.id)).toMatchObject({
+      holdState: "fallback_released",
+      releaseProvenance: { replyGate: restartedGate }
+    });
+    expect(after.getTurn(releasedClaim.turn.id)).toMatchObject({ status: "replied" });
+    expect(after.getEvent(releasedClaim.event.id)).toMatchObject({ status: "completed" });
+    expect(after.recoverAllLeases(() => restartedGate)).toMatchObject({ turns: 0, outbox: 0 });
+    expect(after.claimNextTurn({
+      workerId: "must-not-rerun-held",
+      sessionId: "private:recover-held"
+    })).toBeNull();
+    expect(after.claimNextTurn({
+      workerId: "must-not-rerun-released",
+      sessionId: "private:recover-released"
+    })).toBeNull();
+  });
+
   it("atomically defers a turn into a queued tool job and acknowledgement", async () => {
     const { store } = await createHarness();
     const incoming = store.enqueueEvent({
@@ -1587,4 +2127,90 @@ function deliverPersistedOutbox(store: SessionStore, outboxId: string, workerId:
   const claimed = store.claimNextOutbox({ workerId, sessionId: outbox.sessionId })!;
   expect(claimed.id).toBe(outboxId);
   store.finishOutbox({ outboxId, workerId, outcome: "sent" });
+}
+
+function quarantineOutbox(store: SessionStore, outboxId: string, workerId: string) {
+  const outbox = store.getOutbox(outboxId)!;
+  const claimed = store.claimNextOutbox({ workerId, sessionId: outbox.sessionId })!;
+  expect(claimed.id).toBe(outboxId);
+  store.markOutboxTransportStarted(outboxId, workerId);
+  store.finishOutbox({
+    outboxId,
+    workerId,
+    outcome: "delivery_unknown",
+    error: { code: "confirmed_unknown_for_test" }
+  });
+}
+
+const TEST_MUTATION_FINGERPRINT = `sha256:${"a".repeat(64)}`;
+
+function heldReplyGate(): ReplyGateSnapshotV1 {
+  return {
+    generation: "generation-held-v5",
+    scope: "private",
+    conversationId: "private:10001",
+    scopeEpoch: 4,
+    conversationEpoch: 7
+  };
+}
+
+function heldOptions(
+  originalReplyGate: ReplyGateSnapshotV1,
+  releasePolicy: "unchanged" | "private_scope_plus_one"
+) {
+  return {
+    mutationFingerprint: TEST_MUTATION_FINGERPRINT,
+    semantics: "system_config_confirmation" as const,
+    originalReplyGate,
+    releasePolicy
+  };
+}
+
+function heldReplyDraft(
+  replyGate: ReplyGateSnapshotV1,
+  releasePolicy: "unchanged" | "private_scope_plus_one"
+) {
+  return {
+    kind: "onebot.reply" as const,
+    deliveryPartition: "primary",
+    dedupeFingerprint: "reply-fingerprint",
+    payload: assistantReplyEnvelope({
+      type: "assistant_reply",
+      incoming: {
+        schemaVersion: 1,
+        transport: "onebot",
+        agentId: "plana",
+        accountId: "primary",
+        scope: "private",
+        messageId: 9001,
+        time: "2026-07-17T00:00:00.000Z",
+        userId: 10001,
+        selfId: 20002,
+        sender: { id: "10001", displayName: "管理员" },
+        text: "关闭私聊回复",
+        media: [],
+        attachments: [],
+        replyMessageIds: [],
+        quoteReferences: [],
+        mentionedSelf: false
+      },
+      text: "设置已经保存。",
+      generatedImages: [{ url: "https://example.invalid/success.png" }],
+      isAdmin: true,
+      messageOrigin: "text",
+      toolNames: ["system_config"],
+      ...(releasePolicy === "private_scope_plus_one"
+        ? { deliverySemantics: "system_config_confirmation" as const }
+        : {}),
+      replyGate
+    }, {
+      conversationId: replyGate.conversationId,
+      correlationId: "log-held-v5"
+    })
+  };
+}
+
+function createClaimedHeldTurn(store: SessionStore, sessionId: string, workerId: string) {
+  store.enqueueEvent({ sessionId, kind: "incoming", payload: {} });
+  return store.claimNextTurn({ workerId, sessionId })!;
 }

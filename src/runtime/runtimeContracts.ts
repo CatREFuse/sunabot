@@ -113,6 +113,8 @@ import {
 } from "../../services/agent/promptSystem.js";
 import { buildConversationPromptVariables } from "../../services/agent/persona.js";
 
+export { SYSTEM_CONFIG_NEUTRAL_CONFIRMATION_TEXT } from "../../packages/contracts/session/runtimeMessages.js";
+
 export const DEFAULT_CONTEXT_MESSAGE_LIMIT = 48;
 export const MAX_STORED_CONVERSATION_MESSAGES = 2000;
 export const GROUP_CHAT_SUMMARY_WINDOW_MS = 6 * 60 * 60 * 1000;
@@ -228,7 +230,6 @@ export interface SystemConfigHeldConfirmationHandle {
   release(): Promise<void>;
   neutralizeAndRelease(): Promise<void>;
 }
-export const SYSTEM_CONFIG_NEUTRAL_CONFIRMATION_TEXT = "设置结果未确认，请重新查询当前设置";
 export interface SystemConfigHeldConfirmationPort {
   appendHeld(
     draft: ReplyDeliveryDraft,
@@ -240,7 +241,7 @@ export interface ReplyDelivery {
   emitOutbox?: (draft: ReplyDeliveryDraft | NoReplyPokeDeliveryDraft) => Promise<unknown>;
   replyQuote?: ReplyQuoteSnapshotV1;
   systemConfigHeld?: SystemConfigHeldConfirmationPort;
-  terminalStatus?: "no_reply";
+  terminalStatus?: "no_reply" | "replied";
 }
 export interface DeferredCodexTurn {
   deferred: ProviderDeferredTurn;

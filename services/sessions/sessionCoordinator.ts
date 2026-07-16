@@ -17,7 +17,11 @@ import {
   createSessionTurnServices,
   type SessionTurnServices
 } from "./sessionTurnServices.js";
-import { emitTurnOutbox } from "./turnOutboxEmitter.js";
+import {
+  emitTurnHeldOutbox,
+  emitTurnOutbox,
+  type TurnHeldOutboxHandle
+} from "./turnOutboxEmitter.js";
 import type {
   ClaimedToolTask,
   CodexCoordinatorSettings,
@@ -30,6 +34,8 @@ import {
   type ClaimedTurn,
   type EnqueueSessionEventInput,
   type EnqueueSessionEventResult,
+  type HeldOutboxAppendOptions,
+  type HeldOutboxReplyGateResolver,
   type OutboxDraft,
   type OutboxRecord,
   SessionStore,
@@ -56,6 +62,10 @@ export interface SessionTurnContext {
   signal: AbortSignal;
   turn: TurnRecord;
   emitOutbox(draft: OutboxDraft): Promise<OutboxRecord>;
+  appendHeldOutbox(
+    draft: OutboxDraft,
+    hold: HeldOutboxAppendOptions
+  ): Promise<TurnHeldOutboxHandle>;
 }
 
 export interface SessionCoordinatorOptions {
@@ -84,6 +94,7 @@ export interface SessionCoordinatorOptions {
   isDisconnectedError?: (error: unknown) => boolean;
   cleanupCodexProcess?: (identity: CodexProcessIdentity) => Promise<CodexProcessCleanupResult>;
   observeCodexToolUsage?: CodexToolUsageObserver;
+  resolveHeldReplyGate?: HeldOutboxReplyGateResolver;
 }
 
 export interface SessionCoordinatorIdleOptions {
@@ -137,6 +148,7 @@ export class SessionCoordinator {
   private readonly workerId: string;
   private readonly clock: () => number;
   private readonly disconnectedError: (error: unknown) => boolean;
+  private readonly resolveHeldReplyGate?: HeldOutboxReplyGateResolver;
   private readonly toolJobProcessor: SessionToolJobProcessor;
   private readonly turnServices: SessionTurnServices;
   private readonly turnActor: SessionActorScheduler<ClaimedTurnTask>;
@@ -183,6 +195,7 @@ export class SessionCoordinator {
     this.workerId = options.workerId?.trim() || `session-coordinator:${randomUUID()}`;
     this.clock = options.clock ?? Date.now;
     this.disconnectedError = options.isDisconnectedError ?? isDefaultDisconnectedError;
+    this.resolveHeldReplyGate = options.resolveHeldReplyGate;
     this.turnServices = createSessionTurnServices({
       store: this.store,
       workerId: this.workerId,
@@ -194,7 +207,8 @@ export class SessionCoordinator {
       scheduleTurns: () => this.scheduleTurns(),
       scheduleOutbox: () => this.scheduleOutbox(),
       scheduleTools: () => this.scheduleTools(),
-      serializeError
+      serializeError,
+      resolveHeldReplyGate: this.resolveHeldReplyGate
     });
     this.toolJobProcessor = new SessionToolJobProcessor({
       store: this.store,
@@ -313,7 +327,7 @@ export class SessionCoordinator {
     this.started = true;
     // The bot is single-owner. Reclaiming every lease gives immediate restart
     // recovery instead of waiting for an old process lease to expire.
-    this.store.recoverAllLeases();
+    this.store.recoverAllLeases(this.resolveHeldReplyGate);
   }
 
   private scheduleAll() {
@@ -351,7 +365,19 @@ export class SessionCoordinator {
       const emitOutbox = (draft: OutboxDraft) => emitTurnOutbox(
         this.store, claim, this.workerId, ++outboxOrdinal, draft,
         () => this.assertClaimUsable(state, signal), () => this.scheduleOutbox());
-      const result = await this.handleEvent(claim.event, { signal, turn: claim.turn, emitOutbox });
+      const appendHeldOutbox = (draft: OutboxDraft, hold: HeldOutboxAppendOptions) =>
+        this.resolveHeldReplyGate
+          ? emitTurnHeldOutbox(
+              this.store, claim, this.workerId, ++outboxOrdinal, draft, hold,
+              () => this.assertClaimUsable(state, signal), () => this.scheduleOutbox()
+            )
+          : Promise.reject(new Error("Held outbox reply gate resolver is unavailable."));
+      const result = await this.handleEvent(claim.event, {
+        signal,
+        turn: claim.turn,
+        emitOutbox,
+        appendHeldOutbox
+      });
       this.assertClaimUsable(state, signal);
       this.turnServices.results.apply(claim, state, result);
     } catch (error) {

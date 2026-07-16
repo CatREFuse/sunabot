@@ -1,5 +1,8 @@
 import type { CodexCoordinatorSettings } from "./sessionCoordinatorTypes.js";
-import type { SessionStore } from "./sessionStore.js";
+import type {
+  HeldOutboxReplyGateResolver,
+  SessionStore
+} from "./sessionStore.js";
 import { SessionTurnResultCoordinator } from "./sessionTurnResultCoordinator.js";
 import { SessionTurnWake } from "./sessionTurnWake.js";
 
@@ -15,6 +18,7 @@ interface SessionTurnServicesOptions {
   scheduleOutbox: () => void;
   scheduleTools: () => void;
   serializeError: (error: unknown) => unknown;
+  resolveHeldReplyGate?: HeldOutboxReplyGateResolver;
 }
 
 export function createSessionTurnServices(options: SessionTurnServicesOptions) {
@@ -33,7 +37,8 @@ export function createSessionTurnServices(options: SessionTurnServicesOptions) {
       isStopped: options.isStopped,
       scheduleOutbox: options.scheduleOutbox,
       scheduleTools: options.scheduleTools,
-      serializeError: options.serializeError
+      serializeError: options.serializeError,
+      resolveHeldReplyGate: options.resolveHeldReplyGate
     })
   };
 }

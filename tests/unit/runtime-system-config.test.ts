@@ -17,6 +17,7 @@ import {
   decodeAssistantReply
 } from "../../packages/contracts/session/runtimeMessages.js";
 import type { RenderedPromptRequest } from "../../services/agent/promptSystem.js";
+import type { OutboxDeliveryContext } from "../../services/sessions/sessionCoordinator.js";
 import { SessionStore, type OutboxRecord } from "../../services/sessions/sessionStore.js";
 import type {
   SystemConfigInput,
@@ -194,10 +195,11 @@ describe("SunaRuntime system_config boundary", () => {
     });
     expect(mutationFingerprint).toMatch(/^sha256:[a-f0-9]{64}$/);
     expect(delivery.outbox).toEqual([]);
+    expect(delivery.terminalStatus).toBe("replied");
     expect(harness.gateway.send).not.toHaveBeenCalled();
   });
 
-  it("keeps an offline confirmation retryable after commit and blocks ordinary replies under the new gate", async () => {
+  it("does not let a payload marker bypass the reply gate without trusted held provenance", async () => {
     let runtime!: SunaRuntime;
     const staged = stagedSystemConfigTurn(async () => {
       const config = structuredClone(runtime.config);
@@ -236,25 +238,213 @@ describe("SunaRuntime system_config boundary", () => {
     expect(runtime.config.onebot.autoReplyPrivate).toBe(false);
     expect(confirmationDraft).toBeDefined();
     runtime.activeGateway = harness.gateway;
-    harness.connection.connected = false;
     const confirmation = outboxRecord(confirmationDraft!, "confirmation");
 
     await expect(runtime.deliverSessionOutbox(confirmation, new AbortController().signal))
-      .rejects.toThrow("OneBot is not connected");
-    expect(runtime.config.onebot.autoReplyPrivate).toBe(false);
+      .resolves.toEqual({ delivered: false, skipped: "reply_gate_closed" });
     expect(harness.gateway.send).not.toHaveBeenCalled();
-
-    harness.connection.connected = true;
-    await expect(runtime.deliverSessionOutbox(confirmation, new AbortController().signal))
-      .resolves.toMatchObject({ delivered: true });
-    expect(sentTexts(harness.gateway)).toEqual(["配置确认已进入队列。"]);
 
     await expect(runtime.deliverSessionOutbox(
       outboxRecord(ordinaryDraft, "ordinary"),
       new AbortController().signal
     )).resolves.toEqual({ delivered: false, skipped: "reply_gate_closed" });
     expect(runtime.resolveIncomingReplyRoute(requiredIncoming(privateEvent(21, 171419991)), false)).toBe("none");
+    expect(sentTexts(harness.gateway)).toEqual([]);
+  });
+
+  it("persists, commits, and retries a trusted held confirmation through the real coordinator", async () => {
+    let runtime!: SunaRuntime;
+    let connection!: { connected: boolean };
+    const staged = stagedSystemConfigTurn(async () => {
+      const config = structuredClone(runtime.config);
+      config.onebot.autoReplyPrivate = false;
+      runtime.commitReload({ config, persona: runtime.persona! });
+      connection.connected = false;
+    });
+    const harness = await createRuntimeHarness(stageMutation, {
+      createTurn: () => staged.turn
+    });
+    runtime = harness.runtime;
+    connection = harness.connection;
+    const incoming = requiredIncoming(privateEvent(22, 171419991));
+
+    await runtime.handleInboundMessage(incoming, harness.gateway);
+    await runtime.sessionCoordinator.waitForIdle({ includeOutbox: false, timeoutMs: 3_000 });
+
+    expect(staged.commit).toHaveBeenCalledOnce();
+    expect(runtime.config.onebot.autoReplyPrivate).toBe(false);
+    expect(harness.store.listTurns("private:171419991")).toEqual([
+      expect.objectContaining({ status: "replied", result: undefined })
+    ]);
+    expect(harness.store.listOutbox("private:171419991")[0]).toMatchObject({
+      holdState: "released",
+      status: "pending",
+      mutationFingerprint: expect.stringMatching(/^sha256:[a-f0-9]{64}$/u),
+      holdProvenance: { releasePolicy: "private_scope_plus_one" },
+      releaseProvenance: { outcome: "released" }
+    });
+    expect(harness.gateway.send).not.toHaveBeenCalled();
+
+    const original = harness.store.listOutbox("private:171419991")[0]!;
+    const operatorClaim = harness.store.claimNextOutbox({
+      workerId: "operator-unknown",
+      sessionId: "private:171419991"
+    })!;
+    expect(operatorClaim.id).toBe(original.id);
+    harness.store.markOutboxTransportStarted(original.id, "operator-unknown");
+    harness.store.finishOutbox({
+      outboxId: original.id,
+      workerId: "operator-unknown",
+      outcome: "delivery_unknown",
+      error: { code: "operator_confirmed_unknown" }
+    });
+    let replay = harness.store.replayUnknownOutbox({
+      outboxId: original.id,
+      confirmedNotSent: true
+    });
+    expect(harness.store.replayUnknownOutbox({
+      outboxId: original.id,
+      confirmedNotSent: true
+    })).toEqual(replay);
+    expect(replay).toMatchObject({
+      holdState: "released",
+      holdProvenance: { lineage: [{ outboxId: original.id }] }
+    });
+
+    for (let depth = 1; depth < 8; depth += 1) {
+      const replayClaim = harness.store.claimNextOutbox({
+        workerId: `operator-unknown-${depth}`,
+        sessionId: "private:171419991"
+      })!;
+      expect(replayClaim.id).toBe(replay.id);
+      harness.store.markOutboxTransportStarted(replay.id, `operator-unknown-${depth}`);
+      harness.store.finishOutbox({
+        outboxId: replay.id,
+        workerId: `operator-unknown-${depth}`,
+        outcome: "delivery_unknown",
+        error: { code: "operator_confirmed_unknown" }
+      });
+      replay = harness.store.replayUnknownOutbox({
+        outboxId: replay.id,
+        confirmedNotSent: true
+      });
+    }
+    expect(replay.holdProvenance?.lineage).toHaveLength(8);
+    const forgedLineage = structuredClone(replay);
+    forgedLineage.holdProvenance!.lineage[0]!.mutationFingerprint = `sha256:${"e".repeat(64)}`;
+    await expect(runtime.deliverSessionOutbox(forgedLineage, new AbortController().signal))
+      .rejects.toThrow("replay lineage is invalid");
+    expect(harness.gateway.send).not.toHaveBeenCalled();
+
+    connection.connected = true;
+    runtime.sessionCoordinator.resume("primary");
+    await runtime.sessionCoordinator.waitForIdle({ timeoutMs: 3_000 });
+
+    const replayRows = harness.store.listOutbox("private:171419991");
+    expect(replayRows).toHaveLength(9);
+    expect(replayRows.slice(0, -1).every((row) => row.status === "delivery_unknown")).toBe(true);
+    expect(replayRows.at(-1)).toMatchObject({
+      id: replay.id,
+      holdState: "released",
+      status: "sent"
+    });
     expect(sentTexts(harness.gateway)).toEqual(["配置确认已进入队列。"]);
+  });
+
+  it.each(["scope", "conversation"] as const)(
+    "rejects forged sender/account and a second %s epoch change after release",
+    async (epochKind) => {
+      let runtime!: SunaRuntime;
+      let connection!: { connected: boolean };
+      const staged = stagedSystemConfigTurn(async () => {
+        const config = structuredClone(runtime.config);
+        config.onebot.autoReplyPrivate = false;
+        runtime.commitReload({ config, persona: runtime.persona! });
+        connection.connected = false;
+      });
+      const harness = await createRuntimeHarness(stageMutation, {
+        createTurn: () => staged.turn
+      });
+      runtime = harness.runtime;
+      connection = harness.connection;
+      const incoming = requiredIncoming(privateEvent(epochKind === "scope" ? 24 : 25, 171419991));
+
+      await runtime.handleInboundMessage(incoming, harness.gateway);
+      await runtime.sessionCoordinator.waitForIdle({ includeOutbox: false, timeoutMs: 3_000 });
+      const released = harness.store.listOutbox("private:171419991")[0]!;
+      expect(released).toMatchObject({ holdState: "released", status: "pending" });
+
+      const forgedSender = structuredClone(released);
+      const forgedSenderEnvelope = forgedSender.payload as {
+        payload: { incoming: { userId: number; sender: { id: string } } };
+      };
+      forgedSenderEnvelope.payload.incoming.userId = 20002;
+      forgedSenderEnvelope.payload.incoming.sender.id = "20002";
+      await expect(runtime.deliverSessionOutbox(forgedSender, new AbortController().signal))
+        .rejects.toThrow("confirmation shape is invalid");
+
+      const forgedAccount = structuredClone(released);
+      const forgedAccountEnvelope = forgedAccount.payload as {
+        payload: { incoming: { accountId?: string } };
+      };
+      forgedAccountEnvelope.payload.incoming.accountId = "secondary";
+      forgedAccount.deliveryPartition = "secondary";
+      const controller = new AbortController();
+      const deliveryContext: OutboxDeliveryContext = {
+        signal: controller.signal,
+        phase: "send",
+        remoteReceipt: undefined,
+        sendRemote: async (operation) => operation(),
+        settleStep: async (_step, operation) => operation("unused"),
+        settleEffectStep: async (_step, operation) => operation("unused")
+      };
+      await expect(runtime.deliverSessionOutbox(forgedAccount, deliveryContext))
+        .rejects.toThrow("canonical record changed before delivery");
+
+      if (epochKind === "scope") runtime.replyGates.invalidateScope("private");
+      else runtime.replyGates.invalidateConversation("private:171419991");
+      connection.connected = true;
+      await expect(runtime.deliverSessionOutbox(released, new AbortController().signal))
+        .resolves.toEqual({ delivered: false, skipped: "reply_gate_closed" });
+      expect(harness.gateway.send).not.toHaveBeenCalled();
+    }
+  );
+
+  it("falls back to a neutral durable notice when release persistence fails after commit", async () => {
+    let runtime!: SunaRuntime;
+    const staged = stagedSystemConfigTurn(async () => {
+      const config = structuredClone(runtime.config);
+      config.onebot.autoReplyPrivate = false;
+      runtime.commitReload({ config, persona: runtime.persona! });
+    });
+    const harness = await createRuntimeHarness(stageMutation, {
+      createTurn: () => staged.turn
+    });
+    runtime = harness.runtime;
+    const database = (harness.store as unknown as {
+      database: import("node:sqlite").DatabaseSync;
+    }).database;
+    database.exec(`
+      CREATE TRIGGER inject_runtime_release_failure
+      BEFORE UPDATE OF hold_state ON outbox
+      WHEN NEW.hold_state = 'released'
+      BEGIN
+        SELECT RAISE(ABORT, 'injected runtime release failure');
+      END;
+    `);
+    const incoming = requiredIncoming(privateEvent(23, 171419991));
+
+    await runtime.handleInboundMessage(incoming, harness.gateway);
+    await runtime.sessionCoordinator.waitForIdle({ timeoutMs: 3_000 });
+
+    expect(staged.commit).toHaveBeenCalledOnce();
+    expect(runtime.config.onebot.autoReplyPrivate).toBe(false);
+    expect(harness.store.listOutbox("private:171419991")[0]).toMatchObject({
+      holdState: "fallback_released",
+      status: "sent",
+      releaseProvenance: { outcome: "fallback_released" }
+    });
+    expect(sentTexts(harness.gateway)).toEqual(["设置结果未确认，请重新查询当前设置"]);
   });
 
   it("discards the staged mutation when durable append fails", async () => {
@@ -463,6 +653,80 @@ describe("SunaRuntime system_config boundary", () => {
       deliverySemantics: "system_config_confirmation"
     });
   });
+
+  it("recovers an orphaned held confirmation after restart without rerunning or committing its turn", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-system-config-held-restart-"));
+    temporaryDirectories.push(directory);
+    const databasePath = path.join(directory, "sessions.sqlite");
+    const draftHarness = await createRuntimeHarness(async () => ({ kind: "completed", text: "unused" }), {
+      createTurn: () => idleSystemConfigTurn()
+    });
+    const incoming = requiredIncoming(privateEvent(51, 171419991));
+    draftHarness.runtime.recordIncomingMessage(incoming);
+    const conversationId = conversationRecordId(incoming);
+    const originalGate = draftHarness.runtime.replyGates.capture("private", conversationId);
+    const draft = draftHarness.runtime.replyDeliveryDraft(
+      incoming,
+      "原成功确认不得恢复发送",
+      true,
+      [],
+      "held-restart-run",
+      undefined,
+      true,
+      { messageOrigin: "text", toolNames: ["system_config"] }
+    );
+    draft.payload.payload.deliverySemantics = "system_config_confirmation";
+    draft.dedupeFingerprint = "held-restart-reply";
+
+    const before = new SessionStore({ databasePath });
+    stores.push(before);
+    const event = before.enqueueEvent({
+      sessionId: conversationId,
+      kind: "incoming_reply",
+      payload: {}
+    }).event;
+    const claim = before.claimNextTurn({ workerId: "before-restart" })!;
+    const held = before.appendHeldTurnOutbox({
+      turnId: claim.turn.id,
+      workerId: "before-restart",
+      dedupeKey: `turn-outbox:${event.id}:1`,
+      draft,
+      hold: {
+        mutationFingerprint: `sha256:${"d".repeat(64)}`,
+        semantics: "system_config_confirmation",
+        originalReplyGate: originalGate,
+        releasePolicy: "private_scope_plus_one"
+      }
+    }).outbox;
+    before.close();
+    stores.splice(stores.indexOf(before), 1);
+
+    const after = new SessionStore({ databasePath });
+    stores.push(after);
+    const completeRequestTurn = vi.fn(async (): Promise<ProviderTurnResult> => ({
+      kind: "completed",
+      text: "must not run"
+    }));
+    const afterHarness = await createRuntimeHarness(completeRequestTurn, {
+      createTurn: () => idleSystemConfigTurn()
+    }, { sessionStore: after });
+    afterHarness.runtime.recordIncomingMessage(incoming);
+    afterHarness.runtime.resumeUserGroupOrchestrators(afterHarness.gateway);
+    await afterHarness.runtime.sessionCoordinator.waitForIdle({ timeoutMs: 3_000 });
+
+    expect(completeRequestTurn).not.toHaveBeenCalled();
+    expect(after.getTurn(claim.turn.id)).toMatchObject({ status: "failed" });
+    expect(after.getEvent(event.id)).toMatchObject({ status: "completed", attempts: 1 });
+    expect(after.getOutbox(held.id)).toMatchObject({
+      holdState: "fallback_released",
+      status: "sent",
+      releaseProvenance: {
+        outcome: "fallback_released",
+        replyGate: { scopeEpoch: 0, conversationEpoch: 0 }
+      }
+    });
+    expect(sentTexts(afterHarness.gateway)).toEqual(["设置结果未确认，请重新查询当前设置"]);
+  });
 });
 
 async function stageMutation(
@@ -482,17 +746,19 @@ async function createRuntimeHarness(
     request: RenderedPromptRequest,
     options?: ProviderCompleteOptions
   ) => Promise<ProviderTurnResult>,
-  systemConfig: SystemConfigRuntimePort
+  systemConfig: SystemConfigRuntimePort,
+  options: { sessionStore?: SessionStore } = {}
 ) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-runtime-system-config-"));
   temporaryDirectories.push(directory);
   const config = createAdminTestConfig(directory);
-  const store = new SessionStore({ databasePath: ":memory:" });
-  stores.push(store);
+  const store = options.sessionStore ?? new SessionStore({ databasePath: ":memory:" });
+  if (!stores.includes(store)) stores.push(store);
   const runtime = new SunaRuntime(config, {
     attachmentService: {} as never,
     sessionStore: store,
     systemConfig,
+    replyDebounceMs: 0,
     resolveToolCapabilities: async () => ({ codex: false, workspaceBash: false })
   });
   runtimes.push(runtime);
@@ -505,6 +771,7 @@ async function createRuntimeHarness(
     getProvider(): OpenAIProvider;
     renderPromptRequest(): Promise<RenderedPromptRequest>;
     scheduleMemoryCompression(): void;
+    scheduleAttachmentCacheRefresh(): void;
     persistConversationRecords(): void;
   };
   internals.persona = {
@@ -532,6 +799,7 @@ async function createRuntimeHarness(
     response_format: { type: "text" }
   });
   internals.scheduleMemoryCompression = () => undefined;
+  internals.scheduleAttachmentCacheRefresh = () => undefined;
   internals.persistConversationRecords = () => undefined;
   const { gateway, connection } = fakeGateway();
   return { runtime, store, gateway, connection };
@@ -619,6 +887,7 @@ function outboxRecord(draft: ReplyDeliveryDraft, id: string): OutboxRecord {
     deliveryPartition: "primary",
     partitionSequence: 1,
     status: "pending",
+    holdState: "none",
     attempts: 0,
     settleAttempts: 0,
     availableAt: 0,

@@ -99,6 +99,43 @@ export function migrateOutboxSchemaV4(database: DatabaseSync) {
   database.exec("ALTER TABLE outbox ADD COLUMN settle_started_step TEXT");
 }
 
+export function migrateOutboxSchemaV5(database: DatabaseSync) {
+  database.exec(`
+    ALTER TABLE outbox ADD COLUMN hold_state TEXT NOT NULL DEFAULT 'none'
+      CHECK (hold_state IN ('none', 'held', 'released', 'fallback_released'));
+    ALTER TABLE outbox ADD COLUMN mutation_fingerprint TEXT
+      CHECK (
+        mutation_fingerprint IS NULL OR (
+          length(mutation_fingerprint) = 71
+          AND substr(mutation_fingerprint, 1, 7) = 'sha256:'
+          AND substr(mutation_fingerprint, 8) NOT GLOB '*[^0-9a-f]*'
+        )
+      );
+    ALTER TABLE outbox ADD COLUMN hold_provenance_json TEXT
+      CHECK (
+        hold_provenance_json IS NULL OR (
+          json_valid(hold_provenance_json) AND length(hold_provenance_json) <= 8192
+        )
+      );
+    ALTER TABLE outbox ADD COLUMN release_provenance_json TEXT
+      CHECK (
+        (release_provenance_json IS NULL OR (
+          json_valid(release_provenance_json) AND length(release_provenance_json) <= 8192
+        )) AND (
+          (hold_state = 'none' AND mutation_fingerprint IS NULL
+            AND hold_provenance_json IS NULL AND release_provenance_json IS NULL)
+          OR (hold_state = 'held' AND mutation_fingerprint IS NOT NULL
+            AND hold_provenance_json IS NOT NULL AND release_provenance_json IS NULL)
+          OR (hold_state IN ('released', 'fallback_released') AND mutation_fingerprint IS NOT NULL
+            AND hold_provenance_json IS NOT NULL AND release_provenance_json IS NOT NULL)
+        )
+      );
+
+    CREATE INDEX outbox_hold_claim_idx
+      ON outbox(hold_state, delivery_state, available_at, session_id, sequence);
+  `);
+}
+
 function advanceTerminalPrefix(database: DatabaseSync, sessionId: string, now: number) {
   while (true) {
     const session = database.prepare(`

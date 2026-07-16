@@ -14,7 +14,7 @@ const FIRST_RUN_SIGNING_KEY = "secrets/first-run-bootstrap.key";
 const COMPLETED_REPORT = "runtime/first-run-bootstrap.completed.json";
 const BOUNDARIES = ["marker", "main", "queue", "manifest", "registration", "account-runtime"];
 const MAIN_SCHEMA_VERSION = 10;
-const QUEUE_SCHEMA_VERSION = 4;
+const QUEUE_SCHEMA_VERSION = 5;
 const MAIN_TABLES = [
   "admin_sessions",
   "agent_accounts",
@@ -312,10 +312,33 @@ function validateQueueSchema(database) {
     "id", "session_id", "sequence", "origin_turn_id", "status",
     "delivery_partition", "partition_sequence", "delivery_state", "settle_attempts",
     "transport_started_at", "remote_receipt_json", "remote_sent_at", "settle_steps_json",
-    "settle_started_step"
+    "settle_started_step", "hold_state", "mutation_fingerprint", "hold_provenance_json",
+    "release_provenance_json"
   ]);
-  requireIndexes(database, "outbox", ["outbox_partition_claim_idx", "outbox_partition_sequence_idx"]);
-  requireSchemaSql(database, "outbox", ["strict", "check (sequence > 0)"]);
+  requireIndexes(database, "outbox", [
+    "outbox_partition_claim_idx", "outbox_partition_sequence_idx", "outbox_hold_claim_idx"
+  ]);
+  requireIndexSql(database, "outbox_partition_claim_idx", [
+    "on outbox(delivery_state, delivery_partition, partition_sequence, available_at, session_id, sequence)"
+  ]);
+  requireIndexSql(database, "outbox_partition_sequence_idx", [
+    "unique index", "on outbox(delivery_partition, partition_sequence)"
+  ]);
+  requireIndexSql(database, "outbox_hold_claim_idx", [
+    "on outbox(hold_state, delivery_state, available_at, session_id, sequence)"
+  ]);
+  requireSchemaSql(database, "outbox", [
+    "strict",
+    "check (sequence > 0)",
+    "check (hold_state in ('none', 'held', 'released', 'fallback_released'))",
+    "length(mutation_fingerprint) = 71",
+    "substr(mutation_fingerprint, 1, 7) = 'sha256:'",
+    "json_valid(hold_provenance_json)",
+    "json_valid(release_provenance_json)",
+    "hold_state = 'none' and mutation_fingerprint is null",
+    "hold_state = 'held' and mutation_fingerprint is not null",
+    "hold_state in ('released', 'fallback_released') and mutation_fingerprint is not null"
+  ]);
 }
 
 function requireColumns(database, table, expected) {
@@ -328,6 +351,14 @@ function requireIndexes(database, table, expected) {
   const indexes = new Set(database.prepare(`PRAGMA index_list(${table})`).all().map((row) => String(row.name)));
   const missing = expected.filter((index) => !indexes.has(index));
   if (missing.length > 0) throw new Error(`${table} missing indexes: ${missing.join(", ")}`);
+}
+
+function requireIndexSql(database, index, fragments) {
+  const sql = String(database.prepare(
+    "SELECT sql FROM sqlite_schema WHERE type = 'index' AND name = ?"
+  ).get(index)?.sql ?? "").replaceAll(/\s+/g, " ").toLowerCase();
+  const missing = fragments.filter((fragment) => !sql.includes(fragment));
+  if (missing.length > 0) throw new Error(`${index} missing constraints: ${missing.join(", ")}`);
 }
 
 function requireSchemaSql(database, table, fragments) {

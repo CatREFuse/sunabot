@@ -187,8 +187,39 @@ describe("first-run bootstrap journal", () => {
       label: "stale queue schema version",
       mutate(workspace: string) {
         const database = new DatabaseSync(path.join(workspace, "business/data/session-queue.sqlite"));
-        database.prepare("DELETE FROM schema_migrations WHERE version = 4").run();
+        database.prepare("DELETE FROM schema_migrations WHERE version = 5").run();
         database.close();
+      }
+    },
+    ...[
+      "hold_state",
+      "mutation_fingerprint",
+      "hold_provenance_json",
+      "release_provenance_json"
+    ].map((column) => ({
+      label: `missing queue v5 column ${column}`,
+      mutate(workspace: string) {
+        mutateQueueSchema(workspace, `ALTER TABLE outbox RENAME COLUMN ${column} TO missing_${column}`);
+      }
+    })),
+    ...[
+      "outbox_partition_claim_idx",
+      "outbox_partition_sequence_idx",
+      "outbox_hold_claim_idx"
+    ].map((index) => ({
+      label: `missing queue v5 index ${index}`,
+      mutate(workspace: string) {
+        mutateQueueSchema(workspace, `DROP INDEX ${index}`);
+      }
+    })),
+    {
+      label: "queue held claim index without hold state",
+      mutate(workspace: string) {
+        mutateQueueSchema(workspace, `
+          DROP INDEX outbox_hold_claim_idx;
+          CREATE INDEX outbox_hold_claim_idx
+            ON outbox(delivery_state, available_at, session_id, sequence);
+        `);
       }
     }
   ])("rejects $label before completing first-run", async ({ mutate }) => {
@@ -330,6 +361,15 @@ function writeQueueDatabase(workspace: string) {
     databasePath: path.join(workspace, "business/data/session-queue.sqlite")
   });
   store.close();
+}
+
+function mutateQueueSchema(workspace: string, sql: string) {
+  const database = new DatabaseSync(path.join(workspace, "business/data/session-queue.sqlite"));
+  try {
+    database.exec(sql);
+  } finally {
+    database.close();
+  }
 }
 
 function validManifest() {

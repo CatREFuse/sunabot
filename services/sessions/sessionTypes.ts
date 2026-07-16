@@ -25,6 +25,40 @@ export type OutboxStatus =
   | "sent"
   | "dead"
   | "delivery_unknown";
+export type OutboxHoldState = "none" | "held" | "released" | "fallback_released";
+
+export interface HeldOutboxReplyGateV1 {
+  generation: string;
+  scope: "private" | "user_group" | "bot_group";
+  conversationId: string;
+  scopeEpoch: number;
+  conversationEpoch: number;
+}
+
+export interface HeldOutboxLineageEntryV1 {
+  outboxId: string;
+  mutationFingerprint: string;
+  holdState: "released" | "fallback_released";
+}
+
+export interface HeldOutboxProvenanceV1 {
+  schemaVersion: 1;
+  semantics: "system_config_confirmation";
+  originalReplyGate: HeldOutboxReplyGateV1;
+  releasePolicy: "unchanged" | "private_scope_plus_one";
+  lineage: HeldOutboxLineageEntryV1[];
+}
+
+export interface HeldOutboxReleaseProvenanceV1 {
+  schemaVersion: 1;
+  outcome: "released" | "fallback_released";
+  replyGate: HeldOutboxReplyGateV1;
+  releasedAt: number;
+}
+
+export type HeldOutboxReplyGateResolver = (
+  outbox: OutboxRecord
+) => HeldOutboxReplyGateV1 | undefined;
 
 export interface SessionStoreOptions {
   databasePath: string;
@@ -32,6 +66,7 @@ export interface SessionStoreOptions {
   idFactory?: () => string;
   defaultLeaseMs?: number;
   recoverOnOpen?: "expired" | "all";
+  resolveHeldReplyGate?: HeldOutboxReplyGateResolver;
 }
 
 export interface SessionStateRecord {
@@ -120,6 +155,10 @@ export interface OutboxRecord {
   remoteReceipt?: unknown;
   completedSettleSteps: string[];
   uncertainSettleStep?: string;
+  holdState: OutboxHoldState;
+  mutationFingerprint?: string;
+  holdProvenance?: HeldOutboxProvenanceV1;
+  releaseProvenance?: HeldOutboxReleaseProvenanceV1;
   createdAt: number;
   transportStartedAt?: number;
   remoteSentAt?: number;
@@ -183,6 +222,23 @@ export interface AppendTurnOutboxResult {
   inserted: boolean;
 }
 
+export interface HeldOutboxAppendOptions {
+  mutationFingerprint: string;
+  semantics: "system_config_confirmation";
+  originalReplyGate: HeldOutboxReplyGateV1;
+  releasePolicy: HeldOutboxProvenanceV1["releasePolicy"];
+}
+
+export interface AppendHeldTurnOutboxInput extends AppendTurnOutboxInput {
+  hold: HeldOutboxAppendOptions;
+}
+
+export interface ReleaseHeldOutboxInput {
+  outboxId: string;
+  mutationFingerprint: string;
+  replyGate: HeldOutboxReplyGateV1;
+}
+
 export interface FinishTurnInput {
   turnId: string;
   workerId: string;
@@ -190,6 +246,7 @@ export interface FinishTurnInput {
   result?: unknown;
   error?: unknown;
   outbox?: OutboxDraft[];
+  resolveHeldReplyGate?: HeldOutboxReplyGateResolver;
 }
 
 export interface FinishTurnResult {
@@ -204,6 +261,7 @@ export interface HandoffTurnInput {
   targetEvent: EnqueueSessionEventInput;
   expectedSourceAvailableAt: number;
   result?: unknown;
+  resolveHeldReplyGate?: HeldOutboxReplyGateResolver;
 }
 
 export type HandoffTurnResult =
@@ -227,6 +285,7 @@ export interface InterruptTurnInput {
   turnId: string;
   workerId: string;
   error?: unknown;
+  resolveHeldReplyGate?: HeldOutboxReplyGateResolver;
 }
 
 export interface InterruptTurnResult {
@@ -249,6 +308,7 @@ export interface DeferTurnInput {
   };
   acknowledgement: OutboxDraft;
   result?: unknown;
+  resolveHeldReplyGate?: HeldOutboxReplyGateResolver;
 }
 
 export interface DeferTurnResult {

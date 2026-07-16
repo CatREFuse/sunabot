@@ -28,7 +28,7 @@
 
 当前业务主库 schema 版本是 10。`conversation_thread_states` 使用 STRICT 表和 `conversations.id` 外键，删除会话时级联删除 Thread 状态；`state_schema_version` 当前为 1。写入以 revision CAS、单调 `processed_through_sequence` 和 `last_run_key` 幂等约束防止旧快照覆盖新状态，读取和写入都执行完整领域结构校验。message assignment、Thread message ID 和已无保留消息的非活动 Thread 随 `conversations` 的消息保留边界清理，单 Thread participant uid 最多保留 256 个；原始会话消息不由 Thread 节点删除。模型输出、提示词和运行时错误不能回退游标或破坏已提交状态；Thread 状态仍属于业务库恢复范围，不新增 JSON/JSONL 增长型持久化。异步 Thread 快照读取时复核字符串长度、稳定 Thread ID、active/primary/related 引用、唯一性、sequence 和提示词容量边界；损坏或旧格式快照降级为空 sidecar。恢复门禁只允许 `app_metadata.storage-schema-version=9` 的旧 current 恢复点缺少该表，并在恢复时复核实际数据库版本；schema 10 缺表继续判定为不完整。
 
-Plana 的 `workspace/business/data/session-queue.sqlite` 与其他 Agent 的 `workspace/business/agents/<agentId>/data/session-queue.sqlite` 分别保存所属 Agent 的会话事件、turn、异步任务和 outbox。附件缓存中的每个 `chunks.sqlite` 独立保存该文件的文本分块。
+Plana 的 `workspace/business/data/session-queue.sqlite` 与其他 Agent 的 `workspace/business/agents/<agentId>/data/session-queue.sqlite` 分别保存所属 Agent 的会话事件、turn、异步任务和 outbox。当前 session queue schema 版本是 5；outbox 的 `hold_state`、`mutation_fingerprint`、`hold_provenance_json` 与 `release_provenance_json` 共同保存 `system_config` held confirmation，旧行向前迁移为 `hold_state=none`。fingerprint 只接受固定长度的小写 SHA-256；两份 provenance 使用版本化、有界、严格字段结构，状态与空值组合由 SQLite CHECK 和读取 decoder 双重校验。held append、release、中性化、origin turn/event 终结与恢复均使用事务，不能出现可 claim 的普通行到 held 行更新窗口。带构造期 lease 恢复的 SessionStore 必须同时注入 ReplyGate resolver；恢复遇到 held 行但缺失 resolver 时关闭数据库并失败，不能静默保留 running turn。附件缓存中的每个 `chunks.sqlite` 独立保存该文件的文本分块。
 
 离线 SQLite 恢复点必须覆盖默认 Plana 与注册表中全部启用或停用 Agent 的业务库和队列库。创建恢复点时以注册主库和 `business/agents/<agentId>/data` 文件系统扫描结果的并集核对范围；注册 Agent 缺少数据库、单边数据库、未注册 Agent 孤儿库、非法 ID 或越界路径时失败。新恢复点使用 manifest v2，按 Agent 保存业务库与 queue 的 schema profile、校验信息和投递不变量；正常 v2 业务库必须包含当前统计、管理员会话和 Agent 注册表。校验时 manifest Agent 集合必须与备份内 Plana 注册表完全一致，恢复只接受完全空的目标 workspace，并由 manifest 清单安全重建嵌套目录。仅当 `agents`、`agent_accounts`、`agent.json` 和二级 Agent 数据库都不存在时，迁移前数据库才使用旧单 Agent schema profile。旧 manifest v1 仍可校验和恢复，范围仅包含默认 Plana 双库。
 
@@ -85,7 +85,7 @@ Plana 的 `workspace/business/data/session-queue.sqlite` 与其他 Agent 的 `wo
 - Git 不跟踪整个 `workspace/`，其中包括环境变量、配置、Agent 人格、SQLite、WAL、日志、缓存、QQ 登录态、生成图片和备份。
 - 浏览器管理台不得把账号、密码、Bearer Token 或会话密钥写入 localStorage/sessionStorage。
 - 请求日志递归脱敏授权、token、password、secret 和常见 key 字段，并限制长字符串。
-- `system_config` 只向模型返回固定白名单内的当前 Agent 设置与状态投影，不返回密钥、环境变量名、路径、原始消息、Provider 地址或探针诊断正文。修改只对运行时重新确认的当前管理员 QQ 私聊开放；Web Chat 只读。修改 fingerprint 只保存规范化非敏感字段的 SHA-256，不保存凭据明文；模型参数和外部 API 不能写入确认 outbox 的特殊 delivery 语义。
+- `system_config` 只向模型返回固定白名单内的当前 Agent 设置与状态投影，不返回密钥、环境变量名、路径、原始消息、Provider 地址或探针诊断正文。修改只对运行时重新确认的当前管理员 QQ 私聊开放；Web Chat 只读。修改 fingerprint 只保存规范化非敏感字段的 SHA-256，不保存凭据明文；模型参数和外部 API 不能写入确认 outbox 的特殊 delivery 语义。投递旁路必须同时具有 store 中可信的 released/fallback provenance 与匹配 fingerprint，只有 payload marker 或普通 outbox 状态时仍执行完整 ReplyGate 校验。
 - 配置医生发送给模型的配置先按敏感键以及身份、QQ、Provider 地址、workspace、可执行文件和提示词路径脱敏；问题列表只包含本次实际校验失败的固定白名单路径和服务端固定文案，模型只能对这些路径提出 `add` 或 `replace`，不接收工具权限。服务端限制 AI 输出大小、操作数、JSON Pointer 深度和值大小，并拒绝原型污染字段、重复路径和越权路径；用户确认页的目标值说明由服务端生成，不采用模型理由代替实际修改内容。
 - 配置医生 AI 提案只保存在进程内 10 分钟并绑定原始文件 revision；连续 AI 诊断至少间隔 10 秒。浏览器应用时只提交 proposal ID 与 source revision，不能提交或替换服务端 patch。
 - OneBot、跨组件媒体和 Agent 文件写入均执行身份、大小与路径边界校验；OneBot action 不能携带 Core 或 NapCat 的绝对文件路径。
