@@ -25,7 +25,6 @@ import {
   decodeAssistantReply,
   decodeIncomingReply,
   decodeToolCompletion,
-  incomingReplyEnvelope,
   type AssistantReplyOutboxEnvelope,
   type AssistantReplyOutboxPayload,
   type AsyncToolCompletionPayload,
@@ -108,7 +107,7 @@ import {
 import { buildConversationPromptVariables } from "../../services/agent/persona.js";
 import { DEFAULT_CONTEXT_MESSAGE_LIMIT, MAX_STORED_CONVERSATION_MESSAGES, GROUP_CHAT_SUMMARY_WINDOW_MS, MAX_SELFIE_REFERENCE_IMAGES, MAX_SELFIE_WORKSPACE_REFERENCE_IMAGES, MAX_CURRENT_CONTEXT_IMAGES, MAX_HISTORY_CONTEXT_IMAGES, HYDRATE_MESSAGE_WINDOW_MS, ACTIVE_CONVERSATION_WINDOW_MS, DIRECT_REPLY_TIMEOUT_MS, AMBIENT_ORCHESTRATOR_TIMEOUT_MS, ORCHESTRATOR_MAX_RETRIES, PREPARE_TIMEOUT_MS, RECENT_CONTEXT_TOKEN_BUDGET, DEDUPE_TTL_MS, MAX_DEDUPE_KEYS, DEFAULT_ADMIN_NAME, GROUP_CHAT_SUMMARY_COMMAND, CONVERSATION_REPLY_PROMPT_FILE, SELFIE_PROMPT_FILE, GROUP_CHAT_SUMMARY_PROMPT_FILE, ADMIN_PERSONA_FILES, ADMIN_RUNTIME_PROMPT_DEFAULTS, BatchUserInfo, WorkingMemoryMergeOutput, WorkingMemoryMergeContext, personaFileNameForAdminId, AdminIdentity, ConversationReplyUpdateInput, RuntimeCommandContext, ReplyDeliveryDraft, ReplyDelivery, DeferredCodexTurn, AmbientReplyJob, AmbientReplyState, AmbientIdleTimer, RuntimeConfigSnapshot, RuntimePromptSnapshot, SunaRuntimeOptions } from "./runtimeContracts.js";
 import { adminIdentityFromBot, appendConversationMessage, hasIncomingReplyContent, indexedConversationMessages, isAdminUserId, isExplicitWakeMessage, parseOrchestratorDecision, toContextChatMessage } from "./conversationMemoryHelpers.js";
-import { conversationOrchestratorEnabled, conversationRecordId, conversationReplyEnabled, persistedAttachments, persistedQuoteReferences, persistentIncomingKey, queueIncomingSnapshot, restoredGroupIncoming, uniqueStrings } from "./messagingAttachmentHelpers.js";
+import { conversationOrchestratorEnabled, conversationRecordId, conversationReplyEnabled, incomingConversationMessageId, persistedAttachments, persistedQuoteReferences, persistentIncomingKey, restoredGroupIncoming, uniqueStrings } from "./messagingAttachmentHelpers.js";
 import { conversationLastText } from "./selfieHelpers.js";
 import { errorMessage, isAbortError, sanitizeErrorDetail, withAbortTimeout } from "./infrastructure.js";
 
@@ -241,9 +240,15 @@ export function runtime_resumeUserGroupOrchestrators(this: RuntimeHost, gateway:
 export function runtime_suspendUserGroupOrchestrators(this: RuntimeHost) {
     this.cancelAllAmbientReplies();
   }
-export function runtime_patchIncomingMessage(this: RuntimeHost, record: ConversationRecord, incoming: ParsedIncomingMessage) {
-    const messageId = incoming.messageId == null ? "" : String(incoming.messageId);
-    const message = [...record.messages].reverse().find((item) => item.role === "user" && item.id === messageId);
+export function runtime_patchIncomingMessage(
+  this: RuntimeHost,
+  record: ConversationRecord,
+  incoming: ParsedIncomingMessage,
+  frozenMessageId = incomingConversationMessageId(incoming)
+) {
+    const message = [...record.messages].reverse().find((item) => (
+      item.role === "user" && item.id === frozenMessageId
+    ));
     if (!message) return;
     const identity = senderIdentity(incoming.sender);
     message.text = incoming.text || (inboundImageUrls(incoming).length ? "[图片]" : incoming.attachments.length ? "[文件]" : "[消息]");
@@ -344,24 +349,17 @@ export async function runtime_pumpAmbientReply(this: RuntimeHost, channelKey: st
       if (isOrchestratorReplyRateLimited(record.orchestratorLastReplyAt)) return;
 
       if (!this.isAmbientReplyCurrent(job, state, epoch)) return;
-      this.sessionCoordinator.enqueueEvent({
-        sessionId: channelKey,
-        kind: "incoming_reply",
-        dedupeKey: `reply:${persistentIncomingKey(job.incoming)}`,
-        payload: incomingReplyEnvelope({
-          type: "incoming_reply",
-          route: "ambient",
-          incoming: queueIncomingSnapshot(job.incoming),
-          captureSequence: job.captureSequence
-        }, {
-          conversationId: channelKey,
-          correlationId: `onebot:${job.incoming.messageId ?? persistentIncomingKey(job.incoming)}`,
-          idempotencyKey: `reply:${persistentIncomingKey(job.incoming)}`
-        })
+      if (this.activeReplyDebounce(job.incoming)) return;
+      this.scheduleReplyDebounce({
+        route: "ambient",
+        incoming: job.incoming,
+        captureSequence: job.captureSequence,
+        gate: job.gate
       });
       this.consumeOrchestratorBatch(record, job.captureSequence);
       record.orchestratorLastReplyAt = new Date().toISOString();
       this.persistConversationRecords();
+      this.sessionCoordinator.resume(job.incoming.accountId ?? "primary");
     } catch (error) {
       state.deciding = false;
       if (!isAbortError(error)) console.error("[runtime] ambient reply failed", { channel: channelKey, error });

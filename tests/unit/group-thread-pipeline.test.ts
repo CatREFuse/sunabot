@@ -288,6 +288,104 @@ describe("group thread runtime pipeline", () => {
     expect(snapshot?.messageAssignments.find((assignment) => assignment.messageId === "2")?.relation).toBe("reply");
   });
 
+  it("freezes the debounce Thread window through the handoff sequence without reordering messages", async () => {
+    const historyMessageId = "401000001";
+    const triggerMessageId = "401000002";
+    const followupMessageId = "401000003";
+    const lateMessageId = "401000004";
+    const record: ConversationRecord = {
+      id: "group:1030412235",
+      scope: "user_group",
+      title: "防抖冻结窗口测试群",
+      userId: 753224704,
+      groupId: 1030412235,
+      messageCount: 4,
+      lastAt: "2026-07-16T11:59:00.000Z",
+      lastText: "handoff 后消息",
+      messages: [
+        conversationMessage(historyMessageId, 1, 2218471571, "窗口前历史消息"),
+        conversationMessage(triggerMessageId, 2, 753224704, "首条触发消息"),
+        conversationMessage(followupMessageId, 3, 753224704, "防抖窗口内补充"),
+        conversationMessage(lateMessageId, 4, 753224704, "handoff 后消息")
+      ]
+    };
+    let payload: {
+      messages: Array<{ message_id: string; sequence: number; text: string }>;
+      target_message_ids: string[];
+    } | undefined;
+    const buildRecentContextMessages = vi.fn(() => [{
+      role: "user" as const,
+      content: `[timestamp=2026-07-16 11:56 | sequence=1 | message_id=${historyMessageId} | display_name=用户2218471571 | uid=2218471571]\n窗口前历史消息`
+    }]);
+    store.readGroupThreadState.mockReturnValue(undefined);
+    store.commitGroupThreadState.mockImplementation((input: { state: GroupThreadStateV1 }) => ({
+      status: "committed",
+      record: { conversationId: record.id, revision: input.state.revision, state: input.state }
+    }));
+    const runtime = {
+      config: { bot: { orchestrator: { groupThreadModel: "configured-cheap-model" } } },
+      conversationRecords: new Map([[record.id, record]]),
+      buildRecentContextMessages,
+      getProviderForModel: vi.fn(() => ({})),
+      renderPromptRequest: vi.fn(async (_id: string, variables: Record<string, unknown>) => {
+        payload = variables["thread.payload"] as typeof payload;
+        return promptRequest([{ role: "user", content: JSON.stringify(payload) }]);
+      }),
+      completePrompt: vi.fn(async () => JSON.stringify({
+        schema_version: 1,
+        active_thread_key: "debounced",
+        threads: [{
+          thread_key: "debounced",
+          existing_thread_id: null,
+          topic: "群成员正在补充同一个问题的完整信息。",
+          status: "active"
+        }],
+        message_assignments: [historyMessageId, triggerMessageId, followupMessageId].map((messageId, index) => ({
+          message_id: messageId,
+          primary_thread_key: "debounced",
+          related_thread_keys: [],
+          relation: index === 0 ? "new" : "continue",
+          confidence: 0.95
+        }))
+      }))
+    } as unknown as SunaRuntime;
+    const incoming = {
+      ...groupIncoming(),
+      messageId: Number(triggerMessageId),
+      text: "首条触发消息"
+    };
+
+    const snapshot = await runtime_prepareGroupThreadContext.call(runtime, incoming, {
+      captureSequence: 2,
+      contextThroughSequence: 3
+    });
+    const sidecar = groupThreadPromptContext(snapshot);
+
+    expect(buildRecentContextMessages).toHaveBeenCalledWith(incoming, 2, 64);
+    expect(payload?.messages.map((message) => ({
+      messageId: message.message_id,
+      sequence: message.sequence,
+      text: message.text
+    }))).toEqual([
+      { messageId: historyMessageId, sequence: 1, text: "窗口前历史消息" },
+      { messageId: triggerMessageId, sequence: 2, text: "首条触发消息" },
+      { messageId: followupMessageId, sequence: 3, text: "防抖窗口内补充" }
+    ]);
+    expect(payload?.target_message_ids).toEqual([historyMessageId, triggerMessageId, followupMessageId]);
+    expect(snapshot?.processedThroughSequence).toBe(3);
+    expect(sidecar.message_assignments.map((assignment) => assignment.message_id)).toEqual([
+      historyMessageId,
+      triggerMessageId,
+      followupMessageId
+    ]);
+    expect(sidecar.threads[0]?.message_ids).toEqual([
+      historyMessageId,
+      triggerMessageId,
+      followupMessageId
+    ]);
+    expect(JSON.stringify({ payload, snapshot, sidecar })).not.toContain(lateMessageId);
+  });
+
   it("returns the persisted pre-run snapshot when the Thread commit fails", async () => {
     const previous = backlogState();
     const record: ConversationRecord = {

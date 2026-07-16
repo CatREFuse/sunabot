@@ -1,9 +1,10 @@
-export interface CommandInvocation {
-  id: string;
-  invokedName: string;
-  args: string;
-  rawText: string;
-}
+import {
+  readCommandInvocationV1,
+  validCommandInvocationIdV1,
+  type CommandInvocationV1
+} from "../../packages/contracts/messaging/commands.js";
+
+export type CommandInvocation = CommandInvocationV1;
 
 export interface CommandDefinition<Context, Result = void> {
   id: string;
@@ -15,12 +16,27 @@ export interface CommandMatch<Context, Result = void> extends CommandInvocation 
   definition: CommandDefinition<Context, Result>;
 }
 
+export function commandInvocationSnapshot(invocation: CommandInvocation): CommandInvocation {
+  const snapshot = readCommandInvocationV1({
+    id: invocation.id,
+    invokedName: invocation.invokedName,
+    args: invocation.args,
+    rawText: invocation.rawText
+  });
+  if (!snapshot) throw new Error("Invalid command invocation.");
+  return snapshot;
+}
+
 export class CommandRouter<Context, Result = void> {
   private readonly definitionsByName = new Map<string, CommandDefinition<Context, Result>>();
+  private readonly definitionsById = new Map<string, CommandDefinition<Context, Result>>();
 
   constructor(definitions: Array<CommandDefinition<Context, Result>>) {
     for (const definition of definitions) {
-      if (!definition.id.trim()) throw new Error("Command id is required.");
+      if (!validCommandInvocationIdV1(definition.id)) throw new Error("Command id is invalid.");
+      if (this.definitionsById.has(definition.id)) {
+        throw new Error(`Duplicate command id: ${definition.id}`);
+      }
       if (!definition.names.length) throw new Error(`Command ${definition.id} requires at least one name.`);
       for (const rawName of definition.names) {
         const name = normalizeCommandName(rawName);
@@ -30,6 +46,7 @@ export class CommandRouter<Context, Result = void> {
         }
         this.definitionsByName.set(name, definition);
       }
+      this.definitionsById.set(definition.id, definition);
     }
   }
 
@@ -41,22 +58,27 @@ export class CommandRouter<Context, Result = void> {
     }
     const definition = this.definitionsByName.get(normalizeCommandName(parsed.name));
     if (!definition) return undefined;
-    return {
+    const invocation = readCommandInvocationV1({
       id: definition.id,
       invokedName: parsed.name,
       args: parsed.args,
-      rawText: text,
+      rawText: text
+    });
+    if (!invocation) throw new Error("Matched command invocation exceeds durable limits.");
+    return { ...invocation, definition };
+  }
+
+  restore(invocation: CommandInvocation): CommandMatch<Context, Result> {
+    const definition = this.definitionsById.get(invocation.id);
+    if (!definition) throw new Error(`Unknown command id: ${invocation.id}`);
+    return {
+      ...commandInvocationSnapshot(invocation),
       definition
     };
   }
 
   dispatch(match: CommandMatch<Context, Result>, context: Context) {
-    return match.definition.handler(context, {
-      id: match.id,
-      invokedName: match.invokedName,
-      args: match.args,
-      rawText: match.rawText
-    });
+    return match.definition.handler(context, commandInvocationSnapshot(match));
   }
 }
 

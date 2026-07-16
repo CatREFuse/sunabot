@@ -338,6 +338,10 @@ export class ApplicationDataStore {
     this.transaction(() => this.replaceConversationsUnsafe(records));
   }
 
+  upsertConversation(record: ConversationRecord) {
+    this.transaction(() => this.upsertConversationUnsafe(record));
+  }
+
   readGroupThreadState(conversationId: string): GroupThreadStateRecord | undefined {
     return this.groupThreads.read(conversationId);
   }
@@ -463,18 +467,21 @@ export class ApplicationDataStore {
 
   private replaceConversationsUnsafe(records: readonly ConversationRecord[]) {
     const ids = new Set(records.map((record) => record.id));
-    const upsert = this.database.prepare(`
+    for (const record of records) this.upsertConversationUnsafe(record);
+    for (const row of this.database.prepare("SELECT id FROM conversations").all() as SqlRow[]) {
+      const id = String(row.id);
+      if (!ids.has(id)) this.database.prepare("DELETE FROM conversations WHERE id = ?").run(id);
+    }
+  }
+
+  private upsertConversationUnsafe(record: ConversationRecord) {
+    this.database.prepare(`
       INSERT INTO conversations (id, last_at, data_json) VALUES (?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         last_at = excluded.last_at,
         data_json = excluded.data_json
       WHERE conversations.data_json <> excluded.data_json
-    `);
-    for (const record of records) upsert.run(record.id, record.lastAt, JSON.stringify(record));
-    for (const row of this.database.prepare("SELECT id FROM conversations").all() as SqlRow[]) {
-      const id = String(row.id);
-      if (!ids.has(id)) this.database.prepare("DELETE FROM conversations WHERE id = ?").run(id);
-    }
+    `).run(record.id, record.lastAt, JSON.stringify(record));
   }
 
   private replaceMemoryUnsafe(source: MemoryDataSource, records: readonly JsonObject[]) {

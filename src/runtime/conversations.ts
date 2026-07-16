@@ -108,20 +108,23 @@ import {
 } from "../../services/agent/promptSystem.js";
 import { buildConversationPromptVariables } from "../../services/agent/persona.js";
 import { DEFAULT_CONTEXT_MESSAGE_LIMIT, MAX_STORED_CONVERSATION_MESSAGES, GROUP_CHAT_SUMMARY_WINDOW_MS, MAX_SELFIE_REFERENCE_IMAGES, MAX_SELFIE_WORKSPACE_REFERENCE_IMAGES, MAX_CURRENT_CONTEXT_IMAGES, MAX_HISTORY_CONTEXT_IMAGES, HYDRATE_MESSAGE_WINDOW_MS, ACTIVE_CONVERSATION_WINDOW_MS, DIRECT_REPLY_TIMEOUT_MS, AMBIENT_ORCHESTRATOR_TIMEOUT_MS, ORCHESTRATOR_MAX_RETRIES, PREPARE_TIMEOUT_MS, RECENT_CONTEXT_TOKEN_BUDGET, DEDUPE_TTL_MS, MAX_DEDUPE_KEYS, DEFAULT_ADMIN_NAME, GROUP_CHAT_SUMMARY_COMMAND, CONVERSATION_REPLY_PROMPT_FILE, SELFIE_PROMPT_FILE, GROUP_CHAT_SUMMARY_PROMPT_FILE, ADMIN_PERSONA_FILES, ADMIN_RUNTIME_PROMPT_DEFAULTS, BatchUserInfo, WorkingMemoryMergeOutput, WorkingMemoryMergeContext, personaFileNameForAdminId, AdminIdentity, ConversationReplyUpdateInput, RuntimeCommandContext, ReplyDeliveryDraft, ReplyDelivery, DeferredCodexTurn, AmbientReplyJob, AmbientReplyState, AmbientIdleTimer, RuntimeConfigSnapshot, RuntimePromptSnapshot, SunaRuntimeOptions } from "./runtimeContracts.js";
-import { conversationDescriptorFromInput, conversationRecordId, conversationReplyEnabled, isWebConversationId, normalizeConversationId, persistedAttachments, persistedQuoteReferences } from "./messagingAttachmentHelpers.js";
+import { conversationDescriptorFromInput, conversationRecordId, conversationReplyEnabled, incomingConversationMessageId, isWebConversationId, normalizeConversationId, persistedAttachments, persistedQuoteReferences } from "./messagingAttachmentHelpers.js";
 import { appendConversationMessage } from "./conversationMemoryHelpers.js";
 import { conversationLastText, conversationTitle } from "./selfieHelpers.js";
-import { saveConversationRecords } from "./infrastructure.js";
+import {
+  saveConversationRecordStrict,
+  saveConversationRecords
+} from "./infrastructure.js";
 
 import type { SunaRuntime } from "../runtime.js";
 type RuntimeHost = SunaRuntime;
 
 export function runtime_incomingCaptureSequence(this: RuntimeHost, incoming: ParsedIncomingMessage) {
     const record = this.conversationRecords.get(conversationRecordId(incoming));
-    const messageId = incoming.messageId == null ? "" : String(incoming.messageId);
-    const existing = messageId
-      ? record?.messages.find((message) => message.role === "user" && message.id === messageId)
-      : undefined;
+    const messageId = incomingConversationMessageId(incoming);
+    const existing = record?.messages.find((message) => (
+      message.role === "user" && message.id === messageId
+    ));
     return typeof existing?.sequence === "number"
       ? existing.sequence
       : (record?.messageCount ?? 0) + 1;
@@ -132,10 +135,10 @@ export function runtime_recordIncomingMessage(this: RuntimeHost,
   ) {
     const at = incoming.time;
     const record = this.ensureConversationRecord(incoming, at);
-    const messageId = incoming.messageId == null ? "" : String(incoming.messageId);
-    const existing = messageId
-      ? record.messages.find((message) => message.role === "user" && message.id === messageId)
-      : undefined;
+    const messageId = incomingConversationMessageId(incoming);
+    const existing = record.messages.find((message) => (
+      message.role === "user" && message.id === messageId
+    ));
     if (existing || (
       options.expectedSequence != null &&
       record.messageCount >= options.expectedSequence
@@ -144,7 +147,7 @@ export function runtime_recordIncomingMessage(this: RuntimeHost,
     const senderName = senderDisplayName(incoming.sender);
     const identity = senderIdentity(incoming.sender);
     appendConversationMessage(record, {
-      id: messageId || nanoid(),
+      id: messageId,
       role: "user",
       text: incoming.text || (inboundImageUrls(incoming).length ? "[图片]" : incoming.attachments.length ? "[文件]" : "[消息]"),
       at,
@@ -319,7 +322,17 @@ export function runtime_upsertConversationRecordForReplySetting(this: RuntimeHos
     return record;
   }
 export function runtime_persistConversationRecords(this: RuntimeHost) {
-    saveConversationRecords([...this.conversationRecords.values()]);
+    saveConversationRecords(
+      [...this.conversationRecords.values()],
+      this.config,
+      this.protectedConversationIds()
+    );
+  }
+export function runtime_persistConversationRecordStrict(
+  this: RuntimeHost,
+  record: ConversationRecord
+) {
+    saveConversationRecordStrict(record, this.config);
   }
 export function runtime_markConversationMessagesAsRecordedOnly(this: RuntimeHost, record: ConversationRecord) {
     record.memoryCompressedThroughMessageCount = record.messageCount;
@@ -376,6 +389,7 @@ export class RuntimeConversations {
   ensureConversationRecord(...args: Parameters<typeof runtime_ensureConversationRecord>) { return runtime_ensureConversationRecord.call(this.host, ...args); }
   upsertConversationRecordForReplySetting(...args: Parameters<typeof runtime_upsertConversationRecordForReplySetting>) { return runtime_upsertConversationRecordForReplySetting.call(this.host, ...args); }
   persistConversationRecords(...args: Parameters<typeof runtime_persistConversationRecords>) { return runtime_persistConversationRecords.call(this.host, ...args); }
+  persistConversationRecordStrict(...args: Parameters<typeof runtime_persistConversationRecordStrict>) { return runtime_persistConversationRecordStrict.call(this.host, ...args); }
   markConversationMessagesAsRecordedOnly(...args: Parameters<typeof runtime_markConversationMessagesAsRecordedOnly>) { return runtime_markConversationMessagesAsRecordedOnly.call(this.host, ...args); }
   getActiveConversationRecords(...args: Parameters<typeof runtime_getActiveConversationRecords>) { return runtime_getActiveConversationRecords.call(this.host, ...args); }
   recordServiceMessage(...args: Parameters<typeof runtime_recordServiceMessage>) { return runtime_recordServiceMessage.call(this.host, ...args); }

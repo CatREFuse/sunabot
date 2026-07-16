@@ -80,9 +80,22 @@ export async function runtime_loadQuoteReferences(
   return uniqueQuotes(quoteReferences);
 }
 
-export function runtime_selectRelevantAttachments(this: RuntimeHost, incoming: ParsedIncomingMessage, query: string) {
+export function runtime_selectRelevantAttachments(
+  this: RuntimeHost,
+  incoming: ParsedIncomingMessage,
+  query: string,
+  contextThroughSequence?: number,
+  contextFromSequence?: number
+) {
   const record = this.conversationRecords.get(conversationRecordId(incoming));
-  return selectRelevantConversationAttachments(incoming, record, this.contextMessageLimit(), query);
+  return selectRelevantConversationAttachments(
+    incoming,
+    record,
+    this.contextMessageLimit(),
+    query,
+    contextThroughSequence,
+    contextFromSequence
+  );
 }
 
 export async function runtime_refreshAttachmentCacheReferences(this: RuntimeHost) {

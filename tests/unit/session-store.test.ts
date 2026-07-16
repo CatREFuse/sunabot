@@ -481,6 +481,640 @@ describe("SessionStore", () => {
     });
   });
 
+  it("finds and reschedules pending or active events without bypassing Session heads", async () => {
+    const { store, advance } = await createHarness();
+    const firstHead = store.enqueueEvent({
+      sessionId: "debounce:first",
+      kind: "reply_debounce",
+      payload: { text: "head" },
+      availableAt: 1_500
+    }).event;
+    const hiddenTail = store.enqueueEvent({
+      sessionId: "debounce:first",
+      kind: "reply_debounce",
+      payload: { text: "tail" },
+      availableAt: 1_100
+    }).event;
+    store.enqueueEvent({
+      sessionId: "debounce:second",
+      kind: "reply_debounce",
+      payload: { text: "other" },
+      availableAt: 1_300
+    });
+
+    expect(store.getPendingEvent("debounce:first", "reply_debounce")?.id).toBe(hiddenTail.id);
+    expect(store.getActiveEvent("debounce:first", "reply_debounce")?.id).toBe(hiddenTail.id);
+    expect(store.nextClaimableEventAvailableAt()).toBe(1_300);
+    expect(store.reschedulePendingEvent(firstHead.id, 1_200)).toMatchObject({
+      id: firstHead.id,
+      availableAt: 1_200,
+      status: "pending"
+    });
+    expect(store.nextClaimableEventAvailableAt()).toBe(1_200);
+    expect(() => store.reschedulePendingEvent(firstHead.id, -1)).toThrow("non-negative integer");
+
+    advance(200);
+    const running = store.claimNextTurn({
+      workerId: "debounce-worker",
+      sessionId: "debounce:first"
+    })!;
+    expect(running.event.id).toBe(firstHead.id);
+    expect(store.reschedulePendingEvent(firstHead.id, 1_600)).toBeUndefined();
+    expect(store.bumpActiveEventAvailableAt(firstHead.id, "wrong_kind", 1_600)).toBeUndefined();
+    expect(store.bumpActiveEventAvailableAt(firstHead.id, "reply_debounce", 1_600)).toMatchObject({
+      id: firstHead.id,
+      availableAt: 1_600,
+      status: "running"
+    });
+    store.finishTurn({
+      turnId: running.turn.id,
+      workerId: "debounce-worker",
+      outcome: "no_reply"
+    });
+    expect(store.bumpActiveEventAvailableAt(firstHead.id, "reply_debounce", 1_700)).toBeUndefined();
+  });
+
+  it("lists active events by kind in stable creation and id order", () => {
+    const ids = ["active-b", "active-a", "other", "completed"];
+    let generatedId = 0;
+    const store = storeForCleanup(new SessionStore({
+      databasePath: ":memory:",
+      clock: () => 1_000,
+      idFactory: () => ids.shift() ?? `generated-${++generatedId}`
+    }));
+    const activeB = store.enqueueEvent({
+      sessionId: "active:list:b",
+      kind: "reply_debounce",
+      payload: { sender: "b" }
+    }).event;
+    const activeA = store.enqueueEvent({
+      sessionId: "active:list:a",
+      kind: "reply_debounce",
+      payload: { sender: "a" }
+    }).event;
+    store.enqueueEvent({
+      sessionId: "active:list:other",
+      kind: "incoming",
+      payload: {}
+    });
+    const terminal = store.enqueueEvent({
+      sessionId: "active:list:completed",
+      kind: "reply_debounce",
+      payload: {}
+    }).event;
+    expect(store.claimNextTurn({
+      workerId: "active-list-running",
+      sessionId: activeB.sessionId
+    })?.event.id).toBe(activeB.id);
+    const terminalClaim = store.claimNextTurn({
+      workerId: "active-list-completed",
+      sessionId: terminal.sessionId
+    })!;
+    store.finishTurn({
+      turnId: terminalClaim.turn.id,
+      workerId: "active-list-completed",
+      outcome: "no_reply"
+    });
+
+    expect(store.listActiveEvents("reply_debounce")).toMatchObject([
+      { id: activeA.id, status: "pending", payload: { sender: "a" } },
+      { id: activeB.id, status: "running", payload: { sender: "b" } }
+    ]);
+    expect(store.listActiveEvents("incoming")).toHaveLength(1);
+    expect(() => store.listActiveEvents(" ")).toThrow("kind is required");
+  });
+
+  it("atomically replaces an active event deadline and payload while preserving envelope metadata", async () => {
+    const { store, advance } = await createHarness();
+    const event = store.enqueueEvent({
+      sessionId: "debounce:active-update",
+      kind: "reply_debounce",
+      dedupeKey: "debounce:active-update:sender",
+      payload: { trigger: "message-1", followUps: [] },
+      availableAt: 1_200
+    }).event;
+    const database = (store as unknown as { database: DatabaseSync }).database;
+    const readStoredEnvelope = () => JSON.parse(String((database.prepare(`
+      SELECT payload_json FROM session_events WHERE id = ?
+    `).get(event.id) as { payload_json: string }).payload_json)) as Record<string, unknown>;
+    const before = readStoredEnvelope();
+    const { payload: _beforePayload, ...beforeMetadata } = before;
+
+    expect(store.updateActiveEvent({
+      eventId: event.id,
+      kind: "reply_debounce",
+      availableAt: 1_300,
+      expectedAvailableAt: 1_200,
+      expectedPayload: { trigger: "message-1", followUps: [] },
+      payload: { trigger: "message-1", followUps: ["message-2"] }
+    })).toMatchObject({
+      status: "pending",
+      availableAt: 1_300,
+      payload: { trigger: "message-1", followUps: ["message-2"] }
+    });
+    expect(store.updateActiveEvent({
+      eventId: event.id,
+      kind: "reply_debounce",
+      availableAt: 1_350,
+      expectedAvailableAt: 1_300,
+      expectedPayload: { trigger: "message-1", followUps: [] },
+      payload: { trigger: "must-not-overwrite-pending" }
+    })).toBeUndefined();
+    expect(store.getEvent(event.id)).toMatchObject({
+      availableAt: 1_300,
+      payload: { trigger: "message-1", followUps: ["message-2"] }
+    });
+    expect(store.updateActiveEvent({
+      eventId: event.id,
+      kind: "reply_debounce",
+      availableAt: 1_200,
+      payload: { trigger: "message-1", followUps: ["message-2", "message-3"] }
+    })).toMatchObject({
+      status: "pending",
+      availableAt: 1_200,
+      payload: { trigger: "message-1", followUps: ["message-2", "message-3"] }
+    });
+    const { payload: _afterPayload, ...afterMetadata } = readStoredEnvelope();
+    expect(afterMetadata).toEqual(beforeMetadata);
+    expect(afterMetadata.id).toBe(event.id);
+
+    advance(200);
+    const running = store.claimNextTurn({
+      workerId: "active-update-worker",
+      sessionId: "debounce:active-update"
+    })!;
+    expect(store.updateActiveEvent({
+      eventId: event.id,
+      kind: "reply_debounce",
+      availableAt: 1_500,
+      expectedAvailableAt: 1_200,
+      expectedPayload: { trigger: "message-1", followUps: ["message-2", "message-3"] },
+      payload: { trigger: "message-1", followUps: ["message-2", "message-3", "message-4"] }
+    })).toMatchObject({
+      status: "running",
+      availableAt: 1_500,
+      payload: { followUps: ["message-2", "message-3", "message-4"] }
+    });
+    expect(store.updateActiveEvent({
+      eventId: event.id,
+      kind: "reply_debounce",
+      availableAt: 1_550,
+      expectedAvailableAt: 1_500,
+      expectedPayload: { trigger: "message-1", followUps: ["message-2", "message-3"] },
+      payload: { trigger: "must-not-overwrite-running" }
+    })).toBeUndefined();
+    expect(store.updateActiveEvent({
+      eventId: event.id,
+      kind: "wrong_kind",
+      availableAt: 1_600,
+      payload: { trigger: "must-not-apply" }
+    })).toBeUndefined();
+    expect(store.getEvent(event.id)).toMatchObject({
+      availableAt: 1_500,
+      payload: { followUps: ["message-2", "message-3", "message-4"] }
+    });
+    expect(() => store.updateActiveEvent({
+      eventId: event.id,
+      kind: "reply_debounce",
+      availableAt: 1_600,
+      expectedAvailableAt: -1,
+      payload: {}
+    })).toThrow("expectedAvailableAt must be a non-negative integer");
+
+    store.finishTurn({
+      turnId: running.turn.id,
+      workerId: "active-update-worker",
+      outcome: "no_reply"
+    });
+    expect(store.updateActiveEvent({
+      eventId: event.id,
+      kind: "reply_debounce",
+      availableAt: 1_700,
+      payload: { trigger: "must-not-revive" }
+    })).toBeUndefined();
+  });
+
+  it("rolls back both active event fields when persistence rejects the update", async () => {
+    const { store } = await createHarness();
+    const event = store.enqueueEvent({
+      sessionId: "debounce:active-update-fault",
+      kind: "reply_debounce",
+      payload: { trigger: "message-1", followUps: [] },
+      availableAt: 1_400
+    }).event;
+    const database = (store as unknown as { database: DatabaseSync }).database;
+    database.exec(`
+      CREATE TRIGGER inject_active_event_update_failure
+      BEFORE UPDATE OF available_at, payload_json ON session_events
+      WHEN json_extract(NEW.payload_json, '$.payload.value.injectFailure') = 1
+      BEGIN
+        SELECT RAISE(ABORT, 'injected active event update failure');
+      END;
+    `);
+
+    expect(() => store.updateActiveEvent({
+      eventId: event.id,
+      kind: "reply_debounce",
+      availableAt: 1_800,
+      payload: { trigger: "message-1", followUps: ["message-2"], injectFailure: true }
+    })).toThrow("injected active event update failure");
+    expect(store.getEvent(event.id)).toMatchObject({
+      status: "pending",
+      availableAt: 1_400,
+      payload: { trigger: "message-1", followUps: [] }
+    });
+
+    database.prepare(`
+      UPDATE session_events SET payload_json = json_set(payload_json, '$.id', 'wrong-event-id')
+      WHERE id = ?
+    `).run(event.id);
+    expect(() => store.updateActiveEvent({
+      eventId: event.id,
+      kind: "reply_debounce",
+      availableAt: 1_900,
+      payload: { trigger: "must-not-reencode" }
+    })).toThrow("envelope id");
+    expect(store.getEvent(event.id)?.availableAt).toBe(1_400);
+  });
+
+  it("atomically hands a control turn to a deduplicated target event", async () => {
+    const { store } = await createHarness();
+    const source = store.enqueueEvent({
+      sessionId: "debounce:handoff",
+      kind: "reply_debounce",
+      dedupeKey: "debounce:handoff:source",
+      payload: { trigger: "message-1" },
+      availableAt: 1_000
+    }).event;
+    const claim = store.claimNextTurn({ workerId: "handoff-worker" })!;
+    const input = {
+      turnId: claim.turn.id,
+      workerId: "handoff-worker",
+      expectedSourceAvailableAt: source.availableAt,
+      targetEvent: {
+        sessionId: "group:handoff",
+        kind: "incoming",
+        dedupeKey: `handoff:${source.id}`,
+        payload: { trigger: "message-1" }
+      }
+    };
+
+    const handedOff = store.handoffTurn(input);
+    expect(handedOff).toMatchObject({
+      handedOff: true,
+      inserted: true,
+      duplicate: false,
+      turn: { status: "no_reply" },
+      sourceEvent: { id: source.id, status: "completed" },
+      targetEvent: {
+        sessionId: "group:handoff",
+        sequence: 1,
+        kind: "incoming",
+        status: "pending",
+        dedupeKey: `handoff:${source.id}`
+      }
+    });
+    expect(store.handoffTurn(input)).toMatchObject({
+      handedOff: true,
+      inserted: false,
+      duplicate: true,
+      targetEvent: { id: handedOff.handedOff ? handedOff.targetEvent.id : "unreachable" }
+    });
+    expect(store.listEvents("group:handoff")).toHaveLength(1);
+
+    const existingTarget = store.enqueueEvent({
+      sessionId: "group:existing-target",
+      kind: "incoming",
+      dedupeKey: "handoff:already-present",
+      payload: { trigger: "already present" }
+    }).event;
+    const secondSource = store.enqueueEvent({
+      sessionId: "debounce:existing-target",
+      kind: "reply_debounce",
+      payload: {},
+      availableAt: 1_000
+    }).event;
+    const secondClaim = store.claimNextTurn({
+      workerId: "handoff-existing-worker",
+      sessionId: "debounce:existing-target"
+    })!;
+    expect(store.handoffTurn({
+      turnId: secondClaim.turn.id,
+      workerId: "handoff-existing-worker",
+      expectedSourceAvailableAt: secondSource.availableAt,
+      targetEvent: {
+        sessionId: "group:existing-target",
+        kind: "incoming",
+        dedupeKey: "handoff:already-present",
+        payload: { trigger: "already present" }
+      }
+    })).toMatchObject({
+      handedOff: true,
+      inserted: false,
+      duplicate: false,
+      sourceEvent: { status: "completed" },
+      targetEvent: { id: existingTarget.id }
+    });
+    expect(store.listEvents("group:existing-target")).toHaveLength(1);
+  });
+
+  it("deduplicates a handoff target across nested JSON key insertion orders", async () => {
+    const { store } = await createHarness();
+    const composedKey = "\u00e9";
+    const decomposedKey = "e\u0301";
+    const targetSessionId = "group:handoff-canonical-order";
+    const targetDedupeKey = "handoff:canonical-order";
+    const existing = store.enqueueEvent({
+      sessionId: targetSessionId,
+      kind: "incoming",
+      dedupeKey: targetDedupeKey,
+      payload: {
+        nested: {
+          [composedKey]: "composed",
+          [decomposedKey]: "decomposed"
+        }
+      }
+    }).event;
+    const source = store.enqueueEvent({
+      sessionId: "debounce:handoff-canonical-order",
+      kind: "reply_debounce",
+      payload: {}
+    }).event;
+    const claim = store.claimNextTurn({
+      workerId: "handoff-canonical-order",
+      sessionId: source.sessionId
+    })!;
+
+    expect(store.handoffTurn({
+      turnId: claim.turn.id,
+      workerId: "handoff-canonical-order",
+      expectedSourceAvailableAt: source.availableAt,
+      targetEvent: {
+        sessionId: targetSessionId,
+        kind: "incoming",
+        dedupeKey: targetDedupeKey,
+        payload: {
+          nested: {
+            [decomposedKey]: "decomposed",
+            [composedKey]: "composed"
+          }
+        }
+      }
+    })).toMatchObject({
+      handedOff: true,
+      inserted: false,
+      sourceEvent: { id: source.id, status: "completed" },
+      targetEvent: { id: existing.id }
+    });
+  });
+
+  it.each([
+    {
+      label: "kind",
+      existingKind: "different_kind",
+      existingPayload: {
+        incoming: { senderId: "sender-a", messageId: "message-1" },
+        replyGate: { revision: 1 },
+        contextThroughSequence: 4
+      }
+    },
+    {
+      label: "sender",
+      existingKind: "incoming",
+      existingPayload: {
+        incoming: { senderId: "sender-b", messageId: "message-1" },
+        replyGate: { revision: 1 },
+        contextThroughSequence: 4
+      }
+    },
+    {
+      label: "message",
+      existingKind: "incoming",
+      existingPayload: {
+        incoming: { senderId: "sender-a", messageId: "message-2" },
+        replyGate: { revision: 1 },
+        contextThroughSequence: 4
+      }
+    },
+    {
+      label: "gate",
+      existingKind: "incoming",
+      existingPayload: {
+        incoming: { senderId: "sender-a", messageId: "message-1" },
+        replyGate: { revision: 2 },
+        contextThroughSequence: 4
+      }
+    },
+    {
+      label: "context",
+      existingKind: "incoming",
+      existingPayload: {
+        incoming: { senderId: "sender-a", messageId: "message-1" },
+        replyGate: { revision: 1 },
+        contextThroughSequence: 5
+      }
+    }
+  ])("rejects a handoff target dedupe $label collision without changing the source", async ({
+    label,
+    existingKind,
+    existingPayload
+  }) => {
+    const { store } = await createHarness();
+    const targetSessionId = `group:handoff-collision:${label}`;
+    const targetDedupeKey = `handoff:collision:${label}`;
+    const requestedPayload = {
+      incoming: { senderId: "sender-a", messageId: "message-1" },
+      replyGate: { revision: 1 },
+      contextThroughSequence: 4
+    };
+    const existing = store.enqueueEvent({
+      sessionId: targetSessionId,
+      kind: existingKind,
+      dedupeKey: targetDedupeKey,
+      payload: existingPayload
+    }).event;
+    expect(store.enqueueEvent({
+      sessionId: targetSessionId,
+      kind: "incoming",
+      dedupeKey: targetDedupeKey,
+      payload: requestedPayload
+    })).toMatchObject({ inserted: false, event: { id: existing.id } });
+    const source = store.enqueueEvent({
+      sessionId: `debounce:handoff-collision:${label}`,
+      kind: "reply_debounce",
+      payload: {}
+    }).event;
+    const claim = store.claimNextTurn({
+      workerId: `handoff-collision:${label}`,
+      sessionId: source.sessionId
+    })!;
+
+    expect(() => store.handoffTurn({
+      turnId: claim.turn.id,
+      workerId: `handoff-collision:${label}`,
+      expectedSourceAvailableAt: source.availableAt,
+      targetEvent: {
+        sessionId: targetSessionId,
+        kind: "incoming",
+        dedupeKey: targetDedupeKey,
+        payload: requestedPayload
+      }
+    })).toThrow("Handoff target dedupe collision");
+    expect(store.getEvent(source.id)).toMatchObject({ status: "running" });
+    expect(store.getTurn(claim.turn.id)).toMatchObject({ status: "running" });
+    expect(store.getSessionState(source.sessionId)?.completedEventSequence).toBe(0);
+    expect(store.getEvent(existing.id)).toMatchObject({
+      kind: existingKind,
+      payload: existingPayload
+    });
+  });
+
+  it.each([
+    ["conversationId", "group:wrong-conversation"],
+    ["correlationId", "wrong-correlation"],
+    ["causationId", "wrong-causation"],
+    ["idempotencyKey", "wrong-idempotency"]
+  ])("rejects mismatched handoff target %s provenance", async (field, replacement) => {
+    const { store } = await createHarness();
+    const targetSessionId = `group:handoff-provenance:${field}`;
+    const targetDedupeKey = `handoff:provenance:${field}`;
+    const payload = { incoming: { senderId: "sender-a", messageId: "message-1" } };
+    const existing = store.enqueueEvent({
+      sessionId: targetSessionId,
+      kind: "incoming",
+      dedupeKey: targetDedupeKey,
+      payload
+    }).event;
+    const database = (store as unknown as { database: DatabaseSync }).database;
+    database.prepare(`
+      UPDATE session_events SET payload_json = json_set(payload_json, ?, ?)
+      WHERE id = ?
+    `).run(`$.${field}`, replacement, existing.id);
+    const source = store.enqueueEvent({
+      sessionId: `debounce:handoff-provenance:${field}`,
+      kind: "reply_debounce",
+      payload: {}
+    }).event;
+    const claim = store.claimNextTurn({
+      workerId: `handoff-provenance:${field}`,
+      sessionId: source.sessionId
+    })!;
+
+    expect(() => store.handoffTurn({
+      turnId: claim.turn.id,
+      workerId: `handoff-provenance:${field}`,
+      expectedSourceAvailableAt: source.availableAt,
+      targetEvent: {
+        sessionId: targetSessionId,
+        kind: "incoming",
+        dedupeKey: targetDedupeKey,
+        payload
+      }
+    })).toThrow("Handoff target dedupe collision");
+    expect(store.getEvent(source.id)).toMatchObject({ status: "running" });
+    expect(store.getTurn(claim.turn.id)).toMatchObject({ status: "running" });
+  });
+
+  it("lets a deadline bump win a running handoff and retries from pending", async () => {
+    const { store, advance } = await createHarness();
+    const source = store.enqueueEvent({
+      sessionId: "debounce:race",
+      kind: "reply_debounce",
+      payload: { trigger: "message-1" },
+      availableAt: 1_000
+    }).event;
+    const first = store.claimNextTurn({ workerId: "handoff:first" })!;
+    expect(store.bumpActiveEventAvailableAt(source.id, "reply_debounce", 1_500)).toMatchObject({
+      status: "running",
+      availableAt: 1_500
+    });
+
+    const stale = store.handoffTurn({
+      turnId: first.turn.id,
+      workerId: "handoff:first",
+      expectedSourceAvailableAt: 1_000,
+      targetEvent: {
+        sessionId: "group:race",
+        kind: "incoming",
+        dedupeKey: `handoff:${source.id}`,
+        payload: { trigger: "message-1" }
+      }
+    });
+    expect(stale).toMatchObject({
+      handedOff: false,
+      turn: { status: "interrupted" },
+      sourceEvent: { status: "pending", availableAt: 1_500 }
+    });
+    expect(store.listEvents("group:race")).toEqual([]);
+    expect(store.claimNextTurn({ workerId: "too-early" })).toBeNull();
+
+    advance(500);
+    const retry = store.claimNextTurn({ workerId: "handoff:retry" })!;
+    const committed = store.handoffTurn({
+      turnId: retry.turn.id,
+      workerId: "handoff:retry",
+      expectedSourceAvailableAt: 1_500,
+      targetEvent: {
+        sessionId: "group:race",
+        kind: "incoming",
+        dedupeKey: `handoff:${source.id}`,
+        payload: { trigger: "message-2" }
+      }
+    });
+    expect(committed).toMatchObject({ handedOff: true, inserted: true });
+    expect(store.listTurns("debounce:race").map((turn) => turn.status)).toEqual([
+      "interrupted",
+      "no_reply"
+    ]);
+    expect(store.listEvents("group:race")).toHaveLength(1);
+    expect(store.bumpActiveEventAvailableAt(source.id, "reply_debounce", 2_000)).toBeUndefined();
+  });
+
+  it("rolls back the target event when source handoff completion fails", async () => {
+    const { store } = await createHarness();
+    const source = store.enqueueEvent({
+      sessionId: "debounce:fault",
+      kind: "reply_debounce",
+      payload: {},
+      availableAt: 1_000
+    }).event;
+    const claim = store.claimNextTurn({ workerId: "handoff:fault" })!;
+    const database = (store as unknown as { database: DatabaseSync }).database;
+    database.exec(`
+      CREATE TRIGGER inject_handoff_failure
+      BEFORE UPDATE OF status ON turns
+      WHEN NEW.status = 'no_reply'
+      BEGIN
+        SELECT RAISE(ABORT, 'injected handoff failure');
+      END;
+    `);
+
+    const handoffInput = {
+      turnId: claim.turn.id,
+      workerId: "handoff:fault",
+      expectedSourceAvailableAt: source.availableAt,
+      targetEvent: {
+        sessionId: "group:fault",
+        kind: "incoming",
+        dedupeKey: `handoff:${source.id}`,
+        payload: { text: "must roll back" }
+      }
+    };
+    expect(() => store.handoffTurn(handoffInput)).toThrow("injected handoff failure");
+    expect(store.getSessionState("group:fault")).toBeUndefined();
+    expect(store.getEvent(source.id)).toMatchObject({ status: "running" });
+    expect(store.getTurn(claim.turn.id)).toMatchObject({ status: "running" });
+
+    database.exec("DROP TRIGGER inject_handoff_failure");
+    expect(store.handoffTurn(handoffInput)).toMatchObject({
+      handedOff: true,
+      inserted: true,
+      sourceEvent: { status: "completed" },
+      targetEvent: { payload: { text: "must roll back" } }
+    });
+    expect(store.listEvents("group:fault")).toHaveLength(1);
+  });
+
   it("appends a running turn outbox idempotently across attempts and rejects key collisions", async () => {
     const { store } = await createHarness();
     const firstEvent = store.enqueueEvent({
@@ -804,6 +1438,59 @@ describe("SessionStore", () => {
       firstToken
     );
     expect(store.getToolJob(first.id)?.processIdentity).toBeUndefined();
+  });
+
+  it("preserves a bumped running event deadline when recovering after restart", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-session-bumped-restart-"));
+    temporaryDirectories.push(directory);
+    const databasePath = path.join(directory, "sessions.sqlite");
+    let now = 10_000;
+    let id = 0;
+    const options = () => ({
+      databasePath,
+      clock: () => now,
+      idFactory: () => `bumped-restart-${++id}`
+    });
+
+    const before = new SessionStore(options());
+    storeForCleanup(before);
+    const source = before.enqueueEvent({
+      sessionId: "debounce:bumped-restart",
+      kind: "reply_debounce",
+      payload: {},
+      availableAt: now
+    }).event;
+    const running = before.claimNextTurn({ workerId: "old-turn", leaseMs: 60_000 })!;
+    expect(running.event.id).toBe(source.id);
+    expect(before.bumpActiveEventAvailableAt(source.id, "reply_debounce", 15_000)).toMatchObject({
+      status: "running",
+      availableAt: 15_000
+    });
+    before.close();
+    stores.splice(stores.indexOf(before), 1);
+
+    now = 10_100;
+    const after = new SessionStore({ ...options(), recoverOnOpen: "all" });
+    storeForCleanup(after);
+    expect(after.getTurn(running.turn.id)).toMatchObject({ status: "interrupted" });
+    expect(after.getEvent(source.id)).toMatchObject({
+      status: "pending",
+      availableAt: 15_000
+    });
+    expect(after.nextClaimableEventAvailableAt()).toBe(15_000);
+    expect(after.claimNextTurn({
+      workerId: "too-early",
+      sessionId: "debounce:bumped-restart"
+    })).toBeNull();
+
+    now = 15_000;
+    expect(after.claimNextTurn({
+      workerId: "after-deadline",
+      sessionId: "debounce:bumped-restart"
+    })).toMatchObject({
+      event: { id: source.id, attempts: 2 },
+      turn: { attempt: 2, status: "running" }
+    });
   });
 
   it("recovers all abandoned leases after reopening the database", async () => {

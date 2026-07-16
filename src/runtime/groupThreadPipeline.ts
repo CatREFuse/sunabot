@@ -32,6 +32,7 @@ const GROUP_THREAD_PROMPT_REVISION = "orchestrator.group-thread:v1";
 
 export interface PrepareGroupThreadContextOptions {
   captureSequence?: number;
+  contextThroughSequence?: number;
   signal?: AbortSignal;
 }
 
@@ -67,13 +68,25 @@ export async function runtime_prepareGroupThreadContext(
   const conversationId = conversationRecordId(incoming);
   const record = this.conversationRecords.get(conversationId);
   if (!record) return undefined;
+  const sourceThroughSequence = options.contextThroughSequence ?? options.captureSequence;
+  const currentBatchFromSequence = options.contextThroughSequence == null
+    ? undefined
+    : options.captureSequence;
+  const historyCaptureSequence = currentBatchFromSequence ?? options.captureSequence;
   const sourceMessages = record.messages
     .filter((message) => message.role === "user" || message.role === "assistant")
     .filter((message) => Number.isSafeInteger(message.sequence) && Number(message.sequence) > 0)
-    .filter((message) => options.captureSequence == null || Number(message.sequence) <= options.captureSequence);
+    .filter((message) => sourceThroughSequence == null || Number(message.sequence) <= sourceThroughSequence)
+    .filter((message) => currentBatchFromSequence == null ||
+      Number(message.sequence) < currentBatchFromSequence || message.role === "user");
   const visibleMessageIds = groupContextMessageIds(
-    this.buildRecentContextMessages(incoming, options.captureSequence, INITIAL_THREAD_MESSAGE_LIMIT)
+    this.buildRecentContextMessages(incoming, historyCaptureSequence, INITIAL_THREAD_MESSAGE_LIMIT)
   );
+  if (currentBatchFromSequence != null) {
+    for (const message of sourceMessages) {
+      if (Number(message.sequence) >= currentBatchFromSequence) visibleMessageIds.add(message.id);
+    }
+  }
   const store = applicationDataStore(this.config);
   let previousState: GroupThreadStateV1;
   let baseRevision: number;

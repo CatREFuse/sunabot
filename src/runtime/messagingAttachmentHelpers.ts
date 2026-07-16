@@ -78,6 +78,10 @@ import {
   type OutboundMessageV1
 } from "../../packages/contracts/messaging/messages.js";
 import {
+  inboundConversationIdV1,
+  inboundMessageIdentityV1
+} from "../../packages/contracts/messaging/incomingIdentity.js";
+import {
   generatedImageMediaAsset,
   imageMediaAsset,
   type AttachmentSourcePort
@@ -112,17 +116,24 @@ export function restoredGroupIncoming(
   record: ConversationRecord,
   message: ConversationRecord["messages"][number]
 ): ParsedIncomingMessage | undefined {
-  if (!record.groupId || !message.userId) return undefined;
+  const incoming = restoredConversationIncoming(record, message);
+  return incoming?.groupId ? incoming : undefined;
+}
+export function restoredConversationIncoming(
+  record: ConversationRecord,
+  message: ConversationRecord["messages"][number]
+): ParsedIncomingMessage | undefined {
+  if (!message.userId || (record.scope !== "private" && !record.groupId)) return undefined;
   const numericMessageId = Number(message.id);
   return {
     schemaVersion: 1,
     ...(record.agentId ? { agentId: record.agentId } : {}),
     ...(record.accountId ? { accountId: record.accountId } : {}),
-    scope: "user_group",
+    scope: record.scope,
     ...(Number.isSafeInteger(numericMessageId) && numericMessageId > 0 ? { messageId: numericMessageId } : {}),
     time: message.at,
     userId: message.userId,
-    groupId: record.groupId,
+    ...(record.groupId ? { groupId: record.groupId } : {}),
     selfId: message.selfId ?? record.selfId,
     sender: {
       id: String(message.userId),
@@ -141,11 +152,7 @@ export function restoredGroupIncoming(
 export const WEB_CHAT_CONVERSATION_ID = "web:admin";
 
 export function conversationRecordId(incoming: ParsedIncomingMessage) {
-  if (incoming.transport === "web") return WEB_CHAT_CONVERSATION_ID;
-  const localId = incoming.groupId ? `group:${incoming.groupId}` : `private:${incoming.userId}`;
-  return incoming.accountId && incoming.accountId !== "primary"
-    ? `account:${incoming.accountId}:${localId}`
-    : localId;
+  return inboundConversationIdV1(incoming);
 }
 export function outboundForIncoming(
   incoming: ParsedIncomingMessage,
@@ -189,10 +196,12 @@ export function attachmentSourcePort(port: MessagingPort) {
   return candidate as MessagingPort & AttachmentSourcePort;
 }
 export function persistentIncomingKey(incoming: ParsedIncomingMessage) {
-  const messageId = incoming.messageId == null
-    ? `${incoming.time}:${incoming.userId}:${incoming.text}:${inboundImageUrls(incoming).join(",")}`
+  return `${incoming.selfId ?? ""}:${conversationRecordId(incoming)}:${inboundMessageIdentityV1(incoming)}`;
+}
+export function incomingConversationMessageId(incoming: ParsedIncomingMessage) {
+  return incoming.messageId == null
+    ? inboundMessageIdentityV1(incoming)
     : String(incoming.messageId);
-  return `${incoming.selfId ?? ""}:${conversationRecordId(incoming)}:${messageId}`;
 }
 export function queueIncomingSnapshot(incoming: ParsedIncomingMessage): ParsedIncomingMessage {
   return {
@@ -588,9 +597,22 @@ export function selectRelevantConversationAttachments(
   incoming: ParsedIncomingMessage,
   record: ConversationRecord | undefined,
   contextMessageLimit: number,
-  query: string
+  query: string,
+  contextThroughSequence?: number,
+  contextFromSequence?: number
 ) {
   const direct = uniqueAttachments(incoming.attachments);
+  if (record && contextThroughSequence != null && contextFromSequence != null) {
+    const windowAttachments = record.messages
+      .filter((message) => message.role === "user")
+      .filter((message) => {
+        const sequence = Number(message.sequence ?? 0);
+        return Number.isSafeInteger(sequence) &&
+          sequence >= contextFromSequence && sequence <= contextThroughSequence;
+      })
+      .flatMap((message) => usableAttachments(conversationMessageAttachments(message)));
+    return uniqueAttachments([...direct, ...windowAttachments]).slice(0, 4);
+  }
   if (direct.length) return direct.slice(0, 4);
   if (!record) return [];
 
@@ -598,6 +620,9 @@ export function selectRelevantConversationAttachments(
   const recentMessages = record.messages
     .filter((message) => message.role === "user")
     .filter((message) => !currentMessageId || message.id !== currentMessageId)
+    .filter((message) => (
+      contextThroughSequence == null || Number(message.sequence ?? 0) <= contextThroughSequence
+    ))
     .slice(-Math.max(1, contextMessageLimit))
     .reverse();
   const normalizedQuery = normalizeAttachmentLookupText(query);

@@ -140,6 +140,15 @@ export interface EnqueueSessionEventResult {
   inserted: boolean;
 }
 
+export interface UpdateActiveSessionEventInput {
+  eventId: string;
+  kind: string;
+  availableAt: number;
+  expectedAvailableAt?: number;
+  expectedPayload?: unknown;
+  payload: unknown;
+}
+
 export interface ClaimOptions {
   workerId: string;
   leaseMs?: number;
@@ -186,6 +195,43 @@ export interface FinishTurnInput {
 export interface FinishTurnResult {
   turn: TurnRecord;
   outbox: OutboxRecord[];
+  duplicate: boolean;
+}
+
+export interface HandoffTurnInput {
+  turnId: string;
+  workerId: string;
+  targetEvent: EnqueueSessionEventInput;
+  expectedSourceAvailableAt: number;
+  result?: unknown;
+}
+
+export type HandoffTurnResult =
+  | {
+      handedOff: true;
+      turn: TurnRecord;
+      sourceEvent: SessionEventRecord;
+      targetEvent: SessionEventRecord;
+      inserted: boolean;
+      duplicate: boolean;
+    }
+  | {
+      handedOff: false;
+      turn: TurnRecord;
+      sourceEvent: SessionEventRecord;
+      inserted: false;
+      duplicate: false;
+    };
+
+export interface InterruptTurnInput {
+  turnId: string;
+  workerId: string;
+  error?: unknown;
+}
+
+export interface InterruptTurnResult {
+  turn: TurnRecord;
+  event: SessionEventRecord;
   duplicate: boolean;
 }
 

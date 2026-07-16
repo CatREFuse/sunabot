@@ -6,10 +6,17 @@ import {
   type CodexProcessIdentity,
   type CodexToolInput
 } from "../../packages/contracts/tools/codex.js";
-import { SessionActorScheduler, SessionActorTaskTimeoutError } from "./sessionActor.js";
+import { SessionActorScheduler } from "./sessionActor.js";
 import { createOutboxDeliveryContext } from "./outboxDeliveryContext.js";
 import { OutboxPartitionScheduler } from "./outboxPartitionScheduler.js";
 import { SessionToolJobProcessor } from "./sessionToolJobProcessor.js";
+import {
+  type SessionHandleResult
+} from "./sessionTurnResultCoordinator.js";
+import {
+  createSessionTurnServices,
+  type SessionTurnServices
+} from "./sessionTurnServices.js";
 import { emitTurnOutbox } from "./turnOutboxEmitter.js";
 import type {
   ClaimedToolTask,
@@ -28,7 +35,8 @@ import {
   SessionStore,
   type SessionEventRecord,
   type ToolJobRecord,
-  type TurnRecord
+  type TurnRecord,
+  type UpdateActiveSessionEventInput
 } from "./sessionStore.js";
 
 const DEFAULT_TURN_TIMEOUT_MS = 5 * 60_000;
@@ -42,34 +50,13 @@ const DEFAULT_OUTBOX_DISCONNECTED_PROBE_DELAY_MS = 5_000;
 const IDLE_POLL_MS = 2;
 
 export type { CodexCoordinatorSettings, OutboxDeliveryContext } from "./sessionCoordinatorTypes.js";
+export type { SessionHandleResult } from "./sessionTurnResultCoordinator.js";
 
 export interface SessionTurnContext {
   signal: AbortSignal;
   turn: TurnRecord;
   emitOutbox(draft: OutboxDraft): Promise<OutboxRecord>;
 }
-
-export type SessionHandleResult =
-  | {
-      status: "completed" | "no_reply";
-      result?: unknown;
-      outbox?: OutboxDraft[];
-    }
-  | {
-      status: "failed";
-      result?: unknown;
-      error?: unknown;
-      outbox?: OutboxDraft[];
-    }
-  | {
-      status: "deferred";
-      providerCallId: string;
-      toolName: string;
-      arguments: unknown;
-      originalRequest: unknown;
-      acknowledgement: OutboxDraft;
-      result?: unknown;
-    };
 
 export interface SessionCoordinatorOptions {
   store: SessionStore;
@@ -151,6 +138,7 @@ export class SessionCoordinator {
   private readonly clock: () => number;
   private readonly disconnectedError: (error: unknown) => boolean;
   private readonly toolJobProcessor: SessionToolJobProcessor;
+  private readonly turnServices: SessionTurnServices;
   private readonly turnActor: SessionActorScheduler<ClaimedTurnTask>;
   private readonly outboxActor: SessionActorScheduler<ClaimedOutboxTask>;
   private readonly toolActor: SessionActorScheduler<ClaimedToolTask>;
@@ -159,7 +147,6 @@ export class SessionCoordinator {
   private readonly outboxClaimPartitions = new Map<string, string>();
   private readonly toolClaims = new Map<string, ClaimState>();
   private readonly wakeTimers = new Set<ReturnType<typeof setTimeout>>();
-  private scanningTurns = false;
   private scanningOutbox = false;
   private scanningTools = false;
   private started = false;
@@ -196,6 +183,19 @@ export class SessionCoordinator {
     this.workerId = options.workerId?.trim() || `session-coordinator:${randomUUID()}`;
     this.clock = options.clock ?? Date.now;
     this.disconnectedError = options.isDisconnectedError ?? isDefaultDisconnectedError;
+    this.turnServices = createSessionTurnServices({
+      store: this.store,
+      workerId: this.workerId,
+      codexSettings: this.codexSettings,
+      clock: this.clock,
+      ensureStarted: () => this.ensureStarted(),
+      isActive: () => this.started && !this.stopped,
+      isStopped: () => this.stopped,
+      scheduleTurns: () => this.scheduleTurns(),
+      scheduleOutbox: () => this.scheduleOutbox(),
+      scheduleTools: () => this.scheduleTools(),
+      serializeError
+    });
     this.toolJobProcessor = new SessionToolJobProcessor({
       store: this.store,
       codexRunner: options.codexRunner,
@@ -239,14 +239,24 @@ export class SessionCoordinator {
     });
   }
 
-  enqueueEvent(
-    input: EnqueueSessionEventInput,
-    options: SessionEnqueueOptions = {}
-  ): EnqueueSessionEventResult {
-    this.ensureStarted();
-    const result = this.store.enqueueEvent(input);
-    if (options.schedule !== false) this.scheduleTurns();
-    return result;
+  enqueueEvent(input: EnqueueSessionEventInput, options: SessionEnqueueOptions = {}): EnqueueSessionEventResult {
+    return this.turnServices.wake.enqueueEvent(input, options.schedule !== false);
+  }
+
+  listActiveEvents(kind: string) {
+    return this.turnServices.wake.listActiveEvents(kind);
+  }
+
+  reschedulePendingEvent(eventId: string, availableAt: number) {
+    return this.turnServices.wake.reschedulePendingEvent(eventId, availableAt);
+  }
+
+  bumpActiveEventAvailableAt(eventId: string, kind: string, availableAt: number) {
+    return this.turnServices.wake.bumpActiveEventAvailableAt(eventId, kind, availableAt);
+  }
+
+  updateActiveEvent(input: UpdateActiveSessionEventInput) {
+    return this.turnServices.wake.updateActiveEvent(input);
   }
 
   /** Recover abandoned work on startup, or resume one outbound transport partition after reconnect. */
@@ -263,6 +273,7 @@ export class SessionCoordinator {
   stop() {
     this.stopped = true;
     this.outboxPartitions.stop();
+    this.turnServices.wake.clear();
     for (const timer of this.wakeTimers) clearTimeout(timer);
     this.wakeTimers.clear();
     for (const state of [...this.turnClaims.values(), ...this.outboxClaims.values(), ...this.toolClaims.values()]) {
@@ -288,7 +299,7 @@ export class SessionCoordinator {
     const deadline = this.clock() + timeoutMs;
     this.scheduleAll();
     while (
-      (includeTurns && (this.turnClaims.size > 0 || this.scanningTurns)) ||
+      (includeTurns && (this.turnClaims.size > 0 || this.turnServices.wake.scanning)) ||
       (includeOutbox && (this.outboxClaims.size > 0 || this.scanningOutbox)) ||
       (includeTools && (this.toolClaims.size > 0 || this.scanningTools))
     ) {
@@ -313,9 +324,7 @@ export class SessionCoordinator {
   }
 
   private scheduleTurns() {
-    if (!this.started || this.stopped || this.scanningTurns) return;
-    this.scanningTurns = true;
-    try {
+    this.turnServices.wake.scan(() => {
       while (!this.stopped) {
         const claim = this.store.claimNextTurn({ workerId: this.workerId, leaseMs: this.leaseMs });
         if (!claim) break;
@@ -325,15 +334,13 @@ export class SessionCoordinator {
         this.turnClaims.set(claim.turn.id, state);
         void this.turnActor.enqueue(claim.event.sessionId, { claim, state }, {
           timeoutMs: this.turnTimeoutMs
-        }).catch((error) => this.failTurnTask(claim, state, error)).finally(() => {
+        }).catch((error) => this.turnServices.results.failActorTask(claim, state, error)).finally(() => {
           state.stopRenewal();
           this.turnClaims.delete(claim.turn.id);
           this.deferScan(() => this.scheduleTurns());
         });
       }
-    } finally {
-      this.scanningTurns = false;
-    }
+    });
   }
 
   private async processTurn(task: ClaimedTurnTask, actorSignal: AbortSignal) {
@@ -346,67 +353,11 @@ export class SessionCoordinator {
         () => this.assertClaimUsable(state, signal), () => this.scheduleOutbox());
       const result = await this.handleEvent(claim.event, { signal, turn: claim.turn, emitOutbox });
       this.assertClaimUsable(state, signal);
-      if (result.status === "deferred") {
-        const settings = this.codexSettings();
-        if (result.toolName === "codex" && !settings.enabled) {
-          throw new Error("Codex asynchronous work is disabled.");
-        }
-        this.store.deferTurn({
-          turnId: claim.turn.id,
-          workerId: this.workerId,
-          job: {
-            providerCallId: requiredText(result.providerCallId, "providerCallId"),
-            toolName: result.toolName,
-            ...(result.toolName === "codex" ? { taskKind: codexKind(result.arguments as CodexToolInput) } : {}),
-            originalRequest: result.originalRequest,
-            arguments: result.arguments
-          },
-          acknowledgement: result.acknowledgement,
-          result: result.result
-        });
-        state.finalized = true;
-        this.scheduleOutbox();
-        this.scheduleTools();
-        return;
-      }
-
-      this.store.finishTurn({
-        turnId: claim.turn.id,
-        workerId: this.workerId,
-        outcome: result.status === "completed" ? "replied" : result.status,
-        result: result.result,
-        error: result.status === "failed" ? result.error : undefined,
-        outbox: result.outbox
-      });
-      state.finalized = true;
-      this.scheduleOutbox();
+      this.turnServices.results.apply(claim, state, result);
     } catch (error) {
-      if (!state.finalized && !this.stopped) {
-        this.store.finishTurn({
-          turnId: claim.turn.id,
-          workerId: this.workerId,
-          outcome: signal.aborted ? "timed_out" : "failed",
-          error: serializeError(error)
-        });
-        state.finalized = true;
-      }
+      this.turnServices.results.fail(claim, state, error, signal);
     } finally {
       this.deferScan(() => this.scheduleTurns());
-    }
-  }
-
-  private failTurnTask(claim: ClaimedTurn, state: ClaimState, error: unknown) {
-    if (state.finalized || this.stopped) return;
-    state.finalized = true;
-    try {
-      this.store.finishTurn({
-        turnId: claim.turn.id,
-        workerId: this.workerId,
-        outcome: error instanceof SessionActorTaskTimeoutError ? "timed_out" : "failed",
-        error: serializeError(error)
-      });
-    } catch {
-      // A late handler may have committed between the actor timeout and here.
     }
   }
 

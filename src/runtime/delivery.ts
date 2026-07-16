@@ -31,6 +31,7 @@ import {
   type AssistantReplyOutboxEnvelope,
   type AssistantReplyOutboxPayload,
   type AsyncToolCompletionPayload,
+  type ReplyQuoteSnapshotV1,
   type RuntimeIncomingReplyEventPayload
 } from "../../packages/contracts/session/runtimeMessages.js";
 import { applicationDataStore, sqliteMemoryPersistence } from "../../adapters/sqlite/applicationDataStore.js";
@@ -156,7 +157,8 @@ export async function runtime_sendAssistantReply(this: RuntimeHost,
         logRunId,
         undefined,
         quoteReply,
-        trace
+        trace,
+        delivery.replyQuote
       );
       if (deliveryTiming === "immediate" && delivery.emitOutbox) {
         draft.dedupeFingerprint = immediateReplyFingerprint(
@@ -164,6 +166,7 @@ export async function runtime_sendAssistantReply(this: RuntimeHost,
           replyText,
           generatedImageAssets,
           quoteReply,
+          draft.payload.payload.replyToMessageId,
           trace
         );
         await delivery.emitOutbox(draft);
@@ -231,9 +234,10 @@ export function runtime_replyDeliveryDraft(this: RuntimeHost,
     logRunId?: string,
     dedupeKey?: string,
     quoteReply = true,
-    trace: AssistantMessageTrace = { messageOrigin: "text" }
+    trace: AssistantMessageTrace = { messageOrigin: "text" },
+    replyQuote?: ReplyQuoteSnapshotV1
   ): ReplyDeliveryDraft {
-    const replyToMessageId = quoteReply ? this.groupReplyOptions(incoming).replyToMessageId : undefined;
+    const replyToMessageId = resolveReplyToMessageId(this, incoming, quoteReply, replyQuote);
     return {
       kind: "onebot.reply",
       payload: assistantReplyEnvelope({
@@ -299,7 +303,12 @@ export async function runtime_deliverReplyOutbox(
         }
       );
       if (idempotencyKey) {
-        saveConversationRecordsStrict([...this.conversationRecords.values()], idempotencyKey);
+        saveConversationRecordsStrict(
+          [...this.conversationRecords.values()],
+          idempotencyKey,
+          this.config,
+          this.protectedConversationIds()
+        );
       } else {
         this.scheduleMemoryCompression(record);
       }
@@ -401,7 +410,8 @@ export async function runtime_sendErrorReply(this: RuntimeHost,
           logRunId,
           undefined,
           true,
-          trace
+          trace,
+          delivery.replyQuote
         ));
         return;
       }
@@ -461,11 +471,25 @@ function durableReplyToMessageId(
   return payload.quoteReply === false ? undefined : runtime.groupReplyOptions(incoming).replyToMessageId;
 }
 
+function resolveReplyToMessageId(
+  runtime: RuntimeHost,
+  incoming: ParsedIncomingMessage,
+  quoteReply: boolean,
+  replyQuote?: ReplyQuoteSnapshotV1
+) {
+  if (!quoteReply) return undefined;
+  if (replyQuote) {
+    return replyQuote.enabled ? replyQuote.replyToMessageId ?? undefined : undefined;
+  }
+  return runtime.groupReplyOptions(incoming).replyToMessageId;
+}
+
 function immediateReplyFingerprint(
   incoming: ParsedIncomingMessage,
   text: string,
   generatedImages: ImageResult[],
   quoteReply: boolean,
+  replyToMessageId: number | null | undefined,
   trace: AssistantMessageTrace
 ) {
   return createHash("sha256").update(JSON.stringify({
@@ -481,6 +505,7 @@ function immediateReplyFingerprint(
     text,
     generatedImages: generatedImages.map(({ url, filePath }) => ({ url, filePath })),
     quoteReply,
+    replyToMessageId,
     messageOrigin: trace.messageOrigin
   })).digest("hex");
 }

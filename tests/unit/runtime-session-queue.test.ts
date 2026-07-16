@@ -12,9 +12,11 @@ import type {
 import { parseOneBotInboundMessage } from "../../adapters/onebot/inboundMessageAdapter.js";
 import type { OneBotEvent } from "../../adapters/onebot/protocol.js";
 import type { MessagingPort } from "../../packages/contracts/messaging/messages.js";
-import type {
-  AsyncToolCompletionPayload,
-  GroupThreadContextSnapshotV1
+import {
+  incomingReplyEnvelope,
+  toolCompletionEnvelope,
+  type AsyncToolCompletionPayload,
+  type GroupThreadContextSnapshotV1
 } from "../../packages/contracts/session/runtimeMessages.js";
 import { defaultFinalPromptTemplate } from "../../services/agent/promptDefaults.js";
 import {
@@ -31,6 +33,8 @@ import {
   closeApplicationDataStores
 } from "../../adapters/sqlite/applicationDataStore.js";
 import type { ConversationRecord } from "../../src/types.js";
+import { replyDebounceSessionId } from "../../src/runtime/replyDebounce.js";
+import { conversationRecordId } from "../../src/runtime/messagingAttachmentHelpers.js";
 import { createAdminTestConfig } from "./admin-fixtures.js";
 
 const appendRequestLog = vi.hoisted(() => vi.fn(async () => undefined));
@@ -444,6 +448,155 @@ describe("SunaRuntime Session queue bridge", () => {
     }
   });
 
+  it("keeps frozen conversations beyond top eighty during an unrelated outbox settle", async () => {
+    const harness = createRuntimeHarness(
+      async () => ({ kind: "completed", text: "unused" }),
+      undefined,
+      undefined,
+      undefined,
+      60_000
+    );
+    const activeDebounce = parseOneBotInboundMessage(
+      groupEvent(16_010, 7_100, "old active debounce", 61_001)
+    )!;
+    await harness.runtime.handleInboundMessage(activeDebounce, harness.gateway);
+
+    const frozenSource = parseOneBotInboundMessage(
+      groupEvent(16_011, 7_101, "old frozen source", 61_002)
+    )!;
+    const frozenCallback = parseOneBotInboundMessage(
+      groupEvent(16_012, 7_102, "old frozen callback", 61_003)
+    )!;
+    const queuedDeferred = parseOneBotInboundMessage(
+      groupEvent(16_013, 7_103, "old queued deferred", 61_004)
+    )!;
+    const runningDeferred = parseOneBotInboundMessage(
+      groupEvent(16_014, 7_104, "old running deferred", 61_005)
+    )!;
+    const oldNonprotected = parseOneBotInboundMessage(
+      groupEvent(16_015, 7_105, "old nonprotected", 61_006)
+    )!;
+    const oldMessages = [
+      activeDebounce,
+      frozenSource,
+      frozenCallback,
+      queuedDeferred,
+      runningDeferred,
+      oldNonprotected
+    ];
+    for (const [index, incoming] of oldMessages.entries()) {
+      const record = harness.runtime.recordIncomingMessage(incoming, { persist: false });
+      record.lastAt = new Date(Date.UTC(2020, 0, index + 1)).toISOString();
+    }
+
+    const frozenSourceId = "group:7101";
+    const sourceGate = harness.runtime.replyGates.capture(frozenSource.scope, frozenSourceId);
+    harness.store.enqueueEvent({
+      sessionId: frozenSourceId,
+      kind: "incoming_reply",
+      dedupeKey: "protected:frozen-source",
+      availableAt: Date.now() + 60_000,
+      payload: incomingReplyEnvelope({
+        type: "incoming_reply",
+        route: "direct",
+        incoming: frozenSource,
+        captureSequence: 1,
+        contextThroughSequence: 1,
+        replyGate: sourceGate,
+        replyQuote: { enabled: true, replyToMessageId: frozenSource.messageId! }
+      }, {
+        conversationId: frozenSourceId,
+        correlationId: "protected:frozen-source",
+        idempotencyKey: "protected:frozen-source"
+      })
+    });
+
+    const frozenCallbackId = "group:7102";
+    harness.store.enqueueEvent({
+      sessionId: frozenCallbackId,
+      kind: "tool_completion",
+      dedupeKey: "protected:frozen-callback",
+      availableAt: Date.now() + 60_000,
+      payload: toolCompletionEnvelope({
+        type: "tool_result",
+        toolJobId: "protected-tool-job",
+        providerCallId: "protected-provider-call",
+        toolName: "codex",
+        originalRequest: {
+          incoming: frozenCallback,
+          captureSequence: 1,
+          contextThroughSequence: 1,
+          replyGate: harness.runtime.replyGates.capture(frozenCallback.scope, frozenCallbackId),
+          replyQuote: { enabled: true, replyToMessageId: frozenCallback.messageId! }
+        },
+        arguments: {},
+        outcome: { status: "succeeded", result: "done", error: null }
+      }, {
+        conversationId: frozenCallbackId,
+        correlationId: "protected:frozen-callback",
+        idempotencyKey: "protected:frozen-callback"
+      })
+    });
+
+    const queuedDeferredId = "group:7103";
+    const runningDeferredId = "group:7104";
+    vi.spyOn(harness.store, "listToolJobs").mockReturnValue([
+      { sessionId: queuedDeferredId, status: "queued" },
+      { sessionId: runningDeferredId, status: "running" }
+    ] as ReturnType<SessionStore["listToolJobs"]>);
+    const protectedIds = new Set([
+      "group:7100",
+      frozenSourceId,
+      frozenCallbackId,
+      queuedDeferredId,
+      runningDeferredId
+    ]);
+    expect(harness.runtime.protectedConversationIds()).toEqual(protectedIds);
+
+    const newerIds: string[] = [];
+    let settleIncoming = frozenSource;
+    for (let index = 0; index < 81; index += 1) {
+      const incoming = parseOneBotInboundMessage(
+        groupEvent(17_000 + index, 8_000 + index, `newer conversation ${index}`, 62_000 + index)
+      )!;
+      const record = harness.runtime.recordIncomingMessage(incoming, { persist: false });
+      record.lastAt = new Date(Date.UTC(2026, 5, 1, 0, index)).toISOString();
+      newerIds.push(record.id);
+      settleIncoming = incoming;
+    }
+
+    const settleContext: OutboxDeliveryContext = {
+      signal: new AbortController().signal,
+      phase: "settle",
+      remoteReceipt: { accepted: true, messageId: "unrelated-remote-receipt" },
+      async sendRemote(operation) {
+        return operation();
+      },
+      async settleStep(step, operation) {
+        return step === "conversation_projection"
+          ? operation("outbox:unrelated:conversation_projection")
+          : undefined;
+      },
+      async settleEffectStep() {
+        return undefined;
+      }
+    };
+    await harness.runtime.deliverReplyOutbox({
+      type: "assistant_reply",
+      incoming: settleIncoming,
+      text: "unrelated settled reply",
+      generatedImages: [],
+      isAdmin: false
+    }, harness.gateway, settleContext);
+
+    const persistedIds = new Set(
+      applicationDataStore(harness.runtime.config).readConversations().map((record) => record.id)
+    );
+    expect(persistedIds.has("group:7105")).toBe(false);
+    expect(persistedIds.has(newerIds[0]!)).toBe(false);
+    for (const id of protectedIds) expect(persistedIds.has(id)).toBe(true);
+  });
+
   it.each([
     "conversation_projection",
     "memory_enqueue",
@@ -802,16 +955,23 @@ describe("SunaRuntime Session queue bridge", () => {
       text: "reply:recovered"
     }));
     const harness = createRuntimeHarness(completeRequestTurn);
+    const conversationId = conversationRecordId(incoming);
     harness.store.enqueueEvent({
-      sessionId: "private:171419991",
+      sessionId: conversationId,
       kind: "incoming_reply",
       dedupeKey: "reply:4004:private:171419991:22001",
-      payload: {
+      payload: incomingReplyEnvelope({
         type: "incoming_reply",
         route: "direct",
         incoming,
-        captureSequence: 1
-      }
+        captureSequence: 1,
+        replyGate: harness.runtime.replyGates.capture(incoming.scope, conversationId),
+        replyQuote: { enabled: false, replyToMessageId: null }
+      }, {
+        conversationId,
+        correlationId: "recovered:22001",
+        idempotencyKey: "reply:4004:private:171419991:22001"
+      })
     });
 
     harness.runtime.resumeUserGroupOrchestrators(harness.gateway);
@@ -834,6 +994,144 @@ describe("SunaRuntime Session queue bridge", () => {
     expect(harness.gateway.send).toHaveBeenCalledOnce();
   });
 
+  it("keeps an id-less trigger and follow-up ordered exactly once in the Provider request", async () => {
+    let providerRequest: RenderedPromptRequest | undefined;
+    const harness = createRuntimeHarness(async (request) => {
+      providerRequest = request;
+      return { kind: "completed", text: "reply:id-less-batch" };
+    }, undefined, undefined, undefined, 40);
+    const trigger = privateEvent(22_101, "id-less-trigger-A");
+    const followUp = privateEvent(22_102, "id-less-follow-up-B");
+    delete trigger.message_id;
+    delete followUp.message_id;
+
+    await handleOneBotEvent(harness.runtime, trigger, harness.gateway);
+    await delay(5);
+    await handleOneBotEvent(harness.runtime, followUp, harness.gateway);
+    await waitUntil(() => providerRequest != null);
+    await harness.coordinator.waitForIdle({ timeoutMs: 3_000 });
+
+    const providerText = lastUserText(providerRequest!);
+    expect(providerText.indexOf("id-less-trigger-A"))
+      .toBeLessThan(providerText.indexOf("id-less-follow-up-B"));
+    expect(providerText.match(/id-less-trigger-A/g)).toHaveLength(1);
+    expect(providerText.match(/id-less-follow-up-B/g)).toHaveLength(1);
+    expect(runtimeConversation(harness.runtime, "private:171419991")?.messages
+      .filter((message) => message.role === "user")
+      .map((message) => message.text)).toEqual([
+      "id-less-trigger-A",
+      "id-less-follow-up-B"
+    ]);
+  });
+
+  it("invalidates a waiting scope candidate across disable and re-enable, then accepts a new candidate", async () => {
+    const completeRequestTurn = vi.fn(async (): Promise<ProviderTurnResult> => ({
+      kind: "completed",
+      text: "reply:scope-reenabled"
+    }));
+    const harness = createRuntimeHarness(
+      completeRequestTurn,
+      undefined,
+      undefined,
+      undefined,
+      60
+    );
+    const oldEvent = privateEvent(22_110, "old-scope-candidate");
+    const oldIncoming = parseOneBotInboundMessage(oldEvent)!;
+    const conversationId = "private:171419991";
+    const sourceSessionId = replyDebounceSessionId(oldIncoming);
+
+    await handleOneBotEvent(harness.runtime, oldEvent, harness.gateway);
+    harness.runtime.config.onebot.autoReplyPrivate = false;
+    harness.runtime.cancelScopeReplies("private");
+    harness.runtime.config.onebot.autoReplyPrivate = true;
+
+    await waitUntil(() => harness.store.listTurns(sourceSessionId)[0]?.status === "no_reply");
+    await harness.coordinator.waitForIdle({ timeoutMs: 3_000 });
+
+    expect(completeRequestTurn).not.toHaveBeenCalled();
+    expect(sentTexts(harness.gateway)).toEqual([]);
+    expect(harness.store.listOutbox(sourceSessionId)).toEqual([]);
+    expect(harness.store.listOutbox(conversationId)).toEqual([]);
+
+    await handleOneBotEvent(
+      harness.runtime,
+      privateEvent(22_111, "new-scope-candidate"),
+      harness.gateway
+    );
+    await waitUntil(() => sentTexts(harness.gateway).length === 1);
+    await harness.coordinator.waitForIdle({ timeoutMs: 3_000 });
+
+    expect(completeRequestTurn).toHaveBeenCalledOnce();
+    expect(sentTexts(harness.gateway)).toEqual(["reply:scope-reenabled"]);
+  });
+
+  it("invalidates waiting candidates in every scope across a global disable and re-enable", async () => {
+    const completeRequestTurn = vi.fn(async (): Promise<ProviderTurnResult> => ({
+      kind: "completed",
+      text: "reply:global-reenabled"
+    }));
+    const harness = createRuntimeHarness(
+      completeRequestTurn,
+      undefined,
+      (config) => {
+        config.onebot.autoReplyBotGroup = true;
+      },
+      undefined,
+      60
+    );
+    const oldEvents = [
+      privateEvent(22_120, "old-global-private"),
+      groupEvent(22_121, 622, "old-global-user-group"),
+      botGroupEvent(22_122, 623, "old-global-bot-group")
+    ];
+    const oldIncoming = oldEvents.map((event) => parseOneBotInboundMessage(event)!);
+    const sourceSessionIds = oldIncoming.map(replyDebounceSessionId);
+    const conversationIds = ["private:171419991", "group:622", "group:623"];
+
+    for (const event of oldEvents) {
+      await handleOneBotEvent(harness.runtime, event, harness.gateway);
+    }
+    harness.runtime.config.onebot.autoReplyPrivate = false;
+    harness.runtime.config.onebot.autoReplyUserGroup = false;
+    harness.runtime.config.onebot.autoReplyBotGroup = false;
+    harness.runtime.cancelScopeReplies("private");
+    harness.runtime.cancelScopeReplies("user_group");
+    harness.runtime.cancelScopeReplies("bot_group");
+    harness.runtime.config.onebot.autoReplyPrivate = true;
+    harness.runtime.config.onebot.autoReplyUserGroup = true;
+    harness.runtime.config.onebot.autoReplyBotGroup = true;
+
+    await waitUntil(() => sourceSessionIds.every((sessionId) => (
+      harness.store.listTurns(sessionId)[0]?.status === "no_reply"
+    )));
+    await harness.coordinator.waitForIdle({ timeoutMs: 3_000 });
+
+    expect(completeRequestTurn).not.toHaveBeenCalled();
+    expect(sentTexts(harness.gateway)).toEqual([]);
+    for (const sessionId of sourceSessionIds) {
+      expect(harness.store.listOutbox(sessionId)).toEqual([]);
+    }
+    for (const conversationId of conversationIds) {
+      expect(harness.store.listOutbox(conversationId)).toEqual([]);
+    }
+
+    const newEvents = [
+      privateEvent(22_123, "new-global-private"),
+      groupEvent(22_124, 622, "new-global-user-group"),
+      botGroupEvent(22_125, 623, "new-global-bot-group")
+    ];
+    for (const event of newEvents) {
+      await handleOneBotEvent(harness.runtime, event, harness.gateway);
+    }
+    await waitUntil(() => sentTexts(harness.gateway).length === 3);
+    await harness.coordinator.waitForIdle({ timeoutMs: 3_000 });
+
+    expect(completeRequestTurn).toHaveBeenCalledTimes(3);
+    expect(sentTexts(harness.gateway)).toHaveLength(3);
+    expect(new Set(sentTexts(harness.gateway))).toEqual(new Set(["reply:global-reenabled"]));
+  });
+
   it.each([
     {
       label: "successful",
@@ -851,6 +1149,7 @@ describe("SunaRuntime Session queue bridge", () => {
   }) => {
     const toolGate = deferred<void>();
     const toolStarted = deferred<void>();
+    const dispatchPrompts: string[] = [];
     const completionPrompts: string[] = [];
     const completionThreadContexts: string[] = [];
     const providerStarts: string[] = [];
@@ -895,6 +1194,7 @@ describe("SunaRuntime Session queue bridge", () => {
       }
       if (userText.includes("delegate")) {
         providerStarts.push("delegate");
+        dispatchPrompts.push(userText);
         return {
           kind: "deferred",
           acknowledgement: "我收到委托，开始检查。",
@@ -911,7 +1211,13 @@ describe("SunaRuntime Session queue bridge", () => {
       }
       throw new Error(`Unexpected provider request: ${userText}`);
     });
-    const harness = createRuntimeHarness(completeRequestTurn, runner);
+    const harness = createRuntimeHarness(
+      completeRequestTurn,
+      runner,
+      undefined,
+      undefined,
+      35
+    );
     const dispatchThreadContext = runtimeThreadSnapshot(
       "群成员正在委托 Agent 执行一项耗时分析任务。",
       301
@@ -929,14 +1235,24 @@ describe("SunaRuntime Session queue bridge", () => {
     const acknowledgement = "我收到委托，开始检查。";
 
     await handleOneBotEvent(harness.runtime, groupEvent(301, 300, "delegate"), harness.gateway);
+    await delay(10);
+    const debounceFollowup = groupEvent(303, 300, "unused");
+    debounceFollowup.message = "supplemental task details";
+    await handleOneBotEvent(harness.runtime, debounceFollowup, harness.gateway);
     await toolStarted.promise;
     await waitUntil(() => sentTexts(harness.gateway).includes(acknowledgement));
     expect(sentTexts(harness.gateway).filter((text) => text === acknowledgement)).toHaveLength(1);
     expect(harness.store.listToolJobs("group:300")[0]?.arguments).not.toHaveProperty("dispatch_message");
     expect(harness.store.listToolJobs("group:300")[0]?.originalRequest).toMatchObject({
       captureSequence: 1,
+      contextThroughSequence: 2,
       threadContext: dispatchThreadContext
     });
+    expect(dispatchPrompts).toHaveLength(1);
+    expect(dispatchPrompts[0]!.indexOf("delegate"))
+      .toBeLessThan(dispatchPrompts[0]!.indexOf("supplemental task details"));
+    expect(dispatchPrompts[0]!.match(/delegate/g)).toHaveLength(1);
+    expect(dispatchPrompts[0]!.match(/supplemental task details/g)).toHaveLength(1);
 
     await handleOneBotEvent(harness.runtime, groupEvent(302, 300, "later"), harness.gateway);
     await waitUntil(() => sentTexts(harness.gateway).includes("later reply"));
@@ -962,6 +1278,10 @@ describe("SunaRuntime Session queue bridge", () => {
       status: toolStatus
     });
     expect(completionPrompts).toHaveLength(1);
+    expect(completionPrompts[0]!.indexOf("delegate"))
+      .toBeLessThan(completionPrompts[0]!.indexOf("supplemental task details"));
+    expect(completionPrompts[0]!.match(/delegate/g)).toHaveLength(1);
+    expect(completionPrompts[0]!.match(/supplemental task details/g)).toHaveLength(1);
     expect(completionPrompts[0]).toContain('"providerCallId": "call-runtime-codex"');
     expect(completionPrompts[0]).toContain(`"status": "${toolStatus}"`);
     expect(completionThreadContexts[0]).toContain("群成员正在委托 Agent 执行一项耗时分析任务。");
@@ -998,12 +1318,17 @@ describe("SunaRuntime Session queue bridge", () => {
     const incoming = parseOneBotInboundMessage(privateEvent(30_001, "生成一张自拍"))!;
     harness.runtime.recordIncomingMessage(incoming);
     const delivery = { outbox: [] } satisfies ReplyDelivery;
+    const conversationId = conversationRecordId(incoming);
     const payload = {
       type: "tool_result",
       toolJobId: "job-selfie-1",
       providerCallId: "call-selfie-1",
       toolName: "selfie",
-      originalRequest: { incoming },
+      originalRequest: {
+        incoming,
+        replyGate: harness.runtime.replyGates.capture(incoming.scope, conversationId),
+        replyQuote: { enabled: false, replyToMessageId: null }
+      },
       arguments: { scene: "图书馆" },
       outcome: {
         status: "succeeded",
@@ -1034,7 +1359,7 @@ describe("SunaRuntime Session queue bridge", () => {
     });
   });
 
-  it("uses an empty thread sidecar for legacy group callbacks without a captured snapshot", async () => {
+  it("fails closed for a legacy group callback without frozen gate and quote snapshots", async () => {
     let callbackRequest: RenderedPromptRequest | undefined;
     const harness = createRuntimeHarness(async (request) => {
       callbackRequest = request;
@@ -1071,9 +1396,9 @@ describe("SunaRuntime Session queue bridge", () => {
     );
 
     expect(prepareGroupThreadContext).not.toHaveBeenCalled();
-    expect(callbackRequest?.messages.find((message) => message.role === "developer")?.content)
-      .toContain('"active_thread_id":null');
-    expect(delivery.outbox).toHaveLength(1);
+    expect(callbackRequest).toBeUndefined();
+    expect(delivery.outbox).toEqual([]);
+    expect(delivery.terminalStatus).toBe("no_reply");
   });
 
   it("does not guess the source of legacy outbox replies", async () => {
@@ -1187,7 +1512,8 @@ function createRuntimeHarness(
   resolveToolCapabilities: RuntimeToolCapabilityResolver = async () => ({
     codex: true,
     workspaceBash: true
-  })
+  }),
+  replyDebounceMs = 0
 ): RuntimeHarness {
   const resolvedCodexRunner: CodexRunner = codexRunner ?? {
     async run(_input, context) {
@@ -1210,7 +1536,8 @@ function createRuntimeHarness(
     attachmentService: {} as never,
     sessionStore: store,
     codexRunner: resolvedCodexRunner,
-    resolveToolCapabilities
+    resolveToolCapabilities,
+    replyDebounceMs
   });
   runtimes.push(runtime);
   const provider = {

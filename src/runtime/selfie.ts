@@ -223,12 +223,13 @@ export async function runtime_rewriteSelfiePrompt(this: RuntimeHost,
     });
     return normalizeSelfiePrompt(rewritten) || prompt;
   }
-export function runtime_collectSelfieChatReferenceImages(this: RuntimeHost, incoming: ParsedIncomingMessage) {
+export function runtime_collectSelfieChatReferenceImages(this: RuntimeHost, incoming: ParsedIncomingMessage, captureSequence?: number) {
     const record = this.conversationRecords.get(conversationRecordId(incoming));
     const currentMessageId = incoming.messageId == null ? "" : String(incoming.messageId);
     const recentImages = record?.messages
       .filter((message) => message.role === "user")
       .filter((message) => !currentMessageId || message.id !== currentMessageId)
+      .filter((message) => captureSequence == null || Number(message.sequence ?? 0) < captureSequence)
       .slice(-this.contextMessageLimit())
       .reverse()
       .flatMap((message) => [

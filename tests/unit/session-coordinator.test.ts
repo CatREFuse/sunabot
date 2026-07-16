@@ -397,6 +397,342 @@ describe("SessionCoordinator", () => {
     expect(handled).toEqual(["durable first"]);
   });
 
+  it("automatically wakes for a future turn exactly once", async () => {
+    const store = trackStore(new SessionStore({ databasePath: ":memory:" }));
+    const handled: string[] = [];
+    const coordinator = trackCoordinator(createCoordinator({
+      store,
+      handleEvent: (event) => {
+        handled.push((event.payload as { text: string }).text);
+        return { status: "no_reply" };
+      }
+    }));
+
+    coordinator.resume();
+    coordinator.enqueueEvent({
+      sessionId: "debounce:future",
+      kind: "reply_debounce",
+      payload: { text: "after deadline" },
+      availableAt: Date.now() + 40
+    });
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    expect(handled).toEqual([]);
+    await waitUntil(() => handled.length === 1);
+    await new Promise<void>((resolve) => setTimeout(resolve, 30));
+    expect(handled).toEqual(["after deadline"]);
+    expect(store.listTurns("debounce:future")).toHaveLength(1);
+  });
+
+  it("rearms the single future-turn wake when a pending deadline moves later or earlier", async () => {
+    const store = trackStore(new SessionStore({ databasePath: ":memory:" }));
+    const handled: string[] = [];
+    const coordinator = trackCoordinator(createCoordinator({
+      store,
+      handleEvent: (event) => {
+        handled.push((event.payload as { text: string }).text);
+        return { status: "no_reply" };
+      }
+    }));
+
+    coordinator.resume();
+    const now = Date.now();
+    const movedLater = coordinator.enqueueEvent({
+      sessionId: "debounce:later",
+      kind: "reply_debounce",
+      payload: { text: "later" },
+      availableAt: now + 40
+    }).event;
+    const movedEarlier = coordinator.enqueueEvent({
+      sessionId: "debounce:earlier",
+      kind: "reply_debounce",
+      payload: { text: "earlier" },
+      availableAt: now + 180
+    }).event;
+    expect(coordinator.listActiveEvents("reply_debounce").map((event) => event.id).sort()).toEqual([
+      movedEarlier.id,
+      movedLater.id
+    ].sort());
+    expect(coordinator.updateActiveEvent({
+      eventId: movedLater.id,
+      kind: "reply_debounce",
+      availableAt: now + 130,
+      expectedAvailableAt: now + 40,
+      expectedPayload: { text: "later" },
+      payload: { text: "later updated" }
+    })).toMatchObject({
+      availableAt: now + 130,
+      payload: { text: "later updated" }
+    });
+    expect(coordinator.updateActiveEvent({
+      eventId: movedLater.id,
+      kind: "reply_debounce",
+      availableAt: now + 140,
+      expectedAvailableAt: now + 130,
+      expectedPayload: { text: "later" },
+      payload: { text: "stale pending update" }
+    })).toBeUndefined();
+    expect(coordinator.reschedulePendingEvent(movedEarlier.id, now + 30)).toMatchObject({
+      availableAt: now + 30
+    });
+
+    await waitUntil(() => handled.includes("earlier"));
+    expect(handled).toEqual(["earlier"]);
+    await waitUntil(() => handled.includes("later updated"));
+    expect(handled).toEqual(["earlier", "later updated"]);
+    expect(store.listTurns("debounce:earlier")).toHaveLength(1);
+    expect(store.listTurns("debounce:later")).toHaveLength(1);
+  });
+
+  it("rearms a persisted future turn on resume after restart", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-coordinator-future-restart-"));
+    temporaryDirectories.push(directory);
+    const databasePath = path.join(directory, "sessions.sqlite");
+    const beforeStore = trackStore(new SessionStore({ databasePath }));
+    const before = trackCoordinator(createCoordinator({ store: beforeStore }));
+    before.resume();
+    before.enqueueEvent({
+      sessionId: "debounce:restart",
+      kind: "reply_debounce",
+      payload: { text: "persisted" },
+      availableAt: Date.now() + 100
+    });
+    before.stop();
+    beforeStore.close();
+    stores.splice(stores.indexOf(beforeStore), 1);
+
+    const afterStore = trackStore(new SessionStore({ databasePath }));
+    const handled: string[] = [];
+    const after = trackCoordinator(createCoordinator({
+      store: afterStore,
+      handleEvent: (event) => {
+        handled.push((event.payload as { text: string }).text);
+        return { status: "no_reply" };
+      }
+    }));
+    after.resume();
+    await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    expect(handled).toEqual([]);
+    await waitUntil(() => handled.length === 1);
+    expect(handled).toEqual(["persisted"]);
+  });
+
+  it("clears the future-turn wake on stop", async () => {
+    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+    const store = trackStore(new SessionStore({ databasePath: ":memory:" }));
+    const handled: string[] = [];
+    const coordinator = trackCoordinator(createCoordinator({
+      store,
+      handleEvent: (event) => {
+        handled.push(event.id);
+        return { status: "no_reply" };
+      }
+    }));
+    coordinator.resume();
+    coordinator.enqueueEvent({
+      sessionId: "debounce:stopped",
+      kind: "reply_debounce",
+      payload: {},
+      availableAt: Date.now() + 30
+    });
+
+    const clearsBeforeStop = clearTimeoutSpy.mock.calls.length;
+    coordinator.stop();
+    expect(clearTimeoutSpy.mock.calls.length).toBeGreaterThan(clearsBeforeStop);
+    await new Promise<void>((resolve) => setTimeout(resolve, 60));
+    expect(handled).toEqual([]);
+    expect(store.getPendingEvent("debounce:stopped", "reply_debounce")).toBeDefined();
+    clearTimeoutSpy.mockRestore();
+  });
+
+  it("retries a running debounce handoff after its deadline is bumped", async () => {
+    const store = trackStore(new SessionStore({ databasePath: ":memory:" }));
+    const firstClaimed = deferred<void>();
+    const releaseFirst = deferred<void>();
+    const targets: number[] = [];
+    const seenFollowUps: string[][] = [];
+    let attempts = 0;
+    const coordinator = trackCoordinator(createCoordinator({
+      store,
+      handleEvent: async (event) => {
+        if (event.kind === "incoming") {
+          targets.push((event.payload as { attempt: number }).attempt);
+          return { status: "no_reply" };
+        }
+        attempts += 1;
+        seenFollowUps.push([...(event.payload as { followUps: string[] }).followUps]);
+        const attempt = attempts;
+        if (attempt === 1) {
+          firstClaimed.resolve();
+          await releaseFirst.promise;
+        }
+        return {
+          status: "handoff",
+          expectedSourceAvailableAt: event.availableAt,
+          targetEvent: {
+            sessionId: "group:debounce-race",
+            kind: "incoming",
+            dedupeKey: `handoff:${event.id}`,
+            payload: { attempt }
+          }
+        };
+      }
+    }));
+
+    coordinator.resume();
+    const source = coordinator.enqueueEvent({
+      sessionId: "debounce:running-race",
+      kind: "reply_debounce",
+      payload: { followUps: ["message-1"] },
+      availableAt: Date.now()
+    }).event;
+    await firstClaimed.promise;
+    const bumpedDeadline = Date.now() + 50;
+    expect(store.getActiveEvent("debounce:running-race", "reply_debounce")).toMatchObject({
+      id: source.id,
+      status: "running"
+    });
+    expect(coordinator.updateActiveEvent({
+      eventId: source.id,
+      kind: "reply_debounce",
+      availableAt: bumpedDeadline,
+      expectedAvailableAt: source.availableAt,
+      expectedPayload: { followUps: ["message-1"] },
+      payload: { followUps: ["message-1", "message-2"] }
+    })).toMatchObject({
+      status: "running",
+      availableAt: bumpedDeadline,
+      payload: { followUps: ["message-1", "message-2"] }
+    });
+    expect(coordinator.updateActiveEvent({
+      eventId: source.id,
+      kind: "reply_debounce",
+      availableAt: bumpedDeadline + 20,
+      expectedAvailableAt: bumpedDeadline,
+      expectedPayload: { followUps: ["message-1"] },
+      payload: { followUps: ["stale running update"] }
+    })).toBeUndefined();
+    releaseFirst.resolve();
+
+    await waitUntil(() => targets.length === 1);
+    await coordinator.waitForIdle();
+    expect(attempts).toBe(2);
+    expect(seenFollowUps).toEqual([
+      ["message-1"],
+      ["message-1", "message-2"]
+    ]);
+    expect(targets).toEqual([2]);
+    expect(store.listTurns("debounce:running-race").map((turn) => turn.status)).toEqual([
+      "interrupted",
+      "no_reply"
+    ]);
+    expect(store.listEvents("group:debounce-race")).toHaveLength(1);
+  });
+
+  it("interrupts and retries the source when an atomic handoff cannot enqueue its target", async () => {
+    const store = trackStore(new SessionStore({ databasePath: ":memory:" }));
+    const targets: string[] = [];
+    let attempts = 0;
+    const circular: { self?: unknown } = {};
+    circular.self = circular;
+    const coordinator = trackCoordinator(createCoordinator({
+      store,
+      handleEvent: (event) => {
+        if (event.kind === "incoming") {
+          targets.push((event.payload as { text: string }).text);
+          return { status: "no_reply" };
+        }
+        attempts += 1;
+        return {
+          status: "handoff",
+          expectedSourceAvailableAt: event.availableAt,
+          targetEvent: {
+            sessionId: "group:handoff-retry",
+            kind: "incoming",
+            dedupeKey: `handoff:${event.id}`,
+            payload: attempts === 1 ? circular : { text: "recovered" }
+          }
+        };
+      }
+    }));
+
+    coordinator.resume();
+    coordinator.enqueueEvent({
+      sessionId: "debounce:handoff-retry",
+      kind: "reply_debounce",
+      payload: {},
+      availableAt: Date.now()
+    });
+    await waitUntil(() => targets.length === 1);
+    await coordinator.waitForIdle();
+    expect(attempts).toBe(2);
+    expect(targets).toEqual(["recovered"]);
+    expect(store.listTurns("debounce:handoff-retry").map((turn) => turn.status)).toEqual([
+      "interrupted",
+      "no_reply"
+    ]);
+    expect(store.listTurns("debounce:handoff-retry").some((turn) => turn.status === "failed")).toBe(false);
+    expect(store.listEvents("group:handoff-retry")).toHaveLength(1);
+  });
+
+  it("interrupts and retries the source after a handoff target provenance collision", async () => {
+    const store = trackStore(new SessionStore({ databasePath: ":memory:" }));
+    const collisionKey = "handoff:coordinator-collision";
+    const existing = store.enqueueEvent({
+      sessionId: "group:handoff-collision-retry",
+      kind: "incoming",
+      dedupeKey: collisionKey,
+      payload: { text: "existing" }
+    }).event;
+    const existingClaim = store.claimNextTurn({
+      workerId: "handoff-collision-existing",
+      sessionId: existing.sessionId
+    })!;
+    store.finishTurn({
+      turnId: existingClaim.turn.id,
+      workerId: "handoff-collision-existing",
+      outcome: "no_reply"
+    });
+    const targets: string[] = [];
+    let attempts = 0;
+    const coordinator = trackCoordinator(createCoordinator({
+      store,
+      handleEvent: (event) => {
+        if (event.kind === "incoming") {
+          targets.push((event.payload as { text: string }).text);
+          return { status: "no_reply" };
+        }
+        attempts += 1;
+        return {
+          status: "handoff",
+          expectedSourceAvailableAt: event.availableAt,
+          targetEvent: {
+            sessionId: "group:handoff-collision-retry",
+            kind: "incoming",
+            dedupeKey: attempts === 1 ? collisionKey : `${collisionKey}:recovered`,
+            payload: { text: "recovered" }
+          }
+        };
+      }
+    }));
+
+    coordinator.resume();
+    coordinator.enqueueEvent({
+      sessionId: "debounce:handoff-collision-retry",
+      kind: "reply_debounce",
+      payload: {},
+      availableAt: Date.now()
+    });
+    await waitUntil(() => targets.length === 1);
+    await coordinator.waitForIdle();
+    expect(attempts).toBe(2);
+    expect(targets).toEqual(["recovered"]);
+    expect(store.listTurns("debounce:handoff-collision-retry").map((turn) => turn.status)).toEqual([
+      "interrupted",
+      "no_reply"
+    ]);
+    expect(store.listEvents("group:handoff-collision-retry")).toHaveLength(2);
+  });
+
   it("delivers an emitted outbox while its event handler is still running", async () => {
     const store = trackStore(new SessionStore({ databasePath: ":memory:" }));
     const releaseHandler = deferred<void>();

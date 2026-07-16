@@ -17,7 +17,7 @@ import type {
   AttachmentExtractionContext,
   ParsedAttachment
 } from "../../services/media/attachments/types.js";
-import { CommandRouter, type CommandMatch } from "../../services/messaging/commandRouter.js";
+import { CommandRouter, commandInvocationSnapshot, type CommandMatch } from "../../services/messaging/commandRouter.js";
 import { isReplySenderAllowed } from "../../services/messaging/replySenderPolicy.js";
 import { getDefaultProvider, getRootDir, getWorkspacePath, resolveProjectPath } from "../config.js";
 import {
@@ -30,6 +30,7 @@ import {
   type AssistantReplyOutboxEnvelope,
   type AssistantReplyOutboxPayload,
   type AsyncToolCompletionPayload,
+  type ReplyQuoteSnapshotV1,
   type RuntimeIncomingReplyEventPayload
 } from "../../packages/contracts/session/runtimeMessages.js";
 import { applicationDataStore, sqliteMemoryPersistence } from "../../adapters/sqlite/applicationDataStore.js";
@@ -111,7 +112,7 @@ import {
 } from "../../services/agent/promptSystem.js";
 import { buildConversationPromptVariables } from "../../services/agent/persona.js";
 import { DEFAULT_CONTEXT_MESSAGE_LIMIT, MAX_STORED_CONVERSATION_MESSAGES, GROUP_CHAT_SUMMARY_WINDOW_MS, MAX_SELFIE_REFERENCE_IMAGES, MAX_SELFIE_WORKSPACE_REFERENCE_IMAGES, MAX_CURRENT_CONTEXT_IMAGES, MAX_HISTORY_CONTEXT_IMAGES, HYDRATE_MESSAGE_WINDOW_MS, ACTIVE_CONVERSATION_WINDOW_MS, DIRECT_REPLY_TIMEOUT_MS, AMBIENT_ORCHESTRATOR_TIMEOUT_MS, ORCHESTRATOR_MAX_RETRIES, PREPARE_TIMEOUT_MS, RECENT_CONTEXT_TOKEN_BUDGET, DEDUPE_TTL_MS, MAX_DEDUPE_KEYS, DEFAULT_ADMIN_NAME, GROUP_CHAT_SUMMARY_COMMAND, CONVERSATION_REPLY_PROMPT_FILE, SELFIE_PROMPT_FILE, GROUP_CHAT_SUMMARY_PROMPT_FILE, ADMIN_PERSONA_FILES, ADMIN_RUNTIME_PROMPT_DEFAULTS, BatchUserInfo, WorkingMemoryMergeOutput, WorkingMemoryMergeContext, personaFileNameForAdminId, AdminIdentity, ConversationReplyUpdateInput, RuntimeCommandContext, ReplyDeliveryDraft, ReplyDelivery, DeferredCodexTurn, AmbientReplyJob, AmbientReplyState, AmbientIdleTimer, RuntimeConfigSnapshot, RuntimePromptSnapshot, SunaRuntimeOptions } from "./runtimeContracts.js";
-import { attachmentSourcePort, conversationMessageAttachments, conversationRecordId, conversationReplyEnabled, incomingAttachmentReferenceScope, isNumericMessageId, isRecentMessageForHydration, mergeAttachments, mergeConversationMessageDetails, persistentIncomingKey, queueIncomingSnapshot, replaceQuoteAttachments, uniqueAttachments, uniqueStrings } from "./messagingAttachmentHelpers.js";
+import { attachmentSourcePort, conversationMessageAttachments, conversationRecordId, conversationReplyEnabled, incomingAttachmentReferenceScope, incomingConversationMessageId, isNumericMessageId, isRecentMessageForHydration, mergeAttachments, mergeConversationMessageDetails, persistentIncomingKey, queueIncomingSnapshot, replaceQuoteAttachments, uniqueAttachments, uniqueStrings } from "./messagingAttachmentHelpers.js";
 import { conversationLastText } from "./selfieHelpers.js";
 import { errorMessage, isAbortError, isRuntimeIncomingMessage, withAbortTimeout } from "./infrastructure.js";
 
@@ -239,7 +240,9 @@ export async function runtime_handleInboundMessage(this: RuntimeHost, incoming: 
       return;
     }
 
+    const activeDebounceConversation = this.recoverActiveReplyDebounceConversation(incoming);
     const channelKey = conversationRecordId(incoming);
+    const durableMessageId = incomingConversationMessageId(incoming);
     const gate = this.replyGates.capture(incoming.scope, channelKey);
     const command = this.commandRouter.match(incoming.text, uniqueStrings([
       ...this.config.onebot.mentionNames,
@@ -248,72 +251,105 @@ export async function runtime_handleInboundMessage(this: RuntimeHost, incoming: 
     ]));
     const route = this.resolveIncomingReplyRoute(incoming, Boolean(command));
     const existingRecord = this.conversationRecords.get(channelKey);
-
+    if (await this.handlePersistedReplyDuplicate(
+      incoming, gateway, existingRecord, durableMessageId
+    )) return;
     if (existingRecord && !conversationReplyEnabled(existingRecord)) {
-      const record = this.recordIncomingMessage(incoming);
+      const rollback = activeDebounceConversation
+        ? conversationRecordSnapshot(activeDebounceConversation)
+        : undefined;
+      let record: ConversationRecord;
+      try {
+        record = this.recordIncomingMessage(incoming, {
+          persist: !activeDebounceConversation
+        });
+        if (activeDebounceConversation) this.persistConversationRecordStrict(record);
+      } catch (error) {
+        if (rollback && activeDebounceConversation) {
+          restoreConversationRecord(activeDebounceConversation, rollback);
+        }
+        throw error;
+      }
       this.markIncomingSeen(incoming);
       this.markConversationMessagesAsRecordedOnly(record);
       return;
     }
 
+    if (this.handleActiveReplyDebounceIncoming(incoming, gateway)) return;
+
     if (route === "command" || route === "direct") {
       const proposedCaptureSequence = this.incomingCaptureSequence(incoming);
       const preparationKey = persistentIncomingKey(incoming);
-      const committed = this.sessionCoordinator.enqueueEvent({
-        sessionId: channelKey,
-        kind: "incoming_reply",
-        dedupeKey: `reply:${preparationKey}`,
-        payload: incomingReplyEnvelope({
-          type: "incoming_reply",
-          route,
-          incoming: queueIncomingSnapshot(incoming),
-          captureSequence: proposedCaptureSequence,
-          preparationKey
-        }, {
-          conversationId: channelKey,
-          correlationId: `onebot:${incoming.messageId ?? preparationKey}`,
-          idempotencyKey: `reply:${preparationKey}`
-        })
-      }, { schedule: false });
+      this.scheduleReplyDebounce({
+        route,
+        incoming,
+        captureSequence: proposedCaptureSequence,
+        preparationKey,
+        gate,
+        ...(command ? { commandInvocation: commandInvocationSnapshot(command) } : {})
+      });
 
+      const rollback = activeDebounceConversation
+        ? conversationRecordSnapshot(activeDebounceConversation)
+        : undefined;
+      let incomingPersisted = !activeDebounceConversation;
       try {
-        const committedPayload = decodeIncomingReply(committed.event.payload);
-        const captureSequence = committedPayload.captureSequence;
         const record = this.recordIncomingMessage(incoming, {
-          expectedSequence: captureSequence,
+          expectedSequence: proposedCaptureSequence,
           persist: false
         });
-        this.consumeOrchestratorBatch(record, captureSequence);
-        this.persistConversationRecords();
+        this.consumeOrchestratorBatch(record, proposedCaptureSequence);
+        if (activeDebounceConversation) this.persistConversationRecordStrict(record);
+        else this.persistConversationRecords();
+        incomingPersisted = true;
         this.cancelAmbientReply(channelKey);
-        if (committed.event.status === "pending" || committed.event.status === "running") {
-          const preparation = this.prepareIncomingMessage(incoming, gateway)
-            .then(() => this.patchIncomingMessage(record, incoming))
-            .catch((error) => {
-              console.error("[runtime] prepare incoming message failed; continuing with degraded context", {
-                channel: channelKey,
-                messageId: incoming.messageId,
-                error
-              });
-            })
-            .finally(() => this.scheduleAttachmentCacheRefresh());
-          this.incomingPreparations.set(preparationKey, { promise: preparation, incoming });
-        }
+        const preparation = this.prepareIncomingMessage(incoming, gateway)
+          .then(() => this.patchIncomingMessage(record, incoming, durableMessageId))
+          .catch((error) => {
+            console.error("[runtime] prepare incoming message failed; continuing with degraded context", {
+              channel: channelKey,
+              messageId: incoming.messageId,
+              error
+            });
+          })
+          .finally(() => this.scheduleAttachmentCacheRefresh());
+        this.incomingPreparations.set(preparationKey, { promise: preparation, incoming });
+        this.trackReplyDebouncePreparation(incoming, preparation);
         this.scheduleMemoryCompression(record);
+      } catch (error) {
+        if (rollback && activeDebounceConversation && !incomingPersisted) {
+          restoreConversationRecord(activeDebounceConversation, rollback);
+        }
+        throw error;
       } finally {
         // The in-memory dedupe cursor is committed only after the durable event.
         // If post-commit bookkeeping fails, the queued event remains recoverable.
-        this.markIncomingSeen(incoming);
+        if (incomingPersisted) this.markIncomingSeen(incoming);
         this.sessionCoordinator.resume(incoming.accountId ?? "primary");
       }
       return;
     }
 
     const captureSequence = this.incomingCaptureSequence(incoming);
-    const record = this.recordIncomingMessage(incoming);
+    const rollback = activeDebounceConversation
+      ? conversationRecordSnapshot(activeDebounceConversation)
+      : undefined;
+    let record: ConversationRecord;
+    try {
+      record = this.recordIncomingMessage(incoming, {
+        expectedSequence: captureSequence,
+        persist: !activeDebounceConversation
+      });
+      if (activeDebounceConversation) this.persistConversationRecordStrict(record);
+    } catch (error) {
+      if (rollback && activeDebounceConversation) {
+        restoreConversationRecord(activeDebounceConversation, rollback);
+      }
+      throw error;
+    }
     this.markIncomingSeen(incoming);
     const preparation = this.prepareIncomingMessage(incoming, gateway)
-      .then(() => this.patchIncomingMessage(record, incoming))
+      .then(() => this.patchIncomingMessage(record, incoming, durableMessageId))
       .catch((error) => {
         console.error("[runtime] prepare incoming message failed; continuing with degraded context", {
           channel: channelKey,
@@ -322,6 +358,7 @@ export async function runtime_handleInboundMessage(this: RuntimeHost, incoming: 
         });
       })
       .finally(() => this.scheduleAttachmentCacheRefresh());
+    this.trackReplyDebouncePreparation(incoming, preparation);
     this.scheduleMemoryCompression(record);
 
     if (route === "ambient") {
@@ -343,20 +380,26 @@ export async function runtime_processSessionEvent(this: RuntimeHost,
   ): Promise<SessionHandleResult> {
     const coordinatorSignal = turnContext.signal;
     let timeoutIncoming: ParsedIncomingMessage | undefined;
+    let timeoutReplyQuote: ReplyQuoteSnapshotV1 | undefined;
     let controller: AbortController | undefined;
     try {
       return await withAbortTimeout(async (signal) => {
+        if (event.kind === "reply_debounce") {
+          return this.processReplyDebounceEvent(event, event.payload, signal);
+        }
         if (event.kind === "incoming_reply") {
           const payload = decodeIncomingReply(event.payload);
           if (!isRuntimeIncomingMessage(payload.incoming)) {
             throw new Error(`Session 事件格式无效：${event.id}`);
           }
           timeoutIncoming = payload.incoming;
+          timeoutReplyQuote = payload.replyQuote;
           return this.processIncomingReplyEvent(event, payload, signal, turnContext.emitOutbox);
         }
         if (event.kind === "tool_completion") {
           const payload = decodeToolCompletion(event.payload);
           timeoutIncoming = payload.originalRequest?.incoming;
+          timeoutReplyQuote = payload.originalRequest?.replyQuote;
           if (
             !timeoutIncoming ||
             !this.isReplySenderAllowed(timeoutIncoming.userId)
@@ -376,7 +419,11 @@ export async function runtime_processSessionEvent(this: RuntimeHost,
             }
           });
           const gateway = this.requireActiveGateway();
-          const delivery: ReplyDelivery = { outbox: [], emitOutbox: turnContext.emitOutbox };
+          const delivery: ReplyDelivery = {
+            outbox: [],
+            emitOutbox: turnContext.emitOutbox,
+            ...(payload.originalRequest.replyQuote ? { replyQuote: payload.originalRequest.replyQuote } : {})
+          };
           await this.replyToToolCompletion(payload, gateway, signal, delivery);
           return delivery.outbox.length
             ? { status: "completed", outbox: delivery.outbox }
@@ -401,7 +448,13 @@ export async function runtime_processSessionEvent(this: RuntimeHost,
         outbox: [this.replyDeliveryDraft(
           timeoutIncoming,
           message,
-          this.isAdminUser(timeoutIncoming.userId)
+          this.isAdminUser(timeoutIncoming.userId),
+          [],
+          undefined,
+          undefined,
+          true,
+          undefined,
+          timeoutReplyQuote
         )]
       };
     } finally {
@@ -428,43 +481,39 @@ export async function runtime_processIncomingReplyEvent(this: RuntimeHost,
     }
     // A crash can happen after the Session event commit and before the JSON
     // conversation snapshot. Rebuild that user message before creating context.
-    const recoveredRecord = this.recordIncomingMessage(incoming, {
-      expectedSequence: captureSequence,
-      persist: false
-    });
-    this.consumeOrchestratorBatch(recoveredRecord, captureSequence);
+    const recoveredRecord = this.recoverReplyDebounceMessages(payload);
+    const contextThroughSequence = payload.contextThroughSequence ?? captureSequence;
+    this.consumeOrchestratorBatch(recoveredRecord, contextThroughSequence);
     this.persistConversationRecords();
     this.markIncomingSeen(incoming);
     const channelKey = event.sessionId;
-    const gate = this.replyGates.capture(incoming.scope, channelKey);
+    const gate = readReplyGateSnapshot(payload.replyGate, incoming.scope, channelKey);
+    if (!gate) {
+      throw new Error(`Session 回复门禁快照无效：${event.id}`);
+    }
     const isCurrent = () => this.isReplyTaskCurrent(incoming, gate, signal);
-    if (!isCurrent()) return { status: "no_reply" };
+    if (!isCurrent()) {
+      this.clearReplyDebouncePreparation(payload);
+      return { status: "no_reply" };
+    }
 
     try {
-      if (prepared) {
-        await prepared.promise;
-      } else {
-        await this.prepareIncomingMessage(incoming, gateway).catch((error) => {
-          console.error("[runtime] recovered incoming preparation failed; continuing with degraded context", {
-            channel: channelKey,
-            eventId: event.id,
-            error
-          });
-        });
-      }
+      this.prepareReplyDebounceMessages(payload, gateway);
+      if (prepared) await prepared.promise;
+      await this.waitForReplyDebouncePreparations(incoming, contextThroughSequence);
     } finally {
-      if (payload.preparationKey) this.incomingPreparations.delete(payload.preparationKey);
+      this.clearReplyDebouncePreparation(payload);
     }
     if (!isCurrent()) return { status: "no_reply" };
 
-    const command = payload.route === "command"
-      ? this.commandRouter.match(incoming.text, uniqueStrings([
-        ...this.config.onebot.mentionNames,
-        this.persona?.name ?? "",
-        incoming.selfId == null ? "" : String(incoming.selfId)
-      ]))
+    const command = payload.commandInvocation
+      ? this.commandRouter.restore(payload.commandInvocation)
       : undefined;
-    const delivery: ReplyDelivery = { outbox: [], emitOutbox };
+    const delivery: ReplyDelivery = {
+      outbox: [],
+      emitOutbox,
+      replyQuote: payload.replyQuote
+    };
     let deferred: DeferredCodexTurn | undefined;
     await this.handleIncomingMessage(
       channelKey,
@@ -475,7 +524,8 @@ export async function runtime_processIncomingReplyEvent(this: RuntimeHost,
       command,
       isCurrent,
       delivery,
-      (value) => { deferred = value; }
+      (value) => { deferred = value; },
+      payload.contextThroughSequence
     );
     if (deferred) {
       await appendRequestLog({
@@ -629,11 +679,20 @@ export async function runtime_handleIncomingMessage(this: RuntimeHost,
     command: CommandMatch<RuntimeCommandContext> | undefined = undefined,
     isCurrent: () => boolean = () => true,
     delivery?: ReplyDelivery,
-    onDeferred?: (value: DeferredCodexTurn) => void
+    onDeferred?: (value: DeferredCodexTurn) => void,
+    contextThroughSequence?: number
   ) {
     if (command) {
       try {
-        await this.commandRouter.dispatch(command, { channelKey, incoming, gateway, signal, isCurrent, delivery });
+        await this.commandRouter.dispatch(command, {
+          channelKey,
+          incoming,
+          gateway,
+          signal,
+          isCurrent,
+          delivery,
+          contextThroughSequence
+        });
       } catch (error) {
         if (signal.aborted || isAbortError(error)) return;
         console.error("[runtime] command failed", {
@@ -649,6 +708,7 @@ export async function runtime_handleIncomingMessage(this: RuntimeHost,
 
     await this.replyToIncoming(channelKey, incoming, gateway, {
       captureSequence,
+      contextThroughSequence,
       signal,
       isCurrent,
       delivery,
@@ -669,6 +729,18 @@ export async function runtime_prepareIncomingMessage(this: RuntimeHost, incoming
       incoming.quoteReferences = replaceQuoteAttachments(incoming.quoteReferences, incoming.attachments);
     }, PREPARE_TIMEOUT_MS);
   }
+
+function conversationRecordSnapshot(record: ConversationRecord): ConversationRecord {
+  return { ...record, messages: [...record.messages] };
+}
+
+function restoreConversationRecord(record: ConversationRecord, snapshot: ConversationRecord) {
+  const mutable = record as unknown as Record<string, unknown>;
+  for (const key of Object.keys(record)) {
+    if (!Object.hasOwn(snapshot, key)) delete mutable[key];
+  }
+  Object.assign(record, snapshot);
+}
 
 export class RuntimeIntake {
   constructor(private readonly host: RuntimeHost) {}

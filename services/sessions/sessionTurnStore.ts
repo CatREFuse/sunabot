@@ -21,7 +21,12 @@ import type {
   DeferTurnResult,
   FinishTurnInput,
   FinishTurnResult,
+  HandoffTurnInput,
+  HandoffTurnResult,
+  InterruptTurnInput,
+  InterruptTurnResult,
   ReplayUnknownOutboxInput,
+  SessionEventRecord,
   SqlRow,
   TurnRecord,
   TurnStatus
@@ -193,6 +198,115 @@ export abstract class SessionTurnStore extends SessionOutboxStore {
     });
   }
 
+  handoffTurn(input: HandoffTurnInput): HandoffTurnResult {
+    const targetDedupeKey = requiredText(input.targetEvent.dedupeKey, "targetEvent.dedupeKey");
+    const now = this.now();
+    const expectedSourceAvailableAt = integerTimestamp(
+      input.expectedSourceAvailableAt,
+      now,
+      "expectedSourceAvailableAt"
+    );
+    const targetEventInput = { ...input.targetEvent, dedupeKey: targetDedupeKey };
+
+    return this.transaction(() => {
+      const turn = this.requireTurn(input.turnId);
+      if (turn.status === "no_reply") {
+        const target = this.enqueueHandoffTargetInTransaction(targetEventInput, now);
+        if (target.inserted) {
+          throw new Error(`Completed handoff turn ${turn.id} is missing its target event.`);
+        }
+        return {
+          handedOff: true,
+          turn,
+          sourceEvent: this.requireEvent(turn.eventId),
+          targetEvent: target.event,
+          inserted: false,
+          duplicate: true
+        };
+      }
+      if (turn.status !== "running") {
+        throw new Error(`Turn ${turn.id} is ${turn.status}, not running.`);
+      }
+      this.assertWorker(turn.workerId, input.workerId, `turn ${turn.id}`);
+      const sourceEvent = this.requireEvent(turn.eventId);
+      this.assertHeadEvent(sourceEvent);
+
+      if (
+        sourceEvent.availableAt !== expectedSourceAvailableAt ||
+        sourceEvent.availableAt > now
+      ) {
+        const interrupted = this.interruptRunningTurn(
+          turn,
+          sourceEvent,
+          now,
+          {
+            code: "handoff_deadline_changed",
+            message: "The source event deadline changed before handoff committed."
+          }
+        );
+        return {
+          handedOff: false,
+          turn: interrupted.turn,
+          sourceEvent: interrupted.event,
+          inserted: false,
+          duplicate: false
+        };
+      }
+
+      const target = this.enqueueHandoffTargetInTransaction(targetEventInput, now);
+      if (target.event.id === sourceEvent.id) {
+        throw new Error("Handoff target event must differ from its source event.");
+      }
+      const encodedOutcome = encodeTurnOutcome("no_reply", input.result, undefined, {
+        id: turn.id,
+        sessionId: turn.sessionId,
+        occurredAt: now,
+        correlationId: turn.id,
+        causationId: sourceEvent.id
+      });
+      const updated = this.database.prepare(`
+        UPDATE turns
+        SET status = 'no_reply', worker_id = NULL, lease_until = NULL,
+            result_json = ?, error_json = NULL, finished_at = ?
+        WHERE id = ? AND status = 'running'
+      `).run(encodedOutcome, now, turn.id);
+      if (Number(updated.changes) !== 1) {
+        throw new Error(`Turn ${turn.id} could not complete its handoff.`);
+      }
+      this.completeEvent(sourceEvent, now);
+      return {
+        handedOff: true,
+        turn: this.requireTurn(turn.id),
+        sourceEvent: this.requireEvent(sourceEvent.id),
+        targetEvent: target.event,
+        inserted: target.inserted,
+        duplicate: false
+      };
+    });
+  }
+
+  interruptTurn(input: InterruptTurnInput): InterruptTurnResult {
+    const now = this.now();
+    return this.transaction(() => {
+      const turn = this.requireTurn(input.turnId);
+      if (turn.status === "interrupted") {
+        return {
+          turn,
+          event: this.requireEvent(turn.eventId),
+          duplicate: true
+        };
+      }
+      if (turn.status !== "running") {
+        throw new Error(`Turn ${turn.id} is ${turn.status}, not running.`);
+      }
+      this.assertWorker(turn.workerId, input.workerId, `turn ${turn.id}`);
+      const event = this.requireEvent(turn.eventId);
+      this.assertHeadEvent(event);
+      const interrupted = this.interruptRunningTurn(turn, event, now, input.error);
+      return { ...interrupted, duplicate: false };
+    });
+  }
+
   deferTurn(input: DeferTurnInput): DeferTurnResult {
     const providerCallId = requiredText(input.job.providerCallId, "providerCallId");
     const toolName = requiredText(input.job.toolName, "toolName");
@@ -328,11 +442,47 @@ export abstract class SessionTurnStore extends SessionOutboxStore {
       `).run(encodedOutcome, now, turn.id);
       this.database.prepare(`
         UPDATE session_events
-        SET status = 'pending', available_at = ?, claimed_at = NULL
+        SET status = 'pending', available_at = MAX(available_at, ?), claimed_at = NULL
         WHERE id = ? AND status = 'running'
       `).run(now, turn.eventId);
     }
     return rows.length;
+  }
+
+  private interruptRunningTurn(
+    turn: TurnRecord,
+    event: SessionEventRecord,
+    now: number,
+    error: unknown
+  ) {
+    const encodedOutcome = encodeTurnOutcome("interrupted", undefined, error, {
+      id: turn.id,
+      sessionId: turn.sessionId,
+      occurredAt: now,
+      correlationId: turn.id,
+      causationId: event.id
+    });
+    const turnResult = this.database.prepare(`
+      UPDATE turns
+      SET status = 'interrupted', worker_id = NULL, lease_until = NULL,
+          result_json = ?, error_json = NULL, finished_at = ?
+      WHERE id = ? AND status = 'running'
+    `).run(encodedOutcome, now, turn.id);
+    if (Number(turnResult.changes) !== 1) {
+      throw new Error(`Turn ${turn.id} could not be interrupted.`);
+    }
+    const eventResult = this.database.prepare(`
+      UPDATE session_events
+      SET status = 'pending', claimed_at = NULL
+      WHERE id = ? AND status = 'running'
+    `).run(event.id);
+    if (Number(eventResult.changes) !== 1) {
+      throw new Error(`Event ${event.id} could not return to pending.`);
+    }
+    return {
+      turn: this.requireTurn(turn.id),
+      event: this.requireEvent(event.id)
+    };
   }
 }
 

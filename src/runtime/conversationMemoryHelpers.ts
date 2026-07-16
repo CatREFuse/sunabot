@@ -135,12 +135,22 @@ export function hasIncomingReplyContent(incoming: ParsedIncomingMessage) {
     incoming.mentionedSelf
   );
 }
-export function collectGroupChatSummaryMessages(record: ConversationRecord | undefined, incoming: ParsedIncomingMessage) {
+export function collectGroupChatSummaryMessages(
+  record: ConversationRecord | undefined,
+  incoming: ParsedIncomingMessage,
+  contextThroughSequence?: number
+) {
   if (!record) return [];
   const now = Date.now();
   const currentMessageId = incoming.messageId == null ? "" : String(incoming.messageId);
   return record.messages
     .filter((message) => message.id !== currentMessageId)
+    .filter((message) => (
+      contextThroughSequence == null || (
+        Number.isSafeInteger(message.sequence) &&
+        Number(message.sequence) <= contextThroughSequence
+      )
+    ))
     .filter((message) => {
       const at = Date.parse(message.at);
       return Number.isFinite(at) && now - at <= GROUP_CHAT_SUMMARY_WINDOW_MS;

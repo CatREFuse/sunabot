@@ -30,8 +30,6 @@ import {
   noReplyPokeEnvelope,
   type AssistantReplyOutboxEnvelope,
   type AssistantReplyOutboxPayload,
-  type AsyncToolCompletionPayload,
-  type GroupThreadContextSnapshotV1,
   type RuntimeIncomingReplyEventPayload
 } from "../../packages/contracts/session/runtimeMessages.js";
 import { applicationDataStore, sqliteMemoryPersistence } from "../../adapters/sqlite/applicationDataStore.js";
@@ -39,7 +37,6 @@ import { configureMemoryPersistence } from "../../services/memory/persistence.js
 import {
   ReplyGateEpochs,
   isOrchestratorReplyRateLimited,
-  readReplyGateSnapshot,
   resolveUserGroupReplyRoute,
   type ReplyGateSnapshot
 } from "../../services/orchestration/groupReplyPolicy.js";
@@ -120,7 +117,7 @@ import { buildCommonPromptVariables, buildConversationPromptVariables } from "..
 import { DEFAULT_CONTEXT_MESSAGE_LIMIT, MAX_STORED_CONVERSATION_MESSAGES, GROUP_CHAT_SUMMARY_WINDOW_MS, MAX_SELFIE_REFERENCE_IMAGES, MAX_SELFIE_WORKSPACE_REFERENCE_IMAGES, MAX_CURRENT_CONTEXT_IMAGES, MAX_HISTORY_CONTEXT_IMAGES, HYDRATE_MESSAGE_WINDOW_MS, ACTIVE_CONVERSATION_WINDOW_MS, DIRECT_REPLY_TIMEOUT_MS, AMBIENT_ORCHESTRATOR_TIMEOUT_MS, ORCHESTRATOR_MAX_RETRIES, PREPARE_TIMEOUT_MS, RECENT_CONTEXT_TOKEN_BUDGET, DEDUPE_TTL_MS, MAX_DEDUPE_KEYS, DEFAULT_ADMIN_NAME, GROUP_CHAT_SUMMARY_COMMAND, CONVERSATION_REPLY_PROMPT_FILE, SELFIE_PROMPT_FILE, GROUP_CHAT_SUMMARY_PROMPT_FILE, ADMIN_PERSONA_FILES, ADMIN_RUNTIME_PROMPT_DEFAULTS, BatchUserInfo, WorkingMemoryMergeOutput, WorkingMemoryMergeContext, personaFileNameForAdminId, AdminIdentity, ConversationReplyUpdateInput, RuntimeCommandContext, ReplyDeliveryDraft, ReplyDelivery, DeferredCodexTurn, AmbientReplyJob, AmbientReplyState, AmbientIdleTimer, RuntimeConfigSnapshot, RuntimePromptSnapshot, SunaRuntimeOptions } from "./runtimeContracts.js";
 import { buildMemoryPromptVariables, buildUserProfileRecallQuery, buildUserPrompt, buildWorkingMemoryRecallQuery, clampInteger, collectGroupChatSummaryMessages, estimatePromptTokens, isAdminUserId, toContextChatMessage, uniqueMemoryEntries } from "./conversationMemoryHelpers.js";
 import { conversationMessageAttachments, conversationRecordId, queueIncomingSnapshot, selectRelevantConversationAttachments, toConversationQuote, uniqueAttachments, uniqueQuotes, uniqueStrings } from "./messagingAttachmentHelpers.js";
-import { buildAsyncToolCompletionPrompt, errorMessage, isAbortError, isRuntimeIncomingMessage, sanitizeErrorDetail } from "./infrastructure.js";
+import { errorMessage, isAbortError, isRuntimeIncomingMessage, sanitizeErrorDetail } from "./infrastructure.js";
 import {
   runtime_attachReplyReferences,
   runtime_buildProviderBashOptions,
@@ -135,6 +132,14 @@ import {
   runtime_retainedConversationMessageLimit,
   runtime_selectRelevantAttachments
 } from "./replyContext.js";
+import {
+  ReplyDebounceContext,
+  resolveReplyContextCaptureSequence,
+  type ReplyDebounceContextOptions
+} from "./replyDebounceContext.js";
+import { runtime_replyToToolCompletion } from "./replyDebounceDispatch.js";
+
+export { runtime_replyToToolCompletion };
 
 export {
   runtime_attachReplyReferences,
@@ -156,9 +161,7 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
     channelKey: string,
     incoming: ParsedIncomingMessage,
     gateway: MessagingPort,
-    options: {
-      captureSequence?: number;
-      signal?: AbortSignal;
+    options: ReplyDebounceContextOptions & {
       isCurrent?: () => boolean;
       delivery?: ReplyDelivery;
       onDeferred?: (value: DeferredCodexTurn) => void;
@@ -168,8 +171,6 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
       promptOverride?: string;
       messageOrigin?: AssistantMessageOrigin;
       seedToolNames?: readonly string[];
-      threadContext?: GroupThreadContextSnapshotV1;
-      skipGroupThreadPreparation?: boolean;
     } = {}
   ) {
     const provider = this.getProvider();
@@ -180,6 +181,7 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
       ? "conversation.private-reply"
       : "conversation.group-reply";
     const logRunId = nanoid();
+    const debounceContext = new ReplyDebounceContext(this, incoming, options);
     const logContext = {
       conversationId: conversationRecordId(incoming),
       incomingMessageId: incoming.messageId == null ? undefined : String(incoming.messageId),
@@ -189,7 +191,6 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
     };
     let sent = false;
     let requestStarted = false;
-    let threadContext = options.threadContext;
     const usedToolNames = new Set(options.seedToolNames ?? []);
     const currentToolNames = () => [...usedToolNames];
     const finalizeToolNames = () => {
@@ -210,12 +211,7 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
         text: options.promptOverride ?? incoming.text,
         context: { scope: incoming.scope, userId: incoming.userId, groupId: incoming.groupId, isAdmin }
       });
-      if (incoming.scope !== "private" && !threadContext && !options.skipGroupThreadPreparation) {
-        threadContext = await this.prepareGroupThreadContext(incoming, {
-          captureSequence: options.captureSequence,
-          signal: options.signal
-        });
-      }
+      const threadContext = await debounceContext.prepareThreadContext();
       const threadPromptContext = this.groupThreadPromptContext(threadContext);
 
       const exactUserProfile = await readUserProfileForUser(this.config, String(incoming.userId));
@@ -288,11 +284,8 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
           }))
         }
       });
-      const selectedAttachments = this.selectRelevantAttachments(incoming, afterContext.text);
-      const attachmentContext = selectedAttachments.length
-        ? await this.attachmentService.buildModelContext(selectedAttachments, afterContext.text)
-        : { text: "", localImagePaths: [], attachments: [] };
-      const prompt = options.promptOverride
+      const attachmentContext = await debounceContext.buildAttachmentContext(afterContext.text);
+      const basePrompt = options.promptOverride
         ? [afterContext.text, attachmentContext.text].filter(Boolean).join("\n\n")
         : buildUserPrompt(
           incoming,
@@ -301,8 +294,9 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
           admin,
           attachmentContext.text
         );
-      const messages64 = this.buildRecentContextMessages(incoming, options.captureSequence, 64);
-      const conversationMessages = this.buildRecentContextMessages(incoming, options.captureSequence), markerId = nanoid();
+      const prompt = debounceContext.buildCurrentPrompt(basePrompt, Boolean(options.promptOverride));
+      const messages64 = this.buildRecentContextMessages(incoming, debounceContext.historyCaptureSequence, 64);
+      const conversationMessages = this.buildRecentContextMessages(incoming, debounceContext.historyCaptureSequence), markerId = nanoid();
       const currentInputMarker = incoming.scope === "private" ? undefined : {
         start: `\uE000sunabot-current-input:${markerId}:start\uE001`, end: `\uE000sunabot-current-input:${markerId}:end\uE001`
       };
@@ -322,14 +316,14 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
       );
       const currentUserMessage = [...promptRequest.messages].reverse().find((message) => message.role === "user");
       if (currentUserMessage) {
-        currentUserMessage.imageUrls = inboundImageUrls(incoming).slice(0, MAX_CURRENT_CONTEXT_IMAGES);
+        currentUserMessage.imageUrls = debounceContext.currentImageUrls().slice(0, MAX_CURRENT_CONTEXT_IMAGES);
         currentUserMessage.localImagePaths = attachmentContext.localImagePaths;
       }
-      const selfieChatReferenceImageUrls = this.collectSelfieChatReferenceImages(incoming);
+      const selfieChatReferenceImageUrls = this.collectSelfieChatReferenceImages(incoming, debounceContext.contextCaptureSequence);
       const generateImgReferenceContext = runtime_generateImgReferenceContext.call(
         this,
         incoming,
-        options.captureSequence
+        debounceContext.contextCaptureSequence
       );
       const generatedImages: ImageResult[] = [];
       let assistantTextCount = 0;
@@ -476,8 +470,10 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
         const originalRequest = {
           incoming: queueIncomingSnapshot(incoming),
           captureSequence: options.captureSequence,
+          contextThroughSequence: options.contextThroughSequence,
           imageReferences: generateImgReferenceContext,
           replyGate: this.replyGates.capture(incoming.scope, conversationRecordId(incoming)),
+          ...(options.delivery?.replyQuote ? { replyQuote: options.delivery.replyQuote } : {}),
           ...(threadContext ? { threadContext } : {})
         };
         options.onDeferred?.({
@@ -494,7 +490,8 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
             {
               messageOrigin: "async_tool_dispatch",
               toolNames: turnToolNames
-            }
+            },
+            options.delivery?.replyQuote
           )
         });
         return sent;
@@ -580,7 +577,8 @@ export async function runtime_replyWithGroupChatSummary(this: RuntimeHost,
     gateway: MessagingPort,
     signal?: AbortSignal,
     isCurrent: () => boolean = () => true,
-    delivery?: ReplyDelivery
+    delivery?: ReplyDelivery,
+    contextThroughSequence?: number
   ) {
     const admin = this.adminIdentity();
     const isAdmin = isAdminUserId(incoming.userId, admin);
@@ -595,7 +593,11 @@ export async function runtime_replyWithGroupChatSummary(this: RuntimeHost,
       }
 
       const record = this.conversationRecords.get(conversationRecordId(incoming));
-      const summaryMessages = collectGroupChatSummaryMessages(record, incoming);
+      const summaryMessages = collectGroupChatSummaryMessages(
+        record,
+        incoming,
+        contextThroughSequence
+      );
       if (!summaryMessages.length) {
         const replyRecord = await this.sendAssistantReply(
           channelKey, incoming, gateway, "最近 6 小时没有可总结的文字消息。", isAdmin, [], undefined, isCurrent, delivery
@@ -648,59 +650,12 @@ export async function runtime_replyWithGroupChatSummary(this: RuntimeHost,
       await this.sendErrorReply(incoming, gateway, error, isCurrent, undefined, delivery);
     }
   }
-export async function runtime_replyToToolCompletion(this: RuntimeHost,
-    payload: AsyncToolCompletionPayload,
-    gateway: MessagingPort,
-    signal: AbortSignal,
-    delivery: ReplyDelivery
-  ) {
-    const incoming = payload.originalRequest?.incoming;
-    if (!incoming || !isRuntimeIncomingMessage(incoming)) {
-      throw new Error(`异步工具结果缺少原始请求：${payload.toolJobId}`);
-    }
-    const channelKey = conversationRecordId(incoming);
-    const gate = readReplyGateSnapshot(payload.originalRequest.replyGate, incoming.scope, channelKey) ??
-      this.replyGates.capture(incoming.scope, channelKey);
-    const isCurrent = () => this.isReplyTaskCurrent(incoming, gate, signal);
-    if (!isCurrent()) return;
-    if (payload.toolName === GENERATE_IMG_TOOL_NAME || payload.toolName === SELFIE_TOOL_NAME) {
-      const result = readDeferredImageResult(payload.outcome.result);
-      const text = result.image
-        ? ""
-        : `图片生成失败：${sanitizeErrorDetail(result.error || "没有可用图片")}`;
-      delivery.outbox.push(this.replyDeliveryDraft(
-        incoming,
-        text,
-        this.isAdminUser(incoming.userId),
-        result.image ? [result.image] : [],
-        undefined,
-        `tool-image:${payload.toolJobId}`,
-        true,
-        {
-          messageOrigin: "async_tool_callback",
-          toolNames: [payload.toolName]
-        }
-      ));
-      return;
-    }
-    await this.replyToIncoming(channelKey, incoming, gateway, {
-      signal,
-      isCurrent,
-      delivery,
-      allowAsyncCodex: false,
-      captureSequence: payload.originalRequest.captureSequence,
-      threadContext: payload.originalRequest.threadContext,
-      skipGroupThreadPreparation: true,
-      messageOrigin: "async_tool_callback",
-      seedToolNames: [payload.toolName],
-      promptOverride: buildAsyncToolCompletionPrompt(payload)
-    });
-  }
 export async function runtime_processDeferredToolJob(this: RuntimeHost, job: ToolJobRecord, signal: AbortSignal) {
     if (signal.aborted) throw signal.reason ?? new Error("异步工具任务已取消。");
     const originalRequest = job.originalRequest as {
       incoming?: unknown;
       captureSequence?: unknown;
+      contextThroughSequence?: unknown;
       imageReferences?: unknown;
     };
     const incoming = originalRequest.incoming;
@@ -717,10 +672,9 @@ export async function runtime_processDeferredToolJob(this: RuntimeHost, job: Too
     const input = job.arguments && typeof job.arguments === "object" && !Array.isArray(job.arguments)
       ? job.arguments as Record<string, unknown>
       : {};
-    const captureSequence = typeof originalRequest.captureSequence === "number" &&
-      Number.isFinite(originalRequest.captureSequence)
-      ? originalRequest.captureSequence
-      : undefined;
+    const captureSequence = resolveReplyContextCaptureSequence(
+      originalRequest.captureSequence, originalRequest.contextThroughSequence
+    );
     const imageReferences = readGenerateImgReferenceContext(originalRequest.imageReferences) ??
       runtime_generateImgReferenceContext.call(this, incoming, captureSequence);
     const result = job.toolName === GENERATE_IMG_TOOL_NAME
@@ -732,7 +686,7 @@ export async function runtime_processDeferredToolJob(this: RuntimeHost, job: Too
         })
       : job.toolName === SELFIE_TOOL_NAME
         ? await this.runSelfie(input, provider, {
-            chatReferenceImageUrls: this.collectSelfieChatReferenceImages(incoming),
+            chatReferenceImageUrls: this.collectSelfieChatReferenceImages(incoming, captureSequence),
             imageReferences,
             logContext
           })
@@ -742,17 +696,6 @@ export async function runtime_processDeferredToolJob(this: RuntimeHost, job: Too
       ? { status: "succeeded" as const, result }
       : { status: "failed" as const, result, error: { message: String(record.error ?? "图片生成失败。") } };
   }
-
-function readDeferredImageResult(value: unknown) {
-  const result = value && typeof value === "object" && !Array.isArray(value)
-    ? value as { image?: ImageResult; error?: unknown }
-    : {};
-  const image = result.image;
-  return {
-    image: image && (image.url || image.filePath) ? image : undefined,
-    error: typeof result.error === "string" ? result.error : ""
-  };
-}
 
 function readGenerateImgReferenceContext(value: unknown): GenerateImgReferenceContext | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;

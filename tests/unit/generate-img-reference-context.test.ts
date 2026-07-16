@@ -6,6 +6,7 @@ import {
   runtime_generateImgReferenceContext,
   runtime_processDeferredToolJob
 } from "../../src/runtime/reply.js";
+import { runtime_collectSelfieChatReferenceImages } from "../../src/runtime/selfie.js";
 import { conversationRecordId } from "../../src/runtime/messagingAttachmentHelpers.js";
 import { createAdminTestConfig } from "./admin-fixtures.js";
 
@@ -104,6 +105,75 @@ describe("generate_img historical reference context", () => {
       ["/generated-images/agents/arona/generated.png"],
       expect.objectContaining({ stage: "async_image_tool" })
     );
+  });
+
+  it("keeps deferred selfie chat references inside the dispatch-time debounce boundary", async () => {
+    const incoming = incomingMessage();
+    const record: ConversationRecord = {
+      id: conversationRecordId(incoming),
+      accountId: incoming.accountId,
+      agentId: incoming.agentId,
+      scope: incoming.scope,
+      title: "group",
+      userId: incoming.userId,
+      groupId: incoming.groupId,
+      messageCount: 4,
+      lastAt: incoming.time,
+      lastText: incoming.text,
+      messages: [
+        conversationMessage({
+          id: "inside-boundary",
+          role: "user",
+          sequence: 1,
+          imageUrls: ["https://example.test/inside.png"]
+        }),
+        conversationMessage({
+          id: "after-handoff",
+          role: "user",
+          sequence: 3,
+          imageUrls: ["https://example.test/after.png"]
+        })
+      ]
+    };
+    const runSelfie = vi.fn(async () => ({ ok: true, image: { url: "/selfie.png" } }));
+    const host = {
+      config: createAdminTestConfig(process.cwd()),
+      getProvider: () => ({}),
+      conversationRecords: new Map([[record.id, record]]),
+      contextMessageLimit: () => 48,
+      collectSelfieChatReferenceImages: runtime_collectSelfieChatReferenceImages,
+      runSelfie
+    };
+
+    const result = await runtime_processDeferredToolJob.call(host as never, {
+      id: "job-selfie-1",
+      toolName: "selfie",
+      arguments: { prompt: "take a selfie" },
+      originalRequest: {
+        incoming,
+        captureSequence: 99,
+        contextThroughSequence: 2
+      }
+    } as never, new AbortController().signal);
+
+    expect(result.status).toBe("succeeded");
+    expect(runSelfie).toHaveBeenCalledOnce();
+    expect(runSelfie.mock.calls[0]?.[2]).toMatchObject({
+      chatReferenceImageUrls: ["https://example.test/inside.png"]
+    });
+
+    runSelfie.mockClear();
+    const legacyResult = await runtime_processDeferredToolJob.call(host as never, {
+      id: "job-selfie-legacy",
+      toolName: "selfie",
+      arguments: { prompt: "take a legacy selfie" },
+      originalRequest: { incoming, captureSequence: 2 }
+    } as never, new AbortController().signal);
+
+    expect(legacyResult.status).toBe("succeeded");
+    expect(runSelfie.mock.calls[0]?.[2]).toMatchObject({
+      chatReferenceImageUrls: ["https://example.test/inside.png"]
+    });
   });
 });
 

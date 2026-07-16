@@ -11,7 +11,10 @@ import {
 import { MemorySchedulerStore } from "../../services/memory/memoryScheduler.js";
 import { runWithAgentRuntimeContext } from "../../packages/platform/runtimeAgentContext.js";
 import { appendRequestLogStrict } from "../../src/requestLog.js";
-import { saveConversationRecordsStrict } from "../../src/runtime/infrastructure.js";
+import {
+  saveConversationRecordStrict,
+  saveConversationRecordsStrict
+} from "../../src/runtime/infrastructure.js";
 import { createAdminTestConfig } from "./admin-fixtures.js";
 
 describe("application SQLite data store", () => {
@@ -58,6 +61,10 @@ describe("application SQLite data store", () => {
     expect(() => saveConversationRecordsStrict([
       conversation("private:1", "2026-07-10T01:00:00.000Z")
     ], "outbox:closed:conversation", config)).toThrow();
+    expect(() => saveConversationRecordStrict(
+      conversation("private:1", "2026-07-10T01:00:00.000Z"),
+      config
+    )).toThrow();
     await expect(runWithAgentRuntimeContext(config, () => appendRequestLogStrict({
       category: "test",
       action: "closed"
@@ -77,6 +84,25 @@ describe("application SQLite data store", () => {
       imageCount: 0,
       quoteCount: 0
     }])).rejects.toThrow();
+  });
+
+  it("strictly upserts one conversation without replacing siblings", () => {
+    const config = createAdminTestConfig(root);
+    const store = applicationDataStore(config);
+    store.replaceConversations([
+      conversation("private:1", "2026-07-10T01:00:00.000Z"),
+      conversation("private:2", "2026-07-10T02:00:00.000Z")
+    ]);
+
+    saveConversationRecordStrict({
+      ...conversation("private:1", "2026-07-10T03:00:00.000Z"),
+      lastText: "strict update"
+    }, config);
+
+    expect(store.readConversations()).toEqual([
+      expect.objectContaining({ id: "private:1", lastText: "strict update" }),
+      expect.objectContaining({ id: "private:2", lastText: "" })
+    ]);
   });
 
   it("imports legacy memory once and keeps subsequent SQLite writes authoritative", async () => {

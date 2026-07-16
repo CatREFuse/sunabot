@@ -12,6 +12,29 @@ npm run verify
 
 `verify` 依次执行 runtime contract、architecture、SQLite recovery、类型检查、单元与集成测试、独立 runtime smoke、CI 容量基线、生产构建和 E2E。消息专项回归必须证明 `assistant_text` 写入 durable outbox 后即可继续 inline 工具，远端发送仍在进行或重试时不能阻塞工具；事件重试不能重复发送已提交的中间消息。deferred `dispatch_message` 与任务必须原子持久化，worker 在 acknowledgement 仍待发送时即可 claim，callback 随后按同一会话 FIFO 投递。
 
+回复防抖专项验收矩阵：
+
+| 维度 | 必测场景 | 验收标准 |
+| --- | --- | --- |
+| 路由覆盖 | 私聊、群聊命令、明确 @、唤醒词和群聊 ambient 编排器肯定结果 | 所有入口使用同一条固定 5 秒尾随防抖链路；ambient 在编排器确认后开始计时；截止前不执行命令或调用主回复 Provider |
+| 尾随重置 | 首条触发后，同一发送者在 5 秒内连续发送普通文本、图片、附件或引用消息 | 每条合法消息都把截止时间重置为其到达后的 5 秒；重复重置只产生一个真实回复事件和一次最终外发 |
+| 首触发固定 | 后续消息包含新的命令、@ 或不同引用 | route、真实 current user 输入、幂等键和最终引用目标仍指向首条触发消息；后续消息只扩展上下文和截止时间 |
+| 引用冻结 | 首触发时分别启用/关闭引用，等待期切换开关、命令排除名单或 group exclusion，并覆盖 Provider 运行中、SQLite reopen、deferred acknowledgement/callback 和 timeout/error | initial、命令、deferred 与错误外发都只使用首触发 `ReplyQuoteSnapshotV1`；on→off、off→on 与排除名单变化不能漂移引用；显式 none 也必须编码，当前 target 缺失或损坏 gate/quote 时失败关闭且不能读取热配置 |
+| 命令冻结 | 首触发通过 mention alias 或 persona name 命中命令，等待期删除旧名、启用新名并分别重启；普通 direct 首触发后才启用可命中名称 | 命令按冻结 stable ID、args 和 rawText 恢复并只执行一次，不重新匹配热名称；direct 不晋升；未知 ID、缺失/错位 invocation、超限字段、原文不一致、额外可执行字段在 Provider 和 handler 前失败关闭 |
+| 发送者隔离 | 同群发送者 A 重置自己的窗口，发送者 B 在 A 窗口内发言并独立触发回复 | B 不改变 A 的截止时间，A 也不阻塞 B；B 的消息仍进入 A 在释放边界内的上下文；两个候选分别按自身截止时间执行 |
+| 多 Agent 隔离 | 相同 QQ 号或相同群号同时出现在不同 Agent、不同绑定账号的入站流 | synthetic Session、防抖事件、真实会话和 outbox 均保持 Agent 与 account ID 隔离，不能跨账号重置、引用或外发 |
+| Provider 顺序与上下文边界 | 窗口内穿插同发送者与其他发送者的文本、图片、附件、引用和 Thread 消息，并在 handoff 后继续发言 | `messages_64` 截止到首触发以前；current batch 按 sequence 只包含一次首触发及全部窗口入站消息，真实 Provider 请求保持原顺序；图片继续受既有预算；Thread、附件和 deferred callback 共用 `contextThroughSequence`，handoff 后消息不追加入本轮 |
+| 回复门控 | 等待期间关闭会话、scope 或全局回复，再在同一进程内重新开启 | 首触发快照在释放和真实回复前均被校验；旧候选结束为 `no_reply`，不会调用 Provider、创建回复 outbox 或在重新开启后复活 |
+| 未来唤醒 | 创建防抖事件后没有任何新入站消息；另有更早或更晚的未来事件被重排 | Coordinator 始终按最早可 claim 的 `availableAt` 重置唤醒，达到截止时间后自动执行，不依赖新的 enqueue 或人工 resume |
+| 重启恢复 | pending 防抖事件写入 SQLite 后停止并重建运行时；分别在 queue 首触发提交后、业务会话持久化前，以及 follow-up bump 提交后立即关闭 | 重启后按持久化的最新截止时间和有序入站快照恢复；同发送者或不同发送者继续发言时不会抢占 sequence；首触发、全部 follow-up、附件元数据、route、门控快照和引用目标保持不变 |
+| 截止竞态 | 同一时刻运行中的源事件发生 deadline bump 与 handoff 竞争 | bump 先提交时旧 turn 回到新截止时间的 pending 且无目标事件；handoff 先提交时目标事件恰好一个，之后消息进入新窗口 |
+| 原子 follow-up | 对 pending 与 running 候选分别在“追加 follow-up 快照”和“更新 deadline”之间注入故障，并重复投递相同 message ID | 两项更新同事务提交或同时回滚；重复消息不追加、不 bump；running 旧 handler 中断后重试读取新快照，多个文本、图片和附件 follow-up 顺序与元数据完整 |
+| 无 message ID 幂等 | 完全相同消息重投，及同秒同文本但仅附件或引用不同的 A/B 消息，覆盖 encode→SQLite→decode、completed source reopen redelivery 与超过 64 条 tail | 所有路径复用同一 versioned canonical fingerprint；A/A 只记录和处理一次，A/B 保持两条有序记录；本地附件处理状态不改变身份，业务历史、记忆、Provider 与 durable duplicate validation 均无重复或误合并 |
+| 跨发送者严格落盘 | conversation 有 active debounce 时，其他发送者入站的业务库单记录 upsert 分别失败/成功，并在成功后崩溃重启；后续包含待准备图片和附件 | 失败不 mark seen、不 bump deadline且可重投；成功后全局 sequence、附件准备和冻结 current batch 可从双 SQLite 恢复；常规保存与 outbox settle 在超过 top 80 时仍保护 active/source/callback/deferred 引用的会话记录 |
+| 有界 durable tail | 同一发送者连续发送至少 65 条窗口 follow-up，最后一条含图片和附件，并在淘汰后立即崩溃、重启 | 首触发固定，durable `followUps` 始终不超过最近 64 条且当前消息必在 tail；业务会话与 Provider current batch 保持全部保留消息原顺序且不重复；tail 媒体元数据恢复；decoder 对第 65 条 durable follow-up 和畸形结构失败关闭 |
+| 原子 handoff | 在源完成、截止校验或目标事件写入处注入 SQLite 故障并重试 | 源完成与目标写入同时提交或同时回滚；没有部分 handoff、重复真实事件、跳号 turn 或重复 outbox |
+| handoff provenance | 预先写入与目标使用同 session/dedupe key 但 kind、sender、message、gate、quote、context、correlation 或 causation 不同的事件，并覆盖相同 payload 重试与 crash retry | 只有 canonical envelope 完全一致的目标可幂等复用；collision 整体失败关闭、source 保持可恢复且不能完成或吞回复；普通 enqueue 去重行为不改变 |
+
 群聊 Thread 专项回归必须证明原始消息数组保持同一引用、顺序和数量，群聊元数据字段完整、结构字符可逆转义且私聊格式不变；正文中的提示词变量 token 必须按原文保留。引用规则、批内引用链、外发回执 ID、派发时固化且不随配置漂移的实际引用目标、模型歧义分支、完整批次上下文与目标 ID、临时 key 到稳定 ID、模型选择的 active Thread、完整句 topic、低置信度、非法输出、提交失败回退持久态和分类失败回退均有覆盖。积压恢复必须覆盖 129 条消息按 64 条分批追平，动态 sidecar 只索引真实 `messages_64`，自定义旧内容被替换和重新定位且相邻规则不丢失，模型 topic 不能闭合 developer 标签；真实 user 正文中的同名标签必须原样保留，旧占位只能收到空兼容值，只有旧契约的 system 消息也要恢复当前契约。自定义模板使用 `conversation.messages`、重复展开历史或把当前 user 放在历史之前时，必须保持每份历史内部顺序并恢复正确的当前消息位置；群聊模板在不提供动态 Thread 变量时仍须先完成渲染，再由运行时插入合法空 sidecar。提示词容量回归必须覆盖 Thread、参与者、消息 ID 和 assignment 的确定性上限、active Thread 保留、引用完整性及省略计数。SQLite 测试必须覆盖 schema 9→10、STRICT/外键、完整状态校验、revision CAS、sequence 防回退和 run key 幂等；恢复门禁还要覆盖 schema 9 旧 current 恢复点、伪造版本拒绝与 schema 10 缺表拒绝。持久化 contract 必须覆盖合法有界 Thread 快照在 deferred 原始请求和 assistant outbox 中往返、旧记录无字段兼容、非法引用、非法 sequence 或超限快照降级、异步回调复用原 capture sequence，旧回调缺少快照时不得读取最新 Thread 状态。设置页必须覆盖旧公共配置和旧 Agent manifest 的默认值、配置自检补齐并实际应用字段、独立模型保存、空值拒绝、主动编排器关闭时仍可编辑，以及桌面/移动端 light/dark 截图。
 
 涉及界面时还要运行视觉测试并检查截图；正常回复重试必须覆盖默认 3 次、0—10 配置校验、公共分区热更新、SDK 与原生 HTTP Provider 的相同请求重试、取消后停止、请求日志尝试序号，以及 light/dark 和移动端设置页。Web Chat 必须覆盖管理员身份、每 Agent 顺序执行、连续消息 ID、目标 Agent 日志与 Token 选库、Web/QQ 外发隔离、消息轮询、发送校验、键盘操作、图片缩略图和移动端布局。多 Agent 测试必须覆盖 Agent 原子创建与运行时失败补偿、路径校验、独立 SQLite 与队列、独立人格、公共系统提示词继承、Agent 系统提示词覆盖、QQ 唯一归属、WebUI 端口唯一性、primary 不可移除、同一 OneBot listener 的多账号并发连接、重启恢复、secondary 账号引用与身份查询、primary 兼容接口定向 action、Agent 级和全部 Agent Token 汇总。广播风暴测试必须覆盖同一 Agent 不计数、同群所有不同 Agent 对共同累计、不同群分开计数、补充嗅探账号、重复 OneBot 事件去重、m 窗口淘汰、n 阈值触发、k 静默期、静默期不创建新任务、已 dispatch 任务与 outbox 不受影响、静默期消息只记录、自动恢复、关闭功能与配置热更新。涉及数据迁移时必须核对默认与显式配置 API 直启的写入前零变更门禁、fresh-install 与 completed-migration 标记、首次 marker 发布中断、主库出现后的半初始化拒绝、标记篡改、全部注册 Agent/账号状态漂移、目标 workspace 与端口漂移、必需路径符号链接穿越、外部数据库覆盖、secondary 账号监听、全部账号端口、带标签的各种活动容器、迁移报告四类 copied/preserved 证据、SQLite 表记录数、公共系统提示词哈希、旧文件备份和服务重启后的 API 与 OneBot 状态。Linux 发行验收还要核对干净源码门禁与重新生产构建，预构建 Native Core、生产依赖、Docker Core 构建上下文、迁移 wrapper、门禁模块和迁移文档均存在；在无 `.git`、无开发依赖的解包目录复验真实平台、runtime contract、完整 `dist/`、`tooling/`、生产 `node_modules/` 与锁文件的文件集合及哈希后完成 dry-run，并用篡改 fixture 证明失败关闭。

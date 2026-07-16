@@ -31,6 +31,7 @@ import {
   type AsyncToolCompletionPayload,
   type GroupThreadContextSnapshotV1,
   type NoReplyPokeOutboxEnvelope,
+  type ReplyQuoteSnapshotV1,
   type RuntimeIncomingReplyEventPayload
 } from "../../packages/contracts/session/runtimeMessages.js";
 import { applicationDataStore, sqliteMemoryPersistence } from "../../adapters/sqlite/applicationDataStore.js";
@@ -209,6 +210,7 @@ export interface RuntimeCommandContext {
   signal: AbortSignal;
   isCurrent: () => boolean;
   delivery?: ReplyDelivery;
+  contextThroughSequence?: number;
 }
 export interface ReplyDeliveryDraft {
   kind: "onebot.reply";
@@ -224,6 +226,7 @@ export interface NoReplyPokeDeliveryDraft {
 export interface ReplyDelivery {
   outbox: Array<ReplyDeliveryDraft | NoReplyPokeDeliveryDraft>;
   emitOutbox?: (draft: ReplyDeliveryDraft | NoReplyPokeDeliveryDraft) => Promise<unknown>;
+  replyQuote?: ReplyQuoteSnapshotV1;
   terminalStatus?: "no_reply";
 }
 export interface DeferredCodexTurn {
@@ -231,7 +234,9 @@ export interface DeferredCodexTurn {
   originalRequest: {
     incoming: ParsedIncomingMessage;
     captureSequence?: number;
+    contextThroughSequence?: number;
     replyGate?: ReplyGateSnapshot;
+    replyQuote?: ReplyQuoteSnapshotV1;
     threadContext?: GroupThreadContextSnapshotV1;
   };
   acknowledgement: ReplyDeliveryDraft;
@@ -265,4 +270,5 @@ export interface SunaRuntimeOptions {
   codexRunner?: CodexRunner;
   resolveToolCapabilities?: RuntimeToolCapabilityResolver;
   replyTaskGate?: ReplyTaskGate;
+  replyDebounceMs?: number;
 }

@@ -186,12 +186,17 @@ export function isRuntimeIncomingMessage(value: unknown): value is ParsedIncomin
     Array.isArray(incoming.quoteReferences) &&
     Boolean(incoming.sender && typeof incoming.sender === "object");
 }
-export function buildAsyncToolCompletionPrompt(payload: AsyncToolCompletionPayload) {
+export function buildAsyncToolCompletionPrompt(
+  payload: AsyncToolCompletionPayload,
+  options: { includeOriginalUserRequest?: boolean } = {}
+) {
   const envelope = JSON.stringify({
     toolJobId: payload.toolJobId,
     providerCallId: payload.providerCallId,
     toolName: payload.toolName,
-    originalUserRequest: payload.originalRequest.incoming.text,
+    ...(options.includeOriginalUserRequest === false
+      ? {}
+      : { originalUserRequest: payload.originalRequest.incoming.text }),
     arguments: payload.arguments,
     outcome: payload.outcome
   }, null, 2);
@@ -240,34 +245,53 @@ export function loadConversationRecords(config?: Pick<AppConfig, "persona">) {
     return [];
   }
 }
-export function saveConversationRecords(records: ConversationRecord[], config?: Pick<AppConfig, "persona">) {
+export function saveConversationRecords(
+  records: ConversationRecord[],
+  config?: Pick<AppConfig, "persona">,
+  protectedConversationIds: ReadonlySet<string> = new Set()
+) {
   try {
-    applicationDataStore(config).replaceConversations(normalizedConversationRecords(records));
+    applicationDataStore(config).replaceConversations(
+      normalizedConversationRecords(records, protectedConversationIds)
+    );
   } catch (error) {
     console.error("[runtime] save conversation records failed", error);
   }
 }
+export function saveConversationRecordStrict(
+  record: ConversationRecord,
+  config?: Pick<AppConfig, "persona">
+) {
+  applicationDataStore(config).upsertConversation(normalizedConversationRecord(record));
+}
 export function saveConversationRecordsStrict(
   records: ConversationRecord[],
   idempotencyKey: string,
-  config?: Pick<AppConfig, "persona">
+  config?: Pick<AppConfig, "persona">,
+  protectedConversationIds: ReadonlySet<string> = new Set()
 ) {
   return applicationDataStore(config).replaceConversationsIdempotent(
     idempotencyKey,
-    normalizedConversationRecords(records)
+    normalizedConversationRecords(records, protectedConversationIds)
   );
 }
-function normalizedConversationRecords(records: ConversationRecord[]) {
+function normalizedConversationRecords(
+  records: ConversationRecord[],
+  protectedConversationIds: ReadonlySet<string> = new Set()
+) {
   return records
     .slice()
     .sort((left, right) => Date.parse(right.lastAt) - Date.parse(left.lastAt))
-    .slice(0, 80)
-    .map((record) => ({
-      ...record,
-      messages: record.messages
-        .slice(-MAX_STORED_CONVERSATION_MESSAGES)
-        .map(persistedConversationMessage)
-    }));
+    .filter((record, index) => index < 80 || protectedConversationIds.has(record.id))
+    .map(normalizedConversationRecord);
+}
+function normalizedConversationRecord(record: ConversationRecord): ConversationRecord {
+  return {
+    ...record,
+    messages: record.messages
+      .slice(-MAX_STORED_CONVERSATION_MESSAGES)
+      .map(persistedConversationMessage)
+  };
 }
 export function persistedConversationMessage(
   message: ConversationRecord["messages"][number]

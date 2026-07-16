@@ -116,6 +116,7 @@ import { RuntimeDelivery } from "./runtime/delivery.js";
 import { RuntimeConversations } from "./runtime/conversations.js";
 import { RuntimeSelfie } from "./runtime/selfie.js";
 import { RuntimeGroupThreads } from "./runtime/groupThreadPipeline.js";
+import { DEFAULT_REPLY_DEBOUNCE_MS, RuntimeReplyDebounce } from "./runtime/replyDebounce.js";
 import { TaskLimiter, errorMessage, loadConversationRecords } from "./runtime/infrastructure.js";
 import type { RuntimeToolCapabilityResolver } from "../services/tools/bashCapability.js";
 import type { ReplyTaskGate } from "../services/orchestration/broadcastStormDetector.js";
@@ -166,6 +167,7 @@ export class SunaRuntime {
   private readonly conversations: RuntimeConversations;
   private readonly selfie: RuntimeSelfie;
   private readonly groupThreads: RuntimeGroupThreads;
+  private readonly replyDebounce: RuntimeReplyDebounce;
   constructor(config: AppConfig, options: SunaRuntimeOptions = {}) {
       configureMemoryPersistence(sqliteMemoryPersistence);
       this.config = config;
@@ -228,8 +230,24 @@ export class SunaRuntime {
         {
           id: "group-summary",
           names: ["总结群聊"],
-          handler: async ({ channelKey, incoming, gateway, signal, isCurrent, delivery }) => {
-            await this.replyWithGroupChatSummary(channelKey, incoming, gateway, signal, isCurrent, delivery);
+          handler: async ({
+            channelKey,
+            incoming,
+            gateway,
+            signal,
+            isCurrent,
+            delivery,
+            contextThroughSequence
+          }) => {
+            await this.replyWithGroupChatSummary(
+              channelKey,
+              incoming,
+              gateway,
+              signal,
+              isCurrent,
+              delivery,
+              contextThroughSequence
+            );
           }
         }
       ]);
@@ -242,6 +260,10 @@ export class SunaRuntime {
       this.conversations = new RuntimeConversations(this);
       this.selfie = new RuntimeSelfie(this);
       this.groupThreads = new RuntimeGroupThreads(this);
+      this.replyDebounce = new RuntimeReplyDebounce(
+        this,
+        nonNegativeReplyDebounceMs(options.replyDebounceMs)
+      );
   }
   private inAgentContext<T>(operation: () => T): T { return runWithAgentRuntimeContext(this.config, operation); }
   initialize(...args: Parameters<RuntimeLifecycle["initialize"]>) { return this.inAgentContext(() => this.lifecycle.initialize(...args)); }
@@ -337,6 +359,7 @@ export class SunaRuntime {
   ensureConversationRecord(...args: Parameters<RuntimeConversations["ensureConversationRecord"]>) { return this.conversations.ensureConversationRecord(...args); }
   upsertConversationRecordForReplySetting(...args: Parameters<RuntimeConversations["upsertConversationRecordForReplySetting"]>) { return this.conversations.upsertConversationRecordForReplySetting(...args); }
   persistConversationRecords(...args: Parameters<RuntimeConversations["persistConversationRecords"]>) { return this.inAgentContext(() => this.conversations.persistConversationRecords(...args)); }
+  persistConversationRecordStrict(...args: Parameters<RuntimeConversations["persistConversationRecordStrict"]>) { return this.inAgentContext(() => this.conversations.persistConversationRecordStrict(...args)); }
   markConversationMessagesAsRecordedOnly(...args: Parameters<RuntimeConversations["markConversationMessagesAsRecordedOnly"]>) { return this.conversations.markConversationMessagesAsRecordedOnly(...args); }
   getActiveConversationRecords(...args: Parameters<RuntimeConversations["getActiveConversationRecords"]>) { return this.conversations.getActiveConversationRecords(...args); }
   recordServiceMessage(...args: Parameters<RuntimeConversations["recordServiceMessage"]>) { return this.conversations.recordServiceMessage(...args); }
@@ -354,6 +377,27 @@ export class SunaRuntime {
   prepareGroupThreadContext(...args: Parameters<RuntimeGroupThreads["prepareGroupThreadContext"]>) { return this.inAgentContext(() => this.groupThreads.prepareGroupThreadContext(...args)); }
   groupThreadPromptContext(...args: Parameters<RuntimeGroupThreads["promptContext"]>) { return this.groupThreads.promptContext(...args); }
   ensureGroupThreadPromptRequest(...args: Parameters<RuntimeGroupThreads["ensurePromptRequest"]>) { return this.groupThreads.ensurePromptRequest(...args); }
+  activeReplyDebounce(...args: Parameters<RuntimeReplyDebounce["activeEvent"]>) { return this.replyDebounce.activeEvent(...args); }
+  handlePersistedReplyDuplicate(...args: Parameters<RuntimeReplyDebounce["handlePersistedDuplicate"]>) { return this.replyDebounce.handlePersistedDuplicate(...args); }
+  handleActiveReplyDebounceIncoming(...args: Parameters<RuntimeReplyDebounce["handleActiveIncoming"]>) { return this.replyDebounce.handleActiveIncoming(...args); }
+  scheduleReplyDebounce(...args: Parameters<RuntimeReplyDebounce["schedule"]>) { return this.replyDebounce.schedule(...args); }
+  bumpReplyDebounce(...args: Parameters<RuntimeReplyDebounce["bump"]>) { return this.replyDebounce.bump(...args); }
+  trackReplyDebouncePreparation(...args: Parameters<RuntimeReplyDebounce["trackPreparation"]>) { return this.replyDebounce.trackPreparation(...args); }
+  waitForReplyDebouncePreparations(...args: Parameters<RuntimeReplyDebounce["waitForPreparations"]>) { return this.replyDebounce.waitForPreparations(...args); }
+  recoverActiveReplyDebounceConversation(...args: Parameters<RuntimeReplyDebounce["recoverActiveConversation"]>) { return this.replyDebounce.recoverActiveConversation(...args); }
+  recoverReplyDebounceMessages(...args: Parameters<RuntimeReplyDebounce["recoverMessages"]>) { return this.replyDebounce.recoverMessages(...args); }
+  protectedConversationIds(...args: Parameters<RuntimeReplyDebounce["protectedConversationIds"]>) { return this.replyDebounce.protectedConversationIds(...args); }
+  prepareReplyDebounceMessages(...args: Parameters<RuntimeReplyDebounce["prepareMessages"]>) { return this.replyDebounce.prepareMessages(...args); }
+  clearReplyDebouncePreparation(...args: Parameters<RuntimeReplyDebounce["clearPreparation"]>) { return this.replyDebounce.clearPreparation(...args); }
+  processReplyDebounceEvent(...args: Parameters<RuntimeReplyDebounce["process"]>) { return this.inAgentContext(() => this.replyDebounce.process(...args)); }
+}
+
+function nonNegativeReplyDebounceMs(value: number | undefined) {
+  const selected = value ?? DEFAULT_REPLY_DEBOUNCE_MS;
+  if (!Number.isSafeInteger(selected) || selected < 0) {
+    throw new Error("replyDebounceMs must be a non-negative integer.");
+  }
+  return selected;
 }
 
 function failClosedToolCapabilityResolver(
