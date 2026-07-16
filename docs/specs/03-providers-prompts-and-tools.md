@@ -49,6 +49,8 @@ GPT-5.6 及后续支持该协议的 OpenAI 官方 Responses 请求必须在最�
 
 ### 4.3 工具
 
+`system_config`、`send_file`、`read_file`、`write_file` 与 `workspace_bash` 统一视为受限工具。OpenAI Responses、Codex Responses、Chat Completions、Anthropic Messages 和 Gemini generateContent 在每份含 Function Call 的模型响应上先执行同一套 response preflight；检查必须早于 deferred/`no_reply` 接受、普通或 `assistant_text` 正文 callback，以及任何文件、配置、Bash、queue 或 outbox 副作用。同一响应含非空普通 assistant 文本和任一受限工具，或受限工具与任意其他 inline、deferred、`no_reply`、`assistant_text` Function Call 混用时，整份响应按全部 `call_id` 返回稳定拒绝结果且零副作用；已 staged 的 `system_config` mutation 必须先 discard。普通非受限工具与同响应正文继续沿用原行为。
+
 Agent 工具目录固定包含 `assistant_text`、`no_reply`、`memory_recall`、`websearch`、`generate_img`、`selfie`、`read_file`、`write_file`、`send_file`、`send_voice_message`、`workspace_bash`、`codex` 和 `system_config` 十三项。时间读取、任意目标 OneBot 消息外发和 Provider 检查属于系统或管理能力，不进入 Agent 工具目录。`no_reply`、`read_file`、`write_file`、`send_file` 与 `system_config` 是向后兼容的内置默认工具，旧非空提示词没有定义时，只要对应运行能力可用，仍会注入代码内置定义；显式停用后从模型请求中移除。文件工具始终使用代码内置的严格参数 schema，旧提示词不能恢复宿主绝对路径、账号或会话目标参数，也不能放宽字段集合。
 
 `system_config` 只查询或修改当前 Agent。`get_settings` 返回自动回复、群聊编排、搜索、Bash 偏好、最多 100 个已知群聊的摘要和工具有效状态；`get_status` 返回运行时间、OneBot、人格、Provider、恢复门禁和安全裁剪后的探针结果。`list_groups` 按完整 conversation ID 的二进制字典序分页查询当前 Agent 的全部已知 `user_group`/`bot_group`，`groupCursor` 是上一页最后一个完整 conversation ID，`groupLimit` 允许 1—100、`null` 默认 50，响应返回 `total`、`items`、`nextCursor` 和 `hasMore`；格式合法但当前不存在的游标继续返回字典序更大的记录，并发插入不提供快照分页保证。群聊项只包含 conversation ID、账号、群号、标题、范围、回复开关、编排器开关和最后活动时间。响应不得包含密钥、环境变量名、绝对路径、原始消息、Provider 地址或探针诊断正文。修改操作包括自动回复范围、主动群聊编排器、Tavily 搜索开关、管理员私聊 Bash backend 偏好，以及任意真实完整 conversation ID 对应的已知群聊回复/编排器开关；`set_group_reply` 不受查询页大小限制。搜索实现当前只接受 `tavily`；未知群聊、裸 group ID、多余字段、缺失字段和不匹配参数均失败关闭。

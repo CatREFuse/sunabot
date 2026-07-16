@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ProviderConfig, ProviderKind } from "../../src/types.js";
+import type { ChatMessage, ProviderConfig, ProviderKind } from "../../src/types.js";
 
 const appendRequestLog = vi.hoisted(() => vi.fn(async () => undefined));
 vi.mock("../../src/requestLog.js", () => ({ appendRequestLog }));
@@ -19,6 +19,10 @@ const HOST_PATH = "/Users/tanshow/private/provider-file-secret.txt";
 const ORDINARY_USER = "ordinary user text that resembles no protocol control";
 const ORDINARY_ASSISTANT = "ordinary assistant text that must remain visible";
 const SAFE_LOG_FALLBACK = "[PROVIDER REQUEST LOG REDACTED]";
+const TWO_ROUND_HISTORY: ChatMessage[] = [
+  { role: "user", content: ORDINARY_USER },
+  { role: "assistant", content: ORDINARY_ASSISTANT }
+];
 
 const protocolCases = [
   ["openai-official", "responses.complete", "responses"],
@@ -262,7 +266,7 @@ async function runTwoRoundFlow(
         return responsesFinalPayload();
       });
     vi.spyOn(provider as never, "createClient").mockReturnValue({ responses: { create } });
-    await expect(provider.complete("system", [{ role: "user", content: ORDINARY_USER }], options)).resolves.toBe("DONE");
+    await expect(provider.complete("system", TWO_ROUND_HISTORY, options)).resolves.toBe("DONE");
     actualSecondRequest = create.mock.calls[1]?.[0];
   } else if (protocol === "chat") {
     const create = vi.fn()
@@ -272,7 +276,7 @@ async function runTwoRoundFlow(
         return chatFinalResponse();
       });
     vi.spyOn(provider as never, "createChatClient").mockReturnValue({ chat: { completions: { create } } });
-    await expect(provider.complete("system", [{ role: "user", content: ORDINARY_USER }], options)).resolves.toBe("DONE");
+    await expect(provider.complete("system", TWO_ROUND_HISTORY, options)).resolves.toBe("DONE");
     actualSecondRequest = create.mock.calls[1]?.[0];
   } else {
     vi.spyOn(provider as never, "getApiKey").mockReturnValue("provider-key");
@@ -284,7 +288,7 @@ async function runTwoRoundFlow(
     const fetchMock = vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(jsonResponse(responses[0]))
       .mockResolvedValueOnce(jsonResponse(responses[1]));
-    await expect(provider.complete("system", [{ role: "user", content: ORDINARY_USER }], options)).resolves.toBe("DONE");
+    await expect(provider.complete("system", TWO_ROUND_HISTORY, options)).resolves.toBe("DONE");
     fetchBody = String((fetchMock.mock.calls[1]?.[1] as RequestInit).body);
     actualSecondRequest = JSON.parse(fetchBody);
   }
@@ -372,7 +376,6 @@ function writeArguments() {
 function responsesToolPayload(toolName: "read_file" | "write_file", args: Record<string, unknown>) {
   return {
     output: [
-      { type: "message", role: "assistant", content: [{ type: "output_text", text: ORDINARY_ASSISTANT }] },
       { type: "function_call", name: toolName, call_id: "call-file", arguments: JSON.stringify(args) }
     ]
   };
@@ -391,7 +394,7 @@ function chatToolResponse(toolName: "read_file" | "write_file", args: Record<str
       finish_reason: "tool_calls",
       message: {
         role: "assistant",
-        content: ORDINARY_ASSISTANT,
+        content: null,
         tool_calls: [{
           id: "call-file",
           type: "function",
@@ -411,7 +414,6 @@ function chatFinalResponse() {
 function anthropicToolPayload(toolName: "read_file" | "write_file", args: Record<string, unknown>) {
   return {
     content: [
-      { type: "text", text: ORDINARY_ASSISTANT },
       { type: "tool_use", id: "call-file", name: toolName, input: args }
     ],
     stop_reason: "tool_use"
@@ -428,7 +430,6 @@ function geminiToolPayload(toolName: "read_file" | "write_file", args: Record<st
       content: {
         role: "model",
         parts: [
-          { text: ORDINARY_ASSISTANT },
           { functionCall: { name: toolName, args } }
         ]
       }

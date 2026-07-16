@@ -35,6 +35,7 @@
 | 群聊门控、广播风暴嗅探与编排策略 | `services/orchestration/groupReplyPolicy.ts`, `services/orchestration/broadcastStormDetector.ts`, `services/agents/agentRuntimeManager.ts` |
 | 命令路由、冻结命令调用与钩子 | `services/messaging/commandRouter.ts`, `packages/contracts/messaging/commands.ts`, `services/messaging/hookBus.ts` |
 | Provider、模型发现、多模态探测与工具循环 | `adapters/model/openaiProvider.ts`, `adapters/model/providerDiscovery.ts`, `adapters/model/provider/`, `services/tools/` |
+| 五协议受限工具 response preflight | `adapters/model/provider/toolResponsePreflight.ts`, `adapters/model/provider/completion.ts`, `adapters/model/provider/anthropicCompletion.ts`, `adapters/model/provider/geminiCompletion.ts`, `adapters/model/provider/toolExecutor.ts` |
 | Agent 自助设置与状态工具 | `services/tools/systemConfigTool.ts`, `src/admin/systemConfigService.ts`, `src/runtime/systemConfigReply.ts`, `apps/api/server.ts` |
 | Codex 异步工具 | `adapters/codex/codexTool.ts` |
 | 联网搜索 | `adapters/model/webSearchTool.ts`, `adapters/model/webSearchSettings.ts` |

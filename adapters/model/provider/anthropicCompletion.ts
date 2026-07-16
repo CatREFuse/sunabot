@@ -7,8 +7,7 @@ import { readToolName } from "./promptMapping.js";
 import { claimToolCalls, resolveMaxToolCalls, toolCallLimitError } from "./toolLoopLimits.js";
 import { fetchTextWithTransportRetry, normalizeAnthropicBaseUrl, resolveModelRequestMaxAttempts } from "./transport.js";
 import { errorMessage, isRecord, parseJson } from "./valueUtils.js";
-import { shouldEmitIntermediateAssistantText } from "./turnToolState.js";
-import { rejectExclusiveToolSiblingText } from "./toolExecutor.js";
+import { preflightProviderToolResponse } from "./toolResponsePreflight.js";
 
 export async function completeAnthropicMessages(
   context: ProviderAdapterContext,
@@ -88,19 +87,18 @@ export async function completeAnthropicMessages(
       return { kind: "completed", text };
     }
 
-    const emitAssistantText = shouldEmitIntermediateAssistantText(calls, options, state, Boolean(text));
-    const rejected = rejectExclusiveToolSiblingText(calls, text, options);
-    if (!rejected) {
+    const preflight = preflightProviderToolResponse(calls, text, options, state);
+    if (!preflight.rejected) {
       const deferred = context.toolExecutor.deferredTurn(calls, options, definitions, state);
       if (deferred) return deferred;
       const noReply = context.toolExecutor.noReplyTurn(calls, options, definitions, state);
       if (noReply) return noReply;
-      if (text && options.onAssistantText && emitAssistantText) {
+      if (text && options.onAssistantText && preflight.emitAssistantText) {
         await options.onAssistantText(text, "text");
       }
     }
     messages.push({ role: "assistant", content: blocks });
-    const outputs = rejected ?? await context.toolExecutor.execute(calls, options, definitions, state);
+    const outputs = preflight.rejected ?? await context.toolExecutor.execute(calls, options, definitions, state);
     messages.push({
       role: "user",
       content: outputs.map((output) => ({ type: "tool_result", tool_use_id: output.call_id, content: String(output.output ?? "") }))

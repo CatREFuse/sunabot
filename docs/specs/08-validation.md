@@ -4,6 +4,8 @@
 
 ## 11. 验证标准
 
+受限工具 response preflight 专项必须以 OpenAI Responses、Codex Responses、Chat Completions、Anthropic Messages 和 Gemini generateContent 五种协议分别覆盖 `system_config`、`send_file`、`read_file`、`write_file` 与 `workspace_bash`。每种协议都要证明非空 sibling assistant 文本在 callback 前整份拒绝；受限工具与 inline、deferred、`no_reply` 或 `assistant_text` 混批时，`onAssistantText`、`onToolCall`、文件端口、Bash runner、配置执行、deferred/terminal 接受和 outbox 均为零。staged `system_config` 后续响应必须只 discard 一次 mutation 再返回拒绝输出；普通非受限工具与 sibling text 仍须保持既有 callback 与工具执行行为。直接调用共享 executor 也要复用相同批次门禁，防止绕过协议适配层。
+
 交付前必须通过：
 
 ```bash
@@ -63,4 +65,4 @@ Prompt Cache 验收必须分别执行 OpenAI 官方 Responses 与 Codex Response
 
 `FLOW-001`、`FLOW-002`、`FLOW-003`、`MIG-001`、`MIG-002`、`RECOVERY-001` 与 `ONBOARD-002` 至 `ONBOARD-005` 的代码、故障注入和受控 E2E 已完成。真实 macOS Native Core + 多 NapCat Docker 与 Linux/WSL Docker Core + 多 NapCat Docker 的双 QQ 首次运行、账号定向文字/图片/文件外发和重启恢复仍需在具备两套运行环境与真实 QQ 登录态时执行；在该验收完成前，不能把受控 Provider/OneBot fixture 视为真实部署证据。
 
-`read_file` 与 `write_file` 的 Function Call 批次、跨轮工具独占门禁，以及 OpenAI Responses、Chat Completions、Anthropic、Gemini 与 Codex Responses 对同响应普通 assistant 文本的发送前独占校验均由共享执行器覆盖；对应五协议回归、runtime contract、类型检查、构建和隔离冒烟全部通过前，文件工具不能作为可上线能力交付。
+`system_config`、`send_file`、`read_file`、`write_file` 与 `workspace_bash` 的 response 级独占门禁由共享 preflight 覆盖，`read_file` 与 `write_file` 继续保留跨轮工具独占校验；对应五协议回归、runtime contract、类型检查、构建和隔离冒烟全部通过前，相关受限工具不能作为可上线能力交付。

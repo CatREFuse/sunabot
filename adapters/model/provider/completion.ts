@@ -43,10 +43,9 @@ import { completeGeminiGenerateContent } from "./geminiCompletion.js";
 import { claimToolCalls, resolveMaxToolCalls, toolCallLimitError } from "./toolLoopLimits.js";
 import {
   createTurnToolState,
-  shouldEmitIntermediateAssistantText,
   withTurnToolState
 } from "./turnToolState.js";
-import { rejectExclusiveToolSiblingText } from "./toolExecutor.js";
+import { preflightProviderToolResponse } from "./toolResponsePreflight.js";
 
 export async function completeProviderTurn(
   context: ProviderAdapterContext,
@@ -131,21 +130,15 @@ async function completeOpenAIResponses(
     }
 
     const siblingText = extractProviderText(response);
-    const emitAssistantText = shouldEmitIntermediateAssistantText(
-      toolCalls,
-      options,
-      state,
-      Boolean(siblingText)
-    );
-    const rejected = rejectExclusiveToolSiblingText(toolCalls, siblingText, options);
-    if (!rejected) {
+    const preflight = preflightProviderToolResponse(toolCalls, siblingText, options, state);
+    if (!preflight.rejected) {
       const deferred = context.toolExecutor.deferredTurn(toolCalls, options, tools, state);
       if (deferred) return deferred;
       const noReply = context.toolExecutor.noReplyTurn(toolCalls, options, tools, state);
       if (noReply) return noReply;
-      if (emitAssistantText) await emitIntermediateAssistantText(response, options);
+      if (preflight.emitAssistantText) await emitIntermediateAssistantText(response, options);
     }
-    const outputs = rejected ?? await context.toolExecutor.execute(toolCalls, options, tools, state);
+    const outputs = preflight.rejected ?? await context.toolExecutor.execute(toolCalls, options, tools, state);
     input.push(...extractResponseOutput(response), ...outputs);
   }
 
@@ -267,25 +260,15 @@ async function completeCodexResponses(
 
     const streamText = extractResponsesTextFromSse(text);
     const siblingText = streamText || extractResponsesText(payload);
-    const emitAssistantText = shouldEmitIntermediateAssistantText(
-      toolCalls,
-      options,
-      state,
-      Boolean(siblingText)
-    );
-    const rejected = rejectExclusiveToolSiblingText(
-      toolCalls,
-      siblingText,
-      options
-    );
-    if (!rejected) {
+    const preflight = preflightProviderToolResponse(toolCalls, siblingText, options, state);
+    if (!preflight.rejected) {
       const deferred = context.toolExecutor.deferredTurn(toolCalls, options, tools, state);
       if (deferred) return deferred;
       const noReply = context.toolExecutor.noReplyTurn(toolCalls, options, tools, state);
       if (noReply) return noReply;
-      if (emitAssistantText) await emitIntermediateAssistantText(payload, options, streamText);
+      if (preflight.emitAssistantText) await emitIntermediateAssistantText(payload, options, streamText);
     }
-    const outputs = rejected ?? await context.toolExecutor.execute(toolCalls, options, tools, state);
+    const outputs = preflight.rejected ?? await context.toolExecutor.execute(toolCalls, options, tools, state);
     input.push(...extractResponseOutput(payload), ...outputs);
   }
 
@@ -368,19 +351,13 @@ async function completeChatCompletions(
     }
 
     const siblingText = choice.content?.trim() ?? "";
-    const emitAssistantText = shouldEmitIntermediateAssistantText(
-      calls,
-      options,
-      state,
-      Boolean(siblingText)
-    );
-    const rejected = rejectExclusiveToolSiblingText(calls, siblingText, options);
-    if (!rejected) {
+    const preflight = preflightProviderToolResponse(calls, siblingText, options, state);
+    if (!preflight.rejected) {
       const deferred = context.toolExecutor.deferredTurn(calls, options, definitions, state);
       if (deferred) return deferred;
       const noReply = context.toolExecutor.noReplyTurn(calls, options, definitions, state);
       if (noReply) return noReply;
-      if (siblingText && options.onAssistantText && emitAssistantText) {
+      if (siblingText && options.onAssistantText && preflight.emitAssistantText) {
         await options.onAssistantText(siblingText, "text");
       }
     }
@@ -389,7 +366,7 @@ async function completeChatCompletions(
       content: choice.content ?? null,
       tool_calls: choice.tool_calls
     });
-    const outputs = rejected ?? await context.toolExecutor.execute(calls, options, definitions, state);
+    const outputs = preflight.rejected ?? await context.toolExecutor.execute(calls, options, definitions, state);
     messages.push(...outputs.map((output) => ({
       role: "tool",
       tool_call_id: output.call_id,

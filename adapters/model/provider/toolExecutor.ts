@@ -69,19 +69,16 @@ import {
   markAcceptedTool,
   toolOrderingError
 } from "./turnToolState.js";
+import {
+  preflightProviderToolResponse,
+  toolCallErrors
+} from "./toolResponsePreflight.js";
 
 type InlineExecutor = (
   args: Record<string, unknown>,
   call: ResponseFunctionCallItem,
   options: ProviderCompleteOptions
 ) => Promise<unknown>;
-
-const SYSTEM_CONFIG_SOLO_ERROR =
-  "system_config must be called alone in a model tool-call batch.";
-const SYSTEM_CONFIG_MUTATION_STAGED_ERROR =
-  "A system_config change is already staged; send the final confirmation without calling another tool.";
-const SYSTEM_CONFIG_TURN_SOLO_ERROR =
-  "system_config must be the only accepted tool activity in the provider turn.";
 
 const inlineExecutors: ReadonlyMap<string, InlineExecutor> = new Map([
   [ASSISTANT_TEXT_TOOL_NAME, runAssistantText],
@@ -176,41 +173,8 @@ export class RegistryProviderToolExecutor implements ProviderToolExecutorPort {
     definitions: readonly Record<string, unknown>[],
     state: TurnToolState = createTurnToolState()
   ) {
-    if (options.systemConfig?.turnRejected()) {
-      return toolCallErrors(calls, SYSTEM_CONFIG_TURN_SOLO_ERROR);
-    }
-    if (options.systemConfig?.mutationStaged()) {
-      rejectSystemConfigTurn(options);
-      return toolCallErrors(calls, SYSTEM_CONFIG_MUTATION_STAGED_ERROR);
-    }
-    if (calls.length > 1 && calls.some((call) => call.name === SEND_FILE_TOOL_NAME)) {
-      if (calls.some((call) => call.name === SYSTEM_CONFIG_TOOL_NAME)) {
-        rejectSystemConfigTurn(options);
-      }
-      return toolCallErrors(calls, "send_file must be called alone before any other tool.");
-    }
-    if (calls.length > 1 && calls.some((call) => call.name === SYSTEM_CONFIG_TOOL_NAME)) {
-      rejectSystemConfigTurn(options);
-      return toolCallErrors(calls, SYSTEM_CONFIG_SOLO_ERROR);
-    }
-    if (
-      calls.some((call) => call.name === SYSTEM_CONFIG_TOOL_NAME) &&
-      hasAcceptedTurnActivity(state)
-    ) {
-      rejectSystemConfigTurn(options);
-      return toolCallErrors(calls, SYSTEM_CONFIG_TURN_SOLO_ERROR);
-    }
-    if (state.acceptedToolNames.includes(SYSTEM_CONFIG_TOOL_NAME)) {
-      rejectSystemConfigTurn(options);
-      return toolCallErrors(calls, SYSTEM_CONFIG_TURN_SOLO_ERROR);
-    }
-    if (calls.length > 1 && calls.some((call) => isWorkbenchFileToolName(call.name))) {
-      return calls.map((call) => ({
-        type: "function_call_output",
-        call_id: call.call_id,
-        output: JSON.stringify({ ok: false, error: "read_file and write_file must be called alone before any other tool." })
-      }));
-    }
+    const preflight = preflightProviderToolResponse(calls, "", options, state);
+    if (preflight.rejected) return preflight.rejected;
     if (calls.length > 1 && calls.some((call) => call.name === NO_REPLY_TOOL_NAME)) {
       return toolCallErrors(calls, "no_reply must be called alone before any other tool.");
     }
@@ -226,34 +190,6 @@ function systemConfigTurnLocked(options: ProviderCompleteOptions, state: TurnToo
   return options.systemConfig?.mutationStaged() === true ||
     options.systemConfig?.turnRejected() === true ||
     state.acceptedToolNames.includes(SYSTEM_CONFIG_TOOL_NAME);
-}
-
-function rejectSystemConfigTurn(options: ProviderCompleteOptions) {
-  if (!options.systemConfig?.turnRejected()) options.systemConfig?.rejectTurn();
-}
-
-export function rejectExclusiveToolSiblingText(
-  calls: ResponseFunctionCallItem[],
-  siblingText: string,
-  options: ProviderCompleteOptions
-) {
-  if (!siblingText.trim()) return undefined;
-  if (
-    options.systemConfig?.mutationStaged() === true ||
-    options.systemConfig?.turnRejected() === true
-  ) return undefined;
-  const exclusive = calls.find(
-    (call) => call.name === SEND_FILE_TOOL_NAME || call.name === SYSTEM_CONFIG_TOOL_NAME
-  );
-  if (!exclusive) return undefined;
-  return calls.map((call) => ({
-    type: "function_call_output",
-    call_id: call.call_id,
-    output: JSON.stringify({
-      ok: false,
-      error: `${exclusive.name} must be called without sibling assistant text in the same model response.`
-    })
-  }));
 }
 
 async function executeFunctionCall(
@@ -584,14 +520,6 @@ async function runSystemConfigTool(
   const result = await runSystemConfig(args, options.systemConfig);
   await appendToolLog(SYSTEM_CONFIG_TOOL_NAME, call, args, result, options);
   return result;
-}
-
-function toolCallErrors(calls: ResponseFunctionCallItem[], error: string) {
-  return calls.map((call) => ({
-    type: "function_call_output",
-    call_id: call.call_id,
-    output: JSON.stringify({ ok: false, error })
-  }));
 }
 
 async function runSendFile(
