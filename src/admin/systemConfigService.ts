@@ -10,6 +10,7 @@ import type { AgentConfigService } from "./agentConfigService.js";
 import { configRevision } from "./configRevision.js";
 
 const GROUP_LIMIT = 100;
+const GROUP_PAGE_DEFAULT_LIMIT = 50;
 const GROUP_CONVERSATION_ID = /^(?:account:[A-Za-z0-9_-]+:)?group:\d+$/;
 const WEB_CHAT_CONVERSATION_ID = "web:admin";
 const DURABLE_DELIVERY_REQUIRED_CODE = "SYSTEM_CONFIG_DURABLE_DELIVERY_REQUIRED";
@@ -62,6 +63,7 @@ export class SystemConfigService {
         if (pending) return failure("SYSTEM_CONFIG_MUTATION_PENDING", "配置修改后请直接完成当前回复。");
         if (input.operation === "get_settings") return this.settings(context);
         if (input.operation === "get_status") return this.status(context);
+        if (input.operation === "list_groups") return this.groups(context, input);
         const prepared = await this.prepareMutation(context, input);
         if ("pending" in prepared && prepared.pending) pending = prepared.pending;
         return prepared.result;
@@ -180,6 +182,26 @@ export class SystemConfigService {
       bash: safeBashSettings(config, toolCapabilities.workspaceBash),
       recovery: { required: asRecord(this.options.getRecoveryStatus()).required === true },
       probe: safeProbe(probe)
+    };
+  }
+
+  private groups(context: SystemConfigTurnContext, input: SystemConfigInput) {
+    const cursor = input.groupCursor;
+    const limit = input.groupLimit ?? GROUP_PAGE_DEFAULT_LIMIT;
+    const records = knownGroupRecords(this.options.getRuntime(context.agentId))
+      .sort(compareConversationIds);
+    const candidates = records
+      .filter((record) => cursor === null || record.id > cursor)
+      .slice(0, limit + 1);
+    const hasMore = candidates.length > limit;
+    const items = candidates.slice(0, limit).map(safeGroup);
+    return {
+      ok: true,
+      operation: "list_groups",
+      total: records.length,
+      items,
+      nextCursor: hasMore ? items.at(-1)!.conversationId : null,
+      hasMore
     };
   }
 
@@ -345,6 +367,10 @@ function safeGroup(record: ConversationRecord) {
   };
 }
 
+function compareConversationIds(left: ConversationRecord, right: ConversationRecord) {
+  return left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
+}
+
 function configuredToolStates(config: AppConfig) {
   return Object.fromEntries(Object.entries(config.bot.tools.overrides ?? {}).map(([name, value]) => [
     name,
@@ -496,7 +522,8 @@ function changedFields(
 }
 
 function isMutation(input: SystemConfigInput) {
-  return input.operation !== "get_settings" && input.operation !== "get_status";
+  return input.operation !== "get_settings" && input.operation !== "get_status" &&
+    input.operation !== "list_groups";
 }
 
 function staged(

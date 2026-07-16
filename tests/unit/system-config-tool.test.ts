@@ -19,6 +19,14 @@ describe("system_config tool contract", () => {
     expect(systemConfigTool.parameters.properties.operation.enum).toEqual(SYSTEM_CONFIG_OPERATIONS);
     expect(systemConfigTool.parameters.properties.searchImplementation.enum).toEqual(["tavily", null]);
     expect(systemConfigTool.parameters.properties.bashAdminBackend.enum).toEqual(["native", "docker", null]);
+    expect(systemConfigTool.parameters.properties.conversationId.description).toBe(
+      "Existing full known group conversationId from get_settings or list_groups; use list_groups when the group is outside the settings summary. Required only for set_group_reply."
+    );
+    expect(systemConfigTool.parameters.properties.groupLimit).toMatchObject({
+      type: ["integer", "null"],
+      minimum: 1,
+      maximum: 100
+    });
     expect(systemConfigTool.parameters.required).toEqual([
       "operation",
       "replyScope",
@@ -26,7 +34,9 @@ describe("system_config tool contract", () => {
       "orchestratorEnabled",
       "searchImplementation",
       "bashAdminBackend",
-      "conversationId"
+      "conversationId",
+      "groupCursor",
+      "groupLimit"
     ]);
     expect(systemConfigTool.parameters.required).toEqual(
       Object.keys(systemConfigTool.parameters.properties)
@@ -36,6 +46,15 @@ describe("system_config tool contract", () => {
   it.each([
     ["get_settings", input("get_settings")],
     ["get_status", input("get_status")],
+    ["list_groups with defaults", input("list_groups")],
+    ["list_groups with a full cursor and limit", input("list_groups", {
+      groupCursor: "account:secondary:group:202",
+      groupLimit: 100
+    })],
+    ["list_groups with an unqualified full cursor", input("list_groups", {
+      groupCursor: "group:10",
+      groupLimit: 1
+    })],
     ["set_auto_reply", input("set_auto_reply", { replyScope: "all", enabled: true })],
     ["set_orchestrator", input("set_orchestrator", { enabled: false })],
     ["set_search", input("set_search", { enabled: true, searchImplementation: "tavily" })],
@@ -71,15 +90,40 @@ describe("system_config tool contract", () => {
     });
   });
 
+  it("normalizes whitespace around a legal group cursor", () => {
+    const result = parseSystemConfigInput(input("list_groups", {
+      groupCursor: "  account:secondary:group:202  ",
+      groupLimit: 1
+    }));
+
+    expect(result).toEqual({
+      ok: true,
+      input: input("list_groups", {
+        groupCursor: "account:secondary:group:202",
+        groupLimit: 1
+      })
+    });
+  });
+
   it.each([
     ["get_settings with a mutation value", input("get_settings", { enabled: true }), "get_settings"],
     ["get_status with a mutation value", input("get_status", { conversationId: "group:123" }), "get_status"],
+    ["get_settings with a group cursor", input("get_settings", { groupCursor: "group:123" }), "get_settings"],
+    ["list_groups with a mutation value", input("list_groups", { enabled: true }), "list_groups"],
+    ["list_groups with a mutation conversation", input("list_groups", {
+      conversationId: "group:123"
+    }), "list_groups"],
     ["set_auto_reply without replyScope", input("set_auto_reply", { enabled: true }), "set_auto_reply"],
     ["set_auto_reply without enabled", input("set_auto_reply", { replyScope: "private" }), "set_auto_reply"],
     ["set_auto_reply with an unrelated field", input("set_auto_reply", {
       replyScope: "private",
       enabled: true,
       orchestratorEnabled: false
+    }), "set_auto_reply"],
+    ["set_auto_reply with a group limit", input("set_auto_reply", {
+      replyScope: "private",
+      enabled: true,
+      groupLimit: 10
     }), "set_auto_reply"],
     ["set_orchestrator without enabled", input("set_orchestrator"), "set_orchestrator"],
     ["set_orchestrator with replyScope", input("set_orchestrator", {
@@ -115,6 +159,28 @@ describe("system_config tool contract", () => {
       ok: false,
       code: "SYSTEM_CONFIG_INVALID",
       field
+    });
+  });
+
+  it.each([
+    ["empty cursor", "", null],
+    ["bare group number", "202", null],
+    ["private cursor", "private:202", null],
+    ["malformed account-qualified cursor", "account::group:202", null],
+    ["cursor above maximum length", `account:${"a".repeat(150)}:group:202`, null],
+    ["zero limit", null, 0],
+    ["limit above maximum", null, 101],
+    ["fractional limit", null, 1.5],
+    ["string limit", null, "50"]
+  ])("rejects list_groups with %s", (_label, groupCursor, groupLimit) => {
+    expect(parseSystemConfigInput({
+      ...input("list_groups"),
+      groupCursor,
+      groupLimit
+    })).toMatchObject({
+      ok: false,
+      code: "SYSTEM_CONFIG_INVALID",
+      field: groupCursor === null ? "groupLimit" : "groupCursor"
     });
   });
 
@@ -206,6 +272,8 @@ function input(
     searchImplementation: null,
     bashAdminBackend: null,
     conversationId: null,
+    groupCursor: null,
+    groupLimit: null,
     ...overrides
   };
 }

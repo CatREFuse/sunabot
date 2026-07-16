@@ -105,6 +105,163 @@ describe("SystemConfigService", () => {
     expect(serialized).not.toContain("agentWorkspace");
   });
 
+  it("paginates every known group by full conversation id without duplicates or mutations", async () => {
+    const harness = createHarness("web:admin");
+    const generated = [
+      conversation({
+        id: "account:secondary:group:900",
+        accountId: "secondary",
+        groupId: 900,
+        groupName: "副账号群",
+        scope: "bot_group"
+      }),
+      ...Array.from({ length: 256 }, (_, index) => conversation({
+        id: `group:${index + 1}`,
+        groupId: index + 1,
+        groupName: `群 ${index + 1}`
+      }))
+    ];
+    harness.records.splice(0, harness.records.length, ...generated.reverse());
+    const expectedIds = generated.map((record) => record.id).sort(binaryCompare);
+    const receivedIds: string[] = [];
+    const turn = harness.service.createTurn(harness.context);
+    let groupCursor: string | null = null;
+    let pageCount = 0;
+
+    do {
+      const result = await turn.execute(systemInput("list_groups", {
+        groupCursor,
+        groupLimit: null
+      })) as any;
+
+      expect(result).toMatchObject({
+        ok: true,
+        operation: "list_groups",
+        total: 257
+      });
+      expect(result.items.length).toBeLessThanOrEqual(50);
+      expect(result.hasMore).toBe(result.nextCursor !== null);
+      if (result.hasMore) {
+        expect(result.nextCursor).toBe(result.items.at(-1)?.conversationId);
+      }
+      receivedIds.push(...result.items.map((item: any) => item.conversationId));
+      groupCursor = result.nextCursor;
+      pageCount += 1;
+    } while (groupCursor !== null);
+
+    expect(pageCount).toBe(6);
+    expect(receivedIds).toEqual(expectedIds);
+    expect(new Set(receivedIds).size).toBe(expectedIds.length);
+    expect(receivedIds).toContain("account:secondary:group:900");
+    expect(turn.mutationStaged()).toBe(false);
+    expect(turn.stagedMutation()).toBeUndefined();
+
+    await turn.commit();
+
+    expect(harness.registryConfig).not.toHaveBeenCalled();
+    expect(harness.registryGet).not.toHaveBeenCalled();
+    expect(harness.readEnvelope).not.toHaveBeenCalled();
+    expect(harness.patch).not.toHaveBeenCalled();
+    expect(harness.setConversationReplyEnabled).not.toHaveBeenCalled();
+  });
+
+  it("uses binary keyset pagination for an unknown but valid cursor", async () => {
+    const harness = createHarness();
+    harness.records.splice(0, harness.records.length,
+      conversation({ id: "group:2", groupId: 2 }),
+      conversation({ id: "account:b:group:1", accountId: "b", groupId: 1 }),
+      conversation({ id: "group:10", groupId: 10 }),
+      conversation({ id: "account:a:group:2", accountId: "a", groupId: 2 })
+    );
+
+    const first = await execute(harness, systemInput("list_groups", { groupLimit: 100 }));
+    const afterUnknown = await execute(harness, systemInput("list_groups", {
+      groupCursor: "group:15",
+      groupLimit: 100
+    }));
+    const afterLast = await execute(harness, systemInput("list_groups", {
+      groupCursor: "group:9",
+      groupLimit: 100
+    }));
+
+    expect(first.items.map((item: any) => item.conversationId)).toEqual([
+      "account:a:group:2",
+      "account:b:group:1",
+      "group:10",
+      "group:2"
+    ]);
+    expect(afterUnknown).toMatchObject({
+      total: 4,
+      hasMore: false,
+      nextCursor: null,
+      items: [expect.objectContaining({ conversationId: "group:2" })]
+    });
+    expect(afterLast).toMatchObject({
+      total: 4,
+      hasMore: false,
+      nextCursor: null,
+      items: []
+    });
+  });
+
+  it("isolates list_groups by Agent and returns only safe group projections", async () => {
+    const harness = createHarness();
+    harness.records.push(
+      conversation({ id: "group:777", scope: "private", title: "伪装私聊" }),
+      conversation({ id: "private:888", scope: "user_group", title: "非法群记录" }),
+      conversation({ id: "web:admin", scope: "bot_group", title: "非法 Web 记录" })
+    );
+    const otherRecord = conversation({
+      id: "account:other:group:999",
+      accountId: "other",
+      groupId: 999,
+      groupName: "其他 Agent 群"
+    });
+    const otherRuntime: SystemConfigRuntime = {
+      ...harness.runtime,
+      getConversationRecords: () => [structuredClone(otherRecord)]
+    };
+    harness.getRuntime.mockImplementation((agentId: string) =>
+      agentId === "other-agent" ? otherRuntime : harness.runtime
+    );
+
+    const current = await execute(harness, systemInput("list_groups"));
+    const otherContext = { ...harness.context, agentId: "other-agent" };
+    const other = await harness.service.createTurn(otherContext)
+      .execute(systemInput("list_groups")) as any;
+
+    expect(current.items.map((item: any) => item.conversationId)).toEqual([
+      "account:secondary:group:202",
+      "group:101"
+    ]);
+    expect(other.items).toEqual([{
+      conversationId: "account:other:group:999",
+      accountId: "other",
+      groupId: 999,
+      title: "其他 Agent 群",
+      scope: "user_group",
+      replyEnabled: true,
+      orchestratorEnabled: true,
+      lastAt: "2026-07-16T00:01:00.000Z"
+    }]);
+    expect(Object.keys(current.items[0]).sort()).toEqual([
+      "accountId",
+      "conversationId",
+      "groupId",
+      "lastAt",
+      "orchestratorEnabled",
+      "replyEnabled",
+      "scope",
+      "title"
+    ].sort());
+    const serialized = JSON.stringify({ current, other });
+    expect(serialized).not.toContain(SECRET_MESSAGE);
+    expect(serialized).not.toContain("messages");
+    expect(serialized).not.toContain("lastText");
+    expect(harness.getRuntime).toHaveBeenCalledWith(AGENT_ID);
+    expect(harness.getRuntime).toHaveBeenCalledWith("other-agent");
+  });
+
   it("sanitizes runtime probe and status details", async () => {
     const harness = createHarness("web:admin");
 
@@ -408,6 +565,41 @@ describe("SystemConfigService", () => {
     });
   });
 
+  it("keeps set_group_reply available beyond the get_settings summary page", async () => {
+    const harness = createHarness();
+    const target = conversation({
+      id: "account:secondary:group:999",
+      accountId: "secondary",
+      groupId: 999,
+      groupName: "摘要外群聊"
+    });
+    harness.records.splice(0, harness.records.length,
+      ...Array.from({ length: 100 }, (_, index) => conversation({
+        id: `group:${index + 1}`,
+        groupId: index + 1
+      })),
+      target
+    );
+    const settings = await execute(harness, systemInput("get_settings"));
+    const turn = harness.service.createTurn(harness.context);
+
+    expect(settings.groups).toMatchObject({ total: 101, truncated: true });
+    expect(settings.groups.items).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ conversationId: target.id })
+    ]));
+
+    await expect(turn.execute(systemInput("set_group_reply", {
+      conversationId: target.id,
+      enabled: false
+    }))).resolves.toMatchObject({ ok: true, staged: true });
+    await turn.commit();
+
+    expect(harness.setConversationReplyEnabled).toHaveBeenCalledWith({
+      id: target.id,
+      replyEnabled: false
+    });
+  });
+
   it("rejects bare and unknown group identifiers without staging a mutation", async () => {
     const harness = createHarness();
     const turn = harness.service.createTurn(harness.context);
@@ -645,6 +837,7 @@ function createHarness(conversationId = "private:10001") {
     resolveToolCapabilities: vi.fn(async () => ({ workspaceBash: true })),
     setConversationReplyEnabled
   };
+  const getRuntime = vi.fn((_agentId: string) => runtime);
   const options = {
     registry: {
       config: registryConfig,
@@ -654,7 +847,7 @@ function createHarness(conversationId = "private:10001") {
       readEnvelope,
       patch
     },
-    getRuntime: () => runtime,
+    getRuntime,
     getOnebotStatus: () => ({
       connected: true,
       connections: 1,
@@ -706,6 +899,7 @@ function createHarness(conversationId = "private:10001") {
   return {
     config,
     context,
+    getRuntime,
     patch,
     readEnvelope,
     records,
@@ -817,6 +1011,12 @@ function systemInput(
     searchImplementation: null,
     bashAdminBackend: null,
     conversationId: null,
+    groupCursor: null,
+    groupLimit: null,
     ...overrides
   };
+}
+
+function binaryCompare(left: string, right: string) {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
