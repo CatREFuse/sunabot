@@ -61,6 +61,13 @@ export const PROMPT_FILE_DEFINITIONS = [
   final("conversation.private-reply", "单聊回复", "对话", () => "conversation_private_reply.json", conversationVariables),
   final("conversation.group-reply", "群聊回复", "对话", () => "conversation_group_reply.json", conversationVariables),
   final(
+    "conversation.tone-rewrite",
+    "语气改写",
+    "对话",
+    () => "tone_rewrite.json",
+    [variable("tone.input", "即将发送到会话的原始文本", "string", "出站消息")]
+  ),
+  final(
     "memory.compress-in",
     "工作记忆提取",
     "记忆",

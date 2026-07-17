@@ -15,7 +15,11 @@ import type { CommandInvocationV1 } from "../../packages/contracts/messaging/com
 import { readReplyGateSnapshot, type ReplyGateSnapshot } from "../../services/orchestration/groupReplyPolicy.js";
 import type { SessionHandleResult } from "../../services/sessions/sessionCoordinator.js";
 import type { SessionEventRecord } from "../../services/sessions/sessionStore.js";
-import type { ConversationRecord, ParsedIncomingMessage } from "../types.js";
+import {
+  DEFAULT_REPLY_DEBOUNCE_MS,
+  type ConversationRecord,
+  type ParsedIncomingMessage
+} from "../types.js";
 import {
   conversationRecordId,
   incomingConversationMessageId,
@@ -26,7 +30,7 @@ import {
 
 import type { SunaRuntime } from "../runtime.js";
 
-export const DEFAULT_REPLY_DEBOUNCE_MS = 5_000;
+export { DEFAULT_REPLY_DEBOUNCE_MS } from "../types.js";
 export const REPLY_DEBOUNCE_EVENT_KIND = "reply_debounce";
 
 interface ScheduleReplyDebounceInput {
@@ -51,11 +55,11 @@ export class RuntimeReplyDebounce {
 
   constructor(
     private readonly host: SunaRuntime,
-    private readonly delayMs = DEFAULT_REPLY_DEBOUNCE_MS
+    private readonly delayOverrideMs?: number
   ) {}
 
   activeEvent(incoming: ParsedIncomingMessage) {
-    if (this.delayMs === 0) return undefined;
+    if (this.delayMs() === 0) return undefined;
     return this.host.sessionStore.getActiveEvent(
       replyDebounceSessionId(incoming),
       REPLY_DEBOUNCE_EVENT_KIND
@@ -123,7 +127,8 @@ export class RuntimeReplyDebounce {
     const preparationKey = input.preparationKey?.trim() || undefined;
     const triggerKey = preparationKey ?? persistentIncomingKey(input.incoming);
     const replyQuote = captureReplyQuote(this.host, input.incoming);
-    if (this.delayMs === 0) {
+    const delayMs = this.delayMs();
+    if (delayMs === 0) {
       return this.host.sessionCoordinator.enqueueEvent({
         sessionId: conversationId,
         kind: "incoming_reply",
@@ -149,7 +154,7 @@ export class RuntimeReplyDebounce {
       sessionId: debounceSessionId,
       kind: REPLY_DEBOUNCE_EVENT_KIND,
       dedupeKey: `reply-debounce:${triggerKey}`,
-      availableAt: Date.now() + this.delayMs,
+      availableAt: Date.now() + delayMs,
       payload: replyDebounceEnvelope({
         type: "reply_debounce",
         route: input.route,
@@ -196,7 +201,7 @@ export class RuntimeReplyDebounce {
       const updated = this.host.sessionCoordinator.updateActiveEvent({
         eventId: active.id,
         kind: REPLY_DEBOUNCE_EVENT_KIND,
-        availableAt: Math.max(Date.now() + this.delayMs, active.availableAt + 1),
+        availableAt: Math.max(Date.now() + this.delayMs(), active.availableAt + 1),
         expectedAvailableAt: active.availableAt,
         expectedPayload: active.payload,
         payload: replaceEnvelopePayload(active.payload, nextPayload)
@@ -240,7 +245,7 @@ export class RuntimeReplyDebounce {
   }
 
   recoverActiveConversation(incoming: ParsedIncomingMessage) {
-    if (this.delayMs === 0) return;
+    if (this.delayMs() === 0) return;
     const conversationId = conversationRecordId(incoming);
     const payloads = this.activeConversationPayloads(conversationId);
     return payloads.length ? this.recoverSnapshots(payloads.flatMap(replySnapshots)) : undefined;
@@ -248,7 +253,7 @@ export class RuntimeReplyDebounce {
 
   recoverMessages(payload: DurableReplyPayload) {
     const conversationId = conversationRecordId(payload.incoming);
-    const activePayloads = this.delayMs === 0
+    const activePayloads = this.delayMs() === 0
       ? []
       : this.activeConversationPayloads(conversationId);
     return this.recoverSnapshots([
@@ -360,7 +365,7 @@ export class RuntimeReplyDebounce {
   prepareMessages(payload: DurableReplyPayload, gateway: MessagingPort) {
     const conversationId = conversationRecordId(payload.incoming);
     const record = this.host.conversationRecords.get(conversationId) ?? this.recoverMessages(payload);
-    const activePayloads = this.delayMs === 0
+    const activePayloads = this.delayMs() === 0
       ? []
       : this.activeConversationPayloads(conversationId);
     const recoveryThroughSequence = "contextThroughSequence" in payload
@@ -485,6 +490,10 @@ export class RuntimeReplyDebounce {
     if (event.sessionId !== replyDebounceSessionId(incoming)) {
       throw new Error(`防抖事件 Session 不匹配：${event.id}`);
     }
+  }
+
+  private delayMs() {
+    return this.delayOverrideMs ?? this.host.config.bot.replyDebounceMs ?? DEFAULT_REPLY_DEBOUNCE_MS;
   }
 }
 

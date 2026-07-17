@@ -34,10 +34,20 @@ const emptyConfig: AppConfig = {
   bot: {
     adminQq: "",
     adminName: "",
+    replyDebounceMs: 5_000,
     pokeOnNoReply: false,
     quoteGroupReplies: true,
     quoteGroupReplyExcludedUserIds: [],
     contextMessageLimit: 48,
+    tone: {
+      enabled: false,
+      providerId: "",
+      model: "gpt-5.4-mini",
+      reasoningEffort: "low",
+      temperature: 0.7,
+      maxOutputTokens: 2400,
+      maxRetries: 2
+    },
     memory: {
       memoryModel: "gpt-5.4-mini",
       reasoningEffort: "medium",
@@ -92,7 +102,7 @@ const emptyConfig: AppConfig = {
 const envelope = shallowRef<ConfigEnvelope | null>(null);
 const loading = shallowRef(false);
 const state = reactive<Record<ConfigSectionKey, SectionState>>({
-  server: idle(), persona: idle(), providers: idle(), normalReply: idle(), bot: idle(), memory: idle(),
+  server: idle(), persona: idle(), providers: idle(), normalReply: idle(), bot: idle(), tone: idle(), memory: idle(),
   broadcastStorm: idle(), orchestrator: idle(), tools: idle(), bash: idle(), onebot: idle()
 });
 const drafts = reactive<SectionDrafts>(valuesFromConfig(emptyConfig));
@@ -301,11 +311,13 @@ function valuesFromConfig(config: AppConfig): SectionDrafts {
     bot: {
       adminQq: config.bot.adminQq,
       adminName: config.bot.adminName,
+      replyDebounceMs: config.bot.replyDebounceMs ?? emptyConfig.bot.replyDebounceMs,
       pokeOnNoReply: config.bot.pokeOnNoReply,
       quoteGroupReplies: config.bot.quoteGroupReplies,
       quoteGroupReplyExcludedUserIds: [...(config.bot.quoteGroupReplyExcludedUserIds ?? [])],
       contextMessageLimit: config.bot.contextMessageLimit
     },
+    tone: clone(config.bot.tone ?? emptyConfig.bot.tone),
     memory: clone(config.bot.memory),
     orchestrator: {
       ...clone(config.bot.orchestrator),
@@ -344,7 +356,7 @@ function idle() {
   return { kind: "idle" as const, message: "" };
 }
 
-export const sectionKeys: ConfigSectionKey[] = ["server", "persona", "providers", "broadcastStorm", "normalReply", "bot", "memory", "orchestrator", "tools", "bash", "onebot"];
+export const sectionKeys: ConfigSectionKey[] = ["server", "persona", "providers", "broadcastStorm", "normalReply", "bot", "tone", "memory", "orchestrator", "tools", "bash", "onebot"];
 
 function requestFor(scope: ConfigWorkspaceScope) {
   return scope === "system" ? apiRequestUnscoped : apiRequest;

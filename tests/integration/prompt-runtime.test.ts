@@ -140,6 +140,39 @@ describe("workspace prompt runtime", () => {
     ]));
   });
 
+  it("renders the tone prompt with global persona variables and keeps the outbound text opaque", async () => {
+    const definition = PROMPT_FILE_DEFINITIONS.find((item) => item.id === "conversation.tone-rewrite")!;
+    expect(definition.variables.map((item) => item.name)).toEqual(expect.arrayContaining([
+      "bot.name",
+      "user.name",
+      "runtime.current_time",
+      "utils.roll",
+      "persona.agents",
+      "persona.soul",
+      "persona.preference",
+      "persona.dialogue_style_examples",
+      "persona.user",
+      "persona.relation",
+      "tone.input"
+    ]));
+    const template = parseFinalPromptTemplate(
+      await fs.readFile(path.join(systemWorkspace, definition.fileName(config)), "utf8")
+    );
+    const rendered = renderFinalPromptTemplate(template, {
+      ...await readFragments(),
+      "bot.name": "普拉娜",
+      "user.name": "猫老师",
+      "runtime.current_time": "2026-07-18T08:00:00.000Z",
+      "utils.roll": 42,
+      "tone.input": "保留字面量 @{persona.soul}"
+    }, { opaqueVariables: ["tone.input"] });
+
+    expect(rendered.messages[0]?.content).toContain("<soul>persona.soul fixture");
+    expect(rendered.messages[1]?.content).toContain("保留字面量 @{persona.soul}");
+    expect(rendered.tools).toEqual([]);
+    expect(rendered.response_format).toEqual({ type: "text" });
+  });
+
   it("keeps reusable MD prompts raw and places their semantic wrappers in final templates", async () => {
     const outerTags: Record<string, string> = {
       "persona.agents": "agent_rules",

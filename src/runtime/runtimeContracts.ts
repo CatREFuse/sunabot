@@ -140,6 +140,7 @@ export const GROUP_CHAT_SUMMARY_COMMAND = "/总结群聊";
 export const CONVERSATION_REPLY_PROMPT_FILE = "conversation_reply.json";
 export const PRIVATE_CONVERSATION_REPLY_PROMPT_FILE = "conversation_private_reply.json";
 export const GROUP_CONVERSATION_REPLY_PROMPT_FILE = "conversation_group_reply.json";
+export const TONE_PROMPT_FILE = "tone_rewrite.json";
 export const SELFIE_PROMPT_FILE = "selfie_prompt_rewrite.json";
 export const GROUP_CHAT_SUMMARY_PROMPT_FILE = "group_chat_summary.json";
 export const GROUP_THREAD_CONTEXT_PROMPT_FILE = "group_thread_context.json";
@@ -154,6 +155,7 @@ export const ADMIN_PERSONA_FILES: Readonly<Record<string, string>> = {
 export const ADMIN_RUNTIME_PROMPT_DEFAULTS: Readonly<Record<string, string>> = {
   "conversation.private-reply": defaultFinalPromptContent("conversation.private-reply"),
   "conversation.group-reply": defaultFinalPromptContent("conversation.group-reply"),
+  "conversation.tone-rewrite": defaultFinalPromptContent("conversation.tone-rewrite"),
   "memory.compress-in": defaultFinalPromptContent("memory.compress-in"),
   "memory.compress-out": defaultFinalPromptContent("memory.compress-out"),
   "memory.user-profile": defaultFinalPromptContent("memory.user-profile"),

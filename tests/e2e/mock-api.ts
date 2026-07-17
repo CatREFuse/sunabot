@@ -82,10 +82,20 @@ const initialConfig = {
   bot: {
     adminQq: "171419991",
     adminName: "猫老师",
+    replyDebounceMs: 5_000,
     pokeOnNoReply: false,
     quoteGroupReplies: true,
     quoteGroupReplyExcludedUserIds: [],
     contextMessageLimit: 48,
+    tone: {
+      enabled: false,
+      providerId: "",
+      model: "gpt-5.4-mini",
+      reasoningEffort: "low",
+      temperature: 0.7,
+      maxOutputTokens: 2400,
+      maxRetries: 2
+    },
     memory: {
       memoryModel: "gpt-5.4-mini",
       reasoningEffort: "medium",
@@ -172,6 +182,13 @@ const initialAgentFiles = [
     "对话",
     "conversation_group_reply.json",
     defaultPromptContent("conversation.group-reply")
+  ),
+  file(
+    "conversation.tone-rewrite",
+    "语气改写",
+    "对话",
+    "tone_rewrite.json",
+    defaultPromptContent("conversation.tone-rewrite")
   ),
   file("memory.compress-in", "工作记忆提取", "记忆", "work_memory_compress_in.json", defaultPromptContent("memory.compress-in")),
   file("memory.compress-out", "长期记忆压缩", "记忆", "work_memory_compress_out.json", defaultPromptContent("memory.compress-out")),
@@ -1710,7 +1727,7 @@ function applySection(config: typeof initialConfig, section: string, value: unkn
     config.bot.tools.websearch.tavilyApiKeys = nextKeys;
     return;
   }
-  if (section === "memory" || section === "orchestrator" || section === "bash") {
+  if (section === "tone" || section === "memory" || section === "orchestrator" || section === "bash") {
     Object.assign(config.bot[section], next);
     return;
   }

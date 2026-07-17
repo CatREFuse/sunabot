@@ -6,11 +6,16 @@ import type {
   BotConfig,
   BotMemorySettings,
   BotOrchestratorSettings,
+  BotToneSettings,
   BotToolSettings,
   BroadcastStormConfig,
   ProviderConfig
 } from "../types.js";
-import { AGENT_TOOL_NAMES } from "../types.js";
+import {
+  AGENT_TOOL_NAMES,
+  MAX_REPLY_DEBOUNCE_MS,
+  MIN_REPLY_DEBOUNCE_MS
+} from "../types.js";
 import { AdminApiError, badRequest, conflict } from "./errors.js";
 import { getModelCatalogEntry } from "./models.js";
 import {
@@ -59,6 +64,7 @@ export const CONFIG_SECTIONS = [
   "broadcastStorm",
   "normalReply",
   "bot",
+  "tone",
   "memory",
   "orchestrator",
   "tools",
@@ -82,7 +88,8 @@ export interface ConfigSectionValueMap {
   providers: AppConfig["providers"];
   broadcastStorm: BroadcastStormConfig;
   normalReply: AppConfig["normalReply"];
-  bot: Pick<BotConfig, "adminQq" | "adminName" | "pokeOnNoReply" | "quoteGroupReplies" | "quoteGroupReplyExcludedUserIds" | "contextMessageLimit">;
+  bot: Pick<BotConfig, "adminQq" | "adminName" | "replyDebounceMs" | "pokeOnNoReply" | "quoteGroupReplies" | "quoteGroupReplyExcludedUserIds" | "contextMessageLimit">;
+  tone: BotToneSettings;
   memory: BotMemorySettings;
   orchestrator: BotOrchestratorSettings;
   tools: BotToolSettings;
@@ -277,6 +284,7 @@ export function validateConfigSectionValue<S extends ConfigSection>(
     case "broadcastStorm": return validateBroadcastStormConfig(value) as ConfigSectionValueMap[S];
     case "normalReply": return validateNormalReplyConfig(value) as ConfigSectionValueMap[S];
     case "bot": return validateBot(value) as ConfigSectionValueMap[S];
+    case "tone": return validateTone(value, current?.providers) as ConfigSectionValueMap[S];
     case "memory": return validateMemory(value) as ConfigSectionValueMap[S];
     case "orchestrator": return validateOrchestrator(value) as ConfigSectionValueMap[S];
     case "tools": return validateTools(value, current?.bot.tools) as ConfigSectionValueMap[S];
@@ -407,7 +415,7 @@ function validateProvider(input: unknown, field: string): ProviderConfig {
 function validateBot(input: unknown): ConfigSectionValueMap["bot"] {
   const value = object(input, "bot");
   exactKeys(value, [
-    "adminQq", "adminName", "pokeOnNoReply", "quoteGroupReplies", "quoteGroupReplyExcludedUserIds", "contextMessageLimit"
+    "adminQq", "adminName", "replyDebounceMs", "pokeOnNoReply", "quoteGroupReplies", "quoteGroupReplyExcludedUserIds", "contextMessageLimit"
   ], "bot");
   const adminQq = requiredString(value.adminQq, "bot.adminQq", { trim: true, min: 0, max: 32, allowEmpty: true });
   if (adminQq && !/^\d+$/.test(adminQq)) badRequest("CONFIG_INVALID", "管理员 QQ 必须是数字。", "bot.adminQq");
@@ -428,10 +436,46 @@ function validateBot(input: unknown): ConfigSectionValueMap["bot"] {
   return {
     adminQq,
     adminName: requiredString(value.adminName, "bot.adminName", { trim: true, min: 1, max: 80 }),
+    replyDebounceMs: integer(
+      value.replyDebounceMs,
+      "bot.replyDebounceMs",
+      MIN_REPLY_DEBOUNCE_MS,
+      MAX_REPLY_DEBOUNCE_MS
+    ),
     pokeOnNoReply: boolean(value.pokeOnNoReply, "bot.pokeOnNoReply"),
     quoteGroupReplies: boolean(value.quoteGroupReplies, "bot.quoteGroupReplies"),
     quoteGroupReplyExcludedUserIds: uniqueStrings(quoteGroupReplyExcludedUserIds),
     contextMessageLimit: integer(value.contextMessageLimit, "bot.contextMessageLimit", 1, 120)
+  };
+}
+
+function validateTone(input: unknown, providers?: AppConfig["providers"]): BotToneSettings {
+  const value = object(input, "tone");
+  exactKeys(value, [
+    "enabled", "providerId", "model", "reasoningEffort", "temperature", "maxOutputTokens", "maxRetries"
+  ], "tone");
+  const providerId = requiredString(value.providerId, "tone.providerId", {
+    trim: true,
+    min: 0,
+    max: 64,
+    allowEmpty: true
+  });
+  if (providerId) {
+    const provider = providers?.items.find((item) => item.id === providerId);
+    if (!provider) badRequest("CONFIG_INVALID", "Tone Provider 不存在。", "tone.providerId");
+    if (!provider.enabled) badRequest("CONFIG_INVALID", "Tone Provider 必须启用。", "tone.providerId");
+  }
+  const model = requiredString(value.model, "tone.model", { trim: true, min: 1, max: 200 });
+  const reasoningEffort = optionalReasoningEffort(value.reasoningEffort, "tone.reasoningEffort");
+  validateCatalogEffort(model, reasoningEffort, "tone.reasoningEffort");
+  return {
+    enabled: boolean(value.enabled, "tone.enabled"),
+    providerId,
+    model,
+    ...(reasoningEffort ? { reasoningEffort } : {}),
+    temperature: finiteNumber(value.temperature, "tone.temperature", 0, 2),
+    maxOutputTokens: integer(value.maxOutputTokens, "tone.maxOutputTokens", 1, 1_000_000),
+    maxRetries: integer(value.maxRetries, "tone.maxRetries", 0, 10)
   };
 }
 
@@ -684,11 +728,13 @@ export function validateCompleteConfig(config: AppConfig) {
   validateBot({
     adminQq: config.bot.adminQq,
     adminName: config.bot.adminName,
+    replyDebounceMs: config.bot.replyDebounceMs,
     pokeOnNoReply: config.bot.pokeOnNoReply,
     quoteGroupReplies: config.bot.quoteGroupReplies,
     quoteGroupReplyExcludedUserIds: config.bot.quoteGroupReplyExcludedUserIds,
     contextMessageLimit: config.bot.contextMessageLimit
   });
+  validateTone(config.bot.tone, config.providers);
   validateMemory(config.bot.memory);
   validateOrchestrator(config.bot.orchestrator);
   validateTools(config.bot.tools);
@@ -716,6 +762,7 @@ export function mergeConfigSection<S extends ConfigSection>(
       candidate.onebot.quoteGroupReplies = candidate.bot.quoteGroupReplies;
       break;
     }
+    case "tone": candidate.bot.tone = value as ConfigSectionValueMap["tone"]; break;
     case "memory": candidate.bot.memory = value as ConfigSectionValueMap["memory"]; break;
     case "orchestrator": candidate.bot.orchestrator = value as ConfigSectionValueMap["orchestrator"]; break;
     case "tools": candidate.bot.tools = value as ConfigSectionValueMap["tools"]; break;

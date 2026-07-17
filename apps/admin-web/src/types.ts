@@ -97,13 +97,25 @@ export interface NormalReplyConfig {
   maxRetries: number;
 }
 
+export interface BotToneSettings {
+  enabled: boolean;
+  providerId: string;
+  model: string;
+  reasoningEffort?: ReasoningEffort;
+  temperature: number;
+  maxOutputTokens: number;
+  maxRetries: number;
+}
+
 export interface BotConfig {
   adminQq: string;
   adminName: string;
+  replyDebounceMs: number;
   pokeOnNoReply: boolean;
   quoteGroupReplies: boolean;
   quoteGroupReplyExcludedUserIds: string[];
   contextMessageLimit: number;
+  tone: BotToneSettings;
   memory: BotMemorySettings;
   orchestrator: BotOrchestratorSettings;
   tools: BotToolSettings;
@@ -187,7 +199,7 @@ export interface AgentAvatarInput {
   dataBase64: string;
 }
 
-export type ConfigSectionKey = "server" | "persona" | "providers" | "broadcastStorm" | "normalReply" | "bot" | "memory" | "orchestrator" | "tools" | "bash" | "onebot";
+export type ConfigSectionKey = "server" | "persona" | "providers" | "broadcastStorm" | "normalReply" | "bot" | "tone" | "memory" | "orchestrator" | "tools" | "bash" | "onebot";
 export type SettingsSectionKey = ConfigSectionKey | "security";
 export type ApplyMode = "hot" | "reconnect" | "restart";
 
@@ -208,7 +220,8 @@ export interface ConfigSectionValueMap {
   providers: AppConfig["providers"];
   broadcastStorm: BroadcastStormConfig;
   normalReply: NormalReplyConfig;
-  bot: Pick<BotConfig, "adminQq" | "adminName" | "pokeOnNoReply" | "quoteGroupReplies" | "quoteGroupReplyExcludedUserIds" | "contextMessageLimit">;
+  bot: Pick<BotConfig, "adminQq" | "adminName" | "replyDebounceMs" | "pokeOnNoReply" | "quoteGroupReplies" | "quoteGroupReplyExcludedUserIds" | "contextMessageLimit">;
+  tone: BotToneSettings;
   memory: BotMemorySettings;
   orchestrator: BotOrchestratorSettings;
   tools: BotToolSettingsDraft;

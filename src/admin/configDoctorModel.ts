@@ -92,6 +92,7 @@ function redactForModel(value: Record<string, unknown>) {
     bot: {
       adminQq: "[redacted-identity]",
       adminName: "[redacted-identity]",
+      replyDebounceMs: safeModelValue(bot.replyDebounceMs),
       pokeOnNoReply: safeModelValue(bot.pokeOnNoReply),
       quoteGroupReplies: safeModelValue(bot.quoteGroupReplies),
       quoteGroupReplyExcludedUserIds: "[redacted-identities]",

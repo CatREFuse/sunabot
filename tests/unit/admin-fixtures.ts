@@ -48,10 +48,20 @@ export function createAdminTestConfig(rootDir: string): AppConfig {
     bot: {
       adminQq: "171419991",
       adminName: "Test Admin",
+      replyDebounceMs: 5_000,
       pokeOnNoReply: false,
       quoteGroupReplies: true,
       quoteGroupReplyExcludedUserIds: [],
       contextMessageLimit: 48,
+      tone: {
+        enabled: false,
+        providerId: "",
+        model: "gpt-5.4-mini",
+        reasoningEffort: "low",
+        temperature: 0.7,
+        maxOutputTokens: 2400,
+        maxRetries: 2
+      },
       memory: {
         memoryModel: "gpt-5.4-mini",
         reasoningEffort: "medium",

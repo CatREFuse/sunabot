@@ -116,8 +116,9 @@ import { RuntimeDelivery } from "./runtime/delivery.js";
 import { RuntimeConversations } from "./runtime/conversations.js";
 import { RuntimeSelfie } from "./runtime/selfie.js";
 import { RuntimeGroupThreads } from "./runtime/groupThreadPipeline.js";
-import { DEFAULT_REPLY_DEBOUNCE_MS, RuntimeReplyDebounce } from "./runtime/replyDebounce.js";
+import { RuntimeReplyDebounce } from "./runtime/replyDebounce.js";
 import { RuntimeConversationAssets } from "./runtime/conversationAssets.js";
+import { RuntimeTone } from "./runtime/tone.js";
 import { TaskLimiter, errorMessage, loadConversationRecords } from "./runtime/infrastructure.js";
 import type {
   RuntimeToolCapabilities,
@@ -180,6 +181,7 @@ export class SunaRuntime {
   private readonly reply: RuntimeReply;
   private readonly orchestration: RuntimeOrchestration;
   private readonly memory: RuntimeMemoryPipeline;
+  private readonly tone: RuntimeTone;
   private readonly delivery: RuntimeDelivery;
   private readonly conversations: RuntimeConversations;
   private readonly selfie: RuntimeSelfie;
@@ -285,13 +287,14 @@ export class SunaRuntime {
       this.reply = new RuntimeReply(this);
       this.orchestration = new RuntimeOrchestration(this);
       this.memory = new RuntimeMemoryPipeline(this);
+      this.tone = new RuntimeTone(this);
       this.delivery = new RuntimeDelivery(this);
       this.conversations = new RuntimeConversations(this);
       this.selfie = new RuntimeSelfie(this);
       this.groupThreads = new RuntimeGroupThreads(this);
       this.replyDebounce = new RuntimeReplyDebounce(
         this,
-        nonNegativeReplyDebounceMs(options.replyDebounceMs)
+        optionalNonNegativeReplyDebounceMs(options.replyDebounceMs)
       );
       this.conversationAssets = new RuntimeConversationAssets(this);
   }
@@ -413,6 +416,7 @@ export class SunaRuntime {
   armMemoryWakeTimer(...args: Parameters<RuntimeMemoryPipeline["armMemoryWakeTimer"]>) { return this.memory.armMemoryWakeTimer(...args); }
   drainMemoryScheduler(...args: Parameters<RuntimeMemoryPipeline["drainMemoryScheduler"]>) { return this.inAgentContext(() => this.memory.drainMemoryScheduler(...args)); }
   projectMemoryCursor(...args: Parameters<RuntimeMemoryPipeline["projectMemoryCursor"]>) { return this.memory.projectMemoryCursor(...args); }
+  rewriteToneText(...args: Parameters<RuntimeTone["rewrite"]>) { return this.inAgentContext(() => this.tone.rewrite(...args)); }
   sendAssistantReply(...args: Parameters<RuntimeDelivery["sendAssistantReply"]>) { return this.delivery.sendAssistantReply(...args); }
   replyDeliveryDraft(...args: Parameters<RuntimeDelivery["replyDeliveryDraft"]>) { return this.delivery.replyDeliveryDraft(...args); }
   deliverReplyOutbox(...args: Parameters<RuntimeDelivery["deliverReplyOutbox"]>) { return this.delivery.deliverReplyOutbox(...args); }
@@ -459,10 +463,9 @@ export class SunaRuntime {
   processReplyDebounceEvent(...args: Parameters<RuntimeReplyDebounce["process"]>) { return this.inAgentContext(() => this.replyDebounce.process(...args)); }
 }
 
-function nonNegativeReplyDebounceMs(value: number | undefined) {
-  const selected = value ?? DEFAULT_REPLY_DEBOUNCE_MS;
-  if (!Number.isSafeInteger(selected) || selected < 0) {
+function optionalNonNegativeReplyDebounceMs(value: number | undefined) {
+  if (value !== undefined && (!Number.isSafeInteger(value) || value < 0)) {
     throw new Error("replyDebounceMs must be a non-negative integer.");
   }
-  return selected;
+  return value;
 }

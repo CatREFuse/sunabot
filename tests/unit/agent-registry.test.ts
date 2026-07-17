@@ -183,7 +183,9 @@ describe("AgentRegistry", () => {
     const manifestPath = path.join(testPaths.workspace, "business", "agents", "plana", "agent.json");
     const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8")) as Record<string, unknown>;
     delete (manifest.bot as Record<string, unknown>).pokeOnNoReply;
+    delete (manifest.bot as Record<string, unknown>).replyDebounceMs;
     delete (manifest.bot as Record<string, unknown>).quoteGroupReplyExcludedUserIds;
+    delete (manifest.bot as Record<string, unknown>).tone;
     delete ((manifest.bot as Record<string, unknown>).orchestrator as Record<string, unknown>).groupThreadModel;
     delete ((manifest.bot as Record<string, unknown>).bash as Record<string, unknown>).adminPrivateBackend;
     delete ((manifest.bot as Record<string, unknown>).bash as Record<string, unknown>).auditModel;
@@ -192,8 +194,15 @@ describe("AgentRegistry", () => {
 
     await expect(registry.config("plana", config)).resolves.toMatchObject({
       bot: {
+        replyDebounceMs: 5_000,
         pokeOnNoReply: false,
         quoteGroupReplyExcludedUserIds: [],
+        tone: {
+          enabled: false,
+          providerId: "",
+          model: "gpt-5.4-mini",
+          maxRetries: 2
+        },
         orchestrator: { groupThreadModel: "gpt-5.4-mini" },
         bash: {
           adminPrivateBackend: "native",

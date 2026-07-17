@@ -94,6 +94,38 @@ describe("SunaRuntime reply debounce", () => {
     expect(harness.completeRequestTurn).not.toHaveBeenCalled();
   });
 
+  it("uses the Agent debounce setting and applies hot updates to later resets", async () => {
+    const harness = createRuntimeHarness(async () => ({ kind: "completed", text: "unused" }), {
+      configure(config) {
+        config.bot.replyDebounceMs = 1_000;
+      }
+    });
+    const beforeFirst = Date.now();
+    const incoming = await handleOneBotEvent(
+      harness.runtime,
+      privateEvent(31_002, "configured deadline"),
+      harness.gateway
+    );
+    const afterFirst = Date.now();
+    const sessionId = replyDebounceSessionId(incoming);
+    const initial = harness.store.getActiveEvent(sessionId, "reply_debounce")!;
+    expect(initial.availableAt).toBeGreaterThanOrEqual(beforeFirst + 1_000);
+    expect(initial.availableAt).toBeLessThanOrEqual(afterFirst + 1_000);
+
+    harness.runtime.config.bot.replyDebounceMs = 2_000;
+    const beforeReset = Date.now();
+    await handleOneBotEvent(
+      harness.runtime,
+      privateEvent(31_003, "hot updated deadline"),
+      harness.gateway
+    );
+    const afterReset = Date.now();
+    const bumped = harness.store.getActiveEvent(sessionId, "reply_debounce")!;
+    expect(bumped.id).toBe(initial.id);
+    expect(bumped.availableAt).toBeGreaterThanOrEqual(beforeReset + 2_000);
+    expect(bumped.availableAt).toBeLessThanOrEqual(afterReset + 2_000);
+  });
+
   it("resets one private sender's deadline and replies only to the frozen first trigger", async () => {
     const requests: RenderedPromptRequest[] = [];
     const harness = createRuntimeHarness(async (request) => {
@@ -885,6 +917,8 @@ describe("SunaRuntime reply debounce", () => {
     harness.runtime.recordIncomingMessage(incoming, { persist: false });
     const replyQuote = { enabled: true, replyToMessageId: 31_126 };
     const delivery = { outbox: [], replyQuote };
+    const rewriteToneText = vi.fn(async (text: string) => `toned: ${text}`);
+    harness.runtime.rewriteToneText = rewriteToneText;
     let deferredTurn: Parameters<NonNullable<Parameters<SunaRuntime["replyToIncoming"]>[3]["onDeferred"]>>[0]
       | undefined;
     harness.runtime.config.bot.quoteGroupReplies = false;
@@ -903,6 +937,12 @@ describe("SunaRuntime reply debounce", () => {
 
     expect(deferredTurn?.originalRequest.replyQuote).toEqual(replyQuote);
     const acknowledgement = decodeAssistantReply(deferredTurn!.acknowledgement.payload);
+    expect(rewriteToneText).toHaveBeenCalledWith("deferred acknowledgement", expect.objectContaining({ incoming }));
+    expect(acknowledgement.text).toBe("toned: deferred acknowledgement");
+    expect(acknowledgement.messageOrigin).toBe("async_tool_dispatch");
+    expect(acknowledgement.toolNames).toEqual(["codex"]);
+    expect(deferredTurn?.deferred.toolCall.arguments).not.toHaveProperty("dispatch_message");
+    expect(deferredTurn?.acknowledgement.dedupeKey).toBe("tool-ack:codex:quote-deferred-call");
     expect(acknowledgement.replyToMessageId).toBe(31_126);
     await harness.runtime.deliverReplyOutbox(acknowledgement, harness.gateway);
     expect(sentOutbounds(harness.gateway)[0]?.replyToMessageId).toBe(31_126);

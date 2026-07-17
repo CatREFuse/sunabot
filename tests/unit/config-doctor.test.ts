@@ -31,6 +31,7 @@ describe("ConfigDoctorService", () => {
     const document = structuredClone(defaultConfig()) as Partial<AppConfig>;
     delete document.schemaVersion;
     delete document.normalReply;
+    delete (document.bot as Partial<AppConfig["bot"]>).replyDebounceMs;
     await writeDocument(document);
     const doctor = createDoctor();
 
@@ -40,7 +41,8 @@ describe("ConfigDoctorService", () => {
     expect(report.proposal?.source).toBe("rules");
     expect(report.proposal?.changes).toEqual(expect.arrayContaining([
       expect.objectContaining({ path: "/schemaVersion", action: "add" }),
-      expect.objectContaining({ path: "/normalReply/maxRetries", action: "add" })
+      expect.objectContaining({ path: "/normalReply/maxRetries", action: "add" }),
+      expect.objectContaining({ path: "/bot/replyDebounceMs", action: "add" })
     ]));
   });
 

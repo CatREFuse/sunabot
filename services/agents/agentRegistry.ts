@@ -10,7 +10,13 @@ import {
   resolveSafePromptFilePath
 } from "../agent/public.js";
 import { getWorkspacePath, resolveProjectPath } from "../../src/config.js";
-import type { AppConfig, BotConfig } from "../../src/types.js";
+import {
+  DEFAULT_REPLY_DEBOUNCE_MS,
+  MAX_REPLY_DEBOUNCE_MS,
+  MIN_REPLY_DEBOUNCE_MS,
+  type AppConfig,
+  type BotConfig
+} from "../../src/types.js";
 import type {
   AgentAccountRegistryRow,
   AgentRegistryRepository,
@@ -579,6 +585,7 @@ function parseManifest(value: unknown, expectedId: string): AgentManifest {
     ...normalized,
     bot: {
       ...normalized.bot,
+      replyDebounceMs: normalizeManifestReplyDebounceMs(normalized.bot.replyDebounceMs),
       pokeOnNoReply: normalized.bot.pokeOnNoReply === true,
       quoteGroupReplyExcludedUserIds: normalizeManifestQqList(normalized.bot.quoteGroupReplyExcludedUserIds)
     },
@@ -586,6 +593,12 @@ function parseManifest(value: unknown, expectedId: string): AgentManifest {
       overrideSystem: manifest.prompts?.overrideSystem === true
     }
   };
+}
+
+function normalizeManifestReplyDebounceMs(value: unknown) {
+  return Number.isSafeInteger(value) && Number(value) >= MIN_REPLY_DEBOUNCE_MS && Number(value) <= MAX_REPLY_DEBOUNCE_MS
+    ? Number(value)
+    : DEFAULT_REPLY_DEBOUNCE_MS;
 }
 
 function normalizeManifestQqList(value: unknown) {

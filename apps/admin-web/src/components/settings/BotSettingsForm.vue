@@ -12,6 +12,10 @@ const prefixes = computed({
   get: () => reply.value.commandPrefixes.join(", "),
   set: (value: string) => (reply.value.commandPrefixes = split(value))
 });
+const replyDebounceSeconds = computed({
+  get: () => draft.value.replyDebounceMs / 1_000,
+  set: (value: number) => (draft.value.replyDebounceMs = Math.round(value * 1_000))
+});
 const quoteFilter = computed({
   get: () => draft.value.quoteGroupReplyExcludedUserIds.join(", "),
   set: (value: string) => (draft.value.quoteGroupReplyExcludedUserIds = split(value))
@@ -38,6 +42,19 @@ function split(value: string) {
       <label class="field">
         <span class="field-label">上下文消息数</span>
         <input v-model.number="draft.contextMessageLimit" class="control" type="number" min="1" max="120" step="1">
+      </label>
+      <label class="field">
+        <span class="field-label">输入防抖时间（秒）</span>
+        <input
+          v-model.number="replyDebounceSeconds"
+          class="control"
+          type="number"
+          min="1"
+          max="60"
+          step="0.5"
+          data-config-field="bot.replyDebounceMs"
+        >
+        <span class="text-xs leading-5 text-mute">同一发送者停止发送后开始回复</span>
       </label>
       <div class="grid gap-4 border-y border-line py-3 sm:col-span-2 sm:grid-cols-2 sm:items-center sm:gap-6">
         <ToggleSwitch v-model="draft.quoteGroupReplies" label="引用群聊消息" description="回复时引用触发消息" />
