@@ -13,7 +13,16 @@ describe("DiagnosticsDrawer", () => {
     apiRequest.mockImplementation((path: string) => {
       if (path === "/api/tools") return Promise.resolve({ tools: [
         { name: "assistant_text", title: "行动中消息", description: "发送行动中消息。", enabled: true, available: true, effectiveEnabled: true },
-        { name: "codex", title: "Codex", description: "异步执行任务。", enabled: true, available: false, effectiveEnabled: false }
+        { name: "activate_skill", title: "启用 Skill", description: "启用 Skill。", enabled: true, available: true, effectiveEnabled: false },
+        {
+          name: "codex",
+          title: "Codex",
+          description: "异步执行任务。",
+          enabled: true,
+          available: false,
+          effectiveEnabled: false,
+          availabilityReason: "Codex CLI 未安装或未登录。"
+        }
       ] });
       if (path === "/api/request-logs?limit=100") return Promise.resolve({ filePath: "/logs/requests.jsonl", logs: [{ id: "log-1", at: "2026-07-10T00:00:00.000Z", category: "provider", action: "respond" }] });
       if (path === "/api/onebot/events") return Promise.resolve({ events: [{ receivedAt: "2026-07-10T00:00:00.000Z", postType: "message", messageType: "group", text: "hello" }] });
@@ -24,8 +33,10 @@ describe("DiagnosticsDrawer", () => {
 
     expect(apiRequest.mock.calls.map(([path]) => path)).toEqual(["/api/tools"]);
     expect(wrapper.text()).toContain("assistant_text");
-    expect(wrapper.text()).toContain("可用");
-    expect(wrapper.text()).toContain("不可用");
+    expect(wrapper.text()).not.toContain("能力可用");
+    expect(wrapper.text()).not.toContain("能力不可用");
+    expect(wrapper.text().match(/能力异常/g)).toHaveLength(1);
+    expect(wrapper.text()).toContain("Codex CLI 未安装或未登录。");
 
     await wrapper.get("nav").findAll("button")[1]!.trigger("click");
     await flushPromises();

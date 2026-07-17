@@ -31,9 +31,32 @@ describe("ConversationToolSettingsForm", () => {
     expect(toggles[1]!.props()).toMatchObject({ label: "启用 读取文件", disabled: false, modelValue: true });
     expect(wrapper.text()).toContain("Agent 已停用");
     expect(wrapper.text()).toContain("当前会话不允许读取 Agent workbench 文件。");
-    expect(wrapper.text()).not.toContain("当前能力不可用");
+    expect(wrapper.text()).not.toContain("能力可用");
+    expect(wrapper.text()).not.toContain("能力不可用");
 
     await toggles[1]!.vm.$emit("update:modelValue", false);
     expect(wrapper.emitted("toggle")).toEqual([["read_file", false]]);
+  });
+
+  it("shows an anomaly fallback only when the runtime reports a failure", () => {
+    const wrapper = mount(ConversationToolSettingsForm, {
+      props: {
+        tools: [{
+          name: "run_skill_script",
+          title: "运行 Skill 脚本",
+          description: "运行当前会话已启用 Skill 的脚本。",
+          enabled: true,
+          available: false
+        }],
+        disabledTools: [],
+        loading: false,
+        busy: false
+      },
+      global: { stubs: { RouterLink: { template: "<a><slot /></a>" } } }
+    });
+
+    expect(wrapper.text()).toContain("当前工具运行异常。");
+    expect(wrapper.text()).not.toContain("能力可用");
+    expect(wrapper.text()).not.toContain("能力不可用");
   });
 });

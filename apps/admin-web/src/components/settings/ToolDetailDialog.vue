@@ -21,7 +21,6 @@ const emit = defineEmits<{
 }>();
 const parameters = computed(() => toolParameterRows(props.tool?.parameters));
 const descriptionLength = computed(() => props.description.length);
-const effectiveEnabled = computed(() => props.enabled && props.tool?.available !== false);
 const descriptionSourceLabel = computed(() => {
   if (props.descriptionOverridden) return "全局设置";
   if (props.tool?.descriptionSource === "prompt" || props.tool?.promptDescription != null) return "提示词";
@@ -61,20 +60,14 @@ const descriptionSourceLabel = computed(() => {
           </dd>
         </div>
         <div class="divider-row">
-          <dt class="field-label">运行能力</dt>
-          <dd class="inline-state" :data-kind="tool.available === false ? 'error' : 'success'">
-            <i class="bx mr-1" :class="tool.available === false ? 'bx-error-circle' : 'bx-check-shield'" aria-hidden="true"></i>{{ tool.available === false ? "不可用" : "可用" }}
-          </dd>
-        </div>
-        <div class="divider-row sm:mr-5">
-          <dt class="field-label">实际状态</dt>
-          <dd class="inline-state" :data-kind="effectiveEnabled ? 'success' : undefined">
-            <i class="bx mr-1" :class="effectiveEnabled ? 'bx-play-circle' : 'bx-stop-circle'" aria-hidden="true"></i>{{ effectiveEnabled ? "可调用" : "不可调用" }}
-          </dd>
-        </div>
-        <div class="divider-row">
           <dt class="field-label">说明来源</dt>
           <dd class="inline-state">{{ descriptionSourceLabel }}</dd>
+        </div>
+        <div v-if="tool.available === false" class="divider-row sm:col-span-2">
+          <dt class="field-label">能力异常</dt>
+          <dd class="inline-state text-accent" data-kind="error">
+            <i class="bx bx-error-circle mr-1" aria-hidden="true"></i>{{ tool.availabilityReason || tool.unavailableReason || "当前工具运行异常。" }}
+          </dd>
         </div>
       </dl>
 

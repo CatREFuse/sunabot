@@ -15,6 +15,7 @@ import {
 import { promptDefinitionById } from "../../services/agent/promptCatalog.js";
 import { defaultPromptContent } from "../../services/agent/promptDefaults.js";
 import { parseFinalPromptTemplate } from "../../services/agent/promptSystem.js";
+import { BUILTIN_SKILL_TOOL_CAPABILITIES } from "../../services/tools/skillRuntimeTool.js";
 import { listToolMetadata } from "../../services/tools/toolRegistry.js";
 
 const imageFixture = sharp({
@@ -1360,7 +1361,8 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
         selfie: { enabled: true },
         memory: { enabled: true },
         asyncCodex: true,
-        asyncImage: true
+        asyncImage: true,
+        skillCapabilities: BUILTIN_SKILL_TOOL_CAPABILITIES
       }, prompt?.tools).map((tool) => {
         const configured = tool.name === "workspace_bash"
           ? state.config.bot.bash.enabled

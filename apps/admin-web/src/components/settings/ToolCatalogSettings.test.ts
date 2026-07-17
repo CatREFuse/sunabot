@@ -143,7 +143,7 @@ describe("ToolCatalogSettings", () => {
     apiRequest.mockResolvedValue({ tools });
   });
 
-  it("filters the catalog and keeps configuration separate from capability", async () => {
+  it("hides healthy runtime state and marks only abnormalities", async () => {
     const wrapper = mount(ToolCatalogSettings, {
       props: { modelValue: toolsDraft(), bash: bashDraft() },
       global: { stubs: { DialogOverlay: dialogStub() } }
@@ -152,7 +152,9 @@ describe("ToolCatalogSettings", () => {
 
     expect(wrapper.findAll("article")).toHaveLength(2);
     expect(wrapper.text()).toContain("配置已启用");
-    expect(wrapper.text()).toContain("能力不可用");
+    expect(wrapper.text()).not.toContain("能力可用");
+    expect(wrapper.text()).not.toContain("能力不可用");
+    expect(wrapper.text().match(/能力异常/g)).toHaveLength(1);
     expect(wrapper.text()).toContain("当前请求未启用自拍生成。");
     const unavailableToggle = wrapper.findAll("label").find((label) => label.text().includes("启用 自拍"));
     expect(unavailableToggle?.find('input[type="checkbox"]').attributes("disabled")).toBeUndefined();
@@ -160,6 +162,9 @@ describe("ToolCatalogSettings", () => {
     await wrapper.get('input[aria-label="搜索工具"]').setValue("selfie");
     expect(wrapper.findAll("article")).toHaveLength(1);
     expect(wrapper.text()).toContain("自拍");
+    await wrapper.get('button[aria-label="查看 自拍 详情"]').trigger("click");
+    expect(wrapper.get('[role="dialog"]').text()).toContain("能力异常");
+    expect(wrapper.get('[role="dialog"]').text()).toContain("当前请求未启用自拍生成。");
     await wrapper.get('input[aria-label="搜索工具"]').setValue("");
     expect(wrapper.findAll("article")).toHaveLength(2);
   });
@@ -178,6 +183,8 @@ describe("ToolCatalogSettings", () => {
 
     await wrapper.get('button[aria-label="查看 网页搜索 详情"]').trigger("click");
     expect(wrapper.get('[role="dialog"]').text()).toContain("网页搜索");
+    expect(wrapper.get('[role="dialog"]').text()).not.toContain("能力异常");
+    expect(wrapper.get('[role="dialog"]').text()).not.toContain("能力可用");
     await wrapper.get('textarea[maxlength="4000"]').setValue("只在需要实时信息时搜索网页。");
     expect(draft.overrides.websearch).toEqual({
       enabled: false,

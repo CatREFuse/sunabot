@@ -708,12 +708,23 @@ test("工具目录支持启停、全局说明和继承说明恢复", async ({ pa
   for (const [id, title] of [["workspace_bash", "Bash"], ["codex", "Codex"]] as const) {
     const row = page.locator("article").filter({ has: page.getByText(id, { exact: true }) });
     await expect(row.getByText("配置已启用", { exact: true })).toBeVisible();
-    await expect(row.getByText("能力可用", { exact: true })).toBeVisible();
+    await expect(row.getByText("能力可用", { exact: true })).toHaveCount(0);
+    await expect(row.getByText("能力异常", { exact: true })).toHaveCount(0);
     await row.getByLabel(`启用 ${title}`).uncheck({ force: true });
     await expect(row.getByText("配置已停用", { exact: true })).toBeVisible();
-    await expect(row.getByText("能力可用", { exact: true })).toBeVisible();
+    await expect(row.getByText("能力可用", { exact: true })).toHaveCount(0);
+    await expect(row.getByText("能力异常", { exact: true })).toHaveCount(0);
     await row.getByLabel(`启用 ${title}`).check({ force: true });
   }
+
+  for (const id of ["activate_skill", "read_skill_resource"] as const) {
+    const row = page.locator("article").filter({ has: page.getByText(id, { exact: true }) });
+    await expect(row.getByText("能力可用", { exact: true })).toHaveCount(0);
+    await expect(row.getByText("能力异常", { exact: true })).toHaveCount(0);
+  }
+  const unavailableSkillRow = page.locator("article").filter({ has: page.getByText("run_skill_script", { exact: true }) });
+  await expect(unavailableSkillRow.getByText("能力异常", { exact: true })).toBeVisible();
+  await expect(unavailableSkillRow.getByText("当前环境没有可用的 Skill 脚本审计执行器。", { exact: true })).toBeVisible();
 
   await page.getByLabel("启用 网页搜索").uncheck({ force: true });
   await page.getByRole("button", { name: "查看 行动中消息 详情" }).click();

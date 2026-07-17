@@ -17,9 +17,6 @@ const canToggle = computed(() => props.tool.configurable !== false);
 const configuredState = computed(() => props.enabled
   ? { label: "配置已启用", icon: "bx-check-circle", kind: "success" }
   : { label: "配置已停用", icon: "bx-pause-circle", kind: "" });
-const capabilityState = computed(() => props.tool.available === false
-  ? { label: "能力不可用", icon: "bx-error-circle", kind: "error" }
-  : { label: "能力可用", icon: "bx-check-shield", kind: "success" });
 </script>
 
 <template>
@@ -36,8 +33,8 @@ const capabilityState = computed(() => props.tool.available === false
           <span class="inline-state" :data-kind="configuredState.kind || undefined">
             <i class="bx mr-1" :class="configuredState.icon" aria-hidden="true"></i>{{ configuredState.label }}
           </span>
-          <span class="inline-state" :data-kind="capabilityState.kind || undefined">
-            <i class="bx mr-1" :class="capabilityState.icon" aria-hidden="true"></i>{{ capabilityState.label }}
+          <span v-if="tool.available === false" class="inline-state" data-kind="error">
+            <i class="bx bx-error-circle mr-1" aria-hidden="true"></i>能力异常
           </span>
           <span class="font-mono text-[10px] text-mute">
             <i class="bx bx-transfer-alt mr-1" aria-hidden="true"></i>{{ toolExecutionLabel(tool.execution) }}

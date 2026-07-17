@@ -60,14 +60,6 @@ async function load(tab: DiagnosticTab = active.value, force = false) {
   }
 }
 
-function toolState(tool: SunaTool) {
-  if (!tool.enabled) return { label: "已停用", className: "text-mute" };
-  if (tool.available === false || tool.effectiveEnabled === false) {
-    return { label: "不可用", className: "text-warning" };
-  }
-  return { label: "可用", className: "text-success" };
-}
-
 </script>
 
 <template>
@@ -98,8 +90,15 @@ function toolState(tool: SunaTool) {
 
         <section v-else-if="active === 'tools'" aria-label="工具列表">
           <article v-for="tool in tools" :key="tool.name" class="grid grid-cols-[minmax(0,1fr)_auto] gap-4 border-b border-line py-5">
-            <div class="min-w-0"><strong class="text-sm font-medium text-display">{{ tool.title }}</strong><p class="mt-2 font-mono text-[10px] text-disabled">{{ tool.name }}</p></div>
-            <span class="font-mono text-[10px]" :class="toolState(tool).className">{{ toolState(tool).label }}</span>
+            <div class="min-w-0">
+              <strong class="text-sm font-medium text-display">{{ tool.title }}</strong>
+              <p class="mt-2 font-mono text-[10px] text-disabled">{{ tool.name }}</p>
+              <p v-if="tool.available === false && (tool.availabilityReason || tool.unavailableReason)" class="mt-2 text-xs leading-5 text-accent">
+                {{ tool.availabilityReason || tool.unavailableReason }}
+              </p>
+            </div>
+            <span v-if="!tool.enabled" class="font-mono text-[10px] text-mute">已停用</span>
+            <span v-else-if="tool.available === false" class="font-mono text-[10px] text-warning">能力异常</span>
           </article>
           <div v-if="!tools.length" class="empty-state"><div><strong>没有工具</strong></div></div>
         </section>

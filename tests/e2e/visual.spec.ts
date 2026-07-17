@@ -441,6 +441,18 @@ test("工具目录四视口矩阵", async ({ page }, testInfo) => {
     await expect(noReplyDialog.getByLabel("no_reply 时戳一戳")).toBeVisible();
     await capture(page, viewport.name, theme, "settings-tools-no-reply-detail");
     await noReplyDialog.getByRole("button", { name: "关闭工具详情" }).click();
+
+    await page.getByLabel("搜索工具").fill("run_skill_script");
+    const unavailableSkillRow = page.locator("article").filter({ has: page.getByText("run_skill_script", { exact: true }) });
+    await expect(unavailableSkillRow.getByText("能力异常", { exact: true })).toBeVisible();
+    await expect(unavailableSkillRow.getByText("当前环境没有可用的 Skill 脚本审计执行器。", { exact: true })).toBeVisible();
+    await capture(page, viewport.name, theme, "settings-tools-capability-error");
+    await unavailableSkillRow.getByRole("button", { name: "查看 运行 Skill 脚本 详情" }).click();
+    const unavailableSkillDialog = page.getByRole("dialog", { name: "运行 Skill 脚本" });
+    await expect(unavailableSkillDialog.getByText("能力异常", { exact: true })).toBeVisible();
+    await capture(page, viewport.name, theme, "settings-tools-capability-error-detail");
+    await unavailableSkillDialog.getByRole("button", { name: "关闭工具详情" }).click();
+    await page.getByLabel("搜索工具").fill("");
   }
 });
 

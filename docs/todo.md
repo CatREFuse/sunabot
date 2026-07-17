@@ -263,7 +263,7 @@
   - 证据：SQLite 聚合、精确会话筛选、失败调用、显式重试、Retry-After、正文断流、取消预检、Deferred Codex 终态竞争、自拍改写、会话消息分解和响应式面板均有回归测试；当前全量 165 个 Vitest 文件、910 项测试通过。
 
 - [x] **WEBUI-FIX-011｜Bash 与 Codex 能力状态**
-  - 工具开关始终可配置；配置启用、运行能力和最终可用状态分别展示；Codex Worker 可执行；Bash 仅在通过 bubblewrap 隔离探针的运行环境可执行。
+  - 工具开关始终可配置；配置启用状态持续展示，健康能力不额外标记，只有能力异常时显示原因；Codex Worker 可执行；Bash 仅在通过 bubblewrap 隔离探针的运行环境可执行。
   - 验收：配置开关不被能力状态锁死，Codex 登录与调用链可用，Bash 在支持环境执行、在 macOS Native 或探针失败时明确安全拒绝。
   - 证据：`/api/tools` 与真实回复 Provider 共用能力解析器，配置状态与运行能力独立；Codex CLI `0.139.0`、workspace 授权、Docker 镜像、worker authFile、Bash 隔离探针及通过/拒绝路径均通过回归、运行契约和 Native doctor。Apple Silicon linux/amd64 模拟内核返回 `EINVAL` 时保持明确安全拒绝，不降级普通 Bash。
 

@@ -49,8 +49,8 @@ function selected(tool: SunaTool) {
             </div>
             <p v-if="tool.summary" class="mt-1 text-xs leading-5 text-mute">{{ tool.summary }}</p>
             <p v-if="!agentEnabled(tool)" class="mt-1 text-xs text-accent">Agent 已停用</p>
-            <p v-else-if="tool.available === false" class="mt-1 text-xs text-mute">
-              {{ tool.availabilityReason || tool.unavailableReason || "当前能力不可用" }}
+            <p v-else-if="tool.available === false" class="mt-1 text-xs text-accent">
+              {{ tool.availabilityReason || tool.unavailableReason || "当前工具运行异常。" }}
             </p>
           </div>
         </div>
