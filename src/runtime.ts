@@ -106,7 +106,7 @@ import {
   type RenderedPromptRequest
 } from "../services/agent/promptSystem.js";
 import { buildConversationPromptVariables } from "../services/agent/persona.js";
-import { DEFAULT_CONTEXT_MESSAGE_LIMIT, MAX_STORED_CONVERSATION_MESSAGES, GROUP_CHAT_SUMMARY_WINDOW_MS, MAX_SELFIE_REFERENCE_IMAGES, MAX_SELFIE_WORKSPACE_REFERENCE_IMAGES, MAX_CURRENT_CONTEXT_IMAGES, MAX_HISTORY_CONTEXT_IMAGES, HYDRATE_MESSAGE_WINDOW_MS, ACTIVE_CONVERSATION_WINDOW_MS, DIRECT_REPLY_TIMEOUT_MS, AMBIENT_ORCHESTRATOR_TIMEOUT_MS, ORCHESTRATOR_MAX_RETRIES, PREPARE_TIMEOUT_MS, RECENT_CONTEXT_TOKEN_BUDGET, DEDUPE_TTL_MS, MAX_DEDUPE_KEYS, DEFAULT_ADMIN_NAME, GROUP_CHAT_SUMMARY_COMMAND, CONVERSATION_REPLY_PROMPT_FILE, SELFIE_PROMPT_FILE, GROUP_CHAT_SUMMARY_PROMPT_FILE, ADMIN_PERSONA_FILES, ADMIN_RUNTIME_PROMPT_DEFAULTS, BatchUserInfo, WorkingMemoryMergeOutput, WorkingMemoryMergeContext, personaFileNameForAdminId, AdminIdentity, ConversationReplyUpdateInput, RuntimeCommandContext, ReplyDeliveryDraft, ReplyDelivery, DeferredCodexTurn, AmbientReplyJob, AmbientReplyState, AmbientIdleTimer, RuntimeConfigSnapshot, RuntimePromptSnapshot, SunaRuntimeOptions } from "./runtime/runtimeContracts.js";
+import { DEFAULT_CONTEXT_MESSAGE_LIMIT, MAX_STORED_CONVERSATION_MESSAGES, GROUP_CHAT_SUMMARY_WINDOW_MS, MAX_SELFIE_REFERENCE_IMAGES, MAX_SELFIE_WORKSPACE_REFERENCE_IMAGES, MAX_CURRENT_CONTEXT_IMAGES, MAX_HISTORY_CONTEXT_IMAGES, HYDRATE_MESSAGE_WINDOW_MS, ACTIVE_CONVERSATION_WINDOW_MS, DIRECT_REPLY_TIMEOUT_MS, AMBIENT_ORCHESTRATOR_TIMEOUT_MS, ORCHESTRATOR_MAX_RETRIES, PREPARE_TIMEOUT_MS, RECENT_CONTEXT_TOKEN_BUDGET, DEDUPE_TTL_MS, MAX_DEDUPE_KEYS, DEFAULT_ADMIN_NAME, GROUP_CHAT_SUMMARY_COMMAND, CONVERSATION_REPLY_PROMPT_FILE, SELFIE_PROMPT_FILE, GROUP_CHAT_SUMMARY_PROMPT_FILE, ADMIN_PERSONA_FILES, ADMIN_RUNTIME_PROMPT_DEFAULTS, BatchUserInfo, WorkingMemoryMergeOutput, WorkingMemoryMergeContext, personaFileNameForAdminId, AdminIdentity, ConversationReplyUpdateInput, RuntimeCommandContext, ReplyDeliveryDraft, ReplyDelivery, DeferredCodexTurn, AmbientReplyJob, AmbientReplyState, AmbientIdleTimer, RuntimeConfigSnapshot, RuntimePromptSnapshot, SunaRuntimeOptions, RuntimeBashAuditPort } from "./runtime/runtimeContracts.js";
 import { RuntimeLifecycle } from "./runtime/lifecycle.js";
 import { RuntimeIntake } from "./runtime/intake.js";
 import { RuntimeReply } from "./runtime/reply.js";
@@ -119,7 +119,11 @@ import { RuntimeGroupThreads } from "./runtime/groupThreadPipeline.js";
 import { DEFAULT_REPLY_DEBOUNCE_MS, RuntimeReplyDebounce } from "./runtime/replyDebounce.js";
 import { RuntimeConversationAssets } from "./runtime/conversationAssets.js";
 import { TaskLimiter, errorMessage, loadConversationRecords } from "./runtime/infrastructure.js";
-import type { RuntimeToolCapabilityResolver } from "../services/tools/bashCapability.js";
+import type {
+  RuntimeToolCapabilities,
+  RuntimeToolCapabilityResolver
+} from "../services/tools/bashCapability.js";
+import type { BashExecutionBackend } from "../services/tools/bashAudit.js";
 import type { SystemConfigRuntimePort } from "../services/tools/systemConfigTool.js";
 import type { ReplyTaskGate } from "../services/orchestration/broadcastStormDetector.js";
 import { runWithAgentRuntimeContext } from "../packages/platform/runtimeAgentContext.js";
@@ -128,7 +132,14 @@ export * from "./runtime/runtimeHelpers.js";
 
 export class SunaRuntime {
   persona?: AgentPersona;
-  config: AppConfig;
+  private configValue!: AppConfig;
+  private configEpochValue = 0;
+  get config(): AppConfig { return this.configValue; }
+  set config(value: AppConfig) {
+    this.configValue = value;
+    this.configEpochValue += 1;
+  }
+  get configEpoch() { return this.configEpochValue; }
   readonly conversationRecords: Map<string, ConversationRecord>;
   readonly activeDirectControllers = new Map<string, AbortController>();
   readonly ambientReplies = new Map<string, AmbientReplyState>();
@@ -153,7 +164,8 @@ export class SunaRuntime {
   readonly sessionStore: SessionStore;
   readonly ownsSessionStore: boolean;
   readonly sessionCoordinator: SessionCoordinator;
-  readonly resolveToolCapabilities: RuntimeToolCapabilityResolver;
+  readonly bashAudit?: RuntimeBashAuditPort;
+  private readonly rawToolCapabilityResolver?: RuntimeToolCapabilityResolver;
   readonly systemConfig?: SystemConfigRuntimePort;
   readonly replyTaskGate: ReplyTaskGate;
   readonly incomingPreparations = new Map<string, {
@@ -176,7 +188,8 @@ export class SunaRuntime {
       configureMemoryPersistence(sqliteMemoryPersistence);
       this.config = config;
       this.conversationRecords = new Map(loadConversationRecords(config).map((record) => [record.id, record]));
-      this.resolveToolCapabilities = failClosedToolCapabilityResolver(options.resolveToolCapabilities);
+      this.rawToolCapabilityResolver = options.resolveToolCapabilities;
+      this.bashAudit = options.bashAudit;
       this.systemConfig = options.systemConfig;
       this.replyTaskGate = options.replyTaskGate ?? { canCreateTaskFor: () => true };
       this.memoryScheduler = new MemorySchedulerStore(config);
@@ -331,7 +344,39 @@ export class SunaRuntime {
   contextMessageLimit(...args: Parameters<RuntimeReply["contextMessageLimit"]>) { return this.reply.contextMessageLimit(...args); }
   retainedConversationMessageLimit(...args: Parameters<RuntimeReply["retainedConversationMessageLimit"]>) { return this.reply.retainedConversationMessageLimit(...args); }
   groupReplyOptions(...args: Parameters<RuntimeReply["groupReplyOptions"]>) { return this.reply.groupReplyOptions(...args); }
-  buildProviderBashOptions(...args: Parameters<RuntimeReply["buildProviderBashOptions"]>) { return this.reply.buildProviderBashOptions(...args); }
+  resolveProviderBashHandle(incoming: ParsedIncomingMessage, promptOverride?: string) {
+    return this.reply.resolveProviderBashHandle(incoming, promptOverride, this.rawToolCapabilityResolver);
+  }
+  async resolveToolCapabilities(
+    backendOverride?: BashExecutionBackend | null
+  ): Promise<RuntimeToolCapabilities> {
+    const backend = backendOverride === undefined
+      ? this.config.bot.bash.adminPrivateBackend
+      : backendOverride;
+    const workspacePath = resolveProjectPath(this.config.persona.agentWorkspace);
+    let auditAvailable = false;
+    if (backend && workspacePath && this.bashAudit) {
+      try {
+        auditAvailable = await this.bashAudit.available(this.config) === true;
+      } catch {
+        auditAvailable = false;
+      }
+    }
+    if (!this.rawToolCapabilityResolver) return { workspaceBash: false, codex: false };
+    try {
+      const capabilities = await this.rawToolCapabilityResolver({
+        workspacePath: workspacePath ?? getRootDir(),
+        workspaceBashBackend: backend ?? "docker",
+        workspaceBashAuditAvailable: auditAvailable
+      });
+      return {
+        workspaceBash: Boolean(backend && workspacePath && auditAvailable && capabilities.workspaceBash === true),
+        codex: capabilities.codex === true
+      };
+    } catch {
+      return { workspaceBash: false, codex: false };
+    }
+  }
   isAdminUser(...args: Parameters<RuntimeReply["isAdminUser"]>) { return this.reply.isAdminUser(...args); }
   adminIdentity(...args: Parameters<RuntimeOrchestration["adminIdentity"]>) { return this.orchestration.adminIdentity(...args); }
   isReplySenderAllowed(...args: Parameters<RuntimeOrchestration["isReplySenderAllowed"]>) { return this.orchestration.isReplySenderAllowed(...args); }
@@ -415,21 +460,4 @@ function nonNegativeReplyDebounceMs(value: number | undefined) {
     throw new Error("replyDebounceMs must be a non-negative integer.");
   }
   return selected;
-}
-
-function failClosedToolCapabilityResolver(
-  resolve: RuntimeToolCapabilityResolver | undefined
-): RuntimeToolCapabilityResolver {
-  return async () => {
-    if (!resolve) return { workspaceBash: false, codex: false };
-    try {
-      const capabilities = await resolve();
-      return {
-        workspaceBash: capabilities.workspaceBash === true,
-        codex: capabilities.codex === true
-      };
-    } catch {
-      return { workspaceBash: false, codex: false };
-    }
-  };
 }

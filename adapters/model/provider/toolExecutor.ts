@@ -4,6 +4,7 @@ import type { OpenAIToolDefinition } from "../../../services/agent/promptSystem.
 import type { MemoryRecallInput } from "../../../services/memory/memoryService.js";
 import {
   WORKSPACE_BASH_TOOL_NAME,
+  isWorkspaceBashProviderOptions,
   runWorkspaceBash,
   type WorkspaceBashInput
 } from "../../../services/tools/bashTool.js";
@@ -47,6 +48,7 @@ import {
   providerToolExecutionMode,
   resolveProviderToolDefinitions
 } from "../../../services/tools/toolRegistry.js";
+import { TOOL_CALL_TIMEOUT_MS } from "../../../services/tools/toolConstants.js";
 import {
   readDeferredDispatchMessage,
   withRequiredDispatchMessage,
@@ -430,15 +432,38 @@ async function runBash(
   call: ResponseFunctionCallItem,
   options: ProviderCompleteOptions
 ) {
-  if (!options.bash?.enabled || !options.bash.workspacePath) {
+  if (!isWorkspaceBashProviderOptions(options.bash)) return { ok: false, error: "Bash is not enabled." };
+  try {
+    if (!options.bash.isCurrent()) return { ok: false, error: "Bash is not enabled." };
+  } catch {
     return { ok: false, error: "Bash is not enabled." };
   }
-  const result = await runWorkspaceBash(args as unknown as WorkspaceBashInput, options.bash.workspacePath, {
-    workspaceOnly: options.bash.workspaceOnly,
-    blockedKeywords: options.bash.blockedKeywords
+  const input = readWorkspaceBashInput(args);
+  if (!input) return { ok: false, error: "Invalid Bash arguments." };
+  const result = await runWorkspaceBash(input, options.bash.workspacePath, {
+    backend: options.bash.backend,
+    accessMode: options.bash.accessMode,
+    strictMode: options.bash.strictMode,
+    isCurrent: options.bash.isCurrent,
+    audit: options.bash.audit,
+    approvalContext: options.bash.approvalContext,
+    ...(options.bash.confirmedApprovalId ? { confirmedApprovalId: options.bash.confirmedApprovalId } : {}),
+    ...(options.signal ? { abortSignal: options.signal } : {})
   });
   await appendToolLog(WORKSPACE_BASH_TOOL_NAME, call, args, result, options);
   return result;
+}
+
+function readWorkspaceBashInput(args: Record<string, unknown>): WorkspaceBashInput | undefined {
+  const keys = Object.keys(args);
+  if (
+    keys.length !== 2
+    || !keys.includes("command")
+    || !keys.includes("timeoutMs")
+    || typeof args.command !== "string"
+    || (args.timeoutMs !== null && args.timeoutMs !== TOOL_CALL_TIMEOUT_MS)
+  ) return undefined;
+  return { command: args.command, timeoutMs: args.timeoutMs };
 }
 
 async function runWebSearch(

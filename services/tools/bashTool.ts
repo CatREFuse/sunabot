@@ -77,11 +77,24 @@ export interface WorkspaceBashOptions {
   confirmedApprovalId?: string;
   approvalStore?: BashApprovalStore;
   abortSignal?: AbortSignal;
+  isCurrent?: () => boolean;
   sandbox?: WorkspaceBashSandboxOptions;
   /** @deprecated Retained until the runtime configuration migration is committed. */
   workspaceOnly?: boolean;
   /** @deprecated Deterministic policy and the audit agent replace keyword matching. */
   blockedKeywords?: string[];
+}
+
+export interface WorkspaceBashProviderOptions {
+  enabled: true;
+  workspacePath: string;
+  backend: BashExecutionBackend;
+  accessMode: BashAccessMode;
+  strictMode: boolean;
+  isCurrent: () => boolean;
+  audit: BashAuditRunner;
+  approvalContext: BashApprovalContext;
+  confirmedApprovalId?: string;
 }
 
 export const workspaceBashTool = {
@@ -111,6 +124,40 @@ export function createWorkspaceBashTool(_options: WorkspaceBashOptions = {}) {
   return workspaceBashTool;
 }
 
+export function isWorkspaceBashProviderOptions(value: unknown): value is WorkspaceBashProviderOptions {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const options = value as Record<string, unknown>;
+  const approvalContext = options.approvalContext;
+  const allowedKeys = new Set([
+    "enabled",
+    "workspacePath",
+    "backend",
+    "accessMode",
+    "strictMode",
+    "isCurrent",
+    "audit",
+    "approvalContext",
+    "confirmedApprovalId"
+  ]);
+  if (Object.keys(options).some((key) => !allowedKeys.has(key))) return false;
+  if (
+    options.enabled !== true
+    || typeof options.workspacePath !== "string"
+    || !path.isAbsolute(options.workspacePath)
+    || (options.backend !== "native" && options.backend !== "docker")
+    || (options.accessMode !== "admin" && options.accessMode !== "restricted")
+    || typeof options.strictMode !== "boolean"
+    || typeof options.isCurrent !== "function"
+    || typeof options.audit !== "function"
+    || !approvalContext
+    || typeof approvalContext !== "object"
+    || Array.isArray(approvalContext)
+    || !isValidBashApprovalContext(approvalContext as BashApprovalContext)
+  ) return false;
+  return options.confirmedApprovalId === undefined
+    || (typeof options.confirmedApprovalId === "string" && /^bash-[a-f0-9]{24}$/.test(options.confirmedApprovalId));
+}
+
 export async function runWorkspaceBash(
   input: WorkspaceBashInput,
   agentWorkspacePath: string,
@@ -121,11 +168,22 @@ export async function runWorkspaceBash(
   const accessMode = options.accessMode ?? "admin";
   const timeoutMs = normalizeTimeout(input.timeoutMs);
   let workbenchRoot = "";
+  const stale = (audit?: BashAuditResult) => configurationStaleResult(
+    command,
+    workbenchRoot,
+    backend,
+    accessMode,
+    audit
+  );
+  if (!isBashConfigurationCurrent(options.isCurrent)) return stale();
   let workbenchIdentity: FrozenFilesystemIdentity;
   try {
     workbenchRoot = await resolveAgentWorkbench(agentWorkspacePath);
+    if (!isBashConfigurationCurrent(options.isCurrent)) return stale();
     workbenchIdentity = await captureWorkbenchIdentity(workbenchRoot);
+    if (!isBashConfigurationCurrent(options.isCurrent)) return stale();
   } catch {
+    if (!isBashConfigurationCurrent(options.isCurrent)) return stale();
     return blockedResult(
       command,
       workbenchRoot,
@@ -142,14 +200,18 @@ export async function runWorkspaceBash(
   }
 
   let audit: BashAuditResult;
+  if (!isBashConfigurationCurrent(options.isCurrent)) return stale();
   try {
     audit = await options.audit({
       command,
       backend,
       accessMode,
-      strictMode: options.strictMode !== false
+      strictMode: options.strictMode !== false,
+      ...(options.abortSignal ? { signal: options.abortSignal } : {})
     });
-  } catch (error) {
+    if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
+  } catch {
+    if (!isBashConfigurationCurrent(options.isCurrent)) return stale();
     return blockedResult(
       command,
       workbenchRoot,
@@ -173,9 +235,11 @@ export async function runWorkspaceBash(
 
   let frozenRestrictedPaths: FrozenRestrictedPath[] = [];
   if (policy.restrictedInvocation?.pathOperands.length) {
+    if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
     try {
       frozenRestrictedPaths = await prepareRestrictedPaths(policy.restrictedInvocation.pathOperands, workbenchRoot);
     } catch {
+      if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
       return blockedResult(
         command,
         workbenchRoot,
@@ -185,6 +249,7 @@ export async function runWorkspaceBash(
         audit
       );
     }
+    if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
   }
 
   let approvedOutsideAccesses: BashPathAccess[] = policy.outsideAccesses;
@@ -194,16 +259,65 @@ export async function runWorkspaceBash(
       return blockedResult(command, workbenchRoot, backend, accessMode, "BASH_APPROVAL_CONTEXT_UNAVAILABLE", audit);
     }
     const store = options.approvalStore ?? bashApprovalStore;
-    const consumed = store.consume(
-      options.confirmedApprovalId,
-      command,
-      options.approvalContext
-    );
+    let consumed: BashApprovalAccess[] | undefined;
+    if (options.confirmedApprovalId) {
+      if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
+      const inspected = store.inspect(options.confirmedApprovalId, command, options.approvalContext);
+      if (inspected) {
+        if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
+        try {
+          await verifyApprovalAccesses(inspected, workbenchRoot);
+        } catch {
+          if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
+          return blockedResult(
+            command,
+            workbenchRoot,
+            backend,
+            accessMode,
+            "BASH_APPROVAL_PATH_CHANGED: an approved outside path changed before execution.",
+            audit
+          );
+        }
+        if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
+        consumed = store.consume(options.confirmedApprovalId, command, options.approvalContext);
+        if (!consumed) {
+          return blockedResult(
+            command,
+            workbenchRoot,
+            backend,
+            accessMode,
+            "BASH_APPROVAL_PATH_CHANGED: an approved outside path changed before execution.",
+            audit
+          );
+        }
+      } else {
+        if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
+        consumed = store.consume(options.confirmedApprovalId, command, options.approvalContext);
+        if (consumed) {
+          try {
+            await verifyApprovalAccesses(consumed, workbenchRoot);
+          } catch {
+            if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
+            return blockedResult(
+              command,
+              workbenchRoot,
+              backend,
+              accessMode,
+              "BASH_APPROVAL_PATH_CHANGED: an approved outside path changed before execution.",
+              audit
+            );
+          }
+          if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
+        }
+      }
+    }
     if (!consumed) {
       let prepared: BashApprovalAccess[];
+      if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
       try {
         prepared = await prepareOutsideApprovalAccesses(policy.outsideAccesses, workbenchRoot);
       } catch {
+        if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
         return blockedResult(
           command,
           workbenchRoot,
@@ -213,6 +327,7 @@ export async function runWorkspaceBash(
           audit
         );
       }
+      if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
       const approval = store.issue(command, options.approvalContext, prepared);
       const approvalAudit = withOutsideReadApprovalGuarantee(audit);
       return {
@@ -225,26 +340,16 @@ export async function runWorkspaceBash(
         approvalAccesses: approval.accesses
       };
     }
-    try {
-      await verifyApprovalAccesses(consumed, workbenchRoot);
-    } catch {
-      return blockedResult(
-        command,
-        workbenchRoot,
-        backend,
-        accessMode,
-        "BASH_APPROVAL_PATH_CHANGED: an approved outside path changed before execution.",
-        audit
-      );
-    }
     frozenApprovalAccesses = consumed;
     approvedOutsideAccesses = consumed.map(({ path: approvedPath, access }) => ({ path: approvedPath, access }));
     audit = withOutsideReadApprovalGuarantee(audit);
   }
 
+  if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
   try {
     await verifyFrozenFilesystemIdentity(workbenchIdentity, "directory");
   } catch {
+    if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
     return blockedResult(
       command,
       workbenchRoot,
@@ -254,17 +359,21 @@ export async function runWorkspaceBash(
       audit
     );
   }
+  if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
   const environment = buildWorkbenchEnv();
   try {
+    if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
     const sandbox = await ensureWorkspaceBashIsolation(
       backend,
       workbenchRoot,
       environment,
       options.sandbox
     );
+    if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
     try {
       await verifyFrozenFilesystemIdentity(workbenchIdentity, "directory");
     } catch {
+      if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
       return blockedResult(
         command,
         workbenchRoot,
@@ -274,10 +383,13 @@ export async function runWorkspaceBash(
         audit
       );
     }
+    if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
     if (frozenApprovalAccesses.length) {
+      if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
       try {
         await verifyApprovalAccesses(frozenApprovalAccesses, workbenchRoot);
       } catch {
+        if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
         return blockedResult(
           command,
           workbenchRoot,
@@ -287,11 +399,14 @@ export async function runWorkspaceBash(
           audit
         );
       }
+      if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
     }
     if (frozenRestrictedPaths.length) {
+      if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
       try {
         await verifyRestrictedPaths(frozenRestrictedPaths);
       } catch {
+        if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
         return blockedResult(
           command,
           workbenchRoot,
@@ -301,7 +416,9 @@ export async function runWorkspaceBash(
           audit
         );
       }
+      if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
     }
+    if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
     const invocation = buildWorkspaceBashInvocation(
       policy.restrictedInvocation
         ? { kind: "argv", ...policy.restrictedInvocation }
@@ -311,6 +428,7 @@ export async function runWorkspaceBash(
       sandbox,
       approvedOutsideAccesses
     );
+    if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
     return await executeCommand(invocation, {
       command,
       workbenchRoot,
@@ -319,9 +437,11 @@ export async function runWorkspaceBash(
       timeoutMs,
       environment,
       audit,
+      isCurrent: options.isCurrent,
       signal: options.abortSignal
     });
   } catch (error) {
+    if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
     return blockedResult(
       command,
       workbenchRoot,
@@ -347,11 +467,22 @@ interface ExecuteCommandOptions {
   timeoutMs: number;
   environment: Record<string, string>;
   audit: BashAuditResult;
+  isCurrent?: () => boolean;
   signal?: AbortSignal;
 }
 
 function executeCommand(invocation: WorkspaceBashInvocation, options: ExecuteCommandOptions) {
   return new Promise<WorkspaceBashResult>((resolve) => {
+    if (!isBashConfigurationCurrent(options.isCurrent)) {
+      resolve(configurationStaleResult(
+        options.command,
+        options.workbenchRoot,
+        options.backend,
+        options.accessMode,
+        options.audit
+      ));
+      return;
+    }
     let child: { kill(signal?: NodeJS.Signals | number): boolean } | undefined;
     let watchdog: NodeJS.Timeout | undefined;
     let abortListener: (() => void) | undefined;
@@ -488,6 +619,32 @@ function validateBasicCommand(command: string) {
   if (command.length > MAX_COMMAND_LENGTH) return `Command is too long. Maximum length is ${MAX_COMMAND_LENGTH} characters.`;
   if (/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/.test(command)) return "Control characters are not allowed.";
   return "";
+}
+
+function isBashConfigurationCurrent(isCurrent?: () => boolean) {
+  if (!isCurrent) return true;
+  try {
+    return isCurrent() === true;
+  } catch {
+    return false;
+  }
+}
+
+function configurationStaleResult(
+  command: string,
+  workbenchRoot: string,
+  backend: BashExecutionBackend,
+  accessMode: BashAccessMode,
+  audit?: BashAuditResult
+) {
+  return blockedResult(
+    command,
+    workbenchRoot,
+    backend,
+    accessMode,
+    "BASH_CONFIGURATION_STALE: Bash configuration changed before execution.",
+    audit
+  );
 }
 
 function buildWorkbenchEnv(): Record<string, string> {

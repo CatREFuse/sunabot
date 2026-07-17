@@ -3,9 +3,13 @@ import type { MessageLookupContextV1, MessagingPort } from "../../packages/contr
 import { inboundImageUrls, replaceInboundImageUrls } from "../../packages/contracts/messaging/messages.js";
 import { isAdminSender } from "../../services/messaging/replySenderPolicy.js";
 import { generateImgMediaHandle, type GenerateImgReferenceContext } from "../../services/tools/generateImgTool.js";
-import { getRootDir, resolveProjectPath } from "../config.js";
+import {
+  extractConfirmedBashApprovalId
+} from "../../services/tools/bashAudit.js";
+import type { RuntimeToolCapabilityResolver } from "../../services/tools/bashCapability.js";
+import { resolveProjectPath } from "../config.js";
 import type { SunaRuntime } from "../runtime.js";
-import type { ChatMessage, ConversationMessageQuote, ParsedIncomingMessage } from "../types.js";
+import type { AppConfig, ChatMessage, ConversationMessageQuote, ParsedIncomingMessage } from "../types.js";
 import { clampInteger, estimatePromptTokens, isAdminUserId, toContextChatMessage } from "./conversationMemoryHelpers.js";
 import {
   conversationMessageAttachments,
@@ -195,21 +199,127 @@ export function runtime_groupReplyOptions(this: RuntimeHost, incoming: ParsedInc
   return { replyToMessageId: incoming.messageId };
 }
 
-export function runtime_buildProviderBashOptions(
+export async function runtime_resolveProviderBashHandle(
   this: RuntimeHost,
   incoming: ParsedIncomingMessage,
-  capabilityAvailable = false
-): ProviderBashOptions | undefined {
-  const bash = this.config.bot.bash;
-  if (!bash.enabled || !capabilityAvailable) return undefined;
-  if (incoming.groupId && !bash.allowGroup) return undefined;
-  if (bash.adminOnly && !this.isAdminUser(incoming.userId)) return undefined;
-  return {
-    enabled: true,
-    workspacePath: resolveProjectPath(this.config.persona.agentWorkspace) ?? getRootDir(),
-    workspaceOnly: bash.workspaceOnly,
-    blockedKeywords: bash.blockedKeywords
-  };
+  promptOverride: string | undefined,
+  capabilityResolver?: RuntimeToolCapabilityResolver
+): Promise<ProviderBashOptions | undefined> {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const epoch = this.configEpoch;
+    const config = freezeConfigSnapshot(this.config);
+    const auditPort = this.bashAudit;
+    const candidate = resolveProviderBashCandidate(config, incoming, promptOverride);
+    if (!candidate || !auditPort || !capabilityResolver) return undefined;
+
+    let auditAvailable = false;
+    try {
+      auditAvailable = await auditPort.available(config) === true;
+    } catch {
+      if (this.configEpoch !== epoch) continue;
+      return undefined;
+    }
+    if (this.configEpoch !== epoch) continue;
+    if (!auditAvailable) return undefined;
+
+    let capabilityAvailable = false;
+    try {
+      const capabilities = await capabilityResolver({
+        workspacePath: candidate.workspacePath,
+        workspaceBashBackend: candidate.backend,
+        workspaceBashAuditAvailable: true
+      });
+      capabilityAvailable = capabilities.workspaceBash === true;
+    } catch {
+      if (this.configEpoch !== epoch) continue;
+      return undefined;
+    }
+    if (this.configEpoch !== epoch) continue;
+    if (!capabilityAvailable) return undefined;
+
+    const handle = Object.freeze({
+      enabled: true as const,
+      workspacePath: candidate.workspacePath,
+      backend: candidate.backend,
+      accessMode: candidate.accessMode,
+      strictMode: candidate.strictMode,
+      approvalContext: candidate.approvalContext,
+      isCurrent: () => this.configEpoch === epoch,
+      audit: async (input: Parameters<ProviderBashOptions["audit"]>[0]) => {
+        if (this.configEpoch !== epoch) throw new Error("BASH_AUDIT_UNAVAILABLE");
+        const result = await auditPort.run(config, input);
+        if (this.configEpoch !== epoch) throw new Error("BASH_AUDIT_UNAVAILABLE");
+        return result;
+      },
+      ...(candidate.confirmedApprovalId ? { confirmedApprovalId: candidate.confirmedApprovalId } : {})
+    });
+    if (this.configEpoch !== epoch) continue;
+    return handle;
+  }
+  return undefined;
+}
+
+function resolveProviderBashCandidate(
+  config: Readonly<AppConfig>,
+  incoming: ParsedIncomingMessage,
+  promptOverride?: string
+) {
+  const bash = config.bot.bash;
+  const adminQq = config.bot.adminQq.trim();
+  const accountId = incoming.accountId?.trim();
+  const senderId = incoming.sender?.id?.trim();
+  if (
+    !bash.enabled
+    || !bash.adminOnly
+    || promptOverride !== undefined
+    || incoming.transport !== undefined
+    || incoming.agentId !== config.persona.defaultAgentId
+    || !accountId
+    || !Number.isSafeInteger(incoming.messageId)
+    || Number(incoming.messageId) <= 0
+    || !Number.isSafeInteger(incoming.selfId)
+    || Number(incoming.selfId) <= 0
+    || !adminQq
+    || !isAdminSender(incoming.userId, adminQq)
+    || senderId !== String(incoming.userId)
+  ) return undefined;
+
+  const workspacePath = resolveProjectPath(config.persona.agentWorkspace);
+  if (!workspacePath) return undefined;
+  const privateAdmin = incoming.scope === "private" && incoming.groupId === undefined;
+  const allowedGroup = bash.allowGroup
+    && (incoming.scope === "user_group" || incoming.scope === "bot_group")
+    && Number.isSafeInteger(incoming.groupId)
+    && Number(incoming.groupId) > 0;
+  if (!privateAdmin && !allowedGroup) return undefined;
+
+  const approvalContext = Object.freeze({
+    agentId: config.persona.defaultAgentId,
+    accountId,
+    transport: "onebot" as const,
+    conversationId: conversationRecordId(incoming),
+    userId: String(incoming.userId),
+    ...(allowedGroup ? { groupId: String(incoming.groupId) } : {})
+  });
+  const confirmedApprovalId = extractConfirmedBashApprovalId(incoming.text);
+  return Object.freeze({
+    workspacePath,
+    backend: privateAdmin ? bash.adminPrivateBackend : "docker" as const,
+    accessMode: privateAdmin ? "admin" as const : "restricted" as const,
+    strictMode: bash.strictMode,
+    approvalContext,
+    ...(confirmedApprovalId ? { confirmedApprovalId } : {})
+  });
+}
+
+function freezeConfigSnapshot(config: AppConfig): Readonly<AppConfig> {
+  return deepFreeze(structuredClone(config));
+}
+
+function deepFreeze<T>(value: T): T {
+  if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
+  for (const nested of Object.values(value)) deepFreeze(nested);
+  return Object.freeze(value);
 }
 
 export function runtime_isAdminUser(this: RuntimeHost, userId: number) {

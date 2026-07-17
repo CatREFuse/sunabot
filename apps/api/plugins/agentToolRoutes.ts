@@ -4,18 +4,18 @@ import type { AppConfig } from "../../../src/types.js";
 import { parseFinalPromptTemplate } from "../../../services/agent/promptSystem.js";
 import { promptDefinitionById } from "../../../services/agent/promptCatalog.js";
 import { listToolMetadata } from "../../../services/tools/toolRegistry.js";
-import type { RuntimeToolCapabilityResolver } from "../../../services/tools/bashCapability.js";
+import type { RuntimeToolCapabilitySnapshotResolver } from "../../../services/tools/bashCapability.js";
 import { badRequest, notFound } from "../../../src/admin/errors.js";
 
 export interface AgentToolRouteOptions {
   agentFiles: AgentFileRepository;
-  resolveToolCapabilities: RuntimeToolCapabilityResolver;
+  resolveToolCapabilities: RuntimeToolCapabilitySnapshotResolver;
   resolveConversationAssetCapability?: () => boolean | Promise<boolean>;
   getConfig: () => AppConfig;
   getAgentContext?: (agentId: string) => {
     config: AppConfig;
     agentFiles: AgentFileRepository;
-    resolveToolCapabilities: RuntimeToolCapabilityResolver;
+    resolveToolCapabilities: RuntimeToolCapabilitySnapshotResolver;
     resolveConversationAssetCapability?: () => boolean | Promise<boolean>;
   };
 }
@@ -98,11 +98,7 @@ export function registerAgentToolRoutes(app: FastifyInstance, options: AgentTool
     const tools = listToolMetadata({
       onAssistantText: () => undefined,
       allowNoReply: true,
-      bash: {
-        enabled: capabilities.workspaceBash,
-        workspaceOnly: config.bot.bash.workspaceOnly,
-        blockedKeywords: config.bot.bash.blockedKeywords
-      },
+      bashAvailable: capabilities.workspaceBash,
       bot: config.bot,
       selfie: { enabled: true },
       conversationAssets: { enabled: conversationAssetsAvailable },

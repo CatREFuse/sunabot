@@ -33,6 +33,7 @@ export interface BashAuditInput {
   backend: BashExecutionBackend;
   accessMode: BashAccessMode;
   strictMode: boolean;
+  signal?: AbortSignal;
 }
 
 export interface BashAuditResult {
@@ -113,7 +114,7 @@ export class BashApprovalStore {
     };
   }
 
-  consume(id: string | undefined, command: string, context: BashApprovalContext) {
+  inspect(id: string | undefined, command: string, context: BashApprovalContext) {
     this.prune();
     if (!id) return undefined;
     const approval = this.pending.get(id);
@@ -122,8 +123,14 @@ export class BashApprovalStore {
     if (!contextKey || approval.commandHash !== commandHash(command) || approval.contextKey !== contextKey) {
       return undefined;
     }
-    this.pending.delete(id);
     return structuredClone(approval.accesses);
+  }
+
+  consume(id: string | undefined, command: string, context: BashApprovalContext) {
+    const accesses = this.inspect(id, command, context);
+    if (!accesses || !id) return undefined;
+    this.pending.delete(id);
+    return accesses;
   }
 
   private prune() {

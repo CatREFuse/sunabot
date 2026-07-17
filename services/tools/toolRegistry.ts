@@ -5,7 +5,12 @@ import {
   type BotConfig,
   type BotToolOverride
 } from "../../src/types.js";
-import { createWorkspaceBashTool, WORKSPACE_BASH_TOOL_NAME } from "./bashTool.js";
+import {
+  createWorkspaceBashTool,
+  isWorkspaceBashProviderOptions,
+  WORKSPACE_BASH_TOOL_NAME,
+  type WorkspaceBashProviderOptions
+} from "./bashTool.js";
 import {
   CODEX_TOOL_NAME,
   codexTool,
@@ -44,7 +49,8 @@ export interface ToolAvailability {
     read(input: unknown): Promise<unknown>;
     write(input: unknown): Promise<unknown>;
   };
-  bash?: { enabled: boolean; workspaceOnly?: boolean; blockedKeywords?: string[] };
+  bash?: WorkspaceBashProviderOptions;
+  bashAvailable?: boolean;
   bot?: Pick<BotConfig, "tools">;
   selfie?: { enabled: boolean };
   memory?: { enabled: boolean };
@@ -192,7 +198,7 @@ const catalog: readonly ToolCatalogEntry[] = [
     title: "Bash",
     summary: "在 Agent workspace 内执行 Bash 命令。",
     definition: (options) => createWorkspaceBashTool(options.bash),
-    available: (options) => options.bash?.enabled === true,
+    available: (options) => isWorkspaceBashProviderOptions(options.bash) || options.bashAvailable === true,
     unavailableReason: "当前环境未通过 Bash 隔离检查。",
     execution: "inline"
   },
@@ -276,6 +282,7 @@ export function resolveProviderToolDefinitions(
 ) {
   const promptByName = promptDefinitionMap(promptDefinitions);
   return catalog.flatMap((entry) => {
+    if (entry.name === WORKSPACE_BASH_TOOL_NAME && !isWorkspaceBashProviderOptions(options.bash)) return [];
     if (!(entry.available?.(options) ?? true)) return [];
     const override = toolOverride(options, entry.name);
     if (override?.enabled === false) return [];
@@ -299,6 +306,7 @@ export function providerToolExecutionMode(name: string, options: ToolAvailabilit
 
 export function isProviderToolAvailable(name: string, options: ToolAvailability = {}) {
   if (!isAgentToolName(name) || toolOverride(options, name)?.enabled === false) return false;
+  if (name === WORKSPACE_BASH_TOOL_NAME) return isWorkspaceBashProviderOptions(options.bash);
   const entry = catalog.find((candidate) => candidate.name === name);
   return Boolean(entry && (entry.available?.(options) ?? true));
 }

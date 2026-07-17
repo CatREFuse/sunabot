@@ -156,12 +156,19 @@ describe("workspace Bash capability probe", () => {
   });
 
   it("combines Codex login and Bash isolation into one runtime capability snapshot", async () => {
+    const getWorkspaceBashCapability = vi.fn(async () => true);
     const resolve = createRuntimeToolCapabilityResolver({
       getCodexStatus: vi.fn(async () => ({ installed: true, authenticated: true })),
-      getWorkspaceBashCapability: vi.fn(async () => true)
+      getWorkspaceBashCapability
     });
 
-    await expect(resolve()).resolves.toEqual({ codex: true, workspaceBash: true });
+    const context = {
+      workspacePath: "/fixture/agent-workspace",
+      workspaceBashBackend: "docker" as const,
+      workspaceBashAuditAvailable: true
+    };
+    await expect(resolve(context)).resolves.toEqual({ codex: true, workspaceBash: true });
+    expect(getWorkspaceBashCapability).toHaveBeenCalledWith(context);
   });
 
   it("fails each runtime capability closed when its probe rejects or is incomplete", async () => {
@@ -170,7 +177,26 @@ describe("workspace Bash capability probe", () => {
       getWorkspaceBashCapability: vi.fn(async () => { throw new Error("probe failed"); })
     });
 
-    await expect(resolve()).resolves.toEqual({ codex: false, workspaceBash: false });
+    await expect(resolve({
+      workspacePath: "/fixture/agent-workspace",
+      workspaceBashBackend: "native",
+      workspaceBashAuditAvailable: true
+    })).resolves.toEqual({ codex: false, workspaceBash: false });
+  });
+
+  it("does not start the isolation probe when the independent audit dependency is unavailable", async () => {
+    const getWorkspaceBashCapability = vi.fn(async () => true);
+    const resolve = createRuntimeToolCapabilityResolver({
+      getCodexStatus: vi.fn(async () => ({ installed: true, authenticated: true })),
+      getWorkspaceBashCapability
+    });
+
+    await expect(resolve({
+      workspacePath: "/fixture/agent-workspace",
+      workspaceBashBackend: "docker",
+      workspaceBashAuditAvailable: false
+    })).resolves.toEqual({ codex: true, workspaceBash: false });
+    expect(getWorkspaceBashCapability).not.toHaveBeenCalled();
   });
 });
 

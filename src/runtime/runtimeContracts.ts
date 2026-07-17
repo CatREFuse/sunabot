@@ -95,6 +95,7 @@ import { cleanupPersistedCodexProcess, CodexToolRunner } from "../../adapters/co
 import { isTrustedQqFakeIp } from "../../adapters/onebot/qqMedia.js";
 import type { CodexRunner } from "../../packages/contracts/tools/codex.js";
 import type { RuntimeToolCapabilityResolver } from "../../services/tools/bashCapability.js";
+import type { BashAuditInput, BashAuditResult } from "../../services/tools/bashAudit.js";
 import type { SystemConfigRuntimePort } from "../../services/tools/systemConfigTool.js";
 import type { ReplyTaskGate } from "../../services/orchestration/broadcastStormDetector.js";
 import {
@@ -288,11 +289,16 @@ export interface RuntimeConfigSnapshot {
   persona: AgentPersona;
 }
 export type RuntimePromptSnapshot = RuntimeConfigSnapshot;
+export interface RuntimeBashAuditPort {
+  available(config: AppConfig): boolean | Promise<boolean>;
+  run(config: AppConfig, input: BashAuditInput): Promise<BashAuditResult>;
+}
 export interface SunaRuntimeOptions {
   attachmentService?: AttachmentService;
   sessionStore?: SessionStore;
   codexRunner?: CodexRunner;
   resolveToolCapabilities?: RuntimeToolCapabilityResolver;
+  bashAudit?: RuntimeBashAuditPort;
   systemConfig?: SystemConfigRuntimePort;
   replyTaskGate?: ReplyTaskGate;
   replyDebounceMs?: number;

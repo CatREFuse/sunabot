@@ -15,7 +15,22 @@ describe("ToolRegistry", () => {
   it("uses one canonical name for metadata and the model definition", () => {
     const metadata = listToolMetadata();
     const definitions = resolveProviderToolDefinitions({
-      bash: { enabled: true, workspaceOnly: true, blockedKeywords: [] }
+      bash: {
+        enabled: true,
+        workspacePath: "/fixture/agent-workspace",
+        backend: "docker",
+        accessMode: "admin",
+        strictMode: true,
+        isCurrent: () => true,
+        audit: vi.fn(),
+        approvalContext: {
+          agentId: "plana",
+          accountId: "primary",
+          transport: "onebot",
+          conversationId: "private:171419991",
+          userId: "171419991"
+        }
+      }
     });
     const names = definitions.map((definition) => String(definition.name));
 
@@ -31,6 +46,13 @@ describe("ToolRegistry", () => {
 
   it("does not expose disabled provider tools", () => {
     expect(resolveProviderToolDefinitions({})).toEqual([]);
+  });
+
+  it("keeps API-only Bash capability metadata separate from executable Provider options", () => {
+    const bash = listToolMetadata({ bashAvailable: true }).find((tool) => tool.name === "workspace_bash");
+
+    expect(bash).toMatchObject({ available: true });
+    expect(resolveProviderToolDefinitions({ bashAvailable: true })).toEqual([]);
   });
 
   it("exposes assistant_text only when the runtime can deliver intermediate text", () => {

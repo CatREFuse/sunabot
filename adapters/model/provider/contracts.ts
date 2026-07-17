@@ -11,6 +11,7 @@ import type { SystemConfigToolPort } from "../../../services/tools/systemConfigT
 import type { PrepareOutboundConversationAssetInput } from "../../../services/delivery/public.js";
 import type { ProviderLogContext } from "../../../packages/contracts/model/modelGateway.js";
 import type { ImageGenerationFailureContext } from "../imageGenerationRetry.js";
+import type { WorkspaceBashProviderOptions } from "../../../services/tools/bashTool.js";
 
 export interface ProviderCompleteOptions {
   signal?: AbortSignal;
@@ -65,12 +66,7 @@ export interface ProviderNoReplyTurn {
 
 export type ProviderTurnResult = ProviderCompletedTurn | ProviderDeferredTurn | ProviderNoReplyTurn;
 
-export interface ProviderBashOptions {
-  enabled: boolean;
-  workspacePath: string;
-  workspaceOnly: boolean;
-  blockedKeywords: string[];
-}
+export type ProviderBashOptions = WorkspaceBashProviderOptions;
 
 export interface ProviderWorkbenchFileOptions {
   read(input: unknown): Promise<unknown>;

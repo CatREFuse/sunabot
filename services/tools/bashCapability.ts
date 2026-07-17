@@ -22,20 +22,33 @@ export interface RuntimeToolCapabilities {
   codex: boolean;
 }
 
-export type RuntimeToolCapabilityResolver = () => Promise<RuntimeToolCapabilities>;
+export interface RuntimeToolCapabilityContext {
+  workspacePath: string;
+  workspaceBashBackend: BashExecutionBackend;
+  workspaceBashAuditAvailable: boolean;
+}
+
+export type RuntimeToolCapabilityResolver = (
+  context?: RuntimeToolCapabilityContext
+) => Promise<RuntimeToolCapabilities>;
+
+export type RuntimeToolCapabilitySnapshotResolver = () => Promise<RuntimeToolCapabilities>;
 
 export interface RuntimeToolCapabilityResolverOptions {
   getCodexStatus: () => Promise<{ installed: boolean; authenticated: boolean }>;
-  getWorkspaceBashCapability: () => Promise<boolean>;
+  getWorkspaceBashCapability: (context: RuntimeToolCapabilityContext) => Promise<boolean>;
 }
 
 export function createRuntimeToolCapabilityResolver(
   options: RuntimeToolCapabilityResolverOptions
 ): RuntimeToolCapabilityResolver {
-  return async () => {
+  return async (context) => {
+    const workspaceBashCapability = context?.workspaceBashAuditAvailable === true
+      ? options.getWorkspaceBashCapability(context)
+      : Promise.resolve(false);
     const [codex, workspaceBash] = await Promise.allSettled([
       options.getCodexStatus(),
-      options.getWorkspaceBashCapability()
+      workspaceBashCapability
     ]);
     return {
       codex: codex.status === "fulfilled" && codex.value.installed && codex.value.authenticated,

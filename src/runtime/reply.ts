@@ -121,7 +121,6 @@ import { errorMessage, isAbortError, isRuntimeIncomingMessage, sanitizeErrorDeta
 import { providerWorkbenchFilesForIncoming } from "./workbenchFiles.js";
 import {
   runtime_attachReplyReferences,
-  runtime_buildProviderBashOptions,
   runtime_buildRecentContextMessages,
   runtime_contextMessageLimit,
   runtime_generateImgReferenceContext,
@@ -131,6 +130,7 @@ import {
   runtime_loadQuoteReferences,
   runtime_refreshAttachmentCacheReferences,
   runtime_retainedConversationMessageLimit,
+  runtime_resolveProviderBashHandle,
   runtime_selectRelevantAttachments
 } from "./replyContext.js";
 import {
@@ -144,7 +144,6 @@ import * as systemConfigReply from "./systemConfigReply.js";
 export { runtime_replyToToolCompletion };
 export {
   runtime_attachReplyReferences,
-  runtime_buildProviderBashOptions,
   runtime_buildRecentContextMessages,
   runtime_contextMessageLimit,
   runtime_generateImgReferenceContext,
@@ -154,6 +153,7 @@ export {
   runtime_loadQuoteReferences,
   runtime_refreshAttachmentCacheReferences,
   runtime_retainedConversationMessageLimit,
+  runtime_resolveProviderBashHandle,
   runtime_selectRelevantAttachments
 };
 import type { SunaRuntime } from "../runtime.js";
@@ -344,13 +344,14 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
         response: { status: "running" },
         metadata: logContext
       });
-      const toolCapabilities = await this.resolveToolCapabilities();
+      const toolCapabilities = await this.resolveToolCapabilities(null);
+      const bash = await this.resolveProviderBashHandle(incoming, options.promptOverride);
       const turn = await this.completePromptTurn(provider, promptRequest, {
         signal: options.signal,
         modelRequestMaxRetries: this.config.normalReply.maxRetries,
         allowNoReply: true,
         workbenchFiles: providerWorkbenchFilesForIncoming(this.config, incoming, options.promptOverride),
-        bash: this.buildProviderBashOptions(incoming, toolCapabilities.workspaceBash),
+        bash,
         conversationAssets: this.conversationAssetProviderOptions(
           incoming,
           gateway,
@@ -743,6 +744,6 @@ export class RuntimeReply {
   contextMessageLimit(...args: Parameters<typeof runtime_contextMessageLimit>) { return runtime_contextMessageLimit.call(this.host, ...args); }
   retainedConversationMessageLimit(...args: Parameters<typeof runtime_retainedConversationMessageLimit>) { return runtime_retainedConversationMessageLimit.call(this.host, ...args); }
   groupReplyOptions(...args: Parameters<typeof runtime_groupReplyOptions>) { return runtime_groupReplyOptions.call(this.host, ...args); }
-  buildProviderBashOptions(...args: Parameters<typeof runtime_buildProviderBashOptions>) { return runtime_buildProviderBashOptions.call(this.host, ...args); }
+  resolveProviderBashHandle(...args: Parameters<typeof runtime_resolveProviderBashHandle>) { return runtime_resolveProviderBashHandle.call(this.host, ...args); }
   isAdminUser(...args: Parameters<typeof runtime_isAdminUser>) { return runtime_isAdminUser.call(this.host, ...args); }
 }

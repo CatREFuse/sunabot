@@ -47,6 +47,8 @@ Plana 的 `workspace/business/data/session-queue.sqlite` 与其他 Agent 的 `wo
 - `workspace/business/agents/<agentId>/extensions/mcp/servers.json`：schemaVersion 1 MCP 描述符索引，只保存受限命令、可审计参数和 `envKeys` 引用，不保存环境变量值；
 - `workspace/business/agents/<agentId>/`：Agent 人格、`selfie_prompt_rewrite.json`、可选 `system-prompts/` 覆盖、自拍参考图、私有数据和人工维护文件；
 - `workspace/business/agents/<agentId>/workbench/`：当前 Agent 的文件工具与 Bash 共用私有目录；内容不会自动进入模型请求，只有经过管理员私聊能力门禁和逐次路径、身份、类型及大小复验的文本文件可以按请求读取或原子写入；
+- Bash backend 只在当前 Agent 配置中持久化 `native`/`docker` 偏好；单调配置 epoch、审计结果、独立 Provider 实例、abort signal、审批票据与 capability 快照不持久化。一次性审批只在进程内保存并绑定 Agent、Bot 账号、transport、完整会话、用户、可选群号、命令摘要和精确只读外部文件身份；缺字段、过期、重放或绑定不一致均拒绝；
+- Provider 可执行 Bash options 只能由当前真实 OneBot 入站即时构造，必须在同一不可变配置快照中包含 epoch、backend、workbench、access mode、strict mode、独立 audit runner、`isCurrent` 和完整审批上下文。`isCurrent` 必须贯穿 Bash runner，并在所有文件身份 await、审批 issue/consume、隔离 probe 和最终 spawn 边界复验；旧 handle 以 `BASH_CONFIGURATION_STALE` 失败关闭且不得产生审批、探针或执行副作用。API catalog 的布尔 capability、模型返回参数和持久配置都不能单独升格为执行权限；
 - `workspace/business/media/`：需要随业务恢复的图片和持久附件；
 - `workspace/runtime/napcat/accounts/<accountId>/`：单个 QQ 的 NapCat Docker 配置、登录态、二维码、`account.env` 和运行标记；该目录只挂载给对应 NapCat 容器，不作为 Core 的媒体共享目录；
 - `workspace/runtime/napcat/accounts/<accountId>/manual-login-required`：用户从管理台退出该 QQ 后的临时标记；对应 NapCat 重启时据此跳过快速登录，扫码成功后自动删除；

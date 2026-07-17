@@ -64,8 +64,11 @@ import {
 import { BroadcastStormDetector } from "../../services/orchestration/public.js";
 import {
   createRuntimeToolCapabilityResolver,
-  createWorkspaceBashCapabilityProbe
+  createWorkspaceBashCapabilityProbe,
+  type RuntimeToolCapabilityResolver
 } from "../../services/tools/bashCapability.js";
+import type { RuntimeBashAuditPort } from "../../src/runtime/runtimeContracts.js";
+import { createBashAuditRuntimePort } from "./bashAuditRuntime.js";
 import {
   inspectMultiAgentMigrationGate,
   validateMultiAgentWorkspacePath
@@ -93,6 +96,8 @@ export interface CreateAppOptions {
   agentRegistry?: Pick<AgentRegistryOptions, "workspaceRoot" | "allowUnmarkedMigration">;
   accountRuntimeReconciler?: false | AccountRuntimeReconcilerPort;
   runtimeProbeClient?: false | RuntimeProbeClientPort;
+  bashAudit?: RuntimeBashAuditPort;
+  resolveToolCapabilities?: RuntimeToolCapabilityResolver;
 }
 
 export interface OneBotListenerAddress {
@@ -162,14 +167,17 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
     codexHome: getWorkspacePath(WORKSPACE_LAYOUT.codexHome),
     executable: process.env.SUNABOT_CODEX_EXECUTABLE
   });
-  const probeWorkspaceBash = createWorkspaceBashCapabilityProbe();
-  const toolCapabilitiesFor = (agentConfig: AppConfig) => createRuntimeToolCapabilityResolver({
+  const workspaceBashProbes = {
+    native: createWorkspaceBashCapabilityProbe({ backend: "native" }),
+    docker: createWorkspaceBashCapabilityProbe({ backend: "docker" })
+  };
+  const resolveToolCapabilities = options.resolveToolCapabilities ?? createRuntimeToolCapabilityResolver({
     getCodexStatus: () => codexAuth.status(),
-    getWorkspaceBashCapability: () => probeWorkspaceBash(
-      resolveProjectPath(agentConfig.persona.agentWorkspace) ?? getRootDir()
+    getWorkspaceBashCapability: (context) => workspaceBashProbes[context.workspaceBashBackend](
+      context.workspacePath
     )
   });
-  const resolveToolCapabilities = toolCapabilitiesFor(defaultAgentConfig);
+  const bashAudit = options.bashAudit ?? createBashAuditRuntimePort();
   let systemConfigService: SystemConfigService | undefined;
   const systemConfigRuntime: SystemConfigRuntimePort = {
     createTurn(context) {
@@ -178,12 +186,14 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
     }
   };
   const createRuntime = (agentConfig: AppConfig) => new SunaRuntime(agentConfig, {
-    resolveToolCapabilities: toolCapabilitiesFor(agentConfig),
+    resolveToolCapabilities,
+    bashAudit,
     systemConfig: systemConfigRuntime,
     replyTaskGate: broadcastStormDetector
   });
   const runtime = new SunaRuntime(defaultAgentConfig, {
     resolveToolCapabilities,
+    bashAudit,
     systemConfig: systemConfigRuntime,
     replyTaskGate: broadcastStormDetector
   });
@@ -508,7 +518,7 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
   });
   registerAgentToolRoutes(app, {
     agentFiles,
-    resolveToolCapabilities,
+    resolveToolCapabilities: () => runtime.resolveToolCapabilities(),
     resolveConversationAssetCapability: () => conversationAssetCapabilityFor(
       config.persona.defaultAgentId,
       onebotGateway,
@@ -520,7 +530,7 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
       return {
         config: agentRuntime.config,
         agentFiles: new AgentFileRepository({ runtime: agentRuntime }),
-        resolveToolCapabilities: toolCapabilitiesFor(agentRuntime.config),
+        resolveToolCapabilities: () => agentRuntime.resolveToolCapabilities(),
         resolveConversationAssetCapability: () => conversationAssetCapabilityFor(
           agentId,
           onebotGateway,
