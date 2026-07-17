@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppConfig, ConfigEnvelope, ConfigPatchResponse } from "../types";
+import { setActiveAgentId } from "./agentScope";
 import { ApiRequestError } from "./useAdminApi";
 import { useConfigWorkspace } from "./useConfigWorkspace";
 
@@ -69,212 +70,195 @@ function envelope(revision: string, adminName: string): ConfigEnvelope {
   return { revision, config: config(adminName), fieldStates: {} };
 }
 
-describe("useConfigWorkspace", () => {
-  beforeEach(() => { apiRequest.mockReset(); });
+function patched(revision: string, adminName: string, change?: (value: AppConfig) => void): ConfigPatchResponse {
+  const value = envelope(revision, adminName);
+  change?.(value.config);
+  return { ...value, applyMode: "hot" };
+}
 
-  it("keeps edits typed while a section save is in flight", async () => {
+describe("useConfigWorkspace", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    apiRequest.mockReset();
+    setActiveAgentId("plana");
+  });
+
+  afterEach(() => vi.useRealTimers());
+
+  it("auto-saves a section and preserves typing that happens in flight", async () => {
     const response = deferred<ConfigPatchResponse>();
     apiRequest.mockResolvedValueOnce(envelope("r1", "initial")).mockReturnValueOnce(response.promise);
     const workspace = useConfigWorkspace();
     await workspace.load();
     workspace.drafts.bot.adminName = "submitted";
 
-    const saving = workspace.save("bot");
+    await vi.advanceTimersByTimeAsync(350);
     workspace.drafts.bot.adminName = "typed while saving";
-    response.resolve({ ...envelope("r2", "submitted"), applyMode: "hot" });
-    await saving;
+    response.resolve(patched("r2", "submitted"));
+    await vi.advanceTimersByTimeAsync(350);
 
     expect(JSON.parse(String(apiRequest.mock.calls[1]?.[1]?.body)).value.adminName).toBe("submitted");
     expect(workspace.drafts.bot.adminName).toBe("typed while saving");
     expect(workspace.isDirty("bot")).toBe(true);
-    expect(workspace.state.bot.message).toBe("已保存，还有未保存的修改");
-    expect(workspace.envelope.value?.revision).toBe("r2");
+    workspace.cancel();
   });
 
-  it("retains a validation field returned by the server", async () => {
-    apiRequest.mockResolvedValueOnce(envelope("r1", "initial"));
+  it("serializes multi-section updates against the latest revision", async () => {
+    const first = deferred<ConfigPatchResponse>();
+    apiRequest
+      .mockResolvedValueOnce(envelope("r1", "initial"))
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValueOnce(patched("r3", "next", (value) => { value.bot.memory.messageThreshold = 64; }));
+    const workspace = useConfigWorkspace();
+    await workspace.load();
+    workspace.drafts.bot.adminName = "next";
+    workspace.drafts.memory.messageThreshold = 64;
+
+    await vi.advanceTimersByTimeAsync(350);
+    expect(apiRequest).toHaveBeenCalledTimes(2);
+    first.resolve(patched("r2", "next"));
+    await vi.runAllTimersAsync();
+    await Promise.resolve();
+
+    expect(apiRequest).toHaveBeenCalledTimes(3);
+    expect(JSON.parse(String(apiRequest.mock.calls[2]?.[1]?.body)).revision).toBe("r2");
+    expect(workspace.isDirty("bot")).toBe(false);
+    expect(workspace.isDirty("memory")).toBe(false);
+    workspace.cancel();
+  });
+
+  it("refreshes the revision and retries one time after a conflict", async () => {
+    apiRequest
+      .mockResolvedValueOnce(envelope("r1", "initial"))
+      .mockRejectedValueOnce(new ApiRequestError("配置已更新。", { status: 409, code: "CONFIG_REVISION_CONFLICT" }))
+      .mockResolvedValueOnce(envelope("r2", "server latest"))
+      .mockResolvedValueOnce(patched("r3", "local value"));
+    const workspace = useConfigWorkspace();
+    await workspace.load();
+    workspace.drafts.bot.adminName = "local value";
+
+    await vi.advanceTimersByTimeAsync(350);
+
+    expect(apiRequest).toHaveBeenCalledTimes(4);
+    expect(JSON.parse(String(apiRequest.mock.calls[1]?.[1]?.body)).revision).toBe("r1");
+    expect(JSON.parse(String(apiRequest.mock.calls[3]?.[1]?.body))).toMatchObject({
+      revision: "r2",
+      value: { adminName: "local value" }
+    });
+    expect(workspace.drafts.bot.adminName).toBe("local value");
+    expect(workspace.state.bot.kind).toBe("saved");
+    workspace.cancel();
+  });
+
+  it("stops after one conflict retry and retains the local input", async () => {
+    apiRequest
+      .mockResolvedValueOnce(envelope("r1", "initial"))
+      .mockRejectedValueOnce(new ApiRequestError("冲突。", { status: 409, code: "CONFIG_REVISION_CONFLICT" }))
+      .mockResolvedValueOnce(envelope("r2", "server latest"))
+      .mockRejectedValueOnce(new ApiRequestError("仍有冲突。", { status: 409, code: "CONFIG_REVISION_CONFLICT" }));
+    const workspace = useConfigWorkspace();
+    await workspace.load();
+    workspace.drafts.bot.adminName = "keep me";
+
+    await vi.advanceTimersByTimeAsync(350);
+
+    expect(apiRequest).toHaveBeenCalledTimes(4);
+    expect(workspace.state.bot.kind).toBe("conflict");
+    expect(workspace.drafts.bot.adminName).toBe("keep me");
+    expect(workspace.isDirty("bot")).toBe(true);
+    workspace.cancel();
+  });
+
+  it("retains validation errors and the field value in place", async () => {
+    apiRequest
+      .mockResolvedValueOnce(envelope("r1", "initial"))
+      .mockRejectedValueOnce(new ApiRequestError("管理员 QQ 必须是数字。", { status: 400, code: "CONFIG_INVALID", field: "bot.adminQq" }));
     const workspace = useConfigWorkspace();
     await workspace.load();
     workspace.drafts.bot.adminQq = "invalid";
-    apiRequest.mockRejectedValueOnce(new ApiRequestError("管理员 QQ 必须是数字。", { status: 400, code: "CONFIG_INVALID", field: "bot.adminQq" }));
 
-    await workspace.save("bot");
+    await vi.advanceTimersByTimeAsync(350);
+
     expect(workspace.state.bot).toMatchObject({ kind: "error", field: "bot.adminQq" });
+    expect(workspace.drafts.bot.adminQq).toBe("invalid");
+    expect(await workspace.flush()).toBe(false);
+    workspace.cancel();
   });
 
-  it("saves the shared normal reply retry limit as its own section", async () => {
-    apiRequest.mockResolvedValueOnce(envelope("r1", "initial"));
-    const workspace = useConfigWorkspace("system");
-    await workspace.load();
-    workspace.drafts.normalReply.maxRetries = 6;
-    const saved = envelope("r2", "initial");
-    saved.config.normalReply.maxRetries = 6;
-    apiRequest.mockResolvedValueOnce({ ...saved, applyMode: "hot" });
-
-    await workspace.save("normalReply");
-
-    expect(apiRequest).toHaveBeenNthCalledWith(2, "/api/config/normalReply", expect.objectContaining({
-      method: "PATCH"
-    }));
-    expect(JSON.parse(String(apiRequest.mock.calls[1]?.[1]?.body))).toMatchObject({
-      revision: "r1",
-      value: { maxRetries: 6 }
-    });
-    expect(workspace.isDirty("normalReply")).toBe(false);
-  });
-
-  it("normalizes missing tool overrides without creating a dirty draft", async () => {
-    const legacy = envelope("r1", "initial");
-    delete (legacy.config.bot.tools as Partial<AppConfig["bot"]["tools"]>).overrides;
-    apiRequest.mockResolvedValueOnce(legacy);
-    const workspace = useConfigWorkspace();
-
-    await workspace.load();
-
-    expect(workspace.drafts.tools.overrides).toEqual({});
-    expect(workspace.isDirty("tools")).toBe(false);
-  });
-
-  it("loads a legacy config without normal reply settings", async () => {
-    const legacy = envelope("r1", "initial");
-    delete (legacy.config as Partial<AppConfig>).normalReply;
-    apiRequest.mockResolvedValueOnce(legacy);
-    const workspace = useConfigWorkspace("system");
-
-    await workspace.load();
-
-    expect(workspace.drafts.normalReply).toEqual({ maxRetries: 3 });
-    expect(workspace.isDirty("normalReply")).toBe(false);
-  });
-
-  it("loads a legacy config without a group thread model", async () => {
-    const legacy = envelope("r1", "initial");
-    delete (legacy.config.bot.orchestrator as Partial<AppConfig["bot"]["orchestrator"]>).groupThreadModel;
-    apiRequest.mockResolvedValueOnce(legacy);
-    const workspace = useConfigWorkspace();
-
-    await workspace.load();
-
-    expect(workspace.drafts.orchestrator.groupThreadModel).toBe("gpt-5.4-mini");
-    expect(workspace.isDirty("orchestrator")).toBe(false);
-  });
-
-  it("loads a legacy Agent config with the default reply debounce time", async () => {
-    const legacy = envelope("r1", "initial");
-    delete (legacy.config.bot as Partial<AppConfig["bot"]>).replyDebounceMs;
-    apiRequest.mockResolvedValueOnce(legacy);
-    const workspace = useConfigWorkspace();
-
-    await workspace.load();
-
-    expect(workspace.drafts.bot.replyDebounceMs).toBe(5_000);
-    expect(workspace.isDirty("bot")).toBe(false);
-  });
-
-  it("loads a legacy Agent config with the default tone settings", async () => {
-    const legacy = envelope("r1", "initial");
-    delete (legacy.config.bot as Partial<AppConfig["bot"]>).tone;
-    apiRequest.mockResolvedValueOnce(legacy);
-    const workspace = useConfigWorkspace();
-
-    await workspace.load();
-
-    expect(workspace.drafts.tone).toMatchObject({
-      enabled: false,
-      providerId: "",
-      model: "gpt-5.4-mini",
-      maxRetries: 2
-    });
-    expect(workspace.isDirty("tone")).toBe(false);
-  });
-
-  it("saves tone settings as an Agent section", async () => {
-    apiRequest.mockResolvedValueOnce(envelope("r1", "initial"));
-    const workspace = useConfigWorkspace();
-    await workspace.load();
-    workspace.drafts.tone.enabled = true;
-    const saved = envelope("r2", "initial");
-    saved.config.bot.tone.enabled = true;
-    apiRequest.mockResolvedValueOnce({ ...saved, applyMode: "hot" });
-
-    await workspace.save("tone");
-
-    expect(apiRequest).toHaveBeenNthCalledWith(2, "/api/config/tone", expect.objectContaining({ method: "PATCH" }));
-    expect(JSON.parse(String(apiRequest.mock.calls[1]?.[1]?.body))).toMatchObject({
-      revision: "r1",
-      value: { enabled: true, model: "gpt-5.4-mini" }
-    });
-    expect(workspace.isDirty("tone")).toBe(false);
-  });
-
-  it("saves the linked user-group and orchestrator controls atomically", async () => {
+  it("auto-saves linked group reply fields atomically", async () => {
     apiRequest.mockResolvedValueOnce(envelope("r1", "initial"));
     const workspace = useConfigWorkspace();
     await workspace.load();
     workspace.drafts.onebot.autoReplyUserGroup = false;
     workspace.drafts.orchestrator.enabled = true;
-    workspace.drafts.orchestrator.recentMessageWindowMs = 90_000;
-    expect(workspace.isOneBotSettingsDirty()).toBe(false);
-    const saved = envelope("r2", "initial");
-    saved.config.onebot.autoReplyUserGroup = false;
-    saved.config.bot.orchestrator.enabled = true;
-    saved.config.bot.orchestrator.recentMessageWindowMs = 90_000;
-    apiRequest.mockResolvedValueOnce({ ...saved, applyMode: "hot" });
+    const saved = patched("r2", "initial", (value) => {
+      value.onebot.autoReplyUserGroup = false;
+      value.bot.orchestrator.enabled = true;
+    });
+    apiRequest.mockResolvedValueOnce(saved);
 
-    await workspace.saveGroupReply();
+    await vi.advanceTimersByTimeAsync(350);
 
-    expect(apiRequest).toHaveBeenNthCalledWith(2, "/api/config/group-reply", expect.objectContaining({
-      method: "PATCH"
-    }));
+    expect(apiRequest).toHaveBeenNthCalledWith(2, "/api/config/group-reply?agentId=plana", expect.objectContaining({ method: "PATCH" }));
     expect(JSON.parse(String(apiRequest.mock.calls[1]?.[1]?.body))).toMatchObject({
       revision: "r1",
-      value: {
-        enabled: false,
-        orchestrator: { enabled: true, recentMessageWindowMs: 90_000 }
-      }
+      value: { enabled: false, orchestrator: { enabled: true } }
     });
     expect(workspace.isGroupReplyDirty()).toBe(false);
-    expect(workspace.state.orchestrator.kind).toBe("saved");
+    workspace.cancel();
   });
 
-  it("keeps reply behavior and OneBot connection drafts independently discardable", async () => {
+  it("flushes a pending system setting without waiting for the debounce", async () => {
+    apiRequest.mockResolvedValueOnce(envelope("r1", "initial"));
+    const workspace = useConfigWorkspace("system");
+    await workspace.load();
+    workspace.drafts.normalReply.maxRetries = 6;
+    apiRequest.mockResolvedValueOnce(patched("r2", "initial", (value) => { value.normalReply.maxRetries = 6; }));
+
+    await expect(workspace.flush()).resolves.toBe(true);
+
+    expect(apiRequest).toHaveBeenNthCalledWith(2, "/api/config/normalReply", expect.objectContaining({ method: "PATCH" }));
+    expect(JSON.parse(String(apiRequest.mock.calls[1]?.[1]?.body))).toMatchObject({
+      revision: "r1",
+      value: { maxRetries: 6 }
+    });
+    workspace.cancel();
+  });
+
+  it("cancels queued writes before loading another Agent context", async () => {
     apiRequest.mockResolvedValueOnce(envelope("r1", "initial"));
     const workspace = useConfigWorkspace();
     await workspace.load();
+    workspace.drafts.bot.adminName = "old Agent pending";
+    setActiveAgentId("arona");
+    apiRequest.mockResolvedValueOnce(envelope("arona-r1", "arona"));
 
-    workspace.drafts.onebot.autoReplyPrivate = false;
-    workspace.drafts.onebot.mentionNames = ["普拉娜"];
-    workspace.drafts.onebot.reverseWsPath = "/next/ws";
-    expect(workspace.isReplyBehaviorDirty()).toBe(true);
-    expect(workspace.isOneBotConnectionDirty()).toBe(true);
+    await workspace.load();
+    await vi.runAllTimersAsync();
 
-    workspace.discardReplyBehavior();
-    expect(workspace.drafts.onebot.autoReplyPrivate).toBe(true);
-    expect(workspace.drafts.onebot.mentionNames).toEqual([]);
-    expect(workspace.drafts.onebot.reverseWsPath).toBe("/next/ws");
-    expect(workspace.isReplyBehaviorDirty()).toBe(false);
-    expect(workspace.isOneBotConnectionDirty()).toBe(true);
-
-    workspace.discardOneBotConnection();
-    expect(workspace.drafts.onebot.reverseWsPath).toBe("/onebot/v11/ws");
-    expect(workspace.isOneBotConnectionDirty()).toBe(false);
+    expect(apiRequest).toHaveBeenCalledTimes(2);
+    expect(apiRequest.mock.calls[1]?.[0]).toBe("/api/config?agentId=arona");
+    expect(workspace.drafts.bot.adminName).toBe("arona");
+    workspace.cancel();
   });
 
-  it("loads the server version for a conflicted section while preserving other dirty sections", async () => {
-    apiRequest.mockResolvedValueOnce(envelope("r1", "initial"));
+  it("normalizes legacy defaults without creating auto-save work", async () => {
+    const legacy = envelope("r1", "initial");
+    delete (legacy.config as Partial<AppConfig>).normalReply;
+    delete (legacy.config.bot as Partial<AppConfig["bot"]>).replyDebounceMs;
+    delete (legacy.config.bot as Partial<AppConfig["bot"]>).tone;
+    delete (legacy.config.bot.tools as Partial<AppConfig["bot"]["tools"]>).overrides;
+    apiRequest.mockResolvedValueOnce(legacy);
     const workspace = useConfigWorkspace();
-    await workspace.load();
-    workspace.drafts.bot.adminName = "local conflict";
-    workspace.drafts.memory.messageThreshold = 99;
-    apiRequest.mockRejectedValueOnce(new ApiRequestError("配置已更新。", { status: 409, code: "CONFIG_REVISION_CONFLICT" }));
-    await workspace.save("bot");
-    expect(workspace.state.bot.kind).toBe("conflict");
 
-    apiRequest.mockResolvedValueOnce(envelope("r2", "server latest"));
-    await workspace.load({ preserveDirty: true, discardDirtySection: "bot" });
-    expect(workspace.drafts.bot.adminName).toBe("server latest");
-    expect(workspace.isDirty("bot")).toBe(false);
-    expect(workspace.drafts.memory.messageThreshold).toBe(99);
-    expect(workspace.isDirty("memory")).toBe(true);
+    await workspace.load();
+    await vi.runAllTimersAsync();
+
+    expect(workspace.drafts.normalReply).toEqual({ maxRetries: 3 });
+    expect(workspace.drafts.bot.replyDebounceMs).toBe(5_000);
+    expect(workspace.drafts.tone).toMatchObject({ enabled: false, providerId: "", maxRetries: 2 });
+    expect(workspace.drafts.tools.overrides).toEqual({});
+    expect(apiRequest).toHaveBeenCalledTimes(1);
+    workspace.cancel();
   });
 });

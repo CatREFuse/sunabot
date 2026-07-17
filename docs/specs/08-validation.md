@@ -8,6 +8,8 @@
 
 受限工具 response preflight 专项必须以 OpenAI Responses、Codex Responses、Chat Completions、Anthropic Messages 和 Gemini generateContent 五种协议分别覆盖 `system_config`、`send_file`、`read_file`、`write_file` 与 `workspace_bash`。每种协议都要证明非空 sibling assistant 文本在 callback 前整份拒绝；受限工具与 inline、deferred、`no_reply` 或 `assistant_text` 混批时，`onAssistantText`、`onToolCall`、文件端口、Bash runner、配置执行、deferred/terminal 接受和 outbox 均为零。staged `system_config` 后续响应必须只 discard 一次 mutation 再返回拒绝输出；普通非受限工具与 sibling text 仍须保持既有 callback 与工具执行行为。直接调用共享 executor 也要复用相同批次门禁，防止绕过协议适配层。
 
+Agent 与系统设置的自动同步回归必须覆盖同分区连续输入合并、多分区串行提交、每次请求使用前一响应的最新 revision、409 刷新 revision 后只重试一次、第二次冲突停止、服务端校验与网络失败保留当前输入并定位字段、Agent 切换取消旧上下文请求、路由离开 flush 成功或失败留页、Bark 密文占位与清除语义，以及页面没有通用保存、放弃和未保存离页确认。提示词正文必须继续显式保存并保留冲突恢复与离页保护。桌面和移动端 light/dark 视觉检查需覆盖等待同步、已同步和就地错误状态。
+
 交付前必须通过：
 
 ```bash
@@ -29,7 +31,7 @@ Tone 专项验收矩阵：
 | 独立参数 | 多 Agent 分别选择默认/显式 Provider、目录/自定义模型、推理强度、Temperature、Token 上限和重试次数，并提交全部边界值 | `bot.tone` 按 Agent 隔离并热更新；空 Provider 跟随默认；非法 Provider、模型参数或范围定位到 tone 字段；协议只发送自身支持的生成参数 |
 | 文本与媒体 | 同一回复同时包含正文和 URL/filePath 图片，另有 `send_file` 任务 | 只替换 text；图片对象与引用逐字段不变并留在同一 `assistant_reply` payload；文件保持独立 `conversation_asset` outbox 和同会话 FIFO |
 | 失败关闭 | 模型空输出、超时、取消、Provider 失败和重试耗尽；tone 使 `dispatch_message` 超过 200 字；`system_config` tone 失败 | 不发送原文、不创建可投递的普通回复；deferred 不派发；held outbox 与配置提交均为零；错误处理不得递归产生 tone 旁路 |
-| 管理台 | 桌面与移动端、light/dark、Agent 切换、保存/放弃/冲突、提示词深链 | “语气处理”字段完整、响应式布局正常、状态与目标 Agent 一致，`conversation.tone-rewrite` 可编辑 |
+| 管理台 | 桌面与移动端、light/dark、Agent 切换、自动同步/冲突/失败、提示词深链 | “语气处理”字段完整、响应式布局正常、状态与目标 Agent 一致，配置自动同步且 `conversation.tone-rewrite` 继续显式编辑保存 |
 
 回复防抖专项验收矩阵：
 
@@ -37,7 +39,7 @@ Tone 专项验收矩阵：
 | --- | --- | --- |
 | 路由覆盖 | 私聊、群聊命令、明确 @、唤醒词和群聊 ambient 编排器肯定结果 | 所有入口使用同一条当前 Agent 配置的尾随防抖链路；默认 5 秒；ambient 在编排器确认后开始计时；截止前不执行命令或调用主回复 Provider |
 | 尾随重置 | 首条触发后，同一发送者在配置窗口内连续发送普通文本、图片、附件或引用消息 | 每条合法消息都按当前 Agent 生效的防抖时间重置截止时间；重复重置只产生一个真实回复事件和一次最终外发 |
-| Agent 设置与热更新 | 在不同 Agent 分别保存 1、5、60 秒，提交 0.5、0、61 秒等边界输入，并在候选等待期间修改设置 | 管理台只读写当前 Agent 的 `bot.replyDebounceMs`，合法值按毫秒保存并热更新；越界值定位到该字段；无新输入的已落盘候选保持原 `availableAt`，新候选与后续 reset 使用新值 |
+| Agent 设置与热更新 | 在不同 Agent 分别输入 1、5、60 秒，提交 0.5、0、61 秒等边界输入，并在候选等待期间修改设置 | 管理台只读写当前 Agent 的 `bot.replyDebounceMs`，合法值按毫秒自动同步并热更新；越界值定位到该字段且保留当前输入；无新输入的已落盘候选保持原 `availableAt`，新候选与后续 reset 使用新值 |
 | 首触发固定 | 后续消息包含新的命令、@ 或不同引用 | route、真实 current user 输入、幂等键和最终引用目标仍指向首条触发消息；后续消息只扩展上下文和截止时间 |
 | 引用冻结 | 首触发时分别启用/关闭引用，等待期切换开关、命令排除名单或 group exclusion，并覆盖 Provider 运行中、SQLite reopen、deferred acknowledgement/callback 和 timeout/error | initial、命令、deferred 与错误外发都只使用首触发 `ReplyQuoteSnapshotV1`；on→off、off→on 与排除名单变化不能漂移引用；显式 none 也必须编码，当前 target 缺失或损坏 gate/quote 时失败关闭且不能读取热配置 |
 | 命令冻结 | 首触发通过 mention alias 或 persona name 命中命令，等待期删除旧名、启用新名并分别重启；普通 direct 首触发后才启用可命中名称 | 命令按冻结 stable ID、args 和 rawText 恢复并只执行一次，不重新匹配热名称；direct 不晋升；未知 ID、缺失/错位 invocation、超限字段、原文不一致、额外可执行字段在 Provider 和 handler 前失败关闭 |

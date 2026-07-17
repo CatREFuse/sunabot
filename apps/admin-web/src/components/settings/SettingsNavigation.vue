@@ -4,7 +4,6 @@ import type { SettingsSectionKey } from "../../types";
 defineProps<{
   current: SettingsSectionKey;
   sections: Array<{ id: SettingsSectionKey; label: string; group: string; icon: string }>;
-  dirty: (key: SettingsSectionKey) => boolean;
 }>();
 const emit = defineEmits<{ select: [key: SettingsSectionKey] }>();
 </script>
@@ -22,7 +21,6 @@ const emit = defineEmits<{ select: [key: SettingsSectionKey] }>();
         >
           <i class="bx text-lg" :class="section.icon" aria-hidden="true"></i>
           <span class="text-sm">{{ section.label }}</span>
-          <span v-if="dirty(section.id)" class="ml-auto font-mono text-[10px] text-warning"><i class="bx bx-edit" aria-hidden="true"></i></span>
         </button>
       </template>
     </nav>
@@ -32,7 +30,7 @@ const emit = defineEmits<{ select: [key: SettingsSectionKey] }>();
     <span class="field-label">设置分区</span>
     <select :value="current" class="control" @change="emit('select', ($event.target as HTMLSelectElement).value as SettingsSectionKey)">
       <optgroup v-for="group in [...new Set(sections.map((section) => section.group))]" :key="group" :label="group">
-        <option v-for="section in sections.filter((item) => item.group === group)" :key="section.id" :value="section.id">{{ section.label }}{{ dirty(section.id) ? " · 未保存" : "" }}</option>
+        <option v-for="section in sections.filter((item) => item.group === group)" :key="section.id" :value="section.id">{{ section.label }}</option>
       </optgroup>
     </select>
   </label>

@@ -159,12 +159,6 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     await page.getByRole("button", { name: "工具权限", exact: true }).click();
     await expect(page.getByRole("heading", { name: "工具权限", exact: true })).toBeVisible();
     await capture(page, viewport.name, theme, "conversation-settings-tools");
-    await page.getByRole("button", { name: "回复", exact: true }).click();
-    state.nextConversationError = "回复设置保存失败";
-    await page.getByLabel("允许回复", { exact: true }).uncheck();
-    await page.getByRole("button", { name: "保存", exact: true }).click();
-    await expect(page.getByText("回复设置保存失败", { exact: true })).toBeVisible();
-    await capture(page, viewport.name, theme, "conversations-save-error");
 
     await page.goto("/web-chat");
     await expect(page.getByRole("heading", { name: "与普拉娜对话", exact: true })).toBeVisible();
@@ -282,7 +276,6 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     await expect(page.getByLabel("启动时间 / 秒")).toHaveValue("60");
     await page.getByLabel("启动时间 / 秒").scrollIntoViewIfNeeded();
     await capture(page, viewport.name, theme, "settings-orchestrator-disabled");
-    await page.getByRole("button", { name: "放弃", exact: true }).click();
 
     await page.goto("/agent-settings/tone");
     await expect(page.getByRole("heading", { name: "语气处理" })).toBeVisible();
@@ -309,10 +302,8 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     await expect(page.getByRole("heading", { name: "命令执行" })).toBeVisible();
     await page.getByLabel("允许群聊").check({ force: true });
     state.nextPatchError = "群聊命令需要管理员限制。";
-    await page.getByRole("button", { name: "保存", exact: true }).click();
     await expect(page.getByText(/群聊命令需要管理员限制/)).toBeVisible();
     await capture(page, viewport.name, theme, "settings-validation-error");
-    await page.getByRole("button", { name: "放弃", exact: true }).click();
 
     await page.goto("/settings/onebot");
     await expect(page.getByRole("heading", { name: "通知与连接监控" })).toBeVisible();
@@ -327,10 +318,10 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     await expect(page.getByLabel("过滤名单")).toBeVisible();
     await capture(page, viewport.name, theme, "settings-reply-behavior");
     await page.getByLabel("管理员称呼").fill("新的管理员称呼");
-    await page.getByRole("link", { name: "状态", exact: true }).click();
-    await expect(page.getByRole("button", { name: "保存并离开" })).toBeVisible();
-    await capture(page, viewport.name, theme, "settings-unsaved-leave");
-    await page.getByRole("button", { name: "继续编辑" }).click();
+    await expect.poll(() => state.config.bot.adminName).toBe("新的管理员称呼");
+    await expect(page.getByText("已同步", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "保存", exact: true })).toHaveCount(0);
+    await capture(page, viewport.name, theme, "settings-auto-save");
 
     await page.goto("/memory");
     await expect(page.getByRole("heading", { name: "记忆", exact: true })).toBeVisible();

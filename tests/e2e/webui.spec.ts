@@ -426,7 +426,7 @@ test("Provider 创建时固定类型并支持模型拉取与多模态探测", as
   await expect(page.getByText("支持图片", { exact: true }).last()).toBeVisible();
 });
 
-test("模型下拉目录、推理强度联动与分区保存", async ({ page }) => {
+test("模型下拉目录、推理强度联动与自动同步", async ({ page }) => {
   const state = await installMockApi(page);
   await page.goto("/settings/providers");
 
@@ -455,16 +455,15 @@ test("模型下拉目录、推理强度联动与分区保存", async ({ page }) 
   await expect(effortSelect.locator("option")).toHaveText(["low", "medium", "high", "xhigh", "max", "ultra"]);
   await effortSelect.selectOption("ultra");
   await page.getByLabel("名称").fill("Codex Primary");
-  await page.getByRole("button", { name: "保存", exact: true }).click();
 
-  await expect.poll(() => state.patchRequests.length).toBe(1);
-  expect(state.patchRequests[0]?.section).toBe("providers");
+  await expect.poll(() => state.config.providers.items[0]?.label).toBe("Codex Primary");
+  expect(state.patchRequests.at(-1)?.section).toBe("providers");
   expect(state.config.providers.items[0]).toMatchObject({
     label: "Codex Primary",
     model: "gpt-5.6-sol",
     reasoningEffort: "ultra"
   });
-  await expect(page.getByText("已保存", { exact: true })).toBeVisible();
+  await expect(page.getByText("已同步", { exact: true })).toBeVisible();
 
   await page.goto("/agent-settings/tools");
   await page.getByRole("tab", { name: "运行参数", exact: true }).click();
@@ -475,19 +474,17 @@ test("模型下拉目录、推理强度联动与分区保存", async ({ page }) 
   await expect(page.getByLabel("默认质量")).toHaveValue("high");
   await codexModelSelect.selectOption("gpt-5.5");
   await page.getByLabel("默认质量").selectOption("auto");
-  await page.getByRole("button", { name: "保存", exact: true }).click();
 
-  await expect.poll(() => state.patchRequests.length).toBe(2);
-  expect(state.patchRequests[1]?.section).toBe("tools");
+  await expect.poll(() => state.config.bot.tools.codex.model).toBe("gpt-5.5");
+  expect(state.patchRequests.at(-1)?.section).toBe("tools");
   expect(state.config.bot.tools.codex.model).toBe("gpt-5.5");
   expect(state.config.bot.tools.generateImg.quality).toBe("auto");
 
   await page.getByRole("button", { name: "添加 Key" }).click();
   await page.getByLabel("Tavily API Key 1").fill("tvly-e2e-secret-1234567890");
   await expect(page.getByLabel("Tavily Key 环境变量")).toHaveValue("TAVILY_API_KEY");
-  await page.getByRole("button", { name: "保存", exact: true }).click();
 
-  await expect.poll(() => state.patchRequests.length).toBe(3);
+  await expect.poll(() => state.config.bot.tools.websearch.tavilyApiKeys).toEqual(["tvly-e2e-secret-1234567890"]);
   expect(state.config.bot.tools.websearch.tavilyApiKeys).toEqual(["tvly-e2e-secret-1234567890"]);
   await expect(page.getByLabel("Tavily API Key 1")).toHaveCount(0);
   await expect(page.getByText("1 个已保存", { exact: true })).toBeVisible();
@@ -495,15 +492,11 @@ test("模型下拉目录、推理强度联动与分区保存", async ({ page }) 
 
   await page.getByRole("button", { name: "添加 Key" }).click();
   await page.getByLabel("Tavily API Key 1").fill("tvly-e2e-secret-2-1234567890");
-  await page.getByRole("button", { name: "保存", exact: true }).click();
-  await expect.poll(() => state.patchRequests.length).toBe(4);
-  expect(state.config.bot.tools.websearch.tavilyApiKeys).toHaveLength(2);
+  await expect.poll(() => state.config.bot.tools.websearch.tavilyApiKeys).toHaveLength(2);
 
   await page.getByRole("button", { name: "删除 Key 1" }).click();
   await expect(page.getByText("待删除", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "保存", exact: true }).click();
-  await expect.poll(() => state.patchRequests.length).toBe(5);
-  expect(state.config.bot.tools.websearch.tavilyApiKeys).toEqual(["tvly-e2e-secret-2-1234567890"]);
+  await expect.poll(() => state.config.bot.tools.websearch.tavilyApiKeys).toEqual(["tvly-e2e-secret-2-1234567890"]);
 });
 
 test("防抖时间、回复开关、名称和命令前缀只在回复行为分区编辑", async ({ page }) => {
@@ -521,10 +514,9 @@ test("防抖时间、回复开关、名称和命令前缀只在回复行为分�
   await page.getByLabel("过滤名单").fill("20001, 20002, 20001");
   await page.getByLabel("名称").fill("普拉娜, Plana, Arona");
   await page.getByLabel("命令前缀").fill("/suna, /sunabot");
-  await page.getByRole("button", { name: "保存", exact: true }).click();
 
-  await expect.poll(() => state.patchRequests.length).toBe(2);
-  expect(state.patchRequests.map((request) => request.section)).toEqual(["bot", "onebot"]);
+  await expect.poll(() => state.config.onebot.commandPrefixes).toEqual(["/suna", "/sunabot"]);
+  expect(new Set(state.patchRequests.map((request) => request.section))).toEqual(new Set(["bot", "onebot"]));
   expect(state.config.bot.replyDebounceMs).toBe(7_500);
   expect(state.config.bot.quoteGroupReplyExcludedUserIds).toEqual(["20001", "20002"]);
   expect(state.config.onebot).toMatchObject({
@@ -554,10 +546,9 @@ test("Agent 可独立配置语气处理并打开提示词", async ({ page }) => 
   await page.getByLabel("随机性（Temperature）").fill("1.1");
   await page.getByLabel("最大输出 Token").fill("3200");
   await page.getByLabel("失败重试次数").fill("4");
-  await page.getByRole("button", { name: "保存", exact: true }).click();
 
-  await expect.poll(() => state.patchRequests.length).toBe(1);
-  expect(state.patchRequests[0]?.section).toBe("tone");
+  await expect.poll(() => state.config.bot.tone.maxRetries).toBe(4);
+  expect(state.patchRequests.at(-1)?.section).toBe("tone");
   expect(state.config.bot.tone).toMatchObject({
     enabled: true,
     providerId: "codex",
@@ -591,10 +582,9 @@ test("系统设置可配置广播风暴嗅探参数", async ({ page }) => {
   await page.getByLabel("回复次数").fill("6");
   await page.getByLabel("静默时长（分钟）").fill("7");
   await page.getByLabel("补充嗅探账号").fill("10001, 20002");
-  await page.getByRole("button", { name: "保存", exact: true }).click();
 
-  await expect.poll(() => state.patchRequests.length).toBe(1);
-  expect(state.patchRequests[0]).toMatchObject({
+  await expect.poll(() => state.config.broadcastStorm.cooldownMinutes).toBe(7);
+  expect(state.patchRequests.at(-1)).toMatchObject({
     section: "broadcastStorm",
     body: {
       value: {
@@ -623,10 +613,9 @@ test("系统设置可配置正常回复重试次数", async ({ page }) => {
   await expect(page.getByLabel("失败重试次数")).toHaveValue("3");
 
   await page.getByLabel("失败重试次数").fill("6");
-  await page.getByRole("button", { name: "保存", exact: true }).click();
 
-  await expect.poll(() => state.patchRequests.length).toBe(1);
-  expect(state.patchRequests[0]).toMatchObject({
+  await expect.poll(() => state.config.normalReply.maxRetries).toBe(6);
+  expect(state.patchRequests.at(-1)).toMatchObject({
     section: "normalReply",
     body: { value: { maxRetries: 6 } }
   });
@@ -642,6 +631,26 @@ test("旧版系统配置缺少回复重试时仍可打开设置页", async ({ pa
   await expect(page.getByRole("heading", { name: "正常回复" })).toBeVisible();
   await expect(page.getByLabel("失败重试次数")).toHaveValue("3");
   await expect(page.getByText('"undefined" is not valid JSON', { exact: true })).toHaveCount(0);
+});
+
+test("连接监控自动同步且失败时保留当前输入", async ({ page }) => {
+  const state = await installMockApi(page);
+  await page.goto("/settings/onebot");
+
+  await page.getByLabel("聚合窗口（秒）").fill("90");
+  await page.getByLabel("服务运行状态").uncheck();
+  await page.getByLabel("Bark URL", { exact: true }).fill("https://api.day.app/example-device");
+
+  await expect.poll(() => state.monitoringSettings.aggregationWindowSeconds).toBe(90);
+  expect(state.monitoringSettings.serverEventsEnabled).toBe(false);
+  expect(state.monitoringSettings.barkConfigured).toBe(true);
+  await expect(page.getByRole("button", { name: "保存监控设置" })).toHaveCount(0);
+  await expect(page.locator("span.inline-state").filter({ hasText: "已配置" })).toBeVisible();
+
+  state.nextMonitoringError = "聚合窗口无效。";
+  await page.getByLabel("聚合窗口（秒）").fill("91");
+  await expect(page.getByText("聚合窗口无效。", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("聚合窗口（秒）")).toHaveValue("91");
 });
 
 test("配置医生独立检查、显式 AI 诊断并只提交方案标识", async ({ page }) => {
@@ -770,9 +779,8 @@ test("工具目录支持启停、全局说明和继承说明恢复", async ({ pa
   const defaultDescription = await dialog.getByLabel("模型描述").inputValue();
   await dialog.getByLabel("模型描述").fill("在多轮任务中及时同步当前进展。");
   await dialog.getByRole("button", { name: "关闭工具详情" }).click();
-  await page.getByRole("button", { name: "保存", exact: true }).click();
 
-  await expect.poll(() => state.patchRequests.length).toBe(1);
+  await expect.poll(() => state.config.bot.tools.overrides.assistant_text?.description).toBe("在多轮任务中及时同步当前进展。");
   expect(state.patchRequests[0]?.section).toBe("tools");
   expect(state.config.bot.tools.overrides).toMatchObject({
     assistant_text: { description: "在多轮任务中及时同步当前进展。" },
@@ -785,9 +793,8 @@ test("工具目录支持启停、全局说明和继承说明恢复", async ({ pa
   await dialog.getByRole("button", { name: "恢复继承说明" }).click();
   await expect(dialog.getByLabel("模型描述")).toHaveValue(defaultDescription);
   await dialog.getByRole("button", { name: "关闭工具详情" }).click();
-  await page.getByRole("button", { name: "保存", exact: true }).click();
 
-  await expect.poll(() => state.patchRequests.length).toBe(2);
+  await expect.poll(() => state.config.bot.tools.overrides.assistant_text?.description).toBeUndefined();
   expect(state.config.bot.tools.overrides.assistant_text?.description).toBeUndefined();
   expect(state.config.bot.tools.overrides.websearch).toEqual({ enabled: false });
 
@@ -811,18 +818,15 @@ test("no_reply 与回复行为共用戳一戳设置", async ({ page }) => {
   let dialog = page.getByRole("dialog", { name: "静默结束" });
   await dialog.getByLabel("no_reply 时戳一戳").check();
   await dialog.getByRole("button", { name: "关闭工具详情" }).click();
-  await page.getByRole("button", { name: "保存", exact: true }).click();
 
-  await expect.poll(() => state.patchRequests.length).toBe(1);
+  await expect.poll(() => state.config.bot.pokeOnNoReply).toBe(true);
   expect(state.patchRequests[0]?.section).toBe("bot");
   expect(state.config.bot.pokeOnNoReply).toBe(true);
 
   await page.goto("/agent-settings/bot");
   await expect(page.getByLabel("no_reply 时戳一戳")).toBeChecked();
   await page.getByLabel("no_reply 时戳一戳").uncheck();
-  await page.getByRole("button", { name: "保存", exact: true }).click();
-  await expect.poll(() => state.patchRequests.length).toBe(2);
-  expect(state.config.bot.pokeOnNoReply).toBe(false);
+  await expect.poll(() => state.config.bot.pokeOnNoReply).toBe(false);
 
   await page.goto("/agent-settings/tools");
   await page.getByRole("button", { name: "查看 静默结束 详情" }).click();
@@ -1305,40 +1309,25 @@ test("弹层约束焦点、支持 Escape 并恢复触发位置", async ({ page }
   await expect(trigger).toBeFocused();
 });
 
-test("设置离开确认支持继续编辑、保存或放弃修改", async ({ page }) => {
+test("设置自动同步、离开时刷新队列并在失败时保留输入", async ({ page }) => {
   const state = await installMockApi(page);
   await page.goto("/agent-settings/bot");
   await page.getByLabel("管理员称呼").fill("新的管理员称呼");
 
   await page.getByRole("link", { name: "状态", exact: true }).click();
-  const dialog = page.getByRole("dialog", { name: "放弃未保存的设置？" });
-  await expect(dialog).toBeVisible();
-  await page.getByRole("button", { name: "继续编辑" }).click();
-  await expect(page).toHaveURL(/\/agent-settings\/bot$/);
-  await expect(page.getByLabel("管理员称呼")).toHaveValue("新的管理员称呼");
-
-  await page.getByRole("link", { name: "状态", exact: true }).click();
-  await page.getByRole("button", { name: "保存并离开" }).click();
   await expect(page).toHaveURL(/\/overview$/);
+  await expect.poll(() => state.config.bot.adminName).toBe("新的管理员称呼");
+  await expect(page.getByRole("dialog", { name: "放弃未保存的设置？" })).toHaveCount(0);
 
   await page.goto("/agent-settings/bot");
   await expect(page.getByLabel("管理员称呼")).toHaveValue("新的管理员称呼");
-  await page.getByLabel("管理员称呼").fill("放弃的管理员称呼");
-  await page.getByRole("link", { name: "状态", exact: true }).click();
-  await page.getByRole("button", { name: "放弃并离开" }).click();
-  await expect(page).toHaveURL(/\/overview$/);
-
-  await page.goto("/agent-settings/bot");
-  await page.getByLabel("管理员称呼").fill("保存失败时保留");
   state.nextPatchError = "管理员称呼保存失败。";
+  await page.getByLabel("管理员称呼").fill("保存失败时保留");
   await page.getByRole("link", { name: "状态", exact: true }).click();
-  await page.getByRole("button", { name: "保存并离开" }).click();
   await expect(page).toHaveURL(/\/agent-settings\/bot$/);
-  const failedSaveDialog = page.getByRole("dialog", { name: "放弃未保存的设置？" });
-  await expect(failedSaveDialog).toBeVisible();
-  await expect(failedSaveDialog.getByText("管理员称呼保存失败。", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "继续编辑" }).click();
+  await expect(page.getByText("管理员称呼保存失败。", { exact: true })).toBeVisible();
   await expect(page.getByLabel("管理员称呼")).toHaveValue("保存失败时保留");
+  await expect(page.getByRole("button", { name: "保存", exact: true })).toHaveCount(0);
 });
 
 test("图像页提供自拍参考图、历史、预览、下载和可见错误", async ({ page }) => {

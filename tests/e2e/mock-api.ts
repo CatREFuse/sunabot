@@ -363,6 +363,16 @@ export interface MockApiState {
   adminPassword: string;
   passwordChanges: Array<{ currentPassword: string; newPassword: string; confirmPassword: string }>;
   nextPatchError: string;
+  nextMonitoringError: string;
+  monitoringSettings: {
+    barkConfigured: boolean;
+    aggregationWindowSeconds: number;
+    onebotOfflineGraceSeconds: number;
+    heartbeatStaleSeconds: number;
+    serverEventsEnabled: boolean;
+    onebotEventsEnabled: boolean;
+  };
+  monitoringWrites: Array<Record<string, unknown>>;
   nextConversationError: string;
   imageHistoryError: string;
   qqOnline: boolean;
@@ -412,6 +422,16 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
     adminPassword: options.requiredToken || "session-secret",
     passwordChanges: [],
     nextPatchError: "",
+    nextMonitoringError: "",
+    monitoringSettings: {
+      barkConfigured: false,
+      aggregationWindowSeconds: 60,
+      onebotOfflineGraceSeconds: 20,
+      heartbeatStaleSeconds: 120,
+      serverEventsEnabled: true,
+      onebotEventsEnabled: true
+    },
+    monitoringWrites: [],
     nextConversationError: "",
     imageHistoryError: "",
     qqOnline: true,
@@ -914,17 +934,22 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
     }
 
     if (pathname === "/api/monitoring/settings") {
-      const current = {
-        barkConfigured: false,
-        aggregationWindowSeconds: 60,
-        onebotOfflineGraceSeconds: 20,
-        heartbeatStaleSeconds: 120,
-        serverEventsEnabled: true,
-        onebotEventsEnabled: true
-      };
-      if (method === "GET") return json(route, current);
-      const body = request.postDataJSON() as Partial<typeof current>;
-      return json(route, { ...current, ...body });
+      if (method === "GET") return json(route, state.monitoringSettings);
+      const body = request.postDataJSON() as Record<string, unknown>;
+      state.monitoringWrites.push(body);
+      if (state.nextMonitoringError) {
+        const message = state.nextMonitoringError;
+        state.nextMonitoringError = "";
+        return json(route, { error: { code: "MONITORING_INVALID", message } }, 400);
+      }
+      if (typeof body.aggregationWindowSeconds === "number") state.monitoringSettings.aggregationWindowSeconds = body.aggregationWindowSeconds;
+      if (typeof body.onebotOfflineGraceSeconds === "number") state.monitoringSettings.onebotOfflineGraceSeconds = body.onebotOfflineGraceSeconds;
+      if (typeof body.heartbeatStaleSeconds === "number") state.monitoringSettings.heartbeatStaleSeconds = body.heartbeatStaleSeconds;
+      if (typeof body.serverEventsEnabled === "boolean") state.monitoringSettings.serverEventsEnabled = body.serverEventsEnabled;
+      if (typeof body.onebotEventsEnabled === "boolean") state.monitoringSettings.onebotEventsEnabled = body.onebotEventsEnabled;
+      if (typeof body.barkUrl === "string" && body.barkUrl.trim()) state.monitoringSettings.barkConfigured = true;
+      if (body.clearBarkUrl === true) state.monitoringSettings.barkConfigured = false;
+      return json(route, state.monitoringSettings);
     }
     if (pathname === "/api/monitoring/test") return json(route, { ok: true });
 
@@ -1737,6 +1762,11 @@ function applySection(config: typeof initialConfig, section: string, value: unkn
   }
   if (section === "persona") {
     Object.assign(config.persona, next);
+    return;
+  }
+  if (section === "group-reply") {
+    config.onebot.autoReplyUserGroup = Boolean(next.enabled);
+    Object.assign(config.bot.orchestrator, next.orchestrator as typeof config.bot.orchestrator);
     return;
   }
   if (section === "bot") {

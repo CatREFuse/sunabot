@@ -1,4 +1,13 @@
-import { reactive, readonly, shallowRef, toRaw } from "vue";
+import {
+  getCurrentScope,
+  onScopeDispose,
+  reactive,
+  readonly,
+  shallowRef,
+  toRaw,
+  watch
+} from "vue";
+import { activeAgentId } from "./agentScope";
 import { ApiRequestError, apiRequest, apiRequestUnscoped } from "./useAdminApi";
 import type {
   AppConfig,
@@ -9,9 +18,13 @@ import type {
 } from "../types";
 
 type SectionDrafts = { [K in ConfigSectionKey]: ConfigSectionValueMap[K] };
-type StateKind = "idle" | "saving" | "saved" | "error" | "conflict" | "restart";
+type StateKind = "idle" | "waiting" | "saving" | "saved" | "error" | "conflict" | "restart";
+type SaveTarget = ConfigSectionKey | "groupReply";
 interface SectionState { kind: StateKind; message: string; field?: string }
+interface RequestContext { generation: number; agentId: string; signal: AbortSignal }
 export type ConfigWorkspaceScope = "agent" | "system";
+
+const AUTO_SAVE_DELAY_MS = 350;
 
 const emptyConfig: AppConfig = {
   schemaVersion: 1,
@@ -99,206 +112,353 @@ const emptyConfig: AppConfig = {
   }
 };
 
-const envelope = shallowRef<ConfigEnvelope | null>(null);
-const loading = shallowRef(false);
-const state = reactive<Record<ConfigSectionKey, SectionState>>({
-  server: idle(), persona: idle(), providers: idle(), normalReply: idle(), bot: idle(), tone: idle(), memory: idle(),
-  broadcastStorm: idle(), orchestrator: idle(), tools: idle(), bash: idle(), onebot: idle()
-});
-const drafts = reactive<SectionDrafts>(valuesFromConfig(emptyConfig));
-const baselines = reactive<SectionDrafts>(valuesFromConfig(emptyConfig));
+export const sectionKeys: ConfigSectionKey[] = [
+  "server",
+  "persona",
+  "providers",
+  "broadcastStorm",
+  "normalReply",
+  "bot",
+  "tone",
+  "memory",
+  "orchestrator",
+  "tools",
+  "bash",
+  "onebot"
+];
 
-async function load(
-  options: { preserveDirty?: boolean; discardDirtySection?: ConfigSectionKey } = {},
-  scope: ConfigWorkspaceScope = "agent"
-) {
-  const dirtyBefore = new Map<ConfigSectionKey, boolean>();
-  const savedDrafts = new Map<ConfigSectionKey, unknown>();
+export function useConfigWorkspace(scope: ConfigWorkspaceScope = "agent") {
+  const envelope = shallowRef<ConfigEnvelope | null>(null);
+  const loading = shallowRef(false);
+  const state = reactive<Record<ConfigSectionKey, SectionState>>({
+    server: idle(), persona: idle(), providers: idle(), normalReply: idle(), bot: idle(), tone: idle(), memory: idle(),
+    broadcastStorm: idle(), orchestrator: idle(), tools: idle(), bash: idle(), onebot: idle()
+  });
+  const drafts = reactive<SectionDrafts>(valuesFromConfig(emptyConfig));
+  const baselines = reactive<SectionDrafts>(valuesFromConfig(emptyConfig));
+  const pendingTargets = new Set<SaveTarget>();
+  let loaded = false;
+  let suppressWatch = false;
+  let generation = 0;
+  let contextAgentId = scope === "agent" ? activeAgentId() : "";
+  let contextController = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let drainPromise: Promise<void> | undefined;
+
   for (const key of sectionKeys) {
-    dirtyBefore.set(key, isDirty(key));
-    savedDrafts.set(key, clone(drafts[key]));
+    watch(
+      () => drafts[key],
+      () => {
+        if (!loaded || suppressWatch) return;
+        scheduleForSection(key);
+      },
+      { deep: true, flush: "sync" }
+    );
   }
-  loading.value = true;
-  try {
-    const result = await requestFor(scope)<ConfigEnvelope>("/api/config");
-    envelope.value = result;
-    const values = valuesFromConfig(result.config);
-    for (const key of sectionKeys) {
-      setSection(baselines, key, values[key]);
-      if (options.preserveDirty && key !== options.discardDirtySection && dirtyBefore.get(key)) setSection(drafts, key, savedDrafts.get(key) as SectionDrafts[typeof key]);
-      else setSection(drafts, key, values[key]);
-      state[key] = idle();
-    }
-  } finally {
-    loading.value = false;
-  }
-}
 
-async function save<K extends ConfigSectionKey>(key: K, scope: ConfigWorkspaceScope = "agent") {
-  const current = envelope.value;
-  if (!current) return;
-  const submittedDraft = clone(drafts[key]);
-  if (key === "onebot") {
-    (submittedDraft as SectionDrafts["onebot"]).autoReplyUserGroup = baselines.onebot.autoReplyUserGroup;
-  }
-  state[key] = { kind: "saving", message: "保存中" };
-  try {
-    const result = await requestFor(scope)<ConfigPatchResponse>(`/api/config/${key}`, {
-      method: "PATCH",
-      body: JSON.stringify({ revision: current.revision, value: submittedDraft })
-    });
-    const dirtyBefore = new Map(sectionKeys.map((section) => [section, isDirty(section)]));
-    const savedDrafts = new Map(sectionKeys.map((section) => [section, clone(drafts[section])]));
-    envelope.value = result;
-    const values = valuesFromConfig(result.config);
-    for (const section of sectionKeys) {
-      setSection(baselines, section, values[section]);
-      if (section === key) {
-        const currentDraft = savedDrafts.get(section) as SectionDrafts[typeof section];
-        const unchangedSinceSubmit = JSON.stringify(currentDraft) === JSON.stringify(submittedDraft);
-        setSection(drafts, section, unchangedSinceSubmit ? values[section] : currentDraft);
-      } else if (!dirtyBefore.get(section)) {
-        setSection(drafts, section, values[section]);
-      } else {
-        setSection(drafts, section, savedDrafts.get(section) as SectionDrafts[typeof section]);
-      }
+  if (getCurrentScope()) onScopeDispose(cancel);
+
+  async function load(options: { preserveDirty?: boolean } = {}) {
+    const dirtyBefore = new Map(sectionKeys.map((key) => [key, isDirty(key)]));
+    const savedDrafts = new Map(sectionKeys.map((key) => [key, clone(drafts[key])]));
+    beginContext();
+    const context = currentContext();
+    loading.value = true;
+    try {
+      const result = await request<ConfigEnvelope>(context, "/api/config");
+      if (!isCurrent(context)) return;
+      applyLoadedEnvelope(result, options.preserveDirty ? dirtyBefore : undefined, savedDrafts);
+      loaded = true;
+      if (options.preserveDirty) scheduleAllDirty();
+    } catch (caught) {
+      if (isAbort(caught) || !isCurrent(context)) return;
+      throw caught;
+    } finally {
+      if (isCurrent(context)) loading.value = false;
     }
+  }
+
+  function scheduleForSection(key: ConfigSectionKey) {
+    if (key === "orchestrator") {
+      schedule("groupReply");
+      return;
+    }
+    if (key === "onebot") {
+      if (drafts.onebot.autoReplyUserGroup !== baselines.onebot.autoReplyUserGroup) schedule("groupReply");
+      if (isReplyBehaviorDirty() || isOneBotConnectionDirty()) schedule("onebot");
+      return;
+    }
+    schedule(key);
+  }
+
+  function schedule(target: SaveTarget) {
+    if (!targetDirty(target)) return;
+    pendingTargets.add(target);
+    const key = stateKey(target);
+    if (state[key].kind !== "saving") state[key] = { kind: "waiting", message: "等待同步" };
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      timer = undefined;
+      void startDrain();
+    }, AUTO_SAVE_DELAY_MS);
+  }
+
+  function scheduleAllDirty() {
+    for (const key of sectionKeys) scheduleForSection(key);
+  }
+
+  function startDrain() {
+    if (drainPromise) return drainPromise;
+    const context = currentContext();
+    const running = drain(context).finally(() => {
+      if (drainPromise === running) drainPromise = undefined;
+    });
+    drainPromise = running;
+    return running;
+  }
+
+  async function drain(context: RequestContext) {
+    while (isCurrent(context) && pendingTargets.size > 0) {
+      const [target] = pendingTargets;
+      if (!target) return;
+      pendingTargets.delete(target);
+      if (!targetDirty(target)) {
+        const key = stateKey(target);
+        if (state[key].kind === "waiting") state[key] = idle();
+        continue;
+      }
+      await saveTarget(target, context);
+    }
+  }
+
+  async function saveTarget(target: SaveTarget, context: RequestContext) {
+    const current = envelope.value;
+    if (!current || !isCurrent(context)) return;
+    const submitted = target === "groupReply"
+      ? {
+          enabled: drafts.onebot.autoReplyUserGroup,
+          orchestrator: clone(drafts.orchestrator)
+        }
+      : submittedSection(target);
+    const key = stateKey(target);
+    state[key] = { kind: "saving", message: "正在同步" };
+    try {
+      let result: ConfigPatchResponse;
+      try {
+        result = await patchTarget(target, submitted, current.revision, context);
+      } catch (caught) {
+        if (!(caught instanceof ApiRequestError) || caught.status !== 409) throw caught;
+        await refreshRevision(context);
+        if (!isCurrent(context) || !envelope.value) return;
+        result = await patchTarget(target, submitted, envelope.value.revision, context);
+      }
+      if (!isCurrent(context)) return;
+      applySaveResult(target, submitted, result);
+    } catch (caught) {
+      if (isAbort(caught) || !isCurrent(context)) return;
+      state[key] = caught instanceof ApiRequestError && caught.status === 409
+        ? { kind: "conflict", message: "同步冲突，请修改后重试" }
+        : {
+            kind: "error",
+            message: caught instanceof Error ? caught.message : "同步失败",
+            ...(caught instanceof ApiRequestError && caught.field ? { field: caught.field } : {})
+          };
+    }
+  }
+
+  function submittedSection<K extends ConfigSectionKey>(key: K) {
+    const submitted = clone(drafts[key]);
+    if (key === "onebot") {
+      (submitted as SectionDrafts["onebot"]).autoReplyUserGroup = baselines.onebot.autoReplyUserGroup;
+    }
+    return submitted;
+  }
+
+  function patchTarget(target: SaveTarget, submitted: unknown, revision: string, context: RequestContext) {
+    const path = target === "groupReply" ? "/api/config/group-reply" : `/api/config/${target}`;
+    return request<ConfigPatchResponse>(context, path, {
+      method: "PATCH",
+      body: JSON.stringify({ revision, value: submitted })
+    });
+  }
+
+  async function refreshRevision(context: RequestContext) {
+    const result = await request<ConfigEnvelope>(context, "/api/config");
+    if (!isCurrent(context)) return;
+    const dirtyBefore = new Map(sectionKeys.map((key) => [key, isDirty(key)]));
+    const savedDrafts = new Map(sectionKeys.map((key) => [key, clone(drafts[key])]));
+    applyLoadedEnvelope(result, dirtyBefore, savedDrafts, false);
+  }
+
+  function applyLoadedEnvelope(
+    result: ConfigEnvelope,
+    dirtyBefore?: Map<ConfigSectionKey, boolean>,
+    savedDrafts = new Map<ConfigSectionKey, unknown>(),
+    resetState = true
+  ) {
+    const values = valuesFromConfig(result.config);
+    suppressWatch = true;
+    try {
+      envelope.value = result;
+      for (const key of sectionKeys) {
+        setSection(baselines, key, values[key]);
+        if (dirtyBefore?.get(key)) setSection(drafts, key, savedDrafts.get(key) as SectionDrafts[typeof key]);
+        else setSection(drafts, key, values[key]);
+        if (resetState) state[key] = idle();
+      }
+    } finally {
+      suppressWatch = false;
+    }
+  }
+
+  function applySaveResult(target: SaveTarget, submitted: unknown, result: ConfigPatchResponse) {
+    const dirtyBefore = new Map(sectionKeys.map((key) => [key, isDirty(key)]));
+    const savedDrafts = new Map(sectionKeys.map((key) => [key, clone(drafts[key])]));
+    const values = valuesFromConfig(result.config);
+    suppressWatch = true;
+    try {
+      envelope.value = result;
+      for (const section of sectionKeys) {
+        setSection(baselines, section, values[section]);
+        if (target === "groupReply" && section === "orchestrator") {
+          const currentDraft = savedDrafts.get(section) as SectionDrafts["orchestrator"];
+          const submittedDraft = (submitted as { orchestrator: SectionDrafts["orchestrator"] }).orchestrator;
+          setSection(drafts, section, same(currentDraft, submittedDraft) ? values[section] : currentDraft);
+        } else if (target === "groupReply" && section === "onebot") {
+          const currentDraft = savedDrafts.get(section) as SectionDrafts["onebot"];
+          const nextDraft = clone(currentDraft);
+          if (currentDraft.autoReplyUserGroup === (submitted as { enabled: boolean }).enabled) {
+            nextDraft.autoReplyUserGroup = values.onebot.autoReplyUserGroup;
+          }
+          setSection(drafts, section, nextDraft);
+        } else if (target !== "groupReply" && section === target) {
+          const currentDraft = savedDrafts.get(section) as SectionDrafts[typeof section];
+          setSection(drafts, section, same(currentDraft, submitted) ? values[section] : currentDraft);
+        } else if (dirtyBefore.get(section)) {
+          setSection(drafts, section, savedDrafts.get(section) as SectionDrafts[typeof section]);
+        } else {
+          setSection(drafts, section, values[section]);
+        }
+      }
+    } finally {
+      suppressWatch = false;
+    }
+    const key = stateKey(target);
+    const hasNewEdits = targetDirty(target);
     const restart = result.applyMode === "restart" || Boolean(result.restartRequiredFields?.length);
-    const hasNewEdits = key === "onebot" ? isOneBotSettingsDirty() : isDirty(key);
     state[key] = restart
-      ? { kind: "restart", message: hasNewEdits ? "已保存，重启后生效；还有未保存的修改" : "已保存，重启后生效" }
+      ? { kind: "restart", message: hasNewEdits ? "已同步，重启后生效；正在同步后续修改" : "已同步，重启后生效" }
       : hasNewEdits
-        ? { kind: "idle", message: "已保存，还有未保存的修改" }
-        : { kind: "saved", message: "已保存" };
-  } catch (caught) {
-    if (caught instanceof ApiRequestError && caught.status === 409) {
-      state[key] = { kind: "conflict", message: "设置已更新，请加载最新内容" };
-    } else {
-      state[key] = {
-        kind: "error",
-        message: caught instanceof Error ? caught.message : "保存失败",
-        ...(caught instanceof ApiRequestError && caught.field ? { field: caught.field } : {})
-      };
-    }
+        ? { kind: "waiting", message: "正在同步后续修改" }
+        : { kind: "saved", message: "已同步" };
   }
-}
 
-async function saveGroupReply(scope: ConfigWorkspaceScope = "agent") {
-  const current = envelope.value;
-  if (!current) return;
-  const submittedOrchestrator = clone(drafts.orchestrator);
-  const submittedEnabled = drafts.onebot.autoReplyUserGroup;
-  state.orchestrator = { kind: "saving", message: "保存中" };
-  try {
-    const result = await requestFor(scope)<ConfigPatchResponse>("/api/config/group-reply", {
-      method: "PATCH",
-      body: JSON.stringify({
-        revision: current.revision,
-        value: {
-          enabled: submittedEnabled,
-          orchestrator: submittedOrchestrator
-        }
-      })
+  async function flush() {
+    if (!loaded) return true;
+    if (timer) {
+      clearTimeout(timer);
+      timer = undefined;
+    }
+    scheduleAllDirty();
+    if (timer) {
+      clearTimeout(timer);
+      timer = undefined;
+    }
+    await startDrain();
+    return !sectionKeys.some((key) => isDirty(key));
+  }
+
+  function cancel() {
+    generation += 1;
+    loaded = false;
+    pendingTargets.clear();
+    if (timer) clearTimeout(timer);
+    timer = undefined;
+    contextController.abort();
+    contextController = new AbortController();
+    drainPromise = undefined;
+  }
+
+  function beginContext() {
+    cancel();
+    contextAgentId = scope === "agent" ? activeAgentId() : "";
+  }
+
+  function currentContext(): RequestContext {
+    return {
+      generation,
+      agentId: contextAgentId,
+      signal: contextController.signal
+    };
+  }
+
+  function isCurrent(context: RequestContext) {
+    return context.generation === generation
+      && context.agentId === contextAgentId
+      && !context.signal.aborted;
+  }
+
+  function request<T>(context: RequestContext, path: string, init: RequestInit = {}) {
+    if (scope === "system") return apiRequestUnscoped<T>(path, { ...init, signal: context.signal });
+    const separator = path.includes("?") ? "&" : "?";
+    return apiRequest<T>(`${path}${separator}agentId=${encodeURIComponent(context.agentId)}`, {
+      ...init,
+      signal: context.signal
     });
-    const dirtyBefore = new Map(sectionKeys.map((section) => [section, isDirty(section)]));
-    const savedDrafts = new Map(sectionKeys.map((section) => [section, clone(drafts[section])]));
-    envelope.value = result;
-    const values = valuesFromConfig(result.config);
-    for (const section of sectionKeys) {
-      setSection(baselines, section, values[section]);
-      if (section === "orchestrator") {
-        const currentDraft = savedDrafts.get(section) as SectionDrafts["orchestrator"];
-        const unchangedSinceSubmit = JSON.stringify(currentDraft) === JSON.stringify(submittedOrchestrator);
-        setSection(drafts, section, unchangedSinceSubmit ? values[section] : currentDraft);
-      } else if (section === "onebot") {
-        const currentDraft = savedDrafts.get(section) as SectionDrafts["onebot"];
-        const nextDraft = clone(currentDraft);
-        if (currentDraft.autoReplyUserGroup === submittedEnabled) {
-          nextDraft.autoReplyUserGroup = values.onebot.autoReplyUserGroup;
-        }
-        setSection(drafts, section, nextDraft);
-      } else if (!dirtyBefore.get(section)) {
-        setSection(drafts, section, values[section]);
-      } else {
-        setSection(drafts, section, savedDrafts.get(section) as SectionDrafts[typeof section]);
-      }
-    }
-    const hasNewEdits = isGroupReplyDirty();
-    state.orchestrator = hasNewEdits
-      ? { kind: "idle", message: "已保存，还有未保存的修改" }
-      : { kind: "saved", message: "已保存" };
-  } catch (caught) {
-    if (caught instanceof ApiRequestError && caught.status === 409) {
-      state.orchestrator = { kind: "conflict", message: "设置已更新，请加载最新内容" };
-    } else {
-      state.orchestrator = {
-        kind: "error",
-        message: caught instanceof Error ? caught.message : "保存失败",
-        ...(caught instanceof ApiRequestError && caught.field ? { field: caught.field } : {})
-      };
-    }
   }
-}
 
-function discard(key: ConfigSectionKey) {
-  const groupEnabled = drafts.onebot.autoReplyUserGroup;
-  setSection(drafts, key, baselines[key]);
-  if (key === "onebot") drafts.onebot.autoReplyUserGroup = groupEnabled;
-  state[key] = idle();
-}
+  function targetDirty(target: SaveTarget) {
+    return target === "groupReply" ? isGroupReplyDirty() : isDirty(target);
+  }
 
-function isDirty(key: ConfigSectionKey) {
-  return JSON.stringify(drafts[key]) !== JSON.stringify(baselines[key]);
-}
+  function stateKey(target: SaveTarget): ConfigSectionKey {
+    return target === "groupReply" ? "orchestrator" : target;
+  }
 
-function isGroupReplyDirty() {
-  return isDirty("orchestrator") ||
-    drafts.onebot.autoReplyUserGroup !== baselines.onebot.autoReplyUserGroup;
-}
+  function isDirty(key: ConfigSectionKey) {
+    return !same(drafts[key], baselines[key]);
+  }
 
-function isOneBotSettingsDirty() {
-  return isReplyBehaviorDirty() || isOneBotConnectionDirty();
-}
+  function isGroupReplyDirty() {
+    return isDirty("orchestrator")
+      || drafts.onebot.autoReplyUserGroup !== baselines.onebot.autoReplyUserGroup;
+  }
 
-function isReplyBehaviorDirty() {
-  return drafts.onebot.autoReplyPrivate !== baselines.onebot.autoReplyPrivate ||
-    drafts.onebot.autoReplyBotGroup !== baselines.onebot.autoReplyBotGroup ||
-    JSON.stringify(drafts.onebot.mentionNames) !== JSON.stringify(baselines.onebot.mentionNames) ||
-    JSON.stringify(drafts.onebot.commandPrefixes) !== JSON.stringify(baselines.onebot.commandPrefixes);
-}
+  function isOneBotSettingsDirty() {
+    return isReplyBehaviorDirty() || isOneBotConnectionDirty();
+  }
 
-function isNoReplyPokeDirty() {
-  return drafts.bot.pokeOnNoReply !== baselines.bot.pokeOnNoReply;
-}
+  function isReplyBehaviorDirty() {
+    return drafts.onebot.autoReplyPrivate !== baselines.onebot.autoReplyPrivate
+      || drafts.onebot.autoReplyBotGroup !== baselines.onebot.autoReplyBotGroup
+      || !same(drafts.onebot.mentionNames, baselines.onebot.mentionNames)
+      || !same(drafts.onebot.commandPrefixes, baselines.onebot.commandPrefixes);
+  }
 
-function discardNoReplyPoke() {
-  drafts.bot.pokeOnNoReply = baselines.bot.pokeOnNoReply;
-  state.bot = idle();
-}
+  function isNoReplyPokeDirty() {
+    return drafts.bot.pokeOnNoReply !== baselines.bot.pokeOnNoReply;
+  }
 
-function isOneBotConnectionDirty() {
-  return drafts.onebot.reverseWsPath !== baselines.onebot.reverseWsPath ||
-    drafts.onebot.accessTokenEnv !== baselines.onebot.accessTokenEnv;
-}
+  function isOneBotConnectionDirty() {
+    return drafts.onebot.reverseWsPath !== baselines.onebot.reverseWsPath
+      || drafts.onebot.accessTokenEnv !== baselines.onebot.accessTokenEnv;
+  }
 
-function discardReplyBehavior() {
-  drafts.onebot.autoReplyPrivate = baselines.onebot.autoReplyPrivate;
-  drafts.onebot.autoReplyBotGroup = baselines.onebot.autoReplyBotGroup;
-  drafts.onebot.mentionNames = clone(baselines.onebot.mentionNames);
-  drafts.onebot.commandPrefixes = clone(baselines.onebot.commandPrefixes);
-  state.onebot = idle();
-}
-
-function discardOneBotConnection() {
-  drafts.onebot.reverseWsPath = baselines.onebot.reverseWsPath;
-  drafts.onebot.accessTokenEnv = baselines.onebot.accessTokenEnv;
-  state.onebot = idle();
-}
-
-function discardGroupReply() {
-  setSection(drafts, "orchestrator", baselines.orchestrator);
-  drafts.onebot.autoReplyUserGroup = baselines.onebot.autoReplyUserGroup;
-  state.orchestrator = idle();
+  return {
+    envelope: readonly(envelope),
+    drafts,
+    state,
+    loading: readonly(loading),
+    load,
+    flush,
+    cancel,
+    isDirty,
+    isGroupReplyDirty,
+    isOneBotSettingsDirty,
+    isReplyBehaviorDirty,
+    isNoReplyPokeDirty,
+    isOneBotConnectionDirty
+  };
 }
 
 function valuesFromConfig(config: AppConfig): SectionDrafts {
@@ -352,35 +512,14 @@ function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(toRaw(value))) as T;
 }
 
+function same(left: unknown, right: unknown) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
 function idle() {
   return { kind: "idle" as const, message: "" };
 }
 
-export const sectionKeys: ConfigSectionKey[] = ["server", "persona", "providers", "broadcastStorm", "normalReply", "bot", "tone", "memory", "orchestrator", "tools", "bash", "onebot"];
-
-function requestFor(scope: ConfigWorkspaceScope) {
-  return scope === "system" ? apiRequestUnscoped : apiRequest;
-}
-
-export function useConfigWorkspace(scope: ConfigWorkspaceScope = "agent") {
-  return {
-    envelope: readonly(envelope),
-    drafts,
-    state,
-    loading: readonly(loading),
-    load: (options?: { preserveDirty?: boolean; discardDirtySection?: ConfigSectionKey }) => load(options, scope),
-    save: <K extends ConfigSectionKey>(key: K) => save(key, scope),
-    saveGroupReply: () => saveGroupReply(scope),
-    discard,
-    discardGroupReply,
-    isDirty,
-    isGroupReplyDirty,
-    isOneBotSettingsDirty,
-    isReplyBehaviorDirty,
-    isNoReplyPokeDirty,
-    isOneBotConnectionDirty,
-    discardNoReplyPoke,
-    discardReplyBehavior,
-    discardOneBotConnection
-  };
+function isAbort(error: unknown) {
+  return error instanceof DOMException && error.name === "AbortError";
 }
