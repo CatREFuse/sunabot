@@ -39,8 +39,11 @@ export function useAgentExtensions() {
     loading.value = true;
     error.value = "";
     try {
-      const [nextOverview, nextRuntime, nextApprovals] = await Promise.all([
-        apiRequest<AgentExtensionOverview>(`/api/agent-extensions?agentId=${encodeURIComponent(agentId)}`),
+      const nextOverview = await apiRequest<AgentExtensionOverview>(
+        `/api/agent-extensions?agentId=${encodeURIComponent(agentId)}`
+      );
+      if (!isCurrentLoad(agentId, generation)) return false;
+      const [nextRuntime, nextApprovals] = await Promise.all([
         apiRequest<McpRuntimeStatus>(`/api/agent-extensions/mcp/runtime/status?agentId=${encodeURIComponent(agentId)}`)
           .then((value) => ({ value, error: "" }))
           .catch(() => ({ value: { servers: [] } as McpRuntimeStatus, error: "MCP 运行状态读取失败" })),

@@ -194,6 +194,7 @@ export async function parentBoundExclusiveWrite(input: {
   faultAt?: "before_response";
   workerFailureMode?: ParentBoundWorkerFailureMode;
   workerTimeoutMs?: number;
+  allowParentCtimeChange?: boolean;
 }) {
   return runParentBoundMutation({
     parent: input.parent,
@@ -207,7 +208,8 @@ export async function parentBoundExclusiveWrite(input: {
       responseMode: input.workerFailureMode ?? null
     },
     hook: input.hook,
-    timeoutMs: input.workerTimeoutMs
+    timeoutMs: input.workerTimeoutMs,
+    allowParentCtimeChange: input.allowParentCtimeChange
   });
 }
 
@@ -465,6 +467,7 @@ export async function parentBoundUnlink(input: {
   hook?: ParentBoundMutationHook;
   workerFailureMode?: ParentBoundWorkerFailureMode;
   workerTimeoutMs?: number;
+  allowParentCtimeChange?: boolean;
 }) {
   const target = splitBoundPath(input.filePath);
   return runParentBoundMutation({
@@ -479,7 +482,8 @@ export async function parentBoundUnlink(input: {
       responseMode: input.workerFailureMode ?? null
     },
     hook: input.hook,
-    timeoutMs: input.workerTimeoutMs
+    timeoutMs: input.workerTimeoutMs,
+    allowParentCtimeChange: input.allowParentCtimeChange
   });
 }
 
@@ -493,6 +497,7 @@ export async function parentBoundReleaseLock(input: {
   pauseAt?: ParentBoundReleaseLockPause;
   workerFailureMode?: ParentBoundWorkerFailureMode;
   workerTimeoutMs?: number;
+  allowParentCtimeChange?: boolean;
 }) {
   const source = splitBoundPath(input.source);
   const destination = splitBoundPath(input.tombstone);
@@ -514,7 +519,8 @@ export async function parentBoundReleaseLock(input: {
       responseMode: input.workerFailureMode ?? null
     },
     hook: input.hook,
-    timeoutMs: input.workerTimeoutMs
+    timeoutMs: input.workerTimeoutMs,
+    allowParentCtimeChange: input.allowParentCtimeChange
   });
 }
 

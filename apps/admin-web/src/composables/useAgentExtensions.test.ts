@@ -10,10 +10,11 @@ describe("useAgentExtensions", () => {
     apiRequest.mockReset();
   });
 
-  it("loads the Agent overview, runtime state and approval queue together", async () => {
+  it("loads the Agent overview before runtime state and approval queue", async () => {
+    const overview = deferred<ReturnType<typeof emptyOverview>>();
     apiRequest.mockImplementation(async (path: string) => {
       if (path === "/api/agent-extensions?agentId=agent-a") {
-        return { schemaVersion: 1, agentId: "agent-a", skills: [], mcp: { servers: [], secrets: { configuredKeys: [], missingKeys: [] } } };
+        return overview.promise;
       }
       if (path.includes("/runtime/status")) return { servers: [{ serverId: "server-a", status: "ready", toolCatalogStatus: "ready" }] };
       if (path.includes("/runtime/approvals")) return { approvals: [{ id: "ticket-a" }] };
@@ -21,7 +22,11 @@ describe("useAgentExtensions", () => {
     });
     const state = useAgentExtensions();
 
-    await state.load("agent-a");
+    const loading = state.load("agent-a");
+    await Promise.resolve();
+    expect(apiRequest).toHaveBeenCalledTimes(1);
+    overview.resolve(emptyOverview("agent-a"));
+    await loading;
 
     expect(state.overview.value?.agentId).toBe("agent-a");
     expect(state.runtime.value.servers[0]?.serverId).toBe("server-a");
@@ -183,7 +188,7 @@ describe("useAgentExtensions", () => {
 
     expect(state.message.value).toBe("Skill 已卸载");
     expect(state.error.value).toBe("操作已完成，扩展刷新失败，请手动刷新。");
-    expect(apiRequest).toHaveBeenCalledTimes(4);
+    expect(apiRequest).toHaveBeenCalledTimes(2);
   });
 
   it("reports a copy skip without claiming that the Skill was migrated", async () => {

@@ -8,6 +8,7 @@ import {
   parentBoundCreateIfMissing,
   parentBoundExclusiveWrite,
   parentBoundMkdir,
+  parentBoundReleaseLock,
   parentBoundRename,
   parentBoundUnlink,
   runParentBoundMutation
@@ -344,6 +345,53 @@ describe("parent-bound filesystem mutation", () => {
     await expect(fs.access(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
     expect(await lockTombstones(parent)).toEqual([]);
     expect(releaseWorkers).toBe(1);
+  });
+
+  it("allows independent sibling locks to be acquired and released concurrently", async () => {
+    const parent = await privateDirectory();
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const [indexLock, copyLock] = await Promise.all([
+        acquireFileLock(path.join(parent, ".index.lock")),
+        acquireFileLock(path.join(parent, ".copy.lock"))
+      ]);
+      await Promise.all([indexLock.close(), copyLock.close()]);
+      await expect(fs.access(path.join(parent, ".index.lock")))
+        .rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.access(path.join(parent, ".copy.lock")))
+        .rejects.toMatchObject({ code: "ENOENT" });
+      expect(await lockTombstones(parent)).toEqual([]);
+    }
+  });
+
+  it("keeps lock mutations bound to the same parent when sibling entries change its ctime", async () => {
+    const parent = await privateDirectory();
+    const lockPath = path.join(parent, ".index.lock");
+    const tombstone = path.join(parent, ".extension-lock-tombstone-test");
+    const acquireIdentity = await pinDirectoryIdentity(parent, parent);
+    await fs.writeFile(path.join(parent, ".copy.lock"), "sibling\n", { mode: 0o600 });
+
+    await parentBoundExclusiveWrite({
+      parent,
+      parentIdentity: acquireIdentity,
+      name: path.basename(lockPath),
+      content: Buffer.from("owner\n"),
+      allowParentCtimeChange: true
+    });
+
+    const releaseIdentity = await pinDirectoryIdentity(parent, parent);
+    const lockIdentity = await fs.lstat(lockPath, { bigint: true });
+    await fs.writeFile(path.join(parent, ".runtime.lock"), "sibling\n", { mode: 0o600 });
+    await parentBoundReleaseLock({
+      source: lockPath,
+      tombstone,
+      parentIdentity: releaseIdentity,
+      expectedSource: lockIdentity,
+      allowParentCtimeChange: true
+    });
+
+    await expect(fs.access(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.access(tombstone)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it.each(["pause_before_response", "truncate_response"])(

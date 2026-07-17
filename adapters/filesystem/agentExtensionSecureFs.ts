@@ -262,7 +262,7 @@ export async function acquireFileLock(
           content: Buffer.from(ownerToken),
           faultAt: options?.faultAt,
           workerFailureMode: options?.workerFailureMode,
-          workerTimeoutMs: options?.workerTimeoutMs
+          workerTimeoutMs: options?.workerTimeoutMs, allowParentCtimeChange: true
         });
         lockIdentity = parseParentBoundPathIdentity(result.result.identity);
       } catch (error) {
@@ -300,7 +300,7 @@ export async function acquireFileLock(
                   hook: options?.beforeReleaseWorker
                     ? { beforeCommand: options.beforeReleaseWorker }
                     : undefined,
-                  workerTimeoutMs: options?.releaseWorkerTimeoutMs
+                  workerTimeoutMs: options?.releaseWorkerTimeoutMs, allowParentCtimeChange: true
                 });
                 assertLockReleasedResult(outcome.result);
                 logicallyReleased = true;
@@ -546,7 +546,7 @@ async function removeDeadProcessLock(lockPath: string) {
       source: lockPath,
       tombstone,
       parentIdentity,
-      expectedSource: after
+      expectedSource: after, allowParentCtimeChange: true
     });
     assertLockReleasedResult(outcome.result);
     return true;
@@ -722,7 +722,7 @@ async function removeLockTombstone(input: {
       expectedTarget: input.expected,
       hook: input.beforeUnlink ? { beforeCommand: input.beforeUnlink } : undefined,
       workerFailureMode: input.workerFailureMode,
-      workerTimeoutMs: input.workerTimeoutMs
+      workerTimeoutMs: input.workerTimeoutMs, allowParentCtimeChange: true
     });
   } catch (error) {
     const current = await lstatOptional(input.tombstone);

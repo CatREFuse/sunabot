@@ -14,7 +14,7 @@ Agent 页面以列表和详情双栏管理 Agent，支持新建 Agent、启停�
 
 Agent 扩展管理 API 按当前 Agent 提供 Skill 安装、独立安全审查、启停、卸载、跨 Agent 复制预览与原子应用，以及 MCP server 描述符增删改。`POST /api/agent-extensions/skills/:skillId/review` 只接受严格正文 `{agentId,approve:true}`；管理员 session、CSRF 与 Origin 校验完成后才运行摘要绑定的审核事务，成功后关闭该 Agent 的扩展运行生命周期，失败不改变审批状态。Skill 复制必须显式选择 skip、replace 或 rename，复制普通文件树、重新校验并原子发布，不共享 inode，也不复制 MCP secret 或 OAuth 凭据。MCP runtime API 提供目录读取、显式工具调用、resource read/subscribe/unsubscribe 和 prompt get；全部端点复用管理员 session、CSRF 与 Origin 门禁，使用严格字段集合和请求中止信号。MCP OAuth 授权入口只接受 localhost 回调，展示并绑定当前 Agent、server、resource 和浏览器 session，成功后配置仅保存 credential handle。
 
-扩展页固定使用当前 Agent，顶部汇总 Skill、MCP 与一次性批准；Skill 区提供 ZIP 安装、摘要审查、启停、卸载和跨 Agent 迁移，迁移必须先预览再选择 skip、replace 或 rename。MCP 区提供 stdio 与 Streamable HTTP 描述符的新增、编辑、启停、删除、运行状态和目录详情；stdio 参数与环境变量名称逐行输入，保存前完整展示固定可执行文件与参数并显式确认。OAuth 只打开本机受控授权流程，页面只显示绑定状态和刷新、撤销动作；浏览器不保存 secret、OAuth token、宿主路径或凭据值。待批准 MCP 工具调用以有时限的独立队列展示，批准动作绑定当前 Agent 和 ticket。全部危险删除使用确认弹层，错误留在对应页面或弹层内，页面同时支持 light、dark、桌面和移动端。
+扩展页固定使用当前 Agent，顶部汇总 Skill、MCP 与一次性批准；页面先读取 overview，再并发读取 MCP 运行状态与批准队列，避免只读状态调和与 Skill 索引恢复争用同一扩展目录。Skill 区提供 ZIP 安装、摘要审查、启停、卸载和跨 Agent 迁移，迁移必须先预览再选择 skip、replace 或 rename。MCP 区提供 stdio 与 Streamable HTTP 描述符的新增、编辑、启停、删除、运行状态和目录详情；stdio 参数与环境变量名称逐行输入，保存前完整展示固定可执行文件与参数并显式确认。OAuth 只打开本机受控授权流程，页面只显示绑定状态和刷新、撤销动作；浏览器不保存 secret、OAuth token、宿主路径或凭据值。待批准 MCP 工具调用以有时限的独立队列展示，批准动作绑定当前 Agent 和 ticket。全部危险删除使用确认弹层，错误留在对应页面或弹层内，页面同时支持 light、dark、桌面和移动端。
 
 复制预览返回的 MCP server 已是最终目标安全形态，并明确显示停用与是否需要重新授权；apply 绑定同一 preview revision、源/目标 Skill revision 与源/目标 MCP revision，不能在确认后重新读取并复制源凭据。stdio 复制保留非秘密 env key 名称，以便目标 overview 显示缺失项；管理员重新确认完整命令并替换描述符后解除迁移状态，全部目标 key 配置完成前仍不能启用。Bearer/OAuth 的目标授权状态为 pending 时，启用请求稳定返回重新授权错误；OAuth 绑定成功只替换目标 Agent 的 handle，仍由管理员显式启用。
 
