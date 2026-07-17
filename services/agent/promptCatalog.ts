@@ -46,6 +46,16 @@ const conversationVariables = [
   variable("user.input", "当前用户消息和附件正文组成的输入", "string", "当前请求")
 ] as const;
 
+const groupConversationVariables = [
+  ...conversationVariables,
+  variable(
+    "conversation.group.thread_context",
+    "群聊 Thread 前置节点生成的安全序列化话题索引",
+    "string",
+    "群聊上下文前置节点"
+  )
+] as const;
+
 export const PROMPT_FILE_DEFINITIONS = [
   fragment("persona.agents", "Agent 规则", "人格", "AGENTS.md"),
   fragment("persona.soul", "核心人格", "人格", "SOUL.md"),
@@ -59,7 +69,13 @@ export const PROMPT_FILE_DEFINITIONS = [
   fragment("persona.user", "用户关系", "人格", "USER.md"),
   fragment("persona.relation", "关系", "人格", "RELATION.md"),
   final("conversation.private-reply", "单聊回复", "对话", () => "conversation_private_reply.json", conversationVariables),
-  final("conversation.group-reply", "群聊回复", "对话", () => "conversation_group_reply.json", conversationVariables),
+  final(
+    "conversation.group-reply",
+    "群聊回复",
+    "对话",
+    () => "conversation_group_reply.json",
+    groupConversationVariables
+  ),
   final(
     "conversation.tone-rewrite",
     "语气改写",

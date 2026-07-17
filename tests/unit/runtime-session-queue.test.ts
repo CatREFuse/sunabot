@@ -426,6 +426,10 @@ describe("SunaRuntime Session queue bridge", () => {
         messages: [
           { role: "system", content: id },
           ...((variables["messages_64"] ?? []) as RenderedPromptRequest["messages"]),
+          {
+            role: "developer",
+            content: `<thread_context>${String(variables["conversation.group.thread_context"] ?? "")}</thread_context>`
+          },
           { role: "user", content: String(variables["user.input"] ?? "") }
         ],
         response_format: { type: "text" }
@@ -1784,9 +1788,14 @@ function createRuntimeHarness(
   internals.scheduleAttachmentCacheRefresh = () => undefined;
   internals.scheduleMemoryCompression = () => undefined;
   internals.persistConversationRecords = () => undefined;
-  internals.renderPromptRequest = async (_id, variables) => ({
+  internals.renderPromptRequest = async (id, variables) => ({
     messages: [
       { role: "system", content: "test system" },
+      ...((variables["messages_64"] ?? []) as RenderedPromptRequest["messages"]),
+      ...(id === "conversation.group-reply" ? [{
+        role: "developer" as const,
+        content: `<thread_context>${String(variables["conversation.group.thread_context"] ?? "")}</thread_context>`
+      }] : []),
       { role: "user", content: String(variables["user.input"] ?? "") }
     ],
     response_format: { type: "text" }

@@ -447,7 +447,6 @@ export class SunaRuntime {
   loadSelfieReferenceImages(...args: Parameters<RuntimeSelfie["loadSelfieReferenceImages"]>) { return this.selfie.loadSelfieReferenceImages(...args); }
   prepareGroupThreadContext(...args: Parameters<RuntimeGroupThreads["prepareGroupThreadContext"]>) { return this.inAgentContext(() => this.groupThreads.prepareGroupThreadContext(...args)); }
   groupThreadPromptContext(...args: Parameters<RuntimeGroupThreads["promptContext"]>) { return this.groupThreads.promptContext(...args); }
-  ensureGroupThreadPromptRequest(...args: Parameters<RuntimeGroupThreads["ensurePromptRequest"]>) { return this.groupThreads.ensurePromptRequest(...args); }
   activeReplyDebounce(...args: Parameters<RuntimeReplyDebounce["activeEvent"]>) { return this.replyDebounce.activeEvent(...args); }
   handlePersistedReplyDuplicate(...args: Parameters<RuntimeReplyDebounce["handlePersistedDuplicate"]>) { return this.replyDebounce.handlePersistedDuplicate(...args); }
   handleActiveReplyDebounceIncoming(...args: Parameters<RuntimeReplyDebounce["handleActiveIncoming"]>) { return this.replyDebounce.handleActiveIncoming(...args); }

@@ -260,6 +260,12 @@ export function defaultFinalPromptTemplate(id: string): FinalPromptTemplate | un
           ].join("\n\n")
         },
         "@{messages_64}",
+        ...(isGroupReply
+          ? [{
+              role: "developer",
+              content: "<thread_context>@{conversation.group.thread_context}</thread_context>"
+            }]
+          : []),
         {
           role: "user",
           content: [

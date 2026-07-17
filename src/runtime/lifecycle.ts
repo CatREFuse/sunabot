@@ -99,7 +99,11 @@ import { SessionStore, type OutboxRecord, type SessionEventRecord } from "../../
 import { TOOL_CALL_TIMEOUT_MS } from "../../services/tools/tools.js";
 import { promptDefinitionById } from "../../services/agent/promptCatalog.js";
 import { defaultPromptContent as defaultFinalPromptContent } from "../../services/agent/promptDefaults.js";
-import { ensurePromptTextFile, readPromptTextFile } from "../../services/agent/promptWorkspace.js";
+import {
+  ensurePromptTextFile,
+  migrateGroupReplyThreadContextVariable,
+  readPromptTextFile
+} from "../../services/agent/promptWorkspace.js";
 import {
   buildPromptUtilityVariables,
   parseFinalPromptTemplate,
@@ -271,20 +275,20 @@ export async function runtime_ensureAgentPromptFiles(this: RuntimeHost, config =
       config,
       "system",
       CONVERSATION_REPLY_PROMPT_FILE,
-      ADMIN_RUNTIME_PROMPT_DEFAULTS["conversation.private-reply"] ?? ""
+      ""
     );
     await Promise.all([
       ensurePromptTextFile(
         config,
         "system",
         PRIVATE_CONVERSATION_REPLY_PROMPT_FILE,
-        legacyConversationPrompt
+        legacyConversationPrompt || ADMIN_RUNTIME_PROMPT_DEFAULTS["conversation.private-reply"] || ""
       ),
       ensurePromptTextFile(
         config,
         "system",
         GROUP_CONVERSATION_REPLY_PROMPT_FILE,
-        legacyConversationPrompt
+        legacyConversationPrompt || ADMIN_RUNTIME_PROMPT_DEFAULTS["conversation.group-reply"] || ""
       ),
       ensurePromptTextFile(
         config,
@@ -335,6 +339,7 @@ export async function runtime_ensureAgentPromptFiles(this: RuntimeHost, config =
         ADMIN_RUNTIME_PROMPT_DEFAULTS["image.selfie-rewrite"] ?? ""
       )
     ]);
+    await migrateGroupReplyThreadContextVariable(config, GROUP_CONVERSATION_REPLY_PROMPT_FILE);
   }
 export function runtime_defaultPromptContent(this: RuntimeHost, id: string) {
     return ADMIN_RUNTIME_PROMPT_DEFAULTS[id] ?? "";

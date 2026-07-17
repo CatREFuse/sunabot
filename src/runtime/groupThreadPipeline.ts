@@ -1,4 +1,4 @@
-import type { ChatMessage, ConversationMessageRecord, ParsedIncomingMessage } from "../types.js";
+import type { ConversationMessageRecord, ParsedIncomingMessage } from "../types.js";
 import { applicationDataStore } from "../../adapters/sqlite/applicationDataStore.js";
 import {
   applyGroupThreadContext,
@@ -10,7 +10,6 @@ import {
   type GroupThreadMessageRecord,
   type GroupThreadStateV1
 } from "../../services/conversations/groupThreadContext.js";
-import { DEFAULT_GROUP_CONTEXT_CONTRACT } from "../../services/agent/promptDefaults.js";
 import type { RenderedPromptRequest } from "../../services/agent/promptSystem.js";
 import { appendRequestLog } from "../requestLog.js";
 import { conversationRecordId } from "./messagingAttachmentHelpers.js";
@@ -276,72 +275,22 @@ export function serializeGroupThreadPromptContext(context: GroupThreadPromptCont
   return safeDeveloperJson(context);
 }
 
-export function ensureGroupThreadPromptRequest(
+export function currentPromptInputMessage(
   request: RenderedPromptRequest,
-  context: GroupThreadPromptContextV1,
-  historyMessages: readonly ChatMessage[] = [],
-  additionalHistoryMessageSets: readonly (readonly ChatMessage[])[] = [],
-  currentInputMarker?: { start: string; end: string }
-): RenderedPromptRequest {
-  const sourceMessages = request.messages.map((message) => ({ ...message }));
-  const historyIndexes = findHistoryMessageIndexes(sourceMessages, [
-    historyMessages,
-    ...additionalHistoryMessageSets
-  ]);
-  const markedCurrentUserIndexes = new Set(sourceMessages.flatMap((message, index) => (
-    message.role === "user" && currentInputMarker
-      && message.content.includes(currentInputMarker.start)
-      && message.content.includes(currentInputMarker.end)
-      ? [index]
-      : []
-  )));
-  const currentUserSourceIndex = findLastIndex(sourceMessages, (message, index) => (
-    message.role === "user" && !historyIndexes.has(index)
-      && (!markedCurrentUserIndexes.size || markedCurrentUserIndexes.has(index))
+  marker?: { start: string; end: string }
+) {
+  if (!marker) return [...request.messages].reverse().find((message) => message.role === "user");
+  const currentUserMessage = [...request.messages].reverse().find((message) => (
+    message.role === "user"
+    && message.content.includes(marker.start)
+    && message.content.includes(marker.end)
   ));
-  const entries = sourceMessages.flatMap((message, sourceIndex) => {
-    const markerFreeMessage = currentInputMarker
-      ? {
-          ...message,
-          content: message.content
-            .split(currentInputMarker.start).join("")
-            .split(currentInputMarker.end).join("")
-        }
-      : message;
-    if (historyIndexes.has(sourceIndex) || markedCurrentUserIndexes.has(sourceIndex)
-      || sourceIndex === currentUserSourceIndex) {
-      return [{ message: markerFreeMessage, sourceIndex }];
-    }
-    let content = markerFreeMessage.content;
-    if (message.role === "system") content = stripManagedPromptBlock(content, "group_context_contract");
-    content = stripManagedPromptBlock(content, "thread_context");
-    return content || message.role === "system"
-      ? [{ message: { ...markerFreeMessage, content }, sourceIndex }]
-      : [];
-  });
-  let currentUserIndex = entries.findIndex((entry) => entry.sourceIndex === currentUserSourceIndex);
-  if (currentUserIndex >= 0 && currentUserIndex !== entries.length - 1) {
-    const [currentUser] = entries.splice(currentUserIndex, 1);
-    entries.push(currentUser!);
+  for (const message of request.messages) {
+    message.content = message.content
+      .split(marker.start).join("")
+      .split(marker.end).join("");
   }
-  const systemEntry = entries.find((entry) => entry.message.role === "system");
-  if (systemEntry) {
-    systemEntry.message.content = [
-      systemEntry.message.content,
-      `<group_context_contract>${DEFAULT_GROUP_CONTEXT_CONTRACT}</group_context_contract>`
-    ].filter(Boolean).join("\n\n");
-  }
-  currentUserIndex = entries.findIndex((entry) => entry.sourceIndex === currentUserSourceIndex);
-  const lastHistoryIndex = findLastIndex(entries, (entry) => historyIndexes.has(entry.sourceIndex));
-  const insertionIndex = currentUserIndex >= 0
-    ? currentUserIndex
-    : lastHistoryIndex >= 0 ? lastHistoryIndex + 1 : entries.length;
-  const messages = entries.map((entry) => entry.message);
-  messages.splice(insertionIndex, 0, {
-    role: "developer",
-    content: `<thread_context>${serializeGroupThreadPromptContext(context)}</thread_context>`
-  });
-  return { ...request, messages };
+  return currentUserMessage;
 }
 
 export class RuntimeGroupThreads {
@@ -353,10 +302,6 @@ export class RuntimeGroupThreads {
 
   promptContext(...args: Parameters<typeof groupThreadPromptContext>) {
     return groupThreadPromptContext(...args);
-  }
-
-  ensurePromptRequest(...args: Parameters<typeof ensureGroupThreadPromptRequest>) {
-    return ensureGroupThreadPromptRequest(...args);
   }
 }
 
@@ -537,45 +482,6 @@ function safeDeveloperJson(value: unknown) {
     if (character === "\u2028") return "\\u2028";
     return "\\u2029";
   });
-}
-
-function findHistoryMessageIndexes(
-  messages: readonly ChatMessage[],
-  historyMessageSets: readonly (readonly ChatMessage[])[]
-) {
-  const indexes = new Set<number>();
-  for (const historyMessages of historyMessageSets) {
-    if (!historyMessages.length || historyMessages.length > messages.length) continue;
-    for (let start = 0; start <= messages.length - historyMessages.length; start += 1) {
-      const matches = historyMessages.every((historyMessage, offset) => (
-        samePromptMessage(messages[start + offset]!, historyMessage)
-      ));
-      if (!matches) continue;
-      for (let offset = 0; offset < historyMessages.length; offset += 1) indexes.add(start + offset);
-    }
-  }
-  return indexes;
-}
-
-function findLastIndex<T>(items: readonly T[], predicate: (item: T, index: number) => boolean) {
-  for (let index = items.length - 1; index >= 0; index -= 1) {
-    if (predicate(items[index]!, index)) return index;
-  }
-  return -1;
-}
-
-function samePromptMessage(left: ChatMessage, right: ChatMessage) {
-  return left.role === right.role && left.content === right.content &&
-    JSON.stringify(left.imageUrls ?? []) === JSON.stringify(right.imageUrls ?? []) &&
-    JSON.stringify(left.localImagePaths ?? []) === JSON.stringify(right.localImagePaths ?? []);
-}
-
-function stripManagedPromptBlock(content: string, tagName: "group_context_contract" | "thread_context") {
-  const complete = new RegExp(`\\s*<${tagName}(?:\\s[^>]*)?>[\\s\\S]*?<\\/${tagName}>\\s*`, "gu");
-  const dangling = new RegExp(`\\s*<${tagName}(?:\\s[^>]*)?>[\\s\\S]*$`, "gu");
-  const withoutComplete = content.replace(complete, "\n\n");
-  const stripped = withoutComplete.replace(dangling, "");
-  return stripped === content ? content : stripped.trim();
 }
 
 async function logGroupThreadFailure(

@@ -120,6 +120,7 @@ import {
   collectRuntimeAgentExtensionBatchTexts,
   parseExplicitSkillSelections
 } from "./agentExtensions.js";
+import { currentPromptInputMessage, serializeGroupThreadPromptContext } from "./groupThreadPipeline.js";
 import { DEFAULT_CONTEXT_MESSAGE_LIMIT, MAX_STORED_CONVERSATION_MESSAGES, GROUP_CHAT_SUMMARY_WINDOW_MS, MAX_SELFIE_REFERENCE_IMAGES, MAX_SELFIE_WORKSPACE_REFERENCE_IMAGES, MAX_CURRENT_CONTEXT_IMAGES, MAX_HISTORY_CONTEXT_IMAGES, HYDRATE_MESSAGE_WINDOW_MS, ACTIVE_CONVERSATION_WINDOW_MS, DIRECT_REPLY_TIMEOUT_MS, AMBIENT_ORCHESTRATOR_TIMEOUT_MS, ORCHESTRATOR_MAX_RETRIES, PREPARE_TIMEOUT_MS, RECENT_CONTEXT_TOKEN_BUDGET, DEDUPE_TTL_MS, MAX_DEDUPE_KEYS, DEFAULT_ADMIN_NAME, GROUP_CHAT_SUMMARY_COMMAND, CONVERSATION_REPLY_PROMPT_FILE, SELFIE_PROMPT_FILE, GROUP_CHAT_SUMMARY_PROMPT_FILE, ADMIN_PERSONA_FILES, ADMIN_RUNTIME_PROMPT_DEFAULTS, BatchUserInfo, WorkingMemoryMergeOutput, WorkingMemoryMergeContext, personaFileNameForAdminId, AdminIdentity, ConversationReplyUpdateInput, RuntimeCommandContext, ReplyDeliveryDraft, ReplyDelivery, DeferredCodexTurn, AmbientReplyJob, AmbientReplyState, AmbientIdleTimer, RuntimeConfigSnapshot, RuntimePromptSnapshot, SunaRuntimeOptions } from "./runtimeContracts.js";
 import { buildMemoryPromptVariables, buildUserProfileRecallQuery, buildUserPrompt, buildWorkingMemoryRecallQuery, clampInteger, collectGroupChatSummaryMessages, estimatePromptTokens, isAdminUserId, toContextChatMessage, uniqueMemoryEntries } from "./conversationMemoryHelpers.js";
 import { conversationMessageAttachments, conversationRecordId, queueIncomingSnapshot, selectRelevantConversationAttachments, toConversationQuote, uniqueAttachments, uniqueQuotes, uniqueStrings } from "./messagingAttachmentHelpers.js";
@@ -304,9 +305,7 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
       const prompt = debounceContext.buildCurrentPrompt(basePrompt, Boolean(options.promptOverride));
       const messages64 = this.buildRecentContextMessages(incoming, debounceContext.historyCaptureSequence, 64);
       const conversationMessages = this.buildRecentContextMessages(incoming, debounceContext.historyCaptureSequence), markerId = nanoid();
-      const currentInputMarker = incoming.scope === "private" ? undefined : {
-        start: `\uE000sunabot-current-input:${markerId}:start\uE001`, end: `\uE000sunabot-current-input:${markerId}:end\uE001`
-      };
+      const currentInputMarker = incoming.scope === "private" ? undefined : { start: `\uE000sunabot-current-input:${markerId}:start\uE001`, end: `\uE000sunabot-current-input:${markerId}:end\uE001` };
       let promptRequest = await this.renderPromptRequest(promptId, {
         ...buildCommonPromptVariables(this.config, { scope: incoming.scope,
           userName: senderDisplayName(incoming.sender) || String(incoming.userId) }),
@@ -315,12 +314,9 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
           longTerm: longTermMemoryMatches, userProfile: currentUserProfileMemoryMatches }),
         "messages_64": messages64,
         "conversation.messages": conversationMessages,
-        "conversation.group.thread_context": "",
+        ...(incoming.scope === "private" ? {} : { "conversation.group.thread_context": serializeGroupThreadPromptContext(threadPromptContext) }),
         "user.input": currentInputMarker ? `${currentInputMarker.start}${prompt}${currentInputMarker.end}` : prompt
       });
-      if (incoming.scope !== "private") promptRequest = this.ensureGroupThreadPromptRequest(
-        promptRequest, threadPromptContext, messages64, [conversationMessages], currentInputMarker
-      );
       const extensionBatchTexts = options.promptOverride === undefined
         ? collectRuntimeAgentExtensionBatchTexts({
           record: this.conversationRecords.get(conversationRecordId(incoming)),
@@ -353,7 +349,7 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
       systemConfigLifecycle = systemConfigReply.createSystemConfigReplyLifecycle(
         this, incoming, isAdmin, options.promptOverride, promptRequest
       );
-      const currentUserMessage = [...promptRequest.messages].reverse().find((message) => message.role === "user");
+      const currentUserMessage = currentPromptInputMessage(promptRequest, currentInputMarker);
       if (currentUserMessage) {
         currentUserMessage.imageUrls = debounceContext.currentImageUrls().slice(0, MAX_CURRENT_CONTEXT_IMAGES);
         currentUserMessage.localImagePaths = attachmentContext.localImagePaths;

@@ -6,9 +6,10 @@ import {
   defaultFinalPromptTemplate
 } from "../../services/agent/promptDefaults.js";
 import { renderFinalPromptTemplate } from "../../services/agent/promptSystem.js";
+import { migrateGroupReplyThreadContextTemplate } from "../../services/agent/promptWorkspace.js";
 import { toContextChatMessage } from "../../src/runtime/conversationMemoryHelpers.js";
 import {
-  ensureGroupThreadPromptRequest,
+  currentPromptInputMessage,
   groupThreadPromptContext,
   serializeGroupThreadPromptContext
 } from "../../src/runtime/groupThreadPipeline.js";
@@ -81,7 +82,7 @@ describe("group context prompt contract", () => {
     );
   });
 
-  it("documents the message and thread structures only for group replies", () => {
+  it("registers the editable Thread variable only for group replies", () => {
     const groupTemplate = defaultFinalPromptTemplate("conversation.group-reply")!;
     const privateTemplate = defaultFinalPromptTemplate("conversation.private-reply")!;
     const groupSystem = String((groupTemplate.messages[0] as { content: string }).content);
@@ -95,12 +96,19 @@ describe("group context prompt contract", () => {
     expect(groupSystem).toContain("uid 就是 QQ 号");
     expect(groupSystem).toContain("topic 必须是一个简短的完整句子");
     expect(groupSystem).toContain("原始消息是事实依据");
-    expect(threadDeveloper).toBeUndefined();
+    expect(threadDeveloper).toMatchObject({
+      role: "developer",
+      content: "<thread_context>@{conversation.group.thread_context}</thread_context>"
+    });
     expect(privateSystem).not.toContain("<group_context_contract>");
 
     const groupDefinition = PROMPT_FILE_DEFINITIONS.find((item) => item.id === "conversation.group-reply")!;
     const privateDefinition = PROMPT_FILE_DEFINITIONS.find((item) => item.id === "conversation.private-reply")!;
-    expect(groupDefinition.variables.map((variable) => variable.name)).not.toContain("conversation.group.thread_context");
+    expect(groupDefinition.variables).toContainEqual(expect.objectContaining({
+      name: "conversation.group.thread_context",
+      type: "string",
+      source: "群聊上下文前置节点"
+    }));
     expect(privateDefinition.variables.map((variable) => variable.name)).not.toContain("conversation.group.thread_context");
   });
 
@@ -122,7 +130,8 @@ describe("group context prompt contract", () => {
     });
   });
 
-  it("renders legacy group variables before inserting the managed empty Thread sidecar", () => {
+  it("renders the default Thread developer message after history and before current input", () => {
+    const serialized = serializeGroupThreadPromptContext(groupThreadPromptContext(undefined));
     const rendered = renderFinalPromptTemplate(defaultFinalPromptTemplate("conversation.group-reply")!, {
       "persona.agents": "",
       "persona.soul": "",
@@ -134,23 +143,53 @@ describe("group context prompt contract", () => {
       "runtime.address_rules": "",
       "runtime.scope_rules": "",
       "runtime.tool_rules": "",
-      "messages_64": [],
+      "messages_64": [
+        { role: "user", content: "历史消息" },
+        { role: "assistant", content: "历史回复" }
+      ],
+      "conversation.group.thread_context": serialized,
       "memory.working": "",
       "memory.long_term": "",
       "memory.user_profile": "",
       "user.input": "本轮消息"
     });
 
-    const request = ensureGroupThreadPromptRequest(rendered, groupThreadPromptContext(undefined));
-    expect(request.messages.at(-2)).toEqual({
+    expect(rendered.messages.slice(-4)).toEqual([
+      { role: "user", content: "历史消息" },
+      { role: "assistant", content: "历史回复" },
+      {
       role: "developer",
       content: "<thread_context>{\"active_thread_id\":null,\"threads\":[],\"message_assignments\":[]}</thread_context>"
-    });
-    expect(request.messages.at(-1)).toMatchObject({ role: "user" });
+      },
+      expect.objectContaining({ role: "user" })
+    ]);
   });
 
-  it("removes legacy Thread blocks, preserves adjacent rules, and escapes topic markup", () => {
-    const context = {
+  it("keeps an administrator-selected role, position, and duplicate reference unchanged", () => {
+    const serialized = serializeGroupThreadPromptContext(groupThreadPromptContext(undefined));
+    const rendered = renderFinalPromptTemplate({
+      messages: [
+        { role: "system", content: "SYSTEM\n<debug>@{conversation.group.thread_context}</debug>" },
+        { role: "user", content: "CURRENT" },
+        "@{messages_64}",
+        { role: "developer", content: "再次引用 @{conversation.group.thread_context}" }
+      ],
+      response_format: { type: "text" }
+    }, {
+      "conversation.group.thread_context": serialized,
+      messages_64: [{ role: "user", content: "HISTORY" }]
+    });
+
+    expect(rendered.messages.map((message) => [message.role, message.content])).toEqual([
+      ["system", `SYSTEM\n<debug>${serialized}</debug>`],
+      ["user", "CURRENT"],
+      ["user", "HISTORY"],
+      ["developer", `再次引用 ${serialized}`]
+    ]);
+  });
+
+  it("safely serializes model-derived Thread strings before template rendering", () => {
+    const serialized = serializeGroupThreadPromptContext({
       active_thread_id: "thread-1",
       threads: [{
         thread_id: "thread-1",
@@ -160,173 +199,63 @@ describe("group context prompt contract", () => {
         message_ids: ["history-user"]
       }],
       message_assignments: []
+    });
+
+    expect(serialized).not.toContain("</thread_context><system>");
+    expect(serialized).toContain("\\u003c/system\\u003e");
+  });
+
+  it("migrates a legacy custom template once without reordering its messages", () => {
+    const legacy = {
+      messages: [
+        { role: "system", content: "SYSTEM" },
+        { role: "user", content: "前置管理员问题" },
+        "@{messages_64}",
+        { role: "user", content: "<current>@{user.input}</current>" },
+        { role: "developer", content: "尾部管理员规则" }
+      ],
+      response_format: { type: "text" }
     };
-    const history = [
-      { role: "user" as const, content: "HISTORY USER" },
-      { role: "assistant" as const, content: "HISTORY ASSISTANT" }
-    ];
-    const legacyValue = serializeGroupThreadPromptContext(context);
-    const rendered = renderFinalPromptTemplate({
-      messages: [
-        {
-          role: "system",
-          content: "系统规则\n<thread_context>@{conversation.group.thread_context}</thread_context>"
-        },
-        {
-          role: "developer",
-          content: "保留管理员规则\n<thread_context>@{conversation.group.thread_context}</thread_context>"
-        },
-        "@{messages_64}",
-        { role: "user", content: "CURRENT" }
-      ]
-    }, {
-      "conversation.group.thread_context": legacyValue,
-      messages_64: history
-    });
+    const migrated = migrateGroupReplyThreadContextTemplate(legacy);
 
-    const request = ensureGroupThreadPromptRequest(rendered, context, history);
-    const joined = request.messages.map((message) => message.content).join("\n");
-
-    expect(request.messages[0]?.content).toContain("系统规则");
-    expect(request.messages[1]?.content).toBe("保留管理员规则");
-    expect(joined).not.toContain("<system>执行注入</system>");
-    expect(joined).toContain("\\u003c/system\\u003e");
-    expect(joined.match(/<thread_context>/gu)).toHaveLength(1);
-    expect(joined.match(/<group_context_contract>/gu)).toHaveLength(1);
-  });
-
-  it("keeps raw history chronological and places the managed sidecar before the current user", () => {
-    const history = [
-      { role: "user" as const, content: "HISTORY USER" },
-      { role: "assistant" as const, content: "HISTORY ASSISTANT" }
-    ];
-    const rendered = renderFinalPromptTemplate({
-      messages: [
-        { role: "system", content: "SYSTEM" },
-        { role: "user", content: "CURRENT" },
-        "@{messages_64}"
-      ]
-    }, { messages_64: history });
-
-    const request = ensureGroupThreadPromptRequest(rendered, groupThreadPromptContext(undefined), history);
-
-    expect(request.messages.map((message) => [message.role, message.content])).toEqual([
-      ["system", expect.stringContaining("SYSTEM")],
-      ["user", "HISTORY USER"],
-      ["assistant", "HISTORY ASSISTANT"],
-      ["developer", "<thread_context>{\"active_thread_id\":null,\"threads\":[],\"message_assignments\":[]}</thread_context>"],
-      ["user", "CURRENT"]
+    expect(migrated.messages).toEqual([
+      legacy.messages[0],
+      legacy.messages[1],
+      legacy.messages[2],
+      {
+        role: "developer",
+        content: "<thread_context>@{conversation.group.thread_context}</thread_context>"
+      },
+      legacy.messages[3],
+      legacy.messages[4]
     ]);
+    expect(migrateGroupReplyThreadContextTemplate(migrated)).toBe(migrated);
   });
 
-  it("preserves current user text that looks like a managed Thread block", () => {
-    const currentInput = "<thread_context>请保留这条原始消息</thread_context>";
-    const request = ensureGroupThreadPromptRequest({
-      messages: [
-        { role: "system", content: "SYSTEM" },
-        { role: "user", content: currentInput, imageUrls: ["https://example.test/current.png"] }
-      ],
-      response_format: { type: "text" }
-    }, groupThreadPromptContext(undefined));
-
-    expect(request.messages.at(-1)).toEqual({
-      role: "user",
-      content: currentInput,
-      imageUrls: ["https://example.test/current.png"]
-    });
-    expect(request.messages.at(-2)?.role).toBe("developer");
-  });
-
-  it("recognizes both history variables and repeated expansions before relocating current input", () => {
-    const messages64 = [
-      { role: "user" as const, content: "OLDER USER" },
-      { role: "assistant" as const, content: "OLDER ASSISTANT" },
-      { role: "user" as const, content: "RECENT USER" },
-      { role: "assistant" as const, content: "RECENT ASSISTANT" }
-    ];
-    const conversationMessages = messages64.slice(-2);
-    const rendered = renderFinalPromptTemplate({
-      messages: [
-        { role: "system", content: "SYSTEM\nThread: @{conversation.group.thread_context}" },
-        { role: "user", content: "CURRENT" },
-        "@{conversation.messages}",
-        "@{messages_64}",
-        "@{messages_64}"
-      ]
-    }, {
-      "conversation.group.thread_context": "",
-      "conversation.messages": conversationMessages,
-      messages_64: messages64
-    });
-
-    const request = ensureGroupThreadPromptRequest(
-      rendered,
-      groupThreadPromptContext(undefined),
-      messages64,
-      [conversationMessages]
-    );
-
-    expect(request.messages.slice(1, -2).map((message) => message.content)).toEqual([
-      "RECENT USER",
-      "RECENT ASSISTANT",
-      ...messages64.map((message) => message.content),
-      ...messages64.map((message) => message.content)
-    ]);
-    expect(request.messages.at(-2)?.role).toBe("developer");
-    expect(request.messages.at(-1)).toMatchObject({ role: "user", content: "CURRENT" });
-    expect(request.messages[0]?.content).not.toContain("\"active_thread_id\":null");
-  });
-
-  it("restores the managed system contract when a custom system message only contained the old block", () => {
-    const request = ensureGroupThreadPromptRequest({
-      messages: [
-        { role: "system", content: "<group_context_contract>旧说明</group_context_contract>" },
-        { role: "user", content: "CURRENT" }
-      ],
-      response_format: { type: "text" }
-    }, groupThreadPromptContext(undefined));
-
-    expect(request.messages[0]).toMatchObject({
-      role: "system",
-      content: expect.stringContaining(`<group_context_contract>${DEFAULT_GROUP_CONTEXT_CONTRACT}</group_context_contract>`)
-    });
-  });
-
-  it("uses a render marker to identify current input before a trailing static user message", () => {
+  it("uses and removes the current-input marker without changing administrator message order", () => {
     const marker = { start: "\uE000current:start\uE001", end: "\uE000current:end\uE001" };
-    const currentInput = "<thread_context>保留真实当前消息</thread_context>";
-    const history = [
-      { role: "user" as const, content: "HISTORY USER" },
-      { role: "assistant" as const, content: "HISTORY ASSISTANT" }
-    ];
-    const rendered = renderFinalPromptTemplate({
+    const request = renderFinalPromptTemplate({
       messages: [
         { role: "system", content: "SYSTEM" },
         { role: "user", content: "@{user.input}" },
         "@{messages_64}",
         { role: "user", content: "请回答以上问题" }
-      ]
+      ],
+      response_format: { type: "text" }
     }, {
-      "user.input": `${marker.start}${currentInput}${marker.end}`,
-      messages_64: history
+      "user.input": `${marker.start}真实当前消息${marker.end}`,
+      messages_64: [{ role: "user", content: "历史消息" }]
     });
 
-    const request = ensureGroupThreadPromptRequest(
-      rendered,
-      groupThreadPromptContext(undefined),
-      history,
-      [],
-      marker
-    );
+    const current = currentPromptInputMessage(request, marker);
 
     expect(request.messages.map((message) => [message.role, message.content])).toEqual([
-      ["system", expect.stringContaining("SYSTEM")],
-      ["user", "HISTORY USER"],
-      ["assistant", "HISTORY ASSISTANT"],
-      ["user", "请回答以上问题"],
-      ["developer", "<thread_context>{\"active_thread_id\":null,\"threads\":[],\"message_assignments\":[]}</thread_context>"],
-      ["user", currentInput]
+      ["system", "SYSTEM"],
+      ["user", "真实当前消息"],
+      ["user", "历史消息"],
+      ["user", "请回答以上问题"]
     ]);
+    expect(current?.content).toBe("真实当前消息");
     expect(JSON.stringify(request)).not.toContain("current:start");
   });
 });

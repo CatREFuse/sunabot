@@ -30,7 +30,7 @@ const promptFiles = [
 ] as const;
 
 describe("memory prompt routing contract", () => {
-  it("copies the legacy shared reply prompt into independent private and group files", async () => {
+  it("copies the legacy shared reply prompt and migrates the group template to the editable Thread variable", async () => {
     const migrationRoot = path.join(root, "legacy-split");
     const config = createAdminTestConfig(migrationRoot);
     await fs.mkdir(config.persona.systemPromptWorkspace, { recursive: true });
@@ -44,10 +44,42 @@ describe("memory prompt routing contract", () => {
       path.join(config.persona.systemPromptWorkspace, "conversation_private_reply.json"),
       "utf8"
     )).resolves.toBe(legacyContent);
-    await expect(fs.readFile(
+    const groupContent = await fs.readFile(
       path.join(config.persona.systemPromptWorkspace, "conversation_group_reply.json"),
       "utf8"
-    )).resolves.toBe(legacyContent);
+    );
+    const groupDocument = JSON.parse(groupContent);
+    expect(JSON.stringify(groupDocument)).toContain("conversation.group.thread_context");
+    expect(groupDocument.messages.filter((message: unknown) => (
+      JSON.stringify(message).includes("conversation.group.thread_context")
+    ))).toHaveLength(1);
+    migrationRuntime.close();
+  });
+
+  it("does not restore the migrated variable after an administrator removes it", async () => {
+    const migrationRoot = path.join(root, "custom-thread-migration");
+    const config = createAdminTestConfig(migrationRoot);
+    await fs.mkdir(config.persona.systemPromptWorkspace, { recursive: true });
+    const promptPath = path.join(config.persona.systemPromptWorkspace, "conversation_group_reply.json");
+    await fs.writeFile(promptPath, JSON.stringify({
+      messages: [
+        { role: "system", content: "自定义系统规则" },
+        { role: "user", content: "@{user.input}" }
+      ],
+      response_format: { type: "text" }
+    }), "utf8");
+    const migrationRuntime = new SunaRuntime(config, { attachmentService: {} as never });
+
+    await migrationRuntime.ensureAgentPromptFiles(config);
+    const migrated = JSON.parse(await fs.readFile(promptPath, "utf8"));
+    expect(JSON.stringify(migrated)).toContain("conversation.group.thread_context");
+    migrated.messages = migrated.messages.filter((message: unknown) => (
+      !JSON.stringify(message).includes("conversation.group.thread_context")
+    ));
+    await fs.writeFile(promptPath, `${JSON.stringify(migrated, null, 2)}\n`, "utf8");
+
+    await migrationRuntime.ensureAgentPromptFiles(config);
+    expect(await fs.readFile(promptPath, "utf8")).not.toContain("conversation.group.thread_context");
     migrationRuntime.close();
   });
 
