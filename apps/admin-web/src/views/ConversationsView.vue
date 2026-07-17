@@ -12,6 +12,7 @@ const router = useRouter();
 const data = useConversations();
 const query = shallowRef("");
 const scope = shallowRef<Scope>("all");
+const sidePanel = shallowRef<"settings" | "usage" | null>(null);
 const selectedId = computed(() => String(route.params.conversationId ?? ""));
 const selected = computed(() => data.conversations.value.find((item) => item.id === selectedId.value) ?? null);
 let listTimer: number | undefined;
@@ -31,6 +32,7 @@ onBeforeUnmount(() => {
   data.dispose();
 });
 watch(selectedId, (id) => {
+  sidePanel.value = null;
   data.clearCurrent();
   if (messageTimer) window.clearInterval(messageTimer);
   if (statsTimer) window.clearInterval(statsTimer);
@@ -46,7 +48,10 @@ watch(selectedId, (id) => {
 }, { immediate: true });
 
 function select(id: string) { void router.push(`/conversations/${encodeURIComponent(id)}`); }
-function settings(id: string) { void router.push(`/conversations/${encodeURIComponent(id)}/settings`); }
+async function settings(id: string) {
+  if (selectedId.value !== id) await router.push(`/conversations/${encodeURIComponent(id)}`);
+  sidePanel.value = "settings";
+}
 function back() { void router.push("/conversations"); }
 function refreshMessages() {
   if (!selectedId.value) return;
@@ -81,11 +86,13 @@ function logs(runId?: string) { if (selectedId.value) void data.loadLogs(selecte
       :loading-messages="data.loadingMessages.value"
       :loading-logs="data.loadingLogs.value"
       :error="data.error.value"
+      v-model:side-panel="sidePanel"
       @back="back"
-      @settings="selected && settings(selected.id)"
       @refresh="refreshMessages"
       @older="older"
       @logs="logs"
+      @reply="selected && data.setReplyEnabled(selected, $event)"
+      @orchestrator="selected && data.setOrchestratorEnabled(selected, $event)"
     />
   </div>
 </template>

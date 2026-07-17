@@ -61,6 +61,8 @@ describe("ConversationSidePanel", () => {
 
     expect(header.element.firstElementChild).toBe(close.element);
     expect(wrapper.findAllComponents(ToggleSwitch).map((toggle) => toggle.props("label"))).toEqual(["启动", "编排器"]);
+    expect(wrapper.get('button[aria-pressed="true"]').text()).toBe("回复");
+    expect(wrapper.get('button[aria-pressed="false"]').text()).toBe("工具权限");
 
     await close.trigger("click");
     expect(wrapper.emitted("close")).toEqual([[]]);

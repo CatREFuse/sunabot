@@ -322,5 +322,6 @@ describe("ConversationThread", () => {
 
     await wrapper.get('button[aria-label="会话设置"]').trigger("click");
     expect(wrapper.getComponent(ConversationSidePanel).props()).toMatchObject({ open: true, panel: "settings" });
+    expect(wrapper.emitted("update:sidePanel")).toContainEqual(["settings"]);
   });
 });

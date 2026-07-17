@@ -32,7 +32,7 @@ const emit = defineEmits<{
 }>();
 const logsOpen = shallowRef(false);
 const activeLogRunId = shallowRef<string | undefined>();
-const activePanel = shallowRef<"settings" | "usage" | null>(null);
+const activePanel = defineModel<"settings" | "usage" | null>("sidePanel", { default: null });
 const conversationId = computed(() => props.conversation?.id ?? "");
 const messageIds = computed(() => props.messages.map((message) => message.id));
 const { handleUserScroll, handleContentLoad } = useChatScroll({ conversationId, messageIds });

@@ -114,6 +114,6 @@ describe("AgentAccountList", () => {
 
     expect(removing.text()).toContain("移除中");
     expect(removing.get('button[aria-label="正在移除 备用账号"]').attributes("aria-busy")).toBe("true");
-    expect(removing.get(".qq-docker-spinner").exists()).toBe(true);
+    expect(removing.find(".qq-docker-spinner").exists()).toBe(true);
   });
 });

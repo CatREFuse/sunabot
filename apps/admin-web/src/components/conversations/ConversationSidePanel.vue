@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { computed } from "vue";
-import type { ConversationRecord, ConversationStatsPayload } from "../../types";
+import { computed, onBeforeUnmount, shallowRef, watch } from "vue";
+import { useConversationTools } from "../../composables/useConversationTools";
+import type { ConversationRecord, ConversationStatsPayload, ToolName } from "../../types";
 import { conversationIdentityDetail } from "../../utils/qqIdentity";
 import ModelCallStatsPanel from "../logs/ModelCallStatsPanel.vue";
 import DialogOverlay from "../ui/DialogOverlay.vue";
 import ToggleSwitch from "../ui/ToggleSwitch.vue";
 import ConversationOrchestratorStatus from "./ConversationOrchestratorStatus.vue";
+import ConversationToolSettingsForm from "./ConversationToolSettingsForm.vue";
 
 const props = defineProps<{
   open: boolean;
@@ -18,6 +20,11 @@ const emit = defineEmits<{
   reply: [enabled: boolean];
   orchestrator: [enabled: boolean];
 }>();
+const settingsSection = shallowRef<"general" | "tools">("general");
+const toolPolicy = useConversationTools(() => props.conversation.id);
+const disabledTools = shallowRef<ToolName[]>([]);
+const toolStatus = shallowRef("");
+const toolStatusKind = shallowRef<"saved" | "error" | "">("");
 
 const title = computed(() => props.panel === "settings" ? "会话设置" : "Token 消耗详情");
 const titleId = computed(() => props.panel === "settings" ? "conversation-settings-title" : "conversation-usage-title");
@@ -35,6 +42,62 @@ const scopeLabel = computed(() => {
   if (props.conversation.scope === "bot_group") return "BOT 群聊";
   return "群聊";
 });
+const toolsLoading = computed(() => toolPolicy.loading.value || toolPolicy.catalogLoading.value);
+
+watch(
+  [() => props.open, () => props.panel, () => props.conversation.id, settingsSection],
+  ([open, panel, conversationId, section], previous) => {
+    const previousConversationId = previous?.[2];
+    if (previousConversationId && previousConversationId !== conversationId) {
+      toolPolicy.dispose();
+      disabledTools.value = [];
+      toolStatus.value = "";
+      toolStatusKind.value = "";
+      settingsSection.value = "general";
+      return;
+    }
+    if (open && panel === "settings" && section === "tools") void loadTools();
+  },
+  { immediate: true }
+);
+onBeforeUnmount(() => toolPolicy.dispose());
+
+async function loadTools(force = false) {
+  const conversationId = props.conversation.id;
+  toolStatus.value = "";
+  toolStatusKind.value = "";
+  const loaded = await toolPolicy.load(force);
+  if (conversationId !== props.conversation.id) return;
+  if (loaded) {
+    disabledTools.value = [...toolPolicy.disabledTools.value];
+    return;
+  }
+  toolStatus.value = toolPolicy.error.value || "工具权限读取失败";
+  toolStatusKind.value = "error";
+}
+
+async function setToolEnabled(name: ToolName, enabled: boolean) {
+  if (toolPolicy.saving.value || toolsLoading.value) return;
+  const conversationId = props.conversation.id;
+  const previous = [...disabledTools.value];
+  const next = new Set(previous);
+  if (enabled) next.delete(name);
+  else next.add(name);
+  disabledTools.value = [...next];
+  toolStatus.value = "正在生效";
+  toolStatusKind.value = "";
+  const saved = await toolPolicy.save(disabledTools.value);
+  if (conversationId !== props.conversation.id) return;
+  if (saved) {
+    disabledTools.value = [...toolPolicy.disabledTools.value];
+    toolStatus.value = "已生效";
+    toolStatusKind.value = "saved";
+    return;
+  }
+  disabledTools.value = previous;
+  toolStatus.value = toolPolicy.error.value || "工具权限保存失败";
+  toolStatusKind.value = "error";
+}
 </script>
 
 <template>
@@ -53,8 +116,14 @@ const scopeLabel = computed(() => {
         <h2 :id="titleId" class="text-xl font-medium text-display">{{ title }}</h2>
       </header>
 
-      <div v-if="panel === 'settings'" class="grid gap-8 px-4 py-6 md:px-6">
-        <section aria-labelledby="conversation-reply-control-title">
+      <template v-if="panel === 'settings'">
+        <nav class="segmented mx-4 mt-5 md:mx-6" aria-label="会话设置分区">
+          <button class="segmented-button" type="button" :aria-pressed="settingsSection === 'general'" @click="settingsSection = 'general'">回复</button>
+          <button class="segmented-button" type="button" :aria-pressed="settingsSection === 'tools'" @click="settingsSection = 'tools'">工具权限</button>
+        </nav>
+
+        <div v-if="settingsSection === 'general'" class="grid gap-8 px-4 py-6 md:px-6">
+          <section aria-labelledby="conversation-reply-control-title">
           <h3 id="conversation-reply-control-title" class="text-base font-medium text-display">回复控制</h3>
           <div class="mt-3 divide-y divide-line border-y border-line">
             <ToggleSwitch v-model="replyEnabled" class="py-2" label="启动" />
@@ -71,9 +140,9 @@ const scopeLabel = computed(() => {
             v-if="conversation.scope === 'user_group' && replyEnabled && orchestratorEnabled && conversation.orchestratorStatus"
             :status="conversation.orchestratorStatus"
           />
-        </section>
+          </section>
 
-        <section aria-labelledby="conversation-information-title">
+          <section aria-labelledby="conversation-information-title">
           <h3 id="conversation-information-title" class="text-base font-medium text-display">会话信息</h3>
           <dl class="mt-3 divide-y divide-line border-y border-line text-sm">
             <div class="flex items-start justify-between gap-6 py-3">
@@ -89,11 +158,23 @@ const scopeLabel = computed(() => {
               <dd class="font-mono text-display">{{ conversation.messageCount }}</dd>
             </div>
           </dl>
-        </section>
-      </div>
+          </section>
+        </div>
+
+        <div v-else class="px-4 py-6 md:px-6">
+          <ConversationToolSettingsForm
+            :tools="toolPolicy.tools.value"
+            :disabled-tools="disabledTools"
+            :loading="toolsLoading"
+            :busy="toolsLoading || toolPolicy.saving.value"
+            @toggle="setToolEnabled"
+          />
+          <p v-if="toolStatus" class="mt-4 inline-state" :data-kind="toolStatusKind">{{ toolStatus }}</p>
+        </div>
+      </template>
 
       <ModelCallStatsPanel
-        v-else
+        v-if="panel === 'usage'"
         compact
         :stats="stats?.modelCalls ?? null"
         :messages="stats?.messages"
