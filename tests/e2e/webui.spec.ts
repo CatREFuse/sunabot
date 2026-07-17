@@ -626,7 +626,7 @@ test("工具目录支持启停、全局说明和继承说明恢复", async ({ pa
 
   await expect(page.getByRole("tab", { name: "工具目录", exact: true })).toHaveAttribute("aria-selected", "true");
   await expect(page.getByLabel("搜索工具")).toBeVisible();
-  await expect(page.getByLabel(/^启用 /)).toHaveCount(8);
+  await expect(page.getByLabel(/^启用 /)).toHaveCount(16);
   for (const name of [
     "assistant_text",
     "no_reply",
@@ -634,8 +634,16 @@ test("工具目录支持启停、全局说明和继承说明恢复", async ({ pa
     "websearch",
     "generate_img",
     "selfie",
+    "read_file",
+    "write_file",
+    "send_file",
+    "send_voice_message",
     "workspace_bash",
-    "codex"
+    "codex",
+    "activate_skill",
+    "read_skill_resource",
+    "run_skill_script",
+    "system_config"
   ]) {
     await expect(page.getByText(name, { exact: true })).toBeVisible();
   }

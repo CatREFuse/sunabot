@@ -1050,11 +1050,7 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
       const tools = listToolMetadata({
         onAssistantText: () => undefined,
         allowNoReply: true,
-        bash: {
-          enabled: true,
-          workspaceOnly: state.config.bot.bash.workspaceOnly,
-          blockedKeywords: state.config.bot.bash.blockedKeywords
-        },
+        bashAvailable: true,
         bot: state.config.bot,
         selfie: { enabled: true },
         memory: { enabled: true },
