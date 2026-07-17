@@ -12,6 +12,7 @@ import type { PrepareOutboundConversationAssetInput } from "../../../services/de
 import type { ProviderLogContext } from "../../../packages/contracts/model/modelGateway.js";
 import type { ImageGenerationFailureContext } from "../imageGenerationRetry.js";
 import type { WorkspaceBashProviderOptions } from "../../../services/tools/bashTool.js";
+import type { SkillRuntimeToolPort } from "../../../services/tools/skillRuntimeTool.js";
 
 export interface ProviderCompleteOptions {
   signal?: AbortSignal;
@@ -33,6 +34,8 @@ export interface ProviderCompleteOptions {
   asyncImage?: boolean;
   imageTools?: boolean;
   systemConfig?: SystemConfigToolPort;
+  skills?: SkillRuntimeToolPort;
+  mcp?: ProviderMcpOptions;
   logContext?: ProviderLogContext;
 }
 
@@ -90,6 +93,20 @@ export interface ProviderConversationAssetOptions {
     input: PrepareOutboundConversationAssetInput,
     context: { callId: string; toolName: "send_file" }
   ) => Promise<unknown>;
+}
+
+export interface ProviderMcpOptions {
+  definitions(): Record<string, unknown>[];
+  describe(name: string): {
+    serverId: string;
+    transport: "stdio" | "streamable_http";
+  };
+  call(input: {
+    name: string;
+    arguments: Record<string, unknown>;
+    callId: string;
+    signal?: AbortSignal;
+  }): Promise<unknown>;
 }
 
 export interface OpenAIProviderOptions {

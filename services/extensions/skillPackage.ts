@@ -42,6 +42,7 @@ export interface SkillFrontmatter {
 export interface SkillPackageRiskInput {
   hasScripts: boolean;
   hasExternalUrls: boolean;
+  externalOrigins: string[];
   mcpDependencies: AgentSkillMcpDependency[];
   allowImplicitInvocation: boolean | null;
 }
@@ -237,6 +238,7 @@ export function buildSkillPackageEvidence(
   riskInput: SkillPackageRiskInput = {
     hasScripts: false,
     hasExternalUrls: false,
+    externalOrigins: [],
     mcpDependencies: [],
     allowImplicitInvocation: null
   }
@@ -278,6 +280,7 @@ export function buildSkillPackageEvidence(
     classification: riskInput.hasScripts ? "script-bearing" : "instruction-only",
     hasScripts: riskInput.hasScripts,
     hasExternalUrls: riskInput.hasExternalUrls,
+    externalOrigins: [...riskInput.externalOrigins].sort(compareBinaryText),
     mcpDependencies,
     declaredFileAccess,
     allowImplicitInvocation: riskInput.allowImplicitInvocation
@@ -318,7 +321,12 @@ export function skillRecordFromEvidence(
     fileCount: evidence.fileCount,
     unpackedBytes: evidence.unpackedBytes,
     installedAt,
-    source
+    source,
+    approval: {
+      status: "unapproved",
+      digestSha256: null,
+      approvedAt: null
+    }
   };
 }
 

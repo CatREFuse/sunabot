@@ -50,6 +50,17 @@ import {
 } from "../../../services/tools/toolRegistry.js";
 import { TOOL_CALL_TIMEOUT_MS } from "../../../services/tools/toolConstants.js";
 import {
+  ACTIVATE_SKILL_TOOL_NAME,
+  readActivateSkillInput
+} from "../../../services/tools/activateSkillTool.js";
+import {
+  READ_SKILL_RESOURCE_TOOL_NAME,
+  RUN_SKILL_SCRIPT_TOOL_NAME,
+  readSkillResourceInput,
+  readSkillScriptInput
+} from "../../../services/tools/skillRuntimeTool.js";
+import { isMcpToolAlias } from "../../../services/extensions/public.js";
+import {
   readDeferredDispatchMessage,
   withRequiredDispatchMessage,
   withoutDispatchMessage
@@ -63,6 +74,7 @@ import type {
   TurnToolState
 } from "./contracts.js";
 import { logContextMetadata } from "./logger.js";
+import { mcpToolLogSummary } from "./mcpToolLog.js";
 import { readToolName } from "./promptMapping.js";
 import { errorMessage, parseJson } from "./valueUtils.js";
 import {
@@ -72,9 +84,13 @@ import {
   toolOrderingError
 } from "./turnToolState.js";
 import {
+  LOCAL_DATA_OUTBOUND_TURN_CONFLICT_ERROR,
+  localOutboundTurnConflict,
   preflightProviderToolResponse,
   toolCallErrors
 } from "./toolResponsePreflight.js";
+
+export { mcpToolLogSummary } from "./mcpToolLog.js";
 
 type InlineExecutor = (
   args: Record<string, unknown>,
@@ -92,7 +108,10 @@ const inlineExecutors: ReadonlyMap<string, InlineExecutor> = new Map([
   [SELFIE_TOOL_NAME, runSelfie],
   [SEND_FILE_TOOL_NAME, runSendFile],
   [MEMORY_RECALL_TOOL_NAME, runMemoryRecall],
-  [SYSTEM_CONFIG_TOOL_NAME, runSystemConfigTool]
+  [SYSTEM_CONFIG_TOOL_NAME, runSystemConfigTool],
+  [ACTIVATE_SKILL_TOOL_NAME, runActivateSkill],
+  [READ_SKILL_RESOURCE_TOOL_NAME, runReadSkillResource],
+  [RUN_SKILL_SCRIPT_TOOL_NAME, runSkillScript]
 ]);
 
 async function runAssistantText(
@@ -112,7 +131,14 @@ async function runAssistantText(
 export class RegistryProviderToolExecutor implements ProviderToolExecutorPort {
   resolveDefinitions(options: ProviderCompleteOptions, definitions?: OpenAIToolDefinition[]) {
     const configured = resolveProviderToolDefinitions(options, definitions) as Record<string, unknown>[];
-    return configured.map((tool) => isProviderDeferredTool(readToolName(tool), options)
+    const dynamicMcp = options.mcp?.definitions().filter((tool) => isMcpToolAlias(readToolName(tool))) ?? [];
+    const seen = new Set(configured.map(readToolName));
+    return [...configured, ...dynamicMcp.filter((tool) => {
+      const name = readToolName(tool);
+      if (!name || seen.has(name)) return false;
+      seen.add(name);
+      return true;
+    })].map((tool) => isProviderDeferredTool(readToolName(tool), options)
       ? withRequiredDispatchMessage(tool)
       : withoutDispatchMessage(tool));
   }
@@ -201,6 +227,30 @@ async function executeFunctionCall(
   state: TurnToolState
 ) {
   try {
+    if (localOutboundTurnConflict(call.name, state, options)) {
+      return { ok: false, error: LOCAL_DATA_OUTBOUND_TURN_CONFLICT_ERROR };
+    }
+    if (isMcpToolAlias(call.name)) {
+      if (!options.mcp || !isToolEnabledForTurn(call.name, definitions)) {
+        return { ok: false, error: `Tool ${call.name} is unavailable.` };
+      }
+      const args = parseJson(call.arguments);
+      if (!args || typeof args !== "object" || Array.isArray(args)) {
+        return { ok: false, error: `Invalid tool arguments for ${call.name}.` };
+      }
+      options.onToolCall?.(call.name);
+      markAcceptedTool(state, call.name);
+      const result = await options.mcp.call({
+        name: call.name,
+        arguments: args as Record<string, unknown>,
+        callId: call.call_id,
+        signal: options.signal
+      });
+      await appendToolLog(call.name, call, {
+        argumentKeys: Object.keys(args as Record<string, unknown>).sort()
+      }, mcpToolLogSummary(result), options).catch(() => undefined);
+      return result;
+    }
     const executionMode = providerToolExecutionMode(call.name, options);
     if (!executionMode) return { ok: false, error: `Unsupported tool: ${call.name}` };
     if (!isProviderToolAvailable(call.name, options)) {
@@ -247,6 +297,79 @@ async function executeFunctionCall(
   } catch (error) {
     return { ok: false, error: errorMessage(error) };
   }
+}
+
+async function runActivateSkill(
+  args: Record<string, unknown>,
+  call: ResponseFunctionCallItem,
+  options: ProviderCompleteOptions
+) {
+  if (!options.skills?.skillIds.length) return { ok: false, error: "Skill activation is not enabled." };
+  const input = readActivateSkillInput(args, options.skills.skillIds);
+  const result = await options.skills.activate(input);
+  await appendToolLog(ACTIVATE_SKILL_TOOL_NAME, call, input, pickToolLogResult(result), options)
+    .catch(() => undefined);
+  return result;
+}
+
+async function runReadSkillResource(
+  args: Record<string, unknown>,
+  call: ResponseFunctionCallItem,
+  options: ProviderCompleteOptions
+) {
+  if (!options.skills?.skillIds.length) return { ok: false, error: "Skill resources are not enabled." };
+  const input = readSkillResourceInput(args, options.skills.skillIds);
+  const result = await options.skills.readResource(input);
+  await appendToolLog(READ_SKILL_RESOURCE_TOOL_NAME, call, input, skillResourceLogResult(result), options)
+    .catch(() => undefined);
+  return result;
+}
+
+async function runSkillScript(
+  args: Record<string, unknown>,
+  call: ResponseFunctionCallItem,
+  options: ProviderCompleteOptions
+) {
+  if (!options.skills?.runScript || !options.skills.skillIds.length) {
+    return { ok: false, error: "Skill script execution is not enabled." };
+  }
+  const input = readSkillScriptInput(args, options.skills.skillIds);
+  const result = await options.skills.runScript(input);
+  await appendToolLog(RUN_SKILL_SCRIPT_TOOL_NAME, call, {
+    skillId: input.skillId,
+    path: input.path,
+    argumentCount: input.args.length
+  }, skillScriptLogResult(result), options).catch(() => undefined);
+  return result;
+}
+
+function skillResourceLogResult(value: unknown) {
+  const result = value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+  return {
+    ok: result.ok,
+    skillId: result.skillId,
+    path: result.path,
+    sha256: result.sha256,
+    byteLength: result.byteLength,
+    encoding: result.encoding
+  };
+}
+
+function skillScriptLogResult(value: unknown) {
+  const result = value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+  return {
+    ok: result.ok,
+    exitCode: result.exitCode,
+    signal: result.signal,
+    timedOut: result.timedOut,
+    stdoutLength: typeof result.stdout === "string" ? result.stdout.length : undefined,
+    stderrLength: typeof result.stderr === "string" ? result.stderr.length : undefined,
+    code: result.code
+  };
 }
 
 async function runReadFile(

@@ -239,7 +239,7 @@ async function removeEvidence(name, identity) {
   if (await lstatOptional(name)) fail("BOUND_RECOVERY_REQUIRED");
 }
 
-async function moveKnownEntry(source, destination, expected) {
+async function moveKnownEntry(source, destination, expected, pauseAt = null) {
   if (await lstatOptional(destination)) fail("EEXIST");
   const noFollow = typeof fsConstants.O_NOFOLLOW === "number" ? fsConstants.O_NOFOLLOW : 0;
   const handle = await fs.open(source, fsConstants.O_RDONLY | noFollow);
@@ -265,6 +265,7 @@ async function moveKnownEntry(source, destination, expected) {
           linkedSource.nlink !== before.nlink + 1n || linkedDestination.nlink !== before.nlink + 1n) {
         fail("BOUND_RENAME_IDENTITY_CHANGED");
       }
+      if (pauseAt === "after_link_before_source_unlink") await new Promise(() => undefined);
       await fs.unlink(source);
       renamed = true;
     } else {
@@ -353,6 +354,41 @@ async function execute(command) {
     await syncCwd();
     injectFault(fault, "after_rename_before_response");
     return { identity: serializeIdentity(moved) };
+  }
+  if (command.op === "unlink") {
+    const object = exactObject(command, ["op", "target", "expectedTarget", "responseMode"]);
+    configuredResponse(object.responseMode);
+    const target = basename(object.target);
+    const expected = expectedIdentity(object.expectedTarget);
+    const current = await fs.lstat(target, { bigint: true });
+    if (expected.kind !== "file" || !current.isFile() || current.isSymbolicLink() ||
+        !sameIdentity(current, expected)) fail("BOUND_SOURCE_CHANGED");
+    await fs.unlink(target);
+    await syncCwd();
+    return {};
+  }
+  if (command.op === "release_lock") {
+    const object = exactObject(command, [
+      "op", "source", "destination", "expectedSource", "faultAt", "pauseAt", "responseMode"
+    ]);
+    configuredResponse(object.responseMode);
+    const fault = configuredFault(object.faultAt, [
+      "after_rename_before_unlink", "after_unlink_before_response"
+    ]);
+    const pauseAt = configuredFault(object.pauseAt, ["after_link_before_source_unlink"]);
+    const destination = basename(object.destination);
+    const moved = await moveKnownEntry(
+      basename(object.source),
+      destination,
+      expectedIdentity(object.expectedSource),
+      pauseAt
+    );
+    await syncCwd();
+    injectFault(fault, "after_rename_before_unlink");
+    await removeEvidence(destination, moved);
+    await syncCwd();
+    injectFault(fault, "after_unlink_before_response");
+    return { released: true };
   }
   if (command.op === "recover_operation") return recoverOperation(command);
   if (command.op === "finalize_operation") return finalizeOperation(command);

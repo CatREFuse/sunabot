@@ -1,0 +1,22 @@
+ARG MCP_BASE_IMAGE=docker.io/library/node:24.18.0-bookworm-slim@sha256:0778d035a13f3f3833b7f2cb750e0df6cbce45583e84fd822f499f0c902a6c74
+
+FROM ${MCP_BASE_IMAGE}
+
+RUN groupadd --gid 65532 sunabot-mcp \
+    && useradd --uid 65532 --gid 65532 --no-create-home --home-dir /workbench --shell /usr/sbin/nologin sunabot-mcp \
+    && install -d -m 0555 /usr/local/libexec /opt/sunabot/mcp \
+    && install -d -m 0555 /run/sunabot/extensions \
+    && install -d -o 65532 -g 65532 -m 0700 /workbench \
+    && install -d -o 65532 -g 65532 -m 0700 /skills /run/sunabot/secrets
+
+COPY --chmod=0555 mcp-stdio-entrypoint.mjs /usr/local/libexec/sunabot-mcp-stdio-entrypoint
+COPY --chmod=0555 mcp-test-server.mjs /usr/local/bin/sunabot-mcp-test-server
+COPY --chmod=0444 mcp-executables.json /opt/sunabot/mcp/executables.json
+
+RUN /usr/local/bin/node --version \
+    && /usr/local/bin/node -e 'const fs=require("node:fs"),crypto=require("node:crypto");const value=JSON.parse(fs.readFileSync("/opt/sunabot/mcp/executables.json","utf8"));if(value.schemaVersion!==1||!Array.isArray(value.executables)||value.executables.length<1||value.executables.length>128||new Set(value.executables.map((item)=>item.path)).size!==value.executables.length)process.exit(1);for(const item of value.executables){if(!item||typeof item.path!=="string"||!item.path.startsWith("/")||!item.sha256?.match(/^[a-f0-9]{64}$/)||(fs.statSync(item.path).mode&0o111)===0||crypto.createHash("sha256").update(fs.readFileSync(item.path)).digest("hex")!==item.sha256)process.exit(1)}' \
+    && test -x /usr/local/libexec/sunabot-mcp-stdio-entrypoint
+
+USER 65532:65532
+WORKDIR /workbench
+ENTRYPOINT ["/usr/local/libexec/sunabot-mcp-stdio-entrypoint"]

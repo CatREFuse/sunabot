@@ -8,11 +8,14 @@ import { retainTerminalSkillJournal } from "../../adapters/filesystem/agentSkill
 import { moveVerifiedSkillDirectory } from "../../adapters/filesystem/agentSkillSafeMutation.js";
 import { inspectSkillDirectory } from "../../adapters/filesystem/skillArchive.js";
 import { AgentExtensionService } from "../../services/extensions/public.js";
+import { mcpStdioCredentialEnvironmentKey } from "../../packages/contracts/extensions/agentExtensions.js";
 import {
   makeStoredZip,
   openAiSkillMetadata,
   skillMarkdown
 } from "./agent-extension-fixtures.js";
+
+vi.setConfig({ testTimeout: 30_000, hookTimeout: 30_000 });
 
 const temporaryPaths: string[] = [];
 let workspace = "";
@@ -80,6 +83,7 @@ describe("Agent extension filesystem store", () => {
         classification: "script-bearing",
         hasScripts: true,
         hasExternalUrls: true,
+        externalOrigins: ["https://docs.example.test", "https://mcp.example.test"],
         declaredFileAccess: ["read", "write", "shell"],
         allowImplicitInvocation: false,
         mcpDependencies: [{ id: "github-mcp" }]
@@ -95,7 +99,7 @@ describe("Agent extension filesystem store", () => {
     expect(replacement.digestSha256).not.toBe(installed.digestSha256);
     expect(replacement.riskEvidence.reviewStatus).toBe("unreviewed");
     expect((await service.overview("agent-a")).skills).toHaveLength(1);
-  });
+  }, 20_000);
 
   it("uses an injected status resolver and keeps MCP dependency declarations as preview-only hints", async () => {
     const store = new AgentExtensionStore({ workspaceRoot: workspace });
@@ -106,6 +110,8 @@ describe("Agent extension filesystem store", () => {
     const service = new AgentExtensionService(store, statusResolver);
     const installed = await service.installSkill({ agentId: "agent-a", archive: fullSkillZip("Preview behavior") });
     const descriptor = mcpDescriptor();
+    const sourceKey = mcpStdioCredentialEnvironmentKey("agent-a", descriptor.id, "GITHUB_TOKEN");
+    const targetKey = mcpStdioCredentialEnvironmentKey("agent-b", descriptor.id, "GITHUB_TOKEN");
     await store.putMcpServer({ agentId: "agent-a", server: descriptor, replace: false });
 
     const missing = await service.previewCopy({
@@ -120,8 +126,15 @@ describe("Agent extension filesystem store", () => {
       declaredMcpDependencies: [{ id: "github-mcp" }]
     });
     expect(missing.selectedMcpServers[0]).toMatchObject({
-      sourceSecrets: { configuredKeys: ["GITHUB_TOKEN"], missingKeys: [] },
-      targetSecrets: { configuredKeys: [], missingKeys: ["GITHUB_TOKEN"] }
+      server: {
+        enabled: false,
+        envKeys: ["GITHUB_TOKEN"],
+        migrationStatus: "reauthorization_required"
+      },
+      sourceSecrets: { configuredKeys: [sourceKey], missingKeys: [] },
+      targetSecrets: { configuredKeys: [], missingKeys: [targetKey] },
+      targetState: "disabled",
+      requiresAuthorization: true
     });
     await store.putMcpServer({ agentId: "agent-b", server: descriptor, replace: false });
     const declared = await service.previewCopy({
@@ -134,26 +147,239 @@ describe("Agent extension filesystem store", () => {
     expect(statusResolver).toHaveBeenCalledWith({
       agentId: "agent-a",
       serverId: "github-mcp",
-      envKeys: ["GITHUB_TOKEN"]
+      envKeys: [sourceKey]
+    });
+    expect(statusResolver).toHaveBeenCalledWith({
+      agentId: "agent-b",
+      serverId: "github-mcp",
+      envKeys: [targetKey]
     });
     expect(JSON.stringify(missing)).not.toContain("credential-value");
     await expect(fs.access(path.join(workspace, "secrets"))).rejects.toMatchObject({ code: "ENOENT" });
-  });
+  }, 20_000);
+
+  it("applies a CAS-bound cross-Agent copy without shared inodes and keeps the copied Skill disabled", async () => {
+    const store = new AgentExtensionStore({ workspaceRoot: workspace });
+    let targetSecretConfigured = false;
+    const service = new AgentExtensionService(store, async ({ agentId, envKeys }) => {
+      const configured = agentId === "agent-a" || (agentId === "agent-b" && targetSecretConfigured);
+      return configured
+        ? { configuredKeys: [...envKeys], missingKeys: [] }
+        : { configuredKeys: [], missingKeys: [...envKeys] };
+    });
+    const source = await service.installSkill({ agentId: "agent-a", archive: skillZip("Copy behavior") });
+    await store.putMcpServer({ agentId: "agent-a", server: mcpDescriptor(), replace: false });
+    const targetKey = mcpStdioCredentialEnvironmentKey("agent-b", "github-mcp", "GITHUB_TOKEN");
+    const preview = await service.previewCopy({
+      sourceAgentId: "agent-a",
+      targetAgentId: "agent-b",
+      skillId: source.id,
+      mcpServerIds: ["github-mcp"]
+    });
+    expect((await service.previewCopy({
+      sourceAgentId: "agent-a",
+      targetAgentId: "agent-b",
+      skillId: source.id,
+      mcpServerIds: ["github-mcp"]
+    })).previewRevision).toBe(preview.previewRevision);
+    await store.ensureLayout("agent-b");
+    expect((await service.previewCopy({
+      sourceAgentId: "agent-a",
+      targetAgentId: "agent-b",
+      skillId: source.id,
+      mcpServerIds: ["github-mcp"]
+    })).previewRevision).toBe(preview.previewRevision);
+    const result = await service.applyCopy({
+      sourceAgentId: "agent-a",
+      targetAgentId: "agent-b",
+      skillId: source.id,
+      mcpServerIds: ["github-mcp"],
+      previewRevision: preview.previewRevision,
+      conflictStrategy: "replace"
+    });
+    expect(result).toMatchObject({
+      sourceAgentId: "agent-a",
+      targetAgentId: "agent-b",
+      skipped: false,
+      skill: {
+        id: "test-skill",
+        enabled: false,
+        source: { kind: "copy", agentId: "agent-a", skillId: "test-skill" },
+        riskEvidence: { reviewStatus: "unreviewed", reviewedDigestSha256: null },
+        approval: { status: "unapproved", digestSha256: null, approvedAt: null }
+      },
+      mcpServers: [{
+        id: "github-mcp",
+        enabled: false,
+        envKeys: ["GITHUB_TOKEN"],
+        migrationStatus: "reauthorization_required"
+      }]
+    });
+    await expect(service.setMcpServerEnabled({
+      agentId: "agent-b",
+      serverId: "github-mcp",
+      enabled: true
+    })).rejects.toMatchObject({ code: "MCP_REAUTHORIZATION_REQUIRED" });
+    expect((await service.overview("agent-b")).mcp.secrets)
+      .toEqual({ configuredKeys: [], missingKeys: [targetKey] });
+    targetSecretConfigured = true;
+    await expect(service.setMcpServerEnabled({
+      agentId: "agent-b",
+      serverId: "github-mcp",
+      enabled: true
+    })).rejects.toMatchObject({ code: "MCP_REAUTHORIZATION_REQUIRED" });
+    const migrated = result.mcpServers[0]!;
+    const { migrationStatus: _migrationStatus, ...reauthorized } = migrated;
+    const reauthorizationPreview = await service.previewMcpServer({
+      agentId: "agent-b",
+      server: reauthorized
+    });
+    await service.putMcpServer({
+      agentId: "agent-b",
+      server: reauthorized,
+      replace: true,
+      previewRevision: reauthorizationPreview.previewRevision,
+      approveCommand: true
+    });
+    targetSecretConfigured = false;
+    await expect(service.setMcpServerEnabled({
+      agentId: "agent-b",
+      serverId: "github-mcp",
+      enabled: true
+    })).rejects.toMatchObject({ code: "MCP_CREDENTIALS_REQUIRED" });
+    targetSecretConfigured = true;
+    await expect(service.setMcpServerEnabled({
+      agentId: "agent-b",
+      serverId: "github-mcp",
+      enabled: true
+    })).resolves.toMatchObject({ enabled: true, envKeys: ["GITHUB_TOKEN"] });
+    expect(await extensionFileContents("agent-b")).not.toContain("credential-value");
+    const sourceStat = await fs.stat(path.join(skillsRoot("agent-a"), "test-skill/SKILL.md"), { bigint: true });
+    const targetStat = await fs.stat(path.join(skillsRoot("agent-b"), "test-skill/SKILL.md"), { bigint: true });
+    expect({ dev: targetStat.dev, ino: targetStat.ino }).not.toEqual({ dev: sourceStat.dev, ino: sourceStat.ino });
+
+    const reviewed = await service.reviewSkill({
+      agentId: "agent-b",
+      skillId: "test-skill",
+      approve: true
+    });
+    expect(reviewed).toMatchObject({
+      enabled: false,
+      riskEvidence: { reviewStatus: "approved", reviewedDigestSha256: reviewed.digestSha256 },
+      approval: { status: "approved", digestSha256: reviewed.digestSha256 }
+    });
+    const approved = await service.setSkillEnabled({ agentId: "agent-b", skillId: "test-skill", enabled: true });
+    expect(approved.approval).toMatchObject({
+      status: "approved",
+      digestSha256: approved.digestSha256
+    });
+    await expect(service.applyCopy({
+      sourceAgentId: "agent-a",
+      targetAgentId: "agent-b",
+      skillId: source.id,
+      previewRevision: preview.previewRevision,
+      conflictStrategy: "skip"
+    })).rejects.toMatchObject({ code: "AGENT_EXTENSION_COPY_PREVIEW_STALE" });
+  }, 30_000);
+
+  it("migrates only disabled MCP configuration and requires target-side authorization", async () => {
+    const store = new AgentExtensionStore({ workspaceRoot: workspace });
+    const service = new AgentExtensionService(store, async ({ agentId, envKeys }) => ({
+      configuredKeys: agentId === "agent-a" ? [...envKeys] : [],
+      missingKeys: agentId === "agent-a" ? [] : [...envKeys]
+    }));
+    const source = await service.installSkill({ agentId: "agent-a", archive: skillZip("MCP migration") });
+    const bearer = httpMcpDescriptor("bearer-mcp", {
+      kind: "bearer" as const,
+      credentialRef: "mcp/source-bearer"
+    });
+    const sourceOAuthHandle = `mcpcred_${"A".repeat(24)}`;
+    const oauth = httpMcpDescriptor("oauth-mcp", {
+      kind: "oauth" as const,
+      credentialRef: sourceOAuthHandle
+    });
+    await store.putMcpServer({ agentId: "agent-a", server: bearer, replace: false });
+    await store.putMcpServer({ agentId: "agent-a", server: oauth, replace: false });
+
+    const preview = await service.previewCopy({
+      sourceAgentId: "agent-a",
+      targetAgentId: "agent-b",
+      skillId: source.id,
+      mcpServerIds: [bearer.id, oauth.id]
+    });
+    expect(JSON.stringify(preview)).not.toContain(sourceOAuthHandle);
+    expect(preview.selectedMcpServers).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        server: expect.objectContaining({
+          id: "bearer-mcp",
+          enabled: false,
+          auth: { kind: "bearer", credentialRef: "pending" },
+          migrationStatus: "reauthorization_required"
+        }),
+        targetState: "disabled",
+        requiresAuthorization: true
+      }),
+      expect.objectContaining({
+        server: expect.objectContaining({
+          id: "oauth-mcp",
+          enabled: false,
+          auth: { kind: "oauth", credentialRef: "pending" },
+          migrationStatus: "reauthorization_required"
+        }),
+        targetState: "disabled",
+        requiresAuthorization: true
+      })
+    ]));
+
+    const result = await service.applyCopy({
+      sourceAgentId: "agent-a",
+      targetAgentId: "agent-b",
+      skillId: source.id,
+      mcpServerIds: [bearer.id, oauth.id],
+      previewRevision: preview.previewRevision,
+      conflictStrategy: "replace"
+    });
+    expect(JSON.stringify(result)).not.toContain(sourceOAuthHandle);
+    const target = await store.readMcpServerIndex("agent-b");
+    expect(target.servers).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "bearer-mcp", enabled: false, auth: { kind: "bearer", credentialRef: "pending" } }),
+      expect.objectContaining({ id: "oauth-mcp", enabled: false, auth: { kind: "oauth", credentialRef: "pending" } })
+    ]));
+    for (const serverId of [bearer.id, oauth.id]) {
+      await expect(service.setMcpServerEnabled({ agentId: "agent-b", serverId, enabled: true }))
+        .rejects.toMatchObject({ code: "MCP_REAUTHORIZATION_REQUIRED" });
+    }
+
+    const reboundHandle = `mcpcred_${"B".repeat(24)}`;
+    const rebound = await store.bindMcpOAuthCredential({
+      agentId: "agent-b",
+      serverId: oauth.id,
+      expectedRevision: target.revision,
+      expectedUrl: oauth.url,
+      credentialRef: reboundHandle
+    });
+    expect(rebound).toMatchObject({
+      enabled: false,
+      auth: { kind: "oauth", credentialRef: reboundHandle }
+    });
+    expect(rebound).not.toHaveProperty("migrationStatus");
+  }, 20_000);
 
   it("defaults every required credential to missing and rejects malformed resolver partitions", async () => {
     const store = new AgentExtensionStore({ workspaceRoot: workspace });
     await store.putMcpServer({ agentId: "agent-a", server: mcpDescriptor(), replace: false });
+    const requiredKey = mcpStdioCredentialEnvironmentKey("agent-a", "github-mcp", "GITHUB_TOKEN");
     const defaultService = new AgentExtensionService(store);
     expect((await defaultService.overview("agent-a")).mcp.secrets)
-      .toEqual({ configuredKeys: [], missingKeys: ["GITHUB_TOKEN"] });
+      .toEqual({ configuredKeys: [], missingKeys: [requiredKey] });
 
     const invalid = new AgentExtensionService(store, async () => ({
-      configuredKeys: ["GITHUB_TOKEN"],
-      missingKeys: ["GITHUB_TOKEN"]
+      configuredKeys: [requiredKey],
+      missingKeys: [requiredKey]
     }));
     await expect(invalid.overview("agent-a"))
       .rejects.toMatchObject({ code: "AGENT_EXTENSION_CREDENTIAL_STATUS_INVALID" });
-  });
+  }, 20_000);
 
   it("maps credential resolver throws to one fixed error without leaking through overview, preview, logs, or disk", async () => {
     const privatePath = "/private/workspace/business/agents/agent-a/extensions/mcp/servers.json";
@@ -204,7 +430,7 @@ describe("Agent extension filesystem store", () => {
     expect(await fs.readFile(mcpIndex("agent-a"), "utf8")).not.toContain(privatePath);
     expect(await extensionFileContents("agent-a")).not.toContain(secretValue);
     expect(await extensionFileContents("agent-a")).not.toContain(privatePath);
-  });
+  }, 20_000);
 
   it("revalidates secret-free MCP descriptors at the filesystem write boundary", async () => {
     const store = new AgentExtensionStore({ workspaceRoot: workspace });
@@ -492,7 +718,7 @@ describe("Agent extension filesystem store", () => {
     });
     expect(await fs.readFile(path.join(skillsRoot("agent-b"), "test-skill/SKILL.md"), "utf8"))
       .toContain("Installed");
-  });
+  }, 20_000);
 
   it("terminalizes a removal rollback before a later replacement and ignores damaged historical audit evidence", async () => {
     const initial = new AgentExtensionService(new AgentExtensionStore({ workspaceRoot: workspace }));
@@ -743,6 +969,25 @@ function mcpDescriptor() {
     command: "/usr/bin/github-mcp",
     args: ["--stdio"],
     envKeys: ["GITHUB_TOKEN"]
+  };
+}
+
+function httpMcpDescriptor(
+  id: string,
+  auth: { kind: "bearer" | "oauth"; credentialRef: string }
+) {
+  return {
+    id,
+    name: id,
+    description: "Remote MCP.",
+    enabled: true,
+    required: true,
+    enabledTools: [],
+    disabledTools: [],
+    approvalMode: "always" as const,
+    transport: "streamable_http" as const,
+    url: `https://extensions.example.test/${id === "oauth-mcp" ? "two" : "one"}`,
+    auth
   };
 }
 

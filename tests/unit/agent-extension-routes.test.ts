@@ -83,34 +83,148 @@ describe("Agent extension API plugin", () => {
     expect(invalidAgent.statusCode).toBe(400);
   });
 
-  it("does not register cross-Agent apply or MCP mutation routes", async () => {
+  it("requires an admin-guarded explicit review approval and closes the changed Agent lifecycle", async () => {
     const service = serviceMock();
+    const approved = {
+      ...skillRecord(),
+      riskEvidence: {
+        ...skillRecord().riskEvidence,
+        reviewStatus: "approved",
+        reviewedDigestSha256: "a".repeat(64)
+      },
+      approval: {
+        status: "approved",
+        digestSha256: "a".repeat(64),
+        approvedAt: "2026-07-17T00:01:00.000Z"
+      }
+    };
+    service.reviewSkill.mockResolvedValue(approved);
+    const guard = vi.fn(async (request: { headers: Record<string, unknown> }) => {
+      if (request.headers["x-test-admin"] !== "yes") {
+        throw Object.assign(new Error("unauthorized"), { statusCode: 401, code: "UNAUTHORIZED" });
+      }
+    });
+    const onAgentExtensionsChanged = vi.fn(async () => undefined);
+    const app = Fastify();
+    apps.push(app);
+    registerAgentExtensionRoutes(app, {
+      service: service as never,
+      adminGuard: guard as never,
+      onAgentExtensionsChanged
+    });
+
+    expect((await app.inject({
+      method: "POST",
+      url: "/api/agent-extensions/skills/test-skill/review",
+      payload: { agentId: "agent-a", approve: true }
+    })).statusCode).toBe(401);
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/agent-extensions/skills/test-skill/review",
+      headers: { "x-test-admin": "yes" },
+      payload: { agentId: "agent-a", approve: true }
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      enabled: false,
+      riskEvidence: { reviewStatus: "approved", reviewedDigestSha256: "a".repeat(64) },
+      approval: { status: "approved", digestSha256: "a".repeat(64) }
+    });
+    expect(service.reviewSkill).toHaveBeenCalledWith({
+      agentId: "agent-a",
+      skillId: "test-skill",
+      approve: true
+    });
+    expect(onAgentExtensionsChanged).toHaveBeenCalledWith("agent-a");
+
+    for (const payload of [
+      { agentId: "agent-a", approve: false },
+      { agentId: "agent-a", approve: true, secret: "must-not-leak" }
+    ]) {
+      const invalid = await app.inject({
+        method: "POST",
+        url: "/api/agent-extensions/skills/test-skill/review",
+        headers: { "x-test-admin": "yes" },
+        payload
+      });
+      expect(invalid.statusCode).toBe(400);
+      expect(invalid.body).not.toContain("must-not-leak");
+    }
+    expect(service.reviewSkill).toHaveBeenCalledTimes(1);
+    expect(onAgentExtensionsChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it("registers strict guarded MCP lifecycle routes without accepting secret values", async () => {
+    const service = serviceMock();
+    service.previewMcpServer.mockResolvedValue({
+      schemaVersion: 1,
+      previewRevision: "a".repeat(64),
+      server: mcpDescriptor(),
+      commandApproval: {
+        required: true,
+        command: mcpDescriptor().command,
+        args: mcpDescriptor().args,
+        digestSha256: "b".repeat(64)
+      }
+    });
+    service.putMcpServer.mockResolvedValue(mcpDescriptor());
+    service.setMcpServerEnabled.mockResolvedValue({ ...mcpDescriptor(), enabled: false });
+    service.removeMcpServer.mockResolvedValue(mcpDescriptor());
     const app = Fastify();
     apps.push(app);
     registerAgentExtensionRoutes(app, { service: service as never, adminGuard: vi.fn(async () => undefined) as never });
 
-    const requests = [
-      { method: "POST", url: "/api/agent-extensions/skills/copy" },
-      { method: "PUT", url: "/api/agent-extensions/mcp/servers" },
-      { method: "POST", url: "/api/agent-extensions/mcp/servers/copy" },
-      { method: "PATCH", url: "/api/agent-extensions/mcp/servers/github-mcp" },
-      { method: "DELETE", url: "/api/agent-extensions/mcp/servers/github-mcp" },
-      { method: "PUT", url: "/api/agent-extensions/mcp/secrets" }
-    ] as const;
-    for (const request of requests) {
-      const response = await app.inject({
-        ...request,
-        payload: { token: "super-secret-value", Authorization: "Bearer sk-forbidden" }
-      });
-      expect(response.statusCode).toBe(404);
-      expect(response.body).not.toContain("super-secret-value");
-      expect(response.body).not.toContain("sk-forbidden");
-    }
-    expect(service.copySkill).not.toHaveBeenCalled();
-    expect(service.putMcpServer).not.toHaveBeenCalled();
-    expect(service.copyMcpServer).not.toHaveBeenCalled();
-    expect(service.setMcpServerEnabled).not.toHaveBeenCalled();
-    expect(service.removeMcpServer).not.toHaveBeenCalled();
+    const preview = await app.inject({
+      method: "POST",
+      url: "/api/agent-extensions/mcp/servers/preview",
+      payload: { agentId: "agent-a", server: mcpDescriptor() }
+    });
+    expect(preview.statusCode).toBe(200);
+    expect(preview.json().commandApproval).toMatchObject({
+      command: mcpDescriptor().command,
+      args: mcpDescriptor().args
+    });
+    const stored = await app.inject({
+      method: "PUT",
+      url: "/api/agent-extensions/mcp/servers",
+      payload: {
+        agentId: "agent-a",
+        server: mcpDescriptor(),
+        previewRevision: "a".repeat(64),
+        approveCommand: true
+      }
+    });
+    expect(stored.statusCode).toBe(200);
+    expect(service.putMcpServer).toHaveBeenCalledWith({
+      agentId: "agent-a", server: mcpDescriptor(), replace: undefined,
+      previewRevision: "a".repeat(64), approveCommand: true
+    });
+    expect((await app.inject({
+      method: "PATCH",
+      url: "/api/agent-extensions/mcp/servers/github-mcp",
+      payload: { agentId: "agent-a", enabled: false }
+    })).statusCode).toBe(200);
+    expect((await app.inject({
+      method: "DELETE",
+      url: "/api/agent-extensions/mcp/servers/github-mcp?agentId=agent-a"
+    })).statusCode).toBe(200);
+
+    const injected = await app.inject({
+      method: "PUT",
+      url: "/api/agent-extensions/mcp/servers",
+      payload: {
+        agentId: "agent-a",
+        server: mcpDescriptor(),
+        previewRevision: "a".repeat(64),
+        approveCommand: true,
+        token: "super-secret-value",
+        Authorization: "Bearer sk-forbidden"
+      }
+    });
+    expect(injected.statusCode).toBe(400);
+    expect(injected.body).not.toContain("super-secret-value");
+    expect(injected.body).not.toContain("sk-forbidden");
+    expect(service.putMcpServer).toHaveBeenCalledTimes(1);
   });
 
   it("exposes guarded strict lifecycle and copy-preview routes", async () => {
@@ -118,6 +232,14 @@ describe("Agent extension API plugin", () => {
     service.setSkillEnabled.mockResolvedValue({ ...skillRecord(), enabled: false });
     service.uninstallSkill.mockResolvedValue(skillRecord());
     service.previewCopy.mockResolvedValue(copyPreview());
+    service.applyCopy.mockResolvedValue({
+      schemaVersion: 1,
+      sourceAgentId: "agent-a",
+      targetAgentId: "agent-b",
+      skill: { ...skillRecord(), enabled: false },
+      skipped: false,
+      mcpServers: []
+    });
     const guard = vi.fn(async () => undefined);
     const app = Fastify();
     apps.push(app);
@@ -141,6 +263,21 @@ describe("Agent extension API plugin", () => {
       skillId: "test-skill",
       mcpServerIds: ["github-mcp"]
     });
+    const applied = await app.inject({
+      method: "POST",
+      url: "/api/agent-extensions/skills/copy",
+      payload: {
+        sourceAgentId: "agent-a",
+        targetAgentId: "agent-b",
+        skillId: "test-skill",
+        previewRevision: "f".repeat(64),
+        conflictStrategy: "replace"
+      }
+    });
+    expect(applied.statusCode).toBe(200);
+    expect(service.applyCopy).toHaveBeenCalledWith(expect.objectContaining({
+      sourceAgentId: "agent-a", targetAgentId: "agent-b", conflictStrategy: "replace"
+    }));
 
     const disabled = await app.inject({
       method: "PATCH",
@@ -153,7 +290,7 @@ describe("Agent extension API plugin", () => {
       url: "/api/agent-extensions/skills/test-skill?agentId=agent-a"
     });
     expect(removed.statusCode).toBe(200);
-    expect(guard).toHaveBeenCalledTimes(3);
+    expect(guard).toHaveBeenCalledTimes(4);
 
     const extra = await app.inject({
       method: "PATCH",
@@ -259,10 +396,13 @@ function serviceMock() {
   return {
     overview: vi.fn(),
     installSkill: vi.fn(),
+    reviewSkill: vi.fn(),
     copySkill: vi.fn(),
     putMcpServer: vi.fn(),
+    previewMcpServer: vi.fn(),
     copyMcpServer: vi.fn(),
     previewCopy: vi.fn(),
+    applyCopy: vi.fn(),
     setSkillEnabled: vi.fn(),
     uninstallSkill: vi.fn(),
     setMcpServerEnabled: vi.fn(),
@@ -286,6 +426,7 @@ function skillRecord() {
       classification: "instruction-only",
       hasScripts: false,
       hasExternalUrls: true,
+      externalOrigins: ["https://mcp.example.test"],
       mcpDependencies: [{
         id: "github-mcp",
         description: "Repository tools",
@@ -295,13 +436,14 @@ function skillRecord() {
       declaredFileAccess: ["read"],
       allowImplicitInvocation: false
     },
-    enabled: true,
+    enabled: false,
     entry: "SKILL.md",
     digestSha256: "a".repeat(64),
     fileCount: 1,
     unpackedBytes: 100,
     installedAt: "2026-07-17T00:00:00.000Z",
-    source: { kind: "upload" }
+    source: { kind: "upload" },
+    approval: { status: "unapproved", digestSha256: null, approvedAt: null }
   };
 }
 
@@ -321,8 +463,13 @@ function mcpDescriptor() {
 function copyPreview() {
   return {
     schemaVersion: 1,
+    previewRevision: "f".repeat(64),
     sourceAgentId: "agent-a",
     targetAgentId: "agent-b",
+    sourceSkillRevision: "1".repeat(64),
+    targetSkillRevision: "2".repeat(64),
+    sourceMcpRevision: "3".repeat(64),
+    targetMcpRevision: "4".repeat(64),
     skill: {
       record: skillRecord(),
       contentVersion: "a".repeat(64),
@@ -337,7 +484,9 @@ function copyPreview() {
       descriptorVersion: "c".repeat(64),
       conflict: "none",
       sourceSecrets: { configuredKeys: ["GITHUB_TOKEN"], missingKeys: [] },
-      targetSecrets: { configuredKeys: [], missingKeys: ["GITHUB_TOKEN"] }
+      targetSecrets: { configuredKeys: [], missingKeys: ["GITHUB_TOKEN"] },
+      targetState: "disabled",
+      requiresAuthorization: true
     }]
   };
 }

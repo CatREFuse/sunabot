@@ -62,6 +62,10 @@ COPY --from=build --chown=1000:1000 /srv/sunabot/apps/admin-web/dist ./apps/admi
 COPY --chown=1000:1000 deploy/runtime-contract.json ./deploy/runtime-contract.json
 COPY --chown=1000:1000 deploy/docker/healthcheck.mjs ./deploy/docker/healthcheck.mjs
 COPY --chown=1000:1000 components/component.lock.json ./components/component.lock.json
+COPY --chmod=0555 deploy/docker/mcp-test-server.mjs /usr/local/bin/sunabot-mcp-test-server
+COPY --chmod=0444 deploy/docker/mcp-executables.json /opt/sunabot/mcp/executables.json
+
+RUN /usr/local/bin/node -e 'const fs=require("node:fs"),crypto=require("node:crypto");const value=JSON.parse(fs.readFileSync("/opt/sunabot/mcp/executables.json","utf8"));if(value.schemaVersion!==1||!Array.isArray(value.executables)||value.executables.length<1||value.executables.length>128||new Set(value.executables.map((item)=>item.path)).size!==value.executables.length)process.exit(1);for(const item of value.executables){if(!item||typeof item.path!=="string"||!item.path.startsWith("/")||!item.sha256?.match(/^[a-f0-9]{64}$/)||(fs.statSync(item.path).mode&0o111)===0||crypto.createHash("sha256").update(fs.readFileSync(item.path)).digest("hex")!==item.sha256)process.exit(1)}'
 
 LABEL org.opencontainers.image.title="sunabot-core" \
       org.opencontainers.image.version="${SUNABOT_RELEASE_VERSION}" \

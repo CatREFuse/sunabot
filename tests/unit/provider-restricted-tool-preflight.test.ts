@@ -5,15 +5,24 @@ import type { ProviderConfig, ProviderKind } from "../../src/types.js";
 
 const appendRequestLog = vi.hoisted(() => vi.fn(async () => undefined));
 const runWorkspaceBash = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
+const runWebsearch = vi.hoisted(() => vi.fn(async () => ({ ok: true, items: [] })));
 
 vi.mock("../../src/requestLog.js", () => ({ appendRequestLog }));
 vi.mock("../../services/tools/bashTool.js", async (importOriginal) => ({
   ...await importOriginal<typeof import("../../services/tools/bashTool.js")>(),
   runWorkspaceBash
 }));
+vi.mock("../../adapters/model/webSearchTool.js", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../../adapters/model/webSearchTool.js")>(),
+  runWebsearch
+}));
 
 import { OpenAIProvider } from "../../adapters/model/openaiProvider.js";
 import { RegistryProviderToolExecutor } from "../../adapters/model/provider/toolExecutor.js";
+
+const MCP_TOOL_NAME = `mcp_${"a".repeat(48)}`;
+const MCP_STDIO_TOOL_NAME = `mcp_${"b".repeat(48)}`;
+const MCP_SECOND_SERVER_TOOL_NAME = `mcp_${"c".repeat(48)}`;
 
 const PROVIDERS = [
   ["OpenAI Responses", "openai-official"],
@@ -28,13 +37,18 @@ const RESTRICTED_TOOLS = [
   ["send_file", { path: "exports/report.txt", kind: "file", name: null }],
   ["read_file", { path: "safe.txt" }],
   ["write_file", { path: "safe.txt", content: "sensitive text", overwrite: false }],
-  ["workspace_bash", { command: "ls", timeoutMs: null }]
+  ["workspace_bash", { command: "ls", timeoutMs: null }],
+  ["activate_skill", { skillId: "test-skill" }],
+  ["read_skill_resource", { skillId: "test-skill", path: "references/guide.md" }],
+  ["run_skill_script", { skillId: "test-skill", path: "scripts/run.sh", args: [] }],
+  [MCP_TOOL_NAME, { query: "sensitive" }]
 ] as const;
 
 afterEach(() => {
   vi.restoreAllMocks();
   appendRequestLog.mockClear();
   runWorkspaceBash.mockClear();
+  runWebsearch.mockClear();
 });
 
 describe("restricted tool response preflight", () => {
@@ -64,6 +78,10 @@ describe("restricted tool response preflight", () => {
     expect(effects.write).not.toHaveBeenCalled();
     expect(effects.send).not.toHaveBeenCalled();
     expect(effects.recall).not.toHaveBeenCalled();
+    expect(effects.activateSkill).not.toHaveBeenCalled();
+    expect(effects.readSkillResource).not.toHaveBeenCalled();
+    expect(effects.runSkillScript).not.toHaveBeenCalled();
+    expect(effects.callMcp).not.toHaveBeenCalled();
     expect(runWorkspaceBash).not.toHaveBeenCalled();
     expect(effects.systemConfig.execute).not.toHaveBeenCalled();
     expect(effects.systemConfig.rejectTurn).toHaveBeenCalledTimes(toolName === "system_config" ? 1 : 0);
@@ -89,6 +107,180 @@ describe("restricted tool response preflight", () => {
       .resolves.toEqual({ kind: "completed", text: "混合调用已拒绝" });
 
     assertNoSideEffects(effects);
+  });
+
+  it.each(PROVIDERS)("blocks local data followed by MCP across model rounds on %s", async (
+    _providerLabel,
+    kind
+  ) => {
+    const provider = new OpenAIProvider(providerConfig(kind));
+    installRounds(provider, kind, [
+      { calls: [{ name: "read_file", args: { path: "safe.txt" } }] },
+      { calls: [{ name: MCP_TOOL_NAME, args: { payload: "local-data" } }] },
+      { text: "跨边界调用已拒绝" }
+    ]);
+    const effects = sideEffects();
+    await expect(provider.completeTurn("system", [{ role: "user", content: "读取后外发" }], effects.options))
+      .resolves.toEqual({ kind: "completed", text: "跨边界调用已拒绝" });
+    expect(effects.read).toHaveBeenCalledOnce();
+    expect(effects.callMcp).not.toHaveBeenCalled();
+  });
+
+  it.each(PROVIDERS)("blocks MCP followed by local execution across model rounds on %s", async (
+    _providerLabel,
+    kind
+  ) => {
+    const provider = new OpenAIProvider(providerConfig(kind));
+    installRounds(provider, kind, [
+      { calls: [{ name: MCP_TOOL_NAME, args: { query: "external" } }] },
+      { calls: [{ name: "run_skill_script", args: {
+        skillId: "test-skill", path: "scripts/run.sh", args: []
+      } }] },
+      { text: "跨边界调用已拒绝" }
+    ]);
+    const effects = sideEffects();
+    await expect(provider.completeTurn("system", [{ role: "user", content: "外部调用后执行" }], effects.options))
+      .resolves.toEqual({ kind: "completed", text: "跨边界调用已拒绝" });
+    expect(effects.callMcp).toHaveBeenCalledOnce();
+    expect(effects.runSkillScript).not.toHaveBeenCalled();
+  });
+
+  it.each(PROVIDERS)("treats stdio MCP as local data and blocks a later outbound tool on %s", async (
+    _providerLabel,
+    kind
+  ) => {
+    const provider = new OpenAIProvider(providerConfig(kind));
+    installRounds(provider, kind, [
+      { calls: [{ name: MCP_STDIO_TOOL_NAME, args: { query: "workbench" } }] },
+      { calls: [{ name: "websearch", args: { query: "external", maxResults: 2 } }] },
+      { text: "跨边界调用已拒绝" }
+    ]);
+    const effects = sideEffects();
+    await expect(provider.completeTurn("system", [{ role: "user", content: "本地读取后联网" }], effects.options))
+      .resolves.toEqual({ kind: "completed", text: "跨边界调用已拒绝" });
+    expect(effects.callMcp).toHaveBeenCalledOnce();
+    expect(runWebsearch).not.toHaveBeenCalled();
+  });
+
+  it.each(PROVIDERS)("treats stdio MCP as local data and blocks it after outbound activity on %s", async (
+    _providerLabel,
+    kind
+  ) => {
+    const provider = new OpenAIProvider(providerConfig(kind));
+    installRounds(provider, kind, [
+      { calls: [{ name: "websearch", args: { query: "external", maxResults: 2 } }] },
+      { calls: [{ name: MCP_STDIO_TOOL_NAME, args: { query: "workbench" } }] },
+      { text: "跨边界调用已拒绝" }
+    ]);
+    const effects = sideEffects();
+    await expect(provider.completeTurn("system", [{ role: "user", content: "联网后读取本地" }], effects.options))
+      .resolves.toEqual({ kind: "completed", text: "跨边界调用已拒绝" });
+    expect(runWebsearch).toHaveBeenCalledOnce();
+    expect(effects.callMcp).not.toHaveBeenCalled();
+  });
+
+  it.each(PROVIDERS)("allows local data and stdio MCP from the same server class on %s", async (
+    _providerLabel,
+    kind
+  ) => {
+    const provider = new OpenAIProvider(providerConfig(kind));
+    installRounds(provider, kind, [
+      { calls: [{ name: "read_file", args: { path: "safe.txt" } }] },
+      { calls: [{ name: MCP_STDIO_TOOL_NAME, args: { query: "workbench" } }] },
+      { text: "本地调用完成" }
+    ]);
+    const effects = sideEffects();
+    await expect(provider.completeTurn("system", [{ role: "user", content: "读取本地" }], effects.options))
+      .resolves.toEqual({ kind: "completed", text: "本地调用完成" });
+    expect(effects.read).toHaveBeenCalledOnce();
+    expect(effects.callMcp).toHaveBeenCalledOnce();
+  });
+
+  it.each(PROVIDERS)("allows only one MCP server in one provider turn on %s", async (
+    _providerLabel,
+    kind
+  ) => {
+    const provider = new OpenAIProvider(providerConfig(kind));
+    installRounds(provider, kind, [
+      { calls: [{ name: MCP_TOOL_NAME, args: { query: "server-a" } }] },
+      { calls: [{ name: MCP_SECOND_SERVER_TOOL_NAME, args: { query: "server-b" } }] },
+      { text: "跨服务调用已拒绝" }
+    ]);
+    const effects = sideEffects();
+    await expect(provider.completeTurn("system", [{ role: "user", content: "调用两个服务" }], effects.options))
+      .resolves.toEqual({ kind: "completed", text: "跨服务调用已拒绝" });
+    expect(effects.callMcp).toHaveBeenCalledOnce();
+  });
+
+  it.each(PROVIDERS)("blocks read_file followed by websearch across model rounds on %s", async (
+    _providerLabel,
+    kind
+  ) => {
+    const provider = new OpenAIProvider(providerConfig(kind));
+    installRounds(provider, kind, [
+      { calls: [{ name: "read_file", args: { path: "safe.txt" } }] },
+      { calls: [{ name: "websearch", args: { query: "local-data", maxResults: 2 } }] },
+      { text: "跨边界调用已拒绝" }
+    ]);
+    const effects = sideEffects();
+    await expect(provider.completeTurn("system", [{ role: "user", content: "读取后搜索" }], effects.options))
+      .resolves.toEqual({ kind: "completed", text: "跨边界调用已拒绝" });
+    expect(effects.read).toHaveBeenCalledOnce();
+    expect(runWebsearch).not.toHaveBeenCalled();
+  });
+
+  it.each(PROVIDERS)("blocks memory recall followed by websearch across model rounds on %s", async (
+    _providerLabel,
+    kind
+  ) => {
+    const provider = new OpenAIProvider(providerConfig(kind));
+    installRounds(provider, kind, [
+      { calls: [{ name: "memory_recall", args: { query: "secret" } }] },
+      { calls: [{ name: "websearch", args: { query: "memory-data", maxResults: 2 } }] },
+      { text: "跨边界调用已拒绝" }
+    ]);
+    const effects = sideEffects();
+    await expect(provider.completeTurn("system", [{ role: "user", content: "回忆后搜索" }], effects.options))
+      .resolves.toEqual({ kind: "completed", text: "跨边界调用已拒绝" });
+    expect(effects.recall).toHaveBeenCalledOnce();
+    expect(runWebsearch).not.toHaveBeenCalled();
+  });
+
+  it.each(PROVIDERS)("blocks websearch followed by read_file across model rounds on %s", async (
+    _providerLabel,
+    kind
+  ) => {
+    const provider = new OpenAIProvider(providerConfig(kind));
+    installRounds(provider, kind, [
+      { calls: [{ name: "websearch", args: { query: "external", maxResults: 2 } }] },
+      { calls: [{ name: "read_file", args: { path: "safe.txt" } }] },
+      { text: "跨边界调用已拒绝" }
+    ]);
+    const effects = sideEffects();
+    await expect(provider.completeTurn("system", [{ role: "user", content: "搜索后读取" }], effects.options))
+      .resolves.toEqual({ kind: "completed", text: "跨边界调用已拒绝" });
+    expect(runWebsearch).toHaveBeenCalledOnce();
+    expect(effects.read).not.toHaveBeenCalled();
+  });
+
+  it.each(PROVIDERS)("clears local-data taint for the next user turn on %s", async (
+    _providerLabel,
+    kind
+  ) => {
+    const provider = new OpenAIProvider(providerConfig(kind));
+    installRounds(provider, kind, [
+      { calls: [{ name: "read_file", args: { path: "safe.txt" } }] },
+      { text: "第一轮完成" },
+      { calls: [{ name: "websearch", args: { query: "fresh-turn", maxResults: 2 } }] },
+      { text: "第二轮完成" }
+    ]);
+    const effects = sideEffects();
+    await expect(provider.completeTurn("system", [{ role: "user", content: "读取" }], effects.options))
+      .resolves.toEqual({ kind: "completed", text: "第一轮完成" });
+    await expect(provider.completeTurn("system", [{ role: "user", content: "新一轮搜索" }], effects.options))
+      .resolves.toEqual({ kind: "completed", text: "第二轮完成" });
+    expect(effects.read).toHaveBeenCalledOnce();
+    expect(runWebsearch).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -353,6 +545,10 @@ function sideEffects() {
   }));
   const send = vi.fn(async () => ({ ok: true, queued: true }));
   const recall = vi.fn(async () => ({ ok: true, items: [] }));
+  const activateSkill = vi.fn(async () => ({ ok: true, skillId: "test-skill" }));
+  const readSkillResource = vi.fn(async () => ({ ok: true }));
+  const runSkillScript = vi.fn(async () => ({ ok: true }));
+  const callMcp = vi.fn(async () => ({ ok: true }));
   const onAssistantText = vi.fn(async () => undefined);
   const onToolCall = vi.fn();
   const systemConfig = {
@@ -370,6 +566,18 @@ function sideEffects() {
   const options = {
     allowNoReply: true,
     asyncCodex: true,
+    bot: {
+      tools: {
+        maxCalls: 20,
+        websearch: {
+          provider: "tavily",
+          tavilyApiKey: "test-key",
+          tavilyApiKeys: [],
+          tavilyApiKeyEnv: "TAVILY_API_KEY",
+          maxResults: 5
+        }
+      }
+    } as never,
     onAssistantText,
     onToolCall,
     workbenchFiles: { read, write },
@@ -381,9 +589,33 @@ function sideEffects() {
       blockedKeywords: []
     },
     memory: { enabled: true, recall },
+    skills: {
+      skillIds: ["test-skill"],
+      activate: activateSkill,
+      readResource: readSkillResource,
+      runScript: runSkillScript
+    },
+    mcp: {
+      definitions: () => [MCP_TOOL_NAME, MCP_STDIO_TOOL_NAME, MCP_SECOND_SERVER_TOOL_NAME].map((name) => ({
+        type: "function",
+        name,
+        description: "External search",
+        parameters: { type: "object", additionalProperties: false, properties: {} },
+        strict: true
+      })),
+      describe: (name) => name === MCP_STDIO_TOOL_NAME
+        ? { serverId: "stdio-server", transport: "stdio" }
+        : name === MCP_SECOND_SERVER_TOOL_NAME
+          ? { serverId: "http-server-b", transport: "streamable_http" }
+          : { serverId: "http-server-a", transport: "streamable_http" },
+      call: callMcp
+    },
     systemConfig
   } satisfies ProviderCompleteOptions;
-  return { options, read, write, send, recall, onAssistantText, onToolCall, systemConfig };
+  return {
+    options, read, write, send, recall, activateSkill, readSkillResource, runSkillScript,
+    callMcp, onAssistantText, onToolCall, systemConfig
+  };
 }
 
 function assertNoSideEffects(effects: ReturnType<typeof sideEffects>) {
@@ -393,6 +625,8 @@ function assertNoSideEffects(effects: ReturnType<typeof sideEffects>) {
   expect(effects.write).not.toHaveBeenCalled();
   expect(effects.send).not.toHaveBeenCalled();
   expect(effects.recall).not.toHaveBeenCalled();
+  expect(effects.activateSkill).not.toHaveBeenCalled();
+  expect(effects.callMcp).not.toHaveBeenCalled();
   expect(effects.systemConfig.execute).not.toHaveBeenCalled();
   expect(effects.systemConfig.rejectTurn).not.toHaveBeenCalled();
   expect(runWorkspaceBash).not.toHaveBeenCalled();

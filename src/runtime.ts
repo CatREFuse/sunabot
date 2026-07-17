@@ -127,6 +127,7 @@ import type { BashExecutionBackend } from "../services/tools/bashAudit.js";
 import type { SystemConfigRuntimePort } from "../services/tools/systemConfigTool.js";
 import type { ReplyTaskGate } from "../services/orchestration/broadcastStormDetector.js";
 import { runWithAgentRuntimeContext } from "../packages/platform/runtimeAgentContext.js";
+import type { RuntimeAgentExtensionsPort } from "./runtime/agentExtensions.js";
 export * from "./runtime/runtimeContracts.js";
 export * from "./runtime/runtimeHelpers.js";
 
@@ -167,6 +168,7 @@ export class SunaRuntime {
   readonly bashAudit?: RuntimeBashAuditPort;
   private readonly rawToolCapabilityResolver?: RuntimeToolCapabilityResolver;
   readonly systemConfig?: SystemConfigRuntimePort;
+  readonly agentExtensions?: RuntimeAgentExtensionsPort;
   readonly replyTaskGate: ReplyTaskGate;
   readonly incomingPreparations = new Map<string, {
       promise: Promise<void>;
@@ -191,6 +193,7 @@ export class SunaRuntime {
       this.rawToolCapabilityResolver = options.resolveToolCapabilities;
       this.bashAudit = options.bashAudit;
       this.systemConfig = options.systemConfig;
+      this.agentExtensions = options.agentExtensions;
       this.replyTaskGate = options.replyTaskGate ?? { canCreateTaskFor: () => true };
       this.memoryScheduler = new MemorySchedulerStore(config);
       this.attachmentService = options.attachmentService ?? new AttachmentService(getRootDir(), {

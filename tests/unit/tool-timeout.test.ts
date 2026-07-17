@@ -21,7 +21,8 @@ const processState = vi.hoisted(() => ({
   stderr: [] as string[],
   synchronousErrors: [] as Array<Error | null>,
   suppressCallbacks: [] as boolean[],
-  kills: [] as Array<{ callIndex: number; signal: string }>
+  kills: [] as Array<{ callIndex: number; signal: string }>,
+  waiters: [] as Array<{ expected: number; resolve: () => void }>
 }));
 
 vi.mock("node:child_process", () => ({
@@ -40,6 +41,11 @@ vi.mock("node:child_process", () => ({
       killSignal: options.killSignal,
       env: options.env
     });
+    const waiters = processState.waiters.splice(0);
+    for (const waiter of waiters) {
+      if (processState.calls.length >= waiter.expected) waiter.resolve();
+      else processState.waiters.push(waiter);
+    }
     const synchronousError = processState.synchronousErrors.shift();
     if (synchronousError) throw synchronousError;
     const error = processState.errors.shift() ?? null;
@@ -99,6 +105,7 @@ afterEach(async () => {
   processState.synchronousErrors = [];
   processState.suppressCallbacks = [];
   processState.kills = [];
+  processState.waiters = [];
 });
 
 describe("tool call timeout", () => {
@@ -812,7 +819,7 @@ describe("tool call timeout", () => {
 
   it("uses its own deadline as the only timeout source and force-cleans the container", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-tool-docker-deadline-"));
+    temporaryRoot = await makeSecureScratch("docker-deadline");
     processState.suppressCallbacks = [true, false];
 
     const pending = runWorkspaceBash({ command: "echo ok", timeoutMs: null }, temporaryRoot, {
@@ -843,6 +850,9 @@ describe("tool call timeout", () => {
       cleanupSucceeded: true
     });
     expect(result.stderr).toContain("BASH_EXECUTION_TIMEOUT");
+    expect(processState.calls).toHaveLength(2);
+    const containerName = processState.calls[0]?.args[processState.calls[0]?.args.indexOf("--name") + 1];
+    expect(processState.calls[1]?.args).toEqual(["rm", "-f", containerName]);
   });
 
   it("bounds abort cleanup even when Docker run and rm callbacks never return", async () => {
@@ -968,9 +978,6 @@ describe("tool call timeout", () => {
 });
 
 async function waitForProcessCalls(expected: number) {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    if (processState.calls.length >= expected) return;
-    await new Promise<void>((resolve) => setImmediate(resolve));
-  }
-  throw new Error(`Expected ${expected} process call(s), received ${processState.calls.length}.`);
+  if (processState.calls.length >= expected) return;
+  await new Promise<void>((resolve) => processState.waiters.push({ expected, resolve }));
 }

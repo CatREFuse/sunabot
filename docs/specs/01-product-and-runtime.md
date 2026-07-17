@@ -26,7 +26,7 @@ sunabot 是面向个人自托管场景的 QQ 多 Agent 服务。系统通过 One
 
 NapCat 在 macOS、WSL2 和 Linux 上始终运行于独立 Docker 容器。Sunabot Core 可以在宿主环境 Native 运行，也可以作为独立 Core 容器运行；根目录 `./sunabot.sh` 统一负责初始化、配置、启动顺序、健康检查、停止和日志。`SUNABOT_CORE_MODE=auto` 在 macOS 选择 Native Core，在 WSL2/Linux 选择 Docker Core，也可显式选择 `native` 或 `docker`。
 
-`status`、`doctor`、管理 API 和平台入口共用 schema v1 的只读运行探针，分别报告 liveness、readiness 与 capability。探针统一核对 workspace、迁移状态、Core、OneBot、每个 QQ、Provider、Codex、LibreOffice 和 bubblewrap；QQ 临时离线只降低 readiness，不把 Core 判为死亡。Provider readiness 同时区分配置完成和有界健康请求验证成功，密钥只进入对应鉴权请求头。公开 `/healthz/runtime` 只返回 schema 与 liveness，账号和能力明细只通过管理员鉴权接口返回。
+`status`、`doctor`、管理 API 和平台入口共用 schema v1 的只读运行探针，分别报告 liveness、readiness 与 capability。探针统一核对 workspace、迁移状态、Core、OneBot、每个 QQ、Provider、Codex、LibreOffice、bubblewrap、MCP OAuth 凭据库与 stdio 隔离后端；QQ 临时离线只降低 readiness，不把 Core 判为死亡。Provider readiness 同时区分配置完成和有界健康请求验证成功，密钥只进入对应鉴权请求头。MCP OAuth 或 stdio 未配置时只关闭对应可选能力，非法的已配置值由 doctor 报告稳定配置错误。公开 `/healthz/runtime` 只返回 schema 与 liveness，账号和能力明细只通过管理员鉴权接口返回。
 
 管理台“配置医生”是独立于运行探针的系统配置检查与修复能力，当前只处理 `workspace/business/config/sunabot.json`。它先执行本地确定性扫描，再允许管理员显式发起一次无工具的 AI 结构化建议，并在确认后通过管理 API 应用受限修改；Agent manifest、提示词、凭据、SQLite 和其他 workspace 文件不在当前范围内。该能力不改变 `./sunabot.sh doctor` 的只读语义，当前也没有配置医生 CLI 离线修复入口。
 
@@ -37,6 +37,8 @@ NapCat 在 macOS、WSL2 和 Linux 上始终运行于独立 Docker 容器。Sunab
 管理 API 只发布到宿主回环 `127.0.0.1:8787`。OneBot 使用专用 `8788` 端口并强制校验 access token：Docker Core 模式通过共享的私有运行网络和 `core` 服务名连接；Native Core 模式由启动器配置容器可达的宿主网关。OneBot 不直接发布到局域网或公网。每个 NapCat WebUI 使用注册表分配的独立端口，仅发布到宿主回环，首个账号默认使用 `127.0.0.1:6099`。
 
 Core 与 NapCat 是独立生命周期和文件系统边界。跨组件出站媒体默认使用 OneBot `base64://`，不能传递或依赖宿主、Core 容器、NapCat 容器之间的共享绝对路径。共享业务配置、公共系统提示词和 Agent 注册表位于 workspace 公共区域；每个 Agent 的人格、自拍提示词改写、可选系统提示词覆盖、SQLite、队列、图片与人工文件位于 `workspace/business/agents/<agentId>/`。每个 QQ 的 NapCat 配置、登录态和运行状态位于 `workspace/runtime/napcat/accounts/<accountId>/`，只挂载给对应 NapCat 容器。平台差异只存在于组合根、运行适配器和部署层，业务与持久化格式保持一致。
+
+生产组合根默认不提供 stdio MCP launcher。`SUNABOT_MCP_STDIO_BACKEND=docker` 只接受包含已预装 server 与批准清单的 digest 固定自定义镜像；`bubblewrap` 只在 Linux/WSL 使用绝对、root 所有且权限为 `0444` 的批准清单。Native 与 Docker Core 都禁止运行时下载 server 依赖。`SUNABOT_MCP_CREDENTIAL_VAULT_KEY` 必须是 32 字节 canonical base64url，缺失时 OAuth 管理端点保持不可用，远端无 OAuth MCP 仍可按自身能力运行。
 
 Provider、Codex CLI 与联网工具的出站 HTTP(S) 可独立使用代理。API 在载入 composition root 前由 `packages/platform/proxy.mjs` 解析并安装 Undici dispatcher，优先级为 `SUNABOT_PROXY_URL`、标准 `HTTP_PROXY`/`HTTPS_PROXY`、WSL 默认网关与配置端口探测。`SUNABOT_PROXY_MODE` 支持 `auto`、`env`、`wsl-host` 和 `off`；网关只从当前默认路由动态发现，不写死地址。Native Core 与 Docker Core 使用 `deploy/runtime-contract.json` 中的同一代理契约。`NO_PROXY` 必须包含回环地址、Compose 服务名和启动器选择的宿主网关，代理 URL 与凭据不得进入日志、状态接口或 Git。
 

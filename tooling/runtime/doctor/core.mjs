@@ -80,8 +80,25 @@ export function evaluateRuntimeSnapshot(snapshot) {
     databases,
     listener,
     onebot,
+    mcp: publicMcp(snapshot.mcp),
     errors,
     warnings
+  };
+}
+
+function publicMcp(value) {
+  const capability = (input) => ({
+    ok: input?.ok === true,
+    configured: input?.configured === true,
+    detail: safeString(input?.detail) ?? "unavailable"
+  });
+  return {
+    oauth: capability(value?.oauth),
+    stdio: {
+      ...capability(value?.stdio),
+      backend: safeString(value?.stdio?.backend) ?? "disabled",
+      path: value?.stdio?.path == null ? null : String(value.stdio.path)
+    }
   };
 }
 

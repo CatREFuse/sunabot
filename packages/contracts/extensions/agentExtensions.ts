@@ -1,23 +1,21 @@
+import { createHash } from "node:crypto";
+import {
+  analyzeMcpArgument,
+  isSafeMcpCommandPath,
+  isUnsafeMcpCommand
+} from "./agentMcpDescriptorSecurity.js";
+
 export const AGENT_EXTENSION_SCHEMA_VERSION = 1 as const;
 export const AGENT_ID_PATTERN = /^[a-z][a-z0-9-]{1,31}$/u;
 export const EXTENSION_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;
 export const MCP_ENV_KEY_PATTERN = /^[A-Z_][A-Z0-9_]{0,127}$/u;
 export const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 const ALLOWED_TOOL_PATTERN = /^[A-Za-z0-9_.:/@*?()=,+-]+$/u;
-const SAFE_MCP_COMMAND_PATTERN = /^\/(?:usr\/(?:local\/)?bin|opt\/[a-z0-9][a-z0-9._-]{0,63}\/bin|app\/bin)\/[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$/u;
 const SAFE_MCP_ARGUMENT_PATTERN = /^[A-Za-z0-9._~:/=@,+%-]+$/u;
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001F\u007F-\u009F]/u;
 
-export interface AgentSkillSourceUpload {
-  kind: "upload";
-}
-
-export interface AgentSkillSourceCopy {
-  kind: "copy";
-  agentId: string;
-  skillId: string;
-}
-
+export type AgentSkillSourceUpload = { kind: "upload" };
+export type AgentSkillSourceCopy = { kind: "copy"; agentId: string; skillId: string };
 export type AgentSkillSource = AgentSkillSourceUpload | AgentSkillSourceCopy;
 
 export interface AgentSkillMcpDependency {
@@ -31,11 +29,12 @@ export type AgentSkillDeclaredFileAccess = "read" | "write" | "shell";
 
 export interface AgentSkillRiskEvidence {
   reviewVersion: 1;
-  reviewStatus: "unreviewed";
-  reviewedDigestSha256: null;
+  reviewStatus: "unreviewed" | "approved";
+  reviewedDigestSha256: string | null;
   classification: "instruction-only" | "script-bearing";
   hasScripts: boolean;
   hasExternalUrls: boolean;
+  externalOrigins?: string[];
   mcpDependencies: AgentSkillMcpDependency[];
   declaredFileAccess: AgentSkillDeclaredFileAccess[];
   allowImplicitInvocation: boolean | null;
@@ -57,6 +56,11 @@ export interface AgentSkillRecord {
   unpackedBytes: number;
   installedAt: string;
   source: AgentSkillSource;
+  approval?: {
+    status: "unapproved" | "approved";
+    digestSha256: string | null;
+    approvedAt: string | null;
+  };
 }
 
 export interface AgentSkillIndex {
@@ -65,15 +69,92 @@ export interface AgentSkillIndex {
   skills: AgentSkillRecord[];
 }
 
-export interface AgentMcpServerDescriptor {
+export type AgentMcpApprovalMode = "always" | "mutating" | "never";
+
+interface AgentMcpServerPolicy {
   id: string;
   name: string;
   description: string;
   enabled: boolean;
+  required?: boolean;
+  enabledTools?: string[];
+  disabledTools?: string[];
+  ordinaryUserTools?: string[];
+  approvalMode?: AgentMcpApprovalMode;
+  migrationStatus?: "reauthorization_required";
+}
+
+export interface AgentMcpStdioServerDescriptor extends AgentMcpServerPolicy {
   transport: "stdio";
   command: string;
   args: string[];
   envKeys: string[];
+}
+
+export interface AgentMcpHttpServerDescriptor extends AgentMcpServerPolicy {
+  transport: "streamable_http";
+  url: string;
+  auth:
+    | { kind: "none" }
+    | { kind: "bearer" | "oauth"; credentialRef: string };
+}
+
+export type AgentMcpServerDescriptor =
+  | AgentMcpStdioServerDescriptor
+  | AgentMcpHttpServerDescriptor;
+
+export function mcpDescriptorEnvKeys(server: AgentMcpServerDescriptor, agentId?: string) {
+  if (server.transport === "stdio") {
+    if (agentId === undefined) return server.envKeys;
+    return server.envKeys.map((key) => mcpStdioCredentialEnvironmentKey(agentId, server.id, key));
+  }
+  if (server.auth.kind !== "bearer" || agentId === undefined) return [];
+  return [mcpHttpCredentialEnvironmentKey(agentId, server.id, server.auth.credentialRef, server.url)];
+}
+
+export function mcpStdioCredentialEnvironmentKey(
+  agentId: string,
+  serverId: string,
+  logicalKey: string
+) {
+  const safeAgentId = assertAgentId(agentId);
+  const safeServerId = assertExtensionId(serverId, "serverId");
+  const safeLogicalKey = assertMcpEnvKey(logicalKey, "logicalKey");
+  const digest = createHash("sha256")
+    .update(JSON.stringify([safeAgentId, safeServerId, safeLogicalKey]))
+    .digest("hex")
+    .slice(0, 32)
+    .toUpperCase();
+  return `SUNABOT_MCP_STDIO_SECRET_${digest}`;
+}
+
+export function mcpHttpCredentialEnvironmentKey(
+  agentId: string,
+  serverId: string,
+  credentialRef: string,
+  resource: string
+) {
+  const safeAgentId = assertAgentId(agentId);
+  const safeServerId = assertExtensionId(serverId, "serverId");
+  if (!/^[a-z][a-z0-9._/-]{1,127}$/u.test(credentialRef) || credentialRef.includes("..")) {
+    invalid("AGENT_EXTENSION_MCP_CREDENTIAL_REF_INVALID", "MCP credentialRef 无效。", "credentialRef");
+  }
+  let canonicalResource = "";
+  try {
+    const url = new URL(resource);
+    const localhost = url.hostname.toLowerCase() === "localhost";
+    if ((url.protocol !== "https:" && !(localhost && url.protocol === "http:")) ||
+        url.username || url.password || url.hash) throw new Error("unsafe");
+    canonicalResource = url.toString();
+  } catch {
+    invalid("AGENT_EXTENSION_MCP_URL_INVALID", "MCP resource URL 无效。", "resource");
+  }
+  const digest = createHash("sha256")
+    .update(JSON.stringify([safeAgentId, safeServerId, credentialRef, canonicalResource]))
+    .digest("hex")
+    .slice(0, 32)
+    .toUpperCase();
+  return `SUNABOT_MCP_HTTP_BEARER_${digest}`;
 }
 
 export interface AgentMcpServerIndex {
@@ -101,12 +182,19 @@ export interface AgentMcpMigrationPreview {
   conflict: AgentExtensionConflictStatus;
   sourceSecrets: AgentMcpSecretStatus;
   targetSecrets: AgentMcpSecretStatus;
+  targetState: "disabled";
+  requiresAuthorization: boolean;
 }
 
 export interface AgentExtensionCopyPreview {
   schemaVersion: typeof AGENT_EXTENSION_SCHEMA_VERSION;
+  previewRevision: string;
   sourceAgentId: string;
   targetAgentId: string;
+  sourceSkillRevision: string;
+  targetSkillRevision: string;
+  sourceMcpRevision: string;
+  targetMcpRevision: string;
   skill: {
     record: AgentSkillRecord;
     contentVersion: string;
@@ -117,6 +205,17 @@ export interface AgentExtensionCopyPreview {
     missingMcpDependencies: string[];
   };
   selectedMcpServers: AgentMcpMigrationPreview[];
+}
+
+export type AgentExtensionCopyConflictStrategy = "skip" | "replace" | "rename";
+
+export interface AgentExtensionCopyApplyResult {
+  schemaVersion: typeof AGENT_EXTENSION_SCHEMA_VERSION;
+  sourceAgentId: string;
+  targetAgentId: string;
+  skill: AgentSkillRecord | null;
+  skipped: boolean;
+  mcpServers: AgentMcpServerDescriptor[];
 }
 
 export interface AgentExtensionOverview {
@@ -209,11 +308,13 @@ export function parseAgentSkillIndex(value: unknown): AgentSkillIndex {
 }
 
 export function parseAgentSkillRecord(value: unknown, field = "skill"): AgentSkillRecord {
-  const object = strictObject(value, [
+  const raw = recordValue(value, field);
+  const keys = [
     "id", "name", "description", "license", "compatibility", "metadata", "allowedTools", "riskEvidence",
     "enabled", "entry", "digestSha256",
     "fileCount", "unpackedBytes", "installedAt", "source"
-  ], field);
+  ];
+  const object = strictObject(value, "approval" in raw ? [...keys, "approval"] : keys, field);
   const id = assertExtensionId(object.id, `${field}.id`);
   const name = assertExtensionId(object.name, `${field}.name`);
   if (id !== name) invalid("AGENT_EXTENSION_SKILL_NAME_MISMATCH", "Skill ID 必须与 frontmatter name 一致。", field);
@@ -233,6 +334,7 @@ export function parseAgentSkillRecord(value: unknown, field = "skill"): AgentSki
   const unpackedBytes = boundedInteger(object.unpackedBytes, 1, 32 * 1024 * 1024, `${field}.unpackedBytes`);
   const installedAt = isoTimestamp(object.installedAt, `${field}.installedAt`);
   const source = parseSkillSource(object.source, `${field}.source`);
+  const approval = "approval" in object ? parseSkillApproval(object.approval, `${field}.approval`, digestSha256) : undefined;
   return {
     id,
     name,
@@ -248,8 +350,28 @@ export function parseAgentSkillRecord(value: unknown, field = "skill"): AgentSki
     fileCount,
     unpackedBytes,
     installedAt,
-    source
+    source,
+    ...(approval ? { approval } : {})
   };
+}
+
+function parseSkillApproval(value: unknown, field: string, recordDigest: string) {
+  const object = strictObject(value, ["status", "digestSha256", "approvedAt"], field);
+  if (object.status === "unapproved") {
+    if (object.digestSha256 !== null || object.approvedAt !== null) {
+      invalid("AGENT_EXTENSION_SKILL_APPROVAL_INVALID", "Skill 审批状态无效。", field);
+    }
+    return { status: "unapproved" as const, digestSha256: null, approvedAt: null };
+  }
+  if (object.status !== "approved") {
+    invalid("AGENT_EXTENSION_SKILL_APPROVAL_INVALID", "Skill 审批状态无效。", field);
+  }
+  const digestSha256 = sha256Value(object.digestSha256, `${field}.digestSha256`);
+  const approvedAt = isoTimestamp(object.approvedAt, `${field}.approvedAt`);
+  if (digestSha256 !== recordDigest) {
+    invalid("AGENT_EXTENSION_SKILL_APPROVAL_INVALID", "Skill 审批摘要无效。", field);
+  }
+  return { status: "approved" as const, digestSha256, approvedAt };
 }
 
 export function parseAgentMcpServerIndex(value: unknown): AgentMcpServerIndex {
@@ -268,16 +390,56 @@ export function parseAgentMcpServerDescriptor(
   value: unknown,
   field = "server"
 ): AgentMcpServerDescriptor {
-  const object = strictObject(value, [
-    "id", "name", "description", "enabled", "transport", "command", "args", "envKeys"
-  ], field);
+  const raw = recordValue(value, field);
+  const commonKeys = [
+    "id", "name", "description", "enabled", "transport",
+    "required", "enabledTools", "disabledTools", "approvalMode"
+  ];
+  const ordinaryUserKeys = "ordinaryUserTools" in raw ? ["ordinaryUserTools"] : [];
+  const migrationKeys = "migrationStatus" in raw ? ["migrationStatus"] : [];
+  const transport = raw.transport;
+  const legacyStdio = transport === "stdio" &&
+    !["required", "enabledTools", "disabledTools", "approvalMode"].some((key) => key in raw);
+  const object = strictObject(value, transport === "stdio"
+    ? legacyStdio
+      ? ["id", "name", "description", "enabled", "transport", ...migrationKeys, "command", "args", "envKeys"]
+      : [...commonKeys, ...ordinaryUserKeys, ...migrationKeys, "command", "args", "envKeys"]
+    : transport === "streamable_http"
+      ? [...commonKeys, ...ordinaryUserKeys, ...migrationKeys, "url", "auth"]
+      : commonKeys, field);
   const id = assertExtensionId(object.id, `${field}.id`);
   const name = stringValue(object.name, `${field}.name`, 128);
   const description = stringValue(object.description, `${field}.description`, 1_024, true);
   if (typeof object.enabled !== "boolean") invalid("AGENT_EXTENSION_MCP_INVALID", "MCP enabled 无效。", field);
-  if (object.transport !== "stdio") invalid("AGENT_EXTENSION_MCP_INVALID", "当前只支持 stdio MCP。", field);
+  const policy = legacyStdio ? {} : parseMcpPolicy(object, field);
+  const migrationStatus = "migrationStatus" in object
+    ? parseMcpMigrationStatus(object.migrationStatus, `${field}.migrationStatus`)
+    : undefined;
+  if (object.transport === "streamable_http") {
+    const url = safeMcpServerUrl(object.url, `${field}.url`);
+    const auth = parseMcpAuth(object.auth, `${field}.auth`);
+    if ("ordinaryUserTools" in policy && policy.ordinaryUserTools && auth.kind !== "none") {
+      invalid(
+        "AGENT_EXTENSION_MCP_ORDINARY_USER_CREDENTIAL_FORBIDDEN",
+        "带凭据的 MCP 服务不能向普通用户开放。",
+        `${field}.ordinaryUserTools`
+      );
+    }
+    return {
+      id,
+      name,
+      description,
+      enabled: object.enabled,
+      ...policy,
+      ...(migrationStatus ? { migrationStatus } : {}),
+      transport: "streamable_http",
+      url,
+      auth
+    };
+  }
+  if (object.transport !== "stdio") invalid("AGENT_EXTENSION_MCP_INVALID", "MCP transport 不受支持。", field);
   const command = stringValue(object.command, `${field}.command`, 512);
-  if (!SAFE_MCP_COMMAND_PATTERN.test(command) || isUnsafeMcpCommand(command)) {
+  if (!isSafeMcpCommandPath(command) || isUnsafeMcpCommand(command)) {
     invalid("AGENT_EXTENSION_MCP_COMMAND_INVALID", "MCP command 必须是容器内绝对路径。", `${field}.command`);
   }
   if (!Array.isArray(object.args) || object.args.length > 64) {
@@ -303,15 +465,39 @@ export function parseAgentMcpServerDescriptor(
   }
   const envKeys = object.envKeys.map((key, index) => assertMcpEnvKey(key, `${field}.envKeys[${index}]`));
   assertUnique(envKeys, "MCP envKeys 包含重复项。", `${field}.envKeys`);
-  return { id, name, description, enabled: object.enabled, transport: "stdio", command, args, envKeys };
+  if ("ordinaryUserTools" in policy && policy.ordinaryUserTools && envKeys.length > 0) {
+    invalid(
+      "AGENT_EXTENSION_MCP_ORDINARY_USER_CREDENTIAL_FORBIDDEN",
+      "带凭据的 MCP 服务不能向普通用户开放。",
+      `${field}.ordinaryUserTools`
+    );
+  }
+  return {
+    id,
+    name,
+    description,
+    enabled: object.enabled,
+    ...policy,
+    ...(migrationStatus ? { migrationStatus } : {}),
+    transport: "stdio",
+    command,
+    args,
+    envKeys
+  };
 }
 
 function parseSkillRiskEvidence(value: unknown, field: string): AgentSkillRiskEvidence {
-  const object = strictObject(value, [
+  const raw = recordValue(value, field);
+  const keys = [
     "reviewVersion", "reviewStatus", "reviewedDigestSha256", "classification", "hasScripts",
     "hasExternalUrls", "mcpDependencies", "declaredFileAccess", "allowImplicitInvocation"
-  ], field);
-  if (object.reviewVersion !== 1 || object.reviewStatus !== "unreviewed" || object.reviewedDigestSha256 !== null ||
+  ];
+  const object = strictObject(value, "externalOrigins" in raw ? [...keys, "externalOrigins"] : keys, field);
+  const reviewValid = object.reviewStatus === "unreviewed"
+    ? object.reviewedDigestSha256 === null
+    : object.reviewStatus === "approved" && typeof object.reviewedDigestSha256 === "string" &&
+      SHA256_PATTERN.test(object.reviewedDigestSha256);
+  if (object.reviewVersion !== 1 || !reviewValid ||
       typeof object.hasScripts !== "boolean" || typeof object.hasExternalUrls !== "boolean" ||
       (object.classification !== "instruction-only" && object.classification !== "script-bearing") ||
       (object.classification === "script-bearing") !== object.hasScripts ||
@@ -334,17 +520,116 @@ function parseSkillRiskEvidence(value: unknown, field: string): AgentSkillRiskEv
     }) as AgentSkillDeclaredFileAccess[];
   const declaredFileAccess = (["read", "write", "shell"] as const)
     .filter((access) => declaredFileAccessValues.includes(access));
+  const externalOrigins = "externalOrigins" in object
+    ? stringArray(object.externalOrigins, `${field}.externalOrigins`, 32, 512).map((origin, index) => {
+        let parsed: URL;
+        try { parsed = new URL(origin); } catch {
+          invalid("AGENT_EXTENSION_RISK_EVIDENCE_INVALID", "Skill 外部来源证据无效。", `${field}.externalOrigins[${index}]`);
+        }
+        if ((parsed.protocol !== "https:" && parsed.protocol !== "http:") || parsed.origin !== origin ||
+            parsed.username || parsed.password || parsed.pathname !== "/" || parsed.search || parsed.hash) {
+          invalid("AGENT_EXTENSION_RISK_EVIDENCE_INVALID", "Skill 外部来源证据无效。", `${field}.externalOrigins[${index}]`);
+        }
+        return origin;
+      }).sort(compareBinaryText)
+    : undefined;
+  if (externalOrigins && new Set(externalOrigins).size !== externalOrigins.length) {
+    invalid("AGENT_EXTENSION_RISK_EVIDENCE_INVALID", "Skill 外部来源证据包含重复项。", `${field}.externalOrigins`);
+  }
   return {
     reviewVersion: 1,
-    reviewStatus: "unreviewed",
-    reviewedDigestSha256: null,
+    reviewStatus: object.reviewStatus as AgentSkillRiskEvidence["reviewStatus"],
+    reviewedDigestSha256: object.reviewedDigestSha256 as string | null,
     classification: object.classification,
     hasScripts: object.hasScripts,
     hasExternalUrls: object.hasExternalUrls,
+    ...(externalOrigins ? { externalOrigins } : {}),
     mcpDependencies,
     declaredFileAccess,
     allowImplicitInvocation: object.allowImplicitInvocation
   };
+}
+
+function parseMcpPolicy(object: Record<string, unknown>, field: string) {
+  if (typeof object.required !== "boolean") {
+    invalid("AGENT_EXTENSION_MCP_INVALID", "MCP required 无效。", `${field}.required`);
+  }
+  const enabledTools = mcpToolNameArray(object.enabledTools, `${field}.enabledTools`);
+  const disabledTools = mcpToolNameArray(object.disabledTools, `${field}.disabledTools`);
+  const ordinaryUserTools = "ordinaryUserTools" in object
+    ? mcpToolNameArray(object.ordinaryUserTools, `${field}.ordinaryUserTools`)
+    : [];
+  if (enabledTools.some((tool) => disabledTools.includes(tool))) {
+    invalid("AGENT_EXTENSION_MCP_INVALID", "MCP 工具 allow/deny 列表冲突。", field);
+  }
+  if (ordinaryUserTools.some((tool) => !enabledTools.includes(tool) || disabledTools.includes(tool))) {
+    invalid("AGENT_EXTENSION_MCP_INVALID", "普通用户 MCP 工具必须属于显式 allowlist。", field);
+  }
+  if (object.approvalMode !== "always" && object.approvalMode !== "mutating" && object.approvalMode !== "never") {
+    invalid("AGENT_EXTENSION_MCP_INVALID", "MCP approvalMode 无效。", `${field}.approvalMode`);
+  }
+  return {
+    required: object.required,
+    enabledTools,
+    disabledTools,
+    ...(ordinaryUserTools.length ? { ordinaryUserTools } : {}),
+    approvalMode: object.approvalMode
+  } as const;
+}
+
+function parseMcpMigrationStatus(value: unknown, field: string): "reauthorization_required" {
+  if (value !== "reauthorization_required") {
+    invalid("AGENT_EXTENSION_MCP_INVALID", "MCP 迁移授权状态无效。", field);
+  }
+  return value;
+}
+
+function mcpToolNameArray(value: unknown, field: string) {
+  const names = stringArray(value, field, 256, 128);
+  if (names.some((name) => !/^[A-Za-z0-9_.:/-]+$/u.test(name))) {
+    invalid("AGENT_EXTENSION_MCP_INVALID", "MCP 工具名称无效。", field);
+  }
+  return names;
+}
+
+function parseMcpAuth(value: unknown, field: string): AgentMcpHttpServerDescriptor["auth"] {
+  const raw = recordValue(value, field);
+  if (raw.kind === "none") {
+    strictObject(value, ["kind"], field);
+    return { kind: "none" };
+  }
+  if (raw.kind === "bearer" || raw.kind === "oauth") {
+    const object = strictObject(value, ["kind", "credentialRef"], field);
+    const credentialRef = stringValue(object.credentialRef, `${field}.credentialRef`, 128);
+    const validReference = /^[a-z][a-z0-9._/-]{1,127}$/u.test(credentialRef) && !credentialRef.includes("..");
+    const validOAuthHandle = raw.kind === "oauth" && /^mcpcred_[A-Za-z0-9_-]{24,120}$/u.test(credentialRef);
+    if (!validReference && !validOAuthHandle) {
+      invalid("AGENT_EXTENSION_MCP_CREDENTIAL_REF_INVALID", "MCP credentialRef 无效。", `${field}.credentialRef`);
+    }
+    return { kind: raw.kind, credentialRef };
+  }
+  invalid("AGENT_EXTENSION_MCP_INVALID", "MCP auth 无效。", field);
+}
+
+function safeMcpServerUrl(value: unknown, field: string) {
+  const raw = stringValue(value, field, 2_048);
+  let parsed: URL;
+  try { parsed = new URL(raw); } catch {
+    invalid("AGENT_EXTENSION_MCP_URL_INVALID", "MCP URL 无效。", field);
+  }
+  const localhost = parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1" || parsed.hostname === "[::1]";
+  if ((parsed.protocol !== "https:" && !(localhost && parsed.protocol === "http:")) ||
+      !parsed.hostname || parsed.username || parsed.password || parsed.hash || containsCredentialMaterial(raw)) {
+    invalid("AGENT_EXTENSION_MCP_URL_INVALID", "MCP URL 无效。", field);
+  }
+  return parsed.toString();
+}
+
+function recordValue(value: unknown, field: string) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    invalid("AGENT_EXTENSION_CONFIG_INVALID", `${field}结构无效。`, field);
+  }
+  return value as Record<string, unknown>;
 }
 
 export function parseAgentSkillMcpDependency(value: unknown, field = "dependency"): AgentSkillMcpDependency {
@@ -460,163 +745,6 @@ function containsCredentialMaterial(value: string) {
   return analyzeMcpArgument(value).credential;
 }
 
-function analyzeMcpArgument(value: string) {
-  const decoded = decodedCredentialCandidates(value);
-  return {
-    credential: decoded.candidates.some((candidate) => candidateContainsCredential(candidate)),
-    unsafePath: decoded.candidates.some((candidate) => isUnsafeMcpArgumentPath(candidate)),
-    decodeLimitExceeded: decoded.limitExceeded
-  };
-}
-
-function candidateContainsCredential(candidate: string) {
-    if (/-----BEGIN [A-Z ]*(?:PRIVATE KEY|CERTIFICATE)-----/u.test(candidate) ||
-        /\b(?:sk-[A-Za-z0-9_-]{8,}|ghp_[A-Za-z0-9]{8,}|github_pat_[A-Za-z0-9_]{8,}|glpat-[A-Za-z0-9_-]{8,}|xox[baprs]-[A-Za-z0-9-]{8,}|AKIA[A-Z0-9]{12,})\b/u.test(candidate) ||
-        /\beyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\b/u.test(candidate) ||
-        /[A-Za-z][A-Za-z0-9+.-]*:\/\/[^/@\s]+:[^/@\s]+@/u.test(candidate)) {
-      return true;
-    }
-    return looksLikeOpaqueSecret(candidate) ||
-      /(?:^|[^a-z0-9])(?:authorization|bearer|basic[ \t]+[A-Za-z0-9+/=]+|token|secret|password|passwd|api[-_]?key|access[-_]?token|client[-_]?secret|private[-_]?key|cookie|netrc|cert|key)(?:$|[^a-z0-9])/iu.test(candidate) ||
-      /(?:^|\s)(?:--header|-H|--cookie|--netrc|--cert|--key)(?:\s|=|$)/u.test(candidate) ||
-      /[?&](?:access_token|token|api_key|apikey|key|secret|password)=/iu.test(candidate);
-}
-
-function isUnsafeMcpArgumentPath(value: string) {
-  for (const fragment of argumentFragments(value)) {
-    if (/^https?:\/\//iu.test(fragment)) continue;
-    if (/^(?:file:|[A-Za-z]:[\\/]|\\\\|\/\/|~[\\/])/iu.test(fragment) ||
-        /(?:^|[\\/])\.\.(?:[\\/]|$)/u.test(fragment)) {
-      return true;
-    }
-    if (fragment.startsWith("/")) {
-      if (fragment === "/workbench") continue;
-      if (!fragment.startsWith("/workbench/")) return true;
-      if (fragment.slice("/workbench/".length).split("/").some((segment) =>
-        !segment || segment === "." || segment === ".." || !/^[A-Za-z0-9._-]+$/u.test(segment))) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
-function decodedCredentialCandidates(value: string) {
-  const maximumCandidates = 24;
-  const maximumDepth = 4;
-  const queue = [{ value, depth: 0 }];
-  const candidates = new Set<string>();
-  let limitExceeded = false;
-  while (queue.length > 0) {
-    const current = queue.shift()!;
-    const candidate = current.value;
-    if (candidates.has(candidate)) continue;
-    if (candidates.size >= maximumCandidates) {
-      limitExceeded = true;
-      break;
-    }
-    candidates.add(candidate);
-    const derived = argumentFragments(candidate).filter((fragment) => fragment !== candidate);
-    if (candidate.length <= 4_096) {
-      try {
-        const percentDecoded = decodeURIComponent(candidate);
-        if (percentDecoded !== candidate) derived.push(percentDecoded);
-      } catch { /* malformed encoding is rejected by the auditable argument grammar */ }
-      const base64Decoded = decodeBase64Utf8(candidate);
-      if (base64Decoded != null && base64Decoded !== candidate) derived.push(base64Decoded);
-    }
-    for (const next of derived) {
-      if (!next || candidates.has(next)) continue;
-      if (current.depth >= maximumDepth) {
-        limitExceeded = true;
-      } else {
-        queue.push({ value: next, depth: current.depth + 1 });
-      }
-    }
-  }
-  return { candidates: [...candidates], limitExceeded };
-}
-
-function argumentFragments(value: string) {
-  const fragments = new Set([value]);
-  let lastSeparator = -1;
-  for (let index = 0; index < value.length; index += 1) {
-    if (value[index] === "=" || value[index] === ",") {
-      const suffix = value.slice(index + 1);
-      if (suffix) fragments.add(suffix);
-      lastSeparator = index;
-    } else if (value[index] === ":") {
-      const scheme = value.slice(lastSeparator + 1, index);
-      const suffix = value.slice(index + 1);
-      if (suffix && !/^https?$/iu.test(scheme)) fragments.add(suffix);
-      lastSeparator = index;
-    }
-  }
-  return [...fragments];
-}
-
-function decodeBase64Utf8(value: string) {
-  if (value.length < 16 || value.length > 4_096 || !/^[A-Za-z0-9+/_-]+={0,2}$/u.test(value)) return null;
-  const normalized = value.replace(/-/gu, "+").replace(/_/gu, "/");
-  const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
-  if (padded.length % 4 !== 0) return null;
-  try {
-    const binary = atob(padded);
-    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
-    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-  } catch {
-    return null;
-  }
-}
-
-function looksLikeOpaqueSecret(value: string) {
-  if (value.length < 24 || value.length > 2_048 || value.startsWith("/workbench/") ||
-      /^https?:\/\//iu.test(value) ||
-      /^--[a-z0-9-]+=(?:https?:\/\/|\/workbench(?:\/|$)|[a-z0-9._-]{1,64}$)/iu.test(value) ||
-      value.startsWith("--") && /^[a-z0-9-]+$/u.test(value)) {
-    return false;
-  }
-  if (/^[a-f0-9]{32,}$/iu.test(value) ||
-      /^(?=[A-Z2-7]{32,}={0,6}$)(?=.*[2-7])[A-Z2-7]+=*$/u.test(value) ||
-      /^(?=[a-z2-7]{32,}={0,6}$)(?=.*[2-7])[a-z2-7]+=*$/u.test(value)) {
-    return true;
-  }
-  const distinct = new Set(value).size;
-  if (/^[A-Za-z0-9]+$/u.test(value) && value.length >= 32 && distinct <= 6) return true;
-  const classes = [/[a-z]/u, /[A-Z]/u, /[0-9]/u, /[^A-Za-z0-9]/u]
-    .filter((pattern) => pattern.test(value)).length;
-  if (classes < 2) return false;
-  const counts = new Map<string, number>();
-  for (const character of value) counts.set(character, (counts.get(character) ?? 0) + 1);
-  let entropy = 0;
-  for (const count of counts.values()) {
-    const probability = count / value.length;
-    entropy -= probability * Math.log2(probability);
-  }
-  return entropy >= 4.1;
-}
-
-function isUnsafeMcpCommand(command: string) {
-  const segments = command.split("/").filter(Boolean);
-  const executable = segments.at(-1) ?? "";
-  const dynamicSegments = command.startsWith("/opt/")
-    ? [segments[1] ?? "", executable]
-    : [executable];
-  return dynamicSegments.some((segment) => {
-    if (!segment) return true;
-    const decoded = decodedCredentialCandidates(segment);
-    return decoded.limitExceeded || decoded.candidates.some((candidate) =>
-      candidateContainsCredential(candidate) || looksLikeOpaqueExecutableSegment(candidate));
-  });
-}
-
-function looksLikeOpaqueExecutableSegment(value: string) {
-  if (/^[a-f0-9]{32,}$/iu.test(value)) return true;
-  if (/^(?=[A-Z2-7]{32,}$)(?=.*[2-7])[A-Z2-7]+$/u.test(value) ||
-      /^(?=[a-z2-7]{32,}$)(?=.*[2-7])[a-z2-7]+$/u.test(value)) return true;
-  return value.length >= 48 && /^[A-Za-z0-9]+$/u.test(value) && new Set(value).size <= 8;
-}
-
 function isWellFormedUnicode(value: string) {
   for (let index = 0; index < value.length; index += 1) {
     const unit = value.charCodeAt(index);
@@ -656,8 +784,9 @@ function assertUnique(values: string[], message: string, field: string) {
 }
 
 function isReservedMcpEnvKey(key: string) {
-  return key === "PATH" || key === "HOME" || key === "NODE_OPTIONS" || key === "BASH_ENV" ||
-    /^(?:LD_|DYLD_|DOCKER_|SUNABOT_|CODEX_)/u.test(key);
+  return key === "PATH" || key === "HOME" || key === "PWD" || key === "SHELL" || key === "USER" ||
+    key === "LOGNAME" || key === "TERM" || key === "NODE_OPTIONS" || key === "BASH_ENV" ||
+    key.endsWith("_PROXY") || /^(?:LD_|DYLD_|DOCKER_|SUNABOT_|CODEX_)/u.test(key);
 }
 
 function invalid(code: string, message: string, field?: string): never {

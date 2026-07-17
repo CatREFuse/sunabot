@@ -1,22 +1,17 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import {
-  AGENT_EXTENSION_SCHEMA_VERSION,
-  compareBinaryText,
-  emptyAgentMcpServerIndex,
-  emptyAgentSkillIndex,
-  parseAgentMcpServerIndex,
-  parseAgentMcpServerDescriptor,
-  parseAgentSkillIndex,
+  type AgentExtensionCopyApplyResult,
+  type AgentExtensionCopyConflictStrategy,
   type AgentMcpServerDescriptor,
-  type AgentMcpServerIndex,
-  type AgentSkillIndex,
-  type AgentSkillRecord
+  type AgentSkillRecord,
+  type AgentSkillSource
 } from "../../packages/contracts/extensions/agentExtensions.js";
 import {
   skillRecordFromEvidence,
   type AgentExtensionRepository,
-  type AgentMcpCredentialStatusResolver
+  type AgentMcpCredentialStatusResolver,
+  type SkillReviewPreparation
 } from "../../services/extensions/public.js";
 import {
   acquireFileLock,
@@ -25,37 +20,34 @@ import {
   mkdirChain,
   readJson,
   storeError,
-  syncDirectory,
   writeJsonIfMissing,
   type AgentExtensionBeforeFileOpen
 } from "./agentExtensionSecureFs.js";
-import { buildAgentExtensionCopyPreview } from "./agentExtensionPreview.js";
+import { AgentExtensionCopyLifecycle } from "./agentExtensionCopyLifecycle.js";
+import { AgentExtensionTransactionCoordinator } from "./agentExtensionTransactionCoordinator.js";
 import {
   AgentExtensionPathGuard,
   type AgentExtensionStorePaths as StorePaths
 } from "./agentExtensionPaths.js";
 import {
   safeSkillTarget,
-  type SkillRemovalTransaction,
-  type SkillTransaction
 } from "./agentSkillTransaction.js";
 import {
-  extensionRevision,
-  packageMatches,
   readSkillIndexFile,
-  recoverSkillTransactions,
-  retainTerminalSkillJournal
+  recoverSkillTransactions
 } from "./agentSkillPersistence.js";
+import { validateSkillIndex, withSkillRevision } from "./agentSkillIndex.js";
+import { AgentSkillMutationStore } from "./agentSkillMutationStore.js";
 import {
   moveVerifiedSkillDirectory,
   quarantineVerifiedSkillDirectory
 } from "./agentSkillSafeMutation.js";
 import {
-  extractSkillArchive,
-  inspectSkillDirectory,
-  type SkillArchiveExtractionHooks,
-  type SkillArchiveLimits
-} from "./skillArchive.js";
+  prepareSkillReviewPackage,
+  verifySkillReviewPackage
+} from "./agentSkillReview.js";
+import { extractSkillArchive, type SkillArchiveExtractionHooks, type SkillArchiveLimits } from "./skillArchive.js";
+import { AgentMcpServerStore, validateMcpIndex, withMcpRevision } from "./agentMcpServerStore.js";
 
 export interface AgentExtensionStoreOptions {
   workspaceRoot: string;
@@ -66,16 +58,42 @@ export interface AgentExtensionStoreOptions {
   beforeFileOpen?: AgentExtensionBeforeFileOpen;
   beforeWorkspaceRealpath?: () => void | Promise<void>;
   beforePathOperation?: (operation: string) => void | Promise<void>;
+  beforeSkillReviewFileOpen?: (absolute: string, relative: string) => void | Promise<void>;
 }
 
 export class AgentExtensionStore implements AgentExtensionRepository {
   private readonly now: () => Date;
   private readonly queues = new Map<string, Promise<unknown>>();
   private readonly pathGuard: AgentExtensionPathGuard;
+  private readonly copyLifecycle: AgentExtensionCopyLifecycle;
+  private readonly mcpStore: AgentMcpServerStore;
+  private readonly skillMutations: AgentSkillMutationStore;
+  private readonly extensionTransactions = new AgentExtensionTransactionCoordinator();
 
   constructor(private readonly options: AgentExtensionStoreOptions) {
     this.now = options.now ?? (() => new Date());
     this.pathGuard = new AgentExtensionPathGuard(options.workspaceRoot, options);
+    this.mcpStore = new AgentMcpServerStore({
+      pathGuard: this.pathGuard,
+      ensureLayout: (agentId) => this.ensureLayout(agentId),
+      beforeFileOpen: options.beforeFileOpen
+    });
+    this.copyLifecycle = new AgentExtensionCopyLifecycle({
+      repository: this,
+      pathGuard: this.pathGuard,
+      archiveLimits: options.archiveLimits,
+      fault: (step) => this.fault(step)
+    });
+    this.skillMutations = new AgentSkillMutationStore({
+      pathGuard: this.pathGuard,
+      archiveLimits: options.archiveLimits,
+      ensureLayout: (agentId) => this.ensureLayout(agentId),
+      withTransaction: (agentId, operation) => this.withExtensionTransaction(agentId, operation),
+      serialized: (key, operation) => this.serialized(key, operation),
+      withFileLock: (paths, lockPath, operation) => this.withFileLock(paths, lockPath, operation),
+      persistence: (paths) => this.skillPersistence(paths),
+      fault: (step) => this.fault(step)
+    });
   }
 
   async ensureLayout(agentId: string) {
@@ -94,6 +112,7 @@ export class AgentExtensionStore implements AgentExtensionRepository {
         readJson(paths.mcpIndex, this.options.beforeFileOpen).then(validateMcpIndex)
       ]);
       await this.pathGuard.guard(paths, "ensure-layout-existing-validated");
+      await this.recoverCopyTransactions(agentId);
       return;
     }
     await this.pathGuard.guardBase(paths, "ensure-layout-lock");
@@ -145,13 +164,14 @@ export class AgentExtensionStore implements AgentExtensionRepository {
       });
       await this.pathGuard.guard(paths, "release-layout-lock");
     }
+    await this.recoverCopyTransactions(agentId);
   }
 
   async readSkillIndex(agentId: string) {
     return this.serialized(`skills:${agentId}`, async () => {
       const paths = await this.pathGuard.paths(agentId);
       await this.pathGuard.guard(paths, "read-skill-index");
-      if (!(await exists(paths.skills))) return emptyAgentSkillIndex();
+      if (!(await exists(paths.skills))) return withSkillRevision([]);
       return this.withFileLock(paths, path.join(paths.skills, ".index.lock"), async () => {
         await recoverSkillTransactions(this.skillPersistence(paths));
         return readSkillIndexFile(this.skillPersistence(paths), true);
@@ -160,22 +180,22 @@ export class AgentExtensionStore implements AgentExtensionRepository {
   }
 
   async readMcpServerIndex(agentId: string) {
-    const paths = await this.pathGuard.paths(agentId);
-    await this.pathGuard.guard(paths, "read-mcp-index");
-    if (!(await exists(paths.mcpIndex))) return emptyAgentMcpServerIndex();
-    const index = parseAgentMcpServerIndex(await readJson(paths.mcpIndex, this.options.beforeFileOpen));
-    if (index.revision !== extensionRevision([...index.servers].sort((left, right) => compareBinaryText(left.id, right.id)))) {
-      throw storeError(409, "MCP_INDEX_REVISION_MISMATCH", "MCP 服务索引 revision 无效。");
-    }
-    return index;
+    return this.mcpStore.readServerIndex(agentId);
   }
 
-  async installSkill(input: { agentId: string; archive: Buffer; replace: boolean }) {
+  async installSkill(input: {
+    agentId: string;
+    archive: Buffer;
+    replace: boolean;
+    source?: AgentSkillSource;
+    expectedIndexRevision?: string;
+  }) {
     await this.ensureLayout(input.agentId);
-    const paths = await this.pathGuard.paths(input.agentId);
-    await this.pathGuard.guard(paths, "install-skill-stage");
-    return this.serialized(`skills:${input.agentId}`, async () => {
-      return this.withFileLock(paths, path.join(paths.skills, ".index.lock"), async () => {
+    return this.withExtensionTransaction(input.agentId, async () => {
+      const paths = await this.pathGuard.paths(input.agentId);
+      await this.pathGuard.guard(paths, "install-skill-stage");
+      return this.serialized(`skills:${input.agentId}`, async () => {
+        return this.withFileLock(paths, path.join(paths.skills, ".index.lock"), async () => {
         const extracted = await extractSkillArchive({
           archive: input.archive,
           stagingRoot: paths.skills,
@@ -200,10 +220,17 @@ export class AgentExtensionStore implements AgentExtensionRepository {
           await this.pathGuard.refresh(paths, { allowChanged: [paths.skills] });
           const record = skillRecordFromEvidence(
             extracted.evidence,
-            { kind: "upload" },
-            this.now().toISOString()
+            input.source ?? { kind: "upload" },
+            this.now().toISOString(),
+            false
           );
-          return await this.publishSkillLocked(paths, record, stage, input.replace);
+          return await this.skillMutations.publishLocked(
+            paths,
+            record,
+            stage,
+            input.replace,
+            input.expectedIndexRevision
+          );
         } catch (error) {
           await quarantineVerifiedSkillDirectory({
             source: stage,
@@ -216,6 +243,7 @@ export class AgentExtensionStore implements AgentExtensionRepository {
           });
           throw error;
         }
+        });
       });
     });
   }
@@ -227,303 +255,254 @@ export class AgentExtensionStore implements AgentExtensionRepository {
     mcpServerIds: string[];
     credentialStatus: AgentMcpCredentialStatusResolver;
   }) {
-    const [sourceSkills, targetSkills, sourceMcp, targetMcp] = await Promise.all([
-      this.readSkillIndex(input.sourceAgentId),
-      this.readSkillIndex(input.targetAgentId),
-      this.readMcpServerIndex(input.sourceAgentId),
-      this.readMcpServerIndex(input.targetAgentId)
-    ]);
-    const sourcePaths = await this.pathGuard.paths(input.sourceAgentId);
-    await this.pathGuard.guard(sourcePaths, "preview-skill-copy");
-    const evidence = await inspectSkillDirectory(
-      safeSkillTarget(sourcePaths.skills, input.skillId),
-      this.options.archiveLimits
-    );
-    return buildAgentExtensionCopyPreview({
-      ...input,
-      sourceSkills,
-      targetSkills,
-      sourceMcp,
-      targetMcp,
-      evidence,
-      credentialStatus: input.credentialStatus
-    });
+    return this.copyLifecycle.preview(input);
   }
 
-  async setSkillEnabled(input: { agentId: string; skillId: string; enabled: boolean }) {
+  async prepareSkillReview(input: { agentId: string; skillId: string }): Promise<SkillReviewPreparation> {
     await this.ensureLayout(input.agentId);
     return this.serialized(`skills:${input.agentId}`, async () => {
       const paths = await this.pathGuard.paths(input.agentId);
-      await this.pathGuard.guard(paths, "set-skill-enabled");
+      await this.pathGuard.guard(paths, "prepare-skill-review");
       return this.withFileLock(paths, path.join(paths.skills, ".index.lock"), async () => {
         await recoverSkillTransactions(this.skillPersistence(paths));
         const index = await readSkillIndexFile(this.skillPersistence(paths), true);
         const record = index.skills.find((skill) => skill.id === input.skillId);
-        if (!record) {
-          if (await exists(safeSkillTarget(paths.skills, input.skillId))) {
-            throw storeError(409, "SKILL_UNTRACKED_PACKAGE", "Skill 目录未被可信索引跟踪。");
-          }
-          throw storeError(404, "SKILL_NOT_FOUND", "Skill 不存在。");
+        if (!record) throw storeError(404, "SKILL_NOT_FOUND", "Skill 不存在。");
+        return prepareSkillReviewPackage({
+          agentId: input.agentId,
+          record,
+          indexRevision: index.revision,
+          directory: safeSkillTarget(paths.skills, input.skillId),
+          skillsIdentity: this.pathGuard.directoryIdentity(paths, paths.skills),
+          archiveLimits: this.options.archiveLimits,
+          beforeFileOpen: this.options.beforeSkillReviewFileOpen
+        });
+      });
+    });
+  }
+
+  async commitSkillReview(input: {
+    agentId: string;
+    skillId: string;
+    expectedIndexRevision: string;
+    expectedDigestSha256: string;
+    expectedFiles: SkillReviewPreparation["files"];
+    auditDigestSha256: string;
+  }) {
+    await this.ensureLayout(input.agentId);
+    return this.withExtensionTransaction(input.agentId, () => this.serialized(`skills:${input.agentId}`, async () => {
+      const paths = await this.pathGuard.paths(input.agentId);
+      await this.pathGuard.guard(paths, "commit-skill-review");
+      return this.withFileLock(paths, path.join(paths.skills, ".index.lock"), async () => {
+        await recoverSkillTransactions(this.skillPersistence(paths));
+        const index = await readSkillIndexFile(this.skillPersistence(paths), true);
+        const record = index.skills.find((skill) => skill.id === input.skillId);
+        if (!record) throw storeError(404, "SKILL_NOT_FOUND", "Skill 不存在。");
+        if (index.revision !== input.expectedIndexRevision ||
+            record.digestSha256 !== input.expectedDigestSha256 ||
+            input.auditDigestSha256 !== input.expectedDigestSha256) {
+          throw storeError(409, "SKILL_REVIEW_STALE", "Skill 在安全审查期间发生变化，请重新审查。");
         }
-        if (record.enabled === input.enabled) return record;
-        const updated = { ...record, enabled: input.enabled };
-        await this.pathGuard.guard(paths, "set-skill-enabled-commit");
+        const evidence = await verifySkillReviewPackage({
+          record,
+          directory: safeSkillTarget(paths.skills, input.skillId),
+          skillsIdentity: this.pathGuard.directoryIdentity(paths, paths.skills),
+          expectedFiles: input.expectedFiles,
+          archiveLimits: this.options.archiveLimits
+        });
+        const approvedAt = this.now().toISOString();
+        const updated: AgentSkillRecord = {
+          ...record,
+          enabled: false,
+          riskEvidence: {
+            ...evidence.riskEvidence,
+            reviewStatus: "approved",
+            reviewedDigestSha256: record.digestSha256
+          },
+          approval: {
+            status: "approved",
+            digestSha256: record.digestSha256,
+            approvedAt
+          }
+        };
+        await this.pathGuard.guard(paths, "commit-skill-review-index");
         await atomicJson(paths.skillIndex, withSkillRevision(index.skills.map((skill) =>
           skill.id === input.skillId ? updated : skill
         )));
         return updated;
       });
-    });
+    }));
   }
 
-  async uninstallSkill(input: { agentId: string; skillId: string }) {
+  async applyCopy(input: {
+    sourceAgentId: string;
+    targetAgentId: string;
+    skillId: string;
+    mcpServerIds: string[];
+    previewRevision: string;
+    conflictStrategy: AgentExtensionCopyConflictStrategy;
+    renameTo?: string;
+    credentialStatus: AgentMcpCredentialStatusResolver;
+  }): Promise<AgentExtensionCopyApplyResult> {
+    await this.ensureLayout(input.targetAgentId);
+    return this.withExtensionTransaction(input.targetAgentId, () => this.copyLifecycle.apply(input));
+  }
+
+  async setSkillEnabled(input: { agentId: string; skillId: string; enabled: boolean }) {
+    return this.skillMutations.setEnabled(input);
+  }
+
+  async restoreReviewedSkill(input: { agentId: string; previous: AgentSkillRecord }) {
     await this.ensureLayout(input.agentId);
-    return this.serialized(`skills:${input.agentId}`, async () => {
+    return this.withExtensionTransaction(input.agentId, () => this.serialized(`skills:${input.agentId}`, async () => {
       const paths = await this.pathGuard.paths(input.agentId);
-      await this.pathGuard.guard(paths, "uninstall-skill");
+      await this.pathGuard.guard(paths, "restore-reviewed-skill");
       return this.withFileLock(paths, path.join(paths.skills, ".index.lock"), async () => {
         await recoverSkillTransactions(this.skillPersistence(paths));
         const index = await readSkillIndexFile(this.skillPersistence(paths), true);
-        const target = safeSkillTarget(paths.skills, input.skillId);
-        const record = index.skills.find((skill) => skill.id === input.skillId);
-        if (!record) {
-          if (await exists(target)) throw storeError(409, "SKILL_UNTRACKED_PACKAGE", "Skill 目录未被可信索引跟踪。");
-          throw storeError(404, "SKILL_NOT_FOUND", "Skill 不存在。");
+        const record = index.skills.find((skill) => skill.id === input.previous.id);
+        if (!record || !skillDoublyApproved(input.previous) ||
+            record.digestSha256 !== input.previous.digestSha256 ||
+            !sameSkillReviewIdentity(record, input.previous)) {
+          throw storeError(409, "SKILL_REVIEW_RESTORE_INVALID", "Skill 回滚审批证据无效。");
         }
-        const transactionId = randomUUID();
-        const backup = path.join(paths.skills, `.skill-tombstone-${record.id}-${transactionId}`);
-        const journal = path.join(paths.skills, `.skill-remove-transaction-${transactionId}.json`);
-        const transaction: SkillRemovalTransaction = {
-          schemaVersion: 1,
-          state: "prepared",
-          id: record.id,
-          digest: record.digestSha256,
-          backupName: path.basename(backup)
-        };
-        await this.pathGuard.guard(paths, "uninstall-skill-commit");
-        await atomicJson(journal, transaction);
+        const preparation = await prepareSkillReviewPackage({
+          agentId: input.agentId,
+          record,
+          indexRevision: index.revision,
+          directory: safeSkillTarget(paths.skills, record.id),
+          skillsIdentity: this.pathGuard.directoryIdentity(paths, paths.skills),
+          archiveLimits: this.options.archiveLimits
+        });
         try {
-          await moveVerifiedSkillDirectory({
-            source: target,
-            destination: backup,
-            expectedDigest: record.digestSha256,
-            limits: this.options.archiveLimits,
-            hooks: {
-              beforeRename: () => this.fault("before-skill-remove-rename"),
-              afterRename: () => this.fault("after-skill-remove-rename")
-            }
+          await verifySkillReviewPackage({
+            record,
+            directory: safeSkillTarget(paths.skills, record.id),
+            skillsIdentity: this.pathGuard.directoryIdentity(paths, paths.skills),
+            expectedFiles: preparation.files,
+            archiveLimits: this.options.archiveLimits
           });
-          await syncDirectory(paths.skills);
-          await this.fault("after-skill-remove-directory");
-          await atomicJson(paths.skillIndex, withSkillRevision(index.skills.filter((skill) => skill.id !== record.id)));
-          await this.fault("after-skill-remove-index");
-          await retainTerminalSkillJournal(journal, transaction, "committed");
-          await syncDirectory(paths.skills);
-          return record;
-        } catch (error) {
-          const current = await readSkillIndexFile(this.skillPersistence(paths), false);
-          if (!current.skills.some((skill) => skill.id === record.id)) {
-            await retainTerminalSkillJournal(journal, transaction, "committed");
-            await syncDirectory(paths.skills);
-            return record;
-          }
-          const [targetExists, backupExists] = await Promise.all([exists(target), exists(backup)]);
-          if (targetExists && backupExists) {
-            throw storeError(409, "SKILL_TRANSACTION_INVALID", "Skill 卸载回滚遇到重复目录。");
-          }
-          if (!targetExists && backupExists) {
-            await moveVerifiedSkillDirectory({
-              source: backup,
-              destination: target,
-              expectedDigest: record.digestSha256,
-              limits: this.options.archiveLimits,
-              hooks: {
-                beforeRename: () => this.fault("before-skill-remove-rollback-rename"),
-                afterRename: () => this.fault("after-skill-remove-rollback-rename")
-              }
-            });
-          } else if (!targetExists) {
-            throw storeError(409, "SKILL_TRANSACTION_INVALID", "Skill 卸载回滚缺少可信目录。");
-          }
-          await syncDirectory(paths.skills);
-          await retainTerminalSkillJournal(journal, transaction, "rolled_back");
-          await syncDirectory(paths.skills);
-          throw error;
+        } finally {
+          clearSkillReviewBuffers(preparation);
         }
+        const updated: AgentSkillRecord = {
+          ...record,
+          enabled: input.previous.enabled,
+          riskEvidence: structuredClone(input.previous.riskEvidence),
+          approval: structuredClone(input.previous.approval!)
+        };
+        await this.pathGuard.guard(paths, "restore-reviewed-skill-index");
+        await atomicJson(paths.skillIndex, withSkillRevision(index.skills.map((skill) =>
+          skill.id === record.id ? updated : skill
+        )));
+        return updated;
       });
-    });
+    }));
+  }
+
+  async restoreSkillRecord(input: { agentId: string; previous: AgentSkillRecord }) {
+    await this.ensureLayout(input.agentId);
+    return this.withExtensionTransaction(input.agentId, () => this.serialized(`skills:${input.agentId}`, async () => {
+      const paths = await this.pathGuard.paths(input.agentId);
+      await this.pathGuard.guard(paths, "restore-copy-skill-record");
+      return this.withFileLock(paths, path.join(paths.skills, ".index.lock"), async () => {
+        await recoverSkillTransactions(this.skillPersistence(paths));
+        const index = await readSkillIndexFile(this.skillPersistence(paths), true);
+        const record = index.skills.find((skill) => skill.id === input.previous.id);
+        const approvalBearing = input.previous.enabled ||
+          input.previous.approval?.status === "approved" ||
+          input.previous.riskEvidence.reviewStatus === "approved";
+        if (!record || record.digestSha256 !== input.previous.digestSha256 ||
+            !sameSkillReviewIdentity(record, input.previous) ||
+            (approvalBearing && !skillDoublyApproved(input.previous))) {
+          throw storeError(409, "SKILL_REVIEW_RESTORE_INVALID", "Skill 回滚记录无效。");
+        }
+        const preparation = await prepareSkillReviewPackage({
+          agentId: input.agentId,
+          record,
+          indexRevision: index.revision,
+          directory: safeSkillTarget(paths.skills, record.id),
+          skillsIdentity: this.pathGuard.directoryIdentity(paths, paths.skills),
+          archiveLimits: this.options.archiveLimits
+        });
+        try {
+          await verifySkillReviewPackage({
+            record,
+            directory: safeSkillTarget(paths.skills, record.id),
+            skillsIdentity: this.pathGuard.directoryIdentity(paths, paths.skills),
+            expectedFiles: preparation.files,
+            archiveLimits: this.options.archiveLimits
+          });
+        } finally {
+          clearSkillReviewBuffers(preparation);
+        }
+        const updated = structuredClone(input.previous);
+        await this.pathGuard.guard(paths, "restore-copy-skill-record-index");
+        await atomicJson(paths.skillIndex, withSkillRevision(index.skills.map((skill) =>
+          skill.id === record.id ? updated : skill
+        )));
+        return updated;
+      });
+    }));
+  }
+
+  async uninstallSkill(input: { agentId: string; skillId: string; expectedIndexRevision?: string }) {
+    return this.skillMutations.uninstall(input);
   }
 
   async putMcpServer(input: {
     agentId: string;
     server: AgentMcpServerDescriptor;
     replace: boolean;
+    expectedIndexRevision?: string;
   }) {
     await this.ensureLayout(input.agentId);
-    return this.serialized(`mcp:${input.agentId}`, async () => {
-      const server = parseAgentMcpServerDescriptor(input.server);
-      const paths = await this.pathGuard.paths(input.agentId);
-      await this.pathGuard.guard(paths, "put-mcp-server");
-      return this.withFileLock(paths, path.join(paths.mcp, ".index.lock"), async () => {
-        const index = await this.readMcpServerIndex(input.agentId);
-        const existing = index.servers.find((candidate) => candidate.id === server.id);
-        if (existing && !input.replace) throw storeError(409, "MCP_SERVER_CONFLICT", "MCP 服务已存在。");
-        const servers = [...index.servers.filter((candidate) => candidate.id !== server.id), server]
-          .sort((left, right) => compareBinaryText(left.id, right.id));
-        await this.pathGuard.guard(paths, "put-mcp-server-commit");
-        await atomicJson(paths.mcpIndex, withMcpRevision(servers));
-        return server;
-      });
-    });
+    return this.withExtensionTransaction(input.agentId, () => this.mcpStore.putServer(input));
   }
 
-  async setMcpServerEnabled(input: { agentId: string; serverId: string; enabled: boolean }) {
+  async setMcpServerEnabled(input: {
+    agentId: string;
+    serverId: string;
+    enabled: boolean;
+    credentialStatus: AgentMcpCredentialStatusResolver;
+  }) {
     await this.ensureLayout(input.agentId);
-    return this.serialized(`mcp:${input.agentId}`, async () => {
-      const paths = await this.pathGuard.paths(input.agentId);
-      await this.pathGuard.guard(paths, "set-mcp-server-enabled");
-      return this.withFileLock(paths, path.join(paths.mcp, ".index.lock"), async () => {
-        const index = await this.readMcpServerIndex(input.agentId);
-        const server = index.servers.find((candidate) => candidate.id === input.serverId);
-        if (!server) throw storeError(404, "MCP_SERVER_NOT_FOUND", "MCP 服务不存在。");
-        if (server.enabled === input.enabled) return server;
-        const updated = { ...server, enabled: input.enabled };
-        await this.pathGuard.guard(paths, "set-mcp-server-enabled-commit");
-        await atomicJson(paths.mcpIndex, withMcpRevision(index.servers.map((candidate) =>
-          candidate.id === input.serverId ? updated : candidate
-        )));
-        return updated;
-      });
-    });
+    return this.withExtensionTransaction(input.agentId, () => this.mcpStore.setServerEnabled(input));
   }
 
-  async removeMcpServer(input: { agentId: string; serverId: string }) {
+  async removeMcpServer(input: { agentId: string; serverId: string; expectedIndexRevision?: string }) {
     await this.ensureLayout(input.agentId);
-    return this.serialized(`mcp:${input.agentId}`, async () => {
-      const paths = await this.pathGuard.paths(input.agentId);
-      await this.pathGuard.guard(paths, "remove-mcp-server");
-      return this.withFileLock(paths, path.join(paths.mcp, ".index.lock"), async () => {
-        const index = await this.readMcpServerIndex(input.agentId);
-        const server = index.servers.find((candidate) => candidate.id === input.serverId);
-        if (!server) throw storeError(404, "MCP_SERVER_NOT_FOUND", "MCP 服务不存在。");
-        await this.pathGuard.guard(paths, "remove-mcp-server-commit");
-        await atomicJson(paths.mcpIndex, withMcpRevision(index.servers.filter((candidate) =>
-          candidate.id !== input.serverId
-        )));
-        return server;
-      });
-    });
+    return this.withExtensionTransaction(input.agentId, () => this.mcpStore.removeServer(input));
   }
 
-  private async publishSkillLocked(
+  async bindMcpOAuthCredential(input: {
+    agentId: string;
+    serverId: string;
+    expectedRevision: string;
+    expectedUrl: string;
+    credentialRef: string;
+  }) {
+    await this.ensureLayout(input.agentId);
+    return this.withExtensionTransaction(input.agentId, () => this.mcpStore.bindOAuthCredential(input));
+  }
+
+  async disableMcpOAuthCredential(input: {
+    agentId: string;
+    serverId: string;
+    expectedRevision: string;
+    expectedUrl: string;
+    credentialRef: string;
+  }) {
+    await this.ensureLayout(input.agentId);
+    return this.withExtensionTransaction(input.agentId, () => this.mcpStore.disableOAuthCredential(input));
+  }
+
+  private async withFileLock<T>(
     paths: StorePaths,
-    record: AgentSkillRecord,
-    stage: string,
-    replace: boolean
+    lockPath: string,
+    operation: () => Promise<T>,
+    allowChanged = [path.dirname(lockPath)]
   ) {
-    await recoverSkillTransactions(this.skillPersistence(paths));
-    const index = await readSkillIndexFile(this.skillPersistence(paths), true);
-    const previous = index.skills.find((skill) => skill.id === record.id);
-    if (previous && !replace) throw storeError(409, "SKILL_CONFLICT", "Skill 已存在，如需替换请显式确认。");
-    const target = safeSkillTarget(paths.skills, record.id);
-    const transactionId = randomUUID();
-    const backup = path.join(paths.skills, `.skill-quarantine-${record.id}-${transactionId}`);
-    const journal = path.join(paths.skills, `.skill-transaction-${transactionId}.json`);
-    const transaction: SkillTransaction = {
-      schemaVersion: 1,
-      state: "prepared",
-      id: record.id,
-      previousDigest: previous?.digestSha256 ?? null,
-      nextDigest: record.digestSha256,
-      stageName: path.basename(stage),
-      backupName: path.basename(backup)
-    };
-    await this.pathGuard.guard(paths, "publish-skill-commit");
-    await atomicJson(journal, transaction);
-    try {
-      if (previous) {
-        await moveVerifiedSkillDirectory({
-          source: target,
-          destination: backup,
-          expectedDigest: previous.digestSha256,
-          limits: this.options.archiveLimits,
-          hooks: {
-            beforeRename: () => this.fault("before-skill-backup-rename"),
-            afterRename: () => this.fault("after-skill-backup-rename")
-          }
-        });
-      }
-      await moveVerifiedSkillDirectory({
-        source: stage,
-        destination: target,
-        expectedDigest: record.digestSha256,
-        limits: this.options.archiveLimits,
-        hooks: {
-          beforeRename: () => this.fault("before-skill-target-rename"),
-          afterRename: () => this.fault("after-skill-target-rename")
-        }
-      });
-      await syncDirectory(paths.skills);
-      await this.fault("after-skill-directory-publish");
-      const skills = [...index.skills.filter((skill) => skill.id !== record.id), record]
-        .sort((left, right) => compareBinaryText(left.id, right.id));
-      await atomicJson(paths.skillIndex, withSkillRevision(skills));
-      await this.fault("after-skill-index-publish");
-      await retainTerminalSkillJournal(journal, transaction, "committed");
-      await syncDirectory(paths.skills);
-      return record;
-    } catch (error) {
-      const current = await readSkillIndexFile(this.skillPersistence(paths), false);
-      if (current.skills.some((skill) => skill.id === record.id && skill.digestSha256 === record.digestSha256)) {
-        await retainTerminalSkillJournal(journal, transaction, "committed");
-        await syncDirectory(paths.skills);
-        return record;
-      }
-      const targetExists = await exists(target);
-      const targetHasNext = targetExists && await packageMatches(target, record, this.options.archiveLimits);
-      const targetHasPrevious = Boolean(previous) && targetExists &&
-        await packageMatches(target, previous!, this.options.archiveLimits);
-      if (targetHasNext) {
-        await quarantineVerifiedSkillDirectory({
-          source: target,
-          expectedDigest: record.digestSha256,
-          limits: this.options.archiveLimits,
-          hooks: {
-            beforeRename: () => this.fault("before-skill-target-quarantine-rename"),
-            afterRename: () => this.fault("after-skill-target-quarantine-rename")
-          }
-        });
-      } else if (targetExists && !targetHasPrevious) {
-        throw storeError(409, "SKILL_TRANSACTION_INVALID", "Skill 发布回滚遇到未知目标目录。");
-      }
-      if (previous) {
-        const backupExists = await exists(backup);
-        if (backupExists) {
-          if (await exists(target)) {
-            throw storeError(409, "SKILL_TRANSACTION_INVALID", "Skill 发布回滚遇到重复目录。");
-          }
-          await moveVerifiedSkillDirectory({
-            source: backup,
-            destination: target,
-            expectedDigest: previous.digestSha256,
-            limits: this.options.archiveLimits,
-            hooks: {
-              beforeRename: () => this.fault("before-skill-backup-restore-rename"),
-              afterRename: () => this.fault("after-skill-backup-restore-rename")
-            }
-          });
-        } else if (!(await packageMatches(target, previous, this.options.archiveLimits))) {
-          throw storeError(409, "SKILL_TRANSACTION_INVALID", "Skill 发布回滚缺少可信旧版本。");
-        }
-      }
-      await syncDirectory(paths.skills);
-      await retainTerminalSkillJournal(journal, transaction, "rolled_back");
-      await syncDirectory(paths.skills);
-      throw error;
-    }
-  }
-
-  private async withFileLock<T>(paths: StorePaths, lockPath: string, operation: () => Promise<T>) {
     await this.pathGuard.guard(paths, "acquire-extension-lock");
     const lockParent = path.dirname(lockPath);
     const handle = await acquireFileLock(lockPath);
@@ -532,7 +511,7 @@ export class AgentExtensionStore implements AgentExtensionRepository {
       return await operation();
     } finally {
       await handle.close();
-      await this.pathGuard.refresh(paths, { allowChanged: [lockParent] });
+      await this.pathGuard.refresh(paths, { allowChanged });
       await this.pathGuard.guard(paths, "release-extension-lock");
     }
   }
@@ -550,6 +529,23 @@ export class AgentExtensionStore implements AgentExtensionRepository {
     await this.options.faultInjector?.(step);
   }
 
+  private async recoverCopyTransactions(agentId: string) {
+    if (this.extensionTransactions.owns(agentId)) return;
+    await this.withExtensionTransaction(agentId, () => this.copyLifecycle.recover(agentId));
+  }
+
+  private async withExtensionTransaction<T>(agentId: string, operation: () => Promise<T>) {
+    return this.extensionTransactions.run(agentId, operation, async (scopedOperation) => {
+      const paths = await this.pathGuard.paths(agentId);
+      return await this.serialized(`copy:${agentId}`, () => this.withFileLock(
+        paths,
+        path.join(paths.skills, ".copy.lock"),
+        scopedOperation,
+        [paths.skills, paths.mcp]
+      ));
+    });
+  }
+
   private skillPersistence(paths: StorePaths) {
     return {
       paths,
@@ -561,26 +557,35 @@ export class AgentExtensionStore implements AgentExtensionRepository {
   }
 }
 
-function withSkillRevision(skills: AgentSkillRecord[]): AgentSkillIndex {
-  const ordered = [...skills].sort((left, right) => compareBinaryText(left.id, right.id));
-  return { schemaVersion: AGENT_EXTENSION_SCHEMA_VERSION, revision: extensionRevision(ordered), skills: ordered };
+function skillDoublyApproved(record: AgentSkillRecord) {
+  return record.approval?.status === "approved" &&
+    record.approval.digestSha256 === record.digestSha256 &&
+    record.riskEvidence.reviewStatus === "approved" &&
+    record.riskEvidence.reviewedDigestSha256 === record.digestSha256;
 }
 
-function withMcpRevision(servers: AgentMcpServerDescriptor[]): AgentMcpServerIndex {
-  const ordered = [...servers].sort((left, right) => compareBinaryText(left.id, right.id));
-  return { schemaVersion: AGENT_EXTENSION_SCHEMA_VERSION, revision: extensionRevision(ordered), servers: ordered };
+function sameSkillReviewIdentity(current: AgentSkillRecord, previous: AgentSkillRecord) {
+  return current.id === previous.id && current.name === previous.name &&
+    current.description === previous.description && current.license === previous.license &&
+    current.compatibility === previous.compatibility && current.digestSha256 === previous.digestSha256 &&
+    current.fileCount === previous.fileCount && current.unpackedBytes === previous.unpackedBytes &&
+    JSON.stringify(current.metadata) === JSON.stringify(previous.metadata) &&
+    JSON.stringify(current.allowedTools) === JSON.stringify(previous.allowedTools) &&
+    JSON.stringify({
+      ...current.riskEvidence,
+      reviewStatus: undefined,
+      reviewedDigestSha256: undefined
+    }) === JSON.stringify({
+      ...previous.riskEvidence,
+      reviewStatus: undefined,
+      reviewedDigestSha256: undefined
+    });
 }
 
-function validateSkillIndex(value: unknown) {
-  const index = parseAgentSkillIndex(value);
-  if (index.revision !== extensionRevision([...index.skills].sort((left, right) => compareBinaryText(left.id, right.id)))) {
-    throw storeError(409, "SKILL_INDEX_REVISION_MISMATCH", "Skill 索引 revision 无效。");
-  }
-}
-
-function validateMcpIndex(value: unknown) {
-  const index = parseAgentMcpServerIndex(value);
-  if (index.revision !== extensionRevision([...index.servers].sort((left, right) => compareBinaryText(left.id, right.id)))) {
-    throw storeError(409, "MCP_INDEX_REVISION_MISMATCH", "MCP 服务索引 revision 无效。");
-  }
+function clearSkillReviewBuffers(preparation: SkillReviewPreparation) {
+  const buffers = new Set([
+    ...preparation.scripts.map((script) => script.content),
+    ...preparation.texts.map((text) => text.content)
+  ]);
+  for (const content of buffers) content.fill(0);
 }

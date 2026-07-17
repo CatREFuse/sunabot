@@ -138,6 +138,17 @@ export class AdminAuthService {
     };
   }
 
+  authorizationSessionBinding(request: FastifyRequest) {
+    const bearer = bearerToken(request.headers.authorization);
+    const configuredBearer = this.options.bearerToken?.trim() ?? "";
+    if (bearer && configuredBearer && constantTimeEqual(bearer, configuredBearer)) {
+      return `bearer:${sessionTokenHash(bearer)}`;
+    }
+    const session = this.readSession(request);
+    if (!session) throw unauthorized();
+    return `session:${session.tokenHash}`;
+  }
+
   async login(request: FastifyRequest, reply: FastifyReply, body: unknown): Promise<AdminSessionStatus> {
     this.assertAllowedOrigin(request);
     this.assertFuseAllows(request);

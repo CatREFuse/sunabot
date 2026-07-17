@@ -5,6 +5,9 @@ import {
   assertMcpEnvKey,
   emptyAgentMcpServerIndex,
   emptyAgentSkillIndex,
+  mcpDescriptorEnvKeys,
+  mcpHttpCredentialEnvironmentKey,
+  mcpStdioCredentialEnvironmentKey,
   parseAgentMcpServerDescriptor,
   parseAgentMcpServerIndex,
   parseAgentSkillIndex,
@@ -29,14 +32,18 @@ describe("Agent extension contracts", () => {
       expect(() => assertAgentId(invalid)).toThrow();
     }
     expect(assertMcpEnvKey("GITHUB_TOKEN")).toBe("GITHUB_TOKEN");
-    for (const reserved of ["PATH", "HOME", "NODE_OPTIONS", "LD_PRELOAD", "DOCKER_HOST", "SUNABOT_TOKEN", "CODEX_HOME"]) {
+    for (const reserved of [
+      "PATH", "HOME", "PWD", "SHELL", "USER", "LOGNAME", "TERM", "NODE_OPTIONS", "LD_PRELOAD",
+      "DOCKER_HOST", "SUNABOT_TOKEN", "CODEX_HOME", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "FTP_PROXY",
+      "NO_PROXY", "SERVICE_PROXY"
+    ]) {
       expect(() => assertMcpEnvKey(reserved)).toThrowError(expect.objectContaining({
         code: "AGENT_EXTENSION_ENV_KEY_INVALID"
       }));
     }
   });
 
-  it("keeps MCP descriptors secret-free and stdio-only", () => {
+  it("keeps MCP descriptors secret-free and accepts hardened stdio or Streamable HTTP", () => {
     const descriptor = {
       id: "github-mcp",
       name: "GitHub MCP",
@@ -50,7 +57,6 @@ describe("Agent extension contracts", () => {
     expect(parseAgentMcpServerDescriptor(descriptor)).toEqual(descriptor);
     expect(parseAgentMcpServerDescriptor({
       ...descriptor,
-      command: "/usr/local/bin/node",
       args: [
         "--stdio",
         "--mode=safe",
@@ -69,10 +75,79 @@ describe("Agent extension contracts", () => {
     }).args).toEqual(["--query=issues"]);
     expect(() => parseAgentMcpServerDescriptor({ ...descriptor, token: "secret" }))
       .toThrowError(expect.objectContaining({ code: "AGENT_EXTENSION_CONFIG_INVALID" }));
+    expect(parseAgentMcpServerDescriptor({
+      id: "remote-mcp",
+      name: "Remote MCP",
+      description: "Remote tools.",
+      enabled: true,
+      required: false,
+      enabledTools: ["search"],
+      disabledTools: ["delete"],
+      ordinaryUserTools: ["search"],
+      approvalMode: "never",
+      transport: "streamable_http",
+      url: "https://mcp.example.test/v1",
+      auth: { kind: "none" }
+    })).toMatchObject({
+      transport: "streamable_http",
+      url: "https://mcp.example.test/v1",
+      auth: { kind: "none" }
+    });
+    for (const auth of [
+      { kind: "bearer", credentialRef: "mcp/remote-token" },
+      { kind: "oauth", credentialRef: `mcpcred_${"a".repeat(24)}` }
+    ]) {
+      expect(() => parseAgentMcpServerDescriptor({
+        id: "credential-mcp",
+        name: "Credential MCP",
+        description: "Credential tools.",
+        enabled: true,
+        required: false,
+        enabledTools: ["search"],
+        disabledTools: [],
+        ordinaryUserTools: ["search"],
+        approvalMode: "never",
+        transport: "streamable_http",
+        url: "https://mcp.example.test/v1",
+        auth
+      })).toThrowError(expect.objectContaining({
+        code: "AGENT_EXTENSION_MCP_ORDINARY_USER_CREDENTIAL_FORBIDDEN"
+      }));
+    }
+    expect(() => parseAgentMcpServerDescriptor({
+      ...descriptor,
+      required: false,
+      enabledTools: ["search"],
+      disabledTools: [],
+      ordinaryUserTools: ["search"],
+      approvalMode: "never"
+    })).toThrowError(expect.objectContaining({
+      code: "AGENT_EXTENSION_MCP_ORDINARY_USER_CREDENTIAL_FORBIDDEN"
+    }));
+    expect(() => parseAgentMcpServerDescriptor({
+      id: "remote-mcp",
+      name: "Remote MCP",
+      description: "Remote tools.",
+      enabled: true,
+      required: false,
+      enabledTools: ["search"],
+      disabledTools: [],
+      ordinaryUserTools: ["delete"],
+      approvalMode: "never",
+      transport: "streamable_http",
+      url: "https://mcp.example.test/v1",
+      auth: { kind: "none" }
+    })).toThrowError(expect.objectContaining({ code: "AGENT_EXTENSION_MCP_INVALID" }));
     expect(() => parseAgentMcpServerDescriptor({ ...descriptor, transport: "http" }))
-      .toThrowError(expect.objectContaining({ code: "AGENT_EXTENSION_MCP_INVALID" }));
+      .toThrowError(expect.objectContaining({ code: "AGENT_EXTENSION_CONFIG_INVALID" }));
     expect(() => parseAgentMcpServerDescriptor({ ...descriptor, command: "npx" }))
       .toThrowError(expect.objectContaining({ code: "AGENT_EXTENSION_MCP_COMMAND_INVALID" }));
+    for (const interpreter of [
+      "/usr/local/bin/node", "/usr/bin/python3", "/bin/sh", "/usr/bin/env", "/usr/bin/ruby3.2"
+    ]) {
+      expect(() => parseAgentMcpServerDescriptor({ ...descriptor, command: interpreter }))
+        .toThrowError(expect.objectContaining({ code: "AGENT_EXTENSION_MCP_COMMAND_INVALID" }));
+    }
     expect(() => parseAgentMcpServerDescriptor({ ...descriptor, args: ["--token=plain-secret"] }))
       .toThrowError(expect.objectContaining({ code: "AGENT_EXTENSION_MCP_SECRET_ARGUMENT_REJECTED" }));
     for (const secretArg of [
@@ -97,7 +172,14 @@ describe("Agent extension contracts", () => {
       expect(() => parseAgentMcpServerDescriptor({ ...descriptor, description: invalidText }))
         .toThrowError(expect.objectContaining({ code: "AGENT_EXTENSION_VALUE_INVALID" }));
     }
-    for (const hostCommand of ["/Users/alice/mcp", "/home/alice/mcp", "/tmp/mcp", "file:///usr/bin/mcp"]) {
+    for (const hostCommand of [
+      "/Users/alice/mcp",
+      "/home/alice/mcp",
+      "/tmp/mcp",
+      "/opt/example/bin/mcp",
+      "/app/bin/mcp",
+      "file:///usr/bin/mcp"
+    ]) {
       expect(() => parseAgentMcpServerDescriptor({ ...descriptor, command: hostCommand }))
         .toThrowError(expect.objectContaining({ code: "AGENT_EXTENSION_MCP_COMMAND_INVALID" }));
     }
@@ -124,6 +206,58 @@ describe("Agent extension contracts", () => {
     for (let depth = 0; depth < 7; depth += 1) decodingLimit = encodeURIComponent(decodingLimit);
     expect(() => parseAgentMcpServerDescriptor({ ...descriptor, args: [decodingLimit] }))
       .toThrowError(expect.objectContaining({ code: "AGENT_EXTENSION_MCP_ARGUMENT_INVALID" }));
+  });
+
+  it("derives stable Agent-bound bearer environment names without exposing credential references", () => {
+    const bearer = parseAgentMcpServerDescriptor({
+      id: "remote-mcp",
+      name: "Remote MCP",
+      description: "Remote tools.",
+      enabled: true,
+      required: false,
+      enabledTools: [],
+      disabledTools: [],
+      approvalMode: "always",
+      transport: "streamable_http",
+      url: "https://mcp.example.test/v1",
+      auth: { kind: "bearer", credentialRef: "mcp/remote-token" }
+    });
+    const key = mcpHttpCredentialEnvironmentKey("agent-a", bearer.id, "mcp/remote-token", bearer.url);
+    expect(key).toMatch(/^SUNABOT_MCP_HTTP_BEARER_[A-F0-9]{32}$/u);
+    expect(key).not.toContain("REMOTE_TOKEN");
+    expect(mcpDescriptorEnvKeys(bearer)).toEqual([]);
+    expect(mcpDescriptorEnvKeys(bearer, "agent-a")).toEqual([key]);
+    expect(mcpHttpCredentialEnvironmentKey("agent-a", bearer.id, "mcp/remote-token", bearer.url)).toBe(key);
+    expect(mcpHttpCredentialEnvironmentKey("agent-b", bearer.id, "mcp/remote-token", bearer.url)).not.toBe(key);
+    expect(mcpHttpCredentialEnvironmentKey(
+      "agent-a", bearer.id, "mcp/remote-token", "https://other.example.test/mcp"
+    )).not.toBe(key);
+    expect(mcpDescriptorEnvKeys({ ...bearer, auth: { kind: "oauth", credentialRef: "mcp/oauth" } }, "agent-a"))
+      .toEqual([]);
+  });
+
+  it("keeps stdio descriptor keys logical while deriving Agent and server bound environment names", () => {
+    const server = parseAgentMcpServerDescriptor({
+      id: "local-mcp",
+      name: "Local MCP",
+      description: "Local tools.",
+      enabled: false,
+      transport: "stdio",
+      command: "/usr/bin/local-mcp",
+      args: [],
+      envKeys: ["TOKEN"]
+    });
+    const agentAKey = mcpStdioCredentialEnvironmentKey("agent-a", server.id, "TOKEN");
+
+    expect(server).toMatchObject({ envKeys: ["TOKEN"] });
+    expect(mcpDescriptorEnvKeys(server)).toEqual(["TOKEN"]);
+    expect(mcpDescriptorEnvKeys(server, "agent-a")).toEqual([agentAKey]);
+    expect(agentAKey).toMatch(/^SUNABOT_MCP_STDIO_SECRET_[A-F0-9]{32}$/u);
+    expect(agentAKey).not.toContain("TOKEN");
+    expect(mcpStdioCredentialEnvironmentKey("agent-a", server.id, "TOKEN")).toBe(agentAKey);
+    expect(mcpStdioCredentialEnvironmentKey("agent-b", server.id, "TOKEN")).not.toBe(agentAKey);
+    expect(mcpStdioCredentialEnvironmentKey("agent-a", "other-mcp", "TOKEN")).not.toBe(agentAKey);
+    expect(mcpStdioCredentialEnvironmentKey("agent-a", server.id, "OTHER_TOKEN")).not.toBe(agentAKey);
   });
 
   it("parses the bounded official Skill frontmatter fields and rejects complex YAML", () => {

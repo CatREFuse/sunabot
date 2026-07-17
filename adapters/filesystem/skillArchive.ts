@@ -188,6 +188,7 @@ export async function inspectSkillDirectory(
   let skillMarkdown: string | undefined;
   let openAiMetadata: string | undefined;
   let hasExternalUrls = false;
+  const externalOrigins = new Set<string>();
   const referencePaths: string[] = [];
   let entryCount = 0;
 
@@ -245,11 +246,21 @@ export async function inspectSkillDirectory(
         limits.maxFileBytes,
         async () => hooks.beforeFileOpen?.(absolute, relative)
       );
-      totalBytes += content.length;
-      files.push({ path: relative, bytes: content.length, sha256: createHash("sha256").update(content).digest("hex") });
-      if (relative === "SKILL.md") skillMarkdown = decodeUtf8(content);
-      if (relative === "agents/openai.yaml") openAiMetadata = decodeUtf8(content, "agents/openai.yaml");
-      if (containsExternalUrl(content)) hasExternalUrls = true;
+      try {
+        totalBytes += content.length;
+        files.push({ path: relative, bytes: content.length, sha256: createHash("sha256").update(content).digest("hex") });
+        if (relative === "SKILL.md") skillMarkdown = decodeUtf8(content);
+        if (relative === "agents/openai.yaml") openAiMetadata = decodeUtf8(content, "agents/openai.yaml");
+        if (containsExternalUrl(content)) hasExternalUrls = true;
+        for (const origin of externalUrlOrigins(content)) {
+          externalOrigins.add(origin);
+          if (externalOrigins.size > 32) {
+            throw archiveError("SKILL_EXTERNAL_ORIGIN_LIMIT", "Skill 外部来源数量超限。");
+          }
+        }
+      } finally {
+        content.fill(0);
+      }
       if (relative.startsWith("references/")) {
         if (relative.split("/").length !== 2) {
           throw archiveError("SKILL_REFERENCE_DEPTH_INVALID", "Skill reference 只允许一层目录。");
@@ -272,6 +283,7 @@ export async function inspectSkillDirectory(
     return buildSkillPackageEvidence(files, parseSkillFrontmatter(skillMarkdown), {
       hasScripts: files.some((file) => file.path.startsWith("scripts/")),
       hasExternalUrls,
+      externalOrigins: [...externalOrigins].sort(compareBinaryText),
       ...parsedOpenAi
     });
   } catch (error) {
@@ -654,6 +666,20 @@ function decodeUtf8(content: Buffer, label = "SKILL.md") {
 
 function containsExternalUrl(content: Buffer) {
   return /https?:\/\//iu.test(content.toString("latin1"));
+}
+
+function externalUrlOrigins(content: Buffer) {
+  const source = content.toString("latin1");
+  const matches = source.match(/https?:\/\/[^\s"'<>\u0000-\u001F\u007F]+/giu) ?? [];
+  const origins = new Set<string>();
+  for (const candidate of matches) {
+    const trimmed = candidate.replace(/[),.;\]}]+$/u, "");
+    try {
+      const parsed = new URL(trimmed);
+      if (parsed.protocol === "http:" || parsed.protocol === "https:") origins.add(parsed.origin);
+    } catch { /* malformed links remain represented by hasExternalUrls */ }
+  }
+  return origins;
 }
 
 function resolvedLimits(input: SkillArchiveLimits = {}): Required<SkillArchiveLimits> {

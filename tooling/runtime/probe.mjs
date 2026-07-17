@@ -3,6 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { inspectMultiAgentMigrationGate } from "../../packages/platform/multiAgentMigrationGate.mjs";
 import { inspectFirstRunBootstrap } from "./first-run-state.mjs";
+import { inspectMcpRuntimeConfiguration } from "./mcp-runtime-config.mjs";
 
 export const RUNTIME_PROBE_SCHEMA_VERSION = 1;
 
@@ -56,6 +57,7 @@ export async function collectWorkspaceProbeFacts(options) {
         path: path.join(workspace, "business/config/sunabot.json"),
         detail: "workspace path is invalid"
       };
+  const mcp = await inspectMcpRuntimeConfiguration({ environment: options.environment ?? process.env });
   const connected = options.connectedAccountIds == null
     ? undefined
     : new Set(options.connectedAccountIds.map(String));
@@ -109,7 +111,7 @@ export async function collectWorkspaceProbeFacts(options) {
       exists: Boolean(workspaceStat?.isDirectory() && !workspaceStat.isSymbolicLink()),
       migrationState
     },
-    capabilities: { provider },
+    capabilities: { provider, mcpOAuth: mcp.oauth, mcpStdio: mcp.stdio },
     accounts,
     conflicts
   };
@@ -180,6 +182,8 @@ export function buildRuntimeProbe(facts, options = {}) {
   addOptionalCapability(add, "codex-auth", capabilities.codexAuth, "CODEX_AUTH_REQUIRED", "在管理台完成 Codex 订阅登录");
   addOptionalCapability(add, "libreoffice", capabilities.libreOffice, "LIBREOFFICE_UNAVAILABLE", "安装 LibreOffice");
   addOptionalCapability(add, "workspace-bash", capabilities.workspaceBash, "BUBBLEWRAP_UNAVAILABLE", "安装 bubblewrap 并通过 namespace probe");
+  addOptionalCapability(add, "mcp-oauth", capabilities.mcpOAuth, "MCP_OAUTH_VAULT_UNAVAILABLE", "设置 SUNABOT_MCP_CREDENTIAL_VAULT_KEY");
+  addOptionalCapability(add, "mcp-stdio", capabilities.mcpStdio, "MCP_STDIO_RUNTIME_UNAVAILABLE", "配置 MCP stdio 隔离后端");
   addOptionalCapability(add, "account-reconciler", capabilities.accountReconciler, "ACCOUNT_RECONCILER_UNAVAILABLE", "./sunabot.sh restart");
 
   for (const conflict of facts.conflicts ?? []) {

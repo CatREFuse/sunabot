@@ -17,10 +17,30 @@ export interface AgentRuntimeManagerOptions {
   createRuntime: (config: AppConfig) => SunaRuntime;
   initializeRuntime: boolean;
   broadcastStormDetector: BroadcastStormDetector;
+  probeExtensionReadiness?(agentId: string): Promise<AgentRuntimeReadiness>;
+}
+
+export interface AgentRuntimeReadiness {
+  status: "ready" | "degraded" | "not_ready";
+  code: string | null;
+  requiredMcpServers: string[];
+  degradedMcpServers: string[];
+}
+
+interface OrchestratorActivation {
+  generation: number;
+  gateway: MessagingPort;
 }
 
 export class AgentRuntimeManager {
   private readonly runtimes = new Map<string, SunaRuntime>();
+  private readonly readiness = new Map<string, AgentRuntimeReadiness>();
+  private readonly agentOperations = new Map<string, Promise<unknown>>();
+  private readonly runtimeOrchestratorGenerations = new WeakMap<SunaRuntime, number>();
+  private orchestratorGeneration = 0;
+  private orchestratorActivation?: OrchestratorActivation;
+  private closed = false;
+  private closeOperation?: Promise<void>;
 
   constructor(
     private readonly registry: AgentRegistry,
@@ -29,8 +49,8 @@ export class AgentRuntimeManager {
 
   async initialize() {
     const defaultId = this.options.defaultRuntime.config.persona.defaultAgentId;
-    this.runtimes.set(defaultId, this.options.defaultRuntime);
     const agents = await this.registry.list();
+    await this.start(defaultId);
     for (const agent of agents) {
       if (!agent.enabled || agent.id === defaultId) continue;
       await this.start(agent.id);
@@ -38,13 +58,51 @@ export class AgentRuntimeManager {
   }
 
   async start(agentId: string) {
+    if (this.closed) return undefined;
+    return this.runAgentOperation(agentId, () => this.startAgent(agentId));
+  }
+
+  private async startAgent(agentId: string) {
+    if (this.closed) return undefined;
     const existing = this.runtimes.get(agentId);
-    if (existing) return existing;
-    const config = await this.registry.config(agentId);
-    const runtime = this.options.createRuntime(config);
+    const previousReadiness = this.readiness.get(agentId);
+    const readiness = await this.probeReadiness(agentId);
+    if (this.closed) return undefined;
+    this.readiness.set(agentId, readiness);
+    if (readiness.status === "not_ready") {
+      if (existing && existing !== this.options.defaultRuntime) {
+        existing.close();
+        this.runtimes.delete(agentId);
+      } else if (previousReadiness?.status !== "not_ready") {
+        const defaultId = this.options.defaultRuntime.config.persona.defaultAgentId;
+        if (agentId === defaultId) {
+          this.options.defaultRuntime.suspendUserGroupOrchestrators();
+          this.runtimeOrchestratorGenerations.delete(this.options.defaultRuntime);
+        }
+      }
+      return undefined;
+    }
+    if (existing) {
+      if (previousReadiness?.status === "not_ready") this.resumeRuntimeIfActive(existing);
+      return existing;
+    }
+    const defaultId = this.options.defaultRuntime.config.persona.defaultAgentId;
+    const runtime = agentId === defaultId
+      ? this.options.defaultRuntime
+      : this.options.createRuntime(await this.registry.config(agentId));
     try {
       if (this.options.initializeRuntime) await runtime.initialize();
+      if (this.closed) {
+        try {
+          runtime.close();
+        } catch (error) {
+          this.runtimes.set(agentId, runtime);
+          throw error;
+        }
+        return undefined;
+      }
       this.runtimes.set(agentId, runtime);
+      this.resumeRuntimeIfActive(runtime);
       return runtime;
     } catch (error) {
       runtime.close();
@@ -53,14 +111,20 @@ export class AgentRuntimeManager {
   }
 
   async stop(agentId: string) {
-    const runtime = this.runtimes.get(agentId);
-    if (!runtime || runtime === this.options.defaultRuntime) return;
-    runtime.close();
-    this.runtimes.delete(agentId);
+    if (this.closed) return;
+    await this.runAgentOperation(agentId, async () => {
+      const runtime = this.runtimes.get(agentId);
+      if (!runtime || runtime === this.options.defaultRuntime) return;
+      this.readiness.set(agentId, stoppedReadiness());
+      runtime.close();
+      this.runtimes.delete(agentId);
+    });
   }
 
   get(agentId: string) {
-    return this.runtimes.get(agentId);
+    return this.closed || this.readiness.get(agentId)?.status === "not_ready"
+      ? undefined
+      : this.runtimes.get(agentId);
   }
 
   entries() {
@@ -150,17 +214,50 @@ export class AgentRuntimeManager {
       : undefined;
   }
 
-  resumeUserGroupOrchestrators(gateway: MessagingPort) {
-    for (const runtime of this.runtimes.values()) runtime.resumeUserGroupOrchestrators(gateway);
+  async resumeUserGroupOrchestrators(gateway: MessagingPort) {
+    const activation = {
+      generation: this.orchestratorGeneration + 1,
+      gateway
+    };
+    this.orchestratorGeneration = activation.generation;
+    this.orchestratorActivation = activation;
+    try {
+      const agentIds = new Set([...this.readiness.keys(), ...this.runtimes.keys()]);
+      for (const agentId of agentIds) await this.refreshReadiness(agentId);
+      if (this.orchestratorActivation?.generation !== activation.generation) return;
+      for (const [agentId, runtime] of this.runtimes) {
+        if (this.readiness.get(agentId)?.status !== "not_ready") this.resumeRuntimeIfActive(runtime);
+      }
+    } catch (error) {
+      if (this.orchestratorActivation?.generation === activation.generation) {
+        this.clearOrchestratorActivation();
+        for (const runtime of this.runtimes.values()) runtime.suspendUserGroupOrchestrators();
+      }
+      throw error;
+    }
   }
 
   suspendUserGroupOrchestrators() {
+    this.clearOrchestratorActivation();
     for (const runtime of this.runtimes.values()) runtime.suspendUserGroupOrchestrators();
   }
 
   async close() {
-    for (const runtime of this.runtimes.values()) runtime.close();
-    this.runtimes.clear();
+    if (this.closeOperation) return this.closeOperation;
+    this.closed = true;
+    this.clearOrchestratorActivation();
+    const operation = this.closeAll();
+    this.closeOperation = operation;
+    try {
+      await operation;
+    } catch (error) {
+      if (this.closeOperation === operation) this.closeOperation = undefined;
+      throw error;
+    }
+  }
+
+  async refreshReadiness(agentId: string) {
+    return this.start(agentId);
   }
 
   decorateAgents(agents: AgentSummary[], gatewayStatus: ReturnType<MessagingPort["getStatus"]>) {
@@ -168,14 +265,80 @@ export class AgentRuntimeManager {
     return agents.map((agent) => ({
       ...agent,
       runtime: {
-        loaded: this.runtimes.has(agent.id),
-        persona: this.runtimes.get(agent.id)?.getPersonaStatus()
+        loaded: this.runtimes.has(agent.id) && this.readiness.get(agent.id)?.status !== "not_ready",
+        readiness: this.readiness.get(agent.id) ?? stoppedReadiness(),
+        persona: this.readiness.get(agent.id)?.status === "not_ready"
+          ? undefined
+          : this.runtimes.get(agent.id)?.getPersonaStatus()
       },
       accounts: agent.accounts.map((account) => ({
         ...decorateAccountRuntime(agent.enabled, account, connected.get(account.id))
       }))
     }));
   }
+
+  private async probeReadiness(agentId: string): Promise<AgentRuntimeReadiness> {
+    if (!this.options.probeExtensionReadiness) return readyReadiness();
+    try {
+      return await this.options.probeExtensionReadiness(agentId);
+    } catch {
+      return {
+        status: "not_ready",
+        code: "AGENT_EXTENSION_READINESS_UNAVAILABLE",
+        requiredMcpServers: [],
+        degradedMcpServers: []
+      };
+    }
+  }
+
+  private runAgentOperation<T>(agentId: string, operation: () => Promise<T>) {
+    const previous = this.agentOperations.get(agentId) ?? Promise.resolve();
+    const current = previous.catch(() => undefined).then(operation);
+    this.agentOperations.set(agentId, current);
+    void current.then(() => undefined, () => undefined).then(() => {
+      if (this.agentOperations.get(agentId) === current) this.agentOperations.delete(agentId);
+    });
+    return current;
+  }
+
+  private resumeRuntimeIfActive(runtime: SunaRuntime) {
+    const activation = this.orchestratorActivation;
+    if (!activation || this.runtimeOrchestratorGenerations.get(runtime) === activation.generation) return;
+    runtime.resumeUserGroupOrchestrators(activation.gateway);
+    this.runtimeOrchestratorGenerations.set(runtime, activation.generation);
+  }
+
+  private clearOrchestratorActivation() {
+    this.orchestratorGeneration += 1;
+    this.orchestratorActivation = undefined;
+  }
+
+  private async closeAll() {
+    const pendingResults = await Promise.allSettled([...this.agentOperations.values()]);
+    const entries = [...this.runtimes.entries()];
+    const closeResults = await Promise.allSettled(entries.map(async ([, runtime]) => runtime.close()));
+    for (let index = 0; index < entries.length; index += 1) {
+      if (closeResults[index]?.status === "fulfilled") this.runtimes.delete(entries[index]![0]);
+    }
+    if (this.runtimes.size === 0) this.readiness.clear();
+    this.agentOperations.clear();
+    const failure = [...pendingResults, ...closeResults]
+      .find((result): result is PromiseRejectedResult => result.status === "rejected");
+    if (failure) throw failure.reason;
+  }
+}
+
+function readyReadiness(): AgentRuntimeReadiness {
+  return { status: "ready", code: null, requiredMcpServers: [], degradedMcpServers: [] };
+}
+
+function stoppedReadiness(): AgentRuntimeReadiness {
+  return {
+    status: "not_ready",
+    code: "AGENT_RUNTIME_STOPPED",
+    requiredMcpServers: [],
+    degradedMcpServers: []
+  };
 }
 
 function decorateAccountRuntime(

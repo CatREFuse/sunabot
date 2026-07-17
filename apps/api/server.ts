@@ -79,7 +79,13 @@ import {
 } from "../../tooling/runtime/first-run-state.mjs";
 import { collectWorkspaceProbeFacts } from "../../tooling/runtime/probe.mjs";
 import { buildRuntimeProbe } from "../../tooling/runtime/probe.mjs";
+import { resolveMcpStdioRuntimeOptions } from "../../tooling/runtime/mcp-runtime-config.mjs";
 import type { SystemConfigRuntimePort } from "../../services/tools/systemConfigTool.js";
+import {
+  buildAgentExtensionApiComposition,
+  registerAgentExtensionApi,
+  type AgentExtensionApiOptions
+} from "./agentExtensionApi.js";
 
 export interface CreateAppOptions {
   config?: AppConfig;
@@ -98,13 +104,13 @@ export interface CreateAppOptions {
   runtimeProbeClient?: false | RuntimeProbeClientPort;
   bashAudit?: RuntimeBashAuditPort;
   resolveToolCapabilities?: RuntimeToolCapabilityResolver;
+  agentExtensions?: AgentExtensionApiOptions;
 }
 
 export interface OneBotListenerAddress {
   host: string;
   port: number;
 }
-
 export interface BuiltApp {
   app: FastifyInstance;
   runtime: SunaRuntime;
@@ -117,7 +123,6 @@ export interface BuiltApp {
   getConfig(): AppConfig;
   startOneBotListener(address?: Partial<OneBotListenerAddress>): Promise<OneBotListenerAddress>;
 }
-
 export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp> {
   const skipWorkspaceMigrationGate = options.agentRegistry?.allowUnmarkedMigration === true;
   if (skipWorkspaceMigrationGate) await validateMultiAgentWorkspacePath(getWorkspaceDir());
@@ -157,6 +162,8 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
   });
   await agentRegistry.initialize();
   const defaultAgentConfig = await agentRegistry.config(config.persona.defaultAgentId, config);
+  const agentExtensions = buildAgentExtensionApiComposition(options.agentExtensions, getWorkspaceDir(), agentRegistry);
+  const runtimeAgentExtensions = agentExtensions.runtime;
   const broadcastStormDetector = new BroadcastStormDetector(config.broadcastStorm);
   const outboundMedia = options.outboundMedia ?? new OutboundMediaDelivery({
     rootDir: getWorkspacePath(WORKSPACE_LAYOUT.mediaImages),
@@ -189,22 +196,29 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
     resolveToolCapabilities,
     bashAudit,
     systemConfig: systemConfigRuntime,
+    agentExtensions: runtimeAgentExtensions,
     replyTaskGate: broadcastStormDetector
   });
   const runtime = new SunaRuntime(defaultAgentConfig, {
     resolveToolCapabilities,
     bashAudit,
     systemConfig: systemConfigRuntime,
+    agentExtensions: runtimeAgentExtensions,
     replyTaskGate: broadcastStormDetector
   });
-  if (options.initializeRuntime !== false) await runtime.initialize();
   const agentRuntimeManager = new AgentRuntimeManager(agentRegistry, {
     defaultRuntime: runtime,
     createRuntime,
     initializeRuntime: options.initializeRuntime !== false,
-    broadcastStormDetector
+    broadcastStormDetector,
+    probeExtensionReadiness: (agentId) => agentExtensions.mcpRuntimeService.readiness(agentId)
   });
   await agentRuntimeManager.initialize();
+  agentExtensions.setAgentChangedHandler(async (agentId) => {
+    await agentRuntimeManager.refreshReadiness(agentId);
+  });
+  agentExtensions.mcpRuntimeService.setReadinessInvalidationHandler((agentId) =>
+    agentRuntimeManager.refreshReadiness(agentId).then(() => undefined));
   if (options.initializeRuntime !== false) {
     const firstRun = await completeFirstRunBootstrap(getWorkspaceDir());
     if (firstRun.state === "pending" && "missing" in firstRun && Array.isArray(firstRun.missing)) {
@@ -241,7 +255,9 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
   const conversationDirectory = new ConversationDirectory({
     cachePath: getWorkspacePath(WORKSPACE_LAYOUT.conversationDirectoryCache)
   });
-  onebotGateway.on("connected", () => agentRuntimeManager.resumeUserGroupOrchestrators(onebotGateway));
+  onebotGateway.on("connected", () => {
+    void agentRuntimeManager.resumeUserGroupOrchestrators(onebotGateway).catch((error) => requestLogError(error));
+  });
   onebotGateway.on("disconnected", () => agentRuntimeManager.suspendUserGroupOrchestrators());
   if (onebotServer) onebotGateway.mount();
   const activeReverseWsPath = config.onebot.reverseWsPath;
@@ -253,6 +269,7 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
     adminSessionStore.close();
     serviceMonitor.close();
     await agentRuntimeManager.close();
+    await agentExtensions.close();
     closeApplicationDataStores();
   });
   const agentFiles = new AgentFileRepository({ runtime });
@@ -416,6 +433,7 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
   });
 
   registerAuthRoutes(app, adminAuth);
+  registerAgentExtensionApi(app, agentExtensions, adminAuth);
 
   app.addHook("onSend", async (request, reply, payload) => {
     reply.header("x-content-type-options", "nosniff");
@@ -480,7 +498,10 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
     },
     onAgentUpdated: async (agentId, enabled) => {
       if (enabled) await agentRuntimeManager.start(agentId);
-      else await agentRuntimeManager.stop(agentId);
+      else {
+        await agentRuntimeManager.stop(agentId);
+        await agentExtensions.closeAgent(agentId);
+      }
       if (accountRuntimeReconciler) {
         const agent = await agentRegistry.get(agentId);
         await Promise.all(agent.accounts.map((account) => accountRuntimeReconciler.reconcile(account.id)));
@@ -600,12 +621,17 @@ function conversationAssetCapabilityFor(
 export async function createApp(options: CreateAppOptions = {}) {
   return (await buildApp(options)).app;
 }
-
 export async function startServer() {
   await assertRuntimeWorkspaceMigrationGate();
   const config = await loadConfig();
   assertOneBotAccessToken(config);
-  const built = await buildApp({ config, logger: true });
+  const built = await buildApp({
+    config,
+    logger: true,
+    agentExtensions: {
+      mcpStdio: resolveMcpStdioRuntimeOptions(process.env, process.platform)
+    }
+  });
   const removeShutdownHandlers = installShutdownHandlers(built);
   built.app.addHook("onClose", async () => removeShutdownHandlers());
   try {
@@ -622,7 +648,6 @@ export async function startServer() {
     throw error;
   }
 }
-
 async function assertRuntimeWorkspaceMigrationGate() {
   let gate;
   try {

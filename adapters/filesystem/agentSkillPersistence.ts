@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
-  emptyAgentSkillIndex,
   compareBinaryText,
   parseAgentSkillIndex,
   type AgentSkillIndex,
@@ -56,7 +55,13 @@ export async function readSkillIndexFile(
 ): Promise<AgentSkillIndex> {
   const { paths } = context;
   await verifyRecoverySkills(context);
-  if (!(await exists(paths.skillIndex))) return emptyAgentSkillIndex();
+  if (!(await exists(paths.skillIndex))) {
+    return {
+      schemaVersion: 1,
+      revision: extensionRevision([]),
+      skills: []
+    };
+  }
   const index = parseAgentSkillIndex(await readJson(paths.skillIndex, context.beforeFileOpen));
   await verifyRecoverySkills(context);
   if (index.revision !== extensionRevision([...index.skills].sort((left, right) => compareBinaryText(left.id, right.id)))) {

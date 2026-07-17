@@ -6,6 +6,7 @@ import path from "node:path";
 import process from "node:process";
 import { promisify } from "node:util";
 import { evaluateRuntimeSnapshot } from "./doctor/core.mjs";
+import { inspectMcpRuntimeConfiguration } from "./mcp-runtime-config.mjs";
 import { resolveProjectRoot, resolveWorkspace } from "../shared/paths.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -60,6 +61,27 @@ async function runDoctor() {
     domain,
     production
   });
+  const mcp = await inspectMcpRuntimeConfiguration({ environment: process.env, platform: process.platform });
+  const mcpConfigurationErrors = [
+    ...(mcp.oauth.configured && !mcp.oauth.ok ? [{
+      code: "MCP_OAUTH_VAULT_KEY_INVALID",
+      message: "SUNABOT_MCP_CREDENTIAL_VAULT_KEY 无效。"
+    }] : []),
+    ...(mcp.stdio.configured && !mcp.stdio.ok ? [{
+      code: "MCP_STDIO_RUNTIME_CONFIG_INVALID",
+      message: "MCP stdio 隔离后端配置无效。"
+    }] : [])
+  ];
+  const mcpWarnings = [
+    ...(!mcp.oauth.configured ? [{
+      code: "MCP_OAUTH_VAULT_KEY_MISSING",
+      message: "MCP OAuth 凭据库未启用。"
+    }] : []),
+    ...(!mcp.stdio.configured ? [{
+      code: "MCP_STDIO_DISABLED",
+      message: "MCP stdio 隔离后端未启用。"
+    }] : [])
+  ];
 
   return evaluateRuntimeSnapshot({
     expectation,
@@ -83,11 +105,15 @@ async function runDoctor() {
     databases,
     listener: network.listener,
     onebot: network.onebot,
-    configurationErrors: databasePathOverride ? [{
-      code: "DATABASE_PATH_OVERRIDE_UNSUPPORTED",
-      message: "SUNABOT_DATABASE_PATH 已停止支持；主库固定为 workspace/business/data/sunabot.sqlite。"
-    }] : [],
-    collectionWarnings: network.warnings
+    configurationErrors: [
+      ...(databasePathOverride ? [{
+        code: "DATABASE_PATH_OVERRIDE_UNSUPPORTED",
+        message: "SUNABOT_DATABASE_PATH 已停止支持；主库固定为 workspace/business/data/sunabot.sqlite。"
+      }] : []),
+      ...mcpConfigurationErrors
+    ],
+    collectionWarnings: [...network.warnings, ...mcpWarnings],
+    mcp
   });
 }
 

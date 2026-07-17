@@ -59,6 +59,20 @@ Agent 工具目录固定包含 `assistant_text`、`no_reply`、`memory_recall`�
 
 `bot.tools.overrides` 按工具名保存稀疏覆盖，每项允许可选的 `description`；除 `workspace_bash` 与 `codex` 外，其他工具还允许可选的 `enabled`。没有 `enabled` 覆盖时继承当前单聊或群聊回复提示词是否包含该 Function；显式启用可恢复代码内置定义，显式停用会从模型请求中移除该工具。`workspace_bash` 的启停只写入 `bot.bash.enabled`，`codex` 的启停只写入 `bot.tools.codex.enabled`，通用覆盖中的同名 `enabled` 会被移除。描述采用“配置覆盖、当前端点提示词、代码默认值”的优先级；删除描述覆盖后立即恢复当前端点提示词或代码默认描述。描述覆盖作用于所有 Provider 协议。
 
+Agent Skill 使用渐进披露。普通回复只注入当前 Agent 已启用、内容摘要与批准摘要一致的 Skill 名称、说明和虚拟路径；目录总预算为模型上下文的 2%，无法确定窗口时为 8,000 字符，超限时先裁剪说明，再省略条目并给出稳定提示。`allow_implicit_invocation=false` 的 Skill 不进入隐式目录，但仍可由管理员显式选择。存在可用 Skill 时才注册动态 `activate_skill`，参数枚举只包含当前 Agent 的有效 Skill；激活返回受保护的完整 `SKILL.md`、`/skills/<id>` 虚拟目录和有界资源清单，不主动读取引用资源，同一会话按 Skill ID 与内容摘要去重，后续提示词压缩继续保留已激活说明。Skill 目录、正文和资源均视为外部输入；当前组合根不注册 `run_skill_script`，模型伪造调用必须在读取、投影和沙箱前返回 unavailable。
+
+Skill 脚本安装审查、摘要绑定投影、只读 workbench、只读 `/skills`、临时 `/tmp`、无网络强隔离和有界输出清理属于未接线的安全基础模块，不能作为脚本执行能力已经交付的证据。当前执行模型无法证明目标脚本不会通过解释器、模块加载、`source`、直接可执行文件或其他进程入口运行第二段未审计代码，因此所有平台默认关闭脚本 capability。未来启用必须同时具备固定且可证明的单段执行模型、覆盖完整实际执行字节的独立审计与一次性审批，并补齐 `/skills`、`/workbench` 和模块加载二段执行的零副作用负例；任意 64 位十六进制 fingerprint 不能单独构成授权。
+
+Skill 安装、替换和跨 Agent 复制后固定为停用、未审批和未审查。启用前必须由独立审核 runner 读取当前摘要绑定的完整普通文件清单、`SKILL.md`、references、配置及其他有界 UTF-8 文本；已知二进制只进入 manifest，单脚本上限 256 KiB、全部脚本上限 1 MiB，单文本上限 512 KiB、全部文本上限 2 MiB。审核记录脚本、MCP 依赖、文件访问、外部来源 origin、内容摘要、来源和 review version，拒绝运行时下载、脚本联网、硬编码凭据、私钥、恶意外发链接及 MCP 与文件访问的危险组合。审核通过时以 Skill index revision、内容摘要和完整 manifest 做 CAS，并在同一次原子索引写入中同时记录 risk review 与管理员 approval；启用必须同时匹配这两份当前摘要。停用保留审批，内容替换清除两份审批，复制失败回滚只允许恢复同一内容摘要的既有双审批状态。
+
+跨 Agent 复制的 MCP 描述符在预览和 apply 中使用同一目标安全投影：全部先停用；stdio 只保留非秘密 `envKeys` 名称，Bearer/OAuth credential reference 替换为不可解析的待授权标记；存在秘密依赖的描述符记录 `reauthorization_required`。目标 Agent 的 configured/missing 状态继续按保留的 key 名显示；管理员必须重新确认完整 stdio 命令并替换目标描述符，且全部 key 已在目标 secret store 配置后才能启用。普通命令、参数、URL 和工具策略可以复制，源 Agent 的环境变量值、Bearer reference、OAuth handle 和 token 均不能进入目标索引、复制结果或事务日志。
+
+MCP V1 使用 `@modelcontextprotocol/sdk@1.29.0` 与 2025-06-18 协议。每个 Agent 的每个 server 独占 client、session、目录快照、取消信号和秘密投影；initialize 强制单一协议版本与 strict capability enforcement，未协商的 tools、resources、prompts、subscriptions 或 listChanged 不得调用。tools、resources、resource templates 和 prompts 均执行有界完整分页，按名称或 URI 去重后原子替换快照；任一页失败保留旧快照并标记 degraded，刷新中的 listChanged 触发下一轮完整刷新，通知风暴超过上限后失败关闭。prompts 只能通过管理员显式 API 选择，不能由模型自动执行；resource URI 继续由 server ACL 控制，`file:` 只允许虚拟 `file:///workbench`，不映射宿主路径。资源订阅仅在 server 宣告能力且 URI 已存在于当前快照时开放；只处理当前 client 已成功订阅 URI 的 `resources/updated`，通知触发安全刷新，退订、禁用、Agent 关闭或进程关闭时清空订阅和 client。
+
+MCP tool definition 只来自当前 Agent 的 ready 快照，`enabledTools` 是优先 allowlist，显式空数组表示全部关闭，`disabledTools` 随后拒绝；写入、删除和网络能力默认要求逐次批准，server annotations、instructions、描述、结果和错误均不可信。MCP Function Call 必须独占整份 Provider 响应，原始 sibling assistant text 或与任意其他工具混用时在 callback 前整批拒绝。Provider preflight 还必须从可信 alias 解析 server ID 与 transport：stdio 归入本地数据边界，Streamable HTTP 归入外发网络边界，本地与外发工具在同一 provider turn 内双向冲突；同一 turn 最多使用一个 MCP server，避免跨 server 搬运数据。请求日志只保存参数键和 MCP 结果的有界结构摘要，包括状态、错误布尔值、内容类型、数量、字节数和截断状态；不复制 server 文本、错误、prompt、图片、token、Unix/Windows 路径、getter、Proxy 或 `toJSON` 结果。
+
+成功 initialize 后的 server instructions 只作为当前 Agent、当前 ready 且本轮实际可用 server 的选择提示注入 system context。每项继续保留 `[External MCP input]` 标记与 512 字符上限，整段使用受保护边界并明确不能授予权限、批准调用、改变策略或要求使用工具；单轮最多 16 个 server、总计 4 KiB。其他 Agent、degraded/disabled server、未进入本轮工具定义的 server instructions 不得进入提示词，超限条目按稳定顺序省略。
+
 `send_file` 的模型定义始终由代码侧 canonical strict schema 覆盖：对象只允许且必须包含 `path`、`kind`、`name` 三个键，`name` 可以为 `null`，并固定 `additionalProperties: false`。陈旧或恶意提示词不能改变该参数边界，账号、QQ 号、群号和其他额外字段一律拒绝。`send_file` 必须独占一次模型 response；与 `assistant_text`、系统配置、Bash、deferred tool、其他 Function Call 或原始 assistant 文本同时出现时，OpenAI Responses、Codex Responses、Chat Completions、Anthropic 与 Gemini/兼容协议都必须在任何 intermediate text callback、文件解析、queue 和 outbox 前拒绝整份 response。
 
 工具的配置启用状态与运行能力分开计算。`enabled` 表示配置和提示词选择，`available` 表示当前运行环境、会话权限及依赖能力，`effectiveEnabled` 仅在两者都为真时成立。管理 API 必须同时返回三种状态和不可用原因；平台强制关闭或当前会话无权限时，管理台不能把工具显示成可执行。被停用或不可用的工具既不能出现在 Provider 工具定义中，也不能通过模型返回的未声明 Function Call 绕过门禁执行或派发。

@@ -51,6 +51,35 @@ macOS 快速开发模式会启动 API watch 与 Vite：
 
 Core 启动还会校验固定版本的 Codex CLI；Docker Core 使用镜像内的 `/usr/local/bin/codex`，Native Core 使用 `SUNABOT_CODEX_EXECUTABLE` 或 `PATH`。Codex 授权保存在 `workspace/secrets/codex/auth.json`，未登录时可以先启动管理台完成设备授权，工具在授权完成前保持不可调用。
 
+### MCP 扩展运行环境
+
+OAuth 凭据库需要独立的 32 字节 base64url 主密钥。生成后把结果写入 `workspace/secrets/runtime.env`，不要提交到 Git：
+
+```bash
+node -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("base64url"))'
+```
+
+```dotenv
+SUNABOT_MCP_CREDENTIAL_VAULT_KEY=<上一步生成的结果>
+```
+
+stdio MCP 默认关闭。macOS Native Core 使用独立 Docker 沙箱，并只接受包含已预装 server、入口和批准清单的 digest 固定自定义镜像：
+
+```dotenv
+SUNABOT_MCP_STDIO_BACKEND=docker
+SUNABOT_MCP_STDIO_DOCKER_IMAGE=registry.example/sunabot-mcp@sha256:<64位小写摘要>
+SUNABOT_MCP_STDIO_EXECUTABLE_MANIFEST_SHA256=<镜像内 /opt/sunabot/mcp/executables.json 的 SHA-256>
+```
+
+Linux/WSL Native Core 或定制 Docker Core 可以使用 bubblewrap。批准清单必须是绝对路径、root 所有、单硬链接的普通文件并具有 `0444` 权限；清单中的每个绝对可执行路径都要记录当前文件的 SHA-256。Docker Core 使用该模式时，可执行文件与同一清单必须在构建镜像时预装：
+
+```dotenv
+SUNABOT_MCP_STDIO_BACKEND=bubblewrap
+SUNABOT_MCP_STDIO_EXECUTABLE_MANIFEST=/opt/sunabot/mcp/executables.json
+```
+
+运行时不下载 `npx`、`uvx`、`pip` 或其他依赖，也不会把 Docker socket、宿主环境或代理变量交给 stdio server。每个 server 的秘密使用管理 API 返回的 `SUNABOT_MCP_STDIO_SECRET_<摘要>` 环境变量名单独配置；同名逻辑 key 在不同 Agent 或 server 下使用不同宿主变量名。修改后执行 `./sunabot.sh doctor`，确认 `mcp-oauth` 与 `mcp-stdio` capability 通过；缺失或非法配置时对应能力保持不可用。
+
 Apple Silicon 上的 linux/amd64 Docker 模拟内核若以 `EINVAL` 拒绝 bubblewrap user namespace，启动器会停止 Docker Core 并保持 Bash 不可用。该环境需要改用能够通过 namespace probe 的 Linux/amd64 或 WSL2 主机，不能关闭隔离或回退到普通 Bash。
 
 停止、重启和诊断：

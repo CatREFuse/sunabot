@@ -12,6 +12,10 @@
 
 Agent 页面以列表和详情双栏管理 Agent，支持新建 Agent、启停、查看隔离 workspace 与新增多个 QQ 账号。Agent ID 创建后保持稳定，名称可以修改；Agent 身份页可上传或更换仅用于管理台展示的 WebUI 头像，支持 PNG、JPEG、WebP，不限制原图文件大小。选择图片后必须通过圆形裁图弹层调整位置和缩放，保存透明圆形头像；QQ 头像保持独立。QQ 容器区使用“新建 NapCat QQ Docker”入口；新增、启停或移除 QQ 后，由宿主 account runtime daemon 按注册表调和目标 NapCat 容器，Docker Core 通过 workspace request/result bridge 请求宿主执行且不挂载 Docker socket。未运行账号始终显示“运行”，调用单账号启动接口后创建或启动对应 Compose project；成功后刷新为“待登录”，不能要求重启全部 Sunabot。管理台显示期望状态、实际状态、是否仍需调和和最近错误。注册库不可读时调和失败关闭，不能生成停止或删除计划。每个账号独立扫码、退出和打开对应 NapCat WebUI。Plana 的 `primary` 是固定基线账号，可以退出 QQ 登录，不能从注册表移除；管理 API 对移除请求返回 `PRIMARY_ACCOUNT_REQUIRED`，管理台不显示移除入口，其他离线账号可以移除。
 
+Agent 扩展管理 API 按当前 Agent 提供 Skill 安装、独立安全审查、启停、卸载、跨 Agent 复制预览与原子应用，以及 MCP server 描述符增删改。`POST /api/agent-extensions/skills/:skillId/review` 只接受严格正文 `{agentId,approve:true}`；管理员 session、CSRF 与 Origin 校验完成后才运行摘要绑定的审核事务，成功后关闭该 Agent 的扩展运行生命周期，失败不改变审批状态。Skill 复制必须显式选择 skip、replace 或 rename，复制普通文件树、重新校验并原子发布，不共享 inode，也不复制 MCP secret 或 OAuth 凭据。MCP runtime API 提供目录读取、显式工具调用、resource read/subscribe/unsubscribe 和 prompt get；全部端点复用管理员 session、CSRF 与 Origin 门禁，使用严格字段集合和请求中止信号。MCP OAuth 授权入口只接受 localhost 回调，展示并绑定当前 Agent、server、resource 和浏览器 session，成功后配置仅保存 credential handle。当前批次不包含扩展管理 WebUI，后续界面必须直接消费这些封闭 API，不能在浏览器保存 secret、OAuth token 或宿主路径。
+
+复制预览返回的 MCP server 已是最终目标安全形态，并明确显示停用与是否需要重新授权；apply 绑定同一 preview revision、源/目标 Skill revision 与源/目标 MCP revision，不能在确认后重新读取并复制源凭据。stdio 复制保留非秘密 env key 名称，以便目标 overview 显示缺失项；管理员重新确认完整命令并替换描述符后解除迁移状态，全部目标 key 配置完成前仍不能启用。Bearer/OAuth 的目标授权状态为 pending 时，启用请求稳定返回重新授权错误；OAuth 绑定成功只替换目标 Agent 的 handle，仍由管理员显式启用。
+
 登录页使用 Sunabot 品牌 Hero 与管理员登录表单组成响应式双栏，移动端按 Hero、表单顺序纵向排列。用户可见文案只保留名称、状态、动作、结果和完成操作所需的提示；页面不得展示鉴权实现、浏览器存储方式、数据来源、区域职责、设计说明或装饰性状态代码。
 
 设置中的 Agent 工具页默认打开“工具目录”Tab，列出九个真实工具的图标、名称、Function 名、摘要、配置状态、运行能力和同步或异步方式，支持搜索、启停与刷新。详情弹层展示实际模型描述、描述来源、JSON Schema 参数与严格模式；`no_reply` 详情同时显示“no_reply 时戳一戳”，`system_config` 显示为内置同步工具。编辑模型描述会建立全局覆盖，“恢复继承说明”会删除覆盖。“运行参数”Tab 继续管理单轮调用上限、Tavily、Codex Worker 和图像生成默认值。两个 Tab 共用当前工具配置草稿和保存栏。

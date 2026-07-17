@@ -47,6 +47,10 @@ export type ParentBoundAtomicReplaceFault =
   | "recovery_failure";
 
 export type ParentBoundRenameFault = "after_rename_before_response";
+export type ParentBoundReleaseLockFault =
+  | "after_rename_before_unlink"
+  | "after_unlink_before_response";
+export type ParentBoundReleaseLockPause = "after_link_before_source_unlink";
 
 export type ParentBoundWorkerFailureMode =
   | "pause_before_response"
@@ -107,6 +111,21 @@ type ParentBoundCommand =
       destination: string;
       expectedSource: WireIdentity;
       faultAt: ParentBoundRenameFault | null;
+      responseMode: ParentBoundWorkerFailureMode | null;
+    }
+  | {
+      op: "unlink";
+      target: string;
+      expectedTarget: WireIdentity;
+      responseMode: ParentBoundWorkerFailureMode | null;
+    }
+  | {
+      op: "release_lock";
+      source: string;
+      destination: string;
+      expectedSource: WireIdentity;
+      faultAt: ParentBoundReleaseLockFault | null;
+      pauseAt: ParentBoundReleaseLockPause | null;
       responseMode: ParentBoundWorkerFailureMode | null;
     }
   | {
@@ -432,6 +451,66 @@ export async function parentBoundRename(input: {
         ? serializeStats(input.expectedSource)
         : serializeIdentity(input.expectedSource),
       faultAt: input.faultAt ?? null,
+      responseMode: input.workerFailureMode ?? null
+    },
+    hook: input.hook,
+    timeoutMs: input.workerTimeoutMs
+  });
+}
+
+export async function parentBoundUnlink(input: {
+  filePath: string;
+  parentIdentity: ParentBoundDirectoryIdentity;
+  expectedTarget: BigIntStats | ParentBoundPathIdentity;
+  hook?: ParentBoundMutationHook;
+  workerFailureMode?: ParentBoundWorkerFailureMode;
+  workerTimeoutMs?: number;
+}) {
+  const target = splitBoundPath(input.filePath);
+  return runParentBoundMutation({
+    parent: target.parent,
+    parentIdentity: input.parentIdentity,
+    command: {
+      op: "unlink",
+      target: target.name,
+      expectedTarget: isBigIntStats(input.expectedTarget)
+        ? serializeStats(input.expectedTarget)
+        : serializeIdentity(input.expectedTarget),
+      responseMode: input.workerFailureMode ?? null
+    },
+    hook: input.hook,
+    timeoutMs: input.workerTimeoutMs
+  });
+}
+
+export async function parentBoundReleaseLock(input: {
+  source: string;
+  tombstone: string;
+  parentIdentity: ParentBoundDirectoryIdentity;
+  expectedSource: BigIntStats | ParentBoundPathIdentity;
+  hook?: ParentBoundMutationHook;
+  faultAt?: ParentBoundReleaseLockFault;
+  pauseAt?: ParentBoundReleaseLockPause;
+  workerFailureMode?: ParentBoundWorkerFailureMode;
+  workerTimeoutMs?: number;
+}) {
+  const source = splitBoundPath(input.source);
+  const destination = splitBoundPath(input.tombstone);
+  if (source.parent !== destination.parent) {
+    throw new ParentBoundFsError("BOUND_CROSS_PARENT_RENAME_REJECTED");
+  }
+  return runParentBoundMutation({
+    parent: source.parent,
+    parentIdentity: input.parentIdentity,
+    command: {
+      op: "release_lock",
+      source: source.name,
+      destination: destination.name,
+      expectedSource: isBigIntStats(input.expectedSource)
+        ? serializeStats(input.expectedSource)
+        : serializeIdentity(input.expectedSource),
+      faultAt: input.faultAt ?? null,
+      pauseAt: input.pauseAt ?? null,
       responseMode: input.workerFailureMode ?? null
     },
     hook: input.hook,

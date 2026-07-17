@@ -75,6 +75,9 @@ export const AGENT_TOOL_NAMES = [
   "send_voice_message",
   "workspace_bash",
   "codex",
+  "activate_skill",
+  "read_skill_resource",
+  "run_skill_script",
   "system_config"
 ] as const;
 export type AgentToolName = (typeof AGENT_TOOL_NAMES)[number];

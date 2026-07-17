@@ -3,15 +3,18 @@ import {
   WORKBENCH_FILE_MAX_BYTES,
   isWorkbenchFileRelativePath
 } from "../../../services/tools/public.js";
+import { isMcpToolAlias } from "../../../services/extensions/public.js";
 
 export const PROVIDER_FILE_LOG_REDACTED = "[REDACTED]";
 export const PROVIDER_FILE_LOG_INVALID_RESULT = "[INVALID TOOL RESULT]";
 export const PROVIDER_REQUEST_LOG_REDACTED = "[PROVIDER REQUEST LOG REDACTED]";
+export const PROVIDER_MCP_LOG_REDACTED = "[EXTERNAL MCP DATA REDACTED]";
 const invalidValue = "[invalid]";
 const maxInertDepth = 32;
 const maxInertNodes = 100_000;
 
 type FileToolName = "read_file" | "write_file";
+type ProjectedToolName = FileToolName | "mcp";
 
 export function projectProviderRequestLog(action: string, request: unknown): unknown {
   if (action === "responses.complete" || action === "codex.complete") {
@@ -41,12 +44,13 @@ export function projectProviderRequestLogForStorage(action: string, request: unk
 function projectResponsesRequest(request: unknown) {
   const value = asRecord(request);
   if (!value || !Array.isArray(value.input)) return request;
-  const lineage = new Map<string, FileToolName>();
+  const trustedMcp = trustedMcpToolNames(value.tools);
+  const lineage = new Map<string, ProjectedToolName>();
   const input = mapChanged(value.input, (item) => {
     const record = asRecord(item);
     if (!record) return item;
     if (record.type === "function_call") {
-      const toolName = fileToolName(record.name);
+      const toolName = projectedToolName(record.name, trustedMcp);
       if (!toolName) return item;
       if (typeof record.call_id === "string") lineage.set(record.call_id, toolName);
       return { ...record, arguments: projectJsonArguments(toolName, record.arguments) };
@@ -64,7 +68,8 @@ function projectResponsesRequest(request: unknown) {
 function projectChatRequest(request: unknown) {
   const value = asRecord(request);
   if (!value || !Array.isArray(value.messages)) return request;
-  const lineage = new Map<string, FileToolName>();
+  const trustedMcp = trustedMcpToolNames(value.tools);
+  const lineage = new Map<string, ProjectedToolName>();
   const messages = mapChanged(value.messages, (message) => {
     const record = asRecord(message);
     if (!record) return message;
@@ -72,7 +77,7 @@ function projectChatRequest(request: unknown) {
       const toolCalls = mapChanged(record.tool_calls, (call) => {
         const callRecord = asRecord(call);
         const fn = asRecord(callRecord?.function);
-        const toolName = fileToolName(fn?.name);
+        const toolName = projectedToolName(fn?.name, trustedMcp);
         if (!callRecord || !fn || !toolName) return call;
         if (typeof callRecord.id === "string") lineage.set(callRecord.id, toolName);
         return {
@@ -95,14 +100,17 @@ function projectChatRequest(request: unknown) {
 function projectAnthropicRequest(request: unknown) {
   const value = asRecord(request);
   if (!value || !Array.isArray(value.messages)) return request;
-  const lineage = new Map<string, FileToolName>();
+  const trustedMcp = trustedMcpToolNames(value.tools);
+  const lineage = new Map<string, ProjectedToolName>();
   const messages = mapChanged(value.messages, (message) => {
     const record = asRecord(message);
     if (!record || !Array.isArray(record.content)) return message;
     if (record.role === "assistant") {
       const content = mapChanged(record.content, (block) => {
         const blockRecord = asRecord(block);
-        const toolName = blockRecord?.type === "tool_use" ? fileToolName(blockRecord.name) : undefined;
+        const toolName = blockRecord?.type === "tool_use"
+          ? projectedToolName(blockRecord.name, trustedMcp)
+          : undefined;
         if (!blockRecord || !toolName) return block;
         if (typeof blockRecord.id === "string") lineage.set(blockRecord.id, toolName);
         return { ...blockRecord, input: projectObjectArguments(toolName, blockRecord.input) };
@@ -129,6 +137,7 @@ function projectAnthropicRequest(request: unknown) {
 function projectGeminiRequest(request: unknown) {
   const value = asRecord(request);
   if (!value || !Array.isArray(value.contents)) return request;
+  const trustedMcp = trustedMcpToolNames(value.tools);
   const contents = mapChanged(value.contents, (content) => {
     const record = asRecord(content);
     if (!record || !Array.isArray(record.parts)) return content;
@@ -136,7 +145,7 @@ function projectGeminiRequest(request: unknown) {
       const parts = mapChanged(record.parts, (part) => {
         const partRecord = asRecord(part);
         const call = asRecord(partRecord?.functionCall);
-        const toolName = fileToolName(call?.name);
+        const toolName = projectedToolName(call?.name, trustedMcp);
         if (!partRecord || !call || !toolName) return part;
         return { ...partRecord, functionCall: { ...call, args: projectObjectArguments(toolName, call.args) } };
       });
@@ -146,7 +155,7 @@ function projectGeminiRequest(request: unknown) {
       const parts = mapChanged(record.parts, (part) => {
         const partRecord = asRecord(part);
         const response = asRecord(partRecord?.functionResponse);
-        const toolName = fileToolName(response?.name);
+        const toolName = projectedToolName(response?.name, trustedMcp);
         if (!partRecord || !response || !toolName) return part;
         return {
           ...partRecord,
@@ -160,13 +169,15 @@ function projectGeminiRequest(request: unknown) {
   return contents === value.contents ? request : { ...value, contents };
 }
 
-function projectJsonArguments(toolName: FileToolName, value: unknown) {
+function projectJsonArguments(toolName: ProjectedToolName, value: unknown) {
   const parsed = typeof value === "string" ? parseRecord(value) : undefined;
-  return JSON.stringify(projectFileCallArguments(toolName, parsed));
+  return JSON.stringify(toolName === "mcp" ? projectMcpValue(parsed, value, "arguments") :
+    projectFileCallArguments(toolName, parsed));
 }
 
-function projectObjectArguments(toolName: FileToolName, value: unknown) {
-  return projectFileCallArguments(toolName, asRecord(value));
+function projectObjectArguments(toolName: ProjectedToolName, value: unknown) {
+  return toolName === "mcp" ? projectMcpValue(value, value, "arguments") :
+    projectFileCallArguments(toolName, asRecord(value));
 }
 
 function projectFileCallArguments(toolName: FileToolName, value: Record<string, unknown> | undefined) {
@@ -180,13 +191,15 @@ function projectFileCallArguments(toolName: FileToolName, value: Record<string, 
   };
 }
 
-function projectJsonResult(toolName: FileToolName, value: unknown) {
+function projectJsonResult(toolName: ProjectedToolName, value: unknown) {
   const parsed = typeof value === "string" ? parseRecord(value) : undefined;
+  if (toolName === "mcp") return JSON.stringify(projectMcpValue(parsed, value, "result"));
   if (!parsed) return PROVIDER_FILE_LOG_INVALID_RESULT;
   return JSON.stringify(projectFileResult(toolName, parsed));
 }
 
-function projectObjectResult(toolName: FileToolName, value: unknown) {
+function projectObjectResult(toolName: ProjectedToolName, value: unknown) {
+  if (toolName === "mcp") return projectMcpValue(value, value, "result");
   const parsed = asRecord(value);
   return parsed ? projectFileResult(toolName, parsed) : PROVIDER_FILE_LOG_INVALID_RESULT;
 }
@@ -221,6 +234,56 @@ function safeByteLength(value: unknown) {
 
 function fileToolName(value: unknown): FileToolName | undefined {
   return value === "read_file" || value === "write_file" ? value : undefined;
+}
+
+function projectedToolName(value: unknown, trustedMcp: Set<string>): ProjectedToolName | undefined {
+  const file = fileToolName(value);
+  if (file) return file;
+  return typeof value === "string" && trustedMcp.has(value) ? "mcp" : undefined;
+}
+
+function trustedMcpToolNames(value: unknown) {
+  const names = new Set<string>();
+  if (!Array.isArray(value)) return names;
+  for (const item of value) {
+    const record = asRecord(item);
+    const direct = record?.name;
+    const nested = asRecord(record?.function)?.name;
+    if (typeof direct === "string" && isMcpToolAlias(direct)) names.add(direct);
+    if (typeof nested === "string" && isMcpToolAlias(nested)) names.add(nested);
+    const declarations = record?.functionDeclarations;
+    if (Array.isArray(declarations)) {
+      for (const declaration of declarations) {
+        const name = asRecord(declaration)?.name;
+        if (typeof name === "string" && isMcpToolAlias(name)) names.add(name);
+      }
+    }
+  }
+  return names;
+}
+
+function projectMcpValue(value: unknown, encoded: unknown, kind: "arguments" | "result") {
+  const record = asRecord(value);
+  const array = Array.isArray(value) ? value : undefined;
+  const byteLength = typeof encoded === "string"
+    ? Buffer.byteLength(encoded, "utf8")
+    : safeSerializedBytes(value);
+  return {
+    externalMcpData: PROVIDER_MCP_LOG_REDACTED,
+    kind,
+    byteLength,
+    rootType: record ? "object" : array ? "array" : value === null ? "null" : typeof value,
+    ...(record ? { propertyCount: Object.keys(record).length } : {}),
+    ...(array ? { itemCount: array.length } : {})
+  };
+}
+
+function safeSerializedBytes(value: unknown) {
+  try {
+    return Buffer.byteLength(JSON.stringify(value) ?? "", "utf8");
+  } catch {
+    return invalidValue;
+  }
 }
 
 function parseRecord(value: string) {

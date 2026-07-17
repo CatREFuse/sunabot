@@ -3,8 +3,10 @@ import {
   compareBinaryText,
   AGENT_EXTENSION_SCHEMA_VERSION,
   assertAgentId,
+  mcpDescriptorEnvKeys,
   type AgentExtensionCopyPreview,
   type AgentMcpSecretStatus,
+  type AgentMcpServerDescriptor,
   type AgentMcpServerIndex,
   type AgentSkillIndex,
   type AgentSkillRecord
@@ -40,12 +42,15 @@ export async function buildAgentExtensionCopyPreview(input: {
     .map((dependency) => dependency.id);
   const selectedMcpServers: AgentExtensionCopyPreview["selectedMcpServers"] = [];
   for (const serverId of input.mcpServerIds) {
-    const server = input.sourceMcp.servers.find((candidate) => candidate.id === serverId);
-    if (!server) throw storeError(404, "MCP_SERVER_NOT_FOUND", `MCP 服务不存在：${serverId}。`);
+    const sourceServer = input.sourceMcp.servers.find((candidate) => candidate.id === serverId);
+    if (!sourceServer) throw storeError(404, "MCP_SERVER_NOT_FOUND", `MCP 服务不存在：${serverId}。`);
+    const server = migrationDescriptor(sourceServer);
     const target = input.targetMcp.servers.find((candidate) => candidate.id === serverId);
+    const sourceEnvKeys = mcpDescriptorEnvKeys(sourceServer, input.sourceAgentId);
+    const targetEnvKeys = mcpDescriptorEnvKeys(sourceServer, input.targetAgentId);
     const [sourceSecrets, targetSecrets] = await Promise.all([
-      input.credentialStatus({ agentId: input.sourceAgentId, serverId, envKeys: server.envKeys }),
-      input.credentialStatus({ agentId: input.targetAgentId, serverId, envKeys: server.envKeys })
+      input.credentialStatus({ agentId: input.sourceAgentId, serverId, envKeys: sourceEnvKeys }),
+      input.credentialStatus({ agentId: input.targetAgentId, serverId, envKeys: targetEnvKeys })
     ]);
     selectedMcpServers.push({
       server,
@@ -54,13 +59,19 @@ export async function buildAgentExtensionCopyPreview(input: {
         ? "none"
         : digest(target) === digest(server) ? "same-content" : "different-content",
       sourceSecrets,
-      targetSecrets
+      targetSecrets,
+      targetState: "disabled",
+      requiresAuthorization: server.migrationStatus === "reauthorization_required"
     });
   }
-  return {
+  const preview: Omit<AgentExtensionCopyPreview, "previewRevision"> = {
     schemaVersion: AGENT_EXTENSION_SCHEMA_VERSION,
     sourceAgentId: assertAgentId(input.sourceAgentId),
     targetAgentId: assertAgentId(input.targetAgentId),
+    sourceSkillRevision: input.sourceSkills.revision,
+    targetSkillRevision: input.targetSkills.revision,
+    sourceMcpRevision: input.sourceMcp.revision,
+    targetMcpRevision: input.targetMcp.revision,
     skill: {
       record,
       contentVersion: record.digestSha256,
@@ -76,6 +87,7 @@ export async function buildAgentExtensionCopyPreview(input: {
     },
     selectedMcpServers
   };
+  return { ...preview, previewRevision: digest(preview) };
 }
 
 export function sameSkillEvidence(record: AgentSkillRecord, evidence: SkillPackageEvidence) {
@@ -83,9 +95,36 @@ export function sameSkillEvidence(record: AgentSkillRecord, evidence: SkillPacka
     record.license === evidence.license && record.compatibility === evidence.compatibility &&
     stableJson(record.metadata) === stableJson(evidence.metadata) &&
     stableJson(record.allowedTools) === stableJson(evidence.allowedTools) &&
-    stableJson(record.riskEvidence) === stableJson(evidence.riskEvidence) &&
+    stableJson(packageRiskEvidence(record.riskEvidence)) === stableJson(packageRiskEvidence(evidence.riskEvidence)) &&
     record.digestSha256 === evidence.digestSha256 && record.fileCount === evidence.fileCount &&
     record.unpackedBytes === evidence.unpackedBytes;
+}
+
+function packageRiskEvidence(risk: AgentSkillRecord["riskEvidence"]) {
+  const {
+    reviewStatus: _reviewStatus,
+    reviewedDigestSha256: _reviewedDigestSha256,
+    externalOrigins = [],
+    ...contentEvidence
+  } = risk;
+  return { ...contentEvidence, externalOrigins };
+}
+
+function migrationDescriptor(server: AgentMcpServerDescriptor): AgentMcpServerDescriptor {
+  if (server.transport === "stdio") {
+    return server.envKeys.length > 0
+      ? { ...server, enabled: false, envKeys: [...server.envKeys], migrationStatus: "reauthorization_required" }
+      : { ...server, enabled: false };
+  }
+  if (server.auth.kind === "bearer" || server.auth.kind === "oauth") {
+    return {
+      ...server,
+      enabled: false,
+      auth: { kind: server.auth.kind, credentialRef: "pending" },
+      migrationStatus: "reauthorization_required"
+    };
+  }
+  return { ...server, enabled: false };
 }
 
 function digest(value: unknown) {

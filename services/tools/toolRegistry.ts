@@ -41,6 +41,17 @@ import {
   sendVoiceMessageTool
 } from "./sendConversationAssetTool.js";
 import { withRequiredDispatchMessage, withoutDispatchMessage } from "./deferredDispatch.js";
+import {
+  ACTIVATE_SKILL_TOOL_NAME,
+  createActivateSkillTool,
+} from "./activateSkillTool.js";
+import {
+  READ_SKILL_RESOURCE_TOOL_NAME,
+  RUN_SKILL_SCRIPT_TOOL_NAME,
+  createReadSkillResourceTool,
+  createRunSkillScriptTool,
+  type SkillRuntimeToolPort
+} from "./skillRuntimeTool.js";
 
 export interface ToolAvailability {
   onAssistantText?: unknown;
@@ -59,6 +70,7 @@ export interface ToolAvailability {
   asyncImage?: boolean;
   imageTools?: boolean;
   systemConfig?: SystemConfigToolPort;
+  skills?: SkillRuntimeToolPort;
 }
 
 export type ToolExecution = "inline" | "deferred";
@@ -212,6 +224,36 @@ const catalog: readonly ToolCatalogEntry[] = [
     execution: "deferred"
   },
   {
+    name: ACTIVATE_SKILL_TOOL_NAME,
+    title: "启用 Skill",
+    summary: "为当前会话加载一个已审批 Skill。",
+    definition: (options) => createActivateSkillTool(options.skills?.skillIds ?? []),
+    available: (options) => Boolean(options.skills?.skillIds.length),
+    unavailableReason: "当前 Agent 没有可用 Skill。",
+    defaultEnabled: true,
+    execution: "inline"
+  },
+  {
+    name: READ_SKILL_RESOURCE_TOOL_NAME,
+    title: "读取 Skill 资源",
+    summary: "读取当前会话已启用 Skill 的一个有界资源。",
+    definition: (options) => createReadSkillResourceTool(options.skills?.skillIds ?? []),
+    available: (options) => Boolean(options.skills?.skillIds.length && options.skills.readResource),
+    unavailableReason: "当前会话没有可读取的 Skill 资源。",
+    defaultEnabled: true,
+    execution: "inline"
+  },
+  {
+    name: RUN_SKILL_SCRIPT_TOOL_NAME,
+    title: "运行 Skill 脚本",
+    summary: "通过审计和强隔离运行当前会话已启用 Skill 的脚本。",
+    definition: (options) => createRunSkillScriptTool(options.skills?.skillIds ?? []),
+    available: (options) => Boolean(options.skills?.skillIds.length && options.skills.runScript),
+    unavailableReason: "当前环境没有可用的 Skill 脚本审计执行器。",
+    defaultEnabled: true,
+    execution: "inline"
+  },
+  {
     name: SYSTEM_CONFIG_TOOL_NAME,
     title: "系统设置",
     summary: "查询状态并调整当前 Agent 的受控行为设置。",
@@ -351,6 +393,9 @@ function applyRuntimeToolContract(
     && entry.name !== READ_FILE_TOOL_NAME
     && entry.name !== WRITE_FILE_TOOL_NAME
     && entry.name !== SEND_FILE_TOOL_NAME
+    && entry.name !== ACTIVATE_SKILL_TOOL_NAME
+    && entry.name !== READ_SKILL_RESOURCE_TOOL_NAME
+    && entry.name !== RUN_SKILL_SCRIPT_TOOL_NAME
   ) return selected;
   return {
     ...selected,

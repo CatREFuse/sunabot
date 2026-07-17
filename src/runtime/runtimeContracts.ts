@@ -114,6 +114,7 @@ import {
   type RenderedPromptRequest
 } from "../../services/agent/promptSystem.js";
 import { buildConversationPromptVariables } from "../../services/agent/persona.js";
+import type { RuntimeAgentExtensionsPort } from "./agentExtensions.js";
 
 export { SYSTEM_CONFIG_NEUTRAL_CONFIRMATION_TEXT } from "../../packages/contracts/session/runtimeMessages.js";
 
@@ -300,6 +301,7 @@ export interface SunaRuntimeOptions {
   resolveToolCapabilities?: RuntimeToolCapabilityResolver;
   bashAudit?: RuntimeBashAuditPort;
   systemConfig?: SystemConfigRuntimePort;
+  agentExtensions?: RuntimeAgentExtensionsPort;
   replyTaskGate?: ReplyTaskGate;
   replyDebounceMs?: number;
 }

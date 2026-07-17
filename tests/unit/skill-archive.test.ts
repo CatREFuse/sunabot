@@ -57,6 +57,7 @@ describe("Skill archive", () => {
         classification: "script-bearing",
         hasScripts: true,
         hasExternalUrls: true,
+        externalOrigins: ["https://docs.example.test", "https://mcp.example.test"],
         declaredFileAccess: ["read", "shell"],
         allowImplicitInvocation: false,
         mcpDependencies: [{ id: "github-mcp" }]
