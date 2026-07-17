@@ -37,7 +37,10 @@ describe("RequestLogList", () => {
     expect(usage.text()).toContain("4.1K");
     expect(usage.text()).toContain("缓存率");
     expect(usage.text()).toContain("50%");
-    expect(wrapper.get("details summary").text()).toContain("响应体");
+    const summary = wrapper.get("details summary");
+    expect(summary.text()).toContain("响应体");
+    expect(summary.classes()).toContain("min-h-11");
+    expect(wrapper.get('[data-slot="request-direction-marker"]').find("i").exists()).toBe(false);
   });
 
   it("keeps legacy and non-model logs compact when no usage is available", () => {

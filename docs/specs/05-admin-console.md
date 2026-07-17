@@ -4,7 +4,7 @@
 
 ## 7. 管理台
 
-管理台侧栏分为“Agent”和“公共系统”。Agent 区包含当前 Agent 切换器、Agent 设置、状态、Web Chat、会话、Agent 提示词、记忆、图像和日志；公共系统区依次包含系统设置、配置医生和系统提示词，配置医生使用独立 `/config-doctor` 页面并位于系统设置下方。Agent 提示词页显示当前 Agent 的六个人格文件和自拍提示词改写，并提供“覆盖系统提示词”开关；开启后同页增加该 Agent 的系统提示词覆盖入口。系统提示词页只编辑公共版本，不显示自拍提示词改写。管理台支持 light、dark 和跟随系统主题，并适配桌面、平板和移动端。切换 Agent 后，会话、Web Chat、图片、记忆、Agent 提示词、Agent 工具和 Bot 配置只读写所选 Agent；模型配置、共用开关和公共系统提示词保持全局一致。回复行为中的群聊引用过滤名单接受 QQ 号，命中后仅取消引用，不关闭回复。`no_reply` 工具详情与回复行为页的“no_reply 时戳一戳”共同编辑 `bot.pokeOnNoReply`，任一入口保存后另一入口显示同一值。
+管理台侧栏分为“Agent”和“公共系统”。Agent 区包含当前 Agent 切换器、Agent 设置、状态、Web Chat、会话、Agent 提示词、记忆、图像、扩展和日志；公共系统区依次包含系统设置、配置医生和系统提示词，配置医生使用独立 `/config-doctor` 页面并位于系统设置下方。Agent 提示词页显示当前 Agent 的六个人格文件和自拍提示词改写，并提供“覆盖系统提示词”开关；开启后同页增加该 Agent 的系统提示词覆盖入口。系统提示词页只编辑公共版本，不显示自拍提示词改写。管理台支持 light、dark 和跟随系统主题，并适配桌面、平板和移动端。切换 Agent 后，会话、Web Chat、图片、记忆、Agent 提示词、Agent 工具、扩展和 Bot 配置只读写所选 Agent；模型配置、共用开关和公共系统提示词保持全局一致。回复行为中的群聊引用过滤名单接受 QQ 号，命中后仅取消引用，不关闭回复。`no_reply` 工具详情与回复行为页的“no_reply 时戳一戳”共同编辑 `bot.pokeOnNoReply`，任一入口保存后另一入口显示同一值。
 
 系统设置的“回复重试”页编辑公共 `normalReply.maxRetries`，字段为“失败重试次数”，默认 3，允许 0—10；保存后热更新全部 Agent。系统设置的“广播风暴”页编辑公共 `broadcastStorm` 配置，包含“广播风暴嗅探”“检测窗口（分钟）”“回复次数”“静默时长（分钟）”和“补充嗅探账号”。补充账号与已启用 Agent 的 QQ 合并参与检测；两项公共配置均由全部 Agent 共用，不写入单个 Agent manifest。管理台读取旧版配置响应时，缺失的 `normalReply` 使用当前默认值，不得因新增配置段缺失导致整个设置页进入错误态。
 
@@ -12,7 +12,9 @@
 
 Agent 页面以列表和详情双栏管理 Agent，支持新建 Agent、启停、查看隔离 workspace 与新增多个 QQ 账号。Agent ID 创建后保持稳定，名称可以修改；Agent 身份页可上传或更换仅用于管理台展示的 WebUI 头像，支持 PNG、JPEG、WebP，不限制原图文件大小。选择图片后必须通过圆形裁图弹层调整位置和缩放，保存透明圆形头像；QQ 头像保持独立。QQ 容器区使用“新建 NapCat QQ Docker”入口；新增、启停或移除 QQ 后，由宿主 account runtime daemon 按注册表调和目标 NapCat 容器，Docker Core 通过 workspace request/result bridge 请求宿主执行且不挂载 Docker socket。未运行账号始终显示“运行”，调用单账号启动接口后创建或启动对应 Compose project；成功后刷新为“待登录”，不能要求重启全部 Sunabot。管理台显示期望状态、实际状态、是否仍需调和和最近错误。注册库不可读时调和失败关闭，不能生成停止或删除计划。每个账号独立扫码、退出和打开对应 NapCat WebUI。Plana 的 `primary` 是固定基线账号，可以退出 QQ 登录，不能从注册表移除；管理 API 对移除请求返回 `PRIMARY_ACCOUNT_REQUIRED`，管理台不显示移除入口，其他离线账号可以移除。
 
-Agent 扩展管理 API 按当前 Agent 提供 Skill 安装、独立安全审查、启停、卸载、跨 Agent 复制预览与原子应用，以及 MCP server 描述符增删改。`POST /api/agent-extensions/skills/:skillId/review` 只接受严格正文 `{agentId,approve:true}`；管理员 session、CSRF 与 Origin 校验完成后才运行摘要绑定的审核事务，成功后关闭该 Agent 的扩展运行生命周期，失败不改变审批状态。Skill 复制必须显式选择 skip、replace 或 rename，复制普通文件树、重新校验并原子发布，不共享 inode，也不复制 MCP secret 或 OAuth 凭据。MCP runtime API 提供目录读取、显式工具调用、resource read/subscribe/unsubscribe 和 prompt get；全部端点复用管理员 session、CSRF 与 Origin 门禁，使用严格字段集合和请求中止信号。MCP OAuth 授权入口只接受 localhost 回调，展示并绑定当前 Agent、server、resource 和浏览器 session，成功后配置仅保存 credential handle。当前批次不包含扩展管理 WebUI，后续界面必须直接消费这些封闭 API，不能在浏览器保存 secret、OAuth token 或宿主路径。
+Agent 扩展管理 API 按当前 Agent 提供 Skill 安装、独立安全审查、启停、卸载、跨 Agent 复制预览与原子应用，以及 MCP server 描述符增删改。`POST /api/agent-extensions/skills/:skillId/review` 只接受严格正文 `{agentId,approve:true}`；管理员 session、CSRF 与 Origin 校验完成后才运行摘要绑定的审核事务，成功后关闭该 Agent 的扩展运行生命周期，失败不改变审批状态。Skill 复制必须显式选择 skip、replace 或 rename，复制普通文件树、重新校验并原子发布，不共享 inode，也不复制 MCP secret 或 OAuth 凭据。MCP runtime API 提供目录读取、显式工具调用、resource read/subscribe/unsubscribe 和 prompt get；全部端点复用管理员 session、CSRF 与 Origin 门禁，使用严格字段集合和请求中止信号。MCP OAuth 授权入口只接受 localhost 回调，展示并绑定当前 Agent、server、resource 和浏览器 session，成功后配置仅保存 credential handle。
+
+扩展页固定使用当前 Agent，顶部汇总 Skill、MCP 与一次性批准；Skill 区提供 ZIP 安装、摘要审查、启停、卸载和跨 Agent 迁移，迁移必须先预览再选择 skip、replace 或 rename。MCP 区提供 stdio 与 Streamable HTTP 描述符的新增、编辑、启停、删除、运行状态和目录详情；stdio 参数与环境变量名称逐行输入，保存前完整展示固定可执行文件与参数并显式确认。OAuth 只打开本机受控授权流程，页面只显示绑定状态和刷新、撤销动作；浏览器不保存 secret、OAuth token、宿主路径或凭据值。待批准 MCP 工具调用以有时限的独立队列展示，批准动作绑定当前 Agent 和 ticket。全部危险删除使用确认弹层，错误留在对应页面或弹层内，页面同时支持 light、dark、桌面和移动端。
 
 复制预览返回的 MCP server 已是最终目标安全形态，并明确显示停用与是否需要重新授权；apply 绑定同一 preview revision、源/目标 Skill revision 与源/目标 MCP revision，不能在确认后重新读取并复制源凭据。stdio 复制保留非秘密 env key 名称，以便目标 overview 显示缺失项；管理员重新确认完整命令并替换描述符后解除迁移状态，全部目标 key 配置完成前仍不能启用。Bearer/OAuth 的目标授权状态为 pending 时，启用请求稳定返回重新授权错误；OAuth 绑定成功只替换目标 Agent 的 handle，仍由管理员显式启用。
 

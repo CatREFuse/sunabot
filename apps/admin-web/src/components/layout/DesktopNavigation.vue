@@ -1,36 +1,8 @@
 <script setup lang="ts">
 import { useRuntimeStatus } from "../../composables/useRuntimeStatus";
-import { useTheme, type ThemePreference } from "../../composables/useTheme";
+import { useTheme } from "../../composables/useTheme";
 import AgentSwitcher from "../agents/AgentSwitcher.vue";
-
-const navSections: Array<{ label: string; items: Array<{ to: string; label: string; icon: string }> }> = [
-  {
-    label: "Agent",
-    items: [
-      { to: "/agent-settings", label: "Agent 设置", icon: "bx-slider-alt" },
-      { to: "/overview", label: "状态", icon: "bx-pulse" },
-      { to: "/web-chat", label: "Web Chat", icon: "bx-chat" },
-      { to: "/conversations", label: "会话", icon: "bx-message-square-dots" },
-      { to: "/agent-prompts", label: "Agent 提示词", icon: "bx-bot" },
-      { to: "/memory", label: "记忆", icon: "bx-brain" },
-      { to: "/images", label: "图像", icon: "bx-image" },
-      { to: "/logs", label: "日志", icon: "bx-terminal" }
-    ]
-  },
-  {
-    label: "公共系统",
-    items: [
-      { to: "/settings", label: "系统设置", icon: "bx-cog" },
-      { to: "/config-doctor", label: "配置医生", icon: "bx-first-aid" },
-      { to: "/system-prompts", label: "系统提示词", icon: "bx-file" }
-    ]
-  }
-];
-const themeItems: Array<{ id: ThemePreference; label: string; icon: string }> = [
-  { id: "light", label: "浅色", icon: "bx-sun" },
-  { id: "dark", label: "深色", icon: "bx-moon" },
-  { id: "system", label: "系统", icon: "bx-desktop" }
-];
+import { navigationSections, themeItems } from "./navigationCatalog";
 const theme = useTheme();
 const runtime = useRuntimeStatus();
 </script>
@@ -46,7 +18,7 @@ const runtime = useRuntimeStatus();
     </div>
 
     <nav class="flex min-h-0 flex-1 flex-col overflow-y-auto p-3 pt-2" aria-label="主导航">
-      <section v-for="section in navSections" :key="section.label" class="border-t border-line pb-2 first:border-t-0 first:pt-0">
+      <section v-for="section in navigationSections" :key="section.label" class="border-t border-line pb-2 first:border-t-0 first:pt-0">
         <h2 v-if="section.label !== 'Agent'" class="hidden px-3 pb-2 pt-4 font-mono text-[10px] uppercase tracking-[0.08em] text-disabled xl:block">{{ section.label }}</h2>
         <span v-if="section.label !== 'Agent'" class="sr-only xl:hidden">{{ section.label }}</span>
         <RouterLink

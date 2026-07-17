@@ -17,9 +17,11 @@ describe("StructuredValue", () => {
     expect(nestedDetails).toHaveLength(2);
 
     for (const details of nestedDetails) {
-      expect(details.get("summary").find(".structured__toggle").exists()).toBe(true);
+      const summary = details.get("summary");
+      expect(summary.find(".structured__toggle").exists()).toBe(true);
+      expect(summary.classes()).toContain("min-h-11");
       expect((details.element as HTMLDetailsElement).open).toBe(false);
-      await details.get("summary").trigger("click");
+      await summary.trigger("click");
       expect((details.element as HTMLDetailsElement).open).toBe(true);
     }
 

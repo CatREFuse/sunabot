@@ -10,7 +10,7 @@ import ConversationOrchestratorStatus from "./ConversationOrchestratorStatus.vue
 import RequestLogList from "../logs/RequestLogList.vue";
 import ModelCallStatsPanel from "../logs/ModelCallStatsPanel.vue";
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   conversation: ConversationRecord | null;
   messages: readonly ConversationMessageRecord[];
   memberNames?: Readonly<Record<string, string>>;
@@ -20,7 +20,20 @@ const props = defineProps<{
   loadingMessages: boolean;
   loadingLogs: boolean;
   error: string;
-}>();
+  mutationLocked?: boolean;
+  replyBusy?: boolean;
+  orchestratorBusy?: boolean;
+  replyError?: string;
+  orchestratorError?: string;
+}>(), {
+  memberNames: () => ({}),
+  stats: null,
+  mutationLocked: false,
+  replyBusy: false,
+  orchestratorBusy: false,
+  replyError: "",
+  orchestratorError: ""
+});
 const emit = defineEmits<{
   back: [];
   refresh: [];
@@ -33,11 +46,15 @@ const logsOpen = shallowRef(false);
 const activeLogRunId = shallowRef<string | undefined>();
 const replyEnabled = computed({
   get: () => props.conversation?.replyEnabled !== false,
-  set: (value) => emit("reply", value)
+  set: (value) => {
+    if (!props.mutationLocked) emit("reply", value);
+  }
 });
 const orchestratorEnabled = computed({
   get: () => props.conversation?.orchestratorEnabled !== false,
-  set: (value) => emit("orchestrator", value)
+  set: (value) => {
+    if (!props.mutationLocked) emit("orchestrator", value);
+  }
 });
 const conversationId = computed(() => props.conversation?.id ?? "");
 const messageIds = computed(() => props.messages.map((message) => message.id));
@@ -68,14 +85,22 @@ function refreshLogs() {
       <div class="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b border-line px-4 py-2 md:px-6">
         <div class="flex min-w-0 flex-wrap items-center gap-x-5 gap-y-1">
           <span class="font-mono text-[10px] text-mute">{{ conversation.messageCount }} 条消息 · {{ conversationIdentityDetail(conversation) }}</span>
-          <div class="flex flex-wrap items-center gap-x-5 gap-y-1">
-            <ToggleSwitch v-model="replyEnabled" label="启用" />
-            <ToggleSwitch
-              v-if="conversation.scope === 'user_group' && replyEnabled"
-              v-model="orchestratorEnabled"
-              label="编排器"
-              :description="orchestratorEnabled ? '' : '使用规则匹配回复'"
-            />
+          <div class="flex flex-wrap items-start gap-x-5 gap-y-2">
+            <div class="min-w-32">
+              <ToggleSwitch v-model="replyEnabled" label="启用" :disabled="mutationLocked" />
+              <p v-if="replyBusy" class="inline-state mt-1" role="status">保存中</p>
+              <p v-else-if="replyError" class="inline-state mt-1" data-kind="error" role="alert">{{ replyError }}</p>
+            </div>
+            <div v-if="conversation.scope === 'user_group' && replyEnabled" class="min-w-36">
+              <ToggleSwitch
+                v-model="orchestratorEnabled"
+                label="编排器"
+                :description="orchestratorEnabled ? '' : '使用规则匹配回复'"
+                :disabled="mutationLocked"
+              />
+              <p v-if="orchestratorBusy" class="inline-state mt-1" role="status">保存中</p>
+              <p v-else-if="orchestratorError" class="inline-state mt-1" data-kind="error" role="alert">{{ orchestratorError }}</p>
+            </div>
           </div>
         </div>
         <ConversationOrchestratorStatus

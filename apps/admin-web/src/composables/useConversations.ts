@@ -2,6 +2,9 @@ import { shallowReadonly, shallowRef } from "vue";
 import { apiRequest } from "./useAdminApi";
 import type { ConversationLogEntry, ConversationMessagePage, ConversationMessageRecord, ConversationRecord, ConversationStatsPayload } from "../types";
 
+type ConversationMutation = "reply" | "orchestrator";
+type ConversationMutationErrors = Partial<Record<ConversationMutation, string>>;
+
 export function useConversations() {
   const conversations = shallowRef<ConversationRecord[]>([]);
   const messages = shallowRef<ConversationMessageRecord[]>([]);
@@ -14,12 +17,14 @@ export function useConversations() {
   const loadingMessages = shallowRef(false);
   const loadingLogs = shallowRef(false);
   const error = shallowRef("");
+  const mutationBusy = shallowRef<Record<string, ConversationMutation | undefined>>({});
+  const mutationErrors = shallowRef<Record<string, ConversationMutationErrors>>({});
   let listController: AbortController | undefined;
   let messageController: AbortController | undefined;
   let logController: AbortController | undefined;
   let statsController: AbortController | undefined;
 
-  async function loadList() {
+  async function loadList(): Promise<boolean> {
     listController?.abort();
     listController = new AbortController();
     loadingList.value = true;
@@ -27,9 +32,11 @@ export function useConversations() {
       const payload = await apiRequest<{ conversations: ConversationRecord[] }>("/api/conversations", { signal: listController.signal });
       conversations.value = payload.conversations;
       error.value = "";
+      return true;
     } catch (caught) {
-      if (isAbort(caught)) return;
+      if (isAbort(caught)) return false;
       error.value = caught instanceof Error ? caught.message : "会话读取失败";
+      return false;
     } finally {
       loadingList.value = false;
     }
@@ -92,10 +99,18 @@ export function useConversations() {
 
   async function updateReplySettings(
     conversation: ConversationRecord,
-    changes: Pick<ConversationRecord, "replyEnabled" | "orchestratorEnabled">
+    changes: Pick<ConversationRecord, "replyEnabled" | "orchestratorEnabled">,
+    mutation: ConversationMutation
   ) {
-    const previous = conversations.value;
-    conversations.value = previous.map((item) =>
+    if (mutationBusy.value[conversation.id]) return false;
+    const current = conversations.value.find((item) => item.id === conversation.id) ?? conversation;
+    const previous = {
+      replyEnabled: current.replyEnabled,
+      orchestratorEnabled: current.orchestratorEnabled
+    };
+    setMutationBusy(conversation.id, mutation);
+    setMutationError(conversation.id, mutation, "");
+    conversations.value = conversations.value.map((item) =>
       item.id === conversation.id ? { ...item, ...changes } : item
     );
     try {
@@ -117,19 +132,54 @@ export function useConversations() {
             orchestratorEnabled: payload.conversation.orchestratorEnabled
           }
         : item);
-      error.value = "";
+      setMutationError(conversation.id, mutation, "");
+      return true;
     } catch (caught) {
-      conversations.value = previous;
-      error.value = caught instanceof Error ? caught.message : "回复状态更新失败";
+      conversations.value = conversations.value.map((item) => item.id === conversation.id
+        ? {
+            ...item,
+            ...(changes.replyEnabled === undefined ? {} : { replyEnabled: previous.replyEnabled }),
+            ...(changes.orchestratorEnabled === undefined ? {} : { orchestratorEnabled: previous.orchestratorEnabled })
+          }
+        : item);
+      const message = caught instanceof Error
+        ? caught.message
+        : mutation === "reply" ? "回复设置保存失败" : "编排器设置保存失败";
+      const refreshed = await loadList();
+      setMutationError(
+        conversation.id,
+        mutation,
+        refreshed ? `${message}，已重新读取当前状态` : `${message}，当前状态读取失败，请刷新`
+      );
+      return false;
+    } finally {
+      setMutationBusy(conversation.id, undefined);
     }
   }
 
   async function setReplyEnabled(conversation: ConversationRecord, replyEnabled: boolean) {
-    await updateReplySettings(conversation, { replyEnabled });
+    return updateReplySettings(conversation, { replyEnabled }, "reply");
   }
 
   async function setOrchestratorEnabled(conversation: ConversationRecord, orchestratorEnabled: boolean) {
-    await updateReplySettings(conversation, { orchestratorEnabled });
+    return updateReplySettings(conversation, { orchestratorEnabled }, "orchestrator");
+  }
+
+  function setMutationBusy(id: string, mutation: ConversationMutation | undefined) {
+    const next = { ...mutationBusy.value };
+    if (mutation) next[id] = mutation;
+    else delete next[id];
+    mutationBusy.value = next;
+  }
+
+  function setMutationError(id: string, mutation: ConversationMutation, message: string) {
+    const next = { ...mutationErrors.value };
+    const current = { ...next[id] };
+    if (message) current[mutation] = message;
+    else delete current[mutation];
+    if (Object.keys(current).length) next[id] = current;
+    else delete next[id];
+    mutationErrors.value = next;
   }
 
   function clearCurrent() {
@@ -161,6 +211,8 @@ export function useConversations() {
     loadingMessages: shallowReadonly(loadingMessages),
     loadingLogs: shallowReadonly(loadingLogs),
     error: shallowReadonly(error),
+    mutationBusy: shallowReadonly(mutationBusy),
+    mutationErrors: shallowReadonly(mutationErrors),
     loadList,
     loadMessages,
     loadLogs,

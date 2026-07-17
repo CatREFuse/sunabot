@@ -99,13 +99,52 @@ describe("useQqLogin", () => {
     expect(control.snapshot.value?.imageDataUrl).toBe("data:image/png;base64,FRESH");
     expect(apiRequest).toHaveBeenCalledWith("/api/onebot/qq-login", expect.objectContaining({ method: "POST" }));
   });
+
+  it("freezes status, login, and logout routes to the account that opened the dialog", async () => {
+    let selectedAccountId = "secondary";
+    let releaseStatus!: (snapshot: OneBotQrLogin) => void;
+    const status = new Promise<OneBotQrLogin>((resolve) => {
+      releaseStatus = resolve;
+    });
+    apiRequest.mockImplementation((route: string, init?: RequestInit) => {
+      if (route === "/api/accounts/secondary/status") return status;
+      if (route === "/api/accounts/secondary/login" && init?.method === "POST") {
+        return Promise.resolve({ connected: true, online: true, available: true, phase: "online", data: { user_id: 42 } });
+      }
+      if (route === "/api/accounts/secondary/logout" && init?.method === "POST") {
+        return Promise.resolve({ connected: false, online: false, available: true, phase: "restarting" });
+      }
+      throw new Error(`Unexpected request: ${route}`);
+    });
+    const control = mountControl({
+      paths: () => ({
+        status: `/api/accounts/${selectedAccountId}/status`,
+        login: `/api/accounts/${selectedAccountId}/login`,
+        logout: `/api/accounts/${selectedAccountId}/logout`
+      })
+    });
+
+    const opening = control.openDialog();
+    selectedAccountId = "primary";
+    releaseStatus({ connected: false, online: false, available: true, phase: "starting" });
+    await opening;
+    expect(control.online.value).toBe(true);
+
+    control.requestLogout();
+    await control.logout();
+
+    expect(apiRequest).toHaveBeenCalledWith("/api/accounts/secondary/status");
+    expect(apiRequest).toHaveBeenCalledWith("/api/accounts/secondary/login", expect.objectContaining({ method: "POST" }));
+    expect(apiRequest).toHaveBeenCalledWith("/api/accounts/secondary/logout", expect.objectContaining({ method: "POST" }));
+    expect(apiRequest.mock.calls.some(([route]) => String(route).includes("/primary/"))).toBe(false);
+  });
 });
 
-function mountControl() {
+function mountControl(options: Parameters<typeof useQqLogin>[0] = {}) {
   let control!: ReturnType<typeof useQqLogin>;
   const Harness = defineComponent({
     setup() {
-      control = useQqLogin();
+      control = useQqLogin(options);
       return () => h("div");
     }
   });

@@ -320,4 +320,48 @@ describe("ConversationThread", () => {
     await toggles[1]!.vm.$emit("update:modelValue", false);
     expect(wrapper.emitted("orchestrator")).toEqual([[false]]);
   });
+
+  it("locks both actions while saving and renders action feedback inline", async () => {
+    const conversation = {
+      id: "group:7",
+      scope: "user_group" as const,
+      title: "群聊",
+      userId: 1,
+      groupId: 7,
+      replyEnabled: true,
+      orchestratorEnabled: true,
+      messageCount: 1,
+      lastAt: "2026-07-10T00:00:00.000Z",
+      lastText: "hello",
+      messages: []
+    };
+    const wrapper = shallowMount(ConversationThread, {
+      props: {
+        conversation,
+        messages: [],
+        logs: [],
+        hasMore: false,
+        loadingMessages: false,
+        loadingLogs: false,
+        error: "",
+        mutationLocked: true,
+        replyBusy: true,
+        orchestratorError: "保存失败，已重新读取当前状态"
+      }
+    });
+
+    const toggles = wrapper.findAllComponents(ToggleSwitch);
+    expect(toggles.map((toggle) => toggle.props("disabled"))).toEqual([true, true]);
+    expect(wrapper.get('[role="status"]').text()).toBe("保存中");
+    expect(wrapper.get('[role="alert"]').text()).toBe("保存失败，已重新读取当前状态");
+
+    await toggles[0]!.vm.$emit("update:modelValue", false);
+    await toggles[1]!.vm.$emit("update:modelValue", false);
+    expect(wrapper.emitted("reply")).toBeUndefined();
+    expect(wrapper.emitted("orchestrator")).toBeUndefined();
+
+    await wrapper.setProps({ mutationLocked: false, replyBusy: false });
+    await wrapper.findAllComponents(ToggleSwitch)[0]!.vm.$emit("update:modelValue", false);
+    expect(wrapper.emitted("reply")).toEqual([[false]]);
+  });
 });

@@ -28,4 +28,30 @@ describe("WebChatComposer", () => {
     expect(wrapper.get('button[aria-label="发送"]').attributes()).toHaveProperty("disabled");
     expect(wrapper.get('[role="alert"]').text()).toContain("发送失败");
   });
+
+  it("grows from 44px to 160px and resets after the draft is cleared", async () => {
+    const wrapper = mount(WebChatComposer, {
+      props: { modelValue: "短消息", sending: false, error: "" }
+    });
+    const textarea = wrapper.get<HTMLTextAreaElement>("textarea");
+    let scrollHeight = 44;
+    Object.defineProperty(textarea.element, "scrollHeight", {
+      configurable: true,
+      get: () => scrollHeight
+    });
+
+    await textarea.trigger("input");
+    expect(textarea.element.style.height).toBe("44px");
+    expect(textarea.element.style.overflowY).toBe("hidden");
+
+    scrollHeight = 240;
+    await wrapper.setProps({ modelValue: "第一行\n第二行\n第三行" });
+    expect(textarea.element.style.height).toBe("160px");
+    expect(textarea.element.style.overflowY).toBe("auto");
+
+    scrollHeight = 44;
+    await wrapper.setProps({ modelValue: "" });
+    expect(textarea.element.style.height).toBe("44px");
+    expect(textarea.element.style.overflowY).toBe("hidden");
+  });
 });

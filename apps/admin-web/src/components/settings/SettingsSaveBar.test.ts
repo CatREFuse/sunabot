@@ -20,4 +20,16 @@ describe("SettingsSaveBar", () => {
     expect(wrapper.text()).toContain("已保存，重启后生效");
     expect(wrapper.text()).not.toContain("RESTART REQUIRED");
   });
+
+  it("stays visible at the scroll edge and respects the device safe area", () => {
+    const wrapper = mount(SettingsSaveBar, {
+      props: { dirty: true, busy: false, kind: "idle", message: "" }
+    });
+    const bar = wrapper.get('[data-slot="settings-save-bar"]');
+
+    expect(bar.classes()).toContain("sticky");
+    expect(bar.classes()).toContain("bottom-0");
+    expect(bar.classes()).toContain("bg-page");
+    expect(bar.classes()).toContain("pb-[max(1rem,env(safe-area-inset-bottom))]");
+  });
 });

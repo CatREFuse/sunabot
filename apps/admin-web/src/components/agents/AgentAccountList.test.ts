@@ -1,7 +1,11 @@
-import { shallowMount } from "@vue/test-utils";
-import { describe, expect, it } from "vitest";
+import { flushPromises, shallowMount } from "@vue/test-utils";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentAccount } from "../../types";
+import OneBotLoginDialog from "../overview/OneBotLoginDialog.vue";
 import AgentAccountList from "./AgentAccountList.vue";
+
+const apiRequest = vi.hoisted(() => vi.fn());
+vi.mock("../../composables/useAdminApi", () => ({ apiRequest }));
 
 const createdAt = "2026-07-14T00:00:00.000Z";
 
@@ -17,6 +21,10 @@ function account(input: Pick<AgentAccount, "id" | "agentId" | "label" | "webuiPo
 }
 
 describe("AgentAccountList", () => {
+  beforeEach(() => {
+    apiRequest.mockReset().mockResolvedValue({ connected: true, online: true, available: true, phase: "online" });
+  });
+
   it("keeps the primary account and allows removing secondary accounts", async () => {
     const wrapper = shallowMount(AgentAccountList, {
       props: {
@@ -32,6 +40,15 @@ describe("AgentAccountList", () => {
     const removeSecondary = wrapper.get('button[aria-label="移除 备用账号"]');
     await removeSecondary.trigger("click");
     expect(wrapper.emitted("remove")).toEqual([["secondary"]]);
+
+    const loginButtons = wrapper.findAll("button").filter((button) => button.text() === "登录");
+    await loginButtons[1].trigger("click");
+    await flushPromises();
+    expect(wrapper.getComponent(OneBotLoginDialog).props()).toMatchObject({
+      accountId: "secondary",
+      accountLabel: "备用账号"
+    });
+    expect(apiRequest).toHaveBeenCalledWith("/api/agents/plana/accounts/secondary/login/status");
   });
 
   it("shows a run action for a newly registered container before runtime state is ready", async () => {

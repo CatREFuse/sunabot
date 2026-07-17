@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, onMounted, useTemplateRef, watch } from "vue";
 
 const props = defineProps<{
   sending: boolean;
@@ -7,11 +7,23 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{ submit: [] }>();
 const model = defineModel<string>({ required: true });
+const input = useTemplateRef<HTMLTextAreaElement>("input");
 const sendable = computed(() => {
   const text = model.value.trim();
   return text.length > 0 && text.length <= 16_000 && !props.sending;
 });
 const characterCount = computed(() => model.value.length.toLocaleString("zh-CN"));
+
+onMounted(resizeInput);
+watch(model, resizeInput, { flush: "post" });
+
+function resizeInput() {
+  if (!input.value) return;
+  input.value.style.height = "44px";
+  const contentHeight = Math.min(Math.max(input.value.scrollHeight, 44), 160);
+  input.value.style.height = `${contentHeight}px`;
+  input.value.style.overflowY = input.value.scrollHeight > 160 ? "auto" : "hidden";
+}
 
 function keydown(event: KeyboardEvent) {
   if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
@@ -27,12 +39,14 @@ function keydown(event: KeyboardEvent) {
         <span class="meta-label">消息</span>
         <span class="flex min-w-0 items-end gap-3 border-b border-visible pb-2 focus-within:border-display">
           <textarea
+            ref="input"
             v-model="model"
-            class="max-h-40 min-h-12 min-w-0 flex-1 resize-none bg-transparent py-2 font-mono text-sm leading-6 text-ink outline-none placeholder:text-disabled"
+            class="max-h-40 min-h-11 min-w-0 flex-1 resize-none bg-transparent py-2 font-mono text-sm leading-6 text-ink outline-none placeholder:text-disabled"
             rows="1"
             maxlength="16000"
             placeholder="输入消息"
             aria-label="消息"
+            @input="resizeInput"
             @keydown="keydown"
           ></textarea>
           <button

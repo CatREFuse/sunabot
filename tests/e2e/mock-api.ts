@@ -2,6 +2,16 @@ import type { Page, Route } from "@playwright/test";
 import sharp from "sharp";
 import type { AppConfig } from "../../src/types.js";
 import type { AgentAccount, AgentSummary } from "../../apps/admin-web/src/types.js";
+import type {
+  AgentMcpServer,
+  AgentSkillRecord,
+  McpApprovalTicket,
+  SkillCopyPreview
+} from "../../apps/admin-web/src/types/agentExtensions.js";
+import {
+  mcpHttpCredentialEnvironmentKey,
+  mcpStdioCredentialEnvironmentKey
+} from "../../packages/contracts/extensions/agentExtensions.js";
 import { promptDefinitionById } from "../../services/agent/promptCatalog.js";
 import { defaultPromptContent } from "../../services/agent/promptDefaults.js";
 import { parseFinalPromptTemplate } from "../../services/agent/promptSystem.js";
@@ -10,6 +20,13 @@ import { listToolMetadata } from "../../services/tools/toolRegistry.js";
 const imageFixture = sharp({
   create: { width: 640, height: 640, channels: 4, background: "#d71921" }
 }).png().toBuffer();
+const skillCopyPreviewRevision = "f".repeat(64);
+const skillCopyRevisions = {
+  sourceSkill: "1".repeat(64),
+  targetSkill: "2".repeat(64),
+  sourceMcp: "3".repeat(64),
+  targetMcp: "4".repeat(64)
+};
 
 export const modelCatalog = [
   model("gpt-5.5", "5.5", "medium", ["low", "medium", "high", "xhigh"]),
@@ -328,6 +345,7 @@ export interface MockApiState {
   adminPassword: string;
   passwordChanges: Array<{ currentPassword: string; newPassword: string; confirmPassword: string }>;
   nextPatchError: string;
+  nextConversationError: string;
   imageHistoryError: string;
   qqOnline: boolean;
   qrVersion: number;
@@ -335,6 +353,9 @@ export interface MockApiState {
   tokenUsageRequests: string[];
   webChatMessages: MockWebChatMessage[];
   webChatRequests: string[];
+  extensions: Record<string, { skills: AgentSkillRecord[]; servers: AgentMcpServer[] }>;
+  extensionRequests: Array<{ method: string; path: string; body?: unknown }>;
+  mcpApprovals: McpApprovalTicket[];
   selfieReferences: Array<{
     id: string;
     fileName: string;
@@ -369,6 +390,7 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
     adminPassword: options.requiredToken || "session-secret",
     passwordChanges: [],
     nextPatchError: "",
+    nextConversationError: "",
     imageHistoryError: "",
     qqOnline: true,
     qrVersion: 1,
@@ -376,6 +398,15 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
     tokenUsageRequests: [],
     webChatMessages: structuredClone(initialWebChatMessages),
     webChatRequests: [],
+    extensions: {
+      plana: {
+        skills: [mockSkill("status-report", "unapproved")],
+        servers: [mockMcpServer("workspace-search")]
+      },
+      arona: { skills: [], servers: [] }
+    },
+    extensionRequests: [],
+    mcpApprovals: [mockMcpApproval()],
     selfieReferences: [
       selfieReference("01-neutral-face.png", 458, 501, 241_664),
       selfieReference("02-gentle-smile.png", 458, 501, 244_736),
@@ -428,6 +459,234 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
       return json(route, {
         error: { code: "ADMIN_UNAUTHORIZED", message: "管理员会话无效或已过期。" }
       }, 401);
+    }
+
+    if (pathname === "/api/agent-extensions" && method === "GET") {
+      const agentId = url.searchParams.get("agentId") || "plana";
+      const extensions = state.extensions[agentId] ?? { skills: [], servers: [] };
+      return json(route, {
+        schemaVersion: 1,
+        agentId,
+        skills: extensions.skills,
+        mcp: {
+          servers: extensions.servers,
+          secrets: {
+            configuredKeys: [`SUNABOT_MCP_STDIO_SECRET_${"A".repeat(32)}`],
+            missingKeys: [`SUNABOT_MCP_HTTP_BEARER_${"B".repeat(32)}`]
+          }
+        }
+      });
+    }
+    if (pathname === "/api/agent-extensions/mcp/runtime/status" && method === "GET") {
+      const agentId = url.searchParams.get("agentId") || "plana";
+      return json(route, {
+        servers: (state.extensions[agentId]?.servers ?? []).filter((server) => server.enabled).map((server) => ({
+          serverId: server.id,
+          status: "ready",
+          toolCatalogStatus: "ready",
+          instructions: "[External MCP input] Workspace tools"
+        }))
+      });
+    }
+    if (pathname === "/api/agent-extensions/mcp/runtime/approvals" && method === "GET") {
+      const agentId = url.searchParams.get("agentId") || "plana";
+      return json(route, { approvals: state.mcpApprovals.filter((ticket) => ticket.agentId === agentId) });
+    }
+    if (pathname === "/api/agent-extensions/mcp/runtime/approvals/approve" && method === "POST") {
+      const body = request.postDataJSON() as { agentId: string; ticketId: string };
+      state.extensionRequests.push({ method, path: pathname, body });
+      state.mcpApprovals = state.mcpApprovals.filter((ticket) => ticket.id !== body.ticketId);
+      return json(route, { ok: true });
+    }
+    if (pathname === "/api/agent-extensions/skills" && method === "POST") {
+      const body = request.postDataJSON() as { agentId: string; archiveBase64: string; replace?: boolean };
+      state.extensionRequests.push({ method, path: pathname, body: { ...body, archiveBase64: "[BASE64]" } });
+      const installed = mockSkill("installed-skill", "unapproved");
+      const target = state.extensions[body.agentId] ??= { skills: [], servers: [] };
+      target.skills = body.replace
+        ? [...target.skills.filter((skill) => skill.id !== installed.id), installed]
+        : [...target.skills, installed];
+      return json(route, installed, 201);
+    }
+    const skillReviewMatch = pathname.match(/^\/api\/agent-extensions\/skills\/([^/]+)\/review$/);
+    if (skillReviewMatch && method === "POST") {
+      const body = request.postDataJSON() as { agentId: string; approve: true };
+      const skill = state.extensions[body.agentId]?.skills.find((item) => item.id === decodeURIComponent(skillReviewMatch[1]));
+      if (!skill) return json(route, { error: { code: "SKILL_NOT_FOUND", message: "Skill 不存在。" } }, 404);
+      Object.assign(skill.riskEvidence, { reviewStatus: "approved", reviewedDigestSha256: skill.digestSha256 });
+      skill.approval = { status: "approved", digestSha256: skill.digestSha256, approvedAt: "2026-07-17T00:01:00.000Z" };
+      return json(route, skill);
+    }
+    if (pathname === "/api/agent-extensions/skills/copy/preview" && method === "POST") {
+      const body = request.postDataJSON() as { sourceAgentId: string; targetAgentId: string; skillId: string; mcpServerIds?: string[] };
+      const skill = state.extensions[body.sourceAgentId]?.skills.find((item) => item.id === body.skillId) ?? mockSkill(body.skillId, "approved");
+      const sourceServers = state.extensions[body.sourceAgentId]?.servers ?? [];
+      const targetServers = state.extensions[body.targetAgentId]?.servers ?? [];
+      const selectedMcpServers: Array<SkillCopyPreview["selectedMcpServers"][number]> = [];
+      for (const serverId of body.mcpServerIds ?? []) {
+        const source = sourceServers.find((server) => server.id === serverId);
+        if (!source) return json(route, { error: { code: "MCP_SERVER_NOT_FOUND", message: `MCP 服务不存在：${serverId}。` } }, 404);
+        const server = migratedMockMcpServer(source);
+        const target = targetServers.find((candidate) => candidate.id === serverId);
+        const sourceSecretKeys = mockMcpSecretKeys(source, body.sourceAgentId);
+        const targetSecretKeys = mockMcpSecretKeys(source, body.targetAgentId);
+        selectedMcpServers.push({
+          server,
+          descriptorVersion: "c".repeat(64),
+          conflict: target ? JSON.stringify(target) === JSON.stringify(server) ? "same-content" : "different-content" : "none",
+          sourceSecrets: { configuredKeys: sourceSecretKeys, missingKeys: [] },
+          targetSecrets: { configuredKeys: [], missingKeys: targetSecretKeys },
+          targetState: "disabled" as const,
+          requiresAuthorization: sourceSecretKeys.length > 0 || server.migrationStatus === "reauthorization_required"
+        });
+      }
+      state.extensionRequests.push({ method, path: pathname, body });
+      return json(route, {
+        schemaVersion: 1,
+        previewRevision: skillCopyPreviewRevision,
+        sourceAgentId: body.sourceAgentId,
+        targetAgentId: body.targetAgentId,
+        sourceSkillRevision: skillCopyRevisions.sourceSkill,
+        targetSkillRevision: skillCopyRevisions.targetSkill,
+        sourceMcpRevision: skillCopyRevisions.sourceMcp,
+        targetMcpRevision: skillCopyRevisions.targetMcp,
+        skill: {
+          record: skill,
+          contentVersion: skill.digestSha256,
+          files: [{ path: "SKILL.md", bytes: 512, sha256: "b".repeat(64) }],
+          conflict: "none",
+          declaredMcpDependencies: skill.riskEvidence.mcpDependencies,
+          declaredMcpDependenciesStatus: "declared",
+          missingMcpDependencies: []
+        },
+        selectedMcpServers
+      });
+    }
+    if (pathname === "/api/agent-extensions/skills/copy" && method === "POST") {
+      const body = request.postDataJSON() as {
+        sourceAgentId: string;
+        targetAgentId: string;
+        skillId: string;
+        mcpServerIds?: string[];
+        previewRevision?: string;
+        conflictStrategy?: string;
+        renameTo?: string;
+      };
+      const previewRequest = [...state.extensionRequests].reverse().find((entry) => entry.path === "/api/agent-extensions/skills/copy/preview")?.body as {
+        sourceAgentId?: string;
+        targetAgentId?: string;
+        skillId?: string;
+        mcpServerIds?: string[];
+      } | undefined;
+      const matchesPreview = previewRequest
+        && previewRequest.sourceAgentId === body.sourceAgentId
+        && previewRequest.targetAgentId === body.targetAgentId
+        && previewRequest.skillId === body.skillId
+        && JSON.stringify(previewRequest.mcpServerIds ?? []) === JSON.stringify(body.mcpServerIds ?? []);
+      if (body.previewRevision !== skillCopyPreviewRevision || !matchesPreview) {
+        return json(route, { error: { code: "AGENT_EXTENSION_COPY_PREVIEW_STALE", message: "迁移预览已失效。" } }, 409);
+      }
+      if (!body.conflictStrategy || !["skip", "replace", "rename"].includes(body.conflictStrategy)) {
+        return json(route, { error: { code: "AGENT_EXTENSION_VALUE_INVALID", message: "conflictStrategy 无效。", field: "conflictStrategy" } }, 400);
+      }
+      if (body.conflictStrategy === "rename" && !/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(body.renameTo ?? "")) {
+        return json(route, { error: { code: "AGENT_EXTENSION_VALUE_INVALID", message: "renameTo 无效。", field: "renameTo" } }, 400);
+      }
+      state.extensionRequests.push({ method, path: pathname, body });
+      const source = state.extensions[body.sourceAgentId]?.skills.find((item) => item.id === body.skillId);
+      const target = state.extensions[body.targetAgentId] ??= { skills: [], servers: [] };
+      const existing = target.skills.find((item) => item.id === body.skillId);
+      const skipped = body.conflictStrategy === "skip" && Boolean(existing);
+      const copied = source && !skipped ? structuredClone(source) : null;
+      if (copied) {
+        copied.id = body.renameTo || copied.id;
+        copied.name = copied.id;
+        copied.enabled = false;
+        copied.source = { kind: "copy", agentId: body.sourceAgentId, skillId: body.skillId };
+        target.skills = [...target.skills.filter((skill) => skill.id !== copied.id), copied];
+      }
+      const copiedServers = (body.mcpServerIds ?? []).flatMap((serverId) => {
+        const server = state.extensions[body.sourceAgentId]?.servers.find((candidate) => candidate.id === serverId);
+        return server ? [migratedMockMcpServer(server)] : [];
+      });
+      target.servers = [...target.servers.filter((server) => !copiedServers.some((copiedServer) => copiedServer.id === server.id)), ...copiedServers];
+      return json(route, {
+        schemaVersion: 1,
+        sourceAgentId: body.sourceAgentId,
+        targetAgentId: body.targetAgentId,
+        skill: copied,
+        skipped,
+        mcpServers: copiedServers
+      });
+    }
+    const skillMatch = pathname.match(/^\/api\/agent-extensions\/skills\/([^/]+)$/);
+    if (skillMatch && method === "PATCH") {
+      const body = request.postDataJSON() as { agentId: string; enabled: boolean };
+      const skill = state.extensions[body.agentId]?.skills.find((item) => item.id === decodeURIComponent(skillMatch[1]));
+      if (!skill) return json(route, { error: { code: "SKILL_NOT_FOUND", message: "Skill 不存在。" } }, 404);
+      skill.enabled = body.enabled;
+      return json(route, skill);
+    }
+    if (skillMatch && method === "DELETE") {
+      const agentId = url.searchParams.get("agentId") || "plana";
+      const skillId = decodeURIComponent(skillMatch[1]);
+      const target = state.extensions[agentId] ??= { skills: [], servers: [] };
+      const skill = target.skills.find((item) => item.id === skillId) ?? mockSkill(skillId, "unapproved");
+      target.skills = target.skills.filter((item) => item.id !== skillId);
+      return json(route, skill);
+    }
+    if (pathname === "/api/agent-extensions/mcp/servers/preview" && method === "POST") {
+      const body = request.postDataJSON() as { agentId: string; server: AgentMcpServer };
+      return json(route, {
+        schemaVersion: 1,
+        previewRevision: "c".repeat(64),
+        server: body.server,
+        commandApproval: body.server.transport === "stdio" ? {
+          required: true,
+          command: body.server.command,
+          args: body.server.args,
+          digestSha256: "d".repeat(64)
+        } : null
+      });
+    }
+    if (pathname === "/api/agent-extensions/mcp/servers" && method === "PUT") {
+      const body = request.postDataJSON() as { agentId: string; server: AgentMcpServer; replace?: boolean };
+      state.extensionRequests.push({ method, path: pathname, body });
+      const target = state.extensions[body.agentId] ??= { skills: [], servers: [] };
+      target.servers = [...target.servers.filter((server) => server.id !== body.server.id), body.server];
+      return json(route, body.server);
+    }
+    const mcpServerMatch = pathname.match(/^\/api\/agent-extensions\/mcp\/servers\/([^/]+)$/);
+    if (mcpServerMatch && method === "PATCH") {
+      const body = request.postDataJSON() as { agentId: string; enabled: boolean };
+      const server = state.extensions[body.agentId]?.servers.find((item) => item.id === decodeURIComponent(mcpServerMatch[1]));
+      if (!server) return json(route, { error: { code: "MCP_SERVER_NOT_FOUND", message: "MCP 服务不存在。" } }, 404);
+      server.enabled = body.enabled;
+      return json(route, server);
+    }
+    if (mcpServerMatch && method === "DELETE") {
+      const agentId = url.searchParams.get("agentId") || "plana";
+      const serverId = decodeURIComponent(mcpServerMatch[1]);
+      const target = state.extensions[agentId] ??= { skills: [], servers: [] };
+      const server = target.servers.find((item) => item.id === serverId) ?? mockMcpServer(serverId);
+      target.servers = target.servers.filter((item) => item.id !== serverId);
+      return json(route, server);
+    }
+    if (pathname === "/api/agent-extensions/mcp/runtime/catalog" && method === "GET") {
+      return json(route, {
+        digestSha256: "e".repeat(64),
+        tools: [{ name: "search", description: "[External MCP input] Search the workbench" }],
+        resources: [{ uri: "file:///workbench/README.md" }],
+        resourceTemplates: [],
+        prompts: [{ name: "summarize" }],
+        refreshedAt: "2026-07-17T00:02:00.000Z"
+      });
+    }
+    if (pathname === "/api/agent-extensions/mcp/oauth/begin" && method === "POST") {
+      return json(route, { authorizationUrl: "https://auth.example.test/authorize", authorizationOrigin: "https://auth.example.test", expiresAt: "2026-07-17T00:10:00.000Z" });
+    }
+    if ((pathname === "/api/agent-extensions/mcp/oauth/refresh" || pathname === "/api/agent-extensions/mcp/oauth/revoke") && method === "POST") {
+      return json(route, { ok: true });
     }
 
     if (pathname === "/api/agents" && method === "GET") return json(route, { agents: state.agents });
@@ -935,6 +1194,11 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
       });
     }
     if (pathname === "/api/conversations/reply") {
+      if (state.nextConversationError) {
+        const message = state.nextConversationError;
+        state.nextConversationError = "";
+        return json(route, { error: { code: "CONVERSATION_UPDATE_FAILED", message } }, 500);
+      }
       const body = request.postDataJSON() as { id?: string; replyEnabled?: boolean; orchestratorEnabled?: boolean };
       const conversation = {
         id: body.id ?? "group:10001",
@@ -1230,6 +1494,109 @@ function configEnvelope(state: MockApiState) {
       "bot.tools.websearch.tavilyApiKeys": tavilyFieldState,
       "bot.tools.websearch.tavilyApiKeyEnv": tavilyFieldState
     }
+  };
+}
+
+function mockSkill(id: string, approval: "unapproved" | "approved"): AgentSkillRecord {
+  const digest = "a".repeat(64);
+  return {
+    id,
+    name: id,
+    description: "整理当前 Agent 的运行状态并生成简洁报告。",
+    license: "MIT",
+    compatibility: "Sunabot",
+    metadata: { category: "operations" },
+    allowedTools: [],
+    riskEvidence: {
+      reviewVersion: 1,
+      reviewStatus: approval === "approved" ? "approved" : "unreviewed",
+      reviewedDigestSha256: approval === "approved" ? digest : null,
+      classification: "instruction-only",
+      hasScripts: false,
+      hasExternalUrls: false,
+      mcpDependencies: [{
+        id: "workspace-search",
+        description: "读取工作区目录",
+        transport: "streamable_http",
+        url: "https://mcp.example.test/v1"
+      }],
+      declaredFileAccess: ["read"],
+      allowImplicitInvocation: false
+    },
+    enabled: approval === "approved",
+    entry: "SKILL.md",
+    digestSha256: digest,
+    fileCount: 3,
+    unpackedBytes: 4_096,
+    installedAt: "2026-07-17T00:00:00.000Z",
+    source: { kind: "upload" },
+    approval: approval === "approved"
+      ? { status: "approved", digestSha256: digest, approvedAt: "2026-07-17T00:01:00.000Z" }
+      : { status: "unapproved", digestSha256: null, approvedAt: null }
+  };
+}
+
+function mockMcpServer(id: string): AgentMcpServer {
+  return {
+    id,
+    name: "Workspace Search",
+    description: "读取当前 Agent 的工作区资源。",
+    enabled: true,
+    required: false,
+    enabledTools: ["search"],
+    disabledTools: [],
+    approvalMode: "always",
+    transport: "stdio",
+    command: "/usr/bin/workspace-mcp",
+    args: ["--stdio"],
+    envKeys: ["WORKSPACE_SEARCH_TOKEN"]
+  };
+}
+
+function migratedMockMcpServer(server: AgentMcpServer): AgentMcpServer {
+  if (server.transport === "stdio") {
+    return server.envKeys.length
+      ? { ...server, enabled: false, migrationStatus: "reauthorization_required" }
+      : { ...server, enabled: false };
+  }
+  if (server.auth.kind === "bearer" || server.auth.kind === "oauth") {
+    return {
+      ...server,
+      enabled: false,
+      auth: { kind: server.auth.kind, credentialRef: "pending" },
+      migrationStatus: "reauthorization_required"
+    };
+  }
+  return { ...server, enabled: false };
+}
+
+function mockMcpSecretKeys(server: AgentMcpServer, agentId: string) {
+  if (server.transport === "stdio") {
+    return server.envKeys.map((key) => mcpStdioCredentialEnvironmentKey(agentId, server.id, key));
+  }
+  if (server.auth.kind === "bearer") {
+    return [mcpHttpCredentialEnvironmentKey(agentId, server.id, server.auth.credentialRef, server.url)];
+  }
+  return [];
+}
+
+function mockMcpApproval(): McpApprovalTicket {
+  return {
+    id: `mcpa_${"a".repeat(24)}`,
+    agentId: "plana",
+    accountId: "primary",
+    transport: "onebot",
+    conversationId: "private:171419991",
+    userId: 171419991,
+    serverId: "workspace-search",
+    toolName: "search",
+    snapshotDigest: "a".repeat(64),
+    catalogGeneration: 1,
+    argumentsDigest: "b".repeat(64),
+    arguments: { query: "release status" },
+    status: "pending",
+    createdAt: "2026-07-17T00:00:00.000Z",
+    expiresAt: "2026-07-17T00:10:00.000Z"
   };
 }
 

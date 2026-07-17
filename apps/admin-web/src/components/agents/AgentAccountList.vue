@@ -116,6 +116,8 @@ function accountStatus(account: AgentAccount) {
 
   <OneBotLoginDialog
     :open="qqLogin.open.value"
+    :account-id="activeAccount?.id ?? ''"
+    :account-label="activeAccount?.label ?? ''"
     :busy="qqLogin.busy.value"
     :checking="qqLogin.checking.value"
     :snapshot="qqLogin.snapshot.value"

@@ -10,7 +10,10 @@ const statusMessage = computed(() => {
 </script>
 
 <template>
-  <div class="mt-10 flex min-h-16 flex-wrap items-center justify-between gap-3 border-t border-visible bg-transparent py-4">
+  <div
+    data-slot="settings-save-bar"
+    class="sticky bottom-0 z-20 mt-10 flex min-h-16 flex-wrap items-center justify-between gap-3 border-t border-visible bg-page pt-4 pb-[max(1rem,env(safe-area-inset-bottom))]"
+  >
     <span class="inline-state" :data-kind="kind === 'error' || kind === 'conflict' ? 'error' : kind === 'saved' ? 'success' : kind === 'restart' ? 'warning' : undefined">
       {{ statusMessage }}
     </span>

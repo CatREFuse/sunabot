@@ -186,7 +186,7 @@
   }
 
   .btn-ghost {
-    @apply rounded-md border-transparent px-3 text-mute hover:border-line hover:text-display;
+    @apply rounded-none border-transparent px-3 text-mute hover:border-transparent hover:text-display;
   }
 
   .btn-danger {

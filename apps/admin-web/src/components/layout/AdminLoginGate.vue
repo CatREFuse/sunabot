@@ -35,8 +35,7 @@ async function unlock() {
     <div class="grid w-full max-w-6xl overflow-hidden md:grid-cols-[minmax(0,1.15fr)_minmax(360px,0.85fr)]">
       <LoginHero />
       <form class="flex flex-col justify-center border-t border-visible px-6 py-8 md:min-h-[520px] md:border-l md:border-t-0 md:px-10 lg:px-12" @submit.prevent="unlock">
-        <i class="bx bx-key text-[40px] text-display" aria-hidden="true"></i>
-        <h2 id="login-title" class="mt-8 font-sans text-[36px] font-medium leading-none tracking-[-0.03em] text-display md:text-[48px]">管理员登录</h2>
+        <h2 id="login-title" class="font-sans text-[28px] font-medium leading-none tracking-[-0.02em] text-display md:text-[36px]">管理员登录</h2>
         <label class="field mt-8">
           <span class="field-label">管理员账号</span>
           <input v-model="username" class="control" type="text" autocomplete="username" maxlength="128" data-dialog-initial-focus>

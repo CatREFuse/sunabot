@@ -8,6 +8,8 @@ import DialogOverlay from "../ui/DialogOverlay.vue";
 
 const props = defineProps<{
   open: boolean;
+  accountId: string;
+  accountLabel: string;
   busy: boolean;
   checking: boolean;
   snapshot: OneBotQrLogin | null;
@@ -48,8 +50,11 @@ const avatar = computed(() => /^\d{5,12}$/.test(String(qq.value)) ? `/api/media/
 <template>
   <DialogOverlay :open="open" labelledby="login-title" @close="emit('close')">
     <section class="max-h-[calc(100dvh-32px)] w-full max-w-md overflow-y-auto rounded border border-visible bg-panel">
-      <header class="flex items-center justify-between border-b border-line p-4 md:p-5">
-        <h2 id="login-title" class="text-xl font-medium text-display">QQ 登录</h2>
+      <header class="flex items-center justify-between gap-4 border-b border-line p-4 md:p-5">
+        <div class="min-w-0">
+          <h2 id="login-title" class="text-xl font-medium text-display">QQ 登录</h2>
+          <p class="mt-1 truncate font-mono text-[10px] text-mute">{{ accountLabel }} · {{ accountId }}</p>
+        </div>
         <button class="icon-btn" type="button" aria-label="关闭" @click="emit('close')"><i class="bx bx-x text-2xl" aria-hidden="true"></i></button>
       </header>
       <div class="grid gap-5 p-4 md:p-5">

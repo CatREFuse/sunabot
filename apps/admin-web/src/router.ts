@@ -9,6 +9,7 @@ import PromptsView from "./views/PromptsView.vue";
 import SettingsView from "./views/SettingsView.vue";
 import WebChatView from "./views/WebChatView.vue";
 import AgentsView from "./views/AgentsView.vue";
+import AgentExtensionsView from "./views/AgentExtensionsView.vue";
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -27,6 +28,7 @@ export const router = createRouter({
     { path: "/images", name: "images", component: ImagesView },
     { path: "/logs", name: "logs", component: LogsView },
     { path: "/agents", name: "agents", component: AgentsView },
+    { path: "/extensions", name: "extensions", component: AgentExtensionsView },
     { path: "/agent-settings/:section?", name: "agent-settings", component: SettingsView, props: { scope: "agent" } },
     { path: "/settings/:section?", name: "settings", component: SettingsView, props: { scope: "system" } },
     { path: "/config-doctor", name: "config-doctor", component: ConfigDoctorView },

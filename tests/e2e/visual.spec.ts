@@ -2,6 +2,7 @@ import path from "node:path";
 import { mkdir } from "node:fs/promises";
 import { expect, test } from "@playwright/test";
 import sharp from "sharp";
+import type { AgentMcpHttpServer } from "../../apps/admin-web/src/types/agentExtensions";
 import { installMockApi } from "./mock-api";
 
 const avatarCropFixture = sharp({
@@ -100,6 +101,22 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     });
     await page.getByRole("button", { name: "选择 普拉娜" }).click();
 
+    await page.goto("/extensions");
+    await expect(page.getByRole("heading", { name: "扩展", exact: true })).toBeVisible();
+    await expect(page.getByText("status-report", { exact: true })).toBeVisible();
+    await expect(page.getByText("Workspace Search", { exact: true })).toBeVisible();
+    await capture(page, viewport.name, theme, "agent-extensions");
+    await page.getByRole("button", { name: "审核", exact: true }).click();
+    const skillReviewDialog = page.getByRole("dialog", { name: "status-report" });
+    await expect(skillReviewDialog).toBeVisible();
+    await capture(page, viewport.name, theme, "agent-extensions-review");
+    await skillReviewDialog.locator("footer").getByRole("button", { name: "关闭", exact: true }).click();
+    await page.getByRole("button", { name: "查看 Workspace Search 目录" }).click();
+    const mcpCatalogDialog = page.getByRole("dialog", { name: "Workspace Search" });
+    await expect(mcpCatalogDialog).toBeVisible();
+    await capture(page, viewport.name, theme, "agent-extensions-mcp");
+    await mcpCatalogDialog.getByLabel("关闭", { exact: true }).click();
+
     await page.goto("/conversations/group%3A10001");
     await expect(page.getByRole("heading", { name: "产品讨论群" })).toBeVisible();
     await expect(page.getByLabel("模型调用统计")).toContainText("24 条消息");
@@ -120,6 +137,10 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     await expect(page.getByRole("status", { name: "正在输入" })).toBeVisible();
     await expect(page.getByRole("button", { name: "查看请求日志" })).toHaveCount(3);
     await capture(page, viewport.name, theme, "conversations-detail");
+    state.nextConversationError = "回复设置保存失败";
+    await page.getByLabel("启用", { exact: true }).uncheck();
+    await expect(page.getByRole("alert")).toContainText("已重新读取当前状态");
+    await capture(page, viewport.name, theme, "conversations-save-error");
 
     await page.goto("/web-chat");
     await expect(page.getByRole("heading", { name: "与普拉娜对话", exact: true })).toBeVisible();
@@ -324,6 +345,37 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
   }
 });
 
+test("扩展弹层短高视口", async ({ page }, testInfo) => {
+  const theme = testInfo.project.name.endsWith("dark") ? "dark" : "light";
+  await page.addInitScript((selectedTheme) => localStorage.setItem("sunabot.theme", selectedTheme), theme);
+  await page.emulateMedia({ colorScheme: theme, reducedMotion: "reduce" });
+  const state = await installMockApi(page);
+  const oauthServer: AgentMcpHttpServer = {
+    id: "remote-search",
+    name: "Remote Search",
+    description: "远程搜索服务。",
+    enabled: true,
+    transport: "streamable_http",
+    url: "https://mcp.example.test/v1",
+    auth: { kind: "oauth", credentialRef: "pending" }
+  };
+  state.extensions.plana?.servers.push(oauthServer);
+  await page.setViewportSize({ width: 390, height: 568 });
+  await page.goto("/extensions");
+
+  await page.getByRole("button", { name: "安装 ZIP", exact: true }).click();
+  const installDialog = page.getByRole("dialog", { name: "安装 Skill" });
+  await expectDialogActionsInViewport(installDialog, 568);
+  await capture(page, "390x568", theme, "agent-extensions-install-short");
+  await installDialog.getByRole("button", { name: "关闭", exact: true }).click();
+
+  await page.getByRole("button", { name: "连接 OAuth", exact: true }).click();
+  const oauthDialog = page.getByRole("dialog", { name: "Remote Search" });
+  await expect(oauthDialog.getByLabel("OAuth 授权目标")).toContainText("普拉娜");
+  await expectDialogActionsInViewport(oauthDialog, 568);
+  await capture(page, "390x568", theme, "agent-extensions-oauth-short");
+});
+
 test("头像裁图四视口矩阵", async ({ page }, testInfo) => {
   test.setTimeout(120_000);
   const theme = testInfo.project.name.endsWith("dark") ? "dark" : "light";
@@ -359,7 +411,7 @@ test("工具目录四视口矩阵", async ({ page }, testInfo) => {
     await page.goto("/agent-settings/tools");
     await expect(page.getByRole("tab", { name: "工具目录", exact: true })).toHaveAttribute("aria-selected", "true");
     await expect(page.getByLabel("搜索工具")).toBeVisible();
-    await expect(page.getByLabel(/^启用 /)).toHaveCount(8);
+    await expect(page.getByLabel(/^启用 /)).toHaveCount(16);
     await capture(page, viewport.name, theme, "settings-tools-catalog");
 
     await page.getByRole("button", { name: "查看 行动中消息 详情" }).click();
@@ -416,4 +468,13 @@ async function capture(
     fullPage: true,
     animations: "disabled"
   });
+}
+
+async function expectDialogActionsInViewport(dialog: import("@playwright/test").Locator, viewportHeight: number) {
+  const actions = dialog.locator('[data-slot="dialog-actions"]');
+  await expect(actions).toBeVisible();
+  const box = await actions.boundingBox();
+  expect(box).not.toBeNull();
+  expect(box!.y).toBeGreaterThanOrEqual(0);
+  expect(box!.y + box!.height).toBeLessThanOrEqual(viewportHeight);
 }

@@ -15,10 +15,9 @@ defineProps<{ logs: readonly ConversationLogEntry[] }>();
         <span
           class="request-list__marker"
           :data-kind="log.category === 'model.response' ? 'success' : 'neutral'"
+          data-slot="request-direction-marker"
           aria-hidden="true"
-        >
-          <i class="bx" :class="log.category === 'model.response' ? 'bx-down-arrow-alt' : 'bx-up-arrow-alt'"></i>
-        </span>
+        ></span>
         <header class="flex min-w-0 flex-wrap items-start justify-between gap-3">
           <div class="min-w-0">
             <div class="flex min-w-0 flex-wrap items-center gap-2">
@@ -39,15 +38,15 @@ defineProps<{ logs: readonly ConversationLogEntry[] }>();
         <RequestLogTokenUsage v-if="log.tokenUsage" :usage="log.tokenUsage" />
 
         <details v-if="log.request !== undefined" class="request-list__details">
-          <summary><i class="bx bx-upload mr-1" aria-hidden="true"></i>请求体</summary>
+          <summary class="request-list__summary min-h-11"><i class="bx bx-upload mr-1" aria-hidden="true"></i>请求体</summary>
           <div class="request-list__payload"><StructuredValue :value="log.request" /></div>
         </details>
         <details v-if="log.response !== undefined" class="request-list__details">
-          <summary><i class="bx bx-download mr-1" aria-hidden="true"></i>响应体</summary>
+          <summary class="request-list__summary min-h-11"><i class="bx bx-download mr-1" aria-hidden="true"></i>响应体</summary>
           <div class="request-list__payload"><StructuredValue :value="log.response" /></div>
         </details>
         <details v-if="log.metadata !== undefined" class="request-list__details">
-          <summary><i class="bx bx-info-circle mr-1" aria-hidden="true"></i>元数据</summary>
+          <summary class="request-list__summary min-h-11"><i class="bx bx-info-circle mr-1" aria-hidden="true"></i>元数据</summary>
           <div class="request-list__payload"><StructuredValue :value="log.metadata" /></div>
         </details>
       </article>
@@ -57,17 +56,11 @@ defineProps<{ logs: readonly ConversationLogEntry[] }>();
 </template>
 
 <style scoped>
-.request-list__timeline { position: relative; padding-left: 40px; border-top: 1px solid rgb(var(--color-line)); }
-.request-list__timeline::before { content: ""; position: absolute; top: 24px; bottom: 24px; left: 11px; width: 1px; background: rgb(var(--color-visible)); }
-.request-list__item { position: relative; padding: 20px 0; border-bottom: 1px solid rgb(var(--color-line)); }
-.request-list__marker { position: absolute; top: 20px; left: 0; z-index: 1; display: grid; width: 24px; height: 24px; place-items: center; transform: translateX(-40px); border: 1px solid currentColor; border-radius: 50%; background: rgb(var(--color-page)); color: rgb(var(--color-mute)); font-size: 17px; }
-.request-list__marker[data-kind="success"] { color: rgb(var(--color-success)); }
+.request-list__timeline { border-top: 1px solid rgb(var(--color-line)); }
+.request-list__item { position: relative; padding: 20px 0 20px 16px; border-bottom: 1px solid rgb(var(--color-line)); }
+.request-list__marker { position: absolute; top: 20px; bottom: 20px; left: 0; width: 2px; background: rgb(var(--color-mute)); }
+.request-list__marker[data-kind="success"] { background: rgb(var(--color-success)); }
 .request-list__details { margin-top: 12px; border-top: 1px solid rgb(var(--color-line)); padding-top: 10px; }
-.request-list__details summary { cursor: pointer; color: rgb(var(--color-mute)); font-family: "Space Mono", monospace; font-size: 10px; }
+.request-list__summary { display: flex; align-items: center; cursor: pointer; color: rgb(var(--color-mute)); font-family: "Space Mono", monospace; font-size: 10px; }
 .request-list__payload { margin-top: 10px; border-left: 2px solid rgb(var(--color-visible)); padding-left: 12px; }
-@media (max-width: 560px) {
-  .request-list__timeline { padding-left: 32px; }
-  .request-list__timeline::before { left: 9px; }
-  .request-list__marker { width: 20px; height: 20px; transform: translateX(-32px); font-size: 15px; }
-}
 </style>

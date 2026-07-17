@@ -1,46 +1,14 @@
 <script setup lang="ts">
 import { computed, shallowRef } from "vue";
 import { useRoute } from "vue-router";
-import { useTheme, type ThemePreference } from "../../composables/useTheme";
+import { useTheme } from "../../composables/useTheme";
 import DialogOverlay from "../ui/DialogOverlay.vue";
 import AgentSwitcher from "../agents/AgentSwitcher.vue";
+import { mobileMoreSections, mobilePrimaryItems, themeItems } from "./navigationCatalog";
 
 const route = useRoute();
 const moreOpen = shallowRef(false);
-const primary: Array<{ to: string; label: string; icon: string }> = [
-  { to: "/overview", label: "状态", icon: "bx-pulse" },
-  { to: "/web-chat", label: "Web Chat", icon: "bx-chat" },
-  { to: "/conversations", label: "会话", icon: "bx-message-square-dots" },
-  { to: "/agent-prompts", label: "提示词", icon: "bx-bot" },
-  { to: "/agent-settings", label: "Agent", icon: "bx-slider-alt" }
-];
-const moreSections: Array<{
-  label: string;
-  items: Array<{ to: string; label: string; description: string; icon: string }>;
-}> = [
-  {
-    label: "Agent",
-    items: [
-      { to: "/memory", label: "记忆", description: "检索与维护记忆", icon: "bx-brain" },
-      { to: "/images", label: "图像", description: "查看图像历史", icon: "bx-image" },
-      { to: "/logs", label: "日志", description: "活动终端与请求日志", icon: "bx-terminal" }
-    ]
-  },
-  {
-    label: "公共系统",
-    items: [
-      { to: "/settings", label: "系统设置", description: "模型、账户与连接", icon: "bx-cog" },
-      { to: "/config-doctor", label: "配置医生", description: "检查并修复配置", icon: "bx-first-aid" },
-      { to: "/system-prompts", label: "系统提示词", description: "所有 Agent 的默认提示词", icon: "bx-file" }
-    ]
-  }
-];
-const themeItems: Array<{ id: ThemePreference; label: string; icon: string }> = [
-  { id: "light", label: "浅色", icon: "bx-sun" },
-  { id: "dark", label: "深色", icon: "bx-moon" },
-  { id: "system", label: "系统", icon: "bx-desktop" }
-];
-const moreActive = computed(() => moreSections.some((section) => (
+const moreActive = computed(() => mobileMoreSections.some((section) => (
   section.items.some((item) => route.path.startsWith(item.to))
 )));
 const theme = useTheme();
@@ -49,14 +17,14 @@ const theme = useTheme();
 <template>
   <nav class="fixed inset-x-0 bottom-0 z-40 grid h-[calc(68px+env(safe-area-inset-bottom))] grid-cols-6 border-t border-visible bg-panel pb-[env(safe-area-inset-bottom)] lg:hidden" aria-label="主导航">
     <RouterLink
-      v-for="item in primary"
+      v-for="item in mobilePrimaryItems"
       :key="item.to"
       :to="item.to"
       class="mobile-nav-link relative flex min-w-0 flex-col items-center justify-center gap-1 font-mono text-[10px] uppercase tracking-[0.04em] text-disabled"
       active-class="is-active !text-display"
     >
       <i class="bx text-2xl" :class="item.icon" aria-hidden="true"></i>
-      <span>{{ item.label }}</span>
+      <span>{{ item.mobileLabel }}</span>
     </RouterLink>
     <button class="mobile-nav-link relative flex min-w-0 flex-col items-center justify-center gap-1 bg-transparent font-mono text-[10px] uppercase tracking-[0.04em]" :class="moreActive || moreOpen ? 'is-active text-display' : 'text-disabled'" type="button" @click="moreOpen = true">
       <i class="bx bx-menu text-2xl" aria-hidden="true"></i>
@@ -73,7 +41,7 @@ const theme = useTheme();
           <i class="bx bx-x text-2xl" aria-hidden="true"></i>
         </button>
       </div>
-      <section v-for="section in moreSections" :key="section.label" class="border-t border-line py-3 first:border-t-0 first:pt-0">
+      <section v-for="section in mobileMoreSections" :key="section.label" class="border-t border-line py-3 first:border-t-0 first:pt-0">
         <h3 class="meta-label px-1 pb-2">{{ section.label }}</h3>
         <div v-if="section.label === 'Agent'" class="mb-2 border-y border-line py-2">
           <AgentSwitcher expanded />

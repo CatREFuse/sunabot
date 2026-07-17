@@ -10,6 +10,9 @@ vi.mock("../../composables/useTheme", () => ({ useTheme: () => theme }));
 vi.mock("../../composables/useRuntimeStatus", () => ({
   useRuntimeStatus: () => ({ status: { value: null } })
 }));
+vi.mock("../agents/AgentSwitcher.vue", () => ({
+  default: { template: '<div data-agent-switcher="true" />' }
+}));
 
 function router() {
   return createRouter({
@@ -21,7 +24,7 @@ function router() {
 describe("navigation theme controls", () => {
   beforeEach(() => { theme.setTheme.mockReset(); });
 
-  it("keeps Web Chat visible in desktop and mobile navigation", async () => {
+  it("keeps shared primary navigation visible on desktop and mobile", async () => {
     const navigation = router();
     await navigation.push("/overview");
     const desktop = mount(DesktopNavigation, { global: { plugins: [navigation] } });
@@ -33,6 +36,18 @@ describe("navigation theme controls", () => {
       "aria-label": "Web Chat"
     });
     expect(mobile.get('a[href="/web-chat"]').text()).toContain("Web Chat");
+  });
+
+  it("exposes Extensions from the shared catalog on desktop and mobile", async () => {
+    const navigation = router();
+    await navigation.push("/overview");
+    const desktop = mount(DesktopNavigation, { global: { plugins: [navigation] } });
+    const mobile = mount(MobileNavigation, { global: { plugins: [navigation] } });
+
+    expect(desktop.get('a[href="/extensions"]').text()).toContain("扩展");
+    const more = mobile.findAll("button").find((button) => button.text().includes("更多"));
+    await more!.trigger("click");
+    expect(mobile.get('a[href="/extensions"]').text()).toContain("Skill 与 MCP");
   });
 
   it("offers light, dark and system themes in the mobile More panel", async () => {
