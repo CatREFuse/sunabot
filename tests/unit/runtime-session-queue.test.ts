@@ -34,7 +34,7 @@ import {
   applicationDataStore,
   closeApplicationDataStores
 } from "../../adapters/sqlite/applicationDataStore.js";
-import type { ConversationRecord } from "../../src/types.js";
+import type { ConversationRecord, ParsedIncomingMessage } from "../../src/types.js";
 import { replyDebounceSessionId } from "../../src/runtime/replyDebounce.js";
 import { conversationRecordId } from "../../src/runtime/messagingAttachmentHelpers.js";
 import { createAdminTestConfig } from "./admin-fixtures.js";
@@ -66,6 +66,30 @@ afterEach(() => {
 });
 
 describe("SunaRuntime Session queue bridge", () => {
+  it("keeps the first inbound conversation closed without an explicit test enablement", async () => {
+    const completeRequestTurn = vi.fn(async (): Promise<ProviderTurnResult> => ({
+      kind: "completed",
+      text: "unused"
+    }));
+    const harness = createRuntimeHarness(
+      completeRequestTurn,
+      undefined,
+      undefined,
+      undefined,
+      0,
+      false
+    );
+
+    await handleOneBotEvent(harness.runtime, privateEvent(19_998, "保持关闭"), harness.gateway);
+    await harness.coordinator.waitForIdle({ timeoutMs: 3_000 });
+
+    expect(completeRequestTurn).not.toHaveBeenCalled();
+    expect(runtimeConversation(harness.runtime, "private:171419991")).toMatchObject({
+      replyEnabled: false,
+      messageCount: 1
+    });
+  });
+
   it("passes the shared normal reply retry limit to the provider request", async () => {
     const completeRequestTurn = vi.fn(async (
       _request: RenderedPromptRequest,
@@ -1077,7 +1101,11 @@ describe("SunaRuntime Session queue bridge", () => {
     await expect(handleOneBotEvent(harness.runtime, event, harness.gateway))
       .rejects.toThrow("simulated sqlite commit failure");
     expect(harness.store.listEvents(sessionId)).toHaveLength(0);
-    expect(runtimeConversation(harness.runtime, sessionId)).toBeUndefined();
+    expect(runtimeConversation(harness.runtime, sessionId)).toMatchObject({
+      replyEnabled: true,
+      messageCount: 0,
+      messages: []
+    });
 
     enqueue.mockRestore();
     await handleOneBotEvent(harness.runtime, event, harness.gateway);
@@ -1722,7 +1750,8 @@ function createRuntimeHarness(
     codex: true,
     workspaceBash: true
   }),
-  replyDebounceMs = 0
+  replyDebounceMs = 0,
+  enableNewConversationReplies = true
 ): RuntimeHarness {
   const resolvedCodexRunner: CodexRunner = codexRunner ?? {
     async run(_input, context) {
@@ -1762,6 +1791,7 @@ function createRuntimeHarness(
       systemPrompt: string;
     };
     conversationRecords: Map<string, ConversationRecord>;
+    ensureConversationRecord(incoming: ParsedIncomingMessage, at: string): ConversationRecord;
     getProvider(): OpenAIProvider;
     prepareIncomingMessage(): Promise<void>;
     patchIncomingMessage(): void;
@@ -1782,6 +1812,15 @@ function createRuntimeHarness(
     systemPrompt: "test system"
   };
   internals.conversationRecords.clear();
+  if (enableNewConversationReplies) {
+    const ensureConversationRecord = internals.ensureConversationRecord.bind(runtime);
+    internals.ensureConversationRecord = (incoming, at) => {
+      const isNewConversation = !internals.conversationRecords.has(conversationRecordId(incoming));
+      const record = ensureConversationRecord(incoming, at);
+      if (isNewConversation) record.replyEnabled = true;
+      return record;
+    };
+  }
   internals.getProvider = () => provider;
   internals.prepareIncomingMessage = async () => undefined;
   internals.patchIncomingMessage = () => undefined;
