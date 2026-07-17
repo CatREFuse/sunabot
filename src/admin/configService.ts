@@ -50,6 +50,13 @@ import {
   validateCatalogEffort
 } from "./configValidation.js";
 import { configRevision } from "./configRevision.js";
+import {
+  CONFIG_SECTIONS,
+  restartRequiredFields,
+  sectionApplyMode,
+  type ApplyMode,
+  type ConfigSection
+} from "./configApplyMode.js";
 import { validateBroadcastStormConfig } from "./broadcastStormConfig.js";
 import { validateNormalReplyConfig } from "./normalReplyConfig.js";
 import { ConfigDoctorApplyService, type DoctorCandidateInput } from "./configDoctorApply.js";
@@ -57,23 +64,8 @@ import { configFieldStates, type ConfigFieldStates } from "./configFieldStates.j
 export type { DoctorCandidateInput } from "./configDoctorApply.js";
 export { configFieldStates } from "./configFieldStates.js";
 export { configRevision, stableJson } from "./configRevision.js";
-export const CONFIG_SECTIONS = [
-  "server",
-  "persona",
-  "providers",
-  "broadcastStorm",
-  "normalReply",
-  "bot",
-  "tone",
-  "memory",
-  "orchestrator",
-  "tools",
-  "bash",
-  "onebot"
-] as const;
-
-export type ConfigSection = (typeof CONFIG_SECTIONS)[number];
-export type ApplyMode = "hot" | "reconnect" | "restart";
+export { CONFIG_SECTIONS } from "./configApplyMode.js";
+export type { ApplyMode, ConfigSection } from "./configApplyMode.js";
 const FIXED_PROVIDER_BASE_URLS: Partial<Record<ProviderConfig["kind"], string>> = {
   "codex-responses": "https://chatgpt.com/backend-api/codex",
   "openai-official": "https://api.openai.com",
@@ -773,33 +765,6 @@ export function mergeConfigSection<S extends ConfigSection>(
     }; break;
   }
   return candidate;
-}
-
-function sectionApplyMode(section: ConfigSection, before: AppConfig, after: AppConfig): ApplyMode {
-  if (section === "server") return "restart";
-  if (
-    section === "tools" &&
-    before.bot.tools.codex.maxConcurrency !== after.bot.tools.codex.maxConcurrency
-  ) return "restart";
-  if (section === "onebot" && before.onebot.reverseWsPath !== after.onebot.reverseWsPath) return "restart";
-  if (section === "onebot" && before.onebot.accessTokenEnv !== after.onebot.accessTokenEnv) return "reconnect";
-  return "hot";
-}
-
-function restartRequiredFields(section: ConfigSection, before: AppConfig, after: AppConfig) {
-  const fields: string[] = [];
-  if (section === "server" && before.server.host !== after.server.host) fields.push("server.host");
-  if (section === "server" && before.server.port !== after.server.port) fields.push("server.port");
-  if (section === "onebot" && before.onebot.reverseWsPath !== after.onebot.reverseWsPath) {
-    fields.push("onebot.reverseWsPath");
-  }
-  if (
-    section === "tools" &&
-    before.bot.tools.codex.maxConcurrency !== after.bot.tools.codex.maxConcurrency
-  ) {
-    fields.push("tools.codex.maxConcurrency");
-  }
-  return fields;
 }
 
 async function writeBackup(backupPath: string) {

@@ -86,6 +86,7 @@ import {
   registerAgentExtensionApi,
   type AgentExtensionApiOptions
 } from "./agentExtensionApi.js";
+import { isSpaRoute } from "./spaRouting.js";
 
 export interface CreateAppOptions {
   config?: AppConfig;
@@ -691,26 +692,6 @@ if (isDirectExecution) {
 
 function requestLogError(error: unknown) {
   console.error("[server] request failed", error);
-}
-
-function isSpaRoute(pathname: string) {
-  return pathname === "/" || [
-    "overview",
-    "conversations",
-    "web-chat",
-    "extensions",
-    "agent-prompts",
-    "system-prompts",
-    "prompts",
-    "memory",
-    "images",
-    "logs",
-    "agents",
-    "agent-settings",
-    "settings",
-    "config-doctor"
-  ]
-    .some((segment) => pathname === `/${segment}` || pathname.startsWith(`/${segment}/`));
 }
 
 export function assertOneBotAccessToken(
