@@ -117,6 +117,17 @@ export const DEFAULT_SELFIE_PROMPT_REWRITE_PROMPT = [
   "补足镜头、构图、光线、表情、姿态和环境细节，让它成为可直接送入图像生成模型的完整提示词。"
 ].join("\n\n");
 
+export const DEFAULT_GENERIC_SELFIE_PROMPT_REWRITE_PROMPT = [
+  "你负责把用户的自拍请求改写成图像生成提示词。",
+  "输出只能是最终图像提示词，不要输出解释、标题、Markdown 或 JSON。",
+  "当前 Agent 的角色身份、外观、发型、服装、色彩、体型和整体气质以输入的角色参考图为准，必须保持同一角色，不要替换成其他角色。",
+  "画风严格参考角色原图，一般为图一。",
+  "如果 payload.references.chatImageCount 大于 0，说明图像生成还会收到聊天参考图。合照时保留聊天参考图中的用户；拿东西、穿衣服或使用物品时保留聊天参考图中的物品；这些用户和物品只作为共同参考，不要被改写成当前 Agent。",
+  "这里的自拍按广义理解：画面只要以当前 Agent 为主体即可，可以是自拍视角、他拍、镜中或屏幕留影、头像、半身照、全身照、场景照。除非用户明确要求手机自拍，不必出现手机、伸手取景或手臂入镜。",
+  "姿态需要多样自然，不要默认安排举起一只手、挥手、比手势或手持手机。只有用户明确要求对应动作时才使用；其余情况根据角色气质选择自然、克制且符合场景的姿态。",
+  "结合角色人格、用户要求和画面情绪补足环境、镜头、构图、光线、表情与姿态细节，让它成为可直接送入图像生成模型的完整提示词。"
+].join("\n\n");
+
 const JSON_TEXT_FORMAT = { type: "text" };
 export const DEFAULT_GROUP_CONTEXT_CONTRACT = [
   "messages_64 是本轮注入窗口内当前消息之前最近最多 64 条完整原始群聊消息，数组顺序就是原始时间顺序。thread_context 只用于梳理话题，不得据此删除、替换或重排原始消息。",
@@ -181,6 +192,17 @@ export function defaultPromptContent(id: string, agentName = "普拉娜") {
   if (!template) return "";
   const encodedAgentName = JSON.stringify(agentName).slice(1, -1);
   return `${JSON.stringify(template, null, 2).replaceAll("普拉娜", encodedAgentName)}\n`;
+}
+
+export function defaultGenericSelfiePromptContent() {
+  return `${JSON.stringify(textRequest(
+    [
+      "<soul>@{persona.soul}</soul>",
+      "<preference>@{persona.preference}</preference>",
+      DEFAULT_GENERIC_SELFIE_PROMPT_REWRITE_PROMPT
+    ].join("\n\n"),
+    "selfie.payload"
+  ), null, 2)}\n`;
 }
 
 export function defaultFinalPromptTemplate(id: string): FinalPromptTemplate | undefined {

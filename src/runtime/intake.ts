@@ -111,8 +111,13 @@ import {
 } from "../../services/agent/promptSystem.js";
 import { buildConversationPromptVariables } from "../../services/agent/persona.js";
 import { DEFAULT_CONTEXT_MESSAGE_LIMIT, MAX_STORED_CONVERSATION_MESSAGES, GROUP_CHAT_SUMMARY_WINDOW_MS, MAX_SELFIE_REFERENCE_IMAGES, MAX_SELFIE_WORKSPACE_REFERENCE_IMAGES, MAX_CURRENT_CONTEXT_IMAGES, MAX_HISTORY_CONTEXT_IMAGES, HYDRATE_MESSAGE_WINDOW_MS, ACTIVE_CONVERSATION_WINDOW_MS, DIRECT_REPLY_TIMEOUT_MS, AMBIENT_ORCHESTRATOR_TIMEOUT_MS, ORCHESTRATOR_MAX_RETRIES, PREPARE_TIMEOUT_MS, RECENT_CONTEXT_TOKEN_BUDGET, DEDUPE_TTL_MS, MAX_DEDUPE_KEYS, DEFAULT_ADMIN_NAME, GROUP_CHAT_SUMMARY_COMMAND, CONVERSATION_REPLY_PROMPT_FILE, SELFIE_PROMPT_FILE, GROUP_CHAT_SUMMARY_PROMPT_FILE, ADMIN_PERSONA_FILES, ADMIN_RUNTIME_PROMPT_DEFAULTS, BatchUserInfo, WorkingMemoryMergeOutput, WorkingMemoryMergeContext, personaFileNameForAdminId, AdminIdentity, ConversationReplyUpdateInput, RuntimeCommandContext, ReplyDeliveryDraft, ReplyDelivery, DeferredCodexTurn, AmbientReplyJob, AmbientReplyState, AmbientIdleTimer, RuntimeConfigSnapshot, RuntimePromptSnapshot, SunaRuntimeOptions } from "./runtimeContracts.js";
-import { attachmentSourcePort, conversationMessageAttachments, conversationRecordId, conversationReplyEnabled, incomingAttachmentReferenceScope, incomingConversationMessageId, isNumericMessageId, isRecentMessageForHydration, mergeAttachments, mergeConversationMessageDetails, persistentIncomingKey, queueIncomingSnapshot, replaceQuoteAttachments, uniqueAttachments, uniqueStrings } from "./messagingAttachmentHelpers.js";
+import { attachmentSourcePort, conversationMessageAttachments, conversationRecordId, incomingAttachmentReferenceScope, incomingConversationMessageId, isNumericMessageId, isRecentMessageForHydration, mergeAttachments, mergeConversationMessageDetails, persistentIncomingKey, queueIncomingSnapshot, replaceQuoteAttachments, uniqueAttachments, uniqueStrings } from "./messagingAttachmentHelpers.js";
 import { conversationLastText } from "./selfieHelpers.js";
+import {
+  conversationRecordSnapshot,
+  handleInboundConversationGate,
+  restoreConversationRecord
+} from "./inboundConversationGate.js";
 import { errorMessage, isAbortError, isRuntimeIncomingMessage, withAbortTimeout } from "./infrastructure.js";
 import {
   createSystemConfigHeldConfirmationPort,
@@ -254,30 +259,9 @@ export async function runtime_handleInboundMessage(this: RuntimeHost, incoming: 
       incoming.selfId == null ? "" : String(incoming.selfId)
     ]));
     const route = this.resolveIncomingReplyRoute(incoming, Boolean(command));
-    const existingRecord = this.conversationRecords.get(channelKey);
-    if (await this.handlePersistedReplyDuplicate(
-      incoming, gateway, existingRecord, durableMessageId
+    if (await handleInboundConversationGate(
+      this, incoming, gateway, activeDebounceConversation, durableMessageId
     )) return;
-    if (existingRecord && !conversationReplyEnabled(existingRecord)) {
-      const rollback = activeDebounceConversation
-        ? conversationRecordSnapshot(activeDebounceConversation)
-        : undefined;
-      let record: ConversationRecord;
-      try {
-        record = this.recordIncomingMessage(incoming, {
-          persist: !activeDebounceConversation
-        });
-        if (activeDebounceConversation) this.persistConversationRecordStrict(record);
-      } catch (error) {
-        if (rollback && activeDebounceConversation) {
-          restoreConversationRecord(activeDebounceConversation, rollback);
-        }
-        throw error;
-      }
-      this.markIncomingSeen(incoming);
-      this.markConversationMessagesAsRecordedOnly(record);
-      return;
-    }
 
     if (this.handleActiveReplyDebounceIncoming(incoming, gateway)) return;
 
@@ -773,18 +757,6 @@ export async function runtime_prepareIncomingMessage(this: RuntimeHost, incoming
       incoming.quoteReferences = replaceQuoteAttachments(incoming.quoteReferences, incoming.attachments);
     }, PREPARE_TIMEOUT_MS);
   }
-
-function conversationRecordSnapshot(record: ConversationRecord): ConversationRecord {
-  return { ...record, messages: [...record.messages] };
-}
-
-function restoreConversationRecord(record: ConversationRecord, snapshot: ConversationRecord) {
-  const mutable = record as unknown as Record<string, unknown>;
-  for (const key of Object.keys(record)) {
-    if (!Object.hasOwn(snapshot, key)) delete mutable[key];
-  }
-  Object.assign(record, snapshot);
-}
 
 export class RuntimeIntake {
   constructor(private readonly host: RuntimeHost) {}

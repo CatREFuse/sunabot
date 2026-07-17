@@ -384,13 +384,15 @@ describe("AgentRegistry", () => {
       "arona",
       "DIALOGUE_STYLE_EXAMPLES.md"
     ), "utf8")).resolves.toContain("必须严格遵从以下示例");
-    await expect(fs.readFile(path.join(
+    const aronaSelfiePrompt = await fs.readFile(path.join(
       testPaths.workspace,
       "business",
       "agents",
       "arona",
       "selfie_prompt_rewrite.json"
-    ), "utf8")).resolves.toContain("阿罗娜");
+    ), "utf8");
+    expect(aronaSelfiePrompt).toContain("当前 Agent");
+    expect(aronaSelfiePrompt).not.toContain("普拉娜");
     await expect(fs.access(path.join(
       testPaths.workspace,
       "business",

@@ -37,7 +37,7 @@
 
 ### 6.2 图像生成
 
-图像生成支持尺寸、1K/2K/4K 分辨率、质量、参考图压缩、重试和 OneBot 外发。`generate_img` 与 `selfie` 的全部生图参数及聊天参考图使用意图由模型填写；历史消息中的图片以 `message:<message-id>:image:<index>` 媒体句柄提供给模型，精确句柄优先于显式 URL 和来源回退。来源回退包含 `none`、`current`、`previous_output`、`history`、`current_and_history`；群聊中的自动历史只选择当前用户的媒体，精确句柄只能解析当前会话和当前捕获序列内的媒体。异步图片任务持久化 dispatch 时的媒体映射快照，旧任务没有快照时按原捕获序列重建。历史生成图的 `/generated-images/` 路径只允许生成图片根目录下的受控 PNG 文件，并在进入模型前转为规范化 Data URL。自拍始终使用当前 Agent 的角色参考图与 `selfie_prompt_rewrite.json`；运行时从当前 Agent workspace 的 `selfie/` 目录读取最多 3 张参考图，并为模型选定的聊天参考图保留第 4 个参考位。管理台可在图像页上传、预览和删除这 3 张图片，列表只读取展示图和低清占位图，打开预览时才读取原图。生成文件保存在忽略的运行目录，图片历史元数据保存在主 SQLite 数据库。
+图像生成支持尺寸、1K/2K/4K 分辨率、质量、参考图压缩、重试和 OneBot 外发。`generate_img` 与 `selfie` 的全部生图参数及聊天参考图使用意图由模型填写；历史消息中的图片以 `message:<message-id>:image:<index>` 媒体句柄提供给模型，精确句柄优先于显式 URL 和来源回退。来源回退包含 `none`、`current`、`previous_output`、`history`、`current_and_history`；群聊中的自动历史只选择当前用户的媒体，精确句柄只能解析当前会话和当前捕获序列内的媒体。异步图片任务持久化 dispatch 时的媒体映射快照，旧任务没有快照时按原捕获序列重建。历史生成图的 `/generated-images/` 路径只允许生成图片根目录下的受控 PNG 文件，并在进入模型前转为规范化 Data URL。自拍始终使用当前 Agent 的角色参考图与 `selfie_prompt_rewrite.json`；默认 Plana Agent 使用普拉娜专用改写模板，新建的其他 Agent 使用只依赖当前人格与角色参考图的通用模板。运行时从当前 Agent workspace 的 `selfie/` 目录读取最多 3 张参考图，并为模型选定的聊天参考图保留第 4 个参考位。管理台可在图像页上传、预览和删除这 3 张图片，列表只读取展示图和低清占位图，打开预览时才读取原图。生成文件保存在忽略的运行目录，图片历史元数据保存在主 SQLite 数据库。
 
 出站媒体必须先通过生成图片根目录、直接子文件、PNG 文件名、常规文件和大小校验，再读取为 OneBot `base64://` 内联数据。Native Core 与 Docker Core 使用同一传输方式，NapCat 不读取 Core workspace，不接受共享绝对路径。超过 OneBot 内联预算的文件必须使用独立、鉴权、限流、可过期的传输协议；不能用容器路径或宿主路径作为降级。
 

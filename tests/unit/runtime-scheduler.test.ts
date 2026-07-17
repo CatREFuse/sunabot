@@ -122,6 +122,31 @@ describe("runtime reply scheduling helpers", () => {
     expect(enqueueEvent).not.toHaveBeenCalled();
   });
 
+  it("creates the first inbound conversation with replies disabled", async () => {
+    const runtime = new SunaRuntime(createAdminTestConfig("/tmp/sunabot-runtime-router-test"), {
+      attachmentService: {} as never
+    });
+    const enqueueEvent = vi.fn();
+    const internals = runtime as unknown as {
+      conversationRecords: Map<string, {
+        replyEnabled?: boolean;
+        messageCount: number;
+      }>;
+      persistConversationRecords(): void;
+      sessionCoordinator: { enqueueEvent: typeof enqueueEvent };
+    };
+    internals.persistConversationRecords = vi.fn();
+    internals.sessionCoordinator.enqueueEvent = enqueueEvent;
+
+    await runtime.handleInboundMessage(groupIncoming("普拉娜，看看这个", 171419991), {} as never);
+
+    expect(internals.conversationRecords.get("group:3003")).toMatchObject({
+      replyEnabled: false,
+      messageCount: 1
+    });
+    expect(enqueueEvent).not.toHaveBeenCalled();
+  });
+
   it("keeps ambient replies disabled for a user group with its orchestrator turned off", () => {
     const config = createAdminTestConfig("/tmp/sunabot-runtime-router-test");
     config.bot.orchestrator.enabled = true;

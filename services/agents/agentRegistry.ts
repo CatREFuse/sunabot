@@ -23,6 +23,12 @@ import type {
   AgentRegistryRow
 } from "./agentRegistryRepository.js";
 import { mergeManifestBotConfig } from "./agentConfigProjection.js";
+import {
+  ensureAccountRuntimeDirectories,
+  inferPrimaryAccountQqId,
+  initialAgentWorkspaceFiles,
+  migrateLegacyPrimaryAccountRuntime
+} from "./agentWorkspaceBootstrap.js";
 
 const MANIFEST_FILE = "agent.json";
 const AGENT_ID_PATTERN = /^[a-z][a-z0-9-]{1,31}$/;
@@ -510,7 +516,7 @@ export class AgentRegistry {
   }
 
   private async ensureInitialAgentFiles(directory: string, manifest: AgentManifest) {
-    await Promise.all(initialAgentWorkspaceFiles(this.sharedConfig, manifest.name).map(([fileName, content]) => (
+    await Promise.all(initialAgentWorkspaceFiles(this.sharedConfig, manifest).map(([fileName, content]) => (
       writeIfMissing(path.join(directory, fileName), content)
     )));
   }
@@ -739,76 +745,6 @@ function avatarExtension(bytes: Buffer, fileName: string) {
   if (bytes.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff]))) return "jpg";
   if (bytes.subarray(0, 4).toString("ascii") === "RIFF" && bytes.subarray(8, 12).toString("ascii") === "WEBP") return "webp";
   badRequest("AGENT_AVATAR_INVALID", `不支持的头像格式：${path.extname(fileName) || "未知"}。`, "avatar");
-}
-
-function initialPersonaFiles(name: string) {
-  return {
-    "AGENTS.md": `你是${name}。回复必须是可以直接发送给用户的成品内容。\n`,
-    "SOUL.md": `${name}会保持稳定的人格、语气和身份。\n`,
-    "PREFERENCE.md": `${name}遵守当前 Agent 的偏好和边界。\n`,
-    "DIALOGUE_STYLE_EXAMPLES.md": [
-      "# 对话风格示例",
-      "",
-      "生成回复时必须严格遵从以下示例的语气、句式、节奏、用词和情绪强度。",
-      "",
-      "用户：你好。",
-      `${name}：你好，请告诉我需要处理什么。`,
-      ""
-    ].join("\n"),
-    "USER.md": `${name}根据当前对话和用户画像称呼用户。\n`,
-    "RELATION.md": `${name}只使用工作区中明确记录的关系。\n`
-  };
-}
-
-function initialAgentWorkspaceFiles(config: AppConfig, name: string): Array<readonly [string, string]> {
-  const fragments = Object.entries(initialPersonaFiles(name));
-  const finalPrompts = PROMPT_FILE_DEFINITIONS.filter((definition) => (
-    definition.scope === "persona" && definition.kind === "final"
-  )).map((definition) => [
-    definition.fileName(config),
-    defaultPromptContent(definition.id, name)
-  ] as const);
-  return [...fragments, ...finalPrompts];
-}
-
-async function ensureAccountRuntimeDirectories(accountId: string) {
-  const root = getWorkspacePath(WORKSPACE_LAYOUT.napcatAccounts, accountId);
-  await Promise.all(["config-full", "qq", "plugins"].map((segment) => (
-    fs.mkdir(path.join(root, segment), { recursive: true, mode: 0o700 })
-  )));
-}
-
-async function migrateLegacyPrimaryAccountRuntime() {
-  const target = getWorkspacePath(WORKSPACE_LAYOUT.napcatAccounts, "primary");
-  await fs.mkdir(target, { recursive: true, mode: 0o700 });
-  const mappings: Array<readonly [string, string]> = [
-    [getWorkspacePath(WORKSPACE_LAYOUT.legacyNapcatConfig), path.join(target, "config-full")],
-    [getWorkspacePath(WORKSPACE_LAYOUT.legacyNapcatQqState), path.join(target, "qq")],
-    [getWorkspacePath(WORKSPACE_LAYOUT.legacyNapcatPlugins), path.join(target, "plugins")],
-    [getWorkspacePath(WORKSPACE_LAYOUT.legacyNapcatQrCode), path.join(target, "qrcode.png")],
-    [getWorkspacePath(WORKSPACE_LAYOUT.legacyNapcatManualLogin), path.join(target, "manual-login-required")]
-  ];
-  for (const [source, destination] of mappings) {
-    try {
-      await fs.cp(source, destination, { recursive: true, errorOnExist: false, force: false });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    }
-  }
-}
-
-async function inferPrimaryAccountQqId() {
-  const configDirectory = getWorkspacePath(WORKSPACE_LAYOUT.napcatAccounts, "primary", "config-full");
-  try {
-    const candidates = new Set((await fs.readdir(configDirectory)).flatMap((fileName) => {
-      const match = /^(?:onebot11|napcat)_(\d{5,20})\.json$/.exec(fileName);
-      return match?.[1] ? [match[1]] : [];
-    }));
-    return candidates.size === 1 ? [...candidates][0] : undefined;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-    throw error;
-  }
 }
 
 async function atomicWriteJson(filePath: string, value: unknown) {
