@@ -390,6 +390,15 @@ export function runtime_cancelAmbientReply(this: RuntimeHost, channelKey: string
     state.next = undefined;
     state.controller?.abort(new Error("ambient reply cancelled"));
   }
+function injectImageTokens(text: string, imageCount: number) {
+    const existingTokenCount = text.match(/\[图片\]/g)?.length ?? 0;
+    const missingTokenCount = Math.max(0, Math.floor(imageCount) - existingTokenCount);
+    if (!missingTokenCount) return text;
+    return [
+      text.trim(),
+      Array.from({ length: missingTokenCount }, () => "[图片]").join(" ")
+    ].filter(Boolean).join(" ");
+  }
 export async function runtime_runUserGroupchatOrchestrator(this: RuntimeHost,
     incoming: ParsedIncomingMessage,
     options: { signal?: AbortSignal; captureSequence?: number } = {}
@@ -436,12 +445,15 @@ export async function runtime_runUserGroupchatOrchestrator(this: RuntimeHost,
             .slice(-this.contextMessageLimit())
             .map((message) => {
               const admin = this.adminIdentity();
-              return toContextChatMessage(message, isAdminUserId(message.userId, admin), admin).content;
+              return toContextChatMessage({
+                ...message,
+                text: injectImageTokens(message.text, message.imageUrls?.length ?? 0)
+              }, isAdminUserId(message.userId, admin), admin).content;
             })
         },
         currentMessage: {
           userId: incoming.userId,
-          text: incoming.text,
+          text: injectImageTokens(incoming.text, inboundImageUrls(incoming).length),
           imageCount: inboundImageUrls(incoming).length,
           attachmentCount: incoming.attachments.length,
           attachmentNames: incoming.attachments.map((attachment) => attachment.name),

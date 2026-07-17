@@ -564,6 +564,102 @@ describe("runtime reply scheduling helpers", () => {
     expect(record.orchestratorCheckedMessageCount).toBe(1);
   });
 
+  it("injects one image token per image into the user-group orchestrator payload", async () => {
+    const config = createAdminTestConfig("/tmp/sunabot-runtime-router-test");
+    config.bot.orchestrator.enabled = true;
+    const runtime = new SunaRuntime(config, { attachmentService: {} as never });
+    const complete = vi.fn(async (
+      _systemPrompt: string,
+      _messages: Array<{ role: string; content: string }>
+    ) => '{"should_reply":false,"reason":"无需回复。"}');
+    const record = {
+      id: "group:3003",
+      scope: "user_group" as const,
+      title: "群聊",
+      userId: 2002,
+      groupId: 3003,
+      selfId: 4004,
+      messageCount: 3,
+      lastAt: "2026-07-10T00:01:00.000Z",
+      lastText: "这两张有什么区别",
+      messages: [
+        {
+          id: "999",
+          role: "user" as const,
+          text: "[图片]",
+          at: "2026-07-09T23:59:00.000Z",
+          sequence: 1,
+          userId: 2002,
+          groupId: 3003,
+          imageUrls: ["https://example.test/image-only.png"]
+        },
+        {
+          id: "1000",
+          role: "user" as const,
+          text: "先看这张",
+          at: "2026-07-10T00:00:00.000Z",
+          sequence: 2,
+          userId: 2002,
+          groupId: 3003,
+          imageUrls: ["https://example.test/first.png"]
+        },
+        {
+          id: "1001",
+          role: "user" as const,
+          text: "这两张有什么区别",
+          at: "2026-07-10T00:01:00.000Z",
+          sequence: 3,
+          userId: 2002,
+          groupId: 3003,
+          imageUrls: [
+            "https://example.test/second.png",
+            "https://example.test/third.png"
+          ]
+        }
+      ],
+      replyEnabled: true,
+      orchestratorEnabled: true,
+      orchestratorCheckedMessageCount: 0
+    };
+    const internals = runtime as unknown as {
+      conversationRecords: Map<string, typeof record>;
+      getProviderForModel(): { complete: typeof complete };
+      persistConversationRecords(): void;
+      runUserGroupchatOrchestrator(
+        incoming: ParsedIncomingMessage,
+        options: { captureSequence: number }
+      ): Promise<boolean>;
+    };
+    const incoming = groupIncoming("这两张有什么区别");
+    incoming.media = [
+      { schemaVersion: 1, kind: "image", source: "remote_url", url: "https://example.test/second.png" },
+      { schemaVersion: 1, kind: "image", source: "remote_url", url: "https://example.test/third.png" }
+    ];
+    internals.conversationRecords.set(record.id, record);
+    internals.getProviderForModel = () => ({ complete });
+    internals.persistConversationRecords = vi.fn();
+
+    await expect(internals.runUserGroupchatOrchestrator(incoming, {
+      captureSequence: 3
+    })).resolves.toBe(false);
+
+    const requestMessages = complete.mock.calls[0]?.[1] ?? [];
+    const userMessage = [...requestMessages].reverse().find((message) => message.role === "user");
+    const payload = JSON.parse(userMessage?.content ?? "{}") as {
+      conversation?: { recentMessages?: string[] };
+      currentMessage?: { text?: string };
+    };
+    const recentMessages = payload.conversation?.recentMessages ?? [];
+    expect(recentMessages).toEqual([
+      expect.stringContaining("\n[图片] 图片：1 张"),
+      expect.stringContaining("先看这张 [图片]"),
+      expect.stringContaining("这两张有什么区别 [图片] [图片]")
+    ]);
+    expect(recentMessages.map((message) => message.match(/\[图片\]/g)?.length ?? 0)).toEqual([1, 1, 2]);
+    expect(payload.currentMessage?.text).toBe("这两张有什么区别 [图片] [图片]");
+    expect(JSON.stringify(payload)).not.toContain("example.test");
+  });
+
   it("records a failed orchestrator result and action log before consuming the batch", async () => {
     const config = createAdminTestConfig("/tmp/sunabot-runtime-router-test");
     config.bot.orchestrator.enabled = true;

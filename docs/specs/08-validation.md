@@ -14,7 +14,7 @@
 npm run verify
 ```
 
-`verify` 依次执行 runtime contract、architecture、SQLite recovery、类型检查、单元与集成测试、独立 runtime smoke、CI 容量基线、生产构建和 E2E。消息专项回归必须证明 `assistant_text` 写入 durable outbox 后即可继续 inline 工具，远端发送仍在进行或重试时不能阻塞工具；事件重试不能重复发送已提交的中间消息。deferred `dispatch_message` 与任务必须原子持久化，worker 在 acknowledgement 仍待发送时即可 claim，callback 随后按同一会话 FIFO 投递。
+`verify` 依次执行 runtime contract、architecture、SQLite recovery、类型检查、单元与集成测试、独立 runtime smoke、CI 容量基线、生产构建和 E2E。消息专项回归必须证明 `assistant_text` 写入 durable outbox 后即可继续 inline 工具，远端发送仍在进行或重试时不能阻塞工具；事件重试不能重复发送已提交的中间消息。deferred `dispatch_message` 与任务必须原子持久化，worker 在 acknowledgement 仍待发送时即可 claim，callback 随后按同一会话 FIFO 投递。用户群聊编排器回归必须覆盖纯图片和图文混合消息，证明历史消息与当前消息按真实图片数注入 `[图片]` token，已有 token 不重复补齐，并且不把图片 URL、Data URL 或本地路径放入编排 payload。
 
 独立 runtime smoke 必须保持默认 `127.0.0.1` fake NapCat 行为，并覆盖 Docker 测试 NapCat 显式使用精确 `host.docker.internal` 与 canonical RFC1918 dotted-decimal QA 地址。`SUNABOT_SMOKE_ONEBOT_ADVERTISED_HOST` 只能提供受控 host；协议、端口、路径、用户信息、查询、片段、公共 IP、除精确 `host.docker.internal` 外的 DNS（含 `.internal` 与 punycode）、IPv6、Unicode、大小写变体、尾点、percent 编码、变量展开、短/八进制/十六进制 IPv4、空白和控制字符均在写入 NapCat 配置前失败关闭；Token 不能进入 advertised URL 或错误输出。QA DNS 如后续需要，必须先增加独立的显式精确 allowlist 合同。端口只能来自 `SUNABOT_SMOKE_ONEBOT_PORT`，输入必须是 1024—65535 的 canonical 十进制文本，拒绝空白、正号、前导零、十六进制、指数与浮点写法，并拒绝固定的管理端口 8787、生产 OneBot 端口 8788 和 NapCat WebUI 端口 6099；真实 smoke server 仍只监听宿主回环，测试不得启动、停止或改写生产 Core、NapCat、workspace 或 SQLite。
 
