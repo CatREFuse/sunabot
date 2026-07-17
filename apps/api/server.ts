@@ -507,6 +507,17 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
         await Promise.all(agent.accounts.map((account) => accountRuntimeReconciler.reconcile(account.id)));
       }
     },
+    onAgentRemovalPrepared: async (agent) => {
+      await agentRuntimeManager.stop(agent.id);
+      if (!agent.accounts.length) return;
+      if (!accountRuntimeReconciler) {
+        throw new ServiceError(503, "ACCOUNT_RUNTIME_UNAVAILABLE", "QQ 运行时服务不可用。请执行 ./sunabot.sh restart。");
+      }
+      const states = await Promise.all(agent.accounts.map((account) => accountRuntimeReconciler.reconcile(account.id)));
+      if (states.some((state) => state.reconcileRequired)) {
+        throw new ServiceError(409, "AGENT_DELETE_RECONCILIATION_REQUIRED", "QQ 运行容器尚未停止，请处理后重试删除。");
+      }
+    },
     onPromptSettingsUpdated: async (agentId) => {
       await agentRuntimeManager.require(agentId).reload(await agentRegistry.config(agentId));
     },

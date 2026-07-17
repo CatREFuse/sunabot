@@ -63,6 +63,14 @@ export function useAgents() {
     await load({ force: true });
   }
 
+  async function remove(agentId: string, confirmation: string) {
+    await apiRequest(`/api/agents/${encodeURIComponent(agentId)}`, {
+      method: "DELETE",
+      body: JSON.stringify({ confirmation })
+    });
+    await load({ force: true });
+  }
+
   async function updateAvatar(agentId: string, avatar: AgentAvatarInput) {
     const updated = await apiRequest<AgentSummary>(`/api/agents/${encodeURIComponent(agentId)}/avatar`, {
       method: "PUT",
@@ -109,6 +117,7 @@ export function useAgents() {
     select,
     create,
     update,
+    remove,
     updateAvatar,
     createAccount,
     startAccountRuntime,

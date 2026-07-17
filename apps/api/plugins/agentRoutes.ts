@@ -12,6 +12,7 @@ export interface AgentRouteOptions {
   decorateAgents?: (agents: AgentSummary[]) => unknown;
   onAgentCreated?: (agentId: string) => Promise<void>;
   onAgentUpdated?: (agentId: string, enabled: boolean) => Promise<void>;
+  onAgentRemovalPrepared?: (agent: AgentSummary) => Promise<void>;
   onPromptSettingsUpdated?: (agentId: string) => Promise<void>;
   isAccountConnected?: (accountId: string) => boolean;
   reconcileAccount?: (accountId: string) => Promise<AccountRuntimeState>;
@@ -56,6 +57,22 @@ export function registerAgentRoutes(app: FastifyInstance, registry: AgentRegistr
     });
     await options.onAgentUpdated?.(agentId, updated.enabled);
     return updated;
+  });
+
+  app.delete("/api/agents/:agentId", { schema: { response: { 200: openObject } } }, async (request) => {
+    const { agentId } = request.params as { agentId: string };
+    const body = object(request.body);
+    if (text(body.confirmation, "confirmation") !== "确认删除") {
+      badRequest("AGENT_DELETE_CONFIRMATION_REQUIRED", "请输入“确认删除”以删除 Bot。", "confirmation");
+    }
+    const agent = await registry.get(agentId);
+    if (agent.accounts.some((account) => options.isAccountConnected?.(account.id))) {
+      throw new AdminApiError(409, "AGENT_ACCOUNT_CONNECTED", "请先退出全部 QQ 再删除 Bot。");
+    }
+    const prepared = await registry.prepareRemoval(agentId);
+    await options.onAgentRemovalPrepared?.(prepared);
+    await registry.removePreparedAgent(agentId);
+    return { ok: true };
   });
 
   app.get("/api/agents/:agentId/avatar", async (request, reply) => {

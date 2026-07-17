@@ -4,6 +4,7 @@ import { useRouter } from "vue-router";
 import AgentAccountList from "../components/agents/AgentAccountList.vue";
 import AgentDirectory from "../components/agents/AgentDirectory.vue";
 import CreateAgentDialog from "../components/agents/CreateAgentDialog.vue";
+import DeleteAgentDialog from "../components/agents/DeleteAgentDialog.vue";
 import IdentityAvatar from "../components/ui/IdentityAvatar.vue";
 import PageHeader from "../components/ui/PageHeader.vue";
 import { useAgents } from "../composables/useAgents";
@@ -12,6 +13,7 @@ import { agentAvatarUrl } from "../utils/agentIdentity";
 const state = useAgents();
 const router = useRouter();
 const createOpen = shallowRef(false);
+const deleteOpen = shallowRef(false);
 const busy = shallowRef(false);
 const accountAction = shallowRef<{ kind: "create" } | { kind: "remove"; accountId: string }>();
 const error = shallowRef("");
@@ -47,6 +49,21 @@ async function toggleEnabled() {
   busy.value = true;
   try {
     await state.update(selected.value.id, { enabled: !selected.value.enabled });
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function removeAgent(confirmation: string) {
+  if (!selected.value) return;
+  busy.value = true;
+  error.value = "";
+  try {
+    await state.remove(selected.value.id, confirmation);
+    deleteOpen.value = false;
+    selectedId.value = state.currentAgent.value?.id ?? "";
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : "Bot 删除失败";
   } finally {
     busy.value = false;
   }
@@ -106,7 +123,10 @@ async function removeAccount(accountId: string) {
               <h2 class="truncate text-3xl font-medium tracking-[-0.02em] text-display">{{ selected.name }}</h2>
               <p class="mt-2 font-mono text-xs text-mute">{{ selected.id }} · {{ selected.workspace }}</p>
             </div>
-            <button class="btn min-h-10 px-4" type="button" :disabled="busy" @click="toggleEnabled">{{ selected.enabled ? "停用" : "启用" }}</button>
+            <div class="flex flex-wrap gap-3">
+              <button class="btn min-h-10 px-4" type="button" :disabled="busy" @click="toggleEnabled">{{ selected.enabled ? "停用" : "启用" }}</button>
+              <button v-if="selected.id !== 'plana'" class="btn btn-danger min-h-10 px-4" type="button" :disabled="busy" @click="deleteOpen = true">删除 Bot</button>
+            </div>
           </div>
 
           <dl class="grid border-b border-line sm:grid-cols-3">
@@ -141,4 +161,5 @@ async function removeAccount(accountId: string) {
   </div>
 
   <CreateAgentDialog :open="createOpen" :busy="busy" :error="error" @close="createOpen = false" @submit="create" />
+  <DeleteAgentDialog :open="deleteOpen" :agent="selected" :busy="busy" :error="error" @close="deleteOpen = false" @confirm="removeAgent" />
 </template>

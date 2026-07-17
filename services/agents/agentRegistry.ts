@@ -306,6 +306,56 @@ export class AgentRegistry {
     );
   }
 
+  async prepareRemoval(agentId: string): Promise<AgentSummary> {
+    const agent = await this.get(agentId);
+    if (agent.id === this.sharedConfig.persona.defaultAgentId) {
+      conflict("PRIMARY_AGENT_REQUIRED", "主 Bot 不能删除。");
+    }
+    for (const account of agent.accounts) {
+      this.store.updateAgentAccount({
+        ...account,
+        enabled: false,
+        updatedAt: this.now().toISOString()
+      });
+      await fs.writeFile(
+        path.join(getWorkspacePath(WORKSPACE_LAYOUT.napcatAccounts, account.id), ".remove-on-stop"),
+        `${this.now().toISOString()}\n`,
+        { encoding: "utf8", mode: 0o600 }
+      );
+    }
+    return agent;
+  }
+
+  async removePreparedAgent(agentId: string) {
+    const agent = await this.get(agentId);
+    if (agent.id === this.sharedConfig.persona.defaultAgentId) {
+      conflict("PRIMARY_AGENT_REQUIRED", "主 Bot 不能删除。");
+    }
+    if (agent.accounts.some((account) => account.enabled)) {
+      conflict("AGENT_DELETE_NOT_PREPARED", "Bot 尚未停止。请重试删除。");
+    }
+
+    const directory = this.agentDirectory(agent.id);
+    const removalDirectory = path.join(this.workspaceRoot, `.remove-${agent.id}-${nanoid(12)}`);
+    await fs.rename(directory, removalDirectory);
+    try {
+      for (const account of agent.accounts) this.store.deleteAgentAccount(account.id);
+      if (!this.store.deleteAgent(agent.id)) notFound("AGENT_NOT_FOUND", "Agent 不存在。");
+    } catch (error) {
+      try {
+        if (!this.store.readAgent(agent.id)) this.store.createAgent(agent);
+        for (const account of agent.accounts) {
+          if (!this.store.readAgentAccount(account.id)) this.store.createAgentAccount(account);
+        }
+        await fs.rename(removalDirectory, directory);
+      } catch {
+        throw new ServiceError(500, "AGENT_DELETE_RECOVERY_REQUIRED", "Bot 删除未完成，需要恢复工作区。");
+      }
+      throw error;
+    }
+    await fs.rm(removalDirectory, { recursive: true, force: true });
+  }
+
   async config(agentId: string, sharedConfig = this.sharedConfig): Promise<AppConfig> {
     const manifest = await this.manifest(agentId);
     return configFromManifest(sharedConfig, manifest);

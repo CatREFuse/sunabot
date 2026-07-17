@@ -95,6 +95,21 @@ test("新建和移除 QQ Docker 会显示进行中状态", async ({ page }) => {
   await expect(page.getByText("阿罗娜主账号", { exact: true })).toHaveCount(0);
 });
 
+test("删除 Bot 需要输入确认删除", async ({ page }) => {
+  const state = await installMockApi(page);
+  await page.goto("/agents");
+  await page.getByRole("button", { name: "选择 阿罗娜" }).click();
+  await page.getByRole("button", { name: "删除 Bot", exact: true }).click();
+
+  const dialog = page.getByRole("dialog", { name: "删除 Bot" });
+  await expect(dialog.getByRole("button", { name: "删除 Bot", exact: true })).toBeDisabled();
+  await dialog.getByLabel("输入「确认删除」以继续").fill("确认删除");
+  await dialog.getByRole("button", { name: "删除 Bot", exact: true }).click();
+
+  await expect(page.getByRole("heading", { name: "普拉娜", exact: true })).toBeVisible();
+  expect(state.agents.some((agent) => agent.id === "arona")).toBe(false);
+});
+
 test("Agent 身份页可设置 WebUI 头像并立即刷新", async ({ page }) => {
   const state = await installMockApi(page);
   await page.goto("/agent-settings/persona");

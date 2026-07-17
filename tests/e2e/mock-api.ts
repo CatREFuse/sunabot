@@ -839,6 +839,15 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
       const id = decodeURIComponent(agentMatch[1]);
       const agent = state.agents.find((item) => item.id === id);
       if (!agent) return json(route, { error: { code: "AGENT_NOT_FOUND", message: "Agent 不存在。" } }, 404);
+      if (method === "DELETE") {
+        const body = request.postDataJSON() as { confirmation?: string };
+        if (body.confirmation !== "确认删除") {
+          return json(route, { error: { code: "AGENT_DELETE_CONFIRMATION_REQUIRED", message: "请输入“确认删除”以删除 Bot。" } }, 400);
+        }
+        if (id === "plana") return json(route, { error: { code: "PRIMARY_AGENT_REQUIRED", message: "主 Bot 不能删除。" } }, 409);
+        state.agents = state.agents.filter((item) => item.id !== id);
+        return json(route, { ok: true });
+      }
       if (method === "PATCH") {
         const body = request.postDataJSON() as { name?: string; enabled?: boolean };
         Object.assign(agent, body, { updatedAt: "2026-07-13T08:01:00.000Z" });
