@@ -13,6 +13,7 @@ const state = useAgents();
 const router = useRouter();
 const createOpen = shallowRef(false);
 const busy = shallowRef(false);
+const accountAction = shallowRef<{ kind: "create" } | { kind: "remove"; accountId: string }>();
 const error = shallowRef("");
 const selectedId = shallowRef("");
 const selected = computed(() => state.agents.value.find((agent) => agent.id === selectedId.value) ?? state.currentAgent.value);
@@ -54,9 +55,11 @@ async function toggleEnabled() {
 async function createAccount(label: string) {
   if (!selected.value) return;
   busy.value = true;
+  accountAction.value = { kind: "create" };
   try {
     await state.createAccount(selected.value.id, label);
   } finally {
+    accountAction.value = undefined;
     busy.value = false;
   }
 }
@@ -77,9 +80,11 @@ async function runAccount(accountId: string) {
 async function removeAccount(accountId: string) {
   if (!selected.value) return;
   busy.value = true;
+  accountAction.value = { kind: "remove", accountId };
   try {
     await state.removeAccount(selected.value.id, accountId);
   } finally {
+    accountAction.value = undefined;
     busy.value = false;
   }
 }
@@ -119,7 +124,7 @@ async function removeAccount(accountId: string) {
             </div>
           </dl>
 
-          <AgentAccountList :agent-id="selected.id" :accounts="selected.accounts" :busy="busy" @create="createAccount" @run="runAccount" @remove="removeAccount" @refresh="state.load({ force: true })" />
+          <AgentAccountList :agent-id="selected.id" :accounts="selected.accounts" :busy="busy" :pending-action="accountAction" @create="createAccount" @run="runAccount" @remove="removeAccount" @refresh="state.load({ force: true })" />
 
           <section class="mt-10 border-t border-line pt-6">
             <span class="meta-label">工作区</span>

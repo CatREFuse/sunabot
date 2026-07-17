@@ -1,12 +1,17 @@
 <script setup lang="ts">
-import { computed, reactive, shallowRef } from "vue";
+import { computed, reactive, shallowRef, watch } from "vue";
 import type { AgentAccount } from "../../types";
 import DialogOverlay from "../ui/DialogOverlay.vue";
 import OneBotLoginDialog from "../overview/OneBotLoginDialog.vue";
 import { useQqLogin } from "../../composables/useQqLogin";
 import { apiRequest } from "../../composables/useAdminApi";
 
-const props = defineProps<{ agentId: string; accounts: readonly AgentAccount[]; busy?: boolean }>();
+const props = defineProps<{
+  agentId: string;
+  accounts: readonly AgentAccount[];
+  busy?: boolean;
+  pendingAction?: { kind: "create" } | { kind: "remove"; accountId: string };
+}>();
 const emit = defineEmits<{
   create: [label: string];
   run: [accountId: string];
@@ -18,6 +23,13 @@ const draft = reactive({ label: "" });
 const activeAccount = shallowRef<AgentAccount>();
 const actionError = shallowRef("");
 const accountsWithErrors = computed(() => props.accounts.filter((account) => account.lastError));
+const creatingAccount = computed(() => props.pendingAction?.kind === "create");
+watch(creatingAccount, (isCreating, wasCreating) => {
+  if (!isCreating && wasCreating) {
+    draft.label = "";
+    createOpen.value = false;
+  }
+});
 const qqLogin = useQqLogin({
   paths: () => {
     const accountId = activeAccount.value?.id ?? "missing";
@@ -31,8 +43,6 @@ function create() {
   const label = draft.label.trim();
   if (!label) return;
   emit("create", label);
-  draft.label = "";
-  createOpen.value = false;
 }
 
 function openLogin(account: AgentAccount) {
@@ -58,6 +68,10 @@ function accountStatus(account: AgentAccount) {
   if (account.observedState === "running" || account.runtimeReady) return "待登录";
   return "未运行";
 }
+
+function removingAccount(account: AgentAccount) {
+  return props.pendingAction?.kind === "remove" && props.pendingAction.accountId === account.id;
+}
 </script>
 
 <template>
@@ -67,9 +81,9 @@ function accountStatus(account: AgentAccount) {
         <span class="meta-label">NapCat Docker</span>
         <h3 class="mt-2 text-xl font-medium text-display">QQ 运行容器</h3>
       </div>
-      <button class="btn min-h-10 whitespace-nowrap px-4" type="button" @click="createOpen = true">
-        <i class="bx bx-plus text-lg" aria-hidden="true"></i>
-        <span>新建 NapCat QQ Docker</span>
+      <button class="btn min-h-10 whitespace-nowrap px-4" type="button" :disabled="busy" :aria-busy="creatingAccount" @click="createOpen = true">
+        <i class="bx text-lg" :class="creatingAccount ? 'bx-loader-alt bx-spin' : 'bx-plus'" aria-hidden="true"></i>
+        <span>{{ creatingAccount ? "新建中" : "新建 NapCat QQ Docker" }}</span>
       </button>
     </div>
 
@@ -80,11 +94,11 @@ function accountStatus(account: AgentAccount) {
           <strong class="block truncate font-normal text-display">{{ account.label }}</strong>
           <small class="mt-1 block truncate font-mono text-[10px] text-mute">{{ account.qqId || account.selfId || account.id }}</small>
         </span>
-        <span class="font-mono text-[10px] uppercase" :class="account.connected ? 'text-success' : account.reconcileRequired ? 'text-accent' : 'text-mute'">{{ accountStatus(account) }}</span>
+        <span class="font-mono text-[10px] uppercase" :class="account.connected ? 'text-success' : account.reconcileRequired ? 'text-accent' : 'text-mute'">{{ removingAccount(account) ? "移除中" : accountStatus(account) }}</span>
         <button v-if="!account.runtimeReady" class="btn min-h-9 px-3" type="button" :disabled="busy" @click="emit('run', account.id)">运行</button>
         <button v-else class="btn min-h-9 px-3" type="button" @click="openLogin(account)">{{ account.connected ? "账号" : "登录" }}</button>
-        <button v-if="!account.connected && account.id !== 'primary'" class="icon-btn text-mute hover:text-accent" type="button" :aria-label="`移除 ${account.label}`" :disabled="busy" @click="emit('remove', account.id)">
-          <i class="bx bx-trash" aria-hidden="true"></i>
+        <button v-if="!account.connected && account.id !== 'primary'" class="icon-btn text-mute hover:text-accent" type="button" :aria-label="removingAccount(account) ? `正在移除 ${account.label}` : `移除 ${account.label}`" :aria-busy="removingAccount(account)" :disabled="busy" @click="emit('remove', account.id)">
+          <i class="bx" :class="removingAccount(account) ? 'bx-loader-alt bx-spin' : 'bx-trash'" aria-hidden="true"></i>
         </button>
       </div>
       <p v-for="account in accountsWithErrors" :key="`${account.id}-error`" class="border-b border-line py-3 text-sm text-accent" role="alert">
@@ -109,7 +123,7 @@ function accountStatus(account: AgentAccount) {
       </label>
       <div class="mt-8 flex justify-end gap-3">
         <button class="btn" type="button" @click="createOpen = false">取消</button>
-        <button class="btn btn-primary" type="submit" :disabled="busy || !draft.label.trim()">新建</button>
+        <button class="btn btn-primary" type="submit" :disabled="busy || !draft.label.trim()" :aria-busy="creatingAccount">{{ creatingAccount ? "新建中" : "新建" }}</button>
       </div>
     </form>
   </DialogOverlay>

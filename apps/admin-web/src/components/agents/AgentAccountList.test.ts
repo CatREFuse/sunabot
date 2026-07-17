@@ -86,4 +86,32 @@ describe("AgentAccountList", () => {
     expect(wrapper.findAll("button").some((button) => button.text() === "运行")).toBe(true);
     expect(wrapper.text()).not.toContain("重启后登录");
   });
+
+  it("shows visible progress while creating or removing a QQ Docker", () => {
+    const secondary = account({ id: "secondary", agentId: "plana", label: "备用账号", webuiPort: 6100 });
+    const creating = shallowMount(AgentAccountList, {
+      props: {
+        agentId: "plana",
+        accounts: [secondary],
+        busy: true,
+        pendingAction: { kind: "create" }
+      }
+    });
+
+    const createButton = creating.findAll("button").find((button) => button.text() === "新建中");
+    expect(createButton).toBeDefined();
+    expect(createButton?.attributes("aria-busy")).toBe("true");
+
+    const removing = shallowMount(AgentAccountList, {
+      props: {
+        agentId: "plana",
+        accounts: [secondary],
+        busy: true,
+        pendingAction: { kind: "remove", accountId: "secondary" }
+      }
+    });
+
+    expect(removing.text()).toContain("移除中");
+    expect(removing.get('button[aria-label="正在移除 备用账号"]').attributes("aria-busy")).toBe("true");
+  });
 });

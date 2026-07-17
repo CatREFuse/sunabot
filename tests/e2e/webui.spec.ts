@@ -56,6 +56,43 @@ test("Agent 可新增、隔离切换并运行独立 NapCat QQ Docker", async ({ 
   await promptRequest;
 });
 
+test("新建和移除 QQ Docker 会显示进行中状态", async ({ page }) => {
+  await installMockApi(page);
+  await page.goto("/agents");
+  await page.getByRole("button", { name: "选择 阿罗娜" }).click();
+
+  let releaseCreate: () => void = () => undefined;
+  const createPending = new Promise<void>((resolve) => { releaseCreate = resolve; });
+  await page.route("**/api/agents/arona/accounts", async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    await createPending;
+    await route.fallback();
+  });
+
+  await page.getByRole("button", { name: "新建 NapCat QQ Docker", exact: true }).click();
+  const createAccount = page.getByRole("dialog", { name: "新建 NapCat QQ Docker" });
+  await createAccount.getByLabel("名称").fill("阿罗娜备用账号");
+  await createAccount.getByRole("button", { name: "新建", exact: true }).click();
+  await expect(page.getByRole("button", { name: "新建中", exact: true })).toHaveCount(2);
+  await expect(page.getByRole("button", { name: "新建中", exact: true }).first()).toBeDisabled();
+  releaseCreate();
+  await expect(page.getByText("阿罗娜备用账号", { exact: true })).toBeVisible();
+
+  let releaseRemove: () => void = () => undefined;
+  const removePending = new Promise<void>((resolve) => { releaseRemove = resolve; });
+  await page.route("**/api/agents/arona/accounts/qq_arona_main", async (route) => {
+    if (route.request().method() !== "DELETE") return route.fallback();
+    await removePending;
+    await route.fallback();
+  });
+
+  await page.getByRole("button", { name: "移除 阿罗娜主账号" }).click();
+  await expect(page.getByText("移除中", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "正在移除 阿罗娜主账号" })).toBeDisabled();
+  releaseRemove();
+  await expect(page.getByText("阿罗娜主账号", { exact: true })).toHaveCount(0);
+});
+
 test("Agent 身份页可设置 WebUI 头像并立即刷新", async ({ page }) => {
   const state = await installMockApi(page);
   await page.goto("/agent-settings/persona");
