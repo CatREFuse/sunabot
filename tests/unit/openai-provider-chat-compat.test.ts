@@ -303,6 +303,37 @@ describe("provider protocols", () => {
     expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
+  it("honors a per-request transport timeout for Codex Responses", async () => {
+    vi.useFakeTimers();
+    const provider = new OpenAIProvider(providerConfig("codex-responses"));
+    vi.spyOn(provider as never, "getApiKey").mockReturnValue("provider-key");
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockImplementation(() => new Promise<Response>(() => undefined));
+
+    const completion = provider.complete("system", [{ role: "user", content: "ping" }], {
+      modelRequestMaxRetries: 0,
+      modelRequestAttemptTimeoutMs: 750
+    });
+    const rejected = expect(completion).rejects.toThrow("Provider transport attempt timed out after 750ms");
+    await vi.advanceTimersByTimeAsync(750);
+    await rejected;
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(appendRequestLog.mock.calls
+      .map(([entry]) => entry as Record<string, any>)
+      .filter((entry) => entry.category === "model.response" && entry.action === "codex.complete"))
+      .toEqual([
+        expect.objectContaining({
+          response: expect.objectContaining({
+            ok: false,
+            error: "Provider transport attempt timed out after 750ms",
+            willRetry: false
+          }),
+          metadata: expect.objectContaining({ transportAttempt: 1, maxTransportAttempts: 1 })
+        })
+      ]);
+  });
+
   it("does not route non-Responses providers through image generation", async () => {
     const provider = new OpenAIProvider(providerConfig("openai-compatible"));
     await expect(provider.generateImage("portrait", "1024x1024", "high")).rejects.toThrow(/不支持 Responses 图像生成/);

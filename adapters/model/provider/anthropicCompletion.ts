@@ -54,6 +54,7 @@ export async function completeAnthropicMessages(
       signal: options.signal
     }, options.signal, {
       maxAttempts: resolveModelRequestMaxAttempts(options.modelRequestMaxRetries, 1),
+      attemptTimeoutMs: options.modelRequestAttemptTimeoutMs,
       beforeAttempt: async ({ attempt, maxAttempts }) => {
         responseMetadata = { ...metadata, transportAttempt: attempt, maxTransportAttempts: maxAttempts };
         await context.logger.request("anthropic.messages.complete", requestBody, responseMetadata);

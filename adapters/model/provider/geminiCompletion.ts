@@ -53,6 +53,7 @@ export async function completeGeminiGenerateContent(
       signal: options.signal
     }, options.signal, {
       maxAttempts: resolveModelRequestMaxAttempts(options.modelRequestMaxRetries, 1),
+      attemptTimeoutMs: options.modelRequestAttemptTimeoutMs,
       beforeAttempt: async ({ attempt, maxAttempts }) => {
         responseMetadata = { ...metadata, transportAttempt: attempt, maxTransportAttempts: maxAttempts };
         await context.logger.request("gemini.generate-content.complete", requestBody, responseMetadata);

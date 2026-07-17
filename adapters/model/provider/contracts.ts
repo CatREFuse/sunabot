@@ -17,6 +17,7 @@ import type { SkillRuntimeToolPort } from "../../../services/tools/skillRuntimeT
 export interface ProviderCompleteOptions {
   signal?: AbortSignal;
   modelRequestMaxRetries?: number;
+  modelRequestAttemptTimeoutMs?: number;
   allowNoReply?: boolean;
   workbenchFiles?: ProviderWorkbenchFileOptions;
   bash?: ProviderBashOptions;
