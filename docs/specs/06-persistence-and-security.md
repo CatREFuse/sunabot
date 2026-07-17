@@ -20,7 +20,7 @@
 | `memory_records` | 工作记忆、长期记忆和用户画像 |
 | `memory_batches` | 已提交记忆批次及幂等结果 |
 | `memory_scheduler` | 各会话的记忆待处理队列与重试状态 |
-| `request_logs` | 脱敏后的模型、工具和运行日志；保留原始 usage 与统一 `tokenUsage` |
+| `request_logs` | 脱敏后的模型、工具和运行日志；保留实际模型请求体、Provider 返回 payload、原始 usage 与统一 `tokenUsage` |
 | `model_call_aggregates` | 当前 Agent 按会话与行为聚合的模型调用总量 |
 | `model_call_model_aggregates` | 当前 Agent 按会话、模型、行为和记忆类型聚合的调用总量 |
 | `image_history` | 生成图片历史元数据 |
@@ -105,7 +105,7 @@ Agent 根目录及 `extensions`、`skills`、`mcp` 控制目录必须是当前�
 - 新 workspace 的 `bot.adminQq` 默认为空，不内置任何真实 QQ 身份；管理员登录 QQ 后必须在对应 Agent 的“回复行为”中显式保存管理员 QQ，管理员专属工具在此之前保持关闭。
 - Git 不跟踪整个 `workspace/`，其中包括环境变量、配置、Agent 人格、SQLite、WAL、日志、缓存、QQ 登录态、生成图片和备份。
 - 浏览器管理台不得把账号、密码、Bearer Token 或会话密钥写入 localStorage/sessionStorage。
-- 请求日志递归脱敏授权、token、password、secret 和常见 key 字段，并限制长字符串。
+- 请求日志递归脱敏授权、token、password、secret 和常见 key 字段；模型 request/response payload 的单字符串上限为 8 MiB，其他日志长字符串上限为 16,000 字符。文件工具与 MCP 的参数和结果继续使用有界安全投影，原始 Provider payload 不能绕过该投影。
 - `system_config` 只向模型返回固定白名单内的当前 Agent 设置与状态投影，不返回密钥、环境变量名、路径、原始消息、Provider 地址或探针诊断正文。修改只对运行时重新确认的当前管理员 QQ 私聊开放；Web Chat 只读。修改 fingerprint 只保存规范化非敏感字段的 SHA-256，不保存凭据明文；模型参数和外部 API 不能写入确认 outbox 的特殊 delivery 语义。投递旁路必须同时具有 store 中可信的 released/fallback provenance 与匹配 fingerprint，只有 payload marker 或普通 outbox 状态时仍执行完整 ReplyGate 校验。
 - 配置医生发送给模型的配置先按敏感键以及身份、QQ、Provider 地址、workspace、可执行文件和提示词路径脱敏；问题列表只包含本次实际校验失败的固定白名单路径和服务端固定文案，模型只能对这些路径提出 `add` 或 `replace`，不接收工具权限。服务端限制 AI 输出大小、操作数、JSON Pointer 深度和值大小，并拒绝原型污染字段、重复路径和越权路径；用户确认页的目标值说明由服务端生成，不采用模型理由代替实际修改内容。
 - 配置医生 AI 提案只保存在进程内 10 分钟并绑定原始文件 revision；连续 AI 诊断至少间隔 10 秒。浏览器应用时只提交 proposal ID 与 source revision，不能提交或替换服务端 patch。

@@ -70,6 +70,7 @@ describe("ConversationThread", () => {
     expect(renderedBubble.text()).toContain("QQ 昵称 好吃的猫头菇");
     expect(renderedBubble.text()).toContain("QQ 1");
     await wrapper.get('button[aria-label="请求日志"]').trigger("click");
+    expect(wrapper.getComponent(RequestLogList).props("enableSearch")).toBe(true);
     expect(wrapper.getComponent(RequestLogList).props("logs")).toEqual([
       expect.objectContaining({ metadata: { traceId: "trace-7", retries: 1 } })
     ]);

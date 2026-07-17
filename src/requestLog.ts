@@ -24,6 +24,7 @@ import {
 } from "./tokenUsage.js";
 
 const MAX_STRING_LENGTH = 16_000;
+const MAX_MODEL_PAYLOAD_STRING_LENGTH = 8 * 1024 * 1024;
 
 export interface RequestLogEntry {
   category: string;
@@ -90,12 +91,15 @@ export async function appendRequestLogStrict(entry: RequestLogEntry, idempotency
 
 function requestLogRecord(entry: RequestLogEntry, id: string) {
   const usage = normalizeTokenUsageRecord(entry as unknown as Record<string, unknown>);
+  const maxStringLength = entry.category === "model.request" || entry.category === "model.response"
+    ? MAX_MODEL_PAYLOAD_STRING_LENGTH
+    : MAX_STRING_LENGTH;
   return sanitizeValue({
     id,
     at: new Date().toISOString(),
     ...entry,
     ...(usage ? { tokenUsage: publicTokenUsage(usage) } : {})
-  });
+  }, 0, maxStringLength);
 }
 
 export async function readRequestLogs(options: ReadRequestLogsOptions = {}) {
@@ -311,11 +315,11 @@ function withTokenUsage(record: Record<string, unknown>) {
   return usage ? { ...record, tokenUsage: publicTokenUsage(usage) } : record;
 }
 
-function sanitizeValue(value: unknown, depth = 0): unknown {
+function sanitizeValue(value: unknown, depth = 0, maxStringLength = MAX_STRING_LENGTH): unknown {
   if (depth > 12) return "[MaxDepth]";
-  if (typeof value === "string") return sanitizeString(value);
+  if (typeof value === "string") return sanitizeString(value, maxStringLength);
   if (typeof value !== "object" || value == null) return value;
-  if (Array.isArray(value)) return value.map((item) => sanitizeValue(item, depth + 1));
+  if (Array.isArray(value)) return value.map((item) => sanitizeValue(item, depth + 1, maxStringLength));
 
   const output: Record<string, unknown> = {};
   for (const [key, child] of Object.entries(value)) {
@@ -323,12 +327,12 @@ function sanitizeValue(value: unknown, depth = 0): unknown {
       output[key] = "[REDACTED]";
       continue;
     }
-    output[key] = sanitizeValue(child, depth + 1);
+    output[key] = sanitizeValue(child, depth + 1, maxStringLength);
   }
   return output;
 }
 
-function sanitizeString(value: string) {
+function sanitizeString(value: string, maxStringLength: number) {
   const dataImageMatch = value.match(/^data:(image\/[a-z0-9.+-]+);base64,(.*)$/i);
   if (dataImageMatch) {
     return `[image data url: ${dataImageMatch[1]}, base64Chars=${dataImageMatch[2]?.length ?? 0}]`;
@@ -339,8 +343,8 @@ function sanitizeString(value: string) {
     .replace(/([?&]key)=([^&#\s]+)/gi, "$1=[REDACTED]")
     .replace(/(api[_-]?key|access[_-]?token|authorization)=([^&\s]+)/gi, "$1=[REDACTED]");
 
-  if (redacted.length <= MAX_STRING_LENGTH) return redacted;
-  return `${redacted.slice(0, MAX_STRING_LENGTH)}\n[truncated:${redacted.length - MAX_STRING_LENGTH}]`;
+  if (redacted.length <= maxStringLength) return redacted;
+  return `${redacted.slice(0, maxStringLength)}\n[truncated:${redacted.length - maxStringLength}]`;
 }
 
 function isSecretKey(key: string) {

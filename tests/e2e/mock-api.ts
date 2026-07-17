@@ -1187,14 +1187,32 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
       const runId = url.searchParams.get("runId");
       return json(route, {
         logs: runId === "running-run" || runId === "run-model-update"
-          ? [{
-              id: `${runId}-log`,
-              at: "2026-07-10T02:02:00.000Z",
-              category: "runtime.action",
-              action: "reply.started",
-              response: { status: "running" },
-              metadata: { runId, conversationId: "group:10001" }
-            }]
+          ? [
+              {
+                id: `${runId}-request`,
+                at: "2026-07-10T02:02:00.000Z",
+                category: "model.request",
+                action: "responses.complete",
+                request: { input: [{ role: "system", content: [{ type: "input_text", text: "完整最终提示词 Alpha" }] }] },
+                metadata: { runId, conversationId: "group:10001" }
+              },
+              {
+                id: `${runId}-response`,
+                at: "2026-07-10T02:02:01.000Z",
+                category: "model.response",
+                action: "responses.complete",
+                response: { ok: true, payload: { output_text: "模型返回正文 Beta" } },
+                metadata: { runId, conversationId: "group:10001" }
+              },
+              {
+                id: `${runId}-log`,
+                at: "2026-07-10T02:02:02.000Z",
+                category: "runtime.action",
+                action: "reply.started",
+                response: { status: "running" },
+                metadata: { runId, conversationId: "group:10001" }
+              }
+            ]
           : []
       });
     }

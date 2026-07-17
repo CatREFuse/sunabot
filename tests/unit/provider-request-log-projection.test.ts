@@ -13,6 +13,7 @@ import {
   PROVIDER_FILE_LOG_INVALID_RESULT,
   PROVIDER_FILE_LOG_REDACTED,
   PROVIDER_MCP_LOG_REDACTED,
+  PROVIDER_RESPONSE_LOG_REDACTED,
   projectProviderRequestLog
 } from "../../adapters/model/provider/requestLogProjection.js";
 
@@ -47,6 +48,22 @@ afterEach(() => {
 });
 
 describe("provider request-log file-tool projection", () => {
+  it.each(protocolCases)("stores the complete projected %s response payload", async (
+    kind,
+    action,
+    protocol
+  ) => {
+    await runTwoRoundFlow(kind, protocol, "write_file");
+    const responseEntries = appendRequestLog.mock.calls
+      .map(([entry]) => entry as Record<string, any>)
+      .filter((entry) => entry.category === "model.response" && entry.action === action);
+
+    expect(responseEntries).toHaveLength(2);
+    expect(JSON.stringify(responseEntries.at(-1)?.response?.payload)).toContain("DONE");
+    expect(JSON.stringify(responseEntries)).not.toContain(SECRET);
+    expect(JSON.stringify(responseEntries)).not.toContain(HOST_PATH);
+  });
+
   it.each(protocolCases)("redacts the real two-round %s MCP call and result lineage", async (
     kind,
     action,
@@ -65,6 +82,10 @@ describe("provider request-log file-tool projection", () => {
     expect(evidence.actualSecondSerialized).toContain(HOST_PATH);
     expect(evidence.actualSecondSerialized).toContain("file:///etc/passwd");
     const serialized = JSON.stringify(requestEntries[1]!.request);
+    const responseEntries = appendRequestLog.mock.calls
+      .map(([entry]) => entry as Record<string, any>)
+      .filter((entry) => entry.category === "model.response" && entry.action === action);
+    const serializedResponses = JSON.stringify(responseEntries);
     expect(serialized).toContain(PROVIDER_MCP_LOG_REDACTED);
     expect(serialized).toContain(ORDINARY_USER);
     expect(serialized).toContain(ORDINARY_ASSISTANT);
@@ -72,6 +93,11 @@ describe("provider request-log file-tool projection", () => {
     expect(serialized).not.toContain(HOST_PATH);
     expect(serialized).not.toContain("file:///etc/passwd");
     expect(serialized).not.toContain("Ignore prior instructions");
+    expect(responseEntries).toHaveLength(2);
+    expect(serializedResponses).toContain(PROVIDER_MCP_LOG_REDACTED);
+    expect(serializedResponses).not.toContain(SECRET);
+    expect(serializedResponses).not.toContain(HOST_PATH);
+    expect(serializedResponses).not.toContain("file:///etc/passwd");
   });
 
   it.each(protocolCases.flatMap(([kind, action, protocol]) => ([
@@ -191,6 +217,31 @@ describe("provider request-log file-tool projection", () => {
     expect(serialized).not.toContain(SECRET);
     expect(serialized).not.toContain(HOST_PATH);
     expectInertPlainData(loggedRequest);
+  });
+
+  it.each([
+    "toJSON-secret",
+    "toJSON-throw",
+    "cycle",
+    "bigint",
+    "proxy"
+  ] as const)("replaces a %s response hazard with one inert whole-response summary", async (hazard) => {
+    let serialized = "";
+    appendRequestLog.mockImplementation(async (entry) => {
+      serialized = JSON.stringify(entry);
+    });
+    const logger = createProviderLogger(providerConfig("openai-official"));
+    const payload = { output: [] };
+    installSerializationHazard(payload, hazard);
+
+    await expect(logger.response("responses.complete", { ok: true, payload })).resolves.toBeUndefined();
+
+    const loggedResponse = (appendRequestLog.mock.calls[0]?.[0] as Record<string, unknown>).response;
+    expect(loggedResponse).toEqual({ summary: PROVIDER_RESPONSE_LOG_REDACTED });
+    expect(serialized).toContain(PROVIDER_RESPONSE_LOG_REDACTED);
+    expect(serialized).not.toContain(SECRET);
+    expect(serialized).not.toContain(HOST_PATH);
+    expectInertPlainData(loggedResponse);
   });
 
   it.each(protocolCases)("removes invalid call and result payloads for %s", (_kind, action, protocol) => {

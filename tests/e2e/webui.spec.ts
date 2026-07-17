@@ -1050,6 +1050,16 @@ test("生产构建支持深链接刷新与浏览器返回", async ({ page }) => 
   await expect(page.getByRole("heading", { name: "请求日志" })).toBeVisible();
   await expect(page.getByText("开始生成回复", { exact: true })).toBeVisible();
   await expect(page.getByText("reply.started", { exact: true })).toBeVisible();
+  const logSearch = page.getByLabel("搜索请求日志");
+  await logSearch.fill("alpha");
+  const matchedLog = page.getByLabel("请求日志列表").locator("article");
+  await expect(matchedLog).toHaveCount(1);
+  await expect(matchedLog).toContainText("完整最终提示词 Alpha");
+  await logSearch.fill("BETA");
+  await expect(matchedLog).toHaveCount(1);
+  await expect(matchedLog).toContainText("模型返回正文 Beta");
+  await logSearch.fill("没有结果");
+  await expect(page.getByText("没有匹配的请求日志", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "关闭", exact: true }).click();
 
   await page.reload();

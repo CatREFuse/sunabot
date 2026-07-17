@@ -7,7 +7,10 @@ import {
   imageGenerationErrorStatus
 } from "../imageGenerationRetry.js";
 import type { ProviderLoggerPort } from "./contracts.js";
-import { projectProviderRequestLogForStorage } from "./requestLogProjection.js";
+import {
+  projectProviderRequestLogForStorage,
+  projectProviderResponseLogForStorage
+} from "./requestLogProjection.js";
 import { errorMessage } from "./valueUtils.js";
 
 export function createProviderLogger(provider: ProviderConfig): ProviderLoggerPort {
@@ -18,7 +21,7 @@ export function createProviderLogger(provider: ProviderConfig): ProviderLoggerPo
       providerId: provider.id,
       providerKind: provider.kind,
       model: provider.model,
-      response: payload,
+      response: projectProviderResponseLogForStorage(action, payload),
       metadata
     });
   };

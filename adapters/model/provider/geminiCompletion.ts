@@ -71,8 +71,8 @@ export async function completeGeminiGenerateContent(
     const { response, text: raw } = attempt;
     const payload = parseJson(raw);
     await context.logger.response("gemini.generate-content.complete", response.ok
-      ? { ok: true, usage: isRecord(payload) ? payload.usageMetadata : undefined }
-      : { ok: false, status: response.status, error: geminiError(payload, response.status), willRetry: false, retryDelayMs: 0 }, responseMetadata);
+      ? { ok: true, payload, usage: isRecord(payload) ? payload.usageMetadata : undefined }
+      : { ok: false, status: response.status, error: geminiError(payload, response.status), payload, willRetry: false, retryDelayMs: 0 }, responseMetadata);
     if (!response.ok) throw new Error(geminiError(payload, response.status));
     const candidate = isRecord(payload) && Array.isArray(payload.candidates) ? payload.candidates.find(isRecord) : undefined;
     const content = candidate && isRecord(candidate.content) ? candidate.content : undefined;

@@ -72,8 +72,8 @@ export async function completeAnthropicMessages(
     const { response, text: raw } = attempt;
     const payload = parseJson(raw);
     await context.logger.response("anthropic.messages.complete", response.ok
-      ? { ok: true, stopReason: isRecord(payload) ? payload.stop_reason : undefined, usage: isRecord(payload) ? payload.usage : undefined }
-      : { ok: false, status: response.status, error: anthropicError(payload, response.status), willRetry: false, retryDelayMs: 0 }, responseMetadata);
+      ? { ok: true, payload, stopReason: isRecord(payload) ? payload.stop_reason : undefined, usage: isRecord(payload) ? payload.usage : undefined }
+      : { ok: false, status: response.status, error: anthropicError(payload, response.status), payload, willRetry: false, retryDelayMs: 0 }, responseMetadata);
     if (!response.ok) throw new Error(anthropicError(payload, response.status));
     if (!isRecord(payload) || !Array.isArray(payload.content)) throw new Error("Anthropic 没有返回消息。");
 

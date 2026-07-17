@@ -100,4 +100,46 @@ describe("RequestLogList", () => {
     expect(usage.get('[data-metric="rate"] dd').attributes("title")).toBe("0 / 11,939");
     expect(usage.text()).not.toContain("缓存率--");
   });
+
+  it("matches nested request, response, and metadata text across logs", async () => {
+    const wrapper = mount(RequestLogList, {
+      props: {
+        enableSearch: true,
+        logs: [
+          {
+            id: "request-1",
+            at: "2026-07-12T08:00:00.000Z",
+            category: "model.request",
+            action: "responses.complete",
+            request: { input: [{ role: "system", content: "完整最终提示词 ALPHA" }] }
+          },
+          {
+            id: "response-2",
+            at: "2026-07-12T08:01:00.000Z",
+            category: "model.response",
+            action: "chat.completions.complete",
+            response: { payload: { choices: [{ message: { content: "模型返回正文 beta" } }] } },
+            metadata: { trace: "trace-gamma" }
+          }
+        ]
+      }
+    });
+
+    const search = wrapper.get('[data-slot="request-log-search"]');
+    await search.setValue("alpha");
+    expect(wrapper.findAll('[data-slot="request-log-item"]')).toHaveLength(1);
+    expect(wrapper.text()).toContain("完整最终提示词 ALPHA");
+    expect(wrapper.text()).not.toContain("模型返回正文 beta");
+
+    await search.setValue("BETA");
+    expect(wrapper.findAll('[data-slot="request-log-item"]')).toHaveLength(1);
+    expect(wrapper.text()).toContain("模型返回正文 beta");
+
+    await search.setValue("trace-gamma");
+    expect(wrapper.findAll('[data-slot="request-log-item"]')).toHaveLength(1);
+
+    await search.setValue("没有结果");
+    expect(wrapper.findAll('[data-slot="request-log-item"]')).toHaveLength(0);
+    expect(wrapper.text()).toContain("没有匹配的请求日志");
+  });
 });

@@ -557,4 +557,43 @@ describe("request log token usage", () => {
       }
     });
   });
+
+  it("keeps complete model prompts and response payloads while redacting credentials", async () => {
+    const prompt = `SYSTEM-PROMPT:${"提示词正文".repeat(4_000)}:END`;
+    const returnedText = `MODEL-RESPONSE:${"模型返回".repeat(4_000)}:END`;
+
+    await appendRequestLog({
+      category: "model.request",
+      action: "responses.complete",
+      request: {
+        authorization: "Bearer request-secret",
+        input: [{ role: "system", content: [{ type: "input_text", text: prompt }] }]
+      }
+    });
+    await appendRequestLog({
+      category: "model.response",
+      action: "responses.complete",
+      response: {
+        accessToken: "response-secret",
+        payload: { output_text: returnedText }
+      }
+    });
+
+    const page = await readRequestLogPage({ page: 1, pageSize: 2 });
+    expect(page.logs[0]).toMatchObject({
+      response: {
+        accessToken: "[REDACTED]",
+        payload: { output_text: returnedText }
+      }
+    });
+    expect(page.logs[1]).toMatchObject({
+      request: {
+        authorization: "[REDACTED]",
+        input: [{ content: [{ text: prompt }] }]
+      }
+    });
+    expect(JSON.stringify(page.logs)).not.toContain("[truncated:");
+    expect(JSON.stringify(page.logs)).not.toContain("request-secret");
+    expect(JSON.stringify(page.logs)).not.toContain("response-secret");
+  });
 });

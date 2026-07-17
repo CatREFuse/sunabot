@@ -118,6 +118,7 @@ async function completeOpenAIResponses(
     const response = attempt.value;
     await context.logger.response("responses.complete", {
       ok: true,
+      payload: response,
       summary: summarizeResponsesPayload(response, "")
     }, attempt.metadata);
 
@@ -239,6 +240,7 @@ async function completeCodexResponses(
         ok: false,
         status: response.status,
         error: detail,
+        payload,
         summary: summarizeResponsesPayload(payload, text),
         willRetry: false,
         retryDelayMs: 0
@@ -248,6 +250,7 @@ async function completeCodexResponses(
     await context.logger.response("codex.complete", {
       ok: true,
       status: response.status,
+      payload,
       summary: summarizeResponsesPayload(payload, text)
     }, responseMetadata);
 
@@ -328,6 +331,7 @@ async function completeChatCompletions(
     const choice = response.choices[0]?.message;
     await context.logger.response("chat.completions.complete", {
       ok: true,
+      payload: response,
       finishReason: response.choices[0]?.finish_reason,
       toolCallCount: choice?.tool_calls?.length ?? 0,
       textLength: choice?.content?.length ?? 0,

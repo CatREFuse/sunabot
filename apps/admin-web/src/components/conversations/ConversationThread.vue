@@ -110,7 +110,7 @@ function refreshLogs() {
           </div>
         </div>
         <p v-if="loadingLogs" class="py-12 text-center font-mono text-xs text-mute">加载中</p>
-        <RequestLogList v-if="!loadingLogs" class="mt-5" :logs="logs" />
+        <RequestLogList v-if="!loadingLogs" class="mt-5" :logs="logs" enable-search />
       </aside>
     </DialogOverlay>
 

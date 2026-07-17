@@ -8,6 +8,7 @@ import { isMcpToolAlias } from "../../../services/extensions/public.js";
 export const PROVIDER_FILE_LOG_REDACTED = "[REDACTED]";
 export const PROVIDER_FILE_LOG_INVALID_RESULT = "[INVALID TOOL RESULT]";
 export const PROVIDER_REQUEST_LOG_REDACTED = "[PROVIDER REQUEST LOG REDACTED]";
+export const PROVIDER_RESPONSE_LOG_REDACTED = "[PROVIDER RESPONSE LOG REDACTED]";
 export const PROVIDER_MCP_LOG_REDACTED = "[EXTERNAL MCP DATA REDACTED]";
 const invalidValue = "[invalid]";
 const maxInertDepth = 32;
@@ -39,6 +40,104 @@ export function projectProviderRequestLogForStorage(action: string, request: unk
   } catch {
     return { summary: PROVIDER_REQUEST_LOG_REDACTED };
   }
+}
+
+export function projectProviderResponseLogForStorage(action: string, response: unknown): unknown {
+  try {
+    const inertResponse = cloneInertLogData(response, {
+      active: new WeakSet<object>(),
+      nodes: 0
+    });
+    const value = asRecord(inertResponse);
+    const projected = value && Object.hasOwn(value, "payload")
+      ? { ...value, payload: projectProviderResponsePayload(action, value.payload) }
+      : inertResponse;
+    const serialized = JSON.stringify(projected);
+    if (serialized === undefined) throw new Error("Provider response log is not serializable.");
+    return JSON.parse(serialized) as unknown;
+  } catch {
+    return { summary: PROVIDER_RESPONSE_LOG_REDACTED };
+  }
+}
+
+function projectProviderResponsePayload(action: string, payload: unknown) {
+  if (action === "responses.complete" || action === "codex.complete") {
+    return projectResponsesResponse(payload);
+  }
+  if (action === "chat.completions.complete") return projectChatResponse(payload);
+  if (action === "anthropic.messages.complete") return projectAnthropicResponse(payload);
+  if (action === "gemini.generate-content.complete") return projectGeminiResponse(payload);
+  return payload;
+}
+
+function projectResponsesResponse(payload: unknown) {
+  const value = asRecord(payload);
+  if (!value || !Array.isArray(value.output)) return payload;
+  const output = mapChanged(value.output, (item) => {
+    const record = asRecord(item);
+    const toolName = record?.type === "function_call" ? responseProjectedToolName(record.name) : undefined;
+    return record && toolName
+      ? { ...record, arguments: projectJsonArguments(toolName, record.arguments) }
+      : item;
+  });
+  return output === value.output ? payload : { ...value, output };
+}
+
+function projectChatResponse(payload: unknown) {
+  const value = asRecord(payload);
+  if (!value || !Array.isArray(value.choices)) return payload;
+  const choices = mapChanged(value.choices, (choice) => {
+    const choiceRecord = asRecord(choice);
+    const message = asRecord(choiceRecord?.message);
+    if (!choiceRecord || !message || !Array.isArray(message.tool_calls)) return choice;
+    const toolCalls = mapChanged(message.tool_calls, (call) => {
+      const callRecord = asRecord(call);
+      const fn = asRecord(callRecord?.function);
+      const toolName = responseProjectedToolName(fn?.name);
+      return callRecord && fn && toolName
+        ? { ...callRecord, function: { ...fn, arguments: projectJsonArguments(toolName, fn.arguments) } }
+        : call;
+    });
+    return toolCalls === message.tool_calls
+      ? choice
+      : { ...choiceRecord, message: { ...message, tool_calls: toolCalls } };
+  });
+  return choices === value.choices ? payload : { ...value, choices };
+}
+
+function projectAnthropicResponse(payload: unknown) {
+  const value = asRecord(payload);
+  if (!value || !Array.isArray(value.content)) return payload;
+  const content = mapChanged(value.content, (block) => {
+    const record = asRecord(block);
+    const toolName = record?.type === "tool_use" ? responseProjectedToolName(record.name) : undefined;
+    return record && toolName
+      ? { ...record, input: projectObjectArguments(toolName, record.input) }
+      : block;
+  });
+  return content === value.content ? payload : { ...value, content };
+}
+
+function projectGeminiResponse(payload: unknown) {
+  const value = asRecord(payload);
+  if (!value || !Array.isArray(value.candidates)) return payload;
+  const candidates = mapChanged(value.candidates, (candidate) => {
+    const candidateRecord = asRecord(candidate);
+    const content = asRecord(candidateRecord?.content);
+    if (!candidateRecord || !content || !Array.isArray(content.parts)) return candidate;
+    const parts = mapChanged(content.parts, (part) => {
+      const partRecord = asRecord(part);
+      const call = asRecord(partRecord?.functionCall);
+      const toolName = responseProjectedToolName(call?.name);
+      return partRecord && call && toolName
+        ? { ...partRecord, functionCall: { ...call, args: projectObjectArguments(toolName, call.args) } }
+        : part;
+    });
+    return parts === content.parts
+      ? candidate
+      : { ...candidateRecord, content: { ...content, parts } };
+  });
+  return candidates === value.candidates ? payload : { ...value, candidates };
 }
 
 function projectResponsesRequest(request: unknown) {
@@ -240,6 +339,12 @@ function projectedToolName(value: unknown, trustedMcp: Set<string>): ProjectedTo
   const file = fileToolName(value);
   if (file) return file;
   return typeof value === "string" && trustedMcp.has(value) ? "mcp" : undefined;
+}
+
+function responseProjectedToolName(value: unknown): ProjectedToolName | undefined {
+  const file = fileToolName(value);
+  if (file) return file;
+  return typeof value === "string" && isMcpToolAlias(value) ? "mcp" : undefined;
 }
 
 function trustedMcpToolNames(value: unknown) {

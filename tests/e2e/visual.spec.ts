@@ -143,6 +143,16 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     await expect(page.getByRole("status", { name: "正在输入" })).toBeVisible();
     await expect(page.getByRole("button", { name: "查看请求日志" })).toHaveCount(3);
     await capture(page, viewport.name, theme, "conversations-detail");
+    await messageTrace.getByRole("button", { name: "查看请求日志" }).click();
+    await expect(page.getByLabel("搜索请求日志")).toBeVisible();
+    await page.getByLabel("搜索请求日志").fill("Beta");
+    const matchedRequestLog = page.getByLabel("请求日志列表").locator("article");
+    await expect(matchedRequestLog).toHaveCount(1);
+    await matchedRequestLog.getByText("响应体", { exact: true }).click();
+    await matchedRequestLog.locator("summary").filter({ hasText: /^payload/ }).click();
+    await expect(page.getByText("模型返回正文 Beta", { exact: true })).toBeVisible();
+    await capture(page, viewport.name, theme, "conversations-request-log-search");
+    await page.getByRole("button", { name: "关闭", exact: true }).click();
     await page.getByRole("button", { name: "会话设置", exact: true }).click();
     await expect(page.getByRole("heading", { name: "会话设置", exact: true })).toBeVisible();
     await capture(page, viewport.name, theme, "conversation-settings-general");
