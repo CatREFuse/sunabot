@@ -1,13 +1,12 @@
 <script setup lang="ts">
-import { computed, shallowRef } from "vue";
+import { computed, shallowRef, watch } from "vue";
 import { useChatScroll } from "../../composables/useChatScroll";
-import { conversationIdentityDetail } from "../../utils/qqIdentity";
 import type { ConversationLogEntry, ConversationMessageRecord, ConversationRecord, ConversationStatsPayload } from "../../types";
 import DialogOverlay from "../ui/DialogOverlay.vue";
 import ConversationMessageBubble from "./ConversationMessageBubble.vue";
-import ConversationOrchestratorStatus from "./ConversationOrchestratorStatus.vue";
+import ConversationQuickControls from "./ConversationQuickControls.vue";
+import ConversationSidePanel from "./ConversationSidePanel.vue";
 import RequestLogList from "../logs/RequestLogList.vue";
-import ModelCallStatsPanel from "../logs/ModelCallStatsPanel.vue";
 
 const props = withDefaults(defineProps<{
   conversation: ConversationRecord | null;
@@ -25,18 +24,24 @@ const props = withDefaults(defineProps<{
 });
 const emit = defineEmits<{
   back: [];
-  settings: [];
   refresh: [];
   older: [];
   logs: [runId?: string];
+  reply: [enabled: boolean];
+  orchestrator: [enabled: boolean];
 }>();
 const logsOpen = shallowRef(false);
 const activeLogRunId = shallowRef<string | undefined>();
-const replyEnabled = computed(() => props.conversation?.replyEnabled !== false);
-const orchestratorEnabled = computed(() => props.conversation?.orchestratorEnabled !== false);
+const activePanel = shallowRef<"settings" | "usage" | null>(null);
 const conversationId = computed(() => props.conversation?.id ?? "");
 const messageIds = computed(() => props.messages.map((message) => message.id));
 const { handleUserScroll, handleContentLoad } = useChatScroll({ conversationId, messageIds });
+
+watch(conversationId, () => {
+  activePanel.value = null;
+  logsOpen.value = false;
+});
+
 function openLogs(runId?: string) {
   activeLogRunId.value = runId;
   logsOpen.value = true;
@@ -54,31 +59,19 @@ function refreshLogs() {
       <div class="min-w-0 flex-1">
         <h2 class="truncate text-2xl font-medium leading-none tracking-[-0.02em] text-display">{{ conversation?.title ?? "选择一个会话" }}</h2>
       </div>
-      <button v-if="conversation" class="btn btn-ghost" type="button" @click="emit('settings')">
-        <i class="bx bx-cog" aria-hidden="true"></i>会话设置
-      </button>
+      <button v-if="conversation" class="icon-btn" type="button" aria-label="会话设置" @click="activePanel = 'settings'"><i class="bx bx-cog text-xl" aria-hidden="true"></i></button>
       <button v-if="conversation" class="icon-btn" type="button" aria-label="刷新消息" @click="emit('refresh')"><i class="bx bx-refresh text-xl" aria-hidden="true"></i></button>
       <button v-if="conversation" class="icon-btn" type="button" aria-label="请求日志" @click="openLogs()"><i class="bx bx-file-find text-xl" aria-hidden="true"></i></button>
     </header>
 
     <div v-if="!conversation" class="empty-state flex-1 dot-grid"><div class="bg-page px-5 py-3"><strong>选择一个会话</strong><p>选择后打开消息记录</p></div></div>
     <template v-else>
-      <div class="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b border-line px-4 py-2 md:px-6">
-        <div class="flex min-w-0 flex-wrap items-center gap-x-5 gap-y-1">
-          <span class="font-mono text-[10px] text-mute">{{ conversation.messageCount }} 条消息 · {{ conversationIdentityDetail(conversation) }}</span>
-          <span class="font-mono text-[10px]" :class="replyEnabled ? 'text-success' : 'text-warning'">{{ replyEnabled ? "回复已启用" : "回复已暂停" }}</span>
-          <span v-if="conversation.scope === 'user_group'" class="font-mono text-[10px] text-mute">{{ orchestratorEnabled ? "编排器已启用" : "规则回复" }}</span>
-        </div>
-        <ConversationOrchestratorStatus
-          v-if="conversation.scope === 'user_group' && replyEnabled && orchestratorEnabled && conversation.orchestratorStatus"
-          :status="conversation.orchestratorStatus"
-        />
-      </div>
-      <ModelCallStatsPanel
-        v-if="conversation.scope !== 'private'"
-        compact
-        :stats="stats?.modelCalls ?? null"
-        :messages="stats?.messages"
+      <ConversationQuickControls
+        :conversation="conversation"
+        :stats="stats"
+        @reply="emit('reply', $event)"
+        @orchestrator="emit('orchestrator', $event)"
+        @usage="activePanel = 'usage'"
       />
       <div
         ref="messageViewport"
@@ -120,5 +113,16 @@ function refreshLogs() {
         <RequestLogList v-if="!loadingLogs" class="mt-5" :logs="logs" />
       </aside>
     </DialogOverlay>
+
+    <ConversationSidePanel
+      v-if="conversation"
+      :open="activePanel != null"
+      :panel="activePanel ?? 'settings'"
+      :conversation="conversation"
+      :stats="stats"
+      @close="activePanel = null"
+      @reply="emit('reply', $event)"
+      @orchestrator="emit('orchestrator', $event)"
+    />
   </section>
 </template>

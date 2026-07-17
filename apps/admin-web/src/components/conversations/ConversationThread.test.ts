@@ -3,7 +3,8 @@ import { nextTick } from "vue";
 import { describe, expect, it } from "vitest";
 import AuthenticatedImage from "../ui/AuthenticatedImage.vue";
 import ConversationMessageBubble from "./ConversationMessageBubble.vue";
-import ConversationOrchestratorStatus from "./ConversationOrchestratorStatus.vue";
+import ConversationQuickControls from "./ConversationQuickControls.vue";
+import ConversationSidePanel from "./ConversationSidePanel.vue";
 import ConversationThread from "./ConversationThread.vue";
 import RequestLogList from "../logs/RequestLogList.vue";
 
@@ -275,7 +276,7 @@ describe("ConversationThread", () => {
     expect(wrapper.get('[data-slot="message-origin"]').text()).toContain("未记录");
   });
 
-  it("shows read-only reply state and opens the independent conversation settings page", async () => {
+  it("connects the external controls and both conversation side panels", async () => {
     const conversation = {
       id: "group:7",
       scope: "user_group" as const,
@@ -308,15 +309,17 @@ describe("ConversationThread", () => {
       }
     });
 
-    expect(wrapper.text()).toContain("回复已暂停");
-    expect(wrapper.text()).toContain("编排器已启用");
-    expect(wrapper.findComponent(ConversationOrchestratorStatus).exists()).toBe(false);
+    const controls = wrapper.getComponent(ConversationQuickControls);
+    expect(controls.props("conversation")).toEqual(conversation);
 
-    await wrapper.setProps({ conversation: { ...conversation, replyEnabled: true } });
-    expect(wrapper.text()).toContain("回复已启用");
-    expect(wrapper.getComponent(ConversationOrchestratorStatus).props("status")).toEqual(conversation.orchestratorStatus);
+    controls.vm.$emit("orchestrator", false);
+    expect(wrapper.emitted("orchestrator")).toEqual([[false]]);
 
-    await wrapper.get("button.btn").trigger("click");
-    expect(wrapper.emitted("settings")).toEqual([[]]);
+    controls.vm.$emit("usage");
+    await nextTick();
+    expect(wrapper.getComponent(ConversationSidePanel).props()).toMatchObject({ open: true, panel: "usage" });
+
+    await wrapper.get('button[aria-label="会话设置"]').trigger("click");
+    expect(wrapper.getComponent(ConversationSidePanel).props()).toMatchObject({ open: true, panel: "settings" });
   });
 });

@@ -119,9 +119,15 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
 
     await page.goto("/conversations/group%3A10001");
     await expect(page.getByRole("heading", { name: "产品讨论群" })).toBeVisible();
-    await expect(page.getByLabel("模型调用统计")).toContainText("24 条消息");
-    await page.getByLabel("筛选模型").selectOption("gpt-5.4-mini");
-    await expect(page.getByLabel("模型调用统计")).toContainText("96K Token");
+    const conversationQuickControls = page.getByLabel("会话快捷操作");
+    await expect(conversationQuickControls.getByRole("button", { name: "查看 Token 消耗详情" })).toContainText("128.4K");
+    await expect(page.getByLabel("模型调用统计")).toHaveCount(0);
+    await conversationQuickControls.getByRole("button", { name: "查看 Token 消耗详情" }).click();
+    const conversationUsagePanel = page.getByRole("dialog", { name: "Token 消耗详情" });
+    await expect(conversationUsagePanel.getByLabel("模型调用统计")).toContainText("24 条消息");
+    await conversationUsagePanel.getByLabel("筛选模型").selectOption("gpt-5.4-mini");
+    await expect(conversationUsagePanel.getByLabel("模型调用统计")).toContainText("96K Token");
+    await conversationUsagePanel.getByRole("button", { name: "关闭 Token 消耗详情" }).click();
     await expect(page.getByRole("status", { name: "编排器状态" })).toContainText("编排器状态");
     await expect(page.getByRole("status", { name: "编排器状态" })).toContainText("判断中");
     await expect(page.getByRole("status", { name: "编排器状态" })).not.toContainText("消息");
