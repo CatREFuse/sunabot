@@ -68,13 +68,13 @@ if command -v fnm >/dev/null 2>&1 && fnm exec --using="$VERSION" node -e "" >/de
 fi
 
 if ! command -v node >/dev/null 2>&1; then
-  echo "缺少 Node $VERSION。请安装该版本后重试。" >&2
+  echo "缺少 Node ${VERSION}。请安装该版本后重试。" >&2
   exit 1
 fi
 
 CURRENT=$(node -p 'process.versions.node')
 if [ "$CURRENT" != "$VERSION" ]; then
-  echo "需要 Node $VERSION，当前为 $CURRENT。可执行：fnm install $VERSION" >&2
+  echo "需要 Node ${VERSION}，当前为 ${CURRENT}。可执行：fnm install ${VERSION}" >&2
   exit 1
 fi
 

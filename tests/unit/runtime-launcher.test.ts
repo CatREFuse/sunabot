@@ -143,6 +143,35 @@ describe("unified runtime launcher", () => {
     }
   });
 
+  it("reports the required and current Node versions when they differ", async () => {
+    const fixture = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-launcher-node-version-"));
+    try {
+      const bin = path.join(fixture, "bin");
+      await fs.mkdir(bin, { recursive: true });
+      await fs.copyFile(path.join(root, "sunabot.sh"), path.join(fixture, "sunabot.sh"));
+      await fs.chmod(path.join(fixture, "sunabot.sh"), 0o755);
+      await fs.writeFile(path.join(fixture, ".node-version"), "24.18.0\n");
+      await fs.writeFile(path.join(fixture, "package-lock.json"), "{}\n");
+      await fs.writeFile(path.join(bin, "node"), [
+        "#!/bin/sh",
+        "if [ \"${1:-}\" = \"-p\" ]; then",
+        "  printf '%s\\n' '24.14.0'",
+        "fi"
+      ].join("\n"), { mode: 0o755 });
+
+      const result = spawnSync(path.join(fixture, "sunabot.sh"), ["status"], {
+        cwd: path.parse(fixture).root,
+        encoding: "utf8",
+        env: { ...process.env, PATH: `${bin}:/usr/bin:/bin` }
+      });
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("需要 Node 24.18.0，当前为 24.14.0。可执行：fnm install 24.18.0");
+    } finally {
+      await fs.rm(fixture, { recursive: true, force: true });
+    }
+  });
+
   it("defaults to up and selects the platform Core mode", () => {
     expect(parseLauncherArguments([], {}).command).toBe("up");
     expect(resolveCoreMode("auto", { platform: "darwin" })).toBe("native");
