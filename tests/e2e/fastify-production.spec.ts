@@ -56,7 +56,8 @@ test("Fastify 生产服务提供静态资源、深链接回退与管理鉴权", 
     "/agent-prompts/persona.soul",
     "/agent-prompts/image.selfie-rewrite",
     "/system-prompts/conversation.private-reply",
-    "/web-chat"
+    "/web-chat",
+    "/extensions"
   ];
   let html = "";
   for (const pathname of deepLinks) {

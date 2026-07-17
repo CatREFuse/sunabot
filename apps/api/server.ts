@@ -686,6 +686,7 @@ function isSpaRoute(pathname: string) {
     "overview",
     "conversations",
     "web-chat",
+    "extensions",
     "agent-prompts",
     "system-prompts",
     "prompts",
