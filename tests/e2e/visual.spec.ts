@@ -160,6 +160,14 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     await expect(page.getByRole("heading", { name: "工具权限", exact: true })).toBeVisible();
     await capture(page, viewport.name, theme, "conversation-settings-tools");
 
+    await page.goto("/conversations/group%3A10001/settings/general");
+    await expect(page.getByRole("heading", { name: "会话设置", exact: true })).toBeVisible();
+    await expect(page.getByRole("status")).toContainText("已同步");
+    await capture(page, viewport.name, theme, "conversation-settings-route-general");
+    await page.getByRole("button", { name: "工具权限", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "工具权限", exact: true })).toBeVisible();
+    await capture(page, viewport.name, theme, "conversation-settings-route-tools");
+
     await page.goto("/web-chat");
     await expect(page.getByRole("heading", { name: "与普拉娜对话", exact: true })).toBeVisible();
     await expect(page.getByLabel("Web Chat 消息")).toBeVisible();

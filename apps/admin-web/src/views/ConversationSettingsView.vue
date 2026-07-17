@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, shallowRef, watch } from "vue";
-import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter, type RouteLocationNormalized } from "vue-router";
+import { computed, onBeforeUnmount, watch } from "vue";
+import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from "vue-router";
 import ConversationBehaviorSettings from "../components/conversations/ConversationBehaviorSettings.vue";
 import ConversationToolSettingsForm from "../components/conversations/ConversationToolSettingsForm.vue";
-import DialogOverlay from "../components/ui/DialogOverlay.vue";
 import PageHeader from "../components/ui/PageHeader.vue";
-import SettingsSaveBar from "../components/settings/SettingsSaveBar.vue";
+import SettingsAutoSaveStatus from "../components/settings/SettingsAutoSaveStatus.vue";
+import { activeAgentIdState } from "../composables/agentScope";
 import { useConversationSettings } from "../composables/useConversationSettings";
 import { conversationIdentityDetail } from "../utils/qqIdentity";
 
@@ -14,10 +14,6 @@ const route = useRoute();
 const router = useRouter();
 const conversationId = computed(() => String(route.params.conversationId ?? "").trim());
 const settings = useConversationSettings(conversationId);
-const leaveConfirmOpen = shallowRef(false);
-const pendingLeavePath = shallowRef("");
-const savingBeforeLeave = shallowRef(false);
-const leaveSaveError = shallowRef("");
 const sections = computed<Array<{ id: SettingsSection; label: string; icon: string }>>(() => settings.isWebChat.value
   ? [{ id: "tools", label: "工具权限", icon: "bx-wrench" }]
   : [
@@ -32,79 +28,20 @@ const current = computed<SettingsSection>(() => {
 const backTo = computed(() => settings.isWebChat.value
   ? "/web-chat"
   : `/conversations/${encodeURIComponent(conversationId.value)}`);
-const behaviorKind = computed(() => settings.behaviorError.value ? "error" : settings.behaviorMessage.value ? "saved" : "");
-const toolKind = computed(() => settings.toolError.value ? "error" : settings.toolMessage.value ? "saved" : "");
-const anyDirty = computed(() => settings.behaviorDirty.value || settings.toolsDirty.value);
 
-watch(conversationId, () => { void settings.load(true); }, { immediate: true });
-onMounted(() => window.addEventListener("beforeunload", onBeforeUnload));
-onBeforeUnmount(() => {
-  window.removeEventListener("beforeunload", onBeforeUnload);
-  settings.dispose();
-});
-onBeforeRouteLeave((to) => guardNavigation(to));
+watch([conversationId, activeAgentIdState], () => { void settings.load(true); }, { immediate: true });
+onBeforeUnmount(settings.dispose);
+onBeforeRouteLeave(() => settings.flush());
 onBeforeRouteUpdate((to) => String(to.params.conversationId ?? "").trim() === conversationId.value
   ? true
-  : guardNavigation(to));
+  : settings.flush());
 
 function selectSection(section: SettingsSection) {
   void router.push(`/conversations/${encodeURIComponent(conversationId.value)}/settings/${section}`);
 }
 
-function sectionDirty(section: SettingsSection) {
-  return section === "general" ? settings.behaviorDirty.value : settings.toolsDirty.value;
-}
-
-function guardNavigation(to: RouteLocationNormalized) {
-  if (!anyDirty.value) return true;
-  pendingLeavePath.value = to.fullPath;
-  leaveConfirmOpen.value = true;
-  return false;
-}
-
-function onBeforeUnload(event: BeforeUnloadEvent) {
-  if (!anyDirty.value) return;
-  event.preventDefault();
-  event.returnValue = "";
-}
-
-function cancelLeave() {
-  if (savingBeforeLeave.value) return;
-  leaveConfirmOpen.value = false;
-  pendingLeavePath.value = "";
-  leaveSaveError.value = "";
-}
-
-function confirmLeave() {
-  if (savingBeforeLeave.value) return;
-  const path = pendingLeavePath.value;
-  settings.discardBehavior();
-  settings.discardTools();
-  leaveConfirmOpen.value = false;
-  pendingLeavePath.value = "";
-  leaveSaveError.value = "";
-  if (path) void router.push(path);
-}
-
-async function saveAndLeave() {
-  const path = pendingLeavePath.value;
-  savingBeforeLeave.value = true;
-  leaveSaveError.value = "";
-  try {
-    if (settings.behaviorDirty.value && !await settings.saveBehavior()) {
-      throw new Error(settings.behaviorError.value || "回复设置保存失败");
-    }
-    if (settings.toolsDirty.value && !await settings.saveTools()) {
-      throw new Error(settings.toolError.value || "工具权限保存失败");
-    }
-    leaveConfirmOpen.value = false;
-    pendingLeavePath.value = "";
-    if (path) await router.push(path);
-  } catch (error) {
-    leaveSaveError.value = error instanceof Error ? error.message : "会话设置保存失败";
-  } finally {
-    savingBeforeLeave.value = false;
-  }
+async function refresh() {
+  if (await settings.flush()) await settings.load(true);
 }
 
 function scopeLabel() {
@@ -125,7 +62,7 @@ function scopeLabel() {
           <span v-if="settings.conversation.value" class="block truncate text-sm text-mute">{{ settings.conversation.value.title }}</span>
         </template>
         <template #actions>
-          <button class="btn" type="button" :disabled="settings.loading.value || anyDirty" @click="settings.load(true)">
+          <button class="btn" type="button" :disabled="settings.loading.value" @click="refresh">
             <i class="bx bx-refresh" aria-hidden="true"></i>刷新
           </button>
           <RouterLink class="btn btn-ghost" :to="backTo">
@@ -160,7 +97,7 @@ function scopeLabel() {
             :aria-pressed="current === section.id"
             @click="selectSection(section.id)"
           >
-            <i class="bx mr-1" :class="section.icon" aria-hidden="true"></i>{{ section.label }}{{ sectionDirty(section.id) ? " · 未保存" : "" }}
+            <i class="bx mr-1" :class="section.icon" aria-hidden="true"></i>{{ section.label }}
           </button>
         </nav>
 
@@ -170,17 +107,13 @@ function scopeLabel() {
               :conversation="settings.conversation.value"
               :reply-enabled="settings.replyEnabled.value"
               :orchestrator-enabled="settings.orchestratorEnabled.value"
-              :busy="settings.behaviorSaving.value"
+              :busy="settings.loading.value"
               @update-reply-enabled="settings.setReplyEnabled"
               @update-orchestrator-enabled="settings.setOrchestratorEnabled"
             />
-            <SettingsSaveBar
-              :dirty="settings.behaviorDirty.value"
-              :busy="settings.behaviorSaving.value"
-              :message="settings.behaviorError.value || settings.behaviorMessage.value"
-              :kind="behaviorKind"
-              @save="settings.saveBehavior"
-              @discard="settings.discardBehavior"
+            <SettingsAutoSaveStatus
+              :kind="settings.behaviorState.value.kind"
+              :message="settings.behaviorState.value.message"
             />
           </template>
           <template v-else>
@@ -188,16 +121,12 @@ function scopeLabel() {
               :tools="settings.tools.value"
               :disabled-tools="settings.disabledTools.value"
               :loading="settings.loading.value"
-              :busy="settings.loading.value || settings.toolSaving.value"
+              :busy="settings.loading.value"
               @toggle="settings.setToolEnabled"
             />
-            <SettingsSaveBar
-              :dirty="settings.toolsDirty.value"
-              :busy="settings.loading.value || settings.toolSaving.value"
-              :message="settings.toolError.value || settings.toolMessage.value"
-              :kind="toolKind"
-              @save="settings.saveTools"
-              @discard="settings.discardTools"
+            <SettingsAutoSaveStatus
+              :kind="settings.toolState.value.kind"
+              :message="settings.toolState.value.message"
             />
           </template>
         </main>
@@ -205,16 +134,4 @@ function scopeLabel() {
     </div>
   </div>
 
-  <DialogOverlay :open="leaveConfirmOpen" labelledby="conversation-settings-leave-title" @close="cancelLeave">
-    <section class="w-full max-w-md rounded border border-visible bg-panel p-6">
-      <h2 id="conversation-settings-leave-title" class="text-xl font-medium text-display">放弃未保存的设置？</h2>
-      <p class="mt-3 text-sm leading-6 text-mute">离开后，本次修改不会保留。</p>
-      <p v-if="leaveSaveError" class="mt-4 inline-state" data-kind="error">{{ leaveSaveError }}</p>
-      <div class="mt-8 flex flex-wrap justify-end gap-2">
-        <button class="btn btn-ghost" type="button" :disabled="savingBeforeLeave" @click="cancelLeave">继续编辑</button>
-        <button class="btn btn-primary" type="button" :disabled="savingBeforeLeave" @click="saveAndLeave"><i class="bx bx-save" aria-hidden="true"></i>{{ savingBeforeLeave ? "保存中" : "保存并离开" }}</button>
-        <button class="btn btn-danger" type="button" :disabled="savingBeforeLeave" @click="confirmLeave">放弃并离开</button>
-      </div>
-    </section>
-  </DialogOverlay>
 </template>

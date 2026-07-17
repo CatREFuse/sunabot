@@ -29,9 +29,9 @@ describe("TavilyKeyPool", () => {
       }
     });
 
-    expect(wrapper.get(".key-pool__summary").text().replace(/\s+/g, " ")).toBe("2 个已保存 · 1 个环境变量来源");
+    expect(wrapper.get(".key-pool__summary").text().replace(/\s+/g, " ")).toBe("2 个已配置 · 1 个环境变量来源");
     expect(wrapper.text()).toContain("Key 1");
-    expect(wrapper.text()).toContain("已保存");
+    expect(wrapper.text()).toContain("已配置");
     expect(wrapper.text()).not.toContain("tvly-");
 
     await wrapper.get('button[aria-label="删除 Key 1"]').trigger("click");
@@ -47,6 +47,6 @@ describe("TavilyKeyPool", () => {
     await wrapper.get('[aria-label="Tavily API Key 1"]').setValue("tvly-new-key-1234567890");
 
     expect(draft.tavilyApiKeys).toEqual(["tvly-new-key-1234567890"]);
-    expect(wrapper.get(".key-pool__summary").text().replace(/\s+/g, " ")).toBe("0 个已保存 · 1 个待保存");
+    expect(wrapper.get(".key-pool__summary").text().replace(/\s+/g, " ")).toBe("0 个已配置 · 1 个等待同步");
   });
 });

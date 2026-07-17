@@ -1118,35 +1118,38 @@ test("每个会话都有独立设置侧栏且 Agent 总开关优先", async ({ p
   await expect(page.getByRole("button", { name: /^设置 / })).toHaveCount(2);
   await page.getByRole("button", { name: "设置 产品讨论群", exact: true }).click();
   await expect(page).toHaveURL(/\/conversations\/group%3A10001$/);
-  await expect(page.getByRole("heading", { name: "会话设置", exact: true })).toBeVisible();
-  await page.getByLabel("编排器", { exact: true }).uncheck();
+  const settingsDialog = page.getByRole("dialog", { name: "会话设置" });
+  const settingsPanel = page.locator('[data-slot="conversation-side-panel"]');
+  await expect(settingsDialog).toBeVisible();
+  await expect(settingsPanel).toBeVisible();
+  await settingsPanel.getByRole("checkbox", { name: /^编排器/ }).uncheck();
   await expect.poll(() => state.conversationReplyRequests.at(-1)).toEqual({
     conversationId: "group:10001",
     replyEnabled: true,
     orchestratorEnabled: false
   });
-  await page.getByLabel("启动", { exact: true }).uncheck();
+  await settingsPanel.getByLabel("启动", { exact: true }).uncheck();
   await expect.poll(() => state.conversationReplyRequests.at(-1)).toEqual({
     conversationId: "group:10001",
     replyEnabled: false,
     orchestratorEnabled: false
   });
 
-  await page.getByRole("button", { name: "工具权限", exact: true }).click();
-  await expect(page.getByLabel("启用 网页搜索")).toBeDisabled();
-  expect(await page.getByText("Agent 已停用", { exact: true }).count()).toBeGreaterThan(0);
-  await page.getByLabel("启用 读取文件").uncheck();
+  await settingsPanel.getByRole("button", { name: "工具权限", exact: true }).click();
+  await expect(settingsPanel.getByLabel("启用 网页搜索")).toBeDisabled();
+  expect(await settingsPanel.getByText("Agent 已停用", { exact: true }).count()).toBeGreaterThan(0);
+  await settingsPanel.getByLabel("启用 读取文件").uncheck();
   await expect.poll(() => state.conversationToolRequests.at(-1)).toEqual({
     conversationId: "group:10001",
     disabledTools: ["read_file"]
   });
 
-  await page.getByLabel("启用 读取文件").check();
+  await settingsPanel.getByLabel("启用 读取文件").check();
   await expect.poll(() => state.conversationToolRequests.at(-1)).toEqual({
     conversationId: "group:10001",
     disabledTools: []
   });
-  await page.getByRole("link", { name: "Agent 总开关", exact: true }).click();
+  await settingsPanel.getByRole("link", { name: "Agent 总开关", exact: true }).click();
   await expect(page).toHaveURL(/\/agent-settings\/tools/);
 
   await page.goto("/web-chat");
@@ -1159,6 +1162,33 @@ test("每个会话都有独立设置侧栏且 Agent 总开关优先", async ({ p
   await expect(page.getByRole("heading", { name: "会话设置", exact: true })).toBeVisible();
   await page.getByRole("link", { name: "返回会话", exact: true }).click();
   await expect(page.getByRole("heading", { name: "与普拉娜对话", exact: true })).toBeVisible();
+});
+
+test("独立会话设置自动同步并在失败时保留当前输入", async ({ page }) => {
+  const state = await installMockApi(page);
+  await page.goto("/conversations/group%3A10001/settings/general");
+  await expect(page.getByRole("heading", { name: "会话设置", exact: true })).toBeVisible();
+
+  await page.getByLabel("允许回复", { exact: true }).uncheck();
+  await page.getByRole("link", { name: "返回会话", exact: true }).click();
+  await expect(page).toHaveURL(/\/conversations\/group%3A10001$/);
+  await expect.poll(() => state.conversationReplyRequests.at(-1)).toEqual({
+    conversationId: "group:10001",
+    replyEnabled: false,
+    orchestratorEnabled: true
+  });
+  await expect(page.getByRole("dialog", { name: "放弃未保存的设置？" })).toHaveCount(0);
+
+  await page.goto("/conversations/group%3A10001/settings/tools");
+  await expect(page.getByLabel("启用 读取文件")).toBeEnabled();
+  state.nextConversationToolError = "工具权限同步失败。";
+  await page.getByLabel("启用 读取文件").uncheck();
+  await page.getByRole("link", { name: "返回会话", exact: true }).click();
+
+  await expect(page).toHaveURL(/\/conversations\/group%3A10001\/settings\/tools$/);
+  await expect(page.getByText("工具权限同步失败。", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("启用 读取文件")).not.toBeChecked();
+  await expect(page.getByRole("button", { name: /保存|放弃/ })).toHaveCount(0);
 });
 
 test("页面加载完成后切换路由不再等待新的脚本分块", async ({ page }) => {

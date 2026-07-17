@@ -374,6 +374,7 @@ export interface MockApiState {
   };
   monitoringWrites: Array<Record<string, unknown>>;
   nextConversationError: string;
+  nextConversationToolError: string;
   imageHistoryError: string;
   qqOnline: boolean;
   qrVersion: number;
@@ -433,6 +434,7 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
     },
     monitoringWrites: [],
     nextConversationError: "",
+    nextConversationToolError: "",
     imageHistoryError: "",
     qqOnline: true,
     qrVersion: 1,
@@ -1276,6 +1278,11 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
     if (/^\/api\/conversations\/[^/]+\/tools$/.test(pathname)) {
       const conversationId = decodeURIComponent(pathname.split("/")[3] ?? "");
       if (method === "PUT") {
+        if (state.nextConversationToolError) {
+          const message = state.nextConversationToolError;
+          state.nextConversationToolError = "";
+          return json(route, { error: { code: "CONVERSATION_TOOL_UPDATE_FAILED", message } }, 500);
+        }
         const body = request.postDataJSON() as { disabledTools?: string[] };
         const disabledTools = Array.isArray(body.disabledTools) ? [...body.disabledTools] : [];
         state.conversationTools[conversationId] = disabledTools;

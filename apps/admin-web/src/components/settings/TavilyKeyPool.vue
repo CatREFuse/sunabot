@@ -39,8 +39,8 @@ function isMarkedForRemoval(index: number) {
       <div>
         <span class="field-label">Tavily Key 池</span>
         <p class="key-pool__summary">
-          {{ retainedStoredCount }} 个已保存
-          <template v-if="pendingCount"> · {{ pendingCount }} 个待保存</template>
+          {{ retainedStoredCount }} 个已配置
+          <template v-if="pendingCount"> · {{ pendingCount }} 个等待同步</template>
           <template v-if="environmentCount"> · {{ environmentCount }} 个环境变量来源</template>
         </p>
       </div>
@@ -59,7 +59,7 @@ function isMarkedForRemoval(index: number) {
       >
         <div class="key-pool__identity">
           <span>Key {{ index + 1 }}</span>
-          <small>{{ isMarkedForRemoval(index) ? "待删除" : "已保存" }}</small>
+          <small>{{ isMarkedForRemoval(index) ? "等待删除" : "已配置" }}</small>
         </div>
         <span class="key-pool__masked" aria-hidden="true">•••• •••• ••••</span>
         <button
@@ -76,7 +76,7 @@ function isMarkedForRemoval(index: number) {
       <div v-for="(_, index) in draft.tavilyApiKeys" :key="`new-${index}`" class="key-pool__row key-pool__row--new">
         <span class="key-pool__identity">
           <span>新 Key {{ index + 1 }}</span>
-          <small>未保存</small>
+          <small>等待同步</small>
         </span>
         <input
           v-model.trim="draft.tavilyApiKeys[index]"
@@ -91,7 +91,7 @@ function isMarkedForRemoval(index: number) {
         </button>
       </div>
     </div>
-    <p v-else class="key-pool__empty">还没有保存 Key</p>
+    <p v-else class="key-pool__empty">还没有配置 Key</p>
   </section>
 </template>
 

@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { installMockApi } from "./mock-api";
 
-test("放弃离开会清除群聊回复联动草稿", async ({ page }) => {
+test("群聊回复联动在离开前完成自动同步", async ({ page }) => {
   const state = await installMockApi(page);
   await page.goto("/agent-settings/orchestrator");
 
@@ -10,18 +10,14 @@ test("放弃离开会清除群聊回复联动草稿", async ({ page }) => {
   await groupReply.uncheck();
 
   await page.getByRole("link", { name: "状态", exact: true }).click();
-  const dialog = page.getByRole("dialog", { name: "放弃未保存的设置？" });
-  await expect(dialog).toBeVisible();
-  await dialog.getByRole("button", { name: "放弃并离开" }).click();
-
   await expect(page).toHaveURL(/\/overview$/);
-  expect(state.patchRequests).toHaveLength(0);
+  await expect.poll(() => state.config.onebot.autoReplyUserGroup).toBe(false);
+  await expect(page.getByRole("dialog", { name: "放弃未保存的设置？" })).toHaveCount(0);
 
   await page.goto("/agent-settings/orchestrator");
-  await expect(groupReply).toBeChecked();
+  await expect(groupReply).not.toBeChecked();
   await page.getByRole("link", { name: "状态", exact: true }).click();
   await expect(page).toHaveURL(/\/overview$/);
-  await expect(dialog).toBeHidden();
 });
 
 test("桌面 Agent 菜单不会让侧栏横向滚动", async ({ page }) => {
