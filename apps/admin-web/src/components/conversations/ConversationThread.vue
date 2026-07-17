@@ -9,6 +9,7 @@ import ConversationMessageBubble from "./ConversationMessageBubble.vue";
 import ConversationOrchestratorStatus from "./ConversationOrchestratorStatus.vue";
 import RequestLogList from "../logs/RequestLogList.vue";
 import ModelCallStatsPanel from "../logs/ModelCallStatsPanel.vue";
+import ConversationToolSettings from "./ConversationToolSettings.vue";
 
 const props = withDefaults(defineProps<{
   conversation: ConversationRecord | null;
@@ -76,6 +77,7 @@ function refreshLogs() {
       <div class="min-w-0 flex-1">
         <h2 class="truncate text-2xl font-medium leading-none tracking-[-0.02em] text-display">{{ conversation?.title ?? "选择一个会话" }}</h2>
       </div>
+      <ConversationToolSettings v-if="conversation" :conversation-id="conversation.id" />
       <button v-if="conversation" class="icon-btn" type="button" aria-label="刷新消息" @click="emit('refresh')"><i class="bx bx-refresh text-xl" aria-hidden="true"></i></button>
       <button v-if="conversation" class="icon-btn" type="button" aria-label="请求日志" @click="openLogs()"><i class="bx bx-file-find text-xl" aria-hidden="true"></i></button>
     </header>

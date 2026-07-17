@@ -995,6 +995,31 @@ test("生产构建支持深链接刷新与浏览器返回", async ({ page }) => 
   await expect(page.getByRole("heading", { name: "产品讨论群" })).toBeVisible();
 });
 
+test("每个会话独立保存工具选择且 Agent 总开关优先", async ({ page }) => {
+  const state = await installMockApi(page);
+  state.config.bot.tools.overrides.websearch = { enabled: false };
+  await page.goto("/conversations/group%3A10001");
+
+  await page.getByRole("button", { name: "工具", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "会话工具" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByLabel("启用 网页搜索")).toBeDisabled();
+  expect(await dialog.getByText("Agent 已停用", { exact: true }).count()).toBeGreaterThan(0);
+  await dialog.getByLabel("启用 读取文件").uncheck();
+  await dialog.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(dialog).toBeHidden();
+
+  expect(state.conversationToolRequests).toEqual([{
+    conversationId: "group:10001",
+    disabledTools: ["read_file"]
+  }]);
+
+  await page.goto("/web-chat");
+  await page.getByRole("button", { name: "工具", exact: true }).click();
+  const webDialog = page.getByRole("dialog", { name: "会话工具" });
+  await expect(webDialog.getByLabel("启用 读取文件")).toBeChecked();
+});
+
 test("页面加载完成后切换路由不再等待新的脚本分块", async ({ page }) => {
   await installMockApi(page);
   await page.goto("/overview");

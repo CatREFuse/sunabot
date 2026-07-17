@@ -6,6 +6,7 @@ import type { OpenAIToolDefinition } from "../../services/agent/promptSystem.js"
 import { sendFileTool } from "../../services/tools/sendConversationAssetTool.js";
 import { AGENT_TOOL_NAMES } from "../../src/types.js";
 import {
+  isProviderToolAvailable,
   listToolMetadata,
   providerToolExecutionMode,
   resolveProviderToolDefinitions
@@ -46,6 +47,37 @@ describe("ToolRegistry", () => {
 
   it("does not expose disabled provider tools", () => {
     expect(resolveProviderToolDefinitions({})).toEqual([]);
+  });
+
+  it("applies the conversation selection after the Agent master switch", async () => {
+    const options = {
+      onAssistantText: vi.fn(),
+      allowNoReply: true,
+      disabledTools: ["assistant_text"] as const
+    } satisfies ProviderCompleteOptions;
+    const executor = new RegistryProviderToolExecutor();
+    const definitions = executor.resolveDefinitions(options, [
+      staleTool("assistant_text"),
+      staleTool("no_reply")
+    ]);
+
+    expect(definitions.map((definition) => definition.name)).toEqual(["no_reply"]);
+    expect(providerToolExecutionMode("assistant_text", options)).toBeUndefined();
+    expect(isProviderToolAvailable("assistant_text", options)).toBe(false);
+    expect(listToolMetadata(options, [staleTool("assistant_text")]).find((tool) => tool.name === "assistant_text"))
+      .toMatchObject({ enabled: true, available: true, effectiveEnabled: false });
+
+    const [forged] = await executor.execute([{
+      type: "function_call",
+      name: "assistant_text",
+      call_id: "call-disabled-by-conversation",
+      arguments: JSON.stringify({ text: "should not send" })
+    }], options, definitions);
+    expect(JSON.parse(String(forged?.output))).toEqual({
+      ok: false,
+      error: "Unsupported tool: assistant_text"
+    });
+    expect(options.onAssistantText).not.toHaveBeenCalled();
   });
 
   it("keeps API-only Bash capability metadata separate from executable Provider options", () => {

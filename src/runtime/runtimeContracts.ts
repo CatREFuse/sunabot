@@ -3,6 +3,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { nanoid } from "nanoid";
 import {
+  type AgentToolName,
   AppConfig,
   ChatMessage,
   ConversationMessageQuote,
@@ -208,6 +209,10 @@ export interface ConversationReplyUpdateInput {
   groupId?: unknown;
   replyEnabled?: unknown;
   orchestratorEnabled?: unknown;
+}
+export interface ConversationToolPolicyUpdateInput {
+  id?: unknown;
+  disabledTools?: readonly AgentToolName[];
 }
 export interface RuntimeCommandContext {
   channelKey: string;

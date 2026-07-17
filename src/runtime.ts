@@ -321,6 +321,8 @@ export class SunaRuntime {
   hydrateConversationIdentities(...args: Parameters<RuntimeLifecycle["hydrateConversationIdentities"]>) { return this.lifecycle.hydrateConversationIdentities(...args); }
   enrichMemoryEntries(...args: Parameters<RuntimeLifecycle["enrichMemoryEntries"]>) { return this.lifecycle.enrichMemoryEntries(...args); }
   setConversationReplyEnabled(...args: Parameters<RuntimeLifecycle["setConversationReplyEnabled"]>) { return this.lifecycle.setConversationReplyEnabled(...args); }
+  getConversationToolPolicy(...args: Parameters<RuntimeLifecycle["getConversationToolPolicy"]>) { return this.lifecycle.getConversationToolPolicy(...args); }
+  setConversationToolPolicy(...args: Parameters<RuntimeLifecycle["setConversationToolPolicy"]>) { return this.inAgentContext(() => this.lifecycle.setConversationToolPolicy(...args)); }
   announceServiceOnline(...args: Parameters<RuntimeLifecycle["announceServiceOnline"]>) { return this.lifecycle.announceServiceOnline(...args); }
   hydrateConversationRecords(...args: Parameters<RuntimeIntake["hydrateConversationRecords"]>) { return this.intake.hydrateConversationRecords(...args); }
   performHydrateConversationRecords(...args: Parameters<RuntimeIntake["performHydrateConversationRecords"]>) { return this.intake.performHydrateConversationRecords(...args); }

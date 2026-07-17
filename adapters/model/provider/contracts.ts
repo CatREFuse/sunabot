@@ -1,5 +1,5 @@
 import type OpenAI from "openai";
-import type { BotConfig, ImageResult, ProviderConfig } from "../../../src/types.js";
+import type { AgentToolName, BotConfig, ImageResult, ProviderConfig } from "../../../src/types.js";
 import type { OpenAIToolDefinition } from "../../../services/agent/promptSystem.js";
 import type { MemoryRecallInput } from "../../../services/memory/memoryService.js";
 import type {
@@ -36,6 +36,7 @@ export interface ProviderCompleteOptions {
   imageTools?: boolean;
   systemConfig?: SystemConfigToolPort;
   skills?: SkillRuntimeToolPort;
+  disabledTools?: readonly AgentToolName[];
   mcp?: ProviderMcpOptions;
   logContext?: ProviderLogContext;
 }

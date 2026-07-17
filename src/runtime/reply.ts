@@ -394,6 +394,7 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
           options.delivery
         ),
         bot: this.config.bot,
+        disabledTools: this.conversationRecords.get(conversationRecordId(incoming))?.disabledTools,
         generateImage: (prompt, size, quality, referenceImageUrls, childLogContext) => provider.generateImage(
           prompt,
           size,

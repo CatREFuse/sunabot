@@ -137,6 +137,11 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     await expect(page.getByRole("status", { name: "正在输入" })).toBeVisible();
     await expect(page.getByRole("button", { name: "查看请求日志" })).toHaveCount(3);
     await capture(page, viewport.name, theme, "conversations-detail");
+    await page.getByRole("button", { name: "工具", exact: true }).click();
+    await expect(page.getByRole("dialog", { name: "会话工具" })).toBeVisible();
+    await capture(page, viewport.name, theme, "conversation-tools");
+    await page.getByRole("dialog", { name: "会话工具" }).getByRole("button", { name: "关闭", exact: true }).click();
+    await expect(page.getByRole("dialog", { name: "会话工具" })).toBeHidden();
     state.nextConversationError = "回复设置保存失败";
     await page.getByLabel("启用", { exact: true }).uncheck();
     await expect(page.getByRole("alert")).toContainText("已重新读取当前状态");

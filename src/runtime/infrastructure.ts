@@ -108,6 +108,7 @@ import {
 import { buildConversationPromptVariables } from "../../services/agent/persona.js";
 import { DEFAULT_CONTEXT_MESSAGE_LIMIT, MAX_STORED_CONVERSATION_MESSAGES, GROUP_CHAT_SUMMARY_WINDOW_MS, MAX_SELFIE_REFERENCE_IMAGES, MAX_SELFIE_WORKSPACE_REFERENCE_IMAGES, MAX_CURRENT_CONTEXT_IMAGES, MAX_HISTORY_CONTEXT_IMAGES, HYDRATE_MESSAGE_WINDOW_MS, ACTIVE_CONVERSATION_WINDOW_MS, DIRECT_REPLY_TIMEOUT_MS, AMBIENT_ORCHESTRATOR_TIMEOUT_MS, ORCHESTRATOR_MAX_RETRIES, PREPARE_TIMEOUT_MS, RECENT_CONTEXT_TOKEN_BUDGET, DEDUPE_TTL_MS, MAX_DEDUPE_KEYS, DEFAULT_ADMIN_NAME, GROUP_CHAT_SUMMARY_COMMAND, CONVERSATION_REPLY_PROMPT_FILE, SELFIE_PROMPT_FILE, GROUP_CHAT_SUMMARY_PROMPT_FILE, ADMIN_PERSONA_FILES, ADMIN_RUNTIME_PROMPT_DEFAULTS, BatchUserInfo, WorkingMemoryMergeOutput, WorkingMemoryMergeContext, personaFileNameForAdminId, AdminIdentity, ConversationReplyUpdateInput, RuntimeCommandContext, ReplyDeliveryDraft, ReplyDelivery, DeferredCodexTurn, AmbientReplyJob, AmbientReplyState, AmbientIdleTimer, RuntimeConfigSnapshot, RuntimePromptSnapshot, SunaRuntimeOptions } from "./runtimeContracts.js";
 import { persistedAttachments, persistedQuoteReferences } from "./messagingAttachmentHelpers.js";
+import { normalizeConversationDisabledTools } from "../../services/tools/conversationToolPolicy.js";
 
 export class TaskLimiter {
   private active = 0;
@@ -236,6 +237,7 @@ export function loadConversationRecords(config?: Pick<AppConfig, "persona">) {
     store.ensureLegacyConversationsImported(conversationStorePath());
     return store.readConversations().filter(isConversationRecord).map((record) => ({
       ...record,
+      disabledTools: normalizeConversationDisabledTools(record.disabledTools),
       messages: record.messages
         .slice(-MAX_STORED_CONVERSATION_MESSAGES)
         .map(persistedConversationMessage)
@@ -286,8 +288,10 @@ function normalizedConversationRecords(
     .map(normalizedConversationRecord);
 }
 function normalizedConversationRecord(record: ConversationRecord): ConversationRecord {
+  const disabledTools = normalizeConversationDisabledTools(record.disabledTools);
   return {
     ...record,
+    disabledTools: disabledTools.length ? disabledTools : undefined,
     messages: record.messages
       .slice(-MAX_STORED_CONVERSATION_MESSAGES)
       .map(persistedConversationMessage)

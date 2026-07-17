@@ -44,13 +44,17 @@ describe("conversation API plugin", () => {
       internal: 1
     };
     const setConversationReplyEnabled = vi.fn((body: unknown) => body);
+    const getConversationToolPolicy = vi.fn((id: string) => ({ conversationId: id, disabledTools: ["websearch"] }));
+    const setConversationToolPolicy = vi.fn((body: unknown) => body);
     const runtime = {
       getConversationRecords: vi.fn(() => records),
       hydrateConversationRecords,
       hydrateConversationIdentities,
       getConversationMessages,
       getConversationMessageStats: vi.fn(() => messageStats),
-      setConversationReplyEnabled
+      setConversationReplyEnabled,
+      getConversationToolPolicy,
+      setConversationToolPolicy
     } as unknown as SunaRuntime;
     const onebotGateway = { getStatus: vi.fn(() => ({ connected: true })) } as unknown as OneBotGateway;
     const conversationDirectory = {
@@ -113,11 +117,50 @@ describe("conversation API plugin", () => {
     })).json()).toEqual({ ok: true, conversation: replyBody });
     expect(setConversationReplyEnabled).toHaveBeenCalledWith(replyBody);
 
+    expect((await app.inject({
+      method: "GET",
+      url: "/api/conversations/private%3A171419991/tools"
+    })).json()).toEqual({ conversationId: "private:171419991", disabledTools: ["websearch"] });
+    expect(getConversationToolPolicy).toHaveBeenCalledWith("private:171419991");
+
+    const toolsBody = { disabledTools: ["read_file", "workspace_bash"] };
+    expect((await app.inject({
+      method: "PUT",
+      url: "/api/conversations/private%3A171419991/tools",
+      payload: toolsBody
+    })).json()).toEqual({ id: "private:171419991", ...toolsBody });
+    expect(setConversationToolPolicy).toHaveBeenCalledWith({ id: "private:171419991", ...toolsBody });
+
+    for (const method of ["GET", "PUT"] as const) {
+      const invalid = await app.inject({
+        method,
+        url: "/api/conversations/not-a-conversation/tools",
+        ...(method === "PUT" ? { payload: { disabledTools: [] } } : {})
+      });
+      expect(invalid.statusCode).toBe(400);
+      expect(invalid.json()).toMatchObject({ error: { code: "CONVERSATION_ID_INVALID" } });
+    }
+
+    for (const payload of [
+      { disabledTools: ["unknown_tool"] },
+      { disabledTools: ["read_file", "read_file"] },
+      { disabledTools: "read_file" },
+      { disabledTools: [], extra: true }
+    ]) {
+      const invalid = await app.inject({
+        method: "PUT",
+        url: "/api/conversations/private%3A171419991/tools",
+        payload
+      });
+      expect(invalid.statusCode).toBe(400);
+    }
+
     expect([...routeSchemas.keys()].sort()).toEqual([
       "/api/conversations",
       "/api/conversations/:id/logs",
       "/api/conversations/:id/messages",
       "/api/conversations/:id/stats",
+      "/api/conversations/:id/tools",
       "/api/conversations/reply",
       "/api/web-chat/messages"
     ]);

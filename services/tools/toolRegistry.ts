@@ -52,6 +52,7 @@ import {
   createRunSkillScriptTool,
   type SkillRuntimeToolPort
 } from "./skillRuntimeTool.js";
+import { isConversationToolEnabled } from "./conversationToolPolicy.js";
 
 export interface ToolAvailability {
   onAssistantText?: unknown;
@@ -71,6 +72,7 @@ export interface ToolAvailability {
   imageTools?: boolean;
   systemConfig?: SystemConfigToolPort;
   skills?: SkillRuntimeToolPort;
+  disabledTools?: readonly AgentToolName[];
 }
 
 export type ToolExecution = "inline" | "deferred";
@@ -297,6 +299,7 @@ export function listToolMetadata(
         : "default";
     const execution = effectiveExecution(entry, options);
     const effectiveDefinition = applyDispatchSchema({ ...selected, description }, execution);
+    const conversationEnabled = isConversationToolEnabled(options.disabledTools, entry.name);
     return {
       name: entry.name,
       title: entry.title,
@@ -309,7 +312,7 @@ export function listToolMetadata(
       promptEnabled,
       enabled,
       available,
-      effectiveEnabled: enabled && available,
+      effectiveEnabled: enabled && available && conversationEnabled,
       ...(!available && entry.unavailableReason ? { availabilityReason: entry.unavailableReason } : {}),
       execution,
       parameters: readParameters(effectiveDefinition),
@@ -324,6 +327,7 @@ export function resolveProviderToolDefinitions(
 ) {
   const promptByName = promptDefinitionMap(promptDefinitions);
   return catalog.flatMap((entry) => {
+    if (!isConversationToolEnabled(options.disabledTools, entry.name)) return [];
     if (entry.name === WORKSPACE_BASH_TOOL_NAME && !isWorkspaceBashProviderOptions(options.bash)) return [];
     if (!(entry.available?.(options) ?? true)) return [];
     const override = toolOverride(options, entry.name);
@@ -342,12 +346,14 @@ export function resolveProviderToolDefinitions(
 
 export function providerToolExecutionMode(name: string, options: ToolAvailability = {}) {
   if (!isAgentToolName(name) || toolOverride(options, name)?.enabled === false) return undefined;
+  if (!isConversationToolEnabled(options.disabledTools, name)) return undefined;
   const entry = catalog.find((candidate) => candidate.name === name);
   return entry ? effectiveExecution(entry, options) : undefined;
 }
 
 export function isProviderToolAvailable(name: string, options: ToolAvailability = {}) {
   if (!isAgentToolName(name) || toolOverride(options, name)?.enabled === false) return false;
+  if (!isConversationToolEnabled(options.disabledTools, name)) return false;
   if (name === WORKSPACE_BASH_TOOL_NAME) return isWorkspaceBashProviderOptions(options.bash);
   const entry = catalog.find((candidate) => candidate.name === name);
   return Boolean(entry && (entry.available?.(options) ?? true));

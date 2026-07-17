@@ -353,6 +353,8 @@ export interface MockApiState {
   tokenUsageRequests: string[];
   webChatMessages: MockWebChatMessage[];
   webChatRequests: string[];
+  conversationTools: Record<string, string[]>;
+  conversationToolRequests: Array<{ conversationId: string; disabledTools: string[] }>;
   extensions: Record<string, { skills: AgentSkillRecord[]; servers: AgentMcpServer[] }>;
   extensionRequests: Array<{ method: string; path: string; body?: unknown }>;
   mcpApprovals: McpApprovalTicket[];
@@ -398,6 +400,8 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
     tokenUsageRequests: [],
     webChatMessages: structuredClone(initialWebChatMessages),
     webChatRequests: [],
+    conversationTools: {},
+    conversationToolRequests: [],
     extensions: {
       plana: {
         skills: [mockSkill("status-report", "unapproved")],
@@ -1191,6 +1195,19 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
           internal: 3
         },
         modelCalls: modelCallStats(conversationId)
+      });
+    }
+    if (/^\/api\/conversations\/[^/]+\/tools$/.test(pathname)) {
+      const conversationId = decodeURIComponent(pathname.split("/")[3] ?? "");
+      if (method === "PUT") {
+        const body = request.postDataJSON() as { disabledTools?: string[] };
+        const disabledTools = Array.isArray(body.disabledTools) ? [...body.disabledTools] : [];
+        state.conversationTools[conversationId] = disabledTools;
+        state.conversationToolRequests.push({ conversationId, disabledTools });
+      }
+      return json(route, {
+        conversationId,
+        disabledTools: state.conversationTools[conversationId] ?? []
       });
     }
     if (pathname === "/api/conversations/reply") {

@@ -108,10 +108,11 @@ import {
   type RenderedPromptRequest
 } from "../../services/agent/promptSystem.js";
 import { buildCommonPromptVariables, buildConversationPromptVariables } from "../../services/agent/persona.js";
-import { DEFAULT_CONTEXT_MESSAGE_LIMIT, MAX_STORED_CONVERSATION_MESSAGES, GROUP_CHAT_SUMMARY_WINDOW_MS, MAX_SELFIE_REFERENCE_IMAGES, MAX_SELFIE_WORKSPACE_REFERENCE_IMAGES, MAX_CURRENT_CONTEXT_IMAGES, MAX_HISTORY_CONTEXT_IMAGES, HYDRATE_MESSAGE_WINDOW_MS, ACTIVE_CONVERSATION_WINDOW_MS, DIRECT_REPLY_TIMEOUT_MS, AMBIENT_ORCHESTRATOR_TIMEOUT_MS, ORCHESTRATOR_MAX_RETRIES, PREPARE_TIMEOUT_MS, RECENT_CONTEXT_TOKEN_BUDGET, DEDUPE_TTL_MS, MAX_DEDUPE_KEYS, DEFAULT_ADMIN_NAME, GROUP_CHAT_SUMMARY_COMMAND, CONVERSATION_REPLY_PROMPT_FILE, PRIVATE_CONVERSATION_REPLY_PROMPT_FILE, GROUP_CONVERSATION_REPLY_PROMPT_FILE, SELFIE_PROMPT_FILE, GROUP_CHAT_SUMMARY_PROMPT_FILE, GROUP_THREAD_CONTEXT_PROMPT_FILE, ADMIN_PERSONA_FILES, ADMIN_RUNTIME_PROMPT_DEFAULTS, BatchUserInfo, WorkingMemoryMergeOutput, WorkingMemoryMergeContext, personaFileNameForAdminId, AdminIdentity, ConversationReplyUpdateInput, RuntimeCommandContext, ReplyDeliveryDraft, ReplyDelivery, DeferredCodexTurn, AmbientReplyJob, AmbientReplyState, AmbientIdleTimer, RuntimeConfigSnapshot, RuntimePromptSnapshot, SunaRuntimeOptions } from "./runtimeContracts.js";
+import { DEFAULT_CONTEXT_MESSAGE_LIMIT, MAX_STORED_CONVERSATION_MESSAGES, GROUP_CHAT_SUMMARY_WINDOW_MS, MAX_SELFIE_REFERENCE_IMAGES, MAX_SELFIE_WORKSPACE_REFERENCE_IMAGES, MAX_CURRENT_CONTEXT_IMAGES, MAX_HISTORY_CONTEXT_IMAGES, HYDRATE_MESSAGE_WINDOW_MS, ACTIVE_CONVERSATION_WINDOW_MS, DIRECT_REPLY_TIMEOUT_MS, AMBIENT_ORCHESTRATOR_TIMEOUT_MS, ORCHESTRATOR_MAX_RETRIES, PREPARE_TIMEOUT_MS, RECENT_CONTEXT_TOKEN_BUDGET, DEDUPE_TTL_MS, MAX_DEDUPE_KEYS, DEFAULT_ADMIN_NAME, GROUP_CHAT_SUMMARY_COMMAND, CONVERSATION_REPLY_PROMPT_FILE, PRIVATE_CONVERSATION_REPLY_PROMPT_FILE, GROUP_CONVERSATION_REPLY_PROMPT_FILE, SELFIE_PROMPT_FILE, GROUP_CHAT_SUMMARY_PROMPT_FILE, GROUP_THREAD_CONTEXT_PROMPT_FILE, ADMIN_PERSONA_FILES, ADMIN_RUNTIME_PROMPT_DEFAULTS, BatchUserInfo, WorkingMemoryMergeOutput, WorkingMemoryMergeContext, personaFileNameForAdminId, AdminIdentity, ConversationReplyUpdateInput, ConversationToolPolicyUpdateInput, RuntimeCommandContext, ReplyDeliveryDraft, ReplyDelivery, DeferredCodexTurn, AmbientReplyJob, AmbientReplyState, AmbientIdleTimer, RuntimeConfigSnapshot, RuntimePromptSnapshot, SunaRuntimeOptions } from "./runtimeContracts.js";
 import { clampInteger, indexedConversationMessages } from "./conversationMemoryHelpers.js";
 import { conversationOrchestratorEnabled, conversationReplyEnabled, enrichMemoryEntriesWithConversations, isWebConversationId, normalizeConversationId, normalizeConversationLookupId, outboundForRecord } from "./messagingAttachmentHelpers.js";
 import { conversationMemberNames } from "./selfieHelpers.js";
+import { normalizeConversationDisabledTools } from "../../services/tools/conversationToolPolicy.js";
 
 import type { SunaRuntime } from "../runtime.js";
 type RuntimeHost = SunaRuntime;
@@ -593,6 +594,39 @@ export function runtime_setConversationReplyEnabled(this: RuntimeHost, input: Co
     this.persistConversationRecords();
     return this.publicConversationRecord(record);
   }
+export function runtime_getConversationToolPolicy(this: RuntimeHost, conversationId: string) {
+    const id = normalizeConversationLookupId(conversationId);
+    if (!id) throw new Error("会话无效。");
+    return {
+      conversationId: id,
+      disabledTools: [...(this.conversationRecords.get(id)?.disabledTools ?? [])]
+    };
+  }
+export function runtime_setConversationToolPolicy(this: RuntimeHost, input: ConversationToolPolicyUpdateInput) {
+    const id = normalizeConversationLookupId(input.id);
+    if (!id) throw new Error("会话无效。");
+    let record = this.conversationRecords.get(id);
+    if (!record && isWebConversationId(id)) {
+      const admin = this.adminIdentity();
+      const userId = Number(admin.userId);
+      record = {
+        id,
+        scope: "private",
+        title: "Web Chat",
+        userId: Number.isSafeInteger(userId) && userId > 0 ? userId : 0,
+        messageCount: 0,
+        lastAt: new Date().toISOString(),
+        lastText: "",
+        messages: []
+      };
+      this.conversationRecords.set(id, record);
+    }
+    if (!record) record = this.upsertConversationRecordForReplySetting({ id });
+    const disabledTools = normalizeConversationDisabledTools(input.disabledTools);
+    record.disabledTools = disabledTools.length ? disabledTools : undefined;
+    this.persistConversationRecords();
+    return this.getConversationToolPolicy(id);
+  }
 export async function runtime_announceServiceOnline(this: RuntimeHost, gateway: MessagingPort, message: string) {
     const targets = this.getActiveConversationRecords();
     let sent = 0;
@@ -644,5 +678,7 @@ export class RuntimeLifecycle {
   hydrateConversationIdentities(...args: Parameters<typeof runtime_hydrateConversationIdentities>) { return runtime_hydrateConversationIdentities.call(this.host, ...args); }
   enrichMemoryEntries(...args: Parameters<typeof runtime_enrichMemoryEntries>) { return runtime_enrichMemoryEntries.call(this.host, ...args); }
   setConversationReplyEnabled(...args: Parameters<typeof runtime_setConversationReplyEnabled>) { return runtime_setConversationReplyEnabled.call(this.host, ...args); }
+  getConversationToolPolicy(...args: Parameters<typeof runtime_getConversationToolPolicy>) { return runtime_getConversationToolPolicy.call(this.host, ...args); }
+  setConversationToolPolicy(...args: Parameters<typeof runtime_setConversationToolPolicy>) { return runtime_setConversationToolPolicy.call(this.host, ...args); }
   announceServiceOnline(...args: Parameters<typeof runtime_announceServiceOnline>) { return runtime_announceServiceOnline.call(this.host, ...args); }
 }

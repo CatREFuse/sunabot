@@ -5,6 +5,9 @@ import { WebChatService } from "../../../services/webChat/webChatService.js";
 import { badRequest } from "../../../src/admin/errors.js";
 import { readModelCallStats, readRequestLogs } from "../../../src/requestLog.js";
 import type { SunaRuntime } from "../../../src/runtime.js";
+import type { AgentToolName } from "../../../src/types.js";
+import { isAgentToolName } from "../../../services/tools/toolRegistry.js";
+import { normalizeConversationLookupId } from "../../../src/runtime/messagingAttachmentHelpers.js";
 
 export interface ConversationRouteOptions {
   runtime: SunaRuntime;
@@ -121,6 +124,30 @@ export function registerConversationRoutes(app: FastifyInstance, options: Conver
     };
   });
 
+  app.get("/api/conversations/:id/tools", {
+    schema: {
+      params: conversationParams,
+      response: { 200: openObject }
+    }
+  }, async (request) => {
+    const runtime = runtimeFor(request);
+    const conversationId = validConversationId((request.params as { id?: string }).id);
+    return runtime.getConversationToolPolicy(conversationId);
+  });
+
+  app.put("/api/conversations/:id/tools", {
+    schema: {
+      params: conversationParams,
+      body: passthroughBody,
+      response: { 200: openObject }
+    }
+  }, async (request) => {
+    const runtime = runtimeFor(request);
+    const conversationId = validConversationId((request.params as { id?: string }).id);
+    const disabledTools = validDisabledToolsBody(request.body);
+    return runtime.setConversationToolPolicy({ id: conversationId, disabledTools });
+  });
+
   app.put("/api/conversations/reply", {
     schema: { body: passthroughBody, response: { 200: openObject } }
   }, async (request) => {
@@ -136,6 +163,34 @@ export function registerConversationRoutes(app: FastifyInstance, options: Conver
     });
     return { ok: true, conversation };
   });
+}
+
+function validConversationId(value: unknown) {
+  const id = normalizeConversationLookupId(value);
+  if (!id) badRequest("CONVERSATION_ID_INVALID", "会话无效。", "id");
+  return id;
+}
+
+function validDisabledToolsBody(value: unknown): AgentToolName[] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    badRequest("CONVERSATION_TOOLS_INVALID", "工具选择无效。", "disabledTools");
+  }
+  const keys = Object.keys(value);
+  if (keys.length !== 1 || keys[0] !== "disabledTools") {
+    badRequest("CONVERSATION_TOOLS_INVALID", "请求体必须只包含 disabledTools。", "disabledTools");
+  }
+  const disabledTools = (value as { disabledTools?: unknown }).disabledTools;
+  return validDisabledTools(disabledTools);
+}
+
+function validDisabledTools(value: unknown): AgentToolName[] {
+  if (!Array.isArray(value) || value.some((name) => typeof name !== "string" || !isAgentToolName(name))) {
+    badRequest("CONVERSATION_TOOLS_INVALID", "工具选择无效。", "disabledTools");
+  }
+  if (new Set(value).size !== value.length) {
+    badRequest("CONVERSATION_TOOLS_INVALID", "工具不能重复。", "disabledTools");
+  }
+  return value as AgentToolName[];
 }
 
 function requestAgentId(query: unknown) {

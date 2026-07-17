@@ -328,6 +328,7 @@ export interface ConversationRecord {
   selfId?: number;
   replyEnabled?: boolean;
   orchestratorEnabled?: boolean;
+  disabledTools?: AgentToolName[];
   messageCount: number;
   lastAt: string;
   lastText: string;
