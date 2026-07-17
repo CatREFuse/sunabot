@@ -22,6 +22,53 @@ afterEach(async () => {
 });
 
 describe("Agent extension composition", () => {
+  it("reports Skill runtime capability independently from an empty Skill inventory", async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-agent-extension-capability-"));
+    temporaryPaths.push(workspaceRoot);
+    for (const directory of ["business/agents", "business/agents/agent-a"]) {
+      await fs.mkdir(path.join(workspaceRoot, directory), { recursive: true });
+      await fs.chmod(path.join(workspaceRoot, directory), 0o700);
+    }
+    const composition = buildAgentExtensionComposition({
+      workspaceRoot,
+      agentExists: () => true,
+      oauth: false,
+      mcpClientFactory: { create: vi.fn() }
+    });
+
+    await expect(composition.skillToolCapabilities("agent-a")).resolves.toEqual({
+      activate: true,
+      readResource: true,
+      runScript: false,
+      skillIds: []
+    });
+    await composition.close();
+  });
+
+  it("fails Skill capability closed for an injected runtime without an explicit declaration", async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-agent-extension-custom-runtime-"));
+    temporaryPaths.push(workspaceRoot);
+    for (const directory of ["business/agents", "business/agents/agent-a"]) {
+      await fs.mkdir(path.join(workspaceRoot, directory), { recursive: true });
+      await fs.chmod(path.join(workspaceRoot, directory), 0o700);
+    }
+    const composition = buildAgentExtensionComposition({
+      workspaceRoot,
+      agentExists: () => true,
+      oauth: false,
+      runtime: runtimePort(),
+      mcpClientFactory: { create: vi.fn() }
+    });
+
+    await expect(composition.skillToolCapabilities("agent-a")).resolves.toEqual({
+      activate: false,
+      readResource: false,
+      runScript: false,
+      skillIds: []
+    });
+    await composition.close();
+  });
+
   it("reuses one projection builder across concurrent stdio server launches", async () => {
     const builders = new Set<McpSandboxProjectionBuilder>();
     vi.spyOn(McpSandboxProjectionBuilder.prototype, "build").mockImplementation(async function () {

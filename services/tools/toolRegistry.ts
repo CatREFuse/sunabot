@@ -50,6 +50,7 @@ import {
   RUN_SKILL_SCRIPT_TOOL_NAME,
   createReadSkillResourceTool,
   createRunSkillScriptTool,
+  type SkillToolCapabilitySnapshot,
   type SkillRuntimeToolPort
 } from "./skillRuntimeTool.js";
 import { isConversationToolEnabled } from "./conversationToolPolicy.js";
@@ -72,6 +73,7 @@ export interface ToolAvailability {
   imageTools?: boolean;
   systemConfig?: SystemConfigToolPort;
   skills?: SkillRuntimeToolPort;
+  skillCapabilities?: SkillToolCapabilitySnapshot;
   disabledTools?: readonly AgentToolName[];
 }
 
@@ -229,9 +231,9 @@ const catalog: readonly ToolCatalogEntry[] = [
     name: ACTIVATE_SKILL_TOOL_NAME,
     title: "启用 Skill",
     summary: "为当前会话加载一个已审批 Skill。",
-    definition: (options) => createActivateSkillTool(options.skills?.skillIds ?? []),
-    available: (options) => Boolean(options.skills?.skillIds.length),
-    unavailableReason: "当前 Agent 没有可用 Skill。",
+    definition: (options) => createActivateSkillTool(skillIds(options)),
+    available: (options) => skillCapability(options, "activate"),
+    unavailableReason: "当前环境未启用 Skill 激活能力。",
     defaultEnabled: true,
     execution: "inline"
   },
@@ -239,9 +241,9 @@ const catalog: readonly ToolCatalogEntry[] = [
     name: READ_SKILL_RESOURCE_TOOL_NAME,
     title: "读取 Skill 资源",
     summary: "读取当前会话已启用 Skill 的一个有界资源。",
-    definition: (options) => createReadSkillResourceTool(options.skills?.skillIds ?? []),
-    available: (options) => Boolean(options.skills?.skillIds.length && options.skills.readResource),
-    unavailableReason: "当前会话没有可读取的 Skill 资源。",
+    definition: (options) => createReadSkillResourceTool(skillIds(options)),
+    available: (options) => skillCapability(options, "readResource"),
+    unavailableReason: "当前环境未启用 Skill 资源读取能力。",
     defaultEnabled: true,
     execution: "inline"
   },
@@ -249,8 +251,8 @@ const catalog: readonly ToolCatalogEntry[] = [
     name: RUN_SKILL_SCRIPT_TOOL_NAME,
     title: "运行 Skill 脚本",
     summary: "通过审计和强隔离运行当前会话已启用 Skill 的脚本。",
-    definition: (options) => createRunSkillScriptTool(options.skills?.skillIds ?? []),
-    available: (options) => Boolean(options.skills?.skillIds.length && options.skills.runScript),
+    definition: (options) => createRunSkillScriptTool(skillIds(options)),
+    available: (options) => skillCapability(options, "runScript"),
     unavailableReason: "当前环境没有可用的 Skill 脚本审计执行器。",
     defaultEnabled: true,
     execution: "inline"
@@ -312,7 +314,7 @@ export function listToolMetadata(
       promptEnabled,
       enabled,
       available,
-      effectiveEnabled: enabled && available && conversationEnabled,
+      effectiveEnabled: enabled && available && conversationEnabled && metadataContextReady(entry.name, options),
       ...(!available && entry.unavailableReason ? { availabilityReason: entry.unavailableReason } : {}),
       execution,
       parameters: readParameters(effectiveDefinition),
@@ -329,6 +331,7 @@ export function resolveProviderToolDefinitions(
   return catalog.flatMap((entry) => {
     if (!isConversationToolEnabled(options.disabledTools, entry.name)) return [];
     if (entry.name === WORKSPACE_BASH_TOOL_NAME && !isWorkspaceBashProviderOptions(options.bash)) return [];
+    if (!providerContextReady(entry.name, options)) return [];
     if (!(entry.available?.(options) ?? true)) return [];
     const override = toolOverride(options, entry.name);
     if (override?.enabled === false) return [];
@@ -355,6 +358,7 @@ export function isProviderToolAvailable(name: string, options: ToolAvailability 
   if (!isAgentToolName(name) || toolOverride(options, name)?.enabled === false) return false;
   if (!isConversationToolEnabled(options.disabledTools, name)) return false;
   if (name === WORKSPACE_BASH_TOOL_NAME) return isWorkspaceBashProviderOptions(options.bash);
+  if (!providerContextReady(name, options)) return false;
   const entry = catalog.find((candidate) => candidate.name === name);
   return Boolean(entry && (entry.available?.(options) ?? true));
 }
@@ -372,6 +376,35 @@ function promptDefinitionMap(definitions: OpenAIToolDefinition[] | undefined) {
     parameters: tool.function.parameters,
     ...(typeof tool.function.strict === "boolean" ? { strict: tool.function.strict } : {})
   } satisfies Record<string, unknown>]));
+}
+
+function skillIds(options: ToolAvailability) {
+  return [...(options.skills?.skillIds ?? options.skillCapabilities?.skillIds ?? [])];
+}
+
+function skillCapability(
+  options: ToolAvailability,
+  capability: "activate" | "readResource" | "runScript"
+) {
+  const projected = options.skillCapabilities?.[capability];
+  if (projected != null) return projected;
+  if (capability === "activate") return typeof options.skills?.activate === "function";
+  if (capability === "readResource") return typeof options.skills?.readResource === "function";
+  return typeof options.skills?.runScript === "function";
+}
+
+function metadataContextReady(name: AgentToolName, options: ToolAvailability) {
+  return isSkillTool(name) ? skillIds(options).length > 0 : true;
+}
+
+function providerContextReady(name: AgentToolName, options: ToolAvailability) {
+  return isSkillTool(name) ? Boolean(options.skills?.skillIds.length) : true;
+}
+
+function isSkillTool(name: AgentToolName) {
+  return name === ACTIVATE_SKILL_TOOL_NAME
+    || name === READ_SKILL_RESOURCE_TOOL_NAME
+    || name === RUN_SKILL_SCRIPT_TOOL_NAME;
 }
 
 function toolOverride(options: ToolAvailability, name: AgentToolName): BotToolOverride | undefined {

@@ -28,6 +28,12 @@ describe("agent and tool API plugin", () => {
     const put = vi.fn(async (id: string, body: unknown) => ({ ok: true, id, body }));
     const resolveToolCapabilities = vi.fn(async () => ({ codex: true, workspaceBash: true }));
     const resolveConversationAssetCapability = vi.fn(async () => true);
+    const resolveSkillToolCapabilities = vi.fn(async () => ({
+      activate: true,
+      readResource: true,
+      runScript: false,
+      skillIds: ["approved"]
+    }));
     const config = defaultConfig();
     config.bot.tools.overrides = {
       websearch: { enabled: false, description: "Disabled search override." }
@@ -36,6 +42,7 @@ describe("agent and tool API plugin", () => {
       agentFiles: { list, get, put } as unknown as AgentFileRepository,
       resolveToolCapabilities,
       resolveConversationAssetCapability,
+      resolveSkillToolCapabilities,
       getConfig: () => config
     });
 
@@ -99,8 +106,23 @@ describe("agent and tool API plugin", () => {
       available: false,
       effectiveEnabled: false
     });
+    expect(tools.find((tool: { name: string }) => tool.name === "activate_skill")).toMatchObject({
+      available: true,
+      effectiveEnabled: true,
+      parameters: { properties: { skillId: { enum: ["approved"] } } }
+    });
+    expect(tools.find((tool: { name: string }) => tool.name === "read_skill_resource")).toMatchObject({
+      available: true,
+      effectiveEnabled: true
+    });
+    expect(tools.find((tool: { name: string }) => tool.name === "run_skill_script")).toMatchObject({
+      available: false,
+      effectiveEnabled: false,
+      availabilityReason: "当前环境没有可用的 Skill 脚本审计执行器。"
+    });
     expect(resolveToolCapabilities).toHaveBeenCalledOnce();
     expect(resolveConversationAssetCapability).toHaveBeenCalledOnce();
+    expect(resolveSkillToolCapabilities).toHaveBeenCalledOnce();
     expect(get).toHaveBeenCalledWith("conversation.private-reply", config);
 
     expect([...routeSchemas.keys()].sort()).toEqual([
@@ -130,6 +152,55 @@ describe("agent and tool API plugin", () => {
       available: false,
       effectiveEnabled: false,
       availabilityReason: "Codex CLI 未安装或未登录。"
+    });
+    expect(tools.find((tool: { name: string }) => tool.name === "activate_skill")).toMatchObject({
+      available: false,
+      effectiveEnabled: false,
+      availabilityReason: "当前环境未启用 Skill 激活能力。"
+    });
+  });
+
+  it("keeps Skill inventory isolated between Agent tool catalogs", async () => {
+    const app = Fastify();
+    apps.push(app);
+    const configA = defaultConfig();
+    const configB = defaultConfig();
+    const agentFiles = {
+      get: vi.fn(async () => ({ content: defaultPromptContent("conversation.private-reply") }))
+    } as unknown as AgentFileRepository;
+    const contextFor = (agentId: string) => ({
+      config: agentId === "agent-a" ? configA : configB,
+      agentFiles,
+      resolveToolCapabilities: vi.fn(async () => ({ codex: true, workspaceBash: true })),
+      resolveSkillToolCapabilities: vi.fn(async () => ({
+        activate: true,
+        readResource: true,
+        runScript: false,
+        skillIds: agentId === "agent-a" ? ["agent-a-skill"] : []
+      }))
+    });
+    registerAgentToolRoutes(app, {
+      agentFiles,
+      resolveToolCapabilities: vi.fn(async () => ({ codex: true, workspaceBash: true })),
+      getConfig: () => configA,
+      getAgentContext: contextFor
+    });
+
+    const toolsA = (await app.inject({ method: "GET", url: "/api/tools?agentId=agent-a" })).json().tools;
+    const toolsB = (await app.inject({ method: "GET", url: "/api/tools?agentId=agent-b" })).json().tools;
+    expect(toolsA.find((tool: { name: string }) => tool.name === "activate_skill")).toMatchObject({
+      available: true,
+      effectiveEnabled: true,
+      parameters: { properties: { skillId: { enum: ["agent-a-skill"] } } }
+    });
+    expect(toolsB.find((tool: { name: string }) => tool.name === "activate_skill")).toMatchObject({
+      available: true,
+      effectiveEnabled: false,
+      parameters: { properties: { skillId: { enum: [] } } }
+    });
+    expect(toolsB.find((tool: { name: string }) => tool.name === "read_skill_resource")).toMatchObject({
+      available: true,
+      effectiveEnabled: false
     });
   });
 

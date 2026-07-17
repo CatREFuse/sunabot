@@ -8,6 +8,27 @@ export interface SkillRuntimeToolPort extends ActivateSkillToolPort {
   runScript?: (input: { skillId: string; path: string; args: string[] }) => Promise<unknown>;
 }
 
+export interface SkillToolCapabilitySnapshot {
+  activate: boolean;
+  readResource: boolean;
+  runScript: boolean;
+  skillIds: readonly string[];
+}
+
+export const BUILTIN_SKILL_TOOL_CAPABILITIES = {
+  activate: true,
+  readResource: true,
+  runScript: false,
+  skillIds: []
+} as const satisfies SkillToolCapabilitySnapshot;
+
+export const UNAVAILABLE_SKILL_TOOL_CAPABILITIES = {
+  activate: false,
+  readResource: false,
+  runScript: false,
+  skillIds: []
+} as const satisfies SkillToolCapabilitySnapshot;
+
 export function createReadSkillResourceTool(skillIds: string[]) {
   return skillTool(
     READ_SKILL_RESOURCE_TOOL_NAME,

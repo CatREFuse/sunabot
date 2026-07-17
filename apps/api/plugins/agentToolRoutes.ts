@@ -4,6 +4,10 @@ import type { AppConfig } from "../../../src/types.js";
 import { parseFinalPromptTemplate } from "../../../services/agent/promptSystem.js";
 import { promptDefinitionById } from "../../../services/agent/promptCatalog.js";
 import { listToolMetadata } from "../../../services/tools/toolRegistry.js";
+import {
+  UNAVAILABLE_SKILL_TOOL_CAPABILITIES,
+  type SkillToolCapabilitySnapshot
+} from "../../../services/tools/skillRuntimeTool.js";
 import type { RuntimeToolCapabilitySnapshotResolver } from "../../../services/tools/bashCapability.js";
 import { badRequest, notFound } from "../../../src/admin/errors.js";
 
@@ -11,12 +15,14 @@ export interface AgentToolRouteOptions {
   agentFiles: AgentFileRepository;
   resolveToolCapabilities: RuntimeToolCapabilitySnapshotResolver;
   resolveConversationAssetCapability?: () => boolean | Promise<boolean>;
+  resolveSkillToolCapabilities?: () => SkillToolCapabilitySnapshot | Promise<SkillToolCapabilitySnapshot>;
   getConfig: () => AppConfig;
   getAgentContext?: (agentId: string) => {
     config: AppConfig;
     agentFiles: AgentFileRepository;
     resolveToolCapabilities: RuntimeToolCapabilitySnapshotResolver;
     resolveConversationAssetCapability?: () => boolean | Promise<boolean>;
+    resolveSkillToolCapabilities?: () => SkillToolCapabilitySnapshot | Promise<SkillToolCapabilitySnapshot>;
   };
 }
 
@@ -34,7 +40,8 @@ export function registerAgentToolRoutes(app: FastifyInstance, options: AgentTool
     config: options.getConfig(),
     agentFiles: options.agentFiles,
     resolveToolCapabilities: options.resolveToolCapabilities,
-    resolveConversationAssetCapability: options.resolveConversationAssetCapability
+    resolveConversationAssetCapability: options.resolveConversationAssetCapability,
+    resolveSkillToolCapabilities: options.resolveSkillToolCapabilities
   };
   app.get("/api/agent-files", {
     schema: { querystring: openObject, response: { 200: openObject } }
@@ -89,6 +96,8 @@ export function registerAgentToolRoutes(app: FastifyInstance, options: AgentTool
     const promptFile = await context.agentFiles.get("conversation.private-reply", config);
     const prompt = parseFinalPromptTemplate(promptFile.content);
     const capabilities = await context.resolveToolCapabilities();
+    const skillCapabilities = await context.resolveSkillToolCapabilities?.()
+      ?? UNAVAILABLE_SKILL_TOOL_CAPABILITIES;
     let conversationAssetsAvailable = false;
     try {
       conversationAssetsAvailable = await context.resolveConversationAssetCapability?.() ?? false;
@@ -105,6 +114,7 @@ export function registerAgentToolRoutes(app: FastifyInstance, options: AgentTool
       memory: { enabled: true },
       asyncCodex: capabilities.codex,
       asyncImage: true,
+      skillCapabilities,
       systemConfig: {
         execute: async () => ({ ok: false, error: "System configuration is not executable from the tool catalog." }),
         mutationStaged: () => false,

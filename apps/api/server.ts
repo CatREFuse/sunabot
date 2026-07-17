@@ -556,7 +556,8 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
           agentId,
           onebotGateway,
           agentRegistry
-        )
+        ),
+        resolveSkillToolCapabilities: () => agentExtensions.skillToolCapabilities(agentId)
       };
     }
   });

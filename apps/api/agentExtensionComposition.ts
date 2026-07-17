@@ -23,8 +23,14 @@ import {
   AgentMcpHost,
   McpToolApprovalTransactions,
   SkillActivationService,
+  buildSkillCatalog,
   type McpRuntimeClientFactory
 } from "../../services/extensions/public.js";
+import {
+  BUILTIN_SKILL_TOOL_CAPABILITIES,
+  UNAVAILABLE_SKILL_TOOL_CAPABILITIES,
+  type SkillToolCapabilitySnapshot
+} from "../../services/tools/public.js";
 import { McpRuntimeService } from "../../src/admin/mcpRuntimeService.js";
 import { McpOAuthAdminService } from "../../src/admin/mcpOAuthAdminService.js";
 import {
@@ -37,6 +43,7 @@ export interface AgentExtensionCompositionOptions {
   agentExists(agentId: string): boolean | Promise<boolean>;
   mcpClientFactory?: McpRuntimeClientFactory;
   runtime?: RuntimeAgentExtensionsPort;
+  skillToolCapabilities?: Pick<SkillToolCapabilitySnapshot, "activate" | "readResource" | "runScript">;
   oauth?: false | {
     vaultKey?: Uint8Array;
     vaultFilePath?: string;
@@ -73,6 +80,8 @@ export function buildAgentExtensionComposition(options: AgentExtensionCompositio
     host,
     approvals
   );
+  const skillToolCapabilities = options.skillToolCapabilities
+    ?? (options.runtime ? UNAVAILABLE_SKILL_TOOL_CAPABILITIES : BUILTIN_SKILL_TOOL_CAPABILITIES);
   const closeRuntimeAgent = (agentId: string) => strictCleanup([
     () => runtime.closeAgent(agentId),
     () => host.closeAgent(agentId)
@@ -127,6 +136,13 @@ export function buildAgentExtensionComposition(options: AgentExtensionCompositio
     runtime,
     mcpRuntimeService,
     mcpOAuthService,
+    async skillToolCapabilities(agentId: string) {
+      const index = await store.readSkillIndex(agentId);
+      return {
+        ...skillToolCapabilities,
+        skillIds: buildSkillCatalog({ skills: index.skills }).explicitSkillIds
+      };
+    },
     setAgentChangedHandler(handler: (agentId: string) => Promise<void>) {
       afterAgentChanged = handler;
     },

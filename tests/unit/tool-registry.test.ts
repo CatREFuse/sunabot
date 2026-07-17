@@ -87,6 +87,42 @@ describe("ToolRegistry", () => {
     expect(resolveProviderToolDefinitions({ bashAvailable: true })).toEqual([]);
   });
 
+  it("keeps Skill capability separate from inventory and never exposes empty-enum Provider tools", () => {
+    const capabilityOnly = {
+      skillCapabilities: {
+        activate: true,
+        readResource: true,
+        runScript: false,
+        skillIds: []
+      }
+    };
+    const metadata = listToolMetadata(capabilityOnly);
+
+    expect(metadata.find((tool) => tool.name === "activate_skill"))
+      .toMatchObject({ available: true, effectiveEnabled: false });
+    expect(metadata.find((tool) => tool.name === "read_skill_resource"))
+      .toMatchObject({ available: true, effectiveEnabled: false });
+    expect(metadata.find((tool) => tool.name === "run_skill_script")).toMatchObject({
+      available: false,
+      effectiveEnabled: false,
+      availabilityReason: "当前环境没有可用的 Skill 脚本审计执行器。"
+    });
+    expect(resolveProviderToolDefinitions(capabilityOnly)).toEqual([]);
+    expect(isProviderToolAvailable("activate_skill", capabilityOnly)).toBe(false);
+
+    const withInventory = {
+      skills: {
+        skillIds: ["approved"],
+        activate: vi.fn(),
+        readResource: vi.fn()
+      }
+    };
+    expect(resolveProviderToolDefinitions(withInventory).map((tool) => tool.name))
+      .toEqual(["activate_skill", "read_skill_resource"]);
+    expect(listToolMetadata(withInventory).find((tool) => tool.name === "activate_skill"))
+      .toMatchObject({ available: true, effectiveEnabled: true });
+  });
+
   it("exposes assistant_text only when the runtime can deliver intermediate text", () => {
     expect(resolveProviderToolDefinitions({ onAssistantText: () => undefined }).map((tool) => tool.name))
       .toEqual(["assistant_text"]);

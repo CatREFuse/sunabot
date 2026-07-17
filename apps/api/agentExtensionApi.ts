@@ -17,6 +17,7 @@ export interface AgentExtensionApiOptions {
   workspaceRoot?: string;
   mcpClientFactory?: McpRuntimeClientFactory;
   runtime?: RuntimeAgentExtensionsPort;
+  skillToolCapabilities?: AgentExtensionCompositionOptions["skillToolCapabilities"];
   oauth?: AgentExtensionCompositionOptions["oauth"];
   mcpStdio?: AgentExtensionCompositionOptions["mcpStdio"];
 }
@@ -33,6 +34,7 @@ export function buildAgentExtensionApiComposition(
     },
     mcpClientFactory: options?.mcpClientFactory,
     runtime: options?.runtime,
+    skillToolCapabilities: options?.skillToolCapabilities,
     oauth: options?.oauth,
     mcpStdio: options?.mcpStdio
   });

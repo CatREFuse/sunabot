@@ -66,6 +66,9 @@ export {
   createRunSkillScriptTool,
   readSkillResourceInput,
   readSkillScriptInput,
+  BUILTIN_SKILL_TOOL_CAPABILITIES,
+  UNAVAILABLE_SKILL_TOOL_CAPABILITIES,
+  type SkillToolCapabilitySnapshot,
   type SkillRuntimeToolPort
 } from "./skillRuntimeTool.js";
 export {
