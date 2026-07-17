@@ -83,6 +83,7 @@ describe("AgentFileRepository", () => {
       ["persona.relation", "RELATION.md"],
       ["conversation.private-reply", "conversation_private_reply.json"],
       ["conversation.group-reply", "conversation_group_reply.json"],
+      ["conversation.tone-rewrite", "tone_rewrite.json"],
       ["memory.compress-in", "work_memory_compress_in.json"],
       ["memory.compress-out", "work_memory_compress_out.json"],
       ["memory.user-profile", "user_profile_prompt.json"],

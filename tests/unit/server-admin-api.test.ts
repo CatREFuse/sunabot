@@ -79,9 +79,27 @@ describe("admin API smoke", () => {
     expect(envelope.statusCode).toBe(200);
     expect(envelope.json().revision).toMatch(/^[a-f0-9]{64}$/);
     expect(files.statusCode).toBe(200);
-    expect(files.json().files).toHaveLength(7);
+    expect(files.json().files.map(({ id }: { id: string }) => id)).toEqual([
+      "persona.agents",
+      "persona.soul",
+      "persona.preference",
+      "persona.dialogue_style_examples",
+      "persona.user",
+      "persona.relation",
+      "image.selfie-rewrite"
+    ]);
     expect(systemFiles.statusCode).toBe(200);
-    expect(systemFiles.json().files).toHaveLength(8);
+    expect(systemFiles.json().files.map(({ id }: { id: string }) => id)).toEqual([
+      "conversation.private-reply",
+      "conversation.group-reply",
+      "conversation.tone-rewrite",
+      "memory.compress-in",
+      "memory.compress-out",
+      "memory.user-profile",
+      "orchestrator.user-group",
+      "orchestrator.group-thread",
+      "conversation.group-summary"
+    ]);
     expect(systemFiles.json().files).toContainEqual(expect.objectContaining({
       id: "conversation.private-reply",
       kind: "final",
@@ -91,9 +109,39 @@ describe("admin API smoke", () => {
         expect.objectContaining({ name: "user.input", description: expect.any(String) })
       ])
     }));
+    expect(systemFiles.json().files).toContainEqual(expect.objectContaining({
+      id: "conversation.group-reply",
+      variables: expect.arrayContaining([
+        expect.objectContaining({
+          name: "conversation.group.thread_context",
+          description: expect.any(String)
+        })
+      ])
+    }));
+    expect(systemFiles.json().files.find(({ id }: { id: string }) => id === "conversation.private-reply")?.variables)
+      .not.toContainEqual(expect.objectContaining({ name: "conversation.group.thread_context" }));
+    expect(systemFiles.json().files).toContainEqual(expect.objectContaining({
+      id: "conversation.tone-rewrite",
+      kind: "final",
+      fileName: "tone_rewrite.json",
+      variables: expect.arrayContaining([
+        expect.objectContaining({ name: "tone.input", description: expect.any(String) })
+      ])
+    }));
     expect(files.json().files).toContainEqual(expect.objectContaining({ id: "image.selfie-rewrite" }));
     expect(systemFiles.json().files).toContainEqual(expect.objectContaining({ id: "orchestrator.group-thread" }));
     expect(systemFiles.json().files).not.toContainEqual(expect.objectContaining({ id: "image.selfie-rewrite" }));
+    const toneFile = await app.inject({
+      method: "GET",
+      url: "/api/system-prompt-files/conversation.tone-rewrite",
+      headers
+    });
+    expect(toneFile.statusCode).toBe(200);
+    expect(toneFile.json()).toMatchObject({
+      id: "conversation.tone-rewrite",
+      fileName: "tone_rewrite.json",
+      content: "conversation.tone-rewrite\n"
+    });
     for (const [endpoint, summaries] of [
       ["/api/agent-files", files.json().files],
       ["/api/system-prompt-files", systemFiles.json().files]
