@@ -42,7 +42,7 @@ const labels: Record<string, string> = {
   "orchestrator.groupThreadModel": "Thread 拆分模型",
   "orchestrator.reasoningEffort": "推理强度",
   "orchestrator.messageThreshold": "消息阈值",
-  "orchestrator.recentMessageWindowMs": "最近消息窗口 / ms",
+  "orchestrator.recentMessageWindowMs": "启动时间 / 秒",
   "orchestrator.promptFile": "提示词文件",
   "tools.websearch.provider": "网页搜索",
   "tools.websearch.maxResults": "最大结果数",

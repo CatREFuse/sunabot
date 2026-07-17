@@ -163,10 +163,12 @@ describe("useConfigWorkspace", () => {
     await workspace.load();
     workspace.drafts.onebot.autoReplyUserGroup = false;
     workspace.drafts.orchestrator.enabled = true;
+    workspace.drafts.orchestrator.recentMessageWindowMs = 90_000;
     expect(workspace.isOneBotSettingsDirty()).toBe(false);
     const saved = envelope("r2", "initial");
     saved.config.onebot.autoReplyUserGroup = false;
     saved.config.bot.orchestrator.enabled = true;
+    saved.config.bot.orchestrator.recentMessageWindowMs = 90_000;
     apiRequest.mockResolvedValueOnce({ ...saved, applyMode: "hot" });
 
     await workspace.saveGroupReply();
@@ -178,7 +180,7 @@ describe("useConfigWorkspace", () => {
       revision: "r1",
       value: {
         enabled: false,
-        orchestrator: { enabled: true }
+        orchestrator: { enabled: true, recentMessageWindowMs: 90_000 }
       }
     });
     expect(workspace.isGroupReplyDirty()).toBe(false);

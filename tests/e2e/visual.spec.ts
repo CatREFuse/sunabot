@@ -263,6 +263,8 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     await expect(page.getByRole("heading", { name: "群聊编排器" })).toBeVisible();
     await page.getByLabel("编排器", { exact: true }).uncheck();
     await expect(page.getByLabel("Thread 拆分模型")).toBeEnabled();
+    await expect(page.getByLabel("启动时间 / 秒")).toHaveValue("60");
+    await page.getByLabel("启动时间 / 秒").scrollIntoViewIfNeeded();
     await capture(page, viewport.name, theme, "settings-orchestrator-disabled");
     await page.getByRole("button", { name: "放弃", exact: true }).click();
 

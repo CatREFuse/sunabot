@@ -10,6 +10,7 @@ describe("focusConfigField", () => {
       <label><span class="field-label">管理员 QQ</span><input id="admin"></label>
       <label><span class="field-label">过滤名单</span><input id="quote-filter"></label>
       <label><span class="field-label">Thread 拆分模型</span><select id="thread-model"></select></label>
+      <label><span class="field-label">启动时间 / 秒</span><input id="orchestrator-startup"></label>
       <label data-config-field="server.port"><input id="port"></label>
     `;
     document.body.append(root);
@@ -22,6 +23,8 @@ describe("focusConfigField", () => {
     expect(document.activeElement?.id).toBe("quote-filter");
     expect(focusConfigField(root, "orchestrator.groupThreadModel")).toBe(true);
     expect(document.activeElement?.id).toBe("thread-model");
-    expect(scrollIntoView).toHaveBeenCalledTimes(4);
+    expect(focusConfigField(root, "orchestrator.recentMessageWindowMs")).toBe(true);
+    expect(document.activeElement?.id).toBe("orchestrator-startup");
+    expect(scrollIntoView).toHaveBeenCalledTimes(5);
   });
 });

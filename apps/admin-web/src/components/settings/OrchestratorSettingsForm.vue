@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from "vue";
 import ModelSelect from "./ModelSelect.vue";
 import ReasoningEffortSelect from "./ReasoningEffortSelect.vue";
 import ToggleSwitch from "../ui/ToggleSwitch.vue";
@@ -7,6 +8,15 @@ import type { ConfigSectionValueMap, ModelCatalogItem } from "../../types";
 const draft = defineModel<ConfigSectionValueMap["orchestrator"]>({ required: true });
 const groupEnabled = defineModel<boolean>("groupEnabled", { required: true });
 defineProps<{ models: readonly ModelCatalogItem[] }>();
+
+const startupSeconds = computed({
+  get: () => Math.round(draft.value.recentMessageWindowMs / 1_000),
+  set: (value: number) => {
+    const seconds = Number(value);
+    if (!Number.isFinite(seconds)) return;
+    draft.value.recentMessageWindowMs = Math.round(seconds * 1_000);
+  }
+});
 </script>
 
 <template>
@@ -35,8 +45,8 @@ defineProps<{ models: readonly ModelCatalogItem[] }>();
         <input v-model.number="draft.messageThreshold" class="control" type="number" min="0" max="200" step="1">
       </label>
       <label class="field">
-        <span class="field-label">最近消息窗口 / ms</span>
-        <input v-model.number="draft.recentMessageWindowMs" class="control" type="number" min="1000" max="3600000" step="1000">
+        <span class="field-label">启动时间 / 秒</span>
+        <input v-model.number="startupSeconds" class="control" type="number" min="1" max="3600" step="1">
       </label>
       <label class="field sm:col-span-2">
         <span class="field-label">提示词文件</span>

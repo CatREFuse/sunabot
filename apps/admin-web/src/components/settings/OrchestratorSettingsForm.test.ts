@@ -68,4 +68,28 @@ describe("OrchestratorSettingsForm", () => {
     expect(wrapper.props("modelValue").groupThreadModel).toBe("custom-low-cost-model");
     expect(wrapper.get("fieldset").attributes("disabled")).toBeDefined();
   });
+
+  it("shows the startup time in seconds and persists milliseconds", async () => {
+    const wrapper = mount(OrchestratorSettingsForm, {
+      props: {
+        modelValue: { ...orchestrator, enabled: true },
+        groupEnabled: true,
+        models: []
+      },
+      global: { stubs: { RouterLink: true } }
+    });
+    const startupField = wrapper.findAll(".field")
+      .find((field) => field.text().includes("启动时间 / 秒"));
+    const input = startupField?.get('input[type="number"]');
+
+    expect((input?.element as HTMLInputElement | undefined)?.value).toBe("60");
+    expect(input?.attributes()).toMatchObject({ min: "1", max: "3600", step: "1" });
+
+    await input?.setValue("1");
+    expect(wrapper.props("modelValue").recentMessageWindowMs).toBe(1_000);
+    await input?.setValue("90");
+    expect(wrapper.props("modelValue").recentMessageWindowMs).toBe(90_000);
+    await input?.setValue("3600");
+    expect(wrapper.props("modelValue").recentMessageWindowMs).toBe(3_600_000);
+  });
 });
