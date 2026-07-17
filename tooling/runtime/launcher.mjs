@@ -404,6 +404,7 @@ async function collectRuntimeProbeFacts(context) {
     .map((item) => [item.accountId, item.state === "running" ? "running" : "stopped"]));
   const workspaceFacts = await collectWorkspaceProbeFacts({
     workspace: context.workspace,
+    environment: context.runtimeEnvironment,
     accountObservations,
     conflicts
   });

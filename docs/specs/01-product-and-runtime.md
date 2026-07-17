@@ -38,7 +38,7 @@ NapCat 在 macOS、WSL2 和 Linux 上始终运行于独立 Docker 容器。Sunab
 
 Core 与 NapCat 是独立生命周期和文件系统边界。跨组件出站媒体默认使用 OneBot `base64://`，不能传递或依赖宿主、Core 容器、NapCat 容器之间的共享绝对路径。共享业务配置、公共系统提示词和 Agent 注册表位于 workspace 公共区域；每个 Agent 的人格、自拍提示词改写、可选系统提示词覆盖、SQLite、队列、图片与人工文件位于 `workspace/business/agents/<agentId>/`。每个 QQ 的 NapCat 配置、登录态和运行状态位于 `workspace/runtime/napcat/accounts/<accountId>/`，只挂载给对应 NapCat 容器。平台差异只存在于组合根、运行适配器和部署层，业务与持久化格式保持一致。
 
-生产组合根默认不提供 stdio MCP launcher。`SUNABOT_MCP_STDIO_BACKEND=docker` 只接受包含已预装 server 与批准清单的 digest 固定自定义镜像；`bubblewrap` 只在 Linux/WSL 使用绝对、root 所有且权限为 `0444` 的批准清单。Native 与 Docker Core 都禁止运行时下载 server 依赖。`SUNABOT_MCP_CREDENTIAL_VAULT_KEY` 必须是 32 字节 canonical base64url，缺失时 OAuth 管理端点保持不可用，远端无 OAuth MCP 仍可按自身能力运行。
+生产组合根默认不提供 stdio MCP launcher。`SUNABOT_MCP_STDIO_BACKEND=docker` 只接受包含已预装 server 与批准清单的 digest 固定自定义镜像；`bubblewrap` 只在 Linux/WSL 使用绝对、root 所有且权限为 `0444` 的批准清单。Native 与 Docker Core 都禁止运行时下载 server 依赖。`SUNABOT_MCP_CREDENTIAL_VAULT_KEY` 必须是 32 字节 canonical base64url，缺失时 OAuth 管理端点保持不可用，远端无 OAuth MCP 仍可按自身能力运行。启动、`status` 与 `doctor` 必须使用同一份 `workspace/secrets/runtime.env` 解析 MCP 能力，不能用启动终端的空环境覆盖实际运行配置。
 
 Provider、Codex CLI 与联网工具的出站 HTTP(S) 可独立使用代理。API 在载入 composition root 前由 `packages/platform/proxy.mjs` 解析并安装 Undici dispatcher，优先级为 `SUNABOT_PROXY_URL`、标准 `HTTP_PROXY`/`HTTPS_PROXY`、WSL 默认网关与配置端口探测。`SUNABOT_PROXY_MODE` 支持 `auto`、`env`、`wsl-host` 和 `off`；网关只从当前默认路由动态发现，不写死地址。Native Core 与 Docker Core 使用 `deploy/runtime-contract.json` 中的同一代理契约。`NO_PROXY` 必须包含回环地址、Compose 服务名和启动器选择的宿主网关，代理 URL 与凭据不得进入日志、状态接口或 Git。
 

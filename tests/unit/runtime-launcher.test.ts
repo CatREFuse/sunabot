@@ -22,6 +22,11 @@ import {
 const root = fileURLToPath(new URL("../..", import.meta.url));
 
 describe("unified runtime launcher", () => {
+  it("uses runtime.env values for workspace capability probes", async () => {
+    const source = await fs.readFile(path.join(root, "tooling/runtime/launcher.mjs"), "utf8");
+    expect(source).toMatch(/collectWorkspaceProbeFacts\(\{\s*workspace: context\.workspace,\s*environment: context\.runtimeEnvironment,/u);
+  });
+
   it.each([
     { args: ["up"], invocation: "up" },
     { args: ["--core=docker"], invocation: "--core=docker" },
