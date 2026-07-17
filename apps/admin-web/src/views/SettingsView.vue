@@ -14,6 +14,7 @@ import ProviderSettings from "../components/settings/ProviderSettings.vue";
 import BroadcastStormSettingsForm from "../components/settings/BroadcastStormSettingsForm.vue";
 import NormalReplySettingsForm from "../components/settings/NormalReplySettingsForm.vue";
 import BotSettingsForm from "../components/settings/BotSettingsForm.vue";
+import ToneSettingsForm from "../components/settings/ToneSettingsForm.vue";
 import MemorySettingsForm from "../components/settings/MemorySettingsForm.vue";
 import OrchestratorSettingsForm from "../components/settings/OrchestratorSettingsForm.vue";
 import ToolsSettingsForm from "../components/settings/ToolsSettingsForm.vue";
@@ -42,6 +43,7 @@ const settingsPanel = useTemplateRef<HTMLElement>("settingsPanel");
 const allSections: Array<{ id: SettingsSectionKey; label: string; group: string; icon: string; scope: "agent" | "system" }> = [
   { id: "persona", label: "Agent 身份", group: "Agent", icon: "bx-user-voice", scope: "agent" },
   { id: "bot", label: "回复行为", group: "Agent", icon: "bx-bot", scope: "agent" },
+  { id: "tone", label: "语气处理", group: "Agent", icon: "bx-conversation", scope: "agent" },
   { id: "memory", label: "记忆处理", group: "记忆与编排", icon: "bx-brain", scope: "agent" },
   { id: "orchestrator", label: "群聊编排", group: "记忆与编排", icon: "bx-git-branch", scope: "agent" },
   { id: "tools", label: "Agent 工具", group: "工具", icon: "bx-wrench", scope: "agent" },
@@ -278,6 +280,12 @@ async function logout() {
             v-else-if="current === 'bot'"
             v-model="workspace.drafts.bot"
             v-model:reply="workspace.drafts.onebot"
+          />
+          <ToneSettingsForm
+            v-else-if="current === 'tone'"
+            v-model="workspace.drafts.tone"
+            :models="catalog.models.value"
+            :providers="workspace.drafts.providers.items"
           />
           <MemorySettingsForm v-else-if="current === 'memory'" v-model="workspace.drafts.memory" :models="catalog.models.value" />
           <OrchestratorSettingsForm

@@ -93,6 +93,7 @@ describe("ConfigService", () => {
       value: {
         adminQq: "3971235731",
         adminName: "Updated Admin",
+        replyDebounceMs: 7_500,
         pokeOnNoReply: true,
         quoteGroupReplies: false,
         quoteGroupReplyExcludedUserIds: ["20001", "20002"],
@@ -111,6 +112,7 @@ describe("ConfigService", () => {
     expect(currentConfig().bot).toMatchObject({
       adminQq: "3971235731",
       adminName: "Updated Admin",
+      replyDebounceMs: 7_500,
       pokeOnNoReply: true,
       quoteGroupReplies: false,
       quoteGroupReplyExcludedUserIds: ["20001", "20002"],
@@ -364,6 +366,7 @@ function botSection(adminName: string) {
   return {
     adminQq: bot.adminQq,
     adminName,
+    replyDebounceMs: bot.replyDebounceMs,
     pokeOnNoReply: bot.pokeOnNoReply,
     quoteGroupReplies: bot.quoteGroupReplies,
     quoteGroupReplyExcludedUserIds: bot.quoteGroupReplyExcludedUserIds,

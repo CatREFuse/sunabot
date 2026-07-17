@@ -33,7 +33,7 @@
 
 ### 3.3 按发送者回复防抖
 
-私聊和允许主动回复的群聊统一执行固定 5 秒的尾随防抖。防抖键按 Agent 运行时、QQ 账号、会话和发送者隔离；首条满足命令、私聊、明确 @、唤醒词或群聊编排器判断等触发条件的消息创建回复候选，但在 5 秒静默期结束前不得进入命令执行或主回复流程。同一发送者在窗口内到达的任意后续合法消息都会把该候选的截止时间重置为该消息到达后的 5 秒，无论后续消息本身是否满足触发条件；其他发送者的消息不改变该截止时间。不同发送者、不同 QQ 账号和不同 Agent 的候选各自计时，不能互相阻塞或重置。
+私聊和允许主动回复的群聊统一执行尾随防抖。防抖时间由各 Agent 的 `bot.replyDebounceMs` 独立配置，默认 5,000 ms，允许 1,000—60,000 ms，并在 Agent 设置的“回复行为”中以 1—60 秒编辑。防抖键按 Agent 运行时、QQ 账号、会话和发送者隔离；首条满足命令、私聊、明确 @、唤醒词或群聊编排器判断等触发条件的消息创建回复候选，但在当前静默期结束前不得进入命令执行或主回复流程。同一发送者在窗口内到达的任意后续合法消息都会按该 Agent 当时生效的防抖时间重置候选截止时间，无论后续消息本身是否满足触发条件；其他发送者的消息不改变该截止时间。不同发送者、不同 QQ 账号和不同 Agent 的候选各自计时，不能互相阻塞或重置。
 
 首条触发消息固定本轮 route、幂等键和最终引用目标，窗口内后续消息不能替换这些字段。触发时把当时已经生效的引用开关、排除规则结果和首条 message ID 编码为必填的 `ReplyQuoteSnapshotV1`；防抖 handoff、主回复、命令投递、deferred acknowledgement/callback 和 timeout/error outbox 只消费该快照，窗口内或重启后的引用配置热更新不能重新计算引用。命令 route 同时保存只含稳定命令 ID、调用名、参数和原始文本的有界 `CommandInvocationV1`，执行时按 ID 恢复当前静态定义，不能重新使用热 mention/persona 名称匹配；未知 ID、超限字段、原始文本不一致或任何可执行字段都失败关闭，普通 route 不能携带 invocation，也不能在等待期间因新名称启用而晋升为命令。
 
@@ -54,6 +54,7 @@ Thread 状态按会话增量维护。宿主规则优先处理对已归属消息�
 - 每个会话拥有有序事件流，事件、turn、异步工具任务和 outbox 使用 SQLite 持久化。
 - 同一会话按序处理；不同会话允许受控并发。
 - 回复防抖使用独立的 per-sender synthetic Session 和持久化 `reply_debounce` 事件，`availableAt` 保存当前截止时间；它不能占用真实会话 FIFO 的队首。Session Coordinator 根据全部可 claim 事件中最早的未来 `availableAt` 维护可重置唤醒，期间没有新入站消息时也必须按期恢复执行，进程重启后继续从 SQLite 中的截止时间恢复。
+- `bot.replyDebounceMs` 热更新只改变之后新建候选和之后收到同发送者消息时的 deadline 重置长度；已经持久化且没有新输入的候选继续按其 `availableAt` 执行，保存设置不能批量改写、提前释放或延后现有 durable 事件。
 - 同一发送者的新消息可以重排 pending 防抖事件，也可以更新已经 running 但尚未 handoff 的事件。首触发与最近的有界 follow-up tail 保存在 `reply_debounce` payload 中，更早的窗口消息保存在业务会话库；追加去重后的 follow-up 快照和更新 `availableAt` 必须由 Session store 在同一事务、同一比较更新中提交，不能依赖当前消息已经写入业务会话数据库。重启恢复或分配新 conversation sequence 前，运行时先按 message ID 幂等物化该会话内的 durable 防抖快照，避免 queue 已提交而业务会话尚未落盘时，同发送者或不同发送者的新消息抢占首条 sequence。重复投递同一 message ID 既不追加快照，也不延长截止时间。
 - 缺少 transport message ID 的入站消息使用统一、版本化且定长的 canonical fingerprint 作为 Session 去重键、准备键、durable snapshot 身份和业务会话记录 ID。指纹覆盖 Agent/account/self、conversation、sender、时间、文本、媒体、附件稳定元数据、reply message IDs 和 quote references，忽略本地缓存路径与解析状态；完全相同的重投保持同一身份，仅附件或引用不同的消息必须保持不同。completed source 在重启后再次投递时由已完成的 Session 去重结果直接阻止重复业务记录、记忆入队和 Provider 调用。
 - 只要 conversation 中存在 active 防抖，任何发送者的当前入站都必须先通过严格的单记录业务库 upsert 再进入 seen/sequence 后续步骤；SQLite 写入失败时不得吞错、标记 seen 或延长任一发送者的 deadline，重投后仍可恢复。active debounce、已 handoff 且带冻结边界的 source、deferred callback 与 queued/running deferred job 所引用的会话记录属于持久化保护集；常规批量保存和 outbox settle 的 top-N 投影都不得删除这些记录，直到对应任务终态后才可释放。
@@ -61,6 +62,7 @@ Thread 状态按会话增量维护。宿主规则优先处理对已归属消息�
 - 防抖 turn 完成时在同一 SQLite 事务中校验预期截止时间、完成 synthetic 源事件并向真实会话写入 `incoming_reply` 目标事件；截止时间更新先提交时，已经读取旧 payload 的 running turn 因预期截止时间不符而中断，重试读取含 follow-up 的新 payload 并按新截止时间执行，不能留下目标事件；handoff 先提交时，随后到达的消息进入新的窗口。事务失败必须同时回滚源完成和目标写入，重试只能产生一个真实回复事件。若目标 session 已存在相同 dedupe key，handoff 专用路径必须逐字段核对 kind、payload、correlation/causation 和幂等来源的 canonical provenance；完全一致才视为幂等重试，任何 collision 都回滚整个事务并让 source 保持可恢复，普通 enqueue 的兼容去重语义不受影响。
 - 外发使用 outbox，支持租约、有限重试、断线恢复和幂等键。OneBot outbox 按 account ID 持久化投递分区；离线分区暂停时，其他账号继续按各自 FIFO 投递，探针和恢复只作用于目标分区。
 - OneBot 发送和本地 settle 使用持久化两阶段。远端成功后先记录 receipt 并进入 `sent_remote`，会话投影、请求日志、记忆入队和逐 handler `after_reply` 使用稳定 settle key 继续执行；任何不确定传输或 hook 副作用进入 `delivery_unknown`，只接受人工 `applied` 或 `not_applied` 确认，不能自动重复外发。旧 schema 中无法判断远端结果的 `sending` 记录迁移为 `delivery_unknown`，并安全推进连续终态 cursor。
+- 当前 Agent 启用 `bot.tone.enabled` 后，所有将发往 OneBot 的非空文本在可用的 `before_reply` hook 之后、写入 durable outbox 或直接调用 OneBot 之前统一进入 tone 节点。覆盖普通最终正文、`assistant_text`、deferred `dispatch_message`、异步 callback、timeout/cancel、错误回复、服务上线通知和 `system_config` 确认；纯媒体回复不调用 tone。节点只替换文本，生成图片、媒体引用、附件、文件、引用快照、Agent/account、会话、幂等键、消息来源和工具 trace 均保持原值；文本与生成图片继续位于同一个 `assistant_reply` payload，`send_file` 继续使用独立 `conversation_asset` outbox 并服从同会话 FIFO。改写完成后的正文只持久化一次，outbox 重试、断线恢复和重启投递不得再次调用 tone。启用时空输出、取消、超时、Provider 错误或重试耗尽均失败关闭，不能绕过节点发送原文；`dispatch_message` 改写后仍须非空且不超过 200 字。`system_config` 确认必须先完成 tone 并成功写入 held outbox，随后才能提交配置。
 - Codex 与图像生成长任务先返回确认消息，任务完成后通过持久化事件恢复原会话；任务提交不能等待生成完成。所有 deferred tool 必须单独调用并携带非空 `dispatch_message`，由模型使用当前人格生成“已收到并开始处理”的短消息；该字段与任务在同一事务中落库为 acknowledgement，进入 worker 前从业务参数中删除。事务提交后 acknowledgement outbox 与 worker 独立调度，消息发送、重试或结果不确定不能阻塞任务 claim 和执行；callback 按同一会话 outbox FIFO 排在 acknowledgement 之后。缺失、空白或超过 200 字时不得派发，也不得降级为同步执行。
 - `assistant_text` 允许 Agent 在工具循环中发送中间消息。中间消息必须在当前 turn 仍运行时写入 SQLite outbox 并立即调度发送，持久化完成后即可继续下一项 inline 工具；发送与重试由 outbox 独立执行，不能在 Provider 工具循环结束后才批量写入。重试同一事件时按事件 ID 与中间消息序号去重。群聊只引用第一条中间消息，最终正文仍引用原始消息，后续中间消息不引用。
 - 一次 Provider completion 共享同一个 `TurnToolState`，跨模型轮次记录已发送的 `assistant_text`、已接受工具、deferred 状态和调用次数。Responses、Chat Completions、Anthropic、Gemini 和 Codex 均拒绝 `assistant_text → no_reply`、普通工具 → `no_reply` 和 `assistant_text → deferred` 等非法顺序，合法的首轮独立 `no_reply` 与 deferred 调用保持原行为。

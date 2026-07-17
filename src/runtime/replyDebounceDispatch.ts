@@ -35,9 +35,17 @@ export async function runtime_replyToToolCompletion(
     const text = result.image
       ? ""
       : `图片生成失败：${sanitizeErrorDetail(result.error || "没有可用图片")}`;
+    const tonedText = await this.rewriteToneText(text, {
+      incoming,
+      signal,
+      logContext: {
+        conversationId: channelKey,
+        incomingMessageId: incoming.messageId == null ? undefined : String(incoming.messageId)
+      }
+    });
     delivery.outbox.push(this.replyDeliveryDraft(
       incoming,
-      text,
+      tonedText,
       this.isAdminUser(incoming.userId),
       result.image ? [result.image] : [],
       undefined,

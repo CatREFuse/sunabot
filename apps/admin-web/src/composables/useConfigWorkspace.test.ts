@@ -44,10 +44,12 @@ function config(adminName: string): AppConfig {
     bot: {
       adminQq: "1",
       adminName,
+      replyDebounceMs: 5_000,
       pokeOnNoReply: false,
       quoteGroupReplies: true,
       quoteGroupReplyExcludedUserIds: [],
       contextMessageLimit: 48,
+      tone: { enabled: false, providerId: "", model: "gpt-5.4-mini", reasoningEffort: "low", temperature: 0.7, maxOutputTokens: 2400, maxRetries: 2 },
       memory: { memoryModel: "gpt-5.4-mini", reasoningEffort: "medium", messageThreshold: 48, workingMemoryMaxEntries: 100, workMemoryCompressInPrompt: "in.md", workMemoryCompressOutPrompt: "out.md", userProfilePrompt: "user.md" },
       orchestrator: { enabled: false, userGroupchatOrchestratorModel: "gpt-5.4-mini", groupThreadModel: "gpt-5.4-mini", reasoningEffort: "medium", promptFile: "orchestrator.md", messageThreshold: 10, recentMessageWindowMs: 60_000 },
       tools: {
@@ -155,6 +157,54 @@ describe("useConfigWorkspace", () => {
 
     expect(workspace.drafts.orchestrator.groupThreadModel).toBe("gpt-5.4-mini");
     expect(workspace.isDirty("orchestrator")).toBe(false);
+  });
+
+  it("loads a legacy Agent config with the default reply debounce time", async () => {
+    const legacy = envelope("r1", "initial");
+    delete (legacy.config.bot as Partial<AppConfig["bot"]>).replyDebounceMs;
+    apiRequest.mockResolvedValueOnce(legacy);
+    const workspace = useConfigWorkspace();
+
+    await workspace.load();
+
+    expect(workspace.drafts.bot.replyDebounceMs).toBe(5_000);
+    expect(workspace.isDirty("bot")).toBe(false);
+  });
+
+  it("loads a legacy Agent config with the default tone settings", async () => {
+    const legacy = envelope("r1", "initial");
+    delete (legacy.config.bot as Partial<AppConfig["bot"]>).tone;
+    apiRequest.mockResolvedValueOnce(legacy);
+    const workspace = useConfigWorkspace();
+
+    await workspace.load();
+
+    expect(workspace.drafts.tone).toMatchObject({
+      enabled: false,
+      providerId: "",
+      model: "gpt-5.4-mini",
+      maxRetries: 2
+    });
+    expect(workspace.isDirty("tone")).toBe(false);
+  });
+
+  it("saves tone settings as an Agent section", async () => {
+    apiRequest.mockResolvedValueOnce(envelope("r1", "initial"));
+    const workspace = useConfigWorkspace();
+    await workspace.load();
+    workspace.drafts.tone.enabled = true;
+    const saved = envelope("r2", "initial");
+    saved.config.bot.tone.enabled = true;
+    apiRequest.mockResolvedValueOnce({ ...saved, applyMode: "hot" });
+
+    await workspace.save("tone");
+
+    expect(apiRequest).toHaveBeenNthCalledWith(2, "/api/config/tone", expect.objectContaining({ method: "PATCH" }));
+    expect(JSON.parse(String(apiRequest.mock.calls[1]?.[1]?.body))).toMatchObject({
+      revision: "r1",
+      value: { enabled: true, model: "gpt-5.4-mini" }
+    });
+    expect(workspace.isDirty("tone")).toBe(false);
   });
 
   it("saves the linked user-group and orchestrator controls atomically", async () => {

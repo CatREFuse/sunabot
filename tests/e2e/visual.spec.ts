@@ -284,6 +284,10 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     await capture(page, viewport.name, theme, "settings-orchestrator-disabled");
     await page.getByRole("button", { name: "放弃", exact: true }).click();
 
+    await page.goto("/agent-settings/tone");
+    await expect(page.getByRole("heading", { name: "语气处理" })).toBeVisible();
+    await capture(page, viewport.name, theme, "settings-tone");
+
     await page.goto("/agent-settings/persona");
     await expect(page.getByRole("heading", { name: "Agent 身份" })).toBeVisible();
     await capture(page, viewport.name, theme, "settings-agent-identity");

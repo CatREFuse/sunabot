@@ -129,7 +129,8 @@ export async function runtime_sendAssistantReply(this: RuntimeHost,
     delivery?: ReplyDelivery,
     quoteReply = true,
     trace: AssistantMessageTrace = { messageOrigin: "text" },
-    deliveryTiming: "buffered" | "immediate" = "buffered"
+    deliveryTiming: "buffered" | "immediate" = "buffered",
+    signal?: AbortSignal
   ) {
     if (
       !this.isReplySenderAllowed(incoming.userId) ||
@@ -140,9 +141,18 @@ export async function runtime_sendAssistantReply(this: RuntimeHost,
       text,
       context: { scope: incoming.scope, userId: incoming.userId, groupId: incoming.groupId, isAdmin }
     });
+    const tonedText = await this.rewriteToneText(beforeReply.text, {
+      incoming,
+      signal,
+      logContext: {
+        conversationId: conversationRecordId(incoming),
+        incomingMessageId: incoming.messageId == null ? undefined : String(incoming.messageId),
+        runId: logRunId
+      }
+    });
     const generatedImageAssets = generatedImages.filter((image) => image.url || image.filePath);
     const generatedImageUrls = generatedImages.flatMap((image) => image.url ? [image.url] : []);
-    const replyText = normalizeOutgoingReplyText(beforeReply.text).trim();
+    const replyText = normalizeOutgoingReplyText(tonedText).trim();
     if (!replyText && !generatedImageAssets.length) {
       throw new Error("模型回复为空。");
     }
@@ -392,13 +402,22 @@ export async function runtime_sendErrorReply(this: RuntimeHost,
     isCurrent: () => boolean = () => true,
     logRunId?: string,
     delivery?: ReplyDelivery,
-    trace: AssistantMessageTrace = { messageOrigin: "text" }
+    trace: AssistantMessageTrace = { messageOrigin: "text" },
+    signal?: AbortSignal
   ) {
     if (
       !this.isReplySenderAllowed(incoming.userId) ||
       !isCurrent()
     ) return;
-    const message = formatErrorReply(error);
+    const message = await this.rewriteToneText(formatErrorReply(error), {
+      incoming,
+      signal,
+      logContext: {
+        conversationId: conversationRecordId(incoming),
+        incomingMessageId: incoming.messageId == null ? undefined : String(incoming.messageId),
+        runId: logRunId
+      }
+    });
     try {
       if (!isCurrent()) return;
       if (delivery) {

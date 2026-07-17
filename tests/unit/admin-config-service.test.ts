@@ -68,6 +68,98 @@ describe("ConfigService section semantics", () => {
     expect(states["onebot.accessTokenEnv"]?.applyMode).toBe("reconnect");
   });
 
+  it("persists the Agent reply debounce time as a hot setting", async () => {
+    const subject = service();
+    const envelope = await subject.readEnvelope();
+    const result = await subject.patch("bot", {
+      revision: envelope.revision,
+      value: {
+        adminQq: envelope.config.bot.adminQq,
+        adminName: envelope.config.bot.adminName,
+        replyDebounceMs: 7_500,
+        pokeOnNoReply: envelope.config.bot.pokeOnNoReply,
+        quoteGroupReplies: envelope.config.bot.quoteGroupReplies,
+        quoteGroupReplyExcludedUserIds: envelope.config.bot.quoteGroupReplyExcludedUserIds,
+        contextMessageLimit: envelope.config.bot.contextMessageLimit
+      }
+    });
+
+    expect(result.config.bot.replyDebounceMs).toBe(7_500);
+    expect(result.applyMode).toBe("hot");
+    expect(result.fieldStates["bot.replyDebounceMs"]?.applyMode).toBe("hot");
+  });
+
+  it.each([999, 60_001])("rejects an out-of-range Agent reply debounce time: %s", async (replyDebounceMs) => {
+    const subject = service();
+    const envelope = await subject.readEnvelope();
+
+    await expect(subject.patch("bot", {
+      revision: envelope.revision,
+      value: {
+        adminQq: envelope.config.bot.adminQq,
+        adminName: envelope.config.bot.adminName,
+        replyDebounceMs,
+        pokeOnNoReply: envelope.config.bot.pokeOnNoReply,
+        quoteGroupReplies: envelope.config.bot.quoteGroupReplies,
+        quoteGroupReplyExcludedUserIds: envelope.config.bot.quoteGroupReplyExcludedUserIds,
+        contextMessageLimit: envelope.config.bot.contextMessageLimit
+      }
+    })).rejects.toMatchObject({
+      statusCode: 400,
+      code: "CONFIG_INVALID",
+      field: "bot.replyDebounceMs"
+    });
+  });
+
+  it("persists independent tone settings as a hot Agent section", async () => {
+    const subject = service();
+    const envelope = await subject.readEnvelope();
+    const providerId = envelope.config.providers.items.find((provider) => provider.enabled)!.id;
+    const result = await subject.patch("tone", {
+      revision: envelope.revision,
+      value: {
+        enabled: true,
+        providerId,
+        model: "gpt-5.5",
+        reasoningEffort: "high",
+        temperature: 1.1,
+        maxOutputTokens: 3200,
+        maxRetries: 4
+      }
+    });
+
+    expect(result.config.bot.tone).toEqual({
+      enabled: true,
+      providerId,
+      model: "gpt-5.5",
+      reasoningEffort: "high",
+      temperature: 1.1,
+      maxOutputTokens: 3200,
+      maxRetries: 4
+    });
+    expect(result.applyMode).toBe("hot");
+    expect(result.fieldStates["bot.tone.enabled"]?.applyMode).toBe("hot");
+  });
+
+  it.each([
+    ["providerId", "missing-provider", "tone.providerId"],
+    ["temperature", 2.1, "tone.temperature"],
+    ["maxOutputTokens", 0, "tone.maxOutputTokens"],
+    ["maxRetries", 11, "tone.maxRetries"]
+  ] as const)("rejects invalid tone %s", async (key, value, field) => {
+    const subject = service();
+    const envelope = await subject.readEnvelope();
+
+    await expect(subject.patch("tone", {
+      revision: envelope.revision,
+      value: { ...envelope.config.bot.tone, [key]: value }
+    })).rejects.toMatchObject({
+      statusCode: 400,
+      code: "CONFIG_INVALID",
+      field
+    });
+  });
+
   it("reports server changes as restart-only without replacing other sections", async () => {
     const subject = service();
     const envelope = await subject.readEnvelope();
@@ -359,6 +451,7 @@ describe("ConfigService section semantics", () => {
       value: {
         adminQq: envelope.config.bot.adminQq,
         adminName: envelope.config.bot.adminName,
+        replyDebounceMs: envelope.config.bot.replyDebounceMs,
         pokeOnNoReply: envelope.config.bot.pokeOnNoReply,
         quoteGroupReplies: !envelope.config.bot.quoteGroupReplies,
         quoteGroupReplyExcludedUserIds: ["20001", "20001", "20002"],
@@ -379,6 +472,7 @@ describe("ConfigService section semantics", () => {
       value: {
         adminQq: envelope.config.bot.adminQq,
         adminName: envelope.config.bot.adminName,
+        replyDebounceMs: envelope.config.bot.replyDebounceMs,
         pokeOnNoReply: envelope.config.bot.pokeOnNoReply,
         quoteGroupReplies: envelope.config.bot.quoteGroupReplies,
         quoteGroupReplyExcludedUserIds: ["20001", "another-bot"],

@@ -44,6 +44,7 @@ interface SystemConfigFinalReplyInput {
   logRunId: string;
   isCurrent?: () => boolean;
   delivery?: ReplyDelivery;
+  signal?: AbortSignal;
   messageOrigin: AssistantMessageOrigin;
   toolNames: readonly string[];
 }
@@ -368,7 +369,8 @@ export async function sendSystemConfigAwareFinalReply(
       prepared?.delivery ?? input.delivery,
       true,
       { messageOrigin: input.messageOrigin, toolNames: [...input.toolNames] },
-      prepared?.timing ?? "buffered"
+      prepared?.timing ?? "buffered",
+      input.signal
     );
     if (prepared?.timing === "immediate" && input.lifecycle?.protectsCurrentPrivateReplyFromGateClosure()) {
       host.activeDirectControllers.delete(input.channelKey);

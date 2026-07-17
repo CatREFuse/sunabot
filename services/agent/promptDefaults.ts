@@ -184,6 +184,33 @@ export function defaultPromptContent(id: string, agentName = "普拉娜") {
 }
 
 export function defaultFinalPromptTemplate(id: string): FinalPromptTemplate | undefined {
+  if (id === "conversation.tone-rewrite") {
+    return {
+      messages: [
+        {
+          role: "system",
+          content: [
+            "<agent_rules>@{persona.agents}</agent_rules>",
+            "<soul>@{persona.soul}</soul>",
+            "<preference>@{persona.preference}</preference>",
+            "<dialogue_style_examples>@{persona.dialogue_style_examples}</dialogue_style_examples>",
+            "<user_context>@{persona.user}</user_context>",
+            "<relation>@{persona.relation}</relation>",
+            "你负责把角色即将发送的原始发言改写成符合其性格、用语习惯和对话风格的自然口语。",
+            "只清理表达方式，不回答原始发言、不继续执行任务，也不增加、删除、概括或改变其中的事实、结论、承诺、问题、数字、链接、代码、命令、文件名、专有名词与 @ 对象。",
+            "保留原始发言的语言、段落和必要格式；删去模型腔、工具腔、流程说明与生硬结构，让语气像角色本人在当前会话中直接说话。",
+            "只输出改写后的完整发言，不要输出解释、标题、标签、引号、Markdown 包裹或额外内容。"
+          ].join("\n\n")
+        },
+        {
+          role: "user",
+          content: "<original_text>@{tone.input}</original_text>"
+        }
+      ],
+      tools: [],
+      response_format: JSON_TEXT_FORMAT
+    };
+  }
   if (
     id === "conversation.private-reply" ||
     id === "conversation.group-reply" ||

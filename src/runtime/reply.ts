@@ -105,6 +105,7 @@ import {
   type GenerateImgReferenceContext
 } from "../../services/tools/generateImgTool.js";
 import { SELFIE_TOOL_NAME } from "../../services/tools/selfieTool.js";
+import { DISPATCH_MESSAGE_MAX_CHARS } from "../../services/tools/deferredDispatch.js";
 import { promptDefinitionById } from "../../services/agent/promptCatalog.js";
 import { defaultPromptContent as defaultFinalPromptContent } from "../../services/agent/promptDefaults.js";
 import {
@@ -423,7 +424,8 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
                 : options.messageOrigin ?? "text",
               toolNames: currentToolNames()
             },
-            "immediate"
+            "immediate",
+            options.signal
           );
           if (record) sent = true;
         },
@@ -522,6 +524,14 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
       if (turn.kind === "deferred") {
         const acknowledgement = turn.acknowledgement.trim();
         if (!acknowledgement) throw new Error("异步工具缺少 dispatch_message。");
+        const tonedAcknowledgement = await this.rewriteToneText(acknowledgement, {
+          incoming,
+          signal: options.signal,
+          logContext
+        });
+        if (tonedAcknowledgement.length > DISPATCH_MESSAGE_MAX_CHARS) {
+          throw new Error(`Tone 处理后的 dispatch_message 不能超过 ${DISPATCH_MESSAGE_MAX_CHARS} 个字符。`);
+        }
         const originalRequest = {
           incoming: queueIncomingSnapshot(incoming),
           captureSequence: options.captureSequence,
@@ -536,7 +546,7 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
           originalRequest,
           acknowledgement: this.replyDeliveryDraft(
             incoming,
-            acknowledgement,
+            tonedAcknowledgement,
             isAdmin,
             [],
             logRunId,
@@ -556,6 +566,7 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
         channelKey, incoming, gateway, text: turn.text, isAdmin,
         generatedImages, logRunId, isCurrent: options.isCurrent,
         delivery: options.delivery,
+        signal: options.signal,
         messageOrigin: options.messageOrigin ?? "text",
         toolNames: turnToolNames
       }) || sent;
@@ -610,7 +621,8 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
           {
             messageOrigin: options.messageOrigin ?? "text",
             toolNames: failedToolNames
-          }
+          },
+          options.signal
         );
       }
       return sent;
@@ -631,7 +643,8 @@ export async function runtime_replyWithGroupChatSummary(this: RuntimeHost,
     try {
       if (!incoming.groupId) {
         const record = await this.sendAssistantReply(
-          channelKey, incoming, gateway, "只能在群聊里总结群聊。", isAdmin, [], undefined, isCurrent, delivery
+          channelKey, incoming, gateway, "只能在群聊里总结群聊。", isAdmin, [], undefined, isCurrent, delivery,
+          true, { messageOrigin: "text" }, "buffered", signal
         );
         if (record) this.scheduleMemoryCompression(record);
         return;
@@ -645,7 +658,8 @@ export async function runtime_replyWithGroupChatSummary(this: RuntimeHost,
       );
       if (!summaryMessages.length) {
         const replyRecord = await this.sendAssistantReply(
-          channelKey, incoming, gateway, "最近 6 小时没有可总结的文字消息。", isAdmin, [], undefined, isCurrent, delivery
+          channelKey, incoming, gateway, "最近 6 小时没有可总结的文字消息。", isAdmin, [], undefined, isCurrent, delivery,
+          true, { messageOrigin: "text" }, "buffered", signal
         );
         if (replyRecord) this.scheduleMemoryCompression(replyRecord);
         return;
@@ -680,7 +694,8 @@ export async function runtime_replyWithGroupChatSummary(this: RuntimeHost,
         }
       });
       const replyRecord = await this.sendAssistantReply(
-        channelKey, incoming, gateway, reply, isAdmin, [], undefined, isCurrent, delivery
+        channelKey, incoming, gateway, reply, isAdmin, [], undefined, isCurrent, delivery,
+        true, { messageOrigin: "text" }, "buffered", signal
       );
       if (replyRecord) this.scheduleMemoryCompression(replyRecord);
     } catch (error) {
@@ -692,7 +707,7 @@ export async function runtime_replyWithGroupChatSummary(this: RuntimeHost,
         groupId: incoming.groupId,
         error
       });
-      await this.sendErrorReply(incoming, gateway, error, isCurrent, undefined, delivery);
+      await this.sendErrorReply(incoming, gateway, error, isCurrent, undefined, delivery, { messageOrigin: "text" }, signal);
     }
   }
 export async function runtime_processDeferredToolJob(this: RuntimeHost, job: ToolJobRecord, signal: AbortSignal) {

@@ -34,6 +34,15 @@ describe("SystemConfigService", () => {
         scope: "ambient_group_replies",
         groupThreadClassifierControlled: false
       },
+      tone: {
+        enabled: false,
+        providerId: null,
+        model: "gpt-5.4-mini",
+        reasoningEffort: "low",
+        temperature: 0.7,
+        maxOutputTokens: 2400,
+        maxRetries: 2
+      },
       search: {
         implementation: "tavily",
         availableImplementations: ["tavily"],

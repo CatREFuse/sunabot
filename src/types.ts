@@ -9,6 +9,10 @@ export type {
 } from "../packages/contracts/messaging/messages.js";
 export type { AssistantMessageOrigin } from "../packages/contracts/session/runtimeMessages.js";
 
+export const DEFAULT_REPLY_DEBOUNCE_MS = 5_000;
+export const MIN_REPLY_DEBOUNCE_MS = 1_000;
+export const MAX_REPLY_DEBOUNCE_MS = 60_000;
+
 export type ProviderKind =
   | "codex-responses"
   | "openai-official"
@@ -159,13 +163,25 @@ export interface NormalReplyConfig {
   maxRetries: number;
 }
 
+export interface BotToneSettings {
+  enabled: boolean;
+  providerId: string;
+  model: string;
+  reasoningEffort?: ReasoningEffort;
+  temperature: number;
+  maxOutputTokens: number;
+  maxRetries: number;
+}
+
 export interface BotConfig {
   adminQq: string;
   adminName: string;
+  replyDebounceMs: number;
   pokeOnNoReply: boolean;
   quoteGroupReplies: boolean;
   quoteGroupReplyExcludedUserIds: string[];
   contextMessageLimit: number;
+  tone: BotToneSettings;
   memory: BotMemorySettings;
   orchestrator: BotOrchestratorSettings;
   tools: BotToolSettings;

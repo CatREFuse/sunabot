@@ -56,6 +56,74 @@ describe("tool configuration", () => {
     expect(config.persona.agentWorkspace).toBe("workspace/business/agents/plana");
     expect(config.providers.items.every((provider) => provider.envFile === "workspace/secrets/runtime.env")).toBe(true);
     expect(config.bot.adminQq).toBe("");
+    expect(config.bot.replyDebounceMs).toBe(5_000);
+    expect(config.bot.tone).toEqual({
+      enabled: false,
+      providerId: "",
+      model: "gpt-5.4-mini",
+      reasoningEffort: "low",
+      temperature: 0.7,
+      maxOutputTokens: 2400,
+      maxRetries: 2
+    });
+  });
+
+  it("loads a configured Agent reply debounce time and defaults missing legacy values", async () => {
+    await fs.writeFile(configPath, JSON.stringify({
+      bot: { replyDebounceMs: 7_500 }
+    }), "utf8");
+    await expect(loadConfig()).resolves.toMatchObject({
+      bot: { replyDebounceMs: 7_500 }
+    });
+
+    await fs.writeFile(configPath, JSON.stringify({ bot: {} }), "utf8");
+    await expect(loadConfig()).resolves.toMatchObject({
+      bot: { replyDebounceMs: 5_000 }
+    });
+  });
+
+  it("loads independent tone settings and defaults a missing legacy section", async () => {
+    await fs.writeFile(configPath, JSON.stringify({
+      bot: {
+        tone: {
+          enabled: true,
+          providerId: "openai",
+          model: "gpt-5.5",
+          reasoningEffort: "high",
+          temperature: 1.1,
+          maxOutputTokens: 3200,
+          maxRetries: 4
+        }
+      }
+    }), "utf8");
+    await expect(loadConfig()).resolves.toMatchObject({
+      bot: {
+        tone: {
+          enabled: true,
+          providerId: "openai",
+          model: "gpt-5.5",
+          reasoningEffort: "high",
+          temperature: 1.1,
+          maxOutputTokens: 3200,
+          maxRetries: 4
+        }
+      }
+    });
+
+    await fs.writeFile(configPath, JSON.stringify({ bot: {} }), "utf8");
+    await expect(loadConfig()).resolves.toMatchObject({
+      bot: {
+        tone: {
+          enabled: false,
+          providerId: "",
+          model: "gpt-5.4-mini",
+          reasoningEffort: "low",
+          temperature: 0.7,
+          maxOutputTokens: 2400,
+          maxRetries: 2
+        }
+      }
+    });
   });
 
   it("rejects a configuration written by a newer schema", async () => {

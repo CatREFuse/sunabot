@@ -452,12 +452,21 @@ export async function runtime_processSessionEvent(this: RuntimeHost,
       const message = /timed out|timeout/i.test(errorMessage(error))
         ? "请求处理超时了，请稍后再试。"
         : "请求处理已取消。";
+      const tonedMessage = await this.rewriteToneText(message, {
+        incoming: timeoutIncoming,
+        logContext: {
+          conversationId: event.sessionId,
+          incomingMessageId: timeoutIncoming.messageId == null
+            ? undefined
+            : String(timeoutIncoming.messageId)
+        }
+      });
       return {
         status: "failed",
         error: { message: errorMessage(error) },
         outbox: [this.replyDeliveryDraft(
           timeoutIncoming,
-          message,
+          tonedMessage,
           this.isAdminUser(timeoutIncoming.userId),
           [],
           undefined,
@@ -736,7 +745,7 @@ export async function runtime_handleIncomingMessage(this: RuntimeHost,
           messageId: incoming.messageId,
           error
         });
-        await this.sendErrorReply(incoming, gateway, error, isCurrent, undefined, delivery);
+        await this.sendErrorReply(incoming, gateway, error, isCurrent, undefined, delivery, { messageOrigin: "text" }, signal);
       }
       return;
     }

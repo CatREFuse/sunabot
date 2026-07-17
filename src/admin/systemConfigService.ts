@@ -130,9 +130,19 @@ export class SystemConfigService {
         maxResults: config.bot.tools.websearch.maxResults
       },
       replyBehavior: {
+        replyDebounceMs: config.bot.replyDebounceMs,
         pokeOnNoReply: config.bot.pokeOnNoReply,
         quoteGroupReplies: config.bot.quoteGroupReplies,
         contextMessageLimit: config.bot.contextMessageLimit
+      },
+      tone: {
+        enabled: config.bot.tone.enabled,
+        providerId: config.bot.tone.providerId || null,
+        model: config.bot.tone.model,
+        reasoningEffort: config.bot.tone.reasoningEffort ?? null,
+        temperature: config.bot.tone.temperature,
+        maxOutputTokens: config.bot.tone.maxOutputTokens,
+        maxRetries: config.bot.tone.maxRetries
       },
       memory: {
         model: config.bot.memory.memoryModel,

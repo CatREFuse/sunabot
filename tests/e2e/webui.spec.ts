@@ -506,7 +506,7 @@ test("模型下拉目录、推理强度联动与分区保存", async ({ page }) 
   expect(state.config.bot.tools.websearch.tavilyApiKeys).toEqual(["tvly-e2e-secret-2-1234567890"]);
 });
 
-test("回复开关、名称和命令前缀只在回复行为分区编辑", async ({ page }) => {
+test("防抖时间、回复开关、名称和命令前缀只在回复行为分区编辑", async ({ page }) => {
   const state = await installMockApi(page);
   await page.goto("/agent-settings/bot");
 
@@ -517,6 +517,7 @@ test("回复开关、名称和命令前缀只在回复行为分区编辑", async
   await page.getByLabel("启用 Bot 群聊").check();
   await expect(page.getByLabel("启用私聊")).not.toBeChecked();
   await expect(page.getByLabel("启用 Bot 群聊")).toBeChecked();
+  await page.getByLabel("输入防抖时间（秒）").fill("7.5");
   await page.getByLabel("过滤名单").fill("20001, 20002, 20001");
   await page.getByLabel("名称").fill("普拉娜, Plana, Arona");
   await page.getByLabel("命令前缀").fill("/suna, /sunabot");
@@ -524,6 +525,7 @@ test("回复开关、名称和命令前缀只在回复行为分区编辑", async
 
   await expect.poll(() => state.patchRequests.length).toBe(2);
   expect(state.patchRequests.map((request) => request.section)).toEqual(["bot", "onebot"]);
+  expect(state.config.bot.replyDebounceMs).toBe(7_500);
   expect(state.config.bot.quoteGroupReplyExcludedUserIds).toEqual(["20001", "20002"]);
   expect(state.config.onebot).toMatchObject({
     autoReplyPrivate: false,
@@ -538,6 +540,40 @@ test("回复开关、名称和命令前缀只在回复行为分区编辑", async
   await expect(page.getByLabel("名称")).toHaveCount(0);
   await expect(page.getByLabel("命令前缀")).toHaveCount(0);
   await expect(page.getByLabel("过滤名单")).toHaveCount(0);
+});
+
+test("Agent 可独立配置语气处理并打开提示词", async ({ page }) => {
+  const state = await installMockApi(page);
+  await page.goto("/agent-settings/tone");
+
+  await expect(page.getByRole("heading", { name: "语气处理" })).toBeVisible();
+  await page.getByLabel("启用语气处理").check();
+  await page.getByLabel("Provider").selectOption("codex");
+  await page.getByRole("combobox", { name: "模型", exact: true }).selectOption("gpt-5.5");
+  await page.getByLabel("推理强度").selectOption("high");
+  await page.getByLabel("随机性（Temperature）").fill("1.1");
+  await page.getByLabel("最大输出 Token").fill("3200");
+  await page.getByLabel("失败重试次数").fill("4");
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+
+  await expect.poll(() => state.patchRequests.length).toBe(1);
+  expect(state.patchRequests[0]?.section).toBe("tone");
+  expect(state.config.bot.tone).toMatchObject({
+    enabled: true,
+    providerId: "codex",
+    model: "gpt-5.5",
+    reasoningEffort: "high",
+    temperature: 1.1,
+    maxOutputTokens: 3200,
+    maxRetries: 4
+  });
+
+  await page.getByRole("link", { name: "编辑正文" }).click();
+  await expect(page).toHaveURL(/\/system-prompts\/conversation\.tone-rewrite$/);
+  await expect(page.getByRole("heading", { name: "语气改写" })).toBeVisible();
+  await page.getByRole("button", { name: "变量表", exact: true }).click();
+  const variableTable = page.getByRole("table", { name: "提示词变量表" }).last();
+  await expect(variableTable.getByText("@{tone.input}", { exact: true })).toBeVisible();
 });
 
 test("系统设置可配置广播风暴嗅探参数", async ({ page }) => {

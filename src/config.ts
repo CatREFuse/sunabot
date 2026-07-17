@@ -9,11 +9,15 @@ import {
   BotConfig,
   BotMemorySettings,
   BotOrchestratorSettings,
+  BotToneSettings,
   BotToolOverride,
   BotToolSettings,
   BroadcastStormConfig,
   ProviderConfig,
-  ReasoningEffort
+  ReasoningEffort,
+  DEFAULT_REPLY_DEBOUNCE_MS,
+  MIN_REPLY_DEBOUNCE_MS,
+  MAX_REPLY_DEBOUNCE_MS
 } from "./types.js";
 import { isReasoningEffort, resolveModelReasoningEffort } from "./admin/models.js";
 import {
@@ -118,10 +122,20 @@ export function defaultConfig(): AppConfig {
     bot: {
       adminQq: "",
       adminName: "猫老师",
+      replyDebounceMs: DEFAULT_REPLY_DEBOUNCE_MS,
       pokeOnNoReply: false,
       quoteGroupReplies: true,
       quoteGroupReplyExcludedUserIds: [],
       contextMessageLimit: 48,
+      tone: {
+        enabled: false,
+        providerId: "",
+        model: "gpt-5.4-mini",
+        reasoningEffort: "low",
+        temperature: 0.7,
+        maxOutputTokens: 2400,
+        maxRetries: 2
+      },
       memory: {
         memoryModel: "gpt-5.4-mini",
         reasoningEffort: "low",
@@ -454,6 +468,12 @@ function mergeBotConfig(base: BotConfig, incoming: Partial<BotConfig> | undefine
   return {
     adminQq: typeof incoming?.adminQq === "string" ? incoming.adminQq.trim() : base.adminQq,
     adminName: normalizeString(incoming?.adminName, base.adminName),
+    replyDebounceMs: normalizeInteger(
+      incoming?.replyDebounceMs,
+      base.replyDebounceMs,
+      MIN_REPLY_DEBOUNCE_MS,
+      MAX_REPLY_DEBOUNCE_MS
+    ),
     pokeOnNoReply: incoming?.pokeOnNoReply ?? base.pokeOnNoReply,
     quoteGroupReplies: incoming?.quoteGroupReplies ?? legacyQuoteGroupReplies ?? base.quoteGroupReplies,
     quoteGroupReplyExcludedUserIds: normalizeQqList(
@@ -461,6 +481,7 @@ function mergeBotConfig(base: BotConfig, incoming: Partial<BotConfig> | undefine
       base.quoteGroupReplyExcludedUserIds
     ),
     contextMessageLimit: normalizeInteger(incoming?.contextMessageLimit, base.contextMessageLimit, 1, 120),
+    tone: mergeBotToneSettings(base.tone, incoming?.tone as Partial<BotToneSettings> | undefined),
     memory: mergeBotMemorySettings(base.memory, incoming?.memory as Partial<BotMemorySettings> | undefined),
     orchestrator: mergeBotOrchestratorSettings(base.orchestrator, incoming?.orchestrator as Partial<BotOrchestratorSettings> | undefined),
     tools: mergeBotToolSettings(base.tools, incoming?.tools as Partial<BotToolSettings> | undefined),
@@ -474,6 +495,22 @@ function mergeBotConfig(base: BotConfig, incoming: Partial<BotConfig> | undefine
       workspaceOnly: bash?.workspaceOnly ?? base.bash.workspaceOnly,
       blockedKeywords: ensureStringList(bash?.blockedKeywords, base.bash.blockedKeywords)
     }
+  };
+}
+
+function mergeBotToneSettings(
+  base: BotToneSettings,
+  incoming: Partial<BotToneSettings> | undefined
+): BotToneSettings {
+  const model = normalizeModelName(incoming?.model, base.model);
+  return {
+    enabled: incoming?.enabled ?? base.enabled,
+    providerId: typeof incoming?.providerId === "string" ? incoming.providerId.trim() : base.providerId,
+    model,
+    reasoningEffort: normalizeModelEffort(model, incoming?.reasoningEffort ?? base.reasoningEffort),
+    temperature: normalizeFiniteNumber(incoming?.temperature, base.temperature, 0, 2),
+    maxOutputTokens: normalizeInteger(incoming?.maxOutputTokens, base.maxOutputTokens, 1, 1_000_000),
+    maxRetries: normalizeInteger(incoming?.maxRetries, base.maxRetries, 0, 10)
   };
 }
 
@@ -623,6 +660,12 @@ function normalizeInteger(value: unknown, fallback: number, min: number, max: nu
   const numberValue = Number(value);
   if (!Number.isFinite(numberValue)) return fallback;
   return Math.min(Math.max(Math.trunc(numberValue), min), max);
+}
+
+function normalizeFiniteNumber(value: unknown, fallback: number, min: number, max: number) {
+  const numberValue = Number(value);
+  if (!Number.isFinite(numberValue)) return fallback;
+  return Math.min(Math.max(numberValue, min), max);
 }
 
 function normalizeModelName(value: unknown, fallback: string) {
