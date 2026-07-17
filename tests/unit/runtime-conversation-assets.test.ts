@@ -863,7 +863,7 @@ describe("RuntimeConversationAssets", () => {
       () => ({ connected: true, connections: 1, selfIds: ["4004"] }),
       vi.fn(async () => ({ accepted: true as const, messageId: "must-not-send" }))
     );
-    if (!runtime.conversationRecords.has("private:171419991")) runtime.recordIncomingMessage(incoming);
+    enableConversationReplies(runtime, incoming);
     await driveAssetOutboxToTerminal(runtime, store, event.sessionId, "primary", () => {
       storeNow += 60_000;
     });
@@ -916,7 +916,7 @@ describe("RuntimeConversationAssets", () => {
         () => ({ connected: true, connections: 1, selfIds: ["4004"] }),
         vi.fn(async () => ({ accepted: true as const, messageId: "must-not-send" }))
       );
-      if (!runtime.conversationRecords.has("private:171419991")) runtime.recordIncomingMessage(incoming);
+      enableConversationReplies(runtime, incoming);
       await driveAssetOutboxToTerminal(runtime, store, event.sessionId, "primary", () => {
         storeNow += 60_000;
       });
@@ -987,7 +987,7 @@ describe("RuntimeConversationAssets", () => {
         () => ({ connected: true, connections: 1, selfIds: ["4004"] }),
         sendConversationAsset
       );
-      if (!runtime.conversationRecords.has("private:171419991")) runtime.recordIncomingMessage(incoming);
+      enableConversationReplies(runtime, incoming);
       await driveAssetOutboxToTerminal(runtime, store, event.sessionId, "primary", () => {
         storeNow += 60_000;
       });
@@ -1054,9 +1054,7 @@ describe("RuntimeConversationAssets", () => {
       }),
       sendConversationAsset
     );
-    if (!recoveredRuntime.conversationRecords.has("account:account-b:group:602")) {
-      recoveredRuntime.recordIncomingMessage(incoming);
-    }
+    enableConversationReplies(recoveredRuntime, incoming);
 
     recoveredRuntime.sessionCoordinator.resume("account-b");
     await recoveredRuntime.sessionCoordinator.waitForIdle({ timeoutMs: 3_000 });
@@ -1095,7 +1093,7 @@ describe("RuntimeConversationAssets", () => {
       resolveToolCapabilities: async () => ({ codex: false, workspaceBash: false })
     });
     runtimes.push(runtime);
-    runtime.recordIncomingMessage(incoming);
+    enableConversationReplies(runtime, incoming);
     const sendConversationAsset = vi.fn(async () => ({ accepted: true as const, messageId: "asset-replay-2" }));
     runtime.activeGateway = fakeGateway(
       () => ({ connected: true, connections: 1, selfIds: ["4004"] }),
@@ -1293,7 +1291,7 @@ function createHarness(
     resolveToolCapabilities: async () => ({ codex: false, workspaceBash: false })
   });
   runtimes.push(runtime);
-  runtime.recordIncomingMessage(incoming);
+  enableConversationReplies(runtime, incoming);
   const sendConversationAsset = vi.fn(async () => ({ accepted: true as const, messageId: "asset-1" }));
   const gateway = fakeGateway(getStatus, sendConversationAsset);
   runtime.activeGateway = gateway;
@@ -1307,6 +1305,12 @@ function createHarness(
     sendConversationAsset,
     incoming
   };
+}
+
+function enableConversationReplies(runtime: SunaRuntime, incoming: ParsedIncomingMessage) {
+  const record = runtime.recordIncomingMessage(incoming);
+  if (incoming.transport === "web") return;
+  runtime.setConversationReplyEnabled({ id: record.id, replyEnabled: true });
 }
 
 async function queueAsset(

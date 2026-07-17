@@ -267,6 +267,7 @@ describe("SunaRuntime system_config boundary", () => {
     runtime = harness.runtime;
     connection = harness.connection;
     const incoming = requiredIncoming(privateEvent(22, 171419991));
+    enableConversationReplies(runtime, incoming);
 
     await runtime.handleInboundMessage(incoming, harness.gateway);
     await runtime.sessionCoordinator.waitForIdle({ includeOutbox: false, timeoutMs: 3_000 });
@@ -368,6 +369,7 @@ describe("SunaRuntime system_config boundary", () => {
       runtime = harness.runtime;
       connection = harness.connection;
       const incoming = requiredIncoming(privateEvent(epochKind === "scope" ? 24 : 25, 171419991));
+      enableConversationReplies(runtime, incoming);
 
       await runtime.handleInboundMessage(incoming, harness.gateway);
       await runtime.sessionCoordinator.waitForIdle({ includeOutbox: false, timeoutMs: 3_000 });
@@ -433,6 +435,7 @@ describe("SunaRuntime system_config boundary", () => {
       END;
     `);
     const incoming = requiredIncoming(privateEvent(23, 171419991));
+    enableConversationReplies(runtime, incoming);
 
     await runtime.handleInboundMessage(incoming, harness.gateway);
     await runtime.sessionCoordinator.waitForIdle({ timeoutMs: 3_000 });
@@ -662,7 +665,7 @@ describe("SunaRuntime system_config boundary", () => {
       createTurn: () => idleSystemConfigTurn()
     });
     const incoming = requiredIncoming(privateEvent(51, 171419991));
-    draftHarness.runtime.recordIncomingMessage(incoming);
+    enableConversationReplies(draftHarness.runtime, incoming);
     const conversationId = conversationRecordId(incoming);
     const originalGate = draftHarness.runtime.replyGates.capture("private", conversationId);
     const draft = draftHarness.runtime.replyDeliveryDraft(
@@ -710,7 +713,7 @@ describe("SunaRuntime system_config boundary", () => {
     const afterHarness = await createRuntimeHarness(completeRequestTurn, {
       createTurn: () => idleSystemConfigTurn()
     }, { sessionStore: after });
-    afterHarness.runtime.recordIncomingMessage(incoming);
+    enableConversationReplies(afterHarness.runtime, incoming);
     afterHarness.runtime.resumeUserGroupOrchestrators(afterHarness.gateway);
     await afterHarness.runtime.sessionCoordinator.waitForIdle({ timeoutMs: 3_000 });
 
@@ -728,6 +731,17 @@ describe("SunaRuntime system_config boundary", () => {
     expect(sentTexts(afterHarness.gateway)).toEqual(["设置结果未确认，请重新查询当前设置"]);
   });
 });
+
+function enableConversationReplies(runtime: SunaRuntime, incoming: ParsedIncomingMessage) {
+  runtime.setConversationReplyEnabled({
+    id: conversationRecordId(incoming),
+    scope: incoming.scope,
+    title: "测试会话",
+    userId: incoming.userId,
+    groupId: incoming.groupId,
+    replyEnabled: true
+  });
+}
 
 async function stageMutation(
   _request: RenderedPromptRequest,
