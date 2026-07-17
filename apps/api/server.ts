@@ -442,7 +442,7 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
     reply.header("permissions-policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()");
     reply.header("cross-origin-opener-policy", "same-origin");
     reply.header("cross-origin-resource-policy", "same-origin");
-    reply.header("content-security-policy", "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
+    reply.header("content-security-policy", "default-src 'self'; img-src 'self' data: blob:; font-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
     if ((request.raw.url ?? request.url).startsWith("/api/") && !reply.hasHeader("cache-control")) reply.header("cache-control", "no-store");
     if (request.headers["x-forwarded-proto"] === "https") {
       reply.header("strict-transport-security", "max-age=31536000; includeSubDomains");

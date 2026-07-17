@@ -7,7 +7,7 @@ export default defineConfig(() => {
   return {
     root: "apps/admin-web",
     plugins: [vue()],
-    build: { outDir: "dist", emptyOutDir: true },
+    build: { outDir: "dist", emptyOutDir: true, assetsInlineLimit: 0 },
     server: {
       proxy: {
         "/api": apiTarget,
