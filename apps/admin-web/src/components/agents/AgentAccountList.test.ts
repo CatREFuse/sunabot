@@ -101,6 +101,7 @@ describe("AgentAccountList", () => {
     const createButton = creating.findAll("button").find((button) => button.text() === "新建中");
     expect(createButton).toBeDefined();
     expect(createButton?.attributes("aria-busy")).toBe("true");
+    expect(createButton?.find(".qq-docker-spinner").exists()).toBe(true);
 
     const removing = shallowMount(AgentAccountList, {
       props: {
@@ -113,5 +114,6 @@ describe("AgentAccountList", () => {
 
     expect(removing.text()).toContain("移除中");
     expect(removing.get('button[aria-label="正在移除 备用账号"]').attributes("aria-busy")).toBe("true");
+    expect(removing.get(".qq-docker-spinner").exists()).toBe(true);
   });
 });

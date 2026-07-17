@@ -82,7 +82,7 @@ function removingAccount(account: AgentAccount) {
         <h3 class="mt-2 text-xl font-medium text-display">QQ 运行容器</h3>
       </div>
       <button class="btn min-h-10 whitespace-nowrap px-4" type="button" :disabled="busy" :aria-busy="creatingAccount" @click="createOpen = true">
-        <i class="bx text-lg" :class="creatingAccount ? 'bx-loader-alt bx-spin' : 'bx-plus'" aria-hidden="true"></i>
+        <i class="bx text-lg" :class="creatingAccount ? 'bx-loader-alt qq-docker-spinner' : 'bx-plus'" aria-hidden="true"></i>
         <span>{{ creatingAccount ? "新建中" : "新建 NapCat QQ Docker" }}</span>
       </button>
     </div>
@@ -98,7 +98,7 @@ function removingAccount(account: AgentAccount) {
         <button v-if="!account.runtimeReady" class="btn min-h-9 px-3" type="button" :disabled="busy" @click="emit('run', account.id)">运行</button>
         <button v-else class="btn min-h-9 px-3" type="button" @click="openLogin(account)">{{ account.connected ? "账号" : "登录" }}</button>
         <button v-if="!account.connected && account.id !== 'primary'" class="icon-btn text-mute hover:text-accent" type="button" :aria-label="removingAccount(account) ? `正在移除 ${account.label}` : `移除 ${account.label}`" :aria-busy="removingAccount(account)" :disabled="busy" @click="emit('remove', account.id)">
-          <i class="bx" :class="removingAccount(account) ? 'bx-loader-alt bx-spin' : 'bx-trash'" aria-hidden="true"></i>
+          <i class="bx" :class="removingAccount(account) ? 'bx-loader-alt qq-docker-spinner' : 'bx-trash'" aria-hidden="true"></i>
         </button>
       </div>
       <p v-for="account in accountsWithErrors" :key="`${account.id}-error`" class="border-b border-line py-3 text-sm text-accent" role="alert">
@@ -145,3 +145,17 @@ function removingAccount(account: AgentAccount) {
     @webui="openNapCat"
   />
 </template>
+
+<style scoped>
+.qq-docker-spinner {
+  animation: qq-docker-spin 720ms linear infinite;
+}
+
+@keyframes qq-docker-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .qq-docker-spinner { animation: none; }
+}
+</style>

@@ -75,6 +75,7 @@ test("新建和移除 QQ Docker 会显示进行中状态", async ({ page }) => {
   await createAccount.getByRole("button", { name: "新建", exact: true }).click();
   await expect(page.getByRole("button", { name: "新建中", exact: true })).toHaveCount(2);
   await expect(page.getByRole("button", { name: "新建中", exact: true }).first()).toBeDisabled();
+  await expect(page.locator(".qq-docker-spinner").first()).toHaveCSS("animation-name", /^qq-docker-spin-/);
   releaseCreate();
   await expect(page.getByText("阿罗娜备用账号", { exact: true })).toBeVisible();
 
@@ -89,6 +90,7 @@ test("新建和移除 QQ Docker 会显示进行中状态", async ({ page }) => {
   await page.getByRole("button", { name: "移除 阿罗娜主账号" }).click();
   await expect(page.getByText("移除中", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "正在移除 阿罗娜主账号" })).toBeDisabled();
+  await expect(page.locator(".qq-docker-spinner")).toHaveCSS("animation-name", /^qq-docker-spin-/);
   releaseRemove();
   await expect(page.getByText("阿罗娜主账号", { exact: true })).toHaveCount(0);
 });
