@@ -2385,6 +2385,16 @@ function createRuntimeHarness(
       : { replyDebounceMs: options.replyDebounceMs })
   });
   runtimes.push(runtime);
+  const ensureConversationRecord = runtime.ensureConversationRecord.bind(runtime);
+  runtime.ensureConversationRecord = (incoming, at) => {
+    const conversationId = conversationRecordId(incoming);
+    const isNewConversation = !runtime.conversationRecords.has(conversationId);
+    const record = ensureConversationRecord(incoming, at);
+    if (isNewConversation) {
+      record.replyEnabled = true;
+    }
+    return record;
+  };
   runtime.persona = {
     id: config.persona.defaultAgentId,
     name: config.persona.name,

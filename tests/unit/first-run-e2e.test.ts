@@ -46,10 +46,13 @@ describe("empty workspace first-run flow", () => {
       adminAuthenticated: true,
       providerId: "first-run-provider",
       providerRequests: 1,
+      providerRequestsBeforeEnable: 0,
       agentId: "arona",
       accountRuntime: "running",
       qqOnlineBeforeScan: false,
       qqOnlineAfterConnect: true,
+      firstInboundReplyEnabled: false,
+      repliesBeforeEnable: 0,
       firstReplyDelivered: 1,
       journalCompleted: true
     });

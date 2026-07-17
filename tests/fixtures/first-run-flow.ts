@@ -159,6 +159,55 @@ try {
     message: [{ type: "text", data: { text: "你好" } }],
     sender: { user_id: 171419991, nickname: "猫老师" }
   }));
+  const conversationId = `account:${account.id}:private:171419991`;
+  await waitFor(async () => {
+    const response = await built.app.inject({
+      method: "GET",
+      url: "/api/conversations?agentId=arona",
+      headers: readHeaders
+    });
+    return response.json().conversations.some((conversation: { id?: string }) => (
+      conversation.id === conversationId
+    ));
+  }, 5_000);
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  const conversationsBeforeEnable = await built.app.inject({
+    method: "GET",
+    url: "/api/conversations?agentId=arona",
+    headers: readHeaders
+  });
+  const conversationBeforeEnable = conversationsBeforeEnable.json().conversations.find(
+    (conversation: { id?: string }) => conversation.id === conversationId
+  );
+  if (!conversationBeforeEnable || conversationBeforeEnable.replyEnabled !== false) {
+    throw new Error("First-run conversation did not default to replies disabled.");
+  }
+  const providerRequestsBeforeEnable = providerRequests.length;
+  const repliesBeforeEnable = sentPrivateMessages.length;
+  if (providerRequestsBeforeEnable !== 0 || repliesBeforeEnable !== 0) {
+    throw new Error("First-run inbound message bypassed the disabled reply gate.");
+  }
+  const enabledConversation = await built.app.inject({
+    method: "PUT",
+    url: "/api/conversations/reply?agentId=arona",
+    headers: writeHeaders,
+    payload: { id: conversationId, replyEnabled: true }
+  });
+  if (enabledConversation.statusCode !== 200 || enabledConversation.json().conversation?.replyEnabled !== true) {
+    throw new Error("First-run conversation reply setting did not enable.");
+  }
+  onebot.send(JSON.stringify({
+    time: Math.floor(Date.now() / 1_000),
+    self_id: 246801357,
+    post_type: "message",
+    message_type: "private",
+    sub_type: "friend",
+    message_id: 7002,
+    user_id: 171419991,
+    raw_message: "现在回复",
+    message: [{ type: "text", data: { text: "现在回复" } }],
+    sender: { user_id: 171419991, nickname: "猫老师" }
+  }));
   await waitFor(() => sentPrivateMessages.length > 0 && providerRequests.length > 0, 15_000);
   const online = await built.app.inject({
     method: "GET",
@@ -171,10 +220,13 @@ try {
     adminAuthenticated: session.json().authenticated === true,
     providerId: selected.json().config?.providers?.defaultProviderId,
     providerRequests: providerRequests.length,
+    providerRequestsBeforeEnable,
     agentId: createdAgent.json().id,
     accountRuntime: reconciled.includes(account.id) && account.observedState === "running" ? "running" : "missing",
     qqOnlineBeforeScan: login.json().online === true,
     qqOnlineAfterConnect: online.json().online === true,
+    firstInboundReplyEnabled: conversationBeforeEnable.replyEnabled,
+    repliesBeforeEnable,
     firstReplyDelivered: sentPrivateMessages.length,
     journalCompleted
   })}`);
@@ -184,10 +236,10 @@ try {
   await new Promise<void>((resolve, reject) => providerServer.close((error) => error ? reject(error) : resolve()));
 }
 
-async function waitFor(predicate: () => boolean, timeoutMs: number) {
+async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs: number) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (predicate()) return;
+    if (await predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   throw new Error("First-run reply timed out.");
