@@ -487,15 +487,15 @@ test("模型下拉目录、推理强度联动与自动同步", async ({ page }) 
   await expect.poll(() => state.config.bot.tools.websearch.tavilyApiKeys).toEqual(["tvly-e2e-secret-1234567890"]);
   expect(state.config.bot.tools.websearch.tavilyApiKeys).toEqual(["tvly-e2e-secret-1234567890"]);
   await expect(page.getByLabel("Tavily API Key 1")).toHaveCount(0);
-  await expect(page.getByText("1 个已保存", { exact: true })).toBeVisible();
-  await expect(page.locator(".key-pool__identity").getByText("已保存", { exact: true })).toBeVisible();
+  await expect(page.getByText("1 个已配置", { exact: true })).toBeVisible();
+  await expect(page.locator(".key-pool__identity").getByText("已配置", { exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: "添加 Key" }).click();
   await page.getByLabel("Tavily API Key 1").fill("tvly-e2e-secret-2-1234567890");
   await expect.poll(() => state.config.bot.tools.websearch.tavilyApiKeys).toHaveLength(2);
 
   await page.getByRole("button", { name: "删除 Key 1" }).click();
-  await expect(page.getByText("待删除", { exact: true })).toBeVisible();
+  await expect(page.getByText("等待删除", { exact: true })).toBeVisible();
   await expect.poll(() => state.config.bot.tools.websearch.tavilyApiKeys).toEqual(["tvly-e2e-secret-2-1234567890"]);
 });
 
@@ -516,7 +516,7 @@ test("防抖时间、回复开关、名称和命令前缀只在回复行为分�
   await page.getByLabel("命令前缀").fill("/suna, /sunabot");
 
   await expect.poll(() => state.config.onebot.commandPrefixes).toEqual(["/suna", "/sunabot"]);
-  expect(new Set(state.patchRequests.map((request) => request.section))).toEqual(new Set(["bot", "onebot"]));
+  await expect.poll(() => new Set(state.patchRequests.map((request) => request.section))).toEqual(new Set(["bot", "onebot"]));
   expect(state.config.bot.replyDebounceMs).toBe(7_500);
   expect(state.config.bot.quoteGroupReplyExcludedUserIds).toEqual(["20001", "20002"]);
   expect(state.config.onebot).toMatchObject({
@@ -843,7 +843,7 @@ test("提示词库列出全部文件并支持快捷保存与冲突恢复", async
   await expect(fileList.getByRole("button")).toHaveCount(7);
   await expect(fileList.getByRole("button", { name: /自拍提示词改写/ })).toBeVisible();
   await page.getByLabel("覆盖系统提示词").check();
-  await expect(fileList.getByRole("button")).toHaveCount(14);
+  await expect(fileList.getByRole("button")).toHaveCount(15);
   expect(state.promptOverrides.plana).toBe(true);
   const editor = page.getByLabel("提示词正文");
   await expect(editor).toHaveValue(/冷静、诚实、可靠/);
