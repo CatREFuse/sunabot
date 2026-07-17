@@ -19,7 +19,7 @@
 | 记忆管理 API | `apps/api/plugins/memoryRoutes.ts` |
 | 状态、readiness 与监控 API | `apps/api/plugins/monitoringRoutes.ts`, `tooling/runtime/probe.mjs` |
 | 会话与会话日志 API | `apps/api/plugins/conversationRoutes.ts` |
-| 会话工具选择、持久化与运行时合并 | `services/tools/conversationToolPolicy.ts`, `services/tools/toolRegistry.ts`, `src/runtime/lifecycle.ts`, `src/runtime/reply.ts`, `apps/api/plugins/conversationRoutes.ts`, `apps/admin-web/src/components/conversations/ConversationToolSettings.vue`, `apps/admin-web/src/composables/useConversationTools.ts` |
+| 会话独立设置、工具选择、持久化与运行时合并 | `services/tools/conversationToolPolicy.ts`, `services/tools/toolRegistry.ts`, `src/runtime/lifecycle.ts`, `src/runtime/reply.ts`, `apps/api/plugins/conversationRoutes.ts`, `apps/admin-web/src/views/ConversationSettingsView.vue`, `apps/admin-web/src/components/conversations/ConversationBehaviorSettings.vue`, `apps/admin-web/src/components/conversations/ConversationToolSettingsForm.vue`, `apps/admin-web/src/composables/useConversationSettings.ts`, `apps/admin-web/src/composables/useConversationTools.ts` |
 | Web Chat 管理员会话与浏览器 delivery | `services/webChat/`, `apps/api/plugins/conversationRoutes.ts` |
 | 图片、缩略图、Token/模型调用统计、请求日志与图片测试 API | `apps/api/plugins/mediaRoutes.ts`, `apps/api/plugins/conversationRoutes.ts`, `src/modelCallStats.ts`, `src/requestLog.ts`, `adapters/sqlite/modelCallStore.ts` |
 | Agent 文件与工具目录 API | `apps/api/plugins/agentToolRoutes.ts`, `services/tools/toolRegistry.ts` |

@@ -3,13 +3,11 @@ import { computed, shallowRef } from "vue";
 import { useChatScroll } from "../../composables/useChatScroll";
 import { conversationIdentityDetail } from "../../utils/qqIdentity";
 import type { ConversationLogEntry, ConversationMessageRecord, ConversationRecord, ConversationStatsPayload } from "../../types";
-import ToggleSwitch from "../ui/ToggleSwitch.vue";
 import DialogOverlay from "../ui/DialogOverlay.vue";
 import ConversationMessageBubble from "./ConversationMessageBubble.vue";
 import ConversationOrchestratorStatus from "./ConversationOrchestratorStatus.vue";
 import RequestLogList from "../logs/RequestLogList.vue";
 import ModelCallStatsPanel from "../logs/ModelCallStatsPanel.vue";
-import ConversationToolSettings from "./ConversationToolSettings.vue";
 
 const props = withDefaults(defineProps<{
   conversation: ConversationRecord | null;
@@ -21,42 +19,21 @@ const props = withDefaults(defineProps<{
   loadingMessages: boolean;
   loadingLogs: boolean;
   error: string;
-  mutationLocked?: boolean;
-  replyBusy?: boolean;
-  orchestratorBusy?: boolean;
-  replyError?: string;
-  orchestratorError?: string;
 }>(), {
   memberNames: () => ({}),
-  stats: null,
-  mutationLocked: false,
-  replyBusy: false,
-  orchestratorBusy: false,
-  replyError: "",
-  orchestratorError: ""
+  stats: null
 });
 const emit = defineEmits<{
   back: [];
+  settings: [];
   refresh: [];
   older: [];
   logs: [runId?: string];
-  reply: [enabled: boolean];
-  orchestrator: [enabled: boolean];
 }>();
 const logsOpen = shallowRef(false);
 const activeLogRunId = shallowRef<string | undefined>();
-const replyEnabled = computed({
-  get: () => props.conversation?.replyEnabled !== false,
-  set: (value) => {
-    if (!props.mutationLocked) emit("reply", value);
-  }
-});
-const orchestratorEnabled = computed({
-  get: () => props.conversation?.orchestratorEnabled !== false,
-  set: (value) => {
-    if (!props.mutationLocked) emit("orchestrator", value);
-  }
-});
+const replyEnabled = computed(() => props.conversation?.replyEnabled !== false);
+const orchestratorEnabled = computed(() => props.conversation?.orchestratorEnabled !== false);
 const conversationId = computed(() => props.conversation?.id ?? "");
 const messageIds = computed(() => props.messages.map((message) => message.id));
 const { handleUserScroll, handleContentLoad } = useChatScroll({ conversationId, messageIds });
@@ -77,7 +54,9 @@ function refreshLogs() {
       <div class="min-w-0 flex-1">
         <h2 class="truncate text-2xl font-medium leading-none tracking-[-0.02em] text-display">{{ conversation?.title ?? "选择一个会话" }}</h2>
       </div>
-      <ConversationToolSettings v-if="conversation" :conversation-id="conversation.id" />
+      <button v-if="conversation" class="btn btn-ghost" type="button" @click="emit('settings')">
+        <i class="bx bx-cog" aria-hidden="true"></i>会话设置
+      </button>
       <button v-if="conversation" class="icon-btn" type="button" aria-label="刷新消息" @click="emit('refresh')"><i class="bx bx-refresh text-xl" aria-hidden="true"></i></button>
       <button v-if="conversation" class="icon-btn" type="button" aria-label="请求日志" @click="openLogs()"><i class="bx bx-file-find text-xl" aria-hidden="true"></i></button>
     </header>
@@ -87,23 +66,8 @@ function refreshLogs() {
       <div class="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b border-line px-4 py-2 md:px-6">
         <div class="flex min-w-0 flex-wrap items-center gap-x-5 gap-y-1">
           <span class="font-mono text-[10px] text-mute">{{ conversation.messageCount }} 条消息 · {{ conversationIdentityDetail(conversation) }}</span>
-          <div class="flex flex-wrap items-start gap-x-5 gap-y-2">
-            <div class="min-w-32">
-              <ToggleSwitch v-model="replyEnabled" label="启用" :disabled="mutationLocked" />
-              <p v-if="replyBusy" class="inline-state mt-1" role="status">保存中</p>
-              <p v-else-if="replyError" class="inline-state mt-1" data-kind="error" role="alert">{{ replyError }}</p>
-            </div>
-            <div v-if="conversation.scope === 'user_group' && replyEnabled" class="min-w-36">
-              <ToggleSwitch
-                v-model="orchestratorEnabled"
-                label="编排器"
-                :description="orchestratorEnabled ? '' : '使用规则匹配回复'"
-                :disabled="mutationLocked"
-              />
-              <p v-if="orchestratorBusy" class="inline-state mt-1" role="status">保存中</p>
-              <p v-else-if="orchestratorError" class="inline-state mt-1" data-kind="error" role="alert">{{ orchestratorError }}</p>
-            </div>
-          </div>
+          <span class="font-mono text-[10px]" :class="replyEnabled ? 'text-success' : 'text-warning'">{{ replyEnabled ? "回复已启用" : "回复已暂停" }}</span>
+          <span v-if="conversation.scope === 'user_group'" class="font-mono text-[10px] text-mute">{{ orchestratorEnabled ? "编排器已启用" : "规则回复" }}</span>
         </div>
         <ConversationOrchestratorStatus
           v-if="conversation.scope === 'user_group' && replyEnabled && orchestratorEnabled && conversation.orchestratorStatus"

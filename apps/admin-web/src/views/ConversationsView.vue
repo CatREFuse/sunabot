@@ -46,6 +46,7 @@ watch(selectedId, (id) => {
 }, { immediate: true });
 
 function select(id: string) { void router.push(`/conversations/${encodeURIComponent(id)}`); }
+function settings(id: string) { void router.push(`/conversations/${encodeURIComponent(id)}/settings`); }
 function back() { void router.push("/conversations"); }
 function refreshMessages() {
   if (!selectedId.value) return;
@@ -54,8 +55,6 @@ function refreshMessages() {
 }
 function older() { if (selectedId.value) void data.loadMessages(selectedId.value, { older: true }); }
 function logs(runId?: string) { if (selectedId.value) void data.loadLogs(selectedId.value, runId); }
-async function reply(enabled: boolean) { if (selected.value) await data.setReplyEnabled(selected.value, enabled); }
-async function orchestrator(enabled: boolean) { if (selected.value) await data.setOrchestratorEnabled(selected.value, enabled); }
 </script>
 
 <template>
@@ -68,6 +67,7 @@ async function orchestrator(enabled: boolean) { if (selected.value) await data.s
       v-model:query="query"
       v-model:scope="scope"
       @select="select"
+      @settings="settings"
       @refresh="data.loadList"
     />
     <ConversationThread
@@ -81,17 +81,11 @@ async function orchestrator(enabled: boolean) { if (selected.value) await data.s
       :loading-messages="data.loadingMessages.value"
       :loading-logs="data.loadingLogs.value"
       :error="data.error.value"
-      :mutation-locked="Boolean(data.mutationBusy.value[selectedId])"
-      :reply-busy="data.mutationBusy.value[selectedId] === 'reply'"
-      :orchestrator-busy="data.mutationBusy.value[selectedId] === 'orchestrator'"
-      :reply-error="data.mutationErrors.value[selectedId]?.reply ?? ''"
-      :orchestrator-error="data.mutationErrors.value[selectedId]?.orchestrator ?? ''"
       @back="back"
+      @settings="selected && settings(selected.id)"
       @refresh="refreshMessages"
       @older="older"
       @logs="logs"
-      @reply="reply"
-      @orchestrator="orchestrator"
     />
   </div>
 </template>

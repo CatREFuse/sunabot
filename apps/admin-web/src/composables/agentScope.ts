@@ -1,13 +1,16 @@
+import { readonly, shallowRef } from "vue";
+
 const STORAGE_KEY = "sunabot.current-agent";
-let selectedAgentId = readStoredAgentId();
+const selectedAgentId = shallowRef(readStoredAgentId());
+export const activeAgentIdState = readonly(selectedAgentId);
 
 export function activeAgentId() {
-  return selectedAgentId || "plana";
+  return selectedAgentId.value || "plana";
 }
 
 export function setActiveAgentId(agentId: string) {
-  selectedAgentId = agentId.trim() || "plana";
-  if (typeof window !== "undefined") window.localStorage.setItem(STORAGE_KEY, selectedAgentId);
+  selectedAgentId.value = agentId.trim() || "plana";
+  if (typeof window !== "undefined") window.localStorage.setItem(STORAGE_KEY, selectedAgentId.value);
 }
 
 export function agentScopedPath(path: string, agentId = activeAgentId()) {

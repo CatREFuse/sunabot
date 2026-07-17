@@ -2,7 +2,6 @@ import { shallowMount } from "@vue/test-utils";
 import { nextTick } from "vue";
 import { describe, expect, it } from "vitest";
 import AuthenticatedImage from "../ui/AuthenticatedImage.vue";
-import ToggleSwitch from "../ui/ToggleSwitch.vue";
 import ConversationMessageBubble from "./ConversationMessageBubble.vue";
 import ConversationOrchestratorStatus from "./ConversationOrchestratorStatus.vue";
 import ConversationThread from "./ConversationThread.vue";
@@ -276,7 +275,7 @@ describe("ConversationThread", () => {
     expect(wrapper.get('[data-slot="message-origin"]').text()).toContain("未记录");
   });
 
-  it("shows an independent orchestrator toggle after user-group replies are enabled", async () => {
+  it("shows read-only reply state and opens the independent conversation settings page", async () => {
     const conversation = {
       id: "group:7",
       scope: "user_group" as const,
@@ -309,59 +308,15 @@ describe("ConversationThread", () => {
       }
     });
 
-    expect(wrapper.findAllComponents(ToggleSwitch).map((toggle) => toggle.props("label"))).toEqual(["启用"]);
+    expect(wrapper.text()).toContain("回复已暂停");
+    expect(wrapper.text()).toContain("编排器已启用");
     expect(wrapper.findComponent(ConversationOrchestratorStatus).exists()).toBe(false);
 
     await wrapper.setProps({ conversation: { ...conversation, replyEnabled: true } });
-    const toggles = wrapper.findAllComponents(ToggleSwitch);
-    expect(toggles.map((toggle) => toggle.props("label"))).toEqual(["启用", "编排器"]);
+    expect(wrapper.text()).toContain("回复已启用");
     expect(wrapper.getComponent(ConversationOrchestratorStatus).props("status")).toEqual(conversation.orchestratorStatus);
 
-    await toggles[1]!.vm.$emit("update:modelValue", false);
-    expect(wrapper.emitted("orchestrator")).toEqual([[false]]);
-  });
-
-  it("locks both actions while saving and renders action feedback inline", async () => {
-    const conversation = {
-      id: "group:7",
-      scope: "user_group" as const,
-      title: "群聊",
-      userId: 1,
-      groupId: 7,
-      replyEnabled: true,
-      orchestratorEnabled: true,
-      messageCount: 1,
-      lastAt: "2026-07-10T00:00:00.000Z",
-      lastText: "hello",
-      messages: []
-    };
-    const wrapper = shallowMount(ConversationThread, {
-      props: {
-        conversation,
-        messages: [],
-        logs: [],
-        hasMore: false,
-        loadingMessages: false,
-        loadingLogs: false,
-        error: "",
-        mutationLocked: true,
-        replyBusy: true,
-        orchestratorError: "保存失败，已重新读取当前状态"
-      }
-    });
-
-    const toggles = wrapper.findAllComponents(ToggleSwitch);
-    expect(toggles.map((toggle) => toggle.props("disabled"))).toEqual([true, true]);
-    expect(wrapper.get('[role="status"]').text()).toBe("保存中");
-    expect(wrapper.get('[role="alert"]').text()).toBe("保存失败，已重新读取当前状态");
-
-    await toggles[0]!.vm.$emit("update:modelValue", false);
-    await toggles[1]!.vm.$emit("update:modelValue", false);
-    expect(wrapper.emitted("reply")).toBeUndefined();
-    expect(wrapper.emitted("orchestrator")).toBeUndefined();
-
-    await wrapper.setProps({ mutationLocked: false, replyBusy: false });
-    await wrapper.findAllComponents(ToggleSwitch)[0]!.vm.$emit("update:modelValue", false);
-    expect(wrapper.emitted("reply")).toEqual([[false]]);
+    await wrapper.get("button.btn").trigger("click");
+    expect(wrapper.emitted("settings")).toEqual([[]]);
   });
 });

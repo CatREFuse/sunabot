@@ -355,6 +355,8 @@ export interface MockApiState {
   webChatRequests: string[];
   conversationTools: Record<string, string[]>;
   conversationToolRequests: Array<{ conversationId: string; disabledTools: string[] }>;
+  conversationReplySettings: Record<string, { replyEnabled: boolean; orchestratorEnabled?: boolean }>;
+  conversationReplyRequests: Array<{ conversationId: string; replyEnabled: boolean; orchestratorEnabled?: boolean }>;
   extensions: Record<string, { skills: AgentSkillRecord[]; servers: AgentMcpServer[] }>;
   extensionRequests: Array<{ method: string; path: string; body?: unknown }>;
   mcpApprovals: McpApprovalTicket[];
@@ -402,6 +404,11 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
     webChatRequests: [],
     conversationTools: {},
     conversationToolRequests: [],
+    conversationReplySettings: {
+      "group:10001": { replyEnabled: true, orchestratorEnabled: true },
+      "private:20002": { replyEnabled: true }
+    },
+    conversationReplyRequests: [],
     extensions: {
       plana: {
         skills: [mockSkill("status-report", "unapproved")],
@@ -1075,8 +1082,7 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
             selfId: 123456,
             lastText: "正在输入…",
             lastAt: "2026-07-10T02:20:00.000Z",
-            replyEnabled: true,
-            orchestratorEnabled: true,
+            ...state.conversationReplySettings["group:10001"],
             orchestratorStatus: {
               active: true,
               messageCount: 3,
@@ -1096,7 +1102,7 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
             selfId: 123456,
             lastText: "继续执行。",
             lastAt: "2026-07-10T02:10:00.000Z",
-            replyEnabled: true,
+            ...state.conversationReplySettings["private:20002"],
             messageCount: 9,
             messages: []
           }
@@ -1217,16 +1223,25 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
         return json(route, { error: { code: "CONVERSATION_UPDATE_FAILED", message } }, 500);
       }
       const body = request.postDataJSON() as { id?: string; replyEnabled?: boolean; orchestratorEnabled?: boolean };
+      const id = body.id ?? "group:10001";
+      const previous = state.conversationReplySettings[id] ?? { replyEnabled: true };
+      const next = {
+        replyEnabled: body.replyEnabled ?? previous.replyEnabled,
+        ...(body.orchestratorEnabled === undefined && previous.orchestratorEnabled === undefined
+          ? {}
+          : { orchestratorEnabled: body.orchestratorEnabled ?? previous.orchestratorEnabled ?? true })
+      };
+      state.conversationReplySettings[id] = next;
+      state.conversationReplyRequests.push({ conversationId: id, ...next });
       const conversation = {
-        id: body.id ?? "group:10001",
-        scope: "user_group",
-        title: "产品讨论群",
+        id,
+        scope: id.startsWith("private:") ? "private" : "user_group",
+        title: id.startsWith("private:") ? "猫老师" : "产品讨论群",
         userId: 20002,
-        groupId: 10001,
+        ...(id.startsWith("private:") ? {} : { groupId: 10001 }),
         lastText: "模型目录已经更新。",
         lastAt: "2026-07-10T02:20:00.000Z",
-        replyEnabled: body.replyEnabled ?? true,
-        orchestratorEnabled: body.orchestratorEnabled ?? true,
+        ...next,
         orchestratorStatus: {
           active: false,
           messageCount: 0,

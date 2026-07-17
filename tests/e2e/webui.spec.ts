@@ -995,29 +995,53 @@ test("生产构建支持深链接刷新与浏览器返回", async ({ page }) => 
   await expect(page.getByRole("heading", { name: "产品讨论群" })).toBeVisible();
 });
 
-test("每个会话独立保存工具选择且 Agent 总开关优先", async ({ page }) => {
+test("每个会话都有独立设置页面且 Agent 总开关优先", async ({ page }) => {
   const state = await installMockApi(page);
   state.config.bot.tools.overrides.websearch = { enabled: false };
-  await page.goto("/conversations/group%3A10001");
+  await page.goto("/conversations");
 
-  await page.getByRole("button", { name: "工具", exact: true }).click();
-  const dialog = page.getByRole("dialog", { name: "会话工具" });
-  await expect(dialog).toBeVisible();
-  await expect(dialog.getByLabel("启用 网页搜索")).toBeDisabled();
-  expect(await dialog.getByText("Agent 已停用", { exact: true }).count()).toBeGreaterThan(0);
-  await dialog.getByLabel("启用 读取文件").uncheck();
-  await dialog.getByRole("button", { name: "保存", exact: true }).click();
-  await expect(dialog).toBeHidden();
+  await expect(page.getByRole("button", { name: /^设置 / })).toHaveCount(2);
+  await page.getByRole("button", { name: "设置 产品讨论群", exact: true }).click();
+  await expect(page).toHaveURL(/\/conversations\/group%3A10001\/settings/);
+  await expect(page.getByRole("heading", { name: "会话设置", exact: true })).toBeVisible();
+  await page.getByLabel("群聊编排器").uncheck();
+  await page.getByLabel("允许回复").uncheck();
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(page.getByText("已保存", { exact: true })).toBeVisible();
+  expect(state.conversationReplyRequests).toEqual([{
+    conversationId: "group:10001",
+    replyEnabled: false,
+    orchestratorEnabled: false
+  }]);
+
+  await page.getByRole("button", { name: "工具权限", exact: true }).click();
+  await expect(page.getByLabel("启用 网页搜索")).toBeDisabled();
+  expect(await page.getByText("Agent 已停用", { exact: true }).count()).toBeGreaterThan(0);
+  await page.getByLabel("启用 读取文件").uncheck();
+  await page.getByRole("button", { name: "保存", exact: true }).click();
 
   expect(state.conversationToolRequests).toEqual([{
     conversationId: "group:10001",
     disabledTools: ["read_file"]
   }]);
 
+  await page.getByLabel("启用 读取文件").check();
+  await page.getByRole("link", { name: "Agent 总开关", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "放弃未保存的设置？", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "继续编辑", exact: true }).click();
+  await expect(page).toHaveURL(/\/conversations\/group%3A10001\/settings\/tools/);
+  await page.getByRole("button", { name: "放弃", exact: true }).click();
+
   await page.goto("/web-chat");
-  await page.getByRole("button", { name: "工具", exact: true }).click();
-  const webDialog = page.getByRole("dialog", { name: "会话工具" });
-  await expect(webDialog.getByLabel("启用 读取文件")).toBeChecked();
+  await page.getByRole("link", { name: "会话设置", exact: true }).click();
+  await expect(page).toHaveURL(/\/conversations\/web%3Aadmin\/settings\/tools/);
+  await expect(page.getByRole("button", { name: "回复", exact: true })).toHaveCount(0);
+  await expect(page.getByLabel("启用 读取文件")).toBeChecked();
+
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "会话设置", exact: true })).toBeVisible();
+  await page.getByRole("link", { name: "返回会话", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "与普拉娜对话", exact: true })).toBeVisible();
 });
 
 test("页面加载完成后切换路由不再等待新的脚本分块", async ({ page }) => {

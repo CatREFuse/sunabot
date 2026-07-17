@@ -7,7 +7,7 @@ import IdentityAvatar from "../ui/IdentityAvatar.vue";
 
 type Scope = "all" | ConversationRecord["scope"];
 const props = defineProps<{ conversations: readonly ConversationRecord[]; selectedId: string; loading: boolean }>();
-const emit = defineEmits<{ select: [id: string]; refresh: [] }>();
+const emit = defineEmits<{ select: [id: string]; settings: [id: string]; refresh: [] }>();
 const query = defineModel<string>("query", { required: true });
 const scope = defineModel<Scope>("scope", { required: true });
 const scopes: Array<{ id: Scope; label: string }> = [
@@ -48,22 +48,34 @@ function scopeLabel(value: ConversationRecord["scope"]) {
       </div>
     </div>
     <div class="min-h-0 flex-1 overflow-y-auto">
-      <button
+      <div
         v-for="item in visible"
         :key="item.id"
-        class="grid min-h-[88px] w-full min-w-0 grid-cols-[40px_minmax(0,1fr)_auto] gap-x-3 border-b border-line px-4 py-3 text-left hover:bg-raised"
+        class="grid min-w-0 grid-cols-[minmax(0,1fr)_48px] border-b border-line"
         :class="selectedId === item.id ? 'border-l-2 border-l-accent bg-raised' : 'border-l-2 border-l-transparent'"
-        type="button"
-        @click="emit('select', item.id)"
       >
-        <IdentityAvatar class="row-span-3 self-center" :src="conversationAvatarUrl(item)" :name="item.title" />
-        <strong class="truncate text-sm font-medium text-display">{{ item.title }}</strong>
-        <time class="font-mono text-[10px] text-disabled">{{ formatDateTime(item.lastAt) }}</time>
-        <span class="truncate text-xs text-mute">{{ item.lastText || "暂无消息" }}</span>
-        <span class="font-mono text-[10px] text-mute">{{ scopeLabel(item.scope) }}</span>
-        <span class="truncate font-mono text-[10px] text-disabled">{{ item.messageCount }} 条 · {{ conversationIdentityDetail(item) }}</span>
-        <span class="font-mono text-[10px]" :class="item.replyEnabled === false ? 'text-warning' : 'text-success'">{{ item.replyEnabled === false ? "已暂停" : "已启用" }}</span>
-      </button>
+        <button
+          class="grid min-h-[88px] min-w-0 grid-cols-[40px_minmax(0,1fr)_auto] gap-x-3 px-4 py-3 text-left hover:bg-raised"
+          type="button"
+          @click="emit('select', item.id)"
+        >
+          <IdentityAvatar class="row-span-3 self-center" :src="conversationAvatarUrl(item)" :name="item.title" />
+          <strong class="truncate text-sm font-medium text-display">{{ item.title }}</strong>
+          <time class="font-mono text-[10px] text-disabled">{{ formatDateTime(item.lastAt) }}</time>
+          <span class="truncate text-xs text-mute">{{ item.lastText || "暂无消息" }}</span>
+          <span class="font-mono text-[10px] text-mute">{{ scopeLabel(item.scope) }}</span>
+          <span class="truncate font-mono text-[10px] text-disabled">{{ item.messageCount }} 条 · {{ conversationIdentityDetail(item) }}</span>
+          <span class="font-mono text-[10px]" :class="item.replyEnabled === false ? 'text-warning' : 'text-success'">{{ item.replyEnabled === false ? "已暂停" : "已启用" }}</span>
+        </button>
+        <button
+          class="grid min-h-[88px] place-items-center border-l border-line text-mute transition-colors hover:text-display"
+          type="button"
+          :aria-label="`设置 ${item.title}`"
+          @click="emit('settings', item.id)"
+        >
+          <i class="bx bx-cog text-xl" aria-hidden="true"></i>
+        </button>
+      </div>
       <div v-if="!visible.length" class="empty-state"><div><strong>{{ loading ? "加载中" : "没有会话" }}</strong><p>调整筛选条件或刷新</p></div></div>
     </div>
   </aside>

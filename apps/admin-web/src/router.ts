@@ -10,12 +10,14 @@ import SettingsView from "./views/SettingsView.vue";
 import WebChatView from "./views/WebChatView.vue";
 import AgentsView from "./views/AgentsView.vue";
 import AgentExtensionsView from "./views/AgentExtensionsView.vue";
+import ConversationSettingsView from "./views/ConversationSettingsView.vue";
 
 export const router = createRouter({
   history: createWebHistory(),
   routes: [
     { path: "/", redirect: "/overview" },
     { path: "/overview", name: "overview", component: OverviewView },
+    { path: "/conversations/:conversationId/settings/:section?", name: "conversation-settings", component: ConversationSettingsView },
     { path: "/conversations/:conversationId?", name: "conversations", component: ConversationsView },
     { path: "/web-chat", name: "web-chat", component: WebChatView },
     { path: "/agent-prompts/:fileId?", name: "agent-prompts", component: PromptsView, props: { scope: "persona" } },

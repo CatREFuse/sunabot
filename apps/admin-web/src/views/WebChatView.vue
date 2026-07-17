@@ -3,7 +3,6 @@ import WebChatComposer from "../components/webChat/WebChatComposer.vue";
 import WebChatFeed from "../components/webChat/WebChatFeed.vue";
 import { useWebChat } from "../composables/useWebChat";
 import { useAgents } from "../composables/useAgents";
-import ConversationToolSettings from "../components/conversations/ConversationToolSettings.vue";
 
 const {
   messages,
@@ -26,7 +25,9 @@ const agentsState = useAgents();
           与{{ agentsState.currentAgent.value?.name || "Agent" }}对话
         </h1>
       </div>
-      <ConversationToolSettings conversation-id="web:admin" />
+      <RouterLink class="btn btn-ghost" to="/conversations/web%3Aadmin/settings/tools">
+        <i class="bx bx-cog" aria-hidden="true"></i>会话设置
+      </RouterLink>
     </header>
 
     <WebChatFeed

@@ -1,0 +1,31 @@
+// @vitest-environment happy-dom
+import { mount } from "@vue/test-utils";
+import { describe, expect, it } from "vitest";
+import ToggleSwitch from "../ui/ToggleSwitch.vue";
+import ConversationToolSettingsForm from "./ConversationToolSettingsForm.vue";
+
+describe("ConversationToolSettingsForm", () => {
+  it("locks the Agent master switch and keeps capability state separate", async () => {
+    const wrapper = mount(ConversationToolSettingsForm, {
+      props: {
+        tools: [
+          { name: "websearch", title: "网页搜索", description: "搜索", enabled: false, available: true },
+          { name: "read_file", title: "读取文件", description: "读取", enabled: true, available: false }
+        ],
+        disabledTools: [],
+        loading: false,
+        busy: false
+      },
+      global: { stubs: { RouterLink: { template: "<a><slot /></a>" } } }
+    });
+    const toggles = wrapper.findAllComponents(ToggleSwitch);
+
+    expect(toggles[0]!.props()).toMatchObject({ label: "启用 网页搜索", disabled: true, modelValue: false });
+    expect(toggles[1]!.props()).toMatchObject({ label: "启用 读取文件", disabled: false, modelValue: true });
+    expect(wrapper.text()).toContain("Agent 已停用");
+    expect(wrapper.text()).toContain("当前能力不可用");
+
+    await toggles[1]!.vm.$emit("update:modelValue", false);
+    expect(wrapper.emitted("toggle")).toEqual([["read_file", false]]);
+  });
+});

@@ -4,7 +4,7 @@
 
 ## 11. 验证标准
 
-会话工具策略必须覆盖 QQ 私聊、群聊和 `web:admin` 的独立 SQLite 重载，旧会话缺少字段时默认全部跟随 Agent，总开关关闭后会话不能重新启用。API 负例必须覆盖未知工具、重复工具、非数组、多余字段和无效会话 ID；Provider 回归必须证明会话停用会同时移除工具定义、执行模式和实际调用能力，伪造 Function Call 零副作用。管理台 E2E 与视觉检查必须覆盖会话和 Web Chat 的工具入口、Agent 已停用锁定、会话间隔离、保存恢复、点击外部收起，以及桌面/移动端 light/dark 弹层。
+会话工具策略必须覆盖 QQ 私聊、群聊和 `web:admin` 的独立 SQLite 重载，旧会话缺少字段时默认全部跟随 Agent，总开关关闭后会话不能重新启用。API 负例必须覆盖未知工具、重复工具、非数组、多余字段和无效会话 ID；Provider 回归必须证明会话停用会同时移除工具定义、执行模式和实际调用能力，伪造 Function Call 零副作用。管理台 E2E 与视觉检查必须覆盖每条会话列表项、会话详情和 Web Chat 的独立设置入口，QQ 会话的回复与群聊编排器设置，QQ 与 Web Chat 的工具权限，Agent 已停用锁定、会话间隔离、分区保存恢复、未保存离开保护、深链刷新、返回原会话，以及桌面/移动端 light/dark 页面。延迟请求回归必须证明切换会话或 Agent 后旧工具目录、旧草稿及迟到的成功或失败响应均不会显示或写入新上下文，工具数据就绪前不能切换或保存。
 
 受限工具 response preflight 专项必须以 OpenAI Responses、Codex Responses、Chat Completions、Anthropic Messages 和 Gemini generateContent 五种协议分别覆盖 `system_config`、`send_file`、`read_file`、`write_file` 与 `workspace_bash`。每种协议都要证明非空 sibling assistant 文本在 callback 前整份拒绝；受限工具与 inline、deferred、`no_reply` 或 `assistant_text` 混批时，`onAssistantText`、`onToolCall`、文件端口、Bash runner、配置执行、deferred/terminal 接受和 outbox 均为零。staged `system_config` 后续响应必须只 discard 一次 mutation 再返回拒绝输出；普通非受限工具与 sibling text 仍须保持既有 callback 与工具执行行为。直接调用共享 executor 也要复用相同批次门禁，防止绕过协议适配层。
 

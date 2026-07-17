@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import { ref } from "vue";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const apiRequest = vi.hoisted(() => vi.fn());
@@ -63,5 +64,24 @@ describe("useConversationTools", () => {
 
     expect(state.disabledTools.value).toEqual([]);
     expect(state.error.value).toBe("目录不可用");
+  });
+
+  it("does not show a late save failure after the conversation ID changes", async () => {
+    const conversationId = ref("private:7");
+    let rejectSave: ((reason?: unknown) => void) | undefined;
+    apiRequest.mockImplementation((path: string, init?: RequestInit) => {
+      if (path === "/api/conversations/private%3A7/tools" && init?.method === "PUT") {
+        return new Promise((_, reject) => { rejectSave = reject; });
+      }
+      throw new Error(`unexpected request: ${path}`);
+    });
+    const state = useConversationTools(conversationId);
+    const save = state.save(["read_file"]);
+
+    conversationId.value = "private:8";
+    rejectSave?.(new Error("旧会话保存失败"));
+
+    await expect(save).resolves.toBe(false);
+    expect(state.error.value).toBe("");
   });
 });

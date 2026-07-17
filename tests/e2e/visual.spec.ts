@@ -137,14 +137,17 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     await expect(page.getByRole("status", { name: "正在输入" })).toBeVisible();
     await expect(page.getByRole("button", { name: "查看请求日志" })).toHaveCount(3);
     await capture(page, viewport.name, theme, "conversations-detail");
-    await page.getByRole("button", { name: "工具", exact: true }).click();
-    await expect(page.getByRole("dialog", { name: "会话工具" })).toBeVisible();
-    await capture(page, viewport.name, theme, "conversation-tools");
-    await page.getByRole("dialog", { name: "会话工具" }).getByRole("button", { name: "关闭", exact: true }).click();
-    await expect(page.getByRole("dialog", { name: "会话工具" })).toBeHidden();
+    await page.getByRole("button", { name: "会话设置", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "会话设置", exact: true })).toBeVisible();
+    await capture(page, viewport.name, theme, "conversation-settings-general");
+    await page.getByRole("button", { name: "工具权限", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "工具权限", exact: true })).toBeVisible();
+    await capture(page, viewport.name, theme, "conversation-settings-tools");
+    await page.getByRole("button", { name: "回复", exact: true }).click();
     state.nextConversationError = "回复设置保存失败";
-    await page.getByLabel("启用", { exact: true }).uncheck();
-    await expect(page.getByRole("alert")).toContainText("已重新读取当前状态");
+    await page.getByLabel("允许回复", { exact: true }).uncheck();
+    await page.getByRole("button", { name: "保存", exact: true }).click();
+    await expect(page.getByText("回复设置保存失败", { exact: true })).toBeVisible();
     await capture(page, viewport.name, theme, "conversations-save-error");
 
     await page.goto("/web-chat");
