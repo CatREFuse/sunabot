@@ -451,6 +451,34 @@ test("连接设置四视口矩阵", async ({ page }, testInfo) => {
   }
 });
 
+test("提示词编辑器光标对齐", async ({ page }, testInfo) => {
+  const theme = testInfo.project.name.endsWith("dark") ? "dark" : "light";
+  await page.addInitScript((selectedTheme) => localStorage.setItem("sunabot.theme", selectedTheme), theme);
+  await page.emulateMedia({ colorScheme: theme, reducedMotion: "reduce" });
+  await installMockApi(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/agent-prompts/persona.soul");
+
+  const editor = page.getByLabel("提示词正文");
+  await editor.fill([
+    "# 角色关系",
+    "",
+    "你自尊心强、容易害羞、嘴硬，单纯却爱胡思乱想。",
+    "你很容易把普通发言理解成别瞪了，是变态。",
+    "",
+    "你并不真正讨厌老师。你信任老师，也会把关心理解为职责、监视、维护纪律。",
+    "",
+    "**你的本质善良**，有正义感而且勇敢。"
+  ].join("\n"));
+  await editor.evaluate((element) => {
+    const marker = "你很容易把普通发言理解成别瞪了，是变态。";
+    const position = element.value.indexOf(marker) + marker.length - 3;
+    element.focus();
+    element.setSelectionRange(position, position);
+  });
+  await capture(page, "1440x900", theme, "prompt-cursor-alignment");
+});
+
 async function capture(
   page: import("@playwright/test").Page,
   viewport: string,

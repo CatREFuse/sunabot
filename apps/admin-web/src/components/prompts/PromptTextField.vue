@@ -289,9 +289,12 @@ defineExpose({ insertVariable });
 }
 
 .prompt-field__highlight :deep(.markup-heading),
-.prompt-field__highlight :deep(.markup-bold) { font-weight: 700; }
+.prompt-field__highlight :deep(.markup-bold) {
+  font-weight: inherit;
+  text-shadow: 0.25px 0 currentColor, -0.25px 0 currentColor;
+}
 .prompt-field__highlight :deep(.markup-italic),
-.prompt-field__highlight :deep(.markup-quote) { font-style: italic; }
+.prompt-field__highlight :deep(.markup-quote) { font-style: inherit; }
 .prompt-field__highlight :deep(.markup-marker),
 .prompt-field__highlight :deep(.markup-list-marker),
 .prompt-field__highlight :deep(.markup-xml),
@@ -301,8 +304,6 @@ defineExpose({ insertVariable });
   color: rgb(var(--color-accent));
 }
 .prompt-field__highlight :deep(.markup-code-block) {
-  display: inline-block;
-  width: 100%;
   background: rgb(var(--color-accent) / 0.08);
   color: rgb(var(--color-ink));
 }

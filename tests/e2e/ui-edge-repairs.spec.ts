@@ -48,3 +48,44 @@ test("桌面 Agent 菜单不会让侧栏横向滚动", async ({ page }) => {
     expect((await menu.boundingBox())?.width).toBeGreaterThanOrEqual(256);
   }
 });
+
+test("提示词高亮层保持与输入框一致的字符度量", async ({ page }) => {
+  await installMockApi(page);
+  await page.goto("/agent-prompts/persona.soul");
+
+  const editor = page.getByLabel("提示词正文");
+  await editor.fill("# 标题\n**重点**与*斜体*\n> 引用\n```text\n代码块\n```");
+
+  const metrics = await editor.evaluate((textarea) => {
+    const highlight = textarea.previousElementSibling;
+    if (!(highlight instanceof HTMLElement)) throw new Error("Missing prompt highlight layer");
+    const inputStyle = getComputedStyle(textarea);
+    const properties = [
+      "fontFamily",
+      "fontSize",
+      "fontWeight",
+      "fontStyle",
+      "lineHeight",
+      "letterSpacing",
+      "wordSpacing",
+      "whiteSpace",
+      "wordBreak",
+      "overflowWrap",
+      "tabSize"
+    ] as const;
+    const expected = Object.fromEntries(properties.map((property) => [property, inputStyle[property]]));
+    return Array.from(highlight.querySelectorAll(".markup-heading, .markup-bold, .markup-italic, .markup-quote, .markup-code-block"))
+      .map((element) => ({
+        className: element.className,
+        display: getComputedStyle(element).display,
+        metrics: Object.fromEntries(properties.map((property) => [property, getComputedStyle(element)[property]]))
+      }))
+      .map((element) => ({ ...element, expected }));
+  });
+
+  expect(metrics).not.toHaveLength(0);
+  for (const element of metrics) {
+    expect(element.metrics).toEqual(element.expected);
+    expect(element.display).toBe("inline");
+  }
+});
