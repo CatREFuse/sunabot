@@ -93,7 +93,7 @@ MCP transport 专项必须覆盖 hardened stdio 的空环境、固定 `/workbenc
 
 Token 统计验收必须覆盖 OpenAI Responses、Deferred Codex CLI 成功与失败结果、Chat Completions、Anthropic 和 Gemini 的原始 usage 夹具，验证缓存输入不重复计数、Codex CLI 失败 usage 不丢失、Anthropic 三类输入求和、思考 Token 归入输出、缓存率分母只包含明确报告缓存字段的记录、无缓存字段返回 `null`、显式零缓存返回 `0`、时区跨日、24 个小时桶、最近 53 周日期范围，以及模型与功能组合筛选不改变可选模型集合。行为统计必须验证回答、编排器、记忆总量与两类真实记忆拆分无重复计数，并验证 `conversationId` 精确隔离。管理台测试必须验证小时/日切换、模型/功能筛选、371 个日历单元、24 个小时柱、缓存率折线不产生 `NaN`/`Infinity`，并分别检查移动端与桌面端的 light/dark Token 卡片、行为统计、群聊详情、日历、小时图和展开后的结构化 usage 日志截图。
 
-会话详情专项验收必须验证启动与编排器快捷开关始终位于主消息区，回复关闭时编排器保留且禁用，私聊不显示编排器；主界面只显示会话 Token 总消耗 widget，完整统计只在右侧栏出现。会话设置与 Token 详情栏必须验证左上角关闭按钮、遮罩和 Escape 关闭、焦点恢复，以及 390px 移动端、桌面端 light/dark 无横向溢出截图。
+会话详情专项验收必须验证启动与编排器快捷开关始终位于主消息区，回复关闭时编排器保留且禁用，私聊不显示编排器；主界面只显示会话 Token 总消耗 widget，完整统计只在右侧栏出现。会话设置与 Token 详情栏必须验证左上角关闭按钮、遮罩和 Escape 关闭、焦点恢复，以及 390px 移动端、桌面端 light/dark 无横向溢出截图。会话目录专项必须覆盖 primary 与非 primary 账号存在同一群号但名称不同、非 primary 独有群、按账号定向 OneBot action、v1 primary 缓存兼容、v2 多账号缓存重启恢复，以及一个账号目录失败时不污染其他账号标题。
 
 Prompt Cache 验收必须分别执行 OpenAI 官方 Responses 与 Codex Responses 的两轮真实连续对话：两轮使用同一模型、提示词家族和稳定 system/developer 前缀，第二轮追加第一轮用户消息与助手回复；逐轮记录 Provider 实际返回的原始 `input_tokens`、`cached_tokens` 和可用的 `cache_write_tokens`。OpenAI 官方 GPT-5.6 及后续支持显式断点的暖请求必须命中前导稳定前缀；Codex GPT-5.6 及后续请求必须以首个 developer input 承载合并 system 文本，不发送 `instructions`、`prompt_cache_breakpoint` 或 `prompt_cache_options`，并如实记录后端机会性隐式缓存结果，不能把未报告的缓存写入或偶发命中推算成稳定缓存率。旧模型、未知模型和兼容 Provider 请求体不得出现显式断点字段。测试还必须验证 system/developer 前缀、完整工具定义或输出 schema 变化会切换缓存键，动态历史、记忆和当前输入变化不会改变稳定前缀键；协议映射前后的语义内容、非 system 输入顺序、图片、工具和输出 schema 必须一致。
 

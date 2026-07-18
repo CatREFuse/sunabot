@@ -411,12 +411,16 @@ export class OneBotGateway extends EventEmitter implements MessagingPort, Conver
     return extractOneBotMessageDetails(payload, { ...context, messageId });
   }
 
-  conversationDirectoryGeneration() {
-    return String(this.getStatus().connectedAt ?? "unknown");
+  conversationDirectoryGeneration(accountId?: string) {
+    const normalizedAccountId = accountId?.trim() || "primary";
+    const connection = this.getStatus().accounts.find((item) => item.accountId === normalizedAccountId);
+    return `${normalizedAccountId}:${connection?.connectedAt ?? "unknown"}`;
   }
 
-  loadConversationDirectory() {
-    return loadOneBotConversationDirectory(this);
+  loadConversationDirectory(accountId?: string) {
+    return loadOneBotConversationDirectory({
+      sendAction: (action, params) => this.sendAction(action, params, accountId)
+    });
   }
 
   resolveAttachment(input: AttachmentResolutionInput, options: AttachmentResolverOptions = {}) {

@@ -27,6 +27,96 @@ describe("ConversationDirectory", () => {
     expect(gateway.loadCount).toBe(1);
   });
 
+  it("loads display names from each conversation account", async () => {
+    const gateway = new FakeConversationDirectoryPort({
+      friendsReady: true,
+      groupsReady: true,
+      friends: [],
+      groups: [{ groupId: 7, groupName: "Plana 群" }]
+    });
+    gateway.setAccountSnapshots("qq-koharu", {
+      friendsReady: true,
+      groupsReady: true,
+      friends: [],
+      groups: [{ groupId: 7, groupName: "Koharu 群" }]
+    });
+    const directory = new ConversationDirectory();
+
+    const result = await directory.enrich([
+      conversation({ id: "group:7", accountId: "primary", userId: 1, groupId: 7, title: "7" }),
+      conversation({ id: "account:qq-koharu:group:7", accountId: "qq-koharu", userId: 1, groupId: 7, title: "7" })
+    ], gateway);
+
+    expect(result[0]?.title).toBe("Plana 群");
+    expect(result[1]?.title).toBe("Koharu 群");
+    expect(gateway.loadedAccountIds).toEqual(["primary", "qq-koharu"]);
+  });
+
+  it("keeps account-specific display names across restarts", async () => {
+    const temporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-directory-accounts-"));
+    const cachePath = path.join(temporaryDirectory, "conversation-directory.json");
+    const records = [
+      conversation({ id: "group:7", accountId: "primary", userId: 1, groupId: 7, title: "7" }),
+      conversation({ id: "account:qq-koharu:group:7", accountId: "qq-koharu", userId: 1, groupId: 7, title: "7" })
+    ];
+    try {
+      const firstGateway = new FakeConversationDirectoryPort({
+        friendsReady: true,
+        groupsReady: true,
+        friends: [],
+        groups: [{ groupId: 7, groupName: "Plana 群" }]
+      });
+      firstGateway.setAccountSnapshots("qq-koharu", {
+        friendsReady: true,
+        groupsReady: true,
+        friends: [],
+        groups: [{ groupId: 7, groupName: "Koharu 群" }]
+      });
+      await new ConversationDirectory({ cachePath }).enrich(records, firstGateway);
+
+      const secondGateway = new FakeConversationDirectoryPort({
+        friendsReady: true,
+        groupsReady: true,
+        friends: [],
+        groups: []
+      });
+      secondGateway.setAccountSnapshots("qq-koharu", {
+        friendsReady: true,
+        groupsReady: true,
+        friends: [],
+        groups: []
+      });
+      const result = await new ConversationDirectory({ cachePath }).enrich(records, secondGateway);
+
+      expect(result[0]?.title).toBe("Plana 群");
+      expect(result[1]?.title).toBe("Koharu 群");
+      await expect(fs.readFile(cachePath, "utf8")).resolves.toContain('"version": 2');
+    } finally {
+      await fs.rm(temporaryDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it("reads a legacy v1 cache only for the primary account", async () => {
+    const temporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-directory-v1-"));
+    const cachePath = path.join(temporaryDirectory, "conversation-directory.json");
+    try {
+      await fs.writeFile(cachePath, JSON.stringify({
+        version: 1,
+        friends: [],
+        groups: [{ groupId: 7, groupName: "旧版主账号群" }]
+      }));
+      const result = new ConversationDirectory({ cachePath }).describe([
+        conversation({ id: "group:7", accountId: "primary", userId: 1, groupId: 7, title: "7" }),
+        conversation({ id: "account:qq-koharu:group:7", accountId: "qq-koharu", userId: 1, groupId: 7, title: "7" })
+      ]);
+
+      expect(result[0]?.title).toBe("旧版主账号群");
+      expect(result[1]?.title).toBe("群 7");
+    } finally {
+      await fs.rm(temporaryDirectory, { recursive: true, force: true });
+    }
+  });
+
   it("falls back to the latest message nickname and readable stored titles", async () => {
     const gateway = new FakeConversationDirectoryPort();
     const directory = new ConversationDirectory();

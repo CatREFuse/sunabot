@@ -51,20 +51,34 @@ export class FakeMessagingPort implements MessagingPort {
 export class FakeConversationDirectoryPort implements ConversationDirectoryPort {
   generation = "fake-generation";
   readonly snapshots: ConversationDirectorySnapshotV1[] = [];
+  readonly snapshotsByAccount = new Map<string, ConversationDirectorySnapshotV1[]>();
+  readonly loadCountsByAccount = new Map<string, number>();
+  readonly loadedAccountIds: string[] = [];
   loadCount = 0;
 
   constructor(snapshot?: ConversationDirectorySnapshotV1) {
     if (snapshot) this.snapshots.push(snapshot);
   }
 
-  conversationDirectoryGeneration() {
-    return this.generation;
+  setAccountSnapshots(accountId: string, ...snapshots: ConversationDirectorySnapshotV1[]) {
+    this.snapshotsByAccount.set(normalizeAccountId(accountId), snapshots);
   }
 
-  async loadConversationDirectory() {
-    const index = Math.min(this.loadCount, Math.max(0, this.snapshots.length - 1));
+  conversationDirectoryGeneration(accountId?: string) {
+    return `${this.generation}:${normalizeAccountId(accountId)}`;
+  }
+
+  async loadConversationDirectory(accountId?: string) {
+    const normalizedAccountId = normalizeAccountId(accountId);
+    const snapshots = normalizedAccountId === "primary"
+      ? this.snapshots
+      : this.snapshotsByAccount.get(normalizedAccountId) ?? [];
+    const loadCount = this.loadCountsByAccount.get(normalizedAccountId) ?? 0;
+    const index = Math.min(loadCount, Math.max(0, snapshots.length - 1));
+    this.loadCountsByAccount.set(normalizedAccountId, loadCount + 1);
+    this.loadedAccountIds.push(normalizedAccountId);
     this.loadCount += 1;
-    return structuredClone(this.snapshots[index] ?? emptyDirectorySnapshot());
+    return structuredClone(snapshots[index] ?? emptyDirectorySnapshot());
   }
 }
 
@@ -100,4 +114,8 @@ function emptyDirectorySnapshot(): ConversationDirectorySnapshotV1 {
 
 function senderKey(userId: number, groupId?: number) {
   return `${groupId ?? "private"}:${userId}`;
+}
+
+function normalizeAccountId(accountId?: string) {
+  return accountId?.trim() || "primary";
 }

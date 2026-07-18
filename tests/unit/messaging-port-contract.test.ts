@@ -77,6 +77,16 @@ describe("MessagingPort contract", () => {
     await expect(loadDirectoryUseCase(gateway)).resolves.toEqual(expected);
   });
 
+  it("targets directory actions to the requested OneBot account", async () => {
+    const gateway = oneBotGateway();
+    const sendAction = vi.spyOn(gateway, "sendAction").mockResolvedValue({ status: "ok", data: [] });
+
+    await gateway.loadConversationDirectory("qq-koharu");
+
+    expect(sendAction).toHaveBeenNthCalledWith(1, "get_friend_list", {}, "qq-koharu");
+    expect(sendAction).toHaveBeenNthCalledWith(2, "get_group_list", {}, "qq-koharu");
+  });
+
   it("runs the same attachment source use case through fake and OneBot ports", async () => {
     const expected = {
       kind: "url" as const,

@@ -142,8 +142,8 @@ export interface ConversationDirectorySnapshotV1 {
 }
 
 export interface ConversationDirectoryPort {
-  conversationDirectoryGeneration(): string;
-  loadConversationDirectory(): Promise<ConversationDirectorySnapshotV1>;
+  conversationDirectoryGeneration(accountId?: string): string;
+  loadConversationDirectory(accountId?: string): Promise<ConversationDirectorySnapshotV1>;
 }
 
 export interface MessagingPort {

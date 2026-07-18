@@ -30,39 +30,55 @@ interface ConversationDirectoryOptions {
 }
 
 export class ConversationDirectory {
-  private snapshot: DirectorySnapshot;
-  private pending: Promise<void> | undefined;
+  private readonly snapshots: Map<string, DirectorySnapshot>;
+  private readonly pending = new Map<string, Promise<void>>();
   private readonly cachePath: string | undefined;
 
   constructor(options: ConversationDirectoryOptions = {}) {
     this.cachePath = options.cachePath;
-    this.snapshot = options.cachePath ? readCachedSnapshot(options.cachePath) : emptySnapshot();
+    this.snapshots = options.cachePath ? readCachedSnapshots(options.cachePath) : new Map();
   }
 
   async enrich(records: readonly ConversationRecord[], gateway: ConversationDirectoryPort) {
-    await this.refresh(gateway);
-    if (!this.snapshot.friendsReady || !this.snapshot.groupsReady) {
+    const accountIds = [...new Set(records.map(conversationAccountId))];
+    await Promise.all(accountIds.map((accountId) => this.refresh(gateway, accountId)));
+    const retryAccountIds = accountIds.filter((accountId) => {
+      const snapshot = this.snapshotFor(accountId);
+      return !snapshot.friendsReady || !snapshot.groupsReady;
+    });
+    if (retryAccountIds.length) {
       await delay(DIRECTORY_STARTUP_RETRY_DELAY_MS);
-      await this.refresh(gateway, true);
+      await Promise.all(retryAccountIds.map((accountId) => this.refresh(gateway, accountId, true)));
     }
-    return enrichConversationTitles(records, this.snapshot);
+    return enrichConversationTitles(records, this.snapshots);
   }
 
   describe(records: readonly ConversationRecord[]) {
-    return enrichConversationTitles(records, this.snapshot);
+    return enrichConversationTitles(records, this.snapshots);
   }
 
-  private async refresh(gateway: ConversationDirectoryPort, force = false) {
-    const generation = gateway.conversationDirectoryGeneration();
-    if (!force && this.snapshot.generation === generation && this.snapshot.expiresAt > Date.now()) return;
-    if (!this.pending) {
-      this.pending = this.load(gateway, generation).finally(() => { this.pending = undefined; });
+  private snapshotFor(accountId: string) {
+    return this.snapshots.get(accountId) ?? emptySnapshot();
+  }
+
+  private async refresh(gateway: ConversationDirectoryPort, accountId: string, force = false) {
+    const snapshot = this.snapshotFor(accountId);
+    const generation = gateway.conversationDirectoryGeneration(accountId);
+    if (!force && snapshot.generation === generation && snapshot.expiresAt > Date.now()) return;
+    let pending = this.pending.get(accountId);
+    if (!pending) {
+      const load = this.load(gateway, accountId, generation).finally(() => {
+        if (this.pending.get(accountId) === load) this.pending.delete(accountId);
+      });
+      this.pending.set(accountId, load);
+      pending = load;
     }
-    await this.pending;
+    await pending;
   }
 
-  private async load(gateway: ConversationDirectoryPort, generation: string) {
-    const directory = await gateway.loadConversationDirectory().catch(() => ({
+  private async load(gateway: ConversationDirectoryPort, accountId: string, generation: string) {
+    const previous = this.snapshotFor(accountId);
+    const directory = await gateway.loadConversationDirectory(accountId).catch(() => ({
       friendsReady: false,
       groupsReady: false,
       friends: [],
@@ -71,19 +87,19 @@ export class ConversationDirectory {
     const friendsReady = directory.friendsReady;
     const groupsReady = directory.groupsReady;
     const friends = friendsReady
-      ? mergeMaps(this.snapshot.friends, friendMap(directory.friends))
-      : this.snapshot.friends;
+      ? mergeMaps(previous.friends, friendMap(directory.friends))
+      : previous.friends;
     const groups = groupsReady
-      ? mergeMaps(this.snapshot.groups, groupMap(directory.groups))
-      : this.snapshot.groups;
-    this.snapshot = {
+      ? mergeMaps(previous.groups, groupMap(directory.groups))
+      : previous.groups;
+    this.snapshots.set(accountId, {
       generation,
       expiresAt: Date.now() + (friendsReady && groupsReady ? DIRECTORY_TTL_MS : DIRECTORY_RETRY_MS),
       friends,
       groups,
       friendsReady,
       groupsReady
-    };
+    });
     if (friendsReady || groupsReady) this.persistSnapshot();
   }
 
@@ -91,14 +107,19 @@ export class ConversationDirectory {
     if (!this.cachePath) return;
     const temporaryPath = `${this.cachePath}.${process.pid}.tmp`;
     const payload = {
-      version: 1,
+      version: 2,
       updatedAt: new Date().toISOString(),
-      friends: [...this.snapshot.friends.entries()]
-        .sort(([left], [right]) => left - right)
-        .map(([userId, identity]) => ({ userId, ...identity })),
-      groups: [...this.snapshot.groups.entries()]
-        .sort(([left], [right]) => left - right)
-        .map(([groupId, groupName]) => ({ groupId, groupName }))
+      accounts: [...this.snapshots.entries()]
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([accountId, snapshot]) => ({
+          accountId,
+          friends: [...snapshot.friends.entries()]
+            .sort(([left], [right]) => left - right)
+            .map(([userId, identity]) => ({ userId, ...identity })),
+          groups: [...snapshot.groups.entries()]
+            .sort(([left], [right]) => left - right)
+            .map(([groupId, groupName]) => ({ groupId, groupName }))
+        }))
     };
     try {
       fs.mkdirSync(path.dirname(this.cachePath), { recursive: true });
@@ -111,8 +132,9 @@ export class ConversationDirectory {
   }
 }
 
-function enrichConversationTitles(records: readonly ConversationRecord[], snapshot: DirectorySnapshot) {
+function enrichConversationTitles(records: readonly ConversationRecord[], snapshots: ReadonlyMap<string, DirectorySnapshot>) {
   return records.map((record) => {
+    const snapshot = snapshots.get(conversationAccountId(record)) ?? emptySnapshot();
     if (record.groupId) {
       const groupName = snapshot.groups.get(record.groupId) || readableStoredTitle(record) || `群 ${record.groupId}`;
       return { ...record, title: groupName, groupName };
@@ -190,18 +212,26 @@ function mergeMaps<K, V>(previous: ReadonlyMap<K, V>, current: ReadonlyMap<K, V>
   return new Map<K, V>([...previous, ...current]);
 }
 
-function readCachedSnapshot(cachePath: string): DirectorySnapshot {
+function readCachedSnapshots(cachePath: string): Map<string, DirectorySnapshot> {
   try {
     const root = recordValue(JSON.parse(fs.readFileSync(cachePath, "utf8")));
-    if (root.version !== 1) return emptySnapshot();
-    return {
-      ...emptySnapshot(),
-      friends: friendMap(recordItems(root.friends)),
-      groups: groupMap(recordItems(root.groups))
-    };
+    if (root.version === 1) return new Map([["primary", cachedSnapshot(root)]]);
+    if (root.version !== 2) return new Map();
+    return new Map(recordItems(root.accounts).flatMap((item) => {
+      const accountId = cachedAccountId(item.accountId);
+      return accountId ? [[accountId, cachedSnapshot(item)] as const] : [];
+    }));
   } catch {
-    return emptySnapshot();
+    return new Map();
   }
+}
+
+function cachedSnapshot(value: Record<string, unknown>): DirectorySnapshot {
+  return {
+    ...emptySnapshot(),
+    friends: friendMap(recordItems(value.friends)),
+    groups: groupMap(recordItems(value.groups))
+  };
 }
 
 function recordItems(value: unknown) {
@@ -222,6 +252,15 @@ function emptySnapshot(): DirectorySnapshot {
     friendsReady: false,
     groupsReady: false
   };
+}
+
+function conversationAccountId(record: Pick<ConversationRecord, "accountId">) {
+  return cachedAccountId(record.accountId) || "primary";
+}
+
+function cachedAccountId(value: unknown) {
+  const accountId = cleanText(value);
+  return /^[A-Za-z0-9_-]{1,64}$/.test(accountId) ? accountId : "";
 }
 
 function delay(milliseconds: number) {
