@@ -56,6 +56,20 @@ export function migrateApplicationDataSchema(database: DatabaseSync, modelCalls:
       data_json TEXT NOT NULL CHECK (json_valid(data_json))
     );
     CREATE INDEX IF NOT EXISTS image_history_created_at ON image_history(created_at DESC);
+    CREATE TABLE IF NOT EXISTS emojis (
+      emoji_key TEXT PRIMARY KEY CHECK (
+        length(trim(emoji_key)) BETWEEN 1 AND 24
+        AND length(CAST(emoji_key AS BLOB)) <= 64
+      ),
+      file_name TEXT NOT NULL CHECK (length(trim(file_name)) BETWEEN 1 AND 160),
+      source TEXT NOT NULL CHECK (source IN ('upload', 'generated')),
+      size_bytes INTEGER NOT NULL CHECK (size_bytes > 0),
+      width INTEGER NOT NULL CHECK (width > 0),
+      height INTEGER NOT NULL CHECK (height > 0),
+      created_at TEXT NOT NULL CHECK (length(trim(created_at)) > 0),
+      updated_at TEXT NOT NULL CHECK (length(trim(updated_at)) > 0)
+    ) STRICT;
+    CREATE INDEX IF NOT EXISTS emojis_updated_at ON emojis(updated_at DESC, emoji_key);
     CREATE TABLE IF NOT EXISTS request_logs (
       row_id INTEGER PRIMARY KEY AUTOINCREMENT,
       id TEXT NOT NULL UNIQUE,
@@ -174,8 +188,8 @@ export function migrateApplicationDataSchema(database: DatabaseSync, modelCalls:
   if (schemaVersion < 9) setMetadata(database, "storage-schema-version", "9");
   modelCalls.repairModelAggregatesIfStale();
   const repairedVersion = Number(metadata(database, "storage-schema-version") ?? 0);
-  if (!Number.isSafeInteger(repairedVersion) || repairedVersion < 10) {
-    setMetadata(database, "storage-schema-version", "10");
+  if (!Number.isSafeInteger(repairedVersion) || repairedVersion < 11) {
+    setMetadata(database, "storage-schema-version", "11");
   }
 }
 

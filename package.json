@@ -45,6 +45,7 @@
     "admin:fuse": "node tooling/admin/admin-fuse.mjs",
     "migrate:sqlite": "node tooling/migrations/run-built-migration.mjs migrate-to-sqlite.mjs",
     "migrate:multi-agent": "node tooling/migrations/run-built-migration.mjs migrate-single-agent-to-multi-agent.mjs",
+    "migrate:memory-perspective": "node tooling/migrations/memory-perspective-v1.mjs",
     "runtime:doctor": "./sunabot.sh doctor",
     "runtime:contract": "node tooling/runtime/validate-contract.mjs",
     "runtime:release": "node tooling/runtime/build-release.mjs",

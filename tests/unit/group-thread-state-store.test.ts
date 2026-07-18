@@ -20,12 +20,12 @@ describe("group thread state SQLite store", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it("forward-migrates schema 9 with the strict thread state table", () => {
+  it("forward-migrates schema 9 with the strict thread state and emoji tables", () => {
     const initial = new ApplicationDataStore(databasePath);
     initial.close();
 
     const oldDatabase = new DatabaseSync(databasePath);
-    oldDatabase.exec("DROP TABLE conversation_thread_states");
+    oldDatabase.exec("DROP TABLE conversation_thread_states; DROP TABLE emojis;");
     oldDatabase.prepare("UPDATE app_metadata SET value = '9' WHERE key = 'storage-schema-version'").run();
     oldDatabase.close();
 
@@ -34,7 +34,7 @@ describe("group thread state SQLite store", () => {
 
     const database = new DatabaseSync(databasePath);
     expect(database.prepare("SELECT value FROM app_metadata WHERE key = 'storage-schema-version'").get())
-      .toMatchObject({ value: "10" });
+      .toMatchObject({ value: "11" });
     const sql = String(database.prepare(`
       SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'conversation_thread_states'
     `).get()?.sql ?? "").replaceAll(/\s+/g, " ").toLowerCase();
@@ -50,6 +50,9 @@ describe("group thread state SQLite store", () => {
         on_delete: "CASCADE"
       })
     ]);
+    expect(String(database.prepare(`
+      SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'emojis'
+    `).get()?.sql ?? "").toLowerCase()).toContain("strict");
     database.close();
   });
 

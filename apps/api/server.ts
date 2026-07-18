@@ -51,6 +51,7 @@ import { registerMonitoringRoutes } from "./plugins/monitoringRoutes.js";
 import { registerOneBotRoutes } from "./plugins/onebotRoutes.js";
 import { registerProviderConfigRoutes } from "./plugins/providerConfigRoutes.js";
 import { registerSelfieReferenceRoutes } from "./plugins/selfieReferenceRoutes.js";
+import { registerAgentEmojiApi } from "./emojiApiComposition.js";
 import type { AppConfig, ProviderConfig } from "../../src/types.js";
 import { OpenAIProvider } from "../../adapters/model/openaiProvider.js";
 import { AgentRegistry, type AgentRegistryOptions } from "../../services/agents/agentRegistry.js";
@@ -281,7 +282,7 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
     const repository = new SelfieReferenceRepository({
       getConfig: () => agentId === config.persona.defaultAgentId
         ? config
-        : agentRuntimeManager.require(agentId).config
+        : agentRegistry.config(agentId, config)
     });
     selfieReferences.set(agentId, repository);
     return repository;
@@ -551,7 +552,7 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
   });
   registerAgentToolRoutes(app, {
     agentFiles,
-    resolveToolCapabilities: () => runtime.resolveToolCapabilities(),
+    resolveToolCapabilities: (backend) => runtime.resolveToolCapabilities(backend),
     resolveConversationAssetCapability: () => conversationAssetCapabilityFor(
       config.persona.defaultAgentId,
       onebotGateway,
@@ -563,7 +564,7 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
       return {
         config: agentRuntime.config,
         agentFiles: new AgentFileRepository({ runtime: agentRuntime }),
-        resolveToolCapabilities: () => agentRuntime.resolveToolCapabilities(),
+        resolveToolCapabilities: (backend) => agentRuntime.resolveToolCapabilities(backend),
         resolveConversationAssetCapability: () => conversationAssetCapabilityFor(
           agentId,
           onebotGateway,
@@ -576,6 +577,11 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
   registerSelfieReferenceRoutes(app, {
     repository: selfieReferencesFor(runtime.config.persona.defaultAgentId),
     getRepository: selfieReferencesFor
+  });
+  registerAgentEmojiApi(app, {
+    getConfig: () => config,
+    runtime,
+    getRuntime: (agentId) => agentRuntimeManager.require(agentId)
   });
 
   app.setNotFoundHandler((request, reply) => {

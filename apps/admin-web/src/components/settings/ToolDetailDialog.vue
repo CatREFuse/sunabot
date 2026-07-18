@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import type { SunaTool } from "../../types";
-import { toolExecutionLabel, toolIcon, toolParameterRows } from "../../utils/toolCatalog";
+import { toolAvailabilityPresentation, toolExecutionLabel, toolIcon, toolParameterRows } from "../../utils/toolCatalog";
 import DialogOverlay from "../ui/DialogOverlay.vue";
 import ToggleSwitch from "../ui/ToggleSwitch.vue";
 
@@ -21,6 +21,9 @@ const emit = defineEmits<{
 }>();
 const parameters = computed(() => toolParameterRows(props.tool?.parameters));
 const descriptionLength = computed(() => props.description.length);
+const availability = computed(() => props.tool
+  ? toolAvailabilityPresentation(props.tool)
+  : { kind: "ready" as const, label: "", reason: "" });
 const descriptionSourceLabel = computed(() => {
   if (props.descriptionOverridden) return "全局设置";
   if (props.tool?.descriptionSource === "prompt" || props.tool?.promptDescription != null) return "提示词";
@@ -63,10 +66,23 @@ const descriptionSourceLabel = computed(() => {
           <dt class="field-label">说明来源</dt>
           <dd class="inline-state">{{ descriptionSourceLabel }}</dd>
         </div>
-        <div v-if="tool.available === false" class="divider-row sm:col-span-2">
-          <dt class="field-label">能力异常</dt>
+        <div v-if="tool.accessLabel" class="divider-row sm:col-span-2">
+          <dt class="field-label">适用会话</dt>
+          <dd class="text-xs leading-5 text-mute">
+            <span class="inline-state"><i class="bx bx-lock-alt mr-1" aria-hidden="true"></i>{{ tool.accessLabel }}</span>
+            <span v-if="tool.accessDescription" class="ml-2">{{ tool.accessDescription }}</span>
+          </dd>
+        </div>
+        <div v-if="tool.executionBackend" class="divider-row sm:mr-5">
+          <dt class="field-label">管理员私聊后端</dt>
+          <dd class="inline-state"><i class="bx bx-server mr-1" aria-hidden="true"></i>{{ tool.executionBackend === "docker" ? "Docker" : "Native" }}</dd>
+        </div>
+        <div v-if="availability.kind === 'runtime'" class="divider-row sm:col-span-2">
+          <dt class="field-label">运行环境</dt>
           <dd class="inline-state text-accent" data-kind="error">
-            <i class="bx bx-error-circle mr-1" aria-hidden="true"></i>{{ tool.availabilityReason || tool.unavailableReason || "当前工具运行异常。" }}
+            <i class="bx bx-error-circle mr-1" aria-hidden="true"></i>
+            <span>运行环境异常</span>
+            <span class="ml-2">{{ availability.reason }}</span>
           </dd>
         </div>
       </dl>

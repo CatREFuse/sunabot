@@ -34,7 +34,8 @@ import {
   type GroupThreadContextSnapshotV1,
   type NoReplyPokeOutboxEnvelope,
   type ReplyQuoteSnapshotV1,
-  type RuntimeIncomingReplyEventPayload
+  type RuntimeIncomingReplyEventPayload,
+  type UserGroupOrchestratorResultV1
 } from "../../packages/contracts/session/runtimeMessages.js";
 import { applicationDataStore, sqliteMemoryPersistence } from "../../adapters/sqlite/applicationDataStore.js";
 import { configureMemoryPersistence } from "../../services/memory/persistence.js";
@@ -271,6 +272,7 @@ export interface DeferredCodexTurn {
     replyGate?: ReplyGateSnapshot;
     replyQuote?: ReplyQuoteSnapshotV1;
     threadContext?: GroupThreadContextSnapshotV1;
+    orchestratorResult?: UserGroupOrchestratorResultV1;
   };
   acknowledgement: ReplyDeliveryDraft;
 }

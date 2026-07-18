@@ -74,7 +74,9 @@ describe("agent and tool API plugin", () => {
     expect(tools.find((tool: { name: string }) => tool.name === "workspace_bash")).toMatchObject({
       configuredEnabled: false,
       available: true,
-      effectiveEnabled: false
+      effectiveEnabled: false,
+      accessLabel: "管理员 QQ 私聊可用",
+      executionBackend: "native"
     });
     expect(tools.find((tool: { name: string }) => tool.name === "no_reply")).toMatchObject({
       configuredEnabled: null,
@@ -96,11 +98,15 @@ describe("agent and tool API plugin", () => {
     });
     expect(tools.find((tool: { name: string }) => tool.name === "read_file")).toMatchObject({
       available: false,
-      effectiveEnabled: false
+      effectiveEnabled: false,
+      unavailabilityKind: "session",
+      accessLabel: "管理员 QQ 私聊可用"
     });
     expect(tools.find((tool: { name: string }) => tool.name === "write_file")).toMatchObject({
       available: false,
-      effectiveEnabled: false
+      effectiveEnabled: false,
+      unavailabilityKind: "session",
+      accessLabel: "管理员 QQ 私聊可用"
     });
     expect(tools.find((tool: { name: string }) => tool.name === "send_voice_message")).toMatchObject({
       available: false,
@@ -291,10 +297,140 @@ describe("agent and tool API plugin", () => {
     });
 
     const tools = (await app.inject({ method: "GET", url: "/api/tools" })).json().tools;
-    expect(tools.find((tool: { name: string }) => tool.name === "workspace_bash")).toMatchObject({
+    const bash = tools.find((tool: { name: string }) => tool.name === "workspace_bash");
+    expect(bash).toMatchObject({
       available,
-      effectiveEnabled: available
+      effectiveEnabled: available,
+      accessLabel: available ? "管理员 QQ 私聊可用" : "当前没有可用会话",
+      executionBackend: "native",
+      ...(!available ? {
+        unavailabilityKind: "runtime",
+        runtimeReasonCode: "BASH_NATIVE_ISOLATION_UNAVAILABLE",
+        availabilityReason: "Native 后端未通过强隔离检查，Bash 已安全关闭。可在“命令执行”切换 Docker 后端后重新检查。"
+      } : {})
     });
+  });
+
+  it("reports the independent Bash audit failure without exposing diagnostics", async () => {
+    const app = Fastify();
+    apps.push(app);
+    const config = defaultConfig();
+    config.bot.bash.enabled = true;
+    registerAgentToolRoutes(app, {
+      agentFiles: {
+        get: vi.fn(async () => ({ content: defaultPromptContent("conversation.private-reply") }))
+      } as unknown as AgentFileRepository,
+      resolveToolCapabilities: vi.fn(async () => ({
+        codex: true,
+        workspaceBash: false,
+        workspaceBashReason: "BASH_AUDIT_UNAVAILABLE" as const
+      })),
+      getConfig: () => config
+    });
+
+    const tools = (await app.inject({ method: "GET", url: "/api/tools" })).json().tools;
+    expect(tools.find((tool: { name: string }) => tool.name === "workspace_bash")).toMatchObject({
+      available: false,
+      runtimeReasonCode: "BASH_AUDIT_UNAVAILABLE",
+      availabilityReason: "独立 Bash 审计不可用，Bash 已安全关闭。"
+    });
+  });
+
+  it.each([
+    {
+      backend: "native" as const,
+      reason: "BASH_WORKBENCH_UNAVAILABLE" as const,
+      message: "当前 Agent workbench 不可用，Bash 已安全关闭。"
+    },
+    {
+      backend: "docker" as const,
+      reason: "BASH_DOCKER_ISOLATION_UNAVAILABLE" as const,
+      message: "Docker 后端未通过强隔离检查，Bash 已安全关闭。"
+    }
+  ])("maps $reason to a safe Bash catalog status", async ({ backend, reason, message }) => {
+    const app = Fastify();
+    apps.push(app);
+    const config = defaultConfig();
+    config.bot.bash.enabled = true;
+    config.bot.bash.adminPrivateBackend = backend;
+    registerAgentToolRoutes(app, {
+      agentFiles: {
+        get: vi.fn(async () => ({ content: defaultPromptContent("conversation.private-reply") }))
+      } as unknown as AgentFileRepository,
+      resolveToolCapabilities: vi.fn(async () => ({
+        codex: true,
+        workspaceBash: false,
+        workspaceBashReason: reason
+      })),
+      getConfig: () => config
+    });
+
+    const tools = (await app.inject({ method: "GET", url: "/api/tools" })).json().tools;
+    expect(tools.find((tool: { name: string }) => tool.name === "workspace_bash")).toMatchObject({
+      available: false,
+      executionBackend: backend,
+      runtimeReasonCode: reason,
+      availabilityReason: message
+    });
+  });
+
+  it("marks every session unavailable when the administrator identity gate is disabled", async () => {
+    const app = Fastify();
+    apps.push(app);
+    const config = defaultConfig();
+    config.bot.bash.enabled = true;
+    config.bot.bash.adminOnly = false;
+    const resolveToolCapabilities = vi.fn(async () => ({ codex: true, workspaceBash: true }));
+    registerAgentToolRoutes(app, {
+      agentFiles: {
+        get: vi.fn(async () => ({ content: defaultPromptContent("conversation.private-reply") }))
+      } as unknown as AgentFileRepository,
+      resolveToolCapabilities,
+      getConfig: () => config
+    });
+
+    const tools = (await app.inject({ method: "GET", url: "/api/tools" })).json().tools;
+    expect(tools.find((tool: { name: string }) => tool.name === "workspace_bash")).toMatchObject({
+      configuredEnabled: true,
+      available: false,
+      effectiveEnabled: false,
+      unavailabilityKind: "session",
+      accessLabel: "所有会话均不可用",
+      availabilityReason: "管理员身份门禁已关闭，所有会话均不可用。"
+    });
+    expect(resolveToolCapabilities).toHaveBeenCalledWith(null);
+  });
+
+  it("reports an available administrator group without claiming a failed private backend", async () => {
+    const app = Fastify();
+    apps.push(app);
+    const config = defaultConfig();
+    config.bot.bash.enabled = true;
+    config.bot.bash.allowGroup = true;
+    config.bot.bash.adminPrivateBackend = "native";
+    const resolveToolCapabilities = vi.fn(async (backend?: "native" | "docker" | null) => ({
+      codex: true,
+      workspaceBash: backend === "docker",
+      ...(backend === "docker" ? {} : {
+        workspaceBashReason: "BASH_NATIVE_ISOLATION_UNAVAILABLE" as const
+      })
+    }));
+    registerAgentToolRoutes(app, {
+      agentFiles: {
+        get: vi.fn(async () => ({ content: defaultPromptContent("conversation.private-reply") }))
+      } as unknown as AgentFileRepository,
+      resolveToolCapabilities,
+      getConfig: () => config
+    });
+
+    const tools = (await app.inject({ method: "GET", url: "/api/tools" })).json().tools;
+    expect(tools.find((tool: { name: string }) => tool.name === "workspace_bash")).toMatchObject({
+      available: true,
+      effectiveEnabled: true,
+      accessLabel: "管理员 QQ 群聊可用",
+      accessDescription: expect.stringContaining("管理员私聊的所选后端当前不可用")
+    });
+    expect(resolveToolCapabilities.mock.calls.map(([backend]) => backend)).toEqual(["native", "docker"]);
   });
 });
 

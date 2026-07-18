@@ -1,4 +1,5 @@
 import type { OpenAIToolDefinition } from "../agent/public.js";
+import type { WorkspaceBashUnavailableReason } from "./bashCapability.js";
 import {
   AGENT_TOOL_NAMES,
   type AgentToolName,
@@ -79,6 +80,7 @@ export interface ToolAvailability {
 
 export type ToolExecution = "inline" | "deferred";
 export type ToolDescriptionSource = "override" | "prompt" | "default";
+export type ToolUnavailabilityKind = "runtime" | "session";
 
 export interface ToolMetadata {
   name: AgentToolName;
@@ -94,6 +96,11 @@ export interface ToolMetadata {
   available: boolean;
   effectiveEnabled: boolean;
   availabilityReason?: string;
+  unavailabilityKind?: ToolUnavailabilityKind;
+  accessLabel?: string;
+  accessDescription?: string;
+  executionBackend?: "native" | "docker";
+  runtimeReasonCode?: WorkspaceBashUnavailableReason;
   execution: ToolExecution;
   parameters: Record<string, unknown>;
   strict: boolean;
@@ -106,6 +113,9 @@ interface ToolCatalogEntry {
   definition: (options: ToolAvailability) => Record<string, unknown>;
   available?: (options: ToolAvailability) => boolean;
   unavailableReason?: string;
+  unavailabilityKind?: ToolUnavailabilityKind;
+  accessLabel?: string;
+  accessDescription?: string;
   defaultEnabled?: boolean;
   execution: ToolExecution;
 }
@@ -177,6 +187,9 @@ const catalog: readonly ToolCatalogEntry[] = [
     definition: () => readFileTool,
     available: (options) => typeof options.workbenchFiles?.read === "function",
     unavailableReason: "当前会话不允许读取 Agent workbench 文件。",
+    unavailabilityKind: "session",
+    accessLabel: "管理员 QQ 私聊可用",
+    accessDescription: "Web Chat、群聊和普通用户私聊不可用。",
     defaultEnabled: true,
     execution: "inline"
   },
@@ -187,6 +200,9 @@ const catalog: readonly ToolCatalogEntry[] = [
     definition: () => writeFileTool,
     available: (options) => typeof options.workbenchFiles?.write === "function",
     unavailableReason: "当前会话不允许写入 Agent workbench 文件。",
+    unavailabilityKind: "session",
+    accessLabel: "管理员 QQ 私聊可用",
+    accessDescription: "Web Chat、群聊和普通用户私聊不可用。",
     defaultEnabled: true,
     execution: "inline"
   },
@@ -315,7 +331,12 @@ export function listToolMetadata(
       enabled,
       available,
       effectiveEnabled: enabled && available && conversationEnabled && metadataContextReady(entry.name, options),
-      ...(!available && entry.unavailableReason ? { availabilityReason: entry.unavailableReason } : {}),
+      ...(!available && entry.unavailableReason ? {
+        availabilityReason: entry.unavailableReason,
+        unavailabilityKind: entry.unavailabilityKind ?? "runtime"
+      } : {}),
+      ...(entry.accessLabel ? { accessLabel: entry.accessLabel } : {}),
+      ...(entry.accessDescription ? { accessDescription: entry.accessDescription } : {}),
       execution,
       parameters: readParameters(effectiveDefinition),
       strict: effectiveDefinition.strict === true

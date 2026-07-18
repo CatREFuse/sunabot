@@ -19,8 +19,8 @@ test("会话快捷操作与侧栏视觉检查", async ({ page }, testInfo) => {
     await page.goto("/conversations/group%3A10001");
 
     const quick = page.getByLabel("会话快捷操作");
-    await expect(quick.getByLabel("启动", { exact: true })).toBeVisible();
-    await expect(quick.getByLabel("编排器", { exact: true })).toBeVisible();
+    await expect(quick.getByLabel("回复", { exact: true })).toBeVisible();
+    await expect(quick.getByLabel("编排", { exact: true })).toBeVisible();
     await expect(quick.getByRole("button", { name: "查看 Token 消耗详情" })).toContainText("128.4K");
     await expect(page.getByLabel("模型调用统计")).toHaveCount(0);
     await capture(page, viewport.name, theme, "conversation-quick-controls");

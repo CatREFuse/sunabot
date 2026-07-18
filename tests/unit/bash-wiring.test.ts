@@ -172,6 +172,132 @@ describe("workspace Bash runtime wiring", () => {
     runtime.close();
   });
 
+  it("reports a missing independent audit as a safe runtime capability reason", async () => {
+    const config = createAdminTestConfig("/tmp/sunabot-bash-wiring-status-no-audit");
+    const capabilityProbe = vi.fn(async () => ({ codex: true, workspaceBash: false }));
+    const store = new SessionStore({ databasePath: ":memory:" });
+    const runtime = new SunaRuntime(config, {
+      attachmentService: {} as never,
+      sessionStore: store,
+      resolveToolCapabilities: capabilityProbe
+    });
+
+    await expect(runtime.resolveToolCapabilities()).resolves.toEqual({
+      workspaceBash: false,
+      workspaceBashReason: "BASH_AUDIT_UNAVAILABLE",
+      codex: true
+    });
+    expect(capabilityProbe).toHaveBeenCalledWith(expect.objectContaining({
+      workspaceBashAuditAvailable: false
+    }));
+    runtime.close();
+  });
+
+  it.each(["native", "docker"] as const)(
+    "reports the selected %s isolation backend when its capability probe fails",
+    async (backend) => {
+      const capabilityProbe = vi.fn(async () => ({ codex: true, workspaceBash: false }));
+      const harness = createRuntimeHarness(capabilityProbe);
+      harness.config.bot.bash.adminPrivateBackend = backend;
+
+      await expect(harness.runtime.resolveToolCapabilities()).resolves.toEqual({
+        workspaceBash: false,
+        workspaceBashReason: backend === "native"
+          ? "BASH_NATIVE_ISOLATION_UNAVAILABLE"
+          : "BASH_DOCKER_ISOLATION_UNAVAILABLE",
+        codex: true
+      });
+      expect(capabilityProbe).toHaveBeenCalledWith(expect.objectContaining({
+        workspaceBashBackend: backend,
+        workspaceBashAuditAvailable: true
+      }));
+      harness.close();
+    }
+  );
+
+  it("retries runtime capabilities with one stable backend and workspace snapshot", async () => {
+    const firstProbe = deferred<{ codex: boolean; workspaceBash: boolean }>();
+    const capabilityProbe = vi.fn()
+      .mockImplementationOnce(() => firstProbe.promise)
+      .mockResolvedValue({ codex: true, workspaceBash: false });
+    const harness = createRuntimeHarness(capabilityProbe);
+    const capabilitiesPromise = harness.runtime.resolveToolCapabilities();
+    await vi.waitFor(() => expect(capabilityProbe).toHaveBeenCalledTimes(1));
+
+    const nextConfig = structuredClone(harness.runtime.config);
+    nextConfig.persona.agentWorkspace = "/tmp/sunabot-bash-wiring-capability-b";
+    nextConfig.bot.bash.adminPrivateBackend = "docker";
+    harness.runtime.config = nextConfig;
+    firstProbe.resolve({ codex: true, workspaceBash: false });
+
+    await expect(capabilitiesPromise).resolves.toEqual({
+      workspaceBash: false,
+      workspaceBashReason: "BASH_DOCKER_ISOLATION_UNAVAILABLE",
+      codex: true
+    });
+    expect(capabilityProbe.mock.calls.map(([context]) => context)).toEqual([
+      expect.objectContaining({
+        workspacePath: harness.config.persona.agentWorkspace,
+        workspaceBashBackend: "native"
+      }),
+      expect.objectContaining({
+        workspacePath: "/tmp/sunabot-bash-wiring-capability-b",
+        workspaceBashBackend: "docker"
+      })
+    ]);
+    expect(vi.mocked(harness.auditPort.available).mock.calls.map(([config]) => ({
+      workspacePath: config.persona.agentWorkspace,
+      backend: config.bot.bash.adminPrivateBackend,
+      frozen: Object.isFrozen(config) && Object.isFrozen(config.bot.bash)
+    }))).toEqual([
+      {
+        workspacePath: harness.config.persona.agentWorkspace,
+        backend: "native",
+        frozen: true
+      },
+      {
+        workspacePath: "/tmp/sunabot-bash-wiring-capability-b",
+        backend: "docker",
+        frozen: true
+      }
+    ]);
+    harness.close();
+  });
+
+  it("fails runtime capabilities closed when both bounded snapshots drift", async () => {
+    const firstProbe = deferred<{ codex: boolean; workspaceBash: boolean }>();
+    const secondProbe = deferred<{ codex: boolean; workspaceBash: boolean }>();
+    const capabilityProbe = vi.fn()
+      .mockImplementationOnce(() => firstProbe.promise)
+      .mockImplementationOnce(() => secondProbe.promise);
+    const harness = createRuntimeHarness(capabilityProbe);
+    const capabilitiesPromise = harness.runtime.resolveToolCapabilities();
+    await vi.waitFor(() => expect(capabilityProbe).toHaveBeenCalledTimes(1));
+
+    const configB = structuredClone(harness.runtime.config);
+    configB.bot.bash.adminPrivateBackend = "docker";
+    harness.runtime.config = configB;
+    firstProbe.resolve({ codex: true, workspaceBash: true });
+    await vi.waitFor(() => expect(capabilityProbe).toHaveBeenCalledTimes(2));
+
+    const configC = structuredClone(configB);
+    configC.persona.agentWorkspace = "/tmp/sunabot-bash-wiring-capability-c";
+    configC.bot.bash.adminPrivateBackend = "native";
+    harness.runtime.config = configC;
+    secondProbe.resolve({ codex: true, workspaceBash: true });
+
+    await expect(capabilitiesPromise).resolves.toEqual({
+      workspaceBash: false,
+      workspaceBashReason: "BASH_NATIVE_ISOLATION_UNAVAILABLE",
+      codex: false
+    });
+    expect(capabilityProbe).toHaveBeenCalledTimes(2);
+    expect(harness.auditPort.available).toHaveBeenCalledTimes(2);
+    expect(harness.auditPort.run).not.toHaveBeenCalled();
+    expect(runWorkspaceBashMock).not.toHaveBeenCalled();
+    harness.close();
+  });
+
   it("retries a delayed probe once with the new backend and workspace snapshot", async () => {
     const firstProbe = deferred<{ codex: boolean; workspaceBash: boolean }>();
     const capabilityProbe = vi.fn()
@@ -311,6 +437,22 @@ describe("workspace Bash runtime wiring", () => {
     )).resolves.toBeUndefined();
     expect(harness.auditPort.available).toHaveBeenCalledTimes(1);
     expect(capabilityProbe).toHaveBeenCalledTimes(1);
+    harness.close();
+  });
+
+  it("preserves a workbench capability failure in the runtime status", async () => {
+    const capabilityProbe = vi.fn(async () => ({
+      codex: true,
+      workspaceBash: false,
+      workspaceBashReason: "BASH_WORKBENCH_UNAVAILABLE" as const
+    }));
+    const harness = createRuntimeHarness(capabilityProbe);
+
+    await expect(harness.runtime.resolveToolCapabilities()).resolves.toEqual({
+      workspaceBash: false,
+      workspaceBashReason: "BASH_WORKBENCH_UNAVAILABLE",
+      codex: true
+    });
     harness.close();
   });
 

@@ -37,6 +37,9 @@ function toolsDraft(): BotToolSettingsDraft {
 function bashDraft() {
   return {
     enabled: false,
+    adminPrivateBackend: "native" as const,
+    auditModel: "gpt-5.4-mini",
+    strictMode: true,
     allowGroup: false,
     adminOnly: true,
     workspaceOnly: true,
@@ -154,7 +157,7 @@ describe("ToolCatalogSettings", () => {
     expect(wrapper.text()).toContain("配置已启用");
     expect(wrapper.text()).not.toContain("能力可用");
     expect(wrapper.text()).not.toContain("能力不可用");
-    expect(wrapper.text().match(/能力异常/g)).toHaveLength(1);
+    expect(wrapper.text().match(/运行环境异常/g)).toHaveLength(1);
     expect(wrapper.text()).toContain("当前请求未启用自拍生成。");
     const unavailableToggle = wrapper.findAll("label").find((label) => label.text().includes("启用 自拍"));
     expect(unavailableToggle?.find('input[type="checkbox"]').attributes("disabled")).toBeUndefined();
@@ -163,7 +166,7 @@ describe("ToolCatalogSettings", () => {
     expect(wrapper.findAll("article")).toHaveLength(1);
     expect(wrapper.text()).toContain("自拍");
     await wrapper.get('button[aria-label="查看 自拍 详情"]').trigger("click");
-    expect(wrapper.get('[role="dialog"]').text()).toContain("能力异常");
+    expect(wrapper.get('[role="dialog"]').text()).toContain("运行环境");
     expect(wrapper.get('[role="dialog"]').text()).toContain("当前请求未启用自拍生成。");
     await wrapper.get('input[aria-label="搜索工具"]').setValue("");
     expect(wrapper.findAll("article")).toHaveLength(2);
@@ -183,7 +186,7 @@ describe("ToolCatalogSettings", () => {
 
     await wrapper.get('button[aria-label="查看 网页搜索 详情"]').trigger("click");
     expect(wrapper.get('[role="dialog"]').text()).toContain("网页搜索");
-    expect(wrapper.get('[role="dialog"]').text()).not.toContain("能力异常");
+    expect(wrapper.get('[role="dialog"]').text()).not.toContain("运行环境异常");
     expect(wrapper.get('[role="dialog"]').text()).not.toContain("能力可用");
     await wrapper.get('textarea[maxlength="4000"]').setValue("只在需要实时信息时搜索网页。");
     expect(draft.overrides.websearch).toEqual({
@@ -223,6 +226,42 @@ describe("ToolCatalogSettings", () => {
     expect(draft.codex.enabled).toBe(false);
     expect(draft.overrides.workspace_bash).toEqual({ description: "Bash 说明" });
     expect(draft.overrides.codex).toEqual({ description: "Codex 说明" });
+  });
+
+  it("shows session scope without reporting a runtime failure", async () => {
+    apiRequest.mockResolvedValueOnce({
+      tools: [{
+        name: "read_file",
+        title: "读取文件",
+        summary: "读取 workbench 文件。",
+        execution: "inline",
+        configuredEnabled: null,
+        promptEnabled: true,
+        enabled: true,
+        available: false,
+        effectiveEnabled: false,
+        unavailabilityKind: "session",
+        accessLabel: "管理员 QQ 私聊可用",
+        accessDescription: "Web Chat、群聊和普通用户私聊不可用。",
+        availabilityReason: "当前会话不允许读取 Agent workbench 文件。",
+        defaultDescription: "Read a file.",
+        description: "Read a file.",
+        descriptionSource: "default",
+        parameters: { type: "object", properties: {}, required: [] },
+        strict: true
+      }]
+    });
+    const wrapper = mount(ToolCatalogSettings, {
+      props: { modelValue: toolsDraft(), bash: bashDraft() },
+      global: { stubs: { DialogOverlay: dialogStub() } }
+    });
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("管理员 QQ 私聊可用");
+    expect(wrapper.text()).not.toContain("运行环境异常");
+    await wrapper.get('button[aria-label="查看 读取文件 详情"]').trigger("click");
+    expect(wrapper.get('[role="dialog"]').text()).toContain("适用会话");
+    expect(wrapper.get('[role="dialog"]').text()).not.toContain("运行环境");
   });
 
   it("edits the shared no_reply poke setting from the tool detail", async () => {

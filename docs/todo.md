@@ -16,7 +16,7 @@
 ## 已有基线
 
 - [x] NapCat 已收敛为独立 Docker 组件，Core Native/Docker 共用专用 OneBot listener、token 和内联媒体契约。
-- [x] 当前 `npm run verify` 通过 165 个 Vitest 文件、910 项单元/集成测试、独立 runtime smoke 的 14 项测试和 33 项 E2E；当前视觉回归 8/8 通过，并已检查桌面/移动端、light/dark 的状态、Agent 和 Provider 截图。
+- [x] 2026-07-14 基线的 `npm run verify` 通过 165 个 Vitest 文件、910 项单元/集成测试、独立 runtime smoke 的 14 项测试和 33 项 E2E；该次视觉回归 8/8 通过，并已检查桌面/移动端、light/dark 的状态、Agent 和 Provider 截图。
 - [x] 主业务数据与 session queue 已迁移到 SQLite，并保留现有前向迁移规则。
 - [x] `npm run architecture` 已进入 `npm run verify`，当前依赖边界、public API、durable codec、ToolRegistry 与尺寸预算门禁通过。
 - [x] SQLite 恢复点 manifest v2 已覆盖默认 Plana 与全部注册/磁盘发现 Agent 双库，`npm run backup:gate` 17 项通过并兼容 v1。
@@ -201,6 +201,13 @@
   - 当前生产特别核对三个 NapCat 容器只有两条已建立 OneBot 连接的差异；容器 `healthy` 或 CLI `connected=unknown` 不能替代三个账号逐一真实在线和定向外发证据。
   - 任一数据完整性、重复实例、账号串发、路径越界、媒体错误、权限绕过、恢复失败或生产边界被触碰都阻断部署并按对应功能 commit 回滚。
 
+- [ ] **DEPLOY-FIX-005｜P1｜双环境双 QQ 迁移与上线验收**
+  - macOS 使用 Native Core + 多 NapCat Docker，Linux/WSL 使用 Docker Core + 多 NapCat Docker；两端都必须由拥有仓库与 workspace 的非 root 用户通过根 `./sunabot.sh` 操作。已有实例按类型完成停服、恢复点、迁移、启动和回滚演练；fresh install 只初始化当前结构并验证回滚路径。禁止旧单容器、旧单 Agent 与新运行时并行。
+  - 服务端拉取目标提交后先分类 fresh install、旧单容器、旧单 Agent 或当前多 Agent：fresh install 只初始化当前 schema，不运行旧布局迁移；旧单容器严格执行 `docs/migrations/one-container-to-split-runtime.md`，旧单 Agent 严格执行 `docs/migrations/single-agent-to-multi-agent.md`；完成旧布局迁移后与当前多 Agent 一样继续执行本版 schema 前向升级、远端 workspace 自有记忆导出/提案/重整，以及表情数据库记录与文件配对核验，不能复用本机记忆内容、row ID、提案或迁移报告，也不能重复执行已完成迁移。
+  - 两端分别验证双 QQ 私聊、群聊、@、引用、文字、图片、文件、Base64 媒体、账号定向外发、异步 callback、outbox、Agent/SQLite/queue 隔离、重启与冷启动恢复；同时核对 OneBot token、连接 owner、account runtime daemon 单实例和全部旧进程退出。
+  - 功能验收还必须覆盖：每 Agent 最多 9 张必填备注自拍素材、节点严格选择 1—3 张已知唯一 ID；表情生成、上传、数据库/文件配对与真实 `[/key]` 外发；群聊编排器精确 JSON 字段、候选消息 ID 与 deferred 原始结果不变；记忆重整逐 Agent/来源前后数量、原恢复点、changed recovery 和签名完成报告。
+  - 验收证据必须记录准确 Git commit、运行模式、恢复点 ID、迁移报告、记忆前后计数、数据库/文件配对摘要、`status`/`doctor`、真实收发结果和回滚路径；单端 fixture、容器 healthy、端口监听或受控 E2E 不能替代双环境双 QQ 现场证据。
+
 - [x] **WEBUI-DESIGN-001｜P1｜Nothing Design 视觉、功能与交互重审**
   - 仅在 `INTEGRATION-001` 功能冒烟通过后开始，使用 `$nothing-design` 对全部管理台页面做逐屏审查并实施修正；先确认起始模式，再同时交付一等质量的 light/dark。所需字体为 Doto、Space Grotesk 与 Space Mono，必须随构建本地打包，不依赖线上 Google Fonts。
   - 每屏只保留主、次、三级信息层级，以留白、排版、连续网格和必要分割线组织内容；禁止渐变、阴影、模糊、卡片套卡片、圆角卡片拼贴、装饰性色点、无功能动画、toast 和 skeleton。状态色只用于真实数据状态，用户可见文案只保留名称、状态、动作和结果。
@@ -260,7 +267,7 @@
   - 日志按回答、编排器、记忆压缩和其他统计调用次数与 Token；记忆拆分为工作与长期记忆、用户画像。工作记忆合并和长期记忆晋升由同一次模型调用完成，不重复虚构长期记忆调用。
   - 群聊详情展示累计、保留、可见、用户、回答和内部消息数，并显示同口径模型调用统计；页面可见且已选中会话时每 10 秒刷新。
   - 完成：失败且无 usage 的请求仍计入调用次数，显式传输重试逐次计数；Deferred Codex 和自拍改写保留会话、阶段与尝试上下文；统计写入 SQLite 聚合表并按完整会话 ID 精确读取。
-  - 证据：SQLite 聚合、精确会话筛选、失败调用、显式重试、Retry-After、正文断流、取消预检、Deferred Codex 终态竞争、自拍改写、会话消息分解和响应式面板均有回归测试；当前全量 165 个 Vitest 文件、910 项测试通过。
+  - 证据：SQLite 聚合、精确会话筛选、失败调用、显式重试、Retry-After、正文断流、取消预检、Deferred Codex 终态竞争、自拍改写、会话消息分解和响应式面板均有回归测试；当次全量 165 个 Vitest 文件、910 项测试通过。
 
 - [x] **WEBUI-FIX-011｜Bash 与 Codex 能力状态**
   - 工具开关始终可配置；配置启用状态持续展示，健康能力不额外标记，只有能力异常时显示原因；Codex Worker 可执行；Bash 仅在通过 bubblewrap 隔离探针的运行环境可执行。
@@ -364,7 +371,7 @@
   - 请求日志按回答、编排器、记忆压缩和其他记录模型调用；记忆压缩使用工作与长期记忆、用户画像两个真实调用类别，兼容旧 `working`、`long_term` 日志但不重复计数。
   - 日志页展示全局调用次数与 Token；每个群聊详情展示累计、保留、可见、用户、回答和内部消息数，以及 Token 和模型调用分类。
   - 完成：`model_call_aggregates` 与请求日志在同一事务增量写入，旧库前向重建聚合，分类总量无重复计数，按完整会话 ID 精确聚合，失败请求和实际传输重试如实计数。
-  - 证据：聚合前向迁移、缓存 Token、失败调用、Provider 状态与正文重试、Deferred Codex 迟到用量、自拍改写、会话统计与响应式面板全部通过回归；当前全量 165 个 Vitest 文件、910 项测试通过。
+  - 证据：聚合前向迁移、缓存 Token、失败调用、Provider 状态与正文重试、Deferred Codex 迟到用量、自拍改写、会话统计与响应式面板全部通过回归；当次全量 165 个 Vitest 文件、910 项测试通过。
 
 - [ ] **DATA-005｜P1｜记忆索引与管理分页**（AUD-007）
   - FTS5 或增量常驻索引，管理 API 不再全量读取；保持现有召回语义。

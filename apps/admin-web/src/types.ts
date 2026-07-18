@@ -24,6 +24,7 @@ export type WebsearchToolProvider = "tavily";
 export type GenerateImgToolProvider = "codex-image-gen" | "custom";
 export type ToolName = string;
 export type ToolExecutionMode = "inline" | "deferred";
+export type ToolUnavailabilityKind = "runtime" | "session";
 export interface ToolOverride {
   enabled?: boolean;
   description?: string;
@@ -121,6 +122,9 @@ export interface BotConfig {
   tools: BotToolSettings;
   bash: {
     enabled: boolean;
+    adminPrivateBackend: "native" | "docker";
+    auditModel: string;
+    strictMode: boolean;
     allowGroup: boolean;
     adminOnly: boolean;
     workspaceOnly: boolean;
@@ -381,6 +385,11 @@ export interface SunaTool {
   configurable?: boolean;
   availabilityReason?: string;
   unavailableReason?: string;
+  unavailabilityKind?: ToolUnavailabilityKind;
+  accessLabel?: string;
+  accessDescription?: string;
+  executionBackend?: "native" | "docker";
+  runtimeReasonCode?: string;
   defaultDescription?: string;
   promptDescription?: string;
   description: string;
@@ -428,6 +437,7 @@ export interface OrchestratorDecisionResult {
   status?: "completed" | "failed";
   shouldReply: boolean;
   reason: string;
+  replyToMessageId?: string;
   raw: string;
 }
 
@@ -556,6 +566,7 @@ export interface ImageHistoryRecord {
 export interface SelfieReferenceImage {
   id: string;
   fileName: string;
+  note: string;
   sizeBytes: number;
   width: number;
   height: number;

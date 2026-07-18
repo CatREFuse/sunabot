@@ -117,6 +117,7 @@ const agentScopedPrefixes = [
   "/api/tools",
   "/api/config",
   "/api/status",
+  "/api/emojis",
   "/api/selfie-references"
 ];
 

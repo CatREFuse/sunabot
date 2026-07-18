@@ -10,6 +10,7 @@
 - 创建恢复点时先读取注册主库和 Agent 数据目录的并集。注册 Agent 缺库、单边数据库、未注册 Agent 数据库、非法 ID 或不安全路径都会终止备份。
 - 所有数据库依次执行 `wal_checkpoint(TRUNCATE)`，随后全部持有 `BEGIN EXCLUSIVE` 写锁，再使用 SQLite backup API 复制。
 - 临时目录只有在全部数据库 checksum、`integrity_check`、`foreign_key_check`、当前 schema 必需表、表记录数和各 Agent queue 状态机不变量通过后才原子发布。
+- 临时恢复点会写入目录所有权记录，并在发布前后复核 workspace、备份根目录父链、目录 inode、文件 inode/link count、大小与摘要；异常收尾只处理仍由本次恢复点所有权记录证明的文件，外部替换或缺少所有权证据的目录会被隔离并保留原物。
 
 新恢复点使用 manifest v2，逐项记录安全的 Agent ID、数据库类型、workspace 相对源路径、备份文件名和各 Agent queue 不变量。旧 manifest v1 恢复点仍可校验和恢复，其范围仅包含默认 Plana 双库。manifest 是单项备份清单，可以使用 JSON；业务消息、日志和记忆仍只存 SQLite，不新增 JSON/JSONL 持久化。
 
@@ -65,7 +66,7 @@ node tooling/workspace/sqlite-recovery-cli.mjs rollback \
   --target-workspace /srv/sunabot/restore-staging
 ```
 
-回滚只删除 journal 中记录且类型、大小、SHA-256 仍匹配的恢复产物；未知替换保持原样并返回冲突。恢复、回滚、演练、保留清理和 stale partial 清理都会逐级检查绝对路径父链，用户符号链接路径不会写入或删除外部内容。
+回滚只删除 journal 中记录且类型、大小、SHA-256 仍匹配的恢复产物；未知替换保持原样并返回冲突。恢复、回滚、演练、保留清理和 stale partial 清理都会逐级检查绝对路径父链，用户符号链接路径不会写入或删除外部内容。lock、partial 和已发布目录的删除均采用身份与内容的比较并交换检查；检测到 successor 或路径替换时返回冲突，不删除新对象。
 
 校验通过后，再在服务停止状态下把旧 `business/data` 与 `business/agents/*/data` 移入独立回滚目录，并切换已验证的恢复目录。不得删除旧数据库，也不得在运行中的数据库上原地覆盖。
 

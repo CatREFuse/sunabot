@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AttachmentWorkerError,
   AttachmentWorkerSupervisor,
@@ -136,7 +136,8 @@ describe("AttachmentWorkerSupervisor", () => {
   it("enforces work-directory and RSS limits with small controlled fixtures", async () => {
     const workDirSupervisor = fixtureSupervisor({
       monitorIntervalMs: 10,
-      maxWorkDirBytes: 32
+      maxWorkDirBytes: 32,
+      measureProcessGroupRssBytes: async () => 0
     });
     await expect(workDirSupervisor.run(task("workdir", { mode: "write-and-hang", bytes: 64 })))
       .rejects.toMatchObject({ code: "worker_workdir_limit" });
@@ -148,6 +149,121 @@ describe("AttachmentWorkerSupervisor", () => {
     });
     await expect(rssSupervisor.run(task("rss", { mode: "hang" })))
       .rejects.toMatchObject({ code: "worker_rss_limit" });
+  });
+
+  it("keeps the work-directory limit active when the RSS probe fails", async () => {
+    const supervisor = fixtureSupervisor({
+      monitorIntervalMs: 10,
+      maxWorkDirBytes: 32,
+      measureWorkDirBytes: async () => 64,
+      measureProcessGroupRssBytes: async () => {
+        throw new Error("RSS probe unavailable");
+      }
+    });
+
+    await expect(supervisor.run(task("rss-probe-failed", { mode: "hang" }))).rejects.toMatchObject({
+      code: "worker_workdir_limit",
+      details: { workDirBytes: 64 }
+    });
+  });
+
+  it("keeps the RSS limit active when the work-directory probe fails", async () => {
+    const supervisor = fixtureSupervisor({
+      monitorIntervalMs: 10,
+      maxRssBytes: 100,
+      measureWorkDirBytes: async () => {
+        throw new Error("work-directory probe unavailable");
+      },
+      measureProcessGroupRssBytes: async () => 101
+    });
+
+    await expect(supervisor.run(task("workdir-probe-failed", { mode: "hang" }))).rejects.toMatchObject({
+      code: "worker_rss_limit",
+      details: { rssBytes: 101 }
+    });
+  });
+
+  it("keeps monitoring until timeout when both resource probes fail", async () => {
+    const measureWorkDirBytes = vi.fn(async () => {
+      throw new Error("work-directory probe unavailable");
+    });
+    const measureProcessGroupRssBytes = vi.fn(async () => {
+      throw new Error("RSS probe unavailable");
+    });
+    const supervisor = fixtureSupervisor({
+      timeoutMs: 80,
+      monitorIntervalMs: 10,
+      measureWorkDirBytes,
+      measureProcessGroupRssBytes
+    });
+
+    await expect(supervisor.run(task("both-probes-failed", { mode: "hang" }))).rejects.toMatchObject({
+      code: "worker_timeout"
+    });
+    expect(measureWorkDirBytes.mock.calls.length).toBeGreaterThan(0);
+    expect(measureProcessGroupRssBytes.mock.calls.length).toBeGreaterThan(0);
+  });
+
+  it("waits for a delayed work-directory limit after the RSS probe rejects first", async () => {
+    const workDirProbe = deferred<number>();
+    const rssProbe = deferred<number>();
+    const measureWorkDirBytes = vi.fn(() => workDirProbe.promise);
+    const measureProcessGroupRssBytes = vi.fn(() => rssProbe.promise);
+    const supervisor = fixtureSupervisor({
+      monitorIntervalMs: 10,
+      maxWorkDirBytes: 32,
+      measureWorkDirBytes,
+      measureProcessGroupRssBytes
+    });
+    let settled = false;
+    const result = supervisor.run(task("delayed-probe-order", { mode: "hang" }));
+    void result.then(
+      () => { settled = true; },
+      () => { settled = true; }
+    );
+    await vi.waitFor(() => {
+      expect(measureWorkDirBytes).toHaveBeenCalledTimes(1);
+      expect(measureProcessGroupRssBytes).toHaveBeenCalledTimes(1);
+    });
+
+    rssProbe.reject(new Error("RSS probe unavailable"));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(settled).toBe(false);
+    workDirProbe.resolve(64);
+
+    await expect(result).rejects.toMatchObject({
+      code: "worker_workdir_limit",
+      details: { workDirBytes: 64 }
+    });
+  });
+
+  it("preserves the resource limit without an unhandled rejection when group termination throws", async () => {
+    const signalError = Object.assign(new Error("process-group signal failed"), { code: "EIO" });
+    const processKill = vi.spyOn(process, "kill").mockImplementationOnce(() => {
+      throw signalError;
+    });
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => { unhandled.push(reason); };
+    process.on("unhandledRejection", onUnhandled);
+    const supervisor = fixtureSupervisor({
+      monitorIntervalMs: 10,
+      maxWorkDirBytes: 32,
+      measureWorkDirBytes: async () => 64,
+      measureProcessGroupRssBytes: async () => 0
+    });
+
+    try {
+      await expect(supervisor.run(task("termination-signal-failed", { mode: "hang" }))).rejects.toMatchObject({
+        code: "worker_workdir_limit",
+        details: { workDirBytes: 64 }
+      });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(processKill).toHaveBeenCalledTimes(2);
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+      processKill.mockRestore();
+    }
   });
 
   it("checks final work-directory bytes before accepting a fast result", async () => {
@@ -212,6 +328,16 @@ function workDir(taskId: string) {
 
 function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
 }
 
 function fixtureWorkerSource() {

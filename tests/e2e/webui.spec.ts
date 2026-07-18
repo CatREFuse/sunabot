@@ -169,7 +169,8 @@ test("Agent 设置只保留有效且唯一的配置入口", async ({ page }) => 
 
   await page.goto("/agent-settings/bash");
   await expect(page.getByLabel("启用 Bash")).toHaveCount(0);
-  await expect(page.getByLabel("仅管理员")).toBeVisible();
+  await expect(page.getByLabel("管理员身份门禁")).toBeVisible();
+  await expect(page.getByLabel("管理员私聊后端")).toBeVisible();
 });
 
 function pixelAlpha(data: Buffer, width: number, channels: number, x: number, y: number) {
@@ -372,22 +373,30 @@ test("Web Chat 以管理员身份发送并保持独立的网页消息流", async
   expect(sendButtonStyle.background).toBe("rgba(0, 0, 0, 0)");
 });
 
-test("自拍参考图可独立预览、删除和上传", async ({ page }) => {
+test("自拍参考图可预览、编辑备注、删除和逐图备注上传", async ({ page }) => {
   const state = await installMockApi(page);
   await page.goto("/images");
 
-  await expect(page.getByText("3 / 3 张", { exact: true })).toBeVisible();
+  await expect(page.getByText("3 / 9 张", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "管理参考图", exact: true }).click();
   const manager = page.getByRole("dialog", { name: "自拍参考图" });
   await expect(manager).toBeVisible();
+  await expect(manager.getByText("素材库最多 9 张，每次自拍选用 1–3 张", { exact: true })).toBeVisible();
 
-  await manager.getByRole("button", { name: "查看原图 01-neutral-face.png" }).first().click();
+  await manager.getByRole("button", { name: "编辑备注 常服正面" }).click();
+  const editDialog = page.getByRole("dialog", { name: "编辑图片备注" });
+  await editDialog.getByLabel("01-neutral-face.png 的备注").fill("泳装");
+  await editDialog.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(manager.getByText("备注已保存", { exact: true })).toBeVisible();
+  expect(state.selfieReferences[0]?.note).toBe("泳装");
+
+  await manager.getByRole("button", { name: "查看原图 泳装" }).first().click();
   const preview = page.getByRole("dialog", { name: "自拍参考图预览" });
   await expect(preview).toBeVisible();
   await expect(preview.locator('img[src*="variant=original"]')).toBeVisible();
   await preview.getByRole("button", { name: "关闭预览" }).click();
 
-  await manager.getByRole("button", { name: "删除 01-neutral-face.png" }).click();
+  await manager.getByRole("button", { name: "删除 泳装" }).click();
   await expect(page.getByRole("heading", { name: "删除这张参考图？" })).toBeVisible();
   await page.getByRole("button", { name: "删除", exact: true }).click();
   await expect(manager.getByText("参考图已删除", { exact: true })).toBeVisible();
@@ -399,8 +408,12 @@ test("自拍参考图可独立预览、删除和上传", async ({ page }) => {
     mimeType: "image/png",
     buffer: Buffer.from("replacement-image")
   });
+  const uploadDialog = page.getByRole("dialog", { name: "填写图片备注" });
+  await uploadDialog.getByLabel("replacement.png 的备注").fill("女仆装");
+  await uploadDialog.getByRole("button", { name: "保存并上传", exact: true }).click();
   await expect(manager.getByText("1 张已保存", { exact: true })).toBeVisible();
   expect(state.selfieReferences).toHaveLength(3);
+  expect(state.selfieReferences.at(-1)?.note).toBe("女仆装");
   expect(state.patchRequests).toHaveLength(0);
 
   await manager.getByRole("button", { name: "关闭", exact: true }).click();
@@ -754,21 +767,33 @@ test("工具目录支持启停、全局说明和继承说明恢复", async ({ pa
     const row = page.locator("article").filter({ has: page.getByText(id, { exact: true }) });
     await expect(row.getByText("配置已启用", { exact: true })).toBeVisible();
     await expect(row.getByText("能力可用", { exact: true })).toHaveCount(0);
-    await expect(row.getByText("能力异常", { exact: true })).toHaveCount(0);
+    await expect(row.getByText("运行环境异常", { exact: true })).toHaveCount(0);
     await row.getByLabel(`启用 ${title}`).uncheck({ force: true });
     await expect(row.getByText("配置已停用", { exact: true })).toBeVisible();
     await expect(row.getByText("能力可用", { exact: true })).toHaveCount(0);
-    await expect(row.getByText("能力异常", { exact: true })).toHaveCount(0);
+    await expect(row.getByText("运行环境异常", { exact: true })).toHaveCount(0);
     await row.getByLabel(`启用 ${title}`).check({ force: true });
   }
+
+  const bashRow = page.locator("article").filter({ has: page.getByText("workspace_bash", { exact: true }) });
+  await expect(bashRow.getByText("管理员 QQ 私聊可用", { exact: true })).toBeVisible();
+  await bashRow.getByRole("button", { name: "查看 Bash 详情" }).click();
+  const bashDialog = page.getByRole("dialog", { name: "Bash" });
+  await expect(bashDialog.getByText("适用会话", { exact: true })).toBeVisible();
+  await expect(bashDialog.getByText("管理员私聊后端", { exact: true })).toBeVisible();
+  await expect(bashDialog.getByText("Native", { exact: true })).toBeVisible();
+  await bashDialog.getByRole("button", { name: "关闭工具详情" }).click();
+  await expect(page.getByText("已同步", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("启用 Bash")).toBeChecked();
+  await expect(page.getByLabel("启用 Codex")).toBeChecked();
 
   for (const id of ["activate_skill", "read_skill_resource"] as const) {
     const row = page.locator("article").filter({ has: page.getByText(id, { exact: true }) });
     await expect(row.getByText("能力可用", { exact: true })).toHaveCount(0);
-    await expect(row.getByText("能力异常", { exact: true })).toHaveCount(0);
+    await expect(row.getByText("运行环境异常", { exact: true })).toHaveCount(0);
   }
   const unavailableSkillRow = page.locator("article").filter({ has: page.getByText("run_skill_script", { exact: true }) });
-  await expect(unavailableSkillRow.getByText("能力异常", { exact: true })).toBeVisible();
+  await expect(unavailableSkillRow.getByText("运行环境异常", { exact: true })).toBeVisible();
   await expect(unavailableSkillRow.getByText("当前环境没有可用的 Skill 脚本审计执行器。", { exact: true })).toBeVisible();
 
   await page.getByLabel("启用 网页搜索").uncheck({ force: true });

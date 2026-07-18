@@ -164,7 +164,8 @@ export async function runtime_enqueueConversationMemory(this: RuntimeHost, recor
       userId: record.userId,
       groupId: record.groupId
     }, messages, {
-      committedThrough: record.memoryCompressedThroughMessageCount
+      committedThrough: record.memoryCompressedThroughMessageCount,
+      reconcileGroupHistory: true
     });
   }
 export function runtime_scheduleMemoryDrain(this: RuntimeHost) {

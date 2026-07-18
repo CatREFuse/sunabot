@@ -60,16 +60,26 @@ const conversation = {
 };
 
 describe("ConversationQuickControls", () => {
-  it("keeps reply controls outside and summarizes token usage in one widget", async () => {
+  it("renders the unified title bar, compact controls and usage widgets", async () => {
     const wrapper = shallowMount(ConversationQuickControls, { props: { conversation, stats } });
 
-    expect(wrapper.findAllComponents(ToggleSwitch).map((toggle) => toggle.props("label"))).toEqual(["启动", "编排器"]);
+    expect(wrapper.get("#conversation-title").text()).toBe("产品讨论群");
+    expect(wrapper.findAllComponents(ToggleSwitch).map((toggle) => toggle.props("label"))).toEqual(["回复", "编排"]);
     expect(wrapper.get('[data-slot="token-usage-widget"]').text()).toContain("128.4K");
     expect(wrapper.get('[data-slot="token-usage-widget"]').attributes("title")).toBe("128,400 Token");
-    expect(wrapper.findComponent(ConversationOrchestratorStatus).exists()).toBe(true);
+    expect(wrapper.get('[aria-label="Token 计量格"], .span-widget__cells').findAll("i")).toHaveLength(1);
+    expect(wrapper.findAll(".span-widget__cells")[1]!.findAll("i")).toHaveLength(1);
+    expect(wrapper.findComponent(ConversationOrchestratorStatus).props()).toMatchObject({ enabled: true, variant: "widget" });
 
     await wrapper.get('[data-slot="token-usage-widget"]').trigger("click");
     expect(wrapper.emitted("usage")).toEqual([[]]);
+
+    await wrapper.get('button[aria-label="会话设置"]').trigger("click");
+    await wrapper.get('button[aria-label="刷新消息"]').trigger("click");
+    await wrapper.get('button[aria-label="请求日志"]').trigger("click");
+    expect(wrapper.emitted("settings")).toEqual([[]]);
+    expect(wrapper.emitted("refresh")).toEqual([[]]);
+    expect(wrapper.emitted("logs")).toEqual([[]]);
   });
 
   it("keeps the orchestrator visible but disabled until replies are started", async () => {
@@ -78,9 +88,9 @@ describe("ConversationQuickControls", () => {
     });
     const toggles = wrapper.findAllComponents(ToggleSwitch);
 
-    expect(toggles.map((toggle) => toggle.props("label"))).toEqual(["启动", "编排器"]);
+    expect(toggles.map((toggle) => toggle.props("label"))).toEqual(["回复", "编排"]);
     expect(toggles[1]!.props("disabled")).toBe(true);
-    expect(wrapper.findComponent(ConversationOrchestratorStatus).exists()).toBe(false);
+    expect(wrapper.findComponent(ConversationOrchestratorStatus).props("enabled")).toBe(false);
 
     await toggles[0]!.vm.$emit("update:modelValue", true);
     expect(wrapper.emitted("reply")).toEqual([[true]]);
@@ -94,7 +104,8 @@ describe("ConversationQuickControls", () => {
       }
     });
 
-    expect(wrapper.findAllComponents(ToggleSwitch).map((toggle) => toggle.props("label"))).toEqual(["启动"]);
+    expect(wrapper.findAllComponents(ToggleSwitch).map((toggle) => toggle.props("label"))).toEqual(["回复"]);
     expect(wrapper.get('[data-slot="token-usage-widget"]').text()).toContain("128.4K");
+    expect(wrapper.findComponent(ConversationOrchestratorStatus).exists()).toBe(false);
   });
 });

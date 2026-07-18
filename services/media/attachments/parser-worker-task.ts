@@ -77,6 +77,7 @@ export default async function runParserWorkerTask(
       sheetName: section.kind === "sheet" ? section.title.replace(/^工作表\s*/, "") : undefined,
       title: section.title
     })), {
+      pageCount: extraction.pageCount,
       sectionCount: extraction.sections.length,
       textCharacterCount: extraction.textCharacterCount,
       alreadyTruncated: false

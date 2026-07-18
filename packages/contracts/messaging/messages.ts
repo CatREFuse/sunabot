@@ -44,6 +44,10 @@ export interface InboundMessageV1 {
   mentionedSelf: boolean;
 }
 
+export type OutboundContentSegmentV1 =
+  | { type: "text"; text: string }
+  | { type: "image"; imageIndex: number };
+
 export interface OutboundMessageV1 {
   schemaVersion: 1;
   id: string;
@@ -55,6 +59,7 @@ export interface OutboundMessageV1 {
   groupId?: number;
   text: string;
   media: MediaAssetRefV1[];
+  contentSegments?: OutboundContentSegmentV1[];
   replyToMessageId?: number;
   idempotencyKey?: string;
 }

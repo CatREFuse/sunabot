@@ -6,7 +6,11 @@ import {
   SunaRuntime
 } from "../../src/runtime.js";
 import { appendRequestLog } from "../../src/requestLog.js";
-import { noReplyPokeEnvelope } from "../../packages/contracts/session/runtimeMessages.js";
+import {
+  decodeReplyDebounce,
+  noReplyPokeEnvelope,
+  type UserGroupOrchestratorResultV1
+} from "../../packages/contracts/session/runtimeMessages.js";
 import { createAdminTestConfig } from "./admin-fixtures.js";
 import type { ParsedIncomingMessage } from "../../src/types.js";
 import { BroadcastStormDetector } from "../../services/orchestration/broadcastStormDetector.js";
@@ -537,7 +541,7 @@ describe("runtime reply scheduling helpers", () => {
     const config = createAdminTestConfig("/tmp/sunabot-runtime-router-test");
     config.bot.orchestrator.enabled = true;
     const runtime = new SunaRuntime(config, { attachmentService: {} as never });
-    const raw = '{"should_reply":false,"reason":"当前讨论无需介入。"}';
+    const raw = '{"should_reply":false,"reason":"当前讨论无需介入。","reply_to_message_id":null}';
     const complete = vi.fn(async () => raw);
     const record = {
       id: "group:3003",
@@ -563,7 +567,7 @@ describe("runtime reply scheduling helpers", () => {
       runUserGroupchatOrchestrator(
         incoming: ParsedIncomingMessage,
         options: { captureSequence: number }
-      ): Promise<boolean>;
+      ): Promise<UserGroupOrchestratorResultV1 | undefined>;
     };
     internals.conversationRecords.set(record.id, record);
     internals.getProviderForModel = () => ({ complete });
@@ -571,7 +575,7 @@ describe("runtime reply scheduling helpers", () => {
 
     await expect(internals.runUserGroupchatOrchestrator(groupIncoming("普通群消息"), {
       captureSequence: 1
-    })).resolves.toBe(false);
+    })).resolves.toBeUndefined();
 
     expect(record.messages.at(-1)).toMatchObject({
       role: "assistant",
@@ -596,7 +600,7 @@ describe("runtime reply scheduling helpers", () => {
     const complete = vi.fn(async (
       _systemPrompt: string,
       _messages: Array<{ role: string; content: string }>
-    ) => '{"should_reply":false,"reason":"无需回复。"}');
+    ) => '{"should_reply":false,"reason":"无需回复。","reply_to_message_id":null}');
     const record = {
       id: "group:3003",
       scope: "user_group" as const,
@@ -653,7 +657,7 @@ describe("runtime reply scheduling helpers", () => {
       runUserGroupchatOrchestrator(
         incoming: ParsedIncomingMessage,
         options: { captureSequence: number }
-      ): Promise<boolean>;
+      ): Promise<UserGroupOrchestratorResultV1 | undefined>;
     };
     const incoming = groupIncoming("这两张有什么区别");
     incoming.media = [
@@ -666,13 +670,13 @@ describe("runtime reply scheduling helpers", () => {
 
     await expect(internals.runUserGroupchatOrchestrator(incoming, {
       captureSequence: 3
-    })).resolves.toBe(false);
+    })).resolves.toBeUndefined();
 
     const requestMessages = complete.mock.calls[0]?.[1] ?? [];
     const userMessage = [...requestMessages].reverse().find((message) => message.role === "user");
     const payload = JSON.parse(userMessage?.content ?? "{}") as {
-      conversation?: { recentMessages?: string[] };
-      currentMessage?: { text?: string };
+      conversation?: { recentMessages?: string[]; replyCandidateMessageIds?: string[] };
+      currentMessage?: { messageId?: string; text?: string };
     };
     const recentMessages = payload.conversation?.recentMessages ?? [];
     expect(recentMessages).toEqual([
@@ -681,6 +685,8 @@ describe("runtime reply scheduling helpers", () => {
       expect.stringContaining("这两张有什么区别 [图片] [图片]")
     ]);
     expect(recentMessages.map((message) => message.match(/\[图片\]/g)?.length ?? 0)).toEqual([1, 1, 2]);
+    expect(payload.conversation?.replyCandidateMessageIds).toEqual(["999", "1000", "1001"]);
+    expect(payload.currentMessage?.messageId).toBe("1001");
     expect(payload.currentMessage?.text).toBe("这两张有什么区别 [图片] [图片]");
     expect(JSON.stringify(payload)).not.toContain("example.test");
   });
@@ -714,7 +720,7 @@ describe("runtime reply scheduling helpers", () => {
       runUserGroupchatOrchestrator(
         incoming: ParsedIncomingMessage,
         options: { captureSequence: number }
-      ): Promise<boolean>;
+      ): Promise<UserGroupOrchestratorResultV1 | undefined>;
     };
     internals.conversationRecords.set(record.id, record);
     internals.getProviderForModel = () => ({ complete });
@@ -723,7 +729,7 @@ describe("runtime reply scheduling helpers", () => {
 
     await expect(internals.runUserGroupchatOrchestrator(groupIncoming("普通群消息"), {
       captureSequence: 1
-    })).resolves.toBe(false);
+    })).resolves.toBeUndefined();
 
     expect(record.messages.at(-1)).toMatchObject({
       role: "assistant",
@@ -762,7 +768,7 @@ describe("runtime reply scheduling helpers", () => {
       .mockRejectedValueOnce(new Error("attempt 1 failed"))
       .mockRejectedValueOnce(new Error("attempt 2 failed"))
       .mockRejectedValueOnce(new Error("attempt 3 failed"))
-      .mockResolvedValueOnce('{"should_reply":true,"reason":"需要回复。"}');
+      .mockResolvedValueOnce('{"should_reply":true,"reason":"需要回复。","reply_to_message_id":"1001"}');
     const record = {
       id: "group:3003",
       scope: "user_group" as const,
@@ -787,7 +793,7 @@ describe("runtime reply scheduling helpers", () => {
       runUserGroupchatOrchestrator(
         incoming: ParsedIncomingMessage,
         options: { captureSequence: number }
-      ): Promise<boolean>;
+      ): Promise<UserGroupOrchestratorResultV1 | undefined>;
     };
     internals.conversationRecords.set(record.id, record);
     internals.getProviderForModel = () => ({ complete });
@@ -796,11 +802,19 @@ describe("runtime reply scheduling helpers", () => {
 
     await expect(internals.runUserGroupchatOrchestrator(groupIncoming("普通群消息"), {
       captureSequence: 1
-    })).resolves.toBe(true);
+    })).resolves.toEqual({
+      schemaVersion: 1,
+      reason: "需要回复。",
+      replyToMessageId: "1001"
+    });
 
     expect(complete).toHaveBeenCalledTimes(4);
     expect(record.messages.at(-1)).toMatchObject({
-      orchestratorDecision: { status: "completed", shouldReply: true }
+      orchestratorDecision: {
+        status: "completed",
+        shouldReply: true,
+        replyToMessageId: "1001"
+      }
     });
     expect(record.orchestratorCheckedMessageCount).toBe(0);
     expect(appendRequestLog).toHaveBeenCalledWith(expect.objectContaining({
@@ -857,7 +871,12 @@ describe("runtime reply scheduling helpers", () => {
     const persistConversationRecords = vi.fn(() => {
       persistedCursors.push(record.orchestratorCheckedMessageCount);
     });
-    const runUserGroupchatOrchestrator = vi.fn(async () => true);
+    const orchestratorResult: UserGroupOrchestratorResultV1 = {
+      schemaVersion: 1,
+      reason: "群友正在等待普拉娜回应。",
+      replyToMessageId: "1001"
+    };
+    const runUserGroupchatOrchestrator = vi.fn(async () => orchestratorResult);
     const gateway = {};
     const internals = runtime as unknown as {
       conversationRecords: Map<string, typeof record>;
@@ -895,6 +914,9 @@ describe("runtime reply scheduling helpers", () => {
     expect(persistedCursors.length).toBeGreaterThan(0);
     expect(persistedCursors.every((cursor) => cursor === 1)).toBe(true);
     expect(enqueueEvent).toHaveBeenCalledTimes(2);
+    expect(enqueueEvent.mock.calls.map(([input]) => decodeReplyDebounce(
+      (input as { payload: unknown }).payload
+    ).orchestratorResult)).toEqual([orchestratorResult, orchestratorResult]);
     errorLog.mockRestore();
   });
 
@@ -929,7 +951,7 @@ describe("runtime reply scheduling helpers", () => {
       runUserGroupchatOrchestrator(
         incoming: ParsedIncomingMessage,
         options: { signal: AbortSignal; captureSequence: number }
-      ): Promise<boolean>;
+      ): Promise<UserGroupOrchestratorResultV1 | undefined>;
     };
     internals.conversationRecords.set(record.id, record);
     internals.getProviderForModel = () => ({ complete });
@@ -939,7 +961,7 @@ describe("runtime reply scheduling helpers", () => {
     await expect(internals.runUserGroupchatOrchestrator(groupIncoming("普通群消息"), {
       signal: controller.signal,
       captureSequence: 1
-    })).resolves.toBe(false);
+    })).resolves.toBeUndefined();
 
     expect(record.messages).toHaveLength(1);
     expect(record.orchestratorCheckedMessageCount).toBe(0);

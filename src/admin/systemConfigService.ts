@@ -6,6 +6,7 @@ import type {
   SystemConfigTurnContext
 } from "../../services/tools/systemConfigTool.js";
 import type { AppConfig, ConversationRecord } from "../types.js";
+import type { WorkspaceBashUnavailableReason } from "../../services/tools/bashCapability.js";
 import type { AgentConfigService } from "./agentConfigService.js";
 import { configRevision } from "./configRevision.js";
 
@@ -20,7 +21,10 @@ export interface SystemConfigRuntime {
   getConversationRecords(): ConversationRecord[];
   getPersonaStatus(): unknown;
   getProviderStatus(): unknown;
-  resolveToolCapabilities(): Promise<{ workspaceBash: boolean }>;
+  resolveToolCapabilities(): Promise<{
+    workspaceBash: boolean;
+    workspaceBashReason?: WorkspaceBashUnavailableReason;
+  }>;
   setConversationReplyEnabled(input: {
     id: string;
     replyEnabled?: boolean;
@@ -153,7 +157,7 @@ export class SystemConfigService {
         maxCalls: config.bot.tools.maxCalls,
         configuredEnabled: configuredToolStates(config)
       },
-      bash: safeBashSettings(config, toolCapabilities.workspaceBash),
+      bash: safeBashSettings(config, toolCapabilities),
       system: safeSystemSettings(config, envelope.fieldStates),
       groups: {
         total: records.length,
@@ -189,7 +193,7 @@ export class SystemConfigService {
       onebot: safeOnebotStatus(onebot),
       persona: safePersonaStatus(runtime.getPersonaStatus()),
       provider: safeProviderStatus(runtime.getProviderStatus()),
-      bash: safeBashSettings(config, toolCapabilities.workspaceBash),
+      bash: safeBashSettings(config, toolCapabilities),
       recovery: { required: asRecord(this.options.getRecoveryStatus()).required === true },
       probe: safeProbe(probe)
     };
@@ -391,27 +395,45 @@ function configuredToolStates(config: AppConfig) {
 async function safeToolCapabilities(runtime: SystemConfigRuntime) {
   try {
     const capabilities = await runtime.resolveToolCapabilities();
-    return { workspaceBash: capabilities.workspaceBash === true };
+    return {
+      workspaceBash: capabilities.workspaceBash === true,
+      ...(capabilities.workspaceBashReason ? {
+        workspaceBashReason: capabilities.workspaceBashReason
+      } : {})
+    };
   } catch {
     return { workspaceBash: false };
   }
 }
 
-function safeBashSettings(config: AppConfig, available: boolean) {
+function safeBashSettings(
+  config: AppConfig,
+  capabilities: { workspaceBash: boolean; workspaceBashReason?: WorkspaceBashUnavailableReason }
+) {
   const configuredEnabled = config.bot.bash.enabled;
   const backend = config.bot.bash.adminPrivateBackend;
-  const unavailableReason = available
-    ? configuredEnabled ? null : "BASH_CONFIG_DISABLED"
-    : backend === "native"
-      ? "BASH_NATIVE_ISOLATION_UNAVAILABLE"
-      : "BASH_DOCKER_ISOLATION_UNAVAILABLE";
+  const available = config.bot.bash.adminOnly && capabilities.workspaceBash;
+  const unavailableReason = !config.bot.bash.adminOnly
+    ? "BASH_ADMIN_IDENTITY_DISABLED"
+    : available
+      ? configuredEnabled ? null : "BASH_CONFIG_DISABLED"
+      : capabilities.workspaceBashReason
+        ?? (backend === "native"
+          ? "BASH_NATIVE_ISOLATION_UNAVAILABLE"
+          : "BASH_DOCKER_ISOLATION_UNAVAILABLE");
   const unavailableMessage = unavailableReason === "BASH_CONFIG_DISABLED"
     ? "Bash 未启用。"
-    : unavailableReason === "BASH_NATIVE_ISOLATION_UNAVAILABLE"
-      ? "Native 后端未通过 bubblewrap 或等价强隔离检查；Bash 已安全关闭，不会回退到宿主 Bash。可切换 Docker 后端后重新检查。"
-      : unavailableReason === "BASH_DOCKER_ISOLATION_UNAVAILABLE"
-        ? "Docker 后端未通过强隔离检查；Bash 已安全关闭，不会使用 Docker socket 或宿主 Bash 回退。"
-        : null;
+    : unavailableReason === "BASH_ADMIN_IDENTITY_DISABLED"
+      ? "管理员身份门禁已关闭，所有会话均不可用。"
+      : unavailableReason === "BASH_AUDIT_UNAVAILABLE"
+        ? "独立 Bash 审计不可用，Bash 已安全关闭。"
+        : unavailableReason === "BASH_WORKBENCH_UNAVAILABLE"
+          ? "当前 Agent workbench 不可用，Bash 已安全关闭。"
+          : unavailableReason === "BASH_NATIVE_ISOLATION_UNAVAILABLE"
+            ? "Native 后端未通过 bubblewrap 或等价强隔离检查；Bash 已安全关闭，不会回退到宿主 Bash。可切换 Docker 后端后重新检查。"
+            : unavailableReason === "BASH_DOCKER_ISOLATION_UNAVAILABLE"
+              ? "Docker 后端未通过强隔离检查；Bash 已安全关闭，不会使用 Docker socket 或宿主 Bash 回退。"
+              : null;
   return {
     enabled: configuredEnabled,
     configuredEnabled,
@@ -423,6 +445,11 @@ function safeBashSettings(config: AppConfig, available: boolean) {
     effectiveEnabled: configuredEnabled && available,
     unavailableReason,
     unavailableMessage,
+    ...(unavailableReason === "BASH_ADMIN_IDENTITY_DISABLED"
+      ? { unavailabilityKind: "session" }
+      : unavailableReason && unavailableReason !== "BASH_CONFIG_DISABLED"
+        ? { unavailabilityKind: "runtime" }
+        : {}),
     isolationRequired: "bubblewrap_or_equivalent",
     rawHostFallbackAllowed: false,
     dockerSocketAllowed: false

@@ -67,6 +67,7 @@ export async function runtime_replyToToolCompletion(
     captureSequence: payload.originalRequest.captureSequence,
     contextThroughSequence: payload.originalRequest.contextThroughSequence,
     threadContext: payload.originalRequest.threadContext,
+    orchestratorResult: payload.originalRequest.orchestratorResult,
     skipGroupThreadPreparation: true,
     messageOrigin: "async_tool_callback",
     seedToolNames: [payload.toolName],

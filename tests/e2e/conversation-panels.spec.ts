@@ -6,8 +6,8 @@ test("会话快捷开关与设置、Token 侧栏保持独立", async ({ page }) 
   await page.goto("/conversations/group%3A10001");
 
   const quick = page.getByLabel("会话快捷操作");
-  const reply = quick.getByLabel("启动", { exact: true });
-  const orchestrator = quick.getByLabel("编排器", { exact: true });
+  const reply = quick.getByLabel("回复", { exact: true });
+  const orchestrator = quick.getByLabel("编排", { exact: true });
   const tokenWidget = quick.getByRole("button", { name: "查看 Token 消耗详情" });
 
   await expect(reply).toBeChecked();
@@ -41,14 +41,14 @@ test("会话快捷开关与设置、Token 侧栏保持独立", async ({ page }) 
   await expect(settingsPanel).toBeHidden();
 });
 
-test("会话侧栏适配移动端且私聊只保留启动开关", async ({ page }) => {
+test("会话侧栏适配移动端且私聊只保留回复开关", async ({ page }) => {
   await installMockApi(page);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/conversations/private%3A20002");
 
   const quick = page.getByLabel("会话快捷操作");
-  await expect(quick.getByLabel("启动", { exact: true })).toBeVisible();
-  await expect(quick.getByLabel("编排器", { exact: true })).toHaveCount(0);
+  await expect(quick.getByLabel("回复", { exact: true })).toBeVisible();
+  await expect(quick.getByLabel("编排", { exact: true })).toHaveCount(0);
 
   await quick.getByRole("button", { name: "查看 Token 消耗详情" }).click();
   const panel = page.getByRole("dialog", { name: "Token 消耗详情" });

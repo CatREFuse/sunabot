@@ -16,6 +16,13 @@ import { recoverStaleDockerOneoffs } from "./docker-recovery.mjs";
 import { buildRuntimeProbe, collectWorkspaceProbeFacts } from "./probe.mjs";
 import { accountRuntimeState, planAccountReconciliation } from "./account-reconciler.mjs";
 import {
+  inspectAccountRuntimeOwner,
+  listAccountRuntimeProcesses,
+  quarantineInvalidAccountRuntimeOwner,
+  removeStaleAccountRuntimeOwner,
+  stopAccountRuntimeProcesses
+} from "./account-runtime-daemon.mjs";
+import {
   beginFirstRunBootstrap,
   rollbackFirstRunBootstrap
 } from "./first-run-state.mjs";
@@ -151,7 +158,11 @@ async function up(context) {
     }
   }
   let baseline = before;
-  if (before.state || before.native.running || before.containers.length > 0) {
+  if (before.state
+    || before.native.running
+    || before.containers.length > 0
+    || before.reconciler.processes.length > 0
+    || before.reconciler.owner.status !== "missing") {
     await down(context);
     baseline = await inspectRuntime(context);
   }
@@ -271,10 +282,32 @@ async function down(context) {
   if (runtime.native.alive && !runtime.native.running) {
     throw new Error(`Native PID ${runtime.native.pid} 与 launcher 记录不匹配；未发送停止信号。`);
   }
-  if (runtime.reconciler.alive && !runtime.reconciler.running) {
-    throw new Error(`账号调和 PID ${runtime.reconciler.pid} 与 launcher 记录不匹配；未发送停止信号。`);
+  if (runtime.reconciler.owner.status === "running"
+    && !runtime.reconciler.processes.some((item) => item.pid === runtime.reconciler.owner.record.pid)) {
+    throw new Error("账号调和 owner 与进程清单不一致；未发送停止信号。");
   }
-  if (runtime.reconciler.running) await stopAccountRuntimeDaemon(context, runtime.reconciler.record);
+  let reconcilerStopError;
+  if (runtime.reconciler.processes.length > 0) {
+    try {
+      await stopAccountRuntimeProcesses({
+        workspace: context.workspace,
+        workspaceId: context.identity,
+        entry: accountRuntimeDaemonEntry(context),
+        processes: runtime.reconciler.processes,
+        timeoutMs: Math.min(context.contract.shutdownTimeoutSeconds * 1_000, 5_000)
+      });
+    } catch (error) {
+      if (runtime.reconciler.owner.status !== "invalid") throw error;
+      reconcilerStopError = error;
+    }
+  }
+  if (runtime.reconciler.owner.status !== "missing" && runtime.reconciler.owner.status !== "invalid") {
+    await removeStaleAccountRuntimeOwner({
+      workspace: context.workspace,
+      workspaceId: context.identity,
+      entry: accountRuntimeDaemonEntry(context)
+    });
+  }
   if (runtime.napcat.matches.length > 0) {
     for (const container of runtime.napcat.matches) {
       await command("docker", ["stop", "--timeout", String(context.contract.shutdownTimeoutSeconds), container.id]).catch(() => {});
@@ -290,6 +323,15 @@ async function down(context) {
     await compose(context, ["--profile", context.contract.coreProfile, "down", "--remove-orphans"]);
   }
   await cleanupRemovedNapcatAccounts(context);
+  if (reconcilerStopError) throw reconcilerStopError;
+  if (runtime.reconciler.owner.status === "invalid") {
+    const quarantinePath = await quarantineInvalidAccountRuntimeOwner({
+      workspace: context.workspace,
+      workspaceId: context.identity,
+      entry: accountRuntimeDaemonEntry(context)
+    });
+    if (quarantinePath) console.log(`无效账号调和 owner 已隔离保留：${quarantinePath}`);
+  }
   await fs.rm(context.statePath, { force: true });
   console.log("Sunabot Core 与 NapCat 已停止。");
 }
@@ -329,15 +371,19 @@ async function collectRuntimeProbeFacts(context) {
       .catch(() => false);
   }
   const onebotReady = runtime.native.running ? await httpReady(onebotPath) : dockerCoreHealthy;
-  const conflicts = [];
+  const conflicts = accountRuntimeConflicts(runtime.reconciler, context);
 
   const docker = await dockerAvailable();
   const compose = docker && await commandSucceeds("docker", ["compose", "version"]);
   const capabilities = {};
   capabilities.accountReconciler = {
-    ok: runtime.reconciler.running,
+    ok: runtime.reconciler.healthy,
     path: context.statePath,
-    detail: runtime.reconciler.running ? `PID ${runtime.reconciler.pid}` : "host reconciler is not running"
+    detail: runtime.reconciler.healthy
+      ? `PID ${runtime.reconciler.owner.record.pid}`
+      : runtime.reconciler.processes.length > 0
+        ? `检测到 ${runtime.reconciler.processes.length} 个未完全登记的 host reconciler`
+        : "host reconciler is not running"
   };
   if (context.mode === "native") {
     const native = await inspectNativeCapabilities(context);
@@ -968,19 +1014,54 @@ async function startNativeCore(context, onebotListenHost) {
 
 async function startAccountRuntimeDaemon(context) {
   const previous = await readState(context.statePath);
-  if (previous?.reconciler?.pid) {
-    const observed = await observeProcess(previous.reconciler.pid);
-    if (processSignatureMatches(previous.reconciler, observed)) return previous.reconciler;
-    if (observed) throw new Error(`账号调和 PID ${previous.reconciler.pid} 已被其他进程复用。`);
+  const current = await inspectAccountRuntime(context, previous?.reconciler);
+  if (current.owner.status === "invalid") {
+    throw new Error(`账号调和 owner 无效：${current.owner.detail ?? "拒绝覆盖。"}`);
+  }
+  if (current.processes.length > 1) {
+    throw new Error(`workspace ${context.identity} 存在 ${current.processes.length} 个账号调和 daemon，检测到 split-brain。`);
+  }
+  if (current.stateAlive && !current.stateMatches) {
+    throw new Error(`账号调和 PID ${previous.reconciler.pid} 已被其他进程复用；拒绝覆盖或终止该进程。`);
+  }
+  if (current.processes.length === 1) {
+    if (current.owner.status !== "running" || current.owner.record.pid !== current.processes[0].pid) {
+      throw new Error("检测到未登记或缺少可信 owner 的账号调和 daemon；请执行 ./sunabot.sh down 后重试。");
+    }
+    const state = await readState(context.statePath);
+    await writeState(context, { ...withoutUpdatedAt(state), reconciler: current.owner.record });
+    return current.owner.record;
+  }
+  if (current.owner.status === "running") {
+    throw new Error("账号调和 owner 声明运行，但进程清单中没有匹配实例。");
+  }
+  if (current.owner.status === "stale") {
+    await removeStaleAccountRuntimeOwner({
+      workspace: context.workspace,
+      workspaceId: context.identity,
+      entry: accountRuntimeDaemonEntry(context)
+    });
   }
   await fs.mkdir(path.dirname(context.reconcilerLog), { recursive: true, mode: 0o700 });
   const log = await fs.open(context.reconcilerLog, "a", 0o600);
-  const entry = path.join(context.root, "tooling/runtime/account-runtime-daemon.mjs");
-  const child = spawn(process.execPath, [entry], {
+  const entry = accountRuntimeDaemonEntry(context);
+  const ownerToken = crypto.randomBytes(32).toString("hex");
+  const child = spawn(process.execPath, [
+    entry,
+    `--workspace-id=${context.identity}`,
+    `--owner-token=${ownerToken}`
+  ], {
     cwd: context.root,
     detached: true,
     stdio: ["ignore", log.fd, log.fd],
     env: { ...nativeProcessEnvironment(context), SUNABOT_WORKSPACE: context.workspace }
+  });
+  let childExit;
+  const exited = new Promise((resolve) => {
+    child.once("exit", (code, signal) => {
+      childExit = { code, signal };
+      resolve(childExit);
+    });
   });
   await new Promise((resolve, reject) => {
     child.once("error", reject);
@@ -988,39 +1069,60 @@ async function startAccountRuntimeDaemon(context) {
   });
   child.unref();
   await log.close();
-  let observed;
+  const deadline = Date.now() + 3_000;
   try {
-    observed = await waitForProcessObservation(child.pid, 3_000);
+    while (Date.now() < deadline) {
+      const owner = await inspectAccountRuntimeOwner({
+        workspace: context.workspace,
+        workspaceId: context.identity,
+        entry
+      });
+      if (owner.status === "invalid") {
+        if (childExit) {
+          await delay(50);
+        } else {
+          await Promise.race([delay(50), exited]);
+        }
+        continue;
+      }
+      if (owner.status === "running") {
+        const processes = await listAccountRuntimeProcesses({
+          workspace: context.workspace,
+          workspaceId: context.identity,
+          entry
+        });
+        if (processes.length > 1) {
+          throw new Error(`workspace ${context.identity} 存在 ${processes.length} 个账号调和 daemon，检测到 split-brain。`);
+        }
+        if (processes.length === 1 && processes[0].pid === owner.record.pid) {
+          const state = await readState(context.statePath);
+          await writeState(context, { ...withoutUpdatedAt(state), reconciler: owner.record });
+          return owner.record;
+        }
+      }
+      if (childExit && owner.status === "missing") {
+        throw new Error(`账号调和 daemon 启动失败（${childExit.signal ?? childExit.code ?? "unknown"}）。`);
+      }
+      await Promise.race([delay(50), exited]);
+    }
+    throw new Error("账号调和 daemon 未在时限内取得 workspace owner。 ");
   } catch (error) {
-    try {
-      process.kill(-child.pid, "SIGTERM");
-    } catch {}
+    const spawned = await listAccountRuntimeProcesses({
+      workspace: context.workspace,
+      workspaceId: context.identity,
+      entry
+    }).catch(() => []);
+    const owned = spawned.filter((item) => item.ownerToken === ownerToken);
+    if (owned.length > 0) {
+      await stopAccountRuntimeProcesses({
+        workspace: context.workspace,
+        workspaceId: context.identity,
+        entry,
+        processes: owned,
+        timeoutMs: 1_000
+      }).catch(() => {});
+    }
     throw error;
-  }
-  const record = {
-    pid: child.pid,
-    signature: observed.signature,
-    entry,
-    processGroup: child.pid,
-    startedAt: new Date().toISOString()
-  };
-  const state = await readState(context.statePath);
-  await writeState(context, { ...withoutUpdatedAt(state), reconciler: record });
-  return record;
-}
-
-async function stopAccountRuntimeDaemon(context, record) {
-  const observed = await observeProcess(record?.pid);
-  if (!processSignatureMatches(record, observed)) {
-    throw new Error(`账号调和 PID ${record?.pid ?? "unknown"} 与 launcher 启动记录不匹配。`);
-  }
-  process.kill(-record.processGroup, "SIGTERM");
-  const deadline = Date.now() + Math.min(context.contract.shutdownTimeoutSeconds * 1_000, 5_000);
-  while (Date.now() < deadline && await processAlive(record.pid)) await delay(100);
-  if (await processAlive(record.pid)) {
-    const current = await observeProcess(record.pid);
-    if (!processSignatureMatches(record, current)) throw new Error(`账号调和 PID ${record.pid} 在停止期间发生变化。`);
-    process.kill(-record.processGroup, "SIGKILL");
   }
 }
 
@@ -1054,16 +1156,7 @@ async function inspectRuntime(context) {
       record: state.core
     };
   }
-  let reconciler = { running: false, alive: false, pid: state?.reconciler?.pid, record: state?.reconciler };
-  if (state?.reconciler?.pid) {
-    const observed = await observeProcess(state.reconciler.pid);
-    reconciler = {
-      running: processSignatureMatches(state.reconciler, observed),
-      alive: Boolean(observed),
-      pid: state.reconciler.pid,
-      record: state.reconciler
-    };
-  }
+  const reconciler = await inspectAccountRuntime(context, state?.reconciler);
   const containers = await labeledContainers(context.identity);
   const legacyContainers = await findLegacyContainers();
   const dockerCore = componentStatus(containers, "core");
@@ -1072,6 +1165,106 @@ async function inspectRuntime(context) {
     .map((item) => item.project)
     .filter((project) => project && project !== context.project && !project.startsWith(`${context.project}-napcat-`)))];
   return { state, native, reconciler, containers, legacyContainers, dockerCore, napcat, foreignProjects };
+}
+
+async function inspectAccountRuntime(context, stateRecord) {
+  const entry = accountRuntimeDaemonEntry(context);
+  const [owner, processes, stateObserved] = await Promise.all([
+    inspectAccountRuntimeOwner({
+      workspace: context.workspace,
+      workspaceId: context.identity,
+      entry
+    }),
+    listAccountRuntimeProcesses({
+      workspace: context.workspace,
+      workspaceId: context.identity,
+      entry
+    }),
+    stateRecord?.pid ? observeProcess(stateRecord.pid) : Promise.resolve(null)
+  ]);
+  const stateMatches = processSignatureMatches(stateRecord, stateObserved);
+  const healthy = Boolean(
+    owner.status === "running"
+    && stateMatches
+    && stateRecord.pid === owner.record.pid
+    && processes.length === 1
+    && processes[0].pid === owner.record.pid
+    && processes[0].safeToSignal
+  );
+  return {
+    healthy,
+    running: healthy,
+    alive: Boolean(stateObserved),
+    pid: stateRecord?.pid,
+    record: stateRecord,
+    stateAlive: Boolean(stateObserved),
+    stateMatches,
+    stateObserved,
+    owner,
+    processes
+  };
+}
+
+export function accountRuntimeConflicts(reconciler, context = {}) {
+  const action = "./sunabot.sh down";
+  const conflicts = [];
+  if (reconciler.processes.length > 1) {
+    conflicts.push({
+      id: "account-reconciler-split-brain",
+      code: "ACCOUNT_RECONCILER_SPLIT_BRAIN",
+      action,
+      detail: `同一 workspace 检测到 ${reconciler.processes.length} 个账号调和 daemon：${reconciler.processes.map((item) => item.pid).join(", ")}`
+    });
+  }
+  if (reconciler.owner.status === "invalid") {
+    conflicts.push({
+      id: "account-reconciler-owner",
+      code: "ACCOUNT_RECONCILER_OWNER_INVALID",
+      path: reconciler.owner.ownerPath,
+      action: "检查 owner 文件并确认对应进程身份",
+      detail: reconciler.owner.detail ?? "owner 记录无效"
+    });
+  } else if (reconciler.owner.status === "stale") {
+    conflicts.push({
+      id: "account-reconciler-owner",
+      code: "ACCOUNT_RECONCILER_OWNER_STALE",
+      path: reconciler.owner.ownerPath,
+      action,
+      detail: `owner PID ${reconciler.owner.record.pid} 已停止`
+    });
+  }
+  if (reconciler.stateAlive && !reconciler.stateMatches) {
+    conflicts.push({
+      id: "account-reconciler-state-pid",
+      code: "ACCOUNT_RECONCILER_PID_REUSED",
+      path: context.statePath,
+      action,
+      detail: `launcher-state PID ${reconciler.pid} 已被其他进程复用；不会向该 PID 发信号`
+    });
+  }
+  if (reconciler.processes.some((item) => !item.safeToSignal)) {
+    conflicts.push({
+      id: "account-reconciler-process-identity",
+      code: "ACCOUNT_RECONCILER_PROCESS_IDENTITY_INVALID",
+      action: "检查同 workspace 的账号调和进程",
+      detail: "至少一个账号调和进程缺少可验证的 workspace 或独立进程组身份"
+    });
+  }
+  if (reconciler.processes.length === 1 && !reconciler.healthy) {
+    const process = reconciler.processes[0];
+    conflicts.push({
+      id: "account-reconciler-unregistered",
+      code: "ACCOUNT_RECONCILER_UNREGISTERED",
+      path: context.statePath,
+      action,
+      detail: `PID ${process.pid} 未同时绑定有效 owner 与 launcher state`
+    });
+  }
+  return conflicts;
+}
+
+function accountRuntimeDaemonEntry(context) {
+  return path.join(context.root, "tooling/runtime/account-runtime-daemon.mjs");
 }
 
 function withoutUpdatedAt(state) {

@@ -3,6 +3,7 @@ import { reactive, shallowRef, watch } from "vue";
 import { apiRequest } from "../../composables/useAdminApi";
 import { formatFullDateTime } from "../../utils/format";
 import { oneBotEventDisplayName, oneBotEventId } from "../../utils/logDisplay";
+import { toolAvailabilityPresentation } from "../../utils/toolCatalog";
 import type { ConversationLogEntry, OneBotEventTrace, SunaTool } from "../../types";
 import DialogOverlay from "../ui/DialogOverlay.vue";
 import RequestLogList from "../logs/RequestLogList.vue";
@@ -60,6 +61,10 @@ async function load(tab: DiagnosticTab = active.value, force = false) {
   }
 }
 
+function availability(tool: SunaTool) {
+  return toolAvailabilityPresentation(tool);
+}
+
 </script>
 
 <template>
@@ -93,12 +98,18 @@ async function load(tab: DiagnosticTab = active.value, force = false) {
             <div class="min-w-0">
               <strong class="text-sm font-medium text-display">{{ tool.title }}</strong>
               <p class="mt-2 font-mono text-[10px] text-disabled">{{ tool.name }}</p>
-              <p v-if="tool.available === false && (tool.availabilityReason || tool.unavailableReason)" class="mt-2 text-xs leading-5 text-accent">
-                {{ tool.availabilityReason || tool.unavailableReason }}
+              <p v-if="availability(tool).kind === 'runtime'" class="mt-2 text-xs leading-5 text-accent">
+                {{ availability(tool).reason }}
+              </p>
+              <p v-if="tool.accessLabel" class="mt-2 text-xs leading-5 text-mute">
+                <i class="bx bx-lock-alt mr-1" aria-hidden="true"></i>{{ tool.accessLabel }}
+              </p>
+              <p v-else-if="availability(tool).kind === 'session'" class="mt-2 text-xs leading-5 text-mute">
+                <i class="bx bx-lock-alt mr-1" aria-hidden="true"></i>{{ tool.accessLabel || availability(tool).reason }}
               </p>
             </div>
             <span v-if="!tool.enabled" class="font-mono text-[10px] text-mute">已停用</span>
-            <span v-else-if="tool.available === false" class="font-mono text-[10px] text-warning">能力异常</span>
+            <span v-else-if="availability(tool).kind === 'runtime'" class="font-mono text-[10px] text-warning">运行环境异常</span>
           </article>
           <div v-if="!tools.length" class="empty-state"><div><strong>没有工具</strong></div></div>
         </section>

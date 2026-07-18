@@ -87,4 +87,50 @@ describe("ConversationOrchestratorStatus", () => {
     expect(wrapper.text()).not.toContain("消息");
     expect(wrapper.text()).not.toContain("时间");
   });
+
+  it("renders the compact window widget and closes it when replies are disabled", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime("2026-07-10T00:00:12.000Z");
+    const wrapper = mount(ConversationOrchestratorStatus, {
+      props: {
+        enabled: true,
+        variant: "widget",
+        status: {
+          active: true,
+          messageCount: 7,
+          messageTarget: 21,
+          activeWindowMs: 60_000,
+          lastMessageAt: "2026-07-10T00:00:00.000Z"
+        }
+      }
+    });
+
+    expect(wrapper.get('[data-slot="orchestrator-status"]').text()).toContain("12/ 60秒已激活");
+    expect(wrapper.findAll(".orchestrator-widget__timer i[data-on='true']")).toHaveLength(3);
+
+    await wrapper.setProps({ enabled: false });
+    expect(wrapper.get('[data-slot="orchestrator-status"]').text()).toContain("--/ 60秒已关闭");
+    expect(wrapper.findAll(".orchestrator-widget__timer i[data-on='true']")).toHaveLength(0);
+  });
+
+  it("caps the compact timer at the configured window while judging", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime("2026-07-10T00:01:30.000Z");
+    const wrapper = mount(ConversationOrchestratorStatus, {
+      props: {
+        enabled: true,
+        variant: "widget",
+        status: {
+          active: true,
+          messageCount: 7,
+          messageTarget: 21,
+          activeWindowMs: 60_000,
+          lastMessageAt: "2026-07-10T00:00:00.000Z"
+        }
+      }
+    });
+
+    expect(wrapper.get('[data-slot="orchestrator-status"]').text()).toContain("60/ 60秒判断中");
+    expect(wrapper.findAll(".orchestrator-widget__timer i[data-on='true']")).toHaveLength(12);
+  });
 });

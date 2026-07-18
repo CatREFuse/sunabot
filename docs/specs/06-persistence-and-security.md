@@ -24,9 +24,12 @@
 | `model_call_aggregates` | 当前 Agent 按会话与行为聚合的模型调用总量 |
 | `model_call_model_aggregates` | 当前 Agent 按会话、模型、行为和记忆类型聚合的调用总量 |
 | `image_history` | 生成图片历史元数据 |
+| `emojis` | 当前 Agent 的表情 key、内容寻址文件名、来源、字节数、尺寸与创建/更新时间 |
 | `admin_sessions` | 管理 Cookie 哈希、CSRF Token、访问时间与有效期 |
 
-当前业务主库 schema 版本是 10。`conversation_thread_states` 使用 STRICT 表和 `conversations.id` 外键，删除会话时级联删除 Thread 状态；`state_schema_version` 当前为 1。写入以 revision CAS、单调 `processed_through_sequence` 和 `last_run_key` 幂等约束防止旧快照覆盖新状态，读取和写入都执行完整领域结构校验。message assignment、Thread message ID 和已无保留消息的非活动 Thread 随 `conversations` 的消息保留边界清理，单 Thread participant uid 最多保留 256 个；原始会话消息不由 Thread 节点删除。模型输出、提示词和运行时错误不能回退游标或破坏已提交状态；Thread 状态仍属于业务库恢复范围，不新增 JSON/JSONL 增长型持久化。异步 Thread 快照读取时复核字符串长度、稳定 Thread ID、active/primary/related 引用、唯一性、sequence 和提示词容量边界；损坏或旧格式快照降级为空 sidecar。恢复门禁只允许 `app_metadata.storage-schema-version=9` 的旧 current 恢复点缺少该表，并在恢复时复核实际数据库版本；schema 10 缺表继续判定为不完整。
+当前业务主库 schema 版本是 11；schema 10→11 前向创建 STRICT `emojis` 表和 `emojis_updated_at` 索引，不删除已有业务数据。`conversation_thread_states` 使用 STRICT 表和 `conversations.id` 外键，删除会话时级联删除 Thread 状态；`state_schema_version` 当前为 1。写入以 revision CAS、单调 `processed_through_sequence` 和 `last_run_key` 幂等约束防止旧快照覆盖新状态，读取和写入都执行完整领域结构校验。message assignment、Thread message ID 和已无保留消息的非活动 Thread 随 `conversations` 的消息保留边界清理，单 Thread participant uid 最多保留 256 个；原始会话消息不由 Thread 节点删除。模型输出、提示词和运行时错误不能回退游标或破坏已提交状态；Thread 状态仍属于业务库恢复范围，不新增 JSON/JSONL 增长型持久化。异步 Thread 快照读取时复核字符串长度、稳定 Thread ID、active/primary/related 引用、唯一性、sequence 和提示词容量边界；损坏或旧格式快照降级为空 sidecar。恢复门禁只允许 `storage-schema-version=9` 的旧 current 恢复点缺少 `conversation_thread_states` 与 `emojis`，以及 version 10 的旧 current 恢复点只缺少 `emojis`，并分别复核真实版本；version 10 缺 Thread 表或 version 11 缺任一当前表都判定为不完整。
+
+`emojis` 以 `emoji_key` 为主键，并严格保存 `file_name`、`source`、`size_bytes`、`width`、`height`、`created_at` 与 `updated_at`；`source` 只允许 `upload` 或 `generated`。单 Agent 最多 64 行。统一 key 校验层在任何数据库或文件写入前拒绝原始孤立代理项、replacement character、C0/C1 控制字符、方括号、斜杠和反斜杠，再执行 trim/NFC，并限制为 1—24 个 code point、最多 64 UTF-8 字节；SQLite 中已有的毒值在读取时隐藏或失败关闭，不能令列表或内容 API 持续 500。
 
 会话工具选择随 `ConversationRecord` 写入 `conversations.data_json` 的可选 `disabledTools` 字段，不新增表或 schema 版本。写入只保留去重后的内置 Agent 工具名，空列表省略；读取旧记录时缺失字段规范化为空列表。QQ 与 Web Chat 会话分别使用完整会话 ID 隔离，Agent 切换继续由独立业务库隔离。
 
@@ -36,6 +39,16 @@ Plana 的 `workspace/business/data/session-queue.sqlite` 与其他 Agent 的 `wo
 
 旧数据迁移按幂等键集合验证来源、导入前、导入后和真实增量，不能用总数相同替代记录身份一致。workspace 布局迁移和恢复先持久化 fsync journal intent，再逐文件记录复制、替换与完成状态；中断后可以继续或回滚，删除目标前必须复验类型、大小和 SHA-256，未知替换保持原样并失败关闭。数据库迁移在 checkpoint 后持有独占锁，活动写事务停止迁移。恢复、演练、保留清理和 stale partial 清理对绝对路径完整父链逐级检查，仅允许 macOS 根级 `/tmp` 与 `/var` 指向系统 canonical 目录的受控别名。
 
+既有记忆第一视角重整使用受版本控制的 `tooling/migrations/memory-perspective-v1.mjs`，真实正文、row ID、数据库相对路径、导出、内容提案、绑定计划、intent 和报告只保存在当前机器的 `workspace/business/migrations/`。在线阶段可以只读 `export` 三类 `memory_records`，但在线导出和候选只能作为 stale 审计证据；最终执行必须在同一次停服静默窗口重新导出。`export`、`refresh` 与 `dry-run` 先以纯文件系统方式收集精确 Agent 双库集合并记录真实主库、WAL、SHM 和迁移文档摘要，只复制主库、WAL 与必要文档到临时 workspace，SQLite 只打开临时副本；完成后真实文件逐项 CAS 不一致即失败。Agent 注册表与实际双库集合必须精确相同，不能隐式补 Plana。`generate` 只生成以稳定事实键表达、尚未绑定 row ID 的 unresolved 提案骨架，内容提案可由当前机器上的人工或模型任务完成；`sign` 固化审核结果并绑定实际 signed export、Agent 与输入集合，`refresh` 才在稳定数据库上机械绑定当前 row ID，并把 signed proposal/export 路径和摘要写入 plan。新增、删除、内容变化、重复 effective ID 或稳定键、歧义、遗漏、仅由旧 `{recordId,position,data}` wrapper 支持的目标、跨用户画像、未知字段、外部 artifact 路径或 Agent/数据库集合不一致都失败关闭，不能沿用在线 stale 计划。
+
+记忆重整的真实命令顺序是 `export`、`generate`、人工或模型审核、`sign`、`refresh`、`dry-run`、双阶段 `prepare`、`apply`、`install`、`verify`；取消和恢复只使用 `abort`、`rollback` 及 rollback 返回的 `install` 命令。首次 `prepare` 在全部 Core 端口、进程和业务库/queue 句柄释放后绑定候选、replacement、当前数据库集合、完整 schema、关键 pragma 与逻辑摘要，并以 0600 原子 fsync intent 阻止 Core 启动；manifest v2 原恢复点必须在该 intent 之后创建。已有 intent 后，第二次 `prepare --backup` 只用文件系统 CAS 复验生产主文件、sidecar 和签名绑定，不再打开或 checkpoint 生产 SQLite；它完整验证恢复点的 manifest SHA 与备份内逐库物理、逻辑和 memory/protected 摘要，再把恢复点绑定到首次 `prepare` 已签名的完整 Agent 双库集合与候选 baseline。所有会创建、更新或清除 intent 的命令共用 workspace 级跨进程操作锁：先以 0600 完整写入并 fsync 唯一 owner evidence，再通过无覆盖 hardlink 发布 canonical lock 并 fsync 目录；发布、stale claim、崩溃恢复和释放均按 owner token、文件身份与 link count 对账并有界重试。当前 owner 的首次身份不能依赖外部 `ps`，外部 owner 只有在可信且规范化的进程身份确认不匹配后才可回收；活进程身份无法可信确认时保持锁定并失败关闭。零字节或截断 canonical、符号链接、错误权限、异常 link count、PID 复用和并发 successor 都不能被误认成可安全接管的锁。
+
+生产业务库不执行逐 Agent 业务事务。`apply` 从入口起只用句柄、受信路径、sidecar 缺失和签名主文件 SHA 做生产纯文件 CAS，生产 SQLite open、write 与 checkpoint 必须全部为零；它通过已有恢复 journal 把原恢复点恢复到同一 filesystem 的空 staging workspace，只在 staging 业务库中使用参数化事务替换 `memory_records`，保持所有 queue 和非记忆表不变。完成逐行、schema、pragma、引用和 metadata 复验后，先创建并验证 changed recovery point，再对 staging 做最终 checkpoint、清除 sidecar，并仅用文件系统读取刷新稳定摘要，此后不能再次以 SQLite 打开 staging。`install` 在首个生产 rename 前只以纯文件方式复验生产 exact-before 与 live staging 的签名物理摘要，生产和 live staging 的 SQLite open、write 与 checkpoint 同样为零；原恢复点与 changed recovery 的 ID、manifest SHA、完整 Agent 双库集合的物理和逻辑摘要仍需全量验证，同时复验全父链、目录类型、WAL/SHM 稳定态、同盘关系和 data 目录 journal，再以可重入目录切换安装完整结果。任一恢复证据失效时生产保持 exact-before。强杀发生在 quarantine、rename 或 intent 更新边界时由同一命令按签名 journal 继续。安装后 intent 保持 `verifying`，`verify` 独立核对两份恢复点、plan、完整 row shape、业务库 full logical SHA、非记忆表和 queue；成功时先原子写 signed report 再清 intent。
+
+任一 staging、安装、pending report、完整验证或回滚异常都保持启动阻断状态。可重试的停服确认、端口或句柄失败保留原状态。生产目录首次切换前的 `awaiting-backup`、`prepared`、`staging-restored`、`staging-applying`、`staging-failed` 与 `staged-ready` 都属于 PRE 状态；`abort` 只验证 signed intent、受信路径以及 Core 端口、进程和数据库句柄均已释放，随后写 signed abort report 并清除 intent。PRE `abort` 不读取 plan、backup 或 staging，不打开或检查任何生产及 staging SQLite，不执行 checkpoint，不删除 WAL/SHM，不比较 exact-before，也不因外部生产字节漂移进入人工恢复；生产文件及 sidecar 必须逐字节保持调用前状态。生产目录开始切换后的 POST 状态只能由 `rollback` 接管；旧 staging 丢失、损坏或换盘时从原恢复点重建新的同盘空 staging 和新 journal，再完整恢复签名绑定的 Agent 双库集合、写 signed rollback report 并清 intent。`verify` 对 pending report 的路径解析、读取、JSON、签名、状态和 intent 绑定都纳入同一失败捕获；报告缺失或损坏时只依赖已签名 intent 与原恢复点进入 `rollback-required`，不能用坏报告决定恢复路径。全部目录已经恢复后才发生的备份损坏，以 intent 中签名的完整 Agent 双库集合绑定和已验证 staging 证据完成收尾。存在、损坏或状态未知的 intent 一律阻止 launcher 与 API 直启，禁止手工删除。完整命令见本机 `workspace/business/migrations/memory-perspective-v1-plan.md`；通用 CLI 以 `npm run migrate:memory-perspective -- help` 为准。
+
+记忆重整的授权与文件身份门禁在持久边界再次执行：第二次 `prepare` 写入 `prepared` 前重新读取、验签并精确比较 plan/replacement 全集，`apply` 在创建或打开 staging 前执行同一授权复核，prepared 后任何重签替换都失败关闭。恢复点、production、live staging 与安装 journal 中的 quarantine 数据库都必须是 `nlink=1` 的普通文件；首次恢复点 SQLite 校验前、最终 staged-ready 边界、首个 rename 前及安装重入的每次 rename 前，都按 `dev:ino` 对全部现存数据库做全集互斥复检，hardlink 或 bind alias 一律在任何 live SQLite 打开或目录替换前失败关闭。安装开始和重入还要递归拒绝 signed journal 外新增的业务库/queue 对；每个 current→quarantine 与 staged→current rename 紧邻前再次复验全集身份、路径绑定和目录内容摘要，主文件或 WAL/SHM 在复验间漂移时保留当时目录并进入可回滚状态。
+
 ### 8.2 文件边界
 
 以下内容继续使用文件：
@@ -43,15 +56,17 @@ Plana 的 `workspace/business/data/session-queue.sqlite` 与其他 Agent 的 `wo
 - `workspace/secrets/runtime.env`：本机凭据，不进入 Git；
 - `workspace/business/config/sunabot.json`：schemaVersion 1 的模型、正常回复重试、共用开关和默认 Plana 配置，不保存明文密钥；缺失的小型允许字段由配置归一化与配置医生规则补齐，不支持的显式 schemaVersion 失败关闭；
 - `workspace/business/migrations/multi-agent-v1.json`：首次安装或单 Agent 迁移完成标记，保存完整性摘要和迁移证据摘要；
+- `workspace/business/migrations/memory-perspective-v1-*`：本机记忆重整的导出、内容提案、绑定计划、stale 证据、durable intent 和完成/回滚报告，包含真实记忆时不得进入 Git；未完成 intent 存在、损坏或状态不明时 Core 启动失败关闭；
 - `workspace/business/prompts/`：所有 Agent 默认使用的公共系统提示词；
 - `workspace/business/agents/<agentId>/agent.json`：Agent 名称、启用状态、系统提示词覆盖开关、Bot 行为、工具覆盖、管理员私聊 Bash backend 偏好与 OneBot 行为配置；
 - `workspace/business/agents/<agentId>/extensions/skills/`：schemaVersion 1 Skill 索引、已验证 Skill 包、事务日志、隔离目录与墓碑；
 - `workspace/business/agents/<agentId>/extensions/mcp/servers.json`：schemaVersion 1 MCP 描述符索引，只保存受限命令、可审计参数和 `envKeys` 引用，不保存环境变量值；
 - `workspace/business/agents/<agentId>/`：Agent 人格、`selfie_prompt_rewrite.json`、可选 `system-prompts/` 覆盖、自拍参考图、私有数据和人工维护文件；
+- `workspace/business/agents/<agentId>/selfie/references.json`：当前 Agent 的 schemaVersion 1 自拍素材清单，严格只包含最多 9 项 `{id,fileName,note}`；`id` 是图片内容 SHA-256，`note` 必填并限制为 1—120 个 Unicode code point。清单使用同目录 0600 临时文件原子替换，拒绝额外字段、重复 ID、非法 Unicode、控制字符、超量内容及符号链接；旧目录缺少清单时按稳定文件名顺序生成确定性且可编辑的备注并持久化。图片仍是单张最多 8 MiB 的普通文件，清单属于小型可审阅配置，不替代 SQLite 承载增长型业务数据；
 - `workspace/business/agents/<agentId>/workbench/`：当前 Agent 的文件工具与 Bash 共用私有目录；内容不会自动进入模型请求，只有经过管理员私聊能力门禁和逐次路径、身份、类型及大小复验的文本文件可以按请求读取或原子写入；
 - Bash backend 只在当前 Agent 配置中持久化 `native`/`docker` 偏好；单调配置 epoch、审计结果、独立 Provider 实例、abort signal、审批票据与 capability 快照不持久化。一次性审批只在进程内保存并绑定 Agent、Bot 账号、transport、完整会话、用户、可选群号、命令摘要和精确只读外部文件身份；缺字段、过期、重放或绑定不一致均拒绝；
 - Provider 可执行 Bash options 只能由当前真实 OneBot 入站即时构造，必须在同一不可变配置快照中包含 epoch、backend、workbench、access mode、strict mode、独立 audit runner、`isCurrent` 和完整审批上下文。`isCurrent` 必须贯穿 Bash runner，并在所有文件身份 await、审批 issue/consume、隔离 probe 和最终 spawn 边界复验；旧 handle 以 `BASH_CONFIGURATION_STALE` 失败关闭且不得产生审批、探针或执行副作用。API catalog 的布尔 capability、模型返回参数和持久配置都不能单独升格为执行权限；
-- `workspace/business/media/`：需要随业务恢复的图片和持久附件；
+- `workspace/business/media/`：需要随业务恢复的图片和持久附件；其中 `media/images/emoji-<sha256>.png` 保存 Plana 表情，`media/images/agents/<agentId>/emoji-<sha256>.png` 保存其他 Agent 表情。文件只按对应业务库 `emojis` 行进入图库，必须与记录中的 SHA、字节数和尺寸一致；SQLite 恢复点只保护表情元数据，完整业务恢复、跨机迁移或远程搬迁必须另行把记录与文件作为同一 Agent 的成对资产核对，缺少任一侧时该项不能进入可用图库；
 - `workspace/runtime/napcat/accounts/<accountId>/`：单个 QQ 的 NapCat Docker 配置、登录态、二维码、`account.env` 和运行标记；该目录只挂载给对应 NapCat 容器，不作为 Core 的媒体共享目录；
 - `workspace/runtime/napcat/accounts/<accountId>/manual-login-required`：用户从管理台退出该 QQ 后的临时标记；对应 NapCat 重启时据此跳过快速登录，扫码成功后自动删除；
 - `workspace/cache/`：可重建缓存，不进入快照；

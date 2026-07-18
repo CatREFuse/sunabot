@@ -69,7 +69,8 @@ describe("ConversationThread", () => {
     expect(renderedBubble.text()).not.toContain("群名片 爱上火车张作霖");
     expect(renderedBubble.text()).toContain("QQ 昵称 好吃的猫头菇");
     expect(renderedBubble.text()).toContain("QQ 1");
-    await wrapper.get('button[aria-label="请求日志"]').trigger("click");
+    wrapper.getComponent(ConversationQuickControls).vm.$emit("logs");
+    await nextTick();
     expect(wrapper.getComponent(RequestLogList).props("enableSearch")).toBe(true);
     expect(wrapper.getComponent(RequestLogList).props("logs")).toEqual([
       expect.objectContaining({ metadata: { traceId: "trace-7", retries: 1 } })
@@ -320,7 +321,8 @@ describe("ConversationThread", () => {
     await nextTick();
     expect(wrapper.getComponent(ConversationSidePanel).props()).toMatchObject({ open: true, panel: "usage" });
 
-    await wrapper.get('button[aria-label="会话设置"]').trigger("click");
+    controls.vm.$emit("settings");
+    await nextTick();
     expect(wrapper.getComponent(ConversationSidePanel).props()).toMatchObject({ open: true, panel: "settings" });
     expect(wrapper.emitted("update:sidePanel")).toContainEqual(["settings"]);
   });

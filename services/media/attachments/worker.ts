@@ -173,33 +173,47 @@ export class AttachmentWorkerSupervisor {
       const monitor = setInterval(() => {
         if (monitoring || completed || forcedError) return;
         monitoring = true;
-        void Promise.all([
-          this.measureWorkDirBytes(task.workDir),
-          this.measureProcessGroupRssBytes(processGroupId)
-        ]).then(([workDirBytes, rssBytes]) => {
-          if (completed || forcedError) return;
-          if (workDirBytes > this.maxWorkDirBytes) {
+        let pendingProbes = 2;
+        const finishProbe = () => {
+          pendingProbes -= 1;
+          if (pendingProbes === 0) monitoring = false;
+        };
+        void Promise.resolve()
+          .then(() => this.measureWorkDirBytes(task.workDir))
+          .then((workDirBytes) => {
+            if (completed || forcedError || workDirBytes <= this.maxWorkDirBytes) return;
             terminate(new AttachmentWorkerError(
               "worker_workdir_limit",
               `Attachment worker directory exceeded ${this.maxWorkDirBytes} bytes`,
               { taskId: task.taskId, workDirBytes }
             ));
-            return;
-          }
-          if (rssBytes > this.maxRssBytes) {
+          }, (error) => {
+            if (!completed && !forcedError) {
+              stderr = appendBounded(stderr, `monitor(workdir): ${errorMessage(error)}\n`);
+            }
+          })
+          .catch((error) => {
+            if (!completed) stderr = appendBounded(stderr, `monitor(workdir handler): ${errorMessage(error)}\n`);
+          })
+          .finally(finishProbe);
+        void Promise.resolve()
+          .then(() => this.measureProcessGroupRssBytes(processGroupId))
+          .then((rssBytes) => {
+            if (completed || forcedError || rssBytes <= this.maxRssBytes) return;
             terminate(new AttachmentWorkerError(
               "worker_rss_limit",
               `Attachment worker process group exceeded ${this.maxRssBytes} bytes RSS`,
               { taskId: task.taskId, rssBytes }
             ));
-          }
-        }).catch((error) => {
-          if (!completed) {
-            stderr = appendBounded(stderr, `monitor: ${errorMessage(error)}\n`);
-          }
-        }).finally(() => {
-          monitoring = false;
-        });
+          }, (error) => {
+            if (!completed && !forcedError) {
+              stderr = appendBounded(stderr, `monitor(rss): ${errorMessage(error)}\n`);
+            }
+          })
+          .catch((error) => {
+            if (!completed) stderr = appendBounded(stderr, `monitor(rss handler): ${errorMessage(error)}\n`);
+          })
+          .finally(finishProbe);
       }, this.monitorIntervalMs);
 
       child.stderr?.on("data", (chunk: Buffer | string) => {
@@ -275,10 +289,24 @@ export class AttachmentWorkerSupervisor {
       function terminate(error: AttachmentWorkerError) {
         if (completed || forcedError) return;
         forcedError = error;
-        signalProcessGroup(child, "SIGTERM");
+        signalWorker("SIGTERM", false);
         killTimer = setTimeout(() => {
-          if (!completed) signalProcessGroup(child, "SIGKILL");
+          if (!completed) signalWorker("SIGKILL", true);
         }, terminationGraceMs);
+      }
+
+      function signalWorker(signal: NodeJS.Signals, fallbackToChild: boolean) {
+        try {
+          signalProcessGroup(child, signal);
+        } catch (error) {
+          stderr = appendBounded(stderr, `terminate(${signal}): ${errorMessage(error)}\n`);
+          if (!fallbackToChild) return;
+          try {
+            child.kill(signal);
+          } catch (fallbackError) {
+            stderr = appendBounded(stderr, `terminate(${signal}, child): ${errorMessage(fallbackError)}\n`);
+          }
+        }
       }
     });
   }

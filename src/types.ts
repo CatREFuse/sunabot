@@ -309,6 +309,7 @@ export interface OrchestratorDecisionResult {
   status?: "completed" | "failed";
   shouldReply: boolean;
   reason: string;
+  replyToMessageId?: string;
   raw: string;
 }
 

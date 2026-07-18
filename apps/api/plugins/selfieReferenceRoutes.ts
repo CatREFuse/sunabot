@@ -38,6 +38,15 @@ export function registerSelfieReferenceRoutes(app: FastifyInstance, options: Sel
     return reply.status(201).send(withContentUrls(envelope, context.agentId));
   });
 
+  app.patch("/api/selfie-references/:id", {
+    schema: { params: referenceParams, querystring: openObject, body: passthroughBody, response: { 200: openObject } }
+  }, async (request) => {
+    const params = request.params as { id?: string };
+    const context = repositoryContext(options, request.query);
+    const envelope = await context.repository.updateNote(String(params.id ?? ""), request.body);
+    return withContentUrls(envelope, context.agentId);
+  });
+
   app.get("/api/selfie-references/:id/content", {
     schema: { params: referenceParams, querystring: openObject, response: { 200: passthroughBody } }
   }, async (request, reply) => {

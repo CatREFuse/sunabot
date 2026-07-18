@@ -23,6 +23,22 @@ export function toolExecutionLabel(execution: ToolExecutionMode | undefined) {
   return execution ? executionLabels[execution] : "工具";
 }
 
+export function toolAvailabilityPresentation(tool: SunaTool) {
+  if (tool.available !== false) return { kind: "ready" as const, label: "", reason: "" };
+  if (tool.unavailabilityKind === "session") {
+    return {
+      kind: "session" as const,
+      label: tool.accessLabel || "限定会话",
+      reason: tool.accessDescription || tool.availabilityReason || tool.unavailableReason || "当前会话不可用。"
+    };
+  }
+  return {
+    kind: "runtime" as const,
+    label: "运行环境异常",
+    reason: tool.availabilityReason || tool.unavailableReason || "当前工具运行异常。"
+  };
+}
+
 export function toolParameterRows(parameters: SunaTool["parameters"]): ToolParameterSummary[] {
   if (Array.isArray(parameters)) {
     return parameters

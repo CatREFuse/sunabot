@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from "vue-router";
 import ConversationsView from "./views/ConversationsView.vue";
 import ConfigDoctorView from "./views/ConfigDoctorView.vue";
 import ImagesView from "./views/ImagesView.vue";
+import EmojisView from "./views/EmojisView.vue";
 import LogsView from "./views/LogsView.vue";
 import MemoryView from "./views/MemoryView.vue";
 import OverviewView from "./views/OverviewView.vue";
@@ -28,6 +29,7 @@ export const router = createRouter({
     },
     { path: "/memory", name: "memory", component: MemoryView },
     { path: "/images", name: "images", component: ImagesView },
+    { path: "/emojis", name: "emojis", component: EmojisView },
     { path: "/logs", name: "logs", component: LogsView },
     { path: "/agents", name: "agents", component: AgentsView },
     { path: "/extensions", name: "extensions", component: AgentExtensionsView },

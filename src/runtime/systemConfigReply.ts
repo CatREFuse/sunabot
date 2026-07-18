@@ -26,6 +26,7 @@ import {
   type AssistantReplyOutboxPayload
 } from "../../packages/contracts/session/runtimeMessages.js";
 import { conversationReplyEnabled } from "./messagingAttachmentHelpers.js";
+import { planAgentEmojiMarkers } from "../emojis/emojiAssets.js";
 
 interface SystemConfigReplyBinding {
   agentId: string;
@@ -356,7 +357,11 @@ export async function sendSystemConfigAwareFinalReply(
 ) {
   let prepared: ReturnType<SystemConfigReplyLifecycle["prepareFinalDelivery"]> | undefined;
   try {
-    prepared = input.lifecycle?.prepareFinalDelivery(input);
+    const emojiPlan = planAgentEmojiMarkers(input.text, host.config);
+    prepared = input.lifecycle?.prepareFinalDelivery({
+      ...input,
+      generatedImages: [...input.generatedImages, ...emojiPlan.expectedImages]
+    });
     const record = await host.sendAssistantReply(
       input.channelKey,
       input.incoming,
@@ -370,7 +375,8 @@ export async function sendSystemConfigAwareFinalReply(
       true,
       { messageOrigin: input.messageOrigin, toolNames: [...input.toolNames] },
       prepared?.timing ?? "buffered",
-      input.signal
+      input.signal,
+      emojiPlan
     );
     if (prepared?.timing === "immediate" && input.lifecycle?.protectsCurrentPrivateReplyFromGateClosure()) {
       host.activeDirectControllers.delete(input.channelKey);

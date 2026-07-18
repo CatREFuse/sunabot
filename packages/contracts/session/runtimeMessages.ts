@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import type { ImageResult } from "../media/media.js";
 import {
   decodeInboundMessageV1,
-  type InboundMessageV1
+  type InboundMessageV1,
+  type OutboundContentSegmentV1
 } from "../messaging/messages.js";
 import {
   readCommandInvocationV1,
@@ -49,6 +50,7 @@ export interface RuntimeIncomingReplyEventPayload {
   replyGate: ReplyGateSnapshotV1;
   replyQuote: ReplyQuoteSnapshotV1;
   commandInvocation?: CommandInvocationV1;
+  orchestratorResult?: UserGroupOrchestratorResultV1;
 }
 
 export interface RuntimeReplyFollowUpSnapshotV1 {
@@ -67,6 +69,13 @@ export interface RuntimeReplyDebounceEventPayload {
   replyGate: ReplyGateSnapshotV1;
   replyQuote: ReplyQuoteSnapshotV1;
   commandInvocation?: CommandInvocationV1;
+  orchestratorResult?: UserGroupOrchestratorResultV1;
+}
+
+export interface UserGroupOrchestratorResultV1 {
+  schemaVersion: 1;
+  reason: string;
+  replyToMessageId: string;
 }
 
 export interface ReplyQuoteSnapshotV1 {
@@ -119,6 +128,7 @@ export interface AsyncToolCompletionPayload {
     replyGate?: ReplyGateSnapshotV1;
     replyQuote?: ReplyQuoteSnapshotV1;
     threadContext?: GroupThreadContextSnapshotV1;
+    orchestratorResult?: UserGroupOrchestratorResultV1;
   };
   arguments: unknown;
   outcome: {
@@ -139,6 +149,7 @@ export interface AssistantReplyOutboxPayload {
   incoming: InboundMessageV1;
   text: string;
   generatedImages: ImageResult[];
+  contentSegments?: OutboundContentSegmentV1[];
   isAdmin: boolean;
   quoteReply?: boolean;
   replyToMessageId?: number | null;
@@ -214,6 +225,7 @@ export function decodeIncomingReply(value: unknown): RuntimeIncomingReplyEventPa
     replyGate: rawReplyGate,
     replyQuote: rawReplyQuote,
     commandInvocation: rawCommandInvocation,
+    orchestratorResult: rawOrchestratorResult,
     ...payloadFields
   } = payload;
   const captureSequence = requiredPositiveInteger(payload.captureSequence, "captureSequence");
@@ -231,6 +243,7 @@ export function decodeIncomingReply(value: unknown): RuntimeIncomingReplyEventPa
   const replyGate = decodeReplyGateSnapshot(rawReplyGate, incoming, true)!;
   const replyQuote = decodeReplyQuoteSnapshot(rawReplyQuote, incoming, true)!;
   const commandInvocation = decodeCommandInvocation(rawCommandInvocation, payload.route, incoming);
+  const orchestratorResult = decodeUserGroupOrchestratorResult(rawOrchestratorResult, payload.route);
   return {
     ...payloadFields,
     incoming,
@@ -239,7 +252,8 @@ export function decodeIncomingReply(value: unknown): RuntimeIncomingReplyEventPa
     ...(contextThroughSequence == null ? {} : { contextThroughSequence }),
     replyGate,
     replyQuote,
-    ...(commandInvocation ? { commandInvocation } : {})
+    ...(commandInvocation ? { commandInvocation } : {}),
+    ...(orchestratorResult ? { orchestratorResult } : {})
   } as RuntimeIncomingReplyEventPayload;
 }
 
@@ -251,6 +265,7 @@ export function decodeReplyDebounce(value: unknown): RuntimeReplyDebounceEventPa
     replyGate: rawReplyGate,
     replyQuote: rawReplyQuote,
     commandInvocation: rawCommandInvocation,
+    orchestratorResult: rawOrchestratorResult,
     ...payloadFields
   } = payload;
   validateReplyRoute(payload.route);
@@ -265,6 +280,7 @@ export function decodeReplyDebounce(value: unknown): RuntimeReplyDebounceEventPa
   const replyGate = decodeReplyGateSnapshot(rawReplyGate, incoming, true)!;
   const replyQuote = decodeReplyQuoteSnapshot(rawReplyQuote, incoming, true)!;
   const commandInvocation = decodeCommandInvocation(rawCommandInvocation, payload.route, incoming);
+  const orchestratorResult = decodeUserGroupOrchestratorResult(rawOrchestratorResult, payload.route);
   return {
     ...payloadFields,
     conversationId,
@@ -274,7 +290,8 @@ export function decodeReplyDebounce(value: unknown): RuntimeReplyDebounceEventPa
     ...(preparationKey == null ? {} : { preparationKey }),
     replyGate,
     replyQuote,
-    ...(commandInvocation ? { commandInvocation } : {})
+    ...(commandInvocation ? { commandInvocation } : {}),
+    ...(orchestratorResult ? { orchestratorResult } : {})
   } as RuntimeReplyDebounceEventPayload;
 }
 
@@ -287,6 +304,7 @@ export function decodeToolCompletion(value: unknown): AsyncToolCompletionPayload
     replyGate: rawReplyGate,
     replyQuote: rawReplyQuote,
     threadContext: rawThreadContext,
+    orchestratorResult: rawOrchestratorResult,
     ...originalRequestFields
   } = originalRequest;
   const captureSequence = optionalPositiveInteger(rawCaptureSequence, "captureSequence");
@@ -297,6 +315,10 @@ export function decodeToolCompletion(value: unknown): AsyncToolCompletionPayload
   validateSequenceRange(captureSequence, contextThroughSequence);
   const incoming = decodeInboundMessageV1(originalRequestFields.incoming);
   const threadContext = readGroupThreadContextSnapshot(rawThreadContext);
+  const orchestratorResult = readUserGroupOrchestratorResult(rawOrchestratorResult);
+  if (rawOrchestratorResult != null && (!orchestratorResult || incoming.scope !== "user_group")) {
+    throw contractError("contract_field_invalid", "持久化消息字段 orchestratorResult 无效。");
+  }
   const requiresFrozenReply = captureSequence != null || contextThroughSequence != null;
   const replyGate = decodeReplyGateSnapshot(rawReplyGate, incoming, requiresFrozenReply);
   const replyQuote = decodeReplyQuoteSnapshot(rawReplyQuote, incoming, requiresFrozenReply);
@@ -309,7 +331,8 @@ export function decodeToolCompletion(value: unknown): AsyncToolCompletionPayload
       ...(contextThroughSequence == null ? {} : { contextThroughSequence }),
       ...(replyGate == null ? {} : { replyGate }),
       ...(replyQuote == null ? {} : { replyQuote }),
-      ...(threadContext ? { threadContext } : {})
+      ...(threadContext ? { threadContext } : {}),
+      ...(orchestratorResult ? { orchestratorResult } : {})
     }
   } as unknown as AsyncToolCompletionPayload;
 }
@@ -320,6 +343,7 @@ export function decodeAssistantReply(value: unknown): AssistantReplyOutboxPayloa
     threadContext: rawThreadContext,
     replyToMessageId: rawReplyToMessageId,
     deliverySemantics: rawDeliverySemantics,
+    contentSegments: rawContentSegments,
     ...payloadFields
   } = payload;
   if (rawDeliverySemantics !== undefined && rawDeliverySemantics !== "system_config_confirmation") {
@@ -330,6 +354,11 @@ export function decodeAssistantReply(value: unknown): AssistantReplyOutboxPayloa
   const replyToMessageId = rawReplyToMessageId === null
     ? null
     : positiveSafeInteger(rawReplyToMessageId) ? Number(rawReplyToMessageId) : null;
+  const contentSegments = decodeReplyContentSegments(
+    rawContentSegments,
+    payloadFields.text,
+    payloadFields.generatedImages
+  );
   return {
     ...payloadFields,
     incoming: decodeInboundMessageV1(payloadFields.incoming),
@@ -337,8 +366,54 @@ export function decodeAssistantReply(value: unknown): AssistantReplyOutboxPayloa
     ...(rawDeliverySemantics === "system_config_confirmation"
       ? { deliverySemantics: rawDeliverySemantics }
       : {}),
+    ...(contentSegments ? { contentSegments } : {}),
     ...(threadContext ? { threadContext } : {})
   } as AssistantReplyOutboxPayload;
+}
+
+function decodeReplyContentSegments(
+  value: unknown,
+  text: unknown,
+  generatedImages: unknown
+): OutboundContentSegmentV1[] | undefined {
+  if (value == null) return undefined;
+  if (!Array.isArray(value) || value.length < 1 || value.length > 64 || !Array.isArray(generatedImages)) {
+    throw contractError("contract_field_invalid", "持久化消息字段 contentSegments 无效。");
+  }
+  const segments: OutboundContentSegmentV1[] = [];
+  const imageIndexes = new Set<number>();
+  let joinedText = "";
+  for (const item of value) {
+    if (!isRecord(item)) {
+      throw contractError("contract_field_invalid", "持久化消息字段 contentSegments 无效。");
+    }
+    const keys = Object.keys(item).sort().join(",");
+    if (item.type === "text") {
+      if (keys !== "text,type" || typeof item.text !== "string" || !item.text) {
+        throw contractError("contract_field_invalid", "持久化消息字段 contentSegments 无效。");
+      }
+      if (segments.at(-1)?.type === "text") {
+        throw contractError("contract_field_invalid", "持久化消息字段 contentSegments 无效。");
+      }
+      segments.push({ type: "text", text: item.text });
+      joinedText += item.text;
+      continue;
+    }
+    if (item.type !== "image" || keys !== "imageIndex,type"
+      || !Number.isSafeInteger(item.imageIndex)
+      || Number(item.imageIndex) < 0
+      || Number(item.imageIndex) >= generatedImages.length
+      || imageIndexes.has(Number(item.imageIndex))) {
+      throw contractError("contract_field_invalid", "持久化消息字段 contentSegments 无效。");
+    }
+    const imageIndex = Number(item.imageIndex);
+    imageIndexes.add(imageIndex);
+    segments.push({ type: "image", imageIndex });
+  }
+  if (joinedText !== text || imageIndexes.size !== generatedImages.length) {
+    throw contractError("contract_field_invalid", "持久化消息字段 contentSegments 无效。");
+  }
+  return segments;
 }
 
 export function readGroupThreadContextSnapshot(value: unknown): GroupThreadContextSnapshotV1 | undefined {
@@ -419,6 +494,19 @@ export function readGroupThreadContextSnapshot(value: unknown): GroupThreadConte
       : { omittedThreadCount: Number(value.omittedThreadCount) }),
     threads,
     messageAssignments
+  };
+}
+
+export function readUserGroupOrchestratorResult(
+  value: unknown
+): UserGroupOrchestratorResultV1 | undefined {
+  if (!isRecord(value) || value.schemaVersion !== 1
+    || !boundedSnapshotString(value.reason, 1_000)
+    || !boundedSnapshotString(value.replyToMessageId, 256)) return undefined;
+  return {
+    schemaVersion: 1,
+    reason: value.reason.trim(),
+    replyToMessageId: value.replyToMessageId
   };
 }
 
@@ -518,6 +606,18 @@ function decodeCommandInvocation(
     throw contractError("contract_field_invalid", "持久化消息字段 commandInvocation 无效。");
   }
   return invocation;
+}
+
+function decodeUserGroupOrchestratorResult(
+  value: unknown,
+  route: unknown
+): UserGroupOrchestratorResultV1 | undefined {
+  if (value == null) return undefined;
+  const result = readUserGroupOrchestratorResult(value);
+  if (route !== "ambient" || !result) {
+    throw contractError("contract_field_invalid", "持久化消息字段 orchestratorResult 无效。");
+  }
+  return result;
 }
 
 function decodeReplyQuoteSnapshot(

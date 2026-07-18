@@ -16,7 +16,17 @@ describe("ConversationToolSettingsForm", () => {
             description: "读取",
             enabled: true,
             available: false,
+            unavailabilityKind: "session",
+            accessLabel: "管理员 QQ 私聊可用",
             availabilityReason: "当前会话不允许读取 Agent workbench 文件。"
+          },
+          {
+            name: "workspace_bash",
+            title: "Bash",
+            description: "运行命令",
+            enabled: true,
+            available: true,
+            accessLabel: "管理员 QQ 私聊可用"
           }
         ],
         disabledTools: [],
@@ -29,8 +39,10 @@ describe("ConversationToolSettingsForm", () => {
 
     expect(toggles[0]!.props()).toMatchObject({ label: "启用 网页搜索", disabled: true, modelValue: false });
     expect(toggles[1]!.props()).toMatchObject({ label: "启用 读取文件", disabled: false, modelValue: true });
+    expect(toggles[2]!.props()).toMatchObject({ label: "启用 Bash", disabled: false, modelValue: true });
     expect(wrapper.text()).toContain("Agent 已停用");
-    expect(wrapper.text()).toContain("当前会话不允许读取 Agent workbench 文件。");
+    expect(wrapper.text()).toContain("管理员 QQ 私聊可用");
+    expect(wrapper.text()).not.toContain("当前会话不允许读取 Agent workbench 文件。");
     expect(wrapper.text()).not.toContain("能力可用");
     expect(wrapper.text()).not.toContain("能力不可用");
 

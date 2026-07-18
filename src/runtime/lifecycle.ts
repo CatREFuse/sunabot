@@ -101,7 +101,13 @@ import { promptDefinitionById } from "../../services/agent/promptCatalog.js";
 import { defaultPromptContent as defaultFinalPromptContent } from "../../services/agent/promptDefaults.js";
 import {
   ensurePromptTextFile,
+  migrateConversationEmojiVariables,
+  migrateGroupReplyOrchestratorResultVariable,
   migrateGroupReplyThreadContextVariable,
+  migrateMemoryPerspectivePrompt,
+  migrateSelfieReferenceSelectionPrompt,
+  migrateToneEmojiMarkerRule,
+  migrateUserGroupOrchestratorResultSchema,
   readPromptTextFile
 } from "../../services/agent/promptWorkspace.js";
 import {
@@ -340,6 +346,35 @@ export async function runtime_ensureAgentPromptFiles(this: RuntimeHost, config =
       )
     ]);
     await migrateGroupReplyThreadContextVariable(config, GROUP_CONVERSATION_REPLY_PROMPT_FILE);
+    await migrateGroupReplyOrchestratorResultVariable(config, GROUP_CONVERSATION_REPLY_PROMPT_FILE);
+    await migrateUserGroupOrchestratorResultSchema(
+      config,
+      config.bot.orchestrator.promptFile,
+      ADMIN_RUNTIME_PROMPT_DEFAULTS["orchestrator.user-group"] ?? ""
+    );
+    await migrateSelfieReferenceSelectionPrompt(
+      config,
+      SELFIE_PROMPT_FILE,
+      ADMIN_RUNTIME_PROMPT_DEFAULTS["image.selfie-rewrite"] ?? ""
+    );
+    await migrateConversationEmojiVariables(config, PRIVATE_CONVERSATION_REPLY_PROMPT_FILE);
+    await migrateConversationEmojiVariables(config, GROUP_CONVERSATION_REPLY_PROMPT_FILE);
+    await migrateToneEmojiMarkerRule(config, TONE_PROMPT_FILE);
+    await migrateMemoryPerspectivePrompt(
+      config,
+      config.bot.memory.workMemoryCompressInPrompt,
+      ADMIN_RUNTIME_PROMPT_DEFAULTS["memory.compress-in"] ?? ""
+    );
+    await migrateMemoryPerspectivePrompt(
+      config,
+      config.bot.memory.workMemoryCompressOutPrompt,
+      ADMIN_RUNTIME_PROMPT_DEFAULTS["memory.compress-out"] ?? ""
+    );
+    await migrateMemoryPerspectivePrompt(
+      config,
+      config.bot.memory.userProfilePrompt,
+      ADMIN_RUNTIME_PROMPT_DEFAULTS["memory.user-profile"] ?? ""
+    );
   }
 export function runtime_defaultPromptContent(this: RuntimeHost, id: string) {
     return ADMIN_RUNTIME_PROMPT_DEFAULTS[id] ?? "";

@@ -1,4 +1,7 @@
-import type { GroupThreadContextSnapshotV1 } from "../../packages/contracts/session/runtimeMessages.js";
+import type {
+  GroupThreadContextSnapshotV1,
+  UserGroupOrchestratorResultV1
+} from "../../packages/contracts/session/runtimeMessages.js";
 import type { AttachmentModelContext } from "../../services/media/attachments/types.js";
 import type { SunaRuntime } from "../runtime.js";
 import type { ParsedIncomingMessage } from "../types.js";
@@ -11,6 +14,7 @@ export interface ReplyDebounceContextOptions {
   contextThroughSequence?: number;
   signal?: AbortSignal;
   threadContext?: GroupThreadContextSnapshotV1;
+  orchestratorResult?: UserGroupOrchestratorResultV1;
   skipGroupThreadPreparation?: boolean;
 }
 

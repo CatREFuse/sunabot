@@ -1,5 +1,8 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { OutboundContentSegmentV1 } from "../../packages/contracts/messaging/messages.js";
+import { MAX_EMOJI_MARKERS_PER_REPLY } from "../emojis/public.js";
 
 export interface OutboundMediaDeliveryOptions {
   rootDir: string;
@@ -10,6 +13,13 @@ export interface OutboundMediaDeliveryOptions {
 export type OutboundMediaReferenceMode = "shared-path" | "inline-base64";
 
 export const DEFAULT_OUTBOUND_MEDIA_MAX_INLINE_BYTES = 32 * 1024 * 1024;
+export const MAX_OUTBOUND_MEDIA_REFERENCE_CONCURRENCY = 2;
+export const MAX_OUTBOUND_INLINE_EMOJI_BYTES_PER_MESSAGE = 32 * 1024 * 1024;
+
+export interface OutboundMediaImageInput {
+  url?: string;
+  filePath?: string;
+}
 
 export function outboundMediaReferenceMode(
   env: { SUNABOT_MEDIA_TRANSPORT?: string } = process.env
@@ -77,10 +87,133 @@ export class OutboundMediaDelivery {
           `Outbound media file exceeds the inline Base64 limit of ${this.maxInlineBytes} bytes.`
         );
       }
+      assertContentAddressedEmoji(fileName, content);
       return `base64://${content.toString("base64")}`;
+    }
+    const emojiDigest = contentAddressedEmojiDigest(fileName);
+    if (emojiDigest) {
+      if (stats.size > this.maxInlineBytes) {
+        throw new Error(
+          `Outbound media file exceeds the inline Base64 limit of ${this.maxInlineBytes} bytes.`
+        );
+      }
+      assertContentAddressedEmoji(fileName, await fs.readFile(resolvedPath));
     }
     return resolvedPath;
   }
+}
+
+export async function prepareOutboundImageSources(
+  images: readonly OutboundMediaImageInput[],
+  delivery?: OutboundMediaDelivery,
+  contentSegments?: readonly OutboundContentSegmentV1[]
+) {
+  const emittedIndexes = emittedImageIndexes(images, contentSegments);
+  const localOccurrences = new Map<string, number>();
+  const emojiOccurrences = new Map<string, number>();
+  for (const index of emittedIndexes) {
+    const image = images[index]!;
+    if (!image.filePath) continue;
+    const identity = fileIdentity(image.filePath);
+    localOccurrences.set(identity, (localOccurrences.get(identity) ?? 0) + 1);
+    if (!contentAddressedEmojiDigest(pathLikeBaseName(image.filePath))) continue;
+    emojiOccurrences.set(identity, (emojiOccurrences.get(identity) ?? 0) + 1);
+  }
+  const markerCount = [...emojiOccurrences.values()].reduce((sum, count) => sum + count, 0);
+  if (markerCount > MAX_EMOJI_MARKERS_PER_REPLY) {
+    throw new Error(
+      `Outbound message exceeds the limit of ${MAX_EMOJI_MARKERS_PER_REPLY} emoji markers.`
+    );
+  }
+
+  const sources = new Array<string>(images.length);
+  const pendingByIdentity = new Map<string, { filePath: string; indexes: number[] }>();
+  for (const [index, image] of images.entries()) {
+    if (image.filePath && delivery) {
+      const identity = fileIdentity(image.filePath);
+      const pending = pendingByIdentity.get(identity);
+      if (pending) pending.indexes.push(index);
+      else pendingByIdentity.set(identity, { filePath: image.filePath, indexes: [index] });
+      continue;
+    }
+    const source = image.url && /^https?:\/\//i.test(image.url) ? image.url : image.filePath;
+    if (!source) throw new Error("Outbound image source is invalid.");
+    sources[index] = source;
+  }
+
+  const pending = [...pendingByIdentity.entries()];
+  let cursor = 0;
+  let inlineBytes = 0;
+  let firstError: unknown;
+  const worker = async () => {
+    while (!firstError) {
+      const task = pending[cursor++];
+      if (!task) return;
+      const [identity, entry] = task;
+      try {
+        const source = await delivery!.createReference(entry.filePath);
+        if (firstError) return;
+        const occurrences = localOccurrences.get(identity) ?? 0;
+        const byteLength = occurrences ? inlineBase64ByteLength(source) : undefined;
+        if (byteLength != null) {
+          const contribution = byteLength * occurrences;
+          if (
+            !Number.isSafeInteger(contribution) ||
+            contribution > MAX_OUTBOUND_INLINE_EMOJI_BYTES_PER_MESSAGE - inlineBytes
+          ) {
+            throw new Error(
+              `Outbound inline images exceed the per-message limit of ` +
+              `${MAX_OUTBOUND_INLINE_EMOJI_BYTES_PER_MESSAGE} bytes.`
+            );
+          }
+          inlineBytes += contribution;
+        }
+        for (const index of entry.indexes) sources[index] = source;
+      } catch (error) {
+        firstError ??= error;
+      }
+    }
+  };
+  await Promise.all(Array.from(
+    { length: Math.min(MAX_OUTBOUND_MEDIA_REFERENCE_CONCURRENCY, pending.length) },
+    worker
+  ));
+  if (firstError) throw firstError;
+  return sources;
+}
+
+function emittedImageIndexes(
+  images: readonly OutboundMediaImageInput[],
+  contentSegments?: readonly OutboundContentSegmentV1[]
+) {
+  if (!contentSegments?.length) return images.map((_, index) => index);
+  const indexes: number[] = [];
+  for (const segment of contentSegments) {
+    if (segment.type !== "image") continue;
+    if (!Number.isSafeInteger(segment.imageIndex) || segment.imageIndex < 0 || segment.imageIndex >= images.length) {
+      throw new Error("Outbound image segment index is invalid.");
+    }
+    indexes.push(segment.imageIndex);
+  }
+  return indexes;
+}
+
+function fileIdentity(filePath: string) {
+  return `file:${path.resolve(filePath)}`;
+}
+
+function inlineBase64ByteLength(source: string) {
+  if (!source.startsWith("base64://")) return undefined;
+  const encoded = source.slice("base64://".length);
+  if (!encoded || encoded.length % 4 !== 0) {
+    throw new Error("Outbound inline image reference is invalid.");
+  }
+  const padding = encoded.endsWith("==") ? 2 : encoded.endsWith("=") ? 1 : 0;
+  const byteLength = (encoded.length / 4) * 3 - padding;
+  if (!Number.isSafeInteger(byteLength) || byteLength < 1) {
+    throw new Error("Outbound inline image reference is invalid.");
+  }
+  return byteLength;
 }
 
 function generatedImageFileName(relativePath: string) {
@@ -105,6 +238,23 @@ function isSafePngFileName(fileName: string) {
     path.basename(fileName) === fileName &&
     !fileName.includes("/") &&
     !fileName.includes("\\");
+}
+
+function contentAddressedEmojiDigest(fileName: string) {
+  return /^emoji-([a-f0-9]{64})\.png$/u.exec(fileName)?.[1];
+}
+
+function pathLikeBaseName(value: string) {
+  return value.split(/[\\/]/).at(-1) ?? "";
+}
+
+function assertContentAddressedEmoji(fileName: string, content: Buffer) {
+  const expectedDigest = contentAddressedEmojiDigest(fileName);
+  if (!expectedDigest) return;
+  const actualDigest = crypto.createHash("sha256").update(content).digest("hex");
+  if (actualDigest !== expectedDigest) {
+    throw new Error("Outbound emoji content does not match its content-addressed file name.");
+  }
 }
 
 async function regularFileStats(filePath: string) {

@@ -13,7 +13,7 @@ export const FIRST_RUN_JOURNAL = "runtime/first-run-bootstrap.json";
 const FIRST_RUN_SIGNING_KEY = "secrets/first-run-bootstrap.key";
 const COMPLETED_REPORT = "runtime/first-run-bootstrap.completed.json";
 const BOUNDARIES = ["marker", "main", "queue", "manifest", "registration", "account-runtime"];
-const MAIN_SCHEMA_VERSION = 10;
+const MAIN_SCHEMA_VERSION = 11;
 const QUEUE_SCHEMA_VERSION = 5;
 const MAIN_TABLES = [
   "admin_sessions",
@@ -22,6 +22,7 @@ const MAIN_TABLES = [
   "app_metadata",
   "conversation_thread_states",
   "conversations",
+  "emojis",
   "image_history",
   "memory_batches",
   "memory_records",
@@ -267,7 +268,11 @@ function validateMainSchema(database) {
     "conversation_id", "state_schema_version", "revision", "processed_through_sequence",
     "last_run_key", "classifier_model", "prompt_revision", "state_json", "created_at", "updated_at"
   ]);
+  requireColumns(database, "emojis", [
+    "emoji_key", "file_name", "source", "size_bytes", "width", "height", "created_at", "updated_at"
+  ]);
   requireIndexes(database, "agent_accounts", ["agent_accounts_agent", "agent_accounts_webui_port"]);
+  requireIndexes(database, "emojis", ["emojis_updated_at"]);
   const foreignKeys = database.prepare("PRAGMA foreign_key_list(agent_accounts)").all();
   if (!foreignKeys.some((row) => (
     row.table === "agents"
@@ -300,6 +305,13 @@ function validateMainSchema(database) {
     "check (revision >= 1)",
     "check (processed_through_sequence >= 0)",
     "check (json_valid(state_json))"
+  ]);
+  requireSchemaSql(database, "emojis", [
+    "strict",
+    "source in ('upload', 'generated')",
+    "check (size_bytes > 0)",
+    "check (width > 0)",
+    "check (height > 0)"
   ]);
 }
 

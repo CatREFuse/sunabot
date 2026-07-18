@@ -98,7 +98,16 @@ const emptyConfig: AppConfig = {
       },
       generateImg: { provider: "codex-image-gen", size: "1024x1024", resolution: "1K", quality: "high" }
     },
-    bash: { enabled: true, allowGroup: false, adminOnly: true, workspaceOnly: true, blockedKeywords: ["rm"] }
+    bash: {
+      enabled: false,
+      adminPrivateBackend: "native",
+      auditModel: "gpt-5.4-mini",
+      strictMode: true,
+      allowGroup: false,
+      adminOnly: true,
+      workspaceOnly: true,
+      blockedKeywords: ["rm"]
+    }
   },
   onebot: {
     reverseWsPath: "/onebot/v11/ws",

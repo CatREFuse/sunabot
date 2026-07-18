@@ -1,3 +1,4 @@
+import Fastify from "fastify";
 import { describe, expect, it, vi } from "vitest";
 import { RegistryProviderToolExecutor } from "../../adapters/model/provider/toolExecutor.js";
 import { createTurnToolState } from "../../adapters/model/provider/turnToolState.js";
@@ -85,6 +86,19 @@ describe("ToolRegistry", () => {
 
     expect(bash).toMatchObject({ available: true });
     expect(resolveProviderToolDefinitions({ bashAvailable: true })).toEqual([]);
+  });
+
+  it("classifies workbench file access as a session scope instead of a runtime failure", () => {
+    const metadata = listToolMetadata();
+
+    for (const name of ["read_file", "write_file"] as const) {
+      expect(metadata.find((tool) => tool.name === name)).toMatchObject({
+        available: false,
+        unavailabilityKind: "session",
+        accessLabel: "管理员 QQ 私聊可用",
+        accessDescription: "Web Chat、群聊和普通用户私聊不可用。"
+      });
+    }
   });
 
   it("keeps Skill capability separate from inventory and never exposes empty-enum Provider tools", () => {
@@ -583,6 +597,10 @@ describe("ToolRegistry", () => {
       type: ["array", "null"],
       maxItems: 4
     });
+    expect(parameters.properties.referenceImageUrls).toMatchObject({
+      type: ["array", "null"],
+      maxItems: 4
+    });
     expect(parameters.properties.referenceImageSource.enum).toEqual([
       "none",
       "current",
@@ -611,7 +629,11 @@ describe("ToolRegistry", () => {
     expect(definition?.description).toContain("historical media handles");
     expect(parameters.properties.referenceMediaHandles).toMatchObject({
       type: ["array", "null"],
-      maxItems: 4
+      maxItems: 1
+    });
+    expect(parameters.properties.referenceImageUrls).toMatchObject({
+      type: ["array", "null"],
+      maxItems: 1
     });
     expect(parameters.properties.referenceImageSource.enum).toEqual([
       "none",
@@ -625,6 +647,50 @@ describe("ToolRegistry", () => {
       "referenceImageSource",
       "dispatch_message"
     ]));
+  });
+
+  it("rejects more than one selfie chat reference in either strict schema field", async () => {
+    const executor = new RegistryProviderToolExecutor();
+    const options = {
+      selfie: { enabled: true },
+      asyncImage: true
+    } as unknown as ProviderCompleteOptions;
+    const definition = executor.resolveDefinitions(options, [staleTool("selfie")])
+      .find((item) => item.name === "selfie");
+    const app = Fastify();
+    app.post("/validate-selfie", {
+      schema: { body: definition?.parameters as Record<string, unknown> }
+    }, async () => ({ ok: true }));
+    const payload = {
+      prompt: "自拍",
+      size: null,
+      resolution: "1K",
+      quality: "high",
+      referenceImageUrls: null,
+      referenceMediaHandles: null,
+      referenceImageSource: "none",
+      dispatch_message: "图片生成完成后发送"
+    };
+
+    try {
+      const valid = await app.inject({
+        method: "POST",
+        url: "/validate-selfie",
+        payload: { ...payload, referenceImageUrls: ["https://example.test/one.png"] }
+      });
+      expect(valid.statusCode).toBe(200);
+
+      for (const field of ["referenceImageUrls", "referenceMediaHandles"] as const) {
+        const invalid = await app.inject({
+          method: "POST",
+          url: "/validate-selfie",
+          payload: { ...payload, [field]: ["first", "second"] }
+        });
+        expect(invalid.statusCode).toBe(400);
+      }
+    } finally {
+      await app.close();
+    }
   });
 
   it("removes image tools when the delivery target cannot receive image tasks", () => {

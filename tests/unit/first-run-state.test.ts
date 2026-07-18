@@ -184,6 +184,14 @@ describe("first-run bootstrap journal", () => {
       }
     },
     {
+      label: "missing emojis table",
+      mutate(workspace: string) {
+        const database = new DatabaseSync(path.join(workspace, "business/data/sunabot.sqlite"));
+        database.exec("DROP TABLE emojis");
+        database.close();
+      }
+    },
+    {
       label: "stale queue schema version",
       mutate(workspace: string) {
         const database = new DatabaseSync(path.join(workspace, "business/data/session-queue.sqlite"));

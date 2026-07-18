@@ -4,8 +4,9 @@ import type { SelfieReferenceImage } from "../../types";
 import SelfieReferenceDialog from "./SelfieReferenceDialog.vue";
 
 const image: SelfieReferenceImage = {
-  id: "plana.png",
+  id: "a".repeat(64),
   fileName: "plana.png",
+  note: "日常服",
   sizeBytes: 240_000,
   width: 1200,
   height: 1393,
@@ -20,9 +21,10 @@ function mountDialog() {
     props: {
       open: true,
       images: [image],
-      maxImages: 3,
+      maxImages: 9,
       loading: false,
       uploading: false,
+      updatingId: "",
       deletingId: "",
       status: { kind: "idle", message: "" }
     },
@@ -31,30 +33,65 @@ function mountDialog() {
 }
 
 describe("SelfieReferenceDialog", () => {
-  it("emits selected files and resets the file field", async () => {
+  it("collects a required note for every selected file before upload", async () => {
     const wrapper = mountDialog();
     const input = wrapper.get('input[type="file"]');
-    const file = new File(["png"], "new-plana.png", { type: "image/png" });
-    Object.defineProperty(input.element, "files", { configurable: true, value: [file] });
+    const first = new File(["one"], "swimsuit.png", { type: "image/png" });
+    const second = new File(["two"], "maid.png", { type: "image/png" });
+    Object.defineProperty(input.element, "files", { configurable: true, value: [first, second] });
 
     await input.trigger("change");
 
-    expect(wrapper.emitted("upload")?.[0]?.[0]).toEqual([file]);
+    expect(wrapper.emitted("upload")).toBeUndefined();
+    await wrapper.get('input[aria-label="swimsuit.png 的备注"]').setValue("泳装");
+    await wrapper.get('input[aria-label="maid.png 的备注"]').setValue("女仆装");
+    await wrapper.get("#selfie-note-form").trigger("submit");
+
+    expect(wrapper.emitted("upload")?.[0]?.[0]).toEqual([
+      { file: first, note: "泳装" },
+      { file: second, note: "女仆装" }
+    ]);
     expect((input.element as HTMLInputElement).value).toBe("");
+  });
+
+  it("shows the nine-item catalog boundary and emits note edits", async () => {
+    const wrapper = mountDialog();
+    expect(wrapper.text()).toContain("素材库最多 9 张，每次自拍选用 1–3 张");
+    expect(wrapper.text()).toContain("日常服");
+
+    await wrapper.get('button[aria-label="编辑备注 日常服"]').trigger("click");
+    const note = wrapper.get('input[aria-label="plana.png 的备注"]');
+    expect((note.element as HTMLInputElement).value).toBe("日常服");
+    await note.setValue("女仆装");
+    await wrapper.get("#selfie-note-form").trigger("submit");
+
+    expect(wrapper.emitted("updateNote")?.[0]).toEqual([image.id, "女仆装"]);
+  });
+
+  it("keeps the edited note available when saving fails", async () => {
+    const wrapper = mountDialog();
+    await wrapper.get('button[aria-label="编辑备注 日常服"]').trigger("click");
+    const note = wrapper.get('input[aria-label="plana.png 的备注"]');
+    await note.setValue("泳装");
+    await wrapper.get("#selfie-note-form").trigger("submit");
+    await wrapper.setProps({ status: { kind: "error", message: "备注保存失败" } });
+
+    expect(wrapper.get('input[aria-label="plana.png 的备注"]').element).toHaveProperty("value", "泳装");
+    expect(wrapper.text()).toContain("备注保存失败");
   });
 
   it("opens the original only after preview is requested", async () => {
     const wrapper = mountDialog();
     expect(wrapper.find(`img[src="${image.originalUrl}"]`).exists()).toBe(false);
 
-    await wrapper.get(`button[aria-label="查看原图 ${image.fileName}"]`).trigger("click");
+    await wrapper.get(`button[aria-label="查看原图 ${image.note}"]`).trigger("click");
 
     expect(wrapper.find(`img[src="${image.originalUrl}"]`).exists()).toBe(true);
   });
 
   it("confirms deletion before emitting remove", async () => {
     const wrapper = mountDialog();
-    await wrapper.get(`button[aria-label="删除 ${image.fileName}"]`).trigger("click");
+    await wrapper.get(`button[aria-label="删除 ${image.note}"]`).trigger("click");
     expect(wrapper.text()).toContain("删除这张参考图？");
 
     const confirm = wrapper.findAll("button").find((button) => button.text() === "删除");

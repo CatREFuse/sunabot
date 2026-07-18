@@ -9,6 +9,16 @@ import {
 } from "../../tooling/shared/safe-absolute-path.mjs";
 
 export const MULTI_AGENT_MIGRATION_MARKER = "business/migrations/multi-agent-v1.json";
+export const MEMORY_PERSPECTIVE_MAINTENANCE_INTENT =
+  "business/migrations/memory-perspective-v1-intent.json";
+const MEMORY_PERSPECTIVE_PRE_INSTALL_STATES = new Set([
+  "awaiting-backup",
+  "prepared",
+  "staging-restored",
+  "staging-applying",
+  "staging-failed",
+  "staged-ready"
+]);
 
 export async function inspectMultiAgentMigrationGate(workspaceInput) {
   const workspace = await validateMultiAgentWorkspacePath(workspaceInput);
@@ -24,6 +34,7 @@ export async function inspectMultiAgentMigrationGate(workspaceInput) {
     throw gateError("WORKSPACE_INVALID", `workspace 必须是普通目录且不能是符号链接：${workspace}。`);
   }
 
+  await assertNoIncompleteMemoryPerspectiveMaintenance(workspace);
   await assertMarkerPathSafe(workspace, markerPath);
   const marker = await readOptionalJson(markerPath);
   if (marker) {
@@ -41,6 +52,54 @@ export async function inspectMultiAgentMigrationGate(workspaceInput) {
     return { state: "fresh", workspace, markerPath, existingEntries };
   }
   return { state: "migration-required", workspace, markerPath, existingEntries };
+}
+
+async function assertNoIncompleteMemoryPerspectiveMaintenance(workspace) {
+  const intentPath = path.join(workspace, MEMORY_PERSPECTIVE_MAINTENANCE_INTENT);
+  let stat;
+  try {
+    stat = await fs.lstat(intentPath);
+  } catch (error) {
+    if (error?.code === "ENOENT") return;
+    throw error;
+  }
+  if (!stat.isFile() || stat.isSymbolicLink()) {
+    throw gateError(
+      "MEMORY_PERSPECTIVE_MAINTENANCE_BLOCKED",
+      "记忆重整 intent 路径无效；Core 已拒绝启动，请先完成受控恢复。"
+    );
+  }
+  let state = "unknown";
+  try {
+    const intent = JSON.parse(await fs.readFile(intentPath, "utf8"));
+    if (typeof intent?.state === "string" && intent.state.trim()) state = intent.state.trim();
+  } catch {
+    state = "invalid";
+  }
+  throw gateError(
+    "MEMORY_PERSPECTIVE_MAINTENANCE_BLOCKED",
+    `记忆重整仍处于 ${state} 状态；Core 已拒绝启动，${memoryPerspectiveRecoveryInstruction(state)}`,
+    { intentPath, state }
+  );
+}
+
+function memoryPerspectiveRecoveryInstruction(state) {
+  if (MEMORY_PERSPECTIVE_PRE_INSTALL_STATES.has(state)) {
+    return "请保持停服并按维护计划继续当前步骤，或执行 abort 安全取消；禁止手工删除 intent。";
+  }
+  if (state === "installing") {
+    return "请重复 install 继续安装，或执行 rollback 恢复原恢复点；禁止手工删除 intent。";
+  }
+  if (state === "verifying") {
+    return "请执行 verify 完成验证，失败时执行 rollback；禁止手工删除 intent。";
+  }
+  if (state === "rollback-staged" || state === "rollback-installing") {
+    return "请重复 rollback 返回的 install 命令完成恢复；禁止手工删除 intent。";
+  }
+  if (state === "rollback-required") {
+    return "请执行 rollback，并按返回的 install 命令完成恢复；禁止手工删除 intent。";
+  }
+  return "请保持停服并按受控恢复流程处理；禁止手工删除 intent。";
 }
 
 export async function validateMultiAgentWorkspacePath(workspaceInput) {

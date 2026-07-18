@@ -392,6 +392,7 @@ export interface MockApiState {
   selfieReferences: Array<{
     id: string;
     fileName: string;
+    note: string;
     sizeBytes: number;
     width: number;
     height: number;
@@ -459,9 +460,9 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
     extensionRequests: [],
     mcpApprovals: [mockMcpApproval()],
     selfieReferences: [
-      selfieReference("01-neutral-face.png", 458, 501, 241_664),
-      selfieReference("02-gentle-smile.png", 458, 501, 244_736),
-      selfieReference("03-full-outfit.jpg", 1200, 1393, 441_344)
+      selfieReference("01-neutral-face.png", "常服正面", 458, 501, 241_664),
+      selfieReference("02-gentle-smile.png", "温柔微笑", 458, 501, 244_736),
+      selfieReference("03-full-outfit.jpg", "制服全身", 1200, 1393, 441_344)
     ]
   };
 
@@ -903,17 +904,32 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
       return route.fulfill({ status: 200, contentType: "image/png", body: await imageFixture });
     }
     if (pathname === "/api/selfie-references" && method === "GET") {
-      return json(route, { images: state.selfieReferences, maxImages: 3 });
+      return json(route, { images: state.selfieReferences, maxImages: 9 });
     }
     if (pathname === "/api/selfie-references" && method === "POST") {
-      if (state.selfieReferences.length >= 3) {
-        return json(route, { error: { code: "SELFIE_REFERENCE_LIMIT", message: "最多保留 3 张参考图。" } }, 409);
+      if (state.selfieReferences.length >= 9) {
+        return json(route, { error: { code: "SELFIE_REFERENCE_LIMIT", message: "最多保留 9 张参考图。" } }, 409);
       }
-      const body = request.postDataJSON() as { fileName?: string };
-      state.selfieReferences.push(selfieReference(body.fileName || "reference.png", 640, 640, 16_384));
-      return json(route, { images: state.selfieReferences, maxImages: 3 }, 201);
+      const body = request.postDataJSON() as { fileName?: string; note?: string };
+      const note = body.note?.trim() ?? "";
+      if (!note) {
+        return json(route, { error: { code: "SELFIE_REFERENCE_NOTE_INVALID", message: "自拍参考图备注无效。" } }, 400);
+      }
+      state.selfieReferences.push(selfieReference(body.fileName || "reference.png", note, 640, 640, 16_384));
+      return json(route, { images: state.selfieReferences, maxImages: 9 }, 201);
     }
     const selfieReferenceMatch = pathname.match(/^\/api\/selfie-references\/([^/]+)$/);
+    if (selfieReferenceMatch && method === "PATCH") {
+      const id = decodeURIComponent(selfieReferenceMatch[1]);
+      const body = request.postDataJSON() as { note?: string };
+      const note = body.note?.trim() ?? "";
+      const reference = state.selfieReferences.find((image) => image.id === id);
+      if (!reference || !note) {
+        return json(route, { error: { code: "SELFIE_REFERENCE_NOTE_INVALID", message: "自拍参考图备注无效。" } }, 400);
+      }
+      reference.note = note;
+      return json(route, { images: state.selfieReferences, maxImages: 9 });
+    }
     if (selfieReferenceMatch && method === "DELETE") {
       const id = decodeURIComponent(selfieReferenceMatch[1]);
       state.selfieReferences = state.selfieReferences.filter((image) => image.id !== id);
@@ -1430,7 +1446,18 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
         asyncCodex: true,
         asyncImage: true,
         skillCapabilities: BUILTIN_SKILL_TOOL_CAPABILITIES
-      }, prompt?.tools).map((tool) => {
+      }, prompt?.tools).map((tool) => tool.name === "workspace_bash"
+        ? {
+            ...tool,
+            accessLabel: state.config.bot.bash.allowGroup
+              ? "管理员 QQ 私聊与群聊可用"
+              : "管理员 QQ 私聊可用",
+            accessDescription: state.config.bot.bash.allowGroup
+              ? "私聊使用所选后端。群聊固定使用 Docker 受限模式。Web Chat 和普通用户不可用。"
+              : "私聊使用所选后端。群聊未开启。Web Chat 和普通用户不可用。",
+            executionBackend: state.config.bot.bash.adminPrivateBackend
+          }
+        : tool).map((tool) => {
         const configured = tool.name === "workspace_bash"
           ? state.config.bot.bash.enabled
           : tool.name === "codex"
@@ -1819,12 +1846,13 @@ async function json(route: Route, body: unknown, status = 200) {
   await route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
 }
 
-function selfieReference(fileName: string, width: number, height: number, sizeBytes: number) {
+function selfieReference(fileName: string, note: string, width: number, height: number, sizeBytes: number) {
   const id = fileName;
   const path = `/api/selfie-references/${encodeURIComponent(id)}/content`;
   return {
     id,
     fileName,
+    note,
     sizeBytes,
     width,
     height,

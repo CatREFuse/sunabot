@@ -19,6 +19,8 @@ const RECOVERY_DIRECTORY_PREFIX = "sqlite-recovery-";
 const PARTIAL_DIRECTORY_PREFIX = ".partial-sqlite-recovery-";
 const MANIFEST_FILE = "manifest.json";
 const MANIFEST_CHECKSUM_FILE = "manifest.sha256";
+const RECOVERY_OWNER_FILE = ".recovery-owner.json";
+const PARTIAL_OWNER_FILE = ".recovery-owner.json";
 const LOCK_FILE = ".sqlite-recovery.lock";
 const DEFAULT_AGENT_ID = "plana";
 const AGENT_ID_PATTERN = /^[a-z][a-z0-9-]{1,31}$/;
@@ -37,12 +39,17 @@ const CURRENT_APPLICATION_REQUIRED_TABLES = [
   "agent_accounts",
   "agents",
   "conversation_thread_states",
+  "emojis",
   "model_call_aggregates",
   "model_call_model_aggregates"
 ];
 const PRE_THREAD_APPLICATION_STORAGE_SCHEMA_VERSION = 9;
 const PRE_THREAD_APPLICATION_REQUIRED_TABLES = CURRENT_APPLICATION_REQUIRED_TABLES.filter(
-  (table) => table !== "conversation_thread_states"
+  (table) => table !== "conversation_thread_states" && table !== "emojis"
+);
+const PRE_EMOJI_APPLICATION_STORAGE_SCHEMA_VERSION = 10;
+const PRE_EMOJI_APPLICATION_REQUIRED_TABLES = CURRENT_APPLICATION_REQUIRED_TABLES.filter(
+  (table) => table !== "emojis"
 );
 const QUEUE_REQUIRED_TABLES = ["outbox", "schema_migrations", "session_events", "sessions", "tool_jobs", "turns"];
 const LEGACY_DATABASE_DEFINITIONS = [
@@ -74,36 +81,60 @@ export class RecoveryGateError extends Error {
 }
 
 export async function createRecoveryPoint(options) {
-  const workspace = absolutePath(options.workspace, "workspace");
+  let workspace = absolutePath(options.workspace, "workspace");
   if (options.quiesced !== true) {
     throw new RecoveryGateError(
       "QUIESCENCE_REQUIRED",
       "全 Agent SQLite 恢复点只能在 Sunabot 与 NapCat 已停止写入后创建；请显式确认 quiesced。"
     );
   }
-  const backupsRoot = absolutePath(
-    options.backupsRoot ?? path.join(workspace, "backups", "sqlite-recovery"),
-    "backupsRoot"
-  );
   const now = dateFrom(options.now ?? new Date());
   const backupId = options.backupId ?? recoveryPointId(now);
   assertBackupId(backupId);
-  const finalDirectory = path.join(backupsRoot, backupId);
-  const partialDirectory = path.join(backupsRoot, `${PARTIAL_DIRECTORY_PREFIX}${backupId}`);
   const busyTimeoutMs = positiveInteger(options.busyTimeoutMs ?? 5_000, "busyTimeoutMs");
   const faultInjector = options.faultInjector ?? (() => undefined);
 
-  await safeRecoveryDirectory(workspace);
-  await safeRecoveryDirectory(backupsRoot, { create: true });
+  workspace = await safeRecoveryDirectory(workspace);
+  let backupsRoot = absolutePath(
+    options.backupsRoot ?? path.join(workspace, "backups", "sqlite-recovery"),
+    "backupsRoot"
+  );
+  backupsRoot = await safeRecoveryDirectory(backupsRoot, { create: true });
+  const finalDirectory = path.join(backupsRoot, backupId);
+  const partialDirectory = path.join(backupsRoot, `${PARTIAL_DIRECTORY_PREFIX}${backupId}`);
+  const backupsRootIdentityChain = captureDirectoryIdentityChainSync(backupsRoot);
   const releaseLock = await acquireRecoveryLock(backupsRoot, now);
   const locks = [];
   let preservePartial = false;
+  let ownedPartialIdentity = null;
+  let ownerRecord = null;
+  const ownedPartialArtifacts = new Map();
   try {
     await removeInterruptedPartials(backupsRoot);
     await assertMissing(finalDirectory, "BACKUP_ALREADY_EXISTS");
     await fs.mkdir(partialDirectory, { recursive: false, mode: 0o700 });
+    const partialStat = fsSync.lstatSync(partialDirectory);
+    if (!partialStat.isDirectory() || partialStat.isSymbolicLink()) {
+      throw new RecoveryGateError("RECOVERY_PATH_UNSAFE", "恢复点暂存路径必须是普通目录。");
+    }
+    ownedPartialIdentity = fileIdentity(partialStat);
+    ownerRecord = {
+      schemaVersion: 1,
+      backupId,
+      token: crypto.randomUUID(),
+      directoryIdentity: ownedPartialIdentity
+    };
+    await writeRecoveryOwnerFile(partialDirectory, ownerRecord);
+    ownedPartialArtifacts.set(RECOVERY_OWNER_FILE, fileIdentity(fsSync.lstatSync(
+      path.join(partialDirectory, RECOVERY_OWNER_FILE)
+    )));
 
-    const definitions = await discoverWorkspaceDatabaseDefinitions(workspace);
+    const sourceIdentitySnapshot = captureWorkspaceDatabaseIdentitySnapshot(workspace);
+    const definitions = await discoverWorkspaceDatabaseDefinitions(workspace, {
+      databaseOpenObserver: options.databaseOpenObserver,
+      databaseIdentitySnapshot: sourceIdentitySnapshot
+    });
+    assertWorkspaceDatabaseDefinitionsMatchSnapshot(definitions, sourceIdentitySnapshot);
     const sources = definitions.map((definition) => ({
       definition,
       sourcePath: safeWorkspaceChild(workspace, definition.source)
@@ -116,8 +147,16 @@ export async function createRecoveryPoint(options) {
     for (const source of sources) {
       const walPath = `${source.sourcePath}-wal`;
       const walBytesBefore = await fileSizeOrZero(walPath);
+      assertWorkspaceDatabaseIdentitySnapshot(workspace, sourceIdentitySnapshot);
+      options.databaseOpenObserver?.({
+        databasePath: source.sourcePath,
+        id: source.definition.id,
+        phase: "source-checkpoint"
+      });
+      assertWorkspaceDatabaseIdentitySnapshot(workspace, sourceIdentitySnapshot);
       const lock = new DatabaseSync(source.sourcePath, { timeout: busyTimeoutMs });
       locks.push(lock);
+      assertWorkspaceDatabaseIdentitySnapshot(workspace, sourceIdentitySnapshot);
       lock.exec(`PRAGMA busy_timeout=${busyTimeoutMs}`);
       const checkpoint = checkpointDatabase(lock, source.definition.id);
       checkpointResults.push({ id: source.definition.id, walBytesBefore, ...checkpoint });
@@ -130,12 +169,22 @@ export async function createRecoveryPoint(options) {
         throw sqliteGateError(error, `无法锁定 ${sources[index].definition.id} 数据库`);
       }
     }
+    assertWorkspaceDatabaseIdentitySnapshot(workspace, sourceIdentitySnapshot);
     await invokeFault(faultInjector, "after-locks");
+    assertWorkspaceDatabaseIdentitySnapshot(workspace, sourceIdentitySnapshot);
 
     const databaseEntries = [];
     for (const [index, source] of sources.entries()) {
       const destination = path.join(partialDirectory, source.definition.file);
+      assertWorkspaceDatabaseIdentitySnapshot(workspace, sourceIdentitySnapshot);
+      options.databaseOpenObserver?.({
+        databasePath: source.sourcePath,
+        id: source.definition.id,
+        phase: "source-backup"
+      });
+      assertWorkspaceDatabaseIdentitySnapshot(workspace, sourceIdentitySnapshot);
       const sourceDatabase = new DatabaseSync(source.sourcePath, { readOnly: true, timeout: busyTimeoutMs });
+      assertWorkspaceDatabaseIdentitySnapshot(workspace, sourceIdentitySnapshot);
       try {
         const sourceInspection = inspectDatabase(sourceDatabase, source.definition);
         await backup(sourceDatabase, destination, { rate: 128 });
@@ -156,16 +205,28 @@ export async function createRecoveryPoint(options) {
           invariants: sourceInspection.invariants,
           checkpoint: checkpointResults[index]
         };
+        ownedPartialArtifacts.set(source.definition.file, fileIdentity(fsSync.lstatSync(destination)));
+        options.databaseOpenObserver?.({
+          databasePath: destination,
+          id: source.definition.id,
+          phase: "backup-copy-verify"
+        });
         verifyDatabaseFile(destination, source.definition, entry);
         databaseEntries.push(entry);
       } finally {
         sourceDatabase.close();
       }
+      assertWorkspaceDatabaseIdentitySnapshot(workspace, sourceIdentitySnapshot);
       await invokeFault(
         faultInjector,
         `after-${source.definition.agentId}-${source.definition.kind}-backup`
       );
+      assertWorkspaceDatabaseIdentitySnapshot(workspace, sourceIdentitySnapshot);
     }
+    for (const entry of databaseEntries) {
+      await removeTransientRestoreSidecars(path.join(partialDirectory, entry.file));
+    }
+    assertWorkspaceDatabaseIdentitySnapshot(workspace, sourceIdentitySnapshot);
 
     const manifest = {
       schemaVersion: RECOVERY_MANIFEST_VERSION,
@@ -192,17 +253,82 @@ export async function createRecoveryPoint(options) {
       databases: databaseEntries,
       crossDatabaseInvariants: buildCrossDatabaseInvariants(databaseEntries, RECOVERY_MANIFEST_VERSION)
     };
+    assertWorkspaceDatabaseIdentitySnapshot(workspace, sourceIdentitySnapshot);
     await invokeFault(faultInjector, "before-manifest");
+    assertWorkspaceDatabaseIdentitySnapshot(workspace, sourceIdentitySnapshot);
     await writeManifest(partialDirectory, manifest);
-    await verifyRecoveryPoint(partialDirectory);
+    for (const name of [MANIFEST_FILE, MANIFEST_CHECKSUM_FILE]) {
+      ownedPartialArtifacts.set(name, fileIdentity(fsSync.lstatSync(path.join(partialDirectory, name))));
+    }
+    const publicationSnapshot = captureRecoveryPublicationSnapshot(
+      partialDirectory,
+      manifest,
+      ownerRecord
+    );
+    const verified = await verifyRecoveryPoint(partialDirectory, {
+      databaseOpenObserver: options.databaseOpenObserver
+    });
+    assertWorkspaceDatabaseIdentitySnapshot(workspace, sourceIdentitySnapshot);
+    for (const entry of verified.manifest.databases) {
+      await removeTransientRestoreSidecars(path.join(partialDirectory, entry.file));
+    }
     await syncDirectory(partialDirectory);
+    assertWorkspaceDatabaseIdentitySnapshot(workspace, sourceIdentitySnapshot);
+    assertRecoveryPublicationSnapshot(
+      partialDirectory,
+      publicationSnapshot,
+      finalDirectory,
+      manifest,
+      ownerRecord
+    );
     await invokeFault(faultInjector, "before-publish");
-    await fs.rename(partialDirectory, finalDirectory);
+    assertWorkspaceDatabaseIdentitySnapshot(workspace, sourceIdentitySnapshot);
+    assertRecoveryPublicationSnapshot(
+      partialDirectory,
+      publicationSnapshot,
+      finalDirectory,
+      manifest,
+      ownerRecord
+    );
+    fsSync.renameSync(partialDirectory, finalDirectory);
+    await invokeFault(faultInjector, "after-publish-rename");
+    assertWorkspaceDatabaseIdentitySnapshot(workspace, sourceIdentitySnapshot);
+    assertRecoveryPublicationSnapshot(
+      finalDirectory,
+      publicationSnapshot,
+      null,
+      manifest,
+      ownerRecord
+    );
     await syncDirectory(backupsRoot);
+    await invokeFault(faultInjector, "after-publish-fsync");
+    assertRecoveryPublicationSnapshot(
+      finalDirectory,
+      publicationSnapshot,
+      null,
+      manifest,
+      ownerRecord
+    );
+    assertWorkspaceDatabaseIdentitySnapshot(workspace, sourceIdentitySnapshot);
     return { directory: finalDirectory, manifest };
   } catch (error) {
     preservePartial = error?.preservePartial === true;
-    if (!preservePartial) await removeSafeRecoveryDirectory(partialDirectory);
+    if (!preservePartial && ownedPartialIdentity) {
+      const cleanup = await quarantineOwnedRecoveryDirectory({
+        directories: [partialDirectory, finalDirectory],
+        backupsRoot,
+        backupsRootIdentityChain,
+        expectedIdentity: ownedPartialIdentity,
+        backupId,
+        ownedArtifacts: ownedPartialArtifacts
+      });
+      if (cleanup.status === "ownership-conflict" && error && typeof error === "object") {
+        error.details = {
+          ...(error.details && typeof error.details === "object" ? error.details : {}),
+          partialCleanup: cleanup
+        };
+      }
+    }
     throw normalizeGateError(error);
   } finally {
     for (const lock of locks.reverse()) {
@@ -218,7 +344,7 @@ export async function createRecoveryPoint(options) {
   }
 }
 
-export async function verifyRecoveryPoint(backupDirectoryInput) {
+export async function verifyRecoveryPoint(backupDirectoryInput, options = {}) {
   const backupDirectory = absolutePath(backupDirectoryInput, "backupDirectory");
   await safeRecoveryDirectory(backupDirectory);
   const manifestPath = path.join(backupDirectory, MANIFEST_FILE);
@@ -239,14 +365,39 @@ export async function verifyRecoveryPoint(backupDirectoryInput) {
   }
   validateManifestShape(manifest);
   const definitions = databaseDefinitionsForManifest(manifest);
+  const forbiddenFileIdentities = normalizeForbiddenFileIdentities(
+    options.forbiddenDatabaseFileIdentities
+  );
+  const recoveryFileIdentities = new Map();
+  const databaseFiles = [];
 
-  const inspections = [];
   for (const definition of definitions) {
     const expected = manifest.databases.find((entry) => entry.id === definition.id);
     if (!expected) throw new RecoveryGateError("BACKUP_DATABASE_MISSING", `manifest 缺少 ${definition.id} 数据库。`);
     const databasePath = safeManifestChild(backupDirectory, expected.file);
     await assertRegularFile(databasePath, "BACKUP_FILE_MISSING");
-    const stat = await fs.stat(databasePath);
+    const stat = await fs.lstat(databasePath);
+    if (stat.nlink !== 1) {
+      throw new RecoveryGateError(
+        "BACKUP_FILE_HARDLINK_UNSAFE",
+        `${definition.id} 恢复数据库必须是独立文件。`
+      );
+    }
+    const identity = fileIdentity(stat);
+    if (recoveryFileIdentities.has(identity) || forbiddenFileIdentities.has(identity)) {
+      throw new RecoveryGateError(
+        "BACKUP_FILE_IDENTITY_CONFLICT",
+        `${definition.id} 恢复数据库与其他数据库共用文件身份。`
+      );
+    }
+    recoveryFileIdentities.set(identity, definition.id);
+    databaseFiles.push({ definition, expected, databasePath, identity });
+  }
+
+  const inspections = [];
+  for (const { definition, expected, databasePath, identity } of databaseFiles) {
+    const stat = await fs.lstat(databasePath);
+    assertRecoveryFileIdentity(stat, identity, definition.id);
     if (stat.size !== expected.bytes) {
       throw new RecoveryGateError("BACKUP_SIZE_MISMATCH", `${definition.id} 数据库大小不匹配。`);
     }
@@ -254,7 +405,14 @@ export async function verifyRecoveryPoint(backupDirectoryInput) {
     if (digest !== expected.sha256) {
       throw new RecoveryGateError("BACKUP_CHECKSUM_MISMATCH", `${definition.id} 数据库校验和不匹配。`);
     }
-    const inspection = verifyDatabaseFile(databasePath, definition, expected);
+    const beforeOpen = await fs.lstat(databasePath);
+    assertRecoveryFileIdentity(beforeOpen, identity, definition.id);
+    options.databaseOpenObserver?.({ databasePath, id: definition.id });
+    const inspection = verifyDatabaseFile(databasePath, definition, expected, {
+      databaseInspectionExtension: options.databaseInspectionExtension
+    });
+    const afterOpen = await fs.lstat(databasePath);
+    assertRecoveryFileIdentity(afterOpen, identity, definition.id);
     inspections.push({
       id: definition.id,
       agentId: definition.agentId,
@@ -262,9 +420,11 @@ export async function verifyRecoveryPoint(backupDirectoryInput) {
       ...inspection
     });
   }
+  await assertRecoveryIdentitySnapshot(databaseFiles);
   if (manifest.schemaVersion === RECOVERY_MANIFEST_VERSION) {
-    verifyV2ManifestAgentSet(backupDirectory, manifest);
+    verifyV2ManifestAgentSet(backupDirectory, manifest, options, databaseFiles);
   }
+  await assertRecoveryIdentitySnapshot(databaseFiles);
   const crossDatabaseInvariants = buildCrossDatabaseInvariants(inspections, manifest.schemaVersion);
   if (stableJson(crossDatabaseInvariants) !== stableJson(manifest.crossDatabaseInvariants)) {
     throw new RecoveryGateError(
@@ -275,8 +435,184 @@ export async function verifyRecoveryPoint(backupDirectoryInput) {
   return { ok: true, directory: backupDirectory, manifest, inspections };
 }
 
+function normalizeForbiddenFileIdentities(input) {
+  if (input == null) return new Set();
+  if (!Array.isArray(input) || input.some((identity) => !/^\d+:\d+$/.test(String(identity)))) {
+    throw new RecoveryGateError(
+      "BACKUP_VERIFY_OPTION_INVALID",
+      "forbiddenDatabaseFileIdentities 必须是 dev:ino 字符串数组。"
+    );
+  }
+  return new Set(input.map(String));
+}
+
+function fileIdentity(stat) {
+  return `${stat.dev}:${stat.ino}`;
+}
+
+function assertRecoveryFileIdentity(stat, expectedIdentity, id) {
+  if (!stat.isFile() || stat.nlink !== 1 || fileIdentity(stat) !== expectedIdentity) {
+    throw new RecoveryGateError(
+      "BACKUP_FILE_IDENTITY_CHANGED",
+      `${id} 恢复数据库在校验期间发生文件身份变化。`
+    );
+  }
+}
+
+async function assertRecoveryIdentitySnapshot(databaseFiles) {
+  for (const { definition, databasePath, identity } of databaseFiles) {
+    const stat = await fs.lstat(databasePath);
+    assertRecoveryFileIdentity(stat, identity, definition.id);
+  }
+}
+
+function captureRecoveryPublicationSnapshot(directory, manifest, ownerRecord = null) {
+  const parentDirectory = path.dirname(directory);
+  const parentDirectoryChain = captureDirectoryIdentityChainSync(parentDirectory);
+  let directoryStat;
+  try {
+    directoryStat = fsSync.lstatSync(directory);
+  } catch (error) {
+    throw new RecoveryGateError(
+      "BACKUP_PUBLICATION_CHANGED",
+      `恢复点暂存目录不可读：${directory}（${error.message}）`
+    );
+  }
+  if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink()) {
+    throw new RecoveryGateError("BACKUP_PUBLICATION_CHANGED", "恢复点暂存路径必须是普通目录。");
+  }
+  const expectedNames = [
+    MANIFEST_FILE,
+    MANIFEST_CHECKSUM_FILE,
+    ...manifest.databases.map((entry) => entry.file),
+    ...(ownerRecord ? [RECOVERY_OWNER_FILE] : [])
+  ].sort();
+  const actualEntries = fsSync.readdirSync(directory, { withFileTypes: true });
+  const actualNames = actualEntries.map((entry) => entry.name).sort();
+  if (stableJson(actualNames) !== stableJson(expectedNames)
+    || actualEntries.some((entry) => !entry.isFile() || entry.isSymbolicLink())) {
+    throw new RecoveryGateError(
+      "BACKUP_PUBLICATION_CHANGED",
+      "恢复点暂存目录文件集合与已验证 manifest 不一致。"
+    );
+  }
+
+  const identities = new Set();
+  const files = [];
+  const manifestBytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  const manifestChecksumBytes = Buffer.from(
+    `${sha256(manifestBytes)}  ${MANIFEST_FILE}\n`,
+    "utf8"
+  );
+  const fixedFileExpectations = new Map([
+    [MANIFEST_FILE, { bytes: manifestBytes.length, sha256: sha256(manifestBytes) }],
+    [MANIFEST_CHECKSUM_FILE, {
+      bytes: manifestChecksumBytes.length,
+      sha256: sha256(manifestChecksumBytes)
+    }]
+  ]);
+  if (ownerRecord) {
+    const ownerBytes = Buffer.from(`${JSON.stringify(ownerRecord, null, 2)}\n`, "utf8");
+    fixedFileExpectations.set(RECOVERY_OWNER_FILE, {
+      bytes: ownerBytes.length,
+      sha256: sha256(ownerBytes)
+    });
+  }
+  for (const name of expectedNames) {
+    const filePath = path.join(directory, name);
+    const before = fsSync.lstatSync(filePath);
+    const identity = fileIdentity(before);
+    if (!before.isFile()
+      || before.isSymbolicLink()
+      || before.nlink !== 1
+      || identities.has(identity)) {
+      throw new RecoveryGateError(
+        "BACKUP_PUBLICATION_CHANGED",
+        `恢复点发布文件不是独立普通文件：${name}`
+      );
+    }
+    identities.add(identity);
+    const digest = sha256FileSync(filePath);
+    const after = fsSync.lstatSync(filePath);
+    if (!after.isFile()
+      || after.isSymbolicLink()
+      || after.nlink !== 1
+      || fileIdentity(after) !== identity
+      || after.size !== before.size) {
+      throw new RecoveryGateError(
+        "BACKUP_PUBLICATION_CHANGED",
+        `恢复点发布文件在摘要期间发生变化：${name}`
+      );
+    }
+    const expectedDatabase = manifest.databases.find((entry) => entry.file === name);
+    const expectedFile = expectedDatabase ?? fixedFileExpectations.get(name);
+    if (!expectedFile
+      || before.size !== expectedFile.bytes
+      || digest !== expectedFile.sha256) {
+      throw new RecoveryGateError(
+        "BACKUP_PUBLICATION_CHANGED",
+        `恢复点发布文件与已验证内容不一致：${name}`
+      );
+    }
+    files.push({ name, identity, bytes: before.size, sha256: digest });
+  }
+  return {
+    parentDirectoryChain,
+    directoryIdentity: fileIdentity(directoryStat),
+    files
+  };
+}
+
+function assertRecoveryPublicationSnapshot(directory, expected, finalDirectory, manifest, ownerRecord = null) {
+  let current;
+  try {
+    assertDirectoryIdentityChainSync(path.dirname(directory), expected.parentDirectoryChain);
+    current = captureRecoveryPublicationSnapshot(directory, manifest, ownerRecord);
+  } catch (error) {
+    if (error instanceof RecoveryGateError && error.code === "BACKUP_PUBLICATION_CHANGED") throw error;
+    throw new RecoveryGateError(
+      "BACKUP_PUBLICATION_CHANGED",
+      `恢复点发布前复验失败：${error.message}`
+    );
+  }
+  if (stableJson(current) !== stableJson(expected)) {
+    throw new RecoveryGateError(
+      "BACKUP_PUBLICATION_CHANGED",
+      "恢复点在验证与发布之间发生身份或内容变化。"
+    );
+  }
+  if (finalDirectory && pathStateSync(finalDirectory) !== "missing") {
+    throw new RecoveryGateError("BACKUP_ALREADY_EXISTS", `路径已存在：${finalDirectory}`);
+  }
+}
+
+function revertRecoveryPublicationRename(finalDirectory, partialDirectory, expected) {
+  if (pathStateSync(partialDirectory) !== "missing") return;
+  try {
+    assertDirectoryIdentityChainSync(path.dirname(finalDirectory), expected.parentDirectoryChain);
+  } catch {
+    return;
+  }
+  let stat;
+  try {
+    stat = fsSync.lstatSync(finalDirectory);
+  } catch {
+    return;
+  }
+  if (!stat.isDirectory()
+    || stat.isSymbolicLink()
+    || fileIdentity(stat) !== expected.directoryIdentity) return;
+  fsSync.renameSync(finalDirectory, partialDirectory);
+}
+
 export async function restoreRecoveryPoint(options) {
-  const backup = await verifyRecoveryPoint(options.backupDirectory);
+  const forbiddenDatabaseFileIdentities = normalizeForbiddenFileIdentities(
+    options.forbiddenDatabaseFileIdentities
+  );
+  const backup = await verifyRecoveryPoint(options.backupDirectory, {
+    forbiddenDatabaseFileIdentities: options.forbiddenDatabaseFileIdentities,
+    databaseOpenObserver: options.databaseOpenObserver
+  });
   const targetWorkspace = absolutePath(options.targetWorkspace, "targetWorkspace");
   const definitions = databaseDefinitionsForManifest(backup.manifest);
   const stagingDirectory = path.join(targetWorkspace, `.restore-${backup.manifest.backupId}.staging`);
@@ -339,6 +675,11 @@ export async function restoreRecoveryPoint(options) {
       }
       await assertRestoreFileMatches(staged, entry, "RESTORE_STAGING_CONFLICT");
       const expected = backup.manifest.databases.find((candidate) => candidate.id === target.definition.id);
+      options.databaseOpenObserver?.({
+        databasePath: staged,
+        id: target.definition.id,
+        phase: "restore-staging-verify"
+      });
       verifyDatabaseFile(staged, target.definition, expected);
       await removeTransientRestoreSidecars(staged);
       if (!intent.copied.includes(target.definition.id)) {
@@ -376,8 +717,29 @@ export async function restoreRecoveryPoint(options) {
         throw new RecoveryGateError("RESTORE_STAGING_MISSING", `恢复暂存文件缺失：${staged}`);
       }
       await assertRestoreFileMatches(staged, entry, "RESTORE_STAGING_CONFLICT");
+      const stagedIdentity = await captureRestoreFileIdentity(
+        staged,
+        forbiddenDatabaseFileIdentities
+      );
       await invokeFault(faultInjector, `before-restore-rename-${target.definition.agentId}-${target.definition.kind}`);
+      await assertRestoreFileMatches(staged, entry, "RESTORE_STAGING_CONFLICT");
+      await assertRestoreFileIdentity(
+        staged,
+        stagedIdentity,
+        forbiddenDatabaseFileIdentities
+      );
+      if (await databaseFileState(target.destination) !== "missing") {
+        throw new RecoveryGateError(
+          "RESTORE_DESTINATION_CONFLICT",
+          `恢复目标在最终 rename 前发生变化：${target.destination}`
+        );
+      }
       await fs.rename(staged, target.destination);
+      await assertRestoreFileIdentity(
+        target.destination,
+        stagedIdentity,
+        forbiddenDatabaseFileIdentities
+      );
       await syncDirectory(path.dirname(target.destination));
       await invokeFault(faultInjector, `after-restore-rename-${target.definition.agentId}-${target.definition.kind}`);
       if (!intent.completed.includes(target.definition.id)) intent.completed.push(target.definition.id);
@@ -387,7 +749,9 @@ export async function restoreRecoveryPoint(options) {
     throw normalizeGateError(error, "RESTORE_FAILED");
   }
 
-  const verification = await verifyWorkspaceDatabases(targetWorkspace, backup.manifest);
+  const verification = await verifyWorkspaceDatabases(targetWorkspace, backup.manifest, {
+    databaseOpenObserver: options.databaseOpenObserver
+  });
   await fs.rmdir(stagingDirectory).catch((error) => {
     if (error?.code !== "ENOENT") throw error;
   });
@@ -397,7 +761,9 @@ export async function restoreRecoveryPoint(options) {
 }
 
 export async function rollbackRecoveryPointRestore(options) {
-  const backup = await verifyRecoveryPoint(options.backupDirectory);
+  const backup = await verifyRecoveryPoint(options.backupDirectory, {
+    databaseOpenObserver: options.databaseOpenObserver
+  });
   const targetWorkspace = absolutePath(options.targetWorkspace, "targetWorkspace");
   await safeRecoveryDirectory(targetWorkspace);
   const definitions = databaseDefinitionsForManifest(backup.manifest);
@@ -544,6 +910,33 @@ async function assertRestoreFileMatches(filePath, entry, code) {
   }
 }
 
+async function captureRestoreFileIdentity(filePath, forbiddenIdentities) {
+  const stat = await fs.lstat(filePath);
+  const identity = fileIdentity(stat);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || forbiddenIdentities.has(identity)) {
+    throw new RecoveryGateError(
+      "RESTORE_FILE_IDENTITY_UNSAFE",
+      `恢复暂存数据库必须是独立普通文件：${filePath}`
+    );
+  }
+  return identity;
+}
+
+async function assertRestoreFileIdentity(filePath, expectedIdentity, forbiddenIdentities) {
+  const stat = await fs.lstat(filePath);
+  const identity = fileIdentity(stat);
+  if (!stat.isFile()
+    || stat.isSymbolicLink()
+    || stat.nlink !== 1
+    || identity !== expectedIdentity
+    || forbiddenIdentities.has(identity)) {
+    throw new RecoveryGateError(
+      "RESTORE_FILE_IDENTITY_CHANGED",
+      `恢复暂存数据库在最终 rename 前发生文件身份变化：${filePath}`
+    );
+  }
+}
+
 async function removeTransientRestoreSidecars(databasePath) {
   for (const suffix of ["-wal", "-shm"]) {
     const sidecar = `${databasePath}${suffix}`;
@@ -573,18 +966,23 @@ async function removeEmptyRestoreDirectories(targetWorkspace, targets) {
   }
 }
 
-export async function verifyWorkspaceDatabases(workspaceInput, expectedManifest) {
+export async function verifyWorkspaceDatabases(workspaceInput, expectedManifest, options = {}) {
   const workspace = absolutePath(workspaceInput, "workspace");
   await safeRecoveryDirectory(workspace);
   if (expectedManifest) validateManifestShape(expectedManifest);
   const definitions = expectedManifest
     ? databaseDefinitionsForManifest(expectedManifest)
-    : await discoverWorkspaceDatabaseDefinitions(workspace);
+    : await discoverWorkspaceDatabaseDefinitions(workspace, options);
   const inspections = [];
   for (const definition of definitions) {
     const databasePath = safeWorkspaceChild(workspace, definition.source);
     await assertWorkspaceDatabaseSource(workspace, definition, "RESTORED_DATABASE_MISSING");
     const expected = expectedManifest?.databases?.find((entry) => entry.id === definition.id);
+    options.databaseOpenObserver?.({
+      databasePath,
+      id: definition.id,
+      phase: "restored-workspace-verify"
+    });
     inspections.push({
       id: definition.id,
       agentId: definition.agentId,
@@ -684,13 +1082,215 @@ export async function applyRetention(options) {
   return { applied: options.apply === true, plan };
 }
 
-async function discoverWorkspaceDatabaseDefinitions(workspace) {
+function captureWorkspaceDatabaseIdentitySnapshot(workspace) {
+  const entries = [];
+  const identities = new Map();
+  const addDefinition = (definition) => {
+    assertWorkspaceDatabaseDirectoriesSync(workspace, definition);
+    const databasePath = safeWorkspaceChild(workspace, definition.source);
+    let stat;
+    try {
+      stat = fsSync.lstatSync(databasePath);
+    } catch (error) {
+      if (error?.code === "ENOENT") {
+        throw new RecoveryGateError(
+          "SOURCE_DATABASE_MISSING",
+          `数据库文件不存在：${databasePath}`
+        );
+      }
+      throw error;
+    }
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) {
+      throw new RecoveryGateError(
+        "SOURCE_DATABASE_IDENTITY_UNSAFE",
+        `源数据库必须是独立普通文件：${databasePath}`
+      );
+    }
+    const identity = fileIdentity(stat);
+    if (identities.has(identity)) {
+      throw new RecoveryGateError(
+        "SOURCE_DATABASE_IDENTITY_CONFLICT",
+        `源数据库共用文件身份：${identities.get(identity)} 与 ${definition.source}`
+      );
+    }
+    identities.set(identity, definition.source);
+    entries.push({ source: definition.source, databasePath, identity });
+  };
+
+  for (const definition of databaseDefinitionsForAgent(DEFAULT_AGENT_ID)) addDefinition(definition);
+
+  const agentsRoot = safeWorkspaceChild(workspace, "business/agents");
+  const agentsRootState = pathStateSync(agentsRoot);
+  if (agentsRootState !== "missing" && agentsRootState !== "directory") {
+    throw new RecoveryGateError("AGENT_DATABASE_PATH_INVALID", "business/agents 必须是普通目录。");
+  }
+  if (agentsRootState === "directory") {
+    for (const entry of fsSync.readdirSync(agentsRoot, { withFileTypes: true })) {
+      if (entry.isSymbolicLink()) {
+        throw new RecoveryGateError(
+          "AGENT_DATABASE_PATH_INVALID",
+          `Agent 根目录不能包含符号链接：business/agents/${entry.name}`
+        );
+      }
+      if (!entry.isDirectory()) continue;
+      const agentRoot = path.join(agentsRoot, entry.name);
+      if (pathStateSync(agentRoot) !== "directory") {
+        throw new RecoveryGateError(
+          "AGENT_DATABASE_PATH_INVALID",
+          `Agent 根目录必须是普通目录：business/agents/${entry.name}`
+        );
+      }
+      const dataDirectory = path.join(agentRoot, "data");
+      const dataDirectoryState = pathStateSync(dataDirectory);
+      if (dataDirectoryState === "missing") continue;
+      if (dataDirectoryState !== "directory") {
+        throw new RecoveryGateError(
+          "AGENT_DATABASE_PATH_INVALID",
+          `Agent ${entry.name} 的 data 路径必须是普通目录。`
+        );
+      }
+      const applicationState = pathStateSync(path.join(dataDirectory, "sunabot.sqlite"));
+      const queueState = pathStateSync(path.join(dataDirectory, "session-queue.sqlite"));
+      if (applicationState === "missing" && queueState === "missing") continue;
+      if (!AGENT_ID_PATTERN.test(entry.name)) {
+        throw new RecoveryGateError(
+          "AGENT_DATABASE_PATH_INVALID",
+          `Agent 数据库目录无效：business/agents/${entry.name}`
+        );
+      }
+      if (applicationState !== "file" || queueState !== "file") {
+        const code = applicationState === "missing" || queueState === "missing"
+          ? "AGENT_DATABASE_PAIR_INCOMPLETE"
+          : "AGENT_DATABASE_PATH_INVALID";
+        throw new RecoveryGateError(
+          code,
+          `Agent ${entry.name} 的业务库与 session queue 必须是同时存在的普通文件。`
+        );
+      }
+      for (const definition of databaseDefinitionsForAgent(entry.name)) addDefinition(definition);
+    }
+  }
+
+  entries.sort((left, right) => left.source.localeCompare(right.source));
+  return {
+    workspaceDirectoryChain: captureDirectoryIdentityChainSync(workspace),
+    entries
+  };
+}
+
+function assertWorkspaceDatabaseDirectoriesSync(workspace, definition) {
+  let current = path.resolve(workspace);
+  if (pathStateSync(current) !== "directory") {
+    throw new RecoveryGateError("SOURCE_DATABASE_MISSING", `workspace 不是普通目录：${workspace}`);
+  }
+  for (const segment of definition.source.split("/").slice(0, -1)) {
+    current = path.join(current, segment);
+    if (pathStateSync(current) !== "directory") {
+      throw new RecoveryGateError(
+        "SOURCE_DATABASE_MISSING",
+        `数据库目录不存在或不安全：${current}`
+      );
+    }
+  }
+}
+
+function pathStateSync(candidate) {
+  try {
+    const stat = fsSync.lstatSync(candidate);
+    if (stat.isFile() && !stat.isSymbolicLink()) return "file";
+    if (stat.isDirectory() && !stat.isSymbolicLink()) return "directory";
+    return "invalid";
+  } catch (error) {
+    if (error?.code === "ENOENT") return "missing";
+    throw error;
+  }
+}
+
+function captureDirectoryIdentityChainSync(directory) {
+  const resolved = path.resolve(directory);
+  const parsed = path.parse(resolved);
+  const components = resolved.slice(parsed.root.length).split(path.sep).filter(Boolean);
+  const chain = [];
+  let current = parsed.root;
+  for (const component of components) {
+    current = path.join(current, component);
+    const stat = fsSync.lstatSync(current);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) {
+      throw new RecoveryGateError(
+        "RECOVERY_PATH_UNSAFE",
+        `目录身份链包含非普通目录：${current}`
+      );
+    }
+    chain.push({ path: current, identity: fileIdentity(stat) });
+  }
+  return chain;
+}
+
+function assertDirectoryIdentityChainSync(directory, expected) {
+  const current = captureDirectoryIdentityChainSync(directory);
+  if (stableJson(current) !== stableJson(expected)) {
+    throw new RecoveryGateError(
+      "RECOVERY_PATH_IDENTITY_CHANGED",
+      `目录身份链发生变化：${directory}`
+    );
+  }
+}
+
+function assertWorkspaceDatabaseIdentitySnapshot(workspace, expected) {
+  let current;
+  try {
+    assertDirectoryIdentityChainSync(workspace, expected.workspaceDirectoryChain);
+    current = captureWorkspaceDatabaseIdentitySnapshot(workspace);
+  } catch (error) {
+    throw new RecoveryGateError(
+      "SOURCE_DATABASE_IDENTITY_CHANGED",
+      `源数据库身份集合发生变化：${error.message}`,
+      { causeCode: error.code }
+    );
+  }
+  const project = (entries) => entries.map(({ source, identity }) => ({ source, identity }));
+  if (stableJson(current.workspaceDirectoryChain) !== stableJson(expected.workspaceDirectoryChain)
+    || stableJson(project(current.entries)) !== stableJson(project(expected.entries))) {
+    throw new RecoveryGateError(
+      "SOURCE_DATABASE_IDENTITY_CHANGED",
+      "源数据库身份集合在恢复点创建期间发生变化。"
+    );
+  }
+}
+
+function assertWorkspaceDatabaseDefinitionsMatchSnapshot(definitions, snapshot) {
+  const definitionSources = definitions.map((definition) => definition.source).sort();
+  const snapshotSources = snapshot.entries.map((entry) => entry.source).sort();
+  if (stableJson(definitionSources) !== stableJson(snapshotSources)) {
+    throw new RecoveryGateError(
+      "SOURCE_DATABASE_IDENTITY_CHANGED",
+      "数据库注册表、文件系统与固定身份集合不一致。"
+    );
+  }
+}
+
+async function discoverWorkspaceDatabaseDefinitions(workspace, options = {}) {
+  const identitySnapshot = options.databaseIdentitySnapshot
+    ?? captureWorkspaceDatabaseIdentitySnapshot(workspace);
   const defaultDefinitions = databaseDefinitionsForAgent(DEFAULT_AGENT_ID);
   for (const definition of defaultDefinitions) {
     await assertWorkspaceDatabaseSource(workspace, definition, "SOURCE_DATABASE_MISSING");
   }
 
-  const registryInspection = readRegisteredAgents(safeWorkspaceChild(workspace, defaultDefinitions[0].source));
+  const registryDatabasePath = safeWorkspaceChild(workspace, defaultDefinitions[0].source);
+  assertWorkspaceDatabaseIdentitySnapshot(workspace, identitySnapshot);
+  options.databaseOpenObserver?.({
+    databasePath: registryDatabasePath,
+    id: defaultDefinitions[0].id,
+    phase: "source-agent-registry"
+  });
+  assertWorkspaceDatabaseIdentitySnapshot(workspace, identitySnapshot);
+  let registryInspection;
+  try {
+    registryInspection = readRegisteredAgents(registryDatabasePath);
+  } finally {
+    assertWorkspaceDatabaseIdentitySnapshot(workspace, identitySnapshot);
+  }
   const registry = registryInspection.agents;
   if (!registry.has(DEFAULT_AGENT_ID)) registry.set(DEFAULT_AGENT_ID, true);
   const filesystemAgents = await readFilesystemAgentDatabasePairs(workspace);
@@ -730,20 +1330,39 @@ async function discoverWorkspaceDatabaseDefinitions(workspace) {
     }
   }
 
-  return [...registry.keys()]
+  const definitions = [...registry.keys()]
     .sort(compareAgentIds)
     .flatMap((agentId) => {
       const legacyApplicationSchema = registryInspection.legacySingleAgent && agentId === DEFAULT_AGENT_ID;
       const applicationSource = databaseDefinitionsForAgent(agentId)[0].source;
-      const storageSchemaVersion = legacyApplicationSchema
-        ? undefined
-        : readApplicationStorageSchemaVersion(safeWorkspaceChild(workspace, applicationSource));
+      const applicationPath = safeWorkspaceChild(workspace, applicationSource);
+      if (!legacyApplicationSchema) {
+        assertWorkspaceDatabaseIdentitySnapshot(workspace, identitySnapshot);
+        options.databaseOpenObserver?.({
+          databasePath: applicationPath,
+          id: `agent:${agentId}:application`,
+          phase: "source-storage-schema"
+        });
+        assertWorkspaceDatabaseIdentitySnapshot(workspace, identitySnapshot);
+      }
+      let storageSchemaVersion;
+      if (!legacyApplicationSchema) {
+        try {
+          storageSchemaVersion = readApplicationStorageSchemaVersion(applicationPath);
+        } finally {
+          assertWorkspaceDatabaseIdentitySnapshot(workspace, identitySnapshot);
+        }
+      }
       return databaseDefinitionsForAgent(agentId, {
         legacyApplicationSchema,
         preThreadApplicationSchema:
-          storageSchemaVersion === PRE_THREAD_APPLICATION_STORAGE_SCHEMA_VERSION
+          storageSchemaVersion === PRE_THREAD_APPLICATION_STORAGE_SCHEMA_VERSION,
+        preEmojiApplicationSchema:
+          storageSchemaVersion === PRE_EMOJI_APPLICATION_STORAGE_SCHEMA_VERSION
       });
     });
+  assertWorkspaceDatabaseDefinitionsMatchSnapshot(definitions, identitySnapshot);
+  return definitions;
 }
 
 function readApplicationStorageSchemaVersion(databasePath) {
@@ -898,6 +1517,8 @@ function databaseDefinitionsForAgent(agentId, options = {}) {
       schemaProfile: options.legacyApplicationSchema ? "legacy-single-agent" : "current",
       expectedStorageSchemaVersion: options.preThreadApplicationSchema
         ? PRE_THREAD_APPLICATION_STORAGE_SCHEMA_VERSION
+        : options.preEmojiApplicationSchema
+          ? PRE_EMOJI_APPLICATION_STORAGE_SCHEMA_VERSION
         : undefined,
       source: `${dataRoot}/sunabot.sqlite`,
       file: `agent-${agentId}-application.sqlite`,
@@ -905,6 +1526,8 @@ function databaseDefinitionsForAgent(agentId, options = {}) {
         ? LEGACY_APPLICATION_REQUIRED_TABLES
         : options.preThreadApplicationSchema
           ? PRE_THREAD_APPLICATION_REQUIRED_TABLES
+          : options.preEmojiApplicationSchema
+            ? PRE_EMOJI_APPLICATION_REQUIRED_TABLES
           : CURRENT_APPLICATION_REQUIRED_TABLES
     },
     {
@@ -930,7 +1553,8 @@ function databaseDefinitionsForManifest(manifest) {
     );
     return databaseDefinitionsForAgent(agentId, {
       legacyApplicationSchema: application?.schemaProfile === "legacy-single-agent",
-      preThreadApplicationSchema: isPreThreadCurrentApplicationEntry(application)
+      preThreadApplicationSchema: isPreThreadCurrentApplicationEntry(application),
+      preEmojiApplicationSchema: isPreEmojiCurrentApplicationEntry(application)
     });
   });
 }
@@ -941,14 +1565,50 @@ function isPreThreadCurrentApplicationEntry(entry) {
     && !Object.hasOwn(entry.tables, "conversation_thread_states");
 }
 
-function verifyV2ManifestAgentSet(backupDirectory, manifest) {
+function isPreEmojiCurrentApplicationEntry(entry) {
+  return entry?.schemaProfile === "current"
+    && entry.tables
+    && Object.hasOwn(entry.tables, "conversation_thread_states")
+    && !Object.hasOwn(entry.tables, "emojis");
+}
+
+function verifyV2ManifestAgentSet(backupDirectory, manifest, options = {}, databaseFiles = []) {
   const application = manifest.databases.find((entry) =>
     entry.agentId === DEFAULT_AGENT_ID && entry.kind === "application"
   );
   if (!application) {
     throw new RecoveryGateError("BACKUP_MANIFEST_INVALID", "v2 manifest 缺少 Plana 注册主库。");
   }
-  const registryInspection = readRegisteredAgents(safeManifestChild(backupDirectory, application.file));
+  const databasePath = safeManifestChild(backupDirectory, application.file);
+  const pinned = databaseFiles.find((entry) => entry.definition.id === application.id);
+  if (!pinned) {
+    throw new RecoveryGateError("BACKUP_FILE_MISSING", "Plana 注册主库未进入恢复点身份快照。");
+  }
+  assertRecoveryFileIdentity(
+    fsSync.lstatSync(databasePath),
+    pinned.identity,
+    application.id
+  );
+  options.databaseOpenObserver?.({
+    databasePath,
+    id: application.id,
+    phase: "agent-registry"
+  });
+  assertRecoveryFileIdentity(
+    fsSync.lstatSync(databasePath),
+    pinned.identity,
+    application.id
+  );
+  let registryInspection;
+  try {
+    registryInspection = readRegisteredAgents(databasePath);
+  } finally {
+    assertRecoveryFileIdentity(
+      fsSync.lstatSync(databasePath),
+      pinned.identity,
+      application.id
+    );
+  }
   const registeredAgentIds = new Set(registryInspection.agents.keys());
   registeredAgentIds.add(DEFAULT_AGENT_ID);
   const manifestAgentIds = new Set(manifest.databases.map((entry) => entry.agentId));
@@ -994,7 +1654,7 @@ function checkpointDatabase(database, id) {
   return result;
 }
 
-function verifyDatabaseFile(databasePath, definition, expected) {
+function verifyDatabaseFile(databasePath, definition, expected, options = {}) {
   let database;
   try {
     database = new DatabaseSync(databasePath, { readOnly: true });
@@ -1010,7 +1670,10 @@ function verifyDatabaseFile(databasePath, definition, expected) {
         throw new RecoveryGateError("BACKUP_PAGE_LAYOUT_MISMATCH", `${definition.id} 数据库页布局与 manifest 不一致。`);
       }
     }
-    return inspection;
+    const extension = typeof options.databaseInspectionExtension === "function"
+      ? options.databaseInspectionExtension({ database, databasePath, definition, expected })
+      : undefined;
+    return extension === undefined ? inspection : { ...inspection, extension };
   } catch (error) {
     throw normalizeGateError(error, "BACKUP_DATABASE_INVALID");
   } finally {
@@ -1047,7 +1710,7 @@ function inspectDatabase(database, definition) {
     if (Number(row?.value) !== definition.expectedStorageSchemaVersion) {
       throw new RecoveryGateError(
         "SQLITE_SCHEMA_INCOMPLETE",
-        `${definition.id} 缺少 conversation_thread_states 时 storage-schema-version 必须为 ${definition.expectedStorageSchemaVersion}。`
+        `${definition.id} 的表集合要求 storage-schema-version 为 ${definition.expectedStorageSchemaVersion}。`
       );
     }
   }
@@ -1162,40 +1825,84 @@ async function writeManifest(directory, manifest) {
   await syncFile(checksumPath);
 }
 
+async function writeRecoveryOwnerFile(directory, ownerRecord) {
+  const ownerPath = path.join(directory, RECOVERY_OWNER_FILE);
+  const bytes = Buffer.from(`${JSON.stringify(ownerRecord, null, 2)}\n`, "utf8");
+  await fs.writeFile(ownerPath, bytes, { flag: "wx", mode: 0o600 });
+  await syncFile(ownerPath);
+}
+
 async function acquireRecoveryLock(backupsRoot, now) {
   const lockPath = path.join(backupsRoot, LOCK_FILE);
+  const rootIdentityChain = captureDirectoryIdentityChainSync(backupsRoot);
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
+      const token = crypto.randomUUID();
       const handle = await fs.open(lockPath, "wx", 0o600);
-      await handle.writeFile(`${JSON.stringify({ pid: process.pid, startedAt: now.toISOString() })}\n`);
+      const bytes = Buffer.from(`${JSON.stringify({
+        schemaVersion: 1,
+        token,
+        pid: process.pid,
+        startedAt: now.toISOString()
+      })}\n`, "utf8");
+      await handle.write(bytes);
       await handle.sync();
       await handle.close();
-      return async () => removeRecoveryLock(lockPath);
+      const identity = fileIdentity(fsSync.lstatSync(lockPath));
+      return async () => removeRecoveryLock({
+        lockPath,
+        rootIdentityChain,
+        expectedIdentity: identity,
+        expectedContentHash: sha256(bytes)
+      });
     } catch (error) {
       if (error.code !== "EEXIST") throw error;
       if (await databaseFileState(lockPath) !== "file") {
         throw new RecoveryGateError("RECOVERY_PATH_UNSAFE", `SQLite 恢复锁路径不安全：${lockPath}`);
       }
-      const stale = await lockIsStale(lockPath);
+      const existingStat = await fs.lstat(lockPath);
+      const existingBytes = await fs.readFile(lockPath);
+      const stale = await lockIsStale(lockPath, existingStat, existingBytes);
       if (!stale) throw new RecoveryGateError("BACKUP_LOCKED", "另一个备份/恢复进程持有 SQLite 恢复锁。");
-      await removeRecoveryLock(lockPath);
+      await removeRecoveryLock({
+        lockPath,
+        rootIdentityChain,
+        expectedIdentity: fileIdentity(existingStat),
+        expectedContentHash: sha256(existingBytes)
+      });
     }
   }
   throw new RecoveryGateError("BACKUP_LOCKED", "无法获取 SQLite 恢复锁。");
 }
 
-async function removeRecoveryLock(lockPath) {
+async function removeRecoveryLock(options) {
+  const { lockPath, rootIdentityChain, expectedIdentity, expectedContentHash } = options;
+  try {
+    assertDirectoryIdentityChainSync(path.dirname(lockPath), rootIdentityChain);
+  } catch {
+    return { status: "ownership-conflict", lockPath };
+  }
   const state = await databaseFileState(lockPath);
-  if (state === "missing") return;
-  if (state !== "file") {
-    throw new RecoveryGateError("RECOVERY_PATH_UNSAFE", `SQLite 恢复锁路径不安全：${lockPath}`);
+  if (state === "missing") return { status: "missing", lockPath };
+  if (state !== "file") return { status: "ownership-conflict", lockPath };
+  const stat = await fs.lstat(lockPath);
+  const bytes = await fs.readFile(lockPath);
+  if (stat.nlink !== 1
+    || fileIdentity(stat) !== expectedIdentity
+    || sha256(bytes) !== expectedContentHash) {
+    return { status: "ownership-conflict", lockPath };
   }
   await fs.rm(lockPath);
+  return { status: "removed", lockPath };
 }
 
-async function lockIsStale(lockPath) {
+async function lockIsStale(lockPath, expectedStat = null, expectedBytes = null) {
   try {
-    const lock = JSON.parse(await fs.readFile(lockPath, "utf8"));
+    const bytes = expectedBytes ?? await fs.readFile(lockPath);
+    if (expectedStat && (expectedStat.nlink !== 1 || fileIdentity(expectedStat) !== fileIdentity(await fs.lstat(lockPath)))) {
+      return false;
+    }
+    const lock = JSON.parse(bytes.toString("utf8"));
     const pid = Number(lock.pid);
     if (!Number.isInteger(pid) || pid <= 0) return true;
     try {
@@ -1210,12 +1917,50 @@ async function lockIsStale(lockPath) {
 }
 
 async function removeInterruptedPartials(backupsRoot) {
+  const rootIdentityChain = captureDirectoryIdentityChainSync(backupsRoot);
   for (const entry of await fs.readdir(backupsRoot, { withFileTypes: true })) {
     if (!entry.name.startsWith(PARTIAL_DIRECTORY_PREFIX)) continue;
     const candidate = path.join(backupsRoot, entry.name);
     if (path.dirname(candidate) !== backupsRoot) continue;
     await safeRecoveryDirectory(candidate);
-    await fs.rm(candidate, { recursive: true, force: true });
+    assertDirectoryIdentityChainSync(backupsRoot, rootIdentityChain);
+    const candidateStat = fsSync.lstatSync(candidate);
+    if (!candidateStat.isDirectory() || candidateStat.isSymbolicLink()) {
+      throw new RecoveryGateError(
+        "RECOVERY_PATH_UNSAFE",
+        `中断恢复点暂存路径必须是普通目录：${candidate}`
+      );
+    }
+    let owner;
+    try {
+      owner = JSON.parse(fsSync.readFileSync(path.join(candidate, RECOVERY_OWNER_FILE), "utf8"));
+    } catch {
+      throw new RecoveryGateError(
+        "RECOVERY_PATH_UNSAFE",
+        `中断恢复点缺少所有权凭据，保留原路径供人工处置：${candidate}`
+      );
+    }
+    const expectedBackupId = entry.name.slice(PARTIAL_DIRECTORY_PREFIX.length);
+    if (owner?.schemaVersion !== 1
+      || owner.backupId !== expectedBackupId
+      || owner.directoryIdentity !== fileIdentity(candidateStat)
+      || typeof owner.token !== "string"
+      || owner.token.length < 16) {
+      throw new RecoveryGateError(
+        "RECOVERY_PATH_UNSAFE",
+        `中断恢复点所有权凭据不匹配，保留原路径供人工处置：${candidate}`
+      );
+    }
+    const quarantine = path.join(
+      backupsRoot,
+      `.interrupted-${entry.name.slice(1)}-${crypto.randomUUID().slice(0, 8)}`
+    );
+    if (pathStateSync(quarantine) !== "missing") {
+      throw new RecoveryGateError("RECOVERY_PATH_UNSAFE", `中断恢复点隔离路径已存在：${quarantine}`);
+    }
+    assertDirectoryIdentityChainSync(backupsRoot, rootIdentityChain);
+    fsSync.renameSync(candidate, quarantine);
+    await syncDirectory(backupsRoot);
   }
 }
 
@@ -1300,6 +2045,9 @@ function validateV2AgentDatabaseEntries(entries) {
   return [...agentIds].sort(compareAgentIds).flatMap((agentId) => databaseDefinitionsForAgent(agentId, {
     legacyApplicationSchema: legacyApplication?.agentId === agentId,
     preThreadApplicationSchema: isPreThreadCurrentApplicationEntry(entries.find((entry) =>
+      entry.agentId === agentId && entry.kind === "application"
+    )),
+    preEmojiApplicationSchema: isPreEmojiCurrentApplicationEntry(entries.find((entry) =>
       entry.agentId === agentId && entry.kind === "application"
     ))
   }));
@@ -1463,6 +2211,90 @@ async function removeSafeRecoveryDirectory(directory) {
   await fs.rm(directory, { recursive: true, force: true });
 }
 
+async function quarantineOwnedRecoveryDirectory(options) {
+  const {
+    directories,
+    backupsRoot,
+    backupsRootIdentityChain,
+    expectedIdentity,
+    backupId,
+    ownedArtifacts
+  } = options;
+  try {
+    assertDirectoryIdentityChainSync(backupsRoot, backupsRootIdentityChain);
+  } catch (error) {
+    return {
+      status: "ownership-conflict",
+      path: directories[0],
+      reason: `recovery-root:${error.code ?? error.message}`
+    };
+  }
+  let directory = null;
+  let stat = null;
+  let sawExisting = false;
+  for (const candidate of directories) {
+    const state = pathStateSync(candidate);
+    if (state === "missing") continue;
+    sawExisting = true;
+    if (state !== "directory") {
+      return { status: "ownership-conflict", path: candidate, reason: "path-type" };
+    }
+    const candidateStat = fsSync.lstatSync(candidate);
+    if (candidateStat.isSymbolicLink()) {
+      return { status: "ownership-conflict", path: candidate, reason: "directory-symlink" };
+    }
+    if (fileIdentity(candidateStat) === expectedIdentity) {
+      if (directory) return { status: "ownership-conflict", path: candidate, reason: "duplicate-owned-directory" };
+      directory = candidate;
+      stat = candidateStat;
+    }
+  }
+  if (!directory || !stat) {
+    return sawExisting
+      ? { status: "ownership-conflict", path: directories[0], reason: "directory-identity" }
+      : { status: "missing", path: directories[0] };
+  }
+  const ownerPath = path.join(directory, RECOVERY_OWNER_FILE);
+  let owner;
+  try {
+    owner = JSON.parse(fsSync.readFileSync(ownerPath, "utf8"));
+  } catch {
+    return { status: "ownership-conflict", path: directory, reason: "owner-evidence-missing" };
+  }
+  if (owner?.schemaVersion !== 1
+    || owner.backupId !== backupId
+    || owner.directoryIdentity !== expectedIdentity
+    || typeof owner.token !== "string"
+    || owner.token.length < 16) {
+    return { status: "ownership-conflict", path: directory, reason: "owner-evidence-mismatch" };
+  }
+  assertDirectoryIdentityChainSync(backupsRoot, backupsRootIdentityChain);
+  const quarantine = path.join(
+    backupsRoot,
+    `.failed-${backupId}-${crypto.randomUUID().slice(0, 8)}`
+  );
+  if (pathStateSync(quarantine) !== "missing") {
+    return { status: "ownership-conflict", path: directory, reason: "quarantine-exists" };
+  }
+  fsSync.renameSync(directory, quarantine);
+  await syncDirectory(backupsRoot);
+  for (const [name, expectedIdentity] of ownedArtifacts ?? []) {
+    const artifact = path.join(quarantine, name);
+    if (pathStateSync(artifact) !== "file") continue;
+    const artifactStat = fsSync.lstatSync(artifact);
+    if (artifactStat.isSymbolicLink() || fileIdentity(artifactStat) !== expectedIdentity) continue;
+    fsSync.rmSync(artifact, { force: false });
+  }
+  try {
+    fsSync.rmdirSync(quarantine);
+    await syncDirectory(backupsRoot);
+    return { status: "cleaned", path: quarantine };
+  } catch (error) {
+    if (error?.code === "ENOTEMPTY") return { status: "quarantined", path: quarantine };
+    throw error;
+  }
+}
+
 async function invokeFault(faultInjector, step) {
   try {
     await faultInjector(step);
@@ -1506,6 +2338,64 @@ async function sha256File(filePath) {
   const hash = crypto.createHash("sha256");
   const stream = fsSync.createReadStream(filePath);
   for await (const chunk of stream) hash.update(chunk);
+  return hash.digest("hex");
+}
+
+function sha256FileSync(filePath) {
+  const hash = crypto.createHash("sha256");
+  const pathBefore = fsSync.lstatSync(filePath);
+  const expectedIdentity = fileIdentity(pathBefore);
+  let handle;
+  try {
+    handle = fsSync.openSync(
+      filePath,
+      fsSync.constants.O_RDONLY | (fsSync.constants.O_NOFOLLOW ?? 0)
+    );
+  } catch (error) {
+    throw new RecoveryGateError(
+      "BACKUP_PUBLICATION_CHANGED",
+      `恢复点发布文件无法安全打开：${filePath}（${error.message}）`
+    );
+  }
+  const buffer = Buffer.allocUnsafe(1024 * 1024);
+  try {
+    const descriptorBefore = fsSync.fstatSync(handle);
+    if (!pathBefore.isFile()
+      || pathBefore.isSymbolicLink()
+      || pathBefore.nlink !== 1
+      || !descriptorBefore.isFile()
+      || descriptorBefore.nlink !== 1
+      || fileIdentity(descriptorBefore) !== expectedIdentity
+      || descriptorBefore.size !== pathBefore.size) {
+      throw new RecoveryGateError(
+        "BACKUP_PUBLICATION_CHANGED",
+        `恢复点发布文件描述符身份不匹配：${filePath}`
+      );
+    }
+    let bytesRead;
+    do {
+      bytesRead = fsSync.readSync(handle, buffer, 0, buffer.length, null);
+      if (bytesRead > 0) hash.update(buffer.subarray(0, bytesRead));
+    } while (bytesRead > 0);
+    const descriptorAfter = fsSync.fstatSync(handle);
+    const pathAfter = fsSync.lstatSync(filePath);
+    if (!descriptorAfter.isFile()
+      || descriptorAfter.nlink !== 1
+      || fileIdentity(descriptorAfter) !== expectedIdentity
+      || descriptorAfter.size !== pathBefore.size
+      || !pathAfter.isFile()
+      || pathAfter.isSymbolicLink()
+      || pathAfter.nlink !== 1
+      || fileIdentity(pathAfter) !== expectedIdentity
+      || pathAfter.size !== pathBefore.size) {
+      throw new RecoveryGateError(
+        "BACKUP_PUBLICATION_CHANGED",
+        `恢复点发布文件在摘要期间发生身份变化：${filePath}`
+      );
+    }
+  } finally {
+    fsSync.closeSync(handle);
+  }
   return hash.digest("hex");
 }
 

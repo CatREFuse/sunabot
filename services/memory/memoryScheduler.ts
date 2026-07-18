@@ -2,6 +2,13 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import type { AppConfig } from "../../src/types.js";
 import { resolveProjectPath } from "../../src/config.js";
+import {
+  GROUP_MEMORY_SELECTION_CONTEXT_LIMIT,
+  GROUP_MEMORY_SELECTION_POLICY,
+  isGroupMemoryScope,
+  orderedUniqueMemoryMessages,
+  selectGroupMemoryMessagesNearAssistant
+} from "./groupMemoryWindow.js";
 import { memoryDatabasePath, memoryRepository } from "./persistence.js";
 
 export type MemorySchedulerStatus = "idle" | "queued" | "running";
@@ -26,6 +33,11 @@ export interface MemoryQueuedMessage {
   quoteCount: number;
 }
 
+export interface MemoryEnqueueOptions {
+  committedThrough?: number;
+  reconcileGroupHistory?: true;
+}
+
 export interface MemoryClaim {
   conversation: MemoryConversationDescriptor;
   batchId: string;
@@ -45,6 +57,8 @@ interface StoredConversation {
   state: MemorySchedulerStatus;
   pendingMessages: MemoryQueuedMessage[];
   currentBatch?: StoredBatch;
+  groupMemorySelectionPolicy?: typeof GROUP_MEMORY_SELECTION_POLICY;
+  groupMemorySelectionSource?: MemoryQueuedMessage[];
   dirty: boolean;
   failureCount: number;
   unattemptedMessageCount?: number;
@@ -94,6 +108,13 @@ export class MemorySchedulerStore {
           delete (conversation as StoredConversation & { nextRetryAt?: string }).nextRetryAt;
           changed = true;
         }
+        if (
+          isGroupMemoryScope(conversation.conversation.scope) &&
+          conversation.groupMemorySelectionPolicy === GROUP_MEMORY_SELECTION_POLICY &&
+          this.normalizeGroupMemorySelectionContext(conversation) !== "valid"
+        ) {
+          changed = true;
+        }
       }
       if (changed) await this.write(store);
       return store;
@@ -103,7 +124,7 @@ export class MemorySchedulerStore {
   async enqueue(
     conversation: MemoryConversationDescriptor,
     messages: MemoryQueuedMessage[],
-    options: { committedThrough?: number } = {}
+    options: MemoryEnqueueOptions = {}
   ) {
     return this.exclusive(async () => {
       const store = await this.read();
@@ -119,9 +140,42 @@ export class MemorySchedulerStore {
         existing.lastCommittedSequence = Math.max(existing.lastCommittedSequence, options.committedThrough ?? 0);
       }
 
+      let messagesToQueue = messages;
+      let selectionSourceChanged = false;
+      if (isGroupMemoryScope(conversation.scope)) {
+        if (
+          existing.groupMemorySelectionPolicy === GROUP_MEMORY_SELECTION_POLICY &&
+          this.normalizeGroupMemorySelectionContext(existing) !== "valid"
+        ) {
+          selectionSourceChanged = true;
+        }
+        if (existing.groupMemorySelectionPolicy !== GROUP_MEMORY_SELECTION_POLICY) {
+          if (options.reconcileGroupHistory !== true) {
+            if (selectionSourceChanged) {
+              store.conversations[conversation.id] = existing;
+              await this.write(store);
+            }
+            return 0;
+          }
+          this.migrateGroupMemorySelection(existing, messages);
+          selectionSourceChanged = true;
+        }
+        const selectionSource = orderedUniqueMemoryMessages([
+          ...(existing.groupMemorySelectionSource ?? []),
+          ...messages
+        ]);
+        const nextSelectionSource = selectionSource.slice(-GROUP_MEMORY_SELECTION_CONTEXT_LIMIT);
+        selectionSourceChanged = selectionSourceChanged || !sameMessages(
+          existing.groupMemorySelectionSource ?? [],
+          nextSelectionSource
+        );
+        existing.groupMemorySelectionSource = nextSelectionSource;
+        messagesToQueue = selectGroupMemoryMessagesNearAssistant(selectionSource);
+      }
+
       const byKey = new Map(existing.pendingMessages.map((message) => [messageKey(message), message]));
       let added = 0;
-      for (const message of messages) {
+      for (const message of messagesToQueue) {
         if (message.sequence <= existing.lastCommittedSequence) continue;
         const key = messageKey(message);
         if (byKey.has(key)) continue;
@@ -136,7 +190,7 @@ export class MemorySchedulerStore {
       }
       existing.updatedAt = now.toISOString();
       store.conversations[conversation.id] = existing;
-      if (added || options.committedThrough != null) await this.write(store);
+      if (added || selectionSourceChanged || options.committedThrough != null) await this.write(store);
       return added;
     });
   }
@@ -146,7 +200,7 @@ export class MemorySchedulerStore {
       const store = await this.read();
       const candidates = Object.values(store.conversations)
         .filter((item) => item.pendingMessages.length > 0 && item.state !== "running")
-        .filter((item) => (item.unattemptedMessageCount ?? 0) >= threshold)
+        .filter((item) => this.isConversationReady(item, threshold))
         .sort((left, right) => {
           const leftAt = left.pendingMessages[0]?.at ?? left.updatedAt;
           const rightAt = right.pendingMessages[0]?.at ?? right.updatedAt;
@@ -154,6 +208,7 @@ export class MemorySchedulerStore {
         });
       const selected = candidates[0];
       if (!selected) return undefined;
+      const currentBatchCommitted = this.isCurrentBatchCommitted(selected);
 
       let messages: MemoryQueuedMessage[];
       let batchId: string;
@@ -179,7 +234,11 @@ export class MemorySchedulerStore {
       }
       selected.state = "running";
       selected.dirty = false;
-      selected.unattemptedMessageCount = Math.max(0, (selected.unattemptedMessageCount ?? 0) - threshold);
+      const attemptMessageCount = currentBatchCommitted ? 0 : threshold;
+      selected.unattemptedMessageCount = Math.max(
+        0,
+        (selected.unattemptedMessageCount ?? 0) - attemptMessageCount
+      );
       selected.updatedAt = new Date(nowMs).toISOString();
       await this.write(store);
       return {
@@ -187,7 +246,7 @@ export class MemorySchedulerStore {
         batchId,
         messageIds: messages.map(messageKey),
         messages,
-        attemptMessageCount: threshold
+        attemptMessageCount
       };
     });
   }
@@ -234,7 +293,7 @@ export class MemorySchedulerStore {
       const store = await this.read();
       for (const conversation of Object.values(store.conversations)) {
         if (!conversation.pendingMessages.length || conversation.state === "running") continue;
-        if ((conversation.unattemptedMessageCount ?? 0) >= threshold) return Date.now();
+        if (this.isConversationReady(conversation, threshold)) return Date.now();
       }
       return undefined;
     });
@@ -280,6 +339,74 @@ export class MemorySchedulerStore {
   private async write(store: SchedulerFile) {
     memoryRepository(this.config).replaceMemoryScheduler(store.conversations);
   }
+
+  private migrateGroupMemorySelection(
+    conversation: StoredConversation,
+    conversationMessages: readonly MemoryQueuedMessage[]
+  ) {
+    const selectionSource = orderedUniqueMemoryMessages([
+      ...conversation.pendingMessages,
+      ...conversationMessages
+    ]);
+    const selected = selectGroupMemoryMessagesNearAssistant(selectionSource)
+      .filter((message) => message.sequence > conversation.lastCommittedSequence);
+    const currentBatchCommitted = this.isCurrentBatchCommitted(conversation);
+    const currentBatchKeys = new Set(conversation.currentBatch?.messageIds ?? []);
+    const selectedByKey = new Map(selected.map((message) => [messageKey(message), message]));
+
+    if (currentBatchCommitted) {
+      for (const message of conversation.pendingMessages) {
+        if (currentBatchKeys.has(messageKey(message))) selectedByKey.set(messageKey(message), message);
+      }
+    } else {
+      conversation.currentBatch = undefined;
+      conversation.failureCount = 0;
+    }
+
+    conversation.pendingMessages = [...selectedByKey.values()].sort(compareMessages);
+    conversation.unattemptedMessageCount = conversation.pendingMessages
+      .filter((message) => !currentBatchKeys.has(messageKey(message)))
+      .length;
+    conversation.groupMemorySelectionPolicy = GROUP_MEMORY_SELECTION_POLICY;
+    conversation.groupMemorySelectionSource = selectionSource.slice(-GROUP_MEMORY_SELECTION_CONTEXT_LIMIT);
+    conversation.state = conversation.pendingMessages.length ? "queued" : "idle";
+    conversation.dirty = false;
+    conversation.updatedAt = new Date().toISOString();
+  }
+
+  private isCurrentBatchCommitted(conversation: StoredConversation) {
+    return Boolean(
+      conversation.currentBatch?.batchId &&
+      memoryRepository(this.config).hasMemoryBatch(conversation.currentBatch.batchId)
+    );
+  }
+
+  private normalizeGroupMemorySelectionContext(conversation: StoredConversation) {
+    const source = normalizeGroupMemorySelectionSource(conversation.groupMemorySelectionSource);
+    if (!source) {
+      conversation.groupMemorySelectionPolicy = undefined;
+      conversation.groupMemorySelectionSource = undefined;
+      return "invalid" as const;
+    }
+    if (!sameMessages(conversation.groupMemorySelectionSource ?? [], source)) {
+      conversation.groupMemorySelectionSource = source;
+      return "repaired" as const;
+    }
+    return "valid" as const;
+  }
+
+  private isConversationReady(conversation: StoredConversation, threshold: number) {
+    if (isGroupMemoryScope(conversation.conversation.scope)) {
+      if (conversation.groupMemorySelectionPolicy !== GROUP_MEMORY_SELECTION_POLICY) return false;
+      const source = normalizeGroupMemorySelectionSource(conversation.groupMemorySelectionSource);
+      if (
+        !source?.length ||
+        !sameMessages(conversation.groupMemorySelectionSource ?? [], source)
+      ) return false;
+    }
+    return this.isCurrentBatchCommitted(conversation) ||
+      (conversation.unattemptedMessageCount ?? 0) >= threshold;
+  }
 }
 
 function newConversationState(
@@ -310,4 +437,27 @@ function messageKey(message: MemoryQueuedMessage) {
 
 function compareMessages(left: MemoryQueuedMessage, right: MemoryQueuedMessage) {
   return left.sequence - right.sequence || left.id.localeCompare(right.id);
+}
+
+function sameMessages(left: readonly MemoryQueuedMessage[], right: readonly MemoryQueuedMessage[]) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function normalizeGroupMemorySelectionSource(value: unknown) {
+  if (!Array.isArray(value) || !value.every(isMemoryQueuedMessage)) return undefined;
+  return orderedUniqueMemoryMessages(value).slice(-GROUP_MEMORY_SELECTION_CONTEXT_LIMIT);
+}
+
+function isMemoryQueuedMessage(value: unknown): value is MemoryQueuedMessage {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const message = value as Partial<MemoryQueuedMessage>;
+  return typeof message.id === "string" && message.id.length > 0 &&
+    Number.isSafeInteger(message.sequence) && Number(message.sequence) > 0 &&
+    (message.role === "user" || message.role === "assistant") &&
+    typeof message.text === "string" && message.text.trim().length > 0 &&
+    typeof message.at === "string" && Number.isFinite(Date.parse(message.at)) &&
+    (message.userId == null || Number.isSafeInteger(message.userId)) &&
+    (message.senderName == null || typeof message.senderName === "string") &&
+    Number.isSafeInteger(message.imageCount) && Number(message.imageCount) >= 0 &&
+    Number.isSafeInteger(message.quoteCount) && Number(message.quoteCount) >= 0;
 }

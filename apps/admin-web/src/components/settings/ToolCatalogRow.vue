@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import type { SunaTool } from "../../types";
-import { toolExecutionLabel, toolIcon } from "../../utils/toolCatalog";
+import { toolAvailabilityPresentation, toolExecutionLabel, toolIcon } from "../../utils/toolCatalog";
 import ToggleSwitch from "../ui/ToggleSwitch.vue";
 
 const props = defineProps<{
@@ -17,6 +17,7 @@ const canToggle = computed(() => props.tool.configurable !== false);
 const configuredState = computed(() => props.enabled
   ? { label: "配置已启用", icon: "bx-check-circle", kind: "success" }
   : { label: "配置已停用", icon: "bx-pause-circle", kind: "" });
+const availability = computed(() => toolAvailabilityPresentation(props.tool));
 </script>
 
 <template>
@@ -33,8 +34,14 @@ const configuredState = computed(() => props.enabled
           <span class="inline-state" :data-kind="configuredState.kind || undefined">
             <i class="bx mr-1" :class="configuredState.icon" aria-hidden="true"></i>{{ configuredState.label }}
           </span>
-          <span v-if="tool.available === false" class="inline-state" data-kind="error">
-            <i class="bx bx-error-circle mr-1" aria-hidden="true"></i>能力异常
+          <span v-if="tool.accessLabel" class="inline-state">
+            <i class="bx bx-lock-alt mr-1" aria-hidden="true"></i>{{ tool.accessLabel }}
+          </span>
+          <span v-if="availability.kind === 'runtime'" class="inline-state" data-kind="error">
+            <i class="bx bx-error-circle mr-1" aria-hidden="true"></i>{{ availability.label }}
+          </span>
+          <span v-else-if="availability.kind === 'session' && !tool.accessLabel" class="inline-state">
+            <i class="bx bx-lock-alt mr-1" aria-hidden="true"></i>{{ availability.label }}
           </span>
           <span class="font-mono text-[10px] text-mute">
             <i class="bx bx-transfer-alt mr-1" aria-hidden="true"></i>{{ toolExecutionLabel(tool.execution) }}
@@ -46,8 +53,11 @@ const configuredState = computed(() => props.enabled
             <i class="bx bx-lock-alt mr-1" aria-hidden="true"></i>固定配置
           </span>
         </div>
-        <p v-if="tool.available === false && (tool.availabilityReason || tool.unavailableReason)" class="mt-2 text-xs leading-5 text-accent">
-          {{ tool.availabilityReason || tool.unavailableReason }}
+        <p v-if="availability.kind === 'runtime'" class="mt-2 text-xs leading-5 text-accent">
+          {{ availability.reason }}
+        </p>
+        <p v-else-if="availability.kind === 'session' && !tool.accessLabel" class="mt-2 text-xs leading-5 text-mute">
+          {{ availability.reason }}
         </p>
       </div>
     </div>

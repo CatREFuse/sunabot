@@ -60,7 +60,16 @@ function config(adminName: string): AppConfig {
         codex: { enabled: true, model: "gpt-5.4-mini", codexExecutable: "auto", timeoutMs: 900_000, maxConcurrency: 2 },
         generateImg: { provider: "codex-image-gen", size: "1024x1024", resolution: "1K", quality: "high" }
       },
-      bash: { enabled: true, allowGroup: false, adminOnly: true, workspaceOnly: true, blockedKeywords: ["rm"] }
+      bash: {
+        enabled: true,
+        adminPrivateBackend: "native",
+        auditModel: "gpt-5.4-mini",
+        strictMode: true,
+        allowGroup: false,
+        adminOnly: true,
+        workspaceOnly: true,
+        blockedKeywords: ["rm"]
+      }
     },
     onebot: { reverseWsPath: "/onebot/v11/ws", accessTokenEnv: "ONEBOT_ACCESS_TOKEN", autoReplyPrivate: true, autoReplyUserGroup: true, autoReplyBotGroup: false, quoteGroupReplies: true, mentionNames: [], commandPrefixes: [] }
   };

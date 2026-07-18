@@ -37,6 +37,9 @@ function toolsDraft(): BotToolSettingsDraft {
 function bashDraft() {
   return {
     enabled: false,
+    adminPrivateBackend: "native" as const,
+    auditModel: "gpt-5.4-mini",
+    strictMode: true,
     allowGroup: false,
     adminOnly: true,
     workspaceOnly: true,

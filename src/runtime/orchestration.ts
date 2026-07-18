@@ -38,6 +38,10 @@ import {
   resolveUserGroupReplyRoute,
   type ReplyGateSnapshot
 } from "../../services/orchestration/groupReplyPolicy.js";
+import {
+  parseUserGroupOrchestratorDecision,
+  userGroupOrchestratorResult
+} from "../../services/orchestration/userGroupOrchestratorResult.js";
 import { HookBus } from "../../services/messaging/hookBus.js";
 import {
   applyMemoryBatchTransaction,
@@ -106,7 +110,7 @@ import {
 } from "../../services/agent/promptSystem.js";
 import { buildConversationPromptVariables } from "../../services/agent/persona.js";
 import { DEFAULT_CONTEXT_MESSAGE_LIMIT, MAX_STORED_CONVERSATION_MESSAGES, GROUP_CHAT_SUMMARY_WINDOW_MS, MAX_SELFIE_REFERENCE_IMAGES, MAX_SELFIE_WORKSPACE_REFERENCE_IMAGES, MAX_CURRENT_CONTEXT_IMAGES, MAX_HISTORY_CONTEXT_IMAGES, HYDRATE_MESSAGE_WINDOW_MS, ACTIVE_CONVERSATION_WINDOW_MS, DIRECT_REPLY_TIMEOUT_MS, AMBIENT_ORCHESTRATOR_TIMEOUT_MS, ORCHESTRATOR_MAX_RETRIES, PREPARE_TIMEOUT_MS, RECENT_CONTEXT_TOKEN_BUDGET, DEDUPE_TTL_MS, MAX_DEDUPE_KEYS, DEFAULT_ADMIN_NAME, GROUP_CHAT_SUMMARY_COMMAND, CONVERSATION_REPLY_PROMPT_FILE, SELFIE_PROMPT_FILE, GROUP_CHAT_SUMMARY_PROMPT_FILE, ADMIN_PERSONA_FILES, ADMIN_RUNTIME_PROMPT_DEFAULTS, BatchUserInfo, WorkingMemoryMergeOutput, WorkingMemoryMergeContext, personaFileNameForAdminId, AdminIdentity, ConversationReplyUpdateInput, RuntimeCommandContext, ReplyDeliveryDraft, ReplyDelivery, DeferredCodexTurn, AmbientReplyJob, AmbientReplyState, AmbientIdleTimer, RuntimeConfigSnapshot, RuntimePromptSnapshot, SunaRuntimeOptions } from "./runtimeContracts.js";
-import { adminIdentityFromBot, appendConversationMessage, hasIncomingReplyContent, indexedConversationMessages, isAdminUserId, isExplicitWakeMessage, parseOrchestratorDecision, toContextChatMessage } from "./conversationMemoryHelpers.js";
+import { adminIdentityFromBot, appendConversationMessage, hasIncomingReplyContent, indexedConversationMessages, isAdminUserId, isExplicitWakeMessage, toContextChatMessage } from "./conversationMemoryHelpers.js";
 import { conversationOrchestratorEnabled, conversationRecordId, conversationReplyEnabled, incomingConversationMessageId, persistedAttachments, persistedQuoteReferences, persistentIncomingKey, restoredGroupIncoming, uniqueStrings } from "./messagingAttachmentHelpers.js";
 import { conversationLastText } from "./selfieHelpers.js";
 import { errorMessage, isAbortError, sanitizeErrorDetail, withAbortTimeout } from "./infrastructure.js";
@@ -339,13 +343,13 @@ export async function runtime_pumpAmbientReply(this: RuntimeHost, channelKey: st
       state.deciding = true;
       const controller = new AbortController();
       state.controller = controller;
-      const shouldReply = await this.ambientLimiter.run(() => this.runUserGroupchatOrchestrator(job.incoming, {
+      const orchestratorResult = await this.ambientLimiter.run(() => this.runUserGroupchatOrchestrator(job.incoming, {
         signal: controller.signal,
         captureSequence: job.captureSequence
       }));
       state.deciding = false;
       state.controller = undefined;
-      if (!shouldReply || !this.isAmbientReplyCurrent(job, state, epoch)) return;
+      if (!orchestratorResult || !this.isAmbientReplyCurrent(job, state, epoch)) return;
       if (isOrchestratorReplyRateLimited(record.orchestratorLastReplyAt)) return;
 
       if (!this.isAmbientReplyCurrent(job, state, epoch)) return;
@@ -354,7 +358,8 @@ export async function runtime_pumpAmbientReply(this: RuntimeHost, channelKey: st
         route: "ambient",
         incoming: job.incoming,
         captureSequence: job.captureSequence,
-        gate: job.gate
+        gate: job.gate,
+        orchestratorResult
       });
       this.consumeOrchestratorBatch(record, job.captureSequence);
       record.orchestratorLastReplyAt = new Date().toISOString();
@@ -404,7 +409,7 @@ export async function runtime_runUserGroupchatOrchestrator(this: RuntimeHost,
     options: { signal?: AbortSignal; captureSequence?: number } = {}
   ) {
     const record = this.conversationRecords.get(conversationRecordId(incoming));
-    if (!record) return false;
+    if (!record) return undefined;
     let consumeBatch = false;
     let lastAttempt = 0;
     const logRunId = nanoid();
@@ -417,6 +422,11 @@ export async function runtime_runUserGroupchatOrchestrator(this: RuntimeHost,
     };
 
     try {
+      const replyCandidateMessageIds = this.pendingOrchestratorUserMessages(
+        record,
+        options.captureSequence
+      ).map(({ message }) => message.id);
+      if (!replyCandidateMessageIds.length) return undefined;
       const provider = this.getProviderForModel(
         this.config.bot.orchestrator.userGroupchatOrchestratorModel,
         this.config.bot.orchestrator.reasoningEffort
@@ -439,6 +449,7 @@ export async function runtime_runUserGroupchatOrchestrator(this: RuntimeHost,
           scope: record.scope,
           groupId: record.groupId,
           messageCount: record.messageCount,
+          replyCandidateMessageIds,
           recentMessages: record.messages
             .filter((message) => message.role === "user" || message.role === "assistant")
             .filter((message) => options.captureSequence == null || Number(message.sequence ?? 0) <= options.captureSequence)
@@ -452,6 +463,7 @@ export async function runtime_runUserGroupchatOrchestrator(this: RuntimeHost,
             })
         },
         currentMessage: {
+          messageId: incomingConversationMessageId(incoming),
           userId: incoming.userId,
           text: injectImageTokens(incoming.text, inboundImageUrls(incoming).length),
           imageCount: inboundImageUrls(incoming).length,
@@ -507,12 +519,15 @@ export async function runtime_runUserGroupchatOrchestrator(this: RuntimeHost,
         retry: Math.max(0, lastAttempt - 1),
         maxRetries: ORCHESTRATOR_MAX_RETRIES
       };
-      const decision = parseOrchestratorDecision(output);
-      const shouldReply = decision?.shouldReply === true;
+      const decision = parseUserGroupOrchestratorDecision(output, replyCandidateMessageIds);
+      if (!decision) throw new Error("编排器输出缺少有效的触发原因或回复消息 ID。");
+      const result = userGroupOrchestratorResult(decision);
+      const shouldReply = Boolean(result);
       this.recordOrchestratorDecision(record, {
         status: "completed",
         shouldReply,
-        reason: decision?.reason || output.trim(),
+        reason: decision.reason,
+        ...(decision.replyToMessageId ? { replyToMessageId: decision.replyToMessageId } : {}),
         raw: output
       }, logRunId);
       await appendRequestLog({
@@ -522,17 +537,22 @@ export async function runtime_runUserGroupchatOrchestrator(this: RuntimeHost,
           messageThreshold: this.config.bot.orchestrator.messageThreshold,
           recentMessageWindowMs: this.config.bot.orchestrator.recentMessageWindowMs
         },
-        response: { shouldReply, raw: output },
+        response: {
+          shouldReply,
+          reason: decision.reason,
+          replyToMessageId: decision.replyToMessageId,
+          raw: output
+        },
         metadata: finalLogContext
       });
       // A positive reply decision is consumed by pumpAmbientReply only after
       // its Session event has been durably committed.
       consumeBatch = !shouldReply;
-      return shouldReply;
+      return result;
     } catch (error) {
       const detail = sanitizeErrorDetail(errorMessage(options.signal?.reason ?? error));
       const timedOut = /timed out|timeout/i.test(detail);
-      if (options.signal?.aborted && !timedOut) return false;
+      if (options.signal?.aborted && !timedOut) return undefined;
       console.error("[runtime] user groupchat orchestrator failed", {
         groupId: incoming.groupId,
         messageId: incoming.messageId,
@@ -562,7 +582,7 @@ export async function runtime_runUserGroupchatOrchestrator(this: RuntimeHost,
         }
       });
       consumeBatch = true;
-      return false;
+      return undefined;
     } finally {
       if (consumeBatch) {
         this.consumeOrchestratorBatch(record, options.captureSequence ?? record.messageCount);

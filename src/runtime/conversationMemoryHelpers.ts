@@ -531,20 +531,6 @@ export function resolveFactUsers(fact: MemoryFactInput, participants: BatchUserI
   if (matchedUsers.length) return matchedUsers;
   return participants;
 }
-export function parseOrchestratorDecision(text: string) {
-  const parsed = parseModelJson(text);
-  const record = readRecord(parsed);
-  const rawShouldReply = record.should_reply ?? record.shouldReply ?? record.reply;
-  const reason = String(record.reason ?? "").trim();
-  if (typeof rawShouldReply === "boolean") return { shouldReply: rawShouldReply, reason };
-  if (typeof rawShouldReply === "string") {
-    return {
-      shouldReply: /^(true|yes|是|需要|reply)$/i.test(rawShouldReply.trim()),
-      reason
-    };
-  }
-  return null;
-}
 export function parseModelJson(text: string): unknown {
   const trimmed = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
   const direct = tryParseJson(trimmed);

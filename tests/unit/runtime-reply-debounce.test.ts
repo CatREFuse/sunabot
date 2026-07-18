@@ -15,6 +15,7 @@ import type {
   OutboundMessageV1
 } from "../../packages/contracts/messaging/messages.js";
 import { MAX_COMMAND_INVOCATION_ARGS_CHARACTERS } from "../../packages/contracts/messaging/commands.js";
+import type { CodexRunner } from "../../packages/contracts/tools/codex.js";
 import {
   MAX_RUNTIME_REPLY_FOLLOW_UP_SNAPSHOTS,
   decodeAssistantReply,
@@ -669,7 +670,11 @@ describe("SunaRuntime reply debounce", () => {
     };
     harness.runtime.activeGateway = harness.gateway;
     harness.runtime.ambientReplies.set(channelKey, state);
-    harness.runtime.runUserGroupchatOrchestrator = vi.fn(async () => true);
+    harness.runtime.runUserGroupchatOrchestrator = vi.fn(async () => ({
+      schemaVersion: 1 as const,
+      reason: "ambient orchestrator candidate needs a reply",
+      replyToMessageId: String(incoming.messageId)
+    }));
 
     await harness.runtime.pumpAmbientReply(channelKey, state);
 
@@ -685,6 +690,110 @@ describe("SunaRuntime reply debounce", () => {
     expect(harness.completeRequestTurn).toHaveBeenCalledOnce();
     expect(sentOutbounds(harness.gateway).map((message) => message.text))
       .toEqual(["ambient delayed reply"]);
+  });
+
+  it("keeps the ambient orchestrator result exact through handoff, Provider, and deferred callback", async () => {
+    const requests: RenderedPromptRequest[] = [];
+    const codexRunner: CodexRunner = {
+      run: vi.fn(async (_input, context) => ({
+        ok: true,
+        status: "succeeded",
+        jobId: context.jobId,
+        kind: "analysis",
+        content: "deferred tool completed"
+      }))
+    };
+    const harness = createRuntimeHarness(async (request) => {
+      requests.push(request);
+      if (requests.length === 1) {
+        return {
+          kind: "deferred",
+          acknowledgement: "ambient deferred acknowledgement",
+          toolCall: {
+            name: "codex",
+            callId: "ambient-orchestrator-chain",
+            arguments: { task: "inspect the ambient request" }
+          }
+        };
+      }
+      return {
+        kind: "completed",
+        text: requests.length === 2 ? "ambient deferred callback" : "direct reply"
+      };
+    }, {
+      replyDebounceMs: 50,
+      codexRunner,
+      configure(config) {
+        config.bot.orchestrator.enabled = true;
+      }
+    });
+    harness.runtime.renderPromptRequest = async (_id, variables) => ({
+      messages: [
+        { role: "system", content: "test system" },
+        ...((variables["messages_64"] ?? []) as RenderedPromptRequest["messages"]),
+        {
+          role: "developer",
+          content: `<orchestrator_result>${String(
+            variables["conversation.group.orchestrator_result"] ?? ""
+          )}</orchestrator_result>`
+        },
+        { role: "user", content: String(variables["user.input"] ?? "") }
+      ],
+      response_format: { type: "text" }
+    });
+
+    const incoming = parseOneBotInboundMessage(
+      groupEvent(31_115, 7_115, "ambient result chain", 27_002)
+    )!;
+    const channelKey = conversationRecordId(incoming);
+    const record = harness.runtime.recordIncomingMessage(incoming);
+    const orchestratorResult = {
+      schemaVersion: 1 as const,
+      reason: "群友正在等待编排器选择的消息回复。",
+      replyToMessageId: String(incoming.messageId)
+    };
+    const job = {
+      channelKey,
+      incoming,
+      gateway: harness.gateway,
+      captureSequence: record.messageCount,
+      gate: harness.runtime.replyGates.capture(incoming.scope, channelKey)
+    };
+    const state: Parameters<SunaRuntime["pumpAmbientReply"]>[1] = {
+      epoch: 0,
+      running: false,
+      next: job
+    };
+    harness.runtime.activeGateway = harness.gateway;
+    harness.runtime.ambientReplies.set(channelKey, state);
+    harness.runtime.runUserGroupchatOrchestrator = vi.fn(async () => orchestratorResult);
+
+    await harness.runtime.pumpAmbientReply(channelKey, state);
+
+    const debounce = harness.store.getActiveEvent(replyDebounceSessionId(incoming), "reply_debounce")!;
+    expect(decodeReplyDebounce(debounce.payload).orchestratorResult).toEqual(orchestratorResult);
+    await waitUntil(() => requests.length >= 2, 5_000);
+    await harness.runtime.sessionCoordinator.waitForIdle({ timeoutMs: 5_000 });
+
+    const exactResult = JSON.stringify({
+      should_reply: true,
+      reason: orchestratorResult.reason,
+      reply_to_message_id: orchestratorResult.replyToMessageId
+    });
+    expect(orchestratorResultText(requests[0]!)).toBe(exactResult);
+    expect(orchestratorResultText(requests[1]!)).toBe(exactResult);
+    expect(harness.store.listToolJobs(channelKey)[0]?.originalRequest).toMatchObject({
+      orchestratorResult
+    });
+
+    await handleOneBotEvent(
+      harness.runtime,
+      groupEvent(31_116, 7_115, "Plana direct trigger", 27_002),
+      harness.gateway
+    );
+    await waitUntil(() => requests.length >= 3, 5_000);
+    await harness.runtime.sessionCoordinator.waitForIdle({ timeoutMs: 5_000 });
+    expect(orchestratorResultText(requests[2]!)).toBe("");
   });
 
   it("keeps the first trigger quote while a later reply target only enters context", async () => {
@@ -2360,6 +2469,7 @@ function createRuntimeHarness(
     storeOptions?: ConstructorParameters<typeof SessionStore>[0];
     persistConversations?: boolean;
     loadPersistedConversations?: boolean;
+    codexRunner?: CodexRunner;
   } = {}
 ) {
   const store = new SessionStore(options.storeOptions ?? { databasePath: ":memory:" });
@@ -2379,6 +2489,7 @@ function createRuntimeHarness(
   const runtime = new SunaRuntime(config, {
     attachmentService: options.attachmentService ?? {} as never,
     sessionStore: store,
+    ...(options.codexRunner ? { codexRunner: options.codexRunner } : {}),
     resolveToolCapabilities: async () => ({ codex: false, workspaceBash: false }),
     ...(options.replyDebounceMs === undefined
       ? {}
@@ -2499,6 +2610,13 @@ function sentOutbounds(gateway: MessagingPort) {
 function lastUserText(request: RenderedPromptRequest) {
   return [...request.messages].reverse()
     .find((message) => message.role === "user")?.content ?? "";
+}
+
+function orchestratorResultText(request: RenderedPromptRequest) {
+  const content = request.messages.find((message) => (
+    message.role === "developer" && message.content.startsWith("<orchestrator_result>")
+  ))?.content ?? "";
+  return content.slice("<orchestrator_result>".length, -"</orchestrator_result>".length);
 }
 
 function disposeRuntimeHarness(harness: { runtime: SunaRuntime; store: SessionStore }) {

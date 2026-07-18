@@ -19,6 +19,9 @@ const filteredTools = computed(() => {
     tool.title,
     tool.name,
     tool.summary,
+    tool.accessLabel,
+    tool.accessDescription,
+    tool.availabilityReason,
     descriptionFor(tool)
   ].some((value) => String(value ?? "").toLocaleLowerCase().includes(search)));
 });

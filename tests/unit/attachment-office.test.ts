@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import PptxGenJS from "pptxgenjs";
 import { afterEach, describe, expect, it } from "vitest";
 import { extractOfficeText } from "../../services/media/attachments/office.js";
+import { writePptxParserBoundaryFixture } from "../fixtures/office.js";
 
 const temporaryDirectories: string[] = [];
 const execFileAsync = promisify(execFile);
@@ -25,6 +26,7 @@ describe("Office attachment processing", () => {
     const result = await extractOfficeText(pptxPath);
 
     expect(result.fileType).toBe("pptx");
+    expect(result.pageCount).toBe(2);
     expect(result.sections).toHaveLength(2);
     expect(result.sections[0]).toMatchObject({ kind: "slide", title: "幻灯片 1" });
     expect(result.sections[0]?.text).toContain("季度收入增长");
@@ -41,6 +43,19 @@ describe("Office attachment processing", () => {
 
     expect(stdout).toContain("季度收入增长");
     expect(stdout).toContain("现金流保持稳定");
+  }, 30_000);
+
+  it("counts image-only slides while preserving the parser's blank-slide limit", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "sunabot-pptx-page-count-"));
+    temporaryDirectories.push(directory);
+    const { filePath, sourcePageCount } = await writePptxParserBoundaryFixture(directory);
+
+    const result = await extractOfficeText(filePath);
+
+    expect(sourcePageCount).toBe(3);
+    expect(result.pageCount).toBe(2);
+    expect(result.sections).toHaveLength(1);
+    expect(result.sections[0]?.text).toContain("唯一含正文的幻灯片");
   }, 30_000);
 });
 

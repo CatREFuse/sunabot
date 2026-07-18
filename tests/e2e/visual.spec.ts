@@ -242,13 +242,18 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     await page.goto("/images");
     const selfieHeading = page.getByRole("heading", { name: "自拍参考图" });
     await expect(selfieHeading).toBeVisible();
-    await expect(page.getByText("3 / 3 张", { exact: true })).toBeVisible();
+    await expect(page.getByText("3 / 9 张", { exact: true })).toBeVisible();
     await selfieHeading.evaluate((element) => element.scrollIntoView({ block: "start", behavior: "auto" }));
     await capture(page, viewport.name, theme, "images-selfie");
     await page.getByRole("button", { name: "管理参考图", exact: true }).click();
     const selfieDialog = page.getByRole("dialog", { name: "自拍参考图" });
     await expect(selfieDialog).toBeVisible();
     await capture(page, viewport.name, theme, "images-selfie-manager");
+    await selfieDialog.getByRole("button", { name: "编辑备注 常服正面" }).click();
+    const selfieNoteDialog = page.getByRole("dialog", { name: "编辑图片备注" });
+    await expect(selfieNoteDialog.getByLabel("01-neutral-face.png 的备注")).toHaveValue("常服正面");
+    await capture(page, viewport.name, theme, "images-selfie-note");
+    await selfieNoteDialog.getByRole("button", { name: "取消", exact: true }).click();
     await selfieDialog.getByRole("button", { name: "关闭", exact: true }).click();
 
     await page.goto("/settings/providers");
@@ -308,8 +313,11 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
 
     await page.goto("/agent-settings/bash");
     await expect(page.getByRole("heading", { name: "命令执行" })).toBeVisible();
-    await page.getByLabel("允许群聊").check({ force: true });
     state.nextPatchError = "群聊命令需要管理员限制。";
+    const allowGroupBash = page.getByLabel("允许管理员在群聊中使用");
+    await allowGroupBash.focus();
+    await allowGroupBash.press("Space");
+    await expect(allowGroupBash).toBeChecked();
     await expect(page.getByText(/群聊命令需要管理员限制/)).toBeVisible();
     await capture(page, viewport.name, theme, "settings-validation-error");
 
@@ -371,6 +379,33 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     await expect(page.getByRole("heading", { name: "管理员登录" })).toBeHidden();
     await expect(page.getByRole("heading", { name: "图像", exact: true })).toBeVisible();
     await capture(page, viewport.name, theme, "admin-restored");
+  }
+});
+
+test("自拍素材与备注四视口矩阵", async ({ page }, testInfo) => {
+  test.setTimeout(90_000);
+  const theme = testInfo.project.name.endsWith("dark") ? "dark" : "light";
+  await page.addInitScript((selectedTheme) => localStorage.setItem("sunabot.theme", selectedTheme), theme);
+  await page.emulateMedia({ colorScheme: theme, reducedMotion: "reduce" });
+  await installMockApi(page);
+
+  for (const viewport of viewports) {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.goto("/images");
+    await expect(page.getByText("3 / 9 张", { exact: true })).toBeVisible();
+    await capture(page, viewport.name, theme, "selfie-catalog");
+
+    await page.getByRole("button", { name: "管理参考图", exact: true }).click();
+    const manager = page.getByRole("dialog", { name: "自拍参考图" });
+    await expect(manager.getByText("常服正面", { exact: true })).toBeVisible();
+    await capture(page, viewport.name, theme, "selfie-manager");
+
+    await manager.getByRole("button", { name: "编辑备注 常服正面" }).click();
+    const noteDialog = page.getByRole("dialog", { name: "编辑图片备注" });
+    await expect(noteDialog.getByLabel("01-neutral-face.png 的备注")).toHaveValue("常服正面");
+    await capture(page, viewport.name, theme, "selfie-note");
+    await noteDialog.getByRole("button", { name: "取消", exact: true }).click();
+    await manager.getByRole("button", { name: "关闭", exact: true }).click();
   }
 });
 
@@ -457,15 +492,48 @@ test("工具目录四视口矩阵", async ({ page }, testInfo) => {
 
     await page.getByLabel("搜索工具").fill("run_skill_script");
     const unavailableSkillRow = page.locator("article").filter({ has: page.getByText("run_skill_script", { exact: true }) });
-    await expect(unavailableSkillRow.getByText("能力异常", { exact: true })).toBeVisible();
+    await expect(unavailableSkillRow.getByText("运行环境异常", { exact: true })).toBeVisible();
     await expect(unavailableSkillRow.getByText("当前环境没有可用的 Skill 脚本审计执行器。", { exact: true })).toBeVisible();
     await capture(page, viewport.name, theme, "settings-tools-capability-error");
     await unavailableSkillRow.getByRole("button", { name: "查看 运行 Skill 脚本 详情" }).click();
     const unavailableSkillDialog = page.getByRole("dialog", { name: "运行 Skill 脚本" });
-    await expect(unavailableSkillDialog.getByText("能力异常", { exact: true })).toBeVisible();
+    await expect(unavailableSkillDialog.getByText("运行环境异常", { exact: true })).toBeVisible();
     await capture(page, viewport.name, theme, "settings-tools-capability-error-detail");
     await unavailableSkillDialog.getByRole("button", { name: "关闭工具详情" }).click();
     await page.getByLabel("搜索工具").fill("");
+  }
+});
+
+test("Bash 权限与会话状态四视口矩阵", async ({ page }, testInfo) => {
+  test.setTimeout(90_000);
+  const theme = testInfo.project.name.endsWith("dark") ? "dark" : "light";
+  await page.addInitScript((selectedTheme) => localStorage.setItem("sunabot.theme", selectedTheme), theme);
+  await page.emulateMedia({ colorScheme: theme, reducedMotion: "reduce" });
+  await installMockApi(page);
+
+  for (const viewport of viewports) {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.goto("/agent-settings/bash");
+    await expect(page.getByRole("heading", { name: "命令执行" })).toBeVisible();
+    await expect(page.getByLabel("管理员私聊后端")).toHaveValue("native");
+    await expect(page.getByLabel("严格审计")).toBeVisible();
+    await expect(page.getByLabel("管理员身份门禁")).toBeVisible();
+    await expect(page.getByLabel("允许管理员在群聊中使用")).toBeVisible();
+    await expect(page.getByText("只读逐次确认", { exact: true })).toBeVisible();
+    await capture(page, viewport.name, theme, "settings-bash-permissions");
+
+    await page.goto("/agent-settings/tools");
+    await page.getByLabel("搜索工具").fill("workspace_bash");
+    const bashRow = page.locator("article").filter({ has: page.getByText("workspace_bash", { exact: true }) });
+    await expect(bashRow.getByText("管理员 QQ 私聊可用", { exact: true })).toBeVisible();
+    await expect(bashRow.getByText("运行环境异常", { exact: true })).toHaveCount(0);
+    await capture(page, viewport.name, theme, "settings-bash-session-scope");
+    await bashRow.getByRole("button", { name: "查看 Bash 详情" }).click();
+    const dialog = page.getByRole("dialog", { name: "Bash" });
+    await expect(dialog.getByText("适用会话", { exact: true })).toBeVisible();
+    await expect(dialog.getByText("管理员私聊后端", { exact: true })).toBeVisible();
+    await capture(page, viewport.name, theme, "settings-bash-detail");
+    await dialog.getByRole("button", { name: "关闭工具详情" }).click();
   }
 });
 

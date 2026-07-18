@@ -754,6 +754,47 @@ describe("SystemConfigService", () => {
     expect(JSON.stringify(result)).not.toContain(SECRET_PATH);
   });
 
+  it.each([
+    ["BASH_AUDIT_UNAVAILABLE", "独立 Bash 审计不可用，Bash 已安全关闭。"],
+    ["BASH_WORKBENCH_UNAVAILABLE", "当前 Agent workbench 不可用，Bash 已安全关闭。"]
+  ] as const)("preserves the safe Bash capability reason %s", async (reason, message) => {
+    const harness = createHarness();
+    harness.config.bot.bash.enabled = true;
+    harness.runtime.resolveToolCapabilities = vi.fn(async () => ({
+      workspaceBash: false,
+      workspaceBashReason: reason
+    }));
+
+    for (const operation of ["get_settings", "get_status"] as const) {
+      const result = await execute(harness, systemInput(operation));
+      expect(result.bash).toMatchObject({
+        available: false,
+        effectiveEnabled: false,
+        unavailableReason: reason,
+        unavailableMessage: message,
+        unavailabilityKind: "runtime"
+      });
+    }
+  });
+
+  it("reports the disabled administrator identity gate as a session restriction", async () => {
+    const harness = createHarness();
+    harness.config.bot.bash.enabled = true;
+    harness.config.bot.bash.adminOnly = false;
+    harness.runtime.resolveToolCapabilities = vi.fn(async () => ({ workspaceBash: true }));
+
+    const result = await execute(harness, systemInput("get_settings"));
+
+    expect(result.bash).toMatchObject({
+      configuredEnabled: true,
+      available: false,
+      effectiveEnabled: false,
+      unavailableReason: "BASH_ADMIN_IDENTITY_DISABLED",
+      unavailableMessage: "管理员身份门禁已关闭，所有会话均不可用。",
+      unavailabilityKind: "session"
+    });
+  });
+
   it("stages only the administrator Bash backend preference and never claims capability", async () => {
     const harness = createHarness();
     harness.config.bot.bash.enabled = true;

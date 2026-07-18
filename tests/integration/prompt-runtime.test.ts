@@ -83,6 +83,8 @@ describe("workspace prompt runtime", () => {
       "memory.working": "工作记忆 A",
       "memory.long_term": "长期记忆 B",
       "memory.user_profile": "画像 C",
+      "conversation.emoji.keys": ["开心", "认真"],
+      "conversation.emoji.syntax": "需要发送表情时输出 [/表情key]。",
       "user.input": "当前问题"
     });
 
@@ -92,6 +94,10 @@ describe("workspace prompt runtime", () => {
     expect(rendered.messages.at(-1)?.content).toContain("<working_memory>工作记忆 A</working_memory>");
     expect(rendered.messages.at(-1)?.content).toContain("<long_term_memory>长期记忆 B</long_term_memory>");
     expect(rendered.messages.at(-1)?.content).toContain("<user_profile>画像 C</user_profile>");
+    expect(rendered.messages[0]?.content).toContain("<emoji_keys>[");
+    expect(rendered.messages[0]?.content).toContain('"开心"');
+    expect(rendered.messages[0]?.content).toContain('"认真"');
+    expect(rendered.messages[0]?.content).toContain("<emoji_syntax>需要发送表情时输出 [/表情key]。</emoji_syntax>");
     expect(rendered.messages.at(-1)?.content).toContain("<current_input>当前问题</current_input>");
     expect(rendered.tools?.map((tool) => tool.function.name)).toEqual([
       "assistant_text",

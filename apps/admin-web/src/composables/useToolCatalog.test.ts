@@ -26,6 +26,11 @@ describe("useToolCatalog", () => {
         available: false,
         effectiveEnabled: false,
         availabilityReason: "网页搜索配置不可用。",
+        unavailabilityKind: "runtime",
+        accessLabel: "管理员 QQ 私聊可用",
+        accessDescription: "其他会话不可用。",
+        executionBackend: "docker",
+        runtimeReasonCode: "BASH_DOCKER_ISOLATION_UNAVAILABLE",
         defaultDescription: "Default search description.",
         promptDescription: "Prompt search description.",
         description: "Prompt search description.",
@@ -46,7 +51,12 @@ describe("useToolCatalog", () => {
       promptEnabled: true,
       available: false,
       effectiveEnabled: false,
-      availabilityReason: "网页搜索配置不可用。"
+      availabilityReason: "网页搜索配置不可用。",
+      unavailabilityKind: "runtime",
+      accessLabel: "管理员 QQ 私聊可用",
+      accessDescription: "其他会话不可用。",
+      executionBackend: "docker",
+      runtimeReasonCode: "BASH_DOCKER_ISOLATION_UNAVAILABLE"
     });
     await catalog.load();
     expect(apiRequest).toHaveBeenCalledTimes(1);
@@ -68,6 +78,26 @@ describe("useToolCatalog", () => {
       available: true,
       defaultDescription: "异步任务"
     });
+  });
+
+  it("drops invalid availability and backend enums", async () => {
+    apiRequest.mockResolvedValueOnce({
+      tools: [{
+        name: "workspace_bash",
+        title: "Bash",
+        description: "执行命令",
+        enabled: true,
+        available: false,
+        unavailabilityKind: "unknown",
+        executionBackend: "host"
+      }]
+    });
+    const catalog = useToolCatalog();
+
+    await catalog.load();
+
+    expect(catalog.tools.value[0]).not.toHaveProperty("unavailabilityKind");
+    expect(catalog.tools.value[0]).not.toHaveProperty("executionBackend");
   });
 
   it("keeps the newest forced refresh result", async () => {

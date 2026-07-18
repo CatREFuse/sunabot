@@ -4,7 +4,10 @@ import type { Duplex } from "node:stream";
 import { URL } from "node:url";
 import { nanoid } from "nanoid";
 import { WebSocket, WebSocketServer } from "ws";
-import type { OutboundMediaDelivery } from "../../services/delivery/outboundMedia.js";
+import {
+  prepareOutboundImageSources,
+  type OutboundMediaDelivery
+} from "../../services/delivery/outboundMedia.js";
 import type { AppConfig } from "../../src/types.js";
 import type {
   AttachmentResolutionInput,
@@ -18,6 +21,7 @@ import type {
   MessagingConnectionContextV1,
   MessagingPort,
   MessagingReceiptV1,
+  OutboundContentSegmentV1,
   OutboundConversationAssetV1,
   OutboundMessageV1,
   PokeTargetV1,
@@ -260,11 +264,17 @@ export class OneBotGateway extends EventEmitter implements MessagingPort, Conver
     }, accountId);
   }
 
-  async sendPrivateRichMessage(userId: number, text: string, images: OutboundImageAsset[], accountId?: string) {
-    const imageSources = await this.resolveImageSources(images);
+  async sendPrivateRichMessage(
+    userId: number,
+    text: string,
+    images: OutboundImageAsset[],
+    accountId?: string,
+    contentSegments?: OutboundContentSegmentV1[]
+  ) {
+    const imageSources = await this.resolveImageSources(images, contentSegments);
     return this.sendTargetedAction("send_private_msg", {
       user_id: userId,
-      message: richMessage(text, imageSources)
+      message: richMessage(text, imageSources, undefined, contentSegments)
     }, accountId);
   }
 
@@ -275,11 +285,17 @@ export class OneBotGateway extends EventEmitter implements MessagingPort, Conver
     }, options.accountId);
   }
 
-  async sendGroupRichMessage(groupId: number, text: string, images: OutboundImageAsset[], options: { replyToMessageId?: number; accountId?: string } = {}) {
-    const imageSources = await this.resolveImageSources(images);
+  async sendGroupRichMessage(
+    groupId: number,
+    text: string,
+    images: OutboundImageAsset[],
+    options: { replyToMessageId?: number; accountId?: string } = {},
+    contentSegments?: OutboundContentSegmentV1[]
+  ) {
+    const imageSources = await this.resolveImageSources(images, contentSegments);
     return this.sendTargetedAction("send_group_msg", {
       group_id: groupId,
-      message: richMessage(text, imageSources, options.replyToMessageId)
+      message: richMessage(text, imageSources, options.replyToMessageId, contentSegments)
     }, options.accountId);
   }
 
@@ -330,22 +346,25 @@ export class OneBotGateway extends EventEmitter implements MessagingPort, Conver
   async send(message: OutboundMessageV1): Promise<MessagingReceiptV1> {
     const accountId = message.accountId ?? accountIdFromConversationId(message.conversationId);
     const text = sanitizeOneBotOutboundText(message.text);
+    const contentSegments = message.contentSegments?.map((segment) => segment.type === "text"
+      ? { type: "text" as const, text: sanitizeOneBotOutboundText(segment.text) }
+      : { ...segment });
     const images: OutboundImageAsset[] = message.media.map((asset) => ({
       url: asset.url,
       filePath: asset.source === "shared_file" ? asset.filePath : undefined
     }));
     const response = message.groupId
-      ? images.length
+      ? images.length || contentSegments?.length
         ? await this.sendGroupRichMessage(message.groupId, text, images, {
           replyToMessageId: message.replyToMessageId,
           accountId
-        })
+        }, contentSegments)
         : await this.sendGroupMessage(message.groupId, text, {
           replyToMessageId: message.replyToMessageId,
           accountId
         })
-      : images.length
-        ? await this.sendPrivateRichMessage(message.userId, text, images, accountId)
+      : images.length || contentSegments?.length
+        ? await this.sendPrivateRichMessage(message.userId, text, images, accountId, contentSegments)
         : await this.sendPrivateMessage(message.userId, text, accountId);
     return {
       accepted: true,
@@ -434,15 +453,11 @@ export class OneBotGateway extends EventEmitter implements MessagingPort, Conver
     return resolveOneBotAttachmentFallback(this, input, options);
   }
 
-  private async resolveImageSources(images: OutboundImageAsset[]) {
-    const sources = await Promise.all(images.map(async (image) => {
-      if (image.filePath && this.options.outboundMedia) {
-        return this.options.outboundMedia.createReference(image.filePath);
-      }
-      if (image.url && /^https?:\/\//i.test(image.url)) return image.url;
-      return image.filePath ?? "";
-    }));
-    return sources.filter(Boolean);
+  private resolveImageSources(
+    images: OutboundImageAsset[],
+    contentSegments?: OutboundContentSegmentV1[]
+  ) {
+    return prepareOutboundImageSources(images, this.options.outboundMedia, contentSegments);
   }
 
   private openSocket(accountId?: string) {
@@ -633,7 +648,12 @@ function replyMessage(messageId: number, text: string) {
   ];
 }
 
-function richMessage(text: string, imageSources: string[], replyToMessageId?: number) {
+function richMessage(
+  text: string,
+  imageSources: string[],
+  replyToMessageId?: number,
+  contentSegments?: OutboundContentSegmentV1[]
+) {
   const segments = [];
   if (replyToMessageId) {
     segments.push({
@@ -644,23 +664,36 @@ function richMessage(text: string, imageSources: string[], replyToMessageId?: nu
     });
   }
 
-  const trimmedText = text.trim();
-  if (trimmedText) {
-    segments.push({
-      type: "text",
-      data: {
-        text: trimmedText
+  if (contentSegments?.length) {
+    for (const segment of contentSegments) {
+      if (segment.type === "text") {
+        const segmentText = segment.text.trim();
+        if (segmentText) segments.push({ type: "text", data: { text: segmentText } });
+        continue;
       }
-    });
-  }
+      const imageSource = imageSources[segment.imageIndex];
+      if (!imageSource) throw new Error("Outbound image segment index is invalid.");
+      segments.push({ type: "image", data: { file: imageSource } });
+    }
+  } else {
+    const trimmedText = text.trim();
+    if (trimmedText) {
+      segments.push({
+        type: "text",
+        data: {
+          text: trimmedText
+        }
+      });
+    }
 
-  for (const imageSource of imageSources) {
-    segments.push({
-      type: "image",
-      data: {
-        file: imageSource
-      }
-    });
+    for (const imageSource of imageSources) {
+      segments.push({
+        type: "image",
+        data: {
+          file: imageSource
+        }
+      });
+    }
   }
 
   return segments.length ? segments : [{ type: "text", data: { text: "" } }];

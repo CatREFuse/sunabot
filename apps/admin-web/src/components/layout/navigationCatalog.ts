@@ -26,8 +26,9 @@ export const navigationSections: readonly NavigationSection[] = [
       { to: "/agent-prompts", label: "Agent 提示词", mobileLabel: "提示词", description: "编辑 Agent 提示词", icon: "bx-bot", mobilePlacement: "primary", mobileOrder: 3 },
       { to: "/memory", label: "记忆", mobileLabel: "记忆", description: "检索与维护记忆", icon: "bx-brain", mobilePlacement: "more", mobileOrder: 0 },
       { to: "/images", label: "图像", mobileLabel: "图像", description: "查看图像历史", icon: "bx-image", mobilePlacement: "more", mobileOrder: 1 },
-      { to: "/logs", label: "日志", mobileLabel: "日志", description: "活动终端与请求日志", icon: "bx-terminal", mobilePlacement: "more", mobileOrder: 2 },
-      { to: "/extensions", label: "扩展", mobileLabel: "扩展", description: "Skill 与 MCP", icon: "bx-extension", mobilePlacement: "more", mobileOrder: 3 }
+      { to: "/emojis", label: "表情", mobileLabel: "表情", description: "管理发送表情", icon: "bx-happy-alt", mobilePlacement: "more", mobileOrder: 2 },
+      { to: "/logs", label: "日志", mobileLabel: "日志", description: "活动终端与请求日志", icon: "bx-terminal", mobilePlacement: "more", mobileOrder: 3 },
+      { to: "/extensions", label: "扩展", mobileLabel: "扩展", description: "Skill 与 MCP", icon: "bx-extension", mobilePlacement: "more", mobileOrder: 4 }
     ]
   },
   {

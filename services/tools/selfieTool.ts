@@ -37,7 +37,7 @@ export type SelfieRunResult =
 export const selfieTool = {
   type: "function",
   name: SELFIE_TOOL_NAME,
-  description: "Generate a selfie or broad image of the bot's own appearance. Use when the user asks the bot to show itself, take a selfie, make an avatar, make a photo with the bot, or make the bot hold/wear/use something from chat images. A selfie can be interpreted broadly as any image where the bot's own appearance is present, not only a phone selfie pose. Stored bot selfie references are always supplied. The model decides whether an additional chat reference is needed: prefer an exact historical media handle shown in conversation history, then use referenceImageSource as a fallback. Use previous_output for edits or retries of the latest generated image, history for earlier same-user media, current for current or quoted media, current_and_history to combine them, and none when only the stored bot references are needed. Do not print local file paths or CQ codes.",
+  description: "Generate a selfie or broad image of the bot's own appearance. Use when the user asks the bot to show itself, take a selfie, make an avatar, make a photo with the bot, or make the bot hold/wear/use something from chat images. A selfie can be interpreted broadly as any image where the bot's own appearance is present, not only a phone selfie pose. The selfie prompt node selects 1 to 3 stored bot references from the configured catalog by their notes. The model decides whether one additional chat reference is needed: select at most one exact chat image, prefer its historical media handle shown in conversation history, then use referenceImageSource as a fallback. Use previous_output for edits or retries of the latest generated image, history for earlier same-user media, current for current or quoted media, current_and_history to combine them, and none when only stored bot references are needed. Do not print local file paths or CQ codes.",
   parameters: {
     type: "object",
     additionalProperties: false,
@@ -74,19 +74,19 @@ export const selfieTool = {
       referenceImageUrls: {
         type: ["array", "null"],
         items: { type: "string" },
-        maxItems: 4,
-        description: "Exact chat reference image URLs explicitly present in the request. Use null when selecting conversation media through referenceMediaHandles or referenceImageSource. Do not invent URLs."
+        maxItems: 1,
+        description: "At most one exact chat reference image URL explicitly present in the request. Use null when selecting conversation media through referenceMediaHandles or referenceImageSource. Do not invent URLs."
       },
       referenceMediaHandles: {
         type: ["array", "null"],
         items: { type: "string" },
-        maxItems: 4,
-        description: "Exact historical media handles shown in conversation history, such as message:<message-id>:image:<index>. Prefer these handles when the user refers to a specific earlier image. Use null when no exact chat image is needed. Do not invent handles."
+        maxItems: 1,
+        description: "At most one exact historical media handle shown in conversation history, such as message:<message-id>:image:<index>. Prefer this handle when the user refers to a specific earlier image. Use null when no exact chat image is needed. Do not invent handles."
       },
       referenceImageSource: {
         type: "string",
         enum: GENERATE_IMG_REFERENCE_SOURCES,
-        description: "Fallback chat reference source chosen by the model: none adds no chat media; current uses current and quoted images; previous_output uses the same user's latest generated output; history uses recent same-user conversation media; current_and_history combines current and recent same-user media. Stored bot selfie references are always retained."
+        description: "Fallback chat reference source chosen by the model: none adds no chat media; current uses current and quoted images; previous_output uses the same user's latest generated output; history uses recent same-user conversation media; current_and_history combines current and recent same-user media. The prompt node independently chooses 1 to 3 stored bot references."
       }
     },
     required: [

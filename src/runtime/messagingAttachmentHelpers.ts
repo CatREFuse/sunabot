@@ -158,7 +158,8 @@ export function outboundForIncoming(
   incoming: ParsedIncomingMessage,
   text: string,
   images: ImageResult[] = [],
-  replyToMessageId?: number
+  replyToMessageId?: number,
+  contentSegments?: OutboundMessageV1["contentSegments"]
 ): OutboundMessageV1 {
   return {
     schemaVersion: 1,
@@ -171,6 +172,7 @@ export function outboundForIncoming(
     ...(incoming.groupId ? { groupId: incoming.groupId } : {}),
     text,
     media: images.map(generatedImageMediaAsset).filter((asset): asset is NonNullable<typeof asset> => Boolean(asset)),
+    ...(contentSegments?.length ? { contentSegments: contentSegments.map((segment) => ({ ...segment })) } : {}),
     ...(replyToMessageId ? { replyToMessageId } : {})
   };
 }

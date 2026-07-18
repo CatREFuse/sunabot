@@ -34,6 +34,8 @@ NapCat 在 macOS、WSL2 和 Linux 上始终运行于独立 Docker 容器。Sunab
 
 统一 launcher 在 `up`、`down` 和 `restart` 的运行状态检查前核对当前 workspace 的 NapCat Compose one-off 探针。Docker `ps` 仍报告探针存在而 `inspect` 返回对象不存在时，macOS Colima 的交互终端必须在明确告知其他 Docker 容器会短暂中断后取得确认，随后重启 Colima、等待 Docker Engine 就绪并复验悬空记录消失；非交互命令和其他 Docker Engine 必须失败关闭并返回明确操作。该恢复不能自动执行数据迁移，也不能放宽活动容器、端口、恢复点或迁移标记门禁。
 
+宿主 account runtime daemon 按 workspace 保持单实例。owner 记录以当前用户拥有的 0600 普通文件原子发布，并绑定 workspace 身份、入口、PID/进程组、进程启动身份和随机 owner token；发布、claim 或回收中断时保留可验证的同 inode 恢复证据，只有能够证明旧 owner 已退出或身份失配时才回收。损坏、符号链接、额外硬链接、身份不明或 PID 复用都失败关闭，不能向未证明属于当前 workspace 的进程发送信号。`status` 必须报告 owner 丢失与 split-brain；`down` 和 `restart` 还要发现同 workspace 的旧入口与无参数 daemon，停止全部可证明安全的实例并保留无关进程。
+
 管理 API 只发布到宿主回环 `127.0.0.1:8787`。OneBot 使用专用 `8788` 端口并强制校验 access token：Docker Core 模式通过共享的私有运行网络和 `core` 服务名连接；Native Core 模式由启动器配置容器可达的宿主网关。OneBot 不直接发布到局域网或公网。每个 NapCat WebUI 使用注册表分配的独立端口，仅发布到宿主回环，首个账号默认使用 `127.0.0.1:6099`。
 
 Core 与 NapCat 是独立生命周期和文件系统边界。跨组件出站媒体默认使用 OneBot `base64://`，不能传递或依赖宿主、Core 容器、NapCat 容器之间的共享绝对路径。共享业务配置、公共系统提示词和 Agent 注册表位于 workspace 公共区域；每个 Agent 的人格、自拍提示词改写、可选系统提示词覆盖、SQLite、队列、图片与人工文件位于 `workspace/business/agents/<agentId>/`。每个 QQ 的 NapCat 配置、登录态和运行状态位于 `workspace/runtime/napcat/accounts/<accountId>/`，只挂载给对应 NapCat 容器。平台差异只存在于组合根、运行适配器和部署层，业务与持久化格式保持一致。

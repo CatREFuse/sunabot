@@ -23,7 +23,10 @@ describe("workspace Bash capability probe", () => {
       sandbox: { probe }
     });
 
-    await expect(capability(await createAgentWorkspace())).resolves.toBe(false);
+    await expect(capability(await createAgentWorkspace())).resolves.toEqual({
+      available: false,
+      reason: "BASH_NATIVE_ISOLATION_UNAVAILABLE"
+    });
     expect(probe).not.toHaveBeenCalled();
   });
 
@@ -42,7 +45,7 @@ describe("workspace Bash capability probe", () => {
       }
     });
 
-    await expect(capability(await createAgentWorkspace())).resolves.toBe(true);
+    await expect(capability(await createAgentWorkspace())).resolves.toEqual({ available: true });
     expect(probe).toHaveBeenCalledOnce();
     expect(probe.mock.calls[0]?.[0]).toBe("/fixture/docker");
     const probeArgs = probe.mock.calls[0]?.[1] ?? [];
@@ -66,7 +69,10 @@ describe("workspace Bash capability probe", () => {
       sandbox: { effectiveUid: 0, probe }
     });
 
-    await expect(capability(await createAgentWorkspace())).resolves.toBe(false);
+    await expect(capability(await createAgentWorkspace())).resolves.toEqual({
+      available: false,
+      reason: "BASH_DOCKER_ISOLATION_UNAVAILABLE"
+    });
     expect(probe).not.toHaveBeenCalled();
   });
 
@@ -89,12 +95,15 @@ describe("workspace Bash capability probe", () => {
     });
     const agentWorkspace = await createAgentWorkspace();
 
-    await expect(capability(agentWorkspace)).resolves.toBe(true);
-    await expect(capability(agentWorkspace)).resolves.toBe(true);
+    await expect(capability(agentWorkspace)).resolves.toEqual({ available: true });
+    await expect(capability(agentWorkspace)).resolves.toEqual({ available: true });
     expect(probe).toHaveBeenCalledOnce();
 
     currentTime += 30_001;
-    await expect(capability(agentWorkspace)).resolves.toBe(false);
+    await expect(capability(agentWorkspace)).resolves.toEqual({
+      available: false,
+      reason: "BASH_NATIVE_ISOLATION_UNAVAILABLE"
+    });
     expect(probe).toHaveBeenCalledTimes(2);
   });
 
@@ -114,7 +123,10 @@ describe("workspace Bash capability probe", () => {
       }
     });
 
-    await expect(capability(await createAgentWorkspace())).resolves.toBe(false);
+    await expect(capability(await createAgentWorkspace())).resolves.toEqual({
+      available: false,
+      reason: "BASH_NATIVE_ISOLATION_UNAVAILABLE"
+    });
     expect(probe).not.toHaveBeenCalled();
   });
 
@@ -135,7 +147,10 @@ describe("workspace Bash capability probe", () => {
       }
     });
 
-    await expect(capability(await createAgentWorkspace())).resolves.toBe(false);
+    await expect(capability(await createAgentWorkspace())).resolves.toEqual({
+      available: false,
+      reason: "BASH_DOCKER_ISOLATION_UNAVAILABLE"
+    });
     expect(probe).not.toHaveBeenCalled();
   });
 
@@ -151,7 +166,10 @@ describe("workspace Bash capability probe", () => {
       }
     });
 
-    await expect(capability(await createAgentWorkspace())).resolves.toBe(false);
+    await expect(capability(await createAgentWorkspace())).resolves.toEqual({
+      available: false,
+      reason: "BASH_NATIVE_ISOLATION_UNAVAILABLE"
+    });
     expect(probe).not.toHaveBeenCalled();
   });
 
@@ -181,7 +199,11 @@ describe("workspace Bash capability probe", () => {
       workspacePath: "/fixture/agent-workspace",
       workspaceBashBackend: "native",
       workspaceBashAuditAvailable: true
-    })).resolves.toEqual({ codex: false, workspaceBash: false });
+    })).resolves.toEqual({
+      codex: false,
+      workspaceBash: false,
+      workspaceBashReason: "BASH_NATIVE_ISOLATION_UNAVAILABLE"
+    });
   });
 
   it("does not start the isolation probe when the independent audit dependency is unavailable", async () => {
@@ -195,8 +217,31 @@ describe("workspace Bash capability probe", () => {
       workspacePath: "/fixture/agent-workspace",
       workspaceBashBackend: "docker",
       workspaceBashAuditAvailable: false
-    })).resolves.toEqual({ codex: true, workspaceBash: false });
+    })).resolves.toEqual({
+      codex: true,
+      workspaceBash: false,
+      workspaceBashReason: "BASH_AUDIT_UNAVAILABLE"
+    });
     expect(getWorkspaceBashCapability).not.toHaveBeenCalled();
+  });
+
+  it("distinguishes an invalid Agent workbench from an isolation failure", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-bash-capability-invalid-workbench-"));
+    temporaryRoots.push(root);
+    const invalidWorkspace = path.join(root, "workspace-file");
+    await fs.writeFile(invalidWorkspace, "not a directory");
+    const probe = vi.fn(async () => undefined);
+    const capability = createWorkspaceBashCapabilityProbe({
+      platform: "linux",
+      backend: "native",
+      sandbox: { probe }
+    });
+
+    await expect(capability(invalidWorkspace)).resolves.toEqual({
+      available: false,
+      reason: "BASH_WORKBENCH_UNAVAILABLE"
+    });
+    expect(probe).not.toHaveBeenCalled();
   });
 });
 

@@ -110,9 +110,19 @@ import {
   type RenderedPromptRequest
 } from "../../services/agent/promptSystem.js";
 import { buildConversationPromptVariables } from "../../services/agent/persona.js";
+import {
+  prepareEmojiReply,
+  replanEmojiMarkers,
+  type EmojiMarkerPlan
+} from "../../services/emojis/emojiCatalog.js";
+import {
+  assertPlannedEmojiAssetsIntegrity,
+  planAgentEmojiMarkers
+} from "../emojis/emojiAssets.js";
 import { DEFAULT_CONTEXT_MESSAGE_LIMIT, MAX_STORED_CONVERSATION_MESSAGES, GROUP_CHAT_SUMMARY_WINDOW_MS, MAX_SELFIE_REFERENCE_IMAGES, MAX_SELFIE_WORKSPACE_REFERENCE_IMAGES, MAX_CURRENT_CONTEXT_IMAGES, MAX_HISTORY_CONTEXT_IMAGES, HYDRATE_MESSAGE_WINDOW_MS, ACTIVE_CONVERSATION_WINDOW_MS, DIRECT_REPLY_TIMEOUT_MS, AMBIENT_ORCHESTRATOR_TIMEOUT_MS, ORCHESTRATOR_MAX_RETRIES, PREPARE_TIMEOUT_MS, RECENT_CONTEXT_TOKEN_BUDGET, DEDUPE_TTL_MS, MAX_DEDUPE_KEYS, DEFAULT_ADMIN_NAME, GROUP_CHAT_SUMMARY_COMMAND, CONVERSATION_REPLY_PROMPT_FILE, SELFIE_PROMPT_FILE, GROUP_CHAT_SUMMARY_PROMPT_FILE, ADMIN_PERSONA_FILES, ADMIN_RUNTIME_PROMPT_DEFAULTS, BatchUserInfo, WorkingMemoryMergeOutput, WorkingMemoryMergeContext, personaFileNameForAdminId, AdminIdentity, ConversationReplyUpdateInput, RuntimeCommandContext, ReplyDeliveryDraft, ReplyDelivery, DeferredCodexTurn, AmbientReplyJob, AmbientReplyState, AmbientIdleTimer, RuntimeConfigSnapshot, RuntimePromptSnapshot, SunaRuntimeOptions } from "./runtimeContracts.js";
 import { conversationRecordId, normalizeOutgoingReplyText, outboundForIncoming, persistentIncomingKey, queueIncomingSnapshot } from "./messagingAttachmentHelpers.js";
 import { formatErrorReply, saveConversationRecordsStrict } from "./infrastructure.js";
+import { rewritePlannedEmojiText } from "./emojiReply.js";
 
 import type { SunaRuntime } from "../runtime.js";
 type RuntimeHost = SunaRuntime;
@@ -130,29 +140,42 @@ export async function runtime_sendAssistantReply(this: RuntimeHost,
     quoteReply = true,
     trace: AssistantMessageTrace = { messageOrigin: "text" },
     deliveryTiming: "buffered" | "immediate" = "buffered",
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    emojiPlan?: EmojiMarkerPlan
   ) {
     if (
       !this.isReplySenderAllowed(incoming.userId) ||
       !isCurrent()
     ) return undefined;
+    const plannedEmojiReply = emojiPlan ?? planAgentEmojiMarkers(text, this.config);
     const beforeReply = await this.hooks.run("before_reply", {
       channel: channelKey,
       text,
       context: { scope: incoming.scope, userId: incoming.userId, groupId: incoming.groupId, isAdmin }
     });
-    const tonedText = await this.rewriteToneText(beforeReply.text, {
-      incoming,
-      signal,
-      logContext: {
-        conversationId: conversationRecordId(incoming),
-        incomingMessageId: incoming.messageId == null ? undefined : String(incoming.messageId),
-        runId: logRunId
-      }
-    });
-    const generatedImageAssets = generatedImages.filter((image) => image.url || image.filePath);
-    const generatedImageUrls = generatedImages.flatMap((image) => image.url ? [image.url] : []);
-    const replyText = normalizeOutgoingReplyText(tonedText).trim();
+    const rewritten = await rewritePlannedEmojiText(
+      beforeReply.text,
+      plannedEmojiReply,
+      (value) => this.rewriteToneText(value, {
+          incoming,
+          signal,
+          logContext: {
+            conversationId: conversationRecordId(incoming),
+            incomingMessageId: incoming.messageId == null ? undefined : String(incoming.messageId),
+            runId: logRunId
+          }
+        })
+    );
+    const normalizedText = normalizeOutgoingReplyText(rewritten.text).trim();
+    const preparedReply = prepareEmojiReply(
+      normalizedText,
+      replanEmojiMarkers(normalizedText, rewritten.plan),
+      generatedImages.filter((image) => image.url || image.filePath)
+    );
+    await assertPlannedEmojiAssetsIntegrity(this.config, plannedEmojiReply);
+    const generatedImageAssets = preparedReply.images;
+    const generatedImageUrls = generatedImageAssets.flatMap((image) => image.url ? [image.url] : []);
+    const replyText = preparedReply.text;
     if (!replyText && !generatedImageAssets.length) {
       throw new Error("模型回复为空。");
     }
@@ -168,7 +191,8 @@ export async function runtime_sendAssistantReply(this: RuntimeHost,
         undefined,
         quoteReply,
         trace,
-        delivery.replyQuote
+        delivery.replyQuote,
+        preparedReply.contentSegments
       );
       if (deliveryTiming === "immediate" && delivery.emitOutbox) {
         draft.dedupeFingerprint = immediateReplyFingerprint(
@@ -177,7 +201,8 @@ export async function runtime_sendAssistantReply(this: RuntimeHost,
           generatedImageAssets,
           quoteReply,
           draft.payload.payload.replyToMessageId,
-          trace
+          trace,
+          preparedReply.contentSegments
         );
         await delivery.emitOutbox(draft);
       } else {
@@ -191,7 +216,8 @@ export async function runtime_sendAssistantReply(this: RuntimeHost,
       incoming,
       replyText,
       generatedImageAssets,
-      replyToMessageId
+      replyToMessageId,
+      preparedReply.contentSegments
     ));
 
     const record = this.recordAssistantMessage(
@@ -245,7 +271,8 @@ export function runtime_replyDeliveryDraft(this: RuntimeHost,
     dedupeKey?: string,
     quoteReply = true,
     trace: AssistantMessageTrace = { messageOrigin: "text" },
-    replyQuote?: ReplyQuoteSnapshotV1
+    replyQuote?: ReplyQuoteSnapshotV1,
+    contentSegments?: OutboundMessageV1["contentSegments"]
   ): ReplyDeliveryDraft {
     const replyToMessageId = resolveReplyToMessageId(this, incoming, quoteReply, replyQuote);
     return {
@@ -255,6 +282,7 @@ export function runtime_replyDeliveryDraft(this: RuntimeHost,
         incoming: queueIncomingSnapshot(incoming),
         text,
         generatedImages,
+        ...(contentSegments?.length ? { contentSegments: contentSegments.map((segment) => ({ ...segment })) } : {}),
         isAdmin,
         quoteReply,
         replyToMessageId: replyToMessageId ?? null,
@@ -287,7 +315,8 @@ export async function runtime_deliverReplyOutbox(
         incoming,
         payload.text,
         generatedImageAssets,
-        replyToMessageId
+        replyToMessageId,
+        payload.contentSegments
       ));
     if (delivery) remoteReceipt = await delivery.sendRemote(sendReply);
     else remoteReceipt = await sendReply();
@@ -509,7 +538,8 @@ function immediateReplyFingerprint(
   generatedImages: ImageResult[],
   quoteReply: boolean,
   replyToMessageId: number | null | undefined,
-  trace: AssistantMessageTrace
+  trace: AssistantMessageTrace,
+  contentSegments?: OutboundMessageV1["contentSegments"]
 ) {
   return createHash("sha256").update(JSON.stringify({
     target: {
@@ -523,6 +553,7 @@ function immediateReplyFingerprint(
     },
     text,
     generatedImages: generatedImages.map(({ url, filePath }) => ({ url, filePath })),
+    contentSegments,
     quoteReply,
     replyToMessageId,
     messageOrigin: trace.messageOrigin

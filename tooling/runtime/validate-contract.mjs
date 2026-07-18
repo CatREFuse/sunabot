@@ -7,6 +7,7 @@ import {
   readNodeVersionContractInputs,
   validateNodeVersionEntrypoints
 } from "./node-version-contract.mjs";
+import { validateOfficeParserContract } from "./office-parser-contract.mjs";
 
 const root = resolveProjectRoot(import.meta.url);
 const [
@@ -28,7 +29,8 @@ const [
   agentsGuide,
   dockerSeccompProfile,
   buildRelease,
-  packageManifest
+  packageManifest,
+  packageLock
 ] = await Promise.all([
   readJson("deploy/runtime-contract.json"),
   readJson("deploy/runtime-contract.schema.json"),
@@ -48,11 +50,13 @@ const [
   read("AGENTS.md"),
   readJson("deploy/docker/seccomp-bwrap.json"),
   read("tooling/runtime/build-release.mjs"),
-  readJson("package.json")
+  readJson("package.json"),
+  readJson("package-lock.json")
 ]);
 
 const errors = [
-  ...validateNodeVersionEntrypoints(await readNodeVersionContractInputs(root))
+  ...validateNodeVersionEntrypoints(await readNodeVersionContractInputs(root)),
+  ...validateOfficeParserContract({ componentLock: lock, packageManifest, packageLock })
 ];
 const expect = (condition, message) => {
   if (!condition) errors.push(message);
@@ -211,11 +215,8 @@ expect(!coreDockerfile.toLowerCase().includes("libreoffice"),
   "Core image must not install the retired LibreOffice runtime");
 expect(coreDockerfile.includes("COPY tooling/runtime ./tooling/runtime"),
   "Core build stage must include API runtime helper modules");
-expect(officeParser?.version === "7.2.3"
-  && packageManifest.dependencies?.officeparser?.includes(officeParser.version)
-  && /^sha512-[A-Za-z0-9+/]+=*$/.test(officeParser.integrity ?? "")
-  && packageManifest.scripts?.["office:read"] === "officeparser",
-"Office parser must stay locked and expose the non-GUI CLI");
+expect(officeParser?.version === "7.2.3",
+  "Office parser must stay on the reviewed release");
 expect(codex.optional !== true
   && codex.version === contract.capabilities.codexCli.version
   && codex.package === "@openai/codex"

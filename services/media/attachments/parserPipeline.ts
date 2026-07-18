@@ -38,6 +38,8 @@ import {
 const MAX_WORKER_RESULT_FILE_BYTES = 1024 * 1024;
 const MAX_ATTACHMENT_PREVIEW_CHARACTERS = 2_000;
 const MAX_VISUAL_PAGE_WORK_BYTES = 24 * 1024 * 1024;
+const OFFICE_PARSER_CACHE_REVISION = 2;
+const OFFICE_FORMATS = new Set(["doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "odp", "ods"]);
 
 export interface VisualPageBatchResult {
   pages: Array<{ pageNumber: number; path: string }>;
@@ -46,6 +48,7 @@ export interface VisualPageBatchResult {
 
 interface ParsedArtifactManifest {
   version: 1;
+  parserRevision?: number;
   status: ParsedAttachment["status"];
   mimeType?: string;
   format?: string;
@@ -165,6 +168,8 @@ export class ParserPipeline {
         manifest.sha256 !== attachment.sha256 ||
         manifest.sizeBytes !== attachment.sizeBytes ||
         manifest.detectionHint !== attachmentDetectionHint(attachment.name) ||
+        (requiresOfficeParserRevision(manifest.format, attachment.name) &&
+          manifest.parserRevision !== OFFICE_PARSER_CACHE_REVISION) ||
         !["ready", "partial"].includes(manifest.status)
       ) return undefined;
       await validateManifestArtifacts(this.cacheRoot, manifest);
@@ -281,7 +286,7 @@ export class ParserPipeline {
       textPreview: extraction.textPreview,
       textCharacterCount: extraction.indexedCharacterCount,
       chunkIndexPath: this.relativeCachePath(chunksPath),
-      pageCount: detected.kind === "presentation" ? extraction.sectionCount : undefined,
+      pageCount: detected.kind === "presentation" ? extraction.pageCount : undefined,
       truncated: extraction.truncated
     };
     return result;
@@ -399,6 +404,9 @@ export class ParserPipeline {
     if (!attachment.cacheKey || !attachment.sha256) return;
     const manifest: ParsedArtifactManifest = {
       version: 1,
+      parserRevision: isOfficeFormat(attachment.format)
+        ? OFFICE_PARSER_CACHE_REVISION
+        : undefined,
       status: attachment.status,
       mimeType: attachment.mimeType,
       format: attachment.format,
@@ -568,6 +576,7 @@ function parseArtifactManifest(value: string): ParsedArtifactManifest {
   ) throw new Error("Attachment artifact manifest is invalid.");
   return {
     version: 1,
+    parserRevision: optionalManifestInteger(parsed.parserRevision),
     status: status as ParsedAttachment["status"],
     sha256,
     cacheKey,
@@ -629,6 +638,15 @@ function boundedManifestString(value: unknown, maximumLength: number) {
 
 function optionalManifestInteger(value: unknown) {
   return Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : undefined;
+}
+
+function isOfficeFormat(format: string | undefined) {
+  return typeof format === "string" && OFFICE_FORMATS.has(format);
+}
+
+function requiresOfficeParserRevision(format: string | undefined, fileName: string) {
+  if (isOfficeFormat(format)) return true;
+  return format == null && OFFICE_FORMATS.has(path.extname(fileName).slice(1).toLowerCase());
 }
 
 function uniqueStrings(values: readonly string[]) {

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import type { SunaTool, ToolName } from "../../types";
-import { toolIcon } from "../../utils/toolCatalog";
+import { toolAvailabilityPresentation, toolIcon } from "../../utils/toolCatalog";
 import ToggleSwitch from "../ui/ToggleSwitch.vue";
 
 const props = defineProps<{
@@ -19,6 +19,10 @@ function agentEnabled(tool: SunaTool) {
 
 function selected(tool: SunaTool) {
   return agentEnabled(tool) && !props.disabledTools.includes(tool.name);
+}
+
+function availability(tool: SunaTool) {
+  return toolAvailabilityPresentation(tool);
 }
 </script>
 
@@ -49,8 +53,14 @@ function selected(tool: SunaTool) {
             </div>
             <p v-if="tool.summary" class="mt-1 text-xs leading-5 text-mute">{{ tool.summary }}</p>
             <p v-if="!agentEnabled(tool)" class="mt-1 text-xs text-accent">Agent 已停用</p>
-            <p v-else-if="tool.available === false" class="mt-1 text-xs text-accent">
-              {{ tool.availabilityReason || tool.unavailableReason || "当前工具运行异常。" }}
+            <p v-else-if="availability(tool).kind === 'runtime'" class="mt-1 text-xs text-accent">
+              {{ availability(tool).reason }}
+            </p>
+            <p v-if="agentEnabled(tool) && tool.accessLabel" class="mt-1 text-xs text-mute">
+              <i class="bx bx-lock-alt mr-1" aria-hidden="true"></i>{{ tool.accessLabel }}
+            </p>
+            <p v-else-if="agentEnabled(tool) && availability(tool).kind === 'session'" class="mt-1 text-xs text-mute">
+              <i class="bx bx-lock-alt mr-1" aria-hidden="true"></i>{{ tool.accessLabel || availability(tool).reason }}
             </p>
           </div>
         </div>

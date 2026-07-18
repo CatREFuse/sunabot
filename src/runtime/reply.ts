@@ -40,6 +40,7 @@ import {
   resolveUserGroupReplyRoute,
   type ReplyGateSnapshot
 } from "../../services/orchestration/groupReplyPolicy.js";
+import { serializeUserGroupOrchestratorResult } from "../../services/orchestration/userGroupOrchestratorResult.js";
 import { HookBus } from "../../services/messaging/hookBus.js";
 import {
   applyMemoryBatchTransaction,
@@ -120,6 +121,7 @@ import {
   collectRuntimeAgentExtensionBatchTexts,
   parseExplicitSkillSelections
 } from "./agentExtensions.js";
+import { emojiPromptVariables, prepareRuntimeEmojiText } from "./emojiReply.js";
 import { currentPromptInputMessage, serializeGroupThreadPromptContext } from "./groupThreadPipeline.js";
 import { DEFAULT_CONTEXT_MESSAGE_LIMIT, MAX_STORED_CONVERSATION_MESSAGES, GROUP_CHAT_SUMMARY_WINDOW_MS, MAX_SELFIE_REFERENCE_IMAGES, MAX_SELFIE_WORKSPACE_REFERENCE_IMAGES, MAX_CURRENT_CONTEXT_IMAGES, MAX_HISTORY_CONTEXT_IMAGES, HYDRATE_MESSAGE_WINDOW_MS, ACTIVE_CONVERSATION_WINDOW_MS, DIRECT_REPLY_TIMEOUT_MS, AMBIENT_ORCHESTRATOR_TIMEOUT_MS, ORCHESTRATOR_MAX_RETRIES, PREPARE_TIMEOUT_MS, RECENT_CONTEXT_TOKEN_BUDGET, DEDUPE_TTL_MS, MAX_DEDUPE_KEYS, DEFAULT_ADMIN_NAME, GROUP_CHAT_SUMMARY_COMMAND, CONVERSATION_REPLY_PROMPT_FILE, SELFIE_PROMPT_FILE, GROUP_CHAT_SUMMARY_PROMPT_FILE, ADMIN_PERSONA_FILES, ADMIN_RUNTIME_PROMPT_DEFAULTS, BatchUserInfo, WorkingMemoryMergeOutput, WorkingMemoryMergeContext, personaFileNameForAdminId, AdminIdentity, ConversationReplyUpdateInput, RuntimeCommandContext, ReplyDeliveryDraft, ReplyDelivery, DeferredCodexTurn, AmbientReplyJob, AmbientReplyState, AmbientIdleTimer, RuntimeConfigSnapshot, RuntimePromptSnapshot, SunaRuntimeOptions } from "./runtimeContracts.js";
 import { buildMemoryPromptVariables, buildUserProfileRecallQuery, buildUserPrompt, buildWorkingMemoryRecallQuery, clampInteger, collectGroupChatSummaryMessages, estimatePromptTokens, isAdminUserId, toContextChatMessage, uniqueMemoryEntries } from "./conversationMemoryHelpers.js";
@@ -221,7 +223,6 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
       });
       const threadContext = await debounceContext.prepareThreadContext();
       const threadPromptContext = this.groupThreadPromptContext(threadContext);
-
       const exactUserProfile = await readUserProfileForUser(this.config, String(incoming.userId));
       const memoryResult = await recallMemory(this.config, {
         query: beforeContext.text,
@@ -310,11 +311,12 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
         ...buildCommonPromptVariables(this.config, { scope: incoming.scope,
           userName: senderDisplayName(incoming.sender) || String(incoming.userId) }),
         ...buildConversationPromptVariables(this.config),
+        ...emojiPromptVariables(this.config),
         ...buildMemoryPromptVariables({ working: workingMemoryMatches,
           longTerm: longTermMemoryMatches, userProfile: currentUserProfileMemoryMatches }),
         "messages_64": messages64,
         "conversation.messages": conversationMessages,
-        ...(incoming.scope === "private" ? {} : { "conversation.group.thread_context": serializeGroupThreadPromptContext(threadPromptContext) }),
+        ...(incoming.scope === "private" ? {} : { "conversation.group.thread_context": serializeGroupThreadPromptContext(threadPromptContext), "conversation.group.orchestrator_result": serializeUserGroupOrchestratorResult(options.orchestratorResult) }),
         "user.input": currentInputMarker ? `${currentInputMarker.start}${prompt}${currentInputMarker.end}` : prompt
       });
       const extensionBatchTexts = options.promptOverride === undefined
@@ -520,12 +522,9 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
       if (turn.kind === "deferred") {
         const acknowledgement = turn.acknowledgement.trim();
         if (!acknowledgement) throw new Error("异步工具缺少 dispatch_message。");
-        const tonedAcknowledgement = await this.rewriteToneText(acknowledgement, {
-          incoming,
-          signal: options.signal,
-          logContext
-        });
-        if (tonedAcknowledgement.length > DISPATCH_MESSAGE_MAX_CHARS) {
+        const preparedAcknowledgement = await prepareRuntimeEmojiText(acknowledgement, this.config,
+          (value) => this.rewriteToneText(value, { incoming, signal: options.signal, logContext }));
+        if (preparedAcknowledgement.text.length > DISPATCH_MESSAGE_MAX_CHARS) {
           throw new Error(`Tone 处理后的 dispatch_message 不能超过 ${DISPATCH_MESSAGE_MAX_CHARS} 个字符。`);
         }
         const originalRequest = {
@@ -535,16 +534,17 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
           imageReferences: generateImgReferenceContext,
           replyGate: this.replyGates.capture(incoming.scope, conversationRecordId(incoming)),
           ...(options.delivery?.replyQuote ? { replyQuote: options.delivery.replyQuote } : {}),
-          ...(threadContext ? { threadContext } : {})
+          ...(threadContext ? { threadContext } : {}),
+          ...(options.orchestratorResult ? { orchestratorResult: options.orchestratorResult } : {})
         };
         options.onDeferred?.({
           deferred: turn,
           originalRequest,
           acknowledgement: this.replyDeliveryDraft(
             incoming,
-            tonedAcknowledgement,
+            preparedAcknowledgement.text,
             isAdmin,
-            [],
+            preparedAcknowledgement.images,
             logRunId,
             `tool-ack:${turn.toolCall.name}:${turn.toolCall.callId}`,
             true,
@@ -552,7 +552,8 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
               messageOrigin: "async_tool_dispatch",
               toolNames: turnToolNames
             },
-            options.delivery?.replyQuote
+            options.delivery?.replyQuote,
+            preparedAcknowledgement.contentSegments
           )
         });
         return sent;

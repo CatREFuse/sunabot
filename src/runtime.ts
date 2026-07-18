@@ -122,7 +122,8 @@ import { RuntimeTone } from "./runtime/tone.js";
 import { TaskLimiter, errorMessage, loadConversationRecords } from "./runtime/infrastructure.js";
 import type {
   RuntimeToolCapabilities,
-  RuntimeToolCapabilityResolver
+  RuntimeToolCapabilityResolver,
+  WorkspaceBashUnavailableReason
 } from "../services/tools/bashCapability.js";
 import type { BashExecutionBackend } from "../services/tools/bashAudit.js";
 import type { SystemConfigRuntimePort } from "../services/tools/systemConfigTool.js";
@@ -358,32 +359,73 @@ export class SunaRuntime {
   async resolveToolCapabilities(
     backendOverride?: BashExecutionBackend | null
   ): Promise<RuntimeToolCapabilities> {
-    const backend = backendOverride === undefined
-      ? this.config.bot.bash.adminPrivateBackend
-      : backendOverride;
-    const workspacePath = resolveProjectPath(this.config.persona.agentWorkspace);
-    let auditAvailable = false;
-    if (backend && workspacePath && this.bashAudit) {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const epoch = this.configEpoch;
+      const config = freezeRuntimeConfigSnapshot(this.config);
+      const backend = backendOverride === undefined
+        ? config.bot.bash.adminPrivateBackend
+        : backendOverride;
+      const workspacePath = resolveProjectPath(config.persona.agentWorkspace);
+      let auditAvailable = false;
+      if (backend && workspacePath && this.bashAudit) {
+        try {
+          auditAvailable = await this.bashAudit.available(config) === true;
+        } catch {
+          if (this.configEpoch !== epoch) continue;
+          auditAvailable = false;
+        }
+      }
+      if (this.configEpoch !== epoch) continue;
+      if (!this.rawToolCapabilityResolver) {
+        return {
+          workspaceBash: false,
+          workspaceBashReason: workspaceBashUnavailableReason(backend, workspacePath, auditAvailable),
+          codex: false
+        };
+      }
       try {
-        auditAvailable = await this.bashAudit.available(this.config) === true;
+        const capabilities = await this.rawToolCapabilityResolver({
+          workspacePath: workspacePath ?? getRootDir(),
+          workspaceBashBackend: backend ?? "docker",
+          workspaceBashAuditAvailable: auditAvailable
+        });
+        if (this.configEpoch !== epoch) continue;
+        const workspaceBash = Boolean(backend && workspacePath && auditAvailable && capabilities.workspaceBash === true);
+        return {
+          workspaceBash,
+          ...(!workspaceBash ? {
+            workspaceBashReason: workspaceBashUnavailableReason(
+              backend,
+              workspacePath,
+              auditAvailable,
+              capabilities.workspaceBashReason
+            )
+          } : {}),
+          codex: capabilities.codex === true
+        };
       } catch {
-        auditAvailable = false;
+        if (this.configEpoch !== epoch) continue;
+        return {
+          workspaceBash: false,
+          workspaceBashReason: workspaceBashUnavailableReason(backend, workspacePath, auditAvailable),
+          codex: false
+        };
       }
     }
-    if (!this.rawToolCapabilityResolver) return { workspaceBash: false, codex: false };
-    try {
-      const capabilities = await this.rawToolCapabilityResolver({
-        workspacePath: workspacePath ?? getRootDir(),
-        workspaceBashBackend: backend ?? "docker",
-        workspaceBashAuditAvailable: auditAvailable
-      });
-      return {
-        workspaceBash: Boolean(backend && workspacePath && auditAvailable && capabilities.workspaceBash === true),
-        codex: capabilities.codex === true
-      };
-    } catch {
-      return { workspaceBash: false, codex: false };
-    }
+    const config = freezeRuntimeConfigSnapshot(this.config);
+    const backend = backendOverride === undefined
+      ? config.bot.bash.adminPrivateBackend
+      : backendOverride;
+    const workspacePath = resolveProjectPath(config.persona.agentWorkspace);
+    return {
+      workspaceBash: false,
+      workspaceBashReason: workspaceBashUnavailableReason(
+        backend,
+        workspacePath,
+        Boolean(backend && workspacePath && this.bashAudit)
+      ),
+      codex: false
+    };
   }
   isAdminUser(...args: Parameters<RuntimeReply["isAdminUser"]>) { return this.reply.isAdminUser(...args); }
   adminIdentity(...args: Parameters<RuntimeOrchestration["adminIdentity"]>) { return this.orchestration.adminIdentity(...args); }
@@ -467,4 +509,28 @@ function optionalNonNegativeReplyDebounceMs(value: number | undefined) {
     throw new Error("replyDebounceMs must be a non-negative integer.");
   }
   return value;
+}
+
+function freezeRuntimeConfigSnapshot(config: AppConfig): AppConfig {
+  return deepFreezeRuntimeConfig(structuredClone(config));
+}
+
+function deepFreezeRuntimeConfig<T>(value: T): T {
+  if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
+  for (const nested of Object.values(value)) deepFreezeRuntimeConfig(nested);
+  return Object.freeze(value);
+}
+
+function workspaceBashUnavailableReason(
+  backend: BashExecutionBackend | null,
+  workspacePath: string | undefined,
+  auditAvailable: boolean,
+  probeReason?: WorkspaceBashUnavailableReason
+): WorkspaceBashUnavailableReason {
+  if (!workspacePath) return "BASH_WORKBENCH_UNAVAILABLE";
+  if (!auditAvailable) return "BASH_AUDIT_UNAVAILABLE";
+  if (probeReason) return probeReason;
+  return backend === "native"
+    ? "BASH_NATIVE_ISOLATION_UNAVAILABLE"
+    : "BASH_DOCKER_ISOLATION_UNAVAILABLE";
 }

@@ -7,4 +7,14 @@ export {
   type MemoryPersistenceProvider,
   type MemoryRepositoryPort
 } from "./persistence.js";
-export { MemorySchedulerStore, type MemoryQueuedMessage } from "./memoryScheduler.js";
+export {
+  MemorySchedulerStore,
+  type MemoryEnqueueOptions,
+  type MemoryQueuedMessage
+} from "./memoryScheduler.js";
+export {
+  GROUP_MEMORY_MESSAGE_RADIUS,
+  GROUP_MEMORY_SELECTION_POLICY,
+  isGroupMemoryScope,
+  selectGroupMemoryMessagesNearAssistant
+} from "./groupMemoryWindow.js";

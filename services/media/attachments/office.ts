@@ -17,6 +17,7 @@ export interface OfficeTextSection {
 export interface OfficeTextExtraction {
   fileType: SupportedFileType;
   sections: OfficeTextSection[];
+  pageCount?: number;
   textCharacterCount: number;
   warnings: Array<{ code?: string; message: string }>;
 }
@@ -54,6 +55,9 @@ export async function extractOfficeText(filePath: string): Promise<OfficeTextExt
   return {
     fileType: ast.type,
     sections,
+    pageCount: ast.type === "pptx" || ast.type === "odp"
+      ? ast.content.filter((node) => node.type === "slide").length
+      : undefined,
     textCharacterCount: sections.reduce((sum, section) => sum + section.text.length, 0),
     warnings: warnings.map((warning) => ({
       code: typeof warning.code === "string" ? warning.code : undefined,

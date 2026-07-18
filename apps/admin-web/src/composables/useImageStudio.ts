@@ -1,9 +1,14 @@
 import { readonly, shallowRef } from "vue";
 import { apiBlob, apiRequest, authenticatedMediaPath } from "./useAdminApi";
+import { agentScopedPath } from "./agentScope";
 import type { ImageHistoryRecord } from "../types";
 
-let cachedHistory: ImageHistoryRecord[] | undefined;
-let cachedAt = 0;
+interface HistoryCacheEntry {
+  images: ImageHistoryRecord[];
+  cachedAt: number;
+}
+
+const historyCache = new Map<string, HistoryCacheEntry>();
 const HISTORY_CACHE_MS = 60_000;
 
 export function useImageStudio() {
@@ -11,39 +16,67 @@ export function useImageStudio() {
   const loading = shallowRef(false);
   const downloadingId = shallowRef("");
   const error = shallowRef("");
-  let controller: AbortController | undefined;
+  let activeAgentId = "";
+  let contextGeneration = 0;
+  let loadGeneration = 0;
+  let downloadGeneration = 0;
+  let loadController: AbortController | undefined;
+  let downloadController: AbortController | undefined;
 
-  async function load(force = false) {
-    if (!force && cachedHistory && Date.now() - cachedAt < HISTORY_CACHE_MS) {
-      images.value = cachedHistory;
+  async function load(agentId: string, force = false) {
+    const normalizedAgentId = normalizeAgentId(agentId);
+    activate(normalizedAgentId);
+    const cached = freshCache(normalizedAgentId);
+    if (!force && cached) {
+      images.value = cached.images;
       error.value = "";
-      return;
+      loading.value = false;
+      return true;
     }
-    controller?.abort();
-    controller = new AbortController();
+    loadController?.abort();
+    const requestController = new AbortController();
+    loadController = requestController;
+    const context = contextGeneration;
+    const generation = ++loadGeneration;
     loading.value = true;
     try {
-      const history = await apiRequest<{ images: ImageHistoryRecord[] }>("/api/images", { signal: controller.signal });
+      const history = await apiRequest<{ images: ImageHistoryRecord[] }>(
+        `/api/images?agentId=${encodeURIComponent(normalizedAgentId)}`,
+        { signal: requestController.signal }
+      );
+      if (!isCurrent(normalizedAgentId, context) || generation !== loadGeneration) return false;
       images.value = history.images;
-      cachedHistory = history.images;
-      cachedAt = Date.now();
+      historyCache.set(normalizedAgentId, { images: history.images, cachedAt: Date.now() });
       error.value = "";
+      return true;
     } catch (caught) {
-      if (caught instanceof DOMException && caught.name === "AbortError") return;
-      error.value = caught instanceof Error ? caught.message : "图像工作区读取失败";
+      if (isAbortError(caught)) return false;
+      if (isCurrent(normalizedAgentId, context) && generation === loadGeneration) {
+        error.value = caught instanceof Error ? caught.message : "图像工作区读取失败";
+      }
+      return false;
     } finally {
-      loading.value = false;
+      if (loadController === requestController) loadController = undefined;
+      if (isCurrent(normalizedAgentId, context) && generation === loadGeneration) loading.value = false;
     }
   }
 
-  async function download(image: ImageHistoryRecord) {
+  async function download(agentId: string, image: ImageHistoryRecord) {
+    const normalizedAgentId = normalizeAgentId(agentId);
+    if (activeAgentId !== normalizedAgentId) return false;
+    downloadController?.abort();
+    const requestController = new AbortController();
+    downloadController = requestController;
+    const context = contextGeneration;
+    const generation = ++downloadGeneration;
     downloadingId.value = image.id;
     error.value = "";
     let objectUrl = "";
     try {
       const blob = image.url.startsWith("data:") || image.url.startsWith("blob:")
-        ? await fetch(image.url).then((response) => response.blob())
-        : await apiBlob(authenticatedMediaPath(image.url));
+        ? await fetch(image.url, { signal: requestController.signal }).then((response) => response.blob())
+        : await apiBlob(scopedMediaPath(image.url, normalizedAgentId), { signal: requestController.signal });
+      if (!isCurrent(normalizedAgentId, context) || generation !== downloadGeneration) return false;
       objectUrl = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = objectUrl;
@@ -52,17 +85,85 @@ export function useImageStudio() {
       document.body.append(anchor);
       anchor.click();
       anchor.remove();
+      return true;
     } catch (caught) {
+      if (isAbortError(caught) || !isCurrent(normalizedAgentId, context) || generation !== downloadGeneration) {
+        return false;
+      }
       error.value = caught instanceof Error ? caught.message : "下载失败";
       throw caught;
     } finally {
       if (objectUrl) URL.revokeObjectURL(objectUrl);
-      downloadingId.value = "";
+      if (downloadController === requestController) downloadController = undefined;
+      if (isCurrent(normalizedAgentId, context) && generation === downloadGeneration) downloadingId.value = "";
     }
   }
 
-  function dispose() { controller?.abort(); }
-  return { images: readonly(images), loading: readonly(loading), downloadingId: readonly(downloadingId), error: readonly(error), load, download, dispose };
+  function cancelLoad(agentId: string) {
+    if (activeAgentId !== agentId.trim()) return;
+    loadController?.abort();
+    loadController = undefined;
+    loading.value = false;
+  }
+
+  function dispose() {
+    loadController?.abort();
+    downloadController?.abort();
+    loadController = undefined;
+    downloadController = undefined;
+    contextGeneration += 1;
+  }
+
+  function activate(agentId: string) {
+    if (activeAgentId === agentId) return;
+    loadController?.abort();
+    downloadController?.abort();
+    loadController = undefined;
+    downloadController = undefined;
+    activeAgentId = agentId;
+    contextGeneration += 1;
+    const cached = freshCache(agentId);
+    images.value = cached?.images ?? [];
+    loading.value = false;
+    downloadingId.value = "";
+    error.value = "";
+  }
+
+  function isCurrent(agentId: string, context: number) {
+    return activeAgentId === agentId && contextGeneration === context;
+  }
+
+  return {
+    images: readonly(images),
+    loading: readonly(loading),
+    downloadingId: readonly(downloadingId),
+    error: readonly(error),
+    load,
+    download,
+    cancelLoad,
+    dispose
+  };
+}
+
+function normalizeAgentId(agentId: string) {
+  const normalized = agentId.trim();
+  if (!normalized) throw new Error("Agent ID 不能为空");
+  return normalized;
+}
+
+function freshCache(agentId: string) {
+  const cached = historyCache.get(agentId);
+  if (!cached || Date.now() - cached.cachedAt >= HISTORY_CACHE_MS) return undefined;
+  return cached;
+}
+
+function scopedMediaPath(source: string, agentId: string) {
+  const path = authenticatedMediaPath(source);
+  return path.startsWith("/api/") ? agentScopedPath(path, agentId) : path;
+}
+
+function isAbortError(caught: unknown) {
+  return caught instanceof Error && caught.name === "AbortError";
 }
 
 export function imageDownloadName(image: ImageHistoryRecord, mimeType = "") {

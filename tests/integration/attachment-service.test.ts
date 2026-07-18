@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { createServer, type Server } from "node:http";
-import { readFile, readdir, rm, stat, writeFile, mkdtemp } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, stat, writeFile, mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import PptxGenJS from "pptxgenjs";
@@ -10,9 +10,24 @@ import { AttachmentService } from "../../services/media/attachments/service.js";
 import type { AttachmentSourcePort } from "../../packages/contracts/media/media.js";
 import { FakeAttachmentSourcePort } from "../../packages/testkit/fakeMessagingPort.js";
 import type { IncomingAttachment } from "../../services/media/attachments/types.js";
+import {
+  writeMinimalOfficeFixture,
+  type MinimalOfficeFormat
+} from "../fixtures/office.js";
 
 let temporaryDirectory = "";
 const fixtureServers: Server[] = [];
+const modernOfficeFixtures: Array<{
+  format: MinimalOfficeFormat;
+  text: string;
+  pageCount?: number;
+}> = [
+  { format: "docx", text: "DOCX release approval" },
+  { format: "xlsx", text: "XLSX forecast total" },
+  { format: "odt", text: "ODT incident notes" },
+  { format: "odp", text: "ODP migration slide", pageCount: 1 },
+  { format: "ods", text: "ODS inventory row" }
+];
 
 beforeEach(async () => {
   temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), "sunabot-attachment-service-"));
@@ -132,6 +147,7 @@ describe("AttachmentService integration", () => {
 
     const second = createAttachmentService("restart-cache").service;
     const workerRun = vi.spyOn(second.worker, "run");
+    const parseCached = vi.spyOn(second.parser, "parseCached");
     const [secondResult] = await second.processIncoming([
       incomingAttachment({ id: "after-restart", name: "restart-safe.pdf", url })
     ], unusedGateway());
@@ -143,11 +159,41 @@ describe("AttachmentService integration", () => {
       chunkIndexPath: firstResult!.chunkIndexPath
     });
     expect(context.text).toContain("Restart-safe parsed content");
+    expect(parseCached).not.toHaveBeenCalled();
+    expect(await readArtifactManifest(second.cacheRoot, secondResult!.cacheKey!))
+      .not.toHaveProperty("parserRevision");
     expect(workerRun.mock.calls.filter(([task]) =>
       task.command.kind === "module" &&
       (task.command.payload as { kind?: string } | undefined)?.kind === "pdf_extract"
     )).toHaveLength(0);
   }, 120_000);
+
+  it("reuses an image manifest without applying the Office parser revision", async () => {
+    const image = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+      "base64"
+    );
+    const first = createAttachmentService("image-restart-cache").service;
+    const [firstResult] = await first.processIncoming([
+      incomingAttachment({ id: "image-before", name: "pixel.png", fileId: "pixel" })
+    ], base64Port(image));
+
+    const second = createAttachmentService("image-restart-cache").service;
+    const parseCached = vi.spyOn(second.parser, "parseCached");
+    const [secondResult] = await second.processIncoming([
+      incomingAttachment({ id: "image-after", name: "pixel.png", fileId: "pixel" })
+    ], base64Port(image));
+
+    expect(secondResult).toMatchObject({
+      status: "ready",
+      format: "png",
+      sha256: firstResult!.sha256,
+      visualPagePaths: firstResult!.visualPagePaths
+    });
+    expect(parseCached).not.toHaveBeenCalled();
+    expect(await readArtifactManifest(second.cacheRoot, secondResult!.cacheKey!))
+      .not.toHaveProperty("parserRevision");
+  }, 30_000);
 
   it("does not reuse extension-dependent text detection under a different file name", async () => {
     const filePath = await writeFixture("extension-sensitive", Buffer.from("plain text payload"));
@@ -228,6 +274,95 @@ describe("AttachmentService integration", () => {
     expect(context.localImagePaths).toEqual([]);
   }, 30_000);
 
+  it.each(modernOfficeFixtures)(
+    "reads minimal $format text through the attachment pipeline",
+    async ({ format, text, pageCount }) => {
+      const { bytes } = await writeMinimalOfficeFixture(temporaryDirectory, format, text);
+      const { service } = createAttachmentService(`${format}-cache`);
+
+      const [attachment] = await service.processIncoming([
+        incomingAttachment({ id: `${format}-1`, name: `minimal.${format}`, fileId: format })
+      ], base64Port(bytes), text);
+      const context = await service.buildModelContext([attachment!], text);
+
+      expect(attachment).toMatchObject({ status: "ready", format });
+      if (pageCount != null) expect(attachment!.pageCount).toBe(pageCount);
+      expect(context.text).toContain(text);
+      expect(context.localImagePaths).toEqual([]);
+    },
+    30_000
+  );
+
+  it("reparses an old ready Office manifest that has no parser revision", async () => {
+    const { bytes } = await writeMinimalOfficeFixture(
+      temporaryDirectory,
+      "docx",
+      "Current DOCX cache semantics"
+    );
+    const first = createAttachmentService("old-ready-office-cache").service;
+    const [firstResult] = await first.processIncoming([
+      incomingAttachment({ id: "ready-before", name: "minimal.docx", fileId: "docx" })
+    ], base64Port(bytes));
+    await rewriteArtifactManifest(first.cacheRoot, firstResult!.cacheKey!, (manifest) => {
+      delete manifest.parserRevision;
+      delete manifest.format;
+    });
+
+    const second = createAttachmentService("old-ready-office-cache").service;
+    const parseCached = vi.spyOn(second.parser, "parseCached");
+    const workerRun = vi.spyOn(second.worker, "run");
+    const [secondResult] = await second.processIncoming([
+      incomingAttachment({ id: "ready-after", name: "minimal.docx", fileId: "docx" })
+    ], base64Port(bytes));
+
+    expect(secondResult).toMatchObject({ status: "ready", format: "docx" });
+    expect(parseCached).toHaveBeenCalledTimes(1);
+    expect(officeExtractCalls(workerRun)).toHaveLength(1);
+    expect(await readArtifactManifest(second.cacheRoot, secondResult!.cacheKey!))
+      .toMatchObject({ parserRevision: 2 });
+  }, 60_000);
+
+  it("reparses an old partial PPTX manifest and drops retired visual state", async () => {
+    const pptxPath = path.join(temporaryDirectory, "cached-slides.pptx");
+    const presentation = new PptxGenJS();
+    presentation.addSlide().addText("First cached slide", { x: 1, y: 1, w: 5, h: 1 });
+    presentation.addSlide().addText("Second cached slide", { x: 1, y: 1, w: 5, h: 1 });
+    await presentation.writeFile({ fileName: pptxPath });
+    const bytes = await readFile(pptxPath);
+    const first = createAttachmentService("old-partial-pptx-cache").service;
+    const [firstResult] = await first.processIncoming([
+      incomingAttachment({ id: "pptx-before", name: "cached-slides.pptx", fileId: "pptx" })
+    ], base64Port(bytes));
+    const artifactsDir = path.join(first.cacheRoot, firstResult!.cacheKey!, "artifacts");
+    const oldVisualPage = path.join(artifactsDir, "visual", "page-1.jpg");
+    const oldVisualSource = path.join(artifactsDir, "visual-source.pdf");
+    await mkdir(path.dirname(oldVisualPage), { recursive: true });
+    await writeFile(oldVisualPage, "retired visual page", "utf8");
+    await writeFile(oldVisualSource, "retired visual source", "utf8");
+    await rewriteArtifactManifest(first.cacheRoot, firstResult!.cacheKey!, (manifest) => {
+      delete manifest.parserRevision;
+      manifest.status = "partial";
+      manifest.visualPagePaths = [path.relative(first.cacheRoot, oldVisualPage)];
+      manifest.visualSourcePath = path.relative(first.cacheRoot, oldVisualSource);
+      manifest.errorCode = "visual_conversion_failed";
+      manifest.errorMessage = "旧视觉转换失败";
+    });
+
+    const second = createAttachmentService("old-partial-pptx-cache").service;
+    const workerRun = vi.spyOn(second.worker, "run");
+    const [secondResult] = await second.processIncoming([
+      incomingAttachment({ id: "pptx-after", name: "cached-slides.pptx", fileId: "pptx" })
+    ], base64Port(bytes));
+    const context = await second.buildModelContext([secondResult!], "Second cached slide");
+
+    expect(secondResult).toMatchObject({ status: "ready", format: "pptx", pageCount: 2 });
+    expect(secondResult!.visualPagePaths).toBeUndefined();
+    expect(secondResult!.visualSourcePath).toBeUndefined();
+    expect(secondResult!.errorCode).toBeUndefined();
+    expect(context.localImagePaths).toEqual([]);
+    expect(officeExtractCalls(workerRun)).toHaveLength(1);
+  }, 60_000);
+
   it("reads PowerPoint slide text without an external Office installation", async () => {
     const pptxPath = path.join(temporaryDirectory, "roadmap.pptx");
     const presentation = new PptxGenJS();
@@ -266,26 +401,107 @@ describe("AttachmentService integration", () => {
     expect(context.attachments[0]).toMatchObject({ status: "ready", pageCount: 2 });
   }, 60_000);
 
-  it("rejects legacy Office binaries with an actionable format message", async () => {
-    const legacyDoc = Buffer.alloc(512);
-    Buffer.from("d0cf11e0a1b11ae1", "hex").copy(legacyDoc);
-    const { service } = createAttachmentService("legacy-office-cache");
+  it.each(["doc", "ppt", "xls"] as const)(
+    "rejects legacy .%s binaries with an actionable format message",
+    async (format) => {
+      const legacyOffice = Buffer.alloc(512);
+      Buffer.from("d0cf11e0a1b11ae1", "hex").copy(legacyOffice);
+      const { service } = createAttachmentService(`legacy-${format}-cache`);
 
-    const [attachment] = await service.processIncoming([
-      incomingAttachment({ id: "doc-1", name: "legacy.doc", fileId: "legacy-doc" })
-    ], base64Port(legacyDoc));
-    const context = await service.buildModelContext([attachment!]);
+      const [attachment] = await service.processIncoming([
+        incomingAttachment({ id: `${format}-1`, name: `legacy.${format}`, fileId: `legacy-${format}` })
+      ], base64Port(legacyOffice));
+      const context = await service.buildModelContext([attachment!]);
 
-    expect(attachment).toMatchObject({
-      status: "unsupported",
-      format: "doc",
-      errorCode: "legacy_office_unsupported",
-      errorMessage: "请将旧版 Office 文件另存为 .docx、.xlsx 或 .pptx 后重新发送。"
-    });
-    expect(context.text).toContain("请将旧版 Office 文件另存为 .docx、.xlsx 或 .pptx 后重新发送。");
-    expect(context.localImagePaths).toEqual([]);
-  }, 30_000);
+      expect(attachment).toMatchObject({
+        status: "unsupported",
+        format,
+        errorCode: "legacy_office_unsupported",
+        errorMessage: "请将旧版 Office 文件另存为 .docx、.xlsx 或 .pptx 后重新发送。"
+      });
+      expect(context.text).toContain("请将旧版 Office 文件另存为 .docx、.xlsx 或 .pptx 后重新发送。");
+      expect(context.localImagePaths).toEqual([]);
+    },
+    30_000
+  );
+
+  it.each([
+    { format: "doc", oldStatus: "ready" },
+    { format: "ppt", oldStatus: "partial" },
+    { format: "xls", oldStatus: "ready" }
+  ] as const)(
+    "does not reuse an old $oldStatus .$format manifest after legacy Office support is removed",
+    async ({ format, oldStatus }) => {
+      const legacyOffice = Buffer.alloc(512);
+      Buffer.from("d0cf11e0a1b11ae1", "hex").copy(legacyOffice);
+      const cacheName = `legacy-upgrade-${format}-cache`;
+      const first = createAttachmentService(cacheName).service;
+      const [firstResult] = await first.processIncoming([
+        incomingAttachment({ id: `${format}-before`, name: `legacy.${format}`, fileId: format })
+      ], base64Port(legacyOffice));
+      const oldArtifact = path.join(
+        first.cacheRoot,
+        firstResult!.cacheKey!,
+        "artifacts",
+        "old-chunks.sqlite"
+      );
+      await writeFile(oldArtifact, "old Office artifact", "utf8");
+      await rewriteArtifactManifest(first.cacheRoot, firstResult!.cacheKey!, (manifest) => {
+        delete manifest.parserRevision;
+        manifest.status = oldStatus;
+        manifest.textPreview = "stale legacy Office text";
+        manifest.textCharacterCount = 24;
+        manifest.chunkIndexPath = path.relative(first.cacheRoot, oldArtifact);
+      });
+
+      const second = createAttachmentService(cacheName).service;
+      const parseCached = vi.spyOn(second.parser, "parseCached");
+      const [secondResult] = await second.processIncoming([
+        incomingAttachment({ id: `${format}-after`, name: `legacy.${format}`, fileId: format })
+      ], base64Port(legacyOffice));
+
+      expect(secondResult).toMatchObject({
+        status: "unsupported",
+        format,
+        errorCode: "legacy_office_unsupported"
+      });
+      expect(secondResult!.textPreview).toBeUndefined();
+      expect(parseCached).toHaveBeenCalledTimes(1);
+    },
+    30_000
+  );
 });
+
+async function readArtifactManifest(cacheRoot: string, cacheKey: string) {
+  return JSON.parse(await readFile(
+    path.join(cacheRoot, cacheKey, "artifacts", "manifest.json"),
+    "utf8"
+  )) as Record<string, unknown>;
+}
+
+async function rewriteArtifactManifest(
+  cacheRoot: string,
+  cacheKey: string,
+  mutate: (manifest: Record<string, unknown>) => void
+) {
+  const manifest = await readArtifactManifest(cacheRoot, cacheKey);
+  mutate(manifest);
+  await writeFile(
+    path.join(cacheRoot, cacheKey, "artifacts", "manifest.json"),
+    `${JSON.stringify(manifest, null, 2)}\n`,
+    "utf8"
+  );
+}
+
+function officeExtractCalls(workerRun: { mock: { calls: Array<readonly unknown[]> } }) {
+  return workerRun.mock.calls.filter(([task]) => {
+    const candidate = task as {
+      command?: { kind?: string; payload?: { kind?: string } };
+    } | undefined;
+    return candidate?.command?.kind === "module" &&
+      candidate.command.payload?.kind === "office_extract";
+  });
+}
 
 function createAttachmentService(cacheName: string) {
   const cacheRoot = path.join(temporaryDirectory, cacheName);

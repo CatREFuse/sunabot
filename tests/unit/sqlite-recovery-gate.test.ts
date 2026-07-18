@@ -1,5 +1,6 @@
 // @vitest-environment node
 import fs from "node:fs/promises";
+import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
@@ -90,6 +91,21 @@ describe("SQLite recovery and fault-injection gate", () => {
     expect(restored.verification.crossDatabaseInvariants.agents.plana.outboxStatusCounts).toEqual({ sent: 1 });
   });
 
+  it("canonicalizes the controlled macOS var directory alias before identity pinning", async () => {
+    if (process.platform !== "darwin") return;
+    const fixture = await createFixture();
+    if (!fixture.workspace.startsWith("/private/var/")) return;
+    const aliasedWorkspace = fixture.workspace.replace(/^\/private\/var\//, "/var/");
+
+    const created = await createRecoveryPoint({
+      workspace: aliasedWorkspace,
+      quiesced: true
+    });
+
+    expect(created.directory.startsWith("/private/var/")).toBe(true);
+    await expect(verifyRecoveryPoint(created.directory)).resolves.toMatchObject({ ok: true });
+  });
+
   it("treats a pre-multi-Agent database without an agents table as Plana-only", async () => {
     const fixture = await createFixture();
     const legacyMain = new DatabaseSync(fixture.mainDatabasePath);
@@ -116,16 +132,19 @@ describe("SQLite recovery and fault-injection gate", () => {
     });
   });
 
-  it("requires every current application schema table before publishing", async () => {
-    const fixture = await createFixture();
-    const damagedMain = new DatabaseSync(fixture.mainDatabasePath);
-    damagedMain.exec("DROP TABLE conversation_thread_states;");
-    damagedMain.close();
+  it.each(["conversation_thread_states", "emojis"])(
+    "requires the schema 11 current application table %s before publishing",
+    async (table) => {
+      const fixture = await createFixture();
+      const damagedMain = new DatabaseSync(fixture.mainDatabasePath);
+      damagedMain.exec(`DROP TABLE ${table};`);
+      damagedMain.close();
 
-    await expect(createRecoveryPoint({ workspace: fixture.workspace, quiesced: true })).rejects.toMatchObject({
-      code: "SQLITE_SCHEMA_INCOMPLETE"
-    });
-  });
+      await expect(createRecoveryPoint({ workspace: fixture.workspace, quiesced: true })).rejects.toMatchObject({
+        code: "SQLITE_SCHEMA_INCOMPLETE"
+      });
+    }
+  );
 
   it("creates, verifies, and restores a v2 current-schema recovery point from storage schema 9", async () => {
     const fixture = await createFixture({
@@ -198,6 +217,91 @@ describe("SQLite recovery and fault-injection gate", () => {
     });
 
     await expect(verifyRecoveryPoint(tampered)).rejects.toMatchObject({
+      code: "SQLITE_SCHEMA_INCOMPLETE"
+    });
+  });
+
+  it("creates, verifies, and restores a v2 current-schema recovery point from storage schema 10", async () => {
+    const fixture = await createFixture();
+    downgradeApplicationToStorageSchema10(fixture.mainDatabasePath);
+
+    const created = await createRecoveryPoint({ workspace: fixture.workspace, quiesced: true });
+    const application = created.manifest.databases.find((entry: {
+      agentId: string;
+      kind: string;
+    }) => entry.agentId === "plana" && entry.kind === "application");
+
+    expect(application).toMatchObject({ schemaProfile: "current" });
+    expect(application.tables).toHaveProperty("conversation_thread_states", 0);
+    expect(application.tables).not.toHaveProperty("emojis");
+    await expect(verifyRecoveryPoint(created.directory)).resolves.toMatchObject({ ok: true });
+
+    const targetWorkspace = path.join(fixture.root, "storage-schema-10-restored");
+    await expect(restoreRecoveryPoint({
+      backupDirectory: created.directory,
+      targetWorkspace
+    })).resolves.toMatchObject({ ok: true });
+    const restoredMain = new DatabaseSync(path.join(
+      targetWorkspace,
+      "business",
+      "data",
+      "sunabot.sqlite"
+    ), { readOnly: true });
+    try {
+      expect(restoredMain.prepare(`
+        SELECT value FROM app_metadata WHERE key = 'storage-schema-version'
+      `).get()).toEqual({ value: "10" });
+      expect(restoredMain.prepare(`
+        SELECT COUNT(*) AS count FROM sqlite_schema
+        WHERE type = 'table' AND name = 'conversation_thread_states'
+      `).get()).toEqual({ count: 1 });
+      expect(restoredMain.prepare(`
+        SELECT COUNT(*) AS count FROM sqlite_schema
+        WHERE type = 'table' AND name = 'emojis'
+      `).get()).toEqual({ count: 0 });
+    } finally {
+      restoredMain.close();
+    }
+  });
+
+  it("rejects a pre-Emoji v2 manifest when its database no longer reports storage schema 10", async () => {
+    const fixture = await createFixture();
+    downgradeApplicationToStorageSchema10(fixture.mainDatabasePath);
+    const created = await createRecoveryPoint({ workspace: fixture.workspace, quiesced: true });
+    const application = created.manifest.databases.find((entry: { kind: string }) => entry.kind === "application");
+    if (!application) throw new Error("application backup entry is missing");
+    const tampered = path.join(fixture.root, "schema-10-version-tampered");
+    await fs.cp(created.directory, tampered, { recursive: true });
+    const databasePath = path.join(tampered, application.file);
+    const database = new DatabaseSync(databasePath);
+    try {
+      database.prepare(`
+        UPDATE app_metadata SET value = '11' WHERE key = 'storage-schema-version'
+      `).run();
+    } finally {
+      database.close();
+    }
+    const databaseBytes = await fs.readFile(databasePath);
+    const databaseSha256 = createHash("sha256").update(databaseBytes).digest("hex");
+    await rewriteManifest(tampered, (manifest) => {
+      const entry = manifest.databases.find((item: { id: string }) => item.id === application.id);
+      entry.sha256 = databaseSha256;
+      entry.bytes = databaseBytes.length;
+    });
+
+    await expect(verifyRecoveryPoint(tampered)).rejects.toMatchObject({
+      code: "SQLITE_SCHEMA_INCOMPLETE"
+    });
+  });
+
+  it("rejects a storage schema 10 current application database without its Thread table", async () => {
+    const fixture = await createFixture();
+    downgradeApplicationToStorageSchema10(fixture.mainDatabasePath);
+    const database = new DatabaseSync(fixture.mainDatabasePath);
+    database.exec("DROP TABLE conversation_thread_states;");
+    database.close();
+
+    await expect(createRecoveryPoint({ workspace: fixture.workspace, quiesced: true })).rejects.toMatchObject({
       code: "SQLITE_SCHEMA_INCOMPLETE"
     });
   });
@@ -276,6 +380,279 @@ describe("SQLite recovery and fault-injection gate", () => {
       blocker.close();
     }
     expect((await publishedRecoveryPoints(fixture.backupsRoot))).toEqual([]);
+  });
+
+  it("observes every create-time SQLite open after the source identity preflight", async () => {
+    const fixture = await createFixture();
+    const events: Array<{ databasePath: string; id: string; phase?: string }> = [];
+
+    await expect(createRecoveryPoint({
+      workspace: fixture.workspace,
+      quiesced: true,
+      databaseOpenObserver: (event: { databasePath: string; id: string; phase?: string }) => {
+        events.push(event);
+      }
+    })).resolves.toMatchObject({ manifest: { schemaVersion: 2 } });
+
+    expect(events).toHaveLength(11);
+    expect(events.filter((event) => event.phase === "source-agent-registry")).toHaveLength(1);
+    expect(events.filter((event) => event.phase === "source-storage-schema")).toHaveLength(1);
+    expect(events.filter((event) => event.phase === "source-checkpoint")).toHaveLength(2);
+    expect(events.filter((event) => event.phase === "source-backup")).toHaveLength(2);
+    expect(events.filter((event) => event.phase === "backup-copy-verify")).toHaveLength(2);
+    expect(events.filter((event) => event.phase === "agent-registry")).toHaveLength(1);
+  });
+
+  it("rejects aliased source databases before the first SQLite open", async () => {
+    const fixture = await createFixture();
+    await fs.rm(fixture.queueDatabasePath);
+    await fs.link(fixture.mainDatabasePath, fixture.queueDatabasePath);
+    const events: Array<{ databasePath: string }> = [];
+
+    await expect(createRecoveryPoint({
+      workspace: fixture.workspace,
+      quiesced: true,
+      databaseOpenObserver: (event: { databasePath: string }) => events.push(event)
+    })).rejects.toMatchObject({ code: "SOURCE_DATABASE_IDENTITY_UNSAFE" });
+
+    expect(events).toEqual([]);
+    expect(await publishedRecoveryPoints(fixture.backupsRoot)).toEqual([]);
+  });
+
+  it("rechecks the complete source identity set after a discovery observer callback", async () => {
+    const fixture = await createFixture();
+    const events: Array<{ databasePath: string; phase?: string }> = [];
+
+    await expect(createRecoveryPoint({
+      workspace: fixture.workspace,
+      quiesced: true,
+      databaseOpenObserver(event: { databasePath: string; phase?: string }) {
+        events.push(event);
+        if (event.phase !== "source-agent-registry") return;
+        fsSync.rmSync(fixture.queueDatabasePath);
+        fsSync.linkSync(fixture.mainDatabasePath, fixture.queueDatabasePath);
+      }
+    })).rejects.toMatchObject({ code: "SOURCE_DATABASE_IDENTITY_CHANGED" });
+
+    expect(events).toHaveLength(1);
+    expect(await publishedRecoveryPoints(fixture.backupsRoot)).toEqual([]);
+  });
+
+  it("pins the application identity immediately around storage schema discovery", async () => {
+    const fixture = await createFixture();
+    const originalPath = `${fixture.mainDatabasePath}.original`;
+    const events: Array<{ databasePath: string; phase?: string }> = [];
+
+    await expect(createRecoveryPoint({
+      workspace: fixture.workspace,
+      quiesced: true,
+      databaseOpenObserver(event: { databasePath: string; phase?: string }) {
+        events.push(event);
+        if (event.phase !== "source-storage-schema") return;
+        fsSync.renameSync(fixture.mainDatabasePath, originalPath);
+        fsSync.copyFileSync(originalPath, fixture.mainDatabasePath);
+      }
+    })).rejects.toMatchObject({ code: "SOURCE_DATABASE_IDENTITY_CHANGED" });
+
+    expect(events.map((event) => event.phase)).toEqual([
+      "source-agent-registry",
+      "source-storage-schema"
+    ]);
+    expect(await publishedRecoveryPoints(fixture.backupsRoot)).toEqual([]);
+  });
+
+  it("rejects a verified recovery file aliased by the before-publish hook", async () => {
+    const fixture = await createFixture();
+    const backupId = "sqlite-recovery-20260718T150000000Z-publish-alias";
+    const partialDirectory = path.join(fixture.backupsRoot, `.partial-sqlite-recovery-${backupId}`);
+    const aliasPath = path.join(fixture.root, "published-database-alias.sqlite");
+    let openCountAtHook = 0;
+    const events: Array<{ databasePath: string }> = [];
+
+    await expect(createRecoveryPoint({
+      workspace: fixture.workspace,
+      quiesced: true,
+      backupId,
+      databaseOpenObserver: (event: { databasePath: string }) => events.push(event),
+      async faultInjector(step: string) {
+        if (step !== "before-publish") return;
+        openCountAtHook = events.length;
+        await fs.link(path.join(partialDirectory, "agent-plana-application.sqlite"), aliasPath);
+      }
+    })).rejects.toMatchObject({ code: "BACKUP_PUBLICATION_CHANGED" });
+
+    expect(openCountAtHook).toBe(11);
+    expect(events).toHaveLength(openCountAtHook);
+    expect(await publishedRecoveryPoints(fixture.backupsRoot)).toEqual([]);
+    await expect(fs.stat(partialDirectory)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("rejects a source hardlink introduced after all backup copies finish", async () => {
+    const fixture = await createFixture();
+    const backupId = "sqlite-recovery-20260718T150050000Z-source-alias";
+    const aliasPath = path.join(fixture.root, "source-database-alias.sqlite");
+    const events: Array<{ databasePath: string }> = [];
+
+    await expect(createRecoveryPoint({
+      workspace: fixture.workspace,
+      quiesced: true,
+      backupId,
+      databaseOpenObserver: (event: { databasePath: string }) => events.push(event),
+      async faultInjector(step: string) {
+        if (step === "before-publish") await fs.link(fixture.mainDatabasePath, aliasPath);
+      }
+    })).rejects.toMatchObject({ code: "SOURCE_DATABASE_IDENTITY_CHANGED" });
+
+    expect(events).toHaveLength(11);
+    expect(await publishedRecoveryPoints(fixture.backupsRoot)).toEqual([]);
+  });
+
+  it("does not adopt a self-consistent manifest rewrite after internal verification", async () => {
+    const fixture = await createFixture();
+    const backupId = "sqlite-recovery-20260718T150075000Z-manifest-race";
+    const partialDirectory = path.join(fixture.backupsRoot, `.partial-sqlite-recovery-${backupId}`);
+    const finalDirectory = path.join(fixture.backupsRoot, backupId);
+    const events: Array<{ databasePath: string; phase?: string }> = [];
+
+    await expect(createRecoveryPoint({
+      workspace: fixture.workspace,
+      quiesced: true,
+      backupId,
+      databaseOpenObserver(event: { databasePath: string; phase?: string }) {
+        events.push(event);
+        if (event.phase !== "agent-registry") return;
+        const manifestPath = path.join(partialDirectory, "manifest.json");
+        const rewritten = JSON.parse(fsSync.readFileSync(manifestPath, "utf8"));
+        rewritten.createdAt = "2000-01-01T00:00:00.000Z";
+        const bytes = Buffer.from(`${JSON.stringify(rewritten, null, 2)}\n`, "utf8");
+        fsSync.writeFileSync(manifestPath, bytes);
+        fsSync.writeFileSync(
+          path.join(partialDirectory, "manifest.sha256"),
+          `${createHash("sha256").update(bytes).digest("hex")}  manifest.json\n`
+        );
+      }
+    })).rejects.toMatchObject({ code: "BACKUP_PUBLICATION_CHANGED" });
+
+    expect(events).toHaveLength(11);
+    await expect(fs.stat(finalDirectory)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(partialDirectory)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("pins the partial recovery directory identity before internal verification", async () => {
+    const fixture = await createFixture();
+    const backupId = "sqlite-recovery-20260718T150090000Z-directory-race";
+    const partialDirectory = path.join(fixture.backupsRoot, `.partial-sqlite-recovery-${backupId}`);
+    const parkedDirectory = path.join(fixture.root, "parked-verified-recovery");
+    const finalDirectory = path.join(fixture.backupsRoot, backupId);
+    const events: Array<{ databasePath: string; phase?: string }> = [];
+
+    await expect(createRecoveryPoint({
+      workspace: fixture.workspace,
+      quiesced: true,
+      backupId,
+      databaseOpenObserver(event: { databasePath: string; phase?: string }) {
+        events.push(event);
+        if (event.phase !== "agent-registry") return;
+        fsSync.renameSync(partialDirectory, parkedDirectory);
+        fsSync.mkdirSync(partialDirectory);
+        for (const name of fsSync.readdirSync(parkedDirectory)) {
+          fsSync.renameSync(
+            path.join(parkedDirectory, name),
+            path.join(partialDirectory, name)
+          );
+        }
+      }
+    })).rejects.toMatchObject({ code: "BACKUP_PUBLICATION_CHANGED" });
+
+    expect(events).toHaveLength(11);
+    expect(await fs.readdir(parkedDirectory)).toEqual([]);
+    await expect(fs.stat(finalDirectory)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(partialDirectory)).resolves.toMatchObject({ size: expect.any(Number) });
+    await expect(fs.stat(path.join(partialDirectory, "manifest.json")))
+      .resolves.toMatchObject({ size: expect.any(Number) });
+  });
+
+  it("preserves an external directory that replaces the owned partial path", async () => {
+    const fixture = await createFixture();
+    const backupId = "sqlite-recovery-20260718T150092000Z-cleanup-owner";
+    const partialDirectory = path.join(fixture.backupsRoot, `.partial-sqlite-recovery-${backupId}`);
+    const parkedOwnedDirectory = path.join(fixture.root, "parked-owned-partial");
+    const externalDirectory = path.join(fixture.root, "external-partial-replacement");
+    const sentinelName = "sentinel.txt";
+    await fs.mkdir(externalDirectory);
+    await fs.writeFile(path.join(externalDirectory, sentinelName), "keep\n");
+
+    await expect(createRecoveryPoint({
+      workspace: fixture.workspace,
+      quiesced: true,
+      backupId,
+      async faultInjector(step: string) {
+        if (step !== "before-publish") return;
+        await fs.rename(partialDirectory, parkedOwnedDirectory);
+        await fs.rename(externalDirectory, partialDirectory);
+      }
+    })).rejects.toMatchObject({
+      code: "BACKUP_PUBLICATION_CHANGED",
+      details: { partialCleanup: { status: "ownership-conflict" } }
+    });
+
+    await expect(fs.readFile(path.join(partialDirectory, sentinelName), "utf8"))
+      .resolves.toBe("keep\n");
+    await expect(fs.stat(path.join(parkedOwnedDirectory, "manifest.json")))
+      .resolves.toMatchObject({ size: expect.any(Number) });
+    await expect(fs.stat(path.join(fixture.backupsRoot, backupId)))
+      .rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("pins the recovery root directory chain across the before-publish hook", async () => {
+    const fixture = await createFixture();
+    const backupId = "sqlite-recovery-20260718T150095000Z-parent-race";
+    const partialName = `.partial-sqlite-recovery-${backupId}`;
+    const partialDirectory = path.join(fixture.backupsRoot, partialName);
+    const parkedRoot = path.join(fixture.root, "parked-recovery-root");
+
+    await expect(createRecoveryPoint({
+      workspace: fixture.workspace,
+      quiesced: true,
+      backupId,
+      async faultInjector(step: string) {
+        if (step !== "before-publish") return;
+        await fs.rename(fixture.backupsRoot, parkedRoot);
+        await fs.mkdir(fixture.backupsRoot);
+        await fs.rename(path.join(parkedRoot, partialName), partialDirectory);
+      }
+    })).rejects.toMatchObject({ code: "BACKUP_PUBLICATION_CHANGED" });
+
+    await expect(fs.stat(path.join(fixture.backupsRoot, backupId)))
+      .rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(partialDirectory)).resolves.toMatchObject({ size: expect.any(Number) });
+    await expect(fs.stat(path.join(parkedRoot, ".sqlite-recovery.lock")))
+      .resolves.toMatchObject({ size: expect.any(Number) });
+  });
+
+  it("does not replace a final recovery path created by the before-publish hook", async () => {
+    const fixture = await createFixture();
+    const backupId = "sqlite-recovery-20260718T150100000Z-publish-target";
+    const finalDirectory = path.join(fixture.backupsRoot, backupId);
+    let externalIdentity: { dev: number; ino: number } | null = null;
+
+    await expect(createRecoveryPoint({
+      workspace: fixture.workspace,
+      quiesced: true,
+      backupId,
+      async faultInjector(step: string) {
+        if (step !== "before-publish") return;
+        await fs.mkdir(finalDirectory);
+        const stat = await fs.stat(finalDirectory);
+        externalIdentity = { dev: stat.dev, ino: stat.ino };
+      }
+    })).rejects.toMatchObject({ code: "BACKUP_ALREADY_EXISTS" });
+
+    const finalStat = await fs.stat(finalDirectory);
+    expect({ dev: finalStat.dev, ino: finalStat.ino }).toEqual(externalIdentity);
+    expect(await fs.readdir(finalDirectory)).toEqual([]);
+    await expect(fs.stat(path.join(fixture.backupsRoot, `.partial-sqlite-recovery-${backupId}`)))
+      .rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("checkpoints committed WAL frames for every Agent database before publishing", async () => {
@@ -565,6 +942,46 @@ describe("SQLite recovery and fault-injection gate", () => {
     await expect(fs.access(intentPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("rejects a staged hardlink injected after the final restore digest check and before rename", async () => {
+    const fixture = await createFixture();
+    const created = await createRecoveryPoint({ workspace: fixture.workspace, quiesced: true });
+    const targetWorkspace = path.join(fixture.root, "restore-rename-identity-cas");
+    const productionBefore = await fs.readFile(fixture.mainDatabasePath);
+    const productionIdentity = await fs.stat(fixture.mainDatabasePath);
+    const recoveryPath = path.join(created.directory, "agent-plana-application.sqlite");
+    let stagedPath = "";
+    let aliasStats: { recovery: Awaited<ReturnType<typeof fs.stat>>; staged: Awaited<ReturnType<typeof fs.stat>> } | null = null;
+
+    await expect(restoreRecoveryPoint({
+      backupDirectory: created.directory,
+      targetWorkspace,
+      forbiddenDatabaseFileIdentities: [`${productionIdentity.dev}:${productionIdentity.ino}`],
+      async faultInjector(step: string) {
+        if (step !== "before-restore-rename-plana-application") return;
+        stagedPath = path.join(
+          targetWorkspace,
+          `.restore-${created.manifest.backupId}.staging`,
+          "agent-plana-application.sqlite"
+        );
+        await fs.rm(stagedPath);
+        await fs.link(recoveryPath, stagedPath);
+        const [recovery, staged] = await Promise.all([
+          fs.stat(recoveryPath),
+          fs.stat(stagedPath)
+        ]);
+        aliasStats = { recovery, staged };
+      }
+    })).rejects.toMatchObject({ code: "RESTORE_FILE_IDENTITY_CHANGED" });
+
+    expect(aliasStats).not.toBeNull();
+    expect(aliasStats!.recovery.dev).toBe(aliasStats!.staged.dev);
+    expect(aliasStats!.recovery.ino).toBe(aliasStats!.staged.ino);
+    expect(aliasStats!.recovery.nlink).toBe(2);
+    expect(await fs.readFile(fixture.mainDatabasePath)).toEqual(productionBefore);
+    await expect(fs.stat(path.join(targetWorkspace, "business/data/sunabot.sqlite")))
+      .rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("rolls back a restore stopped after its first staged copy", async () => {
     const fixture = await createFixture();
     const created = await createRecoveryPoint({ workspace: fixture.workspace, quiesced: true });
@@ -582,6 +999,32 @@ describe("SQLite recovery and fault-injection gate", () => {
       targetWorkspace
     })).resolves.toMatchObject({ ok: true, rolledBack: true });
     expect(await fs.readdir(targetWorkspace)).toEqual([]);
+  });
+
+  it("forwards the SQLite open observer through public restore rollback verification", async () => {
+    const fixture = await createFixture();
+    const created = await createRecoveryPoint({ workspace: fixture.workspace, quiesced: true });
+    const targetWorkspace = path.join(fixture.root, "observer-copy-rollback");
+    await expect(restoreRecoveryPoint({
+      backupDirectory: created.directory,
+      targetWorkspace,
+      faultInjector(step: string) {
+        if (step === "after-restore-copy-plana-application") throw new Error("stop after copy");
+      }
+    })).rejects.toThrow("stop after copy");
+    const events: Array<{ databasePath: string; id: string; phase?: string }> = [];
+
+    await expect(rollbackRecoveryPointRestore({
+      backupDirectory: created.directory,
+      targetWorkspace,
+      databaseOpenObserver: (event: { databasePath: string; id: string; phase?: string }) => events.push(event)
+    })).resolves.toMatchObject({ ok: true, rolledBack: true });
+
+    expect(events.map((event) => [event.id, event.phase ?? null])).toEqual([
+      ["agent:plana:application", null],
+      ["agent:plana:session_queue", null],
+      ["agent:plana:application", "agent-registry"]
+    ]);
   });
 
   it("rolls back an interrupted restore without deleting an unknown replacement", async () => {
@@ -831,6 +1274,18 @@ function downgradeApplicationToStorageSchema9(databasePath: string) {
     database.exec("DROP TABLE conversation_thread_states;");
     database.prepare(`
       UPDATE app_metadata SET value = '9' WHERE key = 'storage-schema-version'
+    `).run();
+  } finally {
+    database.close();
+  }
+}
+
+function downgradeApplicationToStorageSchema10(databasePath: string) {
+  const database = new DatabaseSync(databasePath);
+  try {
+    database.exec("DROP TABLE emojis;");
+    database.prepare(`
+      UPDATE app_metadata SET value = '10' WHERE key = 'storage-schema-version'
     `).run();
   } finally {
     database.close();

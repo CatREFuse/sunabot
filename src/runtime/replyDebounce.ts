@@ -8,7 +8,8 @@ import {
   type ReplyQuoteSnapshotV1,
   type RuntimeIncomingReplyEventPayload,
   type RuntimeReplyDebounceEventPayload,
-  type RuntimeReplyFollowUpSnapshotV1
+  type RuntimeReplyFollowUpSnapshotV1,
+  type UserGroupOrchestratorResultV1
 } from "../../packages/contracts/session/runtimeMessages.js";
 import type { MessagingPort } from "../../packages/contracts/messaging/messages.js";
 import type { CommandInvocationV1 } from "../../packages/contracts/messaging/commands.js";
@@ -40,6 +41,7 @@ interface ScheduleReplyDebounceInput {
   gate: ReplyGateSnapshot;
   preparationKey?: string;
   commandInvocation?: CommandInvocationV1;
+  orchestratorResult?: UserGroupOrchestratorResultV1;
 }
 
 interface TrackedReplyPreparation {
@@ -141,7 +143,8 @@ export class RuntimeReplyDebounce {
           ...(preparationKey ? { preparationKey } : {}),
           replyGate: input.gate,
           replyQuote,
-          ...(input.commandInvocation ? { commandInvocation: input.commandInvocation } : {})
+          ...(input.commandInvocation ? { commandInvocation: input.commandInvocation } : {}),
+          ...(input.orchestratorResult ? { orchestratorResult: input.orchestratorResult } : {})
         }, {
           conversationId,
           correlationId: `onebot:${input.incoming.messageId ?? triggerKey}`,
@@ -164,7 +167,8 @@ export class RuntimeReplyDebounce {
         ...(preparationKey ? { preparationKey } : {}),
         replyGate: input.gate,
         replyQuote,
-        ...(input.commandInvocation ? { commandInvocation: input.commandInvocation } : {})
+        ...(input.commandInvocation ? { commandInvocation: input.commandInvocation } : {}),
+        ...(input.orchestratorResult ? { orchestratorResult: input.orchestratorResult } : {})
       }, {
         conversationId,
         correlationId: `onebot:${input.incoming.messageId ?? triggerKey}`,
@@ -471,7 +475,8 @@ export class RuntimeReplyDebounce {
           ...(preparationKey ? { preparationKey } : {}),
           replyGate: gate,
           replyQuote: payload.replyQuote,
-          ...(payload.commandInvocation ? { commandInvocation: payload.commandInvocation } : {})
+          ...(payload.commandInvocation ? { commandInvocation: payload.commandInvocation } : {}),
+          ...(payload.orchestratorResult ? { orchestratorResult: payload.orchestratorResult } : {})
         }, {
           conversationId: payload.conversationId,
           correlationId: `onebot:${incoming.messageId ?? replyKey}`,

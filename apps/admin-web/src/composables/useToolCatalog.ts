@@ -72,6 +72,11 @@ function normalizeTool(value: unknown): SunaTool | null {
     ...(typeof value.configurable === "boolean" ? { configurable: value.configurable } : {}),
     availabilityReason: stringValue(value.availabilityReason) || stringValue(value.unavailableReason),
     unavailableReason: stringValue(value.unavailableReason),
+    ...(unavailabilityKind(value.unavailabilityKind) ? { unavailabilityKind: unavailabilityKind(value.unavailabilityKind) } : {}),
+    accessLabel: stringValue(value.accessLabel),
+    accessDescription: stringValue(value.accessDescription),
+    ...(executionBackend(value.executionBackend) ? { executionBackend: executionBackend(value.executionBackend) } : {}),
+    runtimeReasonCode: stringValue(value.runtimeReasonCode),
     defaultDescription,
     promptDescription: stringValue(value.promptDescription),
     description,
@@ -88,6 +93,14 @@ function defaultExecution(name: string): ToolExecutionMode {
 
 function executionMode(value: unknown): ToolExecutionMode | undefined {
   return value === "inline" || value === "deferred" ? value : undefined;
+}
+
+function executionBackend(value: unknown): "native" | "docker" | undefined {
+  return value === "native" || value === "docker" ? value : undefined;
+}
+
+function unavailabilityKind(value: unknown): "runtime" | "session" | undefined {
+  return value === "runtime" || value === "session" ? value : undefined;
 }
 
 function booleanValue(value: unknown) {

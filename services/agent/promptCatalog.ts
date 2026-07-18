@@ -38,6 +38,8 @@ const conversationVariables = [
   variable("runtime.address_rules", "根据管理员配置生成的称呼规则", "string", "运行时"),
   variable("runtime.scope_rules", "私聊、用户群聊和 Bot 群聊的处理规则", "string", "运行时"),
   variable("runtime.tool_rules", "图像与自拍工具的调用规则", "string", "运行时"),
+  variable("conversation.emoji.keys", "当前 Agent 已配置且可发送的表情 key 列表", "json", "Agent 表情库"),
+  variable("conversation.emoji.syntax", "表情发送标记规则", "string", "Agent 表情库"),
   variable("messages_64", "当前消息之前最近最多 64 条完整会话消息；群聊消息包含时间、顺序、消息 ID、显示名、uid 和引用目标", "message[]", "会话上下文"),
   variable("conversation.messages", "当前消息之前可直接发送给模型的会话消息", "message[]", "会话上下文"),
   variable("memory.working", "工作记忆召回结果", "string", "记忆召回"),
@@ -53,6 +55,12 @@ const groupConversationVariables = [
     "群聊 Thread 前置节点生成的安全序列化话题索引",
     "string",
     "群聊上下文前置节点"
+  ),
+  variable(
+    "conversation.group.orchestrator_result",
+    "主动群聊编排器的触发原因与回复消息 ID；非编排器触发时为空字符串",
+    "string",
+    "群聊编排器"
   )
 ] as const;
 

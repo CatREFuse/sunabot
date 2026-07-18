@@ -15,6 +15,16 @@ describe("DiagnosticsDrawer", () => {
         { name: "assistant_text", title: "行动中消息", description: "发送行动中消息。", enabled: true, available: true, effectiveEnabled: true },
         { name: "activate_skill", title: "启用 Skill", description: "启用 Skill。", enabled: true, available: true, effectiveEnabled: false },
         {
+          name: "read_file",
+          title: "读取文件",
+          description: "读取 workbench 文件。",
+          enabled: true,
+          available: false,
+          effectiveEnabled: false,
+          unavailabilityKind: "session",
+          accessLabel: "管理员 QQ 私聊可用"
+        },
+        {
           name: "codex",
           title: "Codex",
           description: "异步执行任务。",
@@ -35,8 +45,9 @@ describe("DiagnosticsDrawer", () => {
     expect(wrapper.text()).toContain("assistant_text");
     expect(wrapper.text()).not.toContain("能力可用");
     expect(wrapper.text()).not.toContain("能力不可用");
-    expect(wrapper.text().match(/能力异常/g)).toHaveLength(1);
+    expect(wrapper.text().match(/运行环境异常/g)).toHaveLength(1);
     expect(wrapper.text()).toContain("Codex CLI 未安装或未登录。");
+    expect(wrapper.text()).toContain("管理员 QQ 私聊可用");
 
     await wrapper.get("nav").findAll("button")[1]!.trigger("click");
     await flushPromises();
