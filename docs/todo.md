@@ -80,7 +80,7 @@
   - 证据：未知目标替换、预存相同目标 rewrite 失败、复制与 rename 边界中断、retention/cleanup 外部路径攻击和安全回滚回归通过。
 
 - [x] **ONBOARD-002｜P1｜统一 readiness 与 doctor 协议**
-  - CLI、管理 API 和平台入口共用只读 probe，分别报告 Core、OneBot、每个 QQ、Provider、Codex、LibreOffice、bubblewrap、workspace 和迁移状态。
+  - CLI、管理 API 和平台入口共用只读 probe，分别报告 Core、OneBot、每个 QQ、Provider、Codex、bubblewrap、workspace 和迁移状态；Office 正文解析随 Node 生产依赖交付，不再作为宿主 capability。
   - 证据：schema v1 probe、管理员 readiness、最小公开 health、Provider 凭据与有界健康请求、Gemini header 密钥边界、状态页三态及 8 个视觉用例通过。
 
 - [x] **ONBOARD-003｜P1｜新 QQ 运行时调和**
@@ -447,9 +447,9 @@
 ## M5：Core Native/Docker 与 NapCat Docker 同构
 
 - [ ] **RUNTIME-001｜P1｜唯一 runtime contract 与组件锁**（AUD-022、AUD-027）
-  - 定义管理台回环端口、OneBot 专用端口、Compose 服务、宿主网关、media、secret、启动/停止、健康和 capability；锁 Node/NapCat/Codex/LibreOffice 版本、digest、checksum、license、architecture。
+  - 定义管理台回环端口、OneBot 专用端口、Compose 服务、宿主网关、media、secret、启动/停止、健康和 capability；锁 Node/NapCat/Codex/officeparser 版本、digest、checksum、license、architecture。
   - 完成：contract schema、component lock、SBOM、许可证和升级 smoke gate 入库。
-  - 阶段证据：runtime contract、schema、component lock、Node/NapCat/Codex/LibreOffice/bubblewrap 版本与多架构信息已入库并通过静态门禁；SBOM 产物、全部许可证复核和升级 smoke 仍待完成。
+  - 阶段证据：runtime contract、schema、component lock、Node/NapCat/Codex/officeparser/bubblewrap 版本与多架构信息已入库并通过静态门禁；SBOM 产物、全部许可证复核和升级 smoke 仍待完成。
 
 - [ ] **RUNTIME-002｜P1｜Native Core 入口**（AUD-022）
   - Core 使用同一 artifact 和 workspace；NapCat 始终由独立 Docker 服务运行，Native 入口不能安装或管理 NapCat 进程。
@@ -468,7 +468,7 @@
   - 完成：OOM/磁盘满/QQ 离线/Provider 离线演练不会形成重启风暴或静默故障。
 
 - [ ] **RUNTIME-005｜P1｜Core 模式 capability parity**（AUD-022、AUD-025）
-  - 对 websearch、图片、自拍、Codex、Bash、LibreOffice、OneBot 文件和管理台建立同一 capability test。
+  - 对 websearch、图片、自拍、Codex、Bash、Office 正文解析、OneBot 文件和管理台建立同一 capability test。
   - 完成：同一 release/version/workspace fixture 在 Native Core 与 Docker Core 全部通过，跨组件消息不包含共享绝对路径；差异只能来自明确声明的可选 capability。
 
 ## M6：切换、清理与最终验收

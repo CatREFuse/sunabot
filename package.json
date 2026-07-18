@@ -39,6 +39,7 @@
     "workspace:migrate": "node tooling/migrations/migrate-workspace-layout.mjs",
     "workspace:sync": "node tooling/workspace/sync-workspace.mjs",
     "workspace:env": "node tooling/workspace/workspace-env.mjs",
+    "office:read": "officeparser",
     "code:update": "node tooling/dev/update-code.mjs",
     "admin:set-password": "node tooling/admin/admin-credentials.mjs",
     "admin:fuse": "node tooling/admin/admin-fuse.mjs",

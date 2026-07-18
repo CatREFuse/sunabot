@@ -50,7 +50,6 @@ NapCat 通过带 access token 的 OneBot v11 反向 WebSocket 连接 Core。Core
 
 Native Core 还需要：
 
-- LibreOffice
 - Codex CLI `0.139.0`
 - Linux/WSL2 Native Core：`bubblewrap`
 
@@ -60,20 +59,20 @@ Codex CLI 可以通过 npm 安装：
 npm install -g @openai/codex@0.139.0
 ```
 
-macOS 可安装 Docker Desktop 与 LibreOffice：
+macOS 可安装 Docker Desktop：
 
 ```bash
-brew install --cask docker libreoffice
+brew install --cask docker
 ```
 
 Ubuntu WSL2 或 Linux Native Core 可安装宿主依赖：
 
 ```bash
 sudo apt update
-sudo apt install -y ca-certificates git build-essential python3 libreoffice fonts-noto-cjk bubblewrap
+sudo apt install -y ca-certificates git build-essential python3 fonts-noto-cjk bubblewrap
 ```
 
-WSL2 默认使用 Docker Core，镜像已经包含 LibreOffice、Codex CLI、字体与 bubblewrap。Windows 11 可使用 Docker Desktop WSL2 后端；Windows Server 需要在 WSL2 发行版内安装 Docker Engine 与 Compose 插件。
+WSL2 默认使用 Docker Core，镜像已经包含 Codex CLI、字体与 bubblewrap。Office 正文由锁定的 Node `officeparser` 解析，不需要安装桌面 Office。Windows 11 可使用 Docker Desktop WSL2 后端；Windows Server 需要在 WSL2 发行版内安装 Docker Engine 与 Compose 插件。
 
 ## 首次启动
 
@@ -160,7 +159,15 @@ workspace/runtime/napcat/accounts/<accountId>/
 ./sunabot.sh --help
 ```
 
-`status`、`doctor`、`logs` 和 `down` 不安装依赖。`bootstrap` 显式安装锁定依赖；`up` 与 `restart` 在需要时执行安装。`status`、`doctor` 与管理 API 共用同一只读探针，分别报告 Core、OneBot、每个 QQ、Provider、Codex、LibreOffice、bubblewrap、workspace 和迁移状态。Provider 状态区分“已验证可用”“当前不可用”和“未配置”。
+`status`、`doctor`、`logs` 和 `down` 不安装依赖。`bootstrap` 显式安装锁定依赖；`up` 与 `restart` 在需要时执行安装。`status`、`doctor` 与管理 API 共用同一只读探针，分别报告 Core、OneBot、每个 QQ、Provider、Codex、bubblewrap、workspace 和迁移状态。Provider 状态区分“已验证可用”“当前不可用”和“未配置”。
+
+无需启动 Core，也可以从 Bash 直接读取现代 Office 正文：
+
+```bash
+npm run office:read -- /path/to/file.pptx --to=text
+```
+
+支持 `.docx`、`.pptx`、`.xlsx`、`.odt`、`.odp` 和 `.ods`。旧版 `.doc`、`.ppt`、`.xls` 需先另存为现代格式。
 
 Core 模式可以通过环境变量或参数选择：
 

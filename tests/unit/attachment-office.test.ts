@@ -1,16 +1,15 @@
 // @vitest-environment node
+import { execFile } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import PptxGenJS from "pptxgenjs";
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  convertPresentationToPdf,
-  extractOfficeText
-} from "../../services/media/attachments/office.js";
-import { extractPdfTextByPage } from "../../services/media/attachments/pdf.js";
+import { extractOfficeText } from "../../services/media/attachments/office.js";
 
 const temporaryDirectories: string[] = [];
+const execFileAsync = promisify(execFile);
 
 afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, {
@@ -32,17 +31,17 @@ describe("Office attachment processing", () => {
     expect(result.sections[1]?.text).toContain("现金流保持稳定");
   }, 30_000);
 
-  it("converts PowerPoint to a multi-page PDF for visual understanding", async () => {
-    const { directory, pptxPath } = await createPresentationFixture();
-    const outputDir = path.join(directory, "pdf");
+  it("exposes the locked officeparser package as a non-GUI CLI", async () => {
+    const { pptxPath } = await createPresentationFixture();
+    const cliPath = path.join(process.cwd(), "node_modules/officeparser/dist/cli.js");
 
-    const converted = await convertPresentationToPdf(pptxPath, outputDir);
-    const pdf = await extractPdfTextByPage(converted.outputPath);
+    const { stdout } = await execFileAsync(process.execPath, [cliPath, pptxPath, "--to=text"], {
+      maxBuffer: 1024 * 1024
+    });
 
-    expect(pdf.pageCount).toBe(2);
-    expect(pdf.pages[0]?.text).toContain("季度收入增长");
-    expect(pdf.pages[1]?.text).toContain("现金流保持稳定");
-  }, 45_000);
+    expect(stdout).toContain("季度收入增长");
+    expect(stdout).toContain("现金流保持稳定");
+  }, 30_000);
 });
 
 async function createPresentationFixture() {

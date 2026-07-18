@@ -114,7 +114,7 @@ describe("NapCat runtime layout", () => {
     ]);
     expect(coreDockerfile).toContain('org.opencontainers.image.title="sunabot-core"');
     expect(coreDockerfile).toContain('bubblewrap="${BUBBLEWRAP_VERSION}"');
-    expect(coreDockerfile).toContain('libreoffice="${LIBREOFFICE_VERSION}"');
+    expect(coreDockerfile.toLowerCase()).not.toContain("libreoffice");
     expect(coreDockerfile).not.toContain("mlikiowa/napcat-docker");
     expect(coreDockerfile).not.toContain("/opt/QQ");
     expect(coreDockerfile).not.toContain("/app/napcat");

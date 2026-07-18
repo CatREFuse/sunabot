@@ -344,7 +344,6 @@ async function collectRuntimeProbeFacts(context) {
     Object.assign(capabilities, {
       codexCli: native.codexCli,
       codexAuth: native.codexAuth,
-      libreOffice: native.libreOffice,
       workspaceBash: native.workspaceBash
     });
   } else if (runtime.dockerCore.running) {
@@ -359,7 +358,6 @@ async function collectRuntimeProbeFacts(context) {
     Object.assign(capabilities, {
       codexCli: codex.cli,
       codexAuth: codex.auth,
-      libreOffice: { ok: true, detail: "Docker Core image" },
       workspaceBash
     });
   }
@@ -1228,13 +1226,11 @@ async function ensureNativeDependencies(context) {
     await command("npm", ["ci"], { cwd: context.root });
   }
   const capabilities = await inspectNativeCapabilities(context);
-  if (!capabilities.libreOffice.ok) throw new Error(`Native 依赖缺失：${capabilities.libreOffice.detail}`);
   if (!capabilities.workspaceBash.ok) throw new Error(`Native Bash 隔离不可用：${capabilities.workspaceBash.detail}`);
   if (!capabilities.codexCli.ok) throw new Error(`Native Codex CLI 不可用：${capabilities.codexCli.detail}`);
 }
 
 async function inspectNativeCapabilities(context) {
-  const libreOffice = await resolveLibreOfficeExecutable(context.runtimeEnvironment);
   const codex = await inspectNativeCodex(context);
   let workspaceBash = { ok: true, detail: "disabled on macOS Native Core" };
   if (process.platform === "linux") {
@@ -1246,9 +1242,6 @@ async function inspectNativeCapabilities(context) {
     }
   }
   return {
-    libreOffice: libreOffice
-      ? { ok: true, detail: libreOffice }
-      : { ok: false, detail: "LibreOffice executable not found" },
     workspaceBash,
     codexCli: codex.cli,
     codexAuth: codex.auth
@@ -1285,21 +1278,6 @@ function codexVersionCheck(context, version, executable) {
   return version === expected
     ? { ok: true, detail: `${executable} (${version})` }
     : { ok: false, detail: `需要 ${expected}，当前为 ${version || "unknown"}` };
-}
-
-async function resolveLibreOfficeExecutable(environment = {}) {
-  const candidates = [
-    environment.LIBREOFFICE_PATH,
-    "/Applications/LibreOffice.app/Contents/MacOS/soffice",
-    "/opt/homebrew/bin/soffice",
-    "/usr/local/bin/soffice",
-    "/usr/bin/libreoffice",
-    "/usr/bin/soffice"
-  ].filter(Boolean);
-  for (const candidate of candidates) {
-    if (await commandSucceeds("test", ["-x", candidate])) return candidate;
-  }
-  return undefined;
 }
 
 function assertNonRootRuntimeUser() {

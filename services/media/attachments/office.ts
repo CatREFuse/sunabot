@@ -1,10 +1,8 @@
-import path from "node:path";
 import {
   OfficeParser,
   type OfficeContentNode,
   type SupportedFileType
 } from "officeparser";
-import { convertWithLibreOffice } from "./libreoffice.js";
 
 const MAX_OFFICE_UNCOMPRESSED_BYTES = 1024 * 1024 * 1024;
 const MAX_OFFICE_ZIP_ENTRIES = 20_000;
@@ -62,23 +60,6 @@ export async function extractOfficeText(filePath: string): Promise<OfficeTextExt
       message: warning.message
     }))
   };
-}
-
-export async function convertPresentationToPdf(inputPath: string, outputDir: string) {
-  return convertWithLibreOffice(inputPath, outputDir, "pdf");
-}
-
-export async function convertLegacyOfficeFile(inputPath: string, outputDir: string) {
-  const extension = path.extname(inputPath).toLowerCase();
-  const format = extension === ".ppt"
-    ? "pptx"
-    : extension === ".doc"
-      ? "docx"
-      : extension === ".xls"
-        ? "xlsx"
-        : undefined;
-  if (!format) throw new Error(`Unsupported legacy Office extension: ${extension || "unknown"}`);
-  return convertWithLibreOffice(inputPath, outputDir, format);
 }
 
 function collectNodeText(node: OfficeContentNode): string {

@@ -6,7 +6,6 @@ import path from "node:path";
 import PptxGenJS from "pptxgenjs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CacheStore } from "../../services/media/attachments/cache.js";
-import { findLibreOffice } from "../../services/media/attachments/libreoffice.js";
 import { AttachmentService } from "../../services/media/attachments/service.js";
 import type { AttachmentSourcePort } from "../../packages/contracts/media/media.js";
 import { FakeAttachmentSourcePort } from "../../packages/testkit/fakeMessagingPort.js";
@@ -229,8 +228,7 @@ describe("AttachmentService integration", () => {
     expect(context.localImagePaths).toEqual([]);
   }, 30_000);
 
-  it("reads PowerPoint slide text and produces visual page context", async ({ skip }) => {
-    if (!await findLibreOffice()) skip();
+  it("reads PowerPoint slide text without an external Office installation", async () => {
     const pptxPath = path.join(temporaryDirectory, "roadmap.pptx");
     const presentation = new PptxGenJS();
     presentation.layout = "LAYOUT_WIDE";
@@ -263,13 +261,30 @@ describe("AttachmentService integration", () => {
       format: "pptx",
       pageCount: 2
     });
-    expect(attachment!.errorCode).not.toBe("visual_conversion_failed");
     expect(context.text).toContain("Migration window is Saturday");
-    expect(context.localImagePaths).toHaveLength(2);
-    await Promise.all(context.localImagePaths.map(async (imagePath) => {
-      expect((await stat(imagePath)).isFile()).toBe(true);
-    }));
-  }, 180_000);
+    expect(context.localImagePaths).toEqual([]);
+    expect(context.attachments[0]).toMatchObject({ status: "ready", pageCount: 2 });
+  }, 60_000);
+
+  it("rejects legacy Office binaries with an actionable format message", async () => {
+    const legacyDoc = Buffer.alloc(512);
+    Buffer.from("d0cf11e0a1b11ae1", "hex").copy(legacyDoc);
+    const { service } = createAttachmentService("legacy-office-cache");
+
+    const [attachment] = await service.processIncoming([
+      incomingAttachment({ id: "doc-1", name: "legacy.doc", fileId: "legacy-doc" })
+    ], base64Port(legacyDoc));
+    const context = await service.buildModelContext([attachment!]);
+
+    expect(attachment).toMatchObject({
+      status: "unsupported",
+      format: "doc",
+      errorCode: "legacy_office_unsupported",
+      errorMessage: "请将旧版 Office 文件另存为 .docx、.xlsx 或 .pptx 后重新发送。"
+    });
+    expect(context.text).toContain("请将旧版 Office 文件另存为 .docx、.xlsx 或 .pptx 后重新发送。");
+    expect(context.localImagePaths).toEqual([]);
+  }, 30_000);
 });
 
 function createAttachmentService(cacheName: string) {

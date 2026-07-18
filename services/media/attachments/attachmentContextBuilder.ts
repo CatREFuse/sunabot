@@ -36,7 +36,9 @@ export class AttachmentContextBuilder {
         attachmentId: attachment.id,
         name: attachment.name,
         chunks,
-        pageCount: attachment.pageCount
+        pageCount: attachment.visualSourcePath || attachment.visualPagePaths?.length
+          ? attachment.pageCount
+          : undefined
       });
     }
 

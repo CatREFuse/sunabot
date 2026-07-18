@@ -5,7 +5,6 @@ import {
   chunkText,
   type AttachmentTextChunk
 } from "./chunks.js";
-import { convertWithLibreOffice } from "./libreoffice.js";
 import { extractOfficeText } from "./office.js";
 import {
   extractPdfTextByPage,
@@ -19,7 +18,6 @@ type ParserWorkerPayload =
   | { kind: "pdf_extract"; inputPath: string; outputPath: string }
   | { kind: "office_extract"; inputPath: string; outputPath: string }
   | { kind: "pdf_info"; inputPath: string }
-  | { kind: "libreoffice_convert"; inputPath: string; outputFormat: string }
   | { kind: "pdf_render"; inputPath: string; pageNumbers: number[] }
   | { kind: "pdf_render_best_effort"; inputPath: string; pageNumbers: number[] };
 
@@ -84,13 +82,6 @@ export default async function runParserWorkerTask(
       alreadyTruncated: false
     });
   }
-  if (payload.kind === "libreoffice_convert") {
-    return convertWithLibreOffice(
-      payload.inputPath,
-      context.workDir,
-      payload.outputFormat
-    );
-  }
   if (payload.kind === "pdf_info") {
     return { pageCount: await getPdfPageCount(payload.inputPath) };
   }
@@ -143,7 +134,6 @@ function parsePayload(value: unknown): ParserWorkerPayload {
     payload.kind !== "pdf_extract" &&
     payload.kind !== "office_extract" &&
     payload.kind !== "pdf_info" &&
-    payload.kind !== "libreoffice_convert" &&
     payload.kind !== "pdf_render" &&
     payload.kind !== "pdf_render_best_effort"
   ) {
@@ -151,12 +141,6 @@ function parsePayload(value: unknown): ParserWorkerPayload {
   }
   if (typeof payload.inputPath !== "string" || !path.isAbsolute(payload.inputPath)) {
     throw new TypeError("Parser worker inputPath must be absolute.");
-  }
-  if (payload.kind === "libreoffice_convert") {
-    if (typeof payload.outputFormat !== "string" || !/^[a-z0-9]+$/i.test(payload.outputFormat)) {
-      throw new TypeError("Parser worker outputFormat is invalid.");
-    }
-    return payload as ParserWorkerPayload;
   }
   if (
     (payload.kind === "pdf_extract" || payload.kind === "office_extract") &&

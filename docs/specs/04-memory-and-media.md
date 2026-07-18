@@ -29,6 +29,8 @@
 ### 6.1 QQ 文件
 
 - 支持文本、代码、PDF、图片和常见 Office 文档。
+- `.docx`、`.pptx`、`.xlsx`、`.odt`、`.odp` 与 `.ods` 正文由锁定的纯 Node `officeparser` 解析；同一解析器可通过 `npm run office:read -- <path> --to=text` 在 Bash 中直接使用，不依赖 GUI、桌面 Office、Python 或 Java。
+- 旧版二进制 `.doc`、`.ppt` 与 `.xls` 不再通过外部 Office 套件转换，统一提示另存为现代格式；演示文稿保留分节正文和页数，不生成视觉页。PDF 与图片继续提供视觉上下文。
 - 原文件按内容哈希进入附件缓存。
 - 文本解析流式执行，单文件最多索引 20,000,000 字符。
 - 文本分块保存在每个缓存项的 `chunks.sqlite`。

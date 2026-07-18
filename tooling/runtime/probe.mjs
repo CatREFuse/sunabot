@@ -180,7 +180,6 @@ export function buildRuntimeProbe(facts, options = {}) {
   addOptionalReadiness(add, "provider", capabilities.provider, "PROVIDER_NOT_READY", "在管理台选择并测试默认 Provider");
   addOptionalCapability(add, "codex-cli", capabilities.codexCli, "CODEX_CLI_UNAVAILABLE", "安装 runtime contract 指定版本的 Codex CLI");
   addOptionalCapability(add, "codex-auth", capabilities.codexAuth, "CODEX_AUTH_REQUIRED", "在管理台完成 Codex 订阅登录");
-  addOptionalCapability(add, "libreoffice", capabilities.libreOffice, "LIBREOFFICE_UNAVAILABLE", "安装 LibreOffice");
   addOptionalCapability(add, "workspace-bash", capabilities.workspaceBash, "BUBBLEWRAP_UNAVAILABLE", "安装 bubblewrap 并通过 namespace probe");
   addOptionalCapability(add, "mcp-oauth", capabilities.mcpOAuth, "MCP_OAUTH_VAULT_UNAVAILABLE", "设置 SUNABOT_MCP_CREDENTIAL_VAULT_KEY");
   addOptionalCapability(add, "mcp-stdio", capabilities.mcpStdio, "MCP_STDIO_RUNTIME_UNAVAILABLE", "配置 MCP stdio 隔离后端");

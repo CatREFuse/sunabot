@@ -33,7 +33,6 @@ describe("versioned runtime readiness probe", () => {
         provider: { ok: false, detail: "default Provider is not selected" },
         codexCli: { ok: true },
         codexAuth: { ok: false },
-        libreOffice: { ok: true },
         workspaceBash: { ok: true }
       }
     }, { now });
@@ -49,6 +48,7 @@ describe("versioned runtime readiness probe", () => {
       code: "PROVIDER_NOT_READY",
       action: "在管理台选择并测试默认 Provider"
     });
+    expect(report.checks.some((item: { id: string }) => item.id === "libreoffice")).toBe(false);
   });
 
   it("keeps a temporarily offline QQ as an account warning without killing Core", () => {

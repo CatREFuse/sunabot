@@ -26,7 +26,6 @@ ARG SUNABOT_RELEASE_VERSION=0.1.0
 ARG CODEX_CLI_VERSION=0.139.0
 ARG BUBBLEWRAP_VERSION=0.8.0-2+deb12u1
 ARG FONTS_NOTO_CJK_VERSION=1:20220127+repack1-1
-ARG LIBREOFFICE_VERSION=4:7.4.7-1+deb12u14
 ARG TINI_VERSION=0.19.0-1+b3
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -44,7 +43,6 @@ RUN test "$(/usr/local/bin/node -p 'process.versions.node')" = "$NODE_VERSION" \
     && apt-get install -y --no-install-recommends \
         bubblewrap="${BUBBLEWRAP_VERSION}" \
         fonts-noto-cjk="${FONTS_NOTO_CJK_VERSION}" \
-        libreoffice="${LIBREOFFICE_VERSION}" \
         tini="${TINI_VERSION}" \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /srv/sunabot/workspace \

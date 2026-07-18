@@ -261,15 +261,15 @@ export class ParserPipeline {
     detected: DetectedAttachmentType,
     _query: string
   ) {
-    const typedSource = await typedSourcePath(filePath, artifactsDir, detected.format ?? "bin");
-    let parseSource = typedSource;
-    if (detected.format === "ppt" || detected.format === "doc" || detected.format === "xls") {
-      const outputFormat = detected.format === "ppt" ? "pptx" : detected.format === "doc" ? "docx" : "xlsx";
-      parseSource = (await this.runHeavy<{ outputPath: string }>(
-        artifactsDir,
-        { kind: "libreoffice_convert", inputPath: typedSource, outputFormat }
-      )).outputPath;
+    if (isLegacyOfficeFormat(detected.format)) {
+      return failAttachment(
+        attachment,
+        "unsupported",
+        "legacy_office_unsupported",
+        "请将旧版 Office 文件另存为 .docx、.xlsx 或 .pptx 后重新发送。"
+      );
     }
+    const parseSource = await typedSourcePath(filePath, artifactsDir, detected.format ?? "bin");
     const chunksPath = path.join(artifactsDir, "chunks.sqlite");
     const extraction = await this.runHeavy<IndexedDocumentResult>(
       artifactsDir,
@@ -284,30 +284,6 @@ export class ParserPipeline {
       pageCount: detected.kind === "presentation" ? extraction.sectionCount : undefined,
       truncated: extraction.truncated
     };
-
-    if (detected.kind === "presentation") {
-      try {
-        const converted = await this.runHeavy<{ outputPath: string }>(
-          artifactsDir,
-          { kind: "libreoffice_convert", inputPath: typedSource, outputFormat: "pdf" }
-        );
-        const visualSourcePath = path.join(artifactsDir, "visual-source.pdf");
-        if (path.resolve(converted.outputPath) !== path.resolve(visualSourcePath)) {
-          await rm(visualSourcePath, { force: true });
-          await rename(converted.outputPath, visualSourcePath);
-        }
-        result.visualSourcePath = this.relativeCachePath(visualSourcePath);
-        const pdf = await this.runHeavy<{ pageCount: number }>(
-          artifactsDir,
-          { kind: "pdf_info", inputPath: visualSourcePath }
-        );
-        result.pageCount = pdf.pageCount;
-      } catch {
-        result.status = "partial";
-        result.errorCode = "visual_conversion_failed";
-        result.errorMessage = "演示文稿文字已读取，但视觉版式暂时无法读取。";
-      }
-    }
     return result;
   }
 
@@ -531,6 +507,10 @@ async function linkOrCopy(source: string, destination: string) {
   }
   await chmod(destination, 0o600);
   return destination;
+}
+
+function isLegacyOfficeFormat(format: string | undefined) {
+  return format === "doc" || format === "xls" || format === "ppt";
 }
 
 async function firstExistingPath(candidates: readonly string[]) {

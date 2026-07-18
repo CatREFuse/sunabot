@@ -1,4 +1,3 @@
 # Document runtime component
 
-LibreOffice、字体和文档转换依赖的版本与 smoke test 在此边界管理。业务代码只依赖文档转换 port，不依赖安装路径。
-
+Office 文本解析由 `package-lock.json` 与组件锁共同固定的 `officeparser` 提供，不依赖桌面 Office、LibreOffice、Python 或 Java 运行时。Docker 镜像保留 CJK 字体供图片与其他媒体流程使用。

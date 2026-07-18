@@ -31,14 +31,14 @@
       "architectures": ["linux/amd64", "linux/arm64"],
       "smoke": ["test", "-x", "/opt/QQ/qq"]
     },
-    "libreoffice": {
-      "version": "4:7.4.7-1+deb12u14",
-      "source": "https://deb.debian.org/debian",
-      "package": "libreoffice",
-      "distribution": "debian-bookworm",
-      "license": "MPL-2.0",
-      "architectures": ["linux/amd64"],
-      "smoke": ["libreoffice", "--version"]
+    "officeparser": {
+      "version": "7.2.3",
+      "source": "https://www.npmjs.com/package/officeparser",
+      "package": "officeparser",
+      "integrity": "sha512-/Ids2DGCw8gt5EDnsk4lB8ABCVEpE067I50jMiuH7GFR2hBGL6PXwWm/GycjuNXzBLAxAOmQhR2XE+S5hR1qwQ==",
+      "license": "MIT",
+      "architectures": ["linux/amd64", "linux/arm64"],
+      "smoke": ["node", "node_modules/officeparser/dist/cli.js", "--help"]
     },
     "fonts-noto-cjk": {
       "version": "1:20220127+repack1-1",

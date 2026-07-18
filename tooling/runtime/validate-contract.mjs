@@ -199,6 +199,7 @@ expect(compose.includes("io.sunabot.runtime-id")
 const node = lock.components.node;
 const napcat = lock.components.napcat;
 const codex = lock.components["codex-cli"];
+const officeParser = lock.components.officeparser;
 expect(coreDockerfile.includes(`${node.image}@${node.digest}`),
   "Core Dockerfile must pin the Node image digest");
 expect(!/napcat|\/opt\/QQ|xvfb-run/i.test(coreDockerfile),
@@ -206,8 +207,15 @@ expect(!/napcat|\/opt\/QQ|xvfb-run/i.test(coreDockerfile),
 expect(coreDockerfile.includes("dist/apps/api/main.js")
   && coreDockerfile.includes(contract.capabilities.workspaceBash.executable),
 "Core image must run the API and contain bubblewrap");
+expect(!coreDockerfile.toLowerCase().includes("libreoffice"),
+  "Core image must not install the retired LibreOffice runtime");
 expect(coreDockerfile.includes("COPY tooling/runtime ./tooling/runtime"),
   "Core build stage must include API runtime helper modules");
+expect(officeParser?.version === "7.2.3"
+  && packageManifest.dependencies?.officeparser?.includes(officeParser.version)
+  && /^sha512-[A-Za-z0-9+/]+=*$/.test(officeParser.integrity ?? "")
+  && packageManifest.scripts?.["office:read"] === "officeparser",
+"Office parser must stay locked and expose the non-GUI CLI");
 expect(codex.optional !== true
   && codex.version === contract.capabilities.codexCli.version
   && codex.package === "@openai/codex"

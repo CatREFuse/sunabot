@@ -59,14 +59,14 @@ docker compose version
 docker run --rm hello-world
 ```
 
-Docker Core 的 Codex CLI `0.139.0`、bubblewrap 和 LibreOffice 由 Core 镜像提供并在构建或启动时检查。如使用 WSL Native Core，宿主环境还要准备：
+Docker Core 的 Codex CLI `0.139.0` 和 bubblewrap 由 Core 镜像提供并在构建或启动时检查；Office 正文解析随 Node 生产依赖交付。如使用 WSL Native Core，宿主环境还要准备：
 
 ```bash
-sudo apt install -y bubblewrap libreoffice fonts-noto-cjk
+sudo apt install -y bubblewrap fonts-noto-cjk
 npm install -g @openai/codex@0.139.0
 bwrap --version
 codex --version
-libreoffice --version
+npm run office:read -- --help
 ```
 
 Native Core 的 `workspace_bash` 在 bubblewrap 缺失或 namespace probe 失败时会安全拒绝，不能改成普通 Bash 降级运行。Codex CLI 版本不匹配时 Core 不应启动。
