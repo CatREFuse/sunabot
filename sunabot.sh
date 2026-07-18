@@ -12,6 +12,7 @@ usage() {
 
 命令：
   up          启动 Sunabot Core 与全部已启用 QQ
+  start       与 up 相同：清理当前 workspace 后完整启动
   down        停止当前 workspace 的运行组件
   restart     重启当前 workspace
   status      读取运行状态
@@ -39,7 +40,7 @@ case "$COMMAND" in
 esac
 
 allows_install() {
-  [ "$COMMAND" = "up" ] || [ "$COMMAND" = "restart" ] || [ "$COMMAND" = "bootstrap" ]
+  [ "$COMMAND" = "up" ] || [ "$COMMAND" = "start" ] || [ "$COMMAND" = "restart" ] || [ "$COMMAND" = "bootstrap" ]
 }
 
 missing_dependencies() {

@@ -30,9 +30,11 @@ NapCat 在 macOS、WSL2 和 Linux 上始终运行于独立 Docker 容器。Sunab
 
 管理台“配置医生”是独立于运行探针的系统配置检查与修复能力，当前只处理 `workspace/business/config/sunabot.json`。它先执行本地确定性扫描，再允许管理员显式发起一次无工具的 AI 结构化建议，并在确认后通过管理 API 应用受限修改；Agent manifest、提示词、凭据、SQLite 和其他 workspace 文件不在当前范围内。该能力不改变 `./sunabot.sh doctor` 的只读语义，当前也没有配置医生 CLI 离线修复入口。
 
-首次运行使用带 HMAC 的持久 journal；workspace 完整父目录链在 marker、配置、凭据、SQLite、注册表或运行目录写入前逐级拒绝用户符号链接。主库 schema、队列 schema、关键表列、约束、外键和索引全部通过后才能完成首次运行；每个持久化边界支持幂等继续或受控回滚，回滚保留未知文件。`help` 成功退出且不安装依赖；`status`、`doctor`、`logs` 和 `down` 保持只读，只有 `up`、`restart` 或显式 `bootstrap` 可以安装依赖。
+首次运行使用带 HMAC 的持久 journal；workspace 完整父目录链在 marker、配置、凭据、SQLite、注册表或运行目录写入前逐级拒绝用户符号链接。主库 schema、队列 schema、关键表列、约束、外键和索引全部通过后才能完成首次运行；每个持久化边界支持幂等继续或受控回滚，回滚保留未知文件。`help` 成功退出且不安装依赖；`status`、`doctor`、`logs` 和 `down` 不触发依赖安装，只有 `up`、`start`、`restart` 或显式 `bootstrap` 可以安装依赖。
 
-统一 launcher 在 `up`、`down` 和 `restart` 的运行状态检查前核对当前 workspace 的 NapCat Compose one-off 探针。Docker `ps` 仍报告探针存在而 `inspect` 返回对象不存在时，macOS Colima 的交互终端必须在明确告知其他 Docker 容器会短暂中断后取得确认，随后重启 Colima、等待 Docker Engine 就绪并复验悬空记录消失；非交互命令和其他 Docker Engine 必须失败关闭并返回明确操作。该恢复不能自动执行数据迁移，也不能放宽活动容器、端口、恢复点或迁移标记门禁。
+统一 launcher 在 `up`、`start`、`down` 和 `restart` 的运行状态检查前核对当前 workspace 的 NapCat Compose one-off 探针。Docker `ps` 仍报告探针存在而 `inspect` 返回对象不存在时，macOS Colima 的交互终端必须在明确告知其他 Docker 容器会短暂中断后取得确认，随后重启 Colima、等待 Docker Engine 就绪并复验悬空记录消失；非交互命令和其他 Docker Engine 必须失败关闭并返回明确操作。该恢复不能自动执行数据迁移，也不能放宽活动容器、端口、恢复点或迁移标记门禁。
+
+`up`、`start` 与 `restart` 必须进入同一清空后启动流程。launcher 只能停止同时通过仓库命令签名与精确 `SUNABOT_WORKSPACE` 环境验证的 Native Core 进程组，以及带当前 workspace 标签的 Docker 容器和运行网络；身份不明或 PID 复用的进程不能收到信号。清理必须覆盖 account runtime daemon、全部 Core 形态、全部 NapCat 与 Compose one-off，并在 launcher state、同源进程、Docker 对象和 8787、8788、开发模式 5173 端口全部清空后才能启动下一实例。随后必须启动所选 Core、注册表中全部已启用 NapCat 和 account runtime daemon；Core、管理 API、OneBot listener 与 account runtime daemon 连续稳定，且所有 liveness/readiness 失败项清零后命令才能退出 0，可选 capability 降级不阻塞启动。Native OneBot Compose 探针必须有外层期限。带删除标记的 NapCat 目录只有在注册表已经移除对应账号后才能清理，不能在 Agent 删除事务的停用阶段破坏注册集合完整性。
 
 宿主 account runtime daemon 按 workspace 保持单实例。owner 记录以当前用户拥有的 0600 普通文件原子发布，并绑定 workspace 身份、入口、PID/进程组、进程启动身份和随机 owner token；发布、claim 或回收中断时保留可验证的同 inode 恢复证据，只有能够证明旧 owner 已退出或身份失配时才回收。损坏、符号链接、额外硬链接、身份不明或 PID 复用都失败关闭，不能向未证明属于当前 workspace 的进程发送信号。`status` 必须报告 owner 丢失与 split-brain；`down` 和 `restart` 还要发现同 workspace 的旧入口与无参数 daemon，停止全部可证明安全的实例并保留无关进程。
 

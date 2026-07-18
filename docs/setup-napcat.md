@@ -49,6 +49,8 @@ macOS 快速开发模式会启动 API watch 与 Vite：
 
 启动器依次完成 workspace 初始化、运行令牌检查、Core 启动与健康检查、读取 `agent_accounts`、逐账号生成 NapCat OneBot 配置、启动独立容器并检查健康状态。缺失 `ONEBOT_ACCESS_TOKEN` 或 `WEBUI_TOKEN` 时会生成随机令牌并写入 `workspace/secrets/runtime.env`。
 
+`up`、`start` 与 `restart` 使用同一套清空后启动流程。启动器先停止能够同时证明仓库入口与 `SUNABOT_WORKSPACE` 身份的 Native Core 进程组、全部当前 workspace 标签的 Docker 容器、运行网络和 account runtime daemon，再确认 launcher state、进程、容器、网络及 8787、8788 和开发模式 5173 端口均已清空。身份无法验证的进程不会收到信号；未知进程仍占用端口时以非零状态退出。随后启动所选 Core、注册表中全部已启用 NapCat 与 account runtime daemon。Native OneBot 容器连通性探针最多运行 15 秒，Core、管理 API、OneBot listener 与 account runtime daemon 必须连续稳定 3 秒，并且全部 liveness/readiness 检查通过后启动命令才成功退出；Codex 登录等可选 capability 可以保持降级。
+
 Core 启动还会校验固定版本的 Codex CLI；Docker Core 使用镜像内的 `/usr/local/bin/codex`，Native Core 使用 `SUNABOT_CODEX_EXECUTABLE` 或 `PATH`。Codex 授权保存在 `workspace/secrets/codex/auth.json`，未登录时可以先启动管理台完成设备授权，工具在授权完成前保持不可调用。
 
 ### MCP 扩展运行环境
@@ -92,9 +94,11 @@ Apple Silicon 上的 linux/amd64 Docker 模拟内核若以 `EINVAL` 拒绝 bubbl
 ./sunabot.sh doctor
 ```
 
-不要直接执行旧的 `npm run qq:*`、单容器 Compose 或 Native NapCat systemd 命令。运行模式切换前使用 `./sunabot.sh down`，同一个 workspace 只能由当前 launcher 管理一个 Core 和注册表中的 NapCat 账号容器。
+不要直接执行旧的 `npm run qq:*`、单容器 Compose 或 Native NapCat systemd 命令。运行模式切换可直接执行 `up`、`start` 或 `restart`，同一个 workspace 只能由当前 launcher 管理一个 Core 和注册表中的 NapCat 账号容器。
 
-`up`、`down` 和 `restart` 会预检当前 workspace 的 Compose one-off 探针。若 Docker 列表仍显示探针运行，但 `docker inspect` 已返回容器不存在，macOS Colima 的交互终端会提示重启 Colima，并明确说明其他 Docker 容器会短暂中断；确认后启动器重启 Colima、等待 Docker Engine 恢复、复验悬空记录已消失，再继续原命令。非交互命令或其他 Docker Engine 保持失败关闭，并返回 `colima restart` 或重启当前 Docker Engine 的操作提示。该修复不绕过停服、迁移、恢复点或数据库完整性门禁。
+`up`、`start`、`down` 和 `restart` 会预检当前 workspace 的 Compose one-off 探针。若 Docker 列表仍显示探针运行，但 `docker inspect` 已返回容器不存在，macOS Colima 的交互终端会提示重启 Colima，并明确说明其他 Docker 容器会短暂中断；确认后启动器重启 Colima、等待 Docker Engine 恢复、复验悬空记录已消失，再继续原命令。非交互命令或其他 Docker Engine 保持失败关闭，并返回 `colima restart` 或重启当前 Docker Engine 的操作提示。该修复不绕过停服、迁移、恢复点或数据库完整性门禁。
+
+带 `.remove-on-stop` 的 NapCat 目录只有在账号注册行已经删除后才会清理。Agent 删除流程中断、账号仍在注册表时保留目录和登录态，避免后续启动被迁移完整性门禁锁死。
 
 ## QQ 登录
 

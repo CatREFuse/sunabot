@@ -74,7 +74,7 @@
 ## 跨运行环境
 
 - NapCat 在 macOS、WSL2 和 Linux 上始终运行于独立 Docker 容器；Sunabot Core 允许 Native 或 Docker。禁止把 NapCat 重新并入 Core 镜像、Core 容器或 Native 进程管理单元。
-- 根目录 `./sunabot.sh` 是唯一人工运行入口，支持 `up|down|restart|status|logs|doctor`。`SUNABOT_CORE_MODE=auto|native|docker` 只选择 Core 形态，不能改变 NapCat 的容器边界。
+- 根目录 `./sunabot.sh` 是唯一人工运行入口，支持 `up|start|down|restart|status|logs|doctor`；`up`、`start` 与 `restart` 使用同一套清空后启动流程。`SUNABOT_CORE_MODE=auto|native|docker` 只选择 Core 形态，不能改变 NapCat 的容器边界。
 - 启动与迁移必须由拥有仓库和 workspace 的非 root 用户执行；不得通过 UID 0 绕过 Core、NapCat 或 workspace 权限边界。
 - 管理台只监听宿主回环 `127.0.0.1:8787`。OneBot v11 使用专用的 `8788` 端口和强制 access token；Core Docker 通过 Compose 私有网络接入，Core Native 通过启动器配置的宿主网关接入。不得把 OneBot 端口直接发布到局域网或公网。
 - 跨组件媒体默认使用 OneBot `base64://` 内联数据。业务代码、Core 与 NapCat 不能依赖共享绝对路径、相同挂载点或容器内文件路径；大文件能力必须新增明确、鉴权、可限流的传输契约。

@@ -4,6 +4,7 @@ import path from "node:path";
 
 export const LAUNCHER_COMMANDS = new Set([
   "up",
+  "start",
   "down",
   "restart",
   "status",

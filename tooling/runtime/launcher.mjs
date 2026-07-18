@@ -13,6 +13,10 @@ import { installGlobalProxyDispatcher, resolveProxyConfiguration } from "../../p
 import { validateMultiAgentWorkspacePath } from "../../packages/platform/multiAgentMigrationGate.mjs";
 import { resolveProjectRoot, resolveWorkspace } from "../shared/paths.mjs";
 import { recoverStaleDockerOneoffs } from "./docker-recovery.mjs";
+import {
+  listNativeCoreProcessGroups,
+  stopNativeCoreProcessGroups
+} from "./native-core-process.mjs";
 import { buildRuntimeProbe, collectWorkspaceProbeFacts } from "./probe.mjs";
 import { accountRuntimeState, planAccountReconciliation } from "./account-reconciler.mjs";
 import {
@@ -41,6 +45,16 @@ import {
 } from "./launcher-core.mjs";
 
 const root = resolveProjectRoot(import.meta.url);
+const STARTUP_REQUIRED_CHECK_IDS = new Set([
+  "workspace",
+  "core-process",
+  "core-api",
+  "onebot-listener",
+  "account-reconciler"
+]);
+const STARTUP_STABILITY_WINDOW_MS = 3_000;
+const STARTUP_STABILITY_POLL_MS = 250;
+const STARTUP_STABILITY_TIMEOUT_MS = 10_000;
 
 export async function runLauncher(argv = process.argv.slice(2), environment = process.env) {
   const parsed = parseLauncherArguments(argv, environment);
@@ -87,14 +101,12 @@ export async function runLauncher(argv = process.argv.slice(2), environment = pr
 
   switch (parsed.command) {
     case "up":
-      await up(context);
+    case "start":
+    case "restart":
+      await restartRuntime(context);
       break;
     case "down":
       await down(context);
-      break;
-    case "restart":
-      await down(context);
-      await up(context);
       break;
     case "status":
       await printStatus(context);
@@ -127,7 +139,7 @@ export async function runLauncher(argv = process.argv.slice(2), environment = pr
   }
 }
 
-async function up(context) {
+async function restartRuntime(context) {
   if (databasePathOverrideConfigured(context.environment, context.runtimeEnvironment)) {
     throw new Error("SUNABOT_DATABASE_PATH 已停止支持；主库固定为 workspace/business/data/sunabot.sqlite。");
   }
@@ -137,44 +149,26 @@ async function up(context) {
     identity: context.identity,
     runCommand: command
   });
-  const initial = await inspectRuntime(context);
-  assertExpectedProject(context, initial);
+  assertExpectedProject(context, await inspectRuntime(context));
   await initializeWorkspace(context);
   await beginFirstRunBootstrap(context.workspace);
   const secrets = await prepareSecrets(context);
   await ensureAdminCredentials(context);
   await assertComposeServices(context);
+  await down(context);
+  const baseline = await assertRuntimeEmpty(context);
+  await waitForRuntimePortsClosed(context, { dev: context.dev });
   await ensureRuntimeNetwork(context);
-  const before = await inspectRuntime(context);
-  assertExpectedProject(context, before);
-
-  if (context.mode === "native") {
-    if (before.dockerCore.running) {
-      throw new Error(`workspace ${context.identity} 已由 Docker Core 使用；请先执行 ./sunabot.sh down。`);
-    }
-  } else {
-    if (before.native.running) {
-      throw new Error(`workspace ${context.identity} 已由 Native Core 使用（PID ${before.native.pid}）；请先执行 ./sunabot.sh down。`);
-    }
-  }
-  let baseline = before;
-  if (before.state
-    || before.native.running
-    || before.containers.length > 0
-    || before.reconciler.processes.length > 0
-    || before.reconciler.owner.status !== "missing") {
-    await down(context);
-    baseline = await inspectRuntime(context);
-  }
   if (context.mode === "native") await upNative(context, baseline, secrets.values);
   else await upDocker(context, baseline, secrets.values);
   try {
     await startAccountRuntimeDaemon(context);
+    const report = await waitForStableStartup(context);
+    printRuntimeReport(context, report);
   } catch (error) {
     await down(context).catch(() => {});
     throw error;
   }
-  await printStatus(context);
 }
 
 async function upNative(context, before, secrets) {
@@ -273,33 +267,18 @@ async function down(context) {
     runCommand: command
   });
   const runtime = await inspectRuntime(context);
-  if (runtime.foreignProjects.length > 0) {
-    throw new Error(`workspace ${context.identity} 已被其他 Compose project 使用：${runtime.foreignProjects.join(", ")}。`);
-  }
-  if (runtime.native.running && runtime.dockerCore.running) {
-    throw new Error(`workspace ${context.identity} 同时存在 Native 与 Docker Core，检测到 split-brain。`);
-  }
-  if (runtime.native.alive && !runtime.native.running) {
-    throw new Error(`Native PID ${runtime.native.pid} 与 launcher 记录不匹配；未发送停止信号。`);
-  }
   if (runtime.reconciler.owner.status === "running"
     && !runtime.reconciler.processes.some((item) => item.pid === runtime.reconciler.owner.record.pid)) {
     throw new Error("账号调和 owner 与进程清单不一致；未发送停止信号。");
   }
-  let reconcilerStopError;
   if (runtime.reconciler.processes.length > 0) {
-    try {
-      await stopAccountRuntimeProcesses({
-        workspace: context.workspace,
-        workspaceId: context.identity,
-        entry: accountRuntimeDaemonEntry(context),
-        processes: runtime.reconciler.processes,
-        timeoutMs: Math.min(context.contract.shutdownTimeoutSeconds * 1_000, 5_000)
-      });
-    } catch (error) {
-      if (runtime.reconciler.owner.status !== "invalid") throw error;
-      reconcilerStopError = error;
-    }
+    await stopAccountRuntimeProcesses({
+      workspace: context.workspace,
+      workspaceId: context.identity,
+      entry: accountRuntimeDaemonEntry(context),
+      processes: runtime.reconciler.processes,
+      timeoutMs: Math.min(context.contract.shutdownTimeoutSeconds * 1_000, 5_000)
+    });
   }
   if (runtime.reconciler.owner.status !== "missing" && runtime.reconciler.owner.status !== "invalid") {
     await removeStaleAccountRuntimeOwner({
@@ -308,22 +287,20 @@ async function down(context) {
       entry: accountRuntimeDaemonEntry(context)
     });
   }
-  if (runtime.napcat.matches.length > 0) {
-    for (const container of runtime.napcat.matches) {
-      await command("docker", ["stop", "--timeout", String(context.contract.shutdownTimeoutSeconds), container.id]).catch(() => {});
-      await command("docker", ["rm", container.id]).catch(() => {});
-    }
+  if (runtime.nativeProcessGroups.length > 0) {
+    await stopNativeCoreProcessGroups({
+      root: context.root,
+      workspace: context.workspace,
+      groups: runtime.nativeProcessGroups,
+      timeoutMs: context.contract.shutdownTimeoutSeconds * 1_000
+    });
   }
-  if (runtime.native.running) {
-    await stopNativeCore(context, runtime.state.core, { removeState: false });
-  } else if (runtime.dockerCore.matches.length > 0) {
-    await compose(context, ["--profile", context.contract.coreProfile, "stop", "--timeout", String(context.contract.shutdownTimeoutSeconds), context.contract.coreService]);
-  }
-  if (runtime.containers.length > 0) {
-    await compose(context, ["--profile", context.contract.coreProfile, "down", "--remove-orphans"]);
+  await removeWorkspaceContainers(context);
+  await removeRuntimeNetwork(context);
+  if (runtime.state || runtime.nativeProcessGroups.length > 0) {
+    await waitForRuntimePortsClosed(context, runtime.state);
   }
   await cleanupRemovedNapcatAccounts(context);
-  if (reconcilerStopError) throw reconcilerStopError;
   if (runtime.reconciler.owner.status === "invalid") {
     const quarantinePath = await quarantineInvalidAccountRuntimeOwner({
       workspace: context.workspace,
@@ -336,8 +313,35 @@ async function down(context) {
   console.log("Sunabot Core 与 NapCat 已停止。");
 }
 
+async function assertRuntimeEmpty(context) {
+  const runtime = await inspectRuntime(context, { includeOneoffs: true });
+  const residuals = [];
+  if (runtime.state) residuals.push("launcher state");
+  if (runtime.nativeProcessGroups.length > 0) {
+    residuals.push(`Native Core 进程组 ${runtime.nativeProcessGroups.map((item) => item.processGroup).join(", ")}`);
+  }
+  if (runtime.reconciler.processes.length > 0) {
+    residuals.push(`账号调和进程 ${runtime.reconciler.processes.map((item) => item.pid).join(", ")}`);
+  }
+  if (runtime.reconciler.owner.status !== "missing") {
+    residuals.push(`账号调和 owner ${runtime.reconciler.owner.status}`);
+  }
+  if (runtime.containers.length > 0) {
+    residuals.push(`Docker 容器 ${runtime.containers.map((item) => item.id).join(", ")}`);
+  }
+  if (await runtimeNetworkExists(context)) residuals.push(`Docker 网络 ${context.project}-runtime`);
+  if (residuals.length > 0) {
+    throw runtimeError("RUNTIME_NOT_EMPTY", `当前 workspace 未清空：${residuals.join("；")}。`);
+  }
+  return runtime;
+}
+
 async function printStatus(context) {
   const report = buildRuntimeProbe(await collectRuntimeProbeFacts(context));
+  printRuntimeReport(context, report);
+}
+
+function printRuntimeReport(context, report) {
   console.log(`Probe schema: ${report.schemaVersion}`);
   console.log(`Workspace: ${context.workspace}`);
   console.log(`Liveness: ${report.summary.liveness}`);
@@ -349,6 +353,83 @@ async function printStatus(context) {
   for (const item of report.checks.filter((check) => check.status === "fail")) {
     console.log(`[${item.code}] ${item.detail}${item.path ? ` (${item.path})` : ""}; 修复：${item.action}`);
   }
+}
+
+export function startupReportFailures(report) {
+  const checks = new Map((report?.checks ?? []).map((item) => [item.id, item]));
+  const failures = [];
+  const seen = new Set();
+  const add = (check) => {
+    if (seen.has(check.id)) return;
+    seen.add(check.id);
+    failures.push(check);
+  };
+  for (const id of STARTUP_REQUIRED_CHECK_IDS) {
+    const check = checks.get(id);
+    if (!check || check.status !== "pass") {
+      add(check ?? {
+        id,
+        code: "STARTUP_CHECK_MISSING",
+        detail: "启动检查缺失",
+        action: "./sunabot.sh doctor"
+      });
+    }
+  }
+  for (const check of report?.checks ?? []) {
+    if (["liveness", "readiness"].includes(check.kind) && check.status === "fail") add(check);
+  }
+  return failures;
+}
+
+export function assertStartupReportReady(report) {
+  const failures = startupReportFailures(report);
+  if (failures.length === 0) return;
+  const detail = failures.map((item) => {
+    const action = item.action ? `；修复：${item.action}` : "";
+    return `[${item.code ?? "STARTUP_NOT_READY"}] ${item.detail ?? item.id}${action}`;
+  }).join("；");
+  throw runtimeError("STARTUP_NOT_READY", detail);
+}
+
+async function waitForStableStartup(context) {
+  const deadline = Date.now() + STARTUP_STABILITY_TIMEOUT_MS;
+  let stableSince;
+  while (Date.now() < deadline) {
+    if (await startupComponentsReady(context)) {
+      stableSince ??= Date.now();
+      if (Date.now() - stableSince >= STARTUP_STABILITY_WINDOW_MS) {
+        const report = buildRuntimeProbe(await collectRuntimeProbeFacts(context));
+        assertStartupReportReady(report);
+        return report;
+      }
+    } else {
+      stableSince = undefined;
+    }
+    await delay(STARTUP_STABILITY_POLL_MS);
+  }
+  const report = buildRuntimeProbe(await collectRuntimeProbeFacts(context));
+  assertStartupReportReady(report);
+  throw runtimeError("STARTUP_NOT_STABLE", `Core、OneBot 与账号调和未连续稳定 ${STARTUP_STABILITY_WINDOW_MS}ms。`);
+}
+
+async function startupComponentsReady(context) {
+  const runtime = await inspectRuntime(context);
+  const coreRunning = context.mode === "native" ? runtime.native.running : runtime.dockerCore.running;
+  if (!coreRunning || !runtime.reconciler.healthy) return false;
+  const apiReady = await httpReady(
+    `http://127.0.0.1:${context.contract.adminPort}${context.contract.healthPath}`
+  );
+  if (!apiReady) return false;
+  if (context.mode === "docker") {
+    return runtime.dockerCore.matches.length === 1
+      && await componentHealthStatus(runtime.dockerCore.matches[0].id)
+        .then((status) => status === "healthy")
+        .catch(() => false);
+  }
+  const onebotHost = runtime.state?.onebotListenHost ?? context.contract.onebotHost;
+  return httpReady(
+    `http://${onebotHost}:${context.contract.onebotPort}${context.contract.onebotHealthPath}`
+  );
 }
 
 async function doctor(context) {
@@ -505,7 +586,7 @@ async function loadRegisteredAccounts(context) {
 }
 
 function printHelp() {
-  console.log("用法：./sunabot.sh <up|down|restart|status|doctor|logs|bootstrap|help> [--core=auto|native|docker] [--dev]");
+  console.log("用法：./sunabot.sh <up|start|down|restart|status|doctor|logs|bootstrap|help> [--core=auto|native|docker] [--dev]");
 }
 
 async function logs(context) {
@@ -770,7 +851,7 @@ async function probeNativeOneBot(context) {
     context.contract.napcatService,
     "-ec",
     script
-  ], { capture: true });
+  ], { capture: true, timeoutMs: 15_000 });
   const line = output.split(/\r?\n/).reverse()
     .find((value) => value.startsWith("SUNABOT_PROBE_SELECTED="));
   if (!line) throw new Error("NapCat 容器无法访问 Native OneBot /healthz；请检查 Docker host-gateway。 ");
@@ -817,12 +898,32 @@ async function stopNapcatContainers(context) {
 async function cleanupRemovedNapcatAccounts(context) {
   const accountsRoot = path.join(context.workspace, "runtime/napcat/accounts");
   if (!await exists(accountsRoot)) return;
+  const registeredAccountIds = await loadRegisteredAccountIds(context);
+  if (!registeredAccountIds) return;
   const entries = await fs.readdir(accountsRoot, { withFileTypes: true });
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     const accountRoot = path.join(accountsRoot, entry.name);
-    if (!await exists(path.join(accountRoot, ".remove-on-stop"))) continue;
+    const markedForRemoval = await exists(path.join(accountRoot, ".remove-on-stop"));
+    if (!shouldCleanupRemovedNapcatAccount(entry.name, registeredAccountIds, markedForRemoval)) continue;
     await fs.rm(accountRoot, { recursive: true, force: true });
+  }
+}
+
+export function shouldCleanupRemovedNapcatAccount(accountId, registeredAccountIds, markedForRemoval) {
+  return markedForRemoval === true && !registeredAccountIds.has(accountId);
+}
+
+async function loadRegisteredAccountIds(context) {
+  const databasePath = path.join(context.workspace, "business/data/sunabot.sqlite");
+  if (!await exists(databasePath)) return null;
+  const database = new DatabaseSync(databasePath, { readOnly: true });
+  try {
+    return new Set(database.prepare("SELECT id FROM agent_accounts ORDER BY id")
+      .all()
+      .map((row) => String(row.id)));
+  } finally {
+    database.close();
   }
 }
 
@@ -1144,7 +1245,7 @@ async function stopNativeCore(context, record, options = {}) {
   if (options.removeState) await fs.rm(context.statePath, { force: true });
 }
 
-async function inspectRuntime(context) {
+async function inspectRuntime(context, options = {}) {
   const state = await readState(context.statePath);
   let native = { running: false, alive: false, pid: state?.core?.pid, record: state?.core };
   if (state?.core?.pid) {
@@ -1156,15 +1257,28 @@ async function inspectRuntime(context) {
       record: state.core
     };
   }
-  const reconciler = await inspectAccountRuntime(context, state?.reconciler);
-  const containers = await labeledContainers(context.identity);
-  const legacyContainers = await findLegacyContainers();
+  const [reconciler, containers, legacyContainers, nativeProcessGroups] = await Promise.all([
+    inspectAccountRuntime(context, state?.reconciler),
+    labeledContainers(context.identity, { includeOneoffs: options.includeOneoffs === true }),
+    findLegacyContainers(),
+    listNativeCoreProcessGroups({ root: context.root, workspace: context.workspace })
+  ]);
   const dockerCore = componentStatus(containers, "core");
   const napcat = componentStatus(containers, "napcat");
   const foreignProjects = [...new Set(containers
     .map((item) => item.project)
     .filter((project) => project && project !== context.project && !project.startsWith(`${context.project}-napcat-`)))];
-  return { state, native, reconciler, containers, legacyContainers, dockerCore, napcat, foreignProjects };
+  return {
+    state,
+    native,
+    nativeProcessGroups,
+    reconciler,
+    containers,
+    legacyContainers,
+    dockerCore,
+    napcat,
+    foreignProjects
+  };
 }
 
 async function inspectAccountRuntime(context, stateRecord) {
@@ -1273,7 +1387,7 @@ function withoutUpdatedAt(state) {
   return rest;
 }
 
-async function labeledContainers(identity) {
+async function labeledContainers(identity, options = {}) {
   if (!await dockerAvailable()) return [];
   const format = [
     '{{.ID}}',
@@ -1291,7 +1405,64 @@ async function labeledContainers(identity) {
   return output.split(/\r?\n/).filter(Boolean).map((line) => {
     const [id, component, state, project, accountId, oneoff] = line.split("\t");
     return { id, component, state: state?.toLowerCase(), project, accountId, oneoff };
-  }).filter((item) => item.oneoff?.toLowerCase() !== "true");
+  }).filter((item) => options.includeOneoffs === true || item.oneoff?.toLowerCase() !== "true");
+}
+
+async function removeWorkspaceContainers(context) {
+  let containers = await labeledContainers(context.identity, { includeOneoffs: true });
+  if (containers.length === 0) return;
+  const ids = containers.map((item) => item.id);
+  await command("docker", [
+    "stop",
+    "--timeout", String(context.contract.shutdownTimeoutSeconds),
+    ...ids
+  ], { timeoutMs: (context.contract.shutdownTimeoutSeconds + 5) * 1_000 }).catch(() => {});
+  containers = await labeledContainers(context.identity, { includeOneoffs: true });
+  const running = containers.filter((item) => item.state === "running");
+  if (running.length > 0) {
+    throw runtimeError(
+      "DOCKER_CONTAINER_STOP_FAILED",
+      `当前 workspace 的容器未停止：${running.map((item) => item.id).join(", ")}。`
+    );
+  }
+  if (containers.length === 0) return;
+  await command("docker", ["rm", ...containers.map((item) => item.id)]).catch(() => {});
+  const survivors = await labeledContainers(context.identity, { includeOneoffs: true });
+  if (survivors.length > 0) {
+    throw runtimeError(
+      "DOCKER_CONTAINER_REMOVE_FAILED",
+      `当前 workspace 的容器未移除：${survivors.map((item) => item.id).join(", ")}。`
+    );
+  }
+}
+
+async function runtimeNetworkWorkspaceId(context) {
+  const network = `${context.project}-runtime`;
+  const format = [
+    "{{.Name}}",
+    '{{.Label "io.sunabot.workspace-id"}}'
+  ].join("\t");
+  const output = await command("docker", ["network", "ls", "--format", format], { capture: true });
+  const match = output.split(/\r?\n/u)
+    .map((line) => line.split("\t"))
+    .find(([name]) => name === network);
+  return match ? String(match[1] ?? "") : null;
+}
+
+async function runtimeNetworkExists(context) {
+  return await runtimeNetworkWorkspaceId(context) !== null;
+}
+
+async function removeRuntimeNetwork(context) {
+  const workspaceId = await runtimeNetworkWorkspaceId(context);
+  if (workspaceId == null) return;
+  if (workspaceId !== context.identity) {
+    throw runtimeError(
+      "DOCKER_NETWORK_IDENTITY_INVALID",
+      `Docker 网络 ${context.project}-runtime 缺少当前 workspace 身份；未删除。`
+    );
+  }
+  await command("docker", ["network", "rm", `${context.project}-runtime`]);
 }
 
 async function findLegacyContainers() {
@@ -1319,12 +1490,6 @@ function assertExpectedProject(context, runtime) {
   if (runningLegacy.length > 0) {
     throw new Error(`检测到旧 one-container runtime：${runningLegacy.map((item) => item.name).join(", ")}；请按迁移备忘录停止旧容器。`);
   }
-  if (runtime.foreignProjects.length > 0) {
-    throw new Error(`workspace ${context.identity} 已被其他 Compose project 使用：${runtime.foreignProjects.join(", ")}。`);
-  }
-  if (runtime.native.running && runtime.dockerCore.running) {
-    throw new Error(`workspace ${context.identity} 同时存在 Native 与 Docker Core，检测到 split-brain。`);
-  }
 }
 
 async function assertComposeServices(context) {
@@ -1341,6 +1506,7 @@ async function assertComposeServices(context) {
 async function compose(context, args, options = {}) {
   return command("docker", composeArgs(context, args), {
     capture: options.capture,
+    timeoutMs: options.timeoutMs,
     cwd: context.root,
     env: composeEnvironment(context)
   });
@@ -1616,6 +1782,31 @@ function tcpOpen(host, port) {
   });
 }
 
+async function waitForRuntimePortsClosed(context, state) {
+  const onebotHost = state?.onebotListenHost
+    ?? (context.contract.onebotHost === "docker-network-gateway" ? "127.0.0.1" : context.contract.onebotHost);
+  const endpoints = [
+    { name: "管理 API", host: "127.0.0.1", port: context.contract.adminPort },
+    { name: "OneBot", host: onebotHost, port: context.contract.onebotPort }
+  ];
+  if (state?.dev) endpoints.push({ name: "Vite", host: "127.0.0.1", port: 5173 });
+  const deadline = Date.now() + Math.min(context.contract.shutdownTimeoutSeconds * 1_000, 5_000);
+  let occupied = [];
+  while (Date.now() < deadline) {
+    occupied = [];
+    for (const endpoint of endpoints) {
+      if (await tcpOpen(endpoint.host, endpoint.port)) occupied.push(endpoint);
+    }
+    if (occupied.length === 0) return;
+    await delay(100);
+  }
+  const detail = occupied.map((item) => `${item.name} ${item.host}:${item.port}`).join("、");
+  throw runtimeError(
+    "RUNTIME_PORT_STILL_IN_USE",
+    `${detail} 在当前 workspace 清理后仍被占用；拒绝启动新 Core。请检查占用进程后重试。`
+  );
+}
+
 async function assertDockerAvailable() {
   if (!await dockerAvailable()) throw new Error("Docker Engine 不可用；请启动 Docker Desktop 或 Docker Engine。 ");
 }
@@ -1632,6 +1823,10 @@ async function dockerAvailable() {
 function command(executable, args, options = {}) {
   return new Promise((resolve, reject) => {
     const output = [];
+    let settled = false;
+    let timeout;
+    let forceKill;
+    let timeoutError;
     const child = spawn(executable, args, {
       cwd: options.cwd,
       env: options.env ?? process.env,
@@ -1641,11 +1836,33 @@ function command(executable, args, options = {}) {
       child.stdout.on("data", (chunk) => output.push(chunk));
       child.stderr.on("data", (chunk) => output.push(chunk));
     }
-    child.once("error", reject);
+    const finish = (callback) => {
+      if (settled) return;
+      settled = true;
+      if (timeout) clearTimeout(timeout);
+      if (forceKill) clearTimeout(forceKill);
+      callback();
+    };
+    if (Number.isFinite(options.timeoutMs) && options.timeoutMs > 0) {
+      timeout = setTimeout(() => {
+        timeoutError = runtimeError(
+          "COMMAND_TIMEOUT",
+          `${executable} ${args.slice(0, 4).join(" ")} 超过 ${options.timeoutMs}ms 未结束。`
+        );
+        child.kill("SIGTERM");
+        forceKill = setTimeout(() => child.kill("SIGKILL"), 1_000);
+        forceKill.unref?.();
+      }, options.timeoutMs);
+      timeout.unref?.();
+    }
+    child.once("error", (error) => finish(() => reject(error)));
     child.once("exit", (code, signal) => {
       const text = Buffer.concat(output).toString("utf8");
-      if (code === 0) resolve(text);
-      else reject(new Error(`${executable} ${args.slice(0, 4).join(" ")} 失败（${signal || code}）${text ? `：${text.trim()}` : ""}`));
+      finish(() => {
+        if (timeoutError) reject(timeoutError);
+        else if (code === 0) resolve(text);
+        else reject(new Error(`${executable} ${args.slice(0, 4).join(" ")} 失败（${signal || code}）${text ? `：${text.trim()}` : ""}`));
+      });
     });
   });
 }

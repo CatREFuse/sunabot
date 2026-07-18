@@ -136,6 +136,8 @@ account runtime daemon 专项必须覆盖同 workspace 两个并发启动只有�
 
 涉及跨平台运行时还要执行 `./sunabot.sh doctor`，分别验证 Native Core + 多 NapCat Docker 与 Docker Core + 多 NapCat Docker 的启动、停止、单实例、管理台单账号“运行”、OneBot token、两个 QQ 同时在线、文字、图片、文件、账号定向外发和重启恢复。contract 与测试必须拒绝 NapCat 并入 Core、多个账号复用同一 WebUI 端口、OneBot 复用管理端口、跨组件共享绝对路径和旧新运行时并行。
 
+统一 launcher 专项还必须验证 `up`、`start` 与 `restart` 走同一清空后启动流程；异常 launcher state、同 workspace 多 Native Core 进程组、Native/Docker split-brain、全部 workspace 标签容器、Compose one-off、运行网络和多 account runtime daemon 均被清理。测试必须证明只有仓库入口与精确 workspace 环境同时匹配的进程组会收到信号，PID 复用、缺少身份和其他 workspace 进程不会被终止；8787、8788 与开发模式 5173 残留监听必须返回非零。Native OneBot Compose 探针超时必须有界，启动后 Core 或 daemon 退出不能被一次 HTTP 成功掩盖；所选 Core、全部已启用 NapCat 与 account runtime daemon 连续稳定，且全部 liveness/readiness 失败项清零后命令才退出 0，可选 capability 降级不阻塞。Agent 删除准备阶段的 `.remove-on-stop` 目录在注册行仍存在时必须保留，注册行删除后才允许清理。
+
 记忆重整还必须覆盖第二次 `prepare` 最终 hook 与 prepared 后 `apply` 的 plan/replacement 重签漂移，并在 staging 创建前拒绝。恢复身份矩阵分别构造 changed recovery→finalized staging、original recovery→production、production→staging 的真实 hardlink，在 `after-staging-restore` SIGKILL 重入、staged-ready 重入、最终 intent CAS 与 install 首 rename 前证明 recovery、production、live staging、quarantine 的 `nlink`/`dev:ino` 全集门禁先于任何 recovery/live SQLite open；失败时 observer 为零、production 字节不变且 quarantine 不产生。
 
 记忆迁移安装重入时新增未授权数据库对必须在下一次 rename 前零 SQLite open 失败关闭；current→quarantine 与 staged→current 两个 rename 的最终 CAS 都要分别注入主文件和 WAL/SHM 漂移，证明目标目录不被继续移动且 signed intent 进入可回滚状态。

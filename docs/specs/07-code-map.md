@@ -69,7 +69,7 @@
 | 自拍参考图设置 | `apps/admin-web/src/views/ImagesView.vue`, `apps/admin-web/src/components/settings/SelfieReferenceSettings.vue`, `apps/admin-web/src/components/settings/SelfieReferenceDialog.vue`, `apps/admin-web/src/components/settings/SelfieReferenceNoteDialog.vue`, `apps/admin-web/src/composables/useSelfieReferences.ts` |
 | 表情管理台、Agent 切换与乱序请求收敛 | `apps/admin-web/src/views/EmojisView.vue`, `apps/admin-web/src/components/emojis/`, `apps/admin-web/src/composables/useEmojis.ts`, `apps/admin-web/src/types/emojis.ts`, `apps/admin-web/src/utils/emojiKey.ts`, `apps/admin-web/src/components/layout/navigationCatalog.ts`, `apps/admin-web/src/router.ts` |
 | 日志、会话日志全文搜索与群聊模型调用统计 | `apps/admin-web/src/components/logs/RequestLogList.vue`, `apps/admin-web/src/components/logs/ModelCallStatsPanel.vue`, `apps/admin-web/src/views/LogsView.vue`, `apps/admin-web/src/components/conversations/ConversationThread.vue` |
-| 统一运行入口、模式选择与发行打包 | `sunabot.sh`, `tooling/runtime/launcher.mjs`, `tooling/runtime/launcher-core.mjs`, `tooling/runtime/build-release.mjs` |
+| 统一运行入口、模式选择、同 workspace 进程清理与发行打包 | `sunabot.sh`, `tooling/runtime/launcher.mjs`, `tooling/runtime/launcher-core.mjs`, `tooling/runtime/native-core-process.mjs`, `tooling/runtime/build-release.mjs` |
 | Core 与 NapCat Docker 编排 | `deploy/docker/compose.yml`, `deploy/docker/Dockerfile`, `deploy/docker/Dockerfile.napcat`, `tooling/runtime/launcher.mjs` |
 | macOS/WSL/Linux Native Core | `tooling/runtime/launcher.mjs`, `tooling/runtime/macos.mjs` |
 | 全 Agent SQLite 恢复点 | `tooling/workspace/sqlite-recovery.mjs`, `tooling/workspace/sqlite-recovery-cli.mjs` |

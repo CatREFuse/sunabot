@@ -103,7 +103,7 @@
 
 - [x] **ONBOARD-005｜P2｜只读 CLI 不安装依赖**
   - help 成功退出；`status|doctor|logs|down` 零写入、零 `npm ci`，只有启动、重启或显式 bootstrap 可以安装依赖。
-  - 证据：help、option-first `up`、`--core=docker`、`--core docker`、`--dev` 和缺依赖只读命令回归通过。
+  - 证据：help、`up`、`start`、`restart`、option-first `up`、`--core=docker`、`--core docker`、`--dev` 和缺依赖只读命令回归通过。
 
 ## 2026-07-16 生产隔离并行功能队列
 
@@ -207,6 +207,7 @@
   - 两端分别验证双 QQ 私聊、群聊、@、引用、文字、图片、文件、Base64 媒体、账号定向外发、异步 callback、outbox、Agent/SQLite/queue 隔离、重启与冷启动恢复；同时核对 OneBot token、连接 owner、account runtime daemon 单实例和全部旧进程退出。
   - 功能验收还必须覆盖：每 Agent 最多 9 张必填备注自拍素材、节点严格选择 1—3 张已知唯一 ID；表情生成、上传、数据库/文件配对与真实 `[/key]` 外发；群聊编排器精确 JSON 字段、候选消息 ID 与 deferred 原始结果不变；记忆重整逐 Agent/来源前后数量、原恢复点、changed recovery 和签名完成报告。
   - 验收证据必须记录准确 Git commit、运行模式、恢复点 ID、迁移报告、记忆前后计数、数据库/文件配对摘要、`status`/`doctor`、真实收发结果和回滚路径；单端 fixture、容器 healthy、端口监听或受控 E2E 不能替代双环境双 QQ 现场证据。
+  - 2026-07-19 阶段证据：macOS Native Core 生产 workspace 已用统一 `./sunabot.sh start` 完成同源进程、三个旧 NapCat、运行网络、account runtime daemon 和端口清理，再从空状态启动 1 个 Core、3 个已启用 NapCat 与 1 个 daemon；最终及独立复核均为 liveness/readiness/capability 全通过，Docker 无 one-off 残留，停用账号保持停止。该证据只关闭 macOS 启动/重启路径，Linux/WSL Docker Core、真实双 QQ 定向收发、冷启动恢复与回滚证据仍未完成。
 
 - [x] **WEBUI-DESIGN-001｜P1｜Nothing Design 视觉、功能与交互重审**
   - 仅在 `INTEGRATION-001` 功能冒烟通过后开始，使用 `$nothing-design` 对全部管理台页面做逐屏审查并实施修正；先确认起始模式，再同时交付一等质量的 light/dark。所需字体为 Doto、Space Grotesk 与 Space Mono，必须随构建本地打包，不依赖线上 Google Fonts。
@@ -465,9 +466,9 @@
 
 - [ ] **RUNTIME-003｜P1｜Core/NapCat 分离交付与统一 launcher**（AUD-022）
   - Core 镜像只包含 API/Web，NapCat 使用锁定的独立镜像；Compose 提供 `core` 与 `napcat` 两个服务。
-  - 根 `./sunabot.sh` 统一 `up|down|restart|status|logs|doctor`，并支持 `auto|native|docker` Core 模式。
+  - 根 `./sunabot.sh` 统一 `up|start|down|restart|status|logs|doctor`，并支持 `auto|native|docker` Core 模式；`up|start|restart` 使用同一套清空后启动流程。
   - 完成：Docker Core 走私有网络，Native Core 走宿主网关；SIGTERM、冷启动、首次登录、真实文图消息和旧实例门禁通过。
-  - 阶段证据：统一 launcher、多账号 NapCat 编排、专用 OneBot 端口、私有网络、release 入口、账号运行时调和和 readiness 统一协议已实现；Native/Docker 双形态真实多账号 smoke 仍待完成。
+  - 阶段证据：统一 launcher、多账号 NapCat 编排、专用 OneBot 端口、私有网络、release 入口、账号运行时调和和 readiness 统一协议已实现；macOS Native Core 已完成一次生产清空后启动并验证单 Core、单 daemon、3 个 NapCat 与完整 readiness，Docker Core 双形态真实多账号 smoke 仍待完成。
 
 - [ ] **RUNTIME-004｜P1｜健康、资源和日志预算**（AUD-014、AUD-027）
   - Core 与 NapCat 分别报告 liveness；readiness 分层报告 API、OneBot、QQ、Provider，QQ 临时离线不形成重启风暴。

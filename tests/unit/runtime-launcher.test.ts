@@ -18,10 +18,86 @@ import {
   reverseWebSocketWithHost,
   workspaceIdentity
 } from "../../tooling/runtime/launcher-core.mjs";
+import {
+  assertStartupReportReady,
+  shouldCleanupRemovedNapcatAccount,
+  startupReportFailures
+} from "../../tooling/runtime/launcher.mjs";
 
 const root = fileURLToPath(new URL("../..", import.meta.url));
 
 describe("unified runtime launcher", () => {
+  it("accepts a stable startup while leaving optional capabilities degraded", () => {
+    const report = runtimeReport([
+      pass("workspace"),
+      pass("core-process"),
+      pass("core-api"),
+      pass("onebot-listener"),
+      pass("account-reconciler"),
+      fail("codex-auth", "CODEX_AUTH_REQUIRED", "Codex 尚未登录", "capability")
+    ]);
+
+    expect(startupReportFailures(report)).toEqual([]);
+    expect(() => assertStartupReportReady(report)).not.toThrow();
+  });
+
+  it("fails startup when any complete readiness check fails", () => {
+    const report = runtimeReport([
+      pass("workspace"),
+      pass("core-process", "liveness"),
+      pass("core-api", "liveness"),
+      pass("onebot-listener"),
+      pass("account-reconciler", "capability"),
+      fail("provider", "PROVIDER_NOT_READY", "Provider 健康检查超时")
+    ]);
+
+    expect(startupReportFailures(report)).toEqual([
+      expect.objectContaining({ id: "provider", code: "PROVIDER_NOT_READY" })
+    ]);
+    expect(() => assertStartupReportReady(report)).toThrowError(/STARTUP_NOT_READY.*PROVIDER_NOT_READY/u);
+  });
+
+  it("fails startup when a required component or account reconciliation is unavailable", () => {
+    const report = runtimeReport([
+      pass("workspace"),
+      pass("core-process"),
+      pass("core-api"),
+      fail("onebot-listener", "ONEBOT_LISTENER_UNAVAILABLE", "8788 未监听"),
+      fail("account-reconciler", "ACCOUNT_RECONCILER_UNAVAILABLE", "daemon 未运行"),
+      fail("account:primary", "ACCOUNT_RECONCILE_FAILED", "NapCat 启动失败")
+    ]);
+
+    expect(startupReportFailures(report).map((item) => item.id)).toEqual([
+      "onebot-listener",
+      "account-reconciler",
+      "account:primary"
+    ]);
+    expect(() => assertStartupReportReady(report)).toThrowError(
+      /STARTUP_NOT_READY.*ONEBOT_LISTENER_UNAVAILABLE.*ACCOUNT_RECONCILER_UNAVAILABLE.*ACCOUNT_RECONCILE_FAILED/u
+    );
+  });
+
+  it("fails closed when the runtime probe omits a required startup check", () => {
+    const report = runtimeReport([
+      pass("workspace"),
+      pass("core-process"),
+      pass("core-api"),
+      pass("onebot-listener")
+    ]);
+
+    expect(startupReportFailures(report)).toEqual([
+      expect.objectContaining({ id: "account-reconciler", code: "STARTUP_CHECK_MISSING" })
+    ]);
+  });
+
+  it("keeps a removal-marked NapCat directory until its registry row is gone", () => {
+    const registered = new Set(["primary", "qq_pending_removal"]);
+
+    expect(shouldCleanupRemovedNapcatAccount("qq_pending_removal", registered, true)).toBe(false);
+    expect(shouldCleanupRemovedNapcatAccount("qq_removed", registered, true)).toBe(true);
+    expect(shouldCleanupRemovedNapcatAccount("qq_removed", registered, false)).toBe(false);
+  });
+
   it("uses runtime.env values for workspace capability probes", async () => {
     const source = await fs.readFile(path.join(root, "tooling/runtime/launcher.mjs"), "utf8");
     expect(source).toMatch(/collectWorkspaceProbeFacts\(\{\s*workspace: context\.workspace,\s*environment: context\.runtimeEnvironment,/u);
@@ -29,6 +105,8 @@ describe("unified runtime launcher", () => {
 
   it.each([
     { args: ["up"], invocation: "up" },
+    { args: ["start"], invocation: "start" },
+    { args: ["restart"], invocation: "restart" },
     { args: ["--core=docker"], invocation: "--core=docker" },
     { args: ["--core", "docker"], invocation: "--core docker" },
     { args: ["--dev"], invocation: "--dev" }
@@ -190,6 +268,7 @@ describe("unified runtime launcher", () => {
       requestedMode: "native",
       dev: true
     });
+    expect(parseLauncherArguments(["start"], {}).command).toBe("start");
     expect(parseLauncherArguments(["doctor"], { SUNABOT_DEV: "1" }).dev).toBe(true);
     expect(parseLauncherArguments(["--help"], {}).command).toBe("help");
     expect(parseLauncherArguments(["reconcile-account", "--account=qq_arona"], {})).toMatchObject({
@@ -296,6 +375,25 @@ describe("unified runtime launcher", () => {
     )).toBe("ws://172.18.0.1:8788/onebot/v11/ws");
   });
 });
+
+function pass(id: string, kind = "readiness") {
+  return { id, kind, status: "pass", code: null, detail: "ready", action: null };
+}
+
+function fail(id: string, code: string, detail: string, kind = "readiness") {
+  return { id, kind, status: "fail", code, detail, action: "./sunabot.sh doctor" };
+}
+
+function runtimeReport(checks: Array<{
+  id: string;
+  kind: string;
+  status: string;
+  code: string | null;
+  detail: string;
+  action: string | null;
+}>) {
+  return { checks };
+}
 
 async function treeSnapshot(directory: string) {
   const entries: string[] = [];

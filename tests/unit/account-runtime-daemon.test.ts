@@ -359,17 +359,15 @@ describe("account runtime daemon singleton", () => {
     expect(inspected).toMatchObject({ status: "invalid", record: { pid: unrelated.pid } });
     const docker = await createDockerFixture(workspaceIdentity(workspace));
     const down = await runLauncherDown(workspace, docker);
-    expect(down).toMatchObject({ code: 0, signal: null });
+    expect(down, JSON.stringify(down)).toMatchObject({ code: 0, signal: null });
     expect(down.stderr).toBe("");
     expect(down.stdout).toContain("Sunabot Core 与 NapCat 已停止。");
     await expect(fs.access(ownerPath)).rejects.toMatchObject({ code: "ENOENT" });
     expect(isAlive(unrelated.pid!)).toBe(true);
 
     const dockerCalls = (await fs.readFile(docker.tracePath, "utf8")).trim().split("\n");
-    const napcatStopIndex = dockerCalls.findIndex((line) => line === "stop --timeout 30 napcat-fixture");
-    const coreStopIndex = dockerCalls.findIndex((line) => line.includes(" stop --timeout 30 core"));
-    expect(napcatStopIndex).toBeGreaterThanOrEqual(0);
-    expect(coreStopIndex).toBeGreaterThan(napcatStopIndex);
+    expect(dockerCalls).toContain("stop --timeout 30 napcat-fixture core-fixture");
+    expect(dockerCalls).toContain("rm napcat-fixture core-fixture");
 
     const quarantines = (await fs.readdir(ownerDirectory))
       .filter((name) => name.endsWith(".quarantine"));
@@ -581,7 +579,14 @@ async function createDockerFixture(identity: string) {
   const directory = await createWorkspace("sunabot-account-daemon-docker-");
   const bin = path.join(directory, "bin");
   const tracePath = path.join(directory, "docker-trace.log");
+  const statePath = path.join(directory, "docker-state.log");
+  const project = "sunabot-" + identity.slice(0, 12);
   await fs.mkdir(bin, { mode: 0o700 });
+  await fs.writeFile(statePath, [
+    "napcat-fixture\tnapcat\trunning\t" + project + "-napcat-qq-arona\tqq_arona\tfalse",
+    "core-fixture\tcore\trunning\t" + project + "\t\tfalse",
+    ""
+  ].join("\n"));
   await fs.writeFile(path.join(bin, "docker"), [
     "#!/bin/sh",
     "printf '%s\\n' \"$*\" >> \"$DOCKER_TRACE_FILE\"",
@@ -592,11 +597,22 @@ async function createDockerFixture(identity: string) {
     "case \" $* \" in",
     "  *\"label=com.docker.compose.oneoff=true\"*) exit 0 ;;",
     "esac",
+    "if [ \"${1:-}\" = \"stop\" ]; then",
+    "  sed 's/\\trunning\\t/\\texited\\t/' \"$DOCKER_STATE_FILE\" > \"$DOCKER_STATE_FILE.next\"",
+    "  mv \"$DOCKER_STATE_FILE.next\" \"$DOCKER_STATE_FILE\"",
+    "  exit 0",
+    "fi",
+    "if [ \"${1:-}\" = \"rm\" ]; then",
+    "  : > \"$DOCKER_STATE_FILE\"",
+    "  exit 0",
+    "fi",
+    "if [ \"${1:-}\" = \"network\" ] && [ \"${2:-}\" = \"inspect\" ]; then",
+    "  exit 1",
+    "fi",
     "if [ \"${1:-}\" = \"ps\" ]; then",
     "  case \" $* \" in",
     "    *\"--filter label=io.sunabot.workspace-id=\"*)",
-    "      printf 'napcat-fixture\\tnapcat\\trunning\\t%s-napcat-qq-arona\\tqq_arona\\tfalse\\n' \"$DOCKER_PROJECT\"",
-    "      printf 'core-fixture\\tcore\\trunning\\t%s\\t\\tfalse\\n' \"$DOCKER_PROJECT\"",
+    "      cat \"$DOCKER_STATE_FILE\"",
     "      ;;",
     "  esac",
     "fi",
@@ -606,13 +622,14 @@ async function createDockerFixture(identity: string) {
   return {
     bin,
     tracePath,
-    project: `sunabot-${identity.slice(0, 12)}`
+    statePath,
+    project
   };
 }
 
 async function runLauncherDown(
   workspace: string,
-  docker: { bin: string; tracePath: string; project: string }
+  docker: { bin: string; tracePath: string; statePath: string; project: string }
 ) {
   const child = spawn(process.execPath, [
     path.join(projectRoot, "tooling/runtime/launcher.mjs"),
@@ -628,6 +645,7 @@ async function runLauncherDown(
       PATH: `${docker.bin}:${process.env.PATH ?? ""}`,
       NODE_NO_WARNINGS: "1",
       DOCKER_TRACE_FILE: docker.tracePath,
+      DOCKER_STATE_FILE: docker.statePath,
       DOCKER_PROJECT: docker.project
     }
   });
