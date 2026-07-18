@@ -1043,7 +1043,7 @@ async function inspectDockerCodex(context) {
   }
 }
 
-function bubblewrapProbeArguments(workspace) {
+export function bubblewrapProbeArguments(workspace) {
   return [
     "--die-with-parent",
     "--new-session",
@@ -1051,6 +1051,7 @@ function bubblewrapProbeArguments(workspace) {
     "--unshare-pid",
     "--unshare-uts",
     "--unshare-ipc",
+    "--unshare-net",
     "--unshare-cgroup-try",
     "--uid", "0",
     "--gid", "0",

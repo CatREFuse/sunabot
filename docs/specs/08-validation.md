@@ -134,7 +134,7 @@ Office worker 专项必须覆盖并发 2、90 秒超时、IPC 1 MiB、工作目�
 
 account runtime daemon 专项必须覆盖同 workspace 两个并发启动只有一个 owner、两个进程竞争同一 stale owner、owner 发布与 claim-republish 各强杀边界、owner/evidence 硬链接数不超过 2、已 claim request 的 owner 强杀后生成确定性失败结果，以及损坏 owner、符号链接、额外硬链接、PID 复用、进程启动身份和 workspace/entry 失配全部失败关闭。launcher 状态必须区分 owner 丢失与 split-brain；`down`/`restart` 必须发现并停止当前入口、旧入口和无参数的全部同 workspace daemon，同时证明不会向无关或身份未验证进程发送信号。
 
-涉及跨平台运行时还要执行 `./sunabot.sh doctor`，分别验证 Native Core + 多 NapCat Docker 与 Docker Core + 多 NapCat Docker 的启动、停止、单实例、管理台单账号“运行”、OneBot token、两个 QQ 同时在线、文字、图片、文件、账号定向外发和重启恢复。contract 与测试必须拒绝 NapCat 并入 Core、多个账号复用同一 WebUI 端口、OneBot 复用管理端口、跨组件共享绝对路径和旧新运行时并行。
+涉及跨平台运行时还要执行 `./sunabot.sh doctor`，分别验证 Native Core + 多 NapCat Docker 与 Docker Core + 多 NapCat Docker 的启动、停止、单实例、管理台单账号“运行”、OneBot token、两个 QQ 同时在线、文字、图片、文件、账号定向外发和重启恢复。Docker Core 启动前的 bubblewrap 探针必须包含真实执行使用的 network namespace，并由回归证明其 namespace 参数与 seccomp clone 掩码一致。contract 与测试必须拒绝 NapCat 并入 Core、多个账号复用同一 WebUI 端口、OneBot 复用管理端口、跨组件共享绝对路径和旧新运行时并行。
 
 统一 launcher 专项还必须验证 `up`、`start` 与 `restart` 走同一清空后启动流程；异常 launcher state、同 workspace 多 Native Core 进程组、Native/Docker split-brain、全部 workspace 标签容器、Compose one-off、运行网络和多 account runtime daemon 均被清理。测试必须证明只有仓库入口与精确 workspace 环境同时匹配的进程组会收到信号，PID 复用、缺少身份和其他 workspace 进程不会被终止；8787、8788 与开发模式 5173 残留监听必须返回非零。Native OneBot Compose 探针超时必须有界，启动后 Core 或 daemon 退出不能被一次 HTTP 成功掩盖；所选 Core、全部已启用 NapCat 与 account runtime daemon 连续稳定，且全部 liveness/readiness 失败项清零后命令才退出 0，可选 capability 降级不阻塞。Agent 删除准备阶段的 `.remove-on-stop` 目录在注册行仍存在时必须保留，注册行删除后才允许清理。
 

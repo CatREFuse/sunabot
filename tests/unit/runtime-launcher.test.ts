@@ -20,6 +20,7 @@ import {
 } from "../../tooling/runtime/launcher-core.mjs";
 import {
   assertStartupReportReady,
+  bubblewrapProbeArguments,
   shouldCleanupRemovedNapcatAccount,
   startupReportFailures
 } from "../../tooling/runtime/launcher.mjs";
@@ -27,6 +28,21 @@ import {
 const root = fileURLToPath(new URL("../..", import.meta.url));
 
 describe("unified runtime launcher", () => {
+  it("probes the same isolated network namespace required by the Docker seccomp contract", () => {
+    const args = bubblewrapProbeArguments("/srv/sunabot/workspace");
+
+    expect(args).toEqual(expect.arrayContaining([
+      "--unshare-user",
+      "--unshare-pid",
+      "--unshare-uts",
+      "--unshare-ipc",
+      "--unshare-net",
+      "--unshare-cgroup-try"
+    ]));
+    expect(args.filter((argument) => argument === "--unshare-net")).toHaveLength(1);
+    expect(args.indexOf("--unshare-net")).toBeLessThan(args.indexOf("--"));
+  });
+
   it("accepts a stable startup while leaving optional capabilities degraded", () => {
     const report = runtimeReport([
       pass("workspace"),

@@ -26,7 +26,7 @@ sunabot 是面向个人自托管场景的 QQ 多 Agent 服务。系统通过 One
 
 NapCat 在 macOS、WSL2 和 Linux 上始终运行于独立 Docker 容器。Sunabot Core 可以在宿主环境 Native 运行，也可以作为独立 Core 容器运行；根目录 `./sunabot.sh` 统一负责初始化、配置、启动顺序、健康检查、停止和日志。`SUNABOT_CORE_MODE=auto` 在 macOS 选择 Native Core，在 WSL2/Linux 选择 Docker Core，也可显式选择 `native` 或 `docker`。
 
-`status`、`doctor`、管理 API 和平台入口共用 schema v1 的只读运行探针，分别报告 liveness、readiness 与 capability。探针统一核对 workspace、迁移状态、Core、OneBot、每个 QQ、Provider、Codex、bubblewrap、MCP OAuth 凭据库与 stdio 隔离后端；QQ 临时离线只降低 readiness，不把 Core 判为死亡。Office 正文解析由生产 Node 依赖提供，不再作为独立宿主 capability 探测。Provider readiness 同时区分配置完成和有界健康请求验证成功，密钥只进入对应鉴权请求头。MCP OAuth 或 stdio 未配置时只关闭对应可选能力，非法的已配置值由 doctor 报告稳定配置错误。公开 `/healthz/runtime` 只返回 schema 与 liveness，账号和能力明细只通过管理员鉴权接口返回。
+`status`、`doctor`、管理 API 和平台入口共用 schema v1 的只读运行探针，分别报告 liveness、readiness 与 capability。探针统一核对 workspace、迁移状态、Core、OneBot、每个 QQ、Provider、Codex、bubblewrap、MCP OAuth 凭据库与 stdio 隔离后端；Docker Core 的 bubblewrap 探针必须与真实 `workspace_bash` 使用同一组 user、PID、UTS、IPC、network、cgroup namespace，且与固定 seccomp clone 掩码一致。QQ 临时离线只降低 readiness，不把 Core 判为死亡。Office 正文解析由生产 Node 依赖提供，不再作为独立宿主 capability 探测。Provider readiness 同时区分配置完成和有界健康请求验证成功，密钥只进入对应鉴权请求头。MCP OAuth 或 stdio 未配置时只关闭对应可选能力，非法的已配置值由 doctor 报告稳定配置错误。公开 `/healthz/runtime` 只返回 schema 与 liveness，账号和能力明细只通过管理员鉴权接口返回。
 
 管理台“配置医生”是独立于运行探针的系统配置检查与修复能力，当前只处理 `workspace/business/config/sunabot.json`。它先执行本地确定性扫描，再允许管理员显式发起一次无工具的 AI 结构化建议，并在确认后通过管理 API 应用受限修改；Agent manifest、提示词、凭据、SQLite 和其他 workspace 文件不在当前范围内。该能力不改变 `./sunabot.sh doctor` 的只读语义，当前也没有配置医生 CLI 离线修复入口。
 
