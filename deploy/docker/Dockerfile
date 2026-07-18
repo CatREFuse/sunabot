@@ -16,6 +16,7 @@ COPY adapters ./adapters
 COPY packages ./packages
 COPY apps/admin-web ./apps/admin-web
 COPY tooling/quality ./tooling/quality
+COPY tooling/runtime ./tooling/runtime
 COPY tooling/shared ./tooling/shared
 RUN npm run build && npm prune --omit=dev
 

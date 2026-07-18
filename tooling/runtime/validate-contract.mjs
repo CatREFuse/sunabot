@@ -206,6 +206,8 @@ expect(!/napcat|\/opt\/QQ|xvfb-run/i.test(coreDockerfile),
 expect(coreDockerfile.includes("dist/apps/api/main.js")
   && coreDockerfile.includes(contract.capabilities.workspaceBash.executable),
 "Core image must run the API and contain bubblewrap");
+expect(coreDockerfile.includes("COPY tooling/runtime ./tooling/runtime"),
+  "Core build stage must include API runtime helper modules");
 expect(codex.optional !== true
   && codex.version === contract.capabilities.codexCli.version
   && codex.package === "@openai/codex"
