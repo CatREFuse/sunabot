@@ -4,32 +4,44 @@
 
 ## 8. SQLite 持久化
 
+### Agent 配置文件夹迁移
+
+Agent 配置文件夹是跨终端传输角色配置的唯一推荐和支持模型。先将完整文件夹直接复制到目标机本地的任意受控目录，再在管理台新增 Agent 时选择该文件夹；浏览器把文件树提交给预检和原子创建流程。ZIP 只作为管理台选择文件受限环境的兼容输入，不是推荐的存储或传输格式。直接把文件夹复制到活动 `workspace/business/agents/<agentId>/` 不会登记 Agent，也不会绕过预检或原子发布。
+
+可导入根目录只允许 `agent.json`、六个人格 Markdown、Agent 级最终提示词、受当前共享配置命名约束的 `system-prompts/` 覆盖、一个 `assets/avatar.(png|jpg|webp)`、`selfie/references.json` 和受限自拍参考图。单层包装目录会在预检中展开；未知文件、密钥、`.env`、SQLite、队列、请求日志、备份、QQ 登录态、NapCat 运行目录以及链接或特殊文件一律拒绝。路径、Unicode、控制字符、重复名、ZIP slip、ZIP 链接、归档与展开体积、条目数量、UTF-8/JSON 与图片类型均在物化前校验。
+
+预检返回已包含的文件和缺失组件。缺失的 manifest、人格、最终提示词、头像、自拍素材或系统提示词覆盖使用目标当前默认值补齐；存在的 manifest 只允许受支持的 schema 与已知 Bot/OneBot 字段，来源 ID、名称、启用状态和秘密字段不会覆盖新增 Agent 的身份或当前部署凭据。创建先在受控临时目录写入默认 workspace，再写入通过预检的文件、归一化自拍清单并补齐缺项；目录 rename 与注册表写入任一失败时删除本次临时或已发布目录，已有 Agent ID 或目标工作区冲突稳定拒绝，绝不覆盖已有 Agent。
+
 ### 8.1 注册主库与 Agent 业务库
 
 注册主库与默认 Plana Agent 业务库固定为 `workspace/business/data/sunabot.sqlite`，默认队列库固定为 `workspace/business/data/session-queue.sqlite`；外部主库覆盖已经退役，进程环境或 `workspace/secrets/runtime.env` 中出现 `SUNABOT_DATABASE_PATH` 时，launcher、doctor、API 和多 Agent 迁移器都会明确拒绝运行，其中 doctor 返回 `DATABASE_PATH_OVERRIDE_UNSUPPORTED`，迁移器返回 `CUSTOM_DATABASE_PATH_UNSUPPORTED`。其他 Agent 的业务库路径是 `workspace/business/agents/<agentId>/data/sunabot.sqlite`。各数据库使用相同的向前迁移 schema；Agent 注册表和管理员会话只以注册主库为准，其他业务表只读写所属 Agent 的数据，门禁、备份与恢复始终引用规范路径。
 
 主库启用 WAL、`synchronous=NORMAL`、外键和 5 秒 busy timeout。当前表如下：
 
-| 表 | 数据 |
-| --- | --- |
-| `app_metadata` | schema 与旧数据导入标记 |
-| `agents` | Agent ID、名称、启用状态、workspace 与头像路径 |
-| `agent_accounts` | QQ 接入账号、所属 Agent、QQ 号、启用状态与独立 WebUI 端口 |
-| `conversations` | 会话及其消息数组，每个会话一行 |
-| `conversation_thread_states` | 群聊 Thread 增量状态、处理游标、模型和提示词 revision，每个会话至多一行 |
-| `memory_records` | 工作记忆、长期记忆和用户画像 |
-| `memory_batches` | 已提交记忆批次及幂等结果 |
-| `memory_scheduler` | 各会话的记忆待处理队列与重试状态 |
-| `request_logs` | 脱敏后的模型、工具和运行日志；保留实际模型请求体、Provider 返回 payload、原始 usage 与统一 `tokenUsage` |
-| `model_call_aggregates` | 当前 Agent 按会话与行为聚合的模型调用总量 |
-| `model_call_model_aggregates` | 当前 Agent 按会话、模型、行为和记忆类型聚合的调用总量 |
-| `image_history` | 生成图片历史元数据 |
-| `emojis` | 当前 Agent 的表情 key、内容寻址文件名、来源、字节数、尺寸与创建/更新时间 |
-| `admin_sessions` | 管理 Cookie 哈希、CSRF Token、访问时间与有效期 |
+| 表                            | 数据                                                                                                    |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `app_metadata`                | schema 与旧数据导入标记                                                                                 |
+| `agents`                      | Agent ID、名称、启用状态、workspace 与头像路径                                                          |
+| `agent_accounts`              | QQ 接入账号、所属 Agent、QQ 号、启用状态与独立 WebUI 端口                                               |
+| `conversations`               | 会话及其消息数组，每个会话一行                                                                          |
+| `conversation_thread_states`  | 群聊 Thread 增量状态、处理游标、模型和提示词 revision，每个会话至多一行                                 |
+| `memory_records`              | 工作记忆、长期记忆和用户画像                                                                            |
+| `memory_batches`              | 已提交记忆批次及幂等结果                                                                                |
+| `memory_scheduler`            | 各会话的记忆待处理队列与重试状态                                                                        |
+| `request_logs`                | 脱敏后的模型、工具和运行日志；保留实际模型请求体、Provider 返回 payload、原始 usage 与统一 `tokenUsage` |
+| `model_call_aggregates`       | 当前 Agent 按会话与行为聚合的模型调用总量                                                               |
+| `model_call_model_aggregates` | 当前 Agent 按会话、模型、行为和记忆类型聚合的调用总量                                                   |
+| `image_history`               | 生成图片历史元数据                                                                                      |
+| `emojis`                      | 当前 Agent 的表情 key、内容寻址文件名、来源、字节数、尺寸与创建/更新时间                                |
+| `scheduled_tasks`             | 当前 Agent 的任务定义、revision、cron/once 计划、上下文、回调目标与下一次/上一次触发时间                |
+| `scheduled_task_runs`         | 到期 occurrence 的不可变任务快照、状态、lease、生成正文、错误与完成时间                                 |
+| `admin_sessions`              | 管理 Cookie 哈希、CSRF Token、访问时间与有效期                                                          |
 
-当前业务主库 schema 版本是 11；schema 10→11 前向创建 STRICT `emojis` 表和 `emojis_updated_at` 索引，不删除已有业务数据。`conversation_thread_states` 使用 STRICT 表和 `conversations.id` 外键，删除会话时级联删除 Thread 状态；`state_schema_version` 当前为 1。写入以 revision CAS、单调 `processed_through_sequence` 和 `last_run_key` 幂等约束防止旧快照覆盖新状态，读取和写入都执行完整领域结构校验。message assignment、Thread message ID 和已无保留消息的非活动 Thread 随 `conversations` 的消息保留边界清理，单 Thread participant uid 最多保留 256 个；原始会话消息不由 Thread 节点删除。模型输出、提示词和运行时错误不能回退游标或破坏已提交状态；Thread 状态仍属于业务库恢复范围，不新增 JSON/JSONL 增长型持久化。异步 Thread 快照读取时复核字符串长度、稳定 Thread ID、active/primary/related 引用、唯一性、sequence 和提示词容量边界；损坏或旧格式快照降级为空 sidecar。恢复门禁只允许 `storage-schema-version=9` 的旧 current 恢复点缺少 `conversation_thread_states` 与 `emojis`，以及 version 10 的旧 current 恢复点只缺少 `emojis`，并分别复核真实版本；version 10 缺 Thread 表或 version 11 缺任一当前表都判定为不完整。
+当前业务主库 schema 版本是 13；schema 10→11 前向创建 STRICT `emojis` 表和 `emojis_updated_at` 索引，schema 11→12 前向创建 `emoji_versions` 并从现有 `emojis` 回填版本记录，schema 12→13 前向创建 STRICT `scheduled_tasks`、`scheduled_task_runs` 及 `scheduled_tasks_due`、`scheduled_task_runs_status`、`scheduled_task_runs_task` 三个索引，所有迁移均不删除已有业务数据。`conversation_thread_states` 使用 STRICT 表和 `conversations.id` 外键，删除会话时级联删除 Thread 状态；`state_schema_version` 当前为 1。写入以 revision CAS、单调 `processed_through_sequence` 和 `last_run_key` 幂等约束防止旧快照覆盖新状态，读取和写入都执行完整领域结构校验。message assignment、Thread message ID 和已无保留消息的非活动 Thread 随 `conversations` 的消息保留边界清理，单 Thread participant uid 最多保留 256 个；原始会话消息不由 Thread 节点删除。模型输出、提示词和运行时错误不能回退游标或破坏已提交状态；Thread 状态仍属于业务库恢复范围，不新增 JSON/JSONL 增长型持久化。异步 Thread 快照读取时复核字符串长度、稳定 Thread ID、active/primary/related 引用、唯一性、sequence 和提示词容量边界；损坏或旧格式快照降级为空 sidecar。恢复门禁只允许当前规范明确支持的旧 schema 作为迁移输入，并分别复核真实版本；当前 schema 缺任一必需表或索引都判定为不完整。
 
 `emojis` 以 `emoji_key` 为主键，并严格保存 `file_name`、`source`、`size_bytes`、`width`、`height`、`created_at` 与 `updated_at`；`source` 只允许 `upload` 或 `generated`。单 Agent 最多 64 行。统一 key 校验层在任何数据库或文件写入前拒绝原始孤立代理项、replacement character、C0/C1 控制字符、方括号、斜杠和反斜杠，再执行 trim/NFC，并限制为 1—24 个 code point、最多 64 UTF-8 字节；SQLite 中已有的毒值在读取时隐藏或失败关闭，不能令列表或内容 API 持续 500。
+
+`scheduled_tasks` 的管理写入使用 revision CAS；创建、更新和重新启用时计算 `next_run_at`，调度器推进下一次时间不增加管理 revision。`scheduled_task_runs` 以 `UNIQUE(task_id, scheduled_for)` 保证同一 occurrence 只建立一条运行记录，并保存触发时的任务 revision、上下文、计划和全部目标快照。到期 claim 在一个 `BEGIN IMMEDIATE` 事务内插入 `pending` run 并推进任务：延迟启动的 cron 只补一次最早到期 occurrence，再把下一次时间推进到当前时刻之后；once 触发后把下一次时间置空。运行状态按 `pending → running → generated → completed|failed` 推进并使用可续租 lease；生成正文先持久化为 `generated`，进程在分发途中退出后只重放投递，不再次调用 Provider。每个目标随后写入所属会话的 Session 事件和 durable outbox，当前 Agent 队列边界与 envelope 固化账号、完整会话、运行 ID、同一正文和结构化 `mentionUserIds`，以 run ID 在每个会话内幂等。任务定义与运行记录属于当前 Agent 业务库，会话事件和 outbox 属于当前 Agent 队列库；这些增长型数据禁止使用 JSON/JSONL 管理。
 
 会话工具选择随 `ConversationRecord` 写入 `conversations.data_json` 的可选 `disabledTools` 字段，不新增表或 schema 版本。写入只保留去重后的内置 Agent 工具名，空列表省略；读取旧记录时缺失字段规范化为空列表。QQ 与 Web Chat 会话分别使用完整会话 ID 隔离，Agent 切换继续由独立业务库隔离。
 
@@ -63,7 +75,10 @@ Plana 的 `workspace/business/data/session-queue.sqlite` 与其他 Agent 的 `wo
 - `workspace/business/agents/<agentId>/extensions/mcp/servers.json`：schemaVersion 1 MCP 描述符索引，只保存受限命令、可审计参数和 `envKeys` 引用，不保存环境变量值；
 - `workspace/business/agents/<agentId>/`：Agent 人格、`selfie_prompt_rewrite.json`、可选 `system-prompts/` 覆盖、自拍参考图、私有数据和人工维护文件；
 - `workspace/business/agents/<agentId>/selfie/references.json`：当前 Agent 的 schemaVersion 1 自拍素材清单，严格只包含最多 9 项 `{id,fileName,note}`；`id` 是图片内容 SHA-256，`note` 必填并限制为 1—120 个 Unicode code point。清单使用同目录 0600 临时文件原子替换，拒绝额外字段、重复 ID、非法 Unicode、控制字符、超量内容及符号链接；旧目录缺少清单时按稳定文件名顺序生成确定性且可编辑的备注并持久化。图片仍是单张最多 8 MiB 的普通文件，清单属于小型可审阅配置，不替代 SQLite 承载增长型业务数据；
+- `workspace/business/agents/<agentId>/voice/profile.json`：当前 Agent 的 schemaVersion 1 Voice Profile，小型可审阅配置只保存启用状态、默认语言和 `zh`、`en`、`ja` 三个参考音频元数据槽位；每项绑定安全文件名、受控相对路径、MIME、字节数、SHA-256、参考台词、更新时间和可选 HTTPS 来源，不保存音频字节、模型权重、服务凭据或绝对路径；
+- `workspace/business/agents/<agentId>/voice/references/`：当前 Agent 的本地参考音频，文件名按内容摘要固定，单文件最多 8 MiB，发布与读取均拒绝符号链接、目录替换、非法父链和元数据漂移。Kivo 下载器只把小春、普拉娜、阿罗娜的日语参考音频写入对应本机 Agent workspace，并把来源 URL 留在 Profile；参考音频、Kivo 下载结果和 Profile 都属于终端本地资产，不进入 Git，也不包含在 Agent 配置文件夹导入白名单中；
 - `workspace/business/agents/<agentId>/workbench/`：当前 Agent 的文件工具与 Bash 共用私有目录；内容不会自动进入模型请求，只有经过管理员私聊能力门禁和逐次路径、身份、类型及大小复验的文本文件可以按请求读取或原子写入；
+- `workspace/business/agents/<agentId>/workbench/.voice-cache/`：当前 Agent 的可重建合成 WAV 缓存，文件名固定为 `voice-<sha256>.wav`、单文件最多 32 MiB；只有经过 MOSS 响应大小、WAV 结构与摘要校验的字节可以发布，随后仍须通过 `conversation_asset` 文件身份和摘要门禁进入 durable outbox。该缓存不进入 SQLite 或 Git，删除后只影响尚未读取该文件的待发送语音，不能作为长期历史或参考音频来源；
 - Bash backend 只在当前 Agent 配置中持久化 `native`/`docker` 偏好；单调配置 epoch、审计结果、独立 Provider 实例、abort signal、审批票据与 capability 快照不持久化。一次性审批只在进程内保存并绑定 Agent、Bot 账号、transport、完整会话、用户、可选群号、命令摘要和精确只读外部文件身份；缺字段、过期、重放或绑定不一致均拒绝；
 - Provider 可执行 Bash options 只能由当前真实 OneBot 入站即时构造，必须在同一不可变配置快照中包含 epoch、backend、workbench、access mode、strict mode、独立 audit runner、`isCurrent` 和完整审批上下文。`isCurrent` 必须贯穿 Bash runner，并在所有文件身份 await、审批 issue/consume、隔离 probe 和最终 spawn 边界复验；旧 handle 以 `BASH_CONFIGURATION_STALE` 失败关闭且不得产生审批、探针或执行副作用。API catalog 的布尔 capability、模型返回参数和持久配置都不能单独升格为执行权限；
 - `workspace/business/media/`：需要随业务恢复的图片和持久附件；其中 `media/images/emoji-<sha256>.png` 保存 Plana 表情，`media/images/agents/<agentId>/emoji-<sha256>.png` 保存其他 Agent 表情。文件只按对应业务库 `emojis` 行进入图库，必须与记录中的 SHA、字节数和尺寸一致；SQLite 恢复点只保护表情元数据，完整业务恢复、跨机迁移或远程搬迁必须另行把记录与文件作为同一 Agent 的成对资产核对，缺少任一侧时该项不能进入可用图库；
@@ -125,5 +140,6 @@ Agent 根目录及 `extensions`、`skills`、`mcp` 控制目录必须是当前�
 - 配置医生发送给模型的配置先按敏感键以及身份、QQ、Provider 地址、workspace、可执行文件和提示词路径脱敏；问题列表只包含本次实际校验失败的固定白名单路径和服务端固定文案，模型只能对这些路径提出 `add` 或 `replace`，不接收工具权限。服务端限制 AI 输出大小、操作数、JSON Pointer 深度和值大小，并拒绝原型污染字段、重复路径和越权路径；用户确认页的目标值说明由服务端生成，不采用模型理由代替实际修改内容。
 - 配置医生 AI 提案只保存在进程内 10 分钟并绑定原始文件 revision；连续 AI 诊断至少间隔 10 秒。浏览器应用时只提交 proposal ID 与 source revision，不能提交或替换服务端 patch。
 - OneBot、跨组件媒体和 Agent 文件写入均执行身份、大小与路径边界校验；OneBot action 不能携带 Core 或 NapCat 的绝对文件路径。
+- 本地语音服务地址只能由运行环境的 `SUNABOT_MOSS_TTS_NANO_URL` 提供，Native Core 默认使用 `http://127.0.0.1:18083`；生产地址不得包含用户信息、查询或片段，不得经浏览器、提示词、模型参数、请求日志或 OneBot payload 暴露。Docker Core 只能连接显式配置的宿主或 Compose 私网端点，不能把 MOSS HTTP 服务发布到局域网或公网。参考音频来源字段只接受无凭据 HTTPS URL；合成错误日志只记录稳定错误码、语言、字符数、耗时、输出字节数和摘要，不记录正文、音频、服务响应或宿主路径。
 - `read_file` 与 `write_file` 只接受真实 OneBot 管理员私聊且 `promptOverride` 未设置的当前 Agent 入站消息。能力判断在创建 workbench 或解析文件之前完成；普通用户、群聊、Web Chat、伪造 Function Call 和缺失运行端口均失败关闭。Provider 在调用运行端口前按封闭字段集合复验参数并重建请求；成功结果必须使用封闭结构，绑定原请求路径与正文 UTF-8 大小，读取正文还要通过同一 Unicode/控制字符合同，不能信任端口返回的额外路径、正文或错误文本。
 - Node.js 在 macOS 与 Linux 上没有可移植的文件描述符定向 rename/link 发布接口，因此最终临时文件复验与路径发布之间仍以运行 Core 的同一宿主 UID 为受信边界。测试 hook 必须全部位于最终复验之前并被确定性拦截；外部同 UID 在最终复验后主动改写路径属于受信运维主体越界，能力不声称消除该窗口。发布后仍复验目标身份和内容，发现变化时失败关闭。

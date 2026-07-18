@@ -1,5 +1,13 @@
 import { readonly, shallowRef } from "vue";
-import type { EmojiPayload, EmojiRecord, EmojiStatus, EmojiUploadInput } from "../types/emojis";
+import type {
+  EmojiPayload,
+  EmojiRecord,
+  EmojiSendSize,
+  EmojiStatus,
+  EmojiUploadInput,
+  EmojiVersionRecord,
+  EmojiVersionsPayload
+} from "../types/emojis";
 import { emojiKeyValidationError, normalizeEmojiKey } from "../utils/emojiKey";
 import { apiRequest } from "./useAdminApi";
 
@@ -9,9 +17,17 @@ const ALLOWED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
 export function useEmojis() {
   const emojis = shallowRef<EmojiRecord[]>([]);
   const presetKeys = shallowRef<string[]>([]);
+  const sendSize = shallowRef<EmojiSendSize>(512);
+  const settingsRevision = shallowRef("");
   const loading = shallowRef(false);
+  const savingSettings = shallowRef(false);
   const uploading = shallowRef(false);
+  const uploadingKey = shallowRef("");
   const deletingKey = shallowRef("");
+  const versionKey = shallowRef("");
+  const versions = shallowRef<EmojiVersionRecord[]>([]);
+  const loadingVersions = shallowRef(false);
+  const deletingVersion = shallowRef("");
   const generatingKeys = shallowRef<ReadonlySet<string>>(new Set());
   const status = shallowRef<EmojiStatus>({ kind: "idle", message: "" });
   let activeAgentId = "";
@@ -58,6 +74,7 @@ export function useEmojis() {
     const key = normalizeEmojiKey(input.key);
     const context = contextGeneration;
     uploading.value = true;
+    uploadingKey.value = key;
     status.value = { kind: "idle", message: "" };
     try {
       await apiRequest<EmojiPayload>(agentPath("/api/emojis", normalizedAgentId), {
@@ -70,6 +87,7 @@ export function useEmojis() {
       });
       if (!isCurrent(normalizedAgentId, context)) return false;
       if (!await load(normalizedAgentId)) return false;
+      if (versionKey.value === key) await loadVersions(normalizedAgentId, key);
       status.value = { kind: "success", message: `“${key}”已保存` };
       return true;
     } catch (caught) {
@@ -78,7 +96,10 @@ export function useEmojis() {
       }
       return false;
     } finally {
-      if (isCurrent(normalizedAgentId, context)) uploading.value = false;
+      if (isCurrent(normalizedAgentId, context)) {
+        uploading.value = false;
+        uploadingKey.value = "";
+      }
     }
   }
 
@@ -133,6 +154,7 @@ export function useEmojis() {
       });
       if (!isCurrent(normalizedAgentId, context)) return false;
       if (!await load(normalizedAgentId)) return false;
+      if (versionKey.value === key) clearVersions();
       status.value = { kind: "success", message: `“${key}”已删除` };
       return true;
     } catch (caught) {
@@ -142,6 +164,123 @@ export function useEmojis() {
       return false;
     } finally {
       if (isCurrent(normalizedAgentId, context)) deletingKey.value = "";
+    }
+  }
+
+  async function rename(agentId: string, emojiKey: string, nextEmojiKey: string) {
+    const normalizedAgentId = normalizeAgentId(agentId);
+    activate(normalizedAgentId);
+    const currentKey = normalizeEmojiKey(emojiKey);
+    const validationError = emojiKeyValidationError(nextEmojiKey);
+    if (validationError) {
+      status.value = { kind: "error", message: validationError };
+      return false;
+    }
+    const nextKey = normalizeEmojiKey(nextEmojiKey);
+    if (currentKey === nextKey) return true;
+    const context = contextGeneration;
+    status.value = { kind: "idle", message: "" };
+    try {
+      await apiRequest<EmojiPayload>(agentPath(`/api/emojis/${encodeURIComponent(currentKey)}`, normalizedAgentId), {
+        method: "PATCH",
+        body: JSON.stringify({ key: nextKey })
+      });
+      if (!isCurrent(normalizedAgentId, context)) return false;
+      if (!await load(normalizedAgentId)) return false;
+      if (versionKey.value === currentKey) {
+        versionKey.value = nextKey;
+        await loadVersions(normalizedAgentId, nextKey);
+      }
+      status.value = { kind: "success", message: `“${nextKey}”已保存` };
+      return true;
+    } catch (caught) {
+      if (isCurrent(normalizedAgentId, context)) {
+        status.value = { kind: "error", message: errorMessage(caught, "表情 key 保存失败") };
+      }
+      return false;
+    }
+  }
+
+  async function loadVersions(agentId: string, emojiKey: string) {
+    const normalizedAgentId = normalizeAgentId(agentId);
+    activate(normalizedAgentId);
+    const key = normalizeEmojiKey(emojiKey);
+    const context = contextGeneration;
+    versionKey.value = key;
+    loadingVersions.value = true;
+    try {
+      const payload = await apiRequest<EmojiVersionsPayload>(
+        agentPath(`/api/emojis/${encodeURIComponent(key)}/versions`, normalizedAgentId)
+      );
+      if (!isCurrent(normalizedAgentId, context) || versionKey.value !== key) return false;
+      versions.value = [...payload.versions];
+      return true;
+    } catch (caught) {
+      if (isCurrent(normalizedAgentId, context) && versionKey.value === key) {
+        status.value = { kind: "error", message: errorMessage(caught, "版本读取失败") };
+      }
+      return false;
+    } finally {
+      if (isCurrent(normalizedAgentId, context) && versionKey.value === key) loadingVersions.value = false;
+    }
+  }
+
+  async function removeVersion(agentId: string, emojiKey: string, fileName: string) {
+    const normalizedAgentId = normalizeAgentId(agentId);
+    activate(normalizedAgentId);
+    if (deletingVersion.value) return false;
+    const key = normalizeEmojiKey(emojiKey);
+    const context = contextGeneration;
+    deletingVersion.value = fileName;
+    try {
+      await apiRequest<void>(agentPath(
+        `/api/emojis/${encodeURIComponent(key)}/versions/${encodeURIComponent(fileName)}`,
+        normalizedAgentId
+      ), { method: "DELETE" });
+      if (!isCurrent(normalizedAgentId, context)) return false;
+      if (!await loadVersions(normalizedAgentId, key)) return false;
+      status.value = { kind: "success", message: "旧版本已删除" };
+      return true;
+    } catch (caught) {
+      if (isCurrent(normalizedAgentId, context)) {
+        status.value = { kind: "error", message: errorMessage(caught, "版本删除失败") };
+      }
+      return false;
+    } finally {
+      if (isCurrent(normalizedAgentId, context)) deletingVersion.value = "";
+    }
+  }
+
+  function clearVersions() {
+    versionKey.value = "";
+    versions.value = [];
+    loadingVersions.value = false;
+    deletingVersion.value = "";
+  }
+
+  async function setSendSize(agentId: string, nextSize: EmojiSendSize) {
+    const normalizedAgentId = normalizeAgentId(agentId);
+    activate(normalizedAgentId);
+    if (savingSettings.value || nextSize === sendSize.value) return false;
+    const context = contextGeneration;
+    savingSettings.value = true;
+    status.value = { kind: "idle", message: "" };
+    try {
+      const payload = await apiRequest<EmojiPayload>(agentPath("/api/emojis/settings", normalizedAgentId), {
+        method: "PATCH",
+        body: JSON.stringify({ sendSize: nextSize, revision: settingsRevision.value })
+      });
+      if (!isCurrent(normalizedAgentId, context)) return false;
+      applyPayload(payload);
+      status.value = { kind: "success", message: `发送尺寸已设为 ${formatSendSize(nextSize)}` };
+      return true;
+    } catch (caught) {
+      if (isCurrent(normalizedAgentId, context)) {
+        status.value = { kind: "error", message: errorMessage(caught, "发送尺寸保存失败") };
+      }
+      return false;
+    } finally {
+      if (isCurrent(normalizedAgentId, context)) savingSettings.value = false;
     }
   }
 
@@ -162,9 +301,14 @@ export function useEmojis() {
     controller?.abort();
     emojis.value = [];
     presetKeys.value = [];
+    sendSize.value = 512;
+    settingsRevision.value = "";
     loading.value = false;
+    savingSettings.value = false;
     uploading.value = false;
+    uploadingKey.value = "";
     deletingKey.value = "";
+    clearVersions();
     generatingKeys.value = new Set();
     status.value = { kind: "idle", message: "" };
   }
@@ -176,6 +320,8 @@ export function useEmojis() {
   function applyPayload(payload: EmojiPayload) {
     presetKeys.value = [...payload.presetKeys];
     emojis.value = [...payload.emojis];
+    if (isEmojiSendSize(payload.sendSize)) sendSize.value = payload.sendSize;
+    if (typeof payload.revision === "string") settingsRevision.value = payload.revision;
   }
 
   function setGenerating(key: string, active: boolean) {
@@ -188,18 +334,38 @@ export function useEmojis() {
   return {
     emojis: readonly(emojis),
     presetKeys: readonly(presetKeys),
+    sendSize: readonly(sendSize),
     loading: readonly(loading),
+    savingSettings: readonly(savingSettings),
     uploading: readonly(uploading),
+    uploadingKey: readonly(uploadingKey),
     deletingKey: readonly(deletingKey),
+    versionKey: readonly(versionKey),
+    versions: readonly(versions),
+    loadingVersions: readonly(loadingVersions),
+    deletingVersion: readonly(deletingVersion),
     generatingKeys: readonly(generatingKeys),
     status: readonly(status),
     load,
     upload,
     generate,
     remove,
+    rename,
+    loadVersions,
+    removeVersion,
+    clearVersions,
+    setSendSize,
     clearStatus,
     dispose
   };
+}
+
+function isEmojiSendSize(value: unknown): value is EmojiSendSize {
+  return value === 64 || value === 128 || value === 256 || value === 512 || value === 1024;
+}
+
+function formatSendSize(value: EmojiSendSize) {
+  return value === 1024 ? "1k" : `${value}px`;
 }
 
 function normalizeAgentId(agentId: string) {

@@ -25,7 +25,7 @@ describe("group thread state SQLite store", () => {
     initial.close();
 
     const oldDatabase = new DatabaseSync(databasePath);
-    oldDatabase.exec("DROP TABLE conversation_thread_states; DROP TABLE emojis;");
+    oldDatabase.exec("DROP TABLE conversation_thread_states; DROP TABLE emoji_versions; DROP TABLE emojis;");
     oldDatabase.prepare("UPDATE app_metadata SET value = '9' WHERE key = 'storage-schema-version'").run();
     oldDatabase.close();
 
@@ -34,7 +34,7 @@ describe("group thread state SQLite store", () => {
 
     const database = new DatabaseSync(databasePath);
     expect(database.prepare("SELECT value FROM app_metadata WHERE key = 'storage-schema-version'").get())
-      .toMatchObject({ value: "11" });
+      .toMatchObject({ value: "13" });
     const sql = String(database.prepare(`
       SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'conversation_thread_states'
     `).get()?.sql ?? "").replaceAll(/\s+/g, " ").toLowerCase();
@@ -52,6 +52,9 @@ describe("group thread state SQLite store", () => {
     ]);
     expect(String(database.prepare(`
       SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'emojis'
+    `).get()?.sql ?? "").toLowerCase()).toContain("strict");
+    expect(String(database.prepare(`
+      SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'emoji_versions'
     `).get()?.sql ?? "").toLowerCase()).toContain("strict");
     database.close();
   });

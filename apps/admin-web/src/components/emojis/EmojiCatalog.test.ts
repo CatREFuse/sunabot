@@ -20,8 +20,11 @@ describe("EmojiCatalog", () => {
     await flushPromises();
 
     expect(dependencies.data?.load).toHaveBeenCalledWith("koharu");
-    const generateButton = wrapper.findAll("button").find((button) => button.text().includes("一键添加"));
-    await generateButton?.trigger("click");
+    const sendSizeButton = wrapper.findAll("button").find((button) => button.text() === "256");
+    await sendSizeButton?.trigger("click");
+    expect(dependencies.data?.setSendSize).toHaveBeenCalledWith("koharu", 256);
+    const generateButton = wrapper.get('button[aria-label="一键添加 开心"]');
+    await generateButton.trigger("click");
     expect(dependencies.data?.generate).toHaveBeenCalledWith("koharu", "开心");
 
     await wrapper.setProps({ agentId: "plana" });
@@ -29,6 +32,29 @@ describe("EmojiCatalog", () => {
     expect(dependencies.data?.load).toHaveBeenLastCalledWith("plana");
     wrapper.unmount();
     expect(dependencies.data?.dispose).toHaveBeenCalledOnce();
+  });
+
+  it("uploads on card drop, renames a key, and opens version history", async () => {
+    const wrapper = mount(EmojiCatalog, {
+      props: { agentId: "koharu" },
+      attachTo: document.body
+    });
+    await flushPromises();
+
+    const file = new File(["png"], "happy.png", { type: "image/png" });
+    await wrapper.findAll("article")[0]!.trigger("drop", {
+      dataTransfer: { types: ["Files"], files: [file], dropEffect: "none" }
+    });
+    expect(dependencies.data?.upload).toHaveBeenCalledWith("koharu", { key: "开心", file });
+
+    await wrapper.get('button[aria-label="修改 自定义 key"]').trigger("click");
+    const keyInput = wrapper.get('input[aria-label="修改 自定义 key"]');
+    await keyInput.setValue("新表情");
+    await keyInput.trigger("keyup.enter");
+    expect(dependencies.data?.rename).toHaveBeenCalledWith("koharu", "自定义", "新表情");
+
+    await wrapper.get('button[aria-label="查看 自定义 版本"]').trigger("click");
+    expect(dependencies.data?.loadVersions).toHaveBeenCalledWith("koharu", "自定义");
   });
 
   it("reloads the image when replacing the same key with a new content version", async () => {
@@ -77,15 +103,27 @@ function createData() {
   return {
     emojis: shallowRef<EmojiRecord[]>([emoji]),
     presetKeys: shallowRef(["开心"]),
+    sendSize: shallowRef(512 as const),
     loading: shallowRef(false),
+    savingSettings: shallowRef(false),
     uploading: shallowRef(false),
+    uploadingKey: shallowRef(""),
     deletingKey: shallowRef(""),
+    versionKey: shallowRef(""),
+    versions: shallowRef([]),
+    loadingVersions: shallowRef(false),
+    deletingVersion: shallowRef(""),
     generatingKeys: shallowRef<ReadonlySet<string>>(new Set()),
     status: shallowRef({ kind: "idle" as const, message: "" }),
     load: vi.fn().mockResolvedValue(true),
     upload: vi.fn().mockResolvedValue(true),
     generate: vi.fn().mockResolvedValue(true),
     remove: vi.fn().mockResolvedValue(true),
+    rename: vi.fn().mockResolvedValue(true),
+    loadVersions: vi.fn().mockResolvedValue(true),
+    removeVersion: vi.fn().mockResolvedValue(true),
+    clearVersions: vi.fn(),
+    setSendSize: vi.fn().mockResolvedValue(true),
     clearStatus: vi.fn(),
     dispose: vi.fn()
   };

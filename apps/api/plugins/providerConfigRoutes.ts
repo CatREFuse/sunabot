@@ -47,18 +47,18 @@ export function registerProviderConfigRoutes(
     schema: { querystring: openObject, response: { 200: openObject } }
   }, async (request) => {
     const agentId = requestAgentId(request.query);
-    return agentId === "plana" || !options.agentConfigService
-      ? options.configService.readEnvelope()
-      : options.agentConfigService.readEnvelope(agentId);
+    return options.agentConfigService
+      ? options.agentConfigService.readEnvelope(agentId)
+      : options.configService.readEnvelope();
   });
 
   app.patch("/api/config/group-reply", {
     schema: { body: passthroughBody, response: { 200: openObject } }
   }, async (request) => {
     const agentId = requestAgentId(request.query);
-    return agentId === "plana" || !options.agentConfigService
-      ? options.configService.patchGroupReply(request.body)
-      : options.agentConfigService.patchGroupReply(agentId, request.body);
+    return options.agentConfigService
+      ? options.agentConfigService.patchGroupReply(agentId, request.body)
+      : options.configService.patchGroupReply(request.body);
   });
 
   app.patch("/api/config/:section", {
@@ -75,9 +75,9 @@ export function registerProviderConfigRoutes(
   }, async (request) => {
     const params = request.params as { section?: string };
     const agentId = requestAgentId(request.query);
-    return agentId === "plana" || !options.agentConfigService
-      ? options.configService.patch(String(params.section ?? ""), request.body)
-      : options.agentConfigService.patch(agentId, String(params.section ?? ""), request.body);
+    return options.agentConfigService
+      ? options.agentConfigService.patch(agentId, String(params.section ?? ""), request.body)
+      : options.configService.patch(String(params.section ?? ""), request.body);
   });
 
   app.get("/api/models", {

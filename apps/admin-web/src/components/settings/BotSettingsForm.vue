@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import ToggleSwitch from "../ui/ToggleSwitch.vue";
+import SettingsConfirmInput from "./SettingsConfirmInput.vue";
 import type { ConfigSectionValueMap } from "../../types";
 const draft = defineModel<ConfigSectionValueMap["bot"]>({ required: true });
 const reply = defineModel<ConfigSectionValueMap["onebot"]>("reply", { required: true });
@@ -33,40 +34,40 @@ function split(value: string) {
     <div class="grid gap-5 sm:grid-cols-2">
       <label class="field">
         <span class="field-label">管理员 QQ</span>
-        <input v-model.trim="draft.adminQq" class="control" type="text" inputmode="numeric" autocomplete="off">
+        <SettingsConfirmInput v-model.trim="draft.adminQq" type="text" inputmode="numeric" autocomplete="off" confirm-label="确认管理员 QQ" />
       </label>
       <label class="field">
         <span class="field-label">管理员称呼</span>
-        <input v-model.trim="draft.adminName" class="control" type="text" autocomplete="off">
+        <SettingsConfirmInput v-model.trim="draft.adminName" type="text" autocomplete="off" confirm-label="确认管理员称呼" />
       </label>
       <label class="field">
         <span class="field-label">上下文消息数</span>
-        <input v-model.number="draft.contextMessageLimit" class="control" type="number" min="1" max="120" step="1">
+        <SettingsConfirmInput v-model.number="draft.contextMessageLimit" type="number" min="1" max="120" step="1" confirm-label="确认上下文消息数" />
       </label>
       <label class="field">
         <span class="field-label">输入防抖时间（秒）</span>
-        <input
+        <SettingsConfirmInput
           v-model.number="replyDebounceSeconds"
-          class="control"
           type="number"
           min="1"
           max="60"
           step="0.5"
           data-config-field="bot.replyDebounceMs"
-        >
+          confirm-label="确认输入防抖时间"
+        />
         <span class="text-xs leading-5 text-mute">同一发送者停止发送后开始回复</span>
       </label>
       <div class="grid gap-4 border-y border-line py-3 sm:col-span-2 sm:grid-cols-2 sm:items-center sm:gap-6">
         <ToggleSwitch v-model="draft.quoteGroupReplies" label="引用群聊消息" description="回复时引用触发消息" />
         <label class="field">
           <span class="field-label">过滤名单</span>
-          <input
+          <SettingsConfirmInput
             v-model="quoteFilter"
-            class="control"
             type="text"
             autocomplete="off"
             placeholder="123456789, 987654321"
-          >
+            confirm-label="确认过滤名单"
+          />
           <span class="text-xs leading-5 text-mute">回复这些 QQ 时不引用消息</span>
         </label>
       </div>
@@ -79,11 +80,11 @@ function split(value: string) {
     <div class="grid gap-5 sm:grid-cols-2">
       <label class="field">
         <span class="field-label">名称</span>
-        <input v-model="names" class="control" type="text" placeholder="普拉娜, Plana">
+        <SettingsConfirmInput v-model="names" type="text" placeholder="角色名, Agent 名" confirm-label="确认名称" />
       </label>
       <label class="field">
         <span class="field-label">命令前缀</span>
-        <input v-model="prefixes" class="control" type="text" placeholder="/, !">
+        <SettingsConfirmInput v-model="prefixes" type="text" placeholder="/, !" confirm-label="确认命令前缀" />
       </label>
     </div>
   </section>

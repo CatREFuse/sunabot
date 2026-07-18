@@ -17,6 +17,7 @@ const emit = defineEmits<{
 const keyInput = shallowRef("");
 const file = shallowRef<File | null>(null);
 const localError = shallowRef("");
+const dragging = shallowRef(false);
 const fileInput = useTemplateRef<HTMLInputElement>("fileInput");
 const fixedKey = computed(() => Boolean(props.emojiKey));
 const title = computed(() => fixedKey.value ? `替换“${props.emojiKey}”` : "新增表情");
@@ -41,6 +42,24 @@ function chooseFile() {
 function selected(event: Event) {
   const input = event.target as HTMLInputElement;
   file.value = input.files?.[0] ?? null;
+  localError.value = "";
+}
+
+function dragOver(event: DragEvent) {
+  if (!Array.from(event.dataTransfer?.types ?? []).includes("Files")) return;
+  event.preventDefault();
+  dragging.value = true;
+  if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+}
+
+function dragLeave() {
+  dragging.value = false;
+}
+
+function drop(event: DragEvent) {
+  event.preventDefault();
+  dragging.value = false;
+  file.value = event.dataTransfer?.files?.[0] ?? null;
   localError.value = "";
 }
 
@@ -83,7 +102,7 @@ function formatBytes(bytes: number) {
         </div>
         <div class="field">
           <span class="field-label">图片</span>
-          <button class="grid min-h-32 place-items-center border border-dashed border-visible bg-raised px-5 py-6 text-center transition-colors hover:border-display" type="button" :data-dialog-initial-focus="fixedKey ? '' : undefined" @click="chooseFile">
+          <button class="grid min-h-32 place-items-center border border-dashed bg-raised px-5 py-6 text-center transition-colors hover:border-display" :class="dragging ? 'border-display' : 'border-visible'" type="button" :data-dialog-initial-focus="fixedKey ? '' : undefined" @click="chooseFile" @dragover="dragOver" @dragleave="dragLeave" @drop="drop">
             <span v-if="file" class="min-w-0">
               <i class="bx bx-image text-3xl text-mute" aria-hidden="true"></i>
               <strong class="mt-3 block max-w-full truncate text-sm font-medium text-display">{{ file.name }}</strong>
@@ -91,7 +110,7 @@ function formatBytes(bytes: number) {
             </span>
             <span v-else>
               <i class="bx bx-upload text-3xl text-mute" aria-hidden="true"></i>
-              <strong class="mt-3 block text-sm font-medium text-display">选择 1:1 图片</strong>
+              <strong class="mt-3 block text-sm font-medium text-display">拖入或选择图片</strong>
               <span class="mt-1 block text-xs text-mute">PNG、JPEG、WebP</span>
             </span>
           </button>

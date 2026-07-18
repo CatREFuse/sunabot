@@ -21,6 +21,7 @@ import {
 import {
   assertStartupReportReady,
   bubblewrapProbeArguments,
+  nativeBashImageComposeArguments,
   shouldCleanupRemovedNapcatAccount,
   startupReportFailures
 } from "../../tooling/runtime/launcher.mjs";
@@ -41,6 +42,15 @@ describe("unified runtime launcher", () => {
     ]));
     expect(args.filter((argument) => argument === "--unshare-net")).toHaveLength(1);
     expect(args.indexOf("--unshare-net")).toBeLessThan(args.indexOf("--"));
+  });
+
+  it("prepares the dedicated Docker Bash image for Native Core startup", () => {
+    expect(nativeBashImageComposeArguments("/srv/sunabot")).toEqual([
+      "compose",
+      "-f", "/srv/sunabot/deploy/docker/compose.bash.yml",
+      "--profile", "build",
+      "build", "bash-image"
+    ]);
   });
 
   it("accepts a stable startup while leaving optional capabilities degraded", () => {

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import type { ModelCatalogItem } from "../../types";
+import SettingsConfirmInput from "./SettingsConfirmInput.vue";
 
 const model = defineModel<string>({ required: true });
 const props = defineProps<{ models: readonly ModelCatalogItem[]; label?: string }>();
@@ -29,7 +30,7 @@ const custom = computed(() => selection.value === "__custom__");
     </label>
     <label v-if="custom" class="field">
       <span class="sr-only">自定义模型 ID</span>
-      <input v-model.trim="model" class="control" type="text" autocomplete="off" placeholder="输入模型 ID" aria-label="自定义模型 ID">
+      <SettingsConfirmInput v-model.trim="model" type="text" autocomplete="off" placeholder="输入模型 ID" aria-label="自定义模型 ID" confirm-label="确认自定义模型 ID" />
     </label>
   </div>
 </template>

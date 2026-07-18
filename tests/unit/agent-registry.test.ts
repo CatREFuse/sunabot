@@ -488,7 +488,17 @@ describe("AgentRegistry", () => {
       const response = await app.inject({
         method: "POST",
         url: "/api/agents",
-        payload: { id: "arona", name: "阿罗娜" }
+        payload: {
+          id: "arona",
+          name: "阿罗娜",
+          import: {
+            source: "folder",
+            files: [{
+              path: "AGENTS.md",
+              dataBase64: Buffer.from("导入的人格文件。", "utf8").toString("base64")
+            }]
+          }
+        }
       });
 
       expect(response.statusCode).toBe(500);
@@ -502,6 +512,140 @@ describe("AgentRegistry", () => {
       ))).rejects.toMatchObject({ code: "ENOENT" });
       expect((await fs.readdir(path.join(testPaths.workspace, "business", "agents")))
         .some((entry) => entry.startsWith(".rollback-arona-"))).toBe(false);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("previews and creates an Agent from a validated folder while filling missing defaults", async () => {
+    const config = createAdminTestConfig(temporaryDirectory);
+    config.persona.agentWorkspace = path.join(testPaths.workspace, "business", "agents", "plana");
+    const registry = new AgentRegistry(config, {
+      workspaceRoot: path.join(testPaths.workspace, "business", "agents"),
+      store,
+      allowUnmarkedMigration: true
+    });
+    await registry.initialize();
+    const imported = {
+      source: "folder" as const,
+      files: [
+        {
+          path: "agent.json",
+          dataBase64: Buffer.from(JSON.stringify({
+            schemaVersion: 1,
+            id: "legacy-id",
+            name: "旧名称",
+            enabled: false,
+            bot: {
+              adminQq: "999999999",
+              adminName: "源管理员",
+              replyDebounceMs: 2_500,
+              unknownSecret: "discard-me",
+              tools: {
+                websearch: {
+                  tavilyApiKey: "source-secret",
+                  tavilyApiKeys: ["source-secret-2"],
+                  tavilyApiKeyEnv: "SOURCE_TAVILY_KEY"
+                }
+              }
+            },
+            onebot: { mentionNames: ["旧称"] }
+          })).toString("base64")
+        },
+        {
+          path: "AGENTS.md",
+          dataBase64: Buffer.from("导入的人格文件。", "utf8").toString("base64")
+        }
+      ]
+    };
+    const app = Fastify();
+    registerAgentRoutes(app, registry);
+
+    try {
+      const preview = await app.inject({
+        method: "POST",
+        url: "/api/agent-imports/preview",
+        payload: imported
+      });
+      expect(preview.statusCode).toBe(200);
+      expect(preview.json()).toMatchObject({
+        source: "folder",
+        included: ["AGENTS.md", "agent.json"]
+      });
+      expect(preview.json().missing).toContain("人格文件：SOUL.md");
+
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/agents",
+        payload: { id: "arona", name: "阿罗娜", import: imported }
+      });
+      expect(created.statusCode).toBe(200);
+      expect(created.json()).toMatchObject({ id: "arona", name: "阿罗娜", enabled: true });
+      await expect(fs.readFile(path.join(
+        testPaths.workspace,
+        "business",
+        "agents",
+        "arona",
+        "AGENTS.md"
+      ), "utf8")).resolves.toBe("导入的人格文件。");
+      await expect(fs.readFile(path.join(
+        testPaths.workspace,
+        "business",
+        "agents",
+        "arona",
+        "SOUL.md"
+      ), "utf8")).resolves.toContain("阿罗娜");
+      const manifest = await registry.manifest("arona");
+      expect(manifest).toMatchObject({
+        id: "arona",
+        name: "阿罗娜",
+        enabled: true,
+        bot: { replyDebounceMs: 2_500 },
+        onebot: { mentionNames: ["旧称"] }
+      });
+      expect(manifest.bot).not.toHaveProperty("unknownSecret");
+      expect(manifest.bot).toMatchObject({
+        adminQq: config.bot.adminQq,
+        adminName: config.bot.adminName,
+        tools: {
+          websearch: {
+            tavilyApiKey: "",
+            tavilyApiKeys: [],
+            tavilyApiKeyEnv: config.bot.tools.websearch.tavilyApiKeyEnv
+          }
+        }
+      });
+
+      const partialManifest = {
+        source: "folder" as const,
+        files: [{
+          path: "agent.json",
+          dataBase64: Buffer.from(JSON.stringify({ schemaVersion: 1 })).toString("base64")
+        }]
+      };
+      const partial = await app.inject({
+        method: "POST",
+        url: "/api/agents",
+        payload: { id: "hoshino", name: "星野", import: partialManifest }
+      });
+      expect(partial.statusCode).toBe(200);
+      const partialConfig = await registry.manifest("hoshino");
+      expect(partialConfig.bot.replyDebounceMs).toBe(config.bot.replyDebounceMs);
+      expect(partialConfig.onebot).toMatchObject({
+        autoReplyPrivate: config.onebot.autoReplyPrivate,
+        mentionNames: ["星野", "hoshino"]
+      });
+
+      const unsafe = await app.inject({
+        method: "POST",
+        url: "/api/agent-imports/preview",
+        payload: {
+          source: "folder",
+          files: [{ path: ".env", dataBase64: Buffer.from("TOKEN=secret").toString("base64") }]
+        }
+      });
+      expect(unsafe.statusCode).toBe(400);
+      expect(unsafe.json()).toMatchObject({ code: "AGENT_IMPORT_UNKNOWN_FILE" });
     } finally {
       await app.close();
     }

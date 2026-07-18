@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { modelCallMeasurement } from "../../src/modelCallStats.js";
 import type { ModelCallStore } from "./modelCallStore.js";
+import { migrateScheduledTaskTables } from "./scheduledTaskStore.js";
 
 type SqlRow = Record<string, unknown>;
 
@@ -70,6 +71,18 @@ export function migrateApplicationDataSchema(database: DatabaseSync, modelCalls:
       updated_at TEXT NOT NULL CHECK (length(trim(updated_at)) > 0)
     ) STRICT;
     CREATE INDEX IF NOT EXISTS emojis_updated_at ON emojis(updated_at DESC, emoji_key);
+    CREATE TABLE IF NOT EXISTS emoji_versions (
+      emoji_key TEXT NOT NULL REFERENCES emojis(emoji_key) ON UPDATE CASCADE ON DELETE CASCADE,
+      file_name TEXT NOT NULL CHECK (length(trim(file_name)) BETWEEN 1 AND 160),
+      source TEXT NOT NULL CHECK (source IN ('upload', 'generated')),
+      size_bytes INTEGER NOT NULL CHECK (size_bytes > 0),
+      width INTEGER NOT NULL CHECK (width > 0),
+      height INTEGER NOT NULL CHECK (height > 0),
+      created_at TEXT NOT NULL CHECK (length(trim(created_at)) > 0),
+      PRIMARY KEY (emoji_key, file_name)
+    ) STRICT;
+    CREATE INDEX IF NOT EXISTS emoji_versions_key_created_at
+      ON emoji_versions(emoji_key, created_at DESC, file_name);
     CREATE TABLE IF NOT EXISTS request_logs (
       row_id INTEGER PRIMARY KEY AUTOINCREMENT,
       id TEXT NOT NULL UNIQUE,
@@ -152,6 +165,8 @@ export function migrateApplicationDataSchema(database: DatabaseSync, modelCalls:
     CREATE INDEX IF NOT EXISTS agent_accounts_agent ON agent_accounts(agent_id, created_at, id);
   `);
 
+  migrateScheduledTaskTables(database);
+
   const rawVersion = Number(metadata(database, "storage-schema-version") ?? 0);
   const schemaVersion = Number.isSafeInteger(rawVersion) && rawVersion >= 0 ? rawVersion : 0;
   if (schemaVersion < 2) {
@@ -188,8 +203,20 @@ export function migrateApplicationDataSchema(database: DatabaseSync, modelCalls:
   if (schemaVersion < 9) setMetadata(database, "storage-schema-version", "9");
   modelCalls.repairModelAggregatesIfStale();
   const repairedVersion = Number(metadata(database, "storage-schema-version") ?? 0);
-  if (!Number.isSafeInteger(repairedVersion) || repairedVersion < 11) {
-    setMetadata(database, "storage-schema-version", "11");
+  if (!Number.isSafeInteger(repairedVersion) || repairedVersion < 12) {
+    transaction(database, () => {
+      database.exec(`
+        INSERT OR IGNORE INTO emoji_versions (
+          emoji_key, file_name, source, size_bytes, width, height, created_at
+        )
+        SELECT emoji_key, file_name, source, size_bytes, width, height, updated_at
+        FROM emojis
+      `);
+      setMetadata(database, "storage-schema-version", "12");
+    });
+  }
+  if (!Number.isSafeInteger(repairedVersion) || repairedVersion < 13) {
+    setMetadata(database, "storage-schema-version", "13");
   }
 }
 

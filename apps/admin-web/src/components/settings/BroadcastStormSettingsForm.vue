@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import ToggleSwitch from "../ui/ToggleSwitch.vue";
+import SettingsConfirmInput from "./SettingsConfirmInput.vue";
 import type { ConfigSectionValueMap } from "../../types";
 
 const draft = defineModel<ConfigSectionValueMap["broadcastStorm"]>({ required: true });
@@ -25,46 +26,46 @@ const additionalQqIds = computed({
     <fieldset class="grid gap-5 sm:grid-cols-3" :disabled="!draft.enabled">
       <label class="field">
         <span class="field-label">检测窗口（分钟）</span>
-        <input
+        <SettingsConfirmInput
           v-model.number="draft.windowMinutes"
-          class="control"
           type="number"
           min="1"
           max="1440"
           step="1"
-        >
+          confirm-label="确认检测窗口"
+        />
       </label>
       <label class="field">
         <span class="field-label">回复次数</span>
-        <input
+        <SettingsConfirmInput
           v-model.number="draft.replyThreshold"
-          class="control"
           type="number"
           min="1"
           max="100"
           step="1"
-        >
+          confirm-label="确认回复次数"
+        />
       </label>
       <label class="field">
         <span class="field-label">静默时长（分钟）</span>
-        <input
+        <SettingsConfirmInput
           v-model.number="draft.cooldownMinutes"
-          class="control"
           type="number"
           min="1"
           max="1440"
           step="1"
-        >
+          confirm-label="确认静默时长"
+        />
       </label>
       <label class="field sm:col-span-3">
         <span class="field-label">补充嗅探账号</span>
-        <input
+        <SettingsConfirmInput
           v-model="additionalQqIds"
-          class="control"
           type="text"
           autocomplete="off"
           placeholder="123456789, 987654321"
-        >
+          confirm-label="确认补充嗅探账号"
+        />
         <span class="text-xs leading-5 text-mute">用逗号或空格分隔 QQ</span>
       </label>
     </fieldset>

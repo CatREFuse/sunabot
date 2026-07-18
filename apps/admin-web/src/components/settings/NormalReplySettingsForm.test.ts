@@ -13,6 +13,7 @@ describe("NormalReplySettingsForm", () => {
     expect(input.element).toHaveProperty("value", "3");
 
     await input.setValue("6");
+    await wrapper.get('[data-confirm-label="确认失败重试次数"]').trigger("click");
 
     expect(modelValue.maxRetries).toBe(6);
   });

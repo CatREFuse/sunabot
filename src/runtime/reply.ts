@@ -65,12 +65,7 @@ import {
   type MemoryClaim,
   type MemoryQueuedMessage
 } from "../../services/memory/memoryScheduler.js";
-import {
-  OpenAIProvider,
-  type ProviderBashOptions,
-  type ProviderCompleteOptions,
-  type ProviderDeferredTurn
-} from "../../adapters/model/openaiProvider.js";
+import { OpenAIProvider, type ProviderBashOptions, type ProviderCompleteOptions, type ProviderDeferredTurn } from "../../adapters/model/openaiProvider.js";
 import type { ProviderLogContext } from "../../packages/contracts/model/modelGateway.js";
 import {
   inboundImageUrls,
@@ -142,12 +137,9 @@ import {
   runtime_resolveProviderBashHandle,
   runtime_selectRelevantAttachments
 } from "./replyContext.js";
-import {
-  ReplyDebounceContext,
-  resolveReplyContextCaptureSequence,
-  type ReplyDebounceContextOptions
-} from "./replyDebounceContext.js";
+import { ReplyDebounceContext, resolveReplyContextCaptureSequence, type ReplyDebounceContextOptions } from "./replyDebounceContext.js";
 import { runtime_replyToToolCompletion } from "./replyDebounceDispatch.js";
+import { sendRuntimeVoiceFinalReply, startRuntimeDeferredVoiceSynthesis } from "./voiceReply.js";
 import * as systemConfigReply from "./systemConfigReply.js";
 
 export { runtime_replyToToolCompletion };
@@ -307,11 +299,13 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
       const messages64 = this.buildRecentContextMessages(incoming, debounceContext.historyCaptureSequence, 64);
       const conversationMessages = this.buildRecentContextMessages(incoming, debounceContext.historyCaptureSequence), markerId = nanoid();
       const currentInputMarker = incoming.scope === "private" ? undefined : { start: `\uE000sunabot-current-input:${markerId}:start\uE001`, end: `\uE000sunabot-current-input:${markerId}:end\uE001` };
+      const voiceSnapshot = await this.voiceSnapshot();
       let promptRequest = await this.renderPromptRequest(promptId, {
         ...buildCommonPromptVariables(this.config, { scope: incoming.scope,
           userName: senderDisplayName(incoming.sender) || String(incoming.userId) }),
         ...buildConversationPromptVariables(this.config),
         ...emojiPromptVariables(this.config),
+        ...voiceSnapshot.variables,
         ...buildMemoryPromptVariables({ working: workingMemoryMatches,
           longTerm: longTermMemoryMatches, userProfile: currentUserProfileMemoryMatches }),
         "messages_64": messages64,
@@ -392,6 +386,7 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
           options.isCurrent,
           options.delivery
         ),
+        voice: this.voiceProviderCapability(voiceSnapshot.profile, incoming, gateway, options.delivery),
         bot: this.config.bot,
         disabledTools: this.conversationRecords.get(conversationRecordId(incoming))?.disabledTools,
         generateImage: (prompt, size, quality, referenceImageUrls, childLogContext) => provider.generateImage(
@@ -453,7 +448,7 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
           && toolCapabilities.codex,
         asyncImage: options.allowAsyncImage ?? true,
         imageTools: options.allowImageTools ?? true,
-        systemConfig: systemConfigLifecycle?.toolPort,
+        systemConfig: systemConfigLifecycle?.toolPort, cron: this.scheduledTasks.toolPort(incoming, isAdmin, options.promptOverride),
         skills: runtimeAgentExtensions?.skills,
         mcp: runtimeAgentExtensions?.mcp,
         logContext
@@ -520,6 +515,8 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
         return sent;
       }
       if (turn.kind === "deferred") {
+        void startRuntimeDeferredVoiceSynthesis(this, turn.voice,
+          { incoming, gateway, logRunId, isCurrent: options.isCurrent, delivery: options.delivery, signal: options.signal });
         const acknowledgement = turn.acknowledgement.trim();
         if (!acknowledgement) throw new Error("异步工具缺少 dispatch_message。");
         const preparedAcknowledgement = await prepareRuntimeEmojiText(acknowledgement, this.config,
@@ -558,15 +555,17 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
         });
         return sent;
       }
-      sent = await systemConfigReply.sendSystemConfigAwareFinalReply(this, {
+      const finalReply = {
         lifecycle: systemConfigLifecycle,
         channelKey, incoming, gateway, text: turn.text, isAdmin,
         generatedImages, logRunId, isCurrent: options.isCurrent,
         delivery: options.delivery,
         signal: options.signal,
-        messageOrigin: options.messageOrigin ?? "text",
+        messageOrigin: turn.messageOrigin ?? options.messageOrigin ?? "text",
         toolNames: turnToolNames
-      }) || sent;
+      };
+      sent = await (turn.voice ? sendRuntimeVoiceFinalReply(this, { ...finalReply, voice: turn.voice })
+        : systemConfigReply.sendSystemConfigAwareFinalReply(this, finalReply)) || sent;
       return sent;
     } catch (error) {
       systemConfigLifecycle?.discard();

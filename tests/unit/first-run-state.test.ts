@@ -168,6 +168,14 @@ describe("first-run bootstrap journal", () => {
       }
     },
     {
+      label: "future main schema version",
+      mutate(workspace: string) {
+        const database = new DatabaseSync(path.join(workspace, "business/data/sunabot.sqlite"));
+        database.prepare("UPDATE app_metadata SET value = '14' WHERE key = 'storage-schema-version'").run();
+        database.close();
+      }
+    },
+    {
       label: "missing main schema index",
       mutate(workspace: string) {
         const database = new DatabaseSync(path.join(workspace, "business/data/sunabot.sqlite"));
@@ -188,6 +196,30 @@ describe("first-run bootstrap journal", () => {
       mutate(workspace: string) {
         const database = new DatabaseSync(path.join(workspace, "business/data/sunabot.sqlite"));
         database.exec("DROP TABLE emojis");
+        database.close();
+      }
+    },
+    {
+      label: "missing emoji versions table",
+      mutate(workspace: string) {
+        const database = new DatabaseSync(path.join(workspace, "business/data/sunabot.sqlite"));
+        database.exec("DROP TABLE emoji_versions");
+        database.close();
+      }
+    },
+    {
+      label: "missing scheduled tasks table",
+      mutate(workspace: string) {
+        const database = new DatabaseSync(path.join(workspace, "business/data/sunabot.sqlite"));
+        database.exec("DROP TABLE scheduled_tasks");
+        database.close();
+      }
+    },
+    {
+      label: "missing scheduled task runs index",
+      mutate(workspace: string) {
+        const database = new DatabaseSync(path.join(workspace, "business/data/sunabot.sqlite"));
+        database.exec("DROP INDEX scheduled_task_runs_status");
         database.close();
       }
     },

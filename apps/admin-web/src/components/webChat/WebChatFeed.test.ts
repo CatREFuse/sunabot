@@ -40,4 +40,17 @@ describe("WebChatFeed", () => {
     await nextTick();
     expect(scrollTop).toBe(1_200);
   });
+
+  it("uses a generic assistant name when a message has no sender name", () => {
+    const wrapper = mount(WebChatFeed, {
+      props: {
+        messages: [{ id: "a1", role: "assistant", text: "我在。", at: "2026-07-12T00:00:01.000Z" }],
+        loading: false,
+        scrollRevision: 0
+      }
+    });
+
+    expect(wrapper.text()).toContain("助手");
+    expect(wrapper.text()).not.toContain("普拉娜");
+  });
 });

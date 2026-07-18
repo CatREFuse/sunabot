@@ -9,7 +9,7 @@ import {
 } from "../../../src/admin/emojiLibrary.js";
 import { AdminApiError, badRequest } from "../../../src/admin/errors.js";
 import type { SunaRuntime } from "../../../src/runtime.js";
-import type { AppConfig, ImageHistoryRecord, ImageResult } from "../../../src/types.js";
+import type { AppConfig, EmojiSendSize, ImageHistoryRecord, ImageResult } from "../../../src/types.js";
 import {
   emojiGenerationPrompt,
   isEmojiFileName,
@@ -29,6 +29,15 @@ const emojiParams = {
   properties: { key: { type: "string" } },
   additionalProperties: false
 } as const;
+const emojiVersionParams = {
+  type: "object",
+  required: ["key", "fileName"],
+  properties: {
+    key: { type: "string" },
+    fileName: { type: "string" }
+  },
+  additionalProperties: false
+} as const;
 
 export interface EmojiRouteOptions {
   repository: EmojiLibraryRepository;
@@ -37,6 +46,15 @@ export interface EmojiRouteOptions {
   runtime: SunaRuntime;
   getAgentContext?: (agentId: string) => { config: AppConfig; runtime: SunaRuntime };
   generationGate?: EmojiGenerationGate;
+  settings?: {
+    read(agentId: string): Promise<EmojiSettingsEnvelope>;
+    update(agentId: string, input: { sendSize: EmojiSendSize; revision: string }): Promise<EmojiSettingsEnvelope>;
+  };
+}
+
+interface EmojiSettingsEnvelope {
+  sendSize: EmojiSendSize;
+  revision: string;
 }
 
 export function registerEmojiRoutes(app: FastifyInstance, options: EmojiRouteOptions) {
@@ -45,7 +63,22 @@ export function registerEmojiRoutes(app: FastifyInstance, options: EmojiRouteOpt
     schema: { querystring: openObject, response: { 200: openObject } }
   }, async (request) => {
     const context = repositoryContext(options, request.query);
-    return withContentUrls(await context.repository.list(), context.agentId);
+    const [envelope, settings] = await Promise.all([
+      context.repository.list(),
+      readEmojiSettings(options, context.agentId)
+    ]);
+    return withContentUrls(envelope, context.agentId, settings);
+  });
+
+  app.patch("/api/emojis/settings", {
+    schema: { querystring: openObject, body: passthroughBody, response: { 200: openObject } }
+  }, async (request) => {
+    const context = repositoryContext(options, request.query);
+    if (!options.settings) {
+      throw new AdminApiError(409, "EMOJI_SETTINGS_UNAVAILABLE", "表情设置暂不可用。");
+    }
+    const settings = await options.settings.update(context.agentId, parseEmojiSettingsBody(request.body));
+    return withContentUrls(await context.repository.list(), context.agentId, settings);
   });
 
   app.post("/api/emojis", {
@@ -58,7 +91,7 @@ export function registerEmojiRoutes(app: FastifyInstance, options: EmojiRouteOpt
       reply,
       () => context.repository.upload(request.body)
     );
-    return withContentUrls(result, context.agentId);
+    return withContentUrls(result, context.agentId, await readEmojiSettings(options, context.agentId));
   });
 
   app.post("/api/emojis/generate", {
@@ -105,10 +138,52 @@ export function registerEmojiRoutes(app: FastifyInstance, options: EmojiRouteOpt
         () => repository.repository.bindGenerated(body.key, result)
       );
       saveGeneratedImageHistory(runtimeContext.config, provider.getModelInfo().imageModel, prompt, result);
-      return withContentUrls(envelope, repository.agentId);
+      return withContentUrls(envelope, repository.agentId, await readEmojiSettings(options, repository.agentId));
     } finally {
       admission.release();
     }
+  });
+
+  app.patch("/api/emojis/:key", {
+    schema: { params: emojiParams, querystring: openObject, body: passthroughBody, response: { 200: openObject } }
+  }, async (request) => {
+    const params = request.params as { key?: string };
+    const context = repositoryContext(options, request.query);
+    const envelope = await context.repository.rename(params.key ?? "", parseRenameBody(request.body));
+    return withContentUrls(envelope, context.agentId, await readEmojiSettings(options, context.agentId));
+  });
+
+  app.get("/api/emojis/:key/versions", {
+    schema: { params: emojiParams, querystring: openObject, response: { 200: openObject } }
+  }, async (request) => {
+    const params = request.params as { key?: string };
+    const context = repositoryContext(options, request.query);
+    const envelope = await context.repository.listVersions(params.key ?? "");
+    return withVersionContentUrls(envelope, context.agentId);
+  });
+
+  app.get("/api/emojis/:key/versions/:fileName/content", {
+    schema: { params: emojiVersionParams, querystring: openObject, response: { 200: passthroughBody } }
+  }, async (request, reply) => {
+    const params = request.params as { key?: string; fileName?: string };
+    const query = request.query as { variant?: string; agentId?: string };
+    const context = repositoryContext(options, query);
+    const content = await context.repository.versionContent(
+      params.key ?? "",
+      params.fileName ?? "",
+      parseVariant(query.variant)
+    );
+    setEmojiContentHeaders(reply, content.contentType);
+    return content.bytes;
+  });
+
+  app.delete("/api/emojis/:key/versions/:fileName", {
+    schema: { params: emojiVersionParams, querystring: openObject, response: { 204: { type: "null" } } }
+  }, async (request, reply) => {
+    const params = request.params as { key?: string; fileName?: string };
+    const context = repositoryContext(options, request.query);
+    await context.repository.removeVersion(params.key ?? "", params.fileName ?? "");
+    return reply.status(204).send();
   });
 
   app.get("/api/emojis/:key/content", {
@@ -122,10 +197,7 @@ export function registerEmojiRoutes(app: FastifyInstance, options: EmojiRouteOpt
       parseVariant(query.variant),
       parseContentVersion(query.v)
     );
-    reply.header("content-type", content.contentType);
-    reply.header("cache-control", "private, max-age=604800, immutable");
-    reply.header("vary", "Authorization");
-    reply.header("x-content-type-options", "nosniff");
+    setEmojiContentHeaders(reply, content.contentType);
     return content.bytes;
   });
 
@@ -166,9 +238,11 @@ function agentContext(options: EmojiRouteOptions, agentId: string) {
   return options.getAgentContext?.(agentId) ?? { config: options.getConfig(), runtime: options.runtime };
 }
 
-function withContentUrls(envelope: EmojiEnvelope, agentId: string) {
+function withContentUrls(envelope: EmojiEnvelope, agentId: string, settings: EmojiSettingsEnvelope) {
   return {
     presetKeys: envelope.presetKeys,
+    sendSize: settings.sendSize,
+    revision: settings.revision,
     emojis: envelope.emojis.map((emoji) => {
       const base = `/api/emojis/${encodeURIComponent(emoji.key)}/content`;
       const scope = `&agentId=${encodeURIComponent(agentId)}&v=${encodeURIComponent(emoji.fileName)}`;
@@ -180,6 +254,64 @@ function withContentUrls(envelope: EmojiEnvelope, agentId: string) {
       };
     })
   };
+}
+
+function withVersionContentUrls(
+  envelope: Awaited<ReturnType<EmojiLibraryRepository["listVersions"]>>,
+  agentId: string
+) {
+  return {
+    key: envelope.key,
+    versions: envelope.versions.map((version) => {
+      const base = `/api/emojis/${encodeURIComponent(envelope.key)}/versions/${encodeURIComponent(version.fileName)}/content`;
+      const scope = `&agentId=${encodeURIComponent(agentId)}`;
+      return {
+        ...version,
+        originalUrl: `${base}?variant=original${scope}`,
+        displayUrl: `${base}?variant=display${scope}`,
+        placeholderUrl: `${base}?variant=placeholder${scope}`
+      };
+    })
+  };
+}
+
+function setEmojiContentHeaders(reply: FastifyReply, contentType: string) {
+  reply.header("content-type", contentType);
+  reply.header("cache-control", "private, max-age=604800, immutable");
+  reply.header("vary", "Authorization");
+  reply.header("x-content-type-options", "nosniff");
+}
+
+async function readEmojiSettings(options: EmojiRouteOptions, agentId: string): Promise<EmojiSettingsEnvelope> {
+  if (options.settings) return options.settings.read(agentId);
+  const config = agentContext(options, agentId).config;
+  return { sendSize: config.bot.emojiSendSize, revision: "" };
+}
+
+function parseEmojiSettingsBody(input: unknown): { sendSize: EmojiSendSize; revision: string } {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    badRequest("EMOJI_SETTINGS_INVALID", "表情设置无效。");
+  }
+  const body = input as Record<string, unknown>;
+  const extra = Object.keys(body).find((key) => key !== "sendSize" && key !== "revision");
+  if (extra || typeof body.revision !== "string" || !body.revision.trim()) {
+    badRequest("EMOJI_SETTINGS_INVALID", "表情设置无效。", extra ?? "revision");
+  }
+  const sendSize = body.sendSize;
+  if (sendSize !== 64 && sendSize !== 128 && sendSize !== 256 && sendSize !== 512 && sendSize !== 1024) {
+    badRequest("EMOJI_SETTINGS_INVALID", "表情发送尺寸无效。", "sendSize");
+  }
+  return { sendSize, revision: body.revision };
+}
+
+function parseRenameBody(input: unknown) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    badRequest("EMOJI_RENAME_INVALID", "表情 key 无效。");
+  }
+  const body = input as Record<string, unknown>;
+  const extra = Object.keys(body).find((key) => key !== "key");
+  if (extra) badRequest("EMOJI_RENAME_INVALID", "包含不支持的字段。", extra);
+  return requireSafeEmojiKey(body.key);
 }
 
 function parseGenerateBody(input: unknown) {

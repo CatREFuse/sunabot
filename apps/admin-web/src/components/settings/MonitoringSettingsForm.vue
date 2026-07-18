@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, shallowRef, toRaw, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, shallowRef, toRaw } from "vue";
 import { apiRequest } from "../../composables/useAdminApi";
 import ToggleSwitch from "../ui/ToggleSwitch.vue";
+import SettingsConfirmInput from "./SettingsConfirmInput.vue";
 
 interface MonitoringSettings {
   barkConfigured: boolean;
@@ -27,10 +28,7 @@ const message = shallowRef("");
 const error = shallowRef("");
 let baseline = snapshot();
 let loaded = false;
-let suppressWatch = false;
-let changeVersion = 0;
 let pending = false;
-let timer: ReturnType<typeof setTimeout> | undefined;
 let savePromise: Promise<void> | undefined;
 const controller = new AbortController();
 const barkPlaceholder = computed(() => configured.value
@@ -39,12 +37,6 @@ const barkPlaceholder = computed(() => configured.value
 
 onMounted(() => void load());
 onBeforeUnmount(cancel);
-
-watch(form, () => {
-  if (!loaded || suppressWatch) return;
-  changeVersion += 1;
-  schedule();
-}, { deep: true, flush: "sync" });
 
 async function load() {
   try {
@@ -56,15 +48,11 @@ async function load() {
   }
 }
 
-function schedule() {
+function commit() {
+  if (!loaded || !isDirty()) return Promise.resolve();
   pending = true;
-  message.value = "等待同步";
   error.value = "";
-  if (timer) clearTimeout(timer);
-  timer = setTimeout(() => {
-    timer = undefined;
-    void drain();
-  }, 350);
+  return drain();
 }
 
 function drain() {
@@ -81,8 +69,6 @@ async function savePending() {
     pending = false;
     if (!isDirty()) continue;
     const submitted = snapshot();
-    const submittedVersion = changeVersion;
-    message.value = "正在同步";
     error.value = "";
     try {
       const result = await apiRequest<MonitoringSettings>("/api/monitoring/settings", {
@@ -92,28 +78,22 @@ async function savePending() {
       });
       baseline = baselineFrom(result);
       configured.value = result.barkConfigured;
-      if (submittedVersion === changeVersion) apply(result);
-      message.value = submittedVersion === changeVersion ? "已同步" : "正在同步后续修改";
+      if (JSON.stringify(snapshot()) === JSON.stringify(submitted)) apply(result);
     } catch (reason) {
       if (reason instanceof DOMException && reason.name === "AbortError") return;
-      error.value = errorMessage(reason, "同步监控设置失败");
-      message.value = "";
+      error.value = errorMessage(reason, "保存监控设置失败");
     }
   }
 }
 
 async function flush() {
   if (!loaded) return true;
-  if (timer) clearTimeout(timer);
-  timer = undefined;
   if (isDirty()) pending = true;
   await drain();
   return !isDirty();
 }
 
 function cancel() {
-  if (timer) clearTimeout(timer);
-  timer = undefined;
   pending = false;
   controller.abort();
 }
@@ -132,20 +112,19 @@ async function testNotification() {
 }
 
 function apply(settings: MonitoringSettings) {
-  suppressWatch = true;
-  try {
-    configured.value = settings.barkConfigured;
-    form.barkUrl = "";
-    form.clearBarkUrl = false;
-    form.aggregationWindowSeconds = settings.aggregationWindowSeconds;
-    form.onebotOfflineGraceSeconds = settings.onebotOfflineGraceSeconds;
-    form.heartbeatStaleSeconds = settings.heartbeatStaleSeconds;
-    form.serverEventsEnabled = settings.serverEventsEnabled;
-    form.onebotEventsEnabled = settings.onebotEventsEnabled;
-    baseline = snapshot();
-  } finally {
-    suppressWatch = false;
-  }
+  configured.value = settings.barkConfigured;
+  form.barkUrl = "";
+  form.clearBarkUrl = false;
+  form.aggregationWindowSeconds = settings.aggregationWindowSeconds;
+  form.onebotOfflineGraceSeconds = settings.onebotOfflineGraceSeconds;
+  form.heartbeatStaleSeconds = settings.heartbeatStaleSeconds;
+  form.serverEventsEnabled = settings.serverEventsEnabled;
+  form.onebotEventsEnabled = settings.onebotEventsEnabled;
+  baseline = snapshot();
+}
+
+function handleChange(event: Event) {
+  if (event.target instanceof HTMLInputElement && event.target.type === "checkbox") void commit();
 }
 
 function baselineFrom(settings: MonitoringSettings) {
@@ -176,7 +155,7 @@ defineExpose({ flush, cancel });
 </script>
 
 <template>
-  <section class="grid gap-8">
+  <section class="grid gap-8" @change="handleChange">
     <div class="flex flex-wrap items-start justify-between gap-4">
       <div>
         <h2 class="section-title">通知与连接监控</h2>
@@ -188,19 +167,19 @@ defineExpose({ flush, cancel });
     <div class="grid gap-5 sm:grid-cols-2">
       <label class="field sm:col-span-2">
         <span class="field-label">Bark URL</span>
-        <input v-model.trim="form.barkUrl" class="control" type="password" autocomplete="new-password" :placeholder="barkPlaceholder">
+        <SettingsConfirmInput v-model.trim="form.barkUrl" type="password" autocomplete="new-password" :placeholder="barkPlaceholder" confirm-label="确认 Bark URL" @confirm="commit" />
       </label>
       <label class="field">
         <span class="field-label">聚合窗口（秒）</span>
-        <input v-model.number="form.aggregationWindowSeconds" class="control" type="number" min="5" max="600">
+        <SettingsConfirmInput v-model.number="form.aggregationWindowSeconds" type="number" min="5" max="600" confirm-label="确认聚合窗口" @confirm="commit" />
       </label>
       <label class="field">
         <span class="field-label">断线宽限（秒）</span>
-        <input v-model.number="form.onebotOfflineGraceSeconds" class="control" type="number" min="0" max="600">
+        <SettingsConfirmInput v-model.number="form.onebotOfflineGraceSeconds" type="number" min="0" max="600" confirm-label="确认断线宽限" @confirm="commit" />
       </label>
       <label class="field">
         <span class="field-label">心跳超时（秒）</span>
-        <input v-model.number="form.heartbeatStaleSeconds" class="control" type="number" min="30" max="3600">
+        <SettingsConfirmInput v-model.number="form.heartbeatStaleSeconds" type="number" min="30" max="3600" confirm-label="确认心跳超时" @confirm="commit" />
       </label>
       <label class="flex items-center gap-2 self-end pb-3 text-sm text-mute">
         <input v-model="form.clearBarkUrl" type="checkbox">
@@ -213,8 +192,11 @@ defineExpose({ flush, cancel });
       <ToggleSwitch v-model="form.serverEventsEnabled" label="服务运行状态" description="服务启动、停止或发生异常时提醒。" />
     </div>
 
-    <p v-if="error" class="inline-state" data-kind="error">{{ error }}</p>
-    <p v-else class="inline-state" :data-kind="message === '已同步' ? 'success' : undefined">{{ message || "已同步" }}</p>
+    <div v-if="error" class="flex flex-wrap items-center gap-3">
+      <p class="inline-state" data-kind="error">{{ error }}</p>
+      <button class="btn btn-ghost" type="button" @click="commit">重试</button>
+    </div>
+    <p v-else-if="message" class="inline-state" data-kind="success">{{ message }}</p>
     <div class="flex flex-wrap gap-2">
       <button class="btn btn-ghost" type="button" :disabled="testing || !configured" @click="testNotification">发送测试通知</button>
     </div>

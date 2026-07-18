@@ -25,6 +25,7 @@ const allFiles: AgentFileSummary[] = [
   file("memory.user-profile", "用户画像", "memory", "user_profile_prompt.json", "final"),
   file("orchestrator.user-group", "用户群聊编排器", "orchestrator", "user_groupchat_orchestrator.json", "final"),
   file("conversation.group-summary", "群聊摘要", "conversation", "group_chat_summary.json", "final"),
+  file("scheduler.cron-callback", "定时任务回调", "调度", "cron_callback.json", "final"),
   file("image.selfie-rewrite", "自拍提示词改写", "image", "selfie_prompt_rewrite.json", "final")
 ];
 

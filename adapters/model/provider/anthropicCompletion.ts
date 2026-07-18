@@ -88,6 +88,8 @@ export async function completeAnthropicMessages(
       return { kind: "completed", text };
     }
 
+    const companion = context.toolExecutor.companionTurn(calls, text, options, definitions, state);
+    if (companion) return companion;
     const preflight = preflightProviderToolResponse(calls, text, options, state);
     if (!preflight.rejected) {
       const deferred = context.toolExecutor.deferredTurn(calls, options, definitions, state);

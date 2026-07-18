@@ -3,7 +3,7 @@ import type { AgentFileRepository } from "../../../src/admin/agentFiles.js";
 import type { AppConfig } from "../../../src/types.js";
 import { parseFinalPromptTemplate } from "../../../services/agent/promptSystem.js";
 import { promptDefinitionById } from "../../../services/agent/promptCatalog.js";
-import { listToolMetadata, type ToolMetadata } from "../../../services/tools/toolRegistry.js";
+import { listToolMetadata, type ToolAvailability, type ToolMetadata } from "../../../services/tools/toolRegistry.js";
 import {
   UNAVAILABLE_SKILL_TOOL_CAPABILITIES,
   type SkillToolCapabilitySnapshot
@@ -19,6 +19,7 @@ export interface AgentToolRouteOptions {
   agentFiles: AgentFileRepository;
   resolveToolCapabilities: RuntimeToolCapabilitySnapshotResolver;
   resolveConversationAssetCapability?: () => boolean | Promise<boolean>;
+  resolveVoiceCapability?: () => AgentVoiceCapability | Promise<AgentVoiceCapability>;
   resolveSkillToolCapabilities?: () => SkillToolCapabilitySnapshot | Promise<SkillToolCapabilitySnapshot>;
   getConfig: () => AppConfig;
   getAgentContext?: (agentId: string) => {
@@ -26,9 +27,18 @@ export interface AgentToolRouteOptions {
     agentFiles: AgentFileRepository;
     resolveToolCapabilities: RuntimeToolCapabilitySnapshotResolver;
     resolveConversationAssetCapability?: () => boolean | Promise<boolean>;
+    resolveVoiceCapability?: () => AgentVoiceCapability | Promise<AgentVoiceCapability>;
     resolveSkillToolCapabilities?: () => SkillToolCapabilitySnapshot | Promise<SkillToolCapabilitySnapshot>;
   };
 }
+
+export type AgentVoiceCapability = NonNullable<ToolAvailability["voice"]>;
+
+const UNAVAILABLE_VOICE_CAPABILITY: AgentVoiceCapability = {
+  enabled: false,
+  languages: [],
+  defaultLanguage: "ja"
+};
 
 const openObject = { type: "object", additionalProperties: true } as const;
 const passthroughBody = {} as const;
@@ -45,6 +55,7 @@ export function registerAgentToolRoutes(app: FastifyInstance, options: AgentTool
     agentFiles: options.agentFiles,
     resolveToolCapabilities: options.resolveToolCapabilities,
     resolveConversationAssetCapability: options.resolveConversationAssetCapability,
+    resolveVoiceCapability: options.resolveVoiceCapability,
     resolveSkillToolCapabilities: options.resolveSkillToolCapabilities
   };
   app.get("/api/agent-files", {
@@ -119,6 +130,12 @@ export function registerAgentToolRoutes(app: FastifyInstance, options: AgentTool
     } catch {
       conversationAssetsAvailable = false;
     }
+    let voiceCapability = UNAVAILABLE_VOICE_CAPABILITY;
+    try {
+      voiceCapability = await context.resolveVoiceCapability?.() ?? UNAVAILABLE_VOICE_CAPABILITY;
+    } catch {
+      voiceCapability = UNAVAILABLE_VOICE_CAPABILITY;
+    }
     const tools = listToolMetadata({
       onAssistantText: () => undefined,
       allowNoReply: true,
@@ -126,6 +143,7 @@ export function registerAgentToolRoutes(app: FastifyInstance, options: AgentTool
       bot: config.bot,
       selfie: { enabled: true },
       conversationAssets: { enabled: conversationAssetsAvailable },
+      voice: voiceCapability,
       memory: { enabled: true },
       asyncCodex: capabilities.codex,
       asyncImage: true,
@@ -170,17 +188,13 @@ function bashCatalogMetadata(
 ): ToolMetadata {
   if (tool.name !== "workspace_bash") return tool;
   const backend = config.bot.bash.adminPrivateBackend;
-  const privateAvailable = config.bot.bash.adminOnly && privateCapabilities.workspaceBash;
-  const groupAvailable = config.bot.bash.adminOnly
+  const privateReady = config.bot.bash.adminOnly && privateCapabilities.workspaceBash;
+  const groupReady = config.bot.bash.adminOnly
     && config.bot.bash.allowGroup
     && groupCapabilities?.workspaceBash === true;
-  const accessLabel = privateAvailable && groupAvailable
-    ? "管理员 QQ 私聊与群聊可用"
-    : privateAvailable
-      ? "管理员 QQ 私聊可用"
-      : groupAvailable
-        ? "管理员 QQ 群聊可用"
-        : "当前没有可用会话";
+  const accessLabel = config.bot.bash.allowGroup
+    ? "管理员 QQ 私聊与群聊"
+    : "仅管理员 QQ 私聊";
   const reasonCode = privateCapabilities.workspaceBashReason
     ?? (backend === "native" ? "BASH_NATIVE_ISOLATION_UNAVAILABLE" : "BASH_DOCKER_ISOLATION_UNAVAILABLE");
   if (!config.bot.bash.adminOnly) {
@@ -196,9 +210,9 @@ function bashCatalogMetadata(
   return {
     ...tool,
     accessLabel,
-    accessDescription: bashAccessDescription(config, privateAvailable, groupAvailable),
+    accessDescription: bashAccessDescription(config),
     executionBackend: backend,
-    ...(privateAvailable || groupAvailable ? {} : {
+    ...(privateReady || groupReady ? {} : {
       unavailabilityKind: "runtime" as const,
       runtimeReasonCode: reasonCode,
       availabilityReason: bashUnavailableMessage(
@@ -209,16 +223,12 @@ function bashCatalogMetadata(
   };
 }
 
-function bashAccessDescription(config: AppConfig, privateAvailable: boolean, groupAvailable: boolean) {
+function bashAccessDescription(config: AppConfig) {
   const details = [
-    privateAvailable
-      ? `私聊使用${config.bot.bash.adminPrivateBackend === "docker" ? " Docker" : " Native"} 后端。`
-      : "管理员私聊的所选后端当前不可用。",
+    `管理员私聊使用${config.bot.bash.adminPrivateBackend === "docker" ? " Docker" : " Native"} 后端。`,
     config.bot.bash.allowGroup
-      ? groupAvailable
-        ? "群聊固定使用 Docker 受限模式。"
-        : "管理员群聊已开启，但 Docker 受限模式当前不可用。"
-      : "群聊未开启。",
+      ? "管理员群聊固定使用 Docker 受限模式。"
+      : "管理员群聊未启用。",
     "Web Chat 和普通用户不可用。"
   ];
   return details.join("");

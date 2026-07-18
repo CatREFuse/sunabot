@@ -118,6 +118,8 @@ import { RuntimeSelfie } from "./runtime/selfie.js";
 import { RuntimeGroupThreads } from "./runtime/groupThreadPipeline.js";
 import { RuntimeReplyDebounce } from "./runtime/replyDebounce.js";
 import { RuntimeConversationAssets } from "./runtime/conversationAssets.js";
+import { RuntimeScheduledTasks } from "./runtime/scheduledTasks.js";
+import { RuntimeVoice } from "./runtime/voice.js";
 import { RuntimeTone } from "./runtime/tone.js";
 import { TaskLimiter, errorMessage, loadConversationRecords } from "./runtime/infrastructure.js";
 import type {
@@ -167,6 +169,7 @@ export class SunaRuntime {
   readonly sessionStore: SessionStore;
   readonly ownsSessionStore: boolean;
   readonly sessionCoordinator: SessionCoordinator;
+  readonly scheduledTasks: RuntimeScheduledTasks;
   readonly bashAudit?: RuntimeBashAuditPort;
   private readonly rawToolCapabilityResolver?: RuntimeToolCapabilityResolver;
   readonly systemConfig?: SystemConfigRuntimePort;
@@ -189,6 +192,7 @@ export class SunaRuntime {
   private readonly groupThreads: RuntimeGroupThreads;
   private readonly replyDebounce: RuntimeReplyDebounce;
   private readonly conversationAssets: RuntimeConversationAssets;
+  private readonly voice: RuntimeVoice;
   constructor(config: AppConfig, options: SunaRuntimeOptions = {}) {
       configureMemoryPersistence(sqliteMemoryPersistence);
       this.config = config;
@@ -258,6 +262,7 @@ export class SunaRuntime {
         isDisconnectedError: (error) => error instanceof OutboxDisconnectedError ||
           /OneBot is not connected|websocket.*closed/i.test(errorMessage(error))
       });
+      this.scheduledTasks = new RuntimeScheduledTasks(this);
       this.commandRouter = new CommandRouter<RuntimeCommandContext>([
         {
           id: "group-summary",
@@ -298,6 +303,7 @@ export class SunaRuntime {
         optionalNonNegativeReplyDebounceMs(options.replyDebounceMs)
       );
       this.conversationAssets = new RuntimeConversationAssets(this);
+      this.voice = new RuntimeVoice(this, options.voice);
   }
   private inAgentContext<T>(operation: () => T): T { return runWithAgentRuntimeContext(this.config, operation); }
   initialize(...args: Parameters<RuntimeLifecycle["initialize"]>) { return this.inAgentContext(() => this.lifecycle.initialize(...args)); }
@@ -318,6 +324,11 @@ export class SunaRuntime {
   renderPromptRequest(...args: Parameters<RuntimeLifecycle["renderPromptRequest"]>) { return this.lifecycle.renderPromptRequest(...args); }
   completePrompt(...args: Parameters<RuntimeLifecycle["completePrompt"]>) { return this.lifecycle.completePrompt(...args); }
   completePromptTurn(...args: Parameters<RuntimeLifecycle["completePromptTurn"]>) { return this.lifecycle.completePromptTurn(...args); }
+  listScheduledTasks(...args: Parameters<RuntimeScheduledTasks["listScheduledTasks"]>) { return this.scheduledTasks.listScheduledTasks(...args); }
+  getScheduledTask(...args: Parameters<RuntimeScheduledTasks["getScheduledTask"]>) { return this.scheduledTasks.getScheduledTask(...args); }
+  createScheduledTask(...args: Parameters<RuntimeScheduledTasks["createScheduledTask"]>) { return this.inAgentContext(() => this.scheduledTasks.createScheduledTask(...args)); }
+  updateScheduledTask(...args: Parameters<RuntimeScheduledTasks["updateScheduledTask"]>) { return this.inAgentContext(() => this.scheduledTasks.updateScheduledTask(...args)); }
+  deleteScheduledTask(...args: Parameters<RuntimeScheduledTasks["deleteScheduledTask"]>) { return this.inAgentContext(() => this.scheduledTasks.deleteScheduledTask(...args)); }
   getConversationRecords(...args: Parameters<RuntimeLifecycle["getConversationRecords"]>) { return this.lifecycle.getConversationRecords(...args); }
   publicConversationRecord(...args: Parameters<RuntimeLifecycle["publicConversationRecord"]>) { return this.lifecycle.publicConversationRecord(...args); }
   getConversationMessages(...args: Parameters<RuntimeLifecycle["getConversationMessages"]>) { return this.lifecycle.getConversationMessages(...args); }
@@ -337,6 +348,9 @@ export class SunaRuntime {
   conversationAssetProviderOptions(...args: Parameters<RuntimeConversationAssets["providerOptions"]>) { return this.conversationAssets.providerOptions(...args); }
   queueConversationAsset(...args: Parameters<RuntimeConversationAssets["queue"]>) { return this.inAgentContext(() => this.conversationAssets.queue(...args)); }
   deliverConversationAssetOutbox(...args: Parameters<RuntimeConversationAssets["deliver"]>) { return this.inAgentContext(() => this.conversationAssets.deliver(...args)); }
+  voiceSnapshot(...args: Parameters<RuntimeVoice["snapshot"]>) { return this.inAgentContext(() => this.voice.snapshot(...args)); }
+  voiceProviderCapability(...args: Parameters<RuntimeVoice["providerCapability"]>) { return this.voice.providerCapability(...args); }
+  synthesizeAndQueueVoice(...args: Parameters<RuntimeVoice["synthesizeAndQueue"]>) { return this.inAgentContext(() => this.voice.synthesizeAndQueue(...args)); }
   requireActiveGateway(...args: Parameters<RuntimeIntake["requireActiveGateway"]>) { return this.intake.requireActiveGateway(...args); }
   handleIncomingMessage(...args: Parameters<RuntimeIntake["handleIncomingMessage"]>) { return this.inAgentContext(() => this.intake.handleIncomingMessage(...args)); }
   prepareIncomingMessage(...args: Parameters<RuntimeIntake["prepareIncomingMessage"]>) { return this.intake.prepareIncomingMessage(...args); }

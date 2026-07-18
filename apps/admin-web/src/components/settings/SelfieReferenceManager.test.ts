@@ -1,7 +1,7 @@
 import { mount } from "@vue/test-utils";
 import { describe, expect, it } from "vitest";
 import type { SelfieReferenceImage } from "../../types";
-import SelfieReferenceDialog from "./SelfieReferenceDialog.vue";
+import SelfieReferenceManager from "./SelfieReferenceManager.vue";
 
 const image: SelfieReferenceImage = {
   id: "a".repeat(64),
@@ -16,10 +16,9 @@ const image: SelfieReferenceImage = {
   placeholderUrl: "/api/selfie-references/plana.png/content?variant=placeholder"
 };
 
-function mountDialog() {
-  return mount(SelfieReferenceDialog, {
+function mountManager() {
+  return mount(SelfieReferenceManager, {
     props: {
-      open: true,
       images: [image],
       maxImages: 9,
       loading: false,
@@ -32,14 +31,17 @@ function mountDialog() {
   });
 }
 
-describe("SelfieReferenceDialog", () => {
-  it("collects a required note for every selected file before upload", async () => {
-    const wrapper = mountDialog();
+describe("SelfieReferenceManager", () => {
+  it("shows the compact catalog and collects a required note for every selected file", async () => {
+    const wrapper = mountManager();
+    expect(wrapper.get('section[aria-labelledby="selfie-reference-title"]').classes()).toContain("border-t");
+    expect(wrapper.text()).toContain("素材库最多 9 张，每次自拍选用 1–3 张");
+    expect(wrapper.text()).not.toContain("管理参考图");
+
     const input = wrapper.get('input[type="file"]');
     const first = new File(["one"], "swimsuit.png", { type: "image/png" });
     const second = new File(["two"], "maid.png", { type: "image/png" });
     Object.defineProperty(input.element, "files", { configurable: true, value: [first, second] });
-
     await input.trigger("change");
 
     expect(wrapper.emitted("upload")).toBeUndefined();
@@ -54,34 +56,22 @@ describe("SelfieReferenceDialog", () => {
     expect((input.element as HTMLInputElement).value).toBe("");
   });
 
-  it("shows the nine-item catalog boundary and emits note edits", async () => {
-    const wrapper = mountDialog();
-    expect(wrapper.text()).toContain("素材库最多 9 张，每次自拍选用 1–3 张");
-    expect(wrapper.text()).toContain("日常服");
-
+  it("emits note edits and preserves the draft when saving fails", async () => {
+    const wrapper = mountManager();
     await wrapper.get('button[aria-label="编辑备注 日常服"]').trigger("click");
     const note = wrapper.get('input[aria-label="plana.png 的备注"]');
     expect((note.element as HTMLInputElement).value).toBe("日常服");
-    await note.setValue("女仆装");
-    await wrapper.get("#selfie-note-form").trigger("submit");
-
-    expect(wrapper.emitted("updateNote")?.[0]).toEqual([image.id, "女仆装"]);
-  });
-
-  it("keeps the edited note available when saving fails", async () => {
-    const wrapper = mountDialog();
-    await wrapper.get('button[aria-label="编辑备注 日常服"]').trigger("click");
-    const note = wrapper.get('input[aria-label="plana.png 的备注"]');
     await note.setValue("泳装");
     await wrapper.get("#selfie-note-form").trigger("submit");
-    await wrapper.setProps({ status: { kind: "error", message: "备注保存失败" } });
 
+    expect(wrapper.emitted("updateNote")?.[0]).toEqual([image.id, "泳装"]);
+    await wrapper.setProps({ status: { kind: "error", message: "备注保存失败" } });
     expect(wrapper.get('input[aria-label="plana.png 的备注"]').element).toHaveProperty("value", "泳装");
     expect(wrapper.text()).toContain("备注保存失败");
   });
 
-  it("opens the original only after preview is requested", async () => {
-    const wrapper = mountDialog();
+  it("loads the original only after preview is requested", async () => {
+    const wrapper = mountManager();
     expect(wrapper.find(`img[src="${image.originalUrl}"]`).exists()).toBe(false);
 
     await wrapper.get(`button[aria-label="查看原图 ${image.note}"]`).trigger("click");
@@ -90,7 +80,7 @@ describe("SelfieReferenceDialog", () => {
   });
 
   it("confirms deletion before emitting remove", async () => {
-    const wrapper = mountDialog();
+    const wrapper = mountManager();
     await wrapper.get(`button[aria-label="删除 ${image.note}"]`).trigger("click");
     expect(wrapper.text()).toContain("删除这张参考图？");
 

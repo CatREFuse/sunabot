@@ -32,8 +32,8 @@ const qq = computed(() => orchestratorDecision.value
   : messageQq(props.message, props.conversation));
 const nickname = computed(() => props.message.senderNickname?.trim() ?? "");
 const card = computed(() => props.message.senderCard?.trim() ?? "");
-const roleName = computed(() => props.message.role === "assistant" ? "普拉娜" : props.message.role === "event" ? "系统" : "用户");
-const displayName = computed(() => card.value || nickname.value || props.message.senderName?.trim() || (orchestratorDecision.value ? "普拉娜" : roleName.value));
+const roleName = computed(() => props.message.role === "assistant" ? "助手" : props.message.role === "event" ? "系统" : "用户");
+const displayName = computed(() => card.value || nickname.value || props.message.senderName?.trim() || (orchestratorDecision.value ? "助手" : roleName.value));
 const identityDetails = computed(() => {
   const seen = new Set([identityKey(displayName.value)]);
   return [

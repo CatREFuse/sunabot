@@ -70,6 +70,7 @@ beforeAll(async () => {
   const { createAdminTestConfig } = await import("./admin-fixtures.js");
 
   config = createAdminTestConfig(path.join(temporaryDirectory, "runtime"));
+  config.bot.emojiSendSize = 1024;
   config.persona.defaultAgentId = "koharu";
   config.persona.name = "小春";
   config.persona.agentWorkspace = path.join(workspaceDirectory, "business", "agents", "koharu");
@@ -162,8 +163,12 @@ describe("emoji durable delivery chain", () => {
     const rewriteToneText = vi.fn(async (value: string) => value
       .replace("正在处理", "正在认真处理")
       .replace("很快回来", "马上回来"));
+    const deliveryConfig: AppConfig = {
+      ...config,
+      bot: { ...config.bot, emojiSendSize: 256 }
+    };
     const host = {
-      config,
+      config: deliveryConfig,
       isReplySenderAllowed: () => true,
       hooks,
       rewriteToneText,
@@ -210,8 +215,13 @@ describe("emoji durable delivery chain", () => {
         { type: "image", imageIndex: 0 },
         { type: "text", text: "马上回来" }
       ],
-      generatedImages: [{ filePath: imagePath }]
+      generatedImages: [{ filePath: expect.stringMatching(/emoji-[a-f0-9]{64}\.png$/u) }]
     });
+    const resizedPath = draft.payload.payload.generatedImages[0]?.filePath;
+    expect(resizedPath).toBeTruthy();
+    expect(resizedPath).not.toBe(imagePath);
+    const resizedBytes = await fs.readFile(resizedPath!);
+    await expect(sharp(resizedBytes).metadata()).resolves.toMatchObject({ width: 256, height: 256, format: "png" });
 
     const databasePath = path.join(temporaryDirectory, "session-queue.sqlite");
     const before = new SessionStore({ databasePath });
@@ -250,7 +260,7 @@ describe("emoji durable delivery chain", () => {
     const server = http.createServer();
     const gateway = new OneBotGateway(
       server,
-      config,
+      deliveryConfig,
       { handleInboundMessage: vi.fn(async () => undefined) },
       {
         outboundMedia: new OutboundMediaDelivery({
@@ -274,7 +284,7 @@ describe("emoji durable delivery chain", () => {
     }>;
     expect(message.map((segment) => segment.type)).toEqual(["text", "image", "text"]);
     expect(message[0]?.data.text).toBe("正在认真处理");
-    expect(message[1]?.data.file).toBe(`base64://${imageBytes.toString("base64")}`);
+    expect(message[1]?.data.file).toBe(`base64://${resizedBytes.toString("base64")}`);
     expect(message[2]?.data.text).toBe("马上回来");
     after.close();
   });

@@ -9,12 +9,14 @@ import type {
   ModelCatalogItem
 } from "../../types";
 import TavilyKeyPool from "./TavilyKeyPool.vue";
+import SettingsConfirmInput from "./SettingsConfirmInput.vue";
 
 const draft = defineModel<ConfigSectionValueMap["tools"]>({ required: true });
 const props = defineProps<{
   models: readonly ModelCatalogItem[];
   fieldStates?: ConfigEnvelope["fieldStates"];
 }>();
+const emit = defineEmits<{ commit: [] }>();
 const tavilyFieldState = computed(() => props.fieldStates?.["bot.tools.websearch.tavilyApiKeys"]);
 const sizes: ImageSize[] = ["1024x1024", "1536x1024", "1024x1536", "2048x2048", "2048x1152", "1152x2048", "3840x2160", "2160x3840"];
 const resolutions: ImageResolution[] = ["1K", "2K", "4K"];
@@ -30,7 +32,7 @@ const qualities: Array<{ value: ImageQuality; label: string }> = [
   <section class="grid gap-10" aria-label="运行参数">
     <label class="field max-w-xs">
       <span class="field-label">单轮工具调用上限</span>
-      <input v-model.number="draft.maxCalls" class="control" type="number" min="1" max="100" step="1">
+      <SettingsConfirmInput v-model.number="draft.maxCalls" type="number" min="1" max="100" step="1" confirm-label="确认单轮工具调用上限" />
       <small class="text-xs text-mute">每次 Agent 行动最多调用 {{ draft.maxCalls }} 次工具</small>
     </label>
 
@@ -41,16 +43,17 @@ const qualities: Array<{ value: ImageQuality; label: string }> = [
       <div class="grid gap-5 sm:grid-cols-2">
         <label class="field">
           <span class="field-label">最大结果数</span>
-          <input v-model.number="draft.websearch.maxResults" class="control" type="number" min="1" max="10" step="1">
+          <SettingsConfirmInput v-model.number="draft.websearch.maxResults" type="number" min="1" max="10" step="1" confirm-label="确认最大结果数" />
         </label>
         <TavilyKeyPool
           v-model="draft.websearch"
           class="sm:col-span-2"
           :field-state="tavilyFieldState"
+          @commit="emit('commit')"
         />
         <label class="field sm:col-span-2">
           <span class="field-label">Tavily Key 环境变量</span>
-          <input v-model.trim="draft.websearch.tavilyApiKeyEnv" class="control" type="text" autocomplete="off">
+          <SettingsConfirmInput v-model.trim="draft.websearch.tavilyApiKeyEnv" type="text" autocomplete="off" confirm-label="确认 Tavily Key 环境变量" />
         </label>
       </div>
     </section>
@@ -71,15 +74,15 @@ const qualities: Array<{ value: ImageQuality; label: string }> = [
         </label>
         <label class="field">
           <span class="field-label">可执行文件</span>
-          <input v-model.trim="draft.codex.codexExecutable" class="control" type="text" autocomplete="off" placeholder="auto" :disabled="!draft.codex.enabled">
+          <SettingsConfirmInput v-model.trim="draft.codex.codexExecutable" type="text" autocomplete="off" placeholder="auto" :disabled="!draft.codex.enabled" confirm-label="确认可执行文件" />
         </label>
         <label class="field">
           <span class="field-label">任务超时（毫秒）</span>
-          <input v-model.number="draft.codex.timeoutMs" class="control" type="number" min="1000" max="86400000" step="1000" :disabled="!draft.codex.enabled">
+          <SettingsConfirmInput v-model.number="draft.codex.timeoutMs" type="number" min="1000" max="86400000" step="1000" :disabled="!draft.codex.enabled" confirm-label="确认任务超时" />
         </label>
         <label class="field">
           <span class="field-label">最大并发数</span>
-          <input v-model.number="draft.codex.maxConcurrency" class="control" type="number" min="1" max="16" step="1" :disabled="!draft.codex.enabled">
+          <SettingsConfirmInput v-model.number="draft.codex.maxConcurrency" type="number" min="1" max="16" step="1" :disabled="!draft.codex.enabled" confirm-label="确认最大并发数" />
         </label>
       </div>
     </section>

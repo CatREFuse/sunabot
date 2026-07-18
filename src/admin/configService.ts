@@ -80,7 +80,7 @@ export interface ConfigSectionValueMap {
   providers: AppConfig["providers"];
   broadcastStorm: BroadcastStormConfig;
   normalReply: AppConfig["normalReply"];
-  bot: Pick<BotConfig, "adminQq" | "adminName" | "replyDebounceMs" | "pokeOnNoReply" | "quoteGroupReplies" | "quoteGroupReplyExcludedUserIds" | "contextMessageLimit">;
+  bot: Pick<BotConfig, "adminQq" | "adminName" | "replyDebounceMs" | "pokeOnNoReply" | "quoteGroupReplies" | "quoteGroupReplyExcludedUserIds" | "contextMessageLimit" | "emojiSendSize">;
   tone: BotToneSettings;
   memory: BotMemorySettings;
   orchestrator: BotOrchestratorSettings;
@@ -275,7 +275,7 @@ export function validateConfigSectionValue<S extends ConfigSection>(
     case "providers": return validateProviders(value, current?.providers) as ConfigSectionValueMap[S];
     case "broadcastStorm": return validateBroadcastStormConfig(value) as ConfigSectionValueMap[S];
     case "normalReply": return validateNormalReplyConfig(value) as ConfigSectionValueMap[S];
-    case "bot": return validateBot(value) as ConfigSectionValueMap[S];
+    case "bot": return validateBot(value, current?.bot) as ConfigSectionValueMap[S];
     case "tone": return validateTone(value, current?.providers) as ConfigSectionValueMap[S];
     case "memory": return validateMemory(value) as ConfigSectionValueMap[S];
     case "orchestrator": return validateOrchestrator(value) as ConfigSectionValueMap[S];
@@ -404,10 +404,10 @@ function validateProvider(input: unknown, field: string): ProviderConfig {
   };
 }
 
-function validateBot(input: unknown): ConfigSectionValueMap["bot"] {
+function validateBot(input: unknown, current?: BotConfig): ConfigSectionValueMap["bot"] {
   const value = object(input, "bot");
   exactKeys(value, [
-    "adminQq", "adminName", "replyDebounceMs", "pokeOnNoReply", "quoteGroupReplies", "quoteGroupReplyExcludedUserIds", "contextMessageLimit"
+    "adminQq", "adminName", "replyDebounceMs", "pokeOnNoReply", "quoteGroupReplies", "quoteGroupReplyExcludedUserIds", "contextMessageLimit", "emojiSendSize"
   ], "bot");
   const adminQq = requiredString(value.adminQq, "bot.adminQq", { trim: true, min: 0, max: 32, allowEmpty: true });
   if (adminQq && !/^\d+$/.test(adminQq)) badRequest("CONFIG_INVALID", "管理员 QQ 必须是数字。", "bot.adminQq");
@@ -437,8 +437,17 @@ function validateBot(input: unknown): ConfigSectionValueMap["bot"] {
     pokeOnNoReply: boolean(value.pokeOnNoReply, "bot.pokeOnNoReply"),
     quoteGroupReplies: boolean(value.quoteGroupReplies, "bot.quoteGroupReplies"),
     quoteGroupReplyExcludedUserIds: uniqueStrings(quoteGroupReplyExcludedUserIds),
-    contextMessageLimit: integer(value.contextMessageLimit, "bot.contextMessageLimit", 1, 120)
+    contextMessageLimit: integer(value.contextMessageLimit, "bot.contextMessageLimit", 1, 120),
+    emojiSendSize: emojiSendSize(value.emojiSendSize, current?.emojiSendSize ?? 512)
   };
+}
+
+function emojiSendSize(value: unknown, fallback: BotConfig["emojiSendSize"]) {
+  const candidate = value == null ? fallback : value;
+  if (candidate === 64 || candidate === 128 || candidate === 256 || candidate === 512 || candidate === 1024) {
+    return candidate;
+  }
+  badRequest("CONFIG_INVALID", "表情发送尺寸无效。", "bot.emojiSendSize");
 }
 
 function validateTone(input: unknown, providers?: AppConfig["providers"]): BotToneSettings {
@@ -724,7 +733,8 @@ export function validateCompleteConfig(config: AppConfig) {
     pokeOnNoReply: config.bot.pokeOnNoReply,
     quoteGroupReplies: config.bot.quoteGroupReplies,
     quoteGroupReplyExcludedUserIds: config.bot.quoteGroupReplyExcludedUserIds,
-    contextMessageLimit: config.bot.contextMessageLimit
+    contextMessageLimit: config.bot.contextMessageLimit,
+    emojiSendSize: config.bot.emojiSendSize
   });
   validateTone(config.bot.tone, config.providers);
   validateMemory(config.bot.memory);

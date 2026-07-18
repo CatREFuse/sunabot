@@ -339,6 +339,62 @@ describe("OpenAIProvider asynchronous Codex tool turns", () => {
     expect(runSelfie).not.toHaveBeenCalled();
   });
 
+  it("returns matching visible text and voice as one terminal provider turn", async () => {
+    const provider = codexProvider();
+    const onToolCall = vi.fn();
+    const fetchMock = mockCodexToken(provider, codexSseResponse([
+      assistantMessage("おはよう、先生。"),
+      functionCall("send_voice_message", "call_voice", {
+        text: "おはよう、先生。",
+        language: "ja"
+      })
+    ]));
+
+    const result = await provider.completeTurn("system", [{ role: "user", content: "おはよう" }], {
+      voice: { enabled: true, languages: ["ja"], defaultLanguage: "ja" },
+      onToolCall
+    });
+
+    expect(result).toEqual({
+      kind: "completed",
+      text: "おはよう、先生。",
+      voice: {
+        text: "おはよう、先生。",
+        language: "ja",
+        callId: "call_voice",
+        toolName: "send_voice_message"
+      }
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(onToolCall).toHaveBeenCalledWith("send_voice_message");
+  });
+
+  it("returns dispatch_message and voice together without starting deferred work inline", async () => {
+    const provider = codexProvider();
+    const fetchMock = mockCodexToken(provider, codexSseResponse([
+      functionCall("codex", "call_codex_voice", {
+        task: "检查发布包",
+        kind: "local",
+        dispatch_message: "我会认真把它检查完。"
+      }),
+      functionCall("send_voice_message", "call_voice", {
+        text: "我会认真把它检查完。",
+        language: "ja"
+      })
+    ]));
+
+    await expect(provider.completeTurn("system", [{ role: "user", content: "检查" }], {
+      asyncCodex: true,
+      voice: { enabled: true, languages: ["ja"], defaultLanguage: "ja" }
+    })).resolves.toMatchObject({
+      kind: "deferred",
+      acknowledgement: "我会认真把它检查完。",
+      toolCall: { name: "codex", arguments: { task: "检查发布包", kind: "local" } },
+      voice: { language: "ja", callId: "call_voice" }
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it("enforces the configured tool call count instead of a fixed round constant", async () => {
     const provider = codexProvider();
     const config = websearchBotConfig();

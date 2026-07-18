@@ -32,8 +32,13 @@ export function formatMemoryMatchesForPrompt(matches: MemoryEntry[]) {
     .map((item) => {
       const date = item.occurredAt || item.updatedAt || item.createdAt || item.time || "";
       const suffix = date ? ` ${date}` : "";
+      const userId = normalizeText(item.userId ?? item.userIds?.[0]);
+      const userName = normalizeText(item.userName);
+      const identity = userId && userName && userId !== userName
+        ? ` ${userName}（QQ ${userId}）`
+        : "";
       const address = item.source === "user_profile" && item.addressName ? ` 称呼：${item.addressName}` : "";
-      return `${item.sourceTitle}${suffix}${address}：${item.text}`;
+      return `${item.sourceTitle}${suffix}${identity}${address}：${item.text}`;
     })
     .join("\n");
 }

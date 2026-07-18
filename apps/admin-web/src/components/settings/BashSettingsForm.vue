@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { ConfigSectionValueMap } from "../../types";
 import ToggleSwitch from "../ui/ToggleSwitch.vue";
+import SettingsConfirmInput from "./SettingsConfirmInput.vue";
 
 const draft = defineModel<ConfigSectionValueMap["bash"]>({ required: true });
 </script>
@@ -21,7 +22,7 @@ const draft = defineModel<ConfigSectionValueMap["bash"]>({ required: true });
     </label>
     <label class="field">
       <span class="field-label">审计模型</span>
-      <input v-model="draft.auditModel" class="control" type="text" spellcheck="false">
+      <SettingsConfirmInput v-model="draft.auditModel" type="text" spellcheck="false" confirm-label="确认审计模型" />
     </label>
     <div class="divide-y divide-line border-y border-line">
       <ToggleSwitch v-model="draft.strictMode" label="严格审计" description="提高独立审计对外部路径和高风险操作的判定强度" />

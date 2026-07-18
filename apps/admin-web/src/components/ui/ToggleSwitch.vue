@@ -24,12 +24,12 @@ withDefaults(defineProps<{ label: string; description?: string; disabled?: boole
     <span
       data-slot="toggle-track"
       class="relative h-6 w-11 shrink-0 rounded-full border transition-colors duration-200 peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-4 peer-focus-visible:outline-[rgb(var(--color-interactive))]"
-      :class="model ? 'border-display bg-display' : 'border-visible bg-page'"
+      :class="model ? 'border-[rgb(var(--color-interactive))] bg-[rgb(var(--color-interactive))]' : 'border-visible bg-page'"
     >
       <span
         data-slot="toggle-thumb"
         class="absolute left-0.5 top-0.5 size-[18px] rounded-full transition-[transform,background-color] duration-200"
-        :class="model ? 'translate-x-5 bg-page' : 'translate-x-0 bg-disabled'"
+        :class="model ? 'translate-x-5 bg-[rgb(var(--color-interactive-ink))]' : 'translate-x-0 bg-disabled'"
       ></span>
     </span>
   </label>

@@ -4,6 +4,7 @@ import { RegistryProviderToolExecutor } from "../../adapters/model/provider/tool
 import type { ProviderCompleteOptions } from "../../adapters/model/openaiProvider.js";
 import { normalizeOutboundConversationAssetError } from "../../services/delivery/public.js";
 import {
+  createSendVoiceMessageTool,
   readSendFileInput,
   readSendVoiceMessageInput,
   sendFileTool,
@@ -36,9 +37,11 @@ describe("conversation asset tool definitions", () => {
       strict: true,
       parameters: {
         additionalProperties: false,
-        required: ["path"]
+        required: ["text", "language"]
       }
     });
+    expect(createSendVoiceMessageTool(["ja"], "ja").parameters.properties.language.enum)
+      .toEqual(["ja"]);
   });
 
   it("normalizes file and voice inputs and rejects invalid kinds", () => {
@@ -51,9 +54,9 @@ describe("conversation asset tool definitions", () => {
       kind: "image",
       name: "结果图.png"
     });
-    expect(readSendVoiceMessageInput({ path: "audio/reply.amr" })).toEqual({
-      path: "audio/reply.amr",
-      kind: "voice"
+    expect(readSendVoiceMessageInput({ text: " おはよう、先生。 ", language: "ja" })).toEqual({
+      text: "おはよう、先生。",
+      language: "ja"
     });
     expect(() => readSendFileInput({ path: "x", kind: "voice", name: null })).toThrow(
       "auto, file, or image"
@@ -72,6 +75,12 @@ describe("conversation asset tool definitions", () => {
       name: null,
       accountId: "primary"
     } as never)).toThrow("unsupported fields");
+    expect(() => readSendVoiceMessageInput({ text: "おはよう", language: "fr" }))
+      .toThrow("zh, en, or ja");
+    expect(() => readSendVoiceMessageInput({ text: "おはよう", language: "ja", path: "x.wav" } as never))
+      .toThrow("only text and language");
+    expect(() => readSendVoiceMessageInput({ text: "x".repeat(301), language: "en" }))
+      .toThrow("300 characters");
   });
 
   it.each([

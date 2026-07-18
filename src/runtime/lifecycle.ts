@@ -98,10 +98,14 @@ import {
 import { SessionStore, type OutboxRecord, type SessionEventRecord } from "../../services/sessions/sessionStore.js";
 import { TOOL_CALL_TIMEOUT_MS } from "../../services/tools/tools.js";
 import { promptDefinitionById } from "../../services/agent/promptCatalog.js";
-import { defaultPromptContent as defaultFinalPromptContent } from "../../services/agent/promptDefaults.js";
+import {
+  SCHEDULED_TASK_CALLBACK_PROMPT_FILE,
+  SCHEDULED_TASK_CALLBACK_PROMPT_ID
+} from "../../services/agent/scheduledTaskPrompt.js";
 import {
   ensurePromptTextFile,
   migrateConversationEmojiVariables,
+  migrateConversationVoicePrompt,
   migrateGroupReplyOrchestratorResultVariable,
   migrateGroupReplyThreadContextVariable,
   migrateMemoryPerspectivePrompt,
@@ -118,8 +122,8 @@ import {
   type RenderedPromptRequest
 } from "../../services/agent/promptSystem.js";
 import { buildCommonPromptVariables, buildConversationPromptVariables } from "../../services/agent/persona.js";
-import { DEFAULT_CONTEXT_MESSAGE_LIMIT, MAX_STORED_CONVERSATION_MESSAGES, GROUP_CHAT_SUMMARY_WINDOW_MS, MAX_SELFIE_REFERENCE_IMAGES, MAX_SELFIE_WORKSPACE_REFERENCE_IMAGES, MAX_CURRENT_CONTEXT_IMAGES, MAX_HISTORY_CONTEXT_IMAGES, HYDRATE_MESSAGE_WINDOW_MS, ACTIVE_CONVERSATION_WINDOW_MS, DIRECT_REPLY_TIMEOUT_MS, AMBIENT_ORCHESTRATOR_TIMEOUT_MS, ORCHESTRATOR_MAX_RETRIES, PREPARE_TIMEOUT_MS, RECENT_CONTEXT_TOKEN_BUDGET, DEDUPE_TTL_MS, MAX_DEDUPE_KEYS, DEFAULT_ADMIN_NAME, GROUP_CHAT_SUMMARY_COMMAND, CONVERSATION_REPLY_PROMPT_FILE, PRIVATE_CONVERSATION_REPLY_PROMPT_FILE, GROUP_CONVERSATION_REPLY_PROMPT_FILE, TONE_PROMPT_FILE, SELFIE_PROMPT_FILE, GROUP_CHAT_SUMMARY_PROMPT_FILE, GROUP_THREAD_CONTEXT_PROMPT_FILE, ADMIN_PERSONA_FILES, ADMIN_RUNTIME_PROMPT_DEFAULTS, BatchUserInfo, WorkingMemoryMergeOutput, WorkingMemoryMergeContext, personaFileNameForAdminId, AdminIdentity, ConversationReplyUpdateInput, ConversationToolPolicyUpdateInput, RuntimeCommandContext, ReplyDeliveryDraft, ReplyDelivery, DeferredCodexTurn, AmbientReplyJob, AmbientReplyState, AmbientIdleTimer, RuntimeConfigSnapshot, RuntimePromptSnapshot, SunaRuntimeOptions } from "./runtimeContracts.js";
-import { clampInteger, indexedConversationMessages } from "./conversationMemoryHelpers.js";
+import { DEFAULT_CONTEXT_MESSAGE_LIMIT, MAX_STORED_CONVERSATION_MESSAGES, GROUP_CHAT_SUMMARY_WINDOW_MS, MAX_SELFIE_REFERENCE_IMAGES, MAX_SELFIE_WORKSPACE_REFERENCE_IMAGES, MAX_CURRENT_CONTEXT_IMAGES, MAX_HISTORY_CONTEXT_IMAGES, HYDRATE_MESSAGE_WINDOW_MS, ACTIVE_CONVERSATION_WINDOW_MS, DIRECT_REPLY_TIMEOUT_MS, AMBIENT_ORCHESTRATOR_TIMEOUT_MS, ORCHESTRATOR_MAX_RETRIES, PREPARE_TIMEOUT_MS, RECENT_CONTEXT_TOKEN_BUDGET, DEDUPE_TTL_MS, MAX_DEDUPE_KEYS, DEFAULT_ADMIN_NAME, GROUP_CHAT_SUMMARY_COMMAND, CONVERSATION_REPLY_PROMPT_FILE, PRIVATE_CONVERSATION_REPLY_PROMPT_FILE, GROUP_CONVERSATION_REPLY_PROMPT_FILE, TONE_PROMPT_FILE, SELFIE_PROMPT_FILE, GROUP_CHAT_SUMMARY_PROMPT_FILE, GROUP_THREAD_CONTEXT_PROMPT_FILE, ADMIN_PERSONA_FILES, ADMIN_RUNTIME_PROMPT_DEFAULTS, runtimePromptDefaultContent, BatchUserInfo, WorkingMemoryMergeOutput, WorkingMemoryMergeContext, personaFileNameForAdminId, AdminIdentity, ConversationReplyUpdateInput, ConversationToolPolicyUpdateInput, RuntimeCommandContext, ReplyDeliveryDraft, ReplyDelivery, DeferredCodexTurn, AmbientReplyJob, AmbientReplyState, AmbientIdleTimer, RuntimeConfigSnapshot, RuntimePromptSnapshot, SunaRuntimeOptions } from "./runtimeContracts.js";
+import { clampInteger, indexedConversationMessages, resolveRuntimePersonaName } from "./conversationMemoryHelpers.js";
 import { conversationOrchestratorEnabled, conversationReplyEnabled, enrichMemoryEntriesWithConversations, isWebConversationId, normalizeConversationId, normalizeConversationLookupId, outboundForRecord } from "./messagingAttachmentHelpers.js";
 import { conversationMemberNames } from "./selfieHelpers.js";
 import { normalizeConversationDisabledTools } from "../../services/tools/conversationToolPolicy.js";
@@ -137,9 +141,11 @@ export async function runtime_initialize(this: RuntimeHost) {
     await this.seedMemoryScheduler();
     this.persona = await loadPersona(this.config);
     await this.refreshAttachmentCacheReferences();
+    this.scheduledTasks.start();
     this.scheduleMemoryDrain();
   }
 export function runtime_close(this: RuntimeHost) {
+    this.scheduledTasks.stop();
     if (this.memoryWakeTimer) clearTimeout(this.memoryWakeTimer);
     this.memoryWakeTimer = undefined;
     this.sessionCoordinator.stop();
@@ -190,6 +196,7 @@ export function runtime_commitReload(this: RuntimeHost, snapshot: RuntimeConfigS
     if (this.activeGateway) {
       this.sessionCoordinator.resume();
     }
+    this.scheduledTasks.wake();
   }
 export async function runtime_reloadPrompts(this: RuntimeHost, config: AppConfig) {
     this.config = config;
@@ -208,7 +215,7 @@ export function runtime_commitPromptReload(this: RuntimeHost, snapshot: unknown)
 export function runtime_getPersonaStatus(this: RuntimeHost) {
     return {
       id: this.persona?.id ?? "plana",
-      name: this.persona?.name ?? "普拉娜",
+      name: resolveRuntimePersonaName(this.persona?.name, this.config.persona.name),
       memoryItems: this.persona?.memoryItems.length ?? 0
     };
   }
@@ -277,6 +284,7 @@ export function runtime_getProviderForModel(this: RuntimeHost, model: string, re
     });
   }
 export async function runtime_ensureAgentPromptFiles(this: RuntimeHost, config = this.config) {
+    const selfiePromptDefault = runtimePromptDefaultContent(config, "image.selfie-rewrite");
     const legacyConversationPrompt = await readPromptTextFile(
       config,
       "system",
@@ -340,9 +348,15 @@ export async function runtime_ensureAgentPromptFiles(this: RuntimeHost, config =
       ),
       ensurePromptTextFile(
         config,
+        "system",
+        SCHEDULED_TASK_CALLBACK_PROMPT_FILE,
+        ADMIN_RUNTIME_PROMPT_DEFAULTS[SCHEDULED_TASK_CALLBACK_PROMPT_ID] ?? ""
+      ),
+      ensurePromptTextFile(
+        config,
         "persona",
         SELFIE_PROMPT_FILE,
-        ADMIN_RUNTIME_PROMPT_DEFAULTS["image.selfie-rewrite"] ?? ""
+        selfiePromptDefault
       )
     ]);
     await migrateGroupReplyThreadContextVariable(config, GROUP_CONVERSATION_REPLY_PROMPT_FILE);
@@ -355,10 +369,12 @@ export async function runtime_ensureAgentPromptFiles(this: RuntimeHost, config =
     await migrateSelfieReferenceSelectionPrompt(
       config,
       SELFIE_PROMPT_FILE,
-      ADMIN_RUNTIME_PROMPT_DEFAULTS["image.selfie-rewrite"] ?? ""
+      selfiePromptDefault
     );
     await migrateConversationEmojiVariables(config, PRIVATE_CONVERSATION_REPLY_PROMPT_FILE);
     await migrateConversationEmojiVariables(config, GROUP_CONVERSATION_REPLY_PROMPT_FILE);
+    await migrateConversationVoicePrompt(config, PRIVATE_CONVERSATION_REPLY_PROMPT_FILE, ADMIN_RUNTIME_PROMPT_DEFAULTS["conversation.private-reply"] ?? "");
+    await migrateConversationVoicePrompt(config, GROUP_CONVERSATION_REPLY_PROMPT_FILE, ADMIN_RUNTIME_PROMPT_DEFAULTS["conversation.group-reply"] ?? "");
     await migrateToneEmojiMarkerRule(config, TONE_PROMPT_FILE);
     await migrateMemoryPerspectivePrompt(
       config,
@@ -377,7 +393,7 @@ export async function runtime_ensureAgentPromptFiles(this: RuntimeHost, config =
     );
   }
 export function runtime_defaultPromptContent(this: RuntimeHost, id: string) {
-    return ADMIN_RUNTIME_PROMPT_DEFAULTS[id] ?? "";
+    return runtimePromptDefaultContent(this.config, id);
   }
 export async function runtime_renderPromptRequest(this: RuntimeHost,
     id: string,
@@ -391,7 +407,7 @@ export async function runtime_renderPromptRequest(this: RuntimeHost,
       this.config,
       definition.scope,
       definition.fileName(this.config),
-      ADMIN_RUNTIME_PROMPT_DEFAULTS[id]
+      runtimePromptDefaultContent(this.config, id)
     );
     const fragments = Object.fromEntries(
       Object.entries(ADMIN_PERSONA_FILES).map(([fragmentId, fileName]) => [

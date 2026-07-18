@@ -1,6 +1,10 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import {
+  SCHEDULED_CALLBACK_EVENT_KIND,
+  SCHEDULED_CALLBACK_OUTBOX_KIND
+} from "./scheduledTasks.js";
 import { nanoid } from "nanoid";
 import {
   AppConfig,
@@ -372,6 +376,9 @@ export async function runtime_processSessionEvent(this: RuntimeHost,
     let controller: AbortController | undefined;
     try {
       return await withAbortTimeout(async (signal) => {
+        if (event.kind === SCHEDULED_CALLBACK_EVENT_KIND) {
+          return this.scheduledTasks.processEvent(event);
+        }
         if (event.kind === "reply_debounce") {
           return this.processReplyDebounceEvent(event, event.payload, signal);
         }
@@ -387,6 +394,7 @@ export async function runtime_processSessionEvent(this: RuntimeHost,
             payload,
             signal,
             turnContext.emitOutbox,
+            turnContext.emitDeferredOutbox,
             turnContext.appendHeldOutbox
           );
         }
@@ -471,6 +479,7 @@ export async function runtime_processIncomingReplyEvent(this: RuntimeHost,
     payload: RuntimeIncomingReplyEventPayload,
     signal: AbortSignal,
     emitOutbox?: ReplyDelivery["emitOutbox"],
+    emitDeferredOutbox?: ReplyDelivery["emitDeferredOutbox"],
     appendHeldOutbox?: SessionTurnContext["appendHeldOutbox"]
   ): Promise<SessionHandleResult> {
     const gateway = this.requireActiveGateway();
@@ -516,6 +525,7 @@ export async function runtime_processIncomingReplyEvent(this: RuntimeHost,
     const delivery: ReplyDelivery = {
       outbox: [],
       emitOutbox,
+      emitDeferredOutbox,
       replyQuote: payload.replyQuote,
       systemConfigHeld: createSystemConfigHeldConfirmationPort(this, appendHeldOutbox)
     };
@@ -582,6 +592,10 @@ export async function runtime_deliverSessionOutbox(
       throw new Error(`Outbox ${outbox.id} canonical record changed before delivery.`);
     }
     outbox = canonical;
+  }
+  if (outbox.kind === SCHEDULED_CALLBACK_OUTBOX_KIND) {
+    if (!context) throw new Error("Scheduled callback delivery requires a durable outbox context.");
+    return this.scheduledTasks.deliverOutbox(outbox, context);
   }
   if (outbox.kind === "onebot.conversation_asset") {
     return this.deliverConversationAssetOutbox(outbox, delivery);

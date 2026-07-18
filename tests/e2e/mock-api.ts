@@ -2,6 +2,7 @@ import type { Page, Route } from "@playwright/test";
 import sharp from "sharp";
 import type { AppConfig } from "../../src/types.js";
 import type { AgentAccount, AgentSummary } from "../../apps/admin-web/src/types.js";
+import type { VoiceProfile, VoiceProviderStatus } from "../../apps/admin-web/src/types/voice.js";
 import type {
   AgentMcpServer,
   AgentSkillRecord,
@@ -196,6 +197,7 @@ const initialAgentFiles = [
   file("memory.user-profile", "用户画像提取", "记忆", "user_profile_prompt.json", defaultPromptContent("memory.user-profile")),
   file("orchestrator.user-group", "群聊编排", "编排器", "user_groupchat_orchestrator.json", defaultPromptContent("orchestrator.user-group")),
   file("conversation.group-summary", "群聊总结", "对话", "group_chat_summary.json", defaultPromptContent("conversation.group-summary")),
+  file("scheduler.cron-callback", "定时任务回调", "调度", "cron_callback.json", defaultPromptContent("scheduler.cron-callback")),
   file("image.selfie-rewrite", "自拍提示词改写", "图像", "selfie_prompt_rewrite.json", defaultPromptContent("image.selfie-rewrite"))
 ];
 
@@ -325,6 +327,39 @@ const tokenUsageFixture: MockTokenUsagePayload = {
   filters: { models: ["gpt-5.4-mini", "gpt-5.6-terra", "__unlabeled__"], model: "", behavior: "" }
 };
 
+const initialVoiceProfiles: Record<string, VoiceProfile> = Object.fromEntries(
+  ["plana", "arona", "koharu"].map((agentId) => [agentId, {
+    schemaVersion: 1,
+    enabled: true,
+    defaultLanguage: "ja",
+    languages: {
+      zh: null,
+      en: null,
+      ja: {
+        language: "ja",
+        fileName: `kivo-${agentId}-ja.wav`,
+        relativePath: `voice/references/kivo-${agentId}-ja-${"a".repeat(64)}.wav`,
+        mimeType: "audio/wav",
+        sizeBytes: 1_299_818,
+        sha256: "a".repeat(64),
+        referenceText: agentId === "plana"
+          ? "待機中、解決しなければならない作業が多数存在しています。"
+          : "先生、おかえりなさい。今日もよろしくお願いします。",
+        sourceUrl: "https://static.kivo.wiki/voices/mock/reference.ogg",
+        characterUrl: "https://kivo.wiki/",
+        updatedAt: "2026-07-19T01:00:00.000Z"
+      }
+    }
+  } satisfies VoiceProfile])
+);
+
+const readyVoiceProvider: VoiceProviderStatus = {
+  provider: "MOSS-TTS-Nano",
+  ready: true,
+  checkedAt: "2026-07-19T01:00:00.000Z",
+  latencyMs: 18
+};
+
 function filteredTokenUsage(payload: MockTokenUsagePayload, model: string, behavior: string): MockTokenUsagePayload {
   const factor = (model ? 0.5 : 1) * (behavior ? 0.5 : 1);
   const scale = <T extends MockTokenUsageBucket>(bucket: T): T => ({
@@ -401,6 +436,7 @@ export interface MockApiState {
     displayUrl: string;
     placeholderUrl: string;
   }>;
+  voiceProfiles: Record<string, VoiceProfile>;
 }
 
 export async function installMockApi(page: Page, options: { requiredToken?: string } = {}): Promise<MockApiState> {
@@ -463,7 +499,8 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
       selfieReference("01-neutral-face.png", "常服正面", 458, 501, 241_664),
       selfieReference("02-gentle-smile.png", "温柔微笑", 458, 501, 244_736),
       selfieReference("03-full-outfit.jpg", "制服全身", 1200, 1393, 441_344)
-    ]
+    ],
+    voiceProfiles: structuredClone(initialVoiceProfiles)
   };
 
   await page.route("**/api/**", async (route) => {
@@ -511,6 +548,46 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
       return json(route, {
         error: { code: "ADMIN_UNAUTHORIZED", message: "管理员会话无效或已过期。" }
       }, 401);
+    }
+
+    if (pathname === "/api/voice-profile/probe" && method === "POST") {
+      return json(route, { provider: readyVoiceProvider });
+    }
+    if (pathname === "/api/voice-profile") {
+      const agentId = url.searchParams.get("agentId") || "plana";
+      const profile = state.voiceProfiles[agentId] ?? structuredClone(initialVoiceProfiles.plana!);
+      state.voiceProfiles[agentId] = profile;
+      if (method === "GET") return json(route, { profile, provider: readyVoiceProvider });
+      if (method === "PUT") {
+        const body = request.postDataJSON() as Pick<VoiceProfile, "enabled" | "defaultLanguage">;
+        Object.assign(profile, { enabled: body.enabled, defaultLanguage: body.defaultLanguage });
+        return json(route, { profile });
+      }
+    }
+    const voiceReferenceMatch = pathname.match(/^\/api\/voice-profile\/(zh|en|ja)$/u);
+    if (voiceReferenceMatch) {
+      const agentId = url.searchParams.get("agentId") || "plana";
+      const language = voiceReferenceMatch[1] as "zh" | "en" | "ja";
+      const profile = state.voiceProfiles[agentId] ?? structuredClone(initialVoiceProfiles.plana!);
+      state.voiceProfiles[agentId] = profile;
+      if (method === "DELETE") {
+        profile.languages[language] = null;
+        return json(route, { profile });
+      }
+      if (method === "PUT") {
+        const body = request.postDataJSON() as { fileName: string; dataBase64: string; referenceText: string };
+        profile.languages[language] = {
+          language,
+          fileName: body.fileName,
+          relativePath: `voice/references/mock-${language}-${"b".repeat(64)}.wav`,
+          mimeType: "audio/wav",
+          sizeBytes: Math.max(1, Math.floor(body.dataBase64.length * 0.75)),
+          sha256: "b".repeat(64),
+          referenceText: body.referenceText,
+          updatedAt: "2026-07-19T02:00:00.000Z"
+        };
+        return json(route, { profile });
+      }
     }
 
     if (pathname === "/api/agent-extensions" && method === "GET") {
@@ -1450,8 +1527,8 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
         ? {
             ...tool,
             accessLabel: state.config.bot.bash.allowGroup
-              ? "管理员 QQ 私聊与群聊可用"
-              : "管理员 QQ 私聊可用",
+              ? "管理员 QQ 私聊与群聊"
+              : "仅管理员 QQ 私聊",
             accessDescription: state.config.bot.bash.allowGroup
               ? "私聊使用所选后端。群聊固定使用 Docker 受限模式。Web Chat 和普通用户不可用。"
               : "私聊使用所选后端。群聊未开启。Web Chat 和普通用户不可用。",

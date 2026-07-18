@@ -90,6 +90,7 @@ describe("AgentFileRepository", () => {
       ["orchestrator.user-group", "user_groupchat_orchestrator.json"],
       ["orchestrator.group-thread", "group_thread_context.json"],
       ["conversation.group-summary", "group_chat_summary.json"],
+      ["scheduler.cron-callback", "cron_callback.json"],
       ["image.selfie-rewrite", "selfie_prompt_rewrite.json"]
     ] as const;
     for (const [id, fileName] of expectedMappings) {

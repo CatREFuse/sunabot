@@ -2,7 +2,7 @@ import { shallowMount } from "@vue/test-utils";
 import { nextTick } from "vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setActiveAgentId } from "../../composables/agentScope";
-import SelfieReferenceDialog from "./SelfieReferenceDialog.vue";
+import SelfieReferenceManager from "./SelfieReferenceManager.vue";
 import SelfieReferenceSettings from "./SelfieReferenceSettings.vue";
 
 const apiRequest = vi.hoisted(() => vi.fn());
@@ -19,20 +19,20 @@ describe("SelfieReferenceSettings", () => {
     setActiveAgentId("plana");
   });
 
-  it("reloads immediately and closes the manager when the active Agent changes", async () => {
+  it("renders one inline manager and reloads it when the active Agent changes", async () => {
     const wrapper = shallowMount(SelfieReferenceSettings);
     await vi.waitFor(() => expect(apiRequest).toHaveBeenCalledTimes(1));
     expect(apiRequest.mock.calls[0]?.[0]).toBe("/api/selfie-references?agentId=plana");
-
-    await wrapper.get('button[aria-label="管理自拍参考图"]').trigger("click");
-    expect(wrapper.getComponent(SelfieReferenceDialog).props("open")).toBe(true);
+    expect(wrapper.findComponent(SelfieReferenceManager).exists()).toBe(true);
+    expect(wrapper.find('button[aria-label="管理自拍参考图"]').exists()).toBe(false);
+    const initialManager = wrapper.getComponent(SelfieReferenceManager).vm;
 
     setActiveAgentId("arona");
     await nextTick();
 
     expect(apiRequest).toHaveBeenCalledTimes(2);
     expect(apiRequest.mock.calls[1]?.[0]).toBe("/api/selfie-references?agentId=arona");
-    expect(wrapper.getComponent(SelfieReferenceDialog).props("open")).toBe(false);
+    expect(wrapper.getComponent(SelfieReferenceManager).vm).not.toBe(initialManager);
     wrapper.unmount();
   });
 });

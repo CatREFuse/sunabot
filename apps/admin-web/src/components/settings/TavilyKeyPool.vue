@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import type { BotToolSettingsDraft, ConfigEnvelope } from "../../types";
+import SettingsConfirmInput from "./SettingsConfirmInput.vue";
 
 const draft = defineModel<BotToolSettingsDraft["websearch"]>({ required: true });
 const props = defineProps<{
   fieldState?: ConfigEnvelope["fieldStates"][string];
 }>();
+
+const emit = defineEmits<{ commit: [] }>();
 
 const storedCount = computed(() => props.fieldState?.storedSecretCount ?? 0);
 const storedIndexes = computed(() => Array.from({ length: storedCount.value }, (_, index) => index));
@@ -26,6 +29,7 @@ function toggleStoredKey(index: number) {
   const removalIndex = draft.value.removeTavilyApiKeyIndexes.indexOf(index);
   if (removalIndex >= 0) draft.value.removeTavilyApiKeyIndexes.splice(removalIndex, 1);
   else draft.value.removeTavilyApiKeyIndexes.push(index);
+  emit("commit");
 }
 
 function isMarkedForRemoval(index: number) {
@@ -40,7 +44,7 @@ function isMarkedForRemoval(index: number) {
         <span class="field-label">Tavily Key 池</span>
         <p class="key-pool__summary">
           {{ retainedStoredCount }} 个已配置
-          <template v-if="pendingCount"> · {{ pendingCount }} 个等待同步</template>
+          <template v-if="pendingCount"> · {{ pendingCount }} 个待保存</template>
           <template v-if="environmentCount"> · {{ environmentCount }} 个环境变量来源</template>
         </p>
       </div>
@@ -65,6 +69,7 @@ function isMarkedForRemoval(index: number) {
         <button
           class="icon-btn"
           type="button"
+          data-settings-commit
           :aria-label="isMarkedForRemoval(index) ? `撤销删除 Key ${index + 1}` : `删除 Key ${index + 1}`"
           @click="toggleStoredKey(index)"
         >
@@ -76,16 +81,16 @@ function isMarkedForRemoval(index: number) {
       <div v-for="(_, index) in draft.tavilyApiKeys" :key="`new-${index}`" class="key-pool__row key-pool__row--new">
         <span class="key-pool__identity">
           <span>新 Key {{ index + 1 }}</span>
-          <small>等待同步</small>
+          <small>待保存</small>
         </span>
-        <input
+        <SettingsConfirmInput
           v-model.trim="draft.tavilyApiKeys[index]"
-          class="control"
           type="password"
           autocomplete="new-password"
           :aria-label="`Tavily API Key ${index + 1}`"
           placeholder="tvly-..."
-        >
+          :confirm-label="`确认 Tavily API Key ${index + 1}`"
+        />
         <button class="icon-btn" type="button" :aria-label="`移除新 Key ${index + 1}`" @click.prevent="removeNewKey(index)">
           <i class="bx bx-trash" aria-hidden="true"></i>
         </button>

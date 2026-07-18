@@ -37,6 +37,8 @@ describe("runtime selfie references", () => {
 
   it("injects all selfie ids and notes without paths or image bytes", async () => {
     const { config, references } = await createRuntimeFixture("payload", 9);
+    config.persona.defaultAgentId = "arona";
+    config.persona.name = "阿罗娜";
     const runtime = createRuntime(config);
     const renderPromptRequest = vi.spyOn(runtime, "renderPromptRequest").mockResolvedValue({
       messages: [{ role: "user", content: "rewrite" }],
@@ -60,6 +62,7 @@ describe("runtime selfie references", () => {
 
     const variables = renderPromptRequest.mock.calls[0]![1];
     expect(variables["selfie.payload"]).toMatchObject({
+      persona: { name: "阿罗娜" },
       references: {
         workspaceSelfies: references.map(({ id, note }) => ({ id, note })),
         workspaceSelectionLimit: 3,
@@ -72,6 +75,34 @@ describe("runtime selfie references", () => {
     expect(completeRequest).toHaveBeenCalledWith(expect.any(Object), {
       logContext: { ...logContext, promptFamily: "image.selfie-rewrite" }
     });
+  });
+
+  it("uses the generic selfie persona name when no loaded or configured name exists", async () => {
+    const config = createAdminTestConfig(await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-runtime-selfie-name-")));
+    roots.push(path.dirname(config.persona.agentWorkspace));
+    config.persona.defaultAgentId = "secondary";
+    config.persona.name = " ";
+    const runtime = createRuntime(config);
+    const renderPromptRequest = vi.spyOn(runtime, "renderPromptRequest").mockResolvedValue({
+      messages: [{ role: "user", content: "rewrite" }],
+      tools: [],
+      response_format: { type: "json_schema" }
+    });
+    const referenceId = "a".repeat(64);
+    const provider = {
+      completeRequest: vi.fn(async () => JSON.stringify({
+        prompt: "rewritten selfie prompt",
+        selectedSelfieReferenceIds: [referenceId]
+      }))
+    } as unknown as OpenAIProvider;
+
+    await runtime.rewriteSelfiePrompt(provider, "自拍", "1024x1024", {
+      workspaceSelfies: [{ id: referenceId, note: "默认造型" }],
+      chatReferenceImageCount: 0
+    });
+
+    expect(renderPromptRequest.mock.calls[0]![1]["selfie.payload"])
+      .toMatchObject({ persona: { name: "助手" } });
   });
 
   it.each([

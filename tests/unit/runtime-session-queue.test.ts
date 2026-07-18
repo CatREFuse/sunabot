@@ -332,6 +332,7 @@ describe("SunaRuntime Session queue bridge", () => {
       sourceTitle: "用户画像",
       text: "喜欢验证真实运行链路。",
       userId: "171419991",
+      userName: "猫老师",
       addressName: "猫老师"
     });
     readUserProfileForUser.mockImplementationOnce(async () => exactUserProfile as never);
@@ -365,7 +366,7 @@ describe("SunaRuntime Session queue bridge", () => {
 
     const endpointInput = lastUserText(providerRequest!);
     expect(endpointInput).toContain("<working_memory>工作记忆：猫老师正在检查记忆端点。</working_memory>");
-    expect(endpointInput).toContain("<user_profile>用户画像 称呼：猫老师：喜欢验证真实运行链路。</user_profile>");
+    expect(endpointInput).toContain("<user_profile>用户画像 猫老师（QQ 171419991） 称呼：猫老师：喜欢验证真实运行链路。</user_profile>");
   });
 
   it("routes private and group replies to independent prompt families", async () => {
@@ -1482,6 +1483,101 @@ describe("SunaRuntime Session queue bridge", () => {
         toolNames: ["codex"]
       }
     ]);
+  });
+
+  it("queues deferred voice after the acknowledgement and tool job commit without blocking either", async () => {
+    const voiceGate = deferred<void>();
+    const voiceStarted = deferred<void>();
+    const toolGate = deferred<void>();
+    const toolStarted = deferred<void>();
+    const runner: CodexRunner = {
+      async run(_input, context) {
+        toolStarted.resolve();
+        await toolGate.promise;
+        return {
+          ok: true,
+          status: "succeeded",
+          jobId: context.jobId,
+          kind: "analysis",
+          content: "done"
+        };
+      }
+    };
+    const harness = createRuntimeHarness(async (request): Promise<ProviderTurnResult> => {
+      if (lastUserText(request).includes("<tool_result>")) return { kind: "no_reply" };
+      return {
+        kind: "deferred",
+        acknowledgement: "语音稍后跟上，我已经开始处理。",
+        toolCall: {
+          name: "codex",
+          callId: "call-runtime-deferred-voice",
+          arguments: { task: "inspect", kind: "analysis" }
+        },
+        voice: {
+          text: "语音稍后跟上，我已经开始处理。",
+          language: "ja",
+          callId: "call-runtime-deferred-voice-companion",
+          toolName: "send_voice_message"
+        }
+      };
+    }, runner);
+    const voiceFile = path.join(
+      harness.runtime.config.persona.agentWorkspace,
+      "workbench",
+      "exports",
+      "deferred-voice.amr"
+    );
+    fs.mkdirSync(path.dirname(voiceFile), { recursive: true });
+    fs.writeFileSync(voiceFile, Buffer.from("#!AMR\nvoice"));
+    harness.runtime.synthesizeAndQueueVoice = vi.fn(async (voice, context) => {
+      voiceStarted.resolve();
+      await voiceGate.promise;
+      const queued = await harness.runtime.queueConversationAsset({
+        incoming: context.incoming,
+        gateway: context.gateway,
+        input: { path: "exports/deferred-voice.amr", kind: "voice", name: "deferred-voice.amr" },
+        callId: voice.callId,
+        logRunId: context.logRunId,
+        isCurrent: context.isCurrent,
+        delivery: context.delivery,
+        toolName: "send_voice_message"
+      });
+      return { ok: true as const, queued };
+    });
+
+    await handleOneBotEvent(
+      harness.runtime,
+      privateEvent(31_190, "deferred voice"),
+      harness.gateway
+    );
+    await voiceStarted.promise;
+    await toolStarted.promise;
+    await waitUntil(() => sentTexts(harness.gateway).includes("语音稍后跟上，我已经开始处理。"));
+
+    const sessionId = "private:171419991";
+    expect(harness.store.listToolJobs(sessionId)[0]).toMatchObject({
+      status: "running",
+      providerCallId: "call-runtime-deferred-voice"
+    });
+    expect(harness.gateway.sendConversationAsset).not.toHaveBeenCalled();
+    expect(harness.store.listOutbox(sessionId).map((outbox) => outbox.kind)).toEqual(["onebot.reply"]);
+
+    voiceGate.resolve();
+    await waitUntil(() => (harness.gateway.sendConversationAsset as unknown as ReturnType<typeof vi.fn>).mock.calls.length === 1);
+    expect(harness.store.listOutbox(sessionId).map((outbox) => outbox.kind)).toEqual([
+      "onebot.reply",
+      "onebot.conversation_asset"
+    ]);
+    expect(harness.store.listOutbox(sessionId)[1]).toMatchObject({
+      originTurnId: harness.store.listTurns(sessionId)[0]!.id,
+      dedupeKey: expect.stringMatching(/^turn-outbox:[^:]+:1:[a-f0-9]{64}$/u)
+    });
+    expect(harness.gateway.sendConversationAsset).toHaveBeenCalledWith(expect.objectContaining({
+      asset: expect.objectContaining({ kind: "voice", name: "deferred-voice.amr" })
+    }));
+
+    toolGate.resolve();
+    await harness.coordinator.waitForIdle({ timeoutMs: 3_000 });
   });
 
   it("persists asynchronous image callbacks with their source tool", async () => {

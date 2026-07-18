@@ -228,7 +228,7 @@ export function buildDockerInvocation(
     "--cpus", "1",
     "--ulimit", "fsize=268435456:268435456",
     "--tmpfs", "/tmp:rw,nosuid,nodev,size=64m,mode=1777",
-    "--mount", `type=bind,src=${workbenchRoot},dst=/workbench,rw`,
+    "--mount", `type=bind,src=${workbenchRoot},dst=/workbench`,
     "--workdir", "/workbench"
   ];
   addClearedDockerProxyEnvironment(args);

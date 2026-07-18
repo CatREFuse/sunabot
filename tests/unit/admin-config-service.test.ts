@@ -80,6 +80,7 @@ describe("ConfigService section semantics", () => {
         pokeOnNoReply: envelope.config.bot.pokeOnNoReply,
         quoteGroupReplies: envelope.config.bot.quoteGroupReplies,
         quoteGroupReplyExcludedUserIds: envelope.config.bot.quoteGroupReplyExcludedUserIds,
+        emojiSendSize: envelope.config.bot.emojiSendSize,
         contextMessageLimit: envelope.config.bot.contextMessageLimit
       }
     });
@@ -102,6 +103,7 @@ describe("ConfigService section semantics", () => {
         pokeOnNoReply: envelope.config.bot.pokeOnNoReply,
         quoteGroupReplies: envelope.config.bot.quoteGroupReplies,
         quoteGroupReplyExcludedUserIds: envelope.config.bot.quoteGroupReplyExcludedUserIds,
+        emojiSendSize: envelope.config.bot.emojiSendSize,
         contextMessageLimit: envelope.config.bot.contextMessageLimit
       }
     })).rejects.toMatchObject({
@@ -455,6 +457,7 @@ describe("ConfigService section semantics", () => {
         pokeOnNoReply: envelope.config.bot.pokeOnNoReply,
         quoteGroupReplies: !envelope.config.bot.quoteGroupReplies,
         quoteGroupReplyExcludedUserIds: ["20001", "20001", "20002"],
+        emojiSendSize: envelope.config.bot.emojiSendSize,
         contextMessageLimit: envelope.config.bot.contextMessageLimit
       }
     });
@@ -476,6 +479,7 @@ describe("ConfigService section semantics", () => {
         pokeOnNoReply: envelope.config.bot.pokeOnNoReply,
         quoteGroupReplies: envelope.config.bot.quoteGroupReplies,
         quoteGroupReplyExcludedUserIds: ["20001", "another-bot"],
+        emojiSendSize: envelope.config.bot.emojiSendSize,
         contextMessageLimit: envelope.config.bot.contextMessageLimit
       }
     })).rejects.toMatchObject({

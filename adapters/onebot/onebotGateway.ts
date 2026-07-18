@@ -36,6 +36,7 @@ import {
   parseOneBotInboundMessage
 } from "./inboundMessageAdapter.js";
 import type { OneBotEvent } from "./protocol.js";
+import { normalizeMentionUserIds } from "./outboundMentions.js";
 import {
   loadOneBotConversationDirectory,
   resolveOneBotAttachment,
@@ -289,13 +290,14 @@ export class OneBotGateway extends EventEmitter implements MessagingPort, Conver
     groupId: number,
     text: string,
     images: OutboundImageAsset[],
-    options: { replyToMessageId?: number; accountId?: string } = {},
+    options: { replyToMessageId?: number; accountId?: string; mentionUserIds?: readonly number[] } = {},
     contentSegments?: OutboundContentSegmentV1[]
   ) {
+    const mentionUserIds = normalizeMentionUserIds(options.mentionUserIds);
     const imageSources = await this.resolveImageSources(images, contentSegments);
     return this.sendTargetedAction("send_group_msg", {
       group_id: groupId,
-      message: richMessage(text, imageSources, options.replyToMessageId, contentSegments)
+      message: richMessage(text, imageSources, options.replyToMessageId, contentSegments, mentionUserIds)
     }, options.accountId);
   }
 
@@ -345,6 +347,10 @@ export class OneBotGateway extends EventEmitter implements MessagingPort, Conver
 
   async send(message: OutboundMessageV1): Promise<MessagingReceiptV1> {
     const accountId = message.accountId ?? accountIdFromConversationId(message.conversationId);
+    const mentionUserIds = normalizeMentionUserIds(message.mentionUserIds);
+    if (mentionUserIds.length && (message.scope === "private" || !message.groupId)) {
+      throw new Error("Outbound mentions require a group message.");
+    }
     const text = sanitizeOneBotOutboundText(message.text);
     const contentSegments = message.contentSegments?.map((segment) => segment.type === "text"
       ? { type: "text" as const, text: sanitizeOneBotOutboundText(segment.text) }
@@ -354,10 +360,11 @@ export class OneBotGateway extends EventEmitter implements MessagingPort, Conver
       filePath: asset.source === "shared_file" ? asset.filePath : undefined
     }));
     const response = message.groupId
-      ? images.length || contentSegments?.length
+      ? images.length || contentSegments?.length || mentionUserIds.length
         ? await this.sendGroupRichMessage(message.groupId, text, images, {
           replyToMessageId: message.replyToMessageId,
-          accountId
+          accountId,
+          mentionUserIds
         }, contentSegments)
         : await this.sendGroupMessage(message.groupId, text, {
           replyToMessageId: message.replyToMessageId,
@@ -652,7 +659,8 @@ function richMessage(
   text: string,
   imageSources: string[],
   replyToMessageId?: number,
-  contentSegments?: OutboundContentSegmentV1[]
+  contentSegments?: OutboundContentSegmentV1[],
+  mentionUserIds: readonly number[] = []
 ) {
   const segments = [];
   if (replyToMessageId) {
@@ -662,6 +670,10 @@ function richMessage(
         id: String(replyToMessageId)
       }
     });
+  }
+
+  for (const userId of mentionUserIds) {
+    segments.push({ type: "at", data: { qq: String(userId) } });
   }
 
   if (contentSegments?.length) {

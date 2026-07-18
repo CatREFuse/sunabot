@@ -110,6 +110,26 @@ import { buildConversationPromptVariables } from "../../services/agent/persona.j
 import { DEFAULT_CONTEXT_MESSAGE_LIMIT, MAX_STORED_CONVERSATION_MESSAGES, GROUP_CHAT_SUMMARY_WINDOW_MS, MAX_SELFIE_REFERENCE_IMAGES, MAX_SELFIE_WORKSPACE_REFERENCE_IMAGES, MAX_CURRENT_CONTEXT_IMAGES, MAX_HISTORY_CONTEXT_IMAGES, HYDRATE_MESSAGE_WINDOW_MS, ACTIVE_CONVERSATION_WINDOW_MS, DIRECT_REPLY_TIMEOUT_MS, AMBIENT_ORCHESTRATOR_TIMEOUT_MS, ORCHESTRATOR_MAX_RETRIES, PREPARE_TIMEOUT_MS, RECENT_CONTEXT_TOKEN_BUDGET, DEDUPE_TTL_MS, MAX_DEDUPE_KEYS, DEFAULT_ADMIN_NAME, GROUP_CHAT_SUMMARY_COMMAND, CONVERSATION_REPLY_PROMPT_FILE, SELFIE_PROMPT_FILE, GROUP_CHAT_SUMMARY_PROMPT_FILE, ADMIN_PERSONA_FILES, ADMIN_RUNTIME_PROMPT_DEFAULTS, BatchUserInfo, WorkingMemoryMergeOutput, WorkingMemoryMergeContext, personaFileNameForAdminId, AdminIdentity, ConversationReplyUpdateInput, RuntimeCommandContext, ReplyDeliveryDraft, ReplyDelivery, DeferredCodexTurn, AmbientReplyJob, AmbientReplyState, AmbientIdleTimer, RuntimeConfigSnapshot, RuntimePromptSnapshot, SunaRuntimeOptions } from "./runtimeContracts.js";
 import { conversationRecordId, escapeRegExp, formatAttachmentListForContext, formatQuoteReferencesForContext, matchesMentionName, readRecord, uniqueStrings } from "./messagingAttachmentHelpers.js";
 import { conversationLastText, conversationTitle } from "./selfieHelpers.js";
+import {
+  hasForbiddenMemoryRecallPhrase,
+  hasInvalidQqIdentity,
+  hasMemoryIdentity,
+  hasOnlyTrustedMemoryIdentityMarkers,
+  hasUntrustedMemoryQq,
+  isRoleFirstPersonMemory,
+  isRoleFirstPersonProfile,
+  normalizeQqId,
+  normalizeQqIds,
+  replaceReportedMemoryIdentity,
+  resolveFactUsers,
+  trustedParticipantName
+} from "./conversationMemoryIdentity.js";
+
+export { normalizeQqId, normalizeQqIds, resolveFactUsers } from "./conversationMemoryIdentity.js";
+
+export function resolveRuntimePersonaName(personaName: string | undefined, configuredName: string | undefined) {
+  return personaName?.trim() || configuredName?.trim() || "助手";
+}
 
 export function estimatePromptTokens(text: string) {
   let tokens = 0;
@@ -164,7 +184,9 @@ export function collectGroupChatSummaryMessages(
         at: message.at,
         role: message.role,
         userId: message.userId,
-        senderName: message.role === "assistant" ? "普拉娜" : message.senderName,
+        senderName: message.role === "assistant"
+          ? resolveRuntimePersonaName(message.senderName, undefined)
+          : message.senderName,
         text
       }];
     });
@@ -415,13 +437,18 @@ export function normalizeMemoryFacts(values: unknown[]): MemoryFactInput[] {
   const facts: MemoryFactInput[] = [];
   for (const value of values) {
     const record = readRecord(value);
+    const rawFact = record.fact ?? record.text ?? record.summary ?? record.memory ?? record.impression ?? record.profile;
+    if (hasForbiddenMemoryRecallPhrase(rawFact)) continue;
     const id = stringValue(record.id);
-    const fact = stringValue(record.fact ?? record.text ?? record.summary ?? record.memory ?? record.impression ?? record.profile);
+    const fact = normalizeMemoryFactText(rawFact);
     if (!fact) continue;
     const time = stringValue(record.time ?? record.at ?? record.createdAt ?? record.date);
-    const userId = normalizeQqId(record.userId ?? record.qq ?? record.qqId);
+    const rawUserId = record.userId ?? record.qq ?? record.qqId;
+    const rawUserIds = record.userIds ?? record.user_ids ?? record.qqs;
+    if (hasInvalidQqIdentity(rawUserId) || hasInvalidQqIdentity(rawUserIds)) continue;
+    const userId = normalizeQqId(rawUserId);
     const userIds = uniqueStrings([
-      ...normalizeQqIds(record.userIds ?? record.user_ids ?? record.qqs),
+      ...normalizeQqIds(rawUserIds),
       ...(userId ? [userId] : [])
     ]);
     const userName = stringValue(record.userName ?? record.user_name ?? record.name ?? record.nickname ?? record.card);
@@ -463,35 +490,62 @@ export function normalizeMemoryFacts(values: unknown[]): MemoryFactInput[] {
   return facts;
 }
 export function attachUsersToMemoryFacts(facts: MemoryFactInput[], participants: BatchUserInfo[]) {
-  return facts.map((fact) => {
+  return facts.flatMap((fact) => {
+    if (hasForbiddenMemoryRecallPhrase(fact.fact)) return [];
+    if (hasUntrustedMemoryQq(fact, participants)) return [];
     const relatedUsers = resolveFactUsers(fact, participants);
-    if (!relatedUsers.length) return fact;
+    if (!relatedUsers.length) return [fact];
 
-    const factText = relatedUsers.some((user) => fact.fact.includes(user.userId))
-      ? fact.fact
-      : `相关用户：${relatedUsers.map(formatBatchUserLabel).join("；")}。${fact.fact}`;
-    return {
+    const identities = relatedUsers.flatMap((user) => {
+      const userName = trustedParticipantName(user);
+      return userName ? [{ userId: user.userId, userName }] : [];
+    });
+    if (identities.length !== relatedUsers.length) return [];
+    const normalizedFact = identities.length === 1
+      ? replaceReportedMemoryIdentity(fact.fact, identities[0]!, fact.userName)
+      : fact.fact;
+    if (identities.some((identity) => !hasMemoryIdentity(normalizedFact, identity))) return [];
+    if (!hasOnlyTrustedMemoryIdentityMarkers(normalizedFact, participants)) return [];
+    if (!isRoleFirstPersonMemory(normalizedFact, identities)) return [];
+    const primaryName = identities[0]?.userName;
+    return [{
       ...fact,
-      fact: factText,
+      fact: normalizedFact,
       userId: fact.userId ?? (relatedUsers.length === 1 ? relatedUsers[0]!.userId : undefined),
-      userIds: uniqueStrings([
-        ...(fact.userIds ?? []),
-        ...relatedUsers.map((user) => user.userId)
-      ]),
-      userName: fact.userName ?? (relatedUsers.length === 1 ? relatedUsers[0]!.addressName : undefined)
-    };
+      userIds: uniqueStrings(relatedUsers.map((user) => user.userId)),
+      userName: primaryName
+    }];
   });
 }
 export function normalizeUserProfileFacts(facts: MemoryFactInput[], participants: BatchUserInfo[]) {
   return facts.flatMap((fact) => {
+    if (hasForbiddenMemoryRecallPhrase(fact.fact)) return [];
+    if (hasUntrustedMemoryQq(fact, participants)) return [];
     const relatedUsers = resolveFactUsers(fact, participants);
     if (!relatedUsers.length) return [];
-    return relatedUsers.map((user) => {
-      const userName = fact.userName || user.currentName || user.userId;
+    const identities = relatedUsers.flatMap((user) => {
+      const userName = trustedParticipantName(user);
+      return userName ? [{ userId: user.userId, userName }] : [];
+    });
+    if (identities.length !== relatedUsers.length) return [];
+    const normalizedFact = identities.length === 1
+      ? replaceReportedMemoryIdentity(fact.fact, identities[0]!, fact.userName)
+      : fact.fact;
+    if (identities.some((identity) => !hasMemoryIdentity(normalizedFact, identity))) return [];
+    if (!hasOnlyTrustedMemoryIdentityMarkers(normalizedFact, participants)) return [];
+    if (!isRoleFirstPersonProfile(normalizedFact, identities)) return [];
+    return relatedUsers.flatMap((user) => {
+      const userName = trustedParticipantName(user);
+      if (!userName) return [];
       const addressName = user.isAdmin ? user.addressName : fact.addressName || user.addressName;
+      const strippedFact = normalizeMemoryFactText(stripUserProfilePrefix(normalizedFact, user.userId, userName));
+      const identity = { userId: user.userId, userName };
+      if (!hasMemoryIdentity(strippedFact, identity)) return [];
+      if (!isRoleFirstPersonProfile(strippedFact, [identity])
+        || (!strippedFact.includes(user.userId) && !strippedFact.includes(userName))) return [];
       return {
         ...fact,
-        fact: stripUserProfilePrefix(fact.fact, user.userId, userName),
+        fact: strippedFact,
         userId: user.userId,
         userIds: [user.userId],
         userName,
@@ -499,6 +553,9 @@ export function normalizeUserProfileFacts(facts: MemoryFactInput[], participants
       };
     });
   });
+}
+export function normalizeMemoryFactText(value: unknown) {
+  return stringValue(value);
 }
 export function stripUserProfilePrefix(text: string, userId: string, userName: string) {
   const idPattern = escapeRegExp(userId);
@@ -510,26 +567,6 @@ export function stripUserProfilePrefix(text: string, userId: string, userName: s
     .map((line) => line.replace(exactPrefix, "").replace(genericPrefix, "").trim())
     .filter(Boolean)
     .join("\n");
-}
-export function resolveFactUsers(fact: MemoryFactInput, participants: BatchUserInfo[]) {
-  if (!participants.length) return [];
-  const participantById = new Map(participants.map((user) => [user.userId, user]));
-  const explicitIds = uniqueStrings([
-    ...normalizeQqIds(fact.userIds),
-    ...normalizeQqIds(fact.userId)
-  ]);
-  const explicitUsers = explicitIds.flatMap((id) => {
-    const user = participantById.get(id);
-    return user ? [user] : [];
-  });
-  if (explicitUsers.length) return explicitUsers;
-
-  const matchedUsers = participants.filter((user) => {
-    if (fact.fact.includes(user.userId)) return true;
-    return user.names.some((name) => name && fact.fact.includes(name));
-  });
-  if (matchedUsers.length) return matchedUsers;
-  return participants;
 }
 export function parseModelJson(text: string): unknown {
   const trimmed = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
@@ -561,20 +598,6 @@ export function tryParseJson(text: string) {
 }
 export function stringValue(value: unknown) {
   return String(value ?? "").trim();
-}
-export function normalizeQqId(value: unknown) {
-  const text = stringValue(value);
-  if (!text) return "";
-  const match = text.match(/\d{5,}/);
-  return match?.[0] ?? text;
-}
-export function normalizeQqIds(value: unknown) {
-  const values = Array.isArray(value)
-    ? value
-    : stringValue(value)
-      .split(/[,\s，、/]+/)
-      .filter(Boolean);
-  return uniqueStrings(values.map(normalizeQqId).filter(Boolean));
 }
 export function normalizeStringIds(value: unknown) {
   const values = Array.isArray(value)

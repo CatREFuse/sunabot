@@ -30,6 +30,11 @@ import {
   type SystemConfigToolPort
 } from "./systemConfigTool.js";
 import {
+  CRON_TOOL_NAME,
+  cronTool,
+  type CronToolPort
+} from "./cronTool.js";
+import {
   READ_FILE_TOOL_NAME,
   WRITE_FILE_TOOL_NAME,
   readFileTool,
@@ -38,9 +43,10 @@ import {
 import {
   SEND_FILE_TOOL_NAME,
   SEND_VOICE_MESSAGE_TOOL_NAME,
+  createSendVoiceMessageTool,
   sendFileTool,
-  sendVoiceMessageTool
 } from "./sendConversationAssetTool.js";
+import type { VoiceLanguage } from "../voice/public.js";
 import { withRequiredDispatchMessage, withoutDispatchMessage } from "./deferredDispatch.js";
 import {
   ACTIVATE_SKILL_TOOL_NAME,
@@ -69,10 +75,12 @@ export interface ToolAvailability {
   selfie?: { enabled: boolean };
   memory?: { enabled: boolean };
   conversationAssets?: { enabled: boolean };
+  voice?: { enabled: boolean; languages: readonly VoiceLanguage[]; defaultLanguage: VoiceLanguage };
   asyncCodex?: boolean;
   asyncImage?: boolean;
   imageTools?: boolean;
   systemConfig?: SystemConfigToolPort;
+  cron?: CronToolPort;
   skills?: SkillRuntimeToolPort;
   skillCapabilities?: SkillToolCapabilitySnapshot;
   disabledTools?: readonly AgentToolName[];
@@ -219,10 +227,13 @@ const catalog: readonly ToolCatalogEntry[] = [
   {
     name: SEND_VOICE_MESSAGE_TOOL_NAME,
     title: "发送语音",
-    summary: "向当前单聊或群聊发送 Agent workbench 中的语音。",
-    definition: () => sendVoiceMessageTool,
-    available: () => false,
-    unavailableReason: "语音消息工具尚未启用。",
+    summary: "合成克隆语音并发送到当前单聊或群聊。",
+    definition: (options) => createSendVoiceMessageTool(
+      options.voice?.languages,
+      options.voice?.defaultLanguage
+    ),
+    available: (options) => options.voice?.enabled === true && options.voice.languages.length > 0,
+    unavailableReason: "当前 Agent 未配置可用的语音参考音频。",
     execution: "inline"
   },
   {
@@ -280,6 +291,19 @@ const catalog: readonly ToolCatalogEntry[] = [
     definition: () => systemConfigTool,
     available: (options) => Boolean(options.systemConfig),
     unavailableReason: "仅管理员私聊和管理员 Web Chat 可以使用。",
+    defaultEnabled: true,
+    execution: "inline"
+  },
+  {
+    name: CRON_TOOL_NAME,
+    title: "定时任务",
+    summary: "管理当前 Agent 的主动定时回调。",
+    definition: () => cronTool,
+    available: (options) => Boolean(options.cron),
+    unavailableReason: "仅管理员私聊和管理员 Web Chat 可以使用。",
+    unavailabilityKind: "session",
+    accessLabel: "管理员私聊与 Web Chat 可用",
+    accessDescription: "群聊和普通用户私聊不可用。",
     defaultEnabled: true,
     execution: "inline"
   }
@@ -448,11 +472,13 @@ function applyRuntimeToolContract(
 ) {
   if (
     entry.name !== SYSTEM_CONFIG_TOOL_NAME
+    && entry.name !== CRON_TOOL_NAME
     && entry.name !== GENERATE_IMG_TOOL_NAME
     && entry.name !== SELFIE_TOOL_NAME
     && entry.name !== READ_FILE_TOOL_NAME
     && entry.name !== WRITE_FILE_TOOL_NAME
     && entry.name !== SEND_FILE_TOOL_NAME
+    && entry.name !== SEND_VOICE_MESSAGE_TOOL_NAME
     && entry.name !== ACTIVATE_SKILL_TOOL_NAME
     && entry.name !== READ_SKILL_RESOURCE_TOOL_NAME
     && entry.name !== RUN_SKILL_SCRIPT_TOOL_NAME

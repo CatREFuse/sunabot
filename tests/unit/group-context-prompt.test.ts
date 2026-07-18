@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { PROMPT_FILE_DEFINITIONS } from "../../services/agent/promptCatalog.js";
 import {
   DEFAULT_GROUP_CONTEXT_CONTRACT,
+  defaultPromptContent,
   defaultFinalPromptTemplate
 } from "../../services/agent/promptDefaults.js";
 import { renderFinalPromptTemplate } from "../../services/agent/promptSystem.js";
@@ -12,6 +13,7 @@ import {
   migrateUserGroupOrchestratorResultSchemaTemplate
 } from "../../services/agent/promptWorkspace.js";
 import { serializeUserGroupOrchestratorResult } from "../../services/orchestration/userGroupOrchestratorResult.js";
+import { defaultVoiceProfile, voicePromptVariables } from "../../services/voice/public.js";
 import { toContextChatMessage } from "../../src/runtime/conversationMemoryHelpers.js";
 import {
   currentPromptInputMessage,
@@ -21,6 +23,21 @@ import {
 import type { ConversationRecord } from "../../src/types.js";
 
 describe("group context prompt contract", () => {
+  it("keeps shared orchestration prompts generic for every Agent", () => {
+    for (const id of ["orchestrator.user-group", "conversation.group-summary"] as const) {
+      const template = defaultFinalPromptTemplate(id)!;
+      const system = template.messages
+        .filter((message) => typeof message === "object" && message.role === "system")
+        .map((message) => typeof message === "object" ? message.content : "")
+        .join("\n");
+
+      expect(system).toMatch(/当前 Agent|当前角色/);
+      expect(system).not.toContain("普拉娜");
+      expect(system).not.toContain("老师");
+      expect(defaultPromptContent(id, "阿罗娜")).not.toContain("阿罗娜的性格");
+    }
+  });
+
   it("formats group messages with full metadata names and a reply edge", () => {
     const message = conversationMessage({
       id: "248637222",
@@ -182,6 +199,7 @@ describe("group context prompt contract", () => {
       "runtime.tool_rules": "",
       "conversation.emoji.keys": [],
       "conversation.emoji.syntax": "",
+      ...voicePromptVariables(defaultVoiceProfile()),
       "messages_64": [
         { role: "user", content: "历史消息" },
         { role: "assistant", content: "历史回复" }
@@ -223,6 +241,7 @@ describe("group context prompt contract", () => {
       "runtime.tool_rules": "",
       "conversation.emoji.keys": [],
       "conversation.emoji.syntax": "",
+      ...voicePromptVariables(defaultVoiceProfile()),
       "messages_64": [],
       "conversation.group.thread_context": "",
       "conversation.group.orchestrator_result": "",

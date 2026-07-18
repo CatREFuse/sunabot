@@ -12,6 +12,8 @@ import WebChatView from "./views/WebChatView.vue";
 import AgentsView from "./views/AgentsView.vue";
 import AgentExtensionsView from "./views/AgentExtensionsView.vue";
 import ConversationSettingsView from "./views/ConversationSettingsView.vue";
+import ScheduledTasksView from "./views/ScheduledTasksView.vue";
+import VoiceView from "./views/VoiceView.vue";
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -20,6 +22,8 @@ export const router = createRouter({
     { path: "/overview", name: "overview", component: OverviewView },
     { path: "/conversations/:conversationId/settings/:section?", name: "conversation-settings", component: ConversationSettingsView },
     { path: "/conversations/:conversationId?", name: "conversations", component: ConversationsView },
+    { path: "/scheduled-tasks", name: "scheduled-tasks", component: ScheduledTasksView },
+    { path: "/voice", name: "voice", component: VoiceView },
     { path: "/web-chat", name: "web-chat", component: WebChatView },
     { path: "/agent-prompts/:fileId?", name: "agent-prompts", component: PromptsView, props: { scope: "persona" } },
     { path: "/system-prompts/:fileId?", name: "system-prompts", component: PromptsView, props: { scope: "system" } },

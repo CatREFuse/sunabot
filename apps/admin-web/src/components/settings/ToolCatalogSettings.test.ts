@@ -189,16 +189,20 @@ describe("ToolCatalogSettings", () => {
     expect(wrapper.get('[role="dialog"]').text()).not.toContain("运行环境异常");
     expect(wrapper.get('[role="dialog"]').text()).not.toContain("能力可用");
     await wrapper.get('textarea[maxlength="4000"]').setValue("只在需要实时信息时搜索网页。");
+    const confirm = wrapper.findAll("button").find((button) => button.text().includes("确认"));
+    await confirm!.trigger("click");
     expect(draft.overrides.websearch).toEqual({
       enabled: false,
       description: "只在需要实时信息时搜索网页。"
     });
+    expect(wrapper.emitted("commit")).toHaveLength(2);
     expect(wrapper.get('table[aria-label="工具参数"]').text()).toContain("query");
     expect(wrapper.get('table[aria-label="工具参数"]').text()).toContain("必填");
 
     const reset = wrapper.findAll("button").find((button) => button.text().includes("恢复继承说明"));
     await reset!.trigger("click");
     expect(draft.overrides.websearch).toEqual({ enabled: false });
+    expect(wrapper.emitted("commit")).toHaveLength(3);
     expect((wrapper.get('textarea[maxlength="4000"]').element as HTMLTextAreaElement).value).toBe("Prompt web search.");
 
     await websearchToggle!.find('input[type="checkbox"]').setValue(true);

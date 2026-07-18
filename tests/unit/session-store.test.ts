@@ -1889,6 +1889,117 @@ describe("SessionStore", () => {
     expect(store.getOutbox(deferred.acknowledgement.id)).toMatchObject({ status: "pending" });
   });
 
+  it("appends a deferred turn outbox only for its committed event and tool job", async () => {
+    const { store } = await createHarness();
+    const incoming = store.enqueueEvent({
+      sessionId: "group:deferred-outbox",
+      kind: "incoming",
+      payload: { text: "start deferred work" }
+    });
+    const claim = store.claimNextTurn({ workerId: "agent" })!;
+    store.deferTurn({
+      turnId: claim.turn.id,
+      workerId: "agent",
+      job: {
+        providerCallId: "call-deferred-outbox",
+        toolName: "codex",
+        originalRequest: incoming.event.payload,
+        arguments: { task: "inspect" }
+      },
+      acknowledgement: { kind: "reply", payload: { text: "started" } }
+    });
+    const fingerprint = "a".repeat(64);
+    const input = {
+      turnId: claim.turn.id,
+      eventId: incoming.event.id,
+      providerCallId: "call-deferred-outbox",
+      dedupeKey: `turn-outbox:${incoming.event.id}:1`,
+      draft: {
+        kind: "voice",
+        payload: { text: "started" },
+        dedupeFingerprint: fingerprint
+      }
+    };
+
+    const appended = store.appendDeferredTurnOutbox(input);
+    const duplicate = store.appendDeferredTurnOutbox(input);
+
+    expect(appended).toMatchObject({
+      inserted: true,
+      outbox: {
+        sequence: 2,
+        originTurnId: claim.turn.id,
+        dedupeKey: `${input.dedupeKey}:${fingerprint}`,
+        status: "pending"
+      }
+    });
+    expect(duplicate).toMatchObject({ inserted: false, outbox: { id: appended.outbox.id } });
+    expect(store.listOutbox("group:deferred-outbox")).toHaveLength(2);
+  });
+
+  it("rejects non-deferred, mismatched, malformed, and fingerprint-changing deferred outbox appends", async () => {
+    const { store } = await createHarness();
+    const incoming = store.enqueueEvent({
+      sessionId: "group:deferred-outbox-guard",
+      kind: "incoming",
+      payload: {}
+    });
+    const claim = store.claimNextTurn({ workerId: "agent" })!;
+    store.deferTurn({
+      turnId: claim.turn.id,
+      workerId: "agent",
+      job: {
+        providerCallId: "call-guard",
+        toolName: "codex",
+        originalRequest: {},
+        arguments: {}
+      },
+      acknowledgement: { kind: "reply", payload: {} }
+    });
+    const base = {
+      turnId: claim.turn.id,
+      eventId: incoming.event.id,
+      providerCallId: "call-guard",
+      dedupeKey: `turn-outbox:${incoming.event.id}:1`,
+      draft: { kind: "voice", payload: {}, dedupeFingerprint: "b".repeat(64) }
+    };
+    store.appendDeferredTurnOutbox(base);
+
+    expect(() => store.appendDeferredTurnOutbox({
+      ...base,
+      eventId: "foreign-event"
+    })).toThrow("does not belong to turn");
+    expect(() => store.appendDeferredTurnOutbox({
+      ...base,
+      providerCallId: "foreign-call"
+    })).toThrow("Tool job not found");
+    expect(() => store.appendDeferredTurnOutbox({
+      ...base,
+      draft: { ...base.draft, dedupeFingerprint: "c".repeat(64) }
+    })).toThrow("dedupe fingerprint changed");
+    expect(() => store.appendDeferredTurnOutbox({
+      ...base,
+      dedupeKey: `turn-outbox:${incoming.event.id}:2`,
+      draft: { ...base.draft, dedupeFingerprint: "not-a-digest" }
+    })).toThrow("lowercase SHA-256 digest");
+
+    const ordinary = store.enqueueEvent({
+      sessionId: "group:not-deferred",
+      kind: "incoming",
+      payload: {}
+    });
+    const ordinaryClaim = store.claimNextTurn({ workerId: "ordinary", sessionId: ordinary.event.sessionId })!;
+    store.finishTurn({ turnId: ordinaryClaim.turn.id, workerId: "ordinary", outcome: "no_reply" });
+    expect(() => store.appendDeferredTurnOutbox({
+      ...base,
+      turnId: ordinaryClaim.turn.id,
+      eventId: ordinary.event.id,
+      dedupeKey: `turn-outbox:${ordinary.event.id}:1`
+    })).toThrow("not deferred");
+    expect(store.listOutbox("group:deferred-outbox-guard")).toHaveLength(2);
+    expect(store.listOutbox("group:not-deferred")).toHaveLength(0);
+  });
+
   it("appends one idempotent tool completion event at the session tail", async () => {
     const { store } = await createHarness();
     store.enqueueEvent({ sessionId: "group:400", kind: "incoming", payload: { text: "first" } });

@@ -3,6 +3,7 @@ import { computed } from "vue";
 import ModelSelect from "./ModelSelect.vue";
 import ReasoningEffortSelect from "./ReasoningEffortSelect.vue";
 import ToggleSwitch from "../ui/ToggleSwitch.vue";
+import SettingsConfirmInput from "./SettingsConfirmInput.vue";
 import type { ConfigSectionValueMap, ModelCatalogItem, ProviderConfig } from "../../types";
 
 const draft = defineModel<ConfigSectionValueMap["tone"]>({ required: true });
@@ -35,15 +36,15 @@ const enabledProviders = computed(() => props.providers.filter((provider) => pro
       <ReasoningEffortSelect v-model="draft.reasoningEffort" :model="draft.model" :models="models" data-config-field="tone.reasoningEffort" />
       <label class="field">
         <span class="field-label">随机性（Temperature）</span>
-        <input v-model.number="draft.temperature" class="control" data-config-field="tone.temperature" type="number" min="0" max="2" step="0.1">
+        <SettingsConfirmInput v-model.number="draft.temperature" data-config-field="tone.temperature" type="number" min="0" max="2" step="0.1" confirm-label="确认随机性" />
       </label>
       <label class="field">
         <span class="field-label">最大输出 Token</span>
-        <input v-model.number="draft.maxOutputTokens" class="control" data-config-field="tone.maxOutputTokens" type="number" min="1" max="1000000" step="1">
+        <SettingsConfirmInput v-model.number="draft.maxOutputTokens" data-config-field="tone.maxOutputTokens" type="number" min="1" max="1000000" step="1" confirm-label="确认最大输出 Token" />
       </label>
       <label class="field">
         <span class="field-label">失败重试次数</span>
-        <input v-model.number="draft.maxRetries" class="control" data-config-field="tone.maxRetries" type="number" min="0" max="10" step="1">
+        <SettingsConfirmInput v-model.number="draft.maxRetries" data-config-field="tone.maxRetries" type="number" min="0" max="10" step="1" confirm-label="确认失败重试次数" />
       </label>
     </div>
     <div class="border-t border-line pt-6">

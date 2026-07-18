@@ -9,6 +9,7 @@ type ToolsTab = "catalog" | "runtime";
 const draft = defineModel<ConfigSectionValueMap["tools"]>({ required: true });
 const bash = defineModel<ConfigSectionValueMap["bash"]>("bash", { required: true });
 const pokeOnNoReply = defineModel<boolean>("pokeOnNoReply", { default: false });
+const emit = defineEmits<{ commit: [] }>();
 defineProps<{
   models: readonly ModelCatalogItem[];
   fieldStates?: ConfigEnvelope["fieldStates"];
@@ -70,7 +71,7 @@ function onTabKeydown(event: KeyboardEvent, index: number) {
       aria-labelledby="tools-tab-catalog"
       :hidden="activeTab !== 'catalog'"
     >
-      <ToolCatalogSettings v-model="draft" v-model:bash="bash" v-model:poke-on-no-reply="pokeOnNoReply" />
+      <ToolCatalogSettings v-model="draft" v-model:bash="bash" v-model:poke-on-no-reply="pokeOnNoReply" @commit="emit('commit')" />
     </section>
     <section
       id="tools-panel-runtime"
@@ -78,7 +79,7 @@ function onTabKeydown(event: KeyboardEvent, index: number) {
       aria-labelledby="tools-tab-runtime"
       :hidden="activeTab !== 'runtime'"
     >
-      <ToolRuntimeSettings v-model="draft" :models="models" :field-states="fieldStates" />
+      <ToolRuntimeSettings v-model="draft" :models="models" :field-states="fieldStates" @commit="emit('commit')" />
     </section>
   </section>
 </template>

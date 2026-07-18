@@ -5,6 +5,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   DEFAULT_SELFIE_REFERENCE_SELECTION_CONTRACT,
+  DEFAULT_GENERIC_SELFIE_PROMPT_REWRITE_PROMPT,
+  DEFAULT_SELFIE_PROMPT_REWRITE_PROMPT,
+  defaultGenericSelfiePromptContent,
+  defaultPromptContent,
   defaultFinalPromptTemplate
 } from "../../services/agent/promptDefaults.js";
 import { migrateSelfieReferenceSelectionTemplate } from "../../services/agent/promptWorkspace.js";
@@ -21,6 +25,55 @@ afterEach(async () => {
 });
 
 describe("selfie prompt reference-selection migration", () => {
+  it("uses the generic selfie prompt for every secondary Agent fallback path", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-secondary-selfie-prompt-"));
+    roots.push(root);
+    const config = createAdminTestConfig(root);
+    config.persona.defaultAgentId = "arona";
+    config.persona.name = "阿罗娜";
+    config.persona.agentWorkspace = path.join(root, "agents", "arona");
+    const runtime = new SunaRuntime(config, { attachmentService: {} as never });
+    runtimes.push(runtime);
+
+    expect(runtime.defaultPromptContent("image.selfie-rewrite"))
+      .toBe(defaultGenericSelfiePromptContent());
+
+    await runtime.ensureAgentPromptFiles(config);
+    const promptPath = path.join(config.persona.agentWorkspace, "selfie_prompt_rewrite.json");
+    await expect(fs.readFile(promptPath, "utf8")).resolves.toBe(defaultGenericSelfiePromptContent());
+
+    await fs.writeFile(promptPath, " \n", "utf8");
+    const rendered = await runtime.renderPromptRequest("image.selfie-rewrite", {
+      "selfie.payload": "{}"
+    });
+    const content = rendered.messages.map((message) => message.content).join("\n");
+    expect(content).toContain(DEFAULT_GENERIC_SELFIE_PROMPT_REWRITE_PROMPT);
+    expect(content).not.toContain(DEFAULT_SELFIE_PROMPT_REWRITE_PROMPT);
+  });
+
+  it("keeps the Plana-specific selfie prompt for every primary fallback path", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-primary-selfie-prompt-"));
+    roots.push(root);
+    const config = createAdminTestConfig(root);
+    const runtime = new SunaRuntime(config, { attachmentService: {} as never });
+    runtimes.push(runtime);
+
+    expect(runtime.defaultPromptContent("image.selfie-rewrite"))
+      .toBe(defaultPromptContent("image.selfie-rewrite"));
+
+    await runtime.ensureAgentPromptFiles(config);
+    const promptPath = path.join(config.persona.agentWorkspace, "selfie_prompt_rewrite.json");
+    await expect(fs.readFile(promptPath, "utf8"))
+      .resolves.toBe(defaultPromptContent("image.selfie-rewrite"));
+
+    await fs.writeFile(promptPath, " \n", "utf8");
+    const rendered = await runtime.renderPromptRequest("image.selfie-rewrite", {
+      "selfie.payload": "{}"
+    });
+    const content = rendered.messages.map((message) => message.content).join("\n");
+    expect(content).toContain(DEFAULT_SELFIE_PROMPT_REWRITE_PROMPT);
+  });
+
   it("repairs each half-migrated state while preserving custom messages", () => {
     const canonical = defaultFinalPromptTemplate("image.selfie-rewrite")!;
     const customSystem = { role: "system" as const, content: "管理员自定义人格规则，不要输出 JSON。" };

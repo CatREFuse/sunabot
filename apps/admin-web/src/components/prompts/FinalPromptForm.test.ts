@@ -27,7 +27,8 @@ const content = `${JSON.stringify({
 const variables = [
   { name: "persona.soul", description: "核心人格", type: "string" as const, source: "SOUL.md", required: true },
   { name: "messages_64", description: "最近 64 条消息", type: "message[]" as const, source: "会话上下文", required: true },
-  { name: "user.input", description: "当前输入", type: "string" as const, source: "当前请求", required: true }
+  { name: "user.input", description: "当前输入", type: "string" as const, source: "当前请求", required: true },
+  { name: "conversation.voice.settings", description: "语音语言设置", type: "json" as const, source: "Voice Profile", required: true }
 ];
 
 describe("FinalPromptForm", () => {
@@ -76,6 +77,19 @@ describe("FinalPromptForm", () => {
     const latest = String(wrapper.emitted("update:modelValue")?.at(-1)?.[0] ?? "");
     expect(JSON.parse(latest).tools[0].function.name).toBe("find_article");
     expect(JSON.parse(latest).temperature).toBe(0.3);
+  });
+
+  it("inserts prompt variables into Function descriptions", async () => {
+    const wrapper = mount(FinalPromptForm, { props: { modelValue: content, variables } });
+    const description = wrapper.get('[aria-label="search_content 工具说明"]');
+
+    await description.setValue("@语音");
+    const option = wrapper.get('[role="option"]');
+    expect(option.text()).toContain("conversation.voice.settings");
+    await option.trigger("mousedown");
+
+    const latest = String(wrapper.emitted("update:modelValue")?.at(-1)?.[0] ?? "");
+    expect(JSON.parse(latest).tools[0].function.description).toBe("@{conversation.voice.settings}");
   });
 
   it("refreshes structured fields when the backing JSON changes externally", async () => {

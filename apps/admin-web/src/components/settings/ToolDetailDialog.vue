@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, shallowRef, watch } from "vue";
 import type { SunaTool } from "../../types";
 import { toolAvailabilityPresentation, toolExecutionLabel, toolIcon, toolParameterRows } from "../../utils/toolCatalog";
 import DialogOverlay from "../ui/DialogOverlay.vue";
@@ -20,7 +20,9 @@ const emit = defineEmits<{
   resetDescription: [];
 }>();
 const parameters = computed(() => toolParameterRows(props.tool?.parameters));
-const descriptionLength = computed(() => props.description.length);
+const descriptionDraft = shallowRef(props.description);
+const descriptionLength = computed(() => descriptionDraft.value.length);
+const descriptionDirty = computed(() => descriptionDraft.value !== props.description);
 const availability = computed(() => props.tool
   ? toolAvailabilityPresentation(props.tool)
   : { kind: "ready" as const, label: "", reason: "" });
@@ -29,6 +31,18 @@ const descriptionSourceLabel = computed(() => {
   if (props.tool?.descriptionSource === "prompt" || props.tool?.promptDescription != null) return "提示词";
   return "默认";
 });
+
+watch(() => props.description, (description) => {
+  descriptionDraft.value = description;
+});
+watch(() => props.tool?.name, () => {
+  descriptionDraft.value = props.description;
+});
+
+function confirmDescription() {
+  if (!descriptionDirty.value) return;
+  emit("updateDescription", descriptionDraft.value);
+}
 </script>
 
 <template>
@@ -102,19 +116,23 @@ const descriptionSourceLabel = computed(() => {
           <span class="font-mono text-[10px] text-disabled">{{ descriptionLength }} / 4000</span>
         </span>
         <textarea
+          v-model="descriptionDraft"
           class="control min-h-40 py-3 text-sm leading-6"
-          :value="description"
           maxlength="4000"
           spellcheck="false"
-          @input="emit('updateDescription', ($event.target as HTMLTextAreaElement).value)"
         ></textarea>
       </label>
       <div class="mt-3 flex flex-wrap items-center justify-between gap-3">
         <span v-if="descriptionOverridden" class="inline-state text-[rgb(var(--color-interactive))]"><i class="bx bx-edit-alt mr-1" aria-hidden="true"></i>自定义说明</span>
         <span v-else class="inline-state"><i class="bx bx-reset mr-1" aria-hidden="true"></i>继承说明</span>
-        <button class="btn btn-ghost" type="button" :disabled="!descriptionOverridden" @click="emit('resetDescription')">
-          <i class="bx bx-reset" aria-hidden="true"></i>恢复继承说明
-        </button>
+        <div class="flex flex-wrap gap-2">
+          <button class="btn btn-ghost" type="button" data-settings-commit :disabled="!descriptionOverridden" @click="emit('resetDescription')">
+            <i class="bx bx-reset" aria-hidden="true"></i>恢复继承说明
+          </button>
+          <button class="btn btn-primary" type="button" data-settings-confirm :disabled="!descriptionDirty" @click="confirmDescription">
+            <i class="bx bx-check" aria-hidden="true"></i>确认
+          </button>
+        </div>
       </div>
 
       <section class="mt-8" aria-labelledby="tool-parameters-title">

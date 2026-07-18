@@ -127,6 +127,7 @@ export function defaultConfig(): AppConfig {
       quoteGroupReplies: true,
       quoteGroupReplyExcludedUserIds: [],
       contextMessageLimit: 48,
+      emojiSendSize: 512,
       tone: {
         enabled: false,
         providerId: "",
@@ -481,6 +482,9 @@ function mergeBotConfig(base: BotConfig, incoming: Partial<BotConfig> | undefine
       base.quoteGroupReplyExcludedUserIds
     ),
     contextMessageLimit: normalizeInteger(incoming?.contextMessageLimit, base.contextMessageLimit, 1, 120),
+    emojiSendSize: [64, 128, 256, 512, 1024].includes(incoming?.emojiSendSize ?? -1)
+      ? incoming!.emojiSendSize!
+      : base.emojiSendSize,
     tone: mergeBotToneSettings(base.tone, incoming?.tone as Partial<BotToneSettings> | undefined),
     memory: mergeBotMemorySettings(base.memory, incoming?.memory as Partial<BotMemorySettings> | undefined),
     orchestrator: mergeBotOrchestratorSettings(base.orchestrator, incoming?.orchestrator as Partial<BotOrchestratorSettings> | undefined),

@@ -13,6 +13,7 @@ import {
   type PromptVariableValue
 } from "../../services/agent/promptSystem.js";
 import { defaultConfig } from "../../src/config.js";
+import { defaultVoiceProfile, voicePromptVariables } from "../../services/voice/public.js";
 
 let root = "";
 let workspace = "";
@@ -85,6 +86,7 @@ describe("workspace prompt runtime", () => {
       "memory.user_profile": "画像 C",
       "conversation.emoji.keys": ["开心", "认真"],
       "conversation.emoji.syntax": "需要发送表情时输出 [/表情key]。",
+      ...voicePromptVariables(defaultVoiceProfile()),
       "user.input": "当前问题"
     });
 
@@ -109,9 +111,11 @@ describe("workspace prompt runtime", () => {
       "generate_img",
       "selfie",
       "send_file",
+      "send_voice_message",
       "memory_recall",
       "codex",
-      "system_config"
+      "system_config",
+      "cron"
     ]);
     expect(rendered.tools?.every((tool) => tool.function.description.trim().length > 0)).toBe(true);
     for (const name of ["generate_img", "selfie", "codex"]) {

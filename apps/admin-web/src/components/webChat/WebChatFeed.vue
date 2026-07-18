@@ -19,7 +19,7 @@ const entries = computed(() => props.messages.map((message) => ({
   event: message.role === "event",
   name: message.role === "user"
     ? message.senderName?.trim() || "管理员"
-    : message.senderName?.trim() || "普拉娜",
+    : message.senderName?.trim() || "助手",
   text: displayMessageText(message.text, message.imageUrls)
 })));
 

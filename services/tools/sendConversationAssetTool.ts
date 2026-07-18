@@ -1,5 +1,11 @@
 import path from "node:path";
 import type { PrepareOutboundConversationAssetInput } from "../delivery/public.js";
+import {
+  DEFAULT_VOICE_LANGUAGE,
+  MAX_VOICE_TOOL_TEXT_CHARS,
+  VOICE_LANGUAGES,
+  type VoiceLanguage
+} from "../voice/public.js";
 
 export const SEND_FILE_TOOL_NAME = "send_file";
 export const SEND_VOICE_MESSAGE_TOOL_NAME = "send_voice_message";
@@ -11,7 +17,13 @@ export interface SendFileToolInput {
 }
 
 export interface SendVoiceMessageToolInput {
-  path?: unknown;
+  text?: unknown;
+  language?: unknown;
+}
+
+export interface SendVoiceMessageInput {
+  text: string;
+  language: VoiceLanguage;
 }
 
 export const sendFileTool = {
@@ -45,25 +57,39 @@ export const sendFileTool = {
   strict: true
 } as const;
 
-export const sendVoiceMessageTool = {
-  type: "function",
-  name: SEND_VOICE_MESSAGE_TOOL_NAME,
-  description: "Send an existing audio file from the current Agent workbench as a voice message to the current private or group conversation. The path must be relative to the Agent workbench.",
-  parameters: {
-    type: "object",
-    additionalProperties: false,
-    properties: {
-      path: {
-        type: "string",
-        minLength: 1,
-        maxLength: 1_024,
-        description: "Path to a recognized audio file, relative to the current Agent workbench."
-      }
+export function createSendVoiceMessageTool(
+  languages: readonly VoiceLanguage[] = VOICE_LANGUAGES,
+  defaultLanguage: VoiceLanguage = DEFAULT_VOICE_LANGUAGE
+) {
+  const availableLanguages = VOICE_LANGUAGES.filter((language) => languages.includes(language));
+  const effectiveLanguages = availableLanguages.length ? availableLanguages : [defaultLanguage];
+  return {
+    type: "function",
+    name: SEND_VOICE_MESSAGE_TOOL_NAME,
+    description: "Create a cloned-voice reading of the same visible assistant message and send it immediately after that text. Use it at most once, only for a meaningful greeting, intimate or loving expression, intense emotion, shyness, or an important milestone. Never use it for routine facts, progress, errors, code, URLs, or long content. The text must exactly match the accompanying human-readable assistant text, excluding emoji markers.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        text: {
+          type: "string",
+          minLength: 1,
+          maxLength: MAX_VOICE_TOOL_TEXT_CHARS,
+          description: "The exact human-readable assistant text to read aloud, excluding emoji markers."
+        },
+        language: {
+          type: "string",
+          enum: effectiveLanguages,
+          description: `Voice language. Use ${effectiveLanguages.includes(defaultLanguage) ? defaultLanguage : effectiveLanguages[0]} unless the response itself uses another configured language.`
+        }
+      },
+      required: ["text", "language"]
     },
-    required: ["path"]
-  },
-  strict: true
-} as const;
+    strict: true
+  } as const;
+}
+
+export const sendVoiceMessageTool = createSendVoiceMessageTool();
 
 export function readSendFileInput(input: SendFileToolInput): PrepareOutboundConversationAssetInput {
   const unsupported = Object.keys(input).filter((key) => key !== "path" && key !== "kind" && key !== "name");
@@ -92,8 +118,24 @@ export function readSendFileInput(input: SendFileToolInput): PrepareOutboundConv
   return { path: assetPath, kind, ...(name ? { name } : {}) };
 }
 
-export function readSendVoiceMessageInput(input: SendVoiceMessageToolInput): PrepareOutboundConversationAssetInput {
-  return { path: readRelativePath(input.path), kind: "voice" };
+export function readSendVoiceMessageInput(input: SendVoiceMessageToolInput): SendVoiceMessageInput {
+  const keys = Object.keys(input).sort();
+  if (keys.length !== 2 || keys[0] !== "language" || keys[1] !== "text") {
+    throw new Error("send_voice_message arguments must contain only text and language.");
+  }
+  if (typeof input.text !== "string") {
+    throw new Error("send_voice_message text must be a string.");
+  }
+  const text = input.text.trim();
+  if (!text) throw new Error("send_voice_message text is required.");
+  if (text.includes("\0")) throw new Error("send_voice_message text contains unsupported characters.");
+  if ([...text].length > MAX_VOICE_TOOL_TEXT_CHARS) {
+    throw new Error(`send_voice_message text must not exceed ${MAX_VOICE_TOOL_TEXT_CHARS} characters.`);
+  }
+  if (typeof input.language !== "string" || !VOICE_LANGUAGES.includes(input.language as VoiceLanguage)) {
+    throw new Error("send_voice_message language must be zh, en, or ja.");
+  }
+  return { text, language: input.language as VoiceLanguage };
 }
 
 function readRelativePath(value: unknown) {

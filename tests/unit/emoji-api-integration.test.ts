@@ -127,6 +127,14 @@ beforeAll(async () => {
       if (agentId === "disabled-agent") throw new Error("Agent is disabled: disabled-agent");
       if (agentId === "not-ready-agent") throw new Error("Agent runtime is not available: not-ready-agent");
       return requireRuntime(agentId);
+    },
+    configService: {
+      readEnvelope: async () => ({ config: requireConfig("plana"), revision: "plana-r1" }),
+      patch: vi.fn()
+    },
+    agentConfigService: {
+      readEnvelope: async (agentId: string) => ({ config: requireConfig(agentId), revision: `${agentId}-r1` }),
+      patch: vi.fn()
     }
   });
   app.addHook("onClose", async () => closeApplicationDataStores());
@@ -211,7 +219,7 @@ describe("emoji production repository and Fastify routes", () => {
     expect((await list("agent-b")).emojis.map((item: { key: string }) => item.key)).toEqual(["开心"]);
   });
 
-  it("versions replacements, rejects stale content URLs and binds generated images", async () => {
+  it("lists and deletes old versions, renames keys, rejects stale current URLs and binds generated images", async () => {
     const first = findEmoji(await upload("replace-agent", "开心", "red.png", redPng), "开心");
     const second = findEmoji(await upload("replace-agent", "开心", "blue.png", bluePng), "开心");
     expect(second.fileName).not.toBe(first.fileName);
@@ -222,6 +230,47 @@ describe("emoji production repository and Fastify routes", () => {
     expect(stale.statusCode).toBe(409);
     expect(stale.json()).toMatchObject({ error: { code: "EMOJI_CONTENT_VERSION_MISMATCH" } });
     expect(current.statusCode).toBe(200);
+
+    const versions = await app.inject({
+      method: "GET",
+      url: `/api/emojis/${encodeURIComponent("开心")}/versions?agentId=replace-agent`,
+      headers: readHeaders()
+    });
+    expect(versions.statusCode, versions.body).toBe(200);
+    expect(versions.json().versions).toEqual([
+      expect.objectContaining({ fileName: second.fileName, current: true }),
+      expect.objectContaining({ fileName: first.fileName, current: false })
+    ]);
+    const oldVersion = versions.json().versions[1];
+    const oldContent = await app.inject({ method: "GET", url: oldVersion.originalUrl, headers: readHeaders() });
+    expect(oldContent.statusCode).toBe(200);
+
+    const deleteCurrent = await app.inject({
+      method: "DELETE",
+      url: `/api/emojis/${encodeURIComponent("开心")}/versions/${encodeURIComponent(second.fileName)}?agentId=replace-agent`,
+      headers: mutationHeaders()
+    });
+    expect(deleteCurrent.statusCode).toBe(409);
+    expect(deleteCurrent.json()).toMatchObject({ error: { code: "EMOJI_VERSION_CURRENT" } });
+
+    const renamed = await app.inject({
+      method: "PATCH",
+      url: `/api/emojis/${encodeURIComponent("开心")}?agentId=replace-agent`,
+      headers: mutationHeaders(),
+      payload: { key: "大笑" }
+    });
+    expect(renamed.statusCode, renamed.body).toBe(200);
+    expect(findEmoji(renamed.json(), "大笑")).toMatchObject({ fileName: second.fileName });
+    expect(applicationDataStore(requireConfig("replace-agent")).readEmojiVersions("大笑")).toHaveLength(2);
+
+    const deletedOld = await app.inject({
+      method: "DELETE",
+      url: `/api/emojis/${encodeURIComponent("大笑")}/versions/${encodeURIComponent(first.fileName)}?agentId=replace-agent`,
+      headers: mutationHeaders()
+    });
+    expect(deletedOld.statusCode).toBe(204);
+    expect(applicationDataStore(requireConfig("replace-agent")).readEmojiVersions("大笑"))
+      .toEqual([expect.objectContaining({ fileName: second.fileName, current: true })]);
 
     const generated = await app.inject({
       method: "POST",

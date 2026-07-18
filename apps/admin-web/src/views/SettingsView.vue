@@ -8,7 +8,6 @@ import type { ConfigSectionKey, SettingsSectionKey } from "../types";
 import { focusConfigField } from "../utils/configFieldFocus";
 import PageHeader from "../components/ui/PageHeader.vue";
 import SettingsNavigation from "../components/settings/SettingsNavigation.vue";
-import SettingsAutoSaveStatus from "../components/settings/SettingsAutoSaveStatus.vue";
 import PersonaSettingsForm from "../components/settings/PersonaSettingsForm.vue";
 import ProviderSettings from "../components/settings/ProviderSettings.vue";
 import BroadcastStormSettingsForm from "../components/settings/BroadcastStormSettingsForm.vue";
@@ -67,11 +66,10 @@ const currentState = computed(() => {
       ? [workspace.state.tools, workspace.state.bash, workspace.state.bot]
       : [workspace.state[section]];
   return candidates.find((entry) => entry.kind === "error" || entry.kind === "conflict")
-    ?? candidates.find((entry) => entry.kind === "saving" || entry.kind === "waiting")
     ?? candidates.find((entry) => entry.kind === "restart")
-    ?? candidates.find((entry) => entry.kind === "saved")
     ?? candidates[0]!;
 });
+const visibleState = computed(() => ["error", "conflict", "restart"].includes(currentState.value.kind));
 
 onMounted(async () => {
   await Promise.all([loadConfig(), catalog.load()]);
@@ -113,6 +111,37 @@ function isConfigSection(section: SettingsSectionKey): section is ConfigSectionK
   return configSections.has(section as ConfigSectionKey);
 }
 
+function currentConfigSections() {
+  if (!isConfigSection(current.value)) return [];
+  if (current.value === "bot") return ["bot", "onebot"] as const;
+  if (current.value === "tools") return ["tools", "bash", "bot"] as const;
+  return [current.value] as const;
+}
+
+async function commitCurrentSection() {
+  await nextTick();
+  await Promise.all(currentConfigSections().map((section) => workspace.commit(section)));
+}
+
+function handleControlChange(event: Event) {
+  const target = event.target;
+  if (target instanceof HTMLSelectElement || (target instanceof HTMLInputElement && target.type === "checkbox")) {
+    void commitCurrentSection();
+  }
+}
+
+function handleSettingsClick(event: MouseEvent) {
+  if ((event.target as HTMLElement | null)?.closest("[data-settings-confirm],[data-settings-commit]")) {
+    void commitCurrentSection();
+  }
+}
+
+function handleSettingsKeydown(event: KeyboardEvent) {
+  if (event.key === "Enter" && event.target instanceof HTMLElement && event.target.matches("[data-settings-confirm-input]")) {
+    void commitCurrentSection();
+  }
+}
+
 async function logout() {
   loggingOut.value = true;
   logoutError.value = "";
@@ -141,7 +170,13 @@ async function logout() {
       <div v-else-if="loadError" class="empty-state"><div><strong class="!text-accent">{{ loadError }}</strong><button class="btn mt-4" type="button" @click="loadConfig()">重试</button></div></div>
       <div v-else class="mt-8 grid min-w-0 gap-8 lg:grid-cols-[176px_minmax(0,1fr)] xl:grid-cols-[208px_minmax(0,880px)] xl:gap-12">
         <SettingsNavigation :current="current" :sections="sections" @select="selectSection" />
-        <section ref="settingsPanel" class="min-w-0">
+        <section
+          ref="settingsPanel"
+          class="min-w-0"
+          @change="handleControlChange"
+          @click="handleSettingsClick"
+          @keydown="handleSettingsKeydown"
+        >
           <div v-if="current === 'persona'" class="grid gap-12">
             <PersonaSettingsForm :agent-id="activeAgentId()" />
           </div>
@@ -150,6 +185,7 @@ async function logout() {
             v-model="workspace.drafts.providers"
             :models="catalog.models.value"
             :field-states="workspace.envelope.value?.fieldStates"
+            @commit="workspace.commit('providers')"
           />
           <BroadcastStormSettingsForm
             v-else-if="current === 'broadcastStorm'"
@@ -184,6 +220,7 @@ async function logout() {
             :field-states="workspace.envelope.value?.fieldStates"
             v-model:bash="workspace.drafts.bash"
             v-model:poke-on-no-reply="workspace.drafts.bot.pokeOnNoReply"
+            @commit="commitCurrentSection"
           />
           <BashSettingsForm v-else-if="current === 'bash'" v-model="workspace.drafts.bash" />
           <AdminPasswordForm v-else-if="current === 'security'" />
@@ -195,11 +232,10 @@ async function logout() {
             />
           </div>
 
-          <SettingsAutoSaveStatus
-            v-if="current !== 'security' && current !== 'persona'"
-            :message="currentState.message"
-            :kind="currentState.kind"
-          />
+          <div v-if="visibleState" class="mt-6 flex flex-wrap items-center gap-3" role="status" aria-live="polite">
+            <span class="inline-state" :data-kind="currentState.kind === 'restart' ? 'warning' : 'error'">{{ currentState.message }}</span>
+            <button v-if="currentState.kind === 'error' || currentState.kind === 'conflict'" class="btn btn-ghost" type="button" @click="commitCurrentSection">重试</button>
+          </div>
         </section>
       </div>
     </div>

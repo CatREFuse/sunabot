@@ -184,6 +184,7 @@ async function upNative(context, before, secrets) {
   }
   await ensureNativeDependencies(context);
   if (!context.dev) await ensureNativeBuild(context);
+  await prepareNativeBashImage(context);
   await compose(context, ["build", context.contract.napcatService]);
   const onebotListenHost = await resolveNativeOnebotListenHost(context);
   if (await tcpOpen(onebotListenHost, context.contract.onebotPort)) {
@@ -220,6 +221,25 @@ async function upNative(context, before, secrets) {
     await compose(context, ["--profile", context.contract.coreProfile, "down", "--remove-orphans"]).catch(() => {});
     await stopNativeCore(context, native.record, { removeState: true }).catch(() => {});
     throw error;
+  }
+}
+
+export function nativeBashImageComposeArguments(root) {
+  return [
+    "compose",
+    "-f", path.join(root, "deploy/docker/compose.bash.yml"),
+    "--profile", "build",
+    "build", "bash-image"
+  ];
+}
+
+async function prepareNativeBashImage(context) {
+  try {
+    await command("docker", nativeBashImageComposeArguments(context.root), {
+      env: nativeProcessEnvironment(context)
+    });
+  } catch (error) {
+    console.warn(`Bash Docker 隔离镜像准备失败，Bash capability 保持降级：${message(error)}`);
   }
 }
 

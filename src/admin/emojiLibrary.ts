@@ -4,7 +4,8 @@ import sharp from "sharp";
 import { fileTypeFromBuffer } from "file-type";
 import {
   applicationDataStore,
-  type EmojiRecord
+  type EmojiRecord,
+  type EmojiVersionRecord
 } from "../../adapters/sqlite/applicationDataStore.js";
 import {
   MAX_AGENT_EMOJIS,
@@ -35,6 +36,7 @@ import { adminMutationMutex, type AdminMutationMutex } from "./mutation.js";
 export type { EmojiLibraryOperationHooks } from "./emojiFileIo.js";
 
 export const MAX_EMOJI_UPLOAD_BYTES = 8 * 1024 * 1024;
+export const MAX_EMOJI_VERSIONS_PER_KEY = 20;
 const MAX_BASE64_LENGTH = Math.ceil(MAX_EMOJI_UPLOAD_BYTES / 3) * 4;
 const IMAGE_INPUT_PIXEL_LIMIT = 64_000_000;
 const SUPPORTED_IMAGE_TYPES = new Map([
@@ -54,6 +56,11 @@ export interface EmojiEnvelope {
 export interface EmojiContent {
   bytes: Buffer;
   contentType: "image/png" | "image/webp";
+}
+
+export interface EmojiVersionEnvelope {
+  key: string;
+  versions: EmojiVersionRecord[];
 }
 
 export interface EmojiLibraryOptions {
@@ -110,6 +117,45 @@ export class EmojiLibraryRepository {
     });
   }
 
+  async rename(keyInput: unknown, nextKeyInput: unknown): Promise<EmojiEnvelope> {
+    const key = requireEmojiKey(keyInput);
+    const nextKey = requireEmojiKey(nextKeyInput);
+    const config = await this.getConfig();
+    return this.mutex.runExclusive(async () => {
+      const result = applicationDataStore(config).renameEmoji(key, nextKey, new Date().toISOString());
+      if (result === "missing") notFound("EMOJI_NOT_FOUND", "表情不存在。");
+      if (result === "conflict") conflict("EMOJI_KEY_CONFLICT", "该表情 key 已存在。");
+      return envelope(await filterVerifiedEmojiRecords(config));
+    });
+  }
+
+  async listVersions(keyInput: unknown): Promise<EmojiVersionEnvelope> {
+    const key = requireEmojiKey(keyInput);
+    const config = await this.getConfig();
+    const store = applicationDataStore(config);
+    if (!store.readEmoji(key)) notFound("EMOJI_NOT_FOUND", "表情不存在。");
+    const versions = await filterVerifiedEmojiRecords(config, store.readEmojiVersions(key));
+    const currentFileName = store.readEmoji(key)?.fileName;
+    return {
+      key,
+      versions: versions.map((version) => ({
+        ...version,
+        current: version.fileName === currentFileName
+      }))
+    };
+  }
+
+  async removeVersion(keyInput: unknown, fileNameInput: unknown) {
+    const key = requireEmojiKey(keyInput);
+    const fileName = requireEmojiFileName(fileNameInput);
+    const config = await this.getConfig();
+    return this.mutex.runExclusive(async () => {
+      const result = applicationDataStore(config).deleteEmojiVersion(key, fileName);
+      if (result === "missing") notFound("EMOJI_VERSION_NOT_FOUND", "表情版本不存在。");
+      if (result === "current") conflict("EMOJI_VERSION_CURRENT", "当前版本不能删除。");
+    });
+  }
+
   async content(
     keyInput: unknown,
     variant: EmojiImageVariant,
@@ -128,6 +174,27 @@ export class EmojiLibraryRepository {
         conflict("EMOJI_CONTENT_VERSION_MISMATCH", "表情图片版本已更新。");
       }
     }
+    return this.contentFromRecord(config, record, variant);
+  }
+
+  async versionContent(
+    keyInput: unknown,
+    fileNameInput: unknown,
+    variant: EmojiImageVariant
+  ): Promise<EmojiContent> {
+    const key = requireEmojiKey(keyInput);
+    const fileName = requireEmojiFileName(fileNameInput);
+    const config = await this.getConfig();
+    const record = applicationDataStore(config).readEmojiVersion(key, fileName);
+    if (!record) notFound("EMOJI_VERSION_NOT_FOUND", "表情版本不存在。");
+    return this.contentFromRecord(config, record, variant);
+  }
+
+  private async contentFromRecord(
+    config: AppConfig,
+    record: EmojiRecord,
+    variant: EmojiImageVariant
+  ): Promise<EmojiContent> {
     let bytes: Buffer;
     try {
       bytes = await readVerifiedEmojiRecordFile(config, record);
@@ -179,6 +246,13 @@ export class EmojiLibraryRepository {
       const existing = store.readEmoji(key);
       if (!existing && store.readEmojis().length >= MAX_AGENT_EMOJIS) {
         conflict("EMOJI_LIMIT_REACHED", `表情最多保留 ${MAX_AGENT_EMOJIS} 个。`);
+      }
+      if (
+        existing
+        && existing.fileName !== fileName
+        && store.readEmojiVersions(key).length >= MAX_EMOJI_VERSIONS_PER_KEY
+      ) {
+        conflict("EMOJI_VERSION_LIMIT_REACHED", `每个表情最多保留 ${MAX_EMOJI_VERSIONS_PER_KEY} 个版本，请先删除旧版本。`);
       }
       const location = emojiMediaLocation(config, fileName);
       await writeContentAddressedEmojiPng(location.filePath, normalized.bytes, hash, this.hooks);
@@ -242,6 +316,14 @@ function requireEmojiKey(value: unknown) {
     badRequest("EMOJI_KEY_INVALID", "表情 key 需为 1 至 24 个字符，且不能包含括号、斜杠或控制字符。", "key");
   }
   return key;
+}
+
+function requireEmojiFileName(value: unknown) {
+  const fileName = String(value ?? "");
+  if (!isEmojiFileName(fileName)) {
+    badRequest("EMOJI_CONTENT_VERSION_INVALID", "表情图片版本无效。", "fileName");
+  }
+  return fileName;
 }
 
 async function normalizeSquarePng(bytes: Buffer) {

@@ -37,8 +37,11 @@ describe("ToneSettingsForm", () => {
     await wrapper.findAll("select")[1]!.setValue("tone-model");
     await wrapper.findAll("select")[2]!.setValue("high");
     await wrapper.get('[data-config-field="tone.temperature"]').setValue("1.1");
+    await wrapper.get('[data-confirm-label="确认随机性"]').trigger("click");
     await wrapper.get('[data-config-field="tone.maxOutputTokens"]').setValue("3200");
+    await wrapper.get('[data-confirm-label="确认最大输出 Token"]').trigger("click");
     await wrapper.get('[data-config-field="tone.maxRetries"]').setValue("4");
+    await wrapper.get('[data-confirm-label="确认失败重试次数"]').trigger("click");
 
     expect(modelValue).toEqual({
       enabled: true,

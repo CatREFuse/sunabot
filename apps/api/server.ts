@@ -44,14 +44,16 @@ import { registerAgentToolRoutes } from "./plugins/agentToolRoutes.js";
 import { registerAgentRoutes } from "./plugins/agentRoutes.js";
 import { registerAuthRoutes } from "./plugins/authRoutes.js";
 import { registerConversationRoutes } from "./plugins/conversationRoutes.js";
+import { registerScheduledTaskRoutes } from "./plugins/scheduledTaskRoutes.js";
 import { registerConfigDoctorRoutes } from "./plugins/configDoctorRoutes.js";
-import { registerMediaRoutes } from "./plugins/mediaRoutes.js";
+import { registerMediaRoutes, type MediaHostnameLookup } from "./plugins/mediaRoutes.js";
 import { registerMemoryRoutes } from "./plugins/memoryRoutes.js";
 import { registerMonitoringRoutes } from "./plugins/monitoringRoutes.js";
 import { registerOneBotRoutes } from "./plugins/onebotRoutes.js";
 import { registerProviderConfigRoutes } from "./plugins/providerConfigRoutes.js";
 import { registerSelfieReferenceRoutes } from "./plugins/selfieReferenceRoutes.js";
 import { registerAgentEmojiApi } from "./emojiApiComposition.js";
+import { buildVoiceApiComposition, registerVoiceApi } from "./voiceApiComposition.js";
 import type { AppConfig, ProviderConfig } from "../../src/types.js";
 import { OpenAIProvider } from "../../adapters/model/openaiProvider.js";
 import { AgentRegistry, type AgentRegistryOptions } from "../../services/agents/agentRegistry.js";
@@ -107,6 +109,7 @@ export interface CreateAppOptions {
   bashAudit?: RuntimeBashAuditPort;
   resolveToolCapabilities?: RuntimeToolCapabilityResolver;
   agentExtensions?: AgentExtensionApiOptions;
+  mediaHostnameLookup?: MediaHostnameLookup;
 }
 
 export interface OneBotListenerAddress {
@@ -216,6 +219,10 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
     probeExtensionReadiness: (agentId) => agentExtensions.mcpRuntimeService.readiness(agentId)
   });
   await agentRuntimeManager.initialize();
+  const voiceApi = buildVoiceApiComposition({
+    defaultAgentId: () => config.persona.defaultAgentId,
+    getRuntime: (agentId) => agentRuntimeManager.require(agentId)
+  });
   agentExtensions.setAgentChangedHandler(async (agentId) => {
     await agentRuntimeManager.refreshReadiness(agentId);
   });
@@ -486,13 +493,12 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
       }
     });
   }
-
   registerConversationRoutes(app, {
     runtime,
     getRuntime: (agentId) => agentRuntimeManager.require(agentId),
     onebotGateway,
     conversationDirectory
-  });
+  }); registerScheduledTaskRoutes(app, { runtime, getRuntime: (agentId) => agentRuntimeManager.require(agentId) });
   registerAgentRoutes(app, agentRegistry, {
     decorateAgents: (agents) => agentRuntimeManager.decorateAgents(agents, onebotGateway.getStatus()),
     onAgentCreated: async (agentId) => {
@@ -529,8 +535,7 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
       : undefined
   });
   registerMediaRoutes(app, {
-    getConfig: () => config,
-    runtime,
+    getConfig: () => config, runtime, lookupHostname: options.mediaHostnameLookup,
     getAgentContext: (agentId) => {
       const agentRuntime = agentRuntimeManager.require(agentId);
       return { config: agentRuntime.config, runtime: agentRuntime };
@@ -553,11 +558,8 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
   registerAgentToolRoutes(app, {
     agentFiles,
     resolveToolCapabilities: (backend) => runtime.resolveToolCapabilities(backend),
-    resolveConversationAssetCapability: () => conversationAssetCapabilityFor(
-      config.persona.defaultAgentId,
-      onebotGateway,
-      agentRegistry
-    ),
+    resolveConversationAssetCapability: () => conversationAssetCapabilityFor(config.persona.defaultAgentId, onebotGateway, agentRegistry),
+    resolveVoiceCapability: () => voiceApi.resolveCapability(config.persona.defaultAgentId),
     getConfig: () => config,
     getAgentContext: (agentId) => {
       const agentRuntime = agentRuntimeManager.require(agentId);
@@ -565,11 +567,8 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
         config: agentRuntime.config,
         agentFiles: new AgentFileRepository({ runtime: agentRuntime }),
         resolveToolCapabilities: (backend) => agentRuntime.resolveToolCapabilities(backend),
-        resolveConversationAssetCapability: () => conversationAssetCapabilityFor(
-          agentId,
-          onebotGateway,
-          agentRegistry
-        ),
+        resolveConversationAssetCapability: () => conversationAssetCapabilityFor(agentId, onebotGateway, agentRegistry),
+        resolveVoiceCapability: () => voiceApi.resolveCapability(agentId),
         resolveSkillToolCapabilities: () => agentExtensions.skillToolCapabilities(agentId)
       };
     }
@@ -581,8 +580,10 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
   registerAgentEmojiApi(app, {
     getConfig: () => config,
     runtime,
-    getRuntime: (agentId) => agentRuntimeManager.require(agentId)
-  });
+    getRuntime: (agentId) => agentRuntimeManager.require(agentId),
+    configService,
+    agentConfigService
+  }); registerVoiceApi(app, voiceApi);
 
   app.setNotFoundHandler((request, reply) => {
     const pathname = request.url.split("?", 1)[0] ?? "";

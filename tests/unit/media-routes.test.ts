@@ -17,6 +17,27 @@ afterEach(async () => {
 });
 
 describe("media API plugin", () => {
+  it("rejects private addresses from an injected DNS lookup before fetch", async () => {
+    const app = Fastify();
+    apps.push(app);
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    const lookupHostname = vi.fn(async () => [{ address: "127.0.0.1" }]);
+
+    registerMediaRoutes(app, {
+      getConfig: () => defaultConfig(),
+      runtime: {} as SunaRuntime,
+      lookupHostname
+    });
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/media/image?url=${encodeURIComponent("https://media.example/image.jpg")}`
+    });
+
+    expect(lookupHostname).toHaveBeenCalledWith("media.example");
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(response.statusCode).toBe(400);
+  });
+
   it("registers schemas, proxies binary media and records generated images", async () => {
     const routeSchemas = new Map<string, FastifySchema>();
     const app = Fastify();

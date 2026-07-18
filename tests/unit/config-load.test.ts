@@ -57,6 +57,7 @@ describe("tool configuration", () => {
     expect(config.providers.items.every((provider) => provider.envFile === "workspace/secrets/runtime.env")).toBe(true);
     expect(config.bot.adminQq).toBe("");
     expect(config.bot.replyDebounceMs).toBe(5_000);
+    expect(config.bot.emojiSendSize).toBe(512);
     expect(config.bot.tone).toEqual({
       enabled: false,
       providerId: "",
@@ -66,6 +67,14 @@ describe("tool configuration", () => {
       maxOutputTokens: 2400,
       maxRetries: 2
     });
+  });
+
+  it("loads an allowed emoji sending size and defaults invalid legacy values", async () => {
+    await fs.writeFile(configPath, JSON.stringify({ bot: { emojiSendSize: 128 } }), "utf8");
+    await expect(loadConfig()).resolves.toMatchObject({ bot: { emojiSendSize: 128 } });
+
+    await fs.writeFile(configPath, JSON.stringify({ bot: { emojiSendSize: 96 } }), "utf8");
+    await expect(loadConfig()).resolves.toMatchObject({ bot: { emojiSendSize: 512 } });
   });
 
   it("loads a configured Agent reply debounce time and defaults missing legacy values", async () => {

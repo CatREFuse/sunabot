@@ -4,8 +4,7 @@ import {
   reactive,
   readonly,
   shallowRef,
-  toRaw,
-  watch
+  toRaw
 } from "vue";
 import { activeAgentId } from "./agentScope";
 import { ApiRequestError, apiRequest, apiRequestUnscoped } from "./useAdminApi";
@@ -23,8 +22,6 @@ type SaveTarget = ConfigSectionKey | "groupReply";
 interface SectionState { kind: StateKind; message: string; field?: string }
 interface RequestContext { generation: number; agentId: string; signal: AbortSignal }
 export type ConfigWorkspaceScope = "agent" | "system";
-
-const AUTO_SAVE_DELAY_MS = 350;
 
 const emptyConfig: AppConfig = {
   schemaVersion: 1,
@@ -52,6 +49,7 @@ const emptyConfig: AppConfig = {
     quoteGroupReplies: true,
     quoteGroupReplyExcludedUserIds: [],
     contextMessageLimit: 48,
+    emojiSendSize: 512,
     tone: {
       enabled: false,
       providerId: "",
@@ -151,19 +149,7 @@ export function useConfigWorkspace(scope: ConfigWorkspaceScope = "agent") {
   let generation = 0;
   let contextAgentId = scope === "agent" ? activeAgentId() : "";
   let contextController = new AbortController();
-  let timer: ReturnType<typeof setTimeout> | undefined;
   let drainPromise: Promise<void> | undefined;
-
-  for (const key of sectionKeys) {
-    watch(
-      () => drafts[key],
-      () => {
-        if (!loaded || suppressWatch) return;
-        scheduleForSection(key);
-      },
-      { deep: true, flush: "sync" }
-    );
-  }
 
   if (getCurrentScope()) onScopeDispose(cancel);
 
@@ -187,6 +173,12 @@ export function useConfigWorkspace(scope: ConfigWorkspaceScope = "agent") {
     }
   }
 
+  function commit(key: ConfigSectionKey) {
+    if (!loaded) return Promise.resolve();
+    scheduleForSection(key);
+    return startDrain();
+  }
+
   function scheduleForSection(key: ConfigSectionKey) {
     if (key === "orchestrator") {
       schedule("groupReply");
@@ -201,15 +193,10 @@ export function useConfigWorkspace(scope: ConfigWorkspaceScope = "agent") {
   }
 
   function schedule(target: SaveTarget) {
-    if (!targetDirty(target)) return;
-    pendingTargets.add(target);
     const key = stateKey(target);
-    if (state[key].kind !== "saving") state[key] = { kind: "waiting", message: "等待同步" };
-    if (timer) clearTimeout(timer);
-    timer = setTimeout(() => {
-      timer = undefined;
-      void startDrain();
-    }, AUTO_SAVE_DELAY_MS);
+    if (!targetDirty(target) && state[key].kind !== "saving") return;
+    pendingTargets.add(target);
+    if (state[key].kind !== "saving") state[key] = { kind: "waiting", message: "等待保存" };
   }
 
   function scheduleAllDirty() {
@@ -219,8 +206,10 @@ export function useConfigWorkspace(scope: ConfigWorkspaceScope = "agent") {
   function startDrain() {
     if (drainPromise) return drainPromise;
     const context = currentContext();
-    const running = drain(context).finally(() => {
-      if (drainPromise === running) drainPromise = undefined;
+    const running = drain(context).finally(async () => {
+      if (drainPromise !== running) return;
+      drainPromise = undefined;
+      if (isCurrent(context) && pendingTargets.size > 0) await startDrain();
     });
     drainPromise = running;
     return running;
@@ -250,7 +239,7 @@ export function useConfigWorkspace(scope: ConfigWorkspaceScope = "agent") {
         }
       : submittedSection(target);
     const key = stateKey(target);
-    state[key] = { kind: "saving", message: "正在同步" };
+    state[key] = { kind: "saving", message: "保存中" };
     try {
       let result: ConfigPatchResponse;
       try {
@@ -266,10 +255,10 @@ export function useConfigWorkspace(scope: ConfigWorkspaceScope = "agent") {
     } catch (caught) {
       if (isAbort(caught) || !isCurrent(context)) return;
       state[key] = caught instanceof ApiRequestError && caught.status === 409
-        ? { kind: "conflict", message: "同步冲突，请修改后重试" }
+        ? { kind: "conflict", message: "保存冲突，请修改后重试" }
         : {
             kind: "error",
-            message: caught instanceof Error ? caught.message : "同步失败",
+            message: caught instanceof Error ? caught.message : "保存失败",
             ...(caught instanceof ApiRequestError && caught.field ? { field: caught.field } : {})
           };
     }
@@ -356,23 +345,22 @@ export function useConfigWorkspace(scope: ConfigWorkspaceScope = "agent") {
     const hasNewEdits = targetDirty(target);
     const restart = result.applyMode === "restart" || Boolean(result.restartRequiredFields?.length);
     state[key] = restart
-      ? { kind: "restart", message: hasNewEdits ? "已同步，重启后生效；正在同步后续修改" : "已同步，重启后生效" }
+      ? { kind: "restart", message: hasNewEdits ? "重启后生效；还有修改待保存" : "重启后生效" }
       : hasNewEdits
-        ? { kind: "waiting", message: "正在同步后续修改" }
-        : { kind: "saved", message: "已同步" };
+        ? { kind: "waiting", message: "还有修改待保存" }
+        : { kind: "saved", message: "" };
   }
 
   async function flush() {
     if (!loaded) return true;
-    if (timer) {
-      clearTimeout(timer);
-      timer = undefined;
+    if (drainPromise) await drainPromise;
+    if (sectionKeys.some((key) => isDirty(key) && (state[key].kind === "error" || state[key].kind === "conflict"))) {
+      return false;
+    }
+    if (isGroupReplyDirty() && (state.orchestrator.kind === "error" || state.orchestrator.kind === "conflict")) {
+      return false;
     }
     scheduleAllDirty();
-    if (timer) {
-      clearTimeout(timer);
-      timer = undefined;
-    }
     await startDrain();
     return !sectionKeys.some((key) => isDirty(key));
   }
@@ -381,8 +369,6 @@ export function useConfigWorkspace(scope: ConfigWorkspaceScope = "agent") {
     generation += 1;
     loaded = false;
     pendingTargets.clear();
-    if (timer) clearTimeout(timer);
-    timer = undefined;
     contextController.abort();
     contextController = new AbortController();
     drainPromise = undefined;
@@ -459,6 +445,7 @@ export function useConfigWorkspace(scope: ConfigWorkspaceScope = "agent") {
     state,
     loading: readonly(loading),
     load,
+    commit,
     flush,
     cancel,
     isDirty,
@@ -484,7 +471,8 @@ function valuesFromConfig(config: AppConfig): SectionDrafts {
       pokeOnNoReply: config.bot.pokeOnNoReply,
       quoteGroupReplies: config.bot.quoteGroupReplies,
       quoteGroupReplyExcludedUserIds: [...(config.bot.quoteGroupReplyExcludedUserIds ?? [])],
-      contextMessageLimit: config.bot.contextMessageLimit
+      contextMessageLimit: config.bot.contextMessageLimit,
+      emojiSendSize: config.bot.emojiSendSize ?? emptyConfig.bot.emojiSendSize
     },
     tone: clone(config.bot.tone ?? emptyConfig.bot.tone),
     memory: clone(config.bot.memory),

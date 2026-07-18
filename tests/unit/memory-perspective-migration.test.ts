@@ -67,6 +67,15 @@ describe("memory-perspective-v1 tracked migration", () => {
       exportFile: path.join(fixture.workspace, "business/migrations/export.json"),
       proposalDir: path.join(fixture.workspace, "business/migrations/proposals")
     });
+    const generatedProposal = await readJson(path.join(
+      fixture.workspace,
+      "business/migrations/proposals/plana.proposal.json"
+    ));
+    expect(generatedProposal.rowActions[0].reason).toMatch(/角色第一人称/);
+    expect(generatedProposal.rowActions[0].reason).toMatch(/禁止“我记得”/);
+    expect(generatedProposal.rowActions[0].reason).toMatch(/昵称与 QQ 同时存在/);
+    expect(generatedProposal.rowActions[0].reason).toMatch(/相近、重复或因果/);
+    expect(generatedProposal.rowActions[0].reason).toMatch(/最早至最新时间关系/);
     await resolveAllProposals(fixture.workspace);
     driftEveryRowIdAndPosition(fixture.applicationPaths);
     const refreshed = refreshPlans({
@@ -157,64 +166,182 @@ describe("memory-perspective-v1 tracked migration", () => {
     })).toThrow(/跨 userId|画像/);
   });
 
-  it("enforces one profile per user plus strict QQ presence and natural mention", () => {
-    const fact = "我记得 QQ 12345678 与 QQ 87654321 都在意这件事，我觉得需要谨慎回应，我也愿意让他们安心。";
-    expect(() => validateMemoryFact("plana", "working", { id: "ok", fact, userIds: ["12345678", "87654321"] })).not.toThrow();
+  it("enforces role perspective, nickname-to-QQ identity, and one profile per user", () => {
+    const fact = "我注意到测试用户（QQ 12345678）与另一用户（QQ 87654321）都在意这件事，我觉得需要谨慎回应，我也愿意让他们安心。";
+    expect(() => validateMemoryFact("plana", "working", {
+      id: "ok",
+      fact,
+      userIds: ["12345678", "87654321"],
+      userName: "测试用户"
+    })).not.toThrow();
     for (const invalid of [undefined, [], [""], ["abc"]]) {
       expect(() => validateMemoryFact("plana", "working", {
         id: "bad",
-        fact: "我记得这件事，我觉得重要，我也很在意。",
-        userIds: invalid
+        fact: "我注意到测试用户（QQ 12345678）很重视这件事，我觉得重要，我也很在意。",
+        userIds: invalid,
+        userName: "测试用户"
       })).toThrow(/QQ|userId/);
     }
     expect(() => validateMemoryFact("plana", "long_term", {
       id: "bad-missing-one",
-      fact: "我记得 QQ 12345678 的想法，我觉得重要，我也很在意。",
-      userIds: ["12345678", "87654321"]
+      fact: "我注意到测试用户（QQ 12345678）的想法，我觉得重要，我也很在意。",
+      userIds: ["12345678", "87654321"],
+      userName: "测试用户"
+    })).toThrow(/87654321/);
+    expect(() => validateMemoryFact("plana", "long_term", {
+      id: "bad-missing-second-nickname",
+      fact: "我注意到测试用户（QQ 12345678）与（QQ 87654321）都在意这件事，我觉得需要谨慎回应，我也愿意让他们安心。",
+      userIds: ["12345678", "87654321"],
+      userName: "测试用户"
     })).toThrow(/87654321/);
     expect(() => validateMemoryFact("plana", "long_term", {
       id: "bad-substring",
-      fact: "我记得 QQ 912345678 的想法，我觉得重要，我也很在意。",
-      userIds: ["12345678"]
+      fact: "我注意到测试用户（QQ 912345678）的想法，我觉得重要，我也很在意。",
+      userIds: ["12345678"],
+      userName: "测试用户"
     })).toThrow(/12345678/);
     expect(() => validateMemoryFact("plana", "long_term", {
       id: "bad-prefix",
-      fact: "我记得 QQ 123456789 的想法，我觉得重要，我也很在意。",
-      userIds: ["12345678"]
+      fact: "我注意到测试用户（QQ 123456789）的想法，我觉得重要，我也很在意。",
+      userIds: ["12345678"],
+      userName: "测试用户"
     })).toThrow(/12345678/);
     expect(() => validateMemoryFact("plana", "working", {
-      id: "parenthesized-qq",
-      fact: "我记得（12345678）的请求，我觉得需要认真回应，我也很在意。",
-      userIds: ["12345678"]
+      id: "nickname-and-qq",
+      fact: "我注意到测试用户（QQ 12345678）的请求，我觉得需要认真回应，我也很在意。",
+      userIds: ["12345678"],
+      userName: "测试用户"
     })).not.toThrow();
     expect(() => validateMemoryFact("plana", "working", {
+      id: "nickname-suffix-is-not-exact",
+      fact: "我注意到上海（QQ 12345678）的请求，我觉得需要认真回应，我也很在意。",
+      userIds: ["12345678"],
+      userName: "海"
+    })).toThrow(/昵称|对应|成对/);
+    expect(() => validateMemoryFact("plana", "working", {
       id: "task-number-is-not-qq",
-      fact: "我记得任务号 12345678 需要处理，我觉得它很重要，我也很在意。",
-      userIds: ["12345678"]
+      fact: "我注意到测试用户提到任务号 12345678，我觉得它很重要，我也很在意。",
+      userIds: ["12345678"],
+      userName: "测试用户"
     })).toThrow(/QQ 12345678/);
     expect(() => validateMemoryFact("plana", "user_profile", {
       id: "quoted-emotion",
       userId: "12345678",
-      fact: "我记得他说他觉得开心，我认为这是一条稳定信息。"
+      userName: "测试用户",
+      fact: "我注意到测试用户（QQ 12345678）说他觉得开心，我认为这是一条稳定信息。"
     })).toThrow(/情绪|态度/);
     expect(() => validateMemoryFact("plana", "user_profile", {
       id: "quoted-cognition",
       userId: "12345678",
-      fact: "我很开心，因为他说他觉得这件事很重要。"
+      userName: "测试用户",
+      fact: "我很开心，因为测试用户（QQ 12345678）说他觉得这件事很重要。"
     })).toThrow(/认知|感知/);
+    expect(() => validateMemoryFact("plana", "user_profile", {
+      id: "forbidden-recall",
+      userId: "12345678",
+      userName: "测试用户",
+      fact: "我记得测试用户（QQ 12345678）喜欢摄影，我觉得这很有趣，也很期待看到作品。"
+    })).toThrow(/回忆提示语/);
+    for (const forbiddenFact of [
+      "我还记得测试用户（QQ 12345678）喜欢摄影，我觉得这很有趣，也很期待看到作品。",
+      "我回想起来测试用户（QQ 12345678）喜欢摄影，我觉得这很有趣，也很期待看到作品。",
+      "I recall 测试用户（QQ 12345678）喜欢摄影, I think this matters and I care about it."
+    ]) {
+      expect(() => validateMemoryFact("plana", "working", {
+        id: "forbidden-recall-synonym",
+        userIds: ["12345678"],
+        userName: "测试用户",
+        fact: forbiddenFact
+      })).toThrow(/回忆提示语/);
+    }
+    const invalidPerspectiveFacts = [
+      [
+        "self-narrated-possession",
+        "我认为摄影是我的爱好，测试用户（QQ 12345678）是我的昵称，我很开心。",
+        /第一人称认知|角色/
+      ],
+      [
+        "self-narrated-reflexive",
+        "我认为自己喜欢摄影，测试用户（QQ 12345678）是我的昵称，我感到开心。",
+        /第一人称认知|角色/
+      ],
+      [
+        "unquoted-user-speech",
+        "我注意到测试用户（QQ 12345678）说：我觉得摄影很重要，我很开心。",
+        /第一人称认知|角色/
+      ],
+      [
+        "unquoted-context-user-speech",
+        "我注意到测试用户（QQ 12345678）在聊天中说：我很喜欢摄影，我也很开心；我很在意这件事。",
+        /第一人称认知|角色/
+      ],
+      [
+        "unquoted-tell-me-user-speech",
+        "我注意到测试用户（QQ 12345678）告诉我：我很喜欢摄影，我也很开心；我很在意这件事。",
+        /第一人称认知|角色/
+      ],
+      [
+        "quoted-user-speech",
+        "我注意到测试用户（QQ 12345678）说：“我觉得摄影很重要，我很开心”；我也很在意。",
+        /第一人称认知|角色/
+      ],
+      [
+        "quoted-user-speech-before-identity",
+        "我注意到“我很喜欢摄影”，测试用户（QQ 12345678）这样说；我也很在意。",
+        /第一人称认知|角色/
+      ],
+      [
+        "recall-by-impression",
+        "我知道在我的印象里，测试用户（QQ 12345678）喜欢摄影，我觉得很有趣，我也很期待。",
+        /回忆提示语/
+      ],
+      [
+        "recall-by-impression-no-particle",
+        "我知道在我印象中，测试用户（QQ 12345678）喜欢摄影，我觉得很有趣，我也很期待。",
+        /回忆提示语/
+      ]
+    ] as const;
+    for (const source of ["working", "long_term", "user_profile"] as const) {
+      for (const [id, invalidFact, expected] of invalidPerspectiveFacts) {
+        const record = source === "user_profile"
+          ? { id, userId: "12345678", userName: "测试用户", fact: invalidFact }
+          : { id, userIds: ["12345678"], userName: "测试用户", fact: invalidFact };
+        expect(() => validateMemoryFact("plana", source, record)).toThrow(expected);
+      }
+    }
+    expect(() => validateMemoryFact("plana", "working", {
+      id: "ambiguous-user-self-narration",
+      userIds: ["12345678"],
+      userName: "测试用户",
+      fact: "我觉得我（测试用户，QQ 12345678）很喜欢摄影，我也很期待看到作品。"
+    })).toThrow(/第一人称认知|角色/);
+    expect(() => validateMemoryFact("plana", "user_profile", {
+      id: "user-self-narration",
+      userId: "12345678",
+      userName: "测试用户",
+      fact: "我喜欢摄影，测试用户（QQ 12345678）是我的昵称，我对此很开心。"
+    })).toThrow(/认知|角色/);
+    for (const [userName, expected] of [[undefined, /昵称/], ["12345678", /昵称/], ["QQ：12345678", /昵称/], ["别名", /别名/]] as const) {
+      expect(() => validateMemoryFact("plana", "user_profile", {
+        id: "bad-name",
+        userId: "12345678",
+        userName,
+        fact: "我注意到测试用户（QQ 12345678）喜欢摄影，我觉得这很有趣，我也很期待看到作品。"
+      })).toThrow(expected);
+    }
     expect(() => validateReplacements("plana", {
       working: [],
       long_term: [],
       user_profile: [
-        { id: "p1", userId: "12345678", fact: "我注意到他的偏好，我觉得很清楚，我也愿意尊重。" },
-        { id: "p2", userId: "12345678", fact: "我记得他的习惯，我认为很稳定，我也很在意。" }
+        { id: "p1", userId: "12345678", userName: "测试用户", fact: "我注意到测试用户（QQ 12345678）的偏好，我觉得很清楚，我也愿意尊重。" },
+        { id: "p2", userId: "12345678", userName: "测试用户", fact: "我认为测试用户（QQ 12345678）的习惯很稳定，我也很在意并愿意尊重。" }
       ]
     })).toThrow(/只能保留 1 条/);
   });
 
   it("compares record_id, position, wrapper, and full metadata exactly", () => {
     const replacement = {
-      working: [{ id: "w", fact: "我记得 QQ 12345678 的请求，我觉得重要，我也愿意认真回应。", userIds: ["12345678"], mood: "calm" }],
+      working: [{ id: "w", fact: "我注意到测试用户（QQ 12345678）的请求，我觉得重要，我也愿意认真回应。", userIds: ["12345678"], userName: "测试用户", mood: "calm" }],
       long_term: [],
       user_profile: []
     };
@@ -326,7 +453,7 @@ describe("memory-perspective-v1 tracked migration", () => {
     expect(await fs.readFile(intentPath, "utf8")).toBe(intentBefore);
     expect(await snapshotDirectoryBytes(fixtureDataDirectories(fixture))).toEqual(bytesBefore);
     expect((await fs.readdir(migrationDirectory)).filter((name) => name.includes("-abort-"))).toEqual(reportsBefore);
-  });
+  }, 10_000);
 
   it("rejects a missing registered pair and an unregistered orphan pair from export", async () => {
     const missing = await createFixture();
@@ -1514,12 +1641,16 @@ describe("memory-perspective-v1 tracked migration", () => {
     const firstData = JSON.parse(String(first?.data_json));
     delete firstData.userIds;
     firstData.userId = "12345678";
+    firstData.occurredAt = "2026-07-01T00:00:00.000Z";
     database.prepare("UPDATE memory_records SET data_json=? WHERE row_id=?").run(JSON.stringify(firstData), first?.row_id);
-    insertMemory(fixture.applicationPaths[0], "working", "working-second", "第二条", []);
+    insertMemory(fixture.applicationPaths[0], "working", "working-second", "第二条", [], "另一用户");
     const second = database.prepare("SELECT row_id, data_json FROM memory_records WHERE record_id='working-second'").get();
     const secondData = JSON.parse(String(second?.data_json));
     delete secondData.userIds;
     secondData.userId = "87654321";
+    secondData.userName = "另一用户";
+    secondData.occurredAt = "2026-07-03T00:00:00.000Z";
+    secondData.occurredEndAt = "2026-07-05T00:00:00.000Z";
     database.prepare("UPDATE memory_records SET data_json=? WHERE row_id=?").run(JSON.stringify(secondData), second?.row_id);
     database.close();
 
@@ -1528,7 +1659,7 @@ describe("memory-perspective-v1 tracked migration", () => {
     const proposal = await readJson(proposalPath);
     const workingTargets = proposal.targets.working;
     workingTargets[0].sourceStableKeys.push(workingTargets[1].sourceStableKeys[0]);
-    workingTargets[0].targetFact = "我记得 QQ 12345678 与 QQ 87654321 都留下了请求，我觉得两人的需要都重要，我也愿意认真回应。";
+    workingTargets[0].targetFact = "我注意到测试用户（QQ 12345678）先提出请求，另一用户（QQ 87654321）随后推进并在 7 月 5 日完成，我觉得这段因果进展很重要，我也愿意认真回应。";
     proposal.targets.working = [workingTargets[0]];
     for (const action of proposal.rowActions.filter((candidate: { source: string }) => candidate.source === "working")) {
       action.action = action.targetId === workingTargets[0].id ? "keep" : "merge";
@@ -1540,12 +1671,60 @@ describe("memory-perspective-v1 tracked migration", () => {
     const plan = await readJson(path.join(fixture.workspace, "business/migrations/plans/plana.plan.json"));
     expect(plan.replacements.working[0].userIds).toEqual(["12345678", "87654321"]);
     expect(plan.replacements.working[0]).not.toHaveProperty("userId");
+    expect(plan.replacements.working[0].occurredAt).toBe("2026-07-01T00:00:00.000Z");
+    expect(plan.replacements.working[0].occurredEndAt).toBe("2026-07-05T00:00:00.000Z");
     expect(() => dryRunPlans({ workspace: fixture.workspace, planDir: "business/migrations/plans" })).not.toThrow();
+
+    const mismatchedProposal = await readJson(proposalPath);
+    mismatchedProposal.targets.working[0].targetFact = "我注意到另一用户（QQ 12345678）先提出请求，测试用户（QQ 87654321）随后完成，我觉得这段进展很重要，我也愿意认真回应。";
+    await fs.writeFile(proposalPath, `${JSON.stringify(mismatchedProposal, null, 2)}\n`);
+    signProposalDirectory({ proposalDir: path.dirname(proposalPath) });
+    expect(() => refreshPlans({
+      workspace: fixture.workspace,
+      proposalDir: "business/migrations/proposals",
+      planDir: "business/migrations/plans-mismatched-nicknames"
+    })).toThrow(/受信昵称|昵称.*证据|QQ.*成对/);
+
+    const suffixedProposal = await readJson(proposalPath);
+    suffixedProposal.targets.working[0].targetFact = "我注意到测试用户（QQ 12345678）先提出请求，假另一用户（QQ 87654321）随后完成，我觉得这段进展很重要，我也愿意认真回应。";
+    await fs.writeFile(proposalPath, `${JSON.stringify(suffixedProposal, null, 2)}\n`);
+    signProposalDirectory({ proposalDir: path.dirname(proposalPath) });
+    expect(() => refreshPlans({
+      workspace: fixture.workspace,
+      proposalDir: "business/migrations/proposals",
+      planDir: "business/migrations/plans-suffixed-nickname"
+    })).toThrow(/受信昵称|昵称.*证据|QQ.*成对/);
+
+    const mixedIdentityProposal = await readJson(proposalPath);
+    mixedIdentityProposal.targets.working[0].targetFact = "我注意到测试用户（QQ 12345678）先提出请求，伪造用户（QQ 12345678）又补充细节，另一用户（QQ 87654321）随后完成，我觉得这段进展很重要，我也愿意认真回应。";
+    await fs.writeFile(proposalPath, `${JSON.stringify(mixedIdentityProposal, null, 2)}\n`);
+    signProposalDirectory({ proposalDir: path.dirname(proposalPath) });
+    expect(() => refreshPlans({
+      workspace: fixture.workspace,
+      proposalDir: "business/migrations/proposals",
+      planDir: "business/migrations/plans-mixed-nickname"
+    })).toThrow(/受信昵称|昵称.*证据|QQ.*成对/);
+
+    const extraIdentityProposal = await readJson(proposalPath);
+    extraIdentityProposal.targets.working[0].targetFact = "我注意到测试用户（QQ 12345678）先提出请求，另一用户（QQ 87654321）随后完成，陌生用户（QQ 99999999）又加入讨论，我觉得这段进展很重要，我也愿意认真回应。";
+    await fs.writeFile(proposalPath, `${JSON.stringify(extraIdentityProposal, null, 2)}\n`);
+    signProposalDirectory({ proposalDir: path.dirname(proposalPath) });
+    expect(() => refreshPlans({
+      workspace: fixture.workspace,
+      proposalDir: "business/migrations/proposals",
+      planDir: "business/migrations/plans-extra-qq"
+    })).toThrow(/finalUserIds|QQ.*身份|QQ.*证据/);
   });
 
   it("rejects malformed mutable metadata and dangling cross-memory references with zero database writes", async () => {
     for (const mutation of [
       (proposal: any) => { proposal.targets.working[0].metadataPatch.set.userIds = [""]; },
+      (proposal: any) => { proposal.targets.working[0].metadataPatch.set.userName = ""; },
+      (proposal: any) => { proposal.targets.working[0].metadataPatch.set.userName = "12345678"; },
+      (proposal: any) => { proposal.targets.working[0].metadataPatch.remove = ["userName"]; },
+      (proposal: any) => { proposal.targets.working[0].metadataPatch.set.occurredAt = "2026-07-01T00:00:00.000Z"; },
+      (proposal: any) => { proposal.targets.working[0].metadataPatch.preserveFromBase = ["occurredAt"]; },
+      (proposal: any) => { proposal.targets.working[0].metadataPatch.preserveFromBase = ["occurredEndAt"]; },
       (proposal: any) => { proposal.targets.working[0].metadataPatch.set.eventFingerprint = "bad"; },
       (proposal: any) => { proposal.targets.working[0].metadataPatch.set.longTermId = "missing-long-term"; },
       (proposal: any) => { proposal.targets.long_term[0].metadataPatch.set.sourceWorkingMemoryIds = ["missing-working"]; }
@@ -1572,6 +1751,33 @@ describe("memory-perspective-v1 tracked migration", () => {
       }
       expect(snapshotMemoryRows(fixture.applicationPaths)).toEqual(before);
     }
+  });
+
+  it("repairs a missing nickname only through an explicit validated metadata patch", async () => {
+    const fixture = await createFixture();
+    const database = new DatabaseSync(fixture.applicationPaths[0]);
+    const row = database.prepare("SELECT row_id, data_json FROM memory_records WHERE source='working'").get();
+    const data = JSON.parse(String(row?.data_json));
+    delete data.userName;
+    database.prepare("UPDATE memory_records SET data_json=? WHERE row_id=?").run(JSON.stringify(data), row?.row_id);
+    database.close();
+
+    await exportGenerateResolve(fixture);
+    const proposalPath = path.join(fixture.workspace, "business/migrations/proposals/plana.proposal.json");
+    const proposal = await readJson(proposalPath);
+    proposal.targets.working[0].metadataPatch.set.userName = "测试用户";
+    await fs.writeFile(proposalPath, `${JSON.stringify(proposal, null, 2)}\n`);
+    signProposalDirectory({ proposalDir: path.dirname(proposalPath) });
+    refreshPlans({
+      workspace: fixture.workspace,
+      proposalDir: "business/migrations/proposals",
+      planDir: "business/migrations/plans"
+    });
+
+    const plan = await readJson(path.join(fixture.workspace, "business/migrations/plans/plana.plan.json"));
+    expect(plan.replacements.working[0].userName).toBe("测试用户");
+    expect(plan.replacements.working[0].fact).toContain("测试用户（QQ 12345678）");
+    expect(dryRunPlans({ workspace: fixture.workspace, planDir: "business/migrations/plans" }).ok).toBe(true);
   });
 
   it("rejects a symlinked data parent before opening or renaming external databases", async () => {
@@ -2075,6 +2281,72 @@ describe("memory-perspective-v1 tracked migration", () => {
     expect(events.filter((event) => event.scope === "production")).toEqual([]);
     expect(events.filter((event) => event.scope === "staging-live")).toEqual([]);
   }, 30_000);
+
+  it.each(["plan-schema", "proposal-schema"] as const)(
+    "rejects re-signed legacy %s artifacts on staged-ready and installing reentry before a rename",
+    async (artifact) => {
+      for (const initialState of ["staged-ready", "installing"] as const) {
+        const { fixture, stagingWorkspace } = await prepareStagedFull();
+        const planPath = path.join(fixture.workspace, "business/migrations/plans/plana.plan.json");
+        const proposalPath = path.join(fixture.workspace, "business/migrations/proposals/plana.proposal.json");
+        let plan = await readJson(planPath);
+        if (artifact === "plan-schema") {
+          plan.schemaVersion = 2;
+        } else {
+          const proposal = await readJson(proposalPath);
+          proposal.schemaVersion = 1;
+          const signedProposal = resignTestDocument(proposal, "proposalSha256");
+          await fs.writeFile(proposalPath, `${JSON.stringify(signedProposal, null, 2)}\n`);
+          plan.proposalSha256 = signedProposal.proposalSha256;
+        }
+        plan = resignTestDocument(plan, "planSha256");
+        await fs.writeFile(planPath, `${JSON.stringify(plan, null, 2)}\n`);
+
+        const intentPath = migrationIntentFile(fixture);
+        const intent = await readJson(intentPath);
+        const boundAgent = intent.agents.find((agent: { agentId: string }) => agent.agentId === "plana");
+        boundAgent.planSha256 = plan.planSha256;
+        boundAgent.proposalSha256 = plan.proposalSha256;
+        intent.planSetSha256 = testCanonicalSha256(intent.agents.map((agent: any) => ({
+          agentId: agent.agentId,
+          planSha256: agent.planSha256,
+          replacementSha256: agent.replacementSha256
+        })));
+        intent.state = initialState;
+        if (initialState === "installing") intent.installStartedAt = new Date().toISOString();
+        const signedIntent = resignTestDocument(intent, "intentSha256");
+        await fs.writeFile(intentPath, `${JSON.stringify(signedIntent, null, 2)}\n`);
+
+        const productionDirectories = fixtureDataDirectories(fixture);
+        const stagingDirectories = fixtureDataDirectories({
+          applicationPaths: fixture.applicationPaths.map((file) => (
+            path.join(stagingWorkspace, path.relative(fixture.workspace, file))
+          ))
+        });
+        const productionBefore = await snapshotDirectoryBytes(productionDirectories);
+        const stagingBefore = await snapshotDirectoryBytes(stagingDirectories);
+        let renameBoundaryCalls = 0;
+        await expect(installStagedMigration({
+          workspace: fixture.workspace,
+          stagingWorkspace,
+          confirmReplace: true,
+          operationLockHooks: {
+            afterInstallIdentityBeforeRename: async () => { renameBoundaryCalls += 1; }
+          },
+          ...offline
+        })).rejects.toThrow(/schema|plan|proposal/i);
+        expect(renameBoundaryCalls).toBe(0);
+        expect(await snapshotDirectoryBytes(productionDirectories)).toEqual(productionBefore);
+        expect(await snapshotDirectoryBytes(stagingDirectories)).toEqual(stagingBefore);
+        expect(await readJson(intentPath)).toMatchObject({
+          state: initialState === "staged-ready" ? "staged-ready" : "rollback-required",
+          installedDirectories: [],
+          failure: { code: expect.stringMatching(/SCHEMA_INVALID/) }
+        });
+      }
+    },
+    120_000
+  );
 
   it.each(["main", "sidecar"] as const)(
     "rejects production %s drift before apply staging creation with zero production mutation or SQLite open",
@@ -3230,6 +3502,7 @@ async function createFullFixture() {
       id: `working-${agentId}`,
       fact: "旧工作事实",
       userIds: ["12345678"],
+      userName: "测试用户",
       source: "conversation",
       createdAt: "2026-07-01T00:00:00.000Z"
     }]);
@@ -3237,12 +3510,14 @@ async function createFullFixture() {
       id: `long-${agentId}`,
       fact: "旧长期事实",
       userIds: ["12345678"],
+      userName: "测试用户",
       source: "conversation",
       createdAt: "2026-07-01T00:00:00.000Z"
     }]);
     store.replaceMemory("user_profile", [{
       id: `profile-${agentId}`,
       userId: "12345678",
+      userName: "测试用户",
       fact: "旧画像",
       value: "旧画像",
       source: "conversation",
@@ -3420,6 +3695,7 @@ function createApplication(file: string, agentId: string, options: { wrapperWork
     id: `working-${agentId}`,
     fact: "旧工作事实",
     userIds: ["12345678"],
+    userName: "测试用户",
     source: "conversation",
     createdAt: "2026-07-01T00:00:00.000Z"
   };
@@ -3428,6 +3704,7 @@ function createApplication(file: string, agentId: string, options: { wrapperWork
     id: `long-${agentId}`,
     fact: "旧长期事实",
     userIds: ["12345678"],
+    userName: "测试用户",
     source: "conversation",
     createdAt: "2026-07-01T00:00:00.000Z"
   };
@@ -3435,6 +3712,7 @@ function createApplication(file: string, agentId: string, options: { wrapperWork
   const profile = {
     id: `profile-${agentId}`,
     userId: "12345678",
+    userName: "测试用户",
     fact: "旧画像",
     value: "旧画像",
     source: "conversation",
@@ -3442,7 +3720,12 @@ function createApplication(file: string, agentId: string, options: { wrapperWork
   };
   insert.run("user_profile", 0, profile.id, JSON.stringify(profile));
   if (options.secondProfileUser) {
-    const second = { ...profile, id: `profile-2-${agentId}`, userId: options.secondProfileUser };
+    const second = {
+      ...profile,
+      id: `profile-2-${agentId}`,
+      userId: options.secondProfileUser,
+      userName: "另一用户"
+    };
     insert.run("user_profile", 1, second.id, JSON.stringify(second));
   }
   database.close();
@@ -3471,10 +3754,10 @@ async function resolveAllProposals(workspace: string, options: { mergeProfiles?:
     proposal.targets = { working: [], long_term: [], user_profile: [] };
     for (const input of proposal.inputs) {
       const fact = input.source === "working"
-        ? "我记得 QQ 12345678 最近的请求，我觉得这件事很重要，我也愿意认真回应让他安心。"
+        ? "我注意到测试用户（QQ 12345678）最近的请求，我觉得这件事很重要，我也愿意认真回应让他安心。"
         : input.source === "long_term"
-          ? "我记得 QQ 12345678 一直重视可靠回应，我认为这很稳定，我也很在意维持信任。"
-          : "我注意到他重视可靠回应，我觉得这是稳定偏好，我也愿意尊重并认真对待。";
+          ? "我注意到测试用户（QQ 12345678）一直重视可靠回应，我认为这很稳定，我也很在意维持信任。"
+          : "我注意到测试用户（QQ 12345678）重视可靠回应，我觉得这是稳定偏好，我也愿意尊重并认真对待。";
       proposal.targets[input.source].push({
         id: input.effectiveId,
         source: input.source,
@@ -3557,18 +3840,32 @@ function driftEveryRowIdAndPosition(applicationPaths: string[]) {
   }
 }
 
-function insertMemory(file: string, source: string, id: string, fact: string, userIds: string[]) {
+function insertMemory(
+  file: string,
+  source: string,
+  id: string,
+  fact: string,
+  userIds: string[],
+  userName = "测试用户"
+) {
   const database = new DatabaseSync(file);
   const position = Number(database.prepare("SELECT COALESCE(MAX(position), -1) + 1 AS value FROM memory_records WHERE source = ?").get(source)?.value);
   database.prepare("INSERT INTO memory_records(source, position, record_id, data_json) VALUES (?, ?, ?, ?)")
-    .run(source, position, id, JSON.stringify({ id, fact, userIds }));
+    .run(source, position, id, JSON.stringify({ id, fact, userIds, userName }));
   database.close();
 }
 
-function insertWrapperMemory(file: string, source: string, id: string, fact: string, userIds: string[]) {
+function insertWrapperMemory(
+  file: string,
+  source: string,
+  id: string,
+  fact: string,
+  userIds: string[],
+  userName = "测试用户"
+) {
   const database = new DatabaseSync(file);
   const position = Number(database.prepare("SELECT COALESCE(MAX(position), -1) + 1 AS value FROM memory_records WHERE source = ?").get(source)?.value);
-  const data = { id, fact, userIds, source: "conversation", createdAt: "2026-07-02T00:00:00.000Z" };
+  const data = { id, fact, userIds, userName, source: "conversation", createdAt: "2026-07-02T00:00:00.000Z" };
   database.prepare("INSERT INTO memory_records(source, position, record_id, data_json) VALUES (?, ?, ?, ?)")
     .run(source, position, id, JSON.stringify({ recordId: id, position, data }));
   database.close();
@@ -3631,7 +3928,7 @@ async function addOrphanDatabasePair(workspace: string, agentId: string) {
 async function rewriteSignedPlanReplacement(workspace: string, suffix: string) {
   const planPath = path.join(workspace, "business/migrations/plans/plana.plan.json");
   const plan = await readJson(planPath);
-  plan.replacements.working[0].fact = `我记得 QQ 12345678 的请求 ${suffix}，我觉得需要谨慎回应，我也愿意认真处理。`;
+  plan.replacements.working[0].fact = `我注意到测试用户（QQ 12345678）的请求 ${suffix}，我觉得需要谨慎回应，我也愿意认真处理。`;
   plan.replacementSha256 = testCanonicalSha256(plan.replacements);
   await fs.writeFile(
     planPath,

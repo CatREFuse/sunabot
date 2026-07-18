@@ -18,6 +18,7 @@ import {
   type SessionTurnServices
 } from "./sessionTurnServices.js";
 import {
+  createDeferredTurnOutboxEmitter,
   emitTurnHeldOutbox,
   emitTurnOutbox,
   type TurnHeldOutboxHandle
@@ -62,6 +63,7 @@ export interface SessionTurnContext {
   signal: AbortSignal;
   turn: TurnRecord;
   emitOutbox(draft: OutboxDraft): Promise<OutboxRecord>;
+  emitDeferredOutbox(draft: OutboxDraft): Promise<OutboxRecord>;
   appendHeldOutbox(
     draft: OutboxDraft,
     hold: HeldOutboxAppendOptions
@@ -361,6 +363,13 @@ export class SessionCoordinator {
     const { claim, state } = task;
     const signal = combineSignals(actorSignal, state.controller.signal);
     let outboxOrdinal = 0;
+    const deferredOutbox = createDeferredTurnOutboxEmitter(
+      this.store, claim, () => ++outboxOrdinal, () => this.scheduleOutbox()
+    );
+    const rejectDeferredOutbox = () => deferredOutbox.reject(
+      signal.reason ?? new Error("Session turn ended before it became deferred.")
+    );
+    signal.addEventListener("abort", rejectDeferredOutbox, { once: true });
     try {
       const emitOutbox = (draft: OutboxDraft) => emitTurnOutbox(
         this.store, claim, this.workerId, ++outboxOrdinal, draft,
@@ -376,13 +385,19 @@ export class SessionCoordinator {
         signal,
         turn: claim.turn,
         emitOutbox,
+        emitDeferredOutbox: deferredOutbox.emit,
         appendHeldOutbox
       });
       this.assertClaimUsable(state, signal);
       this.turnServices.results.apply(claim, state, result);
+      if (result.status === "deferred") deferredOutbox.release(result.providerCallId);
+      else deferredOutbox.reject(new Error(`Session turn completed as ${result.status}, not deferred.`));
     } catch (error) {
+      deferredOutbox.reject(error);
       this.turnServices.results.fail(claim, state, error, signal);
     } finally {
+      signal.removeEventListener("abort", rejectDeferredOutbox);
+      deferredOutbox.reject(new Error("Session turn ended before it became deferred."));
       this.deferScan(() => this.scheduleTurns());
     }
   }

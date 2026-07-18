@@ -70,6 +70,26 @@ const legacyProfileSystem = [
   "如果没有值得记录的用户认知，输出 {\"profiles\":[]}。"
 ].join("\n\n");
 
+const previousV1ProfileSystem = [
+  "你负责以 @{bot.name} 的第一视角，从同一批聊天消息中整理我对各个用户的稳定认知和印象。",
+  "写作前参考当前角色的人格、偏好和关系：\n<persona_soul>@{persona.soul}</persona_soul>\n<persona_preference>@{persona.preference}</persona_preference>\n<persona_user>@{persona.user}</persona_user>\n<persona_relation>@{persona.relation}</persona_relation>。这些材料决定我会注意什么、如何理解对方以及产生怎样的情绪，但不能替代用户证据，也不能被直接抄进画像。",
+  "所有与人本身有关的属性都归入用户画像，包括身份、职业、背景、所在地、拥有的设备或资源、能力、偏好、习惯、表达风格、长期关注点、边界和长期目标。客观属性与主观认知都在这里处理。",
+  "明确自述的客观属性可以直接记录；偏好、习惯、性格和长期关注点需要用户明确表达，或由多次一致表现支持。不要根据一次普通行为推断稳定属性。",
+  "不要保留一次性事件的过程和结果，例如某次购买、决定、约定、项目进展、故障、完成或临时安排、决定、要求你做的事；这些内容属于工作记忆和长期记忆。只有事件明确形成了对未来有价值的持久属性时，才提取形成后的当前属性，不复述事件过程。",
+  "严禁写入一次性事件，只能写可能会被多次观察到的事件。",
+  "忽略群聊事件本身、用户的一次性情绪、临时状态、不指向具体用户的内容，以及无法确认的推测。角色对用户形成的稳定感受和相处倾向可以保留，但必须有既有关系或多次互动支持。",
+  "用户唯一身份是 QQ 号。userName 只保存 payload 中当前观测到的 QQ 昵称或显示名，不承载回复称呼；群名片由会话目录派生，不复制进 fact。",
+  "addressName 只保存 @{bot.name} 回复该用户时使用的明确称呼。输入 payload.previousProfiles 会提供已有画像：已有非空 addressName 必须原样保留，只有字段为空且用户明确要求“以后叫我……”或同义表达时才推断新值。模型不得根据昵称、群名片、性别或一次玩笑自行创造称呼。",
+  "输入 payload 会给出 admin.userId 和 admin.name；该 QQ 是当前角色的管理员，其 addressName 必须使用 admin.name。其他用户不得写成老师或管理员。admin.userId 为空时不要记录任何老师或管理员身份。",
+  "输入 payload.previousProfiles 会给出该 QQ 的原画像；写入新画像时必须把原画像和本批消息一起作为依据，按语义合并。合并时删除原画像中的一次性事件过程、已失效临时状态和重复描述，同时保留已有非空 addressName。",
+  "对于需要更新的用户，fact 必须是该用户合并后的完整画像。每位用户通常只保留 1 至 3 个最概括、最影响未来相处的认知，用一个自然连贯的短段表达；合并相近内容，删除细节、重复描述和低价值属性。",
+  "fact 必须以我的第一视角自然叙述，使用“我”或“我的”，融合我确认的概括事实、我对这个人的看法，以及我与其相处时稳定的情绪或态度。不得使用列表、分项、字段标签、分类标题或“身份：”“偏好：”“情绪：”“认知：”等模板，也不要解释依据和提取过程。",
+  "fact 中不要写 QQ 号、昵称、群名片、称呼指令、群或会话中的别名清单，也不要写“QQ ...：”“叫他/她……”“称呼为……”等前缀。QQ 号只写在 userId，显示名只写在 userName，回复称呼只写在 addressName。",
+  "输出严格 JSON 对象，不要输出 Markdown、解释或额外文字。",
+  "格式为 {\"profiles\":[{\"userId\":\"QQ号\",\"userName\":\"当前昵称或显示名\",\"addressName\":\"明确称呼或空字符串\",\"fact\":\"语义合并后的完整稳定用户画像\",\"time\":\"本批画像依据的 ISO 时间或时间范围\"}]}。",
+  "如果没有值得记录的用户认知，输出 {\"profiles\":[]}。"
+].join("\n\n");
+
 afterEach(async () => {
   for (const runtime of runtimes.splice(0)) runtime.close();
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
@@ -88,6 +108,19 @@ describe("memory perspective prompt migration", () => {
     const migrated = migrateMemoryPerspectiveTemplate(legacy, canonical);
     expect(migrated).not.toBe(legacy);
     expect(migrated.messages[0]).toEqual(canonical.messages[0]);
+  });
+
+  it("upgrades the exact v1 profile standard and preserves administrator content", () => {
+    const canonical = defaultFinalPromptTemplate("memory.user-profile")!;
+    const previous = structuredClone(canonical);
+    const safetyRule = "管理员安全规则：画像只能来自可核对的用户证据。";
+    (previous.messages[0] as { content: string }).content = `${previousV1ProfileSystem}\n\n${safetyRule}`;
+
+    const migrated = migrateMemoryPerspectiveTemplate(previous, canonical);
+    const content = (migrated.messages[0] as { content: string }).content;
+    expect(content).toBe(`${(canonical.messages[0] as { content: string }).content}\n\n${safetyRule}`);
+    expect(content).toContain("fact 中的“我”始终指当前角色");
+    expect(content).not.toContain("fact 中不要写 QQ 号、昵称");
   });
 
   it("upgrades the exact legacy standard and preserves custom content and the wire contract", () => {
@@ -212,7 +245,7 @@ describe("memory perspective prompt migration", () => {
       await expect(fs.readFile(path.join(
         config.persona.systemPromptWorkspace,
         memoryPerspectiveMarkerFile(fileName)
-      ), "utf8")).resolves.toBe("memory-perspective-v1\n");
+      ), "utf8")).resolves.toBe("memory-perspective-v2\n");
     }
   });
 
@@ -251,6 +284,15 @@ describe("memory perspective prompt migration", () => {
           `${JSON.stringify(legacy, null, 2)}\n`,
           "utf8"
         );
+        await fs.writeFile(
+          path.join(
+            config.persona.systemPromptWorkspace,
+            path.dirname(fileName),
+            `.${path.basename(fileName)}.memory-perspective-v1`
+          ),
+          "memory-perspective-v1\n",
+          "utf8"
+        );
       }
       const invalidMarkerPath = path.join(
         config.persona.systemPromptWorkspace,
@@ -258,7 +300,7 @@ describe("memory perspective prompt migration", () => {
       );
       await fs.writeFile(
         invalidMarkerPath,
-        "memory-perspective-v1 appears here but is not a valid marker\n",
+        "memory-perspective-v1 appears here but is not a valid v2 marker\n",
         "utf8"
       );
       const runtime = new SunaRuntime(config, { attachmentService: {} as never });
@@ -276,7 +318,7 @@ describe("memory perspective prompt migration", () => {
         await expect(fs.readFile(path.join(
           config.persona.systemPromptWorkspace,
           memoryPerspectiveMarkerFile(fileName)
-        ), "utf8")).resolves.toBe("memory-perspective-v1\n");
+        ), "utf8")).resolves.toBe("memory-perspective-v2\n");
       }
 
       const profilePath = path.join(
@@ -319,7 +361,7 @@ describe("memory perspective prompt migration", () => {
       await expect(fs.readFile(path.join(
         config.persona.systemPromptWorkspace,
         memoryPerspectiveMarkerFile(fileName)
-      ), "utf8")).resolves.toBe("memory-perspective-v1\n");
+      ), "utf8")).resolves.toBe("memory-perspective-v2\n");
     }
   });
 });
@@ -347,7 +389,7 @@ function memoryFileCases(config: ReturnType<typeof createAdminTestConfig>) {
 }
 
 function memoryPerspectiveMarkerFile(fileName: string) {
-  return path.join(path.dirname(fileName), `.${path.basename(fileName)}.memory-perspective-v1`);
+  return path.join(path.dirname(fileName), `.${path.basename(fileName)}.memory-perspective-v2`);
 }
 
 function customizeCompressionAnchor(id: string, content: string) {

@@ -3,6 +3,7 @@ import { mkdir } from "node:fs/promises";
 import { expect, test } from "@playwright/test";
 import sharp from "sharp";
 import type { AgentMcpHttpServer } from "../../apps/admin-web/src/types/agentExtensions";
+import { installEmojiManagementMock } from "./emoji-management.fixture";
 import { installMockApi } from "./mock-api";
 
 const avatarCropFixture = sharp({
@@ -74,6 +75,13 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     state.qqOnline = true;
 
     await page.goto("/agents");
+    await page.getByRole("button", { name: "新增", exact: true }).click();
+    const createAgentDialog = page.getByRole("dialog", { name: "新增 Agent" });
+    await expect(createAgentDialog.getByText("导入现有配置", { exact: true })).toBeVisible();
+    await expect(createAgentDialog.getByText("选择文件夹", { exact: true })).toBeVisible();
+    await expect(createAgentDialog.getByText("选择 ZIP", { exact: true })).toBeVisible();
+    await capture(page, viewport.name, theme, "agent-create-import");
+    await createAgentDialog.getByRole("button", { name: "关闭", exact: true }).click();
     await page.getByRole("button", { name: "选择 阿罗娜" }).click();
     await expect(page.getByRole("heading", { name: "阿罗娜", exact: true })).toBeVisible();
     await expect(page.getByText("阿罗娜主账号", { exact: true })).toBeVisible();
@@ -241,20 +249,16 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
 
     await page.goto("/images");
     const selfieHeading = page.getByRole("heading", { name: "自拍参考图" });
+    const selfieManager = page.getByRole("region", { name: "自拍参考图" });
     await expect(selfieHeading).toBeVisible();
     await expect(page.getByText("3 / 9 张", { exact: true })).toBeVisible();
     await selfieHeading.evaluate((element) => element.scrollIntoView({ block: "start", behavior: "auto" }));
     await capture(page, viewport.name, theme, "images-selfie");
-    await page.getByRole("button", { name: "管理参考图", exact: true }).click();
-    const selfieDialog = page.getByRole("dialog", { name: "自拍参考图" });
-    await expect(selfieDialog).toBeVisible();
-    await capture(page, viewport.name, theme, "images-selfie-manager");
-    await selfieDialog.getByRole("button", { name: "编辑备注 常服正面" }).click();
+    await selfieManager.getByRole("button", { name: "编辑备注 常服正面" }).click();
     const selfieNoteDialog = page.getByRole("dialog", { name: "编辑图片备注" });
     await expect(selfieNoteDialog.getByLabel("01-neutral-face.png 的备注")).toHaveValue("常服正面");
     await capture(page, viewport.name, theme, "images-selfie-note");
     await selfieNoteDialog.getByRole("button", { name: "取消", exact: true }).click();
-    await selfieDialog.getByRole("button", { name: "关闭", exact: true }).click();
 
     await page.goto("/settings/providers");
     await expect(page.getByRole("heading", { name: "模型服务" })).toBeVisible();
@@ -330,14 +334,18 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     await expect(page.getByRole("heading", { name: "管理员密码", exact: true })).toBeVisible();
     await capture(page, viewport.name, theme, "settings-security");
 
+    state.config.bot.adminName = "管理员";
     await page.goto("/agent-settings/bot");
     await expect(page.getByLabel("过滤名单")).toBeVisible();
     await capture(page, viewport.name, theme, "settings-reply-behavior");
     await page.getByLabel("管理员称呼").fill("新的管理员称呼");
+    await expect(page.locator('[data-confirm-label="确认管理员称呼"]')).toBeEnabled();
+    await capture(page, viewport.name, theme, "settings-field-confirm-pending");
+    await page.locator('[data-confirm-label="确认管理员称呼"]').click();
     await expect.poll(() => state.config.bot.adminName).toBe("新的管理员称呼");
-    await expect(page.getByText("已同步", { exact: true })).toBeVisible();
+    await expect(page.locator('[data-slot="settings-auto-save-status"]')).toHaveCount(0);
     await expect(page.getByRole("button", { name: "保存", exact: true })).toHaveCount(0);
-    await capture(page, viewport.name, theme, "settings-auto-save");
+    await capture(page, viewport.name, theme, "settings-field-confirmed");
 
     await page.goto("/memory");
     await expect(page.getByRole("heading", { name: "记忆", exact: true })).toBeVisible();
@@ -393,19 +401,61 @@ test("自拍素材与备注四视口矩阵", async ({ page }, testInfo) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await page.goto("/images");
     await expect(page.getByText("3 / 9 张", { exact: true })).toBeVisible();
-    await capture(page, viewport.name, theme, "selfie-catalog");
-
-    await page.getByRole("button", { name: "管理参考图", exact: true }).click();
-    const manager = page.getByRole("dialog", { name: "自拍参考图" });
+    const manager = page.getByRole("region", { name: "自拍参考图" });
     await expect(manager.getByText("常服正面", { exact: true })).toBeVisible();
-    await capture(page, viewport.name, theme, "selfie-manager");
+    await capture(page, viewport.name, theme, "selfie-manager-inline");
 
     await manager.getByRole("button", { name: "编辑备注 常服正面" }).click();
     const noteDialog = page.getByRole("dialog", { name: "编辑图片备注" });
     await expect(noteDialog.getByLabel("01-neutral-face.png 的备注")).toHaveValue("常服正面");
     await capture(page, viewport.name, theme, "selfie-note");
     await noteDialog.getByRole("button", { name: "取消", exact: true }).click();
-    await manager.getByRole("button", { name: "关闭", exact: true }).click();
+  }
+});
+
+test("表情管理四视口矩阵", async ({ page }, testInfo) => {
+  test.setTimeout(90_000);
+  const theme = testInfo.project.name.endsWith("dark") ? "dark" : "light";
+  await page.addInitScript((selectedTheme) => localStorage.setItem("sunabot.theme", selectedTheme), theme);
+  await page.emulateMedia({ colorScheme: theme, reducedMotion: "reduce" });
+  await installEmojiManagementMock(page);
+
+  for (const viewport of viewports) {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.goto("/emojis");
+    await expect(page.getByRole("heading", { name: "表情", exact: true })).toBeVisible();
+    await expect(page.getByRole("group", { name: "表情发送尺寸" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "修改 摸鱼 key" })).toBeVisible();
+    await capture(page, viewport.name, theme, "emoji-manager-compact");
+
+    await page.getByRole("button", { name: "查看 开心 版本" }).click();
+    await expect(page.getByRole("dialog", { name: "开心 · 版本" })).toBeVisible();
+    await capture(page, viewport.name, theme, "emoji-version-history");
+    await page.getByRole("dialog", { name: "开心 · 版本" }).getByRole("button", { name: "关闭" }).click();
+  }
+});
+
+test("语音设置四视口矩阵", async ({ page }, testInfo) => {
+  test.setTimeout(90_000);
+  const theme = testInfo.project.name.endsWith("dark") ? "dark" : "light";
+  await page.addInitScript((selectedTheme) => localStorage.setItem("sunabot.theme", selectedTheme), theme);
+  await page.emulateMedia({ colorScheme: theme, reducedMotion: "reduce" });
+  await installMockApi(page);
+
+  for (const viewport of viewports) {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.goto("/voice");
+    await expect(page.getByRole("heading", { name: "语音", exact: true })).toBeVisible();
+    await expect(page.getByText("MOSS-TTS-Nano", { exact: true })).toBeVisible();
+    await expect(page.getByText("kivo-plana-ja.wav", { exact: true })).toBeVisible();
+    await capture(page, viewport.name, theme, "voice-settings");
+
+    await page.getByRole("button", { name: "替换音频", exact: true }).click();
+    const uploadDialog = page.getByRole("dialog", { name: "替换日本語参考音频" });
+    await expect(uploadDialog.getByLabel("选择参考音频")).toBeVisible();
+    await expect(uploadDialog.getByRole("textbox")).toHaveValue("待機中、解決しなければならない作業が多数存在しています。");
+    await capture(page, viewport.name, theme, "voice-reference-upload");
+    await uploadDialog.getByRole("button", { name: "取消", exact: true }).click();
   }
 });
 
@@ -475,7 +525,8 @@ test("工具目录四视口矩阵", async ({ page }, testInfo) => {
     await page.goto("/agent-settings/tools");
     await expect(page.getByRole("tab", { name: "工具目录", exact: true })).toHaveAttribute("aria-selected", "true");
     await expect(page.getByLabel("搜索工具")).toBeVisible();
-    await expect(page.getByLabel(/^启用 /)).toHaveCount(16);
+    await expect(page.getByLabel(/^启用 /)).toHaveCount(17);
+    await expect(page.getByText("cron", { exact: true })).toBeVisible();
     await capture(page, viewport.name, theme, "settings-tools-catalog");
 
     await page.getByRole("button", { name: "查看 行动中消息 详情" }).click();
@@ -525,7 +576,7 @@ test("Bash 权限与会话状态四视口矩阵", async ({ page }, testInfo) => 
     await page.goto("/agent-settings/tools");
     await page.getByLabel("搜索工具").fill("workspace_bash");
     const bashRow = page.locator("article").filter({ has: page.getByText("workspace_bash", { exact: true }) });
-    await expect(bashRow.getByText("管理员 QQ 私聊可用", { exact: true })).toBeVisible();
+    await expect(bashRow.getByText("仅管理员 QQ 私聊", { exact: true })).toBeVisible();
     await expect(bashRow.getByText("运行环境异常", { exact: true })).toHaveCount(0);
     await capture(page, viewport.name, theme, "settings-bash-session-scope");
     await bashRow.getByRole("button", { name: "查看 Bash 详情" }).click();

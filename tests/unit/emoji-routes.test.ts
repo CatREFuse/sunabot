@@ -38,6 +38,45 @@ afterEach(async () => {
 });
 
 describe("emoji routes", () => {
+  it("reads and updates an Agent-scoped sending size with a config revision", async () => {
+    const repository = fakeRepository(envelope("开心", "a"));
+    const read = vi.fn(async (agentId: string) => ({ sendSize: 512 as const, revision: `${agentId}-r1` }));
+    const update = vi.fn(async (agentId: string, input: { sendSize: 64 | 128 | 256 | 512 | 1024; revision: string }) => ({
+      sendSize: input.sendSize,
+      revision: `${agentId}-r2`
+    }));
+    const app = testApp();
+    registerEmojiRoutes(app, {
+      repository: repository.repository,
+      getConfig: () => createAdminTestConfig(root),
+      runtime: {} as SunaRuntime,
+      settings: { read, update }
+    });
+
+    const listed = await app.inject({ method: "GET", url: "/api/emojis?agentId=arona" });
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json()).toMatchObject({ sendSize: 512, revision: "arona-r1" });
+    expect(read).toHaveBeenCalledWith("arona");
+
+    const changed = await app.inject({
+      method: "PATCH",
+      url: "/api/emojis/settings?agentId=arona",
+      payload: { sendSize: 128, revision: "arona-r1" }
+    });
+    expect(changed.statusCode).toBe(200);
+    expect(changed.json()).toMatchObject({ sendSize: 128, revision: "arona-r2" });
+    expect(update).toHaveBeenCalledWith("arona", { sendSize: 128, revision: "arona-r1" });
+
+    const invalid = await app.inject({
+      method: "PATCH",
+      url: "/api/emojis/settings?agentId=arona",
+      payload: { sendSize: 96, revision: "arona-r2" }
+    });
+    expect(invalid.statusCode).toBe(400);
+    expect(invalid.json().error).toMatchObject({ code: "EMOJI_SETTINGS_INVALID", field: "sendSize" });
+    expect(update).toHaveBeenCalledOnce();
+  });
+
   it("isolates list, upload, content and deletion by explicit Agent ID", async () => {
     const plana = fakeRepository(envelope("认真", "a"));
     const koharu = fakeRepository(envelope("开心", "b"));

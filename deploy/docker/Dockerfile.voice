@@ -1,0 +1,36 @@
+ARG MINIFORGE_IMAGE=condaforge/miniforge3:25.3.0-3@sha256:f1f537ff80646e3aaf84e64abf6249cdc3f20889aa0a8d41535e62925c959f64
+
+FROM ${MINIFORGE_IMAGE}
+
+ARG MOSS_TTS_NANO_REVISION=9b1d3eadd5a72436fcaa9568351266f154db49a2
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+RUN [[ "${MOSS_TTS_NANO_REVISION}" =~ ^[a-f0-9]{40}$ ]]
+
+WORKDIR /opt
+RUN git clone --filter=blob:none --no-checkout https://github.com/OpenMOSS/MOSS-TTS-Nano.git moss-tts-nano \
+    && git -C moss-tts-nano fetch --depth 1 origin "${MOSS_TTS_NANO_REVISION}" \
+    && git -C moss-tts-nano checkout --detach "${MOSS_TTS_NANO_REVISION}" \
+    && rm -rf moss-tts-nano/.git
+
+WORKDIR /opt/moss-tts-nano
+RUN conda install --yes --channel conda-forge "pynini=2.1.6.post1" \
+    && python -m pip install --disable-pip-version-check --no-cache-dir -r requirements.txt \
+    && python -m pip install --disable-pip-version-check --no-cache-dir --no-deps . \
+    && conda clean --all --yes
+
+COPY deploy/docker/moss-tts-nano-api-low-memory.patch /tmp/moss-tts-nano-api-low-memory.patch
+RUN git apply --check /tmp/moss-tts-nano-api-low-memory.patch \
+    && git apply /tmp/moss-tts-nano-api-low-memory.patch \
+    && rm /tmp/moss-tts-nano-api-low-memory.patch
+
+RUN mkdir -p /opt/moss-tts-nano/models /opt/moss-tts-nano/generated_audio \
+    && python -c 'import app_onnx, fastapi, onnxruntime, pynini, uvicorn; print("MOSS-TTS-Nano runtime ready")'
+
+ENV MOSS_TTS_NANO_API_ONLY_LOW_MEMORY=1
+
+EXPOSE 18083
+STOPSIGNAL SIGTERM
+ENTRYPOINT ["python", "app_onnx.py"]
+CMD ["--host", "0.0.0.0", "--port", "18083", "--cpu-threads", "4", "--execution-provider", "cpu", "--output-dir", "/opt/moss-tts-nano/generated_audio"]

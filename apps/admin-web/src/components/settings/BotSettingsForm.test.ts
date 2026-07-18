@@ -11,7 +11,8 @@ describe("BotSettingsForm", () => {
       pokeOnNoReply: false,
       quoteGroupReplies: true,
       quoteGroupReplyExcludedUserIds: [],
-      contextMessageLimit: 48
+      contextMessageLimit: 48,
+      emojiSendSize: 512 as const
     };
     const reply = {
       reverseWsPath: "/onebot/v11/ws",
@@ -30,6 +31,7 @@ describe("BotSettingsForm", () => {
     expect(input.element.value).toBe("5");
 
     await input.setValue("7.5");
+    await wrapper.get('[data-confirm-label="确认输入防抖时间"]').trigger("click");
 
     expect(modelValue.replyDebounceMs).toBe(7_500);
   });

@@ -222,6 +222,14 @@ export interface AppendTurnOutboxResult {
   inserted: boolean;
 }
 
+export interface AppendDeferredTurnOutboxInput {
+  turnId: string;
+  eventId: string;
+  providerCallId: string;
+  dedupeKey: string;
+  draft: OutboxDraft;
+}
+
 export interface HeldOutboxAppendOptions {
   mutationFingerprint: string;
   semantics: "system_config_confirmation";

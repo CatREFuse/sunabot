@@ -1,0 +1,32 @@
+import type { PromptVariableValue } from "../agent/public.js";
+import { VOICE_LANGUAGES, type VoiceProfileV1 } from "./types.js";
+
+export const VOICE_TRIGGER_POLICY = [
+  "语音只用于少量具有标志性或强烈情绪意义的表达，包括早安、晚安、喜爱与亲密表达、强烈兴奋、生气或委屈、害羞，以及重要里程碑。",
+  "日常事实、普通问答、任务进度、错误说明、代码、命令、URL 和长内容不要调用语音。",
+  "语音不能替代文字；每份同源文字至多伴生一次语音。send_voice_message.text 必须与同一响应中的可见 text、assistant_text.text 或异步工具 dispatch_message 的可读正文一致，表情标记不读出。",
+  "language 必须从当前可用语言中选择；没有可用参考音频或语音已关闭时不要调用。",
+].join("\n");
+
+export function voicePromptVariables(
+  profile: VoiceProfileV1,
+): Record<string, PromptVariableValue> {
+  return {
+    "conversation.voice.settings": {
+      enabled: profile.enabled,
+      defaultLanguage: profile.defaultLanguage,
+      languages: VOICE_LANGUAGES.map((code) => ({
+        code,
+        label: languageLabel(code),
+        referenceReady: profile.languages[code] !== null,
+      })),
+    },
+    "conversation.voice.trigger_policy": VOICE_TRIGGER_POLICY,
+  };
+}
+
+function languageLabel(code: (typeof VOICE_LANGUAGES)[number]) {
+  if (code === "zh") return "中文";
+  if (code === "en") return "English";
+  return "日本語";
+}

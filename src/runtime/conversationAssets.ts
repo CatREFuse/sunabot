@@ -54,6 +54,7 @@ export interface QueueConversationAssetOptions {
   logRunId: string;
   isCurrent?: () => boolean;
   delivery: ReplyDelivery;
+  toolName?: "send_file" | "send_voice_message";
 }
 
 export class RuntimeConversationAssets {
@@ -74,19 +75,24 @@ export class RuntimeConversationAssets {
       send: (
         input: PrepareOutboundConversationAssetInput,
         context: { callId: string; toolName: "send_file" }
-      ) => this.queue({ incoming, gateway, input, callId: context.callId, logRunId, isCurrent, delivery })
+      ) => this.queue({ incoming, gateway, input, callId: context.callId, logRunId, isCurrent, delivery, toolName: context.toolName })
     };
   }
 
   async queue(options: QueueConversationAssetOptions) {
+    const toolName = options.toolName ?? "send_file";
+    const voice = toolName === "send_voice_message";
     if (options.incoming.transport === "web") {
       throw conversationAssetContractError();
     }
-    if (!this.host.isAdminUser(options.incoming.userId)) {
+    if (!voice && !this.host.isAdminUser(options.incoming.userId)) {
       throw new Error("send_file is unavailable for the current user.");
     }
-    if (options.input.kind !== "auto" && options.input.kind !== "file" && options.input.kind !== "image") {
-      throw new Error("send_voice_message is disabled.");
+    if (
+      (voice && options.input.kind !== "voice")
+      || (!voice && options.input.kind !== "auto" && options.input.kind !== "file" && options.input.kind !== "image")
+    ) {
+      throw new Error("Conversation asset tool and kind do not match.");
     }
     if (!options.gateway.sendConversationAsset || !options.delivery.emitOutbox) {
       throw new Error("当前消息传输不支持可靠文件发送。");
@@ -113,7 +119,7 @@ export class RuntimeConversationAssets {
       type: "conversation_asset",
       target,
       incomingFingerprint,
-      toolName: "send_file",
+      toolName,
       asset: {
         path: relativePath,
         kind: prepared.kind,
@@ -155,14 +161,12 @@ export class RuntimeConversationAssets {
     if (signal.aborted) throw signal.reason ?? new Error("Outbox delivery aborted.");
 
     const payload = decodeConversationAsset(outbox.payload);
-    if (payload.toolName === "send_voice_message" || payload.asset.kind === "voice") {
-      throw new Error("send_voice_message is disabled.");
-    }
+    if ((payload.toolName === "send_voice_message") !== (payload.asset.kind === "voice")) throw conversationAssetContractError();
     const authoritativeIncoming = this.assertOutboxProvenance(outbox, payload);
     if (!isRuntimeIncomingMessage(authoritativeIncoming)) {
       throw new Error(`Outbox 消息格式无效：${outbox.id}`);
     }
-    if (context.phase !== "settle" && !this.host.isAdminUser(authoritativeIncoming.userId)) {
+    if (context.phase !== "settle" && payload.toolName === "send_file" && !this.host.isAdminUser(authoritativeIncoming.userId)) {
       throw new Error("send_file is unavailable for the current user.");
     }
     if (context.phase !== "settle" && !this.host.isReplySenderAllowed(authoritativeIncoming.userId)) {

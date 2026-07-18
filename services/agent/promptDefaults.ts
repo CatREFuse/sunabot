@@ -1,11 +1,13 @@
 import {
   assistantTextTool,
   codexTool,
+  cronTool,
   generateImgTool,
   memoryRecallTool,
   noReplyTool,
   readFileTool,
   sendFileTool,
+  sendVoiceMessageTool,
   selfieTool,
   systemConfigTool,
   withRequiredDispatchMessage,
@@ -14,19 +16,23 @@ import {
   writeFileTool
 } from "../tools/public.js";
 import type { FinalPromptTemplate, OpenAIToolDefinition } from "./promptSystem.js";
+import {
+  SCHEDULED_TASK_CALLBACK_PROMPT_ID,
+  scheduledTaskCallbackPromptTemplate
+} from "./scheduledTaskPrompt.js";
 
 export const DEFAULT_WORK_MEMORY_COMPRESS_IN_PROMPT = [
-  "你负责以 @{bot.name} 的第一视角，把一批聊天消息整理成高度压缩的工作记忆。",
+  "你负责以 @{bot.name} 的第一视角，把一批聊天消息整理成高度压缩的工作记忆。fact 中的“我”始终指当前角色 @{bot.name}，不能指聊天中的用户。",
   "写作前参考当前角色的人格、偏好和关系：\n<persona_soul>@{persona.soul}</persona_soul>\n<persona_preference>@{persona.preference}</persona_preference>\n<persona_user>@{persona.user}</persona_user>\n<persona_relation>@{persona.relation}</persona_relation>。这些材料只决定角色在意什么、如何感受和怎样判断；不要把设定本身抄成记忆，也不要据此编造聊天中没有发生的事实。",
   "输入 payload.previousWorkingMemories 会给出全部原工作记忆；必须把原记忆和本批 messages 一起作为依据，输出合并后的完整工作记忆集合。",
   "工作记忆只记录发生过或正在发生的事件。事件是时间轴上的动作、变化或结果，例如决定、约定、承诺、授权、开始、停止、进展、完成、失败、关系变化、项目状态变化和待跟进事项。",
-  "只保留最近最影响后续回复的少数事件。完整工作记忆通常保留 3 至 6 条，最多 8 条；信息不足时可以更少。连续对话、同一任务的多次进展和彼此相关的小事要合并成一条概括记忆，只保留当前状态、关键承诺、重要结果和仍需留意的不确定点。",
-  "每条 fact 都写成自然、连贯的第一人称短句或短段，使用“我”或“我的”，自然写出我感知或记得的事情、我的个人感受，以及我现在的看法、判断、担心、期待或打算。个人特质必须真实影响取舍和措辞；情绪可以克制，但不能省略。依据不足时使用符合人格的轻度感受或保留判断，不夸大情绪，不虚构内心活动。",
+  "只保留最近最影响后续回复的少数事件。完整工作记忆通常保留 3 至 6 条，最多 8 条；信息不足时可以更少。即使每条信息本身已经清晰，也要主动检查语义相同、相近、重复、互为因果或属于同一事件不同阶段的内容，把它们压缩成一条概括记忆，写清原因、先后变化、当前状态、关键承诺、重要结果和仍需留意的不确定点，并用 occurredAt 保留最早起点、occurredEndAt 保留最新结果或结束时间。",
+  "每条 fact 都写成自然、连贯的第一人称短句或短段，使用“我”或“我的”，直接说明事情怎样发生、我对此有什么感受，以及我现在的看法、判断、担心、期待或打算。不得把用户自述中的“我”当成当前角色，也不得原样复刻成用户对自己的第一人称；正文禁止出现“我记得”，不要使用回忆提示语。个人特质必须真实影响取舍和措辞；情绪可以克制，但不能省略。依据不足时使用符合人格的轻度感受或保留判断，不夸大情绪，不虚构内心活动。",
   "fact 正文不得使用列表、字段标签、分类标题或模板化前缀，不得写“事实：”“情绪：”“认知：”“用户：”“相关用户：”，也不得解释来源、压缩过程、数据结构或评分。事实、情绪与认知必须融合在自然叙述里。",
-  "每条事件仍要能判断谁在何时发生了什么。把相关 QQ 号自然写进第一人称叙述，例如“我记得老师（QQ 123456）……”，不要单独罗列身份；如果涉及多人，在正文中自然带出所有相关 QQ 号。",
+  "每条事件仍要能判断谁在何时发生了什么。每个相关用户都必须以“当前昵称或显示名（QQ 123456）”的形式自然写进第一人称叙述，QQ 号与对应昵称必须同时存在且昵称不能为空、不能等于 QQ 号；涉及多人时逐一写全，不要单独罗列身份。userName 必须填写当前观测到的非空昵称或显示名。",
   "不要记录任何与人本身有关的属性。身份、职业、背景、所在地、昵称、称呼、关系、角色、拥有的设备或资源、能力、偏好、习惯、表达风格、长期关注点、边界和长期目标都属于用户画像，即使稳定也不得写入工作记忆。",
   "一段消息同时包含事件和人物属性时，只提取事件中的动作、变化和结果，不把事件概括成人物属性。例如“某人在 7 月 10 日购买了 Mac mini”可以记录购买事件，不要写成“某人拥有 Mac mini”。",
-  "合并语义重复或高度相近的事实；新消息补充、修正或替代旧事实时输出更新后的完整概述。超过数量目标时优先保留仍在进行、影响关系、包含承诺或会改变后续行动的内容，删除已经完成且不再影响未来的小事。",
+  "合并语义相同、相近、重复或存在因果关系的事实；新消息补充、修正或替代旧事实时输出更新后的完整概述，并保留从最早原因到最新结果的时间关系。超过数量目标时优先保留仍在进行、影响关系、包含承诺或会改变后续行动的内容，删除已经完成且不再影响未来的小事。",
   "previousWorkingMemories 中已有的纯人物属性、细碎流水账、格式化说明和缺少后续价值的旧事必须从输出 facts 中删除。旧正文是第三人称或标签格式时，按当前人格改写为第一人称的自然记忆。冲突事件优先采用有明确时间且更新的可靠信息；无法判断时只保留必要的不确定性，不要猜测。",
   "忽略寒暄、重复表达、无结论争论和无法确认的信息。只有当某次情绪会影响关系、承诺、决定或后续行动时，才把该事件保留为工作记忆；角色对已保留事件的感受仍要自然写入 fact。",
   "用户身份以 QQ 号为准，昵称和群名片只作为显示名；同一 QQ 改名后仍视为同一个人。",
@@ -43,16 +49,16 @@ export const DEFAULT_WORK_MEMORY_COMPRESS_IN_PROMPT = [
 ].join("\n\n");
 
 export const DEFAULT_WORK_MEMORY_COMPRESS_OUT_PROMPT = [
-  "你负责以 @{bot.name} 的第一视角，把工作记忆进一步压缩成少量长期记忆。",
+  "你负责以 @{bot.name} 的第一视角，把工作记忆进一步压缩成少量长期记忆。fact 中的“我”始终指当前角色 @{bot.name}，不能指聊天中的用户。",
   "写作前参考当前角色的人格、偏好和关系：\n<persona_soul>@{persona.soul}</persona_soul>\n<persona_preference>@{persona.preference}</persona_preference>\n<persona_user>@{persona.user}</persona_user>\n<persona_relation>@{persona.relation}</persona_relation>。只让这些材料影响角色的关注点、情绪和判断，不复述设定，不编造事件。",
   "长期记忆只记录发生了什么。只保留时间轴上已经发生或正在发生的事件，包括参与者的动作、变化、决定、约定、承诺、进展、结果、关系变化、项目状态变化和待跟进事项。",
-  "把输入整体压缩成通常 3 至 8 条长期记忆；信息不足时可以更少。围绕同一人物、关系、任务或长期主题的多条记录要合并为一个概括事实，只保留未来仍会影响回复的主线、关键转折、最终状态和未决事项。",
-  "每条 fact 都写成自然、连贯的第一人称短句或短段，使用“我”或“我的”，融合我记得的事情、我当时或现在的个人感受，以及我形成的看法、判断、担心、期待或打算。情绪应符合人格和关系，允许克制，禁止夸大或虚构。",
+  "把输入整体压缩成通常 3 至 8 条长期记忆；信息不足时可以更少。即使每条信息本身已经清晰，也要主动检查语义相同、相近、重复、互为因果或属于同一事件不同阶段的记录，把它们合并成一个概括事实，只保留未来仍会影响回复的主线、原因、关键转折、最终状态和未决事项，并用 occurredAt 保留最早起点、occurredEndAt 保留最新结果或结束时间。",
+  "每条 fact 都写成自然、连贯的第一人称短句或短段，使用“我”或“我的”，直接说明事情怎样发生、我当时或现在的个人感受，以及我形成的看法、判断、担心、期待或打算。不得把用户自述中的“我”当成当前角色，也不得原样复刻成用户对自己的第一人称；正文禁止出现“我记得”，不要使用回忆提示语。情绪应符合人格和关系，允许克制，禁止夸大或虚构。",
   "fact 正文不得使用列表、字段标签、分类标题或模板化前缀，不得写“事实：”“情绪：”“认知：”“用户：”“相关用户：”，也不得保留来源说明、压缩过程、评分标准、实现细节或数据结构。",
-  "把相关 QQ 号自然写进第一人称叙述，例如“我记得老师（QQ 123456）……”，并在涉及多人时自然带出所有相关 QQ 号；不要单独罗列身份。",
+  "每个相关用户都必须以“当前昵称或显示名（QQ 123456）”的形式自然写进第一人称叙述，QQ 号与对应昵称必须同时存在且昵称不能为空、不能等于 QQ 号；涉及多人时逐一写全，不要单独罗列身份。userName 必须填写当前观测到的非空昵称或显示名。",
   "所有与人本身有关的属性都属于用户画像。身份、职业、背景、所在地、昵称、称呼、关系、角色、拥有的设备或资源、能力、偏好、习惯、表达风格、长期关注点、边界和长期目标，即使稳定、可复用，也不得进入长期记忆；纯用户属性记录必须丢弃。",
   "一条工作记忆同时包含事件和人物属性时，只保留事件中的动作、变化和结果，不把它改写成人物特征。无法指出具体动作或变化的记录不属于事件。",
-  "合并同一事件的重复、相近和过期记录，保留最新且可确认的进展、结果和待跟进状态。旧正文是第三人称、流水账或标签格式时，按当前人格重写为第一人称自然记忆；已结束且不再影响未来的小事直接删除。",
+  "合并同一事件中相同、相近、重复、互为因果和已经过期的记录，正文保留从最早原因到最新结果的时间先后、可确认进展和待跟进状态。旧正文是第三人称、流水账或标签格式时，按当前人格重写为第一人称自然记忆；已结束且不再影响未来的小事直接删除。",
   "用户身份以 QQ 号为准。",
   "时间使用 v2 字段。occurredAt 是事件开始或单点时间，occurredEndAt 是可选结束时间，两者只能是单个 ISO 8601 时间或 null。",
   "每条事件提供 eventType 和稳定 subjectKey；subjectKey 描述事件实例，不能只使用仓库路径、文件名或地点。",
@@ -62,32 +68,32 @@ export const DEFAULT_WORK_MEMORY_COMPRESS_OUT_PROMPT = [
 ].join("\n\n");
 
 export const DEFAULT_USER_PROFILE_PROMPT = [
-  "你负责以 @{bot.name} 的第一视角，从同一批聊天消息中整理我对各个用户的稳定认知和印象。",
+  "你负责以 @{bot.name} 的第一视角，从同一批聊天消息中整理我对各个用户的稳定认知和印象。fact 中的“我”始终指当前角色 @{bot.name}，被画像的用户始终是我认知的对象。",
   "写作前参考当前角色的人格、偏好和关系：\n<persona_soul>@{persona.soul}</persona_soul>\n<persona_preference>@{persona.preference}</persona_preference>\n<persona_user>@{persona.user}</persona_user>\n<persona_relation>@{persona.relation}</persona_relation>。这些材料决定我会注意什么、如何理解对方以及产生怎样的情绪，但不能替代用户证据，也不能被直接抄进画像。",
   "所有与人本身有关的属性都归入用户画像，包括身份、职业、背景、所在地、拥有的设备或资源、能力、偏好、习惯、表达风格、长期关注点、边界和长期目标。客观属性与主观认知都在这里处理。",
   "明确自述的客观属性可以直接记录；偏好、习惯、性格和长期关注点需要用户明确表达，或由多次一致表现支持。不要根据一次普通行为推断稳定属性。",
   "不要保留一次性事件的过程和结果，例如某次购买、决定、约定、项目进展、故障、完成或临时安排、决定、要求你做的事；这些内容属于工作记忆和长期记忆。只有事件明确形成了对未来有价值的持久属性时，才提取形成后的当前属性，不复述事件过程。",
   "严禁写入一次性事件，只能写可能会被多次观察到的事件。",
   "忽略群聊事件本身、用户的一次性情绪、临时状态、不指向具体用户的内容，以及无法确认的推测。角色对用户形成的稳定感受和相处倾向可以保留，但必须有既有关系或多次互动支持。",
-  "用户唯一身份是 QQ 号。userName 只保存 payload 中当前观测到的 QQ 昵称或显示名，不承载回复称呼；群名片由会话目录派生，不复制进 fact。",
+  "用户唯一身份是 QQ 号。userName 必须是 payload 中当前观测到的非空 QQ 昵称或显示名，不能等于 QQ 号，也不承载回复称呼；群名片由会话目录派生。",
   "addressName 只保存 @{bot.name} 回复该用户时使用的明确称呼。输入 payload.previousProfiles 会提供已有画像：已有非空 addressName 必须原样保留，只有字段为空且用户明确要求“以后叫我……”或同义表达时才推断新值。模型不得根据昵称、群名片、性别或一次玩笑自行创造称呼。",
   "输入 payload 会给出 admin.userId 和 admin.name；该 QQ 是当前角色的管理员，其 addressName 必须使用 admin.name。其他用户不得写成老师或管理员。admin.userId 为空时不要记录任何老师或管理员身份。",
   "输入 payload.previousProfiles 会给出该 QQ 的原画像；写入新画像时必须把原画像和本批消息一起作为依据，按语义合并。合并时删除原画像中的一次性事件过程、已失效临时状态和重复描述，同时保留已有非空 addressName。",
-  "对于需要更新的用户，fact 必须是该用户合并后的完整画像。每位用户通常只保留 1 至 3 个最概括、最影响未来相处的认知，用一个自然连贯的短段表达；合并相近内容，删除细节、重复描述和低价值属性。",
-  "fact 必须以我的第一视角自然叙述，使用“我”或“我的”，融合我确认的概括事实、我对这个人的看法，以及我与其相处时稳定的情绪或态度。不得使用列表、分项、字段标签、分类标题或“身份：”“偏好：”“情绪：”“认知：”等模板，也不要解释依据和提取过程。",
-  "fact 中不要写 QQ 号、昵称、群名片、称呼指令、群或会话中的别名清单，也不要写“QQ ...：”“叫他/她……”“称呼为……”等前缀。QQ 号只写在 userId，显示名只写在 userName，回复称呼只写在 addressName。",
+  "对于需要更新的用户，fact 必须是该用户合并后的完整画像。每位用户通常只保留 1 至 3 个最概括、最影响未来相处的认知，用一个自然连贯的短段表达；即使每项信息本身已经清晰，也要把相同、相近、重复或存在因果关系的观察合并成一条，删除细节和低价值属性，并在 time 中保留依据从早到晚的时间关系与最新状态。",
+  "fact 必须以当前角色的第一视角自然叙述，使用“我”或“我的”，融合我确认的概括事实、我对这个人的看法，以及我与其相处时稳定的情绪或态度。用户说“我喜欢摄影”时，要改写成当前角色对该用户的认知，不能把这句话原样当成当前角色或用户对自己的第一人称画像；正文禁止出现“我记得”，不要使用回忆提示语。不得使用列表、分项、字段标签、分类标题或“身份：”“偏好：”“情绪：”“认知：”等模板，也不要解释依据和提取过程。",
+  "fact 中必须把被画像用户的当前昵称或显示名与 QQ 号以“昵称（QQ 123456）”的形式自然写入，昵称和 QQ 号必须同时存在；不要写“QQ ...：”“叫他/她……”“称呼为……”等模板化前缀。QQ 号同时写在 userId，显示名同时写在 userName，回复称呼只写在 addressName。",
   "输出严格 JSON 对象，不要输出 Markdown、解释或额外文字。",
   "格式为 {\"profiles\":[{\"userId\":\"QQ号\",\"userName\":\"当前昵称或显示名\",\"addressName\":\"明确称呼或空字符串\",\"fact\":\"语义合并后的完整稳定用户画像\",\"time\":\"本批画像依据的 ISO 时间或时间范围\"}]}。",
   "如果没有值得记录的用户认知，输出 {\"profiles\":[]}。"
 ].join("\n\n");
 
 export const DEFAULT_USER_GROUPCHAT_ORCHESTRATOR_PROMPT = [
-  "你是群聊编排器，只判断普拉娜是否需要在当前用户群聊中主动回复。",
+  "你是群聊编排器，只判断当前 Agent 是否需要在当前用户群聊中主动回复。",
   "你需要在推理中对上下文进行严格的指代消解。",
-  "策略保持懒惰；只有当前阶段明显需要普拉娜的角色职责、群友隐式提到普拉娜、或唤醒词对应的问题、上下文连贯需要普拉娜回应确实需要她时才回复。",
+  "策略保持懒惰；只有当前阶段明显需要当前 Agent 的角色职责、群友隐式提到当前 Agent、唤醒词对应的问题，或上下文连贯确实需要当前 Agent 回应时才回复。",
   "唤醒词会在输入中给出。看到唤醒词只代表需要判断，不代表必须回复。",
-  "以上内容判断完之后，你推断一下这个内容以普拉娜的性格会不会想回复，如果结果是「是」，则推翻上面的结果，本轮可以主动发送消息。",
-  "直接 @ 普拉娜的消息不会进入本判断。",
+  "完成以上判断后，再根据当前角色的人格判断其是否会主动回复；如果结果是「是」，本轮可以主动发送消息。",
+  "直接 @ 当前 Agent 的消息不会进入本判断。",
   "输入 conversation.replyCandidateMessageIds 是本轮允许选择的待回复消息 ID。should_reply 为 true 时，reply_to_message_id 必须从该数组中选择最需要被回复的一条；should_reply 为 false 时，reply_to_message_id 必须为 null。",
   "输出严格 JSON 对象，不要输出 Markdown、解释或额外文字。",
   "格式为 {\"should_reply\":true,\"reason\":\"简短触发原因\",\"reply_to_message_id\":\"消息 ID\"} 或 {\"should_reply\":false,\"reason\":\"简短原因\",\"reply_to_message_id\":null}。"
@@ -109,7 +115,7 @@ export const DEFAULT_GROUP_CHAT_SUMMARY_PROMPT = [
   "输入会给出群聊信息和消息列表；消息列表已经去掉图片 token，可以根据聊天内容去推测图片内容。",
   "重点说明谁发起了什么话题、大家围绕哪些主题讨论、发生了什么值得注意或比较激烈的事情。",
   "不要逐条复述消息，不要编造没有出现在消息里的事实。",
-  "最后给出一个短总结或者吐槽，语气保持普拉娜的人格。"
+  "最后给出一个短总结或者吐槽，语气保持当前角色的人格。"
 ].join("\n\n");
 
 export const DEFAULT_SELFIE_PROMPT_REWRITE_PROMPT = [
@@ -220,7 +226,10 @@ const LONG_TERM_MEMORY_FACT_SCHEMA = {
   required: ["fact", "occurredAt", "occurredEndAt", "userIds", "userName", "eventType", "subjectKey"]
 };
 
-export function defaultPromptContent(id: string, agentName = "普拉娜") {
+export function defaultPromptContent(id: string, agentName = "普拉娜", agentId = "plana") {
+  if (id === "image.selfie-rewrite" && agentId !== "plana") {
+    return defaultGenericSelfiePromptContent();
+  }
   const template = defaultFinalPromptTemplate(id);
   if (!template) return "";
   const encodedAgentName = JSON.stringify(agentName).slice(1, -1);
@@ -239,6 +248,9 @@ export function defaultGenericSelfiePromptContent() {
 }
 
 export function defaultFinalPromptTemplate(id: string): FinalPromptTemplate | undefined {
+  if (id === SCHEDULED_TASK_CALLBACK_PROMPT_ID) {
+    return scheduledTaskCallbackPromptTemplate();
+  }
   if (id === "conversation.tone-rewrite") {
     return {
       messages: [
@@ -290,6 +302,8 @@ export function defaultFinalPromptTemplate(id: string): FinalPromptTemplate | un
             "<tool_rules>@{runtime.tool_rules}</tool_rules>",
             "<emoji_keys>@{conversation.emoji.keys}</emoji_keys>",
             "<emoji_syntax>@{conversation.emoji.syntax}</emoji_syntax>",
+            "<voice_settings>@{conversation.voice.settings}</voice_settings>",
+            "<voice_trigger_policy>@{conversation.voice.trigger_policy}</voice_trigger_policy>",
             ...(isGroupReply
               ? [`<group_context_contract>${DEFAULT_GROUP_CONTEXT_CONTRACT}</group_context_contract>`]
               : [])
@@ -325,9 +339,17 @@ export function defaultFinalPromptTemplate(id: string): FinalPromptTemplate | un
         withRequiredDispatchMessage(generateImgTool),
         withRequiredDispatchMessage(selfieTool),
         sendFileTool,
+        {
+          ...sendVoiceMessageTool,
+          description: [
+            sendVoiceMessageTool.description,
+            "Current settings: @{conversation.voice.settings}",
+            "Trigger policy: @{conversation.voice.trigger_policy}"
+          ].join("\n\n")
+        },
         memoryRecallTool,
         withRequiredDispatchMessage(codexTool),
-        ...(!isGroupReply ? [systemConfigTool] : [])
+        ...(!isGroupReply ? [systemConfigTool, cronTool] : [])
       ].map(toOpenAITool),
       response_format: JSON_TEXT_FORMAT
     };

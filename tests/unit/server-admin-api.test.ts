@@ -98,7 +98,8 @@ describe("admin API smoke", () => {
       "memory.user-profile",
       "orchestrator.user-group",
       "orchestrator.group-thread",
-      "conversation.group-summary"
+      "conversation.group-summary",
+      "scheduler.cron-callback"
     ]);
     expect(systemFiles.json().files).toContainEqual(expect.objectContaining({
       id: "conversation.private-reply",
@@ -130,6 +131,14 @@ describe("admin API smoke", () => {
     }));
     expect(files.json().files).toContainEqual(expect.objectContaining({ id: "image.selfie-rewrite" }));
     expect(systemFiles.json().files).toContainEqual(expect.objectContaining({ id: "orchestrator.group-thread" }));
+    expect(systemFiles.json().files).toContainEqual(expect.objectContaining({
+      id: "scheduler.cron-callback",
+      kind: "final",
+      fileName: "cron_callback.json",
+      variables: expect.arrayContaining([
+        expect.objectContaining({ name: "cron.payload", type: "json", description: expect.any(String) })
+      ])
+    }));
     expect(systemFiles.json().files).not.toContainEqual(expect.objectContaining({ id: "image.selfie-rewrite" }));
     const toneFile = await app.inject({
       method: "GET",
@@ -411,17 +420,19 @@ describe("admin API smoke", () => {
 
   it("loads QQ message images when the trusted CDN resolves through Clash fake IP", async () => {
     const imageUrl = "https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=fixture&rkey=fixture";
+    const mediaHostnameLookup = vi.fn(async () => [{ address: "198.18.0.226" }]);
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(new Uint8Array([1, 2, 3]), {
       status: 200,
       headers: { "content-type": "image/jpeg", "content-length": "3" }
     }));
-    const app = await createApp(testAppOptions());
+    const app = await createApp(testAppOptions({ mediaHostnameLookup }));
     const response = await app.inject({
       method: "GET",
       url: `/api/media/image?url=${encodeURIComponent(imageUrl)}`,
       headers: ADMIN_HEADERS
     });
 
+    expect(mediaHostnameLookup).toHaveBeenCalledWith("multimedia.nt.qq.com.cn");
     expect(fetchMock).toHaveBeenCalledWith(new URL(imageUrl), expect.objectContaining({ redirect: "manual" }));
     expect(response.statusCode).toBe(200);
     expect(response.headers["content-type"]).toContain("image/jpeg");
@@ -449,11 +460,12 @@ describe("admin API smoke", () => {
   });
 
   it("loads QQ user and group avatars through the dedicated trusted proxy", async () => {
+    const mediaHostnameLookup = vi.fn(async () => [{ address: "8.8.8.8" }]);
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(new Uint8Array([1, 2, 3]), {
       status: 200,
       headers: { "content-type": "image/jpeg", "content-length": "3" }
     }));
-    const app = await createApp(testAppOptions());
+    const app = await createApp(testAppOptions({ mediaHostnameLookup }));
 
     const user = await app.inject({
       method: "GET",
@@ -471,6 +483,7 @@ describe("admin API smoke", () => {
       headers: ADMIN_HEADERS
     });
 
+    expect(mediaHostnameLookup.mock.calls.map(([hostname]) => hostname)).toEqual(["q1.qlogo.cn", "p.qlogo.cn"]);
     expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
       "https://q1.qlogo.cn/g?b=qq&nk=171419991&s=100",
       "https://p.qlogo.cn/gh/1030412235/1030412235/100/"

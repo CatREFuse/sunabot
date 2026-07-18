@@ -300,6 +300,8 @@ function updateSchema(value: string) {
               :key="index"
               :tool="tool"
               :index="index"
+              :variables="variables"
+              :semantic-xml="semanticXml"
               @update="updateTool(index, $event)"
               @remove="removeTool(index)"
             />

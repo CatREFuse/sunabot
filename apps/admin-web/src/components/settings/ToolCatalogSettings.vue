@@ -8,6 +8,7 @@ import ToolDetailDialog from "./ToolDetailDialog.vue";
 const draft = defineModel<ConfigSectionValueMap["tools"]>({ required: true });
 const bash = defineModel<ConfigSectionValueMap["bash"]>("bash", { required: true });
 const pokeOnNoReply = defineModel<boolean>("pokeOnNoReply", { default: false });
+const emit = defineEmits<{ commit: [] }>();
 const catalog = useToolCatalog();
 const query = shallowRef("");
 const selectedName = shallowRef("");
@@ -54,6 +55,7 @@ function setEnabled(tool: SunaTool, enabled: boolean) {
     if (tool.name === "workspace_bash") bash.value.enabled = enabled;
     else draft.value.codex.enabled = enabled;
     updateOverride(tool.name, (override) => { delete override.enabled; });
+    emit("commit");
     return;
   }
   const inherited = tool.promptEnabled ?? tool.inheritedEnabled ?? true;
@@ -61,14 +63,22 @@ function setEnabled(tool: SunaTool, enabled: boolean) {
     if (enabled === inherited) delete override.enabled;
     else override.enabled = enabled;
   });
+  emit("commit");
 }
 
 function setDescription(tool: SunaTool, description: string) {
   updateOverride(tool.name, (override) => { override.description = description; });
+  emit("commit");
 }
 
 function resetDescription(tool: SunaTool) {
   updateOverride(tool.name, (override) => { delete override.description; });
+  emit("commit");
+}
+
+function setPokeOnNoReply(enabled: boolean) {
+  pokeOnNoReply.value = enabled;
+  emit("commit");
 }
 
 function updateOverride(name: string, update: (override: ToolOverride) => void) {
@@ -132,7 +142,7 @@ function updateOverride(name: string, update: (override: ToolOverride) => void) 
       :description-overridden="selectedTool ? hasDescriptionOverride(selectedTool) : false"
       :poke-on-no-reply="pokeOnNoReply"
       @close="selectedName = ''"
-      @update:poke-on-no-reply="pokeOnNoReply = $event"
+      @update:poke-on-no-reply="setPokeOnNoReply"
       @update-description="selectedTool && setDescription(selectedTool, $event)"
       @reset-description="selectedTool && resetDescription(selectedTool)"
     />

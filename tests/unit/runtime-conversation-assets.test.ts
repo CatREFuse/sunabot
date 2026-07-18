@@ -670,7 +670,7 @@ describe("RuntimeConversationAssets", () => {
     }
   });
 
-  it("fails closed for internal voice queue calls and forged voice outbox", async () => {
+  it("rejects an implicit voice queue call without explicit tool identity", async () => {
     const harness = createHarness(privateIncoming());
     writeWorkbenchFile(harness, "exports/voice.amr", Buffer.from("#!AMR\nvoice"));
     const delivery: ReplyDelivery = { outbox: [], emitOutbox: vi.fn(async () => undefined) };
@@ -683,9 +683,37 @@ describe("RuntimeConversationAssets", () => {
       logRunId: "run-forged-voice",
       isCurrent: () => true,
       delivery
-    })).rejects.toThrow("send_voice_message is disabled");
+    })).rejects.toThrow("Conversation asset tool and kind do not match.");
     expect(delivery.emitOutbox).not.toHaveBeenCalled();
+  });
 
+  it("queues and delivers an explicitly identified voice asset", async () => {
+    const harness = createHarness(privateIncoming());
+    writeWorkbenchFile(harness, "exports/voice.amr", Buffer.from("#!AMR\nvoice"));
+    const draft = await queueAsset(
+      harness,
+      { path: "exports/voice.amr", kind: "voice" },
+      "send_voice_message"
+    );
+
+    expect(draft.payload.payload).toMatchObject({
+      toolName: "send_voice_message",
+      asset: { kind: "voice", name: "voice.amr" }
+    });
+    await expect(harness.runtime.deliverConversationAssetOutbox(
+      outboxRecord(harness, draft),
+      deliveryContext().context
+    )).resolves.toMatchObject({ delivered: true });
+    expect(harness.sendConversationAsset).toHaveBeenCalledWith(expect.objectContaining({
+      asset: expect.objectContaining({
+        kind: "voice",
+        name: "voice.amr"
+      })
+    }));
+  });
+
+  it("rejects a forged voice outbox before delivery", async () => {
+    const harness = createHarness(privateIncoming());
     writeWorkbenchFile(harness, "exports/report.txt", "report");
     const draft = await queueAsset(harness, { path: "exports/report.txt", kind: "file" });
     draft.payload.payload.toolName = "send_voice_message";
@@ -693,7 +721,7 @@ describe("RuntimeConversationAssets", () => {
     await expect(harness.runtime.deliverConversationAssetOutbox(
       outboxRecord(harness, draft),
       deliveryContext().context
-    )).rejects.toThrow("send_voice_message is disabled");
+    )).rejects.toMatchObject({ code: "contract_field_invalid" });
     expect(harness.sendConversationAsset).not.toHaveBeenCalled();
   });
 
@@ -1315,7 +1343,8 @@ function enableConversationReplies(runtime: SunaRuntime, incoming: ParsedIncomin
 
 async function queueAsset(
   harness: Harness,
-  input: { path: string; kind: "auto" | "file" | "image"; name?: string }
+  input: { path: string; kind: "auto" | "file" | "image" | "voice"; name?: string },
+  toolName?: "send_file" | "send_voice_message"
 ) {
   const authoritativeIncoming = structuredClone(harness.incoming);
   let draft: ConversationAssetDeliveryDraft | undefined;
@@ -1330,7 +1359,8 @@ async function queueAsset(
     callId: "call-send-file",
     logRunId: "run-send-file",
     isCurrent: () => true,
-    delivery
+    delivery,
+    ...(toolName ? { toolName } : {})
   });
   if (!draft) throw new Error("asset draft was not emitted");
   persistedDraftIncoming.set(draft, authoritativeIncoming);

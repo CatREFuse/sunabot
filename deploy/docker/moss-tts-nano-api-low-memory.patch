@@ -1,0 +1,130 @@
+diff --git a/ort_cpu_runtime.py b/ort_cpu_runtime.py
+index 0b9e5d2..c450eaa 100644
+--- a/ort_cpu_runtime.py
++++ b/ort_cpu_runtime.py
+@@ -2,6 +2,7 @@ from __future__ import annotations
+ 
+ import json
+ import math
++import os
+ import time
+ from dataclasses import dataclass
+ from pathlib import Path
+@@ -309,6 +310,16 @@ class CodecStreamingDecodeSession:
+         )
+ 
+ 
++class ApiOnlyCodecStreamingDecodeSession:
++    def reset(self) -> None:
++        return None
++
++    def run_frames(self, _frame_rows: list[list[int]]) -> tuple[np.ndarray, int] | None:
++        raise RuntimeError(
++            "Streaming codec decode is disabled in the API-only low-memory runtime."
++        )
++
++
+ class OrtCpuRuntime:
+     def __init__(
+         self,
+@@ -322,6 +333,7 @@ class OrtCpuRuntime:
+         self.model_dir = Path(model_dir).expanduser().resolve()
+         self.thread_count = max(1, int(thread_count))
+         self.execution_provider = _normalize_execution_provider(execution_provider)
++        self.api_only_low_memory = os.getenv("MOSS_TTS_NANO_API_ONLY_LOW_MEMORY", "0") == "1"
+         self.ort_providers = _resolve_ort_providers(self.execution_provider)
+         self.manifest_path = self._resolve_manifest_path(self.model_dir)
+         self.manifest_dir = self.manifest_path.parent
+@@ -344,9 +356,13 @@ class OrtCpuRuntime:
+         self.codec_meta = json.loads(self.codec_meta_path.read_text(encoding="utf-8"))
+         self.rng = np.random.default_rng(1234)
+         self.sessions = self._create_sessions()
+-        self.codec_streaming_session = CodecStreamingDecodeSession(
+-            codec_meta=self.codec_meta,
+-            session=self.sessions["codec_decode_step"],
++        self.codec_streaming_session = (
++            ApiOnlyCodecStreamingDecodeSession()
++            if self.api_only_low_memory
++            else CodecStreamingDecodeSession(
++                codec_meta=self.codec_meta,
++                session=self.sessions["codec_decode_step"],
++            )
+         )
+ 
+     @staticmethod
+@@ -378,9 +394,15 @@ class OrtCpuRuntime:
+ 
+     def _session(self, path_value: Path) -> ort.InferenceSession:
+         options = ort.SessionOptions()
+-        options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
++        options.graph_optimization_level = (
++            ort.GraphOptimizationLevel.ORT_ENABLE_BASIC
++            if self.api_only_low_memory
++            else ort.GraphOptimizationLevel.ORT_ENABLE_ALL
++        )
+         options.intra_op_num_threads = self.thread_count
+         options.inter_op_num_threads = 1
++        options.enable_cpu_mem_arena = not self.api_only_low_memory
++        options.enable_mem_pattern = not self.api_only_low_memory
+         session = ort.InferenceSession(str(path_value), sess_options=options, providers=self.ort_providers)
+         if self.execution_provider == EXECUTION_PROVIDER_CUDA and "CUDAExecutionProvider" not in session.get_providers():
+             raise RuntimeError(
+@@ -392,6 +414,17 @@ class OrtCpuRuntime:
+     def _create_sessions(self) -> dict[str, ort.InferenceSession]:
+         tts_dir = self.tts_meta_path.parent
+         codec_dir = self.codec_meta_path.parent
++        if self.api_only_low_memory:
++            local_fixed_sampled_frame = self.tts_meta["files"].get("local_fixed_sampled_frame")
++            if not local_fixed_sampled_frame:
++                raise RuntimeError("The API-only low-memory runtime requires local_fixed_sampled_frame.")
++            return {
++                "prefill": self._session(tts_dir / self.tts_meta["files"]["prefill"]),
++                "decode": self._session(tts_dir / self.tts_meta["files"]["decode_step"]),
++                "local_fixed_sampled_frame": self._session(tts_dir / local_fixed_sampled_frame),
++                "codec_encode": self._session(codec_dir / self.codec_meta["files"]["encode"]),
++                "codec_decode": self._session(codec_dir / self.codec_meta["files"]["decode_full"]),
++            }
+         return {
+             "prefill": self._session(tts_dir / self.tts_meta["files"]["prefill"]),
+             "decode": self._session(tts_dir / self.tts_meta["files"]["decode_step"]),
+@@ -464,9 +497,10 @@ class OrtCpuRuntime:
+             self.run_local_decoder(global_hidden, self.manifest["tts_config"]["audio_assistant_slot_token_id"], [])
+         empty_frames = [([0] * int(self.manifest["tts_config"]["n_vq"]))]
+         self.decode_full_audio(empty_frames)
+-        self.codec_streaming_session.reset()
+-        self.codec_streaming_session.run_frames(empty_frames)
+-        self.codec_streaming_session.reset()
++        if not self.api_only_low_memory:
++            self.codec_streaming_session.reset()
++            self.codec_streaming_session.run_frames(empty_frames)
++            self.codec_streaming_session.reset()
+ 
+     def build_text_rows(self, token_ids: list[int]) -> list[list[int]]:
+         rows: list[list[int]] = []
+diff --git a/app_onnx.py b/app_onnx.py
+index 19c87ed..97106d7 100644
+--- a/app_onnx.py
++++ b/app_onnx.py
+@@ -616,8 +616,10 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
+         level=logging.INFO,
+     )
+ 
+-    text_normalizer_manager = WeTextProcessingManager()
+-    text_normalizer_manager.start()
++    api_only_low_memory = os.getenv("MOSS_TTS_NANO_API_ONLY_LOW_MEMORY", "0") == "1"
++    text_normalizer_manager = None if api_only_low_memory else WeTextProcessingManager()
++    if text_normalizer_manager is not None:
++        text_normalizer_manager.start()
+     output_dir = Path(args.output_dir).expanduser().resolve()
+     runtime = OnnxNanoTTSServiceAdapter(
+         model_dir=args.model_dir,
+@@ -628,7 +630,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
+         text_normalizer_manager=text_normalizer_manager,
+     )
+     warmup_manager = legacy_app.WarmupManager(runtime, text_normalizer_manager=text_normalizer_manager)
+-    warmup_manager.start()
++    if not api_only_low_memory:
++        warmup_manager.start()
+ 
+     OnnxRequestRuntimeManager._factory_model_dir = runtime.model_dir
+     OnnxRequestRuntimeManager._factory_output_dir = output_dir

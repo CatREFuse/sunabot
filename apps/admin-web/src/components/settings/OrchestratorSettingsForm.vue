@@ -3,6 +3,7 @@ import { computed } from "vue";
 import ModelSelect from "./ModelSelect.vue";
 import ReasoningEffortSelect from "./ReasoningEffortSelect.vue";
 import ToggleSwitch from "../ui/ToggleSwitch.vue";
+import SettingsConfirmInput from "./SettingsConfirmInput.vue";
 import type { ConfigSectionValueMap, ModelCatalogItem } from "../../types";
 
 const draft = defineModel<ConfigSectionValueMap["orchestrator"]>({ required: true });
@@ -42,15 +43,15 @@ const startupSeconds = computed({
       <ReasoningEffortSelect v-model="draft.reasoningEffort" :model="draft.userGroupchatOrchestratorModel" :models="models" />
       <label class="field">
         <span class="field-label">消息阈值</span>
-        <input v-model.number="draft.messageThreshold" class="control" type="number" min="0" max="200" step="1">
+        <SettingsConfirmInput v-model.number="draft.messageThreshold" type="number" min="0" max="200" step="1" confirm-label="确认消息阈值" />
       </label>
       <label class="field">
         <span class="field-label">启动时间 / 秒</span>
-        <input v-model.number="startupSeconds" class="control" type="number" min="1" max="3600" step="1">
+        <SettingsConfirmInput v-model.number="startupSeconds" type="number" min="1" max="3600" step="1" confirm-label="确认启动时间" />
       </label>
       <label class="field sm:col-span-2">
         <span class="field-label">提示词文件</span>
-        <input v-model.trim="draft.promptFile" class="control" type="text">
+        <SettingsConfirmInput v-model.trim="draft.promptFile" type="text" confirm-label="确认提示词文件" />
         <RouterLink class="font-mono text-[11px] text-[rgb(var(--color-interactive))]" to="/system-prompts/orchestrator.user-group">编辑正文 →</RouterLink>
       </label>
     </fieldset>

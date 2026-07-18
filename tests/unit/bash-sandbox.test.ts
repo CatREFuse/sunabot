@@ -130,7 +130,7 @@ describe("workspace Bash isolation", () => {
       "--network", "none",
       "--security-opt", "no-new-privileges:true",
       "--ulimit", "fsize=268435456:268435456",
-      "--mount", "type=bind,src=/host/agent/workbench,dst=/workbench,rw",
+      "--mount", "type=bind,src=/host/agent/workbench,dst=/workbench",
       "--workdir", "/workbench", "--entrypoint", "/usr/bin/env", "sunabot-bash:test"
     ]));
     expect(invocation.args.slice(invocation.args.indexOf("sunabot-bash:test"))).toEqual([

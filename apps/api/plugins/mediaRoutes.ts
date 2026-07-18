@@ -19,7 +19,10 @@ export interface MediaRouteOptions {
   runtime: SunaRuntime;
   getAgentContext?: (agentId: string) => { config: AppConfig; runtime: SunaRuntime };
   getAllAgentConfigs?: () => Promise<AppConfig[]>;
+  lookupHostname?: MediaHostnameLookup;
 }
+
+export type MediaHostnameLookup = (hostname: string) => Promise<readonly { address: string }[]>;
 
 const openObject = { type: "object", additionalProperties: true } as const;
 const passthroughBody = {} as const;
@@ -40,6 +43,7 @@ const qqAvatarQuery = {
 
 export function registerMediaRoutes(app: FastifyInstance, options: MediaRouteOptions) {
   const histories = new Map<string, ImageHistoryRecord[]>();
+  const lookupHostname = options.lookupHostname ?? defaultMediaHostnameLookup;
   const contextFor = (request: { query: unknown }) => options.getAgentContext?.(requestAgentId(request.query)) ?? {
     config: options.getConfig(),
     runtime: options.runtime
@@ -107,7 +111,7 @@ export function registerMediaRoutes(app: FastifyInstance, options: MediaRouteOpt
       badRequest("IMAGE_URL_INVALID", "图片地址无效。", "url");
     }
 
-    const { bytes, contentType } = await loadRemoteImage(imageUrl);
+    const { bytes, contentType } = await loadRemoteImage(imageUrl, lookupHostname);
     reply.header("content-type", contentType);
     reply.header("cache-control", "private, max-age=86400, stale-while-revalidate=604800");
     reply.header("vary", "Authorization");
@@ -123,7 +127,7 @@ export function registerMediaRoutes(app: FastifyInstance, options: MediaRouteOpt
     const variant = query.variant === "placeholder" ? "placeholder" : "display";
     const cacheKey = `${variant}:${source}`;
     const cached = thumbnailCache.get(cacheKey);
-    const bytes = cached ?? await createThumbnail(source, variant);
+    const bytes = cached ?? await createThumbnail(source, variant, lookupHostname);
     if (!cached) {
       if (thumbnailCache.size >= 200) thumbnailCache.delete(thumbnailCache.keys().next().value ?? "");
       thumbnailCache.set(cacheKey, bytes);
@@ -147,7 +151,7 @@ export function registerMediaRoutes(app: FastifyInstance, options: MediaRouteOpt
     const imageUrl = kind === "group"
       ? `https://p.qlogo.cn/gh/${id}/${id}/100/`
       : `https://q1.qlogo.cn/g?b=qq&nk=${id}&s=100`;
-    const { bytes, contentType } = await loadRemoteImage(imageUrl);
+    const { bytes, contentType } = await loadRemoteImage(imageUrl, lookupHostname);
     reply.header("content-type", contentType);
     reply.header("cache-control", "private, max-age=86400");
     reply.header("vary", "Authorization");
@@ -189,7 +193,11 @@ export function registerMediaRoutes(app: FastifyInstance, options: MediaRouteOpt
   });
 }
 
-async function createThumbnail(source: string, variant: "display" | "placeholder") {
+async function createThumbnail(
+  source: string,
+  variant: "display" | "placeholder",
+  lookupHostname: MediaHostnameLookup
+) {
   let bytes: Buffer;
   if (source.startsWith("/generated-images/")) {
     const relativePath = decodeURIComponent(source.slice("/generated-images/".length));
@@ -208,7 +216,7 @@ async function createThumbnail(source: string, variant: "display" | "placeholder
     bytes = await fs.promises.readFile(filePath);
   } else {
     if (!isProxyableImageUrl(source)) badRequest("IMAGE_URL_INVALID", "图片地址无效。", "url");
-    bytes = (await loadRemoteImage(source)).bytes;
+    bytes = (await loadRemoteImage(source, lookupHostname)).bytes;
   }
   try {
     const pipeline = sharp(bytes, { animated: false, limitInputPixels: 64_000_000 }).rotate();
@@ -247,12 +255,12 @@ const REMOTE_IMAGE_TYPES = new Set([
   "image/webp"
 ]);
 
-async function loadRemoteImage(value: string) {
+async function loadRemoteImage(value: string, lookupHostname: MediaHostnameLookup) {
   let currentUrl = new URL(value);
   const signal = AbortSignal.timeout(REMOTE_IMAGE_TIMEOUT_MS);
 
   for (let redirectCount = 0; redirectCount <= REMOTE_IMAGE_MAX_REDIRECTS; redirectCount += 1) {
-    await assertPublicRemoteUrl(currentUrl, signal);
+    await assertPublicRemoteUrl(currentUrl, signal, lookupHostname);
     let response: Response;
     try {
       response = await fetch(currentUrl, {
@@ -299,7 +307,7 @@ async function loadRemoteImage(value: string) {
   throw new AdminApiError(502, "IMAGE_LOAD_FAILED", "图片加载失败。");
 }
 
-async function assertPublicRemoteUrl(url: URL, signal: AbortSignal) {
+async function assertPublicRemoteUrl(url: URL, signal: AbortSignal, lookupHostname: MediaHostnameLookup) {
   if ((url.protocol !== "http:" && url.protocol !== "https:") || url.username || url.password) {
     badRequest("IMAGE_URL_INVALID", "图片地址无效。", "url");
   }
@@ -313,9 +321,9 @@ async function assertPublicRemoteUrl(url: URL, signal: AbortSignal) {
     return;
   }
 
-  let addresses: Array<{ address: string }>;
+  let addresses: readonly { address: string }[];
   try {
-    addresses = await promiseWithAbort(lookup(hostname, { all: true, verbatim: true }), signal);
+    addresses = await promiseWithAbort(lookupHostname(hostname), signal);
   } catch {
     if (signal.aborted) throw new AdminApiError(504, "IMAGE_LOAD_FAILED", "图片加载超时。");
     throw new AdminApiError(502, "IMAGE_LOAD_FAILED", "图片域名无法解析。");
@@ -325,6 +333,9 @@ async function assertPublicRemoteUrl(url: URL, signal: AbortSignal) {
     badRequest("IMAGE_URL_PRIVATE", "图片地址不能指向本地网络。", "url");
   }
 }
+
+const defaultMediaHostnameLookup: MediaHostnameLookup = (hostname) =>
+  lookup(hostname, { all: true, verbatim: true });
 
 async function promiseWithAbort<T>(operation: Promise<T>, signal: AbortSignal) {
   if (signal.aborted) throw signal.reason;

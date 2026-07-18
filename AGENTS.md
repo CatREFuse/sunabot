@@ -20,7 +20,8 @@
 | `docs/migrations/single-agent-to-multi-agent.md` | 单 Agent 工作区迁移到 Plana、primary 和多 Agent 注册结构的预检、备份、执行、验收与回滚 | 首次启用多 Agent、多 QQ 前必读 |
 | `docs/setup-napcat.md` | sunabot、NapCat、WebUI 和 OneBot 反向 WebSocket 的本机启动配置 | 部署、重启或排查 OneBot 连接时读取 |
 | `docs/security/admin-access.md` | 管理员账号密码、会话、CSRF、限流、熔断与公网代理边界 | 修改鉴权、WebUI 外网访问或紧急处置时读取 |
-| `docs/deployment/distributed-workspace.md` | Git pull、新终端、workspace 分离、主实例切换与离线备份边界 | 多终端开发、更新或迁移 workspace 时读取 |
+| `docs/deployment/distributed-workspace.md` | Git pull、新终端、workspace 分离、主实例切换、离线备份与 Agent 配置文件夹复制边界 | 多终端开发、更新、接管 workspace 或迁移单个 Agent 时读取 |
+| `docs/deployment/local-voice-cloning.md` | MOSS-TTS-Nano 本地语音服务、N100 验收门槛、Kivo 日语参考音频与真实 QQ 外发流程 | 安装、启动、配置、迁移或验收本地克隆语音前读取 |
 | `docs/operations/sqlite-backup-recovery.md` | 默认 Plana 与全部 Agent 业务库/queue 数据库对的一致恢复点、7/30 天保留、恢复校验、季度演练和故障门禁 | 执行每日备份、恢复、保留清理或故障演练时读取 |
 | `docs/references/README.md` | OneBot v11、v12 协议资料的来源、版本和本地入口 | 核对 OneBot 事件、消息段、动作或兼容性时读取 |
 

@@ -82,7 +82,8 @@ export const AGENT_TOOL_NAMES = [
   "activate_skill",
   "read_skill_resource",
   "run_skill_script",
-  "system_config"
+  "system_config",
+  "cron"
 ] as const;
 export type AgentToolName = (typeof AGENT_TOOL_NAMES)[number];
 export interface AssistantMessageTrace {
@@ -173,6 +174,9 @@ export interface BotToneSettings {
   maxRetries: number;
 }
 
+export const EMOJI_SEND_SIZES = [64, 128, 256, 512, 1024] as const;
+export type EmojiSendSize = (typeof EMOJI_SEND_SIZES)[number];
+
 export interface BotConfig {
   adminQq: string;
   adminName: string;
@@ -181,6 +185,7 @@ export interface BotConfig {
   quoteGroupReplies: boolean;
   quoteGroupReplyExcludedUserIds: string[];
   contextMessageLimit: number;
+  emojiSendSize: EmojiSendSize;
   tone: BotToneSettings;
   memory: BotMemorySettings;
   orchestrator: BotOrchestratorSettings;

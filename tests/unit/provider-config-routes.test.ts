@@ -147,4 +147,46 @@ describe("provider and config API plugin", () => {
     expect(response.statusCode).toBe(422);
     expect(response.json().message).toBe("fetch failed");
   });
+
+  it("routes Plana configuration through the agent configuration service", async () => {
+    const app = Fastify();
+    apps.push(app);
+    const config = defaultConfig();
+    const rootReadEnvelope = vi.fn(async () => ({ config, revision: "root", fieldStates: {} }));
+    const rootPatchGroupReply = vi.fn();
+    const rootPatch = vi.fn();
+    const agentReadEnvelope = vi.fn(async () => ({ config, revision: "plana", fieldStates: {} }));
+    const agentPatchGroupReply = vi.fn(async () => ({ ok: true, applyMode: "hot" }));
+    const agentPatch = vi.fn(async () => ({ ok: true, applyMode: "hot" }));
+    registerProviderConfigRoutes(app, {
+      codexAuth: {
+        status: vi.fn(),
+        startLogin: vi.fn(),
+        logout: vi.fn()
+      },
+      configService: {
+        readEnvelope: rootReadEnvelope,
+        patchGroupReply: rootPatchGroupReply,
+        patch: rootPatch
+      },
+      agentConfigService: {
+        readEnvelope: agentReadEnvelope,
+        patchGroupReply: agentPatchGroupReply,
+        patch: agentPatch
+      }
+    });
+
+    expect((await app.inject({ method: "GET", url: "/api/config?agentId=plana" })).json().revision)
+      .toBe("plana");
+    const body = { revision: "plana", value: config.bot.bash };
+    await app.inject({ method: "PATCH", url: "/api/config/bash?agentId=plana", payload: body });
+    await app.inject({ method: "PATCH", url: "/api/config/group-reply?agentId=plana", payload: body });
+
+    expect(agentReadEnvelope).toHaveBeenCalledWith("plana");
+    expect(agentPatch).toHaveBeenCalledWith("plana", "bash", body);
+    expect(agentPatchGroupReply).toHaveBeenCalledWith("plana", body);
+    expect(rootReadEnvelope).not.toHaveBeenCalled();
+    expect(rootPatch).not.toHaveBeenCalled();
+    expect(rootPatchGroupReply).not.toHaveBeenCalled();
+  });
 });

@@ -25,9 +25,10 @@ describe("working memory semantic merge", () => {
   });
 
   it("sends all previous memories with the current messages and replaces them with the merged set", async () => {
-    const [first, duplicate] = await appendMemoryFacts(config, "working", [
-      { fact: "QQ 10001 喜欢海边。", userIds: ["10001"], time: "2026-07-01T00:00:00.000Z" },
-      { fact: "10001 偏好海边旅行。", userIds: ["10001"], time: "2026-07-02T00:00:00.000Z" }
+    const [first, progress, completed] = await appendMemoryFacts(config, "working", [
+      { fact: "海边用户（QQ 10001）在 7 月 1 日提出迁移。", userIds: ["10001"], userName: "海边用户", occurredAt: "2026-07-01T00:00:00.000Z" },
+      { fact: "海边用户（QQ 10001）在 7 月 3 日开始迁移。", userIds: ["10001"], userName: "海边用户", occurredAt: "2026-07-03T00:00:00.000Z" },
+      { fact: "海边用户（QQ 10001）在 7 月 5 日完成迁移。", userIds: ["10001"], userName: "海边用户", occurredAt: "2026-07-05T00:00:00.000Z" }
     ]);
     const complete = vi.fn(async (systemPrompt: string, messages: Array<{ content: string }>) => {
       const payload = JSON.parse(messages[0]!.content) as {
@@ -35,34 +36,41 @@ describe("working memory semantic merge", () => {
         messages: Array<{ text: string }>;
       };
       expect(systemPrompt).toContain("输出合并后的完整工作记忆集合");
-      expect(systemPrompt).toContain("合并语义重复或高度相近的事实");
+      expect(systemPrompt).toContain("合并语义相同、相近、重复或存在因果关系的事实");
       expect(payload.previousWorkingMemories).toEqual([
-        expect.objectContaining({ id: first!.id, fact: "QQ 10001 喜欢海边。" }),
-        expect.objectContaining({ id: duplicate!.id, fact: "10001 偏好海边旅行。" })
+        expect.objectContaining({ id: first!.id, fact: "海边用户（QQ 10001）在 7 月 1 日提出迁移。" }),
+        expect.objectContaining({ id: progress!.id, fact: "海边用户（QQ 10001）在 7 月 3 日开始迁移。" }),
+        expect.objectContaining({ id: completed!.id, fact: "海边用户（QQ 10001）在 7 月 5 日完成迁移。" })
       ]);
-      expect(payload.messages).toEqual([expect.objectContaining({ text: "我更喜欢有礁石的海边" })]);
+      expect(payload.messages).toEqual([expect.objectContaining({ text: "迁移已经完成" })]);
       return JSON.stringify({
         facts: [{
           id: first!.id,
-          fact: "QQ 10001 喜欢有礁石的海边旅行。",
+          fact: "我注意到海边用户（QQ 10001）从 7 月 1 日提出迁移、7 月 3 日开始，到 7 月 5 日完成，连续进展最终让我安心。",
           userIds: ["10001"],
-          time: "2026-07-01T00:00:00.000Z/2026-07-10T00:00:00.000Z"
+          userName: "海边用户",
+          occurredAt: "2026-07-01T00:00:00.000Z",
+          occurredEndAt: "2026-07-05T00:00:00.000Z"
         }],
         allPreviousMemoriesInvalidated: false
       });
     });
     const runtime = runtimeWithProvider(config, complete);
 
-    const result = await mergeConversation(runtime, "我更喜欢有礁石的海边");
+    const result = await mergeConversation(runtime, "迁移已经完成");
 
-    expect(result).toMatchObject({ ok: true, beforeCount: 2, afterCount: 1, attempts: 1 });
+    expect(result).toMatchObject({ ok: true, beforeCount: 3, afterCount: 1, attempts: 1 });
     expect((await readMemorySourceEntries(config, "working"))).toEqual([
       expect.objectContaining({
         id: first!.id,
-        text: "QQ 10001 喜欢有礁石的海边旅行。",
-        userIds: ["10001"]
+        text: "我注意到海边用户（QQ 10001）从 7 月 1 日提出迁移、7 月 3 日开始，到 7 月 5 日完成，连续进展最终让我安心。",
+        userIds: ["10001"],
+        userName: "海边用户",
+        occurredAt: "2026-07-01T00:00:00.000Z",
+        occurredEndAt: "2026-07-05T00:00:00.000Z"
       })
     ]);
+    expect((await readMemorySourceEntries(config, "working"))[0]?.text).not.toContain("我记得");
     expect(complete).toHaveBeenCalledOnce();
   });
 
@@ -74,6 +82,25 @@ describe("working memory semantic merge", () => {
     })));
 
     const result = await runtime.consolidateWorkingMemory();
+
+    expect(result).toMatchObject({ ok: false, status: "empty_not_authorized" });
+    expect((await readMemorySourceEntries(config, "working")).map((entry) => entry.text)).toEqual([
+      "必须保留的旧事实"
+    ]);
+  });
+
+  it("keeps the old snapshot when the Provider returns user self-narration as role memory", async () => {
+    await appendMemoryFacts(config, "working", [{ fact: "必须保留的旧事实" }]);
+    const runtime = runtimeWithProvider(config, vi.fn(async () => JSON.stringify({
+      facts: [{
+        fact: "我喜欢摄影。",
+        userIds: ["10001"],
+        userName: "海边用户"
+      }],
+      allPreviousMemoriesInvalidated: false
+    })));
+
+    const result = await mergeConversation(runtime, "我喜欢摄影");
 
     expect(result).toMatchObject({ ok: false, status: "empty_not_authorized" });
     expect((await readMemorySourceEntries(config, "working")).map((entry) => entry.text)).toEqual([

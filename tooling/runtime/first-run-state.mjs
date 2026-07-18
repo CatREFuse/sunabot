@@ -13,7 +13,7 @@ export const FIRST_RUN_JOURNAL = "runtime/first-run-bootstrap.json";
 const FIRST_RUN_SIGNING_KEY = "secrets/first-run-bootstrap.key";
 const COMPLETED_REPORT = "runtime/first-run-bootstrap.completed.json";
 const BOUNDARIES = ["marker", "main", "queue", "manifest", "registration", "account-runtime"];
-const MAIN_SCHEMA_VERSION = 11;
+const MAIN_SCHEMA_VERSION = 13;
 const QUEUE_SCHEMA_VERSION = 5;
 const MAIN_TABLES = [
   "admin_sessions",
@@ -23,6 +23,7 @@ const MAIN_TABLES = [
   "conversation_thread_states",
   "conversations",
   "emojis",
+  "emoji_versions",
   "image_history",
   "memory_batches",
   "memory_records",
@@ -30,7 +31,9 @@ const MAIN_TABLES = [
   "model_call_aggregates",
   "model_call_model_aggregates",
   "outbox_local_effects",
-  "request_logs"
+  "request_logs",
+  "scheduled_task_runs",
+  "scheduled_tasks"
 ];
 const QUEUE_TABLES = ["outbox", "schema_migrations", "session_events", "sessions", "tool_jobs", "turns"];
 
@@ -271,8 +274,23 @@ function validateMainSchema(database) {
   requireColumns(database, "emojis", [
     "emoji_key", "file_name", "source", "size_bytes", "width", "height", "created_at", "updated_at"
   ]);
+  requireColumns(database, "emoji_versions", [
+    "emoji_key", "file_name", "source", "size_bytes", "width", "height", "created_at"
+  ]);
+  requireColumns(database, "scheduled_tasks", [
+    "id", "revision", "name", "enabled", "schedule_kind", "cron_expression", "timezone", "run_at",
+    "context_text", "targets_json", "next_run_at", "last_scheduled_at", "created_at", "updated_at"
+  ]);
+  requireColumns(database, "scheduled_task_runs", [
+    "id", "task_id", "task_revision", "scheduled_for", "status", "snapshot_json", "result_text",
+    "error_text", "attempts", "worker_id", "lease_until", "created_at", "updated_at",
+    "generated_at", "completed_at"
+  ]);
   requireIndexes(database, "agent_accounts", ["agent_accounts_agent", "agent_accounts_webui_port"]);
   requireIndexes(database, "emojis", ["emojis_updated_at"]);
+  requireIndexes(database, "emoji_versions", ["emoji_versions_key_created_at"]);
+  requireIndexes(database, "scheduled_tasks", ["scheduled_tasks_due"]);
+  requireIndexes(database, "scheduled_task_runs", ["scheduled_task_runs_status", "scheduled_task_runs_task"]);
   const foreignKeys = database.prepare("PRAGMA foreign_key_list(agent_accounts)").all();
   if (!foreignKeys.some((row) => (
     row.table === "agents"
@@ -293,6 +311,16 @@ function validateMainSchema(database) {
   ))) {
     throw new Error("conversation_thread_states foreign key is invalid");
   }
+  const emojiVersionForeignKeys = database.prepare("PRAGMA foreign_key_list(emoji_versions)").all();
+  if (!emojiVersionForeignKeys.some((row) => (
+    row.table === "emojis"
+    && row.from === "emoji_key"
+    && row.to === "emoji_key"
+    && row.on_update === "CASCADE"
+    && row.on_delete === "CASCADE"
+  ))) {
+    throw new Error("emoji_versions foreign key is invalid");
+  }
   requireSchemaSql(database, "agents", ["check (enabled in (0, 1))", "workspace text not null unique"]);
   requireSchemaSql(database, "agent_accounts", [
     "check (enabled in (0, 1))",
@@ -312,6 +340,29 @@ function validateMainSchema(database) {
     "check (size_bytes > 0)",
     "check (width > 0)",
     "check (height > 0)"
+  ]);
+  requireSchemaSql(database, "emoji_versions", [
+    "strict",
+    "source in ('upload', 'generated')",
+    "check (size_bytes > 0)",
+    "check (width > 0)",
+    "check (height > 0)",
+    "primary key (emoji_key, file_name)"
+  ]);
+  requireSchemaSql(database, "scheduled_tasks", [
+    "strict",
+    "check (enabled in (0, 1))",
+    "schedule_kind in ('cron', 'once')",
+    "check (json_valid(targets_json))",
+    "schedule_kind = 'cron' and cron_expression is not null and timezone is not null and run_at is null",
+    "schedule_kind = 'once' and cron_expression is null and timezone is null and run_at is not null"
+  ]);
+  requireSchemaSql(database, "scheduled_task_runs", [
+    "strict",
+    "status in ('pending', 'running', 'generated', 'completed', 'failed')",
+    "check (json_valid(snapshot_json))",
+    "check (attempts >= 0)",
+    "unique (task_id, scheduled_for)"
   ]);
 }
 

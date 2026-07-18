@@ -116,6 +116,7 @@ export interface BotConfig {
   quoteGroupReplies: boolean;
   quoteGroupReplyExcludedUserIds: string[];
   contextMessageLimit: number;
+  emojiSendSize: 64 | 128 | 256 | 512 | 1024;
   tone: BotToneSettings;
   memory: BotMemorySettings;
   orchestrator: BotOrchestratorSettings;
@@ -224,7 +225,7 @@ export interface ConfigSectionValueMap {
   providers: AppConfig["providers"];
   broadcastStorm: BroadcastStormConfig;
   normalReply: NormalReplyConfig;
-  bot: Pick<BotConfig, "adminQq" | "adminName" | "replyDebounceMs" | "pokeOnNoReply" | "quoteGroupReplies" | "quoteGroupReplyExcludedUserIds" | "contextMessageLimit">;
+  bot: Pick<BotConfig, "adminQq" | "adminName" | "replyDebounceMs" | "pokeOnNoReply" | "quoteGroupReplies" | "quoteGroupReplyExcludedUserIds" | "contextMessageLimit" | "emojiSendSize">;
   tone: BotToneSettings;
   memory: BotMemorySettings;
   orchestrator: BotOrchestratorSettings;

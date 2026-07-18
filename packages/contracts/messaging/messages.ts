@@ -61,6 +61,7 @@ export interface OutboundMessageV1 {
   media: MediaAssetRefV1[];
   contentSegments?: OutboundContentSegmentV1[];
   replyToMessageId?: number;
+  mentionUserIds?: number[];
   idempotencyKey?: string;
 }
 

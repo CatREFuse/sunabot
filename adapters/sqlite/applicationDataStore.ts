@@ -4,13 +4,12 @@ import { DatabaseSync } from "node:sqlite";
 import { getWorkspacePath, resolveProjectPath } from "../../src/config.js";
 import type { AppConfig, ConversationRecord, ImageHistoryRecord } from "../../src/types.js";
 import type { MemoryPersistenceProvider } from "../../services/memory/persistence.js";
+import type { ScheduledTaskStore } from "../../services/scheduling/public.js";
 import { WORKSPACE_LAYOUT } from "../../packages/platform/workspaceLayout.js";
 import { currentAgentRuntimeConfig } from "../../packages/platform/runtimeAgentContext.js";
-import {
-  isValidEmojiKey,
-  normalizeEmojiKey
-} from "../../services/emojis/emojiCatalog.js";
 import { migrateApplicationDataSchema } from "./applicationDataSchema.js";
+import { EmojiStore, type EmojiRecord, type EmojiVersionRecord } from "./emojiStore.js";
+import { SqliteScheduledTaskStore } from "./scheduledTaskStore.js";
 import {
   GroupThreadStateStore,
   type CommitGroupThreadStateInput,
@@ -29,6 +28,7 @@ export type {
   CommitGroupThreadStateResult,
   GroupThreadStateRecord
 } from "./groupThreadStateStore.js";
+export type { EmojiRecord, EmojiVersionRecord } from "./emojiStore.js";
 
 export type MemoryDataSource = "working" | "long_term" | "user_profile";
 
@@ -52,17 +52,6 @@ export interface AgentAccountRegistryRow {
   qqId?: string;
   enabled: boolean;
   webuiPort: number;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface EmojiRecord {
-  key: string;
-  fileName: string;
-  source: "upload" | "generated";
-  sizeBytes: number;
-  width: number;
-  height: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -115,6 +104,8 @@ export class ApplicationDataStore {
   private readonly database: DatabaseSync;
   private readonly groupThreads: GroupThreadStateStore;
   private readonly modelCalls: ModelCallStore;
+  private readonly emojis: EmojiStore;
+  readonly scheduledTasks: ScheduledTaskStore;
 
   constructor(readonly databasePath: string) {
     if (databasePath !== ":memory:") {
@@ -127,6 +118,8 @@ export class ApplicationDataStore {
     this.database.exec("PRAGMA busy_timeout = 5000");
     this.modelCalls = new ModelCallStore(this.database);
     migrateApplicationDataSchema(this.database, this.modelCalls);
+    this.emojis = new EmojiStore(this.database);
+    this.scheduledTasks = new SqliteScheduledTaskStore(this.database);
     this.groupThreads = new GroupThreadStateStore(this.database);
   }
 
@@ -428,54 +421,35 @@ export class ApplicationDataStore {
   }
 
   readEmojis(): EmojiRecord[] {
-    return (this.database.prepare(`
-      SELECT emoji_key, file_name, source, size_bytes, width, height, created_at, updated_at
-      FROM emojis ORDER BY updated_at DESC, emoji_key
-    `).all() as SqlRow[]).flatMap((row) => {
-      const record = mapEmojiRecord(row);
-      return record ? [record] : [];
-    });
+    return this.emojis.readAll();
   }
 
   readEmoji(key: string): EmojiRecord | undefined {
-    const normalizedKey = normalizeEmojiKey(key);
-    if (normalizedKey !== key || !isValidEmojiKey(normalizedKey)) return undefined;
-    const row = this.database.prepare(`
-      SELECT emoji_key, file_name, source, size_bytes, width, height, created_at, updated_at
-      FROM emojis WHERE emoji_key = ?
-    `).get(normalizedKey) as SqlRow | undefined;
-    return row ? mapEmojiRecord(row) : undefined;
+    return this.emojis.read(key);
+  }
+
+  readEmojiVersions(key: string): EmojiVersionRecord[] {
+    return this.emojis.readVersions(key);
+  }
+
+  readEmojiVersion(key: string, fileName: string): EmojiVersionRecord | undefined {
+    return this.emojis.readVersion(key, fileName);
   }
 
   upsertEmoji(record: EmojiRecord) {
-    if (normalizeEmojiKey(record.key) !== record.key || !isValidEmojiKey(record.key)) {
-      throw new Error("Emoji key is invalid.");
-    }
-    this.database.prepare(`
-      INSERT INTO emojis (
-        emoji_key, file_name, source, size_bytes, width, height, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(emoji_key) DO UPDATE SET
-        file_name = excluded.file_name,
-        source = excluded.source,
-        size_bytes = excluded.size_bytes,
-        width = excluded.width,
-        height = excluded.height,
-        updated_at = excluded.updated_at
-    `).run(
-      record.key,
-      record.fileName,
-      record.source,
-      record.sizeBytes,
-      record.width,
-      record.height,
-      record.createdAt,
-      record.updatedAt
-    );
+    this.emojis.upsert(record);
+  }
+
+  renameEmoji(currentKey: string, nextKey: string, updatedAt: string): "renamed" | "missing" | "conflict" {
+    return this.emojis.rename(currentKey, nextKey, updatedAt);
+  }
+
+  deleteEmojiVersion(key: string, fileName: string): "deleted" | "missing" | "current" {
+    return this.emojis.deleteVersion(key, fileName);
   }
 
   deleteEmoji(key: string) {
-    return Number(this.database.prepare("DELETE FROM emojis WHERE emoji_key = ?").run(key).changes) > 0;
+    return this.emojis.delete(key);
   }
 
   appendRequestLog(record: JsonObject) {
@@ -635,21 +609,6 @@ function mapAgentAccountRegistryRow(row: SqlRow): AgentAccountRegistryRow {
     ...(row.qq_id == null || String(row.qq_id).trim() === "" ? {} : { qqId: String(row.qq_id) }),
     enabled: Number(row.enabled) === 1,
     webuiPort: Number(row.webui_port),
-    createdAt: String(row.created_at),
-    updatedAt: String(row.updated_at)
-  };
-}
-
-function mapEmojiRecord(row: SqlRow): EmojiRecord | undefined {
-  const key = String(row.emoji_key);
-  if (normalizeEmojiKey(key) !== key || !isValidEmojiKey(key)) return undefined;
-  return {
-    key,
-    fileName: String(row.file_name),
-    source: String(row.source) as EmojiRecord["source"],
-    sizeBytes: Number(row.size_bytes),
-    width: Number(row.width),
-    height: Number(row.height),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at)
   };

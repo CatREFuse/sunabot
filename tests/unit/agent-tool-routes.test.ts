@@ -75,7 +75,7 @@ describe("agent and tool API plugin", () => {
       configuredEnabled: false,
       available: true,
       effectiveEnabled: false,
-      accessLabel: "管理员 QQ 私聊可用",
+      accessLabel: "仅管理员 QQ 私聊",
       executionBackend: "native"
     });
     expect(tools.find((tool: { name: string }) => tool.name === "no_reply")).toMatchObject({
@@ -210,6 +210,66 @@ describe("agent and tool API plugin", () => {
     });
   });
 
+  it("projects the selected Agent Voice capability into its tool catalog", async () => {
+    const app = Fastify();
+    apps.push(app);
+    const config = defaultConfig();
+    const agentFiles = {
+      get: vi.fn(async () => ({ content: defaultPromptContent("conversation.private-reply") }))
+    } as unknown as AgentFileRepository;
+    const getAgentContext = (agentId: string) => ({
+      config,
+      agentFiles,
+      resolveToolCapabilities: vi.fn(async () => ({ codex: true, workspaceBash: true })),
+      resolveConversationAssetCapability: vi.fn(async () => true),
+      resolveVoiceCapability: vi.fn(async () => agentId === "koharu"
+        ? { enabled: true, languages: ["ja"] as const, defaultLanguage: "ja" as const }
+        : { enabled: false, languages: [] as const, defaultLanguage: "ja" as const })
+    });
+    registerAgentToolRoutes(app, {
+      agentFiles,
+      resolveToolCapabilities: vi.fn(async () => ({ codex: true, workspaceBash: true })),
+      getConfig: () => config,
+      getAgentContext
+    });
+
+    const koharuTools = (await app.inject({ method: "GET", url: "/api/tools?agentId=koharu" })).json().tools;
+    const planaTools = (await app.inject({ method: "GET", url: "/api/tools?agentId=plana" })).json().tools;
+    expect(koharuTools.find((tool: { name: string }) => tool.name === "send_voice_message")).toMatchObject({
+      available: true,
+      effectiveEnabled: true,
+      parameters: { properties: { language: { enum: ["ja"] } } }
+    });
+    expect(planaTools.find((tool: { name: string }) => tool.name === "send_voice_message")).toMatchObject({
+      available: false,
+      effectiveEnabled: false,
+      availabilityReason: "当前 Agent 未配置可用的语音参考音频。"
+    });
+  });
+
+  it("fails the Voice catalog capability closed when profile resolution is unavailable", async () => {
+    const app = Fastify();
+    apps.push(app);
+    const config = defaultConfig();
+    registerAgentToolRoutes(app, {
+      agentFiles: {
+        get: vi.fn(async () => ({ content: defaultPromptContent("conversation.private-reply") }))
+      } as unknown as AgentFileRepository,
+      resolveToolCapabilities: vi.fn(async () => ({ codex: true, workspaceBash: true })),
+      resolveConversationAssetCapability: vi.fn(async () => false),
+      resolveVoiceCapability: vi.fn(async () => {
+        throw new Error("injected private Voice profile path");
+      }),
+      getConfig: () => config
+    });
+
+    const response = await app.inject({ method: "GET", url: "/api/tools" });
+    expect(response.statusCode).toBe(200);
+    expect(response.body).not.toContain("private Voice profile path");
+    expect(response.json().tools.find((tool: { name: string }) => tool.name === "send_voice_message"))
+      .toMatchObject({ available: false, effectiveEnabled: false });
+  });
+
   it("does not advertise send_file without a live conversation asset capability", async () => {
     const app = Fastify();
     apps.push(app);
@@ -301,7 +361,7 @@ describe("agent and tool API plugin", () => {
     expect(bash).toMatchObject({
       available,
       effectiveEnabled: available,
-      accessLabel: available ? "管理员 QQ 私聊可用" : "当前没有可用会话",
+      accessLabel: "仅管理员 QQ 私聊",
       executionBackend: "native",
       ...(!available ? {
         unavailabilityKind: "runtime",
@@ -401,7 +461,7 @@ describe("agent and tool API plugin", () => {
     expect(resolveToolCapabilities).toHaveBeenCalledWith(null);
   });
 
-  it("reports an available administrator group without claiming a failed private backend", async () => {
+  it("keeps the configured session scope independent from backend readiness", async () => {
     const app = Fastify();
     apps.push(app);
     const config = defaultConfig();
@@ -427,8 +487,8 @@ describe("agent and tool API plugin", () => {
     expect(tools.find((tool: { name: string }) => tool.name === "workspace_bash")).toMatchObject({
       available: true,
       effectiveEnabled: true,
-      accessLabel: "管理员 QQ 群聊可用",
-      accessDescription: expect.stringContaining("管理员私聊的所选后端当前不可用")
+      accessLabel: "管理员 QQ 私聊与群聊",
+      accessDescription: expect.stringContaining("管理员私聊使用 Native 后端")
     });
     expect(resolveToolCapabilities.mock.calls.map(([backend]) => backend)).toEqual(["native", "docker"]);
   });

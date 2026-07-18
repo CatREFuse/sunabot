@@ -8,11 +8,13 @@ import type {
 } from "../../../services/tools/generateImgTool.js";
 import type { SelfieRunner } from "../../../services/tools/selfieTool.js";
 import type { SystemConfigToolPort } from "../../../services/tools/systemConfigTool.js";
+import type { CronToolPort } from "../../../services/tools/cronTool.js";
 import type { PrepareOutboundConversationAssetInput } from "../../../services/delivery/public.js";
 import type { ProviderLogContext } from "../../../packages/contracts/model/modelGateway.js";
 import type { ImageGenerationFailureContext } from "../imageGenerationRetry.js";
 import type { WorkspaceBashProviderOptions } from "../../../services/tools/bashTool.js";
 import type { SkillRuntimeToolPort } from "../../../services/tools/skillRuntimeTool.js";
+import type { VoiceLanguage } from "../../../services/voice/public.js";
 
 export interface ProviderCompleteOptions {
   signal?: AbortSignal;
@@ -31,10 +33,12 @@ export interface ProviderCompleteOptions {
   memory?: ProviderMemoryOptions;
   selfie?: ProviderSelfieOptions;
   conversationAssets?: ProviderConversationAssetOptions;
+  voice?: ProviderVoiceCapability;
   asyncCodex?: boolean;
   asyncImage?: boolean;
   imageTools?: boolean;
   systemConfig?: SystemConfigToolPort;
+  cron?: CronToolPort;
   skills?: SkillRuntimeToolPort;
   disabledTools?: readonly AgentToolName[];
   mcp?: ProviderMcpOptions;
@@ -47,12 +51,14 @@ export interface TurnToolState {
   toolCallCount: number;
   assistantTextSent: boolean;
   acceptedToolNames: string[];
-  terminal?: "deferred" | "no_reply";
+  terminal?: "deferred" | "no_reply" | "voice";
 }
 
 export interface ProviderCompletedTurn {
   kind: "completed";
   text: string;
+  messageOrigin?: ProviderAssistantTextSource;
+  voice?: ProviderVoiceCompanion;
 }
 
 export interface ProviderDeferredTurn {
@@ -63,6 +69,14 @@ export interface ProviderDeferredTurn {
     callId: string;
     arguments: Record<string, unknown>;
   };
+  voice?: ProviderVoiceCompanion;
+}
+
+export interface ProviderVoiceCompanion {
+  text: string;
+  language: VoiceLanguage;
+  callId: string;
+  toolName: "send_voice_message";
 }
 
 export interface ProviderNoReplyTurn {
@@ -95,6 +109,12 @@ export interface ProviderConversationAssetOptions {
     input: PrepareOutboundConversationAssetInput,
     context: { callId: string; toolName: "send_file" }
   ) => Promise<unknown>;
+}
+
+export interface ProviderVoiceCapability {
+  enabled: boolean;
+  languages: readonly VoiceLanguage[];
+  defaultLanguage: VoiceLanguage;
 }
 
 export interface ProviderMcpOptions {
@@ -135,6 +155,13 @@ export interface ProviderLoggerPort {
 
 export interface ProviderToolExecutorPort {
   resolveDefinitions(options: ProviderCompleteOptions, definitions?: OpenAIToolDefinition[]): Record<string, unknown>[];
+  companionTurn(
+    calls: ResponseFunctionCallItem[],
+    siblingText: string,
+    options: ProviderCompleteOptions,
+    definitions: readonly Record<string, unknown>[],
+    state?: TurnToolState
+  ): ProviderCompletedTurn | ProviderDeferredTurn | null;
   deferredTurn(
     calls: ResponseFunctionCallItem[],
     options: ProviderCompleteOptions,

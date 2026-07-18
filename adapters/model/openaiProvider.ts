@@ -33,7 +33,9 @@ export type {
   ProviderNoReplyTurn,
   ProviderMemoryOptions,
   ProviderSelfieOptions,
-  ProviderTurnResult
+  ProviderTurnResult,
+  ProviderVoiceCapability,
+  ProviderVoiceCompanion
 } from "./provider/contracts.js";
 export type { ProviderLogContext } from "../../packages/contracts/model/modelGateway.js";
 export { resolveLocalInputImage, toResponsesInputMessage } from "./provider/imageInput.js";

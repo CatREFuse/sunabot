@@ -47,6 +47,13 @@ interface EmojiIntegrityResult {
   bytes?: Buffer;
 }
 
+export interface VerifiedPlannedEmojiAsset {
+  key: string;
+  record: EmojiRecord;
+  image: EmojiMarkerPlan["expectedImages"][number];
+  bytes: Buffer;
+}
+
 export class EmojiAssetIntegrityBusyError extends Error {
   constructor() {
     super("表情图片校验繁忙，请稍后重试。");
@@ -119,7 +126,32 @@ export function planAgentEmojiMarkers(text: string, config: AppConfig) {
 }
 
 export async function assertPlannedEmojiAssetsIntegrity(config: AppConfig, plan: EmojiMarkerPlan) {
+  const assets = plannedEmojiAssets(config, plan);
   const records = new Map<string, EmojiRecord>();
+  for (const asset of assets) records.set(emojiIntegrityOperationKey(config, asset.record), asset.record);
+  await assertEmojiRecordsInBatches(config, [...records.values()]);
+}
+
+export async function readPlannedEmojiAssets(
+  config: AppConfig,
+  plan: EmojiMarkerPlan
+): Promise<VerifiedPlannedEmojiAsset[]> {
+  const assets = plannedEmojiAssets(config, plan);
+  const bytesByRecord = new Map<string, Buffer>();
+  for (const asset of assets) {
+    const operationKey = emojiIntegrityOperationKey(config, asset.record);
+    if (!bytesByRecord.has(operationKey)) {
+      bytesByRecord.set(operationKey, await readVerifiedEmojiRecordFile(config, asset.record));
+    }
+  }
+  return assets.map((asset) => ({
+    ...asset,
+    bytes: bytesByRecord.get(emojiIntegrityOperationKey(config, asset.record))!
+  }));
+}
+
+function plannedEmojiAssets(config: AppConfig, plan: EmojiMarkerPlan) {
+  const assets: Array<Omit<VerifiedPlannedEmojiAsset, "bytes">> = [];
   const store = applicationDataStore(config);
   for (let index = 0; index < plan.expectedKeys.length; index += 1) {
     const key = plan.expectedKeys[index];
@@ -131,9 +163,9 @@ export async function assertPlannedEmojiAssetsIntegrity(config: AppConfig, plan:
     if (path.resolve(image.filePath) !== path.resolve(location.filePath) || image.url !== location.url) {
       throw emojiAssetUnavailable();
     }
-    records.set(emojiIntegrityOperationKey(config, record), record);
+    assets.push({ key, record, image });
   }
-  await assertEmojiRecordsInBatches(config, [...records.values()]);
+  return assets;
 }
 
 export async function filterVerifiedEmojiRecords(

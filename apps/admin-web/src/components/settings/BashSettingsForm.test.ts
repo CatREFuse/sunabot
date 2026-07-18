@@ -45,6 +45,8 @@ describe("BashSettingsForm", () => {
     const [strictMode, adminOnly, allowGroup] = wrapper.findAll('input[type="checkbox"]');
 
     await wrapper.get('input[type="text"]').setValue("gpt-5.5-audit");
+    expect(draft.auditModel).toBe("gpt-5.4-mini");
+    await wrapper.get('[data-confirm-label="确认审计模型"]').trigger("click");
     await strictMode!.setValue(false);
     await adminOnly!.setValue(false);
     await allowGroup!.setValue(true);

@@ -8,7 +8,6 @@ import DialogOverlay from "../ui/DialogOverlay.vue";
 import SelfieReferenceNoteDialog from "./SelfieReferenceNoteDialog.vue";
 
 const props = defineProps<{
-  open: boolean;
   images: readonly SelfieReferenceImage[];
   maxImages: number;
   loading: boolean;
@@ -18,7 +17,6 @@ const props = defineProps<{
   status: SelfieReferenceStatus;
 }>();
 const emit = defineEmits<{
-  close: [];
   upload: [entries: readonly SelfieReferenceUpload[]];
   updateNote: [id: string, note: string];
   remove: [id: string];
@@ -42,17 +40,10 @@ const noteItems = computed(() => {
 const noteDialogOpen = computed(() => Boolean(editImage.value) || pendingFiles.value.length > 0);
 const noteSaving = computed(() => Boolean(noteSubmission.value)
   || (noteMode.value === "edit" ? Boolean(props.updatingId) : props.uploading));
-
-watch(() => props.open, (open) => {
-  if (open) return;
-  previewImage.value = null;
-  deleteImage.value = null;
-  editImage.value = null;
-  pendingFiles.value = [];
-  selectionError.value = "";
-  noteSubmission.value = null;
-  noteRequestError.value = "";
-});
+const visibleStatus = computed(() => selectionError.value || props.status.message);
+const visibleStatusKind = computed(() => selectionError.value
+  ? "error"
+  : props.status.kind === "idle" ? undefined : props.status.kind);
 
 watch(
   () => [props.uploading, props.updatingId, props.status.kind, props.status.message] as const,
@@ -128,59 +119,57 @@ function formatBytes(bytes: number) {
 </script>
 
 <template>
-  <DialogOverlay :open="open" class="!p-0 sm:!p-4" labelledby="selfie-reference-title" @close="emit('close')">
-    <section class="grid h-full max-h-full w-full max-w-4xl grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden border-visible bg-panel sm:h-auto sm:max-h-[calc(100dvh-32px)] sm:rounded sm:border">
-      <header class="flex items-center justify-between gap-4 border-b border-line p-4 md:p-5">
-        <div class="min-w-0">
-          <h2 id="selfie-reference-title" class="text-xl font-medium text-display">自拍参考图</h2>
-          <p class="mt-1 text-xs text-mute">素材库最多 {{ maxImages }} 张，每次自拍选用 1–3 张</p>
-        </div>
-        <button class="icon-btn" type="button" aria-label="关闭" @click="emit('close')"><i class="bx bx-x text-2xl" aria-hidden="true"></i></button>
-      </header>
-
-      <div class="min-h-0 overflow-y-auto p-4 md:p-5">
-        <div v-if="images.length" class="grid grid-cols-2 gap-3 sm:grid-cols-3">
-          <article v-for="image in images" :key="image.id" class="group min-w-0 overflow-hidden border-b border-line transition-colors focus-within:border-display">
-            <div class="relative aspect-square overflow-hidden bg-raised">
-              <button class="block h-full w-full" type="button" :aria-label="`查看原图 ${image.note}`" @click="previewImage = image">
-                <AuthenticatedImage
-                  :src="image.originalUrl"
-                  :display-src="image.displayUrl"
-                  :placeholder-src="image.placeholderUrl"
-                  :alt="image.note"
-                  thumbnail
-                  class-name="h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.02]"
-                />
-              </button>
-            </div>
-            <div class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 py-3">
-              <span class="min-w-0">
-                <strong class="block truncate text-sm font-medium text-display" :title="image.note">{{ image.note }}</strong>
-                <span class="block truncate text-xs text-mute" :title="image.fileName">{{ image.fileName }}</span>
-                <span class="block font-mono text-[10px] text-mute" :title="`${formatExactNumber(image.width)} × ${formatExactNumber(image.height)} px`">{{ formatDashboardMetric(image.width) }} × {{ formatDashboardMetric(image.height) }} · {{ formatBytes(image.sizeBytes) }}</span>
-              </span>
-              <span class="flex items-center gap-1">
-                <button class="icon-btn" type="button" :aria-label="`编辑备注 ${image.note}`" :disabled="Boolean(updatingId)" @click="editImage = image"><i class="bx bx-edit" aria-hidden="true"></i></button>
-                <button class="icon-btn text-accent" type="button" :aria-label="`删除 ${image.note}`" :disabled="deletingId === image.id" @click="deleteImage = image"><i class="bx bx-trash" aria-hidden="true"></i></button>
-              </span>
-            </div>
-          </article>
-        </div>
-        <div v-else class="empty-state min-h-72">
-          <div><i class="bx bx-camera mb-3 text-3xl text-mute" aria-hidden="true"></i><strong>{{ loading ? "加载中" : "还没有参考图" }}</strong><p>添加正面或半身图片</p></div>
-        </div>
+  <section class="border-t border-visible pt-8" aria-labelledby="selfie-reference-title">
+    <header class="flex flex-col items-stretch justify-between gap-4 sm:flex-row sm:items-end">
+      <div class="min-w-0">
+        <h2 id="selfie-reference-title" class="section-title">自拍参考图</h2>
+        <p class="mt-1 text-xs text-mute">素材库最多 {{ maxImages }} 张，每次自拍选用 1–3 张</p>
       </div>
+      <div class="flex items-center justify-between gap-3 sm:justify-end">
+        <span class="inline-state shrink-0" :data-kind="images.length === maxImages ? 'success' : undefined">
+          <i class="bx" :class="images.length === maxImages ? 'bx-check-circle' : 'bx-images'" aria-hidden="true"></i>
+          {{ loading ? "读取中" : `${images.length} / ${maxImages} 张` }}
+        </span>
+        <button class="btn btn-primary shrink-0" type="button" :disabled="uploading || loading || remaining === 0" @click="chooseImages">
+          <i class="bx" :class="uploading ? 'bx-loader-alt bx-spin' : 'bx-plus'" aria-hidden="true"></i>
+          {{ uploading ? "上传中" : remaining === 0 ? "已达上限" : "添加图片" }}
+        </button>
+        <input ref="fileInput" class="sr-only" type="file" multiple accept="image/png,image/jpeg,image/webp" aria-label="选择自拍参考图" @change="selected">
+      </div>
+    </header>
 
-      <footer class="flex flex-wrap items-center justify-between gap-3 border-t border-line p-4 md:p-5">
-        <span class="inline-state" :data-kind="selectionError ? 'error' : status.kind === 'idle' ? undefined : status.kind">{{ selectionError || status.message || `${images.length} / ${maxImages} 张素材` }}</span>
-        <div class="flex flex-wrap justify-end gap-2">
-          <button class="btn btn-ghost" type="button" @click="emit('close')">完成</button>
-          <button class="btn btn-primary" type="button" :disabled="uploading || loading || remaining === 0" @click="chooseImages"><i class="bx bx-upload" aria-hidden="true"></i>{{ uploading ? "上传中" : remaining === 0 ? "已达上限" : "添加图片" }}</button>
-          <input ref="fileInput" class="sr-only" type="file" multiple accept="image/png,image/jpeg,image/webp" @change="selected">
+    <p v-if="visibleStatus" class="mt-4 inline-state" :data-kind="visibleStatusKind" aria-live="polite">{{ visibleStatus }}</p>
+
+    <div v-if="images.length" class="mt-5 grid grid-cols-3 gap-x-2 gap-y-5 sm:grid-cols-6 sm:gap-x-3 lg:grid-cols-9">
+      <article v-for="image in images" :key="image.id" class="group min-w-0 border-b border-line pb-3 transition-colors focus-within:border-display">
+        <button class="block aspect-square w-full overflow-hidden bg-raised" type="button" :aria-label="`查看原图 ${image.note}`" @click="previewImage = image">
+          <AuthenticatedImage
+            :src="image.originalUrl"
+            :display-src="image.displayUrl"
+            :placeholder-src="image.placeholderUrl"
+            :alt="image.note"
+            thumbnail
+            class-name="h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.02]"
+          />
+        </button>
+        <div class="mt-3 min-w-0">
+          <strong class="block truncate text-sm font-medium text-display" :title="image.note">{{ image.note }}</strong>
+          <span class="mt-1 block truncate text-[11px] text-mute" :title="image.fileName">{{ image.fileName }}</span>
+          <span class="mt-1 block truncate font-mono text-[10px] text-mute" :title="`${formatExactNumber(image.width)} × ${formatExactNumber(image.height)} px · ${formatBytes(image.sizeBytes)}`">
+            {{ formatDashboardMetric(image.width) }} × {{ formatDashboardMetric(image.height) }} · {{ formatBytes(image.sizeBytes) }}
+          </span>
         </div>
-      </footer>
-    </section>
-  </DialogOverlay>
+        <div class="-ml-2 mt-1 flex items-center">
+          <button class="icon-btn" type="button" :aria-label="`编辑备注 ${image.note}`" :disabled="Boolean(updatingId)" @click="editImage = image"><i class="bx bx-edit" aria-hidden="true"></i></button>
+          <button class="icon-btn text-accent" type="button" :aria-label="`删除 ${image.note}`" :disabled="deletingId === image.id" @click="deleteImage = image"><i class="bx bx-trash" aria-hidden="true"></i></button>
+        </div>
+      </article>
+    </div>
+
+    <div v-else class="empty-state mt-5 min-h-48 border-y border-line py-16">
+      <div><i class="bx bx-camera mb-3 text-3xl text-mute" aria-hidden="true"></i><strong>{{ loading ? "加载中" : "还没有参考图" }}</strong><p>添加 PNG、JPEG 或 WebP 图片</p></div>
+    </div>
+  </section>
 
   <DialogOverlay :open="Boolean(previewImage)" placement="full" backdrop="preview" :z-index="90" aria-label="自拍参考图预览" @close="previewImage = null">
     <div v-if="previewImage" class="mx-auto grid h-full min-h-0 w-full max-w-7xl grid-rows-[auto_minmax(0,1fr)] overflow-hidden bg-black text-white">

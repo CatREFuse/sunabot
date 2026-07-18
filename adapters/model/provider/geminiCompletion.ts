@@ -93,6 +93,8 @@ export async function completeGeminiGenerateContent(
       return { kind: "completed", text };
     }
 
+    const companion = context.toolExecutor.companionTurn(calls, text, options, resolvedDefinitions, state);
+    if (companion) return companion;
     const preflight = preflightProviderToolResponse(calls, text, options, state);
     if (!preflight.rejected) {
       const deferred = context.toolExecutor.deferredTurn(calls, options, resolvedDefinitions, state);

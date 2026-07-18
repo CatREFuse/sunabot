@@ -12,4 +12,15 @@ describe("ImageHistorySection", () => {
     expect(wrapper.emitted("preview")).toBeUndefined();
     expect(wrapper.text()).not.toContain("复用参数");
   });
+
+  it("uses a compact responsive image grid", () => {
+    const wrapper = shallowMount(ImageHistorySection, { props: { images: [], loading: false, downloadingId: "" } });
+
+    expect(wrapper.get('[data-slot="image-history-grid"]').classes()).toEqual(expect.arrayContaining([
+      "grid-cols-2",
+      "sm:grid-cols-3",
+      "xl:grid-cols-5",
+      "2xl:grid-cols-6"
+    ]));
+  });
 });

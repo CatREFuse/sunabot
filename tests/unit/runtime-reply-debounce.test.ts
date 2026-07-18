@@ -26,6 +26,7 @@ import {
 } from "../../packages/contracts/session/runtimeMessages.js";
 import type { RenderedPromptRequest } from "../../services/agent/promptSystem.js";
 import type { AttachmentService } from "../../services/media/attachments/service.js";
+import { defaultVoiceProfile, voicePromptVariables } from "../../services/voice/public.js";
 import { SessionStore } from "../../services/sessions/sessionStore.js";
 import {
   applicationDataStore,
@@ -78,6 +79,29 @@ afterEach(() => {
 });
 
 describe("SunaRuntime reply debounce", () => {
+  it.each(["private", "group"] as const)("injects disabled voice context into the %s prompt and Provider", async (scope) => {
+    const harness = createRuntimeHarness(async () => ({ kind: "completed", text: "voice context reply" }));
+    const profile = defaultVoiceProfile();
+    const variables = voicePromptVariables(profile);
+    harness.runtime.voiceSnapshot = vi.fn(async () => ({ profile, variables }));
+    const renderPromptRequest = vi.spyOn(harness.runtime, "renderPromptRequest");
+    const incoming = parseOneBotInboundMessage(scope === "private"
+      ? privateEvent(30_990, "voice context")
+      : groupEvent(30_991, 6_991, "voice context", 19_991))!;
+    harness.runtime.recordIncomingMessage(incoming, { persist: false });
+
+    await harness.runtime.replyToIncoming(conversationRecordId(incoming), incoming, harness.gateway, {
+      delivery: { outbox: [] }
+    });
+
+    expect(renderPromptRequest.mock.calls[0]?.[1]).toEqual(expect.objectContaining(variables));
+    expect(harness.completeRequestTurn.mock.calls[0]?.[1]?.voice).toEqual({
+      enabled: false,
+      languages: [],
+      defaultLanguage: "ja"
+    });
+  });
+
   it("uses a five-second default trailing deadline", async () => {
     const harness = createRuntimeHarness(async () => ({ kind: "completed", text: "unused" }));
     const before = Date.now();

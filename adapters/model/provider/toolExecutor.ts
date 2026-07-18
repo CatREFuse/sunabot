@@ -27,6 +27,10 @@ import {
   runSystemConfig
 } from "../../../services/tools/systemConfigTool.js";
 import {
+  CRON_TOOL_NAME,
+  runCronTool
+} from "../../../services/tools/cronTool.js";
+import {
   READ_FILE_TOOL_NAME,
   WRITE_FILE_TOOL_NAME,
   WORKBENCH_FILE_MAX_BYTES,
@@ -73,6 +77,7 @@ import type {
   ResponseFunctionCallItem,
   TurnToolState
 } from "./contracts.js";
+import { providerVoiceCompanionTurn } from "./voiceCompanionTurn.js";
 import { logContextMetadata } from "./logger.js";
 import { mcpToolLogSummary } from "./mcpToolLog.js";
 import { readToolName } from "./promptMapping.js";
@@ -109,6 +114,7 @@ const inlineExecutors: ReadonlyMap<string, InlineExecutor> = new Map([
   [SEND_FILE_TOOL_NAME, runSendFile],
   [MEMORY_RECALL_TOOL_NAME, runMemoryRecall],
   [SYSTEM_CONFIG_TOOL_NAME, runSystemConfigTool],
+  [CRON_TOOL_NAME, executeCronTool],
   [ACTIVATE_SKILL_TOOL_NAME, runActivateSkill],
   [READ_SKILL_RESOURCE_TOOL_NAME, runReadSkillResource],
   [RUN_SKILL_SCRIPT_TOOL_NAME, runSkillScript]
@@ -142,6 +148,14 @@ export class RegistryProviderToolExecutor implements ProviderToolExecutorPort {
       ? withRequiredDispatchMessage(tool)
       : withoutDispatchMessage(tool));
   }
+
+  companionTurn(
+    calls: ResponseFunctionCallItem[],
+    siblingText: string,
+    options: ProviderCompleteOptions,
+    definitions: readonly Record<string, unknown>[],
+    state: TurnToolState = createTurnToolState()
+  ) { return providerVoiceCompanionTurn(calls, siblingText, options, definitions, state); }
 
   deferredTurn(
     calls: ResponseFunctionCallItem[],
@@ -667,6 +681,17 @@ async function runSystemConfigTool(
   }
   const result = await runSystemConfig(args, options.systemConfig);
   await appendToolLog(SYSTEM_CONFIG_TOOL_NAME, call, args, result, options);
+  return result;
+}
+
+async function executeCronTool(
+  args: Record<string, unknown>,
+  call: ResponseFunctionCallItem,
+  options: ProviderCompleteOptions
+) {
+  if (!options.cron) return { ok: false, error: "Scheduled task management is unavailable." };
+  const result = await runCronTool(args, options.cron);
+  await appendToolLog(CRON_TOOL_NAME, call, args, result, options);
   return result;
 }
 

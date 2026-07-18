@@ -109,6 +109,7 @@ import { SessionStore, type OutboxRecord, type SessionEventRecord } from "../../
 import { TOOL_CALL_TIMEOUT_MS } from "../../services/tools/tools.js";
 import { promptDefinitionById } from "../../services/agent/promptCatalog.js";
 import { defaultPromptContent as defaultFinalPromptContent } from "../../services/agent/promptDefaults.js";
+import { SCHEDULED_TASK_CALLBACK_PROMPT_ID } from "../../services/agent/scheduledTaskPrompt.js";
 import {
   parseFinalPromptTemplate,
   renderFinalPromptTemplate,
@@ -117,6 +118,7 @@ import {
 } from "../../services/agent/promptSystem.js";
 import { buildConversationPromptVariables } from "../../services/agent/persona.js";
 import type { RuntimeAgentExtensionsPort } from "./agentExtensions.js";
+import type { RuntimeVoiceOptions } from "./voice.js";
 
 export { SYSTEM_CONFIG_NEUTRAL_CONFIRMATION_TEXT } from "../../packages/contracts/session/runtimeMessages.js";
 
@@ -163,8 +165,16 @@ export const ADMIN_RUNTIME_PROMPT_DEFAULTS: Readonly<Record<string, string>> = {
   "orchestrator.user-group": defaultFinalPromptContent("orchestrator.user-group"),
   "orchestrator.group-thread": defaultFinalPromptContent("orchestrator.group-thread"),
   "conversation.group-summary": defaultFinalPromptContent("conversation.group-summary"),
+  [SCHEDULED_TASK_CALLBACK_PROMPT_ID]: defaultFinalPromptContent(SCHEDULED_TASK_CALLBACK_PROMPT_ID),
   "image.selfie-rewrite": defaultFinalPromptContent("image.selfie-rewrite")
 };
+export function runtimePromptDefaultContent(config: AppConfig, id: string) {
+  return defaultFinalPromptContent(
+    id,
+    config.persona.name,
+    config.persona.defaultAgentId
+  );
+}
 export interface BatchUserInfo {
   userId: string;
   names: string[];
@@ -259,6 +269,7 @@ export interface ReplyDelivery {
   emitOutbox?: (
     draft: ReplyDeliveryDraft | NoReplyPokeDeliveryDraft | ConversationAssetDeliveryDraft
   ) => Promise<unknown>;
+  emitDeferredOutbox?: ReplyDelivery["emitOutbox"];
   replyQuote?: ReplyQuoteSnapshotV1;
   systemConfigHeld?: SystemConfigHeldConfirmationPort;
   terminalStatus?: "no_reply" | "replied";
@@ -311,6 +322,7 @@ export interface SunaRuntimeOptions {
   bashAudit?: RuntimeBashAuditPort;
   systemConfig?: SystemConfigRuntimePort;
   agentExtensions?: RuntimeAgentExtensionsPort;
+  voice?: RuntimeVoiceOptions;
   replyTaskGate?: ReplyTaskGate;
   replyDebounceMs?: number;
 }

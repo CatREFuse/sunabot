@@ -53,6 +53,7 @@ export function createAdminTestConfig(rootDir: string): AppConfig {
       quoteGroupReplies: true,
       quoteGroupReplyExcludedUserIds: [],
       contextMessageLimit: 48,
+      emojiSendSize: 512,
       tone: {
         enabled: false,
         providerId: "",

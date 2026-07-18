@@ -17,7 +17,11 @@ import {
   type SessionHandleResult,
   type SessionTurnContext
 } from "../../services/sessions/sessionCoordinator.js";
-import { SessionStore, type SessionEventRecord } from "../../services/sessions/sessionStore.js";
+import {
+  SessionStore,
+  type OutboxRecord,
+  type SessionEventRecord
+} from "../../services/sessions/sessionStore.js";
 
 const stores: SessionStore[] = [];
 const coordinators: SessionCoordinator[] = [];
@@ -878,6 +882,154 @@ describe("SessionCoordinator", () => {
         dedupeKey: `turn-outbox:${enqueued.event.id}:1:retry-dispatch`
       })
     ]);
+  });
+
+  it("releases a voice outbox that becomes ready before the deferred turn commits", async () => {
+    const store = trackStore(new SessionStore({ databasePath: ":memory:" }));
+    const delivered: string[] = [];
+    let voiceOutcome: Promise<OutboxRecord | Error> | undefined;
+    const coordinator = trackCoordinator(createCoordinator({
+      store,
+      handleEvent: (event, context) => {
+        if (event.kind === "tool_completion") return { status: "no_reply" };
+        voiceOutcome = context.emitDeferredOutbox({
+          kind: "voice",
+          payload: { text: "voice ready first" },
+          dedupeFingerprint: "a".repeat(64)
+        }).then((outbox) => outbox, (error) => error as Error);
+        return {
+          status: "deferred",
+          providerCallId: "call-voice-first",
+          toolName: "codex",
+          arguments: { task: "inspect", kind: "analysis" },
+          originalRequest: event.payload,
+          acknowledgement: { kind: "reply", payload: { text: "acknowledged" } }
+        };
+      },
+      deliverOutbox: (outbox) => {
+        delivered.push((outbox.payload as { text: string }).text);
+      }
+    }));
+
+    coordinator.resume();
+    const event = coordinator.enqueueEvent({
+      sessionId: "group:voice-first",
+      kind: "incoming",
+      payload: { text: "delegate" }
+    }).event;
+    await coordinator.waitForIdle();
+
+    await expect(voiceOutcome).resolves.toMatchObject({
+      originTurnId: store.listTurns(event.sessionId)[0]!.id,
+      dedupeKey: `turn-outbox:${event.id}:1:${"a".repeat(64)}`
+    });
+    expect(store.listTurns(event.sessionId)[0]).toMatchObject({ status: "deferred" });
+    expect(store.listToolJobs(event.sessionId)[0]).toMatchObject({
+      providerCallId: "call-voice-first",
+      originEventId: event.id
+    });
+    expect(delivered).toEqual(["acknowledged", "voice ready first"]);
+  });
+
+  it("lets acknowledgement and the tool job progress before a later voice outbox is ready", async () => {
+    const store = trackStore(new SessionStore({ databasePath: ":memory:" }));
+    const toolGate = deferred<void>();
+    const toolStarted = deferred<void>();
+    let turnContext: SessionTurnContext | undefined;
+    const delivered: string[] = [];
+    const coordinator = trackCoordinator(createCoordinator({
+      store,
+      runner: {
+        async run(_input, context) {
+          toolStarted.resolve();
+          await toolGate.promise;
+          return successfulCodex(context.jobId, "analysis", "done");
+        }
+      },
+      handleEvent: (event, context) => {
+        if (event.kind === "tool_completion") return { status: "no_reply" };
+        turnContext = context;
+        return {
+          status: "deferred",
+          providerCallId: "call-voice-later",
+          toolName: "codex",
+          arguments: { task: "inspect", kind: "analysis" },
+          originalRequest: event.payload,
+          acknowledgement: { kind: "reply", payload: { text: "ack before voice" } }
+        };
+      },
+      deliverOutbox: (outbox) => {
+        delivered.push((outbox.payload as { text: string }).text);
+      }
+    }));
+
+    coordinator.resume();
+    const event = coordinator.enqueueEvent({
+      sessionId: "group:voice-later",
+      kind: "incoming",
+      payload: { text: "delegate" }
+    }).event;
+    await toolStarted.promise;
+    expect(delivered).toEqual(["ack before voice"]);
+    expect(store.listToolJobs(event.sessionId)[0]).toMatchObject({ status: "running" });
+    expect(store.listOutbox(event.sessionId)).toHaveLength(1);
+
+    await turnContext!.emitDeferredOutbox({
+      kind: "voice",
+      payload: { text: "voice ready later" },
+      dedupeFingerprint: "b".repeat(64)
+    });
+    await waitUntil(() => delivered.includes("voice ready later"));
+    expect(store.listOutbox(event.sessionId)).toHaveLength(2);
+    toolGate.resolve();
+    await coordinator.waitForIdle();
+  });
+
+  it("rejects a waiting deferred outbox when the turn completes without deferring", async () => {
+    const store = trackStore(new SessionStore({ databasePath: ":memory:" }));
+    let voiceOutcome: Promise<unknown> | undefined;
+    const coordinator = trackCoordinator(createCoordinator({
+      store,
+      handleEvent: (_event, context) => {
+        voiceOutcome = context.emitDeferredOutbox({
+          kind: "voice",
+          payload: {},
+          dedupeFingerprint: "c".repeat(64)
+        }).then(() => "inserted", (error) => error);
+        return { status: "no_reply" };
+      }
+    }));
+
+    coordinator.resume();
+    coordinator.enqueueEvent({ sessionId: "group:voice-rejected", kind: "incoming", payload: {} });
+    await coordinator.waitForIdle();
+
+    await expect(voiceOutcome).resolves.toMatchObject({ message: "Session turn completed as no_reply, not deferred." });
+    expect(store.listOutbox("group:voice-rejected")).toHaveLength(0);
+  });
+
+  it("rejects a waiting deferred outbox when the turn handler fails", async () => {
+    const store = trackStore(new SessionStore({ databasePath: ":memory:" }));
+    let voiceOutcome: Promise<unknown> | undefined;
+    const coordinator = trackCoordinator(createCoordinator({
+      store,
+      handleEvent: (_event, context) => {
+        voiceOutcome = context.emitDeferredOutbox({
+          kind: "voice",
+          payload: {},
+          dedupeFingerprint: "d".repeat(64)
+        }).then(() => "inserted", (error) => error);
+        throw new Error("provider turn failed");
+      }
+    }));
+
+    coordinator.resume();
+    coordinator.enqueueEvent({ sessionId: "group:voice-failed", kind: "incoming", payload: {} });
+    await coordinator.waitForIdle();
+
+    await expect(voiceOutcome).resolves.toMatchObject({ message: "provider turn failed" });
+    expect(store.listTurns("group:voice-failed")[0]).toMatchObject({ status: "failed" });
+    expect(store.listOutbox("group:voice-failed")).toHaveLength(0);
   });
 
   it("atomically acknowledges a deferred Codex job, releases the Session, and appends completion at the tail", async () => {

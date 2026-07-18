@@ -131,6 +131,8 @@ async function completeOpenAIResponses(
     }
 
     const siblingText = extractProviderText(response);
+    const companion = context.toolExecutor.companionTurn(toolCalls, siblingText, options, tools, state);
+    if (companion) return companion;
     const preflight = preflightProviderToolResponse(toolCalls, siblingText, options, state);
     if (!preflight.rejected) {
       const deferred = context.toolExecutor.deferredTurn(toolCalls, options, tools, state);
@@ -264,6 +266,8 @@ async function completeCodexResponses(
 
     const streamText = extractResponsesTextFromSse(text);
     const siblingText = streamText || extractResponsesText(payload);
+    const companion = context.toolExecutor.companionTurn(toolCalls, siblingText, options, tools, state);
+    if (companion) return companion;
     const preflight = preflightProviderToolResponse(toolCalls, siblingText, options, state);
     if (!preflight.rejected) {
       const deferred = context.toolExecutor.deferredTurn(toolCalls, options, tools, state);
@@ -356,6 +360,8 @@ async function completeChatCompletions(
     }
 
     const siblingText = choice.content?.trim() ?? "";
+    const companion = context.toolExecutor.companionTurn(calls, siblingText, options, definitions, state);
+    if (companion) return companion;
     const preflight = preflightProviderToolResponse(calls, siblingText, options, state);
     if (!preflight.rejected) {
       const deferred = context.toolExecutor.deferredTurn(calls, options, definitions, state);

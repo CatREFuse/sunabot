@@ -1,5 +1,10 @@
 import type { AppConfig } from "../../src/types.js";
 import type { PromptFileKind, PromptVariableDefinition } from "./promptSystem.js";
+import {
+  SCHEDULED_TASK_CALLBACK_PROMPT_FILE,
+  SCHEDULED_TASK_CALLBACK_PROMPT_ID,
+  SCHEDULED_TASK_PAYLOAD_VARIABLE
+} from "./scheduledTaskPrompt.js";
 
 export interface PromptFileDefinition {
   id: string;
@@ -40,6 +45,8 @@ const conversationVariables = [
   variable("runtime.tool_rules", "图像与自拍工具的调用规则", "string", "运行时"),
   variable("conversation.emoji.keys", "当前 Agent 已配置且可发送的表情 key 列表", "json", "Agent 表情库"),
   variable("conversation.emoji.syntax", "表情发送标记规则", "string", "Agent 表情库"),
+  variable("conversation.voice.settings", "当前 Agent 的语音开关、默认语言和可用语言", "json", "Agent 语音设置"),
+  variable("conversation.voice.trigger_policy", "语音伴生消息的触发边界", "string", "Agent 语音设置"),
   variable("messages_64", "当前消息之前最近最多 64 条完整会话消息；群聊消息包含时间、顺序、消息 ID、显示名、uid 和引用目标", "message[]", "会话上下文"),
   variable("conversation.messages", "当前消息之前可直接发送给模型的会话消息", "message[]", "会话上下文"),
   variable("memory.working", "工作记忆召回结果", "string", "记忆召回"),
@@ -135,6 +142,13 @@ export const PROMPT_FILE_DEFINITIONS = [
       ...fragmentVariables,
       variable("group.payload", "总结窗口、群聊信息和消息列表", "json", "会话上下文")
     ]
+  ),
+  final(
+    SCHEDULED_TASK_CALLBACK_PROMPT_ID,
+    "定时任务回调",
+    "调度",
+    () => SCHEDULED_TASK_CALLBACK_PROMPT_FILE,
+    [variable(SCHEDULED_TASK_PAYLOAD_VARIABLE, "任务背景、计划触发时间和回调目标", "json", "定时任务调度器")]
   ),
   final(
     "image.selfie-rewrite",

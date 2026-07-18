@@ -1,7 +1,10 @@
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { defineConfig, devices } from "@playwright/test";
 
 const e2ePort = Number(process.env.SUNABOT_E2E_PORT ?? "15174");
 const e2eBaseUrl = `http://127.0.0.1:${e2ePort}`;
+const e2eWebOutDir = JSON.stringify(path.join(tmpdir(), `sunabot-playwright-web-${e2ePort}`));
 
 export default defineConfig({
   testDir: "./tests/e2e",
@@ -33,7 +36,7 @@ export default defineConfig({
     }
   ],
   webServer: {
-    command: `npm run build:web && npx vite preview --config apps/admin-web/vite.config.ts --host 127.0.0.1 --port ${e2ePort}`,
+    command: `npm run build:web -- --outDir ${e2eWebOutDir} && npx vite preview --config apps/admin-web/vite.config.ts --host 127.0.0.1 --port ${e2ePort} --outDir ${e2eWebOutDir}`,
     url: e2eBaseUrl,
     reuseExistingServer: false,
     timeout: 120_000

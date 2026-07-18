@@ -86,10 +86,13 @@ describe("OrchestratorSettingsForm", () => {
     expect(input?.attributes()).toMatchObject({ min: "1", max: "3600", step: "1" });
 
     await input?.setValue("1");
+    await wrapper.get('[data-confirm-label="确认启动时间"]').trigger("click");
     expect(wrapper.props("modelValue").recentMessageWindowMs).toBe(1_000);
     await input?.setValue("90");
+    await wrapper.get('[data-confirm-label="确认启动时间"]').trigger("click");
     expect(wrapper.props("modelValue").recentMessageWindowMs).toBe(90_000);
     await input?.setValue("3600");
+    await wrapper.get('[data-confirm-label="确认启动时间"]').trigger("click");
     expect(wrapper.props("modelValue").recentMessageWindowMs).toBe(3_600_000);
   });
 });
