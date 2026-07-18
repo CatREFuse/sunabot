@@ -99,7 +99,7 @@
 - [x] **RECOVERY-001｜P2｜中断恢复可继续或回滚**
   - restore 每次文件替换写入可 fsync 的 journal，重跑按 per-file 状态幂等 resume/rollback；也可使用完整 staging tree 校验后原子切换。
   - 验收：每个 rename 前后终止进程，原目标仍可恢复，重跑不会覆盖未知文件，全部 Agent 双库和 queue 不变量最终通过。
-  - 证据：intent 先于 staging、复制与 rename 边界续跑/回滚、未知替换保留、完成后 SHA-256/SQLite/表计数复验和完整父链门禁通过。
+  - 证据：intent 先于 staging、复制与 rename 边界续跑/回滚、未知替换保留、完成后 SHA-256/SQLite/表计数复验和完整父链门禁通过；WAL 模式恢复库的只读复验会生成 sidecar，现已在主文件证据通过后于每次检查前后受控清理并覆盖 staging 发布回归。
 
 - [x] **ONBOARD-005｜P2｜只读 CLI 不安装依赖**
   - help 成功退出；`status|doctor|logs|down` 零写入、零 `npm ci`，只有启动、重启或显式 bootstrap 可以安装依赖。

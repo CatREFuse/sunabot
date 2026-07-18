@@ -112,6 +112,31 @@ describe("legacy SQLite migration recovery point", () => {
     expect((await drillSqliteMigrationRecoveryPoint({ directory: created.directory })).restored).toBe(true);
   });
 
+  it("removes WAL validation sidecars before publishing a restored database", async () => {
+    const fixture = await createFixture();
+    const database = new DatabaseSync(fixture.application);
+    database.exec("PRAGMA journal_mode=WAL; PRAGMA wal_checkpoint(TRUNCATE);");
+    database.close();
+    const created = await createSqliteMigrationRecoveryPoint({
+      workspace: fixture.workspace,
+      backupId: "sqlite-migration-wal-validation-sidecars-test",
+      sources: [],
+      databases: [{ id: "application", kind: "application", path: fixture.application }]
+    });
+    const targetWorkspace = path.join(fixture.root, "wal-validation-restore");
+
+    await expect(restoreSqliteMigrationRecoveryPoint({
+      directory: created.directory,
+      targetWorkspace
+    })).resolves.toMatchObject({ ok: true, backupId: created.manifest.backupId });
+    await expect(fs.access(path.join(targetWorkspace, "business/data/sunabot.sqlite-wal")))
+      .rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.access(path.join(targetWorkspace, "business/data/sunabot.sqlite-shm")))
+      .rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.access(path.join(targetWorkspace, `.sqlite-migration-restore-${created.manifest.backupId}.staging`)))
+      .rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("rejects source escape and symbolic links before publishing", async () => {
     const fixture = await createFixture();
     const outside = path.join(fixture.root, "outside.json");

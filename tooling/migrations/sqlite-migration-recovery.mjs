@@ -344,7 +344,6 @@ export async function restoreSqliteMigrationRecoveryPoint(options) {
     }
     if (stagedState === "missing") await copyDurable(target.source, target.staged);
     await assertMigrationRestoreFile(target.staged, journalEntry, target);
-    if (target.isDatabase) await removeMigrationRestoreSidecars(target.staged);
     if (!intent.copied.includes(target.entry.id)) {
       intent.copied.push(target.entry.id);
       await writeJsonAtomic(intentPath, intent);
@@ -384,7 +383,6 @@ export async function restoreSqliteMigrationRecoveryPoint(options) {
   for (const target of targets) {
     const journalEntry = migrationRestoreIntentEntry(intent, target.entry.id);
     await assertMigrationRestoreFile(target.destination, journalEntry, target);
-    if (target.isDatabase) await removeMigrationRestoreSidecars(target.destination);
   }
   await fs.rmdir(stagingDirectory).catch((error) => {
     if (error?.code === "ENOENT") return;
@@ -419,7 +417,6 @@ export async function rollbackSqliteMigrationRecoveryPointRestore(options) {
     const destinationState = await migrationRestoreFileState(target.destination);
     if (destinationState === "file") {
       await assertMigrationRestoreFile(target.destination, journalEntry, target);
-      if (target.isDatabase) await removeMigrationRestoreSidecars(target.destination);
       await fs.rm(target.destination);
       await syncDirectory(path.dirname(target.destination));
     } else if (destinationState !== "missing") {
@@ -428,7 +425,6 @@ export async function rollbackSqliteMigrationRecoveryPointRestore(options) {
     const stagedState = await migrationRestoreFileState(target.staged);
     if (stagedState === "file") {
       await assertMigrationRestoreFile(target.staged, journalEntry, target);
-      if (target.isDatabase) await removeMigrationRestoreSidecars(target.staged);
       await fs.rm(target.staged);
     } else if (stagedState !== "missing") {
       fail("SQLITE_MIGRATION_RESTORE_CONFLICT", `SQLite 迁移恢复暂存路径冲突：${target.staged}`);
@@ -535,7 +531,14 @@ async function assertMigrationRestoreFile(filePath, journalEntry, target) {
   if (stat.size !== journalEntry.bytes || await sha256File(filePath) !== journalEntry.sha256) {
     fail("SQLITE_MIGRATION_RESTORE_CONFLICT", `SQLite 迁移恢复文件与 journal 不匹配：${filePath}`);
   }
-  if (target.isDatabase) inspectDatabase(filePath, target.entry);
+  if (target.isDatabase) {
+    await removeMigrationRestoreSidecars(filePath);
+    try {
+      inspectDatabase(filePath, target.entry);
+    } finally {
+      await removeMigrationRestoreSidecars(filePath);
+    }
+  }
 }
 
 async function ensureSafeRestoreDirectory(root, relativeDirectory) {

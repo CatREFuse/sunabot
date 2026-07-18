@@ -66,7 +66,7 @@ node tooling/workspace/sqlite-recovery-cli.mjs rollback \
   --target-workspace /srv/sunabot/restore-staging
 ```
 
-回滚只删除 journal 中记录且类型、大小、SHA-256 仍匹配的恢复产物；未知替换保持原样并返回冲突。恢复、回滚、演练、保留清理和 stale partial 清理都会逐级检查绝对路径父链，用户符号链接路径不会写入或删除外部内容。lock、partial 和已发布目录的删除均采用身份与内容的比较并交换检查；检测到 successor 或路径替换时返回冲突，不删除新对象。
+回滚只删除 journal 中记录且类型、大小、SHA-256 仍匹配的恢复产物；未知替换保持原样并返回冲突。恢复库每次 SQLite 校验都先验证主文件类型、大小和 SHA-256，再删除同名且仍为普通文件的 `-wal`、`-shm`，校验关闭后再次删除本次只读检查生成的 sidecar；异常类型或 staging 内其他文件继续失败关闭。恢复、回滚、演练、保留清理和 stale partial 清理都会逐级检查绝对路径父链，用户符号链接路径不会写入或删除外部内容。lock、partial 和已发布目录的删除均采用身份与内容的比较并交换检查；检测到 successor 或路径替换时返回冲突，不删除新对象。
 
 校验通过后，再在服务停止状态下把旧 `business/data` 与 `business/agents/*/data` 移入独立回滚目录，并切换已验证的恢复目录。不得删除旧数据库，也不得在运行中的数据库上原地覆盖。
 
