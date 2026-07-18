@@ -47,7 +47,7 @@ Ubuntu WSL2 的基础依赖：
 
 ```bash
 sudo apt update
-sudo apt install -y ca-certificates curl git build-essential python3 tar gnupg
+sudo apt install -y ca-certificates curl git build-essential python3 tar
 ```
 
 安装仓库 `.node-version` 指定的 Node.js `24.18.0`。Windows 11 使用 [Docker Desktop WSL2 后端](https://docs.docker.com/desktop/features/wsl/)；Windows Server 按 [Docker Engine Ubuntu 安装文档](https://docs.docker.com/engine/install/ubuntu/)安装 Engine、Buildx 与 Compose 插件。
@@ -165,28 +165,20 @@ printf 'SOURCE_COMMIT=%s\nSOURCE_VERSION=%s\n' \
   "$SOURCE_COMMIT" "$SOURCE_VERSION" > "$TRANSFER_ROOT/source-code.env"
 chmod 600 "$TRANSFER_ROOT/source-code.env"
 
-RAW_ARCHIVE="$TRANSFER_ROOT/.workspace-critical.tar"
-ENCRYPTED_ARCHIVE="$TRANSFER_ROOT/workspace-critical.tar.gpg"
-trap 'rm -f "$RAW_ARCHIVE"' EXIT
+ARCHIVE="$TRANSFER_ROOT/workspace-critical.tar"
 
-tar -cpf "$RAW_ARCHIVE" \
+tar -cpf "$ARCHIVE" \
   -C "$SUNABOT_WORKSPACE" \
   business runtime/napcat secrets backups/sqlite-recovery
 
-gpg --symmetric --cipher-algo AES256 \
-  --output "$ENCRYPTED_ARCHIVE" \
-  "$RAW_ARCHIVE"
-rm -f "$RAW_ARCHIVE"
-trap - EXIT
-
 (
   cd "$TRANSFER_ROOT"
-  sha256sum workspace-critical.tar.gpg source-code.env > transfer.sha256
+  sha256sum workspace-critical.tar source-code.env > transfer.sha256
   sha256sum -c transfer.sha256
 )
 ```
 
-归档包含 API 凭据、管理凭据、QQ 登录态和业务数据。只传输 `workspace-critical.tar.gpg`、`source-code.env` 与 `transfer.sha256`；GPG 口令通过独立受控通道交付，不能写入仓库、命令参数、传输目录或任务日志。目标机复验密文和 revision 元数据后才允许解密。`workspace/cache/`、`workspace/runtime/logs/`、PID、临时文件、`node_modules/` 和 `dist/` 可重建，不需要转移。
+归档包含 API 凭据、管理凭据、QQ 登录态和业务数据。把完整 `sunabot-wsl2-transfer-<时间>` 文件夹直接复制到访问受限的受控目标，不创建加密包或等待口令；目标机必须从复制后的文件夹回读 `workspace-critical.tar` 和 `source-code.env`，并使用 `transfer.sha256` 复验。`workspace/cache/`、`workspace/runtime/logs/`、PID、临时文件、`node_modules/` 和 `dist/` 可重建，不需要转移。
 
 源机保持停机，不要在源机和目标机同时登录任一 QQ，也不要让两台机器写入同一个同步目录。
 
@@ -215,15 +207,9 @@ sudo mkdir -p /srv/sunabot-workspace
 sudo chown "$USER:$USER" /srv/sunabot-workspace
 chmod 700 /srv/sunabot-workspace
 
-RESTORE_ARCHIVE="/srv/.sunabot-workspace-restore-$$.tar"
 umask 077
-trap 'rm -f "$RESTORE_ARCHIVE"' EXIT
-gpg --output "$RESTORE_ARCHIVE" \
-  --decrypt "$TRANSFER_SOURCE/workspace-critical.tar.gpg"
-tar -xpf "$RESTORE_ARCHIVE" \
+tar -xpf "$TRANSFER_SOURCE/workspace-critical.tar" \
   -C /srv/sunabot-workspace
-rm -f "$RESTORE_ARCHIVE"
-trap - EXIT
 
 export SUNABOT_WORKSPACE=/srv/sunabot-workspace
 chmod 700 "$SUNABOT_WORKSPACE/secrets"
@@ -238,7 +224,7 @@ npm run runtime:contract
 ./sunabot.sh doctor
 ```
 
-这里的 `SQLITE_BACKUP` 必须改为目标机上的实际路径。恢复点复验失败、Agent 范围不一致、密文与元数据 SHA-256 不匹配，或目标代码 commit/version 与源机记录不一致时不能启动。解密产生的临时明文归档必须在解包后删除；异常退出由 `trap` 清理。
+这里的 `SQLITE_BACKUP` 必须改为目标机上的实际路径。恢复点复验失败、Agent 范围不一致、直接复制的归档与元数据 SHA-256 不匹配，或目标代码 commit/version 与源机记录不一致时不能启动。
 
 ## 6. 启动、登录与账号扩展
 

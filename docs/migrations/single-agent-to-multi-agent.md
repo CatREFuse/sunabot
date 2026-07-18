@@ -156,7 +156,7 @@ npm run migrate:sqlite
 npm run migrate:multi-agent -- --workspace "$SUNABOT_WORKSPACE"
 ```
 
-每个适用命令都必须成功后才能继续。`MIGRATION_RAW_BACKUP` 必须位于受控加密的异机存储或已经同步到该存储，并保持 `0700`；其中的原始归档保留被 `migrate:sqlite` 删除的 JSON/JSONL 与附件分块来源，恢复点保留布局迁移后的规范双库，两者缺一时停止。
+每个适用命令都必须成功后才能继续。完整 `MIGRATION_RAW_BACKUP` 文件夹必须直接复制到访问受限的受控异机存储，并保持 `0700`；不创建加密包或等待口令，复制前后使用 SHA-256 与目标回读校验。原始归档保留被 `migrate:sqlite` 删除的 JSON/JSONL 与附件分块来源，恢复点保留布局迁移后的规范双库，两者缺一时停止。
 
 ## 执行迁移
 
