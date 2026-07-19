@@ -39,6 +39,14 @@ afterAll(async () => {
 });
 
 describe("workspace prompt runtime", () => {
+  it("includes cron in the default group reply tools without exposing system_config", () => {
+    const template = parseFinalPromptTemplate(defaultPromptContent("conversation.group-reply"));
+    const names = template.tools?.map((tool) => tool.function.name);
+
+    expect(names).toContain("cron");
+    expect(names).not.toContain("system_config");
+  });
+
   it("parses and resolves every final request template without leftover variables", async () => {
     const fragmentValues = await readFragments();
 
@@ -77,6 +85,7 @@ describe("workspace prompt runtime", () => {
       "runtime.address_rules": "称呼用户为老师。",
       "runtime.scope_rules": "识别会话范围。",
       "runtime.tool_rules": "按需调用工具。",
+      "runtime.current_time": "2026-07-19T22:43:55.000+08:00 [system_timezone=Asia/Shanghai]",
       "messages_64": [
         { role: "user", content: "上一条问题" },
         { role: "assistant", content: "上一条回复" }
@@ -178,7 +187,7 @@ describe("workspace prompt runtime", () => {
     }, { opaqueVariables: ["tone.input"] });
 
     expect(rendered.messages[0]?.content).toContain("<soul>persona.soul fixture");
-    expect(rendered.messages[1]?.content).toContain("保留字面量 @{persona.soul}");
+    expect(rendered.messages.at(-1)?.content).toContain("保留字面量 @{persona.soul}");
     expect(rendered.tools).toEqual([]);
     expect(rendered.response_format).toEqual({ type: "text" });
   });

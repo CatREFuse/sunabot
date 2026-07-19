@@ -34,12 +34,14 @@ GPT-5.6 及后续支持该协议的 OpenAI 官方 Responses 请求必须在最�
 
 - 多条 system、user、assistant 消息；
 - 变量槽位；
-- 所有提示词模板都可使用 `bot.name`、`user.name`、`runtime.current_time` 和 `utils.roll` 四项通用变量；`user.name` 仅在私聊回复中提供当前用户显示名，其他场景为空字符串；系统时间使用 ISO 8601；`utils.roll` 在每次模板请求时生成一个 1～100 的随机整数，同一次渲染内重复引用保持一致；
+- 所有提示词模板都可使用 `bot.name`、`user.name`、`runtime.current_time` 和 `utils.roll` 四项通用变量；`user.name` 仅在私聊回复中提供当前用户显示名，其他场景为空字符串；`runtime.current_time` 使用系统环境提供的 IANA 时区，值同时包含 ISO 8601 UTC 偏移与 `system_timezone`；`utils.roll` 在每次模板请求时生成一个 1～100 的随机整数，同一次渲染内重复引用保持一致；
 - 人格变量在所有最终提示词中可用；工作记忆、长期记忆和用户画像召回结果分别使用独立变量；
 - function tools；工具 `description` 与消息正文使用同一变量目录和渲染边界，提示词编辑器可插入已登记变量并编辑语义 XML 包装；变量值仍按不透明数据注入，不能递归展开；
 - JSON Schema response format；
 - 管理台编辑、变量表、结构校验、冲突检测和运行时热更新；
 - 运行时默认值与 Agent 工作区文件一致性测试。
+
+所有最终提示词都必须显式引用统一时间契约。运行时从宿主系统环境读取 IANA 时区，不设置独立业务时区；当前系统时间、当前消息时间、历史消息时间、编排器、Thread、记忆、群聊摘要与定时回调中由系统生成的时间都按该时区表达，并携带当时有效的 UTC 偏移。群聊历史元数据同时包含 `timestamp` 与 `timezone`，当前输入单独包含消息时间；模型进行“几分钟后”“明天”等相对时间换算时必须以 `runtime.current_time` 为基准。既有公共与 Agent override 最终提示词通过各自目录的 `.time-context-v1` 标记执行一次持久迁移，只补时间契约并保留管理员原有消息、角色、顺序、工具和 response schema；marker 写入后不重复回填。
 
 每个 Agent 的人格正文独立保存在自身 workspace 的 `AGENTS.md`、`SOUL.md`、`PREFERENCE.md`、`DIALOGUE_STYLE_EXAMPLES.md`、`USER.md` 和 `RELATION.md`。默认 Plana 与管理台新建 Agent 都会以 write-if-missing 方式补齐这六个人格文件和 Agent 级最终提示词，已有定制文件不被覆盖。`DIALOGUE_STYLE_EXAMPLES.md` 通过 `persona.dialogue_style_examples` 注入对话回复和群聊总结，要求 Agent 严格遵从示例的语气、句式、节奏、用词和情绪强度。运行时显示名优先使用已装载人格名称，其次使用当前 Agent 配置名称；两者都为空时使用通用“助手”，非默认 Agent 不得回退为 Plana。单聊回复与群聊回复分别使用 `conversation.private-reply` 和 `conversation.group-reply`，对应 `conversation_private_reply.json` 与 `conversation_group_reply.json`，运行时按会话范围选择，Prompt Cache 家族也分别计算。首次拆分时，现有 `conversation_reply.json` 内容分别复制到两个新文件，旧文件保留但不再作为回复入口。公共系统提示词默认从 `workspace/business/prompts/` 读取，所有 Agent 共用；`image.selfie-rewrite` 始终从当前 Agent workspace 的 `selfie_prompt_rewrite.json` 读取，不参与公共系统提示词继承或覆盖。该提示词的缺失文件初始化、空文件修复、结构迁移与渲染回退均按当前 Agent ID 选择默认内容：primary Plana 保留专用模板，其他 Agent 使用不含 Plana 外观、世界观和人物关系的通用模板。Agent 的 `agent.json` 可通过 `prompts.overrideSystem` 开启系统提示词覆盖，开启时先把当前公共系统提示词复制到 `workspace/business/agents/<agentId>/system-prompts/`，后续仅由该 Agent 读取和编辑。关闭覆盖时保留私有副本并立即恢复公共系统提示词。人格文件、最终提示词、自拍参考图、工具覆盖和 Bot 行为均支持热更新；提示词和人格是小型、可审阅配置文件，不进入 SQLite。
 
@@ -73,7 +75,7 @@ Agent 工具目录固定包含 `assistant_text`、`no_reply`、`memory_recall`�
 
 `system_config` 只查询或修改当前 Agent。`get_settings` 返回自动回复、群聊编排、搜索、Bash 偏好、最多 100 个已知群聊的摘要和工具有效状态；`get_status` 返回运行时间、OneBot、人格、Provider、恢复门禁和安全裁剪后的探针结果。`list_groups` 按完整 conversation ID 的二进制字典序分页查询当前 Agent 的全部已知 `user_group`/`bot_group`，`groupCursor` 是上一页最后一个完整 conversation ID，`groupLimit` 允许 1—100、`null` 默认 50，响应返回 `total`、`items`、`nextCursor` 和 `hasMore`；格式合法但当前不存在的游标继续返回字典序更大的记录，并发插入不提供快照分页保证。群聊项只包含 conversation ID、账号、群号、标题、范围、回复开关、编排器开关和最后活动时间。响应不得包含密钥、环境变量名、绝对路径、原始消息、Provider 地址或探针诊断正文。修改操作包括自动回复范围、主动群聊编排器、Tavily 搜索开关、管理员私聊 Bash backend 偏好，以及任意真实完整 conversation ID 对应的已知群聊回复/编排器开关；`set_group_reply` 不受查询页大小限制。搜索实现当前只接受 `tavily`；未知群聊、裸 group ID、多余字段、缺失字段和不匹配参数均失败关闭。
 
-`cron` 是定时任务唯一的 Agent Function Tool，不拆分为多个工具。严格参数固定包含 `operation`、`taskId`、`revision`、`name`、`enabled`、`schedule`、`context` 和 `targets`；`operation` 只允许 `create|get|list|update|delete`，未使用字段必须传 `null`。工具只对无 prompt override 的当前管理员 QQ 私聊和管理员 Web Chat 开放，只管理当前 Agent；QQ 私聊可用 `conversationId=current` 指向当前会话，Web Chat 必须选择已存在的完整 QQ 会话 ID。创建和更新在写入前复核 cron/once、IANA 时区、启用计划的未来单次时间、1—20 个目标，并按完整会话 ID 和正整数 QQ ID 规范化去重；每个目标最多保留 20 个 @ 对象，私聊目标禁止 @。更新与删除必须携带当前 revision，并以 CAS 冲突失败关闭。
+`cron` 是定时任务唯一的 Agent Function Tool，不拆分为多个工具。严格参数固定包含 `operation`、`taskId`、`revision`、`name`、`enabled`、`schedule`、`context` 和 `targets`；`operation` 只允许 `create|get|list|update|delete`，未使用字段必须传 `null`。`schedule` 的 cron/once discriminator 同时声明 `type: string` 与固定 `const`，确保严格 Function Tool schema 可被 Provider 接受；Provider schema 不使用其严格子集禁止的 `uniqueItems`，重复目标与重复 @ 继续由应用解析器在写入前拒绝。工具默认对全部用户群聊和 Bot 群聊中的所有成员开放，私聊与 Web Chat 仍只对当前管理员开放；prompt override 回调不提供该工具，所有调用只管理当前 Agent。OneBot 会话可用 `conversationId=current` 指向当前会话，Web Chat 必须选择已存在的完整 QQ 会话 ID。创建和更新在写入前复核 cron/once、IANA 时区、启用计划的未来单次时间、1—20 个目标，并按完整会话 ID 和正整数 QQ ID 规范化去重；每个目标最多保留 20 个 @ 对象，私聊目标禁止 @。更新与删除必须携带当前 revision，并以 CAS 冲突失败关闭。
 
 配置修改只对无 prompt override 的当前管理员 QQ 私聊开放，并从下一轮生效；查询也可在同权限 QQ 私聊和管理 Web Chat 使用。Web Chat 没有 durable delivery，因此所有修改在暂存前返回 `SYSTEM_CONFIG_DURABLE_DELIVERY_REQUIRED`，查询保持可用；QQ 宿主缺少真实 held outbox 或 reply-gate resolver 时在 append 阶段失败关闭且不提交。一次成功的 `system_config` 调用必须独占整个 Provider turn；同批或跨模型轮次混入正文、图片、deferred 或其他工具时，Provider 适配器拒绝整轮并清除 staged mutation。配置只在确认进入 schema v5 held 行后提交，commit 成功后才写入 released provenance；commit 失败或遗留 held 恢复只发送固定中性通知。Bash backend 只保存 `native` 或 `docker` 偏好，实际可用性继续由 capability 探针决定；macOS Native 缺少 bubblewrap 或等价强隔离时 effective 状态为关闭，不能回退普通宿主 Bash，Docker backend 也不能通过 Docker socket 放宽隔离。
 
@@ -105,7 +107,7 @@ Agent 设置中的工具启停是所属 Agent 的总开关。每个 QQ 私聊、
 
 `dispatch_message` 负责 deferred tool 的首次受理消息，`assistant_text` 负责 inline 工具开始前的进度或补充问题，最终结果继续使用普通正文。两类消息写入 durable outbox 后立即调度发送，Provider inline 工具与 deferred worker 随后独立执行，不等待远端发送结果；发送失败继续由 outbox 重试，callback 与最终正文保持同一会话 FIFO。单轮工具调用上限可配置，默认 20，最大 100；工具启用状态与描述热更新，权限、超时和并发继续由对应运行配置控制。
 
-`send_voice_message` 是普通回复 turn 的终止 companion 工具，严格参数对象只允许且必须包含 `text` 和 `language`，`text` 去除首尾空白后为 1—300 个字符，`language` 只允许当前 Agent 已配置参考音频的 `zh`、`en` 或 `ja`。一个 Provider response 最多调用一次，并且只能使用以下三种封闭形态：可见 sibling assistant text 加末尾 `send_voice_message`；无 sibling text 的 `assistant_text` 加末尾 `send_voice_message`；无 sibling text 的单个 deferred tool 加末尾 `send_voice_message`，其 `dispatch_message` 作为可读来源。后两种形态中语音调用必须是第二项；三种形态都要求语音正文与来源正文在忽略已知表情标记并规范化空白后完全一致。该 response 不能继续接受其他工具、第二份语音、`system_config` mutation 或后续模型轮次；任一形状、工具顺序、语言、正文或 capability 不符时，在文本 callback、合成、任务和 outbox 前拒绝整份 response。
+`send_voice_message` 是普通回复 turn 的终止 companion 工具，严格参数对象只允许且必须包含 `text` 和 `language`，`text` 去除首尾空白后为 1—300 个字符，`language` 只允许当前 Agent 已配置参考音频的 `zh`、`en` 或 `ja`。一个 Provider turn 最多调用一次，并且只能使用以下四种封闭形态：可见 sibling assistant text 加末尾 `send_voice_message`；无 sibling text 的 `assistant_text` 加末尾 `send_voice_message`；无 sibling text 的单个 deferred tool 加末尾 `send_voice_message`，其 `dispatch_message` 作为可读来源；或上一轮唯一成功活动为一次已投递的 `assistant_text`，下一轮仅调用一次 `send_voice_message`。同一 response 内的后两项组合要求语音调用为第二项，跨轮形态不得夹入其他可见文字、工具或终止活动；四种形态都要求语音正文与来源正文在忽略已知表情标记并规范化空白后完全一致。语音调用后不能继续接受其他工具、第二份语音、`system_config` mutation 或后续模型轮次；任一形状、工具顺序、语言、正文或 capability 不符时，在尚未发生的文本 callback、合成、任务和 outbox 前拒绝。
 
 语音 companion 不替代同源文字。普通正文或 `assistant_text` 与语音合成并行开始，各自在完成准备的瞬间自然写入自己的 durable outbox，不人为规定文字先于语音；任一合成、文本准备或入队失败都不能取消已经成功的另一项。deferred 形态先把 `dispatch_message` acknowledgement 与任务原子持久化，合成完成后通过同一 turn 的 deferred outbox emitter 追加语音；合成先完成时只等待该原子 handoff 可见，不改变任务 claim 与 acknowledgement 的既有并发语义。OneBot 断线、outbox 重试与进程恢复继续使用各自幂等记录，验收不能依赖文字和语音的固定先后顺序。
 

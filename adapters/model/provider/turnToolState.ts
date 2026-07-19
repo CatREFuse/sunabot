@@ -8,6 +8,7 @@ export function createTurnToolState(): TurnToolState {
   return {
     toolCallCount: 0,
     assistantTextSent: false,
+    assistantTextDeliveryCount: 0,
     acceptedToolNames: []
   };
 }
@@ -23,6 +24,11 @@ export function withTurnToolState(
     onAssistantText: async (text: string, source?: ProviderAssistantTextSource) => {
       await deliver(text, source);
       state.assistantTextSent = true;
+      state.assistantTextDeliveryCount += 1;
+      state.deliveredAssistantText = {
+        text,
+        source: source ?? "text"
+      };
     }
   };
 }

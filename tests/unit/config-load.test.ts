@@ -60,6 +60,7 @@ describe("tool configuration", () => {
     expect(config.bot.emojiSendSize).toBe(512);
     expect(config.bot.tone).toEqual({
       enabled: false,
+      followMainModel: false,
       providerId: "",
       model: "gpt-5.4-mini",
       reasoningEffort: "low",
@@ -96,6 +97,7 @@ describe("tool configuration", () => {
       bot: {
         tone: {
           enabled: true,
+          followMainModel: true,
           providerId: "openai",
           model: "gpt-5.5",
           reasoningEffort: "high",
@@ -109,6 +111,7 @@ describe("tool configuration", () => {
       bot: {
         tone: {
           enabled: true,
+          followMainModel: true,
           providerId: "openai",
           model: "gpt-5.5",
           reasoningEffort: "high",
@@ -124,6 +127,7 @@ describe("tool configuration", () => {
       bot: {
         tone: {
           enabled: false,
+          followMainModel: false,
           providerId: "",
           model: "gpt-5.4-mini",
           reasoningEffort: "low",

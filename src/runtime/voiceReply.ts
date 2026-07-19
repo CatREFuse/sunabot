@@ -28,6 +28,7 @@ interface RuntimeVoiceFinalReplyInput extends RuntimeVoiceSynthesisInput {
   messageOrigin: AssistantMessageOrigin;
   toolNames: readonly string[];
   voice: ProviderVoiceCompanion;
+  textAlreadyDelivered?: boolean;
 }
 
 export function startRuntimeVoiceSynthesis(
@@ -85,22 +86,24 @@ export async function sendRuntimeVoiceFinalReply(
     delivery,
     signal: input.signal,
   });
-  const textDelivery = host.sendAssistantReply(
-    input.channelKey,
-    input.incoming,
-    input.gateway,
-    input.text,
-    input.isAdmin,
-    input.generatedImages,
-    input.logRunId,
-    input.isCurrent,
-    delivery,
-    true,
-    { messageOrigin: input.messageOrigin, toolNames: [...input.toolNames] },
-    "immediate",
-    input.signal,
-    emojiPlan,
-  );
+  const textDelivery = input.textAlreadyDelivered
+    ? Promise.resolve(undefined)
+    : host.sendAssistantReply(
+        input.channelKey,
+        input.incoming,
+        input.gateway,
+        input.text,
+        input.isAdmin,
+        input.generatedImages,
+        input.logRunId,
+        input.isCurrent,
+        delivery,
+        true,
+        { messageOrigin: input.messageOrigin, toolNames: [...input.toolNames] },
+        "immediate",
+        input.signal,
+        emojiPlan,
+      );
   const [textResult] = await Promise.allSettled([textDelivery, voiceSynthesis]);
   if (textResult.status === "rejected") {
     input.lifecycle?.discard();

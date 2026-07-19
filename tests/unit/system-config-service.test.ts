@@ -36,6 +36,7 @@ describe("SystemConfigService", () => {
       },
       tone: {
         enabled: false,
+        followMainModel: false,
         providerId: null,
         model: "gpt-5.4-mini",
         reasoningEffort: "low",

@@ -300,10 +300,10 @@ const catalog: readonly ToolCatalogEntry[] = [
     summary: "管理当前 Agent 的主动定时回调。",
     definition: () => cronTool,
     available: (options) => Boolean(options.cron),
-    unavailableReason: "仅管理员私聊和管理员 Web Chat 可以使用。",
+    unavailableReason: "当前会话未提供定时任务能力。",
     unavailabilityKind: "session",
-    accessLabel: "管理员私聊与 Web Chat 可用",
-    accessDescription: "群聊和普通用户私聊不可用。",
+    accessLabel: "全部群聊、管理员私聊与 Web Chat 可用",
+    accessDescription: "群聊成员均可使用；私聊与 Web Chat 仅管理员可用。",
     defaultEnabled: true,
     execution: "inline"
   }

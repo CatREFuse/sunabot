@@ -56,7 +56,7 @@ afterEach(() => {
 });
 
 describe("RuntimeScheduledTasks", () => {
-  it("exposes the cron port only to an administrator in private or Web Chat", async () => {
+  it("exposes the cron port to every group and to administrators in private or Web Chat", async () => {
     const harness = createHarness();
     const privateMessage = incomingMessage();
     const groupMessage = incomingMessage({ scope: "user_group", groupId: 20_001 });
@@ -65,7 +65,8 @@ describe("RuntimeScheduledTasks", () => {
     expect(harness.runtime.toolPort(privateMessage, true)).toBeDefined();
     expect(harness.runtime.toolPort(webMessage, true)).toBeDefined();
     expect(harness.runtime.toolPort(privateMessage, false)).toBeUndefined();
-    expect(harness.runtime.toolPort(groupMessage, true)).toBeUndefined();
+    expect(harness.runtime.toolPort(groupMessage, true)).toBeDefined();
+    expect(harness.runtime.toolPort(groupMessage, false)).toBeDefined();
     expect(harness.runtime.toolPort(privateMessage, true, "callback")).toBeUndefined();
     expect(harness.runtime.toolPort(privateMessage, true, "")).toBeUndefined();
 
@@ -81,6 +82,20 @@ describe("RuntimeScheduledTasks", () => {
       error: "Web Chat 中不能使用 current，请选择一个已有 QQ 会话。"
     });
     expect(harness.store.list().items).toEqual([]);
+
+    const groupResult = await harness.runtime.toolPort(groupMessage, false)!.execute(cronInput("create", {
+      name: "群聊提醒",
+      schedule: once(new Date(harness.storeNow + 60_000).toISOString()),
+      context: "所有群成员均可创建当前 Agent 的群聊提醒",
+      targets: [{ conversationId: "current", mentionUserIds: ["123"] }]
+    }));
+    expect(groupResult).toMatchObject({
+      ok: true,
+      operation: "create",
+      task: {
+        targets: [{ conversationId: "group:20001", mentionUserIds: ["123"] }]
+      }
+    });
   });
 
   it("resolves OneBot current and enforces revision CAS across CRUD", async () => {

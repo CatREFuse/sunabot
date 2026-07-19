@@ -100,6 +100,7 @@ export interface NormalReplyConfig {
 
 export interface BotToneSettings {
   enabled: boolean;
+  followMainModel: boolean;
   providerId: string;
   model: string;
   reasoningEffort?: ReasoningEffort;

@@ -453,7 +453,7 @@ function emojiSendSize(value: unknown, fallback: BotConfig["emojiSendSize"]) {
 function validateTone(input: unknown, providers?: AppConfig["providers"]): BotToneSettings {
   const value = object(input, "tone");
   exactKeys(value, [
-    "enabled", "providerId", "model", "reasoningEffort", "temperature", "maxOutputTokens", "maxRetries"
+    "enabled", "followMainModel", "providerId", "model", "reasoningEffort", "temperature", "maxOutputTokens", "maxRetries"
   ], "tone");
   const providerId = requiredString(value.providerId, "tone.providerId", {
     trim: true,
@@ -471,6 +471,7 @@ function validateTone(input: unknown, providers?: AppConfig["providers"]): BotTo
   validateCatalogEffort(model, reasoningEffort, "tone.reasoningEffort");
   return {
     enabled: boolean(value.enabled, "tone.enabled"),
+    followMainModel: boolean(value.followMainModel, "tone.followMainModel"),
     providerId,
     model,
     ...(reasoningEffort ? { reasoningEffort } : {}),

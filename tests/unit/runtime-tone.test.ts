@@ -28,6 +28,7 @@ describe("RuntimeTone", () => {
     const selected = { ...config.providers.items[0]!, id: "tone-provider", reasoningEffort: "medium" as const };
     config.bot.tone = {
       enabled: true,
+      followMainModel: false,
       providerId: selected.id,
       model: "gpt-5.5",
       reasoningEffort: "high",
@@ -102,6 +103,53 @@ describe("RuntimeTone", () => {
     });
     expect(options.signal).toBeInstanceOf(AbortSignal);
     expect(new RegistryProviderToolExecutor().resolveDefinitions(options, request.tools)).toEqual([]);
+  });
+
+  it("uses the current main model configuration while followMainModel is enabled", async () => {
+    const config = defaultConfig();
+    const main = {
+      ...config.providers.items[0]!,
+      model: "gpt-5.5",
+      reasoningEffort: "high" as const,
+      temperature: 0.4,
+      maxOutputTokens: 9600
+    };
+    config.providers.items = [main];
+    config.normalReply.maxRetries = 3;
+    config.bot.tone = {
+      enabled: true,
+      followMainModel: true,
+      providerId: "other-provider",
+      model: "tone-model",
+      reasoningEffort: "low",
+      temperature: 1.1,
+      maxOutputTokens: 3200,
+      maxRetries: 4
+    };
+    const getProvider = vi.fn(() => new OpenAIProvider(main));
+    const completePrompt = vi.fn(async () => "改写结果");
+    const tone = new RuntimeTone({
+      config,
+      getProvider,
+      renderPromptRequest: async () => ({ messages: [{ role: "user", content: "raw" }] }),
+      completePrompt
+    } as unknown as SunaRuntime);
+
+    await expect(tone.rewrite("原始文本")).resolves.toBe("改写结果");
+
+    expect(getProvider).toHaveBeenCalledWith(undefined);
+    const [provider, , options] = completePrompt.mock.calls[0]! as unknown as [
+      OpenAIProvider,
+      RenderedPromptRequest,
+      ProviderCompleteOptions
+    ];
+    expect(provider.configuration()).toMatchObject({
+      model: "gpt-5.5",
+      reasoningEffort: "high",
+      temperature: 0.4,
+      maxOutputTokens: 9600
+    });
+    expect(options.modelRequestMaxRetries).toBe(3);
   });
 
   it("fails closed when the enabled node returns no sendable text", async () => {

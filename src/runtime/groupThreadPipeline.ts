@@ -15,6 +15,7 @@ import { appendRequestLog } from "../requestLog.js";
 import { conversationRecordId } from "./messagingAttachmentHelpers.js";
 import { parseGroupContextMetadataValue } from "./conversationMemoryHelpers.js";
 import { errorMessage, sanitizeErrorDetail, withAbortTimeout } from "./infrastructure.js";
+import { formatModelTimestamp, systemModelTimeZone } from "../../services/agent/modelTime.js";
 
 import type { SunaRuntime } from "../runtime.js";
 
@@ -324,7 +325,8 @@ function toClassifierMessage(message: ConversationMessageRecord) {
   return {
     message_id: message.id,
     sequence: message.sequence,
-    timestamp: message.at,
+    timestamp: formatModelTimestamp(message.at),
+    timezone: systemModelTimeZone(),
     role: message.role,
     display_name: message.senderName || (message.role === "assistant" ? "助手" : "用户"),
     uid: uid == null ? "unknown" : String(uid),

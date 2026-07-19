@@ -199,6 +199,7 @@ describe("AgentRegistry", () => {
         quoteGroupReplyExcludedUserIds: [],
         tone: {
           enabled: false,
+          followMainModel: false,
           providerId: "",
           model: "gpt-5.4-mini",
           maxRetries: 2

@@ -121,6 +121,7 @@ describe("ConfigService section semantics", () => {
       revision: envelope.revision,
       value: {
         enabled: true,
+        followMainModel: false,
         providerId,
         model: "gpt-5.5",
         reasoningEffort: "high",
@@ -132,6 +133,7 @@ describe("ConfigService section semantics", () => {
 
     expect(result.config.bot.tone).toEqual({
       enabled: true,
+      followMainModel: false,
       providerId,
       model: "gpt-5.5",
       reasoningEffort: "high",

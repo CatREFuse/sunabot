@@ -1,4 +1,5 @@
 import { SEND_VOICE_MESSAGE_TOOL_NAME } from "../../../services/tools/sendConversationAssetTool.js";
+import { ASSISTANT_TEXT_TOOL_NAME } from "../../../services/tools/assistantTextTool.js";
 import {
   isProviderDeferredTool,
   isProviderToolAvailable,
@@ -21,7 +22,8 @@ export function providerVoiceCompanionTurn(
   definitions: readonly Record<string, unknown>[],
   state: TurnToolState,
 ): ProviderCompletedTurn | ProviderDeferredTurn | null {
-  const companion = parseVoiceCompanion(calls, siblingText, (name) =>
+  const deliveredAssistantText = crossRoundAssistantText(calls, siblingText, state);
+  const companion = parseVoiceCompanion(calls, deliveredAssistantText?.text ?? siblingText, (name) =>
     isProviderDeferredTool(name, options),
   );
   if (!companion) return null;
@@ -29,7 +31,7 @@ export function providerVoiceCompanionTurn(
     options.systemConfig?.mutationStaged() ||
     options.systemConfig?.turnRejected() ||
     state.acceptedToolNames.includes("system_config") ||
-    hasAcceptedTurnActivity(state)
+    (hasAcceptedTurnActivity(state) && !deliveredAssistantText)
   ) {
     throw new Error(
       "send_voice_message must be the first accepted activity in the provider turn.",
@@ -69,8 +71,34 @@ export function providerVoiceCompanionTurn(
         ...(companion.source === "assistant_text"
           ? { messageOrigin: "assistant_text" as const }
           : {}),
+        ...(deliveredAssistantText
+          ? {
+              messageOrigin: "assistant_text" as const,
+              textAlreadyDelivered: true as const,
+            }
+          : {}),
         voice,
       };
+}
+
+function crossRoundAssistantText(
+  calls: readonly ResponseFunctionCallItem[],
+  siblingText: string,
+  state: TurnToolState,
+) {
+  if (
+    siblingText.trim() ||
+    calls.length !== 1 ||
+    calls[0]?.name !== SEND_VOICE_MESSAGE_TOOL_NAME ||
+    state.assistantTextDeliveryCount !== 1 ||
+    state.acceptedToolNames.length !== 1 ||
+    state.acceptedToolNames[0] !== ASSISTANT_TEXT_TOOL_NAME ||
+    state.terminal !== undefined ||
+    state.deliveredAssistantText?.source !== "assistant_text"
+  ) {
+    return undefined;
+  }
+  return state.deliveredAssistantText;
 }
 
 function acceptCall(

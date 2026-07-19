@@ -18,7 +18,10 @@ describe("selfie prompt defaults", () => {
       role: "system",
       content: DEFAULT_SELFIE_REFERENCE_SELECTION_CONTRACT
     });
-    expect(template.messages.at(-1)).toEqual({ role: "user", content: "@{selfie.payload}" });
+    expect(template.messages.at(-1)).toEqual({
+      role: "user",
+      content: expect.stringMatching(/@\{runtime\.current_time\}[\s\S]*@\{selfie\.payload\}/)
+    });
     expect(DEFAULT_SELFIE_REFERENCE_SELECTION_CONTRACT).toContain(
       '<selfie_reference_selection_contract version="1">'
     );

@@ -8,7 +8,7 @@
 
 所有 toggle 开启时使用主题色轨道，handle 使用当前面板色并在 light、dark 与跟随系统主题下保持清晰可见；关闭态继续使用中性轨道与 handle，禁用态和键盘焦点样式保持可辨识。
 
-Agent 设置的“语气处理”分区独立编辑当前 Agent 的启用状态、Provider、模型、推理强度、Temperature、最大输出 Token 和失败重试次数，并提供 `conversation.tone-rewrite` 的提示词入口；开关和选择项直接热更新，数值输入确认后热更新。Provider 留空时显示“跟随默认 Provider”，Provider 列表只提供已启用项，模型继续支持目录选择与自定义 ID。旧 Agent 配置或旧管理 API 响应缺少 tone 时使用默认关闭配置，设置页保持可用。系统提示词列表包含“语气改写”；当前 Agent 开启系统提示词覆盖后，可编辑对应私有副本，切换 Agent 后配置与私有提示词保持隔离。
+Agent 设置的“语气处理”分区独立编辑当前 Agent 的启用状态、主模型跟随、Provider、模型、推理强度、Temperature、最大输出 Token 和失败重试次数，并提供 `conversation.tone-rewrite` 的提示词入口；开关和选择项直接热更新，数值输入确认后热更新。开启“主模型跟随”后，Provider、模型、推理强度、Temperature、最大输出 Token 和失败重试次数显示主模型的当前配置并禁用编辑；关闭后继续使用该 Agent 保留的语气处理配置。Provider 留空时显示“跟随默认 Provider”，Provider 列表只提供已启用项，模型继续支持目录选择与自定义 ID。旧 Agent 配置或旧管理 API 响应缺少 tone 时使用默认关闭配置，设置页保持可用。系统提示词列表包含“语气改写”；当前 Agent 开启系统提示词覆盖后，可编辑对应私有副本，切换 Agent 后配置与私有提示词保持隔离。
 
 Agent 区的“语音”页面固定读写当前所选 Agent。页面顶部独立显示全局 MOSS-TTS-Nano 服务状态，并提供“检测服务”“启动服务”“关闭服务”；关闭操作必须二次确认，操作期间互斥锁定，服务不可受控时禁用启动和关闭。页面不得显示服务 URL、Docker 命令、响应正文或宿主路径。服务操作分别调用 `POST /api/voice-service/check|start|stop`，固定由宿主控制器执行，浏览器不能提交容器名、镜像、网络、路径或命令。下方提供当前 Agent 的启用开关、默认语言，以及中文、English、日本語三个语言选项；每个语言独立显示参考音频是否就绪、文件名、参考台词、大小和更新时间，并通过上传弹层选择不超过 8 MiB 的音频和填写 1—1,000 字参考台词。启用前默认语言必须已有参考音频，已启用的默认语言参考音频不能直接删除。设置、上传和删除按控件串行锁定，上传与删除使用各自确认流程，弹层支持关闭按钮、遮罩、Escape、焦点恢复和移动端满宽。页面通过 `GET/PUT /api/voice-profile` 和 `PUT/DELETE /api/voice-profile/:language` 显式携带 `agentId`；切换 Agent 时必须关闭上传和删除弹层、取消旧读取并清空旧 Profile、服务状态、忙碌状态和反馈，旧 Agent 的迟到响应不能覆盖当前页面。
 

@@ -20,7 +20,7 @@ export interface PromptFileDefinition {
 const commonVariables = [
   variable("bot.name", "Bot 名字", "string", "Agent 配置"),
   variable("user.name", "私聊中的用户名字；非私聊为空", "string", "当前会话"),
-  variable("runtime.current_time", "当前系统时间（ISO 8601）", "string", "系统时钟"),
+  variable("runtime.current_time", "当前系统时间（含 UTC 偏移与系统 IANA 时区）", "string", "系统时钟与系统时区"),
   variable("utils.roll", "本次提示词调用生成的 1～100 随机整数", "number", "运行时工具变量")
 ] as const;
 

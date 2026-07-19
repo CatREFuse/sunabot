@@ -26,18 +26,20 @@ export class RuntimeTone {
     if (!this.host.config.bot.tone.enabled || !text.trim()) return text;
 
     const settings = this.host.config.bot.tone;
-    const baseProvider = this.host.getProvider(settings.providerId || undefined).configuration();
+    const baseProvider = this.host.getProvider(
+      settings.followMainModel ? undefined : settings.providerId || undefined
+    ).configuration();
     const reasoning = resolveModelReasoningEffort(
-      settings.model,
-      settings.reasoningEffort,
+      settings.followMainModel ? baseProvider.model : settings.model,
+      settings.followMainModel ? baseProvider.reasoningEffort : settings.reasoningEffort,
       baseProvider.reasoningEffort ?? "low"
     );
     const provider = new OpenAIProvider({
       ...baseProvider,
-      model: settings.model,
+      model: settings.followMainModel ? baseProvider.model : settings.model,
       reasoningEffort: reasoning.effort,
-      temperature: settings.temperature,
-      maxOutputTokens: settings.maxOutputTokens
+      temperature: settings.followMainModel ? baseProvider.temperature : settings.temperature,
+      maxOutputTokens: settings.followMainModel ? baseProvider.maxOutputTokens : settings.maxOutputTokens
     });
     const incoming = context.incoming;
     const request = await this.host.renderPromptRequest(TONE_PROMPT_ID, {
@@ -54,7 +56,9 @@ export class RuntimeTone {
       response_format: { type: "text" }
     }, {
       signal,
-      modelRequestMaxRetries: settings.maxRetries,
+      modelRequestMaxRetries: settings.followMainModel
+        ? this.host.config.normalReply.maxRetries
+        : settings.maxRetries,
       disabledTools: AGENT_TOOL_NAMES,
       logContext: {
         ...context.logContext,

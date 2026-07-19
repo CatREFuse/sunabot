@@ -30,10 +30,10 @@ export const cronTool = {
   name: CRON_TOOL_NAME,
   description: [
     "Create, read, list, update, or delete proactive scheduled tasks for the current Agent.",
-    "This single tool is available only to the administrator in a private chat or administrator Web Chat.",
+    "This single tool is available to every member in every group chat, and to the administrator in a private chat or administrator Web Chat.",
     "A task runs one Agent callback and fans the same final reply out to every target conversation.",
     "Use conversationId current for the current OneBot conversation, or an existing full conversation ID.",
-    "Use a standard five-field crontab expression and IANA time zone for recurring schedules, or an ISO 8601 runAt for a one-time schedule.",
+    "Resolve relative times from the provided current system time and system time zone. Use a standard five-field crontab expression and IANA time zone for recurring schedules, or an ISO 8601 runAt with an explicit UTC offset for a one-time schedule.",
     "For unused fields pass null. Read a task before update or delete and provide its current revision."
   ].join(" "),
   parameters: {
@@ -51,7 +51,7 @@ export const cronTool = {
             type: "object",
             additionalProperties: false,
             properties: {
-              kind: { const: "cron" },
+              kind: { type: "string", const: "cron" },
               expression: { type: "string", minLength: 1, maxLength: 120 },
               timezone: { type: "string", minLength: 1, maxLength: 80 }
             },
@@ -61,8 +61,13 @@ export const cronTool = {
             type: "object",
             additionalProperties: false,
             properties: {
-              kind: { const: "once" },
-              runAt: { type: "string", minLength: 1, maxLength: 80 }
+              kind: { type: "string", const: "once" },
+                    runAt: {
+                      type: "string",
+                      minLength: 1,
+                      maxLength: 80,
+                      description: "ISO 8601 future time with an explicit UTC offset, calculated from the provided current system time and system time zone."
+                    }
             },
             required: ["kind", "runAt"]
           },
@@ -84,7 +89,6 @@ export const cronTool = {
                 mentionUserIds: {
                   type: "array",
                   maxItems: 20,
-                  uniqueItems: true,
                   items: { type: "string", pattern: "^[1-9][0-9]{0,19}$" }
                 }
               },

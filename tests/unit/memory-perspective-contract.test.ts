@@ -55,6 +55,7 @@ describe("memory perspective prompt contract", () => {
       "persona.preference": "ARONA_PREFERENCE_SENTINEL",
       "persona.user": "ARONA_USER_SENTINEL",
       "persona.relation": "ARONA_RELATION_SENTINEL",
+      "runtime.current_time": "2026-07-19T23:00:00.000+08:00 [system_timezone=Asia/Shanghai]",
       [payloadVariable]: { messages: [] }
     }, {
       opaqueVariables: [payloadVariable]

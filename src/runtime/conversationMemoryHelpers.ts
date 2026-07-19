@@ -19,6 +19,7 @@ import type {
 } from "../../services/media/attachments/types.js";
 import { CommandRouter, type CommandMatch } from "../../services/messaging/commandRouter.js";
 import { isAdminSender, isReplySenderAllowed } from "../../services/messaging/replySenderPolicy.js";
+import { formatModelTimestamp, systemModelTimeZone } from "../../services/agent/modelTime.js";
 import { getDefaultProvider, getRootDir, getWorkspacePath, resolveProjectPath } from "../config.js";
 import {
   assistantReplyEnvelope,
@@ -181,7 +182,7 @@ export function collectGroupChatSummaryMessages(
       if (!text) return [];
       return [{
         sequence: message.sequence,
-        at: message.at,
+        at: formatModelTimestamp(message.at),
         role: message.role,
         userId: message.userId,
         senderName: message.role === "assistant"
@@ -278,13 +279,15 @@ export function buildUserPrompt(
   const currentTextBudget = Math.max(1_024, 6_144 - estimatePromptTokens(boundedAttachmentContext));
   const boundedText = truncateToEstimatedTokens(text, currentTextBudget);
   const scopeName = incoming.scope === "private" ? "私聊" : incoming.scope === "user_group" ? "用户群聊" : "bot群聊";
+  const timeZone = systemModelTimeZone();
+  const messageTimeLine = `消息时间：${formatModelTimestamp(incoming.time, timeZone)} [${timeZone}]\n`;
   const groupLine = incoming.groupId ? `群号：${incoming.groupId}\n` : "";
   const roleLine = isAdmin ? `角色：管理员；称呼：${admin.name}\n` : "";
   const imageCount = inboundImageUrls(incoming).length;
   const imageLine = imageCount ? `图片：${imageCount} 张，可作为生图参考图\n` : "";
   const quoteLine = incoming.quoteReferences.length ? `引用：${formatQuoteReferencesForContext(incoming.quoteReferences)}\n` : "";
   const attachmentLine = boundedAttachmentContext ? `文件内容：\n${boundedAttachmentContext}\n` : "";
-  return `消息场景：${scopeName}\n${groupLine}用户：${formatIncomingUserLabel(incoming, admin)}\n${roleLine}${imageLine}${quoteLine}${attachmentLine}内容：${boundedText}`;
+  return `消息场景：${scopeName}\n${messageTimeLine}${groupLine}用户：${formatIncomingUserLabel(incoming, admin)}\n${roleLine}${imageLine}${quoteLine}${attachmentLine}内容：${boundedText}`;
 }
 
 export function buildMemoryPromptVariables(input: {
@@ -314,7 +317,12 @@ export function truncateToEstimatedTokens(text: string, budget: number) {
   }
   return `${output.trimEnd()}\n[内容已截断]`;
 }
-export function toContextChatMessage(message: ConversationRecord["messages"][number], isAdmin: boolean, admin: AdminIdentity): ChatMessage {
+export function toContextChatMessage(
+  message: ConversationRecord["messages"][number],
+  isAdmin: boolean,
+  admin: AdminIdentity,
+  timeZone = systemModelTimeZone()
+): ChatMessage {
   const speaker = formatContextSpeaker(message, isAdmin, admin);
   const quoteText = message.quoteReferences?.length ? ` 引用：${formatQuoteReferencesForContext(message.quoteReferences)}` : "";
   const imageHandles = (message.imageUrls ?? []).map((_, index) => generateImgMediaHandle(message.id, index));
@@ -328,19 +336,23 @@ export function toContextChatMessage(message: ConversationRecord["messages"][num
   return {
     role: message.role === "assistant" ? "assistant" : "user",
     content: message.groupId == null
-      ? `${formatContextTime(message.at)} ${speaker}：${body}`
-      : `${formatGroupContextMessageHeader(message)}\n${body}`,
+      ? `${formatContextTime(message.at, timeZone)} [${timeZone}] ${speaker}：${body}`
+      : `${formatGroupContextMessageHeader(message, timeZone)}\n${body}`,
     imageUrls: message.imageUrls
   };
 }
-export function formatGroupContextMessageHeader(message: ConversationRecord["messages"][number]) {
+export function formatGroupContextMessageHeader(
+  message: ConversationRecord["messages"][number],
+  timeZone = systemModelTimeZone()
+) {
   const uid = message.role === "assistant"
     ? message.selfId ?? message.userId
     : message.userId;
   const displayName = String(message.senderName || "").trim() || (message.role === "assistant" ? "助手" : "用户");
   const replyToMessageId = message.replyMessageIds?.[0] ?? message.quoteReferences?.[0]?.messageId;
   const fields = [
-    `timestamp=${formatGroupContextMetadataValue(formatContextTime(message.at) || message.at)}`,
+    `timestamp=${formatGroupContextMetadataValue(formatContextTime(message.at, timeZone) || message.at)}`,
+    `timezone=${formatGroupContextMetadataValue(timeZone)}`,
     `sequence=${formatGroupContextMetadataValue(message.sequence ?? "unknown")}`,
     `message_id=${formatGroupContextMetadataValue(message.id)}`,
     `display_name=${formatGroupContextMetadataValue(displayName)}`,
@@ -377,10 +389,8 @@ export function formatContextSpeaker(message: ConversationRecord["messages"][num
   const userLabel = !name || name === fallback ? `用户 ${fallback}` : `用户 ${name}(${fallback})`;
   return userLabel;
 }
-export function formatContextTime(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  return date.toISOString().replace("T", " ").slice(0, 16);
+export function formatContextTime(value: string, timeZone = systemModelTimeZone()) {
+  return formatModelTimestamp(value, timeZone);
 }
 export function appendConversationMessage(
   record: ConversationRecord,

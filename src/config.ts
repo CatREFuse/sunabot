@@ -130,6 +130,7 @@ export function defaultConfig(): AppConfig {
       emojiSendSize: 512,
       tone: {
         enabled: false,
+        followMainModel: false,
         providerId: "",
         model: "gpt-5.4-mini",
         reasoningEffort: "low",
@@ -509,6 +510,7 @@ function mergeBotToneSettings(
   const model = normalizeModelName(incoming?.model, base.model);
   return {
     enabled: incoming?.enabled ?? base.enabled,
+    followMainModel: incoming?.followMainModel ?? base.followMainModel,
     providerId: typeof incoming?.providerId === "string" ? incoming.providerId.trim() : base.providerId,
     model,
     reasoningEffort: normalizeModelEffort(model, incoming?.reasoningEffort ?? base.reasoningEffort),

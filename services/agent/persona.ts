@@ -3,6 +3,7 @@ import path from "node:path";
 import { AppConfig } from "../../src/types.js";
 import { resolveProjectPath } from "../../src/config.js";
 import { memoryRepository, type MemoryDataSource } from "../memory/public.js";
+import { formatModelCurrentTime } from "./modelTime.js";
 
 interface PersonaFile {
   name: string;
@@ -21,6 +22,7 @@ export interface CommonPromptVariableContext {
   scope?: "private" | "user_group" | "bot_group";
   userName?: string;
   now?: Date;
+  timeZone?: string;
 }
 
 const personaFiles = [
@@ -60,7 +62,7 @@ export function buildCommonPromptVariables(
   return {
     "bot.name": String(config.persona.name ?? "").trim(),
     "user.name": context.scope === "private" ? String(context.userName ?? "").trim() : "",
-    "runtime.current_time": (context.now ?? new Date()).toISOString()
+    "runtime.current_time": formatModelCurrentTime(context.now ?? new Date(), context.timeZone)
   };
 }
 

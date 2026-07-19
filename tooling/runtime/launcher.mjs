@@ -12,7 +12,7 @@ import dotenv from "dotenv";
 import { installGlobalProxyDispatcher, resolveProxyConfiguration } from "../../packages/platform/proxy.mjs";
 import { validateMultiAgentWorkspacePath } from "../../packages/platform/multiAgentMigrationGate.mjs";
 import { resolveProjectRoot, resolveWorkspace } from "../shared/paths.mjs";
-import { recoverStaleDockerOneoffs } from "./docker-recovery.mjs";
+import { recoverStaleDockerOneoffs, resolveDockerUnavailableMessage } from "./docker-recovery.mjs";
 import {
   listNativeCoreProcessGroups,
   stopNativeCoreProcessGroups
@@ -1841,7 +1841,8 @@ async function waitForRuntimePortsClosed(context, state) {
 }
 
 async function assertDockerAvailable() {
-  if (!await dockerAvailable()) throw new Error("Docker Engine 不可用；请启动 Docker Desktop 或 Docker Engine。 ");
+  if (await dockerAvailable()) return;
+  throw new Error(await resolveDockerUnavailableMessage({ runCommand: command }));
 }
 
 async function dockerAvailable() {

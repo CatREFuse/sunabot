@@ -43,6 +43,7 @@ import {
   SCHEDULED_TASK_CALLBACK_PROMPT_ID,
   SCHEDULED_TASK_PAYLOAD_VARIABLE
 } from "../../services/agent/scheduledTaskPrompt.js";
+import { formatModelTimestamp, systemModelTimeZone } from "../../services/agent/modelTime.js";
 import { appendRequestLog, appendRequestLogStrict } from "../requestLog.js";
 import type { ConversationRecord, ParsedIncomingMessage } from "../types.js";
 import { conversationRecordId } from "./messagingAttachmentHelpers.js";
@@ -194,8 +195,9 @@ export class RuntimeScheduledTasks {
     isAdmin: boolean,
     promptOverride?: string
   ): CronToolPort | undefined {
-    const authorized = isAdmin && promptOverride === undefined && (
-      incoming.transport === "web" || incoming.scope === "private"
+    const groupChat = incoming.scope === "user_group" || incoming.scope === "bot_group";
+    const authorized = promptOverride === undefined && (
+      groupChat || (isAdmin && (incoming.transport === "web" || incoming.scope === "private"))
     );
     if (!authorized) return undefined;
     return {
@@ -435,17 +437,20 @@ export class RuntimeScheduledTasks {
     if (signal.aborted) throw signal.reason ?? new Error("Scheduled task generation aborted.");
     const payload = {
       schemaVersion: 1,
+      systemTimeZone: systemModelTimeZone(),
       task: {
         id: run.snapshot.taskId,
         revision: run.snapshot.taskRevision,
         name: run.snapshot.name,
         context: run.snapshot.context,
-        schedule: run.snapshot.schedule
+        schedule: run.snapshot.schedule.kind === "once"
+          ? { ...run.snapshot.schedule, runAt: formatModelTimestamp(run.snapshot.schedule.runAt) }
+          : run.snapshot.schedule
       },
       occurrence: {
         runId: run.id,
-        scheduledFor: run.scheduledFor,
-        triggeredAt: new Date().toISOString()
+        scheduledFor: formatModelTimestamp(run.scheduledFor),
+        triggeredAt: formatModelTimestamp(new Date())
       },
       targets: run.snapshot.targets
     };

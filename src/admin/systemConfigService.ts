@@ -141,6 +141,7 @@ export class SystemConfigService {
       },
       tone: {
         enabled: config.bot.tone.enabled,
+        followMainModel: config.bot.tone.followMainModel,
         providerId: config.bot.tone.providerId || null,
         model: config.bot.tone.model,
         reasoningEffort: config.bot.tone.reasoningEffort ?? null,

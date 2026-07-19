@@ -43,6 +43,48 @@ describe("cron provider integration", () => {
     expect(unavailableDefinitions.map((definition) => definition.name)).not.toContain("cron");
   });
 
+  it("declares explicit string types for strict Provider schedule discriminators", () => {
+    const executor = new RegistryProviderToolExecutor();
+    const definitions = executor.resolveDefinitions({ cron: { execute: vi.fn() } }, []);
+    const definition = definitions.find((item) => item.name === "cron");
+
+    expect(definition?.parameters.properties.schedule.anyOf[0].properties.kind).toEqual({
+      type: "string",
+      const: "cron"
+    });
+    expect(definition?.parameters.properties.schedule.anyOf[1].properties.kind).toEqual({
+      type: "string",
+      const: "once"
+    });
+    expect(
+      definition?.parameters.properties.targets.anyOf[0].items.properties.mentionUserIds
+    ).not.toHaveProperty("uniqueItems");
+  });
+
+  it("rejects duplicate mention IDs in the application parser", async () => {
+    const execute = vi.fn();
+    const options = { cron: { execute } } satisfies ProviderCompleteOptions;
+    const executor = new RegistryProviderToolExecutor();
+    const definitions = executor.resolveDefinitions(options, []);
+    const output = await executor.execute([call("cron-create", "cron", {
+      operation: "create",
+      taskId: null,
+      revision: null,
+      name: "提醒",
+      enabled: true,
+      schedule: { kind: "once", runAt: "2026-07-20T00:00:00.000Z" },
+      context: "提醒管理员",
+      targets: [{ conversationId: "bot_group:primary:100", mentionUserIds: ["123", "123"] }]
+    })], options, definitions);
+
+    expect(JSON.parse(String(output[0]?.output))).toMatchObject({
+      ok: false,
+      code: "CRON_INVALID",
+      field: "targets"
+    });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
   it("rejects cron batches and sibling text before the port can mutate state", async () => {
     const execute = vi.fn();
     const options = { cron: { execute } } satisfies ProviderCompleteOptions;

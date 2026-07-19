@@ -12,6 +12,7 @@ import {
   migrateMemoryPerspectiveTemplateWithLegacy,
   type MemoryPromptSchemaName
 } from "./memoryPromptMigration.js";
+import { DEFAULT_MODEL_TIME_CONTEXT } from "./modelTime.js";
 
 export type PromptWorkspaceScope = "persona" | "system";
 
@@ -78,8 +79,50 @@ const VOICE_TOOL_NAME = "send_voice_message";
 const CONVERSATION_EMOJI_MIGRATION_VERSION = "emoji-v2";
 const CONVERSATION_VOICE_MIGRATION_VERSION = "voice-v1";
 const TONE_EMOJI_MIGRATION_VERSION = "emoji-marker-v2";
+const PROMPT_TIME_CONTEXT_MIGRATION_VERSION = "time-context-v1";
 export const TONE_EMOJI_MARKER_RULE = "保留正文中形如 [/表情key] 的表情标记，必须逐字保留每个标记及其原始位置，不得新增、删除、改写或重排。";
 const SELFIE_REFERENCE_SELECTION_CONTRACT_MARKER = '<selfie_reference_selection_contract version="1">';
+
+export async function migratePromptTimeContext(
+  config: AppConfig,
+  scope: PromptWorkspaceScope,
+  fileName: string
+) {
+  const filePath = await resolveSafePromptFilePath(config, scope, fileName);
+  const markerPath = await resolveSafePromptFilePath(
+    config,
+    scope,
+    path.join(
+      path.dirname(fileName),
+      `.${path.basename(fileName)}.${PROMPT_TIME_CONTEXT_MIGRATION_VERSION}`
+    )
+  );
+  if (await readOptional(markerPath) === `${PROMPT_TIME_CONTEXT_MIGRATION_VERSION}\n`) return false;
+  const content = await readOptional(filePath);
+  if (!content.trim()) return false;
+  const template = parseFinalPromptTemplate(content);
+  const migrated = migratePromptTimeContextTemplate(template);
+  if (migrated !== template) {
+    await atomicWriteText(filePath, `${JSON.stringify(migrated, null, 2)}\n`);
+  }
+  await atomicWriteText(markerPath, `${PROMPT_TIME_CONTEXT_MIGRATION_VERSION}\n`);
+  return migrated !== template;
+}
+
+export function migratePromptTimeContextTemplate(template: FinalPromptTemplate): FinalPromptTemplate {
+  if (promptMessageVariables(template).has("runtime.current_time")) return template;
+  const messages = [...template.messages];
+  const finalUserIndex = findLastIndex(messages, (message) => (
+    isRecord(message) && message.role === "user" && typeof message.content === "string"
+  ));
+  if (finalUserIndex >= 0) {
+    const current = messages[finalUserIndex] as { role: string; content: string };
+    messages[finalUserIndex] = { ...current, content: `${DEFAULT_MODEL_TIME_CONTEXT}\n\n${current.content}` };
+  } else {
+    messages.push({ role: "developer", content: DEFAULT_MODEL_TIME_CONTEXT });
+  }
+  return { ...template, messages };
+}
 
 const LEGACY_MEMORY_PROMPT_PARAGRAPHS: Record<MemoryPromptSchemaName, readonly string[]> = {
   working_memory: [

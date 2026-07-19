@@ -297,6 +297,10 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     await page.goto("/agent-settings/tone");
     await expect(page.getByRole("heading", { name: "语气处理" })).toBeVisible();
     await capture(page, viewport.name, theme, "settings-tone");
+    await page.getByLabel("主模型跟随").check();
+    await expect(page.getByLabel("Provider")).toBeDisabled();
+    await expect(page.getByLabel("随机性（Temperature）")).toBeDisabled();
+    await capture(page, viewport.name, theme, "settings-tone-follow-main-model");
 
     await page.goto("/agent-settings/persona");
     await expect(page.getByRole("heading", { name: "Agent 身份" })).toBeVisible();

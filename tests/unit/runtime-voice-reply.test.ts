@@ -70,6 +70,23 @@ describe("runtime voice reply", () => {
     expect(voiceFinished).toHaveBeenCalledOnce();
   });
 
+  it("does not enqueue the same text again when assistant_text already delivered it", async () => {
+    const sendAssistantReply = vi.fn(async () => undefined);
+    const synthesizeAndQueueVoice = vi.fn(async () => ({ ok: true as const }));
+    const host = runtimeHost({ sendAssistantReply, synthesizeAndQueueVoice });
+
+    await expect(
+      sendRuntimeVoiceFinalReply(host, {
+        ...finalReplyInput(),
+        messageOrigin: "assistant_text",
+        textAlreadyDelivered: true,
+      }),
+    ).resolves.toBe(false);
+
+    expect(sendAssistantReply).not.toHaveBeenCalled();
+    expect(synthesizeAndQueueVoice).toHaveBeenCalledOnce();
+  });
+
   it("does not expose a voice task without durable delivery", () => {
     const synthesizeAndQueueVoice = vi.fn();
     const host = runtimeHost({ synthesizeAndQueueVoice });

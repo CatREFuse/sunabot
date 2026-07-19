@@ -56,6 +56,7 @@ export function createAdminTestConfig(rootDir: string): AppConfig {
       emojiSendSize: 512,
       tone: {
         enabled: false,
+        followMainModel: false,
         providerId: "",
         model: "gpt-5.4-mini",
         reasoningEffort: "low",

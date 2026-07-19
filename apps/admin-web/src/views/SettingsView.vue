@@ -205,6 +205,8 @@ async function logout() {
             v-model="workspace.drafts.tone"
             :models="catalog.models.value"
             :providers="workspace.drafts.providers.items"
+            :default-provider-id="workspace.drafts.providers.defaultProviderId"
+            :main-max-retries="workspace.drafts.normalReply.maxRetries"
           />
           <MemorySettingsForm v-else-if="current === 'memory'" v-model="workspace.drafts.memory" :models="catalog.models.value" />
           <OrchestratorSettingsForm

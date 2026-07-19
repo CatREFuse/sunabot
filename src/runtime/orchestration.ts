@@ -42,6 +42,7 @@ import {
   parseUserGroupOrchestratorDecision,
   userGroupOrchestratorResult
 } from "../../services/orchestration/userGroupOrchestratorResult.js";
+import { formatModelTimestamp, systemModelTimeZone } from "../../services/agent/modelTime.js";
 import { HookBus } from "../../services/messaging/hookBus.js";
 import {
   applyMemoryBatchTransaction,
@@ -432,6 +433,7 @@ export async function runtime_runUserGroupchatOrchestrator(this: RuntimeHost,
         this.config.bot.orchestrator.reasoningEffort
       );
       const payload = {
+        systemTimeZone: systemModelTimeZone(),
         agent: {
           name: resolveRuntimePersonaName(this.persona?.name, this.config.persona.name),
           wakeWords: uniqueStrings([
@@ -469,7 +471,7 @@ export async function runtime_runUserGroupchatOrchestrator(this: RuntimeHost,
           imageCount: inboundImageUrls(incoming).length,
           attachmentCount: incoming.attachments.length,
           attachmentNames: incoming.attachments.map((attachment) => attachment.name),
-          at: incoming.time
+          at: formatModelTimestamp(incoming.time)
         }
       };
       const promptRequest = await this.renderPromptRequest("orchestrator.user-group", {

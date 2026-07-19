@@ -1,4 +1,5 @@
 import type { FinalPromptTemplate } from "./promptSystem.js";
+import { DEFAULT_MODEL_TIME_CONTEXT } from "./modelTime.js";
 
 export const SCHEDULED_TASK_CALLBACK_PROMPT_ID = "scheduler.cron-callback";
 export const SCHEDULED_TASK_CALLBACK_PROMPT_FILE = "cron_callback.json";
@@ -24,7 +25,7 @@ export function scheduledTaskCallbackPromptTemplate(): FinalPromptTemplate {
       },
       {
         role: "user",
-        content: "<cron_payload>@{cron.payload}</cron_payload>"
+        content: `${DEFAULT_MODEL_TIME_CONTEXT}\n\n<cron_payload>@{cron.payload}</cron_payload>`
       }
     ],
     tools: [],

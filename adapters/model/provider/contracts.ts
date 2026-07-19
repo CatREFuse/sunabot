@@ -50,6 +50,11 @@ export type ProviderAssistantTextSource = "text" | "assistant_text";
 export interface TurnToolState {
   toolCallCount: number;
   assistantTextSent: boolean;
+  assistantTextDeliveryCount: number;
+  deliveredAssistantText?: {
+    text: string;
+    source: ProviderAssistantTextSource;
+  };
   acceptedToolNames: string[];
   terminal?: "deferred" | "no_reply" | "voice";
 }
@@ -58,6 +63,7 @@ export interface ProviderCompletedTurn {
   kind: "completed";
   text: string;
   messageOrigin?: ProviderAssistantTextSource;
+  textAlreadyDelivered?: boolean;
   voice?: ProviderVoiceCompanion;
 }
 

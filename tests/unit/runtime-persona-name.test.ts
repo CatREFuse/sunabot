@@ -7,6 +7,7 @@ import {
   collectGroupChatSummaryMessages,
   resolveRuntimePersonaName
 } from "../../src/runtime/conversationMemoryHelpers.js";
+import { formatModelTimestamp } from "../../services/agent/modelTime.js";
 import { SunaRuntime } from "../../src/runtime.js";
 import type { ConversationRecord, ParsedIncomingMessage } from "../../src/types.js";
 import { createAdminTestConfig } from "./admin-fixtures.js";
@@ -80,8 +81,8 @@ describe("runtime persona names", () => {
     } as ConversationRecord;
 
     expect(collectGroupChatSummaryMessages(record, groupIncoming())).toEqual([
-      expect.objectContaining({ senderName: "阿罗娜", text: "阿罗娜回复" }),
-      expect.objectContaining({ senderName: "助手", text: "旧回复" })
+      expect.objectContaining({ at: formatModelTimestamp(now), senderName: "阿罗娜", text: "阿罗娜回复" }),
+      expect.objectContaining({ at: formatModelTimestamp(now), senderName: "助手", text: "旧回复" })
     ]);
   });
 });

@@ -734,7 +734,11 @@ describe("runtime reply scheduling helpers", () => {
 
     const requestMessages = complete.mock.calls[0]?.[1] ?? [];
     const userMessage = [...requestMessages].reverse().find((message) => message.role === "user");
-    const payload = JSON.parse(userMessage?.content ?? "{}") as {
+    const content = userMessage?.content ?? "{}";
+    const marker = "</time_context>";
+    const payload = JSON.parse(content.includes(marker)
+      ? content.slice(content.indexOf(marker) + marker.length).trim()
+      : content) as {
       conversation?: { recentMessages?: string[]; replyCandidateMessageIds?: string[] };
       currentMessage?: { messageId?: string; text?: string };
     };

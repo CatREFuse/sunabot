@@ -1,11 +1,36 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
-import { recoverStaleDockerOneoffs } from "../../tooling/runtime/docker-recovery.mjs";
+import {
+  recoverStaleDockerOneoffs,
+  resolveDockerUnavailableMessage
+} from "../../tooling/runtime/docker-recovery.mjs";
 
 const identity = "bfa0ec2e0882d0fb";
 const staleId = "497fd988ddfd";
 
 describe("Docker runtime recovery", () => {
+  it("tells Colima users exactly how to start an unavailable Docker Engine", async () => {
+    const runCommand = vi.fn(async (executable: string, args: string[]) => {
+      expect(executable).toBe("docker");
+      expect(args).toEqual(["context", "show"]);
+      return "colima\n";
+    });
+
+    await expect(resolveDockerUnavailableMessage({ runCommand })).resolves.toBe(
+      "Colima Docker Engine 未运行；请执行 colima start，等待终端显示 READY 后，再重新执行刚才的 Sunabot 命令。"
+    );
+  });
+
+  it("keeps generic Docker guidance when the current context cannot be identified", async () => {
+    const runCommand = vi.fn(async () => {
+      throw new Error("docker command unavailable");
+    });
+
+    await expect(resolveDockerUnavailableMessage({ runCommand })).resolves.toBe(
+      "Docker Engine 不可用；请启动 Docker Desktop 或 Docker Engine。"
+    );
+  });
+
   it("does nothing when the current workspace has no stale Compose one-off", async () => {
     const runCommand = vi.fn(async (executable: string, args: string[]) => {
       expect(executable).toBe("docker");

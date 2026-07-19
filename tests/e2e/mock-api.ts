@@ -91,6 +91,7 @@ const initialConfig = {
     contextMessageLimit: 48,
     tone: {
       enabled: false,
+      followMainModel: false,
       providerId: "",
       model: "gpt-5.4-mini",
       reasoningEffort: "low",

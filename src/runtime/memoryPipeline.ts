@@ -40,6 +40,7 @@ import {
   type ReplyGateSnapshot
 } from "../../services/orchestration/groupReplyPolicy.js";
 import { HookBus } from "../../services/messaging/hookBus.js";
+import { formatModelTimestamp, formatOptionalModelTimestamp, systemModelTimeZone } from "../../services/agent/modelTime.js";
 import {
   applyMemoryBatchTransaction,
   ensureAgentTextFile,
@@ -276,7 +277,7 @@ export async function runtime_processMemoryClaim(this: RuntimeHost, claim: Memor
         sequence,
         role: message.role,
         text: message.text,
-        at: message.at,
+        at: formatModelTimestamp(message.at),
         userId: message.userId,
         senderName: message.senderName,
         imageCount: claim.messages[index]?.imageCount ?? 0,
@@ -458,6 +459,7 @@ export async function runtime_requestWorkingMemoryMerge(this: RuntimeHost,
         limit: 20
       });
       const payload = {
+        systemTimeZone: systemModelTimeZone(),
         conversation: context.conversation,
         admin: this.adminIdentity(),
         participants: context.participants,
@@ -467,12 +469,12 @@ export async function runtime_requestWorkingMemoryMerge(this: RuntimeHost,
           userId: entry.userId,
           userIds: entry.userIds,
           userName: entry.userName,
-          occurredAt: entry.occurredAt,
-          occurredEndAt: entry.occurredEndAt,
-          observedAt: entry.observedAt,
+          occurredAt: formatOptionalModelTimestamp(entry.occurredAt),
+          occurredEndAt: formatOptionalModelTimestamp(entry.occurredEndAt),
+          observedAt: formatOptionalModelTimestamp(entry.observedAt),
           time: entry.time || "",
-          createdAt: entry.createdAt,
-          updatedAt: entry.updatedAt,
+          createdAt: formatOptionalModelTimestamp(entry.createdAt),
+          updatedAt: formatOptionalModelTimestamp(entry.updatedAt),
           eventType: entry.eventType,
           subjectKey: entry.subjectKey,
           eventKey: entry.eventKey,
@@ -482,15 +484,18 @@ export async function runtime_requestWorkingMemoryMerge(this: RuntimeHost,
         relatedLongTermMemories: relatedLongTerm.ok ? relatedLongTerm.matches.map((entry) => ({
           id: entry.id,
           fact: entry.text,
-          occurredAt: entry.occurredAt,
-          occurredEndAt: entry.occurredEndAt,
+          occurredAt: formatOptionalModelTimestamp(entry.occurredAt),
+          occurredEndAt: formatOptionalModelTimestamp(entry.occurredEndAt),
           userIds: entry.userIds,
           eventType: entry.eventType,
           subjectKey: entry.subjectKey,
           eventKey: entry.eventKey,
           sourceWorkingMemoryIds: entry.sourceWorkingMemoryIds
         })) : [],
-        messages: context.messages
+        messages: context.messages.map((message) => ({
+          ...message,
+          at: formatModelTimestamp(message.at)
+        }))
       };
       const promptRequest = await this.renderPromptRequest("memory.compress-in", {
         "memory.payload": payload
@@ -526,6 +531,7 @@ export async function runtime_compressUserProfiles(this: RuntimeHost,
         this.config.bot.memory.reasoningEffort
       );
       const payload = {
+        systemTimeZone: systemModelTimeZone(),
         conversation: {
           id: record.id,
           scope: record.scope,
@@ -547,7 +553,7 @@ export async function runtime_compressUserProfiles(this: RuntimeHost,
           sequence,
           role: message.role,
           text: message.text,
-          at: message.at,
+          at: formatModelTimestamp(message.at),
           userId: message.userId,
           senderName: message.senderName,
           imageCount: message.imageUrls?.length ?? 0,

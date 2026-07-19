@@ -101,6 +101,14 @@ describe("ToolRegistry", () => {
     }
   });
 
+  it("describes cron as available in every group chat", () => {
+    expect(listToolMetadata().find((tool) => tool.name === "cron")).toMatchObject({
+      unavailabilityKind: "session",
+      accessLabel: "全部群聊、管理员私聊与 Web Chat 可用",
+      accessDescription: "群聊成员均可使用；私聊与 Web Chat 仅管理员可用。"
+    });
+  });
+
   it("keeps Skill capability separate from inventory and never exposes empty-enum Provider tools", () => {
     const capabilityOnly = {
       skillCapabilities: {

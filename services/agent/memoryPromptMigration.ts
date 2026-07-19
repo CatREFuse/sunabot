@@ -139,6 +139,7 @@ function memoryPerspectiveContract(
   originalLegacyParagraphs: Record<MemoryPromptSchemaName, readonly string[]>
 ) {
   const schemaName = memoryPromptSchemaName(canonical.response_format);
+  const payloadVariable = schemaName === "user_profiles" ? "profile.payload" : "memory.payload";
   const systemMessages = canonical.messages.filter((message) => (
     isRecord(message) && message.role === "system" && typeof message.content === "string"
   ));
@@ -187,7 +188,7 @@ function memoryPerspectiveContract(
     isRecord(message)
     && message.role === "user"
     && typeof message.content === "string"
-    && extractPromptVariables(message.content).length === 1
+    && extractPromptVariables(message.content).includes(payloadVariable)
   ));
   const payloadMessage = payloadMessages[0];
   if (payloadMessages.length !== 1 || !isRecord(payloadMessage) || typeof payloadMessage.content !== "string") {
@@ -239,11 +240,13 @@ function hasMemoryPromptWireContract(
   const canonicalTools = canonical.tools ?? [];
   if (!equalSchemaStructure(actualTools, canonicalTools)) return false;
   if (!hasCanonicalJsonSchemaContract(template.response_format, canonical.response_format)) return false;
-  return template.messages.some((message) => (
-    isRecord(message)
-    && message.role === "user"
-    && message.content === payloadContent
-  ));
+  const payloadVariables = extractPromptVariables(payloadContent)
+    .filter((variable) => variable !== "runtime.current_time");
+  return template.messages.some((message) => {
+    if (!isRecord(message) || message.role !== "user" || typeof message.content !== "string") return false;
+    const variables = extractPromptVariables(message.content);
+    return payloadVariables.every((variable) => variables.includes(variable));
+  });
 }
 
 function isLegacyOrPartialMemoryPrompt(

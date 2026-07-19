@@ -573,6 +573,27 @@ test("Agent 可独立配置语气处理并打开提示词", async ({ page }) => 
   expect(state.patchRequests.at(-1)?.section).toBe("tone");
   expect(state.config.bot.tone).toMatchObject({
     enabled: true,
+    followMainModel: false,
+    providerId: "codex",
+    model: "gpt-5.5",
+    reasoningEffort: "high",
+    temperature: 1.1,
+    maxOutputTokens: 3200,
+    maxRetries: 4
+  });
+
+  await page.getByLabel("主模型跟随").check();
+  await expect(page.getByLabel("Provider")).toBeDisabled();
+  await expect(page.getByRole("combobox", { name: "模型", exact: true })).toBeDisabled();
+  await expect(page.getByLabel("推理强度")).toBeDisabled();
+  await expect(page.getByLabel("随机性（Temperature）")).toHaveValue("0.7");
+  await expect(page.getByLabel("最大输出 Token")).toHaveValue("2400");
+  await expect(page.getByLabel("失败重试次数")).toHaveValue("3");
+  await expect(page.getByLabel("随机性（Temperature）")).toBeDisabled();
+  await expect(page.getByLabel("最大输出 Token")).toBeDisabled();
+  await expect(page.getByLabel("失败重试次数")).toBeDisabled();
+  await expect.poll(() => state.config.bot.tone.followMainModel).toBe(true);
+  expect(state.config.bot.tone).toMatchObject({
     providerId: "codex",
     model: "gpt-5.5",
     reasoningEffort: "high",

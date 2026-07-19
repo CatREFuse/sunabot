@@ -369,6 +369,81 @@ describe("OpenAIProvider asynchronous Codex tool turns", () => {
     expect(onToolCall).toHaveBeenCalledWith("send_voice_message");
   });
 
+  it("accepts matching voice in the next round after assistant_text was delivered", async () => {
+    const provider = codexProvider();
+    const onAssistantText = vi.fn(async () => undefined);
+    const onToolCall = vi.fn();
+    const text = "老师、こんばんは！こんな時間まで起きてちゃだめです！";
+    const fetchMock = mockCodexToken(
+      provider,
+      codexSseResponse([
+        functionCall("assistant_text", "call_voice_text", { text }),
+      ]),
+      codexSseResponse([
+        functionCall("send_voice_message", "call_voice", {
+          text,
+          language: "ja",
+        }),
+      ]),
+    );
+
+    const result = await provider.completeTurn(
+      "system",
+      [{ role: "user", content: "小春发个语音" }],
+      {
+        voice: { enabled: true, languages: ["ja"], defaultLanguage: "ja" },
+        onAssistantText,
+        onToolCall,
+      },
+    );
+
+    expect(result).toEqual({
+      kind: "completed",
+      text,
+      messageOrigin: "assistant_text",
+      textAlreadyDelivered: true,
+      voice: {
+        text,
+        language: "ja",
+        callId: "call_voice",
+        toolName: "send_voice_message",
+      },
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(onAssistantText).toHaveBeenCalledOnce();
+    expect(onAssistantText).toHaveBeenCalledWith(text, "assistant_text");
+    expect(onToolCall.mock.calls.map(([name]) => name)).toEqual([
+      "assistant_text",
+      "send_voice_message",
+    ]);
+  });
+
+  it("rejects next-round voice when it differs from delivered assistant_text", async () => {
+    const provider = codexProvider();
+    const onAssistantText = vi.fn(async () => undefined);
+    mockCodexToken(
+      provider,
+      codexSseResponse([
+        functionCall("assistant_text", "call_voice_text", { text: "早安。" }),
+      ]),
+      codexSseResponse([
+        functionCall("send_voice_message", "call_voice", {
+          text: "晚安。",
+          language: "ja",
+        }),
+      ]),
+    );
+
+    await expect(
+      provider.completeTurn("system", [{ role: "user", content: "发个语音" }], {
+        voice: { enabled: true, languages: ["ja"], defaultLanguage: "ja" },
+        onAssistantText,
+      }),
+    ).rejects.toThrow(
+      "send_voice_message text must exactly match the accompanying human-readable assistant text",
+    );
+  });
+
   it("returns dispatch_message and voice together without starting deferred work inline", async () => {
     const provider = codexProvider();
     const fetchMock = mockCodexToken(provider, codexSseResponse([

@@ -41,6 +41,7 @@ import {
   type ReplyGateSnapshot
 } from "../../services/orchestration/groupReplyPolicy.js";
 import { serializeUserGroupOrchestratorResult } from "../../services/orchestration/userGroupOrchestratorResult.js";
+import { formatModelTimestamp, systemModelTimeZone } from "../../services/agent/modelTime.js";
 import { HookBus } from "../../services/messaging/hookBus.js";
 import {
   applyMemoryBatchTransaction,
@@ -564,7 +565,7 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
         messageOrigin: turn.messageOrigin ?? options.messageOrigin ?? "text",
         toolNames: turnToolNames
       };
-      sent = await (turn.voice ? sendRuntimeVoiceFinalReply(this, { ...finalReply, voice: turn.voice })
+      sent = await (turn.voice ? sendRuntimeVoiceFinalReply(this, { ...finalReply, voice: turn.voice, textAlreadyDelivered: turn.textAlreadyDelivered })
         : systemConfigReply.sendSystemConfigAwareFinalReply(this, finalReply)) || sent;
       return sent;
     } catch (error) {
@@ -660,19 +661,19 @@ export async function runtime_replyWithGroupChatSummary(this: RuntimeHost,
         if (replyRecord) this.scheduleMemoryCompression(replyRecord);
         return;
       }
-
       const provider = this.getProvider();
       const now = new Date();
       const payload = {
         command: GROUP_CHAT_SUMMARY_COMMAND,
+        systemTimeZone: systemModelTimeZone(),
         conversation: {
           id: record?.id ?? conversationRecordId(incoming),
           scope: incoming.scope,
           title: record?.title ?? String(incoming.groupId),
           groupId: incoming.groupId,
           windowHours: 6,
-          windowStart: new Date(now.getTime() - GROUP_CHAT_SUMMARY_WINDOW_MS).toISOString(),
-          windowEnd: now.toISOString(),
+          windowStart: formatModelTimestamp(new Date(now.getTime() - GROUP_CHAT_SUMMARY_WINDOW_MS)),
+          windowEnd: formatModelTimestamp(now),
           messageCount: summaryMessages.length
         },
         messages: summaryMessages

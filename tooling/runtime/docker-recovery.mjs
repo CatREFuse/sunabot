@@ -4,6 +4,23 @@ import { createInterface } from "node:readline/promises";
 const DOCKER_READY_TIMEOUT_MS = 60_000;
 const DOCKER_READY_POLL_MS = 500;
 const MISSING_DOCKER_OBJECT = /no such (?:container|object)\b/i;
+const GENERIC_DOCKER_UNAVAILABLE_MESSAGE = "Docker Engine 不可用；请启动 Docker Desktop 或 Docker Engine。";
+
+export async function resolveDockerUnavailableMessage(options) {
+  try {
+    const dockerContext = (await options.runCommand(
+      "docker",
+      ["context", "show"],
+      { capture: true }
+    )).trim();
+    if (dockerContext === "colima") {
+      return "Colima Docker Engine 未运行；请执行 colima start，等待终端显示 READY 后，再重新执行刚才的 Sunabot 命令。";
+    }
+  } catch {
+    // Keep the generic guidance when the Docker CLI or its context is unavailable.
+  }
+  return GENERIC_DOCKER_UNAVAILABLE_MESSAGE;
+}
 
 export async function recoverStaleDockerOneoffs(options) {
   const staleContainerIds = await findStaleDockerOneoffs(options);

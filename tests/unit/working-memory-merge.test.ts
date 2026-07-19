@@ -31,9 +31,9 @@ describe("working memory semantic merge", () => {
       { fact: "海边用户（QQ 10001）在 7 月 5 日完成迁移。", userIds: ["10001"], userName: "海边用户", occurredAt: "2026-07-05T00:00:00.000Z" }
     ]);
     const complete = vi.fn(async (systemPrompt: string, messages: Array<{ content: string }>) => {
-      const payload = JSON.parse(messages[0]!.content) as {
+      const payload = parsePromptPayload(messages[0]!.content) as {
         previousWorkingMemories: Array<{ id: string; fact: string }>;
-        messages: Array<{ text: string }>;
+        messages: Array<{ text: string; at: string }>;
       };
       expect(systemPrompt).toContain("输出合并后的完整工作记忆集合");
       expect(systemPrompt).toContain("合并语义相同、相近、重复或存在因果关系的事实");
@@ -42,7 +42,10 @@ describe("working memory semantic merge", () => {
         expect.objectContaining({ id: progress!.id, fact: "海边用户（QQ 10001）在 7 月 3 日开始迁移。" }),
         expect.objectContaining({ id: completed!.id, fact: "海边用户（QQ 10001）在 7 月 5 日完成迁移。" })
       ]);
-      expect(payload.messages).toEqual([expect.objectContaining({ text: "迁移已经完成" })]);
+      expect(payload.messages).toEqual([expect.objectContaining({
+        text: "迁移已经完成",
+        at: expect.stringMatching(/^2026-07-10T\d{2}:00:00\.000[+-]\d{2}:\d{2}$/)
+      })]);
       return JSON.stringify({
         facts: [{
           id: first!.id,
@@ -138,7 +141,7 @@ describe("working memory semantic merge", () => {
     const [original] = await appendMemoryFacts(config, "working", [{ fact: "原事实" }]);
     const payloads: Array<{ previousWorkingMemories: Array<{ id: string; fact: string }> }> = [];
     const complete = vi.fn(async (_systemPrompt: string, messages: Array<{ content: string }>) => {
-      const payload = JSON.parse(messages[0]!.content) as {
+      const payload = parsePromptPayload(messages[0]!.content) as {
         previousWorkingMemories: Array<{ id: string; fact: string }>;
       };
       payloads.push(payload);
@@ -216,4 +219,12 @@ async function mergeConversation(runtime: SunaRuntime, text: string) {
     addressName: "海边用户",
     isAdmin: false
   }]);
+}
+
+function parsePromptPayload(content: string) {
+  const marker = "</time_context>";
+  const payload = content.includes(marker)
+    ? content.slice(content.indexOf(marker) + marker.length).trim()
+    : content;
+  return JSON.parse(payload);
 }

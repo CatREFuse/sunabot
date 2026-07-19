@@ -109,6 +109,7 @@ import {
   migrateGroupReplyOrchestratorResultVariable,
   migrateGroupReplyThreadContextVariable,
   migrateMemoryPerspectivePrompt,
+  migratePromptTimeContext,
   migrateSelfieReferenceSelectionPrompt,
   migrateToneEmojiMarkerRule,
   migrateUserGroupOrchestratorResultSchema,
@@ -358,6 +359,19 @@ export async function runtime_ensureAgentPromptFiles(this: RuntimeHost, config =
         SELFIE_PROMPT_FILE,
         selfiePromptDefault
       )
+    ]);
+    await Promise.all([
+      migratePromptTimeContext(config, "system", PRIVATE_CONVERSATION_REPLY_PROMPT_FILE),
+      migratePromptTimeContext(config, "system", GROUP_CONVERSATION_REPLY_PROMPT_FILE),
+      migratePromptTimeContext(config, "system", TONE_PROMPT_FILE),
+      migratePromptTimeContext(config, "system", config.bot.memory.workMemoryCompressInPrompt),
+      migratePromptTimeContext(config, "system", config.bot.memory.workMemoryCompressOutPrompt),
+      migratePromptTimeContext(config, "system", config.bot.memory.userProfilePrompt),
+      migratePromptTimeContext(config, "system", config.bot.orchestrator.promptFile),
+      migratePromptTimeContext(config, "system", GROUP_THREAD_CONTEXT_PROMPT_FILE),
+      migratePromptTimeContext(config, "system", GROUP_CHAT_SUMMARY_PROMPT_FILE),
+      migratePromptTimeContext(config, "system", SCHEDULED_TASK_CALLBACK_PROMPT_FILE),
+      migratePromptTimeContext(config, "persona", SELFIE_PROMPT_FILE)
     ]);
     await migrateGroupReplyThreadContextVariable(config, GROUP_CONVERSATION_REPLY_PROMPT_FILE);
     await migrateGroupReplyOrchestratorResultVariable(config, GROUP_CONVERSATION_REPLY_PROMPT_FILE);
