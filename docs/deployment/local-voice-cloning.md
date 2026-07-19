@@ -12,6 +12,8 @@ MOSS-TTS-Nano 是 Core 与 NapCat 之外的独立本地服务。Native Core 默�
 
 Docker Core 不能使用容器内 `127.0.0.1` 访问宿主 MOSS。默认 Compose 配置通过 `http://sunabot-moss-tts-nano:18083` 访问同一私有网络内的语音容器；显式覆盖地址时仍须保证端点不暴露到局域网或公网。管理 API 不挂载 Docker socket，检查、启动和关闭请求通过 workspace 内的请求/结果桥交给宿主 account runtime daemon；宿主只操作带 `io.sunabot.component=voice` 和当前 workspace identity 标签的固定容器，同名异主容器必须拒绝。
 
+`./sunabot.sh up|start|restart` 的清空后启动流程会在删除当前 workspace runtime network 前断开 owned MOSS endpoint，创建新网络后再以 `sunabot-moss-tts-nano` 别名接入。该流程不停止或重建 MOSS 容器，不重复下载权重，也不丢失已加载模型；`down` 完成后独立 MOSS 容器可以继续通过宿主回环端口运行，并在下一次完整启动时恢复私网连接。标签不匹配、断开失败或重新接入失败时根入口必须报错，不能强制删除其他实例的容器或网络。
+
 ## 3. 安装与启动
 
 推荐在 N100、Linux、WSL2 和无法稳定启动 Conda Python 的 macOS 上使用固定镜像路径：

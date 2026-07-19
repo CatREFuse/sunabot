@@ -9,7 +9,9 @@ import {
 } from "../../apps/api/voiceServiceControlClient.js";
 import {
   VoiceServiceHostError,
+  attachVoiceServiceRuntimeNetwork,
   controlVoiceService,
+  detachVoiceServiceRuntimeNetwork,
 } from "../../tooling/runtime/voice-service-control.mjs";
 import { workspaceIdentity } from "../../tooling/runtime/launcher-core.mjs";
 
@@ -187,6 +189,82 @@ describe("voice service control", () => {
     ).toBe(false);
   });
 
+  it("detaches and restores the owned container around runtime network replacement", async () => {
+    const workspace = await temporaryWorkspace("sunabot-voice-network-lifecycle-");
+    const identity = workspaceIdentity(workspace);
+    const network = `sunabot-${identity.slice(0, 12)}-runtime`;
+    let container = ownedContainer(identity, true, network);
+    const run = vi.fn(async (command: string, args: string[]) => {
+      if (command === "docker" && args[0] === "info") {
+        return { stdout: "27.0.0\n", stderr: "" };
+      }
+      if (
+        command === "docker" &&
+        args[0] === "container" &&
+        args[1] === "inspect"
+      ) {
+        return { stdout: JSON.stringify(container), stderr: "" };
+      }
+      if (
+        command === "docker" &&
+        args[0] === "network" &&
+        args[1] === "disconnect"
+      ) {
+        delete container.NetworkSettings.Networks[network];
+        return { stdout: "", stderr: "" };
+      }
+      if (
+        command === "docker" &&
+        args[0] === "network" &&
+        args[1] === "inspect"
+      ) {
+        return { stdout: "{}", stderr: "" };
+      }
+      if (
+        command === "docker" &&
+        args[0] === "network" &&
+        args[1] === "connect"
+      ) {
+        container.NetworkSettings.Networks[network] = {
+          Aliases: ["sunabot-moss-tts-nano"],
+        };
+        return { stdout: "", stderr: "" };
+      }
+      throw new Error(`unexpected command: ${command} ${args.join(" ")}`);
+    });
+    const options = {
+      workspace,
+      environment: { SUNABOT_DOCKER_NETWORK: network },
+      execFile: run,
+    };
+
+    await expect(detachVoiceServiceRuntimeNetwork(options)).resolves.toBe(true);
+    expect(container.State.Running).toBe(true);
+    expect(container.NetworkSettings.Networks).not.toHaveProperty(network);
+    await expect(attachVoiceServiceRuntimeNetwork(options)).resolves.toBe(true);
+    expect(container.NetworkSettings.Networks[network]).toEqual({
+      Aliases: ["sunabot-moss-tts-nano"],
+    });
+    await expect(attachVoiceServiceRuntimeNetwork(options)).resolves.toBe(false);
+    expect(run).toHaveBeenCalledWith(
+      "docker",
+      ["network", "disconnect", network, "sunabot-moss-tts-nano"],
+      expect.any(Object),
+    );
+    expect(run).toHaveBeenCalledWith(
+      "docker",
+      [
+        "network",
+        "connect",
+        "--alias",
+        "sunabot-moss-tts-nano",
+        network,
+        "sunabot-moss-tts-nano",
+      ],
+      expect.any(Object),
+    );
+  });
+
   it("fails closed when the host runtime bridge is unavailable", async () => {
     const workspace = await temporaryWorkspace("sunabot-voice-control-missing-");
 
@@ -199,7 +277,7 @@ describe("voice service control", () => {
   });
 });
 
-function ownedContainer(identity: string, running: boolean) {
+function ownedContainer(identity: string, running: boolean, network?: string) {
   return {
     Config: {
       Labels: {
@@ -208,6 +286,11 @@ function ownedContainer(identity: string, running: boolean) {
       },
     },
     State: { Running: running },
+    NetworkSettings: {
+      Networks: network
+        ? { [network]: { Aliases: ["sunabot-moss-tts-nano"] } }
+        : {},
+    },
   };
 }
 

@@ -53,6 +53,32 @@ describe("unified runtime launcher", () => {
     ]);
   });
 
+  it("releases and restores the owned Voice endpoint around runtime network replacement", async () => {
+    const source = await fs.readFile(
+      path.join(root, "tooling/runtime/launcher.mjs"),
+      "utf8",
+    );
+    const restart = source.slice(
+      source.indexOf("async function restartRuntime"),
+      source.indexOf("async function upNative"),
+    );
+    const down = source.slice(
+      source.indexOf("async function down"),
+      source.indexOf("async function assertRuntimeEmpty"),
+    );
+
+    expect(down.indexOf("await detachVoiceServiceRuntimeNetwork")).toBeGreaterThan(-1);
+    expect(down.indexOf("await detachVoiceServiceRuntimeNetwork")).toBeLessThan(
+      down.indexOf("await removeRuntimeNetwork"),
+    );
+    expect(restart.indexOf("await ensureRuntimeNetwork")).toBeLessThan(
+      restart.indexOf("await attachVoiceServiceRuntimeNetwork"),
+    );
+    expect(restart.indexOf("await attachVoiceServiceRuntimeNetwork")).toBeLessThan(
+      restart.indexOf('if (context.mode === "native")'),
+    );
+  });
+
   it("accepts a stable startup while leaving optional capabilities degraded", () => {
     const report = runtimeReport([
       pass("workspace"),

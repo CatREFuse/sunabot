@@ -43,6 +43,10 @@ import {
   reverseWebSocketWithHost,
   workspaceIdentity
 } from "./launcher-core.mjs";
+import {
+  attachVoiceServiceRuntimeNetwork,
+  detachVoiceServiceRuntimeNetwork
+} from "./voice-service-control.mjs";
 
 const root = resolveProjectRoot(import.meta.url);
 const STARTUP_REQUIRED_CHECK_IDS = new Set([
@@ -159,6 +163,10 @@ async function restartRuntime(context) {
   const baseline = await assertRuntimeEmpty(context);
   await waitForRuntimePortsClosed(context, { dev: context.dev });
   await ensureRuntimeNetwork(context);
+  await attachVoiceServiceRuntimeNetwork({
+    workspace: context.workspace,
+    environment: composeEnvironment(context)
+  });
   if (context.mode === "native") await upNative(context, baseline, secrets.values);
   else await upDocker(context, baseline, secrets.values);
   try {
@@ -316,6 +324,10 @@ async function down(context) {
     });
   }
   await removeWorkspaceContainers(context);
+  await detachVoiceServiceRuntimeNetwork({
+    workspace: context.workspace,
+    environment: composeEnvironment(context)
+  });
   await removeRuntimeNetwork(context);
   if (runtime.state || runtime.nativeProcessGroups.length > 0) {
     await waitForRuntimePortsClosed(context, runtime.state);

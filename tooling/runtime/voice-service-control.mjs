@@ -32,28 +32,12 @@ export async function controlVoiceService(action, options = {}) {
       409,
     );
   }
-  const environment = options.environment ?? process.env;
-  const workspace = path.resolve(
-    options.workspace ?? resolveWorkspace(root, { requireExplicit: true }),
-  );
-  const identity = workspaceIdentity(workspace);
-  const container = textSetting(
-    environment.SUNABOT_MOSS_TTS_NANO_CONTAINER,
-    "sunabot-moss-tts-nano",
-    /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/u,
-    "VOICE_SERVICE_CONTAINER_INVALID",
-  );
+  const host = voiceServiceHostContext(options);
+  const { environment, workspace, identity, container, network, run } = host;
   const image = String(
     environment.SUNABOT_MOSS_TTS_NANO_IMAGE ??
       "sunabot-moss-tts-nano:9b1d3eadd5a7",
   ).trim();
-  const network = textSetting(
-    environment.SUNABOT_DOCKER_NETWORK,
-    `sunabot-${identity.slice(0, 12)}-runtime`,
-    /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/u,
-    "VOICE_SERVICE_NETWORK_INVALID",
-  );
-  const run = options.execFile ?? execFileAsync;
 
   await requireDocker(run);
   const current = await inspectVoiceContainer(run, container);
@@ -116,6 +100,100 @@ export async function controlVoiceService(action, options = {}) {
     );
   }
   return runtimeStatus(started, "语音服务已启动，模型载入后即可使用。");
+}
+
+export async function detachVoiceServiceRuntimeNetwork(options = {}) {
+  const { identity, container, network, run } = voiceServiceHostContext(options);
+  await requireDocker(run);
+  const current = await inspectVoiceContainer(run, container);
+  assertContainerOwnership(current, identity);
+  if (!current || !containerUsesNetwork(current, network)) return false;
+  try {
+    await runDocker(run, ["network", "disconnect", network, container]);
+  } catch (error) {
+    throw new VoiceServiceHostError(
+      "VOICE_SERVICE_NETWORK_DETACH_FAILED",
+      "语音服务未能释放 Sunabot 运行网络。",
+      503,
+      commandError(error),
+    );
+  }
+  const detached = await inspectVoiceContainer(run, container);
+  assertContainerOwnership(detached, identity);
+  if (containerUsesNetwork(detached, network)) {
+    throw new VoiceServiceHostError(
+      "VOICE_SERVICE_NETWORK_DETACH_FAILED",
+      "语音服务未能释放 Sunabot 运行网络。",
+    );
+  }
+  return true;
+}
+
+export async function attachVoiceServiceRuntimeNetwork(options = {}) {
+  const { identity, container, network, run } = voiceServiceHostContext(options);
+  await requireDocker(run);
+  const current = await inspectVoiceContainer(run, container);
+  assertContainerOwnership(current, identity);
+  if (!current || current.State?.Running !== true) return false;
+  if (containerUsesNetwork(current, network)) return false;
+  await requireDockerObject(
+    run,
+    ["network", "inspect", network],
+    "VOICE_SERVICE_NETWORK_UNAVAILABLE",
+    "语音服务运行网络不可用，请重启 Sunabot。",
+  );
+  try {
+    await runDocker(run, [
+      "network",
+      "connect",
+      "--alias",
+      "sunabot-moss-tts-nano",
+      network,
+      container,
+    ]);
+  } catch (error) {
+    throw new VoiceServiceHostError(
+      "VOICE_SERVICE_NETWORK_ATTACH_FAILED",
+      "语音服务未能接入 Sunabot 运行网络。",
+      503,
+      commandError(error),
+    );
+  }
+  const attached = await inspectVoiceContainer(run, container);
+  assertContainerOwnership(attached, identity);
+  if (!containerUsesNetwork(attached, network)) {
+    throw new VoiceServiceHostError(
+      "VOICE_SERVICE_NETWORK_ATTACH_FAILED",
+      "语音服务未能接入 Sunabot 运行网络。",
+    );
+  }
+  return true;
+}
+
+function voiceServiceHostContext(options) {
+  const environment = options.environment ?? process.env;
+  const workspace = path.resolve(
+    options.workspace ?? resolveWorkspace(root, { requireExplicit: true }),
+  );
+  const identity = workspaceIdentity(workspace);
+  return {
+    environment,
+    workspace,
+    identity,
+    container: textSetting(
+      environment.SUNABOT_MOSS_TTS_NANO_CONTAINER,
+      "sunabot-moss-tts-nano",
+      /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/u,
+      "VOICE_SERVICE_CONTAINER_INVALID",
+    ),
+    network: textSetting(
+      environment.SUNABOT_DOCKER_NETWORK,
+      `sunabot-${identity.slice(0, 12)}-runtime`,
+      /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/u,
+      "VOICE_SERVICE_NETWORK_INVALID",
+    ),
+    run: options.execFile ?? execFileAsync,
+  };
 }
 
 async function requireDocker(run) {
@@ -202,6 +280,10 @@ function runtimeStatus(container, message) {
     ...(message ? { message } : {}),
     updatedAt: new Date().toISOString(),
   };
+}
+
+function containerUsesNetwork(container, network) {
+  return Boolean(container?.NetworkSettings?.Networks?.[network]);
 }
 
 function textSetting(value, fallback, pattern, code) {
