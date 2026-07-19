@@ -754,6 +754,26 @@ test("语音设置按 Agent 保存语言和参考音频", async ({ page }) => {
   await page.goto("/voice");
 
   await expect(page.getByRole("heading", { name: "语音", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "语音服务", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "检测服务", exact: true }).click();
+  await expect.poll(() => state.voiceServiceRequests).toEqual(["check"]);
+  await expect(page.getByText("语音服务可用", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "关闭服务", exact: true }).click();
+  const stopDialog = page.getByRole("dialog", { name: "关闭语音服务？" });
+  await expect(stopDialog).toBeVisible();
+  await stopDialog.getByRole("button", { name: "关闭服务", exact: true }).click();
+  await expect.poll(() => state.voiceServiceRequests).toEqual(["check", "stop"]);
+  await expect(page.getByText("语音服务已关闭", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "启动服务", exact: true }).click();
+  await expect.poll(() => state.voiceServiceRequests).toEqual([
+    "check",
+    "stop",
+    "start"
+  ]);
+  await expect(page.getByText("语音服务已启动", { exact: true })).toBeVisible();
+
   await expect(page.getByText("kivo-plana-ja.wav", { exact: true })).toBeVisible();
   await page.getByLabel("启用语音").uncheck();
   await page.getByRole("button", { name: "保存设置", exact: true }).click();
@@ -770,7 +790,7 @@ test("语音设置按 Agent 保存语言和参考音频", async ({ page }) => {
   await dialog.getByRole("textbox").fill("Good morning, Sensei.");
   await dialog.getByRole("button", { name: "保存并上传", exact: true }).click();
 
-  await expect(page.getByText("plana-en.wav", { exact: true })).toBeVisible();
+  await expect(page.getByTitle("plana-en.wav")).toBeVisible();
   expect(state.voiceProfiles.plana?.languages.en?.referenceText).toBe("Good morning, Sensei.");
 });
 

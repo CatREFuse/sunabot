@@ -290,6 +290,9 @@ export async function runtime_handleInboundMessage(this: RuntimeHost, incoming: 
           expectedSequence: proposedCaptureSequence,
           persist: false
         });
+        if (incoming.scope === "user_group" && this.config.bot.orchestrator.enabled) {
+          record.orchestratorEnabled = true;
+        }
         this.consumeOrchestratorBatch(record, proposedCaptureSequence);
         if (activeDebounceConversation) this.persistConversationRecordStrict(record);
         else this.persistConversationRecords();

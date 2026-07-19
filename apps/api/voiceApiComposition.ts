@@ -10,11 +10,16 @@ import {
   type VoiceSynthesisClient,
 } from "../../services/voice/public.js";
 import { registerVoiceProfileRoutes } from "./plugins/voiceProfileRoutes.js";
+import {
+  VoiceServiceControlClient,
+  type VoiceServiceControlPort,
+} from "./voiceServiceControlClient.js";
 
 export interface VoiceApiCompositionOptions {
   defaultAgentId(): string;
   getRuntime(agentId: string): Pick<SunaRuntime, "config">;
   client?: VoiceSynthesisClient;
+  serviceController?: false | VoiceServiceControlPort;
 }
 
 export type AgentVoiceCapability = {
@@ -64,6 +69,10 @@ export function buildVoiceApiComposition(options: VoiceApiCompositionOptions) {
     repositories.set(agentId, created);
     return created;
   };
+  const serviceController =
+    options.serviceController === false
+      ? undefined
+      : (options.serviceController ?? new VoiceServiceControlClient());
   const resolveCapability = async (
     agentId: string,
   ): Promise<AgentVoiceCapability> => {
@@ -83,6 +92,7 @@ export function buildVoiceApiComposition(options: VoiceApiCompositionOptions) {
   };
   return {
     client,
+    serviceController,
     repository,
     resolveCapability,
     defaultAgentId: options.defaultAgentId,
@@ -96,6 +106,7 @@ export function registerVoiceApi(
   registerVoiceProfileRoutes(app, {
     repository: composition.repository,
     client: composition.client,
+    serviceController: composition.serviceController,
     defaultAgentId: composition.defaultAgentId,
   });
 }

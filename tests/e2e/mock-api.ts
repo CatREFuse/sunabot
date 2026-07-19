@@ -357,7 +357,9 @@ const readyVoiceProvider: VoiceProviderStatus = {
   provider: "MOSS-TTS-Nano",
   ready: true,
   checkedAt: "2026-07-19T01:00:00.000Z",
-  latencyMs: 18
+  latencyMs: 18,
+  serviceState: "running",
+  controlsAvailable: true
 };
 
 function filteredTokenUsage(payload: MockTokenUsagePayload, model: string, behavior: string): MockTokenUsagePayload {
@@ -437,6 +439,8 @@ export interface MockApiState {
     placeholderUrl: string;
   }>;
   voiceProfiles: Record<string, VoiceProfile>;
+  voiceProvider: VoiceProviderStatus;
+  voiceServiceRequests: string[];
 }
 
 export async function installMockApi(page: Page, options: { requiredToken?: string } = {}): Promise<MockApiState> {
@@ -500,7 +504,9 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
       selfieReference("02-gentle-smile.png", "温柔微笑", 458, 501, 244_736),
       selfieReference("03-full-outfit.jpg", "制服全身", 1200, 1393, 441_344)
     ],
-    voiceProfiles: structuredClone(initialVoiceProfiles)
+    voiceProfiles: structuredClone(initialVoiceProfiles),
+    voiceProvider: structuredClone(readyVoiceProvider),
+    voiceServiceRequests: []
   };
 
   await page.route("**/api/**", async (route) => {
@@ -551,13 +557,33 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
     }
 
     if (pathname === "/api/voice-profile/probe" && method === "POST") {
-      return json(route, { provider: readyVoiceProvider });
+      return json(route, { provider: state.voiceProvider });
+    }
+    const voiceServiceMatch = pathname.match(
+      /^\/api\/voice-service\/(check|start|stop)$/u,
+    );
+    if (voiceServiceMatch && method === "POST") {
+      const action = voiceServiceMatch[1]!;
+      state.voiceServiceRequests.push(action);
+      state.voiceProvider =
+        action === "stop"
+          ? {
+              provider: "MOSS-TTS-Nano",
+              ready: false,
+              checkedAt: "2026-07-19T01:01:00.000Z",
+              serviceState: "stopped",
+              controlsAvailable: true,
+              message: "语音服务已关闭。"
+            }
+          : structuredClone(readyVoiceProvider);
+      return json(route, { provider: state.voiceProvider });
     }
     if (pathname === "/api/voice-profile") {
       const agentId = url.searchParams.get("agentId") || "plana";
       const profile = state.voiceProfiles[agentId] ?? structuredClone(initialVoiceProfiles.plana!);
       state.voiceProfiles[agentId] = profile;
-      if (method === "GET") return json(route, { profile, provider: readyVoiceProvider });
+      if (method === "GET")
+        return json(route, { profile, provider: state.voiceProvider });
       if (method === "PUT") {
         const body = request.postDataJSON() as Pick<VoiceProfile, "enabled" | "defaultLanguage">;
         Object.assign(profile, { enabled: body.enabled, defaultLanguage: body.defaultLanguage });

@@ -9,7 +9,6 @@ import type {
   VoiceLanguage,
   VoiceProfile,
   VoiceProfileSettingsInput,
-  VoiceProviderStatus,
   VoiceReferenceInput,
 } from "../../types/voice";
 import { VOICE_LANGUAGES, VOICE_LANGUAGE_LABELS } from "../../types/voice";
@@ -19,10 +18,8 @@ import ToggleSwitch from "../ui/ToggleSwitch.vue";
 const props = withDefaults(
   defineProps<{
     profile: VoiceProfile | null;
-    provider: VoiceProviderStatus | null;
     loading?: boolean;
     saving?: boolean;
-    probing?: boolean;
     busyLanguage?: VoiceLanguage | "";
     error?: string;
     message?: string;
@@ -30,7 +27,6 @@ const props = withDefaults(
   {
     loading: false,
     saving: false,
-    probing: false,
     busyLanguage: "",
     error: "",
     message: "",
@@ -38,7 +34,6 @@ const props = withDefaults(
 );
 const emit = defineEmits<{
   saveSettings: [input: VoiceProfileSettingsInput];
-  probe: [];
   putReference: [input: { language: VoiceLanguage } & VoiceReferenceInput];
   deleteReference: [language: VoiceLanguage];
 }>();
@@ -73,7 +68,6 @@ const controlsBusy = computed(
   () =>
     props.loading ||
     props.saving ||
-    props.probing ||
     Boolean(props.busyLanguage),
 );
 const settingsDirty = computed(
@@ -89,17 +83,6 @@ const missingDefaultReference = computed(() =>
     !props.profile.languages[draftDefaultLanguage.value],
   ),
 );
-const providerState = computed(() => {
-  if (props.probing) return "检测中";
-  if (props.loading && !props.provider) return "读取中";
-  if (!props.provider) return "未检测";
-  return props.provider.ready ? "可用" : "不可用";
-});
-const providerStateKind = computed(() => {
-  if (!props.provider || props.probing) return undefined;
-  return props.provider.ready ? "success" : "error";
-});
-
 watch(
   () => props.profile,
   (profile) => {
@@ -332,46 +315,6 @@ function formatDate(value: string) {
         </select>
       </label>
 
-      <div
-        class="divider-row flex-col items-stretch sm:flex-row sm:items-center"
-      >
-        <div class="min-w-0">
-          <span class="block text-sm text-ink">MOSS-TTS-Nano</span>
-          <span
-            v-if="provider?.message"
-            class="mt-1 block text-xs leading-5 text-mute"
-            >{{ provider.message }}</span
-          >
-          <span
-            v-else-if="provider?.latencyMs != null"
-            class="mt-1 block text-xs leading-5 text-mute"
-            >响应 {{ provider.latencyMs }} ms</span
-          >
-          <span v-else class="mt-1 block text-xs leading-5 text-mute"
-            >本地语音服务</span
-          >
-        </div>
-        <div
-          class="flex flex-wrap items-center justify-between gap-3 sm:justify-end"
-        >
-          <span class="inline-state" :data-kind="providerStateKind">{{
-            providerState
-          }}</span>
-          <button
-            class="btn"
-            type="button"
-            :disabled="controlsBusy"
-            @click="emit('probe')"
-          >
-            <i
-              class="bx"
-              :class="probing ? 'bx-loader-alt bx-spin' : 'bx-pulse'"
-              aria-hidden="true"
-            ></i>
-            {{ probing ? "检测中" : "检测服务" }}
-          </button>
-        </div>
-      </div>
     </div>
 
     <p

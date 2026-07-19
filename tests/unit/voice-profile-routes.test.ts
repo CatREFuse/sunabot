@@ -9,6 +9,10 @@ import {
   registerVoiceApi,
 } from "../../apps/api/voiceApiComposition.js";
 import { registerVoiceProfileRoutes } from "../../apps/api/plugins/voiceProfileRoutes.js";
+import type {
+  VoiceServiceControlPort,
+  VoiceServiceRuntimeStatus,
+} from "../../apps/api/voiceServiceControlClient.js";
 import { ServiceError } from "../../packages/contracts/errors/serviceError.js";
 import {
   VoiceProfileRepository,
@@ -163,6 +167,10 @@ describe("voice profile routes", () => {
       client: clientWithHealth(
         new Error(`upstream failed at ${root}/private.sock`),
       ),
+      serviceController: serviceController({
+        state: "stopped",
+        updatedAt: "2026-07-19T01:02:02.000Z",
+      }),
       now: () => new Date("2026-07-19T01:02:03.000Z"),
     });
 
@@ -176,11 +184,70 @@ describe("voice profile routes", () => {
         provider: "MOSS-TTS-Nano",
         ready: false,
         checkedAt: "2026-07-19T01:02:03.000Z",
-        message: "语音服务不可用",
+        serviceState: "stopped",
+        controlsAvailable: true,
+        message: "语音服务已关闭",
       },
     });
     expect(response.body).not.toContain(root);
     expect(response.body).not.toContain("private.sock");
+  });
+
+  it("checks, starts and stops the managed voice service", async () => {
+    const repositories = await agentRepositories("plana");
+    const controller = serviceController({
+      state: "stopped",
+      updatedAt: "2026-07-19T02:00:00.000Z",
+    });
+    controller.start = vi.fn(async () => ({
+      state: "running" as const,
+      message: "语音服务已启动，模型载入后即可使用。",
+      updatedAt: "2026-07-19T02:01:00.000Z",
+    }));
+    const app = testApp();
+    registerVoiceProfileRoutes(app, {
+      repository: (agentId) => requireRepository(repositories, agentId),
+      client: clientWithHealth({ ok: true, latencyMs: 9 }),
+      serviceController: controller,
+      now: () => new Date("2026-07-19T02:02:00.000Z"),
+    });
+
+    const checked = await app.inject({
+      method: "POST",
+      url: "/api/voice-service/check?agentId=plana",
+    });
+    expect(checked.json().provider).toMatchObject({
+      ready: true,
+      serviceState: "running",
+      controlsAvailable: true,
+    });
+
+    const started = await app.inject({
+      method: "POST",
+      url: "/api/voice-service/start?agentId=plana",
+    });
+    expect(started.statusCode).toBe(200);
+    expect(controller.start).toHaveBeenCalledOnce();
+    expect(started.json().provider).toMatchObject({
+      ready: true,
+      serviceState: "running",
+      controlsAvailable: true,
+    });
+
+    const stopped = await app.inject({
+      method: "POST",
+      url: "/api/voice-service/stop?agentId=plana",
+    });
+    expect(stopped.statusCode).toBe(200);
+    expect(controller.stop).toHaveBeenCalledOnce();
+    expect(stopped.json().provider).toEqual({
+      provider: "MOSS-TTS-Nano",
+      ready: false,
+      checkedAt: "2026-07-19T02:02:00.000Z",
+      serviceState: "stopped",
+      controlsAvailable: true,
+      message: "语音服务已关闭",
+    });
   });
 
   it("builds one repository per Agent and fails closed for an unavailable Agent", async () => {
@@ -299,6 +366,23 @@ function clientWithHealth(
     generate: vi.fn(async () => {
       throw new Error("generate is not used by route tests");
     }),
+  };
+}
+
+function serviceController(
+  initial: VoiceServiceRuntimeStatus,
+): VoiceServiceControlPort {
+  return {
+    check: vi.fn(async () => initial),
+    start: vi.fn(async () => ({
+      state: "running",
+      updatedAt: "2026-07-19T02:01:00.000Z",
+    })),
+    stop: vi.fn(async () => ({
+      state: "stopped",
+      message: "语音服务已关闭",
+      updatedAt: "2026-07-19T02:03:00.000Z",
+    })),
   };
 }
 

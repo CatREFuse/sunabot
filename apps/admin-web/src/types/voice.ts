@@ -32,8 +32,12 @@ export interface VoiceProviderStatus {
   ready: boolean;
   checkedAt: string;
   latencyMs?: number;
+  serviceState?: "running" | "stopped" | "unknown";
+  controlsAvailable?: boolean;
   message?: string;
 }
+
+export type VoiceServiceAction = "check" | "start" | "stop" | "";
 
 export interface VoiceProfileGetResponse {
   profile: VoiceProfile;

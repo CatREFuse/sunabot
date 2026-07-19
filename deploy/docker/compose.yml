@@ -28,6 +28,7 @@ services:
       XDG_CACHE_HOME: /srv/sunabot/workspace/cache/core
       SUNABOT_PROXY_MODE: ${SUNABOT_PROXY_MODE:-auto}
       SUNABOT_PROXY_DISCOVERED_URL: ${SUNABOT_PROXY_DISCOVERED_URL:-}
+      SUNABOT_MOSS_TTS_NANO_URL: ${SUNABOT_MOSS_TTS_NANO_URL:-http://sunabot-moss-tts-nano:18083}
       NO_PROXY: "${NO_PROXY:-localhost,127.0.0.1,::1,[::1],core,host.docker.internal}"
       no_proxy: "${no_proxy:-localhost,127.0.0.1,::1,[::1],core,host.docker.internal}"
     ports:

@@ -72,7 +72,8 @@ describe("scheduled task SQLite store", () => {
       legacy.close();
 
       const migrated = new ApplicationDataStore(databasePath);
-      const task = migrated.scheduledTasks.create(input("迁移任务", "2026-07-19T01:00:00.000Z"));
+      const futureRunAt = new Date(Date.now() + 24 * 60 * 60_000).toISOString();
+      const task = migrated.scheduledTasks.create(input("迁移任务", futureRunAt));
       migrated.close();
       const reopened = new ApplicationDataStore(databasePath);
       expect(reopened.scheduledTasks.get(task.id)).toEqual(task);

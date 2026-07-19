@@ -7,6 +7,11 @@ import {
   type VoiceProfileRepository,
   type VoiceSynthesisClient,
 } from "../../../services/voice/public.js";
+import {
+  VoiceServiceControlError,
+  type VoiceServiceControlPort,
+  type VoiceServiceRuntimeStatus,
+} from "../voiceServiceControlClient.js";
 
 const openObject = { type: "object", additionalProperties: true } as const;
 const passthroughBody = {} as const;
@@ -21,6 +26,7 @@ const languageParams = {
 export interface VoiceProfileRouteOptions {
   repository(agentId: string): VoiceProfileRepository;
   client: VoiceSynthesisClient;
+  serviceController?: VoiceServiceControlPort;
   defaultAgentId?: () => string;
   now?: () => Date;
 }
@@ -40,7 +46,7 @@ export function registerVoiceProfileRoutes(
       const repository = repositoryFor(options, request.query);
       const [profile, provider] = await Promise.all([
         mapRepositoryError(() => repository.readProfile()),
-        probeVoiceProvider(options.client, now),
+        probeVoiceProvider(options.client, now, options.serviceController),
       ]);
       return { profile, provider };
     },
@@ -114,7 +120,63 @@ export function registerVoiceProfileRoutes(
     },
     async (request) => {
       repositoryFor(options, request.query);
-      return { provider: await probeVoiceProvider(options.client, now) };
+      return {
+        provider: await probeVoiceProvider(
+          options.client,
+          now,
+          options.serviceController,
+        ),
+      };
+    },
+  );
+
+  app.post(
+    "/api/voice-service/check",
+    {
+      schema: { querystring: openObject, response: { 200: openObject } },
+    },
+    async (request) => {
+      repositoryFor(options, request.query);
+      return {
+        provider: await probeVoiceProvider(
+          options.client,
+          now,
+          options.serviceController,
+        ),
+      };
+    },
+  );
+
+  app.post(
+    "/api/voice-service/start",
+    {
+      schema: { querystring: openObject, response: { 200: openObject } },
+    },
+    async (request) => {
+      repositoryFor(options, request.query);
+      const runtime = await runServiceAction(options.serviceController, "start");
+      return {
+        provider: await probeVoiceProvider(
+          options.client,
+          now,
+          options.serviceController,
+          runtime,
+        ),
+      };
+    },
+  );
+
+  app.post(
+    "/api/voice-service/stop",
+    {
+      schema: { querystring: openObject, response: { 200: openObject } },
+    },
+    async (request) => {
+      repositoryFor(options, request.query);
+      const runtime = await runServiceAction(options.serviceController, "stop");
+      return {
+        provider: stoppedProvider(now, runtime),
+      };
     },
   );
 }
@@ -122,25 +184,83 @@ export function registerVoiceProfileRoutes(
 export async function probeVoiceProvider(
   client: VoiceSynthesisClient,
   now: () => Date = () => new Date(),
+  serviceController?: VoiceServiceControlPort,
+  knownRuntime?: VoiceServiceRuntimeStatus,
 ) {
   const checkedAt = now().toISOString();
-  try {
-    const result = await client.health({
+  const [health, runtime] = await Promise.allSettled([
+    client.health({
       signal: AbortSignal.timeout(VOICE_HEALTH_PROBE_TIMEOUT_MS),
-    });
+    }),
+    knownRuntime
+      ? Promise.resolve(knownRuntime)
+      : serviceController?.check() ?? Promise.reject(new Error("unmanaged")),
+  ]);
+  const controlsAvailable = runtime.status === "fulfilled";
+  if (health.status === "fulfilled") {
     return {
       provider: "MOSS-TTS-Nano" as const,
       ready: true,
       checkedAt,
-      latencyMs: result.latencyMs,
+      latencyMs: health.value.latencyMs,
+      serviceState: "running" as const,
+      controlsAvailable,
     };
-  } catch {
-    return {
-      provider: "MOSS-TTS-Nano" as const,
-      ready: false,
-      checkedAt,
-      message: "语音服务不可用",
-    };
+  }
+  const serviceState =
+    runtime.status === "fulfilled" ? runtime.value.state : "unknown";
+  return {
+    provider: "MOSS-TTS-Nano" as const,
+    ready: false,
+    checkedAt,
+    serviceState,
+    controlsAvailable,
+    message:
+      serviceState === "stopped"
+        ? "语音服务已关闭"
+        : serviceState === "running"
+          ? (runtime.status === "fulfilled" && runtime.value.message) ||
+            "语音服务正在启动或暂不可用"
+          : "语音服务不可用",
+  };
+}
+
+function stoppedProvider(
+  now: () => Date,
+  runtime: VoiceServiceRuntimeStatus,
+) {
+  return {
+    provider: "MOSS-TTS-Nano" as const,
+    ready: false,
+    checkedAt: now().toISOString(),
+    serviceState: "stopped" as const,
+    controlsAvailable: true,
+    message: runtime.message ?? "语音服务已关闭",
+  };
+}
+
+async function runServiceAction(
+  controller: VoiceServiceControlPort | undefined,
+  action: "start" | "stop",
+) {
+  if (!controller) {
+    throw new AdminApiError(
+      503,
+      "VOICE_SERVICE_CONTROL_UNAVAILABLE",
+      "语音服务管理不可用，请重启 Sunabot。",
+    );
+  }
+  try {
+    return await controller[action]();
+  } catch (error) {
+    if (error instanceof VoiceServiceControlError) {
+      throw new AdminApiError(error.status, error.code, error.message);
+    }
+    throw new AdminApiError(
+      503,
+      "VOICE_SERVICE_CONTROL_FAILED",
+      "语音服务操作失败，请检查运行日志。",
+    );
   }
 }
 

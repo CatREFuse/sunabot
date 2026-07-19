@@ -166,6 +166,65 @@ describe("runtime reply scheduling helpers", () => {
     expect(internals.resolveIncomingReplyRoute(groupIncoming("普通群消息", 171419991), false)).toBe("ambient");
   });
 
+  it("reactivates only the explicitly awakened user-group orchestrator", async () => {
+    const config = createAdminTestConfig("/tmp/sunabot-runtime-router-test");
+    config.bot.orchestrator.enabled = true;
+    const runtime = new SunaRuntime(config, { attachmentService: {} as never });
+    const scheduleReplyDebounce = vi.fn();
+    const internals = runtime as unknown as {
+      conversationRecords: Map<string, Record<string, unknown>>;
+      persistConversationRecords(): void;
+      prepareIncomingMessage(): Promise<void>;
+      patchIncomingMessage(): void;
+      scheduleAttachmentCacheRefresh(): void;
+      scheduleMemoryCompression(): void;
+      scheduleReplyDebounce: typeof scheduleReplyDebounce;
+    };
+    internals.conversationRecords.set("group:3003", {
+      id: "group:3003",
+      scope: "user_group",
+      title: "群聊 3003",
+      userId: 2002,
+      groupId: 3003,
+      selfId: 4004,
+      replyEnabled: true,
+      orchestratorEnabled: false,
+      messageCount: 0,
+      lastAt: "2026-07-10T00:00:00.000Z",
+      lastText: "",
+      messages: []
+    });
+    internals.conversationRecords.set("group:4004", {
+      id: "group:4004",
+      scope: "user_group",
+      title: "群聊 4004",
+      userId: 2002,
+      groupId: 4004,
+      selfId: 4004,
+      replyEnabled: true,
+      orchestratorEnabled: false,
+      messageCount: 0,
+      lastAt: "2026-07-10T00:00:00.000Z",
+      lastText: "",
+      messages: []
+    });
+    internals.persistConversationRecords = vi.fn();
+    internals.prepareIncomingMessage = vi.fn(async () => undefined);
+    internals.patchIncomingMessage = vi.fn();
+    internals.scheduleAttachmentCacheRefresh = vi.fn();
+    internals.scheduleMemoryCompression = vi.fn();
+    internals.scheduleReplyDebounce = scheduleReplyDebounce;
+
+    const incoming = groupIncoming("@普拉娜 看看这个", 171419991);
+    incoming.messageId = 910_001;
+    incoming.mentionedSelf = true;
+    await runtime.handleInboundMessage(incoming, {} as never);
+
+    expect(scheduleReplyDebounce).toHaveBeenCalledWith(expect.objectContaining({ route: "direct" }));
+    expect(internals.conversationRecords.get("group:3003")).toMatchObject({ orchestratorEnabled: true });
+    expect(internals.conversationRecords.get("group:4004")).toMatchObject({ orchestratorEnabled: false });
+  });
+
   it.each(["private", "user_group", "bot_group"] as const)(
     "routes %s replies and commands for any valid QQ sender",
     (scope) => {
@@ -591,6 +650,7 @@ describe("runtime reply scheduling helpers", () => {
       }
     });
     expect(record.orchestratorCheckedMessageCount).toBe(1);
+    expect(record.orchestratorEnabled).toBe(false);
   });
 
   it("injects one image token per image into the user-group orchestrator payload", async () => {
@@ -817,6 +877,7 @@ describe("runtime reply scheduling helpers", () => {
       }
     });
     expect(record.orchestratorCheckedMessageCount).toBe(0);
+    expect(record.orchestratorEnabled).toBe(true);
     expect(appendRequestLog).toHaveBeenCalledWith(expect.objectContaining({
       action: "orchestrator.decision",
       metadata: expect.objectContaining({ attempt: 4, retry: 3, maxRetries: 3 })
@@ -1073,6 +1134,43 @@ describe("runtime reply scheduling helpers", () => {
         text: "待处理消息",
         groupId: 3003
       }
+    });
+  });
+
+  it("keeps an automatically closed orchestrator dormant after reconnect", () => {
+    const config = createAdminTestConfig("/tmp/sunabot-runtime-router-test");
+    config.bot.orchestrator.enabled = true;
+    const runtime = new SunaRuntime(config, { attachmentService: {} as never });
+    const queueAmbientReply = vi.fn();
+    const internals = runtime as unknown as {
+      conversationRecords: Map<string, Record<string, unknown>>;
+      queueAmbientReply: typeof queueAmbientReply;
+    };
+    internals.conversationRecords.set("group:3003", {
+      id: "group:3003",
+      scope: "user_group",
+      title: "群聊",
+      userId: 2002,
+      groupId: 3003,
+      selfId: 4004,
+      messageCount: 1,
+      lastAt: "2026-07-10T00:00:00.000Z",
+      lastText: "待处理消息",
+      messages: [
+        { id: "stored-1", role: "user", text: "待处理消息", at: "2026-07-10T00:00:00.000Z", sequence: 1, userId: 171419991, groupId: 3003 }
+      ],
+      replyEnabled: true,
+      orchestratorEnabled: false,
+      orchestratorCheckedMessageCount: 0
+    });
+    internals.queueAmbientReply = queueAmbientReply;
+
+    runtime.resumeUserGroupOrchestrators({} as never);
+
+    expect(queueAmbientReply).not.toHaveBeenCalled();
+    expect(runtime.getConversationRecords().find((record) => record.id === "group:3003")).toMatchObject({
+      orchestratorEnabled: false,
+      orchestratorStatus: { active: false }
     });
   });
 

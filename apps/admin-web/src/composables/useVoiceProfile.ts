@@ -5,6 +5,7 @@ import type {
   VoiceProfileGetResponse,
   VoiceProfileMutationResponse,
   VoiceProfileSettingsInput,
+  VoiceServiceAction,
   VoiceProviderProbeResponse,
   VoiceProviderStatus,
   VoiceReferenceInput,
@@ -21,10 +22,12 @@ export function useVoiceProfile() {
   const provider = shallowRef<VoiceProviderStatus | null>(null);
   const loading = shallowRef(false);
   const saving = shallowRef(false);
-  const probing = shallowRef(false);
+  const serviceAction = shallowRef<VoiceServiceAction>("");
   const busyLanguage = shallowRef<VoiceLanguage | "">("");
   const error = shallowRef("");
   const message = shallowRef("");
+  const serviceError = shallowRef("");
+  const serviceMessage = shallowRef("");
   let activeAgentId = "";
   let contextGeneration = 0;
   let loadGeneration = 0;
@@ -38,6 +41,7 @@ export function useVoiceProfile() {
     loadController = new AbortController();
     loading.value = true;
     clearFeedback();
+    clearServiceFeedback();
     try {
       const payload = await apiRequest<VoiceProfileGetResponse>(
         voiceProfilePath(normalizedAgentId),
@@ -177,33 +181,46 @@ export function useVoiceProfile() {
     }
   }
 
-  async function probe(agentId: string) {
+  async function runServiceAction(
+    agentId: string,
+    action: Exclude<VoiceServiceAction, "">,
+  ) {
     const normalizedAgentId = activate(agentId);
     const context = contextGeneration;
-    if (probing.value) return false;
+    if (serviceAction.value) return false;
     supersedeLoad();
-    probing.value = true;
-    clearFeedback();
+    serviceAction.value = action;
+    clearServiceFeedback();
     try {
       const payload = await apiRequest<VoiceProviderProbeResponse>(
-        voiceProbePath(normalizedAgentId),
+        voiceServicePath(normalizedAgentId, action),
         {
           method: "POST",
         },
       );
       if (!isCurrent(normalizedAgentId, context)) return false;
       provider.value = payload.provider;
-      message.value = payload.provider.ready
-        ? "语音服务可用"
-        : "语音服务检测完成";
+      serviceMessage.value = serviceActionMessage(action, payload.provider);
       return true;
     } catch (caught) {
       if (!isCurrent(normalizedAgentId, context)) return false;
-      error.value = errorMessage(caught, "语音服务检测失败");
+      serviceError.value = errorMessage(caught, serviceActionFailure(action));
       return false;
     } finally {
-      if (isCurrent(normalizedAgentId, context)) probing.value = false;
+      if (isCurrent(normalizedAgentId, context)) serviceAction.value = "";
     }
+  }
+
+  function checkService(agentId: string) {
+    return runServiceAction(agentId, "check");
+  }
+
+  function startService(agentId: string) {
+    return runServiceAction(agentId, "start");
+  }
+
+  function stopService(agentId: string) {
+    return runServiceAction(agentId, "stop");
   }
 
   function dispose() {
@@ -222,9 +239,10 @@ export function useVoiceProfile() {
     provider.value = null;
     loading.value = false;
     saving.value = false;
-    probing.value = false;
+    serviceAction.value = "";
     busyLanguage.value = "";
     clearFeedback();
+    clearServiceFeedback();
     return normalizedAgentId;
   }
 
@@ -243,20 +261,29 @@ export function useVoiceProfile() {
     message.value = "";
   }
 
+  function clearServiceFeedback() {
+    serviceError.value = "";
+    serviceMessage.value = "";
+  }
+
   return {
     profile: readonly(profile),
     provider: readonly(provider),
     loading: readonly(loading),
     saving: readonly(saving),
-    probing: readonly(probing),
+    serviceAction: readonly(serviceAction),
     busyLanguage: readonly(busyLanguage),
     error: readonly(error),
     message: readonly(message),
+    serviceError: readonly(serviceError),
+    serviceMessage: readonly(serviceMessage),
     load,
     saveSettings,
     putReference,
     deleteReference,
-    probe,
+    checkService,
+    startService,
+    stopService,
     dispose,
   };
 }
@@ -288,8 +315,26 @@ function voiceLanguagePath(agentId: string, language: VoiceLanguage) {
   );
 }
 
-function voiceProbePath(agentId: string) {
-  return agentScopedPath("/api/voice-profile/probe", agentId);
+function voiceServicePath(
+  agentId: string,
+  action: Exclude<VoiceServiceAction, "">,
+) {
+  return agentScopedPath(`/api/voice-service/${action}`, agentId);
+}
+
+function serviceActionMessage(
+  action: Exclude<VoiceServiceAction, "">,
+  provider: VoiceProviderStatus,
+) {
+  if (action === "stop") return "语音服务已关闭";
+  if (provider.ready) return action === "start" ? "语音服务已启动" : "语音服务可用";
+  return action === "start" ? "语音服务正在启动" : "语音服务检测完成";
+}
+
+function serviceActionFailure(action: Exclude<VoiceServiceAction, "">) {
+  if (action === "start") return "语音服务启动失败";
+  if (action === "stop") return "语音服务关闭失败";
+  return "语音服务检测失败";
 }
 
 function fileToBase64(file: File) {

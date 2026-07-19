@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, watch } from "vue";
 import VoiceProfileSettings from "../components/voice/VoiceProfileSettings.vue";
+import VoiceServiceControls from "../components/voice/VoiceServiceControls.vue";
 import PageHeader from "../components/ui/PageHeader.vue";
 import { activeAgentIdState } from "../composables/agentScope";
 import { useVoiceProfile } from "../composables/useVoiceProfile";
@@ -29,7 +30,7 @@ onBeforeUnmount(() => voice.dispose());
             :disabled="
               voice.loading.value ||
               voice.saving.value ||
-              voice.probing.value ||
+              Boolean(voice.serviceAction.value) ||
               Boolean(voice.busyLanguage.value)
             "
             @click="voice.load(agentId)"
@@ -46,18 +47,26 @@ onBeforeUnmount(() => voice.dispose());
         </template>
       </PageHeader>
 
+      <VoiceServiceControls
+        :provider="voice.provider.value"
+        :action="voice.serviceAction.value"
+        :error="voice.serviceError.value"
+        :message="voice.serviceMessage.value"
+        @check="voice.checkService(agentId)"
+        @start="voice.startService(agentId)"
+        @stop="voice.stopService(agentId)"
+      />
+
       <VoiceProfileSettings
         :key="agentId"
+        class="mt-12 border-t border-visible pt-8"
         :profile="voice.profile.value"
-        :provider="voice.provider.value"
         :loading="voice.loading.value"
         :saving="voice.saving.value"
-        :probing="voice.probing.value"
         :busy-language="voice.busyLanguage.value"
         :error="voice.error.value"
         :message="voice.message.value"
         @save-settings="voice.saveSettings(agentId, $event)"
-        @probe="voice.probe(agentId)"
         @put-reference="
           voice.putReference(agentId, $event.language, {
             file: $event.file,

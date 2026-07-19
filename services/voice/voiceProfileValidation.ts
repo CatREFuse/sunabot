@@ -22,7 +22,8 @@ export const MAX_PROFILE_BYTES = 64 * 1024;
 const MAX_FILE_NAME_BYTES = 240;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 const MIME_PATTERN = /^audio\/[a-z0-9][a-z0-9.+-]{0,63}$/u;
-const ISO_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
+const ISO_TIMESTAMP_PATTERN =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u;
 
 export interface ParsedVoiceReferenceUpload {
   language: VoiceLanguage;
@@ -271,13 +272,7 @@ function parseMetadata(
   const referenceText = parseReferenceText(value.referenceText, true);
   const sourceUrl = parseOptionalHttpsUrl(value.sourceUrl, true);
   const characterUrl = parseOptionalHttpsUrl(value.characterUrl, true);
-  if (
-    typeof value.updatedAt !== "string" ||
-    !ISO_TIMESTAMP_PATTERN.test(value.updatedAt) ||
-    new Date(value.updatedAt).toISOString() !== value.updatedAt
-  ) {
-    storedProfileFailure();
-  }
+  const updatedAt = parseStoredTimestamp(value.updatedAt);
   return {
     language,
     fileName,
@@ -288,8 +283,19 @@ function parseMetadata(
     referenceText,
     ...(sourceUrl ? { sourceUrl } : {}),
     ...(characterUrl ? { characterUrl } : {}),
-    updatedAt: value.updatedAt,
+    updatedAt,
   };
+}
+
+function parseStoredTimestamp(value: unknown) {
+  if (
+    typeof value !== "string" ||
+    !ISO_TIMESTAMP_PATTERN.test(value) ||
+    !Number.isFinite(Date.parse(value))
+  ) {
+    return storedProfileFailure();
+  }
+  return new Date(value).toISOString();
 }
 
 function parseStoredLanguage(value: unknown): VoiceLanguage {

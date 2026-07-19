@@ -8,9 +8,9 @@ Intel N100 可用性是基于官方 4 核 CPU 陈述作出的工程推断，不�
 
 ## 2. 组件边界
 
-MOSS-TTS-Nano 是 Core 与 NapCat 之外的独立本地服务。Native Core 默认通过 `http://127.0.0.1:18083` 访问；Native 与 Docker 启动 helper 都只把服务发布到宿主回环，不发布到局域网或公网。Core 只通过 HTTP 发送有界文本和参考音频字节，MOSS 不读取 Agent workspace；Core 校验返回 WAV 后写入当前 Agent 的内容寻址缓存，再通过 durable outbox 和 OneBot `base64://` `record` 段交给 NapCat。三个组件不得共享绝对路径。
+MOSS-TTS-Nano 是 Core 与 NapCat 之外的独立本地服务。Native Core 默认通过 `http://127.0.0.1:18083` 访问；Docker helper 只把服务发布到宿主回环，同时接入当前 Sunabot Compose 私有网络并提供 `sunabot-moss-tts-nano` 别名，不发布到局域网或公网。Core 只通过 HTTP 发送有界文本和参考音频字节，MOSS 不读取 Agent workspace；Core 校验返回 WAV 后写入当前 Agent 的内容寻址缓存，再通过 durable outbox 和 OneBot `base64://` `record` 段交给 NapCat。三个组件不得共享绝对路径。
 
-Docker Core 不能使用容器内 `127.0.0.1` 访问宿主 MOSS。Docker 形态必须把 `SUNABOT_MOSS_TTS_NANO_URL` 设置为显式宿主网关或 Compose 私有网络地址，并保证端点不暴露到局域网或公网；随仓库提供的 Docker 镜像可以加入 Core 所在私有网络，但 `start_moss_tts_nano_docker.sh` 的默认回环发布仍面向 Native Core。Docker Core 的私网接线与真实 NapCat 外发属于现地验收项。
+Docker Core 不能使用容器内 `127.0.0.1` 访问宿主 MOSS。默认 Compose 配置通过 `http://sunabot-moss-tts-nano:18083` 访问同一私有网络内的语音容器；显式覆盖地址时仍须保证端点不暴露到局域网或公网。管理 API 不挂载 Docker socket，检查、启动和关闭请求通过 workspace 内的请求/结果桥交给宿主 account runtime daemon；宿主只操作带 `io.sunabot.component=voice` 和当前 workspace identity 标签的固定容器，同名异主容器必须拒绝。
 
 ## 3. 安装与启动
 
@@ -18,7 +18,7 @@ Docker Core 不能使用容器内 `127.0.0.1` 访问宿主 MOSS。Docker 形态�
 
 ```bash
 tools/build_moss_tts_nano_image.sh
-tools/start_moss_tts_nano_docker.sh
+tools/start_moss_tts_nano_docker.sh --detach
 ```
 
 镜像以固定摘要的 Miniforge 为基础，检出固定 MOSS revision，安装 `pynini=2.1.6.post1` 与官方依赖，并应用仓库内可审阅的 `moss-tts-nano-api-low-memory.patch`。该模式只加载 Sunabot 使用的非流式 `/api/generate` 会话，关闭 ONNX Runtime CPU arena、memory pattern、后台 warmup 和 WeText FST 预加载；客户端明确关闭 WeText，继续使用 MOSS 自带的轻量文本规范化。MOSS 的浏览器流式接口不属于该镜像的运行合同。
@@ -59,7 +59,7 @@ tools/start_moss_tts_nano.sh
 
 ## 4. 配置参考音频
 
-管理台“语音”页面按 Agent 配置启用状态、默认语言和中文、English、日本語三份独立参考音频。每份参考音频不超过 8 MiB，并填写与音频逐字对应的参考台词；默认语言已有参考音频后才能启用 Voice Profile。服务探针显示可用后，在 Agent 工具目录启用 `send_voice_message`。
+管理台“语音”页面可以检测、启动和关闭 MOSS-TTS-Nano；关闭前需要确认，镜像未安装、Docker 不可用、私有网络缺失或同名容器归属冲突时会显示对应结果。服务控制是全局操作，Voice Profile 仍按 Agent 配置启用状态、默认语言和中文、English、日本語三份独立参考音频。每份参考音频不超过 8 MiB，并填写与音频逐字对应的参考台词；默认语言已有参考音频后才能启用 Voice Profile。服务显示可用后，在 Agent 工具目录启用 `send_voice_message`。
 
 小春、普拉娜、阿罗娜的日语样本可以从 [Kivo](https://kivo.wiki/) 在本机准备。下载器只接受固定 Kivo API 与 `static.kivo.wiki/voices/` HTTPS 音频，确定性选择含日语假名的适中台词，转换为 48 kHz、双声道、16-bit PCM WAV，并合并对应 Agent 的 `voice/profile.json`：
 

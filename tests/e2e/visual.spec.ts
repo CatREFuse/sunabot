@@ -450,6 +450,12 @@ test("语音设置四视口矩阵", async ({ page }, testInfo) => {
     await expect(page.getByText("kivo-plana-ja.wav", { exact: true })).toBeVisible();
     await capture(page, viewport.name, theme, "voice-settings");
 
+    await page.getByRole("button", { name: "关闭服务", exact: true }).click();
+    const stopDialog = page.getByRole("dialog", { name: "关闭语音服务？" });
+    await expect(stopDialog).toBeVisible();
+    await capture(page, viewport.name, theme, "voice-service-stop");
+    await stopDialog.getByRole("button", { name: "取消", exact: true }).click();
+
     await page.getByRole("button", { name: "替换音频", exact: true }).click();
     const uploadDialog = page.getByRole("dialog", { name: "替换日本語参考音频" });
     await expect(uploadDialog.getByLabel("选择参考音频")).toBeVisible();

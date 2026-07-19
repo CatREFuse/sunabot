@@ -14,6 +14,7 @@ if __package__:
         merge_voice_profile,
         normalize_kivo_audio_url,
         select_reference_voice,
+        _timestamp_now,
     )
 else:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -26,6 +27,7 @@ else:
         merge_voice_profile,
         normalize_kivo_audio_url,
         select_reference_voice,
+        _timestamp_now,
     )
 
 
@@ -57,6 +59,12 @@ class NormalizeKivoAudioUrlTests(unittest.TestCase):
             with self.subTest(url=invalid_url):
                 with self.assertRaises(KivoVoiceReferenceError):
                     normalize_kivo_audio_url(invalid_url)
+
+    def test_runtime_timestamp_uses_canonical_milliseconds(self) -> None:
+        self.assertRegex(
+            _timestamp_now(),
+            r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$",
+        )
 
 
 class SelectReferenceVoiceTests(unittest.TestCase):

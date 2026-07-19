@@ -18,6 +18,8 @@ const provider: VoiceProviderStatus = {
   ready: true,
   checkedAt: "2026-07-19T10:00:00.000Z",
   latencyMs: 38,
+  serviceState: "running",
+  controlsAvailable: true,
 };
 
 const japaneseReference = {
@@ -75,6 +77,8 @@ describe("useVoiceProfile", () => {
       ready: false,
       checkedAt: "2026-07-19T10:05:00.000Z",
       message: "服务未启动",
+      serviceState: "stopped",
+      controlsAvailable: true,
     };
     apiRequest
       .mockResolvedValueOnce({ profile: initial, provider })
@@ -134,13 +138,45 @@ describe("useVoiceProfile", () => {
     expect(apiRequest.mock.calls[3]?.[1]?.method).toBe("DELETE");
     expect(voice.profile.value).toEqual(removed);
 
-    await expect(voice.probe("plana")).resolves.toBe(true);
+    await expect(voice.checkService("plana")).resolves.toBe(true);
     expect(apiRequest.mock.calls[4]?.[0]).toBe(
-      "/api/voice-profile/probe?agentId=plana",
+      "/api/voice-service/check?agentId=plana",
     );
     expect(apiRequest.mock.calls[4]?.[1]?.method).toBe("POST");
     expect(voice.provider.value).toEqual(unavailable);
     expect(voice.profile.value).toEqual(removed);
+  });
+
+  it("starts and stops the managed voice service", async () => {
+    const starting: VoiceProviderStatus = {
+      ...provider,
+      ready: false,
+      latencyMs: undefined,
+      message: "语音服务正在启动或暂不可用",
+    };
+    const stopped: VoiceProviderStatus = {
+      ...provider,
+      ready: false,
+      latencyMs: undefined,
+      serviceState: "stopped",
+      message: "语音服务已关闭",
+    };
+    apiRequest
+      .mockResolvedValueOnce({ provider: starting })
+      .mockResolvedValueOnce({ provider: stopped });
+    const voice = useVoiceProfile();
+
+    await expect(voice.startService("plana")).resolves.toBe(true);
+    expect(apiRequest.mock.calls[0]?.[0]).toBe(
+      "/api/voice-service/start?agentId=plana",
+    );
+    expect(voice.serviceMessage.value).toBe("语音服务正在启动");
+
+    await expect(voice.stopService("plana")).resolves.toBe(true);
+    expect(apiRequest.mock.calls[1]?.[0]).toBe(
+      "/api/voice-service/stop?agentId=plana",
+    );
+    expect(voice.serviceMessage.value).toBe("语音服务已关闭");
   });
 
   it("clears the old Agent and ignores its late GET response", async () => {

@@ -523,6 +523,7 @@ export async function runtime_runUserGroupchatOrchestrator(this: RuntimeHost,
       if (!decision) throw new Error("编排器输出缺少有效的触发原因或回复消息 ID。");
       const result = userGroupOrchestratorResult(decision);
       const shouldReply = Boolean(result);
+      if (!shouldReply) record.orchestratorEnabled = false;
       this.recordOrchestratorDecision(record, {
         status: "completed",
         shouldReply,

@@ -99,6 +99,22 @@ describe("VoiceProfileRepository", () => {
     expect(runtime.metadata).toEqual(metadata);
   });
 
+  it("accepts legacy second-precision timestamps and normalizes them", async () => {
+    await repository.putReference(upload("ja", waveFixture(1)));
+    const profilePath = path.join(workspace, "voice", "profile.json");
+    const stored = JSON.parse(await fs.readFile(profilePath, "utf8"));
+    stored.languages.ja.updatedAt = "2026-07-18T20:43:03Z";
+    await fs.writeFile(profilePath, `${JSON.stringify(stored)}\n`, {
+      mode: 0o600,
+    });
+
+    await expect(repository.readProfile()).resolves.toMatchObject({
+      languages: {
+        ja: { updatedAt: "2026-07-18T20:43:03.000Z" },
+      },
+    });
+  });
+
   it("requires a reference before enabling the selected default language", async () => {
     await expect(
       repository.updateSettings({ enabled: true, defaultLanguage: "ja" }),

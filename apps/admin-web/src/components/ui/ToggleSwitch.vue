@@ -29,7 +29,7 @@ withDefaults(defineProps<{ label: string; description?: string; disabled?: boole
       <span
         data-slot="toggle-thumb"
         class="absolute left-0.5 top-0.5 size-[18px] rounded-full transition-[transform,background-color] duration-200"
-        :class="model ? 'translate-x-5 bg-[rgb(var(--color-interactive-ink))]' : 'translate-x-0 bg-disabled'"
+        :class="model ? 'translate-x-5 bg-panel' : 'translate-x-0 bg-disabled'"
       ></span>
     </span>
   </label>

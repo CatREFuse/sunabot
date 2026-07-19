@@ -15,7 +15,8 @@ describe("ToggleSwitch", () => {
     await wrapper.get("input").setValue(true);
 
     expect(wrapper.get('[data-slot="toggle-track"]').classes()).toContain("bg-[rgb(var(--color-interactive))]");
-    expect(wrapper.get('[data-slot="toggle-thumb"]').classes()).toContain("bg-[rgb(var(--color-interactive-ink))]");
+    expect(wrapper.get('[data-slot="toggle-thumb"]').classes()).toContain("bg-panel");
+    expect(wrapper.get('[data-slot="toggle-thumb"]').classes().join(" ")).not.toContain("interactive-ink");
     expect(wrapper.get('[data-slot="toggle-thumb"]').classes()).toContain("translate-x-5");
   });
 });

@@ -2,6 +2,7 @@ import { shallowMount } from "@vue/test-utils";
 import { nextTick } from "vue";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import VoiceProfileSettings from "../components/voice/VoiceProfileSettings.vue";
+import VoiceServiceControls from "../components/voice/VoiceServiceControls.vue";
 import { setActiveAgentId } from "../composables/agentScope";
 import VoiceView from "./VoiceView.vue";
 
@@ -10,15 +11,19 @@ const voice = vi.hoisted(() => ({
   provider: { value: null },
   loading: { value: false },
   saving: { value: false },
-  probing: { value: false },
+  serviceAction: { value: "" },
   busyLanguage: { value: "" },
   error: { value: "" },
   message: { value: "" },
+  serviceError: { value: "" },
+  serviceMessage: { value: "" },
   load: vi.fn(),
   saveSettings: vi.fn(),
   putReference: vi.fn(),
   deleteReference: vi.fn(),
-  probe: vi.fn(),
+  checkService: vi.fn(),
+  startService: vi.fn(),
+  stopService: vi.fn(),
   dispose: vi.fn(),
 }));
 
@@ -52,10 +57,13 @@ describe("VoiceView", () => {
   it("passes component events to the Agent-scoped composable actions", async () => {
     const wrapper = shallowMount(VoiceView);
     const settings = wrapper.findComponent(VoiceProfileSettings);
+    const service = wrapper.findComponent(VoiceServiceControls);
     const file = new File(["wav"], "arona.wav", { type: "audio/wav" });
 
     settings.vm.$emit("saveSettings", { enabled: true, defaultLanguage: "ja" });
-    settings.vm.$emit("probe");
+    service.vm.$emit("check");
+    service.vm.$emit("start");
+    service.vm.$emit("stop");
     settings.vm.$emit("putReference", {
       language: "ja",
       file,
@@ -68,7 +76,9 @@ describe("VoiceView", () => {
       enabled: true,
       defaultLanguage: "ja",
     });
-    expect(voice.probe).toHaveBeenCalledWith("plana");
+    expect(voice.checkService).toHaveBeenCalledWith("plana");
+    expect(voice.startService).toHaveBeenCalledWith("plana");
+    expect(voice.stopService).toHaveBeenCalledWith("plana");
     expect(voice.putReference).toHaveBeenCalledWith("plana", "ja", {
       file,
       referenceText: "先生、おはよう！",

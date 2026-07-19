@@ -11,6 +11,17 @@ MOSS_MODEL_DIR="${SUNABOT_MOSS_TTS_NANO_MODEL_DIR:-$PROJECT_ROOT/workspace/runti
 MOSS_OUTPUT_DIR="${SUNABOT_MOSS_TTS_NANO_OUTPUT_DIR:-$PROJECT_ROOT/workspace/runtime/voice/generated}"
 MOSS_CACHE_DIR="${SUNABOT_MOSS_TTS_NANO_CACHE_DIR:-$PROJECT_ROOT/workspace/runtime/voice/cache}"
 MOSS_UPLOAD_DIR="${SUNABOT_MOSS_TTS_NANO_UPLOAD_DIR:-$PROJECT_ROOT/workspace/runtime/voice/uploads}"
+MOSS_WORKSPACE_ID="${SUNABOT_WORKSPACE_ID:-}"
+MOSS_NETWORK="${SUNABOT_DOCKER_NETWORK:-sunabot-runtime}"
+RUN_MODE=()
+
+if (( $# > 1 )) || [[ "${1:-}" != "" && "${1:-}" != "--detach" ]]; then
+  echo "Usage: tools/start_moss_tts_nano_docker.sh [--detach]" >&2
+  exit 2
+fi
+if [[ "${1:-}" == "--detach" ]]; then
+  RUN_MODE=(--detach)
+fi
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "docker is required to start MOSS-TTS-Nano." >&2
@@ -26,6 +37,17 @@ if [[ ! "$MOSS_PORT" =~ ^[0-9]+$ ]] || (( MOSS_PORT < 1 || MOSS_PORT > 65535 ));
 fi
 if [[ ! "$MOSS_CPU_THREADS" =~ ^[0-9]+$ ]] || (( MOSS_CPU_THREADS < 1 || MOSS_CPU_THREADS > 64 )); then
   echo "SUNABOT_MOSS_TTS_NANO_CPU_THREADS must be between 1 and 64." >&2
+  exit 2
+fi
+if [[ ! "$MOSS_NETWORK" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$ ]]; then
+  echo "SUNABOT_DOCKER_NETWORK contains unsupported characters." >&2
+  exit 2
+fi
+if [[ -z "$MOSS_WORKSPACE_ID" ]]; then
+  MOSS_WORKSPACE_ID="$(node -e 'const c=require("node:crypto"),p=require("node:path");process.stdout.write(c.createHash("sha256").update(p.resolve(process.argv[1]).normalize("NFC")).digest("hex").slice(0,16))' "$PROJECT_ROOT/workspace")"
+fi
+if [[ ! "$MOSS_WORKSPACE_ID" =~ ^[a-f0-9]{16}$ ]]; then
+  echo "SUNABOT_WORKSPACE_ID must be 16 lowercase hex characters." >&2
   exit 2
 fi
 
@@ -64,11 +86,15 @@ docker run --rm \
   "$MOSS_IMAGE" \
   -c "$MODEL_BOOTSTRAP"
 
-exec docker run --rm --init \
+exec docker run --rm --init "${RUN_MODE[@]}" \
   --name "$MOSS_CONTAINER" \
   --user "$(id -u):$(id -g)" \
   --env HOME=/tmp \
   --publish "127.0.0.1:$MOSS_PORT:18083" \
+  --network "$MOSS_NETWORK" \
+  --network-alias sunabot-moss-tts-nano \
+  --label io.sunabot.component=voice \
+  --label "io.sunabot.voice-workspace-id=$MOSS_WORKSPACE_ID" \
   --volume "$MOSS_MODEL_DIR:/opt/moss-tts-nano/models" \
   --volume "$MOSS_OUTPUT_DIR:/opt/moss-tts-nano/generated_audio" \
   --volume "$MOSS_CACHE_DIR:/opt/moss-tts-nano/.cache" \

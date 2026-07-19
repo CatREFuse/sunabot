@@ -1,15 +1,8 @@
 import { mount, type VueWrapper } from "@vue/test-utils";
 import { defineComponent, nextTick } from "vue";
 import { describe, expect, it } from "vitest";
-import type { VoiceProfile, VoiceProviderStatus } from "../../types/voice";
+import type { VoiceProfile } from "../../types/voice";
 import VoiceProfileSettings from "./VoiceProfileSettings.vue";
-
-const provider: VoiceProviderStatus = {
-  provider: "MOSS-TTS-Nano",
-  ready: true,
-  checkedAt: "2026-07-19T10:00:00.000Z",
-  latencyMs: 42,
-};
 
 const japaneseReference = {
   language: "ja" as const,
@@ -39,7 +32,7 @@ const DialogOverlayStub = defineComponent({
 
 function mountSettings(overrides: Record<string, unknown> = {}) {
   return mount(VoiceProfileSettings, {
-    props: { profile, provider, ...overrides },
+    props: { profile, ...overrides },
     global: { stubs: { DialogOverlay: DialogOverlayStub } },
   });
 }
@@ -54,12 +47,9 @@ function findButton(wrapper: VueWrapper, label: string, occurrence = 0) {
 }
 
 describe("VoiceProfileSettings", () => {
-  it("shows service state and the three language labels", () => {
+  it("shows the three language labels and current reference", () => {
     const wrapper = mountSettings();
 
-    expect(wrapper.text()).toContain("MOSS-TTS-Nano");
-    expect(wrapper.text()).toContain("可用");
-    expect(wrapper.text()).toContain("响应 42 ms");
     expect(wrapper.text()).toContain("中文");
     expect(wrapper.text()).toContain("English");
     expect(wrapper.text()).toContain("日本語");
@@ -75,16 +65,14 @@ describe("VoiceProfileSettings", () => {
     );
   });
 
-  it("emits settings and service probe actions", async () => {
+  it("emits settings changes", async () => {
     const wrapper = mountSettings();
     await wrapper.get('input[type="checkbox"]').setValue(true);
     await findButton(wrapper, "保存设置").trigger("click");
-    await findButton(wrapper, "检测服务").trigger("click");
 
     expect(wrapper.emitted("saveSettings")).toEqual([
       [{ enabled: true, defaultLanguage: "ja" }],
     ]);
-    expect(wrapper.emitted("probe")).toEqual([[]]);
   });
 
   it("requires a reference for the enabled default language", async () => {
@@ -191,7 +179,7 @@ describe("VoiceProfileSettings", () => {
     await findButton(wrapper, "替换音频").trigger("click");
     expect(wrapper.find('[role="dialog"]').exists()).toBe(true);
 
-    await wrapper.setProps({ profile: null, provider: null });
+    await wrapper.setProps({ profile: null });
 
     expect(wrapper.find('[role="dialog"]').exists()).toBe(false);
   });

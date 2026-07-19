@@ -110,6 +110,7 @@ export interface CreateAppOptions {
   resolveToolCapabilities?: RuntimeToolCapabilityResolver;
   agentExtensions?: AgentExtensionApiOptions;
   mediaHostnameLookup?: MediaHostnameLookup;
+  voiceServiceController?: Parameters<typeof buildVoiceApiComposition>[0]["serviceController"];
 }
 
 export interface OneBotListenerAddress {
@@ -221,7 +222,7 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
   await agentRuntimeManager.initialize();
   const voiceApi = buildVoiceApiComposition({
     defaultAgentId: () => config.persona.defaultAgentId,
-    getRuntime: (agentId) => agentRuntimeManager.require(agentId)
+    getRuntime: (agentId) => agentRuntimeManager.require(agentId), serviceController: options.voiceServiceController
   });
   agentExtensions.setAgentChangedHandler(async (agentId) => {
     await agentRuntimeManager.refreshReadiness(agentId);

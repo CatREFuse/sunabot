@@ -521,7 +521,7 @@ def _write_profile_atomically(path: Path, profile: Mapping[str, Any]) -> None:
 
 
 def _timestamp_now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 def _result_document(
