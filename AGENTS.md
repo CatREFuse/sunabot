@@ -14,6 +14,7 @@
 | `docs/audits/2026-07-14-business-flow-audit.md` | 异步投递、媒体历史、首次运行、迁移门禁、账号调和与 readiness 的问题、修复结果和验收边界 | 修改 outbox、Provider 工具循环、首次接入、迁移或运行检查前读取 |
 | `docs/design/settings-information-architecture.md` | 管理台设置的信息层级、Provider 类型、字段归属与交互约束 | 调整设置页、Provider 配置或账号操作前读取 |
 | `docs/design/multi-agent-information-architecture.md` | 多 Agent、多 QQ、管理台导航、Agent 工作区与统计口径 | 新增 Agent、调整 Agent 切换、多 QQ 接入或按 Agent 隔离数据前读取 |
+| `docs/design/webfetch.md` | WebFetch 的公开工具契约、静态与动态网页抓取、相关内容筛选、出站安全和实施验收计划 | 新增或修改 WebFetch、动态渲染服务、网页正文抽取或联网工具安全边界前读取 |
 | `docs/architecture/project-structure-plan.md` | 目标项目结构、模块边界、组件通信、数据分层、Core Native/Docker 模型和迁移顺序 | 调整目录、拆分模块、设计协议或修改运行打包前读取 |
 | `docs/migrations/wsl2-migration-plan.md` | Windows 11、Windows Server、WSL2、Docker、打包、部署、验收和回滚方案 | 迁移、打包或调整跨平台部署时读取 |
 | `docs/migrations/one-container-to-split-runtime.md` | 现有单容器服务端拉取新代码后的停服、备份、切换、验证和回滚备忘录 | 旧服务端首次升级到 NapCat 独立容器前必读 |
