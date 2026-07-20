@@ -7,7 +7,6 @@ import {
   readSendVoiceMessageInput,
 } from "../../../services/tools/sendConversationAssetTool.js";
 import { readDeferredDispatchMessage } from "../../../services/tools/deferredDispatch.js";
-import type { VoiceLanguage } from "../../../services/voice/public.js";
 import type { ResponseFunctionCallItem } from "./contracts.js";
 import { parseJson } from "./valueUtils.js";
 
@@ -19,7 +18,6 @@ export type VoiceCompanionSource =
 export interface ParsedVoiceCompanion {
   source: VoiceCompanionSource;
   text: string;
-  language: VoiceLanguage;
   voiceCall: ResponseFunctionCallItem;
   sourceCall?: ResponseFunctionCallItem;
   deferred?: {
@@ -55,7 +53,6 @@ export function parseVoiceCompanion(
     return {
       source: "text",
       text: visibleSibling,
-      language: voiceInput.language,
       voiceCall,
     };
   }
@@ -81,7 +78,6 @@ export function parseVoiceCompanion(
     return {
       source: "assistant_text",
       text: sourceText,
-      language: voiceInput.language,
       voiceCall,
       sourceCall,
     };
@@ -101,7 +97,6 @@ export function parseVoiceCompanion(
   return {
     source: "dispatch_message",
     text: dispatch.message,
-    language: voiceInput.language,
     voiceCall,
     sourceCall,
     deferred: {

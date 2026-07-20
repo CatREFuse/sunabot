@@ -37,11 +37,11 @@ describe("conversation asset tool definitions", () => {
       strict: true,
       parameters: {
         additionalProperties: false,
-        required: ["text", "language"]
+        required: ["text"]
       }
     });
-    expect(createSendVoiceMessageTool(["ja"], "ja").parameters.properties.language.enum)
-      .toEqual(["ja"]);
+    expect(createSendVoiceMessageTool(["ja"], "ja").parameters.properties)
+      .toEqual(sendVoiceMessageTool.parameters.properties);
   });
 
   it("normalizes file and voice inputs and rejects invalid kinds", () => {
@@ -54,9 +54,8 @@ describe("conversation asset tool definitions", () => {
       kind: "image",
       name: "结果图.png"
     });
-    expect(readSendVoiceMessageInput({ text: " おはよう、先生。 ", language: "ja" })).toEqual({
-      text: "おはよう、先生。",
-      language: "ja"
+    expect(readSendVoiceMessageInput({ text: " おはよう、先生。 " })).toEqual({
+      text: "おはよう、先生。"
     });
     expect(() => readSendFileInput({ path: "x", kind: "voice", name: null })).toThrow(
       "auto, file, or image"
@@ -75,11 +74,11 @@ describe("conversation asset tool definitions", () => {
       name: null,
       accountId: "primary"
     } as never)).toThrow("unsupported fields");
-    expect(() => readSendVoiceMessageInput({ text: "おはよう", language: "fr" }))
-      .toThrow("zh, en, or ja");
-    expect(() => readSendVoiceMessageInput({ text: "おはよう", language: "ja", path: "x.wav" } as never))
-      .toThrow("only text and language");
-    expect(() => readSendVoiceMessageInput({ text: "x".repeat(301), language: "en" }))
+    expect(() => readSendVoiceMessageInput({ text: "おはよう", language: "ja" } as never))
+      .toThrow("only text");
+    expect(() => readSendVoiceMessageInput({ text: "おはよう", path: "x.wav" } as never))
+      .toThrow("only text");
+    expect(() => readSendVoiceMessageInput({ text: "x".repeat(301) }))
       .toThrow("300 characters");
   });
 

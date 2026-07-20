@@ -238,8 +238,10 @@ describe("agent and tool API plugin", () => {
     expect(koharuTools.find((tool: { name: string }) => tool.name === "send_voice_message")).toMatchObject({
       available: true,
       effectiveEnabled: true,
-      parameters: { properties: { language: { enum: ["ja"] } } }
+      parameters: { required: ["text"], properties: { text: expect.any(Object) } }
     });
+    expect(koharuTools.find((tool: { name: string }) => tool.name === "send_voice_message")
+      .parameters.properties).not.toHaveProperty("language");
     expect(planaTools.find((tool: { name: string }) => tool.name === "send_voice_message")).toMatchObject({
       available: false,
       effectiveEnabled: false,

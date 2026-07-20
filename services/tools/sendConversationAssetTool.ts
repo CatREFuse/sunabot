@@ -18,12 +18,10 @@ export interface SendFileToolInput {
 
 export interface SendVoiceMessageToolInput {
   text?: unknown;
-  language?: unknown;
 }
 
 export interface SendVoiceMessageInput {
   text: string;
-  language: VoiceLanguage;
 }
 
 export const sendFileTool = {
@@ -58,15 +56,13 @@ export const sendFileTool = {
 } as const;
 
 export function createSendVoiceMessageTool(
-  languages: readonly VoiceLanguage[] = VOICE_LANGUAGES,
-  defaultLanguage: VoiceLanguage = DEFAULT_VOICE_LANGUAGE
+  _languages: readonly VoiceLanguage[] = VOICE_LANGUAGES,
+  _defaultLanguage: VoiceLanguage = DEFAULT_VOICE_LANGUAGE
 ) {
-  const availableLanguages = VOICE_LANGUAGES.filter((language) => languages.includes(language));
-  const effectiveLanguages = availableLanguages.length ? availableLanguages : [defaultLanguage];
   return {
     type: "function",
     name: SEND_VOICE_MESSAGE_TOOL_NAME,
-    description: "Create a cloned-voice reading as a companion to the same visible assistant message. Use it at most once, only for a meaningful greeting, intimate or loving expression, intense emotion, shyness, or an important milestone. Never use it for routine facts, progress, errors, code, URLs, or long content. The text must exactly match the accompanying human-readable assistant text, excluding emoji markers. If matching text was sent through assistant_text earlier in the current turn, the next model response may contain only send_voice_message.",
+    description: "Create a cloned-voice reading as a companion to the same visible assistant message. Use it at most once, only for a meaningful greeting, intimate or loving expression, intense emotion, shyness, or an important milestone. Never use it for routine facts, progress, errors, code, URLs, or long content. Pass only the exact human-readable assistant text, excluding emoji markers. The Voice Profile selects the synthesis language and reference audio independently from the conversation language. If matching text was sent through assistant_text earlier in the current turn, the next model response may contain only send_voice_message.",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -76,14 +72,9 @@ export function createSendVoiceMessageTool(
           minLength: 1,
           maxLength: MAX_VOICE_TOOL_TEXT_CHARS,
           description: "The exact human-readable assistant text to read aloud, excluding emoji markers."
-        },
-        language: {
-          type: "string",
-          enum: effectiveLanguages,
-          description: `Voice language. Use ${effectiveLanguages.includes(defaultLanguage) ? defaultLanguage : effectiveLanguages[0]} unless the response itself uses another configured language.`
         }
       },
-      required: ["text", "language"]
+      required: ["text"]
     },
     strict: true
   } as const;
@@ -120,8 +111,8 @@ export function readSendFileInput(input: SendFileToolInput): PrepareOutboundConv
 
 export function readSendVoiceMessageInput(input: SendVoiceMessageToolInput): SendVoiceMessageInput {
   const keys = Object.keys(input).sort();
-  if (keys.length !== 2 || keys[0] !== "language" || keys[1] !== "text") {
-    throw new Error("send_voice_message arguments must contain only text and language.");
+  if (keys.length !== 1 || keys[0] !== "text") {
+    throw new Error("send_voice_message arguments must contain only text.");
   }
   if (typeof input.text !== "string") {
     throw new Error("send_voice_message text must be a string.");
@@ -132,10 +123,7 @@ export function readSendVoiceMessageInput(input: SendVoiceMessageToolInput): Sen
   if ([...text].length > MAX_VOICE_TOOL_TEXT_CHARS) {
     throw new Error(`send_voice_message text must not exceed ${MAX_VOICE_TOOL_TEXT_CHARS} characters.`);
   }
-  if (typeof input.language !== "string" || !VOICE_LANGUAGES.includes(input.language as VoiceLanguage)) {
-    throw new Error("send_voice_message language must be zh, en, or ja.");
-  }
-  return { text, language: input.language as VoiceLanguage };
+  return { text };
 }
 
 function readRelativePath(value: unknown) {

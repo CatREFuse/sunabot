@@ -12,7 +12,6 @@ describe("voice companion tool contract", () => {
         [
           call("send_voice_message", "voice-1", {
             text: "おはよう、先生。",
-            language: "ja",
           }),
         ],
         "おはよう、先生。",
@@ -21,7 +20,6 @@ describe("voice companion tool contract", () => {
     ).toMatchObject({
       source: "text",
       text: "おはよう、先生。",
-      language: "ja",
       voiceCall: { call_id: "voice-1" },
     });
   });
@@ -35,7 +33,6 @@ describe("voice companion tool contract", () => {
           }),
           call("send_voice_message", "voice-1", {
             text: "おやすみなさい、先生。",
-            language: "ja",
           }),
         ],
         "",
@@ -44,7 +41,6 @@ describe("voice companion tool contract", () => {
     ).toMatchObject({
       source: "assistant_text",
       text: "おやすみなさい、先生。[/害羞]",
-      language: "ja",
     });
     expect(voiceReadableText("前[/开心] 后 ")).toBe("前 后");
     expect(voiceReadableText("示例 \\[/开心]")).toBe("示例 \\[/开心]");
@@ -61,7 +57,6 @@ describe("voice companion tool contract", () => {
           }),
           call("send_voice_message", "voice-1", {
             text: "我会认真把它检查完。",
-            language: "zh",
           }),
         ],
         "",
@@ -70,7 +65,6 @@ describe("voice companion tool contract", () => {
     ).toEqual({
       source: "dispatch_message",
       text: "我会认真把它检查完。",
-      language: "zh",
       sourceCall: expect.objectContaining({ call_id: "codex-1" }),
       voiceCall: expect.objectContaining({ call_id: "voice-1" }),
       deferred: {
@@ -85,21 +79,21 @@ describe("voice companion tool contract", () => {
     {
       title: "voice without text",
       calls: [
-        call("send_voice_message", "voice", { text: "晚安。", language: "ja" }),
+        call("send_voice_message", "voice", { text: "晚安。" }),
       ],
       sibling: "",
     },
     {
       title: "mismatched source",
       calls: [
-        call("send_voice_message", "voice", { text: "晚安。", language: "ja" }),
+        call("send_voice_message", "voice", { text: "晚安。" }),
       ],
       sibling: "早安。",
     },
     {
       title: "voice before assistant_text",
       calls: [
-        call("send_voice_message", "voice", { text: "晚安。", language: "ja" }),
+        call("send_voice_message", "voice", { text: "晚安。" }),
         call("assistant_text", "text", { text: "晚安。" }),
       ],
       sibling: "",
@@ -108,7 +102,7 @@ describe("voice companion tool contract", () => {
       title: "unsupported source tool",
       calls: [
         call("websearch", "search", { query: "news" }),
-        call("send_voice_message", "voice", { text: "晚安。", language: "ja" }),
+        call("send_voice_message", "voice", { text: "晚安。" }),
       ],
       sibling: "",
     },
@@ -117,11 +111,9 @@ describe("voice companion tool contract", () => {
       calls: [
         call("send_voice_message", "voice-1", {
           text: "晚安。",
-          language: "ja",
         }),
         call("send_voice_message", "voice-2", {
           text: "晚安。",
-          language: "ja",
         }),
       ],
       sibling: "",
@@ -131,7 +123,6 @@ describe("voice companion tool contract", () => {
       calls: [
         call("send_voice_message", "voice", {
           text: "晚安。",
-          language: "ja",
           path: "x.wav",
         }),
       ],

@@ -43,9 +43,10 @@ export function providerVoiceCompanionTurn(
       "send_voice_message is unavailable for the current conversation.",
     );
   }
-  if (!options.voice.languages.includes(companion.language)) {
+  const language = options.voice.defaultLanguage;
+  if (!options.voice.languages.includes(language)) {
     throw new Error(
-      `send_voice_message language ${companion.language} is not configured.`,
+      `send_voice_message default language ${language} is not configured.`,
     );
   }
   if (companion.sourceCall)
@@ -54,7 +55,7 @@ export function providerVoiceCompanionTurn(
   state.terminal = "voice";
   const voice = {
     text: companion.text,
-    language: companion.language,
+    language,
     callId: companion.voiceCall.call_id,
     toolName: SEND_VOICE_MESSAGE_TOOL_NAME,
   } as const;

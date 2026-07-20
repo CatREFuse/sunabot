@@ -345,8 +345,7 @@ describe("OpenAIProvider asynchronous Codex tool turns", () => {
     const fetchMock = mockCodexToken(provider, codexSseResponse([
       assistantMessage("おはよう、先生。"),
       functionCall("send_voice_message", "call_voice", {
-        text: "おはよう、先生。",
-        language: "ja"
+        text: "おはよう、先生。"
       })
     ]));
 
@@ -382,7 +381,6 @@ describe("OpenAIProvider asynchronous Codex tool turns", () => {
       codexSseResponse([
         functionCall("send_voice_message", "call_voice", {
           text,
-          language: "ja",
         }),
       ]),
     );
@@ -429,7 +427,6 @@ describe("OpenAIProvider asynchronous Codex tool turns", () => {
       codexSseResponse([
         functionCall("send_voice_message", "call_voice", {
           text: "晚安。",
-          language: "ja",
         }),
       ]),
     );
@@ -453,8 +450,7 @@ describe("OpenAIProvider asynchronous Codex tool turns", () => {
         dispatch_message: "我会认真把它检查完。"
       }),
       functionCall("send_voice_message", "call_voice", {
-        text: "我会认真把它检查完。",
-        language: "ja"
+        text: "我会认真把它检查完。"
       })
     ]));
 

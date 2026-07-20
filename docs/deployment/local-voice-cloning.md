@@ -88,7 +88,7 @@ node tools/check_voice_synthesis.mjs --agent arona
 
 2026-07-19 的 macOS ARM64 + 4 vCPU Docker 冒烟已完成三个日语 Profile 的真实合成：小春 6.80 秒 WAV 用时 4.238 秒、RTF 0.623；普拉娜 4.56 秒 WAV 用时 3.332 秒、RTF 0.731；阿罗娜 10.16 秒 WAV 用时 6.442 秒、RTF 0.634。连续暖请求采样峰值约 1.34—1.75 GiB，结束后空闲约 1.29 GiB，容器保持 `OOMKilled=false`。这些数据证明当前 API-only 镜像在该机器上满足项目内存与 RTF 门槛，不能替代 Intel N100、Linux/WSL、Docker Core 私网和真实 QQ 的现地验收。
 
-真实 QQ 验收至少覆盖三个 Agent 的私聊与群聊、primary 与 secondary 账号、早安、晚安、喜爱或亲密表达、强烈情绪、害羞和重要里程碑，并确认普通事实、任务进度、错误、代码、命令、URL 与长内容没有语音。每份语音必须由 `send_voice_message` Function Call 触发，正文与同一 response 的可见 text、`assistant_text.text` 或 deferred `dispatch_message` 完全一致，表情标记不读出。
+真实 QQ 验收至少覆盖三个 Agent 的私聊与群聊、primary 与 secondary 账号、早安、晚安、喜爱或亲密表达、强烈情绪、害羞和重要里程碑，并确认普通事实、任务进度、错误、代码、命令、URL 与长内容没有语音。每份语音必须由只含 `text` 的 `send_voice_message` Function Call 触发，正文与同一 response 的可见 text、`assistant_text.text` 或 deferred `dispatch_message` 完全一致，表情标记不读出；合成语言与参考音频只取当前 Agent Voice Profile 的默认语言，主会话可以继续使用其他语言。
 
 文字与语音各自在准备完成的瞬间自然进入 durable outbox，验收不规定固定先后顺序；语音合成失败时文字仍发送，文字准备失败时已成功的语音仍可入队。deferred acknowledgement 与任务必须原子落盘，合成完成后只追加一份语音；断线、重连、重启和 outbox 重试不得重复文字、任务或语音。Docker Core 还需验证私网 MOSS 端点、无共享路径、真实 `record` 外发和服务恢复。
 

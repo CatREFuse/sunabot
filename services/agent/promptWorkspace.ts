@@ -13,6 +13,7 @@ import {
   type MemoryPromptSchemaName
 } from "./memoryPromptMigration.js";
 import { DEFAULT_MODEL_TIME_CONTEXT } from "./modelTime.js";
+import { isLegacyVoiceToolDescription } from "./voicePromptMigration.js";
 
 export type PromptWorkspaceScope = "persona" | "system";
 
@@ -77,7 +78,7 @@ const VOICE_SETTINGS_VARIABLE = "conversation.voice.settings";
 const VOICE_TRIGGER_POLICY_VARIABLE = "conversation.voice.trigger_policy";
 const VOICE_TOOL_NAME = "send_voice_message";
 const CONVERSATION_EMOJI_MIGRATION_VERSION = "emoji-v2";
-const CONVERSATION_VOICE_MIGRATION_VERSION = "voice-v1";
+const CONVERSATION_VOICE_MIGRATION_VERSION = "voice-v2";
 const TONE_EMOJI_MIGRATION_VERSION = "emoji-marker-v2";
 const PROMPT_TIME_CONTEXT_MIGRATION_VERSION = "time-context-v1";
 export const TONE_EMOJI_MARKER_RULE = "保留正文中形如 [/表情key] 的表情标记，必须逐字保留每个标记及其原始位置，不得新增、删除、改写或重排。";
@@ -518,7 +519,9 @@ export function migrateConversationVoiceTemplate(
     const currentVariables = new Set(extractPromptVariables(current.function.description));
     const missingDescriptionVariables = [VOICE_SETTINGS_VARIABLE, VOICE_TRIGGER_POLICY_VARIABLE]
       .filter((variable) => !currentVariables.has(variable));
-    const description = missingDescriptionVariables.length
+    const description = isLegacyVoiceToolDescription(current.function.description)
+      ? canonicalTool.function.description
+      : missingDescriptionVariables.length
       ? [current.function.description.trim(), ...missingDescriptionVariables.map((variable) => variable === VOICE_SETTINGS_VARIABLE
           ? `Current settings: @{${variable}}`
           : `Trigger policy: @{${variable}}`)]
