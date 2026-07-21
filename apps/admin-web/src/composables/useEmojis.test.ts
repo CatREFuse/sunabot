@@ -108,10 +108,14 @@ describe("useEmojis", () => {
   it("saves the selected sending size with the loaded revision", async () => {
     apiRequest.mockImplementation((path: string, init?: RequestInit) => {
       if (path === "/api/emojis?agentId=arona" && !init?.method) {
-        return Promise.resolve({ presetKeys: ["开心"], emojis: [], sendSize: 512, revision: "arona-r1" });
+        return Promise.resolve({
+          presetKeys: ["开心"], emojis: [], sendSize: 512, sendSeparately: false, revision: "arona-r1"
+        });
       }
       if (path === "/api/emojis/settings?agentId=arona" && init?.method === "PATCH") {
-        return Promise.resolve({ presetKeys: ["开心"], emojis: [], sendSize: 128, revision: "arona-r2" });
+        return Promise.resolve({
+          presetKeys: ["开心"], emojis: [], sendSize: 128, sendSeparately: false, revision: "arona-r2"
+        });
       }
       throw new Error(`Unexpected request: ${path}`);
     });
@@ -122,9 +126,42 @@ describe("useEmojis", () => {
     expect(await data.setSendSize("arona", 128)).toBe(true);
 
     const request = apiRequest.mock.calls.find(([path]) => path === "/api/emojis/settings?agentId=arona");
-    expect(JSON.parse(String(request?.[1]?.body))).toEqual({ sendSize: 128, revision: "arona-r1" });
+    expect(JSON.parse(String(request?.[1]?.body))).toEqual({
+      sendSize: 128,
+      sendSeparately: false,
+      revision: "arona-r1"
+    });
     expect(data.sendSize.value).toBe(128);
     expect(data.status.value).toEqual({ kind: "success", message: "发送尺寸已设为 128px" });
+  });
+
+  it("saves whether emojis use a separate message", async () => {
+    apiRequest.mockImplementation((path: string, init?: RequestInit) => {
+      if (path === "/api/emojis?agentId=arona" && !init?.method) {
+        return Promise.resolve({
+          presetKeys: ["开心"], emojis: [], sendSize: 512, sendSeparately: false, revision: "arona-r1"
+        });
+      }
+      if (path === "/api/emojis/settings?agentId=arona" && init?.method === "PATCH") {
+        return Promise.resolve({
+          presetKeys: ["开心"], emojis: [], sendSize: 512, sendSeparately: true, revision: "arona-r2"
+        });
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    const data = useEmojis();
+
+    await data.load("arona");
+    expect(await data.setSendSeparately("arona", true)).toBe(true);
+
+    const request = apiRequest.mock.calls.find(([path]) => path === "/api/emojis/settings?agentId=arona");
+    expect(JSON.parse(String(request?.[1]?.body))).toEqual({
+      sendSize: 512,
+      sendSeparately: true,
+      revision: "arona-r1"
+    });
+    expect(data.sendSeparately.value).toBe(true);
+    expect(data.status.value).toEqual({ kind: "success", message: "表情将单独发送" });
   });
 
   it("renames a key and manages old versions within the active Agent", async () => {

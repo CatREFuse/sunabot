@@ -114,6 +114,7 @@ export function resolveLauncherContract(contract, options) {
   const dockerServices = docker.services ?? {};
   const coreService = dockerServices.core ?? {};
   const napcatService = dockerServices.napcat ?? {};
+  const webfetchRendererService = dockerServices.webfetchRenderer ?? {};
   const codexCli = contract.capabilities?.codexCli ?? {};
   const nativeUrls = onebot.nativeAdvertisedUrls ?? {};
   const nativeKey = options.platform === "darwin"
@@ -162,6 +163,8 @@ export function resolveLauncherContract(contract, options) {
     coreService: coreService.name ?? docker.coreService ?? "core",
     coreProfile: coreService.profile ?? docker.coreProfile ?? "core-docker",
     napcatService: napcatService.name ?? docker.napcatService ?? "napcat",
+    webfetchRendererService: webfetchRendererService.name ?? "webfetch-renderer",
+    webfetchRendererPort: positivePort(webfetchRendererService.port ?? 8790, "WebFetch Renderer 端口"),
     coreReadyTimeoutSeconds: positiveInteger(
       contract.startup?.coreReadyTimeoutSeconds ?? 60
     ),

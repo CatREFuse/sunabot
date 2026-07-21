@@ -2,7 +2,7 @@
 
 版本：2026-07-20
 
-状态：设计完成，待实现
+状态：实现复核中；静态、语义匹配和动态浏览器冒烟已通过，动态容器强制出站隔离未验收
 
 适用范围：Sunabot Core、Provider 工具循环、独立动态网页渲染服务、Docker/Native 运行时与联网工具安全边界
 
@@ -86,34 +86,27 @@ type WebFetchInput =
 {"url":"https://example.com","semanticMatch":false,"headers":{"authorization":"..."}}
 ```
 
-Canonical JSON Schema 使用两个封闭分支表达条件字段。Provider 适配层可以按协议能力生成等价的扁平 schema，但不得添加第四个公开字段；所有协议最终都必须通过宿主的 discriminated-union 校验，不能依赖模型或 Provider 完成安全校验。
+宿主输入类型与解析器使用两个封闭分支表达条件字段。Provider-facing Function Tool schema 必须使用 OpenAI Responses、Codex Responses、Chat Completions、Anthropic 和 Gemini 均可接受的扁平对象，不得发送 `oneOf`。由于 query 必须在关闭匹配时完全省略，该工具显式使用 `strict: false`；所有协议返回的参数仍必须通过宿主 discriminated-union 校验，模型侧 schema 只用于引导，不能替代安全校验。
 
 ```json
 {
   "type": "object",
-  "oneOf": [
-    {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "url": { "type": "string", "minLength": 1, "maxLength": 4096 },
-        "semanticMatch": { "const": false }
-      },
-      "required": ["url", "semanticMatch"]
-    },
-    {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "url": { "type": "string", "minLength": 1, "maxLength": 4096 },
-        "semanticMatch": { "const": true },
-        "query": { "type": "string", "minLength": 1, "maxLength": 1000 }
-      },
-      "required": ["url", "semanticMatch", "query"]
+  "additionalProperties": false,
+  "properties": {
+    "url": { "type": "string", "minLength": 1, "maxLength": 4096 },
+    "semanticMatch": { "type": "boolean" },
+    "query": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1000,
+      "description": "Required only when semanticMatch is true; omit it when semanticMatch is false."
     }
-  ]
+  },
+  "required": ["url", "semanticMatch"]
 }
 ```
+
+Function Tool 定义同时携带 `strict: false`。旧提示词中的分支 schema 通过 `webfetch-v2` 一次性迁移为该定义；迁移只更新 parameters 与 strict，保留管理员工具说明和其他模板内容。
 
 ### 3.2 固定返回结构
 
@@ -223,8 +216,10 @@ Core 不能使用普通 `fetch(url)` 完成安全抓取后再信任结果。安�
 - 拒绝 `file:`、`ftp:`、`ws:`、`wss:`、浏览器内部协议、扩展协议及打开新窗口；
 - 拦截每个 document、script、stylesheet、XHR 和 fetch 请求，并交给同一出站目标策略；图片、字体、音视频和广告追踪资源默认阻断；
 - 浏览器出站经过强制策略代理，由代理逐请求解析并固定公共 IP，容器不能建立绕过代理的外连；
-- 导航开始后最多等待 12 秒；`DOMContentLoaded` 后观察正文文本，连续 750 毫秒稳定即可结束，不依赖可能永不结束的 `networkidle`；
+- 导航开始后最多等待 12 秒；`DOMContentLoaded` 后最多用 4 秒等待在途网络收敛，再观察正文文本，连续 750 毫秒稳定即可结束；`networkidle` 超时只结束该等待阶段，不能突破总时限或导致无限等待；
 - 最多返回 4 MiB 的序列化 DOM；渲染服务不抽取正文、不执行语义匹配，也不接收 `query`。
+
+Linux/WSL renderer 使用 `linux/amd64` 镜像，Apple Silicon 使用原生 `linux/arm64` 镜像，避免通过 QEMU 执行 Chromium。两种镜像均使用 Chromium 用户命名空间沙箱和 Playwright seccomp 允许项，并保留 Docker VM、非 root、只读根文件系统、`cap_drop=ALL`、no-new-privileges、临时目录和资源限额。健康接口返回当前 `browserIsolation`。
 
 `query` 只在 Core 内用于结果筛选，禁止加入目标 URL、请求头、请求体、浏览器脚本或动态服务请求，从而避免把用户问题额外发送给目标站点。
 
@@ -313,6 +308,7 @@ score = 0.55 × BM25
 - 拒绝 loopback、private、link-local、multicast、unspecified、benchmark、documentation、reserved、IPv4-mapped IPv6、NAT64 映射私网及云 metadata 地址；
 - 拒绝十进制、八进制、十六进制、混合编码、尾点、Unicode 混淆和超长 hostname 绕过；
 - 校验 DNS 返回的全部地址，任一地址不公开则整次拒绝；
+- 系统 DNS 不可用或全部结果命中 Clash `198.18.0.0/15` Fake-IP 时，通过证书覆盖的固定 Cloudflare DoH IP 重新取得 A/AAAA；已验证公网结果使用 15 秒、最多 256 域名的进程内 LRU，并合并同域并发解析，随后仍按同一公网地址规则校验并固定连接；直接输入或普通 DNS 返回该保留网段继续拒绝；
 - 每次跳转和每个浏览器子请求重新校验；
 - DNS 校验结果与实际 socket 目标绑定，不能在校验后重新按 hostname 自由解析；
 - 禁止请求宿主回环服务、Compose 私有服务、NapCat、OneBot、管理台、动态服务自身、云 metadata 和 Agent MCP 服务；
@@ -467,3 +463,16 @@ NapCat 继续使用独立容器。`webfetch-renderer` 不进入 NapCat 镜像、
 - `npm run runtime:contract`、相关单元/集成测试、`npm run check`、`npm run build` 和 `npm run verify` 通过；
 - 当前规范、功能—代码文件索引、验证标准和部署文档已同步；
 - 未修改或删除任何与 WebFetch 无关的业务逻辑、配置和用户数据。
+
+## 14. 2026-07-20 复核记录
+
+已通过：
+
+- macOS Apple Silicon 上完成 `linux/arm64` renderer 冷构建；Chromium 在非 root、只读根、`cap_drop=ALL`、no-new-privileges、seccomp 与 Chromium sandbox 同时开启时健康；
+- 真实 MDN 页面静态抓取与语义匹配成功，完整结果 4,147 个估算 token，匹配结果 3,493 个估算 token；
+- 真实 JavaScript 页面连续 5 次均返回 10 个客户端渲染内容，耗时 5.6—9.3 秒；loopback 请求在 renderer 入口返回 `URL_NOT_ALLOWED`；
+- SIGKILL Chromium 主进程后，renderer 进程非零退出，Docker `restart: unless-stopped` 将容器重启并恢复 healthy；
+- renderer 停机时，静态页面继续成功，正文不足页面返回 `DYNAMIC_RENDERER_UNAVAILABLE`；
+- WebFetch 专项、工具目录回归、类型检查、架构门禁、runtime contract 与生产构建通过。
+
+当前阻断：同一生产约束容器内直接执行普通 `fetch("https://example.com")` 仍返回 HTTP 200，证明网络层没有强制所有浏览器容器出站经过 `safeProxy`；HTTPS CONNECT 也是透明隧道，无法执行解压后响应体上限。动态能力因此尚未达到第 4.3 节“容器不能建立绕过代理的外连”和第 7.1 节响应限制，不能标记为完成。后续实现必须把 Core 可访问的 renderer API、浏览器 worker 与出站代理拆到受控网络边界，或者提供等价且可故障注入验证的强制 egress 方案；不得使用 `seccomp=unconfined`、关闭 Chromium sandbox、增加宿主网络权限或仅依赖浏览器代理参数代替。

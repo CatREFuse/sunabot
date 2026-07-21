@@ -189,7 +189,7 @@ function emittedImageIndexes(
   if (!contentSegments?.length) return images.map((_, index) => index);
   const indexes: number[] = [];
   for (const segment of contentSegments) {
-    if (segment.type !== "image") continue;
+    if (segment.type === "text") continue;
     if (!Number.isSafeInteger(segment.imageIndex) || segment.imageIndex < 0 || segment.imageIndex >= images.length) {
       throw new Error("Outbound image segment index is invalid.");
     }

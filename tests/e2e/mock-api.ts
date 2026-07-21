@@ -3,6 +3,7 @@ import sharp from "sharp";
 import type { AppConfig } from "../../src/types.js";
 import type { AgentAccount, AgentSummary } from "../../apps/admin-web/src/types.js";
 import type { VoiceProfile, VoiceProviderStatus } from "../../apps/admin-web/src/types/voice.js";
+import type { KnowledgeDocument } from "../../apps/admin-web/src/types/knowledge.js";
 import type {
   AgentMcpServer,
   AgentSkillRecord,
@@ -91,6 +92,7 @@ const initialConfig = {
     contextMessageLimit: 48,
     tone: {
       enabled: false,
+      segmentedReply: false,
       followMainModel: false,
       providerId: "",
       model: "gpt-5.4-mini",
@@ -104,6 +106,9 @@ const initialConfig = {
       reasoningEffort: "medium",
       messageThreshold: 48,
       workingMemoryMaxEntries: 100,
+      dreamRecentWindowHours: 48,
+      dreamRecentMemoryLimit: 12,
+      dreamOlderMemoryLimit: 12,
       workMemoryCompressInPrompt: "work_memory_compress_in.json",
       workMemoryCompressOutPrompt: "work_memory_compress_out.json",
       userProfilePrompt: "user_profile_prompt.json"
@@ -172,6 +177,7 @@ const initialAgentFiles = [
   ),
   file("persona.user", "用户关系", "人格", "USER.md", "称呼用户为猫老师。\n"),
   file("persona.relation", "关系", "人格", "RELATION.md", "长期协作伙伴。\n"),
+  file("persona.air", "场域知识", "人格", "AIR.md", "# 场域知识\n\n## 使用边界\n\n按会话范围理解。\n\n## 当前中文互联网公共语境\n\n识别热梗。\n\n## 会话场域\n\n暂无。\n"),
   file(
     "conversation.private-reply",
     "单聊回复",
@@ -350,17 +356,23 @@ const initialVoiceProfiles: Record<string, VoiceProfile> = Object.fromEntries(
         characterUrl: "https://kivo.wiki/",
         updatedAt: "2026-07-19T01:00:00.000Z"
       }
+    },
+    provider: {
+      protocol: "openai-audio",
+      baseUrl: "https://api.openai.com/v1",
+      apiKeyEnv: "OPENAI_API_KEY",
+      model: "gpt-4o-mini-tts",
+      voices: { zh: null, en: null, ja: `voice_${agentId}` }
     }
   } satisfies VoiceProfile])
 );
 
 const readyVoiceProvider: VoiceProviderStatus = {
-  provider: "MOSS-TTS-Nano",
+  provider: "OpenAI Audio",
+  state: "ready",
   ready: true,
   checkedAt: "2026-07-19T01:00:00.000Z",
-  latencyMs: 18,
-  serviceState: "running",
-  controlsAvailable: true
+  latencyMs: 18
 };
 
 function filteredTokenUsage(payload: MockTokenUsagePayload, model: string, behavior: string): MockTokenUsagePayload {
@@ -381,6 +393,18 @@ function filteredTokenUsage(payload: MockTokenUsagePayload, model: string, behav
   };
 }
 
+function knowledgeSnapshot(documents: KnowledgeDocument[]) {
+  return {
+    ok: true,
+    root: "knowledge",
+    documents,
+    fileCount: documents.length,
+    chunkCount: documents.reduce((sum, document) => sum + document.chunkCount, 0),
+    errorCount: documents.filter((document) => document.status === "error").length,
+    indexedAt: "2026-07-20T10:00:00.000Z"
+  };
+}
+
 export interface MockApiState {
   config: typeof initialConfig;
   revision: string;
@@ -395,6 +419,9 @@ export interface MockApiState {
   patchRequests: Array<{ section: string; body: unknown }>;
   fileWrites: Array<{ id: string; body: unknown }>;
   memoryWrites: Array<{ method: string; body: unknown }>;
+  dreamTriggers: number;
+  knowledgeDocuments: KnowledgeDocument[];
+  knowledgeRequests: Array<{ method: string; path: string; body?: unknown }>;
   offline: boolean;
   requiredToken: string;
   authenticated: boolean;
@@ -459,6 +486,14 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
     patchRequests: [],
     fileWrites: [],
     memoryWrites: [],
+    dreamTriggers: 0,
+    knowledgeDocuments: [
+      { path: "产品/路线.md", format: "markdown", sizeBytes: 2_840, chunkCount: 4, status: "indexed", updatedAt: "2026-07-20T10:00:00.000Z" },
+      { path: "产品/发布/检查清单.md", format: "markdown", sizeBytes: 1_560, chunkCount: 6, status: "indexed", updatedAt: "2026-07-20T10:00:00.000Z" },
+      { path: "事件/运行记录.jsonl", format: "jsonl", sizeBytes: 4_096, chunkCount: 18, status: "indexed", updatedAt: "2026-07-20T10:00:00.000Z" },
+      { path: "说明.txt", format: "text", sizeBytes: 640, chunkCount: 3, status: "indexed", updatedAt: "2026-07-20T10:00:00.000Z" }
+    ],
+    knowledgeRequests: [],
     offline: false,
     requiredToken: options.requiredToken ?? "",
     authenticated: !options.requiredToken,
@@ -561,23 +596,19 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
       return json(route, { provider: state.voiceProvider });
     }
     const voiceServiceMatch = pathname.match(
-      /^\/api\/voice-service\/(check|start|stop)$/u,
+      /^\/api\/voice-service\/(check)$/u,
     );
     if (voiceServiceMatch && method === "POST") {
-      const action = voiceServiceMatch[1]!;
-      state.voiceServiceRequests.push(action);
-      state.voiceProvider =
-        action === "stop"
-          ? {
-              provider: "MOSS-TTS-Nano",
-              ready: false,
-              checkedAt: "2026-07-19T01:01:00.000Z",
-              serviceState: "stopped",
-              controlsAvailable: true,
-              message: "语音服务已关闭。"
-            }
-          : structuredClone(readyVoiceProvider);
+      state.voiceServiceRequests.push("check");
+      state.voiceProvider = structuredClone(readyVoiceProvider);
       return json(route, { provider: state.voiceProvider });
+    }
+    if (pathname === "/api/voice-provider" && method === "PUT") {
+      const agentId = url.searchParams.get("agentId") || "plana";
+      const profile = state.voiceProfiles[agentId] ?? structuredClone(initialVoiceProfiles.plana!);
+      state.voiceProfiles[agentId] = profile;
+      profile.provider = request.postDataJSON() as VoiceProfile["provider"];
+      return json(route, { profile });
     }
     if (pathname === "/api/voice-profile") {
       const agentId = url.searchParams.get("agentId") || "plana";
@@ -1496,6 +1527,18 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
             createdAt: "2026-07-10T01:10:00.000Z",
             updatedAt: "2026-07-10T01:10:00.000Z"
           },
+          ...Array.from({ length: 20 }, (_, index) => ({
+            id: `memory-page-${index + 1}`,
+            source: "working",
+            sourceTitle: "工作记忆",
+            fileName: "sunabot.sqlite#memory/working",
+            editable: true,
+            key: `memory-page-${index + 1}`,
+            value: `分页测试记忆 ${index + 1}`,
+            text: `分页测试记忆 ${index + 1}`,
+            field: "fact",
+            updatedAt: `2026-07-09T${String(index).padStart(2, "0")}:00:00.000Z`
+          })),
           {
             id: "long-term-1",
             source: "long_term",
@@ -1507,6 +1550,9 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
             text: "管理台完成了第一轮视觉检查。",
             field: "fact",
             legacyTime: "2026-07-09T08:00:00.000Z",
+            recallCount: 4,
+            distinctRecallDays: 3,
+            lastRecalledAt: "2026-07-20T03:00:00.000Z",
             updatedAt: "2026-07-09T08:30:00.000Z"
           },
           {
@@ -1521,12 +1567,55 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
             field: "fact",
             userId: "20002",
             userName: "最后观测昵称",
-            addressName: "猫老师",
+            addressNames: ["猫老师", "老师"],
             userNickname: "猫老师原昵称",
             groupCards: [{ groupId: 10001, card: "猫老师", lastSeenAt: "2026-07-10T02:00:00.000Z" }],
             updatedAt: "2026-07-10T02:00:00.000Z"
           }
         ]
+      });
+    }
+    if (pathname === "/api/memory/dreams/trigger" && method === "POST") {
+      state.dreamTriggers += 1;
+      return json(route, {
+        ok: true,
+        notificationQueued: true,
+        run: {
+          id: "dream-manual-2026-07-21",
+          date: "2026-07-21",
+          status: "completed",
+          scheduledFor: "2026-07-21T12:00:00.000+08:00",
+          completedAt: "2026-07-21T12:00:03.000+08:00",
+          dreamText: "我刚刚在一片安静的潮声里睡着，旧车站的灯慢慢亮了起来。"
+        }
+      });
+    }
+    if (pathname === "/api/memory/dreams" && method === "GET") {
+      return json(route, {
+        items: [
+          {
+            id: "dream-2026-07-20",
+            date: "2026-07-20",
+            status: "completed",
+            dreamText: "我沿着潮湿的石阶走进旧车站，白天写到一半的信从时刻表后飘出来，像一群安静的鸟绕着四点的钟面盘旋。远处的月台堆着整理好的旧照片，我把几张模糊的留在风里，又将一张发亮的放进口袋。列车没有鸣笛，只载着未完成的清单穿过海面，窗外的人朝我挥手，我忽然想起该更耐心地听完他们的话。醒来前，车站变成书桌，晨光正落在下一页空白处。",
+            scheduledFor: "2026-07-20T04:00:00.000+08:00",
+            completedAt: "2026-07-20T04:02:00.000+08:00",
+            personalityChanged: true,
+            summary: { merged: 2, archived: 1, promoted: 1 }
+          },
+          {
+            id: "dream-2026-07-19",
+            date: "2026-07-19",
+            status: "completed",
+            dreamText: "我在雨后的图书馆里寻找一页被风带走的笔记。",
+            scheduledFor: "2026-07-19T04:00:00.000+08:00",
+            completedAt: "2026-07-19T04:01:00.000+08:00",
+            personalityChanged: false,
+            summary: { merged: 1, archived: 0, promoted: 1 }
+          }
+        ],
+        timeZone: "Asia/Shanghai",
+        nextScheduledFor: "2026-07-21T04:00:00.000+08:00"
       });
     }
     if (pathname === "/api/memory/recall") {
@@ -1535,6 +1624,62 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
     if (pathname === "/api/memory") {
       state.memoryWrites.push({ method, body: request.postDataJSON() });
       return json(route, { ok: true });
+    }
+
+    if (pathname === "/api/knowledge" && method === "GET") {
+      return json(route, knowledgeSnapshot(state.knowledgeDocuments));
+    }
+    if (pathname === "/api/knowledge/search" && method === "GET") {
+      const query = url.searchParams.get("q") || "";
+      state.knowledgeRequests.push({ method, path: pathname });
+      return json(route, {
+        ok: true,
+        query,
+        indexedAt: "2026-07-20T10:00:00.000Z",
+        matches: query ? [
+          {
+            path: "产品/路线.md",
+            format: "markdown",
+            ordinal: 1,
+            startLine: 4,
+            endLine: 5,
+            content: "火星基地采用核能供电，水循环系统保持独立冗余。",
+            score: 2.7183
+          },
+          {
+            path: "产品/发布/检查清单.md",
+            format: "markdown",
+            ordinal: 3,
+            startLine: 12,
+            endLine: 14,
+            content: "发布前检查供电、网络和数据恢复点。",
+            score: 1.2048
+          }
+        ] : []
+      });
+    }
+    if (pathname === "/api/knowledge/reindex" && method === "POST") {
+      state.knowledgeRequests.push({ method, path: pathname });
+      return json(route, knowledgeSnapshot(state.knowledgeDocuments));
+    }
+    if (pathname === "/api/knowledge/documents" && method === "POST") {
+      const body = request.postDataJSON() as { path: string; content: string };
+      state.knowledgeRequests.push({ method, path: pathname, body });
+      state.knowledgeDocuments.push({
+        path: body.path,
+        format: "markdown",
+        sizeBytes: new TextEncoder().encode(body.content).byteLength,
+        chunkCount: body.content.split(/\n\s*\n/u).filter(Boolean).length,
+        status: "indexed",
+        updatedAt: "2026-07-20T10:01:00.000Z"
+      });
+      return json(route, { ok: true, snapshot: knowledgeSnapshot(state.knowledgeDocuments) }, 201);
+    }
+    if (pathname === "/api/knowledge/documents" && method === "DELETE") {
+      const body = request.postDataJSON() as { path: string };
+      state.knowledgeRequests.push({ method, path: pathname, body });
+      state.knowledgeDocuments = state.knowledgeDocuments.filter((document) => document.path !== body.path);
+      return json(route, { ok: true, snapshot: knowledgeSnapshot(state.knowledgeDocuments) });
     }
 
     if (pathname === "/api/tools") {
@@ -1547,19 +1692,21 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
         bot: state.config.bot,
         selfie: { enabled: true },
         memory: { enabled: true },
+        knowledge: { enabled: true, search: async () => ({ ok: true, matches: [] }) },
+        air: { execute: async () => ({ ok: true, updated: true }) },
         asyncCodex: true,
         asyncImage: true,
         skillCapabilities: BUILTIN_SKILL_TOOL_CAPABILITIES
       }, prompt?.tools).map((tool) => tool.name === "workspace_bash"
         ? {
             ...tool,
-            accessLabel: state.config.bot.bash.allowGroup
-              ? "管理员 QQ 私聊与群聊"
-              : "仅管理员 QQ 私聊",
-            accessDescription: state.config.bot.bash.allowGroup
-              ? "私聊使用所选后端。群聊固定使用 Docker 受限模式。Web Chat 和普通用户不可用。"
-              : "私聊使用所选后端。群聊未开启。Web Chat 和普通用户不可用。",
-            executionBackend: state.config.bot.bash.adminPrivateBackend
+            description: `${tool.description} [native bash] 不可用；[docker bash] 已启动。`,
+            accessLabel: "管理员私聊 Native · 群聊与其他私聊 Docker",
+            accessDescription: "仅管理员 QQ 私聊使用 Native Bash；全部群聊与其他 QQ 私聊使用 Docker Bash；Web Chat 不可用。",
+            bashEnvironments: {
+              native: { available: false, reasonCode: "BASH_NATIVE_ISOLATION_UNAVAILABLE" },
+              docker: { started: true }
+            }
           }
         : tool).map((tool) => {
         const configured = tool.name === "workspace_bash"

@@ -84,8 +84,10 @@ async function confirmDelete() {
 
       <EmojiSendSizeSettings
         :model-value="data.sendSize.value"
+        :send-separately="data.sendSeparately.value"
         :saving="data.savingSettings.value"
         @change="data.setSendSize(agentId, $event)"
+        @separate-change="data.setSendSeparately(agentId, $event)"
       />
 
       <section aria-labelledby="preset-emojis-title">

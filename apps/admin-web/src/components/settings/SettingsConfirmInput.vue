@@ -60,11 +60,11 @@ function confirm() {
     <button
       v-if="!readonly"
       class="absolute right-1 top-1/2 grid size-9 -translate-y-1/2 place-items-center rounded text-base transition-colors disabled:cursor-default disabled:text-disabled"
-      :class="dirty ? 'bg-[rgb(var(--color-interactive))] text-[rgb(var(--color-interactive-ink))]' : 'text-mute'"
+      :class="dirty ? 'bg-display text-page' : 'text-mute'"
       type="button"
       data-settings-confirm
       :data-confirm-label="confirmLabel"
-      aria-label="确认"
+      aria-label="确认修改"
       :title="confirmLabel"
       :disabled="disabled || !dirty"
       @click="confirm"

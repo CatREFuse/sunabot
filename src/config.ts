@@ -128,8 +128,10 @@ export function defaultConfig(): AppConfig {
       quoteGroupReplyExcludedUserIds: [],
       contextMessageLimit: 48,
       emojiSendSize: 512,
+      emojiSendSeparately: false,
       tone: {
         enabled: false,
+        segmentedReply: false,
         followMainModel: false,
         providerId: "",
         model: "gpt-5.4-mini",
@@ -143,6 +145,9 @@ export function defaultConfig(): AppConfig {
         reasoningEffort: "low",
         messageThreshold: 48,
         workingMemoryMaxEntries: 100,
+        dreamRecentWindowHours: 48,
+        dreamRecentMemoryLimit: 12,
+        dreamOlderMemoryLimit: 12,
         workMemoryCompressInPrompt: "work_memory_compress_in.json",
         workMemoryCompressOutPrompt: "work_memory_compress_out.json",
         userProfilePrompt: "user_profile_prompt.json"
@@ -486,6 +491,7 @@ function mergeBotConfig(base: BotConfig, incoming: Partial<BotConfig> | undefine
     emojiSendSize: [64, 128, 256, 512, 1024].includes(incoming?.emojiSendSize ?? -1)
       ? incoming!.emojiSendSize!
       : base.emojiSendSize,
+    emojiSendSeparately: incoming?.emojiSendSeparately === true,
     tone: mergeBotToneSettings(base.tone, incoming?.tone as Partial<BotToneSettings> | undefined),
     memory: mergeBotMemorySettings(base.memory, incoming?.memory as Partial<BotMemorySettings> | undefined),
     orchestrator: mergeBotOrchestratorSettings(base.orchestrator, incoming?.orchestrator as Partial<BotOrchestratorSettings> | undefined),
@@ -510,6 +516,7 @@ function mergeBotToneSettings(
   const model = normalizeModelName(incoming?.model, base.model);
   return {
     enabled: incoming?.enabled ?? base.enabled,
+    segmentedReply: incoming?.segmentedReply ?? base.segmentedReply,
     followMainModel: incoming?.followMainModel ?? base.followMainModel,
     providerId: typeof incoming?.providerId === "string" ? incoming.providerId.trim() : base.providerId,
     model,
@@ -522,11 +529,22 @@ function mergeBotToneSettings(
 
 function mergeBotMemorySettings(base: BotMemorySettings, incoming: Partial<BotMemorySettings> | undefined): BotMemorySettings {
   const memoryModel = normalizeModelName(incoming?.memoryModel, base.memoryModel);
+  const recentLimit = normalizeDreamInteger(incoming?.dreamRecentMemoryLimit, base.dreamRecentMemoryLimit, 0, 24);
+  const olderLimit = normalizeDreamInteger(incoming?.dreamOlderMemoryLimit, base.dreamOlderMemoryLimit, 0, 24);
+  const validSelectionSize = recentLimit + olderLimit >= 1 && recentLimit + olderLimit <= 24;
   return {
     memoryModel,
     reasoningEffort: normalizeModelEffort(memoryModel, incoming?.reasoningEffort),
     messageThreshold: normalizeInteger(incoming?.messageThreshold, base.messageThreshold, 1, 200),
     workingMemoryMaxEntries: normalizeInteger(incoming?.workingMemoryMaxEntries, base.workingMemoryMaxEntries, 1, 1000),
+    dreamRecentWindowHours: normalizeDreamInteger(
+      incoming?.dreamRecentWindowHours,
+      base.dreamRecentWindowHours,
+      1,
+      720
+    ),
+    dreamRecentMemoryLimit: validSelectionSize ? recentLimit : base.dreamRecentMemoryLimit,
+    dreamOlderMemoryLimit: validSelectionSize ? olderLimit : base.dreamOlderMemoryLimit,
     workMemoryCompressInPrompt: normalizePromptFile(incoming?.workMemoryCompressInPrompt, base.workMemoryCompressInPrompt),
     workMemoryCompressOutPrompt: normalizePromptFile(incoming?.workMemoryCompressOutPrompt, base.workMemoryCompressOutPrompt),
     userProfilePrompt: normalizePromptFile(incoming?.userProfilePrompt, base.userProfilePrompt)
@@ -666,6 +684,14 @@ function normalizeInteger(value: unknown, fallback: number, min: number, max: nu
   const numberValue = Number(value);
   if (!Number.isFinite(numberValue)) return fallback;
   return Math.min(Math.max(Math.trunc(numberValue), min), max);
+}
+
+function normalizeDreamInteger(value: unknown, fallback: number, min: number, max: number) {
+  if (value === undefined) return fallback;
+  const numberValue = Number(value);
+  return Number.isSafeInteger(numberValue) && numberValue >= min && numberValue <= max
+    ? numberValue
+    : fallback;
 }
 
 function normalizeFiniteNumber(value: unknown, fallback: number, min: number, max: number) {

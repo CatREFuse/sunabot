@@ -18,3 +18,9 @@ export {
   isGroupMemoryScope,
   selectGroupMemoryMessagesNearAssistant
 } from "./groupMemoryWindow.js";
+export {
+  DREAM_PAYLOAD_VARIABLE,
+  DREAM_PROMPT_FILE,
+  DREAM_PROMPT_ID,
+  dreamPromptTemplate
+} from "./dream/public.js";

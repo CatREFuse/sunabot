@@ -86,6 +86,8 @@ describe("admin API smoke", () => {
       "persona.dialogue_style_examples",
       "persona.user",
       "persona.relation",
+      "persona.air",
+      "persona.director-seed",
       "image.selfie-rewrite"
     ]);
     expect(systemFiles.statusCode).toBe(200);
@@ -96,10 +98,14 @@ describe("admin API smoke", () => {
       "memory.compress-in",
       "memory.compress-out",
       "memory.user-profile",
+      "memory.dream",
       "orchestrator.user-group",
       "orchestrator.group-thread",
       "conversation.group-summary",
-      "scheduler.cron-callback"
+      "scheduler.cron-callback",
+      "director.daily-plan",
+      "director.schedule-revision",
+      "air.read"
     ]);
     expect(systemFiles.json().files).toContainEqual(expect.objectContaining({
       id: "conversation.private-reply",

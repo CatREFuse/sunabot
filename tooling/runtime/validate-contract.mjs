@@ -78,6 +78,7 @@ for (const required of [
   '"adapters"',
   '"packages"',
   '"apps/api"',
+  '"apps/webfetch-renderer"',
   '"apps/admin-web/src"',
   '"tooling/migrations"',
   '"tooling/quality"',
@@ -173,11 +174,19 @@ const servicesBlock = compose.slice(compose.indexOf("services:"), compose.indexO
 const serviceNames = servicesBlock
   .split(/\r?\n/)
   .flatMap((line) => /^  ([A-Za-z0-9_-]+):\s*$/.exec(line)?.[1] ?? []);
-expect(arraysEqual(serviceNames, ["core", "napcat"]),
-  "Compose must declare exactly the independent core and napcat services");
+expect(arraysEqual(serviceNames, ["webfetch-renderer", "core", "napcat"]),
+  "Compose must declare the independent webfetch renderer, core and napcat services");
+const rendererBlock = serviceBlock(compose, "webfetch-renderer", "core");
 const coreBlock = serviceBlock(compose, "core", "napcat");
 const napcatBlock = serviceBlock(compose, "napcat", undefined);
 expect(coreBlock.includes('profiles: ["core-docker"]'), "Core Docker service must be profile-controlled");
+expect(rendererBlock.includes('127.0.0.1:8790:8790')
+  && rendererBlock.includes("read_only: true")
+  && rendererBlock.includes("no-new-privileges:true")
+  && rendererBlock.includes("seccomp=deploy/docker/seccomp-webfetch-renderer.json")
+  && !rendererBlock.includes("env_file:")
+  && !rendererBlock.includes("volumes:"),
+"WebFetch renderer must be loopback-only, read-only and isolated from Core secrets and workspace mounts");
 expect(coreBlock.includes("127.0.0.1:8787:8787"),
   "Core admin port must publish to host loopback only");
 expect(coreBlock.includes('expose:\n      - "8788"') && !coreBlock.includes(":8788:8788"),

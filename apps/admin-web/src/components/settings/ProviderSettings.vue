@@ -198,7 +198,10 @@ function setStatus(message: string, kind: "" | "success" | "error" | "warning") 
 
 <template>
   <section class="grid gap-8">
-    <div><h2 class="section-title">模型服务</h2></div>
+    <div>
+      <h2 class="section-title">模型服务</h2>
+      <p class="mt-2 text-sm leading-6 text-mute">管理默认 Provider、连接、模型能力与生成参数。</p>
+    </div>
 
     <label class="field max-w-xl">
       <span class="field-label">默认 Provider</span>
@@ -287,7 +290,7 @@ function setStatus(message: string, kind: "" | "success" | "error" | "warning") 
 <style scoped>
 .provider-group { display: grid; gap: 20px; border-bottom: 1px solid rgb(var(--color-line)); padding: 28px 0; }
 .provider-group > header { display: flex; align-items: center; gap: 12px; }
-.provider-group > header > i { width: 40px; flex: none; color: rgb(var(--color-interactive)); font-size: 28px; line-height: 40px; text-align: center; }
+.provider-group > header > i { width: 40px; flex: none; color: rgb(var(--color-mute)); font-size: 28px; line-height: 40px; text-align: center; }
 .provider-group > header strong { display: block; color: rgb(var(--color-display)); font-size: 15px; font-weight: 500; }
 .provider-group > header span { display: block; margin-top: 2px; color: rgb(var(--color-mute)); font-size: 12px; }
 </style>

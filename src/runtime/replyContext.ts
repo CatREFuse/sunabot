@@ -1,7 +1,7 @@
 import type { ProviderBashOptions } from "../../adapters/model/openaiProvider.js";
 import type { MessageLookupContextV1, MessagingPort } from "../../packages/contracts/messaging/messages.js";
 import { inboundImageUrls, replaceInboundImageUrls } from "../../packages/contracts/messaging/messages.js";
-import { isAdminSender } from "../../services/messaging/replySenderPolicy.js";
+import { isAdminSender, isReplySenderAllowed } from "../../services/messaging/replySenderPolicy.js";
 import { generateImgMediaHandle, type GenerateImgReferenceContext } from "../../services/tools/generateImgTool.js";
 import {
   extractConfirmedBashApprovalId
@@ -153,7 +153,8 @@ export function runtime_buildRecentContextMessages(
 export function runtime_generateImgReferenceContext(
   this: RuntimeHost,
   incoming: ParsedIncomingMessage,
-  captureSequence?: number
+  captureSequence?: number,
+  currentBatchFromSequence?: number
 ): GenerateImgReferenceContext {
   const record = this.conversationRecords.get(conversationRecordId(incoming));
   const currentMessageId = incoming.messageId == null ? "" : String(incoming.messageId);
@@ -161,6 +162,12 @@ export function runtime_generateImgReferenceContext(
     .filter((message) => !currentMessageId || message.id !== currentMessageId)
     .filter((message) => message.role === "user" || message.role === "assistant")
     .filter((message) => captureSequence == null || Number(message.sequence ?? 0) < captureSequence)
+    .filter((message) => (
+      currentBatchFromSequence == null ||
+      Number(message.sequence ?? 0) < currentBatchFromSequence ||
+      incoming.scope === "private" ||
+      message.userId === incoming.userId
+    ))
     .slice(-this.contextMessageLimit());
   const mediaByHandle: Record<string, string> = {};
   for (const message of candidates) {
@@ -270,7 +277,6 @@ function resolveProviderBashCandidate(
   const senderId = incoming.sender?.id?.trim();
   if (
     !bash.enabled
-    || !bash.adminOnly
     || promptOverride !== undefined
     || incoming.transport !== undefined
     || incoming.agentId !== config.persona.defaultAgentId
@@ -279,19 +285,20 @@ function resolveProviderBashCandidate(
     || Number(incoming.messageId) <= 0
     || !Number.isSafeInteger(incoming.selfId)
     || Number(incoming.selfId) <= 0
-    || !adminQq
-    || !isAdminSender(incoming.userId, adminQq)
+    || !isReplySenderAllowed(incoming.userId)
     || senderId !== String(incoming.userId)
   ) return undefined;
 
   const workspacePath = resolveProjectPath(config.persona.agentWorkspace);
   if (!workspacePath) return undefined;
-  const privateAdmin = incoming.scope === "private" && incoming.groupId === undefined;
-  const allowedGroup = bash.allowGroup
-    && (incoming.scope === "user_group" || incoming.scope === "bot_group")
+  const privateConversation = incoming.scope === "private" && incoming.groupId === undefined;
+  const groupConversation = (incoming.scope === "user_group" || incoming.scope === "bot_group")
     && Number.isSafeInteger(incoming.groupId)
     && Number(incoming.groupId) > 0;
-  if (!privateAdmin && !allowedGroup) return undefined;
+  if (!privateConversation && !groupConversation) return undefined;
+
+  const administrator = isAdminSender(incoming.userId, adminQq);
+  const nativeAdministratorPrivate = administrator && privateConversation;
 
   const approvalContext = Object.freeze({
     agentId: config.persona.defaultAgentId,
@@ -299,13 +306,13 @@ function resolveProviderBashCandidate(
     transport: "onebot" as const,
     conversationId: conversationRecordId(incoming),
     userId: String(incoming.userId),
-    ...(allowedGroup ? { groupId: String(incoming.groupId) } : {})
+    ...(groupConversation ? { groupId: String(incoming.groupId) } : {})
   });
   const confirmedApprovalId = extractConfirmedBashApprovalId(incoming.text);
   return Object.freeze({
     workspacePath,
-    backend: privateAdmin ? bash.adminPrivateBackend : "docker" as const,
-    accessMode: privateAdmin ? "admin" as const : "restricted" as const,
+    backend: nativeAdministratorPrivate ? "native" as const : "docker" as const,
+    accessMode: nativeAdministratorPrivate ? "admin" as const : "isolated" as const,
     strictMode: bash.strictMode,
     approvalContext,
     ...(confirmedApprovalId ? { confirmedApprovalId } : {})

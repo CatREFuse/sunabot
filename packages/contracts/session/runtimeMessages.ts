@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { decodeMentionUserIds, decodeOutboxBubbleSequence, type OutboxBubbleSequenceV1 } from "./assistantReplyMetadata.js";
 import type { ImageResult } from "../media/media.js";
 import {
   decodeInboundMessageV1,
@@ -13,6 +14,7 @@ import {
   inboundConversationIdV1,
   inboundMessageIdentityV1
 } from "../messaging/incomingIdentity.js";
+import { decodeReplyContentSegmentsV1 } from "./runtimeReplyContentSegments.js";
 
 export {
   conversationAssetEnvelope,
@@ -129,6 +131,7 @@ export interface AsyncToolCompletionPayload {
     replyQuote?: ReplyQuoteSnapshotV1;
     threadContext?: GroupThreadContextSnapshotV1;
     orchestratorResult?: UserGroupOrchestratorResultV1;
+    mentionUserIds?: number[];
   };
   arguments: unknown;
   outcome: {
@@ -156,7 +159,9 @@ export interface AssistantReplyOutboxPayload {
   logRunId?: string;
   messageOrigin?: AssistantMessageOrigin;
   toolNames?: string[];
+  mentionUserIds?: number[];
   deliverySemantics?: "system_config_confirmation";
+  bubbleSequence?: OutboxBubbleSequenceV1;
   replyGate?: ReplyGateSnapshotV1;
   threadContext?: GroupThreadContextSnapshotV1;
 }
@@ -305,6 +310,7 @@ export function decodeToolCompletion(value: unknown): AsyncToolCompletionPayload
     replyQuote: rawReplyQuote,
     threadContext: rawThreadContext,
     orchestratorResult: rawOrchestratorResult,
+    mentionUserIds: rawMentionUserIds,
     ...originalRequestFields
   } = originalRequest;
   const captureSequence = optionalPositiveInteger(rawCaptureSequence, "captureSequence");
@@ -322,6 +328,7 @@ export function decodeToolCompletion(value: unknown): AsyncToolCompletionPayload
   const requiresFrozenReply = captureSequence != null || contextThroughSequence != null;
   const replyGate = decodeReplyGateSnapshot(rawReplyGate, incoming, requiresFrozenReply);
   const replyQuote = decodeReplyQuoteSnapshot(rawReplyQuote, incoming, requiresFrozenReply);
+  const mentionUserIds = decodeMentionUserIds(rawMentionUserIds);
   return {
     ...payload,
     originalRequest: {
@@ -332,7 +339,8 @@ export function decodeToolCompletion(value: unknown): AsyncToolCompletionPayload
       ...(replyGate == null ? {} : { replyGate }),
       ...(replyQuote == null ? {} : { replyQuote }),
       ...(threadContext ? { threadContext } : {}),
-      ...(orchestratorResult ? { orchestratorResult } : {})
+      ...(orchestratorResult ? { orchestratorResult } : {}),
+      ...(mentionUserIds.length ? { mentionUserIds } : {})
     }
   } as unknown as AsyncToolCompletionPayload;
 }
@@ -343,7 +351,9 @@ export function decodeAssistantReply(value: unknown): AssistantReplyOutboxPayloa
     threadContext: rawThreadContext,
     replyToMessageId: rawReplyToMessageId,
     deliverySemantics: rawDeliverySemantics,
+    bubbleSequence: rawBubbleSequence,
     contentSegments: rawContentSegments,
+    mentionUserIds: rawMentionUserIds,
     ...payloadFields
   } = payload;
   if (rawDeliverySemantics !== undefined && rawDeliverySemantics !== "system_config_confirmation") {
@@ -354,11 +364,13 @@ export function decodeAssistantReply(value: unknown): AssistantReplyOutboxPayloa
   const replyToMessageId = rawReplyToMessageId === null
     ? null
     : positiveSafeInteger(rawReplyToMessageId) ? Number(rawReplyToMessageId) : null;
-  const contentSegments = decodeReplyContentSegments(
+  const contentSegments = decodeReplyContentSegmentsV1(
     rawContentSegments,
     payloadFields.text,
     payloadFields.generatedImages
   );
+  const bubbleSequence = decodeOutboxBubbleSequence(rawBubbleSequence);
+  const mentionUserIds = decodeMentionUserIds(rawMentionUserIds);
   return {
     ...payloadFields,
     incoming: decodeInboundMessageV1(payloadFields.incoming),
@@ -366,54 +378,11 @@ export function decodeAssistantReply(value: unknown): AssistantReplyOutboxPayloa
     ...(rawDeliverySemantics === "system_config_confirmation"
       ? { deliverySemantics: rawDeliverySemantics }
       : {}),
+    ...(bubbleSequence ? { bubbleSequence } : {}),
     ...(contentSegments ? { contentSegments } : {}),
+    ...(mentionUserIds.length ? { mentionUserIds } : {}),
     ...(threadContext ? { threadContext } : {})
   } as AssistantReplyOutboxPayload;
-}
-
-function decodeReplyContentSegments(
-  value: unknown,
-  text: unknown,
-  generatedImages: unknown
-): OutboundContentSegmentV1[] | undefined {
-  if (value == null) return undefined;
-  if (!Array.isArray(value) || value.length < 1 || value.length > 64 || !Array.isArray(generatedImages)) {
-    throw contractError("contract_field_invalid", "持久化消息字段 contentSegments 无效。");
-  }
-  const segments: OutboundContentSegmentV1[] = [];
-  const imageIndexes = new Set<number>();
-  let joinedText = "";
-  for (const item of value) {
-    if (!isRecord(item)) {
-      throw contractError("contract_field_invalid", "持久化消息字段 contentSegments 无效。");
-    }
-    const keys = Object.keys(item).sort().join(",");
-    if (item.type === "text") {
-      if (keys !== "text,type" || typeof item.text !== "string" || !item.text) {
-        throw contractError("contract_field_invalid", "持久化消息字段 contentSegments 无效。");
-      }
-      if (segments.at(-1)?.type === "text") {
-        throw contractError("contract_field_invalid", "持久化消息字段 contentSegments 无效。");
-      }
-      segments.push({ type: "text", text: item.text });
-      joinedText += item.text;
-      continue;
-    }
-    if (item.type !== "image" || keys !== "imageIndex,type"
-      || !Number.isSafeInteger(item.imageIndex)
-      || Number(item.imageIndex) < 0
-      || Number(item.imageIndex) >= generatedImages.length
-      || imageIndexes.has(Number(item.imageIndex))) {
-      throw contractError("contract_field_invalid", "持久化消息字段 contentSegments 无效。");
-    }
-    const imageIndex = Number(item.imageIndex);
-    imageIndexes.add(imageIndex);
-    segments.push({ type: "image", imageIndex });
-  }
-  if (joinedText !== text || imageIndexes.size !== generatedImages.length) {
-    throw contractError("contract_field_invalid", "持久化消息字段 contentSegments 无效。");
-  }
-  return segments;
 }
 
 export function readGroupThreadContextSnapshot(value: unknown): GroupThreadContextSnapshotV1 | undefined {

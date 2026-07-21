@@ -27,6 +27,7 @@ export interface EmojiPayload {
   presetKeys: string[];
   emojis: EmojiRecord[];
   sendSize?: EmojiSendSize;
+  sendSeparately?: boolean;
   revision?: string;
 }
 

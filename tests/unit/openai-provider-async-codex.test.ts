@@ -159,7 +159,18 @@ describe("OpenAIProvider asynchronous Codex tool turns", () => {
 
     expect(result).toEqual({ kind: "completed", text: "今天晴，最高 28°C。" });
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(toolNames(fetchRequestBody(fetchMock, 0))).toEqual(["websearch", "codex"]);
+    expect(toolNames(fetchRequestBody(fetchMock, 0))).toEqual(["websearch", "webfetch", "codex"]);
+    const webfetch = (fetchRequestBody(fetchMock, 0).tools as Array<Record<string, any>>)
+      .find((tool) => tool.name === "webfetch");
+    expect(webfetch).toMatchObject({
+      strict: false,
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        required: ["url", "semanticMatch"]
+      }
+    });
+    expect(webfetch?.parameters).not.toHaveProperty("oneOf");
     expect(runWebsearch).toHaveBeenCalledOnce();
     expect(runWebsearch).toHaveBeenCalledWith({
       query: "current weather",
@@ -498,7 +509,12 @@ describe("OpenAIProvider asynchronous Codex tool turns", () => {
           function: {
             name: "websearch",
             description: "由最终提示词定义的搜索说明",
-            parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+            parameters: {
+              type: "object",
+              additionalProperties: false,
+              properties: { query: { type: "string" } },
+              required: ["query"]
+            },
             strict: true
           }
         }
@@ -569,6 +585,30 @@ describe("OpenAIProvider asynchronous Codex tool turns", () => {
       role: "developer",
       content: [{ type: "input_text", text: "stable system" }]
     });
+  });
+
+  it("preserves deterministic HTTP rejection metadata for outer retry policies", async () => {
+    const provider = codexProvider();
+    const fetchMock = mockCodexToken(provider, new Response(JSON.stringify({
+      error: { message: "Invalid response schema." }
+    }), {
+      status: 400,
+      headers: { "content-type": "application/json" }
+    }));
+
+    await expect(provider.completeRequest({
+      messages: [
+        { role: "system", content: "system" },
+        { role: "user", content: "input" }
+      ],
+      response_format: { type: "text" }
+    })).rejects.toMatchObject({
+      name: "ProviderResponseError",
+      message: "Invalid response schema.",
+      status: 400,
+      retryable: false
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 });
 

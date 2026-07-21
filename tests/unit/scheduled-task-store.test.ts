@@ -41,9 +41,31 @@ describe("scheduled task SQLite store", () => {
       .toMatchObject({ name: "scheduled_tasks_due" });
     expect(database.prepare("SELECT name FROM sqlite_schema WHERE name = 'scheduled_task_runs_status'").get())
       .toMatchObject({ name: "scheduled_task_runs_status" });
+    expect(database.prepare("SELECT name FROM sqlite_schema WHERE name = 'scheduled_tasks_archive'").get())
+      .toMatchObject({ name: "scheduled_tasks_archive" });
   });
 
-  it.each(["10", "11", "12"])("forward migrates application schema %s to 13 and reopens idempotently", async (version) => {
+  it("adds permanent retention to an existing scheduled task table", () => {
+    const current = database.prepare("SELECT sql FROM sqlite_schema WHERE name = 'scheduled_tasks'")
+      .get() as { sql: string };
+    const legacySql = current.sql.replace(
+      "permanent_retention INTEGER NOT NULL DEFAULT 0 CHECK (permanent_retention IN (0, 1)),\n      ",
+      ""
+    );
+    expect(legacySql).not.toContain("permanent_retention");
+    const legacy = new DatabaseSync(":memory:");
+    try {
+      legacy.exec(legacySql);
+      migrateScheduledTaskTables(legacy);
+      expect(legacy.prepare("PRAGMA table_info(scheduled_tasks)").all()).toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: "permanent_retention", notnull: 1, dflt_value: "0" })
+      ]));
+    } finally {
+      legacy.close();
+    }
+  });
+
+  it.each(["10", "11", "12", "13", "14", "15"])("forward migrates application schema %s to 16 and reopens idempotently", async (version) => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), `sunabot-scheduled-v${version}-`));
     const databasePath = path.join(root, "sunabot.sqlite");
     try {
@@ -81,7 +103,7 @@ describe("scheduled task SQLite store", () => {
 
       const verified = new DatabaseSync(databasePath);
       expect(verified.prepare("SELECT value FROM app_metadata WHERE key = 'storage-schema-version'").get())
-        .toEqual({ value: "13" });
+        .toEqual({ value: "16" });
       expect(verified.prepare("SELECT value FROM app_metadata WHERE key = 'scheduled-test-sentinel'").get())
         .toEqual({ value: "keep" });
       const tables = verified.prepare(`
@@ -111,6 +133,7 @@ describe("scheduled task SQLite store", () => {
       revision: 1,
       name: "早报",
       enabled: true,
+      permanentRetention: false,
       nextRunAt: "2026-07-19T01:00:00.000Z",
       targets: [
         { conversationId: "group:20001", mentionUserIds: ["30001", "30002"] },
@@ -154,6 +177,22 @@ describe("scheduled task SQLite store", () => {
     })).toThrow("at most 20 unique");
   });
 
+  it("creates deterministic task ids idempotently and rejects collisions with different drafts", () => {
+    const deterministic = {
+      id: "director-plana-20260720-afternoon-r1-c1",
+      ...input("日常导演 · 整理资料", "2026-07-19T01:00:00.000Z")
+    };
+    const first = store.create(deterministic);
+    const repeated = store.create(deterministic);
+
+    expect(repeated).toEqual(first);
+    expect(store.listPage({ category: "director", page: 1, pageSize: 20 }).items)
+      .toEqual([expect.objectContaining({ id: deterministic.id })]);
+    expect(store.list().items.filter((task) => task.id === deterministic.id)).toHaveLength(1);
+    expect(() => store.create({ ...deterministic, context: "不同内容" }))
+      .toThrow(`Scheduled task id collision: ${deterministic.id}`);
+  });
+
   it("uses revision CAS for update and delete and provides stable list pagination", () => {
     const first = store.create(input("第一项", "2026-07-19T01:00:00.000Z"));
     const second = store.create(input("第二项", "2026-07-19T02:00:00.000Z"));
@@ -190,6 +229,129 @@ describe("scheduled task SQLite store", () => {
     });
     expect(store.delete(first.id, 2)).toEqual({ status: "deleted" });
     expect(store.delete(first.id, 2)).toEqual({ status: "not_found" });
+  });
+
+  it("pages category views and removes archived one-time tasks after three days unless retained", () => {
+    const archived = store.create(input("待归档", "2026-07-19T00:01:00.000Z"));
+    const retained = store.create(input("永久归档", "2026-07-19T00:01:00.000Z"));
+    const failedArchive = store.create(input("失败归档", "2026-07-19T00:01:00.000Z"));
+    const scheduled = store.create(input("尚未触发", "2026-07-20T00:00:00.000Z"));
+    const recurring = store.create({
+      name: "循环任务",
+      schedule: { kind: "cron", expression: "*/5 * * * *", timezone: "UTC" },
+      context: "循环提醒",
+      targets: [{ conversationId: "group:20001", mentionUserIds: [] }]
+    });
+    now = Date.parse("2026-07-19T00:02:00.000Z");
+    for (let index = 0; index < 2; index += 1) completeNextOccurrence();
+    failNextOccurrence();
+    expect(store.update({
+      id: retained.id,
+      expectedRevision: retained.revision,
+      permanentRetention: true
+    })).toMatchObject({
+      status: "updated",
+      task: { revision: 2, permanentRetention: true }
+    });
+
+    expect(store.listPage({ category: "all", page: 2, pageSize: 2 })).toMatchObject({
+      page: 2,
+      pageSize: 2,
+      total: 5,
+      pageCount: 3,
+      items: expect.any(Array)
+    });
+    expect(store.listPage({ category: "recurring", page: 1, pageSize: 20 }).items.map((task) => task.id))
+      .toEqual([recurring.id]);
+    expect(store.listPage({ category: "scheduled", page: 1, pageSize: 20 }).items.map((task) => task.id))
+      .toEqual([scheduled.id]);
+    expect(new Set(
+      store.listPage({ category: "archived", page: 1, pageSize: 20 }).items.map((task) => task.id)
+    )).toEqual(new Set([archived.id, retained.id, failedArchive.id]));
+    expect(store.update({ id: recurring.id, expectedRevision: 1, enabled: false }))
+      .toMatchObject({ status: "updated" });
+    expect(store.update({ id: scheduled.id, expectedRevision: 1, enabled: false }))
+      .toMatchObject({ status: "updated" });
+    expect(store.nextWakeAt()).toBe("2026-07-22T00:02:00.000Z");
+
+    now = Date.parse("2026-07-22T00:02:00.000Z");
+    expect(store.purgeExpiredArchivedTasks()).toBe(2);
+    expect(store.get(archived.id)).toBeUndefined();
+    expect(store.get(failedArchive.id)).toBeUndefined();
+    expect(store.get(retained.id)).toMatchObject({ permanentRetention: true });
+    expect(store.listPage({ category: "archived", page: 9, pageSize: 1 })).toMatchObject({
+      page: 1,
+      pageSize: 1,
+      total: 1,
+      pageCount: 1,
+      items: [expect.objectContaining({ id: retained.id })]
+    });
+    expect(store.listRuns(archived.id)).toHaveLength(1);
+    expect(store.listRuns(failedArchive.id)).toEqual([
+      expect.objectContaining({ status: "failed", errorText: "归档失败" })
+    ]);
+    expect(store.nextWakeAt()).toBeNull();
+
+    function completeNextOccurrence() {
+      const occurrence = store.claimDueOccurrence();
+      expect(occurrence?.status).toBe("created");
+      const running = store.claimPendingRun({ workerId: "worker:archive", leaseMs: 1_000 })!;
+      const generated = store.markGenerated({
+        runId: running.id,
+        workerId: "worker:archive",
+        resultText: "归档结果"
+      })!;
+      expect(store.complete({ runId: generated.id, workerId: "worker:archive" }))
+        .toMatchObject({ status: "completed" });
+    }
+
+    function failNextOccurrence() {
+      store.claimDueOccurrence();
+      const running = store.claimPendingRun({ workerId: "worker:failed-archive", leaseMs: 1_000 })!;
+      expect(store.fail({
+        runId: running.id,
+        workerId: "worker:failed-archive",
+        errorText: "归档失败"
+      })).toMatchObject({ status: "failed" });
+    }
+  });
+
+  it("starts the archive retention window from the latest completed occurrence", () => {
+    const task = store.create(input("再次触发", "2026-07-19T00:01:00.000Z"));
+    now = Date.parse("2026-07-19T00:02:00.000Z");
+    completeOccurrence("worker:first");
+
+    now = Date.parse("2026-07-21T00:00:00.000Z");
+    expect(store.update({
+      id: task.id,
+      expectedRevision: 1,
+      schedule: once("2026-07-22T00:01:00.000Z")
+    })).toMatchObject({ status: "updated", task: { revision: 2 } });
+
+    now = Date.parse("2026-07-22T00:02:00.000Z");
+    expect(store.claimDueOccurrence()).toMatchObject({ run: { status: "pending" } });
+    expect(store.purgeExpiredArchivedTasks()).toBe(0);
+    expect(store.get(task.id)).toBeDefined();
+    expect(store.listPage({ category: "archived", page: 1, pageSize: 20 }).items).toEqual([]);
+    expect(store.listPage({ category: "scheduled", page: 1, pageSize: 20 }).items)
+      .toEqual([expect.objectContaining({ id: task.id })]);
+    finishPendingOccurrence("worker:second");
+    expect(store.nextWakeAt()).toBe("2026-07-25T00:02:00.000Z");
+    now = Date.parse("2026-07-25T00:02:00.000Z");
+    expect(store.purgeExpiredArchivedTasks()).toBe(1);
+
+    function completeOccurrence(workerId: string) {
+      store.claimDueOccurrence();
+      const running = store.claimPendingRun({ workerId, leaseMs: 1_000 })!;
+      store.markGenerated({ runId: running.id, workerId, resultText: "完成" });
+      expect(store.complete({ runId: running.id, workerId })).toMatchObject({ status: "completed" });
+    }
+
+    function finishPendingOccurrence(workerId: string) {
+      const running = store.claimPendingRun({ workerId, leaseMs: 1_000 })!;
+      store.markGenerated({ runId: running.id, workerId, resultText: "完成" });
+      expect(store.complete({ runId: running.id, workerId })).toMatchObject({ status: "completed" });
+    }
   });
 
   it("keeps reopen migration idempotent and rejects a concurrent stale revision", async () => {
@@ -309,7 +471,7 @@ describe("scheduled task SQLite store", () => {
       workerId: null,
       leaseUntil: null
     });
-    expect(store.nextWakeAt()).toBeNull();
+    expect(store.nextWakeAt()).toBe("2026-07-22T00:02:00.251Z");
   });
 
   it("records a failed claimed run and retains the immutable task snapshot after task deletion", () => {

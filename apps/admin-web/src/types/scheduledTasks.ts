@@ -13,6 +13,8 @@ export interface ScheduledTaskOnceSchedule {
 
 export type ScheduledTaskSchedule = ScheduledTaskCronSchedule | ScheduledTaskOnceSchedule;
 
+export type ScheduledTaskCategory = "all" | "director" | "recurring" | "scheduled" | "archived";
+
 export interface ScheduledTaskTarget {
   conversationId: string;
   mentionUserIds: string[];
@@ -29,6 +31,9 @@ export interface ScheduledTaskInput {
 export interface ScheduledTask extends ScheduledTaskInput {
   id: string;
   revision: number;
+  permanentRetention: boolean;
+  archived: boolean;
+  director: boolean;
   createdAt: string;
   updatedAt: string;
   nextTriggerAt?: string;
@@ -39,6 +44,12 @@ export interface ScheduledTask extends ScheduledTaskInput {
 
 export interface ScheduledTasksResponse {
   tasks: ScheduledTask[];
+  pagination: {
+    page: number;
+    pageSize: number;
+    total: number;
+    pageCount: number;
+  };
 }
 
 export interface ScheduledTaskConversationResponse {

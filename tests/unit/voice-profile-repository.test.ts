@@ -8,6 +8,7 @@ import {
   VoiceProfileRepository,
   defaultVoiceProfile,
   type VoiceLanguage,
+  type VoiceProviderSettings,
   type VoiceReferenceUpload,
 } from "../../services/voice/public.js";
 
@@ -40,7 +41,7 @@ describe("VoiceProfileRepository", () => {
     );
   });
 
-  it("stores the canonical metadata contract and returns verified runtime bytes", async () => {
+  it("stores optional reference metadata and resolves the configured online voice", async () => {
     const bytes = waveFixture(7);
     const profile = await repository.putReference(
       upload("ja", bytes, {
@@ -92,11 +93,12 @@ describe("VoiceProfileRepository", () => {
     await expect(repository.readRuntimeProfile()).rejects.toMatchObject({
       code: "VOICE_DISABLED",
     });
+    await repository.updateProvider(providerSettings({ ja: "voice_koharu" }));
     await repository.updateSettings({ enabled: true, defaultLanguage: "ja" });
     const runtime = await repository.readRuntimeProfile();
     expect(runtime.language).toBe("ja");
-    expect(runtime.bytes.equals(bytes)).toBe(true);
-    expect(runtime.metadata).toEqual(metadata);
+    expect(runtime.voiceId).toBe("voice_koharu");
+    expect(runtime.provider).toEqual(providerSettings({ ja: "voice_koharu" }));
   });
 
   it("accepts legacy second-precision timestamps and normalizes them", async () => {
@@ -115,25 +117,42 @@ describe("VoiceProfileRepository", () => {
     });
   });
 
-  it("requires a reference before enabling the selected default language", async () => {
+  it("requires an online voice before enabling the selected default language", async () => {
     await expect(
       repository.updateSettings({ enabled: true, defaultLanguage: "ja" }),
     ).rejects.toMatchObject({
-      code: "VOICE_DEFAULT_REFERENCE_REQUIRED",
+      code: "VOICE_DEFAULT_VOICE_REQUIRED",
       status: 409,
     });
 
-    await repository.putReference(upload("ja", waveFixture(1)));
+    await repository.updateProvider(providerSettings({ ja: "voice_plana" }));
     await repository.updateSettings({ enabled: true, defaultLanguage: "ja" });
     await expect(
       repository.updateSettings({ enabled: true, defaultLanguage: "zh" }),
     ).rejects.toMatchObject({
-      code: "VOICE_DEFAULT_REFERENCE_REQUIRED",
+      code: "VOICE_DEFAULT_VOICE_REQUIRED",
       status: 409,
     });
-    await expect(repository.removeReference("ja")).rejects.toMatchObject({
-      code: "VOICE_DEFAULT_REFERENCE_REQUIRED",
+    await expect(
+      repository.updateProvider(providerSettings()),
+    ).rejects.toMatchObject({
+      code: "VOICE_DEFAULT_VOICE_REQUIRED",
       status: 409,
+    });
+  });
+
+  it("loads stored profiles written before online provider settings existed", async () => {
+    await repository.putReference(upload("ja", waveFixture(1)));
+    const profilePath = path.join(workspace, "voice", "profile.json");
+    const stored = JSON.parse(await fs.readFile(profilePath, "utf8"));
+    delete stored.provider;
+    await fs.writeFile(profilePath, `${JSON.stringify(stored)}\n`, {
+      mode: 0o600,
+    });
+
+    await expect(repository.readProfile()).resolves.toEqual({
+      ...stored,
+      provider: defaultVoiceProfile().provider,
     });
   });
 
@@ -292,4 +311,16 @@ function waveFixture(sample: number) {
 
 function sha256(bytes: Buffer) {
   return createHash("sha256").update(bytes).digest("hex");
+}
+
+function providerSettings(
+  voices: Partial<VoiceProviderSettings["voices"]> = {},
+): VoiceProviderSettings {
+  return {
+    protocol: "openai-audio",
+    baseUrl: "https://api.openai.com/v1",
+    apiKeyEnv: "OPENAI_API_KEY",
+    model: "gpt-4o-mini-tts",
+    voices: { zh: null, en: null, ja: null, ...voices },
+  };
 }

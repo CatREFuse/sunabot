@@ -2,19 +2,41 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 export const AGENT_WORKBENCH_DIRECTORY = "workbench";
+export const AGENT_DOCKER_WORKBENCH_DIRECTORY = "docker-workbench";
+export const AGENT_SKILLS_DIRECTORY = "extensions/skills";
+export const AGENT_MCP_DIRECTORY = "extensions/mcp";
+
+export interface AgentBashEnvironment {
+  workbenchRoot: string;
+  readOnlyMounts: {
+    skills: string;
+    mcp: string;
+  };
+}
 
 export async function resolveAgentWorkbench(agentWorkspace: string) {
   const workspace = path.resolve(agentWorkspace);
   const workspaceRoot = await resolveWorkspaceRoot(workspace);
-  const workbenchPath = path.join(workspaceRoot, AGENT_WORKBENCH_DIRECTORY);
-  await fs.mkdir(workbenchPath, { recursive: true });
-  const stat = await fs.lstat(workbenchPath);
-  if (!stat.isDirectory() || stat.isSymbolicLink()) {
-    throw new Error("AGENT_WORKBENCH_INVALID: workbench must be a regular directory.");
-  }
-  const workbenchRoot = await fs.realpath(workbenchPath);
-  assertWithin(workspaceRoot, workbenchRoot, "AGENT_WORKBENCH_INVALID");
-  return workbenchRoot;
+  return resolveRegularDirectory(workspaceRoot, AGENT_WORKBENCH_DIRECTORY);
+}
+
+export async function resolveAgentBashEnvironment(
+  agentWorkspace: string,
+  backend: "native" | "docker"
+): Promise<AgentBashEnvironment> {
+  const workspaceRoot = await resolveWorkspaceRoot(path.resolve(agentWorkspace));
+  const [workbenchRoot, skills, mcp] = await Promise.all([
+    resolveRegularDirectory(
+      workspaceRoot,
+      backend === "native" ? AGENT_WORKBENCH_DIRECTORY : AGENT_DOCKER_WORKBENCH_DIRECTORY
+    ),
+    resolveRegularDirectory(workspaceRoot, AGENT_SKILLS_DIRECTORY),
+    resolveRegularDirectory(workspaceRoot, AGENT_MCP_DIRECTORY)
+  ]);
+  return {
+    workbenchRoot,
+    readOnlyMounts: { skills, mcp }
+  };
 }
 
 export async function resolveAgentWorkbenchFile(agentWorkspace: string, relativePath: string) {
@@ -50,6 +72,15 @@ async function resolveWorkspaceRoot(workspace: string) {
   await fs.mkdir(workspaceRoot, { recursive: true });
   await assertDirectoryChain(parentRoot, relativeWorkspace);
   return fs.realpath(workspaceRoot);
+}
+
+async function resolveRegularDirectory(workspaceRoot: string, relativePath: string) {
+  const directoryPath = path.join(workspaceRoot, relativePath);
+  await fs.mkdir(directoryPath, { recursive: true, mode: 0o700 });
+  await assertDirectoryChain(workspaceRoot, relativePath);
+  const directoryRoot = await fs.realpath(directoryPath);
+  assertWithin(workspaceRoot, directoryRoot, "AGENT_WORKBENCH_INVALID");
+  return directoryRoot;
 }
 
 async function findExistingParent(candidate: string) {

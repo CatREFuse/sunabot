@@ -1,6 +1,55 @@
 name: sunabot
 
 services:
+  webfetch-renderer:
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.webfetch-renderer
+    image: sunabot-webfetch-renderer:${SUNABOT_IMAGE_TAG:-local}
+    platform: ${SUNABOT_WEBFETCH_PLATFORM:-linux/amd64}
+    user: "${SUNABOT_RUNTIME_UID:-1000}:${SUNABOT_RUNTIME_GID:-1000}"
+    init: true
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      SUNABOT_WEBFETCH_RENDERER_HOST: 0.0.0.0
+      SUNABOT_WEBFETCH_RENDERER_PORT: 8790
+      SUNABOT_WEBFETCH_CHROMIUM_SANDBOX: ${SUNABOT_WEBFETCH_CHROMIUM_SANDBOX:-1}
+    ports:
+      - "127.0.0.1:8790:8790"
+    expose:
+      - "8790"
+    read_only: true
+    shm_size: 512mb
+    stop_grace_period: 20s
+    pids_limit: 256
+    mem_limit: ${SUNABOT_WEBFETCH_MEMORY_LIMIT:-1g}
+    cpus: ${SUNABOT_WEBFETCH_CPU_LIMIT:-1.5}
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=512m,mode=1777,uid=${SUNABOT_RUNTIME_UID:-1000},gid=${SUNABOT_RUNTIME_GID:-1000}
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=deploy/docker/seccomp-webfetch-renderer.json
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/node", "-e", "fetch('http://127.0.0.1:8790/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      start_period: 45s
+      retries: 6
+    labels:
+      io.sunabot.runtime-id: ${SUNABOT_RUNTIME_ID:-sunabot-qq-runtime}
+      io.sunabot.workspace-id: ${SUNABOT_WORKSPACE_ID:?Set SUNABOT_WORKSPACE_ID through the launcher}
+      io.sunabot.component: webfetch-renderer
+    logging:
+      driver: local
+      options:
+        max-size: ${SUNABOT_LOG_MAX_SIZE:-20m}
+        max-file: ${SUNABOT_LOG_MAX_FILES:-5}
+    networks:
+      - runtime
+
   core:
     profiles: ["core-docker"]
     build:
@@ -28,9 +77,9 @@ services:
       XDG_CACHE_HOME: /srv/sunabot/workspace/cache/core
       SUNABOT_PROXY_MODE: ${SUNABOT_PROXY_MODE:-auto}
       SUNABOT_PROXY_DISCOVERED_URL: ${SUNABOT_PROXY_DISCOVERED_URL:-}
-      SUNABOT_MOSS_TTS_NANO_URL: ${SUNABOT_MOSS_TTS_NANO_URL:-http://sunabot-moss-tts-nano:18083}
-      NO_PROXY: "${NO_PROXY:-localhost,127.0.0.1,::1,[::1],core,host.docker.internal}"
-      no_proxy: "${no_proxy:-localhost,127.0.0.1,::1,[::1],core,host.docker.internal}"
+      SUNABOT_WEBFETCH_RENDERER_URL: http://webfetch-renderer:8790
+      NO_PROXY: "${NO_PROXY:-localhost,127.0.0.1,::1,[::1],core,webfetch-renderer,host.docker.internal}"
+      no_proxy: "${no_proxy:-localhost,127.0.0.1,::1,[::1],core,webfetch-renderer,host.docker.internal}"
     ports:
       - "127.0.0.1:8787:8787"
     expose:
@@ -64,7 +113,6 @@ services:
         max-file: ${SUNABOT_LOG_MAX_FILES:-5}
     networks:
       - runtime
-
   napcat:
     build:
       context: .

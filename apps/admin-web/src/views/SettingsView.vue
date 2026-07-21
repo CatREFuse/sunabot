@@ -23,6 +23,7 @@ import MonitoringSettingsForm from "../components/settings/MonitoringSettingsFor
 import DialogOverlay from "../components/ui/DialogOverlay.vue";
 import AdminPasswordForm from "../components/settings/AdminPasswordForm.vue";
 import { activeAgentId, activeAgentIdState } from "../composables/agentScope";
+import { settingsForScope } from "../components/settings/settingsCatalog";
 
 const props = withDefaults(defineProps<{ scope?: "agent" | "system" }>(), { scope: "agent" });
 
@@ -36,21 +37,7 @@ const loggingOut = shallowRef(false);
 const logoutError = shallowRef("");
 const settingsPanel = useTemplateRef<HTMLElement>("settingsPanel");
 const monitoringForm = useTemplateRef<InstanceType<typeof MonitoringSettingsForm>>("monitoringForm");
-const allSections: Array<{ id: SettingsSectionKey; label: string; group: string; icon: string; scope: "agent" | "system" }> = [
-  { id: "persona", label: "Agent 身份", group: "Agent", icon: "bx-user-voice", scope: "agent" },
-  { id: "bot", label: "回复行为", group: "Agent", icon: "bx-bot", scope: "agent" },
-  { id: "tone", label: "语气处理", group: "Agent", icon: "bx-conversation", scope: "agent" },
-  { id: "memory", label: "记忆处理", group: "记忆与编排", icon: "bx-brain", scope: "agent" },
-  { id: "orchestrator", label: "群聊编排", group: "记忆与编排", icon: "bx-git-branch", scope: "agent" },
-  { id: "tools", label: "Agent 工具", group: "工具", icon: "bx-wrench", scope: "agent" },
-  { id: "bash", label: "命令执行", group: "工具", icon: "bx-terminal", scope: "agent" },
-  { id: "providers", label: "模型服务", group: "公共系统", icon: "bx-chip", scope: "system" },
-  { id: "normalReply", label: "回复重试", group: "公共系统", icon: "bx-refresh", scope: "system" },
-  { id: "broadcastStorm", label: "广播风暴", group: "公共系统", icon: "bx-shield-quarter", scope: "system" },
-  { id: "security", label: "账户安全", group: "公共系统", icon: "bx-lock-alt", scope: "system" },
-  { id: "onebot", label: "连接与通知", group: "公共系统", icon: "bx-link", scope: "system" }
-];
-const sections = computed(() => allSections.filter((section) => section.scope === props.scope));
+const sections = computed(() => settingsForScope(props.scope));
 const visibleSections = computed(() => new Set(sections.value.map((section) => section.id)));
 const configSections = new Set<ConfigSectionKey>(sectionKeys);
 const current = computed<SettingsSectionKey>(() => {
@@ -60,7 +47,9 @@ const current = computed<SettingsSectionKey>(() => {
 });
 const currentState = computed(() => {
   const section = isConfigSection(current.value) ? current.value : "persona";
-  const candidates = section === "bot"
+  const candidates = section === "persona"
+    ? [workspace.state.bot, workspace.state.persona]
+    : section === "bot"
     ? [workspace.state.bot, workspace.state.onebot]
     : section === "tools"
       ? [workspace.state.tools, workspace.state.bash, workspace.state.bot]
@@ -113,6 +102,7 @@ function isConfigSection(section: SettingsSectionKey): section is ConfigSectionK
 
 function currentConfigSections() {
   if (!isConfigSection(current.value)) return [];
+  if (current.value === "persona") return ["bot"] as const;
   if (current.value === "bot") return ["bot", "onebot"] as const;
   if (current.value === "tools") return ["tools", "bash", "bot"] as const;
   return [current.value] as const;
@@ -162,13 +152,13 @@ async function logout() {
       <PageHeader :title="props.scope === 'agent' ? 'Agent 设置' : '系统设置'">
         <template #actions>
           <button class="btn" type="button" :disabled="workspace.loading.value" @click="loadConfig(true)">刷新</button>
-          <button class="btn btn-ghost" type="button" @click="logoutConfirmOpen = true"><i class="bx bx-log-out" aria-hidden="true"></i>退出登录</button>
+          <button v-if="props.scope === 'system'" class="btn btn-ghost" type="button" @click="logoutConfirmOpen = true"><i class="bx bx-log-out" aria-hidden="true"></i>退出登录</button>
         </template>
       </PageHeader>
 
       <div v-if="workspace.loading.value && !workspace.envelope.value" class="empty-state"><div><strong>加载中</strong></div></div>
       <div v-else-if="loadError" class="empty-state"><div><strong class="!text-accent">{{ loadError }}</strong><button class="btn mt-4" type="button" @click="loadConfig()">重试</button></div></div>
-      <div v-else class="mt-8 grid min-w-0 gap-8 lg:grid-cols-[176px_minmax(0,1fr)] xl:grid-cols-[208px_minmax(0,880px)] xl:gap-12">
+      <div v-else class="mt-2 grid min-w-0 gap-8 lg:grid-cols-[200px_minmax(0,1fr)] xl:grid-cols-[224px_minmax(0,920px)] xl:gap-12">
         <SettingsNavigation :current="current" :sections="sections" @select="selectSection" />
         <section
           ref="settingsPanel"
@@ -178,7 +168,7 @@ async function logout() {
           @keydown="handleSettingsKeydown"
         >
           <div v-if="current === 'persona'" class="grid gap-12">
-            <PersonaSettingsForm :agent-id="activeAgentId()" />
+            <PersonaSettingsForm v-model="workspace.drafts.bot" :agent-id="activeAgentId()" />
           </div>
           <ProviderSettings
             v-else-if="current === 'providers'"
@@ -227,10 +217,15 @@ async function logout() {
           <BashSettingsForm v-else-if="current === 'bash'" v-model="workspace.drafts.bash" />
           <AdminPasswordForm v-else-if="current === 'security'" />
           <div v-else class="grid gap-12">
-            <MonitoringSettingsForm ref="monitoringForm" />
+            <div>
+              <h2 class="section-title">连接与通知</h2>
+              <p class="mt-2 text-sm leading-6 text-mute">管理 Bark 通知和 OneBot 反向连接。</p>
+            </div>
+            <MonitoringSettingsForm ref="monitoringForm" nested />
             <OneBotSettingsForm
               v-model="workspace.drafts.onebot"
               :field-states="workspace.envelope.value?.fieldStates"
+              nested
             />
           </div>
 

@@ -58,8 +58,10 @@ describe("tool configuration", () => {
     expect(config.bot.adminQq).toBe("");
     expect(config.bot.replyDebounceMs).toBe(5_000);
     expect(config.bot.emojiSendSize).toBe(512);
+    expect(config.bot.emojiSendSeparately).toBe(false);
     expect(config.bot.tone).toEqual({
       enabled: false,
+      segmentedReply: false,
       followMainModel: false,
       providerId: "",
       model: "gpt-5.4-mini",
@@ -68,14 +70,65 @@ describe("tool configuration", () => {
       maxOutputTokens: 2400,
       maxRetries: 2
     });
+    expect(config.bot.memory).toMatchObject({
+      dreamRecentWindowHours: 48,
+      dreamRecentMemoryLimit: 12,
+      dreamOlderMemoryLimit: 12
+    });
+  });
+
+  it("loads Dream sampling settings and safely defaults invalid legacy combinations", async () => {
+    await fs.writeFile(configPath, JSON.stringify({
+      bot: {
+        memory: {
+          dreamRecentWindowHours: 36,
+          dreamRecentMemoryLimit: 8,
+          dreamOlderMemoryLimit: 10
+        }
+      }
+    }), "utf8");
+    await expect(loadConfig()).resolves.toMatchObject({
+      bot: {
+        memory: {
+          dreamRecentWindowHours: 36,
+          dreamRecentMemoryLimit: 8,
+          dreamOlderMemoryLimit: 10
+        }
+      }
+    });
+
+    await fs.writeFile(configPath, JSON.stringify({
+      bot: {
+        memory: {
+          dreamRecentWindowHours: 900,
+          dreamRecentMemoryLimit: 20,
+          dreamOlderMemoryLimit: 20
+        }
+      }
+    }), "utf8");
+    await expect(loadConfig()).resolves.toMatchObject({
+      bot: {
+        memory: {
+          dreamRecentWindowHours: 48,
+          dreamRecentMemoryLimit: 12,
+          dreamOlderMemoryLimit: 12
+        }
+      }
+    });
   });
 
   it("loads an allowed emoji sending size and defaults invalid legacy values", async () => {
-    await fs.writeFile(configPath, JSON.stringify({ bot: { emojiSendSize: 128 } }), "utf8");
-    await expect(loadConfig()).resolves.toMatchObject({ bot: { emojiSendSize: 128 } });
+    await fs.writeFile(configPath, JSON.stringify({
+      bot: { emojiSendSize: 128, emojiSendSeparately: true }
+    }), "utf8");
+    await expect(loadConfig()).resolves.toMatchObject({
+      bot: { emojiSendSize: 128, emojiSendSeparately: true }
+    });
 
     await fs.writeFile(configPath, JSON.stringify({ bot: { emojiSendSize: 96 } }), "utf8");
-    await expect(loadConfig()).resolves.toMatchObject({ bot: { emojiSendSize: 512 } });
+    await expect(loadConfig()).resolves.toMatchObject({
+      bot: { emojiSendSize: 512, emojiSendSeparately: false }
+    });
   });
 
   it("loads a configured Agent reply debounce time and defaults missing legacy values", async () => {
@@ -97,6 +150,7 @@ describe("tool configuration", () => {
       bot: {
         tone: {
           enabled: true,
+          segmentedReply: true,
           followMainModel: true,
           providerId: "openai",
           model: "gpt-5.5",
@@ -111,6 +165,7 @@ describe("tool configuration", () => {
       bot: {
         tone: {
           enabled: true,
+          segmentedReply: true,
           followMainModel: true,
           providerId: "openai",
           model: "gpt-5.5",
@@ -127,6 +182,7 @@ describe("tool configuration", () => {
       bot: {
         tone: {
           enabled: false,
+          segmentedReply: false,
           followMainModel: false,
           providerId: "",
           model: "gpt-5.4-mini",

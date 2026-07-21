@@ -66,15 +66,21 @@ function createData(tasks: ScheduledTask[] = []) {
   return {
     tasks: shallowRef(tasks),
     conversations: shallowRef([]),
+    category: shallowRef("all" as const),
+    pagination: shallowRef({ page: 1, pageSize: 20, total: tasks.length, pageCount: 1 }),
     loading: shallowRef(false),
     saving: shallowRef(false),
     deletingId: shallowRef(""),
     togglingId: shallowRef(""),
+    retainingId: shallowRef(""),
     mutationBusy: shallowRef(false),
     status: shallowRef({ kind: "idle" as const, message: "" as const }),
     load: vi.fn().mockResolvedValue(true),
+    selectCategory: vi.fn().mockResolvedValue(true),
+    changePage: vi.fn().mockResolvedValue(true),
     save: vi.fn().mockResolvedValue(true),
     setEnabled: vi.fn().mockResolvedValue(true),
+    setPermanentRetention: vi.fn().mockResolvedValue(true),
     remove: vi.fn().mockResolvedValue(true),
     clearStatus: vi.fn(),
     dispose: vi.fn()
@@ -90,6 +96,9 @@ function task(): ScheduledTask {
     context: "提醒提交日报",
     schedule: { kind: "cron", expression: "0 9 * * *", timezone: "Asia/Shanghai" },
     targets: [{ conversationId: "group:10001", mentionUserIds: ["7"] }],
+    permanentRetention: false,
+    archived: false,
+    director: false,
     createdAt: "2026-07-19T00:00:00.000Z",
     updatedAt: "2026-07-19T00:00:00.000Z"
   };

@@ -200,13 +200,14 @@ describe("memory prompt routing contract", () => {
     const userProfile = await readPrompt("user_profile_prompt.json");
 
     expect(userProfile).toContain("所有与人本身有关的属性都归入用户画像");
-    expect(userProfile).toContain("userName 必须是 payload 中当前观测到的非空 QQ 昵称或显示名");
-    expect(userProfile).toContain("addressName 只保存 @{bot.name} 回复该用户时使用的明确称呼");
+    expect(userProfile).toContain("userName 只保存 payload 中当前观测到的 QQ 昵称或显示名");
+    expect(userProfile).toContain("addressNames 是称呼数组");
+    expect(userProfile).toContain("逐条检查 payload.messages");
     expect(userProfile).toContain("不要保留一次性事件的过程和结果");
     expect(userProfile).toContain("fact 中的“我”始终指当前角色 @{bot.name}");
     expect(userProfile).toContain("用户说“我喜欢摄影”时，要改写成当前角色对该用户的认知");
     expect(userProfile).toContain("正文禁止出现“我记得”");
-    expect(userProfile).toContain("昵称（QQ 123456）");
+    expect(userProfile).toContain("称呼（QQ 123456）");
   });
 });
 

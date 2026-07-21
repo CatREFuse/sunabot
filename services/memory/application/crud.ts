@@ -12,16 +12,16 @@ import type {
 import { buildEventMemoryValue } from "../domain/eventMergePolicy.js";
 import { toMemoryEntry } from "../domain/entryMapper.js";
 import {
-  configuredAddressName,
+  configuredAddressNames,
   memoryRecordsEqual,
-  normalizeAddressName,
+  normalizeAddressNames,
   normalizeIsoTimestamp,
   normalizeMemoryFactInputs,
   normalizeText,
   normalizeUserId,
   optionalString,
   parseEventTime,
-  readAddressName
+  readAddressNames
 } from "../domain/normalizers.js";
 import {
   formatUserProfileKey,
@@ -52,14 +52,18 @@ export async function createMemoryEntry(config: AppConfig, input: MemoryWriteInp
     if (source.id === "user_profile") {
       const userId = normalizeUserId(input.userId);
       const userName = normalizeText(input.userName);
-      const addressName = configuredAddressName(config, userId, normalizeAddressName(input.addressName));
+      const addressNames = configuredAddressNames(
+        config,
+        userId,
+        normalizeAddressNames(input.addressNames ?? input.addressName)
+      );
       if (userId) {
         value.userId = userId;
         value.userIds = [userId];
         value.id = `user_profile_${userId}`;
       }
       if (userName) value.userName = userName;
-      value.addressName = addressName;
+      value.addressNames = addressNames;
       value.value = text;
     }
 
@@ -99,13 +103,19 @@ export async function updateMemoryEntry(config: AppConfig, input: MemoryWriteInp
       record.value.value = nextText;
       record.value.key = formatUserProfileKey(optionalString(record.value.userId), optionalString(record.value.userName), id);
       const userId = normalizeUserId(record.value.userId);
-      if (Object.hasOwn(input, "addressName")) {
-        const addressName = configuredAddressName(config, userId, normalizeAddressName(input.addressName));
-        record.value.addressName = addressName;
+      if (Object.hasOwn(input, "addressNames") || Object.hasOwn(input, "addressName")) {
+        const addressNames = configuredAddressNames(
+          config,
+          userId,
+          normalizeAddressNames(input.addressNames ?? input.addressName)
+        );
+        record.value.addressNames = addressNames;
       } else {
-        const addressName = configuredAddressName(config, userId, readAddressName(record.value));
-        record.value.addressName = addressName;
+        record.value.addressNames = configuredAddressNames(config, userId, readAddressNames(record.value));
       }
+      delete record.value.addressName;
+      delete record.value.address_name;
+      delete record.value.salutation;
     }
 
     await writeMemoryRecords(filePath, records);
@@ -214,15 +224,24 @@ export async function readUserProfileForUser(config: AppConfig, userIdInput: unk
 export function resolveUserAddressName(
   config: AppConfig,
   userIdInput: unknown,
-  profile?: Pick<MemoryEntry, "addressName" | "userName">,
+  profile?: Pick<MemoryEntry, "addressNames" | "addressName" | "userName">,
   runtimeName?: unknown
 ) {
   const userId = normalizeUserId(userIdInput);
-  return configuredAddressName(
-    config,
-    userId,
-    normalizeAddressName(profile?.addressName) || normalizeText(profile?.userName) || normalizeText(runtimeName) || userId
-  );
+  return resolveUserAddressNames(config, userId, profile, runtimeName)[0] ?? userId;
+}
+
+export function resolveUserAddressNames(
+  config: AppConfig,
+  userIdInput: unknown,
+  profile?: Pick<MemoryEntry, "addressNames" | "addressName" | "userName">,
+  runtimeNames?: unknown
+) {
+  const userId = normalizeUserId(userIdInput);
+  return configuredAddressNames(config, userId, [
+    ...normalizeAddressNames(profile?.addressNames ?? profile?.addressName),
+    ...normalizeAddressNames(runtimeNames)
+  ]);
 }
 
 export async function clearMemorySource(config: AppConfig, sourceInput: MemorySourceId) {

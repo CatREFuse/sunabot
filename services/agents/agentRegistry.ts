@@ -660,6 +660,7 @@ function parseManifest(value: unknown, expectedId: string): AgentManifest {
       ...normalized.bot,
       replyDebounceMs: normalizeManifestReplyDebounceMs(normalized.bot.replyDebounceMs),
       emojiSendSize: normalizeManifestEmojiSendSize(normalized.bot.emojiSendSize),
+      emojiSendSeparately: normalized.bot.emojiSendSeparately === true,
       pokeOnNoReply: normalized.bot.pokeOnNoReply === true,
       quoteGroupReplyExcludedUserIds: normalizeManifestQqList(normalized.bot.quoteGroupReplyExcludedUserIds)
     },

@@ -38,7 +38,6 @@ describe("selfie prompt defaults", () => {
               type: "array",
               minItems: 1,
               maxItems: 3,
-              uniqueItems: true,
               items: { type: "string", pattern: "^[a-f0-9]{64}$" }
             }
           },
@@ -46,5 +45,6 @@ describe("selfie prompt defaults", () => {
         }
       }
     });
+    expect(JSON.stringify(template.response_format)).not.toContain('"uniqueItems"');
   });
 });

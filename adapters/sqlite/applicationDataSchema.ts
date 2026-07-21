@@ -2,6 +2,8 @@ import type { DatabaseSync } from "node:sqlite";
 import { modelCallMeasurement } from "../../src/modelCallStats.js";
 import type { ModelCallStore } from "./modelCallStore.js";
 import { migrateScheduledTaskTables } from "./scheduledTaskStore.js";
+import { migrateDirectorTables } from "./directorStore.js";
+import { migrateDreamTables } from "./dreamStore.js";
 
 type SqlRow = Record<string, unknown>;
 
@@ -166,6 +168,8 @@ export function migrateApplicationDataSchema(database: DatabaseSync, modelCalls:
   `);
 
   migrateScheduledTaskTables(database);
+  migrateDirectorTables(database);
+  migrateDreamTables(database);
 
   const rawVersion = Number(metadata(database, "storage-schema-version") ?? 0);
   const schemaVersion = Number.isSafeInteger(rawVersion) && rawVersion >= 0 ? rawVersion : 0;
@@ -217,6 +221,15 @@ export function migrateApplicationDataSchema(database: DatabaseSync, modelCalls:
   }
   if (!Number.isSafeInteger(repairedVersion) || repairedVersion < 13) {
     setMetadata(database, "storage-schema-version", "13");
+  }
+  if (!Number.isSafeInteger(repairedVersion) || repairedVersion < 14) {
+    setMetadata(database, "storage-schema-version", "14");
+  }
+  if (!Number.isSafeInteger(repairedVersion) || repairedVersion < 15) {
+    setMetadata(database, "storage-schema-version", "15");
+  }
+  if (!Number.isSafeInteger(repairedVersion) || repairedVersion < 16) {
+    setMetadata(database, "storage-schema-version", "16");
   }
 }
 

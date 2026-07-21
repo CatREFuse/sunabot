@@ -2,6 +2,7 @@ import type { SunaTool, ToolExecutionMode, ToolParameterSummary } from "../types
 
 const toolIcons: Record<string, string> = {
   memory_recall: "bx-brain",
+  knowledge_search: "bx-library",
   assistant_text: "bx-message-rounded-dots",
   websearch: "bx-globe",
   generate_img: "bx-image-add",

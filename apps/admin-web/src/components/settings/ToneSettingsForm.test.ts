@@ -6,6 +6,7 @@ describe("ToneSettingsForm", () => {
   it("edits the tone provider and independent model parameters", async () => {
     const modelValue = {
       enabled: false,
+      segmentedReply: false,
       followMainModel: false,
       providerId: "",
       model: "gpt-5.4-mini",
@@ -36,6 +37,7 @@ describe("ToneSettingsForm", () => {
     });
 
     await wrapper.get('input[type="checkbox"]').setValue(true);
+    await wrapper.get('[data-config-field="tone.segmentedReply"] input').setValue(true);
     await wrapper.get('[data-config-field="tone.providerId"]').setValue("default");
     await wrapper.findAll("select")[1]!.setValue("tone-model");
     await wrapper.findAll("select")[2]!.setValue("high");
@@ -48,6 +50,7 @@ describe("ToneSettingsForm", () => {
 
     expect(modelValue).toEqual({
       enabled: true,
+      segmentedReply: true,
       followMainModel: false,
       providerId: "default",
       model: "tone-model",
@@ -63,6 +66,7 @@ describe("ToneSettingsForm", () => {
   it("shows and locks the main model configuration while following it", () => {
     const modelValue = {
       enabled: true,
+      segmentedReply: false,
       followMainModel: true,
       providerId: "tone-provider",
       model: "tone-model",

@@ -50,7 +50,7 @@ function confirmDescription() {
     <section v-if="tool" class="max-h-[calc(100dvh-32px)] w-full max-w-2xl overflow-y-auto rounded border border-visible bg-panel p-5 sm:p-6">
       <header class="flex min-w-0 items-start justify-between gap-4 border-b border-line pb-5">
         <div class="flex min-w-0 items-start gap-3">
-          <i class="bx w-11 shrink-0 text-[32px] leading-[44px] text-[rgb(var(--color-interactive))]" :class="toolIcon(tool.name)" aria-hidden="true"></i>
+          <i class="bx w-11 shrink-0 text-[32px] leading-[44px] text-mute" :class="toolIcon(tool.name)" aria-hidden="true"></i>
           <div class="min-w-0">
             <h2 id="tool-detail-title" class="text-xl font-medium text-display">{{ tool.title }}</h2>
             <p class="mt-1 break-all font-mono text-[10px] text-disabled">{{ tool.name }}</p>
@@ -87,9 +87,17 @@ function confirmDescription() {
             <span v-if="tool.accessDescription" class="ml-2">{{ tool.accessDescription }}</span>
           </dd>
         </div>
-        <div v-if="tool.executionBackend" class="divider-row sm:mr-5">
-          <dt class="field-label">管理员私聊后端</dt>
-          <dd class="inline-state"><i class="bx bx-server mr-1" aria-hidden="true"></i>{{ tool.executionBackend === "docker" ? "Docker" : "Native" }}</dd>
+        <div v-if="tool.bashEnvironments" class="divider-row sm:mr-5">
+          <dt class="field-label">[native bash]</dt>
+          <dd class="inline-state" :data-kind="tool.bashEnvironments.native.available ? 'success' : 'error'">
+            <i class="bx mr-1" :class="tool.bashEnvironments.native.available ? 'bx-check-shield' : 'bx-error-circle'" aria-hidden="true"></i>{{ tool.bashEnvironments.native.available ? "可用" : "不可用" }}
+          </dd>
+        </div>
+        <div v-if="tool.bashEnvironments" class="divider-row">
+          <dt class="field-label">[docker bash]</dt>
+          <dd class="inline-state" :data-kind="tool.bashEnvironments.docker.started ? 'success' : 'error'">
+            <i class="bx mr-1" :class="tool.bashEnvironments.docker.started ? 'bx-check-circle' : 'bx-error-circle'" aria-hidden="true"></i>{{ tool.bashEnvironments.docker.started ? "已启动" : "未启动" }}
+          </dd>
         </div>
         <div v-if="availability.kind === 'runtime'" class="divider-row sm:col-span-2">
           <dt class="field-label">运行环境</dt>
@@ -123,7 +131,7 @@ function confirmDescription() {
         ></textarea>
       </label>
       <div class="mt-3 flex flex-wrap items-center justify-between gap-3">
-        <span v-if="descriptionOverridden" class="inline-state text-[rgb(var(--color-interactive))]"><i class="bx bx-edit-alt mr-1" aria-hidden="true"></i>自定义说明</span>
+        <span v-if="descriptionOverridden" class="inline-state text-display"><i class="bx bx-edit-alt mr-1" aria-hidden="true"></i>自定义说明</span>
         <span v-else class="inline-state"><i class="bx bx-reset mr-1" aria-hidden="true"></i>继承说明</span>
         <div class="flex flex-wrap gap-2">
           <button class="btn btn-ghost" type="button" data-settings-commit :disabled="!descriptionOverridden" @click="emit('resetDescription')">

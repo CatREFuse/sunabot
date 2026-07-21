@@ -9,6 +9,8 @@ import {
   PROMPT_FILE_DEFINITIONS
 } from "../agent/public.js";
 import type { AgentManifest } from "./agentRegistry.js";
+import { DEFAULT_DIRECTOR_SEED } from "../director/public.js";
+import { DEFAULT_AIR_KNOWLEDGE } from "../air/public.js";
 
 export function initialAgentWorkspaceFiles(
   config: AppConfig,
@@ -81,6 +83,8 @@ function initialPersonaFiles(name: string) {
       ""
     ].join("\n"),
     "USER.md": `${name}根据当前对话和用户画像称呼用户。\n`,
-    "RELATION.md": `${name}只使用工作区中明确记录的关系。\n`
+    "RELATION.md": `${name}只使用工作区中明确记录的关系。\n`,
+    "AIR.md": DEFAULT_AIR_KNOWLEDGE,
+    "DIRECTOR_SEED.md": DEFAULT_DIRECTOR_SEED
   };
 }

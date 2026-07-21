@@ -20,6 +20,12 @@ import {
   WEBSEARCH_TOOL_NAME,
   websearchTool
 } from "./definitions.js";
+import { WEBFETCH_TOOL_NAME, webfetchTool } from "./webFetchTool.js";
+import {
+  KNOWLEDGE_SEARCH_TOOL_NAME,
+  knowledgeSearchTool,
+  type KnowledgeSearchToolPort
+} from "./knowledgeSearchTool.js";
 import { GENERATE_IMG_TOOL_NAME, generateImgTool } from "./generateImgTool.js";
 import { SELFIE_TOOL_NAME, selfieTool } from "./selfieTool.js";
 import { ASSISTANT_TEXT_TOOL_NAME, assistantTextTool } from "./assistantTextTool.js";
@@ -34,6 +40,12 @@ import {
   cronTool,
   type CronToolPort
 } from "./cronTool.js";
+import {
+  CALL_DIRECTOR_TOOL_NAME,
+  callDirectorTool,
+  type CallDirectorToolPort
+} from "./callDirectorTool.js";
+import { READ_AIR_TOOL_NAME, readAirTool, type ReadAirToolPort } from "./readAirTool.js";
 import {
   READ_FILE_TOOL_NAME,
   WRITE_FILE_TOOL_NAME,
@@ -74,6 +86,7 @@ export interface ToolAvailability {
   bot?: Pick<BotConfig, "tools">;
   selfie?: { enabled: boolean };
   memory?: { enabled: boolean };
+  knowledge?: KnowledgeSearchToolPort;
   conversationAssets?: { enabled: boolean };
   voice?: { enabled: boolean; languages: readonly VoiceLanguage[]; defaultLanguage: VoiceLanguage };
   asyncCodex?: boolean;
@@ -81,6 +94,8 @@ export interface ToolAvailability {
   imageTools?: boolean;
   systemConfig?: SystemConfigToolPort;
   cron?: CronToolPort;
+  director?: CallDirectorToolPort;
+  air?: ReadAirToolPort;
   skills?: SkillRuntimeToolPort;
   skillCapabilities?: SkillToolCapabilitySnapshot;
   disabledTools?: readonly AgentToolName[];
@@ -108,6 +123,10 @@ export interface ToolMetadata {
   accessLabel?: string;
   accessDescription?: string;
   executionBackend?: "native" | "docker";
+  bashEnvironments?: {
+    native: { available: boolean; reasonCode?: WorkspaceBashUnavailableReason };
+    docker: { started: boolean; reasonCode?: WorkspaceBashUnavailableReason };
+  };
   runtimeReasonCode?: WorkspaceBashUnavailableReason;
   execution: ToolExecution;
   parameters: Record<string, unknown>;
@@ -158,12 +177,42 @@ const catalog: readonly ToolCatalogEntry[] = [
     execution: "inline"
   },
   {
+    name: READ_AIR_TOOL_NAME,
+    title: "读空气",
+    summary: "更新当前 Agent 的场域知识。",
+    definition: () => readAirTool,
+    available: (options) => Boolean(options.air),
+    unavailableReason: "当前会话未提供场域知识更新能力。",
+    unavailabilityKind: "session",
+    defaultEnabled: true,
+    execution: "inline"
+  },
+  {
+    name: KNOWLEDGE_SEARCH_TOOL_NAME,
+    title: "知识库检索",
+    summary: "从当前 Agent 的知识库召回相关段落。",
+    definition: () => knowledgeSearchTool,
+    available: (options) => options.knowledge?.enabled === true,
+    unavailableReason: "当前 Agent 的知识库不可用。",
+    defaultEnabled: true,
+    execution: "inline"
+  },
+  {
     name: WEBSEARCH_TOOL_NAME,
     title: "网页搜索",
     summary: "搜索网页并返回结果。",
     definition: () => websearchTool,
     available: (options) => Boolean(options.bot?.tools.websearch),
     unavailableReason: "网页搜索配置不可用。",
+    execution: "inline"
+  },
+  {
+    name: WEBFETCH_TOOL_NAME,
+    title: "网页读取",
+    summary: "读取单个公开网页并返回有界正文。",
+    definition: () => webfetchTool,
+    available: (options) => Boolean(options.bot),
+    unavailableReason: "当前请求未提供网页读取能力。",
     execution: "inline"
   },
   {
@@ -233,7 +282,7 @@ const catalog: readonly ToolCatalogEntry[] = [
       options.voice?.defaultLanguage
     ),
     available: (options) => options.voice?.enabled === true && options.voice.languages.length > 0,
-    unavailableReason: "当前 Agent 未配置可用的语音参考音频。",
+    unavailableReason: "当前 Agent 未配置可用的在线音色。",
     execution: "inline"
   },
   {
@@ -306,6 +355,16 @@ const catalog: readonly ToolCatalogEntry[] = [
     accessDescription: "群聊成员均可使用；私聊与 Web Chat 仅管理员可用。",
     defaultEnabled: true,
     execution: "inline"
+  },
+  {
+    name: CALL_DIRECTOR_TOOL_NAME,
+    title: "日常导演",
+    summary: "让角色请求演绎导演调整今天尚未结束的行程。",
+    definition: () => callDirectorTool,
+    available: (options) => Boolean(options.director),
+    unavailableReason: "当前 Agent 的日常导演不可用。",
+    defaultEnabled: true,
+    execution: "inline"
   }
 ];
 
@@ -332,7 +391,8 @@ export function listToolMetadata(
     const promptDescription = prompt ? readDescription(prompt) : undefined;
     const description = runtimeToolDescription(
       entry,
-      normalizedDescription(override?.description) ?? promptDescription ?? defaultDescription
+      normalizedDescription(override?.description) ?? promptDescription ?? defaultDescription,
+      options
     );
     const descriptionSource: ToolDescriptionSource = normalizedDescription(override?.description)
       ? "override"
@@ -386,7 +446,8 @@ export function resolveProviderToolDefinitions(
     const definition = applyRuntimeToolContract(entry, prompt ?? canonical, canonical);
     const description = runtimeToolDescription(
       entry,
-      normalizedDescription(override?.description) ?? readDescription(definition)
+      normalizedDescription(override?.description) ?? readDescription(definition),
+      options
     );
     return [{ ...definition, description }];
   });
@@ -473,6 +534,9 @@ function applyRuntimeToolContract(
   if (
     entry.name !== SYSTEM_CONFIG_TOOL_NAME
     && entry.name !== CRON_TOOL_NAME
+    && entry.name !== CALL_DIRECTOR_TOOL_NAME
+    && entry.name !== READ_AIR_TOOL_NAME
+    && entry.name !== WEBFETCH_TOOL_NAME
     && entry.name !== GENERATE_IMG_TOOL_NAME
     && entry.name !== SELFIE_TOOL_NAME
     && entry.name !== READ_FILE_TOOL_NAME
@@ -490,7 +554,7 @@ function applyRuntimeToolContract(
   };
 }
 
-function runtimeToolDescription(entry: ToolCatalogEntry, description: string) {
+function runtimeToolDescription(entry: ToolCatalogEntry, description: string, _options: ToolAvailability) {
   if (
     (entry.name !== GENERATE_IMG_TOOL_NAME && entry.name !== SELFIE_TOOL_NAME) ||
     description.includes("historical media handles")

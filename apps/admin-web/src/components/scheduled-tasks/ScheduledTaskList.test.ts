@@ -9,10 +9,12 @@ describe("ScheduledTaskList", () => {
     const wrapper = mount(ScheduledTaskList, {
       props: {
         tasks: statuses.map((status, index) => task(status, index)),
+        category: "all",
         loading: false,
         mutationBusy: false,
         deletingId: "",
-        togglingId: ""
+        togglingId: "",
+        retainingId: ""
       }
     });
 
@@ -20,6 +22,49 @@ describe("ScheduledTaskList", () => {
       expect(wrapper.text()).toContain(label);
     }
     for (const status of statuses) expect(wrapper.text()).not.toContain(status);
+    expect(wrapper.get("table").element.tagName).toBe("TABLE");
+  });
+
+  it("offers permanent retention only for archived tasks", () => {
+    const archived = {
+      ...task("completed", 0),
+      schedule: { kind: "once" as const, runAt: "2026-07-19T01:00:00.000Z" },
+      archived: true
+    };
+    const wrapper = mount(ScheduledTaskList, {
+      props: {
+        tasks: [archived, task("completed", 1)],
+        category: "all",
+        loading: false,
+        mutationBusy: false,
+        deletingId: "",
+        togglingId: "",
+        retainingId: ""
+      }
+    });
+
+    expect(wrapper.findAll("button").filter((button) => button.text().includes("永久保留"))).toHaveLength(1);
+    expect(wrapper.text()).toContain("归档");
+  });
+
+  it("labels Director tasks and keeps the empty Director view system-managed", async () => {
+    const director = { ...task("completed", 0), director: true };
+    const wrapper = mount(ScheduledTaskList, {
+      props: {
+        tasks: [director],
+        category: "director",
+        loading: false,
+        mutationBusy: false,
+        deletingId: "",
+        togglingId: "",
+        retainingId: ""
+      }
+    });
+    expect(wrapper.text()).toContain("导演任务");
+
+    await wrapper.setProps({ tasks: [] });
+    expect(wrapper.text()).toContain("还没有导演任务");
+    expect(wrapper.findAll("button").some((button) => button.text().includes("新建任务"))).toBe(false);
   });
 });
 
@@ -32,6 +77,9 @@ function task(lastRunStatus: string, index: number): ScheduledTask {
     context: "执行提醒",
     schedule: { kind: "cron", expression: "0 9 * * *", timezone: "Asia/Shanghai" },
     targets: [{ conversationId: "group:10001", mentionUserIds: [] }],
+    permanentRetention: false,
+    archived: false,
+    director: false,
     createdAt: "2026-07-19T00:00:00.000Z",
     updatedAt: "2026-07-19T00:00:00.000Z",
     lastRunStatus

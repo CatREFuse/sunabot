@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ProviderConfig, ProviderKind } from "../../src/types.js";
+import type { BotConfig, ProviderConfig, ProviderKind } from "../../src/types.js";
 
 const appendRequestLog = vi.hoisted(() => vi.fn(async () => undefined));
 vi.mock("../../src/requestLog.js", () => ({ appendRequestLog }));
@@ -38,7 +38,8 @@ describe("provider protocols", () => {
       ],
       response_format: { type: "text" }
     }, {
-      logContext: { stage: "reply", promptFamily: "conversation.reply" }
+      logContext: { stage: "reply", promptFamily: "conversation.reply" },
+      bot: webfetchBotConfig()
     })).resolves.toBe("OK");
 
     const body = create.mock.calls[0]?.[0] as Record<string, any>;
@@ -49,6 +50,7 @@ describe("provider protocols", () => {
       prompt_cache_breakpoint: { mode: "explicit" }
     });
     expect(body.input[2].content[0]).toEqual({ type: "input_text", text: "ping" });
+    expectProviderSafeWebFetch(body.tools.find((tool: Record<string, unknown>) => tool.name === "webfetch"));
   });
 
   it("logs every visible SDK retry and disables hidden client retries", async () => {
@@ -127,12 +129,19 @@ describe("provider protocols", () => {
     }));
     vi.spyOn(provider as never, "createChatClient").mockReturnValue({ chat: { completions: { create } } });
 
-    await expect(provider.complete("system", [{ role: "user", content: "ping" }], { asyncCodex: true })).resolves.toBe("OK");
+    await expect(provider.complete("system", [{ role: "user", content: "ping" }], {
+      asyncCodex: true,
+      bot: webfetchBotConfig()
+    })).resolves.toBe("OK");
     const baseUrl = (provider as unknown as { normalizeChatBaseUrl(): string }).normalizeChatBaseUrl();
     expect(`${baseUrl}/chat/completions`).toBe("https://compatible.example/v1/chat/completions");
     expect(create.mock.calls[0]?.[0]).toMatchObject({ model: "compatible-model", messages: [{ role: "system" }, { role: "user" }] });
-    const chatCodex = (create.mock.calls[0]?.[0] as Record<string, any>).tools[0].function;
+    const chatTools = (create.mock.calls[0]?.[0] as Record<string, any>).tools;
+    const chatCodex = chatTools.find((tool: Record<string, any>) => tool.function.name === "codex").function;
     expect(chatCodex.parameters.required).toContain("dispatch_message");
+    expectProviderSafeWebFetch(
+      chatTools.find((tool: Record<string, any>) => tool.function.name === "webfetch").function
+    );
   });
 
   it("does not start or log an SDK attempt after cancellation", async () => {
@@ -200,7 +209,7 @@ describe("provider protocols", () => {
       role: "user",
       content: "看图",
       imageUrls: ["data:image/png;base64,AAAA"]
-    }], { onAssistantText: delivered, asyncCodex: true })).resolves.toBe("完成");
+    }], { onAssistantText: delivered, asyncCodex: true, bot: webfetchBotConfig() })).resolves.toBe("完成");
     expect(delivered.mock.calls).toEqual([
       ["处理中", "text"],
       ["处理中", "assistant_text"]
@@ -213,6 +222,8 @@ describe("provider protocols", () => {
     ]));
     const anthropicCodex = firstBody.tools.find((tool: Record<string, unknown>) => tool.name === "codex");
     expect(anthropicCodex.input_schema.required).toContain("dispatch_message");
+    const anthropicWebFetch = firstBody.tools.find((tool: Record<string, unknown>) => tool.name === "webfetch");
+    expectProviderSafeWebFetch({ parameters: anthropicWebFetch.input_schema, strict: false });
     const secondBody = JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit).body));
     expect(secondBody.messages.at(-1).content[0]).toMatchObject({ type: "tool_result", tool_use_id: "tool-1" });
   });
@@ -229,7 +240,7 @@ describe("provider protocols", () => {
       role: "user",
       content: "看图",
       imageUrls: ["data:image/png;base64,AAAA"]
-    }], { asyncCodex: true })).resolves.toBe("OK");
+    }], { asyncCodex: true, bot: webfetchBotConfig() })).resolves.toBe("OK");
     expect(String(fetchMock.mock.calls[0]?.[0])).toBe("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent");
     expect(new Headers((fetchMock.mock.calls[0]?.[1] as RequestInit).headers).get("x-goog-api-key")).toBe("gemini-key");
     const body = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body));
@@ -238,6 +249,10 @@ describe("provider protocols", () => {
     ]));
     const geminiCodex = body.tools[0].functionDeclarations.find((tool: Record<string, unknown>) => tool.name === "codex");
     expect(geminiCodex.parameters.required).toContain("dispatch_message");
+    expectProviderSafeWebFetch({
+      ...body.tools[0].functionDeclarations.find((tool: Record<string, unknown>) => tool.name === "webfetch"),
+      strict: false
+    });
   });
 
   it.each([
@@ -356,6 +371,22 @@ function providerConfig(kind: ProviderKind): ProviderConfig {
     modelSource: "custom",
     multimodal: "auto"
   };
+}
+
+function webfetchBotConfig() {
+  return { tools: { maxCalls: 20 } } as unknown as BotConfig;
+}
+
+function expectProviderSafeWebFetch(tool: Record<string, any>) {
+  expect(tool).toMatchObject({
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      required: ["url", "semanticMatch"]
+    },
+    strict: false
+  });
+  expect(tool.parameters).not.toHaveProperty("oneOf");
 }
 
 function jsonResponse(payload: unknown) {

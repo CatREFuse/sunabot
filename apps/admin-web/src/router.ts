@@ -5,6 +5,7 @@ import ImagesView from "./views/ImagesView.vue";
 import EmojisView from "./views/EmojisView.vue";
 import LogsView from "./views/LogsView.vue";
 import MemoryView from "./views/MemoryView.vue";
+import KnowledgeView from "./views/KnowledgeView.vue";
 import OverviewView from "./views/OverviewView.vue";
 import PromptsView from "./views/PromptsView.vue";
 import SettingsView from "./views/SettingsView.vue";
@@ -32,6 +33,7 @@ export const router = createRouter({
       redirect: (to) => ({ name: "agent-prompts", params: { fileId: to.params.fileId } })
     },
     { path: "/memory", name: "memory", component: MemoryView },
+    { path: "/knowledge", name: "knowledge", component: KnowledgeView },
     { path: "/images", name: "images", component: ImagesView },
     { path: "/emojis", name: "emojis", component: EmojisView },
     { path: "/logs", name: "logs", component: LogsView },

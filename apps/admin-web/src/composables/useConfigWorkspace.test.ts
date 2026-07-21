@@ -51,8 +51,9 @@ function config(adminName: string): AppConfig {
       quoteGroupReplyExcludedUserIds: [],
       contextMessageLimit: 48,
       emojiSendSize: 512,
-      tone: { enabled: false, followMainModel: false, providerId: "", model: "gpt-5.4-mini", reasoningEffort: "low", temperature: 0.7, maxOutputTokens: 2400, maxRetries: 2 },
-      memory: { memoryModel: "gpt-5.4-mini", reasoningEffort: "medium", messageThreshold: 48, workingMemoryMaxEntries: 100, workMemoryCompressInPrompt: "in.md", workMemoryCompressOutPrompt: "out.md", userProfilePrompt: "user.md" },
+      emojiSendSeparately: false,
+      tone: { enabled: false, segmentedReply: false, followMainModel: false, providerId: "", model: "gpt-5.4-mini", reasoningEffort: "low", temperature: 0.7, maxOutputTokens: 2400, maxRetries: 2 },
+      memory: { memoryModel: "gpt-5.4-mini", reasoningEffort: "medium", messageThreshold: 48, workingMemoryMaxEntries: 100, dreamRecentWindowHours: 48, dreamRecentMemoryLimit: 12, dreamOlderMemoryLimit: 12, workMemoryCompressInPrompt: "in.md", workMemoryCompressOutPrompt: "out.md", userProfilePrompt: "user.md" },
       orchestrator: { enabled: false, userGroupchatOrchestratorModel: "gpt-5.4-mini", groupThreadModel: "gpt-5.4-mini", reasoningEffort: "medium", promptFile: "orchestrator.md", messageThreshold: 10, recentMessageWindowMs: 60_000 },
       tools: {
         maxCalls: 20,
@@ -298,7 +299,7 @@ describe("useConfigWorkspace", () => {
     const legacy = envelope("r1", "initial");
     delete (legacy.config as Partial<AppConfig>).normalReply;
     delete (legacy.config.bot as Partial<AppConfig["bot"]>).replyDebounceMs;
-    delete (legacy.config.bot as Partial<AppConfig["bot"]>).tone;
+    delete (legacy.config.bot.tone as Partial<AppConfig["bot"]["tone"]>).segmentedReply;
     delete (legacy.config.bot.tools as Partial<AppConfig["bot"]["tools"]>).overrides;
     apiRequest.mockResolvedValueOnce(legacy);
     const workspace = useConfigWorkspace();
@@ -307,7 +308,7 @@ describe("useConfigWorkspace", () => {
 
     expect(workspace.drafts.normalReply).toEqual({ maxRetries: 3 });
     expect(workspace.drafts.bot.replyDebounceMs).toBe(5_000);
-    expect(workspace.drafts.tone).toMatchObject({ enabled: false, providerId: "", maxRetries: 2 });
+    expect(workspace.drafts.tone).toMatchObject({ enabled: false, segmentedReply: false, providerId: "", maxRetries: 2 });
     expect(workspace.drafts.tools.overrides).toEqual({});
     expect(apiRequest).toHaveBeenCalledTimes(1);
     workspace.cancel();

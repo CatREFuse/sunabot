@@ -98,7 +98,8 @@ describe("ConfigService", () => {
         quoteGroupReplies: false,
         quoteGroupReplyExcludedUserIds: ["20001", "20002"],
         contextMessageLimit: 64,
-        emojiSendSize: 128
+        emojiSendSize: 128,
+        emojiSendSeparately: true
       }
     });
 
@@ -118,7 +119,8 @@ describe("ConfigService", () => {
       quoteGroupReplies: false,
       quoteGroupReplyExcludedUserIds: ["20001", "20002"],
       contextMessageLimit: 64,
-      emojiSendSize: 128
+      emojiSendSize: 128,
+      emojiSendSeparately: true
     });
     expect(currentConfig().onebot.quoteGroupReplies).toBe(false);
 
@@ -389,6 +391,7 @@ function botSection(adminName: string) {
     quoteGroupReplies: bot.quoteGroupReplies,
     quoteGroupReplyExcludedUserIds: bot.quoteGroupReplyExcludedUserIds,
     contextMessageLimit: bot.contextMessageLimit,
-    emojiSendSize: bot.emojiSendSize
+    emojiSendSize: bot.emojiSendSize,
+    emojiSendSeparately: bot.emojiSendSeparately
   };
 }

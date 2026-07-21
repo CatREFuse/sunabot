@@ -28,6 +28,7 @@ export interface EmojiManagementMock {
   recordsByAgent: Record<string, EmojiRecord[]>;
   versionsByAgent: Record<string, Record<string, EmojiVersionRecord[]>>;
   sendSizeByAgent: Record<string, 64 | 128 | 256 | 512 | 1024>;
+  sendSeparatelyByAgent: Record<string, boolean>;
   requests: EmojiMockRequest[];
   uploadFixture: Buffer;
 }
@@ -49,6 +50,7 @@ export async function installEmojiManagementMock(page: Page): Promise<EmojiManag
     },
     versionsByAgent: {},
     sendSizeByAgent: { plana: 512, arona: 256 },
+    sendSeparatelyByAgent: { plana: false, arona: false },
     requests: [],
     uploadFixture
   };
@@ -89,10 +91,15 @@ export async function installEmojiManagementMock(page: Page): Promise<EmojiManag
     }
     if (path === "/api/emojis/settings" && method === "PATCH") {
       const sendSize = body?.sendSize;
+      const sendSeparately = body?.sendSeparately;
       if (sendSize !== 64 && sendSize !== 128 && sendSize !== 256 && sendSize !== 512 && sendSize !== 1024) {
         return fulfillJson(route, { error: { code: "EMOJI_SETTINGS_INVALID", message: "表情发送尺寸无效。" } }, 400);
       }
+      if (typeof sendSeparately !== "boolean") {
+        return fulfillJson(route, { error: { code: "EMOJI_SETTINGS_INVALID", message: "表情发送方式无效。" } }, 400);
+      }
       state.sendSizeByAgent[agentId] = sendSize;
+      state.sendSeparatelyByAgent[agentId] = sendSeparately;
       return fulfillJson(route, payload(state, agentId));
     }
     if (path === "/api/emojis/generate" && method === "POST") {
@@ -139,6 +146,7 @@ function payload(state: EmojiManagementMock, agentId: string): EmojiPayload {
     presetKeys: [...emojiPresetKeys],
     emojis: records(state, agentId),
     sendSize: state.sendSizeByAgent[agentId] ?? 512,
+    sendSeparately: state.sendSeparatelyByAgent[agentId] ?? false,
     revision: `${agentId}-revision`
   };
 }

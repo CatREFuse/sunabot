@@ -47,6 +47,7 @@ interface ScheduleReplyDebounceInput {
 interface TrackedReplyPreparation {
   key: string;
   sequence: number;
+  userId: number;
   promise: Promise<void>;
 }
 
@@ -129,7 +130,7 @@ export class RuntimeReplyDebounce {
     const preparationKey = input.preparationKey?.trim() || undefined;
     const triggerKey = preparationKey ?? persistentIncomingKey(input.incoming);
     const replyQuote = captureReplyQuote(this.host, input.incoming);
-    const delayMs = this.delayMs();
+    const delayMs = input.route === "ambient" ? 0 : this.delayMs();
     if (delayMs === 0) {
       return this.host.sessionCoordinator.enqueueEvent({
         sessionId: conversationId,
@@ -228,6 +229,7 @@ export class RuntimeReplyDebounce {
     const tracked = {
       key,
       sequence,
+      userId: incoming.userId,
       promise
     };
     promises.add(tracked);
@@ -245,6 +247,9 @@ export class RuntimeReplyDebounce {
     if (!preparations?.size) return;
     await Promise.allSettled([...preparations]
       .filter((preparation) => preparation.sequence <= contextThroughSequence)
+      .filter((preparation) => (
+        incoming.scope === "private" || preparation.userId === incoming.userId
+      ))
       .map((preparation) => preparation.promise));
   }
 
@@ -369,9 +374,6 @@ export class RuntimeReplyDebounce {
   prepareMessages(payload: DurableReplyPayload, gateway: MessagingPort) {
     const conversationId = conversationRecordId(payload.incoming);
     const record = this.host.conversationRecords.get(conversationId) ?? this.recoverMessages(payload);
-    const activePayloads = this.delayMs() === 0
-      ? []
-      : this.activeConversationPayloads(conversationId);
     const recoveryThroughSequence = "contextThroughSequence" in payload
       ? payload.contextThroughSequence
       : undefined;
@@ -379,7 +381,8 @@ export class RuntimeReplyDebounce {
       const sequence = message.sequence;
       if (message.role !== "user" || !Number.isSafeInteger(sequence)
         || Number(sequence) < payload.captureSequence
-        || Number(sequence) > (recoveryThroughSequence ?? record.messageCount)) return [];
+        || Number(sequence) > (recoveryThroughSequence ?? record.messageCount)
+        || (payload.incoming.scope !== "private" && message.userId !== payload.incoming.userId)) return [];
       const incoming = restoredConversationIncoming(record, message);
       return incoming ? [{
         snapshot: { incoming, captureSequence: Number(sequence) },
@@ -388,11 +391,10 @@ export class RuntimeReplyDebounce {
     });
     const seenSequences = new Set<number>();
     const snapshots = [
-      ...[...activePayloads, payload]
-      .flatMap((value) => replySnapshots(value).map((snapshot, index) => ({
+      ...replySnapshots(payload).map((snapshot, index) => ({
         snapshot,
-        preparationKey: index === 0 ? value.preparationKey : undefined
-      }))),
+        preparationKey: index === 0 ? payload.preparationKey : undefined
+      })),
       ...recoveredSnapshots
     ]
       .sort((left, right) => left.snapshot.captureSequence - right.snapshot.captureSequence)
@@ -446,7 +448,7 @@ export class RuntimeReplyDebounce {
     this.validateEventSession(event, incoming);
     // The durable debounce event is committed before the conversation snapshot.
     // Rebuild the first trigger before gate checks so a crash in that gap remains recoverable.
-    const record = this.recoverMessages(payload);
+    this.recoverMessages(payload);
     const gate = readReplyGateSnapshot(payload.replyGate, incoming.scope, payload.conversationId);
     if (!gate || !this.host.isReplyTaskCurrent(incoming, gate, signal)) {
       this.clearPreparation(payload);
@@ -455,7 +457,7 @@ export class RuntimeReplyDebounce {
 
     this.prepareMessages(payload, this.host.requireActiveGateway());
 
-    const contextThroughSequence = Math.max(payload.captureSequence, record.messageCount);
+    const contextThroughSequence = replySnapshots(payload).at(-1)!.captureSequence;
     const preparationKey = payload.preparationKey?.trim() || undefined;
     const replyKey = preparationKey ?? persistentIncomingKey(incoming);
     return {

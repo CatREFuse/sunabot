@@ -18,15 +18,15 @@ AI 建议只在进程内保存 10 分钟并绑定原始文件 SHA-256 revision�
 
 ## Agent 自助设置安全边界
 
-`system_config` 由宿主按会话注入，只允许当前 Agent 的管理员 QQ 私聊修改配置；群聊、普通私聊、prompt override 和 Web Chat 修改均失败关闭，Web Chat 只允许查询。查询响应使用固定白名单投影，不能包含密钥、环境变量名、绝对路径、原始消息、Provider 地址或探针诊断正文。Bash backend 仅是配置偏好，不能绕过 capability 探针；macOS Native 缺少 bubblewrap 或等价强隔离时保持关闭，Docker backend 不能使用 Docker socket 或宿主 Bash fallback。
+`system_config` 由宿主按会话注入，只允许当前 Agent 的管理员 QQ 私聊修改配置；群聊、普通私聊、prompt override 和 Web Chat 修改均失败关闭，Web Chat 只允许查询。查询响应使用固定白名单投影，不能包含密钥、环境变量名、绝对路径、原始消息、Provider 地址或探针诊断正文。Bash backend 使用固定会话路由，不能由配置切换或绕过 capability 探针；管理员 QQ 私聊使用 Native，管理员群聊及其他 QQ 私聊和群聊使用 Docker，Docker backend 不能使用 Docker socket 或宿主 Bash fallback。
 
 ## Bash 管理员边界
 
-`workspace_bash` 的默认执行入口仅接受规范化后的真实 OneBot 管理员私聊，必须绑定当前 Agent、Bot 账号、完整会话、管理员 user/sender、有效消息 ID 与 Bot self ID，且 `promptOverride` 必须严格为 `undefined`。Web Chat、普通私聊、默认群聊、身份缺失或不匹配都不能启动独立审计或隔离探针。未来群聊开关只允许管理员使用 Docker restricted 模式；`adminOnly=false` 不能扩大权限。
+`workspace_bash` 的执行入口接受规范化后的真实 OneBot QQ 私聊和群聊，必须绑定当前 Agent、Bot 账号、完整会话、一致的 user/sender、有效消息 ID 与 Bot self ID，且 `promptOverride` 必须严格为 `undefined`。管理员 QQ 私聊固定获得 Native `admin` 模式；管理员群聊及其他 QQ 私聊和群聊固定获得 Docker `isolated` 模式。Web Chat、身份缺失或不匹配不能启动独立审计或执行环境探针。
 
 每次命令都先进入独立审计 Provider：使用当前默认启用 Provider 的凭据与专用审计模型，只发送审计 system/user 消息，工具列表固定为空并要求 strict JSON。Provider 会话正文、历史、附件和其他工具句柄不得进入审计请求。运行时用单调配置 epoch 和单一 resolver 冻结不可变配置、真实身份、backend、workbench、access mode、strict mode、审批上下文与 audit runner；审计 availability 和隔离 probe 任一 await 后都复验 epoch，最多重探一次。完整 handle 一次性注入 Provider，执行器、Bash runner 与审计闭包共同使用同一 `isCurrent`；文件身份冻结/复验、审批检查/签发/消费、隔离探针及最终 spawn 的每个异步或副作用边界都重新检查，getter 抛错也失败关闭。已过期 handle 返回 `BASH_CONFIGURATION_STALE`，不能启动新的审批、探针或命令，模型可见错误不得包含宿主路径或底层 probe 诊断。API catalog 只有布尔 capability，不能执行命令。
 
-管理员私聊可选择 Native 或 Docker，但偏好不能绕过平台能力：macOS Native 无等价强隔离时不可用，Linux/WSL Native 与 Docker Core 必须通过 bubblewrap capability，Host Docker 必须无网络、无 Docker socket、空环境、固定 entrypoint 并受资源和清理 watchdog 限制。外部路径只允许 Phase A 已定义的精确只读审批；票据绑定 Agent、账号、transport、完整会话、用户、可选群号和命令摘要，过期、重放、上下文变化或命令变化均拒绝。
+管理员私聊的 macOS Native backend 只在 Core 以非 root 用户运行且宿主 `/bin/bash` 探针通过时可用，命令在逐条独立对抗审批和确定性策略放行后以该 Core OS 用户执行；宿主权限影响、进程、网络、凭据和系统配置风险必须进入审计，运行环境只传入固定 PATH、Native workbench 与当前 Agent 的 Skill/MCP 目录。Linux/WSL Native 与 Docker Core 必须通过 bubblewrap capability；Host Docker 必须无网络、无 Docker socket、空环境、固定 entrypoint，并受资源和清理 watchdog 限制。外部路径只允许 Phase A 已定义的精确只读审批；票据绑定 Agent、账号、transport、完整会话、用户、可选群号和命令摘要，过期、重放、上下文变化或命令变化均拒绝。
 
 修改在模型回合中暂存，只有绑定当前管理员、完整会话与规范化 mutation 的 held confirmation 成功写入 durable outbox 后才提交。特殊 delivery 语义由宿主生成并在实际投递时重新验证管理员与纯文本唯一工具 trace，模型参数、普通正文、图片、deferred 和外部 API payload 均不能设置。投递必须读取 store 中可信的 `released`/`fallback_released` provenance 与 mutation fingerprint；仅有 payload marker 或普通 outbox 状态不能获得旁路。commit 失败只能原子释放固定中性通知；任何更新失败都保持原成功文案 held 且不可 claim。
 

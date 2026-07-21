@@ -46,10 +46,11 @@
         "docker": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["core", "napcat"],
+          "required": ["core", "napcat", "webfetchRenderer"],
           "properties": {
             "core": { "$ref": "#/$defs/runtimeUser" },
-            "napcat": { "$ref": "#/$defs/runtimeUser" }
+            "napcat": { "$ref": "#/$defs/runtimeUser" },
+            "webfetchRenderer": { "$ref": "#/$defs/runtimeUser" }
           }
         },
         "native": {
@@ -239,23 +240,23 @@
       "properties": {
         "nativeCoreOrder": {
           "type": "array",
-          "minItems": 2,
-          "maxItems": 2,
-          "prefixItems": [{ "const": "core-native" }, { "const": "napcat" }],
+          "minItems": 3,
+          "maxItems": 3,
+          "prefixItems": [{ "const": "webfetch-renderer" }, { "const": "core-native" }, { "const": "napcat" }],
           "items": false
         },
         "dockerCoreOrder": {
           "type": "array",
-          "minItems": 2,
-          "maxItems": 2,
-          "prefixItems": [{ "const": "core" }, { "const": "napcat" }],
+          "minItems": 3,
+          "maxItems": 3,
+          "prefixItems": [{ "const": "webfetch-renderer" }, { "const": "core" }, { "const": "napcat" }],
           "items": false
         },
         "shutdownOrder": {
           "type": "array",
-          "minItems": 2,
-          "maxItems": 2,
-          "prefixItems": [{ "const": "napcat" }, { "const": "core" }],
+          "minItems": 3,
+          "maxItems": 3,
+          "prefixItems": [{ "const": "napcat" }, { "const": "core" }, { "const": "webfetch-renderer" }],
           "items": false
         },
         "coreReadyTimeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 300 },
@@ -278,10 +279,11 @@
         "services": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["core", "napcat"],
+          "required": ["core", "napcat", "webfetchRenderer"],
           "properties": {
             "core": { "$ref": "#/$defs/serviceHealth" },
-            "napcat": { "$ref": "#/$defs/serviceHealth" }
+            "napcat": { "$ref": "#/$defs/serviceHealth" },
+            "webfetchRenderer": { "$ref": "#/$defs/serviceHealth" }
           }
         }
       }
@@ -345,10 +347,11 @@
     "resources": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["core", "napcat", "logging"],
+      "required": ["core", "napcat", "webfetchRenderer", "logging"],
       "properties": {
         "core": { "$ref": "#/$defs/serviceResources" },
         "napcat": { "$ref": "#/$defs/serviceResources" },
+        "webfetchRenderer": { "$ref": "#/$defs/serviceResources" },
         "logging": {
           "type": "object",
           "additionalProperties": false,
@@ -379,7 +382,7 @@
         "services": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["core", "napcat"],
+          "required": ["core", "napcat", "webfetchRenderer"],
           "properties": {
             "core": {
               "type": "object",
@@ -405,6 +408,16 @@
                 },
                 "stateRoot": { "const": "runtime/napcat" },
                 "webuiPort": { "const": 6099 }
+              }
+            },
+            "webfetchRenderer": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["name", "image", "port"],
+              "properties": {
+                "name": { "const": "webfetch-renderer" },
+                "image": { "const": "sunabot-webfetch-renderer" },
+                "port": { "const": 8790 }
               }
             }
           }

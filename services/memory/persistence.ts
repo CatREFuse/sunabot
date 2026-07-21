@@ -1,4 +1,11 @@
 import type { AppConfig } from "../../src/types.js";
+import type {
+  MemoryRecallStats,
+  RecordActualMemoryRecallInput,
+  RecordActualMemoryRecallResult,
+  ReserveActualMemoryRecallInput,
+  ReserveActualMemoryRecallResult
+} from "./types.js";
 
 export type MemoryDataSource = "working" | "long_term" | "user_profile";
 export type MemoryRecordData = Record<string, unknown>;
@@ -20,6 +27,10 @@ export interface MemoryRepositoryPort {
   readMemoryScheduler(): Record<string, object>;
   replaceMemoryScheduler(conversations: Readonly<Record<string, object>>): void;
   ensureLegacyMemorySchedulerImported(filePath: string): void;
+  initializeRecallTracking?(recordIds: readonly string[], at?: Date): MemoryRecallStats[];
+  reserveActualRecall(input: ReserveActualMemoryRecallInput): ReserveActualMemoryRecallResult;
+  recordActualRecall?(input: RecordActualMemoryRecallInput): RecordActualMemoryRecallResult;
+  listRecallStats?(recordIds?: readonly string[]): MemoryRecallStats[];
 }
 
 export interface MemoryPersistenceProvider {

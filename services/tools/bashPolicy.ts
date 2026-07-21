@@ -108,6 +108,7 @@ export const WORKSPACE_BASH_RESTRICTED_EXECUTABLES = Object.freeze(
 );
 
 const ALWAYS_DENIED_COMMANDS = /(^|[;&|()\s])(?:\/[^\s;&|()]+\/)?(?:sudo|su|doas|mount|umount|mkfs(?:\.[\w-]+)?|fdisk|parted|losetup|swapon|swapoff|shutdown|reboot|poweroff|halt)(?=$|[;&|()\s])/i;
+const READ_ONLY_SHARED_ROOTS = ["/skills", "/mcp"] as const;
 
 export function evaluateBashPolicy(input: BashPolicyInput): BashPolicyResult {
   const permanentReason = permanentDenialReason(input.command);
@@ -136,7 +137,9 @@ export function evaluateBashPolicy(input: BashPolicyInput): BashPolicyResult {
     return denied(maxRisk(input.audit.risk, "medium"), "审计要求确认，但没有可绑定的合法绝对外部路径。", []);
   }
 
-  const outsideWorkbench = auditorRequiresConfirmation || input.audit.outsideWorkbench ||
+  const outsideWorkbench = auditorRequiresConfirmation || (
+    input.audit.outsideWorkbench && !normalized.onlyReadOnlySharedAccesses
+  ) ||
     outsideAccesses.length > 0 || hasParentTraversal(input.command);
   if (!outsideWorkbench) {
     return {
@@ -149,7 +152,11 @@ export function evaluateBashPolicy(input: BashPolicyInput): BashPolicyResult {
   }
 
   if (input.backend === "docker" || input.accessMode !== "admin") {
-    return denied(maxRisk(input.audit.risk, "medium"), "Docker Bash 只能访问当前 Agent 的 workbench。", outsideAccesses);
+    return denied(
+      maxRisk(input.audit.risk, "medium"),
+      "Docker Bash 只能写入当前 Agent 的 workbench，并只读访问 Skill 与 MCP 配置。",
+      outsideAccesses
+    );
   }
 
   if (!outsideAccesses.length) {
@@ -420,6 +427,7 @@ function hasParentTraversal(command: string) {
 
 function normalizeOutsideAccesses(accesses: BashPathAccess[], workbenchRoot: string) {
   const normalized = new Map<string, BashPathAccess>();
+  let readOnlySharedAccessCount = 0;
   for (const access of accesses) {
     const rawPath = access.path.trim();
     if (!rawPath || rawPath.includes("\0") || !path.isAbsolute(rawPath)) {
@@ -427,6 +435,13 @@ function normalizeOutsideAccesses(accesses: BashPathAccess[], workbenchRoot: str
     }
     if (rawPath.split(/[\\/]+/).includes("..")) {
       return { accesses: [], invalidReason: "审计返回了包含父目录跳转的 workbench 外路径。" };
+    }
+    if (isReadOnlySharedPath(rawPath)) {
+      if (access.access !== "read") {
+        return { accesses: [], invalidReason: "Skill 与 MCP 共享配置只允许读取。" };
+      }
+      readOnlySharedAccessCount += 1;
+      continue;
     }
     if (isWorkbenchPath(rawPath, workbenchRoot)) continue;
     const resolved = path.resolve(rawPath);
@@ -436,7 +451,16 @@ function normalizeOutsideAccesses(accesses: BashPathAccess[], workbenchRoot: str
     const key = `${access.access}\0${resolved}`;
     normalized.set(key, { path: resolved, access: access.access });
   }
-  return { accesses: [...normalized.values()], invalidReason: "" };
+  return {
+    accesses: [...normalized.values()],
+    invalidReason: "",
+    onlyReadOnlySharedAccesses: accesses.length > 0 && readOnlySharedAccessCount === accesses.length
+  };
+}
+
+function isReadOnlySharedPath(candidate: string) {
+  const normalized = path.posix.normalize(candidate);
+  return READ_ONLY_SHARED_ROOTS.some((root) => normalized === root || normalized.startsWith(`${root}/`));
 }
 
 function isWorkbenchPath(candidate: string, workbenchRoot: string) {

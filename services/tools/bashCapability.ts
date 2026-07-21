@@ -1,5 +1,5 @@
 import path from "node:path";
-import { resolveAgentWorkbench } from "../agents/public.js";
+import { resolveAgentBashEnvironment } from "../agents/public.js";
 import type { BashExecutionBackend } from "./bashAudit.js";
 import {
   ensureWorkspaceBashIsolation,
@@ -99,13 +99,14 @@ export function createWorkspaceBashCapabilityProbe(
     const currentTime = now();
     if (cached && cached.expiresAt > currentTime) return cached.result;
 
-    const result = resolveAgentWorkbench(workspace).then(
-      (workbench) => ensureWorkspaceBashIsolation(backend, workbench, {
+    const result = resolveAgentBashEnvironment(workspace, backend).then(
+      (bashEnvironment) => ensureWorkspaceBashIsolation(backend, bashEnvironment.workbenchRoot, {
         PATH: process.env.PATH || "/usr/bin:/bin"
       }, {
         ...options.sandbox,
         platform,
-        runtimeMode
+        runtimeMode,
+        readOnlyMounts: bashEnvironment.readOnlyMounts
       }).then(
         () => ({ available: true }),
         () => unavailableWorkspaceBashCapability(backend)

@@ -63,7 +63,7 @@ describe("workspace Bash runtime wiring", () => {
     temporaryRoots = [];
   });
 
-  it("binds an administrator OneBot private call to the current Agent, account, conversation, user, and command approval", async () => {
+  it("binds an administrator OneBot private call to Native Bash and the current approval context", async () => {
     const harness = createRuntimeHarness();
     harness.config.bot.bash.adminPrivateBackend = "docker";
     const incoming = adminPrivateIncoming(harness.config, {
@@ -75,7 +75,7 @@ describe("workspace Bash runtime wiring", () => {
 
     expect(bash).toMatchObject({
       enabled: true,
-      backend: "docker",
+      backend: "native",
       accessMode: "admin",
       strictMode: true,
       confirmedApprovalId: "bash-1234567890abcdef12345678",
@@ -89,7 +89,7 @@ describe("workspace Bash runtime wiring", () => {
     });
     expect(harness.capabilityProbe).toHaveBeenCalledWith({
       workspacePath: harness.config.persona.agentWorkspace,
-      workspaceBashBackend: "docker",
+      workspaceBashBackend: "native",
       workspaceBashAuditAvailable: true
     });
     expect(Object.isFrozen(bash)).toBe(true);
@@ -101,13 +101,76 @@ describe("workspace Bash runtime wiring", () => {
 
     const auditInput: BashAuditInput = {
       command: "pwd",
-      backend: "docker",
+      backend: "native",
       accessMode: "admin",
       strictMode: true
     };
     await expect(bash!.audit(auditInput)).resolves.toMatchObject({ decision: "allow" });
     expect(vi.mocked(harness.auditPort.run).mock.calls[0]?.[0]).toBe(auditConfig);
     expect(harness.auditPort.run).toHaveBeenCalledWith(auditConfig, auditInput);
+    harness.close();
+  });
+
+  it.each([
+    ["private", adminPrivateIncoming] as const,
+    ["group", adminGroupIncoming] as const
+  ])("routes an ordinary QQ %s conversation to isolated Docker Bash", async (_scope, incomingFor) => {
+    const harness = createRuntimeHarness();
+    const incoming = incomingFor(harness.config, { userId: 20002, senderId: "20002" });
+
+    const bash = await harness.runtime.resolveProviderBashHandle(incoming, undefined);
+
+    expect(bash).toMatchObject({
+      backend: "docker",
+      accessMode: "isolated",
+      strictMode: true,
+      approvalContext: {
+        agentId: "plana",
+        accountId: "primary",
+        transport: "onebot",
+        userId: "20002"
+      }
+    });
+    expect(harness.auditPort.available).toHaveBeenCalledOnce();
+    expect(harness.capabilityProbe).toHaveBeenCalledWith(expect.objectContaining({
+      workspaceBashBackend: "docker",
+      workspaceBashAuditAvailable: true
+    }));
+    harness.close();
+  });
+
+  it("routes an administrator QQ group conversation to audited isolated Docker Bash", async () => {
+    const harness = createRuntimeHarness();
+
+    const bash = await harness.runtime.resolveProviderBashHandle(adminGroupIncoming(harness.config), undefined);
+
+    expect(bash).toMatchObject({ backend: "docker", accessMode: "isolated" });
+    expect(harness.capabilityProbe).toHaveBeenCalledWith(expect.objectContaining({
+      workspaceBashBackend: "docker"
+    }));
+    await expect(bash!.audit({
+      command: "pwd",
+      backend: "docker",
+      accessMode: "isolated",
+      strictMode: true
+    })).resolves.toMatchObject({ decision: "allow" });
+    expect(harness.auditPort.run).toHaveBeenCalledOnce();
+    harness.close();
+  });
+
+  it("routes a valid ordinary QQ conversation to Docker when administrator QQ is not configured", async () => {
+    const harness = createRuntimeHarness();
+    harness.config.bot.adminQq = "";
+
+    const bash = await harness.runtime.resolveProviderBashHandle(
+      adminPrivateIncoming(harness.config, { userId: 20002, senderId: "20002" }),
+      undefined
+    );
+
+    expect(bash).toMatchObject({ backend: "docker", accessMode: "isolated" });
+    expect(harness.capabilityProbe).toHaveBeenCalledWith(expect.objectContaining({
+      workspaceBashBackend: "docker"
+    }));
     harness.close();
   });
 
@@ -138,22 +201,6 @@ describe("workspace Bash runtime wiring", () => {
       error: "Tool workspace_bash is unavailable."
     });
     expect(runWorkspaceBashMock).not.toHaveBeenCalled();
-    harness.close();
-  });
-
-  it("keeps future explicitly enabled group access administrator-only, restricted, and Docker-only", async () => {
-    const harness = createRuntimeHarness();
-    harness.config.bot.bash.allowGroup = true;
-    harness.config.bot.bash.adminOnly = true;
-    harness.config.bot.bash.adminPrivateBackend = "native";
-    const incoming = adminGroupIncoming(harness.config);
-
-    const bash = await harness.runtime.resolveProviderBashHandle(incoming, undefined);
-
-    expect(bash).toMatchObject({ backend: "docker", accessMode: "restricted" });
-    expect(harness.capabilityProbe).toHaveBeenLastCalledWith(expect.objectContaining({
-      workspaceBashBackend: "docker"
-    }));
     harness.close();
   });
 
@@ -200,7 +247,7 @@ describe("workspace Bash runtime wiring", () => {
       const harness = createRuntimeHarness(capabilityProbe);
       harness.config.bot.bash.adminPrivateBackend = backend;
 
-      await expect(harness.runtime.resolveToolCapabilities()).resolves.toEqual({
+      await expect(harness.runtime.resolveToolCapabilities(backend)).resolves.toEqual({
         workspaceBash: false,
         workspaceBashReason: backend === "native"
           ? "BASH_NATIVE_ISOLATION_UNAVAILABLE"
@@ -232,7 +279,7 @@ describe("workspace Bash runtime wiring", () => {
 
     await expect(capabilitiesPromise).resolves.toEqual({
       workspaceBash: false,
-      workspaceBashReason: "BASH_DOCKER_ISOLATION_UNAVAILABLE",
+      workspaceBashReason: "BASH_NATIVE_ISOLATION_UNAVAILABLE",
       codex: true
     });
     expect(capabilityProbe.mock.calls.map(([context]) => context)).toEqual([
@@ -242,7 +289,7 @@ describe("workspace Bash runtime wiring", () => {
       }),
       expect.objectContaining({
         workspacePath: "/tmp/sunabot-bash-wiring-capability-b",
-        workspaceBashBackend: "docker"
+        workspaceBashBackend: "native"
       })
     ]);
     expect(vi.mocked(harness.auditPort.available).mock.calls.map(([config]) => ({
@@ -298,7 +345,7 @@ describe("workspace Bash runtime wiring", () => {
     harness.close();
   });
 
-  it("retries a delayed probe once with the new backend and workspace snapshot", async () => {
+  it("retries a delayed probe once with the new workspace snapshot and fixed administrator backend", async () => {
     const firstProbe = deferred<{ codex: boolean; workspaceBash: boolean }>();
     const capabilityProbe = vi.fn()
       .mockImplementationOnce(() => firstProbe.promise)
@@ -317,7 +364,7 @@ describe("workspace Bash runtime wiring", () => {
     firstProbe.resolve({ codex: true, workspaceBash: true });
 
     await expect(handlePromise).resolves.toMatchObject({
-      backend: "docker",
+      backend: "native",
       workspacePath: "/tmp/sunabot-bash-wiring-runtime-b"
     });
     expect(capabilityProbe.mock.calls.map(([context]) => context)).toEqual([
@@ -327,7 +374,7 @@ describe("workspace Bash runtime wiring", () => {
       }),
       expect.objectContaining({
         workspacePath: "/tmp/sunabot-bash-wiring-runtime-b",
-        workspaceBashBackend: "docker"
+        workspaceBashBackend: "native"
       })
     ]);
     expect(harness.auditPort.available).toHaveBeenCalledTimes(2);
@@ -677,25 +724,11 @@ const negativeCases: Array<{
   promptOverride?: string;
   configure?: (config: AppConfig) => void;
 }> = [
-  {
-    name: "an ordinary private user",
-    incomingFor: (config) => adminPrivateIncoming(config, { userId: 20002, senderId: "20002" })
-  },
-  { name: "a default-disabled group", incomingFor: (config) => adminGroupIncoming(config) },
   { name: "a prompt override", incomingFor: (config) => adminPrivateIncoming(config), promptOverride: "" },
   { name: "a message without messageId", incomingFor: (config) => adminPrivateIncoming(config, { messageId: undefined }) },
   { name: "a message without selfId", incomingFor: (config) => adminPrivateIncoming(config, { selfId: undefined }) },
   { name: "a message without sender", incomingFor: (config) => adminPrivateIncoming(config, { sender: undefined }) },
-  {
-    name: "adminOnly=false",
-    configure: (config) => { config.bot.bash.adminOnly = false; },
-    incomingFor: (config) => adminPrivateIncoming(config)
-  },
-  {
-    name: "an ordinary user in an explicitly enabled group",
-    configure: (config) => { config.bot.bash.allowGroup = true; },
-    incomingFor: (config) => adminGroupIncoming(config, { userId: 20002, senderId: "20002" })
-  },
+  { name: "an invalid QQ sender", incomingFor: (config) => adminPrivateIncoming(config, { userId: 1, senderId: "1" }) },
   { name: "Web Chat", incomingFor: (config) => adminPrivateIncoming(config, { transport: "web" }) },
   { name: "a message without account", incomingFor: (config) => adminPrivateIncoming(config, { accountId: undefined }) },
   { name: "a mismatched Agent", incomingFor: (config) => adminPrivateIncoming(config, { agentId: "other-agent" }) }

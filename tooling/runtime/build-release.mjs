@@ -89,6 +89,7 @@ try {
     "adapters",
     "packages",
     "apps/api",
+    "apps/webfetch-renderer",
     "apps/admin-web/index.html",
     "apps/admin-web/tsconfig.json",
     "apps/admin-web/vite.config.ts",

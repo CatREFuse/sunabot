@@ -27,6 +27,7 @@ import type {
   SessionEventRecord
 } from "../../services/sessions/sessionStore.js";
 import type { CronToolInput } from "../../services/tools/cronTool.js";
+import { buildCallbackInput, readCallbackInput } from "../../services/agent/callbackInput.js";
 import type { SunaRuntime } from "../../src/runtime.js";
 import {
   RuntimeScheduledTasks,
@@ -170,11 +171,74 @@ describe("RuntimeScheduledTasks", () => {
     expect(harness.store.get(created.id)).toBeUndefined();
   });
 
-  it("generates once and fans one frozen reply out with per-target mentions", async () => {
+  it("returns paged category views and updates permanent archive retention", async () => {
+    const realNow = Date.now();
+    const harness = createHarness({ storeNow: realNow - 60_000 });
+    const archive = harness.runtime.createScheduledTask({
+      name: "已完成提醒",
+      schedule: once(new Date(realNow - 30_000).toISOString()),
+      context: "完成后归档",
+      targets: [{ conversationId: "group:20001", mentionUserIds: [] }]
+    });
+    const recurring = harness.runtime.createScheduledTask({
+      name: "年度循环",
+      schedule: { kind: "cron", expression: "0 0 1 1 *", timezone: "UTC" },
+      context: "每年循环",
+      targets: [{ conversationId: "group:20001", mentionUserIds: [] }]
+    });
+    const scheduled = harness.runtime.createScheduledTask({
+      name: "明日提醒",
+      schedule: once(new Date(realNow + 24 * 60 * 60_000).toISOString()),
+      context: "尚未触发",
+      targets: [{ conversationId: "group:20001", mentionUserIds: [] }]
+    });
+    const director = harness.store.create({
+      id: "director-plana-20260720-share-r1-c1",
+      name: "日常导演 · 分享近况",
+      schedule: once(new Date(realNow + 2 * 24 * 60 * 60_000).toISOString()),
+      context: "自然分享日常",
+      targets: [{ conversationId: "group:20001", mentionUserIds: [] }]
+    });
+    await harness.runtime.runOnce();
+
+    expect(harness.runtime.listScheduledTasks({ category: "all", page: 1, pageSize: 2 }))
+      .toMatchObject({
+        tasks: expect.any(Array),
+        pagination: { page: 1, pageSize: 2, total: 4, pageCount: 2 }
+      });
+    expect(harness.runtime.listScheduledTasks({ category: "archived", page: 1, pageSize: 20 }))
+      .toEqual({
+        tasks: [expect.objectContaining({ id: archive.id, archived: true, permanentRetention: false })],
+        pagination: { page: 1, pageSize: 20, total: 1, pageCount: 1 }
+      });
+    expect(harness.runtime.listScheduledTasks({ category: "recurring", page: 1, pageSize: 20 }).tasks)
+      .toEqual([expect.objectContaining({ id: recurring.id, archived: false })]);
+    expect(harness.runtime.listScheduledTasks({ category: "scheduled", page: 1, pageSize: 20 }).tasks)
+      .toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: scheduled.id, archived: false, director: false }),
+        expect.objectContaining({ id: director.id, archived: false, director: true })
+      ]));
+    expect(harness.runtime.listScheduledTasks({ category: "director", page: 1, pageSize: 20 }))
+      .toEqual({
+        tasks: [expect.objectContaining({ id: director.id, director: true })],
+        pagination: { page: 1, pageSize: 20, total: 1, pageCount: 1 }
+      });
+
+    harness.host.conversationRecords.delete("group:20001");
+    expect(harness.runtime.updateScheduledTask(archive.id, {
+      revision: archive.revision,
+      permanentRetention: true
+    })).toMatchObject({ revision: 2, archived: true, permanentRetention: true });
+    expect(() => harness.runtime.updateScheduledTask(archive.id, {
+      revision: 2,
+      permanentRetention: "yes"
+    })).toThrow("permanentRetention 必须是布尔值");
+  });
+
+  it("queues one callback input per target and runs it through the target conversation Agent", async () => {
     const realNow = Date.now();
     const harness = createHarness({
       storeNow: realNow - 60_000,
-      generatedText: "同一份冻结正文"
     });
     harness.runtime.createScheduledTask({
       name: "多人多会话提醒",
@@ -195,13 +259,13 @@ describe("RuntimeScheduledTasks", () => {
       failedRuns: 0
     });
     expect(harness.renderPromptRequest).toHaveBeenCalledOnce();
-    expect(harness.completePrompt).toHaveBeenCalledOnce();
+    expect(harness.completePromptTurn).not.toHaveBeenCalled();
     expect(harness.enqueueEvent).toHaveBeenCalledTimes(2);
 
     const callbacks = harness.enqueuedEvents.map((event) => decodeScheduledCallbackDelivery(event.payload));
-    expect(callbacks.map((callback) => callback.text)).toEqual([
-      "同一份冻结正文",
-      "同一份冻结正文"
+    expect(callbacks.map((callback) => readCallbackInput(callback.text))).toEqual([
+      expect.objectContaining({ role: "callback", kind: "scheduled_task" }),
+      expect.objectContaining({ role: "callback", kind: "scheduled_task" })
     ]);
     expect(callbacks.map((callback) => callback.target)).toEqual([
       {
@@ -222,14 +286,111 @@ describe("RuntimeScheduledTasks", () => {
       }
     ]);
     expect(new Set(callbacks.map((callback) => callback.runId)).size).toBe(1);
+
+    const result = await harness.runtime.processEvent(
+      sessionEventFromInput(harness.enqueuedEvents[0]!, 3)
+    );
+    expect(result.status).toBe("completed");
+    expect(harness.replyToIncoming).toHaveBeenCalledWith(
+      "group:20001",
+      expect.objectContaining({
+        scope: "user_group",
+        text: expect.stringContaining('"role": "callback"')
+      }),
+      expect.any(Object),
+      expect.objectContaining({
+        messageOrigin: "async_tool_callback",
+        delivery: expect.objectContaining({ mentionUserIds: [30001] })
+      })
+    );
+    expect(harness.replyToIncoming.mock.calls.at(-1)?.[3]).not.toHaveProperty("promptOverride");
+    expect(harness.replyToIncoming.mock.calls.at(-1)?.[3]).not.toHaveProperty("atomicImageReply");
   });
 
-  it("preserves the target account as the event-to-outbox delivery partition", () => {
+  it("queues a system callback through the same durable Agent conversation flow", async () => {
+    const harness = createHarness();
+
+    await expect(harness.runtime.enqueueSystemCallback({
+      id: "dream:manual:2",
+      kind: "dream-manual-start",
+      name: "入睡通知",
+      context: "自然告诉管理员自己已经睡着并开始做梦。",
+      target: {
+        conversationId: "account:secondary:private:10001",
+        mentionUserIds: []
+      },
+      triggeredAt: new Date("2026-07-20T12:00:00.000Z")
+    })).resolves.toEqual({
+      queued: true,
+      conversationId: "account:secondary:private:10001",
+      runId: "dream:manual:2"
+    });
+
+    expect(harness.store.list().items).toHaveLength(0);
+    expect(harness.renderPromptRequest).toHaveBeenCalledWith(
+      "scheduler.cron-callback",
+      expect.objectContaining({
+        "cron.payload": expect.objectContaining({
+          task: expect.objectContaining({
+            id: "system:dream-manual-start",
+            context: "自然告诉管理员自己已经睡着并开始做梦。"
+          })
+        })
+      })
+    );
+    const event = harness.enqueuedEvents[0]!;
+    const callback = decodeScheduledCallbackDelivery(event.payload);
+    expect(callback).toMatchObject({
+      taskId: "system:dream-manual-start",
+      runId: "dream:manual:2",
+      target: {
+        accountId: "secondary",
+        scope: "private",
+        userId: 10001
+      }
+    });
+    expect(readCallbackInput(callback.text)).toMatchObject({ role: "callback", kind: "scheduled_task" });
+
+    await expect(harness.runtime.processEvent(sessionEventFromInput(event, 4)))
+      .resolves.toMatchObject({ status: "completed" });
+    expect(harness.replyToIncoming).toHaveBeenCalledWith(
+      "account:secondary:private:10001",
+      expect.objectContaining({ text: expect.stringContaining('"role": "callback"') }),
+      expect.any(Object),
+      expect.objectContaining({ messageOrigin: "async_tool_callback" })
+    );
+  });
+
+  it("runs Director shares as atomic image replies without changing ordinary callbacks", async () => {
+    const harness = createHarness();
+    const payload = {
+      ...callbackPayload(),
+      taskId: "director-plana-20260720-afternoon-r1-c1",
+      text: buildCallbackInput("scheduled_task", {
+        promptMessages: [{ role: "user", content: "分享刚整理好的资料" }]
+      })
+    };
+
+    await expect(harness.runtime.processEvent(scheduledEvent(payload))).resolves.toMatchObject({
+      status: "completed"
+    });
+    expect(harness.replyToIncoming).toHaveBeenCalledWith(
+      payload.target.conversationId,
+      expect.any(Object),
+      expect.any(Object),
+      expect.objectContaining({
+        messageOrigin: "async_tool_callback",
+        atomicImageReply: true
+      })
+    );
+  });
+
+  it("preserves the target account as the event-to-outbox delivery partition", async () => {
     const harness = createHarness();
     const payload = callbackPayload();
     const event = scheduledEvent(payload);
 
-    const result = harness.runtime.processEvent(event);
+    const result = await harness.runtime.processEvent(event);
 
     expect(result.status).toBe("completed");
     expect(result.outbox).toHaveLength(1);
@@ -250,7 +411,7 @@ describe("RuntimeScheduledTasks", () => {
     });
     const harness = createHarness({ gateway });
     const payload = callbackPayload();
-    const draft = harness.runtime.processEvent(scheduledEvent(payload)).outbox![0]!;
+    const draft = (await harness.runtime.processEvent(scheduledEvent(payload))).outbox![0]!;
     const outbox = persistedOutbox(draft, payload.target.conversationId);
     const delivery = deliveryContext();
 
@@ -283,7 +444,7 @@ describe("RuntimeScheduledTasks", () => {
     const gateway = fakeGateway({ connected: false, accounts: [] });
     const harness = createHarness({ gateway });
     const payload = callbackPayload();
-    const draft = harness.runtime.processEvent(scheduledEvent(payload)).outbox![0]!;
+    const draft = (await harness.runtime.processEvent(scheduledEvent(payload))).outbox![0]!;
     const outbox = persistedOutbox(draft, payload.target.conversationId);
     const delivery = deliveryContext();
 
@@ -339,16 +500,29 @@ function createHarness(options: HarnessOptions = {}) {
     };
   });
   const renderPromptRequest = vi.fn(async () => ({ messages: [], tools: [] }));
-  const completePrompt = vi.fn(async () => options.generatedText ?? "定时回复");
+  const completePromptTurn = vi.fn(async () => ({
+    kind: "completed" as const,
+    text: options.generatedText ?? "定时回复"
+  }));
+  const replyToIncoming = vi.fn(async (...args: unknown[]) => {
+    const replyOptions = args[3] as { delivery?: { terminalStatus?: string } };
+    if (replyOptions.delivery) replyOptions.delivery.terminalStatus = "replied";
+    return true;
+  });
   const projectionRecord = conversationRecords.get("account:secondary:group:20002")!;
   const recordAssistantMessage = vi.fn((..._args: unknown[]) => projectionRecord);
   const scheduleMemoryCompression = vi.fn();
   const host = {
-    config: { persona: { defaultAgentId: "plana" } },
+    config: {
+      persona: { defaultAgentId: "plana" },
+      normalReply: { maxRetries: 3 },
+      bot: { tools: { websearch: {} } }
+    },
     conversationRecords,
     sessionCoordinator: { enqueueEvent },
     renderPromptRequest,
-    completePrompt,
+    completePromptTurn,
+    replyToIncoming,
     getProvider: vi.fn(() => ({ id: "test-provider" })),
     activeGateway: options.gateway,
     recordAssistantMessage,
@@ -363,7 +537,8 @@ function createHarness(options: HarnessOptions = {}) {
     enqueuedEvents,
     enqueueEvent,
     renderPromptRequest,
-    completePrompt,
+    completePromptTurn,
+    replyToIncoming,
     recordAssistantMessage,
     scheduleMemoryCompression
   };

@@ -3,6 +3,10 @@ import { describe, expect, it } from "vitest";
 import { defaultPromptContent } from "../../services/agent/promptDefaults.js";
 import { formatMemoryMatchesForPrompt } from "../../services/memory/recall/recallService.js";
 import {
+  MEMORY_CAUSAL_CHAIN_KEY_MAX_LENGTH,
+  MEMORY_CAUSAL_CHAIN_KEY_PATTERN_SOURCE
+} from "../../services/memory/public.js";
+import {
   parseFinalPromptTemplate,
   renderFinalPromptTemplate
 } from "../../services/agent/promptSystem.js";
@@ -70,6 +74,21 @@ describe("memory perspective prompt contract", () => {
     expect(content).not.toMatch(/@\{(?:bot|persona)\./);
   });
 
+  it.each(["memory.compress-in", "memory.compress-out"] as const)(
+    "requires explicit causal evidence in %s",
+    (id) => {
+      const template = parseFinalPromptTemplate(defaultPromptContent(id));
+      const systemPrompt = template.messages
+        .filter((message) => typeof message === "object" && message.role === "system")
+        .map((message) => typeof message === "object" ? message.content : "")
+        .join("\n");
+
+      expect(systemPrompt).toContain("causalChainKey 只在多条事件有明确的原因、转折与结果关系");
+      expect(systemPrompt).toContain("无法可靠确认时返回 null");
+      expect(systemPrompt).toContain('"causalChainKey":null');
+    }
+  );
+
   it("keeps the strict JSON envelopes and memory metadata fields unchanged", () => {
     const working = parseFinalPromptTemplate(defaultPromptContent("memory.compress-in"));
     const longTerm = parseFinalPromptTemplate(defaultPromptContent("memory.compress-out"));
@@ -97,12 +116,19 @@ describe("memory perspective prompt contract", () => {
       "occurredAt",
       "occurredEndAt",
       "userIds",
-      "userName",
+      "addressNames",
       "promoteToLongTerm",
       "longTermId",
       "eventType",
-      "subjectKey"
+      "subjectKey",
+      "causalChainKey"
     ]);
+    expect(workingSchema.schema.properties.facts.items.properties.causalChainKey).toEqual({
+      type: ["string", "null"],
+      minLength: 8,
+      maxLength: MEMORY_CAUSAL_CHAIN_KEY_MAX_LENGTH,
+      pattern: MEMORY_CAUSAL_CHAIN_KEY_PATTERN_SOURCE
+    });
     expect(longTermSchema.name).toBe("long_term_memory");
     expect(longTermSchema.strict).toBe(true);
     expect(longTermSchema.schema.items.required).toEqual([
@@ -110,22 +136,62 @@ describe("memory perspective prompt contract", () => {
       "occurredAt",
       "occurredEndAt",
       "userIds",
-      "userName",
+      "addressNames",
       "eventType",
-      "subjectKey"
+      "subjectKey",
+      "causalChainKey"
     ]);
+    expect(longTermSchema.schema.items.properties.causalChainKey).toEqual({
+      type: ["string", "null"],
+      minLength: 8,
+      maxLength: MEMORY_CAUSAL_CHAIN_KEY_MAX_LENGTH,
+      pattern: MEMORY_CAUSAL_CHAIN_KEY_PATTERN_SOURCE
+    });
     expect(profileSchema.name).toBe("user_profiles");
     expect(profileSchema.strict).toBe(true);
     expect(profileSchema.schema.properties.profiles.items.required).toEqual([
       "userId",
       "userName",
-      "addressName",
+      "addressNames",
       "fact",
       "time"
     ]);
   });
 
-  it("rejects recall phrases and persists the current nickname instead of the address name", () => {
+  it("parses camel and snake causal keys and rejects a nonempty invalid key", () => {
+    expect(parseMemoryFactOutput(JSON.stringify([{
+      fact: "第一条事实",
+      causalChainKey: "causal:release-plan"
+    }]))).toMatchObject([{ causalChainKey: "causal:release-plan" }]);
+    expect(parseMemoryFactOutput(JSON.stringify([{
+      fact: "第二条事实",
+      causal_chain_key: "causal:release-plan"
+    }]))).toMatchObject([{ causalChainKey: "causal:release-plan" }]);
+    expect(parseMemoryFactOutput(JSON.stringify([{
+      fact: "没有可靠因果链",
+      causalChainKey: null
+    }]))).toMatchObject([{ causalChainKey: undefined }]);
+
+    for (const causalChainKey of [
+      "",
+      "event:release-plan",
+      "causal:Release",
+      "causal:release/path",
+      " causal:release-plan ",
+      `causal:${"a".repeat(122)}`
+    ]) {
+      expect(parseMemoryFactOutput(JSON.stringify([{
+        fact: "非法因果链",
+        causalChainKey
+      }]))).toEqual([]);
+    }
+    expect(parseMemoryFactOutput(JSON.stringify([{
+      fact: "非法数组因果链",
+      causalChainKey: []
+    }]))).toEqual([]);
+  });
+
+  it("rejects recall phrases and rewrites semantic identity to a trusted address name", () => {
     const parsed = parseMemoryFactOutput(JSON.stringify([{
       fact: "我知道旧昵称（QQ 10001）正在推进这项工作，这让我很在意，我会继续关注结果。",
       userIds: ["10001"],
@@ -135,13 +201,13 @@ describe("memory perspective prompt contract", () => {
       userId: "10001",
       names: ["海边用户"],
       currentName: "海边用户",
-      addressName: "老师",
+      addressNames: ["老师"],
       isAdmin: true
     }]);
 
-    expect(fact?.fact).toBe("我知道海边用户（QQ 10001）正在推进这项工作，这让我很在意，我会继续关注结果。");
-    expect(fact?.userName).toBe("海边用户");
-    expect(fact?.userName).not.toBe("老师");
+    expect(fact?.fact).toBe("我知道老师（QQ 10001）正在推进这项工作，这让我很在意，我会继续关注结果。");
+    expect(fact?.addressNames).toEqual(["老师"]);
+    expect(fact?.userName).toBeUndefined();
     expect(fact?.fact).not.toContain("我记得");
     expect(fact?.fact).not.toContain("旧昵称");
     expect(fact?.fact).not.toContain("相关用户：");
@@ -164,7 +230,7 @@ describe("memory perspective prompt contract", () => {
       userId: "10001",
       names: ["海边用户"],
       currentName: "海边用户",
-      addressName: "海边用户",
+      addressNames: ["海边用户"],
       isAdmin: false
     };
 
@@ -182,7 +248,7 @@ describe("memory perspective prompt contract", () => {
       fact: "我知道模型幻觉昵称（QQ 10001）正在推进工作。",
       userIds: ["10001"],
       userName: "模型幻觉昵称"
-    }], [{ ...participant, names: [], currentName: "" }])).toEqual([]);
+    }], [{ ...participant, addressNames: [], names: [], currentName: "" }])).toEqual([]);
     expect(attachUsersToMemoryFacts([{
       fact: "我知道海边用户正在推进工作。",
       userIds: ["99999"],
@@ -204,7 +270,7 @@ describe("memory perspective prompt contract", () => {
       userId: "10001",
       names: ["海边用户"],
       currentName: "海边用户",
-      addressName: "海边用户",
+      addressNames: ["海边用户"],
       isAdmin: false
     }]);
 
@@ -216,13 +282,13 @@ describe("memory perspective prompt contract", () => {
       userId: "10001",
       names: ["海"],
       currentName: "海",
-      addressName: "海",
+      addressNames: ["海"],
       isAdmin: false
     }, {
       userId: "10002",
       names: ["上海用户"],
       currentName: "上海用户",
-      addressName: "上海用户",
+      addressNames: ["上海用户"],
       isAdmin: false
     }];
 
@@ -243,14 +309,14 @@ describe("memory perspective prompt contract", () => {
       userId: "10001",
       names: ["海"],
       currentName: "海",
-      addressName: "海",
+      addressNames: ["海"],
       isAdmin: false
     };
 
     expect(attachUsersToMemoryFacts([{
       fact: "我知道上海（QQ 10001）正在推进，这让我很期待。",
       userIds: ["10001"],
-      userName: "海"
+      addressNames: ["海"]
     }], [participant])).toEqual([]);
     expect(attachUsersToMemoryFacts([{
       fact: "我知道海（QQ 10001）正在推进，这让我很期待。",
@@ -259,7 +325,7 @@ describe("memory perspective prompt contract", () => {
     }], [participant])).toMatchObject([{
       fact: "我知道海（QQ 10001）正在推进，这让我很期待。",
       userIds: ["10001"],
-      userName: "海"
+      addressNames: ["海"]
     }]);
   });
 
@@ -268,7 +334,7 @@ describe("memory perspective prompt contract", () => {
       userId: "10001",
       names: ["海"],
       currentName: "海",
-      addressName: "海",
+      addressNames: ["海"],
       isAdmin: false
     };
     const input = [{
@@ -287,13 +353,13 @@ describe("memory perspective prompt contract", () => {
       userId: "10001",
       names: ["海边用户"],
       currentName: "海边用户",
-      addressName: "海边用户",
+      addressNames: ["海边用户"],
       isAdmin: false
     }, {
       userId: "10002",
       names: ["山边用户"],
       currentName: "山边用户",
-      addressName: "山边用户",
+      addressNames: ["山边用户"],
       isAdmin: false
     }];
     const input = [{
@@ -326,7 +392,7 @@ describe("memory perspective prompt contract", () => {
       userId: "10001",
       names: ["海边用户"],
       currentName: "海边用户",
-      addressName: "海边用户",
+      addressNames: ["海边用户"],
       isAdmin: false
     };
     const input = [{
@@ -345,7 +411,7 @@ describe("memory perspective prompt contract", () => {
       userId: "10001",
       names: ["海边用户"],
       currentName: "海边用户",
-      addressName: "海边用户",
+      addressNames: ["海边用户"],
       isAdmin: false
     };
     const input = [{
@@ -364,7 +430,7 @@ describe("memory perspective prompt contract", () => {
       userId: "10001",
       names: ["海边用户"],
       currentName: "海边用户",
-      addressName: "海边用户",
+      addressNames: ["海边用户"],
       isAdmin: false
     };
     const reportedSpeech = [{
@@ -385,12 +451,12 @@ describe("memory perspective prompt contract", () => {
     expect(attachUsersToMemoryFacts(roleAction, [participant])).toHaveLength(1);
   });
 
-  it("rejects user self-narration and keeps only role-first-person profiles with nickname and QQ", () => {
+  it("extracts multiple observed address names and keeps only role-first-person profiles with address and QQ", () => {
     const participants = [{
       userId: "10001",
       names: ["海边用户"],
       currentName: "海边用户",
-      addressName: "老师",
+      addressNames: ["老师", "海边用户"],
       isAdmin: true
     }];
     const normalized = normalizeUserProfileFacts([{
@@ -402,23 +468,24 @@ describe("memory perspective prompt contract", () => {
       userId: "10001",
       userName: "海边用户"
     }, {
-      fact: "我注意到海边用户（QQ 10001）喜欢摄影，这让我更期待看到他的作品。",
+      fact: "我注意到海老师（QQ 10001）喜欢摄影，这让我更期待看到他的作品。",
       userId: "10001",
-      userName: "模型幻觉昵称"
-    }], participants);
+      userName: "模型幻觉昵称",
+      addressNames: ["海老师", "海边用户"]
+    }], participants, [{ text: "海老师，以后也可以叫你海边用户吗？" }]);
 
     expect(normalized).toHaveLength(1);
     expect(normalized[0]).toMatchObject({
       userId: "10001",
       userIds: ["10001"],
       userName: "海边用户",
-      addressName: "老师"
+      addressNames: ["老师", "海边用户", "海老师"]
     });
-    expect(normalized[0]?.fact).toContain("海边用户（QQ 10001）");
+    expect(normalized[0]?.fact).toContain("海老师（QQ 10001）");
     expect(normalized[0]?.fact).not.toContain("我记得");
   });
 
-  it("exposes the stored nickname and QQ together when memory is recalled", () => {
+  it("exposes only the stored address name and QQ as recalled semantic identity", () => {
     expect(formatMemoryMatchesForPrompt([{
       id: "profile-1",
       source: "user_profile",
@@ -431,8 +498,8 @@ describe("memory perspective prompt contract", () => {
       field: "fact",
       userId: "10001",
       userName: "海边用户",
-      addressName: "老师"
-    }])).toBe("用户画像 海边用户（QQ 10001） 称呼：老师：我注意到海边用户很重视时间关系。");
+      addressNames: ["老师", "海老师"]
+    }])).toBe("用户画像 老师（QQ 10001）：我注意到海边用户很重视时间关系。");
   });
 });
 

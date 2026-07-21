@@ -42,7 +42,9 @@ import {
 } from "../../services/orchestration/groupReplyPolicy.js";
 import { serializeUserGroupOrchestratorResult } from "../../services/orchestration/userGroupOrchestratorResult.js";
 import { formatModelTimestamp, systemModelTimeZone } from "../../services/agent/modelTime.js";
+import { readCallbackInput } from "../../services/agent/callbackInput.js";
 import { HookBus } from "../../services/messaging/hookBus.js";
+import { searchKnowledge } from "../../services/knowledge/public.js";
 import {
   applyMemoryBatchTransaction,
   ensureAgentTextFile,
@@ -54,13 +56,13 @@ import {
   readMemorySourceEntries,
   readUserProfileForUser,
   readWorkingMemorySnapshot,
-  recallMemory,
   recoverMemoryTransactions,
   replaceWorkingMemoryFacts,
   resolveUserAddressName,
   type MemoryEntry,
   type MemoryFactInput
 } from "../../services/memory/memoryService.js";
+import { ModelContextMemoryRecall } from "./memoryRecallExposure.js";
 import {
   MemorySchedulerStore,
   type MemoryClaim,
@@ -112,6 +114,7 @@ import {
   type RenderedPromptRequest
 } from "../../services/agent/promptSystem.js";
 import { buildCommonPromptVariables, buildConversationPromptVariables } from "../../services/agent/persona.js";
+import { DIRECTOR_CONVERSATION_SCHEDULE_VARIABLE } from "../../services/director/public.js";
 import {
   applyRuntimeAgentExtensionPrompt,
   collectRuntimeAgentExtensionBatchTexts,
@@ -142,22 +145,8 @@ import { ReplyDebounceContext, resolveReplyContextCaptureSequence, type ReplyDeb
 import { runtime_replyToToolCompletion } from "./replyDebounceDispatch.js";
 import { sendRuntimeVoiceFinalReply, startRuntimeDeferredVoiceSynthesis } from "./voiceReply.js";
 import * as systemConfigReply from "./systemConfigReply.js";
-
 export { runtime_replyToToolCompletion };
-export {
-  runtime_attachReplyReferences,
-  runtime_buildRecentContextMessages,
-  runtime_contextMessageLimit,
-  runtime_generateImgReferenceContext,
-  runtime_groupReplyOptions,
-  runtime_isAdminUser,
-  runtime_loadMessageDetails,
-  runtime_loadQuoteReferences,
-  runtime_refreshAttachmentCacheReferences,
-  runtime_retainedConversationMessageLimit,
-  runtime_resolveProviderBashHandle,
-  runtime_selectRelevantAttachments
-};
+export { runtime_attachReplyReferences, runtime_buildRecentContextMessages, runtime_contextMessageLimit, runtime_generateImgReferenceContext, runtime_groupReplyOptions, runtime_isAdminUser, runtime_loadMessageDetails, runtime_loadQuoteReferences, runtime_refreshAttachmentCacheReferences, runtime_retainedConversationMessageLimit, runtime_resolveProviderBashHandle, runtime_selectRelevantAttachments };
 import type { SunaRuntime } from "../runtime.js";
 type RuntimeHost = SunaRuntime;
 export async function runtime_replyToIncoming(this: RuntimeHost,
@@ -171,6 +160,7 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
       allowAsyncCodex?: boolean;
       allowAsyncImage?: boolean;
       allowImageTools?: boolean;
+      atomicImageReply?: boolean;
       promptOverride?: string;
       messageOrigin?: AssistantMessageOrigin;
       seedToolNames?: readonly string[];
@@ -217,19 +207,20 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
       const threadContext = await debounceContext.prepareThreadContext();
       const threadPromptContext = this.groupThreadPromptContext(threadContext);
       const exactUserProfile = await readUserProfileForUser(this.config, String(incoming.userId));
-      const memoryResult = await recallMemory(this.config, {
+      const modelContextMemory = new ModelContextMemoryRecall(this.config, logRunId);
+      const memoryResult = await modelContextMemory.search({
         query: beforeContext.text,
         source: "long_term",
         limit: 8
       });
       const longTermMemoryMatches = memoryResult.ok ? memoryResult.matches : [];
-      const workingMemoryResult = await recallMemory(this.config, {
+      const workingMemoryResult = await modelContextMemory.search({
         query: buildWorkingMemoryRecallQuery(incoming, beforeContext.text),
         source: "working",
         limit: 8
       });
       const workingMemoryMatches = workingMemoryResult.ok ? workingMemoryResult.matches : [];
-      const userProfileResult = await recallMemory(this.config, {
+      const userProfileResult = await modelContextMemory.search({
         query: buildUserProfileRecallQuery(incoming, beforeContext.text, admin),
         source: "user_profile",
         limit: 6
@@ -287,7 +278,7 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
         }
       });
       const attachmentContext = await debounceContext.buildAttachmentContext(afterContext.text);
-      const basePrompt = options.promptOverride
+      const basePrompt = options.promptOverride || readCallbackInput(afterContext.text)
         ? [afterContext.text, attachmentContext.text].filter(Boolean).join("\n\n")
         : buildUserPrompt(
           incoming,
@@ -311,9 +302,11 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
           longTerm: longTermMemoryMatches, userProfile: currentUserProfileMemoryMatches }),
         "messages_64": messages64,
         "conversation.messages": conversationMessages,
+        [DIRECTOR_CONVERSATION_SCHEDULE_VARIABLE]: await this.director.promptContext(),
         ...(incoming.scope === "private" ? {} : { "conversation.group.thread_context": serializeGroupThreadPromptContext(threadPromptContext), "conversation.group.orchestrator_result": serializeUserGroupOrchestratorResult(options.orchestratorResult) }),
         "user.input": currentInputMarker ? `${currentInputMarker.start}${prompt}${currentInputMarker.end}` : prompt
       });
+      modelContextMemory.includePromptVariable(promptRequest, "memory.long_term", longTermMemoryMatches);
       const extensionBatchTexts = options.promptOverride === undefined
         ? collectRuntimeAgentExtensionBatchTexts({
           record: this.conversationRecords.get(conversationRecordId(incoming)),
@@ -351,12 +344,10 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
         currentUserMessage.imageUrls = debounceContext.currentImageUrls().slice(0, MAX_CURRENT_CONTEXT_IMAGES);
         currentUserMessage.localImagePaths = attachmentContext.localImagePaths;
       }
-      const selfieChatReferenceImageUrls = this.collectSelfieChatReferenceImages(incoming, debounceContext.contextCaptureSequence);
+      const selfieChatReferenceImageUrls = this.collectSelfieChatReferenceImages(
+        incoming, debounceContext.contextCaptureSequence, debounceContext.historyCaptureSequence);
       const generateImgReferenceContext = runtime_generateImgReferenceContext.call(
-        this,
-        incoming,
-        debounceContext.contextCaptureSequence
-      );
+        this, incoming, debounceContext.contextCaptureSequence, debounceContext.historyCaptureSequence);
       const generatedImages: ImageResult[] = [];
       let assistantTextCount = 0;
       this.recordAssistantRequestStarted(incoming, logRunId);
@@ -380,14 +371,14 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
         allowNoReply: true,
         workbenchFiles: providerWorkbenchFilesForIncoming(this.config, incoming, options.promptOverride),
         bash,
-        conversationAssets: this.conversationAssetProviderOptions(
+        conversationAssets: options.atomicImageReply ? undefined : this.conversationAssetProviderOptions(
           incoming,
           gateway,
           logRunId,
           options.isCurrent,
           options.delivery
         ),
-        voice: this.voiceProviderCapability(voiceSnapshot.profile, incoming, gateway, options.delivery),
+        voice: options.atomicImageReply ? undefined : this.voiceProviderCapability(voiceSnapshot.profile, incoming, gateway, options.delivery),
         bot: this.config.bot,
         disabledTools: this.conversationRecords.get(conversationRecordId(incoming))?.disabledTools,
         generateImage: (prompt, size, quality, referenceImageUrls, childLogContext) => provider.generateImage(
@@ -397,7 +388,7 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
           referenceImageUrls,
           childLogContext ?? logContext
         ),
-        onAssistantText: async (text, source = "text") => {
+        onAssistantText: options.atomicImageReply ? undefined : async (text, source = "text") => {
           if (options.isCurrent && !options.isCurrent()) return;
           const quoteReply = assistantTextCount === 0;
           assistantTextCount += 1;
@@ -433,7 +424,11 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
         imageReferences: generateImgReferenceContext,
         memory: {
           enabled: true,
-          recall: (input) => recallMemory(this.config, input)
+          recall: (input) => modelContextMemory.recall(input)
+        },
+        knowledge: {
+          enabled: true,
+          search: (input) => searchKnowledge(this.config, input)
         },
         selfie: {
           enabled: true,
@@ -444,12 +439,14 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
             logContext
           })
         },
-        asyncCodex: (options.allowAsyncCodex ?? true)
+        asyncCodex: !options.atomicImageReply && (options.allowAsyncCodex ?? true)
           && this.config.bot.tools.codex.enabled
           && toolCapabilities.codex,
-        asyncImage: options.allowAsyncImage ?? true,
+        asyncImage: options.atomicImageReply ? false : options.allowAsyncImage ?? true,
         imageTools: options.allowImageTools ?? true,
         systemConfig: systemConfigLifecycle?.toolPort, cron: this.scheduledTasks.toolPort(incoming, isAdmin, options.promptOverride),
+        director: this.director.toolPort(),
+        ...(options.promptOverride === undefined ? { air: this.air.toolPort(incoming, [...messages64, { role: "user", content: prompt }]) } : {}),
         skills: runtimeAgentExtensions?.skills,
         mcp: runtimeAgentExtensions?.mcp,
         logContext
@@ -457,14 +454,15 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
       if (turn.kind === "deferred") usedToolNames.add(turn.toolCall.name);
       const turnToolNames = finalizeToolNames();
       if (turn.kind !== "completed") systemConfigLifecycle?.discard();
-      if (options.isCurrent && !options.isCurrent()) {
+      if (options.signal?.aborted || (options.isCurrent && !options.isCurrent())) {
         systemConfigLifecycle?.discard();
         return sent;
       }
-      if (turn.kind === "no_reply") {
+      modelContextMemory.commit();
+      if (turn.kind === "no_reply" || (options.atomicImageReply && turn.kind === "completed" && generatedImages.length === 0)) {
         this.discardAssistantRequest(incoming, logRunId);
         if (options.delivery) options.delivery.terminalStatus = "no_reply";
-        if (this.config.bot.pokeOnNoReply && gateway.poke) {
+        if (!options.atomicImageReply && this.config.bot.pokeOnNoReply && gateway.poke) {
           const target = {
             ...(incoming.accountId ? { accountId: incoming.accountId } : {}),
             userId: incoming.userId,
@@ -532,6 +530,7 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
           imageReferences: generateImgReferenceContext,
           replyGate: this.replyGates.capture(incoming.scope, conversationRecordId(incoming)),
           ...(options.delivery?.replyQuote ? { replyQuote: options.delivery.replyQuote } : {}),
+          ...(options.delivery?.mentionUserIds?.length ? { mentionUserIds: [...options.delivery.mentionUserIds] } : {}),
           ...(threadContext ? { threadContext } : {}),
           ...(options.orchestratorResult ? { orchestratorResult: options.orchestratorResult } : {})
         };
@@ -550,8 +549,7 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
               messageOrigin: "async_tool_dispatch",
               toolNames: turnToolNames
             },
-            options.delivery?.replyQuote,
-            preparedAcknowledgement.contentSegments
+            options.delivery?.replyQuote, preparedAcknowledgement.contentSegments, options.delivery?.mentionUserIds
           )
         });
         return sent;
@@ -563,7 +561,7 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
         delivery: options.delivery,
         signal: options.signal,
         messageOrigin: turn.messageOrigin ?? options.messageOrigin ?? "text",
-        toolNames: turnToolNames
+        toolNames: turnToolNames, singleMessage: options.atomicImageReply
       };
       sent = await (turn.voice ? sendRuntimeVoiceFinalReply(this, { ...finalReply, voice: turn.voice, textAlreadyDelivered: turn.textAlreadyDelivered })
         : systemConfigReply.sendSystemConfigAwareFinalReply(this, finalReply)) || sent;
@@ -606,6 +604,10 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
         groupId: incoming.groupId,
         error
       });
+      if (options.atomicImageReply) {
+        if (requestStarted) this.discardAssistantRequest(incoming, logRunId); if (options.delivery) options.delivery.terminalStatus = "no_reply";
+        return sent;
+      }
       if (systemConfigReply.shouldSuppressSystemConfigFailureReply(error)) return sent;
       if (!options.isCurrent || options.isCurrent()) {
         await this.sendErrorReply(
@@ -636,7 +638,6 @@ export async function runtime_replyWithGroupChatSummary(this: RuntimeHost,
   ) {
     const admin = this.adminIdentity();
     const isAdmin = isAdminUserId(incoming.userId, admin);
-
     try {
       if (!incoming.groupId) {
         const record = await this.sendAssistantReply(
@@ -753,7 +754,6 @@ export async function runtime_processDeferredToolJob(this: RuntimeHost, job: Too
       ? { status: "succeeded" as const, result }
       : { status: "failed" as const, result, error: { message: String(record.error ?? "图片生成失败。") } };
   }
-
 function readGenerateImgReferenceContext(value: unknown): GenerateImgReferenceContext | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;

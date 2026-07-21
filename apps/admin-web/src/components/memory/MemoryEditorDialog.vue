@@ -9,7 +9,7 @@ const form = reactive({
   source: "working" as MemorySourceId,
   text: "",
   userId: "",
-  addressName: ""
+  addressNames: ""
 });
 const editableSources = computed(() => props.sources.filter((item) => item.editable));
 const userProfile = computed(() => form.source === "user_profile");
@@ -21,7 +21,7 @@ watch(
     form.source = props.entry?.source ?? editableSources.value[0]?.id ?? "working";
     form.text = props.entry?.text ?? "";
     form.userId = props.entry?.userId ?? "";
-    form.addressName = props.entry?.addressName ?? "";
+    form.addressNames = (props.entry?.addressNames ?? (props.entry?.addressName ? [props.entry.addressName] : [])).join("、");
   },
   { immediate: true }
 );
@@ -34,7 +34,10 @@ function save() {
   };
   if (userProfile.value) {
     if (!props.entry) payload.userId = form.userId.trim() || undefined;
-    payload.addressName = form.addressName.trim() || undefined;
+    payload.addressNames = [...new Set(form.addressNames
+      .split(/[\n,，、]+/u)
+      .map((name) => name.trim())
+      .filter(Boolean))];
   }
   emit("save", payload);
 }
@@ -61,7 +64,7 @@ function save() {
           </label>
           <label class="field">
             <span class="field-label">称呼</span>
-            <input v-model="form.addressName" class="control" type="text" autocomplete="off">
+            <input v-model="form.addressNames" class="control" type="text" autocomplete="off">
           </label>
         </div>
         <label class="field">

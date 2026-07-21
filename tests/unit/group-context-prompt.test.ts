@@ -212,6 +212,7 @@ describe("group context prompt contract", () => {
       "persona.dialogue_style_examples": "",
       "persona.user": "",
       "persona.relation": "",
+      "persona.air": "",
       "runtime.output_rules": "",
       "runtime.address_rules": "",
       "runtime.scope_rules": "",
@@ -226,13 +227,14 @@ describe("group context prompt contract", () => {
       ],
       "conversation.group.thread_context": serialized,
       "conversation.group.orchestrator_result": orchestratorResult,
+      "conversation.director.schedule": "",
       "memory.working": "",
       "memory.long_term": "",
       "memory.user_profile": "",
       "user.input": "本轮消息"
     });
 
-    expect(rendered.messages.slice(-5)).toEqual([
+    expect(rendered.messages.slice(-6)).toEqual([
       { role: "user", content: "历史消息" },
       { role: "assistant", content: "历史回复" },
       {
@@ -243,6 +245,7 @@ describe("group context prompt contract", () => {
         role: "developer",
         content: `<orchestrator_result>${orchestratorResult}</orchestrator_result>`
       },
+      { role: "developer", content: "<daily_schedule></daily_schedule>" },
       expect.objectContaining({ role: "user", content: expect.stringContaining("system_timezone=Asia/Shanghai") })
     ]);
   });
@@ -255,6 +258,7 @@ describe("group context prompt contract", () => {
       "persona.dialogue_style_examples": "",
       "persona.user": "",
       "persona.relation": "",
+      "persona.air": "",
       "runtime.output_rules": "",
       "runtime.address_rules": "",
       "runtime.scope_rules": "",
@@ -266,6 +270,7 @@ describe("group context prompt contract", () => {
       "messages_64": [],
       "conversation.group.thread_context": "",
       "conversation.group.orchestrator_result": "",
+      "conversation.director.schedule": "",
       "memory.working": "",
       "memory.long_term": "",
       "memory.user_profile": "",

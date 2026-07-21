@@ -21,7 +21,7 @@ describe("ToolRegistry", () => {
         enabled: true,
         workspacePath: "/fixture/agent-workspace",
         backend: "docker",
-        accessMode: "admin",
+        accessMode: "isolated",
         strictMode: true,
         isCurrent: () => true,
         audit: vi.fn(),
@@ -434,7 +434,6 @@ describe("ToolRegistry", () => {
       "set_auto_reply",
       "set_orchestrator",
       "set_search",
-      "set_bash_admin_backend",
       "set_group_reply"
     ]);
     expect(staleParameters.required).toEqual(expect.arrayContaining([

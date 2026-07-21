@@ -81,6 +81,7 @@ describe("ConfigService section semantics", () => {
         quoteGroupReplies: envelope.config.bot.quoteGroupReplies,
         quoteGroupReplyExcludedUserIds: envelope.config.bot.quoteGroupReplyExcludedUserIds,
         emojiSendSize: envelope.config.bot.emojiSendSize,
+        emojiSendSeparately: envelope.config.bot.emojiSendSeparately,
         contextMessageLimit: envelope.config.bot.contextMessageLimit
       }
     });
@@ -104,6 +105,7 @@ describe("ConfigService section semantics", () => {
         quoteGroupReplies: envelope.config.bot.quoteGroupReplies,
         quoteGroupReplyExcludedUserIds: envelope.config.bot.quoteGroupReplyExcludedUserIds,
         emojiSendSize: envelope.config.bot.emojiSendSize,
+        emojiSendSeparately: envelope.config.bot.emojiSendSeparately,
         contextMessageLimit: envelope.config.bot.contextMessageLimit
       }
     })).rejects.toMatchObject({
@@ -121,6 +123,7 @@ describe("ConfigService section semantics", () => {
       revision: envelope.revision,
       value: {
         enabled: true,
+        segmentedReply: true,
         followMainModel: false,
         providerId,
         model: "gpt-5.5",
@@ -133,6 +136,7 @@ describe("ConfigService section semantics", () => {
 
     expect(result.config.bot.tone).toEqual({
       enabled: true,
+      segmentedReply: true,
       followMainModel: false,
       providerId,
       model: "gpt-5.5",
@@ -146,6 +150,7 @@ describe("ConfigService section semantics", () => {
   });
 
   it.each([
+    ["segmentedReply", "yes", "tone.segmentedReply"],
     ["providerId", "missing-provider", "tone.providerId"],
     ["temperature", 2.1, "tone.temperature"],
     ["maxOutputTokens", 0, "tone.maxOutputTokens"],
@@ -197,6 +202,42 @@ describe("ConfigService section semantics", () => {
       code: "CONFIG_INVALID",
       field: "memory.reasoningEffort"
     });
+  });
+
+  it("persists Dream sampling settings as hot Agent memory configuration", async () => {
+    const subject = service();
+    const envelope = await subject.readEnvelope();
+    const result = await subject.patch("memory", {
+      revision: envelope.revision,
+      value: {
+        ...envelope.config.bot.memory,
+        dreamRecentWindowHours: 36,
+        dreamRecentMemoryLimit: 8,
+        dreamOlderMemoryLimit: 10
+      }
+    });
+
+    expect(result.config.bot.memory).toMatchObject({
+      dreamRecentWindowHours: 36,
+      dreamRecentMemoryLimit: 8,
+      dreamOlderMemoryLimit: 10
+    });
+    expect(result.applyMode).toBe("hot");
+    expect(result.fieldStates["bot.memory.dreamRecentWindowHours"]?.applyMode).toBe("hot");
+  });
+
+  it.each([
+    [{ dreamRecentWindowHours: 0 }, "memory.dreamRecentWindowHours"],
+    [{ dreamRecentMemoryLimit: 13, dreamOlderMemoryLimit: 12 }, "memory.dreamRecentMemoryLimit"],
+    [{ dreamRecentMemoryLimit: 0, dreamOlderMemoryLimit: 0 }, "memory.dreamRecentMemoryLimit"]
+  ] as const)("rejects invalid Dream sampling settings %#", async (patch, field) => {
+    const subject = service();
+    const envelope = await subject.readEnvelope();
+
+    await expect(subject.patch("memory", {
+      revision: envelope.revision,
+      value: { ...envelope.config.bot.memory, ...patch }
+    })).rejects.toMatchObject({ statusCode: 400, code: "CONFIG_INVALID", field });
   });
 
   it("persists an independent group thread model while the orchestrator is disabled", async () => {
@@ -460,6 +501,7 @@ describe("ConfigService section semantics", () => {
         quoteGroupReplies: !envelope.config.bot.quoteGroupReplies,
         quoteGroupReplyExcludedUserIds: ["20001", "20001", "20002"],
         emojiSendSize: envelope.config.bot.emojiSendSize,
+        emojiSendSeparately: envelope.config.bot.emojiSendSeparately,
         contextMessageLimit: envelope.config.bot.contextMessageLimit
       }
     });
@@ -482,6 +524,7 @@ describe("ConfigService section semantics", () => {
         quoteGroupReplies: envelope.config.bot.quoteGroupReplies,
         quoteGroupReplyExcludedUserIds: ["20001", "another-bot"],
         emojiSendSize: envelope.config.bot.emojiSendSize,
+        emojiSendSeparately: envelope.config.bot.emojiSendSeparately,
         contextMessageLimit: envelope.config.bot.contextMessageLimit
       }
     })).rejects.toMatchObject({

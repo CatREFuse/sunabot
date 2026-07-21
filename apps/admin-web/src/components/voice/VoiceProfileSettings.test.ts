@@ -20,6 +20,13 @@ const profile: VoiceProfile = {
   enabled: false,
   defaultLanguage: "ja",
   languages: { zh: null, en: null, ja: japaneseReference },
+  provider: {
+    protocol: "openai-audio",
+    baseUrl: "https://api.openai.com/v1",
+    apiKeyEnv: "OPENAI_API_KEY",
+    model: "gpt-4o-mini-tts",
+    voices: { zh: null, en: null, ja: "voice_plana" },
+  },
 };
 
 const DialogOverlayStub = defineComponent({
@@ -57,7 +64,7 @@ describe("VoiceProfileSettings", () => {
     expect(wrapper.text()).toContain("先生、おはようございます。");
     expect(
       wrapper
-        .get('[role="group"][aria-label="参考音频语言"]')
+        .get('[role="group"][aria-label="音色资料语言"]')
         .attributes("role"),
     ).toBe("group");
     expect(findButton(wrapper, "日本語").attributes("aria-pressed")).toBe(
@@ -75,16 +82,20 @@ describe("VoiceProfileSettings", () => {
     ]);
   });
 
-  it("requires a reference for the enabled default language", async () => {
-    const withoutReferences: VoiceProfile = {
+  it("requires an online voice for the enabled default language", async () => {
+    const withoutVoice: VoiceProfile = {
       ...profile,
       defaultLanguage: "zh",
       languages: { zh: null, en: null, ja: null },
+      provider: {
+        ...profile.provider,
+        voices: { zh: null, en: null, ja: "voice_plana" },
+      },
     };
-    const wrapper = mountSettings({ profile: withoutReferences });
+    const wrapper = mountSettings({ profile: withoutVoice });
     await wrapper.get('input[type="checkbox"]').setValue(true);
 
-    expect(wrapper.text()).toContain("请先添加默认语言的参考音频");
+    expect(wrapper.text()).toContain("请先设置默认语言的在线音色");
     expect(
       findButton(wrapper, "保存设置").attributes("disabled"),
     ).toBeDefined();

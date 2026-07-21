@@ -68,7 +68,7 @@ describe("AgentFileRepository", () => {
     });
     const personaFiles = (await repository.list(config, "persona")).files;
     const systemFiles = (await repository.list(config, "system")).files;
-    expect(personaFiles.filter((file) => file.kind === "fragment")).toHaveLength(6);
+    expect(personaFiles.filter((file) => file.kind === "fragment")).toHaveLength(8);
     expect(personaFiles).toContainEqual(expect.objectContaining({ id: "image.selfie-rewrite", kind: "final" }));
     expect(systemFiles).not.toContainEqual(expect.objectContaining({ id: "image.selfie-rewrite" }));
   });
@@ -81,16 +81,22 @@ describe("AgentFileRepository", () => {
       ["persona.dialogue_style_examples", "DIALOGUE_STYLE_EXAMPLES.md"],
       ["persona.user", "USER.md"],
       ["persona.relation", "RELATION.md"],
+      ["persona.air", "AIR.md"],
+      ["persona.director-seed", "DIRECTOR_SEED.md"],
       ["conversation.private-reply", "conversation_private_reply.json"],
       ["conversation.group-reply", "conversation_group_reply.json"],
       ["conversation.tone-rewrite", "tone_rewrite.json"],
       ["memory.compress-in", "work_memory_compress_in.json"],
       ["memory.compress-out", "work_memory_compress_out.json"],
       ["memory.user-profile", "user_profile_prompt.json"],
+      ["memory.dream", "memory_dream.json"],
       ["orchestrator.user-group", "user_groupchat_orchestrator.json"],
       ["orchestrator.group-thread", "group_thread_context.json"],
       ["conversation.group-summary", "group_chat_summary.json"],
       ["scheduler.cron-callback", "cron_callback.json"],
+      ["director.daily-plan", "director_daily_plan.json"],
+      ["director.schedule-revision", "director_schedule_revision.json"],
+      ["air.read", "read_air.json"],
       ["image.selfie-rewrite", "selfie_prompt_rewrite.json"]
     ] as const;
     for (const [id, fileName] of expectedMappings) {

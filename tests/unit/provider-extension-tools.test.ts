@@ -123,7 +123,12 @@ describe("Provider extension tools", () => {
     }));
     const options = {
       mcp: {
-        definitions: () => [{ type: "function", name, parameters: { type: "object" }, strict: true }],
+        definitions: () => [{
+          type: "function",
+          name,
+          parameters: { type: "object", properties: {}, required: [], additionalProperties: false },
+          strict: true
+        }],
         describe: () => ({ serverId: "server-a", transport: "streamable_http" }),
         call: callMcp
       }

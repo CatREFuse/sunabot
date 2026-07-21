@@ -42,6 +42,9 @@ describe("emoji catalog", () => {
     expect(isValidEmojiKey("😀")).toBe(true);
     expect(MAX_EMOJI_MARKERS_PER_REPLY).toBe(4);
     expect(EMOJI_MARKER_SYNTAX).toContain("单条回复最多 4 个表情");
+    expect(EMOJI_MARKER_SYNTAX).toContain("[/开心]");
+    expect(EMOJI_MARKER_SYNTAX).toContain("不得添加“表情”等前缀");
+    expect(EMOJI_MARKER_SYNTAX).not.toContain("[/表情key]");
   });
 
   it("caps known markers at four while ignoring unknown and escaped marker-like text", () => {
@@ -67,9 +70,9 @@ describe("emoji catalog", () => {
     ]);
     expect(prepared.contentSegments).toEqual([
       { type: "text", text: "早上好" },
-      { type: "image", imageIndex: 0 },
+      { type: "sticker", imageIndex: 0 },
       { type: "text", text: "今天[/不存在]还好吗" },
-      { type: "image", imageIndex: 1 },
+      { type: "sticker", imageIndex: 1 },
       { type: "image", imageIndex: 2 }
     ]);
   });
@@ -92,7 +95,7 @@ describe("emoji catalog", () => {
     expect(emojiPlanContainsMarkers(plan)).toBe(true);
     expect(prepareEmojiReply(rewritten.text, rewritten.plan).contentSegments).toEqual([
       { type: "text", text: "您好" },
-      { type: "image", imageIndex: 0 },
+      { type: "sticker", imageIndex: 0 },
       { type: "text", text: "呀" }
     ]);
     expect(() => prepareEmojiReply("前后[/开心]", plan)).toThrow("改变了表情标记");

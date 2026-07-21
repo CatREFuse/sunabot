@@ -1,97 +1,92 @@
 import { mount } from "@vue/test-utils";
-import { defineComponent } from "vue";
 import { describe, expect, it } from "vitest";
-import type { VoiceProviderStatus } from "../../types/voice";
+import type {
+  VoiceProviderSettings,
+  VoiceProviderStatus,
+} from "../../types/voice";
 import VoiceServiceControls from "./VoiceServiceControls.vue";
 
+const settings: VoiceProviderSettings = {
+  protocol: "openai-audio",
+  baseUrl: "https://api.openai.com/v1",
+  apiKeyEnv: "OPENAI_API_KEY",
+  model: "gpt-4o-mini-tts",
+  voices: { zh: null, en: null, ja: "voice_plana" },
+};
+
 const ready: VoiceProviderStatus = {
-  provider: "MOSS-TTS-Nano",
+  provider: "OpenAI Audio",
+  state: "ready",
   ready: true,
-  checkedAt: "2026-07-19T10:00:00.000Z",
+  checkedAt: "2026-07-20T10:00:00.000Z",
   latencyMs: 42,
-  serviceState: "running",
-  controlsAvailable: true,
 };
-
-const stopped: VoiceProviderStatus = {
-  provider: "MOSS-TTS-Nano",
-  ready: false,
-  checkedAt: "2026-07-19T10:00:00.000Z",
-  serviceState: "stopped",
-  controlsAvailable: true,
-  message: "语音服务已关闭",
-};
-
-const DialogOverlayStub = defineComponent({
-  name: "DialogOverlay",
-  inheritAttrs: false,
-  props: { open: Boolean },
-  emits: ["close"],
-  template: '<div v-if="open" role="dialog"><slot /></div>',
-});
 
 function mountControls(provider: VoiceProviderStatus | null = ready) {
-  return mount(VoiceServiceControls, {
-    props: { provider },
-    global: { stubs: { DialogOverlay: DialogOverlayStub } },
-  });
+  return mount(VoiceServiceControls, { props: { provider, settings } });
 }
 
 describe("VoiceServiceControls", () => {
-  it("shows readiness and exposes check and stop actions", async () => {
+  it("shows online readiness and emits the connection check", async () => {
     const wrapper = mountControls();
 
-    expect(wrapper.text()).toContain("可用");
+    expect(wrapper.text()).toContain("在线语音服务");
+    expect(wrapper.text()).toContain("OpenAI Audio 兼容");
     expect(wrapper.text()).toContain("响应 42 ms");
-    expect(wrapper.get('button:nth-of-type(2)').attributes("disabled")).toBeDefined();
-    await wrapper.get('button:nth-of-type(1)').trigger("click");
+    await wrapper.get("button").trigger("click");
     expect(wrapper.emitted("check")).toEqual([[]]);
   });
 
-  it("starts a stopped service", async () => {
-    const wrapper = mountControls(stopped);
-    const start = wrapper
-      .findAll("button")
-      .find((button) => button.text().trim() === "启动服务");
-    if (!start) throw new Error("启动服务按钮不存在");
-
-    await start.trigger("click");
-    expect(wrapper.emitted("start")).toEqual([[]]);
-  });
-
-  it("confirms before stopping the service", async () => {
+  it("edits and emits a normalized provider configuration", async () => {
     const wrapper = mountControls();
-    const stop = wrapper
-      .findAll("button")
-      .find((button) => button.text().trim() === "关闭服务");
-    if (!stop) throw new Error("关闭服务按钮不存在");
+    const inputs = wrapper.findAll("input");
 
-    await stop.trigger("click");
-    expect(wrapper.get('[role="dialog"]').text()).toContain("关闭语音服务？");
-    const confirm = wrapper
-      .get('[role="dialog"]')
+    await inputs[0]!.setValue(" https://voice.example/v1 ");
+    await inputs[2]!.setValue("tts-model");
+    await inputs[3]!.setValue("voice_zh");
+    const save = wrapper
       .findAll("button")
-      .find((button) => button.text().trim() === "关闭服务");
-    if (!confirm) throw new Error("关闭确认按钮不存在");
-    await confirm.trigger("click");
+      .find((button) => button.text().trim() === "保存设置");
+    if (!save) throw new Error("保存设置按钮不存在");
+    await save.trigger("click");
 
-    expect(wrapper.emitted("stop")).toEqual([[]]);
+    expect(wrapper.emitted("save")).toEqual([
+      [
+        {
+          protocol: "openai-audio",
+          baseUrl: "https://voice.example/v1",
+          apiKeyEnv: "OPENAI_API_KEY",
+          model: "tts-model",
+          voices: { zh: "voice_zh", en: null, ja: "voice_plana" },
+        },
+      ],
+    ]);
   });
 
-  it("keeps management actions disabled when host control is unavailable", () => {
-    const wrapper = mountControls({
-      ...stopped,
-      serviceState: "unknown",
-      controlsAvailable: false,
-      message: "语音服务不可用",
-    });
-    const buttons = wrapper.findAll("button");
+  it("disables saving when required fields are empty or unchanged", async () => {
+    const wrapper = mountControls();
+    const save = wrapper
+      .findAll("button")
+      .find((button) => button.text().trim() === "保存设置");
+    if (!save) throw new Error("保存设置按钮不存在");
+    expect(save.attributes("disabled")).toBeDefined();
 
-    expect(buttons.find((button) => button.text().trim() === "检测服务")?.attributes("disabled"))
-      .toBeUndefined();
-    expect(buttons.find((button) => button.text().trim() === "启动服务")?.attributes("disabled"))
-      .toBeDefined();
-    expect(buttons.find((button) => button.text().trim() === "关闭服务")?.attributes("disabled"))
-      .toBeDefined();
+    await wrapper.findAll("input")[0]!.setValue("");
+    expect(save.attributes("disabled")).toBeDefined();
+    expect(wrapper.emitted("save")).toBeUndefined();
+  });
+
+  it("shows a missing API Key as unconfigured instead of unavailable", () => {
+    const wrapper = mountControls({
+      provider: "OpenAI Audio",
+      state: "unconfigured",
+      ready: false,
+      checkedAt: "2026-07-20T10:00:00.000Z",
+      message: "API Key 未配置",
+    });
+
+    expect(wrapper.text()).toContain("未配置");
+    expect(wrapper.text()).toContain("API Key 未配置");
+    expect(wrapper.find('[data-kind="error"]').exists()).toBe(false);
   });
 });

@@ -70,7 +70,10 @@ export const AGENT_TOOL_NAMES = [
   "assistant_text",
   "no_reply",
   "memory_recall",
+  "read_air",
+  "knowledge_search",
   "websearch",
+  "webfetch",
   "generate_img",
   "selfie",
   "read_file",
@@ -83,7 +86,8 @@ export const AGENT_TOOL_NAMES = [
   "read_skill_resource",
   "run_skill_script",
   "system_config",
-  "cron"
+  "cron",
+  "call_director"
 ] as const;
 export type AgentToolName = (typeof AGENT_TOOL_NAMES)[number];
 export interface AssistantMessageTrace {
@@ -137,6 +141,9 @@ export interface BotMemorySettings {
   reasoningEffort?: ReasoningEffort;
   messageThreshold: number;
   workingMemoryMaxEntries: number;
+  dreamRecentWindowHours: number;
+  dreamRecentMemoryLimit: number;
+  dreamOlderMemoryLimit: number;
   workMemoryCompressInPrompt: string;
   workMemoryCompressOutPrompt: string;
   userProfilePrompt: string;
@@ -166,6 +173,7 @@ export interface NormalReplyConfig {
 
 export interface BotToneSettings {
   enabled: boolean;
+  segmentedReply: boolean;
   followMainModel: boolean;
   providerId: string;
   model: string;
@@ -187,6 +195,7 @@ export interface BotConfig {
   quoteGroupReplyExcludedUserIds: string[];
   contextMessageLimit: number;
   emojiSendSize: EmojiSendSize;
+  emojiSendSeparately: boolean;
   tone: BotToneSettings;
   memory: BotMemorySettings;
   orchestrator: BotOrchestratorSettings;

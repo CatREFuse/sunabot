@@ -9,14 +9,14 @@ import type {
 } from "../types.js";
 import { readMemoryText } from "./memoryText.js";
 import {
-  configuredAddressName,
+  configuredAddressNames,
   earliestIsoLike,
   latestIsoLike,
   normalizeText,
   normalizeUserId,
   normalizeUserIds,
   optionalString,
-  readAddressName,
+  readAddressNames,
   uniqueStrings
 } from "./normalizers.js";
 
@@ -43,7 +43,7 @@ export function mergeUserProfileRecords(
       const profile = ensureUserProfileAggregate(profiles, userId, {
         id: userIds.length === 1 ? normalizeText(record.value.id) || `${source.id}_${userId}` : `${source.id}_${userId}`,
         userName: optionalString(record.value.userName) ?? "",
-        addressName: configuredAddressName(config, userId, readAddressName(record.value)),
+        addressNames: configuredAddressNames(config, userId, readAddressNames(record.value)),
         createdAt: optionalString(record.value.createdAt) ?? recordTime,
         updatedAt: optionalString(record.value.updatedAt) ?? recordTime,
         time: recordTime,
@@ -59,14 +59,14 @@ export function mergeUserProfileRecords(
     const profile = ensureUserProfileAggregate(profiles, group.userId, {
       id: `${source.id}_${group.userId}`,
       userName: group.userName,
-      addressName: configuredAddressName(config, group.userId, group.addressName),
+      addressNames: configuredAddressNames(config, group.userId, group.addressNames),
       createdAt: group.createdAt,
       updatedAt: group.updatedAt,
       time: group.time,
       source: group.source
     });
     if (group.userName) profile.userName = group.userName;
-    if (!profile.addressName && group.addressName) profile.addressName = group.addressName;
+    profile.addressNames = uniqueStrings([...profile.addressNames, ...group.addressNames]);
     profile.updatedAt = latestIsoLike(profile.updatedAt, group.updatedAt);
     profile.time = latestIsoLike(profile.time, group.time);
     profile.source = group.source || profile.source || "sunabot.memory.user_profile";
@@ -108,7 +108,7 @@ export function groupUserProfileFacts(
       const group = groups.get(userId) ?? {
         userId,
         userName: "",
-        addressName: "",
+        addressNames: [],
         facts: [],
         createdAt: time,
         updatedAt: now,
@@ -116,7 +116,7 @@ export function groupUserProfileFacts(
         source: fact.source || fallbackSource
       };
       if (fact.userName) group.userName = fact.userName;
-      if (!group.addressName && fact.addressName) group.addressName = fact.addressName;
+      group.addressNames = uniqueStrings([...group.addressNames, ...fact.addressNames]);
       group.createdAt = earliestIsoLike(group.createdAt, fact.createdAt || time);
       group.updatedAt = latestIsoLike(group.updatedAt, now);
       group.time = latestIsoLike(group.time, time);
@@ -143,7 +143,7 @@ export function ensureUserProfileAggregate(
   const existing = profiles.get(userId);
   if (existing) {
     if (seed.userName) existing.userName = seed.userName;
-    if (!existing.addressName && seed.addressName) existing.addressName = seed.addressName;
+    existing.addressNames = uniqueStrings([...existing.addressNames, ...seed.addressNames]);
     existing.createdAt = earliestIsoLike(existing.createdAt, seed.createdAt);
     existing.updatedAt = latestIsoLike(existing.updatedAt, seed.updatedAt);
     existing.time = latestIsoLike(existing.time, seed.time);
@@ -229,8 +229,7 @@ export function userProfileAggregateValue(config: MemoryIdentityConfig, source: 
     source: profile.source || "sunabot.memory.user_profile"
   };
   if (profile.userName) value.userName = profile.userName;
-  const addressName = configuredAddressName(config, profile.userId, profile.addressName);
-  value.addressName = addressName;
+  value.addressNames = configuredAddressNames(config, profile.userId, profile.addressNames);
   if (profile.time) value.time = profile.time;
   if (profile.updatedAt) value.updatedAt = profile.updatedAt;
   return value;

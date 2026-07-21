@@ -20,6 +20,9 @@ const tasks: ScheduledTask[] = [
       { conversationId: "group:10001", mentionUserIds: ["171419991", "20002"] },
       { conversationId: "private:20002", mentionUserIds: [] }
     ],
+    permanentRetention: false,
+    archived: false,
+    director: false,
     createdAt: "2026-07-18T01:00:00.000Z",
     updatedAt: "2026-07-19T01:00:00.000Z",
     nextTriggerAt: "2026-07-20T01:00:00.000Z",
@@ -34,11 +37,29 @@ const tasks: ScheduledTask[] = [
     context: "提醒确认构建产物、更新日志和回滚方案。",
     schedule: { kind: "once", runAt: "2026-07-22T10:30:00.000Z" },
     targets: [{ conversationId: "group:10001", mentionUserIds: ["171419991"] }],
+    permanentRetention: false,
+    archived: true,
+    director: false,
     createdAt: "2026-07-18T02:00:00.000Z",
     updatedAt: "2026-07-19T02:00:00.000Z",
     lastTriggerAt: "2026-07-18T10:30:00.000Z",
     lastRunStatus: "failed",
     lastError: "上次回调未送达"
+  },
+  {
+    id: "director-plana-20260721-lunch-r1-c1",
+    revision: 1,
+    name: "日常导演 · 午后整理资料",
+    enabled: true,
+    context: "在窗边整理刚读完的资料，分享午后安静的一刻。",
+    schedule: { kind: "once", runAt: "2026-07-21T06:45:00.000Z" },
+    targets: [{ conversationId: "group:10001", mentionUserIds: [] }],
+    permanentRetention: false,
+    archived: false,
+    director: true,
+    createdAt: "2026-07-21T00:00:00.000Z",
+    updatedAt: "2026-07-21T00:00:00.000Z",
+    nextTriggerAt: "2026-07-21T06:45:00.000Z"
   }
 ];
 
@@ -59,7 +80,13 @@ test("定时任务桌面与移动端", async ({ page }, testInfo) => {
     await expect(page.getByText("发行前检查", { exact: true })).toBeVisible();
     await capture(page, viewport.name, theme, "scheduled-tasks-list");
 
-    const task = page.locator("article").filter({ hasText: "工作日晨间简报" });
+    await page.getByRole("tab", { name: "导演任务", exact: true }).click();
+    await expect(page.getByText("日常导演 · 午后整理资料", { exact: true })).toBeVisible();
+    await expect(page.getByText("工作日晨间简报", { exact: true })).toBeHidden();
+    await capture(page, viewport.name, theme, "scheduled-tasks-director");
+    await page.getByRole("tab", { name: "全部", exact: true }).click();
+
+    const task = page.locator("tr").filter({ hasText: "工作日晨间简报" });
     await task.getByRole("button", { name: "编辑", exact: true }).click();
     const dialog = page.getByRole("dialog", { name: "编辑定时任务" });
     await expect(dialog).toBeVisible();
@@ -110,7 +137,12 @@ async function installScheduledTasksApi(page: Page) {
         }]
       };
     } else if (url.pathname === "/api/scheduled-tasks") {
-      body = { tasks };
+      const category = url.searchParams.get("category") ?? "all";
+      const visibleTasks = category === "director" ? tasks.filter((task) => task.director) : tasks;
+      body = {
+        tasks: visibleTasks,
+        pagination: { page: 1, pageSize: 20, total: visibleTasks.length, pageCount: 1 }
+      };
     } else if (url.pathname === "/api/conversations") {
       body = {
         conversations: [

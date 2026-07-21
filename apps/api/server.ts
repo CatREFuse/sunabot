@@ -48,11 +48,13 @@ import { registerScheduledTaskRoutes } from "./plugins/scheduledTaskRoutes.js";
 import { registerConfigDoctorRoutes } from "./plugins/configDoctorRoutes.js";
 import { registerMediaRoutes, type MediaHostnameLookup } from "./plugins/mediaRoutes.js";
 import { registerMemoryRoutes } from "./plugins/memoryRoutes.js";
+import { registerKnowledgeRoutes } from "./plugins/knowledgeRoutes.js";
 import { registerMonitoringRoutes } from "./plugins/monitoringRoutes.js";
 import { registerOneBotRoutes } from "./plugins/onebotRoutes.js";
 import { registerProviderConfigRoutes } from "./plugins/providerConfigRoutes.js";
 import { registerSelfieReferenceRoutes } from "./plugins/selfieReferenceRoutes.js";
 import { registerAgentEmojiApi } from "./emojiApiComposition.js";
+import { resolveDreamAccountId } from "./dreamApiComposition.js";
 import { buildVoiceApiComposition, registerVoiceApi } from "./voiceApiComposition.js";
 import type { AppConfig, ProviderConfig } from "../../src/types.js";
 import { OpenAIProvider } from "../../adapters/model/openaiProvider.js";
@@ -65,6 +67,7 @@ import {
   type RuntimeProbeClientPort
 } from "../../services/agents/accountRuntimeReconciler.js";
 import { BroadcastStormDetector } from "../../services/orchestration/public.js";
+import { knowledgeBaseForConfig } from "../../services/knowledge/public.js";
 import {
   createRuntimeToolCapabilityResolver,
   createWorkspaceBashCapabilityProbe,
@@ -90,7 +93,6 @@ import {
   type AgentExtensionApiOptions
 } from "./agentExtensionApi.js";
 import { isSpaRoute } from "./spaRouting.js";
-
 export interface CreateAppOptions {
   config?: AppConfig;
   initializeRuntime?: boolean;
@@ -110,7 +112,6 @@ export interface CreateAppOptions {
   resolveToolCapabilities?: RuntimeToolCapabilityResolver;
   agentExtensions?: AgentExtensionApiOptions;
   mediaHostnameLookup?: MediaHostnameLookup;
-  voiceServiceController?: Parameters<typeof buildVoiceApiComposition>[0]["serviceController"];
 }
 
 export interface OneBotListenerAddress {
@@ -222,7 +223,7 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
   await agentRuntimeManager.initialize();
   const voiceApi = buildVoiceApiComposition({
     defaultAgentId: () => config.persona.defaultAgentId,
-    getRuntime: (agentId) => agentRuntimeManager.require(agentId), serviceController: options.voiceServiceController
+    getRuntime: (agentId) => agentRuntimeManager.require(agentId)
   });
   agentExtensions.setAgentChangedHandler(async (agentId) => {
     await agentRuntimeManager.refreshReadiness(agentId);
@@ -239,7 +240,6 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
       );
     }
   }
-
   const adminSessionStore = new SqliteAdminSessionStore(applicationDatabasePath(config));
   const adminAuth = await AdminAuthService.create({
     credentialsPath: getWorkspacePath(WORKSPACE_LAYOUT.adminCredentials),
@@ -441,7 +441,6 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
       }
     });
   });
-
   registerAuthRoutes(app, adminAuth);
   registerAgentExtensionApi(app, agentExtensions, adminAuth);
 
@@ -459,7 +458,6 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
     }
     return payload;
   });
-
   app.get("/healthz/runtime", async () => ({ schemaVersion: 1, live: true }));
 
   registerMonitoringRoutes(app, {
@@ -554,8 +552,10 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
     getAgentContext: (agentId) => {
       const agentRuntime = agentRuntimeManager.require(agentId);
       return { config: agentRuntime.config, runtime: agentRuntime };
-    }
+    },
+    resolveDreamAccountId: (agentId) => resolveDreamAccountId(agentId, onebotGateway, agentRegistry)
   });
+  registerKnowledgeRoutes(app, { getService: (agentId) => knowledgeBaseForConfig(agentRuntimeManager.require(agentId).config) });
   registerAgentToolRoutes(app, {
     agentFiles,
     resolveToolCapabilities: (backend) => runtime.resolveToolCapabilities(backend),

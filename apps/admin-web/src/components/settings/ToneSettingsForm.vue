@@ -52,12 +52,18 @@ const displayedMaxRetries = computed({
   <section class="grid gap-8">
     <div>
       <h2 class="section-title">语气处理</h2>
+      <p class="mt-2 text-sm leading-6 text-mute">在最终发送前改写语气，并可拆分为多个聊天气泡。</p>
     </div>
-    <div class="divide-y divide-line border-y border-line">
+    <div class="settings-group grid gap-4">
+      <h3 class="settings-group-title">处理方式</h3>
+      <div class="divide-y divide-line border-y border-line">
       <ToggleSwitch v-model="draft.enabled" data-config-field="tone.enabled" label="启用语气处理" />
+      <ToggleSwitch v-model="draft.segmentedReply" data-config-field="tone.segmentedReply" label="分段回复" :disabled="!draft.enabled" />
       <ToggleSwitch v-model="draft.followMainModel" data-config-field="tone.followMainModel" label="主模型跟随" />
+      </div>
     </div>
-    <div class="grid gap-5 sm:grid-cols-2">
+    <div class="settings-group grid gap-5 sm:grid-cols-2">
+      <h3 class="settings-group-title sm:col-span-2">模型来源</h3>
       <label class="field">
         <span class="field-label">Provider</span>
         <select v-model="displayedProviderId" class="control" data-config-field="tone.providerId" :disabled="followsMainModel">
@@ -82,8 +88,8 @@ const displayedMaxRetries = computed({
         <SettingsConfirmInput v-model.number="displayedMaxRetries" :disabled="followsMainModel" data-config-field="tone.maxRetries" type="number" min="0" max="10" step="1" confirm-label="确认失败重试次数" />
       </label>
     </div>
-    <div class="border-t border-line pt-6">
-      <h3 class="text-base font-medium text-display">提示词</h3>
+    <div class="settings-group">
+      <h3 class="settings-group-title">提示词</h3>
       <RouterLink class="mt-3 inline-block font-mono text-[11px] text-[rgb(var(--color-interactive))]" to="/system-prompts/conversation.tone-rewrite">编辑正文 →</RouterLink>
     </div>
   </section>

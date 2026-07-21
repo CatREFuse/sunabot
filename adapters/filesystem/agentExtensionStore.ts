@@ -63,6 +63,7 @@ export interface AgentExtensionStoreOptions {
 
 export class AgentExtensionStore implements AgentExtensionRepository {
   private readonly now: () => Date;
+  private readonly runLayoutCheck = createLayoutCheckCoordinator();
   private readonly queues = new Map<string, Promise<unknown>>();
   private readonly pathGuard: AgentExtensionPathGuard;
   private readonly copyLifecycle: AgentExtensionCopyLifecycle;
@@ -97,6 +98,10 @@ export class AgentExtensionStore implements AgentExtensionRepository {
   }
 
   async ensureLayout(agentId: string) {
+    return this.runLayoutCheck(agentId, this.extensionTransactions.owns(agentId), () => this.ensureLayoutOnce(agentId));
+  }
+
+  private async ensureLayoutOnce(agentId: string) {
     const paths = await this.pathGuard.paths(agentId);
     await this.pathGuard.guard(paths, "ensure-layout-probe");
     const layoutReady = this.pathGuard.isPinned(paths, paths.skills) &&
@@ -525,9 +530,7 @@ export class AgentExtensionStore implements AgentExtensionRepository {
     });
   }
 
-  private async fault(step: string) {
-    await this.options.faultInjector?.(step);
-  }
+  private async fault(step: string) { await this.options.faultInjector?.(step); }
 
   private async recoverCopyTransactions(agentId: string) {
     if (this.extensionTransactions.owns(agentId)) return;
@@ -555,6 +558,20 @@ export class AgentExtensionStore implements AgentExtensionRepository {
       beforeRecoveryMutation: () => this.fault("before-skill-recovery-mutation")
     };
   }
+}
+
+function createLayoutCheckCoordinator() {
+  const checks = new Map<string, Promise<void>>();
+  return (key: string, bypass: boolean, operation: () => Promise<void>) => {
+    if (bypass) return operation();
+    const existing = checks.get(key);
+    if (existing) return existing;
+    const current = operation().finally(() => {
+      if (checks.get(key) === current) checks.delete(key);
+    });
+    checks.set(key, current);
+    return current;
+  };
 }
 
 function skillDoublyApproved(record: AgentSkillRecord) {

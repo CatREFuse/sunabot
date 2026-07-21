@@ -6,6 +6,7 @@ import {
   WorkspaceBashIsolationError,
   buildBubblewrapInvocation,
   buildDockerInvocation,
+  buildHostNativeInvocation,
   ensureWorkspaceBashIsolation
 } from "../../services/tools/bashSandbox.js";
 import {
@@ -14,6 +15,10 @@ import {
 } from "../../services/tools/bashPolicy.js";
 
 const workbench = "/srv/sunabot/workspace/business/agents/plana/workbench";
+const readOnlyMounts = {
+  skills: "/srv/sunabot/workspace/business/agents/plana/extensions/skills",
+  mcp: "/srv/sunabot/workspace/business/agents/plana/extensions/mcp"
+};
 const environment = {
   PATH: "/usr/local/bin:/usr/bin:/bin",
   HOME: WORKSPACE_BASH_VIRTUAL_ROOT,
@@ -86,6 +91,21 @@ describe("workspace Bash isolation", () => {
     expect(hasSequence(invocation.args, ["--ro-bind", "/var/log/app.log", "/var/log/app.log"])).toBe(true);
   });
 
+  it("binds Native Bash Skill and MCP configuration read-only", () => {
+    const invocation = buildBubblewrapInvocation(
+      { kind: "shell", command: "ls /skills /mcp" },
+      workbench,
+      environment,
+      "/fixture/bwrap",
+      [],
+      "/fixture/prlimit",
+      readOnlyMounts
+    );
+
+    expect(hasSequence(invocation.args, ["--ro-bind", readOnlyMounts.skills, "/skills"])).toBe(true);
+    expect(hasSequence(invocation.args, ["--ro-bind", readOnlyMounts.mcp, "/mcp"])).toBe(true);
+  });
+
   it.each(["write", "delete"] as const)("rejects a forged outside %s bind", (access) => {
     expect(() => buildBubblewrapInvocation(
       { kind: "shell", command: "printf x" },
@@ -114,14 +134,16 @@ describe("workspace Bash isolation", () => {
     )).toThrow(WorkspaceBashIsolationError);
   });
 
-  it("mounts only workbench into a named short-lived Docker container", () => {
+  it("mounts the Docker workbench read-write and only Skill and MCP configuration read-only", () => {
     const containerName = `sunabot-bash-${"a".repeat(32)}`;
     const invocation = buildDockerInvocation(
       { kind: "shell", command: "echo ok" },
       "/host/agent/workbench",
       "/fixture/docker",
       "sunabot-bash:test",
-      containerName
+      containerName,
+      undefined,
+      readOnlyMounts
     );
 
     expect(invocation.file).toBe("/fixture/docker");
@@ -131,13 +153,15 @@ describe("workspace Bash isolation", () => {
       "--security-opt", "no-new-privileges:true",
       "--ulimit", "fsize=268435456:268435456",
       "--mount", "type=bind,src=/host/agent/workbench,dst=/workbench",
+      "--mount", `type=bind,src=${readOnlyMounts.skills},dst=/skills,readonly`,
+      "--mount", `type=bind,src=${readOnlyMounts.mcp},dst=/mcp,readonly`,
       "--workdir", "/workbench", "--entrypoint", "/usr/bin/env", "sunabot-bash:test"
     ]));
     expect(invocation.args.slice(invocation.args.indexOf("sunabot-bash:test"))).toEqual([
       "sunabot-bash:test", "-i",
       "HOME=/workbench", "PWD=/workbench", "PATH=/usr/local/bin:/usr/bin:/bin",
       "LANG=C.UTF-8", "LC_ALL=C.UTF-8", "TMPDIR=/tmp", "TMP=/tmp", "TEMP=/tmp",
-      "SHELL=/bin/bash", "USER=sunabot",
+      "SHELL=/bin/bash", "USER=sunabot", "SUNABOT_SKILLS=/skills", "SUNABOT_MCP_CONFIG=/mcp",
       "/bin/bash", "--noprofile", "--norc", "-lc", "echo ok"
     ]);
     for (const variable of [
@@ -167,16 +191,62 @@ describe("workspace Bash isolation", () => {
     expect(invocation.args.indexOf("-i")).toBeLessThan(invocation.args.indexOf("/usr/bin/ls"));
   });
 
-  it("rejects macOS Native Bash without probing or falling back to host Bash", async () => {
+  it("uses an audited macOS host Bash for the Native backend", async () => {
+    const access = vi.fn(async () => undefined);
     const probe = vi.fn(async () => undefined);
 
     await expect(ensureWorkspaceBashIsolation("native", workbench, environment, {
       platform: "darwin",
+      effectiveUid: 501,
+      access,
       probe
-    })).rejects.toMatchObject({
-      name: "WorkspaceBashIsolationError",
-      code: WORKSPACE_BASH_ISOLATION_ERROR
+    })).resolves.toEqual({
+      kind: "host",
+      executable: "/bin/bash"
     });
+    expect(access).toHaveBeenCalledWith("/bin/bash", expect.any(Number));
+    expect(probe).toHaveBeenCalledWith(
+      "/bin/bash",
+      ["--noprofile", "--norc", "-lc", ":"]
+    );
+  });
+
+  it("builds Native host execution with a sanitized environment and real shared paths", () => {
+    const invocation = buildHostNativeInvocation(
+      { kind: "shell", command: "pwd && ls \"$SUNABOT_SKILLS\" \"$SUNABOT_MCP_CONFIG\"" },
+      workbench,
+      environment,
+      "/bin/bash",
+      [],
+      readOnlyMounts
+    );
+
+    expect(invocation).toEqual({
+      file: "/bin/bash",
+      args: [
+        "--noprofile", "--norc", "-lc",
+        "pwd && ls \"$SUNABOT_SKILLS\" \"$SUNABOT_MCP_CONFIG\""
+      ],
+      env: {
+        ...environment,
+        PATH: "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        HOME: workbench,
+        PWD: workbench,
+        SUNABOT_SKILLS: readOnlyMounts.skills,
+        SUNABOT_MCP_CONFIG: readOnlyMounts.mcp
+      }
+    });
+  });
+
+  it("fails closed for a root macOS Native runtime", async () => {
+    const probe = vi.fn(async () => undefined);
+
+    await expect(ensureWorkspaceBashIsolation("native", workbench, environment, {
+      platform: "darwin",
+      effectiveUid: 0,
+      access: async () => undefined,
+      probe
+    })).rejects.toBeInstanceOf(WorkspaceBashIsolationError);
     expect(probe).not.toHaveBeenCalled();
   });
 

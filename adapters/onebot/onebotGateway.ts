@@ -33,6 +33,7 @@ import {
   extractOneBotMessageDetails,
   extractOneBotReceiptMessageId,
   extractOneBotSender,
+  hydrateOneBotForwardContent,
   parseOneBotInboundMessage
 } from "./inboundMessageAdapter.js";
 import type { OneBotEvent } from "./protocol.js";
@@ -518,6 +519,11 @@ export class OneBotGateway extends EventEmitter implements MessagingPort, Conver
       const inbound = parseOneBotInboundMessage(event);
       if (!inbound || !connection) return;
       inbound.accountId = connection.accountId;
+      await hydrateOneBotForwardContent(
+        inbound,
+        event,
+        (messageId) => this.sendAction("get_forward_msg", { message_id: messageId }, connection.accountId)
+      );
       void this.delegate.handleInboundMessage(inbound, this, connection).catch((error) => {
         console.error("[onebot] event handling failed", {
           postType: event.post_type,
@@ -685,7 +691,13 @@ function richMessage(
       }
       const imageSource = imageSources[segment.imageIndex];
       if (!imageSource) throw new Error("Outbound image segment index is invalid.");
-      segments.push({ type: "image", data: { file: imageSource } });
+      segments.push({
+        type: "image",
+        data: {
+          file: imageSource,
+          ...(segment.type === "sticker" ? { sub_type: 1 } : {})
+        }
+      });
     }
   } else {
     const trimmedText = text.trim();

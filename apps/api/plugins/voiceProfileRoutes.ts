@@ -5,13 +5,9 @@ import {
   VoiceProfileError,
   type VoiceLanguage,
   type VoiceProfileRepository,
+  type VoiceProfileV1,
   type VoiceSynthesisClient,
 } from "../../../services/voice/public.js";
-import {
-  VoiceServiceControlError,
-  type VoiceServiceControlPort,
-  type VoiceServiceRuntimeStatus,
-} from "../voiceServiceControlClient.js";
 
 const openObject = { type: "object", additionalProperties: true } as const;
 const passthroughBody = {} as const;
@@ -25,8 +21,8 @@ const languageParams = {
 
 export interface VoiceProfileRouteOptions {
   repository(agentId: string): VoiceProfileRepository;
-  client: VoiceSynthesisClient;
-  serviceController?: VoiceServiceControlPort;
+  client?: VoiceSynthesisClient;
+  clientForProfile?: (profile: VoiceProfileV1) => VoiceSynthesisClient;
   defaultAgentId?: () => string;
   now?: () => Date;
 }
@@ -44,11 +40,11 @@ export function registerVoiceProfileRoutes(
     },
     async (request) => {
       const repository = repositoryFor(options, request.query);
-      const [profile, provider] = await Promise.all([
-        mapRepositoryError(() => repository.readProfile()),
-        probeVoiceProvider(options.client, now, options.serviceController),
-      ]);
-      return { profile, provider };
+      const profile = await mapRepositoryError(() => repository.readProfile());
+      return {
+        profile,
+        provider: await probeProfileProvider(options, profile, now),
+      };
     },
   );
 
@@ -64,6 +60,24 @@ export function registerVoiceProfileRoutes(
     async (request) => ({
       profile: await mapRepositoryError(() =>
         repositoryFor(options, request.query).updateSettings(
+          request.body as never,
+        ),
+      ),
+    }),
+  );
+
+  app.put(
+    "/api/voice-provider",
+    {
+      schema: {
+        querystring: openObject,
+        body: passthroughBody,
+        response: { 200: openObject },
+      },
+    },
+    async (request) => ({
+      profile: await mapRepositoryError(() =>
+        repositoryFor(options, request.query).updateProvider(
           request.body as never,
         ),
       ),
@@ -113,155 +127,92 @@ export function registerVoiceProfileRoutes(
     }),
   );
 
-  app.post(
+  for (const route of [
     "/api/voice-profile/probe",
-    {
-      schema: { querystring: openObject, response: { 200: openObject } },
-    },
-    async (request) => {
-      repositoryFor(options, request.query);
-      return {
-        provider: await probeVoiceProvider(
-          options.client,
-          now,
-          options.serviceController,
-        ),
-      };
-    },
-  );
-
-  app.post(
     "/api/voice-service/check",
-    {
-      schema: { querystring: openObject, response: { 200: openObject } },
-    },
-    async (request) => {
-      repositoryFor(options, request.query);
-      return {
-        provider: await probeVoiceProvider(
-          options.client,
-          now,
-          options.serviceController,
-        ),
-      };
-    },
-  );
-
-  app.post(
-    "/api/voice-service/start",
-    {
-      schema: { querystring: openObject, response: { 200: openObject } },
-    },
-    async (request) => {
-      repositoryFor(options, request.query);
-      const runtime = await runServiceAction(options.serviceController, "start");
-      return {
-        provider: await probeVoiceProvider(
-          options.client,
-          now,
-          options.serviceController,
-          runtime,
-        ),
-      };
-    },
-  );
-
-  app.post(
-    "/api/voice-service/stop",
-    {
-      schema: { querystring: openObject, response: { 200: openObject } },
-    },
-    async (request) => {
-      repositoryFor(options, request.query);
-      const runtime = await runServiceAction(options.serviceController, "stop");
-      return {
-        provider: stoppedProvider(now, runtime),
-      };
-    },
-  );
+  ]) {
+    app.post(
+      route,
+      {
+        schema: { querystring: openObject, response: { 200: openObject } },
+      },
+      async (request) => {
+        const profile = await mapRepositoryError(() =>
+          repositoryFor(options, request.query).readProfile(),
+        );
+        return {
+          provider: await probeProfileProvider(options, profile, now),
+        };
+      },
+    );
+  }
 }
 
 export async function probeVoiceProvider(
   client: VoiceSynthesisClient,
   now: () => Date = () => new Date(),
-  serviceController?: VoiceServiceControlPort,
-  knownRuntime?: VoiceServiceRuntimeStatus,
 ) {
   const checkedAt = now().toISOString();
-  const [health, runtime] = await Promise.allSettled([
-    client.health({
+  try {
+    const health = await client.health({
       signal: AbortSignal.timeout(VOICE_HEALTH_PROBE_TIMEOUT_MS),
-    }),
-    knownRuntime
-      ? Promise.resolve(knownRuntime)
-      : serviceController?.check() ?? Promise.reject(new Error("unmanaged")),
-  ]);
-  const controlsAvailable = runtime.status === "fulfilled";
-  if (health.status === "fulfilled") {
+    });
     return {
-      provider: "MOSS-TTS-Nano" as const,
+      provider: "OpenAI Audio" as const,
+      state: "ready" as const,
       ready: true,
       checkedAt,
-      latencyMs: health.value.latencyMs,
-      serviceState: "running" as const,
-      controlsAvailable,
+      latencyMs: health.latencyMs,
     };
+  } catch (error) {
+    return unavailableProvider(checkedAt, providerError(error));
   }
-  const serviceState =
-    runtime.status === "fulfilled" ? runtime.value.state : "unknown";
+}
+
+async function probeProfileProvider(
+  options: VoiceProfileRouteOptions,
+  profile: VoiceProfileV1,
+  now: () => Date,
+) {
+  const checkedAt = now().toISOString();
+  try {
+    const client =
+      options.client ?? options.clientForProfile?.(profile) ?? missingClient();
+    return await probeVoiceProvider(client, now);
+  } catch (error) {
+    return unavailableProvider(checkedAt, providerError(error));
+  }
+}
+
+function missingClient(): never {
+  throw new Error("voice client unavailable");
+}
+
+function unavailableProvider(
+  checkedAt: string,
+  error: { state: "unconfigured" | "unavailable"; message: string },
+) {
   return {
-    provider: "MOSS-TTS-Nano" as const,
+    provider: "OpenAI Audio" as const,
+    state: error.state,
     ready: false,
     checkedAt,
-    serviceState,
-    controlsAvailable,
-    message:
-      serviceState === "stopped"
-        ? "语音服务已关闭"
-        : serviceState === "running"
-          ? (runtime.status === "fulfilled" && runtime.value.message) ||
-            "语音服务正在启动或暂不可用"
-          : "语音服务不可用",
+    message: error.message,
   };
 }
 
-function stoppedProvider(
-  now: () => Date,
-  runtime: VoiceServiceRuntimeStatus,
-) {
+function providerError(error: unknown) {
+  if (
+    error &&
+    typeof error === "object" &&
+    (error as { code?: unknown }).code === "VOICE_PROVIDER_KEY_MISSING"
+  ) {
+    return { state: "unconfigured" as const, message: "API Key 未配置" };
+  }
   return {
-    provider: "MOSS-TTS-Nano" as const,
-    ready: false,
-    checkedAt: now().toISOString(),
-    serviceState: "stopped" as const,
-    controlsAvailable: true,
-    message: runtime.message ?? "语音服务已关闭",
+    state: "unavailable" as const,
+    message: "在线语音服务不可用",
   };
-}
-
-async function runServiceAction(
-  controller: VoiceServiceControlPort | undefined,
-  action: "start" | "stop",
-) {
-  if (!controller) {
-    throw new AdminApiError(
-      503,
-      "VOICE_SERVICE_CONTROL_UNAVAILABLE",
-      "语音服务管理不可用，请重启 Sunabot。",
-    );
-  }
-  try {
-    return await controller[action]();
-  } catch (error) {
-    if (error instanceof VoiceServiceControlError) {
-      throw new AdminApiError(error.status, error.code, error.message);
-    }
-    throw new AdminApiError(
-      503,
-      "VOICE_SERVICE_CONTROL_FAILED",
-      "语音服务操作失败，请检查运行日志。",
-    );
-  }
 }
 
 function repositoryFor(options: VoiceProfileRouteOptions, query: unknown) {

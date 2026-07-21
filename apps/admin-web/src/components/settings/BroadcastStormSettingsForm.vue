@@ -17,13 +17,17 @@ const additionalQqIds = computed({
 
 <template>
   <section class="grid gap-8">
-    <h2 class="section-title">广播风暴</h2>
+    <div>
+      <h2 class="section-title">广播风暴</h2>
+      <p class="mt-2 text-sm leading-6 text-mute">识别短时间内的重复回复并临时静默。</p>
+    </div>
 
-    <div class="divide-y divide-line border-y border-line">
+    <div class="settings-group divide-y divide-line border-y border-line py-0">
       <ToggleSwitch v-model="draft.enabled" label="广播风暴嗅探" />
     </div>
 
-    <fieldset class="grid gap-5 sm:grid-cols-3" :disabled="!draft.enabled">
+    <fieldset class="settings-group grid gap-5 sm:grid-cols-3" :disabled="!draft.enabled">
+      <legend class="settings-group-title mb-5">判定与静默</legend>
       <label class="field">
         <span class="field-label">检测窗口（分钟）</span>
         <SettingsConfirmInput
@@ -57,7 +61,7 @@ const additionalQqIds = computed({
           confirm-label="确认静默时长"
         />
       </label>
-      <label class="field sm:col-span-3">
+      <label class="field border-t border-line pt-5 sm:col-span-3">
         <span class="field-label">补充嗅探账号</span>
         <SettingsConfirmInput
           v-model="additionalQqIds"

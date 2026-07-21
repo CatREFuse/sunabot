@@ -44,6 +44,7 @@ function onTabKeydown(event: KeyboardEvent, index: number) {
   <section class="grid min-w-0 gap-8">
     <header>
       <h2 class="section-title">Agent 工具</h2>
+      <p class="mt-2 text-sm leading-6 text-mute">管理当前 Agent 的工具开关和运行参数。</p>
     </header>
 
     <div class="flex min-h-12 min-w-0 overflow-x-auto border-b border-line" role="tablist" aria-label="工具设置">

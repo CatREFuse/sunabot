@@ -2,6 +2,15 @@ import { OpenAIProvider } from "../../adapters/model/openaiProvider.js";
 import type { ProviderLogContext } from "../../packages/contracts/model/modelGateway.js";
 import type { MessageScopeV1 } from "../../packages/contracts/messaging/messages.js";
 import { buildCommonPromptVariables } from "../../services/agent/persona.js";
+import {
+  PLAIN_TONE_OUTPUT_CONTRACT,
+  TONE_AVAILABLE_ASSETS_VARIABLE,
+  TONE_MODE_VARIABLE,
+  TONE_OUTPUT_CONTRACT_VARIABLE,
+  segmentedToneOutputContract,
+  serializeToneAvailableAssets,
+  type ToneAvailableAssetV1
+} from "../../services/agent/toneReplyPrompt.js";
 import { senderDisplayName } from "../../services/conversations/senderName.js";
 import { resolveModelReasoningEffort } from "../admin/models.js";
 import { AGENT_TOOL_NAMES } from "../types.js";
@@ -24,6 +33,35 @@ export class RuntimeTone {
 
   async rewrite(text: string, context: ToneRewriteContext = {}) {
     if (!this.host.config.bot.tone.enabled || !text.trim()) return text;
+    return this.complete(text, context, PLAIN_TONE_OUTPUT_CONTRACT, [], false);
+  }
+
+  async rewriteForDelivery(
+    text: string,
+    assets: readonly ToneAvailableAssetV1[],
+    context: ToneRewriteContext = {},
+    emojiMarkers: readonly string[] = []
+  ) {
+    const segmented = this.host.config.bot.tone.enabled
+      && this.host.config.bot.tone.segmentedReply;
+    if (!segmented) {
+      return { segmented: false as const, content: await this.rewrite(text, context) };
+    }
+    serializeToneAvailableAssets(assets);
+    if (!text.trim()) return { segmented: true as const, content: "" };
+    return {
+      segmented: true as const,
+      content: await this.complete(text, context, segmentedToneOutputContract(emojiMarkers), assets, true)
+    };
+  }
+
+  private async complete(
+    text: string,
+    context: ToneRewriteContext,
+    outputContract: string,
+    assets: readonly ToneAvailableAssetV1[],
+    toneMode: boolean
+  ) {
 
     const settings = this.host.config.bot.tone;
     const baseProvider = this.host.getProvider(
@@ -47,7 +85,10 @@ export class RuntimeTone {
         scope: incoming?.scope ?? context.scope,
         userName: incoming ? senderDisplayName(incoming.sender) : context.userName
       }),
-      "tone.input": text
+      "tone.input": text,
+      [TONE_MODE_VARIABLE]: toneMode,
+      [TONE_OUTPUT_CONTRACT_VARIABLE]: outputContract,
+      [TONE_AVAILABLE_ASSETS_VARIABLE]: serializeToneAvailableAssets(assets)
     });
     const signal = toneSignal(context.signal);
     const output = await this.host.completePrompt(provider, {

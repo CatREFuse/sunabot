@@ -2,16 +2,20 @@ import type { MemoryEntry, MemoryRecord, SourceDefinition } from "../types.js";
 import { readMemoryText } from "./memoryText.js";
 import { formatUserProfileKey, stripUserProfileFactPrefix } from "./profileMergePolicy.js";
 import {
+  normalizeAddressNames,
   normalizeStringArray,
   normalizeText,
   normalizeUserIds,
-  optionalString
+  optionalString,
+  readMemoryCausalChainKey
 } from "./normalizers.js";
 
 export function toMemoryEntry(source: SourceDefinition, record: MemoryRecord): MemoryEntry {
   const userId = optionalString(record.value.userId);
   const userName = optionalString(record.value.userName);
-  const addressName = optionalString(record.value.addressName ?? record.value.address_name ?? record.value.salutation);
+  const addressNames = normalizeAddressNames(
+    record.value.addressNames ?? record.value.addressName ?? record.value.address_name ?? record.value.salutation
+  );
   const text = source.id === "user_profile"
     ? stripUserProfileFactPrefix(readMemoryText(source, record.value), userId, userName)
     : readMemoryText(source, record.value);
@@ -38,12 +42,14 @@ export function toMemoryEntry(source: SourceDefinition, record: MemoryRecord): M
     userId,
     userIds: normalizeUserIds(record.value.userIds),
     userName,
-    addressName,
+    addressNames,
+    addressName: addressNames[0],
     sourceWorkingMemoryIds: normalizeStringArray(record.value.sourceWorkingMemoryIds),
     sourceCandidateIds: normalizeStringArray(record.value.sourceCandidateIds),
     eventType: optionalString(record.value.eventType),
     subjectKey: optionalString(record.value.subjectKey),
     eventKey: optionalString(record.value.eventKey),
+    causalChainKey: readMemoryCausalChainKey(record.value.causalChainKey) || undefined,
     eventFingerprint: optionalString(record.value.eventFingerprint),
     longTermId: optionalString(record.value.longTermId),
     batchId: optionalString(record.value.batchId),

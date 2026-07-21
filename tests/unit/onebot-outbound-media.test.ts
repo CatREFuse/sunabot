@@ -98,7 +98,7 @@ describe("OneBot outbound media adapter", () => {
     );
   });
 
-  it("keeps emoji images in their marked positions and inlines every local PNG", async () => {
+  it("maps sticker segments to NapCat image subtype 1 while keeping normal images untyped", async () => {
     const inlineDelivery = new OutboundMediaDelivery({ rootDir: temporaryDirectory });
     const gateway = new OneBotGateway(
       http.createServer(),
@@ -123,7 +123,7 @@ describe("OneBot outbound media adapter", () => {
       ],
       contentSegments: [
         { type: "text", text: "前" },
-        { type: "image", imageIndex: 0 },
+        { type: "sticker", imageIndex: 0 },
         { type: "text", text: "后" },
         { type: "image", imageIndex: 1 }
       ],
@@ -135,8 +135,10 @@ describe("OneBot outbound media adapter", () => {
     expect(message[0]?.data.id).toBe("5");
     expect(message[1]?.data.text).toBe("前");
     expect(message[2]?.data.file).toBe(`base64://${Buffer.from("generated-image").toString("base64")}`);
+    expect(message[2]?.data.sub_type).toBe(1);
     expect(message[3]?.data.text).toBe("后");
     expect(message[4]?.data.file).toBe(`base64://${Buffer.from("agent-generated-image").toString("base64")}`);
+    expect(message[4]?.data).not.toHaveProperty("sub_type");
   });
 
   it("bounds unique image preparation at two while preserving source order", async () => {

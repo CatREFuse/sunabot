@@ -34,7 +34,7 @@ describe("group thread state SQLite store", () => {
 
     const database = new DatabaseSync(databasePath);
     expect(database.prepare("SELECT value FROM app_metadata WHERE key = 'storage-schema-version'").get())
-      .toMatchObject({ value: "13" });
+      .toMatchObject({ value: "16" });
     const sql = String(database.prepare(`
       SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'conversation_thread_states'
     `).get()?.sql ?? "").replaceAll(/\s+/g, " ").toLowerCase();

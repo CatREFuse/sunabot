@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed, shallowRef } from "vue";
 import type { PromptVariableDefinition } from "../../types";
 
 const props = withDefaults(defineProps<{
@@ -11,14 +12,58 @@ const emit = defineEmits<{ insert: [name: string] }>();
 const formatVariable = (name: string) => `@{${name}}`;
 const isUsed = (name: string) => props.usedNames.includes(name);
 const usageCount = (name: string) => props.usageCounts[name] ?? 0;
-const referencedVariables = () => props.variables.filter((variable) => usageCount(variable.name) > 0).length;
+const referencedVariableCount = computed(() => props.variables.filter((variable) => usageCount(variable.name) > 0).length);
+const activeTooltip = shallowRef<{
+  id: string;
+  variable: PromptVariableDefinition;
+  left: number;
+  top: number;
+  width: number;
+  placement: "top" | "bottom";
+} | null>(null);
+
+function tooltipId(name: string) {
+  return `prompt-variable-${name.replace(/[^a-zA-Z0-9_-]+/g, "-")}-description`;
+}
+
+function showVariableTooltip(variable: PromptVariableDefinition, event: Event) {
+  const target = event.currentTarget;
+  if (!(target instanceof HTMLElement)) return;
+  const anchor = target.matches(".variable-context__token")
+    ? target
+    : target.querySelector<HTMLElement>(".variable-context__token") ?? target;
+  const rect = anchor.getBoundingClientRect();
+  const width = Math.min(320, Math.max(160, window.innerWidth - 24));
+  const left = Math.min(
+    window.innerWidth - width - 12,
+    Math.max(12, rect.left + rect.width / 2 - width / 2)
+  );
+  const placement = rect.bottom + 144 <= window.innerHeight ? "bottom" : "top";
+  activeTooltip.value = {
+    id: tooltipId(variable.name),
+    variable,
+    left,
+    top: placement === "bottom" ? rect.bottom + 8 : rect.top - 8,
+    width,
+    placement
+  };
+}
+
+function hideVariableTooltip() {
+  activeTooltip.value = null;
+}
+
+function insertVariable(name: string) {
+  hideVariableTooltip();
+  emit("insert", name);
+}
 </script>
 
 <template>
   <div class="variable-context" :class="{ 'variable-context--fill': fill }" role="table" aria-label="提示词变量表">
     <div class="variable-context__heading">
       <span>可用变量</span>
-      <span>已引用 {{ referencedVariables() }} / {{ variables.length }}</span>
+      <span>已引用 {{ referencedVariableCount }} / {{ variables.length }}</span>
     </div>
     <div v-if="variables.length" class="variable-context__table">
       <button
@@ -27,12 +72,22 @@ const referencedVariables = () => props.variables.filter((variable) => usageCoun
         class="variable-context__row"
         :class="{ 'variable-context__row--used': isUsed(variable.name) }"
         type="button"
-        :title="`插入 @{${variable.name}}`"
+        :aria-label="`插入 @{${variable.name}}：${variable.description}`"
+        :aria-describedby="activeTooltip?.variable.name === variable.name ? activeTooltip.id : undefined"
         @pointerdown.prevent
-        @click="emit('insert', variable.name)"
+        @focus="showVariableTooltip(variable, $event)"
+        @blur="hideVariableTooltip"
+        @keydown.esc.stop="hideVariableTooltip"
+        @click="insertVariable(variable.name)"
       >
         <span class="variable-context__primary">
-          <code>{{ formatVariable(variable.name) }}</code>
+          <span
+            class="variable-context__token"
+            @pointerenter="showVariableTooltip(variable, $event)"
+            @pointerleave="hideVariableTooltip"
+          >
+            <code>{{ formatVariable(variable.name) }}</code>
+          </span>
           <span>{{ variable.description }}</span>
         </span>
         <span class="variable-context__meta">
@@ -43,6 +98,25 @@ const referencedVariables = () => props.variables.filter((variable) => usageCoun
       </button>
     </div>
     <p v-else class="variable-context__empty">当前没有可直接使用的变量</p>
+
+    <Teleport to="body">
+      <div
+        v-if="activeTooltip"
+        :id="activeTooltip.id"
+        class="variable-context__tooltip"
+        :data-placement="activeTooltip.placement"
+        role="tooltip"
+        :style="{
+          left: `${activeTooltip.left}px`,
+          top: `${activeTooltip.top}px`,
+          width: `${activeTooltip.width}px`
+        }"
+      >
+        <code>{{ formatVariable(activeTooltip.variable.name) }}</code>
+        <p>{{ activeTooltip.variable.description }}</p>
+        <small>{{ activeTooltip.variable.type }} · {{ activeTooltip.variable.source }}</small>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -100,6 +174,11 @@ const referencedVariables = () => props.variables.filter((variable) => usageCoun
   border-left-color: rgb(var(--color-accent));
 }
 
+.variable-context__row--used .variable-context__token {
+  border-color: rgb(var(--color-accent) / 0.56);
+  background: rgb(var(--color-accent) / 0.1);
+}
+
 .variable-context__row--used code { color: rgb(var(--color-accent)); }
 
 .variable-context__row code {
@@ -110,8 +189,26 @@ const referencedVariables = () => props.variables.filter((variable) => usageCoun
   white-space: nowrap;
 }
 
+.variable-context__token {
+  position: relative;
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  padding: 4px 8px;
+  border: 1px solid rgb(var(--color-visible));
+  border-radius: 7px;
+  background: rgb(var(--color-panel));
+  transition: border-color 140ms ease, background-color 140ms ease, color 140ms ease;
+}
+
+.variable-context__row:hover .variable-context__token,
+.variable-context__row:focus-visible .variable-context__token {
+  border-color: rgb(var(--color-display));
+  background: rgb(var(--color-page));
+}
+
 .variable-context__primary,
-.variable-context__primary span,
+.variable-context__primary > span,
 .variable-context__meta,
 .variable-context__meta small {
   overflow: hidden;
@@ -126,9 +223,9 @@ const referencedVariables = () => props.variables.filter((variable) => usageCoun
   gap: 10px;
 }
 
-.variable-context__primary code { flex: 0 1 auto; }
+.variable-context__primary code { min-width: 0; flex: 0 1 auto; }
 
-.variable-context__primary span {
+.variable-context__primary > span:not(.variable-context__token) {
   min-width: 0;
   flex: 1;
   font-size: 12px;
@@ -163,6 +260,40 @@ const referencedVariables = () => props.variables.filter((variable) => usageCoun
   padding: 12px;
   font-size: 11px;
   color: rgb(var(--color-mute));
+}
+
+.variable-context__tooltip {
+  position: fixed;
+  z-index: 110;
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid rgb(var(--color-visible));
+  border-radius: 8px;
+  background: rgb(var(--color-display));
+  color: rgb(var(--color-page));
+  box-shadow: 0 10px 28px rgb(0 0 0 / 0.2);
+  pointer-events: none;
+}
+
+.variable-context__tooltip[data-placement="top"] { transform: translateY(-100%); }
+
+.variable-context__tooltip code {
+  overflow-wrap: anywhere;
+  font-family: "Space Mono", monospace;
+  font-size: 11px;
+  color: inherit;
+}
+
+.variable-context__tooltip p {
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.variable-context__tooltip small {
+  font-family: "Space Mono", monospace;
+  font-size: 9px;
+  color: rgb(var(--color-page) / 0.68);
 }
 
 @container (max-width: 280px) {

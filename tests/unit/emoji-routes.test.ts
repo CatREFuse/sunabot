@@ -40,9 +40,18 @@ afterEach(async () => {
 describe("emoji routes", () => {
   it("reads and updates an Agent-scoped sending size with a config revision", async () => {
     const repository = fakeRepository(envelope("开心", "a"));
-    const read = vi.fn(async (agentId: string) => ({ sendSize: 512 as const, revision: `${agentId}-r1` }));
-    const update = vi.fn(async (agentId: string, input: { sendSize: 64 | 128 | 256 | 512 | 1024; revision: string }) => ({
+    const read = vi.fn(async (agentId: string) => ({
+      sendSize: 512 as const,
+      sendSeparately: false,
+      revision: `${agentId}-r1`
+    }));
+    const update = vi.fn(async (agentId: string, input: {
+      sendSize: 64 | 128 | 256 | 512 | 1024;
+      sendSeparately: boolean;
+      revision: string;
+    }) => ({
       sendSize: input.sendSize,
+      sendSeparately: input.sendSeparately,
       revision: `${agentId}-r2`
     }));
     const app = testApp();
@@ -55,25 +64,41 @@ describe("emoji routes", () => {
 
     const listed = await app.inject({ method: "GET", url: "/api/emojis?agentId=arona" });
     expect(listed.statusCode).toBe(200);
-    expect(listed.json()).toMatchObject({ sendSize: 512, revision: "arona-r1" });
+    expect(listed.json()).toMatchObject({ sendSize: 512, sendSeparately: false, revision: "arona-r1" });
     expect(read).toHaveBeenCalledWith("arona");
 
     const changed = await app.inject({
       method: "PATCH",
       url: "/api/emojis/settings?agentId=arona",
-      payload: { sendSize: 128, revision: "arona-r1" }
+      payload: { sendSize: 128, sendSeparately: true, revision: "arona-r1" }
     });
     expect(changed.statusCode).toBe(200);
-    expect(changed.json()).toMatchObject({ sendSize: 128, revision: "arona-r2" });
-    expect(update).toHaveBeenCalledWith("arona", { sendSize: 128, revision: "arona-r1" });
+    expect(changed.json()).toMatchObject({ sendSize: 128, sendSeparately: true, revision: "arona-r2" });
+    expect(update).toHaveBeenCalledWith("arona", {
+      sendSize: 128,
+      sendSeparately: true,
+      revision: "arona-r1"
+    });
 
     const invalid = await app.inject({
       method: "PATCH",
       url: "/api/emojis/settings?agentId=arona",
-      payload: { sendSize: 96, revision: "arona-r2" }
+      payload: { sendSize: 96, sendSeparately: true, revision: "arona-r2" }
     });
     expect(invalid.statusCode).toBe(400);
     expect(invalid.json().error).toMatchObject({ code: "EMOJI_SETTINGS_INVALID", field: "sendSize" });
+    expect(update).toHaveBeenCalledOnce();
+
+    const invalidMode = await app.inject({
+      method: "PATCH",
+      url: "/api/emojis/settings?agentId=arona",
+      payload: { sendSize: 128, sendSeparately: "yes", revision: "arona-r2" }
+    });
+    expect(invalidMode.statusCode).toBe(400);
+    expect(invalidMode.json().error).toMatchObject({
+      code: "EMOJI_SETTINGS_INVALID",
+      field: "sendSeparately"
+    });
     expect(update).toHaveBeenCalledOnce();
   });
 

@@ -16,6 +16,11 @@
         "name": "napcat",
         "uid": 1000,
         "gid": 1000
+      },
+      "webfetchRenderer": {
+        "name": "node",
+        "uid": 1000,
+        "gid": 1000
       }
     },
     "native": {
@@ -89,9 +94,9 @@
     "noProxyRequired": ["localhost", "127.0.0.1", "::1", "[::1]"]
   },
   "startup": {
-    "nativeCoreOrder": ["core-native", "napcat"],
-    "dockerCoreOrder": ["core", "napcat"],
-    "shutdownOrder": ["napcat", "core"],
+    "nativeCoreOrder": ["webfetch-renderer", "core-native", "napcat"],
+    "dockerCoreOrder": ["webfetch-renderer", "core", "napcat"],
+    "shutdownOrder": ["napcat", "core", "webfetch-renderer"],
     "coreReadyTimeoutSeconds": 60,
     "napcatReadyTimeoutSeconds": 120,
     "shutdownTimeoutSeconds": 30
@@ -119,12 +124,23 @@
         "timeoutSeconds": 5,
         "startPeriodSeconds": 60,
         "retries": 12
+      },
+      "webfetchRenderer": {
+        "livenessCommand": [
+          "/usr/local/bin/node",
+          "-e",
+          "fetch('http://127.0.0.1:8790/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+        ],
+        "intervalSeconds": 10,
+        "timeoutSeconds": 5,
+        "startPeriodSeconds": 45,
+        "retries": 6
       }
     }
   },
   "capabilities": {
     "required": ["admin-web", "onebot-v11", "image-generation", "office-documents", "workspace-bash", "codex-cli"],
-    "optional": ["websearch"],
+    "optional": ["websearch", "webfetch", "webfetch-dynamic-renderer"],
     "workspaceBash": {
       "service": "core",
       "isolation": "bubblewrap",
@@ -156,6 +172,12 @@
       "pids": 512,
       "sharedMemory": "1g"
     },
+    "webfetchRenderer": {
+      "memory": "1g",
+      "cpus": 1.5,
+      "pids": 256,
+      "sharedMemory": "512m"
+    },
     "logging": {
       "maxSize": "20m",
       "maxFiles": 5
@@ -181,6 +203,11 @@
         "upstreamImage": "docker.io/mlikiowa/napcat-docker:v4.15.0@sha256:cde89d766604e570517e9ce66304d4222210479d2209ec04e5d58890dea087f7",
         "stateRoot": "runtime/napcat",
         "webuiPort": 6099
+      },
+      "webfetchRenderer": {
+        "name": "webfetch-renderer",
+        "image": "sunabot-webfetch-renderer",
+        "port": 8790
       }
     },
     "labels": {

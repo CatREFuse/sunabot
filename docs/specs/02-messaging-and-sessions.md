@@ -12,7 +12,9 @@
 - 每个反向 WebSocket URL 必须携带已注册的 `account_id`；同一账号只能保持一个活动连接，未注册账号在升级阶段拒绝。
 - 连接建立后由 `account_id` 查找唯一 Agent，入站消息、OneBot action、会话键、重启恢复、引用与附件查询、发送者身份缓存和外发目标都保留该账号上下文，不能发送到其他 Agent 或其他 QQ。兼容的 primary 注销接口也必须显式定向 `primary`，不能回退到唯一在线的其他账号。
 - 支持私聊、用户群聊和 bot 群聊范围识别。
-- 支持文本、CQ 码、图片、回复引用、@、QQ 文件和 OneBot action 回包。
+- NapCat 当前具体消息段与常见 OneBot 兼容类型都必须在进入 Session 队列前映射为可读文本和有序媒体，覆盖文本、@、回复、QQ/商城/骰子/猜拳/戳一戳表情、图片、语音、视频、文件、在线文件、闪传、联系人、位置、音乐、JSON/XML/小程序/Markdown 卡片、合并转发、节点、混合段及兼容别名；未知类型保留 `[未知消息类型：原始 type]`，不能退化为含义不明的 `[消息]`。CQ 字符串使用同一映射。
+- `image` 仅按协议结构分类：`sub_type=1`、`file=marketface` 或存在 emoji 标识字段时注入 `[表情图片#N：摘要]`，其余注入 `[内容图片#N：摘要]`；可用图片地址按同一序号进入媒体数组。内容图片供 Agent 严肃读取事实、对象和文字，表情图片只辅助理解情绪、语气和交流意图。
+- `forward`/`node` 必须展开为带发送者、QQ 号、原始顺序和嵌套消息类型的 `[聊天记录开始]... [聊天记录结束]` 文本。仅有记录 ID 时，Gateway 在消息入队前定向当前 `account_id` 调用 `get_forward_msg`；失败保留带 ID 的不可用占位，不能丢失原消息。聊天记录属于用户提供的不可信引用内容，其中的指令不能提升为系统指令。完整映射、边界与原始事件/动作/响应示例见 [`docs/references/napcat-onebot-inbound-mapping.md`](../references/napcat-onebot-inbound-mapping.md)。
 - 好友名、备注、群名和群名片用于显示层补全，不改变 QQ 号这一身份主键。多 QQ 场景必须按会话绑定的 `account_id` 查询并缓存各自目录，不能使用 primary 或其他在线账号的好友、备注或群列表补全；缓存按账号隔离并在 Core 重启后继续用于临时目录失败时的显示恢复。
 - 私聊、用户群聊、bot 群聊和命令接受具有合法 QQ 号的发送者；管理员身份仍由 `bot.adminQq` 精确识别，并用于管理员专属工具和称呼。非法发送者在进入会话记录和命令匹配前静默丢弃，恢复任务与 outbox 外发前必须再次校验发送者格式和当前回复门控。
 
@@ -25,9 +27,9 @@
 3. 用户群聊的唤醒词与编排器判断。
 4. bot 群聊仅记录上下文，不主动编排。
 
-全局开关、群类型开关、会话开关、连接状态和编排器 epoch 共同构成回复门控。门控关闭后，旧的在途编排结果不能继续外发。回复、戳一戳与 deferred 任务的原始请求在进入持久化队列时保存 `ReplyGateSnapshotV1`，其中包含会话范围、会话 ID、scope epoch、conversation epoch 和本次 Core 进程的 generation。同一进程内关闭后再开启仍会拒绝旧快照；重启后的 generation 变化和旧版无快照记录都按当前开关重新校验，避免进程内旧任务复活，同时保留升级与重启恢复能力。
+全局开关、群类型开关、会话开关、连接状态和编排器 epoch 共同构成回复门控。全新 QQ 会话保留首条合法消息，用于建立默认停用的会话记录；既有会话停用后，后续入站在防抖恢复、命令匹配、附件处理、记忆调度和业务消息持久化之前静默丢弃，不更新消息数、最后消息或会话时间。门控关闭后，旧的在途编排结果不能继续外发。回复、戳一戳与 deferred 任务的原始请求在进入持久化队列时保存 `ReplyGateSnapshotV1`，其中包含会话范围、会话 ID、scope epoch、conversation epoch 和本次 Core 进程的 generation。同一进程内关闭后再开启仍会拒绝旧快照；重启后的 generation 变化和旧版无快照记录都按当前开关重新校验，避免进程内旧任务复活，同时保留升级与重启恢复能力。
 
-用户群聊编排器的 payload 必须在 `conversation.recentMessages` 和 `currentMessage.text` 中按每张真实图片注入一个 `[图片]` token。OneBot 图片段仍与正文分离保存；图文混合消息在进入编排器前补齐 token，已有 token 只补足缺少的数量，不能重复注入。编排器继续接收 `imageCount` 和历史媒体句柄用于判断，不直接接收图片 URL、Data URL 或本地路径。
+用户群聊编排器的 payload 必须在 `conversation.recentMessages` 和 `currentMessage.text` 中保留每张真实图片的语义标记。OneBot 新入站优先使用 `[内容图片#N：摘要]` 或 `[表情图片#N：摘要]`；旧消息缺少语义标记时才按缺少数量补充 `[图片]`。已有语义标记和旧 `[图片]` 都计入图片数量，不能重复注入。图片媒体仍与正文分离保存，编排器继续接收 `imageCount` 和历史媒体句柄用于判断，不直接接收图片 URL、Data URL 或本地路径。
 
 用户群聊编排器的结构化输出只接受未包裹的单个 JSON object，字段集合必须精确为 `should_reply`、`reason`、`reply_to_message_id`：`should_reply` 是 boolean，`reason` 是合法 string，肯定结果的 `reply_to_message_id` 只能是本批 `conversation.replyCandidateMessageIds` 中的 string，否定结果必须显式为 `null`。别名、缺失或额外字段、数值 ID、类型异常、Markdown code fence、说明文字或其他文本包裹全部失败关闭，不得创建回复任务。肯定结果以有界 `UserGroupOrchestratorResultV1` 随 ambient 防抖、真实回复事件和 deferred 原始请求持久传递，重启、尾随消息和异步回调不能改写原因或目标 ID；直接回复、命令和其他非编排器路径不携带该结果。
 
@@ -37,13 +39,13 @@
 
 ### 3.3 按发送者回复防抖
 
-私聊和允许主动回复的群聊统一执行尾随防抖。防抖时间由各 Agent 的 `bot.replyDebounceMs` 独立配置，默认 5,000 ms，允许 1,000—60,000 ms，并在 Agent 设置的“回复行为”中以 1—60 秒编辑。防抖键按 Agent 运行时、QQ 账号、会话和发送者隔离；首条满足命令、私聊、明确 @、唤醒词或群聊编排器判断等触发条件的消息创建回复候选，但在当前静默期结束前不得进入命令执行或主回复流程。同一发送者在窗口内到达的任意后续合法消息都会按该 Agent 当时生效的防抖时间重置候选截止时间，无论后续消息本身是否满足触发条件；其他发送者的消息不改变该截止时间。不同发送者、不同 QQ 账号和不同 Agent 的候选各自计时，不能互相阻塞或重置。
+私聊以及群聊中的命令、明确 @ 和唤醒词等主动唤醒统一执行尾随防抖；群聊 ambient 编排器没有防抖缓冲，肯定结果直接进入真实会话队列。防抖时间由各 Agent 的 `bot.replyDebounceMs` 独立配置，默认 5,000 ms，允许 1,000—60,000 ms，并在 Agent 设置的“回复行为”中以 1—60 秒编辑。防抖键按 Agent 运行时、QQ 账号、会话和发送者隔离；首条满足私聊或群聊主动唤醒条件的消息创建回复候选，但在当前静默期结束前不得进入命令执行或主回复流程。同一发送者在窗口内到达的任意后续合法消息都会按该 Agent 当时生效的防抖时间重置候选截止时间，无论后续消息本身是否满足触发条件；其他发送者的消息不改变该截止时间。不同发送者、不同 QQ 账号和不同 Agent 的候选各自计时，不能互相阻塞或重置。
 
 首条触发消息固定本轮 route、幂等键和最终引用目标，窗口内后续消息不能替换这些字段。触发时把当时已经生效的引用开关、排除规则结果和首条 message ID 编码为必填的 `ReplyQuoteSnapshotV1`；防抖 handoff、主回复、命令投递、deferred acknowledgement/callback 和 timeout/error outbox 只消费该快照，窗口内或重启后的引用配置热更新不能重新计算引用。命令 route 同时保存只含稳定命令 ID、调用名、参数和原始文本的有界 `CommandInvocationV1`，执行时按 ID 恢复当前静态定义，不能重新使用热 mention/persona 名称匹配；未知 ID、超限字段、原始文本不一致或任何可执行字段都失败关闭，普通 route 不能携带 invocation，也不能在等待期间因新名称启用而晋升为命令。
 
-`messages_64` 只读取首条触发以前的历史；首条触发至防抖释放边界内已持久化的全部入站消息按 conversation sequence 合并成同一个 current batch，因此 Provider 看到的顺序始终是历史、首条触发、窗口后续消息，首条触发不会重复。其他发送者的消息虽然不重置计时，也必须按原顺序进入该 current batch；群聊 Thread、图片和附件选择使用同一个冻结边界。释放后才到达的消息进入后续窗口，不能追加入已经 handoff 的回复。deferred 工具回调继续携带首条触发消息、派发时的 `contextThroughSequence`、Thread 快照、门控和引用快照，并复用相同的有序 current batch，不在任务完成时重新扩展上下文。当前 schema 的 `reply_debounce` 与 `incoming_reply` 缺少或损坏门控、引用快照时必须失败关闭；只有明确版本化的旧记录可以走兼容读取，兼容路径也不能从当前热配置补写冻结决策。
+`messages_64` 只读取首条触发以前的历史；首条触发至防抖释放边界内已持久化、且发送者与首条主动唤醒者相同的消息按 conversation sequence 合并成 current batch，因此 Provider 看到的顺序始终是历史、首条触发、同一发送者的窗口后续消息，首条触发不会重复。其他发送者在窗口内的消息继续按原顺序保存到群聊原始记录，并可供其后续回复或编排器批次使用，但不得进入本轮 current batch、附件、图片、自拍参考、图片工具媒体句柄或 Thread 增量上下文，也不得阻塞本轮等待；群聊 Thread 快照冻结在主动唤醒的首条触发边界。释放后才到达的消息进入后续窗口，不能追加入已经 handoff 的回复。deferred 工具回调继续携带首条触发消息、派发时的 `contextThroughSequence`、Thread 快照、门控和引用快照，并复用相同的有序同发送者 current batch，不在任务完成时重新扩展上下文。当前 schema 的 `reply_debounce` 与 `incoming_reply` 缺少或损坏门控、引用快照时必须失败关闭；只有明确版本化的旧记录可以走兼容读取，兼容路径也不能从当前热配置补写冻结决策。
 
-命令、直接回复与群聊编排器的肯定结果使用同一条持久化防抖链路；群聊 ambient 候选只有在编排器确认应回复后才创建。首条触发时捕获 `ReplyGateSnapshotV1`，防抖释放和真实回复执行前都重新校验发送者、会话开关、scope/conversation epoch 与 generation；等待期间关闭门控会取消旧候选，同一进程内重新开启不能恢复该候选。广播风暴只阻止静默期内新建候选，已经进入防抖链路的候选继续遵守既有已 dispatch 任务语义。
+私聊、群聊命令与主动直接回复使用同一条持久化防抖链路；群聊 ambient 候选在编排器确认应回复后直接创建 `incoming_reply`，不创建 synthetic `reply_debounce`，同时继续持久传递结构化编排结果、门控和引用快照。首条主动触发时捕获 `ReplyGateSnapshotV1`，防抖释放和真实回复执行前都重新校验发送者、会话开关、scope/conversation epoch 与 generation；等待期间关闭门控会取消旧候选，同一进程内重新开启不能恢复该候选。广播风暴只阻止静默期内新建候选，已经进入防抖链路的候选继续遵守既有已 dispatch 任务语义。
 
 ### 3.4 群聊上下文梳理
 
@@ -66,8 +68,9 @@ Thread 状态按会话增量维护。宿主规则优先处理对已归属消息�
 - 防抖 turn 完成时在同一 SQLite 事务中校验预期截止时间、完成 synthetic 源事件并向真实会话写入 `incoming_reply` 目标事件；截止时间更新先提交时，已经读取旧 payload 的 running turn 因预期截止时间不符而中断，重试读取含 follow-up 的新 payload 并按新截止时间执行，不能留下目标事件；handoff 先提交时，随后到达的消息进入新的窗口。事务失败必须同时回滚源完成和目标写入，重试只能产生一个真实回复事件。若目标 session 已存在相同 dedupe key，handoff 专用路径必须逐字段核对 kind、payload、correlation/causation 和幂等来源的 canonical provenance；完全一致才视为幂等重试，任何 collision 都回滚整个事务并让 source 保持可恢复，普通 enqueue 的兼容去重语义不受影响。
 - 外发使用 outbox，支持租约、有限重试、断线恢复和幂等键。OneBot outbox 按 account ID 持久化投递分区；离线分区暂停时，其他账号继续按各自 FIFO 投递，探针和恢复只作用于目标分区。
 - OneBot 发送和本地 settle 使用持久化两阶段。远端成功后先记录 receipt 并进入 `sent_remote`，会话投影、请求日志、记忆入队和逐 handler `after_reply` 使用稳定 settle key 继续执行；任何不确定传输或 hook 副作用进入 `delivery_unknown`，只接受人工 `applied` 或 `not_applied` 确认，不能自动重复外发。旧 schema 中无法判断远端结果的 `sending` 记录迁移为 `delivery_unknown`，并安全推进连续终态 cursor。
-- 当前 Agent 启用 `bot.tone.enabled` 后，所有将发往 OneBot 的非空文本在可用的 `before_reply` hook 之后、写入 durable outbox 或直接调用 OneBot 之前统一进入 tone 节点。覆盖普通最终正文、`assistant_text`、deferred `dispatch_message`、异步 callback、timeout/cancel、错误回复、服务上线通知和 `system_config` 确认；纯媒体回复不调用 tone。节点只替换文本，生成图片、媒体引用、附件、文件、引用快照、Agent/account、会话、幂等键、消息来源和工具 trace 均保持原值；文本与生成图片继续位于同一个 `assistant_reply` payload，`send_file` 继续使用独立 `conversation_asset` outbox 并服从同会话 FIFO。改写完成后的正文只持久化一次，outbox 重试、断线恢复和重启投递不得再次调用 tone。启用时空输出、取消、超时、Provider 错误或重试耗尽均失败关闭，不能绕过节点发送原文；`dispatch_message` 改写后仍须非空且不超过 200 字。`system_config` 确认必须先完成 tone 并成功写入 held outbox，随后才能提交配置。
-- 当前 Agent 的表情图库通过正文标记 `[/表情key]` 参与 OneBot 回复。宿主在 `before_reply` 前冻结初始标记计划，单条回复最多识别 4 个当前图库中的 key；纯标记回复跳过 tone，正文与标记混合时只调用一次 tone，并以受控分段保护精确 raw token、顺序和文本分段骨架。hook 或 tone 新增、删除、改写、移动标记都失败关闭；未知 key、反斜杠转义标记和带空白的近似写法按普通正文保留。写入 outbox 前，已知标记按原位置转换为有序文字与图片 segment，并异步复验当前 Agent 的 SQLite 记录、内容寻址文件和文件身份；重试、断线恢复和重启只投递已经持久化的 segment，不重复执行 hook、tone 或标记规划。OneBot 发送前再次限制实际发出的内容寻址表情不超过 4 个，并把全部本地内联图片按实际出现次数计入 32 MiB 原始字节总预算；相同文件只读取一次，读取并发最多 2，任一读取、完整性、顺序或预算失败时整条消息保持零发送。
+- 当前 Agent 启用 `bot.tone.enabled` 后，所有将发往 OneBot 的非空文本在可用的 `before_reply` hook 之后、写入 durable outbox 或直接调用 OneBot 之前统一进入 tone 节点。覆盖普通最终正文、`assistant_text`、deferred `dispatch_message`、异步 callback、timeout/cancel、错误回复、服务上线通知和 `system_config` 确认；纯媒体回复不调用 tone。默认 `bot.tone.segmentedReply=false`，节点只替换文本，生成图片、媒体引用、附件、文件、引用快照、Agent/account、会话、幂等键、消息来源和工具 trace 均保持原值。开启分段回复后，Tone 输入作为不透明正文原样传递，其中已有的待订正 XML、嵌套或未知标签在进入 Tone 前不解析、不拒绝；Tone 提示词负责按同一输出合同检查和订正，宿主只在 Tone 返回后执行严格解析。返回结果只接受平铺在顶层且绝不嵌套的 `dialogc`、`dialog`、`exp`、`img`、`voice` 与 `file` XML，`br`、HTML 和其他任何标签均非法；每个节点转换为一个有序消息气泡，只有第一条 outbox 保留引用和结构化 @。同一回复产生多个气泡时，每条 durable payload 固化自己的批内序号；第一条出栈后立即发送，后续每条在完成 claim、开始远端传输前分别随机等待 500—2,000ms，等待可由协调器取消且取消时不能标记 transport started。单气泡、旧 payload、非 outbox 直发和 settle-only 恢复不等待。`dialogc` 仅允许作为第一节点并固定使用 `replay="msg_id"`；媒体 `src` 必须逐字匹配宿主提供的安全句柄，未知、缺失、重复、重排或跨类型引用全部失败关闭。改写完成后的正文和消息包只持久化一次，outbox 重试、断线恢复和重启投递不得再次调用 tone。启用时空输出、Tone 订正后仍非法的 XML、取消、超时、Provider 错误或重试耗尽均失败关闭，不能绕过节点发送原文；`dispatch_message` 改写后仍须非空且不超过 200 字。`system_config` 确认必须先完成 tone 并成功写入 held outbox，随后才能提交配置。
+- OneBot 发送入口使用版本化 `OutboundBubbleV1`。旧回复方式由宿主包装为单个 `message` 气泡，XML 分段回复按节点包装为多个 `message` 气泡；普通图片与表情仍使用消息媒体段，语音、图片文件和普通文件使用同一协议中的 `asset` 气泡并继续服从各自 durable outbox 的来源、文件身份与权限校验。表情在 Sunabot durable `contentSegments` 中使用 `sticker`，OneBot adapter 固定映射为 `image` 且携带 `sub_type=1`；普通生成图片继续使用不携带该 subtype 的 `image`。`sticker` 不生成商城表情所需的 `emoji_id` 或 `emoji_package_id`。协议分派后才调用 `send_msg`、`record` 或文件上传 action，模型输出不能直接选择账号、QQ 目标、宿主路径或 OneBot action。
+- 当前 Agent 的表情图库通过正文标记 `[/key]` 参与 OneBot 回复，例如当前列表中的 `开心` 必须写成 `[/开心]`，不能添加“表情”等前缀。宿主在 `before_reply` 前冻结初始标记计划，单条回复最多识别 4 个当前图库中的 key；纯标记回复跳过 tone，正文与标记混合时只调用一次 tone，并以受控分段保护精确 raw token、顺序和文本分段骨架。分段 Tone 的 `<exp>` 只能逐字使用本轮明确允许的标记；允许列表为空时不得输出 `<exp>`。hook 或 tone 新增、删除、改写、移动标记都失败关闭；未知 key、反斜杠转义标记和带空白的近似写法按普通正文保留。写入 outbox 前，已知标记按原位置转换为有序文字与图片 segment，并异步复验当前 Agent 的 SQLite 记录、内容寻址文件和文件身份；重试、断线恢复和重启只投递已经持久化的 segment，不重复执行 hook、tone 或标记规划。`bot.emojiSendSeparately` 默认关闭；开启后，含正文或普通生成图的回复先写入一条 outbox，全部表情再写入紧随其后的独立 outbox，第二条不重复引用或 @，纯表情回复仍只写入一条。纯表情发送成功后不新增 assistant 会话记录，不写入记忆队列。OneBot 发送前再次限制实际发出的内容寻址表情不超过 4 个，并把全部本地内联图片按实际出现次数计入 32 MiB 原始字节总预算；相同文件只读取一次，读取并发最多 2，任一读取、完整性、顺序或预算失败时整条消息保持零发送。
 - Codex 与图像生成长任务先返回确认消息，任务完成后通过持久化事件恢复原会话；任务提交不能等待生成完成。所有 deferred tool 必须单独调用并携带非空 `dispatch_message`，由模型使用当前人格生成“已收到并开始处理”的短消息；该字段与任务在同一事务中落库为 acknowledgement，进入 worker 前从业务参数中删除。事务提交后 acknowledgement outbox 与 worker 独立调度，消息发送、重试或结果不确定不能阻塞任务 claim 和执行；callback 按同一会话 outbox FIFO 排在 acknowledgement 之后。缺失、空白或超过 200 字时不得派发，也不得降级为同步执行。
 - `assistant_text` 允许 Agent 在工具循环中发送中间消息。中间消息必须在当前 turn 仍运行时写入 SQLite outbox 并立即调度发送，持久化完成后即可继续下一项 inline 工具；发送与重试由 outbox 独立执行，不能在 Provider 工具循环结束后才批量写入。重试同一事件时按事件 ID 与中间消息序号去重。群聊只引用第一条中间消息，最终正文仍引用原始消息，后续中间消息不引用。
 - 一次 Provider completion 共享同一个 `TurnToolState`，跨模型轮次记录已发送的 `assistant_text`、已接受工具、deferred 状态和调用次数。Responses、Chat Completions、Anthropic、Gemini 和 Codex 均拒绝 `assistant_text → no_reply`、普通工具 → `no_reply` 和 `assistant_text → deferred` 等非法顺序，合法的首轮独立 `no_reply` 与 deferred 调用保持原行为。
@@ -77,5 +80,17 @@ Thread 状态按会话增量维护。宿主规则优先处理对已归属消息�
 - 启动恢复必须在同一事务中把无法证明已提交的 held 成功文案改为固定中性通知，并终结其 origin running turn 与队首事件；已经 released 但尚未 finish 的 turn 直接终结，不能再次调用 Provider 或重复提交配置。构造期恢复必须显式提供当前 runtime 的 ReplyGate resolver；存在 held 行但 resolver 缺失时整个恢复事务失败关闭，不能留下仍在 running 的 origin 或部分恢复状态。成功 durable append、配置 commit 与 release 全部完成后，immediate confirmation 的 origin turn 以 `replied` 终结；store 中可信 `released` provenance 也会在 release 响应丢失时把最终 turn 收敛为 `replied`，不能写入失败或 `no_reply` 统计。关闭当前私聊门控只能保护该次已持久化 confirmation 不被自身配置提交取消，其他会话、门控、超时和取消继续生效。`finishTurn`、`deferTurn` 和失败路径都对遗留 held 行执行同一安全网，并在可投递后调度 outbox。`delivery_unknown` replay 对 released/fallback 记录使用稳定 replay key，逐层保留 mutation fingerprint 与可信 lineage，最多 8 层；每层源行必须仍为无不确定 settle 的 `delivery_unknown` 且 payload、session、turn、kind、partition 和 release provenance 全部一致。普通 `hold_state=none` 或只有 payload marker 的记录不能通过 replay 升格。
 - `no_reply` 允许 Agent 在本轮无需回复、话题已经自然结束，或继续回应其他 Bot 可能引起循环广播时静默结束。该工具必须在发送任何中间消息或调用其他工具前单独调用；接受后本轮直接以 `no_reply` 结束，不生成 Bot 消息，也不发送文字或错误回复。`bot.pokeOnNoReply` 默认关闭；开启后仅为当前 QQ 账号与触发者创建 `onebot.poke` outbox，群聊携带原群号，私聊不携带群号，turn 状态仍为 `no_reply`。
 - `bot.quoteGroupReplyExcludedUserIds` 按 Agent 保存 QQ 号过滤名单。开启群聊引用时，回复名单中的发送者仍正常发送正文，但第一条中间消息、最终正文和错误回复都不引用触发消息；其他发送者维持原引用行为。
-- 新写入的 Bot 消息持久化 `messageOrigin` 与按首次调用顺序去重的 `toolNames`。来源区分普通正文 `text`、显式 `assistant_text`、异步受理 `async_tool_dispatch` 和异步结果 `async_tool_callback`；工具清单只记录本轮实际接受的 Function Call，不能使用 Provider 请求中的可用工具定义反推。即时 `assistant_text` 的 durable outbox 保存发送时已经接受的工具前缀，turn 完成后会话投影按同一 `logRunId` 收敛为本轮完整工具清单。旧消息缺少来源时保持未知，不按正文、时间或日志邻近猜测。
+- 新写入的 Bot 消息持久化 `messageOrigin` 与按首次调用顺序去重的 `toolNames`。来源区分普通正文 `text`、显式 `assistant_text`、异步受理 `async_tool_dispatch` 和 callback 结果 `async_tool_callback`；工具清单只记录本轮实际接受的 Function Call，不能使用 Provider 请求中的可用工具定义反推。即时 `assistant_text` 的 durable outbox 保存发送时已经接受的工具前缀，turn 完成后会话投影按同一 `logRunId` 收敛为本轮完整工具清单。旧消息缺少来源时保持未知，不按正文、时间或日志邻近猜测。
 - 会话最多保留 2,000 条消息，最多保留最近 80 个会话。
+
+### 3.6 日常导演主动分享
+
+每个 Agent 的日常导演在系统时区每日 07:00 后确保当天行程存在；Core 在 07:00 后启动或重启时立即补建，07:00 前只等待分钟级唤醒。当天已有行程时不得重复调用计划 Provider。每个启用且非 Web Chat 的既有 QQ 会话都是当天分享候选，目标按完整会话 ID 排序并以最多 20 个一组写入确定性 one-time 定时任务；会话启停集合在分享触发前变化时，尚未到期的同 revision 任务必须幂等替换，不能因 ID 冲突停止调度。
+
+每个 share 节点必须落在所属活动时间内、具有文本意图和现场自拍提示，并在当前时间之后才创建任务。任务回调复用 `scheduled_callback` 的正常 private/group Agent loop、目标账号、Session FIFO 与 outbox；回调上下文只提供人物、现场、动作、服装和自拍意图，要求当前角色以本人视角自然分享日常并在同一 turn 调用 `selfie`。最终回复不得暴露定时、计划、规划、日程、任务、触发、回调、cron、导演、系统、提示词、字段或预设等元信息，也不得使用“按照计划”“今天安排”“到点了”“提醒一下”“定时分享”等表述。任务不能绕过目标会话、Agent/account 隔离或媒体安全边界，也不能向 Web Chat 主动投递。行程 revision 变化时，旧 revision 尚未执行的任务与链接被删除，新 revision 使用新的确定性 ID 创建；已经到期的历史不被重放。
+
+### 3.7 Dream 与会话边界
+
+Dream 只读取当前 Agent 在当日睡眠窗口内已经持久化的会话投影，并以有界、去标识化的模型输入参与记忆整理。每日 04:00 自动运行不建立用户 turn、内部回调、Session 事件、outbox 或 OneBot 外发；生成失败只进入 Dream 运行状态和请求日志，不向任一会话发送错误消息。管理员手动触发时，运行权持久化成功后向所选 Agent 的在线 QQ 账号与已配置管理员私聊排入一次 `scheduled_callback`；回调沿既有 Session、完整 Agent loop、durable outbox 和 OneBot 出站链路投递，由当前人格、关系与可编辑提示词生成“已经睡着、正在进入梦境”的即时消息，业务层不能硬编码最终文案或直接调用 Gateway。当天已完成、运行中、缺少在线账号或缺少有效管理员 QQ 时拒绝触发且不排入通知；通知入队失败时本次 Dream 终止为不可自动重试失败，管理员可再次手动触发。
+
+普通回复只有把长期记忆实际注入本轮模型上下文时才记录召回；管理台搜索、Dream 素材选择和其他只读查询不增加计数。同一 `logRunId` 中初始召回与 `memory_recall` 工具重复命中同一长期记忆时只计一次，避免工具循环放大使用频率。

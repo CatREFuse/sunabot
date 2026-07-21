@@ -71,6 +71,9 @@ export interface BotMemorySettings {
   reasoningEffort?: ReasoningEffort;
   messageThreshold: number;
   workingMemoryMaxEntries: number;
+  dreamRecentWindowHours: number;
+  dreamRecentMemoryLimit: number;
+  dreamOlderMemoryLimit: number;
   workMemoryCompressInPrompt: string;
   workMemoryCompressOutPrompt: string;
   userProfilePrompt: string;
@@ -100,6 +103,7 @@ export interface NormalReplyConfig {
 
 export interface BotToneSettings {
   enabled: boolean;
+  segmentedReply: boolean;
   followMainModel: boolean;
   providerId: string;
   model: string;
@@ -118,6 +122,7 @@ export interface BotConfig {
   quoteGroupReplyExcludedUserIds: string[];
   contextMessageLimit: number;
   emojiSendSize: 64 | 128 | 256 | 512 | 1024;
+  emojiSendSeparately: boolean;
   tone: BotToneSettings;
   memory: BotMemorySettings;
   orchestrator: BotOrchestratorSettings;
@@ -226,7 +231,7 @@ export interface ConfigSectionValueMap {
   providers: AppConfig["providers"];
   broadcastStorm: BroadcastStormConfig;
   normalReply: NormalReplyConfig;
-  bot: Pick<BotConfig, "adminQq" | "adminName" | "replyDebounceMs" | "pokeOnNoReply" | "quoteGroupReplies" | "quoteGroupReplyExcludedUserIds" | "contextMessageLimit" | "emojiSendSize">;
+  bot: Pick<BotConfig, "adminQq" | "adminName" | "replyDebounceMs" | "pokeOnNoReply" | "quoteGroupReplies" | "quoteGroupReplyExcludedUserIds" | "contextMessageLimit" | "emojiSendSize" | "emojiSendSeparately">;
   tone: BotToneSettings;
   memory: BotMemorySettings;
   orchestrator: BotOrchestratorSettings;
@@ -391,6 +396,10 @@ export interface SunaTool {
   accessLabel?: string;
   accessDescription?: string;
   executionBackend?: "native" | "docker";
+  bashEnvironments?: {
+    native: { available: boolean; reasonCode?: string };
+    docker: { started: boolean; reasonCode?: string };
+  };
   runtimeReasonCode?: string;
   defaultDescription?: string;
   promptDescription?: string;
@@ -609,16 +618,26 @@ export interface MemoryEntry {
   userId?: string;
   userIds?: string[];
   userName?: string;
+  addressNames?: string[];
   addressName?: string;
   userNickname?: string;
   groupCards?: Array<{ groupId: number; card: string; lastSeenAt: string }>;
   score?: number;
+  recallCount?: number;
+  distinctRecallDays?: number;
+  lastRecalledAt?: string;
+  recallTrackingStartedAt?: string;
+  lastReviewedAt?: string;
+  importance?: number;
+  futureRelevance?: number;
+  emotionalSalience?: number;
 }
 export interface MemoryWritePayload {
   source: MemorySourceId;
   id?: string;
   text: string;
   userId?: string;
+  addressNames?: string[];
   addressName?: string;
 }
 export interface MemoryPayload { sources: MemorySource[]; entries: MemoryEntry[] }

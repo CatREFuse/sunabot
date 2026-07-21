@@ -247,7 +247,11 @@ async function completeCodexResponses(
         willRetry: false,
         retryDelayMs: 0
       }, responseMetadata);
-      throw new Error(detail);
+      throw Object.assign(new Error(detail), {
+        name: "ProviderResponseError",
+        status: response.status,
+        retryable: retryableModelError(undefined, response.status)
+      });
     }
     await context.logger.response("codex.complete", {
       ok: true,

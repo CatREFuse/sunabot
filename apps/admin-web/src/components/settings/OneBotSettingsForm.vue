@@ -3,14 +3,15 @@ import { computed } from "vue";
 import type { ConfigEnvelope, ConfigSectionValueMap } from "../../types";
 import SettingsConfirmInput from "./SettingsConfirmInput.vue";
 const draft = defineModel<ConfigSectionValueMap["onebot"]>({ required: true });
-const props = defineProps<{ fieldStates?: ConfigEnvelope["fieldStates"] }>();
+const props = withDefaults(defineProps<{ fieldStates?: ConfigEnvelope["fieldStates"]; nested?: boolean }>(), { nested: false });
 const tokenConfigured = computed(() => props.fieldStates?.["onebot.accessTokenEnv"]?.secretConfigured);
 </script>
 
 <template>
   <section class="grid gap-8">
     <div>
-      <h2 class="section-title">OneBot</h2>
+      <h3 class="settings-group-title">OneBot 连接</h3>
+      <p class="settings-group-description">反向 WebSocket 路径与访问凭据。</p>
     </div>
     <div class="grid gap-5 sm:grid-cols-2">
       <label class="field">

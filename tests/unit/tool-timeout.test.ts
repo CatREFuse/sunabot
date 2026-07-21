@@ -9,6 +9,7 @@ interface ProcessCall {
   file: string;
   args: string[];
   timeout: number;
+  cwd?: string;
   signal?: AbortSignal;
   killSignal?: string;
   env?: NodeJS.ProcessEnv;
@@ -29,13 +30,14 @@ vi.mock("node:child_process", () => ({
   execFile: vi.fn((
     file: string,
     args: string[],
-    options: { timeout?: number; signal?: AbortSignal; killSignal?: string; env?: NodeJS.ProcessEnv },
+    options: { cwd?: string; timeout?: number; signal?: AbortSignal; killSignal?: string; env?: NodeJS.ProcessEnv },
     callback: (error: Error | null, stdout: string, stderr: string) => void
   ) => {
     const callIndex = processState.calls.length;
     processState.calls.push({
       file,
       args: [...args],
+      cwd: options.cwd,
       timeout: options.timeout ?? 0,
       signal: options.signal,
       killSignal: options.killSignal,
@@ -143,6 +145,51 @@ describe("tool call timeout", () => {
     expect(result).toMatchObject({ ok: true, cwd: "/workbench", stdout: "/workbench\n" });
     expect(JSON.stringify(result)).not.toContain(temporaryRoot);
     expect(workspaceBashTool.parameters.properties.timeoutMs.enum).toEqual([TOOL_CALL_TIMEOUT_MS, null]);
+  });
+
+  it("runs administrator private Native Bash on macOS only after adversarial approval", async () => {
+    temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-tool-native-host-"));
+    const audit = vi.fn(allowedAudit);
+    const probe = vi.fn(async () => undefined);
+
+    const result = await runWorkspaceBash({ command: "pwd", timeoutMs: null }, temporaryRoot, {
+      backend: "native",
+      accessMode: "admin",
+      audit,
+      sandbox: {
+        platform: "darwin",
+        runtimeMode: "macos",
+        effectiveUid: 501,
+        access: async () => undefined,
+        probe
+      }
+    });
+
+    const workbenchRoot = await fs.realpath(path.join(temporaryRoot, "workbench"));
+    const skillsRoot = await fs.realpath(path.join(temporaryRoot, "extensions/skills"));
+    const mcpRoot = await fs.realpath(path.join(temporaryRoot, "extensions/mcp"));
+    expect(audit).toHaveBeenCalledWith({
+      command: "pwd",
+      backend: "native",
+      accessMode: "admin",
+      strictMode: true
+    });
+    expect(probe).toHaveBeenCalledWith("/bin/bash", ["--noprofile", "--norc", "-lc", ":"]);
+    expect(processState.calls).toHaveLength(1);
+    expect(processState.calls[0]).toMatchObject({
+      file: "/bin/bash",
+      args: ["--noprofile", "--norc", "-lc", "pwd"],
+      cwd: workbenchRoot,
+      env: {
+        PATH: "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        HOME: workbenchRoot,
+        PWD: workbenchRoot,
+        SUNABOT_SKILLS: skillsRoot,
+        SUNABOT_MCP_CONFIG: mcpRoot
+      }
+    });
+    expect(processState.calls[0]?.env).not.toHaveProperty("DOCKER_HOST");
+    expect(result).toMatchObject({ ok: true, backend: "native", accessMode: "admin" });
   });
 
   it("does not execute plain Bash when isolation is unavailable", async () => {
@@ -287,7 +334,7 @@ describe("tool call timeout", () => {
     "rm leak"
   ])("refuses a restricted operand symlink before execution: %s", async (command) => {
     temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-tool-restricted-link-"));
-    const workbenchRoot = path.join(temporaryRoot, "workbench");
+    const workbenchRoot = path.join(temporaryRoot, "docker-workbench");
     const outsideRoot = await makeSecureScratch("restricted-link-outside");
     const outsideFile = path.join(outsideRoot, "secret");
     await fs.writeFile(outsideFile, "secret");
@@ -308,7 +355,7 @@ describe("tool call timeout", () => {
     "refuses a restricted hardlink operand before read, write, or delete: %s",
     async (command) => {
       temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-tool-restricted-hardlink-"));
-      const workbenchRoot = path.join(temporaryRoot, "workbench");
+      const workbenchRoot = path.join(temporaryRoot, "docker-workbench");
       const outsideRoot = await makeSecureScratch("restricted-hardlink-outside");
       const outsideFile = path.join(outsideRoot, "secret");
       await fs.writeFile(outsideFile, "secret");
@@ -330,7 +377,7 @@ describe("tool call timeout", () => {
     "refuses a restricted intermediate symlink: %s",
     async (command) => {
       temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-tool-restricted-parent-link-"));
-      const workbenchRoot = path.join(temporaryRoot, "workbench");
+      const workbenchRoot = path.join(temporaryRoot, "docker-workbench");
       const outsideRoot = await makeSecureScratch("restricted-parent-outside");
       await fs.writeFile(path.join(outsideRoot, "secret"), "secret");
       await fs.mkdir(workbenchRoot);
@@ -352,7 +399,7 @@ describe("tool call timeout", () => {
     "refuses a restricted path with a group/world-writable %s directory",
     async (kind) => {
       temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-tool-restricted-mode-"));
-      const workbenchRoot = path.join(temporaryRoot, "workbench");
+      const workbenchRoot = path.join(temporaryRoot, "docker-workbench");
       const sharedRoot = path.join(workbenchRoot, "shared");
       await fs.mkdir(sharedRoot, { recursive: true });
       await fs.writeFile(path.join(sharedRoot, "report.txt"), "safe");
@@ -371,7 +418,7 @@ describe("tool call timeout", () => {
 
   it("refuses a restricted path owned by a different Core uid", async () => {
     temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-tool-restricted-owner-"));
-    const workbenchRoot = path.join(temporaryRoot, "workbench");
+    const workbenchRoot = path.join(temporaryRoot, "docker-workbench");
     await fs.mkdir(workbenchRoot);
     await fs.writeFile(path.join(workbenchRoot, "report.txt"), "safe");
     const currentUid = typeof process.getuid === "function" ? process.getuid() : 1_000;
@@ -392,7 +439,7 @@ describe("tool call timeout", () => {
 
   it("revalidates restricted operand identity after the sandbox capability probe", async () => {
     temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-tool-restricted-race-"));
-    const workbenchRoot = path.join(temporaryRoot, "workbench");
+    const workbenchRoot = path.join(temporaryRoot, "docker-workbench");
     const reportPath = path.join(workbenchRoot, "report.txt");
     const outsideRoot = await makeSecureScratch("restricted-race-outside");
     const outsideFile = path.join(outsideRoot, "secret");
@@ -424,7 +471,7 @@ describe("tool call timeout", () => {
 
   it("revalidates restricted directory ownership and mode after the sandbox probe", async () => {
     temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-tool-restricted-mode-race-"));
-    const workbenchRoot = path.join(temporaryRoot, "workbench");
+    const workbenchRoot = path.join(temporaryRoot, "docker-workbench");
     const sharedRoot = path.join(workbenchRoot, "shared");
     await fs.mkdir(sharedRoot, { recursive: true });
     await fs.writeFile(path.join(sharedRoot, "report.txt"), "safe");

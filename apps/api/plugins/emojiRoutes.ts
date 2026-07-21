@@ -48,12 +48,17 @@ export interface EmojiRouteOptions {
   generationGate?: EmojiGenerationGate;
   settings?: {
     read(agentId: string): Promise<EmojiSettingsEnvelope>;
-    update(agentId: string, input: { sendSize: EmojiSendSize; revision: string }): Promise<EmojiSettingsEnvelope>;
+    update(agentId: string, input: {
+      sendSize: EmojiSendSize;
+      sendSeparately: boolean;
+      revision: string;
+    }): Promise<EmojiSettingsEnvelope>;
   };
 }
 
 interface EmojiSettingsEnvelope {
   sendSize: EmojiSendSize;
+  sendSeparately: boolean;
   revision: string;
 }
 
@@ -242,6 +247,7 @@ function withContentUrls(envelope: EmojiEnvelope, agentId: string, settings: Emo
   return {
     presetKeys: envelope.presetKeys,
     sendSize: settings.sendSize,
+    sendSeparately: settings.sendSeparately,
     revision: settings.revision,
     emojis: envelope.emojis.map((emoji) => {
       const base = `/api/emojis/${encodeURIComponent(emoji.key)}/content`;
@@ -285,15 +291,23 @@ function setEmojiContentHeaders(reply: FastifyReply, contentType: string) {
 async function readEmojiSettings(options: EmojiRouteOptions, agentId: string): Promise<EmojiSettingsEnvelope> {
   if (options.settings) return options.settings.read(agentId);
   const config = agentContext(options, agentId).config;
-  return { sendSize: config.bot.emojiSendSize, revision: "" };
+  return {
+    sendSize: config.bot.emojiSendSize,
+    sendSeparately: config.bot.emojiSendSeparately,
+    revision: ""
+  };
 }
 
-function parseEmojiSettingsBody(input: unknown): { sendSize: EmojiSendSize; revision: string } {
+function parseEmojiSettingsBody(input: unknown): {
+  sendSize: EmojiSendSize;
+  sendSeparately: boolean;
+  revision: string;
+} {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     badRequest("EMOJI_SETTINGS_INVALID", "表情设置无效。");
   }
   const body = input as Record<string, unknown>;
-  const extra = Object.keys(body).find((key) => key !== "sendSize" && key !== "revision");
+  const extra = Object.keys(body).find((key) => key !== "sendSize" && key !== "sendSeparately" && key !== "revision");
   if (extra || typeof body.revision !== "string" || !body.revision.trim()) {
     badRequest("EMOJI_SETTINGS_INVALID", "表情设置无效。", extra ?? "revision");
   }
@@ -301,7 +315,10 @@ function parseEmojiSettingsBody(input: unknown): { sendSize: EmojiSendSize; revi
   if (sendSize !== 64 && sendSize !== 128 && sendSize !== 256 && sendSize !== 512 && sendSize !== 1024) {
     badRequest("EMOJI_SETTINGS_INVALID", "表情发送尺寸无效。", "sendSize");
   }
-  return { sendSize, revision: body.revision };
+  if (typeof body.sendSeparately !== "boolean") {
+    badRequest("EMOJI_SETTINGS_INVALID", "表情发送方式无效。", "sendSeparately");
+  }
+  return { sendSize, sendSeparately: body.sendSeparately, revision: body.revision };
 }
 
 function parseRenameBody(input: unknown) {

@@ -45,6 +45,7 @@ import {
   applyMemoryBatchTransaction,
   ensureAgentTextFile,
   formatMemoryMatchesForPrompt,
+  isMemoryCausalChainKey,
   isMemoryBatchCommitted,
   mergeUserProfileMemory,
   normalizeEventMemorySchema,
@@ -230,7 +231,7 @@ export function collectBatchUsers(
       userId,
       names,
       currentName,
-      addressName: isAdmin ? admin.name : currentName || userId,
+      addressNames: uniqueStrings([isAdmin ? admin.name : "", currentName].filter(Boolean)),
       isAdmin
     });
   }
@@ -257,7 +258,7 @@ export function buildWorkingMemoryRecallQuery(incoming: ParsedIncomingMessage, t
   ].filter(Boolean).join(" ");
 }
 export function formatBatchUserLabel(user: BatchUserInfo) {
-  return `QQ ${user.userId}（${user.addressName}）`;
+  return `QQ ${user.userId}（${user.addressNames.join("、") || "暂无称呼"}）`;
 }
 export function isMemoryEntryRelatedToUsers(entry: MemoryEntry, userIds: Set<string>) {
   if (entry.userId && userIds.has(entry.userId)) return true;
@@ -284,7 +285,7 @@ export function buildUserPrompt(
   const groupLine = incoming.groupId ? `群号：${incoming.groupId}\n` : "";
   const roleLine = isAdmin ? `角色：管理员；称呼：${admin.name}\n` : "";
   const imageCount = inboundImageUrls(incoming).length;
-  const imageLine = imageCount ? `图片：${imageCount} 张，可作为生图参考图\n` : "";
+  const imageLine = imageCount ? `图片：${imageCount} 张，类型与顺序见内容中的图片标记\n` : "";
   const quoteLine = incoming.quoteReferences.length ? `引用：${formatQuoteReferencesForContext(incoming.quoteReferences)}\n` : "";
   const attachmentLine = boundedAttachmentContext ? `文件内容：\n${boundedAttachmentContext}\n` : "";
   return `消息场景：${scopeName}\n${messageTimeLine}${groupLine}用户：${formatIncomingUserLabel(incoming, admin)}\n${roleLine}${imageLine}${quoteLine}${attachmentLine}内容：${boundedText}`;
@@ -462,6 +463,7 @@ export function normalizeMemoryFacts(values: unknown[]): MemoryFactInput[] {
       ...(userId ? [userId] : [])
     ]);
     const userName = stringValue(record.userName ?? record.user_name ?? record.name ?? record.nickname ?? record.card);
+    const addressNames = normalizeAddressNameValues(record.addressNames ?? record.address_names);
     const addressName = stringValue(record.addressName ?? record.address_name ?? record.salutation);
     const occurredAt = stringValue(record.occurredAt ?? record.occurred_at);
     const occurredEndAtValue = record.occurredEndAt ?? record.occurred_end_at;
@@ -472,6 +474,9 @@ export function normalizeMemoryFacts(values: unknown[]): MemoryFactInput[] {
     const eventType = stringValue(record.eventType ?? record.event_type);
     const subjectKey = stringValue(record.subjectKey ?? record.subject_key);
     const eventKey = stringValue(record.eventKey ?? record.event_key);
+    const rawCausalChainKey = record.causalChainKey ?? record.causal_chain_key;
+    const causalChainKey = stringValue(rawCausalChainKey);
+    if (rawCausalChainKey != null && !isMemoryCausalChainKey(rawCausalChainKey)) continue;
     const eventFingerprint = stringValue(record.eventFingerprint ?? record.event_fingerprint);
     const longTermId = stringValue(record.longTermId ?? record.long_term_id);
     const batchId = stringValue(record.batchId ?? record.batch_id);
@@ -485,12 +490,14 @@ export function normalizeMemoryFacts(values: unknown[]): MemoryFactInput[] {
       userId: userId || undefined,
       userIds: userIds.length ? userIds : undefined,
       userName: userName || undefined,
+      addressNames: addressNames.length ? addressNames : undefined,
       addressName: addressName || undefined,
       sourceWorkingMemoryIds: sourceWorkingMemoryIds.length ? sourceWorkingMemoryIds : undefined,
       sourceCandidateIds: sourceCandidateIds.length ? sourceCandidateIds : undefined,
       eventType: eventType || undefined,
       subjectKey: subjectKey || undefined,
       eventKey: eventKey || undefined,
+      causalChainKey: causalChainKey || undefined,
       eventFingerprint: eventFingerprint || undefined,
       longTermId: longTermId || undefined,
       batchId: batchId || undefined,
@@ -507,8 +514,11 @@ export function attachUsersToMemoryFacts(facts: MemoryFactInput[], participants:
     if (!relatedUsers.length) return [fact];
 
     const identities = relatedUsers.flatMap((user) => {
-      const userName = trustedParticipantName(user);
-      return userName ? [{ userId: user.userId, userName }] : [];
+      const addressName = (user.addressNames ?? user.names ?? []).find((name) => hasMemoryIdentity(fact.fact, {
+        userId: user.userId,
+        userName: name
+      })) ?? trustedParticipantName(user);
+      return addressName ? [{ userId: user.userId, userName: addressName }] : [];
     });
     if (identities.length !== relatedUsers.length) return [];
     const normalizedFact = identities.length === 1
@@ -517,52 +527,63 @@ export function attachUsersToMemoryFacts(facts: MemoryFactInput[], participants:
     if (identities.some((identity) => !hasMemoryIdentity(normalizedFact, identity))) return [];
     if (!hasOnlyTrustedMemoryIdentityMarkers(normalizedFact, participants)) return [];
     if (!isRoleFirstPersonMemory(normalizedFact, identities)) return [];
-    const primaryName = identities[0]?.userName;
     return [{
       ...fact,
       fact: normalizedFact,
       userId: fact.userId ?? (relatedUsers.length === 1 ? relatedUsers[0]!.userId : undefined),
       userIds: uniqueStrings(relatedUsers.map((user) => user.userId)),
-      userName: primaryName
+      userName: undefined,
+      addressNames: uniqueStrings(identities.map((identity) => identity.userName))
     }];
   });
 }
-export function normalizeUserProfileFacts(facts: MemoryFactInput[], participants: BatchUserInfo[]) {
+export function normalizeUserProfileFacts(
+  facts: MemoryFactInput[],
+  participants: BatchUserInfo[],
+  messages: Array<{ text: string }> = []
+) {
   return facts.flatMap((fact) => {
     if (hasForbiddenMemoryRecallPhrase(fact.fact)) return [];
     if (hasUntrustedMemoryQq(fact, participants)) return [];
     const relatedUsers = resolveFactUsers(fact, participants);
-    if (!relatedUsers.length) return [];
-    const identities = relatedUsers.flatMap((user) => {
-      const userName = trustedParticipantName(user);
-      return userName ? [{ userId: user.userId, userName }] : [];
-    });
-    if (identities.length !== relatedUsers.length) return [];
-    const normalizedFact = identities.length === 1
-      ? replaceReportedMemoryIdentity(fact.fact, identities[0]!, fact.userName)
-      : fact.fact;
-    if (identities.some((identity) => !hasMemoryIdentity(normalizedFact, identity))) return [];
-    if (!hasOnlyTrustedMemoryIdentityMarkers(normalizedFact, participants)) return [];
-    if (!isRoleFirstPersonProfile(normalizedFact, identities)) return [];
+    if (relatedUsers.length !== 1) return [];
     return relatedUsers.flatMap((user) => {
-      const userName = trustedParticipantName(user);
-      if (!userName) return [];
-      const addressName = user.isAdmin ? user.addressName : fact.addressName || user.addressName;
-      const strippedFact = normalizeMemoryFactText(stripUserProfilePrefix(normalizedFact, user.userId, userName));
-      const identity = { userId: user.userId, userName };
+      const proposedAddressNames = uniqueStrings([
+        ...(fact.addressNames ?? []),
+        ...(fact.addressName ? [fact.addressName] : [])
+      ].map(stringValue).filter(Boolean));
+      if (proposedAddressNames.some((name) => !isObservedAddressName(name, user, messages))) return [];
+      const addressNames = uniqueStrings([
+        ...(user.addressNames ?? user.names ?? []),
+        ...proposedAddressNames
+      ]);
+      const addressName = addressNames.find((name) => hasMemoryIdentity(fact.fact, {
+        userId: user.userId,
+        userName: name
+      }));
+      if (!addressName) return [];
+      const strippedFact = normalizeMemoryFactText(stripUserProfilePrefix(fact.fact, user.userId, addressName));
+      const identity = { userId: user.userId, userName: addressName };
       if (!hasMemoryIdentity(strippedFact, identity)) return [];
+      if (!hasOnlyTrustedMemoryIdentityMarkers(strippedFact, [{ ...user, addressNames }])) return [];
       if (!isRoleFirstPersonProfile(strippedFact, [identity])
-        || (!strippedFact.includes(user.userId) && !strippedFact.includes(userName))) return [];
+        || (!strippedFact.includes(user.userId) && !strippedFact.includes(addressName))) return [];
       return {
         ...fact,
         fact: strippedFact,
         userId: user.userId,
         userIds: [user.userId],
-        userName,
-        addressName
+        userName: user.currentName || undefined,
+        addressNames,
+        addressName: undefined
       };
     });
   });
+}
+function isObservedAddressName(name: string, user: BatchUserInfo, messages: Array<{ text: string }>) {
+  if (!name || normalizeQqId(name) || name.length > 120) return false;
+  if ((user.addressNames ?? []).includes(name) || user.names.includes(name)) return true;
+  return messages.some((message) => message.text.includes(name));
 }
 export function normalizeMemoryFactText(value: unknown) {
   return stringValue(value);
@@ -616,6 +637,10 @@ export function normalizeStringIds(value: unknown) {
       .split(/[\s,，、]+/)
       .filter(Boolean);
   return uniqueStrings(values.map(stringValue).filter(Boolean));
+}
+function normalizeAddressNameValues(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return uniqueStrings(value.map(stringValue).filter(Boolean));
 }
 export function adminIdentityFromBot(bot: AppConfig["bot"]): AdminIdentity {
   return {

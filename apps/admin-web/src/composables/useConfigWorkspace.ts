@@ -50,8 +50,10 @@ const emptyConfig: AppConfig = {
     quoteGroupReplyExcludedUserIds: [],
     contextMessageLimit: 48,
     emojiSendSize: 512,
+    emojiSendSeparately: false,
     tone: {
       enabled: false,
+      segmentedReply: false,
       followMainModel: false,
       providerId: "",
       model: "gpt-5.4-mini",
@@ -65,6 +67,9 @@ const emptyConfig: AppConfig = {
       reasoningEffort: "medium",
       messageThreshold: 48,
       workingMemoryMaxEntries: 100,
+      dreamRecentWindowHours: 48,
+      dreamRecentMemoryLimit: 12,
+      dreamOlderMemoryLimit: 12,
       workMemoryCompressInPrompt: "work_memory_compress_in.json",
       workMemoryCompressOutPrompt: "work_memory_compress_out.json",
       userProfilePrompt: "user_profile_prompt.json"
@@ -473,9 +478,13 @@ function valuesFromConfig(config: AppConfig): SectionDrafts {
       quoteGroupReplies: config.bot.quoteGroupReplies,
       quoteGroupReplyExcludedUserIds: [...(config.bot.quoteGroupReplyExcludedUserIds ?? [])],
       contextMessageLimit: config.bot.contextMessageLimit,
-      emojiSendSize: config.bot.emojiSendSize ?? emptyConfig.bot.emojiSendSize
+      emojiSendSize: config.bot.emojiSendSize ?? emptyConfig.bot.emojiSendSize,
+      emojiSendSeparately: config.bot.emojiSendSeparately === true
     },
-    tone: clone(config.bot.tone ?? emptyConfig.bot.tone),
+    tone: {
+      ...clone(emptyConfig.bot.tone),
+      ...clone(config.bot.tone ?? {})
+    },
     memory: clone(config.bot.memory),
     orchestrator: {
       ...clone(config.bot.orchestrator),

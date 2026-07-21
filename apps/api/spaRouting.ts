@@ -7,6 +7,7 @@ const SPA_ROUTE_SEGMENTS = [
   "system-prompts",
   "prompts",
   "memory",
+  "knowledge",
   "images",
   "emojis",
   "scheduled-tasks",

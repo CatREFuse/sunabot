@@ -28,6 +28,7 @@ export async function runtime_replyToToolCompletion(
     return;
   }
   delivery.replyQuote = replyQuote;
+  delivery.mentionUserIds = payload.originalRequest.mentionUserIds;
   const isCurrent = () => this.isReplyTaskCurrent(incoming, gate, signal);
   if (!isCurrent()) return;
   if (payload.toolName === GENERATE_IMG_TOOL_NAME || payload.toolName === SELFIE_TOOL_NAME) {
@@ -55,28 +56,27 @@ export async function runtime_replyToToolCompletion(
         messageOrigin: "async_tool_callback",
         toolNames: [payload.toolName]
       },
-      delivery.replyQuote
+      delivery.replyQuote,
+      undefined,
+      delivery.mentionUserIds
     ));
     return;
   }
-  await this.replyToIncoming(channelKey, incoming, gateway, {
+  const callbackIncoming = {
+    ...incoming,
+    text: buildAsyncToolCompletionPrompt(payload)
+  };
+  await this.replyToIncoming(channelKey, callbackIncoming, gateway, {
     signal,
     isCurrent,
     delivery,
-    allowAsyncCodex: false,
     captureSequence: payload.originalRequest.captureSequence,
     contextThroughSequence: payload.originalRequest.contextThroughSequence,
     threadContext: payload.originalRequest.threadContext,
     orchestratorResult: payload.originalRequest.orchestratorResult,
     skipGroupThreadPreparation: true,
     messageOrigin: "async_tool_callback",
-    seedToolNames: [payload.toolName],
-    promptOverride: buildAsyncToolCompletionPrompt(payload, {
-      includeOriginalUserRequest: !(
-        Number.isSafeInteger(payload.originalRequest.captureSequence) &&
-        Number.isSafeInteger(payload.originalRequest.contextThroughSequence)
-      )
-    })
+    seedToolNames: [payload.toolName]
   });
 }
 

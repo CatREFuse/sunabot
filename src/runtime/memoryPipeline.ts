@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { nanoid } from "nanoid";
 import {
   AppConfig,
@@ -52,13 +53,13 @@ import {
   readMemorySourceEntries,
   readUserProfileForUser,
   readWorkingMemorySnapshot,
-  recallMemory,
   recoverMemoryTransactions,
   replaceWorkingMemoryFacts,
-  resolveUserAddressName,
+  resolveUserAddressNames,
   type MemoryEntry,
   type MemoryFactInput
 } from "../../services/memory/memoryService.js";
+import { ModelContextMemoryRecall } from "./memoryRecallExposure.js";
 import {
   MemorySchedulerStore,
   type MemoryClaim,
@@ -117,6 +118,23 @@ import { conversationTitle } from "./selfieHelpers.js";
 
 import type { SunaRuntime } from "../runtime.js";
 type RuntimeHost = SunaRuntime;
+
+const manualMemoryRecallKeys = new WeakMap<WorkingMemoryMergeContext, string>();
+
+function memoryCompressRecallKey(context: WorkingMemoryMergeContext) {
+  const batchId = typeof context.metadata.batchId === "string"
+    ? context.metadata.batchId.trim()
+    : "";
+  if (batchId) {
+    const digest = createHash("sha256").update(batchId).digest("hex");
+    return `memory.compress-in:batch:${digest}`;
+  }
+  const existing = manualMemoryRecallKeys.get(context);
+  if (existing) return existing;
+  const created = `memory.compress-in:merge:${nanoid()}`;
+  manualMemoryRecallKeys.set(context, created);
+  return created;
+}
 
 export function runtime_scheduleAttachmentCacheRefresh(this: RuntimeHost) {
     this.attachmentRefreshDirty = true;
@@ -264,6 +282,21 @@ export async function runtime_processMemoryClaim(this: RuntimeHost, claim: Memor
     }));
     const admin = this.adminIdentity();
     const participants = await this.enrichParticipantAddressNames(collectBatchUsers(batch, admin));
+    const userProfileOutput = await this.compressUserProfiles(record, batch, participants);
+    if (!userProfileOutput) return false;
+    const userProfileFacts = normalizeUserProfileFacts(
+      userProfileOutput,
+      participants,
+      batch.map(({ message }) => ({ text: message.text }))
+    );
+    const participantAddressNames = new Map(userProfileFacts.map((fact) => [fact.userId, fact.addressNames ?? []]));
+    const memoryParticipants = participants.map((participant) => ({
+      ...participant,
+      addressNames: uniqueStrings([
+        ...participant.addressNames,
+        ...(participantAddressNames.get(participant.userId) ?? [])
+      ])
+    }));
     const context: WorkingMemoryMergeContext = {
       conversation: {
         id: record.id,
@@ -272,7 +305,7 @@ export async function runtime_processMemoryClaim(this: RuntimeHost, claim: Memor
         userId: record.userId,
         groupId: record.groupId
       },
-      participants,
+      participants: memoryParticipants,
       messages: batch.map(({ sequence, message }, index) => ({
         sequence,
         role: message.role,
@@ -296,16 +329,13 @@ export async function runtime_processMemoryClaim(this: RuntimeHost, claim: Memor
       const snapshot = await readWorkingMemorySnapshot(this.config);
       const merged = await this.requestWorkingMemoryMerge(context, snapshot.entries);
       if (!merged || invalidWorkingMemoryClear(merged, snapshot.entries.length)) return false;
-      const allWorkingFacts = attachUsersToMemoryFacts(merged.facts, participants).map((fact) => ({
+      const allWorkingFacts = attachUsersToMemoryFacts(merged.facts, memoryParticipants).map((fact) => ({
         ...fact,
         batchId: claim.batchId
       }));
       const existingWorkingIds = new Set(snapshot.entries.map((entry) => entry.id));
       const maxWorkingEntries = clampInteger(this.config.bot.memory.workingMemoryMaxEntries, 100, 1, 1000);
       const workingFacts = allWorkingFacts.slice(-maxWorkingEntries);
-      const userProfileOutput = await this.compressUserProfiles(record, batch, participants);
-      if (!userProfileOutput) return false;
-      const userProfileFacts = normalizeUserProfileFacts(userProfileOutput, participants);
       const longTermFacts = allWorkingFacts
         .filter((fact) => (
           fact.promoteToLongTerm === true &&
@@ -352,11 +382,11 @@ export async function runtime_enrichParticipantAddressNames(this: RuntimeHost, p
       const profile = await readUserProfileForUser(this.config, participant.userId);
       return {
         ...participant,
-        addressName: resolveUserAddressName(
+        addressNames: resolveUserAddressNames(
           this.config,
           participant.userId,
           profile,
-          participant.currentName
+          participant.names
         )
       };
     }));
@@ -448,11 +478,18 @@ export async function runtime_requestWorkingMemoryMerge(this: RuntimeHost,
         this.config.bot.memory.memoryModel,
         this.config.bot.memory.reasoningEffort
       );
-      const relatedLongTerm = await recallMemory(this.config, {
+      const modelContextMemory = new ModelContextMemoryRecall(
+        this.config,
+        memoryCompressRecallKey(context)
+      );
+      const relatedLongTerm = await modelContextMemory.search({
         query: [
           context.conversation.id,
           context.conversation.title,
-          ...context.participants.flatMap((participant) => [participant.userId, participant.addressName]),
+          ...context.participants.flatMap((participant) => [
+            participant.userId,
+            ...(participant.addressNames ?? participant.names ?? [])
+          ]),
           ...context.messages.map((message) => message.text)
         ].filter(Boolean).join(" "),
         source: "long_term",
@@ -468,7 +505,7 @@ export async function runtime_requestWorkingMemoryMerge(this: RuntimeHost,
           fact: entry.text,
           userId: entry.userId,
           userIds: entry.userIds,
-          userName: entry.userName,
+          addressNames: entry.addressNames,
           occurredAt: formatOptionalModelTimestamp(entry.occurredAt),
           occurredEndAt: formatOptionalModelTimestamp(entry.occurredEndAt),
           observedAt: formatOptionalModelTimestamp(entry.observedAt),
@@ -487,6 +524,7 @@ export async function runtime_requestWorkingMemoryMerge(this: RuntimeHost,
           occurredAt: formatOptionalModelTimestamp(entry.occurredAt),
           occurredEndAt: formatOptionalModelTimestamp(entry.occurredEndAt),
           userIds: entry.userIds,
+          addressNames: entry.addressNames,
           eventType: entry.eventType,
           subjectKey: entry.subjectKey,
           eventKey: entry.eventKey,
@@ -500,6 +538,11 @@ export async function runtime_requestWorkingMemoryMerge(this: RuntimeHost,
       const promptRequest = await this.renderPromptRequest("memory.compress-in", {
         "memory.payload": payload
       });
+      modelContextMemory.includePromptVariable(
+        promptRequest,
+        "memory.payload",
+        relatedLongTerm.ok ? relatedLongTerm.matches : []
+      );
       const output = await withAbortTimeout(
         (signal) => this.completePrompt(provider, promptRequest, memoryProviderCompleteOptions(signal, {
             conversationId: context.conversation.id,
@@ -509,6 +552,7 @@ export async function runtime_requestWorkingMemoryMerge(this: RuntimeHost,
         })),
         MEMORY_PROVIDER_TOTAL_TIMEOUT_MS
       );
+      modelContextMemory.commit();
       return parseWorkingMemoryMergeOutput(output);
     } catch (error) {
       console.error("[runtime] work memory compression failed", {
@@ -544,7 +588,7 @@ export async function runtime_compressUserProfiles(this: RuntimeHost,
         currentAliases: participants.map((participant) => ({
           userId: participant.userId,
           userName: participant.currentName || participant.userId,
-          addressName: participant.addressName,
+          addressNames: participant.addressNames,
           groupId: record.groupId,
           conversationTitle: record.title
         })),

@@ -28,6 +28,7 @@ describe("RuntimeTone", () => {
     const selected = { ...config.providers.items[0]!, id: "tone-provider", reasoningEffort: "medium" as const };
     config.bot.tone = {
       enabled: true,
+      segmentedReply: false,
       followMainModel: false,
       providerId: selected.id,
       model: "gpt-5.5",
@@ -72,7 +73,8 @@ describe("RuntimeTone", () => {
     expect(renderPromptRequest).toHaveBeenCalledWith("conversation.tone-rewrite", expect.objectContaining({
       "bot.name": config.persona.name,
       "user.name": "猫老师",
-      "tone.input": "原始文本"
+      "tone.input": "原始文本",
+      tone_mode: false
     }));
     const [provider, request, options] = completePrompt.mock.calls[0]! as unknown as [
       OpenAIProvider,
@@ -118,6 +120,7 @@ describe("RuntimeTone", () => {
     config.normalReply.maxRetries = 3;
     config.bot.tone = {
       enabled: true,
+      segmentedReply: false,
       followMainModel: true,
       providerId: "other-provider",
       model: "tone-model",
@@ -150,6 +153,54 @@ describe("RuntimeTone", () => {
       maxOutputTokens: 9600
     });
     expect(options.modelRequestMaxRetries).toBe(3);
+  });
+
+  it("requests the XML contract and exposes only registered media handles for segmented delivery", async () => {
+    const config = defaultConfig();
+    config.bot.tone.enabled = true;
+    config.bot.tone.segmentedReply = true;
+    const baseProvider = new OpenAIProvider(config.providers.items[0]!);
+    const renderPromptRequest = vi.fn(async () => ({ messages: [{ role: "user" as const, content: "raw" }] }));
+    const completePrompt = vi.fn(async () => [
+      '<dialogc replay="msg_id">老师！</dialogc>',
+      '<img src="asset:image:0"/>'
+    ].join(""));
+    const tone = new RuntimeTone({
+      config,
+      getProvider: () => baseProvider,
+      renderPromptRequest,
+      completePrompt
+    } as unknown as SunaRuntime);
+
+    const rawXmlDraft = "<dialog>命令：<br/>npm run check</dialog>";
+    await expect(tone.rewriteForDelivery(rawXmlDraft, [
+      { kind: "image", src: "asset:image:0" }
+    ], {}, ["[/开心]"])).resolves.toEqual({
+      segmented: true,
+      content: '<dialogc replay="msg_id">老师！</dialogc><img src="asset:image:0"/>'
+    });
+    expect(renderPromptRequest).toHaveBeenCalledWith(
+      "conversation.tone-rewrite",
+      expect.objectContaining({
+        "tone.input": rawXmlDraft,
+        tone_mode: true,
+        "tone.available_assets": '[{"kind":"image","src":"asset:image:0"}]',
+        "tone.output_contract": expect.stringContaining('["[/开心]"]')
+      })
+    );
+  });
+
+  it("rejects untrusted media handles before rendering the segmented prompt", async () => {
+    const config = defaultConfig();
+    config.bot.tone.enabled = true;
+    config.bot.tone.segmentedReply = true;
+    const renderPromptRequest = vi.fn();
+    const tone = new RuntimeTone({ config, renderPromptRequest } as unknown as SunaRuntime);
+
+    await expect(tone.rewriteForDelivery("原文", [
+      { kind: "file", src: "https://example.com/private.txt" }
+    ])).rejects.toMatchObject({ code: "TONE_ASSET_HANDLE_INVALID" });
+    expect(renderPromptRequest).not.toHaveBeenCalled();
   });
 
   it("fails closed when the enabled node returns no sendable text", async () => {

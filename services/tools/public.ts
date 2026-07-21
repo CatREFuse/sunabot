@@ -7,6 +7,18 @@ export {
   memoryRecallTool,
   websearchTool
 } from "./definitions.js";
+export {
+  KNOWLEDGE_SEARCH_TOOL_NAME,
+  knowledgeSearchTool,
+  type KnowledgeSearchToolPort
+} from "./knowledgeSearchTool.js";
+export {
+  WEBFETCH_TOOL_NAME,
+  WEBFETCH_MAX_QUERY_LENGTH,
+  WEBFETCH_MAX_URL_LENGTH,
+  readWebFetchInput,
+  webfetchTool
+} from "./webFetchTool.js";
 export { WORKSPACE_BASH_TOOL_NAME, createWorkspaceBashTool, workspaceBashTool } from "./bashTool.js";
 export { GENERATE_IMG_TOOL_NAME, generateImgTool } from "./generateImgTool.js";
 export { SELFIE_TOOL_NAME, selfieTool } from "./selfieTool.js";
@@ -33,6 +45,20 @@ export {
   type CronToolOperation,
   type CronToolPort
 } from "./cronTool.js";
+export {
+  CALL_DIRECTOR_TOOL_NAME,
+  callDirectorTool,
+  runCallDirector,
+  type CallDirectorToolInput,
+  type CallDirectorToolPort
+} from "./callDirectorTool.js";
+export {
+  READ_AIR_TOOL_NAME,
+  readAirTool,
+  runReadAir,
+  type ReadAirToolInput,
+  type ReadAirToolPort
+} from "./readAirTool.js";
 export {
   READ_FILE_TOOL_NAME,
   WRITE_FILE_TOOL_NAME,

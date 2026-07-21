@@ -98,7 +98,14 @@ function redactForModel(value: Record<string, unknown>) {
       quoteGroupReplyExcludedUserIds: "[redacted-identities]",
       contextMessageLimit: safeModelValue(bot.contextMessageLimit),
       memory: {
-        ...pickSafeValues(memory, ["reasoningEffort", "messageThreshold", "workingMemoryMaxEntries"]),
+        ...pickSafeValues(memory, [
+          "reasoningEffort",
+          "messageThreshold",
+          "workingMemoryMaxEntries",
+          "dreamRecentWindowHours",
+          "dreamRecentMemoryLimit",
+          "dreamOlderMemoryLimit"
+        ]),
         promptFiles: "[redacted-paths]"
       },
       orchestrator: {

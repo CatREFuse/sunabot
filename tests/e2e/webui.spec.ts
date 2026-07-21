@@ -115,6 +115,8 @@ test("Agent 身份页可设置 WebUI 头像并立即刷新", async ({ page }) =>
   await page.goto("/agent-settings/persona");
 
   await expect(page.getByText("WebUI 头像", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("管理员 QQ")).toBeVisible();
+  await expect(page.getByLabel("管理员称呼")).toBeVisible();
   const source = await sharp({
     create: { width: 900, height: 600, channels: 4, background: "#d71921" }
   }).png().toBuffer();
@@ -169,8 +171,10 @@ test("Agent 设置只保留有效且唯一的配置入口", async ({ page }) => 
 
   await page.goto("/agent-settings/bash");
   await expect(page.getByLabel("启用 Bash")).toHaveCount(0);
-  await expect(page.getByLabel("管理员身份门禁")).toBeVisible();
-  await expect(page.getByLabel("管理员私聊后端")).toBeVisible();
+  await expect(page.getByLabel("严格审批")).toBeVisible();
+  await expect(page.getByLabel("对抗审批 Agent")).toBeVisible();
+  await expect(page.getByLabel("管理员身份门禁")).toHaveCount(0);
+  await expect(page.getByLabel("管理员私聊后端")).toHaveCount(0);
 });
 
 function pixelAlpha(data: Buffer, width: number, channels: number, x: number, y: number) {
@@ -361,7 +365,7 @@ test("Web Chat 以管理员身份发送并保持独立的网页消息流", async
     return { family: style.fontFamily, size: Number.parseFloat(style.fontSize) };
   });
   expect(titleStyle.family).toContain("Space Grotesk");
-  expect(titleStyle.size).toBe(48);
+  expect(titleStyle.size).toBe(40);
   const messageRadii = await page.getByLabel("Web Chat 消息").locator("article")
     .evaluateAll((elements) => elements.map((element) => getComputedStyle(element).borderRadius));
   expect(messageRadii.every((radius) => radius === "0px")).toBe(true);
@@ -559,6 +563,7 @@ test("Agent 可独立配置语气处理并打开提示词", async ({ page }) => 
 
   await expect(page.getByRole("heading", { name: "语气处理" })).toBeVisible();
   await page.getByLabel("启用语气处理").check();
+  await page.getByLabel("分段回复").check();
   await page.getByLabel("Provider").selectOption("codex");
   await page.getByRole("combobox", { name: "模型", exact: true }).selectOption("gpt-5.5");
   await page.getByLabel("推理强度").selectOption("high");
@@ -573,6 +578,7 @@ test("Agent 可独立配置语气处理并打开提示词", async ({ page }) => 
   expect(state.patchRequests.at(-1)?.section).toBe("tone");
   expect(state.config.bot.tone).toMatchObject({
     enabled: true,
+    segmentedReply: true,
     followMainModel: false,
     providerId: "codex",
     model: "gpt-5.5",
@@ -605,9 +611,11 @@ test("Agent 可独立配置语气处理并打开提示词", async ({ page }) => 
   await page.getByRole("link", { name: "编辑正文" }).click();
   await expect(page).toHaveURL(/\/system-prompts\/conversation\.tone-rewrite$/);
   await expect(page.getByRole("heading", { name: "语气改写" })).toBeVisible();
-  await page.getByRole("button", { name: "变量表", exact: true }).click();
-  const variableTable = page.getByRole("table", { name: "提示词变量表" }).last();
+  await expect(page.getByRole("button", { name: "变量表", exact: true })).toBeHidden();
+  const variableTable = page.getByRole("table", { name: "提示词变量表" });
   await expect(variableTable.getByText("@{tone.input}", { exact: true })).toBeVisible();
+  await expect(variableTable.getByText("@{tone.output_contract}", { exact: true })).toBeVisible();
+  await expect(variableTable.getByText("@{tone.available_assets}", { exact: true })).toBeVisible();
 });
 
 test("系统设置可配置广播风暴嗅探参数", async ({ page }) => {
@@ -652,11 +660,11 @@ test("系统设置可配置广播风暴嗅探参数", async ({ page }) => {
   });
 });
 
-test("系统设置可配置正常回复重试次数", async ({ page }) => {
+test("系统设置可配置回复重试次数", async ({ page }) => {
   const state = await installMockApi(page);
   await page.goto("/settings/normalReply");
 
-  await expect(page.getByRole("heading", { name: "正常回复" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "回复重试" })).toBeVisible();
   await expect(page.getByLabel("失败重试次数")).toHaveValue("3");
 
   await page.getByLabel("失败重试次数").fill("6");
@@ -676,7 +684,7 @@ test("旧版系统配置缺少回复重试时仍可打开设置页", async ({ pa
 
   await page.goto("/settings/normalReply");
 
-  await expect(page.getByRole("heading", { name: "正常回复" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "回复重试" })).toBeVisible();
   await expect(page.getByLabel("失败重试次数")).toHaveValue("3");
   await expect(page.getByText('"undefined" is not valid JSON', { exact: true })).toHaveCount(0);
 });
@@ -744,16 +752,16 @@ test("配置医生独立检查、显式 AI 诊断并只提交方案标识", asyn
     sourceRevision: "doctor-r1"
   });
 
-  await page.getByRole("button", { name: "应用修复", exact: true }).click();
-  let repairDialog = page.getByRole("dialog", { name: "应用这些修复？" });
+  await page.getByRole("button", { name: "一键修复", exact: true }).click();
+  let repairDialog = page.getByRole("dialog", { name: "修复全部配置？" });
   await expect(repairDialog).toBeVisible();
   await repairDialog.getByRole("button", { name: "取消", exact: true }).click();
   await expect(repairDialog).toBeHidden();
   expect(state.doctorRequests.filter((request) => request.path.endsWith("/apply"))).toEqual([]);
 
-  await page.getByRole("button", { name: "应用修复", exact: true }).click();
-  repairDialog = page.getByRole("dialog", { name: "应用这些修复？" });
-  await repairDialog.getByRole("button", { name: "应用修复", exact: true }).click();
+  await page.getByRole("button", { name: "一键修复", exact: true }).click();
+  repairDialog = page.getByRole("dialog", { name: "修复全部配置？" });
+  await repairDialog.getByRole("button", { name: "确认修复", exact: true }).click();
   await expect(page.getByText("配置正常", { exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "配置已修复", exact: true })).toBeVisible();
 
@@ -770,34 +778,24 @@ test("配置医生独立检查、显式 AI 诊断并只提交方案标识", asyn
   expect(state.doctorRequests.filter((request) => request.path.endsWith("/scan"))).toHaveLength(2);
 });
 
-test("语音设置按 Agent 保存语言和参考音频", async ({ page }) => {
+test("语音设置按 Agent 保存在线服务、语言和音色资料", async ({ page }) => {
   const state = await installMockApi(page);
   await page.goto("/voice");
 
   await expect(page.getByRole("heading", { name: "语音", exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "语音服务", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "检测服务", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "在线语音服务", exact: true })).toBeVisible();
+  await page.getByLabel("服务地址").fill("https://voice.example/v1");
+  await page.getByLabel("模型").fill("voice-model");
+  await page.getByRole("button", { name: "保存设置", exact: true }).first().click();
+  await expect.poll(() => state.voiceProfiles.plana?.provider.baseUrl).toBe("https://voice.example/v1");
+  await expect.poll(() => state.voiceProfiles.plana?.provider.model).toBe("voice-model");
+  await page.getByRole("button", { name: "检测连接", exact: true }).click();
   await expect.poll(() => state.voiceServiceRequests).toEqual(["check"]);
-  await expect(page.getByText("语音服务可用", { exact: true })).toBeVisible();
-
-  await page.getByRole("button", { name: "关闭服务", exact: true }).click();
-  const stopDialog = page.getByRole("dialog", { name: "关闭语音服务？" });
-  await expect(stopDialog).toBeVisible();
-  await stopDialog.getByRole("button", { name: "关闭服务", exact: true }).click();
-  await expect.poll(() => state.voiceServiceRequests).toEqual(["check", "stop"]);
-  await expect(page.getByText("语音服务已关闭", { exact: true })).toBeVisible();
-
-  await page.getByRole("button", { name: "启动服务", exact: true }).click();
-  await expect.poll(() => state.voiceServiceRequests).toEqual([
-    "check",
-    "stop",
-    "start"
-  ]);
-  await expect(page.getByText("语音服务已启动", { exact: true })).toBeVisible();
+  await expect(page.getByText("在线语音服务可用", { exact: true })).toBeVisible();
 
   await expect(page.getByText("kivo-plana-ja.wav", { exact: true })).toBeVisible();
   await page.getByLabel("启用语音").uncheck();
-  await page.getByRole("button", { name: "保存设置", exact: true }).click();
+  await page.getByRole("button", { name: "保存设置", exact: true }).last().click();
   await expect.poll(() => state.voiceProfiles.plana?.enabled).toBe(false);
 
   await page.getByRole("button", { name: "English", exact: true }).click();
@@ -821,12 +819,15 @@ test("工具目录支持启停、全局说明和继承说明恢复", async ({ pa
 
   await expect(page.getByRole("tab", { name: "工具目录", exact: true })).toHaveAttribute("aria-selected", "true");
   await expect(page.getByLabel("搜索工具")).toBeVisible();
-  await expect(page.getByLabel(/^启用 /)).toHaveCount(17);
+  await expect(page.getByLabel(/^启用 /)).toHaveCount(21);
   for (const name of [
     "assistant_text",
     "no_reply",
     "memory_recall",
+    "read_air",
+    "knowledge_search",
     "websearch",
+    "webfetch",
     "generate_img",
     "selfie",
     "read_file",
@@ -839,7 +840,8 @@ test("工具目录支持启停、全局说明和继承说明恢复", async ({ pa
     "read_skill_resource",
     "run_skill_script",
     "cron",
-    "system_config"
+    "system_config",
+    "call_director"
   ]) {
     await expect(page.getByText(name, { exact: true })).toBeVisible();
   }
@@ -860,12 +862,14 @@ test("工具目录支持启停、全局说明和继承说明恢复", async ({ pa
   }
 
   const bashRow = page.locator("article").filter({ has: page.getByText("workspace_bash", { exact: true }) });
-  await expect(bashRow.getByText("仅管理员 QQ 私聊", { exact: true })).toBeVisible();
+  await expect(bashRow.getByText("管理员私聊 Native · 群聊与其他私聊 Docker", { exact: true })).toBeVisible();
+  await expect(bashRow.getByText("[native bash] 不可用", { exact: true })).toBeVisible();
+  await expect(bashRow.getByText("[docker bash] 已启动", { exact: true })).toBeVisible();
   await bashRow.getByRole("button", { name: "查看 Bash 详情" }).click();
   const bashDialog = page.getByRole("dialog", { name: "Bash" });
   await expect(bashDialog.getByText("适用会话", { exact: true })).toBeVisible();
-  await expect(bashDialog.getByText("管理员私聊后端", { exact: true })).toBeVisible();
-  await expect(bashDialog.getByText("Native", { exact: true })).toBeVisible();
+  await expect(bashDialog.getByText("[native bash]", { exact: true })).toBeVisible();
+  await expect(bashDialog.getByText("[docker bash]", { exact: true })).toBeVisible();
   await bashDialog.getByRole("button", { name: "关闭工具详情" }).click();
   await expect(page.locator('[data-slot="settings-auto-save-status"]')).toHaveCount(0);
   await expect(page.getByLabel("启用 Bash")).toBeChecked();
@@ -953,10 +957,10 @@ test("提示词库列出全部文件并支持快捷保存与冲突恢复", async
 
   await expect(page.getByRole("heading", { name: "核心人格" })).toBeVisible();
   const fileList = page.locator("aside").filter({ has: page.getByLabel("搜索文件") });
-  await expect(fileList.getByRole("button")).toHaveCount(7);
+  await expect(fileList.getByRole("button")).toHaveCount(8);
   await expect(fileList.getByRole("button", { name: /自拍提示词改写/ })).toBeVisible();
   await page.getByLabel("覆盖系统提示词").check();
-  await expect(fileList.getByRole("button")).toHaveCount(16);
+  await expect(fileList.getByRole("button")).toHaveCount(18);
   expect(state.promptOverrides.plana).toBe(true);
   const editor = page.getByLabel("提示词正文");
   await expect(editor).toHaveValue(/冷静、诚实、可靠/);
@@ -1038,7 +1042,7 @@ test("宽屏提示词可调整变量表宽度", async ({ page }) => {
   }))));
   expect(cardStyles).toEqual([
     { borderWidth: "1px", borderRadius: "4px" },
-    { borderWidth: "1px", borderRadius: "4px" }
+    { borderWidth: "1px", borderRadius: "8px" }
   ]);
 
   const selectionStyle = await page.getByLabel("提示词正文").evaluate((element) => {
@@ -1073,7 +1077,7 @@ test("宽屏提示词可调整变量表宽度", async ({ page }) => {
   await expect.poll(() => editor.evaluate((element) => element.scrollTop)).toBe(scrollTop);
   const referencedVariable = variableTable.getByRole("button", { name: /persona\.preference/ });
   await expect(referencedVariable).toContainText("×2");
-  await expect(variableTable).toContainText("已引用 2 / 9");
+  await expect(variableTable).toContainText("已引用 2 / 10");
 });
 
 test("最终请求支持消息组、排序、结构测试和 JSON 存储同步", async ({ page }) => {
@@ -1132,12 +1136,14 @@ test("最终提示词在不同宽度保持单槽位双栏编辑", async ({ page 
   await expect(dragHandle).toBeHidden();
   await expect(moveButton).toBeVisible();
   await expect(page.locator(".prompt-workspace__panel:visible")).toHaveCount(1);
-  await expect(page.locator(".prompt-editor__variables")).toBeHidden();
+  const variablePanel = page.locator(".prompt-editor__variables");
+  await expect(variablePanel).toBeVisible();
   await expect(page.getByRole("separator", { name: "调整可用变量宽度" })).toBeHidden();
-  await page.getByRole("button", { name: "变量表", exact: true }).click();
-  const variableDrawer = page.getByRole("dialog").filter({ has: page.getByRole("heading", { name: "变量表" }) });
-  await expect(variableDrawer.getByRole("table", { name: "提示词变量表" })).toBeVisible();
-  await variableDrawer.getByRole("button", { name: "关闭变量表" }).click();
+  await expect(page.getByRole("button", { name: "变量表", exact: true })).toBeHidden();
+  const variableTable = variablePanel;
+  const conversationVariable = variableTable.getByRole("button", { name: /conversation\.messages/ });
+  await conversationVariable.locator(".variable-context__token").hover();
+  await expect(page.getByRole("tooltip")).toContainText("当前消息之前可直接发送给模型的会话消息");
   await page.getByRole("tab", { name: "输出格式" }).click();
   await expect(page.getByRole("tabpanel", { name: "输出格式" })).toBeVisible();
 
@@ -1150,7 +1156,6 @@ test("最终提示词在不同宽度保持单槽位双栏编辑", async ({ page 
   await expect(visiblePanels).toHaveCount(1);
   await expect(page.getByText("可用变量", { exact: true })).toBeVisible();
   await expect(page.getByRole("separator", { name: "调整可用变量宽度" })).toBeVisible();
-  const variableTable = page.getByRole("table", { name: "提示词变量表" });
   const systemPrompt = page.getByRole("textbox", { name: "system 提示词" });
   const beforeInsert = `${Array.from({ length: 80 }, (_, index) => `line ${index + 1}`).join("\n")}\n`;
   await systemPrompt.fill(beforeInsert);
@@ -1339,27 +1344,75 @@ test("浅色、深色与系统主题可切换并持久化", async ({ page }) => 
   await expect.poll(() => page.evaluate(() => localStorage.getItem("sunabot.theme"))).toBe("system");
 });
 
-test("记忆页区分称呼与昵称、显示事件范围并保留称呼编辑", async ({ page }) => {
+test("记忆页分页并区分称呼与昵称、显示事件范围和保留称呼编辑", async ({ page }) => {
   const state = await installMockApi(page);
   await page.goto("/memory");
 
   const sourceTabs = page.getByRole("navigation", { name: "记忆类别" });
-  await expect(sourceTabs.getByRole("button")).toHaveText(["工作记忆", "长期记忆", "用户画像"]);
+  const sortField = page.getByLabel("排序字段");
+  const sortDirection = page.getByLabel("排序方向");
+  await expect(sourceTabs.getByRole("button")).toHaveText(["工作记忆", "长期记忆", "用户画像", "梦境"]);
+  await expect(sortField).toHaveValue("updatedAt");
+  await expect(sortDirection).toHaveValue("desc");
+  await expect(page.getByRole("heading", { name: "梦境", exact: true })).toHaveCount(0);
+  await sourceTabs.getByRole("button", { name: "梦境", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "梦境", exact: true })).toBeVisible();
+  await expect(page.getByText("Asia/Shanghai", { exact: true })).toBeVisible();
+  await expect(page.getByText(/我沿着潮湿的石阶走进旧车站/)).toBeVisible();
+  await expect(page.getByText("合并 2 · 归档 1 · 转存 1", { exact: true })).toBeVisible();
+  await expect(page.getByText("人格已微调", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "立即做梦", exact: true }).click();
+  await expect(page.getByText("梦境已完成", { exact: true })).toBeVisible();
+  expect(state.dreamTriggers).toBe(1);
+  await sortField.selectOption("createdAt");
+  await sortDirection.selectOption("asc");
+  await expect(page.getByText(/我在雨后的图书馆里寻找一页/)).toBeVisible();
+  await expect(page.getByText(/我沿着潮湿的石阶走进旧车站/)).toHaveCount(0);
+  await sortDirection.selectOption("desc");
+  await expect(page.getByText(/我沿着潮湿的石阶走进旧车站/)).toBeVisible();
+  await page.getByRole("button", { name: "展开 1 条历史", exact: true }).click();
+  await expect(page.getByText(/我在雨后的图书馆里寻找一页/)).toBeVisible();
+  await page.getByRole("button", { name: "收起历史", exact: true }).click();
+  await expect(page.getByLabel("搜索记忆")).toHaveCount(0);
+  await expect(page.getByRole("navigation", { name: "记忆分页" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "新增", exact: true })).toHaveCount(0);
+
+  await sourceTabs.getByRole("button", { name: "工作记忆" }).click();
+  await sortField.selectOption("updatedAt");
   await expect(page.getByText(/发生 .* 至 .*/)).toBeVisible();
+  const memoryRows = page.locator("article").filter({ has: page.getByRole("button", { name: "编辑记忆" }) });
+  const pagination = page.getByRole("navigation", { name: "记忆分页" });
+  await expect(pagination).toContainText("共 21 条 · 每页 20 条");
+  await expect(memoryRows).toHaveCount(20);
+  await pagination.getByRole("button", { name: "下一页" }).click();
+  await expect(memoryRows).toHaveCount(1);
+  await expect(page.getByText("分页测试记忆 1", { exact: true })).toBeVisible();
+  await sortDirection.selectOption("asc");
+  await expect(pagination).toContainText("1 / 2");
+  await expect(memoryRows.first()).toContainText("分页测试记忆 1");
+
+  await sourceTabs.getByRole("button", { name: "长期记忆" }).click();
+  await sortField.selectOption("lastRecalledAt");
+  await sortDirection.selectOption("desc");
+  await expect(page.getByText("召回 4 次", { exact: true })).toBeVisible();
+  await expect(page.getByText("跨 3 天", { exact: true })).toBeVisible();
+  await expect(page.getByText(/最近召回/)).toBeVisible();
 
   await sourceTabs.getByRole("button", { name: "用户画像" }).click();
-  await expect(page.getByText("称呼 猫老师", { exact: true })).toBeVisible();
+  await sortField.selectOption("createdAt");
+  await expect(page.getByRole("navigation", { name: "记忆分页" })).toHaveCount(0);
+  await expect(page.getByText("称呼 猫老师、老师", { exact: true })).toBeVisible();
   await expect(page.getByText("QQ 昵称 猫老师原昵称", { exact: true })).toBeVisible();
   await expect(page.getByText("群名片 猫老师 · 群 10001", { exact: true })).toBeVisible();
 
   const filter = page.getByLabel("搜索记忆");
   await filter.fill("猫老师");
-  const profileRow = page.locator("article").filter({ hasText: "称呼 猫老师" });
+  const profileRow = page.locator("article").filter({ hasText: "称呼 猫老师、老师" });
   await expect(profileRow).toBeVisible();
-  await expect(page.locator("article")).toHaveCount(1);
+  await expect(memoryRows).toHaveCount(1);
 
   await profileRow.getByRole("button", { name: "编辑记忆" }).click();
-  await expect(page.getByLabel("称呼")).toHaveValue("猫老师");
+  await expect(page.getByLabel("称呼")).toHaveValue("猫老师、老师");
   await page.getByLabel("正文").fill("正文已经更新。");
   await page.getByRole("button", { name: "保存", exact: true }).click();
 
@@ -1370,7 +1423,7 @@ test("记忆页区分称呼与昵称、显示事件范围并保留称呼编辑",
       source: "user_profile",
       id: "profile-1",
       text: "正文已经更新。",
-      addressName: "猫老师"
+      addressNames: ["猫老师", "老师"]
     }
   });
 });
@@ -1454,7 +1507,7 @@ test("弹层约束焦点、支持 Escape 并恢复触发位置", async ({ page }
 
 test("设置按字段确认、离开时刷新队列并在失败时保留输入", async ({ page }) => {
   const state = await installMockApi(page);
-  await page.goto("/agent-settings/bot");
+  await page.goto("/agent-settings/persona");
   await page.getByLabel("管理员称呼").fill("新的管理员称呼");
   await page.locator('[data-confirm-label="确认管理员称呼"]').click();
 
@@ -1463,13 +1516,13 @@ test("设置按字段确认、离开时刷新队列并在失败时保留输入",
   await expect.poll(() => state.config.bot.adminName).toBe("新的管理员称呼");
   await expect(page.getByRole("dialog", { name: "放弃未保存的设置？" })).toHaveCount(0);
 
-  await page.goto("/agent-settings/bot");
+  await page.goto("/agent-settings/persona");
   await expect(page.getByLabel("管理员称呼")).toHaveValue("新的管理员称呼");
   state.nextPatchError = "管理员称呼保存失败。";
   await page.getByLabel("管理员称呼").fill("保存失败时保留");
   await page.locator('[data-confirm-label="确认管理员称呼"]').click();
   await page.getByRole("link", { name: "状态", exact: true }).click();
-  await expect(page).toHaveURL(/\/agent-settings\/bot$/);
+  await expect(page).toHaveURL(/\/agent-settings\/persona$/);
   await expect(page.getByText("管理员称呼保存失败。", { exact: true })).toBeVisible();
   await expect(page.getByLabel("管理员称呼")).toHaveValue("保存失败时保留");
   await expect(page.getByRole("button", { name: "保存", exact: true })).toHaveCount(0);

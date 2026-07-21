@@ -1,12 +1,6 @@
-export interface VoiceSynthesisPromptAudio {
-  bytes: Uint8Array;
-  fileName: string;
-  mimeType: string;
-}
-
 export interface VoiceSynthesisGenerateInput {
   text: string;
-  promptAudio: VoiceSynthesisPromptAudio;
+  voiceId: string;
   signal?: AbortSignal;
 }
 

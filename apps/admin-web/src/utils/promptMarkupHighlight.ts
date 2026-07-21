@@ -1,4 +1,4 @@
-const INLINE_PATTERN = /(<\/?[A-Za-z][^>\n]*>)|(`[^`\n]+`)|(\*\*[^*\n]+\*\*|__[^_\n]+__)|(\*[^*\n]+\*|_[^_\n]+_)|(@\{\s*[A-Za-z_][\w.-]*\s*\}|\{\{\s*[A-Za-z_][\w.-]*\s*\}\})/g;
+const INLINE_PATTERN = /(<\/?[A-Za-z](?:"[^"\n]*"|'[^'\n]*'|[^>"'\n])*>)|(`[^`\n]+`)|(\*\*[^*\n]+\*\*|__[^_\n]+__)|(\*[^*\n]+\*|_[^_\n]+_)|(@\{\s*[A-Za-z_][\w.-]*\s*\}|\{\{\s*[A-Za-z_][\w.-]*\s*\}\})/g;
 
 export function highlightedPromptMarkup(content: string, variableNames?: ReadonlySet<string>) {
   const lines = content.split("\n");
@@ -61,7 +61,7 @@ function highlightInline(value: string, variableNames?: ReadonlySet<string>) {
     const index = match.index ?? 0;
     result += escapeHtml(value.slice(cursor, index));
     const token = match[0];
-    if (match[1]) result += wrap("markup-xml", token);
+    if (match[1]) result += highlightXmlToken(token);
     else if (match[2]) result += wrap("markup-code", token);
     else if (match[3]) result += wrap("markup-bold", token);
     else if (match[4]) result += wrap("markup-italic", token);
@@ -74,6 +74,26 @@ function highlightInline(value: string, variableNames?: ReadonlySet<string>) {
     cursor = index + token.length;
   }
   return result + escapeHtml(value.slice(cursor));
+}
+
+function highlightXmlToken(value: string) {
+  const attribute = value.match(/\s+s-if\s*=\s*(["'])(.*?)\1/u);
+  if (!attribute || attribute.index == null) return wrap("markup-xml", value);
+  const start = attribute.index;
+  const condition = attribute[2] ?? "";
+  const conditionStart = attribute[0].indexOf(condition);
+  const directive = [
+    escapeHtml(attribute[0].slice(0, conditionStart)),
+    `<span class="markup-condition">${escapeHtml(condition)}</span>`,
+    escapeHtml(attribute[0].slice(conditionStart + condition.length))
+  ].join("");
+  return [
+    '<span class="markup-xml">',
+    escapeHtml(value.slice(0, start)),
+    `<span class="markup-directive">${directive}</span>`,
+    escapeHtml(value.slice(start + attribute[0].length)),
+    "</span>"
+  ].join("");
 }
 
 function promptVariableName(value: string) {

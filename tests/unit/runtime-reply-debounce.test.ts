@@ -24,7 +24,11 @@ import {
   incomingReplyEnvelope,
   toolCompletionEnvelope
 } from "../../packages/contracts/session/runtimeMessages.js";
-import type { RenderedPromptRequest } from "../../services/agent/promptSystem.js";
+import {
+  parseFinalPromptTemplate,
+  renderFinalPromptTemplate,
+  type RenderedPromptRequest
+} from "../../services/agent/promptSystem.js";
 import type { AttachmentService } from "../../services/media/attachments/service.js";
 import { defaultVoiceProfile, voicePromptVariables } from "../../services/voice/public.js";
 import { SessionStore } from "../../services/sessions/sessionStore.js";
@@ -33,6 +37,7 @@ import {
   closeApplicationDataStores
 } from "../../adapters/sqlite/applicationDataStore.js";
 import { SunaRuntime } from "../../src/runtime.js";
+import type { ReplyDelivery } from "../../src/runtime/runtimeContracts.js";
 import {
   conversationRecordId,
   persistentIncomingKey,
@@ -44,6 +49,11 @@ import { createAdminTestConfig } from "./admin-fixtures.js";
 const appendRequestLog = vi.hoisted(() => vi.fn(async () => undefined));
 const appendRequestLogStrict = vi.hoisted(() => vi.fn(async () => undefined));
 const recallMemory = vi.hoisted(() => vi.fn(async () => ({ ok: true, matches: [] })));
+const recordModelContextRecall = vi.hoisted(() => vi.fn());
+const reserveModelContextRecall = vi.hoisted(() => vi.fn((_config: unknown, matches: unknown[]) => ({
+  accepted: [...matches],
+  stale: []
+})));
 const readUserProfileForUser = vi.hoisted(() => vi.fn(async () => undefined));
 
 vi.mock("../../src/requestLog.js", async (importOriginal) => ({
@@ -54,6 +64,8 @@ vi.mock("../../src/requestLog.js", async (importOriginal) => ({
 vi.mock("../../services/memory/memoryService.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../services/memory/memoryService.js")>()),
   recallMemory,
+  recordModelContextRecall,
+  reserveModelContextRecall,
   readUserProfileForUser
 }));
 
@@ -79,6 +91,69 @@ afterEach(() => {
 });
 
 describe("SunaRuntime reply debounce", () => {
+  it("holds an atomic image reply until text and the generated image can share one outbox", async () => {
+    const image = { url: "data:image/png;base64,AA==", revisedPrompt: "现场自拍" };
+    const harness = createRuntimeHarness(async (_request, options) => {
+      expect(options?.onAssistantText).toBeUndefined();
+      expect(options?.asyncImage).toBe(false);
+      expect(options?.asyncCodex).toBe(false);
+      expect(options?.conversationAssets).toBeUndefined();
+      expect(options?.voice).toBeUndefined();
+      options?.onImageGenerated?.(image);
+      return { kind: "completed", text: "资料终于整理完了。" };
+    });
+    const incoming = parseOneBotInboundMessage(privateEvent(30_988, "日常导演分享"))!;
+    harness.runtime.recordIncomingMessage(incoming, { persist: false });
+    const delivery: ReplyDelivery = { outbox: [] };
+
+    await harness.runtime.replyToIncoming(conversationRecordId(incoming), incoming, harness.gateway, {
+      delivery,
+      atomicImageReply: true
+    });
+
+    expect(harness.gateway.send).not.toHaveBeenCalled();
+    expect(delivery.outbox).toHaveLength(1);
+    expect(decodeAssistantReply(delivery.outbox[0]!.payload)).toMatchObject({
+      text: "资料终于整理完了。",
+      generatedImages: [image]
+    });
+  });
+
+  it("does not publish a text-only fallback when an atomic image reply has no image", async () => {
+    const harness = createRuntimeHarness(async () => ({
+      kind: "completed",
+      text: "图片没生成，但先说一声。"
+    }));
+    const incoming = parseOneBotInboundMessage(privateEvent(30_989, "日常导演分享失败"))!;
+    harness.runtime.recordIncomingMessage(incoming, { persist: false });
+    const delivery: ReplyDelivery = { outbox: [] };
+
+    await harness.runtime.replyToIncoming(conversationRecordId(incoming), incoming, harness.gateway, {
+      delivery,
+      atomicImageReply: true
+    });
+
+    expect(delivery).toMatchObject({ outbox: [], terminalStatus: "no_reply" });
+    expect(harness.gateway.send).not.toHaveBeenCalled();
+  });
+
+  it("does not publish an error bubble when an atomic image reply fails", async () => {
+    const harness = createRuntimeHarness(async () => {
+      throw new Error("selfie provider unavailable");
+    });
+    const incoming = parseOneBotInboundMessage(privateEvent(30_987, "日常导演生图异常"))!;
+    harness.runtime.recordIncomingMessage(incoming, { persist: false });
+    const delivery: ReplyDelivery = { outbox: [] };
+
+    await harness.runtime.replyToIncoming(conversationRecordId(incoming), incoming, harness.gateway, {
+      delivery,
+      atomicImageReply: true
+    });
+
+    expect(delivery).toMatchObject({ outbox: [], terminalStatus: "no_reply" });
+    expect(harness.gateway.send).not.toHaveBeenCalled();
+  });
+
   it.each(["private", "group"] as const)("injects disabled voice context into the %s prompt and Provider", async (scope) => {
     const harness = createRuntimeHarness(async () => ({ kind: "completed", text: "voice context reply" }));
     const profile = defaultVoiceProfile();
@@ -100,6 +175,76 @@ describe("SunaRuntime reply debounce", () => {
       languages: [],
       defaultLanguage: "ja"
     });
+  });
+
+  it.each(["provider_failure", "cancelled", "superseded"] as const)(
+    "does not confirm model-context recall for a %s turn",
+    async (mode) => {
+      recallMemory.mockResolvedValue({ ok: true, matches: [longTermRecallMatch()] });
+      const controller = new AbortController();
+      let current = true;
+      const harness = createRuntimeHarness(async (_request, options) => {
+        await options?.memory?.recall({ query: "灯塔", source: "long_term" });
+        if (mode === "provider_failure") throw new Error("second model round failed");
+        if (mode === "cancelled") controller.abort(new Error("cancelled after tool recall"));
+        if (mode === "superseded") current = false;
+        return { kind: "completed", text: "late reply" };
+      });
+      const incoming = parseOneBotInboundMessage(privateEvent(30_992, `recall ${mode}`))!;
+      harness.runtime.recordIncomingMessage(incoming, { persist: false });
+
+      await harness.runtime.replyToIncoming(conversationRecordId(incoming), incoming, harness.gateway, {
+        signal: controller.signal,
+        isCurrent: () => current,
+        delivery: { outbox: [] }
+      });
+
+      expect(recordModelContextRecall).not.toHaveBeenCalled();
+    }
+  );
+
+  it("confirms initial and tool memory once after a successful current model turn", async () => {
+    recallMemory.mockResolvedValue({ ok: true, matches: [longTermRecallMatch()] });
+    const harness = createRuntimeHarness(async (_request, options) => {
+      await options?.memory?.recall({ query: "灯塔", source: "long_term" });
+      return { kind: "completed", text: "current reply" };
+    });
+    harness.runtime.renderPromptRequest = async (_id, variables) => renderFinalPromptTemplate(
+      parseFinalPromptTemplate(JSON.stringify({
+        messages: [
+          { role: "system", content: "<long_term>@{memory.long_term}</long_term>" },
+          { role: "user", content: "@{user.input}" }
+        ],
+        response_format: { type: "text" }
+      })),
+      variables
+    );
+    const incoming = parseOneBotInboundMessage(privateEvent(30_993, "successful recall"))!;
+    harness.runtime.recordIncomingMessage(incoming, { persist: false });
+
+    await harness.runtime.replyToIncoming(conversationRecordId(incoming), incoming, harness.gateway, {
+      delivery: { outbox: [] }
+    });
+
+    expect(recordModelContextRecall).toHaveBeenCalledOnce();
+    expect(recordModelContextRecall.mock.calls[0]?.[1]).toEqual([longTermRecallMatch()]);
+  });
+
+  it("does not infer memory-variable use from matching user text", async () => {
+    const match = longTermRecallMatch();
+    recallMemory.mockResolvedValue({ ok: true, matches: [match] });
+    const harness = createRuntimeHarness(async () => ({ kind: "completed", text: "reply" }));
+    const incoming = parseOneBotInboundMessage(privateEvent(
+      30_994,
+      `${match.sourceTitle}：${match.text}`
+    ))!;
+    harness.runtime.recordIncomingMessage(incoming, { persist: false });
+
+    await harness.runtime.replyToIncoming(conversationRecordId(incoming), incoming, harness.gateway, {
+      delivery: { outbox: [] }
+    });
+
+    expect(recordModelContextRecall).not.toHaveBeenCalled();
   });
 
   it("uses a five-second default trailing deadline", async () => {
@@ -192,7 +337,7 @@ describe("SunaRuntime reply debounce", () => {
       ]);
   });
 
-  it("keeps another group sender ambient, preserves the trigger deadline, and quotes the first trigger", async () => {
+  it("loads only the active group wake sender during debounce while retaining every raw group message", async () => {
     const requests: RenderedPromptRequest[] = [];
     const harness = createRuntimeHarness(async (request) => {
       requests.push(request);
@@ -229,13 +374,32 @@ describe("SunaRuntime reply debounce", () => {
       incoming: expect.objectContaining({ userId: 20_002 })
     }));
 
+    await delay(20);
+    await handleOneBotEvent(
+      harness.runtime,
+      groupEvent(31_022, 7_020, "additional detail from the active wake sender", 20_001),
+      harness.gateway
+    );
+    const bumped = harness.store.getActiveEvent(triggerSessionId, "reply_debounce")!;
+    expect(bumped.id).toBe(initial.id);
+    expect(bumped.availableAt).toBeGreaterThan(initial.availableAt);
+
     await waitUntil(() => sentOutbounds(harness.gateway).length === 1);
     await harness.runtime.sessionCoordinator.waitForIdle({ timeoutMs: 3_000 });
 
     expect(harness.completeRequestTurn).toHaveBeenCalledOnce();
-    expect(requests[0]!.messages.some((message) => (
-      message.content.includes("ambient context from another sender")
-    ))).toBe(true);
+    const providerPrompt = requests[0]!.messages.map((message) => message.content).join("\n");
+    const rawMessages = harness.runtime.conversationRecords.get(conversationRecordId(trigger))?.messages
+      .filter((message) => message.role === "user")
+      .map((message) => ({ userId: message.userId, text: message.text }));
+    expect(providerPrompt).toContain("Plana first group trigger");
+    expect(providerPrompt).toContain("additional detail from the active wake sender");
+    expect(providerPrompt).not.toContain("ambient context from another sender");
+    expect(rawMessages).toEqual([
+        { userId: 20_001, text: "Plana first group trigger" },
+        { userId: 20_002, text: "ambient context from another sender" },
+        { userId: 20_001, text: "additional detail from the active wake sender" }
+      ]);
     expect(sentOutbounds(harness.gateway)[0]).toMatchObject({
       groupId: 7_020,
       userId: 20_001,
@@ -560,7 +724,7 @@ describe("SunaRuntime reply debounce", () => {
     expect(agentB.store.listTurns(conversationId).map((turn) => turn.status)).toEqual(["replied"]);
   });
 
-  it("waits for another sender's conversation preparation before building Provider context", async () => {
+  it("does not wait for or load another group sender's pending preparation", async () => {
     const pendingPreparation = deferred<void>();
     const requests: RenderedPromptRequest[] = [];
     const harness = createRuntimeHarness(async (request) => {
@@ -591,23 +755,16 @@ describe("SunaRuntime reply debounce", () => {
     );
     const debounceSessionId = replyDebounceSessionId(trigger);
 
-    const conversationId = conversationRecordId(trigger);
-    await waitUntil(() => (
-      harness.store.listEvents(debounceSessionId)[0]?.status === "completed"
-      && harness.store.listTurns(debounceSessionId)[0]?.status === "no_reply"
-      && harness.store.listTurns(conversationId)[0]?.status === "running"
-    ));
-    expect(harness.completeRequestTurn).not.toHaveBeenCalled();
-    expect(sentOutbounds(harness.gateway)).toEqual([]);
-    pendingPreparation.resolve();
-
     await waitUntil(() => sentOutbounds(harness.gateway).length === 1);
     await harness.runtime.sessionCoordinator.waitForIdle({ timeoutMs: 3_000 });
 
     expect(harness.completeRequestTurn).toHaveBeenCalledOnce();
     expect(requests[0]!.messages.some((message) => (
       message.content.includes("ambient prepared image attachment context")
-    ))).toBe(true);
+    ))).toBe(false);
+    expect(harness.store.listEvents(debounceSessionId)[0]?.status).toBe("completed");
+    pendingPreparation.resolve();
+    await pendingPreparation.promise;
   });
 
   it("clears the trigger preparation after a waiting debounce is cancelled by its gate", async () => {
@@ -665,12 +822,12 @@ describe("SunaRuntime reply debounce", () => {
     expect(harness.completeRequestTurn).toHaveBeenCalledOnce();
   });
 
-  it("turns a positive ambient orchestrator decision into one delayed debounce reply", async () => {
+  it("dispatches a positive ambient orchestrator decision without a debounce event", async () => {
     const harness = createRuntimeHarness(async () => ({
       kind: "completed",
-      text: "ambient delayed reply"
+      text: "ambient immediate reply"
     }), {
-      replyDebounceMs: 120,
+      replyDebounceMs: 60_000,
       configure(config) {
         config.bot.orchestrator.enabled = true;
       }
@@ -704,16 +861,13 @@ describe("SunaRuntime reply debounce", () => {
 
     expect(harness.runtime.runUserGroupchatOrchestrator).toHaveBeenCalledOnce();
     expect(harness.store.getActiveEvent(replyDebounceSessionId(incoming), "reply_debounce"))
-      .toBeDefined();
-    expect(harness.completeRequestTurn).not.toHaveBeenCalled();
-    await delay(45);
-    expect(harness.completeRequestTurn).not.toHaveBeenCalled();
+      .toBeUndefined();
 
     await waitUntil(() => sentOutbounds(harness.gateway).length === 1);
     await harness.runtime.sessionCoordinator.waitForIdle({ timeoutMs: 3_000 });
     expect(harness.completeRequestTurn).toHaveBeenCalledOnce();
     expect(sentOutbounds(harness.gateway).map((message) => message.text))
-      .toEqual(["ambient delayed reply"]);
+      .toEqual(["ambient immediate reply"]);
   });
 
   it("keeps the ambient orchestrator result exact through handoff, Provider, and deferred callback", async () => {
@@ -794,8 +948,12 @@ describe("SunaRuntime reply debounce", () => {
 
     await harness.runtime.pumpAmbientReply(channelKey, state);
 
-    const debounce = harness.store.getActiveEvent(replyDebounceSessionId(incoming), "reply_debounce")!;
-    expect(decodeReplyDebounce(debounce.payload).orchestratorResult).toEqual(orchestratorResult);
+    expect(harness.store.getActiveEvent(replyDebounceSessionId(incoming), "reply_debounce"))
+      .toBeUndefined();
+    const incomingReply = harness.store.listEvents(channelKey)
+      .find((event) => event.kind === "incoming_reply");
+    expect(incomingReply).toBeDefined();
+    expect(decodeIncomingReply(incomingReply!.payload).orchestratorResult).toEqual(orchestratorResult);
     await waitUntil(() => requests.length >= 2, 5_000);
     await harness.runtime.sessionCoordinator.waitForIdle({ timeoutMs: 5_000 });
 
@@ -1518,7 +1676,7 @@ describe("SunaRuntime reply debounce", () => {
     expect(prepareGroupThreadContext).toHaveBeenCalledOnce();
     expect(prepareGroupThreadContext.mock.calls[0]?.[1]).toEqual(expect.objectContaining({
       captureSequence: 1,
-      contextThroughSequence: 2
+      contextThroughSequence: 1
     }));
     const followupHistory = requests[0]!.messages.find((message) => (
       message.content.includes("followup text with media")
@@ -1586,7 +1744,7 @@ describe("SunaRuntime reply debounce", () => {
         captureSequence: 2,
         incoming: expect.objectContaining({
           messageId: 31_161,
-          text: "durable follow-up with attachment",
+          text: "durable follow-up with attachment [内容图片#1]  [文件：durable.txt]",
           attachments: [expect.objectContaining({ name: "durable.txt" })]
         })
       })
@@ -1616,7 +1774,7 @@ describe("SunaRuntime reply debounce", () => {
       attachments: message.attachments?.map((attachment) => attachment.name)
     }))).toEqual([
       { sequence: 1, text: "durable trigger before follow-up crash", attachments: [] },
-      { sequence: 2, text: "durable follow-up with attachment", attachments: ["durable.txt"] }
+      { sequence: 2, text: "durable follow-up with attachment [内容图片#1]  [文件：durable.txt]", attachments: ["durable.txt"] }
     ]);
     const providerContent = requests[0]!.messages.map((message) => message.content).join("\n");
     expect(providerContent.indexOf("durable trigger before follow-up crash"))
@@ -1689,14 +1847,14 @@ describe("SunaRuntime reply debounce", () => {
       {
         id: "31171",
         sequence: 2,
-        text: "Plana sender B trigger",
+        text: "Plana sender B trigger [内容图片#1]  [文件：b2.txt]",
         images: ["https://example.test/b2.png"],
         attachments: ["b2.txt"]
       },
       {
         id: "31172",
         sequence: 3,
-        text: "sender A durable follow-up",
+        text: "sender A durable follow-up [内容图片#1]  [文件：a3.txt]",
         images: ["https://example.test/a3.png"],
         attachments: ["a3.txt"]
       }
@@ -1746,7 +1904,7 @@ describe("SunaRuntime reply debounce", () => {
       {
         sequence: 2,
         messageId: 31_181,
-        text: "/总结群聊",
+        text: "/总结群聊 [内容图片#1]  [文件：ordered-one.txt]",
         images: ["https://example.test/ordered-one.png"],
         attachments: ["ordered-one.txt"]
       },
@@ -1824,7 +1982,7 @@ describe("SunaRuntime reply debounce", () => {
       {
         sequence: 3,
         messageId: 31_197,
-        text: "concurrent C",
+        text: "concurrent C [内容图片#1]  [文件：concurrent-c.txt]",
         images: ["https://example.test/concurrent-c.png"],
         attachments: ["concurrent-c.txt"]
       }
@@ -1907,7 +2065,7 @@ describe("SunaRuntime reply debounce", () => {
       captureSequence: 71,
       incoming: expect.objectContaining({
         messageId: 32_070,
-        text: "window-item-070|",
+        text: "window-item-070| [内容图片#1]  [文件：tail-window.txt]",
         attachments: [expect.objectContaining({ name: "tail-window.txt" })]
       })
     }));
@@ -2172,7 +2330,7 @@ describe("SunaRuntime reply debounce", () => {
     const senderB = await handleOneBotEvent(before.runtime, senderBEvent, before.gateway);
     const senderBStoredId = before.runtime.conversationRecords
       .get(conversationRecordId(trigger))?.messages
-      .find((message) => message.text === "crash-safe context B with attachment")?.id;
+      .find((message) => message.text === "crash-safe context B with attachment [内容图片#1]  [文件：sender-b-restart.txt]")?.id;
     expect(senderBStoredId).toMatch(/^content:v1:/);
     expect(before.runtime.conversationRecords.get(conversationRecordId(trigger))?.messages
       .find((message) => message.id === senderBStoredId)?.attachments)
@@ -2219,7 +2377,7 @@ describe("SunaRuntime reply debounce", () => {
       {
         id: senderBStoredId,
         sequence: 2,
-        text: "crash-safe context B with attachment"
+        text: "crash-safe context B with attachment [内容图片#1]  [文件：sender-b-restart.txt]"
       }
     ]);
     const recoveredEvent = after.store.getActiveEvent(debounceSessionId, "reply_debounce")!;
@@ -2234,28 +2392,18 @@ describe("SunaRuntime reply debounce", () => {
     await after.runtime.sessionCoordinator.waitForIdle({ timeoutMs: 3_000 });
 
     const providerContent = requests[0]!.messages.map((message) => message.content).join("\n");
-    expect(providerContent.indexOf("Plana crash-safe trigger A"))
-      .toBeLessThan(providerContent.indexOf("crash-safe context B with attachment"));
     expect(providerContent.match(/Plana crash-safe trigger A/g)).toHaveLength(1);
-    expect(providerContent.match(/crash-safe context B with attachment/g)).toHaveLength(1);
-    expect(providerContent).toContain("SENDER_B_RESTART_ATTACHMENT_CONTEXT");
+    expect(providerContent).not.toContain("crash-safe context B with attachment");
+    expect(providerContent).not.toContain("SENDER_B_RESTART_ATTACHMENT_CONTEXT");
     expect(requests[0]!.messages.at(-1)?.imageUrls)
-      .toContain("https://example.test/sender-b-restart.png");
+      .not.toContain("https://example.test/sender-b-restart.png");
     const preparedSenderB = prepareIncomingMessage.mock.calls
       .find(([incoming]) => incoming.userId === 61_002)?.[0];
-    expect(preparedSenderB).toEqual(expect.objectContaining({
-      userId: 61_002,
-      attachments: [expect.objectContaining({ name: "sender-b-restart.txt" })]
-    }));
-    expect(preparedSenderB?.messageId).toBeUndefined();
-    expect(Object.hasOwn(preparedSenderB!, "messageId")).toBe(false);
-    expect(buildModelContext).toHaveBeenCalledWith(
-      [expect.objectContaining({ name: "sender-b-restart.txt", status: "ready" })],
-      expect.any(String)
-    );
+    expect(preparedSenderB).toBeUndefined();
+    expect(buildModelContext).not.toHaveBeenCalled();
     expect(after.runtime.conversationRecords.get(conversationRecordId(trigger))?.messages
       .find((message) => message.id === senderBStoredId)?.attachments)
-      .toEqual([expect.objectContaining({ name: "sender-b-restart.txt", status: "ready" })]);
+      .toEqual([expect.objectContaining({ name: "sender-b-restart.txt", status: "pending" })]);
     expect(after.completeRequestTurn).toHaveBeenCalledOnce();
   });
 
@@ -2577,6 +2725,20 @@ function fakeGateway() {
     })),
     poke: vi.fn(async () => ({ accepted: true as const }))
   } as unknown as MessagingPort;
+}
+
+function longTermRecallMatch() {
+  return {
+    id: "long-term-lighthouse",
+    source: "long_term" as const,
+    sourceTitle: "长期记忆",
+    fileName: "LONG_TERM_MEMORY.jsonl",
+    editable: true,
+    key: "long-term-lighthouse",
+    value: "我在海边看见一座发光的灯塔。",
+    text: "我在海边看见一座发光的灯塔。",
+    field: "fact"
+  };
 }
 
 async function handleOneBotEvent(

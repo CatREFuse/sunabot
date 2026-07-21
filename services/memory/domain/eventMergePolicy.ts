@@ -4,8 +4,10 @@ import {
   computeMemoryEventFingerprint,
   computeMemoryEventKey,
   isMemoryEventKey,
+  mergeCompatibleCausalChainKeys,
   memoryRecordChanged,
   normalizeIsoTimestamp,
+  normalizeAddressNames,
   normalizeStringArray,
   normalizeText,
   normalizeUserId,
@@ -43,6 +45,9 @@ export function mergeNormalizedEventFact(fact: NormalizedMemoryFact, previous: R
     userId: fact.userId || normalizeUserId(previous.userId),
     userIds: fact.userIds.length ? fact.userIds : normalizeUserIds(previous.userIds),
     userName: fact.userName || normalizeText(previous.userName),
+    addressNames: fact.addressNames.length
+      ? fact.addressNames
+      : normalizeAddressNames(previous.addressNames ?? previous.addressName ?? previous.address_name ?? previous.salutation),
     occurredAt: fact.occurredAt || normalizeIsoTimestamp(previous.occurredAt),
     occurredEndAt: fact.occurredEndAt || normalizeIsoTimestamp(previous.occurredEndAt),
     observedAt: fact.observedAt || normalizeIsoTimestamp(previous.observedAt),
@@ -55,6 +60,7 @@ export function mergeNormalizedEventFact(fact: NormalizedMemoryFact, previous: R
     eventType: fact.eventType || normalizeText(previous.eventType),
     subjectKey: fact.subjectKey || normalizeText(previous.subjectKey),
     eventKey: fact.eventKey || normalizeText(previous.eventKey),
+    causalChainKey: mergeCompatibleCausalChainKeys(fact.causalChainKey, previous.causalChainKey),
     eventFingerprint: fact.eventFingerprint || normalizeText(previous.eventFingerprint),
     longTermId: fact.longTermId || normalizeText(previous.longTermId),
     batchId: fact.batchId || normalizeText(previous.batchId),
@@ -68,6 +74,18 @@ export function attachWorkingSourcesToLongTermFacts(
 ) {
   const promotedWorkingFacts = workingFacts.filter((fact) => fact.promoteToLongTerm);
   return longTermFacts.map((longTermFact) => {
+    const sourceMappedWorking = promotedWorkingFacts.filter((workingFact) => (
+      longTermFact.sourceWorkingMemoryIds.includes(workingFact.id)
+    ));
+    if (sourceMappedWorking.length) {
+      return {
+        ...longTermFact,
+        causalChainKey: mergeCompatibleCausalChainKeys(
+          longTermFact.causalChainKey,
+          ...sourceMappedWorking.map((workingFact) => workingFact.causalChainKey)
+        )
+      };
+    }
     if (longTermFact.sourceWorkingMemoryIds.length) return longTermFact;
     const preparedLongTerm = prepareLongTermFact(longTermFact);
     const matchingWorking = promotedWorkingFacts.filter((workingFact) => {
@@ -76,7 +94,14 @@ export function attachWorkingSourcesToLongTermFacts(
       return preparedWorking.eventFingerprint === preparedLongTerm.eventFingerprint;
     });
     return matchingWorking.length === 1
-      ? { ...longTermFact, sourceWorkingMemoryIds: [matchingWorking[0]!.id] }
+      ? {
+          ...longTermFact,
+          sourceWorkingMemoryIds: [matchingWorking[0]!.id],
+          causalChainKey: mergeCompatibleCausalChainKeys(
+            longTermFact.causalChainKey,
+            matchingWorking[0]!.causalChainKey
+          )
+        }
       : longTermFact;
   });
 }
@@ -100,7 +125,11 @@ export function attachLongTermMappingsToWorkingFacts(
     return {
       ...workingFact,
       longTermId: normalizeText(mapped.value.id),
-      eventKey: normalizeText(mapped.value.eventKey) || preparedWorking.eventKey
+      eventKey: normalizeText(mapped.value.eventKey) || preparedWorking.eventKey,
+      causalChainKey: mergeCompatibleCausalChainKeys(
+        preparedWorking.causalChainKey,
+        mapped.value.causalChainKey
+      )
     };
   });
 }
@@ -143,6 +172,10 @@ export function buildLongTermMemoryRecords(
       : allocateLongTermId(prepared, metadata, factIndex, nextRecords);
     const previous = selected?.value ?? {};
     const combined = mergeNormalizedEventFact(prepared, previous);
+    combined.causalChainKey = mergeCompatibleCausalChainKeys(
+      prepared.causalChainKey,
+      ...matchingRecords.map((record) => record.value.causalChainKey)
+    );
     combined.sourceWorkingMemoryIds = uniqueStrings([
       ...matchingRecords.flatMap((record) => normalizeStringArray(record.value.sourceWorkingMemoryIds)),
       ...prepared.sourceWorkingMemoryIds
@@ -281,6 +314,7 @@ export function buildEventMemoryValue(
     occurredAt: fact.occurredAt,
     occurredEndAt: fact.occurredEndAt
   });
+  const causalChainKey = mergeCompatibleCausalChainKeys(fact.causalChainKey);
   const value: Record<string, unknown> = {
     ...metadata,
     schemaVersion: 2,
@@ -293,7 +327,9 @@ export function buildEventMemoryValue(
 
   delete value.time;
   delete value.address_name;
+  delete value.addressName;
   delete value.salutation;
+  delete value.userName;
   if (fact.time && !fact.occurredAt) value.legacyTime = fact.time;
   value.occurredAt = fact.occurredAt || null;
   value.occurredEndAt = fact.occurredEndAt || null;
@@ -302,8 +338,8 @@ export function buildEventMemoryValue(
   else delete value.userId;
   if (userIds.length) value.userIds = userIds;
   else delete value.userIds;
-  if (fact.userName) value.userName = fact.userName;
-  else delete value.userName;
+  if (fact.addressNames.length) value.addressNames = fact.addressNames;
+  else delete value.addressNames;
   if (fact.sourceWorkingMemoryIds.length) value.sourceWorkingMemoryIds = fact.sourceWorkingMemoryIds;
   else delete value.sourceWorkingMemoryIds;
   if (fact.sourceCandidateIds.length) value.sourceCandidateIds = fact.sourceCandidateIds;
@@ -314,6 +350,8 @@ export function buildEventMemoryValue(
   else delete value.subjectKey;
   if (eventKey) value.eventKey = eventKey;
   else delete value.eventKey;
+  if (causalChainKey) value.causalChainKey = causalChainKey;
+  else delete value.causalChainKey;
   value.eventFingerprint = eventFingerprint;
   if (fact.longTermId) value.longTermId = fact.longTermId;
   else delete value.longTermId;

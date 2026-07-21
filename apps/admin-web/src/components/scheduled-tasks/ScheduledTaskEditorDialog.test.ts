@@ -115,6 +115,9 @@ function taskWithMentions(mentionUserIds: string[]): ScheduledTask {
     context: "提醒大家提交日报",
     schedule: { kind: "cron", expression: "0 18 * * 1-5", timezone: "Asia/Shanghai" },
     targets: [{ conversationId: "group:10001", mentionUserIds }],
+    permanentRetention: false,
+    archived: false,
+    director: false,
     createdAt: "2026-07-19T00:00:00.000Z",
     updatedAt: "2026-07-19T00:00:00.000Z"
   };

@@ -309,6 +309,8 @@ defineExpose({ insertVariable });
 }
 .prompt-field__highlight :deep(.markup-code-fence) { color: rgb(var(--color-accent)); }
 .prompt-field__highlight :deep(.markup-quote) { color: rgb(var(--color-mute)); }
+.prompt-field__highlight :deep(.markup-directive) { color: rgb(var(--color-warning)); }
+.prompt-field__highlight :deep(.markup-condition) { color: rgb(var(--color-display)); }
 
 .prompt-field__suggestions {
   position: absolute;

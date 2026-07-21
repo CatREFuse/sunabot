@@ -52,7 +52,7 @@ describe("attachment runtime integration", () => {
       ]
     });
 
-    expect(incoming?.text).toBe("请读一下");
+    expect(incoming?.text).toBe("请读一下 [文件：需求说明.docx]");
     expect(incoming?.attachments).toEqual([
       expect.objectContaining({
         id: expect.stringMatching(/^attachment_[a-f0-9]{20}$/),
@@ -77,7 +77,7 @@ describe("attachment runtime integration", () => {
       raw_message: "[CQ:file,file=cq-file-id,name=发布计划.pdf,file_size=4096,busid=103]"
     });
 
-    expect(incoming?.text).toBe("");
+    expect(incoming?.text).toBe("[文件：发布计划.pdf]");
     expect(incoming?.attachments).toEqual([
       expect.objectContaining({
         source: "message",
@@ -114,7 +114,7 @@ describe("attachment runtime integration", () => {
       }
     }, { source: "quote" });
 
-    expect(details.text).toBe("原文件");
+    expect(details.text).toBe("原文件 [文件：会议材料.pptx]");
     expect(details.sender.displayName).toBe("引用用户");
     expect(details.attachments).toEqual([
       expect.objectContaining({
@@ -141,7 +141,7 @@ describe("attachment runtime integration", () => {
     });
 
     expect(incoming).toBeDefined();
-    expect(incoming?.text).toBe("");
+    expect(incoming?.text).toBe("[文件：说明.txt]");
     expect(hasIncomingReplyContent(incoming!)).toBe(true);
   });
 

@@ -8,6 +8,7 @@ export const WORKSPACE_LAYOUT = {
   mediaImages: "business/media/images",
   legacyData: "business/data/legacy",
   attachmentCache: "cache/attachments",
+  knowledgeCache: "cache/knowledge",
   conversationDirectoryCache: "cache/conversation-directory.json",
   codexJobs: "runtime/tmp/codex-jobs",
   runtimeLogs: "runtime/logs",

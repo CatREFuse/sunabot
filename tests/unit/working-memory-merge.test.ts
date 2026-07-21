@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { applicationDataStore } from "../../adapters/sqlite/applicationDataStore.js";
 import {
   appendMemoryFacts,
   readMemorySourceEntries
@@ -51,7 +52,7 @@ describe("working memory semantic merge", () => {
           id: first!.id,
           fact: "我注意到海边用户（QQ 10001）从 7 月 1 日提出迁移、7 月 3 日开始，到 7 月 5 日完成，连续进展最终让我安心。",
           userIds: ["10001"],
-          userName: "海边用户",
+          addressNames: ["海边用户"],
           occurredAt: "2026-07-01T00:00:00.000Z",
           occurredEndAt: "2026-07-05T00:00:00.000Z"
         }],
@@ -68,7 +69,7 @@ describe("working memory semantic merge", () => {
         id: first!.id,
         text: "我注意到海边用户（QQ 10001）从 7 月 1 日提出迁移、7 月 3 日开始，到 7 月 5 日完成，连续进展最终让我安心。",
         userIds: ["10001"],
-        userName: "海边用户",
+        addressNames: ["海边用户"],
         occurredAt: "2026-07-01T00:00:00.000Z",
         occurredEndAt: "2026-07-05T00:00:00.000Z"
       })
@@ -165,6 +166,78 @@ describe("working memory semantic merge", () => {
     ]);
     expect(complete).toHaveBeenCalledTimes(2);
   });
+
+  it("deduplicates long-term recall across one scheduler batch and snapshot retry", async () => {
+    const [related] = await appendMemoryFacts(config, "long_term", [{
+      fact: "测试群的长期记忆会参与工作记忆整理"
+    }]);
+    await appendMemoryFacts(config, "working", [{ fact: "原事实" }]);
+    let providerCalls = 0;
+    const complete = vi.fn(async (_systemPrompt: string, messages: Array<{ content: string }>) => {
+      const payload = parsePromptPayload(messages[0]!.content) as {
+        previousWorkingMemories: Array<{ id: string; fact: string }>;
+        relatedLongTermMemories: Array<{ id: string }>;
+      };
+      expect(payload.relatedLongTermMemories).toContainEqual(expect.objectContaining({ id: related!.id }));
+      providerCalls += 1;
+      if (providerCalls === 1) {
+        await appendMemoryFacts(config, "working", [{ fact: "并发写入事实" }]);
+      }
+      return JSON.stringify({
+        facts: payload.previousWorkingMemories.map((entry) => ({ id: entry.id, fact: entry.fact })),
+        allPreviousMemoriesInvalidated: false
+      });
+    });
+    const runtime = runtimeWithProvider(config, complete);
+    const batchId = `batch-${"x".repeat(400)}`;
+    const context = {
+      conversation: { id: "group:30003", scope: "user_group", title: "测试群" },
+      participants: [],
+      messages: [],
+      metadata: { source: "sunabot.memory.batch", batchId }
+    };
+
+    await expect(runtime.mergeWorkingMemory(context)).resolves.toMatchObject({
+      ok: true,
+      attempts: 2
+    });
+    await expect(runtime.mergeWorkingMemory({
+      ...context,
+      metadata: { ...context.metadata }
+    })).resolves.toMatchObject({ ok: true, attempts: 1 });
+
+    expect(applicationDataStore(config).listRecallStats([related!.id])[0]).toMatchObject({
+      recallCount: 1
+    });
+  });
+
+  it("counts long-term recall once for each manual consolidation operation", async () => {
+    const [related] = await appendMemoryFacts(config, "long_term", [{
+      fact: "工作记忆整理会参考这条长期记忆"
+    }]);
+    await appendMemoryFacts(config, "working", [{ fact: "需要整理的事实" }]);
+    const runtime = runtimeWithProvider(config, vi.fn(async (
+      _systemPrompt: string,
+      messages: Array<{ content: string }>
+    ) => {
+      const payload = parsePromptPayload(messages[0]!.content) as {
+        previousWorkingMemories: Array<{ id: string; fact: string }>;
+        relatedLongTermMemories: Array<{ id: string }>;
+      };
+      expect(payload.relatedLongTermMemories).toContainEqual(expect.objectContaining({ id: related!.id }));
+      return JSON.stringify({
+        facts: payload.previousWorkingMemories.map((entry) => ({ id: entry.id, fact: entry.fact })),
+        allPreviousMemoriesInvalidated: false
+      });
+    }));
+
+    await expect(runtime.consolidateWorkingMemory()).resolves.toMatchObject({ ok: true });
+    await expect(runtime.consolidateWorkingMemory()).resolves.toMatchObject({ ok: true });
+
+    expect(applicationDataStore(config).listRecallStats([related!.id])[0]).toMatchObject({
+      recallCount: 2
+    });
+  });
 });
 
 function runtimeWithProvider(
@@ -198,7 +271,7 @@ async function mergeConversation(runtime: SunaRuntime, text: string) {
         userId: string;
         names: string[];
         currentName: string;
-        addressName: string;
+        addressNames: string[];
         isAdmin: boolean;
       }>
     ): Promise<unknown>;
@@ -216,7 +289,7 @@ async function mergeConversation(runtime: SunaRuntime, text: string) {
     userId: "10001",
     names: ["海边用户"],
     currentName: "海边用户",
-    addressName: "海边用户",
+    addressNames: ["海边用户"],
     isAdmin: false
   }]);
 }

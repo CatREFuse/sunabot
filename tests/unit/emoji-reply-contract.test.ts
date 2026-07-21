@@ -34,7 +34,7 @@ describe("emoji durable reply segments", () => {
       ],
       contentSegments: [
         { type: "text", text: "前" },
-        { type: "image", imageIndex: 0 },
+        { type: "sticker", imageIndex: 0 },
         { type: "text", text: "后" },
         { type: "image", imageIndex: 1 }
       ],
@@ -67,7 +67,7 @@ describe("emoji durable reply segments", () => {
         ...base.payload,
         contentSegments: [
           { type: "text", text: "正文" },
-          { type: "image", imageIndex: 0 },
+          { type: "sticker", imageIndex: 0 },
           { type: "image", imageIndex: 0 }
         ]
       }

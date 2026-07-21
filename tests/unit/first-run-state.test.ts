@@ -171,7 +171,7 @@ describe("first-run bootstrap journal", () => {
       label: "future main schema version",
       mutate(workspace: string) {
         const database = new DatabaseSync(path.join(workspace, "business/data/sunabot.sqlite"));
-        database.prepare("UPDATE app_metadata SET value = '14' WHERE key = 'storage-schema-version'").run();
+        database.prepare("UPDATE app_metadata SET value = '17' WHERE key = 'storage-schema-version'").run();
         database.close();
       }
     },

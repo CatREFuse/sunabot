@@ -7,7 +7,10 @@ import {
 
 function runtime(): ScheduledTaskAdminRuntime {
   return {
-    listScheduledTasks: vi.fn(() => [{ id: "task-1" }]),
+    listScheduledTasks: vi.fn(() => ({
+      tasks: [{ id: "task-1" }],
+      pagination: { page: 2, pageSize: 20, total: 21, pageCount: 2 }
+    })),
     getScheduledTask: vi.fn((id) => ({ id })),
     createScheduledTask: vi.fn((input) => ({ id: "task-2", input })),
     updateScheduledTask: vi.fn((id, input) => ({ id, input })),
@@ -25,9 +28,19 @@ describe("scheduled task routes", () => {
       getRuntime: (agentId) => agentId === "arona" ? arona : plana
     });
 
-    expect((await app.inject({ method: "GET", url: "/api/scheduled-tasks?agentId=arona" })).json())
-      .toEqual({ tasks: [{ id: "task-1" }] });
-    expect(arona.listScheduledTasks).toHaveBeenCalledOnce();
+    expect((await app.inject({
+      method: "GET",
+      url: "/api/scheduled-tasks?agentId=arona&category=director&page=2&pageSize=20"
+    })).json()).toEqual({
+      tasks: [{ id: "task-1" }],
+      pagination: { page: 2, pageSize: 20, total: 21, pageCount: 2 }
+    });
+    expect(arona.listScheduledTasks).toHaveBeenCalledWith({ category: "director", page: 2, pageSize: 20 });
+    expect((await app.inject({
+      method: "GET",
+      url: "/api/scheduled-tasks?agentId=arona&category=unknown&page=0&pageSize=101"
+    })).statusCode).toBe(400);
+    expect(arona.listScheduledTasks).toHaveBeenCalledTimes(1);
 
     const created = await app.inject({
       method: "POST",

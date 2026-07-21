@@ -159,7 +159,8 @@ export function outboundForIncoming(
   text: string,
   images: ImageResult[] = [],
   replyToMessageId?: number,
-  contentSegments?: OutboundMessageV1["contentSegments"]
+  contentSegments?: OutboundMessageV1["contentSegments"],
+  mentionUserIds?: readonly number[]
 ): OutboundMessageV1 {
   return {
     schemaVersion: 1,
@@ -173,7 +174,8 @@ export function outboundForIncoming(
     text,
     media: images.map(generatedImageMediaAsset).filter((asset): asset is NonNullable<typeof asset> => Boolean(asset)),
     ...(contentSegments?.length ? { contentSegments: contentSegments.map((segment) => ({ ...segment })) } : {}),
-    ...(replyToMessageId ? { replyToMessageId } : {})
+    ...(replyToMessageId ? { replyToMessageId } : {}),
+    ...(mentionUserIds?.length ? { mentionUserIds: [...mentionUserIds] } : {})
   };
 }
 export function outboundForRecord(record: ConversationRecord, text: string): OutboundMessageV1 {
@@ -607,6 +609,9 @@ export function selectRelevantConversationAttachments(
   if (record && contextThroughSequence != null && contextFromSequence != null) {
     const windowAttachments = record.messages
       .filter((message) => message.role === "user")
+      .filter((message) => (
+        incoming.scope === "private" || message.userId === incoming.userId
+      ))
       .filter((message) => {
         const sequence = Number(message.sequence ?? 0);
         return Number.isSafeInteger(sequence) &&

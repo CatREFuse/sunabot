@@ -5,7 +5,7 @@ test("群聊回复联动在离开前完成自动同步", async ({ page }) => {
   const state = await installMockApi(page);
   await page.goto("/agent-settings/orchestrator");
 
-  const groupReply = page.getByLabel("启用", { exact: true });
+  const groupReply = page.getByLabel("启用群聊回复", { exact: true });
   await expect(groupReply).toBeChecked();
   await groupReply.uncheck();
 

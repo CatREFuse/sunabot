@@ -24,18 +24,26 @@ const startupSeconds = computed({
   <section class="grid gap-8">
     <div>
       <h2 class="section-title">群聊编排器</h2>
+      <p class="mt-2 text-sm leading-6 text-mute">分离群聊主题，并控制 Agent 的主动回复。</p>
     </div>
-    <div class="grid gap-5 sm:grid-cols-2">
+    <div class="settings-group grid gap-5 sm:grid-cols-2">
+      <div class="sm:col-span-2">
+        <h3 class="settings-group-title">Thread 拆分</h3>
+        <p class="settings-group-description">用于识别同一群聊中的并行话题。</p>
+      </div>
       <ModelSelect v-model="draft.groupThreadModel" :models="models" label="Thread 拆分模型" />
     </div>
-    <div class="divide-y divide-line border-y border-line">
-      <ToggleSwitch v-model="groupEnabled" label="启用" />
-      <ToggleSwitch v-model="draft.enabled" label="编排器" :disabled="!groupEnabled" />
-      <p v-if="groupEnabled && !draft.enabled" class="py-3 text-xs leading-5 text-mute">使用规则匹配回复</p>
-      <p v-else-if="groupEnabled" class="py-3 text-xs leading-5 text-mute">每个群每分钟最多主动回复 1 次</p>
+    <div class="settings-group grid gap-4">
+      <h3 class="settings-group-title">主动回复</h3>
+      <div class="divide-y divide-line border-y border-line">
+        <ToggleSwitch v-model="groupEnabled" label="启用群聊回复" />
+        <ToggleSwitch v-model="draft.enabled" label="启用编排器" :disabled="!groupEnabled" />
+        <p v-if="groupEnabled && !draft.enabled" class="py-3 text-xs leading-5 text-mute">使用规则匹配回复</p>
+        <p v-else-if="groupEnabled" class="py-3 text-xs leading-5 text-mute">每个群每分钟最多主动回复 1 次</p>
+      </div>
     </div>
     <fieldset
-      class="grid gap-5 sm:grid-cols-2"
+      class="settings-group grid gap-5 sm:grid-cols-2"
       :class="{ 'opacity-50': !groupEnabled || !draft.enabled }"
       :disabled="!groupEnabled || !draft.enabled"
     >

@@ -230,6 +230,9 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     if (!await variableTable.isVisible()) await page.getByRole("button", { name: "变量表", exact: true }).click();
     await expect(variableTable).toBeVisible();
     await capture(page, viewport.name, theme, "prompts-variable-table");
+    await variableTable.getByRole("button").first().locator(".variable-context__token").hover();
+    await expect(page.getByRole("tooltip")).toBeVisible();
+    await capture(page, viewport.name, theme, "prompts-variable-tooltip");
 
     await page.goto("/logs");
     await expect(page.getByRole("heading", { name: "日志", exact: true })).toBeVisible();
@@ -265,7 +268,7 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     await capture(page, viewport.name, theme, "settings-providers");
 
     await page.goto("/settings/normalReply");
-    await expect(page.getByRole("heading", { name: "正常回复" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "回复重试" })).toBeVisible();
     await expect(page.getByLabel("失败重试次数")).toHaveValue("3");
     await capture(page, viewport.name, theme, "settings-normal-reply");
 
@@ -274,8 +277,8 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
       await expect(page.getByRole("heading", { name: "配置医生", exact: true })).toBeVisible();
       await expect(page.getByText("发现 1 项可修复问题", { exact: true })).toBeVisible();
       await capture(page, viewport.name, theme, "settings-config-doctor-report");
-      await page.getByRole("button", { name: "应用修复", exact: true }).click();
-      const doctorDialog = page.getByRole("dialog", { name: "应用这些修复？" });
+      await page.getByRole("button", { name: "一键修复", exact: true }).click();
+      const doctorDialog = page.getByRole("dialog", { name: "修复全部配置？" });
       await expect(doctorDialog).toBeVisible();
       await capture(page, viewport.name, theme, "settings-config-doctor-confirm");
       await doctorDialog.getByRole("button", { name: "取消", exact: true }).click();
@@ -288,7 +291,7 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
 
     await page.goto("/agent-settings/orchestrator");
     await expect(page.getByRole("heading", { name: "群聊编排器" })).toBeVisible();
-    await page.getByLabel("编排器", { exact: true }).uncheck();
+    await page.getByLabel("启用编排器", { exact: true }).uncheck();
     await expect(page.getByLabel("Thread 拆分模型")).toBeEnabled();
     await expect(page.getByLabel("启动时间 / 秒")).toHaveValue("60");
     await page.getByLabel("启动时间 / 秒").scrollIntoViewIfNeeded();
@@ -296,6 +299,12 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
 
     await page.goto("/agent-settings/tone");
     await expect(page.getByRole("heading", { name: "语气处理" })).toBeVisible();
+    const toneEnabled = page.getByLabel("启用语气处理");
+    if (!await toneEnabled.isChecked()) {
+      await expect(page.getByLabel("分段回复")).toBeDisabled();
+      await toneEnabled.check();
+    }
+    await expect(page.getByLabel("分段回复")).toBeEnabled();
     await capture(page, viewport.name, theme, "settings-tone");
     await page.getByLabel("主模型跟随").check();
     await expect(page.getByLabel("Provider")).toBeDisabled();
@@ -305,6 +314,16 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     await page.goto("/agent-settings/persona");
     await expect(page.getByRole("heading", { name: "Agent 身份" })).toBeVisible();
     await capture(page, viewport.name, theme, "settings-agent-identity");
+
+    await page.goto("/agent-settings/memory");
+    await expect(page.getByRole("heading", { name: "记忆处理" })).toBeVisible();
+    await capture(page, viewport.name, theme, "settings-memory");
+    const dreamSampling = page.getByRole("heading", { name: "Dream 抽样" });
+    await dreamSampling.scrollIntoViewIfNeeded();
+    await expect(page.getByLabel("近期窗口（小时）")).toHaveValue("48");
+    await expect(page.getByLabel("近期记忆数")).toHaveValue("12");
+    await expect(page.getByLabel("更早记忆数")).toHaveValue("12");
+    await capture(page, viewport.name, theme, "settings-memory-dream");
 
     await page.goto("/agent-settings/tools");
     await page.getByRole("tab", { name: "运行参数", exact: true }).click();
@@ -321,17 +340,16 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
 
     await page.goto("/agent-settings/bash");
     await expect(page.getByRole("heading", { name: "命令执行" })).toBeVisible();
-    state.nextPatchError = "群聊命令需要管理员限制。";
-    const allowGroupBash = page.getByLabel("允许管理员在群聊中使用");
-    await allowGroupBash.focus();
-    await allowGroupBash.press("Space");
-    await expect(allowGroupBash).toBeChecked();
-    await expect(page.getByText(/群聊命令需要管理员限制/)).toBeVisible();
+    state.nextPatchError = "审批模型不可用。";
+    await page.getByLabel("对抗审批 Agent").fill("gpt-unavailable");
+    await page.locator('[data-confirm-label="确认审批模型"]').click();
+    await expect(page.getByText(/审批模型不可用/)).toBeVisible();
     await capture(page, viewport.name, theme, "settings-validation-error");
 
     await page.goto("/settings/onebot");
-    await expect(page.getByRole("heading", { name: "通知与连接监控" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "OneBot" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "连接与通知" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Bark 通知" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "OneBot 连接" })).toBeVisible();
     await capture(page, viewport.name, theme, "settings-connections");
 
     await page.goto("/settings/security");
@@ -342,6 +360,7 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     await page.goto("/agent-settings/bot");
     await expect(page.getByLabel("过滤名单")).toBeVisible();
     await capture(page, viewport.name, theme, "settings-reply-behavior");
+    await page.goto("/agent-settings/persona");
     await page.getByLabel("管理员称呼").fill("新的管理员称呼");
     await expect(page.locator('[data-confirm-label="确认管理员称呼"]')).toBeEnabled();
     await capture(page, viewport.name, theme, "settings-field-confirm-pending");
@@ -354,14 +373,18 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     await page.goto("/memory");
     await expect(page.getByRole("heading", { name: "记忆", exact: true })).toBeVisible();
     await capture(page, viewport.name, theme, "memory-list");
+    const memoryPagination = page.getByRole("navigation", { name: "记忆分页" });
+    await expect(memoryPagination).toBeVisible();
+    await memoryPagination.scrollIntoViewIfNeeded();
+    await capture(page, viewport.name, theme, "memory-pagination");
     await page.getByRole("button", { name: "新增" }).click();
     await expect(page.getByRole("heading", { name: "新增记忆" })).toBeVisible();
     await capture(page, viewport.name, theme, "memory-editor");
     await page.getByRole("button", { name: "关闭" }).click();
     await page.getByRole("button", { name: "用户画像" }).click();
-    const profileRow = page.locator("article").filter({ hasText: "称呼 猫老师" });
+    const profileRow = page.locator("article").filter({ hasText: "称呼 猫老师、老师" });
     await profileRow.getByRole("button", { name: "编辑记忆" }).click();
-    await expect(page.getByLabel("称呼")).toHaveValue("猫老师");
+    await expect(page.getByLabel("称呼")).toHaveValue("猫老师、老师");
     await capture(page, viewport.name, theme, "memory-profile-editor");
     await page.getByRole("button", { name: "关闭" }).click();
 
@@ -450,15 +473,9 @@ test("语音设置四视口矩阵", async ({ page }, testInfo) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await page.goto("/voice");
     await expect(page.getByRole("heading", { name: "语音", exact: true })).toBeVisible();
-    await expect(page.getByText("MOSS-TTS-Nano", { exact: true })).toBeVisible();
+    await expect(page.getByLabel("接口协议")).toHaveValue("openai-audio");
     await expect(page.getByText("kivo-plana-ja.wav", { exact: true })).toBeVisible();
     await capture(page, viewport.name, theme, "voice-settings");
-
-    await page.getByRole("button", { name: "关闭服务", exact: true }).click();
-    const stopDialog = page.getByRole("dialog", { name: "关闭语音服务？" });
-    await expect(stopDialog).toBeVisible();
-    await capture(page, viewport.name, theme, "voice-service-stop");
-    await stopDialog.getByRole("button", { name: "取消", exact: true }).click();
 
     await page.getByRole("button", { name: "替换音频", exact: true }).click();
     const uploadDialog = page.getByRole("dialog", { name: "替换日本語参考音频" });
@@ -535,7 +552,8 @@ test("工具目录四视口矩阵", async ({ page }, testInfo) => {
     await page.goto("/agent-settings/tools");
     await expect(page.getByRole("tab", { name: "工具目录", exact: true })).toHaveAttribute("aria-selected", "true");
     await expect(page.getByLabel("搜索工具")).toBeVisible();
-    await expect(page.getByLabel(/^启用 /)).toHaveCount(17);
+    await expect(page.getByLabel(/^启用 /)).toHaveCount(21);
+    await expect(page.getByText("read_air", { exact: true })).toBeVisible();
     await expect(page.getByText("cron", { exact: true })).toBeVisible();
     await capture(page, viewport.name, theme, "settings-tools-catalog");
 
@@ -576,23 +594,26 @@ test("Bash 权限与会话状态四视口矩阵", async ({ page }, testInfo) => 
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await page.goto("/agent-settings/bash");
     await expect(page.getByRole("heading", { name: "命令执行" })).toBeVisible();
-    await expect(page.getByLabel("管理员私聊后端")).toHaveValue("native");
-    await expect(page.getByLabel("严格审计")).toBeVisible();
-    await expect(page.getByLabel("管理员身份门禁")).toBeVisible();
-    await expect(page.getByLabel("允许管理员在群聊中使用")).toBeVisible();
-    await expect(page.getByText("只读逐次确认", { exact: true })).toBeVisible();
+    await expect(page.getByText("对抗审批 Agent", { exact: true })).toBeVisible();
+    await expect(page.getByLabel("严格审批")).toBeVisible();
+    await expect(page.getByText("Native Bash", { exact: true })).toBeVisible();
+    await expect(page.getByText("Docker Bash", { exact: true })).toBeVisible();
+    await expect(page.getByText("Skill 与 MCP · Docker 只读", { exact: true })).toBeVisible();
     await capture(page, viewport.name, theme, "settings-bash-permissions");
 
     await page.goto("/agent-settings/tools");
     await page.getByLabel("搜索工具").fill("workspace_bash");
     const bashRow = page.locator("article").filter({ has: page.getByText("workspace_bash", { exact: true }) });
-    await expect(bashRow.getByText("仅管理员 QQ 私聊", { exact: true })).toBeVisible();
+    await expect(bashRow.getByText("管理员私聊 Native · 群聊与其他私聊 Docker", { exact: true })).toBeVisible();
+    await expect(bashRow.getByText("[native bash] 不可用", { exact: true })).toBeVisible();
+    await expect(bashRow.getByText("[docker bash] 已启动", { exact: true })).toBeVisible();
     await expect(bashRow.getByText("运行环境异常", { exact: true })).toHaveCount(0);
     await capture(page, viewport.name, theme, "settings-bash-session-scope");
     await bashRow.getByRole("button", { name: "查看 Bash 详情" }).click();
     const dialog = page.getByRole("dialog", { name: "Bash" });
     await expect(dialog.getByText("适用会话", { exact: true })).toBeVisible();
-    await expect(dialog.getByText("管理员私聊后端", { exact: true })).toBeVisible();
+    await expect(dialog.getByText("[native bash]", { exact: true })).toBeVisible();
+    await expect(dialog.getByText("[docker bash]", { exact: true })).toBeVisible();
     await capture(page, viewport.name, theme, "settings-bash-detail");
     await dialog.getByRole("button", { name: "关闭工具详情" }).click();
   }
@@ -607,8 +628,9 @@ test("连接设置四视口矩阵", async ({ page }, testInfo) => {
   for (const viewport of viewports) {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await page.goto("/settings/onebot");
-    await expect(page.getByRole("heading", { name: "通知与连接监控" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "OneBot" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "连接与通知" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Bark 通知" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "OneBot 连接" })).toBeVisible();
     await capture(page, viewport.name, theme, "settings-connections");
   }
 });
@@ -639,6 +661,36 @@ test("提示词编辑器光标对齐", async ({ page }, testInfo) => {
     element.setSelectionRange(position, position);
   });
   await capture(page, "1440x900", theme, "prompt-cursor-alignment");
+});
+
+test("提示词 s-if 条件语法高亮", async ({ page }, testInfo) => {
+  const theme = testInfo.project.name.endsWith("dark") ? "dark" : "light";
+  await page.addInitScript((selectedTheme) => localStorage.setItem("sunabot.theme", selectedTheme), theme);
+  await page.emulateMedia({ colorScheme: theme, reducedMotion: "reduce" });
+  await installMockApi(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/system-prompts/conversation.tone-rewrite");
+
+  await page.getByRole("textbox", { name: "system 提示词" }).fill([
+    "分段 XML 检查",
+    '<xml-check s-if="tone_mode == true">',
+    "只允许规定的顶层标签，绝对不可嵌套。",
+    "</xml-check>"
+  ].join("\n"));
+
+  const directive = page.locator(".prompt-field__highlight .markup-directive").filter({
+    hasText: 's-if="tone_mode == true"'
+  });
+  await expect(directive).toBeVisible();
+  await expect(directive.locator(".markup-condition")).toHaveText("tone_mode == true");
+  const colors = await directive.evaluate((element) => ({
+    directive: getComputedStyle(element).color,
+    condition: getComputedStyle(element.querySelector(".markup-condition")!).color,
+    xml: getComputedStyle(element.closest(".markup-xml")!).color
+  }));
+  expect(colors.directive).not.toBe(colors.xml);
+  expect(colors.condition).not.toBe(colors.directive);
+  await capture(page, "1440x900", theme, "prompt-s-if-highlight");
 });
 
 async function capture(

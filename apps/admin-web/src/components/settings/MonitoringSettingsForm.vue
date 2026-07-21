@@ -152,13 +152,14 @@ function errorMessage(reason: unknown, fallback: string) {
 }
 
 defineExpose({ flush, cancel });
+withDefaults(defineProps<{ nested?: boolean }>(), { nested: false });
 </script>
 
 <template>
   <section class="grid gap-8" @change="handleChange">
     <div class="flex flex-wrap items-start justify-between gap-4">
       <div>
-        <h2 class="section-title">通知与连接监控</h2>
+        <h3 class="settings-group-title">Bark 通知</h3>
         <p class="mt-2 max-w-2xl text-sm leading-6 text-mute">设置 Bark 后，连接异常与服务异常会自动合并提醒，减少重复消息。</p>
       </div>
       <span class="inline-state" :data-kind="configured ? 'success' : 'warning'">{{ configured ? "已配置" : "未配置" }}</span>

@@ -58,6 +58,26 @@ describe("ScheduledTaskScheduler", () => {
     await expect(scheduler.runOnce()).resolves.toMatchObject({ claimedOccurrences: 0, claimedRuns: 0 });
   });
 
+  it("purges an expired archive during the normal scheduler drain", async () => {
+    const task = createTask("2026-07-19T00:01:00.000Z");
+    now = Date.parse("2026-07-19T00:02:00.000Z");
+    const scheduler = new ScheduledTaskScheduler({
+      store,
+      workerId: "scheduler:archive-cleanup",
+      leaseMs: 500,
+      clock: () => new Date(now),
+      generate: async () => "定时回复",
+      deliver: async () => undefined
+    });
+    await scheduler.runOnce();
+    expect(store.get(task.id)).toBeDefined();
+
+    now = Date.parse("2026-07-22T00:02:00.000Z");
+    await expect(scheduler.runOnce()).resolves.toMatchObject({ claimedOccurrences: 0, claimedRuns: 0 });
+    expect(store.get(task.id)).toBeUndefined();
+    expect(store.listRuns(task.id)).toHaveLength(1);
+  });
+
   it("recovers a generated run after lease expiry without calling generate again", async () => {
     const task = createTask("2026-07-19T00:01:00.000Z");
     now = Date.parse("2026-07-19T00:02:00.000Z");
@@ -162,7 +182,7 @@ describe("ScheduledTaskScheduler", () => {
     });
     expect(deliver).not.toHaveBeenCalled();
     expect(store.listRuns()[0]).toMatchObject({ status: "failed", errorText: "provider failed" });
-    expect(store.nextWakeAt()).toBeNull();
+    expect(store.nextWakeAt()).toBe("2026-07-22T00:02:00.000Z");
   });
 
   function createTask(runAt: string) {

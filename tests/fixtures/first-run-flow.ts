@@ -147,6 +147,7 @@ try {
     onebot?.once("open", resolve);
     onebot?.once("error", reject);
   });
+  const providerRequestsBeforeFirstInbound = providerRequests.length;
   onebot.send(JSON.stringify({
     time: Math.floor(Date.now() / 1_000),
     self_id: 246801357,
@@ -184,7 +185,10 @@ try {
   }
   const providerRequestsBeforeEnable = providerRequests.length;
   const repliesBeforeEnable = sentPrivateMessages.length;
-  if (providerRequestsBeforeEnable !== 0 || repliesBeforeEnable !== 0) {
+  if (
+    providerRequestsBeforeEnable !== providerRequestsBeforeFirstInbound
+    || repliesBeforeEnable !== 0
+  ) {
     throw new Error("First-run inbound message bypassed the disabled reply gate.");
   }
   const enabledConversation = await built.app.inject({
@@ -220,6 +224,7 @@ try {
     adminAuthenticated: session.json().authenticated === true,
     providerId: selected.json().config?.providers?.defaultProviderId,
     providerRequests: providerRequests.length,
+    providerRequestsBeforeFirstInbound,
     providerRequestsBeforeEnable,
     agentId: createdAgent.json().id,
     accountRuntime: reconciled.includes(account.id) && account.observedState === "running" ? "running" : "missing",

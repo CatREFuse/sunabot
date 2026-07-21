@@ -19,6 +19,9 @@ test("表情可按 Agent 管理、生成、上传与删除", async ({ page }) =>
   await sendSize.getByRole("button", { name: "128", exact: true }).click();
   await expect(page.getByText("发送尺寸已设为 128px", { exact: true })).toBeVisible();
   expect(mock.sendSizeByAgent.plana).toBe(128);
+  await page.getByText("表情单独发送", { exact: true }).click();
+  await expect(page.getByText("表情将单独发送", { exact: true })).toBeVisible();
+  expect(mock.sendSeparatelyByAgent.plana).toBe(true);
   await expect(page.getByRole("heading", { name: "摸鱼", exact: true })).toBeVisible();
   await expect(page.getByText("[/摸鱼]", { exact: true })).toBeVisible();
 

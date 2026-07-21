@@ -19,6 +19,16 @@
     --color-success: 57 132 74;
     --color-warning: 160 116 25;
     --color-interactive: 0 92 184;
+    --font-display: "Doto Variable", "Space Mono", monospace;
+    --font-ui: "Space Grotesk Variable", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    --font-data: "Space Mono", monospace;
+    --radius-surface: 0px;
+    --radius-technical: 4px;
+    --radius-control: 4px;
+    --radius-overlay: 16px;
+    --motion-fast: 180ms;
+    --motion-standard: 240ms;
+    --motion-ease: cubic-bezier(0.25, 0.1, 0.25, 1);
   }
 
   :root[data-theme="dark"] {
@@ -80,7 +90,7 @@
     overflow: hidden;
     background: rgb(var(--color-page));
     color: rgb(var(--color-ink));
-    font-family: "Space Grotesk Variable", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    font-family: var(--font-ui);
     font-size: 1rem;
     line-height: 1.5;
     text-rendering: optimizeLegibility;
@@ -154,7 +164,7 @@
   }
 
   .page-title {
-    @apply font-sans text-[36px] font-medium leading-none tracking-[-0.03em] text-display md:text-[48px];
+    @apply font-sans text-[32px] font-medium leading-none tracking-[-0.03em] text-display md:text-[40px];
   }
 
   .page-intro {
@@ -208,6 +218,7 @@
 
   .control {
     @apply min-h-11 w-full min-w-0 rounded border border-visible bg-page px-3 py-2 font-mono text-sm text-ink transition-colors duration-200 placeholder:text-disabled hover:border-mute focus:border-display focus:outline-none;
+    border-radius: var(--radius-control);
   }
 
   textarea.control {
@@ -253,6 +264,22 @@
   .dot-grid {
     background-image: radial-gradient(circle, rgb(var(--color-visible)) 1px, transparent 1px);
     background-size: 16px 16px;
+  }
+
+  .settings-group {
+    @apply border-t border-line pt-6;
+  }
+
+  .settings-group:first-child {
+    @apply border-t-0 pt-0;
+  }
+
+  .settings-group-title {
+    @apply text-base font-medium text-display;
+  }
+
+  .settings-group-description {
+    @apply mt-1 max-w-2xl text-sm leading-6 text-mute;
   }
 }
 

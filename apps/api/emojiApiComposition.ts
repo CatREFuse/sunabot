@@ -57,7 +57,7 @@ export function registerAgentEmojiApi(
       },
       update: async (agentId, input) => {
         const envelope = await configEnvelopeFor(agentId);
-        const value = botSectionValue(envelope.config.bot, input.sendSize);
+        const value = botSectionValue(envelope.config.bot, input.sendSize, input.sendSeparately);
         const updated = agentId === options.runtime.config.persona.defaultAgentId
           ? await options.configService.patch("bot", { revision: input.revision, value })
           : await options.agentConfigService.patch(agentId, "bot", { revision: input.revision, value });
@@ -68,10 +68,14 @@ export function registerAgentEmojiApi(
 }
 
 function emojiSettings(bot: BotConfig, revision: string) {
-  return { sendSize: bot.emojiSendSize, revision };
+  return {
+    sendSize: bot.emojiSendSize,
+    sendSeparately: bot.emojiSendSeparately,
+    revision
+  };
 }
 
-function botSectionValue(bot: BotConfig, emojiSendSize: EmojiSendSize) {
+function botSectionValue(bot: BotConfig, emojiSendSize: EmojiSendSize, emojiSendSeparately: boolean) {
   return {
     adminQq: bot.adminQq,
     adminName: bot.adminName,
@@ -80,6 +84,7 @@ function botSectionValue(bot: BotConfig, emojiSendSize: EmojiSendSize) {
     quoteGroupReplies: bot.quoteGroupReplies,
     quoteGroupReplyExcludedUserIds: [...bot.quoteGroupReplyExcludedUserIds],
     contextMessageLimit: bot.contextMessageLimit,
-    emojiSendSize
+    emojiSendSize,
+    emojiSendSeparately
   };
 }

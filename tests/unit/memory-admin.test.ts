@@ -64,10 +64,10 @@ describe("admin memory mutations", () => {
     const result = await replaceWorkingMemoryFacts(config, [
       {
         id: first!.id,
-        fact: "QQ 10001 喜欢海边旅行。",
+        fact: "海边用户（QQ 10001）喜欢海边旅行。",
         time: "2026-07-01T00:00:00.000Z/2026-07-02T00:00:00.000Z",
         userIds: ["10001"],
-        userName: "海边用户"
+        addressNames: ["海边用户"]
       },
       { id: "invented-id", fact: "QQ 20002 喜欢登山。", userIds: ["20002"] }
     ], {
@@ -80,11 +80,11 @@ describe("admin memory mutations", () => {
     expect(stored).toHaveLength(2);
     expect(stored[0]).toMatchObject({
       id: first!.id,
-      text: "QQ 10001 喜欢海边旅行。",
+      text: "海边用户（QQ 10001）喜欢海边旅行。",
       createdAt: first!.createdAt,
       updatedAt: expect.any(String),
       userIds: ["10001"],
-      userName: "海边用户"
+      addressNames: ["海边用户"]
     });
     expect(stored.map((entry) => entry.id)).not.toContain(duplicate!.id);
     expect(stored[1]!.id).not.toBe("invented-id");

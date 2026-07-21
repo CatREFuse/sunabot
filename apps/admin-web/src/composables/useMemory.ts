@@ -15,22 +15,37 @@ export function useMemory() {
   const error = shallowRef("");
   const activeSource = shallowRef<MemorySourceId>("working");
   let controller: AbortController | undefined;
+  let requestAgentId = "";
+  let contextGeneration = 0;
 
-  async function load(source: MemorySourceId = activeSource.value) {
+  async function load(source: MemorySourceId = activeSource.value, agentId?: string) {
+    const normalizedAgentId = agentId?.trim() ?? "";
+    const generation = ++contextGeneration;
     activeSource.value = source;
     controller?.abort();
-    controller = new AbortController();
+    const requestController = new AbortController();
+    controller = requestController;
+    if (requestAgentId && normalizedAgentId && requestAgentId !== normalizedAgentId) {
+      entries.value = [];
+      clearMatches();
+    }
+    requestAgentId = normalizedAgentId;
     loading.value = true;
+    const agentQuery = normalizedAgentId ? `&agentId=${encodeURIComponent(normalizedAgentId)}` : "";
     try {
-      const payload = await apiRequest<MemoryPayload>(`/api/memory?source=${encodeURIComponent(source)}`, { signal: controller.signal });
+      const payload = await apiRequest<MemoryPayload>(`/api/memory?source=${encodeURIComponent(source)}${agentQuery}`, { signal: requestController.signal });
+      if (generation !== contextGeneration) return false;
       sources.value = payload.sources.filter((item) => supportedSources.has(String(item.id)));
       entries.value = payload.entries.filter((item) => supportedSources.has(String(item.source)));
       error.value = "";
+      return true;
     } catch (caught) {
-      if (caught instanceof DOMException && caught.name === "AbortError") return;
+      if (generation !== contextGeneration) return false;
+      if (caught instanceof DOMException && caught.name === "AbortError") return false;
       error.value = caught instanceof Error ? caught.message : "记忆读取失败";
+      return false;
     } finally {
-      loading.value = false;
+      if (generation === contextGeneration) loading.value = false;
     }
   }
 
@@ -86,7 +101,11 @@ export function useMemory() {
     matches.value = [];
     recallActive.value = false;
   }
-  function dispose() { controller?.abort(); }
+  function dispose() {
+    contextGeneration += 1;
+    controller?.abort();
+    loading.value = false;
+  }
 
   return { sources: shallowReadonly(sources), entries: shallowReadonly(entries), matches: shallowReadonly(matches), recallActive: shallowReadonly(recallActive), loading: shallowReadonly(loading), mutating: shallowReadonly(mutating), error: shallowReadonly(error), load, recall, create, update, remove, clearMatches, dispose };
 }

@@ -10,6 +10,8 @@ import { currentAgentRuntimeConfig } from "../../packages/platform/runtimeAgentC
 import { migrateApplicationDataSchema } from "./applicationDataSchema.js";
 import { EmojiStore, type EmojiRecord, type EmojiVersionRecord } from "./emojiStore.js";
 import { SqliteScheduledTaskStore } from "./scheduledTaskStore.js";
+import { SqliteDirectorStore } from "./directorStore.js";
+import { SqliteDreamStore } from "./dreamStore.js";
 import {
   GroupThreadStateStore,
   type CommitGroupThreadStateInput,
@@ -106,6 +108,8 @@ export class ApplicationDataStore {
   private readonly modelCalls: ModelCallStore;
   private readonly emojis: EmojiStore;
   readonly scheduledTasks: ScheduledTaskStore;
+  readonly director: SqliteDirectorStore;
+  readonly dreams: SqliteDreamStore;
 
   constructor(readonly databasePath: string) {
     if (databasePath !== ":memory:") {
@@ -120,6 +124,9 @@ export class ApplicationDataStore {
     migrateApplicationDataSchema(this.database, this.modelCalls);
     this.emojis = new EmojiStore(this.database);
     this.scheduledTasks = new SqliteScheduledTaskStore(this.database);
+    this.director = new SqliteDirectorStore(this.database);
+    this.dreams = new SqliteDreamStore(this.database);
+    initializeLongTermRecallTracking(this);
     this.groupThreads = new GroupThreadStateStore(this.database);
   }
 
@@ -239,7 +246,16 @@ export class ApplicationDataStore {
 
   replaceMemory(source: MemoryDataSource, records: readonly JsonObject[]) {
     this.transaction(() => this.replaceMemoryUnsafe(source, records));
+    if (source === "long_term") initializeLongTermRecallTracking(this);
   }
+
+  initializeRecallTracking(recordIds: readonly string[], at?: Date) { return this.dreams.initializeRecallTracking(recordIds, at); }
+
+  reserveActualRecall(input: Parameters<SqliteDreamStore["reserveActualRecall"]>[0]) { return this.dreams.reserveActualRecall(input); }
+
+  recordActualRecall(input: Parameters<SqliteDreamStore["recordActualRecall"]>[0]) { return this.dreams.recordActualRecall(input); }
+
+  listRecallStats(recordIds?: readonly string[]) { return this.dreams.listRecallStats(recordIds); }
 
   commitMemoryBatch(input: {
     batchId: string;
@@ -578,6 +594,16 @@ export class ApplicationDataStore {
   private requestLogCount() {
     return count(this.database.prepare("SELECT COUNT(*) AS count FROM request_logs").get());
   }
+}
+
+function initializeLongTermRecallTracking(store: Pick<ApplicationDataStore, "dreams" | "readMemory">) {
+  const ids = store.readMemory("long_term")
+    .flatMap((record) => {
+      if (typeof record.id !== "string") return [];
+      const id = record.id.trim();
+      return id && [...id].length <= 128 ? [id] : [];
+    });
+  if (ids.length) store.dreams.initializeRecallTracking(ids);
 }
 
 function count(row: unknown) {

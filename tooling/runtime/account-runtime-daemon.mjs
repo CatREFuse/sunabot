@@ -434,18 +434,6 @@ async function recoverAbandonedClaims(processingDirectory, resultsDirectory) {
         requestId: request.requestId,
         error: "Host runtime probe 的原 owner 在 claim 后退出；为避免重复执行，本请求已失败关闭。"
       });
-    } else if (request.kind === "voice-service-control"
-      && ["check", "start", "stop"].includes(request.action)) {
-      await atomicJson(resultPath, {
-        schemaVersion: 1,
-        kind: "voice-service-control",
-        requestId: request.requestId,
-        error: {
-          code: "VOICE_SERVICE_CONTROL_INTERRUPTED",
-          message: "语音服务操作被中断，请重新检测。",
-          status: 503
-        }
-      });
     } else if (/^[A-Za-z0-9_-]{1,64}$/.test(request.accountId ?? "")
       && ["running", "stopped"].includes(request.desiredState)) {
       await atomicJson(resultPath, {
@@ -488,9 +476,7 @@ async function processRequest(options) {
   const probeValid = kind === "runtime-probe"
     && Array.isArray(connectedAccountIds)
     && connectedAccountIds.every((accountId) => /^[A-Za-z0-9_-]{1,64}$/.test(accountId));
-  const voiceServiceValid = kind === "voice-service-control"
-    && ["check", "start", "stop"].includes(request.action);
-  if (!baseValid || (!accountValid && !probeValid && !voiceServiceValid)) {
+  if (!baseValid || (!accountValid && !probeValid)) {
     await fs.rm(requestPath, { force: true });
     return;
   }
@@ -499,11 +485,6 @@ async function processRequest(options) {
     await processRuntimeProbe({ ...request, connectedAccountIds }, name, requestPath, resultsDirectory, workspace);
     return;
   }
-  if (kind === "voice-service-control") {
-    await processVoiceServiceControl(request, name, requestPath, resultsDirectory, workspace);
-    return;
-  }
-
   let stdout = "";
   let stderr = "";
   try {
@@ -538,75 +519,6 @@ async function processRequest(options) {
     state
   });
   await fs.rm(requestPath, { force: true });
-}
-
-async function processVoiceServiceControl(request, name, requestPath, resultsDirectory, workspace) {
-  let service;
-  let failure;
-  try {
-    const result = await execFileAsync(process.execPath, [
-      path.join(root, "tooling/runtime/voice-service-control.mjs"),
-      request.action
-    ], {
-      cwd: root,
-      env: { ...process.env, SUNABOT_WORKSPACE: workspace },
-      maxBuffer: PROCESS_OUTPUT_BYTES,
-      timeout: request.action === "start" ? 10 * 60_000 : 45_000
-    });
-    service = parseVoiceServiceResult(`${result.stdout}\n${result.stderr}`);
-  } catch (error) {
-    const output = `${stringField(error, "stdout")}\n${stringField(error, "stderr")}`;
-    failure = parseVoiceServiceFailure(output) ?? {
-      code: "VOICE_SERVICE_CONTROL_FAILED",
-      message: "语音服务操作失败，请检查运行日志。",
-      status: 503
-    };
-  }
-  if (!service && !failure) {
-    failure = {
-      code: "VOICE_SERVICE_CONTROL_INVALID",
-      message: "语音服务管理返回了无效结果。",
-      status: 503
-    };
-  }
-  await atomicJson(path.join(resultsDirectory, name), {
-    schemaVersion: 1,
-    kind: "voice-service-control",
-    requestId: request.requestId,
-    ...(service ? { service } : { error: failure })
-  });
-  await fs.rm(requestPath, { force: true });
-}
-
-function parseVoiceServiceResult(output) {
-  const match = /^SUNABOT_VOICE_SERVICE=(\{.*\})$/mu.exec(String(output));
-  if (!match) return undefined;
-  try {
-    const value = JSON.parse(match[1]);
-    return ["running", "stopped", "unknown"].includes(value?.state)
-      && typeof value.updatedAt === "string"
-      ? value
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function parseVoiceServiceFailure(output) {
-  const match = /^SUNABOT_VOICE_SERVICE_ERROR=(\{.*\})$/mu.exec(String(output));
-  if (!match) return undefined;
-  try {
-    const value = JSON.parse(match[1]);
-    if (!/^VOICE_SERVICE_[A-Z0-9_]+$/u.test(value?.code ?? "")) return undefined;
-    if (typeof value.message !== "string" || value.message.length > 300) return undefined;
-    return {
-      code: value.code,
-      message: value.message,
-      status: value.status === 409 ? 409 : 503
-    };
-  } catch {
-    return undefined;
-  }
 }
 
 async function processRuntimeProbe(request, name, requestPath, resultsDirectory, workspace) {

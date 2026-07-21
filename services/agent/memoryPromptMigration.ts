@@ -3,7 +3,7 @@ import {
   type FinalPromptTemplate
 } from "./promptSystem.js";
 
-export const MEMORY_PERSPECTIVE_MIGRATION_VERSION = "memory-perspective-v2";
+export const MEMORY_PERSPECTIVE_MIGRATION_VERSION = "memory-perspective-v4";
 
 export type MemoryPromptSchemaName = "working_memory" | "long_term_memory" | "user_profiles";
 
@@ -25,8 +25,12 @@ const PREVIOUS_PARAGRAPH_PREFIXES: Record<
       "每条 fact 都写成自然、连贯的第一人称短句或短段，使用“我”或“我的”，自然写出我感知或记得的事情、我的个人感受，以及我现在的看法、判断、担心、期待或打算。个人特质必须真实影响取舍和措辞；情绪可以克制，但不能省略。依据不足时使用符合人格的轻度感受或保留判断，不夸大情绪，不虚构内心活动。"
     ],
     [
-      "每条事件仍要能判断谁在何时发生了什么。每个相关用户都必须以",
-      "每条事件仍要能判断谁在何时发生了什么。把相关 QQ 号自然写进第一人称叙述，例如“我记得老师（QQ 123456）……”，不要单独罗列身份；如果涉及多人，在正文中自然带出所有相关 QQ 号。"
+      "每条事件仍要能判断谁在何时发生了什么。人物在 fact 中只使用",
+      "每条事件仍要能判断谁在何时发生了什么。每个相关用户都必须以“当前昵称或显示名（QQ 123456）”的形式自然写进第一人称叙述，QQ 号与对应昵称必须同时存在且昵称不能为空、不能等于 QQ 号；涉及多人时逐一写全，不要单独罗列身份。userName 必须填写当前观测到的非空昵称或显示名。"
+    ],
+    [
+      "格式为 {\"facts\":[{\"id\":",
+      "格式为 {\"facts\":[{\"id\":\"可复用的原记忆 id 或 null\",\"fact\":\"包含相关用户 QQ 号的事实内容\",\"occurredAt\":\"单个 ISO 时间或 null\",\"occurredEndAt\":\"单个 ISO 时间或 null\",\"userIds\":[\"QQ号\"],\"userName\":\"当前昵称或群名片\",\"promoteToLongTerm\":true,\"longTermId\":\"已有长期记忆 id 或 null\",\"eventType\":\"task\",\"subjectKey\":\"稳定事件主体\"}],\"allPreviousMemoriesInvalidated\":false}。新增事实的 id 返回 null。"
     ],
     [
       "合并语义相同、相近、重复或存在因果关系的事实",
@@ -47,8 +51,12 @@ const PREVIOUS_PARAGRAPH_PREFIXES: Record<
       "每条 fact 都写成自然、连贯的第一人称短句或短段，使用“我”或“我的”，融合我记得的事情、我当时或现在的个人感受，以及我形成的看法、判断、担心、期待或打算。情绪应符合人格和关系，允许克制，禁止夸大或虚构。"
     ],
     [
-      "每个相关用户都必须以“当前昵称或显示名（QQ 123456）”的形式",
-      "把相关 QQ 号自然写进第一人称叙述，例如“我记得老师（QQ 123456）……”，并在涉及多人时自然带出所有相关 QQ 号；不要单独罗列身份。"
+      "每个相关用户都必须以输入已有 addressNames 中的",
+      "每个相关用户都必须以“当前昵称或显示名（QQ 123456）”的形式自然写进第一人称叙述，QQ 号与对应昵称必须同时存在且昵称不能为空、不能等于 QQ 号；涉及多人时逐一写全，不要单独罗列身份。userName 必须填写当前观测到的非空昵称或显示名。"
+    ],
+    [
+      "数组元素格式为 {\"fact\":",
+      "数组元素格式为 {\"fact\":\"包含相关用户 QQ 号的长期事实\",\"occurredAt\":\"单个 ISO 时间或 null\",\"occurredEndAt\":\"单个 ISO 时间或 null\",\"userIds\":[\"QQ号\"],\"userName\":\"当前昵称或群名片\",\"eventType\":\"task\",\"subjectKey\":\"稳定事件主体\"}。"
     ],
     [
       "合并同一事件中相同、相近、重复、互为因果和已经过期的记录",
@@ -61,8 +69,20 @@ const PREVIOUS_PARAGRAPH_PREFIXES: Record<
       "你负责以 @{bot.name} 的第一视角，从同一批聊天消息中整理我对各个用户的稳定认知和印象。"
     ],
     [
-      "用户唯一身份是 QQ 号。userName 必须是 payload 中当前观测到的非空 QQ 昵称或显示名",
-      "用户唯一身份是 QQ 号。userName 只保存 payload 中当前观测到的 QQ 昵称或显示名，不承载回复称呼；群名片由会话目录派生，不复制进 fact。"
+      "用户唯一身份是 QQ 号。userName 只保存 payload 中当前观测到的 QQ 昵称或显示名",
+      "用户唯一身份是 QQ 号。userName 必须是 payload 中当前观测到的非空 QQ 昵称或显示名，不能等于 QQ 号，也不承载回复称呼；群名片由会话目录派生。"
+    ],
+    [
+      "addressNames 是称呼数组。",
+      "addressName 只保存 @{bot.name} 回复该用户时使用的明确称呼。输入 payload.previousProfiles 会提供已有画像：已有非空 addressName 必须原样保留，只有字段为空且用户明确要求“以后叫我……”或同义表达时才推断新值。模型不得根据昵称、群名片、性别或一次玩笑自行创造称呼。"
+    ],
+    [
+      "输入 payload 会给出 admin.userId 和 admin.name；该 QQ 是当前角色的管理员，其 addressNames",
+      "输入 payload 会给出 admin.userId 和 admin.name；该 QQ 是当前角色的管理员，其 addressName 必须使用 admin.name。其他用户不得写成老师或管理员。admin.userId 为空时不要记录任何老师或管理员身份。"
+    ],
+    [
+      "输入 payload.previousProfiles 会给出该 QQ 的原画像；",
+      "输入 payload.previousProfiles 会给出该 QQ 的原画像；写入新画像时必须把原画像和本批消息一起作为依据，按语义合并。合并时删除原画像中的一次性事件过程、已失效临时状态和重复描述，同时保留已有非空 addressName。"
     ],
     [
       "对于需要更新的用户，fact 必须是该用户合并后的完整画像。每位用户通常只保留 1 至 3 个最概括",
@@ -73,8 +93,12 @@ const PREVIOUS_PARAGRAPH_PREFIXES: Record<
       "fact 必须以我的第一视角自然叙述，使用“我”或“我的”，融合我确认的概括事实、我对这个人的看法，以及我与其相处时稳定的情绪或态度。不得使用列表、分项、字段标签、分类标题或“身份：”“偏好：”“情绪：”“认知：”等模板，也不要解释依据和提取过程。"
     ],
     [
-      "fact 中必须把被画像用户的当前昵称或显示名与 QQ 号以",
-      "fact 中不要写 QQ 号、昵称、群名片、称呼指令、群或会话中的别名清单，也不要写“QQ ...：”“叫他/她……”“称呼为……”等前缀。QQ 号只写在 userId，显示名只写在 userName，回复称呼只写在 addressName。"
+      "fact 中只使用 addressNames 中的一个称呼作为人物语义标识",
+      "fact 中必须把被画像用户的当前昵称或显示名与 QQ 号以“昵称（QQ 123456）”的形式自然写入，昵称和 QQ 号必须同时存在；不要写“QQ ...：”“叫他/她……”“称呼为……”等模板化前缀。QQ 号同时写在 userId，显示名同时写在 userName，回复称呼只写在 addressName。"
+    ],
+    [
+      "格式为 {\"profiles\":[{\"userId\":",
+      "格式为 {\"profiles\":[{\"userId\":\"QQ号\",\"userName\":\"当前昵称或显示名\",\"addressName\":\"明确称呼或空字符串\",\"fact\":\"语义合并后的完整稳定用户画像\",\"time\":\"本批画像依据的 ISO 时间或时间范围\"}]}。"
     ]
   ]
 };
@@ -96,12 +120,41 @@ const HISTORICAL_LEGACY_PARAGRAPH_REPLACEMENTS: Partial<Record<
   ]]
 };
 
+const PROFILE_V1_PARAGRAPH_REPLACEMENTS: ReadonlyArray<readonly [string, string]> = [[
+  "你负责以 @{bot.name} 的第一视角，从同一批聊天消息中整理我对各个用户的稳定认知和印象。fact 中的“我”始终指当前角色 @{bot.name}，被画像的用户始终是我认知的对象。",
+  "你负责以 @{bot.name} 的第一视角，从同一批聊天消息中整理我对各个用户的稳定认知和印象。"
+], [
+  "用户唯一身份是 QQ 号。userName 必须是 payload 中当前观测到的非空 QQ 昵称或显示名，不能等于 QQ 号，也不承载回复称呼；群名片由会话目录派生。",
+  "用户唯一身份是 QQ 号。userName 只保存 payload 中当前观测到的 QQ 昵称或显示名，不承载回复称呼；群名片由会话目录派生，不复制进 fact。"
+], [
+  "对于需要更新的用户，fact 必须是该用户合并后的完整画像。每位用户通常只保留 1 至 3 个最概括、最影响未来相处的认知，用一个自然连贯的短段表达；即使每项信息本身已经清晰，也要把相同、相近、重复或存在因果关系的观察合并成一条，删除细节和低价值属性，并在 time 中保留依据从早到晚的时间关系与最新状态。",
+  "对于需要更新的用户，fact 必须是该用户合并后的完整画像。每位用户通常只保留 1 至 3 个最概括、最影响未来相处的认知，用一个自然连贯的短段表达；合并相近内容，删除细节、重复描述和低价值属性。"
+], [
+  "fact 必须以当前角色的第一视角自然叙述，使用“我”或“我的”，融合我确认的概括事实、我对这个人的看法，以及我与其相处时稳定的情绪或态度。用户说“我喜欢摄影”时，要改写成当前角色对该用户的认知，不能把这句话原样当成当前角色或用户对自己的第一人称画像；正文禁止出现“我记得”，不要使用回忆提示语。不得使用列表、分项、字段标签、分类标题或“身份：”“偏好：”“情绪：”“认知：”等模板，也不要解释依据和提取过程。",
+  "fact 必须以我的第一视角自然叙述，使用“我”或“我的”，融合我确认的概括事实、我对这个人的看法，以及我与其相处时稳定的情绪或态度。不得使用列表、分项、字段标签、分类标题或“身份：”“偏好：”“情绪：”“认知：”等模板，也不要解释依据和提取过程。"
+], [
+  "fact 中必须把被画像用户的当前昵称或显示名与 QQ 号以“昵称（QQ 123456）”的形式自然写入，昵称和 QQ 号必须同时存在；不要写“QQ ...：”“叫他/她……”“称呼为……”等模板化前缀。QQ 号同时写在 userId，显示名同时写在 userName，回复称呼只写在 addressName。",
+  "fact 中不要写 QQ 号、昵称、群名片、称呼指令、群或会话中的别名清单，也不要写“QQ ...：”“叫他/她……”“称呼为……”等前缀。QQ 号只写在 userId，显示名只写在 userName，回复称呼只写在 addressName。"
+]];
+
 export function migrateMemoryPerspectiveTemplateWithLegacy(
   template: FinalPromptTemplate,
   canonical: FinalPromptTemplate,
   originalLegacyParagraphs: Record<MemoryPromptSchemaName, readonly string[]>
 ): FinalPromptTemplate {
   const contract = memoryPerspectiveContract(canonical, originalLegacyParagraphs);
+  const canonicalSchema = hasCanonicalJsonSchemaContract(
+    template.response_format,
+    canonical.response_format
+  );
+  const preCausalChainSchema = hasPreCausalChainJsonSchemaContract(
+    template.response_format,
+    canonical.response_format
+  );
+  const legacyAddressNameSchema = hasLegacyAddressNameJsonSchemaContract(
+    template.response_format,
+    canonical.response_format
+  );
   if (!hasMemoryPromptWireContract(template, canonical, contract.payloadContent)) return template;
 
   const systemIndex = template.messages.findIndex((message) => {
@@ -115,7 +168,29 @@ export function migrateMemoryPerspectiveTemplateWithLegacy(
       splitPromptParagraphs(contract.canonicalSystemContent)
     );
   });
-  if (systemIndex < 0) return template;
+  if (systemIndex < 0) {
+    const schemaNeedsMigration = !canonicalSchema && (preCausalChainSchema || legacyAddressNameSchema);
+    const causalChainContractPresent = contract.causalChainParagraph !== undefined
+      && template.messages.some((message) => (
+        isRecord(message)
+        && message.role === "system"
+        && typeof message.content === "string"
+        && splitPromptParagraphs(message.content).includes(contract.causalChainParagraph!)
+      ));
+    const causalChainContractNeedsMigration = contract.causalChainParagraph !== undefined
+      && !causalChainContractPresent;
+    if (!schemaNeedsMigration && !causalChainContractNeedsMigration) return template;
+    const messages = causalChainContractNeedsMigration
+      ? appendSystemContract(template.messages, contract.causalChainParagraph!)
+      : template.messages;
+    return {
+      ...template,
+      messages,
+      response_format: schemaNeedsMigration
+        ? canonicalResponseFormatWithMetadata(template.response_format, canonical.response_format)
+        : template.response_format
+    };
+  }
 
   const current = template.messages[systemIndex];
   if (!isRecord(current) || typeof current.content !== "string") return template;
@@ -131,7 +206,10 @@ export function migrateMemoryPerspectiveTemplateWithLegacy(
     ...current,
     content: [contract.canonicalSystemContent.trim(), ...customParagraphs].join("\n\n")
   };
-  return { ...template, messages };
+  const responseFormat = hasCanonicalJsonSchemaContract(template.response_format, canonical.response_format)
+    ? template.response_format
+    : canonicalResponseFormatWithMetadata(template.response_format, canonical.response_format);
+  return { ...template, messages, response_format: responseFormat };
 }
 
 function memoryPerspectiveContract(
@@ -155,13 +233,24 @@ function memoryPerspectiveContract(
     schemaName,
     canonicalSystemContent
   );
+  const previousCausalChainSystemContent = preCausalChainSystemContent(
+    schemaName,
+    canonicalSystemContent
+  );
   const genericLegacyParagraphs = originalLegacyParagraphs[schemaName];
   const legacyParagraphVariants = [
     genericLegacyParagraphs,
     historicalLegacyParagraphs(schemaName, genericLegacyParagraphs),
-    splitPromptParagraphs(previousSystemContent)
+    ...(schemaName === "user_profiles"
+      ? []
+      : [splitPromptParagraphs(previousCausalChainSystemContent)]),
+    splitPromptParagraphs(previousSystemContent),
+    splitPromptParagraphs(olderMemoryPerspectiveSystemContent(schemaName, previousSystemContent))
   ];
   const paragraphs = splitPromptParagraphs(canonicalSystemContent);
+  const causalChainParagraph = schemaName === "user_profiles"
+    ? undefined
+    : requiredParagraph(paragraphs, (paragraph) => paragraph.startsWith("causalChainKey 只在"));
   const currentParagraphs = uniqueStrings([
     requiredParagraph(paragraphs, (paragraph) => (
       extractPromptVariables(paragraph).includes("bot.name")
@@ -196,10 +285,26 @@ function memoryPerspectiveContract(
   }
   return {
     canonicalSystemContent,
+    causalChainParagraph,
     currentParagraphs,
     legacyParagraphVariants,
     payloadContent: payloadMessage.content
   };
+}
+
+function olderMemoryPerspectiveSystemContent(schemaName: MemoryPromptSchemaName, content: string) {
+  if (schemaName !== "user_profiles") return content;
+  return splitPromptParagraphs(content).map((paragraph) => (
+    PROFILE_V1_PARAGRAPH_REPLACEMENTS.find(([current]) => current === paragraph)?.[1] ?? paragraph
+  )).join("\n\n");
+}
+
+function preCausalChainSystemContent(schemaName: MemoryPromptSchemaName, content: string) {
+  if (schemaName === "user_profiles") return content;
+  return splitPromptParagraphs(content)
+    .filter((paragraph) => !paragraph.startsWith("causalChainKey 只在"))
+    .map((paragraph) => paragraph.replace(',"causalChainKey":null', ""))
+    .join("\n\n");
 }
 
 function historicalLegacyParagraphs(
@@ -239,7 +344,9 @@ function hasMemoryPromptWireContract(
   const actualTools = template.tools ?? [];
   const canonicalTools = canonical.tools ?? [];
   if (!equalSchemaStructure(actualTools, canonicalTools)) return false;
-  if (!hasCanonicalJsonSchemaContract(template.response_format, canonical.response_format)) return false;
+  if (!hasCanonicalJsonSchemaContract(template.response_format, canonical.response_format)
+    && !hasPreCausalChainJsonSchemaContract(template.response_format, canonical.response_format)
+    && !hasLegacyAddressNameJsonSchemaContract(template.response_format, canonical.response_format)) return false;
   const payloadVariables = extractPromptVariables(payloadContent)
     .filter((variable) => variable !== "runtime.current_time");
   return template.messages.some((message) => {
@@ -268,7 +375,7 @@ function isLegacyOrPartialMemoryPrompt(
     )).length;
     if (legacyOnlyMatches === 0) return false;
     if (legacyMatches === legacyParagraphs.length) return true;
-    return legacyMatches >= Math.ceil(legacyParagraphs.length * 0.6) && currentMatches >= 2;
+    return legacyMatches >= Math.ceil(legacyParagraphs.length * 0.4) && currentMatches >= 1;
   });
 }
 
@@ -303,6 +410,25 @@ function splitPromptParagraphs(content: string) {
   return content.trim().split(/\n{2,}/).map((paragraph) => paragraph.trim()).filter(Boolean);
 }
 
+function appendSystemContract(
+  messages: FinalPromptTemplate["messages"],
+  contract: string
+): FinalPromptTemplate["messages"] {
+  let appended = false;
+  const next = messages.map((message) => {
+    if (appended
+      || !isRecord(message)
+      || message.role !== "system"
+      || typeof message.content !== "string") return message;
+    appended = true;
+    return {
+      ...message,
+      content: [message.content.trim(), contract].filter(Boolean).join("\n\n")
+    };
+  });
+  return appended ? next : [{ role: "system", content: contract }, ...next];
+}
+
 function requiredParagraph(paragraphs: readonly string[], predicate: (paragraph: string) => boolean) {
   const paragraph = paragraphs.find(predicate);
   if (!paragraph) throw new Error("Canonical memory prompt is missing its perspective contract.");
@@ -319,6 +445,85 @@ function hasCanonicalJsonSchemaContract(actual: unknown, canonical: unknown) {
   return actualSchema !== undefined
     && canonicalSchema !== undefined
     && equalSchemaStructure(actualSchema, canonicalSchema);
+}
+
+function hasLegacyAddressNameJsonSchemaContract(actual: unknown, canonical: unknown) {
+  const actualSchema = strictJsonSchema(actual);
+  const canonicalSchema = strictJsonSchema(canonical);
+  if (actualSchema === undefined || canonicalSchema === undefined) return false;
+  let schemaName: MemoryPromptSchemaName;
+  try {
+    schemaName = memoryPromptSchemaName(actual);
+    if (schemaName !== memoryPromptSchemaName(canonical)) return false;
+  } catch {
+    return false;
+  }
+  const expected = structuredClone(canonicalSchema);
+  const item = memoryFactSchemaItem(expected, schemaName);
+  if (!item || !isRecord(item.properties) || !Array.isArray(item.required)) return false;
+  if (schemaName !== "user_profiles") removeCausalChainSchemaField(item);
+  const legacyField = schemaName === "user_profiles" ? "addressName" : "userName";
+  if (!Object.hasOwn(item.properties, "addressNames")) return false;
+  delete item.properties.addressNames;
+  item.properties[legacyField] = { type: "string" };
+  item.required = item.required.map((field) => field === "addressNames" ? legacyField : field);
+  return equalSchemaStructure(actualSchema, expected);
+}
+
+function hasPreCausalChainJsonSchemaContract(actual: unknown, canonical: unknown) {
+  const actualSchema = strictJsonSchema(actual);
+  const canonicalSchema = strictJsonSchema(canonical);
+  if (actualSchema === undefined || canonicalSchema === undefined) return false;
+  let schemaName: MemoryPromptSchemaName;
+  try {
+    schemaName = memoryPromptSchemaName(actual);
+    if (schemaName === "user_profiles" || schemaName !== memoryPromptSchemaName(canonical)) return false;
+  } catch {
+    return false;
+  }
+  const expected = structuredClone(canonicalSchema);
+  const item = memoryFactSchemaItem(expected, schemaName);
+  if (!item) return false;
+  removeCausalChainSchemaField(item);
+  return equalSchemaStructure(actualSchema, expected);
+}
+
+function memoryFactSchemaItem(schema: Record<string, unknown>, schemaName: MemoryPromptSchemaName) {
+  return schemaName === "user_profiles"
+    ? nestedRecord(schema, "properties", "profiles", "items")
+    : schemaName === "working_memory"
+      ? nestedRecord(schema, "properties", "facts", "items")
+      : nestedRecord(schema, "items");
+}
+
+function removeCausalChainSchemaField(item: Record<string, unknown>) {
+  if (!isRecord(item.properties) || !Array.isArray(item.required)) return;
+  delete item.properties.causalChainKey;
+  item.required = item.required.filter((field) => field !== "causalChainKey");
+}
+
+function canonicalResponseFormatWithMetadata(
+  actual: FinalPromptTemplate["response_format"],
+  canonical: FinalPromptTemplate["response_format"]
+): FinalPromptTemplate["response_format"] {
+  if (!isRecord(actual) || !isRecord(actual.json_schema)
+    || !isRecord(canonical) || !isRecord(canonical.json_schema)) return canonical;
+  return {
+    ...canonical,
+    json_schema: {
+      ...actual.json_schema,
+      ...canonical.json_schema
+    }
+  };
+}
+
+function nestedRecord(value: unknown, ...keys: string[]) {
+  let current = value;
+  for (const key of keys) {
+    if (!isRecord(current)) return undefined;
+    current = current[key];
+  }
+  return isRecord(current) ? current : undefined;
 }
 
 function strictJsonSchema(value: unknown) {

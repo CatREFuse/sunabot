@@ -102,35 +102,46 @@ describe("memory v2 storage", () => {
       fact: "喜欢明亮色彩",
       userId: "703084445",
       userName: "新昵称",
-      addressName: "模型新称呼"
+      addressNames: ["模型新称呼", "圆圆"]
     }]);
     await mergeUserProfileMemory(config);
 
-    expect(await readUserProfileForUser(config, "171419991")).toMatchObject({ addressName: "错误称呼" });
+    expect(await readUserProfileForUser(config, "171419991")).toMatchObject({
+      addressNames: ["Test Admin", "错误称呼"],
+      addressName: "Test Admin"
+    });
     const user = await readUserProfileForUser(config, "703084445");
-    expect(user).toMatchObject({ addressName: "圆圆", userName: "新昵称" });
+    expect(user).toMatchObject({
+      addressNames: ["圆圆", "模型新称呼"],
+      addressName: "圆圆",
+      userName: "新昵称"
+    });
     expect(resolveUserAddressName(config, "703084445", user, "临时昵称")).toBe("圆圆");
-    expect(resolveUserAddressName(config, "171419991", undefined, "临时昵称")).toBe("临时昵称");
+    expect(resolveUserAddressName(config, "171419991", undefined, "临时昵称")).toBe("Test Admin");
 
     const admin = await readUserProfileForUser(config, "171419991");
     await updateMemoryEntry(config, {
       source: "user_profile",
       id: admin!.id,
       text: admin!.text,
-      addressName: "管理台管理员称呼"
+      addressNames: ["管理台管理员称呼", "Test Admin"]
     });
-    expect(await readUserProfileForUser(config, "171419991")).toMatchObject({ addressName: "管理台管理员称呼" });
+    expect(await readUserProfileForUser(config, "171419991")).toMatchObject({
+      addressNames: ["Test Admin", "管理台管理员称呼"]
+    });
 
     await updateMemoryEntry(config, {
       source: "user_profile",
       id: user!.id,
       text: user!.text,
-      addressName: "管理台称呼"
+      addressNames: ["管理台称呼", "圆圆"]
     });
-    expect(await readUserProfileForUser(config, "703084445")).toMatchObject({ addressName: "管理台称呼" });
+    expect(await readUserProfileForUser(config, "703084445")).toMatchObject({
+      addressNames: ["管理台称呼", "圆圆"]
+    });
     expect((await recallMemory(config, { query: "管理台称呼", source: "user_profile" })).matches[0]).toMatchObject({
       userId: "703084445",
-      addressName: "管理台称呼"
+      addressNames: ["管理台称呼", "圆圆"]
     });
   });
 
@@ -254,7 +265,7 @@ describe("memory v2 storage", () => {
         subjectKey: "memory:batch-1",
         promoteToLongTerm: true
       }],
-      userProfileFacts: [{ fact: "喜欢测试", userId: "703084445", addressName: "圆圆" }],
+      userProfileFacts: [{ fact: "我知道圆圆（QQ 703084445）喜欢测试。", userId: "703084445", addressNames: ["圆圆"] }],
       longTermFacts: [{
         fact: "完成批次事务",
         occurredAt: "2026-07-10T01:00:00.000Z",
@@ -276,7 +287,7 @@ describe("memory v2 storage", () => {
       longTermId: expect.stringMatching(/^long_term_/),
       eventKey: expect.stringMatching(/^v1:sha256:/)
     });
-    expect(await readUserProfileForUser(config, "703084445")).toMatchObject({ addressName: "圆圆" });
+    expect(await readUserProfileForUser(config, "703084445")).toMatchObject({ addressNames: ["圆圆"] });
     expect(await readMemorySourceEntries(config, "long_term")).toHaveLength(1);
     expect(applicationDataStore(config).hasMemoryBatch(input.batchId)).toBe(true);
   });

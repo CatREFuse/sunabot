@@ -18,7 +18,7 @@ describe("system_config tool contract", () => {
     expect(systemConfigTool.parameters.additionalProperties).toBe(false);
     expect(systemConfigTool.parameters.properties.operation.enum).toEqual(SYSTEM_CONFIG_OPERATIONS);
     expect(systemConfigTool.parameters.properties.searchImplementation.enum).toEqual(["tavily", null]);
-    expect(systemConfigTool.parameters.properties.bashAdminBackend.enum).toEqual(["native", "docker", null]);
+    expect(systemConfigTool.parameters.properties.bashAdminBackend.enum).toEqual([null]);
     expect(systemConfigTool.parameters.properties.conversationId.description).toBe(
       "Existing full known group conversationId from get_settings or list_groups; use list_groups when the group is outside the settings summary. Required only for set_group_reply."
     );
@@ -59,8 +59,6 @@ describe("system_config tool contract", () => {
     ["set_orchestrator", input("set_orchestrator", { enabled: false })],
     ["set_search", input("set_search", { enabled: true, searchImplementation: "tavily" })],
     ["set_search without changing implementation", input("set_search", { enabled: false })],
-    ["set_bash_admin_backend native", input("set_bash_admin_backend", { bashAdminBackend: "native" })],
-    ["set_bash_admin_backend docker", input("set_bash_admin_backend", { bashAdminBackend: "docker" })],
     ["set_group_reply reply switch", input("set_group_reply", {
       enabled: true,
       conversationId: "group:123"
@@ -135,11 +133,6 @@ describe("system_config tool contract", () => {
       enabled: true,
       conversationId: "group:123"
     }), "set_search"],
-    ["set_bash_admin_backend without a backend", input("set_bash_admin_backend"), "set_bash_admin_backend"],
-    ["set_bash_admin_backend with enabled", input("set_bash_admin_backend", {
-      enabled: true,
-      bashAdminBackend: "native"
-    }), "set_bash_admin_backend"],
     ["set_group_reply without conversationId", input("set_group_reply", { enabled: true }), "set_group_reply"],
     ["set_group_reply without either switch", input("set_group_reply", {
       conversationId: "group:123"
@@ -217,19 +210,21 @@ describe("system_config tool contract", () => {
     expect(port.mutationStaged()).toBe(false);
   });
 
-  it("rejects unsupported administrator Bash backends before operation execution", async () => {
+  it("rejects the removed Bash backend mutation and its non-null compatibility field", async () => {
     const execute = vi.fn(async () => ({ ok: true }));
     const port = toolPort(execute);
 
     await expect(runSystemConfig({
-      ...input("set_bash_admin_backend"),
-      bashAdminBackend: "host"
+      ...input("get_settings"),
+      operation: "set_bash_admin_backend",
+      bashAdminBackend: "docker"
     }, port)).resolves.toMatchObject({
       ok: false,
       code: "SYSTEM_CONFIG_INVALID",
-      field: "bashAdminBackend",
-      error: "Unsupported administrator Bash backend."
+      field: "operation"
     });
+    await expect(runSystemConfig({ ...input("get_settings"), bashAdminBackend: "docker" }, port))
+      .resolves.toMatchObject({ ok: false, field: "bashAdminBackend" });
     expect(execute).not.toHaveBeenCalled();
     expect(port.mutationStaged()).toBe(false);
   });

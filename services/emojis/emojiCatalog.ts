@@ -19,7 +19,7 @@ export const PRESET_EMOJI_KEYS = [
 export const MAX_AGENT_EMOJIS = 64;
 export const MAX_EMOJI_MARKERS_PER_REPLY = 4;
 export const EMOJI_MARKER_SYNTAX =
-  "需要发送表情时，在正文对应位置输出 [/表情key]。表情key 必须从可用列表中精确选择，不得编造、转义或嵌套；单条回复最多 4 个表情，没有合适表情时不要输出标记。";
+  "需要发送表情时，在正文对应位置输出由斜杠和真实 key 组成的标记。例如可用列表包含“开心”时，只能输出 [/开心]。方括号内的内容必须严格等于 key，不得添加“表情”等前缀，也不得原样输出占位文字。key 必须从可用列表中精确选择，不得编造、转义或嵌套；单条回复最多 4 个表情，没有合适表情时不要输出标记。";
 
 export const EMOJI_EXPRESSION_PROMPTS: Readonly<Record<string, string>> = {
   开心: "真诚开心地笑，眼神明亮，嘴角自然上扬",
@@ -191,7 +191,7 @@ export function prepareEmojiReply(
   for (const marker of actualMarkers) {
     appendTextPart(contentSegments, text.slice(cursor, marker.index));
     images.push({ ...marker.image });
-    contentSegments.push({ type: "image", imageIndex: images.length - 1 });
+    contentSegments.push({ type: "sticker", imageIndex: images.length - 1 });
     cursor = marker.index + marker.raw.length;
   }
   appendTextPart(contentSegments, text.slice(cursor));

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { applicationDataStore } from "../../adapters/sqlite/applicationDataStore.js";
 import { ServiceError } from "../../packages/contracts/errors/serviceError.js";
+import { decodeAssistantReply } from "../../packages/contracts/session/runtimeMessages.js";
 import {
   decodeScheduledCallbackDelivery,
   decodeScheduledCallbackOutbox,
@@ -9,8 +10,13 @@ import {
   type ScheduledCallbackPayloadV1,
   type ScheduledCallbackTargetV1
 } from "../../packages/contracts/session/scheduledTaskRuntimeMessages.js";
-import type { MessagingPort } from "../../packages/contracts/messaging/messages.js";
 import {
+  outboundMessageBubble,
+  sendOutboundBubble,
+  type MessagingPort
+} from "../../packages/contracts/messaging/messages.js";
+import {
+  DIRECTOR_SCHEDULED_TASK_ID_PREFIX,
   normalizeScheduledTaskDraft,
   normalizeScheduledTaskId,
   normalizeScheduledTaskResult,
@@ -19,7 +25,6 @@ import {
   type ScheduledTask,
   type ScheduledTaskDraft,
   type ScheduledTaskRun,
-  type ScheduledTaskSchedule,
   type ScheduledTaskStore,
   type ScheduledTaskTarget,
   type UpdateScheduledTaskInput
@@ -33,7 +38,8 @@ import {
 import {
   OutboxDisconnectedError,
   type OutboxDeliveryContext,
-  type SessionHandleResult
+  type SessionHandleResult,
+  type SessionTurnContext
 } from "../../services/sessions/sessionCoordinator.js";
 import type {
   OutboxRecord,
@@ -44,39 +50,42 @@ import {
   SCHEDULED_TASK_PAYLOAD_VARIABLE
 } from "../../services/agent/scheduledTaskPrompt.js";
 import { formatModelTimestamp, systemModelTimeZone } from "../../services/agent/modelTime.js";
+import { buildCallbackInput, readCallbackInput } from "../../services/agent/callbackInput.js";
 import { appendRequestLog, appendRequestLogStrict } from "../requestLog.js";
 import type { ConversationRecord, ParsedIncomingMessage } from "../types.js";
 import { conversationRecordId } from "./messagingAttachmentHelpers.js";
+import { createSystemConfigHeldConfirmationPort } from "./systemConfigReply.js";
+import type { DeferredCodexTurn, ReplyDelivery } from "./runtimeContracts.js";
+import {
+  ScheduledTaskAdminCatalog,
+  type ScheduledTaskAdminPage,
+  type ScheduledTaskAdminView
+} from "./scheduledTaskAdmin.js";
 import type { SunaRuntime } from "../runtime.js";
+
+export type { ScheduledTaskAdminPage, ScheduledTaskAdminView } from "./scheduledTaskAdmin.js";
 
 export const SCHEDULED_CALLBACK_EVENT_KIND = "scheduled_callback_delivery";
 export const SCHEDULED_CALLBACK_OUTBOX_KIND = "onebot.scheduled_callback";
 
-const LIST_PAGE_SIZE = 100;
-
-export interface ScheduledTaskAdminView {
+export interface RuntimeSystemCallbackInput {
   id: string;
-  revision: number;
+  kind: string;
   name: string;
-  enabled: boolean;
   context: string;
-  schedule: ScheduledTaskSchedule;
-  targets: ScheduledTaskTarget[];
-  createdAt: string;
-  updatedAt: string;
-  nextTriggerAt?: string;
-  lastTriggerAt?: string;
-  lastRunStatus?: ScheduledTaskRun["status"];
-  lastError?: string;
+  target: ScheduledTaskTarget;
+  triggeredAt?: Date;
 }
 
 export class RuntimeScheduledTasks {
   readonly scheduler: ScheduledTaskScheduler;
+  private readonly adminCatalog: ScheduledTaskAdminCatalog;
 
   constructor(
     private readonly host: SunaRuntime,
     readonly store: ScheduledTaskStore = applicationDataStore(host.config).scheduledTasks
   ) {
+    this.adminCatalog = new ScheduledTaskAdminCatalog(store);
     this.scheduler = new ScheduledTaskScheduler({
       store,
       workerId: `scheduled-task:${host.config.persona.defaultAgentId}:${randomUUID()}`,
@@ -109,23 +118,16 @@ export class RuntimeScheduledTasks {
     return this.scheduler.runOnce();
   }
 
-  listScheduledTasks(): ScheduledTaskAdminView[] {
-    const tasks: ScheduledTask[] = [];
-    let cursor: string | undefined;
-    const seen = new Set<string>();
-    do {
-      const page = this.store.list({ cursor, limit: LIST_PAGE_SIZE });
-      tasks.push(...page.items);
-      if (!page.nextCursor) break;
-      if (seen.has(page.nextCursor)) throw new Error("Scheduled task pagination cursor repeated.");
-      seen.add(page.nextCursor);
-      cursor = page.nextCursor;
-    } while (cursor);
-    return tasks.map((task) => this.adminView(task));
+  enqueueSystemCallback(input: RuntimeSystemCallbackInput) {
+    return enqueueRuntimeSystemCallback(this.host, input, (payload) => this.enqueueCallback(payload));
+  }
+
+  listScheduledTasks(input: unknown = {}): ScheduledTaskAdminPage {
+    return this.adminCatalog.list(input);
   }
 
   getScheduledTask(id: string): ScheduledTaskAdminView {
-    return this.adminView(this.requireTask(id));
+    return this.adminCatalog.view(this.requireTask(id));
   }
 
   createScheduledTask(input: unknown): ScheduledTaskAdminView {
@@ -133,7 +135,7 @@ export class RuntimeScheduledTasks {
     try {
       const created = this.store.create(draft);
       this.wake();
-      return this.adminView(created);
+      return this.adminCatalog.view(created);
     } catch (error) {
       throw scheduledTaskInputError(error);
     }
@@ -143,35 +145,38 @@ export class RuntimeScheduledTasks {
     const taskId = validTaskId(id);
     const current = this.requireTask(taskId);
     const value = strictRecord(input, "SCHEDULED_TASK_UPDATE_INVALID", "定时任务更新内容无效。");
-    assertOnlyKeys(value, ["revision", "name", "enabled", "schedule", "context", "targets"]);
+    assertOnlyKeys(value, [
+      "revision", "name", "enabled", "schedule", "context", "targets", "permanentRetention"
+    ]);
     const expectedRevision = positiveRevision(value.revision);
-    const changedKeys = ["name", "enabled", "schedule", "context", "targets"]
+    const changedKeys = ["name", "enabled", "schedule", "context", "targets", "permanentRetention"]
       .filter((key) => Object.hasOwn(value, key));
     if (!changedKeys.length) {
       throw new ServiceError(400, "SCHEDULED_TASK_UPDATE_INVALID", "请至少修改一个定时任务字段。");
     }
-    const merged = this.validatedDraft({
-      name: Object.hasOwn(value, "name") ? value.name : current.name,
-      enabled: Object.hasOwn(value, "enabled") ? value.enabled : current.enabled,
-      schedule: Object.hasOwn(value, "schedule") ? value.schedule : current.schedule,
-      context: Object.hasOwn(value, "context") ? value.context : current.context,
-      targets: Object.hasOwn(value, "targets") ? value.targets : current.targets
-    });
     const update: UpdateScheduledTaskInput = {
       id: taskId,
-      expectedRevision,
-      name: merged.name,
-      enabled: merged.enabled,
-      schedule: merged.schedule,
-      context: merged.context,
-      targets: merged.targets
+      expectedRevision
     };
+    if (["name", "enabled", "schedule", "context", "targets"].some((key) => Object.hasOwn(value, key))) {
+      const merged = this.validatedDraft({
+        name: Object.hasOwn(value, "name") ? value.name : current.name,
+        enabled: Object.hasOwn(value, "enabled") ? value.enabled : current.enabled,
+        schedule: Object.hasOwn(value, "schedule") ? value.schedule : current.schedule,
+        context: Object.hasOwn(value, "context") ? value.context : current.context,
+        targets: Object.hasOwn(value, "targets") ? value.targets : current.targets
+      });
+      Object.assign(update, merged);
+    }
+    if (Object.hasOwn(value, "permanentRetention")) {
+      update.permanentRetention = scheduledTaskBoolean(value.permanentRetention, "permanentRetention");
+    }
     try {
       const result = this.store.update(update);
       if (result.status === "not_found") throw taskNotFound(taskId);
       if (result.status === "conflict") throw taskConflict(result.current);
       this.wake();
-      return this.adminView(result.task);
+      return this.adminCatalog.view(result.task);
     } catch (error) {
       if (error instanceof ServiceError) throw error;
       throw scheduledTaskInputError(error);
@@ -205,13 +210,19 @@ export class RuntimeScheduledTasks {
     };
   }
 
-  processEvent(event: SessionEventRecord): SessionHandleResult {
+  async processEvent(
+    event: SessionEventRecord,
+    turnContext?: SessionTurnContext
+  ): Promise<SessionHandleResult> {
     if (event.kind !== SCHEDULED_CALLBACK_EVENT_KIND) {
       throw new Error(`Unsupported scheduled callback event: ${event.kind}`);
     }
     const payload = decodeScheduledCallbackDelivery(event.payload);
     if (payload.target.conversationId !== event.sessionId) {
       throw new Error(`Scheduled callback event ${event.id} targets another conversation.`);
+    }
+    if (readCallbackInput(payload.text)) {
+      return this.runAgentCallback(payload, turnContext);
     }
     const dedupeKey = callbackDedupeKey(payload.runId);
     return {
@@ -236,6 +247,56 @@ export class RuntimeScheduledTasks {
     };
   }
 
+  private async runAgentCallback(
+    payload: ScheduledCallbackPayloadV1,
+    turnContext?: SessionTurnContext
+  ): Promise<SessionHandleResult> {
+    const signal = turnContext?.signal ?? new AbortController().signal;
+    const incoming = scheduledCallbackIncoming(this.host, payload.target, payload.triggeredAt, payload.text);
+    const delivery: ReplyDelivery = {
+      outbox: [],
+      emitOutbox: turnContext?.emitOutbox,
+      emitDeferredOutbox: turnContext?.emitDeferredOutbox,
+      replyQuote: { enabled: false, replyToMessageId: null },
+      mentionUserIds: [...payload.target.mentionUserIds],
+      systemConfigHeld: createSystemConfigHeldConfirmationPort(this.host, turnContext?.appendHeldOutbox)
+    };
+    let deferred: DeferredCodexTurn | undefined;
+    await this.host.replyToIncoming(
+      payload.target.conversationId,
+      incoming,
+      this.host.activeGateway ?? offlineCallbackGateway(),
+      {
+        signal,
+        isCurrent: () => !signal.aborted,
+        delivery,
+        onDeferred: (value) => { deferred = value; },
+        messageOrigin: "async_tool_callback",
+        ...(payload.taskId.startsWith(DIRECTOR_SCHEDULED_TASK_ID_PREFIX)
+          ? { atomicImageReply: true }
+          : {})
+      }
+    );
+    if (deferred) {
+      return {
+        status: "deferred",
+        providerCallId: deferred.deferred.toolCall.callId,
+        toolName: deferred.deferred.toolCall.name,
+        arguments: deferred.deferred.toolCall.arguments,
+        originalRequest: deferred.originalRequest,
+        acknowledgement: deferred.acknowledgement,
+        result: { acknowledgement: decodeAssistantReply(deferred.acknowledgement.payload).text }
+      };
+    }
+    if (delivery.terminalStatus === "no_reply") {
+      return { status: "no_reply", ...(delivery.outbox.length ? { outbox: delivery.outbox } : {}) };
+    }
+    if (delivery.terminalStatus === "replied") return { status: "completed" };
+    return delivery.outbox.length
+      ? { status: "completed", outbox: delivery.outbox }
+      : { status: "no_reply" };
+  }
+
   async deliverOutbox(outbox: OutboxRecord, context: OutboxDeliveryContext) {
     if (outbox.kind !== SCHEDULED_CALLBACK_OUTBOX_KIND) {
       throw new Error(`Unsupported scheduled callback outbox: ${outbox.kind}`);
@@ -252,7 +313,7 @@ export class RuntimeScheduledTasks {
       if (!gateway || !isAccountConnected(gateway, payload.target.accountId)) {
         throw new OutboxDisconnectedError("OneBot is not connected for the scheduled callback account.");
       }
-      await context.sendRemote(() => gateway.send({
+      await context.sendRemote(() => sendOutboundBubble(gateway, outboundMessageBubble({
         schemaVersion: 1,
         id: outbox.id,
         conversationId: payload.target.conversationId,
@@ -267,7 +328,7 @@ export class RuntimeScheduledTasks {
           ? { mentionUserIds: [...payload.target.mentionUserIds] }
           : {}),
         idempotencyKey: outbox.dedupeKey ?? callbackDedupeKey(payload.runId)
-      }));
+      })));
     }
 
     await context.settleStep("conversation_projection", (idempotencyKey) => {
@@ -317,7 +378,7 @@ export class RuntimeScheduledTasks {
         return { ok: true, operation: "get", task: this.getScheduledTask(resolved.taskId!) };
       }
       if (resolved.operation === "list") {
-        return { ok: true, operation: "list", tasks: this.listScheduledTasks() };
+        return { ok: true, operation: "list", tasks: this.adminCatalog.listAll() };
       }
       if (resolved.operation === "update") {
         const update = cronUpdateInput(resolved);
@@ -409,30 +470,6 @@ export class RuntimeScheduledTasks {
     return task;
   }
 
-  private adminView(task: ScheduledTask): ScheduledTaskAdminView {
-    const latest = this.store.listRuns(task.id).at(-1);
-    return {
-      id: task.id,
-      revision: task.revision,
-      name: task.name,
-      enabled: task.enabled,
-      context: task.context,
-      schedule: structuredClone(task.schedule),
-      targets: task.targets.map((target) => ({
-        conversationId: target.conversationId,
-        mentionUserIds: [...target.mentionUserIds]
-      })),
-      createdAt: task.createdAt,
-      updatedAt: task.updatedAt,
-      ...(task.nextRunAt ? { nextTriggerAt: task.nextRunAt } : {}),
-      ...(latest?.scheduledFor || task.lastScheduledAt
-        ? { lastTriggerAt: latest?.scheduledFor ?? task.lastScheduledAt! }
-        : {}),
-      ...(latest ? { lastRunStatus: latest.status } : {}),
-      ...(latest?.errorText ? { lastError: latest.errorText } : {})
-    };
-  }
-
   private async generate(run: ScheduledTaskRun, signal: AbortSignal) {
     if (signal.aborted) throw signal.reason ?? new Error("Scheduled task generation aborted.");
     const payload = {
@@ -457,16 +494,9 @@ export class RuntimeScheduledTasks {
     const request = await this.host.renderPromptRequest(SCHEDULED_TASK_CALLBACK_PROMPT_ID, {
       [SCHEDULED_TASK_PAYLOAD_VARIABLE]: payload
     });
-    const text = await this.host.completePrompt(this.host.getProvider(), request, {
-      signal,
-      logContext: {
-        conversationId: `scheduled:${run.taskId}`,
-        runId: run.id,
-        stage: "scheduled_task",
-        promptFamily: SCHEDULED_TASK_CALLBACK_PROMPT_ID
-      }
-    });
-    return normalizeScheduledTaskResult(text);
+    return normalizeScheduledTaskResult(buildCallbackInput("scheduled_task", {
+      promptMessages: request.messages
+    }));
   }
 
   private async enqueueDeliveries(run: ScheduledTaskRun, signal: AbortSignal) {
@@ -475,7 +505,6 @@ export class RuntimeScheduledTasks {
     for (const target of run.snapshot.targets) {
       if (signal.aborted) throw signal.reason ?? new Error("Scheduled task delivery aborted.");
       const resolvedTarget = resolveTarget(this.host.conversationRecords.get(target.conversationId), target);
-      const dedupeKey = callbackDedupeKey(run.id);
       const payload: ScheduledCallbackPayloadV1 = {
         type: "scheduled_callback",
         taskId: run.taskId,
@@ -487,19 +516,7 @@ export class RuntimeScheduledTasks {
         text,
         target: resolvedTarget
       };
-      this.host.sessionCoordinator.enqueueEvent({
-        sessionId: resolvedTarget.conversationId,
-        kind: SCHEDULED_CALLBACK_EVENT_KIND,
-        dedupeKey,
-        payload: scheduledCallbackDeliveryEnvelope(payload, {
-          conversationId: resolvedTarget.conversationId,
-          correlationId: run.id,
-          causationId: run.taskId,
-          idempotencyKey: dedupeKey,
-          occurredAt: triggeredAt,
-          id: `${run.id}:${resolvedTarget.conversationId}`
-        })
-      });
+      this.enqueueCallback(payload);
     }
     await appendRequestLog({
       category: "runtime.action",
@@ -520,6 +537,81 @@ export class RuntimeScheduledTasks {
       }
     });
   }
+
+  private enqueueCallback(payload: ScheduledCallbackPayloadV1) {
+    const dedupeKey = callbackDedupeKey(payload.runId);
+    this.host.sessionCoordinator.enqueueEvent({
+      sessionId: payload.target.conversationId,
+      kind: SCHEDULED_CALLBACK_EVENT_KIND,
+      dedupeKey,
+      payload: scheduledCallbackDeliveryEnvelope(payload, {
+        conversationId: payload.target.conversationId,
+        correlationId: payload.runId,
+        causationId: payload.taskId,
+        idempotencyKey: dedupeKey,
+        occurredAt: payload.triggeredAt,
+        id: `${payload.runId}:${payload.target.conversationId}`
+      })
+    });
+  }
+}
+
+async function enqueueRuntimeSystemCallback(
+  host: SunaRuntime,
+  input: RuntimeSystemCallbackInput,
+  enqueue: (payload: ScheduledCallbackPayloadV1) => void
+) {
+  const triggeredAt = validCallbackDate(input.triggeredAt ?? new Date()).toISOString();
+  const runId = callbackField(input.id, "id", 80);
+  const kind = callbackField(input.kind, "kind", 64);
+  const name = callbackField(input.name, "name", 120);
+  const taskId = `system:${kind}`;
+  const target = resolveTarget(host.conversationRecords.get(input.target.conversationId), input.target);
+  const request = await host.renderPromptRequest(SCHEDULED_TASK_CALLBACK_PROMPT_ID, {
+    [SCHEDULED_TASK_PAYLOAD_VARIABLE]: {
+      schemaVersion: 1,
+      systemTimeZone: systemModelTimeZone(),
+      task: {
+        id: taskId,
+        revision: 1,
+        name,
+        context: callbackField(input.context, "context", 20_000),
+        schedule: { kind: "once", runAt: formatModelTimestamp(triggeredAt) }
+      },
+      occurrence: {
+        runId,
+        scheduledFor: formatModelTimestamp(triggeredAt),
+        triggeredAt: formatModelTimestamp(triggeredAt)
+      },
+      targets: [input.target]
+    }
+  });
+  const payload: ScheduledCallbackPayloadV1 = {
+    type: "scheduled_callback",
+    taskId,
+    taskRevision: 1,
+    runId,
+    taskName: name,
+    scheduledFor: triggeredAt,
+    triggeredAt,
+    text: normalizeScheduledTaskResult(buildCallbackInput("scheduled_task", {
+      promptMessages: request.messages
+    })),
+    target
+  };
+  enqueue(payload);
+  await appendRequestLog({
+    category: "runtime.action",
+    action: "scheduled_callback.queued",
+    request: { taskId, taskRevision: 1, scheduledFor: triggeredAt },
+    response: { targetCount: 1, textChars: payload.text.length },
+    metadata: {
+      conversationId: target.conversationId,
+      runId,
+      stage: "scheduled_task"
+    }
+  });
+  return { queued: true as const, conversationId: target.conversationId, runId };
 }
 
 function resolveTarget(
@@ -556,7 +648,8 @@ function resolveTarget(
 function scheduledCallbackIncoming(
   host: SunaRuntime,
   target: ScheduledCallbackTargetV1,
-  at: string
+  at: string,
+  text = ""
 ): ParsedIncomingMessage {
   const record = host.conversationRecords.get(target.conversationId);
   return {
@@ -570,12 +663,22 @@ function scheduledCallbackIncoming(
     ...(target.groupId == null ? {} : { groupId: target.groupId }),
     ...(record?.selfId == null ? {} : { selfId: record.selfId }),
     sender: { id: String(target.userId) },
-    text: "",
+    text,
     media: [],
     attachments: [],
     replyMessageIds: [],
     quoteReferences: [],
     mentionedSelf: false
+  };
+}
+
+function offlineCallbackGateway(): MessagingPort {
+  const unavailable = async () => { throw new OutboxDisconnectedError("OneBot is not connected."); };
+  return {
+    getStatus: () => ({ connected: false, connections: 0, selfIds: [] }),
+    send: unavailable,
+    resolveSender: unavailable,
+    getMessage: unavailable
   };
 }
 
@@ -594,6 +697,19 @@ function messagingReceiptMessageId(value: unknown) {
 
 function callbackDedupeKey(runId: string) {
   return `scheduled-callback:${runId}`;
+}
+
+function callbackField(value: string, field: string, maxLength: number) {
+  const normalized = String(value ?? "").trim();
+  if (!normalized || normalized.length > maxLength) throw new Error(`System callback ${field} is invalid.`);
+  return normalized;
+}
+
+function validCallbackDate(value: Date) {
+  if (!(value instanceof Date) || !Number.isFinite(value.getTime())) {
+    throw new Error("System callback triggeredAt is invalid.");
+  }
+  return new Date(value.getTime());
 }
 
 function strictRecord(value: unknown, code: string, message: string): Record<string, unknown> {
@@ -615,6 +731,13 @@ function positiveRevision(value: unknown) {
     throw new ServiceError(400, "SCHEDULED_TASK_REVISION_INVALID", "revision 必须是正整数。", "revision");
   }
   return Number(value);
+}
+
+function scheduledTaskBoolean(value: unknown, field: string) {
+  if (typeof value !== "boolean") {
+    throw new ServiceError(400, "SCHEDULED_TASK_FIELD_INVALID", `${field} 必须是布尔值。`, field);
+  }
+  return value;
 }
 
 function validTaskId(value: string) {

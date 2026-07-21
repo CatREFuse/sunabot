@@ -25,19 +25,27 @@ export interface VoiceProfile {
   enabled: boolean;
   defaultLanguage: VoiceLanguage;
   languages: Record<VoiceLanguage, VoiceReferenceMetadata | null>;
+  provider: VoiceProviderSettings;
+}
+
+export interface VoiceProviderSettings {
+  protocol: "openai-audio";
+  baseUrl: string;
+  apiKeyEnv: string;
+  model: string;
+  voices: Record<VoiceLanguage, string | null>;
 }
 
 export interface VoiceProviderStatus {
-  provider: "MOSS-TTS-Nano";
+  provider: "OpenAI Audio";
+  state: "ready" | "unconfigured" | "unavailable";
   ready: boolean;
   checkedAt: string;
   latencyMs?: number;
-  serviceState?: "running" | "stopped" | "unknown";
-  controlsAvailable?: boolean;
   message?: string;
 }
 
-export type VoiceServiceAction = "check" | "start" | "stop" | "";
+export type VoiceServiceAction = "check" | "";
 
 export interface VoiceProfileGetResponse {
   profile: VoiceProfile;
@@ -56,6 +64,8 @@ export interface VoiceProfileSettingsInput {
   enabled: boolean;
   defaultLanguage: VoiceLanguage;
 }
+
+export type VoiceProviderSettingsInput = VoiceProviderSettings;
 
 export interface VoiceReferenceInput {
   file: File;

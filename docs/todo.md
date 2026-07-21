@@ -132,9 +132,9 @@
 
 - [ ] **BASH-FIX-001｜P0｜分会话 Bash 审计、确认与强隔离**
   - 基础安全模块已形成 clean commit `903f88905362822a37329d6bd7a14226b7323308`，Provider/runtime/server 原子 wiring 已形成 clean commit `ba8b66feb2a293981a16e4479f812e4a24aa8e7e`。wiring 冻结快照通过 16 files / 365 tests、86 项定向回归、类型、架构、runtime contract、生产构建、Compose 静态合同、diff-check 与独立终审，覆盖配置 epoch、A→B→A、audit/文件探针/审批/隔离各异步边界和最终 check-to-exec 零 await；两项 commit 仍需在 `INTEGRATION-001` 与 Provider raw-sibling preflight、媒体、文件工具和 W2 统一合并并完成真实隔离冒烟，本项保持未完成且不可单独上线。
-  - 默认只有管理员私聊获得 Bash capability，并可在系统配置中选择 Native 或 Docker backend。若未来或既有显式配置允许其他 scope，也只能使用 Docker/等价强隔离 backend，并同时通过 `adminOnly` 与 `allowGroup` 双门禁；非管理员、未允许群聊与伪造调用始终拒绝。所有命令先经过独立模型审计，再经过不可被模型覆盖的确定性策略；永久高危命令始终拒绝，允许确认的越界操作使用一次性、绑定命令与会话的管理员票据。
-  - `workbench` 是唯一可写数据边界。Native backend 只有在平台强沙箱探针通过时可用；macOS Native 缺少等价强隔离时必须安全拒绝或切换 Docker，不能执行普通宿主 Bash。Docker Core 不能通过挂载 Docker socket 放宽隔离。
-  - 验收：覆盖管理员/普通用户/群聊、backend 切换、模型审计失败与超时、确定性永久拒绝、一次性确认重放、路径/符号链接/挂载/子进程/环境变量逃逸、超时与输出上限、Native/Docker 能力探针、macOS fail-closed、Docker Core 与 Linux/WSL 契约。
+  - Bash capability 使用固定会话路由：管理员 QQ 私聊为 Native `admin`，管理员群聊及其他 QQ 私聊和群聊为 Docker `isolated`，Web Chat 与伪造调用始终拒绝；系统配置不能切换 backend。两种 backend 的每条命令都先经过独立模型审计，再经过不可被模型覆盖的确定性策略；永久高危命令始终拒绝，允许确认的越界操作使用一次性、绑定命令与会话的管理员票据。
+  - Native 与 Docker 使用不同 workbench，业务目录只共享当前 Agent 的 Skill 与 MCP 配置；Docker 中两者只读。macOS Native 只在 Core 非 root 且宿主 `/bin/bash` 探针通过后，以清理环境的 Core OS 用户执行；Linux/WSL Native 与 Docker Core 继续使用强隔离，Docker Core 不能通过挂载 Docker socket 放宽隔离。
+  - 验收：覆盖管理员私聊、管理员群聊、普通用户私聊和群聊的固定路由，模型审计失败与超时、确定性永久拒绝、一次性确认重放、路径/符号链接/挂载/子进程/环境变量逃逸、超时与输出上限、macOS 非 root `/bin/bash` capability、root 与探针失败关闭、Docker Core 与 Linux/WSL 契约。
   - 风险：当前配置、Provider executor、reply runtime、管理 API/UI、Docker/launcher 和既有 `GATE-006` 均有交叉；基础安全模块先独立验收，共享接线后置。
 
 - [ ] **TOOL-FIX-002｜P1｜独立 `read_file` / `write_file` 工具**

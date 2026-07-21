@@ -18,6 +18,7 @@ import {
   stopNativeCoreProcessGroups
 } from "./native-core-process.mjs";
 import { buildRuntimeProbe, collectWorkspaceProbeFacts } from "./probe.mjs";
+import { removeLegacyVoiceContainers } from "./legacy-voice-cleanup.mjs";
 import { accountRuntimeState, planAccountReconciliation } from "./account-reconciler.mjs";
 import {
   inspectAccountRuntimeOwner,
@@ -43,10 +44,6 @@ import {
   reverseWebSocketWithHost,
   workspaceIdentity
 } from "./launcher-core.mjs";
-import {
-  attachVoiceServiceRuntimeNetwork,
-  detachVoiceServiceRuntimeNetwork
-} from "./voice-service-control.mjs";
 
 const root = resolveProjectRoot(import.meta.url);
 const STARTUP_REQUIRED_CHECK_IDS = new Set([
@@ -163,10 +160,6 @@ async function restartRuntime(context) {
   const baseline = await assertRuntimeEmpty(context);
   await waitForRuntimePortsClosed(context, { dev: context.dev });
   await ensureRuntimeNetwork(context);
-  await attachVoiceServiceRuntimeNetwork({
-    workspace: context.workspace,
-    environment: composeEnvironment(context)
-  });
   if (context.mode === "native") await upNative(context, baseline, secrets.values);
   else await upDocker(context, baseline, secrets.values);
   try {
@@ -194,6 +187,7 @@ async function upNative(context, before, secrets) {
   if (!context.dev) await ensureNativeBuild(context);
   await prepareNativeBashImage(context);
   await compose(context, ["build", context.contract.napcatService]);
+  await prepareWebfetchRenderer(context);
   const onebotListenHost = await resolveNativeOnebotListenHost(context);
   if (await tcpOpen(onebotListenHost, context.contract.onebotPort)) {
     throw new Error(`${onebotListenHost}:${context.contract.onebotPort} 已被非当前 launcher 管理的进程占用。`);
@@ -251,12 +245,27 @@ async function prepareNativeBashImage(context) {
   }
 }
 
+async function prepareWebfetchRenderer(context) {
+  try {
+    await compose(context, ["up", "-d", "--build", context.contract.webfetchRendererService]);
+    await waitForHttp(
+      `http://127.0.0.1:${context.contract.webfetchRendererPort}/healthz`,
+      context.contract.coreReadyTimeoutSeconds * 1_000
+    );
+    return true;
+  } catch (error) {
+    console.warn(`WebFetch 动态渲染服务准备失败，静态抓取保持可用：${message(error)}`);
+    return false;
+  }
+}
+
 async function upDocker(context, before, secrets) {
   if (!before.dockerCore.running && await tcpOpen("127.0.0.1", context.contract.adminPort)) {
     throw new Error(`127.0.0.1:${context.contract.adminPort} 已被非当前 Docker Core 占用。`);
   }
   try {
     await prepareWslDockerProxy(context);
+    await prepareWebfetchRenderer(context);
     await compose(context, [
       "--profile",
       context.contract.coreProfile,
@@ -324,9 +333,9 @@ async function down(context) {
     });
   }
   await removeWorkspaceContainers(context);
-  await detachVoiceServiceRuntimeNetwork({
-    workspace: context.workspace,
-    environment: composeEnvironment(context)
+  await removeLegacyVoiceContainers({
+    workspaceId: context.identity,
+    timeoutSeconds: context.contract.shutdownTimeoutSeconds
   });
   await removeRuntimeNetwork(context);
   if (runtime.state || runtime.nativeProcessGroups.length > 0) {
@@ -484,6 +493,10 @@ async function collectRuntimeProbeFacts(context) {
       .catch(() => false);
   }
   const onebotReady = runtime.native.running ? await httpReady(onebotPath) : dockerCoreHealthy;
+  const webfetchRendererReady = runtime.webfetchRenderer.matches.length === 1
+    && await componentHealthStatus(runtime.webfetchRenderer.matches[0].id)
+      .then((status) => status === "healthy")
+      .catch(() => false);
   const conflicts = accountRuntimeConflicts(runtime.reconciler, context);
 
   const docker = await dockerAvailable();
@@ -585,7 +598,14 @@ async function collectRuntimeProbeFacts(context) {
       docker: { ok: docker, detail: docker ? "available" : "unavailable" },
       compose: { ok: compose, detail: compose ? "available" : "unavailable" }
     },
-    capabilities: { ...workspaceFacts.capabilities, ...capabilities }
+    capabilities: {
+      ...workspaceFacts.capabilities,
+      ...capabilities,
+      webfetchDynamicRenderer: {
+        ok: webfetchRendererReady,
+        detail: webfetchRendererReady ? "renderer healthy" : "renderer unavailable"
+      }
+    }
   };
 }
 
@@ -623,7 +643,7 @@ function printHelp() {
 
 async function logs(context) {
   const runtime = await inspectRuntime(context);
-  if (!runtime.native.running && !runtime.dockerCore.running && !runtime.napcat.running) {
+  if (!runtime.native.running && !runtime.dockerCore.running && !runtime.napcat.running && !runtime.webfetchRenderer.running) {
     throw new Error("Sunabot 尚未运行。");
   }
   const children = [];
@@ -632,7 +652,8 @@ async function logs(context) {
   }
   if (runtime.containers.length > 0) {
     const services = [
-      ...(runtime.dockerCore.running ? [context.contract.coreService] : [])
+      ...(runtime.dockerCore.running ? [context.contract.coreService] : []),
+      ...(runtime.webfetchRenderer.running ? [context.contract.webfetchRendererService] : [])
     ];
     if (services.length) children.push(spawnCompose(context, ["--profile", context.contract.coreProfile, "logs", "-f", ...services]));
     for (const container of runtime.napcat.matches.filter((item) => item.state === "running")) {
@@ -1298,6 +1319,7 @@ async function inspectRuntime(context, options = {}) {
   ]);
   const dockerCore = componentStatus(containers, "core");
   const napcat = componentStatus(containers, "napcat");
+  const webfetchRenderer = componentStatus(containers, "webfetch-renderer");
   const foreignProjects = [...new Set(containers
     .map((item) => item.project)
     .filter((project) => project && project !== context.project && !project.startsWith(`${context.project}-napcat-`)))];
@@ -1310,6 +1332,7 @@ async function inspectRuntime(context, options = {}) {
     legacyContainers,
     dockerCore,
     napcat,
+    webfetchRenderer,
     foreignProjects
   };
 }
@@ -1531,7 +1554,11 @@ async function assertComposeServices(context) {
   }
   const output = await compose(context, ["--profile", context.contract.coreProfile, "config", "--services"], { capture: true });
   const services = new Set(output.split(/\r?\n/).map((value) => value.trim()).filter(Boolean));
-  for (const expected of [context.contract.coreService, context.contract.napcatService]) {
+  for (const expected of [
+    context.contract.coreService,
+    context.contract.napcatService,
+    context.contract.webfetchRendererService
+  ]) {
     if (!services.has(expected)) throw new Error(`Compose 缺少 ${expected} service。`);
   }
 }
@@ -1589,6 +1616,9 @@ function composeEnvironment(context, project = context.project) {
     SUNABOT_RUNTIME_ID: context.contract.runtimeId,
     SUNABOT_RUNTIME_UID: String(process.getuid?.() ?? 1000),
     SUNABOT_RUNTIME_GID: String(process.getgid?.() ?? 1000),
+    SUNABOT_WEBFETCH_PLATFORM:
+      process.platform === "darwin" && process.arch === "arm64" ? "linux/arm64" : "linux/amd64",
+    SUNABOT_WEBFETCH_CHROMIUM_SANDBOX: "1",
     SUNABOT_WORKSPACE: context.workspace,
     SUNABOT_WORKSPACE_ID: context.identity,
     SUNABOT_RUNTIME_ENV: context.runtimeEnv
@@ -1624,8 +1654,19 @@ async function ensureNativeDependencies(context) {
 
 async function inspectNativeCapabilities(context) {
   const codex = await inspectNativeCodex(context);
-  let workspaceBash = { ok: true, detail: "disabled on macOS Native Core" };
-  if (process.platform === "linux") {
+  let workspaceBash = { ok: false, detail: `unsupported native Bash platform: ${process.platform}` };
+  if (process.platform === "darwin") {
+    if ((process.getuid?.() ?? -1) <= 0) {
+      workspaceBash = { ok: false, detail: "Native host Bash requires a non-root runtime user" };
+    } else {
+      try {
+        await command("/bin/bash", ["--noprofile", "--norc", "-lc", ":"], { capture: true });
+        workspaceBash = { ok: true, detail: "audited administrator private-chat host Bash available" };
+      } catch (error) {
+        workspaceBash = { ok: false, detail: message(error) };
+      }
+    }
+  } else if (process.platform === "linux") {
     try {
       await command("/usr/bin/bwrap", bubblewrapProbeArguments(context.workspace), { capture: true });
       workspaceBash = { ok: true, detail: "bubblewrap namespace probe passed" };

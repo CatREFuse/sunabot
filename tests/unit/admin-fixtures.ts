@@ -54,8 +54,10 @@ export function createAdminTestConfig(rootDir: string): AppConfig {
       quoteGroupReplyExcludedUserIds: [],
       contextMessageLimit: 48,
       emojiSendSize: 512,
+      emojiSendSeparately: false,
       tone: {
         enabled: false,
+        segmentedReply: false,
         followMainModel: false,
         providerId: "",
         model: "gpt-5.4-mini",
@@ -69,6 +71,9 @@ export function createAdminTestConfig(rootDir: string): AppConfig {
         reasoningEffort: "medium",
         messageThreshold: 48,
         workingMemoryMaxEntries: 100,
+        dreamRecentWindowHours: 48,
+        dreamRecentMemoryLimit: 12,
+        dreamOlderMemoryLimit: 12,
         workMemoryCompressInPrompt: "work_memory_compress_in.json",
         workMemoryCompressOutPrompt: "work_memory_compress_out.json",
         userProfilePrompt: "user_profile_prompt.json"

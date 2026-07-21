@@ -120,6 +120,10 @@ import { RuntimeReplyDebounce } from "./runtime/replyDebounce.js";
 import { RuntimeConversationAssets } from "./runtime/conversationAssets.js";
 import { RuntimeScheduledTasks } from "./runtime/scheduledTasks.js";
 import { RuntimeVoice } from "./runtime/voice.js";
+import { RuntimeDirector } from "./runtime/director.js";
+import { RuntimeAir } from "./runtime/air.js";
+import { RuntimeDreams } from "./runtime/dreamPipeline.js";
+import { createRuntimeDreamsForHost, forceRuntimeDreamForHost } from "./runtime/dreamRuntime.js";
 import { RuntimeTone } from "./runtime/tone.js";
 import { TaskLimiter, errorMessage, loadConversationRecords } from "./runtime/infrastructure.js";
 import type {
@@ -170,6 +174,9 @@ export class SunaRuntime {
   readonly ownsSessionStore: boolean;
   readonly sessionCoordinator: SessionCoordinator;
   readonly scheduledTasks: RuntimeScheduledTasks;
+  readonly director: RuntimeDirector;
+  readonly air: RuntimeAir;
+  readonly dreams: RuntimeDreams;
   readonly bashAudit?: RuntimeBashAuditPort;
   private readonly rawToolCapabilityResolver?: RuntimeToolCapabilityResolver;
   readonly systemConfig?: SystemConfigRuntimePort;
@@ -263,6 +270,9 @@ export class SunaRuntime {
           /OneBot is not connected|websocket.*closed/i.test(errorMessage(error))
       });
       this.scheduledTasks = new RuntimeScheduledTasks(this);
+      this.director = new RuntimeDirector(this);
+      this.air = new RuntimeAir(this);
+      this.dreams = createRuntimeDreamsForHost(this);
       this.commandRouter = new CommandRouter<RuntimeCommandContext>([
         {
           id: "group-summary",
@@ -329,6 +339,10 @@ export class SunaRuntime {
   createScheduledTask(...args: Parameters<RuntimeScheduledTasks["createScheduledTask"]>) { return this.inAgentContext(() => this.scheduledTasks.createScheduledTask(...args)); }
   updateScheduledTask(...args: Parameters<RuntimeScheduledTasks["updateScheduledTask"]>) { return this.inAgentContext(() => this.scheduledTasks.updateScheduledTask(...args)); }
   deleteScheduledTask(...args: Parameters<RuntimeScheduledTasks["deleteScheduledTask"]>) { return this.inAgentContext(() => this.scheduledTasks.deleteScheduledTask(...args)); }
+  listDreamHistory(...args: Parameters<RuntimeDreams["listHistory"]>) { return this.dreams.listHistory(...args); }
+  forceDream(input: Parameters<typeof forceRuntimeDreamForHost>[1]) {
+    return this.inAgentContext(() => forceRuntimeDreamForHost(this, input));
+  }
   getConversationRecords(...args: Parameters<RuntimeLifecycle["getConversationRecords"]>) { return this.lifecycle.getConversationRecords(...args); }
   publicConversationRecord(...args: Parameters<RuntimeLifecycle["publicConversationRecord"]>) { return this.lifecycle.publicConversationRecord(...args); }
   getConversationMessages(...args: Parameters<RuntimeLifecycle["getConversationMessages"]>) { return this.lifecycle.getConversationMessages(...args); }
@@ -377,7 +391,7 @@ export class SunaRuntime {
       const epoch = this.configEpoch;
       const config = freezeRuntimeConfigSnapshot(this.config);
       const backend = backendOverride === undefined
-        ? config.bot.bash.adminPrivateBackend
+        ? "native"
         : backendOverride;
       const workspacePath = resolveProjectPath(config.persona.agentWorkspace);
       let auditAvailable = false;
@@ -428,7 +442,7 @@ export class SunaRuntime {
     }
     const config = freezeRuntimeConfigSnapshot(this.config);
     const backend = backendOverride === undefined
-      ? config.bot.bash.adminPrivateBackend
+      ? "native"
       : backendOverride;
     const workspacePath = resolveProjectPath(config.persona.agentWorkspace);
     return {
@@ -473,6 +487,7 @@ export class SunaRuntime {
   drainMemoryScheduler(...args: Parameters<RuntimeMemoryPipeline["drainMemoryScheduler"]>) { return this.inAgentContext(() => this.memory.drainMemoryScheduler(...args)); }
   projectMemoryCursor(...args: Parameters<RuntimeMemoryPipeline["projectMemoryCursor"]>) { return this.memory.projectMemoryCursor(...args); }
   rewriteToneText(...args: Parameters<RuntimeTone["rewrite"]>) { return this.inAgentContext(() => this.tone.rewrite(...args)); }
+  rewriteToneDelivery(...args: Parameters<RuntimeTone["rewriteForDelivery"]>) { return this.inAgentContext(() => this.tone.rewriteForDelivery(...args)); }
   sendAssistantReply(...args: Parameters<RuntimeDelivery["sendAssistantReply"]>) { return this.delivery.sendAssistantReply(...args); }
   replyDeliveryDraft(...args: Parameters<RuntimeDelivery["replyDeliveryDraft"]>) { return this.delivery.replyDeliveryDraft(...args); }
   deliverReplyOutbox(...args: Parameters<RuntimeDelivery["deliverReplyOutbox"]>) { return this.delivery.deliverReplyOutbox(...args); }

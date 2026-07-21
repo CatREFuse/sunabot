@@ -1,4 +1,4 @@
-import { MossTtsNanoClient } from "../../adapters/voice/public.js";
+import { OpenAiSpeechClient } from "../../adapters/voice/public.js";
 import type { ProviderVoiceCompanion } from "../../adapters/model/openaiProvider.js";
 import {
   VoiceOutputStore,
@@ -7,6 +7,7 @@ import {
   defaultVoiceProfile,
   voicePromptVariables,
   type VoiceProfileV1,
+  type VoiceProviderSettings,
   type VoiceSynthesisClient,
 } from "../../services/voice/public.js";
 import type { MessagingPort } from "../../packages/contracts/messaging/messages.js";
@@ -54,7 +55,7 @@ export class RuntimeVoice {
     delivery: ReplyDelivery | undefined,
   ) {
     const languages = (["zh", "en", "ja"] as const).filter(
-      (language) => profile.languages[language] !== null,
+      (language) => profile.provider.voices[language] !== null,
     );
     return {
       enabled:
@@ -81,16 +82,12 @@ export class RuntimeVoice {
   ) {
     const startedAt = performance.now();
     try {
-      const reference = await this.repository().readRuntimeProfile(
+      const target = await this.repository().readRuntimeProfile(
         companion.language,
       );
-      const result = await this.client().generate({
+      const result = await this.client(target.provider).generate({
         text: companion.text,
-        promptAudio: {
-          bytes: reference.bytes,
-          fileName: reference.metadata.fileName,
-          mimeType: reference.metadata.mimeType,
-        },
+        voiceId: target.voiceId,
         ...(context.signal ? { signal: context.signal } : {}),
       });
       const stored = await this.outputStore().put(result.bytes, result.sha256);
@@ -142,11 +139,13 @@ export class RuntimeVoice {
     return this.outputStoreValue;
   }
 
-  private client() {
+  private client(provider: VoiceProviderSettings) {
     return (
       this.options.client ??
-      new MossTtsNanoClient({
-        baseUrl: process.env.SUNABOT_MOSS_TTS_NANO_URL,
+      new OpenAiSpeechClient({
+        baseUrl: provider.baseUrl,
+        model: provider.model,
+        apiKey: process.env[provider.apiKeyEnv] ?? "",
       })
     );
   }

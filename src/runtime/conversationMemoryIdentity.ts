@@ -43,11 +43,9 @@ export function trustedParticipantName(user: BatchUserInfo) {
 }
 
 function trustedParticipantNames(user: BatchUserInfo) {
-  return uniqueStrings([
-    validMemoryUserName(normalizeObservedName(user.currentName, user.userId), user.userId),
-    ...[...user.names].reverse()
-      .map((name) => validMemoryUserName(normalizeObservedName(name, user.userId), user.userId))
-  ].filter((name): name is string => Boolean(name)));
+  return uniqueStrings((user.addressNames ?? user.names ?? [])
+    .map((name) => validMemoryUserName(normalizeObservedName(name, user.userId), user.userId))
+    .filter((name): name is string => Boolean(name)));
 }
 
 function normalizeObservedName(value: unknown, userId: string) {

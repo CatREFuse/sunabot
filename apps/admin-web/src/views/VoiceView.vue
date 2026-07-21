@@ -48,13 +48,15 @@ onBeforeUnmount(() => voice.dispose());
       </PageHeader>
 
       <VoiceServiceControls
+        :key="agentId"
+        :settings="voice.profile.value?.provider ?? null"
         :provider="voice.provider.value"
         :action="voice.serviceAction.value"
+        :saving="voice.saving.value"
         :error="voice.serviceError.value"
         :message="voice.serviceMessage.value"
         @check="voice.checkService(agentId)"
-        @start="voice.startService(agentId)"
-        @stop="voice.stopService(agentId)"
+        @save="voice.saveProvider(agentId, $event)"
       />
 
       <VoiceProfileSettings

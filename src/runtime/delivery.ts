@@ -34,6 +34,7 @@ import {
   type ReplyQuoteSnapshotV1,
   type RuntimeIncomingReplyEventPayload
 } from "../../packages/contracts/session/runtimeMessages.js";
+import type { OutboxBubbleSequenceV1 } from "../../packages/contracts/session/assistantReplyMetadata.js";
 import { applicationDataStore, sqliteMemoryPersistence } from "../../adapters/sqlite/applicationDataStore.js";
 import { configureMemoryPersistence } from "../../services/memory/persistence.js";
 import {
@@ -75,9 +76,12 @@ import {
 import type { ProviderLogContext } from "../../packages/contracts/model/modelGateway.js";
 import {
   inboundImageUrls,
+  outboundMessageBubble,
   replaceInboundImageUrls,
+  sendOutboundBubble,
   type MessageDetailsV1,
   type MessagingPort,
+  type MessagingReceiptV1,
   type OutboundMessageV1
 } from "../../packages/contracts/messaging/messages.js";
 import {
@@ -99,6 +103,7 @@ import {
   type OutboxDeliveryContext,
   type SessionHandleResult
 } from "../../services/sessions/sessionCoordinator.js";
+import { waitForOutboxBubble } from "../../services/sessions/outboxBubblePacing.js";
 import { SessionStore, type OutboxRecord, type SessionEventRecord } from "../../services/sessions/sessionStore.js";
 import { TOOL_CALL_TIMEOUT_MS } from "../../services/tools/tools.js";
 import { promptDefinitionById } from "../../services/agent/promptCatalog.js";
@@ -111,10 +116,16 @@ import {
 } from "../../services/agent/promptSystem.js";
 import { buildConversationPromptVariables } from "../../services/agent/persona.js";
 import {
+  isEmojiFileName,
   prepareEmojiReply,
   replanEmojiMarkers,
   type EmojiMarkerPlan
 } from "../../services/emojis/emojiCatalog.js";
+import {
+  parseSegmentedReplyXml,
+  type SegmentedReplyNodeV1
+} from "../../services/messaging/segmentedReply.js";
+import type { ToneAvailableAssetV1 } from "../../services/agent/toneReplyPrompt.js";
 import {
   planAgentEmojiMarkers
 } from "../emojis/emojiAssets.js";
@@ -141,7 +152,8 @@ export async function runtime_sendAssistantReply(this: RuntimeHost,
     trace: AssistantMessageTrace = { messageOrigin: "text" },
     deliveryTiming: "buffered" | "immediate" = "buffered",
     signal?: AbortSignal,
-    emojiPlan?: EmojiMarkerPlan
+    emojiPlan?: EmojiMarkerPlan,
+    singleMessage = false
   ) {
     if (
       !this.isReplySenderAllowed(incoming.userId) ||
@@ -153,10 +165,7 @@ export async function runtime_sendAssistantReply(this: RuntimeHost,
       text,
       context: { scope: incoming.scope, userId: incoming.userId, groupId: incoming.groupId, isAdmin }
     });
-    const rewritten = await rewritePlannedEmojiText(
-      beforeReply.text,
-      plannedEmojiReply,
-      (value) => this.rewriteToneText(value, {
+    const toneContext = {
           incoming,
           signal,
           logContext: {
@@ -164,75 +173,137 @@ export async function runtime_sendAssistantReply(this: RuntimeHost,
             incomingMessageId: incoming.messageId == null ? undefined : String(incoming.messageId),
             runId: logRunId
           }
-        })
-    );
-    const normalizedText = normalizeOutgoingReplyText(rewritten.text).trim();
-    const preparedReply = prepareEmojiReply(
-      normalizedText,
-      replanEmojiMarkers(normalizedText, rewritten.plan),
-      generatedImages.filter((image) => image.url || image.filePath)
-    );
-    const emojiImages = await prepareEmojiDeliveryImages(this.config, plannedEmojiReply);
-    preparedReply.images.splice(0, emojiImages.length, ...emojiImages);
-    const generatedImageAssets = preparedReply.images;
-    const generatedImageUrls = generatedImageAssets.flatMap((image) => image.url ? [image.url] : []);
-    const replyText = preparedReply.text;
-    if (!replyText && !generatedImageAssets.length) {
+        };
+    let replyText: string;
+    let outboundImageAssets: ImageResult[];
+    let deliveryParts: Array<{
+      text: string;
+      images: ImageResult[];
+      contentSegments?: OutboundMessageV1["contentSegments"];
+      primary: boolean;
+    }>;
+    if (this.config.bot.tone.enabled && this.config.bot.tone.segmentedReply) {
+      const currentEmojiPlan = replanEmojiMarkers(beforeReply.text, plannedEmojiReply);
+      const availableImages = generatedImages.filter((image) => image.url || image.filePath);
+      const assets: ToneAvailableAssetV1[] = availableImages.map((_, index) => ({
+        kind: "image",
+        src: segmentedImageSource(index)
+      }));
+      const rewritten = await this.rewriteToneDelivery(
+        beforeReply.text,
+        assets,
+        toneContext,
+        currentEmojiPlan.expectedMarkers
+      );
+      deliveryParts = await segmentedReplyDeliveryParts(
+        this.config,
+        rewritten.content,
+        currentEmojiPlan,
+        availableImages
+      );
+      replyText = deliveryParts.flatMap((part) => part.text ? [part.text] : []).join("\n");
+      outboundImageAssets = deliveryParts.flatMap((part) => part.images);
+    } else {
+      const rewritten = await rewritePlannedEmojiText(
+        beforeReply.text,
+        plannedEmojiReply,
+        (value) => this.rewriteToneText(value, toneContext)
+      );
+      const normalizedText = normalizeOutgoingReplyText(rewritten.text).trim();
+      const preparedReply = prepareEmojiReply(
+        normalizedText,
+        replanEmojiMarkers(normalizedText, rewritten.plan),
+        generatedImages.filter((image) => image.url || image.filePath)
+      );
+      const emojiImages = await prepareEmojiDeliveryImages(this.config, plannedEmojiReply);
+      preparedReply.images.splice(0, emojiImages.length, ...emojiImages);
+      outboundImageAssets = preparedReply.images;
+      replyText = preparedReply.text;
+      deliveryParts = emojiDeliveryParts(
+        replyText,
+        outboundImageAssets,
+        emojiImages.length,
+        preparedReply.contentSegments,
+        this.config.bot.emojiSendSeparately
+      );
+    }
+    if (singleMessage && deliveryParts.length > 1) {
+      deliveryParts = [{ text: replyText, images: outboundImageAssets, primary: true }];
+    }
+    const generatedImageUrls = generatedImages.flatMap((image) => image.url ? [image.url] : []);
+    if (!replyText && !outboundImageAssets.length) {
       throw new Error("模型回复为空。");
     }
     if (!isCurrent()) return undefined;
 
     if (delivery) {
-      const draft = this.replyDeliveryDraft(
-        incoming,
-        replyText,
-        isAdmin,
-        generatedImageAssets,
-        logRunId,
-        undefined,
-        quoteReply,
-        trace,
-        delivery.replyQuote,
-        preparedReply.contentSegments
-      );
-      if (deliveryTiming === "immediate" && delivery.emitOutbox) {
-        draft.dedupeFingerprint = immediateReplyFingerprint(
+      const drafts = deliveryParts.map((part, index) => this.replyDeliveryDraft(
           incoming,
-          replyText,
-          generatedImageAssets,
-          quoteReply,
+          part.text,
+          isAdmin,
+          part.images,
+          logRunId,
+          undefined,
+          part.primary ? quoteReply : false,
+          trace,
+          part.primary ? delivery.replyQuote : undefined,
+          part.contentSegments,
+          part.primary ? delivery.mentionUserIds : undefined,
+          deliveryParts.length > 1 ? {
+            schemaVersion: 1,
+            index,
+            total: deliveryParts.length
+          } : undefined
+        ));
+      if (deliveryTiming === "immediate" && delivery.emitOutbox) {
+        for (const [index, draft] of drafts.entries()) {
+          const part = deliveryParts[index]!;
+          draft.dedupeFingerprint = immediateReplyFingerprint(
+          incoming,
+          part.text,
+          part.images,
+          part.primary ? quoteReply : false,
           draft.payload.payload.replyToMessageId,
           trace,
-          preparedReply.contentSegments
-        );
-        await delivery.emitOutbox(draft);
+          part.contentSegments
+          );
+          await delivery.emitOutbox(draft);
+        }
       } else {
-        delivery.outbox.push(draft);
+        delivery.outbox.push(...drafts);
       }
       return undefined;
     }
 
     const replyToMessageId = quoteReply ? this.groupReplyOptions(incoming).replyToMessageId : undefined;
-    const receipt = await gateway.send(outboundForIncoming(
-      incoming,
-      replyText,
-      generatedImageAssets,
-      replyToMessageId,
-      preparedReply.contentSegments
-    ));
+    let receipt: MessagingReceiptV1 | undefined;
+    for (const part of deliveryParts) {
+      const currentReceipt = await sendOutboundBubble(gateway, outboundMessageBubble(outboundForIncoming(
+        incoming,
+        part.text,
+        part.images,
+        part.primary ? replyToMessageId : undefined,
+        part.contentSegments,
+        part.primary ? undefined : []
+      )));
+      receipt ??= currentReceipt;
+    }
 
-    const record = this.recordAssistantMessage(
-      incoming,
-      replyText || "[图片]",
-      generatedImageUrls,
-      logRunId,
-      undefined,
-      trace,
-      {
-        ...(receipt.messageId ? { messageId: receipt.messageId } : {}),
-        ...(replyToMessageId == null ? {} : { replyMessageIds: [replyToMessageId] })
-      }
-    );
+    const pureEmojiReply = !replyText
+      && outboundImageAssets.length > 0
+      && outboundImageAssets.every(isEmojiImageResult);
+    const record = pureEmojiReply ? undefined : this.recordAssistantMessage(
+        incoming,
+        replyText || "[图片]",
+        generatedImageUrls,
+        logRunId,
+        undefined,
+        trace,
+        {
+          ...(receipt?.messageId ? { messageId: receipt.messageId } : {}),
+          ...(replyToMessageId == null ? {} : { replyMessageIds: [replyToMessageId] })
+        }
+      );
     if (logRunId) {
       await appendRequestLog({
         category: "runtime.action",
@@ -273,7 +344,9 @@ export function runtime_replyDeliveryDraft(this: RuntimeHost,
     quoteReply = true,
     trace: AssistantMessageTrace = { messageOrigin: "text" },
     replyQuote?: ReplyQuoteSnapshotV1,
-    contentSegments?: OutboundMessageV1["contentSegments"]
+    contentSegments?: OutboundMessageV1["contentSegments"],
+    mentionUserIds?: readonly number[],
+    bubbleSequence?: OutboxBubbleSequenceV1
   ): ReplyDeliveryDraft {
     const replyToMessageId = resolveReplyToMessageId(this, incoming, quoteReply, replyQuote);
     return {
@@ -290,6 +363,8 @@ export function runtime_replyDeliveryDraft(this: RuntimeHost,
         logRunId,
         messageOrigin: trace.messageOrigin ?? "text",
         toolNames: trace.toolNames?.length ? [...new Set(trace.toolNames)] : undefined,
+        ...(mentionUserIds?.length ? { mentionUserIds: [...mentionUserIds] } : {}),
+        ...(bubbleSequence ? { bubbleSequence } : {}),
         replyGate: this.replyGates.capture(incoming.scope, conversationRecordId(incoming))
       }, {
         conversationId: conversationRecordId(incoming),
@@ -308,22 +383,31 @@ export async function runtime_deliverReplyOutbox(
   const incoming = payload.incoming;
   const replyToMessageId = durableReplyToMessageId(this, payload, incoming);
   const generatedImageAssets = payload.generatedImages.filter((image) => image.url || image.filePath);
-  const generatedImageUrls = payload.generatedImages.flatMap((image) => image.url ? [image.url] : []);
+  const generatedImageUrls = generatedImageAssets
+    .filter((image) => !isEmojiImageResult(image))
+    .flatMap((image) => image.url ? [image.url] : []);
+  const containsEmoji = generatedImageAssets.some(isEmojiImageResult);
+  const pureEmojiReply = !payload.text
+    && containsEmoji
+    && generatedImageAssets.every(isEmojiImageResult);
   let remoteReceipt = delivery?.remoteReceipt;
   if (delivery?.phase === "send" || !delivery) {
       if (!gateway) throw new OutboxDisconnectedError("OneBot is not connected.");
-      const sendReply = () => gateway.send(outboundForIncoming(
+      if (delivery) await waitForOutboxBubble(payload.bubbleSequence, delivery.signal);
+      const sendReply = () => sendOutboundBubble(gateway, outboundMessageBubble(outboundForIncoming(
         incoming,
         payload.text,
         generatedImageAssets,
         replyToMessageId,
-        payload.contentSegments
-      ));
+        payload.contentSegments,
+        payload.mentionUserIds
+      )));
     if (delivery) remoteReceipt = await delivery.sendRemote(sendReply);
     else remoteReceipt = await sendReply();
   }
 
     const settleConversation = (idempotencyKey?: string) => {
+      if (pureEmojiReply) return undefined;
       const outboundMessageId = messagingReceiptMessageId(delivery?.remoteReceipt ?? remoteReceipt);
       const record = this.recordAssistantMessage(
         incoming,
@@ -357,6 +441,7 @@ export async function runtime_deliverReplyOutbox(
     if (delivery) {
       await delivery.settleStep("conversation_projection", settleConversation);
       await delivery.settleStep("memory_enqueue", async () => {
+        if (pureEmojiReply) return;
         const record = this.conversationRecords.get(conversationRecordId(incoming));
         if (!record) throw new Error(`Conversation projection is missing: ${conversationRecordId(incoming)}`);
         await this.enqueueConversationMemory(record);
@@ -460,17 +545,19 @@ export async function runtime_sendErrorReply(this: RuntimeHost,
           undefined,
           true,
           trace,
-          delivery.replyQuote
+          delivery.replyQuote,
+          undefined,
+          delivery.mentionUserIds
         ));
         return;
       }
       const replyToMessageId = this.groupReplyOptions(incoming).replyToMessageId;
-      const receipt = await gateway.send(outboundForIncoming(
+      const receipt = await sendOutboundBubble(gateway, outboundMessageBubble(outboundForIncoming(
         incoming,
         message,
         [],
         replyToMessageId
-      ));
+      )));
       this.recordAssistantMessage(
         incoming,
         message,
@@ -559,4 +646,120 @@ function immediateReplyFingerprint(
     replyToMessageId,
     messageOrigin: trace.messageOrigin
   })).digest("hex");
+}
+
+function segmentedImageSource(index: number) {
+  return `asset:image:${index}`;
+}
+
+async function segmentedReplyDeliveryParts(
+  config: AppConfig,
+  xml: string,
+  emojiPlan: EmojiMarkerPlan,
+  images: readonly ImageResult[]
+) {
+  const nodes: SegmentedReplyNodeV1[] = xml.trim()
+    ? parseSegmentedReplyXml(xml).nodes
+    : images.map((_, index) => ({ type: "image" as const, src: segmentedImageSource(index) }));
+  const actualMarkers = nodes.flatMap((node) => node.type === "expression" ? [node.marker] : []);
+  if (!sameSequence(actualMarkers, emojiPlan.expectedMarkers)) {
+    throw segmentedReplyContractError("分段回复改变了原有表情标记。");
+  }
+  const actualAssets = nodes.flatMap((node) => (
+    node.type === "image" || node.type === "voice" || node.type === "file"
+      ? [{ type: node.type, src: node.src }]
+      : []
+  ));
+  const expectedAssets = images.map((_, index) => ({
+    type: "image" as const,
+    src: segmentedImageSource(index)
+  }));
+  if (JSON.stringify(actualAssets) !== JSON.stringify(expectedAssets)) {
+    throw segmentedReplyContractError("分段回复改变了本轮媒体资源。");
+  }
+  const emojiImages = await prepareEmojiDeliveryImages(config, emojiPlan);
+  let emojiIndex = 0;
+  return nodes.map((node, index) => {
+    if (node.type === "dialog") {
+      const text = normalizeOutgoingReplyText(node.text).trim();
+      if (!text) throw segmentedReplyContractError("分段回复包含空文字气泡。");
+      return { text, images: [], primary: index === 0 };
+    }
+    if (node.type === "expression") {
+      const image = emojiImages[emojiIndex++];
+      if (!image) throw segmentedReplyContractError("分段回复表情资源缺失。");
+      return {
+        text: "",
+        images: [image],
+        contentSegments: [{ type: "sticker" as const, imageIndex: 0 }],
+        primary: index === 0
+      };
+    }
+    if (node.type === "image") {
+      const imageIndex = Number(node.src.slice("asset:image:".length));
+      const image = images[imageIndex];
+      if (!Number.isSafeInteger(imageIndex) || imageIndex < 0 || !image) {
+        throw segmentedReplyContractError("分段回复图片资源无效。");
+      }
+      return { text: "", images: [{ ...image }], primary: index === 0 };
+    }
+    throw segmentedReplyContractError("分段回复引用了未提供的资源。");
+  });
+}
+
+function sameSequence(left: readonly string[], right: readonly string[]) {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function segmentedReplyContractError(message: string) {
+  return Object.assign(new Error(message), { code: "SEGMENTED_REPLY_CONTRACT_INVALID" });
+}
+
+function emojiDeliveryParts(
+  text: string,
+  images: readonly ImageResult[],
+  emojiImageCount: number,
+  contentSegments: OutboundMessageV1["contentSegments"],
+  sendSeparately: boolean
+) {
+  if (!sendSeparately || emojiImageCount === 0) {
+    return [{
+      text,
+      images: [...images],
+      contentSegments,
+      primary: true
+    }];
+  }
+
+  const parts: Array<{
+    text: string;
+    images: ImageResult[];
+    contentSegments?: OutboundMessageV1["contentSegments"];
+    primary: boolean;
+  }> = [];
+  const generatedImages = images.slice(emojiImageCount);
+  if (text || generatedImages.length) {
+    parts.push({ text, images: generatedImages, primary: true });
+  }
+  parts.push({
+    text: "",
+    images: images.slice(0, emojiImageCount),
+    contentSegments: images.slice(0, emojiImageCount).map((_, imageIndex) => ({
+      type: "sticker" as const,
+      imageIndex
+    })),
+    primary: parts.length === 0
+  });
+  return parts;
+}
+
+function isEmojiImageResult(image: Pick<ImageResult, "url" | "filePath">) {
+  return [image.filePath, image.url].some((value) => {
+    if (!value) return false;
+    try {
+      return isEmojiFileName(path.basename(decodeURIComponent(value)));
+    } catch {
+      return false;
+    }
+  });
 }

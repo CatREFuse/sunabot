@@ -63,4 +63,29 @@ describe("useMemory", () => {
     expect(memory.sources.value).toEqual(payload.sources);
     expect(memory.entries.value).toEqual(payload.entries);
   });
+
+  it("keeps an older Agent response from replacing the active Agent memory", async () => {
+    let resolvePlana!: (value: MemoryPayload) => void;
+    let resolveArona!: (value: MemoryPayload) => void;
+    const planaRequest = new Promise<MemoryPayload>((resolve) => { resolvePlana = resolve; });
+    const aronaRequest = new Promise<MemoryPayload>((resolve) => { resolveArona = resolve; });
+    apiRequest
+      .mockReturnValueOnce(planaRequest)
+      .mockReturnValueOnce(aronaRequest);
+    const memory = useMemory();
+
+    const planaLoad = memory.load("working", "plana");
+    const planaSignal = apiRequest.mock.calls[0]?.[1]?.signal as AbortSignal;
+    const aronaLoad = memory.load("working", "arona");
+    const aronaEntry = { ...entry, id: "arona-memory", text: "阿罗娜的记忆" };
+    resolveArona({ ...payload, entries: [aronaEntry] });
+    await aronaLoad;
+    resolvePlana(payload);
+    await planaLoad;
+
+    expect(planaSignal.aborted).toBe(true);
+    expect(apiRequest.mock.calls[0]?.[0]).toBe("/api/memory?source=working&agentId=plana");
+    expect(apiRequest.mock.calls[1]?.[0]).toBe("/api/memory?source=working&agentId=arona");
+    expect(memory.entries.value).toEqual([aronaEntry]);
+  });
 });

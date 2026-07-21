@@ -6,7 +6,7 @@ export type ConfigDoctorPatchOperation = {
   value?: unknown;
 };
 
-const MAX_OPERATIONS = 64;
+const MAX_OPERATIONS = 256;
 const MAX_POINTER_DEPTH = 12;
 const MAX_VALUE_BYTES = 32_768;
 const FORBIDDEN_POINTER_SEGMENTS = new Set(["__proto__", "prototype", "constructor"]);

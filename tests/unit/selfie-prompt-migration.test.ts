@@ -11,7 +11,10 @@ import {
   defaultPromptContent,
   defaultFinalPromptTemplate
 } from "../../services/agent/promptDefaults.js";
-import { migrateSelfieReferenceSelectionTemplate } from "../../services/agent/promptWorkspace.js";
+import {
+  migrateSelfieReferenceSelectionTemplate,
+  migrateSelfieResponseSchemaTemplate
+} from "../../services/agent/promptWorkspace.js";
 import type { FinalPromptTemplate } from "../../services/agent/promptSystem.js";
 import { SunaRuntime } from "../../src/runtime.js";
 import { createAdminTestConfig } from "./admin-fixtures.js";
@@ -155,11 +158,16 @@ describe("selfie prompt reference-selection migration", () => {
       content: DEFAULT_SELFIE_REFERENCE_SELECTION_CONTRACT
     });
     expect(migrated.response_format.type).toBe("json_schema");
+    expect(JSON.stringify(migrated.response_format)).not.toContain('"uniqueItems"');
     const markerPath = path.join(
       config.persona.agentWorkspace,
       ".selfie_prompt_rewrite.json.reference-selection-v1"
     );
     await expect(fs.readFile(markerPath, "utf8")).resolves.toBe("reference-selection-v1\n");
+    await expect(fs.readFile(path.join(
+      config.persona.agentWorkspace,
+      ".selfie_prompt_rewrite.json.reference-selection-schema-v2"
+    ), "utf8")).resolves.toBe("reference-selection-schema-v2\n");
 
     migrated.messages = [migrated.messages[0], migrated.messages.at(-1)];
     migrated.response_format = { type: "text" };
@@ -167,5 +175,20 @@ describe("selfie prompt reference-selection migration", () => {
     await runtime.ensureAgentPromptFiles(config);
 
     expect(JSON.parse(await fs.readFile(promptPath, "utf8"))).toEqual(migrated);
+  });
+
+  it("removes only the unsupported uniqueness keyword from persisted selfie schemas", () => {
+    const legacy = defaultFinalPromptTemplate("image.selfie-rewrite")!;
+    const responseFormat = legacy.response_format as {
+      json_schema: { schema: { properties: { selectedSelfieReferenceIds: Record<string, unknown> } } };
+    };
+    responseFormat.json_schema.schema.properties.selectedSelfieReferenceIds.uniqueItems = true;
+    legacy.messages[0] = { role: "system", content: "保留自定义自拍改写规则" };
+
+    const migrated = migrateSelfieResponseSchemaTemplate(legacy)!;
+    expect(JSON.stringify(migrated.response_format)).not.toContain('"uniqueItems"');
+    expect(migrated.messages[0]).toEqual({ role: "system", content: "保留自定义自拍改写规则" });
+    expect(JSON.stringify(legacy.response_format)).toContain('"uniqueItems":true');
+    expect(migrateSelfieResponseSchemaTemplate(migrated)).toBeUndefined();
   });
 });

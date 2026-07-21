@@ -23,6 +23,9 @@ describe("EmojiCatalog", () => {
     const sendSizeButton = wrapper.findAll("button").find((button) => button.text() === "256");
     await sendSizeButton?.trigger("click");
     expect(dependencies.data?.setSendSize).toHaveBeenCalledWith("koharu", 256);
+    const separateToggle = wrapper.get('input[type="checkbox"]');
+    await separateToggle.setValue(true);
+    expect(dependencies.data?.setSendSeparately).toHaveBeenCalledWith("koharu", true);
     const generateButton = wrapper.get('button[aria-label="一键添加 开心"]');
     await generateButton.trigger("click");
     expect(dependencies.data?.generate).toHaveBeenCalledWith("koharu", "开心");
@@ -104,6 +107,7 @@ function createData() {
     emojis: shallowRef<EmojiRecord[]>([emoji]),
     presetKeys: shallowRef(["开心"]),
     sendSize: shallowRef(512 as const),
+    sendSeparately: shallowRef(false),
     loading: shallowRef(false),
     savingSettings: shallowRef(false),
     uploading: shallowRef(false),
@@ -124,6 +128,7 @@ function createData() {
     removeVersion: vi.fn().mockResolvedValue(true),
     clearVersions: vi.fn(),
     setSendSize: vi.fn().mockResolvedValue(true),
+    setSendSeparately: vi.fn().mockResolvedValue(true),
     clearStatus: vi.fn(),
     dispose: vi.fn()
   };

@@ -397,7 +397,9 @@ export function runtime_cancelAmbientReply(this: RuntimeHost, channelKey: string
     state.controller?.abort(new Error("ambient reply cancelled"));
   }
 function injectImageTokens(text: string, imageCount: number) {
-    const existingTokenCount = text.match(/\[图片\]/g)?.length ?? 0;
+    const existingTokenCount = text.match(
+      /\[(?:图片|内容图片(?:#\d+)?(?:：[^\]]*)?|表情图片(?:#\d+)?(?:：[^\]]*)?)\]/g
+    )?.length ?? 0;
     const missingTokenCount = Math.max(0, Math.floor(imageCount) - existingTokenCount);
     if (!missingTokenCount) return text;
     return [

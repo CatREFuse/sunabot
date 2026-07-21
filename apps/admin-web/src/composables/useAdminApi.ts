@@ -109,6 +109,7 @@ const agentScopedPrefixes = [
   "/api/conversations",
   "/api/scheduled-tasks",
   "/api/memory",
+  "/api/knowledge",
   "/api/images",
   "/api/request-logs",
   "/api/token-usage",

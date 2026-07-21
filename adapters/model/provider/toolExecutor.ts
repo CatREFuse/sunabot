@@ -2,6 +2,7 @@ import type { ImageResult } from "../../../src/types.js";
 import { appendRequestLog } from "../../../src/requestLog.js";
 import type { OpenAIToolDefinition } from "../../../services/agent/promptSystem.js";
 import type { MemoryRecallInput } from "../../../services/memory/memoryService.js";
+import type { KnowledgeSearchInput } from "../../../services/knowledge/public.js";
 import {
   WORKSPACE_BASH_TOOL_NAME,
   isWorkspaceBashProviderOptions,
@@ -30,6 +31,10 @@ import {
   CRON_TOOL_NAME,
   runCronTool
 } from "../../../services/tools/cronTool.js";
+import {
+  CALL_DIRECTOR_TOOL_NAME,
+  runCallDirector
+} from "../../../services/tools/callDirectorTool.js";
 import {
   READ_FILE_TOOL_NAME,
   WRITE_FILE_TOOL_NAME,
@@ -69,7 +74,10 @@ import {
   withRequiredDispatchMessage,
   withoutDispatchMessage
 } from "../../../services/tools/deferredDispatch.js";
+import { assertProviderToolDefinitions } from "../../../services/tools/providerToolSchema.js";
 import { runWebsearch, type WebsearchInput } from "../webSearchTool.js";
+import { WEBFETCH_TOOL_NAME } from "../../../services/tools/public.js";
+import { KNOWLEDGE_SEARCH_TOOL_NAME } from "../../../services/tools/knowledgeSearchTool.js";
 import type {
   ProviderCompleteOptions,
   ProviderDeferredTurn,
@@ -94,6 +102,8 @@ import {
   preflightProviderToolResponse,
   toolCallErrors
 } from "./toolResponsePreflight.js";
+import { runWebFetch } from "./webFetchExecutor.js";
+import { READ_AIR_TOOL_NAME, executeReadAirTool } from "./readAirExecutor.js";
 
 export { mcpToolLogSummary } from "./mcpToolLog.js";
 
@@ -109,12 +119,16 @@ const inlineExecutors: ReadonlyMap<string, InlineExecutor> = new Map([
   [WRITE_FILE_TOOL_NAME, runWriteFile],
   [WORKSPACE_BASH_TOOL_NAME, runBash],
   [WEBSEARCH_TOOL_NAME, runWebSearch],
+  [WEBFETCH_TOOL_NAME, runWebFetch],
   [GENERATE_IMG_TOOL_NAME, runImageGeneration],
   [SELFIE_TOOL_NAME, runSelfie],
   [SEND_FILE_TOOL_NAME, runSendFile],
   [MEMORY_RECALL_TOOL_NAME, runMemoryRecall],
+  [READ_AIR_TOOL_NAME, executeReadAirTool],
+  [KNOWLEDGE_SEARCH_TOOL_NAME, runKnowledgeSearch],
   [SYSTEM_CONFIG_TOOL_NAME, runSystemConfigTool],
   [CRON_TOOL_NAME, executeCronTool],
+  [CALL_DIRECTOR_TOOL_NAME, executeCallDirectorTool],
   [ACTIVATE_SKILL_TOOL_NAME, runActivateSkill],
   [READ_SKILL_RESOURCE_TOOL_NAME, runReadSkillResource],
   [RUN_SKILL_SCRIPT_TOOL_NAME, runSkillScript]
@@ -139,7 +153,7 @@ export class RegistryProviderToolExecutor implements ProviderToolExecutorPort {
     const configured = resolveProviderToolDefinitions(options, definitions) as Record<string, unknown>[];
     const dynamicMcp = options.mcp?.definitions().filter((tool) => isMcpToolAlias(readToolName(tool))) ?? [];
     const seen = new Set(configured.map(readToolName));
-    return [...configured, ...dynamicMcp.filter((tool) => {
+    const resolved = [...configured, ...dynamicMcp.filter((tool) => {
       const name = readToolName(tool);
       if (!name || seen.has(name)) return false;
       seen.add(name);
@@ -147,6 +161,8 @@ export class RegistryProviderToolExecutor implements ProviderToolExecutorPort {
     })].map((tool) => isProviderDeferredTool(readToolName(tool), options)
       ? withRequiredDispatchMessage(tool)
       : withoutDispatchMessage(tool));
+    assertProviderToolDefinitions(resolved);
+    return resolved;
   }
 
   companionTurn(
@@ -671,6 +687,13 @@ async function runMemoryRecall(
   return result;
 }
 
+async function runKnowledgeSearch(args: Record<string, unknown>, call: ResponseFunctionCallItem, options: ProviderCompleteOptions) {
+  if (!options.knowledge?.enabled) return { ok: false, error: "Knowledge search is not enabled." };
+  const result = await options.knowledge.search(args as KnowledgeSearchInput);
+  await appendToolLog(KNOWLEDGE_SEARCH_TOOL_NAME, call, args, result, options);
+  return result;
+}
+
 async function runSystemConfigTool(
   args: Record<string, unknown>,
   call: ResponseFunctionCallItem,
@@ -692,6 +715,17 @@ async function executeCronTool(
   if (!options.cron) return { ok: false, error: "Scheduled task management is unavailable." };
   const result = await runCronTool(args, options.cron);
   await appendToolLog(CRON_TOOL_NAME, call, args, result, options);
+  return result;
+}
+
+async function executeCallDirectorTool(
+  args: Record<string, unknown>,
+  call: ResponseFunctionCallItem,
+  options: ProviderCompleteOptions
+) {
+  if (!options.director) return { ok: false, error: "Daily director is unavailable." };
+  const result = await runCallDirector(args, options.director);
+  await appendToolLog(CALL_DIRECTOR_TOOL_NAME, call, args, result, options);
   return result;
 }
 

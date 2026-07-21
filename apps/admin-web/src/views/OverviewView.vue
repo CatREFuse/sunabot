@@ -347,11 +347,11 @@ function accountOptionLabel(account: AgentAccount) {
           <div class="min-w-0"><span class="meta-label">Provider</span><strong>{{ runtime.status.value?.provider.defaultProviderId ?? "--" }}</strong><small>{{ runtime.status.value?.provider.model ?? "--" }}</small></div>
         </article>
         <article class="health-card">
-          <span class="health-card__icon" :class="providerReadiness.tone"><i class="bx bx-key" aria-hidden="true"></i></span>
+          <span class="health-card__icon"><i class="bx bx-key" aria-hidden="true"></i></span>
           <div class="min-w-0"><span class="meta-label">Provider 状态</span><strong :class="providerReadiness.tone">{{ providerReadiness.label }}</strong><small>{{ providerReadiness.detail }}</small></div>
         </article>
         <article class="health-card">
-          <span class="health-card__icon text-success"><i class="bx bx-user-voice" aria-hidden="true"></i></span>
+          <span class="health-card__icon"><i class="bx bx-user-voice" aria-hidden="true"></i></span>
           <div class="min-w-0"><span class="meta-label">Agent</span><strong>{{ runtime.status.value?.persona.name ?? "--" }}</strong><small>{{ runtime.status.value?.persona.id ?? "--" }}</small></div>
         </article>
         <article class="health-card health-card--wide">
@@ -394,13 +394,11 @@ function accountOptionLabel(account: AgentAccount) {
 .count-card { display: flex; min-height: 112px; align-items: center; gap: 18px; border-bottom: 1px solid rgb(var(--color-line)); padding: 20px 0; }
 .count-card:last-child { border-bottom: 0; }
 .count-card__icon, .health-card__icon { display: grid; flex: none; place-items: center; background: transparent; font-size: 28px; }
-.count-card__icon { width: 36px; height: 36px; color: rgb(var(--color-interactive)); }
-.count-card[data-tone="success"] .count-card__icon { color: rgb(var(--color-success)); }
-.count-card[data-tone="warning"] .count-card__icon { color: rgb(var(--color-warning)); }
+.count-card__icon { width: 36px; height: 36px; color: rgb(var(--color-mute)); }
 .count-card strong { display: block; margin-top: 7px; color: rgb(var(--color-display)); font-family: "Doto Variable", "Space Mono", monospace; font-size: 30px; font-weight: 700; line-height: 1; letter-spacing: -.035em; }
 .health-mosaic { display: grid; margin-top: 48px; border-top: 1px solid rgb(var(--color-line)); }
 .health-card { display: flex; min-height: 104px; align-items: center; gap: 16px; border-bottom: 1px solid rgb(var(--color-line)); padding: 20px 0; }
-.health-card__icon { width: 32px; height: 32px; color: rgb(var(--color-interactive)); }
+.health-card__icon { width: 32px; height: 32px; color: rgb(var(--color-mute)); }
 .health-card strong { display: block; overflow: hidden; margin-top: 7px; color: rgb(var(--color-display)); font-size: 14px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .health-card small { display: block; overflow: hidden; margin-top: 4px; color: rgb(var(--color-mute)); font-family: "Space Mono", monospace; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 @media (min-width: 640px) {

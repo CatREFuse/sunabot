@@ -110,18 +110,11 @@ export function registerAgentToolRoutes(app: FastifyInstance, options: AgentTool
     const config = context.config;
     const promptFile = await context.agentFiles.get("conversation.private-reply", config);
     const prompt = parseFinalPromptTemplate(promptFile.content);
-    const privateBackend = config.bot.bash.adminOnly
-      ? config.bot.bash.adminPrivateBackend
-      : null;
-    const capabilities = await context.resolveToolCapabilities(privateBackend);
-    const groupCapabilities = config.bot.bash.adminOnly && config.bot.bash.allowGroup
-      ? config.bot.bash.adminPrivateBackend === "docker"
-        ? capabilities
-        : await context.resolveToolCapabilities("docker")
-      : undefined;
-    const bashAvailable = config.bot.bash.adminOnly && (
-      capabilities.workspaceBash || groupCapabilities?.workspaceBash === true
-    );
+    const [nativeCapabilities, dockerCapabilities] = await Promise.all([
+      context.resolveToolCapabilities("native"),
+      context.resolveToolCapabilities("docker")
+    ]);
+    const bashAvailable = nativeCapabilities.workspaceBash || dockerCapabilities.workspaceBash;
     const skillCapabilities = await context.resolveSkillToolCapabilities?.()
       ?? UNAVAILABLE_SKILL_TOOL_CAPABILITIES;
     let conversationAssetsAvailable = false;
@@ -145,7 +138,8 @@ export function registerAgentToolRoutes(app: FastifyInstance, options: AgentTool
       conversationAssets: { enabled: conversationAssetsAvailable },
       voice: voiceCapability,
       memory: { enabled: true },
-      asyncCodex: capabilities.codex,
+      knowledge: { enabled: true, search: async () => ({ ok: false, matches: [] }) },
+      asyncCodex: nativeCapabilities.codex || dockerCapabilities.codex,
       asyncImage: true,
       skillCapabilities,
       systemConfig: {
@@ -153,12 +147,14 @@ export function registerAgentToolRoutes(app: FastifyInstance, options: AgentTool
         mutationStaged: () => false,
         rejectTurn: () => undefined,
         turnRejected: () => false
+      },
+      director: {
+        execute: async () => ({ ok: false, error: "Daily director is not executable from the tool catalog." })
       }
     }, prompt.tools).map((tool) => bashCatalogMetadata(
       tool,
-      config,
-      capabilities,
-      groupCapabilities
+      nativeCapabilities,
+      dockerCapabilities
     )).map((tool) => {
       const configured = tool.name === "workspace_bash"
         ? config.bot.bash.enabled
@@ -182,70 +178,46 @@ export function registerAgentToolRoutes(app: FastifyInstance, options: AgentTool
 
 function bashCatalogMetadata(
   tool: ToolMetadata,
-  config: AppConfig,
-  privateCapabilities: RuntimeToolCapabilities,
-  groupCapabilities: RuntimeToolCapabilities | undefined
+  nativeCapabilities: RuntimeToolCapabilities,
+  dockerCapabilities: RuntimeToolCapabilities
 ): ToolMetadata {
   if (tool.name !== "workspace_bash") return tool;
-  const backend = config.bot.bash.adminPrivateBackend;
-  const privateReady = config.bot.bash.adminOnly && privateCapabilities.workspaceBash;
-  const groupReady = config.bot.bash.adminOnly
-    && config.bot.bash.allowGroup
-    && groupCapabilities?.workspaceBash === true;
-  const accessLabel = config.bot.bash.allowGroup
-    ? "管理员 QQ 私聊与群聊"
-    : "仅管理员 QQ 私聊";
-  const reasonCode = privateCapabilities.workspaceBashReason
-    ?? (backend === "native" ? "BASH_NATIVE_ISOLATION_UNAVAILABLE" : "BASH_DOCKER_ISOLATION_UNAVAILABLE");
-  if (!config.bot.bash.adminOnly) {
-    return {
-      ...tool,
-      accessLabel: "所有会话均不可用",
-      accessDescription: "管理员身份门禁已关闭；开启后仅管理员 QQ 会话可使用 Bash。",
-      executionBackend: backend,
-      unavailabilityKind: "session",
-      availabilityReason: "管理员身份门禁已关闭，所有会话均不可用。"
-    };
-  }
+  const nativeReady = nativeCapabilities.workspaceBash;
+  const dockerStarted = dockerCapabilities.workspaceBash;
+  const nativeReason = nativeCapabilities.workspaceBashReason
+    ?? (nativeReady ? undefined : "BASH_NATIVE_ISOLATION_UNAVAILABLE");
+  const dockerReason = dockerCapabilities.workspaceBashReason
+    ?? (dockerStarted ? undefined : "BASH_DOCKER_ISOLATION_UNAVAILABLE");
+  const reasonCode = nativeReason ?? dockerReason;
+  const statusDescription = `[native bash] ${nativeReady ? "可用" : "不可用"}；[docker bash] ${dockerStarted ? "已启动" : "未启动"}。`;
   return {
     ...tool,
-    accessLabel,
-    accessDescription: bashAccessDescription(config),
-    executionBackend: backend,
-    ...(privateReady || groupReady ? {} : {
+    description: `${tool.description.trim()} ${statusDescription}`.trim(),
+    accessLabel: "管理员私聊 Native · 群聊与其他私聊 Docker",
+    accessDescription: "仅管理员 QQ 私聊使用 Native Bash；全部群聊与其他 QQ 私聊使用 Docker Bash；Web Chat 不可用。",
+    bashEnvironments: {
+      native: { available: nativeReady, ...(nativeReason ? { reasonCode: nativeReason } : {}) },
+      docker: { started: dockerStarted, ...(dockerReason ? { reasonCode: dockerReason } : {}) }
+    },
+    ...(nativeReady || dockerStarted ? {} : {
       unavailabilityKind: "runtime" as const,
       runtimeReasonCode: reasonCode,
-      availabilityReason: bashUnavailableMessage(
-        reasonCode,
-        config.bot.bash.allowGroup && groupCapabilities?.workspaceBash !== true
-      )
+      availabilityReason: `${bashUnavailableMessage(nativeReason, "Native")} ${bashUnavailableMessage(dockerReason, "Docker")}`.trim()
     })
   };
 }
 
-function bashAccessDescription(config: AppConfig) {
-  const details = [
-    `管理员私聊使用${config.bot.bash.adminPrivateBackend === "docker" ? " Docker" : " Native"} 后端。`,
-    config.bot.bash.allowGroup
-      ? "管理员群聊固定使用 Docker 受限模式。"
-      : "管理员群聊未启用。",
-    "Web Chat 和普通用户不可用。"
-  ];
-  return details.join("");
-}
-
-function bashUnavailableMessage(reason: WorkspaceBashUnavailableReason, groupUnavailable = false) {
-  const groupSuffix = groupUnavailable ? "管理员群聊的 Docker 受限模式也不可用。" : "";
+function bashUnavailableMessage(reason: WorkspaceBashUnavailableReason | undefined, label: "Native" | "Docker") {
   if (reason === "BASH_AUDIT_UNAVAILABLE") {
-    return `独立 Bash 审计不可用，Bash 已安全关闭。${groupSuffix}`;
+    return `${label} Bash 的对抗审批 Agent 不可用。`;
   }
   if (reason === "BASH_WORKBENCH_UNAVAILABLE") {
-    return `当前 Agent workbench 不可用，Bash 已安全关闭。${groupSuffix}`;
+    return `${label} Bash 工作目录不可用。`;
   }
   if (reason === "BASH_NATIVE_ISOLATION_UNAVAILABLE") {
-    return `Native 后端未通过强隔离检查，Bash 已安全关闭。可在“命令执行”切换 Docker 后端后重新检查。${groupSuffix}`;
+    return "Native Bash 当前不可用。";
   }
-  return `Docker 后端未通过强隔离检查，Bash 已安全关闭。${groupSuffix}`;
+  return "Docker Bash 环境未启动。";
 }
 
 function requestAgentId(query: unknown) {

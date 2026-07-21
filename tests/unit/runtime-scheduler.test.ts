@@ -7,7 +7,7 @@ import {
 } from "../../src/runtime.js";
 import { appendRequestLog } from "../../src/requestLog.js";
 import {
-  decodeReplyDebounce,
+  decodeIncomingReply,
   noReplyPokeEnvelope,
   type UserGroupOrchestratorResultV1
 } from "../../packages/contracts/session/runtimeMessages.js";
@@ -95,7 +95,7 @@ describe("runtime reply scheduling helpers", () => {
     expect(replyToIncoming).not.toHaveBeenCalled();
   });
 
-  it("does not execute registered commands when the conversation reply gate is disabled", async () => {
+  it("discards inbound messages before storage when the conversation is disabled", async () => {
     const runtime = new SunaRuntime(createAdminTestConfig("/tmp/sunabot-runtime-router-test"), {
       attachmentService: {} as never
     });
@@ -124,6 +124,13 @@ describe("runtime reply scheduling helpers", () => {
     await runtime.handleInboundMessage(groupIncoming("/总结群聊", 171419991), {} as never);
 
     expect(enqueueEvent).not.toHaveBeenCalled();
+    expect(internals.persistConversationRecords).not.toHaveBeenCalled();
+    expect(internals.conversationRecords.get("group:3003")).toMatchObject({
+      replyEnabled: false,
+      messageCount: 0,
+      lastText: "",
+      messages: []
+    });
   });
 
   it("creates the first inbound conversation with replies disabled", async () => {
@@ -695,7 +702,7 @@ describe("runtime reply scheduling helpers", () => {
         {
           id: "1001",
           role: "user" as const,
-          text: "这两张有什么区别",
+          text: "这两张有什么区别 [内容图片#1：图表] [表情图片#2：疑惑]",
           at: "2026-07-10T00:01:00.000Z",
           sequence: 3,
           userId: 2002,
@@ -719,7 +726,7 @@ describe("runtime reply scheduling helpers", () => {
         options: { captureSequence: number }
       ): Promise<UserGroupOrchestratorResultV1 | undefined>;
     };
-    const incoming = groupIncoming("这两张有什么区别");
+    const incoming = groupIncoming("这两张有什么区别 [内容图片#1：图表] [表情图片#2：疑惑]");
     incoming.media = [
       { schemaVersion: 1, kind: "image", source: "remote_url", url: "https://example.test/second.png" },
       { schemaVersion: 1, kind: "image", source: "remote_url", url: "https://example.test/third.png" }
@@ -746,12 +753,14 @@ describe("runtime reply scheduling helpers", () => {
     expect(recentMessages).toEqual([
       expect.stringContaining("\n[图片] 图片：1 张"),
       expect.stringContaining("先看这张 [图片]"),
-      expect.stringContaining("这两张有什么区别 [图片] [图片]")
+      expect.stringContaining("这两张有什么区别 [内容图片#1：图表] [表情图片#2：疑惑]")
     ]);
-    expect(recentMessages.map((message) => message.match(/\[图片\]/g)?.length ?? 0)).toEqual([1, 1, 2]);
+    expect(recentMessages.map((message) => message.match(/\[图片\]/g)?.length ?? 0)).toEqual([1, 1, 0]);
     expect(payload.conversation?.replyCandidateMessageIds).toEqual(["999", "1000", "1001"]);
     expect(payload.currentMessage?.messageId).toBe("1001");
-    expect(payload.currentMessage?.text).toBe("这两张有什么区别 [图片] [图片]");
+    expect(payload.currentMessage?.text).toBe(
+      "这两张有什么区别 [内容图片#1：图表] [表情图片#2：疑惑]"
+    );
     expect(JSON.stringify(payload)).not.toContain("example.test");
   });
 
@@ -979,9 +988,14 @@ describe("runtime reply scheduling helpers", () => {
     expect(persistedCursors.length).toBeGreaterThan(0);
     expect(persistedCursors.every((cursor) => cursor === 1)).toBe(true);
     expect(enqueueEvent).toHaveBeenCalledTimes(2);
-    expect(enqueueEvent.mock.calls.map(([input]) => decodeReplyDebounce(
-      (input as { payload: unknown }).payload
-    ).orchestratorResult)).toEqual([orchestratorResult, orchestratorResult]);
+    expect(enqueueEvent.mock.calls.map(([input]) => ({
+      kind: (input as { kind: string }).kind,
+      orchestratorResult: decodeIncomingReply((input as { payload: unknown }).payload)
+        .orchestratorResult
+    }))).toEqual([
+      { kind: "incoming_reply", orchestratorResult },
+      { kind: "incoming_reply", orchestratorResult }
+    ]);
     errorLog.mockRestore();
   });
 

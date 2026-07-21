@@ -6,6 +6,11 @@ import type {
   NormalizedMemoryFact
 } from "../types.js";
 
+export const MEMORY_CAUSAL_CHAIN_KEY_MAX_LENGTH = 128;
+export const MEMORY_CAUSAL_CHAIN_KEY_PATTERN_SOURCE = "^causal:[a-z0-9][a-z0-9._-]{0,120}$";
+
+const MEMORY_CAUSAL_CHAIN_KEY_PATTERN = new RegExp(MEMORY_CAUSAL_CHAIN_KEY_PATTERN_SOURCE);
+
 export function normalizeText(value: unknown) {
   return String(value ?? "").trim();
 }
@@ -114,20 +119,55 @@ export function normalizeAddressName(value: unknown) {
   return normalizeText(value).slice(0, 120);
 }
 
-export function readAddressName(value: Record<string, unknown>) {
-  return normalizeAddressName(value.addressName ?? value.address_name ?? value.salutation);
+export function normalizeAddressNames(value: unknown) {
+  const values = Array.isArray(value) ? value : [value];
+  return uniqueStrings(values.map(normalizeAddressName).filter(Boolean));
 }
 
-export function configuredAddressName(config: MemoryIdentityConfig, userId: string, requested: string) {
+export function readAddressNames(value: Record<string, unknown>) {
+  const canonical = normalizeAddressNames(value.addressNames);
+  return canonical.length
+    ? canonical
+    : normalizeAddressNames(value.addressName ?? value.address_name ?? value.salutation);
+}
+
+export function readAddressName(value: Record<string, unknown>) {
+  return readAddressNames(value)[0] ?? "";
+}
+
+export function configuredAddressNames(config: MemoryIdentityConfig, userId: string, requested: unknown) {
+  const names = normalizeAddressNames(requested);
   const adminQq = normalizeUserId(config.bot.adminQq);
   if (userId && adminQq && userId === adminQq) {
-    return requested || normalizeAddressName(config.bot.adminName) || "猫老师";
+    return uniqueStrings([
+      normalizeAddressName(config.bot.adminName) || "猫老师",
+      ...names
+    ]);
   }
-  return requested;
+  return names;
+}
+
+export function configuredAddressName(config: MemoryIdentityConfig, userId: string, requested: unknown) {
+  return configuredAddressNames(config, userId, requested)[0] ?? "";
 }
 
 export function isMemoryEventKey(value: string) {
   return /^v\d+:sha256:[a-f0-9]{64}$/.test(value);
+}
+
+export function isMemoryCausalChainKey(value: unknown): value is string {
+  return typeof value === "string"
+    && value.length <= MEMORY_CAUSAL_CHAIN_KEY_MAX_LENGTH
+    && MEMORY_CAUSAL_CHAIN_KEY_PATTERN.test(value);
+}
+
+export function readMemoryCausalChainKey(value: unknown) {
+  return isMemoryCausalChainKey(value) ? value : "";
+}
+
+export function mergeCompatibleCausalChainKeys(...values: unknown[]) {
+  const keys = uniqueStrings(values.map(readMemoryCausalChainKey).filter(Boolean));
+  return keys.length === 1 ? keys[0]! : "";
 }
 
 export function sha256(value: string | Buffer) {
@@ -158,35 +198,41 @@ export function memoryRecordsEqual(left: MemoryRecord[], right: MemoryRecord[]) 
 }
 
 export function normalizeMemoryFactInputs(facts: MemoryFactInput[]): NormalizedMemoryFact[] {
-  return facts
-    .map((item) => {
-      const range = parseEventTime(item.occurredAt ?? item.time, item.occurredEndAt);
-      return {
-        id: normalizeText(item.id),
-        fact: normalizeText(item.fact),
-        time: normalizeText(item.time),
-        occurredAt: range.occurredAt,
-        occurredEndAt: range.occurredEndAt,
-        observedAt: normalizeIsoTimestamp(item.observedAt),
-        createdAt: normalizeIsoTimestamp(item.createdAt),
-        updatedAt: normalizeIsoTimestamp(item.updatedAt),
-        source: normalizeText(item.source),
-        userId: normalizeUserId(item.userId),
-        userIds: normalizeUserIds(item.userIds),
-        userName: normalizeText(item.userName),
-        addressName: normalizeAddressName(item.addressName ?? item.address_name ?? item.salutation),
-        sourceWorkingMemoryIds: normalizeStringArray(item.sourceWorkingMemoryIds),
-        sourceCandidateIds: normalizeStringArray(item.sourceCandidateIds),
-        eventType: normalizeEventType(item.eventType),
-        subjectKey: normalizeSubjectKey(item.subjectKey),
-        eventKey: normalizeText(item.eventKey),
-        eventFingerprint: normalizeText(item.eventFingerprint),
-        longTermId: normalizeText(item.longTermId),
-        batchId: normalizeText(item.batchId),
-        promoteToLongTerm: item.promoteToLongTerm === true
-      };
-    })
-    .filter((item) => item.fact);
+  return facts.flatMap((item) => {
+    const causalChainKey = item.causalChainKey == null
+      ? ""
+      : isMemoryCausalChainKey(item.causalChainKey) ? item.causalChainKey : undefined;
+    if (causalChainKey === undefined) return [];
+    const range = parseEventTime(item.occurredAt ?? item.time, item.occurredEndAt);
+    const normalized = {
+      id: normalizeText(item.id),
+      fact: normalizeText(item.fact),
+      time: normalizeText(item.time),
+      occurredAt: range.occurredAt,
+      occurredEndAt: range.occurredEndAt,
+      observedAt: normalizeIsoTimestamp(item.observedAt),
+      createdAt: normalizeIsoTimestamp(item.createdAt),
+      updatedAt: normalizeIsoTimestamp(item.updatedAt),
+      source: normalizeText(item.source),
+      userId: normalizeUserId(item.userId),
+      userIds: normalizeUserIds(item.userIds),
+      userName: normalizeText(item.userName),
+      addressNames: normalizeAddressNames(
+        item.addressNames ?? item.addressName ?? item.address_name ?? item.salutation
+      ),
+      sourceWorkingMemoryIds: normalizeStringArray(item.sourceWorkingMemoryIds),
+      sourceCandidateIds: normalizeStringArray(item.sourceCandidateIds),
+      eventType: normalizeEventType(item.eventType),
+      subjectKey: normalizeSubjectKey(item.subjectKey),
+      eventKey: normalizeText(item.eventKey),
+      causalChainKey,
+      eventFingerprint: normalizeText(item.eventFingerprint),
+      longTermId: normalizeText(item.longTermId),
+      batchId: normalizeText(item.batchId),
+      promoteToLongTerm: item.promoteToLongTerm === true
+    };
+    return normalized.fact ? [normalized] : [];
+  });
 }
 
 export function memorySnapshotToken(records: MemoryRecord[]) {

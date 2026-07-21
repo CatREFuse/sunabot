@@ -217,10 +217,30 @@ function resetVariablePanelWidth() {
 .prompt-editor__variables { display: none; }
 .prompt-editor__splitter { display: none; }
 
+@container (min-width: 640px) {
+  .prompt-editor .prompt-editor__workspace {
+    grid-template-rows: minmax(0, 1fr) minmax(144px, 28%);
+    gap: 12px;
+    overflow: hidden;
+  }
+
+  .prompt-editor .prompt-editor__variables {
+    display: flex;
+    min-height: 0;
+    overflow: hidden;
+    border: 1px solid rgb(var(--color-visible));
+    border-radius: 8px;
+  }
+
+  .prompt-editor .variable-drawer-trigger { display: none; }
+}
+
 @container (min-width: 960px) {
   .prompt-editor .prompt-editor__workspace {
     grid-template-areas: "editor splitter variables";
     grid-template-columns: minmax(0, 1fr) 16px var(--variable-panel-width);
+    grid-template-rows: minmax(0, 1fr);
+    gap: 0;
     overflow: hidden;
     background: transparent;
   }
@@ -230,8 +250,6 @@ function resetVariablePanelWidth() {
     grid-area: variables;
     display: flex;
     overflow: hidden;
-    border: 1px solid rgb(var(--color-visible));
-    border-radius: 4px;
   }
   .prompt-editor .prompt-editor__splitter {
     z-index: 5;
@@ -276,6 +294,5 @@ function resetVariablePanelWidth() {
   .prompt-editor .prompt-editor__splitter:focus-visible {
     outline: 0;
   }
-  .prompt-editor .variable-drawer-trigger { display: none; }
 }
 </style>

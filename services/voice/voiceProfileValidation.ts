@@ -5,11 +5,15 @@ import {
   MAX_VOICE_REFERENCE_BYTES,
   MAX_VOICE_REFERENCE_TEXT_CHARS,
   MAX_VOICE_SOURCE_URL_CHARS,
+  MAX_VOICE_ID_CHARS,
   VOICE_LANGUAGES,
   VoiceProfileError,
+  defaultVoiceProfile,
   type VoiceLanguage,
   type VoiceProfileSettingsInput,
   type VoiceProfileV1,
+  type VoiceProviderSettings,
+  type VoiceProviderSettingsInput,
   type VoiceReferenceMetadata,
   type VoiceReferenceUpload,
 } from "./types.js";
@@ -104,7 +108,7 @@ export function parseVoiceProfile(input: unknown): VoiceProfileV1 {
   const value = exactObject(
     input,
     ["schemaVersion", "enabled", "defaultLanguage", "languages"],
-    [],
+    ["provider"],
     "VOICE_PROFILE_INVALID",
     "语音配置文件无效。",
   );
@@ -132,19 +136,73 @@ export function parseVoiceProfile(input: unknown): VoiceProfileV1 {
       ];
     }),
   ) as Record<VoiceLanguage, VoiceReferenceMetadata | null>;
-  if (value.enabled && !languages[defaultLanguage]) {
-    throw new VoiceProfileError(
-      "VOICE_PROFILE_INVALID",
-      "已启用的默认语言缺少参考音频。",
-      500,
-    );
-  }
+  const provider =
+    value.provider === undefined
+      ? defaultVoiceProfile().provider
+      : parseVoiceProviderSettings(value.provider, true);
   return {
     schemaVersion: 1,
     enabled: value.enabled,
     defaultLanguage,
     languages,
+    provider,
   };
+}
+
+export function parseVoiceProviderSettings(
+  input: VoiceProviderSettingsInput | unknown,
+  stored = false,
+): VoiceProviderSettings {
+  try {
+    const value = exactObject(
+      input,
+      ["protocol", "baseUrl", "apiKeyEnv", "model", "voices"],
+      [],
+      "VOICE_PROVIDER_INVALID",
+      "在线语音设置无效。",
+      stored ? 500 : 400,
+    );
+    if (value.protocol !== "openai-audio") throw new Error();
+    const baseUrl = parseProviderBaseUrl(value.baseUrl);
+    const apiKeyEnv = parseProviderToken(
+      value.apiKeyEnv,
+      /^[A-Za-z_][A-Za-z0-9_]{0,127}$/u,
+      128,
+    );
+    const model = parseProviderToken(
+      value.model,
+      /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/u,
+      128,
+    );
+    const voicesObject = exactObject(
+      value.voices,
+      [...VOICE_LANGUAGES],
+      [],
+      "VOICE_PROVIDER_INVALID",
+      "在线语音设置无效。",
+      stored ? 500 : 400,
+    );
+    const voices = Object.fromEntries(
+      VOICE_LANGUAGES.map((language) => [
+        language,
+        voicesObject[language] === null
+          ? null
+          : parseProviderToken(
+              voicesObject[language],
+              /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u,
+              MAX_VOICE_ID_CHARS,
+            ),
+      ]),
+    ) as Record<VoiceLanguage, string | null>;
+    return { protocol: "openai-audio", baseUrl, apiKeyEnv, model, voices };
+  } catch (error) {
+    if (error instanceof VoiceProfileError) throw error;
+    throw new VoiceProfileError(
+      "VOICE_PROVIDER_INVALID",
+      stored ? "语音配置文件无效。" : "在线语音设置无效。",
+      stored ? 500 : 400,
+    );
+  }
 }
 
 export function parseVoiceProfileSettings(
@@ -175,6 +233,43 @@ export function parseVoiceLanguage(value: unknown): VoiceLanguage {
     return value as VoiceLanguage;
   }
   throw new VoiceProfileError("VOICE_LANGUAGE_INVALID", "语音语言无效。", 400);
+}
+
+function parseProviderBaseUrl(value: unknown) {
+  if (
+    typeof value !== "string" ||
+    !value ||
+    value !== value.trim() ||
+    value.length > MAX_VOICE_SOURCE_URL_CHARS
+  ) {
+    throw new Error();
+  }
+  const url = new URL(value);
+  const loopback = ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname);
+  if (
+    (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) ||
+    !url.hostname ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash
+  ) {
+    throw new Error();
+  }
+  url.pathname = url.pathname.replace(/\/+$/u, "");
+  return url.toString().replace(/\/$/u, "");
+}
+
+function parseProviderToken(value: unknown, pattern: RegExp, maximum: number) {
+  if (
+    typeof value !== "string" ||
+    value.length > maximum ||
+    value !== value.trim() ||
+    !pattern.test(value)
+  ) {
+    throw new Error();
+  }
+  return value;
 }
 
 export function parseStoredRelativePath(value: unknown, sha256: string) {
@@ -397,7 +492,10 @@ function exactObject(
   input: unknown,
   required: readonly string[],
   optional: readonly string[],
-  code: "VOICE_PROFILE_INVALID" | "VOICE_REFERENCE_INVALID",
+  code:
+    | "VOICE_PROFILE_INVALID"
+    | "VOICE_REFERENCE_INVALID"
+    | "VOICE_PROVIDER_INVALID",
   message: string,
   status?: 400 | 500,
 ): Record<string, unknown> {

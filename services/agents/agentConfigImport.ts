@@ -21,7 +21,9 @@ const PERSONA_FILES = [
   "PREFERENCE.md",
   "DIALOGUE_STYLE_EXAMPLES.md",
   "USER.md",
-  "RELATION.md"
+  "RELATION.md",
+  "AIR.md",
+  "DIRECTOR_SEED.md"
 ] as const;
 
 export interface AgentConfigImportFileInput {

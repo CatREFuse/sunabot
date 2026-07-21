@@ -62,6 +62,33 @@ describe("Agent extension filesystem store", () => {
     expect(await fs.readFile(mcpIndex("agent-a"), "utf8")).not.toBe("{}\n");
   });
 
+  it("singleflights concurrent layout recovery for the same Agent", async () => {
+    await new AgentExtensionStore({ workspaceRoot: workspace }).ensureLayout("agent-a");
+    let pauseRecovery!: () => void;
+    let resumeRecovery!: () => void;
+    const paused = new Promise<void>((resolve) => { pauseRecovery = resolve; });
+    const resume = new Promise<void>((resolve) => { resumeRecovery = resolve; });
+    let recoveryLockAttempts = 0;
+    const store = new AgentExtensionStore({
+      workspaceRoot: workspace,
+      async beforePathOperation(operation) {
+        if (operation !== "acquire-extension-lock") return;
+        recoveryLockAttempts += 1;
+        if (recoveryLockAttempts !== 1) return;
+        pauseRecovery();
+        await resume;
+      }
+    });
+
+    const first = store.ensureLayout("agent-a");
+    await paused;
+    const second = store.ensureLayout("agent-a");
+    resumeRecovery();
+
+    await expect(Promise.all([first, second])).resolves.toEqual([undefined, undefined]);
+    expect(recoveryLockAttempts).toBe(1);
+  });
+
   it("installs one public Skill name per Agent and persists strict metadata as unreviewed evidence", async () => {
     const service = new AgentExtensionService(new AgentExtensionStore({
       workspaceRoot: workspace,

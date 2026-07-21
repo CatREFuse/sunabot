@@ -22,7 +22,7 @@
 | `docs/setup-napcat.md` | sunabot、NapCat、WebUI 和 OneBot 反向 WebSocket 的本机启动配置 | 部署、重启或排查 OneBot 连接时读取 |
 | `docs/security/admin-access.md` | 管理员账号密码、会话、CSRF、限流、熔断与公网代理边界 | 修改鉴权、WebUI 外网访问或紧急处置时读取 |
 | `docs/deployment/distributed-workspace.md` | Git pull、新终端、workspace 分离、主实例切换、离线备份与 Agent 配置文件夹复制边界 | 多终端开发、更新、接管 workspace 或迁移单个 Agent 时读取 |
-| `docs/deployment/local-voice-cloning.md` | MOSS-TTS-Nano 本地语音服务、N100 验收门槛、Kivo 日语参考音频与真实 QQ 外发流程 | 安装、启动、配置、迁移或验收本地克隆语音前读取 |
+| `docs/deployment/online-voice-synthesis.md` | 在线语音协议、Provider 配置、音色 ID、安全边界与真实 QQ 外发流程 | 配置、迁移或验收在线语音合成前读取 |
 | `docs/operations/sqlite-backup-recovery.md` | 默认 Plana 与全部 Agent 业务库/queue 数据库对的一致恢复点、7/30 天保留、恢复校验、季度演练和故障门禁 | 执行每日备份、恢复、保留清理或故障演练时读取 |
 | `docs/references/README.md` | OneBot v11、v12 协议资料的来源、版本和本地入口 | 核对 OneBot 事件、消息段、动作或兼容性时读取 |
 
@@ -43,6 +43,7 @@
 | OneBot、消息解析、回复、群聊编排 | `adapters/onebot/onebotGateway.ts`, `src/runtime.ts`, `services/orchestration/groupReplyPolicy.ts` |
 | 会话顺序、异步任务、outbox、断线恢复 | `services/sessions/` |
 | 记忆、用户画像、长期记忆、压缩 | `services/memory/`, `adapters/sqlite/applicationDataStore.ts` |
+| 知识库、BM25、资料管理 | `services/knowledge/`, `services/tools/knowledgeSearchTool.ts`, `apps/api/plugins/knowledgeRoutes.ts`, `apps/admin-web/src/views/KnowledgeView.vue` |
 | 请求日志、会话记录、图片历史 | `adapters/sqlite/applicationDataStore.ts`, `adapters/sqlite/modelCallStore.ts`, `src/requestLog.ts`, `apps/api/plugins/conversationRoutes.ts`, `apps/api/plugins/mediaRoutes.ts` |
 | 文件读取、PDF、Office、附件缓存 | `services/media/attachments/` |
 | Provider、工具调用、Codex、联网搜索 | `adapters/model/openaiProvider.ts`, `services/tools/`, `adapters/codex/codexTool.ts`, `adapters/model/webSearchTool.ts` |
@@ -82,7 +83,7 @@
 - 跨组件媒体默认使用 OneBot `base64://` 内联数据。业务代码、Core 与 NapCat 不能依赖共享绝对路径、相同挂载点或容器内文件路径；大文件能力必须新增明确、鉴权、可限流的传输契约。
 - 业务模块、SQLite schema、workspace 目录和消息语义必须同时兼容 macOS Native Core、WSL/Linux Native Core 与 Docker Core；从开发环境迁移到生产环境时不能修改业务代码或业务数据格式。
 - 平台差异只能放在 `apps/*` 组合根、`tooling/runtime/`、`deploy/` 或明确的平台 adapter 中，禁止在 services、领域模型和持久化模块中散布平台判断。
-- macOS Native Core 不具备 bubblewrap 时，`workspace_bash` 必须关闭或安全拒绝；Linux/WSL Native Core 与 Docker Core 的 bubblewrap 强隔离契约不得放宽。
+- macOS Native Core 仅允许管理员 QQ 私聊在每条命令通过独立对抗审批后使用宿主 `/bin/bash`；管理员群聊、其他群聊与其他私聊固定使用 Docker Bash。Linux/WSL Native Core 与 Docker Core 的 bubblewrap 强隔离契约不得放宽。
 - 新功能涉及文件、进程、路径、附件、图片、工具、OneBot 或部署时，必须验证 Native Core + NapCat Docker 与 Docker Core + NapCat Docker 的组件边界；至少运行 `npm run runtime:contract`、相关单元测试、`npm run check` 与 `npm run build`。
 - 平台专属依赖缺失时，启动器或 doctor 必须返回明确状态；不得静默切换运行模式，不得同时运行旧单容器和新分离运行时，也不得改变数据库、配置或 workspace 的跨平台格式。
 - 服务端拉取代码后若发现旧 `sunabot-qq-runtime` 容器或 `qq-runtime` Compose service，必须在首次执行 `./sunabot.sh up` 前完整执行 `docs/migrations/one-container-to-split-runtime.md`；不得删除旧容器、跳过离线双库备份或边运行边迁移。

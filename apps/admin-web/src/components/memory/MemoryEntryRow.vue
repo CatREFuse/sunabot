@@ -32,7 +32,7 @@ function formatMemoryTime(value: string) {
       <div class="min-w-0 space-y-1">
         <strong class="block truncate text-sm font-medium text-display">{{ nickname }}</strong>
         <p class="font-mono text-[10px] text-mute">QQ 昵称 {{ nickname }}</p>
-        <p class="font-mono text-[10px] text-mute">称呼 {{ entry.addressName || "暂无" }}</p>
+        <p class="font-mono text-[10px] text-mute">称呼 {{ entry.addressNames?.join("、") || entry.addressName || "暂无" }}</p>
         <p v-for="card in entry.groupCards" :key="`${card.groupId}-${card.card}`" class="truncate font-mono text-[10px] text-mute">群名片 {{ card.card }} · 群 {{ card.groupId }}</p>
         <p v-if="!entry.groupCards?.length" class="font-mono text-[10px] text-disabled">群名片 暂无</p>
         <p class="font-mono text-[10px] text-disabled">QQ {{ entry.userId }}</p>
@@ -46,6 +46,9 @@ function formatMemoryTime(value: string) {
       <p class="whitespace-pre-wrap break-words text-sm leading-6 text-ink">{{ entry.text }}</p>
       <div class="mt-3 flex flex-wrap gap-4 font-mono text-[10px] text-disabled">
         <span v-if="entry.score != null">相关度 {{ entry.score.toFixed(3) }}</span>
+        <span v-if="entry.source === 'long_term' && entry.recallCount != null">召回 {{ entry.recallCount }} 次</span>
+        <span v-if="entry.source === 'long_term' && entry.distinctRecallDays != null">跨 {{ entry.distinctRecallDays }} 天</span>
+        <span v-if="entry.lastRecalledAt">最近召回 {{ formatFullDateTime(entry.lastRecalledAt) }}</span>
         <span v-if="eventTime">发生 {{ eventTime }}</span>
         <span v-if="entry.updatedAt || entry.createdAt">更新 {{ formatFullDateTime(entry.updatedAt || entry.createdAt) }}</span>
       </div>

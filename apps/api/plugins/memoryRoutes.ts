@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { ServiceError } from "../../../packages/contracts/errors/serviceError.js";
 import {
   createMemoryEntry,
   deleteMemoryEntry,
@@ -8,6 +9,7 @@ import {
   type MemoryEntry
 } from "../../../services/memory/public.js";
 import type { AppConfig } from "../../../src/types.js";
+import type { DreamHistoryEnvelope, DreamHistoryItem } from "../../../services/memory/dream/public.js";
 
 const openObject = { type: "object", additionalProperties: true } as const;
 const sourceQuery = {
@@ -27,12 +29,19 @@ const operations = {
 export interface MemoryRouteRuntime {
   enrichMemoryEntries(entries: MemoryEntry[]): MemoryEntry[];
   reload(config: AppConfig): Promise<void>;
+  listDreamHistory?(limit: number): DreamHistoryEnvelope | Promise<DreamHistoryEnvelope>;
+  forceDream?(input: { accountId: string }): Promise<{
+    ok: true;
+    notificationQueued: true;
+    run: DreamHistoryItem;
+  }>;
 }
 
 export interface MemoryRouteDependencies {
   getConfig(): AppConfig;
   runtime: MemoryRouteRuntime;
   getAgentContext?: (agentId: string) => { config: AppConfig; runtime: MemoryRouteRuntime };
+  resolveDreamAccountId?: (agentId: string) => Promise<string | undefined> | string | undefined;
   operations?: Partial<typeof operations>;
 }
 
@@ -50,6 +59,51 @@ export function registerMemoryRoutes(app: FastifyInstance, dependencies: MemoryR
     const context = contextFor(request);
     const payload = await memory.listMemoryEntries(context.config, query.source);
     return { ...payload, entries: context.runtime.enrichMemoryEntries(payload.entries) };
+  });
+
+  app.get("/api/memory/dreams", {
+    schema: {
+      querystring: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          agentId: { type: "string" },
+          limit: { type: "integer", minimum: 1, maximum: 100, default: 30 }
+        }
+      },
+      response: { 200: openObject }
+    }
+  }, async (request) => {
+    const context = contextFor(request);
+    if (!context.runtime.listDreamHistory) throw new Error("Dream history runtime is unavailable.");
+    const query = request.query as { limit?: number };
+    return context.runtime.listDreamHistory(query.limit ?? 30);
+  });
+
+  app.post("/api/memory/dreams/trigger", {
+    schema: {
+      querystring: {
+        type: "object",
+        additionalProperties: false,
+        properties: { agentId: { type: "string" } }
+      },
+      response: { 200: openObject }
+    }
+  }, async (request) => {
+    const agentId = requestAgentId(request.query);
+    const context = contextFor(request);
+    if (!context.runtime.forceDream) {
+      throw new ServiceError(503, "DREAM_RUNTIME_UNAVAILABLE", "Dream 暂不可用。");
+    }
+    const accountId = await dependencies.resolveDreamAccountId?.(agentId);
+    if (!accountId) {
+      throw new ServiceError(409, "DREAM_ACCOUNT_OFFLINE", "当前 Agent 没有在线 QQ，无法发送入睡消息。");
+    }
+    try {
+      return await context.runtime.forceDream({ accountId });
+    } catch (error) {
+      throw dreamTriggerError(error);
+    }
   });
 
   app.post("/api/memory/recall", {
@@ -84,6 +138,7 @@ export function registerMemoryRoutes(app: FastifyInstance, dependencies: MemoryR
       text?: string;
       userId?: string;
       userName?: string;
+      addressNames?: string[];
       addressName?: string;
     });
     await runtime.reload(config);
@@ -98,6 +153,7 @@ export function registerMemoryRoutes(app: FastifyInstance, dependencies: MemoryR
       source?: string;
       id?: string;
       text?: string;
+      addressNames?: string[];
       addressName?: string;
     });
     await runtime.reload(config);
@@ -129,17 +185,34 @@ function requestAgentId(query: unknown) {
   return String(value ?? "plana").trim() || "plana";
 }
 
+function dreamTriggerError(error: unknown) {
+  if (error instanceof ServiceError) return error;
+  const code = error && typeof error === "object" && typeof (error as { code?: unknown }).code === "string"
+    ? String((error as { code: string }).code)
+    : "";
+  if (code === "DREAM_ALREADY_COMPLETED" || code === "DREAM_BUSY" || code === "DREAM_ADMIN_QQ_UNAVAILABLE") {
+    return new ServiceError(
+      409,
+      code,
+      error instanceof Error && error.message.trim() ? error.message : "Dream 目前无法触发。"
+    );
+  }
+  return error;
+}
+
 const memoryWriteBody = { type: "object", additionalProperties: false } as const;
 const createProperties = {
   source: { type: "string" },
   text: { type: "string" },
   userId: { type: "string" },
   userName: { type: "string" },
+  addressNames: { type: "array", items: { type: "string" } },
   addressName: { type: "string" }
 } as const;
 const updateProperties = {
   source: { type: "string" },
   id: { type: "string" },
   text: { type: "string" },
+  addressNames: { type: "array", items: { type: "string" } },
   addressName: { type: "string" }
 } as const;

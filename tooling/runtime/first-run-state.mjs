@@ -13,7 +13,7 @@ export const FIRST_RUN_JOURNAL = "runtime/first-run-bootstrap.json";
 const FIRST_RUN_SIGNING_KEY = "secrets/first-run-bootstrap.key";
 const COMPLETED_REPORT = "runtime/first-run-bootstrap.completed.json";
 const BOUNDARIES = ["marker", "main", "queue", "manifest", "registration", "account-runtime"];
-const MAIN_SCHEMA_VERSION = 13;
+const MAIN_SCHEMA_VERSION = 16;
 const QUEUE_SCHEMA_VERSION = 5;
 const MAIN_TABLES = [
   "admin_sessions",
@@ -22,10 +22,17 @@ const MAIN_TABLES = [
   "app_metadata",
   "conversation_thread_states",
   "conversations",
+  "director_daily_schedule_revisions",
+  "director_daily_schedules",
+  "director_schedule_task_links",
+  "dream_memory_archive",
+  "dream_runs",
   "emojis",
   "emoji_versions",
   "image_history",
   "memory_batches",
+  "memory_recall_receipts",
+  "memory_recall_stats",
   "memory_records",
   "memory_scheduler",
   "model_call_aggregates",
@@ -278,7 +285,8 @@ function validateMainSchema(database) {
     "emoji_key", "file_name", "source", "size_bytes", "width", "height", "created_at"
   ]);
   requireColumns(database, "scheduled_tasks", [
-    "id", "revision", "name", "enabled", "schedule_kind", "cron_expression", "timezone", "run_at",
+    "id", "revision", "name", "enabled", "permanent_retention", "schedule_kind",
+    "cron_expression", "timezone", "run_at",
     "context_text", "targets_json", "next_run_at", "last_scheduled_at", "created_at", "updated_at"
   ]);
   requireColumns(database, "scheduled_task_runs", [
@@ -289,7 +297,7 @@ function validateMainSchema(database) {
   requireIndexes(database, "agent_accounts", ["agent_accounts_agent", "agent_accounts_webui_port"]);
   requireIndexes(database, "emojis", ["emojis_updated_at"]);
   requireIndexes(database, "emoji_versions", ["emoji_versions_key_created_at"]);
-  requireIndexes(database, "scheduled_tasks", ["scheduled_tasks_due"]);
+  requireIndexes(database, "scheduled_tasks", ["scheduled_tasks_due", "scheduled_tasks_archive"]);
   requireIndexes(database, "scheduled_task_runs", ["scheduled_task_runs_status", "scheduled_task_runs_task"]);
   const foreignKeys = database.prepare("PRAGMA foreign_key_list(agent_accounts)").all();
   if (!foreignKeys.some((row) => (
@@ -352,6 +360,7 @@ function validateMainSchema(database) {
   requireSchemaSql(database, "scheduled_tasks", [
     "strict",
     "check (enabled in (0, 1))",
+    "check (permanent_retention in (0, 1))",
     "schedule_kind in ('cron', 'once')",
     "check (json_valid(targets_json))",
     "schedule_kind = 'cron' and cron_expression is not null and timezone is not null and run_at is null",

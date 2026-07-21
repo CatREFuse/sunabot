@@ -6,6 +6,7 @@ import type {
 } from "./scheduledTask.js";
 
 export interface CreateScheduledTaskInput {
+  id?: string;
   name: string;
   enabled?: boolean;
   schedule: ScheduledTaskSchedule;
@@ -21,7 +22,11 @@ export interface UpdateScheduledTaskInput {
   schedule?: ScheduledTaskSchedule;
   context?: string;
   targets?: ScheduledTaskTarget[];
+  permanentRetention?: boolean;
 }
+
+export const SCHEDULED_TASK_CATEGORIES = ["all", "director", "recurring", "scheduled", "archived"] as const;
+export type ScheduledTaskCategory = (typeof SCHEDULED_TASK_CATEGORIES)[number];
 
 export interface ListScheduledTasksInput {
   enabled?: boolean;
@@ -32,6 +37,24 @@ export interface ListScheduledTasksInput {
 export interface ScheduledTaskPage {
   items: ScheduledTask[];
   nextCursor: string | null;
+}
+
+export interface ListScheduledTaskPageInput {
+  category: ScheduledTaskCategory;
+  page: number;
+  pageSize: number;
+}
+
+export interface ScheduledTaskOffsetPage {
+  items: ScheduledTask[];
+  page: number;
+  pageSize: number;
+  total: number;
+  pageCount: number;
+}
+
+export interface PurgeExpiredArchivedTasksInput {
+  now?: Date;
 }
 
 export type UpdateScheduledTaskResult =
@@ -90,6 +113,7 @@ export interface ScheduledTaskStore {
   create(input: CreateScheduledTaskInput): ScheduledTask;
   get(id: string): ScheduledTask | undefined;
   list(input?: ListScheduledTasksInput): ScheduledTaskPage;
+  listPage(input: ListScheduledTaskPageInput): ScheduledTaskOffsetPage;
   update(input: UpdateScheduledTaskInput): UpdateScheduledTaskResult;
   delete(id: string, expectedRevision: number): DeleteScheduledTaskResult;
   getRun(id: string): ScheduledTaskRun | undefined;
@@ -100,5 +124,6 @@ export interface ScheduledTaskStore {
   markGenerated(input: MarkScheduledTaskRunGeneratedInput): ScheduledTaskRun | undefined;
   complete(input: CompleteScheduledTaskRunInput): ScheduledTaskRun | undefined;
   fail(input: FailScheduledTaskRunInput): ScheduledTaskRun | undefined;
+  purgeExpiredArchivedTasks(input?: PurgeExpiredArchivedTasksInput): number;
   nextWakeAt(): string | null;
 }

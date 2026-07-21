@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { TextDecoder } from "node:util";
 import type { RenderedPromptRequest } from "../../services/agent/promptSystem.js";
 import {
+  defaultConfig,
   getConfigPath,
   getDefaultProvider,
   normalizeConfigDocument
@@ -14,7 +15,6 @@ import {
   applyConfigDoctorOperations,
   diffConfigDocuments,
   isAiRepairablePath,
-  isRuleRepairableOperation,
   operationRisk,
   parseAiOperations,
   type ConfigDoctorPatchOperation
@@ -31,7 +31,6 @@ const AI_COOLDOWN_MS = 10_000;
 const MAX_AI_RESPONSE_BYTES = 64 * 1024;
 const MAX_JSON_DEPTH = 64;
 const MAX_JSON_STRUCTURE_TOKENS = 4_096;
-
 export interface ConfigDoctorIssue {
   id: string;
   path: string;
@@ -49,7 +48,6 @@ export interface ConfigDoctorChange {
 }
 
 export type { ConfigDoctorProviderInfo } from "./configDoctorModel.js";
-
 export interface ConfigDoctorProposal {
   id: string;
   sourceRevision: string;
@@ -435,9 +433,8 @@ export class ConfigDoctorService {
         )]
       };
     }
-    const differences = diffConfigDocuments(document, normalized);
-    const ruleOperations = differences.filter(isRuleRepairableOperation);
-    const manualOperations = differences.filter((operation) => !isRuleRepairableOperation(operation));
+    const repaired = repairNormalizedConfig(normalized, document);
+    const ruleOperations = diffConfigDocuments(document, repaired.candidate);
     const ruleChanges = ruleOperations.map((operation) => changeForOperation(operation));
     const issues: ConfigDoctorIssue[] = [
       ...ruleChanges.map((change, index) => ({
@@ -448,21 +445,18 @@ export class ConfigDoctorService {
         repairable: true,
         source: "rules" as const
       })),
-      ...manualOperations.map((operation, index) => ({
-        id: `CONFIG_MANUAL_${index + 1}`,
-        path: operation.path,
-        message: `字段 ${operation.path} 需要手动确认。`,
-        severity: "error" as const,
-        repairable: false,
-        source: "rules" as const
-      }))
+      ...repaired.issues
     ];
     const candidate = applyConfigDoctorOperations(document, ruleOperations) as AppConfig;
-    const validationIssues = collectConfigValidationIssues(candidate);
-    for (const issue of validationIssues) {
-      if (!issues.some((existing) => !existing.repairable && existing.path === issue.path)) issues.push(issue);
+    let candidateValid = repaired.issues.length === 0;
+    if (candidateValid) {
+      try {
+        validateCompleteConfig(candidate);
+      } catch (error) {
+        candidateValid = false;
+        issues.push(validationIssue(error));
+      }
     }
-    const candidateValid = validationIssues.length === 0;
     return { ruleOperations, ruleChanges, candidateValid, issues };
   }
 
@@ -525,48 +519,88 @@ function withDerivedMirrorOperations(
   return expanded;
 }
 
-function collectConfigValidationIssues(candidate: AppConfig) {
+function repairNormalizedConfig(candidate: AppConfig, source: Record<string, unknown>) {
   const working = structuredClone(candidate);
-  const defaults = normalizeConfigDocument({}, { applyRuntimeOverrides: false });
+  const defaults = defaultConfig();
   const issues: ConfigDoctorIssue[] = [];
   const seen = new Set<string>();
-  for (let attempt = 0; attempt < 32; attempt += 1) {
+  for (let attempt = 0; attempt < 128; attempt += 1) {
     try {
       validateCompleteConfig(working);
-      break;
+      return { candidate: working, issues };
     } catch (error) {
-      const path = error instanceof AdminApiError && error.field ? fieldToPointer(error.field) : "/";
-      if (seen.has(path)) break;
+      const field = error instanceof AdminApiError ? error.field : undefined;
+      const path = configFieldToPointer(field);
+      if (!path || seen.has(path) || !replaceInvalidValue(
+        working as unknown as Record<string, unknown>,
+        defaults,
+        source,
+        path
+      )) {
+        issues.push(validationIssue(error, path));
+        return { candidate: working, issues };
+      }
+      if (path === "/bot/quoteGroupReplies") {
+        working.onebot.quoteGroupReplies = working.bot.quoteGroupReplies;
+      }
       seen.add(path);
-      issues.push({
-        id: `${error instanceof AdminApiError ? error.code : "CONFIG_STRUCTURE_INVALID"}_${issues.length + 1}`,
-        path,
-        message: error instanceof Error ? error.message : "系统配置结构无效。",
-        severity: "error",
-        repairable: false,
-        source: "rules"
-      });
-      if (!replaceWithDefault(working as unknown as Record<string, unknown>, defaults, path)) break;
     }
   }
-  return issues;
+  issues.push({
+    id: "CONFIG_REPAIR_LIMIT_EXCEEDED",
+    path: "/",
+    message: "系统配置包含过多连续无效字段。",
+    severity: "error",
+    repairable: false,
+    source: "rules"
+  });
+  return { candidate: working, issues };
 }
 
-function replaceWithDefault(target: Record<string, unknown>, defaults: AppConfig, pointer: string) {
-  const segments = pointerSegments(pointer);
-  if (!segments.length) return false;
-  let defaultParent: unknown = defaults;
-  let targetParent: unknown = target;
-  for (const segment of segments.slice(0, -1)) {
-    if (!defaultParent || typeof defaultParent !== "object" || !Object.hasOwn(defaultParent, segment)) return false;
-    if (!targetParent || typeof targetParent !== "object" || !Object.hasOwn(targetParent, segment)) return false;
-    defaultParent = (defaultParent as Record<string, unknown>)[segment];
-    targetParent = (targetParent as Record<string, unknown>)[segment];
+function validationIssue(error: unknown, path?: string): ConfigDoctorIssue {
+  return {
+    id: error instanceof AdminApiError ? error.code : "CONFIG_STRUCTURE_INVALID",
+    path: path ?? configFieldToPointer(error instanceof AdminApiError ? error.field : undefined) ?? "/",
+    message: error instanceof Error ? error.message : "系统配置结构无效。",
+    severity: "error",
+    repairable: false,
+    source: "rules"
+  };
+}
+
+function replaceInvalidValue(
+  target: Record<string, unknown>,
+  defaults: AppConfig,
+  source: Record<string, unknown>,
+  pointer: string
+) {
+  const defaultValue = valueAtPointer(defaults, pointer);
+  if (!defaultValue.exists) return false;
+  const sourceValue = valueAtPointer(source, pointer);
+  const value = sourceValue.exists && typeof defaultValue.value === "boolean"
+    ? false
+    : defaultValue.value;
+  return replaceAtPointer(target, pointer, value);
+}
+
+function valueAtPointer(document: unknown, pointer: string): { exists: boolean; value?: unknown } {
+  let current = document;
+  for (const segment of pointerSegments(pointer)) {
+    if (!current || typeof current !== "object" || !Object.hasOwn(current, segment)) return { exists: false };
+    current = (current as Record<string, unknown>)[segment];
   }
-  if (!defaultParent || typeof defaultParent !== "object" || !targetParent || typeof targetParent !== "object") return false;
-  const key = segments.at(-1)!;
-  if (!Object.hasOwn(defaultParent, key)) return false;
-  (targetParent as Record<string, unknown>)[key] = structuredClone((defaultParent as Record<string, unknown>)[key]);
+  return { exists: true, value: current };
+}
+
+function replaceAtPointer(target: Record<string, unknown>, pointer: string, value: unknown) {
+  const segments = pointerSegments(pointer);
+  let parent: unknown = target;
+  for (const segment of segments.slice(0, -1)) {
+    if (!parent || typeof parent !== "object" || !Object.hasOwn(parent, segment)) return false;
+    parent = (parent as Record<string, unknown>)[segment];
+  }
+  if (!parent || typeof parent !== "object") return false;
+  (parent as Record<string, unknown>)[segments.at(-1)!] = structuredClone(value);
   return true;
 }
 
@@ -631,8 +665,13 @@ function fileRevision(content: Uint8Array) {
   return crypto.createHash("sha256").update(content).digest("hex");
 }
 
-function fieldToPointer(field: string) {
-  return `/${field.split(".").filter(Boolean).map((segment) => segment.replace(/~/g, "~0").replace(/\//g, "~1")).join("/")}`;
+function configFieldToPointer(field: string | undefined) {
+  if (!field) return undefined;
+  const segments = field.split(".").filter(Boolean);
+  if (["tone", "memory", "orchestrator", "tools", "bash"].includes(segments[0] ?? "")) {
+    segments.unshift("bot");
+  }
+  return `/${segments.map((segment) => segment.replace(/~/g, "~0").replace(/\//g, "~1")).join("/")}`;
 }
 
 function removeTrailingCommas(text: string) {

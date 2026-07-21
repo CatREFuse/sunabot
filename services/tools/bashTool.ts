@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import path from "node:path";
-import { resolveAgentWorkbench } from "../agents/public.js";
+import { resolveAgentBashEnvironment } from "../agents/public.js";
 import {
   bashApprovalStore,
   isValidBashApprovalContext,
@@ -25,10 +25,13 @@ import {
 } from "./bashFilesystemGuard.js";
 import {
   WORKSPACE_BASH_ISOLATION_ERROR,
+  WORKSPACE_BASH_MCP_ROOT,
+  WORKSPACE_BASH_SKILLS_ROOT,
   WORKSPACE_BASH_VIRTUAL_ROOT,
   buildWorkspaceBashInvocation,
   ensureWorkspaceBashIsolation,
   type WorkspaceBashInvocation,
+  type WorkspaceBashReadOnlyMounts,
   type WorkspaceBashSandboxOptions
 } from "./bashSandbox.js";
 import { evaluateBashPolicy } from "./bashPolicy.js";
@@ -100,7 +103,7 @@ export interface WorkspaceBashProviderOptions {
 export const workspaceBashTool = {
   type: "function",
   name: WORKSPACE_BASH_TOOL_NAME,
-  description: "Run an independently audited command from the current Agent workbench. Restricted conversations accept one fixed local file-operation argv without shell syntax or network access. Administrator Bash remains strongly sandboxed; external access is denied or requires an exact one-time confirmation.",
+  description: "Run a command after an independent adversarial approval agent reviews it. Only administrator QQ private chats use Native host Bash; group chats and other QQ private chats use isolated Docker Bash. Native and Docker keep separate workbenches and expose the same Skill and MCP configuration; Docker mounts that shared configuration read-only and has no network access.",
   parameters: {
     type: "object",
     additionalProperties: false,
@@ -145,7 +148,11 @@ export function isWorkspaceBashProviderOptions(value: unknown): value is Workspa
     || typeof options.workspacePath !== "string"
     || !path.isAbsolute(options.workspacePath)
     || (options.backend !== "native" && options.backend !== "docker")
-    || (options.accessMode !== "admin" && options.accessMode !== "restricted")
+    || (options.accessMode !== "admin" && options.accessMode !== "isolated" && options.accessMode !== "restricted")
+    || !(
+      (options.backend === "native" && options.accessMode === "admin")
+      || (options.backend === "docker" && options.accessMode === "isolated")
+    )
     || typeof options.strictMode !== "boolean"
     || typeof options.isCurrent !== "function"
     || typeof options.audit !== "function"
@@ -168,6 +175,7 @@ export async function runWorkspaceBash(
   const accessMode = options.accessMode ?? "admin";
   const timeoutMs = normalizeTimeout(input.timeoutMs);
   let workbenchRoot = "";
+  let readOnlyMounts: WorkspaceBashReadOnlyMounts | undefined;
   const stale = (audit?: BashAuditResult) => configurationStaleResult(
     command,
     workbenchRoot,
@@ -178,7 +186,9 @@ export async function runWorkspaceBash(
   if (!isBashConfigurationCurrent(options.isCurrent)) return stale();
   let workbenchIdentity: FrozenFilesystemIdentity;
   try {
-    workbenchRoot = await resolveAgentWorkbench(agentWorkspacePath);
+    const bashEnvironment = await resolveAgentBashEnvironment(agentWorkspacePath, backend);
+    workbenchRoot = bashEnvironment.workbenchRoot;
+    readOnlyMounts = bashEnvironment.readOnlyMounts;
     if (!isBashConfigurationCurrent(options.isCurrent)) return stale();
     workbenchIdentity = await captureWorkbenchIdentity(workbenchRoot);
     if (!isBashConfigurationCurrent(options.isCurrent)) return stale();
@@ -367,7 +377,7 @@ export async function runWorkspaceBash(
       backend,
       workbenchRoot,
       environment,
-      options.sandbox
+      { ...options.sandbox, readOnlyMounts }
     );
     if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
     try {
@@ -426,7 +436,8 @@ export async function runWorkspaceBash(
       workbenchRoot,
       environment,
       sandbox,
-      approvedOutsideAccesses
+      approvedOutsideAccesses,
+      readOnlyMounts
     );
     if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
     return await executeCommand(invocation, {
@@ -447,7 +458,7 @@ export async function runWorkspaceBash(
       workbenchRoot,
       backend,
       accessMode,
-      `${WORKSPACE_BASH_ISOLATION_ERROR}: strong sandbox capability check failed.`,
+      `${WORKSPACE_BASH_ISOLATION_ERROR}: Bash execution capability check failed.`,
       audit
     );
   }
@@ -658,7 +669,9 @@ function buildWorkbenchEnv(): Record<string, string> {
     LANG: process.env.LANG || "C.UTF-8",
     LC_ALL: process.env.LC_ALL || "",
     SHELL: "/bin/bash",
-    USER: "sunabot"
+    USER: "sunabot",
+    SUNABOT_SKILLS: WORKSPACE_BASH_SKILLS_ROOT,
+    SUNABOT_MCP_CONFIG: WORKSPACE_BASH_MCP_ROOT
   };
 }
 

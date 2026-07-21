@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import {
   decodeScheduledTaskSnapshot,
+  DIRECTOR_SCHEDULED_TASK_ID_PREFIX,
   firstScheduledAt,
   nextScheduledAt,
   nonNegativeInteger,
@@ -24,7 +25,9 @@ import {
   type DeleteScheduledTaskResult,
   type FailScheduledTaskRunInput,
   type ListScheduledTasksInput,
+  type ListScheduledTaskPageInput,
   type MarkScheduledTaskRunGeneratedInput,
+  type PurgeExpiredArchivedTasksInput,
   type RenewScheduledTaskRunInput,
   type ScheduledTask,
   type ScheduledTaskPage,
@@ -45,9 +48,11 @@ export interface SqliteScheduledTaskStoreOptions {
 }
 
 const TASK_COLUMNS = `
-  id, revision, name, enabled, schedule_kind, cron_expression, timezone, run_at,
+  id, revision, name, enabled, permanent_retention, schedule_kind, cron_expression, timezone, run_at,
   context_text, targets_json, next_run_at, last_scheduled_at, created_at, updated_at
 `;
+
+const ARCHIVE_RETENTION_MS = 3 * 24 * 60 * 60_000;
 
 const RUN_COLUMNS = `
   id, task_id, task_revision, scheduled_for, status, snapshot_json, result_text,
@@ -62,6 +67,7 @@ export function migrateScheduledTaskTables(database: DatabaseSync) {
       revision INTEGER NOT NULL CHECK (revision >= 1),
       name TEXT NOT NULL CHECK (length(trim(name)) BETWEEN 1 AND 120),
       enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+      permanent_retention INTEGER NOT NULL DEFAULT 0 CHECK (permanent_retention IN (0, 1)),
       schedule_kind TEXT NOT NULL CHECK (schedule_kind IN ('cron', 'once')),
       cron_expression TEXT,
       timezone TEXT,
@@ -121,6 +127,17 @@ export function migrateScheduledTaskTables(database: DatabaseSync) {
     CREATE INDEX IF NOT EXISTS scheduled_task_runs_task
       ON scheduled_task_runs(task_id, scheduled_for DESC, id);
   `);
+  const taskColumns = database.prepare("PRAGMA table_info(scheduled_tasks)").all() as SqlRow[];
+  if (!taskColumns.some((column) => String(column.name) === "permanent_retention")) {
+    database.exec(`
+      ALTER TABLE scheduled_tasks
+      ADD COLUMN permanent_retention INTEGER NOT NULL DEFAULT 0 CHECK (permanent_retention IN (0, 1))
+    `);
+  }
+  database.exec(`
+    CREATE INDEX IF NOT EXISTS scheduled_tasks_archive
+      ON scheduled_tasks(schedule_kind, permanent_retention, next_run_at, id)
+  `);
 }
 
 export class SqliteScheduledTaskStore implements ScheduledTaskStore {
@@ -149,15 +166,16 @@ export class SqliteScheduledTaskStore implements ScheduledTaskStore {
       context: input.context,
       targets: input.targets
     }, { isAllowedConversationId: this.allowedConversationIds });
-    const id = normalizeScheduledTaskId(this.idFactory());
+    const id = normalizeScheduledTaskId(input.id ?? this.idFactory());
     const timestamp = now.toISOString();
     const nextRunAt = draft.enabled ? firstScheduledAt(draft.schedule, now) : null;
     const schedule = scheduleColumns(draft.schedule);
-    this.database.prepare(`
+    const inserted = this.database.prepare(`
       INSERT INTO scheduled_tasks (
-        id, revision, name, enabled, schedule_kind, cron_expression, timezone, run_at,
+        id, revision, name, enabled, permanent_retention, schedule_kind, cron_expression, timezone, run_at,
         context_text, targets_json, next_run_at, last_scheduled_at, created_at, updated_at
-      ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+      ) VALUES (?, 1, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+      ON CONFLICT(id) DO NOTHING
     `).run(
       id,
       draft.name,
@@ -172,7 +190,11 @@ export class SqliteScheduledTaskStore implements ScheduledTaskStore {
       timestamp,
       timestamp
     );
-    return this.requireTask(id);
+    const task = this.requireTask(id);
+    if (Number(inserted.changes) === 0 && !sameScheduledTaskDraft(task, draft)) {
+      throw new Error(`Scheduled task id collision: ${id}`);
+    }
+    return task;
   }
 
   get(id: string) {
@@ -196,10 +218,36 @@ export class SqliteScheduledTaskStore implements ScheduledTaskStore {
     };
   }
 
+  listPage(input: ListScheduledTaskPageInput) {
+    const category = listCategory(input.category);
+    const requestedPage = pageNumber(input.page);
+    const pageSize = listLimit(input.pageSize);
+    const where = categoryWhere(category);
+    const countRow = this.database.prepare(`
+      SELECT COUNT(*) AS total FROM scheduled_tasks WHERE ${where}
+    `).get() as SqlRow;
+    const total = nonNegativeInteger(Number(countRow.total), "scheduled task page total");
+    const pageCount = Math.max(1, Math.ceil(total / pageSize));
+    const page = Math.min(requestedPage, pageCount);
+    const rows = this.database.prepare(`
+      SELECT ${TASK_COLUMNS} FROM scheduled_tasks
+      WHERE ${where}
+      ORDER BY updated_at DESC, id
+      LIMIT ? OFFSET ?
+    `).all(pageSize, (page - 1) * pageSize) as SqlRow[];
+    return {
+      items: rows.map(mapTask),
+      page,
+      pageSize,
+      total,
+      pageCount
+    };
+  }
+
   update(input: UpdateScheduledTaskInput): UpdateScheduledTaskResult {
     const id = normalizeScheduledTaskId(input.id);
     const expectedRevision = positiveInteger(input.expectedRevision, "expectedRevision");
-    const changed = ["name", "enabled", "schedule", "context", "targets"]
+    const changed = ["name", "enabled", "schedule", "context", "targets", "permanentRetention"]
       .some((field) => Object.prototype.hasOwnProperty.call(input, field));
     if (!changed) throw new Error("Scheduled task update requires at least one changed field.");
 
@@ -207,13 +255,17 @@ export class SqliteScheduledTaskStore implements ScheduledTaskStore {
       const current = this.readTask(id);
       if (!current) return { status: "not_found" };
       if (current.revision !== expectedRevision) return { status: "conflict", current };
-      const draft = normalizeScheduledTaskDraft({
-        name: input.name ?? current.name,
-        enabled: input.enabled ?? current.enabled,
-        schedule: input.schedule ?? current.schedule,
-        context: input.context ?? current.context,
-        targets: input.targets ?? current.targets
-      }, { isAllowedConversationId: this.allowedConversationIds });
+      const draftChanged = ["name", "enabled", "schedule", "context", "targets"]
+        .some((field) => Object.prototype.hasOwnProperty.call(input, field));
+      const draft = draftChanged
+        ? normalizeScheduledTaskDraft({
+            name: input.name ?? current.name,
+            enabled: input.enabled ?? current.enabled,
+            schedule: input.schedule ?? current.schedule,
+            context: input.context ?? current.context,
+            targets: input.targets ?? current.targets
+          }, { isAllowedConversationId: this.allowedConversationIds })
+        : current;
       const scheduleChanged = JSON.stringify(draft.schedule) !== JSON.stringify(current.schedule);
       const becameEnabled = draft.enabled && !current.enabled;
       const nextRunAt = !draft.enabled
@@ -223,11 +275,14 @@ export class SqliteScheduledTaskStore implements ScheduledTaskStore {
           : current.nextRunAt;
       const timestamp = this.now().toISOString();
       const schedule = scheduleColumns(draft.schedule);
+      const permanentRetention = Object.prototype.hasOwnProperty.call(input, "permanentRetention")
+        ? requiredBoolean(input.permanentRetention, "permanentRetention")
+        : current.permanentRetention;
       const updated = this.database.prepare(`
         UPDATE scheduled_tasks SET
           revision = revision + 1,
           name = ?, enabled = ?, schedule_kind = ?, cron_expression = ?, timezone = ?, run_at = ?,
-          context_text = ?, targets_json = ?, next_run_at = ?, updated_at = ?
+          context_text = ?, targets_json = ?, permanent_retention = ?, next_run_at = ?, updated_at = ?
         WHERE id = ? AND revision = ?
       `).run(
         draft.name,
@@ -238,6 +293,7 @@ export class SqliteScheduledTaskStore implements ScheduledTaskStore {
         schedule.runAt,
         draft.context,
         JSON.stringify(draft.targets),
+        permanentRetention ? 1 : 0,
         nextRunAt,
         timestamp,
         id,
@@ -409,6 +465,23 @@ export class SqliteScheduledTaskStore implements ScheduledTaskStore {
     return Number(updated.changes) === 1 ? this.requireRun(runId) : undefined;
   }
 
+  purgeExpiredArchivedTasks(input: PurgeExpiredArchivedTasksInput = {}) {
+    const cutoff = new Date(this.inputDate(input.now).getTime() - ARCHIVE_RETENTION_MS).toISOString();
+    const removed = this.database.prepare(`
+      DELETE FROM scheduled_tasks
+      WHERE schedule_kind = 'once'
+        AND next_run_at IS NULL
+        AND permanent_retention = 0
+        AND (
+          SELECT run.completed_at FROM scheduled_task_runs AS run
+          WHERE run.task_id = scheduled_tasks.id
+          ORDER BY run.scheduled_for DESC, run.id DESC
+          LIMIT 1
+        ) <= ?
+    `).run(cutoff);
+    return Number(removed.changes);
+  }
+
   nextWakeAt() {
     const row = this.database.prepare(`
       SELECT MIN(wake_at) AS wake_at FROM (
@@ -418,6 +491,19 @@ export class SqliteScheduledTaskStore implements ScheduledTaskStore {
         SELECT CASE WHEN status = 'pending' THEN created_at ELSE lease_until END AS wake_at
         FROM scheduled_task_runs
         WHERE status IN ('pending', 'running', 'generated')
+        UNION ALL
+        SELECT strftime('%Y-%m-%dT%H:%M:%fZ', run.completed_at, '+3 days') AS wake_at
+        FROM scheduled_tasks AS task
+        JOIN scheduled_task_runs AS run ON run.id = (
+          SELECT latest.id FROM scheduled_task_runs AS latest
+          WHERE latest.task_id = task.id
+          ORDER BY latest.scheduled_for DESC, latest.id DESC
+          LIMIT 1
+        )
+        WHERE task.schedule_kind = 'once'
+          AND task.next_run_at IS NULL
+          AND task.permanent_retention = 0
+          AND run.status IN ('completed', 'failed')
       )
     `).get() as SqlRow | undefined;
     return row?.wake_at == null ? null : normalizeStoredTimestamp(row.wake_at, "wakeAt");
@@ -489,6 +575,7 @@ function mapTask(row: SqlRow): ScheduledTask {
     id: normalizeScheduledTaskId(String(row.id)),
     revision: positiveInteger(Number(row.revision), "stored task revision"),
     ...draft,
+    permanentRetention: Number(row.permanent_retention) === 1,
     nextRunAt: nullableTimestamp(row.next_run_at, "next_run_at"),
     lastScheduledAt: nullableTimestamp(row.last_scheduled_at, "last_scheduled_at"),
     createdAt: normalizeStoredTimestamp(row.created_at, "created_at"),
@@ -545,6 +632,14 @@ function scheduleColumns(schedule: ScheduledTaskSchedule) {
   return { kind: "once", expression: null, timezone: null, runAt: schedule.runAt };
 }
 
+function sameScheduledTaskDraft(task: ScheduledTask, draft: ReturnType<typeof normalizeScheduledTaskDraft>) {
+  return task.name === draft.name
+    && task.enabled === draft.enabled
+    && JSON.stringify(task.schedule) === JSON.stringify(draft.schedule)
+    && task.context === draft.context
+    && JSON.stringify(task.targets) === JSON.stringify(draft.targets);
+}
+
 function nullableTimestamp(value: unknown, field: string) {
   return value == null ? null : normalizeStoredTimestamp(value, field);
 }
@@ -571,6 +666,42 @@ function listLimit(value: number | undefined) {
   if (!Number.isSafeInteger(value) || value < 1 || value > 100) {
     throw new Error("Scheduled task list limit must be between 1 and 100.");
   }
+  return value;
+}
+
+function listCategory(value: ListScheduledTaskPageInput["category"]) {
+  if (
+    value === "all" || value === "director" || value === "recurring"
+    || value === "scheduled" || value === "archived"
+  ) return value;
+  throw new Error("Scheduled task category is invalid.");
+}
+
+function categoryWhere(category: ReturnType<typeof listCategory>) {
+  if (category === "director") return `id GLOB '${DIRECTOR_SCHEDULED_TASK_ID_PREFIX}*'`;
+  if (category === "recurring") return "schedule_kind = 'cron'";
+  const archived = `
+    schedule_kind = 'once'
+    AND next_run_at IS NULL
+    AND (
+      SELECT run.status FROM scheduled_task_runs AS run
+      WHERE run.task_id = scheduled_tasks.id
+      ORDER BY run.scheduled_for DESC, run.id DESC
+      LIMIT 1
+    ) IN ('completed', 'failed')
+  `;
+  if (category === "archived") return archived;
+  if (category === "scheduled") return `schedule_kind = 'once' AND NOT (${archived})`;
+  return "1 = 1";
+}
+
+function pageNumber(value: number) {
+  if (!Number.isSafeInteger(value) || value < 1) throw new Error("Scheduled task page must be a positive integer.");
+  return value;
+}
+
+function requiredBoolean(value: unknown, field: string) {
+  if (typeof value !== "boolean") throw new Error(`${field} must be a boolean.`);
   return value;
 }
 

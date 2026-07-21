@@ -52,12 +52,9 @@ async function submit() {
 
 <template>
   <section aria-labelledby="admin-password-title">
-    <header class="flex items-start gap-4 border-b border-line pb-6">
-      <i class="bx bx-lock-alt text-[30px] text-display" aria-hidden="true"></i>
-      <div>
-        <h2 id="admin-password-title" class="section-title">管理员密码</h2>
-        <p class="page-intro">新密码至少需要 12 个字符。</p>
-      </div>
+    <header class="border-b border-line pb-6">
+      <h2 id="admin-password-title" class="section-title">管理员密码</h2>
+      <p class="mt-2 text-sm leading-6 text-mute">新密码至少需要 12 个字符，修改后其他管理会话会退出。</p>
     </header>
 
     <form class="mt-8 grid max-w-xl gap-5" @submit.prevent="submit">

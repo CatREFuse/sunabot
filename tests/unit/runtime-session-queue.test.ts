@@ -333,7 +333,7 @@ describe("SunaRuntime Session queue bridge", () => {
       text: "喜欢验证真实运行链路。",
       userId: "171419991",
       userName: "猫老师",
-      addressName: "猫老师"
+      addressNames: ["猫老师"]
     });
     readUserProfileForUser.mockImplementationOnce(async () => exactUserProfile as never);
     recallMemory
@@ -357,6 +357,7 @@ describe("SunaRuntime Session queue bridge", () => {
         "persona.dialogue_style_examples": "",
         "persona.user": "",
         "persona.relation": "",
+        "persona.air": "",
         ...variables
       });
     };
@@ -366,7 +367,7 @@ describe("SunaRuntime Session queue bridge", () => {
 
     const endpointInput = lastUserText(providerRequest!);
     expect(endpointInput).toContain("<working_memory>工作记忆：猫老师正在检查记忆端点。</working_memory>");
-    expect(endpointInput).toContain("<user_profile>用户画像 猫老师（QQ 171419991） 称呼：猫老师：喜欢验证真实运行链路。</user_profile>");
+    expect(endpointInput).toContain("<user_profile>用户画像 猫老师（QQ 171419991）：喜欢验证真实运行链路。</user_profile>");
   });
 
   it("routes private and group replies to independent prompt families", async () => {
@@ -1326,6 +1327,7 @@ describe("SunaRuntime Session queue bridge", () => {
     const completionThreadContexts: string[] = [];
     const providerStarts: string[] = [];
     const asyncCodexFlags: Array<boolean | undefined> = [];
+    const cronToolFlags: boolean[] = [];
     const runner: CodexRunner = {
       async run(input, context) {
         expect(input).toEqual({ task: "perform long analysis", kind: "analysis" });
@@ -1356,6 +1358,7 @@ describe("SunaRuntime Session queue bridge", () => {
     ): Promise<ProviderTurnResult> => {
       const userText = lastUserText(request);
       asyncCodexFlags.push(options.asyncCodex);
+      cronToolFlags.push(Boolean(options.cron));
       if (userText.includes("<tool_result>")) {
         providerStarts.push("tool_completion");
         completionPrompts.push(userText);
@@ -1459,7 +1462,8 @@ describe("SunaRuntime Session queue bridge", () => {
     expect(completionThreadContexts[0]).toContain("群成员正在委托 Agent 执行一项耗时分析任务。");
     expect(completionThreadContexts[0]).not.toContain("后来消息");
     expect(prepareGroupThreadContext.mock.calls.map(([incoming]) => incoming.messageId)).toEqual([301, 302]);
-    expect(asyncCodexFlags).toEqual([true, true, false]);
+    expect(asyncCodexFlags).toEqual([true, true, true]);
+    expect(cronToolFlags).toEqual([true, true, true]);
     expect(runtimeConversation(harness.runtime, "group:300")?.messages
       .filter((message) => message.role === "assistant")
       .map((message) => ({

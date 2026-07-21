@@ -8,6 +8,7 @@ export const MAX_SCHEDULED_TASK_TARGETS = 20;
 export const MAX_SCHEDULED_TASK_MENTIONS = 20;
 export const MAX_SCHEDULED_TASK_CONTEXT_LENGTH = 32_768;
 export const MAX_SCHEDULED_TASK_RESULT_LENGTH = 65_536;
+export const DIRECTOR_SCHEDULED_TASK_ID_PREFIX = "director-";
 
 const MAX_TASK_NAME_LENGTH = 120;
 const MAX_TASK_ID_LENGTH = 128;
@@ -33,6 +34,7 @@ export interface ScheduledTaskDraft {
 export interface ScheduledTask extends ScheduledTaskDraft {
   id: string;
   revision: number;
+  permanentRetention: boolean;
   nextRunAt: string | null;
   lastScheduledAt: string | null;
   createdAt: string;
@@ -132,6 +134,10 @@ export function normalizeScheduledTaskTargets(
 
 export function normalizeScheduledTaskId(value: string, field = "taskId") {
   return identifier(value, field, MAX_TASK_ID_LENGTH);
+}
+
+export function isDirectorScheduledTaskId(value: string) {
+  return typeof value === "string" && value.startsWith(DIRECTOR_SCHEDULED_TASK_ID_PREFIX);
 }
 
 export function normalizeScheduledTaskWorkerId(value: string) {

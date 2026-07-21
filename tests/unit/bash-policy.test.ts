@@ -18,6 +18,67 @@ const allowedAudit = {
 };
 
 describe("deterministic Bash policy", () => {
+  it("allows audited shell syntax in isolated Docker mode without permitting outside paths", () => {
+    expect(evaluateBashPolicy({
+      command: "mkdir -p reports && printf ok > reports/status.txt",
+      backend: "docker",
+      accessMode: "isolated",
+      strictMode: true,
+      workbenchRoot,
+      audit: allowedAudit
+    })).toMatchObject({ decision: "allow", restrictedInvocation: undefined });
+
+    expect(evaluateBashPolicy({
+      command: "cat /etc/passwd",
+      backend: "docker",
+      accessMode: "isolated",
+      strictMode: true,
+      workbenchRoot,
+      audit: {
+        ...allowedAudit,
+        outsideWorkbench: true,
+        outsideAccesses: [{ path: "/etc/passwd", access: "read" as const }]
+      }
+    })).toMatchObject({ decision: "deny" });
+  });
+
+  it.each([
+    { backend: "native" as const, accessMode: "admin" as const, path: "/mcp/servers.json" },
+    { backend: "docker" as const, accessMode: "isolated" as const, path: "/skills/example/SKILL.md" }
+  ])("allows audited read-only shared configuration access in $backend Bash", ({ backend, accessMode, path }) => {
+    expect(evaluateBashPolicy({
+      command: `cat ${path}`,
+      backend,
+      accessMode,
+      strictMode: true,
+      workbenchRoot,
+      audit: {
+        ...allowedAudit,
+        outsideWorkbench: true,
+        outsideAccesses: [{ path, access: "read" }]
+      }
+    })).toMatchObject({ decision: "allow", outsideAccesses: [] });
+  });
+
+  it.each([
+    { backend: "native" as const, accessMode: "admin" as const, path: "/mcp/servers.json", access: "write" as const },
+    { backend: "docker" as const, accessMode: "isolated" as const, path: "/skills/example", access: "delete" as const }
+  ])("denies $access access to shared configuration in $backend Bash", ({ backend, accessMode, path, access }) => {
+    expect(evaluateBashPolicy({
+      command: `${access === "write" ? "printf x >" : "rm -r"} ${path}`,
+      backend,
+      accessMode,
+      strictMode: true,
+      workbenchRoot,
+      audit: {
+        ...allowedAudit,
+        risk: "medium",
+        outsideWorkbench: true,
+        outsideAccesses: [{ path, access }]
+      }
+    })).toMatchObject({ decision: "deny", risk: "medium" });
+  });
+
   it.each([
     "rm -rf *",
     "rm -fr ./",

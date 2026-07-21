@@ -666,7 +666,9 @@ describe("runtime persisted contracts", () => {
       isAdmin: true,
       logRunId: "run-1",
       messageOrigin: "async_tool_callback",
-      toolNames: ["codex", "websearch"]
+      toolNames: ["codex", "websearch"],
+      mentionUserIds: [10002, 10003],
+      bubbleSequence: { schemaVersion: 1, index: 1, total: 3 }
     }, {
       conversationId: "private:10001",
       correlationId: "run-1"
@@ -676,8 +678,34 @@ describe("runtime persisted contracts", () => {
       text: "生成完成。",
       logRunId: "run-1",
       messageOrigin: "async_tool_callback",
-      toolNames: ["codex", "websearch"]
+      toolNames: ["codex", "websearch"],
+      mentionUserIds: [10002, 10003],
+      bubbleSequence: { schemaVersion: 1, index: 1, total: 3 }
     });
+  });
+
+  it("rejects invalid durable bubble sequence metadata", () => {
+    const encoded = assistantReplyEnvelope({
+      type: "assistant_reply",
+      incoming: payload.incoming,
+      text: "第二个气泡",
+      generatedImages: [],
+      isAdmin: false
+    }, {
+      conversationId: "private:10001",
+      correlationId: "run-invalid-bubble"
+    });
+    for (const bubbleSequence of [
+      { schemaVersion: 1, index: 0, total: 1 },
+      { schemaVersion: 1, index: 2, total: 2 },
+      { schemaVersion: 1, index: -1, total: 2 },
+      { schemaVersion: 1, index: 1, total: 2, extra: true }
+    ]) {
+      expect(() => decodeAssistantReply({
+        ...encoded,
+        payload: { ...encoded.payload, bubbleSequence }
+      })).toThrow("持久化消息字段 bubbleSequence 无效");
+    }
   });
 
   it("keeps only a workbench-relative path and content snapshot in asset outbox envelopes", () => {
@@ -864,7 +892,8 @@ describe("runtime persisted contracts", () => {
         contextThroughSequence: 23,
         replyGate,
         replyQuote,
-        threadContext
+        threadContext,
+        mentionUserIds: [10002, 10003]
       },
       arguments: { task: "inspect" },
       outcome: { status: "succeeded", result: { text: "done" }, error: null }
@@ -875,7 +904,8 @@ describe("runtime persisted contracts", () => {
     expect(decodeToolCompletion(completion).originalRequest).toMatchObject({
       captureSequence: 19,
       contextThroughSequence: 23,
-      threadContext
+      threadContext,
+      mentionUserIds: [10002, 10003]
     });
   });
 

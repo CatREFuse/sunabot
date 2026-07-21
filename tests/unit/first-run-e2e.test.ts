@@ -42,11 +42,14 @@ describe("empty workspace first-run flow", () => {
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     const line = result.stdout.split(/\r?\n/).find((item) => item.startsWith("SUNABOT_FIRST_RUN_E2E="));
     expect(line).toBeTruthy();
-    expect(JSON.parse(line!.slice("SUNABOT_FIRST_RUN_E2E=".length))).toEqual({
+    const report = JSON.parse(line!.slice("SUNABOT_FIRST_RUN_E2E=".length)) as {
+      providerRequests: number;
+      providerRequestsBeforeFirstInbound: number;
+      providerRequestsBeforeEnable: number;
+    };
+    expect(report).toMatchObject({
       adminAuthenticated: true,
       providerId: "first-run-provider",
-      providerRequests: 1,
-      providerRequestsBeforeEnable: 0,
       agentId: "arona",
       accountRuntime: "running",
       qqOnlineBeforeScan: false,
@@ -56,5 +59,7 @@ describe("empty workspace first-run flow", () => {
       firstReplyDelivered: 1,
       journalCompleted: true
     });
+    expect(report.providerRequestsBeforeEnable).toBe(report.providerRequestsBeforeFirstInbound);
+    expect(report.providerRequests).toBeGreaterThan(report.providerRequestsBeforeEnable);
   }, 35_000);
 });

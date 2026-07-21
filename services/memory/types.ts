@@ -30,6 +30,8 @@ export interface MemoryEntry {
   userId?: string;
   userIds?: string[];
   userName?: string;
+  addressNames?: string[];
+  /** @deprecated Legacy single-value compatibility alias. */
   addressName?: string;
   userNickname?: string;
   groupCards?: Array<{ groupId: number; card: string; lastSeenAt: string }>;
@@ -38,11 +40,20 @@ export interface MemoryEntry {
   eventType?: string;
   subjectKey?: string;
   eventKey?: string;
+  causalChainKey?: string;
   eventFingerprint?: string;
   longTermId?: string;
   batchId?: string;
   promoteToLongTerm?: boolean;
   score?: number;
+  recallCount?: number;
+  distinctRecallDays?: number;
+  lastRecalledAt?: string;
+  recallTrackingStartedAt?: string;
+  lastReviewedAt?: string;
+  importance?: number;
+  futureRelevance?: number;
+  emotionalSalience?: number;
 }
 
 export interface MemoryFactInput {
@@ -58,6 +69,8 @@ export interface MemoryFactInput {
   userId?: string;
   userIds?: string[];
   userName?: string;
+  addressNames?: string[];
+  /** @deprecated Legacy single-value compatibility input. */
   addressName?: string;
   address_name?: string;
   salutation?: string;
@@ -66,6 +79,7 @@ export interface MemoryFactInput {
   eventType?: string;
   subjectKey?: string;
   eventKey?: string;
+  causalChainKey?: string;
   eventFingerprint?: string;
   longTermId?: string;
   batchId?: string;
@@ -108,12 +122,57 @@ export interface MemoryRecallInput {
   limit?: unknown;
 }
 
+export interface MemoryRecallUsage {
+  kind: "model_context";
+  recallKey: string;
+  recalledAt?: Date;
+  localDate?: string;
+}
+
+export interface MemoryRecallStats {
+  recordId: string;
+  recallCount: number;
+  distinctRecallDays: number;
+  lastRecalledAt: string | null;
+  lastRecallLocalDate: string | null;
+  trackingStartedAt: string;
+  lastReviewedAt: string | null;
+  importance: number | null;
+  futureRelevance: number | null;
+  emotionalSalience: number | null;
+}
+
+export interface RecordActualMemoryRecallInput {
+  recordId: string;
+  recallKey: string;
+  localDate: string;
+  at?: Date;
+}
+
+export interface ReserveActualMemoryRecallInput {
+  recordId: string;
+  recallKey: string;
+  at?: Date;
+}
+
+export interface ReserveActualMemoryRecallResult {
+  reserved: boolean;
+  recordPresent: boolean;
+}
+
+export interface RecordActualMemoryRecallResult {
+  recorded: boolean;
+  recordPresent: boolean;
+  stats: MemoryRecallStats;
+}
+
 export interface MemoryWriteInput {
   source?: unknown;
   id?: unknown;
   text?: unknown;
   userId?: unknown;
   userName?: unknown;
+  addressNames?: unknown;
   addressName?: unknown;
 }
 
@@ -138,7 +197,7 @@ export interface NormalizedMemoryFact {
   userId: string;
   userIds: string[];
   userName: string;
-  addressName: string;
+  addressNames: string[];
   occurredAt: string;
   occurredEndAt: string;
   observedAt: string;
@@ -148,6 +207,7 @@ export interface NormalizedMemoryFact {
   eventType: string;
   subjectKey: string;
   eventKey: string;
+  causalChainKey: string;
   eventFingerprint: string;
   longTermId: string;
   batchId: string;
@@ -158,7 +218,7 @@ export interface UserProfileAggregate {
   id: string;
   userId: string;
   userName: string;
-  addressName: string;
+  addressNames: string[];
   facts: string[];
   factKeys: Set<string>;
   createdAt: string;
@@ -170,7 +230,7 @@ export interface UserProfileAggregate {
 export interface UserProfileFactGroup {
   userId: string;
   userName: string;
-  addressName: string;
+  addressNames: string[];
   facts: string[];
   createdAt: string;
   updatedAt: string;

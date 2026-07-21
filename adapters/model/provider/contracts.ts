@@ -2,6 +2,7 @@ import type OpenAI from "openai";
 import type { AgentToolName, BotConfig, ImageResult, ProviderConfig } from "../../../src/types.js";
 import type { OpenAIToolDefinition } from "../../../services/agent/promptSystem.js";
 import type { MemoryRecallInput } from "../../../services/memory/memoryService.js";
+import type { KnowledgeSearchToolPort } from "../../../services/tools/knowledgeSearchTool.js";
 import type {
   GenerateImageRunner,
   GenerateImgReferenceContext
@@ -9,6 +10,8 @@ import type {
 import type { SelfieRunner } from "../../../services/tools/selfieTool.js";
 import type { SystemConfigToolPort } from "../../../services/tools/systemConfigTool.js";
 import type { CronToolPort } from "../../../services/tools/cronTool.js";
+import type { CallDirectorToolPort } from "../../../services/tools/callDirectorTool.js";
+import type { ReadAirToolPort } from "../../../services/tools/public.js";
 import type { PrepareOutboundConversationAssetInput } from "../../../services/delivery/public.js";
 import type { ProviderLogContext } from "../../../packages/contracts/model/modelGateway.js";
 import type { ImageGenerationFailureContext } from "../imageGenerationRetry.js";
@@ -31,6 +34,7 @@ export interface ProviderCompleteOptions {
   referenceImageUrls?: string[];
   imageReferences?: GenerateImgReferenceContext;
   memory?: ProviderMemoryOptions;
+  knowledge?: KnowledgeSearchToolPort;
   selfie?: ProviderSelfieOptions;
   conversationAssets?: ProviderConversationAssetOptions;
   voice?: ProviderVoiceCapability;
@@ -39,6 +43,8 @@ export interface ProviderCompleteOptions {
   imageTools?: boolean;
   systemConfig?: SystemConfigToolPort;
   cron?: CronToolPort;
+  director?: CallDirectorToolPort;
+  air?: ReadAirToolPort;
   skills?: SkillRuntimeToolPort;
   disabledTools?: readonly AgentToolName[];
   mcp?: ProviderMcpOptions;

@@ -184,6 +184,8 @@ export function buildRuntimeProbe(facts, options = {}) {
   addOptionalCapability(add, "mcp-oauth", capabilities.mcpOAuth, "MCP_OAUTH_VAULT_UNAVAILABLE", "设置 SUNABOT_MCP_CREDENTIAL_VAULT_KEY");
   addOptionalCapability(add, "mcp-stdio", capabilities.mcpStdio, "MCP_STDIO_RUNTIME_UNAVAILABLE", "配置 MCP stdio 隔离后端");
   addOptionalCapability(add, "account-reconciler", capabilities.accountReconciler, "ACCOUNT_RECONCILER_UNAVAILABLE", "./sunabot.sh restart");
+  addOptionalCapability(add, "webfetch-dynamic-renderer", capabilities.webfetchDynamicRenderer,
+    "WEBFETCH_RENDERER_UNAVAILABLE", "./sunabot.sh restart");
 
   for (const conflict of facts.conflicts ?? []) {
     add({

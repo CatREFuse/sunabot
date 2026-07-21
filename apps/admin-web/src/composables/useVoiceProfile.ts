@@ -7,6 +7,7 @@ import type {
   VoiceProfileSettingsInput,
   VoiceServiceAction,
   VoiceProviderProbeResponse,
+  VoiceProviderSettingsInput,
   VoiceProviderStatus,
   VoiceReferenceInput,
 } from "../types/voice";
@@ -106,6 +107,37 @@ export function useVoiceProfile() {
     }
   }
 
+  async function saveProvider(
+    agentId: string,
+    input: VoiceProviderSettingsInput,
+  ) {
+    const normalizedAgentId = activate(agentId);
+    const context = contextGeneration;
+    if (saving.value) return false;
+    supersedeLoad();
+    saving.value = true;
+    clearServiceFeedback();
+    try {
+      const payload = await apiRequest<VoiceProfileMutationResponse>(
+        voiceProviderPath(normalizedAgentId),
+        {
+          method: "PUT",
+          body: JSON.stringify(input),
+        },
+      );
+      if (!isCurrent(normalizedAgentId, context)) return false;
+      profile.value = payload.profile;
+      serviceMessage.value = "在线语音设置已保存";
+      return true;
+    } catch (caught) {
+      if (!isCurrent(normalizedAgentId, context)) return false;
+      serviceError.value = errorMessage(caught, "在线语音设置保存失败");
+      return false;
+    } finally {
+      if (isCurrent(normalizedAgentId, context)) saving.value = false;
+    }
+  }
+
   async function putReference(
     agentId: string,
     language: VoiceLanguage,
@@ -181,46 +213,33 @@ export function useVoiceProfile() {
     }
   }
 
-  async function runServiceAction(
-    agentId: string,
-    action: Exclude<VoiceServiceAction, "">,
-  ) {
+  async function checkService(agentId: string) {
     const normalizedAgentId = activate(agentId);
     const context = contextGeneration;
     if (serviceAction.value) return false;
     supersedeLoad();
-    serviceAction.value = action;
+    serviceAction.value = "check";
     clearServiceFeedback();
     try {
       const payload = await apiRequest<VoiceProviderProbeResponse>(
-        voiceServicePath(normalizedAgentId, action),
+        voiceServicePath(normalizedAgentId),
         {
           method: "POST",
         },
       );
       if (!isCurrent(normalizedAgentId, context)) return false;
       provider.value = payload.provider;
-      serviceMessage.value = serviceActionMessage(action, payload.provider);
+      serviceMessage.value = payload.provider.ready
+        ? "在线语音服务可用"
+        : "在线语音服务检测完成";
       return true;
     } catch (caught) {
       if (!isCurrent(normalizedAgentId, context)) return false;
-      serviceError.value = errorMessage(caught, serviceActionFailure(action));
+      serviceError.value = errorMessage(caught, "在线语音服务检测失败");
       return false;
     } finally {
       if (isCurrent(normalizedAgentId, context)) serviceAction.value = "";
     }
-  }
-
-  function checkService(agentId: string) {
-    return runServiceAction(agentId, "check");
-  }
-
-  function startService(agentId: string) {
-    return runServiceAction(agentId, "start");
-  }
-
-  function stopService(agentId: string) {
-    return runServiceAction(agentId, "stop");
   }
 
   function dispose() {
@@ -279,11 +298,10 @@ export function useVoiceProfile() {
     serviceMessage: readonly(serviceMessage),
     load,
     saveSettings,
+    saveProvider,
     putReference,
     deleteReference,
     checkService,
-    startService,
-    stopService,
     dispose,
   };
 }
@@ -315,26 +333,12 @@ function voiceLanguagePath(agentId: string, language: VoiceLanguage) {
   );
 }
 
-function voiceServicePath(
-  agentId: string,
-  action: Exclude<VoiceServiceAction, "">,
-) {
-  return agentScopedPath(`/api/voice-service/${action}`, agentId);
+function voiceProviderPath(agentId: string) {
+  return agentScopedPath("/api/voice-provider", agentId);
 }
 
-function serviceActionMessage(
-  action: Exclude<VoiceServiceAction, "">,
-  provider: VoiceProviderStatus,
-) {
-  if (action === "stop") return "语音服务已关闭";
-  if (provider.ready) return action === "start" ? "语音服务已启动" : "语音服务可用";
-  return action === "start" ? "语音服务正在启动" : "语音服务检测完成";
-}
-
-function serviceActionFailure(action: Exclude<VoiceServiceAction, "">) {
-  if (action === "start") return "语音服务启动失败";
-  if (action === "stop") return "语音服务关闭失败";
-  return "语音服务检测失败";
+function voiceServicePath(agentId: string) {
+  return agentScopedPath("/api/voice-service/check", agentId);
 }
 
 function fileToBase64(file: File) {

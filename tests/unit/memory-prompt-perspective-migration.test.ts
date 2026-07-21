@@ -150,6 +150,103 @@ describe("memory perspective prompt migration", () => {
     expect(migrated.response_format).toBe(legacy.response_format);
   });
 
+  it.each(["memory.compress-in", "memory.compress-out"] as const)(
+    "upgrades the pre-causal %s standard and preserves administrator content",
+    (id) => {
+      const canonical = defaultFinalPromptTemplate(id)!;
+      const previous = preCausalTemplate(id);
+      const safetyRule = `管理员安全规则：${id} 只保存可核验的因果关系。`;
+      const system = previous.messages[0] as { content: string; name?: string };
+      system.content += `\n\n${safetyRule}`;
+      system.name = "memory-policy";
+      const descriptor = previous.response_format.json_schema as Record<string, unknown>;
+      descriptor.description = "管理员保留的响应说明";
+
+      const migrated = migrateMemoryPerspectiveTemplate(previous, canonical);
+      expect(migrated).not.toBe(previous);
+      expect(migrated.messages[0]).toEqual({
+        role: "system",
+        name: "memory-policy",
+        content: `${(canonical.messages[0] as { content: string }).content}\n\n${safetyRule}`
+      });
+      expect(migrated.response_format).toMatchObject({
+        json_schema: {
+          description: "管理员保留的响应说明",
+          schema: expect.objectContaining({})
+        }
+      });
+      expect(responseSchema(migrated)).toEqual(responseSchema(canonical));
+      expect(migrateMemoryPerspectiveTemplate(migrated, canonical)).toBe(migrated);
+    }
+  );
+
+  it("updates a pre-causal schema without replacing a fully customized system prompt", () => {
+    const canonical = defaultFinalPromptTemplate("memory.compress-in")!;
+    const previous = preCausalTemplate("memory.compress-in");
+    const customSystem = "管理员自定义记忆规则：仅记录经过人工确认的事件。";
+    (previous.messages[0] as { content: string }).content = customSystem;
+    previous.messages.splice(1, 0, { role: "developer", content: "管理员附加审计规则。" });
+
+    const migrated = migrateMemoryPerspectiveTemplate(previous, canonical);
+    expect(migrated.messages).toEqual([
+      {
+        role: "system",
+        content: expect.stringMatching(/^管理员自定义记忆规则：仅记录经过人工确认的事件。\n\ncausalChainKey 只在/)
+      },
+      { role: "developer", content: "管理员附加审计规则。" },
+      previous.messages[2]
+    ]);
+    expect(JSON.stringify(migrated.response_format)).toContain('"causalChainKey"');
+    expect(migrateMemoryPerspectiveTemplate(migrated, canonical)).toBe(migrated);
+  });
+
+  it("repairs a schema-first half migration while preserving the response descriptor", () => {
+    const canonical = defaultFinalPromptTemplate("memory.compress-in")!;
+    const halfMigrated = structuredClone(canonical);
+    (halfMigrated.messages[0] as { content: string }).content = "管理员自定义记忆规则。";
+    const responseFormat = halfMigrated.response_format;
+
+    const migrated = migrateMemoryPerspectiveTemplate(halfMigrated, canonical);
+    expect((migrated.messages[0] as { content: string }).content).toMatch(
+      /^管理员自定义记忆规则。\n\ncausalChainKey 只在/
+    );
+    expect(migrated.response_format).toBe(responseFormat);
+    expect(migrateMemoryPerspectiveTemplate(migrated, canonical)).toBe(migrated);
+  });
+
+  it("repairs a legacy address schema behind a customized system prompt", () => {
+    const canonical = defaultFinalPromptTemplate("memory.compress-in")!;
+    const legacy = legacyAddressTemplate("memory.compress-in");
+    (legacy.messages[0] as { content: string }).content = "管理员自定义工作记忆规则。";
+
+    const migrated = migrateMemoryPerspectiveTemplate(legacy, canonical);
+    expect((migrated.messages[0] as { content: string }).content).toMatch(
+      /^管理员自定义工作记忆规则。\n\ncausalChainKey 只在/
+    );
+    expect(JSON.stringify(migrated.response_format)).toContain('"addressNames"');
+    expect(JSON.stringify(migrated.response_format)).toContain('"causalChainKey"');
+    expect(JSON.stringify(migrated.response_format)).not.toContain('"userName"');
+  });
+
+  it("adds a causal system contract when an exact pre-causal prompt has no system message", () => {
+    const canonical = defaultFinalPromptTemplate("memory.compress-out")!;
+    const previous = preCausalTemplate("memory.compress-out");
+    const payloadMessage = previous.messages[1]!;
+    previous.messages = [
+      { role: "developer", content: "管理员注记中提到了 causalChainKey，但这不是系统合同。" },
+      payloadMessage
+    ];
+
+    const migrated = migrateMemoryPerspectiveTemplate(previous, canonical);
+    expect(migrated.messages).toEqual([
+      expect.objectContaining({ role: "system", content: expect.stringMatching(/^causalChainKey 只在/) }),
+      previous.messages[0],
+      payloadMessage
+    ]);
+    expect(JSON.stringify(migrated.response_format)).toContain('"causalChainKey"');
+    expect(migrateMemoryPerspectiveTemplate(migrated, canonical)).toBe(migrated);
+  });
+
   it("finishes a partial migration without duplicating canonical paragraphs", () => {
     const canonical = defaultFinalPromptTemplate("memory.compress-out")!;
     const canonicalSystem = (canonical.messages[0] as { content: string }).content;
@@ -245,7 +342,62 @@ describe("memory perspective prompt migration", () => {
       await expect(fs.readFile(path.join(
         config.persona.systemPromptWorkspace,
         memoryPerspectiveMarkerFile(fileName)
-      ), "utf8")).resolves.toBe("memory-perspective-v2\n");
+      ), "utf8")).resolves.toBe("memory-perspective-v4\n");
+    }
+  });
+
+  it("migrates persisted pre-causal v3 prompts to v4 once and keeps second-run bytes unchanged", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-memory-causal-prompt-v4-"));
+    roots.push(root);
+    const config = createAdminTestConfig(root);
+    await fs.mkdir(config.persona.systemPromptWorkspace, { recursive: true });
+    const cases = [
+      ["memory.compress-in", config.bot.memory.workMemoryCompressInPrompt],
+      ["memory.compress-out", config.bot.memory.workMemoryCompressOutPrompt]
+    ] as const;
+
+    for (const [id, fileName] of cases) {
+      const previous = preCausalTemplate(id);
+      (previous.messages[0] as { content: string }).content += "\n\n管理员安全规则：只保留可核验的因果关系。";
+      await fs.writeFile(
+        path.join(config.persona.systemPromptWorkspace, fileName),
+        `${JSON.stringify(previous, null, 2)}\n`,
+        "utf8"
+      );
+      await fs.writeFile(
+        path.join(
+          config.persona.systemPromptWorkspace,
+          path.dirname(fileName),
+          `.${path.basename(fileName)}.memory-perspective-v3`
+        ),
+        "memory-perspective-v3\n",
+        "utf8"
+      );
+    }
+
+    const runtime = new SunaRuntime(config, { attachmentService: {} as never });
+    runtimes.push(runtime);
+    await runtime.ensureAgentPromptFiles(config);
+    const firstRunBytes = new Map<string, Buffer>();
+    for (const [id, fileName] of cases) {
+      const filePath = path.join(config.persona.systemPromptWorkspace, fileName);
+      const bytes = await fs.readFile(filePath);
+      firstRunBytes.set(fileName, bytes);
+      const migrated = JSON.parse(bytes.toString("utf8"));
+      const canonical = defaultFinalPromptTemplate(id)!;
+      expect(String(migrated.messages[0].content)).toContain("管理员安全规则：只保留可核验的因果关系。");
+      expect(String(migrated.messages[0].content)).toContain("causalChainKey 只在");
+      expect(responseSchema(migrated)).toEqual(responseSchema(canonical));
+      await expect(fs.readFile(path.join(
+        config.persona.systemPromptWorkspace,
+        memoryPerspectiveMarkerFile(fileName)
+      ), "utf8")).resolves.toBe("memory-perspective-v4\n");
+    }
+
+    await runtime.ensureAgentPromptFiles(config);
+    for (const [, fileName] of cases) {
+      const secondRunBytes = await fs.readFile(path.join(config.persona.systemPromptWorkspace, fileName));
+      expect(secondRunBytes.equals(firstRunBytes.get(fileName)!)).toBe(true);
     }
   });
 
@@ -293,6 +445,15 @@ describe("memory perspective prompt migration", () => {
           "memory-perspective-v1\n",
           "utf8"
         );
+        await fs.writeFile(
+          path.join(
+            config.persona.systemPromptWorkspace,
+            path.dirname(fileName),
+            `.${path.basename(fileName)}.memory-perspective-v3`
+          ),
+          "memory-perspective-v3\n",
+          "utf8"
+        );
       }
       const invalidMarkerPath = path.join(
         config.persona.systemPromptWorkspace,
@@ -318,7 +479,7 @@ describe("memory perspective prompt migration", () => {
         await expect(fs.readFile(path.join(
           config.persona.systemPromptWorkspace,
           memoryPerspectiveMarkerFile(fileName)
-        ), "utf8")).resolves.toBe("memory-perspective-v2\n");
+        ), "utf8")).resolves.toBe("memory-perspective-v4\n");
       }
 
       const profilePath = path.join(
@@ -361,7 +522,7 @@ describe("memory perspective prompt migration", () => {
       await expect(fs.readFile(path.join(
         config.persona.systemPromptWorkspace,
         memoryPerspectiveMarkerFile(fileName)
-      ), "utf8")).resolves.toBe("memory-perspective-v2\n");
+      ), "utf8")).resolves.toBe("memory-perspective-v4\n");
     }
   });
 });
@@ -389,7 +550,7 @@ function memoryFileCases(config: ReturnType<typeof createAdminTestConfig>) {
 }
 
 function memoryPerspectiveMarkerFile(fileName: string) {
-  return path.join(path.dirname(fileName), `.${path.basename(fileName)}.memory-perspective-v2`);
+  return path.join(path.dirname(fileName), `.${path.basename(fileName)}.memory-perspective-v4`);
 }
 
 function customizeCompressionAnchor(id: string, content: string) {
@@ -410,4 +571,43 @@ async function readPromptDocument(
   fileName: string
 ) {
   return JSON.parse(await fs.readFile(path.join(config.persona.systemPromptWorkspace, fileName), "utf8"));
+}
+
+function preCausalTemplate(id: "memory.compress-in" | "memory.compress-out") {
+  const template = structuredClone(defaultFinalPromptTemplate(id)!);
+  const system = template.messages[0] as { content: string };
+  system.content = system.content
+    .split(/\n{2,}/)
+    .filter((paragraph) => !paragraph.startsWith("causalChainKey 只在"))
+    .map((paragraph) => paragraph.replace(',"causalChainKey":null', ""))
+    .join("\n\n");
+  const descriptor = template.response_format.json_schema as {
+    schema: Record<string, any>;
+  };
+  const item = id === "memory.compress-in"
+    ? descriptor.schema.properties.facts.items
+    : descriptor.schema.items;
+  delete item.properties.causalChainKey;
+  item.required = item.required.filter((field: string) => field !== "causalChainKey");
+  return template;
+}
+
+function legacyAddressTemplate(id: "memory.compress-in" | "memory.compress-out") {
+  const template = preCausalTemplate(id);
+  const descriptor = template.response_format.json_schema as {
+    schema: Record<string, any>;
+  };
+  const item = id === "memory.compress-in"
+    ? descriptor.schema.properties.facts.items
+    : descriptor.schema.items;
+  delete item.properties.addressNames;
+  item.properties.userName = { type: "string" };
+  item.required = item.required.map((field: string) => field === "addressNames" ? "userName" : field);
+  return template;
+}
+
+function responseSchema(template: FinalPromptTemplate) {
+  return (template.response_format as {
+    json_schema: { schema: Record<string, unknown> };
+  }).json_schema.schema;
 }

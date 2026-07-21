@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 
 export interface ScheduledTaskAdminRuntime {
-  listScheduledTasks(): unknown;
+  listScheduledTasks(input: unknown): unknown;
   getScheduledTask(id: string): unknown;
   createScheduledTask(input: unknown): unknown | Promise<unknown>;
   updateScheduledTask(id: string, input: unknown): unknown | Promise<unknown>;
@@ -14,6 +14,16 @@ export interface ScheduledTaskRouteOptions {
 }
 
 const openObject = { type: "object", additionalProperties: true } as const;
+const scheduledTaskListQuery = {
+  type: "object",
+  properties: {
+    agentId: { type: "string" },
+    category: { type: "string", enum: ["all", "director", "recurring", "scheduled", "archived"] },
+    page: { type: "integer", minimum: 1 },
+    pageSize: { type: "integer", minimum: 1, maximum: 100 }
+  },
+  additionalProperties: false
+} as const;
 const passthroughBody = {} as const;
 const taskParams = {
   type: "object",
@@ -28,8 +38,8 @@ export function registerScheduledTaskRoutes(app: FastifyInstance, options: Sched
   );
 
   app.get("/api/scheduled-tasks", {
-    schema: { querystring: openObject, response: { 200: openObject } }
-  }, async (request) => ({ tasks: await runtimeFor(request).listScheduledTasks() }));
+    schema: { querystring: scheduledTaskListQuery, response: { 200: openObject } }
+  }, async (request) => runtimeFor(request).listScheduledTasks(scheduledTaskListInput(request.query)));
 
   app.get("/api/scheduled-tasks/:id", {
     schema: { params: taskParams, querystring: openObject, response: { 200: openObject } }
@@ -65,4 +75,15 @@ function taskId(params: unknown) {
 function requestAgentId(query: unknown) {
   const value = query && typeof query === "object" ? (query as { agentId?: unknown }).agentId : undefined;
   return String(value ?? "plana").trim() || "plana";
+}
+
+function scheduledTaskListInput(query: unknown) {
+  const value = query && typeof query === "object"
+    ? query as { category?: unknown; page?: unknown; pageSize?: unknown }
+    : {};
+  return {
+    category: String(value.category ?? "all"),
+    page: Number(value.page ?? 1),
+    pageSize: Number(value.pageSize ?? 20)
+  };
 }

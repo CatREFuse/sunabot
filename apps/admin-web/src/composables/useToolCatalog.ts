@@ -76,6 +76,7 @@ function normalizeTool(value: unknown): SunaTool | null {
     accessLabel: stringValue(value.accessLabel),
     accessDescription: stringValue(value.accessDescription),
     ...(executionBackend(value.executionBackend) ? { executionBackend: executionBackend(value.executionBackend) } : {}),
+    ...(bashEnvironments(value.bashEnvironments) ? { bashEnvironments: bashEnvironments(value.bashEnvironments) } : {}),
     runtimeReasonCode: stringValue(value.runtimeReasonCode),
     defaultDescription,
     promptDescription: stringValue(value.promptDescription),
@@ -97,6 +98,23 @@ function executionMode(value: unknown): ToolExecutionMode | undefined {
 
 function executionBackend(value: unknown): "native" | "docker" | undefined {
   return value === "native" || value === "docker" ? value : undefined;
+}
+
+function bashEnvironments(value: unknown): SunaTool["bashEnvironments"] | undefined {
+  if (!isRecord(value) || !isRecord(value.native) || !isRecord(value.docker)) return undefined;
+  const nativeAvailable = booleanValue(value.native.available);
+  const dockerStarted = booleanValue(value.docker.started);
+  if (nativeAvailable === undefined || dockerStarted === undefined) return undefined;
+  return {
+    native: {
+      available: nativeAvailable,
+      ...(stringValue(value.native.reasonCode) ? { reasonCode: stringValue(value.native.reasonCode) } : {})
+    },
+    docker: {
+      started: dockerStarted,
+      ...(stringValue(value.docker.reasonCode) ? { reasonCode: stringValue(value.docker.reasonCode) } : {})
+    }
+  };
 }
 
 function unavailabilityKind(value: unknown): "runtime" | "session" | undefined {

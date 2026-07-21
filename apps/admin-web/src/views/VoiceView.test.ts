@@ -19,11 +19,10 @@ const voice = vi.hoisted(() => ({
   serviceMessage: { value: "" },
   load: vi.fn(),
   saveSettings: vi.fn(),
+  saveProvider: vi.fn(),
   putReference: vi.fn(),
   deleteReference: vi.fn(),
   checkService: vi.fn(),
-  startService: vi.fn(),
-  stopService: vi.fn(),
   dispose: vi.fn(),
 }));
 
@@ -62,8 +61,13 @@ describe("VoiceView", () => {
 
     settings.vm.$emit("saveSettings", { enabled: true, defaultLanguage: "ja" });
     service.vm.$emit("check");
-    service.vm.$emit("start");
-    service.vm.$emit("stop");
+    service.vm.$emit("save", {
+      protocol: "openai-audio",
+      baseUrl: "https://voice.example/v1",
+      apiKeyEnv: "VOICE_API_KEY",
+      model: "tts-model",
+      voices: { zh: null, en: null, ja: "voice_arona" },
+    });
     settings.vm.$emit("putReference", {
       language: "ja",
       file,
@@ -77,8 +81,13 @@ describe("VoiceView", () => {
       defaultLanguage: "ja",
     });
     expect(voice.checkService).toHaveBeenCalledWith("plana");
-    expect(voice.startService).toHaveBeenCalledWith("plana");
-    expect(voice.stopService).toHaveBeenCalledWith("plana");
+    expect(voice.saveProvider).toHaveBeenCalledWith("plana", {
+      protocol: "openai-audio",
+      baseUrl: "https://voice.example/v1",
+      apiKeyEnv: "VOICE_API_KEY",
+      model: "tts-model",
+      voices: { zh: null, en: null, ja: "voice_arona" },
+    });
     expect(voice.putReference).toHaveBeenCalledWith("plana", "ja", {
       file,
       referenceText: "先生、おはよう！",

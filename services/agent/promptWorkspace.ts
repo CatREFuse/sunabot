@@ -13,6 +13,8 @@ import {
   type MemoryPromptSchemaName
 } from "./memoryPromptMigration.js";
 import { DEFAULT_MODEL_TIME_CONTEXT } from "./modelTime.js";
+import { hasCanonicalJsonSchemaContract, strictJsonSchema } from "./promptSchemaMigration.js";
+import { SCHEDULED_TASK_AGENT_LOOP_CONTRACT } from "./scheduledTaskPrompt.js";
 import { isLegacyVoiceToolDescription } from "./voicePromptMigration.js";
 
 export type PromptWorkspaceScope = "persona" | "system";
@@ -81,6 +83,8 @@ const CONVERSATION_EMOJI_MIGRATION_VERSION = "emoji-v2";
 const CONVERSATION_VOICE_MIGRATION_VERSION = "voice-v2";
 const TONE_EMOJI_MIGRATION_VERSION = "emoji-marker-v2";
 const PROMPT_TIME_CONTEXT_MIGRATION_VERSION = "time-context-v1";
+const SCHEDULED_TASK_AGENT_LOOP_MIGRATION_VERSION = "callback-input-v2";
+const SELFIE_RESPONSE_SCHEMA_MIGRATION_VERSION = "reference-selection-schema-v2";
 export const TONE_EMOJI_MARKER_RULE = "保留正文中形如 [/表情key] 的表情标记，必须逐字保留每个标记及其原始位置，不得新增、删除、改写或重排。";
 const SELFIE_REFERENCE_SELECTION_CONTRACT_MARKER = '<selfie_reference_selection_contract version="1">';
 
@@ -123,6 +127,57 @@ export function migratePromptTimeContextTemplate(template: FinalPromptTemplate):
     messages.push({ role: "developer", content: DEFAULT_MODEL_TIME_CONTEXT });
   }
   return { ...template, messages };
+}
+
+export async function migrateScheduledTaskAgentLoopPrompt(
+  config: AppConfig,
+  fileName: string,
+  canonicalContent: string
+) {
+  const filePath = await resolveSafePromptFilePath(config, "system", fileName);
+  const markerPath = await resolveSafePromptFilePath(
+    config,
+    "system",
+    path.join(
+      path.dirname(fileName),
+      `.${path.basename(fileName)}.${SCHEDULED_TASK_AGENT_LOOP_MIGRATION_VERSION}`
+    )
+  );
+  if (await readOptional(markerPath) === `${SCHEDULED_TASK_AGENT_LOOP_MIGRATION_VERSION}\n`) return false;
+  const content = await readOptional(filePath);
+  if (!content.trim()) return false;
+  const migrated = migrateScheduledTaskAgentLoopTemplate(
+    parseFinalPromptTemplate(content),
+    parseFinalPromptTemplate(canonicalContent)
+  );
+  if (migrated) await atomicWriteText(filePath, `${JSON.stringify(migrated, null, 2)}\n`);
+  await atomicWriteText(markerPath, `${SCHEDULED_TASK_AGENT_LOOP_MIGRATION_VERSION}\n`);
+  return Boolean(migrated);
+}
+
+export function migrateScheduledTaskAgentLoopTemplate(
+  template: FinalPromptTemplate,
+  canonical: FinalPromptTemplate
+): FinalPromptTemplate | undefined {
+  let changed = false;
+  let messages = template.messages;
+  if (!messages.some((message) => (
+    isRecord(message)
+    && typeof message.content === "string"
+    && message.content.includes('<scheduled_callback_input version="2">')
+  ))) {
+    messages = [...messages];
+    const finalUserIndex = findLastIndex(messages, (message) => isRecord(message) && message.role === "user");
+    messages.splice(finalUserIndex < 0 ? messages.length : finalUserIndex, 0, {
+      role: "developer",
+      content: SCHEDULED_TASK_AGENT_LOOP_CONTRACT
+    });
+    changed = true;
+  }
+
+  const tools = structuredClone(canonical.tools ?? []);
+  if (JSON.stringify(template.tools ?? []) !== JSON.stringify(tools)) changed = true;
+  return changed ? { ...template, messages, tools } : undefined;
 }
 
 const LEGACY_MEMORY_PROMPT_PARAGRAPHS: Record<MemoryPromptSchemaName, readonly string[]> = {
@@ -393,6 +448,36 @@ export function migrateSelfieReferenceSelectionTemplate(
   return { ...template, messages, response_format: responseFormat };
 }
 
+export async function migrateSelfieResponseSchemaPrompt(
+  config: AppConfig,
+  fileName: string
+) {
+  const filePath = await resolveSafePromptFilePath(config, "persona", fileName);
+  const markerPath = await resolveSafePromptFilePath(
+    config,
+    "persona",
+    `.${path.basename(fileName)}.${SELFIE_RESPONSE_SCHEMA_MIGRATION_VERSION}`
+  );
+  if (await readOptional(markerPath) === `${SELFIE_RESPONSE_SCHEMA_MIGRATION_VERSION}\n`) return false;
+  const content = await readOptional(filePath);
+  if (!content.trim()) return false;
+  const template = parseFinalPromptTemplate(content);
+  const migrated = migrateSelfieResponseSchemaTemplate(template);
+  if (migrated) await atomicWriteText(filePath, `${JSON.stringify(migrated, null, 2)}\n`);
+  await atomicWriteText(markerPath, `${SELFIE_RESPONSE_SCHEMA_MIGRATION_VERSION}\n`);
+  return Boolean(migrated);
+}
+
+export function migrateSelfieResponseSchemaTemplate(
+  template: FinalPromptTemplate
+): FinalPromptTemplate | undefined {
+  const selection = selfieReferenceSelectionSchema(template);
+  if (!selection || !Object.hasOwn(selection, "uniqueItems")) return undefined;
+  const migrated = structuredClone(template);
+  delete selfieReferenceSelectionSchema(migrated)!.uniqueItems;
+  return migrated;
+}
+
 export async function migrateConversationEmojiVariables(
   config: AppConfig,
   fileName: string
@@ -649,41 +734,11 @@ export function migrateMemoryPerspectiveTemplate(
   );
 }
 
-function hasCanonicalJsonSchemaContract(actual: unknown, canonical: unknown) {
-  const actualSchema = strictJsonSchema(actual);
-  const canonicalSchema = strictJsonSchema(canonical);
-  return actualSchema !== undefined
-    && canonicalSchema !== undefined
-    && equalSchemaStructure(actualSchema, canonicalSchema);
-}
-
-function strictJsonSchema(value: unknown) {
-  if (!isRecord(value) || value.type !== "json_schema" || !isRecord(value.json_schema)) {
-    return undefined;
-  }
-  const descriptor = value.json_schema;
-  return descriptor.strict === true && isRecord(descriptor.schema)
-    ? descriptor.schema
-    : undefined;
-}
-
-function equalSchemaStructure(actual: unknown, canonical: unknown): boolean {
-  if (Array.isArray(canonical)) {
-    return Array.isArray(actual)
-      && actual.length === canonical.length
-      && canonical.every((item, index) => equalSchemaStructure(actual[index], item));
-  }
-  if (isRecord(canonical)) {
-    if (!isRecord(actual)) return false;
-    const canonicalKeys = Object.keys(canonical).filter((key) => key !== "description");
-    const actualKeys = Object.keys(actual).filter((key) => key !== "description");
-    return actualKeys.length === canonicalKeys.length
-      && canonicalKeys.every((key) => (
-        Object.hasOwn(actual, key)
-        && equalSchemaStructure(actual[key], canonical[key])
-      ));
-  }
-  return actual === canonical;
+function selfieReferenceSelectionSchema(template: FinalPromptTemplate) {
+  const schema = strictJsonSchema(template.response_format);
+  if (!schema || !isRecord(schema.properties)) return undefined;
+  const selection = schema.properties.selectedSelfieReferenceIds;
+  return isRecord(selection) ? selection : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

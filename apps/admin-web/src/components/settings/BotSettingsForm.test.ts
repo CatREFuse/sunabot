@@ -12,7 +12,8 @@ describe("BotSettingsForm", () => {
       quoteGroupReplies: true,
       quoteGroupReplyExcludedUserIds: [],
       contextMessageLimit: 48,
-      emojiSendSize: 512 as const
+      emojiSendSize: 512 as const,
+      emojiSendSeparately: false
     };
     const reply = {
       reverseWsPath: "/onebot/v11/ws",

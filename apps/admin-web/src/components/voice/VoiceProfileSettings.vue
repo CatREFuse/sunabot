@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, shallowRef, useTemplateRef, watch } from "vue";
+import { computed, shallowRef, useTemplateRef, watch } from "vue";
 import {
   MAX_VOICE_REFERENCE_BYTES,
   MAX_VOICE_REFERENCE_TEXT_LENGTH,
@@ -44,7 +44,7 @@ const draftDefaultLanguage = shallowRef<VoiceLanguage>("ja");
 const selectedLanguage = shallowRef<VoiceLanguage>("ja");
 const uploadLanguage = shallowRef<VoiceLanguage | null>(null);
 const uploadFile = shallowRef<File | null>(null);
-const uploadReferenceText = ref("");
+const uploadReferenceText = shallowRef("");
 const uploadError = shallowRef("");
 const uploadSubmitted = shallowRef(false);
 const uploadBusySeen = shallowRef(false);
@@ -65,10 +65,7 @@ const deleteReference = computed(() =>
     : null,
 );
 const controlsBusy = computed(
-  () =>
-    props.loading ||
-    props.saving ||
-    Boolean(props.busyLanguage),
+  () => props.loading || props.saving || Boolean(props.busyLanguage),
 );
 const settingsDirty = computed(
   () =>
@@ -76,11 +73,11 @@ const settingsDirty = computed(
     (draftEnabled.value !== props.profile?.enabled ||
       draftDefaultLanguage.value !== props.profile?.defaultLanguage),
 );
-const missingDefaultReference = computed(() =>
+const missingDefaultVoice = computed(() =>
   Boolean(
     props.profile &&
     draftEnabled.value &&
-    !props.profile.languages[draftDefaultLanguage.value],
+    !props.profile.provider.voices[draftDefaultLanguage.value],
   ),
 );
 watch(
@@ -134,7 +131,7 @@ function saveSettings() {
   if (
     !props.profile ||
     !settingsDirty.value ||
-    missingDefaultReference.value ||
+    missingDefaultVoice.value ||
     controlsBusy.value
   )
     return;
@@ -266,7 +263,7 @@ function formatDate(value: string) {
       <button
         class="btn btn-primary shrink-0"
         type="button"
-        :disabled="!settingsDirty || missingDefaultReference || controlsBusy"
+        :disabled="!settingsDirty || missingDefaultVoice || controlsBusy"
         @click="saveSettings"
       >
         <i
@@ -314,15 +311,10 @@ function formatDate(value: string) {
           </option>
         </select>
       </label>
-
     </div>
 
-    <p
-      v-if="missingDefaultReference"
-      class="mt-4 inline-state"
-      data-kind="warning"
-    >
-      请先添加默认语言的参考音频
+    <p v-if="missingDefaultVoice" class="mt-4 inline-state" data-kind="warning">
+      请先设置默认语言的在线音色
     </p>
     <p
       v-else-if="error"
@@ -350,12 +342,10 @@ function formatDate(value: string) {
       class="flex flex-col items-stretch justify-between gap-4 sm:flex-row sm:items-end"
     >
       <div class="min-w-0">
-        <h2 id="voice-references-title" class="section-title">参考音频</h2>
-        <p class="mt-1 text-xs leading-5 text-mute">
-          每种语言使用独立的参考音频和台词
-        </p>
+        <h2 id="voice-references-title" class="section-title">音色资料</h2>
+        <p class="mt-1 text-xs leading-5 text-mute">可选的参考音频和对应台词</p>
       </div>
-      <div class="segmented self-start" role="group" aria-label="参考音频语言">
+      <div class="segmented self-start" role="group" aria-label="音色资料语言">
         <button
           v-for="language in VOICE_LANGUAGES"
           :key="language"

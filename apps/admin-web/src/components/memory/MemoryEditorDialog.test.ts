@@ -21,7 +21,7 @@ const profile: MemoryEntry = {
   field: "fact",
   userId: "171419991",
   userName: "当前昵称",
-  addressName: "猫老师"
+  addressNames: ["猫老师", "老师"]
 };
 
 describe("MemoryEditorDialog", () => {
@@ -32,7 +32,7 @@ describe("MemoryEditorDialog", () => {
     });
 
     expect(wrapper.text()).not.toContain("MEMORY ENTRY");
-    expect(wrapper.get('input[autocomplete="off"]').element).toHaveProperty("value", "猫老师");
+    expect(wrapper.get('input[autocomplete="off"]').element).toHaveProperty("value", "猫老师、老师");
     expect(wrapper.get('input[inputmode="numeric"]').attributes()).toHaveProperty("disabled");
     await wrapper.get("textarea").setValue("正文已经更新。");
     await wrapper.get("form").trigger("submit");
@@ -41,7 +41,7 @@ describe("MemoryEditorDialog", () => {
       source: "user_profile",
       id: "profile-1",
       text: "正文已经更新。",
-      addressName: "猫老师"
+      addressNames: ["猫老师", "老师"]
     });
   });
 });

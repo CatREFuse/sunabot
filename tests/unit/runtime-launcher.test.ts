@@ -29,6 +29,20 @@ import {
 const root = fileURLToPath(new URL("../..", import.meta.url));
 
 describe("unified runtime launcher", () => {
+  it("probes non-root macOS Native host Bash instead of reporting it disabled", async () => {
+    const source = await fs.readFile(path.join(root, "tooling/runtime/launcher.mjs"), "utf8");
+    const nativeCapabilities = source.slice(
+      source.indexOf("async function inspectNativeCapabilities"),
+      source.indexOf("async function inspectNativeCodex")
+    );
+
+    expect(nativeCapabilities).toContain('process.platform === "darwin"');
+    expect(nativeCapabilities).toContain('(process.getuid?.() ?? -1) <= 0');
+    expect(nativeCapabilities).toContain('command("/bin/bash", ["--noprofile", "--norc", "-lc", ":"]');
+    expect(nativeCapabilities).toContain("audited administrator private-chat host Bash available");
+    expect(nativeCapabilities).not.toContain("disabled on macOS Native Core");
+  });
+
   it("probes the same isolated network namespace required by the Docker seccomp contract", () => {
     const args = bubblewrapProbeArguments("/srv/sunabot/workspace");
 
@@ -53,29 +67,21 @@ describe("unified runtime launcher", () => {
     ]);
   });
 
-  it("releases and restores the owned Voice endpoint around runtime network replacement", async () => {
+  it("removes the current workspace legacy Voice container before its runtime network", async () => {
     const source = await fs.readFile(
       path.join(root, "tooling/runtime/launcher.mjs"),
       "utf8",
-    );
-    const restart = source.slice(
-      source.indexOf("async function restartRuntime"),
-      source.indexOf("async function upNative"),
     );
     const down = source.slice(
       source.indexOf("async function down"),
       source.indexOf("async function assertRuntimeEmpty"),
     );
 
-    expect(down.indexOf("await detachVoiceServiceRuntimeNetwork")).toBeGreaterThan(-1);
-    expect(down.indexOf("await detachVoiceServiceRuntimeNetwork")).toBeLessThan(
+    expect(down.indexOf("await removeLegacyVoiceContainers")).toBeGreaterThan(
+      -1,
+    );
+    expect(down.indexOf("await removeLegacyVoiceContainers")).toBeLessThan(
       down.indexOf("await removeRuntimeNetwork"),
-    );
-    expect(restart.indexOf("await ensureRuntimeNetwork")).toBeLessThan(
-      restart.indexOf("await attachVoiceServiceRuntimeNetwork"),
-    );
-    expect(restart.indexOf("await attachVoiceServiceRuntimeNetwork")).toBeLessThan(
-      restart.indexOf('if (context.mode === "native")'),
     );
   });
 

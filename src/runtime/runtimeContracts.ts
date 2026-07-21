@@ -111,6 +111,12 @@ import { promptDefinitionById } from "../../services/agent/promptCatalog.js";
 import { defaultPromptContent as defaultFinalPromptContent } from "../../services/agent/promptDefaults.js";
 import { SCHEDULED_TASK_CALLBACK_PROMPT_ID } from "../../services/agent/scheduledTaskPrompt.js";
 import {
+  DIRECTOR_DAILY_PLAN_PROMPT_ID,
+  DIRECTOR_SCHEDULE_REVISION_PROMPT_ID
+} from "../../services/director/public.js";
+import { AIR_KNOWLEDGE_PROMPT_ID } from "../../services/air/public.js";
+import { DREAM_PROMPT_ID } from "../../services/memory/public.js";
+import {
   parseFinalPromptTemplate,
   renderFinalPromptTemplate,
   type PromptVariableValue,
@@ -153,7 +159,9 @@ export const ADMIN_PERSONA_FILES: Readonly<Record<string, string>> = {
   "persona.preference": "PREFERENCE.md",
   "persona.dialogue_style_examples": "DIALOGUE_STYLE_EXAMPLES.md",
   "persona.user": "USER.md",
-  "persona.relation": "RELATION.md"
+  "persona.relation": "RELATION.md",
+  "persona.air": "AIR.md",
+  "persona.director-seed": "DIRECTOR_SEED.md"
 };
 export const ADMIN_RUNTIME_PROMPT_DEFAULTS: Readonly<Record<string, string>> = {
   "conversation.private-reply": defaultFinalPromptContent("conversation.private-reply"),
@@ -166,6 +174,10 @@ export const ADMIN_RUNTIME_PROMPT_DEFAULTS: Readonly<Record<string, string>> = {
   "orchestrator.group-thread": defaultFinalPromptContent("orchestrator.group-thread"),
   "conversation.group-summary": defaultFinalPromptContent("conversation.group-summary"),
   [SCHEDULED_TASK_CALLBACK_PROMPT_ID]: defaultFinalPromptContent(SCHEDULED_TASK_CALLBACK_PROMPT_ID),
+  [DIRECTOR_DAILY_PLAN_PROMPT_ID]: defaultFinalPromptContent(DIRECTOR_DAILY_PLAN_PROMPT_ID),
+  [DIRECTOR_SCHEDULE_REVISION_PROMPT_ID]: defaultFinalPromptContent(DIRECTOR_SCHEDULE_REVISION_PROMPT_ID),
+  [AIR_KNOWLEDGE_PROMPT_ID]: defaultFinalPromptContent(AIR_KNOWLEDGE_PROMPT_ID),
+  [DREAM_PROMPT_ID]: defaultFinalPromptContent(DREAM_PROMPT_ID),
   "image.selfie-rewrite": defaultFinalPromptContent("image.selfie-rewrite")
 };
 export function runtimePromptDefaultContent(config: AppConfig, id: string) {
@@ -179,7 +191,7 @@ export interface BatchUserInfo {
   userId: string;
   names: string[];
   currentName: string;
-  addressName: string;
+  addressNames: string[];
   isAdmin: boolean;
 }
 export interface WorkingMemoryMergeOutput {
@@ -271,6 +283,7 @@ export interface ReplyDelivery {
   ) => Promise<unknown>;
   emitDeferredOutbox?: ReplyDelivery["emitOutbox"];
   replyQuote?: ReplyQuoteSnapshotV1;
+  mentionUserIds?: number[];
   systemConfigHeld?: SystemConfigHeldConfirmationPort;
   terminalStatus?: "no_reply" | "replied";
 }
@@ -282,6 +295,7 @@ export interface DeferredCodexTurn {
     contextThroughSequence?: number;
     replyGate?: ReplyGateSnapshot;
     replyQuote?: ReplyQuoteSnapshotV1;
+    mentionUserIds?: number[];
     threadContext?: GroupThreadContextSnapshotV1;
     orchestratorResult?: UserGroupOrchestratorResultV1;
   };

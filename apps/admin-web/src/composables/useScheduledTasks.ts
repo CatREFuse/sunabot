@@ -2,6 +2,7 @@ import { computed, readonly, shallowReadonly, shallowRef } from "vue";
 import type { ConversationRecord } from "../types";
 import type {
   ScheduledTask,
+  ScheduledTaskCategory,
   ScheduledTaskConversationResponse,
   ScheduledTaskInput,
   ScheduledTasksResponse,
@@ -10,14 +11,20 @@ import type {
 import { apiRequest } from "./useAdminApi";
 
 export function useScheduledTasks() {
+  const pageSize = 20;
   const tasks = shallowRef<ScheduledTask[]>([]);
   const conversations = shallowRef<ConversationRecord[]>([]);
+  const category = shallowRef<ScheduledTaskCategory>("all");
+  const pagination = shallowRef({ page: 1, pageSize, total: 0, pageCount: 1 });
   const loading = shallowRef(false);
   const saving = shallowRef(false);
   const deletingId = shallowRef("");
   const togglingId = shallowRef("");
+  const retainingId = shallowRef("");
   const status = shallowRef<ScheduledTaskStatus>({ kind: "idle", message: "" });
-  const mutationBusy = computed(() => saving.value || Boolean(deletingId.value) || Boolean(togglingId.value));
+  const mutationBusy = computed(() => (
+    saving.value || Boolean(deletingId.value) || Boolean(togglingId.value) || Boolean(retainingId.value)
+  ));
   let activeAgentId = "";
   let contextGeneration = 0;
   let loadGeneration = 0;
@@ -39,6 +46,24 @@ export function useScheduledTasks() {
     ]);
     if (isCurrent(normalizedAgentId, context) && generation === loadGeneration) loading.value = false;
     return tasksLoaded;
+  }
+
+  async function selectCategory(agentId: string, nextCategory: ScheduledTaskCategory) {
+    const normalizedAgentId = normalizeAgentId(agentId);
+    activate(normalizedAgentId);
+    if (category.value === nextCategory && pagination.value.page === 1) return true;
+    category.value = nextCategory;
+    pagination.value = { ...pagination.value, page: 1 };
+    return refreshTasks(normalizedAgentId);
+  }
+
+  async function changePage(agentId: string, page: number) {
+    const normalizedAgentId = normalizeAgentId(agentId);
+    activate(normalizedAgentId);
+    if (!Number.isSafeInteger(page) || page < 1 || page > pagination.value.pageCount) return false;
+    if (page === pagination.value.page) return true;
+    pagination.value = { ...pagination.value, page };
+    return refreshTasks(normalizedAgentId);
   }
 
   async function save(agentId: string, input: ScheduledTaskInput, task?: ScheduledTask) {
@@ -99,6 +124,37 @@ export function useScheduledTasks() {
     }
   }
 
+  async function setPermanentRetention(agentId: string, task: ScheduledTask, permanentRetention: boolean) {
+    const normalizedAgentId = normalizeAgentId(agentId);
+    activate(normalizedAgentId);
+    if (mutationBusy.value) return false;
+    const context = contextGeneration;
+    retainingId.value = task.id;
+    status.value = { kind: "idle", message: "" };
+    try {
+      await apiRequest<void>(agentPath(
+        `/api/scheduled-tasks/${encodeURIComponent(task.id)}`,
+        normalizedAgentId
+      ), {
+        method: "PUT",
+        body: JSON.stringify({ permanentRetention, revision: task.revision })
+      });
+      if (!isCurrent(normalizedAgentId, context)) return false;
+      if (!await loadTasks(normalizedAgentId, context)) return false;
+      status.value = {
+        kind: "success",
+        message: permanentRetention ? "已设为永久保留" : "已取消永久保留"
+      };
+      return true;
+    } catch (caught) {
+      if (isAbort(caught) || !isCurrent(normalizedAgentId, context)) return false;
+      status.value = { kind: "error", message: errorMessage(caught, "保留状态更新失败") };
+      return false;
+    } finally {
+      if (isCurrent(normalizedAgentId, context)) retainingId.value = "";
+    }
+  }
+
   async function remove(agentId: string, task: ScheduledTask) {
     const normalizedAgentId = normalizeAgentId(agentId);
     activate(normalizedAgentId);
@@ -143,17 +199,30 @@ export function useScheduledTasks() {
     taskController = new AbortController();
     try {
       const payload = await apiRequest<ScheduledTasksResponse>(
-        agentPath("/api/scheduled-tasks", agentId),
+        agentPath(
+          `/api/scheduled-tasks?category=${encodeURIComponent(category.value)}&page=${pagination.value.page}&pageSize=${pageSize}`,
+          agentId
+        ),
         { signal: taskController.signal }
       );
       if (!isCurrent(agentId, context) || generation !== taskLoadGeneration) return false;
       tasks.value = Array.isArray(payload.tasks) ? [...payload.tasks] : [];
+      pagination.value = normalizedPagination(payload.pagination, pageSize);
       return true;
     } catch (caught) {
       if (isAbort(caught) || !isCurrent(agentId, context) || generation !== taskLoadGeneration) return false;
       status.value = { kind: "error", message: errorMessage(caught, "定时任务读取失败") };
       return false;
     }
+  }
+
+  async function refreshTasks(agentId: string) {
+    const context = contextGeneration;
+    const generation = ++loadGeneration;
+    loading.value = true;
+    const loaded = await loadTasks(agentId, context);
+    if (isCurrent(agentId, context) && generation === loadGeneration) loading.value = false;
+    return loaded;
   }
 
   async function loadConversations(agentId: string, context: number) {
@@ -186,10 +255,13 @@ export function useScheduledTasks() {
     conversationController?.abort();
     tasks.value = [];
     conversations.value = [];
+    category.value = "all";
+    pagination.value = { page: 1, pageSize, total: 0, pageCount: 1 };
     loading.value = false;
     saving.value = false;
     deletingId.value = "";
     togglingId.value = "";
+    retainingId.value = "";
     status.value = { kind: "idle", message: "" };
   }
 
@@ -200,19 +272,36 @@ export function useScheduledTasks() {
   return {
     tasks: shallowReadonly(tasks),
     conversations: shallowReadonly(conversations),
+    category: readonly(category),
+    pagination: shallowReadonly(pagination),
     loading: readonly(loading),
     saving: readonly(saving),
     deletingId: readonly(deletingId),
     togglingId: readonly(togglingId),
+    retainingId: readonly(retainingId),
     mutationBusy: readonly(mutationBusy),
     status: readonly(status),
     load,
+    selectCategory,
+    changePage,
     save,
     setEnabled,
+    setPermanentRetention,
     remove,
     clearStatus,
     dispose
   };
+}
+
+function normalizedPagination(
+  value: ScheduledTasksResponse["pagination"],
+  fallbackPageSize: number
+) {
+  const total = Number.isSafeInteger(value?.total) && value.total >= 0 ? value.total : 0;
+  const pageSize = Number.isSafeInteger(value?.pageSize) && value.pageSize > 0 ? value.pageSize : fallbackPageSize;
+  const pageCount = Math.max(1, Number.isSafeInteger(value?.pageCount) ? value.pageCount : Math.ceil(total / pageSize));
+  const page = Number.isSafeInteger(value?.page) && value.page > 0 ? Math.min(value.page, pageCount) : 1;
+  return { page, pageSize, total, pageCount };
 }
 
 function normalizedInput(input: ScheduledTaskInput): ScheduledTaskInput {

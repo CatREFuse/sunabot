@@ -6,6 +6,10 @@ import type {
   SenderIdentityV1
 } from "../../packages/contracts/messaging/messages.js";
 import { pendingAttachments } from "../../services/media/attachments/service.js";
+import {
+  extractOneBotForwardMessageIds,
+  renderOneBotMessage
+} from "./inboundMessageContent.js";
 import type { OneBotEvent, OneBotMessageSegment } from "./protocol.js";
 
 const DEFAULT_ATTACHMENT_NAME = "未命名文件";
@@ -25,6 +29,7 @@ export function parseOneBotInboundMessage(event: OneBotEvent): InboundMessageV1 
 
   const selfId = event.self_id;
   const message = event.message ?? event.raw_message ?? "";
+  const rendered = renderOneBotMessage(message, { selfId });
   return {
     schemaVersion: 1,
     scope: event.message_type === "private" ? "private" : detectGroupScope(event),
@@ -34,8 +39,8 @@ export function parseOneBotInboundMessage(event: OneBotEvent): InboundMessageV1 
     ...(positiveInteger(event.group_id) ? { groupId: positiveInteger(event.group_id) } : {}),
     ...(positiveInteger(selfId) ? { selfId: positiveInteger(selfId) } : {}),
     sender: senderIdentity(event.sender ?? {}, event.user_id),
-    text: extractText(message, selfId),
-    media: extractImageUrls(message).map(imageMediaAsset),
+    text: rendered.text,
+    media: rendered.imageUrls.map(imageMediaAsset),
     attachments: pendingAttachments(extractOneBotAttachments(message, {
       source: "message",
       messageId: event.message_id,
@@ -56,6 +61,7 @@ export function extractOneBotMessageDetails(
   const data = record(root.data);
   const payloadSource = Object.keys(data).length ? data : root;
   const message = readOneBotMessage(payloadSource.message) ?? readOneBotMessage(payloadSource.raw_message) ?? "";
+  const rendered = renderOneBotMessage(message);
   const userId = positiveInteger(payloadSource.user_id) ?? context.userId ?? 0;
   const attachmentContext: AttachmentExtractionContext = {
     source: context.source ?? "quote",
@@ -64,12 +70,37 @@ export function extractOneBotMessageDetails(
     userId: context.userId ?? positiveInteger(payloadSource.user_id)
   };
   return {
-    text: extractText(message),
-    media: extractImageUrls(message).map(imageMediaAsset),
+    text: rendered.text,
+    media: rendered.imageUrls.map(imageMediaAsset),
     attachments: pendingAttachments(extractOneBotAttachments(message, attachmentContext)),
     replyMessageIds: extractReplyMessageIds(message),
     sender: senderIdentity(record(payloadSource.sender), userId)
   };
+}
+
+export async function hydrateOneBotForwardContent(
+  incoming: InboundMessageV1,
+  event: OneBotEvent,
+  loadForward: (messageId: string) => Promise<unknown>
+) {
+  const message = event.message ?? event.raw_message ?? "";
+  const forwardIds = extractOneBotForwardMessageIds(message);
+  if (!forwardIds.length) return incoming;
+  const forwardPayloads = new Map<string, unknown>();
+  await Promise.all(forwardIds.map(async (messageId) => {
+    try {
+      forwardPayloads.set(messageId, await loadForward(messageId));
+    } catch (error) {
+      console.error("[onebot] forward message hydration failed", { messageId, error });
+    }
+  }));
+  const rendered = renderOneBotMessage(message, {
+    selfId: event.self_id,
+    forwardPayloads
+  });
+  incoming.text = rendered.text;
+  incoming.media = rendered.imageUrls.map(imageMediaAsset);
+  return incoming;
 }
 
 export function extractOneBotSender(payload: unknown, fallbackUserId: number): SenderIdentityV1 {
@@ -135,20 +166,6 @@ function detectGroupScope(event: OneBotEvent): "user_group" | "bot_group" {
   return subType === "bot_group" || senderRole === "bot" ? "bot_group" : "user_group";
 }
 
-function extractText(message: string | OneBotMessageSegment[], selfId?: number) {
-  if (typeof message === "string") return normalizeCqMessage(message, selfId).trim();
-  return message.map((segment) => {
-    if (segment.type === "text") return String(segment.data?.text ?? "");
-    if (segment.type === "at") {
-      const qq = String(segment.data?.qq ?? "");
-      return selfId && qq === String(selfId) ? "" : `@${qq}`;
-    }
-    if (segment.type === "record") return "[语音]";
-    if (segment.type === "video") return "[视频]";
-    return "";
-  }).join("").trim();
-}
-
 function isMentioned(message: string | OneBotMessageSegment[], selfId?: number) {
   if (!selfId) return false;
   if (typeof message === "string") {
@@ -158,33 +175,6 @@ function isMentioned(message: string | OneBotMessageSegment[], selfId?: number) 
     return false;
   }
   return message.some((segment) => segment.type === "at" && [String(selfId), "all"].includes(String(segment.data?.qq ?? "")));
-}
-
-function normalizeCqMessage(message: string, selfId?: number) {
-  return message
-    .replace(/\[CQ:reply,[^\]]*\]/g, "")
-    .replace(/\[CQ:image,[^\]]*\]/g, "")
-    .replace(/\[CQ:file(?:,[^\]]*)?\]/gi, "")
-    .replace(/\[CQ:at,qq=([^\],]+)[^\]]*\]/g, (_match, qq: string) => {
-      if ((selfId && qq === String(selfId)) || qq === "all") return "";
-      return `@${qq}`;
-    });
-}
-
-function extractImageUrls(message: string | OneBotMessageSegment[]) {
-  if (typeof message === "string") {
-    const urls: string[] = [];
-    for (const match of message.matchAll(/\[CQ:image,([^\]]+)\]/g)) {
-      const params = parseCqParams(match[1] ?? "");
-      const url = params.url || params.file || "";
-      if (isUsableImageUrl(url)) urls.push(url);
-    }
-    return uniqueStrings(urls);
-  }
-  return uniqueStrings(message.filter((segment) => segment.type === "image").flatMap((segment) => [
-    String(segment.data?.url ?? ""),
-    String(segment.data?.file ?? "")
-  ]).map((value) => value.trim()).filter(isUsableImageUrl));
 }
 
 function extractReplyMessageIds(message: string | OneBotMessageSegment[]) {
@@ -277,10 +267,6 @@ function readOneBotMessage(value: unknown): string | OneBotMessageSegment[] | un
   return value as OneBotMessageSegment[];
 }
 
-function isUsableImageUrl(value: string) {
-  return /^https?:\/\//i.test(value) || /^data:image\/[a-z0-9.+-]+;base64,/i.test(value);
-}
-
 function normalizedString(value: unknown) {
   const result = typeof value === "string" || typeof value === "number" ? String(value).trim() : "";
   return result || undefined;
@@ -326,7 +312,6 @@ function fileNameFromUrl(value: string | undefined) {
   } catch { return undefined; }
 }
 
-function uniqueStrings(values: string[]) { return [...new Set(values)]; }
 function uniqueNumbers(values: number[]) { return [...new Set(values)]; }
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};

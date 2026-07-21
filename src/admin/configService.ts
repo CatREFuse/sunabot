@@ -61,6 +61,7 @@ import { validateBroadcastStormConfig } from "./broadcastStormConfig.js";
 import { validateNormalReplyConfig } from "./normalReplyConfig.js";
 import { ConfigDoctorApplyService, type DoctorCandidateInput } from "./configDoctorApply.js";
 import { configFieldStates, type ConfigFieldStates } from "./configFieldStates.js";
+import { validateMemoryConfig } from "./memoryConfigValidation.js";
 export type { DoctorCandidateInput } from "./configDoctorApply.js";
 export { configFieldStates } from "./configFieldStates.js";
 export { configRevision, stableJson } from "./configRevision.js";
@@ -80,7 +81,7 @@ export interface ConfigSectionValueMap {
   providers: AppConfig["providers"];
   broadcastStorm: BroadcastStormConfig;
   normalReply: AppConfig["normalReply"];
-  bot: Pick<BotConfig, "adminQq" | "adminName" | "replyDebounceMs" | "pokeOnNoReply" | "quoteGroupReplies" | "quoteGroupReplyExcludedUserIds" | "contextMessageLimit" | "emojiSendSize">;
+  bot: Pick<BotConfig, "adminQq" | "adminName" | "replyDebounceMs" | "pokeOnNoReply" | "quoteGroupReplies" | "quoteGroupReplyExcludedUserIds" | "contextMessageLimit" | "emojiSendSize" | "emojiSendSeparately">;
   tone: BotToneSettings;
   memory: BotMemorySettings;
   orchestrator: BotOrchestratorSettings;
@@ -277,7 +278,7 @@ export function validateConfigSectionValue<S extends ConfigSection>(
     case "normalReply": return validateNormalReplyConfig(value) as ConfigSectionValueMap[S];
     case "bot": return validateBot(value, current?.bot) as ConfigSectionValueMap[S];
     case "tone": return validateTone(value, current?.providers) as ConfigSectionValueMap[S];
-    case "memory": return validateMemory(value) as ConfigSectionValueMap[S];
+    case "memory": return validateMemoryConfig(value) as ConfigSectionValueMap[S];
     case "orchestrator": return validateOrchestrator(value) as ConfigSectionValueMap[S];
     case "tools": return validateTools(value, current?.bot.tools) as ConfigSectionValueMap[S];
     case "bash": return validateBash(value) as ConfigSectionValueMap[S];
@@ -407,7 +408,7 @@ function validateProvider(input: unknown, field: string): ProviderConfig {
 function validateBot(input: unknown, current?: BotConfig): ConfigSectionValueMap["bot"] {
   const value = object(input, "bot");
   exactKeys(value, [
-    "adminQq", "adminName", "replyDebounceMs", "pokeOnNoReply", "quoteGroupReplies", "quoteGroupReplyExcludedUserIds", "contextMessageLimit", "emojiSendSize"
+    "adminQq", "adminName", "replyDebounceMs", "pokeOnNoReply", "quoteGroupReplies", "quoteGroupReplyExcludedUserIds", "contextMessageLimit", "emojiSendSize", "emojiSendSeparately"
   ], "bot");
   const adminQq = requiredString(value.adminQq, "bot.adminQq", { trim: true, min: 0, max: 32, allowEmpty: true });
   if (adminQq && !/^\d+$/.test(adminQq)) badRequest("CONFIG_INVALID", "管理员 QQ 必须是数字。", "bot.adminQq");
@@ -438,7 +439,8 @@ function validateBot(input: unknown, current?: BotConfig): ConfigSectionValueMap
     quoteGroupReplies: boolean(value.quoteGroupReplies, "bot.quoteGroupReplies"),
     quoteGroupReplyExcludedUserIds: uniqueStrings(quoteGroupReplyExcludedUserIds),
     contextMessageLimit: integer(value.contextMessageLimit, "bot.contextMessageLimit", 1, 120),
-    emojiSendSize: emojiSendSize(value.emojiSendSize, current?.emojiSendSize ?? 512)
+    emojiSendSize: emojiSendSize(value.emojiSendSize, current?.emojiSendSize ?? 512),
+    emojiSendSeparately: boolean(value.emojiSendSeparately, "bot.emojiSendSeparately")
   };
 }
 
@@ -453,7 +455,7 @@ function emojiSendSize(value: unknown, fallback: BotConfig["emojiSendSize"]) {
 function validateTone(input: unknown, providers?: AppConfig["providers"]): BotToneSettings {
   const value = object(input, "tone");
   exactKeys(value, [
-    "enabled", "followMainModel", "providerId", "model", "reasoningEffort", "temperature", "maxOutputTokens", "maxRetries"
+    "enabled", "segmentedReply", "followMainModel", "providerId", "model", "reasoningEffort", "temperature", "maxOutputTokens", "maxRetries"
   ], "tone");
   const providerId = requiredString(value.providerId, "tone.providerId", {
     trim: true,
@@ -471,6 +473,7 @@ function validateTone(input: unknown, providers?: AppConfig["providers"]): BotTo
   validateCatalogEffort(model, reasoningEffort, "tone.reasoningEffort");
   return {
     enabled: boolean(value.enabled, "tone.enabled"),
+    segmentedReply: boolean(value.segmentedReply, "tone.segmentedReply"),
     followMainModel: boolean(value.followMainModel, "tone.followMainModel"),
     providerId,
     model,
@@ -478,26 +481,6 @@ function validateTone(input: unknown, providers?: AppConfig["providers"]): BotTo
     temperature: finiteNumber(value.temperature, "tone.temperature", 0, 2),
     maxOutputTokens: integer(value.maxOutputTokens, "tone.maxOutputTokens", 1, 1_000_000),
     maxRetries: integer(value.maxRetries, "tone.maxRetries", 0, 10)
-  };
-}
-
-function validateMemory(input: unknown): BotMemorySettings {
-  const value = object(input, "memory");
-  exactKeys(value, [
-    "memoryModel", "reasoningEffort", "messageThreshold", "workingMemoryMaxEntries",
-    "workMemoryCompressInPrompt", "workMemoryCompressOutPrompt", "userProfilePrompt"
-  ], "memory");
-  const memoryModel = requiredString(value.memoryModel, "memory.memoryModel", { trim: true, min: 1, max: 200 });
-  const reasoningEffort = optionalReasoningEffort(value.reasoningEffort, "memory.reasoningEffort");
-  validateCatalogEffort(memoryModel, reasoningEffort, "memory.reasoningEffort");
-  return {
-    memoryModel,
-    ...(reasoningEffort ? { reasoningEffort } : {}),
-    messageThreshold: integer(value.messageThreshold, "memory.messageThreshold", 1, 200),
-    workingMemoryMaxEntries: integer(value.workingMemoryMaxEntries, "memory.workingMemoryMaxEntries", 1, 1_000),
-    workMemoryCompressInPrompt: pathString(value.workMemoryCompressInPrompt, "memory.workMemoryCompressInPrompt", true),
-    workMemoryCompressOutPrompt: pathString(value.workMemoryCompressOutPrompt, "memory.workMemoryCompressOutPrompt", true),
-    userProfilePrompt: pathString(value.userProfilePrompt, "memory.userProfilePrompt", true)
   };
 }
 
@@ -735,10 +718,11 @@ export function validateCompleteConfig(config: AppConfig) {
     quoteGroupReplies: config.bot.quoteGroupReplies,
     quoteGroupReplyExcludedUserIds: config.bot.quoteGroupReplyExcludedUserIds,
     contextMessageLimit: config.bot.contextMessageLimit,
-    emojiSendSize: config.bot.emojiSendSize
+    emojiSendSize: config.bot.emojiSendSize,
+    emojiSendSeparately: config.bot.emojiSendSeparately
   });
   validateTone(config.bot.tone, config.providers);
-  validateMemory(config.bot.memory);
+  validateMemoryConfig(config.bot.memory);
   validateOrchestrator(config.bot.orchestrator);
   validateTools(config.bot.tools);
   validateBash(config.bot.bash);

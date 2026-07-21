@@ -46,10 +46,7 @@ const metrics = computed<UsageMetric[]>(() => [
 .request-usage__item:nth-child(odd):not(:first-child) { border-left: 1px solid rgb(var(--color-line)); padding-left: 12px; }
 .request-usage__item:nth-last-child(-n+2) { border-bottom: 0; }
 .request-usage dt { display: flex; align-items: center; gap: 5px; color: rgb(var(--color-mute)); font-family: "Space Mono", monospace; font-size: 9px; }
-.request-usage__item[data-tone="neutral"] dt i { color: rgb(var(--color-mute)); }
-.request-usage__item[data-tone="interactive"] dt i { color: rgb(var(--color-interactive)); }
-.request-usage__item[data-tone="success"] dt i { color: rgb(var(--color-success)); }
-.request-usage__item[data-tone="warning"] dt i { color: rgb(var(--color-warning)); }
+.request-usage__item dt i { color: rgb(var(--color-mute)); }
 .request-usage dd { margin-top: 6px; overflow-wrap: anywhere; color: rgb(var(--color-display)); font-family: "Space Mono", monospace; font-size: 18px; font-weight: 700; line-height: 1; letter-spacing: -.03em; }
 @media (min-width: 640px) {
   .request-usage { grid-template-columns: repeat(5, minmax(0, 1fr)); }

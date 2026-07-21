@@ -14,6 +14,7 @@ import {
   VOICE_DIRECTORY,
   parseVoiceLanguage,
   parseVoiceProfileSettings,
+  parseVoiceProviderSettings,
   parseVoiceReferenceUpload,
   profileUsesRelativePath,
   safeVoiceReferenceStem,
@@ -21,9 +22,11 @@ import {
 import {
   VoiceProfileError,
   type RuntimeVoiceReference,
+  type RuntimeVoiceTarget,
   type VoiceLanguage,
   type VoiceProfileSettingsInput,
   type VoiceProfileV1,
+  type VoiceProviderSettingsInput,
   type VoiceReferenceMetadata,
   type VoiceReferenceUpload,
 } from "./types.js";
@@ -68,14 +71,34 @@ export class VoiceProfileRepository {
     const settings = parseVoiceProfileSettings(input);
     return this.withWorkspaceLock(async (workspace) => {
       const current = await readStoredVoiceProfile(workspace);
-      if (settings.enabled && !current.languages[settings.defaultLanguage]) {
+      if (
+        settings.enabled &&
+        !current.provider.voices[settings.defaultLanguage]
+      ) {
         throw new VoiceProfileError(
-          "VOICE_DEFAULT_REFERENCE_REQUIRED",
-          "启用语音前需要为默认语言设置参考音频。",
+          "VOICE_DEFAULT_VOICE_REQUIRED",
+          "启用语音前需要为默认语言设置在线音色 ID。",
           409,
         );
       }
       const next: VoiceProfileV1 = { ...current, ...settings };
+      await writeStoredVoiceProfile(workspace, next);
+      return next;
+    });
+  }
+
+  updateProvider(input: VoiceProviderSettingsInput): Promise<VoiceProfileV1> {
+    const provider = parseVoiceProviderSettings(input);
+    return this.withWorkspaceLock(async (workspace) => {
+      const current = await readStoredVoiceProfile(workspace);
+      if (current.enabled && !provider.voices[current.defaultLanguage]) {
+        throw new VoiceProfileError(
+          "VOICE_DEFAULT_VOICE_REQUIRED",
+          "默认语言需要设置在线音色 ID。",
+          409,
+        );
+      }
+      const next: VoiceProfileV1 = { ...current, provider };
       await writeStoredVoiceProfile(workspace, next);
       return next;
     });
@@ -152,13 +175,6 @@ export class VoiceProfileRepository {
           404,
         );
       }
-      if (current.enabled && current.defaultLanguage === selectedLanguage) {
-        throw new VoiceProfileError(
-          "VOICE_DEFAULT_REFERENCE_REQUIRED",
-          "已启用的默认语言参考音频不能删除。",
-          409,
-        );
-      }
       const next: VoiceProfileV1 = {
         ...current,
         languages: { ...current.languages, [selectedLanguage]: null },
@@ -181,7 +197,7 @@ export class VoiceProfileRepository {
     });
   }
 
-  readRuntimeProfile(language?: VoiceLanguage): Promise<RuntimeVoiceReference> {
+  readRuntimeProfile(language?: VoiceLanguage): Promise<RuntimeVoiceTarget> {
     const selectedLanguage =
       language === undefined ? undefined : parseVoiceLanguage(language);
     return this.withWorkspaceLock(async (workspace) => {
@@ -189,11 +205,21 @@ export class VoiceProfileRepository {
       if (!profile.enabled) {
         throw new VoiceProfileError("VOICE_DISABLED", "语音功能未启用。", 409);
       }
-      return readRuntimeVoiceReference(
-        workspace,
+      const resolvedLanguage = selectedLanguage ?? profile.defaultLanguage;
+      const voiceId = profile.provider.voices[resolvedLanguage];
+      if (!voiceId) {
+        throw new VoiceProfileError(
+          "VOICE_DEFAULT_VOICE_REQUIRED",
+          "该语言尚未设置在线音色 ID。",
+          409,
+        );
+      }
+      return {
         profile,
-        selectedLanguage ?? profile.defaultLanguage,
-      );
+        language: resolvedLanguage,
+        voiceId,
+        provider: profile.provider,
+      };
     });
   }
 

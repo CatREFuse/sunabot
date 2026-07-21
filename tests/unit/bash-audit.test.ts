@@ -25,6 +25,11 @@ describe("independent Bash audit", () => {
       json_schema: { name: "bash_security_audit", strict: true }
     });
     expect(request.messages[0]?.content).toContain("Never execute it");
+    expect(buildBashAuditRequest({ ...auditInput, accessMode: "isolated" }).messages[0]?.content)
+      .toContain("Isolated mode permits shell syntax with writable access only inside the Docker workbench");
+    expect(request.messages[0]?.content).toContain("Skill and MCP configuration are exposed through SUNABOT_SKILLS and SUNABOT_MCP_CONFIG");
+    expect(buildBashAuditRequest({ ...auditInput, backend: "native", accessMode: "admin" }).messages[0]?.content)
+      .toContain("native backend runs as the Sunabot runtime OS user after approval");
   });
 
   it("parses the auditor response and rejects incomplete outside-path reports", async () => {

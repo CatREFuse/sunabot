@@ -18,6 +18,7 @@ export function useEmojis() {
   const emojis = shallowRef<EmojiRecord[]>([]);
   const presetKeys = shallowRef<string[]>([]);
   const sendSize = shallowRef<EmojiSendSize>(512);
+  const sendSeparately = shallowRef(false);
   const settingsRevision = shallowRef("");
   const loading = shallowRef(false);
   const savingSettings = shallowRef(false);
@@ -268,7 +269,11 @@ export function useEmojis() {
     try {
       const payload = await apiRequest<EmojiPayload>(agentPath("/api/emojis/settings", normalizedAgentId), {
         method: "PATCH",
-        body: JSON.stringify({ sendSize: nextSize, revision: settingsRevision.value })
+        body: JSON.stringify({
+          sendSize: nextSize,
+          sendSeparately: sendSeparately.value,
+          revision: settingsRevision.value
+        })
       });
       if (!isCurrent(normalizedAgentId, context)) return false;
       applyPayload(payload);
@@ -277,6 +282,36 @@ export function useEmojis() {
     } catch (caught) {
       if (isCurrent(normalizedAgentId, context)) {
         status.value = { kind: "error", message: errorMessage(caught, "发送尺寸保存失败") };
+      }
+      return false;
+    } finally {
+      if (isCurrent(normalizedAgentId, context)) savingSettings.value = false;
+    }
+  }
+
+  async function setSendSeparately(agentId: string, enabled: boolean) {
+    const normalizedAgentId = normalizeAgentId(agentId);
+    activate(normalizedAgentId);
+    if (savingSettings.value || enabled === sendSeparately.value) return false;
+    const context = contextGeneration;
+    savingSettings.value = true;
+    status.value = { kind: "idle", message: "" };
+    try {
+      const payload = await apiRequest<EmojiPayload>(agentPath("/api/emojis/settings", normalizedAgentId), {
+        method: "PATCH",
+        body: JSON.stringify({
+          sendSize: sendSize.value,
+          sendSeparately: enabled,
+          revision: settingsRevision.value
+        })
+      });
+      if (!isCurrent(normalizedAgentId, context)) return false;
+      applyPayload(payload);
+      status.value = { kind: "success", message: enabled ? "表情将单独发送" : "表情将随正文发送" };
+      return true;
+    } catch (caught) {
+      if (isCurrent(normalizedAgentId, context)) {
+        status.value = { kind: "error", message: errorMessage(caught, "发送方式保存失败") };
       }
       return false;
     } finally {
@@ -302,6 +337,7 @@ export function useEmojis() {
     emojis.value = [];
     presetKeys.value = [];
     sendSize.value = 512;
+    sendSeparately.value = false;
     settingsRevision.value = "";
     loading.value = false;
     savingSettings.value = false;
@@ -321,6 +357,7 @@ export function useEmojis() {
     presetKeys.value = [...payload.presetKeys];
     emojis.value = [...payload.emojis];
     if (isEmojiSendSize(payload.sendSize)) sendSize.value = payload.sendSize;
+    if (typeof payload.sendSeparately === "boolean") sendSeparately.value = payload.sendSeparately;
     if (typeof payload.revision === "string") settingsRevision.value = payload.revision;
   }
 
@@ -335,6 +372,7 @@ export function useEmojis() {
     emojis: readonly(emojis),
     presetKeys: readonly(presetKeys),
     sendSize: readonly(sendSize),
+    sendSeparately: readonly(sendSeparately),
     loading: readonly(loading),
     savingSettings: readonly(savingSettings),
     uploading: readonly(uploading),
@@ -355,6 +393,7 @@ export function useEmojis() {
     removeVersion,
     clearVersions,
     setSendSize,
+    setSendSeparately,
     clearStatus,
     dispose
   };

@@ -152,7 +152,7 @@ export async function runtime_readRelevantUserProfiles(this: RuntimeHost, partic
         userId: entry.userId,
         userIds: entry.userIds,
         userName: entry.userName,
-        addressName: entry.addressName,
+        addressNames: entry.addressNames,
         fact: entry.text,
         occurredAt: entry.occurredAt,
         occurredEndAt: entry.occurredEndAt,
@@ -250,13 +250,24 @@ export async function runtime_rewriteSelfiePrompt(this: RuntimeHost,
     });
     return parseRewrittenSelfiePrompt(rewritten, new Set(references.workspaceSelfies.map(({ id }) => id)));
   }
-export function runtime_collectSelfieChatReferenceImages(this: RuntimeHost, incoming: ParsedIncomingMessage, captureSequence?: number) {
+export function runtime_collectSelfieChatReferenceImages(
+  this: RuntimeHost,
+  incoming: ParsedIncomingMessage,
+  captureSequence?: number,
+  currentBatchFromSequence?: number
+) {
     const record = this.conversationRecords.get(conversationRecordId(incoming));
     const currentMessageId = incoming.messageId == null ? "" : String(incoming.messageId);
     const recentImages = record?.messages
       .filter((message) => message.role === "user")
       .filter((message) => !currentMessageId || message.id !== currentMessageId)
       .filter((message) => captureSequence == null || Number(message.sequence ?? 0) < captureSequence)
+      .filter((message) => (
+        currentBatchFromSequence == null ||
+        Number(message.sequence ?? 0) < currentBatchFromSequence ||
+        incoming.scope === "private" ||
+        message.userId === incoming.userId
+      ))
       .slice(-this.contextMessageLimit())
       .reverse()
       .flatMap((message) => [

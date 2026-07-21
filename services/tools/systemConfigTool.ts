@@ -7,7 +7,6 @@ export const SYSTEM_CONFIG_OPERATIONS = [
   "set_auto_reply",
   "set_orchestrator",
   "set_search",
-  "set_bash_admin_backend",
   "set_group_reply"
 ] as const;
 
@@ -65,7 +64,7 @@ export const systemConfigTool = {
   type: "function",
   name: SYSTEM_CONFIG_TOOL_NAME,
   description: [
-    "Read the current Agent's safe behavior settings or sanitized system status, and change only the allowed reply, orchestrator, search, administrator Bash backend, or known-group settings.",
+    "Read the current Agent's safe behavior settings or sanitized system status, and change only the allowed reply, orchestrator, search, or known-group settings.",
     "This tool is available only in an administrator private chat or administrator Web Chat.",
     "A change is validated immediately and takes effect after the current confirmation reply is queued; report it as effective from the next turn.",
     "Call get_settings before changing an unfamiliar option. The only currently supported search implementation is tavily."
@@ -98,9 +97,9 @@ export const systemConfigTool = {
         description: "Search implementation for set_search; null keeps the current implementation."
       },
       bashAdminBackend: {
-        type: ["string", "null"],
-        enum: ["native", "docker", null],
-        description: "Administrator private-chat Bash backend for set_bash_admin_backend."
+        type: "null",
+        enum: [null],
+        description: "Reserved compatibility field. Always use null; Bash routing is fixed."
       },
       conversationId: {
         type: ["string", "null"],
@@ -177,8 +176,8 @@ export function parseSystemConfigInput(input: unknown):
   if (value.searchImplementation !== null && value.searchImplementation !== "tavily") {
     return invalid("Unsupported search implementation.", "searchImplementation");
   }
-  if (value.bashAdminBackend !== null && value.bashAdminBackend !== "native" && value.bashAdminBackend !== "docker") {
-    return invalid("Unsupported administrator Bash backend.", "bashAdminBackend");
+  if (value.bashAdminBackend !== null) {
+    return invalid("Bash routing is fixed; bashAdminBackend must be null.", "bashAdminBackend");
   }
   const conversationId = value.conversationId === null
     ? null
@@ -277,13 +276,6 @@ function validateOperationShape(input: SystemConfigInput) {
       input.groupLimit === null
       ? undefined
       : invalid("set_search accepts enabled and an optional searchImplementation only.", "set_search");
-  }
-  if (input.operation === "set_bash_admin_backend") {
-    return input.replyScope === null && input.enabled === null && input.orchestratorEnabled === null &&
-      input.searchImplementation === null && input.bashAdminBackend !== null && input.conversationId === null &&
-      input.groupCursor === null && input.groupLimit === null
-      ? undefined
-      : invalid("set_bash_admin_backend requires bashAdminBackend only.", "set_bash_admin_backend");
   }
   return input.replyScope === null && input.conversationId !== null &&
     (input.enabled !== null || input.orchestratorEnabled !== null) && input.searchImplementation === null &&

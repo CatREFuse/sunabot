@@ -46,7 +46,8 @@ export interface InboundMessageV1 {
 
 export type OutboundContentSegmentV1 =
   | { type: "text"; text: string }
-  | { type: "image"; imageIndex: number };
+  | { type: "image"; imageIndex: number }
+  | { type: "sticker"; imageIndex: number };
 
 export interface OutboundMessageV1 {
   schemaVersion: 1;
@@ -159,6 +160,25 @@ export interface MessagingPort {
   poke?(target: PokeTargetV1): Promise<MessagingReceiptV1>;
   resolveSender(input: SenderLookupV1): Promise<SenderIdentityV1>;
   getMessage(messageId: number, context?: MessageLookupContextV1): Promise<MessageDetailsV1>;
+}
+
+export type OutboundBubbleV1 =
+  | { schemaVersion: 1; type: "message"; message: OutboundMessageV1 }
+  | { schemaVersion: 1; type: "asset"; asset: OutboundConversationAssetV1 };
+
+export function outboundMessageBubble(message: OutboundMessageV1): OutboundBubbleV1 {
+  return { schemaVersion: 1, type: "message", message };
+}
+
+export function outboundAssetBubble(asset: OutboundConversationAssetV1): OutboundBubbleV1 {
+  return { schemaVersion: 1, type: "asset", asset };
+}
+
+export function sendOutboundBubble(port: MessagingPort, bubble: OutboundBubbleV1) {
+  if (bubble.schemaVersion !== 1) throw contractError("contract_version_unsupported", "不支持的出站气泡版本。");
+  if (bubble.type === "message") return port.send(bubble.message);
+  if (!port.sendConversationAsset) throw contractError("contract_capability_unavailable", "当前消息适配器不支持资源气泡。");
+  return port.sendConversationAsset(bubble.asset);
 }
 
 export function inboundImageUrls(message: Pick<InboundMessageV1, "media">) {

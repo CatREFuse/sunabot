@@ -1,4 +1,10 @@
 import type { ChatMessage } from "../../src/types.js";
+import {
+  PromptConditionError,
+  extractPromptConditionalVariables,
+  renderPromptConditionals,
+  validatePromptConditionals
+} from "./promptTemplateCondition.js";
 
 export type PromptFileKind = "fragment" | "final";
 
@@ -39,6 +45,8 @@ export interface PromptRenderOptions {
 }
 
 export type PromptVariableValue = string | number | boolean | null | Record<string, unknown> | unknown[];
+
+const renderedPromptVariableUsage = new WeakMap<RenderedPromptRequest, ReadonlySet<string>>();
 
 export class PromptTemplateError extends Error {
   constructor(
@@ -87,6 +95,7 @@ export function parseFinalPromptTemplate(content: string): FinalPromptTemplate {
         `messages.${index}`
       );
     }
+    validateConditionalContent(message.content, `messages.${index}.content`);
     if (message.role === "system") hasSystem = true;
     if (message.role === "user") hasUser = true;
   });
@@ -104,10 +113,13 @@ export function parseFinalPromptTemplate(content: string): FinalPromptTemplate {
     );
   }
   if (parsed.tools != null) validateTools(parsed.tools);
+  validateConditionalValue(parsed, "");
   return parsed as FinalPromptTemplate;
 }
 
-export function validatePromptFragment(_content: string) {}
+export function validatePromptFragment(content: string) {
+  validateConditionalContent(content, "content");
+}
 
 export function validatePromptContent(kind: PromptFileKind, content: string) {
   if (kind === "final") parseFinalPromptTemplate(content);
@@ -123,6 +135,11 @@ export function extractPromptVariables(content: string) {
     seen.add(name);
     names.push(name);
   }
+  for (const name of conditionalVariablesFromContent(content)) {
+    if (seen.has(name)) continue;
+    seen.add(name);
+    names.push(name);
+  }
   return names;
 }
 
@@ -131,13 +148,25 @@ export function renderFinalPromptTemplate(
   variables: Readonly<Record<string, PromptVariableValue>>,
   options: PromptRenderOptions = {}
 ): RenderedPromptRequest {
-  const resolve = createVariableResolver(variables, new Set(options.opaqueVariables ?? []));
-  const rendered = renderValue(template, resolve, "") as Record<string, unknown>;
+  const usedVariables = new Set<string>();
+  const resolve = createVariableResolver(variables, new Set(options.opaqueVariables ?? []), usedVariables);
+  let rendered: Record<string, unknown>;
+  try {
+    rendered = renderValue(template, resolve, "") as Record<string, unknown>;
+  } catch (error) {
+    throw promptConditionTemplateError(error, "messages");
+  }
   const messages = normalizeRenderedMessages(rendered.messages);
   if (!messages.length) {
     throw new PromptTemplateError("PROMPT_MESSAGES_EMPTY", "变量解析后 messages 不能为空。", "messages");
   }
-  return { ...rendered, messages } as RenderedPromptRequest;
+  const request = { ...rendered, messages } as RenderedPromptRequest;
+  renderedPromptVariableUsage.set(request, usedVariables);
+  return request;
+}
+
+export function renderedPromptUsesVariable(request: RenderedPromptRequest, name: string) {
+  return renderedPromptVariableUsage.get(request)?.has(name) === true;
 }
 
 export function buildPromptUtilityVariables() {
@@ -148,12 +177,14 @@ export function buildPromptUtilityVariables() {
 
 function createVariableResolver(
   variables: Readonly<Record<string, PromptVariableValue>>,
-  opaqueVariables: ReadonlySet<string>
+  opaqueVariables: ReadonlySet<string>,
+  usedVariables: Set<string>
 ) {
   const cache = new Map<string, PromptVariableValue>();
   const resolving: string[] = [];
 
   const resolve = (name: string): PromptVariableValue => {
+    usedVariables.add(name);
     if (cache.has(name)) return cache.get(name)!;
     if (!Object.hasOwn(variables, name) || variables[name] == null) {
       throw new PromptTemplateError("PROMPT_VARIABLE_MISSING", `缺少变量：${name}`, name);
@@ -195,9 +226,10 @@ function renderValue(
 }
 
 function renderString(value: string, resolve: (name: string) => PromptVariableValue) {
-  const exact = value.trim().match(EXACT_VARIABLE_PATTERN);
+  const conditioned = renderPromptConditionals(value, resolve);
+  const exact = conditioned.trim().match(EXACT_VARIABLE_PATTERN);
   if (exact) return structuredClone(resolve(exact[1] ?? exact[2] ?? ""));
-  return value.replace(VARIABLE_PATTERN, (_token, curlyName: string, atName: string) => {
+  return conditioned.replace(VARIABLE_PATTERN, (_token, curlyName: string, atName: string) => {
     const resolved = resolve(curlyName || atName);
     return stringifyVariable(resolved);
   });
@@ -287,4 +319,73 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
+}
+
+function validateConditionalContent(content: string, field: string) {
+  try {
+    validatePromptConditionals(content);
+  } catch (error) {
+    throw promptConditionTemplateError(error, field);
+  }
+}
+
+function validateConditionalValue(value: unknown, field: string) {
+  if (typeof value === "string") {
+    validateConditionalContent(value, field || "content");
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => validateConditionalValue(item, field ? `${field}.${index}` : String(index)));
+    return;
+  }
+  if (!isRecord(value)) return;
+  for (const [key, item] of Object.entries(value)) {
+    validateConditionalValue(item, field ? `${field}.${key}` : key);
+  }
+}
+
+function conditionalVariablesFromContent(content: string) {
+  try {
+    const parsed = JSON.parse(content) as unknown;
+    const variables: string[] = [];
+    const seen = new Set<string>();
+    collectConditionalVariables(parsed, variables, seen);
+    return variables;
+  } catch (error) {
+    if (error instanceof PromptTemplateError) throw error;
+    return conditionalVariables(content);
+  }
+}
+
+function collectConditionalVariables(value: unknown, variables: string[], seen: Set<string>) {
+  if (typeof value === "string") {
+    for (const name of conditionalVariables(value)) {
+      if (seen.has(name)) continue;
+      seen.add(name);
+      variables.push(name);
+    }
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((item) => collectConditionalVariables(item, variables, seen));
+    return;
+  }
+  if (!isRecord(value)) return;
+  Object.values(value).forEach((item) => collectConditionalVariables(item, variables, seen));
+}
+
+function conditionalVariables(content: string) {
+  try {
+    return extractPromptConditionalVariables(content);
+  } catch (error) {
+    throw promptConditionTemplateError(error, "content");
+  }
+}
+
+function promptConditionTemplateError(error: unknown, field: string): never {
+  if (error instanceof PromptTemplateError) throw error;
+  if (error instanceof PromptConditionError) {
+    throw new PromptTemplateError(error.code, error.message, error.variable ?? field);
+  }
+  throw error;
 }

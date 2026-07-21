@@ -6,14 +6,26 @@ export type {
   MemoryEntry,
   MemoryFactInput,
   MemoryRecallInput,
+  MemoryRecallStats,
+  MemoryRecallUsage,
   MemorySource,
   MemorySourceId,
   MemoryWriteInput,
+  RecordActualMemoryRecallInput,
+  RecordActualMemoryRecallResult,
+  ReserveActualMemoryRecallInput,
+  ReserveActualMemoryRecallResult,
   ReplaceWorkingMemoryFactsResult,
   WorkingMemorySnapshot
 } from "./types.js";
 
-export { computeMemoryEventFingerprint, computeMemoryEventKey } from "./domain/normalizers.js";
+export {
+  computeMemoryEventFingerprint,
+  computeMemoryEventKey,
+  isMemoryCausalChainKey,
+  MEMORY_CAUSAL_CHAIN_KEY_MAX_LENGTH,
+  MEMORY_CAUSAL_CHAIN_KEY_PATTERN_SOURCE
+} from "./domain/normalizers.js";
 export {
   appendMemoryFacts,
   clearMemorySource,
@@ -23,6 +35,7 @@ export {
   normalizeEventMemorySchema,
   readUserProfileForUser,
   resolveUserAddressName,
+  resolveUserAddressNames,
   updateMemoryEntry
 } from "./application/crud.js";
 export {
@@ -34,6 +47,11 @@ export {
   upsertLongTermMemoryFacts
 } from "./application/batch.js";
 export { listMemoryEntries, readMemorySourceEntries } from "./application/queries.js";
-export { formatMemoryMatchesForPrompt, recallMemory } from "./recall/recallService.js";
+export {
+  formatMemoryMatchesForPrompt,
+  recallMemory,
+  recordModelContextRecall,
+  reserveModelContextRecall
+} from "./recall/recallService.js";
 export { ensureAgentTextFile, readAgentTextFile } from "./adapters/agentFileAdapter.js";
 export { readStrictJsonlFile } from "./adapters/legacyJsonl.js";

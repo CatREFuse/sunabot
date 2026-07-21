@@ -29,7 +29,7 @@ describe("MemoryEntryRow", () => {
           userId: "171419991",
           userName: "最后观测昵称",
           userNickname: "当前 QQ 昵称",
-          addressName: "猫老师",
+          addressNames: ["猫老师", "老师"],
           groupCards: [{ groupId: 10001, card: "群内名片", lastSeenAt: "2026-07-10T02:00:00.000Z" }]
         }),
         pendingDelete: false
@@ -37,7 +37,7 @@ describe("MemoryEntryRow", () => {
     });
 
     expect(wrapper.text()).toContain("QQ 昵称 当前 QQ 昵称");
-    expect(wrapper.text()).toContain("称呼 猫老师");
+    expect(wrapper.text()).toContain("称呼 猫老师、老师");
     expect(wrapper.text()).toContain("群名片 群内名片 · 群 10001");
     expect(wrapper.text()).toContain("QQ 171419991");
   });
@@ -63,5 +63,25 @@ describe("MemoryEntryRow", () => {
     expect(range.text()).not.toContain("fact");
     expect(range.text()).not.toContain("--");
     expect(legacy.text()).toContain("发生 2026-07-01/2026-07-02");
+  });
+
+  it("shows long-term recall frequency and distinct recall days", () => {
+    const wrapper = shallowMount(MemoryEntryRow, {
+      props: {
+        entry: entry({
+          source: "long_term",
+          sourceTitle: "长期记忆",
+          fileName: "LONG_TERM_MEMORY.jsonl",
+          recallCount: 4,
+          distinctRecallDays: 3,
+          lastRecalledAt: "2026-07-20T03:00:00.000Z"
+        }),
+        pendingDelete: false
+      }
+    });
+
+    expect(wrapper.text()).toContain("召回 4 次");
+    expect(wrapper.text()).toContain("跨 3 天");
+    expect(wrapper.text()).toContain("最近召回");
   });
 });

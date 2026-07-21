@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  resolveAgentBashEnvironment,
   resolveAgentWorkbench,
   resolveAgentWorkbenchFile
 } from "../../services/agents/agentWorkbench.js";
@@ -19,6 +20,22 @@ describe("Agent workbench paths", () => {
     const agentWorkspace = await temporaryDirectory("sunabot-agent-");
 
     await expect(resolveAgentWorkbench(agentWorkspace)).resolves.toBe(path.join(await fs.realpath(agentWorkspace), "workbench"));
+  });
+
+  it("keeps Native and Docker Bash workbenches separate while sharing only Skill and MCP directories", async () => {
+    const agentWorkspace = await temporaryDirectory("sunabot-agent-");
+
+    const nativeEnvironment = await resolveAgentBashEnvironment(agentWorkspace, "native");
+    const dockerEnvironment = await resolveAgentBashEnvironment(agentWorkspace, "docker");
+
+    expect(nativeEnvironment.workbenchRoot).toBe(path.join(await fs.realpath(agentWorkspace), "workbench"));
+    expect(dockerEnvironment.workbenchRoot).toBe(path.join(await fs.realpath(agentWorkspace), "docker-workbench"));
+    expect(dockerEnvironment.workbenchRoot).not.toBe(nativeEnvironment.workbenchRoot);
+    expect(dockerEnvironment.readOnlyMounts).toEqual(nativeEnvironment.readOnlyMounts);
+    expect(dockerEnvironment.readOnlyMounts).toEqual({
+      skills: path.join(await fs.realpath(agentWorkspace), "extensions", "skills"),
+      mcp: path.join(await fs.realpath(agentWorkspace), "extensions", "mcp")
+    });
   });
 
   it("creates a missing Agent workspace below an existing trusted parent", async () => {

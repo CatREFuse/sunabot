@@ -33,6 +33,7 @@ export function resolveReplyContextCaptureSequence(
 export class ReplyDebounceContext {
   readonly historyCaptureSequence: number | undefined;
   readonly contextCaptureSequence: number | undefined;
+  private readonly senderOnlyGroupBatch: boolean;
 
   constructor(
     private readonly host: SunaRuntime,
@@ -40,6 +41,9 @@ export class ReplyDebounceContext {
     private readonly options: ReplyDebounceContextOptions
   ) {
     this.historyCaptureSequence = validSequence(options.captureSequence);
+    this.senderOnlyGroupBatch = incoming.scope !== "private"
+      && validSequence(options.captureSequence) != null
+      && validSequence(options.contextThroughSequence) != null;
     this.contextCaptureSequence = resolveReplyContextCaptureSequence(
       options.captureSequence,
       options.contextThroughSequence
@@ -89,7 +93,9 @@ export class ReplyDebounceContext {
     ) return this.options.threadContext;
     return this.host.prepareGroupThreadContext(this.incoming, {
       captureSequence: this.options.captureSequence,
-      contextThroughSequence: this.options.contextThroughSequence,
+      contextThroughSequence: this.senderOnlyGroupBatch
+        ? this.options.captureSequence
+        : this.options.contextThroughSequence,
       signal: this.options.signal
     });
   }
@@ -119,6 +125,9 @@ export class ReplyDebounceContext {
         const sequence = validSequence(message.sequence);
         return sequence != null && sequence >= fromSequence && sequence <= throughSequence;
       })
+      .filter((message) => (
+        !this.senderOnlyGroupBatch || message.userId === this.incoming.userId
+      ))
       .sort((left, right) => Number(left.sequence) - Number(right.sequence))
       .filter((message) => {
         if (seenIds.has(message.id)) return false;

@@ -141,6 +141,7 @@ export class SystemConfigService {
       },
       tone: {
         enabled: config.bot.tone.enabled,
+        segmentedReply: config.bot.tone.segmentedReply,
         followMainModel: config.bot.tone.followMainModel,
         providerId: config.bot.tone.providerId || null,
         model: config.bot.tone.model,
@@ -152,7 +153,10 @@ export class SystemConfigService {
       memory: {
         model: config.bot.memory.memoryModel,
         messageThreshold: config.bot.memory.messageThreshold,
-        workingMemoryMaxEntries: config.bot.memory.workingMemoryMaxEntries
+        workingMemoryMaxEntries: config.bot.memory.workingMemoryMaxEntries,
+        dreamRecentWindowHours: config.bot.memory.dreamRecentWindowHours,
+        dreamRecentMemoryLimit: config.bot.memory.dreamRecentMemoryLimit,
+        dreamOlderMemoryLimit: config.bot.memory.dreamOlderMemoryLimit
       },
       tools: {
         maxCalls: config.bot.tools.maxCalls,
@@ -167,8 +171,7 @@ export class SystemConfigService {
       },
       options: {
         replyScopes: ["all", "private", "user_group", "bot_group"],
-        searchImplementations: ["tavily"],
-        bashAdminBackends: ["native", "docker"]
+        searchImplementations: ["tavily"]
       }
     };
   }
@@ -225,9 +228,6 @@ export class SystemConfigService {
     const config = await this.options.registry.config(context.agentId);
     if (input.operation === "set_auto_reply") return this.prepareAutoReply(context.agentId, config, input);
     if (input.operation === "set_orchestrator") return this.prepareOrchestrator(context.agentId, config, input);
-    if (input.operation === "set_bash_admin_backend") {
-      return this.prepareBashAdminBackend(context.agentId, config, input);
-    }
     return this.prepareSearch(context.agentId, config, input);
   }
 
@@ -304,22 +304,6 @@ export class SystemConfigService {
         value: tools
       });
     }, { availableImplementations: ["tavily"] });
-  }
-
-  private prepareBashAdminBackend(agentId: string, config: AppConfig, input: SystemConfigInput) {
-    const before = { adminPrivateBackend: config.bot.bash.adminPrivateBackend };
-    const after = { adminPrivateBackend: input.bashAdminBackend! };
-    const changes = changedFields(before, after, "bash");
-    const details = { preferenceOnly: true, isolationCapabilityRequired: true };
-    if (!changes.length) return noOp("set_bash_admin_backend", before, after, details);
-    const bash = structuredClone(config.bot.bash);
-    bash.adminPrivateBackend = after.adminPrivateBackend;
-    return staged(input, before, after, changes, async () => {
-      await this.options.agentConfigService.patch(agentId, "bash", {
-        revision: configRevision(config),
-        value: bash
-      });
-    }, details);
   }
 
   private prepareGroupMutation(context: SystemConfigTurnContext, input: SystemConfigInput) {
@@ -412,26 +396,19 @@ function safeBashSettings(
   capabilities: { workspaceBash: boolean; workspaceBashReason?: WorkspaceBashUnavailableReason }
 ) {
   const configuredEnabled = config.bot.bash.enabled;
-  const backend = config.bot.bash.adminPrivateBackend;
-  const available = config.bot.bash.adminOnly && capabilities.workspaceBash;
-  const unavailableReason = !config.bot.bash.adminOnly
-    ? "BASH_ADMIN_IDENTITY_DISABLED"
-    : available
-      ? configuredEnabled ? null : "BASH_CONFIG_DISABLED"
-      : capabilities.workspaceBashReason
-        ?? (backend === "native"
-          ? "BASH_NATIVE_ISOLATION_UNAVAILABLE"
-          : "BASH_DOCKER_ISOLATION_UNAVAILABLE");
+  const backend = "native" as const;
+  const available = capabilities.workspaceBash;
+  const unavailableReason = available
+    ? configuredEnabled ? null : "BASH_CONFIG_DISABLED"
+    : capabilities.workspaceBashReason ?? "BASH_NATIVE_ISOLATION_UNAVAILABLE";
   const unavailableMessage = unavailableReason === "BASH_CONFIG_DISABLED"
     ? "Bash 未启用。"
-    : unavailableReason === "BASH_ADMIN_IDENTITY_DISABLED"
-      ? "管理员身份门禁已关闭，所有会话均不可用。"
-      : unavailableReason === "BASH_AUDIT_UNAVAILABLE"
-        ? "独立 Bash 审计不可用，Bash 已安全关闭。"
+    : unavailableReason === "BASH_AUDIT_UNAVAILABLE"
+      ? "Bash 对抗审批 Agent 不可用，Bash 已安全关闭。"
         : unavailableReason === "BASH_WORKBENCH_UNAVAILABLE"
           ? "当前 Agent workbench 不可用，Bash 已安全关闭。"
           : unavailableReason === "BASH_NATIVE_ISOLATION_UNAVAILABLE"
-            ? "Native 后端未通过 bubblewrap 或等价强隔离检查；Bash 已安全关闭，不会回退到宿主 Bash。可切换 Docker 后端后重新检查。"
+            ? "管理员私聊 Native Bash 当前不可用。"
             : unavailableReason === "BASH_DOCKER_ISOLATION_UNAVAILABLE"
               ? "Docker 后端未通过强隔离检查；Bash 已安全关闭，不会使用 Docker socket 或宿主 Bash 回退。"
               : null;
@@ -440,18 +417,22 @@ function safeBashSettings(
     configuredEnabled,
     adminPrivateBackend: backend,
     configuredBackend: backend,
+    routes: {
+      administratorPrivateQq: "native",
+      administratorGroupQq: "docker",
+      otherQqConversations: "docker"
+    },
     auditModel: config.bot.bash.auditModel,
     strictMode: config.bot.bash.strictMode,
     available,
     effectiveEnabled: configuredEnabled && available,
     unavailableReason,
     unavailableMessage,
-    ...(unavailableReason === "BASH_ADMIN_IDENTITY_DISABLED"
-      ? { unavailabilityKind: "session" }
-      : unavailableReason && unavailableReason !== "BASH_CONFIG_DISABLED"
-        ? { unavailabilityKind: "runtime" }
-        : {}),
-    isolationRequired: "bubblewrap_or_equivalent",
+    ...(unavailableReason && unavailableReason !== "BASH_CONFIG_DISABLED"
+      ? { unavailabilityKind: "runtime" }
+      : {}),
+    isolationRequired: "backend_specific",
+    nativeHostExecutionAllowed: true,
     rawHostFallbackAllowed: false,
     dockerSocketAllowed: false
   };

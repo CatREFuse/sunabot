@@ -74,6 +74,7 @@ export class ScheduledTaskScheduler {
   }
 
   private async drain(): Promise<ScheduledTaskDrainResult> {
+    this.options.store.purgeExpiredArchivedTasks({ now: this.now() });
     const result: ScheduledTaskDrainResult = {
       claimedOccurrences: 0,
       claimedRuns: 0,

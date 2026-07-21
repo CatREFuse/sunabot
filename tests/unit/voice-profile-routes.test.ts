@@ -9,14 +9,11 @@ import {
   registerVoiceApi,
 } from "../../apps/api/voiceApiComposition.js";
 import { registerVoiceProfileRoutes } from "../../apps/api/plugins/voiceProfileRoutes.js";
-import type {
-  VoiceServiceControlPort,
-  VoiceServiceRuntimeStatus,
-} from "../../apps/api/voiceServiceControlClient.js";
 import { ServiceError } from "../../packages/contracts/errors/serviceError.js";
 import {
   VoiceProfileRepository,
   defaultVoiceProfile,
+  type VoiceProviderSettings,
   type VoiceSynthesisClient,
 } from "../../services/voice/public.js";
 import { createAdminTestConfig } from "./admin-fixtures.js";
@@ -35,66 +32,58 @@ afterEach(async () => {
 });
 
 describe("voice profile routes", () => {
-  it("keeps profiles isolated by Agent and requires a reference before enabling", async () => {
-    const repositories = await agentRepositories("plana", "koharu");
+  it("keeps online provider settings isolated by Agent and requires a default voice", async () => {
+    const repositories = await agentRepositories("plana", "arona");
     const app = testApp();
     registerVoiceProfileRoutes(app, {
       repository: (agentId) => requireRepository(repositories, agentId),
       client: clientWithHealth({ ok: true, latencyMs: 7 }),
-      now: () => new Date("2026-07-19T00:00:00.000Z"),
+      now: () => new Date("2026-07-20T00:00:00.000Z"),
     });
 
     const disabled = await app.inject({
       method: "PUT",
-      url: "/api/voice-profile?agentId=plana",
+      url: "/api/voice-profile?agentId=arona",
       payload: { enabled: true, defaultLanguage: "ja" },
     });
     expect(disabled.statusCode).toBe(409);
     expect(disabled.json().error).toMatchObject({
-      code: "VOICE_DEFAULT_REFERENCE_REQUIRED",
+      code: "VOICE_DEFAULT_VOICE_REQUIRED",
     });
 
-    const uploaded = await app.inject({
+    const configured = await app.inject({
       method: "PUT",
-      url: "/api/voice-profile/ja?agentId=koharu",
-      payload: {
-        fileName: "koharu.wav",
-        dataBase64: waveFixture().toString("base64"),
-        referenceText: "おはようございます。",
-        sourceUrl: "https://kivo.wiki/voice/koharu",
-      },
+      url: "/api/voice-provider?agentId=arona",
+      payload: providerSettings({ ja: "voice_arona" }),
     });
-    expect(uploaded.statusCode).toBe(200);
-    expect(uploaded.json().profile.languages.ja).toMatchObject({
-      language: "ja",
-      fileName: "koharu.wav",
-      mimeType: "audio/wav",
-      referenceText: "おはようございます。",
-    });
+    expect(configured.statusCode).toBe(200);
+    expect(configured.json().profile.provider).toEqual(
+      providerSettings({ ja: "voice_arona" }),
+    );
 
     const enabled = await app.inject({
       method: "PUT",
-      url: "/api/voice-profile?agentId=koharu",
+      url: "/api/voice-profile?agentId=arona",
       payload: { enabled: true, defaultLanguage: "ja" },
     });
     expect(enabled.statusCode).toBe(200);
-    expect(enabled.json().profile).toMatchObject({
-      enabled: true,
-      defaultLanguage: "ja",
-    });
 
-    const [koharu, plana] = await Promise.all([
-      app.inject({ method: "GET", url: "/api/voice-profile?agentId=koharu" }),
+    const [arona, plana] = await Promise.all([
+      app.inject({ method: "GET", url: "/api/voice-profile?agentId=arona" }),
       app.inject({ method: "GET", url: "/api/voice-profile?agentId=plana" }),
     ]);
-    expect(koharu.json()).toMatchObject({
-      profile: { enabled: true, languages: { ja: expect.any(Object) } },
-      provider: { provider: "MOSS-TTS-Nano", ready: true, latencyMs: 7 },
+    expect(arona.json()).toMatchObject({
+      profile: {
+        enabled: true,
+        defaultLanguage: "ja",
+        provider: { voices: { ja: "voice_arona" } },
+      },
+      provider: { provider: "OpenAI Audio", ready: true, latencyMs: 7 },
     });
     expect(plana.json().profile).toEqual(defaultVoiceProfile());
   });
 
-  it("rejects invalid language, settings and audio without exposing local paths", async () => {
+  it("rejects invalid language, provider settings and audio without exposing local paths", async () => {
     const repositories = await agentRepositories("plana");
     const app = testApp();
     registerVoiceProfileRoutes(app, {
@@ -104,23 +93,25 @@ describe("voice profile routes", () => {
 
     const invalidLanguage = await app.inject({
       method: "PUT",
-      url: "/api/voice-profile/fr?agentId=plana",
-      payload: {
-        fileName: "bad.wav",
-        dataBase64: "AA==",
-        referenceText: "bad",
-      },
-    });
-    expect(invalidLanguage.statusCode).toBe(400);
-
-    const invalidSettings = await app.inject({
-      method: "PUT",
       url: "/api/voice-profile?agentId=plana",
       payload: { enabled: false, defaultLanguage: "fr" },
     });
-    expect(invalidSettings.statusCode).toBe(400);
-    expect(invalidSettings.json().error).toMatchObject({
+    expect(invalidLanguage.statusCode).toBe(400);
+    expect(invalidLanguage.json().error).toMatchObject({
       code: "VOICE_LANGUAGE_INVALID",
+    });
+
+    const invalidProvider = await app.inject({
+      method: "PUT",
+      url: "/api/voice-provider?agentId=plana",
+      payload: {
+        ...providerSettings({ ja: "voice_plana" }),
+        baseUrl: "http://example.com/v1",
+      },
+    });
+    expect(invalidProvider.statusCode).toBe(400);
+    expect(invalidProvider.json().error).toMatchObject({
+      code: "VOICE_PROVIDER_INVALID",
     });
 
     const invalidBase64 = await app.inject({
@@ -136,80 +127,78 @@ describe("voice profile routes", () => {
     expect(invalidBase64.json().error).toMatchObject({
       code: "VOICE_REFERENCE_BASE64_INVALID",
     });
-
-    const unsupported = await app.inject({
-      method: "PUT",
-      url: "/api/voice-profile/ja?agentId=plana",
-      payload: {
-        fileName: "private.txt",
-        dataBase64: Buffer.from("not audio").toString("base64"),
-        referenceText: "bad",
-      },
-    });
-    expect(unsupported.statusCode).toBe(415);
-    expect(unsupported.json().error).toMatchObject({
-      code: "VOICE_REFERENCE_TYPE_UNSUPPORTED",
-    });
     expect(
       JSON.stringify([
-        invalidSettings.json(),
+        invalidLanguage.json(),
+        invalidProvider.json(),
         invalidBase64.json(),
-        unsupported.json(),
       ]),
     ).not.toContain(root);
   });
 
-  it("reports health failures with a fixed public message", async () => {
+  it("reports online health failures with a fixed public message", async () => {
     const repositories = await agentRepositories("plana");
     const app = testApp();
     registerVoiceProfileRoutes(app, {
       repository: (agentId) => requireRepository(repositories, agentId),
-      client: clientWithHealth(
-        new Error(`upstream failed at ${root}/private.sock`),
-      ),
-      serviceController: serviceController({
-        state: "stopped",
-        updatedAt: "2026-07-19T01:02:02.000Z",
-      }),
-      now: () => new Date("2026-07-19T01:02:03.000Z"),
+      client: clientWithHealth(new Error(`failed at ${root}/private.sock`)),
+      now: () => new Date("2026-07-20T01:02:03.000Z"),
     });
 
     const response = await app.inject({
       method: "POST",
-      url: "/api/voice-profile/probe?agentId=plana",
+      url: "/api/voice-service/check?agentId=plana",
     });
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({
       provider: {
-        provider: "MOSS-TTS-Nano",
+        provider: "OpenAI Audio",
+        state: "unavailable",
         ready: false,
-        checkedAt: "2026-07-19T01:02:03.000Z",
-        serviceState: "stopped",
-        controlsAvailable: true,
-        message: "语音服务已关闭",
+        checkedAt: "2026-07-20T01:02:03.000Z",
+        message: "在线语音服务不可用",
       },
     });
     expect(response.body).not.toContain(root);
     expect(response.body).not.toContain("private.sock");
   });
 
-  it("checks, starts and stops the managed voice service", async () => {
+  it("reports a missing API Key as unconfigured", async () => {
     const repositories = await agentRepositories("plana");
-    const controller = serviceController({
-      state: "stopped",
-      updatedAt: "2026-07-19T02:00:00.000Z",
+    const app = testApp();
+    registerVoiceProfileRoutes(app, {
+      repository: (agentId) => requireRepository(repositories, agentId),
+      client: clientWithHealth(
+        Object.assign(new Error("secret value must stay private"), {
+          code: "VOICE_PROVIDER_KEY_MISSING",
+        }),
+      ),
+      now: () => new Date("2026-07-20T01:02:03.000Z"),
     });
-    controller.start = vi.fn(async () => ({
-      state: "running" as const,
-      message: "语音服务已启动，模型载入后即可使用。",
-      updatedAt: "2026-07-19T02:01:00.000Z",
-    }));
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/voice-service/check?agentId=plana",
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      provider: {
+        provider: "OpenAI Audio",
+        state: "unconfigured",
+        ready: false,
+        checkedAt: "2026-07-20T01:02:03.000Z",
+        message: "API Key 未配置",
+      },
+    });
+    expect(response.body).not.toContain("secret value");
+  });
+
+  it("keeps only the online connection check action", async () => {
+    const repositories = await agentRepositories("plana");
     const app = testApp();
     registerVoiceProfileRoutes(app, {
       repository: (agentId) => requireRepository(repositories, agentId),
       client: clientWithHealth({ ok: true, latencyMs: 9 }),
-      serviceController: controller,
-      now: () => new Date("2026-07-19T02:02:00.000Z"),
     });
 
     const checked = await app.inject({
@@ -217,51 +206,36 @@ describe("voice profile routes", () => {
       url: "/api/voice-service/check?agentId=plana",
     });
     expect(checked.json().provider).toMatchObject({
+      provider: "OpenAI Audio",
       ready: true,
-      serviceState: "running",
-      controlsAvailable: true,
+      latencyMs: 9,
     });
-
-    const started = await app.inject({
-      method: "POST",
-      url: "/api/voice-service/start?agentId=plana",
-    });
-    expect(started.statusCode).toBe(200);
-    expect(controller.start).toHaveBeenCalledOnce();
-    expect(started.json().provider).toMatchObject({
-      ready: true,
-      serviceState: "running",
-      controlsAvailable: true,
-    });
-
-    const stopped = await app.inject({
-      method: "POST",
-      url: "/api/voice-service/stop?agentId=plana",
-    });
-    expect(stopped.statusCode).toBe(200);
-    expect(controller.stop).toHaveBeenCalledOnce();
-    expect(stopped.json().provider).toEqual({
-      provider: "MOSS-TTS-Nano",
-      ready: false,
-      checkedAt: "2026-07-19T02:02:00.000Z",
-      serviceState: "stopped",
-      controlsAvailable: true,
-      message: "语音服务已关闭",
-    });
+    expect(
+      await app.inject({
+        method: "POST",
+        url: "/api/voice-service/start?agentId=plana",
+      }),
+    ).toMatchObject({ statusCode: 404 });
+    expect(
+      await app.inject({
+        method: "POST",
+        url: "/api/voice-service/stop?agentId=plana",
+      }),
+    ).toMatchObject({ statusCode: 404 });
   });
 
-  it("builds one repository per Agent and fails closed for an unavailable Agent", async () => {
+  it("builds one repository per Agent and resolves capability from voice IDs", async () => {
     const planaConfig = createAdminTestConfig(root);
-    const koharuConfig = createAdminTestConfig(root);
+    const aronaConfig = createAdminTestConfig(root);
     planaConfig.persona.agentWorkspace = path.join(root, "plana");
-    koharuConfig.persona.agentWorkspace = path.join(root, "koharu");
+    aronaConfig.persona.agentWorkspace = path.join(root, "arona");
     await Promise.all([
       fs.mkdir(planaConfig.persona.agentWorkspace, { recursive: true }),
-      fs.mkdir(koharuConfig.persona.agentWorkspace, { recursive: true }),
+      fs.mkdir(aronaConfig.persona.agentWorkspace, { recursive: true }),
     ]);
     const runtimes = new Map([
       ["plana", { config: planaConfig }],
-      ["koharu", { config: koharuConfig }],
+      ["arona", { config: aronaConfig }],
     ]);
     const composition = buildVoiceApiComposition({
       defaultAgentId: () => "plana",
@@ -278,19 +252,16 @@ describe("voice profile routes", () => {
     expect(composition.repository("plana")).toBe(
       composition.repository("plana"),
     );
-    expect(composition.repository("koharu")).not.toBe(
+    expect(composition.repository("arona")).not.toBe(
       composition.repository("plana"),
     );
-    await composition.repository("koharu").putReference({
-      language: "ja",
-      fileName: "koharu.wav",
-      dataBase64: waveFixture().toString("base64"),
-      referenceText: "こんばんは。",
-    });
     await composition
-      .repository("koharu")
+      .repository("arona")
+      .updateProvider(providerSettings({ ja: "voice_arona" }));
+    await composition
+      .repository("arona")
       .updateSettings({ enabled: true, defaultLanguage: "ja" });
-    await expect(composition.resolveCapability("koharu")).resolves.toEqual({
+    await expect(composition.resolveCapability("arona")).resolves.toEqual({
       enabled: true,
       languages: ["ja"],
       defaultLanguage: "ja",
@@ -369,39 +340,14 @@ function clientWithHealth(
   };
 }
 
-function serviceController(
-  initial: VoiceServiceRuntimeStatus,
-): VoiceServiceControlPort {
+function providerSettings(
+  voices: Partial<VoiceProviderSettings["voices"]> = {},
+): VoiceProviderSettings {
   return {
-    check: vi.fn(async () => initial),
-    start: vi.fn(async () => ({
-      state: "running",
-      updatedAt: "2026-07-19T02:01:00.000Z",
-    })),
-    stop: vi.fn(async () => ({
-      state: "stopped",
-      message: "语音服务已关闭",
-      updatedAt: "2026-07-19T02:03:00.000Z",
-    })),
+    protocol: "openai-audio",
+    baseUrl: "https://api.openai.com/v1",
+    apiKeyEnv: "OPENAI_API_KEY",
+    model: "gpt-4o-mini-tts",
+    voices: { zh: null, en: null, ja: null, ...voices },
   };
-}
-
-function waveFixture() {
-  const data = Buffer.from([1, 0, 1, 0]);
-  const bytes = Buffer.alloc(44 + data.byteLength);
-  bytes.write("RIFF", 0, "ascii");
-  bytes.writeUInt32LE(36 + data.byteLength, 4);
-  bytes.write("WAVE", 8, "ascii");
-  bytes.write("fmt ", 12, "ascii");
-  bytes.writeUInt32LE(16, 16);
-  bytes.writeUInt16LE(1, 20);
-  bytes.writeUInt16LE(1, 22);
-  bytes.writeUInt32LE(16_000, 24);
-  bytes.writeUInt32LE(32_000, 28);
-  bytes.writeUInt16LE(2, 32);
-  bytes.writeUInt16LE(16, 34);
-  bytes.write("data", 36, "ascii");
-  bytes.writeUInt32LE(data.byteLength, 40);
-  data.copy(bytes, 44);
-  return bytes;
 }

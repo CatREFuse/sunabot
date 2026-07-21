@@ -28,6 +28,10 @@ import type {
   PreparedOutboundConversationAssetV1
 } from "../../packages/contracts/messaging/messages.js";
 import {
+  outboundAssetBubble,
+  sendOutboundBubble
+} from "../../packages/contracts/messaging/messages.js";
+import {
   OutboxDisconnectedError,
   type OutboxDeliveryContext
 } from "../../services/sessions/sessionCoordinator.js";
@@ -197,7 +201,10 @@ export class RuntimeConversationAssets {
         byteLength: payload.asset.byteLength,
         sha256: payload.asset.sha256
       }, payload.asset.rootIdentity);
-      const sendAsset = () => gateway.sendConversationAsset!(assetTarget(payload, prepared));
+      const sendAsset = () => sendOutboundBubble(
+        gateway,
+        outboundAssetBubble(assetTarget(payload, prepared))
+      );
       remoteReceipt = await context.sendRemote(sendAsset);
     }
 

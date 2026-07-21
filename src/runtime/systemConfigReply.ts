@@ -48,6 +48,7 @@ interface SystemConfigFinalReplyInput {
   signal?: AbortSignal;
   messageOrigin: AssistantMessageOrigin;
   toolNames: readonly string[];
+  singleMessage?: boolean;
 }
 
 export class SystemConfigReplyLifecycle {
@@ -376,7 +377,8 @@ export async function sendSystemConfigAwareFinalReply(
       { messageOrigin: input.messageOrigin, toolNames: [...input.toolNames] },
       prepared?.timing ?? "buffered",
       input.signal,
-      emojiPlan
+      emojiPlan,
+      input.singleMessage
     );
     if (prepared?.timing === "immediate" && input.lifecycle?.protectsCurrentPrivateReplyFromGateClosure()) {
       host.activeDirectControllers.delete(input.channelKey);

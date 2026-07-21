@@ -92,7 +92,7 @@ describe("PromptTextField", () => {
   it("renders escaped Markdown and XML syntax in the highlight layer", () => {
     const wrapper = mount(PromptTextField, {
       props: {
-        modelValue: "# 标题\n- **重点**与*斜体*\n> 引用\n`code` <context>@{user.input}</context>\n```ts\nconst value = '<safe>';\n**代码内不是粗体**\n```",
+        modelValue: "# 标题\n- **重点**与*斜体*\n> 引用\n`code` <context s-if=\"tone_mode == true\">@{user.input}</context>\n```ts\nconst value = '<safe>';\n**代码内不是粗体**\n```",
         variables,
         label: "系统提示词"
       }
@@ -104,6 +104,8 @@ describe("PromptTextField", () => {
     expect(highlight.find(".markup-italic").text()).toBe("*斜体*");
     expect(highlight.find(".markup-quote").exists()).toBe(true);
     expect(highlight.findAll(".markup-xml")).toHaveLength(2);
+    expect(highlight.get(".markup-directive").text()).toBe('s-if="tone_mode == true"');
+    expect(highlight.get(".markup-condition").text()).toBe("tone_mode == true");
     expect(highlight.find(".markup-code-block").text()).toContain("const value = '<safe>';\n**代码内不是粗体**");
     expect(highlight.findAll(".markup-code-fence")).toHaveLength(2);
     expect(highlight.find(".markup-code-block").find(".markup-bold").exists()).toBe(false);

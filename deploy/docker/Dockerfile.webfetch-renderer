@@ -1,0 +1,41 @@
+ARG NODE_VERSION=24.18.0
+ARG NODE_IMAGE=docker.io/library/node:24.18.0-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d
+
+FROM ${NODE_IMAGE} AS build
+ARG NODE_VERSION
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+RUN test "$(/usr/local/bin/node -p 'process.versions.node')" = "$NODE_VERSION"
+WORKDIR /srv/sunabot
+COPY package.json package-lock.json ./
+RUN npm ci
+COPY tsconfig.json ./
+COPY src ./src
+COPY services ./services
+COPY adapters ./adapters
+COPY packages ./packages
+COPY apps/webfetch-renderer ./apps/webfetch-renderer
+RUN npx tsc && npm prune --omit=dev
+
+FROM ${NODE_IMAGE} AS runtime
+ARG NODE_VERSION
+ENV NODE_ENV=production \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
+    HOME=/tmp/webfetch-home \
+    XDG_CACHE_HOME=/tmp/webfetch-cache
+RUN test "$(/usr/local/bin/node -p 'process.versions.node')" = "$NODE_VERSION" \
+    && mkdir -p /srv/sunabot /ms-playwright /tmp/webfetch-home /tmp/webfetch-cache \
+    && chown -R 1000:1000 /srv/sunabot /ms-playwright /tmp/webfetch-home /tmp/webfetch-cache
+WORKDIR /srv/sunabot
+COPY --from=build --chown=1000:1000 /srv/sunabot/package.json ./package.json
+COPY --from=build --chown=1000:1000 /srv/sunabot/package-lock.json ./package-lock.json
+COPY --from=build --chown=1000:1000 /srv/sunabot/node_modules ./node_modules
+COPY --from=build --chown=1000:1000 /srv/sunabot/dist ./dist
+RUN /usr/local/bin/node node_modules/playwright/cli.js install --with-deps chromium \
+    && rm -rf /var/lib/apt/lists/* /root/.cache
+
+USER 1000:1000
+EXPOSE 8790
+STOPSIGNAL SIGTERM
+HEALTHCHECK --interval=10s --timeout=5s --start-period=45s --retries=6 \
+  CMD ["/usr/local/bin/node", "-e", "fetch('http://127.0.0.1:8790/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+ENTRYPOINT ["/usr/local/bin/node", "/srv/sunabot/dist/apps/webfetch-renderer/main.js"]
