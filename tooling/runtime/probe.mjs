@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { inspectMultiAgentMigrationGate } from "../../packages/platform/multiAgentMigrationGate.mjs";
+import { ensureCodexAccessToken } from "../../packages/platform/codexTokenRefresh.mjs";
 import { inspectFirstRunBootstrap } from "./first-run-state.mjs";
 import { inspectMcpRuntimeConfiguration } from "./mcp-runtime-config.mjs";
 
@@ -352,22 +353,14 @@ async function providerCredential(workspace, provider) {
     const authPath = path.join(workspace, "secrets/codex/auth.json");
     if (await regularFile(authPath)) {
       try {
-        const payload = JSON.parse(await fs.readFile(authPath, "utf8"));
-        const token = String(payload?.tokens?.access_token ?? "").trim();
-        if (token && !jwtExpired(token)) return token;
+        return await ensureCodexAccessToken({
+          authFile: authPath,
+          codexHome: path.dirname(authPath)
+        });
       } catch {}
     }
   }
   return "";
-}
-
-function jwtExpired(token) {
-  try {
-    const payload = JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString("utf8"));
-    return typeof payload.exp === "number" && payload.exp * 1_000 <= Date.now();
-  } catch {
-    return false;
-  }
 }
 
 function providerEnvironmentPath(workspace, reference) {

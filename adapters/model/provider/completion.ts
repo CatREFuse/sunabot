@@ -154,7 +154,7 @@ async function completeCodexResponses(
   options: ProviderCompleteOptions,
   state: TurnToolState
 ): Promise<ProviderTurnResult> {
-  const apiKey = context.getApiKey();
+  const apiKey = await context.getApiKeyAsync();
   if (!apiKey) throw new Error("Codex 未登录。请先运行 codex login，或设置 CODEX_ACCESS_TOKEN。");
 
   const tools = context.toolExecutor.resolveDefinitions(options, request.tools);

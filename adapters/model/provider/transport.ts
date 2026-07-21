@@ -6,6 +6,7 @@ import dotenv from "dotenv";
 import type { ProviderConfig } from "../../../src/types.js";
 import { getWorkspacePath, resolveProjectPath } from "../../../src/config.js";
 import { WORKSPACE_LAYOUT } from "../../../packages/platform/workspaceLayout.js";
+import { ensureCodexAccessToken } from "../../../packages/platform/codexTokenRefresh.mjs";
 
 const inheritedProcessEnvironment = { ...process.env };
 
@@ -37,6 +38,13 @@ export function createChatClient(
 }
 
 export function resolveProviderApiKey(provider: ProviderConfig) {
+  const configuredToken = resolveConfiguredProviderApiKey(provider);
+  if (configuredToken) return configuredToken;
+  if (provider.kind === "codex-responses") return resolveCodexAccessToken();
+  return "";
+}
+
+function resolveConfiguredProviderApiKey(provider: ProviderConfig) {
   const envToken = inheritedProcessEnvironment[provider.apiKeyEnv];
   if (envToken) return envToken;
   const providerToken = readEnvValue(resolveProjectPath(provider.envFile), provider.apiKeyEnv);
@@ -45,8 +53,21 @@ export function resolveProviderApiKey(provider: ProviderConfig) {
   if (projectToken) return projectToken;
   const runtimeToken = process.env[provider.apiKeyEnv];
   if (runtimeToken) return runtimeToken;
-  if (provider.kind === "codex-responses") return resolveCodexAccessToken();
   return "";
+}
+
+export async function resolveProviderApiKeyAsync(provider: ProviderConfig) {
+  const configuredToken = resolveConfiguredProviderApiKey(provider);
+  if (configuredToken || provider.kind !== "codex-responses") return configuredToken;
+  const authFile = resolveCodexAuthFile();
+  try {
+    return await ensureCodexAccessToken({
+      authFile,
+      codexHome: path.dirname(authFile)
+    });
+  } catch {
+    return "";
+  }
 }
 
 export function normalizeOpenAiBaseUrl(baseUrl?: string) {

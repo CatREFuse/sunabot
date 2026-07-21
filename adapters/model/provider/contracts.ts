@@ -202,6 +202,7 @@ export interface ProviderTransportFactories {
   createResponsesClient(options?: { maxRetries?: number }): OpenAI;
   createChatClient(options?: { maxRetries?: number }): OpenAI;
   getApiKey(): string;
+  getApiKeyAsync(): Promise<string>;
 }
 
 export interface ProviderAdapterContext extends ProviderTransportFactories {

@@ -21,7 +21,8 @@ import {
   createChatClient as createOpenAIChatClient,
   createResponsesClient,
   normalizeChatBaseUrl,
-  resolveProviderApiKey
+  resolveProviderApiKey,
+  resolveProviderApiKeyAsync
 } from "./provider/transport.js";
 
 export type {
@@ -135,7 +136,8 @@ export class OpenAIProvider {
       imageWriter: this.imageWriter,
       createResponsesClient: (options) => this.createClient(options),
       createChatClient: (options) => this.createChatClient(options),
-      getApiKey: () => this.getApiKey()
+      getApiKey: () => this.getApiKey(),
+      getApiKeyAsync: () => this.getApiKeyAsync()
     };
   }
 
@@ -149,6 +151,10 @@ export class OpenAIProvider {
 
   private getApiKey() {
     return resolveProviderApiKey(this.provider);
+  }
+
+  private async getApiKeyAsync() {
+    return this.getApiKey() || resolveProviderApiKeyAsync(this.provider);
   }
 
   configuration() {
