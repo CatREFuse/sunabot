@@ -56,7 +56,16 @@ describe("media API plugin", () => {
         getModelInfo: () => ({ model: "text-model", imageModel: "image-model" })
       }))
     } as unknown as SunaRuntime;
-    registerMediaRoutes(app, { getConfig: () => config, runtime });
+    const requestRemoteImage = vi.fn(async (url: URL, init: RequestInit) => ({
+      response: await fetch(url, init),
+      close: vi.fn(async () => undefined),
+      destroy: vi.fn(async () => undefined)
+    }));
+    registerMediaRoutes(app, {
+      getConfig: () => config,
+      runtime,
+      requestRemoteImage
+    });
 
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(new Uint8Array([1, 2, 3]), {
       status: 200,
@@ -72,6 +81,11 @@ describe("media API plugin", () => {
     expect(fetchMock).toHaveBeenCalledWith(new URL("https://8.8.8.8/image.jpg"), expect.objectContaining({
       redirect: "manual"
     }));
+    expect(requestRemoteImage).toHaveBeenCalledWith(
+      new URL("https://8.8.8.8/image.jpg"),
+      expect.any(Object),
+      [{ address: "8.8.8.8", family: 4 }]
+    );
 
     const source = await sharp({ create: { width: 800, height: 600, channels: 3, background: "#d71921" } }).png().toBuffer();
     fetchMock.mockResolvedValueOnce(new Response(source, {
@@ -101,7 +115,7 @@ describe("media API plugin", () => {
 
     const generated = await app.inject({
       method: "POST",
-      url: "/api/playground/image",
+      url: "/api/playground/image?agentId=plana",
       payload: {
         prompt: "portrait",
         size: "1024x1536",
@@ -112,7 +126,7 @@ describe("media API plugin", () => {
     expect(generated.statusCode).toBe(200);
     expect(generateImage).toHaveBeenCalledWith("portrait", "2160x3840", "high");
 
-    const history = await app.inject({ method: "GET", url: "/api/images" });
+    const history = await app.inject({ method: "GET", url: "/api/images?agentId=plana" });
     expect(history.json().images).toContainEqual(expect.objectContaining({
       id: "plugin-test.png",
       size: "2160x3840",
@@ -126,6 +140,7 @@ describe("media API plugin", () => {
       "/api/media/qq-avatar",
       "/api/media/thumbnail",
       "/api/model-call-stats",
+      "/api/overview/summary",
       "/api/playground/image",
       "/api/request-logs",
       "/api/token-usage"

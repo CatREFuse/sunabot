@@ -20,6 +20,7 @@ import {
   EmojiGenerationGate,
   EmojiNormalizationBusyError
 } from "../../../services/emojis/emojiOperationGate.js";
+import { requestAgentId } from "../requestAgentId.js";
 
 const openObject = { type: "object", additionalProperties: true } as const;
 const passthroughBody = {} as const;
@@ -373,11 +374,6 @@ function saveGeneratedImageHistory(
     createdAt: new Date().toISOString()
   };
   store.replaceImageHistory([record, ...store.readImageHistory()].slice(0, 80));
-}
-
-function requestAgentId(query: unknown) {
-  const value = query && typeof query === "object" ? (query as { agentId?: unknown }).agentId : undefined;
-  return String(value ?? "plana").trim() || "plana";
 }
 
 function parseVariant(value: string | undefined): EmojiImageVariant {

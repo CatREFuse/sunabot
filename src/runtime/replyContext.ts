@@ -272,7 +272,6 @@ function resolveProviderBashCandidate(
   promptOverride?: string
 ) {
   const bash = config.bot.bash;
-  const adminQq = config.bot.adminQq.trim();
   const accountId = incoming.accountId?.trim();
   const senderId = incoming.sender?.id?.trim();
   if (
@@ -297,9 +296,6 @@ function resolveProviderBashCandidate(
     && Number(incoming.groupId) > 0;
   if (!privateConversation && !groupConversation) return undefined;
 
-  const administrator = isAdminSender(incoming.userId, adminQq);
-  const nativeAdministratorPrivate = administrator && privateConversation;
-
   const approvalContext = Object.freeze({
     agentId: config.persona.defaultAgentId,
     accountId,
@@ -311,8 +307,8 @@ function resolveProviderBashCandidate(
   const confirmedApprovalId = extractConfirmedBashApprovalId(incoming.text);
   return Object.freeze({
     workspacePath,
-    backend: nativeAdministratorPrivate ? "native" as const : "docker" as const,
-    accessMode: nativeAdministratorPrivate ? "admin" as const : "isolated" as const,
+    backend: "docker" as const,
+    accessMode: "isolated" as const,
     strictMode: bash.strictMode,
     approvalContext,
     ...(confirmedApprovalId ? { confirmedApprovalId } : {})

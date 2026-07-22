@@ -48,12 +48,12 @@ describe("provider and config API plugin", () => {
       .toBe("waiting");
     expect((await app.inject({ method: "POST", url: "/api/codex-auth/logout" })).json().authenticated)
       .toBe(false);
-    expect((await app.inject({ method: "GET", url: "/api/config" })).json().revision).toBe("revision");
+    expect((await app.inject({ method: "GET", url: "/api/config?agentId=plana" })).json().revision).toBe("revision");
 
     const groupReplyBody = { revision: "revision", value: { enabled: true } };
     expect((await app.inject({
       method: "PATCH",
-      url: "/api/config/group-reply",
+      url: "/api/config/group-reply?agentId=plana",
       payload: groupReplyBody
     })).json()).toMatchObject({ ok: true, applyMode: "hot" });
     expect(patchGroupReply).toHaveBeenCalledWith(groupReplyBody);
@@ -61,7 +61,7 @@ describe("provider and config API plugin", () => {
     const sectionBody = { revision: "revision", value: config.providers };
     expect((await app.inject({
       method: "PATCH",
-      url: "/api/config/providers",
+      url: "/api/config/providers?agentId=plana",
       payload: sectionBody
     })).json()).toMatchObject({ ok: true, applyMode: "hot" });
     expect(patch).toHaveBeenCalledWith("providers", sectionBody);

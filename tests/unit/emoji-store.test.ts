@@ -19,7 +19,7 @@ describe("emoji SQLite store", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it("creates the schema 12 emoji history inside the current schema 16 and performs version CRUD", () => {
+  it("creates the schema 12 emoji history inside the current schema 17 and performs version CRUD", () => {
     const store = new ApplicationDataStore(databasePath);
     store.upsertEmoji(record("开心", "a", "upload"));
     store.upsertEmoji(record("哭", "b", "generated"));
@@ -57,7 +57,7 @@ describe("emoji SQLite store", () => {
 
     const database = new DatabaseSync(databasePath);
     expect(database.prepare("SELECT value FROM app_metadata WHERE key = 'storage-schema-version'").get())
-      .toMatchObject({ value: "16" });
+      .toMatchObject({ value: "17" });
     expect(String(database.prepare("SELECT sql FROM sqlite_schema WHERE name = 'emojis'").get()?.sql ?? "").toLowerCase())
       .toContain("strict");
     database.close();
@@ -79,7 +79,7 @@ describe("emoji SQLite store", () => {
     migrated.close();
     const database = new DatabaseSync(databasePath);
     expect(database.prepare("SELECT value FROM app_metadata WHERE key = 'storage-schema-version'").get())
-      .toMatchObject({ value: "16" });
+      .toMatchObject({ value: "17" });
     database.close();
   });
 

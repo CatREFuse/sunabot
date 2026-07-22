@@ -101,15 +101,10 @@ function executionBackend(value: unknown): "native" | "docker" | undefined {
 }
 
 function bashEnvironments(value: unknown): SunaTool["bashEnvironments"] | undefined {
-  if (!isRecord(value) || !isRecord(value.native) || !isRecord(value.docker)) return undefined;
-  const nativeAvailable = booleanValue(value.native.available);
+  if (!isRecord(value) || !isRecord(value.docker)) return undefined;
   const dockerStarted = booleanValue(value.docker.started);
-  if (nativeAvailable === undefined || dockerStarted === undefined) return undefined;
+  if (dockerStarted === undefined) return undefined;
   return {
-    native: {
-      available: nativeAvailable,
-      ...(stringValue(value.native.reasonCode) ? { reasonCode: stringValue(value.native.reasonCode) } : {})
-    },
     docker: {
       started: dockerStarted,
       ...(stringValue(value.docker.reasonCode) ? { reasonCode: stringValue(value.docker.reasonCode) } : {})

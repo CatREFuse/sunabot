@@ -5,6 +5,8 @@ import path from "node:path";
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_REFRESH_WINDOW_MS = 60_000;
 const MAX_STDOUT_BUFFER_BYTES = 64 * 1024;
+const MAX_STDERR_BUFFER_BYTES = 16 * 1024;
+const CHILD_SHUTDOWN_GRACE_MS = 1_000;
 const refreshes = new Map();
 
 export async function ensureCodexAccessToken(options) {
@@ -49,22 +51,29 @@ async function requestManagedRefresh(options) {
         RUST_LOG: "error"
       },
       windowsHide: true,
-      stdio: ["pipe", "pipe", "ignore"]
+      detached: process.platform !== "win32",
+      stdio: ["pipe", "pipe", "pipe"]
     });
-    let settled = false;
     let initialized = false;
     let refreshCompleted = false;
+    let desiredError;
     let stdout = "";
+    let stderrBytes = 0;
+    let shutdownTimer;
+    let killTimer;
     const timer = setTimeout(() => {
-      child.kill("SIGTERM");
-      finish(new Error("CODEX_AUTH_REFRESH_TIMEOUT"));
+      desiredError = new Error("CODEX_AUTH_REFRESH_TIMEOUT");
+      terminateChild(child, "SIGTERM");
+      killTimer = setTimeout(() => terminateChild(child, "SIGKILL"), CHILD_SHUTDOWN_GRACE_MS);
+      killTimer.unref?.();
     }, timeoutMs);
 
-    const finish = (error) => {
-      if (settled) return;
-      settled = true;
+    const finish = () => {
       clearTimeout(timer);
-      if (error) reject(error);
+      if (shutdownTimer) clearTimeout(shutdownTimer);
+      if (killTimer) clearTimeout(killTimer);
+      if (desiredError) reject(desiredError);
+      else if (!refreshCompleted) reject(new Error("CODEX_AUTH_REFRESH_FAILED"));
       else resolve();
     };
 
@@ -72,10 +81,15 @@ async function requestManagedRefresh(options) {
       if (!child.stdin.destroyed) child.stdin.write(`${JSON.stringify(message)}\n`);
     };
 
-    child.once("error", () => finish(new Error("CODEX_AUTH_REFRESH_UNAVAILABLE")));
-    child.once("exit", () => {
-      if (refreshCompleted) finish();
-      else finish(new Error("CODEX_AUTH_REFRESH_FAILED"));
+    child.stdin.on("error", () => {
+      if (!refreshCompleted && !desiredError) desiredError = new Error("CODEX_AUTH_REFRESH_FAILED");
+    });
+    child.once("error", () => {
+      desiredError = new Error("CODEX_AUTH_REFRESH_UNAVAILABLE");
+    });
+    child.once("close", finish);
+    child.stderr.on("data", (chunk) => {
+      stderrBytes = Math.min(MAX_STDERR_BUFFER_BYTES, stderrBytes + Buffer.byteLength(chunk));
     });
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
@@ -97,12 +111,18 @@ async function requestManagedRefresh(options) {
         }
         if (message?.id !== 2) continue;
         if (message.error) {
+          desiredError = new Error("CODEX_AUTH_REFRESH_FAILED");
           child.stdin.end();
-          finish(new Error("CODEX_AUTH_REFRESH_FAILED"));
           return;
         }
         refreshCompleted = true;
         child.stdin.end();
+        shutdownTimer = setTimeout(() => {
+          terminateChild(child, "SIGTERM");
+          killTimer = setTimeout(() => terminateChild(child, "SIGKILL"), CHILD_SHUTDOWN_GRACE_MS);
+          killTimer.unref?.();
+        }, CHILD_SHUTDOWN_GRACE_MS);
+        shutdownTimer.unref?.();
       }
     });
 
@@ -132,10 +152,26 @@ async function readAccessToken(authFile) {
 
 function jwtExpiresWithin(token, windowMs) {
   try {
-    const payload = JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString("utf8"));
-    return typeof payload.exp === "number" && payload.exp * 1_000 <= Date.now() + Math.max(0, windowMs);
+    const segments = token.split(".");
+    if (segments.length !== 3 || segments.some((segment) => !/^[A-Za-z0-9_-]+$/.test(segment))) return true;
+    const payload = JSON.parse(Buffer.from(segments[1], "base64url").toString("utf8"));
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return true;
+    if (!Number.isSafeInteger(payload.exp) || payload.exp <= 0 || payload.exp > Math.floor(Number.MAX_SAFE_INTEGER / 1_000)) {
+      return true;
+    }
+    return payload.exp * 1_000 <= Date.now() + Math.max(0, windowMs);
   } catch {
-    return false;
+    return true;
+  }
+}
+
+function terminateChild(child, signal) {
+  if (!child.pid) return;
+  try {
+    if (process.platform !== "win32") process.kill(-child.pid, signal);
+    else child.kill(signal);
+  } catch {
+    try { child.kill(signal); } catch { /* child already exited */ }
   }
 }
 

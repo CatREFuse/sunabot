@@ -1597,7 +1597,7 @@ function inspectProtectedDatabaseState(workspace, definition) {
   const queuePath = safeWorkspaceChild(workspace, definition.queue);
   return {
     applicationLogicalSha256: databaseLogicalSha256(applicationPath),
-    applicationWithoutMemorySha256: databaseLogicalSha256(applicationPath, { excludeTables: new Set(["memory_records"]) }),
+    applicationWithoutMemorySha256: databaseLogicalSha256(applicationPath, { excludeTables: memoryMutationTables() }),
     applicationFileSha256: sha256File(applicationPath),
     queueLogicalSha256: databaseLogicalSha256(queuePath),
     queueFileSha256: sha256File(queuePath)
@@ -3020,7 +3020,7 @@ function inspectDatabaseBinding(workspace, agentId, kind, relative) {
     fileSha256: sha256File(absolute),
     logicalSha256: databaseLogicalSha256(absolute),
     withoutMemorySha256: kind === "application"
-      ? databaseLogicalSha256(absolute, { excludeTables: new Set(["memory_records"]) })
+      ? databaseLogicalSha256(absolute, { excludeTables: memoryMutationTables() })
       : null,
     memoryBaselineSha256: kind === "application"
       ? applicationMemoryBaselineSha256(absolute)
@@ -3130,12 +3130,16 @@ function migrationRecoveryInspectionExtension({ database, definition }) {
   return {
     logicalSha256: databaseLogicalSha256FromOpenDatabase(database),
     withoutMemorySha256: definition.kind === "application"
-      ? databaseLogicalSha256FromOpenDatabase(database, { excludeTables: new Set(["memory_records"]) })
+      ? databaseLogicalSha256FromOpenDatabase(database, { excludeTables: memoryMutationTables() })
       : null,
     memoryBaselineSha256: definition.kind === "application"
       ? applicationMemoryBaselineSha256FromOpenDatabase(database)
       : null
   };
+}
+
+function memoryMutationTables() {
+  return new Set(["memory_records", "memory_source_revisions"]);
 }
 
 function recoveryDatabaseBindingsFromVerification(verified) {

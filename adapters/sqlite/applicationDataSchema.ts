@@ -23,6 +23,25 @@ export function migrateApplicationDataSchema(database: DatabaseSync, modelCalls:
     CREATE UNIQUE INDEX IF NOT EXISTS memory_records_source_record_id
       ON memory_records(source, record_id) WHERE record_id IS NOT NULL AND record_id <> '';
     CREATE INDEX IF NOT EXISTS memory_records_source_position ON memory_records(source, position);
+    CREATE TABLE IF NOT EXISTS memory_source_revisions (
+      source TEXT PRIMARY KEY CHECK (source IN ('working', 'long_term', 'user_profile')),
+      revision INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0)
+    ) STRICT;
+    INSERT OR IGNORE INTO memory_source_revisions (source, revision) VALUES
+      ('working', 0), ('long_term', 0), ('user_profile', 0);
+    CREATE TRIGGER IF NOT EXISTS memory_records_revision_insert
+      AFTER INSERT ON memory_records BEGIN
+        UPDATE memory_source_revisions SET revision = revision + 1 WHERE source = NEW.source;
+      END;
+    CREATE TRIGGER IF NOT EXISTS memory_records_revision_update
+      AFTER UPDATE ON memory_records BEGIN
+        UPDATE memory_source_revisions SET revision = revision + 1 WHERE source = OLD.source;
+        UPDATE memory_source_revisions SET revision = revision + 1 WHERE source = NEW.source AND NEW.source <> OLD.source;
+      END;
+    CREATE TRIGGER IF NOT EXISTS memory_records_revision_delete
+      AFTER DELETE ON memory_records BEGIN
+        UPDATE memory_source_revisions SET revision = revision + 1 WHERE source = OLD.source;
+      END;
     CREATE TABLE IF NOT EXISTS memory_batches (
       batch_id TEXT PRIMARY KEY,
       result_json TEXT NOT NULL CHECK (json_valid(result_json)),
@@ -230,6 +249,9 @@ export function migrateApplicationDataSchema(database: DatabaseSync, modelCalls:
   }
   if (!Number.isSafeInteger(repairedVersion) || repairedVersion < 16) {
     setMetadata(database, "storage-schema-version", "16");
+  }
+  if (!Number.isSafeInteger(repairedVersion) || repairedVersion < 17) {
+    setMetadata(database, "storage-schema-version", "17");
   }
 }
 

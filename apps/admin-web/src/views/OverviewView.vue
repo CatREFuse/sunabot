@@ -7,7 +7,7 @@ import { useRuntimeStatus } from "../composables/useRuntimeStatus";
 import { useAgents } from "../composables/useAgents";
 import { formatFullDateTime } from "../utils/format";
 import { formatDashboardMetric, formatExactNumber } from "../utils/numberFormat";
-import type { AgentAccount, ConversationRecord, ImageHistoryRecord, OneBotChatList, OneBotLoginCheck, TokenUsageFilters, TokenUsagePayload } from "../types";
+import type { AgentAccount, OneBotChatList, OneBotLoginCheck, TokenUsageFilters, TokenUsagePayload } from "../types";
 import PageHeader from "../components/ui/PageHeader.vue";
 import DiagnosticsDrawer from "../components/overview/DiagnosticsDrawer.vue";
 import OneBotLoginDialog from "../components/overview/OneBotLoginDialog.vue";
@@ -129,15 +129,16 @@ async function loadOverviewDetails() {
     statusAccount
       ? apiRequest<OneBotLoginCheck>(`${accountApiBaseFor(statusAccount)}/login/status`)
       : Promise.resolve({ connected: false, online: false } as OneBotLoginCheck),
-    apiRequest<{ conversations: ConversationRecord[] }>("/api/conversations"),
-    apiRequest<{ images: ImageHistoryRecord[] }>("/api/images"),
+    apiRequest<{ conversations: number; images: number }>("/api/overview/summary"),
     Promise.resolve().then(() => apiRequest<TokenUsagePayload>(tokenUsageUrl()))
   ]);
   if (results[0].status === "fulfilled" && selectedAccountKey.value === statusAccountKey) qqStatus.value = results[0].value;
-  if (results[1].status === "fulfilled") conversationCount.value = results[1].value.conversations.length;
-  if (results[2].status === "fulfilled") imageCount.value = results[2].value.images.length;
-  if (results[3].status === "fulfilled") tokenUsage.value = results[3].value;
-  const names = ["QQ 状态", "会话", "图像", "Token"];
+  if (results[1].status === "fulfilled") {
+    conversationCount.value = results[1].value.conversations;
+    imageCount.value = results[1].value.images;
+  }
+  if (results[2].status === "fulfilled") tokenUsage.value = results[2].value;
+  const names = ["QQ 状态", "概览", "Token"];
   overviewError.value = results.flatMap((result, index) => result.status === "rejected"
     && (index !== 0 || selectedAccountKey.value === statusAccountKey)
     ? [`${names[index]}: ${result.reason instanceof Error ? result.reason.message : "读取失败"}`]

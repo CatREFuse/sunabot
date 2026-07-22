@@ -13,7 +13,7 @@ export const FIRST_RUN_JOURNAL = "runtime/first-run-bootstrap.json";
 const FIRST_RUN_SIGNING_KEY = "secrets/first-run-bootstrap.key";
 const COMPLETED_REPORT = "runtime/first-run-bootstrap.completed.json";
 const BOUNDARIES = ["marker", "main", "queue", "manifest", "registration", "account-runtime"];
-const MAIN_SCHEMA_VERSION = 16;
+const MAIN_SCHEMA_VERSION = 17;
 const QUEUE_SCHEMA_VERSION = 5;
 const MAIN_TABLES = [
   "admin_sessions",
@@ -34,6 +34,7 @@ const MAIN_TABLES = [
   "memory_recall_receipts",
   "memory_recall_stats",
   "memory_records",
+  "memory_source_revisions",
   "memory_scheduler",
   "model_call_aggregates",
   "model_call_model_aggregates",
@@ -292,8 +293,9 @@ function validateMainSchema(database) {
   requireColumns(database, "scheduled_task_runs", [
     "id", "task_id", "task_revision", "scheduled_for", "status", "snapshot_json", "result_text",
     "error_text", "attempts", "worker_id", "lease_until", "created_at", "updated_at",
-    "generated_at", "completed_at"
+    "generated_at", "completed_at", "delivery_attempts", "last_delivery_error", "next_delivery_at"
   ]);
+  requireColumns(database, "memory_source_revisions", ["source", "revision"]);
   requireIndexes(database, "agent_accounts", ["agent_accounts_agent", "agent_accounts_webui_port"]);
   requireIndexes(database, "emojis", ["emojis_updated_at"]);
   requireIndexes(database, "emoji_versions", ["emoji_versions_key_created_at"]);
@@ -373,6 +375,16 @@ function validateMainSchema(database) {
     "check (attempts >= 0)",
     "unique (task_id, scheduled_for)"
   ]);
+  requireSchemaSql(database, "memory_source_revisions", [
+    "strict",
+    "source in ('working', 'long_term', 'user_profile')",
+    "check (revision >= 0)"
+  ]);
+  requireTriggers(database, [
+    "memory_records_revision_insert",
+    "memory_records_revision_update",
+    "memory_records_revision_delete"
+  ]);
 }
 
 function validateQueueSchema(database) {
@@ -423,6 +435,14 @@ function requireIndexes(database, table, expected) {
   const indexes = new Set(database.prepare(`PRAGMA index_list(${table})`).all().map((row) => String(row.name)));
   const missing = expected.filter((index) => !indexes.has(index));
   if (missing.length > 0) throw new Error(`${table} missing indexes: ${missing.join(", ")}`);
+}
+
+function requireTriggers(database, expected) {
+  const triggers = new Set(database.prepare(
+    "SELECT name FROM sqlite_schema WHERE type = 'trigger'"
+  ).all().map((row) => String(row.name)));
+  const missing = expected.filter((trigger) => !triggers.has(trigger));
+  if (missing.length > 0) throw new Error(`missing triggers: ${missing.join(", ")}`);
 }
 
 function requireIndexSql(database, index, fragments) {

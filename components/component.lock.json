@@ -1,15 +1,15 @@
 {
   "$schema": "./component-lock.schema.json",
   "schemaVersion": 1,
-  "supportedPlatforms": ["linux/amd64"],
+  "supportedPlatforms": ["linux/amd64", "linux/arm64"],
   "components": {
     "node": {
       "version": "24.18.0",
       "source": "https://hub.docker.com/_/node",
       "image": "docker.io/library/node:24.18.0-bookworm-slim",
-      "digest": "sha256:0778d035a13f3f3833b7f2cb750e0df6cbce45583e84fd822f499f0c902a6c74",
+      "digest": "sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d",
       "license": "MIT",
-      "architectures": ["linux/amd64"],
+      "architectures": ["linux/amd64", "linux/arm64"],
       "smoke": ["node", "--version"]
     },
     "napcat": {
@@ -46,7 +46,7 @@
       "package": "fonts-noto-cjk",
       "distribution": "debian-bookworm",
       "license": "OFL-1.1",
-      "architectures": ["linux/amd64"],
+      "architectures": ["linux/amd64", "linux/arm64"],
       "smoke": ["test", "-d", "/usr/share/fonts/opentype/noto"]
     },
     "tini": {
@@ -55,7 +55,7 @@
       "package": "tini",
       "distribution": "debian-bookworm",
       "license": "MIT",
-      "architectures": ["linux/amd64"],
+      "architectures": ["linux/amd64", "linux/arm64"],
       "smoke": ["tini", "--version"]
     },
     "bubblewrap": {
@@ -64,7 +64,7 @@
       "package": "bubblewrap",
       "distribution": "debian-bookworm",
       "license": "LGPL-2.0-or-later",
-      "architectures": ["linux/amd64"],
+      "architectures": ["linux/amd64", "linux/arm64"],
       "smoke": ["bwrap", "--version"]
     },
     "codex-cli": {
@@ -73,7 +73,7 @@
       "package": "@openai/codex",
       "integrity": "sha512-wr2fRE+fzW0CjEbfFsLh1ftarVEcw0CMLWS7QyA0nyOz5qacQPVq3cq2+/U7oEbwm1TOqoi0Fm1nxniB5FkpmA==",
       "license": "Apache-2.0",
-      "architectures": ["linux/amd64"],
+      "architectures": ["linux/amd64", "linux/arm64"],
       "smoke": ["codex", "--version"]
     }
   }

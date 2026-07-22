@@ -131,6 +131,7 @@ describe("NapCat runtime layout", () => {
       compose.lastIndexOf("\nnetworks:\n")
     );
     expect(coreService).toContain('profiles: ["core-docker"]');
+    expect(coreService).toContain("platform: ${SUNABOT_CORE_PLATFORM:-linux/amd64}");
     expect(coreService).toContain(":/srv/sunabot/workspace");
     expect(napcatService).not.toContain("platform: linux/amd64");
     expect(napcatService).not.toContain("env_file:");

@@ -28,6 +28,7 @@ export interface CodexCoordinatorSettings {
 export interface SessionClaimState {
   readonly controller: AbortController;
   finalized: boolean;
+  finalizationAttempted: boolean;
   stopRenewal: () => void;
 }
 

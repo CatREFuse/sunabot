@@ -8,6 +8,7 @@ import {
   type VoiceProfileV1,
   type VoiceSynthesisClient,
 } from "../../../services/voice/public.js";
+import { requestAgentId } from "../requestAgentId.js";
 
 const openObject = { type: "object", additionalProperties: true } as const;
 const passthroughBody = {} as const;
@@ -216,17 +217,7 @@ function providerError(error: unknown) {
 }
 
 function repositoryFor(options: VoiceProfileRouteOptions, query: unknown) {
-  return options.repository(
-    requestAgentId(query, options.defaultAgentId?.() ?? "plana"),
-  );
-}
-
-function requestAgentId(query: unknown, defaultAgentId: string) {
-  const value =
-    query && typeof query === "object"
-      ? (query as { agentId?: unknown }).agentId
-      : undefined;
-  return String(value ?? defaultAgentId).trim() || defaultAgentId;
+  return options.repository(requestAgentId(query));
 }
 
 function requestLanguage(params: unknown): VoiceLanguage {

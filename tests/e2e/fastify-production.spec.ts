@@ -75,13 +75,13 @@ test("Fastify 生产服务提供静态资源、深链接回退与管理鉴权", 
   expect(asset.status()).toBe(200);
   expect(asset.headers()["content-type"]).toContain("javascript");
 
-  const unauthorized = await request.get(`${origin}/api/status`, {
+  const unauthorized = await request.get(`${origin}/api/status?agentId=plana`, {
     headers: { "x-forwarded-for": "203.0.113.9" }
   });
   expect(unauthorized.status()).toBe(401);
   expect((await unauthorized.json()).error.code).toBe("ADMIN_UNAUTHORIZED");
 
-  const authorized = await request.get(`${origin}/api/status`, {
+  const authorized = await request.get(`${origin}/api/status?agentId=plana`, {
     headers: {
       "x-forwarded-for": "203.0.113.9",
       authorization: "Bearer fastify-production-token"

@@ -66,6 +66,34 @@ describe("ScheduledTaskList", () => {
     expect(wrapper.text()).toContain("还没有导演任务");
     expect(wrapper.findAll("button").some((button) => button.text().includes("新建任务"))).toBe(false);
   });
+
+  it("offers manual replay for a terminal delivery failure", async () => {
+    const failed = {
+      ...task("failed", 0),
+      lastRunId: "run-1",
+      deliveryAttempts: 3,
+      nextDeliveryAt: undefined,
+      canReplayDelivery: true,
+      lastError: "目标不可用"
+    };
+    const wrapper = mount(ScheduledTaskList, {
+      props: {
+        tasks: [failed],
+        category: "all",
+        loading: false,
+        mutationBusy: false,
+        deletingId: "",
+        togglingId: "",
+        retainingId: ""
+      }
+    });
+
+    expect(wrapper.text()).toContain("已尝试投递 3 次");
+    const replay = wrapper.findAll("button").find((button) => button.text().includes("重放投递"));
+    expect(replay).toBeDefined();
+    await replay!.trigger("click");
+    expect(wrapper.emitted("replay")?.[0]).toEqual([failed]);
+  });
 });
 
 function task(lastRunStatus: string, index: number): ScheduledTask {
@@ -80,6 +108,7 @@ function task(lastRunStatus: string, index: number): ScheduledTask {
     permanentRetention: false,
     archived: false,
     director: false,
+    canReplayDelivery: false,
     createdAt: "2026-07-19T00:00:00.000Z",
     updatedAt: "2026-07-19T00:00:00.000Z",
     lastRunStatus

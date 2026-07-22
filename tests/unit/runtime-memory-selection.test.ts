@@ -104,9 +104,10 @@ describe("runtime group memory selection", () => {
         updatedAt: "2026-07-18T00:00:00.000Z"
       }
     });
-    expect(applicationDataStore(runtime.config).commitMemoryBatch({
+    const memoryStore = applicationDataStore(runtime.config);
+    expect(memoryStore.commitMemoryBatch({
       batchId,
-      baselineWorking: [],
+      baselineRevisions: memoryStore.readMemorySnapshot().revisions,
       working: [],
       longTerm: [],
       userProfile: [],

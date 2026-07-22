@@ -6,6 +6,10 @@ import {
   parsePublicWebUrl,
   resolvePublicWebTarget
 } from "../../adapters/webfetch/urlPolicy.js";
+import { fetchSafeHtml } from "../../adapters/webfetch/safeHttpFetcher.js";
+import { RendererLimiter, RendererQueueFullError } from "../../apps/webfetch-renderer/rendererLimiter.js";
+import { rejectConnect } from "../../apps/webfetch-renderer/safeProxy.js";
+import type { Duplex } from "node:stream";
 import {
   LOCAL_DATA_OUTBOUND_TURN_CONFLICT_ERROR,
   preflightProviderToolResponse
@@ -152,6 +156,42 @@ describe("WebFetch URL policy", () => {
       async () => [],
       fetchImpl as typeof fetch
     )).resolves.toEqual([{ address: "93.184.216.34", family: 4 }]);
+  });
+
+  it("includes DNS resolution in the static fetch deadline", async () => {
+    const lookup = vi.fn((_hostname: string, signal?: AbortSignal) => new Promise<never>((_resolve, reject) => {
+      signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+    }));
+
+    await expect(fetchSafeHtml("https://dns-timeout.test/", {
+      lookup,
+      timeoutMs: 20
+    })).rejects.toMatchObject({ code: "FETCH_TIMEOUT" });
+    expect(lookup).toHaveBeenCalledWith("dns-timeout.test", expect.any(AbortSignal));
+  });
+});
+
+describe("WebFetch renderer resource boundaries", () => {
+  it("bounds queued renders and removes an aborted waiter", async () => {
+    const limiter = new RendererLimiter(1, 1);
+    let release!: () => void;
+    const active = limiter.run(() => new Promise<void>((resolve) => { release = resolve; }));
+    const controller = new AbortController();
+    const queued = limiter.run(async () => undefined, controller.signal);
+
+    await expect(limiter.run(async () => undefined)).rejects.toBeInstanceOf(RendererQueueFullError);
+    controller.abort(new Error("client disconnected"));
+    await expect(queued).rejects.toThrow("client disconnected");
+    release();
+    await active;
+    await expect(limiter.run(async () => "next")).resolves.toBe("next");
+    limiter.close();
+  });
+
+  it("rejects HTTPS CONNECT tunnels", () => {
+    const end = vi.fn();
+    rejectConnect({ end } as unknown as Duplex);
+    expect(end).toHaveBeenCalledWith(expect.stringContaining("405 Method Not Allowed"));
   });
 });
 

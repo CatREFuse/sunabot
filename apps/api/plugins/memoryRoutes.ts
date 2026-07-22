@@ -10,6 +10,7 @@ import {
 } from "../../../services/memory/public.js";
 import type { AppConfig } from "../../../src/types.js";
 import type { DreamHistoryEnvelope, DreamHistoryItem } from "../../../services/memory/dream/public.js";
+import { requestAgentId } from "../requestAgentId.js";
 
 const openObject = { type: "object", additionalProperties: true } as const;
 const sourceQuery = {
@@ -178,11 +179,6 @@ export function registerMemoryRoutes(app: FastifyInstance, dependencies: MemoryR
     await runtime.reload(config);
     return result;
   });
-}
-
-function requestAgentId(query: unknown) {
-  const value = query && typeof query === "object" ? (query as { agentId?: unknown }).agentId : undefined;
-  return String(value ?? "plana").trim() || "plana";
 }
 
 function dreamTriggerError(error: unknown) {

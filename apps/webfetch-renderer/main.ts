@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import Fastify from "fastify";
 import { chromium, type Browser, type Page } from "playwright";
 import { resolvePublicWebTarget } from "../../adapters/webfetch/urlPolicy.js";
+import { RendererLimiter, RendererQueueFullError } from "./rendererLimiter.js";
 import { startSafeWebProxy } from "./safeProxy.js";
 
 const HOST = process.env.SUNABOT_WEBFETCH_RENDERER_HOST?.trim() || "0.0.0.0";
@@ -9,27 +10,12 @@ const PORT = readPort(process.env.SUNABOT_WEBFETCH_RENDERER_PORT, 8790);
 const MAX_DOM_BYTES = 4 * 1024 * 1024;
 const NAVIGATION_TIMEOUT_MS = 12_000;
 const MAX_CONCURRENCY = 2;
+const MAX_QUEUED_RENDERS = 16;
 const CHROMIUM_SANDBOX = readChromiumSandbox(process.env.SUNABOT_WEBFETCH_CHROMIUM_SANDBOX);
 const blockedResourceTypes = new Set(["image", "media", "font"]);
 
-class RendererLimiter {
-  private active = 0;
-  private readonly waiters: Array<() => void> = [];
-  constructor(private readonly limit: number) {}
-  async run<T>(operation: () => Promise<T>) {
-    if (this.active >= this.limit) await new Promise<void>((resolve) => this.waiters.push(resolve));
-    this.active += 1;
-    try {
-      return await operation();
-    } finally {
-      this.active -= 1;
-      this.waiters.shift()?.();
-    }
-  }
-}
-
 const app = Fastify({ logger: false, bodyLimit: 8 * 1024 });
-const limiter = new RendererLimiter(MAX_CONCURRENCY);
+const limiter = new RendererLimiter(MAX_CONCURRENCY, MAX_QUEUED_RENDERS);
 const proxy = await startSafeWebProxy();
 const browser = await launchBrowser(proxy.url);
 let shuttingDown = false;
@@ -57,17 +43,33 @@ app.post<{ Body: { url?: unknown } }>("/render", async (request, reply) => {
     reply.code(400).send({ ok: false, code: "URL_NOT_ALLOWED" });
     return;
   }
+  if (new URL(url).protocol === "https:") {
+    reply.code(422).send({ ok: false, code: "DYNAMIC_HTTPS_DISABLED" });
+    return;
+  }
+  const controller = new AbortController();
+  const abort = () => controller.abort(new Error("Renderer client disconnected."));
+  request.raw.once("aborted", abort);
+  reply.raw.once("close", abort);
   try {
-    const result = await limiter.run(() => render(browser, url));
+    const result = await limiter.run(() => render(browser, proxy, url, controller.signal), controller.signal);
     reply.code(200).send(result);
-  } catch {
-    reply.code(502).send({ ok: false, code: "DYNAMIC_RENDER_FAILED" });
+  } catch (error) {
+    if (error instanceof RendererQueueFullError) {
+      reply.code(429).send({ ok: false, code: "RENDER_QUEUE_FULL" });
+    } else if (!controller.signal.aborted) {
+      reply.code(502).send({ ok: false, code: "DYNAMIC_RENDER_FAILED" });
+    }
+  } finally {
+    request.raw.off("aborted", abort);
+    reply.raw.off("close", abort);
   }
 });
 
 const shutdown = async () => {
   if (shuttingDown) return;
   shuttingDown = true;
+  limiter.close();
   await app.close().catch(() => undefined);
   await browser.close().catch(() => undefined);
   await proxy.close().catch(() => undefined);
@@ -103,7 +105,13 @@ async function launchBrowser(proxyUrl: string) {
   });
 }
 
-async function render(browserInstance: Browser, url: string) {
+async function render(
+  browserInstance: Browser,
+  safeProxy: Awaited<ReturnType<typeof startSafeWebProxy>>,
+  url: string,
+  signal: AbortSignal
+) {
+  const budget = safeProxy.openBudget();
   const context = await browserInstance.newContext({
     acceptDownloads: false,
     serviceWorkers: "block",
@@ -113,6 +121,8 @@ async function render(browserInstance: Browser, url: string) {
     userAgent: "Sunabot-WebFetch-Renderer/1.0"
   });
   const page = await context.newPage();
+  const abort = () => void context.close().catch(() => undefined);
+  signal.addEventListener("abort", abort, { once: true });
   page.on("popup", (popup) => void popup.close());
   // Install the policy at context scope so popup pages cannot create an
   // unfiltered network path before the popup close handler runs.
@@ -126,17 +136,19 @@ async function render(browserInstance: Browser, url: string) {
     let parsed: URL;
     try {
       parsed = new URL(request.url());
-      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new Error("protocol");
-      await resolvePublicWebTarget(parsed);
+      if (parsed.protocol !== "http:") throw new Error("protocol");
+      await resolvePublicWebTarget(parsed, undefined, signal);
     } catch {
       await route.abort("blockedbyclient");
       return;
     }
     const headers = { ...request.headers() };
     for (const key of ["authorization", "cookie", "proxy-authorization", "origin", "referer"]) delete headers[key];
+    headers["x-sunabot-render-budget"] = budget.id;
     await route.continue({ headers });
   });
   try {
+    if (signal.aborted) throw signal.reason ?? new Error("Renderer request aborted.");
     const deadline = Date.now() + NAVIGATION_TIMEOUT_MS;
     const navigation = await page.goto(url, { waitUntil: "domcontentloaded", timeout: NAVIGATION_TIMEOUT_MS });
     // The renderer is only an HTML acquisition path.  Do not hand a browser
@@ -149,12 +161,15 @@ async function render(browserInstance: Browser, url: string) {
       timeout: Math.min(4_000, Math.max(1, deadline - Date.now()))
     }).catch(() => undefined);
     await waitForStableBody(page, deadline);
-    const finalUrl = (await resolvePublicWebTarget(page.url())).url.href;
+    if (signal.aborted) throw signal.reason ?? new Error("Renderer request aborted.");
+    const finalUrl = (await resolvePublicWebTarget(page.url(), undefined, signal)).url.href;
     const html = await page.content();
     if (Buffer.byteLength(html, "utf8") > MAX_DOM_BYTES) throw new Error("rendered DOM too large");
     return { html, finalUrl };
   } finally {
+    signal.removeEventListener("abort", abort);
     await context.close();
+    budget.close();
   }
 }
 

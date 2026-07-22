@@ -862,14 +862,12 @@ test("工具目录支持启停、全局说明和继承说明恢复", async ({ pa
   }
 
   const bashRow = page.locator("article").filter({ has: page.getByText("workspace_bash", { exact: true }) });
-  await expect(bashRow.getByText("管理员私聊 Native · 群聊与其他私聊 Docker", { exact: true })).toBeVisible();
-  await expect(bashRow.getByText("[native bash] 不可用", { exact: true })).toBeVisible();
-  await expect(bashRow.getByText("[docker bash] 已启动", { exact: true })).toBeVisible();
+  await expect(bashRow.getByText("全部 QQ 会话 Docker", { exact: true })).toBeVisible();
+  await expect(bashRow.getByText("Docker Bash 已启动", { exact: true })).toBeVisible();
   await bashRow.getByRole("button", { name: "查看 Bash 详情" }).click();
   const bashDialog = page.getByRole("dialog", { name: "Bash" });
   await expect(bashDialog.getByText("适用会话", { exact: true })).toBeVisible();
-  await expect(bashDialog.getByText("[native bash]", { exact: true })).toBeVisible();
-  await expect(bashDialog.getByText("[docker bash]", { exact: true })).toBeVisible();
+  await expect(bashDialog.getByText("Docker Bash", { exact: true })).toBeVisible();
   await bashDialog.getByRole("button", { name: "关闭工具详情" }).click();
   await expect(page.locator('[data-slot="settings-auto-save-status"]')).toHaveCount(0);
   await expect(page.getByLabel("启用 Bash")).toBeChecked();
@@ -963,7 +961,7 @@ test("提示词库列出全部文件并支持快捷保存与冲突恢复", async
   await expect(fileList.getByRole("button")).toHaveCount(18);
   expect(state.promptOverrides.plana).toBe(true);
   const editor = page.getByLabel("提示词正文");
-  await expect(editor).toHaveValue(/冷静、诚实、可靠/);
+  await expect(editor).toContainText("冷静、诚实、可靠");
 
   await editor.fill("清醒、可靠、坦诚。\n");
   await editor.press("Control+s");
@@ -981,7 +979,7 @@ test("提示词库列出全部文件并支持快捷保存与冲突恢复", async
   await expect(conflictAlert).toContainText("保留当前内容后可再次保存，或加载服务器版本并放弃当前修改。");
 
   await conflictAlert.getByRole("button", { name: "保留当前内容" }).click();
-  await expect(editor).toHaveValue("保留本地版本。\n");
+  await expect(editor).toContainText("保留本地版本。");
   await expect(conflictAlert).toBeHidden();
   await page.getByRole("button", { name: "保存", exact: true }).click();
   await expect.poll(() => state.fileWrites.length).toBe(3);
@@ -993,7 +991,7 @@ test("提示词库列出全部文件并支持快捷保存与冲突恢复", async
   await page.getByRole("button", { name: "保存", exact: true }).click();
   await expect(conflictAlert).toBeVisible();
   await conflictAlert.getByRole("button", { name: "加载服务器版本" }).click();
-  await expect(editor).toHaveValue("服务器最新内容。\n");
+  await expect(editor).toContainText("服务器最新内容。");
   await expect(conflictAlert).toBeHidden();
   await expect(page.getByRole("button", { name: "保存", exact: true })).toBeDisabled();
 
@@ -1045,17 +1043,17 @@ test("宽屏提示词可调整变量表宽度", async ({ page }) => {
     { borderWidth: "1px", borderRadius: "8px" }
   ]);
 
-  const selectionStyle = await page.getByLabel("提示词正文").evaluate((element) => {
-    const style = getComputedStyle(element, "::selection");
-    return {
-      background: style.backgroundColor,
-      color: style.color,
-      textFillColor: style.webkitTextFillColor
-    };
-  });
+  const promptEditor = page.getByLabel("提示词正文");
+  await promptEditor.press("ControlOrMeta+a");
+  const selectionStyle = await page.locator(".prompt-field__editor .cm-selectionBackground").first().evaluate((element) => ({
+    background: getComputedStyle(element).backgroundColor,
+    contentLayers: element.closest(".prompt-field__editor")?.querySelectorAll(".cm-content").length ?? 0,
+    legacyLayers: element.closest(".prompt-field__editor")?.querySelectorAll("textarea, .prompt-field__highlight").length ?? 0
+  }));
   expect(selectionStyle.background).toContain("215, 25, 33");
-  expect(selectionStyle.color).not.toBe("rgba(0, 0, 0, 0)");
-  expect(selectionStyle.textFillColor).not.toBe("transparent");
+  expect(selectionStyle.contentLayers).toBe(1);
+  expect(selectionStyle.legacyLayers).toBe(0);
+  await promptEditor.press("ArrowLeft");
 
   await splitter.focus();
   await splitter.press("ArrowLeft");
@@ -1067,14 +1065,11 @@ test("宽屏提示词可调整变量表宽度", async ({ page }) => {
 
   const editor = page.getByLabel("提示词正文");
   await editor.fill(`${Array.from({ length: 80 }, (_, index) => `第 ${index + 1} 行`).join("\n")}\n@{persona.preference}\n@{persona.preference}\n`);
-  await editor.evaluate((element) => {
-    element.scrollTop = 240;
-    element.setSelectionRange(8, 8);
-    element.dispatchEvent(new Event("scroll"));
-  });
-  const scrollTop = await editor.evaluate((element) => element.scrollTop);
+  const scroller = editor.locator("xpath=..");
+  await scroller.evaluate((element) => { element.scrollTop = 240; });
+  const scrollTop = await scroller.evaluate((element) => element.scrollTop);
   await variableTable.getByRole("button", { name: /persona\.agents/ }).click();
-  await expect.poll(() => editor.evaluate((element) => element.scrollTop)).toBe(scrollTop);
+  await expect.poll(() => scroller.evaluate((element) => element.scrollTop)).toBe(scrollTop);
   const referencedVariable = variableTable.getByRole("button", { name: /persona\.preference/ });
   await expect(referencedVariable).toContainText("×2");
   await expect(variableTable).toContainText("已引用 2 / 10");
@@ -1095,10 +1090,10 @@ test("最终请求支持消息组、排序、结构测试和 JSON 存储同步",
 
   await page.getByTitle("插入变量时自动添加 XML 标签").click();
   await systemPrompt.click();
-  await systemPrompt.press("Control+End");
+  await systemPrompt.press("ControlOrMeta+ArrowDown");
   await systemPrompt.type("\n@当前用户");
   await page.getByRole("option", { name: /当前用户/ }).click();
-  await expect(systemPrompt).toHaveValue(/<user_input>@\{user\.input\}<\/user_input>/);
+  await expect(systemPrompt).toContainText("<user_input>@{user.input}</user_input>");
 
   await page.getByRole("tab", { name: "消息组 2" }).click();
   await expect(page.getByLabel("消息组变量")).toHaveValue("messages_64");
@@ -1159,15 +1154,13 @@ test("最终提示词在不同宽度保持单槽位双栏编辑", async ({ page 
   const systemPrompt = page.getByRole("textbox", { name: "system 提示词" });
   const beforeInsert = `${Array.from({ length: 80 }, (_, index) => `line ${index + 1}`).join("\n")}\n`;
   await systemPrompt.fill(beforeInsert);
-  await systemPrompt.evaluate((element) => {
-    element.scrollTop = 320;
-    element.setSelectionRange(element.value.length, element.value.length);
-    element.dispatchEvent(new Event("scroll"));
-  });
-  const scrollTop = await systemPrompt.evaluate((element) => element.scrollTop);
+  const systemScroller = systemPrompt.locator("xpath=..");
+  await systemScroller.evaluate((element) => { element.scrollTop = 320; });
+  const scrollTop = await systemScroller.evaluate((element) => element.scrollTop);
   await variableTable.getByRole("button", { name: /@\{conversation\.messages\}/ }).click();
-  await expect(systemPrompt).toHaveValue(`${beforeInsert}@{conversation.messages}`);
-  await expect.poll(() => systemPrompt.evaluate((element) => element.scrollTop)).toBe(scrollTop);
+  await expect.poll(() => systemScroller.evaluate((element) => element.scrollTop)).toBe(scrollTop);
+  await systemPrompt.press("ControlOrMeta+ArrowDown");
+  await expect(systemPrompt).toContainText("@{conversation.messages}");
 
   await page.getByRole("button", { name: "保存", exact: true }).click();
   await expect(page.getByText("已保存", { exact: true })).toBeVisible();
@@ -1309,7 +1302,7 @@ test("独立会话设置自动同步并在失败时保留当前输入", async ({
   await expect(page.getByRole("button", { name: /保存|放弃/ })).toHaveCount(0);
 });
 
-test("页面加载完成后切换路由不再等待新的脚本分块", async ({ page }) => {
+test("路由按需加载对应脚本分块", async ({ page }) => {
   await installMockApi(page);
   await page.goto("/overview");
   await expect(page.getByRole("heading", { name: "状态" })).toBeVisible();
@@ -1317,15 +1310,16 @@ test("页面加载完成后切换路由不再等待新的脚本分块", async ({
   const lateChunks: string[] = [];
   await page.route("**/assets/*.js", async (route) => {
     lateChunks.push(route.request().url());
-    await new Promise((resolve) => setTimeout(resolve, 2_000));
+    await new Promise((resolve) => setTimeout(resolve, 150));
     await route.continue();
   });
 
   await page.getByRole("link", { name: "日志", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "日志" })).toBeVisible({ timeout: 750 });
+  await expect(page.getByRole("heading", { name: "日志" })).toBeVisible();
   await page.getByRole("link", { name: "图像", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "图像" })).toBeVisible({ timeout: 750 });
-  expect(lateChunks).toEqual([]);
+  await expect(page.getByRole("heading", { name: "图像" })).toBeVisible();
+  expect(lateChunks.some((url) => /\/LogsView-[^/]+\.js$/u.test(url))).toBe(true);
+  expect(lateChunks.some((url) => /\/ImagesView-[^/]+\.js$/u.test(url))).toBe(true);
 });
 
 test("浅色、深色与系统主题可切换并持久化", async ({ page }) => {
@@ -1548,10 +1542,11 @@ test("图像页提供自拍参考图、历史、预览、下载和可见错误",
   expect(requests).not.toContain("/api/playground/image");
   await expect(page.locator('.authenticated-image[data-state="ready"]').first()).toBeVisible();
   const placeholderCount = placeholderRequests.filter((url) => url.includes("image-1.png")).length;
-  const overviewImages = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/images");
+  const historyRequestsBeforeOverview = requests.filter((pathname) => pathname === "/api/images").length;
   await page.getByRole("link", { name: "状态", exact: true }).click();
-  await overviewImages;
+  await expect(page.getByRole("heading", { name: "运行状态" })).toBeVisible();
   const historyRequestsAfterOverview = requests.filter((pathname) => pathname === "/api/images").length;
+  expect(historyRequestsAfterOverview).toBe(historyRequestsBeforeOverview);
   await page.getByRole("link", { name: "图像", exact: true }).click();
   await expect(page.getByRole("heading", { name: "生成历史" })).toBeVisible();
   expect(requests.filter((pathname) => pathname === "/api/images")).toHaveLength(historyRequestsAfterOverview);

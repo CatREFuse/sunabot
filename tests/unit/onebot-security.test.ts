@@ -167,6 +167,8 @@ describe("OneBot security boundaries", () => {
       data: { user_id: 22222 }
     });
     expect(firstMessage).not.toHaveBeenCalled();
+    await expect(gateway.sendAction("get_login_info", {})).rejects.toThrow("OneBot is not connected");
+    expect(firstMessage).not.toHaveBeenCalled();
 
     second.send(JSON.stringify({
       post_type: "message",

@@ -38,6 +38,22 @@ describe("OneBot outbound media adapter", () => {
     await fs.rm(temporaryDirectory, { recursive: true, force: true });
   });
 
+  it("always sends plain text as a structured segment", async () => {
+    const gateway = new OneBotGateway(
+      http.createServer(),
+      defaultConfig(),
+      { handleInboundMessage: vi.fn(async () => undefined) }
+    );
+    const sendAction = vi.spyOn(gateway, "sendAction").mockResolvedValue({ status: "ok" });
+
+    await gateway.sendPrivateMessage(99, "[CQ:at,qq=all]纯文本", "primary");
+
+    expect(sendAction.mock.calls[0]?.[1]).toMatchObject({
+      user_id: 99,
+      message: [{ type: "text", data: { text: "[CQ:at,qq=all]纯文本" } }]
+    });
+  });
+
   it("maps internal image assets to local paths when NapCat shares the filesystem", async () => {
     const gateway = new OneBotGateway(
       http.createServer(),

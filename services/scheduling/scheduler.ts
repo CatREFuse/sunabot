@@ -4,6 +4,7 @@ import type { ScheduledTaskStore } from "./scheduledTaskStore.js";
 const DEFAULT_LEASE_MS = 60_000;
 const MAX_DRAIN_ITEMS = 1_000;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
+const DELIVERY_RETRY_BASE_MS = 30_000;
 
 export interface ScheduledTaskSchedulerErrorContext {
   phase: "generate" | "deliver";
@@ -17,6 +18,7 @@ export interface ScheduledTaskSchedulerOptions {
   deliver: (run: ScheduledTaskRun, signal: AbortSignal) => Promise<void>;
   leaseMs?: number;
   clock?: () => Date;
+  random?: () => number;
   onError?: (error: unknown, context: ScheduledTaskSchedulerErrorContext) => void;
 }
 
@@ -32,6 +34,7 @@ export interface ScheduledTaskDrainResult {
 export class ScheduledTaskScheduler {
   private readonly clock: () => Date;
   private readonly leaseMs: number;
+  private readonly random: () => number;
   private started = false;
   private timer?: ReturnType<typeof setTimeout>;
   private wakeAt?: string;
@@ -40,6 +43,7 @@ export class ScheduledTaskScheduler {
 
   constructor(private readonly options: ScheduledTaskSchedulerOptions) {
     this.clock = options.clock ?? (() => new Date());
+    this.random = options.random ?? Math.random;
     this.leaseMs = positiveLease(options.leaseMs ?? DEFAULT_LEASE_MS);
     if (!options.workerId.trim()) throw new Error("Scheduled task scheduler workerId is required.");
   }
@@ -99,9 +103,12 @@ export class ScheduledTaskScheduler {
       if (!run) break;
       result.claimedRuns += 1;
       if (run.status === "generated") {
-        if (await this.deliver(run)) {
+        const delivery = await this.deliver(run);
+        if (delivery === "completed") {
           result.deliveredRuns += 1;
           result.completedRuns += 1;
+        } else if (delivery === "failed") {
+          result.failedRuns += 1;
         }
         continue;
       }
@@ -111,9 +118,12 @@ export class ScheduledTaskScheduler {
         continue;
       }
       result.generatedRuns += 1;
-      if (await this.deliver(generated)) {
+      const delivery = await this.deliver(generated);
+      if (delivery === "completed") {
         result.deliveredRuns += 1;
         result.completedRuns += 1;
+      } else if (delivery === "failed") {
+        result.failedRuns += 1;
       }
     }
     return result;
@@ -123,7 +133,7 @@ export class ScheduledTaskScheduler {
     const controller = new AbortController();
     this.activeController = controller;
     try {
-      const resultText = await this.withLeaseRenewal(run, () => this.options.generate(run, controller.signal));
+      const resultText = await this.withLeaseRenewal(run, controller, () => this.options.generate(run, controller.signal));
       if (controller.signal.aborted) return undefined;
       return this.options.store.markGenerated({
         runId: run.id,
@@ -151,30 +161,46 @@ export class ScheduledTaskScheduler {
     const controller = new AbortController();
     this.activeController = controller;
     try {
-      await this.withLeaseRenewal(run, () => this.options.deliver(run, controller.signal));
-      if (controller.signal.aborted) return false;
-      return Boolean(this.options.store.complete({
+      await this.withLeaseRenewal(run, controller, () => this.options.deliver(run, controller.signal));
+      if (controller.signal.aborted) return "retrying" as const;
+      return this.options.store.complete({
         runId: run.id,
         workerId: this.options.workerId,
         now: this.now()
-      }));
+      }) ? "completed" as const : "retrying" as const;
     } catch (error) {
-      if (!controller.signal.aborted) this.options.onError?.(error, { phase: "deliver", run });
-      return false;
+      if (controller.signal.aborted) return "retrying" as const;
+      const now = this.now();
+      const retryAt = new Date(now.getTime() + deliveryRetryDelay(run.deliveryAttempts + 1, this.random()));
+      const recorded = this.options.store.recordDeliveryFailure({
+        runId: run.id,
+        workerId: this.options.workerId,
+        errorText: errorMessage(error),
+        retryAt,
+        now
+      });
+      this.options.onError?.(error, { phase: "deliver", run });
+      return recorded?.terminal ? "failed" as const : "retrying" as const;
     } finally {
       if (this.activeController === controller) this.activeController = undefined;
     }
   }
 
-  private async withLeaseRenewal<T>(run: ScheduledTaskRun, operation: () => Promise<T>) {
+  private async withLeaseRenewal<T>(run: ScheduledTaskRun, controller: AbortController, operation: () => Promise<T>) {
     const delay = Math.max(25, Math.floor(this.leaseMs / 3));
     const timer = setInterval(() => {
-      this.options.store.renew({
-        runId: run.id,
-        workerId: this.options.workerId,
-        leaseMs: this.leaseMs,
-        now: this.now()
-      });
+      try {
+        const renewed = this.options.store.renew({
+          runId: run.id,
+          workerId: this.options.workerId,
+          leaseMs: this.leaseMs,
+          now: this.now()
+        });
+        if (!renewed) throw new Error("Scheduled task lease was lost.");
+      } catch (error) {
+        controller.abort(error);
+        this.options.onError?.(error, { phase: run.status === "generated" ? "deliver" : "generate", run });
+      }
     }, delay);
     timer.unref?.();
     try {
@@ -217,6 +243,12 @@ export class ScheduledTaskScheduler {
     }
     return new Date(date.getTime());
   }
+}
+
+function deliveryRetryDelay(attempt: number, random: number) {
+  if (!Number.isFinite(random) || random < 0 || random > 1) throw new Error("Scheduled task retry jitter is invalid.");
+  const base = Math.min(15 * 60_000, DELIVERY_RETRY_BASE_MS * 2 ** Math.max(0, attempt - 1));
+  return Math.round(base * (0.8 + random * 0.4));
 }
 
 function positiveLease(value: number) {

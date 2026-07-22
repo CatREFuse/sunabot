@@ -20,7 +20,6 @@ export const WORKSPACE_BASH_MCP_ROOT = "/mcp";
 const WORKSPACE_BASH_DOCKER_ENV_EXECUTABLE = "/usr/bin/env";
 const WORKSPACE_BASH_DOCKER_TEST_EXECUTABLE = "/usr/bin/test";
 const WORKSPACE_BASH_TARGET_PATH = "/usr/local/bin:/usr/bin:/bin";
-const WORKSPACE_BASH_NATIVE_HOST_PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
 const WORKSPACE_BASH_TARGET_ENVIRONMENT = [
   "HOME=/workbench",
   "PWD=/workbench",
@@ -103,11 +102,11 @@ export async function ensureWorkspaceBashIsolation(
   const platform = options.platform ?? process.platform;
   const runtimeMode = options.runtimeMode ?? process.env.SUNABOT_RUNTIME_MODE ?? "native";
   validateReadOnlyMounts(options.readOnlyMounts, workbenchRoot);
-  if (backend === "docker" && runtimeMode !== "docker") {
+  if (backend === "docker" && runtimeMode !== "docker" && platform !== "linux") {
     return ensureDockerSandbox(options);
   }
-  if (backend === "native" && platform === "darwin" && runtimeMode !== "docker") {
-    return ensureNativeHostBash(options);
+  if (backend === "native" && platform === "darwin") {
+    throw new WorkspaceBashIsolationError("Native host Bash is disabled because macOS has no enforced process isolation boundary.");
   }
   if (platform === "linux") {
     return ensureBubblewrapSandbox(workbenchRoot, environment, options);
@@ -161,43 +160,14 @@ export function buildWorkspaceBashInvocation(
 }
 
 export function buildHostNativeInvocation(
-  execution: WorkspaceBashExecution,
-  workbenchRoot: string,
-  environment: Readonly<Record<string, string>>,
-  executable = WORKSPACE_BASH_NATIVE_HOST_EXECUTABLE,
-  approvedOutsideAccesses: BashPathAccess[] = [],
-  readOnlyMounts?: WorkspaceBashReadOnlyMounts
+  _execution: WorkspaceBashExecution,
+  _workbenchRoot: string,
+  _environment: Readonly<Record<string, string>>,
+  _executable = WORKSPACE_BASH_NATIVE_HOST_EXECUTABLE,
+  _approvedOutsideAccesses: BashPathAccess[] = [],
+  _readOnlyMounts?: WorkspaceBashReadOnlyMounts
 ): WorkspaceBashInvocation {
-  if (!path.isAbsolute(workbenchRoot) || /[\u0000\r\n]/.test(workbenchRoot)) {
-    throw new WorkspaceBashIsolationError("Native Bash workbench path is invalid.");
-  }
-  if (!path.isAbsolute(executable) || /[\u0000\r\n]/.test(executable)) {
-    throw new WorkspaceBashIsolationError("Native Bash executable path is invalid.");
-  }
-  validateReadOnlyMounts(readOnlyMounts, workbenchRoot);
-  for (const access of approvedOutsideAccesses) {
-    if (access.access !== "read") {
-      throw new WorkspaceBashIsolationError("Approved Native host accesses are read-only.");
-    }
-    validateOutsideBindPath(access.path, workbenchRoot);
-  }
-  const hostEnvironment = {
-    ...environment,
-    PATH: WORKSPACE_BASH_NATIVE_HOST_PATH,
-    HOME: workbenchRoot,
-    PWD: workbenchRoot,
-    ...(readOnlyMounts ? {
-      SUNABOT_SKILLS: readOnlyMounts.skills,
-      SUNABOT_MCP_CONFIG: readOnlyMounts.mcp
-    } : {})
-  };
-  return execution.kind === "argv"
-    ? { file: execution.executable, args: execution.args, env: hostEnvironment }
-    : {
-        file: executable,
-        args: ["--noprofile", "--norc", "-lc", execution.command],
-        env: hostEnvironment
-      };
+  throw new WorkspaceBashIsolationError("Native host Bash is disabled because macOS has no enforced process isolation boundary.");
 }
 
 export function buildBubblewrapInvocation(
@@ -370,29 +340,6 @@ async function ensureBubblewrapSandbox(
   );
   await executeSandboxProbe(probe.file, probe.args, options, "bubblewrap resource and kernel isolation probe failed");
   return { kind: "bubblewrap", executable, resourceLimiter } as const;
-}
-
-async function ensureNativeHostBash(options: WorkspaceBashSandboxOptions) {
-  const effectiveUid = options.effectiveUid ?? (typeof process.getuid === "function" ? process.getuid() : -1);
-  if (effectiveUid <= 0) {
-    throw new WorkspaceBashIsolationError("Native host Bash requires a non-root runtime user.");
-  }
-  const executable = options.nativeHostExecutable ?? WORKSPACE_BASH_NATIVE_HOST_EXECUTABLE;
-  if (!path.isAbsolute(executable) || /[\u0000\r\n]/.test(executable)) {
-    throw new WorkspaceBashIsolationError("Native host Bash executable path is invalid.");
-  }
-  try {
-    await (options.access ?? fs.access)(executable, fsConstants.X_OK);
-  } catch (error) {
-    throw new WorkspaceBashIsolationError(`Native host Bash is not executable: ${errorMessage(error)}`);
-  }
-  await executeSandboxProbe(
-    executable,
-    ["--noprofile", "--norc", "-lc", ":"],
-    options,
-    "Native host Bash probe failed"
-  );
-  return { kind: "host", executable } as const;
 }
 
 async function ensureDockerSandbox(options: WorkspaceBashSandboxOptions) {

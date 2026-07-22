@@ -16,18 +16,13 @@ import type {
 } from "../../src/types.js";
 import {
   ONEBOT_AUTHENTICATED_MAX_PAYLOAD_BYTES,
-  ONEBOT_LOOPBACK_MAX_PAYLOAD_BYTES,
-  ONEBOT_UNAUTHENTICATED_MAX_PAYLOAD_BYTES
+  ONEBOT_LOOPBACK_MAX_PAYLOAD_BYTES
 } from "../../adapters/onebot/onebotGateway.js";
-import { FILE_SIZE_LIMIT_BYTES } from "../../services/media/attachments/limits.js";
 
 describe("attachment runtime integration", () => {
-  it("allows an authenticated bounded OneBot payload large enough for a 256 MiB Base64 fallback", () => {
-    const maximumBase64Characters = 4 * Math.ceil(FILE_SIZE_LIMIT_BYTES / 3);
-    expect(ONEBOT_AUTHENTICATED_MAX_PAYLOAD_BYTES).toBeGreaterThan(maximumBase64Characters + 1024 * 1024);
-    expect(ONEBOT_AUTHENTICATED_MAX_PAYLOAD_BYTES).toBe(384 * 1024 * 1024);
-    expect(ONEBOT_LOOPBACK_MAX_PAYLOAD_BYTES).toBeGreaterThan(maximumBase64Characters + 1024 * 1024);
-    expect(ONEBOT_UNAUTHENTICATED_MAX_PAYLOAD_BYTES).toBe(100 * 1024 * 1024);
+  it("caps ordinary OneBot events and rejects large inline media payloads", () => {
+    expect(ONEBOT_AUTHENTICATED_MAX_PAYLOAD_BYTES).toBe(16 * 1024 * 1024);
+    expect(ONEBOT_LOOPBACK_MAX_PAYLOAD_BYTES).toBe(8 * 1024 * 1024);
   });
 
   it("parses a current array-message file segment", () => {

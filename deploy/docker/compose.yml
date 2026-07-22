@@ -58,7 +58,7 @@ services:
       args:
         SUNABOT_RELEASE_VERSION: ${SUNABOT_RELEASE_VERSION:-0.1.0}
     image: sunabot-core:${SUNABOT_IMAGE_TAG:-local}
-    platform: linux/amd64
+    platform: ${SUNABOT_CORE_PLATFORM:-linux/amd64}
     user: "${SUNABOT_RUNTIME_UID:-1000}:${SUNABOT_RUNTIME_GID:-1000}"
     restart: unless-stopped
     env_file:

@@ -80,6 +80,7 @@ function renderCqMessage(message: string, state: RenderState, depth: number) {
   for (const match of message.matchAll(expression)) {
     if (state.segmentCount >= MAX_MESSAGE_SEGMENTS) {
       state.truncated = true;
+      cursor = match.index ?? cursor;
       break;
     }
     const index = match.index ?? cursor;
@@ -91,7 +92,7 @@ function renderCqMessage(message: string, state: RenderState, depth: number) {
     }, state, depth));
     cursor = index + match[0].length;
   }
-  parts.push(message.slice(cursor));
+  if (!state.truncated) parts.push(message.slice(cursor));
   return parts.join("").trim();
 }
 
@@ -199,8 +200,14 @@ function renderForwardEntry(value: unknown, state: RenderState, depth: number, i
   ) || "未知发送者";
   const senderId = oneLine(sender.user_id ?? entry.user_id ?? data.user_id ?? data.uin, 64);
   const senderLabel = senderId ? `${senderName}(QQ ${senderId})` : senderName;
-  const body = content ? renderMessage(content, state, depth) : "[空消息]";
+  const body = content ? escapeForwardBoundaryMarkers(renderMessage(content, state, depth)) : "[空消息]";
   return `${index}. ${senderLabel}：${body}`;
+}
+
+function escapeForwardBoundaryMarkers(value: string) {
+  return value
+    .replaceAll("[聊天记录开始", "［聊天记录开始")
+    .replaceAll("[聊天记录结束]", "［聊天记录结束］");
 }
 
 function renderContact(data: Record<string, unknown>) {

@@ -111,7 +111,7 @@ export function createAdminTestConfig(rootDir: string): AppConfig {
       },
       bash: {
         enabled: true,
-        adminPrivateBackend: "native",
+        adminPrivateBackend: "docker",
         auditModel: "gpt-5.4-mini",
         strictMode: true,
         allowGroup: false,

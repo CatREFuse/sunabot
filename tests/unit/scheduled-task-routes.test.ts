@@ -14,7 +14,8 @@ function runtime(): ScheduledTaskAdminRuntime {
     getScheduledTask: vi.fn((id) => ({ id })),
     createScheduledTask: vi.fn((input) => ({ id: "task-2", input })),
     updateScheduledTask: vi.fn((id, input) => ({ id, input })),
-    deleteScheduledTask: vi.fn((id, input) => ({ id, input }))
+    deleteScheduledTask: vi.fn((id, input) => ({ id, input })),
+    replayScheduledTaskDelivery: vi.fn((runId) => ({ runId }))
   };
 }
 
@@ -63,6 +64,12 @@ describe("scheduled task routes", () => {
       payload: { revision: 2 }
     });
     expect(arona.deleteScheduledTask).toHaveBeenCalledWith("task-1", { revision: 2 });
+
+    await app.inject({
+      method: "POST",
+      url: "/api/scheduled-tasks/runs/run-1/replay?agentId=arona"
+    });
+    expect(arona.replayScheduledTaskDelivery).toHaveBeenCalledWith("run-1");
 
     await app.close();
   });

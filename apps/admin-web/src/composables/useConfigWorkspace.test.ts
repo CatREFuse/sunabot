@@ -64,7 +64,7 @@ function config(adminName: string): AppConfig {
       },
       bash: {
         enabled: true,
-        adminPrivateBackend: "native",
+        adminPrivateBackend: "docker",
         auditModel: "gpt-5.4-mini",
         strictMode: true,
         allowGroup: false,
@@ -291,6 +291,31 @@ describe("useConfigWorkspace", () => {
 
     expect(apiRequest).toHaveBeenCalledTimes(2);
     expect(apiRequest.mock.calls[1]?.[0]).toBe("/api/config?agentId=arona");
+    expect(workspace.drafts.bot.adminName).toBe("arona");
+    workspace.cancel();
+  });
+
+  it("keeps a delayed save alive until an Agent switch flush completes", async () => {
+    const delayedSave = deferred<ConfigPatchResponse>();
+    apiRequest
+      .mockResolvedValueOnce(envelope("r1", "initial"))
+      .mockReturnValueOnce(delayedSave.promise)
+      .mockResolvedValueOnce(envelope("arona-r1", "arona"));
+    const workspace = useConfigWorkspace();
+    await workspace.load();
+    workspace.drafts.bot.adminName = "saved before switch";
+
+    const flushed = workspace.flush();
+    const saveSignal = apiRequest.mock.calls[1]?.[1]?.signal as AbortSignal;
+    expect(saveSignal.aborted).toBe(false);
+    expect(apiRequest).toHaveBeenCalledTimes(2);
+
+    delayedSave.resolve(patched("r2", "saved before switch"));
+    await expect(flushed).resolves.toBe(true);
+    expect(saveSignal.aborted).toBe(false);
+
+    await workspace.load({ agentId: "arona" });
+    expect(apiRequest.mock.calls[2]?.[0]).toBe("/api/config?agentId=arona");
     expect(workspace.drafts.bot.adminName).toBe("arona");
     workspace.cancel();
   });

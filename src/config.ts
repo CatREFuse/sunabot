@@ -187,7 +187,7 @@ export function defaultConfig(): AppConfig {
       },
       bash: {
         enabled: false,
-        adminPrivateBackend: "native",
+        adminPrivateBackend: "docker",
         auditModel: "gpt-5.4-mini",
         strictMode: true,
         allowGroup: false,
@@ -498,7 +498,7 @@ function mergeBotConfig(base: BotConfig, incoming: Partial<BotConfig> | undefine
     tools: mergeBotToolSettings(base.tools, incoming?.tools as Partial<BotToolSettings> | undefined),
     bash: {
       enabled: bash?.enabled ?? base.bash.enabled,
-      adminPrivateBackend: bash?.adminPrivateBackend === "docker" ? "docker" : "native",
+      adminPrivateBackend: "docker",
       auditModel: normalizeModelName(bash?.auditModel, base.bash.auditModel),
       strictMode: bash?.strictMode ?? base.bash.strictMode,
       allowGroup: bash?.allowGroup ?? base.bash.allowGroup,

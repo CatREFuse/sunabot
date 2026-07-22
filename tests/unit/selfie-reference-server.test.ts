@@ -44,14 +44,14 @@ describe("selfie reference server registration", () => {
 
     const unauthorized = await app.inject({
       method: "GET",
-      url: "/api/selfie-references",
+      url: "/api/selfie-references?agentId=plana",
       headers: { host: "127.0.0.1", "x-forwarded-for": "127.0.0.1" }
     });
     expect(unauthorized.statusCode).toBe(401);
 
     const authorized = await app.inject({
       method: "GET",
-      url: "/api/selfie-references",
+      url: "/api/selfie-references?agentId=plana",
       headers: {
         host: "127.0.0.1",
         "x-forwarded-for": "127.0.0.1",
@@ -95,7 +95,7 @@ describe("selfie reference server registration", () => {
       const callsBeforeDefaultGet = registryConfig.mock.calls.length;
       const defaultList = await built.app.inject({
         method: "GET",
-        url: "/api/selfie-references",
+        url: "/api/selfie-references?agentId=plana",
         headers: ADMIN_HEADERS
       });
       expect(defaultList.statusCode).toBe(200);

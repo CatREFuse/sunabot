@@ -118,6 +118,7 @@ function taskWithMentions(mentionUserIds: string[]): ScheduledTask {
     permanentRetention: false,
     archived: false,
     director: false,
+    canReplayDelivery: false,
     createdAt: "2026-07-19T00:00:00.000Z",
     updatedAt: "2026-07-19T00:00:00.000Z"
   };

@@ -6,7 +6,7 @@ import BashSettingsForm from "./BashSettingsForm.vue";
 function bashDraft(): ConfigSectionValueMap["bash"] {
   return {
     enabled: true,
-    adminPrivateBackend: "native",
+    adminPrivateBackend: "docker",
     auditModel: "gpt-5.4-mini",
     strictMode: true,
     allowGroup: false,
@@ -17,12 +17,12 @@ function bashDraft(): ConfigSectionValueMap["bash"] {
 }
 
 describe("BashSettingsForm", () => {
-  it("shows the fixed Native administrator and Docker ordinary-user routing", () => {
+  it("shows the fixed Docker routing for every QQ conversation", () => {
     const draft = bashDraft();
     const wrapper = mount(BashSettingsForm, { props: { modelValue: draft } });
 
     expect(wrapper.find("select").exists()).toBe(false);
-    expect(wrapper.text()).toContain("管理员 QQ 私聊Native Bash");
+    expect(wrapper.text()).toContain("管理员 QQ 私聊Docker Bash");
     expect(wrapper.text()).toContain("全部群聊与其他 QQ 私聊Docker Bash");
     expect(wrapper.text()).toContain("Web Chat");
     expect(wrapper.text()).toContain("不可用");
@@ -34,7 +34,7 @@ describe("BashSettingsForm", () => {
     expect(wrapper.text()).not.toContain("阻止关键字");
     expect(wrapper.text()).not.toContain("仅 Agent Workspace");
     expect(wrapper.text()).toContain("Skill 与 MCP · Docker 只读");
-    expect(wrapper.text()).toContain("Native 与 Docker 分离");
+    expect(wrapper.text()).not.toContain("Native Bash");
   });
 
   it("writes only the approval model and strict approval control back to the Bash draft", async () => {
@@ -54,6 +54,6 @@ describe("BashSettingsForm", () => {
       allowGroup: false
     });
     expect(wrapper.text()).toContain("对抗审批 Agent");
-    expect(wrapper.text()).toContain("每条 Native 与 Docker Bash 命令");
+    expect(wrapper.text()).toContain("每条 Docker Bash 命令");
   });
 });

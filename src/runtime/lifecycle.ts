@@ -101,36 +101,12 @@ import { SessionStore, type OutboxRecord, type SessionEventRecord } from "../../
 import { TOOL_CALL_TIMEOUT_MS } from "../../services/tools/tools.js";
 import { promptDefinitionById } from "../../services/agent/promptCatalog.js";
 import {
-  SCHEDULED_TASK_CALLBACK_PROMPT_FILE,
-  SCHEDULED_TASK_CALLBACK_PROMPT_ID
-} from "../../services/agent/scheduledTaskPrompt.js";
-import {
-  ensurePromptTextFile,
-  migrateConversationEmojiVariables,
-  migrateConversationVoicePrompt,
-  migrateGroupReplyOrchestratorResultVariable,
-  migrateGroupReplyThreadContextVariable,
-  migrateMemoryPerspectivePrompt,
-  migratePromptTimeContext,
-  migrateScheduledTaskAgentLoopPrompt,
-  migrateSelfieReferenceSelectionPrompt,
-  migrateSelfieResponseSchemaPrompt,
-  migrateToneEmojiMarkerRule,
-  migrateUserGroupOrchestratorResultSchema,
   readPromptTextFile
 } from "../../services/agent/promptWorkspace.js";
-import { migrateToneSegmentedReplyPrompt } from "../../services/agent/tonePromptMigration.js";
-import { migrateConversationWebFetchPrompt } from "../../services/agent/webFetchPromptMigration.js";
-import { migrateConversationDirectorPrompt, migrateDirectorScheduleSchemaPrompt } from "../../services/agent/directorPromptMigration.js";
-import { migrateDreamSchemaPrompt } from "../../services/agent/dreamPromptMigration.js";
-import { migrateConversationInboundMessagePrompt } from "../../services/agent/inboundMessagePromptMigration.js";
-import { migrateRecoverableOutputErrorPrompt } from "../../services/agent/recoverableOutputErrorPromptMigration.js";
-import { ensureAirPromptWorkspace } from "../../services/agent/airPromptWorkspace.js";
-import { DIRECTOR_DAILY_PLAN_PROMPT_FILE, DIRECTOR_DAILY_PLAN_PROMPT_ID, DIRECTOR_SCHEDULE_REVISION_PROMPT_FILE, DIRECTOR_SCHEDULE_REVISION_PROMPT_ID } from "../../services/director/public.js";
-import { DREAM_PROMPT_FILE, DREAM_PROMPT_ID } from "../../services/memory/public.js";
 import { buildPromptUtilityVariables, parseFinalPromptTemplate, renderFinalPromptTemplate, type PromptVariableValue, type RenderedPromptRequest } from "../../services/agent/promptSystem.js";
 import { buildCommonPromptVariables, buildConversationPromptVariables } from "../../services/agent/persona.js";
-import { DEFAULT_CONTEXT_MESSAGE_LIMIT, MAX_STORED_CONVERSATION_MESSAGES, GROUP_CHAT_SUMMARY_WINDOW_MS, MAX_SELFIE_REFERENCE_IMAGES, MAX_SELFIE_WORKSPACE_REFERENCE_IMAGES, MAX_CURRENT_CONTEXT_IMAGES, MAX_HISTORY_CONTEXT_IMAGES, HYDRATE_MESSAGE_WINDOW_MS, ACTIVE_CONVERSATION_WINDOW_MS, DIRECT_REPLY_TIMEOUT_MS, AMBIENT_ORCHESTRATOR_TIMEOUT_MS, ORCHESTRATOR_MAX_RETRIES, PREPARE_TIMEOUT_MS, RECENT_CONTEXT_TOKEN_BUDGET, DEDUPE_TTL_MS, MAX_DEDUPE_KEYS, DEFAULT_ADMIN_NAME, GROUP_CHAT_SUMMARY_COMMAND, CONVERSATION_REPLY_PROMPT_FILE, PRIVATE_CONVERSATION_REPLY_PROMPT_FILE, GROUP_CONVERSATION_REPLY_PROMPT_FILE, TONE_PROMPT_FILE, SELFIE_PROMPT_FILE, GROUP_CHAT_SUMMARY_PROMPT_FILE, GROUP_THREAD_CONTEXT_PROMPT_FILE, ADMIN_PERSONA_FILES, ADMIN_RUNTIME_PROMPT_DEFAULTS, runtimePromptDefaultContent, BatchUserInfo, WorkingMemoryMergeOutput, WorkingMemoryMergeContext, personaFileNameForAdminId, AdminIdentity, ConversationReplyUpdateInput, ConversationToolPolicyUpdateInput, RuntimeCommandContext, ReplyDeliveryDraft, ReplyDelivery, DeferredCodexTurn, AmbientReplyJob, AmbientReplyState, AmbientIdleTimer, RuntimeConfigSnapshot, RuntimePromptSnapshot, SunaRuntimeOptions } from "./runtimeContracts.js";
+import { DEFAULT_CONTEXT_MESSAGE_LIMIT, MAX_STORED_CONVERSATION_MESSAGES, GROUP_CHAT_SUMMARY_WINDOW_MS, MAX_SELFIE_REFERENCE_IMAGES, MAX_SELFIE_WORKSPACE_REFERENCE_IMAGES, MAX_CURRENT_CONTEXT_IMAGES, MAX_HISTORY_CONTEXT_IMAGES, HYDRATE_MESSAGE_WINDOW_MS, ACTIVE_CONVERSATION_WINDOW_MS, DIRECT_REPLY_TIMEOUT_MS, AMBIENT_ORCHESTRATOR_TIMEOUT_MS, ORCHESTRATOR_MAX_RETRIES, PREPARE_TIMEOUT_MS, RECENT_CONTEXT_TOKEN_BUDGET, DEDUPE_TTL_MS, MAX_DEDUPE_KEYS, DEFAULT_ADMIN_NAME, GROUP_CHAT_SUMMARY_COMMAND, ADMIN_PERSONA_FILES, runtimePromptDefaultContent, BatchUserInfo, WorkingMemoryMergeOutput, WorkingMemoryMergeContext, personaFileNameForAdminId, AdminIdentity, ConversationReplyUpdateInput, ConversationToolPolicyUpdateInput, RuntimeCommandContext, ReplyDeliveryDraft, ReplyDelivery, DeferredCodexTurn, AmbientReplyJob, AmbientReplyState, AmbientIdleTimer, RuntimeConfigSnapshot, RuntimePromptSnapshot, SunaRuntimeOptions } from "./runtimeContracts.js";
+import { ensureRuntimePromptWorkspace } from "./promptMigrations.js";
 import { clampInteger, indexedConversationMessages, resolveRuntimePersonaName } from "./conversationMemoryHelpers.js";
 import { conversationOrchestratorEnabled, conversationReplyEnabled, enrichMemoryEntriesWithConversations, isWebConversationId, normalizeConversationId, normalizeConversationLookupId, outboundForRecord } from "./messagingAttachmentHelpers.js";
 import { conversationMemberNames } from "./selfieHelpers.js";
@@ -294,150 +270,7 @@ export function runtime_getProviderForModel(this: RuntimeHost, model: string, re
     });
   }
 export async function runtime_ensureAgentPromptFiles(this: RuntimeHost, config = this.config) {
-    const selfiePromptDefault = runtimePromptDefaultContent(config, "image.selfie-rewrite");
-    const legacyConversationPrompt = await readPromptTextFile(
-      config,
-      "system",
-      CONVERSATION_REPLY_PROMPT_FILE,
-      ""
-    );
-    await Promise.all([
-      ensurePromptTextFile(
-        config,
-        "system",
-        PRIVATE_CONVERSATION_REPLY_PROMPT_FILE,
-        legacyConversationPrompt || ADMIN_RUNTIME_PROMPT_DEFAULTS["conversation.private-reply"] || ""
-      ),
-      ensurePromptTextFile(
-        config,
-        "system",
-        GROUP_CONVERSATION_REPLY_PROMPT_FILE,
-        legacyConversationPrompt || ADMIN_RUNTIME_PROMPT_DEFAULTS["conversation.group-reply"] || ""
-      ),
-      ensurePromptTextFile(
-        config,
-        "system",
-        TONE_PROMPT_FILE,
-        ADMIN_RUNTIME_PROMPT_DEFAULTS["conversation.tone-rewrite"] ?? ""
-      ),
-      ensurePromptTextFile(
-        config,
-        "system",
-        config.bot.memory.workMemoryCompressInPrompt,
-        ADMIN_RUNTIME_PROMPT_DEFAULTS["memory.compress-in"] ?? ""
-      ),
-      ensurePromptTextFile(
-        config,
-        "system",
-        config.bot.memory.workMemoryCompressOutPrompt,
-        ADMIN_RUNTIME_PROMPT_DEFAULTS["memory.compress-out"] ?? ""
-      ),
-      ensurePromptTextFile(
-        config,
-        "system",
-        config.bot.memory.userProfilePrompt,
-        ADMIN_RUNTIME_PROMPT_DEFAULTS["memory.user-profile"] ?? ""
-      ),
-      ensurePromptTextFile(
-        config,
-        "system",
-        config.bot.orchestrator.promptFile,
-        ADMIN_RUNTIME_PROMPT_DEFAULTS["orchestrator.user-group"] ?? ""
-      ),
-      ensurePromptTextFile(
-        config,
-        "system",
-        GROUP_THREAD_CONTEXT_PROMPT_FILE,
-        ADMIN_RUNTIME_PROMPT_DEFAULTS["orchestrator.group-thread"] ?? ""
-      ),
-      ensurePromptTextFile(
-        config,
-        "system",
-        GROUP_CHAT_SUMMARY_PROMPT_FILE,
-        ADMIN_RUNTIME_PROMPT_DEFAULTS["conversation.group-summary"] ?? ""
-      ),
-      ensurePromptTextFile(
-        config,
-        "system",
-        SCHEDULED_TASK_CALLBACK_PROMPT_FILE,
-        ADMIN_RUNTIME_PROMPT_DEFAULTS[SCHEDULED_TASK_CALLBACK_PROMPT_ID] ?? ""
-      ),
-      ...([
-        [DIRECTOR_DAILY_PLAN_PROMPT_FILE, DIRECTOR_DAILY_PLAN_PROMPT_ID],
-        [DIRECTOR_SCHEDULE_REVISION_PROMPT_FILE, DIRECTOR_SCHEDULE_REVISION_PROMPT_ID],
-        [DREAM_PROMPT_FILE, DREAM_PROMPT_ID]
-      ] as const).map(([file, id]) => ensurePromptTextFile(
-        config, "system", file, ADMIN_RUNTIME_PROMPT_DEFAULTS[id] ?? ""
-      )),
-      ensurePromptTextFile(
-        config,
-        "persona",
-        SELFIE_PROMPT_FILE,
-        selfiePromptDefault
-      )
-    ]);
-    await ensureAirPromptWorkspace(config);
-    await Promise.all([
-      migratePromptTimeContext(config, "system", PRIVATE_CONVERSATION_REPLY_PROMPT_FILE),
-      migratePromptTimeContext(config, "system", GROUP_CONVERSATION_REPLY_PROMPT_FILE),
-      migratePromptTimeContext(config, "system", TONE_PROMPT_FILE),
-      migratePromptTimeContext(config, "system", config.bot.memory.workMemoryCompressInPrompt),
-      migratePromptTimeContext(config, "system", config.bot.memory.workMemoryCompressOutPrompt),
-      migratePromptTimeContext(config, "system", config.bot.memory.userProfilePrompt),
-      migratePromptTimeContext(config, "system", config.bot.orchestrator.promptFile),
-      migratePromptTimeContext(config, "system", GROUP_THREAD_CONTEXT_PROMPT_FILE),
-      migratePromptTimeContext(config, "system", GROUP_CHAT_SUMMARY_PROMPT_FILE),
-      migratePromptTimeContext(config, "system", SCHEDULED_TASK_CALLBACK_PROMPT_FILE),
-      ...[DIRECTOR_DAILY_PLAN_PROMPT_FILE, DIRECTOR_SCHEDULE_REVISION_PROMPT_FILE]
-        .flatMap((file) => [migratePromptTimeContext(config, "system", file), migrateDirectorScheduleSchemaPrompt(config, file)]),
-      migrateDreamSchemaPrompt(config, DREAM_PROMPT_FILE),
-      migratePromptTimeContext(config, "persona", SELFIE_PROMPT_FILE)
-    ]);
-    await migrateScheduledTaskAgentLoopPrompt(
-      config,
-      SCHEDULED_TASK_CALLBACK_PROMPT_FILE,
-      ADMIN_RUNTIME_PROMPT_DEFAULTS[SCHEDULED_TASK_CALLBACK_PROMPT_ID] ?? ""
-    );
-    await migrateGroupReplyThreadContextVariable(config, GROUP_CONVERSATION_REPLY_PROMPT_FILE);
-    await migrateGroupReplyOrchestratorResultVariable(config, GROUP_CONVERSATION_REPLY_PROMPT_FILE);
-    await migrateUserGroupOrchestratorResultSchema(
-      config,
-      config.bot.orchestrator.promptFile,
-      ADMIN_RUNTIME_PROMPT_DEFAULTS["orchestrator.user-group"] ?? ""
-    );
-    await migrateSelfieReferenceSelectionPrompt(
-      config,
-      SELFIE_PROMPT_FILE,
-      selfiePromptDefault
-    );
-    await migrateSelfieResponseSchemaPrompt(config, SELFIE_PROMPT_FILE);
-    await migrateConversationEmojiVariables(config, PRIVATE_CONVERSATION_REPLY_PROMPT_FILE);
-    await migrateConversationEmojiVariables(config, GROUP_CONVERSATION_REPLY_PROMPT_FILE);
-    await migrateConversationVoicePrompt(config, PRIVATE_CONVERSATION_REPLY_PROMPT_FILE, ADMIN_RUNTIME_PROMPT_DEFAULTS["conversation.private-reply"] ?? "");
-    await migrateConversationVoicePrompt(config, GROUP_CONVERSATION_REPLY_PROMPT_FILE, ADMIN_RUNTIME_PROMPT_DEFAULTS["conversation.group-reply"] ?? "");
-    await migrateConversationWebFetchPrompt(config, PRIVATE_CONVERSATION_REPLY_PROMPT_FILE, ADMIN_RUNTIME_PROMPT_DEFAULTS["conversation.private-reply"] ?? "");
-    await migrateConversationWebFetchPrompt(config, GROUP_CONVERSATION_REPLY_PROMPT_FILE, ADMIN_RUNTIME_PROMPT_DEFAULTS["conversation.group-reply"] ?? "");
-    await migrateConversationDirectorPrompt(config, PRIVATE_CONVERSATION_REPLY_PROMPT_FILE, ADMIN_RUNTIME_PROMPT_DEFAULTS["conversation.private-reply"] ?? "");
-    await migrateConversationDirectorPrompt(config, GROUP_CONVERSATION_REPLY_PROMPT_FILE, ADMIN_RUNTIME_PROMPT_DEFAULTS["conversation.group-reply"] ?? "");
-    await Promise.all([PRIVATE_CONVERSATION_REPLY_PROMPT_FILE, GROUP_CONVERSATION_REPLY_PROMPT_FILE].map((file) => migrateConversationInboundMessagePrompt(config, file)));
-    await Promise.all([PRIVATE_CONVERSATION_REPLY_PROMPT_FILE, GROUP_CONVERSATION_REPLY_PROMPT_FILE, TONE_PROMPT_FILE].map((file) => migrateRecoverableOutputErrorPrompt(config, file)));
-    await migrateToneEmojiMarkerRule(config, TONE_PROMPT_FILE);
-    await migrateToneSegmentedReplyPrompt(config, TONE_PROMPT_FILE);
-    await migrateMemoryPerspectivePrompt(
-      config,
-      config.bot.memory.workMemoryCompressInPrompt,
-      ADMIN_RUNTIME_PROMPT_DEFAULTS["memory.compress-in"] ?? ""
-    );
-    await migrateMemoryPerspectivePrompt(
-      config,
-      config.bot.memory.workMemoryCompressOutPrompt,
-      ADMIN_RUNTIME_PROMPT_DEFAULTS["memory.compress-out"] ?? ""
-    );
-    await migrateMemoryPerspectivePrompt(
-      config,
-      config.bot.memory.userProfilePrompt,
-      ADMIN_RUNTIME_PROMPT_DEFAULTS["memory.user-profile"] ?? ""
-    );
+    await ensureRuntimePromptWorkspace(config);
   }
 export function runtime_defaultPromptContent(this: RuntimeHost, id: string) {
     return runtimePromptDefaultContent(this.config, id);

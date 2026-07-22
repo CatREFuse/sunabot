@@ -195,6 +195,18 @@ export class RuntimeScheduledTasks {
     return { id: taskId, deleted: true as const };
   }
 
+  replayScheduledTaskDelivery(runId: string): ScheduledTaskAdminView {
+    const normalizedRunId = validTaskId(runId);
+    const current = this.store.getRun(normalizedRunId);
+    if (!current) throw new ServiceError(404, "SCHEDULED_TASK_RUN_NOT_FOUND", "定时任务执行记录不存在。");
+    const replayed = this.store.replayDelivery({ runId: normalizedRunId });
+    if (!replayed) {
+      throw new ServiceError(409, "SCHEDULED_TASK_REPLAY_UNAVAILABLE", "当前执行记录不能重放投递。");
+    }
+    this.wake();
+    return this.adminCatalog.view(this.requireTask(replayed.taskId));
+  }
+
   toolPort(
     incoming: ParsedIncomingMessage,
     isAdmin: boolean,

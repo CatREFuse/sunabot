@@ -29,18 +29,18 @@ import {
 const root = fileURLToPath(new URL("../..", import.meta.url));
 
 describe("unified runtime launcher", () => {
-  it("probes non-root macOS Native host Bash instead of reporting it disabled", async () => {
+  it("probes Docker isolation for Native Core without invoking host Bash", async () => {
     const source = await fs.readFile(path.join(root, "tooling/runtime/launcher.mjs"), "utf8");
     const nativeCapabilities = source.slice(
       source.indexOf("async function inspectNativeCapabilities"),
       source.indexOf("async function inspectNativeCodex")
     );
 
-    expect(nativeCapabilities).toContain('process.platform === "darwin"');
-    expect(nativeCapabilities).toContain('(process.getuid?.() ?? -1) <= 0');
-    expect(nativeCapabilities).toContain('command("/bin/bash", ["--noprofile", "--norc", "-lc", ":"]');
-    expect(nativeCapabilities).toContain("audited administrator private-chat host Bash available");
-    expect(nativeCapabilities).not.toContain("disabled on macOS Native Core");
+    expect(nativeCapabilities).toContain('command("docker", [');
+    expect(nativeCapabilities).toContain('"--network", "none"');
+    expect(nativeCapabilities).toContain('"--cap-drop", "ALL"');
+    expect(nativeCapabilities).toContain("Docker Bash isolation probe passed");
+    expect(nativeCapabilities).not.toContain('command("/bin/bash"');
   });
 
   it("probes the same isolated network namespace required by the Docker seccomp contract", () => {

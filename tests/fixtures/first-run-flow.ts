@@ -103,11 +103,11 @@ try {
     origin: "http://127.0.0.1",
     "x-sunabot-csrf": csrf
   };
-  const envelope = await built.app.inject({ method: "GET", url: "/api/config", headers: readHeaders });
+  const envelope = await built.app.inject({ method: "GET", url: "/api/config?agentId=plana", headers: readHeaders });
   const providers = envelope.json().config.providers;
   const selected = await built.app.inject({
     method: "PATCH",
-    url: "/api/config/providers",
+    url: "/api/config/providers?agentId=plana",
     headers: writeHeaders,
     payload: {
       revision: envelope.json().revision,

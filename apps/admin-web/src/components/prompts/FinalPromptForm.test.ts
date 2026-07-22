@@ -2,6 +2,7 @@ import { mount } from "@vue/test-utils";
 import { describe, expect, it } from "vitest";
 import FinalPromptForm from "./FinalPromptForm.vue";
 import FinalPromptWorkspace from "./FinalPromptWorkspace.vue";
+import PromptTextField from "./PromptTextField.vue";
 
 const content = `${JSON.stringify({
   messages: [
@@ -81,15 +82,29 @@ describe("FinalPromptForm", () => {
 
   it("inserts prompt variables into Function descriptions", async () => {
     const wrapper = mount(FinalPromptForm, { props: { modelValue: content, variables } });
-    const description = wrapper.get('[aria-label="search_content 工具说明"]');
+    const description = wrapper.findAllComponents(PromptTextField)
+      .find((component) => component.props("label") === "search_content 工具说明");
+    expect(description).toBeDefined();
 
-    await description.setValue("@语音");
-    const option = wrapper.get('[role="option"]');
-    expect(option.text()).toContain("conversation.voice.settings");
-    await option.trigger("mousedown");
+    description?.vm.insertVariable("conversation.voice.settings");
+    await wrapper.vm.$nextTick();
 
     const latest = String(wrapper.emitted("update:modelValue")?.at(-1)?.[0] ?? "");
-    expect(JSON.parse(latest).tools[0].function.description).toBe("@{conversation.voice.settings}");
+    expect(JSON.parse(latest).tools[0].function.description).toBe("@{conversation.voice.settings}搜索内容");
+  });
+
+  it("inserts shared-table variables into the active CodeMirror message", async () => {
+    const wrapper = mount(FinalPromptForm, {
+      props: { modelValue: content, variables, semanticXml: true }
+    });
+
+    wrapper.vm.insertVariable("conversation.voice.settings");
+    await wrapper.vm.$nextTick();
+
+    const latest = String(wrapper.emitted("update:modelValue")?.at(-1)?.[0] ?? "");
+    expect(JSON.parse(latest).messages[0].content).toBe(
+      "<conversation_voice_settings>@{conversation.voice.settings}</conversation_voice_settings>@{persona.soul}"
+    );
   });
 
   it("refreshes structured fields when the backing JSON changes externally", async () => {
@@ -106,7 +121,7 @@ describe("FinalPromptForm", () => {
 
     await wrapper.setProps({ modelValue: next });
 
-    expect((wrapper.get('[aria-label="system 提示词"]').element as HTMLTextAreaElement).value).toBe("新的系统提示词");
+    expect(wrapper.get('[aria-label="system 提示词"]').text()).toContain("新的系统提示词");
     expect(wrapper.find('[aria-label="完整请求 JSON"]').exists()).toBe(false);
     expect(wrapper.text()).toContain("当前请求不启用 Function Call");
   });

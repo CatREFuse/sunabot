@@ -207,7 +207,7 @@ describe("AgentRegistry", () => {
         },
         orchestrator: { groupThreadModel: "gpt-5.4-mini" },
         bash: {
-          adminPrivateBackend: "native",
+          adminPrivateBackend: "docker",
           auditModel: "gpt-5.4-mini",
           strictMode: true
         }

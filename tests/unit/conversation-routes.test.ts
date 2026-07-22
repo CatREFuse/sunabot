@@ -64,13 +64,13 @@ describe("conversation API plugin", () => {
 
     registerConversationRoutes(app, { runtime, onebotGateway, conversationDirectory });
 
-    expect((await app.inject({ method: "GET", url: "/api/conversations" })).json())
+    expect((await app.inject({ method: "GET", url: "/api/conversations?agentId=plana" })).json())
       .toEqual({ conversations: records });
     expect(hydrateConversationRecords).toHaveBeenCalledWith(onebotGateway);
 
     expect((await app.inject({
       method: "GET",
-      url: "/api/conversations/private%3A171419991/messages?before=12&limit=5"
+      url: "/api/conversations/private%3A171419991/messages?agentId=plana&before=12&limit=5"
     })).json()).toEqual({ messages: [{ role: "user", content: "hello" }] });
     expect(hydrateConversationIdentities).toHaveBeenCalledWith("private:171419991", onebotGateway);
     expect(getConversationMessages).toHaveBeenCalledWith("private:171419991", {
@@ -80,14 +80,14 @@ describe("conversation API plugin", () => {
 
     expect((await app.inject({
       method: "GET",
-      url: "/api/conversations/private%3A171419991/stats"
+      url: "/api/conversations/private%3A171419991/stats?agentId=plana"
     })).json()).toMatchObject({
       conversationId: "private:171419991",
       messages: messageStats,
       modelCalls: { conversationId: "private:171419991" }
     });
 
-    expect((await app.inject({ method: "GET", url: "/api/web-chat/messages" })).json())
+    expect((await app.inject({ method: "GET", url: "/api/web-chat/messages?agentId=plana" })).json())
       .toEqual({ messages: [{ role: "user", content: "hello" }] });
     expect(getConversationMessages).toHaveBeenCalledWith("web:admin", { limit: 200 });
     for (const invalid of [
@@ -96,7 +96,7 @@ describe("conversation API plugin", () => {
     ]) {
       const response = await app.inject({
         method: "POST",
-        url: "/api/web-chat/messages",
+        url: "/api/web-chat/messages?agentId=plana",
         payload: { text: invalid.text }
       });
       expect(response.statusCode).toBe(400);
@@ -112,21 +112,21 @@ describe("conversation API plugin", () => {
     const replyBody = { id: "private:171419991", replyEnabled: false };
     expect((await app.inject({
       method: "PUT",
-      url: "/api/conversations/reply",
+      url: "/api/conversations/reply?agentId=plana",
       payload: replyBody
     })).json()).toEqual({ ok: true, conversation: replyBody });
     expect(setConversationReplyEnabled).toHaveBeenCalledWith(replyBody);
 
     expect((await app.inject({
       method: "GET",
-      url: "/api/conversations/private%3A171419991/tools"
+      url: "/api/conversations/private%3A171419991/tools?agentId=plana"
     })).json()).toEqual({ conversationId: "private:171419991", disabledTools: ["websearch"] });
     expect(getConversationToolPolicy).toHaveBeenCalledWith("private:171419991");
 
     const toolsBody = { disabledTools: ["read_file", "workspace_bash"] };
     expect((await app.inject({
       method: "PUT",
-      url: "/api/conversations/private%3A171419991/tools",
+      url: "/api/conversations/private%3A171419991/tools?agentId=plana",
       payload: toolsBody
     })).json()).toEqual({ id: "private:171419991", ...toolsBody });
     expect(setConversationToolPolicy).toHaveBeenCalledWith({ id: "private:171419991", ...toolsBody });
@@ -134,7 +134,7 @@ describe("conversation API plugin", () => {
     for (const method of ["GET", "PUT"] as const) {
       const invalid = await app.inject({
         method,
-        url: "/api/conversations/not-a-conversation/tools",
+        url: "/api/conversations/not-a-conversation/tools?agentId=plana",
         ...(method === "PUT" ? { payload: { disabledTools: [] } } : {})
       });
       expect(invalid.statusCode).toBe(400);
@@ -149,7 +149,7 @@ describe("conversation API plugin", () => {
     ]) {
       const invalid = await app.inject({
         method: "PUT",
-        url: "/api/conversations/private%3A171419991/tools",
+        url: "/api/conversations/private%3A171419991/tools?agentId=plana",
         payload
       });
       expect(invalid.statusCode).toBe(400);
@@ -291,13 +291,13 @@ describe("conversation API plugin", () => {
 
     const first = app.inject({
       method: "POST",
-      url: "/api/web-chat/messages",
+      url: "/api/web-chat/messages?agentId=plana",
       payload: { text: "第一条" }
     });
     await firstStarted.promise;
     const second = app.inject({
       method: "POST",
-      url: "/api/web-chat/messages",
+      url: "/api/web-chat/messages?agentId=plana",
       payload: { text: "第二条" }
     });
     await secondRuntimeLookup.promise;

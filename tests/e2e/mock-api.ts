@@ -143,7 +143,7 @@ const initialConfig = {
     },
     bash: {
       enabled: true,
-      adminPrivateBackend: "native",
+      adminPrivateBackend: "docker",
       auditModel: "gpt-5.4-mini",
       strictMode: true,
       allowGroup: false,
@@ -1700,11 +1700,10 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
       }, prompt?.tools).map((tool) => tool.name === "workspace_bash"
         ? {
             ...tool,
-            description: `${tool.description} [native bash] 不可用；[docker bash] 已启动。`,
-            accessLabel: "管理员私聊 Native · 群聊与其他私聊 Docker",
-            accessDescription: "仅管理员 QQ 私聊使用 Native Bash；全部群聊与其他 QQ 私聊使用 Docker Bash；Web Chat 不可用。",
+            description: `${tool.description} Docker Bash 已启动。`,
+            accessLabel: "全部 QQ 会话 Docker",
+            accessDescription: "QQ 私聊与群聊使用 Docker Bash；Web Chat 不可用。",
             bashEnvironments: {
-              native: { available: false, reasonCode: "BASH_NATIVE_ISOLATION_UNAVAILABLE" },
               docker: { started: true }
             }
           }

@@ -1618,6 +1618,8 @@ function composeEnvironment(context, project = context.project) {
     SUNABOT_RUNTIME_GID: String(process.getgid?.() ?? 1000),
     SUNABOT_WEBFETCH_PLATFORM:
       process.platform === "darwin" && process.arch === "arm64" ? "linux/arm64" : "linux/amd64",
+    SUNABOT_CORE_PLATFORM:
+      process.platform === "darwin" && process.arch === "arm64" ? "linux/arm64" : "linux/amd64",
     SUNABOT_WEBFETCH_CHROMIUM_SANDBOX: "1",
     SUNABOT_WORKSPACE: context.workspace,
     SUNABOT_WORKSPACE_ID: context.identity,
@@ -1648,31 +1650,29 @@ async function ensureNativeDependencies(context) {
     await command("npm", ["ci"], { cwd: context.root });
   }
   const capabilities = await inspectNativeCapabilities(context);
-  if (!capabilities.workspaceBash.ok) throw new Error(`Native Bash 隔离不可用：${capabilities.workspaceBash.detail}`);
   if (!capabilities.codexCli.ok) throw new Error(`Native Codex CLI 不可用：${capabilities.codexCli.detail}`);
 }
 
 async function inspectNativeCapabilities(context) {
   const codex = await inspectNativeCodex(context);
-  let workspaceBash = { ok: false, detail: `unsupported native Bash platform: ${process.platform}` };
-  if (process.platform === "darwin") {
-    if ((process.getuid?.() ?? -1) <= 0) {
-      workspaceBash = { ok: false, detail: "Native host Bash requires a non-root runtime user" };
-    } else {
-      try {
-        await command("/bin/bash", ["--noprofile", "--norc", "-lc", ":"], { capture: true });
-        workspaceBash = { ok: true, detail: "audited administrator private-chat host Bash available" };
-      } catch (error) {
-        workspaceBash = { ok: false, detail: message(error) };
-      }
-    }
-  } else if (process.platform === "linux") {
-    try {
+  let workspaceBash;
+  try {
+    if (process.platform === "linux") {
       await command("/usr/bin/bwrap", bubblewrapProbeArguments(context.workspace), { capture: true });
       workspaceBash = { ok: true, detail: "bubblewrap namespace probe passed" };
-    } catch (error) {
-      workspaceBash = { ok: false, detail: message(error) };
+    } else {
+      const image = context.runtimeEnvironment.SUNABOT_BASH_IMAGE || "sunabot-bash:local";
+      await command("docker", [
+        "run", "--rm", "--pull", "never", "--network", "none", "--read-only",
+        "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
+        "--pids-limit", "64", "--memory", "512m", "--cpus", "1",
+        "--entrypoint", "/usr/bin/env", image, "-i",
+        "PATH=/usr/local/bin:/usr/bin:/bin", "/bin/bash", "--noprofile", "--norc", "-ec", ":"
+      ], { capture: true });
+      workspaceBash = { ok: true, detail: "Docker Bash isolation probe passed" };
     }
+  } catch (error) {
+    workspaceBash = { ok: false, detail: message(error) };
   }
   return {
     workspaceBash,

@@ -266,10 +266,10 @@ describe("tool configuration", () => {
     expect(config.providers.items.map((provider) => provider.modelSource)).toEqual(["remote", "custom"]);
   });
 
-  it("defaults workspace Bash to disabled with a native strict administrator backend", () => {
+  it("defaults workspace Bash to disabled with a Docker strict backend", () => {
     expect(defaultConfig().bot.bash).toMatchObject({
       enabled: false,
-      adminPrivateBackend: "native",
+      adminPrivateBackend: "docker",
       auditModel: "gpt-5.4-mini",
       strictMode: true
     });

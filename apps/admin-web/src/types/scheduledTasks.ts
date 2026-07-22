@@ -39,6 +39,10 @@ export interface ScheduledTask extends ScheduledTaskInput {
   nextTriggerAt?: string;
   lastTriggerAt?: string;
   lastRunStatus?: string;
+  lastRunId?: string;
+  deliveryAttempts?: number;
+  nextDeliveryAt?: string;
+  canReplayDelivery: boolean;
   lastError?: string;
 }
 

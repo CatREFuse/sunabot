@@ -180,7 +180,8 @@ export class SqliteDreamStore {
         const forced = this.database.prepare(`
           UPDATE dream_runs SET
             status = ?, worker_id = ?, lease_until = ?, attempt_count = attempt_count + 1,
-            next_retry_at = NULL, updated_at = ?
+            error_code = NULL, error_text = NULL, next_retry_at = NULL, failed_at = NULL,
+            updated_at = ?
           WHERE id = ? AND status = 'failed'
         `).run(
           recoveredStatus,
@@ -196,7 +197,8 @@ export class SqliteDreamStore {
         };
       }
       if (
-        (existing.status === "running" || existing.status === "generated" || existing.status === "consolidated")
+        (existing.status === "running" || existing.status === "generated" || existing.status === "consolidated"
+          || (existing.status === "failed" && existing.nextRetryAt != null && existing.nextRetryAt <= normalized.nowIso))
         && existing.attemptCount >= DREAM_MAX_CLAIMS
         && (existing.leaseUntil == null || existing.leaseUntil <= normalized.nowIso)
       ) {
@@ -206,13 +208,16 @@ export class SqliteDreamStore {
             error_code = 'DREAM_ATTEMPT_LIMIT',
             error_text = 'Dream processing stopped after three interrupted attempts.',
             next_retry_at = NULL, failed_at = ?, updated_at = ?
-          WHERE id = ? AND status IN ('running', 'generated', 'consolidated') AND attempt_count >= ?
-            AND (lease_until IS NULL OR lease_until <= ?)
+          WHERE id = ? AND attempt_count >= ? AND (
+            (status IN ('running', 'generated', 'consolidated') AND (lease_until IS NULL OR lease_until <= ?))
+            OR (status = 'failed' AND next_retry_at IS NOT NULL AND next_retry_at <= ?)
+          )
         `).run(
           normalized.nowIso,
           normalized.nowIso,
           existing.id,
           DREAM_MAX_CLAIMS,
+          normalized.nowIso,
           normalized.nowIso
         );
         const current = this.requireRun(existing.id);
@@ -233,7 +238,8 @@ export class SqliteDreamStore {
       const recovered = this.database.prepare(`
         UPDATE dream_runs SET
           status = ?, worker_id = ?, lease_until = ?, attempt_count = attempt_count + 1,
-          next_retry_at = NULL, updated_at = ?
+          error_code = NULL, error_text = NULL, next_retry_at = NULL, failed_at = NULL,
+          updated_at = ?
         WHERE id = ? AND (
           (status IN ('running', 'generated', 'consolidated') AND lease_until <= ? AND attempt_count < ?)
           OR (status = 'failed' AND next_retry_at IS NOT NULL AND next_retry_at <= ? AND attempt_count < ?)
@@ -409,7 +415,8 @@ export class SqliteDreamStore {
     const updated = this.database.prepare(`
       UPDATE dream_runs SET
         status = 'completed', worker_id = NULL, lease_until = NULL,
-        next_retry_at = NULL, completed_at = ?, updated_at = ?
+        error_code = NULL, error_text = NULL, next_retry_at = NULL, failed_at = NULL,
+        completed_at = ?, updated_at = ?
       WHERE id = ? AND worker_id = ? AND status = 'consolidated'
         AND persona_status <> 'pending' AND lease_until > ?
     `).run(nowIso, nowIso, runId, workerId, nowIso);

@@ -45,43 +45,52 @@ test("桌面 Agent 菜单不会让侧栏横向滚动", async ({ page }) => {
   }
 });
 
-test("提示词高亮层保持与输入框一致的字符度量", async ({ page }) => {
+test("提示词使用带行号的标准 Markdown 编辑器", async ({ page }) => {
   await installMockApi(page);
   await page.goto("/agent-prompts/persona.soul");
 
   const editor = page.getByLabel("提示词正文");
-  await editor.fill("# 标题\n**重点**与*斜体*\n> 引用\n```text\n代码块\n```");
+  await editor.fill("# 标题\n**重点**与*斜体*\n> 引用\n<context>@{bot.name}</context>\n```text\n代码块\n```");
 
-  const metrics = await editor.evaluate((textarea) => {
-    const highlight = textarea.previousElementSibling;
-    if (!(highlight instanceof HTMLElement)) throw new Error("Missing prompt highlight layer");
-    const inputStyle = getComputedStyle(textarea);
-    const properties = [
-      "fontFamily",
-      "fontSize",
-      "fontWeight",
-      "fontStyle",
-      "lineHeight",
-      "letterSpacing",
-      "wordSpacing",
-      "whiteSpace",
-      "wordBreak",
-      "overflowWrap",
-      "tabSize"
-    ] as const;
-    const expected = Object.fromEntries(properties.map((property) => [property, inputStyle[property]]));
-    return Array.from(highlight.querySelectorAll(".markup-heading, .markup-bold, .markup-italic, .markup-quote, .markup-code-block"))
-      .map((element) => ({
-        className: element.className,
-        display: getComputedStyle(element).display,
-        metrics: Object.fromEntries(properties.map((property) => [property, getComputedStyle(element)[property]]))
-      }))
-      .map((element) => ({ ...element, expected }));
+  await expect(editor).toHaveAttribute("contenteditable", "true");
+  await expect(editor).toHaveAttribute("data-language", "markdown");
+  await expect(page.locator(".prompt-field__editor .cm-lineNumbers")).toBeVisible();
+  await expect(page.locator(".prompt-field__editor .cm-lineNumbers .cm-gutterElement").filter({ hasText: "7" })).toBeVisible();
+  await expect(page.locator(".prompt-field__editor .cm-prompt-variable")).toHaveText("@{bot.name}");
+  await expect(page.locator(".prompt-field__editor textarea, .prompt-field__highlight")).toHaveCount(0);
+});
+
+test("Final Prompt 全选时保持单层文本", async ({ page }) => {
+  await installMockApi(page);
+  await page.setViewportSize({ width: 1532, height: 842 });
+  await page.goto("/system-prompts/memory.user-profile");
+
+  const editor = page.getByRole("textbox", { name: "system 提示词" });
+  await expect(editor).toBeVisible();
+  await editor.fill(Array.from({ length: 48 }, (_, index) => (
+    `${index + 1}. 你负责以 @{bot.name} 的第一视角，从同一批聊天消息中整理我对各个用户的稳定认知和印象。`
+  )).join("\n"));
+
+  await editor.press("ControlOrMeta+a");
+  const editorFrame = page.locator(".prompt-field__editor").filter({ has: editor });
+  const selection = editorFrame.locator(".cm-selectionBackground").first();
+  await expect(selection).toBeVisible();
+  const structure = await editorFrame.evaluate((element) => {
+    const scroller = element.querySelector<HTMLElement>(".cm-scroller");
+    const selectionLayer = element.querySelector<HTMLElement>(".cm-selectionBackground");
+    if (!scroller || !selectionLayer) throw new Error("Missing CodeMirror selection layer");
+    return {
+      contentLayers: element.querySelectorAll(".cm-content").length,
+      legacyLayers: element.querySelectorAll("textarea, .prompt-field__highlight").length,
+      scrolls: scroller.scrollHeight > scroller.clientHeight,
+      scrollbarGutter: getComputedStyle(scroller).scrollbarGutter,
+      selectionBackground: getComputedStyle(selectionLayer).backgroundColor
+    };
   });
 
-  expect(metrics).not.toHaveLength(0);
-  for (const element of metrics) {
-    expect(element.metrics).toEqual(element.expected);
-    expect(element.display).toBe("inline");
-  }
+  expect(structure.contentLayers).toBe(1);
+  expect(structure.legacyLayers).toBe(0);
+  expect(structure.scrolls).toBe(true);
+  expect(structure.scrollbarGutter).toBe("stable");
+  expect(structure.selectionBackground).toContain("215, 25, 33");
 });

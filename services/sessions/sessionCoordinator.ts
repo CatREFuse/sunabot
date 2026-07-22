@@ -9,6 +9,7 @@ import {
 import { SessionActorScheduler } from "./sessionActor.js";
 import { createOutboxDeliveryContext } from "./outboxDeliveryContext.js";
 import { OutboxPartitionScheduler } from "./outboxPartitionScheduler.js";
+import { SessionPersistenceMonitor } from "./sessionPersistenceMonitor.js";
 import { SessionToolJobProcessor } from "./sessionToolJobProcessor.js";
 import {
   type SessionHandleResult
@@ -97,6 +98,7 @@ export interface SessionCoordinatorOptions {
   cleanupCodexProcess?: (identity: CodexProcessIdentity) => Promise<CodexProcessCleanupResult>;
   observeCodexToolUsage?: CodexToolUsageObserver;
   resolveHeldReplyGate?: HeldOutboxReplyGateResolver;
+  onPersistenceError?: (error: unknown, context: { code: string; recordId: string }) => void;
 }
 
 export interface SessionCoordinatorIdleOptions {
@@ -151,6 +153,7 @@ export class SessionCoordinator {
   private readonly clock: () => number;
   private readonly disconnectedError: (error: unknown) => boolean;
   private readonly resolveHeldReplyGate?: HeldOutboxReplyGateResolver;
+  private readonly persistenceMonitor: SessionPersistenceMonitor;
   private readonly toolJobProcessor: SessionToolJobProcessor;
   private readonly turnServices: SessionTurnServices;
   private readonly turnActor: SessionActorScheduler<ClaimedTurnTask>;
@@ -198,6 +201,7 @@ export class SessionCoordinator {
     this.clock = options.clock ?? Date.now;
     this.disconnectedError = options.isDisconnectedError ?? isDefaultDisconnectedError;
     this.resolveHeldReplyGate = options.resolveHeldReplyGate;
+    this.persistenceMonitor = new SessionPersistenceMonitor(this.leaseMs, this.clock, options.onPersistenceError);
     this.turnServices = createSessionTurnServices({
       store: this.store,
       workerId: this.workerId,
@@ -344,8 +348,9 @@ export class SessionCoordinator {
       while (!this.stopped) {
         const claim = this.store.claimNextTurn({ workerId: this.workerId, leaseMs: this.leaseMs });
         if (!claim) break;
-        const state = this.createClaimState(
-          () => this.store.renewTurnLease(claim.turn.id, this.workerId, this.leaseMs)
+        const state = this.persistenceMonitor.claim(
+          () => this.store.renewTurnLease(claim.turn.id, this.workerId, this.leaseMs),
+          claim.turn.id
         );
         this.turnClaims.set(claim.turn.id, state);
         void this.turnActor.enqueue(claim.event.sessionId, { claim, state }, {
@@ -426,8 +431,9 @@ export class SessionCoordinator {
           }
         }
         if (!outbox) break;
-        const state = this.createClaimState(
-          () => this.store.renewOutboxLease(outbox.id, this.workerId, this.leaseMs)
+        const state = this.persistenceMonitor.claim(
+          () => this.store.renewOutboxLease(outbox.id, this.workerId, this.leaseMs),
+          outbox.id
         );
         this.outboxClaims.set(outbox.id, state);
         this.outboxClaimPartitions.set(outbox.id, outbox.deliveryPartition);
@@ -482,11 +488,12 @@ export class SessionCoordinator {
   }
 
   private finishOutboxFailure(outbox: OutboxRecord, state: ClaimState, error: unknown) {
-    if (state.finalized || this.stopped) return;
-    state.finalized = true;
+    if (state.finalized || state.finalizationAttempted || this.stopped) return;
+    state.finalizationAttempted = true;
     try {
       const current = this.store.getOutbox(outbox.id);
       if (!current || current.status === "sent" || current.status === "dead" || current.status === "delivery_unknown") {
+        state.finalized = true;
         return;
       }
       if (current.uncertainSettleStep) {
@@ -496,6 +503,7 @@ export class SessionCoordinator {
           outcome: "delivery_unknown",
           error: serializeError(error)
         });
+        state.finalized = true;
         return;
       }
       if (current.status === "sent_remote") {
@@ -508,6 +516,7 @@ export class SessionCoordinator {
           availableAt
         });
         this.wakeAt(availableAt, () => this.scheduleOutbox());
+        state.finalized = true;
         return;
       }
       if (current.transportStartedAt != null) {
@@ -517,6 +526,7 @@ export class SessionCoordinator {
           outcome: "delivery_unknown",
           error: serializeError(error)
         });
+        state.finalized = true;
         return;
       }
       if (this.disconnectedError(error)) {
@@ -528,6 +538,7 @@ export class SessionCoordinator {
           availableAt: this.clock()
         });
         this.outboxPartitions.pause(outbox.deliveryPartition);
+        state.finalized = true;
         return;
       }
       if (outbox.attempts < this.maxOutboxAttempts) {
@@ -540,6 +551,7 @@ export class SessionCoordinator {
           availableAt
         });
         this.wakeAt(availableAt, () => this.scheduleOutbox());
+        state.finalized = true;
         return;
       }
       this.store.finishOutbox({
@@ -548,8 +560,11 @@ export class SessionCoordinator {
         outcome: "dead",
         error: serializeError(error)
       });
-    } catch {
-      // Recovery will reclaim the lease if persistence itself is unavailable.
+      state.finalized = true;
+    } catch (persistenceError) {
+      this.persistenceMonitor.record(persistenceError, "OUTBOX_FINALIZATION_PERSIST_FAILED", outbox.id);
+      state.controller.abort(persistenceError);
+      this.wakeAt(this.clock() + this.leaseMs, () => this.scheduleOutbox());
     }
   }
 
@@ -561,14 +576,15 @@ export class SessionCoordinator {
         const job = this.store.claimNextToolJob({ workerId: this.workerId, leaseMs: this.leaseMs });
         if (!job) break;
         const jobSettings = this.codexSettings();
-        const state = this.createClaimState(
+        const state = this.persistenceMonitor.claim(
           () => this.store.renewToolJobLease(
             job.id,
             this.workerId,
             this.leaseMs,
             job.attempts,
             job.attemptToken
-          )
+          ),
+          job.id
         );
         this.toolClaims.set(job.id, state);
         const actorKey = toolActorKey(job, jobSettings.workspacePath);
@@ -585,19 +601,8 @@ export class SessionCoordinator {
     }
   }
 
-  private createClaimState(renew: () => boolean): ClaimState {
-    const controller = new AbortController();
-    const interval = setInterval(() => {
-      if (!renew() && !controller.signal.aborted) {
-        controller.abort(new Error("Persistent lease ownership was lost."));
-      }
-    }, Math.max(1, Math.floor(this.leaseMs / 3)));
-    interval.unref?.();
-    return {
-      controller,
-      finalized: false,
-      stopRenewal: () => clearInterval(interval)
-    };
+  getPersistenceHealth() {
+    return this.persistenceMonitor.health();
   }
 
   private assertClaimUsable(state: ClaimState, signal: AbortSignal) {

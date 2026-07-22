@@ -187,7 +187,7 @@ describe("emoji routes", () => {
 
     const invalidKey = await app.inject({
       method: "POST",
-      url: "/api/emojis/generate",
+      url: "/api/emojis/generate?agentId=plana",
       payload: { key: "bad/key" }
     });
     expect(invalidKey.statusCode).toBe(400);
@@ -202,7 +202,7 @@ describe("emoji routes", () => {
 
     const invalidVariant = await app.inject({
       method: "GET",
-      url: "/api/emojis/%E5%BC%80%E5%BF%83/content?variant=giant"
+      url: "/api/emojis/%E5%BC%80%E5%BF%83/content?variant=giant&agentId=plana"
     });
     expect(invalidVariant.statusCode).toBe(400);
     expect(invalidVariant.json()).toEqual({
@@ -236,7 +236,7 @@ describe("emoji routes", () => {
     for (const invalidKey of ["\ud800", "开\u0085心"]) {
       const upload = await app.inject({
         method: "POST",
-        url: "/api/emojis",
+        url: "/api/emojis?agentId=plana",
         payload: {
           key: invalidKey,
           fileName: "invalid.png",
@@ -245,7 +245,7 @@ describe("emoji routes", () => {
       });
       const generate = await app.inject({
         method: "POST",
-        url: "/api/emojis/generate",
+        url: "/api/emojis/generate?agentId=plana",
         payload: { key: invalidKey }
       });
 
@@ -283,7 +283,7 @@ describe("emoji routes", () => {
 
       const response = await app.inject({
         method: "POST",
-        url: "/api/emojis/generate",
+        url: "/api/emojis/generate?agentId=plana",
         payload: { key: "开心" }
       });
 
@@ -327,14 +327,14 @@ describe("emoji routes", () => {
 
     const firstRequest = app.inject({
       method: "POST",
-      url: "/api/emojis/generate",
+      url: "/api/emojis/generate?agentId=plana",
       payload: { key: "开心" }
     });
     await vi.waitFor(() => expect(generateImage).toHaveBeenCalledTimes(1));
 
     const duplicate = await app.inject({
       method: "POST",
-      url: "/api/emojis/generate",
+      url: "/api/emojis/generate?agentId=plana",
       payload: { key: "开心" }
     });
     expect(duplicate.statusCode).toBe(409);
@@ -349,14 +349,14 @@ describe("emoji routes", () => {
 
     const secondRequest = app.inject({
       method: "POST",
-      url: "/api/emojis/generate",
+      url: "/api/emojis/generate?agentId=plana",
       payload: { key: "哭" }
     });
     await vi.waitFor(() => expect(generateImage).toHaveBeenCalledTimes(2));
 
     const capacity = await app.inject({
       method: "POST",
-      url: "/api/emojis/generate",
+      url: "/api/emojis/generate?agentId=plana",
       payload: { key: "认真" }
     });
     expect(capacity.statusCode).toBe(429);
@@ -379,7 +379,7 @@ describe("emoji routes", () => {
 
     const retry = await app.inject({
       method: "POST",
-      url: "/api/emojis/generate",
+      url: "/api/emojis/generate?agentId=plana",
       payload: { key: "开心" }
     });
     expect(retry.statusCode).toBe(200);
@@ -453,7 +453,7 @@ describe("emoji routes", () => {
 
     const upload = await app.inject({
       method: "POST",
-      url: "/api/emojis",
+      url: "/api/emojis?agentId=plana",
       payload: { key: "开心", fileName: "bad.png", dataBase64: "%%%%" }
     });
     expect(upload.statusCode).toBe(429);
@@ -464,7 +464,7 @@ describe("emoji routes", () => {
 
     const generated = await app.inject({
       method: "POST",
-      url: "/api/emojis/generate",
+      url: "/api/emojis/generate?agentId=plana",
       payload: { key: "开心" }
     });
     expect(generated.statusCode).toBe(429);
@@ -477,7 +477,7 @@ describe("emoji routes", () => {
     repository.bindGenerated.mockResolvedValueOnce(envelope("开心", "e", "generated"));
     const retry = await app.inject({
       method: "POST",
-      url: "/api/emojis/generate",
+      url: "/api/emojis/generate?agentId=plana",
       payload: { key: "开心" }
     });
     expect(retry.statusCode).toBe(200);

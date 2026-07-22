@@ -4,6 +4,7 @@ import type {
   KnowledgeSearchInput,
   KnowledgeUploadInput
 } from "../../../services/knowledge/public.js";
+import { requestAgentId } from "../requestAgentId.js";
 
 type KnowledgeRouteService = Pick<
   KnowledgeBaseService,
@@ -17,6 +18,7 @@ export interface KnowledgeRouteOptions {
 const openObject = { type: "object", additionalProperties: true } as const;
 const agentQuery = {
   type: "object",
+  required: ["agentId"],
   additionalProperties: false,
   properties: { agentId: { type: "string", minLength: 1, maxLength: 32 } }
 } as const;
@@ -76,9 +78,4 @@ export function registerKnowledgeRoutes(app: FastifyInstance, options: Knowledge
     const body = request.body as { path?: string };
     return serviceFor(request).deleteDocument(body.path);
   });
-}
-
-function requestAgentId(query: unknown) {
-  const value = query && typeof query === "object" ? (query as { agentId?: unknown }).agentId : undefined;
-  return String(value ?? "plana").trim() || "plana";
 }

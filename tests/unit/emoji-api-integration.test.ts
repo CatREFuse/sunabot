@@ -162,21 +162,21 @@ afterAll(async () => {
 
 describe("emoji production repository and Fastify routes", () => {
   it("enforces admin authentication and CSRF before repository mutations", async () => {
-    const unauthorized = await app.inject({ method: "GET", url: "/api/emojis" });
+    const unauthorized = await app.inject({ method: "GET", url: "/api/emojis?agentId=plana" });
     const authorized = await app.inject({
       method: "GET",
-      url: "/api/emojis",
+      url: "/api/emojis?agentId=plana",
       headers: readHeaders()
     });
     const missingCsrf = await app.inject({
       method: "POST",
-      url: "/api/emojis",
+      url: "/api/emojis?agentId=plana",
       headers: { host: LOGIN_HEADERS.host, origin: LOGIN_HEADERS.origin, cookie },
       payload: uploadPayload("开心", "red.png", redPng)
     });
     const wrongOrigin = await app.inject({
       method: "POST",
-      url: "/api/emojis",
+      url: "/api/emojis?agentId=plana",
       headers: { ...mutationHeaders(), origin: "https://untrusted.example.test" },
       payload: uploadPayload("开心", "red.png", redPng)
     });

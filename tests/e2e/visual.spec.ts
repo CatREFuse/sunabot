@@ -209,17 +209,11 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     serverFile.revision = `${serverFile.revision}-external`;
     await page.getByRole("button", { name: "保存", exact: true }).click();
     await expect(page.getByText("服务器版本已更新", { exact: true }).first()).toBeVisible();
-    await editor.evaluate((element) => {
-      element.scrollTop = 0;
-      element.dispatchEvent(new Event("scroll"));
-    });
+    await editor.locator("xpath=..").evaluate((element) => { element.scrollTop = 0; });
     await capture(page, viewport.name, theme, "prompts-dirty-conflict");
-    await editor.evaluate((element) => {
-      element.focus();
-      element.setSelectionRange(16, 62);
-    });
+    await editor.press("ControlOrMeta+a");
     await capture(page, viewport.name, theme, "prompts-text-selection");
-    await editor.evaluate((element) => element.setSelectionRange(0, 0));
+    await editor.press("ArrowLeft");
     await page.getByRole("button", { name: "加载服务器版本" }).click();
 
     await page.goto("/system-prompts/conversation.private-reply");
@@ -596,24 +590,22 @@ test("Bash 权限与会话状态四视口矩阵", async ({ page }, testInfo) => 
     await expect(page.getByRole("heading", { name: "命令执行" })).toBeVisible();
     await expect(page.getByText("对抗审批 Agent", { exact: true })).toBeVisible();
     await expect(page.getByLabel("严格审批")).toBeVisible();
-    await expect(page.getByText("Native Bash", { exact: true })).toBeVisible();
-    await expect(page.getByText("Docker Bash", { exact: true })).toBeVisible();
+    await expect(page.getByText("Native Bash", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("Docker Bash", { exact: true })).toHaveCount(2);
     await expect(page.getByText("Skill 与 MCP · Docker 只读", { exact: true })).toBeVisible();
     await capture(page, viewport.name, theme, "settings-bash-permissions");
 
     await page.goto("/agent-settings/tools");
     await page.getByLabel("搜索工具").fill("workspace_bash");
     const bashRow = page.locator("article").filter({ has: page.getByText("workspace_bash", { exact: true }) });
-    await expect(bashRow.getByText("管理员私聊 Native · 群聊与其他私聊 Docker", { exact: true })).toBeVisible();
-    await expect(bashRow.getByText("[native bash] 不可用", { exact: true })).toBeVisible();
-    await expect(bashRow.getByText("[docker bash] 已启动", { exact: true })).toBeVisible();
+    await expect(bashRow.getByText("全部 QQ 会话 Docker", { exact: true })).toBeVisible();
+    await expect(bashRow.getByText("Docker Bash 已启动", { exact: true })).toBeVisible();
     await expect(bashRow.getByText("运行环境异常", { exact: true })).toHaveCount(0);
     await capture(page, viewport.name, theme, "settings-bash-session-scope");
     await bashRow.getByRole("button", { name: "查看 Bash 详情" }).click();
     const dialog = page.getByRole("dialog", { name: "Bash" });
     await expect(dialog.getByText("适用会话", { exact: true })).toBeVisible();
-    await expect(dialog.getByText("[native bash]", { exact: true })).toBeVisible();
-    await expect(dialog.getByText("[docker bash]", { exact: true })).toBeVisible();
+    await expect(dialog.getByText("Docker Bash", { exact: true })).toBeVisible();
     await capture(page, viewport.name, theme, "settings-bash-detail");
     await dialog.getByRole("button", { name: "关闭工具详情" }).click();
   }
@@ -654,13 +646,29 @@ test("提示词编辑器光标对齐", async ({ page }, testInfo) => {
     "",
     "**你的本质善良**，有正义感而且勇敢。"
   ].join("\n"));
-  await editor.evaluate((element) => {
-    const marker = "你很容易把普通发言理解成别瞪了，是变态。";
-    const position = element.value.indexOf(marker) + marker.length - 3;
-    element.focus();
-    element.setSelectionRange(position, position);
-  });
+  await editor.press("ControlOrMeta+ArrowUp");
+  await editor.press("ArrowDown");
+  await editor.press("ArrowDown");
+  await editor.press("ArrowDown");
+  await editor.press("End");
+  await editor.press("ArrowLeft");
+  await editor.press("ArrowLeft");
+  await editor.press("ArrowLeft");
   await capture(page, "1440x900", theme, "prompt-cursor-alignment");
+});
+
+test("Final Prompt 输入框全选无文本重叠", async ({ page }, testInfo) => {
+  const theme = testInfo.project.name.endsWith("dark") ? "dark" : "light";
+  await page.addInitScript((selectedTheme) => localStorage.setItem("sunabot.theme", selectedTheme), theme);
+  await page.emulateMedia({ colorScheme: theme, reducedMotion: "reduce" });
+  await installMockApi(page);
+  await page.setViewportSize({ width: 1532, height: 842 });
+  await page.goto("/system-prompts/memory.user-profile");
+
+  const editor = page.getByRole("textbox", { name: "system 提示词" });
+  await expect(editor).toBeVisible();
+  await editor.press("ControlOrMeta+a");
+  await capture(page, "1532x842", theme, "prompt-selection-alignment");
 });
 
 test("提示词 s-if 条件语法高亮", async ({ page }, testInfo) => {
@@ -678,18 +686,15 @@ test("提示词 s-if 条件语法高亮", async ({ page }, testInfo) => {
     "</xml-check>"
   ].join("\n"));
 
-  const directive = page.locator(".prompt-field__highlight .markup-directive").filter({
-    hasText: 's-if="tone_mode == true"'
-  });
+  const directive = page.locator(".cm-prompt-directive").filter({ hasText: "s-if=" }).first();
+  const condition = page.locator(".cm-prompt-condition").filter({ hasText: "tone_mode == true" });
   await expect(directive).toBeVisible();
-  await expect(directive.locator(".markup-condition")).toHaveText("tone_mode == true");
-  const colors = await directive.evaluate((element) => ({
-    directive: getComputedStyle(element).color,
-    condition: getComputedStyle(element.querySelector(".markup-condition")!).color,
-    xml: getComputedStyle(element.closest(".markup-xml")!).color
-  }));
-  expect(colors.directive).not.toBe(colors.xml);
-  expect(colors.condition).not.toBe(colors.directive);
+  await expect(condition).toHaveText("tone_mode == true");
+  const [directiveColor, conditionColor] = await Promise.all([
+    directive.evaluate((element) => getComputedStyle(element).color),
+    condition.evaluate((element) => getComputedStyle(element).color)
+  ]);
+  expect(conditionColor).not.toBe(directiveColor);
   await capture(page, "1440x900", theme, "prompt-s-if-highlight");
 });
 

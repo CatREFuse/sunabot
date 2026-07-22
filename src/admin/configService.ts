@@ -655,8 +655,8 @@ function validateBash(input: unknown): BotConfig["bash"] {
     "enabled", "adminPrivateBackend", "auditModel", "strictMode",
     "allowGroup", "adminOnly", "workspaceOnly", "blockedKeywords"
   ], "bash");
-  if (value.adminPrivateBackend !== "native" && value.adminPrivateBackend !== "docker") {
-    badRequest("CONFIG_INVALID", "管理员私聊 Bash 后端无效。", "bash.adminPrivateBackend");
+  if (value.adminPrivateBackend !== "docker") {
+    badRequest("CONFIG_INVALID", "Bash 仅支持 Docker 隔离。", "bash.adminPrivateBackend");
   }
   return {
     enabled: boolean(value.enabled, "bash.enabled"),

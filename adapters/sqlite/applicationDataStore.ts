@@ -3,10 +3,11 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { getWorkspacePath, resolveProjectPath } from "../../src/config.js";
 import type { AppConfig, ConversationRecord, ImageHistoryRecord } from "../../src/types.js";
-import type { MemoryPersistenceProvider } from "../../services/memory/persistence.js";
+import type { MemoryPersistenceProvider, MemorySourceRevisions } from "../../services/memory/persistence.js";
 import type { ScheduledTaskStore } from "../../services/scheduling/public.js";
 import { WORKSPACE_LAYOUT } from "../../packages/platform/workspaceLayout.js";
 import { currentAgentRuntimeConfig } from "../../packages/platform/runtimeAgentContext.js";
+import { readMemorySourceRevisions, readMemorySourceSnapshot } from "./memoryRevisionStore.js";
 import { migrateApplicationDataSchema } from "./applicationDataSchema.js";
 import { EmojiStore, type EmojiRecord, type EmojiVersionRecord } from "./emojiStore.js";
 import { SqliteScheduledTaskStore } from "./scheduledTaskStore.js";
@@ -244,6 +245,8 @@ export class ApplicationDataStore {
     `).all(source).map((row) => parseObject((row as SqlRow).data_json));
   }
 
+  readMemorySnapshot() { return this.transaction(() => readMemorySourceSnapshot(this.database, (source) => this.readMemory(source))); }
+
   replaceMemory(source: MemoryDataSource, records: readonly JsonObject[]) {
     this.transaction(() => this.replaceMemoryUnsafe(source, records));
     if (source === "long_term") initializeLongTermRecallTracking(this);
@@ -259,7 +262,7 @@ export class ApplicationDataStore {
 
   commitMemoryBatch(input: {
     batchId: string;
-    baselineWorking: readonly JsonObject[];
+    baselineRevisions: MemorySourceRevisions;
     working: readonly JsonObject[];
     longTerm: readonly JsonObject[];
     userProfile: readonly JsonObject[];
@@ -268,7 +271,10 @@ export class ApplicationDataStore {
     return this.transaction(() => {
       const existing = this.readMemoryBatch(input.batchId);
       if (existing !== undefined) return { status: "existing" as const, result: existing };
-      if (JSON.stringify(this.readMemory("working")) !== JSON.stringify(input.baselineWorking)) {
+      const currentRevisions = readMemorySourceRevisions(this.database);
+      if ((["working", "long_term", "user_profile"] as const).some(
+        (source) => currentRevisions[source] !== input.baselineRevisions[source]
+      )) {
         return { status: "snapshot_conflict" as const };
       }
       this.replaceMemoryUnsafe("working", input.working);

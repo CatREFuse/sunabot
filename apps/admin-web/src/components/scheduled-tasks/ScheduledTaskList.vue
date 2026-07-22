@@ -11,11 +11,13 @@ const props = defineProps<{
   deletingId: string;
   togglingId: string;
   retainingId: string;
+  replayingId?: string;
 }>();
 const emit = defineEmits<{
   edit: [task: ScheduledTask];
   toggle: [task: ScheduledTask];
   togglePermanentRetention: [task: ScheduledTask];
+  replay: [task: ScheduledTask];
   remove: [task: ScheduledTask];
   create: [];
 }>();
@@ -67,6 +69,8 @@ function taskKindLabel(task: ScheduledTask) {
                 <strong>{{ task.name }}</strong>
                 <p>{{ task.context }}</p>
                 <p v-if="task.lastError" class="task-error">{{ task.lastError }}</p>
+                <p v-if="task.deliveryAttempts">已尝试投递 {{ task.deliveryAttempts }} 次</p>
+                <p v-if="task.nextDeliveryAt">下次投递 {{ formatDateTime(task.nextDeliveryAt) }}</p>
               </div>
             </td>
             <td data-label="计划">
@@ -117,6 +121,10 @@ function taskKindLabel(task: ScheduledTask) {
                 <button v-if="task.archived" class="btn" type="button" :disabled="mutationBusy" @click="emit('togglePermanentRetention', task)">
                   <i v-if="retainingId === task.id" class="bx bx-loader-alt bx-spin" aria-hidden="true"></i>
                   {{ retainingId === task.id ? "更新中" : task.permanentRetention ? "取消保留" : "永久保留" }}
+                </button>
+                <button v-if="task.canReplayDelivery" class="btn" type="button" :disabled="mutationBusy" @click="emit('replay', task)">
+                  <i v-if="replayingId === task.id" class="bx bx-loader-alt bx-spin" aria-hidden="true"></i>
+                  {{ replayingId === task.id ? "重放中" : "重放投递" }}
                 </button>
                 <button class="icon-btn text-accent" type="button" :disabled="mutationBusy" :aria-label="`删除 ${task.name}`" @click="emit('remove', task)">
                   <i class="bx" :class="deletingId === task.id ? 'bx-loader-alt bx-spin' : 'bx-trash'" aria-hidden="true"></i>

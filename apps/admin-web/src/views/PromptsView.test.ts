@@ -61,7 +61,7 @@ describe("PromptsView", () => {
     first.resolve(file("persona.soul", "stale route content"));
     await flushPromises();
 
-    expect((wrapper.get("textarea").element as HTMLTextAreaElement).value).toBe("new route content");
+    expect(wrapper.get('[aria-label="提示词正文"]').text()).toContain("new route content");
     expect(wrapper.text()).not.toContain("stale route content");
     wrapper.unmount();
   });
@@ -93,7 +93,7 @@ describe("PromptsView", () => {
     await flushPromises();
 
     expect(apiRequest).toHaveBeenCalledWith("/api/agent-files/image.selfie-rewrite");
-    expect((wrapper.get("textarea").element as HTMLTextAreaElement).value).toBe("自拍提示词");
+    expect(wrapper.get('[aria-label="system 提示词"]').text()).toContain("自拍提示词");
     wrapper.unmount();
   });
 });

@@ -115,9 +115,12 @@ export async function applyMemoryBatchTransaction(
     const workingSource = sourceById("working");
     const longTermSource = sourceById("long_term");
     const profileSource = sourceById("user_profile");
-    const workingRecords = await readMemoryRecords(memorySourcePath(config, workingSource));
-    const longTermRecords = await readMemoryRecords(memorySourcePath(config, longTermSource));
-    const profileRecords = await readMemoryRecords(memorySourcePath(config, profileSource));
+    memorySourcePath(config, longTermSource);
+    memorySourcePath(config, profileSource);
+    const snapshot = store.readMemorySnapshot();
+    const workingRecords = snapshot.records.working.map((value, index) => ({ index, value }));
+    const longTermRecords = snapshot.records.long_term.map((value, index) => ({ index, value }));
+    const profileRecords = snapshot.records.user_profile.map((value, index) => ({ index, value }));
     if (memorySnapshotToken(workingRecords) !== input.expectedWorkingSnapshotToken) {
       return { status: "snapshot_conflict" };
     }
@@ -177,7 +180,7 @@ export async function applyMemoryBatchTransaction(
     };
     const committed = store.commitMemoryBatch({
       batchId,
-      baselineWorking: workingRecords.map((record) => record.value),
+      baselineRevisions: snapshot.revisions,
       working: nextWorkingRecords.map((record) => record.value),
       longTerm: longTermBuild.records.map((record) => record.value),
       userProfile: nextProfileRecords.map((record) => record.value),

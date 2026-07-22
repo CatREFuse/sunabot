@@ -65,7 +65,7 @@ describe("scheduled task SQLite store", () => {
     }
   });
 
-  it.each(["10", "11", "12", "13", "14", "15"])("forward migrates application schema %s to 16 and reopens idempotently", async (version) => {
+  it.each(["10", "11", "12", "13", "14", "15", "16"])("forward migrates application schema %s to 17 and reopens idempotently", async (version) => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), `sunabot-scheduled-v${version}-`));
     const databasePath = path.join(root, "sunabot.sqlite");
     try {
@@ -103,7 +103,7 @@ describe("scheduled task SQLite store", () => {
 
       const verified = new DatabaseSync(databasePath);
       expect(verified.prepare("SELECT value FROM app_metadata WHERE key = 'storage-schema-version'").get())
-        .toEqual({ value: "16" });
+        .toEqual({ value: "17" });
       expect(verified.prepare("SELECT value FROM app_metadata WHERE key = 'scheduled-test-sentinel'").get())
         .toEqual({ value: "keep" });
       const tables = verified.prepare(`

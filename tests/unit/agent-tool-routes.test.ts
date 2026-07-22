@@ -75,9 +75,8 @@ describe("agent and tool API plugin", () => {
       configuredEnabled: false,
       available: true,
       effectiveEnabled: false,
-      accessLabel: "管理员私聊 Native · 群聊与其他私聊 Docker",
+      accessLabel: "全部 QQ 会话 Docker",
       bashEnvironments: {
-        native: { available: true },
         docker: { started: true }
       }
     });
@@ -134,7 +133,7 @@ describe("agent and tool API plugin", () => {
       effectiveEnabled: false,
       availabilityReason: "当前环境没有可用的 Skill 脚本审计执行器。"
     });
-    expect(resolveToolCapabilities.mock.calls.map(([backend]) => backend)).toEqual(["native", "docker"]);
+    expect(resolveToolCapabilities.mock.calls.map(([backend]) => backend)).toEqual(["docker"]);
     expect(resolveConversationAssetCapability).toHaveBeenCalledOnce();
     expect(resolveSkillToolCapabilities).toHaveBeenCalledOnce();
     expect(get).toHaveBeenCalledWith("conversation.private-reply", config);
@@ -354,22 +353,18 @@ describe("agent and tool API plugin", () => {
   });
 
   it.each([
-    { native: true, docker: true, available: true },
-    { native: false, docker: true, available: true },
-    { native: true, docker: false, available: true },
-    { native: false, docker: false, available: false }
-  ])("advertises split Native=$native and Docker=$docker Bash status", async ({ native, docker, available }) => {
+    { docker: true, available: true },
+    { docker: false, available: false }
+  ])("advertises Docker=$docker Bash status", async ({ docker, available }) => {
     const app = Fastify();
     apps.push(app);
     const config = defaultConfig();
     config.bot.bash.enabled = true;
-    const resolveToolCapabilities = vi.fn(async (backend?: "native" | "docker" | null) => ({
+    const resolveToolCapabilities = vi.fn(async () => ({
       codex: true,
-      workspaceBash: backend === "native" ? native : docker,
-      ...((backend === "native" ? native : docker) ? {} : {
-        workspaceBashReason: backend === "native"
-          ? "BASH_NATIVE_ISOLATION_UNAVAILABLE" as const
-          : "BASH_DOCKER_ISOLATION_UNAVAILABLE" as const
+      workspaceBash: docker,
+      ...(docker ? {} : {
+        workspaceBashReason: "BASH_DOCKER_ISOLATION_UNAVAILABLE" as const
       })
     }));
     registerAgentToolRoutes(app, {
@@ -385,13 +380,9 @@ describe("agent and tool API plugin", () => {
     expect(bash).toMatchObject({
       available,
       effectiveEnabled: available,
-      accessLabel: "管理员私聊 Native · 群聊与其他私聊 Docker",
-      accessDescription: "仅管理员 QQ 私聊使用 Native Bash；全部群聊与其他 QQ 私聊使用 Docker Bash；Web Chat 不可用。",
+      accessLabel: "全部 QQ 会话 Docker",
+      accessDescription: "QQ 私聊与群聊使用 Docker Bash；Web Chat 不可用。",
       bashEnvironments: {
-        native: {
-          available: native,
-          ...(!native ? { reasonCode: "BASH_NATIVE_ISOLATION_UNAVAILABLE" } : {})
-        },
         docker: {
           started: docker,
           ...(!docker ? { reasonCode: "BASH_DOCKER_ISOLATION_UNAVAILABLE" } : {})
@@ -399,13 +390,12 @@ describe("agent and tool API plugin", () => {
       },
       ...(!available ? {
         unavailabilityKind: "runtime",
-        runtimeReasonCode: "BASH_NATIVE_ISOLATION_UNAVAILABLE",
-        availabilityReason: "Native Bash 当前不可用。 Docker Bash 环境未启动。"
+        runtimeReasonCode: "BASH_DOCKER_ISOLATION_UNAVAILABLE",
+        availabilityReason: "Docker Bash 环境未启动。"
       } : {})
     });
-    expect(bash.description).toContain(`[native bash] ${native ? "可用" : "不可用"}`);
-    expect(bash.description).toContain(`[docker bash] ${docker ? "已启动" : "未启动"}`);
-    expect(resolveToolCapabilities.mock.calls.map(([backend]) => backend)).toEqual(["native", "docker"]);
+    expect(bash.description).toContain(`Docker Bash ${docker ? "已启动" : "未启动"}`);
+    expect(resolveToolCapabilities.mock.calls.map(([backend]) => backend)).toEqual(["docker"]);
   });
 
   it("reports the independent Bash audit failure without exposing diagnostics", async () => {
@@ -429,9 +419,8 @@ describe("agent and tool API plugin", () => {
     expect(tools.find((tool: { name: string }) => tool.name === "workspace_bash")).toMatchObject({
       available: false,
       runtimeReasonCode: "BASH_AUDIT_UNAVAILABLE",
-      availabilityReason: "Native Bash 的对抗审批 Agent 不可用。 Docker Bash 的对抗审批 Agent 不可用。",
+      availabilityReason: "Bash 对抗审批 Agent 不可用。",
       bashEnvironments: {
-        native: { available: false, reasonCode: "BASH_AUDIT_UNAVAILABLE" },
         docker: { started: false, reasonCode: "BASH_AUDIT_UNAVAILABLE" }
       }
     });

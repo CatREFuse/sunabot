@@ -15,7 +15,7 @@ afterEach(async () => {
 });
 
 describe("workspace Bash capability probe", () => {
-  it("reports macOS Native Bash available after the audited host shell probe succeeds", async () => {
+  it("fails macOS Native Bash closed even when the host shell is executable", async () => {
     const access = vi.fn(async () => undefined);
     const probe = vi.fn(async () => undefined);
     const capability = createWorkspaceBashCapabilityProbe({
@@ -24,12 +24,12 @@ describe("workspace Bash capability probe", () => {
       sandbox: { effectiveUid: 501, access, probe }
     });
 
-    await expect(capability(await createAgentWorkspace())).resolves.toEqual({ available: true });
-    expect(access).toHaveBeenCalledWith("/bin/bash", expect.any(Number));
-    expect(probe).toHaveBeenCalledWith(
-      "/bin/bash",
-      ["--noprofile", "--norc", "-lc", ":"]
-    );
+    await expect(capability(await createAgentWorkspace())).resolves.toEqual({
+      available: false,
+      reason: "BASH_NATIVE_ISOLATION_UNAVAILABLE"
+    });
+    expect(access).not.toHaveBeenCalled();
+    expect(probe).not.toHaveBeenCalled();
   });
 
   it("reports macOS Docker Bash only after its image probe succeeds", async () => {

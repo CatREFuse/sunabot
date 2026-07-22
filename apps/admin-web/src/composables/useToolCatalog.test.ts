@@ -100,7 +100,7 @@ describe("useToolCatalog", () => {
     expect(catalog.tools.value[0]).not.toHaveProperty("executionBackend");
   });
 
-  it("normalizes split Native and Docker Bash environment status", async () => {
+  it("normalizes Docker Bash environment status", async () => {
     apiRequest.mockResolvedValueOnce({
       tools: [{
         name: "workspace_bash",
@@ -108,7 +108,6 @@ describe("useToolCatalog", () => {
         description: "执行命令",
         enabled: true,
         bashEnvironments: {
-          native: { available: false, reasonCode: "BASH_NATIVE_ISOLATION_UNAVAILABLE" },
           docker: { started: true }
         }
       }]
@@ -118,7 +117,6 @@ describe("useToolCatalog", () => {
     await catalog.load();
 
     expect(catalog.tools.value[0]?.bashEnvironments).toEqual({
-      native: { available: false, reasonCode: "BASH_NATIVE_ISOLATION_UNAVAILABLE" },
       docker: { started: true }
     });
   });

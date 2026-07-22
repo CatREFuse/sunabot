@@ -6,6 +6,7 @@ import {
   type SelfieReferenceVariant
 } from "../../../src/admin/selfieReferences.js";
 import { badRequest } from "../../../src/admin/errors.js";
+import { requestAgentId } from "../requestAgentId.js";
 
 const openObject = { type: "object", additionalProperties: true } as const;
 const passthroughBody = {} as const;
@@ -94,11 +95,6 @@ function publicImage(image: SelfieReferenceImage, agentId?: string) {
     displayUrl: `${base}?variant=display${scope}`,
     placeholderUrl: `${base}?variant=placeholder${scope}`
   };
-}
-
-function requestAgentId(query: unknown) {
-  const value = query && typeof query === "object" ? (query as { agentId?: unknown }).agentId : undefined;
-  return String(value ?? "plana").trim() || "plana";
 }
 
 function parseVariant(value: string | undefined): SelfieReferenceVariant {

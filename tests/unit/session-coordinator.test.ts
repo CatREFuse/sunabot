@@ -884,6 +884,42 @@ describe("SessionCoordinator", () => {
     ]);
   });
 
+  it("reports a durable outbox finalization failure without marking the claim complete", async () => {
+    const store = trackStore(new SessionStore({ databasePath: ":memory:" }));
+    const persistenceErrors = vi.fn();
+    const coordinator = trackCoordinator(createCoordinator({
+      store,
+      handleEvent: () => completedReply("persist result"),
+      deliverOutbox: () => { throw new Error("transport rejected"); },
+      onPersistenceError: persistenceErrors
+    }));
+    const finishOutbox = vi.spyOn(store, "finishOutbox").mockImplementationOnce(() => {
+      throw new Error("sqlite write failed");
+    });
+
+    coordinator.resume();
+    coordinator.enqueueEvent({
+      sessionId: "group:outbox-persistence-failure",
+      kind: "incoming",
+      payload: { text: "send" }
+    });
+    await coordinator.waitForIdle();
+
+    const outbox = store.listOutbox("group:outbox-persistence-failure")[0]!;
+    expect(finishOutbox).toHaveBeenCalledOnce();
+    expect(outbox.status).toBe("sending");
+    expect(coordinator.getPersistenceHealth()).toMatchObject({
+      status: "degraded",
+      code: "OUTBOX_FINALIZATION_PERSIST_FAILED",
+      recordId: outbox.id
+    });
+    expect(persistenceErrors).toHaveBeenCalledWith(expect.any(Error), {
+      code: "OUTBOX_FINALIZATION_PERSIST_FAILED",
+      recordId: outbox.id
+    });
+    coordinator.stop();
+  });
+
   it("releases a voice outbox that becomes ready before the deferred turn commits", async () => {
     const store = trackStore(new SessionStore({ databasePath: ":memory:" }));
     const delivered: string[] = [];
@@ -1998,6 +2034,7 @@ interface CoordinatorHarnessOptions {
   runDeferredTool?: ConstructorParameters<typeof SessionCoordinator>[0]["runDeferredTool"];
   observeCodexToolUsage?: ConstructorParameters<typeof SessionCoordinator>[0]["observeCodexToolUsage"];
   resolveHeldReplyGate?: ConstructorParameters<typeof SessionCoordinator>[0]["resolveHeldReplyGate"];
+  onPersistenceError?: ConstructorParameters<typeof SessionCoordinator>[0]["onPersistenceError"];
 }
 
 function createCoordinator(options: CoordinatorHarnessOptions) {
@@ -2025,6 +2062,7 @@ function createCoordinator(options: CoordinatorHarnessOptions) {
     runDeferredTool: options.runDeferredTool,
     observeCodexToolUsage: options.observeCodexToolUsage,
     resolveHeldReplyGate: options.resolveHeldReplyGate,
+    onPersistenceError: options.onPersistenceError,
     leaseMs: 1_000
   });
 }

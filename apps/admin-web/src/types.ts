@@ -397,7 +397,6 @@ export interface SunaTool {
   accessDescription?: string;
   executionBackend?: "native" | "docker";
   bashEnvironments?: {
-    native: { available: boolean; reasonCode?: string };
     docker: { started: boolean; reasonCode?: string };
   };
   runtimeReasonCode?: string;

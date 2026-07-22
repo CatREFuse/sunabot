@@ -370,9 +370,10 @@ describe("MemorySchedulerStore", () => {
     await scheduler.enqueue(conversation(), thresholdGroupHistory(), completeGroupHistory);
     const first = await scheduler.claimNext(48);
     expect(first?.messages).toHaveLength(48);
-    expect(applicationDataStore(config).commitMemoryBatch({
+    const memoryStore = applicationDataStore(config);
+    expect(memoryStore.commitMemoryBatch({
       batchId: first!.batchId,
-      baselineWorking: [],
+      baselineRevisions: memoryStore.readMemorySnapshot().revisions,
       working: [],
       longTerm: [],
       userProfile: [],
@@ -551,9 +552,10 @@ describe("MemorySchedulerStore", () => {
     applicationDataStore(config).replaceMemoryScheduler({
       [conversation().id]: legacyConversationState(messages, batchId)
     });
-    expect(applicationDataStore(config).commitMemoryBatch({
+    const memoryStore = applicationDataStore(config);
+    expect(memoryStore.commitMemoryBatch({
       batchId,
-      baselineWorking: [],
+      baselineRevisions: memoryStore.readMemorySnapshot().revisions,
       working: [],
       longTerm: [],
       userProfile: [],

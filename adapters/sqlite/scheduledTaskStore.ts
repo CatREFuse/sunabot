@@ -29,6 +29,8 @@ import {
   type MarkScheduledTaskRunGeneratedInput,
   type PurgeExpiredArchivedTasksInput,
   type RenewScheduledTaskRunInput,
+  type RecordScheduledTaskDeliveryFailureInput,
+  type ReplayScheduledTaskDeliveryInput,
   type ScheduledTask,
   type ScheduledTaskPage,
   type ScheduledTaskRun,
@@ -56,7 +58,8 @@ const ARCHIVE_RETENTION_MS = 3 * 24 * 60 * 60_000;
 
 const RUN_COLUMNS = `
   id, task_id, task_revision, scheduled_for, status, snapshot_json, result_text,
-  error_text, attempts, worker_id, lease_until, created_at, updated_at,
+  error_text, attempts, delivery_attempts, last_delivery_error, next_delivery_at,
+  worker_id, lease_until, created_at, updated_at,
   generated_at, completed_at
 `;
 
@@ -98,6 +101,9 @@ export function migrateScheduledTaskTables(database: DatabaseSync) {
       result_text TEXT CHECK (result_text IS NULL OR length(result_text) BETWEEN 1 AND 65536),
       error_text TEXT CHECK (error_text IS NULL OR length(error_text) BETWEEN 1 AND 65536),
       attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+      delivery_attempts INTEGER NOT NULL DEFAULT 0 CHECK (delivery_attempts >= 0),
+      last_delivery_error TEXT CHECK (last_delivery_error IS NULL OR length(last_delivery_error) BETWEEN 1 AND 65536),
+      next_delivery_at TEXT,
       worker_id TEXT,
       lease_until TEXT,
       created_at TEXT NOT NULL CHECK (length(trim(created_at)) > 0),
@@ -133,6 +139,16 @@ export function migrateScheduledTaskTables(database: DatabaseSync) {
       ALTER TABLE scheduled_tasks
       ADD COLUMN permanent_retention INTEGER NOT NULL DEFAULT 0 CHECK (permanent_retention IN (0, 1))
     `);
+  }
+  const runColumns = database.prepare("PRAGMA table_info(scheduled_task_runs)").all() as SqlRow[];
+  if (!runColumns.some((column) => String(column.name) === "delivery_attempts")) {
+    database.exec("ALTER TABLE scheduled_task_runs ADD COLUMN delivery_attempts INTEGER NOT NULL DEFAULT 0 CHECK (delivery_attempts >= 0)");
+  }
+  if (!runColumns.some((column) => String(column.name) === "last_delivery_error")) {
+    database.exec("ALTER TABLE scheduled_task_runs ADD COLUMN last_delivery_error TEXT");
+  }
+  if (!runColumns.some((column) => String(column.name) === "next_delivery_at")) {
+    database.exec("ALTER TABLE scheduled_task_runs ADD COLUMN next_delivery_at TEXT");
   }
   database.exec(`
     CREATE INDEX IF NOT EXISTS scheduled_tasks_archive
@@ -389,23 +405,25 @@ export class SqliteScheduledTaskStore implements ScheduledTaskStore {
       const row = this.database.prepare(`
         SELECT ${RUN_COLUMNS} FROM scheduled_task_runs
         WHERE status = 'pending'
-          OR (status IN ('running', 'generated') AND lease_until <= ?)
+          OR (status = 'running' AND lease_until <= ?)
+          OR (status = 'generated' AND lease_until <= ? AND (next_delivery_at IS NULL OR next_delivery_at <= ?))
         ORDER BY CASE status WHEN 'generated' THEN 0 WHEN 'pending' THEN 1 ELSE 2 END,
           scheduled_for, id
         LIMIT 1
-      `).get(nowIso) as SqlRow | undefined;
+      `).get(nowIso, nowIso, nowIso) as SqlRow | undefined;
       if (!row) return undefined;
       const run = mapRun(row);
       const claimed = this.database.prepare(`
         UPDATE scheduled_task_runs SET
           status = CASE WHEN status = 'generated' THEN 'generated' ELSE 'running' END,
           attempts = attempts + 1,
-          worker_id = ?, lease_until = ?, updated_at = ?
+          worker_id = ?, lease_until = ?, next_delivery_at = NULL, updated_at = ?
         WHERE id = ? AND (
           status = 'pending'
-          OR (status IN ('running', 'generated') AND lease_until <= ?)
+          OR (status = 'running' AND lease_until <= ?)
+          OR (status = 'generated' AND lease_until <= ? AND (next_delivery_at IS NULL OR next_delivery_at <= ?))
         )
-      `).run(workerId, leaseUntil, nowIso, run.id, nowIso);
+      `).run(workerId, leaseUntil, nowIso, run.id, nowIso, nowIso, nowIso);
       return Number(claimed.changes) === 1 ? this.requireRun(run.id) : undefined;
     });
   }
@@ -432,7 +450,8 @@ export class SqliteScheduledTaskStore implements ScheduledTaskStore {
     const nowIso = this.inputDate(input.now).toISOString();
     const updated = this.database.prepare(`
       UPDATE scheduled_task_runs SET
-        status = 'generated', result_text = ?, generated_at = ?, updated_at = ?
+        status = 'generated', result_text = ?, delivery_attempts = 0,
+        last_delivery_error = NULL, next_delivery_at = NULL, generated_at = ?, updated_at = ?
       WHERE id = ? AND worker_id = ? AND status = 'running' AND lease_until > ?
     `).run(resultText, nowIso, nowIso, runId, workerId, nowIso);
     return Number(updated.changes) === 1 ? this.requireRun(runId) : undefined;
@@ -465,6 +484,51 @@ export class SqliteScheduledTaskStore implements ScheduledTaskStore {
     return Number(updated.changes) === 1 ? this.requireRun(runId) : undefined;
   }
 
+  recordDeliveryFailure(input: RecordScheduledTaskDeliveryFailureInput) {
+    const runId = normalizeScheduledTaskId(input.runId, "runId");
+    const workerId = normalizeScheduledTaskWorkerId(input.workerId);
+    const errorText = normalizeScheduledTaskError(input.errorText);
+    const now = this.inputDate(input.now);
+    const nowIso = now.toISOString();
+    const retryAt = validDate(input.retryAt, "retryAt").toISOString();
+    if (retryAt <= nowIso) throw new Error("retryAt must be later than now.");
+    return this.transaction(() => {
+      const current = this.readRun(runId);
+      if (!current || current.status !== "generated" || current.workerId !== workerId ||
+        current.leaseUntil == null || current.leaseUntil <= nowIso) return undefined;
+      const deliveryAttempts = current.deliveryAttempts + 1;
+      const terminal = deliveryAttempts >= 3;
+      const updated = terminal
+        ? this.database.prepare(`
+            UPDATE scheduled_task_runs SET
+              status = 'failed', error_text = ?, delivery_attempts = ?, last_delivery_error = ?,
+              next_delivery_at = NULL, worker_id = NULL, lease_until = NULL,
+              completed_at = ?, updated_at = ?
+            WHERE id = ? AND worker_id = ? AND status = 'generated' AND lease_until > ?
+          `).run(errorText, deliveryAttempts, errorText, nowIso, nowIso, runId, workerId, nowIso)
+        : this.database.prepare(`
+            UPDATE scheduled_task_runs SET
+              delivery_attempts = ?, last_delivery_error = ?, next_delivery_at = ?,
+              lease_until = ?, updated_at = ?
+            WHERE id = ? AND worker_id = ? AND status = 'generated' AND lease_until > ?
+          `).run(deliveryAttempts, errorText, retryAt, retryAt, nowIso, runId, workerId, nowIso);
+      return Number(updated.changes) === 1 ? { run: this.requireRun(runId), terminal } : undefined;
+    });
+  }
+
+  replayDelivery(input: ReplayScheduledTaskDeliveryInput) {
+    const runId = normalizeScheduledTaskId(input.runId, "runId");
+    const nowIso = this.inputDate(input.now).toISOString();
+    const updated = this.database.prepare(`
+      UPDATE scheduled_task_runs SET
+        status = 'generated', error_text = NULL, delivery_attempts = 0,
+        last_delivery_error = NULL, next_delivery_at = ?, worker_id = 'manual-replay',
+        lease_until = ?, completed_at = NULL, updated_at = ?
+      WHERE id = ? AND status = 'failed' AND result_text IS NOT NULL AND delivery_attempts > 0
+    `).run(nowIso, nowIso, nowIso, runId);
+    return Number(updated.changes) === 1 ? this.requireRun(runId) : undefined;
+  }
+
   purgeExpiredArchivedTasks(input: PurgeExpiredArchivedTasksInput = {}) {
     const cutoff = new Date(this.inputDate(input.now).getTime() - ARCHIVE_RETENTION_MS).toISOString();
     const removed = this.database.prepare(`
@@ -488,7 +552,9 @@ export class SqliteScheduledTaskStore implements ScheduledTaskStore {
         SELECT next_run_at AS wake_at FROM scheduled_tasks
         WHERE enabled = 1 AND next_run_at IS NOT NULL
         UNION ALL
-        SELECT CASE WHEN status = 'pending' THEN created_at ELSE lease_until END AS wake_at
+        SELECT CASE WHEN status = 'pending' THEN created_at
+          WHEN status = 'generated' THEN COALESCE(next_delivery_at, lease_until)
+          ELSE lease_until END AS wake_at
         FROM scheduled_task_runs
         WHERE status IN ('pending', 'running', 'generated')
         UNION ALL
@@ -602,6 +668,9 @@ function mapRun(row: SqlRow): ScheduledTaskRun {
     resultText: nullableText(row.result_text),
     errorText: nullableText(row.error_text),
     attempts: nonNegativeInteger(Number(row.attempts), "stored run attempts"),
+    deliveryAttempts: nonNegativeInteger(Number(row.delivery_attempts), "stored run delivery attempts"),
+    lastDeliveryError: nullableText(row.last_delivery_error),
+    nextDeliveryAt: nullableTimestamp(row.next_delivery_at, "next_delivery_at"),
     workerId: nullableText(row.worker_id),
     leaseUntil: nullableTimestamp(row.lease_until, "lease_until"),
     createdAt: normalizeStoredTimestamp(row.created_at, "created_at"),

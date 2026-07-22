@@ -51,9 +51,8 @@ interface PendingAction {
   timer: NodeJS.Timeout;
 }
 
-export const ONEBOT_AUTHENTICATED_MAX_PAYLOAD_BYTES = 384 * 1024 * 1024;
-export const ONEBOT_LOOPBACK_MAX_PAYLOAD_BYTES = 384 * 1024 * 1024;
-export const ONEBOT_UNAUTHENTICATED_MAX_PAYLOAD_BYTES = 100 * 1024 * 1024;
+export const ONEBOT_AUTHENTICATED_MAX_PAYLOAD_BYTES = 16 * 1024 * 1024;
+export const ONEBOT_LOOPBACK_MAX_PAYLOAD_BYTES = 8 * 1024 * 1024;
 
 export interface OneBotEventTrace {
   receivedAt: string;
@@ -131,7 +130,9 @@ export class OneBotGateway extends EventEmitter implements MessagingPort, Conver
       }
 
       ws.on("message", (data) => {
-        void this.handleMessage(ws, data.toString());
+        void this.handleMessage(ws, data.toString()).catch((error) => {
+          console.error("[onebot] inbound message failed", { error });
+        });
       });
 
       ws.on("close", () => {
@@ -262,7 +263,7 @@ export class OneBotGateway extends EventEmitter implements MessagingPort, Conver
   async sendPrivateMessage(userId: number, message: string, accountId?: string) {
     return this.sendTargetedAction("send_private_msg", {
       user_id: userId,
-      message
+      message: textMessage(message)
     }, accountId);
   }
 
@@ -283,7 +284,7 @@ export class OneBotGateway extends EventEmitter implements MessagingPort, Conver
   async sendGroupMessage(groupId: number, message: string, options: { replyToMessageId?: number; accountId?: string } = {}) {
     return this.sendTargetedAction("send_group_msg", {
       group_id: groupId,
-      message: options.replyToMessageId ? replyMessage(options.replyToMessageId, message) : message
+      message: options.replyToMessageId ? replyMessage(options.replyToMessageId, message) : textMessage(message)
     }, options.accountId);
   }
 
@@ -472,10 +473,6 @@ export class OneBotGateway extends EventEmitter implements MessagingPort, Conver
     const requested = accountId?.trim() || "primary";
     const exact = [...this.sockets].find(([, info]) => info.accountId === requested)?.[0];
     if (exact?.readyState === WebSocket.OPEN) return exact;
-    if (!accountId && this.sockets.size === 1) {
-      const only = [...this.sockets.keys()][0];
-      if (only?.readyState === WebSocket.OPEN) return only;
-    }
     return undefined;
   }
 
@@ -659,6 +656,10 @@ function replyMessage(messageId: number, text: string) {
       }
     }
   ];
+}
+
+function textMessage(text: string) {
+  return [{ type: "text", data: { text } }];
 }
 
 function richMessage(

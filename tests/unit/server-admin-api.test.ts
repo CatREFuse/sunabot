@@ -12,6 +12,15 @@ import type { CreateAppOptions } from "../../apps/api/server.js";
 import type { AppConfig } from "../../src/types.js";
 
 const ADMIN_HEADERS = { host: "127.0.0.1", authorization: "Bearer admin-secret" };
+const scopedUrl = (url: string) => `${url}${url.includes("?") ? "&" : "?"}agentId=plana`;
+
+async function requestThroughGlobalFetch(url: URL, init: RequestInit) {
+  return {
+    response: await fetch(url, init),
+    close: async () => undefined,
+    destroy: async () => undefined
+  };
+}
 
 describe("admin API smoke", () => {
   let temporaryDirectory = "";
@@ -71,9 +80,9 @@ describe("admin API smoke", () => {
     const app = await createApp(testAppOptions());
     const headers = ADMIN_HEADERS;
     const models = await app.inject({ method: "GET", url: "/api/models", headers });
-    const envelope = await app.inject({ method: "GET", url: "/api/config", headers });
-    const files = await app.inject({ method: "GET", url: "/api/agent-files", headers });
-    const systemFiles = await app.inject({ method: "GET", url: "/api/system-prompt-files", headers });
+    const envelope = await app.inject({ method: "GET", url: scopedUrl("/api/config"), headers });
+    const files = await app.inject({ method: "GET", url: scopedUrl("/api/agent-files"), headers });
+    const systemFiles = await app.inject({ method: "GET", url: scopedUrl("/api/system-prompt-files"), headers });
     expect(models.statusCode).toBe(200);
     expect(models.json().models).toHaveLength(7);
     expect(envelope.statusCode).toBe(200);
@@ -148,7 +157,7 @@ describe("admin API smoke", () => {
     expect(systemFiles.json().files).not.toContainEqual(expect.objectContaining({ id: "image.selfie-rewrite" }));
     const toneFile = await app.inject({
       method: "GET",
-      url: "/api/system-prompt-files/conversation.tone-rewrite",
+      url: scopedUrl("/api/system-prompt-files/conversation.tone-rewrite"),
       headers
     });
     expect(toneFile.statusCode).toBe(200);
@@ -162,7 +171,7 @@ describe("admin API smoke", () => {
       ["/api/system-prompt-files", systemFiles.json().files]
     ] as const) {
       for (const summary of summaries) {
-        const detail = await app.inject({ method: "GET", url: `${endpoint}/${summary.id}`, headers });
+        const detail = await app.inject({ method: "GET", url: scopedUrl(`${endpoint}/${summary.id}`), headers });
         expect(detail.statusCode, `${endpoint}/${summary.id}`).toBe(200);
         expect(detail.json()).toMatchObject({ id: summary.id, content: expect.any(String) });
       }
@@ -296,7 +305,7 @@ describe("admin API smoke", () => {
     const app = await createApp(testAppOptions());
     let response = await app.inject({
       method: "GET",
-      url: "/api/status",
+      url: scopedUrl("/api/status"),
       headers: { host: "127.0.0.1", "x-forwarded-for": "127.0.0.1" }
     });
     expect(response.statusCode).toBe(401);
@@ -304,7 +313,7 @@ describe("admin API smoke", () => {
 
     response = await app.inject({
       method: "GET",
-      url: "/api/status",
+      url: scopedUrl("/api/status"),
       headers: {
         host: "127.0.0.1",
         "x-forwarded-for": "127.0.0.1",
@@ -337,12 +346,12 @@ describe("admin API smoke", () => {
 
     const unauthorized = await app.inject({
       method: "GET",
-      url: "/api/readiness",
+      url: scopedUrl("/api/readiness"),
       headers: { host: "127.0.0.1" }
     });
     const readiness = await app.inject({
       method: "GET",
-      url: "/api/readiness",
+      url: scopedUrl("/api/readiness"),
       headers: ADMIN_HEADERS
     });
     const liveness = await app.inject({
@@ -368,7 +377,7 @@ describe("admin API smoke", () => {
     const app = await createApp(testAppOptions());
     config.server.port = 9123;
     await saveConfig(config);
-    const response = await app.inject({ method: "GET", url: "/api/config", headers: ADMIN_HEADERS });
+    const response = await app.inject({ method: "GET", url: scopedUrl("/api/config"), headers: ADMIN_HEADERS });
     expect(response.statusCode).toBe(200);
     expect(response.json().config.server.port).toBe(9123);
     await app.close();
@@ -377,11 +386,11 @@ describe("admin API smoke", () => {
   it("rejects changing the fixed Plana workspace", async () => {
     const app = await createApp(testAppOptions());
     const headers = ADMIN_HEADERS;
-    const envelope = await app.inject({ method: "GET", url: "/api/config", headers });
+    const envelope = await app.inject({ method: "GET", url: scopedUrl("/api/config"), headers });
     const nextWorkspace = path.join(temporaryDirectory, "new-agent");
     const response = await app.inject({
       method: "PATCH",
-      url: "/api/config/persona",
+      url: scopedUrl("/api/config/persona"),
       headers,
       payload: {
         revision: envelope.json().revision,
@@ -431,7 +440,7 @@ describe("admin API smoke", () => {
       status: 200,
       headers: { "content-type": "image/jpeg", "content-length": "3" }
     }));
-    const app = await createApp(testAppOptions({ mediaHostnameLookup }));
+    const app = await createApp(testAppOptions({ mediaHostnameLookup, mediaPinnedRequest: requestThroughGlobalFetch }));
     const response = await app.inject({
       method: "GET",
       url: `/api/media/image?url=${encodeURIComponent(imageUrl)}`,
@@ -451,7 +460,7 @@ describe("admin API smoke", () => {
       status: 401,
       headers: { "content-type": "text/plain" }
     }));
-    const app = await createApp(testAppOptions());
+    const app = await createApp(testAppOptions({ mediaPinnedRequest: requestThroughGlobalFetch }));
     const response = await app.inject({
       method: "GET",
       url: `/api/media/image?url=${encodeURIComponent("https://8.8.8.8/image.png")}`,
@@ -471,7 +480,7 @@ describe("admin API smoke", () => {
       status: 200,
       headers: { "content-type": "image/jpeg", "content-length": "3" }
     }));
-    const app = await createApp(testAppOptions({ mediaHostnameLookup }));
+    const app = await createApp(testAppOptions({ mediaHostnameLookup, mediaPinnedRequest: requestThroughGlobalFetch }));
 
     const user = await app.inject({
       method: "GET",
@@ -517,7 +526,7 @@ describe("admin API smoke", () => {
 
     const response = await built.app.inject({
       method: "POST",
-      url: "/api/playground/image",
+      url: scopedUrl("/api/playground/image"),
       headers: ADMIN_HEADERS,
       payload: {
         prompt: "portrait test",
@@ -527,7 +536,7 @@ describe("admin API smoke", () => {
     });
     const history = await built.app.inject({
       method: "GET",
-      url: "/api/images",
+      url: scopedUrl("/api/images"),
       headers: ADMIN_HEADERS
     });
     const record = history.json().images.find((item: { id: string }) => item.id === "playground-test.png");

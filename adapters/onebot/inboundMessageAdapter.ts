@@ -204,9 +204,14 @@ function senderIdentity(sender: Record<string, unknown>, fallbackUserId: number)
 }
 
 function eventTime(value: unknown) {
-  return typeof value === "number" && Number.isFinite(value)
-    ? new Date(value * 1000).toISOString()
-    : new Date().toISOString();
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const milliseconds = value * 1000;
+    if (Number.isFinite(milliseconds)) {
+      const date = new Date(milliseconds);
+      if (Number.isFinite(date.getTime())) return date.toISOString();
+    }
+  }
+  return new Date().toISOString();
 }
 
 function normalizeFileSegment(data: Record<string, unknown>): NormalizedFileSegment {

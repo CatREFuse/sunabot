@@ -21,9 +21,10 @@ export function useScheduledTasks() {
   const deletingId = shallowRef("");
   const togglingId = shallowRef("");
   const retainingId = shallowRef("");
+  const replayingId = shallowRef("");
   const status = shallowRef<ScheduledTaskStatus>({ kind: "idle", message: "" });
   const mutationBusy = computed(() => (
-    saving.value || Boolean(deletingId.value) || Boolean(togglingId.value) || Boolean(retainingId.value)
+    saving.value || Boolean(deletingId.value) || Boolean(togglingId.value) || Boolean(retainingId.value) || Boolean(replayingId.value)
   ));
   let activeAgentId = "";
   let contextGeneration = 0;
@@ -183,6 +184,31 @@ export function useScheduledTasks() {
     }
   }
 
+  async function replayDelivery(agentId: string, task: ScheduledTask) {
+    const normalizedAgentId = normalizeAgentId(agentId);
+    activate(normalizedAgentId);
+    if (mutationBusy.value || !task.canReplayDelivery || !task.lastRunId) return false;
+    const context = contextGeneration;
+    replayingId.value = task.id;
+    status.value = { kind: "idle", message: "" };
+    try {
+      await apiRequest<void>(agentPath(
+        `/api/scheduled-tasks/runs/${encodeURIComponent(task.lastRunId)}/replay`,
+        normalizedAgentId
+      ), { method: "POST" });
+      if (!isCurrent(normalizedAgentId, context)) return false;
+      if (!await loadTasks(normalizedAgentId, context)) return false;
+      status.value = { kind: "success", message: "投递已重放" };
+      return true;
+    } catch (caught) {
+      if (isAbort(caught) || !isCurrent(normalizedAgentId, context)) return false;
+      status.value = { kind: "error", message: errorMessage(caught, "投递重放失败") };
+      return false;
+    } finally {
+      if (isCurrent(normalizedAgentId, context)) replayingId.value = "";
+    }
+  }
+
   function clearStatus() {
     status.value = { kind: "idle", message: "" };
   }
@@ -262,6 +288,7 @@ export function useScheduledTasks() {
     deletingId.value = "";
     togglingId.value = "";
     retainingId.value = "";
+    replayingId.value = "";
     status.value = { kind: "idle", message: "" };
   }
 
@@ -279,6 +306,7 @@ export function useScheduledTasks() {
     deletingId: readonly(deletingId),
     togglingId: readonly(togglingId),
     retainingId: readonly(retainingId),
+    replayingId: readonly(replayingId),
     mutationBusy: readonly(mutationBusy),
     status: readonly(status),
     load,
@@ -287,6 +315,7 @@ export function useScheduledTasks() {
     save,
     setEnabled,
     setPermanentRetention,
+    replayDelivery,
     remove,
     clearStatus,
     dispose

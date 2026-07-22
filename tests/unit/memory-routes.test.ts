@@ -29,11 +29,11 @@ describe("memory API plugin", () => {
       }
     });
 
-    expect((await app.inject({ method: "GET", url: "/api/memory?source=working" })).json())
+    expect((await app.inject({ method: "GET", url: "/api/memory?agentId=plana&source=working" })).json())
       .toMatchObject({ entries: [{ id: "memory-1", userNickname: "老师" }] });
     expect((await app.inject({
       method: "POST",
-      url: "/api/memory/recall",
+      url: "/api/memory/recall?agentId=plana",
       payload: { query: "迁移", limit: 3 }
     })).json()).toMatchObject({ ok: true, query: "迁移", matches: [{ id: "memory-1", userNickname: "老师" }] });
     expect(enrichMemoryEntries).toHaveBeenCalledTimes(2);
@@ -55,15 +55,15 @@ describe("memory API plugin", () => {
       }
     });
 
-    expect((await app.inject({ method: "POST", url: "/api/memory", payload: { source: "working", text: "完成迁移" } })).statusCode)
+    expect((await app.inject({ method: "POST", url: "/api/memory?agentId=plana", payload: { source: "working", text: "完成迁移" } })).statusCode)
       .toBe(200);
-    expect((await app.inject({ method: "PUT", url: "/api/memory", payload: { source: "working", id: "memory-2", text: "已完成" } })).statusCode)
+    expect((await app.inject({ method: "PUT", url: "/api/memory?agentId=plana", payload: { source: "working", id: "memory-2", text: "已完成" } })).statusCode)
       .toBe(200);
-    expect((await app.inject({ method: "DELETE", url: "/api/memory", payload: { source: "working", id: "memory-2" } })).json())
+    expect((await app.inject({ method: "DELETE", url: "/api/memory?agentId=plana", payload: { source: "working", id: "memory-2" } })).json())
       .toEqual({ ok: true });
     expect(reload).toHaveBeenCalledTimes(3);
 
-    expect((await app.inject({ method: "POST", url: "/api/memory", payload: { text: "x", developerNote: "no" } })).statusCode)
+    expect((await app.inject({ method: "POST", url: "/api/memory?agentId=plana", payload: { text: "x", developerNote: "no" } })).statusCode)
       .toBe(200);
     expect(createMemoryEntry).toHaveBeenLastCalledWith(expect.anything(), { text: "x" });
   });
@@ -152,7 +152,7 @@ describe("memory API plugin", () => {
     expect(forceDream).toHaveBeenCalledWith({ accountId: "arona-main" });
   });
 
-  it("refuses a manual Dream when the selected Agent has no online QQ", async () => {
+  it("requires an explicit Agent before resolving a manual Dream account", async () => {
     const runtime = {
       enrichMemoryEntries: (entries: MemoryEntry[]) => entries,
       reload: vi.fn(),
@@ -168,8 +168,8 @@ describe("memory API plugin", () => {
 
     const response = await app.inject({ method: "POST", url: "/api/memory/dreams/trigger" });
 
-    expect(response.statusCode).toBe(409);
-    expect(response.json()).toMatchObject({ code: "DREAM_ACCOUNT_OFFLINE" });
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ code: "AGENT_ID_REQUIRED" });
     expect(runtime.forceDream).not.toHaveBeenCalled();
   });
 });

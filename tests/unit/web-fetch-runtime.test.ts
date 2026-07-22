@@ -55,9 +55,11 @@ describe("WebFetch renderer runtime", () => {
       port: 8790
     });
     expect(contract.capabilities.optional).toContain("webfetch-dynamic-renderer");
+    expect(contract.supportedPlatforms).toEqual(["linux/amd64", "linux/arm64"]);
     expect(launcher).toContain("WebFetch 动态渲染服务准备失败，静态抓取保持可用");
     expect(launcher).toContain('process.platform === "darwin" && process.arch === "arm64" ? "linux/arm64" : "linux/amd64"');
     expect(launcher).toContain('SUNABOT_WEBFETCH_CHROMIUM_SANDBOX: "1"');
+    expect(launcher).toContain("SUNABOT_CORE_PLATFORM:");
     expect(probe).toContain('"webfetch-dynamic-renderer"');
     expect(release).toContain('"apps/webfetch-renderer"');
     expect(rendererMain).toContain('browser.once("disconnected"');

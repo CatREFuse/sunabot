@@ -104,7 +104,7 @@ const emptyConfig: AppConfig = {
     },
     bash: {
       enabled: false,
-      adminPrivateBackend: "native",
+      adminPrivateBackend: "docker",
       auditModel: "gpt-5.4-mini",
       strictMode: true,
       allowGroup: false,
@@ -159,10 +159,10 @@ export function useConfigWorkspace(scope: ConfigWorkspaceScope = "agent") {
 
   if (getCurrentScope()) onScopeDispose(cancel);
 
-  async function load(options: { preserveDirty?: boolean } = {}) {
+  async function load(options: { preserveDirty?: boolean; agentId?: string } = {}) {
     const dirtyBefore = new Map(sectionKeys.map((key) => [key, isDirty(key)]));
     const savedDrafts = new Map(sectionKeys.map((key) => [key, clone(drafts[key])]));
-    beginContext();
+    beginContext(options.agentId);
     const context = currentContext();
     loading.value = true;
     try {
@@ -380,9 +380,9 @@ export function useConfigWorkspace(scope: ConfigWorkspaceScope = "agent") {
     drainPromise = undefined;
   }
 
-  function beginContext() {
+  function beginContext(agentId?: string) {
     cancel();
-    contextAgentId = scope === "agent" ? activeAgentId() : "";
+    contextAgentId = scope === "agent" ? (agentId?.trim() || activeAgentId()) : "";
   }
 
   function currentContext(): RequestContext {
@@ -459,7 +459,8 @@ export function useConfigWorkspace(scope: ConfigWorkspaceScope = "agent") {
     isOneBotSettingsDirty,
     isReplyBehaviorDirty,
     isNoReplyPokeDirty,
-    isOneBotConnectionDirty
+    isOneBotConnectionDirty,
+    agentId: () => contextAgentId
   };
 }
 

@@ -73,6 +73,7 @@ function createData(tasks: ScheduledTask[] = []) {
     deletingId: shallowRef(""),
     togglingId: shallowRef(""),
     retainingId: shallowRef(""),
+    replayingId: shallowRef(""),
     mutationBusy: shallowRef(false),
     status: shallowRef({ kind: "idle" as const, message: "" as const }),
     load: vi.fn().mockResolvedValue(true),
@@ -81,6 +82,7 @@ function createData(tasks: ScheduledTask[] = []) {
     save: vi.fn().mockResolvedValue(true),
     setEnabled: vi.fn().mockResolvedValue(true),
     setPermanentRetention: vi.fn().mockResolvedValue(true),
+    replayDelivery: vi.fn().mockResolvedValue(true),
     remove: vi.fn().mockResolvedValue(true),
     clearStatus: vi.fn(),
     dispose: vi.fn()
@@ -99,6 +101,7 @@ function task(): ScheduledTask {
     permanentRetention: false,
     archived: false,
     director: false,
+    canReplayDelivery: false,
     createdAt: "2026-07-19T00:00:00.000Z",
     updatedAt: "2026-07-19T00:00:00.000Z"
   };

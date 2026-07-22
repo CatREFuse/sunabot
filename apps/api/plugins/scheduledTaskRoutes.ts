@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { requestAgentId } from "../requestAgentId.js";
 
 export interface ScheduledTaskAdminRuntime {
   listScheduledTasks(input: unknown): unknown;
@@ -6,6 +7,7 @@ export interface ScheduledTaskAdminRuntime {
   createScheduledTask(input: unknown): unknown | Promise<unknown>;
   updateScheduledTask(id: string, input: unknown): unknown | Promise<unknown>;
   deleteScheduledTask(id: string, input: unknown): unknown | Promise<unknown>;
+  replayScheduledTaskDelivery(runId: string): unknown | Promise<unknown>;
 }
 
 export interface ScheduledTaskRouteOptions {
@@ -65,16 +67,17 @@ export function registerScheduledTaskRoutes(app: FastifyInstance, options: Sched
     ok: true,
     task: await runtimeFor(request).deleteScheduledTask(taskId(request.params), request.body)
   }));
+
+  app.post("/api/scheduled-tasks/runs/:id/replay", {
+    schema: { params: taskParams, querystring: openObject, response: { 200: openObject } }
+  }, async (request) => ({
+    task: await runtimeFor(request).replayScheduledTaskDelivery(taskId(request.params))
+  }));
 }
 
 function taskId(params: unknown) {
   const value = params && typeof params === "object" ? (params as { id?: unknown }).id : undefined;
   return String(value ?? "").trim();
-}
-
-function requestAgentId(query: unknown) {
-  const value = query && typeof query === "object" ? (query as { agentId?: unknown }).agentId : undefined;
-  return String(value ?? "plana").trim() || "plana";
 }
 
 function scheduledTaskListInput(query: unknown) {

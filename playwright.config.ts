@@ -36,7 +36,7 @@ export default defineConfig({
     }
   ],
   webServer: {
-    command: `npm run build:web -- --outDir ${e2eWebOutDir} && npx vite preview --config apps/admin-web/vite.config.ts --host 127.0.0.1 --port ${e2ePort} --outDir ${e2eWebOutDir}`,
+    command: `npm run build:web:vite -- --outDir ${e2eWebOutDir} && npx vite preview --config apps/admin-web/vite.config.ts --host 127.0.0.1 --port ${e2ePort} --outDir ${e2eWebOutDir}`,
     url: e2eBaseUrl,
     reuseExistingServer: false,
     timeout: 120_000

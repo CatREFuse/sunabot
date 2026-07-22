@@ -60,9 +60,9 @@ describe("SystemConfigService", () => {
       bash: {
         enabled: false,
         configuredEnabled: false,
-        adminPrivateBackend: "native",
-        configuredBackend: "native",
-        routes: { administratorPrivateQq: "native", administratorGroupQq: "docker", otherQqConversations: "docker" },
+        adminPrivateBackend: "docker",
+        configuredBackend: "docker",
+        routes: { administratorPrivateQq: "docker", administratorGroupQq: "docker", otherQqConversations: "docker" },
         auditModel: "gpt-5.4-mini",
         strictMode: true,
         available: true,
@@ -70,7 +70,7 @@ describe("SystemConfigService", () => {
         unavailableReason: "BASH_CONFIG_DISABLED",
         unavailableMessage: "Bash 未启用。",
         isolationRequired: "backend_specific",
-        nativeHostExecutionAllowed: true,
+        nativeHostExecutionAllowed: false,
         rawHostFallbackAllowed: false,
         dockerSocketAllowed: false
       },
@@ -309,9 +309,9 @@ describe("SystemConfigService", () => {
       bash: {
         enabled: false,
         configuredEnabled: false,
-        adminPrivateBackend: "native",
-        configuredBackend: "native",
-        routes: { administratorPrivateQq: "native", administratorGroupQq: "docker", otherQqConversations: "docker" },
+        adminPrivateBackend: "docker",
+        configuredBackend: "docker",
+        routes: { administratorPrivateQq: "docker", administratorGroupQq: "docker", otherQqConversations: "docker" },
         auditModel: "gpt-5.4-mini",
         strictMode: true,
         available: true,
@@ -319,7 +319,7 @@ describe("SystemConfigService", () => {
         unavailableReason: "BASH_CONFIG_DISABLED",
         unavailableMessage: "Bash 未启用。",
         isolationRequired: "backend_specific",
-        nativeHostExecutionAllowed: true,
+        nativeHostExecutionAllowed: false,
         rawHostFallbackAllowed: false,
         dockerSocketAllowed: false
       },
@@ -688,17 +688,17 @@ describe("SystemConfigService", () => {
 
   it.each([
     {
-      label: "native isolation unavailable",
+      label: "Docker isolation unavailable",
       enabled: true,
-      backend: "native" as const,
+      backend: "docker" as const,
       available: false,
-      reason: "BASH_NATIVE_ISOLATION_UNAVAILABLE",
-      message: "管理员私聊 Native Bash 当前不可用。"
+      reason: "BASH_DOCKER_ISOLATION_UNAVAILABLE",
+      message: "Docker 后端未通过强隔离检查；Bash 已安全关闭，不会使用 Docker socket 或宿主 Bash 回退。"
     },
     {
       label: "configuration disabled",
       enabled: false,
-      backend: "native" as const,
+      backend: "docker" as const,
       available: true,
       reason: "BASH_CONFIG_DISABLED",
       message: "Bash 未启用。"
@@ -706,7 +706,7 @@ describe("SystemConfigService", () => {
     {
       label: "enabled with isolation",
       enabled: true,
-      backend: "native" as const,
+      backend: "docker" as const,
       available: true,
       reason: null,
       message: null
@@ -727,8 +727,8 @@ describe("SystemConfigService", () => {
       const result = await execute(harness, systemInput(operation));
       expect(result.bash).toMatchObject({
         configuredEnabled: enabled,
-        adminPrivateBackend: "native",
-        routes: { administratorPrivateQq: "native", administratorGroupQq: "docker", otherQqConversations: "docker" },
+        adminPrivateBackend: "docker",
+        routes: { administratorPrivateQq: "docker", administratorGroupQq: "docker", otherQqConversations: "docker" },
         available,
         effectiveEnabled: enabled && available,
         unavailableReason: reason,
@@ -751,7 +751,7 @@ describe("SystemConfigService", () => {
     expect(result.bash).toMatchObject({
       available: false,
       effectiveEnabled: false,
-      unavailableReason: "BASH_NATIVE_ISOLATION_UNAVAILABLE"
+      unavailableReason: "BASH_DOCKER_ISOLATION_UNAVAILABLE"
     });
     expect(JSON.stringify(result)).not.toContain(SECRET_PATH);
   });
@@ -790,8 +790,8 @@ describe("SystemConfigService", () => {
 
     expect(result.bash).toMatchObject({
       configuredEnabled: true,
-      adminPrivateBackend: "native",
-      routes: { administratorPrivateQq: "native", administratorGroupQq: "docker", otherQqConversations: "docker" },
+      adminPrivateBackend: "docker",
+      routes: { administratorPrivateQq: "docker", administratorGroupQq: "docker", otherQqConversations: "docker" },
       available: true,
       effectiveEnabled: true
     });

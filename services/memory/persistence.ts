@@ -9,14 +9,16 @@ import type {
 
 export type MemoryDataSource = "working" | "long_term" | "user_profile";
 export type MemoryRecordData = Record<string, unknown>;
+export type MemorySourceRevisions = Record<MemoryDataSource, number>;
 
 export interface MemoryRepositoryPort {
   readMemory(source: MemoryDataSource): MemoryRecordData[];
+  readMemorySnapshot(): { records: Record<MemoryDataSource, MemoryRecordData[]>; revisions: MemorySourceRevisions };
   replaceMemory(source: MemoryDataSource, records: readonly MemoryRecordData[]): void;
   ensureLegacyMemoryImported(source: MemoryDataSource, filePath: string): void;
   commitMemoryBatch(input: {
     batchId: string;
-    baselineWorking: readonly MemoryRecordData[];
+    baselineRevisions: MemorySourceRevisions;
     working: readonly MemoryRecordData[];
     longTerm: readonly MemoryRecordData[];
     userProfile: readonly MemoryRecordData[];

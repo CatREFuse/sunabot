@@ -106,7 +106,7 @@ describe("Dream SQLite store", () => {
     }
   });
 
-  it("forward migrates a schema 14 application database to 16 and reopens idempotently", async () => {
+  it("forward migrates a schema 14 application database to 17 and reopens idempotently", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-dream-v14-"));
     const databasePath = path.join(root, "sunabot.sqlite");
     try {
@@ -186,7 +186,7 @@ describe("Dream SQLite store", () => {
       const afterReopen = inspectApplicationSchema(databasePath);
 
       expect(afterMigration).toEqual({
-        version: "16",
+        version: "17",
         dreamTables: [
           { name: "dream_memory_archive", strict: true },
           { name: "dream_runs", strict: true },
@@ -513,8 +513,37 @@ describe("Dream SQLite store", () => {
     now += 1;
     expect(store.claimDailyRun(claimInput("worker:b"))).toMatchObject({
       status: "recovered",
-      run: { status: "running", attemptCount: 2, workerId: "worker:b" }
+      run: {
+        status: "running",
+        attemptCount: 2,
+        workerId: "worker:b",
+        errorCode: null,
+        errorText: null,
+        failedAt: null
+      }
     });
+  });
+
+  it("terminally fails a retryable failure when the third attempt becomes due", () => {
+    const run = store.claimDailyRun(claimInput("worker:a")).run;
+    for (const [index, worker] of ["worker:a", "worker:b", "worker:c"].entries()) {
+      now += 10;
+      store.markFailed({
+        runId: run.id,
+        workerId: worker,
+        errorCode: "MODEL_UNAVAILABLE",
+        errorText: `failure-${index + 1}`,
+        retryAt: new Date(now + 500),
+        now: new Date(now)
+      });
+      now += 500;
+      const claim = store.claimDailyRun(claimInput(`worker:${String.fromCharCode(98 + index)}`));
+      if (index < 2) expect(claim).toMatchObject({ status: "recovered", run: { attemptCount: index + 2 } });
+      else expect(claim).toMatchObject({
+        status: "existing",
+        run: { status: "failed", attemptCount: 3, nextRetryAt: null, errorCode: "DREAM_ATTEMPT_LIMIT" }
+      });
+    }
   });
 
   it("terminally fails an expired running lease after three interrupted generation attempts", () => {

@@ -8,6 +8,7 @@ import type { SunaRuntime } from "../../../src/runtime.js";
 import type { AgentToolName } from "../../../src/types.js";
 import { isAgentToolName } from "../../../services/tools/toolRegistry.js";
 import { normalizeConversationLookupId } from "../../../src/runtime/messagingAttachmentHelpers.js";
+import { requestAgentId } from "../requestAgentId.js";
 
 export interface ConversationRouteOptions {
   runtime: SunaRuntime;
@@ -191,9 +192,4 @@ function validDisabledTools(value: unknown): AgentToolName[] {
     badRequest("CONVERSATION_TOOLS_INVALID", "工具不能重复。", "disabledTools");
   }
   return value as AgentToolName[];
-}
-
-function requestAgentId(query: unknown) {
-  const value = query && typeof query === "object" ? (query as { agentId?: unknown }).agentId : undefined;
-  return String(value ?? "plana").trim() || "plana";
 }

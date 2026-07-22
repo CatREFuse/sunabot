@@ -103,7 +103,7 @@ export interface WorkspaceBashProviderOptions {
 export const workspaceBashTool = {
   type: "function",
   name: WORKSPACE_BASH_TOOL_NAME,
-  description: "Run a command after an independent adversarial approval agent reviews it. Only administrator QQ private chats use Native host Bash; group chats and other QQ private chats use isolated Docker Bash. Native and Docker keep separate workbenches and expose the same Skill and MCP configuration; Docker mounts that shared configuration read-only and has no network access.",
+  description: "Run a command in an isolated Docker environment after an independent adversarial approval agent reviews it. QQ conversations use a dedicated Docker workbench with no network or Docker socket access; Skill and MCP configuration is mounted read-only.",
   parameters: {
     type: "object",
     additionalProperties: false,

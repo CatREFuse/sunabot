@@ -6,6 +6,7 @@ import type { CodexAuthService } from "../../../src/admin/codexAuth.js";
 import { AdminApiError, badRequest } from "../../../src/admin/errors.js";
 import { IMAGE_MODEL_CATALOG, MODEL_CATALOG, REASONING_EFFORTS } from "../../../src/admin/models.js";
 import type { ProviderConfig } from "../../../src/types.js";
+import { requestAgentId } from "../requestAgentId.js";
 
 export type ProviderTestRunner = (provider: ProviderConfig) => Promise<Record<string, unknown>>;
 export type ProviderModelsRunner = (provider: ProviderConfig) => Promise<string[]>;
@@ -145,11 +146,6 @@ export function registerProviderConfigRoutes(
     const result = await (options.probeProviderVision ?? probeProviderMultimodal)(provider);
     return { ok: true, ...result };
   });
-}
-
-function requestAgentId(query: unknown) {
-  const value = query && typeof query === "object" ? (query as { agentId?: unknown }).agentId : undefined;
-  return String(value ?? "plana").trim() || "plana";
 }
 
 function providerFromBody(body: unknown, code: string) {

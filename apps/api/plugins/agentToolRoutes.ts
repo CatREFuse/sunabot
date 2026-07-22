@@ -14,6 +14,7 @@ import type {
   WorkspaceBashUnavailableReason
 } from "../../../services/tools/bashCapability.js";
 import { badRequest, notFound } from "../../../src/admin/errors.js";
+import { requestAgentId } from "../requestAgentId.js";
 
 export interface AgentToolRouteOptions {
   agentFiles: AgentFileRepository;
@@ -110,11 +111,8 @@ export function registerAgentToolRoutes(app: FastifyInstance, options: AgentTool
     const config = context.config;
     const promptFile = await context.agentFiles.get("conversation.private-reply", config);
     const prompt = parseFinalPromptTemplate(promptFile.content);
-    const [nativeCapabilities, dockerCapabilities] = await Promise.all([
-      context.resolveToolCapabilities("native"),
-      context.resolveToolCapabilities("docker")
-    ]);
-    const bashAvailable = nativeCapabilities.workspaceBash || dockerCapabilities.workspaceBash;
+    const dockerCapabilities = await context.resolveToolCapabilities("docker");
+    const bashAvailable = dockerCapabilities.workspaceBash;
     const skillCapabilities = await context.resolveSkillToolCapabilities?.()
       ?? UNAVAILABLE_SKILL_TOOL_CAPABILITIES;
     let conversationAssetsAvailable = false;
@@ -139,7 +137,7 @@ export function registerAgentToolRoutes(app: FastifyInstance, options: AgentTool
       voice: voiceCapability,
       memory: { enabled: true },
       knowledge: { enabled: true, search: async () => ({ ok: false, matches: [] }) },
-      asyncCodex: nativeCapabilities.codex || dockerCapabilities.codex,
+      asyncCodex: dockerCapabilities.codex,
       asyncImage: true,
       skillCapabilities,
       systemConfig: {
@@ -151,11 +149,7 @@ export function registerAgentToolRoutes(app: FastifyInstance, options: AgentTool
       director: {
         execute: async () => ({ ok: false, error: "Daily director is not executable from the tool catalog." })
       }
-    }, prompt.tools).map((tool) => bashCatalogMetadata(
-      tool,
-      nativeCapabilities,
-      dockerCapabilities
-    )).map((tool) => {
+    }, prompt.tools).map((tool) => bashCatalogMetadata(tool, dockerCapabilities)).map((tool) => {
       const configured = tool.name === "workspace_bash"
         ? config.bot.bash.enabled
         : tool.name === "codex"
@@ -178,51 +172,37 @@ export function registerAgentToolRoutes(app: FastifyInstance, options: AgentTool
 
 function bashCatalogMetadata(
   tool: ToolMetadata,
-  nativeCapabilities: RuntimeToolCapabilities,
   dockerCapabilities: RuntimeToolCapabilities
 ): ToolMetadata {
   if (tool.name !== "workspace_bash") return tool;
-  const nativeReady = nativeCapabilities.workspaceBash;
   const dockerStarted = dockerCapabilities.workspaceBash;
-  const nativeReason = nativeCapabilities.workspaceBashReason
-    ?? (nativeReady ? undefined : "BASH_NATIVE_ISOLATION_UNAVAILABLE");
   const dockerReason = dockerCapabilities.workspaceBashReason
     ?? (dockerStarted ? undefined : "BASH_DOCKER_ISOLATION_UNAVAILABLE");
-  const reasonCode = nativeReason ?? dockerReason;
-  const statusDescription = `[native bash] ${nativeReady ? "可用" : "不可用"}；[docker bash] ${dockerStarted ? "已启动" : "未启动"}。`;
+  const statusDescription = `Docker Bash ${dockerStarted ? "已启动" : "未启动"}。`;
   return {
     ...tool,
     description: `${tool.description.trim()} ${statusDescription}`.trim(),
-    accessLabel: "管理员私聊 Native · 群聊与其他私聊 Docker",
-    accessDescription: "仅管理员 QQ 私聊使用 Native Bash；全部群聊与其他 QQ 私聊使用 Docker Bash；Web Chat 不可用。",
+    accessLabel: "全部 QQ 会话 Docker",
+    accessDescription: "QQ 私聊与群聊使用 Docker Bash；Web Chat 不可用。",
     bashEnvironments: {
-      native: { available: nativeReady, ...(nativeReason ? { reasonCode: nativeReason } : {}) },
       docker: { started: dockerStarted, ...(dockerReason ? { reasonCode: dockerReason } : {}) }
     },
-    ...(nativeReady || dockerStarted ? {} : {
+    ...(dockerStarted ? {} : {
       unavailabilityKind: "runtime" as const,
-      runtimeReasonCode: reasonCode,
-      availabilityReason: `${bashUnavailableMessage(nativeReason, "Native")} ${bashUnavailableMessage(dockerReason, "Docker")}`.trim()
+      runtimeReasonCode: dockerReason,
+      availabilityReason: bashUnavailableMessage(dockerReason)
     })
   };
 }
 
-function bashUnavailableMessage(reason: WorkspaceBashUnavailableReason | undefined, label: "Native" | "Docker") {
+function bashUnavailableMessage(reason: WorkspaceBashUnavailableReason | undefined) {
   if (reason === "BASH_AUDIT_UNAVAILABLE") {
-    return `${label} Bash 的对抗审批 Agent 不可用。`;
+    return "Bash 对抗审批 Agent 不可用。";
   }
   if (reason === "BASH_WORKBENCH_UNAVAILABLE") {
-    return `${label} Bash 工作目录不可用。`;
-  }
-  if (reason === "BASH_NATIVE_ISOLATION_UNAVAILABLE") {
-    return "Native Bash 当前不可用。";
+    return "Bash 工作目录不可用。";
   }
   return "Docker Bash 环境未启动。";
-}
-
-function requestAgentId(query: unknown) {
-  const value = query && typeof query === "object" ? (query as { agentId?: unknown }).agentId : undefined;
-  return String(value ?? "plana").trim() || "plana";
 }
 
 function promptId(value: unknown, scope?: "persona" | "system") {

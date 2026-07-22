@@ -87,14 +87,8 @@ function confirmDescription() {
             <span v-if="tool.accessDescription" class="ml-2">{{ tool.accessDescription }}</span>
           </dd>
         </div>
-        <div v-if="tool.bashEnvironments" class="divider-row sm:mr-5">
-          <dt class="field-label">[native bash]</dt>
-          <dd class="inline-state" :data-kind="tool.bashEnvironments.native.available ? 'success' : 'error'">
-            <i class="bx mr-1" :class="tool.bashEnvironments.native.available ? 'bx-check-shield' : 'bx-error-circle'" aria-hidden="true"></i>{{ tool.bashEnvironments.native.available ? "可用" : "不可用" }}
-          </dd>
-        </div>
         <div v-if="tool.bashEnvironments" class="divider-row">
-          <dt class="field-label">[docker bash]</dt>
+          <dt class="field-label">Docker Bash</dt>
           <dd class="inline-state" :data-kind="tool.bashEnvironments.docker.started ? 'success' : 'error'">
             <i class="bx mr-1" :class="tool.bashEnvironments.docker.started ? 'bx-check-circle' : 'bx-error-circle'" aria-hidden="true"></i>{{ tool.bashEnvironments.docker.started ? "已启动" : "未启动" }}
           </dd>

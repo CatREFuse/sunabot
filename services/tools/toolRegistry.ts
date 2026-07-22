@@ -124,7 +124,6 @@ export interface ToolMetadata {
   accessDescription?: string;
   executionBackend?: "native" | "docker";
   bashEnvironments?: {
-    native: { available: boolean; reasonCode?: WorkspaceBashUnavailableReason };
     docker: { started: boolean; reasonCode?: WorkspaceBashUnavailableReason };
   };
   runtimeReasonCode?: WorkspaceBashUnavailableReason;

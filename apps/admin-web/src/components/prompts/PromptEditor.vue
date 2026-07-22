@@ -27,39 +27,13 @@ const usedNames = computed(() => usedPromptVariableNames(content.value, props.fi
 const usageCounts = computed(() => promptVariableUsageCounts(content.value, props.file?.variables ?? []));
 const workspaceStyle = computed(() => ({ "--variable-panel-width": `${variablePanelWidth.value}px` }));
 const promptTextField = useTemplateRef<InstanceType<typeof PromptTextField>>("promptTextField");
-const finalWorkspace = useTemplateRef<HTMLElement>("finalWorkspace");
-const lastFinalTextarea = shallowRef<HTMLTextAreaElement | null>(null);
+const finalPromptForm = useTemplateRef<InstanceType<typeof FinalPromptForm>>("finalPromptForm");
 watch(() => props.file?.id, () => { variableDrawerOpen.value = false; });
 
 function insertVariable(name: string) {
-  if (props.file?.kind === "final") insertFinalVariable(name);
+  if (props.file?.kind === "final") finalPromptForm.value?.insertVariable(name);
   else promptTextField.value?.insertVariable(name);
   variableDrawerOpen.value = false;
-}
-
-function rememberFinalTextarea(event: FocusEvent) {
-  if (event.target instanceof HTMLTextAreaElement) lastFinalTextarea.value = event.target;
-}
-
-function insertFinalVariable(name: string) {
-  const target = lastFinalTextarea.value;
-  if (!target || !finalWorkspace.value?.contains(target)) return;
-  const token = variableToken(name);
-  const scrollTop = target.scrollTop;
-  const scrollLeft = target.scrollLeft;
-  target.setRangeText(token, target.selectionStart, target.selectionEnd, "end");
-  target.dispatchEvent(new Event("input", { bubbles: true }));
-  target.focus({ preventScroll: true });
-  target.scrollTop = scrollTop;
-  target.scrollLeft = scrollLeft;
-}
-
-function variableToken(name: string) {
-  const token = `@{${name}}`;
-  if (!semanticXml.value) return token;
-  const normalized = name.replace(/[^A-Za-z0-9_-]+/g, "_");
-  const tag = /^[A-Za-z_]/.test(normalized) ? normalized : `variable_${normalized}`;
-  return `<${tag}>${token}</${tag}>`;
 }
 
 function resizeVariablePanel(clientX: number, target: HTMLElement) {
@@ -126,8 +100,8 @@ function resetVariablePanelWidth() {
     </div>
     <div v-else class="flex min-h-0 flex-1 flex-col p-3 md:p-6">
       <div class="prompt-editor__workspace min-h-0 flex-1" :style="workspaceStyle">
-        <div v-if="file.kind === 'final'" ref="finalWorkspace" class="min-h-0 overflow-hidden" @focusin="rememberFinalTextarea">
-          <FinalPromptForm v-model="content" :variables="file.variables ?? []" :semantic-xml="semanticXml" :show-variables="false" />
+        <div v-if="file.kind === 'final'" class="min-h-0 overflow-hidden">
+          <FinalPromptForm ref="finalPromptForm" v-model="content" :variables="file.variables ?? []" :semantic-xml="semanticXml" :show-variables="false" />
         </div>
         <PromptTextField
           v-else

@@ -8,7 +8,8 @@ export interface ResolvedPublicTarget {
 }
 
 export type WebFetchDnsLookup = (
-  hostname: string
+  hostname: string,
+  signal?: AbortSignal
 ) => Promise<Array<{ address: string; family: number }>>;
 
 const CLASH_FAKE_IP_RANGE = ipaddr.parseCIDR("198.18.0.0/15");
@@ -24,14 +25,15 @@ const dohInflight = new Map<string, Promise<Array<{ address: string; family: num
 
 export async function resolvePublicWebTarget(
   input: string | URL,
-  lookup: WebFetchDnsLookup = lookupWebFetchDns
+  lookup: WebFetchDnsLookup = (hostname, signal) => lookupWebFetchDns(hostname, undefined, undefined, signal),
+  signal?: AbortSignal
 ): Promise<ResolvedPublicTarget> {
   const url = parsePublicWebUrl(input);
   const hostname = normalizedHostname(url);
   const literalFamily = ipaddr.isValid(hostname) ? ipaddr.parse(hostname).kind() : undefined;
   const records = literalFamily
     ? [{ address: hostname, family: literalFamily === "ipv4" ? 4 : 6 }]
-    : await lookup(hostname).catch(() => []);
+    : await lookupRecords(lookup, hostname, signal);
   if (!records.length) throw new WebFetchError("TARGET_NOT_PUBLIC", "No public DNS target.");
   const addresses = records.map((record) => {
     if (record.family !== 4 && record.family !== 6) {
@@ -109,9 +111,13 @@ function ipFamily(value: string): 4 | 6 {
 export async function lookupWebFetchDns(
   hostname: string,
   systemLookup: WebFetchDnsLookup = (target) => dns.lookup(target, { all: true, verbatim: true }),
-  fetchImpl: typeof fetch = fetch
+  fetchImpl: typeof fetch = fetch,
+  signal?: AbortSignal
 ) {
-  const records = await systemLookup(hostname).catch(() => []);
+  const records = await abortable(systemLookup(hostname, signal), signal).catch((error) => {
+    if (signal?.aborted) throw error;
+    return [];
+  });
   if (records.length && !records.every((record) => isClashFakeIp(record.address))) return records;
   const cached = dohCache.get(hostname);
   if (cached && cached.expiresAt > Date.now()) {
@@ -140,7 +146,26 @@ export async function lookupWebFetchDns(
     }).finally(() => dohInflight.delete(hostname));
     dohInflight.set(hostname, current);
   }
-  return (await current).map((record) => ({ ...record }));
+  return (await abortable(current, signal)).map((record) => ({ ...record }));
+}
+
+async function lookupRecords(lookup: WebFetchDnsLookup, hostname: string, signal?: AbortSignal) {
+  try {
+    return await abortable(lookup(hostname, signal), signal);
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    return [];
+  }
+}
+
+function abortable<T>(operation: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return operation;
+  if (signal.aborted) return Promise.reject(signal.reason ?? new Error("aborted"));
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(signal.reason ?? new Error("aborted"));
+    signal.addEventListener("abort", abort, { once: true });
+    operation.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+  });
 }
 
 export function normalizedHostname(url: URL) {

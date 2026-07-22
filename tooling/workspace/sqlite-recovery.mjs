@@ -39,10 +39,23 @@ const CURRENT_APPLICATION_REQUIRED_TABLES = [
   "agent_accounts",
   "agents",
   "conversation_thread_states",
+  "director_daily_schedule_revisions",
+  "director_daily_schedules",
+  "director_schedule_task_links",
+  "dream_memory_archive",
+  "dream_runs",
   "emojis",
+  "emoji_versions",
+  "memory_recall_receipts",
+  "memory_recall_stats",
+  "memory_source_revisions",
   "model_call_aggregates",
-  "model_call_model_aggregates"
+  "model_call_model_aggregates",
+  "outbox_local_effects",
+  "scheduled_task_runs",
+  "scheduled_tasks"
 ];
+const CURRENT_APPLICATION_STORAGE_SCHEMA_VERSION = 17;
 const PRE_THREAD_APPLICATION_STORAGE_SCHEMA_VERSION = 9;
 const PRE_THREAD_APPLICATION_REQUIRED_TABLES = CURRENT_APPLICATION_REQUIRED_TABLES.filter(
   (table) => table !== "conversation_thread_states" && table !== "emojis"
@@ -1519,7 +1532,7 @@ function databaseDefinitionsForAgent(agentId, options = {}) {
         ? PRE_THREAD_APPLICATION_STORAGE_SCHEMA_VERSION
         : options.preEmojiApplicationSchema
           ? PRE_EMOJI_APPLICATION_STORAGE_SCHEMA_VERSION
-        : undefined,
+          : CURRENT_APPLICATION_STORAGE_SCHEMA_VERSION,
       source: `${dataRoot}/sunabot.sqlite`,
       file: `agent-${agentId}-application.sqlite`,
       requiredTables: options.legacyApplicationSchema

@@ -396,11 +396,11 @@ function safeBashSettings(
   capabilities: { workspaceBash: boolean; workspaceBashReason?: WorkspaceBashUnavailableReason }
 ) {
   const configuredEnabled = config.bot.bash.enabled;
-  const backend = "native" as const;
+  const backend = "docker" as const;
   const available = capabilities.workspaceBash;
   const unavailableReason = available
     ? configuredEnabled ? null : "BASH_CONFIG_DISABLED"
-    : capabilities.workspaceBashReason ?? "BASH_NATIVE_ISOLATION_UNAVAILABLE";
+    : capabilities.workspaceBashReason ?? "BASH_DOCKER_ISOLATION_UNAVAILABLE";
   const unavailableMessage = unavailableReason === "BASH_CONFIG_DISABLED"
     ? "Bash 未启用。"
     : unavailableReason === "BASH_AUDIT_UNAVAILABLE"
@@ -408,7 +408,7 @@ function safeBashSettings(
         : unavailableReason === "BASH_WORKBENCH_UNAVAILABLE"
           ? "当前 Agent workbench 不可用，Bash 已安全关闭。"
           : unavailableReason === "BASH_NATIVE_ISOLATION_UNAVAILABLE"
-            ? "管理员私聊 Native Bash 当前不可用。"
+            ? "宿主 Bash 已禁用。"
             : unavailableReason === "BASH_DOCKER_ISOLATION_UNAVAILABLE"
               ? "Docker 后端未通过强隔离检查；Bash 已安全关闭，不会使用 Docker socket 或宿主 Bash 回退。"
               : null;
@@ -418,7 +418,7 @@ function safeBashSettings(
     adminPrivateBackend: backend,
     configuredBackend: backend,
     routes: {
-      administratorPrivateQq: "native",
+      administratorPrivateQq: "docker",
       administratorGroupQq: "docker",
       otherQqConversations: "docker"
     },
@@ -432,7 +432,7 @@ function safeBashSettings(
       ? { unavailabilityKind: "runtime" }
       : {}),
     isolationRequired: "backend_specific",
-    nativeHostExecutionAllowed: true,
+    nativeHostExecutionAllowed: false,
     rawHostFallbackAllowed: false,
     dockerSocketAllowed: false
   };

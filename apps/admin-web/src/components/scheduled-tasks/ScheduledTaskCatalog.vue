@@ -56,6 +56,10 @@ async function togglePermanentRetention(task: ScheduledTask) {
   await data.setPermanentRetention(props.agentId, task, !task.permanentRetention);
 }
 
+async function replay(task: ScheduledTask) {
+  await data.replayDelivery(props.agentId, task);
+}
+
 async function selectCategory(category: ScheduledTaskCategory) {
   await data.selectCategory(props.agentId, category);
 }
@@ -99,12 +103,14 @@ async function confirmDelete() {
           :deleting-id="data.deletingId.value"
           :toggling-id="data.togglingId.value"
           :retaining-id="data.retainingId.value"
+          :replaying-id="data.replayingId.value"
           role="tabpanel"
           :aria-labelledby="`scheduled-task-tab-${data.category.value}`"
           @create="openCreate"
           @edit="openEdit"
           @toggle="toggle"
           @toggle-permanent-retention="togglePermanentRetention"
+          @replay="replay"
           @remove="pendingDelete = $event"
         />
         <ScheduledTaskPagination

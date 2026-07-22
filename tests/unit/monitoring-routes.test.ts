@@ -46,7 +46,7 @@ describe("monitoring API plugin", () => {
     expect((await app.inject({ method: "POST", url: "/api/monitoring/test" })).json())
       .toEqual({ ok: true, delivered: true });
 
-    expect((await app.inject({ method: "GET", url: "/api/status" })).json()).toMatchObject({
+    expect((await app.inject({ method: "GET", url: "/api/status?agentId=plana" })).json()).toMatchObject({
       startedAt: "2026-07-12T00:00:00.000Z",
       configPath: "/workspace/business/config/sunabot.json",
       onebot: { connected: true },

@@ -47,7 +47,7 @@ export async function fetchSafeHtml(input: string, options: SafeHtmlFetchOptions
   const request = options.request ?? requestPinnedTarget;
   try {
     for (let redirect = 0; redirect <= WEBFETCH_MAX_REDIRECTS; redirect += 1) {
-      const target = await resolvePublicWebTarget(current, options.lookup);
+      const target = await resolvePublicWebTarget(current, options.lookup, signal);
       const response = await request(target, signal);
       if (isRedirect(response.status)) {
         response.body.destroy();

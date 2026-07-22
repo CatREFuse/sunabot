@@ -1,6 +1,6 @@
-import { mount } from "@vue/test-utils";
+import { flushPromises, mount } from "@vue/test-utils";
 import { nextTick } from "vue";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { TokenUsageBucket, TokenUsagePayload } from "../../types";
 import EChart from "../ui/EChart.vue";
 import TokenUsageDashboard from "./TokenUsageDashboard.vue";
@@ -30,6 +30,8 @@ function usagePayload(): TokenUsagePayload {
 describe("TokenUsageDashboard", () => {
   it("switches between hourly and daily ECharts views", async () => {
     const wrapper = mount(TokenUsageDashboard, { props: { usage: usagePayload(), loading: false } });
+    await vi.dynamicImportSettled();
+    await flushPromises();
     const summary = wrapper.get('[aria-label="今日 Token 统计"]');
 
     expect(summary.text()).toContain("16.1K");
@@ -53,6 +55,8 @@ describe("TokenUsageDashboard", () => {
     expect(wrapper.find('[aria-label="每日 Token 消耗日历"]').exists()).toBe(false);
 
     await wrapper.get('[aria-label="时间粒度"] button:last-child').trigger("click");
+    await vi.dynamicImportSettled();
+    await flushPromises();
     const calendar = wrapper.findAllComponents(EChart)
       .find((chart) => chart.props("accessibleLabel") === "每日 Token 消耗日历");
     const calendarSeries = calendar?.props("option").series as Array<{ type: string; data: Array<[string, number]> }>;
@@ -77,8 +81,10 @@ describe("TokenUsageDashboard", () => {
     expect(wrapper.get('[aria-label="筛选 Token 模型"]').text()).toContain("未标注模型");
   });
 
-  it("shows an empty cache rate without treating missing input as a zero-percent hit", () => {
+  it("shows an empty cache rate without treating missing input as a zero-percent hit", async () => {
     const wrapper = mount(TokenUsageDashboard, { props: { usage: null, loading: true } });
+    await vi.dynamicImportSettled();
+    await flushPromises();
     const rateCard = wrapper.findAll(".token-card--metric").find((card) => card.text().includes("缓存率"));
 
     expect(rateCard?.text()).toContain("--");
@@ -92,6 +98,8 @@ describe("TokenUsageDashboard", () => {
   it("keeps the newest calendar days visible when usage updates", async () => {
     const wrapper = mount(TokenUsageDashboard, { props: { usage: null, loading: true } });
     await wrapper.get('[aria-label="时间粒度"] button:last-child').trigger("click");
+    await vi.dynamicImportSettled();
+    await flushPromises();
     const scrollContainer = wrapper.get<HTMLElement>(".calendar-wrap").element;
     Object.defineProperty(scrollContainer, "scrollWidth", { configurable: true, value: 689 });
 

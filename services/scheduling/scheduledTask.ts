@@ -63,6 +63,9 @@ export interface ScheduledTaskRun {
   resultText: string | null;
   errorText: string | null;
   attempts: number;
+  deliveryAttempts: number;
+  lastDeliveryError: string | null;
+  nextDeliveryAt: string | null;
   workerId: string | null;
   leaseUntil: string | null;
   createdAt: string;

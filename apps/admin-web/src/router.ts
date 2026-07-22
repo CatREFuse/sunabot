@@ -1,20 +1,21 @@
 import { createRouter, createWebHistory } from "vue-router";
-import ConversationsView from "./views/ConversationsView.vue";
-import ConfigDoctorView from "./views/ConfigDoctorView.vue";
-import ImagesView from "./views/ImagesView.vue";
-import EmojisView from "./views/EmojisView.vue";
-import LogsView from "./views/LogsView.vue";
-import MemoryView from "./views/MemoryView.vue";
-import KnowledgeView from "./views/KnowledgeView.vue";
-import OverviewView from "./views/OverviewView.vue";
-import PromptsView from "./views/PromptsView.vue";
-import SettingsView from "./views/SettingsView.vue";
-import WebChatView from "./views/WebChatView.vue";
-import AgentsView from "./views/AgentsView.vue";
-import AgentExtensionsView from "./views/AgentExtensionsView.vue";
-import ConversationSettingsView from "./views/ConversationSettingsView.vue";
-import ScheduledTasksView from "./views/ScheduledTasksView.vue";
-import VoiceView from "./views/VoiceView.vue";
+
+const ConversationsView = () => import("./views/ConversationsView.vue");
+const ConfigDoctorView = () => import("./views/ConfigDoctorView.vue");
+const ImagesView = () => import("./views/ImagesView.vue");
+const EmojisView = () => import("./views/EmojisView.vue");
+const LogsView = () => import("./views/LogsView.vue");
+const MemoryView = () => import("./views/MemoryView.vue");
+const KnowledgeView = () => import("./views/KnowledgeView.vue");
+const OverviewView = () => import("./views/OverviewView.vue");
+const PromptsView = () => import("./views/PromptsView.vue");
+const SettingsView = () => import("./views/SettingsView.vue");
+const WebChatView = () => import("./views/WebChatView.vue");
+const AgentsView = () => import("./views/AgentsView.vue");
+const AgentExtensionsView = () => import("./views/AgentExtensionsView.vue");
+const ConversationSettingsView = () => import("./views/ConversationSettingsView.vue");
+const ScheduledTasksView = () => import("./views/ScheduledTasksView.vue");
+const VoiceView = () => import("./views/VoiceView.vue");
 
 export const router = createRouter({
   history: createWebHistory(),

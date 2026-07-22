@@ -71,6 +71,8 @@ expect(arraysEqual(contract.supportedPlatforms, lock.supportedPlatforms),
   "runtime and component platforms must match");
 expect(contract.supportedPlatforms.includes("linux/amd64"),
   "the production Core image must declare linux/amd64 support");
+expect(contract.supportedPlatforms.includes("linux/arm64"),
+  "the production Core image must declare linux/arm64 support");
 
 for (const required of [
   '"src"',

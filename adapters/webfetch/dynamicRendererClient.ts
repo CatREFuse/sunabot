@@ -31,7 +31,7 @@ export class HttpDynamicRendererClient implements DynamicRendererPort {
     }
     if (!response.ok) {
       throw new WebFetchError(
-        response.status === 503 ? "DYNAMIC_RENDERER_UNAVAILABLE" : "DYNAMIC_RENDER_FAILED",
+        response.status === 429 || response.status === 503 ? "DYNAMIC_RENDERER_UNAVAILABLE" : "DYNAMIC_RENDER_FAILED",
         "Renderer rejected the request."
       );
     }

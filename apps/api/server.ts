@@ -46,7 +46,7 @@ import { registerAuthRoutes } from "./plugins/authRoutes.js";
 import { registerConversationRoutes } from "./plugins/conversationRoutes.js";
 import { registerScheduledTaskRoutes } from "./plugins/scheduledTaskRoutes.js";
 import { registerConfigDoctorRoutes } from "./plugins/configDoctorRoutes.js";
-import { registerMediaRoutes, type MediaHostnameLookup } from "./plugins/mediaRoutes.js";
+import { registerMediaRoutes, type MediaHostnameLookup, type MediaPinnedRequest } from "./plugins/mediaRoutes.js";
 import { registerMemoryRoutes } from "./plugins/memoryRoutes.js";
 import { registerKnowledgeRoutes } from "./plugins/knowledgeRoutes.js";
 import { registerMonitoringRoutes } from "./plugins/monitoringRoutes.js";
@@ -112,8 +112,8 @@ export interface CreateAppOptions {
   resolveToolCapabilities?: RuntimeToolCapabilityResolver;
   agentExtensions?: AgentExtensionApiOptions;
   mediaHostnameLookup?: MediaHostnameLookup;
+  mediaPinnedRequest?: MediaPinnedRequest;
 }
-
 export interface OneBotListenerAddress {
   host: string;
   port: number;
@@ -534,7 +534,7 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
       : undefined
   });
   registerMediaRoutes(app, {
-    getConfig: () => config, runtime, lookupHostname: options.mediaHostnameLookup,
+    getConfig: () => config, runtime, lookupHostname: options.mediaHostnameLookup, requestRemoteImage: options.mediaPinnedRequest,
     getAgentContext: (agentId) => {
       const agentRuntime = agentRuntimeManager.require(agentId);
       return { config: agentRuntime.config, runtime: agentRuntime };

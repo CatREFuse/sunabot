@@ -137,13 +137,19 @@ describe("ScheduledTaskScheduler", () => {
       failedRuns: 0
     });
     const generated = store.listRuns()[0]!;
-    expect(generated).toMatchObject({ status: "generated", resultText: "持久化回复" });
+    expect(generated).toMatchObject({
+      status: "generated",
+      resultText: "持久化回复",
+      deliveryAttempts: 1,
+      lastDeliveryError: "transport offline",
+      nextDeliveryAt: expect.any(String)
+    });
     expect(errors).toHaveBeenCalledWith(
       expect.objectContaining({ message: "transport offline" }),
       expect.objectContaining({ phase: "deliver" })
     );
 
-    now = Date.parse(generated.leaseUntil!) + 1;
+    now = Date.parse(generated.nextDeliveryAt!) + 1;
     const recoveredDelivery = vi.fn(async () => undefined);
     const recoveryScheduler = new ScheduledTaskScheduler({
       store,
@@ -159,7 +165,59 @@ describe("ScheduledTaskScheduler", () => {
       expect.objectContaining({ status: "generated", resultText: "持久化回复" }),
       expect.any(AbortSignal)
     );
-    expect(store.listRuns()[0]).toMatchObject({ status: "completed", attempts: 2 });
+    expect(store.listRuns()[0]).toMatchObject({ status: "completed", attempts: 2, deliveryAttempts: 1 });
+  });
+
+  it("backs off delivery failures and terminally fails the third delivery attempt", async () => {
+    createTask("2026-07-19T00:01:00.000Z");
+    now = Date.parse("2026-07-19T00:02:00.000Z");
+    const deliver = vi.fn(async () => { throw new Error("transport offline"); });
+    const scheduler = new ScheduledTaskScheduler({
+      store,
+      workerId: "scheduler:delivery-limit",
+      leaseMs: 200,
+      clock: () => new Date(now),
+      generate: async () => "只生成一次",
+      deliver
+    });
+
+    await scheduler.runOnce();
+    for (let attempt = 2; attempt <= 3; attempt += 1) {
+      now = Date.parse(store.listRuns()[0]!.nextDeliveryAt!) + 1;
+      const result = await scheduler.runOnce();
+      if (attempt === 3) expect(result.failedRuns).toBe(1);
+    }
+
+    expect(deliver).toHaveBeenCalledTimes(3);
+    expect(store.listRuns()[0]).toMatchObject({
+      status: "failed",
+      deliveryAttempts: 3,
+      errorText: "transport offline",
+      nextDeliveryAt: null,
+      completedAt: expect.any(String)
+    });
+
+    const failed = store.listRuns()[0]!;
+    expect(store.replayDelivery({ runId: failed.id, now: new Date(now) })).toMatchObject({
+      status: "generated",
+      resultText: "只生成一次",
+      deliveryAttempts: 0,
+      lastDeliveryError: null,
+      nextDeliveryAt: new Date(now).toISOString(),
+      completedAt: null
+    });
+    const replayDelivery = vi.fn(async () => undefined);
+    const replayScheduler = new ScheduledTaskScheduler({
+      store,
+      workerId: "scheduler:manual-replay",
+      leaseMs: 200,
+      clock: () => new Date(now),
+      generate: async () => { throw new Error("must not regenerate"); },
+      deliver: replayDelivery
+    });
+    await expect(replayScheduler.runOnce()).resolves.toMatchObject({ completedRuns: 1 });
+    expect(replayDelivery).toHaveBeenCalledOnce();
+    expect(store.listRuns()[0]).toMatchObject({ status: "completed", deliveryAttempts: 0 });
   });
 
   it("marks generation failures terminal while continuing to expose them for audit", async () => {

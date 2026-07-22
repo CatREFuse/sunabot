@@ -191,7 +191,7 @@ describe("workspace Bash isolation", () => {
     expect(invocation.args.indexOf("-i")).toBeLessThan(invocation.args.indexOf("/usr/bin/ls"));
   });
 
-  it("uses an audited macOS host Bash for the Native backend", async () => {
+  it("rejects the macOS Native host backend even when Bash is present", async () => {
     const access = vi.fn(async () => undefined);
     const probe = vi.fn(async () => undefined);
 
@@ -200,42 +200,20 @@ describe("workspace Bash isolation", () => {
       effectiveUid: 501,
       access,
       probe
-    })).resolves.toEqual({
-      kind: "host",
-      executable: "/bin/bash"
-    });
-    expect(access).toHaveBeenCalledWith("/bin/bash", expect.any(Number));
-    expect(probe).toHaveBeenCalledWith(
-      "/bin/bash",
-      ["--noprofile", "--norc", "-lc", ":"]
-    );
+    })).rejects.toMatchObject({ code: WORKSPACE_BASH_ISOLATION_ERROR });
+    expect(access).not.toHaveBeenCalled();
+    expect(probe).not.toHaveBeenCalled();
   });
 
-  it("builds Native host execution with a sanitized environment and real shared paths", () => {
-    const invocation = buildHostNativeInvocation(
+  it("does not construct a Native host invocation", () => {
+    expect(() => buildHostNativeInvocation(
       { kind: "shell", command: "pwd && ls \"$SUNABOT_SKILLS\" \"$SUNABOT_MCP_CONFIG\"" },
       workbench,
       environment,
       "/bin/bash",
       [],
       readOnlyMounts
-    );
-
-    expect(invocation).toEqual({
-      file: "/bin/bash",
-      args: [
-        "--noprofile", "--norc", "-lc",
-        "pwd && ls \"$SUNABOT_SKILLS\" \"$SUNABOT_MCP_CONFIG\""
-      ],
-      env: {
-        ...environment,
-        PATH: "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
-        HOME: workbench,
-        PWD: workbench,
-        SUNABOT_SKILLS: readOnlyMounts.skills,
-        SUNABOT_MCP_CONFIG: readOnlyMounts.mcp
-      }
-    });
+    )).toThrow(WorkspaceBashIsolationError);
   });
 
   it("fails closed for a root macOS Native runtime", async () => {

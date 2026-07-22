@@ -25,6 +25,10 @@ export interface ScheduledTaskAdminView {
   nextTriggerAt?: string;
   lastTriggerAt?: string;
   lastRunStatus?: ScheduledTaskRun["status"];
+  lastRunId?: string;
+  deliveryAttempts?: number;
+  nextDeliveryAt?: string;
+  canReplayDelivery: boolean;
   lastError?: string;
   permanentRetention: boolean;
   archived: boolean;
@@ -93,7 +97,14 @@ export class ScheduledTaskAdminCatalog {
         ? { lastTriggerAt: latest?.scheduledFor ?? task.lastScheduledAt! }
         : {}),
       ...(latest ? { lastRunStatus: latest.status } : {}),
-      ...(latest?.errorText ? { lastError: latest.errorText } : {}),
+      ...(latest ? { lastRunId: latest.id, deliveryAttempts: latest.deliveryAttempts } : {}),
+      ...(latest?.nextDeliveryAt ? { nextDeliveryAt: latest.nextDeliveryAt } : {}),
+      ...(latest?.lastDeliveryError || latest?.errorText
+        ? { lastError: latest.lastDeliveryError ?? latest.errorText! }
+        : {}),
+      canReplayDelivery: Boolean(
+        latest?.status === "failed" && latest.resultText != null && latest.deliveryAttempts > 0
+      ),
       permanentRetention: task.permanentRetention,
       archived: task.schedule.kind === "once" && task.nextRunAt === null &&
         (latest?.status === "completed" || latest?.status === "failed"),

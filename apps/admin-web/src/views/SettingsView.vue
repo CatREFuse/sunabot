@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, shallowRef, useTemplateRef, watch } from "vue";
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, shallowRef, useTemplateRef, watch } from "vue";
 import { onBeforeRouteLeave, useRoute, useRouter } from "vue-router";
 import { useConfigWorkspace, sectionKeys } from "../composables/useConfigWorkspace";
 import { useModelCatalog } from "../composables/useModelCatalog";
@@ -8,35 +8,37 @@ import type { ConfigSectionKey, SettingsSectionKey } from "../types";
 import { focusConfigField } from "../utils/configFieldFocus";
 import PageHeader from "../components/ui/PageHeader.vue";
 import SettingsNavigation from "../components/settings/SettingsNavigation.vue";
-import PersonaSettingsForm from "../components/settings/PersonaSettingsForm.vue";
-import ProviderSettings from "../components/settings/ProviderSettings.vue";
-import BroadcastStormSettingsForm from "../components/settings/BroadcastStormSettingsForm.vue";
-import NormalReplySettingsForm from "../components/settings/NormalReplySettingsForm.vue";
-import BotSettingsForm from "../components/settings/BotSettingsForm.vue";
-import ToneSettingsForm from "../components/settings/ToneSettingsForm.vue";
-import MemorySettingsForm from "../components/settings/MemorySettingsForm.vue";
-import OrchestratorSettingsForm from "../components/settings/OrchestratorSettingsForm.vue";
-import ToolsSettingsForm from "../components/settings/ToolsSettingsForm.vue";
-import BashSettingsForm from "../components/settings/BashSettingsForm.vue";
-import OneBotSettingsForm from "../components/settings/OneBotSettingsForm.vue";
-import MonitoringSettingsForm from "../components/settings/MonitoringSettingsForm.vue";
 import DialogOverlay from "../components/ui/DialogOverlay.vue";
-import AdminPasswordForm from "../components/settings/AdminPasswordForm.vue";
-import { activeAgentId, activeAgentIdState } from "../composables/agentScope";
+import { activeAgentId, activeAgentIdState, setActiveAgentId } from "../composables/agentScope";
 import { settingsForScope } from "../components/settings/settingsCatalog";
 
 const props = withDefaults(defineProps<{ scope?: "agent" | "system" }>(), { scope: "agent" });
+const PersonaSettingsForm = defineAsyncComponent(() => import("../components/settings/PersonaSettingsForm.vue"));
+const ProviderSettings = defineAsyncComponent(() => import("../components/settings/ProviderSettings.vue"));
+const BroadcastStormSettingsForm = defineAsyncComponent(() => import("../components/settings/BroadcastStormSettingsForm.vue"));
+const NormalReplySettingsForm = defineAsyncComponent(() => import("../components/settings/NormalReplySettingsForm.vue"));
+const BotSettingsForm = defineAsyncComponent(() => import("../components/settings/BotSettingsForm.vue"));
+const ToneSettingsForm = defineAsyncComponent(() => import("../components/settings/ToneSettingsForm.vue"));
+const MemorySettingsForm = defineAsyncComponent(() => import("../components/settings/MemorySettingsForm.vue"));
+const OrchestratorSettingsForm = defineAsyncComponent(() => import("../components/settings/OrchestratorSettingsForm.vue"));
+const ToolsSettingsForm = defineAsyncComponent(() => import("../components/settings/ToolsSettingsForm.vue"));
+const BashSettingsForm = defineAsyncComponent(() => import("../components/settings/BashSettingsForm.vue"));
+const OneBotSettingsForm = defineAsyncComponent(() => import("../components/settings/OneBotSettingsForm.vue"));
+const MonitoringSettingsForm = defineAsyncComponent(() => import("../components/settings/MonitoringSettingsForm.vue"));
+const AdminPasswordForm = defineAsyncComponent(() => import("../components/settings/AdminPasswordForm.vue"));
 
 const route = useRoute();
 const router = useRouter();
 const workspace = useConfigWorkspace(props.scope);
 const catalog = useModelCatalog();
 const loadError = shallowRef("");
+const switchError = shallowRef("");
+const pendingSwitchAgentId = shallowRef("");
 const logoutConfirmOpen = shallowRef(false);
 const loggingOut = shallowRef(false);
 const logoutError = shallowRef("");
 const settingsPanel = useTemplateRef<HTMLElement>("settingsPanel");
-const monitoringForm = useTemplateRef<InstanceType<typeof MonitoringSettingsForm>>("monitoringForm");
+const monitoringForm = useTemplateRef<{ flush(): Promise<boolean> }>("monitoringForm");
 const sections = computed(() => settingsForScope(props.scope));
 const visibleSections = computed(() => new Set(sections.value.map((section) => section.id)));
 const configSections = new Set<ConfigSectionKey>(sectionKeys);
@@ -61,12 +63,18 @@ const currentState = computed(() => {
 const visibleState = computed(() => ["error", "conflict", "restart"].includes(currentState.value.kind));
 
 onMounted(async () => {
-  await Promise.all([loadConfig(), catalog.load()]);
+  const [loaded] = await Promise.all([loadConfig(), catalog.load()]);
+  if (loaded && props.scope === "agent") stableAgentId = workspace.agentId();
 });
 onBeforeUnmount(() => workspace.cancel());
 
-watch(activeAgentIdState, () => {
-  if (props.scope === "agent") void loadConfig();
+let agentSwitchSequence = 0;
+let restoringAgent = false;
+let stableAgentId = workspace.agentId();
+watch(activeAgentIdState, (next) => {
+  if (props.scope !== "agent" || restoringAgent || next === workspace.agentId()) return;
+  const sequence = ++agentSwitchSequence;
+  void switchAgent(next, sequence);
 }, { flush: "sync" });
 
 watch(currentState, async (entry) => {
@@ -83,12 +91,65 @@ onBeforeRouteLeave(async () => {
   return configSynced && monitoringSynced;
 });
 
-async function loadConfig(preserveDirty = false) {
+async function loadConfig(preserveDirty = false, agentId?: string) {
   try {
-    await workspace.load({ preserveDirty });
+    await workspace.load({ preserveDirty, agentId });
     loadError.value = "";
+    return true;
   } catch (error) {
     loadError.value = error instanceof Error ? error.message : "配置读取失败";
+    return false;
+  }
+}
+
+async function switchAgent(nextAgentId: string, sequence: number) {
+  const previousAgentId = stableAgentId;
+  const saved = await workspace.flush();
+  if (sequence !== agentSwitchSequence) return;
+  if (!saved) {
+    pendingSwitchAgentId.value = nextAgentId;
+    restoreActiveAgent(previousAgentId);
+    switchError.value = "设置保存失败，请处理后重试，或放弃更改后切换。";
+    return;
+  }
+  const loaded = await loadConfig(false, nextAgentId);
+  if (sequence !== agentSwitchSequence) return;
+  if (loaded) {
+    stableAgentId = nextAgentId;
+    pendingSwitchAgentId.value = "";
+    switchError.value = "";
+    return;
+  }
+  restoreActiveAgent(previousAgentId);
+  await loadConfig(false, previousAgentId);
+  switchError.value = "Agent 配置读取失败，已返回原 Agent。";
+}
+
+async function discardAndSwitch() {
+  const nextAgentId = pendingSwitchAgentId.value;
+  if (!nextAgentId) return;
+  const previousAgentId = stableAgentId;
+  const sequence = ++agentSwitchSequence;
+  pendingSwitchAgentId.value = "";
+  switchError.value = "";
+  restoreActiveAgent(nextAgentId);
+  const loaded = await loadConfig(false, nextAgentId);
+  if (sequence !== agentSwitchSequence) return;
+  if (loaded) {
+    stableAgentId = nextAgentId;
+    return;
+  }
+  restoreActiveAgent(previousAgentId);
+  await loadConfig(false, previousAgentId);
+  switchError.value = "Agent 配置读取失败，已返回原 Agent。";
+}
+
+function restoreActiveAgent(agentId: string) {
+  restoringAgent = true;
+  try {
+    setActiveAgentId(agentId);
+  } finally {
+    restoringAgent = false;
   }
 }
 
@@ -155,6 +216,11 @@ async function logout() {
           <button v-if="props.scope === 'system'" class="btn btn-ghost" type="button" @click="logoutConfirmOpen = true"><i class="bx bx-log-out" aria-hidden="true"></i>退出登录</button>
         </template>
       </PageHeader>
+
+      <div v-if="switchError" class="mt-4 flex flex-wrap items-center gap-3" role="status" aria-live="polite">
+        <span class="inline-state" data-kind="error">{{ switchError }}</span>
+        <button v-if="pendingSwitchAgentId" class="btn btn-ghost" type="button" @click="discardAndSwitch">放弃更改并切换</button>
+      </div>
 
       <div v-if="workspace.loading.value && !workspace.envelope.value" class="empty-state"><div><strong>加载中</strong></div></div>
       <div v-else-if="loadError" class="empty-state"><div><strong class="!text-accent">{{ loadError }}</strong><button class="btn mt-4" type="button" @click="loadConfig()">重试</button></div></div>

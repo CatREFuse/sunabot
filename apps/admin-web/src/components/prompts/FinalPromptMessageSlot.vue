@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, useTemplateRef } from "vue";
 import type { PromptVariableDefinition } from "../../types";
 import {
   messageGroupToken,
@@ -24,6 +24,7 @@ const emit = defineEmits<{
 const messageGroups = computed(() => props.variables.filter((variable) => variable.type === "message[]"));
 const selectedGroupName = computed(() => typeof props.message === "string" ? messageGroupVariableName(props.message) : "");
 const selectedGroup = computed(() => messageGroups.value.find((variable) => variable.name === selectedGroupName.value));
+const promptTextField = useTemplateRef<InstanceType<typeof PromptTextField>>("promptTextField");
 
 function updateRole(role: string) {
   if (typeof props.message === "string") return;
@@ -49,6 +50,12 @@ function onDragHandleKeydown(event: KeyboardEvent) {
     emit("move", 1);
   }
 }
+
+function insertVariable(name: string) {
+  promptTextField.value?.insertVariable(name);
+}
+
+defineExpose({ insertVariable });
 </script>
 
 <template>
@@ -108,6 +115,7 @@ function onDragHandleKeydown(event: KeyboardEvent) {
         </select>
       </label>
       <PromptTextField
+        ref="promptTextField"
         :model-value="message.content"
         :variables="variables"
         :label="`${message.role} 提示词`"

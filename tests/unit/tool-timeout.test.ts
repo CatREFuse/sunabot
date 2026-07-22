@@ -147,7 +147,7 @@ describe("tool call timeout", () => {
     expect(workspaceBashTool.parameters.properties.timeoutMs.enum).toEqual([TOOL_CALL_TIMEOUT_MS, null]);
   });
 
-  it("runs administrator private Native Bash on macOS only after adversarial approval", async () => {
+  it("fails closed for administrator Native Bash on macOS after adversarial approval", async () => {
     temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-tool-native-host-"));
     const audit = vi.fn(allowedAudit);
     const probe = vi.fn(async () => undefined);
@@ -165,31 +165,16 @@ describe("tool call timeout", () => {
       }
     });
 
-    const workbenchRoot = await fs.realpath(path.join(temporaryRoot, "workbench"));
-    const skillsRoot = await fs.realpath(path.join(temporaryRoot, "extensions/skills"));
-    const mcpRoot = await fs.realpath(path.join(temporaryRoot, "extensions/mcp"));
     expect(audit).toHaveBeenCalledWith({
       command: "pwd",
       backend: "native",
       accessMode: "admin",
       strictMode: true
     });
-    expect(probe).toHaveBeenCalledWith("/bin/bash", ["--noprofile", "--norc", "-lc", ":"]);
-    expect(processState.calls).toHaveLength(1);
-    expect(processState.calls[0]).toMatchObject({
-      file: "/bin/bash",
-      args: ["--noprofile", "--norc", "-lc", "pwd"],
-      cwd: workbenchRoot,
-      env: {
-        PATH: "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
-        HOME: workbenchRoot,
-        PWD: workbenchRoot,
-        SUNABOT_SKILLS: skillsRoot,
-        SUNABOT_MCP_CONFIG: mcpRoot
-      }
-    });
-    expect(processState.calls[0]?.env).not.toHaveProperty("DOCKER_HOST");
-    expect(result).toMatchObject({ ok: true, backend: "native", accessMode: "admin" });
+    expect(probe).not.toHaveBeenCalled();
+    expect(processState.calls).toHaveLength(0);
+    expect(result).toMatchObject({ ok: false, backend: "native", accessMode: "admin" });
+    expect(result.stderr).toContain("BASH_ISOLATION_UNAVAILABLE");
   });
 
   it("does not execute plain Bash when isolation is unavailable", async () => {

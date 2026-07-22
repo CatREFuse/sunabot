@@ -339,6 +339,7 @@ export class SunaRuntime {
   createScheduledTask(...args: Parameters<RuntimeScheduledTasks["createScheduledTask"]>) { return this.inAgentContext(() => this.scheduledTasks.createScheduledTask(...args)); }
   updateScheduledTask(...args: Parameters<RuntimeScheduledTasks["updateScheduledTask"]>) { return this.inAgentContext(() => this.scheduledTasks.updateScheduledTask(...args)); }
   deleteScheduledTask(...args: Parameters<RuntimeScheduledTasks["deleteScheduledTask"]>) { return this.inAgentContext(() => this.scheduledTasks.deleteScheduledTask(...args)); }
+  replayScheduledTaskDelivery(...args: Parameters<RuntimeScheduledTasks["replayScheduledTaskDelivery"]>) { return this.inAgentContext(() => this.scheduledTasks.replayScheduledTaskDelivery(...args)); }
   listDreamHistory(...args: Parameters<RuntimeDreams["listHistory"]>) { return this.dreams.listHistory(...args); }
   forceDream(input: Parameters<typeof forceRuntimeDreamForHost>[1]) {
     return this.inAgentContext(() => forceRuntimeDreamForHost(this, input));
@@ -391,7 +392,7 @@ export class SunaRuntime {
       const epoch = this.configEpoch;
       const config = freezeRuntimeConfigSnapshot(this.config);
       const backend = backendOverride === undefined
-        ? "native"
+        ? "docker"
         : backendOverride;
       const workspacePath = resolveProjectPath(config.persona.agentWorkspace);
       let auditAvailable = false;
@@ -442,7 +443,7 @@ export class SunaRuntime {
     }
     const config = freezeRuntimeConfigSnapshot(this.config);
     const backend = backendOverride === undefined
-      ? "native"
+      ? "docker"
       : backendOverride;
     const workspacePath = resolveProjectPath(config.persona.agentWorkspace);
     return {

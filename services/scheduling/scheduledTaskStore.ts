@@ -109,6 +109,19 @@ export interface FailScheduledTaskRunInput {
   now?: Date;
 }
 
+export interface RecordScheduledTaskDeliveryFailureInput {
+  runId: string;
+  workerId: string;
+  errorText: string;
+  retryAt: Date;
+  now?: Date;
+}
+
+export interface ReplayScheduledTaskDeliveryInput {
+  runId: string;
+  now?: Date;
+}
+
 export interface ScheduledTaskStore {
   create(input: CreateScheduledTaskInput): ScheduledTask;
   get(id: string): ScheduledTask | undefined;
@@ -124,6 +137,8 @@ export interface ScheduledTaskStore {
   markGenerated(input: MarkScheduledTaskRunGeneratedInput): ScheduledTaskRun | undefined;
   complete(input: CompleteScheduledTaskRunInput): ScheduledTaskRun | undefined;
   fail(input: FailScheduledTaskRunInput): ScheduledTaskRun | undefined;
+  recordDeliveryFailure(input: RecordScheduledTaskDeliveryFailureInput): { run: ScheduledTaskRun; terminal: boolean } | undefined;
+  replayDelivery(input: ReplayScheduledTaskDeliveryInput): ScheduledTaskRun | undefined;
   purgeExpiredArchivedTasks(input?: PurgeExpiredArchivedTasksInput): number;
   nextWakeAt(): string | null;
 }
