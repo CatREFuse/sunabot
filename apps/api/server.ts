@@ -5,6 +5,7 @@ import http from "node:http";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { OpenAIProvider } from "../../adapters/model/openaiProvider.js";
+import { createDockerBashSupervisor } from "../../adapters/docker/dockerBashSupervisor.js";
 import { OneBotGateway } from "../../adapters/onebot/onebotGateway.js";
 import { SqliteAdminSessionStore } from "../../adapters/sqlite/adminSessionStore.js";
 import {
@@ -43,6 +44,7 @@ import {
   type RuntimeToolCapabilityResolver
 } from "../../services/tools/bashCapability.js";
 import type { SystemConfigRuntimePort } from "../../services/tools/systemConfigTool.js";
+import type { WorkspaceBashRuntimePort } from "../../services/tools/bashRuntime.js";
 import { AgentConfigService } from "../../src/admin/agentConfigService.js";
 import { AgentFileRepository } from "../../src/admin/agentFiles.js";
 import { AdminAuthService } from "../../src/admin/auth.js";
@@ -117,6 +119,7 @@ export interface CreateAppOptions {
   accountRuntimeReconciler?: false | AccountRuntimeReconcilerPort;
   runtimeProbeClient?: false | RuntimeProbeClientPort;
   bashAudit?: RuntimeBashAuditPort;
+  bashRuntime?: WorkspaceBashRuntimePort;
   resolveToolCapabilities?: RuntimeToolCapabilityResolver;
   agentExtensions?: AgentExtensionApiOptions;
   mediaHostnameLookup?: MediaHostnameLookup;
@@ -185,9 +188,10 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
     codexHome: getWorkspacePath(WORKSPACE_LAYOUT.codexHome),
     executable: process.env.SUNABOT_CODEX_EXECUTABLE
   });
+  const bashRuntime = options.bashRuntime ?? createDockerBashSupervisor();
   const workspaceBashProbes = {
-    native: createWorkspaceBashCapabilityProbe({ backend: "native" }),
-    docker: createWorkspaceBashCapabilityProbe({ backend: "docker" })
+    native: createWorkspaceBashCapabilityProbe({ backend: "native", runtime: bashRuntime }),
+    docker: createWorkspaceBashCapabilityProbe({ backend: "docker", runtime: bashRuntime })
   };
   const resolveToolCapabilities = options.resolveToolCapabilities ?? createRuntimeToolCapabilityResolver({
     getCodexStatus: () => codexAuth.status(),
@@ -206,6 +210,7 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
   const createRuntime = (agentConfig: AppConfig) => new SunaRuntime(agentConfig, {
     resolveToolCapabilities,
     bashAudit,
+    bashRuntime,
     systemConfig: systemConfigRuntime,
     agentExtensions: runtimeAgentExtensions,
     replyTaskGate: broadcastStormDetector

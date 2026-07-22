@@ -24,6 +24,7 @@ import {
   type FrozenRestrictedPath
 } from "./bashFilesystemGuard.js";
 import { evaluateBashPolicy } from "./bashPolicy.js";
+import { runBashAuditWithDeadline } from "./bashAuditDeadline.js";
 import {
   WORKSPACE_BASH_ISOLATION_ERROR,
   WORKSPACE_BASH_MCP_ROOT,
@@ -35,10 +36,14 @@ import {
   type WorkspaceBashReadOnlyMounts,
   type WorkspaceBashSandboxOptions
 } from "./bashSandbox.js";
-import { TOOL_CALL_TIMEOUT_MS } from "./toolConstants.js";
+import {
+  WORKSPACE_BASH_EXECUTION_TIMEOUT_MS,
+  type WorkspaceBashRuntimeErrorCode,
+  type WorkspaceBashRuntimeExecutionResult,
+  type WorkspaceBashRuntimePort
+} from "./bashRuntime.js";
 
 export const WORKSPACE_BASH_TOOL_NAME = "workspace_bash";
-
 const MAX_COMMAND_LENGTH = 4_000;
 const MAX_OUTPUT_CHARS = 24_000;
 const OUTSIDE_READ_APPROVAL_GUARANTEE = "仅授权读取既存 canonical regular file；完整父链身份已冻结，并会在只读 bind 前复验。";
@@ -69,6 +74,8 @@ export interface WorkspaceBashResult {
   cleanupAttempted?: boolean;
   cleanupSucceeded?: boolean;
   cleanupError?: "BASH_DOCKER_CLEANUP_FAILED";
+  errorCode?: WorkspaceBashRuntimeErrorCode;
+  retryAfterMs?: number;
 }
 
 export interface WorkspaceBashOptions {
@@ -82,6 +89,7 @@ export interface WorkspaceBashOptions {
   abortSignal?: AbortSignal;
   isCurrent?: () => boolean;
   sandbox?: WorkspaceBashSandboxOptions;
+  runtime?: WorkspaceBashRuntimePort;
   /** @deprecated Retained until the runtime configuration migration is committed. */
   workspaceOnly?: boolean;
   /** @deprecated Deterministic policy and the audit agent replace keyword matching. */
@@ -98,6 +106,7 @@ export interface WorkspaceBashProviderOptions {
   audit: BashAuditRunner;
   approvalContext: BashApprovalContext;
   confirmedApprovalId?: string;
+  runtime?: WorkspaceBashRuntimePort;
 }
 
 export const workspaceBashTool = {
@@ -114,8 +123,8 @@ export const workspaceBashTool = {
       },
       timeoutMs: {
         type: ["integer", "null"],
-        enum: [TOOL_CALL_TIMEOUT_MS, null],
-        description: "Tool timeout is fixed at 300000 milliseconds. Use null to apply it."
+        enum: [WORKSPACE_BASH_EXECUTION_TIMEOUT_MS, null],
+        description: "Tool execution timeout is fixed at 30000 milliseconds. Use null to apply it."
       }
     },
     required: ["command", "timeoutMs"]
@@ -126,7 +135,6 @@ export const workspaceBashTool = {
 export function createWorkspaceBashTool(_options: WorkspaceBashOptions = {}) {
   return workspaceBashTool;
 }
-
 export function isWorkspaceBashProviderOptions(value: unknown): value is WorkspaceBashProviderOptions {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const options = value as Record<string, unknown>;
@@ -140,7 +148,8 @@ export function isWorkspaceBashProviderOptions(value: unknown): value is Workspa
     "isCurrent",
     "audit",
     "approvalContext",
-    "confirmedApprovalId"
+    "confirmedApprovalId",
+    "runtime"
   ]);
   if (Object.keys(options).some((key) => !allowedKeys.has(key))) return false;
   if (
@@ -161,10 +170,14 @@ export function isWorkspaceBashProviderOptions(value: unknown): value is Workspa
     || Array.isArray(approvalContext)
     || !isValidBashApprovalContext(approvalContext as BashApprovalContext)
   ) return false;
+  if (options.runtime !== undefined && (
+    !options.runtime
+    || typeof options.runtime !== "object"
+    || typeof (options.runtime as WorkspaceBashRuntimePort).execute !== "function"
+  )) return false;
   return options.confirmedApprovalId === undefined
     || (typeof options.confirmedApprovalId === "string" && /^bash-[a-f0-9]{24}$/.test(options.confirmedApprovalId));
 }
-
 export async function runWorkspaceBash(
   input: WorkspaceBashInput,
   agentWorkspacePath: string,
@@ -212,13 +225,12 @@ export async function runWorkspaceBash(
   let audit: BashAuditResult;
   if (!isBashConfigurationCurrent(options.isCurrent)) return stale();
   try {
-    audit = await options.audit({
+    audit = await runBashAuditWithDeadline(options.audit, {
       command,
       backend,
       accessMode,
-      strictMode: options.strictMode !== false,
-      ...(options.abortSignal ? { signal: options.abortSignal } : {})
-    });
+      strictMode: options.strictMode !== false
+    }, options.abortSignal);
     if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
   } catch {
     if (!isBashConfigurationCurrent(options.isCurrent)) return stale();
@@ -377,7 +389,11 @@ export async function runWorkspaceBash(
       backend,
       workbenchRoot,
       environment,
-      { ...options.sandbox, readOnlyMounts }
+      {
+        ...options.sandbox,
+        readOnlyMounts,
+        skipDockerProbe: Boolean(options.runtime)
+      }
     );
     if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
     try {
@@ -429,10 +445,31 @@ export async function runWorkspaceBash(
       if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
     }
     if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
+    const execution = policy.restrictedInvocation
+      ? { kind: "argv" as const, ...policy.restrictedInvocation }
+      : { kind: "shell" as const, command };
+    if (sandbox.kind === "docker" && options.runtime) {
+      const runtimeResult = await options.runtime.execute({
+        execution,
+        workbenchRoot,
+        image: sandbox.image ?? "sunabot-bash:local",
+        readOnlyMounts,
+        dockerEnvironment: sandbox.launcherEnvironment,
+        effectiveUid: options.sandbox?.effectiveUid,
+        timeoutMs,
+        signal: options.abortSignal,
+        isCurrent: options.isCurrent
+      });
+      return runtimeExecutionResult(runtimeResult, {
+        command,
+        workbenchRoot,
+        backend,
+        accessMode,
+        audit
+      });
+    }
     const invocation = buildWorkspaceBashInvocation(
-      policy.restrictedInvocation
-        ? { kind: "argv", ...policy.restrictedInvocation }
-        : { kind: "shell", command },
+      execution,
       workbenchRoot,
       environment,
       sandbox,
@@ -622,7 +659,35 @@ function normalizeCommand(value: unknown) {
 }
 
 function normalizeTimeout(_value: unknown) {
-  return TOOL_CALL_TIMEOUT_MS;
+  return WORKSPACE_BASH_EXECUTION_TIMEOUT_MS;
+}
+
+function runtimeExecutionResult(
+  result: WorkspaceBashRuntimeExecutionResult,
+  options: Pick<ExecuteCommandOptions, "command" | "workbenchRoot" | "backend" | "accessMode" | "audit">
+): WorkspaceBashResult {
+  const cleanupFailed = result.cleanupAttempted === true && result.cleanupSucceeded === false;
+  const stderr = cleanupFailed && !result.stderr.includes("BASH_DOCKER_CLEANUP_FAILED")
+    ? [result.stderr, "BASH_DOCKER_CLEANUP_FAILED: Docker container cleanup could not be verified."].filter(Boolean).join("\n")
+    : result.stderr;
+  return {
+    ok: result.ok,
+    command: sanitizeHostText(options.command, options.workbenchRoot),
+    cwd: WORKSPACE_BASH_VIRTUAL_ROOT,
+    backend: options.backend,
+    accessMode: options.accessMode,
+    exitCode: result.exitCode,
+    signal: result.signal,
+    timedOut: result.timedOut,
+    stdout: truncateOutput(sanitizeHostText(result.stdout, options.workbenchRoot)),
+    stderr: truncateOutput(sanitizeHostText(stderr, options.workbenchRoot)),
+    audit: sanitizeAuditResult(options.audit, options.workbenchRoot),
+    cleanupAttempted: result.cleanupAttempted,
+    cleanupSucceeded: result.cleanupSucceeded,
+    cleanupError: cleanupFailed ? "BASH_DOCKER_CLEANUP_FAILED" : undefined,
+    errorCode: result.errorCode,
+    retryAfterMs: result.retryAfterMs
+  };
 }
 
 function validateBasicCommand(command: string) {

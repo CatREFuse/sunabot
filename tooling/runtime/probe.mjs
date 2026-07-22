@@ -250,7 +250,7 @@ function addOptionalCapability(add, id, fact, code, action) {
     id,
     kind: "capability",
     status: normalized.ok === true ? "pass" : normalized.ok === false ? "fail" : "unknown",
-    code,
+    code: normalized.code ?? code,
     path: normalized.path,
     action: normalized.action ?? action,
     detail: normalized.detail ?? (normalized.ok ? "available" : "unavailable")

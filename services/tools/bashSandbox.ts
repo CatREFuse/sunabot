@@ -77,6 +77,7 @@ export interface WorkspaceBashSandboxOptions {
   access?: (filePath: string, mode: number) => Promise<void>;
   probe?: (file: string, args: string[], options?: { env?: Record<string, string> }) => Promise<void>;
   readOnlyMounts?: WorkspaceBashReadOnlyMounts;
+  skipDockerProbe?: boolean;
 }
 
 export interface WorkspaceBashReadOnlyMounts {
@@ -354,6 +355,9 @@ async function ensureDockerSandbox(options: WorkspaceBashSandboxOptions) {
   validateReadOnlyMounts(options.readOnlyMounts);
   try {
     if (path.isAbsolute(executable)) await (options.access ?? fs.access)(executable, fsConstants.X_OK);
+    if (options.skipDockerProbe) {
+      return { kind: "docker", executable, image, launcherEnvironment } as const;
+    }
     const probeName = createBashProbeContainerName();
     const effectiveGid = typeof process.getgid === "function" ? process.getgid() : effectiveUid;
     const args = [
@@ -439,12 +443,34 @@ async function executeSandboxProbe(
 
 function executeProbe(file: string, args: string[], env?: Record<string, string>) {
   return new Promise<void>((resolve, reject) => {
-    execFile(file, args, {
-      env,
-      timeout: 5_000,
-      maxBuffer: 64 * 1_024,
-      killSignal: "SIGKILL"
-    }, (error) => error ? reject(error) : resolve());
+    let child: { kill(signal?: NodeJS.Signals | number): boolean } | undefined;
+    let completed = false;
+    const finish = (error?: Error | null) => {
+      if (completed) return;
+      completed = true;
+      clearTimeout(watchdog);
+      if (error) reject(error);
+      else resolve();
+    };
+    const watchdog = setTimeout(() => {
+      try {
+        child?.kill("SIGKILL");
+      } catch {
+        // The hard deadline remains authoritative if launcher termination throws.
+      }
+      finish(new Error("Docker isolation probe timed out."));
+    }, 2_000);
+    watchdog.unref();
+    try {
+      child = execFile(file, args, {
+        env,
+        timeout: 2_000,
+        maxBuffer: 64 * 1_024,
+        killSignal: "SIGKILL"
+      }, (error) => finish(error));
+    } catch (error) {
+      finish(error as Error);
+    }
   });
 }
 
@@ -458,7 +484,10 @@ function buildDockerCliEnvironment(source: Readonly<NodeJS.ProcessEnv> = process
     "DOCKER_CONFIG",
     "DOCKER_TLS_VERIFY",
     "DOCKER_CERT_PATH",
-    "DOCKER_API_VERSION"
+    "DOCKER_API_VERSION",
+    "SUNABOT_DOCKER_SOCKET",
+    "SUNABOT_RUNTIME_ID",
+    "SUNABOT_WORKSPACE_ID"
   ]) {
     const value = source[key];
     if (typeof value === "string" && value) environment[key] = value;

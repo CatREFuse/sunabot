@@ -8,6 +8,7 @@ import {
   extractConfirmedBashApprovalId
 } from "../../services/tools/bashAudit.js";
 import type { RuntimeToolCapabilityResolver } from "../../services/tools/bashCapability.js";
+import type { WorkspaceBashRuntimePort } from "../../services/tools/bashRuntime.js";
 import { resolveProjectPath } from "../config.js";
 import type { AppConfig, ChatMessage, ConversationMessageQuote, ConversationRecord, ParsedIncomingMessage } from "../types.js";
 import { clampInteger, estimatePromptTokens, isAdminUserId, toContextChatMessage } from "./conversationMemoryHelpers.js";
@@ -35,6 +36,7 @@ interface RuntimeReplyContextHost extends RuntimeConfigPort {
   readonly conversationRecords: ReadonlyMap<string, ConversationRecord>;
   readonly attachmentService: Pick<AttachmentService, "cache">;
   readonly bashAudit?: RuntimeBashAuditPort;
+  readonly bashRuntime?: WorkspaceBashRuntimePort;
   adminIdentity(): AdminIdentity;
   contextMessageLimit(): number;
   loadMessageDetails(
@@ -275,6 +277,7 @@ export async function runtime_resolveProviderBashHandle(
         if (this.configEpoch !== epoch) throw new Error("BASH_AUDIT_UNAVAILABLE");
         return result;
       },
+      ...(this.bashRuntime ? { runtime: this.bashRuntime } : {}),
       ...(candidate.confirmedApprovalId ? { confirmedApprovalId: candidate.confirmedApprovalId } : {})
     });
     if (this.configEpoch !== epoch) continue;

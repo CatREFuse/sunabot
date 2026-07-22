@@ -1,10 +1,11 @@
 // @vitest-environment node
 import { spawnSync } from "node:child_process";
+import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   composeProjectName,
   composeServiceRunning,
@@ -21,9 +22,14 @@ import {
 import {
   assertStartupReportReady,
   bubblewrapProbeArguments,
+  command,
+  commandTimeoutMs,
   nativeBashImageComposeArguments,
+  nativeCoreEnvironment,
+  resolveEffectiveDockerSocket,
   shouldCleanupRemovedNapcatAccount,
-  startupReportFailures
+  startupReportFailures,
+  validateWorkspaceBashContainerOwnership
 } from "../../tooling/runtime/launcher.mjs";
 
 const root = fileURLToPath(new URL("../..", import.meta.url));
@@ -36,7 +42,7 @@ describe("unified runtime launcher", () => {
       source.indexOf("async function inspectNativeCodex")
     );
 
-    expect(nativeCapabilities).toContain('command("docker", [');
+    expect(nativeCapabilities).toContain('dockerCommand(context, [');
     expect(nativeCapabilities).toContain('"--network", "none"');
     expect(nativeCapabilities).toContain('"--cap-drop", "ALL"');
     expect(nativeCapabilities).toContain("Docker Bash isolation probe passed");
@@ -65,6 +71,187 @@ describe("unified runtime launcher", () => {
       "--profile", "build",
       "build", "bash-image"
     ]);
+  });
+
+  it("pins Docker command categories to finite default deadlines", () => {
+    expect(commandTimeoutMs("docker", ["info"], undefined)).toBe(10_000);
+    expect(commandTimeoutMs("docker", ["exec", "core", "true"], undefined)).toBe(45_000);
+    expect(commandTimeoutMs("docker", ["compose", "up", "-d", "--build"], undefined)).toBe(15 * 60_000);
+    expect(commandTimeoutMs("docker", ["compose", "config"], undefined)).toBe(5 * 60_000);
+    expect(commandTimeoutMs("codex", ["login", "status"], undefined)).toBe(30_000);
+    expect(commandTimeoutMs("docker", ["info"], 1234)).toBe(1234);
+  });
+
+  it("gives graceful Docker stop and first-run credential input explicit longer budgets", async () => {
+    const source = await fs.readFile(path.join(root, "tooling/runtime/launcher.mjs"), "utf8");
+    expect(source).toContain("INTERACTIVE_COMMAND_TIMEOUT_MS = 15 * 60_000");
+    expect(source).toContain("timeoutMs: INTERACTIVE_COMMAND_TIMEOUT_MS");
+    expect(source.match(/context\.contract\.shutdownTimeoutSeconds \+ 5/gu)?.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("requires complete Bash ownership before the down path can remove a container", () => {
+    const invocationId = "b".repeat(32);
+    const container = {
+      id: "a".repeat(12),
+      component: "workspace-bash",
+      name: `sunabot-bash-${invocationId}`,
+      runtimeId: "sunabot-qq-runtime",
+      workspaceId: "c".repeat(32),
+      ownerId: "d".repeat(32),
+      invocationId,
+      expiresAtRaw: "1800000000000"
+    };
+    expect(() => validateWorkspaceBashContainerOwnership(container, {
+      identity: "c".repeat(32),
+      runtimeId: "sunabot-qq-runtime"
+    })).not.toThrow();
+    expect(() => validateWorkspaceBashContainerOwnership({
+      ...container,
+      name: `sunabot-bash-${"e".repeat(32)}`
+    }, {
+      identity: "c".repeat(32),
+      runtimeId: "sunabot-qq-runtime"
+    })).toThrow(/DOCKER_BASH_OWNERSHIP_INVALID/u);
+  });
+
+  it("settles a timed-out command after TERM then KILL even without an exit event", async () => {
+    vi.useFakeTimers();
+    try {
+      class FakeChild extends EventEmitter {
+        kill = vi.fn(() => true);
+        unref = vi.fn();
+      }
+      const child = new FakeChild();
+      const spawnProcess = vi.fn(() => child);
+      const pending = command("docker", ["info"], {
+        timeoutMs: 100,
+        terminateGraceMs: 50,
+        spawnProcess
+      });
+      const rejection = expect(pending).rejects.toMatchObject({ code: "COMMAND_TIMEOUT" });
+
+      await vi.advanceTimersByTimeAsync(100);
+      expect(child.kill).toHaveBeenCalledTimes(1);
+      expect(child.kill).toHaveBeenLastCalledWith("SIGTERM");
+
+      await vi.advanceTimersByTimeAsync(49);
+      expect(child.kill).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(child.kill).toHaveBeenLastCalledWith("SIGKILL");
+      expect(child.unref).toHaveBeenCalledTimes(1);
+      await rejection;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels the KILL escalation when a timed-out command exits after TERM", async () => {
+    vi.useFakeTimers();
+    try {
+      class FakeChild extends EventEmitter {
+        kill = vi.fn(() => true);
+      }
+      const child = new FakeChild();
+      const pending = command("docker", ["info"], {
+        timeoutMs: 100,
+        terminateGraceMs: 50,
+        spawnProcess: () => child
+      });
+      const rejection = expect(pending).rejects.toMatchObject({ code: "COMMAND_TIMEOUT" });
+
+      await vi.advanceTimersByTimeAsync(100);
+      child.emit("exit", null, "SIGTERM");
+      await rejection;
+      await vi.advanceTimersByTimeAsync(50);
+      expect(child.kill).toHaveBeenCalledTimes(1);
+      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds captured command output and still hard-settles without an exit event", async () => {
+    vi.useFakeTimers();
+    try {
+      class FakeChild extends EventEmitter {
+        stdout = new EventEmitter();
+        stderr = new EventEmitter();
+        kill = vi.fn(() => true);
+        unref = vi.fn();
+      }
+      const child = new FakeChild();
+      const pending = command("docker", ["info"], {
+        capture: true,
+        maxOutputBytes: 4,
+        timeoutMs: 10_000,
+        terminateGraceMs: 25,
+        spawnProcess: () => child
+      });
+      const rejection = expect(pending).rejects.toMatchObject({ code: "COMMAND_OUTPUT_LIMIT" });
+
+      child.stdout.emit("data", Buffer.from("12345"));
+      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+      await vi.advanceTimersByTimeAsync(25);
+      expect(child.kill).toHaveBeenLastCalledWith("SIGKILL");
+      await rejection;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("resolves the effective Docker Unix socket with Docker Context precedence", async () => {
+    const runCommand = vi.fn(async () => "unix:///Users/test/.colima/production/docker.sock\n");
+
+    await expect(resolveEffectiveDockerSocket({
+      DOCKER_CONTEXT: "production",
+      DOCKER_HOST: "unix:///var/run/wrong.sock"
+    }, runCommand)).resolves.toBe("/Users/test/.colima/production/docker.sock");
+    expect(runCommand).toHaveBeenCalledWith("docker", [
+      "context", "inspect",
+      "--format", '{{ (index .Endpoints "docker").Host }}',
+      "production"
+    ], expect.objectContaining({ capture: true, timeoutMs: 10_000 }));
+
+    runCommand.mockClear();
+    await expect(resolveEffectiveDockerSocket({
+      DOCKER_HOST: "unix:///var/run/docker.sock"
+    }, runCommand)).resolves.toBe("/var/run/docker.sock");
+    expect(runCommand).not.toHaveBeenCalled();
+    await expect(resolveEffectiveDockerSocket({ DOCKER_HOST: "ssh://docker-host" }, runCommand))
+      .rejects.toMatchObject({ code: "DOCKER_BASH_ENDPOINT_UNSUPPORTED" });
+  });
+
+  it("builds a launcher-owned Native Core identity and Docker endpoint environment", () => {
+    const context = {
+      environment: {
+        PATH: "/usr/bin",
+        SUNABOT_RUNTIME_ID: "spoofed-runtime",
+        SUNABOT_WORKSPACE_ID: "spoofed-workspace",
+        SUNABOT_DOCKER_SOCKET: "/tmp/spoofed.sock"
+      },
+      runtimeEnvironment: {
+        SUNABOT_RUNTIME_ID: "runtime-env-spoof",
+        SUNABOT_DOCKER_SOCKET: "/tmp/runtime-env.sock"
+      },
+      dev: false,
+      identity: "bfa0ec2e0882d0fb",
+      workspace: "/srv/sunabot/workspace",
+      dockerSocket: "/Users/test/.colima/default/docker.sock",
+      contract: {
+        runtimeId: "sunabot-qq-runtime",
+        adminHost: "127.0.0.1",
+        adminPort: 8787,
+        onebotPort: 8788
+      }
+    };
+
+    expect(nativeCoreEnvironment(context, "127.0.0.1", "darwin")).toMatchObject({
+      SUNABOT_RUNTIME_MODE: "macos",
+      SUNABOT_RUNTIME_ID: "sunabot-qq-runtime",
+      SUNABOT_WORKSPACE_ID: "bfa0ec2e0882d0fb",
+      SUNABOT_DOCKER_SOCKET: "/Users/test/.colima/default/docker.sock"
+    });
+    expect(nativeCoreEnvironment(context, "172.18.0.1", "linux")).not.toHaveProperty("SUNABOT_DOCKER_SOCKET");
   });
 
   it("removes the current workspace legacy Voice container before its runtime network", async () => {
@@ -359,6 +546,14 @@ describe("unified runtime launcher", () => {
     expect(resolved.coreService).toBe("core");
     expect(resolved.coreProfile).toBe("core-docker");
     expect(resolved.napcatService).toBe("napcat");
+    expect(contract.docker.labels).toEqual({
+      runtimeId: "io.sunabot.runtime-id",
+      workspaceId: "io.sunabot.workspace-id",
+      component: "io.sunabot.component",
+      ownerId: "io.sunabot.owner-id",
+      invocationId: "io.sunabot.invocation-id",
+      expiresAtMs: "io.sunabot.expires-at-ms"
+    });
     expect(resolved.codexCli).toEqual({
       version: "0.139.0",
       executable: "/usr/local/bin/codex",

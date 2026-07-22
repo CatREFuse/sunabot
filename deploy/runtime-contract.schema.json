@@ -425,11 +425,21 @@
         "labels": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["runtimeId", "workspaceId", "component"],
+          "required": [
+            "runtimeId",
+            "workspaceId",
+            "component",
+            "ownerId",
+            "invocationId",
+            "expiresAtMs"
+          ],
           "properties": {
             "runtimeId": { "const": "io.sunabot.runtime-id" },
             "workspaceId": { "const": "io.sunabot.workspace-id" },
-            "component": { "const": "io.sunabot.component" }
+            "component": { "const": "io.sunabot.component" },
+            "ownerId": { "const": "io.sunabot.owner-id" },
+            "invocationId": { "const": "io.sunabot.invocation-id" },
+            "expiresAtMs": { "const": "io.sunabot.expires-at-ms" }
           }
         }
       }

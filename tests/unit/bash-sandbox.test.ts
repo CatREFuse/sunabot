@@ -264,6 +264,29 @@ describe("workspace Bash isolation", () => {
     expect(probe.mock.calls[0]?.[2]).toEqual({ env: expect.any(Object) });
   });
 
+  it("preserves only Docker routing and launcher ownership metadata for the supervisor", async () => {
+    const sandbox = await ensureWorkspaceBashIsolation("docker", workbench, environment, {
+      platform: "darwin",
+      runtimeMode: "native",
+      effectiveUid: 1_000,
+      skipDockerProbe: true,
+      dockerEnvironment: {
+        PATH: "/usr/bin:/bin",
+        SUNABOT_DOCKER_SOCKET: "/canonical/docker.sock",
+        SUNABOT_RUNTIME_ID: "sunabot-qq-runtime",
+        SUNABOT_WORKSPACE_ID: "a".repeat(16),
+        OPENAI_API_KEY: "must-not-pass"
+      }
+    });
+
+    expect(sandbox.launcherEnvironment).toEqual({
+      PATH: "/usr/bin:/bin",
+      SUNABOT_DOCKER_SOCKET: "/canonical/docker.sock",
+      SUNABOT_RUNTIME_ID: "sunabot-qq-runtime",
+      SUNABOT_WORKSPACE_ID: "a".repeat(16)
+    });
+  });
+
   it("fails closed for a root Docker host runtime", async () => {
     const probe = vi.fn(async () => undefined);
     await expect(ensureWorkspaceBashIsolation("docker", workbench, environment, {

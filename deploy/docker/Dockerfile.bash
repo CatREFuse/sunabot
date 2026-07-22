@@ -25,7 +25,7 @@ RUN apt-get update \
         /usr/bin/file /usr/bin/grep /usr/bin/head /usr/bin/ls /usr/bin/md5sum /usr/bin/mkdir \
         /usr/bin/mv /usr/bin/printf /usr/bin/pwd /usr/bin/readlink /usr/bin/realpath /usr/bin/rm \
         /usr/bin/rmdir /usr/bin/sha1sum /usr/bin/sha224sum /usr/bin/sha256sum /usr/bin/sha384sum \
-        /usr/bin/sha512sum /usr/bin/stat /usr/bin/tail /usr/bin/touch /usr/bin/true /usr/bin/wc; \
+        /usr/bin/sha512sum /usr/bin/stat /usr/bin/tail /usr/bin/timeout /usr/bin/touch /usr/bin/true /usr/bin/wc; \
        do test -x "$executable"; done
 
 WORKDIR /workbench

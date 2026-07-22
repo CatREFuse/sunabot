@@ -3,15 +3,25 @@ import { createInterface } from "node:readline/promises";
 
 const DOCKER_READY_TIMEOUT_MS = 60_000;
 const DOCKER_READY_POLL_MS = 500;
+const DOCKER_CONTROL_TIMEOUT_MS = 10_000;
+const DOCKER_REMOVE_TIMEOUT_MS = 15_000;
+const COLIMA_RESTART_TIMEOUT_MS = 120_000;
 const MISSING_DOCKER_OBJECT = /no such (?:container|object)\b/i;
 const GENERIC_DOCKER_UNAVAILABLE_MESSAGE = "Docker Engine 不可用；请启动 Docker Desktop 或 Docker Engine。";
+const LABEL_RUNTIME_ID = "io.sunabot.runtime-id";
+const LABEL_WORKSPACE_ID = "io.sunabot.workspace-id";
+const LABEL_COMPONENT = "io.sunabot.component";
+const LABEL_OWNER_ID = "io.sunabot.owner-id";
+const LABEL_INVOCATION_ID = "io.sunabot.invocation-id";
+const LABEL_EXPIRES_AT_MS = "io.sunabot.expires-at-ms";
+const WORKSPACE_BASH_COMPONENT = "workspace-bash";
 
 export async function resolveDockerUnavailableMessage(options) {
   try {
     const dockerContext = (await options.runCommand(
       "docker",
       ["context", "show"],
-      { capture: true }
+      { capture: true, timeoutMs: DOCKER_CONTROL_TIMEOUT_MS }
     )).trim();
     if (dockerContext === "colima") {
       return "Colima Docker Engine 未运行；请执行 colima start，等待终端显示 READY 后，再重新执行刚才的 Sunabot 命令。";
@@ -31,7 +41,7 @@ export async function recoverStaleDockerOneoffs(options) {
   const dockerContext = (await options.runCommand(
     "docker",
     ["context", "show"],
-    { capture: true }
+    { capture: true, timeoutMs: DOCKER_CONTROL_TIMEOUT_MS }
   )).trim();
   const detail = staleContainerIds.join(", ");
   if ((options.platform ?? process.platform) !== "darwin" || dockerContext !== "colima") {
@@ -45,7 +55,10 @@ export async function recoverStaleDockerOneoffs(options) {
     );
   }
 
-  await options.runCommand("colima", ["status"], { capture: true });
+  await options.runCommand("colima", ["status"], {
+    capture: true,
+    timeoutMs: DOCKER_CONTROL_TIMEOUT_MS
+  });
   const confirm = options.confirm ?? confirmColimaRestart;
   const accepted = await confirm(
     `检测到 Docker 悬空的 Sunabot 探针容器（${detail}）。修复需要重启 Colima，会短暂中断其他 Docker 容器，它们将按各自的重启策略恢复。继续？[y/N] `
@@ -54,7 +67,9 @@ export async function recoverStaleDockerOneoffs(options) {
     throw new Error("已取消 Colima 重启，Docker 悬空状态未处理。");
   }
 
-  await options.runCommand("colima", ["restart"]);
+  await options.runCommand("colima", ["restart"], {
+    timeoutMs: COLIMA_RESTART_TIMEOUT_MS
+  });
   await waitForDocker(options);
   const remaining = await findStaleDockerOneoffs(options);
   if (remaining.length > 0) {
@@ -62,6 +77,68 @@ export async function recoverStaleDockerOneoffs(options) {
   }
   (options.log ?? console.log)("Colima 已重启，Docker 悬空状态已清理。");
   return { repaired: true, staleContainerIds };
+}
+
+export async function recoverWorkspaceBashContainers(options) {
+  const containers = await listWorkspaceBashContainers(options);
+  const now = options.now?.() ?? Date.now();
+  const expired = containers.filter((container) => container.expiresAtMs <= now);
+  const removedContainerIds = [];
+  for (const container of expired) {
+    try {
+      await options.runCommand("docker", ["rm", "-f", container.id], {
+        capture: true,
+        timeoutMs: DOCKER_REMOVE_TIMEOUT_MS
+      });
+    } catch (error) {
+      if (!MISSING_DOCKER_OBJECT.test(message(error))) throw error;
+    }
+    removedContainerIds.push(container.id);
+  }
+  return {
+    repaired: removedContainerIds.length > 0,
+    removedContainerIds
+  };
+}
+
+async function listWorkspaceBashContainers(options) {
+  const output = await options.runCommand("docker", [
+    "ps", "-a",
+    "--filter", `label=${LABEL_WORKSPACE_ID}=${options.identity}`,
+    "--filter", `label=${LABEL_COMPONENT}=${WORKSPACE_BASH_COMPONENT}`,
+    "--format", [
+      "{{.ID}}",
+      "{{.Names}}",
+      `{{.Label "${LABEL_RUNTIME_ID}"}}`,
+      `{{.Label "${LABEL_WORKSPACE_ID}"}}`,
+      `{{.Label "${LABEL_COMPONENT}"}}`,
+      `{{.Label "${LABEL_OWNER_ID}"}}`,
+      `{{.Label "${LABEL_INVOCATION_ID}"}}`,
+      `{{.Label "${LABEL_EXPIRES_AT_MS}"}}`
+    ].join("\t")
+  ], { capture: true, timeoutMs: DOCKER_CONTROL_TIMEOUT_MS });
+  return output.split(/\r?\n/u).filter(Boolean).map((line) => {
+    const [id, name, runtimeId, workspaceId, component, ownerId, invocationId, expiresAtRaw] = line.split("\t");
+    const expiresAtMs = Number(expiresAtRaw);
+    const expectedName = Boolean(invocationId && (
+      name === `sunabot-bash-${invocationId}`
+      || name === `sunabot-bash-probe-${invocationId}`
+    ));
+    if (
+      !/^[a-f0-9]{12,64}$/u.test(id ?? "")
+      || runtimeId !== options.runtimeId
+      || workspaceId !== options.identity
+      || component !== WORKSPACE_BASH_COMPONENT
+      || !/^[a-f0-9]{32}$/u.test(ownerId ?? "")
+      || !/^[a-f0-9]{32}$/u.test(invocationId ?? "")
+      || !expectedName
+      || !Number.isSafeInteger(expiresAtMs)
+      || expiresAtMs <= 0
+    ) {
+      throw new Error(`DOCKER_BASH_OWNERSHIP_INVALID：容器 ${id || "unknown"} 的恢复标签不完整；未删除。`);
+    }
+    return { id, expiresAtMs };
+  });
 }
 
 async function findStaleDockerOneoffs(options) {
@@ -76,7 +153,7 @@ async function findStaleDockerOneoffs(options) {
       "{{.State}}",
       '{{.Label "com.docker.compose.oneoff"}}'
     ].join("\t")
-  ], { capture: true });
+  ], { capture: true, timeoutMs: DOCKER_CONTROL_TIMEOUT_MS });
   const candidates = output.split(/\r?\n/).filter(Boolean).map((line) => {
     const [id, component, state, oneoff] = line.split("\t");
     return { id, component, state, oneoff };
@@ -88,7 +165,7 @@ async function findStaleDockerOneoffs(options) {
       await options.runCommand(
         "docker",
         ["inspect", "--format", "{{.Id}}", candidate.id],
-        { capture: true }
+        { capture: true, timeoutMs: DOCKER_CONTROL_TIMEOUT_MS }
       );
     } catch (error) {
       if (!MISSING_DOCKER_OBJECT.test(message(error))) throw error;
@@ -107,7 +184,7 @@ async function waitForDocker(options) {
       await options.runCommand(
         "docker",
         ["info", "--format", "{{.ServerVersion}}"],
-        { capture: true }
+        { capture: true, timeoutMs: DOCKER_CONTROL_TIMEOUT_MS }
       );
       return;
     } catch (error) {

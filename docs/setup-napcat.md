@@ -98,6 +98,10 @@ Apple Silicon 上的 linux/amd64 Docker 模拟内核若以 `EINVAL` 拒绝 bubbl
 
 `up`、`start`、`down` 和 `restart` 会预检当前 workspace 的 Compose one-off 探针。若 Docker 列表仍显示探针运行，但 `docker inspect` 已返回容器不存在，macOS Colima 的交互终端会提示重启 Colima，并明确说明其他 Docker 容器会短暂中断；确认后启动器重启 Colima、等待 Docker Engine 恢复、复验悬空记录已消失，再继续原命令。非交互命令或其他 Docker Engine 保持失败关闭，并返回 `colima restart` 或重启当前 Docker Engine 的操作提示。该修复不绕过停服、迁移、恢复点或数据库完整性门禁。
 
+macOS Native Core 启动时由 launcher 按 `DOCKER_CONTEXT`、`DOCKER_HOST`、当前 Context 的顺序解析实际 Unix endpoint，并把固定路径作为 `SUNABOT_DOCKER_SOCKET` 注入 Core；非 Unix endpoint 会关闭 Docker Bash capability。Core 不跟随运行中 Context 切换，切换 Docker daemon 后必须通过 `./sunabot.sh restart` 重新固定 endpoint。`SUNABOT_WORKSPACE_ID` 与 `SUNABOT_RUNTIME_ID` 同样由 launcher 覆盖，不能在 `runtime.env` 中伪造。`status`、`doctor`、启停与恢复使用有界 Docker 命令；macOS Docker Bash 异常显示 `DOCKER_BASH_UNAVAILABLE`。
+
+每条 Bash 命令使用独立短生命周期容器，最长执行 30 秒；Core 只在首次 capability 和熔断恢复时创建完整探针容器，普通命令前不再额外 `docker run` 探针。命令容器采用 `sunabot-bash-<32hex>` 名称和 `io.sunabot.*` owner/调用/过期标签；Core 在线删除失败会重试，launcher 在启动和停止流程中回收当前 workspace 的合法残留。排查残留时不得按名称批量删除，也不得删除 NapCat；先执行 `./sunabot.sh doctor`，再按完整标签确认归属。
+
 带 `.remove-on-stop` 的 NapCat 目录只有在账号注册行已经删除后才会清理。Agent 删除流程中断、账号仍在注册表时保留目录和登录态，避免后续启动被迁移完整性门禁锁死。
 
 ## QQ 登录

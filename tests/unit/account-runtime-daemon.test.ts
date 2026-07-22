@@ -623,6 +623,7 @@ async function createDockerFixture(identity: string) {
     "fi",
     "case \" $* \" in",
     "  *\"label=com.docker.compose.oneoff=true\"*) exit 0 ;;",
+    "  *\"label=io.sunabot.component=workspace-bash\"*) exit 0 ;;",
     "esac",
     "if [ \"${1:-}\" = \"stop\" ]; then",
     "  sed 's/\\trunning\\t/\\texited\\t/' \"$DOCKER_STATE_FILE\" > \"$DOCKER_STATE_FILE.next\"",

@@ -62,6 +62,38 @@ describe("workspace Bash capability probe", () => {
     expect(probe.mock.calls[0]?.[2]).toEqual({ env: expect.any(Object) });
   });
 
+  it("delegates macOS Docker health to the shared runtime without container reprobes", async () => {
+    const capabilityRuntime = vi.fn(async () => ({ available: true }));
+    const probe = vi.fn(async () => undefined);
+    const capability = createWorkspaceBashCapabilityProbe({
+      platform: "darwin",
+      backend: "docker",
+      runtimeMode: "native",
+      runtime: {
+        capability: capabilityRuntime,
+        execute: vi.fn(async () => ({
+          ok: true,
+          exitCode: 0,
+          signal: null,
+          timedOut: false,
+          stdout: "",
+          stderr: ""
+        }))
+      },
+      sandbox: {
+        effectiveUid: 1_000,
+        dockerImage: "sunabot-bash:test",
+        probe
+      }
+    });
+    const workspace = await createAgentWorkspace();
+
+    await expect(capability(workspace)).resolves.toEqual({ available: true });
+    await expect(capability(workspace)).resolves.toEqual({ available: true });
+    expect(capabilityRuntime).toHaveBeenCalledTimes(2);
+    expect(probe).not.toHaveBeenCalled();
+  });
+
   it("reports Docker Bash unavailable for a root Core process", async () => {
     const probe = vi.fn(async () => undefined);
     const capability = createWorkspaceBashCapabilityProbe({
@@ -78,7 +110,7 @@ describe("workspace Bash capability probe", () => {
     expect(probe).not.toHaveBeenCalled();
   });
 
-  it("caches a successful namespace probe and refreshes failures after the TTL", async () => {
+  it("keeps a successful namespace lease without periodic reprobes", async () => {
     let currentTime = 1_000;
     const probe = vi.fn()
       .mockResolvedValueOnce(undefined)
@@ -102,10 +134,34 @@ describe("workspace Bash capability probe", () => {
     expect(probe).toHaveBeenCalledOnce();
 
     currentTime += 30_001;
-    await expect(capability(agentWorkspace)).resolves.toEqual({
-      available: false,
-      reason: "BASH_NATIVE_ISOLATION_UNAVAILABLE"
+    await expect(capability(agentWorkspace)).resolves.toEqual({ available: true });
+    expect(probe).toHaveBeenCalledOnce();
+  });
+
+  it("retries a failed capability probe after the bounded recovery window", async () => {
+    let currentTime = 1_000;
+    const probe = vi.fn()
+      .mockRejectedValueOnce(new Error("namespace unavailable"))
+      .mockResolvedValueOnce(undefined);
+    const capability = createWorkspaceBashCapabilityProbe({
+      platform: "linux",
+      backend: "native",
+      ttlMs: 3_000,
+      now: () => currentTime,
+      sandbox: {
+        effectiveUid: 1_000,
+        executable: "/fixture/bwrap",
+        access: vi.fn(async () => undefined),
+        probe
+      }
     });
+    const agentWorkspace = await createAgentWorkspace();
+
+    await expect(capability(agentWorkspace)).resolves.toMatchObject({ available: false });
+    await expect(capability(agentWorkspace)).resolves.toMatchObject({ available: false });
+    expect(probe).toHaveBeenCalledOnce();
+    currentTime += 3_001;
+    await expect(capability(agentWorkspace)).resolves.toEqual({ available: true });
     expect(probe).toHaveBeenCalledTimes(2);
   });
 

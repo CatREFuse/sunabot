@@ -68,6 +68,8 @@ import { runWorkspaceBash, workspaceBashTool } from "../../services/tools/bashTo
 import { BashApprovalStore } from "../../services/tools/bashAudit.js";
 import { DIRECT_REPLY_TIMEOUT_MS } from "../../src/runtime/runtimeContracts.js";
 import { TOOL_CALL_TIMEOUT_MS } from "../../services/tools/tools.js";
+import { WORKSPACE_BASH_EXECUTION_TIMEOUT_MS } from "../../services/tools/bashRuntime.js";
+import { WORKSPACE_BASH_AUDIT_TIMEOUT_MS } from "../../services/tools/bashAuditDeadline.js";
 
 let temporaryRoot = "";
 let extraTemporaryRoots: string[] = [];
@@ -111,7 +113,7 @@ afterEach(async () => {
 });
 
 describe("tool call timeout", () => {
-  it("fixes the reply chain and resource-limited workspace Bash at 300 seconds", async () => {
+  it("keeps the reply budget at 300 seconds and limits Bash execution to 30 seconds", async () => {
     temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-tool-timeout-"));
     await fs.mkdir(path.join(temporaryRoot, "workbench"));
     const workbenchRoot = await fs.realpath(path.join(temporaryRoot, "workbench"));
@@ -144,7 +146,10 @@ describe("tool call timeout", () => {
     ]));
     expect(result).toMatchObject({ ok: true, cwd: "/workbench", stdout: "/workbench\n" });
     expect(JSON.stringify(result)).not.toContain(temporaryRoot);
-    expect(workspaceBashTool.parameters.properties.timeoutMs.enum).toEqual([TOOL_CALL_TIMEOUT_MS, null]);
+    expect(workspaceBashTool.parameters.properties.timeoutMs.enum).toEqual([
+      WORKSPACE_BASH_EXECUTION_TIMEOUT_MS,
+      null
+    ]);
   });
 
   it("fails closed for administrator Native Bash on macOS after adversarial approval", async () => {
@@ -169,7 +174,8 @@ describe("tool call timeout", () => {
       command: "pwd",
       backend: "native",
       accessMode: "admin",
-      strictMode: true
+      strictMode: true,
+      signal: expect.any(AbortSignal)
     });
     expect(probe).not.toHaveBeenCalled();
     expect(processState.calls).toHaveLength(0);
@@ -207,6 +213,20 @@ describe("tool call timeout", () => {
 
     expect(result.stderr).toContain("BASH_AUDIT_UNAVAILABLE");
     expect(JSON.stringify(result)).not.toContain("/Users/alice");
+    expect(processState.calls).toHaveLength(0);
+  });
+
+  it("hard-stops an audit runner that ignores cancellation", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-tool-audit-timeout-"));
+    const audit = vi.fn(() => new Promise<Awaited<ReturnType<typeof allowedAudit>>>(() => undefined));
+
+    const pending = runWorkspaceBash({ command: "echo must-not-run", timeoutMs: null }, temporaryRoot, { audit });
+    await vi.waitFor(() => expect(audit).toHaveBeenCalledOnce());
+    await vi.advanceTimersByTimeAsync(WORKSPACE_BASH_AUDIT_TIMEOUT_MS);
+    const result = await pending;
+
+    expect(result.stderr).toContain("BASH_AUDIT_UNAVAILABLE");
     expect(processState.calls).toHaveLength(0);
   });
 
@@ -849,6 +869,74 @@ describe("tool call timeout", () => {
     expect(processState.calls[1]).toMatchObject({ args: ["rm", "-f", containerName] });
   });
 
+  it("uses the injected Docker runtime without a per-command capability container", async () => {
+    temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-tool-docker-runtime-"));
+    const probe = vi.fn(async () => undefined);
+    const execute = vi.fn(async () => ({
+      ok: true,
+      exitCode: 0,
+      signal: null,
+      timedOut: false,
+      stdout: "ok",
+      stderr: "",
+      cleanupAttempted: true,
+      cleanupSucceeded: true
+    }));
+
+    const result = await runWorkspaceBash({ command: "printf ok", timeoutMs: null }, temporaryRoot, {
+      backend: "docker",
+      accessMode: "isolated",
+      audit: allowedAudit,
+      runtime: { capability: vi.fn(async () => ({ available: true })), execute },
+      sandbox: {
+        platform: "darwin",
+        runtimeMode: "native",
+        effectiveUid: 1_000,
+        dockerExecutable: "/fixture/docker",
+        dockerImage: "sunabot-bash:test",
+        access: async () => undefined,
+        probe
+      }
+    });
+
+    expect(result).toMatchObject({ ok: true, stdout: "ok", cleanupSucceeded: true });
+    expect(probe).not.toHaveBeenCalled();
+    expect(processState.calls).toHaveLength(0);
+    expect(execute).toHaveBeenCalledWith(expect.objectContaining({
+      execution: { kind: "shell", command: "printf ok" },
+      image: "sunabot-bash:test",
+      timeoutMs: WORKSPACE_BASH_EXECUTION_TIMEOUT_MS
+    }));
+  });
+
+  it("hard-stops a Docker capability probe whose launcher callback never returns", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-tool-docker-probe-timeout-"));
+    processState.suppressCallbacks = [true, false];
+
+    const pending = runWorkspaceBash({ command: "printf must-not-run", timeoutMs: null }, temporaryRoot, {
+      backend: "docker",
+      accessMode: "isolated",
+      audit: allowedAudit,
+      sandbox: {
+        platform: "darwin",
+        runtimeMode: "native",
+        effectiveUid: 1_000,
+        dockerExecutable: "/fixture/docker",
+        dockerImage: "sunabot-bash:test",
+        access: async () => undefined
+      }
+    });
+    await waitForProcessCalls(1);
+    await vi.advanceTimersByTimeAsync(2_000);
+    const result = await pending;
+
+    expect(result).toMatchObject({ ok: false, exitCode: null });
+    expect(result.stderr).toContain("BASH_ISOLATION_UNAVAILABLE");
+    expect(processState.kills).toContainEqual({ callIndex: 0, signal: "SIGKILL" });
+    expect(processState.calls).toHaveLength(2);
+  });
+
   it("uses its own deadline as the only timeout source and force-cleans the container", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     temporaryRoot = await makeSecureScratch("docker-deadline");
@@ -869,7 +957,7 @@ describe("tool call timeout", () => {
       }
     });
     await waitForProcessCalls(1);
-    await vi.advanceTimersByTimeAsync(TOOL_CALL_TIMEOUT_MS);
+    await vi.advanceTimersByTimeAsync(WORKSPACE_BASH_EXECUTION_TIMEOUT_MS);
     const result = await pending;
 
     expect(processState.calls[0]?.timeout).toBe(0);

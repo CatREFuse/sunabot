@@ -213,7 +213,10 @@
     "labels": {
       "runtimeId": "io.sunabot.runtime-id",
       "workspaceId": "io.sunabot.workspace-id",
-      "component": "io.sunabot.component"
+      "component": "io.sunabot.component",
+      "ownerId": "io.sunabot.owner-id",
+      "invocationId": "io.sunabot.invocation-id",
+      "expiresAtMs": "io.sunabot.expires-at-ms"
     }
   },
   "native": {

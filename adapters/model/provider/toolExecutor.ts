@@ -57,7 +57,7 @@ import {
   providerToolExecutionMode,
   resolveProviderToolDefinitions
 } from "../../../services/tools/toolRegistry.js";
-import { TOOL_CALL_TIMEOUT_MS } from "../../../services/tools/toolConstants.js";
+import { WORKSPACE_BASH_EXECUTION_TIMEOUT_MS } from "../../../services/tools/bashRuntime.js";
 import {
   ACTIVATE_SKILL_TOOL_NAME,
   readActivateSkillInput
@@ -600,6 +600,7 @@ async function runBash(
     isCurrent: options.bash.isCurrent,
     audit: options.bash.audit,
     approvalContext: options.bash.approvalContext,
+    runtime: options.bash.runtime,
     ...(options.bash.confirmedApprovalId ? { confirmedApprovalId: options.bash.confirmedApprovalId } : {}),
     ...(options.signal ? { abortSignal: options.signal } : {})
   });
@@ -614,7 +615,7 @@ function readWorkspaceBashInput(args: Record<string, unknown>): WorkspaceBashInp
     || !keys.includes("command")
     || !keys.includes("timeoutMs")
     || typeof args.command !== "string"
-    || (args.timeoutMs !== null && args.timeoutMs !== TOOL_CALL_TIMEOUT_MS)
+    || (args.timeoutMs !== null && args.timeoutMs !== WORKSPACE_BASH_EXECUTION_TIMEOUT_MS)
   ) return undefined;
   return { command: args.command, timeoutMs: args.timeoutMs };
 }

@@ -12,7 +12,11 @@ import dotenv from "dotenv";
 import { installGlobalProxyDispatcher, resolveProxyConfiguration } from "../../packages/platform/proxy.mjs";
 import { validateMultiAgentWorkspacePath } from "../../packages/platform/multiAgentMigrationGate.mjs";
 import { resolveProjectRoot, resolveWorkspace } from "../shared/paths.mjs";
-import { recoverStaleDockerOneoffs, resolveDockerUnavailableMessage } from "./docker-recovery.mjs";
+import {
+  recoverStaleDockerOneoffs,
+  recoverWorkspaceBashContainers,
+  resolveDockerUnavailableMessage
+} from "./docker-recovery.mjs";
 import {
   listNativeCoreProcessGroups,
   stopNativeCoreProcessGroups
@@ -56,6 +60,15 @@ const STARTUP_REQUIRED_CHECK_IDS = new Set([
 const STARTUP_STABILITY_WINDOW_MS = 3_000;
 const STARTUP_STABILITY_POLL_MS = 250;
 const STARTUP_STABILITY_TIMEOUT_MS = 10_000;
+const DEFAULT_COMMAND_TIMEOUT_MS = 30_000;
+const DOCKER_CONTROL_TIMEOUT_MS = 10_000;
+const DOCKER_EXEC_TIMEOUT_MS = 45_000;
+const DOCKER_COMPOSE_TIMEOUT_MS = 5 * 60_000;
+const BUILD_COMMAND_TIMEOUT_MS = 15 * 60_000;
+const INTERACTIVE_COMMAND_TIMEOUT_MS = 15 * 60_000;
+const COMMAND_TERMINATE_GRACE_MS = 1_000;
+const DEFAULT_COMMAND_OUTPUT_BYTES = 1 * 1024 * 1024;
+const DOCKER_CONTEXT_HOST_FORMAT = '{{ (index .Endpoints "docker").Host }}';
 
 export async function runLauncher(argv = process.argv.slice(2), environment = process.env) {
   const parsed = parseLauncherArguments(argv, environment);
@@ -145,11 +158,8 @@ async function restartRuntime(context) {
     throw new Error("SUNABOT_DATABASE_PATH 已停止支持；主库固定为 workspace/business/data/sunabot.sqlite。");
   }
   assertNonRootRuntimeUser();
-  await assertDockerAvailable();
-  await recoverStaleDockerOneoffs({
-    identity: context.identity,
-    runCommand: command
-  });
+  await assertDockerAvailable(context);
+  await recoverDockerRuntime(context);
   assertExpectedProject(context, await inspectRuntime(context));
   await initializeWorkspace(context);
   await beginFirstRunBootstrap(context.workspace);
@@ -237,9 +247,7 @@ export function nativeBashImageComposeArguments(root) {
 
 async function prepareNativeBashImage(context) {
   try {
-    await command("docker", nativeBashImageComposeArguments(context.root), {
-      env: nativeProcessEnvironment(context)
-    });
+    await dockerCommand(context, nativeBashImageComposeArguments(context.root));
   } catch (error) {
     console.warn(`Bash Docker 隔离镜像准备失败，Bash capability 保持降级：${message(error)}`);
   }
@@ -298,11 +306,8 @@ async function upDocker(context, before, secrets) {
 }
 
 async function down(context) {
-  await assertDockerAvailable();
-  await recoverStaleDockerOneoffs({
-    identity: context.identity,
-    runCommand: command
-  });
+  await assertDockerAvailable(context);
+  await recoverDockerRuntime(context);
   const runtime = await inspectRuntime(context);
   if (runtime.reconciler.owner.status === "running"
     && !runtime.reconciler.processes.some((item) => item.pid === runtime.reconciler.owner.record.pid)) {
@@ -352,6 +357,22 @@ async function down(context) {
   }
   await fs.rm(context.statePath, { force: true });
   console.log("Sunabot Core 与 NapCat 已停止。");
+}
+
+async function recoverDockerRuntime(context) {
+  const runCommand = (executable, args, options = {}) => command(executable, args, {
+    ...options,
+    env: options.env ?? nativeProcessEnvironment(context)
+  });
+  await recoverWorkspaceBashContainers({
+    identity: context.identity,
+    runtimeId: context.contract.runtimeId,
+    runCommand
+  });
+  await recoverStaleDockerOneoffs({
+    identity: context.identity,
+    runCommand
+  });
 }
 
 async function assertRuntimeEmpty(context) {
@@ -463,7 +484,7 @@ async function startupComponentsReady(context) {
   if (!apiReady) return false;
   if (context.mode === "docker") {
     return runtime.dockerCore.matches.length === 1
-      && await componentHealthStatus(runtime.dockerCore.matches[0].id)
+      && await componentHealthStatus(context, runtime.dockerCore.matches[0].id)
         .then((status) => status === "healthy")
         .catch(() => false);
   }
@@ -488,19 +509,21 @@ async function collectRuntimeProbeFacts(context) {
   const apiReady = await httpReady(apiPath);
   let dockerCoreHealthy = false;
   if (runtime.dockerCore.matches.length > 0) {
-    dockerCoreHealthy = await componentHealthStatus(runtime.dockerCore.matches[0].id)
+    dockerCoreHealthy = await componentHealthStatus(context, runtime.dockerCore.matches[0].id)
       .then((status) => status === "healthy")
       .catch(() => false);
   }
   const onebotReady = runtime.native.running ? await httpReady(onebotPath) : dockerCoreHealthy;
   const webfetchRendererReady = runtime.webfetchRenderer.matches.length === 1
-    && await componentHealthStatus(runtime.webfetchRenderer.matches[0].id)
+    && await componentHealthStatus(context, runtime.webfetchRenderer.matches[0].id)
       .then((status) => status === "healthy")
       .catch(() => false);
   const conflicts = accountRuntimeConflicts(runtime.reconciler, context);
 
-  const docker = await dockerAvailable();
-  const compose = docker && await commandSucceeds("docker", ["compose", "version"]);
+  const docker = await dockerAvailable(context);
+  const compose = docker && await commandSucceeds("docker", ["compose", "version"], {
+    env: nativeProcessEnvironment(context)
+  });
   const capabilities = {};
   capabilities.accountReconciler = {
     ok: runtime.reconciler.healthy,
@@ -695,7 +718,8 @@ async function ensureAdminCredentials(context) {
     username
   ], {
     cwd: context.root,
-    env: { ...process.env, SUNABOT_WORKSPACE: context.workspace }
+    env: { ...process.env, SUNABOT_WORKSPACE: context.workspace },
+    timeoutMs: INTERACTIVE_COMMAND_TIMEOUT_MS
   });
 }
 
@@ -734,7 +758,7 @@ async function reconcileAccount(context, accountId) {
   const accountRoot = path.join(context.workspace, "runtime/napcat/accounts", accountId);
 
   try {
-    await assertDockerAvailable();
+    await assertDockerAvailable(context);
     let observedState = plan.observedState;
     if (plan.desiredState === "running") {
       if (!account) throw new Error(`QQ 账号 ${accountId} 未注册。`);
@@ -767,8 +791,10 @@ async function reconcileAccount(context, accountId) {
       observedState = "running";
     } else {
       for (const containerId of plan.targetContainerIds) {
-        await command("docker", ["stop", "--timeout", String(context.contract.shutdownTimeoutSeconds), containerId]);
-        await command("docker", ["rm", containerId]);
+        await dockerCommand(context, ["stop", "--timeout", String(context.contract.shutdownTimeoutSeconds), containerId], {
+          timeoutMs: (context.contract.shutdownTimeoutSeconds + 5) * 1_000
+        });
+        await dockerCommand(context, ["rm", containerId]);
       }
       observedState = "missing";
     }
@@ -915,7 +941,7 @@ async function probeNativeOneBot(context) {
 async function resolveNativeOnebotListenHost(context) {
   if (context.contract.onebotHost !== "docker-network-gateway") return context.contract.onebotHost;
   const network = `${context.project}-runtime`;
-  const gateway = (await command("docker", [
+  const gateway = (await dockerCommand(context, [
     "network",
     "inspect",
     network,
@@ -930,8 +956,10 @@ async function resolveNativeOnebotListenHost(context) {
 
 async function ensureRuntimeNetwork(context) {
   const network = `${context.project}-runtime`;
-  if (await commandSucceeds("docker", ["network", "inspect", network])) return;
-  await command("docker", [
+  if (await commandSucceeds("docker", ["network", "inspect", network], {
+    env: nativeProcessEnvironment(context)
+  })) return;
+  await dockerCommand(context, [
     "network", "create",
     "--label", `io.sunabot.runtime-id=${context.contract.runtimeId}`,
     "--label", `io.sunabot.workspace-id=${context.identity}`,
@@ -941,10 +969,12 @@ async function ensureRuntimeNetwork(context) {
 }
 
 async function stopNapcatContainers(context) {
-  const containers = (await labeledContainers(context.identity)).filter((item) => item.component === "napcat");
+  const containers = (await labeledContainers(context)).filter((item) => item.component === "napcat");
   for (const container of containers) {
-    await command("docker", ["stop", "--timeout", String(context.contract.shutdownTimeoutSeconds), container.id]).catch(() => {});
-    await command("docker", ["rm", container.id]).catch(() => {});
+    await dockerCommand(context, ["stop", "--timeout", String(context.contract.shutdownTimeoutSeconds), container.id], {
+      timeoutMs: (context.contract.shutdownTimeoutSeconds + 5) * 1_000
+    }).catch(() => {});
+    await dockerCommand(context, ["rm", container.id]).catch(() => {});
   }
 }
 
@@ -995,10 +1025,10 @@ async function waitForComponentHealth(context, component, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   let lastStatus = "missing";
   while (Date.now() < deadline) {
-    const containers = await labeledContainers(context.identity);
+    const containers = await labeledContainers(context);
     const match = containers.find((item) => item.component === component);
     if (match) {
-      lastStatus = await componentHealthStatus(match.id).catch(() => "inspect-error");
+      lastStatus = await componentHealthStatus(context, match.id).catch(() => "inspect-error");
       if (lastStatus === "healthy") return;
       if (["unhealthy", "exited", "dead"].includes(lastStatus)) {
         throw new Error(`${component} 容器健康检查失败：${lastStatus}`);
@@ -1013,10 +1043,10 @@ async function waitForNapcatAccountHealth(context, accountId, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   let lastStatus = "missing";
   while (Date.now() < deadline) {
-    const match = (await labeledContainers(context.identity))
+    const match = (await labeledContainers(context))
       .find((item) => item.component === "napcat" && item.accountId === accountId);
     if (match) {
-      lastStatus = await componentHealthStatus(match.id).catch(() => "inspect-error");
+      lastStatus = await componentHealthStatus(context, match.id).catch(() => "inspect-error");
       if (lastStatus === "healthy") return;
       if (["unhealthy", "exited", "dead"].includes(lastStatus)) {
         throw new Error(`NapCat ${accountId} 容器健康检查失败：${lastStatus}`);
@@ -1027,8 +1057,8 @@ async function waitForNapcatAccountHealth(context, accountId, timeoutMs) {
   throw new Error(`NapCat ${accountId} 容器健康检查超时：${lastStatus}`);
 }
 
-async function componentHealthStatus(containerId) {
-  const output = await command("docker", [
+async function componentHealthStatus(context, containerId) {
+  const output = await dockerCommand(context, [
     "inspect",
     "--format",
     "{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}",
@@ -1038,11 +1068,11 @@ async function componentHealthStatus(containerId) {
 }
 
 async function assertDockerCoreBwrap(context) {
-  const containers = await labeledContainers(context.identity);
+  const containers = await labeledContainers(context);
   const core = containers.find((item) => item.component === "core" && item.state === "running");
   if (!core) throw new Error("Docker Core 未运行，无法执行 bubblewrap namespace probe。");
   try {
-    await command("docker", [
+    await dockerCommand(context, [
       "exec",
       core.id,
       "/usr/bin/bwrap",
@@ -1063,7 +1093,7 @@ async function assertDockerCoreCodex(context) {
 }
 
 async function inspectDockerCodex(context) {
-  const containers = await labeledContainers(context.identity);
+  const containers = await labeledContainers(context);
   const core = containers.find((item) => item.component === "core" && item.state === "running");
   if (!core) {
     const detail = "Docker Core 未运行。";
@@ -1072,7 +1102,7 @@ async function inspectDockerCodex(context) {
   const executable = context.contract.codexCli.executable;
   let version;
   try {
-    version = (await command("docker", ["exec", core.id, executable, "--version"], { capture: true })).trim();
+    version = (await dockerCommand(context, ["exec", core.id, executable, "--version"], { capture: true })).trim();
   } catch (error) {
     const detail = message(error);
     return { cli: { ok: false, detail }, auth: { ok: false, detail: "Codex CLI 不可用。" } };
@@ -1083,7 +1113,7 @@ async function inspectDockerCodex(context) {
   const workspace = context.contract.paths.workspace ?? "/srv/sunabot/workspace";
   const codexHome = path.posix.join(workspace, path.posix.dirname(context.contract.codexCli.authFile));
   try {
-    await command("docker", [
+    await dockerCommand(context, [
       "exec",
       "--env", `CODEX_HOME=${codexHome}`,
       core.id,
@@ -1129,17 +1159,7 @@ async function startNativeCore(context, onebotListenHost) {
     cwd: context.root,
     detached: true,
     stdio: ["ignore", log.fd, log.fd],
-    env: {
-      ...nativeProcessEnvironment(context),
-      NODE_ENV: context.dev ? "development" : "production",
-      SUNABOT_RUNTIME_MODE: process.platform === "darwin" ? "macos" : "linux-native",
-      SUNABOT_RUNTIME_ID: context.contract.runtimeId,
-      SUNABOT_WORKSPACE: context.workspace,
-      SUNABOT_HOST: context.contract.adminHost,
-      SUNABOT_PORT: String(context.contract.adminPort),
-      SUNABOT_ONEBOT_HOST: onebotListenHost,
-      SUNABOT_ONEBOT_PORT: String(context.contract.onebotPort)
-    }
+    env: nativeCoreEnvironment(context, onebotListenHost)
   });
   await new Promise((resolve, reject) => {
     child.once("error", reject);
@@ -1313,8 +1333,8 @@ async function inspectRuntime(context, options = {}) {
   }
   const [reconciler, containers, legacyContainers, nativeProcessGroups] = await Promise.all([
     inspectAccountRuntime(context, state?.reconciler),
-    labeledContainers(context.identity, { includeOneoffs: options.includeOneoffs === true }),
-    findLegacyContainers(),
+    labeledContainers(context, { includeOneoffs: options.includeOneoffs === true }),
+    findLegacyContainers(context),
     listNativeCoreProcessGroups({ root: context.root, workspace: context.workspace })
   ]);
   const dockerCore = componentStatus(containers, "core");
@@ -1443,37 +1463,90 @@ function withoutUpdatedAt(state) {
   return rest;
 }
 
-async function labeledContainers(identity, options = {}) {
-  if (!await dockerAvailable()) return [];
+async function labeledContainers(context, options = {}) {
+  if (!await dockerAvailable(context)) return [];
   const format = [
     '{{.ID}}',
     '{{.Label "io.sunabot.component"}}',
     '{{.State}}',
     '{{.Label "com.docker.compose.project"}}',
     '{{.Label "io.sunabot.account-id"}}',
-    '{{.Label "com.docker.compose.oneoff"}}'
+    '{{.Label "com.docker.compose.oneoff"}}',
+    '{{.Names}}',
+    '{{.Label "io.sunabot.runtime-id"}}',
+    '{{.Label "io.sunabot.workspace-id"}}',
+    '{{.Label "io.sunabot.owner-id"}}',
+    '{{.Label "io.sunabot.invocation-id"}}',
+    '{{.Label "io.sunabot.expires-at-ms"}}'
   ].join("\t");
-  const output = await command("docker", [
+  const output = await dockerCommand(context, [
     "ps", "-a",
-    "--filter", `label=io.sunabot.workspace-id=${identity}`,
+    "--filter", `label=io.sunabot.workspace-id=${context.identity}`,
     "--format", format
   ], { capture: true });
   return output.split(/\r?\n/).filter(Boolean).map((line) => {
-    const [id, component, state, project, accountId, oneoff] = line.split("\t");
-    return { id, component, state: state?.toLowerCase(), project, accountId, oneoff };
+    const [
+      id, component, state, project, accountId, oneoff,
+      name, runtimeId, workspaceId, ownerId, invocationId, expiresAtRaw
+    ] = line.split("\t");
+    const item = {
+      id,
+      component,
+      state: state?.toLowerCase(),
+      project,
+      accountId,
+      oneoff,
+      name,
+      runtimeId,
+      workspaceId,
+      ownerId,
+      invocationId,
+      expiresAtRaw
+    };
+    if (component === "workspace-bash") {
+      validateWorkspaceBashContainerOwnership(item, {
+        identity: context.identity,
+        runtimeId: context.contract.runtimeId
+      });
+    }
+    return item;
   }).filter((item) => options.includeOneoffs === true || item.oneoff?.toLowerCase() !== "true");
 }
 
+export function validateWorkspaceBashContainerOwnership(container, deployment) {
+  const expiresAtMs = Number(container.expiresAtRaw);
+  const expectedName = Boolean(container.invocationId && (
+    container.name === `sunabot-bash-${container.invocationId}`
+    || container.name === `sunabot-bash-probe-${container.invocationId}`
+  ));
+  if (
+    !/^[a-f0-9]{12,64}$/u.test(container.id ?? "")
+    || container.runtimeId !== deployment.runtimeId
+    || container.workspaceId !== deployment.identity
+    || container.component !== "workspace-bash"
+    || !/^[a-f0-9]{32}$/u.test(container.ownerId ?? "")
+    || !/^[a-f0-9]{32}$/u.test(container.invocationId ?? "")
+    || !expectedName
+    || !Number.isSafeInteger(expiresAtMs)
+    || expiresAtMs <= 0
+  ) {
+    throw runtimeError(
+      "DOCKER_BASH_OWNERSHIP_INVALID",
+      `容器 ${container.id || "unknown"} 的 Bash 归属标签不完整；未删除。`
+    );
+  }
+}
+
 async function removeWorkspaceContainers(context) {
-  let containers = await labeledContainers(context.identity, { includeOneoffs: true });
+  let containers = await labeledContainers(context, { includeOneoffs: true });
   if (containers.length === 0) return;
   const ids = containers.map((item) => item.id);
-  await command("docker", [
+  await dockerCommand(context, [
     "stop",
     "--timeout", String(context.contract.shutdownTimeoutSeconds),
     ...ids
   ], { timeoutMs: (context.contract.shutdownTimeoutSeconds + 5) * 1_000 }).catch(() => {});
-  containers = await labeledContainers(context.identity, { includeOneoffs: true });
+  containers = await labeledContainers(context, { includeOneoffs: true });
   const running = containers.filter((item) => item.state === "running");
   if (running.length > 0) {
     throw runtimeError(
@@ -1482,8 +1555,8 @@ async function removeWorkspaceContainers(context) {
     );
   }
   if (containers.length === 0) return;
-  await command("docker", ["rm", ...containers.map((item) => item.id)]).catch(() => {});
-  const survivors = await labeledContainers(context.identity, { includeOneoffs: true });
+  await dockerCommand(context, ["rm", ...containers.map((item) => item.id)]).catch(() => {});
+  const survivors = await labeledContainers(context, { includeOneoffs: true });
   if (survivors.length > 0) {
     throw runtimeError(
       "DOCKER_CONTAINER_REMOVE_FAILED",
@@ -1498,7 +1571,7 @@ async function runtimeNetworkWorkspaceId(context) {
     "{{.Name}}",
     '{{.Label "io.sunabot.workspace-id"}}'
   ].join("\t");
-  const output = await command("docker", ["network", "ls", "--format", format], { capture: true });
+  const output = await dockerCommand(context, ["network", "ls", "--format", format], { capture: true });
   const match = output.split(/\r?\n/u)
     .map((line) => line.split("\t"))
     .find(([name]) => name === network);
@@ -1518,18 +1591,18 @@ async function removeRuntimeNetwork(context) {
       `Docker 网络 ${context.project}-runtime 缺少当前 workspace 身份；未删除。`
     );
   }
-  await command("docker", ["network", "rm", `${context.project}-runtime`]);
+  await dockerCommand(context, ["network", "rm", `${context.project}-runtime`]);
 }
 
-async function findLegacyContainers() {
-  if (!await dockerAvailable()) return [];
+async function findLegacyContainers(context) {
+  if (!await dockerAvailable(context)) return [];
   const format = [
     '{{.ID}}',
     '{{.Names}}',
     '{{.State}}',
     '{{.Label "com.docker.compose.service"}}'
   ].join("\t");
-  const output = await command("docker", ["ps", "-a", "--format", format], { capture: true });
+  const output = await dockerCommand(context, ["ps", "-a", "--format", format], { capture: true });
   return output.split(/\r?\n/).filter(Boolean).map((line) => {
     const [id, name, state, service] = line.split("\t");
     return { id, name, state: state?.toLowerCase(), service };
@@ -1607,7 +1680,7 @@ function composeArgs(context, args, project = context.project) {
 
 function composeEnvironment(context, project = context.project) {
   return {
-    ...process.env,
+    ...context.environment,
     ...context.runtimeEnvironment,
     ...context.composeOverrides,
     COMPOSE_PROJECT_NAME: project,
@@ -1629,9 +1702,30 @@ function composeEnvironment(context, project = context.project) {
 
 function nativeProcessEnvironment(context) {
   return {
-    ...process.env,
+    ...context.environment,
     ...context.runtimeEnvironment
   };
+}
+
+export function nativeCoreEnvironment(context, onebotListenHost, platform = process.platform) {
+  const environment = {
+    ...nativeProcessEnvironment(context),
+    NODE_ENV: context.dev ? "development" : "production",
+    SUNABOT_RUNTIME_MODE: platform === "darwin" ? "macos" : "linux-native",
+    SUNABOT_RUNTIME_ID: context.contract.runtimeId,
+    SUNABOT_WORKSPACE: context.workspace,
+    SUNABOT_WORKSPACE_ID: context.identity,
+    SUNABOT_HOST: context.contract.adminHost,
+    SUNABOT_PORT: String(context.contract.adminPort),
+    SUNABOT_ONEBOT_HOST: onebotListenHost,
+    SUNABOT_ONEBOT_PORT: String(context.contract.onebotPort)
+  };
+  if (platform === "darwin" && context.dockerSocket) {
+    environment.SUNABOT_DOCKER_SOCKET = context.dockerSocket;
+  } else {
+    delete environment.SUNABOT_DOCKER_SOCKET;
+  }
+  return environment;
 }
 
 async function readRuntimeEnvironment(filePath) {
@@ -1647,7 +1741,7 @@ async function ensureNativeDependencies(context) {
   const marker = path.join(context.root, "node_modules/.package-lock.json");
   const lock = path.join(context.root, "package-lock.json");
   if (!(await exists(marker)) || await newerThan(lock, marker)) {
-    await command("npm", ["ci"], { cwd: context.root });
+    await command("npm", ["ci"], { cwd: context.root, timeoutMs: BUILD_COMMAND_TIMEOUT_MS });
   }
   const capabilities = await inspectNativeCapabilities(context);
   if (!capabilities.codexCli.ok) throw new Error(`Native Codex CLI 不可用：${capabilities.codexCli.detail}`);
@@ -1656,13 +1750,18 @@ async function ensureNativeDependencies(context) {
 async function inspectNativeCapabilities(context) {
   const codex = await inspectNativeCodex(context);
   let workspaceBash;
+  if (process.platform !== "linux") context.dockerSocket = undefined;
   try {
     if (process.platform === "linux") {
       await command("/usr/bin/bwrap", bubblewrapProbeArguments(context.workspace), { capture: true });
       workspaceBash = { ok: true, detail: "bubblewrap namespace probe passed" };
     } else {
+      context.dockerSocket = await resolveEffectiveDockerSocket(
+        nativeProcessEnvironment(context),
+        (executable, args, options) => command(executable, args, options)
+      );
       const image = context.runtimeEnvironment.SUNABOT_BASH_IMAGE || "sunabot-bash:local";
-      await command("docker", [
+      await dockerCommand(context, [
         "run", "--rm", "--pull", "never", "--network", "none", "--read-only",
         "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
         "--pids-limit", "64", "--memory", "512m", "--cpus", "1",
@@ -1672,13 +1771,82 @@ async function inspectNativeCapabilities(context) {
       workspaceBash = { ok: true, detail: "Docker Bash isolation probe passed" };
     }
   } catch (error) {
-    workspaceBash = { ok: false, detail: message(error) };
+    workspaceBash = {
+      ok: false,
+      code: process.platform === "linux" ? "BUBBLEWRAP_UNAVAILABLE" : "DOCKER_BASH_UNAVAILABLE",
+      action: process.platform === "linux"
+        ? "安装 bubblewrap 并通过 namespace probe"
+        : "启动当前 Docker Engine 并准备 sunabot-bash 镜像",
+      detail: message(error)
+    };
   }
   return {
     workspaceBash,
     codexCli: codex.cli,
     codexAuth: codex.auth
   };
+}
+
+export async function resolveEffectiveDockerSocket(environment = process.env, runCommand = command) {
+  const dockerContext = environment.DOCKER_CONTEXT?.trim();
+  const dockerHost = environment.DOCKER_HOST?.trim();
+  let host;
+  if (dockerContext) {
+    host = await inspectDockerContextHost(dockerContext, environment, runCommand);
+  } else if (dockerHost) {
+    host = dockerHost;
+  } else {
+    host = await inspectDockerContextHost(undefined, environment, runCommand);
+  }
+  return dockerSocketPath(host);
+}
+
+async function inspectDockerContextHost(contextName, environment, runCommand) {
+  const args = [
+    "context", "inspect",
+    "--format", DOCKER_CONTEXT_HOST_FORMAT,
+    ...(contextName ? [contextName] : [])
+  ];
+  return (await runCommand("docker", args, {
+    capture: true,
+    timeoutMs: DOCKER_CONTROL_TIMEOUT_MS,
+    env: environment
+  })).trim();
+}
+
+function dockerSocketPath(host) {
+  let parsed;
+  try {
+    parsed = new URL(host);
+  } catch {
+    throw runtimeError("DOCKER_BASH_ENDPOINT_UNSUPPORTED", "Docker endpoint 不是有效的 unix:// 地址。");
+  }
+  if (
+    parsed.protocol !== "unix:"
+    || parsed.hostname
+    || parsed.username
+    || parsed.password
+    || parsed.port
+    || parsed.search
+    || parsed.hash
+  ) {
+    throw runtimeError("DOCKER_BASH_ENDPOINT_UNSUPPORTED", "macOS Native Bash 只支持本机 unix:// Docker endpoint。");
+  }
+  let socketPath;
+  try {
+    socketPath = decodeURIComponent(parsed.pathname);
+  } catch {
+    throw runtimeError("DOCKER_BASH_ENDPOINT_UNSUPPORTED", "Docker Unix socket 路径编码无效。");
+  }
+  if (
+    !path.isAbsolute(socketPath)
+    || socketPath.includes("\0")
+    || socketPath.includes("\n")
+    || socketPath.includes("\r")
+  ) {
+    throw runtimeError("DOCKER_BASH_ENDPOINT_UNSUPPORTED", "Docker Unix socket 必须是绝对路径。");
+  }
+  return path.resolve(socketPath);
 }
 
 async function inspectNativeCodex(context) {
@@ -1723,7 +1891,7 @@ async function ensureNativeBuild(context) {
   const outputs = [context.apiEntry, context.webEntry];
   const present = await Promise.all(outputs.map(exists));
   if (present.some((value) => !value) || await sourcesNewerThan(context.root, outputs)) {
-    await command("npm", ["run", "build"], { cwd: context.root });
+    await command("npm", ["run", "build"], { cwd: context.root, timeoutMs: BUILD_COMMAND_TIMEOUT_MS });
   }
 }
 
@@ -1881,36 +2049,52 @@ async function waitForRuntimePortsClosed(context, state) {
   );
 }
 
-async function assertDockerAvailable() {
-  if (await dockerAvailable()) return;
-  throw new Error(await resolveDockerUnavailableMessage({ runCommand: command }));
+async function assertDockerAvailable(context) {
+  if (await dockerAvailable(context)) return;
+  const runCommand = (executable, args, options = {}) => command(executable, args, {
+    ...options,
+    env: options.env ?? nativeProcessEnvironment(context)
+  });
+  throw new Error(await resolveDockerUnavailableMessage({ runCommand }));
 }
 
-async function dockerAvailable() {
+async function dockerAvailable(context) {
   try {
-    await command("docker", ["info", "--format", "{{.ServerVersion}}"], { capture: true });
+    await dockerCommand(context, ["info", "--format", "{{.ServerVersion}}"], {
+      capture: true,
+      timeoutMs: DOCKER_CONTROL_TIMEOUT_MS
+    });
     return true;
   } catch {
     return false;
   }
 }
 
-function command(executable, args, options = {}) {
+function dockerCommand(context, args, options = {}) {
+  return command("docker", args, {
+    ...options,
+    env: options.env ?? nativeProcessEnvironment(context)
+  });
+}
+
+export function command(executable, args, options = {}) {
   return new Promise((resolve, reject) => {
     const output = [];
+    let outputBytes = 0;
     let settled = false;
+    let terminating = false;
     let timeout;
     let forceKill;
-    let timeoutError;
-    const child = spawn(executable, args, {
+    let terminalError;
+    const timeoutMs = commandTimeoutMs(executable, args, options.timeoutMs);
+    const terminateGraceMs = positiveTimeout(options.terminateGraceMs, COMMAND_TERMINATE_GRACE_MS);
+    const maxOutputBytes = positiveTimeout(options.maxOutputBytes, DEFAULT_COMMAND_OUTPUT_BYTES);
+    const spawnProcess = options.spawnProcess ?? spawn;
+    const child = spawnProcess(executable, args, {
       cwd: options.cwd,
       env: options.env ?? process.env,
       stdio: options.capture ? ["ignore", "pipe", "pipe"] : "inherit"
     });
-    if (options.capture) {
-      child.stdout.on("data", (chunk) => output.push(chunk));
-      child.stderr.on("data", (chunk) => output.push(chunk));
-    }
     const finish = (callback) => {
       if (settled) return;
       settled = true;
@@ -1918,28 +2102,68 @@ function command(executable, args, options = {}) {
       if (forceKill) clearTimeout(forceKill);
       callback();
     };
-    if (Number.isFinite(options.timeoutMs) && options.timeoutMs > 0) {
+    const terminate = (error) => {
+      if (terminating || settled) return;
+      terminating = true;
+      terminalError = error;
+      try { child.kill("SIGTERM"); } catch {}
+      forceKill = setTimeout(() => {
+        try { child.kill("SIGKILL"); } catch {}
+        child.stdin?.destroy?.();
+        child.stdout?.destroy?.();
+        child.stderr?.destroy?.();
+        child.unref?.();
+        finish(() => reject(terminalError));
+      }, terminateGraceMs);
+      forceKill.unref?.();
+    };
+    if (options.capture) {
+      const collect = (chunk) => {
+        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        outputBytes += buffer.byteLength;
+        if (outputBytes > maxOutputBytes) {
+          terminate(runtimeError("COMMAND_OUTPUT_LIMIT", `${executable} 输出超过 ${maxOutputBytes} bytes。`));
+          return;
+        }
+        output.push(buffer);
+      };
+      child.stdout.on("data", collect);
+      child.stderr.on("data", collect);
+    }
+    if (timeoutMs > 0) {
       timeout = setTimeout(() => {
-        timeoutError = runtimeError(
+        terminate(runtimeError(
           "COMMAND_TIMEOUT",
-          `${executable} ${args.slice(0, 4).join(" ")} 超过 ${options.timeoutMs}ms 未结束。`
-        );
-        child.kill("SIGTERM");
-        forceKill = setTimeout(() => child.kill("SIGKILL"), 1_000);
-        forceKill.unref?.();
-      }, options.timeoutMs);
+          `${executable} ${args.slice(0, 4).join(" ")} 超过 ${timeoutMs}ms 未结束。`
+        ));
+      }, timeoutMs);
       timeout.unref?.();
     }
-    child.once("error", (error) => finish(() => reject(error)));
+    child.once("error", (error) => finish(() => reject(terminalError ?? error)));
     child.once("exit", (code, signal) => {
       const text = Buffer.concat(output).toString("utf8");
       finish(() => {
-        if (timeoutError) reject(timeoutError);
+        if (terminalError) reject(terminalError);
         else if (code === 0) resolve(text);
         else reject(new Error(`${executable} ${args.slice(0, 4).join(" ")} 失败（${signal || code}）${text ? `：${text.trim()}` : ""}`));
       });
     });
   });
+}
+
+export function commandTimeoutMs(executable, args, explicitTimeoutMs) {
+  if (Number.isFinite(explicitTimeoutMs) && explicitTimeoutMs > 0) return Math.floor(explicitTimeoutMs);
+  if (path.basename(executable) !== "docker") return DEFAULT_COMMAND_TIMEOUT_MS;
+  if (args[0] === "compose") {
+    if (args.includes("build") || args.includes("--build")) return BUILD_COMMAND_TIMEOUT_MS;
+    return DOCKER_COMPOSE_TIMEOUT_MS;
+  }
+  if (args[0] === "run" || args[0] === "exec") return DOCKER_EXEC_TIMEOUT_MS;
+  return DOCKER_CONTROL_TIMEOUT_MS;
+}
+
+function positiveTimeout(value, fallback) {
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
 }
 
 async function commandSucceeds(executable, args, options = {}) {

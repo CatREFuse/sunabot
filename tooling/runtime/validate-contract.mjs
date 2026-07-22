@@ -15,6 +15,7 @@ const [
   schema,
   lock,
   coreDockerfile,
+  bashDockerfile,
   napcatDockerfile,
   napcatEntrypoint,
   compose,
@@ -37,6 +38,7 @@ const [
   readJson("deploy/runtime-contract.schema.json"),
   readJson("components/component.lock.json"),
   read("deploy/docker/Dockerfile"),
+  read("deploy/docker/Dockerfile.bash"),
   read("deploy/docker/Dockerfile.napcat"),
   read("deploy/docker/napcat-entrypoint.sh"),
   read("deploy/docker/compose.yml"),
@@ -168,6 +170,24 @@ expect(contract.capabilities.workspaceBash.service === "core"
   && contract.capabilities.workspaceBash.isolation === "bubblewrap"
   && contract.capabilities.workspaceBash.failClosed === true,
 "workspace Bash must remain fail-closed inside Core");
+const dockerLabels = contract.docker.labels;
+const dockerLabelSchema = schema.properties?.docker?.properties?.labels;
+for (const [key, value] of Object.entries({
+  runtimeId: "io.sunabot.runtime-id",
+  workspaceId: "io.sunabot.workspace-id",
+  component: "io.sunabot.component",
+  ownerId: "io.sunabot.owner-id",
+  invocationId: "io.sunabot.invocation-id",
+  expiresAtMs: "io.sunabot.expires-at-ms"
+})) {
+  expect(dockerLabels?.[key] === value, `Docker label ${key} must stay canonical`);
+  expect(dockerLabelSchema?.required?.includes(key)
+    && dockerLabelSchema?.properties?.[key]?.const === value,
+  `runtime schema must require canonical Docker label ${key}`);
+}
+expect(["/usr/bin/timeout", "/usr/bin/head", "/usr/bin/wc", "/usr/bin/cat"]
+  .every((executable) => bashDockerfile.includes(executable)),
+"the disposable Bash image must contain the timeout and bounded-output watchdog dependencies");
 expect(contract.capabilities.required.includes("codex-cli")
   && !contract.capabilities.optional.includes("codex-cli")
   && contract.capabilities.codexCli.service === "core"
@@ -295,6 +315,23 @@ expect(launcher.includes("recoverStaleDockerOneoffs")
   && dockerRecovery.includes("com.docker.compose.oneoff=true")
   && dockerRecovery.includes("colima restart"),
   "the launcher must detect stale Compose probes and keep Colima recovery interactive");
+expect(launcher.includes("recoverWorkspaceBashContainers")
+  && dockerRecovery.includes("io.sunabot.component")
+  && dockerRecovery.includes("workspace-bash")
+  && dockerRecovery.includes("io.sunabot.expires-at-ms"),
+"the launcher must safely recover expired workspace Bash containers by canonical labels");
+expect(launcher.includes("SUNABOT_WORKSPACE_ID")
+  && launcher.includes("SUNABOT_DOCKER_SOCKET")
+  && launcher.includes("resolveEffectiveDockerSocket"),
+"Native Core must receive the launcher-owned workspace and Docker endpoint identity");
+expect(launcher.includes("COMMAND_TIMEOUT")
+  && launcher.includes("COMMAND_OUTPUT_LIMIT")
+  && launcher.includes("INTERACTIVE_COMMAND_TIMEOUT_MS")
+  && launcher.includes("context.contract.shutdownTimeoutSeconds + 5")
+  && launcher.includes('child.kill("SIGTERM")')
+  && launcher.includes('child.kill("SIGKILL")')
+  && launcher.includes("commandTimeoutMs"),
+"launcher commands must enforce a default TERM-to-KILL hard deadline");
 expect(launcher.includes("assertDockerCoreCodex")
   && launcher.includes("inspectDockerCodex")
   && launcher.includes("inspectNativeCodex")

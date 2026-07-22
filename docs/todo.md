@@ -131,11 +131,11 @@
   - 风险：大文件不能长期写入 SQLite 或绕过内联预算；账号串发、Core/NapCat 共享路径或文件替换后误发均阻断集成。普通 outbox fingerprint 只覆盖稳定副作用身份并刻意排除每次尝试可能变化的 `logRunId` 与 `replyGate`；完整 payload 继续由 canonical row、idempotency key 与有界 replay lineage 约束，规范与最终集成不得把两层合同混写。
 
 - [ ] **BASH-FIX-001｜P0｜分会话 Bash 审计、确认与强隔离**
-  - 基础安全模块已形成 clean commit `903f88905362822a37329d6bd7a14226b7323308`，Provider/runtime/server 原子 wiring 已形成 clean commit `ba8b66feb2a293981a16e4479f812e4a24aa8e7e`。wiring 冻结快照通过 16 files / 365 tests、86 项定向回归、类型、架构、runtime contract、生产构建、Compose 静态合同、diff-check 与独立终审，覆盖配置 epoch、A→B→A、audit/文件探针/审批/隔离各异步边界和最终 check-to-exec 零 await；两项 commit 仍需在 `INTEGRATION-001` 与 Provider raw-sibling preflight、媒体、文件工具和 W2 统一合并并完成真实隔离冒烟，本项保持未完成且不可单独上线。
-  - Bash capability 使用固定会话路由：管理员 QQ 私聊为 Native `admin`，管理员群聊及其他 QQ 私聊和群聊为 Docker `isolated`，Web Chat 与伪造调用始终拒绝；系统配置不能切换 backend。两种 backend 的每条命令都先经过独立模型审计，再经过不可被模型覆盖的确定性策略；永久高危命令始终拒绝，允许确认的越界操作使用一次性、绑定命令与会话的管理员票据。
-  - Native 与 Docker 使用不同 workbench，业务目录只共享当前 Agent 的 Skill 与 MCP 配置；Docker 中两者只读。macOS Native 只在 Core 非 root 且宿主 `/bin/bash` 探针通过后，以清理环境的 Core OS 用户执行；Linux/WSL Native 与 Docker Core 继续使用强隔离，Docker Core 不能通过挂载 Docker socket 放宽隔离。
-  - 验收：覆盖管理员私聊、管理员群聊、普通用户私聊和群聊的固定路由，模型审计失败与超时、确定性永久拒绝、一次性确认重放、路径/符号链接/挂载/子进程/环境变量逃逸、超时与输出上限、macOS 非 root `/bin/bash` capability、root 与探针失败关闭、Docker Core 与 Linux/WSL 契约。
-  - 风险：当前配置、Provider executor、reply runtime、管理 API/UI、Docker/launcher 和既有 `GATE-006` 均有交叉；基础安全模块先独立验收，共享接线后置。
+  - 基础安全模块、Provider/runtime/server 原子 wiring 与 response preflight 已进入当前集成线。全部真实 OneBot QQ 私聊和群聊固定使用 Docker `isolated`，Web Chat 与伪造调用始终拒绝；系统配置不能切换 backend。每条命令先经过 10 秒硬期限的独立模型审计，再经过不可被模型覆盖的确定性策略与一次性、绑定命令和会话的审批票据。
+  - macOS Native Core 固定使用 launcher 解析的 Unix socket 和一次性容器，宿主 `/bin/bash` 永久关闭；Linux/WSL Native 与 Docker Core 继续使用 bubblewrap，Docker Core 不挂载 Docker socket。业务写入只进入当前 Agent `docker-workbench`，Skill 与 MCP 配置只读，容器无网络、无额外 capability、只读根并限制 PID、内存、CPU、文件大小和日志。
+  - 2026-07-22 已实现共享 Docker Engine supervisor：2 秒控制请求、300 毫秒安全重试、create/start 状态对账与命令零重放、30 秒容器 watchdog、45 秒总预算、并发 2/排队 1 秒、3/10/30/60 秒熔断与 half-open 单飞、输出上限、清理失败熔断、1/5/30 秒清理重试和过期回收。launcher 同步固定 endpoint 与 canonical labels，全部非流式命令具有默认 timeout、TERM→KILL 和无 exit 硬结束；doctor 使用平台准确错误码。
+  - 自动化验收覆盖固定会话路由、模型审计失败与超时、永久拒绝、一次性确认重放、路径/符号链接/挂载/子进程/环境逃逸、create/start/wait/log/delete 故障注入、并发与预算、熔断恢复、残留归属、launcher 超时、runtime contract、类型、架构和构建。最终证据以本任务验证记录为准，不能沿用历史分支测试数量冒充当前结果。
+  - 2026-07-22 已在本机 Colima 完成 supervisor capability、真实命令、容器 watchdog、删除确认与零残留冒烟，未重启运行中的 Core/NapCat。未完成：macOS Native Core 重启后的接线集成冒烟、Linux/WSL Native 与 Docker Core bubblewrap parity、Core 强杀后的残留恢复和真实 QQ 全链路仍需在授权环境执行；这些外部证据齐备前本项保持未完成。
 
 - [ ] **TOOL-FIX-002｜P1｜独立 `read_file` / `write_file` 工具**
   - 在 Bash 安全边界稳定后实现独立工具，不通过拼接任意 Bash 命令提供文件能力。两项工具只处理当前 Agent `workbench` 相对路径，复用唯一真实路径解析与符号链接逃逸门禁。
