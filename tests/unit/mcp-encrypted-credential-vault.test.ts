@@ -3,8 +3,9 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { EncryptedFileMcpCredentialVault } from "../../adapters/mcp/encryptedCredentialVault.js";
+import { testTempRoot } from "./test-temp-root.js";
 
-const TEST_ROOT = "/Users/tanshow/Developer/sunabot-dev-workspaces/skill-mcp-w2/oauth-vault";
+const TEST_ROOT = testTempRoot("mcp-encrypted-credential-vault");
 
 describe("encrypted MCP credential vault", () => {
   let root = "";

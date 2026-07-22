@@ -17,12 +17,13 @@ import {
   type SkillScriptChild,
   type SkillScriptSpawn
 } from "../../adapters/filesystem/agentSkillScriptSandbox.js";
+import { testTempRoot } from "./test-temp-root.js";
 
 const digest = "a".repeat(64);
 const source = "#!/bin/bash\nprintf '%s\\n' \"$1\"\n";
 const resourceSha = createHash("sha256").update(source).digest("hex");
 const image = `sha256:${"d".repeat(64)}`;
-const TEST_ROOT = "/Users/tanshow/Developer/sunabot-dev-workspaces/skill-mcp-w2-skill-script-sandbox";
+const TEST_ROOT = testTempRoot("skill-script-sandbox");
 let runRoot = "";
 let sandboxInput: AgentSkillScriptSandboxInput;
 

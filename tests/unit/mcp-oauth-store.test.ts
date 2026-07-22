@@ -3,10 +3,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentExtensionStore } from "../../adapters/filesystem/agentExtensionStore.js";
+import { testTempRoot } from "./test-temp-root.js";
 
 vi.setConfig({ testTimeout: 30_000, hookTimeout: 30_000 });
 
-const testRoot = "/Users/tanshow/Developer/sunabot-dev-workspaces/skill-mcp-w2/oauth-store";
+const testRoot = testTempRoot("mcp-oauth-store");
 const handle = `mcpcred_${"A".repeat(24)}`;
 let root = "";
 

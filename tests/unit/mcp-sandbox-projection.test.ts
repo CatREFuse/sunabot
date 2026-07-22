@@ -15,10 +15,11 @@ import {
 import { createMcpStdioLaunchProjection } from "../../adapters/mcp/stdioLaunchProjection.js";
 import { AgentExtensionService } from "../../services/extensions/public.js";
 import { makeStoredZip, skillMarkdown } from "./agent-extension-fixtures.js";
+import { testTempRoot } from "./test-temp-root.js";
 
 const temporaryPaths: string[] = [];
 let workspace = "";
-const testDataRoot = "/Users/tanshow/Developer/sunabot-dev-workspaces/skill-mcp-w2/projections";
+const testDataRoot = testTempRoot("mcp-sandbox-projection");
 
 beforeEach(async () => {
   await makeTestTreeWritable(testDataRoot);

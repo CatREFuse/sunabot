@@ -6,8 +6,9 @@ import { AgentExtensionStore } from "../../adapters/filesystem/agentExtensionSto
 import { extensionRevision } from "../../adapters/filesystem/agentSkillPersistence.js";
 import { AgentExtensionService } from "../../services/extensions/public.js";
 import { makeStoredZip, skillMarkdown } from "./agent-extension-fixtures.js";
+import { testTempRoot } from "./test-temp-root.js";
 
-const TEST_DATA_ROOT = "/Users/tanshow/Developer/sunabot-dev-workspaces/skill-mcp-w2/copy-transaction";
+const TEST_DATA_ROOT = testTempRoot("agent-extension-copy-transaction");
 const SOURCE_OAUTH_HANDLE = `mcpcred_${"A".repeat(24)}`;
 const SOURCE_STDIO_SECRET_VALUE = "source-stdio-secret-value";
 const temporaryPaths: string[] = [];

@@ -15,6 +15,7 @@ import { SunaRuntime } from "../../src/runtime.js";
 import { conversationRecordId } from "../../src/runtime/messagingAttachmentHelpers.js";
 import type { ParsedIncomingMessage } from "../../src/types.js";
 import { createAdminTestConfig } from "./admin-fixtures.js";
+import { testTempRoot } from "./test-temp-root.js";
 
 const appendRequestLog = vi.hoisted(() => vi.fn(async () => undefined));
 vi.mock("../../src/requestLog.js", async (importOriginal) => ({
@@ -28,7 +29,7 @@ vi.mock("../../services/memory/memoryService.js", async (importOriginal) => ({
   readUserProfileForUser: vi.fn(async () => undefined)
 }));
 
-const dataRoot = "/Users/tanshow/Developer/sunabot-dev-workspaces/skill-mcp-w2/runtime-wiring";
+const dataRoot = testTempRoot("runtime-agent-extension-wiring");
 const runtimes: SunaRuntime[] = [];
 
 afterEach(async () => {

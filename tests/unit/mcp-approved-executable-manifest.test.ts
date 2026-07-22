@@ -7,8 +7,9 @@ import {
   readMcpApprovedExecutableManifest,
   verifyMcpApprovedExecutable
 } from "../../adapters/mcp/approvedExecutableManifest.js";
+import { testTempRoot } from "./test-temp-root.js";
 
-const root = "/Users/tanshow/Developer/sunabot-dev-workspaces/skill-mcp-w2/mcp-approved-executables";
+const root = testTempRoot("mcp-approved-executables");
 const command = "/usr/bin/true";
 
 beforeEach(async () => {

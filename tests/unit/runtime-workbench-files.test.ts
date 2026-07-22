@@ -6,8 +6,9 @@ import { parseOneBotInboundMessage } from "../../adapters/onebot/inboundMessageA
 import type { OneBotEvent } from "../../adapters/onebot/protocol.js";
 import { defaultConfig } from "../../src/config.js";
 import { providerWorkbenchFilesForIncoming } from "../../src/runtime/workbenchFiles.js";
+import { testTempRoot } from "./test-temp-root.js";
 
-const TEST_DATA_ROOT = "/Users/tanshow/Developer/sunabot-dev-workspaces/workbench-file-tools";
+const TEST_DATA_ROOT = testTempRoot("runtime-workbench-files");
 const roots: string[] = [];
 
 beforeAll(async () => {

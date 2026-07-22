@@ -6,8 +6,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentSkillScriptProjectionBuilder } from "../../adapters/filesystem/agentSkillScriptProjection.js";
 import { inspectSkillDirectory } from "../../adapters/filesystem/skillArchive.js";
 import { skillMarkdown } from "./agent-extension-fixtures.js";
+import { testTempRoot } from "./test-temp-root.js";
 
-const TEST_ROOT = "/Users/tanshow/Developer/sunabot-dev-workspaces/skill-mcp-w2/skill-script-projection";
+const TEST_ROOT = testTempRoot("skill-script-projection");
 let workspace = "";
 let temporaryRoot = "";
 

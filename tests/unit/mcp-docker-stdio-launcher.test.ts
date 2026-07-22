@@ -19,8 +19,9 @@ import type {
   HardenedStdioLaunchSpec
 } from "../../adapters/mcp/hardenedStdioTransport.js";
 import type { McpSandboxProjection } from "../../adapters/mcp/sandboxProjection.js";
+import { testTempRoot } from "./test-temp-root.js";
 
-const testRoot = "/Users/tanshow/Developer/sunabot-dev-workspaces/skill-mcp-w2/mcp-docker-stdio-launcher";
+const testRoot = testTempRoot("mcp-docker-stdio-launcher");
 const fixedContainerName = `sunabot-mcp-${"a".repeat(32)}`;
 const fixedImage = `sha256:${"c".repeat(64)}`;
 const TEST_EXIT_WAIT_MS = 2_000;

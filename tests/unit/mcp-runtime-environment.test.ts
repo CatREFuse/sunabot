@@ -6,8 +6,9 @@ import {
   inspectMcpRuntimeConfiguration,
   resolveMcpStdioRuntimeOptions
 } from "../../tooling/runtime/mcp-runtime-config.mjs";
+import { testTempRoot } from "./test-temp-root.js";
 
-const root = "/Users/tanshow/Developer/sunabot-dev-workspaces/skill-mcp-w2/mcp-runtime-environment";
+const root = testTempRoot("mcp-runtime-environment");
 const digestImage = `registry.example/sunabot-mcp@sha256:${"a".repeat(64)}`;
 const manifestSha256 = "b".repeat(64);
 const serverSourceUrl = new URL("../../apps/api/server.ts", import.meta.url);

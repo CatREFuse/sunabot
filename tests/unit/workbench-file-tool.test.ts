@@ -12,8 +12,9 @@ import {
   WORKBENCH_FILE_MAX_CONTENT_LENGTH,
   isWorkbenchFileRelativePath
 } from "../../services/tools/workbenchFileTool.js";
+import { testTempRoot } from "./test-temp-root.js";
 
-const TEST_DATA_ROOT = "/Users/tanshow/Developer/sunabot-dev-workspaces/workbench-file-tools";
+const TEST_DATA_ROOT = testTempRoot("workbench-file-tool");
 const roots: string[] = [];
 
 beforeAll(async () => {

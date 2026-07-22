@@ -7,8 +7,9 @@ import { AgentExtensionStore } from "../../adapters/filesystem/agentExtensionSto
 import { AgentSkillRuntimeReader } from "../../adapters/filesystem/agentSkillRuntimeReader.js";
 import { AgentExtensionService, SkillActivationService } from "../../services/extensions/public.js";
 import { makeStoredZip, skillMarkdown } from "./agent-extension-fixtures.js";
+import { testTempRoot } from "./test-temp-root.js";
 
-const TEST_ROOT = "/Users/tanshow/Developer/sunabot-dev-workspaces/skill-mcp-w2/skill-resource";
+const TEST_ROOT = testTempRoot("skill-runtime-resource");
 vi.setConfig({ testTimeout: 30_000, hookTimeout: 30_000 });
 let workspace = "";
 

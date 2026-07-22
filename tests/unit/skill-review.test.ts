@@ -14,8 +14,9 @@ import {
   type SkillReviewAuditRunnerPort
 } from "../../services/extensions/public.js";
 import { makeStoredZip, openAiSkillMetadata, skillMarkdown } from "./agent-extension-fixtures.js";
+import { testTempRoot } from "./test-temp-root.js";
 
-const TEST_ROOT = "/Users/tanshow/Developer/sunabot-dev-workspaces/skill-mcp-w2/skill-review";
+const TEST_ROOT = testTempRoot("skill-review");
 vi.setConfig({ testTimeout: 30_000, hookTimeout: 30_000 });
 const temporaryPaths: string[] = [];
 let workspace = "";
