@@ -152,6 +152,10 @@ describe("tone segmented output prompt", () => {
     });
     expect(JSON.stringify(segmented.messages)).toContain("<xml-check>");
     expect(JSON.stringify(segmented.messages)).toContain("XML 草稿会原样进入 Tone");
+    expect(JSON.stringify(segmented.messages)).toContain("信息较短时，可以按短句拆分");
+    expect(JSON.stringify(segmented.messages)).toContain("信息较长时，每个文字气泡承载一个完整段落");
+    expect(JSON.stringify(segmented.messages)).toContain("文字气泡总数不超过 3 个");
+    expect(JSON.stringify(segmented.messages)).toContain("用户明确要求只用一个气泡时");
     expect(JSON.stringify(segmented.messages)).not.toContain("s-if=");
   });
 
