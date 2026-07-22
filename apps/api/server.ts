@@ -51,7 +51,7 @@ import { registerMemoryRoutes } from "./plugins/memoryRoutes.js";
 import { registerKnowledgeRoutes } from "./plugins/knowledgeRoutes.js";
 import { registerMonitoringRoutes } from "./plugins/monitoringRoutes.js";
 import { registerOneBotRoutes } from "./plugins/onebotRoutes.js";
-import { registerProviderConfigRoutes } from "./plugins/providerConfigRoutes.js";
+import { registerProviderConfigRoutes } from "./plugins/providerConfigRoutes.js"; import { registerReleaseRoutes } from "./plugins/releaseRoutes.js";
 import { registerSelfieReferenceRoutes } from "./plugins/selfieReferenceRoutes.js";
 import { registerAgentEmojiApi } from "./emojiApiComposition.js";
 import { resolveDreamAccountId } from "./dreamApiComposition.js";
@@ -545,7 +545,7 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
   });
   registerOneBotRoutes(app, onebotGateway, { agentRegistry });
   registerProviderConfigRoutes(app, { codexAuth, configService, agentConfigService, testProvider: options.testProvider });
-  registerConfigDoctorRoutes(app, configDoctorService);
+  registerConfigDoctorRoutes(app, configDoctorService); registerReleaseRoutes(app);
   registerMemoryRoutes(app, {
     getConfig: () => config,
     runtime,

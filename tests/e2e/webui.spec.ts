@@ -722,6 +722,7 @@ test("配置医生独立检查、显式 AI 诊断并只提交方案标识", asyn
   ));
   expect(desktopItems.indexOf("/settings")).toBeLessThan(desktopItems.indexOf("/config-doctor"));
   expect(desktopItems.indexOf("/config-doctor")).toBeLessThan(desktopItems.indexOf("/system-prompts"));
+  expect(desktopItems.indexOf("/system-prompts")).toBeLessThan(desktopItems.indexOf("/releases"));
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole("button", { name: "更多", exact: true }).click();
@@ -731,6 +732,7 @@ test("配置医生独立检查、显式 AI 诊断并只提交方案标识", asyn
   ));
   expect(mobileItems.indexOf("/settings")).toBeLessThan(mobileItems.indexOf("/config-doctor"));
   expect(mobileItems.indexOf("/config-doctor")).toBeLessThan(mobileItems.indexOf("/system-prompts"));
+  expect(mobileItems.indexOf("/system-prompts")).toBeLessThan(mobileItems.indexOf("/releases"));
   await moreDialog.getByRole("button", { name: "关闭", exact: true }).click();
 
   await page.setViewportSize({ width: 1280, height: 800 });
@@ -776,6 +778,27 @@ test("配置医生独立检查、显式 AI 诊断并只提交方案标识", asyn
   ]);
   expect(state.patchRequests).toEqual([]);
   expect(state.doctorRequests.filter((request) => request.path.endsWith("/scan"))).toHaveLength(2);
+});
+
+test("版本页面展示当前版本与更新日志", async ({ page }) => {
+  await installMockApi(page);
+  const initialRequest = page.waitForRequest((request) => request.url().endsWith("/api/releases"));
+
+  await page.goto("/releases");
+  expect((await initialRequest).method()).toBe("GET");
+
+  await expect(page.getByRole("heading", { name: "版本更新", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "v0.1.0", exact: true })).toBeVisible();
+  await expect(page.getByText("当前发行", { exact: true })).toBeVisible();
+  await expect(page.getByText("2026年7月22日", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "更新日志", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "核心能力", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "稳定性", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "管理台", exact: true })).toBeVisible();
+
+  const refreshRequest = page.waitForRequest((request) => request.url().endsWith("/api/releases"));
+  await page.getByRole("button", { name: "刷新", exact: true }).click();
+  expect((await refreshRequest).method()).toBe("GET");
 });
 
 test("语音设置按 Agent 保存在线服务、语言和音色资料", async ({ page }) => {

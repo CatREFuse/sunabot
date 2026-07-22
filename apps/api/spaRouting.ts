@@ -16,7 +16,8 @@ const SPA_ROUTE_SEGMENTS = [
   "agents",
   "agent-settings",
   "settings",
-  "config-doctor"
+  "config-doctor",
+  "releases"
 ] as const;
 
 export function isSpaRoute(pathname: string) {

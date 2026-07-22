@@ -57,7 +57,8 @@ test("Fastify 生产服务提供静态资源、深链接回退与管理鉴权", 
     "/agent-prompts/image.selfie-rewrite",
     "/system-prompts/conversation.private-reply",
     "/web-chat",
-    "/extensions"
+    "/extensions",
+    "/releases"
   ];
   let html = "";
   for (const pathname of deepLinks) {
@@ -88,4 +89,22 @@ test("Fastify 生产服务提供静态资源、深链接回退与管理鉴权", 
     }
   });
   expect(authorized.status()).toBe(200);
+
+  const unauthorizedRelease = await request.get(`${origin}/api/releases`, {
+    headers: { "x-forwarded-for": "203.0.113.9" }
+  });
+  expect(unauthorizedRelease.status()).toBe(401);
+
+  const releaseCatalog = await request.get(`${origin}/api/releases`, {
+    headers: {
+      "x-forwarded-for": "203.0.113.9",
+      authorization: "Bearer fastify-production-token"
+    }
+  });
+  expect(releaseCatalog.status()).toBe(200);
+  expect(releaseCatalog.headers()["cache-control"]).toBe("no-store");
+  expect(await releaseCatalog.json()).toMatchObject({
+    schemaVersion: 1,
+    currentVersion: "0.1.0"
+  });
 });

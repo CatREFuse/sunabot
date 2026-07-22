@@ -276,6 +276,11 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
       await expect(doctorDialog).toBeVisible();
       await capture(page, viewport.name, theme, "settings-config-doctor-confirm");
       await doctorDialog.getByRole("button", { name: "取消", exact: true }).click();
+
+      await page.goto("/releases");
+      await expect(page.getByRole("heading", { name: "版本更新", exact: true })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "v0.1.0", exact: true })).toBeVisible();
+      await capture(page, viewport.name, theme, "releases");
     }
 
     await page.goto("/settings/broadcastStorm");

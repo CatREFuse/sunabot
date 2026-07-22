@@ -9,7 +9,9 @@ describe("admin SPA routing", () => {
     "/scheduled-tasks",
     "/scheduled-tasks/",
     "/voice",
-    "/voice/"
+    "/voice/",
+    "/releases",
+    "/releases/"
   ])("serves the admin application for %s", (pathname) => {
     expect(isSpaRoute(pathname)).toBe(true);
   });
@@ -20,6 +22,8 @@ describe("admin SPA routing", () => {
     "/emojis-archive",
     "/scheduled-task",
     "/voices",
+    "/release",
+    "/releases-archive",
     "/definitely-missing"
   ])("keeps non-SPA paths outside the history fallback: %s", (pathname) => {
     expect(isSpaRoute(pathname)).toBe(false);

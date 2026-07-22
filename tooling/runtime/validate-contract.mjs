@@ -65,7 +65,11 @@ const expect = (condition, message) => {
 expect(contract.schemaVersion === 2, "runtime contract schemaVersion must be 2");
 expect(schema.properties?.schemaVersion?.const === 2, "runtime schema must fix schemaVersion 2");
 expect(contract.runtimeId === "sunabot-qq-runtime", "runtimeId must stay sunabot-qq-runtime");
-expect(contract.releaseVersion === "0.1.0", "runtime release version must match package version");
+expect(contract.releaseVersion === packageManifest.version,
+  "runtime release version must match package version");
+expect(packageLock.version === packageManifest.version
+  && packageLock.packages?.[""]?.version === packageManifest.version,
+"package lock versions must match package version");
 expect(contract.nodeVersion === "24.18.0", "runtime must use the pinned Node version");
 expect(arraysEqual(contract.supportedPlatforms, lock.supportedPlatforms),
   "runtime and component platforms must match");

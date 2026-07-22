@@ -39,7 +39,8 @@ export const navigationSections: readonly NavigationSection[] = [
     items: [
       { to: "/settings", label: "系统设置", mobileLabel: "系统设置", description: "模型、账户与连接", icon: "bx-cog", mobilePlacement: "more", mobileOrder: 0 },
       { to: "/config-doctor", label: "配置医生", mobileLabel: "配置医生", description: "检查并修复配置", icon: "bx-first-aid", mobilePlacement: "more", mobileOrder: 1 },
-      { to: "/system-prompts", label: "系统提示词", mobileLabel: "系统提示词", description: "所有 Agent 的默认提示词", icon: "bx-file", mobilePlacement: "more", mobileOrder: 2 }
+      { to: "/system-prompts", label: "系统提示词", mobileLabel: "系统提示词", description: "所有 Agent 的默认提示词", icon: "bx-file", mobilePlacement: "more", mobileOrder: 2 },
+      { to: "/releases", label: "版本更新", mobileLabel: "版本更新", description: "当前版本与更新日志", icon: "bx-package", mobilePlacement: "more", mobileOrder: 3 }
     ]
   }
 ];

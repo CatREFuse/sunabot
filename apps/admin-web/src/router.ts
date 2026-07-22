@@ -16,6 +16,7 @@ const AgentExtensionsView = () => import("./views/AgentExtensionsView.vue");
 const ConversationSettingsView = () => import("./views/ConversationSettingsView.vue");
 const ScheduledTasksView = () => import("./views/ScheduledTasksView.vue");
 const VoiceView = () => import("./views/VoiceView.vue");
+const ReleasesView = () => import("./views/ReleasesView.vue");
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -43,6 +44,7 @@ export const router = createRouter({
     { path: "/agent-settings/:section?", name: "agent-settings", component: SettingsView, props: { scope: "agent" } },
     { path: "/settings/:section?", name: "settings", component: SettingsView, props: { scope: "system" } },
     { path: "/config-doctor", name: "config-doctor", component: ConfigDoctorView },
+    { path: "/releases", name: "releases", component: ReleasesView },
     { path: "/:pathMatch(.*)*", redirect: "/overview" }
   ],
   scrollBehavior: () => ({ top: 0 })

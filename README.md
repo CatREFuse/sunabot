@@ -2,6 +2,8 @@
 
 sunabot 是面向个人自托管场景的多 Agent QQ 服务。每个 Agent 可以绑定多个 QQ 账号，并拥有独立的人格、记忆、会话、图片和工具配置；Provider、系统提示词与管理安全由同一个 Sunabot Core 统一管理。
 
+当前版本：`0.1.0` · [更新日志](CHANGELOG.md) · [GitHub Releases](https://github.com/CatREFuse/sunabot/releases)
+
 ## 功能
 
 - QQ 私聊、群聊、@、引用回复、戳一戳、文件和图片消息
