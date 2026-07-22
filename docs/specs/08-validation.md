@@ -32,6 +32,8 @@ npm run verify
 
 `verify` 依次执行 runtime contract、architecture、SQLite recovery、类型检查、单元与集成测试、独立 runtime smoke、CI 容量基线、生产构建和 E2E。消息专项回归必须证明 `assistant_text` 写入 durable outbox 后即可继续 inline 工具，远端发送仍在进行或重试时不能阻塞工具；事件重试不能重复发送已提交的中间消息。deferred `dispatch_message` 与任务必须原子持久化，worker 在 acknowledgement 仍待发送时即可 claim，callback 随后按同一会话 FIFO 投递。OneBot 入站专项必须覆盖 NapCat 当前全部具体消息段及兼容别名、精确的 `onlinefile`/`flashtransfer` 类型、未知类型回退、CQ 字符串、内容图片与表情图片分类、内联与仅 ID 的 `forward`/`node`、当前账号的 `get_forward_msg` 入队前展开、嵌套发送者和媒体顺序，以及深度、数量和最终文本容量边界；公共提示词回归必须同时覆盖默认契约和 `.inbound-message-v1` 的保留式、幂等迁移。用户群聊编排器回归必须覆盖纯图片和图文混合消息，证明历史消息与当前消息优先保留 `[内容图片#N]`、`[表情图片#N]`，只为缺少语义标记的旧媒体补充 `[图片]`，已有标记不重复补齐，并且不把图片 URL、Data URL 或本地路径放入编排 payload。
 
+Session FIFO 属性回归必须用 100 个确定性交错 turn 覆盖至少五个群会话，继续断言同会话模型启动与外发顺序、跨会话并行、零丢失和零重复。该用例只衡量 Session 队列，必须隔离另有专项覆盖的群 Thread 分类与记忆压缩模型副作用；队列自身的 `waitForIdle` 保留 10 秒失败门限，外层测试预算为 20 秒以覆盖 Native macOS 与 WSL/ext4 的初始化和调度开销，不能用外层默认 5 秒提前截断队列门限。
+
 定时任务专项验收矩阵：
 
 | 维度               | 必测场景                                                                                                                                                           | 验收标准                                                                                                                                                                                            |

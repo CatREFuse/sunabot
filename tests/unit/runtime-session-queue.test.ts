@@ -1051,6 +1051,9 @@ describe("SunaRuntime Session queue bridge", () => {
       }
     });
     const harness = createRuntimeHarness(completeRequestTurn);
+    // This property test measures the Session queue; classifiers and memory have dedicated coverage.
+    vi.spyOn(harness.runtime, "prepareGroupThreadContext").mockResolvedValue(undefined);
+    vi.spyOn(harness.runtime, "processMemoryClaim").mockResolvedValue(true);
 
     for (let index = 0; index < 100; index += 1) {
       const marker = `job-${String(index).padStart(3, "0")}`;
@@ -1081,7 +1084,7 @@ describe("SunaRuntime Session queue bridge", () => {
     const allSent = sentTexts(harness.gateway);
     expect(allSent).toHaveLength(100);
     expect(new Set(allSent).size).toBe(100);
-  });
+  }, 20_000);
 
   it.each([
     { scope: "private", event: privateEvent(21_001, "retry-private"), sessionId: "private:171419991" },
