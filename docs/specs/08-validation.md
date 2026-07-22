@@ -193,7 +193,7 @@ Prompt Cache 验收必须分别执行 OpenAI 官方 Responses 与 Codex Response
 
 Office worker 专项必须覆盖并发 2、90 秒超时、IPC 1 MiB、工作目录 1 GiB、进程组 RSS 1.5 GiB、正常与异常峰值 RSS、整个进程组 TERM→KILL 和 worker 自报结果。工作目录探针失败时 RSS 上限仍生效，RSS 探针失败时工作目录上限仍生效，两个探针都失败时总超时仍结束任务；还要控制两个探针的相反完成顺序并让进程组 signal 抛错，证明首个资源错误稳定、fallback 有界且 `unhandledRejection` 为零。
 
-account runtime daemon 专项必须覆盖同 workspace 两个并发启动只有一个 owner、两个进程竞争同一 stale owner、owner 发布与 claim-republish 各强杀边界、owner/evidence 硬链接数不超过 2、已 claim request 的 owner 强杀后生成确定性失败结果，以及损坏 owner、符号链接、额外硬链接、PID 复用、进程启动身份和 workspace/entry 失配全部失败关闭。launcher 状态必须区分 owner 丢失与 split-brain；`down`/`restart` 必须发现并停止当前入口、旧入口和无参数的全部同 workspace daemon，同时证明不会向无关或身份未验证进程发送信号。
+account runtime daemon 专项必须覆盖同 workspace 两个并发启动只有一个 owner、两个进程竞争同一 stale owner、owner 发布与 claim-republish 各强杀边界、owner/evidence 硬链接数不超过 2、已 claim request 的 owner 强杀后生成确定性失败结果，以及损坏 owner、符号链接、额外硬链接、PID 复用、进程启动身份和 workspace/entry 失配全部失败关闭。claim 竞态还要以等长 replacement 内容覆盖 Linux/WSL 快速复用 inode 的路径，证明 `dev/ino` 相同仍会因内容摘要不符恢复 replacement 并返回 `ACCOUNT_RUNTIME_OWNER_CHANGED`；源码级故障注入必须统一换行并验证每个锚点精确命中一次。launcher 状态必须区分 owner 丢失与 split-brain；`down`/`restart` 必须发现并停止当前入口、旧入口和无参数的全部同 workspace daemon，同时证明不会向无关或身份未验证进程发送信号。
 
 涉及跨平台运行时还要执行 `./sunabot.sh doctor`，分别验证 Native Core + 多 NapCat Docker 与 Docker Core + 多 NapCat Docker 的启动、停止、单实例、管理台单账号“运行”、OneBot token、两个 QQ 同时在线、文字、图片、文件、语音、账号定向外发和重启恢复。语音验收还要分别证明两种 Core 使用同一在线 Provider 合同且 NapCat 只接收 OneBot Base64；launcher 不安装、启动、停止或连接本地 Voice 服务。Docker Core 启动前的 bubblewrap 探针必须包含真实执行使用的 network namespace，并由回归证明其 namespace 参数与 seccomp clone 掩码一致。contract 与测试必须拒绝 NapCat 或本地语音服务并入 Core、多个账号复用同一 WebUI 端口、OneBot 复用管理端口、跨组件共享绝对路径和旧新运行时并行。
 

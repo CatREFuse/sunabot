@@ -684,7 +684,14 @@ async function readOwnerSnapshot(ownerPath) {
     if (!sameOwnerFileSnapshot(before, after)) {
       throw daemonError("ACCOUNT_RUNTIME_OWNER_INVALID", "owner 文件在读取期间发生变化。");
     }
-    return { content: raw.toString("utf8"), raw, identity: fileIdentity(before) };
+    return {
+      content: raw.toString("utf8"),
+      raw,
+      identity: {
+        ...fileIdentity(before),
+        contentSha256: crypto.createHash("sha256").update(raw).digest("hex")
+      }
+    };
   } finally {
     await handle.close();
   }
@@ -798,7 +805,7 @@ async function claimOwnerPath(options) {
 
   let claimed;
   try {
-    claimed = await fs.lstat(options.claimPath);
+    claimed = await readOwnerSnapshot(options.claimPath);
   } catch (error) {
     const restored = await republishClaimedOwnerWithoutOverwrite({
       claimPath: options.claimPath,
@@ -808,10 +815,10 @@ async function claimOwnerPath(options) {
       .catch(() => false);
     throw daemonError(
       "ACCOUNT_RUNTIME_OWNER_CHANGED",
-      `${options.changedDetail}；无法复验 claim inode${restored ? "，已恢复 ownerPath" : "，claim 已保留"}。${safeMessage(error)}`
+      `${options.changedDetail}；无法复验 claim 文件${restored ? "，已恢复 ownerPath" : "，claim 已保留"}。${safeMessage(error)}`
     );
   }
-  if (sameFileIdentity(claimed, options.expectedIdentity)) return claimed;
+  if (sameClaimedOwnerIdentity(claimed.identity, options.expectedIdentity)) return claimed.identity;
 
   const restored = await republishClaimedOwnerWithoutOverwrite({
     claimPath: options.claimPath,
@@ -820,7 +827,7 @@ async function claimOwnerPath(options) {
   });
   throw daemonError(
     "ACCOUNT_RUNTIME_OWNER_CHANGED",
-    `${options.changedDetail}；移动到 claim 的 inode 不匹配${restored ? "，已原子恢复 ownerPath" : `，ownerPath 已被占用且 claim 保留在 ${options.claimPath}`}。`
+    `${options.changedDetail}；移动到 claim 的文件身份不匹配${restored ? "，已原子恢复 ownerPath" : `，ownerPath 已被占用且 claim 保留在 ${options.claimPath}`}。`
   );
 }
 
@@ -911,6 +918,15 @@ function fileIdentity(stat) {
 
 function sameFileIdentity(left, right) {
   return Number(left?.dev) === Number(right?.dev) && Number(left?.ino) === Number(right?.ino);
+}
+
+function sameClaimedOwnerIdentity(left, right) {
+  return Boolean(
+    sameFileIdentity(left, right)
+    && Number(left?.size) === Number(right?.size)
+    && typeof left?.contentSha256 === "string"
+    && left.contentSha256 === right?.contentSha256
+  );
 }
 
 function sameOwnerLease(left, right) {

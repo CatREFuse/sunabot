@@ -47,7 +47,7 @@ Native Core 启动时必须通过独立 `deploy/docker/compose.bash.yml` 准备 
 
 WebFetch 静态 HTML 抓取在 Core 内执行；正文不足时才调用独立 `webfetch-renderer`。renderer 只接收 URL，通过强制安全代理访问逐次校验并固定到公网 IP 的 HTTP(S) 目标，返回有界 DOM；query、Agent workspace、数据库、Provider key、OneBot token 和浏览器持久状态均不能进入该服务。renderer 启动失败只降低 `webfetch-dynamic-renderer` 可选 capability，静态抓取保持可用。Linux/WSL 使用 `linux/amd64` renderer，Apple Silicon 使用原生 `linux/arm64` renderer，避免通过 QEMU 执行 Chromium；两种架构均保持 Chromium 用户命名空间沙箱、Docker VM、非 root、只读根文件系统、`cap_drop=ALL`、no-new-privileges、seccomp、临时目录和资源限额。
 
-宿主 account runtime daemon 按 workspace 保持单实例。owner 记录以当前用户拥有的 0600 普通文件原子发布，并绑定 workspace 身份、入口、PID/进程组、进程启动身份和随机 owner token；发布、claim 或回收中断时保留可验证的同 inode 恢复证据，只有能够证明旧 owner 已退出或身份失配时才回收。损坏、符号链接、额外硬链接、身份不明或 PID 复用都失败关闭，不能向未证明属于当前 workspace 的进程发送信号。`status` 必须报告 owner 丢失与 split-brain；`down` 和 `restart` 还要发现同 workspace 的旧入口与无参数 daemon，停止全部可证明安全的实例并保留无关进程。
+宿主 account runtime daemon 按 workspace 保持单实例。owner 记录以当前用户拥有的 0600 普通文件原子发布，并绑定 workspace 身份、入口、PID/进程组、进程启动身份和随机 owner token；发布、claim 或回收中断时保留可验证的同 inode 恢复证据，claim 后还必须复验读取期间稳定的文件大小与内容摘要，不能因文件系统快速复用 `dev/ino` 而把 replacement owner 当成旧文件。只有能够证明旧 owner 已退出或身份失配时才回收。损坏、符号链接、额外硬链接、身份不明或 PID 复用都失败关闭，不能向未证明属于当前 workspace 的进程发送信号。`status` 必须报告 owner 丢失与 split-brain；`down` 和 `restart` 还要发现同 workspace 的旧入口与无参数 daemon，停止全部可证明安全的实例并保留无关进程。
 
 管理 API 只发布到宿主回环 `127.0.0.1:8787`。OneBot 使用专用 `8788` 端口并强制校验 access token：Docker Core 模式通过共享的私有运行网络和 `core` 服务名连接；Native Core 模式由启动器配置容器可达的宿主网关。OneBot 不直接发布到局域网或公网。每个 NapCat WebUI 使用注册表分配的独立端口，仅发布到宿主回环，首个账号默认使用 `127.0.0.1:6099`。
 

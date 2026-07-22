@@ -150,13 +150,14 @@ describe("account runtime daemon singleton", () => {
       const restoreWorkspace = await createWorkspace(`sunabot-account-daemon-restore-${stage}-`);
       const ownerPath = path.join(restoreWorkspace, ACCOUNT_RUNTIME_OWNER_RELATIVE_PATH);
       await fs.mkdir(path.dirname(ownerPath), { recursive: true, mode: 0o700 });
-      await fs.writeFile(ownerPath, "{partial", { mode: 0o600 });
       const staleRecord = ownerRecord({
         workspace: restoreWorkspace,
         entry: fixture.entry,
         pid: 2_147_480_000,
         ownerToken: token(`restore-stale-${stage}`)
       });
+      const replacementBytes = Buffer.byteLength(`${JSON.stringify(staleRecord, null, 2)}\n`);
+      await fs.writeFile(ownerPath, "x".repeat(replacementBytes), { mode: 0o600 });
       const child = await startRestoreFaultDriver({
         fixture,
         workspace: restoreWorkspace,
@@ -485,9 +486,9 @@ async function createDaemonFixture(options: {
       await fs.copyFile(path.join(projectRoot, relative), path.join(root, relative));
       continue;
     }
-    let source = await fs.readFile(path.join(projectRoot, relative), "utf8");
+    let source = (await fs.readFile(path.join(projectRoot, relative), "utf8")).replace(/\r\n/gu, "\n");
     if (options.injectOwnerPublishFaults) {
-      source = source.replace(
+      source = replaceExactlyOnce(source,
         "      published = true;\n      await syncDirectory(ownerDirectory);\n      const snapshot = await readOwnerSnapshot(ownerPath);",
         [
           "      published = true;",
@@ -496,47 +497,61 @@ async function createDaemonFixture(options: {
           "      if (process.env.SUNABOT_TEST_OWNER_PUBLISH_FAULT === 'read') throw new Error('injected read fault');",
           "      const snapshot = await readOwnerSnapshot(ownerPath);",
           "      if (process.env.SUNABOT_TEST_OWNER_PUBLISH_FAULT === 'stat') throw new Error('injected stat fault');"
-        ].join("\n")
-      ).replace(
+        ].join("\n"),
+        "owner publish sync/read/stat faults"
+      );
+      source = replaceExactlyOnce(source,
         "      await assertOwnerEvidence(ownerPath, snapshot.identity, publishedRecord);",
         [
           "      if (process.env.SUNABOT_TEST_OWNER_PUBLISH_FAULT === 'verify') throw new Error('injected verify fault');",
           "      await assertOwnerEvidence(ownerPath, snapshot.identity, publishedRecord);"
-        ].join("\n")
+        ].join("\n"),
+        "owner publish verify fault"
       );
     }
     if (options.injectQuarantineRaceHook) {
-      source = source.replace(
+      source = replaceExactlyOnce(source,
         "  if (!inspected.identity) {",
-        "  await globalThis.__SUNABOT_TEST_BEFORE_QUARANTINE_CLAIM__?.();\n  if (!inspected.identity) {"
+        "  await globalThis.__SUNABOT_TEST_BEFORE_QUARANTINE_CLAIM__?.();\n  if (!inspected.identity) {",
+        "quarantine claim race hook"
       );
     }
     if (options.injectClaimRepublishFaults) {
-      source = source.replace(
+      source = replaceExactlyOnce(source,
         "  const evidencePath = recoveryOwnerEvidencePath(options.ownerPath, record);",
-        "  if (process.env.SUNABOT_TEST_RESTORE_FAULT === 'before-evidence') process.kill(process.pid, 'SIGKILL');\n  const evidencePath = recoveryOwnerEvidencePath(options.ownerPath, record);"
-      ).replace(
+        "  if (process.env.SUNABOT_TEST_RESTORE_FAULT === 'before-evidence') process.kill(process.pid, 'SIGKILL');\n  const evidencePath = recoveryOwnerEvidencePath(options.ownerPath, record);",
+        "claim republish before-evidence fault"
+      );
+      source = replaceExactlyOnce(source,
         "    await handle.close();\n    handle = undefined;\n  } catch (error) {",
-        "    await handle.close();\n    handle = undefined;\n    if (process.env.SUNABOT_TEST_RESTORE_FAULT === 'after-evidence') process.kill(process.pid, 'SIGKILL');\n  } catch (error) {"
-      ).replace(
+        "    await handle.close();\n    handle = undefined;\n    if (process.env.SUNABOT_TEST_RESTORE_FAULT === 'after-evidence') process.kill(process.pid, 'SIGKILL');\n  } catch (error) {",
+        "claim republish after-evidence fault"
+      );
+      source = replaceExactlyOnce(source,
         "    await fs.link(evidencePath, options.ownerPath);\n  } catch (error) {",
-        "    await fs.link(evidencePath, options.ownerPath);\n    if (process.env.SUNABOT_TEST_RESTORE_FAULT === 'after-link') process.kill(process.pid, 'SIGKILL');\n  } catch (error) {"
-      ).replace(
+        "    await fs.link(evidencePath, options.ownerPath);\n    if (process.env.SUNABOT_TEST_RESTORE_FAULT === 'after-link') process.kill(process.pid, 'SIGKILL');\n  } catch (error) {",
+        "claim republish after-link fault"
+      );
+      source = replaceExactlyOnce(source,
         "  await syncDirectory(ownerDirectory);\n  const published = await readOwnerSnapshot(options.ownerPath);",
-        "  await syncDirectory(ownerDirectory);\n  if (process.env.SUNABOT_TEST_RESTORE_FAULT === 'after-dir-sync') process.kill(process.pid, 'SIGKILL');\n  const published = await readOwnerSnapshot(options.ownerPath);"
-      ).replace(
+        "  await syncDirectory(ownerDirectory);\n  if (process.env.SUNABOT_TEST_RESTORE_FAULT === 'after-dir-sync') process.kill(process.pid, 'SIGKILL');\n  const published = await readOwnerSnapshot(options.ownerPath);",
+        "claim republish after-dir-sync fault"
+      );
+      source = replaceExactlyOnce(source,
         "  await cleanupClaimedOwnerArtifacts({",
-        "  if (process.env.SUNABOT_TEST_RESTORE_FAULT === 'before-old-cleanup') process.kill(process.pid, 'SIGKILL');\n  await cleanupClaimedOwnerArtifacts({"
+        "  if (process.env.SUNABOT_TEST_RESTORE_FAULT === 'before-old-cleanup') process.kill(process.pid, 'SIGKILL');\n  await cleanupClaimedOwnerArtifacts({",
+        "claim republish before-old-cleanup fault"
       );
     }
     if (options.injectEvidenceFailureHook) {
-      source = source.replace(
+      source = replaceExactlyOnce(source,
         "  let evidencePath;\n  try {",
-        "  await globalThis.__SUNABOT_TEST_AFTER_OWNER_CLAIM__?.();\n  let evidencePath;\n  try {"
+        "  await globalThis.__SUNABOT_TEST_AFTER_OWNER_CLAIM__?.();\n  let evidencePath;\n  try {",
+        "owner claim evidence failure hook"
       );
     }
     if (options.injectStaleClaimPause) {
-      source = source.replace(
+      source = replaceExactlyOnce(source,
         "async function removeOwnerSnapshot(ownerPath, expectedIdentity, record) {\n  const ownerDirectory = path.dirname(ownerPath);",
         [
           "async function removeOwnerSnapshot(ownerPath, expectedIdentity, record) {",
@@ -545,7 +560,8 @@ async function createDaemonFixture(options: {
           "    await delay(Number(process.env.SUNABOT_TEST_STALE_CLAIM_DELAY_MS) || 250);",
           "  }",
           "  const ownerDirectory = path.dirname(ownerPath);"
-        ].join("\n")
+        ].join("\n"),
+        "stale owner claim pause"
       );
     }
     if (options.injectClaimRepublishFaults && !source.includes("SUNABOT_TEST_RESTORE_FAULT")) {
@@ -567,6 +583,14 @@ async function createDaemonFixture(options: {
     "console.log(`SUNABOT_ACCOUNT_RECONCILE=${JSON.stringify({schemaVersion:1,accountId:account,desiredState:'running',observedState:'running',reconcileRequired:false,lastError:null,updatedAt:new Date().toISOString()})}`);"
   ].join("\n"));
   return { root, entry: path.join(root, "tooling/runtime/account-runtime-daemon.mjs") };
+}
+
+function replaceExactlyOnce(source: string, search: string, replacement: string, label: string) {
+  const first = source.indexOf(search);
+  if (first < 0 || source.indexOf(search, first + search.length) >= 0) {
+    throw new Error(`${label} 注入锚点必须且只能出现一次。`);
+  }
+  return `${source.slice(0, first)}${replacement}${source.slice(first + search.length)}`;
 }
 
 async function createWorkspace(prefix: string) {
