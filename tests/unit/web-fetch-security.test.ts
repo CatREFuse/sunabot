@@ -6,10 +6,15 @@ import {
   parsePublicWebUrl,
   resolvePublicWebTarget
 } from "../../adapters/webfetch/urlPolicy.js";
-import { fetchSafeHtml } from "../../adapters/webfetch/safeHttpFetcher.js";
+import {
+  fetchSafeHtml,
+  WEBFETCH_CONNECT_RETRY_COUNT,
+  WEBFETCH_CONNECT_TIMEOUT_MS,
+  WEBFETCH_STATIC_TIMEOUT_MS
+} from "../../adapters/webfetch/safeHttpFetcher.js";
 import { RendererLimiter, RendererQueueFullError } from "../../apps/webfetch-renderer/rendererLimiter.js";
 import { rejectConnect } from "../../apps/webfetch-renderer/safeProxy.js";
-import type { Duplex } from "node:stream";
+import { Readable, type Duplex } from "node:stream";
 import {
   LOCAL_DATA_OUTBOUND_TURN_CONFLICT_ERROR,
   preflightProviderToolResponse
@@ -17,6 +22,40 @@ import {
 import { createTurnToolState } from "../../adapters/model/provider/turnToolState.js";
 
 describe("WebFetch URL policy", () => {
+  it("allows up to 90 seconds for the complete static fetch", () => {
+    expect(WEBFETCH_STATIC_TIMEOUT_MS).toBe(90_000);
+    expect(WEBFETCH_CONNECT_TIMEOUT_MS).toBe(10_000);
+    expect(WEBFETCH_CONNECT_RETRY_COUNT).toBe(3);
+  });
+
+  it("retries three connection failures before returning a response", async () => {
+    const request = vi.fn()
+      .mockRejectedValueOnce(new Error("ECONNRESET"))
+      .mockRejectedValueOnce(new Error("ECONNRESET"))
+      .mockRejectedValueOnce(new Error("ECONNRESET"))
+      .mockResolvedValueOnce({
+        status: 200,
+        headers: { "content-type": "text/html" },
+        body: Readable.from([Buffer.from("<html><body>ok</body></html>")])
+      });
+
+    await expect(fetchSafeHtml("https://retry.test/", {
+      lookup: async () => [{ address: "93.184.216.34", family: 4 }],
+      request
+    })).resolves.toMatchObject({ status: 200 });
+    expect(request).toHaveBeenCalledTimes(4);
+  });
+
+  it("stops after three connection retries", async () => {
+    const request = vi.fn(async () => { throw new Error("ECONNRESET"); });
+
+    await expect(fetchSafeHtml("https://retry.test/", {
+      lookup: async () => [{ address: "93.184.216.34", family: 4 }],
+      request
+    })).rejects.toMatchObject({ code: "CONTENT_EXTRACTION_FAILED" });
+    expect(request).toHaveBeenCalledTimes(4);
+  });
+
   it("rejects non-web schemes, credentials, custom ports and trailing-dot hosts", () => {
     for (const url of [
       "file:///etc/passwd",

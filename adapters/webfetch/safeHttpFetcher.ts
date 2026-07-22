@@ -10,8 +10,9 @@ import {
   type WebFetchDnsLookup
 } from "./urlPolicy.js";
 
-export const WEBFETCH_STATIC_TIMEOUT_MS = 8_000;
-export const WEBFETCH_CONNECT_TIMEOUT_MS = 5_000;
+export const WEBFETCH_STATIC_TIMEOUT_MS = 90_000;
+export const WEBFETCH_CONNECT_TIMEOUT_MS = 10_000;
+export const WEBFETCH_CONNECT_RETRY_COUNT = 3;
 export const WEBFETCH_MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 export const WEBFETCH_MAX_REDIRECTS = 5;
 
@@ -48,7 +49,7 @@ export async function fetchSafeHtml(input: string, options: SafeHtmlFetchOptions
   try {
     for (let redirect = 0; redirect <= WEBFETCH_MAX_REDIRECTS; redirect += 1) {
       const target = await resolvePublicWebTarget(current, options.lookup, signal);
-      const response = await request(target, signal);
+      const response = await requestWithRetries(target, signal, request);
       if (isRedirect(response.status)) {
         response.body.destroy();
         const location = firstHeader(response.headers.location);
@@ -89,6 +90,22 @@ export async function fetchSafeHtml(input: string, options: SafeHtmlFetchOptions
     throw new WebFetchError("CONTENT_EXTRACTION_FAILED", "Fetch failed.");
   }
   throw new WebFetchError("CONTENT_EXTRACTION_FAILED", "Fetch failed.");
+}
+
+async function requestWithRetries(
+  target: ResolvedPublicTarget,
+  signal: AbortSignal,
+  request: PinnedRequest
+) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await request(target, signal);
+    } catch (error) {
+      if (signal.aborted || error instanceof WebFetchError || attempt >= WEBFETCH_CONNECT_RETRY_COUNT) {
+        throw error;
+      }
+    }
+  }
 }
 
 export async function requestPinnedTarget(
