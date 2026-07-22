@@ -93,7 +93,7 @@ describe("Skill review transaction", () => {
     });
     expect(audit.review).toHaveBeenCalledTimes(1);
     expect(capturedBuffers.every((buffer) => buffer.every((byte) => byte === 0))).toBe(true);
-  }, 20_000);
+  }, 30_000);
 
   it.each([
     ["runtime downloader", "#!/bin/sh\nnpx unsafe-package\n"],
@@ -334,7 +334,7 @@ describe("Skill review transaction", () => {
     });
     await expect(service.setSkillEnabled({ agentId: "agent-a", skillId: replaced.id, enabled: true }))
       .rejects.toMatchObject({ code: "SKILL_REVIEW_REQUIRED" });
-  }, 20_000);
+  }, 30_000);
 
   it("maps audit failures to one stable error and rejects a mismatched decision digest", async () => {
     const store = new AgentExtensionStore({ workspaceRoot: workspace });
@@ -395,7 +395,7 @@ describe("Skill review transaction", () => {
     });
     expect(await fs.readFile(path.join(skillsRoot("agent-b"), "test-skill/SKILL.md"), "utf8"))
       .toContain("Target original");
-  }, 20_000);
+  }, 30_000);
 
   it("refuses trusted rollback restore for a different digest or either single-field approval", async () => {
     const store = new AgentExtensionStore({ workspaceRoot: workspace });

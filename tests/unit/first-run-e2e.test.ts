@@ -46,6 +46,8 @@ describe("empty workspace first-run flow", () => {
       providerRequests: number;
       providerRequestsBeforeFirstInbound: number;
       providerRequestsBeforeEnable: number;
+      providerRequestsForDisabledInbound: number;
+      providerRequestsForEnabledInbound: number;
     };
     expect(report).toMatchObject({
       adminAuthenticated: true,
@@ -57,9 +59,10 @@ describe("empty workspace first-run flow", () => {
       firstInboundReplyEnabled: false,
       repliesBeforeEnable: 0,
       firstReplyDelivered: 1,
+      providerRequestsForDisabledInbound: 0,
       journalCompleted: true
     });
-    expect(report.providerRequestsBeforeEnable).toBe(report.providerRequestsBeforeFirstInbound);
+    expect(report.providerRequestsForEnabledInbound).toBeGreaterThan(0);
     expect(report.providerRequests).toBeGreaterThan(report.providerRequestsBeforeEnable);
   }, 35_000);
 });

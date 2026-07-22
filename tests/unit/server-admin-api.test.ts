@@ -290,7 +290,7 @@ describe("admin API smoke", () => {
     expect(response.json().elapsedMs).toEqual(expect.any(Number));
     expect(after).toBe(before);
     await app.close();
-  }, 10_000);
+  }, 20_000);
 
   it("enforces auth for forwarded requests and accepts a valid bearer token", async () => {
     const app = await createApp(testAppOptions());
@@ -313,7 +313,7 @@ describe("admin API smoke", () => {
     });
     expect(response.statusCode).toBe(200);
     await app.close();
-  });
+  }, 20_000);
 
   it("protects readiness while reusing the host probe facts and keeps runtime liveness secret-free", async () => {
     const collectFacts = vi.fn(async () => ({

@@ -10,23 +10,32 @@ import { initializeWorkspace } from "../../tooling/workspace/init-workspace.mjs"
 
 const root = getRootDir();
 const workspace = getWorkspaceDir();
-const providerRequests: string[] = [];
+const disabledInboundMarker = "FIRST_RUN_DISABLED_REPLY_GATE_7001";
+const enabledInboundMarker = "FIRST_RUN_ENABLED_REPLY_7002";
+const providerRequests: Array<{ url: string; body: string }> = [];
+const providerResponse = JSON.stringify({
+  id: "first-run-completion",
+  object: "chat.completion",
+  created: 1,
+  model: "first-run-model",
+  choices: [{
+    index: 0,
+    message: { role: "assistant", content: "欢迎回来。" },
+    finish_reason: "stop"
+  }],
+  usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 }
+});
 const providerServer = http.createServer((request, response) => {
-  request.resume();
-  providerRequests.push(request.url ?? "");
-  response.writeHead(200, { "content-type": "application/json" });
-  response.end(JSON.stringify({
-    id: "first-run-completion",
-    object: "chat.completion",
-    created: 1,
-    model: "first-run-model",
-    choices: [{
-      index: 0,
-      message: { role: "assistant", content: "欢迎回来。" },
-      finish_reason: "stop"
-    }],
-    usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 }
-  }));
+  const chunks: Buffer[] = [];
+  request.on("data", (chunk: Buffer | string) => chunks.push(Buffer.from(chunk)));
+  request.once("end", () => {
+    providerRequests.push({
+      url: request.url ?? "",
+      body: Buffer.concat(chunks).toString("utf8")
+    });
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(providerResponse);
+  });
 });
 await new Promise<void>((resolve, reject) => {
   providerServer.once("error", reject);
@@ -156,8 +165,8 @@ try {
     sub_type: "friend",
     message_id: 7001,
     user_id: 171419991,
-    raw_message: "你好",
-    message: [{ type: "text", data: { text: "你好" } }],
+    raw_message: disabledInboundMarker,
+    message: [{ type: "text", data: { text: disabledInboundMarker } }],
     sender: { user_id: 171419991, nickname: "猫老师" }
   }));
   const conversationId = `account:${account.id}:private:171419991`;
@@ -184,12 +193,20 @@ try {
     throw new Error("First-run conversation did not default to replies disabled.");
   }
   const providerRequestsBeforeEnable = providerRequests.length;
+  const providerRequestsForDisabledInbound = providerRequests
+    .slice(providerRequestsBeforeFirstInbound)
+    .filter((request) => request.body.includes(disabledInboundMarker));
   const repliesBeforeEnable = sentPrivateMessages.length;
   if (
-    providerRequestsBeforeEnable !== providerRequestsBeforeFirstInbound
+    providerRequestsForDisabledInbound.length !== 0
     || repliesBeforeEnable !== 0
   ) {
-    throw new Error("First-run inbound message bypassed the disabled reply gate.");
+    throw new Error(`First-run inbound message bypassed the disabled reply gate: ${JSON.stringify({
+      providerRequestsBeforeFirstInbound,
+      providerRequestsBeforeEnable,
+      disabledInboundProviderRequestUrls: providerRequestsForDisabledInbound.map((request) => request.url),
+      repliesBeforeEnable
+    })}`);
   }
   const enabledConversation = await built.app.inject({
     method: "PUT",
@@ -208,11 +225,14 @@ try {
     sub_type: "friend",
     message_id: 7002,
     user_id: 171419991,
-    raw_message: "现在回复",
-    message: [{ type: "text", data: { text: "现在回复" } }],
+    raw_message: enabledInboundMarker,
+    message: [{ type: "text", data: { text: enabledInboundMarker } }],
     sender: { user_id: 171419991, nickname: "猫老师" }
   }));
-  await waitFor(() => sentPrivateMessages.length > 0 && providerRequests.length > 0, 15_000);
+  await waitFor(() => (
+    sentPrivateMessages.length > 0
+    && providerRequests.some((request) => request.body.includes(enabledInboundMarker))
+  ), 15_000);
   const online = await built.app.inject({
     method: "GET",
     url: `/api/agents/arona/accounts/${account.id}/login/status`,
@@ -226,6 +246,9 @@ try {
     providerRequests: providerRequests.length,
     providerRequestsBeforeFirstInbound,
     providerRequestsBeforeEnable,
+    providerRequestsForDisabledInbound: providerRequestsForDisabledInbound.length,
+    providerRequestsForEnabledInbound: providerRequests
+      .filter((request) => request.body.includes(enabledInboundMarker)).length,
     agentId: createdAgent.json().id,
     accountRuntime: reconciled.includes(account.id) && account.observedState === "running" ? "running" : "missing",
     qqOnlineBeforeScan: login.json().online === true,

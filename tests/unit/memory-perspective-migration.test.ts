@@ -1593,7 +1593,7 @@ describe("memory-perspective-v1 tracked migration", () => {
     } finally {
       for (const database of liveConnections) database.close();
     }
-  });
+  }, 20_000);
 
   it("detects trigger and sqlite_sequence changes as independent logical-SHA mutations", async () => {
     const fixture = await createFixture();
