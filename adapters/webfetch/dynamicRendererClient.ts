@@ -1,6 +1,5 @@
 import {
   WebFetchError,
-  type DynamicRenderResult,
   type DynamicRendererPort
 } from "../../services/webfetch/public.js";
 import { resolvePublicWebTarget } from "./urlPolicy.js";

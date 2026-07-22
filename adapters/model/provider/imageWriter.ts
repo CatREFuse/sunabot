@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { nanoid } from "nanoid";
-import type { ImageResult } from "../../../src/types.js";
-import { getWorkspacePath } from "../../../src/config.js";
+import type { ImageResult } from "../../../packages/contracts/media/media.js";
+import { getWorkspacePath } from "../../../packages/platform/projectPaths.js";
 import { WORKSPACE_LAYOUT } from "../../../packages/platform/workspaceLayout.js";
 import { currentAgentRuntimeConfig } from "../../../packages/platform/runtimeAgentContext.js";
 import type { GeneratedImageWriterPort } from "./contracts.js";

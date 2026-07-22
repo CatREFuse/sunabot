@@ -1,4 +1,5 @@
-import type { ChatMessage, ProviderConfig } from "../../../src/types.js";
+import type { ProviderConfig } from "../../../packages/contracts/admin/public.js";
+import type { ChatMessage } from "../../../packages/contracts/model/modelGateway.js";
 import type { RenderedPromptRequest } from "../../../services/agent/promptSystem.js";
 import { isRecord } from "./valueUtils.js";
 

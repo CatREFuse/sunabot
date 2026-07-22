@@ -1,5 +1,6 @@
 import type { ProviderBashOptions } from "../../adapters/model/openaiProvider.js";
 import type { MessageLookupContextV1, MessagingPort } from "../../packages/contracts/messaging/messages.js";
+import type { AttachmentService } from "../../services/media/attachments/service.js";
 import { inboundImageUrls, replaceInboundImageUrls } from "../../packages/contracts/messaging/messages.js";
 import { isAdminSender, isReplySenderAllowed } from "../../services/messaging/replySenderPolicy.js";
 import { generateImgMediaHandle, type GenerateImgReferenceContext } from "../../services/tools/generateImgTool.js";
@@ -8,8 +9,7 @@ import {
 } from "../../services/tools/bashAudit.js";
 import type { RuntimeToolCapabilityResolver } from "../../services/tools/bashCapability.js";
 import { resolveProjectPath } from "../config.js";
-import type { SunaRuntime } from "../runtime.js";
-import type { AppConfig, ChatMessage, ConversationMessageQuote, ParsedIncomingMessage } from "../types.js";
+import type { AppConfig, ChatMessage, ConversationMessageQuote, ConversationRecord, ParsedIncomingMessage } from "../types.js";
 import { clampInteger, estimatePromptTokens, isAdminUserId, toContextChatMessage } from "./conversationMemoryHelpers.js";
 import {
   conversationMessageAttachments,
@@ -24,10 +24,27 @@ import {
   DEFAULT_CONTEXT_MESSAGE_LIMIT,
   MAX_HISTORY_CONTEXT_IMAGES,
   MAX_STORED_CONVERSATION_MESSAGES,
-  RECENT_CONTEXT_TOKEN_BUDGET
+  RECENT_CONTEXT_TOKEN_BUDGET,
+  type AdminIdentity,
+  type RuntimeBashAuditPort,
+  type RuntimeConfigPort
 } from "./runtimeContracts.js";
 
-type RuntimeHost = SunaRuntime;
+interface RuntimeReplyContextHost extends RuntimeConfigPort {
+  readonly configEpoch: number;
+  readonly conversationRecords: ReadonlyMap<string, ConversationRecord>;
+  readonly attachmentService: Pick<AttachmentService, "cache">;
+  readonly bashAudit?: RuntimeBashAuditPort;
+  adminIdentity(): AdminIdentity;
+  contextMessageLimit(): number;
+  loadMessageDetails(
+    gateway: MessagingPort,
+    messageId: number,
+    context?: MessageLookupContextV1
+  ): ReturnType<MessagingPort["getMessage"]>;
+}
+
+type RuntimeHost = RuntimeReplyContextHost;
 
 export async function runtime_attachReplyReferences(
   this: RuntimeHost,
@@ -214,7 +231,7 @@ export async function runtime_resolveProviderBashHandle(
 ): Promise<ProviderBashOptions | undefined> {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const epoch = this.configEpoch;
-    const config = freezeConfigSnapshot(this.config);
+    const config = deepFreeze(structuredClone(this.config));
     const auditPort = this.bashAudit;
     const candidate = resolveProviderBashCandidate(config, incoming, promptOverride);
     if (!candidate || !auditPort || !capabilityResolver) return undefined;
@@ -313,10 +330,6 @@ function resolveProviderBashCandidate(
     approvalContext,
     ...(confirmedApprovalId ? { confirmedApprovalId } : {})
   });
-}
-
-function freezeConfigSnapshot(config: AppConfig): Readonly<AppConfig> {
-  return deepFreeze(structuredClone(config));
 }
 
 function deepFreeze<T>(value: T): T {

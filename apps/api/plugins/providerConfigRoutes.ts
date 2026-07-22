@@ -4,8 +4,8 @@ import { discoverProviderModels, probeProviderMultimodal } from "../../../adapte
 import { ConfigService, validateProviderDraft } from "../../../src/admin/configService.js";
 import type { CodexAuthService } from "../../../src/admin/codexAuth.js";
 import { AdminApiError, badRequest } from "../../../src/admin/errors.js";
-import { IMAGE_MODEL_CATALOG, MODEL_CATALOG, REASONING_EFFORTS } from "../../../src/admin/models.js";
-import type { ProviderConfig } from "../../../src/types.js";
+import { IMAGE_MODEL_CATALOG, MODEL_CATALOG, REASONING_EFFORTS } from "../../../packages/contracts/admin/models.js";
+import type { ProviderConfig } from "../../../packages/contracts/admin/public.js";
 import { requestAgentId } from "../requestAgentId.js";
 
 export type ProviderTestRunner = (provider: ProviderConfig) => Promise<Record<string, unknown>>;

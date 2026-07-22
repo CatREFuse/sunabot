@@ -23,4 +23,4 @@
 
 固定边界：管理台为宿主回环 `127.0.0.1:8787`，OneBot 为专用 `8788` listener，各账号 NapCat WebUI 从宿主回环 `127.0.0.1:6099` 起分配独立端口。NapCat 始终是独立 Docker 服务，跨组件媒体默认使用 `base64://`。
 
-`macos.mjs` 只做统一 launcher 的兼容委托。发行包包含统一 launcher、Docker Compose、workspace 初始化与 Native Core 进程脚本，不再携带 Native NapCat 组件、旧 systemd unit 或平行 Compose 入口。
+发行包包含统一 launcher、Docker Compose、workspace 初始化与 Native Core 进程脚本，不携带 Native NapCat 组件、旧 systemd unit 或平行 Compose 入口。

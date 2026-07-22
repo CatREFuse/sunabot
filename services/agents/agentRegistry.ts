@@ -4,14 +4,13 @@ import { nanoid } from "nanoid";
 import { ServiceError } from "../../packages/contracts/errors/serviceError.js";
 import { inspectMultiAgentMigrationGate, validateMultiAgentWorkspacePath } from "../../packages/platform/multiAgentMigrationGate.mjs";
 import { WORKSPACE_LAYOUT, workspaceRelativeReference } from "../../packages/platform/workspaceLayout.js";
-import { getWorkspacePath } from "../../src/config.js";
 import {
   DEFAULT_REPLY_DEBOUNCE_MS,
   MAX_REPLY_DEBOUNCE_MS,
   MIN_REPLY_DEBOUNCE_MS,
   type AppConfig,
   type BotConfig
-} from "../../src/types.js";
+} from "../../packages/contracts/admin/public.js";
 import type {
   AgentAccountRegistryRow,
   AgentRegistryRepository,
@@ -82,7 +81,7 @@ export interface AgentAvatarInput {
 }
 
 export interface AgentRegistryOptions {
-  workspaceRoot?: string;
+  workspaceRoot: string;
   store: AgentRegistryRepository;
   allowUnmarkedMigration?: boolean;
   workspaceGateAlreadyChecked?: boolean;
@@ -97,7 +96,7 @@ export class AgentRegistry {
   private readonly now: () => Date;
 
   constructor(private sharedConfig: AppConfig, options: AgentRegistryOptions) {
-    this.workspaceRoot = options.workspaceRoot ?? getWorkspacePath(WORKSPACE_LAYOUT.agentRoot);
+    this.workspaceRoot = options.workspaceRoot;
     this.store = options.store;
     this.allowUnmarkedMigration = options.allowUnmarkedMigration === true;
     this.workspaceGateAlreadyChecked = options.workspaceGateAlreadyChecked === true;
@@ -119,7 +118,7 @@ export class AgentRegistry {
     }
     await fs.mkdir(this.workspaceRoot, { recursive: true, mode: 0o700 });
     await this.ensureDefaultAgent();
-    await ensureSharedSystemPrompts(this.sharedConfig);
+    await ensureSharedSystemPrompts(this.sharedConfig, this.workspaceDir());
   }
 
   updateSharedConfig(config: AppConfig) {
@@ -305,7 +304,7 @@ export class AgentRegistry {
     };
     try {
       this.store.createAgentAccount(account);
-      await ensureAccountRuntimeDirectories(account.id);
+      await ensureAccountRuntimeDirectories(this.workspaceDir(), account.id);
       return account;
     } catch (error) {
       this.store.deleteAgentAccount(account.id);
@@ -358,7 +357,7 @@ export class AgentRegistry {
     if (account.id === "primary") conflict("PRIMARY_ACCOUNT_REQUIRED", "主账号不能移除。");
     this.store.deleteAgentAccount(account.id);
     await fs.writeFile(
-      path.join(getWorkspacePath(WORKSPACE_LAYOUT.napcatAccounts, account.id), ".remove-on-stop"),
+      path.join(this.workspaceDir(), WORKSPACE_LAYOUT.napcatAccounts, account.id, ".remove-on-stop"),
       `${this.now().toISOString()}\n`,
       { encoding: "utf8", mode: 0o600 }
     );
@@ -376,7 +375,7 @@ export class AgentRegistry {
         updatedAt: this.now().toISOString()
       });
       await fs.writeFile(
-        path.join(getWorkspacePath(WORKSPACE_LAYOUT.napcatAccounts, account.id), ".remove-on-stop"),
+        path.join(this.workspaceDir(), WORKSPACE_LAYOUT.napcatAccounts, account.id, ".remove-on-stop"),
         `${this.now().toISOString()}\n`,
         { encoding: "utf8", mode: 0o600 }
       );
@@ -546,16 +545,20 @@ export class AgentRegistry {
           updatedAt: createdAt
         });
       }
-      if (this.allowUnmarkedMigration) await migrateLegacyPrimaryAccountRuntime();
-      await ensureAccountRuntimeDirectories("primary");
+      if (this.allowUnmarkedMigration) await migrateLegacyPrimaryAccountRuntime(this.workspaceDir());
+      await ensureAccountRuntimeDirectories(this.workspaceDir(), "primary");
       const primary = this.store.readAgentAccount("primary");
       if (primary && !primary.qqId) {
-        const qqId = await inferPrimaryAccountQqId();
+        const qqId = await inferPrimaryAccountQqId(this.workspaceDir());
         if (qqId) {
           this.store.updateAgentAccount({ ...primary, qqId, updatedAt: this.now().toISOString() });
         }
       }
     }
+  }
+
+  private workspaceDir() {
+    return path.resolve(this.workspaceRoot, "../..");
   }
 
   private async writeInitialWorkspace(directory: string, manifest: AgentManifest, avatar?: AgentAvatarInput) {

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { AppConfig } from "../../src/types.js";
-import { resolveProjectPath } from "../../src/config.js";
+import type { AppConfig } from "../../packages/contracts/admin/public.js";
+import { resolveProjectPath } from "../../packages/platform/projectPaths.js";
 import { memoryRepository, type MemoryDataSource } from "../memory/public.js";
 import { formatModelCurrentTime } from "./modelTime.js";
 

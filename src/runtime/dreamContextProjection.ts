@@ -301,7 +301,7 @@ function projectTasks(value: unknown, identities: IdentityIndex, seed: string) {
       name: optionalBoundedText(task.name ?? task.title, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.label, identities),
       enabled: typeof task.enabled === "boolean" ? task.enabled : true,
       status,
-      schedule: projectTaskSchedule(task.schedule, identities),
+      schedule: projectTaskSchedule(task.schedule),
       context: optionalBoundedText(task.context, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.taskContext, identities),
       nextRunAt: nullableBoundedText(task.nextRunAt, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.timestamp),
       lastScheduledAt: nullableBoundedText(task.lastScheduledAt, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.timestamp),
@@ -310,7 +310,7 @@ function projectTasks(value: unknown, identities: IdentityIndex, seed: string) {
   });
 }
 
-function projectTaskSchedule(value: unknown, identities: IdentityIndex) {
+function projectTaskSchedule(value: unknown) {
   const schedule = recordValue(value);
   if (schedule.kind === "cron") {
     return compactObject({

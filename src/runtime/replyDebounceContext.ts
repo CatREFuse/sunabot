@@ -2,12 +2,14 @@ import type {
   GroupThreadContextSnapshotV1,
   UserGroupOrchestratorResultV1
 } from "../../packages/contracts/session/runtimeMessages.js";
+import type { AttachmentService } from "../../services/media/attachments/service.js";
 import type { AttachmentModelContext } from "../../services/media/attachments/types.js";
-import type { SunaRuntime } from "../runtime.js";
-import type { ParsedIncomingMessage } from "../types.js";
+import type { ConversationRecord, ParsedIncomingMessage } from "../types.js";
 import { inboundImageUrls } from "../../packages/contracts/messaging/messages.js";
 import { isAdminUserId, toContextChatMessage } from "./conversationMemoryHelpers.js";
+import type { PrepareGroupThreadContextOptions } from "./groupThreadPipeline.js";
 import { conversationRecordId } from "./messagingAttachmentHelpers.js";
+import type { AdminIdentity } from "./runtimeContracts.js";
 
 export interface ReplyDebounceContextOptions {
   captureSequence?: number;
@@ -18,16 +20,17 @@ export interface ReplyDebounceContextOptions {
   skipGroupThreadPreparation?: boolean;
 }
 
+interface ReplyDebounceContextHost { readonly attachmentService: Pick<AttachmentService, "buildModelContext">; readonly conversationRecords: ReadonlyMap<string, ConversationRecord>; adminIdentity(): AdminIdentity; prepareGroupThreadContext(incoming: ParsedIncomingMessage, options: PrepareGroupThreadContextOptions): Promise<GroupThreadContextSnapshotV1 | undefined>; selectRelevantAttachments(incoming: ParsedIncomingMessage, query: string, contextThroughSequence?: number, contextFromSequence?: number): Parameters<AttachmentService["buildModelContext"]>[0]; }
+
 export function resolveReplyContextCaptureSequence(
   captureSequence: unknown,
   contextThroughSequence: unknown
 ): number | undefined {
-  if (typeof contextThroughSequence === "number" && Number.isFinite(contextThroughSequence)) {
-    return contextThroughSequence + 1;
-  }
-  return typeof captureSequence === "number" && Number.isFinite(captureSequence)
-    ? captureSequence
-    : undefined;
+  return typeof contextThroughSequence === "number" && Number.isFinite(contextThroughSequence)
+    ? contextThroughSequence + 1
+    : typeof captureSequence === "number" && Number.isFinite(captureSequence)
+      ? captureSequence
+      : undefined;
 }
 
 export class ReplyDebounceContext {
@@ -36,14 +39,14 @@ export class ReplyDebounceContext {
   private readonly senderOnlyGroupBatch: boolean;
 
   constructor(
-    private readonly host: SunaRuntime,
+    private readonly host: ReplyDebounceContextHost,
     private readonly incoming: ParsedIncomingMessage,
     private readonly options: ReplyDebounceContextOptions
   ) {
     this.historyCaptureSequence = validSequence(options.captureSequence);
-    this.senderOnlyGroupBatch = incoming.scope !== "private"
-      && validSequence(options.captureSequence) != null
-      && validSequence(options.contextThroughSequence) != null;
+    const contextThroughSequence = validSequence(options.contextThroughSequence);
+    this.senderOnlyGroupBatch = incoming.scope !== "private" &&
+      this.historyCaptureSequence != null && contextThroughSequence != null;
     this.contextCaptureSequence = resolveReplyContextCaptureSequence(
       options.captureSequence,
       options.contextThroughSequence

@@ -87,14 +87,6 @@ export class CodexToolRunner implements CodexRunner {
   }
 }
 
-export function runCodexTool(
-  input: CodexToolInput,
-  context: CodexToolExecutionContext,
-  runner: CodexRunner = new CodexToolRunner()
-) {
-  return runner.run(input, context);
-}
-
 export interface CodexProcessSupervisorOptions {
   spawnProcess?: CodexSpawn;
   signalProcessGroup?: CodexProcessSignal;

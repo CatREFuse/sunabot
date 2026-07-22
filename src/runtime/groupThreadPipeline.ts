@@ -1,4 +1,4 @@
-import type { ConversationMessageRecord, ParsedIncomingMessage } from "../types.js";
+import type { ConversationMessageRecord, ConversationRecord, ParsedIncomingMessage, ReasoningEffort } from "../types.js";
 import { applicationDataStore } from "../../adapters/sqlite/applicationDataStore.js";
 import {
   applyGroupThreadContext,
@@ -11,13 +11,12 @@ import {
   type GroupThreadStateV1
 } from "../../services/conversations/groupThreadContext.js";
 import type { RenderedPromptRequest } from "../../services/agent/promptSystem.js";
-import { appendRequestLog } from "../requestLog.js";
+import { appendRequestLog } from "../../adapters/observability/requestLog.js";
 import { conversationRecordId } from "./messagingAttachmentHelpers.js";
 import { parseGroupContextMetadataValue } from "./conversationMemoryHelpers.js";
 import { errorMessage, sanitizeErrorDetail, withAbortTimeout } from "./infrastructure.js";
 import { formatModelTimestamp, systemModelTimeZone } from "../../services/agent/modelTime.js";
-
-import type { SunaRuntime } from "../runtime.js";
+import type { RuntimePromptPort } from "./runtimeContracts.js";
 
 const INITIAL_THREAD_MESSAGE_LIMIT = 64;
 const INCREMENTAL_THREAD_MESSAGE_LIMIT = 64;
@@ -29,6 +28,8 @@ const PROMPT_PARTICIPANT_LIMIT = 16;
 const PROMPT_THREAD_MESSAGE_LIMIT = 16;
 const GROUP_THREAD_TIMEOUT_MS = 5_000;
 const GROUP_THREAD_PROMPT_REVISION = "orchestrator.group-thread:v1";
+
+interface GroupThreadRuntimeHost extends Omit<RuntimePromptPort, "getProvider"> { readonly conversationRecords: ReadonlyMap<string, ConversationRecord>; buildRecentContextMessages(incoming: ParsedIncomingMessage, captureSequence?: number, messageLimit?: number): Array<{ content: string }>; getProviderForModel(model: string, requestedEffort?: ReasoningEffort): ReturnType<RuntimePromptPort["getProvider"]>; }
 
 export interface PrepareGroupThreadContextOptions {
   captureSequence?: number;
@@ -58,7 +59,7 @@ export interface GroupThreadPromptContextV1 extends Record<string, unknown> {
 }
 
 export async function runtime_prepareGroupThreadContext(
-  this: SunaRuntime,
+  this: GroupThreadRuntimeHost,
   incoming: ParsedIncomingMessage,
   options: PrepareGroupThreadContextOptions = {}
 ): Promise<GroupThreadContextSnapshotV1 | undefined> {
@@ -273,7 +274,13 @@ export function groupThreadPromptContext(
 }
 
 export function serializeGroupThreadPromptContext(context: GroupThreadPromptContextV1) {
-  return safeDeveloperJson(context);
+  return JSON.stringify(context).replace(/[<>&\u2028\u2029]/gu, (character) => {
+    if (character === "<") return "\\u003c";
+    if (character === ">") return "\\u003e";
+    if (character === "&") return "\\u0026";
+    if (character === "\u2028") return "\\u2028";
+    return "\\u2029";
+  });
 }
 
 export function currentPromptInputMessage(
@@ -295,14 +302,11 @@ export function currentPromptInputMessage(
 }
 
 export class RuntimeGroupThreads {
-  constructor(private readonly host: SunaRuntime) {}
+  readonly prepareGroupThreadContext: OmitThisParameter<typeof runtime_prepareGroupThreadContext>;
+  readonly promptContext = groupThreadPromptContext;
 
-  prepareGroupThreadContext(...args: Parameters<typeof runtime_prepareGroupThreadContext>) {
-    return runtime_prepareGroupThreadContext.call(this.host, ...args);
-  }
-
-  promptContext(...args: Parameters<typeof groupThreadPromptContext>) {
-    return groupThreadPromptContext(...args);
+  constructor(host: GroupThreadRuntimeHost) {
+    this.prepareGroupThreadContext = runtime_prepareGroupThreadContext.bind(host);
   }
 }
 
@@ -474,16 +478,6 @@ function compactGroupThreadSnapshot(
         relatedThreadIds: assignment.relatedThreadIds.filter((threadId) => retainedThreadIds.has(threadId))
       }))
   };
-}
-
-function safeDeveloperJson(value: unknown) {
-  return JSON.stringify(value).replace(/[<>&\u2028\u2029]/gu, (character) => {
-    if (character === "<") return "\\u003c";
-    if (character === ">") return "\\u003e";
-    if (character === "&") return "\\u0026";
-    if (character === "\u2028") return "\\u2028";
-    return "\\u2029";
-  });
 }
 
 async function logGroupThreadFailure(

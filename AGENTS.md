@@ -44,7 +44,7 @@
 | 会话顺序、异步任务、outbox、断线恢复 | `services/sessions/` |
 | 记忆、用户画像、长期记忆、压缩 | `services/memory/`, `adapters/sqlite/applicationDataStore.ts` |
 | 知识库、BM25、资料管理 | `services/knowledge/`, `services/tools/knowledgeSearchTool.ts`, `apps/api/plugins/knowledgeRoutes.ts`, `apps/admin-web/src/views/KnowledgeView.vue` |
-| 请求日志、会话记录、图片历史 | `adapters/sqlite/applicationDataStore.ts`, `adapters/sqlite/modelCallStore.ts`, `src/requestLog.ts`, `apps/api/plugins/conversationRoutes.ts`, `apps/api/plugins/mediaRoutes.ts` |
+| 请求日志、会话记录、图片历史 | `adapters/observability/requestLog.ts`, `adapters/sqlite/applicationDataStore.ts`, `adapters/sqlite/modelCallStore.ts`, `apps/api/plugins/conversationRoutes.ts`, `apps/api/plugins/mediaRoutes.ts` |
 | 文件读取、PDF、Office、附件缓存 | `services/media/attachments/` |
 | Provider、工具调用、Codex、联网搜索 | `adapters/model/openaiProvider.ts`, `services/tools/`, `adapters/codex/codexTool.ts`, `adapters/model/webSearchTool.ts` |
 | 人格和最终提示词 | `services/agent/` |

@@ -10,10 +10,10 @@ import { isTrustedQqFakeIp } from "../../../adapters/onebot/qqMedia.js";
 import { WORKSPACE_LAYOUT } from "../../../packages/platform/workspaceLayout.js";
 import { runWithAgentRuntimeContext } from "../../../packages/platform/runtimeAgentContext.js";
 import { AdminApiError, badRequest } from "../../../src/admin/errors.js";
-import { getWorkspacePath } from "../../../src/config.js";
-import { readModelCallStats, readRequestLogPage, readTokenUsageSummary, requestLogPath } from "../../../src/requestLog.js";
+import { getWorkspacePath } from "../../../packages/platform/projectPaths.js";
+import { readModelCallStats, readRequestLogPage, readTokenUsageSummary, requestLogPath } from "../../../adapters/observability/requestLog.js";
 import type { SunaRuntime } from "../../../src/runtime.js";
-import type { AppConfig, BotToolSettings, ImageHistoryRecord } from "../../../src/types.js";
+import type { AppConfig, BotToolSettings, ImageHistoryRecord } from "../../../packages/contracts/admin/public.js";
 import { requestAgentId } from "../requestAgentId.js";
 
 export interface MediaRouteOptions {

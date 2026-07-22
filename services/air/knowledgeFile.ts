@@ -1,8 +1,8 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resolveProjectPath } from "../../src/config.js";
-import type { AppConfig } from "../../src/types.js";
+import { resolveProjectPath } from "../../packages/platform/projectPaths.js";
+import type { AppConfig } from "../../packages/contracts/admin/public.js";
 import { AIR_KNOWLEDGE_FILE } from "./contracts.js";
 
 export const AIR_KNOWLEDGE_MAX_BYTES = 64 * 1024;

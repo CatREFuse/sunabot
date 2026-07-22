@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { applicationDataStore, closeApplicationDataStores } from "../../adapters/sqlite/applicationDataStore.js";
-import { appendRequestLog, readModelCallStats, readRequestLogPage, readTokenUsageSummary } from "../../src/requestLog.js";
+import { appendRequestLog, readModelCallStats, readRequestLogPage, readTokenUsageSummary } from "../../adapters/observability/requestLog.js";
 
 afterEach(() => {
   vi.useRealTimers();

@@ -45,7 +45,7 @@ import {
   createTurnToolState,
   withTurnToolState
 } from "./turnToolState.js";
-import { preflightProviderToolResponse } from "./toolResponsePreflight.js";
+import { processProviderToolRound } from "./toolRound.js";
 
 export async function completeProviderTurn(
   context: ProviderAdapterContext,
@@ -131,18 +131,17 @@ async function completeOpenAIResponses(
     }
 
     const siblingText = extractProviderText(response);
-    const companion = context.toolExecutor.companionTurn(toolCalls, siblingText, options, tools, state);
-    if (companion) return companion;
-    const preflight = preflightProviderToolResponse(toolCalls, siblingText, options, state);
-    if (!preflight.rejected) {
-      const deferred = context.toolExecutor.deferredTurn(toolCalls, options, tools, state);
-      if (deferred) return deferred;
-      const noReply = context.toolExecutor.noReplyTurn(toolCalls, options, tools, state);
-      if (noReply) return noReply;
-      if (preflight.emitAssistantText) await emitIntermediateAssistantText(response, options);
-    }
-    const outputs = preflight.rejected ?? await context.toolExecutor.execute(toolCalls, options, tools, state);
-    input.push(...extractResponseOutput(response), ...outputs);
+    const toolRound = await processProviderToolRound({
+      calls: toolCalls,
+      siblingText,
+      options,
+      definitions: tools,
+      state,
+      executor: context.toolExecutor,
+      emitAssistantText: () => emitIntermediateAssistantText(response, options)
+    });
+    if (toolRound.terminal) return toolRound.terminal;
+    input.push(...extractResponseOutput(response), ...toolRound.outputs);
   }
 
   throw toolCallLimitError(maxToolCalls);
@@ -273,18 +272,17 @@ async function completeCodexResponses(
 
     const streamText = extractResponsesTextFromSse(text);
     const siblingText = streamText || extractResponsesText(payload);
-    const companion = context.toolExecutor.companionTurn(toolCalls, siblingText, options, tools, state);
-    if (companion) return companion;
-    const preflight = preflightProviderToolResponse(toolCalls, siblingText, options, state);
-    if (!preflight.rejected) {
-      const deferred = context.toolExecutor.deferredTurn(toolCalls, options, tools, state);
-      if (deferred) return deferred;
-      const noReply = context.toolExecutor.noReplyTurn(toolCalls, options, tools, state);
-      if (noReply) return noReply;
-      if (preflight.emitAssistantText) await emitIntermediateAssistantText(payload, options, streamText);
-    }
-    const outputs = preflight.rejected ?? await context.toolExecutor.execute(toolCalls, options, tools, state);
-    input.push(...extractResponseOutput(payload), ...outputs);
+    const toolRound = await processProviderToolRound({
+      calls: toolCalls,
+      siblingText,
+      options,
+      definitions: tools,
+      state,
+      executor: context.toolExecutor,
+      emitAssistantText: () => emitIntermediateAssistantText(payload, options, streamText)
+    });
+    if (toolRound.terminal) return toolRound.terminal;
+    input.push(...extractResponseOutput(payload), ...toolRound.outputs);
   }
 
   throw toolCallLimitError(maxToolCalls);
@@ -386,25 +384,24 @@ async function completeChatCompletions(
     }
 
     const siblingText = choice.content?.trim() ?? "";
-    const companion = context.toolExecutor.companionTurn(calls, siblingText, options, definitions, state);
-    if (companion) return companion;
-    const preflight = preflightProviderToolResponse(calls, siblingText, options, state);
-    if (!preflight.rejected) {
-      const deferred = context.toolExecutor.deferredTurn(calls, options, definitions, state);
-      if (deferred) return deferred;
-      const noReply = context.toolExecutor.noReplyTurn(calls, options, definitions, state);
-      if (noReply) return noReply;
-      if (siblingText && options.onAssistantText && preflight.emitAssistantText) {
-        await options.onAssistantText(siblingText, "text");
+    const toolRound = await processProviderToolRound({
+      calls,
+      siblingText,
+      options,
+      definitions,
+      state,
+      executor: context.toolExecutor,
+      emitAssistantText: async () => {
+        if (siblingText && options.onAssistantText) await options.onAssistantText(siblingText, "text");
       }
-    }
+    });
+    if (toolRound.terminal) return toolRound.terminal;
     messages.push({
       role: "assistant",
       content: choice.content ?? null,
       tool_calls: choice.tool_calls
     });
-    const outputs = preflight.rejected ?? await context.toolExecutor.execute(calls, options, definitions, state);
-    messages.push(...outputs.map((output) => ({
+    messages.push(...toolRound.outputs.map((output) => ({
       role: "tool",
       tool_call_id: output.call_id,
       content: output.output

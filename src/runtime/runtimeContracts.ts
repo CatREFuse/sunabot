@@ -1,113 +1,29 @@
-import fs from "node:fs";
-import fsp from "node:fs/promises";
-import path from "node:path";
-import { nanoid } from "nanoid";
-import {
-  type AgentToolName,
-  AppConfig,
-  ChatMessage,
-  ConversationMessageQuote,
-  ConversationRecord,
-  ImageResult,
-  ParsedIncomingMessage,
-  ReasoningEffort
-} from "../types.js";
-import { resolveModelReasoningEffort } from "../admin/models.js";
-import { AttachmentService } from "../../services/media/attachments/service.js";
+import type { AgentToolName, AppConfig, ConversationRecord, ParsedIncomingMessage } from "../types.js";
+import type { AttachmentService } from "../../services/media/attachments/service.js";
 import type {
-  AttachmentExtractionContext,
-  ParsedAttachment
-} from "../../services/media/attachments/types.js";
-import { CommandRouter, type CommandMatch } from "../../services/messaging/commandRouter.js";
-import { isReplySenderAllowed } from "../../services/messaging/replySenderPolicy.js";
-import { getDefaultProvider, getRootDir, getWorkspacePath, resolveProjectPath } from "../config.js";
-import {
-  assistantReplyEnvelope,
-  decodeAssistantReply,
-  decodeIncomingReply,
-  decodeToolCompletion,
-  incomingReplyEnvelope,
-  type AssistantReplyOutboxEnvelope,
-  type AssistantReplyOutboxPayload,
-  type AsyncToolCompletionPayload,
-  type ConversationAssetOutboxEnvelope,
-  type GroupThreadContextSnapshotV1,
-  type NoReplyPokeOutboxEnvelope,
-  type ReplyQuoteSnapshotV1,
-  type RuntimeIncomingReplyEventPayload,
-  type UserGroupOrchestratorResultV1
+  AssistantReplyOutboxEnvelope,
+  ConversationAssetOutboxEnvelope,
+  GroupThreadContextSnapshotV1,
+  NoReplyPokeOutboxEnvelope,
+  ReplyQuoteSnapshotV1,
+  UserGroupOrchestratorResultV1
 } from "../../packages/contracts/session/runtimeMessages.js";
-import { applicationDataStore, sqliteMemoryPersistence } from "../../adapters/sqlite/applicationDataStore.js";
-import { configureMemoryPersistence } from "../../services/memory/persistence.js";
-import {
-  ReplyGateEpochs,
-  isOrchestratorReplyRateLimited,
-  resolveUserGroupReplyRoute,
-  type ReplyGateSnapshot
-} from "../../services/orchestration/groupReplyPolicy.js";
-import { HookBus } from "../../services/messaging/hookBus.js";
-import {
-  applyMemoryBatchTransaction,
-  ensureAgentTextFile,
-  formatMemoryMatchesForPrompt,
-  isMemoryBatchCommitted,
-  mergeUserProfileMemory,
-  normalizeEventMemorySchema,
-  readAgentTextFile,
-  readMemorySourceEntries,
-  readUserProfileForUser,
-  readWorkingMemorySnapshot,
-  recallMemory,
-  recoverMemoryTransactions,
-  replaceWorkingMemoryFacts,
-  resolveUserAddressName,
-  type MemoryEntry,
-  type MemoryFactInput
-} from "../../services/memory/memoryService.js";
-import {
-  MemorySchedulerStore,
-  type MemoryClaim,
-  type MemoryQueuedMessage
-} from "../../services/memory/memoryScheduler.js";
-import {
+import type { ReplyGateSnapshot } from "../../services/orchestration/groupReplyPolicy.js";
+import type { MemoryFactInput } from "../../services/memory/memoryService.js";
+import type {
   OpenAIProvider,
-  type ProviderBashOptions,
-  type ProviderCompleteOptions,
-  type ProviderDeferredTurn
+  ProviderCompleteOptions,
+  ProviderDeferredTurn
 } from "../../adapters/model/openaiProvider.js";
-import type { ProviderLogContext } from "../../packages/contracts/model/modelGateway.js";
-import {
-  inboundImageUrls,
-  replaceInboundImageUrls,
-  type MessageDetailsV1,
-  type MessagingPort,
-  type OutboundMessageV1
-} from "../../packages/contracts/messaging/messages.js";
-import {
-  generatedImageMediaAsset,
-  imageMediaAsset,
-  type AttachmentSourcePort
-} from "../../packages/contracts/media/media.js";
-import { loadPersona, AgentPersona } from "../../services/agent/persona.js";
-import { appendRequestLog } from "../requestLog.js";
-import { WORKSPACE_LAYOUT } from "../../packages/platform/workspaceLayout.js";
-import { SenderNameResolver, senderDisplayName, senderIdentity } from "../../services/conversations/senderName.js";
-import type { SelfieInput, SelfieRunResult } from "../../services/tools/selfieTool.js";
-import { cleanupPersistedCodexProcess, CodexToolRunner } from "../../adapters/codex/codexTool.js";
-import { isTrustedQqFakeIp } from "../../adapters/onebot/qqMedia.js";
+import type { MessagingPort } from "../../packages/contracts/messaging/messages.js";
+import type { AgentPersona } from "../../services/agent/persona.js";
 import type { CodexRunner } from "../../packages/contracts/tools/codex.js";
 import type { RuntimeToolCapabilityResolver } from "../../services/tools/bashCapability.js";
 import type { BashAuditInput, BashAuditResult } from "../../services/tools/bashAudit.js";
 import type { SystemConfigRuntimePort } from "../../services/tools/systemConfigTool.js";
 import type { ReplyTaskGate } from "../../services/orchestration/broadcastStormDetector.js";
-import {
-  OutboxDisconnectedError,
-  SessionCoordinator,
-  type SessionHandleResult
-} from "../../services/sessions/sessionCoordinator.js";
-import { SessionStore, type OutboxRecord, type SessionEventRecord } from "../../services/sessions/sessionStore.js";
+import type { SessionStore } from "../../services/sessions/sessionStore.js";
 import { TOOL_CALL_TIMEOUT_MS } from "../../services/tools/tools.js";
-import { promptDefinitionById } from "../../services/agent/promptCatalog.js";
 import { defaultPromptContent as defaultFinalPromptContent } from "../../services/agent/promptDefaults.js";
 import { SCHEDULED_TASK_CALLBACK_PROMPT_ID } from "../../services/agent/scheduledTaskPrompt.js";
 import {
@@ -116,13 +32,7 @@ import {
 } from "../../services/director/public.js";
 import { AIR_KNOWLEDGE_PROMPT_ID } from "../../services/air/public.js";
 import { DREAM_PROMPT_ID } from "../../services/memory/public.js";
-import {
-  parseFinalPromptTemplate,
-  renderFinalPromptTemplate,
-  type PromptVariableValue,
-  type RenderedPromptRequest
-} from "../../services/agent/promptSystem.js";
-import { buildConversationPromptVariables } from "../../services/agent/persona.js";
+import type { PromptVariableValue, RenderedPromptRequest } from "../../services/agent/promptSystem.js";
 import type { RuntimeAgentExtensionsPort } from "./agentExtensions.js";
 import type { RuntimeVoiceOptions } from "./voice.js";
 
@@ -324,6 +234,21 @@ export interface RuntimeConfigSnapshot {
   persona: AgentPersona;
 }
 export type RuntimePromptSnapshot = RuntimeConfigSnapshot;
+export interface RuntimeConfigPort {
+  readonly config: AppConfig;
+}
+export interface RuntimePromptPort extends RuntimeConfigPort {
+  getProvider(providerId?: string): OpenAIProvider;
+  renderPromptRequest(
+    id: string,
+    variables: Readonly<Record<string, PromptVariableValue>>
+  ): Promise<RenderedPromptRequest>;
+  completePrompt(
+    provider: OpenAIProvider,
+    request: RenderedPromptRequest,
+    options?: ProviderCompleteOptions
+  ): Promise<string>;
+}
 export interface RuntimeBashAuditPort {
   available(config: AppConfig): boolean | Promise<boolean>;
   run(config: AppConfig, input: BashAuditInput): Promise<BashAuditResult>;

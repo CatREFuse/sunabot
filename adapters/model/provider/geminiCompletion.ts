@@ -1,12 +1,12 @@
 import type { RenderedPromptRequest } from "../../../services/agent/promptSystem.js";
-import type { ChatMessage } from "../../../src/types.js";
+import type { ChatMessage } from "../../../packages/contracts/model/modelGateway.js";
 import type { ProviderAdapterContext, ProviderCompleteOptions, ProviderTurnResult, ResponseFunctionCallItem, TurnToolState } from "./contracts.js";
-import { toChatCompletionMessage } from "./imageInput.js";
+import { parseDataImage, toChatCompletionMessage } from "./imageInput.js";
 import { withLogContext } from "./logger.js";
 import { claimToolCalls, resolveMaxToolCalls, toolCallLimitError } from "./toolLoopLimits.js";
 import { fetchTextWithTransportRetry, normalizeGeminiBaseUrl, resolveModelRequestMaxAttempts } from "./transport.js";
 import { errorMessage, isRecord, parseJson } from "./valueUtils.js";
-import { preflightProviderToolResponse } from "./toolResponsePreflight.js";
+import { processProviderToolRound } from "./toolRound.js";
 
 export async function completeGeminiGenerateContent(
   context: ProviderAdapterContext,
@@ -93,23 +93,22 @@ export async function completeGeminiGenerateContent(
       return { kind: "completed", text };
     }
 
-    const companion = context.toolExecutor.companionTurn(calls, text, options, resolvedDefinitions, state);
-    if (companion) return companion;
-    const preflight = preflightProviderToolResponse(calls, text, options, state);
-    if (!preflight.rejected) {
-      const deferred = context.toolExecutor.deferredTurn(calls, options, resolvedDefinitions, state);
-      if (deferred) return deferred;
-      const noReply = context.toolExecutor.noReplyTurn(calls, options, resolvedDefinitions, state);
-      if (noReply) return noReply;
-      if (text && options.onAssistantText && preflight.emitAssistantText) {
-        await options.onAssistantText(text, "text");
+    const toolRound = await processProviderToolRound({
+      calls,
+      siblingText: text,
+      options,
+      definitions: resolvedDefinitions,
+      state,
+      executor: context.toolExecutor,
+      emitAssistantText: async () => {
+        if (text && options.onAssistantText) await options.onAssistantText(text, "text");
       }
-    }
+    });
+    if (toolRound.terminal) return toolRound.terminal;
     contents.push({ role: "model", parts });
-    const outputs = preflight.rejected ?? await context.toolExecutor.execute(calls, options, resolvedDefinitions, state);
     contents.push({
       role: "user",
-      parts: outputs.map((output, index) => ({
+      parts: toolRound.outputs.map((output, index) => ({
         functionResponse: {
           name: calls[index]?.name ?? "tool",
           response: normalizeFunctionResponse(output.output)
@@ -133,11 +132,6 @@ async function toGeminiContent(message: ChatMessage) {
       return data ? [{ inlineData: { mimeType: data.mediaType, data: data.data } }] : [];
     })
   };
-}
-
-function parseDataImage(value: string) {
-  const match = value.match(/^data:(image\/[a-z0-9.+-]+);base64,(.+)$/is);
-  return match ? { mediaType: match[1]!, data: match[2]! } : undefined;
 }
 
 function normalizeFunctionResponse(value: unknown) {

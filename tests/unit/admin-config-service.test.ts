@@ -33,7 +33,7 @@ vi.mock("../../src/config.js", async () => {
 });
 
 import { ConfigService, configFieldStates } from "../../src/admin/configService.js";
-import { MODEL_CATALOG } from "../../src/admin/models.js";
+import { MODEL_CATALOG } from "../../packages/contracts/admin/models.js";
 import { AdminMutationMutex } from "../../src/admin/mutation.js";
 
 let rootDir = "";

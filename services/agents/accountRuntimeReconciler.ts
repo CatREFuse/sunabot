@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { getWorkspaceDir } from "../../src/config.js";
+import { getWorkspaceDir } from "../../packages/platform/projectPaths.js";
 
 export interface AccountRuntimeState {
   schemaVersion: 1;

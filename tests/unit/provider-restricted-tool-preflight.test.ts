@@ -7,7 +7,7 @@ const appendRequestLog = vi.hoisted(() => vi.fn(async () => undefined));
 const runWorkspaceBash = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
 const runWebsearch = vi.hoisted(() => vi.fn(async () => ({ ok: true, items: [] })));
 
-vi.mock("../../src/requestLog.js", () => ({ appendRequestLog }));
+vi.mock("../../adapters/observability/requestLog.js", () => ({ appendRequestLog }));
 vi.mock("../../services/tools/bashTool.js", async (importOriginal) => ({
   ...await importOriginal<typeof import("../../services/tools/bashTool.js")>(),
   runWorkspaceBash

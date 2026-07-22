@@ -21,8 +21,6 @@ import {
 
 export const AGENT_FILE_DEFINITIONS = PROMPT_FILE_DEFINITIONS;
 
-export type AgentFileId = (typeof AGENT_FILE_DEFINITIONS)[number]["id"];
-
 type AgentFileDefinition = PromptFileDefinition;
 
 interface ResolvedAgentFile {

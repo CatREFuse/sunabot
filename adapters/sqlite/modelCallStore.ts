@@ -4,7 +4,7 @@ import {
   type MemoryModelCallKindId,
   type ModelCallBehaviorId,
   type ModelCallMeasurement
-} from "../../src/modelCallStats.js";
+} from "../../packages/contracts/model/modelCallStats.js";
 
 type JsonObject = Record<string, unknown>;
 type SqlRow = Record<string, unknown>;

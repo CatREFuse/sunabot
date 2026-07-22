@@ -32,6 +32,9 @@ import {
 } from "../../tooling/workspace/sqlite-recovery.mjs";
 
 const AGENTS = ["plana", "arona", "koharu", "laobfeng"];
+const CHILD_PROCESS_TIMEOUT_MS = 15_000;
+const PLAN_DIR = "business/migrations/plans";
+const PROPOSAL_DIR = "business/migrations/proposals";
 const temporaryDirectories: string[] = [];
 const offline = {
   quiesced: true,
@@ -78,13 +81,9 @@ describe("memory-perspective-v1 tracked migration", () => {
     expect(generatedProposal.rowActions[0].reason).toMatch(/最早至最新时间关系/);
     await resolveAllProposals(fixture.workspace);
     driftEveryRowIdAndPosition(fixture.applicationPaths);
-    const refreshed = refreshPlans({
-      workspace: fixture.workspace,
-      proposalDir: "business/migrations/proposals",
-      planDir: "business/migrations/plans"
-    });
+    const refreshed = refreshFixturePlans(fixture);
     expect(refreshed.plans).toHaveLength(4);
-    const dryRun = dryRunPlans({ workspace: fixture.workspace, planDir: "business/migrations/plans" });
+    const dryRun = dryRunFixture(fixture);
     expect(dryRun.ok).toBe(true);
     expect(dryRun.agents.every((agent: { before: Record<string, number> }) => (
       agent.before.working === 1 && agent.before.long_term === 1 && agent.before.user_profile === 1
@@ -381,17 +380,13 @@ describe("memory-perspective-v1 tracked migration", () => {
   it("writes a durable awaiting-backup intent and aborts without changing drifted production bytes", async () => {
     const fixture = await createFixture();
     await exportGenerateResolve(fixture);
-    refreshPlans({ workspace: fixture.workspace, proposalDir: "business/migrations/proposals", planDir: "business/migrations/plans" });
-    const prepared = await prepareMigration({
-      workspace: fixture.workspace,
-      planDir: "business/migrations/plans",
-      ...offline
-    });
+    refreshFixturePlans(fixture);
+    const prepared = await prepareFixture(fixture);
     expect(prepared.state).toBe("awaiting-backup");
     const intentPath = path.join(fixture.workspace, "business/migrations/memory-perspective-v1-intent.json");
     const firstIntent = await readJson(intentPath);
     expect(firstIntent.intentSha256).toMatch(/^sha256:/);
-    const aborted = await abortMigration({ workspace: fixture.workspace, ...offline });
+    const aborted = await abortFixture(fixture);
     expect(aborted.ok).toBe(true);
     await expect(readJson(path.join(fixture.workspace, aborted.report))).resolves.toMatchObject({
       status: "aborted",
@@ -401,13 +396,13 @@ describe("memory-perspective-v1 tracked migration", () => {
     });
     await expect(fs.stat(intentPath)).rejects.toMatchObject({ code: "ENOENT" });
 
-    await prepareMigration({ workspace: fixture.workspace, planDir: "business/migrations/plans", ...offline });
+    await prepareFixture(fixture);
     const drifted = new DatabaseSync(fixture.queuePaths[0]);
     drifted.prepare("UPDATE outbox SET payload = ? WHERE id = 1").run("drift");
     drifted.close();
     const before = await snapshotDirectoryBytes(fixtureDataDirectories(fixture));
     await fs.rm(path.join(fixture.workspace, "business/migrations/plans"), { recursive: true, force: true });
-    await expect(abortMigration({ workspace: fixture.workspace, ...offline })).resolves.toMatchObject({ ok: true });
+    await expect(abortFixture(fixture)).resolves.toMatchObject({ ok: true });
     expect(await snapshotDirectoryBytes(fixtureDataDirectories(fixture))).toEqual(before);
     await expect(fs.stat(intentPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
@@ -415,8 +410,8 @@ describe("memory-perspective-v1 tracked migration", () => {
   it("keeps the signed intent and production bytes unchanged when an abort stop gate fails", async () => {
     const fixture = await createFullFixture();
     await exportGenerateResolve(fixture);
-    refreshPlans({ workspace: fixture.workspace, proposalDir: "business/migrations/proposals", planDir: "business/migrations/plans" });
-    await prepareMigration({ workspace: fixture.workspace, planDir: "business/migrations/plans", ...offline });
+    refreshFixturePlans(fixture);
+    await prepareFixture(fixture);
     const intentPath = migrationIntentFile(fixture);
     const intentBefore = await fs.readFile(intentPath, "utf8");
     const sidecar = `${fixture.queuePaths[0]}-wal`;
@@ -425,14 +420,12 @@ describe("memory-perspective-v1 tracked migration", () => {
     const migrationDirectory = path.dirname(intentPath);
     const reportsBefore = (await fs.readdir(migrationDirectory)).filter((name) => name.includes("-abort-"));
 
-    await expect(abortMigration({
-      workspace: fixture.workspace,
+    await expect(abortFixture(fixture, {
       quiesced: true,
       portProbe: async () => true,
       handleProbe: async () => false
     })).rejects.toThrow(/仍在监听|running/i);
-    await expect(abortMigration({
-      workspace: fixture.workspace,
+    await expect(abortFixture(fixture, {
       quiesced: true,
       portProbe: async () => false,
       handleProbe: async () => true
@@ -443,7 +436,7 @@ describe("memory-perspective-v1 tracked migration", () => {
     await fs.rm(sidecar);
     try {
       await fs.symlink(outsideSidecar, sidecar);
-      await expect(abortMigration({ workspace: fixture.workspace, ...offline }))
+      await expect(abortFixture(fixture))
         .rejects.toThrow(/sidecar|符号链接|类型异常/i);
     } finally {
       await fs.rm(sidecar, { force: true });
@@ -477,14 +470,10 @@ describe("memory-perspective-v1 tracked migration", () => {
 
     await exportGenerateResolve(fixture);
     const exported = await readJson(path.join(fixture.workspace, "business/migrations/export.json"));
-    const refreshed = refreshPlans({
-      workspace: fixture.workspace,
-      proposalDir: "business/migrations/proposals",
-      planDir: "business/migrations/plans"
-    });
+    const refreshed = refreshFixturePlans(fixture);
     expect(exported.agents.map((agent: { agentId: string }) => agent.agentId).sort()).toEqual([...AGENTS].sort());
     expect(refreshed.plans).toHaveLength(4);
-    expect(dryRunPlans({ workspace: fixture.workspace, planDir: "business/migrations/plans" }).ok).toBe(true);
+    expect(dryRunFixture(fixture).ok).toBe(true);
   });
 
   it("allows an empty agents/plana/data directory as configuration-only workspace state", async () => {
@@ -633,18 +622,9 @@ describe("memory-perspective-v1 tracked migration", () => {
     const { fixture, stagingWorkspace, staged } = await prepareStagedFull();
     expect(staged.state).toBe("staged-ready");
     expect((await verifyRecoveryPoint(staged.changedRecoveryPoint)).ok).toBe(true);
-    const installed = await installStagedMigration({
-      workspace: fixture.workspace,
-      stagingWorkspace,
-      confirmReplace: true,
-      ...offline
-    });
+    const installed = await installFixture(fixture, stagingWorkspace);
     expect(installed.state).toBe("verifying");
-    const verified = await verifyMigration({
-      workspace: fixture.workspace,
-      planDir: "business/migrations/plans",
-      ...offline
-    });
+    const verified = await verifyFixture(fixture);
     expect(verified.ok).toBe(true);
     await expect(fs.stat(path.join(
       fixture.workspace,
@@ -675,41 +655,16 @@ describe("memory-perspective-v1 tracked migration", () => {
     expect(restoreEvents.filter((event) => event.phase === "restored-workspace-verify")).toHaveLength(8);
   }, 30_000);
 
-  it("resumes install after real SIGKILL at quarantine, rename, and intent boundaries", async () => {
+  it("[fault] resumes install after real SIGKILL at quarantine, rename, and intent boundaries", async () => {
     for (const point of ["after-install-quarantine:arona", "after-install-rename:arona", "after-install-intent:arona"]) {
       const { fixture, stagingWorkspace } = await prepareStagedFull();
-      const cli = path.resolve("tooling/migrations/memory-perspective-v1.mjs");
-      const code = `
-        import { installStagedMigration } from ${JSON.stringify(pathToFileUrl(cli))};
-        await installStagedMigration({
-          workspace: ${JSON.stringify(fixture.workspace)},
-          stagingWorkspace: ${JSON.stringify(stagingWorkspace)},
-          confirmReplace: true,
-          quiesced: true,
-          portProbe: async () => false,
-          handleProbe: async () => false
-        });
-      `;
-      const killed = spawnSync(process.execPath, ["--input-type=module", "-e", code], {
-        env: { ...process.env, SUNABOT_MEMORY_MIGRATION_FAULT: `sigkill:${point}` },
-        encoding: "utf8"
-      });
-      expect(killed.signal).toBe("SIGKILL");
-      await expect(installStagedMigration({
-        workspace: fixture.workspace,
-        stagingWorkspace,
-        confirmReplace: true,
-        ...offline
-      })).resolves.toMatchObject({ state: "verifying" });
-      await expect(verifyMigration({
-        workspace: fixture.workspace,
-        planDir: "business/migrations/plans",
-        ...offline
-      })).resolves.toMatchObject({ ok: true });
+      expect(runKilledInstall(fixture.workspace, stagingWorkspace, point).signal).toBe("SIGKILL");
+      await expect(installFixture(fixture, stagingWorkspace)).resolves.toMatchObject({ state: "verifying" });
+      await expect(verifyFixture(fixture)).resolves.toMatchObject({ ok: true });
     }
   }, 60_000);
 
-  it("rejects a changed-recovery-to-staged hardlink on install reentry after SIGKILL quarantine", async () => {
+  it("[fault] rejects a changed-recovery-to-staged hardlink on install reentry after SIGKILL quarantine", async () => {
     const { fixture, stagingWorkspace } = await prepareStagedFull();
     expect(runKilledInstall(
       fixture.workspace,
@@ -732,14 +687,9 @@ describe("memory-perspective-v1 tracked migration", () => {
       binding.stagedAbsolute,
       binding.quarantineAbsolute
     ]);
-    const events: Array<{ databasePath: string; scope: string; blocked: boolean }> = [];
-    await expect(installStagedMigration({
-      workspace: fixture.workspace,
-      stagingWorkspace,
-      confirmReplace: true,
-      databaseOpenObserver: (event: { databasePath: string; scope: string; blocked: boolean }) => events.push(event),
-      ...offline
-    })).rejects.toThrow(/独立|身份|link|rollback/i);
+    const { events, databaseOpenObserver } = observeDatabaseOpens();
+    await expect(installFixture(fixture, stagingWorkspace, { databaseOpenObserver }))
+      .rejects.toThrow(/独立|身份|link|rollback/i);
     expect(events).toEqual([]);
     expect(await snapshotDirectoryBytes([
       binding.stagedAbsolute,
@@ -752,12 +702,8 @@ describe("memory-perspective-v1 tracked migration", () => {
   it("rejects cross-filesystem install before the first data-directory rename", async () => {
     const { fixture, stagingWorkspace } = await prepareStagedFull();
     const original = await fs.stat(fixture.applicationPaths[0]);
-    await expect(installStagedMigration({
-      workspace: fixture.workspace,
-      stagingWorkspace,
-      confirmReplace: true,
-      deviceProbe: (directory: string) => directory.startsWith(stagingWorkspace) ? 2 : 1,
-      ...offline
+    await expect(installFixture(fixture, stagingWorkspace, {
+      deviceProbe: (directory: string) => directory.startsWith(stagingWorkspace) ? 2 : 1
     })).rejects.toThrow(/filesystem|跨/);
     expect((await fs.stat(fixture.applicationPaths[0])).ino).toBe(original.ino);
   }, 30_000);
@@ -766,19 +712,14 @@ describe("memory-perspective-v1 tracked migration", () => {
     const { fixture, recovery } = await prepareBoundFull();
     const stagingWorkspace = path.join(fixture.root, "cross-device-staging");
     const original = await fs.stat(fixture.applicationPaths[0]);
-    await expect(applyMigration({
-      workspace: fixture.workspace,
-      planDir: "business/migrations/plans",
-      backup: recovery.directory,
-      stagingWorkspace,
-      deviceProbe: (directory: string) => directory.startsWith(stagingWorkspace) ? 2 : 1,
-      ...offline
+    await expect(applyFixture(fixture, recovery.directory, stagingWorkspace, {
+      deviceProbe: (directory: string) => directory.startsWith(stagingWorkspace) ? 2 : 1
     })).rejects.toThrow(/filesystem|跨/);
     expect((await fs.stat(fixture.applicationPaths[0])).ino).toBe(original.ino);
     const intentPath = path.join(fixture.workspace, "business/migrations/memory-perspective-v1-intent.json");
     expect((await readJson(intentPath)).state).toBe("staging-failed");
     const beforeAbort = await snapshotDirectoryBytes(fixtureDataDirectories(fixture));
-    await expect(abortMigration({ workspace: fixture.workspace, ...offline })).resolves.toMatchObject({ ok: true });
+    await expect(abortFixture(fixture)).resolves.toMatchObject({ ok: true });
     expect(await snapshotDirectoryBytes(fixtureDataDirectories(fixture))).toEqual(beforeAbort);
     await expect(fs.stat(intentPath)).rejects.toMatchObject({ code: "ENOENT" });
   }, 30_000);
@@ -801,53 +742,27 @@ describe("memory-perspective-v1 tracked migration", () => {
     }
   }, 30_000);
 
-  it("resumes rollback install after real SIGKILL at every directory journal boundary", async () => {
+  it("[fault] resumes rollback install after real SIGKILL at every directory journal boundary", async () => {
     for (const point of ["after-install-quarantine:arona", "after-install-rename:arona", "after-install-intent:arona"]) {
       const { fixture, rollbackStaging } = await prepareRollbackStaged();
-      const cli = path.resolve("tooling/migrations/memory-perspective-v1.mjs");
-      const code = `
-        import { installStagedMigration } from ${JSON.stringify(pathToFileUrl(cli))};
-        await installStagedMigration({
-          workspace: ${JSON.stringify(fixture.workspace)},
-          stagingWorkspace: ${JSON.stringify(rollbackStaging)},
-          confirmReplace: true,
-          quiesced: true,
-          portProbe: async () => false,
-          handleProbe: async () => false
-        });
-      `;
-      const killed = spawnSync(process.execPath, ["--input-type=module", "-e", code], {
-        env: { ...process.env, SUNABOT_MEMORY_MIGRATION_FAULT: `sigkill:${point}` },
-        encoding: "utf8"
-      });
-      expect(killed.signal).toBe("SIGKILL");
-      await expect(installStagedMigration({
-        workspace: fixture.workspace,
-        stagingWorkspace: rollbackStaging,
-        confirmReplace: true,
-        ...offline
-      })).resolves.toMatchObject({ status: "rolled-back" });
+      expect(runKilledInstall(fixture.workspace, rollbackStaging, point).signal).toBe("SIGKILL");
+      await expect(installFixture(fixture, rollbackStaging)).resolves.toMatchObject({ status: "rolled-back" });
     }
   }, 60_000);
 
   it("fails a stale recovery point and permits a signed PRE-state abort", async () => {
     const fixture = await createFullFixture();
     await exportGenerateResolve(fixture);
-    refreshPlans({ workspace: fixture.workspace, proposalDir: "business/migrations/proposals", planDir: "business/migrations/plans" });
+    refreshFixturePlans(fixture);
     const old = await createRecoveryPoint({ workspace: fixture.workspace, quiesced: true, now: new Date("2026-01-01T00:00:00.000Z") });
-    await prepareMigration({ workspace: fixture.workspace, planDir: "business/migrations/plans", ...offline });
-    await expect(prepareMigration({
-      workspace: fixture.workspace,
-      planDir: "business/migrations/plans",
-      backup: old.directory,
-      ...offline
-    })).rejects.toThrow(/createdAt|晚于/);
-    await expect(abortMigration({ workspace: fixture.workspace, ...offline })).resolves.toMatchObject({ ok: true });
+    await prepareFixture(fixture);
+    await expect(prepareFixture(fixture, { backup: old.directory })).rejects.toThrow(/createdAt|晚于/);
+    await expect(abortFixture(fixture)).resolves.toMatchObject({ ok: true });
   }, 30_000);
 
   it("rolls production back through a verified empty staging after final verify detects queue drift", async () => {
     const { fixture, stagingWorkspace, recovery } = await prepareStagedFull();
-    await installStagedMigration({ workspace: fixture.workspace, stagingWorkspace, confirmReplace: true, ...offline });
+    await installFixture(fixture, stagingWorkspace);
     const queue = new SessionStore({ databasePath: fixture.queuePaths[0] });
     queue.enqueueEvent({
       sessionId: "private:plana:12345678",
@@ -856,24 +771,10 @@ describe("memory-perspective-v1 tracked migration", () => {
       payload: { text: "drift" }
     });
     queue.close();
-    await expect(verifyMigration({
-      workspace: fixture.workspace,
-      planDir: "business/migrations/plans",
-      ...offline
-    })).rejects.toThrow(/ROLLBACK|verify|摘要/i);
+    await expect(verifyFixture(fixture)).rejects.toThrow(/ROLLBACK|verify|摘要/i);
     const rollbackStaging = path.join(fixture.root, "rollback-staging");
-    await stageRollback({
-      workspace: fixture.workspace,
-      backup: recovery.directory,
-      targetWorkspace: rollbackStaging,
-      ...offline
-    });
-    await expect(installStagedMigration({
-      workspace: fixture.workspace,
-      stagingWorkspace: rollbackStaging,
-      confirmReplace: true,
-      ...offline
-    })).resolves.toMatchObject({ status: "rolled-back" });
+    await rollbackFixture(fixture, recovery.directory, rollbackStaging);
+    await expect(installFixture(fixture, rollbackStaging)).resolves.toMatchObject({ status: "rolled-back" });
     const database = new DatabaseSync(fixture.applicationPaths[0], { readOnly: true });
     const row = database.prepare("SELECT data_json FROM memory_records WHERE source='working'").get();
     database.close();
@@ -904,12 +805,7 @@ describe("memory-perspective-v1 tracked migration", () => {
       const externalBytes = Buffer.from(`external-${failure}-unchanged`);
       await fs.writeFile(externalSentinel, externalBytes);
 
-      const installed = await installStagedMigration({
-        workspace: fixture.workspace,
-        stagingWorkspace,
-        confirmReplace: true,
-        ...offline
-      });
+      const installed = await installFixture(fixture, stagingWorkspace);
       const reportPath = path.join(fixture.workspace, String(installed.pendingReport));
       if (failure === "deleted") {
         await fs.rm(reportPath);
@@ -921,11 +817,7 @@ describe("memory-perspective-v1 tracked migration", () => {
         await fs.writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`);
       }
 
-      await expect(verifyMigration({
-        workspace: fixture.workspace,
-        planDir: "business/migrations/plans",
-        ...offline
-      })).rejects.toThrow(/ROLLBACK|verify|pending-report|JSON|signature/i);
+      await expect(verifyFixture(fixture)).rejects.toThrow(/ROLLBACK|verify|pending-report|JSON|signature/i);
 
       const intentPath = path.join(
         fixture.workspace,
@@ -933,18 +825,8 @@ describe("memory-perspective-v1 tracked migration", () => {
       );
       expect((await readJson(intentPath)).state).toBe("rollback-required");
       const rollbackStaging = path.join(fixture.root, `rollback-${failure}`);
-      await stageRollback({
-        workspace: fixture.workspace,
-        backup: recovery.directory,
-        targetWorkspace: rollbackStaging,
-        ...offline
-      });
-      await expect(installStagedMigration({
-        workspace: fixture.workspace,
-        stagingWorkspace: rollbackStaging,
-        confirmReplace: true,
-        ...offline
-      })).resolves.toMatchObject({ status: "rolled-back" });
+      await rollbackFixture(fixture, recovery.directory, rollbackStaging);
+      await expect(installFixture(fixture, rollbackStaging)).resolves.toMatchObject({ status: "rolled-back" });
 
       expect(await Promise.all(databaseFiles.map((file) => fs.readFile(file)))).toEqual(
         databaseFiles.map((file) => recoveryBytesBySource.get(
@@ -960,12 +842,7 @@ describe("memory-perspective-v1 tracked migration", () => {
 
   it("rejects a changed-recovery hardlink to production before verify opens or checkpoints live SQLite", async () => {
     const { fixture, stagingWorkspace } = await prepareStagedFull();
-    await installStagedMigration({
-      workspace: fixture.workspace,
-      stagingWorkspace,
-      confirmReplace: true,
-      ...offline
-    });
+    await installFixture(fixture, stagingWorkspace);
     const intent = await readJson(migrationIntentFile(fixture));
     const alias = await hardlinkBoundRecoveryToMatchingLive(
       fixture.workspace,
@@ -976,13 +853,9 @@ describe("memory-perspective-v1 tracked migration", () => {
     expect(alias.recoveryStat.ino).toBe(alias.liveStat.ino);
     expect(alias.recoveryStat.nlink).toBe(2);
     const productionBefore = await snapshotDirectoryBytes(fixtureDataDirectories(fixture));
-    const events: Array<{ databasePath: string; scope: string; blocked: boolean }> = [];
-    await expect(verifyMigration({
-      workspace: fixture.workspace,
-      planDir: "business/migrations/plans",
-      databaseOpenObserver: (event: { databasePath: string; scope: string; blocked: boolean }) => events.push(event),
-      ...offline
-    })).rejects.toThrow(/独立|身份|link|rollback/i);
+    const { events, databaseOpenObserver } = observeDatabaseOpens();
+    await expect(verifyFixture(fixture, { databaseOpenObserver }))
+      .rejects.toThrow(/独立|身份|link|rollback/i);
     expect(events).toEqual([]);
     expect(await snapshotDirectoryBytes(fixtureDataDirectories(fixture))).toEqual(productionBefore);
     expect((await readJson(migrationIntentFile(fixture))).state).toBe("rollback-required");
@@ -1007,14 +880,10 @@ describe("memory-perspective-v1 tracked migration", () => {
     expect(alias.recoveryStat.nlink).toBe(2);
     const productionBefore = await snapshotDirectoryBytes(fixtureDataDirectories(prepared.fixture));
     const rollbackTarget = path.join(prepared.fixture.root, "rejected-rollback-identity-alias");
-    const events: Array<{ databasePath: string; scope: string; blocked: boolean }> = [];
-    await expect(stageRollback({
-      workspace: prepared.fixture.workspace,
-      backup: prepared.recovery.directory,
-      targetWorkspace: rollbackTarget,
-      databaseOpenObserver: (event: { databasePath: string; scope: string; blocked: boolean }) => events.push(event),
-      ...offline
-    })).rejects.toThrow(/独立|身份|link/i);
+    const { events, databaseOpenObserver } = observeDatabaseOpens();
+    await expect(rollbackFixture(
+      prepared.fixture, prepared.recovery.directory, rollbackTarget, { databaseOpenObserver }
+    )).rejects.toThrow(/独立|身份|link/i);
     expect(events).toEqual([]);
     expect(await snapshotDirectoryBytes(fixtureDataDirectories(prepared.fixture))).toEqual(productionBefore);
     expect((await readJson(migrationIntentFile(prepared.fixture))).state).toBe("rollback-staged");
@@ -1038,14 +907,10 @@ describe("memory-perspective-v1 tracked migration", () => {
     expect(productionStat.ino).toBe(targetStat.ino);
     expect(productionStat.nlink).toBe(2);
     const productionBefore = await snapshotDirectoryBytes(fixtureDataDirectories(prepared.fixture));
-    const events: Array<{ databasePath: string; scope: string; blocked: boolean }> = [];
-    await expect(stageRollback({
-      workspace: prepared.fixture.workspace,
-      backup: prepared.recovery.directory,
-      targetWorkspace: prepared.rollbackStaging,
-      databaseOpenObserver: (event: { databasePath: string; scope: string; blocked: boolean }) => events.push(event),
-      ...offline
-    })).rejects.toThrow(/独立|身份|link/i);
+    const { events, databaseOpenObserver } = observeDatabaseOpens();
+    await expect(rollbackFixture(
+      prepared.fixture, prepared.recovery.directory, prepared.rollbackStaging, { databaseOpenObserver }
+    )).rejects.toThrow(/独立|身份|link/i);
     expect(events).toEqual([]);
     expect(await snapshotDirectoryBytes(fixtureDataDirectories(prepared.fixture))).toEqual(productionBefore);
     expect((await readJson(migrationIntentFile(prepared.fixture))).state).toBe("rollback-staged");
@@ -1055,12 +920,7 @@ describe("memory-perspective-v1 tracked migration", () => {
     "moves verify %s failures to rollback-required and restores all eight databases",
     async (failure) => {
       const { fixture, stagingWorkspace, recovery } = await prepareStagedFull();
-      await installStagedMigration({
-        workspace: fixture.workspace,
-        stagingWorkspace,
-        confirmReplace: true,
-        ...offline
-      });
+      await installFixture(fixture, stagingWorkspace);
       if (failure === "database-missing") {
         await fs.rm(fixture.applicationPaths[1]);
       } else {
@@ -1069,26 +929,12 @@ describe("memory-perspective-v1 tracked migration", () => {
         database.close();
       }
 
-      await expect(verifyMigration({
-        workspace: fixture.workspace,
-        planDir: "business/migrations/plans",
-        ...offline
-      })).rejects.toThrow(/ROLLBACK|verify|数据库|schema|Agent/i);
+      await expect(verifyFixture(fixture)).rejects.toThrow(/ROLLBACK|verify|数据库|schema|Agent/i);
       expect((await readJson(migrationIntentFile(fixture))).state).toBe("rollback-required");
 
       const rollbackStaging = path.join(fixture.root, `rollback-verify-${failure}`);
-      await stageRollback({
-        workspace: fixture.workspace,
-        backup: recovery.directory,
-        targetWorkspace: rollbackStaging,
-        ...offline
-      });
-      await installStagedMigration({
-        workspace: fixture.workspace,
-        stagingWorkspace: rollbackStaging,
-        confirmReplace: true,
-        ...offline
-      });
+      await rollbackFixture(fixture, recovery.directory, rollbackStaging);
+      await installFixture(fixture, rollbackStaging);
       await expectWorkspaceMatchesRecovery(fixture, recovery.directory);
       await expect(fs.stat(migrationIntentFile(fixture))).rejects.toMatchObject({ code: "ENOENT" });
     },
@@ -1096,7 +942,7 @@ describe("memory-perspective-v1 tracked migration", () => {
   );
 
   it.each(["deleted", "symlink-corrupt"] as const)(
-    "recovers a SIGKILL forward install after its staging workspace is %s",
+    "[fault] recovers a SIGKILL forward install after its staging workspace is %s",
     async (failure) => {
       const { fixture, stagingWorkspace, recovery } = await prepareStagedFull();
       expect(runKilledInstall(fixture.workspace, stagingWorkspace, "after-install-intent:arona").signal).toBe("SIGKILL");
@@ -1106,27 +952,13 @@ describe("memory-perspective-v1 tracked migration", () => {
       await fs.rm(stagingWorkspace, { recursive: true, force: true });
       if (failure === "symlink-corrupt") await fs.symlink(sentinel, stagingWorkspace, "dir");
 
-      await expect(installStagedMigration({
-        workspace: fixture.workspace,
-        stagingWorkspace,
-        confirmReplace: true,
-        ...offline
-      })).rejects.toThrow(/ROLLBACK|staging|符号链接|workspace/i);
+      await expect(installFixture(fixture, stagingWorkspace))
+        .rejects.toThrow(/ROLLBACK|staging|符号链接|workspace/i);
       expect((await readJson(migrationIntentFile(fixture))).state).toBe("rollback-required");
 
       const rollbackStaging = path.join(fixture.root, `rollback-forward-${failure}`);
-      await stageRollback({
-        workspace: fixture.workspace,
-        backup: recovery.directory,
-        targetWorkspace: rollbackStaging,
-        ...offline
-      });
-      await installStagedMigration({
-        workspace: fixture.workspace,
-        stagingWorkspace: rollbackStaging,
-        confirmReplace: true,
-        ...offline
-      });
+      await rollbackFixture(fixture, recovery.directory, rollbackStaging);
+      await installFixture(fixture, rollbackStaging);
       await expectWorkspaceMatchesRecovery(fixture, recovery.directory);
       expect(await fs.readFile(path.join(sentinel, "sentinel.txt"), "utf8")).toBe("unchanged");
       await expect(fs.stat(migrationIntentFile(fixture))).rejects.toMatchObject({ code: "ENOENT" });
@@ -1134,28 +966,18 @@ describe("memory-perspective-v1 tracked migration", () => {
     60_000
   );
 
-  it("rebuilds a fresh rollback journal after SIGKILL and rollback staging loss", async () => {
+  it("[fault] rebuilds a fresh rollback journal after SIGKILL and rollback staging loss", async () => {
     const { fixture, recovery, rollbackStaging } = await prepareRollbackStaged();
     expect(runKilledInstall(fixture.workspace, rollbackStaging, "after-install-intent:arona").signal).toBe("SIGKILL");
     expect((await readJson(migrationIntentFile(fixture))).state).toBe("rollback-installing");
     await fs.rm(rollbackStaging, { recursive: true, force: true });
 
     const rebuilt = path.join(fixture.root, "rollback-rebuilt-after-loss");
-    await stageRollback({
-      workspace: fixture.workspace,
-      backup: recovery.directory,
-      targetWorkspace: rebuilt,
-      ...offline
-    });
+    await rollbackFixture(fixture, recovery.directory, rebuilt);
     const restagedIntent = await readJson(migrationIntentFile(fixture));
     expect(restagedIntent.state).toBe("rollback-staged");
     expect(restagedIntent.stagingWorkspace).toBe(rebuilt);
-    await installStagedMigration({
-      workspace: fixture.workspace,
-      stagingWorkspace: rebuilt,
-      confirmReplace: true,
-      ...offline
-    });
+    await installFixture(fixture, rebuilt);
     await expectWorkspaceMatchesRecovery(fixture, recovery.directory);
     await expect(fs.stat(migrationIntentFile(fixture))).rejects.toMatchObject({ code: "ENOENT" });
   }, 60_000);
@@ -1165,23 +987,13 @@ describe("memory-perspective-v1 tracked migration", () => {
     expect((await readJson(migrationIntentFile(fixture))).state).toBe("rollback-staged");
     await fs.rm(rollbackStaging, { recursive: true, force: true });
     const rebuilt = path.join(fixture.root, "rollback-restaged-after-loss");
-    await stageRollback({
-      workspace: fixture.workspace,
-      backup: recovery.directory,
-      targetWorkspace: rebuilt,
-      ...offline
-    });
-    await installStagedMigration({
-      workspace: fixture.workspace,
-      stagingWorkspace: rebuilt,
-      confirmReplace: true,
-      ...offline
-    });
+    await rollbackFixture(fixture, recovery.directory, rebuilt);
+    await installFixture(fixture, rebuilt);
     await expectWorkspaceMatchesRecovery(fixture, recovery.directory);
     await expect(fs.stat(migrationIntentFile(fixture))).rejects.toMatchObject({ code: "ENOENT" });
   }, 60_000);
 
-  it("finalizes an already installed rollback from signed database evidence if the backup later corrupts", async () => {
+  it("[fault] finalizes an already installed rollback from signed database evidence if the backup later corrupts", async () => {
     const { fixture, recovery, rollbackStaging } = await prepareRollbackStaged();
     const verified = await verifyRecoveryPoint(recovery.directory);
     const expectedBySource = new Map(await Promise.all(verified.manifest.databases.map(async (entry) => [
@@ -1195,12 +1007,7 @@ describe("memory-perspective-v1 tracked migration", () => {
     manifest.createdAt = "2000-01-01T00:00:00.000Z";
     await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 
-    await expect(installStagedMigration({
-      workspace: fixture.workspace,
-      stagingWorkspace: rollbackStaging,
-      confirmReplace: true,
-      ...offline
-    })).resolves.toMatchObject({ status: "rolled-back" });
+    await expect(installFixture(fixture, rollbackStaging)).resolves.toMatchObject({ status: "rolled-back" });
     const databaseFiles = [...fixture.applicationPaths, ...fixture.queuePaths];
     expect(await Promise.all(databaseFiles.map((file) => fs.readFile(file)))).toEqual(
       databaseFiles.map((file) => expectedBySource.get(
@@ -1212,21 +1019,10 @@ describe("memory-perspective-v1 tracked migration", () => {
 
   it("keeps verifying retryable when quiescence confirmation or probes fail", async () => {
     const { fixture, stagingWorkspace } = await prepareStagedFull();
-    await installStagedMigration({
-      workspace: fixture.workspace,
-      stagingWorkspace,
-      confirmReplace: true,
-      ...offline
-    });
-    await expect(verifyMigration({
-      workspace: fixture.workspace,
-      planDir: "business/migrations/plans",
-      quiesced: false
-    })).rejects.toThrow(/quiesced|停服|显式/i);
+    await installFixture(fixture, stagingWorkspace);
+    await expect(verifyFixture(fixture, { quiesced: false })).rejects.toThrow(/quiesced|停服|显式/i);
     expect((await readJson(migrationIntentFile(fixture))).state).toBe("verifying");
-    await expect(verifyMigration({
-      workspace: fixture.workspace,
-      planDir: "business/migrations/plans",
+    await expect(verifyFixture(fixture, {
       quiesced: true,
       portProbe: async () => true,
       handleProbe: async () => false
@@ -1260,12 +1056,8 @@ describe("memory-perspective-v1 tracked migration", () => {
       ), Buffer.from("tampered"));
     }
 
-    await expect(installStagedMigration({
-      workspace: fixture.workspace,
-      stagingWorkspace,
-      confirmReplace: true,
-      ...offline
-    })).rejects.toThrow(/recovery|恢复点|backup|manifest|checksum|安装/i);
+    await expect(installFixture(fixture, stagingWorkspace))
+      .rejects.toThrow(/recovery|恢复点|backup|manifest|checksum|安装/i);
     expect((await readJson(migrationIntentFile(fixture))).state).toBe("staged-ready");
     expect((await Promise.all(fixture.applicationPaths.map((file) => fs.stat(path.dirname(file)))))
       .map((stat) => stat.ino)).toEqual(directoryInodes.map((stat) => stat.ino));
@@ -1287,7 +1079,7 @@ describe("memory-perspective-v1 tracked migration", () => {
       fs.rm(recovery.directory, { recursive: true, force: true }),
       fs.rm(path.join(fixture.workspace, "business/migrations/plans"), { recursive: true, force: true })
     ]);
-    const aborted = await abortMigration({ workspace: fixture.workspace, ...offline });
+    const aborted = await abortFixture(fixture);
     expect(await snapshotDirectoryBytes(fixtureDataDirectories(fixture))).toEqual(before);
     await expect(readJson(path.join(fixture.workspace, aborted.report))).resolves.toMatchObject({
       previousState: "prepared",
@@ -1306,7 +1098,7 @@ describe("memory-perspective-v1 tracked migration", () => {
       fs.rm(recovery.directory, { recursive: true, force: true }),
       fs.rm(path.join(fixture.workspace, "business/migrations/plans"), { recursive: true, force: true })
     ]);
-    await expect(abortMigration({ workspace: fixture.workspace, ...offline })).resolves.toMatchObject({ ok: true });
+    await expect(abortFixture(fixture)).resolves.toMatchObject({ ok: true });
     await expect(fs.stat(missingDataDirectory)).rejects.toMatchObject({ code: "ENOENT" });
     expect(await snapshotDirectoryBytes(existingDirectories)).toEqual(before);
     await expect(fs.stat(migrationIntentFile(fixture))).rejects.toMatchObject({ code: "ENOENT" });
@@ -1324,18 +1116,13 @@ describe("memory-perspective-v1 tracked migration", () => {
     queue.close();
     const before = await snapshotDirectoryBytes(fixtureDataDirectories(fixture));
     await fs.rm(stagingWorkspace, { recursive: true, force: true });
-    await expect(installStagedMigration({
-      workspace: fixture.workspace,
-      stagingWorkspace,
-      confirmReplace: true,
-      ...offline
-    })).rejects.toThrow(/staging|安装|目录|不存在/i);
+    await expect(installFixture(fixture, stagingWorkspace)).rejects.toThrow(/staging|安装|目录|不存在/i);
     expect((await readJson(migrationIntentFile(fixture))).state).toBe("staged-ready");
     await Promise.all([
       fs.rm(recovery.directory, { recursive: true, force: true }),
       fs.rm(path.join(fixture.workspace, "business/migrations/plans"), { recursive: true, force: true })
     ]);
-    await expect(abortMigration({ workspace: fixture.workspace, ...offline })).resolves.toMatchObject({ ok: true });
+    await expect(abortFixture(fixture)).resolves.toMatchObject({ ok: true });
     expect(await snapshotDirectoryBytes(fixtureDataDirectories(fixture))).toEqual(before);
     await expect(fs.stat(migrationIntentFile(fixture))).rejects.toMatchObject({ code: "ENOENT" });
   }, 60_000);
@@ -1343,7 +1130,7 @@ describe("memory-perspective-v1 tracked migration", () => {
   it.each([
     ["staging-restored", "after-staging-restore"],
     ["staging-applying", "before-staging-commit:arona"]
-  ] as const)("aborts %s without plan, backup, or staging inputs", async (expectedState, fault) => {
+  ] as const)("[fault] aborts %s without plan, backup, or staging inputs", async (expectedState, fault) => {
     const { fixture, recovery } = await prepareBoundFull();
     const stagingWorkspace = path.join(fixture.root, `apply-state-${expectedState}`);
     expect(runKilledApply(
@@ -1359,7 +1146,7 @@ describe("memory-perspective-v1 tracked migration", () => {
       fs.rm(recovery.directory, { recursive: true, force: true }),
       fs.rm(stagingWorkspace, { recursive: true, force: true })
     ]);
-    const aborted = await abortMigration({ workspace: fixture.workspace, ...offline });
+    const aborted = await abortFixture(fixture);
     expect(await snapshotDirectoryBytes(fixtureDataDirectories(fixture))).toEqual(before);
     await expect(readJson(path.join(fixture.workspace, aborted.report))).resolves.toMatchObject({
       previousState: expectedState,
@@ -1368,7 +1155,7 @@ describe("memory-perspective-v1 tracked migration", () => {
     await expect(fs.stat(migrationIntentFile(fixture))).rejects.toMatchObject({ code: "ENOENT" });
   }, 60_000);
 
-  it("rejects a production hardlink hidden behind staging after an after-staging-restore SIGKILL", async () => {
+  it("[fault] rejects a production hardlink hidden behind staging after an after-staging-restore SIGKILL", async () => {
     const { fixture, recovery } = await prepareBoundFull();
     const stagingWorkspace = path.join(fixture.root, "staging-restored-hardlink-reentry");
     expect(runKilledApply(
@@ -1390,15 +1177,9 @@ describe("memory-perspective-v1 tracked migration", () => {
     expect(productionStat.ino).toBe(stagedStat.ino);
     expect(productionStat.nlink).toBe(2);
     const productionBefore = await snapshotDirectoryBytes(fixtureDataDirectories(fixture));
-    const events: Array<{ databasePath: string; scope: string; blocked: boolean }> = [];
-    await expect(applyMigration({
-      workspace: fixture.workspace,
-      planDir: "business/migrations/plans",
-      backup: recovery.directory,
-      stagingWorkspace,
-      databaseOpenObserver: (event: { databasePath: string; scope: string; blocked: boolean }) => events.push(event),
-      ...offline
-    })).rejects.toThrow(/独立|身份|link|staging/i);
+    const { events, databaseOpenObserver } = observeDatabaseOpens();
+    await expect(applyFixture(fixture, recovery.directory, stagingWorkspace, { databaseOpenObserver }))
+      .rejects.toThrow(/独立|身份|link|staging/i);
     expect(events).toEqual([]);
     expect(await snapshotDirectoryBytes(fixtureDataDirectories(fixture))).toEqual(productionBefore);
     expect((await readJson(migrationIntentFile(fixture))).state).toBe("staging-failed");
@@ -1406,14 +1187,10 @@ describe("memory-perspective-v1 tracked migration", () => {
 
   it("binds one direct and one wrapper row with the same source/effectiveId through refresh and dry-run", async () => {
     const { fixture } = await prepareDuplicateWorkingProposal();
-    const refreshed = refreshPlans({
-      workspace: fixture.workspace,
-      proposalDir: "business/migrations/proposals",
-      planDir: "business/migrations/plans"
-    });
+    const refreshed = refreshFixturePlans(fixture);
 
     expect(refreshed.plans).toHaveLength(4);
-    expect(dryRunPlans({ workspace: fixture.workspace, planDir: "business/migrations/plans" }).ok).toBe(true);
+    expect(dryRunFixture(fixture).ok).toBe(true);
   });
 
   it.each(["wrapper-base", "missing-evidence", "delete", "split-target"] as const)(
@@ -1466,9 +1243,9 @@ describe("memory-perspective-v1 tracked migration", () => {
     insertMemory(fixture.applicationPaths[0], "working", "cross-source-id", "工作事实", ["12345678"]);
     insertMemory(fixture.applicationPaths[0], "long_term", "cross-source-id", "长期事实", ["12345678"]);
     await exportGenerateResolve(fixture);
-    refreshPlans({ workspace: fixture.workspace, proposalDir: "business/migrations/proposals", planDir: "business/migrations/plans" });
+    refreshFixturePlans(fixture);
 
-    expect(dryRunPlans({ workspace: fixture.workspace, planDir: "business/migrations/plans" }).ok).toBe(true);
+    expect(dryRunFixture(fixture).ok).toBe(true);
   });
 
   it("still rejects two rows with the exact same stableKey", async () => {
@@ -1483,11 +1260,7 @@ describe("memory-perspective-v1 tracked migration", () => {
     const deleted = await createFixture();
     await exportGenerateResolve(deleted);
     removeMemoryById(deleted.applicationPaths[0], "working-plana");
-    expect(() => refreshPlans({
-      workspace: deleted.workspace,
-      proposalDir: "business/migrations/proposals",
-      planDir: "business/migrations/plans"
-    })).toThrow(/集合已变化|重新 export/);
+    expect(() => refreshFixturePlans(deleted)).toThrow(/集合已变化|重新 export/);
 
     const duplicate = await createFixture();
     await exportGenerateResolve(duplicate);
@@ -1507,7 +1280,8 @@ describe("memory-perspective-v1 tracked migration", () => {
       outsideSignedProposals,
       { recursive: true }
     );
-    expect(() => signProposalDirectory({ proposalDir: outsideSignedProposals })).toThrow(/workspace|所属/);
+    expect(() => signProposalDirectory({ proposalDir: outsideSignedProposals }))
+      .toThrow(/workspace|所属|sourceExport 不存在/);
 
     const proposalPath = path.join(fixture.workspace, "business/migrations/proposals/plana.proposal.json");
     const proposal = await readJson(proposalPath);
@@ -1534,26 +1308,16 @@ describe("memory-perspective-v1 tracked migration", () => {
 
     const planFixture = await createFixture();
     await exportGenerateResolve(planFixture);
-    refreshPlans({
-      workspace: planFixture.workspace,
-      proposalDir: "business/migrations/proposals",
-      planDir: "business/migrations/plans"
-    });
+    refreshFixturePlans(planFixture);
     const planPath = path.join(planFixture.workspace, "business/migrations/plans/plana.plan.json");
     const plan = await readJson(planPath);
     plan.remotePath = "/tmp/unknown-plan-artifact";
     await fs.writeFile(planPath, `${JSON.stringify(resignTestDocument(plan, "planSha256"), null, 2)}\n`);
-    expect(() => dryRunPlans({
-      workspace: planFixture.workspace,
-      planDir: "business/migrations/plans"
-    })).toThrow(/remotePath|未知字段/);
+    expect(() => dryRunFixture(planFixture)).toThrow(/remotePath|未知字段/);
     delete plan.remotePath;
     plan.sourceExport = "/tmp/absolute-export.json";
     await fs.writeFile(planPath, `${JSON.stringify(resignTestDocument(plan, "planSha256"), null, 2)}\n`);
-    expect(() => dryRunPlans({
-      workspace: planFixture.workspace,
-      planDir: "business/migrations/plans"
-    })).toThrow(/绝对|artifact|relative|相对/i);
+    expect(() => dryRunFixture(planFixture)).toThrow(/绝对|artifact|relative|相对/i);
   });
 
   it("keeps all eight main, wal, and shm files byte-identical through export, refresh, and dry-run", async () => {
@@ -1582,13 +1346,9 @@ describe("memory-perspective-v1 tracked migration", () => {
       });
       await resolveAllProposals(fixture.workspace);
       expect(await snapshotDirectoryBytes(directories)).toEqual(before);
-      refreshPlans({
-        workspace: fixture.workspace,
-        proposalDir: "business/migrations/proposals",
-        planDir: "business/migrations/plans"
-      });
+      refreshFixturePlans(fixture);
       expect(await snapshotDirectoryBytes(directories)).toEqual(before);
-      expect(dryRunPlans({ workspace: fixture.workspace, planDir: "business/migrations/plans" }).ok).toBe(true);
+      expect(dryRunFixture(fixture).ok).toBe(true);
       expect(await snapshotDirectoryBytes(directories)).toEqual(before);
     } finally {
       for (const database of liveConnections) database.close();
@@ -1615,8 +1375,8 @@ describe("memory-perspective-v1 tracked migration", () => {
     for (const drift of ["application", "queue"] as const) {
       const fixture = await createFullFixture();
       await exportGenerateResolve(fixture);
-      refreshPlans({ workspace: fixture.workspace, proposalDir: "business/migrations/proposals", planDir: "business/migrations/plans" });
-      await prepareMigration({ workspace: fixture.workspace, planDir: "business/migrations/plans", ...offline });
+      refreshFixturePlans(fixture);
+      await prepareFixture(fixture);
       const recovery = await createRecoveryPoint({ workspace: fixture.workspace, quiesced: true });
       const database = new DatabaseSync(drift === "application" ? fixture.applicationPaths[0] : fixture.queuePaths[0]);
       if (drift === "application") {
@@ -1625,12 +1385,7 @@ describe("memory-perspective-v1 tracked migration", () => {
         database.exec("PRAGMA user_version=99");
       }
       database.close();
-      await expect(prepareMigration({
-        workspace: fixture.workspace,
-        planDir: "business/migrations/plans",
-        backup: recovery.directory,
-        ...offline
-      })).rejects.toThrow(/摘要|绑定|漂移/);
+      await expect(prepareFixture(fixture, { backup: recovery.directory })).rejects.toThrow(/摘要|绑定|漂移/);
     }
   }, 60_000);
 
@@ -1667,13 +1422,13 @@ describe("memory-perspective-v1 tracked migration", () => {
     }
     await fs.writeFile(proposalPath, `${JSON.stringify(proposal, null, 2)}\n`);
     signProposalDirectory({ proposalDir: path.dirname(proposalPath) });
-    refreshPlans({ workspace: fixture.workspace, proposalDir: "business/migrations/proposals", planDir: "business/migrations/plans" });
+    refreshFixturePlans(fixture);
     const plan = await readJson(path.join(fixture.workspace, "business/migrations/plans/plana.plan.json"));
     expect(plan.replacements.working[0].userIds).toEqual(["12345678", "87654321"]);
     expect(plan.replacements.working[0]).not.toHaveProperty("userId");
     expect(plan.replacements.working[0].occurredAt).toBe("2026-07-01T00:00:00.000Z");
     expect(plan.replacements.working[0].occurredEndAt).toBe("2026-07-05T00:00:00.000Z");
-    expect(() => dryRunPlans({ workspace: fixture.workspace, planDir: "business/migrations/plans" })).not.toThrow();
+    expect(() => dryRunFixture(fixture)).not.toThrow();
 
     const mismatchedProposal = await readJson(proposalPath);
     mismatchedProposal.targets.working[0].targetFact = "我注意到另一用户（QQ 12345678）先提出请求，测试用户（QQ 87654321）随后完成，我觉得这段进展很重要，我也愿意认真回应。";
@@ -1743,11 +1498,7 @@ describe("memory-perspective-v1 tracked migration", () => {
         failedDuringSign = true;
       }
       if (!failedDuringSign) {
-        expect(() => refreshPlans({
-          workspace: fixture.workspace,
-          proposalDir: "business/migrations/proposals",
-          planDir: "business/migrations/plans"
-        })).toThrow(/引用不存在|metadata/i);
+        expect(() => refreshFixturePlans(fixture)).toThrow(/引用不存在|metadata/i);
       }
       expect(snapshotMemoryRows(fixture.applicationPaths)).toEqual(before);
     }
@@ -1768,16 +1519,12 @@ describe("memory-perspective-v1 tracked migration", () => {
     proposal.targets.working[0].metadataPatch.set.userName = "测试用户";
     await fs.writeFile(proposalPath, `${JSON.stringify(proposal, null, 2)}\n`);
     signProposalDirectory({ proposalDir: path.dirname(proposalPath) });
-    refreshPlans({
-      workspace: fixture.workspace,
-      proposalDir: "business/migrations/proposals",
-      planDir: "business/migrations/plans"
-    });
+    refreshFixturePlans(fixture);
 
     const plan = await readJson(path.join(fixture.workspace, "business/migrations/plans/plana.plan.json"));
     expect(plan.replacements.working[0].userName).toBe("测试用户");
     expect(plan.replacements.working[0].fact).toContain("测试用户（QQ 12345678）");
-    expect(dryRunPlans({ workspace: fixture.workspace, planDir: "business/migrations/plans" }).ok).toBe(true);
+    expect(dryRunFixture(fixture).ok).toBe(true);
   });
 
   it("rejects a symlinked data parent before opening or renaming external databases", async () => {
@@ -1788,12 +1535,7 @@ describe("memory-perspective-v1 tracked migration", () => {
     const externalApplication = path.join(external, "sunabot.sqlite");
     const before = await fs.readFile(externalApplication);
     await fs.symlink(external, dataDirectory);
-    await expect(installStagedMigration({
-      workspace: fixture.workspace,
-      stagingWorkspace,
-      confirmReplace: true,
-      ...offline
-    })).rejects.toThrow(/symlink|符号链接/);
+    await expect(installFixture(fixture, stagingWorkspace)).rejects.toThrow(/symlink|符号链接/);
     expect(await fs.readFile(externalApplication)).toEqual(before);
     await expect(fs.stat(path.join(
       fixture.workspace,
@@ -1824,12 +1566,7 @@ describe("memory-perspective-v1 tracked migration", () => {
         await fs.rmdir(quarantineAgent);
         await fs.symlink(external, quarantineAgent);
       }
-      await expect(installStagedMigration({
-        workspace: fixture.workspace,
-        stagingWorkspace,
-        confirmReplace: true,
-        ...offline
-      })).rejects.toThrow(/symlink|符号链接|状态无法/);
+      await expect(installFixture(fixture, stagingWorkspace)).rejects.toThrow(/symlink|符号链接|状态无法/);
       expect(await fs.readFile(currentApplication)).toEqual(currentBefore);
       expect(await fs.readFile(sentinel)).toEqual(Buffer.from("unchanged"));
     }
@@ -1838,51 +1575,34 @@ describe("memory-perspective-v1 tracked migration", () => {
   it("binds and revalidates an existing prepare intent without opening or mutating production SQLite", async () => {
     const fixture = await createFullFixture();
     await exportGenerateResolve(fixture);
-    refreshPlans({
-      workspace: fixture.workspace,
-      proposalDir: "business/migrations/proposals",
-      planDir: "business/migrations/plans"
-    });
-    await prepareMigration({
-      workspace: fixture.workspace,
-      planDir: "business/migrations/plans",
-      ...offline
-    });
+    refreshFixturePlans(fixture);
+    await prepareFixture(fixture);
     const recovery = await createRecoveryPoint({ workspace: fixture.workspace, quiesced: true });
     const before = await snapshotDirectoryBytes(fixtureDataDirectories(fixture));
-    const events: Array<{ databasePath: string; scope: string; blocked: boolean }> = [];
+    const { events, databaseOpenObserver } = observeDatabaseOpens();
 
-    await expect(prepareMigration({
-      workspace: fixture.workspace,
-      planDir: "business/migrations/plans",
+    await expect(prepareFixture(fixture, {
       backup: recovery.directory,
-      databaseOpenObserver: (event: { databasePath: string; scope: string; blocked: boolean }) => events.push(event),
-      ...offline
+      databaseOpenObserver
     })).resolves.toMatchObject({ state: "prepared" });
     const boundIntent = await fs.readFile(migrationIntentFile(fixture), "utf8");
-    await expect(prepareMigration({
-      workspace: fixture.workspace,
-      planDir: "business/migrations/plans",
+    await expect(prepareFixture(fixture, {
       backup: recovery.directory,
-      databaseOpenObserver: (event: { databasePath: string; scope: string; blocked: boolean }) => events.push(event),
-      ...offline
+      databaseOpenObserver
     })).resolves.toMatchObject({ state: "prepared" });
 
     expect(events.filter((event) => event.scope === "production")).toEqual([]);
     expect(await snapshotDirectoryBytes(fixtureDataDirectories(fixture))).toEqual(before);
     expect(await fs.readFile(migrationIntentFile(fixture), "utf8")).toBe(boundIntent);
 
-    await expect(prepareMigration({
-      workspace: fixture.workspace,
-      planDir: "business/migrations/plans",
+    await expect(prepareFixture(fixture, {
       backup: recovery.directory,
-      databaseOpenObserver: (event: { databasePath: string; scope: string; blocked: boolean }) => events.push(event),
+      databaseOpenObserver,
       operationLockHooks: {
         afterBackupValidationBeforePrepareIntent: async () => {
           await fs.writeFile(`${fixture.queuePaths[0]}-wal`, Buffer.from("prepared-retry-final-cas"));
         }
-      },
-      ...offline
+      }
     })).rejects.toThrow(/sidecar|WAL|SHM/i);
     expect(await fs.readFile(migrationIntentFile(fixture), "utf8")).toBe(boundIntent);
     expect(events.filter((event) => event.scope === "production")).toEqual([]);
@@ -1891,30 +1611,19 @@ describe("memory-perspective-v1 tracked migration", () => {
   it("rechecks production bytes after backup validation before persisting prepared intent", async () => {
     const fixture = await createFullFixture();
     await exportGenerateResolve(fixture);
-    refreshPlans({
-      workspace: fixture.workspace,
-      proposalDir: "business/migrations/proposals",
-      planDir: "business/migrations/plans"
-    });
-    await prepareMigration({
-      workspace: fixture.workspace,
-      planDir: "business/migrations/plans",
-      ...offline
-    });
+    refreshFixturePlans(fixture);
+    await prepareFixture(fixture);
     const recovery = await createRecoveryPoint({ workspace: fixture.workspace, quiesced: true });
     const intentBefore = await fs.readFile(migrationIntentFile(fixture), "utf8");
-    const events: Array<{ databasePath: string; scope: string; blocked: boolean }> = [];
-    await expect(prepareMigration({
-      workspace: fixture.workspace,
-      planDir: "business/migrations/plans",
+    const { events, databaseOpenObserver } = observeDatabaseOpens();
+    await expect(prepareFixture(fixture, {
       backup: recovery.directory,
-      databaseOpenObserver: (event: { databasePath: string; scope: string; blocked: boolean }) => events.push(event),
+      databaseOpenObserver,
       operationLockHooks: {
         afterBackupValidationBeforePrepareIntent: async () => {
           await fs.appendFile(fixture.applicationPaths[0], Buffer.from("prepare-final-cas-drift"));
         }
-      },
-      ...offline
+      }
     })).rejects.toThrow(/摘要|绑定|漂移/i);
     expect(events.filter((event) => event.scope === "production")).toEqual([]);
     expect(await fs.readFile(migrationIntentFile(fixture), "utf8")).toBe(intentBefore);
@@ -1924,25 +1633,15 @@ describe("memory-perspective-v1 tracked migration", () => {
   it("rejects a new production database pair at the final prepare CAS without opening SQLite", async () => {
     const fixture = await createFullFixture();
     await exportGenerateResolve(fixture);
-    refreshPlans({
-      workspace: fixture.workspace,
-      proposalDir: "business/migrations/proposals",
-      planDir: "business/migrations/plans"
-    });
-    await prepareMigration({
-      workspace: fixture.workspace,
-      planDir: "business/migrations/plans",
-      ...offline
-    });
+    refreshFixturePlans(fixture);
+    await prepareFixture(fixture);
     const recovery = await createRecoveryPoint({ workspace: fixture.workspace, quiesced: true });
     const intentBefore = await fs.readFile(migrationIntentFile(fixture), "utf8");
-    const events: Array<{ databasePath: string; scope: string; blocked: boolean }> = [];
+    const { events, databaseOpenObserver } = observeDatabaseOpens();
     let productionAfterExternalDrift: Awaited<ReturnType<typeof snapshotDirectoryBytes>> | null = null;
-    await expect(prepareMigration({
-      workspace: fixture.workspace,
-      planDir: "business/migrations/plans",
+    await expect(prepareFixture(fixture, {
       backup: recovery.directory,
-      databaseOpenObserver: (event: { databasePath: string; scope: string; blocked: boolean }) => events.push(event),
+      databaseOpenObserver,
       operationLockHooks: {
         afterBackupValidationBeforePrepareIntent: async () => {
           const orphanData = await addOrphanDatabasePair(fixture.workspace, "prepare-final-orphan");
@@ -1951,43 +1650,30 @@ describe("memory-perspective-v1 tracked migration", () => {
             orphanData
           ]);
         }
-      },
-      ...offline
+      }
     })).rejects.toThrow(/数据库.*集合|集合.*数据库/i);
     expectOnlyRecoveryDatabaseOpens(events, 9);
     expect(productionAfterExternalDrift).not.toBeNull();
-    expect(await snapshotDirectoryBytes(productionAfterExternalDrift!.map((entry) => entry.directory)))
-      .toEqual(productionAfterExternalDrift);
+    await expectSnapshotUnchanged(productionAfterExternalDrift!);
     expect(await fs.readFile(migrationIntentFile(fixture), "utf8")).toBe(intentBefore);
   }, 30_000);
 
   it("rejects a re-signed plan replacement at the final prepare authorization CAS", async () => {
     const fixture = await createFullFixture();
     await exportGenerateResolve(fixture);
-    refreshPlans({
-      workspace: fixture.workspace,
-      proposalDir: "business/migrations/proposals",
-      planDir: "business/migrations/plans"
-    });
-    await prepareMigration({
-      workspace: fixture.workspace,
-      planDir: "business/migrations/plans",
-      ...offline
-    });
+    refreshFixturePlans(fixture);
+    await prepareFixture(fixture);
     const recovery = await createRecoveryPoint({ workspace: fixture.workspace, quiesced: true });
     const intentBefore = await fs.readFile(migrationIntentFile(fixture), "utf8");
-    const events: Array<{ databasePath: string; scope: string; blocked: boolean }> = [];
-    await expect(prepareMigration({
-      workspace: fixture.workspace,
-      planDir: "business/migrations/plans",
+    const { events, databaseOpenObserver } = observeDatabaseOpens();
+    await expect(prepareFixture(fixture, {
       backup: recovery.directory,
-      databaseOpenObserver: (event: { databasePath: string; scope: string; blocked: boolean }) => events.push(event),
+      databaseOpenObserver,
       operationLockHooks: {
         afterBackupValidationBeforePrepareIntent: async () => {
           await rewriteSignedPlanReplacement(fixture.workspace, "prepare-plan-drift");
         }
-      },
-      ...offline
+      }
     })).rejects.toThrow(/plan|replacement|intent|绑定/i);
     expectOnlyRecoveryDatabaseOpens(events, 9);
     expect(await fs.readFile(migrationIntentFile(fixture), "utf8")).toBe(intentBefore);
@@ -1997,15 +1683,11 @@ describe("memory-perspective-v1 tracked migration", () => {
     const { fixture, recovery } = await prepareBoundFull();
     const stagingWorkspace = path.join(fixture.root, "zero-open-staging");
     const productionBefore = await snapshotDirectoryBytes(fixtureDataDirectories(fixture));
-    const events: Array<{ databasePath: string; scope: string; blocked: boolean }> = [];
+    const { events, databaseOpenObserver } = observeDatabaseOpens();
     let blockedProbe = false;
 
-    await expect(applyMigration({
-      workspace: fixture.workspace,
-      planDir: "business/migrations/plans",
-      backup: recovery.directory,
-      stagingWorkspace,
-      databaseOpenObserver: (event: { databasePath: string; scope: string; blocked: boolean }) => events.push(event),
+    await expect(applyFixture(fixture, recovery.directory, stagingWorkspace, {
+      databaseOpenObserver,
       operationLockHooks: {
         afterFinalStagingCheckpoint: async ({ databasePaths, probeDatabaseOpen }: {
           databasePaths: string[];
@@ -2019,8 +1701,7 @@ describe("memory-perspective-v1 tracked migration", () => {
             blockedProbe = true;
           }
         }
-      },
-      ...offline
+      }
     })).resolves.toMatchObject({ state: "staged-ready" });
 
     expect(blockedProbe).toBe(true);
@@ -2029,26 +1710,19 @@ describe("memory-perspective-v1 tracked migration", () => {
     expect(events.filter((event) => event.scope === "staging-live" && event.blocked)).toHaveLength(1);
     expect(await snapshotDirectoryBytes(fixtureDataDirectories(fixture))).toEqual(productionBefore);
 
-    const finalizedBefore = await snapshotDirectoryBytes(fixtureDataDirectories({
-      applicationPaths: fixture.applicationPaths.map((file) => path.join(stagingWorkspace, path.relative(fixture.workspace, file)))
-    }));
+    const finalizedBefore = await snapshotDirectoryBytes(relocatedDataDirectories(fixture, stagingWorkspace));
     const intentBefore = await fs.readFile(migrationIntentFile(fixture), "utf8");
-    const retryEvents: Array<{ databasePath: string; scope: string; blocked: boolean }> = [];
-    await expect(applyMigration({
-      workspace: fixture.workspace,
-      planDir: "business/migrations/plans",
-      backup: recovery.directory,
-      stagingWorkspace,
-      databaseOpenObserver: (event: { databasePath: string; scope: string; blocked: boolean }) => retryEvents.push(event),
-      ...offline
+    const { events: retryEvents, databaseOpenObserver: retryObserver } = observeDatabaseOpens();
+    await expect(applyFixture(fixture, recovery.directory, stagingWorkspace, {
+      databaseOpenObserver: retryObserver
     })).resolves.toMatchObject({ state: "staged-ready" });
     expect(retryEvents).toHaveLength(18);
     expect(retryEvents.every((event) => event.scope === "recovery" && event.blocked === false)).toBe(true);
     expect(await fs.readFile(migrationIntentFile(fixture), "utf8")).toBe(intentBefore);
-    expect(await snapshotDirectoryBytes(finalizedBefore.map((entry) => entry.directory))).toEqual(finalizedBefore);
+    await expectSnapshotUnchanged(finalizedBefore);
   }, 30_000);
 
-  it("resumes after the durable staged-ready boundary without opening production or finalized staging", async () => {
+  it("[fault] resumes after the durable staged-ready boundary without opening production or finalized staging", async () => {
     const { fixture, recovery } = await prepareBoundFull();
     const stagingWorkspace = path.join(fixture.root, "staged-ready-kill-staging");
     expect(runKilledApply(
@@ -2059,19 +1733,12 @@ describe("memory-perspective-v1 tracked migration", () => {
     ).signal).toBe("SIGKILL");
     expect((await readJson(migrationIntentFile(fixture))).state).toBe("staged-ready");
     const productionBefore = await snapshotDirectoryBytes(fixtureDataDirectories(fixture));
-    const stagingDirectories = fixtureDataDirectories({
-      applicationPaths: fixture.applicationPaths.map((file) => path.join(stagingWorkspace, path.relative(fixture.workspace, file)))
-    });
+    const stagingDirectories = relocatedDataDirectories(fixture, stagingWorkspace);
     const stagingBefore = await snapshotDirectoryBytes(stagingDirectories);
-    const events: Array<{ databasePath: string; scope: string; blocked: boolean }> = [];
+    const { events, databaseOpenObserver } = observeDatabaseOpens();
 
-    await expect(applyMigration({
-      workspace: fixture.workspace,
-      planDir: "business/migrations/plans",
-      backup: recovery.directory,
-      stagingWorkspace,
-      databaseOpenObserver: (event: { databasePath: string; scope: string; blocked: boolean }) => events.push(event),
-      ...offline
+    await expect(applyFixture(fixture, recovery.directory, stagingWorkspace, {
+      databaseOpenObserver
     })).resolves.toMatchObject({ state: "staged-ready" });
     expect(events).toHaveLength(18);
     expect(events.every((event) => event.scope === "recovery" && event.blocked === false)).toBe(true);
@@ -2082,21 +1749,16 @@ describe("memory-perspective-v1 tracked migration", () => {
   it("rechecks production bytes immediately before persisting staged-ready intent", async () => {
     const { fixture, recovery } = await prepareBoundFull();
     const stagingWorkspace = path.join(fixture.root, "final-production-cas-staging");
-    const events: Array<{ databasePath: string; scope: string; blocked: boolean }> = [];
+    const { events, databaseOpenObserver } = observeDatabaseOpens();
     let productionAfterExternalDrift: Awaited<ReturnType<typeof snapshotDirectoryBytes>> | null = null;
-    await expect(applyMigration({
-      workspace: fixture.workspace,
-      planDir: "business/migrations/plans",
-      backup: recovery.directory,
-      stagingWorkspace,
-      databaseOpenObserver: (event: { databasePath: string; scope: string; blocked: boolean }) => events.push(event),
+    await expect(applyFixture(fixture, recovery.directory, stagingWorkspace, {
+      databaseOpenObserver,
       operationLockHooks: {
         beforeStagedReadyIntent: async () => {
           await fs.writeFile(`${fixture.applicationPaths[0]}-wal`, Buffer.from("apply-final-cas-sidecar"));
           productionAfterExternalDrift = await snapshotDirectoryBytes(fixtureDataDirectories(fixture));
         }
-      },
-      ...offline
+      }
     })).rejects.toThrow(/sidecar|WAL|SHM|staging/i);
     expect(events.filter((event) => event.scope === "production")).toEqual([]);
     expect(productionAfterExternalDrift).not.toBeNull();
@@ -2109,32 +1771,24 @@ describe("memory-perspective-v1 tracked migration", () => {
     async (scope) => {
       const { fixture, recovery } = await prepareBoundFull();
       const stagingWorkspace = path.join(fixture.root, `final-${scope}-set-cas-staging`);
-      const events: Array<{ databasePath: string; scope: string; blocked: boolean }> = [];
+      const { events, databaseOpenObserver } = observeDatabaseOpens();
       let driftSnapshot: Awaited<ReturnType<typeof snapshotDirectoryBytes>> | null = null;
-      await expect(applyMigration({
-        workspace: fixture.workspace,
-        planDir: "business/migrations/plans",
-        backup: recovery.directory,
-        stagingWorkspace,
-        databaseOpenObserver: (event: { databasePath: string; scope: string; blocked: boolean }) => events.push(event),
+      await expect(applyFixture(fixture, recovery.directory, stagingWorkspace, {
+        databaseOpenObserver,
         operationLockHooks: {
           beforeStagedReadyIntent: async () => {
             const targetWorkspace = scope === "production" ? fixture.workspace : stagingWorkspace;
             const orphanData = await addOrphanDatabasePair(targetWorkspace, `apply-final-${scope}-orphan`);
-            const knownDirectories = fixtureDataDirectories({
-              applicationPaths: fixture.applicationPaths.map((file) => (
-                scope === "production" ? file : path.join(stagingWorkspace, path.relative(fixture.workspace, file))
-              ))
-            });
+            const knownDirectories = scope === "production"
+              ? fixtureDataDirectories(fixture)
+              : relocatedDataDirectories(fixture, stagingWorkspace);
             driftSnapshot = await snapshotDirectoryBytes([...knownDirectories, orphanData]);
           }
-        },
-        ...offline
+        }
       })).rejects.toThrow(/数据库.*集合|集合.*数据库|staging/i);
       expect(events.filter((event) => event.scope === "production")).toEqual([]);
       expect(driftSnapshot).not.toBeNull();
-      expect(await snapshotDirectoryBytes(driftSnapshot!.map((entry) => entry.directory)))
-        .toEqual(driftSnapshot);
+      await expectSnapshotUnchanged(driftSnapshot!);
       expect((await readJson(migrationIntentFile(fixture))).state).toBe("staging-failed");
     },
     60_000
@@ -2146,14 +1800,9 @@ describe("memory-perspective-v1 tracked migration", () => {
     const stagingWorkspace = path.join(fixture.root, "rejected-plan-drift-staging");
     const productionBefore = await snapshotDirectoryBytes(fixtureDataDirectories(fixture));
     const intentBefore = await fs.readFile(migrationIntentFile(fixture), "utf8");
-    const events: Array<{ databasePath: string; scope: string; blocked: boolean }> = [];
-    await expect(applyMigration({
-      workspace: fixture.workspace,
-      planDir: "business/migrations/plans",
-      backup: recovery.directory,
-      stagingWorkspace,
-      databaseOpenObserver: (event: { databasePath: string; scope: string; blocked: boolean }) => events.push(event),
-      ...offline
+    const { events, databaseOpenObserver } = observeDatabaseOpens();
+    await expect(applyFixture(fixture, recovery.directory, stagingWorkspace, {
+      databaseOpenObserver
     })).rejects.toThrow(/plan|replacement|intent|绑定/i);
     expectOnlyRecoveryDatabaseOpens(events, 9);
     expect(await snapshotDirectoryBytes(fixtureDataDirectories(fixture))).toEqual(productionBefore);
@@ -2167,24 +1816,17 @@ describe("memory-perspective-v1 tracked migration", () => {
       const { fixture, recovery, stagingWorkspace } = await prepareStagedFull();
       const targetWorkspace = scope === "production" ? fixture.workspace : stagingWorkspace;
       const orphanData = await addOrphanDatabasePair(targetWorkspace, `apply-retry-${scope}-orphan`);
-      const knownDirectories = fixtureDataDirectories({
-        applicationPaths: fixture.applicationPaths.map((file) => (
-          scope === "production" ? file : path.join(stagingWorkspace, path.relative(fixture.workspace, file))
-        ))
-      });
+      const knownDirectories = scope === "production"
+        ? fixtureDataDirectories(fixture)
+        : relocatedDataDirectories(fixture, stagingWorkspace);
       const driftSnapshot = await snapshotDirectoryBytes([...knownDirectories, orphanData]);
       const intentBefore = await fs.readFile(migrationIntentFile(fixture), "utf8");
-      const events: Array<{ databasePath: string; scope: string; blocked: boolean }> = [];
-      await expect(applyMigration({
-        workspace: fixture.workspace,
-        planDir: "business/migrations/plans",
-        backup: recovery.directory,
-        stagingWorkspace,
-        databaseOpenObserver: (event: { databasePath: string; scope: string; blocked: boolean }) => events.push(event),
-        ...offline
+      const { events, databaseOpenObserver } = observeDatabaseOpens();
+      await expect(applyFixture(fixture, recovery.directory, stagingWorkspace, {
+        databaseOpenObserver
       })).rejects.toThrow(/数据库.*集合|集合.*数据库|未授权安装数据库|安装/i);
       expect(events).toEqual([]);
-      expect(await snapshotDirectoryBytes(driftSnapshot.map((entry) => entry.directory))).toEqual(driftSnapshot);
+      await expectSnapshotUnchanged(driftSnapshot);
       expect(await fs.readFile(migrationIntentFile(fixture), "utf8")).toBe(intentBefore);
     },
     60_000
@@ -2208,11 +1850,7 @@ describe("memory-perspective-v1 tracked migration", () => {
     expect(recoveryOpenCount).toBe(0);
 
     const productionBefore = await snapshotDirectoryBytes(fixtureDataDirectories(fixture));
-    const stagingDirectories = fixtureDataDirectories({
-      applicationPaths: fixture.applicationPaths.map((file) => (
-        path.join(stagingWorkspace, path.relative(fixture.workspace, file))
-      ))
-    });
+    const stagingDirectories = relocatedDataDirectories(fixture, stagingWorkspace);
     const stagingBefore = await snapshotDirectoryBytes(stagingDirectories);
     const intentBefore = await fs.readFile(migrationIntentFile(fixture), "utf8");
     const quarantineDirectory = path.join(
@@ -2220,14 +1858,9 @@ describe("memory-perspective-v1 tracked migration", () => {
       "business/migrations/memory-perspective-v1-quarantine/plana/data"
     );
     await expect(fs.stat(quarantineDirectory)).rejects.toMatchObject({ code: "ENOENT" });
-    const events: Array<{ databasePath: string; scope: string; blocked: boolean }> = [];
-    await expect(applyMigration({
-      workspace: fixture.workspace,
-      planDir: "business/migrations/plans",
-      backup: recovery.directory,
-      stagingWorkspace,
-      databaseOpenObserver: (event: { databasePath: string; scope: string; blocked: boolean }) => events.push(event),
-      ...offline
+    const { events, databaseOpenObserver } = observeDatabaseOpens();
+    await expect(applyFixture(fixture, recovery.directory, stagingWorkspace, {
+      databaseOpenObserver
     })).rejects.toThrow(/hardlink|独立|身份|link/i);
     expect(events).toEqual([]);
     expect(await snapshotDirectoryBytes(fixtureDataDirectories(fixture))).toEqual(productionBefore);
@@ -2239,14 +1872,10 @@ describe("memory-perspective-v1 tracked migration", () => {
   it("rejects a production-to-staging hardlink at the final staged-ready identity CAS", async () => {
     const { fixture, recovery } = await prepareBoundFull();
     const stagingWorkspace = path.join(fixture.root, "final-live-identity-alias-staging");
-    const events: Array<{ databasePath: string; scope: string; blocked: boolean }> = [];
+    const { events, databaseOpenObserver } = observeDatabaseOpens();
     let alias: Awaited<ReturnType<typeof hardlinkMatchingLiveDatabase>> | null = null;
-    await expect(applyMigration({
-      workspace: fixture.workspace,
-      planDir: "business/migrations/plans",
-      backup: recovery.directory,
-      stagingWorkspace,
-      databaseOpenObserver: (event: { databasePath: string; scope: string; blocked: boolean }) => events.push(event),
+    await expect(applyFixture(fixture, recovery.directory, stagingWorkspace, {
+      databaseOpenObserver,
       operationLockHooks: {
         beforeStagedReadyIntent: async () => {
           alias = await hardlinkMatchingLiveDatabase(fixture.workspace, stagingWorkspace);
@@ -2254,8 +1883,7 @@ describe("memory-perspective-v1 tracked migration", () => {
           expect(alias.leftStat.ino).toBe(alias.rightStat.ino);
           expect(alias.leftStat.nlink).toBe(2);
         }
-      },
-      ...offline
+      }
     })).rejects.toThrow(/独立|身份|link|staging/i);
     expect(alias).not.toBeNull();
     expect(events.filter((event) => event.scope === "production")).toEqual([]);
@@ -2264,17 +1892,13 @@ describe("memory-perspective-v1 tracked migration", () => {
 
   it("installs finalized staging without opening either finalized or destination database paths", async () => {
     const { fixture, stagingWorkspace } = await prepareStagedFull();
-    const events: Array<{ databasePath: string; scope: string; blocked: boolean }> = [];
+    const { events, databaseOpenObserver } = observeDatabaseOpens();
     const productionPaths = new Set([...fixture.applicationPaths, ...fixture.queuePaths].map((file) => path.resolve(file)));
     const stagingPaths = new Set([...fixture.applicationPaths, ...fixture.queuePaths].map((file) => (
       path.resolve(stagingWorkspace, path.relative(fixture.workspace, file))
     )));
-    await expect(installStagedMigration({
-      workspace: fixture.workspace,
-      stagingWorkspace,
-      confirmReplace: true,
-      databaseOpenObserver: (event: { databasePath: string; scope: string; blocked: boolean }) => events.push(event),
-      ...offline
+    await expect(installFixture(fixture, stagingWorkspace, {
+      databaseOpenObserver
     })).resolves.toMatchObject({ state: "verifying" });
     expect(events.filter((event) => productionPaths.has(event.databasePath))).toEqual([]);
     expect(events.filter((event) => stagingPaths.has(event.databasePath))).toEqual([]);
@@ -2318,22 +1942,14 @@ describe("memory-perspective-v1 tracked migration", () => {
         await fs.writeFile(intentPath, `${JSON.stringify(signedIntent, null, 2)}\n`);
 
         const productionDirectories = fixtureDataDirectories(fixture);
-        const stagingDirectories = fixtureDataDirectories({
-          applicationPaths: fixture.applicationPaths.map((file) => (
-            path.join(stagingWorkspace, path.relative(fixture.workspace, file))
-          ))
-        });
+        const stagingDirectories = relocatedDataDirectories(fixture, stagingWorkspace);
         const productionBefore = await snapshotDirectoryBytes(productionDirectories);
         const stagingBefore = await snapshotDirectoryBytes(stagingDirectories);
         let renameBoundaryCalls = 0;
-        await expect(installStagedMigration({
-          workspace: fixture.workspace,
-          stagingWorkspace,
-          confirmReplace: true,
+        await expect(installFixture(fixture, stagingWorkspace, {
           operationLockHooks: {
             afterInstallIdentityBeforeRename: async () => { renameBoundaryCalls += 1; }
-          },
-          ...offline
+          }
         })).rejects.toThrow(/schema|plan|proposal/i);
         expect(renameBoundaryCalls).toBe(0);
         expect(await snapshotDirectoryBytes(productionDirectories)).toEqual(productionBefore);
@@ -2359,14 +1975,9 @@ describe("memory-perspective-v1 tracked migration", () => {
       }
       const before = await snapshotDirectoryBytes(fixtureDataDirectories(fixture));
       const stagingWorkspace = path.join(fixture.root, `rejected-production-${drift}`);
-      const events: Array<{ databasePath: string; scope: string; blocked: boolean }> = [];
-      await expect(applyMigration({
-        workspace: fixture.workspace,
-        planDir: "business/migrations/plans",
-        backup: recovery.directory,
-        stagingWorkspace,
-        databaseOpenObserver: (event: { databasePath: string; scope: string; blocked: boolean }) => events.push(event),
-        ...offline
+      const { events, databaseOpenObserver } = observeDatabaseOpens();
+      await expect(applyFixture(fixture, recovery.directory, stagingWorkspace, {
+        databaseOpenObserver
       })).rejects.toThrow(/摘要|sidecar|WAL|SHM|staging|绑定/i);
       expect(events).toEqual([]);
       expect(await snapshotDirectoryBytes(fixtureDataDirectories(fixture))).toEqual(before);
@@ -2381,11 +1992,7 @@ describe("memory-perspective-v1 tracked migration", () => {
       const targetWorkspace = scope === "production" ? fixture.workspace : stagingWorkspace;
       const orphanData = await addOrphanDatabasePair(targetWorkspace, `install-${scope}-orphan`);
       const productionDirectories = fixtureDataDirectories(fixture);
-      const stagingDirectories = fixtureDataDirectories({
-        applicationPaths: fixture.applicationPaths.map((file) => (
-          path.join(stagingWorkspace, path.relative(fixture.workspace, file))
-        ))
-      });
+      const stagingDirectories = relocatedDataDirectories(fixture, stagingWorkspace);
       const productionSnapshot = await snapshotDirectoryBytes([
         ...productionDirectories,
         ...(scope === "production" ? [orphanData] : [])
@@ -2394,19 +2001,13 @@ describe("memory-perspective-v1 tracked migration", () => {
         ...stagingDirectories,
         ...(scope === "staging" ? [orphanData] : [])
       ]);
-      const events: Array<{ databasePath: string; scope: string; blocked: boolean }> = [];
-      await expect(installStagedMigration({
-        workspace: fixture.workspace,
-        stagingWorkspace,
-        confirmReplace: true,
-        databaseOpenObserver: (event: { databasePath: string; scope: string; blocked: boolean }) => events.push(event),
-        ...offline
+      const { events, databaseOpenObserver } = observeDatabaseOpens();
+      await expect(installFixture(fixture, stagingWorkspace, {
+        databaseOpenObserver
       })).rejects.toThrow(/数据库.*集合|集合.*数据库|安装/i);
       expect(events).toEqual([]);
-      expect(await snapshotDirectoryBytes(productionSnapshot.map((entry) => entry.directory)))
-        .toEqual(productionSnapshot);
-      expect(await snapshotDirectoryBytes(stagingSnapshot.map((entry) => entry.directory)))
-        .toEqual(stagingSnapshot);
+      await expectSnapshotUnchanged(productionSnapshot);
+      await expectSnapshotUnchanged(stagingSnapshot);
       await expect(fs.stat(path.join(
         fixture.workspace,
         "business/migrations/memory-perspective-v1-quarantine/plana/data"
@@ -2441,23 +2042,15 @@ describe("memory-perspective-v1 tracked migration", () => {
       expect(alias.recoveryStat.ino).toBe(alias.liveStat.ino);
       expect(alias.recoveryStat.nlink).toBe(2);
       const productionBefore = await snapshotDirectoryBytes(fixtureDataDirectories(fixture));
-      const stagingDirectories = fixtureDataDirectories({
-        applicationPaths: fixture.applicationPaths.map((file) => (
-          path.join(stagingWorkspace, path.relative(fixture.workspace, file))
-        ))
-      });
+      const stagingDirectories = relocatedDataDirectories(fixture, stagingWorkspace);
       const stagingBefore = await snapshotDirectoryBytes(stagingDirectories);
       const directoryInodesBefore = await Promise.all([
         ...fixtureDataDirectories(fixture),
         ...stagingDirectories
       ].map(async (directory) => (await fs.stat(directory)).ino));
-      const events: Array<{ databasePath: string; scope: string; blocked: boolean }> = [];
-      await expect(installStagedMigration({
-        workspace: fixture.workspace,
-        stagingWorkspace,
-        confirmReplace: true,
-        databaseOpenObserver: (event: { databasePath: string; scope: string; blocked: boolean }) => events.push(event),
-        ...offline
+      const { events, databaseOpenObserver } = observeDatabaseOpens();
+      await expect(installFixture(fixture, stagingWorkspace, {
+        databaseOpenObserver
       })).rejects.toThrow(/hardlink|独立|身份|link|安装/i);
       expect(events).toEqual([]);
       expect(await snapshotDirectoryBytes(fixtureDataDirectories(fixture))).toEqual(productionBefore);
@@ -2546,7 +2139,7 @@ describe("memory-perspective-v1 tracked migration", () => {
     }
   , 60_000);
 
-  it("rejects an unsigned database pair on install reentry before another directory rename", async () => {
+  it("[fault] rejects an unsigned database pair on install reentry before another directory rename", async () => {
     const { fixture, stagingWorkspace } = await prepareStagedFull();
     expect(runKilledInstall(
       fixture.workspace,
@@ -2581,7 +2174,7 @@ describe("memory-perspective-v1 tracked migration", () => {
     expect((await readJson(migrationIntentFile(fixture))).state).toBe("rollback-required");
   }, 60_000);
 
-  it("rechecks the full identity universe immediately before rollback normalize restores quarantine", async () => {
+  it("[fault] rechecks the full identity universe immediately before rollback normalize restores quarantine", async () => {
     const { fixture, recovery, stagingWorkspace } = await prepareStagedFull();
     expect(runKilledInstall(
       fixture.workspace,
@@ -2743,7 +2336,7 @@ describe("memory-perspective-v1 tracked migration", () => {
   );
 
   it.each(["main", "sidecar"] as const)(
-    "rejects staged %s drift at the final staged-to-current CAS after SIGKILL quarantine",
+    "[fault] rejects staged %s drift at the final staged-to-current CAS after SIGKILL quarantine",
     async (drift) => {
       const { fixture, stagingWorkspace } = await prepareStagedFull();
       expect(runKilledInstall(
@@ -2893,7 +2486,7 @@ describe("memory-perspective-v1 tracked migration", () => {
     await expectNoOperationLockArtifacts(reused.workspace);
   });
 
-  it("keeps a contender out while a real holder pauses after acquisition", async () => {
+  it("[fault] keeps a contender out while a real holder pauses after acquisition", async () => {
     const fixture = await createMinimalAbortFixture("awaiting-backup");
     const readyPath = path.join(fixture.root, "holder-ready");
     const releasePath = path.join(fixture.root, "holder-release");
@@ -3091,7 +2684,7 @@ describe("memory-perspective-v1 tracked migration", () => {
     "operation-lock:after-evidence-fsync",
     "operation-lock:after-canonical-link",
     "operation-lock:after-publish-dir-fsync"
-  ] as const)("recovers a real SIGKILL at publication point %s", async (point) => {
+  ] as const)("[fault] recovers a real SIGKILL at publication point %s", async (point) => {
     const fixture = await createMinimalAbortFixture("awaiting-backup");
     expect(runKilledAbort(fixture.workspace, point).signal).toBe("SIGKILL");
     await expect(fs.stat(fixture.intentPath)).resolves.toBeTruthy();
@@ -3106,7 +2699,7 @@ describe("memory-perspective-v1 tracked migration", () => {
     "operation-lock:after-claim-dir-fsync",
     "operation-lock:after-claim-unlink",
     "operation-lock:after-evidence-unlink"
-  ] as const)("recovers a real SIGKILL at release point %s", async (point) => {
+  ] as const)("[fault] recovers a real SIGKILL at release point %s", async (point) => {
     const fixture = await createMinimalAbortFixture("awaiting-backup");
     const killed = runKilledAbort(fixture.workspace, point);
     expect(
@@ -3123,7 +2716,7 @@ describe("memory-perspective-v1 tracked migration", () => {
     "operation-lock:after-recovery-evidence-fsync",
     "operation-lock:after-recovery-canonical-link",
     "operation-lock:after-recovery-dir-fsync"
-  ] as const)("recovers a successor republish after real SIGKILL at %s", async (point) => {
+  ] as const)("[fault] recovers a successor republish after real SIGKILL at %s", async (point) => {
     const fixture = await createMinimalAbortFixture("awaiting-backup");
     const killed = runKilledSuccessorRecovery(fixture.workspace, point);
     expect(
@@ -3184,6 +2777,95 @@ describe("memory-perspective-v1 tracked migration", () => {
     await expectNoOperationLockArtifacts(fixture.workspace);
   });
 });
+
+type MigrationFixture = { workspace: string };
+type DataFixture = MigrationFixture & { applicationPaths: string[] };
+type DatabaseOpenEvent = { databasePath: string; scope: string; blocked: boolean };
+
+function refreshFixturePlans(fixture: MigrationFixture) {
+  return refreshPlans({ workspace: fixture.workspace, proposalDir: PROPOSAL_DIR, planDir: PLAN_DIR });
+}
+
+function dryRunFixture(fixture: MigrationFixture) {
+  return dryRunPlans({ workspace: fixture.workspace, planDir: PLAN_DIR });
+}
+
+function prepareFixture(
+  fixture: MigrationFixture,
+  options: Partial<Parameters<typeof prepareMigration>[0]> = {}
+) {
+  return prepareMigration({ ...offline, workspace: fixture.workspace, planDir: PLAN_DIR, ...options });
+}
+
+function applyFixture(
+  fixture: MigrationFixture,
+  backup: string,
+  stagingWorkspace: string,
+  options: Partial<Parameters<typeof applyMigration>[0]> = {}
+) {
+  return applyMigration({
+    ...offline,
+    workspace: fixture.workspace,
+    planDir: PLAN_DIR,
+    backup,
+    stagingWorkspace,
+    ...options
+  });
+}
+
+function installFixture(
+  fixture: MigrationFixture,
+  stagingWorkspace: string,
+  options: Partial<Parameters<typeof installStagedMigration>[0]> = {}
+) {
+  return installStagedMigration({
+    ...offline,
+    workspace: fixture.workspace,
+    stagingWorkspace,
+    confirmReplace: true,
+    ...options
+  });
+}
+
+function rollbackFixture(
+  fixture: MigrationFixture,
+  backup: string,
+  targetWorkspace: string,
+  options: Partial<Parameters<typeof stageRollback>[0]> = {}
+) {
+  return stageRollback({ ...offline, workspace: fixture.workspace, backup, targetWorkspace, ...options });
+}
+
+function verifyFixture(
+  fixture: MigrationFixture,
+  options: Partial<Parameters<typeof verifyMigration>[0]> = {}
+) {
+  return verifyMigration({ ...offline, workspace: fixture.workspace, planDir: PLAN_DIR, ...options });
+}
+
+function abortFixture(
+  fixture: MigrationFixture,
+  options: Partial<Parameters<typeof abortMigration>[0]> = {}
+) {
+  return abortMigration({ ...offline, workspace: fixture.workspace, ...options });
+}
+
+function observeDatabaseOpens() {
+  const events: DatabaseOpenEvent[] = [];
+  return { events, databaseOpenObserver: (event: DatabaseOpenEvent) => events.push(event) };
+}
+
+function relocatedDataDirectories(fixture: DataFixture, targetWorkspace: string) {
+  return fixtureDataDirectories({
+    applicationPaths: fixture.applicationPaths.map((file) => (
+      path.join(targetWorkspace, path.relative(fixture.workspace, file))
+    ))
+  });
+}
+
+async function expectSnapshotUnchanged(snapshot: Awaited<ReturnType<typeof snapshotDirectoryBytes>>) {
+  expect(await snapshotDirectoryBytes(snapshot.map((entry) => entry.directory))).toEqual(snapshot);
+}
 
 type MinimalAbortFixture = {
   root: string;
@@ -3353,11 +3035,7 @@ function runKilledAbort(workspace: string, point: string) {
       handleProbe: async () => false
     });
   `;
-  return spawnSync(process.execPath, ["--input-type=module", "-e", code], {
-    env: { ...process.env, SUNABOT_MEMORY_MIGRATION_FAULT: `sigkill:${point}` },
-    encoding: "utf8",
-    timeout: 10_000
-  });
+  return runFaultInjectedChild(code, point);
 }
 
 function runKilledSuccessorRecovery(workspace: string, point: string) {
@@ -3401,11 +3079,7 @@ function runKilledSuccessorRecovery(workspace: string, point: string) {
       }
     });
   `;
-  return spawnSync(process.execPath, ["--input-type=module", "-e", code], {
-    env: { ...process.env, SUNABOT_MEMORY_MIGRATION_FAULT: `sigkill:${point}` },
-    encoding: "utf8",
-    timeout: 10_000
-  });
+  return runFaultInjectedChild(code, point);
 }
 
 function runBarrierAbort(workspace: string, readyPath: string, releasePath: string) {
@@ -3447,16 +3121,31 @@ async function waitForPath(filePath: string, timeoutMs = 5_000) {
   throw new Error(`timed out waiting for ${filePath}`);
 }
 
-function waitForChild(child: ReturnType<typeof spawn>) {
+function waitForChild(child: ReturnType<typeof spawn>, timeoutMs = CHILD_PROCESS_TIMEOUT_MS) {
   return new Promise<{ code: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string }>((resolve, reject) => {
     let stdout = "";
     let stderr = "";
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGKILL");
+    }, timeoutMs);
     child.stdout?.setEncoding("utf8");
     child.stderr?.setEncoding("utf8");
     child.stdout?.on("data", (chunk) => { stdout += chunk; });
     child.stderr?.on("data", (chunk) => { stderr += chunk; });
-    child.once("error", reject);
-    child.once("close", (code, signal) => resolve({ code, signal, stdout, stderr }));
+    child.once("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    child.once("close", (code, signal) => {
+      clearTimeout(timeout);
+      if (timedOut) {
+        reject(new Error(`child process timed out after ${timeoutMs}ms; stdout=${stdout}; stderr=${stderr}`));
+        return;
+      }
+      resolve({ code, signal, stdout, stderr });
+    });
   });
 }
 
@@ -3625,10 +3314,7 @@ function runKilledInstall(workspace: string, stagingWorkspace: string, point: st
       handleProbe: async () => false
     });
   `;
-  return spawnSync(process.execPath, ["--input-type=module", "-e", code], {
-    env: { ...process.env, SUNABOT_MEMORY_MIGRATION_FAULT: `sigkill:${point}` },
-    encoding: "utf8"
-  });
+  return runFaultInjectedChild(code, point);
 }
 
 function runKilledApply(
@@ -3650,9 +3336,15 @@ function runKilledApply(
       handleProbe: async () => false
     });
   `;
+  return runFaultInjectedChild(code, point);
+}
+
+function runFaultInjectedChild(code: string, point: string) {
   return spawnSync(process.execPath, ["--input-type=module", "-e", code], {
     env: { ...process.env, SUNABOT_MEMORY_MIGRATION_FAULT: `sigkill:${point}` },
-    encoding: "utf8"
+    encoding: "utf8",
+    timeout: CHILD_PROCESS_TIMEOUT_MS,
+    killSignal: "SIGKILL"
   });
 }
 

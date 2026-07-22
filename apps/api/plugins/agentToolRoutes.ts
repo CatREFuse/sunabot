@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type { AgentFileRepository } from "../../../src/admin/agentFiles.js";
-import type { AppConfig } from "../../../src/types.js";
+import type { AppConfig } from "../../../packages/contracts/admin/public.js";
 import { parseFinalPromptTemplate } from "../../../services/agent/promptSystem.js";
 import { promptDefinitionById } from "../../../services/agent/promptCatalog.js";
 import { listToolMetadata, type ToolAvailability, type ToolMetadata } from "../../../services/tools/toolRegistry.js";

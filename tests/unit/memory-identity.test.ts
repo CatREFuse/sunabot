@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { enrichMemoryEntriesWithConversations } from "../../src/runtime.js";
+import { enrichMemoryEntriesWithConversations } from "../../src/runtime/messagingAttachmentHelpers.js";
 import type { ConversationRecord } from "../../src/types.js";
 import type { MemoryEntry } from "../../services/memory/public.js";
 

@@ -12,11 +12,10 @@ import {
 } from "../../services/voice/public.js";
 import type { MessagingPort } from "../../packages/contracts/messaging/messages.js";
 import { resolveProjectPath } from "../config.js";
-import { appendRequestLog } from "../requestLog.js";
+import { appendRequestLog } from "../../adapters/observability/requestLog.js";
 import type { ParsedIncomingMessage } from "../types.js";
-import type { ReplyDelivery } from "./runtimeContracts.js";
-
-import type { SunaRuntime } from "../runtime.js";
+import type { QueueConversationAssetOptions } from "./conversationAssets.js";
+import type { ReplyDelivery, RuntimeConfigPort } from "./runtimeContracts.js";
 
 export interface RuntimeVoiceOptions {
   repository?: VoiceProfileRepository;
@@ -28,13 +27,17 @@ export interface RuntimeVoiceSnapshot {
   variables: ReturnType<typeof voicePromptVariables>;
 }
 
+interface RuntimeVoiceHost extends RuntimeConfigPort {
+  queueConversationAsset(options: QueueConversationAssetOptions): Promise<unknown>;
+}
+
 export class RuntimeVoice {
   private repositoryValue?: VoiceProfileRepository;
   private repositoryWorkspace = "";
   private outputStoreValue?: VoiceOutputStore;
 
   constructor(
-    private readonly host: SunaRuntime,
+    private readonly host: RuntimeVoiceHost,
     private readonly options: RuntimeVoiceOptions = {},
   ) {}
 

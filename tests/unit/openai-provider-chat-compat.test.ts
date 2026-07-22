@@ -3,9 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BotConfig, ProviderConfig, ProviderKind } from "../../src/types.js";
 
 const appendRequestLog = vi.hoisted(() => vi.fn(async () => undefined));
-vi.mock("../../src/requestLog.js", () => ({ appendRequestLog }));
+vi.mock("../../adapters/observability/requestLog.js", () => ({ appendRequestLog }));
 
 import { OpenAIProvider } from "../../adapters/model/openaiProvider.js";
+import { normalizeChatBaseUrl } from "../../adapters/model/provider/transport.js";
 
 beforeEach(() => {
   appendRequestLog.mockReset();
@@ -133,7 +134,7 @@ describe("provider protocols", () => {
       asyncCodex: true,
       bot: webfetchBotConfig()
     })).resolves.toBe("OK");
-    const baseUrl = (provider as unknown as { normalizeChatBaseUrl(): string }).normalizeChatBaseUrl();
+    const baseUrl = normalizeChatBaseUrl(provider.configuration());
     expect(`${baseUrl}/chat/completions`).toBe("https://compatible.example/v1/chat/completions");
     expect(create.mock.calls[0]?.[0]).toMatchObject({ model: "compatible-model", messages: [{ role: "system" }, { role: "user" }] });
     const chatTools = (create.mock.calls[0]?.[0] as Record<string, any>).tools;

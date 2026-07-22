@@ -6,9 +6,22 @@ import type {
   ParsedIncomingMessage,
 } from "../types.js";
 import type { MessagingPort } from "../../packages/contracts/messaging/messages.js";
-import type { SunaRuntime } from "../runtime.js";
-import type { ReplyDelivery } from "./runtimeContracts.js";
+import type { runtime_sendAssistantReply } from "./delivery.js";
+import type { ReplyDelivery, RuntimeConfigPort } from "./runtimeContracts.js";
 import type { SystemConfigReplyLifecycle } from "./systemConfigReply.js";
+import type { RuntimeVoice } from "./voice.js";
+
+interface RuntimeVoiceReplyHost extends RuntimeConfigPort {
+  synthesizeAndQueueVoice(
+    ...args: Parameters<RuntimeVoice["synthesizeAndQueue"]>
+  ): ReturnType<RuntimeVoice["synthesizeAndQueue"]>;
+  sendAssistantReply(
+    ...args: Parameters<typeof runtime_sendAssistantReply>
+  ): ReturnType<typeof runtime_sendAssistantReply>;
+  scheduleMemoryCompression(
+    record: NonNullable<Awaited<ReturnType<typeof runtime_sendAssistantReply>>>
+  ): void;
+}
 
 interface RuntimeVoiceSynthesisInput {
   incoming: ParsedIncomingMessage;
@@ -32,7 +45,7 @@ interface RuntimeVoiceFinalReplyInput extends RuntimeVoiceSynthesisInput {
 }
 
 export function startRuntimeVoiceSynthesis(
-  host: SunaRuntime,
+  host: RuntimeVoiceReplyHost,
   voice: ProviderVoiceCompanion | undefined,
   input: RuntimeVoiceSynthesisInput,
 ) {
@@ -48,7 +61,7 @@ export function startRuntimeVoiceSynthesis(
 }
 
 export function startRuntimeDeferredVoiceSynthesis(
-  host: SunaRuntime,
+  host: RuntimeVoiceReplyHost,
   voice: ProviderVoiceCompanion | undefined,
   input: RuntimeVoiceSynthesisInput,
 ) {
@@ -61,7 +74,7 @@ export function startRuntimeDeferredVoiceSynthesis(
 }
 
 export async function sendRuntimeVoiceFinalReply(
-  host: SunaRuntime,
+  host: RuntimeVoiceReplyHost,
   input: RuntimeVoiceFinalReplyInput,
 ) {
   const emojiPlan = planAgentEmojiMarkers(input.text, host.config);

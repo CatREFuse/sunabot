@@ -21,6 +21,7 @@ const [
   coreHealthcheck,
   outboundMedia,
   apiServer,
+  onebotListener,
   workspaceLayout,
   launcher,
   launcherCore,
@@ -42,6 +43,7 @@ const [
   read("deploy/docker/healthcheck.mjs"),
   read("services/delivery/outboundMedia.ts"),
   read("apps/api/server.ts"),
+  read("apps/api/onebotListener.ts"),
   read("packages/platform/workspaceLayout.ts"),
   read("tooling/runtime/launcher.mjs"),
   read("tooling/runtime/launcher-core.mjs"),
@@ -272,10 +274,12 @@ for (const [name, component] of Object.entries(lock.components ?? {})) {
   }
 }
 
-expect(apiServer.includes("SUNABOT_ONEBOT_HOST")
-  && apiServer.includes("SUNABOT_ONEBOT_PORT")
-  && apiServer.includes("assertOneBotAccessToken")
-  && apiServer.includes('request.url?.split("?", 1)[0] === "/healthz"'),
+expect(onebotListener.includes("SUNABOT_ONEBOT_HOST")
+  && onebotListener.includes("SUNABOT_ONEBOT_PORT")
+  && onebotListener.includes("assertOneBotAccessToken")
+  && onebotListener.includes('request.url?.split("?", 1)[0] === "/healthz"')
+  && apiServer.includes('from "./onebotListener.js"')
+  && apiServer.includes("startOneBotHttpServer"),
 "Core must expose a separate authenticated OneBot listener with liveness");
 expect(`${launcher}\n${launcherCore}`.includes("SUNABOT_CORE_MODE")
   && launcherCore.includes("nativeAdvertisedUrls")

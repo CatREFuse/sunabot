@@ -1,26 +1,19 @@
 import { createHash } from "node:crypto";
 import type { MessagingPort } from "../../packages/contracts/messaging/messages.js";
-import {
-  SYSTEM_CONFIG_TOOL_NAME,
-  type SystemConfigMutationDescriptor,
-  type SystemConfigTurn
-} from "../../services/tools/systemConfigTool.js";
-import type { SunaRuntime } from "../runtime.js";
+import { SYSTEM_CONFIG_TOOL_NAME, type SystemConfigMutationDescriptor, type SystemConfigRuntimePort, type SystemConfigTurn } from "../../services/tools/systemConfigTool.js";
 import type {
   AssistantMessageOrigin,
+  ConversationRecord,
   ImageResult,
   ParsedIncomingMessage
 } from "../types.js";
-import type {
-  ReplyDelivery,
-  ReplyDeliveryDraft,
-  SystemConfigHeldConfirmationHandle
-} from "./runtimeContracts.js";
+import type { ReplyDelivery, ReplyDeliveryDraft, RuntimeConfigPort, SystemConfigHeldConfirmationHandle } from "./runtimeContracts.js";
+import type { runtime_sendAssistantReply } from "./delivery.js";
 import { conversationRecordId } from "./messagingAttachmentHelpers.js";
 import type { RenderedPromptRequest } from "../../services/agent/promptSystem.js";
 import type { SessionTurnContext } from "../../services/sessions/sessionCoordinator.js";
-import type { OutboxRecord } from "../../services/sessions/sessionStore.js";
-import { readReplyGateSnapshot } from "../../services/orchestration/groupReplyPolicy.js";
+import type { OutboxRecord, SessionStore } from "../../services/sessions/sessionStore.js";
+import { readReplyGateSnapshot, type ReplyGateEpochs, type ReplyGateSnapshot } from "../../services/orchestration/groupReplyPolicy.js";
 import {
   SYSTEM_CONFIG_NEUTRAL_CONFIRMATION_TEXT,
   type AssistantReplyOutboxPayload
@@ -50,6 +43,14 @@ interface SystemConfigFinalReplyInput {
   toolNames: readonly string[];
   singleMessage?: boolean;
 }
+
+interface SystemConfigLifecycleHost extends RuntimeConfigPort { readonly systemConfig?: SystemConfigRuntimePort; }
+
+interface ReplyGateCaptureHost { readonly replyGates: Pick<ReplyGateEpochs, "capture">; }
+
+interface HeldSystemConfigValidationHost extends ReplyGateCaptureHost { readonly conversationRecords: ReadonlyMap<string, ConversationRecord>; readonly sessionStore: Pick<SessionStore, "getTurn" | "getOutbox">; isAdminUser(userId: number): boolean; isReplyTaskCurrent(incoming: ParsedIncomingMessage, gate: ReplyGateSnapshot, signal?: AbortSignal): boolean; }
+
+interface SystemConfigFinalReplyHost extends RuntimeConfigPort { readonly activeDirectControllers: Pick<Map<string, AbortController>, "delete">; scheduleMemoryCompression(record: ConversationRecord): void; sendAssistantReply(...args: Parameters<typeof runtime_sendAssistantReply>): ReturnType<typeof runtime_sendAssistantReply>; }
 
 export class SystemConfigReplyLifecycle {
   readonly toolPort: SystemConfigTurn;
@@ -163,7 +164,7 @@ export class SystemConfigReplyLifecycle {
 }
 
 export function createSystemConfigReplyLifecycle(
-  host: Pick<SunaRuntime, "config" | "systemConfig">,
+  host: SystemConfigLifecycleHost,
   incoming: ParsedIncomingMessage,
   isAdmin: boolean,
   promptOverride: string | undefined,
@@ -185,13 +186,14 @@ export function createSystemConfigReplyLifecycle(
 }
 
 export function createSystemConfigHeldConfirmationPort(
-  host: Pick<SunaRuntime, "replyGates">,
+  host: ReplyGateCaptureHost,
   appendHeldOutbox: SessionTurnContext["appendHeldOutbox"] | undefined
 ): ReplyDelivery["systemConfigHeld"] {
   if (!appendHeldOutbox) return undefined;
   return {
     appendHeld: async (draft, options) => {
-      const payload = decodeHeldConfirmationPayload(draft);
+      if (draft.kind !== "onebot.reply") throw lifecycleError("配置确认投递类型无效。");
+      const payload = draft.payload.payload;
       const conversationId = conversationRecordId(payload.incoming);
       const originalReplyGate = readReplyGateSnapshot(
         payload.replyGate,
@@ -223,7 +225,7 @@ export function createSystemConfigHeldConfirmationPort(
 }
 
 export function validateHeldSystemConfigConfirmation(
-  host: SunaRuntime,
+  host: HeldSystemConfigValidationHost,
   outbox: OutboxRecord,
   payload: AssistantReplyOutboxPayload,
   checkCurrent: boolean,
@@ -315,7 +317,7 @@ function validHeldReleaseTransition(
     (fallback && release.scopeEpoch === original.scopeEpoch);
 }
 
-function validateHeldOutboxLineage(host: SunaRuntime, outbox: OutboxRecord) {
+function validateHeldOutboxLineage(host: Pick<HeldSystemConfigValidationHost, "sessionStore">, outbox: OutboxRecord) {
   const lineage = outbox.holdProvenance?.lineage ?? [];
   if (lineage.length === 0) {
     const turn = host.sessionStore.getTurn(outbox.originTurnId);
@@ -353,7 +355,7 @@ function sameReplyGateSnapshot(
 }
 
 export async function sendSystemConfigAwareFinalReply(
-  host: SunaRuntime,
+  host: SystemConfigFinalReplyHost,
   input: SystemConfigFinalReplyInput
 ) {
   let prepared: ReturnType<SystemConfigReplyLifecycle["prepareFinalDelivery"]> | undefined;
@@ -445,13 +447,6 @@ function marksPrivateGateClosingConfirmation(
     payload.text.trim().length > 0 &&
     payload.toolNames?.length === 1 &&
     payload.toolNames[0] === SYSTEM_CONFIG_TOOL_NAME;
-}
-
-function decodeHeldConfirmationPayload(draft: ReplyDeliveryDraft) {
-  if (draft.kind !== "onebot.reply") {
-    throw lifecycleError("配置确认投递类型无效。");
-  }
-  return draft.payload.payload;
 }
 
 class SystemConfigReplyLifecycleError extends Error {

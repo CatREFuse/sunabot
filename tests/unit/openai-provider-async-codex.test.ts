@@ -11,7 +11,7 @@ const runWebsearch = vi.hoisted(() => vi.fn(async () => ({
   results: [{ title: "Weather", url: "https://example.test/weather" }]
 })));
 
-vi.mock("../../src/requestLog.js", () => ({ appendRequestLog }));
+vi.mock("../../adapters/observability/requestLog.js", () => ({ appendRequestLog }));
 vi.mock("../../adapters/model/webSearchTool.js", () => ({
   WEBSEARCH_TOOL_NAME: "websearch",
   websearchTool: {

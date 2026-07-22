@@ -1,8 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { WORKSPACE_LAYOUT } from "../../packages/platform/workspaceLayout.js";
-import { getWorkspacePath } from "../../src/config.js";
-import type { AppConfig } from "../../src/types.js";
+import type { AppConfig } from "../../packages/contracts/admin/public.js";
 import {
   defaultGenericSelfiePromptContent,
   defaultPromptContent,
@@ -28,22 +27,22 @@ export function initialAgentWorkspaceFiles(
   return [...fragments, ...finalPrompts];
 }
 
-export async function ensureAccountRuntimeDirectories(accountId: string) {
-  const root = getWorkspacePath(WORKSPACE_LAYOUT.napcatAccounts, accountId);
+export async function ensureAccountRuntimeDirectories(workspace: string, accountId: string) {
+  const root = path.join(workspace, WORKSPACE_LAYOUT.napcatAccounts, accountId);
   await Promise.all(["config-full", "qq", "plugins"].map((segment) => (
     fs.mkdir(path.join(root, segment), { recursive: true, mode: 0o700 })
   )));
 }
 
-export async function migrateLegacyPrimaryAccountRuntime() {
-  const target = getWorkspacePath(WORKSPACE_LAYOUT.napcatAccounts, "primary");
+export async function migrateLegacyPrimaryAccountRuntime(workspace: string) {
+  const target = path.join(workspace, WORKSPACE_LAYOUT.napcatAccounts, "primary");
   await fs.mkdir(target, { recursive: true, mode: 0o700 });
   const mappings: Array<readonly [string, string]> = [
-    [getWorkspacePath(WORKSPACE_LAYOUT.legacyNapcatConfig), path.join(target, "config-full")],
-    [getWorkspacePath(WORKSPACE_LAYOUT.legacyNapcatQqState), path.join(target, "qq")],
-    [getWorkspacePath(WORKSPACE_LAYOUT.legacyNapcatPlugins), path.join(target, "plugins")],
-    [getWorkspacePath(WORKSPACE_LAYOUT.legacyNapcatQrCode), path.join(target, "qrcode.png")],
-    [getWorkspacePath(WORKSPACE_LAYOUT.legacyNapcatManualLogin), path.join(target, "manual-login-required")]
+    [path.join(workspace, WORKSPACE_LAYOUT.legacyNapcatConfig), path.join(target, "config-full")],
+    [path.join(workspace, WORKSPACE_LAYOUT.legacyNapcatQqState), path.join(target, "qq")],
+    [path.join(workspace, WORKSPACE_LAYOUT.legacyNapcatPlugins), path.join(target, "plugins")],
+    [path.join(workspace, WORKSPACE_LAYOUT.legacyNapcatQrCode), path.join(target, "qrcode.png")],
+    [path.join(workspace, WORKSPACE_LAYOUT.legacyNapcatManualLogin), path.join(target, "manual-login-required")]
   ];
   for (const [source, destination] of mappings) {
     try {
@@ -54,8 +53,8 @@ export async function migrateLegacyPrimaryAccountRuntime() {
   }
 }
 
-export async function inferPrimaryAccountQqId() {
-  const configDirectory = getWorkspacePath(WORKSPACE_LAYOUT.napcatAccounts, "primary", "config-full");
+export async function inferPrimaryAccountQqId(workspace: string) {
+  const configDirectory = path.join(workspace, WORKSPACE_LAYOUT.napcatAccounts, "primary", "config-full");
   try {
     const candidates = new Set((await fs.readdir(configDirectory)).flatMap((fileName) => {
       const match = /^(?:onebot11|napcat)_(\d{5,20})\.json$/.exec(fileName);

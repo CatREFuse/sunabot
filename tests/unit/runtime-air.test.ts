@@ -9,7 +9,7 @@ import { RuntimeAir } from "../../src/runtime/air.js";
 import type { SunaRuntime } from "../../src/runtime.js";
 import type { ParsedIncomingMessage } from "../../src/types.js";
 
-vi.mock("../../src/requestLog.js", () => ({ appendRequestLog: vi.fn(async () => undefined) }));
+vi.mock("../../adapters/observability/requestLog.js", () => ({ appendRequestLog: vi.fn(async () => undefined) }));
 
 const roots: string[] = [];
 

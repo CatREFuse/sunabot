@@ -1,4 +1,4 @@
-import type { AppConfig } from "../../../src/types.js";
+import type { AppConfig } from "../../../packages/contracts/admin/public.js";
 import type { MemoryEntry, MemoryRecallInput, MemoryRecallUsage } from "../types.js";
 import { compareMemoryEntries } from "../domain/entryMapper.js";
 import { normalizeLimit, normalizeText } from "../domain/normalizers.js";

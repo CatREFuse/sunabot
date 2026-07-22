@@ -1,4 +1,4 @@
-import type { AppConfig } from "../../src/types.js";
+import type { AppConfig } from "../../packages/contracts/admin/public.js";
 import type {
   MemoryRecallStats,
   RecordActualMemoryRecallInput,

@@ -9,24 +9,30 @@ import {
   type AirConversationContext
 } from "../../services/air/public.js";
 import { loadPersona } from "../../services/agent/public.js";
+import type { AgentPersona } from "../../services/agent/persona.js";
 import type {
   ReadAirToolInput,
   ReadAirToolPort
 } from "../../services/tools/public.js";
-import { appendRequestLog } from "../requestLog.js";
-import type { SunaRuntime } from "../runtime.js";
-import type { ChatMessage, ParsedIncomingMessage } from "../types.js";
+import { appendRequestLog } from "../../adapters/observability/requestLog.js";
+import type { ChatMessage, ConversationRecord, ParsedIncomingMessage } from "../types.js";
 import { errorMessage } from "./infrastructure.js";
 import { conversationRecordId } from "./messagingAttachmentHelpers.js";
+import type { RuntimePromptPort } from "./runtimeContracts.js";
 
 const READ_AIR_MAX_ATTEMPTS = 2;
 const READ_AIR_MESSAGE_LIMIT = 64;
 const READ_AIR_MESSAGE_MAX_CHARS = 8_000;
 
+interface RuntimeAirHost extends RuntimePromptPort {
+  readonly conversationRecords: ReadonlyMap<string, ConversationRecord>;
+  persona?: AgentPersona;
+}
+
 export class RuntimeAir {
   private queue: Promise<void> = Promise.resolve();
 
-  constructor(private readonly host: SunaRuntime) {}
+  constructor(private readonly host: RuntimeAirHost) {}
 
   toolPort(incoming: ParsedIncomingMessage, messages: readonly ChatMessage[]): ReadAirToolPort {
     const conversationId = conversationRecordId(incoming);

@@ -1,11 +1,8 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  estimatePromptTokens,
-  isExplicitWakeMessage,
-  SunaRuntime
-} from "../../src/runtime.js";
-import { appendRequestLog } from "../../src/requestLog.js";
+import { SunaRuntime } from "../../src/runtime.js";
+import { estimatePromptTokens, isExplicitWakeMessage } from "../../src/runtime/conversationMemoryHelpers.js";
+import { appendRequestLog } from "../../adapters/observability/requestLog.js";
 import {
   decodeIncomingReply,
   noReplyPokeEnvelope,
@@ -15,9 +12,9 @@ import { createAdminTestConfig } from "./admin-fixtures.js";
 import type { ParsedIncomingMessage } from "../../src/types.js";
 import { BroadcastStormDetector } from "../../services/orchestration/broadcastStormDetector.js";
 
-vi.mock("../../src/requestLog.js", () => ({
-  appendRequestLog: vi.fn(async () => undefined)
-}));
+const requestLog = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock("../../adapters/observability/requestLog.js", () => ({ appendRequestLog: requestLog }));
+const TEST_WORKSPACE = "/tmp/sunabot-runtime-router-test";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -36,9 +33,7 @@ describe("runtime reply scheduling helpers", () => {
   });
 
   it.each(["ping", "普拉娜 ping", "普通群消息"])("routes noncommand text through the main reply model: %s", async (text) => {
-    const runtime = new SunaRuntime(createAdminTestConfig("/tmp/sunabot-runtime-router-test"), {
-      attachmentService: {} as never
-    });
+    const runtime = createRuntime();
     const replyToIncoming = vi.fn(async () => undefined);
     (runtime as unknown as { replyToIncoming: typeof replyToIncoming }).replyToIncoming = replyToIncoming;
     const incoming = groupIncoming(text);
@@ -58,9 +53,7 @@ describe("runtime reply scheduling helpers", () => {
   });
 
   it("routes a registered command to its handler without calling the main reply model", async () => {
-    const runtime = new SunaRuntime(createAdminTestConfig("/tmp/sunabot-runtime-router-test"), {
-      attachmentService: {} as never
-    });
+    const runtime = createRuntime();
     const replyToIncoming = vi.fn(async () => undefined);
     const replyWithGroupChatSummary = vi.fn(async () => undefined);
     const internals = runtime as unknown as {
@@ -96,9 +89,7 @@ describe("runtime reply scheduling helpers", () => {
   });
 
   it("discards inbound messages before storage when the conversation is disabled", async () => {
-    const runtime = new SunaRuntime(createAdminTestConfig("/tmp/sunabot-runtime-router-test"), {
-      attachmentService: {} as never
-    });
+    const runtime = createRuntime();
     const enqueueEvent = vi.fn();
     const internals = runtime as unknown as {
       conversationRecords: Map<string, Record<string, unknown>>;
@@ -134,9 +125,7 @@ describe("runtime reply scheduling helpers", () => {
   });
 
   it("creates the first inbound conversation with replies disabled", async () => {
-    const runtime = new SunaRuntime(createAdminTestConfig("/tmp/sunabot-runtime-router-test"), {
-      attachmentService: {} as never
-    });
+    const runtime = createRuntime();
     const enqueueEvent = vi.fn();
     const internals = runtime as unknown as {
       conversationRecords: Map<string, {
@@ -161,7 +150,7 @@ describe("runtime reply scheduling helpers", () => {
   it("keeps ambient replies disabled for a user group with its orchestrator turned off", () => {
     const config = createAdminTestConfig("/tmp/sunabot-runtime-router-test");
     config.bot.orchestrator.enabled = true;
-    const runtime = new SunaRuntime(config, { attachmentService: {} as never });
+    const runtime = createRuntime(config);
     const internals = runtime as unknown as {
       conversationRecords: Map<string, { orchestratorEnabled?: boolean }>;
       resolveIncomingReplyRoute(incoming: ParsedIncomingMessage, command: boolean): string;
@@ -176,7 +165,7 @@ describe("runtime reply scheduling helpers", () => {
   it("reactivates only the explicitly awakened user-group orchestrator", async () => {
     const config = createAdminTestConfig("/tmp/sunabot-runtime-router-test");
     config.bot.orchestrator.enabled = true;
-    const runtime = new SunaRuntime(config, { attachmentService: {} as never });
+    const runtime = createRuntime(config);
     const scheduleReplyDebounce = vi.fn();
     const internals = runtime as unknown as {
       conversationRecords: Map<string, Record<string, unknown>>;
@@ -239,9 +228,7 @@ describe("runtime reply scheduling helpers", () => {
       config.onebot.autoReplyPrivate = true;
       config.onebot.autoReplyUserGroup = true;
       config.onebot.autoReplyBotGroup = true;
-      const runtime = new SunaRuntime(config, {
-        attachmentService: {} as never
-      });
+      const runtime = createRuntime(config);
       const internals = runtime as unknown as {
         resolveIncomingReplyRoute(incoming: ParsedIncomingMessage, command: boolean): string;
       };
@@ -263,9 +250,7 @@ describe("runtime reply scheduling helpers", () => {
       config.onebot.autoReplyPrivate = true;
       config.onebot.autoReplyUserGroup = true;
       config.onebot.autoReplyBotGroup = true;
-      const runtime = new SunaRuntime(config, {
-        attachmentService: {} as never
-      });
+      const runtime = createRuntime(config);
       const enqueueEvent = vi.fn();
       const recordIncomingMessage = vi.fn();
       const internals = runtime as unknown as {
@@ -287,9 +272,7 @@ describe("runtime reply scheduling helpers", () => {
 
   it("keeps an in-flight reply valid when bot.adminQq changes", () => {
     const config = createAdminTestConfig("/tmp/sunabot-runtime-router-test");
-    const runtime = new SunaRuntime(config, {
-      attachmentService: {} as never
-    });
+    const runtime = createRuntime(config);
     const internals = runtime as unknown as {
       conversationRecords: Map<string, Record<string, unknown>>;
       replyGates: { capture(scope: "user_group", conversationId: string): unknown };
@@ -311,7 +294,7 @@ describe("runtime reply scheduling helpers", () => {
 
   it("skips a persisted outbox reply with an invalid sender", async () => {
     const config = createAdminTestConfig("/tmp/sunabot-runtime-router-test");
-    const runtime = new SunaRuntime(config, { attachmentService: {} as never });
+    const runtime = createRuntime(config);
     const incoming = groupIncoming("普通群消息", 1234);
     const internals = runtime as unknown as {
       replyDeliveryDraft(incoming: ParsedIncomingMessage, text: string, isAdmin: boolean): unknown;
@@ -335,10 +318,7 @@ describe("runtime reply scheduling helpers", () => {
       additionalQqIds: []
     });
     const config = createAdminTestConfig("/tmp/sunabot-runtime-router-test");
-    const runtime = new SunaRuntime(config, {
-      attachmentService: {} as never,
-      replyTaskGate: detector
-    });
+    const runtime = createRuntime(config, { replyTaskGate: detector });
     const incoming = groupIncoming("普通群消息", 171419991);
     const internals = runtime as unknown as {
       conversationRecords: Map<string, Record<string, unknown>>;
@@ -385,10 +365,7 @@ describe("runtime reply scheduling helpers", () => {
         cooldownMinutes: 1,
         additionalQqIds: []
       });
-      const runtime = new SunaRuntime(createAdminTestConfig("/tmp/sunabot-runtime-router-test"), {
-        attachmentService: {} as never,
-        replyTaskGate: detector
-      });
+      const runtime = createRuntime(undefined, { replyTaskGate: detector });
       const incoming = groupIncoming("普拉娜，回复我", 171419991);
       incoming.scope = scope;
       if (scope === "private") delete incoming.groupId;
@@ -406,7 +383,7 @@ describe("runtime reply scheduling helpers", () => {
 
   it("skips a persisted reply after the conversation reply gate closes and reopens", async () => {
     const config = createAdminTestConfig("/tmp/sunabot-runtime-router-test");
-    const runtime = new SunaRuntime(config, { attachmentService: {} as never });
+    const runtime = createRuntime(config);
     const incoming = groupIncoming("普通群消息", 171419991);
     const internals = runtime as unknown as {
       conversationRecords: Map<string, Record<string, unknown>>;
@@ -434,7 +411,7 @@ describe("runtime reply scheduling helpers", () => {
   it("skips a persisted no_reply poke after the scope reply gate closes and reopens", async () => {
     const config = createAdminTestConfig("/tmp/sunabot-runtime-router-test");
     config.onebot.autoReplyUserGroup = true;
-    const runtime = new SunaRuntime(config, { attachmentService: {} as never });
+    const runtime = createRuntime(config);
     const incoming = groupIncoming("普通群消息", 171419991);
     const internals = runtime as unknown as {
       conversationRecords: Map<string, Record<string, unknown>>;
@@ -471,9 +448,7 @@ describe("runtime reply scheduling helpers", () => {
   });
 
   it("preserves the default reply gate when only the group orchestrator setting changes", () => {
-    const runtime = new SunaRuntime(createAdminTestConfig("/tmp/sunabot-runtime-router-test"), {
-      attachmentService: {} as never
-    });
+    const runtime = createRuntime();
     const invalidateConversation = vi.fn();
     const internals = runtime as unknown as {
       conversationRecords: Map<string, {
@@ -520,7 +495,7 @@ describe("runtime reply scheduling helpers", () => {
     config.bot.orchestrator.enabled = true;
     config.bot.orchestrator.messageThreshold = 20;
     config.bot.orchestrator.recentMessageWindowMs = 60_000;
-    const runtime = new SunaRuntime(config, { attachmentService: {} as never });
+    const runtime = createRuntime(config);
     const internals = runtime as unknown as {
       conversationRecords: Map<string, {
         id: string;
@@ -573,7 +548,7 @@ describe("runtime reply scheduling helpers", () => {
   it("marks the orchestrator inactive after the consumed batch has no new user messages", () => {
     const config = createAdminTestConfig("/tmp/sunabot-runtime-router-test");
     config.bot.orchestrator.enabled = true;
-    const runtime = new SunaRuntime(config, { attachmentService: {} as never });
+    const runtime = createRuntime(config);
     const internals = runtime as unknown as {
       conversationRecords: Map<string, Record<string, unknown>>;
     };
@@ -606,38 +581,11 @@ describe("runtime reply scheduling helpers", () => {
   it("records the orchestrator decision as an internal conversation result", async () => {
     const config = createAdminTestConfig("/tmp/sunabot-runtime-router-test");
     config.bot.orchestrator.enabled = true;
-    const runtime = new SunaRuntime(config, { attachmentService: {} as never });
+    const runtime = createRuntime(config);
     const raw = '{"should_reply":false,"reason":"当前讨论无需介入。","reply_to_message_id":null}';
     const complete = vi.fn(async () => raw);
-    const record = {
-      id: "group:3003",
-      scope: "user_group" as const,
-      title: "群聊",
-      userId: 2002,
-      groupId: 3003,
-      selfId: 4004,
-      messageCount: 1,
-      lastAt: "2026-07-10T00:01:00.000Z",
-      lastText: "普通群消息",
-      messages: [
-        { id: "1001", role: "user" as const, text: "普通群消息", at: "2026-07-10T00:01:00.000Z", sequence: 1, userId: 2002, groupId: 3003 }
-      ],
-      replyEnabled: true,
-      orchestratorEnabled: true,
-      orchestratorCheckedMessageCount: 0
-    };
-    const internals = runtime as unknown as {
-      conversationRecords: Map<string, typeof record>;
-      getProviderForModel(): { complete: typeof complete };
-      persistConversationRecords(): void;
-      runUserGroupchatOrchestrator(
-        incoming: ParsedIncomingMessage,
-        options: { captureSequence: number }
-      ): Promise<UserGroupOrchestratorResultV1 | undefined>;
-    };
-    internals.conversationRecords.set(record.id, record);
-    internals.getProviderForModel = () => ({ complete });
-    internals.persistConversationRecords = vi.fn();
+    const record = orchestratorRecord();
+    const internals = wireOrchestrator(runtime, record, complete);
 
     await expect(internals.runUserGroupchatOrchestrator(groupIncoming("普通群消息"), {
       captureSequence: 1
@@ -663,7 +611,7 @@ describe("runtime reply scheduling helpers", () => {
   it("injects one image token per image into the user-group orchestrator payload", async () => {
     const config = createAdminTestConfig("/tmp/sunabot-runtime-router-test");
     config.bot.orchestrator.enabled = true;
-    const runtime = new SunaRuntime(config, { attachmentService: {} as never });
+    const runtime = createRuntime(config);
     const complete = vi.fn(async (
       _systemPrompt: string,
       _messages: Array<{ role: string; content: string }>
@@ -717,24 +665,12 @@ describe("runtime reply scheduling helpers", () => {
       orchestratorEnabled: true,
       orchestratorCheckedMessageCount: 0
     };
-    const internals = runtime as unknown as {
-      conversationRecords: Map<string, typeof record>;
-      getProviderForModel(): { complete: typeof complete };
-      persistConversationRecords(): void;
-      runUserGroupchatOrchestrator(
-        incoming: ParsedIncomingMessage,
-        options: { captureSequence: number }
-      ): Promise<UserGroupOrchestratorResultV1 | undefined>;
-    };
+    const internals = wireOrchestrator(runtime, record, complete);
     const incoming = groupIncoming("这两张有什么区别 [内容图片#1：图表] [表情图片#2：疑惑]");
     incoming.media = [
       { schemaVersion: 1, kind: "image", source: "remote_url", url: "https://example.test/second.png" },
       { schemaVersion: 1, kind: "image", source: "remote_url", url: "https://example.test/third.png" }
     ];
-    internals.conversationRecords.set(record.id, record);
-    internals.getProviderForModel = () => ({ complete });
-    internals.persistConversationRecords = vi.fn();
-
     await expect(internals.runUserGroupchatOrchestrator(incoming, {
       captureSequence: 3
     })).resolves.toBeUndefined();
@@ -767,37 +703,10 @@ describe("runtime reply scheduling helpers", () => {
   it("records a failed orchestrator result and action log before consuming the batch", async () => {
     const config = createAdminTestConfig("/tmp/sunabot-runtime-router-test");
     config.bot.orchestrator.enabled = true;
-    const runtime = new SunaRuntime(config, { attachmentService: {} as never });
+    const runtime = createRuntime(config);
     const complete = vi.fn(async () => { throw new Error("provider unavailable"); });
-    const record = {
-      id: "group:3003",
-      scope: "user_group" as const,
-      title: "群聊",
-      userId: 2002,
-      groupId: 3003,
-      selfId: 4004,
-      messageCount: 1,
-      lastAt: "2026-07-10T00:01:00.000Z",
-      lastText: "普通群消息",
-      messages: [
-        { id: "1001", role: "user" as const, text: "普通群消息", at: "2026-07-10T00:01:00.000Z", sequence: 1, userId: 2002, groupId: 3003 }
-      ],
-      replyEnabled: true,
-      orchestratorEnabled: true,
-      orchestratorCheckedMessageCount: 0
-    };
-    const internals = runtime as unknown as {
-      conversationRecords: Map<string, typeof record>;
-      getProviderForModel(): { complete: typeof complete };
-      persistConversationRecords(): void;
-      runUserGroupchatOrchestrator(
-        incoming: ParsedIncomingMessage,
-        options: { captureSequence: number }
-      ): Promise<UserGroupOrchestratorResultV1 | undefined>;
-    };
-    internals.conversationRecords.set(record.id, record);
-    internals.getProviderForModel = () => ({ complete });
-    internals.persistConversationRecords = vi.fn();
+    const record = orchestratorRecord();
+    const internals = wireOrchestrator(runtime, record, complete);
     vi.mocked(appendRequestLog).mockClear();
 
     await expect(internals.runUserGroupchatOrchestrator(groupIncoming("普通群消息"), {
@@ -836,41 +745,14 @@ describe("runtime reply scheduling helpers", () => {
   it("retries the orchestrator three times and records the successful retry", async () => {
     const config = createAdminTestConfig("/tmp/sunabot-runtime-router-test");
     config.bot.orchestrator.enabled = true;
-    const runtime = new SunaRuntime(config, { attachmentService: {} as never });
+    const runtime = createRuntime(config);
     const complete = vi.fn()
       .mockRejectedValueOnce(new Error("attempt 1 failed"))
       .mockRejectedValueOnce(new Error("attempt 2 failed"))
       .mockRejectedValueOnce(new Error("attempt 3 failed"))
       .mockResolvedValueOnce('{"should_reply":true,"reason":"需要回复。","reply_to_message_id":"1001"}');
-    const record = {
-      id: "group:3003",
-      scope: "user_group" as const,
-      title: "群聊",
-      userId: 2002,
-      groupId: 3003,
-      selfId: 4004,
-      messageCount: 1,
-      lastAt: "2026-07-10T00:01:00.000Z",
-      lastText: "普通群消息",
-      messages: [
-        { id: "1001", role: "user" as const, text: "普通群消息", at: "2026-07-10T00:01:00.000Z", sequence: 1, userId: 2002, groupId: 3003 }
-      ],
-      replyEnabled: true,
-      orchestratorEnabled: true,
-      orchestratorCheckedMessageCount: 0
-    };
-    const internals = runtime as unknown as {
-      conversationRecords: Map<string, typeof record>;
-      getProviderForModel(): { complete: typeof complete };
-      persistConversationRecords(): void;
-      runUserGroupchatOrchestrator(
-        incoming: ParsedIncomingMessage,
-        options: { captureSequence: number }
-      ): Promise<UserGroupOrchestratorResultV1 | undefined>;
-    };
-    internals.conversationRecords.set(record.id, record);
-    internals.getProviderForModel = () => ({ complete });
-    internals.persistConversationRecords = vi.fn();
+    const record = orchestratorRecord();
+    const internals = wireOrchestrator(runtime, record, complete);
     vi.mocked(appendRequestLog).mockClear();
 
     await expect(internals.runUserGroupchatOrchestrator(groupIncoming("普通群消息"), {
@@ -910,7 +792,7 @@ describe("runtime reply scheduling helpers", () => {
     const config = createAdminTestConfig("/tmp/sunabot-runtime-router-test");
     config.bot.orchestrator.enabled = true;
     config.bot.orchestrator.messageThreshold = 0;
-    const runtime = new SunaRuntime(config, { attachmentService: {} as never });
+    const runtime = createRuntime(config);
     const incoming = groupIncoming("普通群消息", 171419991);
     const record = {
       id: "group:3003",
@@ -1002,39 +884,12 @@ describe("runtime reply scheduling helpers", () => {
   it("keeps the batch pending when an orchestrator run is cancelled", async () => {
     const config = createAdminTestConfig("/tmp/sunabot-runtime-router-test");
     config.bot.orchestrator.enabled = true;
-    const runtime = new SunaRuntime(config, { attachmentService: {} as never });
+    const runtime = createRuntime(config);
     const controller = new AbortController();
     controller.abort(new Error("ambient reply cancelled"));
     const complete = vi.fn(async () => { throw controller.signal.reason; });
-    const record = {
-      id: "group:3003",
-      scope: "user_group" as const,
-      title: "群聊",
-      userId: 171419991,
-      groupId: 3003,
-      selfId: 4004,
-      messageCount: 1,
-      lastAt: "2026-07-10T00:01:00.000Z",
-      lastText: "普通群消息",
-      messages: [
-        { id: "1001", role: "user" as const, text: "普通群消息", at: "2026-07-10T00:01:00.000Z", sequence: 1, userId: 2002, groupId: 3003 }
-      ],
-      replyEnabled: true,
-      orchestratorEnabled: true,
-      orchestratorCheckedMessageCount: 0
-    };
-    const internals = runtime as unknown as {
-      conversationRecords: Map<string, typeof record>;
-      getProviderForModel(): { complete: typeof complete };
-      persistConversationRecords(): void;
-      runUserGroupchatOrchestrator(
-        incoming: ParsedIncomingMessage,
-        options: { signal: AbortSignal; captureSequence: number }
-      ): Promise<UserGroupOrchestratorResultV1 | undefined>;
-    };
-    internals.conversationRecords.set(record.id, record);
-    internals.getProviderForModel = () => ({ complete });
-    internals.persistConversationRecords = vi.fn();
+    const record = orchestratorRecord(171419991);
+    const internals = wireOrchestrator(runtime, record, complete);
     vi.mocked(appendRequestLog).mockClear();
 
     await expect(internals.runUserGroupchatOrchestrator(groupIncoming("普通群消息"), {
@@ -1055,7 +910,7 @@ describe("runtime reply scheduling helpers", () => {
     config.bot.orchestrator.enabled = true;
     config.bot.orchestrator.messageThreshold = 20;
     config.bot.orchestrator.recentMessageWindowMs = 60_000;
-    const runtime = new SunaRuntime(config, { attachmentService: {} as never });
+    const runtime = createRuntime(config);
     const queueAmbientReply = vi.fn();
     const record = {
       id: "group:3003",
@@ -1109,7 +964,7 @@ describe("runtime reply scheduling helpers", () => {
     const config = createAdminTestConfig("/tmp/sunabot-runtime-router-test");
     config.bot.orchestrator.enabled = true;
     config.bot.orchestrator.recentMessageWindowMs = 60_000;
-    const runtime = new SunaRuntime(config, { attachmentService: {} as never });
+    const runtime = createRuntime(config);
     const queueAmbientReply = vi.fn();
     const record = {
       id: "account:secondary-a:group:3003",
@@ -1158,7 +1013,7 @@ describe("runtime reply scheduling helpers", () => {
   it("keeps an automatically closed orchestrator dormant after reconnect", () => {
     const config = createAdminTestConfig("/tmp/sunabot-runtime-router-test");
     config.bot.orchestrator.enabled = true;
-    const runtime = new SunaRuntime(config, { attachmentService: {} as never });
+    const runtime = createRuntime(config);
     const queueAmbientReply = vi.fn();
     const internals = runtime as unknown as {
       conversationRecords: Map<string, Record<string, unknown>>;
@@ -1193,9 +1048,7 @@ describe("runtime reply scheduling helpers", () => {
   });
 
   it("exposes group member names from the complete conversation history", () => {
-    const runtime = new SunaRuntime(createAdminTestConfig("/tmp/sunabot-runtime-router-test"), {
-      attachmentService: {} as never
-    });
+    const runtime = createRuntime();
     const internals = runtime as unknown as {
       conversationRecords: Map<string, {
         id: string;
@@ -1230,9 +1083,7 @@ describe("runtime reply scheduling helpers", () => {
   });
 
   it("reuses the running request bubble for the completed reply", () => {
-    const runtime = new SunaRuntime(createAdminTestConfig("/tmp/sunabot-runtime-router-test"), {
-      attachmentService: {} as never
-    });
+    const runtime = createRuntime();
     const internals = runtime as unknown as {
       conversationRecords: Map<string, {
         messageCount: number;
@@ -1278,7 +1129,7 @@ describe("runtime reply scheduling helpers", () => {
   it("aborts active group work and keeps pre-disable epochs stale after re-enable", () => {
     const config = createAdminTestConfig("/tmp/sunabot-runtime-router-test");
     config.onebot.autoReplyUserGroup = true;
-    const runtime = new SunaRuntime(config, { attachmentService: {} as never });
+    const runtime = createRuntime(config);
     const controller = new AbortController();
     const ambientController = new AbortController();
     const internals = runtime as unknown as {
@@ -1317,7 +1168,7 @@ describe("runtime reply scheduling helpers", () => {
 
   it("applies the memory compression threshold setting immediately after a hot reload", async () => {
     const config = createAdminTestConfig("/tmp/sunabot-runtime-router-test");
-    const runtime = new SunaRuntime(config, { attachmentService: {} as never });
+    const runtime = createRuntime(config);
     const scheduleMemoryDrain = vi.fn();
     const claimNext = vi.fn(async () => undefined);
     const internals = runtime as unknown as {
@@ -1358,6 +1209,54 @@ function groupIncoming(text: string, userId = 2002): ParsedIncomingMessage {
     quoteReferences: [],
     mentionedSelf: false
   };
+}
+
+function createRuntime(
+  config = createAdminTestConfig(TEST_WORKSPACE),
+  options: NonNullable<ConstructorParameters<typeof SunaRuntime>[1]> = {}
+) {
+  return new SunaRuntime(config, { attachmentService: {} as never, ...options });
+}
+
+function orchestratorRecord(userId = 2002) {
+  return {
+    id: "group:3003",
+    scope: "user_group" as const,
+    title: "群聊",
+    userId,
+    groupId: 3003,
+    selfId: 4004,
+    messageCount: 1,
+    lastAt: "2026-07-10T00:01:00.000Z",
+    lastText: "普通群消息",
+    messages: [{
+      id: "1001", role: "user" as const, text: "普通群消息", at: "2026-07-10T00:01:00.000Z",
+      sequence: 1, userId: 2002, groupId: 3003
+    }],
+    replyEnabled: true,
+    orchestratorEnabled: true,
+    orchestratorCheckedMessageCount: 0
+  };
+}
+
+function wireOrchestrator<T extends { id: string }>(
+  runtime: SunaRuntime,
+  record: T,
+  complete: ReturnType<typeof vi.fn>
+) {
+  const internals = runtime as unknown as {
+    conversationRecords: Map<string, T>;
+    getProviderForModel(): { complete: typeof complete };
+    persistConversationRecords(): void;
+    runUserGroupchatOrchestrator(
+      incoming: ParsedIncomingMessage,
+      options: { captureSequence: number; signal?: AbortSignal }
+    ): Promise<UserGroupOrchestratorResultV1 | undefined>;
+  };
+  internals.conversationRecords.set(record.id, record);
+  internals.getProviderForModel = () => ({ complete });
+  internals.persistConversationRecords = vi.fn();
+  return internals;
 }
 
 async function waitFor(predicate: () => boolean, timeoutMs = 1_000) {

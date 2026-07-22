@@ -17,7 +17,7 @@ vi.mock("../../adapters/sqlite/applicationDataStore.js", () => ({
   applicationDataStore: vi.fn(() => store)
 }));
 
-vi.mock("../../src/requestLog.js", () => ({
+vi.mock("../../adapters/observability/requestLog.js", () => ({
   appendRequestLog: vi.fn(async () => undefined)
 }));
 

@@ -12,7 +12,9 @@
     "outDir": "dist",
     "rootDir": ".",
     "resolveJsonModule": true,
-    "noUncheckedIndexedAccess": true
+    "noUncheckedIndexedAccess": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true
   },
   "include": ["src/**/*.ts", "apps/api/**/*.ts", "apps/webfetch-renderer/**/*.ts", "services/**/*.ts", "adapters/**/*.ts", "packages/**/*.ts", "packages/**/*.mjs"]
 }

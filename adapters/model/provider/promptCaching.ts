@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { ProviderLogContext } from "../../../packages/contracts/model/modelGateway.js";
-import type { ProviderConfig } from "../../../src/types.js";
+import type { ProviderConfig } from "../../../packages/contracts/admin/public.js";
 
 const CACHE_KEY_PREFIX = "sunabot:";
 const CACHE_KEY_HASH_LENGTH = 48;

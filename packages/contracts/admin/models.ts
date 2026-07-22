@@ -1,4 +1,4 @@
-import type { ReasoningEffort } from "../types.js";
+import type { ReasoningEffort } from "./public.js";
 
 export interface ModelCatalogEntry {
   id: string;

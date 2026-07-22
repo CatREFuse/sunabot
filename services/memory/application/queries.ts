@@ -1,4 +1,4 @@
-import type { AppConfig } from "../../../src/types.js";
+import type { AppConfig } from "../../../packages/contracts/admin/public.js";
 import type { MemorySourceId, SourceDefinition } from "../types.js";
 import { compareMemoryEntries, toMemoryEntry } from "../domain/entryMapper.js";
 import { memoryRepository } from "../persistence.js";

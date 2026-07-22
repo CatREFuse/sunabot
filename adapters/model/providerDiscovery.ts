@@ -1,5 +1,5 @@
-import { MODEL_CATALOG } from "../../src/admin/models.js";
-import type { ProviderConfig } from "../../src/types.js";
+import { MODEL_CATALOG } from "../../packages/contracts/admin/models.js";
+import type { ProviderConfig } from "../../packages/contracts/admin/public.js";
 import { OpenAIProvider } from "./openaiProvider.js";
 import {
   normalizeAnthropicBaseUrl,

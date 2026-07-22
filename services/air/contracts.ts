@@ -1,4 +1,4 @@
-import type { ChatMessage } from "../../src/types.js";
+import type { ChatMessage } from "../../packages/contracts/model/modelGateway.js";
 
 export const AIR_KNOWLEDGE_PROMPT_ID = "air.read";
 export const AIR_KNOWLEDGE_PROMPT_FILE = "read_air.json";

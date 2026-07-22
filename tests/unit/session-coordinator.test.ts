@@ -4,10 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  assistantReplyEnvelope,
   decodeAssistantReply,
-  SYSTEM_CONFIG_NEUTRAL_CONFIRMATION_TEXT,
-  type ReplyGateSnapshotV1
+  SYSTEM_CONFIG_NEUTRAL_CONFIRMATION_TEXT
 } from "../../packages/contracts/session/runtimeMessages.js";
 import type { CodexRunner, CodexToolResult } from "../../adapters/codex/codexTool.js";
 import {
@@ -22,10 +20,29 @@ import {
   type OutboxRecord,
   type SessionEventRecord
 } from "../../services/sessions/sessionStore.js";
+import {
+  claimIncoming,
+  createHeldReplyFixture,
+  deferred,
+  deferredToolResult,
+  enqueueDebounce,
+  enqueueIncoming,
+  waitUntil
+} from "./support/session-fixtures.js";
 
 const stores: SessionStore[] = [];
 const coordinators: SessionCoordinator[] = [];
 const temporaryDirectories: string[] = [];
+const HELD_FIXTURE = createHeldReplyFixture({
+  fingerprint: `sha256:${"c".repeat(64)}`,
+  generation: "coordinator-held-generation",
+  conversationId: "private:171419991",
+  userId: 171419991,
+  messageId: 6001,
+  scopeEpoch: 2,
+  conversationEpoch: 3,
+  correlationId: "coordinator-held-run"
+});
 
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -74,8 +91,8 @@ describe("SessionCoordinator", () => {
     }));
 
     coordinator.resume();
-    coordinator.enqueueEvent({ sessionId: "group:probe:1", kind: "incoming", payload: { text: "first" } });
-    coordinator.enqueueEvent({ sessionId: "group:probe:2", kind: "incoming", payload: { text: "second" } });
+    enqueueIncoming(coordinator, "group:probe:1", { text: "first" });
+    enqueueIncoming(coordinator, "group:probe:2", { text: "second" });
 
     await waitUntil(() => store.listOutbox("group:probe:2")[0]?.status === "sent");
     expect(remoteSends).toBe(2);
@@ -110,8 +127,8 @@ describe("SessionCoordinator", () => {
       }));
 
       coordinator.resume();
-      coordinator.enqueueEvent({ sessionId: "group:probe-terminal:1", kind: "incoming", payload: { text: "first" } });
-      coordinator.enqueueEvent({ sessionId: "group:probe-terminal:2", kind: "incoming", payload: { text: "second" } });
+      enqueueIncoming(coordinator, "group:probe-terminal:1", { text: "first" });
+      enqueueIncoming(coordinator, "group:probe-terminal:2", { text: "second" });
 
       await waitUntil(() => store.listOutbox("group:probe-terminal:2")[0]?.status === "sent");
       expect(store.listOutbox("group:probe-terminal:1")[0]?.status).toBe(
@@ -144,26 +161,10 @@ describe("SessionCoordinator", () => {
     }));
 
     coordinator.resume();
-    coordinator.enqueueEvent({
-      sessionId: "group:offline:1",
-      kind: "incoming",
-      payload: { accountId: "qq-offline", text: "offline-1" }
-    });
-    coordinator.enqueueEvent({
-      sessionId: "group:offline:2",
-      kind: "incoming",
-      payload: { accountId: "qq-offline", text: "offline-2" }
-    });
-    coordinator.enqueueEvent({
-      sessionId: "group:online:1",
-      kind: "incoming",
-      payload: { accountId: "qq-online", text: "online-1" }
-    });
-    coordinator.enqueueEvent({
-      sessionId: "group:online:2",
-      kind: "incoming",
-      payload: { accountId: "qq-online", text: "online-2" }
-    });
+    enqueueIncoming(coordinator, "group:offline:1", { accountId: "qq-offline", text: "offline-1" });
+    enqueueIncoming(coordinator, "group:offline:2", { accountId: "qq-offline", text: "offline-2" });
+    enqueueIncoming(coordinator, "group:online:1", { accountId: "qq-online", text: "online-1" });
+    enqueueIncoming(coordinator, "group:online:2", { accountId: "qq-online", text: "online-2" });
 
     await waitUntil(() => store.listOutbox("group:online:2")[0]?.status === "sent");
     expect(attempts.filter((value) => value.startsWith("qq-online"))).toEqual([
@@ -224,7 +225,7 @@ describe("SessionCoordinator", () => {
     }));
 
     coordinator.resume();
-    coordinator.enqueueEvent({ sessionId: `group:settle:${failingStep}`, kind: "incoming", payload: {} });
+    enqueueIncoming(coordinator, `group:settle:${failingStep}`, {});
     await waitUntil(() => store.listOutbox(`group:settle:${failingStep}`)[0]?.status === "sent");
     const outbox = store.listOutbox(`group:settle:${failingStep}`)[0]!;
     expect(remoteSends).toBe(1);
@@ -259,7 +260,7 @@ describe("SessionCoordinator", () => {
     }));
 
     coordinator.resume();
-    coordinator.enqueueEvent({ sessionId: "group:unknown-transport", kind: "incoming", payload: {} });
+    enqueueIncoming(coordinator, "group:unknown-transport", {});
     await waitUntil(() => store.listOutbox("group:unknown-transport")[0]?.status === "delivery_unknown");
     await new Promise<void>((resolve) => setTimeout(resolve, 30));
     expect(remoteSends).toBe(1);
@@ -298,7 +299,7 @@ describe("SessionCoordinator", () => {
       }
     }));
     before.resume();
-    before.enqueueEvent({ sessionId: "group:settle-restart", kind: "incoming", payload: {} });
+    enqueueIncoming(before, "group:settle-restart", {});
     await waitUntil(() => beforeStore.listOutbox("group:settle-restart")[0]?.status === "sent_remote");
     before.stop();
     beforeStore.close();
@@ -356,10 +357,10 @@ describe("SessionCoordinator", () => {
     }));
 
     coordinator.resume();
-    coordinator.enqueueEvent({ sessionId: "group:a", kind: "incoming", payload: { text: "first" } });
-    coordinator.enqueueEvent({ sessionId: "group:a", kind: "incoming", payload: { text: "second" } });
-    coordinator.enqueueEvent({ sessionId: "group:a", kind: "incoming", payload: { text: "third" } });
-    coordinator.enqueueEvent({ sessionId: "group:b", kind: "incoming", payload: { text: "parallel" } });
+    enqueueIncoming(coordinator, "group:a", { text: "first" });
+    enqueueIncoming(coordinator, "group:a", { text: "second" });
+    enqueueIncoming(coordinator, "group:a", { text: "third" });
+    enqueueIncoming(coordinator, "group:b", { text: "parallel" });
 
     await waitUntil(() => starts.includes("group:b:parallel"));
     expect(starts).toEqual(["group:a:first", "group:b:parallel"]);
@@ -419,12 +420,7 @@ describe("SessionCoordinator", () => {
     }));
 
     coordinator.resume();
-    coordinator.enqueueEvent({
-      sessionId: "debounce:future",
-      kind: "reply_debounce",
-      payload: { text: "after deadline" },
-      availableAt: Date.now() + 40
-    });
+    enqueueDebounce(coordinator, "debounce:future", { text: "after deadline" }, { availableAt: Date.now() + 40 });
     await new Promise<void>((resolve) => setTimeout(resolve, 10));
     expect(handled).toEqual([]);
     await waitUntil(() => handled.length === 1);
@@ -446,18 +442,8 @@ describe("SessionCoordinator", () => {
 
     coordinator.resume();
     const now = Date.now();
-    const movedLater = coordinator.enqueueEvent({
-      sessionId: "debounce:later",
-      kind: "reply_debounce",
-      payload: { text: "later" },
-      availableAt: now + 40
-    }).event;
-    const movedEarlier = coordinator.enqueueEvent({
-      sessionId: "debounce:earlier",
-      kind: "reply_debounce",
-      payload: { text: "earlier" },
-      availableAt: now + 180
-    }).event;
+    const movedLater = enqueueDebounce(coordinator, "debounce:later", { text: "later" }, { availableAt: now + 40 }).event;
+    const movedEarlier = enqueueDebounce(coordinator, "debounce:earlier", { text: "earlier" }, { availableAt: now + 180 }).event;
     expect(coordinator.listActiveEvents("reply_debounce").map((event) => event.id).sort()).toEqual([
       movedEarlier.id,
       movedLater.id
@@ -500,12 +486,7 @@ describe("SessionCoordinator", () => {
     const beforeStore = trackStore(new SessionStore({ databasePath }));
     const before = trackCoordinator(createCoordinator({ store: beforeStore }));
     before.resume();
-    before.enqueueEvent({
-      sessionId: "debounce:restart",
-      kind: "reply_debounce",
-      payload: { text: "persisted" },
-      availableAt: Date.now() + 100
-    });
+    enqueueDebounce(before, "debounce:restart", { text: "persisted" }, { availableAt: Date.now() + 100 });
     before.stop();
     beforeStore.close();
     stores.splice(stores.indexOf(beforeStore), 1);
@@ -538,12 +519,7 @@ describe("SessionCoordinator", () => {
       }
     }));
     coordinator.resume();
-    coordinator.enqueueEvent({
-      sessionId: "debounce:stopped",
-      kind: "reply_debounce",
-      payload: {},
-      availableAt: Date.now() + 30
-    });
+    enqueueDebounce(coordinator, "debounce:stopped", {}, { availableAt: Date.now() + 30 });
 
     const clearsBeforeStop = clearTimeoutSpy.mock.calls.length;
     coordinator.stop();
@@ -589,12 +565,7 @@ describe("SessionCoordinator", () => {
     }));
 
     coordinator.resume();
-    const source = coordinator.enqueueEvent({
-      sessionId: "debounce:running-race",
-      kind: "reply_debounce",
-      payload: { followUps: ["message-1"] },
-      availableAt: Date.now()
-    }).event;
+    const source = enqueueDebounce(coordinator, "debounce:running-race", { followUps: ["message-1"] }, { availableAt: Date.now() }).event;
     await firstClaimed.promise;
     const bumpedDeadline = Date.now() + 50;
     expect(store.getActiveEvent("debounce:running-race", "reply_debounce")).toMatchObject({
@@ -666,12 +637,7 @@ describe("SessionCoordinator", () => {
     }));
 
     coordinator.resume();
-    coordinator.enqueueEvent({
-      sessionId: "debounce:handoff-retry",
-      kind: "reply_debounce",
-      payload: {},
-      availableAt: Date.now()
-    });
+    enqueueDebounce(coordinator, "debounce:handoff-retry", {}, { availableAt: Date.now() });
     await waitUntil(() => targets.length === 1);
     await coordinator.waitForIdle();
     expect(attempts).toBe(2);
@@ -726,12 +692,7 @@ describe("SessionCoordinator", () => {
     }));
 
     coordinator.resume();
-    coordinator.enqueueEvent({
-      sessionId: "debounce:handoff-collision-retry",
-      kind: "reply_debounce",
-      payload: {},
-      availableAt: Date.now()
-    });
+    enqueueDebounce(coordinator, "debounce:handoff-collision-retry", {}, { availableAt: Date.now() });
     await waitUntil(() => targets.length === 1);
     await coordinator.waitForIdle();
     expect(attempts).toBe(2);
@@ -767,11 +728,7 @@ describe("SessionCoordinator", () => {
     }));
 
     coordinator.resume();
-    coordinator.enqueueEvent({
-      sessionId: "group:active-delivery",
-      kind: "incoming",
-      payload: { text: "start" }
-    });
+    enqueueIncoming(coordinator, "group:active-delivery", { text: "start" });
 
     await deliveryObserved.promise;
     await waitUntil(() => store.listOutbox("group:active-delivery")[0]?.status === "sent");
@@ -820,11 +777,7 @@ describe("SessionCoordinator", () => {
     }));
 
     coordinator.resume();
-    coordinator.enqueueEvent({
-      sessionId: "group:active-tool-gate",
-      kind: "incoming",
-      payload: { text: "search" }
-    });
+    enqueueIncoming(coordinator, "group:active-tool-gate", { text: "search" });
 
     await dispatchStarted.promise;
     await handlerContinued.promise;
@@ -866,20 +819,14 @@ describe("SessionCoordinator", () => {
       }
     }));
 
-    coordinator.resume();
-    const enqueued = coordinator.enqueueEvent({
-      sessionId: "group:active-retry",
-      kind: "incoming",
-      payload: { text: "start" }
-    });
-    await coordinator.waitForIdle();
+    const event = await runIncoming(coordinator, "group:active-retry", { text: "start" });
 
     expect(attempts).toBe(2);
     expect(store.listOutbox("group:active-retry")).toEqual([
       expect.objectContaining({
         status: "sent",
         attempts: 2,
-        dedupeKey: `turn-outbox:${enqueued.event.id}:1:retry-dispatch`
+        dedupeKey: `turn-outbox:${event.id}:1:retry-dispatch`
       })
     ]);
   });
@@ -897,13 +844,7 @@ describe("SessionCoordinator", () => {
       throw new Error("sqlite write failed");
     });
 
-    coordinator.resume();
-    coordinator.enqueueEvent({
-      sessionId: "group:outbox-persistence-failure",
-      kind: "incoming",
-      payload: { text: "send" }
-    });
-    await coordinator.waitForIdle();
+    await runIncoming(coordinator, "group:outbox-persistence-failure", { text: "send" });
 
     const outbox = store.listOutbox("group:outbox-persistence-failure")[0]!;
     expect(finishOutbox).toHaveBeenCalledOnce();
@@ -933,27 +874,14 @@ describe("SessionCoordinator", () => {
           payload: { text: "voice ready first" },
           dedupeFingerprint: "a".repeat(64)
         }).then((outbox) => outbox, (error) => error as Error);
-        return {
-          status: "deferred",
-          providerCallId: "call-voice-first",
-          toolName: "codex",
-          arguments: { task: "inspect", kind: "analysis" },
-          originalRequest: event.payload,
-          acknowledgement: { kind: "reply", payload: { text: "acknowledged" } }
-        };
+        return deferredToolResult(event, "call-voice-first", { task: "inspect", kind: "analysis" }, "acknowledged");
       },
       deliverOutbox: (outbox) => {
         delivered.push((outbox.payload as { text: string }).text);
       }
     }));
 
-    coordinator.resume();
-    const event = coordinator.enqueueEvent({
-      sessionId: "group:voice-first",
-      kind: "incoming",
-      payload: { text: "delegate" }
-    }).event;
-    await coordinator.waitForIdle();
+    const event = await runIncoming(coordinator, "group:voice-first", { text: "delegate" });
 
     await expect(voiceOutcome).resolves.toMatchObject({
       originTurnId: store.listTurns(event.sessionId)[0]!.id,
@@ -985,14 +913,7 @@ describe("SessionCoordinator", () => {
       handleEvent: (event, context) => {
         if (event.kind === "tool_completion") return { status: "no_reply" };
         turnContext = context;
-        return {
-          status: "deferred",
-          providerCallId: "call-voice-later",
-          toolName: "codex",
-          arguments: { task: "inspect", kind: "analysis" },
-          originalRequest: event.payload,
-          acknowledgement: { kind: "reply", payload: { text: "ack before voice" } }
-        };
+        return deferredToolResult(event, "call-voice-later", { task: "inspect", kind: "analysis" }, "ack before voice");
       },
       deliverOutbox: (outbox) => {
         delivered.push((outbox.payload as { text: string }).text);
@@ -1000,11 +921,7 @@ describe("SessionCoordinator", () => {
     }));
 
     coordinator.resume();
-    const event = coordinator.enqueueEvent({
-      sessionId: "group:voice-later",
-      kind: "incoming",
-      payload: { text: "delegate" }
-    }).event;
+    const event = enqueueIncoming(coordinator, "group:voice-later", { text: "delegate" }).event;
     await toolStarted.promise;
     expect(delivered).toEqual(["ack before voice"]);
     expect(store.listToolJobs(event.sessionId)[0]).toMatchObject({ status: "running" });
@@ -1021,7 +938,10 @@ describe("SessionCoordinator", () => {
     await coordinator.waitForIdle();
   });
 
-  it("rejects a waiting deferred outbox when the turn completes without deferring", async () => {
+  it.each([
+    ["the turn completes without deferring", "voice-rejected", "no_reply", "Session turn completed as no_reply, not deferred."],
+    ["the turn handler fails", "voice-failed", "failed", "provider turn failed"]
+  ] as const)("rejects a waiting deferred outbox when %s", async (_case, suffix, outcome, message) => {
     const store = trackStore(new SessionStore({ databasePath: ":memory:" }));
     let voiceOutcome: Promise<unknown> | undefined;
     const coordinator = trackCoordinator(createCoordinator({
@@ -1030,42 +950,18 @@ describe("SessionCoordinator", () => {
         voiceOutcome = context.emitDeferredOutbox({
           kind: "voice",
           payload: {},
-          dedupeFingerprint: "c".repeat(64)
+          dedupeFingerprint: (outcome === "failed" ? "d" : "c").repeat(64)
         }).then(() => "inserted", (error) => error);
+        if (outcome === "failed") throw new Error(message);
         return { status: "no_reply" };
       }
     }));
 
-    coordinator.resume();
-    coordinator.enqueueEvent({ sessionId: "group:voice-rejected", kind: "incoming", payload: {} });
-    await coordinator.waitForIdle();
+    await runIncoming(coordinator, `group:${suffix}`);
 
-    await expect(voiceOutcome).resolves.toMatchObject({ message: "Session turn completed as no_reply, not deferred." });
-    expect(store.listOutbox("group:voice-rejected")).toHaveLength(0);
-  });
-
-  it("rejects a waiting deferred outbox when the turn handler fails", async () => {
-    const store = trackStore(new SessionStore({ databasePath: ":memory:" }));
-    let voiceOutcome: Promise<unknown> | undefined;
-    const coordinator = trackCoordinator(createCoordinator({
-      store,
-      handleEvent: (_event, context) => {
-        voiceOutcome = context.emitDeferredOutbox({
-          kind: "voice",
-          payload: {},
-          dedupeFingerprint: "d".repeat(64)
-        }).then(() => "inserted", (error) => error);
-        throw new Error("provider turn failed");
-      }
-    }));
-
-    coordinator.resume();
-    coordinator.enqueueEvent({ sessionId: "group:voice-failed", kind: "incoming", payload: {} });
-    await coordinator.waitForIdle();
-
-    await expect(voiceOutcome).resolves.toMatchObject({ message: "provider turn failed" });
-    expect(store.listTurns("group:voice-failed")[0]).toMatchObject({ status: "failed" });
-    expect(store.listOutbox("group:voice-failed")).toHaveLength(0);
+    await expect(voiceOutcome).resolves.toMatchObject({ message });
+    expect(store.listTurns(`group:${suffix}`)[0]).toMatchObject({ status: outcome });
+    expect(store.listOutbox(`group:${suffix}`)).toHaveLength(0);
   });
 
   it("atomically acknowledges a deferred Codex job, releases the Session, and appends completion at the tail", async () => {
@@ -1095,14 +991,9 @@ describe("SessionCoordinator", () => {
         const text = (event.payload as { text: string }).text;
         seen.push(text);
         if (text === "delegate") {
-          return {
-            status: "deferred",
-            providerCallId: "call-codex-1",
-            toolName: "codex",
-            arguments: { task: "perform deep research", kind: "research" },
-            originalRequest: event.payload,
-            acknowledgement: { kind: "reply", payload: { text: "task started" } }
-          } satisfies SessionHandleResult;
+          return deferredToolResult(
+            event, "call-codex-1", { task: "perform deep research", kind: "research" }, "task started"
+          );
         }
         laterRanWhileToolPending = !toolFinished;
         return completedReply(text);
@@ -1130,11 +1021,7 @@ describe("SessionCoordinator", () => {
 
     await toolStarted.promise;
     await waitUntil(() => deliveries.includes("task started"));
-    coordinator.enqueueEvent({
-      sessionId: "group:defer",
-      kind: "incoming",
-      payload: { text: "later" }
-    });
+    enqueueIncoming(coordinator, "group:defer", { text: "later" });
     await waitUntil(() => seen.includes("later"));
     expect(laterRanWhileToolPending).toBe(true);
     expect(seen).toEqual(["delegate", "later"]);
@@ -1177,20 +1064,11 @@ describe("SessionCoordinator", () => {
           completions.push(event.payload);
           return { status: "no_reply" };
         }
-        return {
-          status: "deferred",
-          providerCallId: "call-failure",
-          toolName: "codex",
-          arguments: { task: "long analysis", kind: "analysis" },
-          originalRequest: event.payload,
-          acknowledgement: { kind: "reply", payload: { text: "started" } }
-        };
+        return deferredToolResult(event, "call-failure", { task: "long analysis", kind: "analysis" }, "started");
       }
     }));
 
-    coordinator.resume();
-    coordinator.enqueueEvent({ sessionId: "group:failure", kind: "incoming", payload: { text: "analyze" } });
-    await coordinator.waitForIdle();
+    await runIncoming(coordinator, "group:failure", { text: "analyze" });
 
     const job = store.listToolJobs("group:failure")[0]!;
     expect(job.status).toBe("failed");
@@ -1241,19 +1119,12 @@ describe("SessionCoordinator", () => {
       observeCodexToolUsage,
       handleEvent: (event) => event.kind === "tool_completion"
         ? { status: "no_reply" }
-        : {
-            status: "deferred",
-            providerCallId: "call-observed-codex",
-            toolName: "codex",
-            arguments: { task: "private task body", kind: "analysis" },
-            originalRequest: event.payload,
-            acknowledgement: { kind: "reply", payload: { text: "started" } }
-          }
+        : deferredToolResult(
+            event, "call-observed-codex", { task: "private task body", kind: "analysis" }, "started"
+          )
     }));
 
-    coordinator.resume();
-    coordinator.enqueueEvent({ sessionId: "group:observed", kind: "incoming", payload: { text: "run" } });
-    await coordinator.waitForIdle();
+    await runIncoming(coordinator, "group:observed", { text: "run" });
 
     expect(store.listToolJobs("group:observed")[0]?.status).toBe("failed");
     expect(observeCodexToolUsage).toHaveBeenCalledOnce();
@@ -1300,19 +1171,10 @@ describe("SessionCoordinator", () => {
       },
       handleEvent: (event) => event.kind === "tool_completion"
         ? { status: "no_reply" }
-        : {
-            status: "deferred",
-            providerCallId: "call-no-usage",
-            toolName: "codex",
-            arguments: { task: "inspect", kind: "analysis" },
-            originalRequest: event.payload,
-            acknowledgement: { kind: "reply", payload: { text: "started" } }
-          }
+        : deferredToolResult(event, "call-no-usage", { task: "inspect", kind: "analysis" }, "started")
     }));
 
-    coordinator.resume();
-    coordinator.enqueueEvent({ sessionId: "group:no-usage", kind: "incoming", payload: { text: "run" } });
-    await coordinator.waitForIdle();
+    await runIncoming(coordinator, "group:no-usage", { text: "run" });
 
     expect(observeCodexToolUsage).toHaveBeenCalledWith(expect.objectContaining({
       conversationId: "group:no-usage",
@@ -1348,19 +1210,12 @@ describe("SessionCoordinator", () => {
       },
       handleEvent: (event) => event.kind === "tool_completion"
         ? { status: "no_reply" }
-        : {
-            status: "deferred",
-            providerCallId: "call-lost-codex-completion",
-            toolName: "codex",
-            arguments: { task: "inspect", kind: "analysis" },
-            originalRequest: event.payload,
-            acknowledgement: { kind: "reply", payload: { text: "started" } }
-          }
+        : deferredToolResult(
+            event, "call-lost-codex-completion", { task: "inspect", kind: "analysis" }, "started"
+          )
     }));
 
-    coordinator.resume();
-    coordinator.enqueueEvent({ sessionId: "group:lost-completion", kind: "incoming", payload: { text: "run" } });
-    await coordinator.waitForIdle();
+    await runIncoming(coordinator, "group:lost-completion", { text: "run" });
 
     expect(store.listToolJobs("group:lost-completion")[0]?.status).toBe("succeeded");
     expect(observeCodexToolUsage).toHaveBeenCalledOnce();
@@ -1397,15 +1252,15 @@ describe("SessionCoordinator", () => {
     }));
 
     coordinator.resume();
-    coordinator.enqueueEvent({ sessionId: "group:retry", kind: "incoming", payload: { text: "eventual" } });
-    coordinator.enqueueEvent({ sessionId: "group:unknown", kind: "incoming", payload: { text: "unknown" } });
+    enqueueIncoming(coordinator, "group:retry", { text: "eventual" });
+    enqueueIncoming(coordinator, "group:unknown", { text: "unknown" });
     await coordinator.waitForIdle();
     expect(store.listOutbox("group:retry")[0]).toMatchObject({ status: "sent", attempts: 3 });
     expect(store.listOutbox("group:unknown")[0]).toMatchObject({ status: "dead", attempts: 3 });
 
     connected = false;
-    coordinator.enqueueEvent({ sessionId: "group:reconnect", kind: "incoming", payload: { text: "reconnect:1" } });
-    coordinator.enqueueEvent({ sessionId: "group:reconnect", kind: "incoming", payload: { text: "reconnect:2" } });
+    enqueueIncoming(coordinator, "group:reconnect", { text: "reconnect:1" });
+    enqueueIncoming(coordinator, "group:reconnect", { text: "reconnect:2" });
     await waitUntil(() => store.listOutbox("group:reconnect")[0]?.status === "pending");
     await coordinator.waitForIdle();
     expect(attempts.get("reconnect:1")).toBe(1);
@@ -1439,7 +1294,7 @@ describe("SessionCoordinator", () => {
     }));
 
     coordinator.resume();
-    coordinator.enqueueEvent({ sessionId: "group:stop", kind: "incoming", payload: { text: "queued" } });
+    enqueueIncoming(coordinator, "group:stop", { text: "queued" });
     await waitUntil(() => store.listOutbox("group:stop")[0]?.status === "pending");
     expect(attempts).toBe(1);
 
@@ -1459,9 +1314,8 @@ describe("SessionCoordinator", () => {
     const databasePath = path.join(directory, "sessions.sqlite");
     const oldStore = trackStore(new SessionStore({ databasePath }));
 
-    oldStore.enqueueEvent({ sessionId: "group:turn", kind: "incoming", payload: { text: "pending turn" } });
-    oldStore.enqueueEvent({ sessionId: "group:outbox", kind: "incoming", payload: { text: "old outbox" } });
-    const outboxTurn = oldStore.claimNextTurn({ workerId: "old-turn", sessionId: "group:outbox" })!;
+    enqueueIncoming(oldStore, "group:turn", { text: "pending turn" });
+    const outboxTurn = claimIncoming(oldStore, "group:outbox", "old-turn", { text: "old outbox" });
     oldStore.finishTurn({
       turnId: outboxTurn.turn.id,
       workerId: "old-turn",
@@ -1470,8 +1324,7 @@ describe("SessionCoordinator", () => {
     });
     oldStore.claimNextOutbox({ workerId: "old-outbox", sessionId: "group:outbox" });
 
-    oldStore.enqueueEvent({ sessionId: "group:tool", kind: "incoming", payload: { text: "old tool" } });
-    const toolTurn = oldStore.claimNextTurn({ workerId: "old-turn", sessionId: "group:tool" })!;
+    const toolTurn = claimIncoming(oldStore, "group:tool", "old-turn", { text: "old tool" });
     const deferredTool = oldStore.deferTurn({
       turnId: toolTurn.turn.id,
       workerId: "old-turn",
@@ -1531,8 +1384,7 @@ describe("SessionCoordinator", () => {
 
   it("cleans a verified orphan process before starting an isolated recovered attempt", async () => {
     const store = trackStore(new SessionStore({ databasePath: ":memory:" }));
-    store.enqueueEvent({ sessionId: "group:orphan", kind: "incoming", payload: { text: "old tool" } });
-    const turn = store.claimNextTurn({ workerId: "old-turn" })!;
+    const turn = claimIncoming(store, "group:orphan", "old-turn", { text: "old tool" });
     const deferred = store.deferTurn({
       turnId: turn.turn.id,
       workerId: "old-turn",
@@ -1601,8 +1453,7 @@ describe("SessionCoordinator", () => {
 
   it("does not start a new attempt when an orphan PID cannot be verified", async () => {
     const store = trackStore(new SessionStore({ databasePath: ":memory:" }));
-    store.enqueueEvent({ sessionId: "group:pid-reuse", kind: "incoming", payload: {} });
-    const turn = store.claimNextTurn({ workerId: "old-turn" })!;
+    const turn = claimIncoming(store, "group:pid-reuse", "old-turn", {});
     const deferred = store.deferTurn({
       turnId: turn.turn.id,
       workerId: "old-turn",
@@ -1673,21 +1524,14 @@ describe("SessionCoordinator", () => {
       handleEvent: (event) => {
         if (event.kind === "tool_completion") return { status: "no_reply" };
         const payload = event.payload as { task: string; kind: "local" | "research" };
-        return {
-          status: "deferred",
-          providerCallId: `call:${payload.task}`,
-          toolName: "codex",
-          arguments: payload,
-          originalRequest: payload,
-          acknowledgement: { kind: "reply", payload: { text: `started:${payload.task}` } }
-        };
+        return deferredToolResult(event, `call:${payload.task}`, payload, `started:${payload.task}`);
       }
     }));
 
     coordinator.resume();
-    coordinator.enqueueEvent({ sessionId: "group:l1", kind: "incoming", payload: { task: "local one", kind: "local" } });
-    coordinator.enqueueEvent({ sessionId: "group:l2", kind: "incoming", payload: { task: "local two", kind: "local" } });
-    coordinator.enqueueEvent({ sessionId: "group:r", kind: "incoming", payload: { task: "research", kind: "research" } });
+    enqueueIncoming(coordinator, "group:l1", { task: "local one", kind: "local" });
+    enqueueIncoming(coordinator, "group:l2", { task: "local two", kind: "local" });
+    enqueueIncoming(coordinator, "group:r", { task: "research", kind: "research" });
 
     await waitUntil(() => starts.length === 2);
     expect(starts).toContain("local one");
@@ -1716,20 +1560,11 @@ describe("SessionCoordinator", () => {
       runDeferredTool,
       handleEvent: (event) => event.kind === "tool_completion"
         ? completedReply("image completed")
-        : {
-            status: "deferred",
-            providerCallId: "call-image-1",
-            toolName: "generate_img",
-            arguments: { prompt: "月球基地" },
-            originalRequest: event.payload,
-            acknowledgement: { kind: "reply", payload: { text: "image queued" } }
-          },
+        : deferredToolResult(event, "call-image-1", { prompt: "月球基地" }, "image queued", "generate_img"),
       deliverOutbox: (outbox) => deliveries.push((outbox.payload as { text: string }).text)
     }));
 
-    coordinator.resume();
-    coordinator.enqueueEvent({ sessionId: "private:image", kind: "incoming", payload: { text: "draw" } });
-    await coordinator.waitForIdle();
+    await runIncoming(coordinator, "private:image", { text: "draw" });
 
     expect(deliveries).toEqual(["image queued", "image completed"]);
     expect(runDeferredTool).toHaveBeenCalledOnce();
@@ -1753,14 +1588,9 @@ describe("SessionCoordinator", () => {
       },
       handleEvent: (event) => event.kind === "tool_completion"
         ? completedReply("callback complete")
-        : {
-            status: "deferred",
-            providerCallId: "call-dispatch-before-worker",
-            toolName: "generate_img",
-            arguments: { prompt: "月球基地" },
-            originalRequest: event.payload,
-            acknowledgement: { kind: "reply", payload: { text: "dispatch started" } }
-          },
+        : deferredToolResult(
+            event, "call-dispatch-before-worker", { prompt: "月球基地" }, "dispatch started", "generate_img"
+          ),
       deliverOutbox: async (outbox) => {
         const text = (outbox.payload as { text: string }).text;
         if (text === "dispatch started") {
@@ -1772,11 +1602,7 @@ describe("SessionCoordinator", () => {
     }));
 
     coordinator.resume();
-    coordinator.enqueueEvent({
-      sessionId: "private:dispatch-before-worker",
-      kind: "incoming",
-      payload: { text: "draw" }
-    });
+    enqueueIncoming(coordinator, "private:dispatch-before-worker", { text: "draw" });
 
     await dispatchDeliveryStarted.promise;
     await toolStarted.promise;
@@ -1797,7 +1623,7 @@ describe("SessionCoordinator", () => {
 
   it("exposes a held turn port that releases before delivery and shares the turn ordinal", async () => {
     const store = trackStore(new SessionStore({ databasePath: ":memory:", clock: () => 1_000 }));
-    const gate = coordinatorHeldGate();
+    const gate = HELD_FIXTURE.gate;
     let currentGate = gate;
     const delivered: Array<{ text: string; holdState: string }> = [];
     const coordinator = trackCoordinator(createCoordinator({
@@ -1805,8 +1631,8 @@ describe("SessionCoordinator", () => {
       resolveHeldReplyGate: () => currentGate,
       handleEvent: async (event, context) => {
         const held = await context.appendHeldOutbox(
-          coordinatorHeldDraft(gate, "private_scope_plus_one"),
-          coordinatorHeldOptions(gate, "private_scope_plus_one")
+          HELD_FIXTURE.draft("private_scope_plus_one"),
+          HELD_FIXTURE.options("private_scope_plus_one")
         );
         expect(store.claimNextOutbox({ workerId: "must-remain-held" })).toBeNull();
         currentGate = { ...gate, scopeEpoch: gate.scopeEpoch + 1 };
@@ -1827,9 +1653,7 @@ describe("SessionCoordinator", () => {
       }
     }));
 
-    coordinator.resume();
-    coordinator.enqueueEvent({ sessionId: "private:held-port", kind: "incoming", payload: {} });
-    await coordinator.waitForIdle();
+    await runIncoming(coordinator, "private:held-port");
 
     const outbox = store.listOutbox("private:held-port");
     expect(outbox[0]?.dedupeKey).toMatch(/:1:reply-fingerprint$/u);
@@ -1844,7 +1668,7 @@ describe("SessionCoordinator", () => {
 
   it("preserves and schedules a released confirmation when the release response is lost", async () => {
     const store = trackStore(new SessionStore({ databasePath: ":memory:", clock: () => 1_000 }));
-    const gate = coordinatorHeldGate();
+    const gate = HELD_FIXTURE.gate;
     const releaseGate = { ...gate, scopeEpoch: gate.scopeEpoch + 1 };
     const delivered: string[] = [];
     let originRuns = 0;
@@ -1854,8 +1678,8 @@ describe("SessionCoordinator", () => {
       handleEvent: async (_event, context) => {
         originRuns += 1;
         const held = await context.appendHeldOutbox(
-          coordinatorHeldDraft(gate, "private_scope_plus_one"),
-          coordinatorHeldOptions(gate, "private_scope_plus_one")
+          HELD_FIXTURE.draft("private_scope_plus_one"),
+          HELD_FIXTURE.options("private_scope_plus_one")
         );
         await held.release(releaseGate);
         throw new Error("release response was lost");
@@ -1863,13 +1687,7 @@ describe("SessionCoordinator", () => {
       deliverOutbox: (outbox) => delivered.push(decodeAssistantReply(outbox.payload).text)
     }));
 
-    coordinator.resume();
-    const event = coordinator.enqueueEvent({
-      sessionId: gate.conversationId,
-      kind: "incoming",
-      payload: {}
-    }).event;
-    await coordinator.waitForIdle();
+    const event = await runIncoming(coordinator, gate.conversationId);
 
     expect(originRuns).toBe(1);
     expect(store.getEvent(event.id)).toMatchObject({ status: "completed", attempts: 1 });
@@ -1886,7 +1704,7 @@ describe("SessionCoordinator", () => {
 
   it("atomically falls back and schedules an unreleased confirmation when the turn finishes", async () => {
     const store = trackStore(new SessionStore({ databasePath: ":memory:", clock: () => 1_000 }));
-    const gate = coordinatorHeldGate();
+    const gate = HELD_FIXTURE.gate;
     const delivered: string[] = [];
     let originRuns = 0;
     const coordinator = trackCoordinator(createCoordinator({
@@ -1895,21 +1713,15 @@ describe("SessionCoordinator", () => {
       handleEvent: async (_event, context) => {
         originRuns += 1;
         await context.appendHeldOutbox(
-          coordinatorHeldDraft(gate, "private_scope_plus_one"),
-          coordinatorHeldOptions(gate, "private_scope_plus_one")
+          HELD_FIXTURE.draft("private_scope_plus_one"),
+          HELD_FIXTURE.options("private_scope_plus_one")
         );
         return { status: "completed", result: { handled: true } };
       },
       deliverOutbox: (outbox) => delivered.push(decodeAssistantReply(outbox.payload).text)
     }));
 
-    coordinator.resume();
-    const event = coordinator.enqueueEvent({
-      sessionId: gate.conversationId,
-      kind: "incoming",
-      payload: {}
-    }).event;
-    await coordinator.waitForIdle();
+    const event = await runIncoming(coordinator, gate.conversationId);
 
     expect(originRuns).toBe(1);
     expect(store.getEvent(event.id)).toMatchObject({ status: "completed", attempts: 1 });
@@ -1923,7 +1735,7 @@ describe("SessionCoordinator", () => {
 
   it("atomically falls back an unreleased held confirmation when the turn fails", async () => {
     const store = trackStore(new SessionStore({ databasePath: ":memory:", clock: () => 1_000 }));
-    const gate = coordinatorHeldGate();
+    const gate = HELD_FIXTURE.gate;
     let currentGate = gate;
     const delivered: string[] = [];
     const coordinator = trackCoordinator(createCoordinator({
@@ -1931,8 +1743,8 @@ describe("SessionCoordinator", () => {
       resolveHeldReplyGate: () => currentGate,
       handleEvent: async (_event, context) => {
         await context.appendHeldOutbox(
-          coordinatorHeldDraft(gate, "private_scope_plus_one"),
-          coordinatorHeldOptions(gate, "private_scope_plus_one")
+          HELD_FIXTURE.draft("private_scope_plus_one"),
+          HELD_FIXTURE.options("private_scope_plus_one")
         );
         currentGate = { ...gate, scopeEpoch: gate.scopeEpoch + 1 };
         throw new Error("handler failed before release");
@@ -1940,13 +1752,7 @@ describe("SessionCoordinator", () => {
       deliverOutbox: (outbox) => delivered.push(decodeAssistantReply(outbox.payload).text)
     }));
 
-    coordinator.resume();
-    const event = coordinator.enqueueEvent({
-      sessionId: "private:held-failure",
-      kind: "incoming",
-      payload: {}
-    }).event;
-    await coordinator.waitForIdle();
+    const event = await runIncoming(coordinator, "private:held-failure");
 
     expect(store.getEvent(event.id)).toMatchObject({ status: "completed", attempts: 1 });
     expect(store.listTurns("private:held-failure")).toEqual([
@@ -1962,7 +1768,7 @@ describe("SessionCoordinator", () => {
 
   it("atomically falls back and schedules held delivery when a turn defers", async () => {
     const store = trackStore(new SessionStore({ databasePath: ":memory:", clock: () => 1_000 }));
-    const gate = coordinatorHeldGate();
+    const gate = HELD_FIXTURE.gate;
     const delivered: string[] = [];
     let originRuns = 0;
     const coordinator = trackCoordinator(createCoordinator({
@@ -1972,21 +1778,19 @@ describe("SessionCoordinator", () => {
         if (event.kind === "tool_completion") return { status: "no_reply" };
         originRuns += 1;
         await context.appendHeldOutbox(
-          coordinatorHeldDraft(gate, "private_scope_plus_one"),
-          coordinatorHeldOptions(gate, "private_scope_plus_one")
+          HELD_FIXTURE.draft("private_scope_plus_one"),
+          HELD_FIXTURE.options("private_scope_plus_one")
         );
-        return {
-          status: "deferred",
-          providerCallId: "held-defer-call",
-          toolName: "codex",
-          arguments: { task: "complete later", kind: "analysis" },
-          originalRequest: event.payload,
-          acknowledgement: {
+        return deferredToolResult(
+          event,
+          "held-defer-call",
+          { task: "complete later", kind: "analysis" },
+          {
             kind: "ack",
             deliveryPartition: "primary",
             payload: { text: "任务已经开始。" }
           }
-        } satisfies SessionHandleResult;
+        );
       },
       deliverOutbox: (outbox) => {
         delivered.push(outbox.kind === "onebot.reply"
@@ -1995,13 +1799,7 @@ describe("SessionCoordinator", () => {
       }
     }));
 
-    coordinator.resume();
-    const event = coordinator.enqueueEvent({
-      sessionId: gate.conversationId,
-      kind: "incoming",
-      payload: { text: "defer safely" }
-    }).event;
-    await coordinator.waitForIdle();
+    const event = await runIncoming(coordinator, gate.conversationId, { text: "defer safely" });
 
     expect(originRuns).toBe(1);
     expect(store.getEvent(event.id)).toMatchObject({ status: "completed", attempts: 1 });
@@ -2082,6 +1880,13 @@ function successfulCodex(
   return { ok: true, status: "succeeded", jobId, kind, content };
 }
 
+async function runIncoming(coordinator: SessionCoordinator, sessionId: string, payload: unknown = {}) {
+  coordinator.resume();
+  const event = enqueueIncoming(coordinator, sessionId, payload).event;
+  await coordinator.waitForIdle();
+  return event;
+}
+
 function trackStore(store: SessionStore) {
   stores.push(store);
   return store;
@@ -2097,90 +1902,4 @@ function deliverPersistedOutbox(store: SessionStore, outboxId: string, workerId:
 function trackCoordinator(coordinator: SessionCoordinator) {
   coordinators.push(coordinator);
   return coordinator;
-}
-
-function deferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (error?: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
-}
-
-async function waitUntil(predicate: () => boolean, timeoutMs = 2_000) {
-  const deadline = Date.now() + timeoutMs;
-  while (!predicate()) {
-    if (Date.now() >= deadline) throw new Error("Condition was not met before timeout.");
-    await new Promise<void>((resolve) => setTimeout(resolve, 2));
-  }
-}
-
-const COORDINATOR_MUTATION_FINGERPRINT = `sha256:${"c".repeat(64)}`;
-
-function coordinatorHeldGate(): ReplyGateSnapshotV1 {
-  return {
-    generation: "coordinator-held-generation",
-    scope: "private",
-    conversationId: "private:171419991",
-    scopeEpoch: 2,
-    conversationEpoch: 3
-  };
-}
-
-function coordinatorHeldOptions(
-  originalReplyGate: ReplyGateSnapshotV1,
-  releasePolicy: "unchanged" | "private_scope_plus_one"
-) {
-  return {
-    mutationFingerprint: COORDINATOR_MUTATION_FINGERPRINT,
-    semantics: "system_config_confirmation" as const,
-    originalReplyGate,
-    releasePolicy
-  };
-}
-
-function coordinatorHeldDraft(
-  replyGate: ReplyGateSnapshotV1,
-  releasePolicy: "unchanged" | "private_scope_plus_one"
-) {
-  return {
-    kind: "onebot.reply" as const,
-    deliveryPartition: "primary",
-    dedupeFingerprint: "reply-fingerprint",
-    payload: assistantReplyEnvelope({
-      type: "assistant_reply",
-      incoming: {
-        schemaVersion: 1,
-        transport: "onebot",
-        agentId: "plana",
-        accountId: "primary",
-        scope: "private",
-        messageId: 6001,
-        time: "2026-07-17T00:00:00.000Z",
-        userId: 171419991,
-        selfId: 20002,
-        sender: { id: "171419991" },
-        text: "关闭私聊回复",
-        media: [],
-        attachments: [],
-        replyMessageIds: [],
-        quoteReferences: [],
-        mentionedSelf: false
-      },
-      text: "设置已经保存。",
-      generatedImages: [],
-      isAdmin: true,
-      messageOrigin: "text",
-      toolNames: ["system_config"],
-      ...(releasePolicy === "private_scope_plus_one"
-        ? { deliverySemantics: "system_config_confirmation" as const }
-        : {}),
-      replyGate
-    }, {
-      conversationId: replyGate.conversationId,
-      correlationId: "coordinator-held-run"
-    })
-  };
 }

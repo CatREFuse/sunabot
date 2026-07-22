@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
-import { getWorkspaceDir } from "../../src/config.js";
-import { appendRequestLog } from "../../src/requestLog.js";
-import { BotConfig } from "../../src/types.js";
+import { getWorkspaceDir } from "../../packages/platform/projectPaths.js";
+import { appendRequestLog } from "../observability/requestLog.js";
+import type { BotConfig } from "../../packages/contracts/admin/public.js";
 import { resolveTavilyApiKeys } from "./webSearchSettings.js";
 import { WEBSEARCH_TOOL_NAME } from "../../services/tools/definitions.js";
 export { WEBSEARCH_TOOL_NAME, websearchTool } from "../../services/tools/definitions.js";

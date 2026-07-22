@@ -2,7 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const appendRequestLog = vi.hoisted(() => vi.fn(async () => undefined));
-vi.mock("../../src/requestLog.js", () => ({ appendRequestLog }));
+vi.mock("../../adapters/observability/requestLog.js", () => ({ appendRequestLog }));
 
 import { RegistryProviderToolExecutor } from "../../adapters/model/provider/toolExecutor.js";
 import { createTurnToolState } from "../../adapters/model/provider/turnToolState.js";

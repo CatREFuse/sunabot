@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { OpenAiSpeechClient } from "../../adapters/voice/public.js";
 import { AdminApiError } from "../../src/admin/errors.js";
-import { resolveProjectPath } from "../../src/config.js";
+import { resolveProjectPath } from "../../packages/platform/projectPaths.js";
 import type { SunaRuntime } from "../../src/runtime.js";
 import {
   VOICE_LANGUAGES,

@@ -3,8 +3,8 @@ import path from "node:path";
 import { homedir } from "node:os";
 import OpenAI from "openai";
 import dotenv from "dotenv";
-import type { ProviderConfig } from "../../../src/types.js";
-import { getWorkspacePath, resolveProjectPath } from "../../../src/config.js";
+import type { ProviderConfig } from "../../../packages/contracts/admin/public.js";
+import { getWorkspacePath, resolveProjectPath } from "../../../packages/platform/projectPaths.js";
 import { WORKSPACE_LAYOUT } from "../../../packages/platform/workspaceLayout.js";
 import { ensureCodexAccessToken } from "../../../packages/platform/codexTokenRefresh.mjs";
 

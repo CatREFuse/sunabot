@@ -1,7 +1,7 @@
 import path from "node:path";
 import type { ReasoningEffort } from "../types.js";
 import { badRequest } from "./errors.js";
-import { getModelCatalogEntry, isReasoningEffort } from "./models.js";
+import { getModelCatalogEntry, isReasoningEffort } from "../../packages/contracts/admin/models.js";
 
 export const IMAGE_SIZES = [
   "1024x1024",

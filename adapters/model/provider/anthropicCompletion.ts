@@ -1,13 +1,13 @@
 import type { RenderedPromptRequest } from "../../../services/agent/promptSystem.js";
-import type { ChatMessage } from "../../../src/types.js";
+import type { ChatMessage } from "../../../packages/contracts/model/modelGateway.js";
 import type { ProviderAdapterContext, ProviderCompleteOptions, ProviderTurnResult, ResponseFunctionCallItem, TurnToolState } from "./contracts.js";
-import { toChatCompletionMessage } from "./imageInput.js";
+import { parseDataImage, toChatCompletionMessage } from "./imageInput.js";
 import { withLogContext } from "./logger.js";
 import { readToolName } from "./promptMapping.js";
 import { claimToolCalls, resolveMaxToolCalls, toolCallLimitError } from "./toolLoopLimits.js";
 import { fetchTextWithTransportRetry, normalizeAnthropicBaseUrl, resolveModelRequestMaxAttempts } from "./transport.js";
 import { errorMessage, isRecord, parseJson } from "./valueUtils.js";
-import { preflightProviderToolResponse } from "./toolResponsePreflight.js";
+import { processProviderToolRound } from "./toolRound.js";
 
 export async function completeAnthropicMessages(
   context: ProviderAdapterContext,
@@ -88,23 +88,22 @@ export async function completeAnthropicMessages(
       return { kind: "completed", text };
     }
 
-    const companion = context.toolExecutor.companionTurn(calls, text, options, definitions, state);
-    if (companion) return companion;
-    const preflight = preflightProviderToolResponse(calls, text, options, state);
-    if (!preflight.rejected) {
-      const deferred = context.toolExecutor.deferredTurn(calls, options, definitions, state);
-      if (deferred) return deferred;
-      const noReply = context.toolExecutor.noReplyTurn(calls, options, definitions, state);
-      if (noReply) return noReply;
-      if (text && options.onAssistantText && preflight.emitAssistantText) {
-        await options.onAssistantText(text, "text");
+    const toolRound = await processProviderToolRound({
+      calls,
+      siblingText: text,
+      options,
+      definitions,
+      state,
+      executor: context.toolExecutor,
+      emitAssistantText: async () => {
+        if (text && options.onAssistantText) await options.onAssistantText(text, "text");
       }
-    }
+    });
+    if (toolRound.terminal) return toolRound.terminal;
     messages.push({ role: "assistant", content: blocks });
-    const outputs = preflight.rejected ?? await context.toolExecutor.execute(calls, options, definitions, state);
     messages.push({
       role: "user",
-      content: outputs.map((output) => ({ type: "tool_result", tool_use_id: output.call_id, content: String(output.output ?? "") }))
+      content: toolRound.outputs.map((output) => ({ type: "tool_result", tool_use_id: output.call_id, content: String(output.output ?? "") }))
     });
   }
   throw toolCallLimitError(maxToolCalls);
@@ -123,11 +122,6 @@ async function toAnthropicMessage(message: ChatMessage) {
       return data ? [{ type: "image", source: { type: "base64", media_type: data.mediaType, data: data.data } }] : [];
     })
   };
-}
-
-function parseDataImage(value: string) {
-  const match = value.match(/^data:(image\/[a-z0-9.+-]+);base64,(.+)$/is);
-  return match ? { mediaType: match[1]!, data: match[2]! } : undefined;
 }
 
 function anthropicError(payload: unknown, status: number) {

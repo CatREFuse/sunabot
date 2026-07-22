@@ -1,5 +1,5 @@
 import { ServiceError } from "../../packages/contracts/errors/serviceError.js";
-import type { AppConfig } from "../../src/types.js";
+import type { AppConfig } from "../../packages/contracts/admin/public.js";
 import { PROMPT_FILE_DEFINITIONS } from "../agent/public.js";
 import type { AgentManifest } from "./agentRegistry.js";
 import type { AgentConfigImportPlan, AgentConfigImportRules } from "./agentConfigImport.js";

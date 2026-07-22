@@ -4,7 +4,7 @@ import type { AgentConfigService } from "../../src/admin/agentConfigService.js";
 import type { ConfigService } from "../../src/admin/configService.js";
 import { EmojiLibraryRepository } from "../../src/admin/emojiLibrary.js";
 import type { SunaRuntime } from "../../src/runtime.js";
-import type { AppConfig, BotConfig, EmojiSendSize } from "../../src/types.js";
+import type { AppConfig, BotConfig, EmojiSendSize } from "../../packages/contracts/admin/public.js";
 import { registerEmojiRoutes } from "./plugins/emojiRoutes.js";
 
 export function registerAgentEmojiApi(

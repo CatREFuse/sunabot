@@ -1,132 +1,54 @@
-import fs from "node:fs";
-import fsp from "node:fs/promises";
-import path from "node:path";
 import { nanoid } from "nanoid";
 import {
-  AppConfig,
-  AssistantMessageOrigin,
-  ChatMessage,
-  ConversationMessageQuote,
-  ConversationRecord,
-  ImageResult,
-  ParsedIncomingMessage,
-  ReasoningEffort
-} from "../types.js";
-import { resolveModelReasoningEffort } from "../admin/models.js";
-import { AttachmentService } from "../../services/media/attachments/service.js";
-import type {
-  AttachmentExtractionContext,
-  ParsedAttachment
-} from "../../services/media/attachments/types.js";
-import { CommandRouter, type CommandMatch } from "../../services/messaging/commandRouter.js";
-import { isAdminSender } from "../../services/messaging/replySenderPolicy.js";
-import { getDefaultProvider, getRootDir, getWorkspacePath, resolveProjectPath } from "../config.js";
-import {
-  assistantReplyEnvelope,
-  decodeAssistantReply,
-  decodeIncomingReply,
-  decodeToolCompletion,
-  incomingReplyEnvelope,
-  noReplyPokeEnvelope,
-  type AssistantReplyOutboxEnvelope,
-  type AssistantReplyOutboxPayload,
-  type RuntimeIncomingReplyEventPayload
-} from "../../packages/contracts/session/runtimeMessages.js";
-import { applicationDataStore, sqliteMemoryPersistence } from "../../adapters/sqlite/applicationDataStore.js";
-import { configureMemoryPersistence } from "../../services/memory/persistence.js";
-import {
-  ReplyGateEpochs,
-  isOrchestratorReplyRateLimited,
-  resolveUserGroupReplyRoute,
-  type ReplyGateSnapshot
-} from "../../services/orchestration/groupReplyPolicy.js";
-import { serializeUserGroupOrchestratorResult } from "../../services/orchestration/userGroupOrchestratorResult.js";
-import { formatModelTimestamp, systemModelTimeZone } from "../../services/agent/modelTime.js";
-import { readCallbackInput } from "../../services/agent/callbackInput.js";
-import { HookBus } from "../../services/messaging/hookBus.js";
-import { searchKnowledge } from "../../services/knowledge/public.js";
-import {
-  applyMemoryBatchTransaction,
-  ensureAgentTextFile,
-  formatMemoryMatchesForPrompt,
-  isMemoryBatchCommitted,
-  mergeUserProfileMemory,
-  normalizeEventMemorySchema,
-  readAgentTextFile,
-  readMemorySourceEntries,
-  readUserProfileForUser,
-  readWorkingMemorySnapshot,
-  recoverMemoryTransactions,
-  replaceWorkingMemoryFacts,
-  resolveUserAddressName,
-  type MemoryEntry,
-  type MemoryFactInput
-} from "../../services/memory/memoryService.js";
-import { ModelContextMemoryRecall } from "./memoryRecallExposure.js";
-import {
-  MemorySchedulerStore,
-  type MemoryClaim,
-  type MemoryQueuedMessage
-} from "../../services/memory/memoryScheduler.js";
-import { OpenAIProvider, type ProviderBashOptions, type ProviderCompleteOptions, type ProviderDeferredTurn } from "../../adapters/model/openaiProvider.js";
-import type { ProviderLogContext } from "../../packages/contracts/model/modelGateway.js";
-import {
   inboundImageUrls,
-  replaceInboundImageUrls,
-  type MessageDetailsV1,
-  type MessagingPort,
-  type OutboundMessageV1
+  type MessagingPort
 } from "../../packages/contracts/messaging/messages.js";
+import { noReplyPokeEnvelope } from "../../packages/contracts/session/runtimeMessages.js";
+import { readCallbackInput } from "../../services/agent/callbackInput.js";
+import { formatModelTimestamp, systemModelTimeZone } from "../../services/agent/modelTime.js";
 import {
-  generatedImageMediaAsset,
-  imageMediaAsset,
-  type AttachmentSourcePort
-} from "../../packages/contracts/media/media.js";
-import { loadPersona, AgentPersona } from "../../services/agent/persona.js";
-import { appendRequestLog } from "../requestLog.js";
-import { WORKSPACE_LAYOUT } from "../../packages/platform/workspaceLayout.js";
-import { SenderNameResolver, senderDisplayName, senderIdentity } from "../../services/conversations/senderName.js";
-import type { SelfieInput, SelfieRunResult } from "../../services/tools/selfieTool.js";
-import { cleanupPersistedCodexProcess, CodexToolRunner } from "../../adapters/codex/codexTool.js";
-import { isTrustedQqFakeIp } from "../../adapters/onebot/qqMedia.js";
-import type { CodexRunner } from "../../packages/contracts/tools/codex.js";
-import {
-  OutboxDisconnectedError,
-  SessionCoordinator,
-  type SessionHandleResult
-} from "../../services/sessions/sessionCoordinator.js";
-import { SessionStore, type OutboxRecord, type SessionEventRecord, type ToolJobRecord } from "../../services/sessions/sessionStore.js";
-import { TOOL_CALL_TIMEOUT_MS } from "../../services/tools/tools.js";
+  buildCommonPromptVariables,
+  buildConversationPromptVariables
+} from "../../services/agent/persona.js";
+import { senderDisplayName } from "../../services/conversations/senderName.js";
+import { DIRECTOR_CONVERSATION_SCHEDULE_VARIABLE } from "../../services/director/public.js";
+import { searchKnowledge } from "../../services/knowledge/public.js";
+import { readUserProfileForUser } from "../../services/memory/memoryService.js";
+import { serializeUserGroupOrchestratorResult } from "../../services/orchestration/userGroupOrchestratorResult.js";
+import type { ToolJobRecord } from "../../services/sessions/sessionStore.js";
+import { DISPATCH_MESSAGE_MAX_CHARS } from "../../services/tools/deferredDispatch.js";
 import {
   GENERATE_IMG_TOOL_NAME,
-  generateImgMediaHandle,
   runGenerateImg,
   type GenerateImgReferenceContext
 } from "../../services/tools/generateImgTool.js";
 import { SELFIE_TOOL_NAME } from "../../services/tools/selfieTool.js";
-import { DISPATCH_MESSAGE_MAX_CHARS } from "../../services/tools/deferredDispatch.js";
-import { promptDefinitionById } from "../../services/agent/promptCatalog.js";
-import { defaultPromptContent as defaultFinalPromptContent } from "../../services/agent/promptDefaults.js";
+import { appendRequestLog } from "../../adapters/observability/requestLog.js";
+import type { SunaRuntime } from "../runtime.js";
 import {
-  parseFinalPromptTemplate,
-  renderFinalPromptTemplate,
-  type PromptVariableValue,
-  type RenderedPromptRequest
-} from "../../services/agent/promptSystem.js";
-import { buildCommonPromptVariables, buildConversationPromptVariables } from "../../services/agent/persona.js";
-import { DIRECTOR_CONVERSATION_SCHEDULE_VARIABLE } from "../../services/director/public.js";
+  type AssistantMessageOrigin,
+  type ImageResult,
+  type ParsedIncomingMessage
+} from "../types.js";
 import {
   applyRuntimeAgentExtensionPrompt,
   collectRuntimeAgentExtensionBatchTexts,
   parseExplicitSkillSelections
 } from "./agentExtensions.js";
+import {
+  buildMemoryPromptVariables,
+  buildUserProfileRecallQuery,
+  buildUserPrompt,
+  buildWorkingMemoryRecallQuery,
+  collectGroupChatSummaryMessages,
+  isAdminUserId,
+  uniqueMemoryEntries
+} from "./conversationMemoryHelpers.js";
 import { emojiPromptVariables, prepareRuntimeEmojiText } from "./emojiReply.js";
 import { currentPromptInputMessage, serializeGroupThreadPromptContext } from "./groupThreadPipeline.js";
-import { DEFAULT_CONTEXT_MESSAGE_LIMIT, MAX_STORED_CONVERSATION_MESSAGES, GROUP_CHAT_SUMMARY_WINDOW_MS, MAX_SELFIE_REFERENCE_IMAGES, MAX_SELFIE_WORKSPACE_REFERENCE_IMAGES, MAX_CURRENT_CONTEXT_IMAGES, MAX_HISTORY_CONTEXT_IMAGES, HYDRATE_MESSAGE_WINDOW_MS, ACTIVE_CONVERSATION_WINDOW_MS, DIRECT_REPLY_TIMEOUT_MS, AMBIENT_ORCHESTRATOR_TIMEOUT_MS, ORCHESTRATOR_MAX_RETRIES, PREPARE_TIMEOUT_MS, RECENT_CONTEXT_TOKEN_BUDGET, DEDUPE_TTL_MS, MAX_DEDUPE_KEYS, DEFAULT_ADMIN_NAME, GROUP_CHAT_SUMMARY_COMMAND, CONVERSATION_REPLY_PROMPT_FILE, SELFIE_PROMPT_FILE, GROUP_CHAT_SUMMARY_PROMPT_FILE, ADMIN_PERSONA_FILES, ADMIN_RUNTIME_PROMPT_DEFAULTS, BatchUserInfo, WorkingMemoryMergeOutput, WorkingMemoryMergeContext, personaFileNameForAdminId, AdminIdentity, ConversationReplyUpdateInput, RuntimeCommandContext, ReplyDeliveryDraft, ReplyDelivery, DeferredCodexTurn, AmbientReplyJob, AmbientReplyState, AmbientIdleTimer, RuntimeConfigSnapshot, RuntimePromptSnapshot, SunaRuntimeOptions } from "./runtimeContracts.js";
-import { buildMemoryPromptVariables, buildUserProfileRecallQuery, buildUserPrompt, buildWorkingMemoryRecallQuery, clampInteger, collectGroupChatSummaryMessages, estimatePromptTokens, isAdminUserId, toContextChatMessage, uniqueMemoryEntries } from "./conversationMemoryHelpers.js";
-import { conversationMessageAttachments, conversationRecordId, queueIncomingSnapshot, selectRelevantConversationAttachments, toConversationQuote, uniqueAttachments, uniqueQuotes, uniqueStrings } from "./messagingAttachmentHelpers.js";
 import { errorMessage, isAbortError, isRuntimeIncomingMessage, sanitizeErrorDetail } from "./infrastructure.js";
-import { providerWorkbenchFilesForIncoming } from "./workbenchFiles.js";
+import { ModelContextMemoryRecall } from "./memoryRecallExposure.js";
+import { conversationRecordId, queueIncomingSnapshot, uniqueStrings } from "./messagingAttachmentHelpers.js";
 import {
   runtime_attachReplyReferences,
   runtime_buildRecentContextMessages,
@@ -137,17 +59,23 @@ import {
   runtime_loadMessageDetails,
   runtime_loadQuoteReferences,
   runtime_refreshAttachmentCacheReferences,
-  runtime_retainedConversationMessageLimit,
   runtime_resolveProviderBashHandle,
+  runtime_retainedConversationMessageLimit,
   runtime_selectRelevantAttachments
 } from "./replyContext.js";
 import { ReplyDebounceContext, resolveReplyContextCaptureSequence, type ReplyDebounceContextOptions } from "./replyDebounceContext.js";
 import { runtime_replyToToolCompletion } from "./replyDebounceDispatch.js";
-import { sendRuntimeVoiceFinalReply, startRuntimeDeferredVoiceSynthesis } from "./voiceReply.js";
+import {
+  GROUP_CHAT_SUMMARY_COMMAND,
+  GROUP_CHAT_SUMMARY_WINDOW_MS,
+  MAX_CURRENT_CONTEXT_IMAGES,
+  type DeferredCodexTurn,
+  type ReplyDelivery
+} from "./runtimeContracts.js";
 import * as systemConfigReply from "./systemConfigReply.js";
-export { runtime_replyToToolCompletion };
-export { runtime_attachReplyReferences, runtime_buildRecentContextMessages, runtime_contextMessageLimit, runtime_generateImgReferenceContext, runtime_groupReplyOptions, runtime_isAdminUser, runtime_loadMessageDetails, runtime_loadQuoteReferences, runtime_refreshAttachmentCacheReferences, runtime_retainedConversationMessageLimit, runtime_resolveProviderBashHandle, runtime_selectRelevantAttachments };
-import type { SunaRuntime } from "../runtime.js";
+import { sendRuntimeVoiceFinalReply, startRuntimeDeferredVoiceSynthesis } from "./voiceReply.js";
+import { providerWorkbenchFilesForIncoming } from "./workbenchFiles.js";
+export { runtime_attachReplyReferences, runtime_buildRecentContextMessages, runtime_contextMessageLimit, runtime_generateImgReferenceContext, runtime_groupReplyOptions, runtime_isAdminUser, runtime_loadMessageDetails, runtime_loadQuoteReferences, runtime_refreshAttachmentCacheReferences, runtime_replyToToolCompletion, runtime_resolveProviderBashHandle, runtime_retainedConversationMessageLimit, runtime_selectRelevantAttachments };
 type RuntimeHost = SunaRuntime;
 export async function runtime_replyToIncoming(this: RuntimeHost,
     channelKey: string,
@@ -167,7 +95,6 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
     } = {}
   ) {
     const provider = this.getProvider();
-    const persona = this.persona ?? (await loadPersona(this.config));
     const admin = this.adminIdentity();
     const isAdmin = isAdminUserId(incoming.userId, admin);
     const promptId = incoming.scope === "private"
@@ -777,22 +704,4 @@ function readReferenceImageUrls(value: unknown) {
     .map((item) => item.trim())
     .filter(Boolean))
     .slice(0, 4);
-}
-export class RuntimeReply {
-  constructor(private readonly host: RuntimeHost) {}
-  replyToIncoming(...args: Parameters<typeof runtime_replyToIncoming>) { return runtime_replyToIncoming.call(this.host, ...args); }
-  replyWithGroupChatSummary(...args: Parameters<typeof runtime_replyWithGroupChatSummary>) { return runtime_replyWithGroupChatSummary.call(this.host, ...args); }
-  replyToToolCompletion(...args: Parameters<typeof runtime_replyToToolCompletion>) { return runtime_replyToToolCompletion.call(this.host, ...args); }
-  processDeferredToolJob(...args: Parameters<typeof runtime_processDeferredToolJob>) { return runtime_processDeferredToolJob.call(this.host, ...args); }
-  attachReplyReferences(...args: Parameters<typeof runtime_attachReplyReferences>) { return runtime_attachReplyReferences.call(this.host, ...args); }
-  loadMessageDetails(...args: Parameters<typeof runtime_loadMessageDetails>) { return runtime_loadMessageDetails.call(this.host, ...args); }
-  loadQuoteReferences(...args: Parameters<typeof runtime_loadQuoteReferences>) { return runtime_loadQuoteReferences.call(this.host, ...args); }
-  selectRelevantAttachments(...args: Parameters<typeof runtime_selectRelevantAttachments>) { return runtime_selectRelevantAttachments.call(this.host, ...args); }
-  refreshAttachmentCacheReferences(...args: Parameters<typeof runtime_refreshAttachmentCacheReferences>) { return runtime_refreshAttachmentCacheReferences.call(this.host, ...args); }
-  buildRecentContextMessages(...args: Parameters<typeof runtime_buildRecentContextMessages>) { return runtime_buildRecentContextMessages.call(this.host, ...args); }
-  contextMessageLimit(...args: Parameters<typeof runtime_contextMessageLimit>) { return runtime_contextMessageLimit.call(this.host, ...args); }
-  retainedConversationMessageLimit(...args: Parameters<typeof runtime_retainedConversationMessageLimit>) { return runtime_retainedConversationMessageLimit.call(this.host, ...args); }
-  groupReplyOptions(...args: Parameters<typeof runtime_groupReplyOptions>) { return runtime_groupReplyOptions.call(this.host, ...args); }
-  resolveProviderBashHandle(...args: Parameters<typeof runtime_resolveProviderBashHandle>) { return runtime_resolveProviderBashHandle.call(this.host, ...args); }
-  isAdminUser(...args: Parameters<typeof runtime_isAdminUser>) { return runtime_isAdminUser.call(this.host, ...args); }
 }

@@ -10,7 +10,7 @@ import {
 } from "../../adapters/sqlite/applicationDataStore.js";
 import { MemorySchedulerStore } from "../../services/memory/memoryScheduler.js";
 import { runWithAgentRuntimeContext } from "../../packages/platform/runtimeAgentContext.js";
-import { appendRequestLogStrict } from "../../src/requestLog.js";
+import { appendRequestLogStrict } from "../../adapters/observability/requestLog.js";
 import {
   saveConversationRecordStrict,
   saveConversationRecordsStrict

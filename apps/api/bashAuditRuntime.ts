@@ -5,7 +5,7 @@ import {
   type BashAuditInput
 } from "../../services/tools/bashAudit.js";
 import type { RuntimeBashAuditPort } from "../../src/runtime/runtimeContracts.js";
-import type { AppConfig, ProviderConfig } from "../../src/types.js";
+import type { AppConfig, ProviderConfig } from "../../packages/contracts/admin/public.js";
 
 interface BashAuditProviderPort {
   hasApiKey(): boolean;

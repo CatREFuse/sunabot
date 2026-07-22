@@ -1,5 +1,5 @@
-import type { ImageResult } from "../../../src/types.js";
-import { appendRequestLog } from "../../../src/requestLog.js";
+import type { ImageResult } from "../../../packages/contracts/media/media.js";
+import { appendRequestLog } from "../../observability/requestLog.js";
 import type { OpenAIToolDefinition } from "../../../services/agent/promptSystem.js";
 import type { MemoryRecallInput } from "../../../services/memory/memoryService.js";
 import type { KnowledgeSearchInput } from "../../../services/knowledge/public.js";

@@ -51,7 +51,7 @@ import {
 } from "../../services/agent/scheduledTaskPrompt.js";
 import { formatModelTimestamp, systemModelTimeZone } from "../../services/agent/modelTime.js";
 import { buildCallbackInput, readCallbackInput } from "../../services/agent/callbackInput.js";
-import { appendRequestLog, appendRequestLogStrict } from "../requestLog.js";
+import { appendRequestLog, appendRequestLogStrict } from "../../adapters/observability/requestLog.js";
 import type { ConversationRecord, ParsedIncomingMessage } from "../types.js";
 import { conversationRecordId } from "./messagingAttachmentHelpers.js";
 import { createSystemConfigHeldConfirmationPort } from "./systemConfigReply.js";

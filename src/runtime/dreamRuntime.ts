@@ -16,7 +16,7 @@ import {
 } from "../../services/memory/dream/public.js";
 import type { PromptVariableValue, RenderedPromptRequest } from "../../services/agent/promptSystem.js";
 import { AgentFileRepository } from "../admin/agentFiles.js";
-import { appendRequestLog } from "../requestLog.js";
+import { appendRequestLog } from "../../adapters/observability/requestLog.js";
 import type { ConversationRecord } from "../types.js";
 import type { SunaRuntime } from "../runtime.js";
 import {

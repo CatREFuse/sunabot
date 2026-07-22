@@ -14,10 +14,14 @@ import {
 import type { MessagingPort } from "../../packages/contracts/messaging/messages.js";
 import type { CommandInvocationV1 } from "../../packages/contracts/messaging/commands.js";
 import { readReplyGateSnapshot, type ReplyGateSnapshot } from "../../services/orchestration/groupReplyPolicy.js";
-import type { SessionHandleResult } from "../../services/sessions/sessionCoordinator.js";
-import type { SessionEventRecord } from "../../services/sessions/sessionStore.js";
+import type {
+  SessionCoordinator,
+  SessionHandleResult
+} from "../../services/sessions/sessionCoordinator.js";
+import type { SessionEventRecord, SessionStore } from "../../services/sessions/sessionStore.js";
 import {
   DEFAULT_REPLY_DEBOUNCE_MS,
+  type AppConfig,
   type ConversationRecord,
   type ParsedIncomingMessage
 } from "../types.js";
@@ -28,8 +32,6 @@ import {
   queueIncomingSnapshot,
   restoredConversationIncoming
 } from "./messagingAttachmentHelpers.js";
-
-import type { SunaRuntime } from "../runtime.js";
 
 export { DEFAULT_REPLY_DEBOUNCE_MS } from "../types.js";
 export const REPLY_DEBOUNCE_EVENT_KIND = "reply_debounce";
@@ -52,12 +54,60 @@ interface TrackedReplyPreparation {
 }
 
 type DurableReplyPayload = RuntimeIncomingReplyEventPayload | RuntimeReplyDebounceEventPayload;
+type ReplyDebounceBumpResult =
+  | { status: "duplicate"; event: SessionEventRecord }
+  | { status: "updated"; event: SessionEventRecord; captureSequence: number }
+  | { status: "inactive" };
+
+interface RuntimeReplyDebounceHost {
+  readonly config: AppConfig;
+  readonly conversationRecords: Map<string, ConversationRecord>;
+  readonly incomingPreparations: Map<string, {
+    promise: Promise<void>;
+    incoming: ParsedIncomingMessage;
+  }>;
+  readonly sessionCoordinator: SessionCoordinator;
+  readonly sessionStore: SessionStore;
+  bumpReplyDebounce(
+    event: SessionEventRecord,
+    incoming: ParsedIncomingMessage
+  ): ReplyDebounceBumpResult;
+  incomingCaptureSequence(incoming: ParsedIncomingMessage): number;
+  groupReplyOptions(incoming: ParsedIncomingMessage): { replyToMessageId?: number };
+  isReplyTaskCurrent(
+    incoming: ParsedIncomingMessage,
+    gate: ReplyGateSnapshot,
+    signal?: AbortSignal
+  ): boolean;
+  markIncomingSeen(incoming: ParsedIncomingMessage): void;
+  patchIncomingMessage(
+    record: ConversationRecord,
+    incoming: ParsedIncomingMessage,
+    frozenMessageId?: string
+  ): void;
+  persistConversationRecordStrict(record: ConversationRecord): void;
+  prepareIncomingMessage(incoming: ParsedIncomingMessage, gateway: MessagingPort): Promise<void>;
+  recordIncomingMessage(
+    incoming: ParsedIncomingMessage,
+    options?: { expectedSequence?: number; persist?: boolean }
+  ): ConversationRecord;
+  recoverReplyDebounceMessages(payload: DurableReplyPayload): ConversationRecord;
+  requireActiveGateway(): MessagingPort;
+  scheduleAttachmentCacheRefresh(): void;
+  scheduleMemoryCompression(record: ConversationRecord): void;
+  trackReplyDebouncePreparation(
+    incoming: ParsedIncomingMessage,
+    promise: Promise<void>,
+    sequence?: number,
+    key?: string
+  ): void;
+}
 
 export class RuntimeReplyDebounce {
   private readonly preparationPromises = new Map<string, Set<TrackedReplyPreparation>>();
 
   constructor(
-    private readonly host: SunaRuntime,
+    private readonly host: RuntimeReplyDebounceHost,
     private readonly delayOverrideMs?: number
   ) {}
 
@@ -505,7 +555,7 @@ export class RuntimeReplyDebounce {
 }
 
 function captureReplyQuote(
-  runtime: SunaRuntime,
+  runtime: RuntimeReplyDebounceHost,
   incoming: ParsedIncomingMessage
 ): ReplyQuoteSnapshotV1 {
   const replyToMessageId = runtime.groupReplyOptions(incoming).replyToMessageId;

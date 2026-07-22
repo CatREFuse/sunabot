@@ -1,4 +1,4 @@
-import { appendRequestLog } from "../../../src/requestLog.js";
+import { appendRequestLog } from "../../observability/requestLog.js";
 import { runReadAir } from "../../../services/tools/public.js";
 import type { ProviderCompleteOptions, ResponseFunctionCallItem } from "./contracts.js";
 import { logContextMetadata } from "./logger.js";

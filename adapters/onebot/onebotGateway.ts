@@ -8,7 +8,7 @@ import {
   prepareOutboundImageSources,
   type OutboundMediaDelivery
 } from "../../services/delivery/outboundMedia.js";
-import type { AppConfig } from "../../src/types.js";
+import type { AppConfig } from "../../packages/contracts/admin/public.js";
 import type {
   AttachmentResolutionInput,
   AttachmentResolverOptions,

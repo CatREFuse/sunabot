@@ -405,6 +405,13 @@ function knowledgeSnapshot(documents: KnowledgeDocument[]) {
   };
 }
 
+const knowledgeDocuments: KnowledgeDocument[] = [
+  { path: "产品/路线.md", format: "markdown", sizeBytes: 2_840, chunkCount: 4, status: "indexed", updatedAt: "2026-07-20T10:00:00.000Z" },
+  { path: "产品/发布/检查清单.md", format: "markdown", sizeBytes: 1_560, chunkCount: 6, status: "indexed", updatedAt: "2026-07-20T10:00:00.000Z" },
+  { path: "事件/运行记录.jsonl", format: "jsonl", sizeBytes: 4_096, chunkCount: 18, status: "indexed", updatedAt: "2026-07-20T10:00:00.000Z" },
+  { path: "说明.txt", format: "text", sizeBytes: 640, chunkCount: 3, status: "indexed", updatedAt: "2026-07-20T10:00:00.000Z" }
+];
+
 export interface MockApiState {
   config: typeof initialConfig;
   revision: string;
@@ -420,8 +427,6 @@ export interface MockApiState {
   fileWrites: Array<{ id: string; body: unknown }>;
   memoryWrites: Array<{ method: string; body: unknown }>;
   dreamTriggers: number;
-  knowledgeDocuments: KnowledgeDocument[];
-  knowledgeRequests: Array<{ method: string; path: string; body?: unknown }>;
   offline: boolean;
   requiredToken: string;
   authenticated: boolean;
@@ -487,13 +492,6 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
     fileWrites: [],
     memoryWrites: [],
     dreamTriggers: 0,
-    knowledgeDocuments: [
-      { path: "产品/路线.md", format: "markdown", sizeBytes: 2_840, chunkCount: 4, status: "indexed", updatedAt: "2026-07-20T10:00:00.000Z" },
-      { path: "产品/发布/检查清单.md", format: "markdown", sizeBytes: 1_560, chunkCount: 6, status: "indexed", updatedAt: "2026-07-20T10:00:00.000Z" },
-      { path: "事件/运行记录.jsonl", format: "jsonl", sizeBytes: 4_096, chunkCount: 18, status: "indexed", updatedAt: "2026-07-20T10:00:00.000Z" },
-      { path: "说明.txt", format: "text", sizeBytes: 640, chunkCount: 3, status: "indexed", updatedAt: "2026-07-20T10:00:00.000Z" }
-    ],
-    knowledgeRequests: [],
     offline: false,
     requiredToken: options.requiredToken ?? "",
     authenticated: !options.requiredToken,
@@ -1666,11 +1664,10 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
     }
 
     if (pathname === "/api/knowledge" && method === "GET") {
-      return json(route, knowledgeSnapshot(state.knowledgeDocuments));
+      return json(route, knowledgeSnapshot(knowledgeDocuments));
     }
     if (pathname === "/api/knowledge/search" && method === "GET") {
       const query = url.searchParams.get("q") || "";
-      state.knowledgeRequests.push({ method, path: pathname });
       return json(route, {
         ok: true,
         query,
@@ -1697,30 +1694,6 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
         ] : []
       });
     }
-    if (pathname === "/api/knowledge/reindex" && method === "POST") {
-      state.knowledgeRequests.push({ method, path: pathname });
-      return json(route, knowledgeSnapshot(state.knowledgeDocuments));
-    }
-    if (pathname === "/api/knowledge/documents" && method === "POST") {
-      const body = request.postDataJSON() as { path: string; content: string };
-      state.knowledgeRequests.push({ method, path: pathname, body });
-      state.knowledgeDocuments.push({
-        path: body.path,
-        format: "markdown",
-        sizeBytes: new TextEncoder().encode(body.content).byteLength,
-        chunkCount: body.content.split(/\n\s*\n/u).filter(Boolean).length,
-        status: "indexed",
-        updatedAt: "2026-07-20T10:01:00.000Z"
-      });
-      return json(route, { ok: true, snapshot: knowledgeSnapshot(state.knowledgeDocuments) }, 201);
-    }
-    if (pathname === "/api/knowledge/documents" && method === "DELETE") {
-      const body = request.postDataJSON() as { path: string };
-      state.knowledgeRequests.push({ method, path: pathname, body });
-      state.knowledgeDocuments = state.knowledgeDocuments.filter((document) => document.path !== body.path);
-      return json(route, { ok: true, snapshot: knowledgeSnapshot(state.knowledgeDocuments) });
-    }
-
     if (pathname === "/api/tools") {
       const conversationPrompt = state.files.find((file) => file.id === "conversation.private-reply");
       const prompt = conversationPrompt ? parseFinalPromptTemplate(conversationPrompt.content) : undefined;

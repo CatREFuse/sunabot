@@ -28,6 +28,7 @@ const emptyConfig: AppConfig = {
   server: { host: "127.0.0.1", port: 8787 },
   persona: {
     defaultAgentId: "plana",
+    name: "",
     agentWorkspace: "",
     systemPromptWorkspace: "workspace/business/prompts",
     systemPromptOverride: false
@@ -151,7 +152,6 @@ export function useConfigWorkspace(scope: ConfigWorkspaceScope = "agent") {
   const baselines = reactive<SectionDrafts>(valuesFromConfig(emptyConfig));
   const pendingTargets = new Set<SaveTarget>();
   let loaded = false;
-  let suppressWatch = false;
   let generation = 0;
   let contextAgentId = scope === "agent" ? activeAgentId() : "";
   let contextController = new AbortController();
@@ -301,17 +301,12 @@ export function useConfigWorkspace(scope: ConfigWorkspaceScope = "agent") {
     resetState = true
   ) {
     const values = valuesFromConfig(result.config);
-    suppressWatch = true;
-    try {
-      envelope.value = result;
-      for (const key of sectionKeys) {
-        setSection(baselines, key, values[key]);
-        if (dirtyBefore?.get(key)) setSection(drafts, key, savedDrafts.get(key) as SectionDrafts[typeof key]);
-        else setSection(drafts, key, values[key]);
-        if (resetState) state[key] = idle();
-      }
-    } finally {
-      suppressWatch = false;
+    envelope.value = result;
+    for (const key of sectionKeys) {
+      setSection(baselines, key, values[key]);
+      if (dirtyBefore?.get(key)) setSection(drafts, key, savedDrafts.get(key) as SectionDrafts[typeof key]);
+      else setSection(drafts, key, values[key]);
+      if (resetState) state[key] = idle();
     }
   }
 
@@ -319,33 +314,28 @@ export function useConfigWorkspace(scope: ConfigWorkspaceScope = "agent") {
     const dirtyBefore = new Map(sectionKeys.map((key) => [key, isDirty(key)]));
     const savedDrafts = new Map(sectionKeys.map((key) => [key, clone(drafts[key])]));
     const values = valuesFromConfig(result.config);
-    suppressWatch = true;
-    try {
-      envelope.value = result;
-      for (const section of sectionKeys) {
-        setSection(baselines, section, values[section]);
-        if (target === "groupReply" && section === "orchestrator") {
-          const currentDraft = savedDrafts.get(section) as SectionDrafts["orchestrator"];
-          const submittedDraft = (submitted as { orchestrator: SectionDrafts["orchestrator"] }).orchestrator;
-          setSection(drafts, section, same(currentDraft, submittedDraft) ? values[section] : currentDraft);
-        } else if (target === "groupReply" && section === "onebot") {
-          const currentDraft = savedDrafts.get(section) as SectionDrafts["onebot"];
-          const nextDraft = clone(currentDraft);
-          if (currentDraft.autoReplyUserGroup === (submitted as { enabled: boolean }).enabled) {
-            nextDraft.autoReplyUserGroup = values.onebot.autoReplyUserGroup;
-          }
-          setSection(drafts, section, nextDraft);
-        } else if (target !== "groupReply" && section === target) {
-          const currentDraft = savedDrafts.get(section) as SectionDrafts[typeof section];
-          setSection(drafts, section, same(currentDraft, submitted) ? values[section] : currentDraft);
-        } else if (dirtyBefore.get(section)) {
-          setSection(drafts, section, savedDrafts.get(section) as SectionDrafts[typeof section]);
-        } else {
-          setSection(drafts, section, values[section]);
+    envelope.value = result;
+    for (const section of sectionKeys) {
+      setSection(baselines, section, values[section]);
+      if (target === "groupReply" && section === "orchestrator") {
+        const currentDraft = savedDrafts.get(section) as SectionDrafts["orchestrator"];
+        const submittedDraft = (submitted as { orchestrator: SectionDrafts["orchestrator"] }).orchestrator;
+        setSection(drafts, section, same(currentDraft, submittedDraft) ? values[section] : currentDraft);
+      } else if (target === "groupReply" && section === "onebot") {
+        const currentDraft = savedDrafts.get(section) as SectionDrafts["onebot"];
+        const nextDraft = clone(currentDraft);
+        if (currentDraft.autoReplyUserGroup === (submitted as { enabled: boolean }).enabled) {
+          nextDraft.autoReplyUserGroup = values.onebot.autoReplyUserGroup;
         }
+        setSection(drafts, section, nextDraft);
+      } else if (target !== "groupReply" && section === target) {
+        const currentDraft = savedDrafts.get(section) as SectionDrafts[typeof section];
+        setSection(drafts, section, same(currentDraft, submitted) ? values[section] : currentDraft);
+      } else if (dirtyBefore.get(section)) {
+        setSection(drafts, section, savedDrafts.get(section) as SectionDrafts[typeof section]);
+      } else {
+        setSection(drafts, section, values[section]);
       }
-    } finally {
-      suppressWatch = false;
     }
     const key = stateKey(target);
     const hasNewEdits = targetDirty(target);

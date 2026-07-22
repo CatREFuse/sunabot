@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { modelCallMeasurement } from "../../src/modelCallStats.js";
+import { modelCallMeasurement } from "../../packages/contracts/model/modelCallStats.js";
 import type { ModelCallStore } from "./modelCallStore.js";
 import { migrateScheduledTaskTables } from "./scheduledTaskStore.js";
 import { migrateDirectorTables } from "./directorStore.js";

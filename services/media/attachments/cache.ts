@@ -136,30 +136,6 @@ export class CacheStore {
   }
 }
 
-export function downloadHttpToCache(
-  store: CacheStore,
-  url: string,
-  options: DownloadHttpOptions = {}
-) {
-  return store.downloadHttp(url, options);
-}
-
-export function writeBase64ToCache(
-  store: CacheStore,
-  encoded: string,
-  options: WriteBase64Options = {}
-) {
-  return store.writeBase64(encoded, options);
-}
-
-export function importFileToCache(
-  store: CacheStore,
-  filePath: string,
-  options: ImportFileOptions = {}
-) {
-  return store.importFile(filePath, options);
-}
-
 function positiveInteger(value: number | undefined, fallback: number) {
   return Number.isSafeInteger(value) && value! > 0 ? value! : fallback;
 }

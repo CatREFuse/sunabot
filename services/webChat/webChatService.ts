@@ -1,15 +1,42 @@
-import type { InboundMessageV1 } from "../../packages/contracts/messaging/messages.js";
+import type {
+  InboundMessageV1,
+  MessageDetailsV1,
+  MessagingPort,
+  MessagingReceiptV1,
+  MessagingStatusV1,
+  OutboundMessageV1,
+  SenderIdentityV1,
+  SenderLookupV1
+} from "../../packages/contracts/messaging/messages.js";
 import { ServiceError } from "../../packages/contracts/errors/serviceError.js";
-import type { SunaRuntime } from "../../src/runtime.js";
-import { WEB_CHAT_CONVERSATION_ID } from "../../src/runtime/messagingAttachmentHelpers.js";
-import { DIRECT_REPLY_TIMEOUT_MS } from "../../src/runtime/runtimeContracts.js";
-import { WebChatDeliveryAdapter } from "./webChatDelivery.js";
+
+const WEB_CHAT_CONVERSATION_ID = "web:admin";
+const WEB_CHAT_REPLY_TIMEOUT_MS = 300_000;
+
+export interface WebChatRuntimePort {
+  adminIdentity(): { userId: string; name: string };
+  getConversationMessages(conversationId: string, options: { limit: number }): object;
+  incomingCaptureSequence(message: InboundMessageV1): number;
+  recordIncomingMessage(message: InboundMessageV1, options: { expectedSequence: number }): unknown;
+  replyToIncoming(
+    conversationId: string,
+    message: InboundMessageV1,
+    delivery: MessagingPort,
+    options: {
+      captureSequence: number;
+      signal: AbortSignal;
+      allowAsyncCodex: false;
+      allowAsyncImage: false;
+      allowImageTools: false;
+    }
+  ): Promise<unknown>;
+}
 
 export class WebChatService {
   private messageSequence = 0;
   private pendingTurn: Promise<void> = Promise.resolve();
 
-  constructor(private readonly runtime: SunaRuntime) {}
+  constructor(private readonly runtime: WebChatRuntimePort) {}
 
   messages() {
     return this.runtime.getConversationMessages(WEB_CHAT_CONVERSATION_ID, { limit: 200 });
@@ -55,7 +82,7 @@ export class WebChatService {
     this.runtime.recordIncomingMessage(incoming, { expectedSequence: captureSequence });
 
     const delivery = new WebChatDeliveryAdapter();
-    const signal = AbortSignal.timeout(DIRECT_REPLY_TIMEOUT_MS);
+    const signal = AbortSignal.timeout(WEB_CHAT_REPLY_TIMEOUT_MS);
     await this.runtime.replyToIncoming(WEB_CHAT_CONVERSATION_ID, incoming, delivery, {
       captureSequence,
       signal,
@@ -66,5 +93,26 @@ export class WebChatService {
       allowImageTools: false
     });
     return { ok: true, delivered: delivery.messages.length, ...this.messages() };
+  }
+}
+
+class WebChatDeliveryAdapter implements MessagingPort {
+  readonly messages: OutboundMessageV1[] = [];
+
+  getStatus(): MessagingStatusV1 {
+    return { connected: true, connections: 1, selfIds: ["web"] };
+  }
+
+  async send(message: OutboundMessageV1): Promise<MessagingReceiptV1> {
+    this.messages.push(message);
+    return { accepted: true, messageId: message.id };
+  }
+
+  async resolveSender(input: SenderLookupV1): Promise<SenderIdentityV1> {
+    return input.current ?? { id: String(input.userId), displayName: "管理员" };
+  }
+
+  async getMessage(_messageId: number): Promise<MessageDetailsV1> {
+    throw new Error("Web Chat 不支持读取外部消息。");
   }
 }

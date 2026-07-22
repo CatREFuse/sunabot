@@ -1,4 +1,4 @@
-import { AGENT_TOOL_NAMES, type AgentToolName } from "../../src/types.js";
+import { AGENT_TOOL_NAMES, type AgentToolName } from "../../packages/contracts/admin/public.js";
 
 export function normalizeConversationDisabledTools(value: unknown): AgentToolName[] {
   if (!Array.isArray(value)) return [];

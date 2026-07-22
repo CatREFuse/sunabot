@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { AppConfig } from "../../src/types.js";
+import type { AppConfig } from "../../packages/contracts/admin/public.js";
 import { RECOVERABLE_OUTPUT_ERROR_CONTRACT } from "./recoverableOutputErrorPrompt.js";
 import {
   parseFinalPromptTemplate,

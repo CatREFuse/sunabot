@@ -66,6 +66,21 @@ describe("architecture gate violation fixtures", () => {
     expect(failures).toContain("reads process environment");
   });
 
+  it("keeps adapters and platform modules independent from the application composition root", async () => {
+    const root = await fixture({
+      "adapters/provider.ts": 'import type { Config } from "../src/types.js"; export type { Config };',
+      "packages/platform/paths.ts": 'import { root } from "../../src/config.js"; export { root };',
+      "src/types.ts": "export interface Config {}",
+      "src/config.ts": "export const root = true;"
+    });
+
+    const result = auditFixture(root, ["layer-boundary"]);
+
+    expect(result.failures).toHaveLength(2);
+    expect(result.failures.join("\n")).toContain("adapters/provider.ts");
+    expect(result.failures.join("\n")).toContain("packages/platform/paths.ts");
+  });
+
   it("rejects executable cycles but ignores type-only cycles", async () => {
     const executableRoot = await fixture({
       "services/a/public.ts": 'import { b } from "../b/public.js"; export const a = b;',

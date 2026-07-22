@@ -40,7 +40,7 @@ import {
   type OutboxRecord
 } from "../../services/sessions/sessionStore.js";
 import { resolveProjectPath } from "../config.js";
-import { appendRequestLogStrict } from "../requestLog.js";
+import { appendRequestLogStrict } from "../../adapters/observability/requestLog.js";
 import type { ParsedIncomingMessage } from "../types.js";
 import type { ConversationAssetDeliveryDraft, ReplyDelivery } from "./runtimeContracts.js";
 import { conversationRecordId } from "./messagingAttachmentHelpers.js";

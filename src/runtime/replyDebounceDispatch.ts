@@ -1,16 +1,21 @@
 import type { AsyncToolCompletionPayload } from "../../packages/contracts/session/runtimeMessages.js";
 import type { MessagingPort } from "../../packages/contracts/messaging/messages.js";
-import { readReplyGateSnapshot } from "../../services/orchestration/groupReplyPolicy.js";
+import { readReplyGateSnapshot, type ReplyGateSnapshot } from "../../services/orchestration/groupReplyPolicy.js";
 import { GENERATE_IMG_TOOL_NAME } from "../../services/tools/generateImgTool.js";
 import { SELFIE_TOOL_NAME } from "../../services/tools/selfieTool.js";
-import type { SunaRuntime } from "../runtime.js";
-import type { ImageResult } from "../types.js";
+import type { ImageResult, ParsedIncomingMessage } from "../types.js";
+import type { runtime_replyDeliveryDraft } from "./delivery.js";
 import { conversationRecordId } from "./messagingAttachmentHelpers.js";
 import { buildAsyncToolCompletionPrompt, isRuntimeIncomingMessage, sanitizeErrorDetail } from "./infrastructure.js";
 import type { ReplyDelivery } from "./runtimeContracts.js";
+import type { ToneRewriteContext } from "./tone.js";
+
+type AsyncToolCallbackOptions = Pick<AsyncToolCompletionPayload["originalRequest"], "captureSequence" | "contextThroughSequence" | "threadContext" | "orchestratorResult"> & { signal: AbortSignal; isCurrent: () => boolean; delivery: ReplyDelivery; skipGroupThreadPreparation: true; messageOrigin: "async_tool_callback"; seedToolNames: string[]; };
+
+interface ToolCompletionRuntimeHost { isReplyTaskCurrent(incoming: ParsedIncomingMessage, gate: ReplyGateSnapshot, signal?: AbortSignal): boolean; rewriteToneText(text: string, context?: ToneRewriteContext): Promise<string>; isAdminUser(userId: number): boolean; replyDeliveryDraft(...args: Parameters<typeof runtime_replyDeliveryDraft>): ReturnType<typeof runtime_replyDeliveryDraft>; replyToIncoming(channelKey: string, incoming: ParsedIncomingMessage, gateway: MessagingPort, options: AsyncToolCallbackOptions): Promise<unknown>; }
 
 export async function runtime_replyToToolCompletion(
-  this: SunaRuntime,
+  this: ToolCompletionRuntimeHost,
   payload: AsyncToolCompletionPayload,
   gateway: MessagingPort,
   signal: AbortSignal,

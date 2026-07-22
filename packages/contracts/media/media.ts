@@ -145,7 +145,3 @@ export function generatedImageMediaAsset(image: Pick<ImageResult, "url" | "fileP
   }
   return image.url ? imageMediaAsset(image.url) : undefined;
 }
-
-export function mediaAssetUrl(asset: MediaAssetRefV1) {
-  return asset.url;
-}

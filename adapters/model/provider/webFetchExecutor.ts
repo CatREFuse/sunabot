@@ -1,4 +1,4 @@
-import { appendRequestLog } from "../../../src/requestLog.js";
+import { appendRequestLog } from "../../observability/requestLog.js";
 import { defaultWebFetchService } from "../../webfetch/public.js";
 import {
   WEBFETCH_TOOL_NAME,

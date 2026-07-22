@@ -9,7 +9,7 @@ import {
   isTrustedTokenlessHost,
   OneBotGateway
 } from "../../adapters/onebot/onebotGateway.js";
-import { assertOneBotAccessToken } from "../../apps/api/server.js";
+import { assertOneBotAccessToken } from "../../apps/api/onebotListener.js";
 import type { OneBotEvent } from "../../adapters/onebot/protocol.js";
 
 const originalAccessToken = process.env.ONEBOT_ACCESS_TOKEN;

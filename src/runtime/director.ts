@@ -26,7 +26,7 @@ import {
   type ScheduledTask,
   type ScheduledTaskTarget
 } from "../../services/scheduling/public.js";
-import { appendRequestLog } from "../requestLog.js";
+import { appendRequestLog } from "../../adapters/observability/requestLog.js";
 import type { SunaRuntime } from "../runtime.js";
 import {
   conversationReplyEnabled,

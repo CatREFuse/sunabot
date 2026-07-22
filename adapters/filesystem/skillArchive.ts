@@ -12,13 +12,13 @@ import {
   type SkillPackageEvidence,
   type SkillPackageFileEvidence
 } from "../../services/extensions/public.js";
+import type { PinnedDirectoryIdentity } from "./agentExtensionSecureFs.js";
 import {
   parentBoundExclusiveWrite,
   parentBoundMkdir,
   parentBoundRename,
   parentBoundSync
 } from "./parentBoundFs.js";
-import type { PinnedDirectoryIdentity } from "./agentExtensionSecureFs.js";
 
 export const DEFAULT_SKILL_ARCHIVE_LIMITS = {
   maxArchiveBytes: 16 * 1024 * 1024,
@@ -83,7 +83,7 @@ export async function extractSkillArchive(input: {
     rootIdentity = await pinStagingDirectory(requestedRoot, undefined, input.hooks?.beforeInitialRootBind);
   }
   const stagingRoot = rootIdentity.realPath;
-  const stageGuard = await StagingDirectoryGuard.create(stagingRoot, rootIdentity, input.hooks);
+  const stageGuard = await StagingDirectoryGuard.create(rootIdentity, input.hooks);
   const container = path.join(stagingRoot, `.skill-stage-${randomUUID()}`);
   await stageGuard.createDirectory(container);
 
@@ -424,7 +424,7 @@ class StagingDirectoryGuard {
     private readonly hooks?: SkillArchiveExtractionHooks
   ) {}
 
-  static async create(root: string, rootIdentity: StagingDirectoryIdentity, hooks?: SkillArchiveExtractionHooks) {
+  static async create(rootIdentity: StagingDirectoryIdentity, hooks?: SkillArchiveExtractionHooks) {
     const guard = new StagingDirectoryGuard(rootIdentity.realPath, hooks);
     const verified = await pinStagingDirectory(guard.root, rootIdentity.realPath);
     assertDirectoryLineage(rootIdentity, verified);

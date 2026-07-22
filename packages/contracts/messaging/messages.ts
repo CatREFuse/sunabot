@@ -153,6 +153,23 @@ export interface ConversationDirectoryPort {
   loadConversationDirectory(accountId?: string): Promise<ConversationDirectorySnapshotV1>;
 }
 
+export interface ConversationIdentityMessage {
+  role: "user" | "assistant" | "event";
+  userId?: number;
+  senderName?: string;
+  senderNickname?: string;
+}
+
+export interface ConversationRecord {
+  id: string;
+  accountId?: string;
+  groupId?: number;
+  userId: number;
+  title: string;
+  lastAt: string;
+  messages: readonly ConversationIdentityMessage[];
+}
+
 export interface MessagingPort {
   getStatus(): MessagingStatusV1;
   send(message: OutboundMessageV1): Promise<MessagingReceiptV1>;

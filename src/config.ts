@@ -1,7 +1,5 @@
 import fs from "node:fs/promises";
-import { existsSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
 import {
   AGENT_TOOL_NAMES,
@@ -19,7 +17,7 @@ import {
   MIN_REPLY_DEBOUNCE_MS,
   MAX_REPLY_DEBOUNCE_MS
 } from "./types.js";
-import { isReasoningEffort, resolveModelReasoningEffort } from "./admin/models.js";
+import { isReasoningEffort, resolveModelReasoningEffort } from "../packages/contracts/admin/models.js";
 import {
   DEFAULT_TAVILY_API_KEY_ENV,
   normalizeTavilySettings
@@ -29,27 +27,21 @@ import {
   WORKSPACE_LAYOUT,
   workspaceRelativeReference
 } from "../packages/platform/workspaceLayout.js";
+import {
+  getRootDir,
+  getWorkspaceDir,
+  getWorkspacePath,
+  resolveProjectPath
+} from "../packages/platform/projectPaths.js";
 
-const rootDir = discoverProjectRoot(path.dirname(fileURLToPath(import.meta.url)));
-const workspaceDir = resolveWorkspaceDir(process.env.SUNABOT_WORKSPACE);
 const AUTO_CODEX_EXECUTABLE = "auto";
 export const CONFIG_SCHEMA_VERSION = 1 as const;
 
 if (process.env.NODE_ENV !== "test") {
-  dotenv.config({ path: path.join(workspaceDir, WORKSPACE_LAYOUT.secretsEnv), override: false });
+  dotenv.config({ path: getWorkspacePath(WORKSPACE_LAYOUT.secretsEnv), override: false });
 }
 
-export function getRootDir() {
-  return rootDir;
-}
-
-export function getWorkspaceDir() {
-  return workspaceDir;
-}
-
-export function getWorkspacePath(...segments: string[]) {
-  return path.join(workspaceDir, ...segments);
-}
+export { getRootDir, getWorkspaceDir, getWorkspacePath, resolveProjectPath };
 
 export function getConfigPath() {
   return process.env.SUNABOT_CONFIG ?? getWorkspacePath(WORKSPACE_LAYOUT.config);
@@ -278,22 +270,6 @@ async function syncDirectory(directory: string) {
   }
 }
 
-export function resolveProjectPath(inputPath: string | undefined) {
-  if (!inputPath) return undefined;
-  if (path.isAbsolute(inputPath)) return inputPath;
-  const normalized = inputPath.replace(/\\/g, "/");
-  if (normalized === ".env" || normalized === "workspace/.env") {
-    return getWorkspacePath(WORKSPACE_LAYOUT.secretsEnv);
-  }
-  if (normalized === "workspace") return workspaceDir;
-  if (normalized === "workspace/agents" || normalized.startsWith("workspace/agents/")) {
-    const suffix = normalized.slice("workspace/agents".length).replace(/^\/+/, "");
-    return getWorkspacePath(WORKSPACE_LAYOUT.agentRoot, suffix);
-  }
-  if (normalized.startsWith("workspace/")) return getWorkspacePath(normalized.slice("workspace/".length));
-  return path.join(rootDir, inputPath);
-}
-
 export function getAgentSessionQueuePath(config: Pick<AppConfig, "persona">) {
   if (config.persona.defaultAgentId === "plana") return getWorkspacePath(WORKSPACE_LAYOUT.sessionQueue);
   const agentWorkspace = resolveProjectPath(config.persona.agentWorkspace);
@@ -337,31 +313,6 @@ async function assertWorkspaceLayoutReady() {
       if ((error as NodeJS.ErrnoException).code === "WORKSPACE_LAYOUT_MIGRATION_REQUIRED") throw error;
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
-  }
-}
-
-function resolveWorkspaceDir(configured: string | undefined) {
-  const value = configured?.trim();
-  if (!value) {
-    if (process.env.NODE_ENV === "production") {
-      throw new Error("SUNABOT_WORKSPACE is required in production.");
-    }
-    return path.join(rootDir, "workspace");
-  }
-  return path.isAbsolute(value) ? path.normalize(value) : path.resolve(rootDir, value);
-}
-
-function discoverProjectRoot(startDir: string) {
-  let current = path.resolve(startDir);
-  for (;;) {
-    if (existsSync(path.join(current, "package.json")) && existsSync(path.join(current, "AGENTS.md"))) {
-      return current;
-    }
-    const parent = path.dirname(current);
-    if (parent === current) {
-      throw new Error(`Unable to locate sunabot project root from ${startDir}.`);
-    }
-    current = parent;
   }
 }
 

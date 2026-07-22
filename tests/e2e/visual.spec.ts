@@ -1,27 +1,242 @@
-import path from "node:path";
-import { mkdir } from "node:fs/promises";
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page, type TestInfo } from "@playwright/test";
 import sharp from "sharp";
 import type { AgentMcpHttpServer } from "../../apps/admin-web/src/types/agentExtensions";
 import { installEmojiManagementMock } from "./emoji-management.fixture";
 import { installMockApi } from "./mock-api";
+import { installScheduledTasksApi } from "./support/scheduled-tasks";
+import {
+  captureVisual as capture,
+  compactVisualViewports,
+  expectDialogActionsInViewport,
+  expectLocatorInViewport,
+  prepareVisualPage,
+  visualViewports as viewports
+} from "./support/visual";
 
 const avatarCropFixture = sharp({
   create: { width: 900, height: 600, channels: 4, background: "#d71921" }
 }).png().toBuffer();
 
-const viewports = [
-  { name: "390x844", width: 390, height: 844 },
-  { name: "768x1024", width: 768, height: 1024 },
-  { name: "1440x900", width: 1440, height: 900 },
-  { name: "1920x1080", width: 1920, height: 1080 }
-];
+const migratedVisualScenarios = [
+  { title: "会话标题栏与侧栏矩阵", timeoutMs: 120_000, run: runConversationVisualScenario },
+  { title: "知识库页面与上传弹层矩阵", timeoutMs: 90_000, run: runKnowledgeVisualScenario },
+  { title: "记忆、梦境与召回矩阵", timeoutMs: 120_000, run: runMemoryVisualScenario },
+  { title: "表情目录与编辑弹层矩阵", timeoutMs: 120_000, run: runEmojiVisualScenario },
+  { title: "定时任务与编辑弹层矩阵", timeoutMs: 90_000, run: runScheduledTasksVisualScenario }
+] satisfies readonly {
+  title: string;
+  timeoutMs: number;
+  run(page: Page, testInfo: TestInfo): Promise<void>;
+}[];
+
+for (const scenario of migratedVisualScenarios) {
+  test(scenario.title, async ({ page }, testInfo) => {
+    test.setTimeout(scenario.timeoutMs);
+    await scenario.run(page, testInfo);
+  });
+}
+
+async function runConversationVisualScenario(page: Page, testInfo: TestInfo) {
+  const theme = await prepareVisualPage(page, testInfo);
+  await installMockApi(page);
+  const conversationViewports = [
+    viewports[0],
+    viewports[1],
+    { name: "900x844", width: 900, height: 844 },
+    viewports[2]
+  ];
+
+  for (const viewport of conversationViewports) {
+    await page.setViewportSize(viewport);
+    await page.goto("/conversations/group%3A10001");
+    const header = page.getByLabel("会话快捷操作");
+    await expect(header.getByRole("heading", { name: "产品讨论群" })).toBeVisible();
+    await expect(header.getByRole("button", { name: "查看 Token 消耗详情" })).toContainText("128.4K");
+    await expect(header.getByRole("status", { name: "编排器状态" })).toBeVisible();
+    await expect(header.getByRole("button", { name: "会话设置" })).toBeVisible();
+    await expect(header.getByRole("button", { name: "刷新消息" })).toBeVisible();
+    await expect(header.getByRole("button", { name: "请求日志" })).toBeVisible();
+    const bounds = await header.evaluate((element) => {
+      const headerRect = element.getBoundingClientRect();
+      const children = [...element.querySelectorAll<HTMLElement>(
+        ".conversation-identity, .conversation-instruments, .conversation-tools"
+      )];
+      return {
+        pageOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        childrenInside: children.every((child) => {
+          const rect = child.getBoundingClientRect();
+          return rect.left >= headerRect.left - 1 && rect.right <= headerRect.right + 1;
+        })
+      };
+    });
+    expect(bounds.pageOverflow).toBeLessThanOrEqual(1);
+    expect(bounds.childrenInside).toBe(true);
+    await capture(page, viewport.name, theme, "conversation-header");
+
+    if (viewport.width === 390 || viewport.width === 1_440) {
+      await capture(page, viewport.name, theme, "conversation-quick-controls", { fullPage: false });
+      await header.getByRole("button", { name: "查看 Token 消耗详情" }).click();
+      const usage = page.getByRole("dialog", { name: "Token 消耗详情" });
+      await expect(usage.getByLabel("模型调用统计")).toContainText("128.4K Token");
+      await capture(page, viewport.name, theme, "conversation-token-panel", { fullPage: false });
+      await usage.getByRole("button", { name: "关闭 Token 消耗详情" }).click();
+
+      await page.getByRole("button", { name: "会话设置" }).click();
+      const settings = page.getByRole("dialog", { name: "会话设置" });
+      await expect(settings.getByRole("heading", { name: "回复控制" })).toBeVisible();
+      await capture(page, viewport.name, theme, "conversation-settings-panel", { fullPage: false });
+      await settings.getByRole("button", { name: "关闭会话设置" }).click();
+    }
+  }
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/conversations/group%3A10001");
+  await page.getByLabel("回复", { exact: true }).uncheck();
+  await expect(page.getByRole("status", { name: "编排器状态" })).toContainText("已关闭");
+  await expect(page.getByLabel("编排", { exact: true })).toBeDisabled();
+}
+
+async function runKnowledgeVisualScenario(page: Page, testInfo: TestInfo) {
+  const theme = await prepareVisualPage(page, testInfo);
+  await installMockApi(page);
+  for (const viewport of compactVisualViewports) {
+    await page.setViewportSize(viewport);
+    await page.goto("/knowledge");
+    await expect(page.getByRole("heading", { name: "知识库", exact: true })).toBeVisible();
+    await page.getByLabel("检索知识库").fill("火星基地供电");
+    await page.getByRole("button", { name: "检索", exact: true }).click();
+    await expect(page.getByText("火星基地采用核能供电，水循环系统保持独立冗余。", { exact: true })).toBeVisible();
+    await capture(page, viewport.name, theme, "knowledge-search");
+
+    await page.getByRole("button", { name: "添加 Markdown", exact: true }).first().click();
+    const dialog = page.getByRole("dialog", { name: "添加 Markdown" });
+    await dialog.getByLabel("Markdown 文件").setInputFiles({
+      name: "应急手册.md",
+      mimeType: "text/markdown",
+      buffer: Buffer.from("# 应急手册\n\n检查恢复点。")
+    });
+    await dialog.getByLabel("保存位置").fill("运维/应急手册.md");
+    await expectLocatorInViewport(dialog, viewport.width, viewport.height);
+    await capture(page, viewport.name, theme, "knowledge-upload");
+    await dialog.getByRole("button", { name: "关闭", exact: true }).click();
+  }
+}
+
+async function runMemoryVisualScenario(page: Page, testInfo: TestInfo) {
+  const theme = await prepareVisualPage(page, testInfo);
+  await installMockApi(page);
+  for (const viewport of viewports) {
+    await page.setViewportSize(viewport);
+    await page.goto("/memory");
+    const sourceTabs = page.getByRole("navigation", { name: "记忆类别" });
+    await expect(sourceTabs.getByRole("button")).toHaveText(["工作记忆", "长期记忆", "用户画像", "梦境"]);
+    await expect(page.getByLabel("排序字段")).toHaveValue("updatedAt");
+    await expect(page.getByLabel("排序方向")).toHaveValue("desc");
+    const memoryRows = page.locator("article").filter({ has: page.getByRole("button", { name: "编辑记忆" }) });
+    await expect(memoryRows).toHaveCount(20);
+    const pagination = page.getByRole("navigation", { name: "记忆分页" });
+    await expect(pagination).toContainText("共 21 条 · 每页 20 条");
+    await pagination.scrollIntoViewIfNeeded();
+    await capture(page, viewport.name, theme, "memory-pagination", { fullPage: false });
+
+    await sourceTabs.getByRole("button", { name: "梦境", exact: true }).click();
+    const dream = page.getByRole("region", { name: "梦境" });
+    await expect(dream.getByRole("button", { name: "立即做梦", exact: true })).toBeVisible();
+    await expect(dream.getByText(/我沿着潮湿的石阶走进旧车站/)).toBeVisible();
+    await expect(dream.getByText("合并 2 · 归档 1 · 转存 1", { exact: true })).toBeVisible();
+    await expect(dream.getByText("人格已微调", { exact: true })).toBeVisible();
+    await dream.scrollIntoViewIfNeeded();
+    await capture(page, viewport.name, theme, "memory-dream", { fullPage: false });
+
+    await sourceTabs.getByRole("button", { name: "长期记忆", exact: true }).click();
+    await page.getByLabel("排序字段").selectOption("lastRecalledAt");
+    const recall = page.locator("article").filter({ hasText: "管理台完成了第一轮视觉检查。" });
+    await expect(recall.getByText("召回 4 次", { exact: true })).toBeVisible();
+    await expect(recall.getByText("跨 3 天", { exact: true })).toBeVisible();
+    await recall.scrollIntoViewIfNeeded();
+    await capture(page, viewport.name, theme, "memory-recall-stats", { fullPage: false });
+  }
+}
+
+async function runEmojiVisualScenario(page: Page, testInfo: TestInfo) {
+  const theme = await prepareVisualPage(page, testInfo, { agentId: "plana" });
+  await installEmojiManagementMock(page);
+  for (const viewport of viewports) {
+    await page.setViewportSize(viewport);
+    await navigateToEmojiManagement(page, viewport.width);
+    await expect(page.getByRole("heading", { name: "表情", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "预设表情", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "摸鱼", exact: true })).toBeAttached();
+    await expect(page.getByAltText("开心表情")).toBeVisible();
+    await expect(page.getByRole("group", { name: "表情发送尺寸" })).toBeVisible();
+    await capture(page, viewport.name, theme, "emoji-catalog", { checkPageShell: true });
+
+    if (viewport.width === 390 || viewport.width === 1_440) {
+      await page.getByRole("heading", { name: "自定义表情", exact: true }).scrollIntoViewIfNeeded();
+      await capture(page, viewport.name, theme, "emoji-custom", { checkPageShell: true });
+      await page.locator(".page-shell").evaluate((element) => { element.scrollTop = 0; });
+      await page.getByRole("button", { name: "新增", exact: true }).click();
+      const editor = page.getByRole("dialog", { name: "新增表情" });
+      await expectLocatorInViewport(editor, viewport.width, viewport.height);
+      await capture(page, viewport.name, theme, "emoji-upload-dialog", { checkPageShell: true });
+      await editor.getByRole("button", { name: "关闭", exact: true }).click();
+    }
+
+    await page.getByRole("button", { name: "查看 开心 版本" }).click();
+    const versions = page.getByRole("dialog", { name: "开心 · 版本" });
+    await expect(versions).toBeVisible();
+    await capture(page, viewport.name, theme, "emoji-version-history", { checkPageShell: true });
+    await versions.getByRole("button", { name: "关闭" }).click();
+  }
+}
+
+async function runScheduledTasksVisualScenario(page: Page, testInfo: TestInfo) {
+  const theme = await prepareVisualPage(page, testInfo, { agentId: "plana" });
+  await installScheduledTasksApi(page);
+  for (const viewport of compactVisualViewports) {
+    await page.setViewportSize(viewport);
+    await page.goto("/scheduled-tasks");
+    await expect(page.getByRole("heading", { name: "定时任务", exact: true })).toBeVisible();
+    await expect(page.getByText("工作日晨间简报", { exact: true })).toBeVisible();
+    await expect(page.getByText("发行前检查", { exact: true })).toBeVisible();
+    await capture(page, viewport.name, theme, "scheduled-tasks-list");
+
+    await page.getByRole("tab", { name: "导演任务", exact: true }).click();
+    await expect(page.getByText("日常导演 · 午后整理资料", { exact: true })).toBeVisible();
+    await expect(page.getByText("工作日晨间简报", { exact: true })).toBeHidden();
+    await capture(page, viewport.name, theme, "scheduled-tasks-director");
+    await page.getByRole("tab", { name: "全部", exact: true }).click();
+
+    const taskRow = page.locator("tr").filter({ hasText: "工作日晨间简报" });
+    await taskRow.getByRole("button", { name: "编辑", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "编辑定时任务" });
+    await expect(dialog.getByLabel("名称")).toHaveValue("工作日晨间简报");
+    await expect(dialog.locator("small").filter({ hasText: "产品讨论群" }).first()).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "移除 @171419991" })).toBeVisible();
+    await expectDialogActionsInViewport(dialog, viewport.height);
+    await capture(page, viewport.name, theme, "scheduled-tasks-editor");
+    await dialog.getByRole("heading", { name: "回调目标", exact: true }).scrollIntoViewIfNeeded();
+    await capture(page, viewport.name, theme, "scheduled-tasks-editor-targets");
+    await dialog.getByRole("button", { name: "关闭", exact: true }).click();
+  }
+}
+
+async function navigateToEmojiManagement(page: Page, viewportWidth: number) {
+  await page.goto("/overview");
+  if (viewportWidth >= 1_024) {
+    await page.getByRole("link", { name: "表情", exact: true }).click();
+  } else {
+    await page.getByRole("button", { name: "更多", exact: true }).click();
+    const menu = page.getByRole("dialog", { name: "更多" });
+    await expect(menu).toBeVisible();
+    await menu.getByRole("link", { name: /^表情/u }).click();
+  }
+  await expect(page).toHaveURL(/\/emojis$/u);
+}
 
 test("四视口界面矩阵", async ({ page }, testInfo) => {
   test.setTimeout(180_000);
-  const theme = testInfo.project.name.endsWith("dark") ? "dark" : "light";
-  await page.addInitScript((selectedTheme) => localStorage.setItem("sunabot.theme", selectedTheme), theme);
-  await page.emulateMedia({ colorScheme: theme, reducedMotion: "reduce" });
+  const theme = await prepareVisualPage(page, testInfo);
   const state = await installMockApi(page);
 
   for (const viewport of viewports) {
@@ -372,10 +587,6 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     await page.goto("/memory");
     await expect(page.getByRole("heading", { name: "记忆", exact: true })).toBeVisible();
     await capture(page, viewport.name, theme, "memory-list");
-    const memoryPagination = page.getByRole("navigation", { name: "记忆分页" });
-    await expect(memoryPagination).toBeVisible();
-    await memoryPagination.scrollIntoViewIfNeeded();
-    await capture(page, viewport.name, theme, "memory-pagination");
     await page.getByRole("button", { name: "新增" }).click();
     await expect(page.getByRole("heading", { name: "新增记忆" })).toBeVisible();
     await capture(page, viewport.name, theme, "memory-editor");
@@ -418,9 +629,7 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
 
 test("自拍素材与备注四视口矩阵", async ({ page }, testInfo) => {
   test.setTimeout(90_000);
-  const theme = testInfo.project.name.endsWith("dark") ? "dark" : "light";
-  await page.addInitScript((selectedTheme) => localStorage.setItem("sunabot.theme", selectedTheme), theme);
-  await page.emulateMedia({ colorScheme: theme, reducedMotion: "reduce" });
+  const theme = await prepareVisualPage(page, testInfo);
   await installMockApi(page);
 
   for (const viewport of viewports) {
@@ -439,33 +648,9 @@ test("自拍素材与备注四视口矩阵", async ({ page }, testInfo) => {
   }
 });
 
-test("表情管理四视口矩阵", async ({ page }, testInfo) => {
-  test.setTimeout(90_000);
-  const theme = testInfo.project.name.endsWith("dark") ? "dark" : "light";
-  await page.addInitScript((selectedTheme) => localStorage.setItem("sunabot.theme", selectedTheme), theme);
-  await page.emulateMedia({ colorScheme: theme, reducedMotion: "reduce" });
-  await installEmojiManagementMock(page);
-
-  for (const viewport of viewports) {
-    await page.setViewportSize({ width: viewport.width, height: viewport.height });
-    await page.goto("/emojis");
-    await expect(page.getByRole("heading", { name: "表情", exact: true })).toBeVisible();
-    await expect(page.getByRole("group", { name: "表情发送尺寸" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "修改 摸鱼 key" })).toBeVisible();
-    await capture(page, viewport.name, theme, "emoji-manager-compact");
-
-    await page.getByRole("button", { name: "查看 开心 版本" }).click();
-    await expect(page.getByRole("dialog", { name: "开心 · 版本" })).toBeVisible();
-    await capture(page, viewport.name, theme, "emoji-version-history");
-    await page.getByRole("dialog", { name: "开心 · 版本" }).getByRole("button", { name: "关闭" }).click();
-  }
-});
-
 test("语音设置四视口矩阵", async ({ page }, testInfo) => {
   test.setTimeout(90_000);
-  const theme = testInfo.project.name.endsWith("dark") ? "dark" : "light";
-  await page.addInitScript((selectedTheme) => localStorage.setItem("sunabot.theme", selectedTheme), theme);
-  await page.emulateMedia({ colorScheme: theme, reducedMotion: "reduce" });
+  const theme = await prepareVisualPage(page, testInfo);
   await installMockApi(page);
 
   for (const viewport of viewports) {
@@ -486,9 +671,7 @@ test("语音设置四视口矩阵", async ({ page }, testInfo) => {
 });
 
 test("扩展弹层短高视口", async ({ page }, testInfo) => {
-  const theme = testInfo.project.name.endsWith("dark") ? "dark" : "light";
-  await page.addInitScript((selectedTheme) => localStorage.setItem("sunabot.theme", selectedTheme), theme);
-  await page.emulateMedia({ colorScheme: theme, reducedMotion: "reduce" });
+  const theme = await prepareVisualPage(page, testInfo);
   const state = await installMockApi(page);
   const oauthServer: AgentMcpHttpServer = {
     id: "remote-search",
@@ -518,9 +701,7 @@ test("扩展弹层短高视口", async ({ page }, testInfo) => {
 
 test("头像裁图四视口矩阵", async ({ page }, testInfo) => {
   test.setTimeout(120_000);
-  const theme = testInfo.project.name.endsWith("dark") ? "dark" : "light";
-  await page.addInitScript((selectedTheme) => localStorage.setItem("sunabot.theme", selectedTheme), theme);
-  await page.emulateMedia({ colorScheme: theme, reducedMotion: "reduce" });
+  const theme = await prepareVisualPage(page, testInfo);
   await installMockApi(page);
 
   for (const viewport of viewports) {
@@ -541,9 +722,7 @@ test("头像裁图四视口矩阵", async ({ page }, testInfo) => {
 
 test("工具目录四视口矩阵", async ({ page }, testInfo) => {
   test.setTimeout(120_000);
-  const theme = testInfo.project.name.endsWith("dark") ? "dark" : "light";
-  await page.addInitScript((selectedTheme) => localStorage.setItem("sunabot.theme", selectedTheme), theme);
-  await page.emulateMedia({ colorScheme: theme, reducedMotion: "reduce" });
+  const theme = await prepareVisualPage(page, testInfo);
   await installMockApi(page);
 
   for (const viewport of viewports) {
@@ -584,9 +763,7 @@ test("工具目录四视口矩阵", async ({ page }, testInfo) => {
 
 test("Bash 权限与会话状态四视口矩阵", async ({ page }, testInfo) => {
   test.setTimeout(90_000);
-  const theme = testInfo.project.name.endsWith("dark") ? "dark" : "light";
-  await page.addInitScript((selectedTheme) => localStorage.setItem("sunabot.theme", selectedTheme), theme);
-  await page.emulateMedia({ colorScheme: theme, reducedMotion: "reduce" });
+  const theme = await prepareVisualPage(page, testInfo);
   await installMockApi(page);
 
   for (const viewport of viewports) {
@@ -617,9 +794,7 @@ test("Bash 权限与会话状态四视口矩阵", async ({ page }, testInfo) => 
 });
 
 test("连接设置四视口矩阵", async ({ page }, testInfo) => {
-  const theme = testInfo.project.name.endsWith("dark") ? "dark" : "light";
-  await page.addInitScript((selectedTheme) => localStorage.setItem("sunabot.theme", selectedTheme), theme);
-  await page.emulateMedia({ colorScheme: theme, reducedMotion: "reduce" });
+  const theme = await prepareVisualPage(page, testInfo);
   await installMockApi(page);
 
   for (const viewport of viewports) {
@@ -633,9 +808,7 @@ test("连接设置四视口矩阵", async ({ page }, testInfo) => {
 });
 
 test("提示词编辑器光标对齐", async ({ page }, testInfo) => {
-  const theme = testInfo.project.name.endsWith("dark") ? "dark" : "light";
-  await page.addInitScript((selectedTheme) => localStorage.setItem("sunabot.theme", selectedTheme), theme);
-  await page.emulateMedia({ colorScheme: theme, reducedMotion: "reduce" });
+  const theme = await prepareVisualPage(page, testInfo);
   await installMockApi(page);
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/agent-prompts/persona.soul");
@@ -663,23 +836,39 @@ test("提示词编辑器光标对齐", async ({ page }, testInfo) => {
 });
 
 test("Final Prompt 输入框全选无文本重叠", async ({ page }, testInfo) => {
-  const theme = testInfo.project.name.endsWith("dark") ? "dark" : "light";
-  await page.addInitScript((selectedTheme) => localStorage.setItem("sunabot.theme", selectedTheme), theme);
-  await page.emulateMedia({ colorScheme: theme, reducedMotion: "reduce" });
+  const theme = await prepareVisualPage(page, testInfo);
   await installMockApi(page);
   await page.setViewportSize({ width: 1532, height: 842 });
   await page.goto("/system-prompts/memory.user-profile");
 
   const editor = page.getByRole("textbox", { name: "system 提示词" });
   await expect(editor).toBeVisible();
+  await editor.fill(Array.from({ length: 48 }, (_, index) => (
+    `${index + 1}. 你负责以 @{bot.name} 的第一视角，从同一批聊天消息中整理我对各个用户的稳定认知和印象。`
+  )).join("\n"));
   await editor.press("ControlOrMeta+a");
+  const editorFrame = page.locator(".prompt-field__editor").filter({ has: editor });
+  const selection = editorFrame.locator(".cm-selectionBackground").first();
+  await expect(selection).toBeVisible();
+  const structure = await editorFrame.evaluate((element) => {
+    const scroller = element.querySelector<HTMLElement>(".cm-scroller");
+    const selectionLayer = element.querySelector<HTMLElement>(".cm-selectionBackground");
+    if (!scroller || !selectionLayer) throw new Error("Missing CodeMirror selection layer");
+    return {
+      contentLayers: element.querySelectorAll(".cm-content").length,
+      legacyLayers: element.querySelectorAll("textarea, .prompt-field__highlight").length,
+      scrolls: scroller.scrollHeight > scroller.clientHeight,
+      scrollbarGutter: getComputedStyle(scroller).scrollbarGutter,
+      selectionBackground: getComputedStyle(selectionLayer).backgroundColor
+    };
+  });
+  expect(structure).toMatchObject({ contentLayers: 1, legacyLayers: 0, scrolls: true, scrollbarGutter: "stable" });
+  expect(structure.selectionBackground).toContain("215, 25, 33");
   await capture(page, "1532x842", theme, "prompt-selection-alignment");
 });
 
 test("提示词 s-if 条件语法高亮", async ({ page }, testInfo) => {
-  const theme = testInfo.project.name.endsWith("dark") ? "dark" : "light";
-  await page.addInitScript((selectedTheme) => localStorage.setItem("sunabot.theme", selectedTheme), theme);
-  await page.emulateMedia({ colorScheme: theme, reducedMotion: "reduce" });
+  const theme = await prepareVisualPage(page, testInfo);
   await installMockApi(page);
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/system-prompts/conversation.tone-rewrite");
@@ -702,39 +891,3 @@ test("提示词 s-if 条件语法高亮", async ({ page }, testInfo) => {
   expect(conditionColor).not.toBe(directiveColor);
   await capture(page, "1440x900", theme, "prompt-s-if-highlight");
 });
-
-async function capture(
-  page: import("@playwright/test").Page,
-  viewport: string,
-  theme: string,
-  name: string
-) {
-  await page.evaluate(async () => {
-    if ("fonts" in document) {
-      await Promise.race([document.fonts.ready, new Promise((resolve) => setTimeout(resolve, 2_000))]);
-    }
-  });
-  const overflow = await page.evaluate(() => ({
-    document: document.documentElement.scrollWidth - window.innerWidth,
-    body: document.body.scrollWidth - window.innerWidth
-  }));
-  expect(overflow.document, `${name}: document horizontal overflow`).toBeLessThanOrEqual(1);
-  expect(overflow.body, `${name}: body horizontal overflow`).toBeLessThanOrEqual(1);
-
-  const output = path.resolve("test-results/webui-visual", viewport, theme);
-  await mkdir(output, { recursive: true });
-  await page.screenshot({
-    path: path.join(output, `${name}.png`),
-    fullPage: true,
-    animations: "disabled"
-  });
-}
-
-async function expectDialogActionsInViewport(dialog: import("@playwright/test").Locator, viewportHeight: number) {
-  const actions = dialog.locator('[data-slot="dialog-actions"]');
-  await expect(actions).toBeVisible();
-  const box = await actions.boundingBox();
-  expect(box).not.toBeNull();
-  expect(box!.y).toBeGreaterThanOrEqual(0);
-  expect(box!.y + box!.height).toBeLessThanOrEqual(viewportHeight);
-}

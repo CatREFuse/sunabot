@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 const requestLog = vi.hoisted(() => vi.fn(async () => undefined));
-vi.mock("../../src/requestLog.js", () => ({ appendRequestLog: requestLog }));
+vi.mock("../../adapters/observability/requestLog.js", () => ({ appendRequestLog: requestLog }));
 
 import {
   RegistryProviderToolExecutor,

@@ -1,4 +1,5 @@
-import { ImageQuality, ImageResult } from "../../src/types.js";
+import type { ImageQuality } from "../../packages/contracts/admin/public.js";
+import type { ImageResult } from "../../packages/contracts/media/media.js";
 import { GENERATE_IMG_REFERENCE_SOURCES } from "./generateImgTool.js";
 
 export const SELFIE_TOOL_NAME = "selfie";

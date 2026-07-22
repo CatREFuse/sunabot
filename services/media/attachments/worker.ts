@@ -35,8 +35,6 @@ interface AttachmentWorkerFailure {
   error?: { code?: string; message?: string };
 }
 
-export type AttachmentWorkerResponse<T = unknown> = AttachmentWorkerSuccess<T> | AttachmentWorkerFailure;
-
 export type AttachmentWorkerErrorCode =
   | "worker_timeout"
   | "worker_ipc_limit"

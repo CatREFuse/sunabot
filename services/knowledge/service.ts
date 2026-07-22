@@ -5,8 +5,8 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { ServiceError } from "../../packages/contracts/errors/serviceError.js";
 import { WORKSPACE_LAYOUT } from "../../packages/platform/workspaceLayout.js";
-import { getWorkspacePath, resolveProjectPath } from "../../src/config.js";
-import type { AppConfig } from "../../src/types.js";
+import { getWorkspacePath, resolveProjectPath } from "../../packages/platform/projectPaths.js";
+import type { AppConfig } from "../../packages/contracts/admin/public.js";
 import { chunkKnowledgeDocument } from "./chunking.js";
 import { knowledgeFtsQuery, tokenizeKnowledgeText } from "./tokenizer.js";
 import type {

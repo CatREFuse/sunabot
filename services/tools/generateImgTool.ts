@@ -1,4 +1,5 @@
-import { ImageResult, BotConfig, ImageQuality } from "../../src/types.js";
+import type { BotConfig, ImageQuality } from "../../packages/contracts/admin/public.js";
+import type { ImageResult } from "../../packages/contracts/media/media.js";
 import type { ProviderLogContext } from "../../packages/contracts/model/modelGateway.js";
 
 export const GENERATE_IMG_TOOL_NAME = "generate_img";

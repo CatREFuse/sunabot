@@ -13,10 +13,10 @@ import {
 } from "../../services/agent/toneReplyPrompt.js";
 import { senderDisplayName } from "../../services/conversations/senderName.js";
 import { parseSegmentedReplyXml } from "../../services/messaging/segmentedReply.js";
-import { resolveModelReasoningEffort } from "../admin/models.js";
+import { resolveModelReasoningEffort } from "../../packages/contracts/admin/models.js";
 import { AGENT_TOOL_NAMES } from "../types.js";
-import type { SunaRuntime } from "../runtime.js";
 import type { ParsedIncomingMessage } from "../types.js";
+import type { RuntimePromptPort } from "./runtimeContracts.js";
 
 const TONE_PROMPT_ID = "conversation.tone-rewrite";
 const TONE_REQUEST_TIMEOUT_MS = 60_000;
@@ -30,7 +30,7 @@ export interface ToneRewriteContext {
 }
 
 export class RuntimeTone {
-  constructor(private readonly host: SunaRuntime) {}
+  constructor(private readonly host: RuntimePromptPort) {}
 
   async rewrite(text: string, context: ToneRewriteContext = {}) {
     if (!this.host.config.bot.tone.enabled || !text.trim()) return text;
@@ -73,20 +73,21 @@ export class RuntimeTone {
   ) {
 
     const settings = this.host.config.bot.tone;
+    const followMainModel = settings.followMainModel;
     const baseProvider = this.host.getProvider(
-      settings.followMainModel ? undefined : settings.providerId || undefined
+      followMainModel ? undefined : settings.providerId || undefined
     ).configuration();
     const reasoning = resolveModelReasoningEffort(
-      settings.followMainModel ? baseProvider.model : settings.model,
-      settings.followMainModel ? baseProvider.reasoningEffort : settings.reasoningEffort,
+      followMainModel ? baseProvider.model : settings.model,
+      followMainModel ? baseProvider.reasoningEffort : settings.reasoningEffort,
       baseProvider.reasoningEffort ?? "low"
     );
     const provider = new OpenAIProvider({
       ...baseProvider,
-      model: settings.followMainModel ? baseProvider.model : settings.model,
+      model: followMainModel ? baseProvider.model : settings.model,
       reasoningEffort: reasoning.effort,
-      temperature: settings.followMainModel ? baseProvider.temperature : settings.temperature,
-      maxOutputTokens: settings.followMainModel ? baseProvider.maxOutputTokens : settings.maxOutputTokens
+      temperature: followMainModel ? baseProvider.temperature : settings.temperature,
+      maxOutputTokens: followMainModel ? baseProvider.maxOutputTokens : settings.maxOutputTokens
     });
     const incoming = context.incoming;
     const request = await this.host.renderPromptRequest(TONE_PROMPT_ID, {
@@ -106,7 +107,7 @@ export class RuntimeTone {
       response_format: { type: "text" }
     }, {
       signal,
-      modelRequestMaxRetries: settings.followMainModel
+      modelRequestMaxRetries: followMainModel
         ? this.host.config.normalReply.maxRetries
         : settings.maxRetries,
       disabledTools: AGENT_TOOL_NAMES,

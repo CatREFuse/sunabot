@@ -1,23 +1,37 @@
-import { existsSync, readFileSync } from "node:fs";
-import path from "node:path";
 import type {
   InboundMessageV1,
   MessagingConnectionContextV1,
   MessagingPort
 } from "../../packages/contracts/messaging/messages.js";
-import { WORKSPACE_LAYOUT } from "../../packages/platform/workspaceLayout.js";
-import { getWorkspacePath } from "../../src/config.js";
-import type { SunaRuntime } from "../../src/runtime.js";
-import type { AppConfig } from "../../src/types.js";
 import type { BroadcastStormDetector } from "../orchestration/public.js";
 import type { AgentRegistry, AgentSummary } from "./agentRegistry.js";
 
-export interface AgentRuntimeManagerOptions {
-  defaultRuntime: SunaRuntime;
-  createRuntime: (config: AppConfig) => SunaRuntime;
+type AgentRuntimeConfig = Awaited<ReturnType<AgentRegistry["config"]>>;
+
+export interface AgentRuntimePort {
+  config: AgentRuntimeConfig;
+  initialize(): Promise<unknown>;
+  close(): unknown;
+  handleInboundMessage(message: InboundMessageV1, gateway: MessagingPort): Promise<unknown>;
+  resumeUserGroupOrchestrators(gateway: MessagingPort): unknown;
+  suspendUserGroupOrchestrators(): unknown;
+  getPersonaStatus(): unknown;
+}
+
+export interface AgentRuntimeManagerOptions<TRuntime extends AgentRuntimePort> {
+  defaultRuntime: TRuntime;
+  createRuntime: (config: AgentRuntimeConfig) => TRuntime;
   initializeRuntime: boolean;
   broadcastStormDetector: BroadcastStormDetector;
   probeExtensionReadiness?(agentId: string): Promise<AgentRuntimeReadiness>;
+  readAccountRuntimeStatus?(accountId: string): AccountRuntimeStatusSnapshot;
+}
+
+export interface AccountRuntimeStatusSnapshot {
+  configured: boolean;
+  observedState?: "running" | "stopped" | "missing" | "unknown";
+  reconcileRequired?: boolean;
+  lastError?: string | null;
 }
 
 export interface AgentRuntimeReadiness {
@@ -32,11 +46,11 @@ interface OrchestratorActivation {
   gateway: MessagingPort;
 }
 
-export class AgentRuntimeManager {
-  private readonly runtimes = new Map<string, SunaRuntime>();
+export class AgentRuntimeManager<TRuntime extends AgentRuntimePort> {
+  private readonly runtimes = new Map<string, TRuntime>();
   private readonly readiness = new Map<string, AgentRuntimeReadiness>();
   private readonly agentOperations = new Map<string, Promise<unknown>>();
-  private readonly runtimeOrchestratorGenerations = new WeakMap<SunaRuntime, number>();
+  private readonly runtimeOrchestratorGenerations = new WeakMap<TRuntime, number>();
   private orchestratorGeneration = 0;
   private orchestratorActivation?: OrchestratorActivation;
   private closed = false;
@@ -44,7 +58,7 @@ export class AgentRuntimeManager {
 
   constructor(
     private readonly registry: AgentRegistry,
-    private readonly options: AgentRuntimeManagerOptions
+    private readonly options: AgentRuntimeManagerOptions<TRuntime>
   ) {}
 
   async initialize() {
@@ -272,7 +286,12 @@ export class AgentRuntimeManager {
           : this.runtimes.get(agent.id)?.getPersonaStatus()
       },
       accounts: agent.accounts.map((account) => ({
-        ...decorateAccountRuntime(agent.enabled, account, connected.get(account.id))
+        ...decorateAccountRuntime(
+          agent.enabled,
+          account,
+          connected.get(account.id),
+          this.options.readAccountRuntimeStatus?.(account.id)
+        )
       }))
     }));
   }
@@ -301,7 +320,7 @@ export class AgentRuntimeManager {
     return current;
   }
 
-  private resumeRuntimeIfActive(runtime: SunaRuntime) {
+  private resumeRuntimeIfActive(runtime: TRuntime) {
     const activation = this.orchestratorActivation;
     if (!activation || this.runtimeOrchestratorGenerations.get(runtime) === activation.generation) return;
     runtime.resumeUserGroupOrchestrators(activation.gateway);
@@ -344,14 +363,13 @@ function stoppedReadiness(): AgentRuntimeReadiness {
 function decorateAccountRuntime(
   agentEnabled: boolean,
   account: AgentSummary["accounts"][number],
-  connection: { accountId: string; selfId?: string; connectedAt: string } | undefined
+  connection: { accountId: string; selfId?: string; connectedAt: string } | undefined,
+  state: AccountRuntimeStatusSnapshot | undefined
 ) {
-  const accountRoot = getWorkspacePath(WORKSPACE_LAYOUT.napcatAccounts, account.id);
-  const state = readAccountRuntimeState(path.join(accountRoot, "runtime-state.json"));
   const connected = Boolean(connection);
   const desiredState = account.enabled && agentEnabled ? "running" : "stopped";
   const observedState = connected ? "running" : state?.observedState ?? (
-    existsSync(path.join(accountRoot, "config-full", "webui.json")) ? "unknown" : "missing"
+    state?.configured ? "unknown" : "missing"
   );
   return {
     ...account,
@@ -365,17 +383,4 @@ function decorateAccountRuntime(
     lastError: state?.lastError ?? null,
     runtimeReady: connected || observedState === "running"
   };
-}
-
-function readAccountRuntimeState(filePath: string): {
-  observedState?: "running" | "stopped" | "missing" | "unknown";
-  reconcileRequired?: boolean;
-  lastError?: string | null;
-} | undefined {
-  try {
-    const value = JSON.parse(readFileSync(filePath, "utf8"));
-    return value?.schemaVersion === 1 ? value : undefined;
-  } catch {
-    return undefined;
-  }
 }

@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   buildUserPrompt,
-  hasIncomingReplyContent,
+  hasIncomingReplyContent
+} from "../../src/runtime/conversationMemoryHelpers.js";
+import {
   sanitizeAttachmentForPersistence,
   selectRelevantConversationAttachments
-} from "../../src/runtime.js";
+} from "../../src/runtime/messagingAttachmentHelpers.js";
 import {
   extractOneBotMessageDetails,
   parseOneBotInboundMessage

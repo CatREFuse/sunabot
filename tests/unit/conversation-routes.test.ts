@@ -9,7 +9,7 @@ import type { OneBotGateway } from "../../adapters/onebot/onebotGateway.js";
 import { ServiceError } from "../../packages/contracts/errors/serviceError.js";
 import type { ConversationDirectory } from "../../services/conversations/conversationDirectory.js";
 import { SunaRuntime } from "../../src/runtime.js";
-import { appendRequestLog } from "../../src/requestLog.js";
+import { appendRequestLog } from "../../adapters/observability/requestLog.js";
 import { applicationDataStore, closeApplicationDataStores } from "../../adapters/sqlite/applicationDataStore.js";
 import { createAdminTestConfig } from "./admin-fixtures.js";
 
@@ -333,24 +333,21 @@ describe("conversation API plugin", () => {
     };
     const aronaRuntime = new SunaRuntime(aronaConfig, { attachmentService: {} as never });
     const internals = aronaRuntime as unknown as {
-      reply: {
-        replyToIncoming(): Promise<void>;
-      };
+      completePromptTurn(): Promise<{ kind: "completed"; text: string }>;
       adminIdentity(): { userId: string; name: string };
       incomingCaptureSequence(): number;
       recordIncomingMessage(): void;
       getConversationMessages(): Record<string, unknown>;
     };
-    internals.reply = {
-      replyToIncoming: async () => {
-        await appendRequestLog({
-          category: "model.response",
-          action: "responses.complete",
-          model: "gpt-arona",
-          response: { usage: { input_tokens: 8, output_tokens: 2, total_tokens: 10 } },
-          metadata: { conversationId: "web:admin", stage: "reply" }
-        });
-      }
+    internals.completePromptTurn = async () => {
+      await appendRequestLog({
+        category: "model.response",
+        action: "responses.complete",
+        model: "gpt-arona",
+        response: { usage: { input_tokens: 8, output_tokens: 2, total_tokens: 10 } },
+        metadata: { conversationId: "web:admin", stage: "reply" }
+      });
+      return { kind: "completed", text: "测试回复" };
     };
     internals.adminIdentity = () => ({ userId: "171419991", name: "管理员" });
     internals.incomingCaptureSequence = () => 1;
@@ -388,7 +385,7 @@ describe("conversation API plugin", () => {
       expect(response.statusCode).toBe(200);
       expect(getRuntime).toHaveBeenCalledWith("arona");
       expect(applicationDataStore(aronaConfig).readRequestLogs({ query: "web:admin", limit: 20 }))
-        .toEqual([expect.objectContaining({ action: "responses.complete", model: "gpt-arona" })]);
+        .toContainEqual(expect.objectContaining({ action: "responses.complete", model: "gpt-arona" }));
       expect(applicationDataStore(aronaConfig).readModelCallAggregateRows("web:admin"))
         .toEqual([expect.objectContaining({ behavior: "reply", requests: 1, total: 10 })]);
       expect(applicationDataStore(planaConfig).readRequestLogs({ query: "web:admin", limit: 20 })).toEqual([]);

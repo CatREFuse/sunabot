@@ -1,4 +1,4 @@
-import type { AppConfig } from "../../src/types.js";
+import type { AppConfig } from "../../packages/contracts/admin/public.js";
 import type { PromptFileKind, PromptVariableDefinition } from "./promptSystem.js";
 import {
   SCHEDULED_TASK_CALLBACK_PROMPT_FILE,
@@ -251,14 +251,8 @@ export const PROMPT_FILE_DEFINITIONS = [
   )
 ] as const satisfies readonly PromptFileDefinition[];
 
-export type PromptFileId = (typeof PROMPT_FILE_DEFINITIONS)[number]["id"];
-
 export function promptDefinitionById(id: string) {
   return PROMPT_FILE_DEFINITIONS.find((item) => item.id === id);
-}
-
-export function promptFragmentVariables() {
-  return fragmentVariables;
 }
 
 function fragment(id: string, title: string, category: string, fileName: string): PromptFileDefinition {

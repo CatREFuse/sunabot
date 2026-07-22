@@ -131,10 +131,6 @@ export function readAddressNames(value: Record<string, unknown>) {
     : normalizeAddressNames(value.addressName ?? value.address_name ?? value.salutation);
 }
 
-export function readAddressName(value: Record<string, unknown>) {
-  return readAddressNames(value)[0] ?? "";
-}
-
 export function configuredAddressNames(config: MemoryIdentityConfig, userId: string, requested: unknown) {
   const names = normalizeAddressNames(requested);
   const adminQq = normalizeUserId(config.bot.adminQq);
@@ -145,10 +141,6 @@ export function configuredAddressNames(config: MemoryIdentityConfig, userId: str
     ]);
   }
   return names;
-}
-
-export function configuredAddressName(config: MemoryIdentityConfig, userId: string, requested: unknown) {
-  return configuredAddressNames(config, userId, requested)[0] ?? "";
 }
 
 export function isMemoryEventKey(value: string) {

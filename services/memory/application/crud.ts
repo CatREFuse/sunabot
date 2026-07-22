@@ -1,5 +1,5 @@
 import { nanoid } from "nanoid";
-import type { AppConfig } from "../../../src/types.js";
+import type { AppConfig } from "../../../packages/contracts/admin/public.js";
 import { ServiceError } from "../../../packages/contracts/errors/serviceError.js";
 import type {
   MemoryEntry,

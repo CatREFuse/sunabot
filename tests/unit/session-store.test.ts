@@ -5,16 +5,32 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  assistantReplyEnvelope,
   decodeAssistantReply,
-  SYSTEM_CONFIG_NEUTRAL_CONFIRMATION_TEXT,
-  type ReplyGateSnapshotV1
+  SYSTEM_CONFIG_NEUTRAL_CONFIRMATION_TEXT
 } from "../../packages/contracts/session/runtimeMessages.js";
 import { SessionStore } from "../../services/sessions/sessionStore.js";
+import {
+  claimIncoming,
+  createHeldReplyFixture,
+  enqueueDebounce,
+  enqueueIncoming
+} from "./support/session-fixtures.js";
 
 const stores: SessionStore[] = [];
 const temporaryDirectories: string[] = [];
 const THREAD_ID = "thread:22222222222222222222222222222222";
+const HELD_FIXTURE = createHeldReplyFixture({
+  fingerprint: `sha256:${"a".repeat(64)}`,
+  generation: "generation-held-v5",
+  conversationId: "private:10001",
+  userId: 10001,
+  messageId: 9001,
+  scopeEpoch: 4,
+  conversationEpoch: 7,
+  correlationId: "log-held-v5",
+  senderDisplayName: "管理员",
+  generatedImageUrl: "https://example.invalid/success.png"
+});
 
 const threadContextSnapshot = {
   schemaVersion: 1,
@@ -53,8 +69,7 @@ describe("SessionStore", () => {
     const databasePath = path.join(directory, "sessions.sqlite");
     const before = new SessionStore({ databasePath });
     storeForCleanup(before);
-    before.enqueueEvent({ sessionId: "group:effect", kind: "incoming", payload: {} });
-    const turn = before.claimNextTurn({ workerId: "turn" })!;
+    const turn = claimIncoming(before, "group:effect", "turn", {});
     before.finishTurn({
       turnId: turn.turn.id,
       workerId: "turn",
@@ -156,8 +171,7 @@ describe("SessionStore", () => {
     const databasePath = path.join(directory, "sessions.sqlite");
     const before = new SessionStore({ databasePath });
     storeForCleanup(before);
-    before.enqueueEvent({ sessionId: "group:settle", kind: "incoming", payload: {} });
-    const turn = before.claimNextTurn({ workerId: "turn" })!;
+    const turn = claimIncoming(before, "group:settle", "turn", {});
     before.finishTurn({
       turnId: turn.turn.id,
       workerId: "turn",
@@ -201,8 +215,7 @@ describe("SessionStore", () => {
     const databasePath = path.join(directory, "sessions.sqlite");
     const before = new SessionStore({ databasePath });
     storeForCleanup(before);
-    before.enqueueEvent({ sessionId: "group:unknown", kind: "incoming", payload: {} });
-    const turn = before.claimNextTurn({ workerId: "turn" })!;
+    const turn = claimIncoming(before, "group:unknown", "turn", {});
     before.finishTurn({
       turnId: turn.turn.id,
       workerId: "turn",
@@ -260,8 +273,7 @@ describe("SessionStore", () => {
     const databasePath = path.join(directory, "sessions.sqlite");
     const before = new SessionStore({ databasePath });
     storeForCleanup(before);
-    before.enqueueEvent({ sessionId: "private:asset-unknown", kind: "incoming", payload: {} });
-    const turn = before.claimNextTurn({ workerId: "turn" })!;
+    const turn = claimIncoming(before, "private:asset-unknown", "turn", {});
     before.finishTurn({
       turnId: turn.turn.id,
       workerId: "turn",
@@ -314,7 +326,7 @@ describe("SessionStore", () => {
     }).id).toBe(nestedReplay.id);
     expect(after.listOutbox("private:asset-unknown")).toHaveLength(3);
 
-    after.enqueueEvent({ sessionId: "private:asset-replay-tamper", kind: "incoming", payload: {} });
+    enqueueIncoming(after, "private:asset-replay-tamper", {});
     const inspection = new DatabaseSync(databasePath);
     inspection.exec("PRAGMA foreign_keys = ON");
     inspection.prepare("UPDATE outbox SET session_id = ? WHERE id = ?")
@@ -329,20 +341,16 @@ describe("SessionStore", () => {
 
   it("replays released held outbox with bounded trusted lineage and a stable dedupe key", async () => {
     const { store } = await createHarness();
-    const gate = heldReplyGate();
-    const { turn, event } = createClaimedHeldTurn(store, "private:held-replay", "held-replay-turn");
+    const gate = HELD_FIXTURE.gate;
+    const { turn, event } = claimIncoming(store, "private:held-replay", "held-replay-turn");
     const held = store.appendHeldTurnOutbox({
       turnId: turn.id,
       workerId: "held-replay-turn",
       dedupeKey: `turn-outbox:${event.id}:1`,
-      draft: heldReplyDraft(gate, "unchanged"),
-      hold: heldOptions(gate, "unchanged")
+      draft: HELD_FIXTURE.draft("unchanged"),
+      hold: HELD_FIXTURE.options("unchanged")
     }).outbox;
-    store.releaseHeldOutbox({
-      outboxId: held.id,
-      mutationFingerprint: TEST_MUTATION_FINGERPRINT,
-      replyGate: gate
-    });
+    releaseHeld(store, held.id, gate);
     store.finishTurn({
       turnId: turn.id,
       workerId: "held-replay-turn",
@@ -356,12 +364,12 @@ describe("SessionStore", () => {
     });
     expect(firstReplay).toMatchObject({
       holdState: "released",
-      mutationFingerprint: TEST_MUTATION_FINGERPRINT,
-      dedupeKey: `outbox-replay:${held.id}:${TEST_MUTATION_FINGERPRINT}`,
+      mutationFingerprint: HELD_FIXTURE.fingerprint,
+      dedupeKey: `outbox-replay:${held.id}:${HELD_FIXTURE.fingerprint}`,
       holdProvenance: {
         lineage: [{
           outboxId: held.id,
-          mutationFingerprint: TEST_MUTATION_FINGERPRINT,
+          mutationFingerprint: HELD_FIXTURE.fingerprint,
           holdState: "released"
         }]
       },
@@ -387,13 +395,13 @@ describe("SessionStore", () => {
 
   it("does not upgrade ordinary markers, replay held rows, or accept a cross-session replay collision", async () => {
     const { store } = await createHarness();
-    const gate = heldReplyGate();
-    const ordinaryClaim = createClaimedHeldTurn(
+    const gate = HELD_FIXTURE.gate;
+    const ordinaryClaim = claimIncoming(
       store,
       "private:ordinary-marker-replay",
       "ordinary-marker-turn"
     );
-    const markerDraft = heldReplyDraft(gate, "private_scope_plus_one");
+    const markerDraft = HELD_FIXTURE.draft("private_scope_plus_one");
     const ordinary = store.finishTurn({
       turnId: ordinaryClaim.turn.id,
       workerId: "ordinary-marker-turn",
@@ -408,13 +416,13 @@ describe("SessionStore", () => {
     expect(ordinaryReplay).toMatchObject({ holdState: "none" });
     expect(ordinaryReplay.mutationFingerprint).toBeUndefined();
 
-    const heldClaim = createClaimedHeldTurn(store, "private:held-no-replay", "held-no-replay-turn");
+    const heldClaim = claimIncoming(store, "private:held-no-replay", "held-no-replay-turn");
     const stillHeld = store.appendHeldTurnOutbox({
       turnId: heldClaim.turn.id,
       workerId: "held-no-replay-turn",
       dedupeKey: `turn-outbox:${heldClaim.event.id}:1`,
-      draft: heldReplyDraft(gate, "unchanged"),
-      hold: heldOptions(gate, "unchanged")
+      draft: HELD_FIXTURE.draft("unchanged"),
+      hold: HELD_FIXTURE.options("unchanged")
     }).outbox;
     const database = (store as unknown as { database: DatabaseSync }).database;
     database.prepare(`
@@ -427,7 +435,7 @@ describe("SessionStore", () => {
       confirmedNotSent: true
     })).toThrow("cannot be replayed before release");
 
-    const sourceClaim = createClaimedHeldTurn(
+    const sourceClaim = claimIncoming(
       store,
       "private:held-global-collision-source",
       "held-global-source-turn"
@@ -436,14 +444,10 @@ describe("SessionStore", () => {
       turnId: sourceClaim.turn.id,
       workerId: "held-global-source-turn",
       dedupeKey: `turn-outbox:${sourceClaim.event.id}:1`,
-      draft: heldReplyDraft(gate, "unchanged"),
-      hold: heldOptions(gate, "unchanged")
+      draft: HELD_FIXTURE.draft("unchanged"),
+      hold: HELD_FIXTURE.options("unchanged")
     }).outbox;
-    store.releaseHeldOutbox({
-      outboxId: source.id,
-      mutationFingerprint: TEST_MUTATION_FINGERPRINT,
-      replyGate: gate
-    });
+    releaseHeld(store, source.id, gate);
     store.finishTurn({
       turnId: sourceClaim.turn.id,
       workerId: "held-global-source-turn",
@@ -451,7 +455,7 @@ describe("SessionStore", () => {
     });
     quarantineOutbox(store, source.id, "held-global-source-sender");
 
-    const collisionClaim = createClaimedHeldTurn(
+    const collisionClaim = claimIncoming(
       store,
       "private:held-global-collision-foreign",
       "held-global-foreign-turn"
@@ -463,7 +467,7 @@ describe("SessionStore", () => {
       outbox: [{
         kind: "reply",
         deliveryPartition: "foreign-partition",
-        dedupeKey: `outbox-replay:${source.id}:${TEST_MUTATION_FINGERPRINT}`,
+        dedupeKey: `outbox-replay:${source.id}:${HELD_FIXTURE.fingerprint}`,
         payload: { text: "foreign collision" }
       }]
     });
@@ -685,11 +689,7 @@ describe("SessionStore", () => {
       dedupeKey: "onebot:1002",
       payload: { text: "second" }
     });
-    const other = store.enqueueEvent({
-      sessionId: "group:200",
-      kind: "incoming",
-      payload: { text: "parallel" }
-    });
+    const other = enqueueIncoming(store, "group:200", { text: "parallel" });
 
     expect(duplicate).toEqual({ event: first.event, inserted: false });
     expect(second.event.sequence).toBe(2);
@@ -738,24 +738,9 @@ describe("SessionStore", () => {
 
   it("finds and reschedules pending or active events without bypassing Session heads", async () => {
     const { store, advance } = await createHarness();
-    const firstHead = store.enqueueEvent({
-      sessionId: "debounce:first",
-      kind: "reply_debounce",
-      payload: { text: "head" },
-      availableAt: 1_500
-    }).event;
-    const hiddenTail = store.enqueueEvent({
-      sessionId: "debounce:first",
-      kind: "reply_debounce",
-      payload: { text: "tail" },
-      availableAt: 1_100
-    }).event;
-    store.enqueueEvent({
-      sessionId: "debounce:second",
-      kind: "reply_debounce",
-      payload: { text: "other" },
-      availableAt: 1_300
-    });
+    const firstHead = enqueueDebounce(store, "debounce:first", { text: "head" }, { availableAt: 1_500 }).event;
+    const hiddenTail = enqueueDebounce(store, "debounce:first", { text: "tail" }, { availableAt: 1_100 }).event;
+    enqueueDebounce(store, "debounce:second", { text: "other" }, { availableAt: 1_300 });
 
     expect(store.getPendingEvent("debounce:first", "reply_debounce")?.id).toBe(hiddenTail.id);
     expect(store.getActiveEvent("debounce:first", "reply_debounce")?.id).toBe(hiddenTail.id);
@@ -797,26 +782,10 @@ describe("SessionStore", () => {
       clock: () => 1_000,
       idFactory: () => ids.shift() ?? `generated-${++generatedId}`
     }));
-    const activeB = store.enqueueEvent({
-      sessionId: "active:list:b",
-      kind: "reply_debounce",
-      payload: { sender: "b" }
-    }).event;
-    const activeA = store.enqueueEvent({
-      sessionId: "active:list:a",
-      kind: "reply_debounce",
-      payload: { sender: "a" }
-    }).event;
-    store.enqueueEvent({
-      sessionId: "active:list:other",
-      kind: "incoming",
-      payload: {}
-    });
-    const terminal = store.enqueueEvent({
-      sessionId: "active:list:completed",
-      kind: "reply_debounce",
-      payload: {}
-    }).event;
+    const activeB = enqueueDebounce(store, "active:list:b", { sender: "b" }).event;
+    const activeA = enqueueDebounce(store, "active:list:a", { sender: "a" }).event;
+    enqueueIncoming(store, "active:list:other", {});
+    const terminal = enqueueDebounce(store, "active:list:completed", {}).event;
     expect(store.claimNextTurn({
       workerId: "active-list-running",
       sessionId: activeB.sessionId
@@ -841,13 +810,7 @@ describe("SessionStore", () => {
 
   it("atomically replaces an active event deadline and payload while preserving envelope metadata", async () => {
     const { store, advance } = await createHarness();
-    const event = store.enqueueEvent({
-      sessionId: "debounce:active-update",
-      kind: "reply_debounce",
-      dedupeKey: "debounce:active-update:sender",
-      payload: { trigger: "message-1", followUps: [] },
-      availableAt: 1_200
-    }).event;
+    const event = enqueueDebounce(store, "debounce:active-update", { trigger: "message-1", followUps: [] }, { dedupeKey: "debounce:active-update:sender", availableAt: 1_200 }).event;
     const database = (store as unknown as { database: DatabaseSync }).database;
     const readStoredEnvelope = () => JSON.parse(String((database.prepare(`
       SELECT payload_json FROM session_events WHERE id = ?
@@ -951,12 +914,7 @@ describe("SessionStore", () => {
 
   it("rolls back both active event fields when persistence rejects the update", async () => {
     const { store } = await createHarness();
-    const event = store.enqueueEvent({
-      sessionId: "debounce:active-update-fault",
-      kind: "reply_debounce",
-      payload: { trigger: "message-1", followUps: [] },
-      availableAt: 1_400
-    }).event;
+    const event = enqueueDebounce(store, "debounce:active-update-fault", { trigger: "message-1", followUps: [] }, { availableAt: 1_400 }).event;
     const database = (store as unknown as { database: DatabaseSync }).database;
     database.exec(`
       CREATE TRIGGER inject_active_event_update_failure
@@ -994,13 +952,7 @@ describe("SessionStore", () => {
 
   it("atomically hands a control turn to a deduplicated target event", async () => {
     const { store } = await createHarness();
-    const source = store.enqueueEvent({
-      sessionId: "debounce:handoff",
-      kind: "reply_debounce",
-      dedupeKey: "debounce:handoff:source",
-      payload: { trigger: "message-1" },
-      availableAt: 1_000
-    }).event;
+    const source = enqueueDebounce(store, "debounce:handoff", { trigger: "message-1" }, { dedupeKey: "debounce:handoff:source", availableAt: 1_000 }).event;
     const claim = store.claimNextTurn({ workerId: "handoff-worker" })!;
     const input = {
       turnId: claim.turn.id,
@@ -1043,12 +995,7 @@ describe("SessionStore", () => {
       dedupeKey: "handoff:already-present",
       payload: { trigger: "already present" }
     }).event;
-    const secondSource = store.enqueueEvent({
-      sessionId: "debounce:existing-target",
-      kind: "reply_debounce",
-      payload: {},
-      availableAt: 1_000
-    }).event;
+    const secondSource = enqueueDebounce(store, "debounce:existing-target", {}, { availableAt: 1_000 }).event;
     const secondClaim = store.claimNextTurn({
       workerId: "handoff-existing-worker",
       sessionId: "debounce:existing-target"
@@ -1090,11 +1037,7 @@ describe("SessionStore", () => {
         }
       }
     }).event;
-    const source = store.enqueueEvent({
-      sessionId: "debounce:handoff-canonical-order",
-      kind: "reply_debounce",
-      payload: {}
-    }).event;
+    const source = enqueueDebounce(store, "debounce:handoff-canonical-order", {}).event;
     const claim = store.claimNextTurn({
       workerId: "handoff-canonical-order",
       sessionId: source.sessionId
@@ -1124,64 +1067,20 @@ describe("SessionStore", () => {
   });
 
   it.each([
-    {
-      label: "kind",
-      existingKind: "different_kind",
-      existingPayload: {
-        incoming: { senderId: "sender-a", messageId: "message-1" },
-        replyGate: { revision: 1 },
-        contextThroughSequence: 4
-      }
-    },
-    {
-      label: "sender",
-      existingKind: "incoming",
-      existingPayload: {
-        incoming: { senderId: "sender-b", messageId: "message-1" },
-        replyGate: { revision: 1 },
-        contextThroughSequence: 4
-      }
-    },
-    {
-      label: "message",
-      existingKind: "incoming",
-      existingPayload: {
-        incoming: { senderId: "sender-a", messageId: "message-2" },
-        replyGate: { revision: 1 },
-        contextThroughSequence: 4
-      }
-    },
-    {
-      label: "gate",
-      existingKind: "incoming",
-      existingPayload: {
-        incoming: { senderId: "sender-a", messageId: "message-1" },
-        replyGate: { revision: 2 },
-        contextThroughSequence: 4
-      }
-    },
-    {
-      label: "context",
-      existingKind: "incoming",
-      existingPayload: {
-        incoming: { senderId: "sender-a", messageId: "message-1" },
-        replyGate: { revision: 1 },
-        contextThroughSequence: 5
-      }
-    }
-  ])("rejects a handoff target dedupe $label collision without changing the source", async ({
+    ["kind", "different_kind", handoffPayload()],
+    ["sender", "incoming", handoffPayload({ senderId: "sender-b" })],
+    ["message", "incoming", handoffPayload({ messageId: "message-2" })],
+    ["gate", "incoming", handoffPayload({ revision: 2 })],
+    ["context", "incoming", handoffPayload({ contextThroughSequence: 5 })]
+  ])("rejects a handoff target dedupe %s collision without changing the source", async (
     label,
     existingKind,
     existingPayload
-  }) => {
+  ) => {
     const { store } = await createHarness();
     const targetSessionId = `group:handoff-collision:${label}`;
     const targetDedupeKey = `handoff:collision:${label}`;
-    const requestedPayload = {
-      incoming: { senderId: "sender-a", messageId: "message-1" },
-      replyGate: { revision: 1 },
-      contextThroughSequence: 4
-    };
+    const requestedPayload = handoffPayload();
     const existing = store.enqueueEvent({
       sessionId: targetSessionId,
       kind: existingKind,
@@ -1194,11 +1093,7 @@ describe("SessionStore", () => {
       dedupeKey: targetDedupeKey,
       payload: requestedPayload
     })).toMatchObject({ inserted: false, event: { id: existing.id } });
-    const source = store.enqueueEvent({
-      sessionId: `debounce:handoff-collision:${label}`,
-      kind: "reply_debounce",
-      payload: {}
-    }).event;
+    const source = enqueueDebounce(store, `debounce:handoff-collision:${label}`, {}).event;
     const claim = store.claimNextTurn({
       workerId: `handoff-collision:${label}`,
       sessionId: source.sessionId
@@ -1245,11 +1140,7 @@ describe("SessionStore", () => {
       UPDATE session_events SET payload_json = json_set(payload_json, ?, ?)
       WHERE id = ?
     `).run(`$.${field}`, replacement, existing.id);
-    const source = store.enqueueEvent({
-      sessionId: `debounce:handoff-provenance:${field}`,
-      kind: "reply_debounce",
-      payload: {}
-    }).event;
+    const source = enqueueDebounce(store, `debounce:handoff-provenance:${field}`, {}).event;
     const claim = store.claimNextTurn({
       workerId: `handoff-provenance:${field}`,
       sessionId: source.sessionId
@@ -1272,12 +1163,7 @@ describe("SessionStore", () => {
 
   it("lets a deadline bump win a running handoff and retries from pending", async () => {
     const { store, advance } = await createHarness();
-    const source = store.enqueueEvent({
-      sessionId: "debounce:race",
-      kind: "reply_debounce",
-      payload: { trigger: "message-1" },
-      availableAt: 1_000
-    }).event;
+    const source = enqueueDebounce(store, "debounce:race", { trigger: "message-1" }, { availableAt: 1_000 }).event;
     const first = store.claimNextTurn({ workerId: "handoff:first" })!;
     expect(store.bumpActiveEventAvailableAt(source.id, "reply_debounce", 1_500)).toMatchObject({
       status: "running",
@@ -1327,12 +1213,7 @@ describe("SessionStore", () => {
 
   it("rolls back the target event when source handoff completion fails", async () => {
     const { store } = await createHarness();
-    const source = store.enqueueEvent({
-      sessionId: "debounce:fault",
-      kind: "reply_debounce",
-      payload: {},
-      availableAt: 1_000
-    }).event;
+    const source = enqueueDebounce(store, "debounce:fault", {}, { availableAt: 1_000 }).event;
     const claim = store.claimNextTurn({ workerId: "handoff:fault" })!;
     const database = (store as unknown as { database: DatabaseSync }).database;
     database.exec(`
@@ -1372,16 +1253,8 @@ describe("SessionStore", () => {
 
   it("appends a running turn outbox idempotently across attempts and rejects key collisions", async () => {
     const { store } = await createHarness();
-    const firstEvent = store.enqueueEvent({
-      sessionId: "group:active-outbox",
-      kind: "incoming",
-      payload: { text: "first" }
-    });
-    store.enqueueEvent({
-      sessionId: "group:active-outbox",
-      kind: "incoming",
-      payload: { text: "second" }
-    });
+    const firstEvent = enqueueIncoming(store, "group:active-outbox", { text: "first" });
+    enqueueIncoming(store, "group:active-outbox", { text: "second" });
     const firstAttempt = store.claimNextTurn({ workerId: "worker:first" })!;
     const input = {
       turnId: firstAttempt.turn.id,
@@ -1449,16 +1322,15 @@ describe("SessionStore", () => {
 
   it("inserts held outbox directly and blocks its Session and delivery partition FIFO", async () => {
     const { store } = await createHarness();
-    const gate = heldReplyGate();
-    store.enqueueEvent({ sessionId: "private:held", kind: "incoming", payload: {} });
-    const heldTurn = store.claimNextTurn({ workerId: "held-turn", sessionId: "private:held" })!;
+    const gate = HELD_FIXTURE.gate;
+    const heldTurn = claimIncoming(store, "private:held", "held-turn", {});
     const database = (store as unknown as { database: DatabaseSync }).database;
     const appendInput = {
       turnId: heldTurn.turn.id,
       workerId: "held-turn",
       dedupeKey: `turn-outbox:${heldTurn.event.id}:1`,
-      draft: heldReplyDraft(gate, "private_scope_plus_one"),
-      hold: heldOptions(gate, "private_scope_plus_one")
+      draft: HELD_FIXTURE.draft("private_scope_plus_one"),
+      hold: HELD_FIXTURE.options("private_scope_plus_one")
     };
     database.exec(`
       CREATE TRIGGER inject_held_insert_failure
@@ -1486,7 +1358,7 @@ describe("SessionStore", () => {
       inserted: true,
       outbox: {
         holdState: "held",
-        mutationFingerprint: TEST_MUTATION_FINGERPRINT,
+        mutationFingerprint: HELD_FIXTURE.fingerprint,
         status: "pending",
         holdProvenance: {
           schemaVersion: 1,
@@ -1501,12 +1373,12 @@ describe("SessionStore", () => {
       turnId: heldTurn.turn.id,
       workerId: "held-turn",
       dedupeKey: `turn-outbox:${heldTurn.event.id}:1`,
-      draft: heldReplyDraft(gate, "private_scope_plus_one"),
-      hold: heldOptions(gate, "private_scope_plus_one")
+      draft: HELD_FIXTURE.draft("private_scope_plus_one"),
+      hold: HELD_FIXTURE.options("private_scope_plus_one")
     })).toEqual({ outbox: held.outbox, inserted: false });
     expect(store.claimNextOutbox({ workerId: "blocked", sessionId: "private:held" })).toBeNull();
 
-    store.enqueueEvent({ sessionId: "private:same-partition", kind: "incoming", payload: {} });
+    enqueueIncoming(store, "private:same-partition", {});
     const samePartitionTurn = store.claimNextTurn({
       workerId: "same-partition-turn",
       sessionId: "private:same-partition"
@@ -1522,7 +1394,7 @@ describe("SessionStore", () => {
       sessionId: "private:same-partition"
     })).toBeNull();
 
-    store.enqueueEvent({ sessionId: "private:other-partition", kind: "incoming", payload: {} });
+    enqueueIncoming(store, "private:other-partition", {});
     const otherTurn = store.claimNextTurn({
       workerId: "other-turn",
       sessionId: "private:other-partition"
@@ -1542,9 +1414,9 @@ describe("SessionStore", () => {
       turnId: heldTurn.turn.id,
       workerId: "held-turn",
       dedupeKey: `turn-outbox:${heldTurn.event.id}:1`,
-      draft: heldReplyDraft(gate, "private_scope_plus_one"),
+      draft: HELD_FIXTURE.draft("private_scope_plus_one"),
       hold: {
-        ...heldOptions(gate, "private_scope_plus_one"),
+        ...HELD_FIXTURE.options("private_scope_plus_one"),
         mutationFingerprint: `sha256:${"b".repeat(64)}`
       }
     })).toThrow("mutation fingerprint changed");
@@ -1552,30 +1424,15 @@ describe("SessionStore", () => {
 
   it("releases held outbox only for the recorded gate transition and stays idempotent", async () => {
     const { store } = await createHarness();
-    const gate = heldReplyGate();
-    const { turn, event } = createClaimedHeldTurn(store, "private:release", "release-turn");
-    const held = store.appendHeldTurnOutbox({
-      turnId: turn.id,
-      workerId: "release-turn",
-      dedupeKey: `turn-outbox:${event.id}:1`,
-      draft: heldReplyDraft(gate, "private_scope_plus_one"),
-      hold: heldOptions(gate, "private_scope_plus_one")
-    }).outbox;
+    const gate = HELD_FIXTURE.gate;
+    const { outbox: held } = appendHeld(store, "private:release", "release-turn", "private_scope_plus_one");
 
-    expect(() => store.releaseHeldOutbox({
-      outboxId: held.id,
-      mutationFingerprint: TEST_MUTATION_FINGERPRINT,
-      replyGate: { ...gate, scopeEpoch: gate.scopeEpoch + 2 }
-    })).toThrow("release gate");
-    expect(() => store.releaseHeldOutbox({
-      outboxId: held.id,
-      mutationFingerprint: TEST_MUTATION_FINGERPRINT,
-      replyGate: { ...gate, generation: "other-generation", scopeEpoch: 0, conversationEpoch: 0 }
+    expect(() => releaseHeld(store, held.id, { ...gate, scopeEpoch: gate.scopeEpoch + 2 })).toThrow("release gate");
+    expect(() => releaseHeld(store, held.id, {
+      ...gate, generation: "other-generation", scopeEpoch: 0, conversationEpoch: 0
     })).toThrow("generation changed");
-    expect(() => store.neutralizeAndReleaseHeldOutbox({
-      outboxId: held.id,
-      mutationFingerprint: TEST_MUTATION_FINGERPRINT,
-      replyGate: { ...gate, generation: "other-generation", scopeEpoch: 0, conversationEpoch: 1 }
+    expect(() => neutralizeHeld(store, held.id, {
+      ...gate, generation: "other-generation", scopeEpoch: 0, conversationEpoch: 1
     })).toThrow("generation changed");
     expect(store.getOutbox(held.id)).toMatchObject({ holdState: "held" });
 
@@ -1589,19 +1446,11 @@ describe("SessionStore", () => {
         SELECT RAISE(ABORT, 'injected release failure');
       END;
     `);
-    expect(() => store.releaseHeldOutbox({
-      outboxId: held.id,
-      mutationFingerprint: TEST_MUTATION_FINGERPRINT,
-      replyGate: releaseGate
-    })).toThrow("injected release failure");
+    expect(() => releaseHeld(store, held.id, releaseGate)).toThrow("injected release failure");
     expect(store.getOutbox(held.id)).toMatchObject({ holdState: "held" });
     expect(store.getOutbox(held.id)?.releaseProvenance).toBeUndefined();
     database.exec("DROP TRIGGER inject_release_failure");
-    const released = store.releaseHeldOutbox({
-      outboxId: held.id,
-      mutationFingerprint: TEST_MUTATION_FINGERPRINT,
-      replyGate: releaseGate
-    });
+    const released = releaseHeld(store, held.id, releaseGate);
     expect(released).toMatchObject({
       holdState: "released",
       releaseProvenance: {
@@ -1611,15 +1460,9 @@ describe("SessionStore", () => {
         releasedAt: 1_000
       }
     });
-    expect(store.releaseHeldOutbox({
-      outboxId: held.id,
-      mutationFingerprint: TEST_MUTATION_FINGERPRINT,
-      replyGate: releaseGate
-    })).toEqual(released);
-    expect(() => store.releaseHeldOutbox({
-      outboxId: held.id,
-      mutationFingerprint: TEST_MUTATION_FINGERPRINT,
-      replyGate: { ...releaseGate, conversationEpoch: 1 }
+    expect(releaseHeld(store, held.id, releaseGate)).toEqual(released);
+    expect(() => releaseHeld(store, held.id, {
+      ...releaseGate, conversationEpoch: 1
     })).toThrow("release provenance changed");
     expect(store.claimNextOutbox({ workerId: "released-sender" })).toMatchObject({
       id: held.id,
@@ -1629,15 +1472,8 @@ describe("SessionStore", () => {
 
   it("atomically neutralizes a held confirmation and leaves the success payload unreachable on failure", async () => {
     const { store } = await createHarness();
-    const gate = heldReplyGate();
-    const { turn, event } = createClaimedHeldTurn(store, "private:fallback", "fallback-turn");
-    const held = store.appendHeldTurnOutbox({
-      turnId: turn.id,
-      workerId: "fallback-turn",
-      dedupeKey: `turn-outbox:${event.id}:1`,
-      draft: heldReplyDraft(gate, "unchanged"),
-      hold: heldOptions(gate, "unchanged")
-    }).outbox;
+    const gate = HELD_FIXTURE.gate;
+    const { outbox: held } = appendHeld(store, "private:fallback", "fallback-turn", "unchanged");
     const database = (store as unknown as { database: DatabaseSync }).database;
     database.exec(`
       CREATE TRIGGER inject_neutralize_failure
@@ -1647,11 +1483,7 @@ describe("SessionStore", () => {
         SELECT RAISE(ABORT, 'injected neutralize failure');
       END;
     `);
-    expect(() => store.neutralizeAndReleaseHeldOutbox({
-      outboxId: held.id,
-      mutationFingerprint: TEST_MUTATION_FINGERPRINT,
-      replyGate: gate
-    })).toThrow("injected neutralize failure");
+    expect(() => neutralizeHeld(store, held.id, gate)).toThrow("injected neutralize failure");
     expect(store.getOutbox(held.id)).toMatchObject({ holdState: "held" });
     expect(store.getOutbox(held.id)?.releaseProvenance).toBeUndefined();
     expect(decodeAssistantReply(store.getOutbox(held.id)!.payload)).toMatchObject({
@@ -1660,11 +1492,7 @@ describe("SessionStore", () => {
     });
 
     database.exec("DROP TRIGGER inject_neutralize_failure");
-    const fallback = store.neutralizeAndReleaseHeldOutbox({
-      outboxId: held.id,
-      mutationFingerprint: TEST_MUTATION_FINGERPRINT,
-      replyGate: gate
-    });
+    const fallback = neutralizeHeld(store, held.id, gate);
     expect(fallback).toMatchObject({
       holdState: "fallback_released",
       releaseProvenance: { outcome: "fallback_released", replyGate: gate }
@@ -1676,24 +1504,12 @@ describe("SessionStore", () => {
       toolNames: ["system_config"]
     });
     expect(decodeAssistantReply(fallback.payload).deliverySemantics).toBeUndefined();
-    expect(store.neutralizeAndReleaseHeldOutbox({
-      outboxId: held.id,
-      mutationFingerprint: TEST_MUTATION_FINGERPRINT,
-      replyGate: gate
-    })).toEqual(fallback);
+    expect(neutralizeHeld(store, held.id, gate)).toEqual(fallback);
   });
 
   it("rejects non-canonical held provenance even when the stored JSON is valid", async () => {
     const { store } = await createHarness();
-    const gate = heldReplyGate();
-    const { turn, event } = createClaimedHeldTurn(store, "private:strict-held", "strict-held-turn");
-    const held = store.appendHeldTurnOutbox({
-      turnId: turn.id,
-      workerId: "strict-held-turn",
-      dedupeKey: `turn-outbox:${event.id}:1`,
-      draft: heldReplyDraft(gate, "unchanged"),
-      hold: heldOptions(gate, "unchanged")
-    }).outbox;
+    const { outbox: held } = appendHeld(store, "private:strict-held", "strict-held-turn", "unchanged");
     const database = (store as unknown as { database: DatabaseSync }).database;
     database.prepare(`
       UPDATE outbox
@@ -1711,15 +1527,10 @@ describe("SessionStore", () => {
 
   it("neutralizes held outbox in the same transaction that finishes its origin turn", async () => {
     const { store } = await createHarness();
-    const gate = heldReplyGate();
-    const { turn, event } = createClaimedHeldTurn(store, "private:finish-held", "finish-held-turn");
-    const held = store.appendHeldTurnOutbox({
-      turnId: turn.id,
-      workerId: "finish-held-turn",
-      dedupeKey: `turn-outbox:${event.id}:1`,
-      draft: heldReplyDraft(gate, "private_scope_plus_one"),
-      hold: heldOptions(gate, "private_scope_plus_one")
-    }).outbox;
+    const gate = HELD_FIXTURE.gate;
+    const { turn, event, outbox: held } = appendHeld(
+      store, "private:finish-held", "finish-held-turn", "private_scope_plus_one"
+    );
     const database = (store as unknown as { database: DatabaseSync }).database;
     database.exec(`
       CREATE TRIGGER inject_finish_held_failure
@@ -1764,28 +1575,14 @@ describe("SessionStore", () => {
       clock: () => 1_000
     });
     storeForCleanup(before);
-    const gate = heldReplyGate();
-    const heldClaim = createClaimedHeldTurn(before, "private:recover-held", "recover-held-turn");
-    const held = before.appendHeldTurnOutbox({
-      turnId: heldClaim.turn.id,
-      workerId: "recover-held-turn",
-      dedupeKey: `turn-outbox:${heldClaim.event.id}:1`,
-      draft: heldReplyDraft(gate, "private_scope_plus_one"),
-      hold: heldOptions(gate, "private_scope_plus_one")
-    }).outbox;
-    const releasedClaim = createClaimedHeldTurn(before, "private:recover-released", "recover-released-turn");
-    const releasedHeld = before.appendHeldTurnOutbox({
-      turnId: releasedClaim.turn.id,
-      workerId: "recover-released-turn",
-      dedupeKey: `turn-outbox:${releasedClaim.event.id}:1`,
-      draft: heldReplyDraft(gate, "unchanged"),
-      hold: heldOptions(gate, "unchanged")
-    }).outbox;
-    before.releaseHeldOutbox({
-      outboxId: releasedHeld.id,
-      mutationFingerprint: TEST_MUTATION_FINGERPRINT,
-      replyGate: gate
-    });
+    const gate = HELD_FIXTURE.gate;
+    const { outbox: held, ...heldClaim } = appendHeld(
+      before, "private:recover-held", "recover-held-turn", "private_scope_plus_one"
+    );
+    const { outbox: releasedHeld, ...releasedClaim } = appendHeld(
+      before, "private:recover-released", "recover-released-turn", "unchanged"
+    );
+    releaseHeld(before, releasedHeld.id, gate);
     before.close();
     stores.splice(stores.indexOf(before), 1);
 
@@ -1824,12 +1621,7 @@ describe("SessionStore", () => {
 
   it("atomically defers a turn into a queued tool job and acknowledgement", async () => {
     const { store } = await createHarness();
-    const incoming = store.enqueueEvent({
-      sessionId: "group:300",
-      kind: "incoming",
-      payload: { text: "inspect the workspace" }
-    });
-    const claim = store.claimNextTurn({ workerId: "agent" })!;
+    const claim = claimIncoming(store, "group:300", "agent", { text: "inspect the workspace" });
 
     const deferred = store.deferTurn({
       turnId: claim.turn.id,
@@ -1849,7 +1641,7 @@ describe("SessionStore", () => {
 
     expect(deferred).toMatchObject({
       duplicate: false,
-      turn: { status: "deferred", eventId: incoming.event.id },
+      turn: { status: "deferred", eventId: claim.event.id },
       job: {
         status: "queued",
         providerCallId: "call_codex_1",
@@ -1862,7 +1654,7 @@ describe("SessionStore", () => {
         payload: { text: "任务已经开始。" }
       }
     });
-    expect(store.getEvent(incoming.event.id)?.status).toBe("completed");
+    expect(store.getEvent(claim.event.id)?.status).toBe("completed");
     expect(store.getSessionState("group:300")).toMatchObject({
       completedEventSequence: 1,
       nextOutboxSequence: 1
@@ -1891,19 +1683,14 @@ describe("SessionStore", () => {
 
   it("appends a deferred turn outbox only for its committed event and tool job", async () => {
     const { store } = await createHarness();
-    const incoming = store.enqueueEvent({
-      sessionId: "group:deferred-outbox",
-      kind: "incoming",
-      payload: { text: "start deferred work" }
-    });
-    const claim = store.claimNextTurn({ workerId: "agent" })!;
+    const claim = claimIncoming(store, "group:deferred-outbox", "agent", { text: "start deferred work" });
     store.deferTurn({
       turnId: claim.turn.id,
       workerId: "agent",
       job: {
         providerCallId: "call-deferred-outbox",
         toolName: "codex",
-        originalRequest: incoming.event.payload,
+        originalRequest: claim.event.payload,
         arguments: { task: "inspect" }
       },
       acknowledgement: { kind: "reply", payload: { text: "started" } }
@@ -1911,9 +1698,9 @@ describe("SessionStore", () => {
     const fingerprint = "a".repeat(64);
     const input = {
       turnId: claim.turn.id,
-      eventId: incoming.event.id,
+      eventId: claim.event.id,
       providerCallId: "call-deferred-outbox",
-      dedupeKey: `turn-outbox:${incoming.event.id}:1`,
+      dedupeKey: `turn-outbox:${claim.event.id}:1`,
       draft: {
         kind: "voice",
         payload: { text: "started" },
@@ -1939,12 +1726,7 @@ describe("SessionStore", () => {
 
   it("rejects non-deferred, mismatched, malformed, and fingerprint-changing deferred outbox appends", async () => {
     const { store } = await createHarness();
-    const incoming = store.enqueueEvent({
-      sessionId: "group:deferred-outbox-guard",
-      kind: "incoming",
-      payload: {}
-    });
-    const claim = store.claimNextTurn({ workerId: "agent" })!;
+    const claim = claimIncoming(store, "group:deferred-outbox-guard", "agent", {});
     store.deferTurn({
       turnId: claim.turn.id,
       workerId: "agent",
@@ -1958,9 +1740,9 @@ describe("SessionStore", () => {
     });
     const base = {
       turnId: claim.turn.id,
-      eventId: incoming.event.id,
+      eventId: claim.event.id,
       providerCallId: "call-guard",
-      dedupeKey: `turn-outbox:${incoming.event.id}:1`,
+      dedupeKey: `turn-outbox:${claim.event.id}:1`,
       draft: { kind: "voice", payload: {}, dedupeFingerprint: "b".repeat(64) }
     };
     store.appendDeferredTurnOutbox(base);
@@ -1979,22 +1761,17 @@ describe("SessionStore", () => {
     })).toThrow("dedupe fingerprint changed");
     expect(() => store.appendDeferredTurnOutbox({
       ...base,
-      dedupeKey: `turn-outbox:${incoming.event.id}:2`,
+      dedupeKey: `turn-outbox:${claim.event.id}:2`,
       draft: { ...base.draft, dedupeFingerprint: "not-a-digest" }
     })).toThrow("lowercase SHA-256 digest");
 
-    const ordinary = store.enqueueEvent({
-      sessionId: "group:not-deferred",
-      kind: "incoming",
-      payload: {}
-    });
-    const ordinaryClaim = store.claimNextTurn({ workerId: "ordinary", sessionId: ordinary.event.sessionId })!;
+    const ordinaryClaim = claimIncoming(store, "group:not-deferred", "ordinary", {});
     store.finishTurn({ turnId: ordinaryClaim.turn.id, workerId: "ordinary", outcome: "no_reply" });
     expect(() => store.appendDeferredTurnOutbox({
       ...base,
       turnId: ordinaryClaim.turn.id,
-      eventId: ordinary.event.id,
-      dedupeKey: `turn-outbox:${ordinary.event.id}:1`
+      eventId: ordinaryClaim.event.id,
+      dedupeKey: `turn-outbox:${ordinaryClaim.event.id}:1`
     })).toThrow("not deferred");
     expect(store.listOutbox("group:deferred-outbox-guard")).toHaveLength(2);
     expect(store.listOutbox("group:not-deferred")).toHaveLength(0);
@@ -2002,8 +1779,7 @@ describe("SessionStore", () => {
 
   it("appends one idempotent tool completion event at the session tail", async () => {
     const { store } = await createHarness();
-    store.enqueueEvent({ sessionId: "group:400", kind: "incoming", payload: { text: "first" } });
-    const origin = store.claimNextTurn({ workerId: "agent" })!;
+    const origin = claimIncoming(store, "group:400", "agent", { text: "first" });
     const originalRequest = {
       text: "first",
       captureSequence: 17,
@@ -2020,11 +1796,7 @@ describe("SessionStore", () => {
       },
       acknowledgement: { kind: "onebot.group", payload: { text: "开始研究。" } }
     });
-    const intervening = store.enqueueEvent({
-      sessionId: "group:400",
-      kind: "incoming",
-      payload: { text: "arrived while the tool ran" }
-    });
+    const intervening = enqueueIncoming(store, "group:400", { text: "arrived while the tool ran" });
 
     deliverPersistedOutbox(store, deferred.acknowledgement.id, "ack-worker");
     const job = store.claimNextToolJob({ workerId: "codex-worker" })!;
@@ -2079,11 +1851,10 @@ describe("SessionStore", () => {
     const harness = await createHarness();
     const { store } = harness;
 
-    store.enqueueEvent({ sessionId: "group:turn", kind: "incoming", payload: {} });
+    enqueueIncoming(store, "group:turn", {});
     const abandonedTurn = store.claimNextTurn({ workerId: "old-turn", leaseMs: 50 })!;
 
-    store.enqueueEvent({ sessionId: "group:job", kind: "incoming", payload: {} });
-    const jobTurn = store.claimNextTurn({ workerId: "agent", sessionId: "group:job" })!;
+    const jobTurn = claimIncoming(store, "group:job", "agent", {});
     const deferred = store.deferTurn({
       turnId: jobTurn.turn.id,
       workerId: "agent",
@@ -2098,8 +1869,7 @@ describe("SessionStore", () => {
     deliverPersistedOutbox(store, deferred.acknowledgement.id, "ack-worker");
     store.claimNextToolJob({ workerId: "old-job", leaseMs: 50, sessionId: "group:job" });
 
-    store.enqueueEvent({ sessionId: "group:outbox", kind: "incoming", payload: {} });
-    const outboxTurn = store.claimNextTurn({ workerId: "agent", sessionId: "group:outbox" })!;
+    const outboxTurn = claimIncoming(store, "group:outbox", "agent", {});
     const finished = store.finishTurn({
       turnId: outboxTurn.turn.id,
       workerId: "agent",
@@ -2130,8 +1900,7 @@ describe("SessionStore", () => {
 
   it("persists orphan process identity and fences a recovered tool attempt", async () => {
     const { store } = await createHarness();
-    store.enqueueEvent({ sessionId: "group:fence", kind: "incoming", payload: {} });
-    const turn = store.claimNextTurn({ workerId: "agent" })!;
+    const turn = claimIncoming(store, "group:fence", "agent", {});
     const deferred = store.deferTurn({
       turnId: turn.turn.id,
       workerId: "agent",
@@ -2195,12 +1964,7 @@ describe("SessionStore", () => {
 
     const before = new SessionStore(options());
     storeForCleanup(before);
-    const source = before.enqueueEvent({
-      sessionId: "debounce:bumped-restart",
-      kind: "reply_debounce",
-      payload: {},
-      availableAt: now
-    }).event;
+    const source = enqueueDebounce(before, "debounce:bumped-restart", {}, { availableAt: now }).event;
     const running = before.claimNextTurn({ workerId: "old-turn", leaseMs: 60_000 })!;
     expect(running.event.id).toBe(source.id);
     expect(before.bumpActiveEventAvailableAt(source.id, "reply_debounce", 15_000)).toMatchObject({
@@ -2248,11 +2012,10 @@ describe("SessionStore", () => {
 
     const before = new SessionStore(options());
     storeForCleanup(before);
-    before.enqueueEvent({ sessionId: "group:turn", kind: "incoming", payload: {} });
+    enqueueIncoming(before, "group:turn", {});
     const runningTurn = before.claimNextTurn({ workerId: "old-turn", leaseMs: 60_000 })!;
 
-    before.enqueueEvent({ sessionId: "group:job", kind: "incoming", payload: {} });
-    const origin = before.claimNextTurn({ workerId: "agent", sessionId: "group:job" })!;
+    const origin = claimIncoming(before, "group:job", "agent", {});
     const deferred = before.deferTurn({
       turnId: origin.turn.id,
       workerId: "agent",
@@ -2266,8 +2029,7 @@ describe("SessionStore", () => {
     });
     deliverPersistedOutbox(before, deferred.acknowledgement.id, "ack-worker");
     before.claimNextToolJob({ workerId: "old-job", leaseMs: 60_000, sessionId: "group:job" });
-    before.enqueueEvent({ sessionId: "group:outbox", kind: "incoming", payload: {} });
-    const outboxTurn = before.claimNextTurn({ workerId: "outbox-turn", sessionId: "group:outbox" })!;
+    const outboxTurn = claimIncoming(before, "group:outbox", "outbox-turn", {});
     const pendingOutbox = before.finishTurn({
       turnId: outboxTurn.turn.id,
       workerId: "outbox-turn",
@@ -2318,6 +2080,40 @@ async function createHarness() {
   };
 }
 
+function handoffPayload({
+  senderId = "sender-a",
+  messageId = "message-1",
+  revision = 1,
+  contextThroughSequence = 4
+}: Partial<{ senderId: string; messageId: string; revision: number; contextThroughSequence: number }> = {}) {
+  return { incoming: { senderId, messageId }, replyGate: { revision }, contextThroughSequence };
+}
+
+function appendHeld(
+  store: SessionStore,
+  sessionId: string,
+  workerId: string,
+  releasePolicy: "unchanged" | "private_scope_plus_one"
+) {
+  const claim = claimIncoming(store, sessionId, workerId);
+  const outbox = store.appendHeldTurnOutbox({
+    turnId: claim.turn.id,
+    workerId,
+    dedupeKey: `turn-outbox:${claim.event.id}:1`,
+    draft: HELD_FIXTURE.draft(releasePolicy),
+    hold: HELD_FIXTURE.options(releasePolicy)
+  }).outbox;
+  return { ...claim, outbox };
+}
+
+function releaseHeld(store: SessionStore, outboxId: string, replyGate: typeof HELD_FIXTURE.gate) {
+  return store.releaseHeldOutbox({ outboxId, mutationFingerprint: HELD_FIXTURE.fingerprint, replyGate });
+}
+
+function neutralizeHeld(store: SessionStore, outboxId: string, replyGate: typeof HELD_FIXTURE.gate) {
+  return store.neutralizeAndReleaseHeldOutbox({ outboxId, mutationFingerprint: HELD_FIXTURE.fingerprint, replyGate });
+}
+
 function storeForCleanup(store: SessionStore) {
   stores.push(store);
   return store;
@@ -2341,77 +2137,4 @@ function quarantineOutbox(store: SessionStore, outboxId: string, workerId: strin
     outcome: "delivery_unknown",
     error: { code: "confirmed_unknown_for_test" }
   });
-}
-
-const TEST_MUTATION_FINGERPRINT = `sha256:${"a".repeat(64)}`;
-
-function heldReplyGate(): ReplyGateSnapshotV1 {
-  return {
-    generation: "generation-held-v5",
-    scope: "private",
-    conversationId: "private:10001",
-    scopeEpoch: 4,
-    conversationEpoch: 7
-  };
-}
-
-function heldOptions(
-  originalReplyGate: ReplyGateSnapshotV1,
-  releasePolicy: "unchanged" | "private_scope_plus_one"
-) {
-  return {
-    mutationFingerprint: TEST_MUTATION_FINGERPRINT,
-    semantics: "system_config_confirmation" as const,
-    originalReplyGate,
-    releasePolicy
-  };
-}
-
-function heldReplyDraft(
-  replyGate: ReplyGateSnapshotV1,
-  releasePolicy: "unchanged" | "private_scope_plus_one"
-) {
-  return {
-    kind: "onebot.reply" as const,
-    deliveryPartition: "primary",
-    dedupeFingerprint: "reply-fingerprint",
-    payload: assistantReplyEnvelope({
-      type: "assistant_reply",
-      incoming: {
-        schemaVersion: 1,
-        transport: "onebot",
-        agentId: "plana",
-        accountId: "primary",
-        scope: "private",
-        messageId: 9001,
-        time: "2026-07-17T00:00:00.000Z",
-        userId: 10001,
-        selfId: 20002,
-        sender: { id: "10001", displayName: "管理员" },
-        text: "关闭私聊回复",
-        media: [],
-        attachments: [],
-        replyMessageIds: [],
-        quoteReferences: [],
-        mentionedSelf: false
-      },
-      text: "设置已经保存。",
-      generatedImages: [{ url: "https://example.invalid/success.png" }],
-      isAdmin: true,
-      messageOrigin: "text",
-      toolNames: ["system_config"],
-      ...(releasePolicy === "private_scope_plus_one"
-        ? { deliverySemantics: "system_config_confirmation" as const }
-        : {}),
-      replyGate
-    }, {
-      conversationId: replyGate.conversationId,
-      correlationId: "log-held-v5"
-    })
-  };
-}
-
-function createClaimedHeldTurn(store: SessionStore, sessionId: string, workerId: string) {
-  store.enqueueEvent({ sessionId, kind: "incoming", payload: {} });
-  return store.claimNextTurn({ workerId, sessionId })!;
 }

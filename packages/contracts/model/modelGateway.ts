@@ -1,3 +1,12 @@
+export type ChatRole = "system" | "developer" | "user" | "assistant";
+
+export interface ChatMessage {
+  role: ChatRole;
+  content: string;
+  imageUrls?: string[];
+  localImagePaths?: string[];
+}
+
 export interface ProviderLogContext {
   conversationId?: string;
   incomingMessageId?: string;

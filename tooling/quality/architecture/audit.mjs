@@ -7,6 +7,7 @@ export const ARCHITECTURE_RULES = [
   "structure",
   "path-drift",
   "service-boundary",
+  "layer-boundary",
   "contracts-boundary",
   "public-api",
   "executable-cycle",
@@ -149,6 +150,16 @@ export function auditArchitecture(projectRoot, overrides = {}) {
           source: source.relative,
           target: target.relative,
           message: `${source.relative}:${reference.line} imports forbidden boundary ${target.relative}`
+        });
+      }
+
+      if (rules.has("layer-boundary") && target.relative?.startsWith("src/")
+        && /^(?:adapters|packages\/platform)\//.test(source.relative)) {
+        report({
+          rule: "layer-boundary",
+          source: source.relative,
+          target: target.relative,
+          message: `${source.relative}:${reference.line} imports application composition boundary ${target.relative}`
         });
       }
 
@@ -359,7 +370,7 @@ function isForbiddenServiceTarget(relative) {
   return relative.startsWith("adapters/")
     || relative.startsWith("deploy/")
     || relative.startsWith("tooling/")
-    || relative.startsWith("src/admin/")
+    || relative.startsWith("src/")
     || relative.startsWith("apps/admin-web/")
     || relative.startsWith("admin/");
 }

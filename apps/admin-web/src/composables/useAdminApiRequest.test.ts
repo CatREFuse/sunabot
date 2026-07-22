@@ -11,7 +11,7 @@ afterEach(() => {
 describe("apiRequest session coordination", () => {
   it("waits for the administrator session before sending a write request", async () => {
     const session = deferred<Response>();
-    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchMock = vi.fn((input: RequestInfo | URL, _init?: RequestInit) => {
       if (String(input) === "/api/auth/session") return session.promise;
       return Promise.resolve(jsonResponse({ ok: true }));
     });

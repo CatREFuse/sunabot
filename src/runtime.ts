@@ -1,119 +1,49 @@
-import fs from "node:fs";
-import fsp from "node:fs/promises";
-import path from "node:path";
-import { nanoid } from "nanoid";
 import {
-  AppConfig,
-  ChatMessage,
-  ConversationMessageQuote,
-  ConversationRecord,
-  ImageResult,
-  ParsedIncomingMessage,
-  ReasoningEffort
+  type AppConfig,
+  type ConversationRecord,
+  type ParsedIncomingMessage
 } from "./types.js";
-import { resolveModelReasoningEffort } from "./admin/models.js";
 import { AttachmentService } from "../services/media/attachments/service.js";
-import type {
-  AttachmentExtractionContext,
-  ParsedAttachment
-} from "../services/media/attachments/types.js";
-import { CommandRouter, type CommandMatch } from "../services/messaging/commandRouter.js";
-import { isReplySenderAllowed } from "../services/messaging/replySenderPolicy.js";
-import { getAgentPrivatePath, getAgentSessionQueuePath, getDefaultProvider, getRootDir, getWorkspacePath, resolveProjectPath } from "./config.js";
+import { CommandRouter } from "../services/messaging/commandRouter.js";
 import {
-  assistantReplyEnvelope,
-  decodeAssistantReply,
-  decodeIncomingReply,
-  decodeToolCompletion,
-  incomingReplyEnvelope,
-  type AssistantReplyOutboxEnvelope,
-  type AssistantReplyOutboxPayload,
-  type AsyncToolCompletionPayload,
-  type RuntimeIncomingReplyEventPayload
-} from "../packages/contracts/session/runtimeMessages.js";
-import { applicationDataStore, sqliteMemoryPersistence } from "../adapters/sqlite/applicationDataStore.js";
+  getAgentPrivatePath,
+  getAgentSessionQueuePath,
+  getRootDir,
+  getWorkspacePath,
+  resolveProjectPath
+} from "./config.js";
+import { sqliteMemoryPersistence } from "../adapters/sqlite/applicationDataStore.js";
 import { configureMemoryPersistence } from "../services/memory/persistence.js";
-import {
-  ReplyGateEpochs,
-  isOrchestratorReplyRateLimited,
-  resolveUserGroupReplyRoute,
-  type ReplyGateSnapshot
-} from "../services/orchestration/groupReplyPolicy.js";
+import { ReplyGateEpochs } from "../services/orchestration/groupReplyPolicy.js";
 import { HookBus } from "../services/messaging/hookBus.js";
-import {
-  applyMemoryBatchTransaction,
-  ensureAgentTextFile,
-  formatMemoryMatchesForPrompt,
-  isMemoryBatchCommitted,
-  mergeUserProfileMemory,
-  normalizeEventMemorySchema,
-  readAgentTextFile,
-  readMemorySourceEntries,
-  readUserProfileForUser,
-  readWorkingMemorySnapshot,
-  recallMemory,
-  recoverMemoryTransactions,
-  replaceWorkingMemoryFacts,
-  resolveUserAddressName,
-  type MemoryEntry,
-  type MemoryFactInput
-} from "../services/memory/memoryService.js";
-import {
-  MemorySchedulerStore,
-  type MemoryClaim,
-  type MemoryQueuedMessage
-} from "../services/memory/memoryScheduler.js";
-import {
-  OpenAIProvider,
-  type ProviderBashOptions,
-  type ProviderCompleteOptions,
-  type ProviderDeferredTurn
-} from "../adapters/model/openaiProvider.js";
-import type { ProviderLogContext } from "../packages/contracts/model/modelGateway.js";
-import {
-  inboundImageUrls,
-  replaceInboundImageUrls,
-  type MessageDetailsV1,
-  type MessagingPort,
-  type OutboundMessageV1
-} from "../packages/contracts/messaging/messages.js";
-import {
-  generatedImageMediaAsset,
-  imageMediaAsset,
-  type AttachmentSourcePort
-} from "../packages/contracts/media/media.js";
-import { loadPersona, AgentPersona } from "../services/agent/persona.js";
-import { appendRequestLog } from "./requestLog.js";
+import { MemorySchedulerStore } from "../services/memory/memoryScheduler.js";
+import type { MessagingPort } from "../packages/contracts/messaging/messages.js";
+import type { AgentPersona } from "../services/agent/persona.js";
+import { appendRequestLog } from "../adapters/observability/requestLog.js";
 import { WORKSPACE_LAYOUT } from "../packages/platform/workspaceLayout.js";
-import { SenderNameResolver, senderDisplayName, senderIdentity } from "../services/conversations/senderName.js";
-import type { SelfieInput, SelfieRunResult } from "../services/tools/selfieTool.js";
+import { SenderNameResolver } from "../services/conversations/senderName.js";
 import { cleanupPersistedCodexProcess, CodexToolRunner } from "../adapters/codex/codexTool.js";
 import { isTrustedQqFakeIp } from "../adapters/onebot/qqMedia.js";
-import type { CodexRunner } from "../packages/contracts/tools/codex.js";
 import {
   OutboxDisconnectedError,
-  SessionCoordinator,
-  type SessionHandleResult
+  SessionCoordinator
 } from "../services/sessions/sessionCoordinator.js";
-import { SessionStore, type OutboxRecord, type SessionEventRecord } from "../services/sessions/sessionStore.js";
-import { TOOL_CALL_TIMEOUT_MS } from "../services/tools/tools.js";
-import { promptDefinitionById } from "../services/agent/promptCatalog.js";
-import { defaultPromptContent as defaultFinalPromptContent } from "../services/agent/promptDefaults.js";
+import { SessionStore } from "../services/sessions/sessionStore.js";
 import {
-  parseFinalPromptTemplate,
-  renderFinalPromptTemplate,
-  type PromptVariableValue,
-  type RenderedPromptRequest
-} from "../services/agent/promptSystem.js";
-import { buildConversationPromptVariables } from "../services/agent/persona.js";
-import { DEFAULT_CONTEXT_MESSAGE_LIMIT, MAX_STORED_CONVERSATION_MESSAGES, GROUP_CHAT_SUMMARY_WINDOW_MS, MAX_SELFIE_REFERENCE_IMAGES, MAX_SELFIE_WORKSPACE_REFERENCE_IMAGES, MAX_CURRENT_CONTEXT_IMAGES, MAX_HISTORY_CONTEXT_IMAGES, HYDRATE_MESSAGE_WINDOW_MS, ACTIVE_CONVERSATION_WINDOW_MS, DIRECT_REPLY_TIMEOUT_MS, AMBIENT_ORCHESTRATOR_TIMEOUT_MS, ORCHESTRATOR_MAX_RETRIES, PREPARE_TIMEOUT_MS, RECENT_CONTEXT_TOKEN_BUDGET, DEDUPE_TTL_MS, MAX_DEDUPE_KEYS, DEFAULT_ADMIN_NAME, GROUP_CHAT_SUMMARY_COMMAND, CONVERSATION_REPLY_PROMPT_FILE, SELFIE_PROMPT_FILE, GROUP_CHAT_SUMMARY_PROMPT_FILE, ADMIN_PERSONA_FILES, ADMIN_RUNTIME_PROMPT_DEFAULTS, BatchUserInfo, WorkingMemoryMergeOutput, WorkingMemoryMergeContext, personaFileNameForAdminId, AdminIdentity, ConversationReplyUpdateInput, RuntimeCommandContext, ReplyDeliveryDraft, ReplyDelivery, DeferredCodexTurn, AmbientReplyJob, AmbientReplyState, AmbientIdleTimer, RuntimeConfigSnapshot, RuntimePromptSnapshot, SunaRuntimeOptions, RuntimeBashAuditPort } from "./runtime/runtimeContracts.js";
+  DIRECT_REPLY_TIMEOUT_MS,
+  type RuntimeCommandContext,
+  type AmbientReplyState,
+  type AmbientIdleTimer,
+  type SunaRuntimeOptions,
+  type RuntimeBashAuditPort
+} from "./runtime/runtimeContracts.js";
 import { RuntimeLifecycle } from "./runtime/lifecycle.js";
-import { RuntimeIntake } from "./runtime/intake.js";
-import { RuntimeReply } from "./runtime/reply.js";
+import * as runtimeIntake from "./runtime/intake.js";
+import * as runtimeReply from "./runtime/reply.js";
 import { RuntimeOrchestration } from "./runtime/orchestration.js";
 import { RuntimeMemoryPipeline } from "./runtime/memoryPipeline.js";
-import { RuntimeDelivery } from "./runtime/delivery.js";
-import { RuntimeConversations } from "./runtime/conversations.js";
+import * as runtimeDelivery from "./runtime/delivery.js";
+import * as runtimeConversations from "./runtime/conversations.js";
 import { RuntimeSelfie } from "./runtime/selfie.js";
 import { RuntimeGroupThreads } from "./runtime/groupThreadPipeline.js";
 import { RuntimeReplyDebounce } from "./runtime/replyDebounce.js";
@@ -136,9 +66,6 @@ import type { SystemConfigRuntimePort } from "../services/tools/systemConfigTool
 import type { ReplyTaskGate } from "../services/orchestration/broadcastStormDetector.js";
 import { runWithAgentRuntimeContext } from "../packages/platform/runtimeAgentContext.js";
 import type { RuntimeAgentExtensionsPort } from "./runtime/agentExtensions.js";
-export * from "./runtime/runtimeContracts.js";
-export * from "./runtime/runtimeHelpers.js";
-
 export class SunaRuntime {
   persona?: AgentPersona;
   private configValue!: AppConfig;
@@ -188,13 +115,9 @@ export class SunaRuntime {
     }>();
   activeGateway?: MessagingPort;
   private readonly lifecycle: RuntimeLifecycle;
-  private readonly intake: RuntimeIntake;
-  private readonly reply: RuntimeReply;
   private readonly orchestration: RuntimeOrchestration;
   private readonly memory: RuntimeMemoryPipeline;
   private readonly tone: RuntimeTone;
-  private readonly delivery: RuntimeDelivery;
-  private readonly conversations: RuntimeConversations;
   private readonly selfie: RuntimeSelfie;
   private readonly groupThreads: RuntimeGroupThreads;
   private readonly replyDebounce: RuntimeReplyDebounce;
@@ -299,13 +222,9 @@ export class SunaRuntime {
         }
       ]);
         this.lifecycle = new RuntimeLifecycle(this);
-      this.intake = new RuntimeIntake(this);
-      this.reply = new RuntimeReply(this);
       this.orchestration = new RuntimeOrchestration(this);
       this.memory = new RuntimeMemoryPipeline(this);
       this.tone = new RuntimeTone(this);
-      this.delivery = new RuntimeDelivery(this);
-      this.conversations = new RuntimeConversations(this);
       this.selfie = new RuntimeSelfie(this);
       this.groupThreads = new RuntimeGroupThreads(this);
       this.replyDebounce = new RuntimeReplyDebounce(
@@ -354,36 +273,41 @@ export class SunaRuntime {
   getConversationToolPolicy(...args: Parameters<RuntimeLifecycle["getConversationToolPolicy"]>) { return this.lifecycle.getConversationToolPolicy(...args); }
   setConversationToolPolicy(...args: Parameters<RuntimeLifecycle["setConversationToolPolicy"]>) { return this.inAgentContext(() => this.lifecycle.setConversationToolPolicy(...args)); }
   announceServiceOnline(...args: Parameters<RuntimeLifecycle["announceServiceOnline"]>) { return this.lifecycle.announceServiceOnline(...args); }
-  hydrateConversationRecords(...args: Parameters<RuntimeIntake["hydrateConversationRecords"]>) { return this.intake.hydrateConversationRecords(...args); }
-  performHydrateConversationRecords(...args: Parameters<RuntimeIntake["performHydrateConversationRecords"]>) { return this.intake.performHydrateConversationRecords(...args); }
-  handleInboundMessage(...args: Parameters<RuntimeIntake["handleInboundMessage"]>) { return this.inAgentContext(() => this.intake.handleInboundMessage(...args)); }
-  processSessionEvent(...args: Parameters<RuntimeIntake["processSessionEvent"]>) { return this.inAgentContext(() => this.intake.processSessionEvent(...args)); }
-  processIncomingReplyEvent(...args: Parameters<RuntimeIntake["processIncomingReplyEvent"]>) { return this.inAgentContext(() => this.intake.processIncomingReplyEvent(...args)); }
-  deliverSessionOutbox(...args: Parameters<RuntimeIntake["deliverSessionOutbox"]>) { return this.inAgentContext(() => this.intake.deliverSessionOutbox(...args)); }
+  hydrateConversationRecords(...args: Parameters<typeof runtimeIntake.runtime_hydrateConversationRecords>) { return runtimeIntake.runtime_hydrateConversationRecords.call(this, ...args); }
+  performHydrateConversationRecords(...args: Parameters<typeof runtimeIntake.runtime_performHydrateConversationRecords>) { return runtimeIntake.runtime_performHydrateConversationRecords.call(this, ...args); }
+  handleInboundMessage(...args: Parameters<typeof runtimeIntake.runtime_handleInboundMessage>) { return this.inAgentContext(() => runtimeIntake.runtime_handleInboundMessage.call(this, ...args)); }
+  processSessionEvent(...args: Parameters<typeof runtimeIntake.runtime_processSessionEvent>) { return this.inAgentContext(() => runtimeIntake.runtime_processSessionEvent.call(this, ...args)); }
+  processIncomingReplyEvent(...args: Parameters<typeof runtimeIntake.runtime_processIncomingReplyEvent>) { return this.inAgentContext(() => runtimeIntake.runtime_processIncomingReplyEvent.call(this, ...args)); }
+  deliverSessionOutbox(...args: Parameters<typeof runtimeIntake.runtime_deliverSessionOutbox>) { return this.inAgentContext(() => runtimeIntake.runtime_deliverSessionOutbox.call(this, ...args)); }
   conversationAssetProviderOptions(...args: Parameters<RuntimeConversationAssets["providerOptions"]>) { return this.conversationAssets.providerOptions(...args); }
   queueConversationAsset(...args: Parameters<RuntimeConversationAssets["queue"]>) { return this.inAgentContext(() => this.conversationAssets.queue(...args)); }
   deliverConversationAssetOutbox(...args: Parameters<RuntimeConversationAssets["deliver"]>) { return this.inAgentContext(() => this.conversationAssets.deliver(...args)); }
   voiceSnapshot(...args: Parameters<RuntimeVoice["snapshot"]>) { return this.inAgentContext(() => this.voice.snapshot(...args)); }
   voiceProviderCapability(...args: Parameters<RuntimeVoice["providerCapability"]>) { return this.voice.providerCapability(...args); }
   synthesizeAndQueueVoice(...args: Parameters<RuntimeVoice["synthesizeAndQueue"]>) { return this.inAgentContext(() => this.voice.synthesizeAndQueue(...args)); }
-  requireActiveGateway(...args: Parameters<RuntimeIntake["requireActiveGateway"]>) { return this.intake.requireActiveGateway(...args); }
-  handleIncomingMessage(...args: Parameters<RuntimeIntake["handleIncomingMessage"]>) { return this.inAgentContext(() => this.intake.handleIncomingMessage(...args)); }
-  prepareIncomingMessage(...args: Parameters<RuntimeIntake["prepareIncomingMessage"]>) { return this.intake.prepareIncomingMessage(...args); }
-  replyToIncoming(...args: Parameters<RuntimeReply["replyToIncoming"]>) { return this.inAgentContext(() => this.reply.replyToIncoming(...args)); }
-  replyWithGroupChatSummary(...args: Parameters<RuntimeReply["replyWithGroupChatSummary"]>) { return this.reply.replyWithGroupChatSummary(...args); }
-  replyToToolCompletion(...args: Parameters<RuntimeReply["replyToToolCompletion"]>) { return this.reply.replyToToolCompletion(...args); }
-  processDeferredToolJob(...args: Parameters<RuntimeReply["processDeferredToolJob"]>) { return this.inAgentContext(() => this.reply.processDeferredToolJob(...args)); }
-  attachReplyReferences(...args: Parameters<RuntimeReply["attachReplyReferences"]>) { return this.reply.attachReplyReferences(...args); }
-  loadMessageDetails(...args: Parameters<RuntimeReply["loadMessageDetails"]>) { return this.reply.loadMessageDetails(...args); }
-  loadQuoteReferences(...args: Parameters<RuntimeReply["loadQuoteReferences"]>) { return this.reply.loadQuoteReferences(...args); }
-  selectRelevantAttachments(...args: Parameters<RuntimeReply["selectRelevantAttachments"]>) { return this.reply.selectRelevantAttachments(...args); }
-  refreshAttachmentCacheReferences(...args: Parameters<RuntimeReply["refreshAttachmentCacheReferences"]>) { return this.reply.refreshAttachmentCacheReferences(...args); }
-  buildRecentContextMessages(...args: Parameters<RuntimeReply["buildRecentContextMessages"]>) { return this.reply.buildRecentContextMessages(...args); }
-  contextMessageLimit(...args: Parameters<RuntimeReply["contextMessageLimit"]>) { return this.reply.contextMessageLimit(...args); }
-  retainedConversationMessageLimit(...args: Parameters<RuntimeReply["retainedConversationMessageLimit"]>) { return this.reply.retainedConversationMessageLimit(...args); }
-  groupReplyOptions(...args: Parameters<RuntimeReply["groupReplyOptions"]>) { return this.reply.groupReplyOptions(...args); }
+  requireActiveGateway(...args: Parameters<typeof runtimeIntake.runtime_requireActiveGateway>) { return runtimeIntake.runtime_requireActiveGateway.call(this, ...args); }
+  handleIncomingMessage(...args: Parameters<typeof runtimeIntake.runtime_handleIncomingMessage>) { return this.inAgentContext(() => runtimeIntake.runtime_handleIncomingMessage.call(this, ...args)); }
+  prepareIncomingMessage(...args: Parameters<typeof runtimeIntake.runtime_prepareIncomingMessage>) { return runtimeIntake.runtime_prepareIncomingMessage.call(this, ...args); }
+  replyToIncoming(...args: Parameters<typeof runtimeReply.runtime_replyToIncoming>) { return this.inAgentContext(() => runtimeReply.runtime_replyToIncoming.call(this, ...args)); }
+  replyWithGroupChatSummary(...args: Parameters<typeof runtimeReply.runtime_replyWithGroupChatSummary>) { return runtimeReply.runtime_replyWithGroupChatSummary.call(this, ...args); }
+  replyToToolCompletion(...args: Parameters<typeof runtimeReply.runtime_replyToToolCompletion>) { return runtimeReply.runtime_replyToToolCompletion.call(this, ...args); }
+  processDeferredToolJob(...args: Parameters<typeof runtimeReply.runtime_processDeferredToolJob>) { return this.inAgentContext(() => runtimeReply.runtime_processDeferredToolJob.call(this, ...args)); }
+  attachReplyReferences(...args: Parameters<typeof runtimeReply.runtime_attachReplyReferences>) { return runtimeReply.runtime_attachReplyReferences.call(this, ...args); }
+  loadMessageDetails(...args: Parameters<typeof runtimeReply.runtime_loadMessageDetails>) { return runtimeReply.runtime_loadMessageDetails.call(this, ...args); }
+  loadQuoteReferences(...args: Parameters<typeof runtimeReply.runtime_loadQuoteReferences>) { return runtimeReply.runtime_loadQuoteReferences.call(this, ...args); }
+  selectRelevantAttachments(...args: Parameters<typeof runtimeReply.runtime_selectRelevantAttachments>) { return runtimeReply.runtime_selectRelevantAttachments.call(this, ...args); }
+  refreshAttachmentCacheReferences(...args: Parameters<typeof runtimeReply.runtime_refreshAttachmentCacheReferences>) { return runtimeReply.runtime_refreshAttachmentCacheReferences.call(this, ...args); }
+  buildRecentContextMessages(...args: Parameters<typeof runtimeReply.runtime_buildRecentContextMessages>) { return runtimeReply.runtime_buildRecentContextMessages.call(this, ...args); }
+  contextMessageLimit(...args: Parameters<typeof runtimeReply.runtime_contextMessageLimit>) { return runtimeReply.runtime_contextMessageLimit.call(this, ...args); }
+  retainedConversationMessageLimit(...args: Parameters<typeof runtimeReply.runtime_retainedConversationMessageLimit>) { return runtimeReply.runtime_retainedConversationMessageLimit.call(this, ...args); }
+  groupReplyOptions(...args: Parameters<typeof runtimeReply.runtime_groupReplyOptions>) { return runtimeReply.runtime_groupReplyOptions.call(this, ...args); }
   resolveProviderBashHandle(incoming: ParsedIncomingMessage, promptOverride?: string) {
-    return this.reply.resolveProviderBashHandle(incoming, promptOverride, this.rawToolCapabilityResolver);
+    return runtimeReply.runtime_resolveProviderBashHandle.call(
+      this,
+      incoming,
+      promptOverride,
+      this.rawToolCapabilityResolver
+    );
   }
   async resolveToolCapabilities(
     backendOverride?: BashExecutionBackend | null
@@ -456,7 +380,7 @@ export class SunaRuntime {
       codex: false
     };
   }
-  isAdminUser(...args: Parameters<RuntimeReply["isAdminUser"]>) { return this.reply.isAdminUser(...args); }
+  isAdminUser(...args: Parameters<typeof runtimeReply.runtime_isAdminUser>) { return runtimeReply.runtime_isAdminUser.call(this, ...args); }
   adminIdentity(...args: Parameters<RuntimeOrchestration["adminIdentity"]>) { return this.orchestration.adminIdentity(...args); }
   isReplySenderAllowed(...args: Parameters<RuntimeOrchestration["isReplySenderAllowed"]>) { return this.orchestration.isReplySenderAllowed(...args); }
   isDuplicateIncoming(...args: Parameters<RuntimeOrchestration["isDuplicateIncoming"]>) { return this.orchestration.isDuplicateIncoming(...args); }
@@ -489,23 +413,23 @@ export class SunaRuntime {
   projectMemoryCursor(...args: Parameters<RuntimeMemoryPipeline["projectMemoryCursor"]>) { return this.memory.projectMemoryCursor(...args); }
   rewriteToneText(...args: Parameters<RuntimeTone["rewrite"]>) { return this.inAgentContext(() => this.tone.rewrite(...args)); }
   rewriteToneDelivery(...args: Parameters<RuntimeTone["rewriteForDelivery"]>) { return this.inAgentContext(() => this.tone.rewriteForDelivery(...args)); }
-  sendAssistantReply(...args: Parameters<RuntimeDelivery["sendAssistantReply"]>) { return this.delivery.sendAssistantReply(...args); }
-  replyDeliveryDraft(...args: Parameters<RuntimeDelivery["replyDeliveryDraft"]>) { return this.delivery.replyDeliveryDraft(...args); }
-  deliverReplyOutbox(...args: Parameters<RuntimeDelivery["deliverReplyOutbox"]>) { return this.delivery.deliverReplyOutbox(...args); }
-  sendErrorReply(...args: Parameters<RuntimeDelivery["sendErrorReply"]>) { return this.delivery.sendErrorReply(...args); }
-  incomingCaptureSequence(...args: Parameters<RuntimeConversations["incomingCaptureSequence"]>) { return this.conversations.incomingCaptureSequence(...args); }
-  recordIncomingMessage(...args: Parameters<RuntimeConversations["recordIncomingMessage"]>) { return this.conversations.recordIncomingMessage(...args); }
-  recordAssistantRequestStarted(...args: Parameters<RuntimeConversations["recordAssistantRequestStarted"]>) { return this.conversations.recordAssistantRequestStarted(...args); }
-  recordAssistantMessage(...args: Parameters<RuntimeConversations["recordAssistantMessage"]>) { return this.conversations.recordAssistantMessage(...args); }
-  recordAssistantTurnTools(...args: Parameters<RuntimeConversations["recordAssistantTurnTools"]>) { return this.conversations.recordAssistantTurnTools(...args); }
-  discardAssistantRequest(...args: Parameters<RuntimeConversations["discardAssistantRequest"]>) { return this.conversations.discardAssistantRequest(...args); }
-  ensureConversationRecord(...args: Parameters<RuntimeConversations["ensureConversationRecord"]>) { return this.conversations.ensureConversationRecord(...args); }
-  upsertConversationRecordForReplySetting(...args: Parameters<RuntimeConversations["upsertConversationRecordForReplySetting"]>) { return this.conversations.upsertConversationRecordForReplySetting(...args); }
-  persistConversationRecords(...args: Parameters<RuntimeConversations["persistConversationRecords"]>) { return this.inAgentContext(() => this.conversations.persistConversationRecords(...args)); }
-  persistConversationRecordStrict(...args: Parameters<RuntimeConversations["persistConversationRecordStrict"]>) { return this.inAgentContext(() => this.conversations.persistConversationRecordStrict(...args)); }
-  markConversationMessagesAsRecordedOnly(...args: Parameters<RuntimeConversations["markConversationMessagesAsRecordedOnly"]>) { return this.conversations.markConversationMessagesAsRecordedOnly(...args); }
-  getActiveConversationRecords(...args: Parameters<RuntimeConversations["getActiveConversationRecords"]>) { return this.conversations.getActiveConversationRecords(...args); }
-  recordServiceMessage(...args: Parameters<RuntimeConversations["recordServiceMessage"]>) { return this.conversations.recordServiceMessage(...args); }
+  sendAssistantReply(...args: Parameters<typeof runtimeDelivery.runtime_sendAssistantReply>) { return runtimeDelivery.runtime_sendAssistantReply.call(this, ...args); }
+  replyDeliveryDraft(...args: Parameters<typeof runtimeDelivery.runtime_replyDeliveryDraft>) { return runtimeDelivery.runtime_replyDeliveryDraft.call(this, ...args); }
+  deliverReplyOutbox(...args: Parameters<typeof runtimeDelivery.runtime_deliverReplyOutbox>) { return runtimeDelivery.runtime_deliverReplyOutbox.call(this, ...args); }
+  sendErrorReply(...args: Parameters<typeof runtimeDelivery.runtime_sendErrorReply>) { return runtimeDelivery.runtime_sendErrorReply.call(this, ...args); }
+  incomingCaptureSequence(...args: Parameters<typeof runtimeConversations.runtime_incomingCaptureSequence>) { return runtimeConversations.runtime_incomingCaptureSequence.call(this, ...args); }
+  recordIncomingMessage(...args: Parameters<typeof runtimeConversations.runtime_recordIncomingMessage>) { return runtimeConversations.runtime_recordIncomingMessage.call(this, ...args); }
+  recordAssistantRequestStarted(...args: Parameters<typeof runtimeConversations.runtime_recordAssistantRequestStarted>) { return runtimeConversations.runtime_recordAssistantRequestStarted.call(this, ...args); }
+  recordAssistantMessage(...args: Parameters<typeof runtimeConversations.runtime_recordAssistantMessage>) { return runtimeConversations.runtime_recordAssistantMessage.call(this, ...args); }
+  recordAssistantTurnTools(...args: Parameters<typeof runtimeConversations.runtime_recordAssistantTurnTools>) { return runtimeConversations.runtime_recordAssistantTurnTools.call(this, ...args); }
+  discardAssistantRequest(...args: Parameters<typeof runtimeConversations.runtime_discardAssistantRequest>) { return runtimeConversations.runtime_discardAssistantRequest.call(this, ...args); }
+  ensureConversationRecord(...args: Parameters<typeof runtimeConversations.runtime_ensureConversationRecord>) { return runtimeConversations.runtime_ensureConversationRecord.call(this, ...args); }
+  upsertConversationRecordForReplySetting(...args: Parameters<typeof runtimeConversations.runtime_upsertConversationRecordForReplySetting>) { return runtimeConversations.runtime_upsertConversationRecordForReplySetting.call(this, ...args); }
+  persistConversationRecords(...args: Parameters<typeof runtimeConversations.runtime_persistConversationRecords>) { return this.inAgentContext(() => runtimeConversations.runtime_persistConversationRecords.call(this, ...args)); }
+  persistConversationRecordStrict(...args: Parameters<typeof runtimeConversations.runtime_persistConversationRecordStrict>) { return this.inAgentContext(() => runtimeConversations.runtime_persistConversationRecordStrict.call(this, ...args)); }
+  markConversationMessagesAsRecordedOnly(...args: Parameters<typeof runtimeConversations.runtime_markConversationMessagesAsRecordedOnly>) { return runtimeConversations.runtime_markConversationMessagesAsRecordedOnly.call(this, ...args); }
+  getActiveConversationRecords(...args: Parameters<typeof runtimeConversations.runtime_getActiveConversationRecords>) { return runtimeConversations.runtime_getActiveConversationRecords.call(this, ...args); }
+  recordServiceMessage(...args: Parameters<typeof runtimeConversations.runtime_recordServiceMessage>) { return runtimeConversations.runtime_recordServiceMessage.call(this, ...args); }
   processMemoryClaim(...args: Parameters<RuntimeMemoryPipeline["processMemoryClaim"]>) { return this.inAgentContext(() => this.memory.processMemoryClaim(...args)); }
   enrichParticipantAddressNames(...args: Parameters<RuntimeMemoryPipeline["enrichParticipantAddressNames"]>) { return this.memory.enrichParticipantAddressNames(...args); }
   mergeConversationWorkingMemory(...args: Parameters<RuntimeMemoryPipeline["mergeConversationWorkingMemory"]>) { return this.inAgentContext(() => this.memory.mergeConversationWorkingMemory(...args)); }

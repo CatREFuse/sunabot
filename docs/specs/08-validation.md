@@ -32,7 +32,11 @@ Agent 配置文件夹导入专项必须覆盖：直接文件夹和单层包装�
 npm run verify
 ```
 
-`verify` 依次执行 runtime contract、architecture、SQLite recovery、类型检查、单元与集成测试、独立 runtime smoke、CI 容量基线、生产构建和 E2E。消息专项回归必须证明 `assistant_text` 写入 durable outbox 后即可继续 inline 工具，远端发送仍在进行或重试时不能阻塞工具；事件重试不能重复发送已提交的中间消息。deferred `dispatch_message` 与任务必须原子持久化，worker 在 acknowledgement 仍待发送时即可 claim，callback 随后按同一会话 FIFO 投递。OneBot 入站专项必须覆盖 NapCat 当前全部具体消息段及兼容别名、精确的 `onlinefile`/`flashtransfer` 类型、未知类型回退、CQ 字符串、内容图片与表情图片分类、内联与仅 ID 的 `forward`/`node`、当前账号的 `get_forward_msg` 入队前展开、嵌套发送者和媒体顺序，以及深度、数量和最终文本容量边界；公共提示词回归必须同时覆盖默认契约和 `.inbound-message-v1` 的保留式、幂等迁移。用户群聊编排器回归必须覆盖纯图片和图文混合消息，证明历史消息与当前消息优先保留 `[内容图片#N]`、`[表情图片#N]`，只为缺少语义标记的旧媒体补充 `[图片]`，已有标记不重复补齐，并且不把图片 URL、Data URL 或本地路径放入编排 payload。
+常规单元与集成测试最多使用四个 worker，避免大量文件系统故障注入互相争用而产生超时或身份探针噪声。
+
+`verify` 依次执行 runtime contract、architecture、类型检查、测试阶段、独立 runtime smoke、CI 容量基线、生产构建和 E2E；测试阶段依次执行常规单元与集成测试、一次 SQLite recovery gate，以及 memory perspective core/fault 两条有界迁移 lane，不能在外层重复 recovery。消息专项回归必须证明 `assistant_text` 写入 durable outbox 后即可继续 inline 工具，远端发送仍在进行或重试时不能阻塞工具；事件重试不能重复发送已提交的中间消息。deferred `dispatch_message` 与任务必须原子持久化，worker 在 acknowledgement 仍待发送时即可 claim，callback 随后按同一会话 FIFO 投递。OneBot 入站专项必须覆盖 NapCat 当前全部具体消息段及兼容别名、精确的 `onlinefile`/`flashtransfer` 类型、未知类型回退、CQ 字符串、内容图片与表情图片分类、内联与仅 ID 的 `forward`/`node`、当前账号的 `get_forward_msg` 入队前展开、嵌套发送者和媒体顺序，以及深度、数量和最终文本容量边界；公共提示词回归必须同时覆盖默认契约和 `.inbound-message-v1` 的保留式、幂等迁移。用户群聊编排器回归必须覆盖纯图片和图文混合消息，证明历史消息与当前消息优先保留 `[内容图片#N]`、`[表情图片#N]`，只为缺少语义标记的旧媒体补充 `[图片]`，已有标记不重复补齐，并且不把图片 URL、Data URL 或本地路径放入编排 payload。
+
+管理台视觉场景集中在 `tests/e2e/visual.spec.ts` 与 `tests/e2e/support/visual.ts`，使用数据矩阵覆盖 light/dark、桌面与移动端，禁止为同一路由和断言复制独立 visual spec。知识库浏览器测试通过真实 Fastify、`KnowledgeBaseService` 与临时 workspace 验证上传、删除和重建索引；`mock-api.ts` 只保留无法在该 lane 运行的外部边界，不复制知识库业务实现。
 
 本轮安全回归还必须覆盖：省略账号时只有 `primary` 可解析、CQ 形文本按结构化 text 字面外发、CQ 段超限无控制尾部、forward 边界伪造转义、巨大时间戳回退、鉴权前后 WebSocket payload 上限；三类记忆来源任一并发写入都使旧批次冲突；畸形或缺 `exp` 的 Codex JWT 强制刷新且顽固子进程最终被进程组回收；macOS host Bash 零 invocation、Docker 隔离探针失败关闭；远程图片连接使用已验证 DNS 地址并在重定向重建 dispatcher；全部 Agent 隔离 API 缺 `agentId` 时拒绝。生产 Web 构建必须通过初始 gzip 与异步 chunk 预算，Agent 设置切换必须覆盖保存失败恢复和迟到响应隔离，Overview 只请求汇总计数。
 

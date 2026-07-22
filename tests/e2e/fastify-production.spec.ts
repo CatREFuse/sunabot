@@ -1,12 +1,15 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import Fastify from "fastify";
 import type { FastifyInstance } from "fastify";
 import { expect, test } from "@playwright/test";
 import { WORKSPACE_LAYOUT } from "../../packages/platform/workspaceLayout.js";
 
 let app: FastifyInstance;
 let origin = "";
+let knowledgeApp: FastifyInstance;
+let knowledgeOrigin = "";
 let temporaryDirectory = "";
 let previousConfigPath: string | undefined;
 let previousAdminToken: string | undefined;
@@ -20,7 +23,6 @@ test.beforeAll(async () => {
   process.env.SUNABOT_WORKSPACE = temporaryDirectory;
   process.env.SUNABOT_CONFIG = path.join(temporaryDirectory, "sunabot.json");
   process.env.SUNABOT_ADMIN_TOKEN = "fastify-production-token";
-
   const [{ defaultConfig, saveConfig }, { createApp }] = await Promise.all([
     import("../../src/config.js"),
     import("../../apps/api/server.js")
@@ -36,10 +38,33 @@ test.beforeAll(async () => {
     }
   });
   origin = await app.listen({ host: "127.0.0.1", port: 0 });
+
+  const [{ registerKnowledgeRoutes }, { KnowledgeBaseService }] = await Promise.all([
+    import("../../apps/api/plugins/knowledgeRoutes.js"),
+    import("../../services/knowledge/public.js")
+  ]);
+  const knowledgeRoot = path.join(temporaryDirectory, WORKSPACE_LAYOUT.defaultAgent, "knowledge");
+  await fs.mkdir(path.join(knowledgeRoot, "产品"), { recursive: true });
+  await fs.writeFile(
+    path.join(knowledgeRoot, "产品", "路线.md"),
+    "# 火星基地\n\n火星基地采用核能供电，水循环系统保持独立冗余。\n"
+  );
+  const knowledgeService = new KnowledgeBaseService({
+    sourceRoot: knowledgeRoot,
+    indexPath: path.join(temporaryDirectory, "cache", "knowledge", "plana.sqlite")
+  });
+  knowledgeApp = Fastify({ logger: false });
+  registerKnowledgeRoutes(knowledgeApp, {
+    getService(agentId) {
+      if (agentId !== "plana") throw new Error(`Unexpected knowledge Agent: ${agentId}`);
+      return knowledgeService;
+    }
+  });
+  knowledgeOrigin = await knowledgeApp.listen({ host: "127.0.0.1", port: 0 });
 });
 
 test.afterAll(async () => {
-  await app?.close();
+  await Promise.all([app?.close(), knowledgeApp?.close()]);
   await fs.rm(temporaryDirectory, { recursive: true, force: true });
   if (previousConfigPath == null) delete process.env.SUNABOT_CONFIG;
   else process.env.SUNABOT_CONFIG = previousConfigPath;
@@ -107,4 +132,52 @@ test("Fastify 生产服务提供静态资源、深链接回退与管理鉴权", 
     schemaVersion: 1,
     currentVersion: "0.1.0"
   });
+});
+
+test("知识库 WebUI 通过真实 Fastify 临时 workspace 完成检索、上传和删除", async ({ page }) => {
+  const { installMockApi } = await import("./mock-api");
+  await installMockApi(page);
+  await page.route("**/api/knowledge**", async (route) => {
+    const request = route.request();
+    const source = new URL(request.url());
+    const headers = { ...request.headers() };
+    delete headers.host;
+    const response = await route.fetch({
+      url: new URL(`${source.pathname}${source.search}`, knowledgeOrigin).toString(),
+      headers
+    });
+    await route.fulfill({ response });
+  });
+
+  await page.goto("/knowledge");
+  await expect(page.getByRole("heading", { name: "知识库", exact: true })).toBeVisible();
+  await expect(page.getByText("产品", { exact: true })).toBeVisible();
+  await expect(page.getByText("路线.md", { exact: true })).toBeVisible();
+  await page.getByLabel("检索知识库").fill("火星基地供电");
+  await page.getByRole("button", { name: "检索", exact: true }).click();
+  await expect(page.getByText("火星基地采用核能供电，水循环系统保持独立冗余。", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "添加 Markdown", exact: true }).first().click();
+  const dialog = page.getByRole("dialog", { name: "添加 Markdown" });
+  await dialog.getByLabel("Markdown 文件").setInputFiles({
+    name: "应急手册.md",
+    mimeType: "text/markdown",
+    buffer: Buffer.from("# 应急手册\n\n检查恢复点。")
+  });
+  await dialog.getByLabel("保存位置").fill("运维/应急手册.md");
+  await dialog.getByRole("button", { name: "添加", exact: true }).click();
+  await expect(page.getByText("应急手册.md", { exact: true })).toBeVisible();
+  const uploadedPath = path.join(
+    temporaryDirectory,
+    WORKSPACE_LAYOUT.defaultAgent,
+    "knowledge",
+    "运维",
+    "应急手册.md"
+  );
+  await expect(fs.readFile(uploadedPath, "utf8")).resolves.toContain("检查恢复点");
+
+  await page.getByRole("button", { name: "删除 运维/应急手册.md" }).click();
+  await page.getByRole("button", { name: "确认删除 运维/应急手册.md" }).click();
+  await expect(page.getByText("应急手册.md", { exact: true })).toHaveCount(0);
+  await expect(fs.stat(uploadedPath)).rejects.toMatchObject({ code: "ENOENT" });
 });

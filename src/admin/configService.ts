@@ -17,7 +17,7 @@ import {
   MIN_REPLY_DEBOUNCE_MS
 } from "../types.js";
 import { AdminApiError, badRequest, conflict } from "./errors.js";
-import { getModelCatalogEntry } from "./models.js";
+import { getModelCatalogEntry } from "../../packages/contracts/admin/models.js";
 import {
   DEFAULT_TAVILY_API_KEY_ENV,
   isEnvironmentName,

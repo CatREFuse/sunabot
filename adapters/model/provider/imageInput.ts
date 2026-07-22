@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import sharp from "sharp";
-import type { ChatMessage } from "../../../src/types.js";
-import { getWorkspacePath } from "../../../src/config.js";
-import { appendRequestLog } from "../../../src/requestLog.js";
+import type { ChatMessage } from "../../../packages/contracts/model/modelGateway.js";
+import { getWorkspacePath } from "../../../packages/platform/projectPaths.js";
+import { appendRequestLog } from "../../observability/requestLog.js";
 import { WORKSPACE_LAYOUT } from "../../../packages/platform/workspaceLayout.js";
 import { MAX_ATTACHMENT_VISUAL_PAGES } from "../../../services/media/attachments/context.js";
 import { normalizeAttachmentImage } from "../../../services/media/attachments/image.js";
@@ -37,6 +37,11 @@ export async function buildImageGenerationContent(prompt: string, referenceImage
 
 export function countInputImages(content: Array<Record<string, unknown>>) {
   return content.filter((item) => item.type === "input_image").length;
+}
+
+export function parseDataImage(value: string) {
+  const match = value.match(/^data:(image\/[a-z0-9.+-]+);base64,(.+)$/is);
+  return match ? { mediaType: match[1]!, data: match[2]! } : undefined;
 }
 
 export interface ResponsesInputMessageOptions {

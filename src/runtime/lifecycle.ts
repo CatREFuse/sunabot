@@ -1,117 +1,40 @@
-import fs from "node:fs";
-import fsp from "node:fs/promises";
-import path from "node:path";
-import { nanoid } from "nanoid";
-import {
-  AppConfig,
-  ChatMessage,
-  ConversationMessageStats,
-  ConversationMessageQuote,
-  ConversationRecord,
-  ImageResult,
-  ParsedIncomingMessage,
-  ReasoningEffort
-} from "../types.js";
-import { resolveModelReasoningEffort } from "../admin/models.js";
-import { AttachmentService } from "../../services/media/attachments/service.js";
-import type {
-  AttachmentExtractionContext,
-  ParsedAttachment
-} from "../../services/media/attachments/types.js";
-import { CommandRouter, type CommandMatch } from "../../services/messaging/commandRouter.js";
-import { isReplySenderAllowed } from "../../services/messaging/replySenderPolicy.js";
-import { getDefaultProvider, getRootDir, getWorkspacePath, resolveProjectPath } from "../config.js";
-import {
-  assistantReplyEnvelope,
-  decodeAssistantReply,
-  decodeIncomingReply,
-  decodeToolCompletion,
-  incomingReplyEnvelope,
-  type AssistantReplyOutboxEnvelope,
-  type AssistantReplyOutboxPayload,
-  type AsyncToolCompletionPayload,
-  type RuntimeIncomingReplyEventPayload
-} from "../../packages/contracts/session/runtimeMessages.js";
-import { applicationDataStore, sqliteMemoryPersistence } from "../../adapters/sqlite/applicationDataStore.js";
-import { configureMemoryPersistence } from "../../services/memory/persistence.js";
-import {
-  ReplyGateEpochs,
-  isOrchestratorReplyRateLimited,
-  resolveUserGroupReplyRoute,
-  type ReplyGateSnapshot
-} from "../../services/orchestration/groupReplyPolicy.js";
-import { HookBus } from "../../services/messaging/hookBus.js";
-import {
-  applyMemoryBatchTransaction,
-  formatMemoryMatchesForPrompt,
-  isMemoryBatchCommitted,
-  mergeUserProfileMemory,
-  normalizeEventMemorySchema,
-  readMemorySourceEntries,
-  readUserProfileForUser,
-  readWorkingMemorySnapshot,
-  recallMemory,
-  recoverMemoryTransactions,
-  replaceWorkingMemoryFacts,
-  resolveUserAddressName,
-  type MemoryEntry,
-  type MemoryFactInput
-} from "../../services/memory/memoryService.js";
-import {
-  MemorySchedulerStore,
-  type MemoryClaim,
-  type MemoryQueuedMessage
-} from "../../services/memory/memoryScheduler.js";
 import {
   OpenAIProvider,
-  type ProviderBashOptions,
-  type ProviderCompleteOptions,
-  type ProviderDeferredTurn
+  type ProviderCompleteOptions
 } from "../../adapters/model/openaiProvider.js";
 import { probeProviderMultimodal } from "../../adapters/model/providerDiscovery.js";
-import type { ProviderLogContext } from "../../packages/contracts/model/modelGateway.js";
 import {
-  inboundImageUrls,
   outboundMessageBubble,
-  replaceInboundImageUrls,
   sendOutboundBubble,
-  type MessageDetailsV1,
-  type MessagingPort,
-  type OutboundMessageV1
+  type MessagingPort
 } from "../../packages/contracts/messaging/messages.js";
-import {
-  generatedImageMediaAsset,
-  imageMediaAsset,
-  type AttachmentSourcePort
-} from "../../packages/contracts/media/media.js";
-import { loadPersona, AgentPersona } from "../../services/agent/persona.js";
-import { appendRequestLog } from "../requestLog.js";
-import { WORKSPACE_LAYOUT } from "../../packages/platform/workspaceLayout.js";
-import { SenderNameResolver, senderDisplayName, senderIdentity } from "../../services/conversations/senderName.js";
-import type { SelfieInput, SelfieRunResult } from "../../services/tools/selfieTool.js";
-import { cleanupPersistedCodexProcess, CodexToolRunner } from "../../adapters/codex/codexTool.js";
-import { isTrustedQqFakeIp } from "../../adapters/onebot/qqMedia.js";
-import type { CodexRunner } from "../../packages/contracts/tools/codex.js";
-import {
-  OutboxDisconnectedError,
-  SessionCoordinator,
-  type SessionHandleResult
-} from "../../services/sessions/sessionCoordinator.js";
-import { SessionStore, type OutboxRecord, type SessionEventRecord } from "../../services/sessions/sessionStore.js";
-import { TOOL_CALL_TIMEOUT_MS } from "../../services/tools/tools.js";
+import { buildCommonPromptVariables, loadPersona } from "../../services/agent/persona.js";
 import { promptDefinitionById } from "../../services/agent/promptCatalog.js";
+import { buildPromptUtilityVariables, parseFinalPromptTemplate, renderFinalPromptTemplate, type PromptVariableValue, type RenderedPromptRequest } from "../../services/agent/promptSystem.js";
 import {
   readPromptTextFile
 } from "../../services/agent/promptWorkspace.js";
-import { buildPromptUtilityVariables, parseFinalPromptTemplate, renderFinalPromptTemplate, type PromptVariableValue, type RenderedPromptRequest } from "../../services/agent/promptSystem.js";
-import { buildCommonPromptVariables, buildConversationPromptVariables } from "../../services/agent/persona.js";
-import { DEFAULT_CONTEXT_MESSAGE_LIMIT, MAX_STORED_CONVERSATION_MESSAGES, GROUP_CHAT_SUMMARY_WINDOW_MS, MAX_SELFIE_REFERENCE_IMAGES, MAX_SELFIE_WORKSPACE_REFERENCE_IMAGES, MAX_CURRENT_CONTEXT_IMAGES, MAX_HISTORY_CONTEXT_IMAGES, HYDRATE_MESSAGE_WINDOW_MS, ACTIVE_CONVERSATION_WINDOW_MS, DIRECT_REPLY_TIMEOUT_MS, AMBIENT_ORCHESTRATOR_TIMEOUT_MS, ORCHESTRATOR_MAX_RETRIES, PREPARE_TIMEOUT_MS, RECENT_CONTEXT_TOKEN_BUDGET, DEDUPE_TTL_MS, MAX_DEDUPE_KEYS, DEFAULT_ADMIN_NAME, GROUP_CHAT_SUMMARY_COMMAND, ADMIN_PERSONA_FILES, runtimePromptDefaultContent, BatchUserInfo, WorkingMemoryMergeOutput, WorkingMemoryMergeContext, personaFileNameForAdminId, AdminIdentity, ConversationReplyUpdateInput, ConversationToolPolicyUpdateInput, RuntimeCommandContext, ReplyDeliveryDraft, ReplyDelivery, DeferredCodexTurn, AmbientReplyJob, AmbientReplyState, AmbientIdleTimer, RuntimeConfigSnapshot, RuntimePromptSnapshot, SunaRuntimeOptions } from "./runtimeContracts.js";
-import { ensureRuntimePromptWorkspace } from "./promptMigrations.js";
-import { clampInteger, indexedConversationMessages, resolveRuntimePersonaName } from "./conversationMemoryHelpers.js";
-import { conversationOrchestratorEnabled, conversationReplyEnabled, enrichMemoryEntriesWithConversations, isWebConversationId, normalizeConversationId, normalizeConversationLookupId, outboundForRecord } from "./messagingAttachmentHelpers.js";
-import { conversationMemberNames } from "./selfieHelpers.js";
+import {
+  mergeUserProfileMemory,
+  normalizeEventMemorySchema,
+  recoverMemoryTransactions,
+  type MemoryEntry
+} from "../../services/memory/memoryService.js";
 import { normalizeConversationDisabledTools } from "../../services/tools/conversationToolPolicy.js";
+import { resolveModelReasoningEffort } from "../../packages/contracts/admin/models.js";
+import { getDefaultProvider } from "../config.js";
 import type { SunaRuntime } from "../runtime.js";
+import {
+  AppConfig,
+  ConversationMessageStats,
+  ConversationRecord,
+  ReasoningEffort
+} from "../types.js";
+import { clampInteger, indexedConversationMessages, resolveRuntimePersonaName } from "./conversationMemoryHelpers.js";
+import { conversationOrchestratorEnabled, conversationReplyEnabled, enrichMemoryEntriesWithConversations, isWebConversationId, normalizeConversationLookupId, outboundForRecord } from "./messagingAttachmentHelpers.js";
+import { ensureRuntimePromptWorkspace } from "./promptMigrations.js";
+import { ADMIN_PERSONA_FILES, ConversationReplyUpdateInput, ConversationToolPolicyUpdateInput, RuntimeConfigSnapshot, RuntimePromptSnapshot, personaFileNameForAdminId, runtimePromptDefaultContent } from "./runtimeContracts.js";
+import { conversationMemberNames } from "./selfieHelpers.js";
 type RuntimeHost = SunaRuntime;
 export async function runtime_initialize(this: RuntimeHost) {
     await this.attachmentService.initialize();

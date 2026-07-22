@@ -1,8 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { WORKSPACE_LAYOUT, workspaceRelativeReference } from "../../packages/platform/workspaceLayout.js";
-import { resolveProjectPath } from "../../src/config.js";
-import type { AppConfig } from "../../src/types.js";
+import type { AppConfig } from "../../packages/contracts/admin/public.js";
 import {
   defaultPromptContent,
   PROMPT_FILE_DEFINITIONS,
@@ -23,9 +22,10 @@ export function sharedSystemPromptConfig(config: AppConfig): AppConfig {
   };
 }
 
-export async function ensureSharedSystemPrompts(config: AppConfig) {
+export async function ensureSharedSystemPrompts(config: AppConfig, workspace: string) {
   const sharedConfig = sharedSystemPromptConfig(config);
-  const defaultWorkspace = resolveProjectPath(config.persona.agentWorkspace);
+  sharedConfig.persona.systemPromptWorkspace = path.join(workspace, WORKSPACE_LAYOUT.systemPrompts);
+  const defaultWorkspace = path.join(workspace, WORKSPACE_LAYOUT.defaultAgent);
   await Promise.all(PROMPT_FILE_DEFINITIONS.filter((definition) => definition.scope === "system").map(async (definition) => {
     const fileName = definition.fileName(sharedConfig);
     const destination = await resolveSafePromptFilePath(sharedConfig, "system", fileName);
@@ -54,6 +54,11 @@ export async function ensureAgentSystemPromptOverrides(
   }
   const inheritedConfig = projectConfig(shared, { ...manifest, prompts: { overrideSystem: false } });
   const overrideConfig = projectConfig(shared, { ...manifest, prompts: { overrideSystem: true } });
+  inheritedConfig.persona.systemPromptWorkspace = path.join(
+    path.resolve(agentDirectory, "../.."),
+    WORKSPACE_LAYOUT.systemPrompts
+  );
+  overrideConfig.persona.systemPromptWorkspace = path.join(agentDirectory, "system-prompts");
   await Promise.all(PROMPT_FILE_DEFINITIONS.filter((definition) => definition.scope === "system").map(async (definition) => {
     const fileName = definition.fileName(overrideConfig);
     const destination = await resolveSafePromptFilePath(overrideConfig, "system", fileName);

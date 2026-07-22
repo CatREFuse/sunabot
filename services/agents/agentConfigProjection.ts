@@ -1,4 +1,4 @@
-import type { BotConfig } from "../../src/types.js";
+import type { BotConfig } from "../../packages/contracts/admin/public.js";
 
 export function mergeManifestBotConfig(
   shared: BotConfig,

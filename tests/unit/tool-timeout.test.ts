@@ -66,7 +66,7 @@ vi.mock("node:child_process", () => ({
 
 import { runWorkspaceBash, workspaceBashTool } from "../../services/tools/bashTool.js";
 import { BashApprovalStore } from "../../services/tools/bashAudit.js";
-import { DIRECT_REPLY_TIMEOUT_MS } from "../../src/runtime.js";
+import { DIRECT_REPLY_TIMEOUT_MS } from "../../src/runtime/runtimeContracts.js";
 import { TOOL_CALL_TIMEOUT_MS } from "../../services/tools/tools.js";
 
 let temporaryRoot = "";

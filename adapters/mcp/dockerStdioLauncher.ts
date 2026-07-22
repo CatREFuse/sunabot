@@ -1,7 +1,6 @@
 import { execFile, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { EventEmitter } from "node:events";
-import fs from "node:fs/promises";
 import path from "node:path";
 import type {
   HardenedStdioLaunchHandlers,
@@ -11,22 +10,22 @@ import type {
 } from "./hardenedStdioTransport.js";
 import type { McpSandboxProjection } from "./sandboxProjection.js";
 import {
-  MCP_STDIO_LAUNCH_DIRECTORY_VIRTUAL_PATH
-} from "./stdioEntrypointSource.js";
-import {
-  assertMcpStdioLaunchProjectionIdentity,
-  createMcpStdioLaunchProjection,
-  type McpStdioLaunchProjection
-} from "./stdioLaunchProjection.js";
-import {
   assertMcpSandboxProjectionIdentity,
   captureMcpSandboxProjectionIdentity
 } from "./sandboxProjectionIdentity.js";
+import {
+  MCP_STDIO_LAUNCH_DIRECTORY_VIRTUAL_PATH
+} from "./stdioEntrypointSource.js";
 import {
   clearMcpStdioResolvedEnvironment,
   invalidMcpStdioText,
   validateMcpStdioLaunchSpec
 } from "./stdioLaunchPolicy.js";
+import {
+  assertMcpStdioLaunchProjectionIdentity,
+  createMcpStdioLaunchProjection,
+  type McpStdioLaunchProjection
+} from "./stdioLaunchProjection.js";
 
 export const MCP_STDIO_DOCKER_IMAGE = "sunabot-mcp:local";
 export const MCP_STDIO_DOCKER_EXECUTABLE = "/usr/local/bin/docker";

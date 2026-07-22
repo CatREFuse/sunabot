@@ -1,128 +1,60 @@
-import fs from "node:fs";
-import fsp from "node:fs/promises";
-import path from "node:path";
+import type { MessagingPort } from "../../packages/contracts/messaging/messages.js";
 import {
-  SCHEDULED_CALLBACK_EVENT_KIND,
-  SCHEDULED_CALLBACK_OUTBOX_KIND
-} from "./scheduledTasks.js";
-import { nanoid } from "nanoid";
-import {
-  AppConfig,
-  ChatMessage,
-  ConversationMessageQuote,
-  ConversationRecord,
-  ImageResult,
-  ParsedIncomingMessage,
-  ReasoningEffort
-} from "../types.js";
-import { resolveModelReasoningEffort } from "../admin/models.js";
-import { AttachmentService } from "../../services/media/attachments/service.js";
-import type {
-  AttachmentExtractionContext,
-  ParsedAttachment
-} from "../../services/media/attachments/types.js";
-import { CommandRouter, commandInvocationSnapshot, type CommandMatch } from "../../services/messaging/commandRouter.js";
-import { isReplySenderAllowed } from "../../services/messaging/replySenderPolicy.js";
-import { getDefaultProvider, getRootDir, getWorkspacePath, resolveProjectPath } from "../config.js";
-import {
-  assistantReplyEnvelope,
   decodeAssistantReply,
   decodeIncomingReply,
   decodeNoReplyPoke,
   decodeToolCompletion,
-  incomingReplyEnvelope,
-  type AssistantReplyOutboxEnvelope,
-  type AsyncToolCompletionPayload,
   type ReplyQuoteSnapshotV1,
   type RuntimeIncomingReplyEventPayload
 } from "../../packages/contracts/session/runtimeMessages.js";
-import { applicationDataStore, sqliteMemoryPersistence } from "../../adapters/sqlite/applicationDataStore.js";
-import { configureMemoryPersistence } from "../../services/memory/persistence.js";
-import {
-  ReplyGateEpochs,
-  isOrchestratorReplyRateLimited,
-  readReplyGateSnapshot,
-  resolveUserGroupReplyRoute,
-  type ReplyGateSnapshot
-} from "../../services/orchestration/groupReplyPolicy.js";
-import { HookBus } from "../../services/messaging/hookBus.js";
-import {
-  applyMemoryBatchTransaction,
-  ensureAgentTextFile,
-  formatMemoryMatchesForPrompt,
-  isMemoryBatchCommitted,
-  mergeUserProfileMemory,
-  normalizeEventMemorySchema,
-  readAgentTextFile,
-  readMemorySourceEntries,
-  readUserProfileForUser,
-  readWorkingMemorySnapshot,
-  recallMemory,
-  recoverMemoryTransactions,
-  replaceWorkingMemoryFacts,
-  resolveUserAddressName,
-  type MemoryEntry,
-  type MemoryFactInput
-} from "../../services/memory/memoryService.js";
-import {
-  MemorySchedulerStore,
-  type MemoryClaim,
-  type MemoryQueuedMessage
-} from "../../services/memory/memoryScheduler.js";
-import {
-  OpenAIProvider,
-  type ProviderBashOptions,
-  type ProviderCompleteOptions,
-  type ProviderDeferredTurn
-} from "../../adapters/model/openaiProvider.js";
-import type { ProviderLogContext } from "../../packages/contracts/model/modelGateway.js";
-import {
-  inboundImageUrls,
-  replaceInboundImageUrls,
-  type MessageDetailsV1,
-  type MessagingPort,
-  type OutboundMessageV1
-} from "../../packages/contracts/messaging/messages.js";
-import {
-  generatedImageMediaAsset,
-  imageMediaAsset,
-  type AttachmentSourcePort
-} from "../../packages/contracts/media/media.js";
-import { loadPersona, AgentPersona } from "../../services/agent/persona.js";
-import { appendRequestLog, appendRequestLogStrict } from "../requestLog.js";
-import { WORKSPACE_LAYOUT } from "../../packages/platform/workspaceLayout.js";
-import { SenderNameResolver, senderDisplayName, senderIdentity } from "../../services/conversations/senderName.js";
-import type { SelfieInput, SelfieRunResult } from "../../services/tools/selfieTool.js";
-import { cleanupPersistedCodexProcess, CodexToolRunner } from "../../adapters/codex/codexTool.js";
-import { isTrustedQqFakeIp } from "../../adapters/onebot/qqMedia.js";
-import type { CodexRunner } from "../../packages/contracts/tools/codex.js";
+import { commandInvocationSnapshot, type CommandMatch } from "../../services/messaging/commandRouter.js";
+import { readReplyGateSnapshot } from "../../services/orchestration/groupReplyPolicy.js";
 import {
   OutboxDisconnectedError,
-  SessionCoordinator,
   type OutboxDeliveryContext,
   type SessionHandleResult,
   type SessionTurnContext
 } from "../../services/sessions/sessionCoordinator.js";
-import { SessionStore, type OutboxRecord, type SessionEventRecord } from "../../services/sessions/sessionStore.js";
-import { TOOL_CALL_TIMEOUT_MS } from "../../services/tools/tools.js";
-import { promptDefinitionById } from "../../services/agent/promptCatalog.js";
-import { defaultPromptContent as defaultFinalPromptContent } from "../../services/agent/promptDefaults.js";
+import type { OutboxRecord, SessionEventRecord } from "../../services/sessions/sessionStore.js";
+import { appendRequestLog, appendRequestLogStrict } from "../../adapters/observability/requestLog.js";
 import {
-  parseFinalPromptTemplate,
-  renderFinalPromptTemplate,
-  type PromptVariableValue,
-  type RenderedPromptRequest
-} from "../../services/agent/promptSystem.js";
-import { buildConversationPromptVariables } from "../../services/agent/persona.js";
-import { DEFAULT_CONTEXT_MESSAGE_LIMIT, MAX_STORED_CONVERSATION_MESSAGES, GROUP_CHAT_SUMMARY_WINDOW_MS, MAX_SELFIE_REFERENCE_IMAGES, MAX_SELFIE_WORKSPACE_REFERENCE_IMAGES, MAX_CURRENT_CONTEXT_IMAGES, MAX_HISTORY_CONTEXT_IMAGES, HYDRATE_MESSAGE_WINDOW_MS, ACTIVE_CONVERSATION_WINDOW_MS, DIRECT_REPLY_TIMEOUT_MS, AMBIENT_ORCHESTRATOR_TIMEOUT_MS, ORCHESTRATOR_MAX_RETRIES, PREPARE_TIMEOUT_MS, RECENT_CONTEXT_TOKEN_BUDGET, DEDUPE_TTL_MS, MAX_DEDUPE_KEYS, DEFAULT_ADMIN_NAME, GROUP_CHAT_SUMMARY_COMMAND, CONVERSATION_REPLY_PROMPT_FILE, SELFIE_PROMPT_FILE, GROUP_CHAT_SUMMARY_PROMPT_FILE, ADMIN_PERSONA_FILES, ADMIN_RUNTIME_PROMPT_DEFAULTS, BatchUserInfo, WorkingMemoryMergeOutput, WorkingMemoryMergeContext, personaFileNameForAdminId, AdminIdentity, ConversationReplyUpdateInput, RuntimeCommandContext, ReplyDeliveryDraft, ReplyDelivery, DeferredCodexTurn, AmbientReplyJob, AmbientReplyState, AmbientIdleTimer, RuntimeConfigSnapshot, RuntimePromptSnapshot, SunaRuntimeOptions } from "./runtimeContracts.js";
-import { attachmentSourcePort, conversationMessageAttachments, conversationRecordId, conversationReplyEnabled, incomingAttachmentReferenceScope, incomingConversationMessageId, isNumericMessageId, isRecentMessageForHydration, mergeAttachments, mergeConversationMessageDetails, persistentIncomingKey, queueIncomingSnapshot, replaceQuoteAttachments, uniqueAttachments, uniqueStrings } from "./messagingAttachmentHelpers.js";
-import { conversationLastText } from "./selfieHelpers.js";
+  type ConversationRecord,
+  type ParsedIncomingMessage
+} from "../types.js";
 import {
   conversationRecordSnapshot,
   handleInboundConversationGate,
   restoreConversationRecord
 } from "./inboundConversationGate.js";
 import { errorMessage, isAbortError, isRuntimeIncomingMessage, withAbortTimeout } from "./infrastructure.js";
+import {
+  attachmentSourcePort,
+  conversationMessageAttachments,
+  conversationRecordId,
+  conversationReplyEnabled,
+  incomingAttachmentReferenceScope,
+  incomingConversationMessageId,
+  isNumericMessageId,
+  isRecentMessageForHydration,
+  mergeAttachments,
+  mergeConversationMessageDetails,
+  persistentIncomingKey,
+  replaceQuoteAttachments,
+  uniqueAttachments,
+  uniqueStrings
+} from "./messagingAttachmentHelpers.js";
+import {
+  DIRECT_REPLY_TIMEOUT_MS,
+  PREPARE_TIMEOUT_MS,
+  type DeferredCodexTurn,
+  type ReplyDelivery,
+  type RuntimeCommandContext
+} from "./runtimeContracts.js";
+import {
+  SCHEDULED_CALLBACK_EVENT_KIND,
+  SCHEDULED_CALLBACK_OUTBOX_KIND
+} from "./scheduledTasks.js";
+import { conversationLastText } from "./selfieHelpers.js";
 import {
   createSystemConfigHeldConfirmationPort,
   sameCanonicalOutbox,
@@ -783,16 +715,3 @@ export async function runtime_prepareIncomingMessage(this: RuntimeHost, incoming
       incoming.quoteReferences = replaceQuoteAttachments(incoming.quoteReferences, incoming.attachments);
     }, PREPARE_TIMEOUT_MS);
   }
-
-export class RuntimeIntake {
-  constructor(private readonly host: RuntimeHost) {}
-  hydrateConversationRecords(...args: Parameters<typeof runtime_hydrateConversationRecords>) { return runtime_hydrateConversationRecords.call(this.host, ...args); }
-  performHydrateConversationRecords(...args: Parameters<typeof runtime_performHydrateConversationRecords>) { return runtime_performHydrateConversationRecords.call(this.host, ...args); }
-  handleInboundMessage(...args: Parameters<typeof runtime_handleInboundMessage>) { return runtime_handleInboundMessage.call(this.host, ...args); }
-  processSessionEvent(...args: Parameters<typeof runtime_processSessionEvent>) { return runtime_processSessionEvent.call(this.host, ...args); }
-  processIncomingReplyEvent(...args: Parameters<typeof runtime_processIncomingReplyEvent>) { return runtime_processIncomingReplyEvent.call(this.host, ...args); }
-  deliverSessionOutbox(...args: Parameters<typeof runtime_deliverSessionOutbox>) { return runtime_deliverSessionOutbox.call(this.host, ...args); }
-  requireActiveGateway(...args: Parameters<typeof runtime_requireActiveGateway>) { return runtime_requireActiveGateway.call(this.host, ...args); }
-  handleIncomingMessage(...args: Parameters<typeof runtime_handleIncomingMessage>) { return runtime_handleIncomingMessage.call(this.host, ...args); }
-  prepareIncomingMessage(...args: Parameters<typeof runtime_prepareIncomingMessage>) { return runtime_prepareIncomingMessage.call(this.host, ...args); }
-}

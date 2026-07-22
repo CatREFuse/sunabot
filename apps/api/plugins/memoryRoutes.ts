@@ -8,7 +8,7 @@ import {
   updateMemoryEntry,
   type MemoryEntry
 } from "../../../services/memory/public.js";
-import type { AppConfig } from "../../../src/types.js";
+import type { AppConfig } from "../../../packages/contracts/admin/public.js";
 import type { DreamHistoryEnvelope, DreamHistoryItem } from "../../../services/memory/dream/public.js";
 import { requestAgentId } from "../requestAgentId.js";
 

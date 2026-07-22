@@ -1,5 +1,6 @@
 import type OpenAI from "openai";
-import type { AgentToolName, BotConfig, ImageResult, ProviderConfig } from "../../../src/types.js";
+import type { AgentToolName, BotConfig, ProviderConfig } from "../../../packages/contracts/admin/public.js";
+import type { ImageResult } from "../../../packages/contracts/media/media.js";
 import type { OpenAIToolDefinition } from "../../../services/agent/promptSystem.js";
 import type { MemoryRecallInput } from "../../../services/memory/memoryService.js";
 import type { KnowledgeSearchToolPort } from "../../../services/tools/knowledgeSearchTool.js";

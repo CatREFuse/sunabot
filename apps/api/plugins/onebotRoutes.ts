@@ -8,8 +8,8 @@ import {
 } from "../../../adapters/onebot/napcatLoginControl.js";
 import type { OneBotGateway } from "../../../adapters/onebot/onebotGateway.js";
 import { WORKSPACE_LAYOUT } from "../../../packages/platform/workspaceLayout.js";
-import { getWorkspacePath } from "../../../src/config.js";
-import type { OneBotLoginCheck, OneBotQrLogin } from "../../../src/types.js";
+import { getWorkspacePath } from "../../../packages/platform/projectPaths.js";
+import type { OneBotLoginCheck, OneBotQrLogin } from "../../../packages/contracts/admin/public.js";
 import { AdminApiError, conflict, notFound } from "../../../src/admin/errors.js";
 import type { AgentRegistry } from "../../../services/agents/agentRegistry.js";
 import type { AgentAccountRegistryRow } from "../../../adapters/sqlite/applicationDataStore.js";

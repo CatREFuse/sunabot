@@ -1,4 +1,5 @@
-import type { ImageQuality, ImageResult } from "../../../src/types.js";
+import type { ImageQuality } from "../../../packages/contracts/admin/public.js";
+import type { ImageResult } from "../../../packages/contracts/media/media.js";
 import type { ProviderLogContext } from "../../../packages/contracts/model/modelGateway.js";
 import {
   ImageGenerationHttpError,

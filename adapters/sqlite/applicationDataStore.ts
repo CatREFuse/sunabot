@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { getWorkspacePath, resolveProjectPath } from "../../src/config.js";
-import type { AppConfig, ConversationRecord, ImageHistoryRecord } from "../../src/types.js";
+import { getWorkspacePath, resolveProjectPath } from "../../packages/platform/projectPaths.js";
+import type { AppConfig, ImageHistoryRecord } from "../../packages/contracts/admin/public.js";
+import type { ConversationRecord } from "../../packages/contracts/messaging/messages.js";
 import type { MemoryPersistenceProvider, MemorySourceRevisions } from "../../services/memory/persistence.js";
 import type { ScheduledTaskStore } from "../../services/scheduling/public.js";
 import { WORKSPACE_LAYOUT } from "../../packages/platform/workspaceLayout.js";
@@ -358,10 +359,10 @@ export class ApplicationDataStore {
     return { imported: records.length > 0, count: this.memoryCount(source) };
   }
 
-  readConversations() {
+  readConversations<T extends ConversationRecord = ConversationRecord>() {
     return this.database.prepare(`
       SELECT data_json FROM conversations ORDER BY last_at DESC, id
-    `).all().map((row) => JSON.parse(String((row as SqlRow).data_json)) as ConversationRecord);
+    `).all().map((row) => JSON.parse(String((row as SqlRow).data_json)) as T);
   }
 
   replaceConversations(records: readonly ConversationRecord[]) {

@@ -7,23 +7,28 @@ import {
   type AgentSkillIndex,
   type AgentSkillRecord
 } from "../../packages/contracts/extensions/agentExtensions.js";
+import {
+  type AgentExtensionPathGuard,
+  type AgentExtensionStorePaths
+} from "./agentExtensionPaths.js";
 import { sameSkillEvidence } from "./agentExtensionPreview.js";
 import {
-  exists,
   atomicJson,
+  exists,
   pinDirectoryIdentity,
   readJson,
   refreshPrivatePinnedDirectory,
   storeError,
   syncDirectory,
   verifyPrivatePinnedDirectory,
-  type PinnedDirectoryIdentity,
-  type AgentExtensionBeforeFileOpen
+  type AgentExtensionBeforeFileOpen,
+  type PinnedDirectoryIdentity
 } from "./agentExtensionSecureFs.js";
 import {
-  type AgentExtensionPathGuard,
-  type AgentExtensionStorePaths
-} from "./agentExtensionPaths.js";
+  bindSkillDirectory,
+  moveVerifiedSkillDirectory,
+  quarantineVerifiedSkillDirectory
+} from "./agentSkillSafeMutation.js";
 import {
   parseSkillRemovalTransaction,
   parseSkillTransaction,
@@ -32,11 +37,6 @@ import {
   type SkillRemovalTransaction,
   type SkillTransaction
 } from "./agentSkillTransaction.js";
-import {
-  bindSkillDirectory,
-  moveVerifiedSkillDirectory,
-  quarantineVerifiedSkillDirectory
-} from "./agentSkillSafeMutation.js";
 import { parentBoundRename, type ParentBoundWorkerFailureMode } from "./parentBoundFs.js";
 import { inspectSkillDirectory, type SkillArchiveLimits } from "./skillArchive.js";
 
@@ -77,7 +77,7 @@ export async function readSkillIndexFile(
 }
 
 export async function recoverSkillTransactions(context: SkillPersistenceContext) {
-  const { paths, pathGuard, archiveLimits } = context;
+  const { paths, pathGuard } = context;
   await pathGuard.guard(paths, "recover-skill-transactions");
   context.recoverySkillsIdentity = pathGuard.directoryIdentity(paths, paths.skills);
   await verifyRecoverySkills(context);

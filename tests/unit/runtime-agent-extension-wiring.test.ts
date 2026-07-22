@@ -18,8 +18,8 @@ import { createAdminTestConfig } from "./admin-fixtures.js";
 import { testTempRoot } from "./test-temp-root.js";
 
 const appendRequestLog = vi.hoisted(() => vi.fn(async () => undefined));
-vi.mock("../../src/requestLog.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../src/requestLog.js")>()),
+vi.mock("../../adapters/observability/requestLog.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../adapters/observability/requestLog.js")>()),
   appendRequestLog,
   appendRequestLogStrict: appendRequestLog
 }));

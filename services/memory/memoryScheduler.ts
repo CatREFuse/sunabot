@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
-import type { AppConfig } from "../../src/types.js";
-import { resolveProjectPath } from "../../src/config.js";
+import type { AppConfig } from "../../packages/contracts/admin/public.js";
+import { resolveProjectPath } from "../../packages/platform/projectPaths.js";
 import {
   GROUP_MEMORY_SELECTION_CONTEXT_LIMIT,
   GROUP_MEMORY_SELECTION_POLICY,

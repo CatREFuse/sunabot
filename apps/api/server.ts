@@ -1,98 +1,106 @@
+import fastifyStatic from "@fastify/static";
+import Fastify, { type FastifyInstance } from "fastify";
+import fs, { existsSync } from "node:fs";
 import http from "node:http";
 import path from "node:path";
-import fs, { existsSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import Fastify, { type FastifyInstance } from "fastify";
-import fastifyStatic from "@fastify/static";
-import { AgentFileRepository } from "../../src/admin/agentFiles.js";
-import { AdminAuthService } from "../../src/admin/auth.js";
-import { ConfigService } from "../../src/admin/configService.js";
-import { ConfigDoctorService, type ConfigDoctorModelRunner } from "../../src/admin/configDoctor.js";
-import { AgentConfigService } from "../../src/admin/agentConfigService.js";
-import { SystemConfigService } from "../../src/admin/systemConfigService.js";
-import { CodexAuthService } from "../../src/admin/codexAuth.js";
-import { MonitorSettingsStore } from "../../src/admin/monitorSettings.js";
-import { SelfieReferenceRepository } from "../../src/admin/selfieReferences.js";
-import {
-  getConfigPath,
-  getRootDir,
-  getWorkspaceDir,
-  getWorkspacePath,
-  loadConfig,
-  resolveProjectPath
-} from "../../src/config.js";
+import { OpenAIProvider } from "../../adapters/model/openaiProvider.js";
+import { OneBotGateway } from "../../adapters/onebot/onebotGateway.js";
+import { SqliteAdminSessionStore } from "../../adapters/sqlite/adminSessionStore.js";
 import {
   applicationDatabasePath,
   applicationDataStore,
   closeApplicationDataStores,
   sqliteMemoryPersistence
 } from "../../adapters/sqlite/applicationDataStore.js";
-import { SqliteAdminSessionStore } from "../../adapters/sqlite/adminSessionStore.js";
-import { configureMemoryPersistence } from "../../services/memory/persistence.js";
+import type { AppConfig, ProviderConfig } from "../../packages/contracts/admin/public.js";
 import { ServiceError } from "../../packages/contracts/errors/serviceError.js";
+import {
+  inspectMultiAgentMigrationGate,
+  validateMultiAgentWorkspacePath
+} from "../../packages/platform/multiAgentMigrationGate.mjs";
+import { WORKSPACE_LAYOUT } from "../../packages/platform/workspaceLayout.js";
+import {
+  AccountRuntimeReconciler,
+  RuntimeProbeClient,
+  type AccountRuntimeReconcilerPort,
+  type RuntimeProbeClientPort
+} from "../../services/agents/accountRuntimeReconciler.js";
+import { AgentRegistry, type AgentRegistryOptions } from "../../services/agents/agentRegistry.js";
+import { AgentRuntimeManager } from "../../services/agents/agentRuntimeManager.js";
 import { ConversationDirectory } from "../../services/conversations/conversationDirectory.js";
-import { OneBotGateway } from "../../adapters/onebot/onebotGateway.js";
 import {
   OutboundMediaDelivery,
   outboundMediaMaxInlineBytes,
   outboundMediaReferenceMode
 } from "../../services/delivery/outboundMedia.js";
-import { SunaRuntime } from "../../src/runtime.js";
-import { ServiceMonitor } from "../../src/serviceMonitor.js";
-import { WORKSPACE_LAYOUT } from "../../packages/platform/workspaceLayout.js";
-import { registerAgentToolRoutes } from "./plugins/agentToolRoutes.js";
-import { registerAgentRoutes } from "./plugins/agentRoutes.js";
-import { registerAuthRoutes } from "./plugins/authRoutes.js";
-import { registerConversationRoutes } from "./plugins/conversationRoutes.js";
-import { registerScheduledTaskRoutes } from "./plugins/scheduledTaskRoutes.js";
-import { registerConfigDoctorRoutes } from "./plugins/configDoctorRoutes.js";
-import { registerMediaRoutes, type MediaHostnameLookup, type MediaPinnedRequest } from "./plugins/mediaRoutes.js";
-import { registerMemoryRoutes } from "./plugins/memoryRoutes.js";
-import { registerKnowledgeRoutes } from "./plugins/knowledgeRoutes.js";
-import { registerMonitoringRoutes } from "./plugins/monitoringRoutes.js";
-import { registerOneBotRoutes } from "./plugins/onebotRoutes.js";
-import { registerProviderConfigRoutes } from "./plugins/providerConfigRoutes.js"; import { registerReleaseRoutes } from "./plugins/releaseRoutes.js";
-import { registerSelfieReferenceRoutes } from "./plugins/selfieReferenceRoutes.js";
-import { registerAgentEmojiApi } from "./emojiApiComposition.js";
-import { resolveDreamAccountId } from "./dreamApiComposition.js";
-import { buildVoiceApiComposition, registerVoiceApi } from "./voiceApiComposition.js";
-import type { AppConfig, ProviderConfig } from "../../src/types.js";
-import { OpenAIProvider } from "../../adapters/model/openaiProvider.js";
-import { AgentRegistry, type AgentRegistryOptions } from "../../services/agents/agentRegistry.js";
-import { AgentRuntimeManager } from "../../services/agents/agentRuntimeManager.js";
-import {
-  AccountRuntimeReconciler,
-  type AccountRuntimeReconcilerPort,
-  RuntimeProbeClient,
-  type RuntimeProbeClientPort
-} from "../../services/agents/accountRuntimeReconciler.js";
-import { BroadcastStormDetector } from "../../services/orchestration/public.js";
 import { knowledgeBaseForConfig } from "../../services/knowledge/public.js";
+import { configureMemoryPersistence } from "../../services/memory/persistence.js";
+import { BroadcastStormDetector } from "../../services/orchestration/public.js";
 import {
   createRuntimeToolCapabilityResolver,
   createWorkspaceBashCapabilityProbe,
   type RuntimeToolCapabilityResolver
 } from "../../services/tools/bashCapability.js";
-import type { RuntimeBashAuditPort } from "../../src/runtime/runtimeContracts.js";
-import { createBashAuditRuntimePort } from "./bashAuditRuntime.js";
+import type { SystemConfigRuntimePort } from "../../services/tools/systemConfigTool.js";
+import { AgentConfigService } from "../../src/admin/agentConfigService.js";
+import { AgentFileRepository } from "../../src/admin/agentFiles.js";
+import { AdminAuthService } from "../../src/admin/auth.js";
+import { CodexAuthService } from "../../src/admin/codexAuth.js";
+import { ConfigDoctorService, type ConfigDoctorModelRunner } from "../../src/admin/configDoctor.js";
+import { ConfigService } from "../../src/admin/configService.js";
+import { MonitorSettingsStore } from "../../src/admin/monitorSettings.js";
+import { SelfieReferenceRepository } from "../../src/admin/selfieReferences.js";
+import { SystemConfigService } from "../../src/admin/systemConfigService.js";
 import {
-  inspectMultiAgentMigrationGate,
-  validateMultiAgentWorkspacePath
-} from "../../packages/platform/multiAgentMigrationGate.mjs";
+  getConfigPath,
+  getRootDir,
+  getWorkspaceDir,
+  getWorkspacePath,
+  loadConfig
+} from "../../src/config.js";
+import { SunaRuntime } from "../../src/runtime.js";
+import type { RuntimeBashAuditPort } from "../../src/runtime/runtimeContracts.js";
+import { ServiceMonitor } from "../../src/serviceMonitor.js";
 import {
   completeFirstRunBootstrap,
   inspectFirstRunBootstrap
 } from "../../tooling/runtime/first-run-state.mjs";
-import { collectWorkspaceProbeFacts } from "../../tooling/runtime/probe.mjs";
-import { buildRuntimeProbe } from "../../tooling/runtime/probe.mjs";
 import { resolveMcpStdioRuntimeOptions } from "../../tooling/runtime/mcp-runtime-config.mjs";
-import type { SystemConfigRuntimePort } from "../../services/tools/systemConfigTool.js";
+import { buildRuntimeProbe, collectWorkspaceProbeFacts } from "../../tooling/runtime/probe.mjs";
+import { readAccountRuntimeStatus } from "./accountRuntimeStatus.js";
 import {
   buildAgentExtensionApiComposition,
   registerAgentExtensionApi,
   type AgentExtensionApiOptions
 } from "./agentExtensionApi.js";
+import { createBashAuditRuntimePort } from "./bashAuditRuntime.js";
+import { resolveDreamAccountId } from "./dreamApiComposition.js";
+import { registerAgentEmojiApi } from "./emojiApiComposition.js";
+import { registerAgentRoutes } from "./plugins/agentRoutes.js";
+import { registerAgentToolRoutes } from "./plugins/agentToolRoutes.js";
+import { registerAuthRoutes } from "./plugins/authRoutes.js";
+import { registerConfigDoctorRoutes } from "./plugins/configDoctorRoutes.js";
+import { registerConversationRoutes } from "./plugins/conversationRoutes.js";
+import { registerKnowledgeRoutes } from "./plugins/knowledgeRoutes.js";
+import { registerMediaRoutes, type MediaHostnameLookup, type MediaPinnedRequest } from "./plugins/mediaRoutes.js";
+import { registerMemoryRoutes } from "./plugins/memoryRoutes.js";
+import { registerMonitoringRoutes } from "./plugins/monitoringRoutes.js";
+import { registerOneBotRoutes } from "./plugins/onebotRoutes.js";
+import { registerProviderConfigRoutes } from "./plugins/providerConfigRoutes.js";
+import { registerReleaseRoutes } from "./plugins/releaseRoutes.js";
+import { registerScheduledTaskRoutes } from "./plugins/scheduledTaskRoutes.js";
+import { registerSelfieReferenceRoutes } from "./plugins/selfieReferenceRoutes.js";
 import { isSpaRoute } from "./spaRouting.js";
+import { buildVoiceApiComposition, registerVoiceApi } from "./voiceApiComposition.js";
+import {
+  assertOneBotAccessToken,
+  closeOneBotHttpServer,
+  createOneBotHttpServer,
+  resolveOneBotListenerAddress,
+  startOneBotHttpServer,
+  type OneBotListenerAddress
+} from "./onebotListener.js";
 export interface CreateAppOptions {
   config?: AppConfig;
   initializeRuntime?: boolean;
@@ -114,10 +122,6 @@ export interface CreateAppOptions {
   mediaHostnameLookup?: MediaHostnameLookup;
   mediaPinnedRequest?: MediaPinnedRequest;
 }
-export interface OneBotListenerAddress {
-  host: string;
-  port: number;
-}
 export interface BuiltApp {
   app: FastifyInstance;
   runtime: SunaRuntime;
@@ -126,7 +130,7 @@ export interface BuiltApp {
   outboundMedia: OutboundMediaDelivery;
   serviceMonitor: ServiceMonitor;
   agentRegistry: AgentRegistry;
-  agentRuntimeManager: AgentRuntimeManager;
+  agentRuntimeManager: AgentRuntimeManager<SunaRuntime>;
   getConfig(): AppConfig;
   startOneBotListener(address?: Partial<OneBotListenerAddress>): Promise<OneBotListenerAddress>;
 }
@@ -206,24 +210,24 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
     agentExtensions: runtimeAgentExtensions,
     replyTaskGate: broadcastStormDetector
   });
-  const runtime = new SunaRuntime(defaultAgentConfig, {
-    resolveToolCapabilities,
-    bashAudit,
-    systemConfig: systemConfigRuntime,
-    agentExtensions: runtimeAgentExtensions,
-    replyTaskGate: broadcastStormDetector
-  });
+  const runtime = createRuntime(defaultAgentConfig);
   const agentRuntimeManager = new AgentRuntimeManager(agentRegistry, {
     defaultRuntime: runtime,
     createRuntime,
     initializeRuntime: options.initializeRuntime !== false,
     broadcastStormDetector,
+    readAccountRuntimeStatus,
     probeExtensionReadiness: (agentId) => agentExtensions.mcpRuntimeService.readiness(agentId)
   });
   await agentRuntimeManager.initialize();
+  const getRuntime = (agentId: string) => agentRuntimeManager.require(agentId);
+  const getRuntimeContext = (agentId: string) => {
+    const agentRuntime = getRuntime(agentId);
+    return { config: agentRuntime.config, runtime: agentRuntime };
+  };
   const voiceApi = buildVoiceApiComposition({
     defaultAgentId: () => config.persona.defaultAgentId,
-    getRuntime: (agentId) => agentRuntimeManager.require(agentId)
+    getRuntime
   });
   agentExtensions.setAgentChangedHandler(async (agentId) => {
     await agentRuntimeManager.refreshReadiness(agentId);
@@ -274,7 +278,7 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
   const serviceMonitor = new ServiceMonitor(runtime, onebotGateway, monitorSettings);
   app.addHook("onClose", async () => {
     await onebotGateway.close();
-    await closeHttpServer(onebotServer);
+    await closeOneBotHttpServer(onebotServer);
     codexAuth.close();
     adminSessionStore.close();
     serviceMonitor.close();
@@ -283,6 +287,7 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
     closeApplicationDataStores();
   });
   const agentFiles = new AgentFileRepository({ runtime });
+  const agentFilesFor = (agentId: string) => new AgentFileRepository({ runtime: getRuntime(agentId) });
   const selfieReferences = new Map<string, SelfieReferenceRepository>();
   const selfieReferencesFor = (agentId: string) => {
     const existing = selfieReferences.get(agentId);
@@ -414,7 +419,7 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
   systemConfigService = new SystemConfigService({
     registry: agentRegistry,
     agentConfigService,
-    getRuntime: (agentId) => agentRuntimeManager.require(agentId),
+    getRuntime,
     getOnebotStatus,
     getRuntimeProbe: async (agentId) => buildRuntimeProbe(await getRuntimeProbeFacts(agentId)),
     getRecoveryStatus: () => configService.getRecoveryStatus(),
@@ -494,10 +499,11 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
   }
   registerConversationRoutes(app, {
     runtime,
-    getRuntime: (agentId) => agentRuntimeManager.require(agentId),
+    getRuntime,
     onebotGateway,
     conversationDirectory
-  }); registerScheduledTaskRoutes(app, { runtime, getRuntime: (agentId) => agentRuntimeManager.require(agentId) });
+  });
+  registerScheduledTaskRoutes(app, { runtime, getRuntime });
   registerAgentRoutes(app, agentRegistry, {
     decorateAgents: (agents) => agentRuntimeManager.decorateAgents(agents, onebotGateway.getStatus()),
     onAgentCreated: async (agentId) => {
@@ -535,27 +541,22 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
   });
   registerMediaRoutes(app, {
     getConfig: () => config, runtime, lookupHostname: options.mediaHostnameLookup, requestRemoteImage: options.mediaPinnedRequest,
-    getAgentContext: (agentId) => {
-      const agentRuntime = agentRuntimeManager.require(agentId);
-      return { config: agentRuntime.config, runtime: agentRuntime };
-    },
+    getAgentContext: getRuntimeContext,
     getAllAgentConfigs: async () => Promise.all((await agentRegistry.list())
       .filter((agent) => agent.enabled)
       .map((agent) => agentRegistry.config(agent.id)))
   });
   registerOneBotRoutes(app, onebotGateway, { agentRegistry });
   registerProviderConfigRoutes(app, { codexAuth, configService, agentConfigService, testProvider: options.testProvider });
-  registerConfigDoctorRoutes(app, configDoctorService); registerReleaseRoutes(app);
+  registerConfigDoctorRoutes(app, configDoctorService);
+  registerReleaseRoutes(app);
   registerMemoryRoutes(app, {
     getConfig: () => config,
     runtime,
-    getAgentContext: (agentId) => {
-      const agentRuntime = agentRuntimeManager.require(agentId);
-      return { config: agentRuntime.config, runtime: agentRuntime };
-    },
+    getAgentContext: getRuntimeContext,
     resolveDreamAccountId: (agentId) => resolveDreamAccountId(agentId, onebotGateway, agentRegistry)
   });
-  registerKnowledgeRoutes(app, { getService: (agentId) => knowledgeBaseForConfig(agentRuntimeManager.require(agentId).config) });
+  registerKnowledgeRoutes(app, { getService: (agentId) => knowledgeBaseForConfig(getRuntime(agentId).config) });
   registerAgentToolRoutes(app, {
     agentFiles,
     resolveToolCapabilities: (backend) => runtime.resolveToolCapabilities(backend),
@@ -563,10 +564,10 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
     resolveVoiceCapability: () => voiceApi.resolveCapability(config.persona.defaultAgentId),
     getConfig: () => config,
     getAgentContext: (agentId) => {
-      const agentRuntime = agentRuntimeManager.require(agentId);
+      const agentRuntime = getRuntime(agentId);
       return {
         config: agentRuntime.config,
-        agentFiles: new AgentFileRepository({ runtime: agentRuntime }),
+        agentFiles: agentFilesFor(agentId),
         resolveToolCapabilities: (backend) => agentRuntime.resolveToolCapabilities(backend),
         resolveConversationAssetCapability: () => conversationAssetCapabilityFor(agentId, onebotGateway, agentRegistry),
         resolveVoiceCapability: () => voiceApi.resolveCapability(agentId),
@@ -581,10 +582,11 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
   registerAgentEmojiApi(app, {
     getConfig: () => config,
     runtime,
-    getRuntime: (agentId) => agentRuntimeManager.require(agentId),
+    getRuntime,
     configService,
     agentConfigService
-  }); registerVoiceApi(app, voiceApi);
+  });
+  registerVoiceApi(app, voiceApi);
 
   app.setNotFoundHandler((request, reply) => {
     const pathname = request.url.split("?", 1)[0] ?? "";
@@ -616,13 +618,11 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
       const defaults = resolveOneBotListenerAddress();
       const host = address.host ?? listenerOptions?.host ?? defaults.host;
       const port = address.port ?? listenerOptions?.port ?? defaults.port;
-      validateListenerAddress(host, port, address.port != null || listenerOptions?.port != null);
-      await listenHttpServer(onebotServer, host, port);
-      const boundAddress = onebotServer.address();
-      if (!boundAddress || typeof boundAddress === "string") {
-        throw new Error("OneBot listener did not expose a TCP address.");
-      }
-      return { host, port: boundAddress.port };
+      return startOneBotHttpServer(
+        onebotServer,
+        { host, port },
+        address.port != null || listenerOptions?.port != null
+      );
     }
   };
 }
@@ -700,75 +700,6 @@ if (isDirectExecution) {
 
 function requestLogError(error: unknown) {
   console.error("[server] request failed", error);
-}
-
-export function assertOneBotAccessToken(
-  config: Pick<AppConfig, "onebot">,
-  env: NodeJS.ProcessEnv = process.env
-) {
-  const variable = config.onebot.accessTokenEnv;
-  if (env[variable]?.trim()) return;
-  throw new Error(
-    `Cannot start the OneBot listener: ${variable} is required. ` +
-    "Configure the same non-empty token in Sunabot Core and NapCat."
-  );
-}
-
-export function resolveOneBotListenerAddress(
-  env: { SUNABOT_ONEBOT_HOST?: string; SUNABOT_ONEBOT_PORT?: string } = process.env
-): OneBotListenerAddress {
-  const host = env.SUNABOT_ONEBOT_HOST?.trim() || "127.0.0.1";
-  const rawPort = env.SUNABOT_ONEBOT_PORT?.trim() || "8788";
-  const port = Number(rawPort);
-  validateListenerAddress(host, port, false);
-  return { host, port };
-}
-
-function validateListenerAddress(host: string, port: number, allowEphemeralPort: boolean) {
-  if (!host.trim()) throw new Error("SUNABOT_ONEBOT_HOST must not be empty.");
-  const minimum = allowEphemeralPort ? 0 : 1;
-  if (!Number.isSafeInteger(port) || port < minimum || port > 65_535) {
-    throw new Error(`SUNABOT_ONEBOT_PORT must be an integer between ${minimum} and 65535.`);
-  }
-}
-
-function createOneBotHttpServer() {
-  return http.createServer((request, response) => {
-    if (request.method === "GET" && request.url?.split("?", 1)[0] === "/healthz") {
-      response.writeHead(204, { "cache-control": "no-store" });
-      response.end();
-      return;
-    }
-    response.writeHead(404, {
-      "content-type": "text/plain; charset=utf-8",
-      "cache-control": "no-store"
-    });
-    response.end("ONEBOT_WEBSOCKET_UPGRADE_REQUIRED\n");
-  });
-}
-
-function listenHttpServer(server: http.Server, host: string, port: number) {
-  return new Promise<void>((resolve, reject) => {
-    const onError = (error: Error) => {
-      server.off("listening", onListening);
-      reject(error);
-    };
-    const onListening = () => {
-      server.off("error", onError);
-      resolve();
-    };
-    server.once("error", onError);
-    server.once("listening", onListening);
-    server.listen(port, host);
-  });
-}
-
-async function closeHttpServer(server: http.Server | undefined) {
-  if (!server?.listening) return;
-  server.closeAllConnections();
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => error ? reject(error) : resolve());
-  });
 }
 
 function formatHost(host: string) {

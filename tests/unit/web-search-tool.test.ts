@@ -9,7 +9,7 @@ vi.mock("../../src/config.js", () => ({
   getWorkspaceDir: () => process.cwd(),
   getWorkspacePath: (...segments: string[]) => segments.join("/")
 }));
-vi.mock("../../src/requestLog.js", () => ({ appendRequestLog }));
+vi.mock("../../adapters/observability/requestLog.js", () => ({ appendRequestLog }));
 
 import {
   runWebsearch,

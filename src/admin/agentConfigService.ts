@@ -1,5 +1,4 @@
 import type { AgentRegistry } from "../../services/agents/agentRegistry.js";
-import type { AgentRuntimeManager } from "../../services/agents/agentRuntimeManager.js";
 import type { AppConfig } from "../types.js";
 import type { ConfigService } from "./configService.js";
 import {
@@ -16,7 +15,13 @@ const GLOBAL_SECTIONS = new Set<ConfigSection>(["server", "providers", "broadcas
 export class AgentConfigService {
   constructor(
     private readonly registry: AgentRegistry,
-    private readonly runtimes: AgentRuntimeManager,
+    private readonly runtimes: {
+      require(agentId: string): {
+        prepareReload(config: AppConfig): Promise<unknown>;
+        commitReload(snapshot: unknown): void;
+        reload(config: AppConfig): Promise<unknown>;
+      };
+    },
     private readonly globalConfigService: Pick<ConfigService, "readEnvelope" | "patch" | "patchGroupReply">
   ) {}
 

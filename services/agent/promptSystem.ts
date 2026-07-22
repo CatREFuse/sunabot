@@ -1,4 +1,4 @@
-import type { ChatMessage } from "../../src/types.js";
+import type { ChatMessage } from "../../packages/contracts/model/modelGateway.js";
 import {
   PromptConditionError,
   extractPromptConditionalVariables,

@@ -9,7 +9,8 @@ import {
 } from "../../../src/admin/emojiLibrary.js";
 import { AdminApiError, badRequest } from "../../../src/admin/errors.js";
 import type { SunaRuntime } from "../../../src/runtime.js";
-import type { AppConfig, EmojiSendSize, ImageHistoryRecord, ImageResult } from "../../../src/types.js";
+import type { AppConfig, EmojiSendSize, ImageHistoryRecord } from "../../../packages/contracts/admin/public.js";
+import type { ImageResult } from "../../../packages/contracts/media/media.js";
 import {
   emojiGenerationPrompt,
   isEmojiFileName,

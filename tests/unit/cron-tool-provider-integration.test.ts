@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 const appendRequestLog = vi.hoisted(() => vi.fn(async () => undefined));
-vi.mock("../../src/requestLog.js", () => ({ appendRequestLog }));
+vi.mock("../../adapters/observability/requestLog.js", () => ({ appendRequestLog }));
 
 import type { ProviderCompleteOptions } from "../../adapters/model/provider/contracts.js";
 import { RegistryProviderToolExecutor } from "../../adapters/model/provider/toolExecutor.js";

@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 
 export const GROUP_THREAD_STATE_SCHEMA_VERSION = 1 as const;
-export const GROUP_THREAD_MODEL_OUTPUT_SCHEMA_VERSION = 1 as const;
 
 export const GROUP_THREAD_STATUSES = ["active", "dormant", "closed"] as const;
 export type GroupThreadStatus = typeof GROUP_THREAD_STATUSES[number];
@@ -139,58 +138,6 @@ export interface GroupThreadModelOutputV1 {
 export type GroupThreadModelParseResult =
   | { ok: true; value: GroupThreadModelOutputV1 }
   | { ok: false; error: GroupThreadContextError };
-
-export const GROUP_THREAD_MODEL_OUTPUT_JSON_SCHEMA = {
-  type: "object",
-  additionalProperties: false,
-  required: ["schema_version", "active_thread_key", "threads", "message_assignments"],
-  properties: {
-    schema_version: { const: 1 },
-    active_thread_key: { type: ["string", "null"] },
-    threads: {
-      type: "array",
-      maxItems: 16,
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["thread_key", "existing_thread_id", "topic", "status"],
-        properties: {
-          thread_key: { type: "string", minLength: 1, maxLength: 64 },
-          existing_thread_id: { type: ["string", "null"] },
-          topic: { type: "string", minLength: 8, maxLength: 160 },
-          status: { type: "string", enum: GROUP_THREAD_STATUSES }
-        }
-      }
-    },
-    message_assignments: {
-      type: "array",
-      maxItems: 128,
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: [
-          "message_id",
-          "primary_thread_key",
-          "related_thread_keys",
-          "relation",
-          "confidence"
-        ],
-        properties: {
-          message_id: { type: "string", minLength: 1 },
-          primary_thread_key: { type: "string", minLength: 1, maxLength: 64 },
-          related_thread_keys: {
-            type: "array",
-            maxItems: 2,
-            uniqueItems: true,
-            items: { type: "string", minLength: 1, maxLength: 64 }
-          },
-          relation: { type: "string", enum: GROUP_THREAD_RELATIONS },
-          confidence: { type: "number", minimum: 0, maximum: 1 }
-        }
-      }
-    }
-  }
-} as const;
 
 export function createEmptyGroupThreadState(): GroupThreadStateV1 {
   return {

@@ -5,7 +5,7 @@ import {
   type AgentToolName,
   type BotConfig,
   type BotToolOverride
-} from "../../src/types.js";
+} from "../../packages/contracts/admin/public.js";
 import {
   createWorkspaceBashTool,
   isWorkspaceBashProviderOptions,

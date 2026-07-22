@@ -42,7 +42,7 @@ const requestLog = vi.hoisted(() => ({
   appendStrict: vi.fn(async () => undefined)
 }));
 
-vi.mock("../../src/requestLog.js", () => ({
+vi.mock("../../adapters/observability/requestLog.js", () => ({
   appendRequestLog: requestLog.append,
   appendRequestLogStrict: requestLog.appendStrict
 }));

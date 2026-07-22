@@ -23,6 +23,7 @@ import {
   type FrozenFilesystemIdentity,
   type FrozenRestrictedPath
 } from "./bashFilesystemGuard.js";
+import { evaluateBashPolicy } from "./bashPolicy.js";
 import {
   WORKSPACE_BASH_ISOLATION_ERROR,
   WORKSPACE_BASH_MCP_ROOT,
@@ -34,7 +35,6 @@ import {
   type WorkspaceBashReadOnlyMounts,
   type WorkspaceBashSandboxOptions
 } from "./bashSandbox.js";
-import { evaluateBashPolicy } from "./bashPolicy.js";
 import { TOOL_CALL_TIMEOUT_MS } from "./toolConstants.js";
 
 export const WORKSPACE_BASH_TOOL_NAME = "workspace_bash";
@@ -729,8 +729,4 @@ function sanitizeHostText(value: string, workbenchRoot: string) {
 function truncateOutput(value: string) {
   if (value.length <= MAX_OUTPUT_CHARS) return value;
   return `${value.slice(0, MAX_OUTPUT_CHARS)}\n[truncated]`;
-}
-
-function errorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error || "unknown error");
 }

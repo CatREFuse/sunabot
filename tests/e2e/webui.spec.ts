@@ -152,7 +152,25 @@ test("Agent 身份页可设置 WebUI 头像并立即刷新", async ({ page }) =>
 });
 
 test("Agent 设置只保留有效且唯一的配置入口", async ({ page }) => {
-  await installMockApi(page);
+  const state = await installMockApi(page);
+
+  for (const viewport of [
+    { width: 1_024, height: 768 },
+    { width: 1_440, height: 900 }
+  ]) {
+    await page.setViewportSize(viewport);
+    await page.goto("/overview");
+    const navigation = page.getByRole("navigation", { name: "主导航" });
+    await page.getByRole("button", { name: /^当前 Agent：/ }).click();
+    const menu = page.getByRole("listbox", { name: "Agent" });
+    await expect(menu).toBeVisible();
+    const overflow = await navigation.evaluate((element) => ({
+      clientWidth: element.clientWidth,
+      scrollWidth: element.scrollWidth
+    }));
+    expect(overflow.scrollWidth).toBe(overflow.clientWidth);
+    expect((await menu.boundingBox())?.width).toBeGreaterThanOrEqual(256);
+  }
 
   await page.goto("/agent-settings/persona");
   await expect(page.getByText("Agent ID", { exact: true })).toBeVisible();
@@ -175,6 +193,16 @@ test("Agent 设置只保留有效且唯一的配置入口", async ({ page }) => 
   await expect(page.getByLabel("对抗审批 Agent")).toBeVisible();
   await expect(page.getByLabel("管理员身份门禁")).toHaveCount(0);
   await expect(page.getByLabel("管理员私聊后端")).toHaveCount(0);
+
+  await page.goto("/agent-settings/orchestrator");
+  const groupReply = page.getByLabel("启用群聊回复", { exact: true });
+  await groupReply.uncheck();
+  await page.getByRole("link", { name: "状态", exact: true }).click();
+  await expect(page).toHaveURL(/\/overview$/);
+  await expect.poll(() => state.config.onebot.autoReplyUserGroup).toBe(false);
+  await expect(page.getByRole("dialog", { name: "放弃未保存的设置？" })).toHaveCount(0);
+  await page.goto("/agent-settings/orchestrator");
+  await expect(groupReply).not.toBeChecked();
 });
 
 function pixelAlpha(data: Buffer, width: number, channels: number, x: number, y: number) {
@@ -1035,6 +1063,14 @@ test("宽屏提示词可调整变量表宽度", async ({ page }) => {
   await page.setViewportSize({ width: 1920, height: 1000 });
   await page.goto("/agent-prompts/persona.soul");
 
+  const promptEditor = page.getByLabel("提示词正文");
+  await promptEditor.fill("# 标题\n**重点**与*斜体*\n> 引用\n<context>@{bot.name}</context>\n```text\n代码块\n```");
+  await expect(promptEditor).toHaveAttribute("contenteditable", "true");
+  await expect(promptEditor).toHaveAttribute("data-language", "markdown");
+  await expect(page.locator(".prompt-field__editor .cm-lineNumbers .cm-gutterElement").filter({ hasText: "7" })).toBeVisible();
+  await expect(page.locator(".prompt-field__editor .cm-prompt-variable")).toHaveText("@{bot.name}");
+  await expect(page.locator(".prompt-field__editor textarea, .prompt-field__highlight")).toHaveCount(0);
+
   const splitter = page.getByRole("separator", { name: "调整可用变量宽度" });
   const variableTable = page.getByRole("table", { name: "提示词变量表" });
   const editorCard = page.locator(".prompt-editor__workspace > .prompt-field");
@@ -1066,7 +1102,6 @@ test("宽屏提示词可调整变量表宽度", async ({ page }) => {
     { borderWidth: "1px", borderRadius: "8px" }
   ]);
 
-  const promptEditor = page.getByLabel("提示词正文");
   await promptEditor.press("ControlOrMeta+a");
   const selectionStyle = await page.locator(".prompt-field__editor .cm-selectionBackground").first().evaluate((element) => ({
     background: getComputedStyle(element).backgroundColor,

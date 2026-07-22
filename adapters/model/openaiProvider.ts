@@ -1,7 +1,8 @@
 import type OpenAI from "openai";
-import type { ChatMessage, ImageQuality, ImageResult, ProviderConfig } from "../../src/types.js";
+import type { ImageQuality, ProviderConfig } from "../../packages/contracts/admin/public.js";
+import type { ImageResult } from "../../packages/contracts/media/media.js";
+import type { ChatMessage, ProviderLogContext } from "../../packages/contracts/model/modelGateway.js";
 import type { RenderedPromptRequest } from "../../services/agent/promptSystem.js";
-import type { ProviderLogContext } from "../../packages/contracts/model/modelGateway.js";
 import { completeProviderTurn } from "./provider/completion.js";
 import type {
   GeneratedImageWriterPort,
@@ -12,33 +13,26 @@ import type {
   ProviderToolExecutorPort,
   ProviderTurnResult
 } from "./provider/contracts.js";
-import { FileGeneratedImageWriter } from "./provider/imageWriter.js";
 import { DEFAULT_IMAGE_MODEL, generateProviderImage } from "./provider/imageGeneration.js";
+import { FileGeneratedImageWriter } from "./provider/imageWriter.js";
 import { createProviderLogger } from "./provider/logger.js";
 import { legacyPromptRequest } from "./provider/promptMapping.js";
 import { RegistryProviderToolExecutor } from "./provider/toolExecutor.js";
 import {
   createChatClient as createOpenAIChatClient,
   createResponsesClient,
-  normalizeChatBaseUrl,
   resolveProviderApiKey,
   resolveProviderApiKeyAsync
 } from "./provider/transport.js";
 
+export type { ProviderLogContext } from "../../packages/contracts/model/modelGateway.js";
 export type {
   OpenAIProviderOptions,
-  ProviderBashOptions,
-  ProviderCompleteOptions,
-  ProviderCompletedTurn,
-  ProviderDeferredTurn,
-  ProviderNoReplyTurn,
-  ProviderMemoryOptions,
-  ProviderSelfieOptions,
+  ProviderBashOptions, ProviderCompletedTurn, ProviderCompleteOptions, ProviderDeferredTurn, ProviderMemoryOptions, ProviderNoReplyTurn, ProviderSelfieOptions,
   ProviderTurnResult,
   ProviderVoiceCapability,
   ProviderVoiceCompanion
 } from "./provider/contracts.js";
-export type { ProviderLogContext } from "../../packages/contracts/model/modelGateway.js";
 export { resolveLocalInputImage, toResponsesInputMessage } from "./provider/imageInput.js";
 
 export class OpenAIProvider {
@@ -161,7 +155,4 @@ export class OpenAIProvider {
     return { ...this.provider };
   }
 
-  private normalizeChatBaseUrl() {
-    return normalizeChatBaseUrl(this.provider);
-  }
 }

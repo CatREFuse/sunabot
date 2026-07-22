@@ -75,7 +75,7 @@ sunabot/
 └── workspace/                               # 终端私有，不进入 Git
 ```
 
-`src/runtime.ts` 只组合运行用例。Agent 注册表依赖 `AgentRegistryRepository`，由 API composition root 注入 SQLite adapter。请求日志与模型聚合存储与主业务 store 拆分，schema 迁移保持独立入口。
+`src/runtime.ts` 只组合运行用例，Runtime 子模块通过窄 host port 调用组合能力。Agent 注册表依赖 `AgentRegistryRepository`，由 API composition root 注入 SQLite adapter。公共管理配置、Provider 模型和消息类型位于 `packages/contracts/`，项目与 workspace 路径位于 `packages/platform/projectPaths.ts`；services、adapters 与 platform 不反向导入 `src/`。请求日志写入与读取内聚在 `adapters/observability/requestLog.ts`，模型聚合存储与主业务 store 拆分，schema 迁移保持独立入口。
 
 ## 4. 运行拓扑
 

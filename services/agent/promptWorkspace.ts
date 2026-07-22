@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resolveProjectPath } from "../../src/config.js";
-import type { AppConfig } from "../../src/types.js";
+import { resolveProjectPath } from "../../packages/platform/projectPaths.js";
+import type { AppConfig } from "../../packages/contracts/admin/public.js";
 import {
   extractPromptVariables,
   parseFinalPromptTemplate,
