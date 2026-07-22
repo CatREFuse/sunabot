@@ -155,6 +155,62 @@ describe("RuntimeTone", () => {
     expect(options.modelRequestMaxRetries).toBe(3);
   });
 
+  it("keeps the original formatted error when Tone rewrites away its details", async () => {
+    const config = defaultConfig();
+    config.bot.tone.enabled = true;
+    const baseProvider = new OpenAIProvider(config.providers.items[0]!);
+    const renderPromptRequest = vi.fn(async () => ({ messages: [{ role: "user" as const, content: "raw" }] }));
+    const completePrompt = vi.fn()
+      .mockResolvedValueOnce("请老师稍后再试一次。")
+      .mockResolvedValueOnce("请老师稍后再试一次。\n异常：Our servers are currently overloaded.");
+    const tone = new RuntimeTone({
+      config,
+      getProvider: () => baseProvider,
+      renderPromptRequest,
+      completePrompt
+    } as unknown as SunaRuntime);
+
+    await expect(tone.rewrite("异常：Our servers are currently overloaded."))
+      .resolves.toBe("请老师稍后再试一次。\n异常：Our servers are currently overloaded.");
+    await expect(tone.rewrite("异常：Our servers are currently overloaded."))
+      .resolves.toBe("请老师稍后再试一次。\n异常：Our servers are currently overloaded.");
+    expect(renderPromptRequest).toHaveBeenCalledWith(
+      "conversation.tone-rewrite",
+      expect.objectContaining({
+        "tone.output_contract": expect.stringContaining("错误原文")
+      })
+    );
+  });
+
+  it("keeps the original formatted error in segmented XML without duplicating it", async () => {
+    const config = defaultConfig();
+    config.bot.tone.enabled = true;
+    config.bot.tone.segmentedReply = true;
+    const baseProvider = new OpenAIProvider(config.providers.items[0]!);
+    const original = '异常：Provider returned <400> & "bad".';
+    const encoded = "异常：Provider returned &lt;400&gt; &amp; &quot;bad&quot;.";
+    const completePrompt = vi.fn()
+      .mockResolvedValueOnce("<dialog>请老师稍后再试。</dialog>")
+      .mockResolvedValueOnce(`<dialog>请老师稍后再试。\n${encoded}</dialog>`);
+    const tone = new RuntimeTone({
+      config,
+      getProvider: () => baseProvider,
+      renderPromptRequest: async () => ({ messages: [{ role: "user", content: "raw" }] }),
+      completePrompt
+    } as unknown as SunaRuntime);
+
+    await expect(tone.rewriteForDelivery(original, []))
+      .resolves.toEqual({
+        segmented: true,
+        content: `<dialog>请老师稍后再试。</dialog><dialog>${encoded}</dialog>`
+      });
+    await expect(tone.rewriteForDelivery(original, []))
+      .resolves.toEqual({
+        segmented: true,
+        content: `<dialog>请老师稍后再试。\n${encoded}</dialog>`
+      });
+  });
+
   it("requests the XML contract and exposes only registered media handles for segmented delivery", async () => {
     const config = defaultConfig();
     config.bot.tone.enabled = true;

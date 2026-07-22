@@ -251,6 +251,125 @@ describe("tone outbound delivery", () => {
     expect(delivery.outbox[0].payload.payload.bubbleSequence).toBeUndefined();
   });
 
+  it("restores an omitted generated-image suffix while rejecting a changed media sequence", async () => {
+    const incoming: ParsedIncomingMessage = {
+      schemaVersion: 1,
+      transport: "onebot",
+      agentId: "plana",
+      accountId: "primary",
+      scope: "private",
+      messageId: 102,
+      time: "2026-07-22T06:18:28.000Z",
+      userId: 1,
+      selfId: 2,
+      sender: { id: "1", displayName: "猫老师" },
+      text: "用户输入",
+      media: [],
+      attachments: [],
+      replyMessageIds: [],
+      quoteReferences: [],
+      mentionedSelf: false
+    };
+    const images = [
+      { url: "data:image/png;base64,AA==", revisedPrompt: "first" },
+      { url: "data:image/png;base64,AQ==", revisedPrompt: "second" }
+    ];
+    const config = defaultConfig();
+    config.bot.tone.enabled = true;
+    config.bot.tone.segmentedReply = true;
+    const rewriteToneDelivery = vi.fn(async () => ({
+      segmented: true as const,
+      content: '<dialogc replay="msg_id">正文</dialogc>'
+    }));
+    const host = {
+      config,
+      isReplySenderAllowed: () => true,
+      hooks: { run: vi.fn(async () => ({ text: "原始正文" })) },
+      rewriteToneDelivery,
+      replyGates: new ReplyGateEpochs(),
+      groupReplyOptions: () => ({ replyToMessageId: undefined }),
+      replyDeliveryDraft(...args: Parameters<typeof runtime_replyDeliveryDraft>) {
+        return runtime_replyDeliveryDraft.call(host as unknown as SunaRuntime, ...args);
+      }
+    };
+    const delivery = { outbox: [] } satisfies ReplyDelivery;
+    const gateway = { send: vi.fn() } as unknown as MessagingPort;
+
+    await runtime_sendAssistantReply.call(
+      host as unknown as SunaRuntime,
+      "private:1",
+      incoming,
+      gateway,
+      "原始正文",
+      true,
+      images,
+      "run-missing-image",
+      () => true,
+      delivery
+    );
+
+    expect(delivery.outbox).toHaveLength(3);
+    expect(delivery.outbox.map((draft) => draft.kind === "onebot.reply"
+      ? draft.payload.payload.generatedImages.map((image) => image.revisedPrompt)
+      : [])).toEqual([[], ["first"], ["second"]]);
+
+    delivery.outbox.length = 0;
+    rewriteToneDelivery.mockResolvedValueOnce({
+      segmented: true,
+      content: '<dialogc replay="msg_id">正文</dialogc><img src="asset:image:0"/>'
+    });
+    await runtime_sendAssistantReply.call(
+      host as unknown as SunaRuntime,
+      "private:1",
+      incoming,
+      gateway,
+      "原始正文",
+      true,
+      images,
+      "run-missing-image-suffix",
+      () => true,
+      delivery
+    );
+    expect(delivery.outbox).toHaveLength(3);
+
+    delivery.outbox.length = 0;
+    rewriteToneDelivery.mockResolvedValueOnce({
+      segmented: true,
+      content: '<dialogc replay="msg_id">正文</dialogc><img src="asset:image:1"/>'
+    });
+    await expect(runtime_sendAssistantReply.call(
+      host as unknown as SunaRuntime,
+      "private:1",
+      incoming,
+      gateway,
+      "原始正文",
+      true,
+      images,
+      "run-changed-image",
+      () => true,
+      delivery
+    )).rejects.toMatchObject({ code: "SEGMENTED_REPLY_CONTRACT_INVALID" });
+    expect(delivery.outbox).toEqual([]);
+
+    rewriteToneDelivery.mockResolvedValueOnce({
+      segmented: true,
+      content: Array.from({ length: 32 }, (_, index) => `<dialog>气泡 ${index + 1}</dialog>`).join("")
+    });
+    await expect(runtime_sendAssistantReply.call(
+      host as unknown as SunaRuntime,
+      "private:1",
+      incoming,
+      gateway,
+      "原始正文",
+      true,
+      [images[0]!],
+      "run-bubble-overflow",
+      () => true,
+      delivery
+    )).rejects.toThrow("分段回复最多包含 32 个气泡");
+    expect(delivery.outbox).toEqual([]);
+  });
+
   it("waits after outbox claim before sending a later bubble", async () => {
     vi.useFakeTimers();
     const random = vi.spyOn(Math, "random").mockReturnValue(0);

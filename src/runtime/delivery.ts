@@ -122,6 +122,7 @@ import {
   type EmojiMarkerPlan
 } from "../../services/emojis/emojiCatalog.js";
 import {
+  MAX_SEGMENTED_REPLY_BUBBLES,
   parseSegmentedReplyXml,
   type SegmentedReplyNodeV1
 } from "../../services/messaging/segmentedReply.js";
@@ -674,9 +675,18 @@ async function segmentedReplyDeliveryParts(
     type: "image" as const,
     src: segmentedImageSource(index)
   }));
-  if (JSON.stringify(actualAssets) !== JSON.stringify(expectedAssets)) {
+  const actualAssetsArePrefix = actualAssets.length <= expectedAssets.length
+    && actualAssets.every((asset, index) => (
+      asset.type === expectedAssets[index]?.type && asset.src === expectedAssets[index]?.src
+    ));
+  if (!actualAssetsArePrefix) {
     throw segmentedReplyContractError("分段回复改变了本轮媒体资源。");
   }
+  const missingAssets = expectedAssets.slice(actualAssets.length);
+  if (nodes.length + missingAssets.length > MAX_SEGMENTED_REPLY_BUBBLES) {
+    throw segmentedReplyContractError(`分段回复最多包含 ${MAX_SEGMENTED_REPLY_BUBBLES} 个气泡。`);
+  }
+  nodes.push(...missingAssets);
   const emojiImages = await prepareEmojiDeliveryImages(config, emojiPlan);
   let emojiIndex = 0;
   return nodes.map((node, index) => {

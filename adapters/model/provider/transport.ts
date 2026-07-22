@@ -115,11 +115,17 @@ interface TransportRetryContext {
   retryDelayMs: number;
 }
 
+interface TransportResponseFailure {
+  error: unknown;
+  retryable: boolean;
+}
+
 interface TransportRetryObserver {
   maxAttempts?: number;
   attemptTimeoutMs?: number;
   beforeAttempt?(context: { attempt: number; maxAttempts: number }): unknown | Promise<unknown>;
   attemptFailed?(error: unknown, context: TransportRetryContext): unknown | Promise<unknown>;
+  classifyResponseFailure?(response: Response, text: string): TransportResponseFailure | undefined;
 }
 
 export const PROVIDER_TRANSPORT_ATTEMPT_TIMEOUT_MS = 60_000;
@@ -167,6 +173,22 @@ export async function fetchTextWithTransportRetry(
       continue;
     } finally {
       clearTimeout(attemptTimer);
+    }
+
+    const responseFailure = observer.classifyResponseFailure?.(response, text);
+    if (responseFailure) {
+      const willRetry = !callerSignal?.aborted && attempt < maxAttempts && responseFailure.retryable;
+      const retryDelayMs = willRetry ? resolveRetryDelayMs(response.headers, attempt) : 0;
+      await observer.attemptFailed?.(responseFailure.error, {
+        attempt,
+        maxAttempts,
+        willRetry,
+        status: response.status,
+        retryDelayMs
+      });
+      if (!willRetry) throw responseFailure.error;
+      await waitForRetry(retryDelayMs, callerSignal);
+      continue;
     }
 
     const willRetry = !callerSignal?.aborted

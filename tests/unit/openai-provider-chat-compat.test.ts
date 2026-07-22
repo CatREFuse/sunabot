@@ -318,6 +318,76 @@ describe("provider protocols", () => {
     expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
+  it("retries a retryable Codex error carried by an HTTP 200 response", async () => {
+    vi.useFakeTimers();
+    const provider = new OpenAIProvider(providerConfig("codex-responses"));
+    vi.spyOn(provider as never, "getApiKey").mockReturnValue("provider-key");
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(codexErrorResponse({
+        type: "service_unavailable_error",
+        code: "server_is_overloaded",
+        message: "Our servers are currently overloaded. Please try again later."
+      }))
+      .mockResolvedValueOnce(codexTextResponse("OK"));
+
+    const completion = provider.complete("system", [{ role: "user", content: "ping" }], {
+      modelRequestMaxRetries: 1
+    });
+    const assertion = expect(completion).resolves.toBe("OK");
+    await vi.runAllTimersAsync();
+
+    await assertion;
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(appendRequestLog.mock.calls
+      .map(([entry]) => entry as Record<string, any>)
+      .filter((entry) => entry.category === "model.response" && entry.action === "codex.complete"))
+      .toEqual([
+        expect.objectContaining({
+          response: expect.objectContaining({
+            ok: false,
+            status: 200,
+            error: "Our servers are currently overloaded. Please try again later.",
+            willRetry: true
+          }),
+          metadata: expect.objectContaining({ transportAttempt: 1, maxTransportAttempts: 2 })
+        }),
+        expect.objectContaining({
+          response: expect.objectContaining({ ok: true }),
+          metadata: expect.objectContaining({ transportAttempt: 2, maxTransportAttempts: 2 })
+        })
+      ]);
+  });
+
+  it("surfaces a non-retryable Codex HTTP 200 response error verbatim", async () => {
+    const provider = new OpenAIProvider(providerConfig("codex-responses"));
+    vi.spyOn(provider as never, "getApiKey").mockReturnValue("provider-key");
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(codexErrorResponse({
+      type: "invalid_request_error",
+      code: "invalid_json_schema",
+      message: "The response schema is invalid."
+    }));
+
+    await expect(provider.complete("system", [{ role: "user", content: "ping" }], {
+      modelRequestMaxRetries: 3
+    })).rejects.toThrow("The response schema is invalid.");
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(appendRequestLog.mock.calls
+      .map(([entry]) => entry as Record<string, any>)
+      .filter((entry) => entry.category === "model.response" && entry.action === "codex.complete"))
+      .toEqual([
+        expect.objectContaining({
+          response: expect.objectContaining({
+            ok: false,
+            status: 200,
+            error: "The response schema is invalid.",
+            willRetry: false
+          }),
+          metadata: expect.objectContaining({ transportAttempt: 1, maxTransportAttempts: 4 })
+        })
+      ]);
+  });
+
   it("honors a per-request transport timeout for Codex Responses", async () => {
     vi.useFakeTimers();
     const provider = new OpenAIProvider(providerConfig("codex-responses"));
@@ -412,4 +482,11 @@ function codexTextResponse(text: string) {
     `data: ${JSON.stringify({ type: "response.output_item.done", output_index: 0, item: message })}`,
     `data: ${JSON.stringify({ type: "response.completed", response: { status: "completed", output: [message] } })}`
   ].join("\n\n"), { status: 200, headers: { "content-type": "text/event-stream" } });
+}
+
+function codexErrorResponse(error: { type: string; code: string; message: string }) {
+  return new Response(`data: ${JSON.stringify({ type: "error", error })}`, {
+    status: 200,
+    headers: { "content-type": "text/event-stream" }
+  });
 }

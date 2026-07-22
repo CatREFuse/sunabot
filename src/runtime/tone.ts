@@ -12,6 +12,7 @@ import {
   type ToneAvailableAssetV1
 } from "../../services/agent/toneReplyPrompt.js";
 import { senderDisplayName } from "../../services/conversations/senderName.js";
+import { parseSegmentedReplyXml } from "../../services/messaging/segmentedReply.js";
 import { resolveModelReasoningEffort } from "../admin/models.js";
 import { AGENT_TOOL_NAMES } from "../types.js";
 import type { SunaRuntime } from "../runtime.js";
@@ -33,7 +34,8 @@ export class RuntimeTone {
 
   async rewrite(text: string, context: ToneRewriteContext = {}) {
     if (!this.host.config.bot.tone.enabled || !text.trim()) return text;
-    return this.complete(text, context, PLAIN_TONE_OUTPUT_CONTRACT, [], false);
+    const rewritten = await this.complete(text, context, PLAIN_TONE_OUTPUT_CONTRACT, [], false);
+    return preserveFormattedError(text, rewritten);
   }
 
   async rewriteForDelivery(
@@ -49,9 +51,16 @@ export class RuntimeTone {
     }
     serializeToneAvailableAssets(assets);
     if (!text.trim()) return { segmented: true as const, content: "" };
+    const rewritten = await this.complete(
+      text,
+      context,
+      segmentedToneOutputContract(emojiMarkers),
+      assets,
+      true
+    );
     return {
       segmented: true as const,
-      content: await this.complete(text, context, segmentedToneOutputContract(emojiMarkers), assets, true)
+      content: preserveSegmentedFormattedError(text, rewritten)
     };
   }
 
@@ -116,4 +125,32 @@ export class RuntimeTone {
 function toneSignal(parent: AbortSignal | undefined) {
   const timeout = AbortSignal.timeout(TONE_REQUEST_TIMEOUT_MS);
   return parent ? AbortSignal.any([parent, timeout]) : timeout;
+}
+
+function preserveFormattedError(source: string, rewritten: string) {
+  const original = source.trim();
+  if (!original.startsWith("异常：") || rewritten.includes(original)) return rewritten;
+  return `${rewritten}\n${original}`;
+}
+
+function preserveSegmentedFormattedError(source: string, rewritten: string) {
+  const original = source.trim();
+  if (!original.startsWith("异常：")) return rewritten;
+  let nodes;
+  try {
+    nodes = parseSegmentedReplyXml(rewritten).nodes;
+  } catch {
+    return rewritten;
+  }
+  if (nodes.some((node) => node.type === "dialog" && node.text.includes(original))) return rewritten;
+  return `${rewritten}<dialog>${escapeXmlText(original)}</dialog>`;
+}
+
+function escapeXmlText(value: string) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&apos;");
 }

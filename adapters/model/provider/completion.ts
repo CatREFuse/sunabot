@@ -37,7 +37,7 @@ import {
   resolveRetryDelayMs,
   waitForRetry
 } from "./transport.js";
-import { errorMessage, parseJson } from "./valueUtils.js";
+import { errorMessage, isRecord, parseJson } from "./valueUtils.js";
 import { completeAnthropicMessages } from "./anthropicCompletion.js";
 import { completeGeminiGenerateContent } from "./geminiCompletion.js";
 import { claimToolCalls, resolveMaxToolCalls, toolCallLimitError } from "./toolLoopLimits.js";
@@ -231,7 +231,10 @@ async function completeCodexResponses(
           willRetry,
           retryDelayMs
         }, { ...metadata, transportAttempt: attempt, maxTransportAttempts: maxAttempts });
-      }
+      },
+      classifyResponseFailure: (response, text) => response.ok
+        ? codexResponsePayloadFailure(parseResponsesSsePayload(text) ?? parseJson(text))
+        : undefined
     });
     const { response, text } = attempt;
     const payload = parseResponsesSsePayload(text) ?? parseJson(text);
@@ -285,6 +288,25 @@ async function completeCodexResponses(
   }
 
   throw toolCallLimitError(maxToolCalls);
+}
+
+function codexResponsePayloadFailure(payload: unknown) {
+  if (!isRecord(payload) || !isRecord(payload.error)) return undefined;
+  const message = String(payload.error.message ?? "").trim();
+  if (!message) return undefined;
+  const type = String(payload.error.type ?? "").trim();
+  const code = String(payload.error.code ?? "").trim();
+  const signature = `${type} ${code}`.toLowerCase();
+  const retryable = /overload|rate_limit|service_unavailable|server_error|temporar|timeout/u.test(signature);
+  return {
+    error: Object.assign(new Error(message), {
+      name: "ProviderResponseError",
+      ...(type ? { providerType: type } : {}),
+      ...(code ? { providerCode: code } : {}),
+      retryable
+    }),
+    retryable
+  };
 }
 
 function leadingInstructionBoundary(messages: RenderedPromptRequest["messages"]) {
