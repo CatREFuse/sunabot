@@ -32,9 +32,13 @@ Agent 配置文件夹导入专项必须覆盖：直接文件夹和单层包装�
 npm run verify
 ```
 
-常规单元与集成测试最多使用四个 worker，避免大量文件系统故障注入互相争用而产生超时或身份探针噪声。
+常规单元与集成测试最多使用四个 worker，避免大量文件系统故障注入互相争用而产生超时或身份探针噪声。Skill script sandbox 会冻结完整挂载路径身份，系统临时目录中其他 worker 创建夹具会改变祖先目录 ctime，因此该套件必须由 `test:skill-script-sandbox` 独立串行执行，仍属于 `npm test` 和 `verify` 的强制安全门禁。
 
-`verify` 依次执行 runtime contract、architecture、类型检查、测试阶段、独立 runtime smoke、CI 容量基线、生产构建和 E2E；测试阶段依次执行常规单元与集成测试、一次 SQLite recovery gate，以及 memory perspective core/fault 两条有界迁移 lane，不能在外层重复 recovery。消息专项回归必须证明 `assistant_text` 写入 durable outbox 后即可继续 inline 工具，远端发送仍在进行或重试时不能阻塞工具；事件重试不能重复发送已提交的中间消息。deferred `dispatch_message` 与任务必须原子持久化，worker 在 acknowledgement 仍待发送时即可 claim，callback 随后按同一会话 FIFO 投递。OneBot 入站专项必须覆盖 NapCat 当前全部具体消息段及兼容别名、精确的 `onlinefile`/`flashtransfer` 类型、未知类型回退、CQ 字符串、内容图片与表情图片分类、内联与仅 ID 的 `forward`/`node`、当前账号的 `get_forward_msg` 入队前展开、嵌套发送者和媒体顺序，以及深度、数量和最终文本容量边界；公共提示词回归必须同时覆盖默认契约和 `.inbound-message-v1` 的保留式、幂等迁移。用户群聊编排器回归必须覆盖纯图片和图文混合消息，证明历史消息与当前消息优先保留 `[内容图片#N]`、`[表情图片#N]`，只为缺少语义标记的旧媒体补充 `[图片]`，已有标记不重复补齐，并且不把图片 URL、Data URL 或本地路径放入编排 payload。
+测试采用串联场景所有权：Session Store、Coordinator、durable outbox 与 Runtime 组合由 `runtime-session-queue`、`runtime-reply-debounce`、`runtime-contracts` 和 runtime smoke 连续验证；Provider 与工具协议由共享 adapter contract、response preflight、ToolRegistry 和实际 Runtime 链验证；管理台展示与交互由保留的复杂 composable/主视图测试、WebUI E2E 和视觉矩阵验证。独立测试继续保留纯函数边界、SSRF 与协议拒绝、Bash/MCP 隔离、迁移、SQLite 恢复、崩溃重入、并发竞争和跨 Agent 隔离。相同业务断言不得在 service、route、runtime 和 E2E 四层重复铺设；上层只验证本层的装配、持久化或用户行为。
+
+仓库测试代码预算为 82,000 行，口径覆盖 `tests/`、`packages/testkit/` 和全部 `*.test.*`/`*.spec.*` 代码文件；`npm run test:budget` 在全量验证中执行。新增行为可调整测试所有权和场景矩阵，但不能通过复制 fixture、逐字段手写同构 case 或恢复展示型组件快照突破预算。
+
+`verify` 依次执行 runtime contract、architecture、测试代码预算、类型检查、测试阶段、独立 runtime smoke、CI 容量基线、生产构建和 E2E；测试阶段依次执行常规单元与集成测试、独立 skill script sandbox、一次 SQLite recovery gate，以及 memory perspective core/fault 两条有界迁移 lane，不能在外层重复 recovery。消息专项回归必须证明 `assistant_text` 写入 durable outbox 后即可继续 inline 工具，远端发送仍在进行或重试时不能阻塞工具；事件重试不能重复发送已提交的中间消息。deferred `dispatch_message` 与任务必须原子持久化，worker 在 acknowledgement 仍待发送时即可 claim，callback 随后按同一会话 FIFO 投递。OneBot 入站专项必须覆盖 NapCat 当前全部具体消息段及兼容别名、精确的 `onlinefile`/`flashtransfer` 类型、未知类型回退、CQ 字符串、内容图片与表情图片分类、内联与仅 ID 的 `forward`/`node`、当前账号的 `get_forward_msg` 入队前展开、嵌套发送者和媒体顺序，以及深度、数量和最终文本容量边界；公共提示词回归必须同时覆盖默认契约和 `.inbound-message-v1` 的保留式、幂等迁移。用户群聊编排器回归必须覆盖纯图片和图文混合消息，证明历史消息与当前消息优先保留 `[内容图片#N]`、`[表情图片#N]`，只为缺少语义标记的旧媒体补充 `[图片]`，已有标记不重复补齐，并且不把图片 URL、Data URL 或本地路径放入编排 payload。
 
 管理台视觉场景集中在 `tests/e2e/visual.spec.ts` 与 `tests/e2e/support/visual.ts`，使用数据矩阵覆盖 light/dark、桌面与移动端，禁止为同一路由和断言复制独立 visual spec。知识库浏览器测试通过真实 Fastify、`KnowledgeBaseService` 与临时 workspace 验证上传、删除和重建索引；`mock-api.ts` 只保留无法在该 lane 运行的外部边界，不复制知识库业务实现。
 
