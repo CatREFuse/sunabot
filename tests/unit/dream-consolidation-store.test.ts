@@ -119,6 +119,22 @@ describe("Dream consolidation SQLite commit", () => {
     ]);
   });
 
+  it("leaves legacy SQLite working rows untouched when the Agent Markdown was committed externally", () => {
+    createGeneratedRun();
+    seedRecallHistory();
+    const legacyRows = [{ id: "legacy-sqlite-working", fact: "只用于升级兼容。" }];
+    replaceMemory("working", legacyRows);
+
+    const committed = store.commitConsolidation(commitInput({
+      expectedWorkingDigest: DIGEST,
+      externalWorkingMemory: true
+    }));
+
+    expect(committed).toMatchObject({ status: "committed" });
+    expect(readMemory("working")).toEqual(legacyRows);
+    expect(readMemory("long_term")).toEqual(LONG_TERM_FINAL);
+  });
+
   it("atomically migrates recall stats and receipts from a non-canonical legacy id", () => {
     const legacyId = "legacy id with spaces";
     const targetId = "legacy_long_term_target";

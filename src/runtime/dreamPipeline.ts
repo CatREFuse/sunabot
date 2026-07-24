@@ -9,6 +9,10 @@ import {
   nextDreamScheduledAt
 } from "./dreamHistory.js";
 import { assertDreamProviderRequest } from "./dreamProviderRequest.js";
+import { commitDreamWithWorkingMemory, type RuntimeDreamWorkingMemoryPort } from "./dreamWorkingMemoryCommit.js";
+import type { RuntimeDreamContextPort, RuntimeDreamContextSnapshot, RuntimeDreamPromptPort } from "./dreamPorts.js";
+export type { RuntimeDreamWorkingMemoryPort } from "./dreamWorkingMemoryCommit.js";
+export type { RuntimeDreamContextPort, RuntimeDreamContextSnapshot, RuntimeDreamPromptPort } from "./dreamPorts.js";
 import {
   DREAM_PAYLOAD_VARIABLE,
   DREAM_PROMPT_ID,
@@ -98,6 +102,7 @@ export interface RuntimeDreamStorePort {
     workerId: string;
     expectedWorkingDigest: string;
     expectedLongTermDigest: string;
+    externalWorkingMemory?: boolean;
     workingMemoryId: string;
     working: readonly DreamMemoryRecord[];
     longTerm: readonly DreamMemoryRecord[];
@@ -138,29 +143,6 @@ export interface RuntimeDreamStorePort {
   }): RuntimeDreamRun | undefined;
   complete(input: { runId: string; workerId: string; now?: Date }): RuntimeDreamRun | undefined;
 }
-export interface RuntimeDreamContextSnapshot {
-  workingRecords: DreamMemoryRecord[];
-  longTermRecords: DreamMemoryRecord[];
-  workingDigest: string;
-  longTermDigest: string;
-  recallStats: DreamRecallStatsSnapshot[];
-  userProfiles: unknown[];
-  recentConversations: unknown[];
-  activeTasks: unknown[];
-  plannedDailySchedule: unknown | null;
-  persona: JsonObject;
-}
-export interface RuntimeDreamContextPort {
-  capture(input: {
-    now: Date;
-    localDate: string;
-    timeZone: string;
-    window: { start: string; end: string };
-  }): Promise<RuntimeDreamContextSnapshot>;
-}
-export interface RuntimeDreamPromptPort {
-  render(promptId: string, variables: Readonly<Record<string, unknown>>): Promise<unknown>;
-}
 export interface RuntimeDreamModelPort {
   complete(request: unknown, options: {
     signal: AbortSignal;
@@ -192,6 +174,7 @@ export interface RuntimeDreamLogPort {
 export interface RuntimeDreamsOptions {
   store: RuntimeDreamStorePort;
   context: RuntimeDreamContextPort;
+  workingMemory?: RuntimeDreamWorkingMemoryPort;
   prompt: RuntimeDreamPromptPort;
   model: RuntimeDreamModelPort;
   persona: RuntimeDreamPersonaPort;
@@ -224,6 +207,7 @@ export interface RuntimeDreamHistory {
 interface PersistedDreamInput {
   schemaVersion: 1;
   workingDigest: string;
+  workingRevision?: string;
   longTermDigest: string;
   payload: JsonObject;
 }
@@ -415,6 +399,9 @@ export class RuntimeDreams {
       input: {
         schemaVersion: 1,
         workingDigest: validDigest(snapshot.workingDigest, "workingDigest"),
+        ...(snapshot.workingRevision ? {
+          workingRevision: validDigest(snapshot.workingRevision, "workingRevision")
+        } : {}),
         longTermDigest: validDigest(snapshot.longTermDigest, "longTermDigest"),
         payload
       },
@@ -481,19 +468,27 @@ export class RuntimeDreams {
           longTermRecords: snapshot.longTermRecords,
           recallStats: recallStatsFromPayload(input.payload)
         });
-        const committed = this.options.store.commitConsolidation({
+        const committed = await commitDreamWithWorkingMemory({
+          workingMemory: this.options.workingMemory,
+          workingRevision: input.workingRevision,
+          records: plan.working,
           runId: run.id,
-          workerId: this.workerId,
-          expectedWorkingDigest: input.workingDigest,
-          expectedLongTermDigest: input.longTermDigest,
-          workingMemoryId: plan.workingMemoryId,
-          working: plan.working,
-          longTerm: plan.longTerm,
-          archives: plan.archives,
-          recallLineages: composeDreamRecallLineages(plan.recallLineages, snapshot.longTermRecords),
-          reviews: plan.reviews,
-          result: toJsonObject(plan.result, "dream consolidation result"),
-          now: this.clock()
+          localDate: run.localDate,
+          commit: (externalWorkingMemory) => this.options.store.commitConsolidation({
+            runId: run.id,
+            workerId: this.workerId,
+            expectedWorkingDigest: input.workingDigest,
+            expectedLongTermDigest: input.longTermDigest,
+            externalWorkingMemory,
+            workingMemoryId: plan.workingMemoryId,
+            working: plan.working,
+            longTerm: plan.longTerm,
+            archives: plan.archives,
+            recallLineages: composeDreamRecallLineages(plan.recallLineages, snapshot.longTermRecords),
+            reviews: plan.reviews,
+            result: toJsonObject(plan.result, "dream consolidation result"),
+            now: this.clock()
+          })
         });
         if (committed.status === "snapshot_conflict") {
           throw new DreamRunError(
@@ -658,6 +653,9 @@ function persistedInput(value: JsonObject): PersistedDreamInput {
   return {
     schemaVersion: 1,
     workingDigest: validDigest(value.workingDigest, "workingDigest"),
+    ...(value.workingRevision == null ? {} : {
+      workingRevision: validDigest(value.workingRevision, "workingRevision")
+    }),
     longTermDigest: validDigest(value.longTermDigest, "longTermDigest"),
     payload: value.payload
   };

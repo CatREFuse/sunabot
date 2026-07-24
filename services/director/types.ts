@@ -14,6 +14,10 @@ export const DIRECTOR_CONVERSATION_SCHEDULE_VARIABLE = "conversation.director.sc
 
 export type DirectorScheduleSource = "daily_plan" | "character_revision";
 
+export interface DirectorSettings {
+  enabled: boolean;
+}
+
 export interface DirectorScheduleShareV1 {
   enabled: boolean;
   at: string | null;
@@ -74,6 +78,10 @@ export type DirectorScheduleCommitResult =
 
 export interface DirectorStore {
   read(date: string): DirectorScheduleV1 | undefined;
+  list(input?: { page?: number; pageSize?: number }): {
+    schedules: DirectorScheduleV1[];
+    pagination: { page: number; pageSize: number; total: number; pageCount: number };
+  };
   commit(input: DirectorScheduleCommitInput): DirectorScheduleCommitResult;
   listTaskLinks(date: string): DirectorScheduleTaskLink[];
   linkTask(link: DirectorScheduleTaskLink): void;

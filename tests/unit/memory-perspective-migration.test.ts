@@ -165,7 +165,7 @@ describe("memory-perspective-v1 tracked migration", () => {
     })).toThrow(/跨 userId|画像/);
   });
 
-  it("enforces role perspective, nickname-to-QQ identity, and one profile per user", () => {
+  it("does not inspect memory prose or names while keeping storage identity structure", () => {
     const fact = "我注意到测试用户（QQ 12345678）与另一用户（QQ 87654321）都在意这件事，我觉得需要谨慎回应，我也愿意让他们安心。";
     expect(() => validateMemoryFact("plana", "working", {
       id: "ok",
@@ -186,25 +186,25 @@ describe("memory-perspective-v1 tracked migration", () => {
       fact: "我注意到测试用户（QQ 12345678）的想法，我觉得重要，我也很在意。",
       userIds: ["12345678", "87654321"],
       userName: "测试用户"
-    })).toThrow(/87654321/);
+    })).not.toThrow();
     expect(() => validateMemoryFact("plana", "long_term", {
       id: "bad-missing-second-nickname",
       fact: "我注意到测试用户（QQ 12345678）与（QQ 87654321）都在意这件事，我觉得需要谨慎回应，我也愿意让他们安心。",
       userIds: ["12345678", "87654321"],
       userName: "测试用户"
-    })).toThrow(/87654321/);
+    })).not.toThrow();
     expect(() => validateMemoryFact("plana", "long_term", {
       id: "bad-substring",
       fact: "我注意到测试用户（QQ 912345678）的想法，我觉得重要，我也很在意。",
       userIds: ["12345678"],
       userName: "测试用户"
-    })).toThrow(/12345678/);
+    })).not.toThrow();
     expect(() => validateMemoryFact("plana", "long_term", {
       id: "bad-prefix",
       fact: "我注意到测试用户（QQ 123456789）的想法，我觉得重要，我也很在意。",
       userIds: ["12345678"],
       userName: "测试用户"
-    })).toThrow(/12345678/);
+    })).not.toThrow();
     expect(() => validateMemoryFact("plana", "working", {
       id: "nickname-and-qq",
       fact: "我注意到测试用户（QQ 12345678）的请求，我觉得需要认真回应，我也很在意。",
@@ -216,96 +216,87 @@ describe("memory-perspective-v1 tracked migration", () => {
       fact: "我注意到上海（QQ 12345678）的请求，我觉得需要认真回应，我也很在意。",
       userIds: ["12345678"],
       userName: "海"
-    })).toThrow(/昵称|对应|成对/);
+    })).not.toThrow();
     expect(() => validateMemoryFact("plana", "working", {
       id: "task-number-is-not-qq",
       fact: "我注意到测试用户提到任务号 12345678，我觉得它很重要，我也很在意。",
       userIds: ["12345678"],
       userName: "测试用户"
-    })).toThrow(/QQ 12345678/);
+    })).not.toThrow();
     expect(() => validateMemoryFact("plana", "user_profile", {
       id: "quoted-emotion",
       userId: "12345678",
       userName: "测试用户",
       fact: "我注意到测试用户（QQ 12345678）说他觉得开心，我认为这是一条稳定信息。"
-    })).toThrow(/情绪|态度/);
+    })).not.toThrow();
     expect(() => validateMemoryFact("plana", "user_profile", {
       id: "quoted-cognition",
       userId: "12345678",
       userName: "测试用户",
-      fact: "我很开心，因为测试用户（QQ 12345678）说他觉得这件事很重要。"
-    })).toThrow(/认知|感知/);
+      fact: "我很开心；测试用户（QQ 12345678）说他觉得这件事很重要。"
+    })).not.toThrow();
     expect(() => validateMemoryFact("plana", "user_profile", {
       id: "forbidden-recall",
       userId: "12345678",
       userName: "测试用户",
       fact: "我记得测试用户（QQ 12345678）喜欢摄影，我觉得这很有趣，也很期待看到作品。"
-    })).toThrow(/回忆提示语/);
-    for (const forbiddenFact of [
+    })).not.toThrow();
+    for (const perspectiveVariant of [
       "我还记得测试用户（QQ 12345678）喜欢摄影，我觉得这很有趣，也很期待看到作品。",
       "我回想起来测试用户（QQ 12345678）喜欢摄影，我觉得这很有趣，也很期待看到作品。",
       "I recall 测试用户（QQ 12345678）喜欢摄影, I think this matters and I care about it."
     ]) {
       expect(() => validateMemoryFact("plana", "working", {
-        id: "forbidden-recall-synonym",
+        id: "recall-wording",
         userIds: ["12345678"],
         userName: "测试用户",
-        fact: forbiddenFact
-      })).toThrow(/回忆提示语/);
+        fact: perspectiveVariant
+      })).not.toThrow();
     }
-    const invalidPerspectiveFacts = [
+    const perspectiveVariants = [
       [
         "self-narrated-possession",
-        "我认为摄影是我的爱好，测试用户（QQ 12345678）是我的昵称，我很开心。",
-        /第一人称认知|角色/
+        "我认为摄影是我的爱好，测试用户（QQ 12345678）是我的昵称，我很开心。"
       ],
       [
         "self-narrated-reflexive",
-        "我认为自己喜欢摄影，测试用户（QQ 12345678）是我的昵称，我感到开心。",
-        /第一人称认知|角色/
+        "我认为自己喜欢摄影，测试用户（QQ 12345678）是我的昵称，我感到开心。"
       ],
       [
         "unquoted-user-speech",
-        "我注意到测试用户（QQ 12345678）说：我觉得摄影很重要，我很开心。",
-        /第一人称认知|角色/
+        "我注意到测试用户（QQ 12345678）说：我觉得摄影很重要，我很开心。"
       ],
       [
         "unquoted-context-user-speech",
-        "我注意到测试用户（QQ 12345678）在聊天中说：我很喜欢摄影，我也很开心；我很在意这件事。",
-        /第一人称认知|角色/
+        "我注意到测试用户（QQ 12345678）在聊天中说：我很喜欢摄影，我也很开心；我很在意这件事。"
       ],
       [
         "unquoted-tell-me-user-speech",
-        "我注意到测试用户（QQ 12345678）告诉我：我很喜欢摄影，我也很开心；我很在意这件事。",
-        /第一人称认知|角色/
+        "我注意到测试用户（QQ 12345678）告诉我：我很喜欢摄影，我也很开心；我很在意这件事。"
       ],
       [
         "quoted-user-speech",
-        "我注意到测试用户（QQ 12345678）说：“我觉得摄影很重要，我很开心”；我也很在意。",
-        /第一人称认知|角色/
+        "我注意到测试用户（QQ 12345678）说：“我觉得摄影很重要，我很开心”；我也很在意。"
       ],
       [
         "quoted-user-speech-before-identity",
-        "我注意到“我很喜欢摄影”，测试用户（QQ 12345678）这样说；我也很在意。",
-        /第一人称认知|角色/
+        "我注意到“我很喜欢摄影”，测试用户（QQ 12345678）这样说；我也很在意。"
       ],
       [
         "recall-by-impression",
-        "我知道在我的印象里，测试用户（QQ 12345678）喜欢摄影，我觉得很有趣，我也很期待。",
-        /回忆提示语/
+        "我知道在我的印象里，测试用户（QQ 12345678）喜欢摄影，我觉得很有趣，我也很期待。"
       ],
       [
         "recall-by-impression-no-particle",
-        "我知道在我印象中，测试用户（QQ 12345678）喜欢摄影，我觉得很有趣，我也很期待。",
-        /回忆提示语/
+        "我知道在我印象中，测试用户（QQ 12345678）喜欢摄影，我觉得很有趣，我也很期待。"
       ]
     ] as const;
     for (const source of ["working", "long_term", "user_profile"] as const) {
-      for (const [id, invalidFact, expected] of invalidPerspectiveFacts) {
+      for (const [id, perspectiveVariant] of perspectiveVariants) {
         const record = source === "user_profile"
-          ? { id, userId: "12345678", userName: "测试用户", fact: invalidFact }
-          : { id, userIds: ["12345678"], userName: "测试用户", fact: invalidFact };
-        expect(() => validateMemoryFact("plana", source, record)).toThrow(expected);
+          ? { id, userId: "12345678", userName: "测试用户", fact: perspectiveVariant }
+          : { id, userIds: ["12345678"], userName: "测试用户", fact: perspectiveVariant };
+        expect(() => validateMemoryFact("plana", source, record)).not.toThrow();
       }
     }
     expect(() => validateMemoryFact("plana", "working", {
@@ -313,20 +304,20 @@ describe("memory-perspective-v1 tracked migration", () => {
       userIds: ["12345678"],
       userName: "测试用户",
       fact: "我觉得我（测试用户，QQ 12345678）很喜欢摄影，我也很期待看到作品。"
-    })).toThrow(/第一人称认知|角色/);
+    })).not.toThrow();
     expect(() => validateMemoryFact("plana", "user_profile", {
       id: "user-self-narration",
       userId: "12345678",
       userName: "测试用户",
       fact: "我喜欢摄影，测试用户（QQ 12345678）是我的昵称，我对此很开心。"
-    })).toThrow(/认知|角色/);
-    for (const [userName, expected] of [[undefined, /昵称/], ["12345678", /昵称/], ["QQ：12345678", /昵称/], ["别名", /别名/]] as const) {
+    })).not.toThrow();
+    for (const userName of [undefined, "12345678", "QQ：12345678", "别名"] as const) {
       expect(() => validateMemoryFact("plana", "user_profile", {
         id: "bad-name",
         userId: "12345678",
         userName,
         fact: "我注意到测试用户（QQ 12345678）喜欢摄影，我觉得这很有趣，我也很期待看到作品。"
-      })).toThrow(expected);
+      })).not.toThrow();
     }
     expect(() => validateReplacements("plana", {
       working: [],
@@ -1389,7 +1380,7 @@ describe("memory-perspective-v1 tracked migration", () => {
     }
   }, 60_000);
 
-  it("mechanically unions scalar working userId evidence and removes an ambiguous scalar", async () => {
+  it("mechanically unions scalar working userId evidence without validating prose name-to-QQ pairing", async () => {
     const fixture = await createFixture();
     const database = new DatabaseSync(fixture.applicationPaths[0]);
     const first = database.prepare("SELECT row_id, data_json FROM memory_records WHERE source='working'").get();
@@ -1438,7 +1429,7 @@ describe("memory-perspective-v1 tracked migration", () => {
       workspace: fixture.workspace,
       proposalDir: "business/migrations/proposals",
       planDir: "business/migrations/plans-mismatched-nicknames"
-    })).toThrow(/受信昵称|昵称.*证据|QQ.*成对/);
+    })).not.toThrow();
 
     const suffixedProposal = await readJson(proposalPath);
     suffixedProposal.targets.working[0].targetFact = "我注意到测试用户（QQ 12345678）先提出请求，假另一用户（QQ 87654321）随后完成，我觉得这段进展很重要，我也愿意认真回应。";
@@ -1448,7 +1439,7 @@ describe("memory-perspective-v1 tracked migration", () => {
       workspace: fixture.workspace,
       proposalDir: "business/migrations/proposals",
       planDir: "business/migrations/plans-suffixed-nickname"
-    })).toThrow(/受信昵称|昵称.*证据|QQ.*成对/);
+    })).not.toThrow();
 
     const mixedIdentityProposal = await readJson(proposalPath);
     mixedIdentityProposal.targets.working[0].targetFact = "我注意到测试用户（QQ 12345678）先提出请求，伪造用户（QQ 12345678）又补充细节，另一用户（QQ 87654321）随后完成，我觉得这段进展很重要，我也愿意认真回应。";
@@ -1458,7 +1449,7 @@ describe("memory-perspective-v1 tracked migration", () => {
       workspace: fixture.workspace,
       proposalDir: "business/migrations/proposals",
       planDir: "business/migrations/plans-mixed-nickname"
-    })).toThrow(/受信昵称|昵称.*证据|QQ.*成对/);
+    })).not.toThrow();
 
     const extraIdentityProposal = await readJson(proposalPath);
     extraIdentityProposal.targets.working[0].targetFact = "我注意到测试用户（QQ 12345678）先提出请求，另一用户（QQ 87654321）随后完成，陌生用户（QQ 99999999）又加入讨论，我觉得这段进展很重要，我也愿意认真回应。";
@@ -1468,7 +1459,7 @@ describe("memory-perspective-v1 tracked migration", () => {
       workspace: fixture.workspace,
       proposalDir: "business/migrations/proposals",
       planDir: "business/migrations/plans-extra-qq"
-    })).toThrow(/finalUserIds|QQ.*身份|QQ.*证据/);
+    })).not.toThrow();
   });
 
   it("rejects malformed mutable metadata and dangling cross-memory references with zero database writes", async () => {

@@ -25,6 +25,7 @@ export {
 export type {
   AgentToolName,
   BotBashSettings,
+  BotDirectorSettings,
   BotMemorySettings,
   BotOrchestratorSettings,
   BotToneSettings,
@@ -129,6 +130,9 @@ export interface ConversationRecord extends ConversationContract {
   selfId?: number;
   replyEnabled?: boolean;
   orchestratorEnabled?: boolean;
+  orchestratorResponseTimeOverrideEnabled?: boolean;
+  orchestratorResponseTimeMs?: number;
+  directorEventsEnabled?: boolean;
   disabledTools?: AgentToolName[];
   messageCount: number;
   lastAt: string;

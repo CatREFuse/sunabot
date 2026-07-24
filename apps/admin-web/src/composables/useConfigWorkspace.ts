@@ -63,6 +63,7 @@ const emptyConfig: AppConfig = {
       maxOutputTokens: 2400,
       maxRetries: 2
     },
+    director: { enabled: false },
     memory: {
       memoryModel: "gpt-5.4-mini",
       reasoningEffort: "medium",
@@ -135,6 +136,7 @@ export const sectionKeys: ConfigSectionKey[] = [
   "bot",
   "tone",
   "memory",
+  "director",
   "orchestrator",
   "tools",
   "bash",
@@ -146,7 +148,7 @@ export function useConfigWorkspace(scope: ConfigWorkspaceScope = "agent") {
   const loading = shallowRef(false);
   const state = reactive<Record<ConfigSectionKey, SectionState>>({
     server: idle(), persona: idle(), providers: idle(), normalReply: idle(), bot: idle(), tone: idle(), memory: idle(),
-    broadcastStorm: idle(), orchestrator: idle(), tools: idle(), bash: idle(), onebot: idle()
+    director: idle(), broadcastStorm: idle(), orchestrator: idle(), tools: idle(), bash: idle(), onebot: idle()
   });
   const drafts = reactive<SectionDrafts>(valuesFromConfig(emptyConfig));
   const baselines = reactive<SectionDrafts>(valuesFromConfig(emptyConfig));
@@ -477,6 +479,7 @@ function valuesFromConfig(config: AppConfig): SectionDrafts {
       ...clone(config.bot.tone ?? {})
     },
     memory: clone(config.bot.memory),
+    director: clone(config.bot.director ?? emptyConfig.bot.director),
     orchestrator: {
       ...clone(config.bot.orchestrator),
       groupThreadModel: config.bot.orchestrator.groupThreadModel?.trim() || emptyConfig.bot.orchestrator.groupThreadModel

@@ -17,6 +17,7 @@ const props = withDefaults(defineProps<{
   hasMore: boolean;
   loadingMessages: boolean;
   loadingLogs: boolean;
+  settingsBusy?: boolean;
   error: string;
 }>(), {
   memberNames: () => ({}),
@@ -29,6 +30,8 @@ const emit = defineEmits<{
   logs: [runId?: string];
   reply: [enabled: boolean];
   orchestrator: [enabled: boolean];
+  orchestratorResponseTimeOverride: [enabled: boolean];
+  orchestratorResponseTime: [milliseconds: number];
 }>();
 const logsOpen = shallowRef(false);
 const activeLogRunId = shallowRef<string | undefined>();
@@ -114,9 +117,12 @@ function refreshLogs() {
       :panel="activePanel ?? 'settings'"
       :conversation="conversation"
       :stats="stats"
+      :busy="settingsBusy"
       @close="activePanel = null"
       @reply="emit('reply', $event)"
       @orchestrator="emit('orchestrator', $event)"
+      @orchestrator-response-time-override="emit('orchestratorResponseTimeOverride', $event)"
+      @orchestrator-response-time="emit('orchestratorResponseTime', $event)"
     />
   </section>
 </template>

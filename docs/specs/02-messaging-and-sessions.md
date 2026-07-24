@@ -23,18 +23,22 @@
 
 每条消息按以下优先级进入运行时：
 
-1. 显式命令，例如群聊总结。
+1. 显式命令，例如群聊总结。所有半角或全角斜杠命令都必须显式 at 当前 Bot，例如 `/总结群聊@Plana`；缺少 `@Bot` 或目标名称不匹配时按普通消息处理，不进入命令路由。命令参数仍由具体命令自行解释。
 2. 私聊或明确 @ 的直接回复。
 3. 用户群聊的唤醒词与编排器判断。
 4. bot 群聊仅记录上下文，不主动编排。
 
 全局开关、群类型开关、会话开关、连接状态和编排器 epoch 共同构成回复门控。全新 QQ 会话保留首条合法消息，用于建立默认停用的会话记录；既有会话停用后，后续入站在防抖恢复、命令匹配、附件处理、记忆调度和业务消息持久化之前静默丢弃，不更新消息数、最后消息或会话时间。门控关闭后，旧的在途编排结果不能继续外发。回复、戳一戳与 deferred 任务的原始请求在进入持久化队列时保存 `ReplyGateSnapshotV1`，其中包含会话范围、会话 ID、scope epoch、conversation epoch 和本次 Core 进程的 generation。同一进程内关闭后再开启仍会拒绝旧快照；重启后的 generation 变化和旧版无快照记录都按当前开关重新校验，避免进程内旧任务复活，同时保留升级与重启恢复能力。
 
+导演事件使用独立的会话级 `directorEventsEnabled` 开关，不继承“允许回复”或群聊编排器状态。旧会话缺失该字段时按关闭处理，新会话创建时显式关闭；只有显式开启的 QQ 会话进入导演主动分享目标。开关变化后立即按当前启用会话重算当天尚未执行的导演任务目标，关闭不会影响普通回复、普通定时任务或其他会话。
+
 用户群聊编排器的 payload 必须在 `conversation.recentMessages` 和 `currentMessage.text` 中保留每张真实图片的语义标记。OneBot 新入站优先使用 `[内容图片#N：摘要]` 或 `[表情图片#N：摘要]`；旧消息缺少语义标记时才按缺少数量补充 `[图片]`。已有语义标记和旧 `[图片]` 都计入图片数量，不能重复注入。图片媒体仍与正文分离保存，编排器继续接收 `imageCount` 和历史媒体句柄用于判断，不直接接收图片 URL、Data URL 或本地路径。
 
 用户群聊编排器的结构化输出只接受未包裹的单个 JSON object，字段集合必须精确为 `should_reply`、`reason`、`reply_to_message_id`：`should_reply` 是 boolean，`reason` 是合法 string，肯定结果的 `reply_to_message_id` 只能是本批 `conversation.replyCandidateMessageIds` 中的 string，否定结果必须显式为 `null`。别名、缺失或额外字段、数值 ID、类型异常、Markdown code fence、说明文字或其他文本包裹全部失败关闭，不得创建回复任务。肯定结果以有界 `UserGroupOrchestratorResultV1` 随 ambient 防抖、真实回复事件和 deferred 原始请求持久传递，重启、尾随消息和异步回调不能改写原因或目标 ID；直接回复、命令和其他非编排器路径不携带该结果。
 
 用户群聊编排器按会话自动管理激活期。新会话沿用默认开启状态；编排器返回有效的 `should_reply=true` 后继续保持开启，返回第一条有效的 `should_reply=false` 后立即关闭该会话编排器并持久化状态，后续普通群消息不再创建 ambient 判断。全局编排器开启时，显式唤醒词、明确 @ 或命令会自动重新打开对应会话的编排器，本次直接回复或命令消息同时作为已消费边界，后续普通群消息再进入新的编排批次。超时、取消、Provider 失败或结构化输出无效不视为“不回复”，不能关闭编排器。自动开关只影响当前会话，其他群聊状态不变；Core 重启或 OneBot 重连后只恢复仍处于开启状态的会话，已经自动关闭的会话保持关闭，直到再次被显式唤醒或手动开启。
+
+用户群聊可以独立开启编排器时间覆盖，并把响应时间设置为 1—3,600 秒。覆盖关闭或旧会话缺少覆盖字段时，调度、恢复、状态窗口、编排器 payload 与请求日志统一使用当前 Agent 的 `recentMessageWindowMs`；首次开启覆盖但没有已保存的合法会话时间时，保存并沿用当前 Agent 的 `recentMessageWindowMs`；覆盖开启时统一使用当前会话的 `orchestratorResponseTimeMs`，消息阈值、模型超时和回复限流不变。更新正在等待的会话时间后立即按最后一条候选消息重新计算剩余等待时间，已经进入判断或 durable 回复链路的任务不回退。非法、非整数或越界时间不得写入；不同会话的覆盖值互不影响。
 
 广播风暴嗅探是系统级新任务门控。受监控账号包含所有已启用 Agent 绑定的已启用 QQ，以及公共配置中的补充嗅探 QQ；同一 Agent 绑定的多个 QQ 视为同一参与者，每个补充 QQ 视为一个参与者。开启后，同一群内任意两个不同受监控参与者发生显式引用回复时记一次，同一条消息经多个 NapCat 连接重复到达只计一次；同群内不同 Agent 对之间的次数共同累计，不同群分别计数。在配置的 m 分钟窗口内累计 n 次后触发风暴，k 分钟内所有 Agent 对新收到的私聊、群聊、命令和 Web Chat 消息只记录而不创建回复任务。触发前已经 dispatch 的直接回复、群聊编排、deferred tool completion、`no_reply` 戳一戳和 outbox 继续执行与投递，不取消、不失效。静默期结束后恢复为新消息创建任务，静默期内收到的消息不得延迟补建任务。默认开启，m=2、n=3、k=1，补充嗅探账号默认为空；开关、m/n/k 与补充账号名单在系统设置中热更新并保存到公共配置。
 
@@ -70,7 +74,7 @@ Thread 状态按会话增量维护。宿主规则优先处理对已归属消息�
 - 外发使用 outbox，支持租约、有限重试、断线恢复和幂等键。OneBot outbox 按 account ID 持久化投递分区；离线分区暂停时，其他账号继续按各自 FIFO 投递，探针和恢复只作用于目标分区。
 - outbox、turn 与工具任务的租约续期异常必须中止当前 claim，并通过稳定错误码与记录 ID 暴露持久化降级状态；outbox 失败终态只有在 `finishOutbox` 成功提交后才能标记 finalized。终态写入失败时保留可恢复 lease、延后重新扫描，不能吞错或在同一 claim 内重复终结。
 - OneBot 发送和本地 settle 使用持久化两阶段。远端成功后先记录 receipt 并进入 `sent_remote`，会话投影、请求日志、记忆入队和逐 handler `after_reply` 使用稳定 settle key 继续执行；任何不确定传输或 hook 副作用进入 `delivery_unknown`，只接受人工 `applied` 或 `not_applied` 确认，不能自动重复外发。旧 schema 中无法判断远端结果的 `sending` 记录迁移为 `delivery_unknown`，并安全推进连续终态 cursor。
-- 当前 Agent 启用 `bot.tone.enabled` 后，所有将发往 OneBot 的非空文本在可用的 `before_reply` hook 之后、写入 durable outbox 或直接调用 OneBot 之前统一进入 tone 节点。覆盖普通最终正文、`assistant_text`、deferred `dispatch_message`、异步 callback、timeout/cancel、错误回复、服务上线通知和 `system_config` 确认；纯媒体回复不调用 tone。默认 `bot.tone.segmentedReply=false`，节点只替换文本，生成图片、媒体引用、附件、文件、引用快照、Agent/account、会话、幂等键、消息来源和工具 trace 均保持原值。以 `异常：` 开头的错误回复必须在 Tone 结果中逐字保留完整错误原文；Tone 遗漏或泛化该原文时，宿主在发送前把原文补回。开启分段回复后，Tone 输入作为不透明正文原样传递，其中已有的待订正 XML、嵌套或未知标签在进入 Tone 前不解析、不拒绝；Tone 提示词负责按同一输出合同检查和订正，宿主只在 Tone 返回后执行严格解析。返回结果只接受平铺在顶层且绝不嵌套的 `dialogc`、`dialog`、`exp`、`img`、`voice` 与 `file` XML，`br`、HTML 和其他任何标签均非法；每个节点转换为一个有序消息气泡，只有第一条 outbox 保留引用和结构化 @。同一回复产生多个气泡时，每条 durable payload 固化自己的批内序号；第一条出栈后立即发送，后续每条在完成 claim、开始远端传输前分别随机等待 500—2,000ms，等待可由协调器取消且取消时不能标记 transport started。单气泡、旧 payload、非 outbox 直发和 settle-only 恢复不等待。`dialogc` 仅允许作为第一节点并固定使用 `replay="msg_id"`；媒体 `src` 必须逐字匹配宿主提供的安全句柄，Tone 完全省略媒体或只输出预期媒体前缀时由宿主按原顺序补足剩余尾项，未知句柄、重复、跳项、重排或跨类型引用继续失败关闭。改写完成后的正文和消息包只持久化一次，outbox 重试、断线恢复和重启投递不得再次调用 tone。启用时空输出、Tone 订正后仍非法的 XML、取消、超时、Provider 错误或重试耗尽均失败关闭，不能绕过节点发送原文；`dispatch_message` 改写后仍须非空且不超过 200 字。`system_config` 确认必须先完成 tone 并成功写入 held outbox，随后才能提交配置。
+- 当前 Agent 启用 `bot.tone.enabled` 后，所有将发往 OneBot 的非空文本在可用的 `before_reply` hook 之后、写入 durable outbox 或直接调用 OneBot 之前统一进入 tone 节点。覆盖普通最终正文、`assistant_text`、deferred `dispatch_message`、异步 callback、timeout/cancel、错误回复、服务上线通知和 `system_config` 确认；纯媒体回复不调用 tone。默认 `bot.tone.segmentedReply=false`，节点只替换文本，生成图片、媒体引用、附件、文件、引用快照、Agent/account、会话、幂等键、消息来源和工具 trace 均保持原值。以 `异常：` 开头的错误回复必须在 Tone 结果中逐字保留完整错误原文；Tone 遗漏或泛化该原文时，宿主在发送前把原文补回。开启分段回复后，Tone 输入作为不透明正文原样传递，其中已有的待订正 XML、嵌套或未知标签在进入 Tone 前不解析、不拒绝；Tone 提示词负责按同一输出合同检查和订正，宿主只在 Tone 返回后执行严格解析。返回结果只接受平铺在顶层且绝不嵌套的 `dialogc`、`dialog`、`exp`、`img`、`voice` 与 `file` XML，`br`、HTML 和其他任何标签均非法；`exp` 同时接受 `<exp>[/key]</exp>` 与 `<exp key="[/key]"/>`，两种形式解析为同一表情节点，空 key、额外属性和非法标记继续拒绝；每个节点转换为一个有序消息气泡，只有第一条 outbox 保留引用和结构化 @。同一回复产生多个气泡时，每条 durable payload 固化自己的批内序号；第一条出栈后立即发送，后续每条在完成 claim、开始远端传输前分别随机等待 500—2,000ms，等待可由协调器取消且取消时不能标记 transport started。单气泡、旧 payload、非 outbox 直发和 settle-only 恢复不等待。`dialogc` 仅允许作为第一节点并固定使用 `replay="msg_id"`；媒体 `src` 必须逐字匹配宿主提供的安全句柄，Tone 完全省略媒体或只输出预期媒体前缀时由宿主按原顺序补足剩余尾项，未知句柄、重复、跳项、重排或跨类型引用进入 Tone 门禁订正重试。分段 XML、表情顺序或媒体资源等宿主硬编码门禁失败时，宿主按当前 Tone 有效“失败重试次数”重新发起完整 Tone 请求，并在请求最后追加本次尝试序号、最大尝试次数和按发生顺序累计且 XML 转义的全部历史门禁错误；每次后续请求都保留此前错误并强调不得重复，门禁通过前保持零 outbox，重试耗尽后继续失败关闭。改写完成后的正文和消息包只持久化一次，outbox 重试、断线恢复和重启投递不得再次调用 tone。启用时空输出、取消、超时、Provider 错误或门禁订正重试耗尽均失败关闭，不能绕过节点发送原文；`dispatch_message` 改写后仍须非空且不超过 200 字。`system_config` 确认必须先完成 tone 并成功写入 held outbox，随后才能提交配置。
 - OneBot 发送入口使用版本化 `OutboundBubbleV1`。旧回复方式由宿主包装为单个 `message` 气泡，XML 分段回复按节点包装为多个 `message` 气泡；普通图片与表情仍使用消息媒体段，语音、图片文件和普通文件使用同一协议中的 `asset` 气泡并继续服从各自 durable outbox 的来源、文件身份与权限校验。表情在 Sunabot durable `contentSegments` 中使用 `sticker`，OneBot adapter 固定映射为 `image` 且携带 `sub_type=1`；普通生成图片继续使用不携带该 subtype 的 `image`。`sticker` 不生成商城表情所需的 `emoji_id` 或 `emoji_package_id`。协议分派后才调用 `send_msg`、`record` 或文件上传 action，模型输出不能直接选择账号、QQ 目标、宿主路径或 OneBot action。
 - 当前 Agent 的表情图库通过正文标记 `[/key]` 参与 OneBot 回复，例如当前列表中的 `开心` 必须写成 `[/开心]`，不能添加“表情”等前缀。宿主在 `before_reply` 前冻结初始标记计划，单条回复最多识别 4 个当前图库中的 key；纯标记回复跳过 tone，正文与标记混合时只调用一次 tone，并以受控分段保护精确 raw token、顺序和文本分段骨架。分段 Tone 的 `<exp>` 只能逐字使用本轮明确允许的标记；允许列表为空时不得输出 `<exp>`。hook 或 tone 新增、删除、改写、移动标记都失败关闭；未知 key、反斜杠转义标记和带空白的近似写法按普通正文保留。写入 outbox 前，已知标记按原位置转换为有序文字与图片 segment，并异步复验当前 Agent 的 SQLite 记录、内容寻址文件和文件身份；重试、断线恢复和重启只投递已经持久化的 segment，不重复执行 hook、tone 或标记规划。`bot.emojiSendSeparately` 默认关闭；开启后，含正文或普通生成图的回复先写入一条 outbox，全部表情再写入紧随其后的独立 outbox，第二条不重复引用或 @，纯表情回复仍只写入一条。纯表情发送成功后不新增 assistant 会话记录，不写入记忆队列。OneBot 发送前再次限制实际发出的内容寻址表情不超过 4 个，并把全部本地内联图片按实际出现次数计入 32 MiB 原始字节总预算；相同文件只读取一次，读取并发最多 2，任一读取、完整性、顺序或预算失败时整条消息保持零发送。
 - Codex 与图像生成长任务先返回确认消息，任务完成后通过持久化事件恢复原会话；任务提交不能等待生成完成。所有 deferred tool 必须单独调用并携带非空 `dispatch_message`，由模型使用当前人格生成“已收到并开始处理”的短消息；该字段与任务在同一事务中落库为 acknowledgement，进入 worker 前从业务参数中删除。事务提交后 acknowledgement outbox 与 worker 独立调度，消息发送、重试或结果不确定不能阻塞任务 claim 和执行；callback 按同一会话 outbox FIFO 排在 acknowledgement 之后。缺失、空白或超过 200 字时不得派发，也不得降级为同步执行。
@@ -87,9 +91,13 @@ Thread 状态按会话增量维护。宿主规则优先处理对已归属消息�
 
 ### 3.6 日常导演主动分享
 
+日常导演受当前 Agent 的 `bot.director.enabled` 总开关控制，缺失该字段时固定视为关闭。关闭后不得生成或修订当日行程，不向普通回复注入行程，不提供 `call_director`，并删除尚未触发的导演分享任务；已经进入 Session event 或 outbox 的导演回调也必须静默完成，不能继续生成或外发。开关热更新，重新开启后按当前系统时间恢复当日行程检查。
+
 每个 Agent 的日常导演在系统时区每日 07:00 后确保当天行程存在；Core 在 07:00 后启动或重启时立即补建，07:00 前只等待分钟级唤醒。当天已有行程时不得重复调用计划 Provider。每个启用且非 Web Chat 的既有 QQ 会话都是当天分享候选，目标按完整会话 ID 排序并以最多 20 个一组写入确定性 one-time 定时任务；会话启停集合在分享触发前变化时，尚未到期的同 revision 任务必须幂等替换，不能因 ID 冲突停止调度。
 
 每个 share 节点必须落在所属活动时间内、具有文本意图和现场自拍提示，并在当前时间之后才创建任务。任务回调复用 `scheduled_callback` 的正常 private/group Agent loop、目标账号、Session FIFO 与 outbox；回调上下文只提供人物、现场、动作、服装和自拍意图，要求当前角色以本人视角自然分享日常并在同一 turn 调用 `selfie`。最终回复不得暴露定时、计划、规划、日程、任务、触发、回调、cron、导演、系统、提示词、字段或预设等元信息，也不得使用“按照计划”“今天安排”“到点了”“提醒一下”“定时分享”等表述。任务不能绕过目标会话、Agent/account 隔离或媒体安全边界，也不能向 Web Chat 主动投递。行程 revision 变化时，旧 revision 尚未执行的任务与链接被删除，新 revision 使用新的确定性 ID 创建；已经到期的历史不被重放。
+
+普通定时任务与 `system:*` 回调在进入统一 private/group 回复管线时必须显式使用无 Director 访问模式：不得读取 `bot.director`、Director SQLite 行程或 `conversation.director.schedule`，不得挂载 `call_director`，也不得获得 Director 原子自拍回复模式。只有保留的 `director-` 任务 ID 可以进入 Director 回调分支；Director 开关缺失、关闭、读取异常或行程损坏都不能阻断普通任务的生成、Session event、模型回调、durable outbox、重试和重启恢复。旧 callback/outbox 的 Director 识别只允许从受校验 callback envelope 内的冻结任务 ID 派生，普通正文中的相似文本不能改变分类。
 
 普通定时任务生成结果后按目标创建幂等 Session 事件；目标投递失败写入 run 的 `delivery_attempts`、`last_delivery_error` 和 `next_delivery_at`，以带随机抖动的有界指数退避最多尝试三次。第三次失败转为持久 `failed` 终态，不再由调度循环无限 claim；Core 重启只恢复尚未到期的下一次投递或未超过上限的 run。管理员可从失败记录发起一次显式重新投递，服务端原子清理旧投递错误并把既有生成结果恢复为可 claim 状态，不重复生成正文，也不允许对非失败记录执行该操作。
 

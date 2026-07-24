@@ -5,7 +5,8 @@ import { inboundImageUrls, replaceInboundImageUrls } from "../../packages/contra
 import { isAdminSender, isReplySenderAllowed } from "../../services/messaging/replySenderPolicy.js";
 import { generateImgMediaHandle, type GenerateImgReferenceContext } from "../../services/tools/generateImgTool.js";
 import {
-  extractConfirmedBashApprovalId
+  extractConfirmedBashApprovalId,
+  type BashExecutionBackend
 } from "../../services/tools/bashAudit.js";
 import type { RuntimeToolCapabilityResolver } from "../../services/tools/bashCapability.js";
 import type { WorkspaceBashRuntimePort } from "../../services/tools/bashRuntime.js";
@@ -229,13 +230,14 @@ export async function runtime_resolveProviderBashHandle(
   this: RuntimeHost,
   incoming: ParsedIncomingMessage,
   promptOverride: string | undefined,
-  capabilityResolver?: RuntimeToolCapabilityResolver
+  capabilityResolver?: RuntimeToolCapabilityResolver,
+  backend: BashExecutionBackend = "docker"
 ): Promise<ProviderBashOptions | undefined> {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const epoch = this.configEpoch;
     const config = deepFreeze(structuredClone(this.config));
     const auditPort = this.bashAudit;
-    const candidate = resolveProviderBashCandidate(config, incoming, promptOverride);
+    const candidate = resolveProviderBashCandidate(config, incoming, promptOverride, backend);
     if (!candidate || !auditPort || !capabilityResolver) return undefined;
 
     let auditAvailable = false;
@@ -289,37 +291,47 @@ export async function runtime_resolveProviderBashHandle(
 function resolveProviderBashCandidate(
   config: Readonly<AppConfig>,
   incoming: ParsedIncomingMessage,
-  promptOverride?: string
+  promptOverride: string | undefined,
+  backend: BashExecutionBackend
 ) {
   const bash = config.bot.bash;
-  const accountId = incoming.accountId?.trim();
   const senderId = incoming.sender?.id?.trim();
-  if (
-    !bash.enabled
-    || promptOverride !== undefined
-    || incoming.transport !== undefined
-    || incoming.agentId !== config.persona.defaultAgentId
-    || !accountId
-    || !Number.isSafeInteger(incoming.messageId)
-    || Number(incoming.messageId) <= 0
-    || !Number.isSafeInteger(incoming.selfId)
-    || Number(incoming.selfId) <= 0
-    || !isReplySenderAllowed(incoming.userId)
-    || senderId !== String(incoming.userId)
-  ) return undefined;
-
-  const workspacePath = resolveProjectPath(config.persona.agentWorkspace);
-  if (!workspacePath) return undefined;
+  const administrator = isAdminSender(incoming.userId, config.bot.adminQq.trim());
   const privateConversation = incoming.scope === "private" && incoming.groupId === undefined;
   const groupConversation = (incoming.scope === "user_group" || incoming.scope === "bot_group")
     && Number.isSafeInteger(incoming.groupId)
     && Number(incoming.groupId) > 0;
-  if (!privateConversation && !groupConversation) return undefined;
+  const webAdministratorPrivate = incoming.transport === "web"
+    && administrator
+    && privateConversation;
+  const oneBotConversation = incoming.transport === undefined
+    && Boolean(incoming.accountId?.trim())
+    && Number.isSafeInteger(incoming.messageId)
+    && Number(incoming.messageId) > 0
+    && Number.isSafeInteger(incoming.selfId)
+    && Number(incoming.selfId) > 0
+    && (privateConversation || groupConversation);
+  if (
+    !bash.enabled
+    || promptOverride !== undefined
+    || (!webAdministratorPrivate && incoming.agentId !== config.persona.defaultAgentId)
+    || (webAdministratorPrivate && incoming.agentId !== undefined
+      && incoming.agentId !== config.persona.defaultAgentId)
+    || !isReplySenderAllowed(incoming.userId)
+    || senderId !== String(incoming.userId)
+    || (!webAdministratorPrivate && !oneBotConversation)
+    || (backend === "native" && !(webAdministratorPrivate || (administrator && privateConversation)))
+  ) return undefined;
+
+  const workspacePath = resolveProjectPath(config.persona.agentWorkspace);
+  if (!workspacePath) return undefined;
+  const accountId = webAdministratorPrivate ? "web-admin" : incoming.accountId!.trim();
 
   const approvalContext = Object.freeze({
+    backend,
     agentId: config.persona.defaultAgentId,
     accountId,
-    transport: "onebot" as const,
+    transport: webAdministratorPrivate ? "web" : "onebot",
     conversationId: conversationRecordId(incoming),
     userId: String(incoming.userId),
     ...(groupConversation ? { groupId: String(incoming.groupId) } : {})
@@ -327,8 +339,8 @@ function resolveProviderBashCandidate(
   const confirmedApprovalId = extractConfirmedBashApprovalId(incoming.text);
   return Object.freeze({
     workspacePath,
-    backend: "docker" as const,
-    accessMode: "isolated" as const,
+    backend,
+    accessMode: backend === "native" ? "admin" as const : "isolated" as const,
     strictMode: bash.strictMode,
     approvalContext,
     ...(confirmedApprovalId ? { confirmedApprovalId } : {})

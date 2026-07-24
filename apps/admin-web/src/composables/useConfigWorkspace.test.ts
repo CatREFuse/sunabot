@@ -53,6 +53,7 @@ function config(adminName: string): AppConfig {
       emojiSendSize: 512,
       emojiSendSeparately: false,
       tone: { enabled: false, segmentedReply: false, followMainModel: false, providerId: "", model: "gpt-5.4-mini", reasoningEffort: "low", temperature: 0.7, maxOutputTokens: 2400, maxRetries: 2 },
+      director: { enabled: false },
       memory: { memoryModel: "gpt-5.4-mini", reasoningEffort: "medium", messageThreshold: 48, workingMemoryMaxEntries: 100, dreamRecentWindowHours: 48, dreamRecentMemoryLimit: 12, dreamOlderMemoryLimit: 12, workMemoryCompressInPrompt: "in.md", workMemoryCompressOutPrompt: "out.md", userProfilePrompt: "user.md" },
       orchestrator: { enabled: false, userGroupchatOrchestratorModel: "gpt-5.4-mini", groupThreadModel: "gpt-5.4-mini", reasoningEffort: "medium", promptFile: "orchestrator.md", messageThreshold: 10, recentMessageWindowMs: 60_000 },
       tools: {

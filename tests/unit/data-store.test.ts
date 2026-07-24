@@ -6,7 +6,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   applicationDatabasePath,
   applicationDataStore,
-  closeApplicationDataStores
+  closeApplicationDataStores,
+  generatedImageHistoryRecords
 } from "../../adapters/sqlite/applicationDataStore.js";
 import { MemorySchedulerStore } from "../../services/memory/memoryScheduler.js";
 import { runWithAgentRuntimeContext } from "../../packages/platform/runtimeAgentContext.js";
@@ -96,11 +97,18 @@ describe("application SQLite data store", () => {
 
     saveConversationRecordStrict({
       ...conversation("private:1", "2026-07-10T03:00:00.000Z"),
-      lastText: "strict update"
+      lastText: "strict update",
+      orchestratorResponseTimeOverrideEnabled: true,
+      orchestratorResponseTimeMs: 15_000
     }, config);
 
     expect(store.readConversations()).toEqual([
-      expect.objectContaining({ id: "private:1", lastText: "strict update" }),
+      expect.objectContaining({
+        id: "private:1",
+        lastText: "strict update",
+        orchestratorResponseTimeOverrideEnabled: true,
+        orchestratorResponseTimeMs: 15_000
+      }),
       expect.objectContaining({ id: "private:2", lastText: "" })
     ]);
   });
@@ -145,12 +153,38 @@ describe("application SQLite data store", () => {
     ]);
     expect(store.readMemoryScheduler()).toHaveProperty("private:1");
     expect(store.readImageHistory()).toEqual([expect.objectContaining({ id: "image-1" })]);
+    store.appendImageHistory({
+      id: "image-2",
+      url: "/generated-images/image-2.png",
+      prompt: "追加记录",
+      createdAt: "2026-07-10T03:00:00.000Z"
+    });
+    expect(store.readImageHistory()).toEqual([
+      expect.objectContaining({ id: "image-2", prompt: "追加记录" }),
+      expect.objectContaining({ id: "image-1" })
+    ]);
     expect(store.counts()).toMatchObject({
       conversations: 2,
       requestLogs: 2,
       memorySchedulerConversations: 1,
-      imageHistory: 1
+      imageHistory: 2
     });
+  });
+
+  it("indexes only regular generated PNG files with stable agent URLs", async () => {
+    const imageDir = path.join(root, "images");
+    await fs.mkdir(imageDir);
+    await fs.writeFile(path.join(imageDir, "2026-07-24T10-29-13-152Z-example.png"), "image");
+    await fs.writeFile(path.join(imageDir, "emoji-deadbeef.png"), "emoji");
+    await fs.writeFile(path.join(imageDir, "ignored.jpg"), "image");
+
+    expect(generatedImageHistoryRecords(imageDir, "arona")).toEqual([
+      expect.objectContaining({
+        id: "2026-07-24T10-29-13-152Z-example.png",
+        url: "/generated-images/agents/arona/2026-07-24T10-29-13-152Z-example.png",
+        createdAt: "2026-07-24T10:29:13.152Z"
+      })
+    ]);
   });
 
   it("rejects the retired external main database override", () => {

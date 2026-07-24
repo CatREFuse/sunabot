@@ -29,7 +29,7 @@ import {
 import { appendRequestLog } from "../../adapters/observability/requestLog.js";
 import type { SunaRuntime } from "../runtime.js";
 import {
-  conversationReplyEnabled,
+  conversationDirectorEventsEnabled,
   isWebConversationId
 } from "./messagingAttachmentHelpers.js";
 
@@ -42,6 +42,10 @@ export class RuntimeDirector {
   private inFlight?: Promise<DirectorScheduleV1 | undefined>;
 
   constructor(private readonly host: SunaRuntime) {}
+
+  get enabled() {
+    return this.host.config.bot.director?.enabled === true;
+  }
 
   start() {
     if (this.timer) return;
@@ -57,16 +61,43 @@ export class RuntimeDirector {
     this.timer = undefined;
   }
 
+  configChanged(previousEnabled: boolean) {
+    if (previousEnabled === this.enabled) return;
+    if (!this.enabled) {
+      this.removePendingScheduledShares(new Date());
+      return;
+    }
+    void this.tick().catch((error) => this.logFailure("director.daily_plan.failed", error));
+  }
+
+  targetsChanged(now = new Date()) {
+    if (!this.enabled) return;
+    const schedule = applicationDataStore(this.host.config).director.read(
+      directorLocalDate(now, directorTimeZone())
+    );
+    if (!schedule) return;
+    void this.reconcileScheduledShares(schedule, now).catch((error) => {
+      void this.logFailure("director.targets.reconcile_failed", error);
+    });
+  }
+
+  listSchedules(input: { page?: number; pageSize?: number } = {}) {
+    return applicationDataStore(this.host.config).director.list(input);
+  }
+
   async promptContext(now = new Date()) {
+    if (!this.enabled) return "";
     const store = applicationDataStore(this.host.config).director;
     return directorSchedulePromptContext(store.read(directorLocalDate(now, directorTimeZone())));
   }
 
-  toolPort(): CallDirectorToolPort {
+  toolPort(): CallDirectorToolPort | undefined {
+    if (!this.enabled) return undefined;
     return { execute: (input) => this.reviseToday(input) };
   }
 
   async ensureToday(now = new Date(), allowBeforeWake = false): Promise<DirectorScheduleV1 | undefined> {
+    if (!this.enabled) return undefined;
     const timeZone = directorTimeZone();
     const date = directorLocalDate(now, timeZone);
     const store = applicationDataStore(this.host.config).director;
@@ -89,6 +120,7 @@ export class RuntimeDirector {
   }
 
   private async generateToday(now: Date, date: string, timeZone: string) {
+    if (!this.enabled) return undefined;
     const repository = applicationDataStore(this.host.config);
     const existing = repository.director.read(date);
     if (existing) return existing;
@@ -117,6 +149,7 @@ export class RuntimeDirector {
         promptFamily: DIRECTOR_DAILY_PLAN_PROMPT_ID
       }
     });
+    if (!this.enabled) return undefined;
     const draft = parseDirectorScheduleDraft(text, { date, timeZone });
     if (!draft.items.some((item) => item.share.enabled && Date.parse(item.share.at!) > now.getTime())) {
       throw new Error("Director daily plan must contain a future share.");
@@ -149,6 +182,9 @@ export class RuntimeDirector {
 
   private async reviseToday(input: CallDirectorToolInput) {
     try {
+      if (!this.enabled) {
+        return { ok: false, code: "DIRECTOR_DISABLED", error: "Daily director is disabled." };
+      }
       const now = new Date();
       const timeZone = directorTimeZone();
       const current = await this.ensureToday(now, true);
@@ -218,6 +254,10 @@ export class RuntimeDirector {
   }
 
   private async reconcileScheduledShares(schedule: DirectorScheduleV1, now: Date) {
+    if (!this.enabled) {
+      this.removePendingScheduledShares(now);
+      return;
+    }
     const repository = applicationDataStore(this.host.config);
     const links = repository.director.listTaskLinks(schedule.date);
     for (const link of links) {
@@ -284,9 +324,21 @@ export class RuntimeDirector {
     this.host.scheduledTasks.wake();
   }
 
+  private removePendingScheduledShares(now: Date) {
+    const repository = applicationDataStore(this.host.config);
+    const date = directorLocalDate(now, directorTimeZone());
+    for (const link of repository.director.listTaskLinks(date)) {
+      const task = repository.scheduledTasks.get(link.taskId);
+      if (!task?.nextRunAt) continue;
+      deleteScheduledTask(repository.scheduledTasks, task);
+      repository.director.deleteTaskLink(link.taskId);
+    }
+    this.host.scheduledTasks.wake();
+  }
+
   private enabledTargets(): ScheduledTaskTarget[] {
     return [...this.host.conversationRecords.values()]
-      .filter((record) => !isWebConversationId(record.id) && conversationReplyEnabled(record))
+      .filter((record) => !isWebConversationId(record.id) && conversationDirectorEventsEnabled(record))
       .sort((left, right) => left.id.localeCompare(right.id))
       .map((record) => ({ conversationId: record.id, mentionUserIds: [] }));
   }

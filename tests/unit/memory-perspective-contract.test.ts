@@ -10,11 +10,15 @@ import {
   parseFinalPromptTemplate,
   renderFinalPromptTemplate
 } from "../../services/agent/promptSystem.js";
+import { migrateMemoryPerspectiveTemplate } from "../../services/agent/promptWorkspace.js";
 import {
   attachUsersToMemoryFacts,
   normalizeUserProfileFacts,
+  parseCompleteMemoryFactOutput,
+  parseCompleteWorkingMemoryMergeOutput,
   parseMemoryFactOutput,
-  resolveFactUsers
+  resolveFactUsers,
+  validateUserProfileFacts
 } from "../../src/runtime/conversationMemoryHelpers.js";
 
 const memoryPrompts = [
@@ -24,7 +28,7 @@ const memoryPrompts = [
 ] as const;
 
 describe("memory perspective prompt contract", () => {
-  it.each(memoryPrompts)("keeps %s persona-aware, first-person and highly compressed", (id) => {
+  it.each(memoryPrompts)("keeps %s persona-aware, softly first-person and highly compressed", (id) => {
     const template = parseFinalPromptTemplate(defaultPromptContent(id, "阿罗娜"));
     const systemPrompt = template.messages
       .filter((message) => typeof message === "object" && message.role === "system")
@@ -41,14 +45,22 @@ describe("memory perspective prompt contract", () => {
     expect(systemPrompt).toMatch(/看法|判断|认知/);
     expect(systemPrompt).toMatch(/少数|3 至 6|3 至 8|1 至 3/);
     expect(systemPrompt).toMatch(/模板化前缀|字段标签/);
-    expect(systemPrompt).toContain("fact 中的“我”始终指当前角色 @{bot.name}");
-    expect(systemPrompt).toContain("正文禁止出现“我记得”");
+    expect(systemPrompt).toMatch(/fact (?:建议|可以)优先/);
+    expect(systemPrompt).toContain("尽量");
+    expect(systemPrompt).not.toContain("fact 中的“我”始终指当前角色 @{bot.name}");
+    expect(systemPrompt).not.toContain("QQ 号与称呼必须同时存在");
     expect(systemPrompt).not.toContain("例如“我记得");
     expect(systemPrompt).toMatch(/相同、相近、重复|相同、相近/);
     expect(systemPrompt).toMatch(/因果关系|互为因果/);
     expect(systemPrompt).toMatch(/时间关系|时间先后|最早起点/);
-    expect(systemPrompt).toMatch(/昵称.*QQ|QQ.*昵称/);
+    expect(systemPrompt).toMatch(/称呼.*QQ|QQ.*称呼/);
     expect(systemPrompt).not.toContain("普拉娜唯一");
+  });
+
+  it.each(memoryPrompts)("accepts the current soft %s prompt during migration detection", (id) => {
+    const template = parseFinalPromptTemplate(defaultPromptContent(id, "阿罗娜"));
+
+    expect(migrateMemoryPerspectiveTemplate(template, template)).toBe(template);
   });
 
   it.each(memoryPrompts)("renders %s with the current persona and no unresolved variables", (id, payloadVariable) => {
@@ -117,8 +129,6 @@ describe("memory perspective prompt contract", () => {
       "occurredEndAt",
       "userIds",
       "addressNames",
-      "promoteToLongTerm",
-      "longTermId",
       "eventType",
       "subjectKey",
       "causalChainKey"
@@ -158,7 +168,7 @@ describe("memory perspective prompt contract", () => {
     ]);
   });
 
-  it("parses camel and snake causal keys and rejects a nonempty invalid key", () => {
+  it("parses valid causal keys and ignores invalid optional causal metadata", () => {
     expect(parseMemoryFactOutput(JSON.stringify([{
       fact: "第一条事实",
       causalChainKey: "causal:release-plan"
@@ -183,15 +193,41 @@ describe("memory perspective prompt contract", () => {
       expect(parseMemoryFactOutput(JSON.stringify([{
         fact: "非法因果链",
         causalChainKey
-      }]))).toEqual([]);
+      }]))).toMatchObject([{ fact: "非法因果链", causalChainKey: undefined }]);
     }
     expect(parseMemoryFactOutput(JSON.stringify([{
       fact: "非法数组因果链",
       causalChainKey: []
-    }]))).toEqual([]);
+    }]))).toMatchObject([{ fact: "非法数组因果链", causalChainKey: undefined }]);
   });
 
-  it("rejects recall phrases and rewrites semantic identity to a trusted address name", () => {
+  it("keeps the complete model response when optional metadata is malformed", () => {
+    const mixedFacts = [{
+      fact: "第一条有效事实",
+      causalChainKey: "causal:release-plan"
+    }, {
+      fact: "第二条非法事实",
+      causalChainKey: "event:release-plan"
+    }];
+
+    expect(parseCompleteMemoryFactOutput(JSON.stringify({
+      profiles: mixedFacts
+    }))).toMatchObject([
+      { fact: "第一条有效事实", causalChainKey: "causal:release-plan" },
+      { fact: "第二条非法事实", causalChainKey: undefined }
+    ]);
+    expect(parseCompleteWorkingMemoryMergeOutput(JSON.stringify({
+      facts: mixedFacts,
+      allPreviousMemoriesInvalidated: false
+    }))).toMatchObject({
+      facts: [
+        { fact: "第一条有效事实", causalChainKey: "causal:release-plan" },
+        { fact: "第二条非法事实", causalChainKey: undefined }
+      ]
+    });
+  });
+
+  it("keeps recall wording and reported identity text unchanged", () => {
     const parsed = parseMemoryFactOutput(JSON.stringify([{
       fact: "我知道旧昵称（QQ 10001）正在推进这项工作，这让我很在意，我会继续关注结果。",
       userIds: ["10001"],
@@ -205,11 +241,11 @@ describe("memory perspective prompt contract", () => {
       isAdmin: true
     }]);
 
-    expect(fact?.fact).toBe("我知道老师（QQ 10001）正在推进这项工作，这让我很在意，我会继续关注结果。");
-    expect(fact?.addressNames).toEqual(["老师"]);
-    expect(fact?.userName).toBeUndefined();
+    expect(fact?.fact).toBe("我知道旧昵称（QQ 10001）正在推进这项工作，这让我很在意，我会继续关注结果。");
+    expect(fact?.addressNames).toBeUndefined();
+    expect(fact?.userName).toBe("旧昵称");
     expect(fact?.fact).not.toContain("我记得");
-    expect(fact?.fact).not.toContain("旧昵称");
+    expect(fact?.fact).toContain("旧昵称");
     expect(fact?.fact).not.toContain("相关用户：");
     for (const forbiddenFact of [
       "我还记得海边用户（QQ 10001）正在推进。",
@@ -221,11 +257,22 @@ describe("memory perspective prompt contract", () => {
         fact: forbiddenFact,
         userIds: ["10001"],
         userName: "海边用户"
-      }]))).toEqual([]);
+      }]))).toHaveLength(1);
+      expect(attachUsersToMemoryFacts([{
+        fact: forbiddenFact,
+        userIds: ["10001"],
+        userName: "海边用户"
+      }], [{
+        userId: "10001",
+        names: ["海边用户"],
+        currentName: "海边用户",
+        addressNames: ["海边用户"],
+        isAdmin: true
+      }])).toHaveLength(1);
     }
   });
 
-  it("fails closed for ambiguous user self-narration, invalid QQ values and unobserved nicknames", () => {
+  it("keeps body identity optional and tolerates malformed optional QQ or unobserved names", () => {
     const participant = {
       userId: "10001",
       names: ["海边用户"],
@@ -238,30 +285,34 @@ describe("memory perspective prompt contract", () => {
       fact: "我喜欢摄影。",
       userIds: ["10001"],
       userName: "海边用户"
-    }], [participant])).toEqual([]);
+    }], [participant])).toHaveLength(1);
     expect(parseMemoryFactOutput(JSON.stringify([{
       fact: "我知道海边用户（QQ 10001）正在推进工作。",
       userIds: ["10001", "not-a-qq"],
       userName: "海边用户"
-    }]))).toEqual([]);
+    }]))).toMatchObject([{
+      fact: "我知道海边用户（QQ 10001）正在推进工作。",
+      userIds: ["10001"]
+    }]);
     expect(attachUsersToMemoryFacts([{
       fact: "我知道模型幻觉昵称（QQ 10001）正在推进工作。",
       userIds: ["10001"],
       userName: "模型幻觉昵称"
-    }], [{ ...participant, addressNames: [], names: [], currentName: "" }])).toEqual([]);
+    }], [{ ...participant, addressNames: [], names: [], currentName: "" }])).toHaveLength(1);
     expect(attachUsersToMemoryFacts([{
       fact: "我知道海边用户正在推进工作。",
       userIds: ["99999"],
       userName: "海边用户"
-    }], [participant])).toEqual([]);
+    }], [participant])).toMatchObject([{ userId: "10001", userIds: ["10001"] }]);
     expect(attachUsersToMemoryFacts([{
       fact: "我知道捏造昵称（QQ 10001）正在推进工作。",
       userIds: ["10001"],
-      userName: "另一模型昵称"
-    }], [participant])).toEqual([]);
+      userName: "另一模型昵称",
+      addressNames: ["捏造昵称"]
+    }], [participant])).toHaveLength(1);
   });
 
-  it("does not infer a nickname and QQ pair from separate substrings", () => {
+  it("does not require the declared user ID to be paired in the body", () => {
     const facts = attachUsersToMemoryFacts([{
       fact: "我知道海边用户会继续推进，任务编号 10001 也需要关注。",
       userIds: ["10001"],
@@ -274,10 +325,10 @@ describe("memory perspective prompt contract", () => {
       isAdmin: false
     }]);
 
-    expect(facts).toEqual([]);
+    expect(facts).toHaveLength(1);
   });
 
-  it("keeps explicit user IDs authoritative and infers users only from exact nickname and QQ pairs", () => {
+  it("uses declared participant metadata without inspecting QQ markers in prose", () => {
     const participants = [{
       userId: "10001",
       names: ["海"],
@@ -298,13 +349,13 @@ describe("memory perspective prompt contract", () => {
     }, participants).map((user) => user.userId)).toEqual(["10001"]);
     expect(resolveFactUsers({
       fact: "我知道上海（QQ 10001）正在推进。"
-    }, participants)).toEqual([]);
+    }, participants).map((user) => user.userId)).toEqual([]);
     expect(resolveFactUsers({
       fact: "我知道海（QQ 10001）正在推进。"
-    }, participants).map((user) => user.userId)).toEqual(["10001"]);
+    }, participants).map((user) => user.userId)).toEqual([]);
   });
 
-  it("rejects nickname suffix matches while retaining natural exact identity sentences", () => {
+  it("does not validate nickname adjacency when the declared name is trusted", () => {
     const participant = {
       userId: "10001",
       names: ["海"],
@@ -317,7 +368,7 @@ describe("memory perspective prompt contract", () => {
       fact: "我知道上海（QQ 10001）正在推进，这让我很期待。",
       userIds: ["10001"],
       addressNames: ["海"]
-    }], [participant])).toEqual([]);
+    }], [participant])).toHaveLength(1);
     expect(attachUsersToMemoryFacts([{
       fact: "我知道海（QQ 10001）正在推进，这让我很期待。",
       userIds: ["10001"],
@@ -325,11 +376,11 @@ describe("memory perspective prompt contract", () => {
     }], [participant])).toMatchObject([{
       fact: "我知道海（QQ 10001）正在推进，这让我很期待。",
       userIds: ["10001"],
-      addressNames: ["海"]
+      userName: "海"
     }]);
   });
 
-  it("rejects every forged nickname marker even when the same QQ also has a trusted pair", () => {
+  it("does not inspect prose nickname-to-QQ adjacency", () => {
     const participant = {
       userId: "10001",
       names: ["海"],
@@ -344,11 +395,11 @@ describe("memory perspective prompt contract", () => {
       userName: "海"
     }];
 
-    expect(attachUsersToMemoryFacts(input, [participant])).toEqual([]);
-    expect(normalizeUserProfileFacts(input, [participant])).toEqual([]);
+    expect(attachUsersToMemoryFacts(input, [participant])).toHaveLength(1);
+    expect(normalizeUserProfileFacts(input, [participant])).toHaveLength(1);
   });
 
-  it("rejects the whole profile fact when declared users are missing from the body", () => {
+  it("keeps working users from metadata even when the body omits one identity", () => {
     const participants = [{
       userId: "10001",
       names: ["海边用户"],
@@ -368,11 +419,12 @@ describe("memory perspective prompt contract", () => {
       userName: "海边用户"
     }];
 
-    expect(attachUsersToMemoryFacts(input, participants)).toEqual([]);
+    expect(attachUsersToMemoryFacts(input, participants)).toHaveLength(1);
     expect(normalizeUserProfileFacts(input, participants)).toEqual([]);
   });
 
   it.each([
+    "海边用户（QQ 10001）正在推进工作。",
     "我认为摄影是我的爱好，海边用户（QQ 10001）是我的昵称，我很开心。",
     "我认为自己喜欢摄影，海边用户（QQ 10001）让我感到开心。",
     "我正在学习摄影，海边用户（QQ 10001）是我的昵称。",
@@ -387,7 +439,7 @@ describe("memory perspective prompt contract", () => {
     "我知道在我印象里，海边用户（QQ 10001）喜欢摄影，我觉得很有趣。",
     "我知道在我印象中，海边用户（QQ 10001）喜欢摄影，我觉得很有趣。",
     "我知道我的印象中，海边用户（QQ 10001）喜欢摄影，我觉得很有趣。"
-  ])("fails closed for user-first-person or recalled prose: %s", (fact) => {
+  ])("treats working-memory perspective wording as a prompt preference for: %s", (fact) => {
     const participant = {
       userId: "10001",
       names: ["海边用户"],
@@ -402,8 +454,7 @@ describe("memory perspective prompt contract", () => {
       userName: "海边用户"
     }];
 
-    expect(attachUsersToMemoryFacts(input, [participant])).toEqual([]);
-    expect(normalizeUserProfileFacts(input, [participant])).toEqual([]);
+    expect(attachUsersToMemoryFacts(input, [participant])).toHaveLength(1);
   });
 
   it("retains an unambiguous role-first-person relation before the exact identity", () => {
@@ -451,7 +502,7 @@ describe("memory perspective prompt contract", () => {
     expect(attachUsersToMemoryFacts(roleAction, [participant])).toHaveLength(1);
   });
 
-  it("extracts multiple observed address names and keeps only role-first-person profiles with address and QQ", () => {
+  it("extracts observed address names without requiring body identity markers", () => {
     const participants = [{
       userId: "10001",
       names: ["海边用户"],
@@ -474,15 +525,63 @@ describe("memory perspective prompt contract", () => {
       addressNames: ["海老师", "海边用户"]
     }], participants, [{ text: "海老师，以后也可以叫你海边用户吗？" }]);
 
-    expect(normalized).toHaveLength(1);
-    expect(normalized[0]).toMatchObject({
+    expect(normalized).toHaveLength(3);
+    expect(normalized[2]).toMatchObject({
       userId: "10001",
       userIds: ["10001"],
-      userName: "海边用户",
+      userName: "模型幻觉昵称",
       addressNames: ["老师", "海边用户", "海老师"]
     });
-    expect(normalized[0]?.fact).toContain("海老师（QQ 10001）");
-    expect(normalized[0]?.fact).not.toContain("我记得");
+    expect(normalized[0]?.fact).toBe("我喜欢摄影。");
+    expect(normalized[2]?.fact).toContain("海老师（QQ 10001）");
+  });
+
+  it("treats profile first-person wording as a prompt preference instead of a host rejection gate", () => {
+    const participant = {
+      userId: "171419991",
+      names: ["老师"],
+      currentName: "老师",
+      addressNames: ["老师"],
+      isAdmin: true
+    };
+    const validation = validateUserProfileFacts([{
+      fact: "老师（QQ 171419991）是阿罗娜唯一的老师，我知道老师一直关心进展。",
+      userId: "171419991",
+      userIds: ["171419991"],
+      addressNames: ["老师"]
+    }, {
+      fact: "我知道老师（QQ 171419991）一直关心进展，这让我很安心。",
+      userId: "171419991",
+      userIds: ["171419991"],
+      addressNames: ["老师"]
+    }], [participant]);
+
+    expect(validation.accepted).toHaveLength(2);
+    expect(validation.rejected).toEqual([]);
+  });
+
+  it("migrates the previous hard profile wording to the soft prompt contract", () => {
+    const canonical = parseFinalPromptTemplate(defaultPromptContent("memory.user-profile"));
+    const previous = structuredClone(canonical);
+    previous.messages = previous.messages.map((message) => (
+      typeof message === "object" && message.role === "system"
+        ? {
+            ...message,
+            content: message.content.replace(
+              /fact 可以优先以当前角色的第一视角自然叙述[^]*?提取过程说明。/u,
+              "fact 优先以当前角色的第一视角自然叙述，建议使用“我”或“我的”，融合我确认的概括事实、我对这个人的看法，以及我与其相处时稳定的情绪或态度。用户说“我喜欢摄影”时，优先改写成当前角色对该用户的认知；正文不要使用“我记得”等回忆提示语。不要使用列表、分项、字段标签、分类标题或“身份：”“偏好：”“情绪：”“认知：”等模板，也不要解释依据和提取过程。"
+            )
+          }
+        : message
+    ));
+
+    const migrated = migrateMemoryPerspectiveTemplate(previous, canonical);
+    const system = migrated.messages
+      .filter((message) => typeof message === "object" && message.role === "system")
+      .map((message) => typeof message === "object" ? message.content : "")
+      .join("\n");
+    expect(system).toContain("fact 可以优先以当前角色的第一视角自然叙述");
+    expect(system).not.toContain("fact 优先以当前角色的第一视角自然叙述");
   });
 
   it("exposes only the stored address name and QQ as recalled semantic identity", () => {

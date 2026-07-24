@@ -109,7 +109,14 @@ describe("conversation API plugin", () => {
       });
     }
 
-    const replyBody = { id: "private:171419991", replyEnabled: false };
+    const replyBody = {
+      id: "group:10001",
+      scope: "user_group",
+      replyEnabled: false,
+      orchestratorResponseTimeOverrideEnabled: true,
+      orchestratorResponseTimeMs: 15_000,
+      directorEventsEnabled: true
+    };
     expect((await app.inject({
       method: "PUT",
       url: "/api/conversations/reply?agentId=plana",
@@ -117,13 +124,33 @@ describe("conversation API plugin", () => {
     })).json()).toEqual({ ok: true, conversation: replyBody });
     expect(setConversationReplyEnabled).toHaveBeenCalledWith(replyBody);
 
+    for (const orchestratorResponseTimeMs of [999, 3_600_001, 1_500.5, "15000"]) {
+      const invalid = await app.inject({
+        method: "PUT",
+        url: "/api/conversations/reply?agentId=plana",
+        payload: {
+          id: "group:10001",
+          scope: "user_group",
+          orchestratorResponseTimeOverrideEnabled: true,
+          orchestratorResponseTimeMs
+        }
+      });
+      expect(invalid.statusCode).toBe(400);
+      expect(invalid.json()).toMatchObject({
+        error: {
+          code: "CONVERSATION_ORCHESTRATOR_RESPONSE_TIME_INVALID",
+          field: "orchestratorResponseTimeMs"
+        }
+      });
+    }
+
     expect((await app.inject({
       method: "GET",
       url: "/api/conversations/private%3A171419991/tools?agentId=plana"
     })).json()).toEqual({ conversationId: "private:171419991", disabledTools: ["websearch"] });
     expect(getConversationToolPolicy).toHaveBeenCalledWith("private:171419991");
 
-    const toolsBody = { disabledTools: ["read_file", "workspace_bash"] };
+    const toolsBody = { disabledTools: ["read_file", "docker_bash"] };
     expect((await app.inject({
       method: "PUT",
       url: "/api/conversations/private%3A171419991/tools?agentId=plana",

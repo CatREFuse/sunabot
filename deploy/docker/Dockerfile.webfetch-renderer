@@ -29,9 +29,9 @@ WORKDIR /srv/sunabot
 COPY --from=build --chown=1000:1000 /srv/sunabot/package.json ./package.json
 COPY --from=build --chown=1000:1000 /srv/sunabot/package-lock.json ./package-lock.json
 COPY --from=build --chown=1000:1000 /srv/sunabot/node_modules ./node_modules
-COPY --from=build --chown=1000:1000 /srv/sunabot/dist ./dist
 RUN /usr/local/bin/node node_modules/playwright/cli.js install --with-deps chromium \
     && rm -rf /var/lib/apt/lists/* /root/.cache
+COPY --from=build --chown=1000:1000 /srv/sunabot/dist ./dist
 
 USER 1000:1000
 EXPOSE 8790

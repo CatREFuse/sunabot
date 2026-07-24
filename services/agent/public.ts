@@ -4,3 +4,10 @@ export { loadPersona } from "./persona.js";
 export { PROMPT_FILE_DEFINITIONS } from "./promptCatalog.js";
 export { defaultGenericSelfiePromptContent, defaultPromptContent } from "./promptDefaults.js";
 export { resolvePromptFilePath, resolveSafePromptFilePath } from "./promptWorkspace.js";
+export {
+  DEFAULT_MODEL_TIME_CONTEXT,
+  formatModelCurrentTime,
+  formatModelTimestamp,
+  formatOptionalModelTimestamp,
+  systemModelTimeZone
+} from "./modelTime.js";

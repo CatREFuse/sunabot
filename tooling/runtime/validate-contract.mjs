@@ -17,6 +17,7 @@ const [
   coreDockerfile,
   bashDockerfile,
   napcatDockerfile,
+  webfetchRendererDockerfile,
   napcatEntrypoint,
   compose,
   coreHealthcheck,
@@ -40,6 +41,7 @@ const [
   read("deploy/docker/Dockerfile"),
   read("deploy/docker/Dockerfile.bash"),
   read("deploy/docker/Dockerfile.napcat"),
+  read("deploy/docker/Dockerfile.webfetch-renderer"),
   read("deploy/docker/napcat-entrypoint.sh"),
   read("deploy/docker/compose.yml"),
   read("deploy/docker/healthcheck.mjs"),
@@ -243,6 +245,21 @@ const codex = lock.components["codex-cli"];
 const officeParser = lock.components.officeparser;
 expect(coreDockerfile.includes(`${node.image}@${node.digest}`),
   "Core Dockerfile must pin the Node image digest");
+const rendererNodeModulesCopy = webfetchRendererDockerfile.indexOf(
+  "COPY --from=build --chown=1000:1000 /srv/sunabot/node_modules ./node_modules"
+);
+const rendererChromiumInstall = webfetchRendererDockerfile.indexOf(
+  "RUN /usr/local/bin/node node_modules/playwright/cli.js install --with-deps chromium"
+);
+const rendererDistCopy = webfetchRendererDockerfile.indexOf(
+  "COPY --from=build --chown=1000:1000 /srv/sunabot/dist ./dist"
+);
+expect(
+  rendererNodeModulesCopy >= 0
+    && rendererChromiumInstall > rendererNodeModulesCopy
+    && rendererDistCopy > rendererChromiumInstall,
+  "WebFetch renderer must install Chromium after production dependencies and before application dist so business code changes reuse the browser layer"
+);
 expect(!/napcat|\/opt\/QQ|xvfb-run/i.test(coreDockerfile),
   "Core Dockerfile must not contain QQ or NapCat");
 expect(coreDockerfile.includes("dist/apps/api/main.js")

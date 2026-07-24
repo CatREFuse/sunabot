@@ -26,6 +26,14 @@ export function normalizeDirectorScheduleDraft(
   value: unknown,
   expected: { date: string; timeZone: string }
 ): DirectorScheduleDraftV1 {
+  return normalizeDirectorSchedule(value, expected, 1);
+}
+
+function normalizeDirectorSchedule(
+  value: unknown,
+  expected: { date: string; timeZone: string },
+  minimumShares: 0 | 1
+): DirectorScheduleDraftV1 {
   const record = strictRecord(value, "Director schedule must be an object.");
   exactKeys(record, ["schemaVersion", "date", "timeZone", "theme", "summary", "items"], "schedule");
   if (record.schemaVersion !== 1) throw new Error("Director schedule schemaVersion must be 1.");
@@ -50,7 +58,7 @@ export function normalizeDirectorScheduleDraft(
     }
   }
   const shares = items.filter((item) => item.share.enabled);
-  if (shares.length < 1 || shares.length > 3) {
+  if (shares.length < minimumShares || shares.length > 3) {
     throw new Error("Director schedule must contain 1 to 3 daily shares.");
   }
   return {
@@ -66,6 +74,8 @@ export function normalizeDirectorScheduleDraft(
 export function isDirectorSchedule(value: unknown): value is DirectorScheduleV1 {
   try {
     const record = strictRecord(value, "Director schedule must be an object.");
+    const source = record.source;
+    if (source !== "daily_plan" && source !== "character_revision") return false;
     const draftValue = {
       schemaVersion: record.schemaVersion,
       date: record.date,
@@ -74,15 +84,14 @@ export function isDirectorSchedule(value: unknown): value is DirectorScheduleV1 
       summary: record.summary,
       items: record.items
     };
-    const draft = normalizeDirectorScheduleDraft(draftValue, {
+    const draft = normalizeDirectorSchedule(draftValue, {
       date: requiredDate(record.date, "date"),
       timeZone: boundedText(record.timeZone, "timeZone", 80)
-    });
+    }, source === "character_revision" ? 0 : 1);
     return Boolean(
       draft
       && Number.isSafeInteger(record.revision)
       && Number(record.revision) >= 1
-      && (record.source === "daily_plan" || record.source === "character_revision")
       && validTimestamp(record.generatedAt)
       && validTimestamp(record.updatedAt)
     );

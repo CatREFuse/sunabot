@@ -128,24 +128,24 @@ describe("Dream memory consolidation", () => {
     })).toThrow("cannot be consolidated with factual working memory");
   });
 
-  it("requires high confidence and stable event or causal linkage for long-term merges", () => {
+  it("applies model-directed long-term merges without confidence or relationship gates", () => {
     const sharedEventRecords = [
       memory("long_a", "我经历同一事件的开端。", "2026-01-01T08:00:00.000Z", { eventKey: "event:shared" }),
       memory("long_b", "我经历同一事件的后续。", "2026-01-02T08:00:00.000Z", { eventKey: "event:shared" })
     ];
     const lowConfidence = mergeOnlyPlan(sharedEventRecords, DREAM_DESTRUCTIVE_ACTION_MIN_CONFIDENCE - 0.01);
-    expect(lowConfidence.longTerm.map((record) => record.id)).toEqual(["long_a", "long_b"]);
-    expect(lowConfidence.recallLineages).toEqual([]);
-    expect(lowConfidence.result).toMatchObject({ merged: 0, retained: 2 });
+    expect(lowConfidence.longTerm.map((record) => record.id)).toEqual(["long_a"]);
+    expect(lowConfidence.recallLineages).toEqual([{ targetId: "long_a", sourceIds: ["long_a", "long_b"] }]);
+    expect(lowConfidence.result).toMatchObject({ merged: 1, retained: 0 });
 
     const unrelatedRecords = [
       memory("long_a", "我经历第一件旧事。", "2026-01-01T08:00:00.000Z", { eventKey: "event:first" }),
       memory("long_b", "我经历另一件旧事。", "2026-01-02T08:00:00.000Z", { eventKey: "event:second" })
     ];
     const unrelated = mergeOnlyPlan(unrelatedRecords, DREAM_DESTRUCTIVE_ACTION_MIN_CONFIDENCE);
-    expect(unrelated.longTerm.map((record) => record.id)).toEqual(["long_a", "long_b"]);
-    expect(unrelated.recallLineages).toEqual([]);
-    expect(unrelated.result).toMatchObject({ merged: 0, retained: 2 });
+    expect(unrelated.longTerm.map((record) => record.id)).toEqual(["long_a"]);
+    expect(unrelated.recallLineages).toEqual([{ targetId: "long_a", sourceIds: ["long_a", "long_b"] }]);
+    expect(unrelated.result).toMatchObject({ merged: 1, retained: 0 });
 
     const causalRecords = [
       memory("long_a", "我经历先发生的原因。", "2026-01-01T08:00:00.000Z", { causalChainKey: "causal:release" }),
@@ -158,7 +158,7 @@ describe("Dream memory consolidation", () => {
     expect(causal.result).toMatchObject({ merged: 1, retained: 0 });
   });
 
-  it("keeps unrelated working memories separate and records their review time", () => {
+  it("applies a model-directed working-memory merge without a relationship gate", () => {
     const output = dreamOutput();
     output.longTermReviews = [];
     output.workingReviews = [{
@@ -184,14 +184,17 @@ describe("Dream memory consolidation", () => {
     });
 
     expect(plan.working).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: "work_a", dreamReviewedAt: NOW.toISOString() }),
-      expect.objectContaining({ id: "work_b", dreamReviewedAt: NOW.toISOString() })
+      expect.objectContaining({
+        id: "work_a",
+        fact: "被模型误判为同一事件。",
+        dreamReviewedAt: NOW.toISOString()
+      })
     ]));
-    expect(plan.working.some((record) => record.fact === "被模型误判为同一事件。")).toBe(false);
-    expect(plan.result).toMatchObject({ merged: 0, retained: 2 });
+    expect(plan.working.some((record) => record.id === "work_b")).toBe(false);
+    expect(plan.result).toMatchObject({ merged: 1, retained: 0 });
   });
 
-  it("promotes unrelated old dreams separately instead of inventing one shared event", () => {
+  it("follows the model-directed old-dream merge without a relationship gate", () => {
     const output = dreamOutput();
     output.longTermReviews = [];
     output.workingReviews = [{
@@ -220,11 +223,14 @@ describe("Dream memory consolidation", () => {
       recallStats: []
     });
 
-    expect(plan.longTerm.map((record) => record.id).sort()).toEqual([
-      "long_term_dream_2026_07_18",
-      "long_term_dream_2026_07_19"
+    expect(plan.longTerm).toEqual([
+      expect.objectContaining({
+        id: "long_term_dream_2026_07_18",
+        fact: "两场无关的梦。",
+        sourceWorkingMemoryIds: ["dream_a", "dream_b"]
+      })
     ]);
-    expect(plan.result).toMatchObject({ merged: 0, promoted: 2 });
+    expect(plan.result).toMatchObject({ merged: 0, promoted: 1 });
   });
 
   it("retains an archive candidate below the destructive-action confidence threshold", () => {

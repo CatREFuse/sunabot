@@ -234,20 +234,17 @@ describe("group context prompt contract", () => {
       "user.input": "本轮消息"
     });
 
-    expect(rendered.messages.slice(-6)).toEqual([
-      { role: "user", content: "历史消息" },
-      { role: "assistant", content: "历史回复" },
-      {
-      role: "developer",
-      content: "<thread_context>{\"active_thread_id\":null,\"threads\":[],\"message_assignments\":[]}</thread_context>"
-      },
-      {
-        role: "developer",
-        content: `<orchestrator_result>${orchestratorResult}</orchestrator_result>`
-      },
-      { role: "developer", content: "<daily_schedule></daily_schedule>" },
-      expect.objectContaining({ role: "user", content: expect.stringContaining("system_timezone=Asia/Shanghai") })
-    ]);
+    const contents = rendered.messages.map((message) => message.content);
+    const historyIndex = contents.indexOf("历史消息");
+    const threadIndex = contents.indexOf(
+      "<thread_context>{\"active_thread_id\":null,\"threads\":[],\"message_assignments\":[]}</thread_context>"
+    );
+    const orchestratorIndex = contents.indexOf(`<orchestrator_result>${orchestratorResult}</orchestrator_result>`);
+    const currentInputIndex = contents.findIndex((content) => content.includes("system_timezone=Asia/Shanghai"));
+    expect(contents[historyIndex + 1]).toBe("历史回复");
+    expect(historyIndex).toBeLessThan(threadIndex);
+    expect(threadIndex).toBeLessThan(orchestratorIndex);
+    expect(orchestratorIndex).toBeLessThan(currentInputIndex);
   });
 
   it("renders an empty orchestrator variable for a non-orchestrator group reply", () => {

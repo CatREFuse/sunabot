@@ -102,23 +102,34 @@ describe("workspace prompt runtime", () => {
       "user.input": "当前问题"
     });
 
-    expect(rendered.messages.map((message) => message.role)).toEqual(["system", "user", "assistant", "developer", "user"]);
+    expect(rendered.messages.map((message) => message.role)).toEqual([
+      "system",
+      "user",
+      "assistant",
+      "developer",
+      "developer",
+      "developer",
+      "user"
+    ]);
     expect(rendered.messages[0]?.content).toContain("<soul>");
     expect(rendered.messages[0]?.content).toContain("<output_rules>只输出正文。</output_rules>");
+    expect(rendered.messages[0]?.content).not.toContain("<air_knowledge>");
+    expect(rendered.messages.at(-1)?.content).toContain("<air_knowledge>");
     expect(rendered.messages.at(-1)?.content).toContain("<working_memory>工作记忆 A</working_memory>");
     expect(rendered.messages.at(-1)?.content).toContain("<long_term_memory>长期记忆 B</long_term_memory>");
     expect(rendered.messages.at(-1)?.content).toContain("<user_profile>画像 C</user_profile>");
-    expect(rendered.messages[0]?.content).toContain("<emoji_keys>[");
-    expect(rendered.messages[0]?.content).toContain('"开心"');
-    expect(rendered.messages[0]?.content).toContain('"认真"');
-    expect(rendered.messages[0]?.content).toContain("<emoji_syntax>需要发送表情时输出 [/表情key]。</emoji_syntax>");
+    expect(rendered.messages[3]?.content).toContain("<emoji_keys>[");
+    expect(rendered.messages[3]?.content).toContain('"开心"');
+    expect(rendered.messages[3]?.content).toContain('"认真"');
+    expect(rendered.messages[3]?.content).toContain("<emoji_syntax>需要发送表情时输出 [/表情key]。</emoji_syntax>");
     expect(rendered.messages.at(-1)?.content).toContain("<current_input>当前问题</current_input>");
     expect(rendered.tools?.map((tool) => tool.function.name)).toEqual([
       "assistant_text",
       "no_reply",
       "read_file",
       "write_file",
-      "workspace_bash",
+      "native_bash",
+      "docker_bash",
       "websearch",
       "webfetch",
       "generate_img",
@@ -227,9 +238,11 @@ describe("workspace prompt runtime", () => {
       await fs.readFile(path.join(systemWorkspace, "conversation_private_reply.json"), "utf8")
     );
     const system = conversation.messages[0] as Record<string, unknown>;
-    for (const [id, tag] of Object.entries(outerTags)) {
+    for (const [id, tag] of Object.entries(outerTags).filter(([id]) => id !== "persona.air")) {
       expect(system.content).toContain(`<${tag}>@{${id}}</${tag}>`);
     }
+    const user = conversation.messages.at(-1) as Record<string, unknown>;
+    expect(user.content).toContain("<air_knowledge>@{persona.air}</air_knowledge>");
   });
 });
 

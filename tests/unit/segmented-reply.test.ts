@@ -34,6 +34,7 @@ describe("segmented reply XML", () => {
       '<dialogc replay="msg_id">老师&amp;同学！</dialogc>',
       "<dialog>阿罗娜一直在等你！</dialog>",
       "<exp>[/开心]</exp>",
+      '<exp key="[/认真]"/>',
       '<img src="asset:image:0"/>',
       '<voice src="asset:voice:0"/>',
       '<file src="asset:file:0"/>'
@@ -43,6 +44,7 @@ describe("segmented reply XML", () => {
         { type: "dialog", text: "老师&同学！", reply: true },
         { type: "dialog", text: "阿罗娜一直在等你！", reply: false },
         { type: "expression", marker: "[/开心]" },
+        { type: "expression", marker: "[/认真]" },
         { type: "image", src: "asset:image:0" },
         { type: "voice", src: "asset:voice:0" },
         { type: "file", src: "asset:file:0" }
@@ -58,6 +60,9 @@ describe("segmented reply XML", () => {
     ['<dialogc replay="other">回复</dialogc>', 'replay="msg_id"'],
     ['<img src="a" alt="b"/>', "只能包含 src"],
     ["<exp>开心</exp>", "表情标记"],
+    ["<exp/>", "只能包含 key"],
+    ['<exp key="开心"/>', "必须是一个表情标记"],
+    ['<exp key="[/开心]" extra="1"/>', "只能包含 key"],
     ["<dialog>老师&同学</dialog>", "未转义"],
     ["<dialog>老师&unknown;</dialog>", "未知实体"],
     ["<dialog>第一条</dialog><dialogc replay=\"msg_id\">第二条</dialogc>", "第一个气泡"]
@@ -102,6 +107,7 @@ describe("tone segmented output prompt", () => {
 
     expect(exact).toContain('依次为 ["[/开心]"]');
     expect(exact).toContain("只能逐字使用该列表中的值");
+    expect(exact).toContain('<exp key="[/key]"/>');
     expect(exact).toContain("最后一个文字气泡内");
     expect(exact).toContain("绝对不可嵌套");
     expect(exact).toContain("<br/>");

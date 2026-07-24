@@ -10,7 +10,7 @@ const entry: MemoryEntry = {
   id: "memory-1",
   source: "working",
   sourceTitle: "工作记忆",
-  fileName: "WORKING_MEMORY.jsonl",
+  fileName: "WORKING_MEMORY.md",
   editable: true,
   key: "memory-1",
   value: "已有记忆",
@@ -18,8 +18,13 @@ const entry: MemoryEntry = {
   field: "text"
 };
 const payload: MemoryPayload = {
-  sources: [{ id: "working", title: "工作记忆", fileName: "WORKING_MEMORY.jsonl", editable: true }],
-  entries: [entry]
+  sources: [{ id: "working", title: "工作记忆", fileName: "WORKING_MEMORY.md", editable: true }],
+  entries: [entry],
+  document: {
+    fileName: "WORKING_MEMORY.md",
+    content: "# 工作记忆\n\n完整原文",
+    revision: "revision-plana"
+  }
 };
 
 describe("useMemory", () => {
@@ -43,6 +48,7 @@ describe("useMemory", () => {
     expect(memory.recallActive.value).toBe(false);
     expect(memory.matches.value).toEqual([]);
     expect(memory.entries.value).toEqual([entry]);
+    expect(memory.document.value).toEqual(payload.document);
   });
 
   it("drops sources and entries outside the supported active set", async () => {
@@ -78,7 +84,8 @@ describe("useMemory", () => {
     const planaSignal = apiRequest.mock.calls[0]?.[1]?.signal as AbortSignal;
     const aronaLoad = memory.load("working", "arona");
     const aronaEntry = { ...entry, id: "arona-memory", text: "阿罗娜的记忆" };
-    resolveArona({ ...payload, entries: [aronaEntry] });
+    const aronaDocument = { ...payload.document!, content: "# 工作记忆\n\n阿罗娜的完整原文", revision: "revision-arona" };
+    resolveArona({ ...payload, entries: [aronaEntry], document: aronaDocument });
     await aronaLoad;
     resolvePlana(payload);
     await planaLoad;
@@ -87,5 +94,6 @@ describe("useMemory", () => {
     expect(apiRequest.mock.calls[0]?.[0]).toBe("/api/memory?source=working&agentId=plana");
     expect(apiRequest.mock.calls[1]?.[0]).toBe("/api/memory?source=working&agentId=arona");
     expect(memory.entries.value).toEqual([aronaEntry]);
+    expect(memory.document.value).toEqual(aronaDocument);
   });
 });

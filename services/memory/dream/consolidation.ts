@@ -10,7 +10,6 @@ import {
   sha256,
   uniqueStrings
 } from "../domain/normalizers.js";
-import { evaluateDreamCanonicalFact } from "./canonicalFact.js";
 import { dreamPersonaImpactScore, evaluateDreamArchiveCandidate } from "./policy.js";
 import type {
   DreamModelOutputV1,
@@ -112,10 +111,6 @@ export function buildDreamConsolidationPlan(input: DreamConsolidationInput): Dre
     }
     if (review.action === "rewrite") {
       const record = records[0]!;
-      if (!highConfidence(review.confidence) || !canonicalFactAllowed(review.canonical?.fact, records)) {
-        retained += retainLongTermRecords(review, reviews);
-        continue;
-      }
       const targetId = recordId(record);
       longTerm.set(targetId, mergeMemoryRecords([record], targetId, review.canonical!.fact, now, {
         dreamRunId: input.runId
@@ -125,15 +120,7 @@ export function buildDreamConsolidationPlan(input: DreamConsolidationInput): Dre
       continue;
     }
     if (review.action === "merge") {
-      if (!highConfidence(review.confidence) || !hasStableMergeRelationship(records)) {
-        retained += retainLongTermRecords(review, reviews);
-        continue;
-      }
       assertCompatibleReality(records);
-      if (!canonicalFactAllowed(review.canonical?.fact, records)) {
-        retained += retainLongTermRecords(review, reviews);
-        continue;
-      }
       const stable = oldestRecord(records);
       const targetId = recordId(stable);
       for (const id of review.sourceIds) longTerm.delete(id);
@@ -185,7 +172,7 @@ export function buildDreamConsolidationPlan(input: DreamConsolidationInput): Dre
           emotionalSalience: review.emotionalSalience
         }
       },
-      reason: review.reason,
+      reason: review.reason || "dream_archive_policy",
       recallSnapshot: {
         recallCount: recordStats.recallCount,
         trackingStartedAt: recordStats.trackingStartedAt
@@ -213,11 +200,6 @@ export function buildDreamConsolidationPlan(input: DreamConsolidationInput): Dre
     }
     if (action === "rewrite") {
       const record = records[0]!;
-      if (!highConfidence(review.confidence) || !canonicalFactAllowed(review.canonical?.fact, records)) {
-        markWorkingReviewed(working, records, now);
-        retained += 1;
-        continue;
-      }
       const targetId = recordId(record);
       working.set(targetId, mergeMemoryRecords([record], targetId, review.canonical!.fact, now, {
         dreamRunId: input.runId,
@@ -241,17 +223,7 @@ export function buildDreamConsolidationPlan(input: DreamConsolidationInput): Dre
       continue;
     }
     if (action === "merge") {
-      if (!highConfidence(review.confidence) || !hasStableMergeRelationship(records)) {
-        markWorkingReviewed(working, records, now);
-        retained += records.length;
-        continue;
-      }
       assertCompatibleReality(records);
-      if (!canonicalFactAllowed(review.canonical?.fact, records)) {
-        markWorkingReviewed(working, records, now);
-        retained += records.length;
-        continue;
-      }
       const stable = oldestRecord(records);
       const targetId = recordId(stable);
       for (const id of review.sourceIds) working.delete(id);
@@ -263,43 +235,7 @@ export function buildDreamConsolidationPlan(input: DreamConsolidationInput): Dre
       continue;
     }
 
-    if (!oldDreams.length && !highConfidence(review.confidence)) {
-      markWorkingReviewed(working, records, now);
-      retained += records.length;
-      continue;
-    }
-
     assertCompatibleReality(records);
-    if (oldDreams.length > 1 && !hasStableMergeRelationship(records)) {
-      for (const record of records) {
-        const sourceId = recordId(record);
-        working.delete(sourceId);
-        const targetId = promotedLongTermId([record], input.runId);
-        const canonicalText = normalizeText(record.fact);
-        const promotedRecord = mergeMemoryRecords([record], targetId, canonicalText, now, {
-          dreamRunId: input.runId,
-          dreamReviewedAt: now,
-          sourceWorkingMemoryIds: [sourceId],
-          promoteToLongTerm: false,
-          longTermId: undefined
-        });
-        const existing = longTerm.get(targetId);
-        longTerm.set(targetId, existing
-          ? mergeMemoryRecords([existing, promotedRecord], targetId, canonicalText, now, {
-              dreamRunId: input.runId,
-              dreamReviewedAt: now,
-              sourceWorkingMemoryIds: [sourceId]
-            })
-          : promotedRecord);
-        promoted += 1;
-      }
-      continue;
-    }
-    if (review.canonical && !canonicalFactAllowed(review.canonical.fact, records)) {
-      markWorkingReviewed(working, records, now);
-      retained += records.length;
-      continue;
-    }
     for (const id of review.sourceIds) working.delete(id);
     const canonicalText = review.canonical?.fact
       ?? records.map((record) => normalizeText(record.fact)).filter(Boolean).join("；");
@@ -511,10 +447,6 @@ function highConfidence(confidence: number) {
   return confidence >= DREAM_DESTRUCTIVE_ACTION_MIN_CONFIDENCE;
 }
 
-function hasStableMergeRelationship(records: readonly DreamMemoryRecord[]) {
-  return sharedNonEmptyField(records, "eventKey") || Boolean(sharedValidCausalChainKey(records));
-}
-
 function sharedValidCausalChainKey(records: readonly DreamMemoryRecord[]) {
   if (records.length < 2) return "";
   const values = records.map((record) => record.causalChainKey);
@@ -530,12 +462,6 @@ function retainedCausalChainKey(records: readonly DreamMemoryRecord[]) {
   return sharedValidCausalChainKey(records);
 }
 
-function sharedNonEmptyField(records: readonly DreamMemoryRecord[], field: string) {
-  if (records.length < 2) return false;
-  const values = records.map((record) => normalizeText(record[field]));
-  return values.every(Boolean) && new Set(values).size === 1;
-}
-
 function promotedLongTermId(records: readonly DreamMemoryRecord[], runId: string) {
   const dream = records.find(isDreamMemory);
   const date = dream ? dreamDate(dream) : "";
@@ -544,21 +470,9 @@ function promotedLongTermId(records: readonly DreamMemoryRecord[], runId: string
 }
 
 function protectedMemory(record: DreamMemoryRecord) {
-  if (record.protectedFromDream === true || record.protected === true || record.explicitRemember === true) return true;
-  const eventType = normalizeText(record.eventType);
-  if ([
-    "identity",
-    "relationship",
-    "relationship_change",
-    "safety",
-    "boundary",
-    "commitment",
-    "goal",
-    "task",
-    "conflict"
-  ].includes(eventType)) return true;
-  return /(?:明确记住|请记住|承诺|约定|安全边界|长期目标|未完成|待跟进|未解决)/u
-    .test(normalizeText(record.fact));
+  return record.protectedFromDream === true
+    || record.protected === true
+    || record.explicitRemember === true;
 }
 
 function manualMemory(record: DreamMemoryRecord) {
@@ -573,10 +487,6 @@ function manualMemory(record: DreamMemoryRecord) {
 
 function immutableMemory(record: DreamMemoryRecord) {
   return manualMemory(record) || protectedMemory(record);
-}
-
-function canonicalFactAllowed(fact: unknown, records: readonly DreamMemoryRecord[]) {
-  return evaluateDreamCanonicalFact(fact, records).eligible;
 }
 
 function isDreamMemory(record: DreamMemoryRecord) {

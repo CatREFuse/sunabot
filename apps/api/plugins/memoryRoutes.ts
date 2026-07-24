@@ -4,6 +4,7 @@ import {
   createMemoryEntry,
   deleteMemoryEntry,
   listMemoryEntries,
+  listMemoryOperationLogs,
   recallMemory,
   updateMemoryEntry,
   type MemoryEntry
@@ -21,6 +22,7 @@ const sourceQuery = {
 
 const operations = {
   listMemoryEntries,
+  listMemoryOperationLogs,
   recallMemory,
   createMemoryEntry,
   updateMemoryEntry,
@@ -60,6 +62,28 @@ export function registerMemoryRoutes(app: FastifyInstance, dependencies: MemoryR
     const context = contextFor(request);
     const payload = await memory.listMemoryEntries(context.config, query.source);
     return { ...payload, entries: context.runtime.enrichMemoryEntries(payload.entries) };
+  });
+
+  app.get("/api/memory/operations", {
+    schema: {
+      querystring: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          agentId: { type: "string" },
+          page: { type: "integer", minimum: 1, maximum: 100_000, default: 1 },
+          pageSize: { type: "integer", minimum: 1, maximum: 100, default: 50 }
+        }
+      },
+      response: { 200: openObject }
+    }
+  }, async (request) => {
+    const query = request.query as { page?: number; pageSize?: number };
+    const context = contextFor(request);
+    return memory.listMemoryOperationLogs(context.config, {
+      page: query.page ?? 1,
+      pageSize: query.pageSize ?? 50
+    });
   });
 
   app.get("/api/memory/dreams", {

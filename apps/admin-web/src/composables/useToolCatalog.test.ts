@@ -83,7 +83,7 @@ describe("useToolCatalog", () => {
   it("drops invalid availability and backend enums", async () => {
     apiRequest.mockResolvedValueOnce({
       tools: [{
-        name: "workspace_bash",
+        name: "docker_bash",
         title: "Bash",
         description: "执行命令",
         enabled: true,
@@ -103,7 +103,7 @@ describe("useToolCatalog", () => {
   it("normalizes Docker Bash environment status", async () => {
     apiRequest.mockResolvedValueOnce({
       tools: [{
-        name: "workspace_bash",
+        name: "docker_bash",
         title: "Bash",
         description: "执行命令",
         enabled: true,

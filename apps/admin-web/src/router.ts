@@ -15,6 +15,7 @@ const AgentsView = () => import("./views/AgentsView.vue");
 const AgentExtensionsView = () => import("./views/AgentExtensionsView.vue");
 const ConversationSettingsView = () => import("./views/ConversationSettingsView.vue");
 const ScheduledTasksView = () => import("./views/ScheduledTasksView.vue");
+const DirectorView = () => import("./views/DirectorView.vue");
 const VoiceView = () => import("./views/VoiceView.vue");
 const ReleasesView = () => import("./views/ReleasesView.vue");
 
@@ -26,6 +27,7 @@ export const router = createRouter({
     { path: "/conversations/:conversationId/settings/:section?", name: "conversation-settings", component: ConversationSettingsView },
     { path: "/conversations/:conversationId?", name: "conversations", component: ConversationsView },
     { path: "/scheduled-tasks", name: "scheduled-tasks", component: ScheduledTasksView },
+    { path: "/director", name: "director", component: DirectorView },
     { path: "/voice", name: "voice", component: VoiceView },
     { path: "/web-chat", name: "web-chat", component: WebChatView },
     { path: "/agent-prompts/:fileId?", name: "agent-prompts", component: PromptsView, props: { scope: "persona" } },

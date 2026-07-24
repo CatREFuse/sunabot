@@ -27,6 +27,11 @@ export interface ToneRewriteContext {
   userName?: string;
   signal?: AbortSignal;
   logContext?: ProviderLogContext;
+  hardGateRetry?: {
+    attempt: number;
+    maxAttempts: number;
+    errors: readonly string[];
+  };
 }
 
 export class RuntimeTone {
@@ -100,9 +105,12 @@ export class RuntimeTone {
       [TONE_OUTPUT_CONTRACT_VARIABLE]: outputContract,
       [TONE_AVAILABLE_ASSETS_VARIABLE]: serializeToneAvailableAssets(assets)
     });
+    const retryMessage = toneHardGateRetryMessage(context.hardGateRetry);
     const signal = toneSignal(context.signal);
     const output = await this.host.completePrompt(provider, {
-      messages: request.messages,
+      messages: retryMessage
+        ? [...request.messages, { role: "developer", content: retryMessage }]
+        : request.messages,
       tools: [],
       response_format: { type: "text" }
     }, {
@@ -121,6 +129,20 @@ export class RuntimeTone {
     if (!rewritten) throw new Error("Tone 节点没有返回可发送内容。");
     return rewritten;
   }
+}
+
+function toneHardGateRetryMessage(state: ToneRewriteContext["hardGateRetry"]) {
+  if (!state?.errors.length) return "";
+  const errors = state.errors.map((error, index) => (
+    `${index + 1}. ${escapeXmlText(error.slice(0, 500).trim() || "未知门禁错误")}`
+  ));
+  return [
+    `<tone_retry_state attempt="${state.attempt}" max_attempts="${state.maxAttempts}">`,
+    "上一轮 Tone 输出未通过宿主硬编码门禁。以下错误按发生顺序累计：",
+    ...errors,
+    "请根据全部累计错误重新生成完整结果，严格遵守 tone_output_contract，不要重复任何已经指出的错误。",
+    "</tone_retry_state>"
+  ].join("\n");
 }
 
 function toneSignal(parent: AbortSignal | undefined) {

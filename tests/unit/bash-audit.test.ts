@@ -58,6 +58,7 @@ describe("independent Bash audit", () => {
     let now = 1_000;
     const store = new BashApprovalStore(() => now, 60_000);
     const context = {
+      backend: "native" as const,
       agentId: "plana",
       accountId: "qq-bot-a",
       transport: "onebot",
@@ -86,6 +87,7 @@ describe("independent Bash audit", () => {
     expect(store.consume(approval.id, "cat /fixture/file", { ...context, conversationId: "private:other" })).toBeUndefined();
     expect(store.consume(approval.id, "cat /fixture/file", { ...context, accountId: "qq-bot-b" })).toBeUndefined();
     expect(store.consume(approval.id, "cat /fixture/file", { ...context, transport: "web" })).toBeUndefined();
+    expect(store.consume(approval.id, "cat /fixture/file", { ...context, backend: "docker" })).toBeUndefined();
     expect(store.consume(approval.id, "cat /fixture/file", context)).toEqual([frozenAccess]);
     expect(store.consume(approval.id, "cat /fixture/file", context)).toBeUndefined();
 
@@ -111,6 +113,7 @@ describe("independent Bash audit", () => {
   it("shows every approved path with its exact read, write, or delete mode", () => {
     const store = new BashApprovalStore(() => 1_000, 60_000);
     const approval = store.issue("admin command", {
+      backend: "native",
       agentId: "plana",
       accountId: "qq-bot-a",
       transport: "onebot",

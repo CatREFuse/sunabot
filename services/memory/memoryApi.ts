@@ -55,3 +55,19 @@ export {
 } from "./recall/recallService.js";
 export { ensureAgentTextFile, readAgentTextFile } from "./adapters/agentFileAdapter.js";
 export { readStrictJsonlFile } from "./adapters/legacyJsonl.js";
+export {
+  WORKING_MEMORY_FILE,
+  WORKING_MEMORY_MAX_BYTES,
+  WORKING_MEMORY_MAX_ITEM_CHARS,
+  appendWorkingMemoryDocumentItem,
+  ensureWorkingMemoryDocument,
+  parseWorkingMemoryMarkdown,
+  readWorkingMemoryDocument,
+  renderWorkingMemoryMarkdown,
+  replaceWorkingMemoryDocument,
+  workingMemoryItemToEntry,
+  workingMemoryItemsFromFacts,
+  type WorkingMemoryConversationSource,
+  type WorkingMemoryDocumentItem,
+  type WorkingMemoryDocumentSnapshot
+} from "./workingMemoryDocument.js";

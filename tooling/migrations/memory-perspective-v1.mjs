@@ -1076,14 +1076,6 @@ function buildReplacements(plan, rows, timestamp) {
         if (eventKey) data.eventKey = eventKey;
         else delete data.eventKey;
       }
-      validateEvidenceMemoryIdentities(
-        plan.agentId,
-        source,
-        target,
-        data,
-        base.effectiveData,
-        evidence.map((row) => row.effectiveData)
-      );
       assertImmutableMetadata(plan.agentId, target.id, source, base.effectiveData, data);
       replacements[source].push(canonicalize(data));
     }
@@ -1126,102 +1118,12 @@ function validateMemoryFact(agentId, source, record) {
   const fact = normalizeText(record.fact ?? record.value);
   const maximumLength = source === "user_profile" ? 300 : 360;
   if (!fact || fact.length > maximumLength) throw migrationError("TARGET_FACT_LENGTH_INVALID", `${agentId}: ${source}/${record.id} 正文为空或过长`);
-  if (!/^(?:我|I\b)/i.test(fact)) throw migrationError("TARGET_FIRST_PERSON_MISSING", `${agentId}: ${source}/${record.id} 未用第一人称开头`);
-  if (/(?:我(?:还|仍|仍然|依然|一直|始终|清楚地)?记得|我(?:回想|回忆)(?:起|起来)?|我(?:想起|忆起)|(?:在)?我(?:的)?印象(?:里|中)|我有印象|印象(?:里|中)我|\bI\s+(?:(?:still|clearly)\s+)?(?:remember|recall)\b)/iu.test(fact)) {
-    throw migrationError("TARGET_RECALL_PHRASE_FORBIDDEN", `${agentId}: ${source}/${record.id} 正文禁止使用回忆提示语`);
-  }
-  const roleProse = stripQuotedSpeech(fact);
-  if (!roleCognitionPrefix(roleProse)) {
-    throw migrationError("TARGET_COGNITION_MISSING", `${agentId}: ${source}/${record.id} 缺少认知或感知`);
-  }
-  if (!/(?:^|[。！？，；,.!?;\s])(?:我(?:也)?(?:(?:感到|感觉)(?:很|有些|有点)?(?:开心|安心|欣慰|不安|难过|好奇|警惕|亲近|感激|满意|遗憾|温暖)|(?:很|有些|有点)(?:喜欢|开心|安心|担心|在意|欣慰|不安|难过|期待|好奇|警惕|亲近|敬佩|感激|厌恶|反感|偏爱|满意|遗憾|温暖|介意|重视)|喜欢|担心|在意|期待|敬佩|感激|厌恶|反感|偏爱|愿意|乐意|介意|重视)|I\s+(?:feel|am|like|love|worry|care|hope|appreciate|dislike|prefer|respect)\b)/i.test(roleProse)) {
-    throw migrationError("TARGET_EMOTION_MISSING", `${agentId}: ${source}/${record.id} 缺少情绪或态度`);
-  }
-  if (/^\s*(?:[-*#]|\d+[.)、])\s/m.test(fact)
-    || /(?:事实|情绪|认知|相关用户|用户画像|工作记忆|长期记忆)[:：]/.test(fact)) {
-    throw migrationError("TARGET_FORMATTED_PROSE", `${agentId}: ${source}/${record.id} 使用了列表或字段标签`);
-  }
   const context = `${agentId}: ${source}/${record.id}`;
-  const userName = normalizeRequiredUserName(record.userName, context);
   const userIds = source === "user_profile"
     ? [normalizeProfileUserId(record.userId, context).normalized]
     : normalizeUserIdsStrict(record.userIds ?? record.userId, context);
   if (userIds.length === 0) {
     throw migrationError("TARGET_USER_IDS_MISSING", `${context} 缺少有效 QQ userIds`);
-  }
-  if (hasAmbiguousUserFirstPersonSubject(fact, userIds, userName)) {
-    throw migrationError("TARGET_PERSPECTIVE_INVALID", `${context} 必须写成当前角色的第一人称认知`);
-  }
-  if (!fact.includes(userName)) {
-    throw migrationError("TARGET_USER_NAME_NOT_NATURAL", `${context} 未自然写入昵称 ${userName}`);
-  }
-  for (const userId of userIds) {
-    if (!naturalMemoryIdentityPattern(userId).test(fact)) {
-      throw migrationError("TARGET_USER_ID_NOT_NATURAL", `${context} 未以昵称（QQ ${userId}）自然写入身份`);
-    }
-  }
-  if (!userIds.some((userId) => hasNaturalMemoryIdentity(fact, userId, userName))) {
-    throw migrationError("TARGET_USER_NAME_NOT_NATURAL", `${context} 昵称 ${userName} 未与任何相关 QQ 对应出现`);
-  }
-  if (source === "user_profile" && !roleProfilePerspectivePattern(userName, userIds[0]).test(fact)) {
-    throw migrationError("TARGET_PROFILE_PERSPECTIVE_INVALID", `${context} 必须写成当前角色对该用户的第一人称认知`);
-  }
-}
-
-function validateEvidenceMemoryIdentities(agentId, source, target, data, baseData, evidenceRows) {
-  const context = `${agentId}: ${source}/${target.id}`;
-  const trustedNames = new Map();
-  for (const [index, evidence] of evidenceRows.entries()) {
-    const evidenceContext = `${context} evidence ${index + 1}`;
-    const ids = source === "user_profile"
-      ? [normalizeProfileUserId(evidence.userId, evidenceContext).normalized]
-      : normalizeUserIdsStrict(evidence.userIds ?? evidence.userId, evidenceContext);
-    const explicitPrimary = source !== "user_profile" && evidence.userId != null
-      ? normalizeUserIdsStrict(evidence.userId, evidenceContext)[0]
-      : ids[0];
-    const name = normalizeText(evidence.userName);
-    if (!explicitPrimary || !name) continue;
-    const trustedName = normalizeRequiredUserName(name, evidenceContext);
-    const names = trustedNames.get(explicitPrimary) ?? new Set();
-    names.add(trustedName);
-    trustedNames.set(explicitPrimary, names);
-  }
-
-  const finalUserIds = source === "user_profile"
-    ? [normalizeProfileUserId(data.userId, context).normalized]
-    : normalizeUserIdsStrict(data.userIds ?? data.userId, context);
-  const finalUserIdSet = new Set(finalUserIds);
-  if (naturalMemoryIdentityMarkerUserIds(data.fact).some((userId) => !finalUserIdSet.has(userId))) {
-    throw migrationError("TARGET_USER_ID_EVIDENCE_MISMATCH", `${context} 正文包含未列入 finalUserIds 的 QQ 身份`);
-  }
-  const baseIds = source === "user_profile"
-    ? [normalizeProfileUserId(baseData.userId, `${context} base`).normalized]
-    : normalizeUserIdsStrict(baseData.userIds ?? baseData.userId, `${context} base`);
-  const basePrimaryId = source !== "user_profile" && baseData.userId != null
-    ? normalizeUserIdsStrict(baseData.userId, `${context} base`)[0]
-    : baseIds[0];
-  const finalUserName = normalizeRequiredUserName(data.userName, context);
-  const explicitRepairName = normalizeText(target.metadataPatch?.set?.userName);
-  if (basePrimaryId) {
-    const baseNames = trustedNames.get(basePrimaryId);
-    if (baseNames?.size) {
-      if (!baseNames.has(finalUserName)) {
-        throw migrationError("TARGET_USER_NAME_EVIDENCE_MISMATCH", `${context} userName 未绑定 base evidence 的主 QQ`);
-      }
-    } else if (!explicitRepairName || explicitRepairName !== finalUserName) {
-      throw migrationError("TARGET_USER_NAME_EVIDENCE_MISSING", `${context} 缺少受签 metadataPatch.userName 修复`);
-    } else {
-      trustedNames.set(basePrimaryId, new Set([finalUserName]));
-    }
-  }
-  for (const userId of finalUserIds) {
-    const names = trustedNames.get(userId);
-    if (!names?.size) {
-      throw migrationError("TARGET_USER_NAME_EVIDENCE_MISSING", `${context} QQ ${userId} 缺少受信昵称证据`);
-    }
-    if (!hasOnlyTrustedNaturalMemoryIdentities(data.fact, userId, [...names])) {
-      throw migrationError("TARGET_USER_NAME_EVIDENCE_MISMATCH", `${context} QQ ${userId} 未与受信昵称成对出现`);
-    }
   }
 }
 
@@ -5393,111 +5295,6 @@ function normalizeRequiredUserName(value, context) {
     throw migrationError("TARGET_USER_NAME_INVALID", `${context} 缺少非 QQ 的有效昵称`);
   }
   return userName;
-}
-
-function naturalMemoryIdentityPattern(userId, userName = "") {
-  const namePattern = userName
-    ? escapeRegExp(userName)
-    : "(?!(?:与|和|及|跟|同|、)\\s*[（(])[^，。！？；：（）()\\r\\n]{1,40}";
-  return new RegExp(`${namePattern}\\s*[（(]\\s*QQ(?:号)?\\s*[:：#]?\\s*${escapeRegExp(userId)}(?!\\d)\\s*[）)]`, "i");
-}
-
-function hasNaturalMemoryIdentity(fact, userId, userName) {
-  return findNaturalMemoryIdentityMatch(fact, userId, userName) != null;
-}
-
-function findNaturalMemoryIdentityMatch(fact, userId, userName) {
-  const text = String(fact);
-  for (const marker of text.matchAll(naturalMemoryIdentityMarkerPattern(userId))) {
-    const match = naturalMemoryIdentityAtMarker(text, marker, userName);
-    if (match) return match;
-  }
-  return undefined;
-}
-
-function hasOnlyTrustedNaturalMemoryIdentities(fact, userId, trustedNames) {
-  const text = String(fact);
-  let markerCount = 0;
-  for (const marker of text.matchAll(naturalMemoryIdentityMarkerPattern(userId))) {
-    markerCount += 1;
-    if (!trustedNames.some((userName) => naturalMemoryIdentityAtMarker(text, marker, userName))) {
-      return false;
-    }
-  }
-  return markerCount > 0;
-}
-
-function naturalMemoryIdentityMarkerPattern(userId) {
-  return new RegExp(
-    `[（(]\\s*QQ(?:号)?\\s*[:：#]?\\s*${escapeRegExp(userId)}(?!\\d)\\s*[）)]`,
-    "gu"
-  );
-}
-
-function naturalMemoryIdentityMarkerUserIds(fact) {
-  return [...String(fact).matchAll(/[（(]\s*QQ(?:号)?\s*[:：#]?\s*(\d{5,20})(?!\d)\s*[）)]/giu)]
-    .map((match) => match[1]);
-}
-
-function naturalMemoryIdentityAtMarker(fact, marker, userName) {
-  const markerStart = marker.index;
-  const beforeMarker = fact.slice(0, markerStart).replace(/\s+$/u, "");
-  if (!beforeMarker.endsWith(userName)) return undefined;
-  const identityStart = beforeMarker.length - userName.length;
-  const leftContext = beforeMarker.slice(0, identityStart);
-  if (!hasNaturalMemoryIdentityLeftBoundary(leftContext)) return undefined;
-  return {
-    start: identityStart,
-    end: markerStart + marker[0].length
-  };
-}
-
-function hasNaturalMemoryIdentityLeftBoundary(leftContext) {
-  if (!leftContext) return true;
-  if (/[\s,，.。!！?？;；:：、"'“”‘’「」『』\[\]【】({（]$/u.test(leftContext)) return true;
-  return /(?:认为|觉得|知道|了解|了解到|注意到|意识到|理解|相信|判断|看出|发现|在意|担心|期待|欣赏|认可|重视|愿意|乐意|支持|感谢|关心|关注|尊重|喜欢|信任|帮助|陪伴|保护|告诉|听到|看到|得知|提到|关于|涉及|对|和|与)$/u.test(leftContext);
-}
-
-function roleCognitionPrefix(fact) {
-  return fact.match(/^(?:我(?:也)?(?:觉得|认为|判断|意识到|理解|相信|推测|在意|希望|担心|期待|认可|反感|偏好|看重|知道|了解到|注意到|看出|发现|欣赏|重视|愿意|乐意|对)|I\s+(?:think|believe|judge|understand|realize|know|notice|prefer|care|hope|worry|expect)\b)/i)?.[0] ?? "";
-}
-
-function hasAmbiguousUserFirstPersonSubject(fact, userIds, userName) {
-  const prefix = roleCognitionPrefix(fact);
-  if (!prefix) return false;
-  if (/["'“‘「『]\s*(?:我(?:自己|本人)?|I\b)/iu.test(fact)) return true;
-  const matches = userIds.flatMap((userId) => {
-    const match = findNaturalMemoryIdentityMatch(fact, userId, userName);
-    return match ? [{ userId, ...match }] : [];
-  });
-  if (matches.some(({ end }) => /^(?:\s|[,，])*(?:[^。！？；;:：\r\n]{0,32})?(?:说|表示|提到|自述|回答|声称|写道|告诉我)\s*(?:[:：]\s*)?["'“‘「『]?\s*(?:我(?:自己|本人)?|I\b)/iu.test(fact.slice(end)))) {
-    return true;
-  }
-  if (matches.some(({ end }) => /^\s*(?:就是|是)\s*我的(?:昵称|名字|姓名|身份)/u.test(fact.slice(end)))) {
-    return true;
-  }
-
-  const firstIdentityStart = matches.reduce((earliest, match) => (
-    earliest == null || match.start < earliest ? match.start : earliest
-  ), undefined);
-  const beforeIdentity = fact.slice(prefix.length, firstIdentityStart ?? fact.length).trim();
-  const relationalLeading = matches.some(({ start }) => (
-    /^我(?:自己|本人)?(?:和|与|对)\s*$/u.test(fact.slice(prefix.length, start).trim())
-  ));
-  if (relationalLeading) return false;
-  return /^(?:我(?:自己|本人)?|自己|本人)/u.test(beforeIdentity)
-    || /(?:我的|自己|本人)/u.test(beforeIdentity);
-}
-
-function stripQuotedSpeech(value) {
-  return String(value)
-    .replace(/“[^”]*”|「[^」]*」|『[^』]*』|"[^"]*"|'[^']*'/gu, "");
-}
-
-function roleProfilePerspectivePattern(userName, userId) {
-  const cognition = "(?:认为|觉得|知道|了解到|注意到|意识到|理解|相信|判断|看出|发现|在意|担心|期待|欣赏|认可|重视|愿意|乐意|对)";
-  const identity = `${escapeRegExp(userName)}\\s*[（(]\\s*QQ(?:号)?\\s*[:：#]?\\s*${escapeRegExp(userId)}(?!\\d)\\s*[）)]`;
-  return new RegExp(`^我(?:也)?${cognition}[\\s\\S]{0,120}${identity}`, "u");
 }
 
 function escapeRegExp(value) {

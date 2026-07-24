@@ -1,5 +1,3 @@
-import { nanoid } from "nanoid";
-import { createHash } from "node:crypto";
 import { formatModelTimestamp, formatOptionalModelTimestamp, systemModelTimeZone } from "../../services/agent/modelTime.js";
 import { loadPersona } from "../../services/agent/persona.js";
 import {
@@ -15,38 +13,21 @@ import {
   resolveUserAddressNames,
   type MemoryEntry
 } from "../../services/memory/memoryService.js";
+import { recordMemoryOperation } from "../../services/memory/operationAudit.js";
 import {
   ConversationRecord
 } from "../types.js";
-import { attachUsersToMemoryFacts, clampInteger, collectBatchUsers, indexedConversationMessages, invalidWorkingMemoryClear, isMemoryEligibleConversationMessage, normalizeUserProfileFacts, parseMemoryFactOutput, parseWorkingMemoryMergeOutput } from "./conversationMemoryHelpers.js";
+import { attachUsersToMemoryFacts, clampInteger, collectBatchUsers, indexedConversationMessages, isMemoryEligibleConversationMessage, parseCompleteMemoryFactOutput, parseCompleteWorkingMemoryMergeOutput, validateUserProfileFacts } from "./conversationMemoryHelpers.js";
 import { withAbortTimeout } from "./infrastructure.js";
 import {
   MEMORY_PROVIDER_TOTAL_TIMEOUT_MS,
   memoryProviderCompleteOptions
 } from "./memoryProviderBudget.js";
-import { ModelContextMemoryRecall } from "./memoryRecallExposure.js";
 import { conversationReplyEnabled, uniqueStrings } from "./messagingAttachmentHelpers.js";
 import { BatchUserInfo, WorkingMemoryMergeContext, WorkingMemoryMergeOutput } from "./runtimeContracts.js";
 
 import type { SunaRuntime } from "../runtime.js";
 type RuntimeHost = SunaRuntime;
-
-const manualMemoryRecallKeys = new WeakMap<WorkingMemoryMergeContext, string>();
-
-function memoryCompressRecallKey(context: WorkingMemoryMergeContext) {
-  const batchId = typeof context.metadata.batchId === "string"
-    ? context.metadata.batchId.trim()
-    : "";
-  if (batchId) {
-    const digest = createHash("sha256").update(batchId).digest("hex");
-    return `memory.compress-in:batch:${digest}`;
-  }
-  const existing = manualMemoryRecallKeys.get(context);
-  if (existing) return existing;
-  const created = `memory.compress-in:merge:${nanoid()}`;
-  manualMemoryRecallKeys.set(context, created);
-  return created;
-}
 
 export function runtime_scheduleAttachmentCacheRefresh(this: RuntimeHost) {
     this.attachmentRefreshDirty = true;
@@ -195,12 +176,51 @@ export async function runtime_processMemoryClaim(this: RuntimeHost, claim: Memor
     const admin = this.adminIdentity();
     const participants = await this.enrichParticipantAddressNames(collectBatchUsers(batch, admin));
     const userProfileOutput = await this.compressUserProfiles(record, batch, participants);
-    if (!userProfileOutput) return false;
-    const userProfileFacts = normalizeUserProfileFacts(
+    if (!userProfileOutput) {
+      recordMemoryOperation(this.config, {
+        source: "user_profile",
+        operation: "batch_validate",
+        actor: "memory_pipeline",
+        outcome: "rejected",
+        batchId: claim.batchId,
+        conversationId: record.id,
+        conversationScope: record.scope,
+        reasonCode: "model_output_invalid"
+      });
+      return false;
+    }
+    const userProfileValidation = validateUserProfileFacts(
       userProfileOutput,
       participants,
       batch.map(({ message }) => ({ text: message.text }))
     );
+    const userProfileFacts = userProfileValidation.accepted;
+    if (userProfileFacts.length !== userProfileOutput.length) {
+      const rejectionReasons = rejectionReasonCounts(userProfileValidation.rejected);
+      console.warn("[runtime] ignored unroutable user profile items", {
+        conversationId: record.id,
+        batchId: claim.batchId,
+        memoryKind: "user_profile",
+        returnedCount: userProfileOutput.length,
+        acceptedCount: userProfileFacts.length,
+        rejectionReasons
+      });
+      for (const reasonCode of Object.keys(rejectionReasons)) {
+        recordMemoryOperation(this.config, {
+          source: "user_profile",
+          operation: "batch_validate",
+          actor: "memory_pipeline",
+          outcome: "rejected",
+          batchId: claim.batchId,
+          conversationId: record.id,
+          conversationScope: record.scope,
+          beforeCount: userProfileOutput.length,
+          afterCount: userProfileFacts.length,
+          changedCount: 0,
+          reasonCode
+        });
+      }
+    }
     const participantAddressNames = new Map(userProfileFacts.map((fact) => [fact.userId, fact.addressNames ?? []]));
     const memoryParticipants = participants.map((participant) => ({
       ...participant,
@@ -232,6 +252,8 @@ export async function runtime_processMemoryClaim(this: RuntimeHost, claim: Memor
         source: "sunabot.memory.user_profile",
         batchId: claim.batchId,
         conversationId: record.id,
+        conversationScope: record.scope,
+        conversationTitle: record.title,
         compressedMessageStart: batch[0]!.sequence,
         compressedMessageEnd: batch[batch.length - 1]!.sequence
       }
@@ -240,36 +262,20 @@ export async function runtime_processMemoryClaim(this: RuntimeHost, claim: Memor
     for (let attempt = 1; attempt <= 2; attempt += 1) {
       const snapshot = await readWorkingMemorySnapshot(this.config);
       const merged = await this.requestWorkingMemoryMerge(context, snapshot.entries);
-      if (!merged || invalidWorkingMemoryClear(merged, snapshot.entries.length)) return false;
-      const allWorkingFacts = attachUsersToMemoryFacts(merged.facts, memoryParticipants).map((fact) => ({
+      if (!merged) return false;
+      const acceptedWorkingFacts = attachUsersToMemoryFacts(merged.facts, memoryParticipants);
+      const allWorkingFacts = acceptedWorkingFacts.map((fact) => ({
         ...fact,
         batchId: claim.batchId
       }));
-      const existingWorkingIds = new Set(snapshot.entries.map((entry) => entry.id));
       const maxWorkingEntries = clampInteger(this.config.bot.memory.workingMemoryMaxEntries, 100, 1, 1000);
       const workingFacts = allWorkingFacts.slice(-maxWorkingEntries);
-      const longTermFacts = allWorkingFacts
-        .filter((fact) => (
-          fact.promoteToLongTerm === true &&
-          Boolean(fact.occurredAt || fact.time) &&
-          Boolean(fact.eventType) &&
-          Boolean(fact.subjectKey)
-        ))
-        .map((fact) => ({
-          ...fact,
-          sourceWorkingMemoryIds: uniqueStrings([
-            ...(fact.sourceWorkingMemoryIds ?? []),
-            fact.id && existingWorkingIds.has(fact.id) ? fact.id : ""
-          ]),
-          batchId: claim.batchId
-        }));
       const result = await applyMemoryBatchTransaction(this.config, {
         batchId: claim.batchId,
         expectedWorkingSnapshotToken: snapshot.token,
         workingFacts,
-        allPreviousMemoriesInvalidated: merged.allPreviousMemoriesInvalidated,
         userProfileFacts,
-        longTermFacts,
+        longTermFacts: [],
         metadata: {
           ...context.metadata,
           source: "sunabot.memory.batch",
@@ -303,6 +309,15 @@ export async function runtime_enrichParticipantAddressNames(this: RuntimeHost, p
       };
     }));
   }
+
+function rejectionReasonCounts(
+  rejected: ReadonlyArray<{ reasonCode: string }>
+) {
+  return rejected.reduce<Record<string, number>>((counts, item) => {
+    counts[item.reasonCode] = (counts[item.reasonCode] ?? 0) + 1;
+    return counts;
+  }, {});
+}
 export async function runtime_mergeConversationWorkingMemory(this: RuntimeHost,
     record: ConversationRecord,
     batch: Array<{ sequence: number; message: ConversationRecord["messages"][number] }>,
@@ -330,6 +345,8 @@ export async function runtime_mergeConversationWorkingMemory(this: RuntimeHost,
       metadata: {
         source: "sunabot.memory.compress.in",
         conversationId: record.id,
+        conversationScope: record.scope,
+        conversationTitle: record.title,
         compressedMessageStart: batch[0]!.sequence,
         compressedMessageEnd: batch[batch.length - 1]!.sequence
       }
@@ -344,23 +361,16 @@ export async function runtime_mergeWorkingMemory(this: RuntimeHost, context: Wor
       if (!merged) {
         return { ok: false as const, status: "model_invalid" as const, beforeCount };
       }
-      if (
-        merged.allPreviousMemoriesInvalidated &&
-        (merged.facts.length > 0 || snapshot.entries.length === 0)
-      ) {
-        console.error("[runtime] invalid working memory clear signal", {
-          conversationId: context.conversation.id,
-          previousCount: snapshot.entries.length,
-          factCount: merged.facts.length
-        });
-        return { ok: false as const, status: "model_invalid" as const, beforeCount };
-      }
 
       const facts = attachUsersToMemoryFacts(merged.facts, context.participants);
       const replaced = await replaceWorkingMemoryFacts(this.config, facts, {
         expectedSnapshotToken: snapshot.token,
-        allPreviousMemoriesInvalidated: merged.allPreviousMemoriesInvalidated,
-        metadata: context.metadata
+        metadata: {
+          ...context.metadata,
+          conversationId: context.conversation.id,
+          conversationScope: context.conversation.scope,
+          conversationTitle: context.conversation.title
+        }
       });
       if (replaced.status === "applied") {
         return {
@@ -371,9 +381,6 @@ export async function runtime_mergeWorkingMemory(this: RuntimeHost, context: Wor
           attempts: attempt,
           facts
         };
-      }
-      if (replaced.status !== "snapshot_conflict") {
-        return { ok: false as const, status: replaced.status, beforeCount };
       }
     }
     console.error("[runtime] working memory merge snapshot conflict", {
@@ -390,23 +397,6 @@ export async function runtime_requestWorkingMemoryMerge(this: RuntimeHost,
         this.config.bot.memory.memoryModel,
         this.config.bot.memory.reasoningEffort
       );
-      const modelContextMemory = new ModelContextMemoryRecall(
-        this.config,
-        memoryCompressRecallKey(context)
-      );
-      const relatedLongTerm = await modelContextMemory.search({
-        query: [
-          context.conversation.id,
-          context.conversation.title,
-          ...context.participants.flatMap((participant) => [
-            participant.userId,
-            ...(participant.addressNames ?? participant.names ?? [])
-          ]),
-          ...context.messages.map((message) => message.text)
-        ].filter(Boolean).join(" "),
-        source: "long_term",
-        limit: 20
-      });
       const payload = {
         systemTimeZone: systemModelTimeZone(),
         conversation: context.conversation,
@@ -424,24 +414,16 @@ export async function runtime_requestWorkingMemoryMerge(this: RuntimeHost,
           time: entry.time || "",
           createdAt: formatOptionalModelTimestamp(entry.createdAt),
           updatedAt: formatOptionalModelTimestamp(entry.updatedAt),
+          recordedAt: entry.recordedAt,
+          timeZone: entry.timeZone,
+          conversationId: entry.conversationId,
+          conversationScope: entry.conversationScope,
+          conversationTitle: entry.conversationTitle,
+          sourceKind: entry.sourceKind,
           eventType: entry.eventType,
           subjectKey: entry.subjectKey,
-          eventKey: entry.eventKey,
-          longTermId: entry.longTermId,
-          promoteToLongTerm: entry.promoteToLongTerm
+          eventKey: entry.eventKey
         })),
-        relatedLongTermMemories: relatedLongTerm.ok ? relatedLongTerm.matches.map((entry) => ({
-          id: entry.id,
-          fact: entry.text,
-          occurredAt: formatOptionalModelTimestamp(entry.occurredAt),
-          occurredEndAt: formatOptionalModelTimestamp(entry.occurredEndAt),
-          userIds: entry.userIds,
-          addressNames: entry.addressNames,
-          eventType: entry.eventType,
-          subjectKey: entry.subjectKey,
-          eventKey: entry.eventKey,
-          sourceWorkingMemoryIds: entry.sourceWorkingMemoryIds
-        })) : [],
         messages: context.messages.map((message) => ({
           ...message,
           at: formatModelTimestamp(message.at)
@@ -450,11 +432,6 @@ export async function runtime_requestWorkingMemoryMerge(this: RuntimeHost,
       const promptRequest = await this.renderPromptRequest("memory.compress-in", {
         "memory.payload": payload
       });
-      modelContextMemory.includePromptVariable(
-        promptRequest,
-        "memory.payload",
-        relatedLongTerm.ok ? relatedLongTerm.matches : []
-      );
       const output = await withAbortTimeout(
         (signal) => this.completePrompt(provider, promptRequest, memoryProviderCompleteOptions(signal, {
             conversationId: context.conversation.id,
@@ -464,12 +441,46 @@ export async function runtime_requestWorkingMemoryMerge(this: RuntimeHost,
         })),
         MEMORY_PROVIDER_TOTAL_TIMEOUT_MS
       );
-      modelContextMemory.commit();
-      return parseWorkingMemoryMergeOutput(output);
+      const parsed = parseCompleteWorkingMemoryMergeOutput(output);
+      if (!parsed) {
+        console.error("[runtime] rejected invalid memory model output", {
+          conversationId: context.conversation.id,
+          memoryKind: "working_long_term",
+          reason: "parse"
+        });
+        recordMemoryOperation(this.config, {
+          source: "working",
+          operation: "batch_validate",
+          actor: "memory_pipeline",
+          outcome: "rejected",
+          batchId: typeof context.metadata.batchId === "string" ? context.metadata.batchId : undefined,
+          conversationId: context.conversation.id,
+          conversationScope: context.conversation.scope,
+          beforeCount: previousWorkingMemories.length,
+          afterCount: previousWorkingMemories.length,
+          changedCount: 0,
+          reasonCode: "parse_failed"
+        });
+        return null;
+      }
+      return parsed;
     } catch (error) {
       console.error("[runtime] work memory compression failed", {
         conversationId: context.conversation.id,
         error
+      });
+      recordMemoryOperation(this.config, {
+        source: "working",
+        operation: "batch_validate",
+        actor: "memory_pipeline",
+        outcome: "failed",
+        batchId: typeof context.metadata.batchId === "string" ? context.metadata.batchId : undefined,
+        conversationId: context.conversation.id,
+        conversationScope: context.conversation.scope,
+        beforeCount: previousWorkingMemories.length,
+        afterCount: previousWorkingMemories.length,
+        changedCount: 0,
+        reasonCode: "provider_failed"
       });
       return null;
     }
@@ -528,11 +539,32 @@ export async function runtime_compressUserProfiles(this: RuntimeHost,
         })),
         MEMORY_PROVIDER_TOTAL_TIMEOUT_MS
       );
-      return parseMemoryFactOutput(output);
+      const parsed = parseCompleteMemoryFactOutput(output);
+      if (!parsed) {
+        recordMemoryOperation(this.config, {
+          source: "user_profile",
+          operation: "batch_validate",
+          actor: "memory_pipeline",
+          outcome: "rejected",
+          conversationId: record.id,
+          conversationScope: record.scope,
+          reasonCode: "parse_failed"
+        });
+      }
+      return parsed;
     } catch (error) {
       console.error("[runtime] user profile compression failed", {
         conversationId: record.id,
         error
+      });
+      recordMemoryOperation(this.config, {
+        source: "user_profile",
+        operation: "batch_validate",
+        actor: "memory_pipeline",
+        outcome: "failed",
+        conversationId: record.id,
+        conversationScope: record.scope,
+        reasonCode: "provider_failed"
       });
       return null;
     }

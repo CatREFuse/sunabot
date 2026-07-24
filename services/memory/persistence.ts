@@ -24,6 +24,12 @@ export interface MemoryRepositoryPort {
     userProfile: readonly MemoryRecordData[];
     result: unknown;
   }): { status: "existing"; result: unknown } | { status: "snapshot_conflict" } | { status: "committed"; result: unknown };
+  commitUserProfileBatch(input: {
+    batchId: string;
+    expectedUserProfileRevision: number;
+    userProfile: readonly MemoryRecordData[];
+    result: unknown;
+  }): { status: "existing"; result: unknown } | { status: "snapshot_conflict" } | { status: "committed"; result: unknown };
   readMemoryBatch(batchId: string): unknown;
   hasMemoryBatch(batchId: string): boolean;
   readMemoryScheduler(): Record<string, object>;
@@ -33,6 +39,14 @@ export interface MemoryRepositoryPort {
   reserveActualRecall(input: ReserveActualMemoryRecallInput): ReserveActualMemoryRecallResult;
   recordActualRecall?(input: RecordActualMemoryRecallInput): RecordActualMemoryRecallResult;
   listRecallStats?(recordIds?: readonly string[]): MemoryRecallStats[];
+  appendMemoryOperationLog?(record: MemoryRecordData): void;
+  readMemoryOperationLogPage?(options: { page: number; pageSize: number }): {
+    logs: MemoryRecordData[];
+    page: number;
+    pageSize: number;
+    total: number;
+    pageCount: number;
+  };
 }
 
 export interface MemoryPersistenceProvider {

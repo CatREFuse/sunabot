@@ -92,6 +92,7 @@ import { registerOneBotRoutes } from "./plugins/onebotRoutes.js";
 import { registerProviderConfigRoutes } from "./plugins/providerConfigRoutes.js";
 import { registerReleaseRoutes } from "./plugins/releaseRoutes.js";
 import { registerScheduledTaskRoutes } from "./plugins/scheduledTaskRoutes.js";
+import { registerDirectorRoutes } from "./plugins/directorRoutes.js";
 import { registerSelfieReferenceRoutes } from "./plugins/selfieReferenceRoutes.js";
 import { isSpaRoute } from "./spaRouting.js";
 import { buildVoiceApiComposition, registerVoiceApi } from "./voiceApiComposition.js";
@@ -509,6 +510,7 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
     conversationDirectory
   });
   registerScheduledTaskRoutes(app, { runtime, getRuntime });
+  registerDirectorRoutes(app, { runtime, getRuntime });
   registerAgentRoutes(app, agentRegistry, {
     decorateAgents: (agents) => agentRuntimeManager.decorateAgents(agents, onebotGateway.getStatus()),
     onAgentCreated: async (agentId) => {

@@ -52,6 +52,7 @@ import { RuntimeScheduledTasks } from "./runtime/scheduledTasks.js";
 import { RuntimeVoice } from "./runtime/voice.js";
 import { RuntimeDirector } from "./runtime/director.js";
 import { RuntimeAir } from "./runtime/air.js";
+import { RuntimeWorkingMemory } from "./runtime/workMemory.js";
 import { RuntimeDreams } from "./runtime/dreamPipeline.js";
 import { createRuntimeDreamsForHost, forceRuntimeDreamForHost } from "./runtime/dreamRuntime.js";
 import { RuntimeTone } from "./runtime/tone.js";
@@ -104,6 +105,7 @@ export class SunaRuntime {
   readonly scheduledTasks: RuntimeScheduledTasks;
   readonly director: RuntimeDirector;
   readonly air: RuntimeAir;
+  readonly workingMemory: RuntimeWorkingMemory;
   readonly dreams: RuntimeDreams;
   readonly bashAudit?: RuntimeBashAuditPort;
   readonly bashRuntime?: WorkspaceBashRuntimePort;
@@ -198,6 +200,7 @@ export class SunaRuntime {
       this.scheduledTasks = new RuntimeScheduledTasks(this);
       this.director = new RuntimeDirector(this);
       this.air = new RuntimeAir(this);
+      this.workingMemory = new RuntimeWorkingMemory(this);
       this.dreams = createRuntimeDreamsForHost(this);
       this.commandRouter = new CommandRouter<RuntimeCommandContext>([
         {
@@ -262,6 +265,7 @@ export class SunaRuntime {
   updateScheduledTask(...args: Parameters<RuntimeScheduledTasks["updateScheduledTask"]>) { return this.inAgentContext(() => this.scheduledTasks.updateScheduledTask(...args)); }
   deleteScheduledTask(...args: Parameters<RuntimeScheduledTasks["deleteScheduledTask"]>) { return this.inAgentContext(() => this.scheduledTasks.deleteScheduledTask(...args)); }
   replayScheduledTaskDelivery(...args: Parameters<RuntimeScheduledTasks["replayScheduledTaskDelivery"]>) { return this.inAgentContext(() => this.scheduledTasks.replayScheduledTaskDelivery(...args)); }
+  listDirectorSchedules(...args: Parameters<RuntimeDirector["listSchedules"]>) { return this.director.listSchedules(...args); }
   listDreamHistory(...args: Parameters<RuntimeDreams["listHistory"]>) { return this.dreams.listHistory(...args); }
   forceDream(input: Parameters<typeof forceRuntimeDreamForHost>[1]) {
     return this.inAgentContext(() => forceRuntimeDreamForHost(this, input));
@@ -304,12 +308,17 @@ export class SunaRuntime {
   contextMessageLimit(...args: Parameters<typeof runtimeReply.runtime_contextMessageLimit>) { return runtimeReply.runtime_contextMessageLimit.call(this, ...args); }
   retainedConversationMessageLimit(...args: Parameters<typeof runtimeReply.runtime_retainedConversationMessageLimit>) { return runtimeReply.runtime_retainedConversationMessageLimit.call(this, ...args); }
   groupReplyOptions(...args: Parameters<typeof runtimeReply.runtime_groupReplyOptions>) { return runtimeReply.runtime_groupReplyOptions.call(this, ...args); }
-  resolveProviderBashHandle(incoming: ParsedIncomingMessage, promptOverride?: string) {
+  resolveProviderBashHandle(
+    incoming: ParsedIncomingMessage,
+    promptOverride?: string,
+    backend: BashExecutionBackend = "docker"
+  ) {
     return runtimeReply.runtime_resolveProviderBashHandle.call(
       this,
       incoming,
       promptOverride,
-      this.rawToolCapabilityResolver
+      this.rawToolCapabilityResolver,
+      backend
     );
   }
   async resolveToolCapabilities(

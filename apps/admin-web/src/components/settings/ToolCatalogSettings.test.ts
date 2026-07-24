@@ -90,8 +90,8 @@ const tools = [
 
 const directRuntimeTools = [
   {
-    name: "workspace_bash",
-    title: "Bash",
+    name: "docker_bash",
+    title: "Docker Bash",
     summary: "执行 workspace 命令。",
     execution: "inline",
     configuredEnabled: false,
@@ -213,7 +213,7 @@ describe("ToolCatalogSettings", () => {
     apiRequest.mockResolvedValueOnce({ tools: directRuntimeTools });
     const draft = toolsDraft();
     draft.overrides.codex = { enabled: false, description: "Codex 说明" };
-    draft.overrides.workspace_bash = { enabled: true, description: "Bash 说明" };
+    draft.overrides.docker_bash = { enabled: true, description: "Bash 说明" };
     const bash = bashDraft();
     const wrapper = mount(ToolCatalogSettings, {
       props: { modelValue: draft, bash },
@@ -221,14 +221,14 @@ describe("ToolCatalogSettings", () => {
     });
     await flushPromises();
 
-    const bashToggle = wrapper.findAll("label").find((label) => label.text().includes("启用 Bash"));
+    const bashToggle = wrapper.findAll("label").find((label) => label.text().includes("启用 Docker Bash"));
     const codexToggle = wrapper.findAll("label").find((label) => label.text().includes("启用 Codex"));
     await bashToggle!.get('input[type="checkbox"]').setValue(true);
     await codexToggle!.get('input[type="checkbox"]').setValue(false);
 
     expect(bash.enabled).toBe(true);
     expect(draft.codex.enabled).toBe(false);
-    expect(draft.overrides.workspace_bash).toEqual({ description: "Bash 说明" });
+    expect(draft.overrides.docker_bash).toEqual({ description: "Bash 说明" });
     expect(draft.overrides.codex).toEqual({ description: "Codex 说明" });
   });
 

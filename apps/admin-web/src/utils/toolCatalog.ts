@@ -7,7 +7,8 @@ const toolIcons: Record<string, string> = {
   websearch: "bx-globe",
   generate_img: "bx-image-add",
   selfie: "bx-camera",
-  workspace_bash: "bx-terminal",
+  native_bash: "bx-terminal",
+  docker_bash: "bx-terminal",
   codex: "bx-code-alt"
 };
 

@@ -1,5 +1,6 @@
 import type {
   AppConfigShape,
+  BotDirectorSettings,
   BotMemorySettings,
   BotOrchestratorSettings,
   BotConfigShape,
@@ -16,6 +17,7 @@ import type {
 
 export type {
   BotMemorySettings,
+  BotDirectorSettings,
   BotOrchestratorSettings,
   BotToneSettings,
   BroadcastStormConfig,
@@ -91,7 +93,7 @@ export interface AgentAvatarInput {
   dataBase64: string;
 }
 
-export type ConfigSectionKey = "server" | "persona" | "providers" | "broadcastStorm" | "normalReply" | "bot" | "tone" | "memory" | "orchestrator" | "tools" | "bash" | "onebot";
+export type ConfigSectionKey = "server" | "persona" | "providers" | "broadcastStorm" | "normalReply" | "bot" | "tone" | "memory" | "director" | "orchestrator" | "tools" | "bash" | "onebot";
 export type SettingsSectionKey = ConfigSectionKey | "security";
 export type ApplyMode = "hot" | "reconnect" | "restart";
 
@@ -115,6 +117,7 @@ export interface ConfigSectionValueMap {
   bot: Pick<BotConfig, "adminQq" | "adminName" | "replyDebounceMs" | "pokeOnNoReply" | "quoteGroupReplies" | "quoteGroupReplyExcludedUserIds" | "contextMessageLimit" | "emojiSendSize" | "emojiSendSeparately">;
   tone: BotToneSettings;
   memory: BotMemorySettings;
+  director: BotDirectorSettings;
   orchestrator: BotOrchestratorSettings;
   tools: BotToolSettingsDraft;
   bash: BotConfig["bash"];
@@ -278,7 +281,8 @@ export interface SunaTool {
   accessDescription?: string;
   executionBackend?: "native" | "docker";
   bashEnvironments?: {
-    docker: { started: boolean; reasonCode?: string };
+    native?: { available: boolean; reasonCode?: string };
+    docker?: { started: boolean; reasonCode?: string };
   };
   runtimeReasonCode?: string;
   defaultDescription?: string;
@@ -336,6 +340,9 @@ export interface ConversationRecord {
   selfId?: number;
   replyEnabled?: boolean;
   orchestratorEnabled?: boolean;
+  orchestratorResponseTimeOverrideEnabled?: boolean;
+  orchestratorResponseTimeMs?: number;
+  directorEventsEnabled?: boolean;
   disabledTools?: ToolName[];
   messageCount: number;
   lastAt: string;
@@ -482,8 +489,55 @@ export interface MemoryWritePayload {
   addressNames?: string[];
   addressName?: string;
 }
-export interface MemoryPayload { sources: MemorySource[]; entries: MemoryEntry[] }
+export interface MemoryDocument {
+  fileName: string;
+  content: string;
+  revision: string;
+}
+export interface MemoryPayload {
+  sources: MemorySource[];
+  entries: MemoryEntry[];
+  document?: MemoryDocument;
+}
 export interface MemoryRecallPayload { ok: boolean; query: string; matches: MemoryEntry[]; error?: string }
+export interface MemoryOperationLogEntry {
+  id: string;
+  at: string;
+  category: string;
+  action: string;
+  request?: {
+    source?: string;
+    operation?: string;
+    actor?: string;
+    recordIds?: string[];
+    batchId?: string;
+    conversationId?: string;
+    conversationScope?: string;
+  };
+  response?: {
+    outcome?: string;
+    beforeCount?: number;
+    afterCount?: number;
+    changedCount?: number;
+    beforeRevision?: string;
+    afterRevision?: string;
+    reasonCode?: string;
+  };
+  metadata?: {
+    agentId?: string;
+    stage?: string;
+    memorySource?: string;
+    batchId?: string;
+    conversationId?: string;
+  };
+}
+export interface MemoryOperationLogPayload {
+  logs: MemoryOperationLogEntry[];
+  page: number;
+  pageSize: number;
+  total: number;
+  pageCount: number;
+}
 
 export interface OneBotChatList {
   connected: boolean;

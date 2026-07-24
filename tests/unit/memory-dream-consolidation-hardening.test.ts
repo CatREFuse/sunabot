@@ -75,7 +75,7 @@ describe("Dream consolidation hardening", () => {
     });
   });
 
-  it("retains high-confidence canonical proposals that introduce unsupported facts", () => {
+  it("applies canonical proposals without inspecting names, QQ values, or factual support", () => {
     const longTermRecords = [
       memory("long_a", "我与猫老师（123456789）确认继续验收。", {
         eventKey: "event:release",
@@ -102,9 +102,19 @@ describe("Dream consolidation hardening", () => {
 
     const plan = buildDreamConsolidationPlan(baseInput(output, [], longTermRecords));
 
-    expect(plan.longTerm).toEqual(longTermRecords);
-    expect(plan.recallLineages).toEqual([]);
-    expect(plan.result).toMatchObject({ merged: 0, retained: 2 });
+    expect(plan.longTerm).toHaveLength(1);
+    expect(plan.longTerm[0]).toMatchObject({
+      id: "long_a",
+      fact: "我与陌生人（987654321）确认继续验收，并决定转账500元。",
+      userIds: ["123456789"],
+      addressNames: ["猫老师"],
+      consolidatedBy: "sunabot.dream"
+    });
+    expect(plan.recallLineages).toEqual([{
+      targetId: "long_a",
+      sourceIds: ["long_a", "long_b"]
+    }]);
+    expect(plan.result).toMatchObject({ merged: 1, retained: 0 });
   });
 
   it("merges a shared event with conflicting causal keys and removes the conflict", () => {

@@ -423,7 +423,7 @@ describe("tool configuration", () => {
     expect(config.bot.tools.overrides).toEqual({
       websearch: { enabled: false, description: "Search only when explicitly enabled." },
       codex: { description: "Delegate long work." },
-      workspace_bash: { description: "Run workspace commands." }
+      docker_bash: { description: "Run workspace commands." }
     });
     expect(config.bot.tools.codex.enabled).toBe(false);
   });

@@ -12,7 +12,7 @@ import type { SelfieRunner } from "../../../services/tools/selfieTool.js";
 import type { SystemConfigToolPort } from "../../../services/tools/systemConfigTool.js";
 import type { CronToolPort } from "../../../services/tools/cronTool.js";
 import type { CallDirectorToolPort } from "../../../services/tools/callDirectorTool.js";
-import type { ReadAirToolPort } from "../../../services/tools/public.js";
+import type { AddWorkMemoryToolPort, ReadAirToolPort } from "../../../services/tools/public.js";
 import type { PrepareOutboundConversationAssetInput } from "../../../services/delivery/public.js";
 import type { ProviderLogContext } from "../../../packages/contracts/model/modelGateway.js";
 import type { ImageGenerationFailureContext } from "../imageGenerationRetry.js";
@@ -26,12 +26,15 @@ export interface ProviderCompleteOptions {
   modelRequestAttemptTimeoutMs?: number;
   allowNoReply?: boolean;
   workbenchFiles?: ProviderWorkbenchFileOptions;
-  bash?: ProviderBashOptions;
+  bash?: {
+    native?: ProviderBashOptions;
+    docker?: ProviderBashOptions;
+  };
   bot?: BotConfig;
   generateImage?: GenerateImageRunner;
   onAssistantText?: (text: string, source?: ProviderAssistantTextSource) => void | Promise<void>;
   onToolCall?: (name: string) => void;
-  onImageGenerated?: (image: ImageResult) => void;
+  onImageGenerated?: (image: ImageResult, metadata?: GeneratedImageMetadata) => void;
   referenceImageUrls?: string[];
   imageReferences?: GenerateImgReferenceContext;
   memory?: ProviderMemoryOptions;
@@ -46,10 +49,17 @@ export interface ProviderCompleteOptions {
   cron?: CronToolPort;
   director?: CallDirectorToolPort;
   air?: ReadAirToolPort;
+  workingMemory?: AddWorkMemoryToolPort;
   skills?: SkillRuntimeToolPort;
   disabledTools?: readonly AgentToolName[];
   mcp?: ProviderMcpOptions;
   logContext?: ProviderLogContext;
+}
+
+export interface GeneratedImageMetadata {
+  prompt?: string;
+  size?: string;
+  resolution?: string;
 }
 
 export type ProviderAssistantTextSource = "text" | "assistant_text";

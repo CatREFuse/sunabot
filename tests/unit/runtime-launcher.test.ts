@@ -495,6 +495,44 @@ describe("unified runtime launcher", () => {
     }
   });
 
+  it.runIf(process.platform === "darwin")("keeps Homebrew Docker and Colima commands available after resolving Node", async () => {
+    const fixture = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-launcher-homebrew-path-"));
+    try {
+      const bin = path.join(fixture, "bin");
+      const launcher = path.join(fixture, "tooling/runtime/launcher.mjs");
+      const trace = path.join(fixture, "trace.log");
+      await fs.mkdir(path.dirname(launcher), { recursive: true });
+      await fs.mkdir(bin, { recursive: true });
+      await fs.copyFile(path.join(root, "sunabot.sh"), path.join(fixture, "sunabot.sh"));
+      await fs.chmod(path.join(fixture, "sunabot.sh"), 0o755);
+      await fs.writeFile(path.join(fixture, ".node-version"), `${process.versions.node}\n`);
+      await fs.writeFile(path.join(fixture, "package-lock.json"), "{}\n");
+      await fs.mkdir(path.join(fixture, "node_modules"));
+      await fs.writeFile(path.join(fixture, "node_modules/.package-lock.json"), "");
+      await fs.writeFile(launcher, "");
+      await fs.writeFile(path.join(bin, "node"), [
+        "#!/bin/sh",
+        "if [ \"${1:-}\" = \"-p\" ]; then",
+        `  printf '%s\\n' '${process.versions.node}'`,
+        "  exit 0",
+        "fi",
+        "printf '%s\\n' \"$PATH\" > \"$TRACE_FILE\""
+      ].join("\n"), { mode: 0o755 });
+
+      const result = spawnSync(path.join(fixture, "sunabot.sh"), ["restart"], {
+        cwd: path.parse(fixture).root,
+        encoding: "utf8",
+        env: { ...process.env, PATH: `${bin}:/usr/bin:/bin`, TRACE_FILE: trace }
+      });
+
+      expect(result.status, result.stderr).toBe(0);
+      const effectivePath = await fs.readFile(trace, "utf8");
+      expect(effectivePath.split(":")).toContain("/opt/homebrew/bin");
+    } finally {
+      await fs.rm(fixture, { recursive: true, force: true });
+    }
+  });
+
   it("defaults to up and selects the platform Core mode", () => {
     expect(parseLauncherArguments([], {}).command).toBe("up");
     expect(resolveCoreMode("auto", { platform: "darwin" })).toBe("native");

@@ -73,7 +73,7 @@ Provider 类型在创建时选择，创建后只显示类型摘要，不提供�
 
 ## Agent 工具
 
-Agent 工具页分为“工具目录”和“运行参数”两个 Tab。工具目录固定展示全部 Agent 工具；运行参数保留单轮调用上限、Tavily、Codex Worker 和图像默认值。`workspace_bash` 固定显示管理员 QQ Native、其他 QQ 会话 Docker，并分别显示 `[native bash]` 可用性与 `[docker bash]` 启动状态；命令执行页只编辑对抗审批模型与严格审批。`send_file` 展示配置状态，实时 OneBot 能力健康时不额外标记，异常时显示具体原因，不提供账号或目标参数；`send_voice_message` 当前固定显示运行环境异常，不能通过配置启用。会话适用范围使用锁图标和中性文案，不使用错误色。
+Agent 工具页分为“工具目录”和“运行参数”两个 Tab。工具目录固定展示全部 Agent 工具；运行参数保留单轮调用上限、Tavily、Codex Worker 和图像默认值。`native_bash` 与 `docker_bash` 分为两个工具：管理员 QQ 私聊和管理员 Web Chat 可使用两者，其他 QQ 会话只使用 Docker；目录分别显示 `[native bash]` 与 `[docker bash]` 状态，命令执行页只编辑对抗审批模型与严格审批。`send_file` 展示配置状态，实时 OneBot 能力健康时不额外标记，异常时显示具体原因，不提供账号或目标参数；`send_voice_message` 当前固定显示运行环境异常，不能通过配置启用。会话适用范围使用锁图标和中性文案，不使用错误色。
 
 | 区域 | 内容 | 交互 |
 | --- | --- | --- |

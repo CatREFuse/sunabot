@@ -12,6 +12,9 @@
 | `docs/todo.md` | TODO-driven 架构整理、性能治理、分离运行时交付任务、依赖与完成证据 | 规划迭代、选择任务、确认依赖或验收进度时读取 |
 | `docs/audits/2026-07-11-codebase-audit.md` | 历史基线、原始问题编号、风险和当时的优化顺序 | 对照旧问题来源或比较历史实现时读取 |
 | `docs/audits/2026-07-14-business-flow-audit.md` | 异步投递、媒体历史、首次运行、迁移门禁、账号调和与 readiness 的问题、修复结果和验收边界 | 修改 outbox、Provider 工具循环、首次接入、迁移或运行检查前读取 |
+| `docs/audits/2026-07-23-llm-token-cache-audit.md` | 全部 LLM/图像节点的请求级 Token、缓存率、Prefix 复算、失败盲区与分层改进方案 | 调整模型路由、提示词缓存、上下文预算、记忆/编排/Tone 流程或模型调用统计前读取 |
+| `docs/audits/2026-07-23-llm-token-cache-audit.html` | LLM Token 与 Prompt Cache 审计的自包含交互式 HTML 报告 | 浏览审计结论、图表、完整节点清单、改进优先级和验收路线图时读取 |
+| `docs/audits/2026-07-24-memory-system-topology-and-logs-audit.md` | 工作记忆、长期记忆、用户画像、召回、Dream、调度器与操作日志的运行证据和高问题节点 | 排查记忆不更新、积压、模型门禁、Dream 失败或记忆操作历史前读取 |
 | `docs/design/settings-information-architecture.md` | 管理台设置的信息层级、Provider 类型、字段归属与交互约束 | 调整设置页、Provider 配置或账号操作前读取 |
 | `docs/design/multi-agent-information-architecture.md` | 多 Agent、多 QQ、管理台导航、Agent 工作区与统计口径 | 新增 Agent、调整 Agent 切换、多 QQ 接入或按 Agent 隔离数据前读取 |
 | `docs/design/webfetch.md` | WebFetch 的公开工具契约、静态与动态网页抓取、相关内容筛选、出站安全和实施验收计划 | 新增或修改 WebFetch、动态渲染服务、网页正文抽取或联网工具安全边界前读取 |
@@ -83,7 +86,7 @@
 - 跨组件媒体默认使用 OneBot `base64://` 内联数据。业务代码、Core 与 NapCat 不能依赖共享绝对路径、相同挂载点或容器内文件路径；大文件能力必须新增明确、鉴权、可限流的传输契约。
 - 业务模块、SQLite schema、workspace 目录和消息语义必须同时兼容 macOS Native Core、WSL/Linux Native Core 与 Docker Core；从开发环境迁移到生产环境时不能修改业务代码或业务数据格式。
 - 平台差异只能放在 `apps/*` 组合根、`tooling/runtime/`、`deploy/` 或明确的平台 adapter 中，禁止在 services、领域模型和持久化模块中散布平台判断。
-- macOS Native Core 仅允许管理员 QQ 私聊在每条命令通过独立对抗审批后使用宿主 `/bin/bash`；管理员群聊、其他群聊与其他私聊固定使用 Docker Bash。Linux/WSL Native Core 与 Docker Core 的 bubblewrap 强隔离契约不得放宽。
+- macOS Native Core 仅允许管理员 QQ 私聊和已认证管理员 Web Chat 在每条命令通过独立对抗审批后使用宿主 `/bin/bash`；管理员群聊、其他群聊与其他私聊固定使用 Docker Bash，管理员 QQ 私聊和管理员 Web Chat 也可显式使用 Docker Bash。Linux/WSL Native Core 与 Docker Core 的 bubblewrap 强隔离契约不得放宽。
 - 新功能涉及文件、进程、路径、附件、图片、工具、OneBot 或部署时，必须验证 Native Core + NapCat Docker 与 Docker Core + NapCat Docker 的组件边界；至少运行 `npm run runtime:contract`、相关单元测试、`npm run check` 与 `npm run build`。
 - 平台专属依赖缺失时，启动器或 doctor 必须返回明确状态；不得静默切换运行模式，不得同时运行旧单容器和新分离运行时，也不得改变数据库、配置或 workspace 的跨平台格式。
 - 服务端拉取代码后若发现旧 `sunabot-qq-runtime` 容器或 `qq-runtime` Compose service，必须在首次执行 `./sunabot.sh up` 前完整执行 `docs/migrations/one-container-to-split-runtime.md`；不得删除旧容器、跳过离线双库备份或边运行边迁移。

@@ -78,7 +78,7 @@ describe("working memory semantic merge", () => {
     expect(complete).toHaveBeenCalledOnce();
   });
 
-  it("keeps nonempty memory when the model returns an unauthorized empty set", async () => {
+  it("accepts a valid empty set without a separate clear authorization gate", async () => {
     await appendMemoryFacts(config, "working", [{ fact: "必须保留的旧事实" }]);
     const runtime = runtimeWithProvider(config, vi.fn(async () => JSON.stringify({
       facts: [],
@@ -87,13 +87,11 @@ describe("working memory semantic merge", () => {
 
     const result = await runtime.consolidateWorkingMemory();
 
-    expect(result).toMatchObject({ ok: false, status: "empty_not_authorized" });
-    expect((await readMemorySourceEntries(config, "working")).map((entry) => entry.text)).toEqual([
-      "必须保留的旧事实"
-    ]);
+    expect(result).toMatchObject({ ok: true, beforeCount: 1, afterCount: 0 });
+    expect(await readMemorySourceEntries(config, "working")).toEqual([]);
   });
 
-  it("keeps the old snapshot when the Provider returns user self-narration as role memory", async () => {
+  it("accepts user self-narration without a host wording gate", async () => {
     await appendMemoryFacts(config, "working", [{ fact: "必须保留的旧事实" }]);
     const runtime = runtimeWithProvider(config, vi.fn(async () => JSON.stringify({
       facts: [{
@@ -106,10 +104,92 @@ describe("working memory semantic merge", () => {
 
     const result = await mergeConversation(runtime, "我喜欢摄影");
 
-    expect(result).toMatchObject({ ok: false, status: "empty_not_authorized" });
+    expect(result).toMatchObject({ ok: true, status: "applied" });
     expect((await readMemorySourceEntries(config, "working")).map((entry) => entry.text)).toEqual([
-      "必须保留的旧事实"
+      "我喜欢摄影。"
     ]);
+  });
+
+  it("accepts every nonempty returned fact without semantic validation", async () => {
+    await appendMemoryFacts(config, "working", [{ fact: "必须保留的旧事实" }]);
+    const workingMemoryPath = path.join(config.persona.agentWorkspace, "WORKING_MEMORY.md");
+    const originalDocument = await fs.readFile(workingMemoryPath, "utf8");
+    const [related] = await appendMemoryFacts(config, "long_term", [{
+      fact: "海边用户正在推进工作，也喜欢摄影。"
+    }]);
+    const runtime = runtimeWithProvider(config, vi.fn(async () => JSON.stringify({
+      facts: [{
+        fact: "我知道海边用户（QQ 10001）正在推进工作，这让我很在意。",
+        userIds: ["10001"],
+        userName: "海边用户"
+      }, {
+        fact: "我喜欢摄影。",
+        userIds: ["10001"],
+        userName: "海边用户"
+      }],
+      allPreviousMemoriesInvalidated: false
+    })));
+
+    const result = await mergeConversation(runtime, "继续推进，我也喜欢摄影");
+
+    expect(result).toMatchObject({ ok: true, status: "applied" });
+    expect((await readMemorySourceEntries(config, "working")).map((entry) => entry.text)).toEqual([
+      "我知道海边用户（QQ 10001）正在推进工作，这让我很在意。",
+      "我喜欢摄影。"
+    ]);
+    expect(await fs.readFile(workingMemoryPath, "utf8")).not.toBe(originalDocument);
+    expect(applicationDataStore(config).listRecallStats([related!.id])[0]?.recallCount ?? 0).toBe(0);
+  });
+
+  it("continues the batch when profile wording would previously have failed semantic validation", async () => {
+    await appendMemoryFacts(config, "working", [{ fact: "必须保留的旧事实" }]);
+    const runtime = runtimeWithProvider(config, vi.fn(async () => "unused"));
+    vi.spyOn(runtime, "compressUserProfiles").mockResolvedValue([{
+      fact: "我知道海边用户（QQ 10001）喜欢测试。",
+      userIds: ["10001"],
+      userName: "海边用户"
+    }, {
+      fact: "我喜欢摄影。",
+      userIds: ["10001"],
+      userName: "海边用户"
+    }]);
+    const workingMerge = vi.spyOn(runtime, "requestWorkingMemoryMerge").mockResolvedValue({
+      facts: [{ fact: "工作记忆正文" }],
+      allPreviousMemoriesInvalidated: false
+    });
+
+    const result = await runtime.processMemoryClaim({
+      conversation: {
+        id: "group:30003",
+        scope: "user_group",
+        title: "测试群",
+        userId: 10001,
+        groupId: 30003
+      },
+      batchId: "profile-gate-batch",
+      messageIds: ["message-1"],
+      messages: [{
+        id: "message-1",
+        sequence: 1,
+        role: "user",
+        text: "我喜欢摄影",
+        at: "2026-07-10T00:00:00.000Z",
+        userId: 10001,
+        senderName: "海边用户",
+        imageCount: 0,
+        quoteCount: 0
+      }],
+      attemptMessageCount: 1
+    });
+
+    expect(result).toBe(true);
+    expect(workingMerge).toHaveBeenCalledOnce();
+    expect((await readMemorySourceEntries(config, "working")).map((entry) => entry.text)).toEqual([
+      "工作记忆正文"
+    ]);
+    expect(await readMemorySourceEntries(config, "long_term")).toEqual([]);
+    expect((await readMemorySourceEntries(config, "user_profile"))[0]?.text).toContain("我知道海边用户（QQ 10001）喜欢测试。");
+    expect((await readMemorySourceEntries(config, "user_profile"))[0]?.text).toContain("我喜欢摄影。");
   });
 
   it("accepts an explicit signal when every previous fact is invalidated", async () => {
@@ -125,7 +205,7 @@ describe("working memory semantic merge", () => {
     expect(await readMemorySourceEntries(config, "working")).toEqual([]);
   });
 
-  it("rejects a clear signal combined with nonempty facts", async () => {
+  it("does not use the legacy clear signal as a write gate", async () => {
     await appendMemoryFacts(config, "working", [{ fact: "原事实" }]);
     const runtime = runtimeWithProvider(config, vi.fn(async () => JSON.stringify({
       facts: [{ fact: "仍然存在的事实" }],
@@ -134,8 +214,24 @@ describe("working memory semantic merge", () => {
 
     const result = await runtime.consolidateWorkingMemory();
 
-    expect(result).toMatchObject({ ok: false, status: "model_invalid" });
-    expect((await readMemorySourceEntries(config, "working")).map((entry) => entry.text)).toEqual(["原事实"]);
+    expect(result).toMatchObject({ ok: true, beforeCount: 1, afterCount: 1 });
+    expect((await readMemorySourceEntries(config, "working")).map((entry) => entry.text)).toEqual(["仍然存在的事实"]);
+  });
+
+  it("keeps valid facts when the same model array contains empty items", async () => {
+    await appendMemoryFacts(config, "working", [{ fact: "原事实" }]);
+    const runtime = runtimeWithProvider(config, vi.fn(async () => JSON.stringify({
+      facts: [
+        { fact: "" },
+        { fact: "有效事实" }
+      ],
+      allPreviousMemoriesInvalidated: false
+    })));
+
+    const result = await runtime.consolidateWorkingMemory();
+
+    expect(result).toMatchObject({ ok: true, beforeCount: 1, afterCount: 1 });
+    expect((await readMemorySourceEntries(config, "working")).map((entry) => entry.text)).toEqual(["有效事实"]);
   });
 
   it("retries once with the latest complete snapshot after a concurrent write", async () => {
@@ -167,18 +263,18 @@ describe("working memory semantic merge", () => {
     expect(complete).toHaveBeenCalledTimes(2);
   });
 
-  it("deduplicates long-term recall across one scheduler batch and snapshot retry", async () => {
+  it("does not include or mutate long-term memory while retrying a working-memory snapshot", async () => {
     const [related] = await appendMemoryFacts(config, "long_term", [{
-      fact: "测试群的长期记忆会参与工作记忆整理"
+      fact: "测试群的长期记忆保持独立"
     }]);
     await appendMemoryFacts(config, "working", [{ fact: "原事实" }]);
     let providerCalls = 0;
     const complete = vi.fn(async (_systemPrompt: string, messages: Array<{ content: string }>) => {
       const payload = parsePromptPayload(messages[0]!.content) as {
         previousWorkingMemories: Array<{ id: string; fact: string }>;
-        relatedLongTermMemories: Array<{ id: string }>;
+        relatedLongTermMemories?: Array<{ id: string }>;
       };
-      expect(payload.relatedLongTermMemories).toContainEqual(expect.objectContaining({ id: related!.id }));
+      expect(payload.relatedLongTermMemories).toBeUndefined();
       providerCalls += 1;
       if (providerCalls === 1) {
         await appendMemoryFacts(config, "working", [{ fact: "并发写入事实" }]);
@@ -206,37 +302,9 @@ describe("working memory semantic merge", () => {
       metadata: { ...context.metadata }
     })).resolves.toMatchObject({ ok: true, attempts: 1 });
 
-    expect(applicationDataStore(config).listRecallStats([related!.id])[0]).toMatchObject({
-      recallCount: 1
-    });
-  });
-
-  it("counts long-term recall once for each manual consolidation operation", async () => {
-    const [related] = await appendMemoryFacts(config, "long_term", [{
-      fact: "工作记忆整理会参考这条长期记忆"
-    }]);
-    await appendMemoryFacts(config, "working", [{ fact: "需要整理的事实" }]);
-    const runtime = runtimeWithProvider(config, vi.fn(async (
-      _systemPrompt: string,
-      messages: Array<{ content: string }>
-    ) => {
-      const payload = parsePromptPayload(messages[0]!.content) as {
-        previousWorkingMemories: Array<{ id: string; fact: string }>;
-        relatedLongTermMemories: Array<{ id: string }>;
-      };
-      expect(payload.relatedLongTermMemories).toContainEqual(expect.objectContaining({ id: related!.id }));
-      return JSON.stringify({
-        facts: payload.previousWorkingMemories.map((entry) => ({ id: entry.id, fact: entry.fact })),
-        allPreviousMemoriesInvalidated: false
-      });
-    }));
-
-    await expect(runtime.consolidateWorkingMemory()).resolves.toMatchObject({ ok: true });
-    await expect(runtime.consolidateWorkingMemory()).resolves.toMatchObject({ ok: true });
-
-    expect(applicationDataStore(config).listRecallStats([related!.id])[0]).toMatchObject({
-      recallCount: 2
-    });
+    expect(applicationDataStore(config).listRecallStats([related!.id])[0]?.recallCount ?? 0).toBe(0);
+    expect((await readMemorySourceEntries(config, "long_term")).map((entry) => entry.text))
+      .toEqual(["测试群的长期记忆保持独立"]);
   });
 });
 

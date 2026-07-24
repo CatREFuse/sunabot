@@ -145,6 +145,26 @@ export class ModelCallStore {
     };
   }
 
+  readRequestLogCategoryPage(options: { category: string; page: number; pageSize: number }) {
+    const offset = (options.page - 1) * options.pageSize;
+    const rows = this.database.prepare(`
+      SELECT data_json FROM request_logs
+      WHERE category = ?
+      ORDER BY at DESC, row_id DESC LIMIT ? OFFSET ?
+    `).all(options.category, options.pageSize, offset);
+    const countRow = this.database.prepare(`
+      SELECT COUNT(*) AS count FROM request_logs WHERE category = ?
+    `).get(options.category) as SqlRow;
+    const total = Number(countRow.count ?? 0);
+    return {
+      logs: rows.map((row) => JSON.parse(String((row as SqlRow).data_json))),
+      page: options.page,
+      pageSize: options.pageSize,
+      total,
+      pageCount: Math.max(1, Math.ceil(total / options.pageSize))
+    };
+  }
+
   readTokenUsageRecords(since: string) {
     return this.database.prepare(`
       SELECT data_json FROM request_logs

@@ -5,6 +5,7 @@ import {
   AGENT_TOOL_NAMES,
   AppConfig,
   BotConfig,
+  BotDirectorSettings,
   BotMemorySettings,
   BotOrchestratorSettings,
   BotToneSettings,
@@ -131,6 +132,9 @@ export function defaultConfig(): AppConfig {
         temperature: 0.7,
         maxOutputTokens: 2400,
         maxRetries: 2
+      },
+      director: {
+        enabled: false
       },
       memory: {
         memoryModel: "gpt-5.4-mini",
@@ -444,6 +448,7 @@ function mergeBotConfig(base: BotConfig, incoming: Partial<BotConfig> | undefine
       : base.emojiSendSize,
     emojiSendSeparately: incoming?.emojiSendSeparately === true,
     tone: mergeBotToneSettings(base.tone, incoming?.tone as Partial<BotToneSettings> | undefined),
+    director: mergeBotDirectorSettings(base.director, incoming?.director as Partial<BotDirectorSettings> | undefined),
     memory: mergeBotMemorySettings(base.memory, incoming?.memory as Partial<BotMemorySettings> | undefined),
     orchestrator: mergeBotOrchestratorSettings(base.orchestrator, incoming?.orchestrator as Partial<BotOrchestratorSettings> | undefined),
     tools: mergeBotToolSettings(base.tools, incoming?.tools as Partial<BotToolSettings> | undefined),
@@ -458,6 +463,13 @@ function mergeBotConfig(base: BotConfig, incoming: Partial<BotConfig> | undefine
       blockedKeywords: ensureStringList(bash?.blockedKeywords, base.bash.blockedKeywords)
     }
   };
+}
+
+function mergeBotDirectorSettings(
+  base: BotDirectorSettings,
+  incoming: Partial<BotDirectorSettings> | undefined
+): BotDirectorSettings {
+  return { enabled: incoming?.enabled ?? base.enabled };
 }
 
 function mergeBotToneSettings(
@@ -577,12 +589,19 @@ function mergeBotToolOverrides(
     const candidate = incoming?.[name];
     const normalized = normalizeBotToolOverride(candidate, fallback);
     if (!normalized) continue;
-    if (name === "workspace_bash" || name === "codex") {
+    if (name === "native_bash" || name === "docker_bash" || name === "codex") {
       const { enabled: _legacyEnabled, ...descriptionOnly } = normalized;
       if (descriptionOnly.description) merged[name] = descriptionOnly;
       continue;
     }
     merged[name] = normalized;
+  }
+  const legacyBash = normalizeBotToolOverride(
+    (incoming as Record<string, BotToolOverride | undefined> | undefined)?.workspace_bash,
+    (base as Record<string, BotToolOverride | undefined> | undefined)?.workspace_bash
+  );
+  if (legacyBash?.description && !merged.docker_bash?.description) {
+    merged.docker_bash = { description: legacyBash.description };
   }
   return merged;
 }

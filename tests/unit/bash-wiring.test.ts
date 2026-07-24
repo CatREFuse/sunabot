@@ -79,6 +79,7 @@ describe("workspace Bash runtime wiring", () => {
       strictMode: true,
       confirmedApprovalId: "bash-1234567890abcdef12345678",
       approvalContext: {
+        backend: "docker",
         agentId: "plana",
         accountId: "secondary",
         transport: "onebot",
@@ -110,6 +111,54 @@ describe("workspace Bash runtime wiring", () => {
     harness.close();
   });
 
+  it("binds native_bash only for an administrator private conversation", async () => {
+    const harness = createRuntimeHarness();
+    const admin = adminPrivateIncoming(harness.config);
+
+    await expect(harness.runtime.resolveProviderBashHandle(admin, undefined, "native")).resolves.toMatchObject({
+      backend: "native",
+      accessMode: "admin",
+      approvalContext: { backend: "native", transport: "onebot", userId: "171419991" }
+    });
+    await expect(harness.runtime.resolveProviderBashHandle(
+      adminPrivateIncoming(harness.config, { userId: 20002, senderId: "20002" }),
+      undefined,
+      "native"
+    )).resolves.toBeUndefined();
+    await expect(harness.runtime.resolveProviderBashHandle(
+      adminGroupIncoming(harness.config),
+      undefined,
+      "native"
+    )).resolves.toBeUndefined();
+    harness.close();
+  });
+
+  it("gives authenticated administrator Web Chat both Native and Docker Bash handles", async () => {
+    const harness = createRuntimeHarness();
+    const incoming = adminPrivateIncoming(harness.config, {
+      transport: "web",
+      accountId: undefined,
+      selfId: undefined,
+      agentId: undefined
+    });
+
+    const [native, docker] = await Promise.all([
+      harness.runtime.resolveProviderBashHandle(incoming, undefined, "native"),
+      harness.runtime.resolveProviderBashHandle(incoming, undefined, "docker")
+    ]);
+    expect(native).toMatchObject({
+      backend: "native",
+      accessMode: "admin",
+      approvalContext: { backend: "native", accountId: "web-admin", transport: "web", conversationId: "web:admin" }
+    });
+    expect(docker).toMatchObject({
+      backend: "docker",
+      accessMode: "isolated",
+      approvalContext: { backend: "docker", accountId: "web-admin", transport: "web", conversationId: "web:admin" }
+    });
+    harness.close();
+  });
+
   it.each([
     ["private", adminPrivateIncoming] as const,
     ["group", adminGroupIncoming] as const
@@ -124,6 +173,7 @@ describe("workspace Bash runtime wiring", () => {
       accessMode: "isolated",
       strictMode: true,
       approvalContext: {
+        backend: "docker",
         agentId: "plana",
         accountId: "primary",
         transport: "onebot",
@@ -189,15 +239,15 @@ describe("workspace Bash runtime wiring", () => {
     expect(harness.capabilityProbe).not.toHaveBeenCalled();
 
     const executor = new RegistryProviderToolExecutor();
-    const staleDefinitions = [{ type: "function", name: "workspace_bash", parameters: {}, strict: true }];
+    const staleDefinitions = [{ type: "function", name: "docker_bash", parameters: {}, strict: true }];
     const [output] = await executor.execute(
       [bashCall({ command: "pwd", timeoutMs: null })],
-      { bash } as ProviderCompleteOptions,
+      { bash: { ...(bash ? { docker: bash } : {}) } } as ProviderCompleteOptions,
       staleDefinitions
     );
     expect(JSON.parse(String(output?.output))).toEqual({
       ok: false,
-      error: "Tool workspace_bash is unavailable."
+      error: "Tool docker_bash is unavailable."
     });
     expect(runWorkspaceBashMock).not.toHaveBeenCalled();
     harness.close();
@@ -447,7 +497,7 @@ describe("workspace Bash runtime wiring", () => {
       undefined
     );
     const executor = new RegistryProviderToolExecutor();
-    const options = { bash: handle } satisfies ProviderCompleteOptions;
+    const options = { bash: { ...(handle ? { docker: handle } : {}) } } satisfies ProviderCompleteOptions;
     const definitions = executor.resolveDefinitions(options);
     vi.mocked(harness.auditPort.run).mockClear();
 
@@ -575,6 +625,7 @@ describe("workspace Bash runtime wiring", () => {
     const command = `cat ${outsideFile}`;
     const store = new BashApprovalStore(() => 1_000, 60_000);
     const approvalContext = {
+      backend: "native" as const,
       agentId: "plana",
       accountId: "primary",
       transport: "onebot",
@@ -728,7 +779,6 @@ const negativeCases: Array<{
   { name: "a message without selfId", incomingFor: (config) => adminPrivateIncoming(config, { selfId: undefined }) },
   { name: "a message without sender", incomingFor: (config) => adminPrivateIncoming(config, { sender: undefined }) },
   { name: "an invalid QQ sender", incomingFor: (config) => adminPrivateIncoming(config, { userId: 1, senderId: "1" }) },
-  { name: "Web Chat", incomingFor: (config) => adminPrivateIncoming(config, { transport: "web" }) },
   { name: "a message without account", incomingFor: (config) => adminPrivateIncoming(config, { accountId: undefined }) },
   { name: "a mismatched Agent", incomingFor: (config) => adminPrivateIncoming(config, { agentId: "other-agent" }) }
 ];
@@ -736,7 +786,7 @@ const negativeCases: Array<{
 function bashCall(args: Record<string, unknown>) {
   return {
     type: "function_call" as const,
-    name: "workspace_bash",
+    name: "docker_bash",
     call_id: "call-bash",
     arguments: JSON.stringify(args)
   };

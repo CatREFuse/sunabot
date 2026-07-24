@@ -27,10 +27,10 @@ Agent 配置文件夹是跨终端传输角色配置的唯一推荐和支持模�
 | `agent_accounts`              | QQ 接入账号、所属 Agent、QQ 号、启用状态与独立 WebUI 端口                                               |
 | `conversations`               | 会话及其消息数组，每个会话一行                                                                          |
 | `conversation_thread_states`  | 群聊 Thread 增量状态、处理游标、模型和提示词 revision，每个会话至多一行                                 |
-| `memory_records`              | 工作记忆、长期记忆和用户画像                                                                            |
+| `memory_records`              | 长期记忆、用户画像，以及只读保留的历史工作记忆                                                        |
 | `memory_batches`              | 已提交记忆批次及幂等结果                                                                                |
 | `memory_scheduler`            | 各会话的记忆待处理队列与重试状态                                                                        |
-| `request_logs`                | 脱敏后的模型、工具和运行日志；保留实际模型请求体、Provider 返回 payload、原始 usage 与统一 `tokenUsage` |
+| `request_logs`                | 脱敏后的模型、工具、运行与 `memory.operation` 记忆操作日志；保留实际模型请求体、Provider 返回 payload、原始 usage 与统一 `tokenUsage` |
 | `model_call_aggregates`       | 当前 Agent 按会话与行为聚合的模型调用总量                                                               |
 | `model_call_model_aggregates` | 当前 Agent 按会话、模型、行为和记忆类型聚合的调用总量                                                   |
 | `image_history`               | 生成图片历史元数据                                                                                      |
@@ -41,7 +41,9 @@ Agent 配置文件夹是跨终端传输角色配置的唯一推荐和支持模�
 
 当前业务主库 schema 版本是 17；schema 10→11 前向创建 STRICT `emojis` 表和 `emojis_updated_at` 索引，schema 11→12 前向创建 `emoji_versions` 并从现有 `emojis` 回填版本记录，schema 12→13 前向创建 STRICT `scheduled_tasks`、`scheduled_task_runs` 及 `scheduled_tasks_due`、`scheduled_task_runs_status`、`scheduled_task_runs_task` 三个索引，schema 15→16 为既有 `scheduled_tasks` 前向补充默认关闭的 `permanent_retention` 并创建 `scheduled_tasks_archive` 索引，schema 16→17 创建 STRICT `memory_source_revisions` 与三项记忆 revision trigger，并为 `scheduled_task_runs` 补充投递尝试、最后错误和下次投递时间；所有迁移均不删除已有业务数据。`conversation_thread_states` 使用 STRICT 表和 `conversations.id` 外键，删除会话时级联删除 Thread 状态；`state_schema_version` 当前为 1。写入以 revision CAS、单调 `processed_through_sequence` 和 `last_run_key` 幂等约束防止旧快照覆盖新状态，读取和写入都执行完整领域结构校验。message assignment、Thread message ID 和已无保留消息的非活动 Thread 随 `conversations` 的消息保留边界清理，单 Thread participant uid 最多保留 256 个；原始会话消息不由 Thread 节点删除。模型输出、提示词和运行时错误不能回退游标或破坏已提交状态；Thread 状态仍属于业务库恢复范围，不新增 JSON/JSONL 增长型持久化。异步 Thread 快照读取时复核字符串长度、稳定 Thread ID、active/primary/related 引用、唯一性、sequence 和提示词容量边界；损坏或旧格式快照降级为空 sidecar。恢复门禁只允许当前规范明确支持的旧 schema 作为迁移输入，并分别复核真实版本；当前 schema 缺任一必需表、索引、记忆 revision trigger 或投递列都判定为不完整。
 
-记忆批处理开始时必须在一个 SQLite 读事务中同时读取工作记忆、长期记忆、用户画像和三项 source revision。提交阶段在 `BEGIN IMMEDIATE` 内逐项比较全部 baseline revision，再应用批次与幂等记录；任一来源被另一连接插入、更新或删除时整批返回冲突，不能只检查工作记忆快照而覆盖长期记忆或用户画像的新写入。
+当前工作记忆位于每个 Agent workspace 根目录的 `WORKING_MEMORY.md`，不要求 Git 跟踪。文件以 SHA-256 revision、64 KiB 上限、普通文件与符号链接拒绝、同目录 0600 临时文件和原子 rename 提交；模型、工具、管理 API 与 Dream 共用该门禁。长期记忆与用户画像继续使用 SQLite source revision。实时记忆批处理在任何写入前完成整批模型输出校验，再分别复核工作记忆文件 revision 与用户画像 SQLite revision；工作记忆文件和用户画像事务各自原子提交，当前不声称跨 Markdown 与 SQLite 的单一原子事务。长期记忆不参与实时工作记忆批处理。Dream 捕获并持久化 Markdown revision，写回时先做文件 CAS，再提交不含历史 SQLite 工作记忆的长期记忆事务；已观察到的事务失败会按 Dream 新 revision 精确回滚文件，进程在两步之间强制终止不具备跨介质原子回滚。
+
+记忆操作审计复用当前 Agent 的 `request_logs`，不新增表或 JSON/JSONL。`memory.operation` 记录来源、操作、执行者、结果、稳定原因码、宿主时间、可用的 batch/conversation/record 标识、数量与 revision；正文、模型原始返回和宿主绝对路径禁止进入该事件。读取沿用现有请求日志分页与搜索，写入必须由当前 Agent 配置选择业务库，不能跨 Agent 汇总落盘。
 
 Dream 抽样窗口与两个时间桶上限属于现有 Agent JSON 配置的 `bot.memory` 字段，不推进 SQLite schema。缺少三项字段的旧配置分别补为 48、12、12；超范围或合计不在 1—24 的手工配置回退到安全默认组合。新建 Dream 运行把入选批次写入既有 `dream_runs.input_json`，后续重试不受配置再次修改影响。
 
@@ -49,7 +51,7 @@ Dream 抽样窗口与两个时间桶上限属于现有 Agent JSON 配置的 `bot
 
 `scheduled_tasks` 的管理写入使用 revision CAS；创建、更新和重新启用时计算 `next_run_at`，调度器推进下一次时间不增加管理 revision。管理台分类和分页直接在 SQLite 查询：cron 始终属于“循环”；once 在仍可能触发时属于“定时”，在 `next_run_at` 为空且存在 `completed|failed` 运行后属于“归档”。归档定义以最近一次终结运行的 `completed_at` 起算保留三天；调度器把清理时刻纳入 `nextWakeAt`，到期删除 `permanent_retention=0` 的任务定义，保留不可变运行记录，重新安排过的 once 从最新终结时间重新起算。永久保留更新与普通编辑共用 revision CAS。`scheduled_task_runs` 以 `UNIQUE(task_id, scheduled_for)` 保证同一 occurrence 只建立一条运行记录，并保存触发时的任务 revision、上下文、计划和全部目标快照。到期 claim 在一个 `BEGIN IMMEDIATE` 事务内插入 `pending` run 并推进任务：延迟启动的 cron 只补一次最早到期 occurrence，再把下一次时间推进到当前时刻之后；once 触发后把下一次时间置空。运行状态按 `pending → running → generated → completed|failed` 推进并使用可续租 lease；渲染后的 callback input 先持久化为 `generated`，进程在分发途中退出后只重放入队，不重复渲染。投递异常持久化 `delivery_attempts`、`last_delivery_error` 和带抖动退避的 `next_delivery_at`，第三次失败终止；人工重新投递只接受 `failed` run，并在事务中清理错误、写入可立即过期接管的恢复 lease，使调度器复用同一 callback input。每个目标随后写入所属会话的 Session 事件，目标会话内的正常 Agent turn 再产生 durable outbox；当前 Agent 队列边界与 envelope 固化账号、完整会话、运行 ID、callback input 和结构化 `mentionUserIds`，以 run ID 在每个会话内幂等。任务定义与运行记录属于当前 Agent 业务库，会话事件和 outbox 属于当前 Agent 队列库；这些增长型数据禁止使用 JSON/JSONL 管理。
 
-日常导演创建的定时任务保留 `director-` 确定性 ID 前缀；管理台与 API 直接由该前缀派生“导演任务”分类，不新增分类列或推进 schema 版本。导演分类是附加视图，任务仍按 cron/once 规则同时归入循环、定时或归档生命周期。
+日常导演创建的定时任务保留 `director-` 确定性 ID 前缀；管理台与 API 直接由该前缀派生内部 `director` 分类，不新增分类列或推进 schema 版本。普通定时任务的 `all|recurring|scheduled|archived` 查询固定排除该前缀，导演页面单独读取 `director` 分类；归档保留与自动清理仍沿用相同 SQLite 生命周期。
 
 会话工具选择随 `ConversationRecord` 写入 `conversations.data_json` 的可选 `disabledTools` 字段，不新增表或 schema 版本。写入只保留去重后的内置 Agent 工具名，空列表省略；读取旧记录时缺失字段规范化为空列表。QQ 与 Web Chat 会话分别使用完整会话 ID 隔离，Agent 切换继续由独立业务库隔离。
 
@@ -78,7 +80,8 @@ Plana 的 `workspace/business/data/session-queue.sqlite` 与其他 Agent 的 `wo
 - `workspace/business/migrations/multi-agent-v1.json`：首次安装或单 Agent 迁移完成标记，保存完整性摘要和迁移证据摘要；
 - `workspace/business/migrations/memory-perspective-v1-*`：本机记忆重整的导出、内容提案、绑定计划、stale 证据、durable intent 和完成/回滚报告，包含真实记忆时不得进入 Git；未完成 intent 存在、损坏或状态不明时 Core 启动失败关闭；
 - `workspace/business/prompts/`：所有 Agent 默认使用的公共系统提示词；
-- `workspace/business/agents/<agentId>/agent.json`：Agent 名称、启用状态、系统提示词覆盖开关、Bot 行为、工具覆盖、Bash 对抗审批设置与 OneBot 行为配置；旧 `adminPrivateBackend`、`adminOnly`、`allowGroup` 仅保留配置兼容，加载时统一归一化为 Docker 隔离路由；
+- `workspace/business/prompts/.sunabot-prompt-migrations.json` 与 Agent override 对应文件：保存提示词迁移版本、输入和输出摘要及完成状态；`memory-perspective-v6` 无法按结构和已知内容指纹识别管理员模板时记录无改写完成状态，原提示词字节保持不变且 Core 继续启动；
+- `workspace/business/agents/<agentId>/agent.json`：Agent 名称、启用状态、系统提示词覆盖开关、Bot 行为、工具覆盖、Bash 对抗审批设置与 OneBot 行为配置；旧 `adminPrivateBackend`、`adminOnly`、`allowGroup` 仅保留配置兼容，不能改变 `native_bash` 与 `docker_bash` 的固定会话权限；
 - `workspace/business/agents/<agentId>/extensions/skills/`：schemaVersion 1 Skill 索引、已验证 Skill 包、事务日志、隔离目录与墓碑；
 - `workspace/business/agents/<agentId>/extensions/mcp/servers.json`：schemaVersion 1 MCP 描述符索引，只保存受限命令、可审计参数和 `envKeys` 引用，不保存环境变量值；
 - `workspace/business/agents/<agentId>/`：Agent 人格、`selfie_prompt_rewrite.json`、可选 `system-prompts/` 覆盖、自拍参考图、私有数据和人工维护文件；
@@ -91,9 +94,9 @@ Plana 的 `workspace/business/data/session-queue.sqlite` 与其他 Agent 的 `wo
 - `workspace/business/agents/<agentId>/docker-workbench/`：当前 Agent 的隔离 Bash 独立可写持久目录，不与文件工具共享；
 - `workspace/business/agents/<agentId>/extensions/skills/` 与 `extensions/mcp/`：隔离 Bash 唯一可见的共享配置目录，固定以只读 bind 映射为 `/skills` 与 `/mcp/`，容器命令不能修改源目录；
 - `workspace/business/agents/<agentId>/workbench/.voice-cache/`：当前 Agent 的可重建合成 WAV 缓存，文件名固定为 `voice-<sha256>.wav`、单文件最多 32 MiB；只有经过在线响应大小、WAV 结构与摘要校验的字节可以发布，随后仍须通过 `conversation_asset` 文件身份和摘要门禁进入 durable outbox。该缓存不进入 SQLite 或 Git，删除后只影响尚未读取该文件的待发送语音，不能作为长期历史或音色资料来源；
-- Bash backend 不再是可修改偏好；单调配置 epoch、审批结果、独立 Provider 实例、abort signal、审批票据与 capability 快照不持久化。全部 QQ 会话的每条命令均先交给同一独立对抗审批合同并固定进入 Docker 强隔离，Docker 不能申请 workbench 外部路径、宿主 Bash 或 Docker socket；缺字段、过期、重放或绑定不一致均拒绝；
+- Bash backend 不再是可修改偏好；单调配置 epoch、审批结果、独立 Provider 实例、abort signal、审批票据与 capability 快照不持久化。管理员 QQ 私聊与已认证管理员 Web Chat 可取得 Native 和 Docker 两个独立工具，其他 QQ 会话只取得 Docker；每条命令先交给同一独立对抗审批合同，票据额外绑定 backend。Docker 不能申请 workbench 外部路径、宿主 Bash 或 Docker socket；缺字段、过期、重放或绑定不一致均拒绝；
 - macOS Native Docker Bash 的容器身份只写入 Docker labels，不新增业务持久化：稳定部署字段使用 `io.sunabot.runtime-id`、`io.sunabot.workspace-id` 与 `io.sunabot.component=workspace-bash`，单次 Core 和调用字段使用随机 `io.sunabot.owner-id`、`io.sunabot.invocation-id` 与整数 `io.sunabot.expires-at-ms`。在线删除必须同时核对 owner 与 invocation；跨进程过期回收还必须核对稳定部署字段、过期时间和固定容器名，不能依据名称、路径 hash 或单个标签删除容器；
-- Provider 可执行 Bash options 只能由当前真实 OneBot 入站即时构造，必须在同一不可变配置快照中包含 epoch、固定 backend、对应独立 workbench、access mode、strict mode、独立 audit runner、`isCurrent` 和完整审批上下文。`isCurrent` 必须贯穿 Bash runner，并在所有文件身份 await、审批 issue/consume、隔离 probe 和最终 spawn 边界复验；旧 handle 以 `BASH_CONFIGURATION_STALE` 失败关闭且不得产生审批、探针或执行副作用。API catalog 的双环境 capability、模型返回参数和持久配置都不能单独升格为执行权限；
+- Provider 可执行 Bash options 只能由当前真实 OneBot 入站或已认证管理员 Web Chat 即时构造，必须在同一不可变配置快照中包含 epoch、固定 backend、对应独立 workbench、access mode、strict mode、独立 audit runner、`isCurrent` 和完整审批上下文。`isCurrent` 必须贯穿 Bash runner，并在所有文件身份 await、审批 issue/consume、隔离 probe 和最终 spawn 边界复验；旧 handle 以 `BASH_CONFIGURATION_STALE` 失败关闭且不得产生审批、探针或执行副作用。API catalog 的双环境 capability、模型返回参数和持久配置都不能单独升格为执行权限；
 - `workspace/business/media/`：需要随业务恢复的图片和持久附件；其中 `media/images/emoji-<sha256>.png` 保存 Plana 表情，`media/images/agents/<agentId>/emoji-<sha256>.png` 保存其他 Agent 表情。文件只按对应业务库 `emojis` 行进入图库，必须与记录中的 SHA、字节数和尺寸一致；SQLite 恢复点只保护表情元数据，完整业务恢复、跨机迁移或远程搬迁必须另行把记录与文件作为同一 Agent 的成对资产核对，缺少任一侧时该项不能进入可用图库；
 - `workspace/runtime/napcat/accounts/<accountId>/`：单个 QQ 的 NapCat Docker 配置、登录态、二维码、`account.env` 和运行标记；该目录只挂载给对应 NapCat 容器，不作为 Core 的媒体共享目录；
 - `workspace/runtime/napcat/accounts/<accountId>/manual-login-required`：用户从管理台退出该 QQ 后的临时标记；对应 NapCat 重启时据此跳过快速登录，扫码成功后自动删除；
@@ -146,13 +149,19 @@ Agent 根目录及 `extensions`、`skills`、`mcp` 控制目录必须是当前�
 
 业务 schema v14 引入 `director_daily_schedules`、`director_daily_schedule_revisions` 与 `director_schedule_task_links` 三个 STRICT 表。current 表以 `schedule_date` 为主键保存当天最新 revision、IANA 时区、种子 SHA-256、完整行程 JSON 和生成/更新时间；revision 表以日期与 revision 为复合主键，追加保存来源、角色请求、种子摘要、完整快照和创建时间；task link 以定时任务 ID 为主键关联日期、revision、item、runAt 与创建时间。行程与 revision 属于增长型业务数据，必须留在每个 Agent 的 `sunabot.sqlite`，不得写入 JSON/JSONL。
 
+导演总开关保存为每个 Agent manifest 的 `bot.director.enabled`，缺失时默认关闭；它不是增长型业务数据，不进入 SQLite。关闭只移除尚未触发的任务与 link，不删除每日决策、revision、已终结任务或运行历史。
+
+会话级导演事件开关随 `ConversationRecord.directorEventsEnabled` 保存在各 Agent `conversations.data_json` 中。旧记录缺字段与显式 `false` 都表示关闭，新建会话显式保存 `false`；不得通过启动迁移批量开启既有会话。该字段只控制导演主动分享目标，不复用普通回复或编排器开关。
+
+会话级编排器时间覆盖随 `ConversationRecord.orchestratorResponseTimeOverrideEnabled` 和 `ConversationRecord.orchestratorResponseTimeMs` 保存在各 Agent `conversations.data_json` 中，不新增表或 schema 版本。旧记录缺少开关时按关闭处理，已有数值仅在开关显式为 `true` 且为 1,000—3,600,000 的整数毫秒时生效；关闭覆盖时保留合法数值，便于该会话再次开启。API 拒绝字符串、小数和越界值，运行时遇到损坏值回退到 Agent 的 `recentMessageWindowMs`。
+
 每天首个 `daily_plan` 提交幂等返回已有快照，角色修订必须携带 expected revision 并在 `BEGIN IMMEDIATE` 事务中追加历史与更新 current；过期 revision 只能返回 conflict，不能覆盖。Director 任务 ID 由 Agent、日期、item、revision 与目标分块确定，`scheduled_tasks.create` 允许内部调用提供受校验 ID；相同 ID 与相同 draft 幂等返回，内容不同必须拒绝 collision。迁移向前创建表并把 metadata 推进到 14，既有记忆、会话、Emoji、定时任务、请求日志和 Agent 数据不变。
 
 ### 8.5 Dream schema v15
 
 业务 schema v15 在每个 Agent 的 `sunabot.sqlite` 前向创建四个 STRICT 表：`memory_recall_stats` 保存长期记忆累计召回、跨日计数、最近召回、tracking、最近审查及有界 pending exposure JSON；`memory_recall_receipts` 以 `recall_key + record_id` 去重实际模型上下文召回；`dream_runs` 保存自然日唯一运行、系统时区、04:00 窗口、输入摘要、模型输出、租约、重试、整理结果与人格状态；`dream_memory_archive` 保存待 30 天后清除的原记录、原因与期限。既有 v15/v16 数据库通过幂等补列取得 `pending_recall_json`，默认空数组且受 JSON 类型与 64 KiB 上限约束。迁移顺序固定为 Director v14、Dream v15、定时任务保留字段 v16、记忆 source CAS 与投递退避字段 v17；首次运行门禁在 schema 17 同时要求 Director 三表、Dream 四表、记忆 revision 表与 trigger，以及定时任务投递列。
 
-同一 Agent、系统时区自然日的 Dream run 唯一，claim、generated、consolidated、persona 与 completed 阶段均受租约和条件更新保护。模型输出先持久化为 generated，重启恢复直接继续整理，不能再次调用模型；暂时模型或传输故障最多尝试三次、间隔 15 分钟，永久输入、快照、结果冲突以及 Provider 明确返回的不可重试 HTTP 4xx 只尝试一次，running、generated 与 consolidated 任一租约在累计第三次 claim 后再次过期，都由下一次自动 claim 原子标记 `DREAM_ATTEMPT_LIMIT`，不得无限恢复。管理员手动触发可对当日 failed 行执行一次新的条件 claim，保留同一 run ID、输入、已生成结果和阶段并递增 `attempt_count`，因此不会建立第二条当日记录或重复已完成运行；该显式恢复可以超过自动三次上限，后续失败仍需再次由管理员明确触发。手动通知入队失败保存 `DREAM_NOTIFICATION_FAILED` 且不设置 `next_retry_at`。记忆替换、归档、召回 lineage、工作与长期记忆复审时间、审查分数、tracking 初始化与运行阶段推进在同一 `BEGIN IMMEDIATE` 事务完成；任何从长期记忆移除的源还必须没有未过期 pending exposure，归档写入前继续按当前统计行与 receipt 表复验零召回和 tracking 快照，任一步失败整体回滚。
+同一 Agent、系统时区自然日的 Dream run 唯一，claim、generated、consolidated、persona 与 completed 阶段均受租约和条件更新保护。模型输出先持久化为 generated，重启恢复直接继续整理，不能再次调用模型；暂时模型或传输故障最多尝试三次、间隔 15 分钟，永久输入、快照、结果冲突以及 Provider 明确返回的不可重试 HTTP 4xx 只尝试一次，running、generated 与 consolidated 任一租约在累计第三次 claim 后再次过期，都由下一次自动 claim 原子标记 `DREAM_ATTEMPT_LIMIT`，不得无限恢复。管理员手动触发可对当日 failed 行执行一次新的条件 claim，保留同一 run ID、输入、已生成结果和阶段并递增 `attempt_count`，因此不会建立第二条当日记录或重复已完成运行；该显式恢复可以超过自动三次上限，后续失败仍需再次由管理员明确触发。手动通知入队失败保存 `DREAM_NOTIFICATION_FAILED` 且不设置 `next_retry_at`。`WORKING_MEMORY.md` 复审结果由文件 CAS 提交；长期记忆替换、归档、召回 lineage、长期记忆复审时间、审查分数、tracking 初始化与运行阶段推进在同一 `BEGIN IMMEDIATE` 事务完成。任何从长期记忆移除的源还必须没有未过期 pending exposure，归档写入前继续按当前统计行与 receipt 表复验零召回和 tracking 快照，任一步失败整体回滚并触发工作记忆文件的受 revision 回滚。
 
 调度表达式固定为系统 IANA 时区的 `0 4 * * *`，按当地自然日唯一并由时区库处理夏令时。Core 在 04:00 后启动时只补最近一次未运行日期，不遍历历史欠账；全新安装在首次 04:00 之前不会补做安装前一天。运行时每分钟检查一次，stop 会取消当前模型请求并释放定时器，完成记录不会重复执行。
 

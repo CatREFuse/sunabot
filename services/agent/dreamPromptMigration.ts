@@ -7,7 +7,7 @@ import {
 } from "./promptSystem.js";
 import { resolveSafePromptFilePath } from "./promptWorkspace.js";
 
-const MIGRATION_VERSION = "dream-schema-v2";
+const MIGRATION_VERSION = "dream-flex-contract-v3";
 
 export async function migrateDreamSchemaPrompt(config: AppConfig, fileName: string) {
   const filePath = await resolveSafePromptFilePath(config, "system", fileName);
@@ -28,30 +28,10 @@ export async function migrateDreamSchemaPrompt(config: AppConfig, fileName: stri
 export function migrateDreamSchemaTemplate(
   template: FinalPromptTemplate
 ): FinalPromptTemplate | undefined {
-  if (!containsUniqueItems(template.response_format)) return undefined;
+  if (template.response_format.type === "text") return undefined;
   const migrated = structuredClone(template);
-  removeUniqueItems(migrated.response_format);
+  migrated.response_format = { type: "text" };
   return migrated;
-}
-
-function containsUniqueItems(value: unknown): boolean {
-  if (Array.isArray(value)) return value.some(containsUniqueItems);
-  if (!isRecord(value)) return false;
-  return Object.hasOwn(value, "uniqueItems") || Object.values(value).some(containsUniqueItems);
-}
-
-function removeUniqueItems(value: unknown) {
-  if (Array.isArray(value)) {
-    value.forEach(removeUniqueItems);
-    return;
-  }
-  if (!isRecord(value)) return;
-  delete value.uniqueItems;
-  Object.values(value).forEach(removeUniqueItems);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value != null && !Array.isArray(value);
 }
 
 async function readOptional(filePath: string) {

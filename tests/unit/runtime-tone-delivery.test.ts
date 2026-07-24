@@ -333,6 +333,7 @@ describe("tone outbound delivery", () => {
     expect(delivery.outbox).toHaveLength(3);
 
     delivery.outbox.length = 0;
+    config.bot.tone.maxRetries = 0;
     rewriteToneDelivery.mockResolvedValueOnce({
       segmented: true,
       content: '<dialogc replay="msg_id">正文</dialogc><img src="asset:image:1"/>'
@@ -367,6 +368,122 @@ describe("tone outbound delivery", () => {
       () => true,
       delivery
     )).rejects.toThrow("分段回复最多包含 32 个气泡");
+    expect(delivery.outbox).toEqual([]);
+  });
+
+  it("retries hard-gate failures with cumulative errors before creating outbox drafts", async () => {
+    const incoming: ParsedIncomingMessage = {
+      schemaVersion: 1,
+      transport: "onebot",
+      agentId: "plana",
+      accountId: "primary",
+      scope: "private",
+      messageId: 103,
+      time: "2026-07-24T01:38:43.000+08:00",
+      userId: 1,
+      selfId: 2,
+      sender: { id: "1", displayName: "猫老师" },
+      text: "用户输入",
+      media: [],
+      attachments: [],
+      replyMessageIds: [],
+      quoteReferences: [],
+      mentionedSelf: false
+    };
+    const image = { url: "data:image/png;base64,AA==", revisedPrompt: "unchanged" };
+    const config = defaultConfig();
+    config.bot.tone.enabled = true;
+    config.bot.tone.segmentedReply = true;
+    config.bot.tone.maxRetries = 2;
+    const rewriteToneDelivery = vi.fn()
+      .mockResolvedValueOnce({
+        segmented: true,
+        content: '<dialogc replay="msg_id">正文</dialogc><img src="asset:image:1"/>'
+      })
+      .mockResolvedValueOnce({
+        segmented: true,
+        content: '<dialogc replay="msg_id">正文<br/></dialogc>'
+      })
+      .mockResolvedValueOnce({
+        segmented: true,
+        content: '<dialogc replay="msg_id">正文</dialogc><img src="asset:image:0"/>'
+      });
+    const host = {
+      config,
+      isReplySenderAllowed: () => true,
+      hooks: { run: vi.fn(async () => ({ text: "原始正文" })) },
+      rewriteToneDelivery,
+      replyGates: new ReplyGateEpochs(),
+      groupReplyOptions: () => ({ replyToMessageId: undefined }),
+      replyDeliveryDraft(...args: Parameters<typeof runtime_replyDeliveryDraft>) {
+        return runtime_replyDeliveryDraft.call(host as unknown as SunaRuntime, ...args);
+      }
+    };
+    const delivery = { outbox: [] } satisfies ReplyDelivery;
+
+    await runtime_sendAssistantReply.call(
+      host as unknown as SunaRuntime,
+      "private:1",
+      incoming,
+      { send: vi.fn() } as unknown as MessagingPort,
+      "原始正文",
+      true,
+      [image],
+      "run-hard-gate-retry",
+      () => true,
+      delivery
+    );
+
+    expect(rewriteToneDelivery).toHaveBeenCalledTimes(3);
+    expect(rewriteToneDelivery.mock.calls[0]?.[2]).not.toHaveProperty("hardGateRetry");
+    expect(rewriteToneDelivery.mock.calls[1]?.[2]).toMatchObject({
+      hardGateRetry: {
+        attempt: 2,
+        maxAttempts: 3,
+        errors: ["分段回复改变了本轮媒体资源。"]
+      }
+    });
+    expect(rewriteToneDelivery.mock.calls[2]?.[2]).toMatchObject({
+      hardGateRetry: {
+        attempt: 3,
+        maxAttempts: 3,
+        errors: [
+          "分段回复改变了本轮媒体资源。",
+          "分段回复节点不能嵌套标签。"
+        ]
+      }
+    });
+    expect(delivery.outbox).toHaveLength(2);
+
+    delivery.outbox.length = 0;
+    rewriteToneDelivery.mockReset();
+    rewriteToneDelivery.mockResolvedValue({
+      segmented: true,
+      content: '<dialogc replay="msg_id">正文</dialogc><img src="asset:image:1"/>'
+    });
+    await expect(runtime_sendAssistantReply.call(
+      host as unknown as SunaRuntime,
+      "private:1",
+      incoming,
+      { send: vi.fn() } as unknown as MessagingPort,
+      "原始正文",
+      true,
+      [image],
+      "run-hard-gate-exhausted",
+      () => true,
+      delivery
+    )).rejects.toMatchObject({ code: "SEGMENTED_REPLY_CONTRACT_INVALID" });
+    expect(rewriteToneDelivery).toHaveBeenCalledTimes(3);
+    expect(rewriteToneDelivery.mock.calls[2]?.[2]).toMatchObject({
+      hardGateRetry: {
+        attempt: 3,
+        maxAttempts: 3,
+        errors: [
+          "分段回复改变了本轮媒体资源。",
+          "分段回复改变了本轮媒体资源。"
+        ]
+      }
+    });
     expect(delivery.outbox).toEqual([]);
   });
 

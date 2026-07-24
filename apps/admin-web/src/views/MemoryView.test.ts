@@ -6,17 +6,23 @@ import { activeAgentIdState } from "../composables/agentScope";
 import DreamHistoryPanel from "../components/memory/DreamHistoryPanel.vue";
 import MemoryEntryRow from "../components/memory/MemoryEntryRow.vue";
 import MemoryEditorDialog from "../components/memory/MemoryEditorDialog.vue";
+import MemoryOperationLogDrawer from "../components/memory/MemoryOperationLogDrawer.vue";
 import MemoryPagination from "../components/memory/MemoryPagination.vue";
 import MemorySortControl from "../components/memory/MemorySortControl.vue";
 import MemoryView from "./MemoryView.vue";
 
 const memory = vi.hoisted(() => ({
   sources: { value: [
-    { id: "working", title: "工作记忆", fileName: "memory", editable: true },
-    { id: "longterm", title: "长期记忆", fileName: "memory", editable: true },
+    { id: "working", title: "工作记忆", fileName: "WORKING_MEMORY.md", editable: true },
+    { id: "long_term", title: "长期记忆", fileName: "memory", editable: true },
     { id: "user_profile", title: "用户画像", fileName: "profile", editable: true }
   ] },
   entries: { value: [] as MemoryEntry[] },
+  document: { value: {
+    fileName: "WORKING_MEMORY.md",
+    content: "# 工作记忆\n\n<!-- sunabot-workmemory:v1 -->\n\n<!-- sunabot-workmemory:item eyJpZCI6Im1lbW9yeS0xIn0 -->\n## memory-1\n\n- 记录时间：2026-07-24T03:19:26.000+08:00 [Asia/Shanghai]\n- 会话来源：group:10001（user_group）\n- 会话标题：测试群\n- 来源类型：add_workmemory\n\n完整工作记忆正文。",
+    revision: "working-revision"
+  } },
   matches: { value: [] as MemoryEntry[] },
   recallActive: { value: false },
   loading: { value: false },
@@ -43,6 +49,18 @@ const dreams = vi.hoisted(() => ({
   trigger: vi.fn(),
   dispose: vi.fn()
 }));
+const operationLogs = vi.hoisted(() => ({
+  logs: { value: [] },
+  page: { value: 1 },
+  pageSize: 50,
+  total: { value: 0 },
+  pageCount: { value: 1 },
+  loading: { value: false },
+  error: { value: "" },
+  load: vi.fn(),
+  reset: vi.fn(),
+  dispose: vi.fn()
+}));
 
 vi.mock("../composables/agentScope", async () => {
   const { shallowRef } = await vi.importActual<typeof import("vue")>("vue");
@@ -50,12 +68,23 @@ vi.mock("../composables/agentScope", async () => {
 });
 vi.mock("../composables/useDreams", () => ({ useDreams: () => dreams }));
 vi.mock("../composables/useMemory", () => ({ useMemory: () => memory }));
+vi.mock("../composables/useMemoryOperationLogs", () => ({ useMemoryOperationLogs: () => operationLogs }));
+
+function mountMemoryView() {
+  return shallowMount(MemoryView, {
+    global: {
+      stubs: {
+        PageHeader: { template: '<header><slot name="titleAfter"/><slot name="actions"/></header>' }
+      }
+    }
+  });
+}
 
 function entry(index: number, overrides: Partial<MemoryEntry> = {}): MemoryEntry {
   return {
     id: `memory-${index}`,
-    source: "working",
-    sourceTitle: "工作记忆",
+    source: "long_term",
+    sourceTitle: "长期记忆",
     fileName: "memory",
     editable: true,
     key: `memory-${index}`,
@@ -73,8 +102,24 @@ describe("MemoryView pagination", () => {
     memory.entries.value = Array.from({ length: 25 }, (_, index) => entry(index + 1));
   });
 
+  it("opens the selected Agent memory operation log and closes it after Agent switching", async () => {
+    const wrapper = mountMemoryView();
+
+    await wrapper.get("button.btn-ghost").trigger("click");
+
+    expect(operationLogs.load).toHaveBeenCalledWith("plana", 1);
+    expect(wrapper.findComponent(MemoryOperationLogDrawer).props("open")).toBe(true);
+
+    (activeAgentIdState as { value: string }).value = "arona";
+    await nextTick();
+
+    expect(operationLogs.reset).toHaveBeenCalled();
+    expect(wrapper.findComponent(MemoryOperationLogDrawer).props("open")).toBe(false);
+  });
+
   it("shows 20 entries per page and resets to page one after filtering", async () => {
-    const wrapper = shallowMount(MemoryView);
+    const wrapper = mountMemoryView();
+    await wrapper.get('nav[aria-label="记忆类别"]').findAll("button")[1]!.trigger("click");
     const pagination = wrapper.findComponent(MemoryPagination);
 
     expect(wrapper.findAllComponents(MemoryEntryRow)).toHaveLength(20);
@@ -98,7 +143,8 @@ describe("MemoryView pagination", () => {
         ? `2026-07-${String(index + 1).padStart(2, "0")}T03:00:00.000Z`
         : undefined
     }));
-    const wrapper = shallowMount(MemoryView);
+    const wrapper = mountMemoryView();
+    await wrapper.get('nav[aria-label="记忆类别"]').findAll("button")[1]!.trigger("click");
     const sort = wrapper.findComponent(MemorySortControl);
 
     expect(wrapper.findAllComponents(MemoryEntryRow)[0]?.props("entry").id).toBe("memory-25");
@@ -135,10 +181,6 @@ describe("MemoryView pagination", () => {
       "用户画像",
       "梦境"
     ]);
-    wrapper.findComponent(MemoryPagination).vm.$emit("change", 2);
-    await nextTick();
-    expect(wrapper.findAllComponents(MemoryEntryRow)).toHaveLength(5);
-
     await tabs.findAll("button")[3]!.trigger("click");
 
     expect(wrapper.findComponent(DreamHistoryPanel).props()).toMatchObject({
@@ -159,12 +201,14 @@ describe("MemoryView pagination", () => {
 
     await tabs.findAll("button")[0]!.trigger("click");
 
-    expect(wrapper.find('input[aria-label="搜索记忆"]').exists()).toBe(true);
-    expect(wrapper.findComponent(MemoryPagination).props("page")).toBe(2);
-    expect(wrapper.findAllComponents(MemoryEntryRow)[0]?.props("entry").id).toBe("memory-21");
+    expect(wrapper.get('[aria-label="工作记忆原文"]').text()).toContain("完整工作记忆正文。");
+    expect(wrapper.get('[aria-label="工作记忆原文"]').text()).not.toContain("sunabot-workmemory");
+    expect(wrapper.find('input[aria-label="搜索记忆"]').exists()).toBe(false);
+    expect(wrapper.findComponent(MemoryPagination).exists()).toBe(false);
+    expect(wrapper.findAllComponents(MemoryEntryRow)).toHaveLength(0);
 
     await tabs.findAll("button")[1]!.trigger("click");
-    expect(memory.load).toHaveBeenLastCalledWith("longterm", "plana");
+    expect(memory.load).toHaveBeenLastCalledWith("long_term", "plana");
     expect(memory.load.mock.calls.some(([requestedSource]) => requestedSource === "dream")).toBe(false);
   });
 
@@ -176,17 +220,18 @@ describe("MemoryView pagination", () => {
         }
       }
     });
+    await wrapper.get('nav[aria-label="记忆类别"]').findAll("button")[1]!.trigger("click");
     const firstRow = wrapper.findAllComponents(MemoryEntryRow)[0]!;
     const editor = wrapper.findComponent(MemoryEditorDialog);
 
-    expect(memory.load).toHaveBeenCalledWith("working", "plana");
+    expect(memory.load).toHaveBeenCalledWith("long_term", "plana");
     expect(dreams.load).toHaveBeenCalledWith("plana");
     expect(wrapper.findComponent(DreamHistoryPanel).exists()).toBe(false);
 
     firstRow.vm.$emit("edit", entry(1));
     await nextTick();
     expect(editor.props("open")).toBe(true);
-    editor.vm.$emit("save", { source: "working", text: "新记忆" });
+    editor.vm.$emit("save", { source: "long_term", text: "新记忆" });
     await flushPromises();
     expect(wrapper.text()).toContain("已保存");
 
@@ -199,7 +244,7 @@ describe("MemoryView pagination", () => {
     (activeAgentIdState as { value: string }).value = "arona";
     await nextTick();
 
-    expect(memory.load).toHaveBeenLastCalledWith("working", "arona");
+    expect(memory.load).toHaveBeenLastCalledWith("long_term", "arona");
     expect(dreams.load).toHaveBeenLastCalledWith("arona");
     expect(editor.props("open")).toBe(false);
     expect(firstRow.props("pendingDelete")).toBe(false);

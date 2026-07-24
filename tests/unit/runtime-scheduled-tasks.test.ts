@@ -14,6 +14,7 @@ import {
   decodeScheduledCallbackDelivery,
   decodeScheduledCallbackOutbox,
   scheduledCallbackDeliveryEnvelope,
+  scheduledCallbackOutboxEnvelope,
   type ScheduledCallbackPayloadV1
 } from "../../packages/contracts/session/scheduledTaskRuntimeMessages.js";
 import {
@@ -204,7 +205,7 @@ describe("RuntimeScheduledTasks", () => {
     expect(harness.runtime.listScheduledTasks({ category: "all", page: 1, pageSize: 2 }))
       .toMatchObject({
         tasks: expect.any(Array),
-        pagination: { page: 1, pageSize: 2, total: 4, pageCount: 2 }
+        pagination: { page: 1, pageSize: 2, total: 3, pageCount: 2 }
       });
     expect(harness.runtime.listScheduledTasks({ category: "archived", page: 1, pageSize: 20 }))
       .toEqual({
@@ -214,10 +215,7 @@ describe("RuntimeScheduledTasks", () => {
     expect(harness.runtime.listScheduledTasks({ category: "recurring", page: 1, pageSize: 20 }).tasks)
       .toEqual([expect.objectContaining({ id: recurring.id, archived: false })]);
     expect(harness.runtime.listScheduledTasks({ category: "scheduled", page: 1, pageSize: 20 }).tasks)
-      .toEqual(expect.arrayContaining([
-        expect.objectContaining({ id: scheduled.id, archived: false, director: false }),
-        expect.objectContaining({ id: director.id, archived: false, director: true })
-      ]));
+      .toEqual([expect.objectContaining({ id: scheduled.id, archived: false, director: false })]);
     expect(harness.runtime.listScheduledTasks({ category: "director", page: 1, pageSize: 20 }))
       .toEqual({
         tasks: [expect.objectContaining({ id: director.id, director: true })],
@@ -235,10 +233,11 @@ describe("RuntimeScheduledTasks", () => {
     })).toThrow("permanentRetention 必须是布尔值");
   });
 
-  it("queues one callback input per target and runs it through the target conversation Agent", async () => {
+  it("runs an ordinary task end to end while the Director switch is off", async () => {
     const realNow = Date.now();
     const harness = createHarness({
       storeNow: realNow - 60_000,
+      directorEnabled: false
     });
     harness.runtime.createScheduledTask({
       name: "多人多会话提醒",
@@ -299,12 +298,39 @@ describe("RuntimeScheduledTasks", () => {
       }),
       expect.any(Object),
       expect.objectContaining({
+        directorAccess: "none",
         messageOrigin: "async_tool_callback",
         delivery: expect.objectContaining({ mentionUserIds: [30001] })
       })
     );
     expect(harness.replyToIncoming.mock.calls.at(-1)?.[3]).not.toHaveProperty("promptOverride");
     expect(harness.replyToIncoming.mock.calls.at(-1)?.[3]).not.toHaveProperty("atomicImageReply");
+  });
+
+  it("does not read Director settings while processing an ordinary callback", async () => {
+    const harness = createHarness();
+    Object.defineProperty(harness.host.config.bot, "director", {
+      configurable: true,
+      get() {
+        throw new Error("Ordinary callbacks must not read Director settings.");
+      }
+    });
+    const payload = {
+      ...callbackPayload(),
+      text: buildCallbackInput("scheduled_task", {
+        promptMessages: [{ role: "user", content: "普通提醒" }]
+      })
+    };
+
+    await expect(harness.runtime.processEvent(scheduledEvent(payload))).resolves.toMatchObject({
+      status: "completed"
+    });
+    expect(harness.replyToIncoming).toHaveBeenCalledWith(
+      payload.target.conversationId,
+      expect.any(Object),
+      expect.any(Object),
+      expect.objectContaining({ directorAccess: "none" })
+    );
   });
 
   it("queues a system callback through the same durable Agent conversation flow", async () => {
@@ -357,7 +383,10 @@ describe("RuntimeScheduledTasks", () => {
       "account:secondary:private:10001",
       expect.objectContaining({ text: expect.stringContaining('"role": "callback"') }),
       expect.any(Object),
-      expect.objectContaining({ messageOrigin: "async_tool_callback" })
+      expect.objectContaining({
+        directorAccess: "none",
+        messageOrigin: "async_tool_callback"
+      })
     );
   });
 
@@ -379,10 +408,55 @@ describe("RuntimeScheduledTasks", () => {
       expect.any(Object),
       expect.any(Object),
       expect.objectContaining({
+        directorAccess: "full",
         messageOrigin: "async_tool_callback",
         atomicImageReply: true
       })
     );
+  });
+
+  it("drops Director callbacks and outbox delivery while the Director switch is off", async () => {
+    const harness = createHarness({ directorEnabled: false });
+    const payload = {
+      ...callbackPayload(),
+      taskId: "director-plana-20260720-afternoon-r1-c1",
+      text: buildCallbackInput("scheduled_task", { promptMessages: [{ role: "user", content: "分享资料" }] })
+    };
+    await expect(harness.runtime.processEvent(scheduledEvent(payload))).resolves.toEqual({ status: "no_reply" });
+    expect(harness.replyToIncoming).not.toHaveBeenCalled();
+
+    const draft = {
+      kind: SCHEDULED_CALLBACK_OUTBOX_KIND,
+      deliveryPartition: "secondary",
+      payload: scheduledCallbackOutboxEnvelope(payload, {
+        conversationId: payload.target.conversationId,
+        correlationId: payload.runId,
+        causationId: payload.taskId,
+        idempotencyKey: "disabled-director",
+        occurredAt: payload.triggeredAt
+      })
+    } as OutboxDraft;
+    const gateway = fakeGateway({ connected: true, accounts: ["secondary"] });
+    harness.host.activeGateway = gateway;
+    await expect(harness.runtime.deliverOutbox(
+      persistedOutbox(draft, payload.target.conversationId),
+      deliveryContext().context
+    )).resolves.toEqual({ delivered: true });
+    expect(gateway.send).not.toHaveBeenCalled();
+
+    const legacyReplyInput = buildCallbackInput("scheduled_task", {
+      promptMessages: [{
+        role: "user",
+        content: `<cron_payload>${JSON.stringify({ task: { id: payload.taskId } })}</cron_payload>`
+      }]
+    });
+    expect(harness.runtime.isDisabledDirectorReply(legacyReplyInput)).toBe(true);
+    expect(harness.runtime.isDisabledDirectorReply(buildCallbackInput("scheduled_task", {
+      promptMessages: [{
+        role: "user",
+        content: `<cron_payload>${JSON.stringify({ task: { id: "ordinary-task" } })}</cron_payload>`
+      }]
+    }))).toBe(false);
   });
 
   it("preserves the target account as the event-to-outbox delivery partition", async () => {
@@ -460,6 +534,7 @@ interface HarnessOptions {
   storeNow?: number;
   generatedText?: string;
   gateway?: MessagingPort;
+  directorEnabled?: boolean;
 }
 
 function createHarness(options: HarnessOptions = {}) {
@@ -516,7 +591,7 @@ function createHarness(options: HarnessOptions = {}) {
     config: {
       persona: { defaultAgentId: "plana" },
       normalReply: { maxRetries: 3 },
-      bot: { tools: { websearch: {} } }
+      bot: { director: { enabled: options.directorEnabled ?? true }, tools: { websearch: {} } }
     },
     conversationRecords,
     sessionCoordinator: { enqueueEvent },

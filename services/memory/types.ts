@@ -37,6 +37,7 @@ export interface MemoryEntry {
   groupCards?: Array<{ groupId: number; card: string; lastSeenAt: string }>;
   sourceWorkingMemoryIds?: string[];
   sourceCandidateIds?: string[];
+  sourceMemoryIds?: string[];
   eventType?: string;
   subjectKey?: string;
   eventKey?: string;
@@ -44,6 +45,18 @@ export interface MemoryEntry {
   eventFingerprint?: string;
   longTermId?: string;
   batchId?: string;
+  recordedAt?: string;
+  timeZone?: string;
+  conversationId?: string;
+  conversationScope?: string;
+  conversationTitle?: string;
+  sourceKind?: "model_merge" | "add_workmemory" | "admin" | "dream";
+  memoryKind?: string;
+  realityStatus?: string;
+  factuality?: string;
+  dreamRunId?: string;
+  dreamDate?: string;
+  dreamReviewedAt?: string;
   promoteToLongTerm?: boolean;
   score?: number;
   recallCount?: number;
@@ -76,6 +89,7 @@ export interface MemoryFactInput {
   salutation?: string;
   sourceWorkingMemoryIds?: string[];
   sourceCandidateIds?: string[];
+  sourceMemoryIds?: string[];
   eventType?: string;
   subjectKey?: string;
   eventKey?: string;
@@ -83,6 +97,12 @@ export interface MemoryFactInput {
   eventFingerprint?: string;
   longTermId?: string;
   batchId?: string;
+  memoryKind?: string;
+  realityStatus?: string;
+  factuality?: string;
+  dreamRunId?: string;
+  dreamDate?: string;
+  dreamReviewedAt?: string;
   promoteToLongTerm?: boolean;
 }
 
@@ -93,14 +113,12 @@ export interface WorkingMemorySnapshot {
 
 export type ReplaceWorkingMemoryFactsResult =
   | { status: "applied"; entries: MemoryEntry[] }
-  | { status: "snapshot_conflict" }
-  | { status: "empty_not_authorized" };
+  | { status: "snapshot_conflict" };
 
 export interface MemoryBatchTransactionInput {
   batchId: string;
   expectedWorkingSnapshotToken: string;
   workingFacts: MemoryFactInput[];
-  allPreviousMemoriesInvalidated?: boolean;
   userProfileFacts: MemoryFactInput[];
   longTermFacts: MemoryFactInput[];
   metadata?: Record<string, unknown>;
@@ -114,7 +132,7 @@ export type ApplyMemoryBatchTransactionResult =
     userProfileEntries: MemoryEntry[];
     longTermEntries: MemoryEntry[];
   }
-  | { status: "snapshot_conflict" | "empty_not_authorized" };
+  | { status: "snapshot_conflict" };
 
 export interface MemoryRecallInput {
   query?: unknown;

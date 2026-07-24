@@ -67,6 +67,27 @@ export class SqliteDirectorStore implements DirectorStore {
     return parsed;
   }
 
+  list(input: { page?: number; pageSize?: number } = {}) {
+    const pageSize = normalizePageSize(input.pageSize);
+    const requestedPage = normalizePage(input.page);
+    const total = Number((this.database.prepare(`
+      SELECT COUNT(*) AS count FROM director_daily_schedules
+    `).get() as SqlRow).count ?? 0);
+    const pageCount = Math.max(1, Math.ceil(total / pageSize));
+    const page = Math.min(requestedPage, pageCount);
+    const schedules = (this.database.prepare(`
+      SELECT schedule_json
+      FROM director_daily_schedules
+      ORDER BY schedule_date DESC
+      LIMIT ? OFFSET ?
+    `).all(pageSize, (page - 1) * pageSize) as SqlRow[]).map((row) => {
+      const parsed = JSON.parse(String(row.schedule_json));
+      if (!isDirectorSchedule(parsed)) throw new Error("Stored director schedule is invalid.");
+      return parsed;
+    });
+    return { schedules, pagination: { page, pageSize, total, pageCount } };
+  }
+
   commit(input: DirectorScheduleCommitInput): DirectorScheduleCommitResult {
     const now = input.now ?? new Date();
     const timestamp = now.toISOString();
@@ -181,4 +202,18 @@ export class SqliteDirectorStore implements DirectorStore {
       throw error;
     }
   }
+}
+
+function normalizePage(value: number | undefined) {
+  if (value == null) return 1;
+  if (!Number.isSafeInteger(value) || value < 1) throw new Error("Director schedule page must be positive.");
+  return value;
+}
+
+function normalizePageSize(value: number | undefined) {
+  if (value == null) return 14;
+  if (!Number.isSafeInteger(value) || value < 1 || value > 31) {
+    throw new Error("Director schedule page size must be between 1 and 31.");
+  }
+  return value;
 }

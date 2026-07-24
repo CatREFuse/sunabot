@@ -10,6 +10,7 @@ import {
 import type { AgentManifest } from "./agentRegistry.js";
 import { DEFAULT_DIRECTOR_SEED } from "../director/public.js";
 import { DEFAULT_AIR_KNOWLEDGE } from "../air/public.js";
+import { WORKING_MEMORY_FILE, renderWorkingMemoryMarkdown } from "../memory/public.js";
 
 export function initialAgentWorkspaceFiles(
   config: AppConfig,
@@ -24,7 +25,7 @@ export function initialAgentWorkspaceFiles(
       ? defaultGenericSelfiePromptContent()
       : defaultPromptContent(definition.id, manifest.name)
   ] as const);
-  return [...fragments, ...finalPrompts];
+  return [...fragments, [WORKING_MEMORY_FILE, renderWorkingMemoryMarkdown([])] as const, ...finalPrompts];
 }
 
 export async function ensureAccountRuntimeDirectories(workspace: string, accountId: string) {

@@ -22,15 +22,17 @@ AI 建议只在进程内保存 10 分钟并绑定原始文件 SHA-256 revision�
 
 ## Bash 管理员边界
 
-`workspace_bash` 的执行入口接受规范化后的真实 OneBot QQ 私聊和群聊，必须绑定当前 Agent、Bot 账号、完整会话、一致的 user/sender、有效消息 ID 与 Bot self ID，且 `promptOverride` 必须严格为 `undefined`。管理员 QQ 私聊固定获得 Native `admin` 模式；管理员群聊及其他 QQ 私聊和群聊固定获得 Docker `isolated` 模式。Web Chat、身份缺失或不匹配不能启动独立审计或执行环境探针。
+`native_bash` 只接受规范化后的管理员 QQ 私聊和已认证管理员 Web Chat，`docker_bash` 接受规范化后的真实 OneBot QQ 私聊与群聊以及已认证管理员 Web Chat。OneBot 必须绑定当前 Agent、Bot 账号、完整会话、一致的 user/sender、有效消息 ID 与 Bot self ID，且 `promptOverride` 必须严格为 `undefined`；Web Chat 必须来自管理 API 建立的管理员私聊身份。管理员 QQ 私聊与管理员 Web Chat 获得 Native `admin` 和 Docker `isolated` 两种模式；管理员群聊及其他 QQ 私聊和群聊只获得 Docker `isolated` 模式。身份缺失或不匹配不能启动独立审计或执行环境探针。
 
 每次命令都先进入独立审计 Provider：使用当前默认启用 Provider 的凭据与专用审计模型，只发送审计 system/user 消息，工具列表固定为空并要求 strict JSON。Provider 会话正文、历史、附件和其他工具句柄不得进入审计请求。运行时用单调配置 epoch 和单一 resolver 冻结不可变配置、真实身份、backend、workbench、access mode、strict mode、审批上下文与 audit runner；审计 availability 和隔离 probe 任一 await 后都复验 epoch，最多重探一次。完整 handle 一次性注入 Provider，执行器、Bash runner 与审计闭包共同使用同一 `isCurrent`；文件身份冻结/复验、审批检查/签发/消费、隔离探针及最终 spawn 的每个异步或副作用边界都重新检查，getter 抛错也失败关闭。已过期 handle 返回 `BASH_CONFIGURATION_STALE`，不能启动新的审批、探针或命令，模型可见错误不得包含宿主路径或底层 probe 诊断。API catalog 只有布尔 capability，不能执行命令。
 
-管理员私聊的 macOS Native backend 只在 Core 以非 root 用户运行且宿主 `/bin/bash` 探针通过时可用，命令在逐条独立对抗审批和确定性策略放行后以该 Core OS 用户执行；宿主权限影响、进程、网络、凭据和系统配置风险必须进入审计，运行环境只传入固定 PATH、Native workbench 与当前 Agent 的 Skill/MCP 目录。Linux/WSL Native 与 Docker Core 必须通过 bubblewrap capability；Host Docker 必须无网络、无 Docker socket、空环境、固定 entrypoint，并受资源和清理 watchdog 限制。外部路径只允许 Phase A 已定义的精确只读审批；票据绑定 Agent、账号、transport、完整会话、用户、可选群号和命令摘要，过期、重放、上下文变化或命令变化均拒绝。
+管理员私聊的 macOS Native backend 只在 Core 以非 root 用户运行且宿主 `/bin/bash` 探针通过时可用，命令在逐条独立对抗审批和确定性策略放行后以该 Core OS 用户执行；宿主权限影响、进程、网络、凭据和系统配置风险必须进入审计，运行环境只传入固定 PATH、Native workbench 与当前 Agent 的 Skill/MCP 目录。Linux/WSL Native 与 Docker Core 必须通过 bubblewrap capability；Host Docker 必须无网络、无 Docker socket、空环境、固定 entrypoint，并受资源和清理 watchdog 限制。外部路径只允许 Phase A 已定义的精确只读审批；票据绑定 backend、Agent、账号、transport、完整会话、用户、可选群号和命令摘要，过期、重放、上下文变化、后端变化或命令变化均拒绝。
 
 修改在模型回合中暂存，只有绑定当前管理员、完整会话与规范化 mutation 的 held confirmation 成功写入 durable outbox 后才提交。特殊 delivery 语义由宿主生成并在实际投递时重新验证管理员与纯文本唯一工具 trace，模型参数、普通正文、图片、deferred 和外部 API payload 均不能设置。投递必须读取 store 中可信的 `released`/`fallback_released` provenance 与 mutation fingerprint；仅有 payload marker 或普通 outbox 状态不能获得旁路。commit 失败只能原子释放固定中性通知；任何更新失败都保持原成功文案 held 且不可 claim。
 
 release provenance 绑定 append 时的 ReplyGate 与提交后的当前 ReplyGate。同一 runtime generation 中，只允许 private scope epoch 因关闭当前私聊回复恰好增加 1，conversation epoch 必须不变；其他设置要求两个 epoch 都不变。跨 generation 恢复只接受新 runtime 当前 private scope/conversation epoch 为 0/0；不匹配时遗留 held 继续不可 claim，旧 released 记录也拒绝投递。启动恢复、turn 完成、失败和 deferred 交接都必须终结 origin turn/event，不能再次执行未知 mutation；人工 replay 只保留最多 8 层可信 released/fallback lineage，普通 marker、未释放 held 或 provenance 漂移不能升格。
+
+macOS host `native_bash` 的成功命令结果保留真实 workbench 与 stdout/stderr 宿主路径；基础设施错误、底层 probe 诊断、Docker 与 bubblewrap 结果继续执行宿主路径脱敏。
 
 ## 外网访问要求
 

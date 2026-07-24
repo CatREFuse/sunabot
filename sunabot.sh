@@ -39,6 +39,18 @@ case "$COMMAND" in
     ;;
 esac
 
+ensure_macos_homebrew_path() {
+  [ "$(uname -s)" = "Darwin" ] || return 0
+  for directory in /opt/homebrew/bin /usr/local/bin; do
+    [ -d "$directory" ] || continue
+    case ":$PATH:" in
+      *":$directory:"*) ;;
+      *) PATH="${PATH:+$PATH:}$directory" ;;
+    esac
+  done
+  export PATH
+}
+
 allows_install() {
   [ "$COMMAND" = "up" ] || [ "$COMMAND" = "start" ] || [ "$COMMAND" = "restart" ] || [ "$COMMAND" = "bootstrap" ]
 }
@@ -51,6 +63,10 @@ missing_dependencies() {
 needs_install() {
   [ ! -f "$INSTALL_MARKER" ] || [ "$LOCK" -nt "$INSTALL_MARKER" ]
 }
+
+if ! command -v fnm >/dev/null 2>&1 && ! command -v node >/dev/null 2>&1; then
+  ensure_macos_homebrew_path
+fi
 
 if command -v fnm >/dev/null 2>&1 && fnm exec --using="$VERSION" node -e "" >/dev/null 2>&1; then
   if needs_install; then
@@ -65,6 +81,7 @@ if command -v fnm >/dev/null 2>&1 && fnm exec --using="$VERSION" node -e "" >/de
     echo "运行依赖已准备。"
     exit 0
   fi
+  ensure_macos_homebrew_path
   exec fnm exec --using="$VERSION" node "$ROOT/tooling/runtime/launcher.mjs" "$@"
 fi
 
@@ -93,4 +110,5 @@ if [ "$COMMAND" = "bootstrap" ]; then
   exit 0
 fi
 
+ensure_macos_homebrew_path
 exec node "$ROOT/tooling/runtime/launcher.mjs" "$@"

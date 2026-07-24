@@ -29,6 +29,7 @@ import {
   renderFinalPromptTemplate,
   type RenderedPromptRequest
 } from "../../services/agent/promptSystem.js";
+import { DIRECTOR_CONVERSATION_SCHEDULE_VARIABLE } from "../../services/director/public.js";
 import type { AttachmentService } from "../../services/media/attachments/service.js";
 import { defaultVoiceProfile, voicePromptVariables } from "../../services/voice/public.js";
 import { SessionStore } from "../../services/sessions/sessionStore.js";
@@ -91,6 +92,60 @@ afterEach(() => {
 });
 
 describe("SunaRuntime reply debounce", () => {
+  it("isolates ordinary scheduled callbacks from Director context and tools", async () => {
+    const harness = createRuntimeHarness(async (_request, options) => {
+      expect(options?.director).toBeUndefined();
+      return { kind: "completed", text: "普通定时回复" };
+    });
+    const promptContext = vi.spyOn(harness.runtime.director, "promptContext")
+      .mockRejectedValue(new Error("Stored director schedule is invalid."));
+    const toolPort = vi.spyOn(harness.runtime.director, "toolPort")
+      .mockImplementation(() => {
+        throw new Error("Director tool must not be resolved.");
+      });
+    const renderPromptRequest = vi.spyOn(harness.runtime, "renderPromptRequest");
+    const incoming = harness.record(privateEvent(30_986, "普通定时任务"));
+
+    await harness.reply(incoming, {
+      delivery: { outbox: [] },
+      directorAccess: "none",
+      messageOrigin: "async_tool_callback"
+    });
+
+    expect(promptContext).not.toHaveBeenCalled();
+    expect(toolPort).not.toHaveBeenCalled();
+    expect(harness.completeRequestTurn).toHaveBeenCalledOnce();
+    expect(renderPromptRequest.mock.calls[0]?.[1]).toEqual(expect.objectContaining({
+      [DIRECTOR_CONVERSATION_SCHEDULE_VARIABLE]: ""
+    }));
+  });
+
+  it("keeps Director context and tools for explicitly Director-enabled replies", async () => {
+    const directorPort = { execute: vi.fn() };
+    const harness = createRuntimeHarness(async (_request, options) => {
+      expect(options?.director).toBe(directorPort);
+      return { kind: "completed", text: "导演回复" };
+    });
+    const promptContext = vi.spyOn(harness.runtime.director, "promptContext")
+      .mockResolvedValue('{"status":"active"}');
+    const toolPort = vi.spyOn(harness.runtime.director, "toolPort")
+      .mockReturnValue(directorPort);
+    const renderPromptRequest = vi.spyOn(harness.runtime, "renderPromptRequest");
+    const incoming = harness.record(privateEvent(30_985, "导演回调"));
+
+    await harness.reply(incoming, {
+      delivery: { outbox: [] },
+      directorAccess: "full",
+      messageOrigin: "async_tool_callback"
+    });
+
+    expect(promptContext).toHaveBeenCalledOnce();
+    expect(toolPort).toHaveBeenCalledOnce();
+    expect(renderPromptRequest.mock.calls[0]?.[1]).toEqual(expect.objectContaining({
+      [DIRECTOR_CONVERSATION_SCHEDULE_VARIABLE]: '{"status":"active"}'
+    }));
+  });
+
   it("holds an atomic image reply until text and the generated image can share one outbox", async () => {
     const image = { url: "data:image/png;base64,AA==", revisedPrompt: "现场自拍" };
     const harness = createRuntimeHarness(async (_request, options) => {
@@ -983,7 +1038,7 @@ describe("SunaRuntime reply debounce", () => {
       );
     });
 
-    await harness.handle(groupEvent(31_124, 7_124, "/总结群聊", 28_003));
+    await harness.handle(groupEvent(31_124, 7_124, "/总结群聊@Plana", 28_003));
     harness.runtime.config.bot.quoteGroupReplies = false;
 
     await harness.waitForOutbounds(1);
@@ -1175,7 +1230,7 @@ describe("SunaRuntime reply debounce", () => {
       return processIncomingReplyEvent(...args);
     };
 
-    const command = await harness.handle(groupEvent(31_130, 7_130, "/总结群聊", 29_001));
+    const command = await harness.handle(groupEvent(31_130, 7_130, "/总结群聊@Plana", 29_001));
     expect(harness.activeDebounce(command))
       .toBeDefined();
     await delay(40);
@@ -1195,7 +1250,7 @@ describe("SunaRuntime reply debounce", () => {
     expect(harness.runtime.conversationRecords.get(conversationRecordId(command))?.messages
       .filter((message) => message.role === "user")
       .map((message) => message.text)).toEqual([
-        "/总结群聊",
+        "/总结群聊@Plana",
         "late after summary handoff"
       ]);
   });
@@ -1293,7 +1348,7 @@ describe("SunaRuntime reply debounce", () => {
     const replyWithGroupChatSummary = vi.fn(async () => undefined);
     harness.runtime.replyWithGroupChatSummary = replyWithGroupChatSummary;
     const incoming = parseOneBotInboundMessage(
-      groupEvent(31_133, 7_133, "/总结群聊", 29_133)
+      groupEvent(31_133, 7_133, "/总结群聊@Plana", 29_133)
     )!;
     const conversationId = conversationRecordId(incoming);
     harness.runtime.activeGateway = harness.gateway;
@@ -1334,7 +1389,7 @@ describe("SunaRuntime reply debounce", () => {
     harness.runtime.replyWithGroupChatSummary = replyWithGroupChatSummary;
     const incoming = parseOneBotInboundMessage(privateEvent(
       31_135,
-      `/总结群聊 ${"a".repeat(MAX_COMMAND_INVOCATION_ARGS_CHARACTERS + 1)}`
+      `/总结群聊@Plana ${"a".repeat(MAX_COMMAND_INVOCATION_ARGS_CHARACTERS + 1)}`
     ))!;
 
     await expect(harness.runtime.handleInboundMessage(incoming, harness.gateway))

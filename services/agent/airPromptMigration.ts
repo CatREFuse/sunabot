@@ -46,19 +46,29 @@ export function migrateConversationAirTemplate(
 
   const messages = [...template.messages];
   if (!hasKnowledge) {
-    const systemIndex = messages.findIndex((message) => (
+    const currentInputIndex = messages.findIndex((message) => (
       typeof message === "object"
       && message != null
       && !Array.isArray(message)
-      && message.role === "system"
+      && message.role === "user"
+      && typeof message.content === "string"
+      && message.content.includes("@{user.input}")
+    ));
+    const finalUserIndex = findLastIndex(messages, (message) => (
+      typeof message === "object"
+      && message != null
+      && !Array.isArray(message)
+      && message.role === "user"
       && typeof message.content === "string"
     ));
+    const userIndex = currentInputIndex >= 0 ? currentInputIndex : finalUserIndex;
+    if (userIndex < 0) throw new Error("Conversation prompt is missing its user message.");
+    const user = messages[userIndex] as Record<string, unknown>;
     const field = `<air_knowledge>@{${AIR_PERSONA_VARIABLE}}</air_knowledge>`;
-    if (systemIndex < 0) messages.unshift({ role: "system", content: field });
-    else {
-      const system = messages[systemIndex] as Record<string, unknown>;
-      messages[systemIndex] = { ...system, content: `${String(system.content).trimEnd()}\n\n${field}` };
-    }
+    messages[userIndex] = {
+      ...user,
+      content: `${field}\n\n${String(user.content).trimStart()}`
+    };
   }
   const canonicalTool = canonical.tools?.find((tool) => tool.function.name === READ_AIR_TOOL_NAME);
   if (!canonicalTool) throw new Error("Canonical conversation prompt is missing read_air.");
@@ -66,6 +76,13 @@ export function migrateConversationAirTemplate(
     ? [...(template.tools ?? [])]
     : [...(template.tools ?? []), structuredClone(canonicalTool)];
   return { ...template, messages, tools };
+}
+
+function findLastIndex<T>(values: readonly T[], predicate: (value: T) => boolean) {
+  for (let index = values.length - 1; index >= 0; index -= 1) {
+    if (predicate(values[index] as T)) return index;
+  }
+  return -1;
 }
 
 async function readOptional(filePath: string) {

@@ -22,7 +22,8 @@ const actionNames: Record<string, string> = {
   "websearch": "网页搜索",
   "generate_img": "生图",
   "selfie": "自拍",
-  "workspace_bash": "命令执行",
+  "native_bash": "Native 命令执行",
+  "docker_bash": "Docker 命令执行",
   "codex": "Codex 异步任务",
   "input_image": "图片输入"
 };

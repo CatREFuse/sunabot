@@ -8,8 +8,9 @@ import {
 } from "../../packages/contracts/admin/public.js";
 import {
   createWorkspaceBashTool,
+  DOCKER_BASH_TOOL_NAME,
   isWorkspaceBashProviderOptions,
-  WORKSPACE_BASH_TOOL_NAME,
+  NATIVE_BASH_TOOL_NAME,
   type WorkspaceBashProviderOptions
 } from "./bashTool.js";
 import {
@@ -47,6 +48,11 @@ import {
 } from "./callDirectorTool.js";
 import { READ_AIR_TOOL_NAME, readAirTool, type ReadAirToolPort } from "./readAirTool.js";
 import {
+  ADD_WORKMEMORY_TOOL_NAME,
+  addWorkMemoryTool,
+  type AddWorkMemoryToolPort
+} from "./addWorkMemoryTool.js";
+import {
   READ_FILE_TOOL_NAME,
   WRITE_FILE_TOOL_NAME,
   readFileTool,
@@ -81,8 +87,14 @@ export interface ToolAvailability {
     read(input: unknown): Promise<unknown>;
     write(input: unknown): Promise<unknown>;
   };
-  bash?: WorkspaceBashProviderOptions;
-  bashAvailable?: boolean;
+  bash?: {
+    native?: WorkspaceBashProviderOptions;
+    docker?: WorkspaceBashProviderOptions;
+  };
+  bashAvailable?: {
+    native?: boolean;
+    docker?: boolean;
+  };
   bot?: Pick<BotConfig, "tools">;
   selfie?: { enabled: boolean };
   memory?: { enabled: boolean };
@@ -96,6 +108,7 @@ export interface ToolAvailability {
   cron?: CronToolPort;
   director?: CallDirectorToolPort;
   air?: ReadAirToolPort;
+  workingMemory?: AddWorkMemoryToolPort;
   skills?: SkillRuntimeToolPort;
   skillCapabilities?: SkillToolCapabilitySnapshot;
   disabledTools?: readonly AgentToolName[];
@@ -124,7 +137,8 @@ export interface ToolMetadata {
   accessDescription?: string;
   executionBackend?: "native" | "docker";
   bashEnvironments?: {
-    docker: { started: boolean; reasonCode?: WorkspaceBashUnavailableReason };
+    native?: { available: boolean; reasonCode?: WorkspaceBashUnavailableReason };
+    docker?: { started: boolean; reasonCode?: WorkspaceBashUnavailableReason };
   };
   runtimeReasonCode?: WorkspaceBashUnavailableReason;
   execution: ToolExecution;
@@ -173,6 +187,17 @@ const catalog: readonly ToolCatalogEntry[] = [
     definition: () => memoryRecallTool,
     available: (options) => options.memory?.enabled === true,
     unavailableReason: "当前请求未启用记忆召回。",
+    execution: "inline"
+  },
+  {
+    name: ADD_WORKMEMORY_TOOL_NAME,
+    title: "记录工作记忆",
+    summary: "记录当前会话需要暂时保持一致的事项。",
+    definition: () => addWorkMemoryTool,
+    available: (options) => Boolean(options.workingMemory),
+    unavailableReason: "当前会话未提供工作记忆写入能力。",
+    unavailabilityKind: "session",
+    defaultEnabled: true,
     execution: "inline"
   },
   {
@@ -285,12 +310,30 @@ const catalog: readonly ToolCatalogEntry[] = [
     execution: "inline"
   },
   {
-    name: WORKSPACE_BASH_TOOL_NAME,
-    title: "Bash",
-    summary: "在 Agent workspace 内执行 Bash 命令。",
-    definition: (options) => createWorkspaceBashTool(options.bash),
-    available: (options) => isWorkspaceBashProviderOptions(options.bash) || options.bashAvailable === true,
-    unavailableReason: "当前环境未通过 Bash 隔离检查。",
+    name: NATIVE_BASH_TOOL_NAME,
+    title: "Native Bash",
+    summary: "在管理员宿主环境中执行 Bash 命令。",
+    definition: () => createWorkspaceBashTool({ backend: "native" }),
+    available: (options) => isWorkspaceBashProviderOptions(options.bash?.native)
+      || options.bashAvailable?.native === true,
+    unavailableReason: "当前环境未通过 Native Bash 检查。",
+    unavailabilityKind: "session",
+    accessLabel: "管理员私聊与 Web Chat 可用",
+    accessDescription: "管理员 QQ 私聊和管理 Web Chat 可用；群聊与普通用户私聊不可用。",
+    defaultEnabled: true,
+    execution: "inline"
+  },
+  {
+    name: DOCKER_BASH_TOOL_NAME,
+    title: "Docker Bash",
+    summary: "在当前 Agent 的隔离 Docker workbench 中执行 Bash 命令。",
+    definition: () => createWorkspaceBashTool({ backend: "docker" }),
+    available: (options) => isWorkspaceBashProviderOptions(options.bash?.docker)
+      || options.bashAvailable?.docker === true,
+    unavailableReason: "当前环境未通过 Docker Bash 隔离检查。",
+    accessLabel: "全部允许会话可用",
+    accessDescription: "管理员私聊、管理 Web Chat、群聊与普通用户私聊均可使用隔离 Docker workbench。",
+    defaultEnabled: true,
     execution: "inline"
   },
   {
@@ -378,7 +421,7 @@ export function listToolMetadata(
   promptDefinitions?: OpenAIToolDefinition[]
 ): ToolMetadata[] {
   const promptByName = promptDefinitionMap(promptDefinitions);
-  return catalog.map((entry) => {
+  return catalog.filter((entry) => entry.name !== ADD_WORKMEMORY_TOOL_NAME).map((entry) => {
     const canonical = entry.definition(options);
     const prompt = promptByName?.get(entry.name);
     const override = toolOverride(options, entry.name);
@@ -434,7 +477,7 @@ export function resolveProviderToolDefinitions(
   const promptByName = promptDefinitionMap(promptDefinitions);
   return catalog.flatMap((entry) => {
     if (!isConversationToolEnabled(options.disabledTools, entry.name)) return [];
-    if (entry.name === WORKSPACE_BASH_TOOL_NAME && !isWorkspaceBashProviderOptions(options.bash)) return [];
+    if (isBashTool(entry.name) && !isWorkspaceBashProviderOptions(bashOptions(options, entry.name))) return [];
     if (!providerContextReady(entry.name, options)) return [];
     if (!(entry.available?.(options) ?? true)) return [];
     const override = toolOverride(options, entry.name);
@@ -462,7 +505,7 @@ export function providerToolExecutionMode(name: string, options: ToolAvailabilit
 export function isProviderToolAvailable(name: string, options: ToolAvailability = {}) {
   if (!isAgentToolName(name) || toolOverride(options, name)?.enabled === false) return false;
   if (!isConversationToolEnabled(options.disabledTools, name)) return false;
-  if (name === WORKSPACE_BASH_TOOL_NAME) return isWorkspaceBashProviderOptions(options.bash);
+  if (isBashTool(name)) return isWorkspaceBashProviderOptions(bashOptions(options, name));
   if (!providerContextReady(name, options)) return false;
   const entry = catalog.find((candidate) => candidate.name === name);
   return Boolean(entry && (entry.available?.(options) ?? true));
@@ -513,9 +556,20 @@ function isSkillTool(name: AgentToolName) {
 }
 
 function toolOverride(options: ToolAvailability, name: AgentToolName): BotToolOverride | undefined {
+  if (name === ADD_WORKMEMORY_TOOL_NAME) return undefined;
   const override = options.bot?.tools.overrides?.[name];
-  if (!override || (name !== WORKSPACE_BASH_TOOL_NAME && name !== CODEX_TOOL_NAME)) return override;
+  if (!override || (!isBashTool(name) && name !== CODEX_TOOL_NAME)) return override;
   return override.description == null ? undefined : { description: override.description };
+}
+
+function isBashTool(name: AgentToolName) {
+  return name === NATIVE_BASH_TOOL_NAME || name === DOCKER_BASH_TOOL_NAME;
+}
+
+function bashOptions(options: ToolAvailability, name: AgentToolName) {
+  if (name === NATIVE_BASH_TOOL_NAME) return options.bash?.native;
+  if (name === DOCKER_BASH_TOOL_NAME) return options.bash?.docker;
+  return undefined;
 }
 
 function effectiveExecution(entry: ToolCatalogEntry, options: ToolAvailability): ToolExecution {
@@ -535,6 +589,7 @@ function applyRuntimeToolContract(
     && entry.name !== CRON_TOOL_NAME
     && entry.name !== CALL_DIRECTOR_TOOL_NAME
     && entry.name !== READ_AIR_TOOL_NAME
+    && entry.name !== ADD_WORKMEMORY_TOOL_NAME
     && entry.name !== WEBFETCH_TOOL_NAME
     && entry.name !== GENERATE_IMG_TOOL_NAME
     && entry.name !== SELFIE_TOOL_NAME

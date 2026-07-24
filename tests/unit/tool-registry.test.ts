@@ -18,36 +18,60 @@ describe("ToolRegistry", () => {
     const metadata = listToolMetadata();
     const definitions = resolveProviderToolDefinitions({
       bash: {
-        enabled: true,
-        workspacePath: "/fixture/agent-workspace",
-        backend: "docker",
-        accessMode: "isolated",
-        strictMode: true,
-        isCurrent: () => true,
-        audit: vi.fn(),
-        approvalContext: {
-          agentId: "plana",
-          accountId: "primary",
-          transport: "onebot",
-          conversationId: "private:171419991",
-          userId: "171419991"
+        docker: {
+          enabled: true,
+          workspacePath: "/fixture/agent-workspace",
+          backend: "docker",
+          accessMode: "isolated",
+          strictMode: true,
+          isCurrent: () => true,
+          audit: vi.fn(),
+          approvalContext: {
+            backend: "docker",
+            agentId: "plana",
+            accountId: "primary",
+            transport: "onebot",
+            conversationId: "private:171419991",
+            userId: "171419991"
+          }
         }
       }
     });
     const names = definitions.map((definition) => String(definition.name));
 
-    expect(metadata.some((tool) => tool.name === "workspace_bash")).toBe(true);
+    expect(metadata.some((tool) => tool.name === "native_bash")).toBe(true);
+    expect(metadata.some((tool) => tool.name === "docker_bash")).toBe(true);
     expect(metadata.some((tool) => tool.name === "bash.run")).toBe(false);
-    expect(metadata.map((tool) => tool.name)).toEqual(AGENT_TOOL_NAMES);
+    expect(metadata.map((tool) => tool.name)).toEqual(
+      AGENT_TOOL_NAMES.filter((name) => name !== "add_workmemory")
+    );
+    expect(metadata.some((tool) => tool.name === "add_workmemory")).toBe(false);
     expect(metadata.some((tool) => tool.name === "system.time")).toBe(false);
     expect(metadata.some((tool) => tool.name === "onebot.send_message")).toBe(false);
     expect(metadata.some((tool) => tool.name === "provider.test")).toBe(false);
-    expect(names).toEqual(["workspace_bash"]);
-    expect(providerToolExecutionMode("workspace_bash")).toBe("inline");
+    expect(names).toEqual(["docker_bash"]);
+    expect(providerToolExecutionMode("native_bash")).toBe("inline");
+    expect(providerToolExecutionMode("docker_bash")).toBe("inline");
   });
 
   it("does not expose disabled provider tools", () => {
     expect(resolveProviderToolDefinitions({})).toEqual([]);
+  });
+
+  it("always exposes add_workmemory in ordinary host-bound turns without a settings switch", () => {
+    const options = {
+      workingMemory: { execute: vi.fn() },
+      disabledTools: ["add_workmemory"] as const,
+      bot: {
+        tools: {
+          overrides: { add_workmemory: { enabled: false } }
+        }
+      }
+    } as unknown as ProviderCompleteOptions;
+    expect(resolveProviderToolDefinitions(options, []).map((tool) => tool.name))
+      .toEqual(["add_workmemory"]);
+    expect(isProviderToolAvailable("add_workmemory", options)).toBe(true);
+    expect(listToolMetadata(options).some((tool) => tool.name === "add_workmemory")).toBe(false);
   });
 
   it("applies the conversation selection after the Agent master switch", async () => {
@@ -82,10 +106,10 @@ describe("ToolRegistry", () => {
   });
 
   it("keeps API-only Bash capability metadata separate from executable Provider options", () => {
-    const bash = listToolMetadata({ bashAvailable: true }).find((tool) => tool.name === "workspace_bash");
+    const bash = listToolMetadata({ bashAvailable: { docker: true } }).find((tool) => tool.name === "docker_bash");
 
     expect(bash).toMatchObject({ available: true });
-    expect(resolveProviderToolDefinitions({ bashAvailable: true })).toEqual([]);
+    expect(resolveProviderToolDefinitions({ bashAvailable: { docker: true } })).toEqual([]);
   });
 
   it("classifies workbench file access as a session scope instead of a runtime failure", () => {
@@ -285,7 +309,7 @@ describe("ToolRegistry", () => {
     const executor = new RegistryProviderToolExecutor();
     const definitions = executor.resolveDefinitions(options, [staleTool("send_file"), staleTool("assistant_text")]);
 
-    for (const mixedTool of ["system_config", "workspace_bash", "assistant_text", "codex"]) {
+    for (const mixedTool of ["system_config", "docker_bash", "assistant_text", "codex"]) {
       const outputs = await executor.execute([{
         type: "function_call",
         name: "send_file",

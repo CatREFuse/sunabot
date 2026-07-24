@@ -153,7 +153,7 @@ export function registerConversationRoutes(app: FastifyInstance, options: Conver
     schema: { body: passthroughBody, response: { 200: openObject } }
   }, async (request) => {
     const runtime = runtimeFor(request);
-    const conversation = runtime.setConversationReplyEnabled(request.body as {
+    const body = request.body as {
       id?: string;
       scope?: string;
       title?: string;
@@ -161,9 +161,44 @@ export function registerConversationRoutes(app: FastifyInstance, options: Conver
       groupId?: number;
       replyEnabled?: boolean;
       orchestratorEnabled?: boolean;
-    });
+      orchestratorResponseTimeOverrideEnabled?: boolean;
+      orchestratorResponseTimeMs?: number;
+      directorEventsEnabled?: boolean;
+    };
+    validateConversationOrchestratorResponseTime(body);
+    const conversation = runtime.setConversationReplyEnabled(body);
     return { ok: true, conversation };
   });
+}
+
+function validateConversationOrchestratorResponseTime(body: {
+  orchestratorResponseTimeOverrideEnabled?: unknown;
+  orchestratorResponseTimeMs?: unknown;
+}) {
+  if (
+    body.orchestratorResponseTimeOverrideEnabled !== undefined &&
+    typeof body.orchestratorResponseTimeOverrideEnabled !== "boolean"
+  ) {
+    badRequest(
+      "CONVERSATION_ORCHESTRATOR_RESPONSE_TIME_OVERRIDE_INVALID",
+      "编排器时间覆盖设置无效。",
+      "orchestratorResponseTimeOverrideEnabled"
+    );
+  }
+  if (
+    body.orchestratorResponseTimeMs !== undefined &&
+    (
+      !Number.isInteger(body.orchestratorResponseTimeMs) ||
+      Number(body.orchestratorResponseTimeMs) < 1_000 ||
+      Number(body.orchestratorResponseTimeMs) > 3_600_000
+    )
+  ) {
+    badRequest(
+      "CONVERSATION_ORCHESTRATOR_RESPONSE_TIME_INVALID",
+      "编排器响应时间必须是 1 到 3600 秒之间的整数。",
+      "orchestratorResponseTimeMs"
+    );
+  }
 }
 
 function validConversationId(value: unknown) {

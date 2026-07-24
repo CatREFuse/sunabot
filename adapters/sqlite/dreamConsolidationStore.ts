@@ -41,6 +41,7 @@ interface NormalizedConsolidationInput {
   workerId: string;
   expectedWorkingDigest: string;
   expectedLongTermDigest: string;
+  externalWorkingMemory: boolean;
   workingMemoryId: string;
   working: NormalizedMemoryRecord[];
   longTerm: NormalizedMemoryRecord[];
@@ -213,9 +214,11 @@ export function commitDreamConsolidationUnsafe(
     return { status: "lease_lost", run };
   }
 
-  const currentWorking = readMemory(database, "working");
+  const currentWorking = normalized.externalWorkingMemory ? [] : readMemory(database, "working");
   const currentLongTerm = readMemory(database, "long_term");
-  const actualWorkingDigest = digestDreamMemorySnapshot(currentWorking);
+  const actualWorkingDigest = normalized.externalWorkingMemory
+    ? normalized.expectedWorkingDigest
+    : digestDreamMemorySnapshot(currentWorking);
   const actualLongTermDigest = digestDreamMemorySnapshot(currentLongTerm);
   const sources: MemorySource[] = [];
   if (actualWorkingDigest !== normalized.expectedWorkingDigest) sources.push("working");
@@ -230,7 +233,7 @@ export function commitDreamConsolidationUnsafe(
     return { status: "snapshot_conflict", sources, actualWorkingDigest, actualLongTermDigest };
   }
 
-  replaceMemory(database, "working", normalized.working);
+  if (!normalized.externalWorkingMemory) replaceMemory(database, "working", normalized.working);
   replaceMemory(database, "long_term", normalized.longTerm);
   archiveMemories(database, normalized, now);
   for (const lineage of normalized.recallLineages) mergeRecallLineage(database, lineage);
@@ -289,6 +292,7 @@ function normalizeInput(input: CommitDreamConsolidationInput): NormalizedConsoli
     workerId: normalizeWorkerId(input.workerId),
     expectedWorkingDigest: normalizeDigest(input.expectedWorkingDigest, "expectedWorkingDigest"),
     expectedLongTermDigest: normalizeDigest(input.expectedLongTermDigest, "expectedLongTermDigest"),
+    externalWorkingMemory: input.externalWorkingMemory === true,
     workingMemoryId,
     working,
     longTerm,

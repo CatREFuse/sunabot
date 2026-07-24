@@ -94,6 +94,35 @@ describe("director SQLite store", () => {
     store.deleteTaskLink("director-plana-20260720-afternoon-r1-c1");
     expect(store.listTaskLinks("2026-07-20")).toEqual([]);
   });
+
+  it("lists the latest decision for each day with bounded pagination", () => {
+    store.commit({
+      draft: draft("第一天"),
+      seedHash: "a".repeat(64),
+      source: "daily_plan",
+      now: new Date("2026-07-20T07:00:00.000Z")
+    });
+    store.commit({
+      draft: { ...draft("第二天"), date: "2026-07-21", items: draft("第二天").items.map((item) => ({
+        ...item,
+        startAt: item.startAt.replace("2026-07-20", "2026-07-21"),
+        endAt: item.endAt.replace("2026-07-20", "2026-07-21"),
+        share: { ...item.share, at: item.share.at?.replace("2026-07-20", "2026-07-21") ?? null }
+      })) },
+      seedHash: "b".repeat(64),
+      source: "daily_plan",
+      now: new Date("2026-07-21T07:00:00.000Z")
+    });
+
+    expect(store.list({ page: 1, pageSize: 1 })).toMatchObject({
+      schedules: [{ date: "2026-07-21", summary: "第二天" }],
+      pagination: { page: 1, pageSize: 1, total: 2, pageCount: 2 }
+    });
+    expect(store.list({ page: 9, pageSize: 1 })).toMatchObject({
+      schedules: [{ date: "2026-07-20", summary: "第一天" }],
+      pagination: { page: 2, pageSize: 1, total: 2, pageCount: 2 }
+    });
+  });
 });
 
 function draft(summary: string): DirectorScheduleDraftV1 {

@@ -373,6 +373,41 @@ describe("admin API smoke", () => {
     await app.close();
   });
 
+  it("serves global system settings without requiring an Agent", async () => {
+    const app = await createApp(testAppOptions());
+    const globalEnvelope = await app.inject({ method: "GET", url: "/api/config", headers: ADMIN_HEADERS });
+
+    expect(globalEnvelope.statusCode).toBe(200);
+    expect(globalEnvelope.json().config.normalReply.maxRetries).toBe(3);
+
+    const patch = await app.inject({
+      method: "PATCH",
+      url: "/api/config/normalReply",
+      headers: ADMIN_HEADERS,
+      payload: {
+        revision: globalEnvelope.json().revision,
+        value: { maxRetries: 4 }
+      }
+    });
+
+    expect(patch.statusCode).toBe(200);
+    expect(patch.json().config.normalReply.maxRetries).toBe(4);
+
+    const agentOnlyPatch = await app.inject({
+      method: "PATCH",
+      url: "/api/config/bot",
+      headers: ADMIN_HEADERS,
+      payload: {
+        revision: patch.json().revision,
+        value: {}
+      }
+    });
+
+    expect(agentOnlyPatch.statusCode).toBe(400);
+    expect(agentOnlyPatch.json()).toMatchObject({ error: { code: "AGENT_ID_REQUIRED" } });
+    await app.close();
+  });
+
   it("reloads the config envelope from disk after an external edit", async () => {
     const app = await createApp(testAppOptions());
     config.server.port = 9123;

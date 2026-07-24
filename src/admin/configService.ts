@@ -4,6 +4,7 @@ import type {
   AgentToolName,
   AppConfig,
   BotConfig,
+  BotDirectorSettings,
   BotMemorySettings,
   BotOrchestratorSettings,
   BotToneSettings,
@@ -84,6 +85,7 @@ export interface ConfigSectionValueMap {
   bot: Pick<BotConfig, "adminQq" | "adminName" | "replyDebounceMs" | "pokeOnNoReply" | "quoteGroupReplies" | "quoteGroupReplyExcludedUserIds" | "contextMessageLimit" | "emojiSendSize" | "emojiSendSeparately">;
   tone: BotToneSettings;
   memory: BotMemorySettings;
+  director: BotDirectorSettings;
   orchestrator: BotOrchestratorSettings;
   tools: BotToolSettings;
   bash: BotConfig["bash"];
@@ -279,6 +281,7 @@ export function validateConfigSectionValue<S extends ConfigSection>(
     case "bot": return validateBot(value, current?.bot) as ConfigSectionValueMap[S];
     case "tone": return validateTone(value, current?.providers) as ConfigSectionValueMap[S];
     case "memory": return validateMemoryConfig(value) as ConfigSectionValueMap[S];
+    case "director": return validateDirector(value) as ConfigSectionValueMap[S];
     case "orchestrator": return validateOrchestrator(value) as ConfigSectionValueMap[S];
     case "tools": return validateTools(value, current?.bot.tools) as ConfigSectionValueMap[S];
     case "bash": return validateBash(value) as ConfigSectionValueMap[S];
@@ -301,6 +304,12 @@ function validatePersona(input: unknown): ConfigSectionValueMap["persona"] {
   return {
     agentWorkspace: pathString(value.agentWorkspace, "persona.agentWorkspace", false)
   };
+}
+
+function validateDirector(input: unknown): BotDirectorSettings {
+  const value = object(input, "director");
+  exactKeys(value, ["enabled"], "director");
+  return { enabled: boolean(value.enabled, "director.enabled") };
 }
 
 function validateProviders(input: unknown, current?: AppConfig["providers"]): AppConfig["providers"] {
@@ -629,7 +638,7 @@ function validateToolOverrides(input: unknown): NonNullable<BotToolSettings["ove
     const override = object(rawOverride, field);
     const extra = Object.keys(override).find((key) => key !== "enabled" && key !== "description");
     if (extra) badRequest("CONFIG_UNKNOWN_FIELD", "包含不支持的字段。", `${field}.${extra}`);
-    const enabled = name === "workspace_bash" || name === "codex" || override.enabled == null
+    const enabled = name === "native_bash" || name === "docker_bash" || name === "codex" || override.enabled == null
       ? undefined
       : boolean(override.enabled, `${field}.enabled`);
     let description: string | undefined;
@@ -722,6 +731,7 @@ export function validateCompleteConfig(config: AppConfig) {
     emojiSendSeparately: config.bot.emojiSendSeparately
   });
   validateTone(config.bot.tone, config.providers);
+  validateDirector(config.bot.director ?? { enabled: false });
   validateMemoryConfig(config.bot.memory);
   validateOrchestrator(config.bot.orchestrator);
   validateTools(config.bot.tools);
@@ -751,6 +761,7 @@ export function mergeConfigSection<S extends ConfigSection>(
     }
     case "tone": candidate.bot.tone = value as ConfigSectionValueMap["tone"]; break;
     case "memory": candidate.bot.memory = value as ConfigSectionValueMap["memory"]; break;
+    case "director": candidate.bot.director = value as ConfigSectionValueMap["director"]; break;
     case "orchestrator": candidate.bot.orchestrator = value as ConfigSectionValueMap["orchestrator"]; break;
     case "tools": candidate.bot.tools = value as ConfigSectionValueMap["tools"]; break;
     case "bash": candidate.bot.bash = value as ConfigSectionValueMap["bash"]; break;

@@ -260,7 +260,10 @@ describe("emoji durable delivery chain", () => {
     ]);
   });
 
-  it("marks segmented expression bubbles as stickers", async () => {
+  it.each([
+    "<exp>[/开心]</exp>",
+    '<exp key="[/开心]"/>'
+  ])("marks both segmented expression forms as stickers: %s", async (expressionXml) => {
     const incoming = privateIncoming();
     const providerText = "[/开心]";
     const host = deliveryHost(vi.fn(async (value: string) => value), providerText);
@@ -270,7 +273,7 @@ describe("emoji durable delivery chain", () => {
     Object.assign(host, {
       rewriteToneDelivery: vi.fn(async () => ({
         segmented: true as const,
-        content: "<exp>[/开心]</exp>"
+        content: expressionXml
       }))
     });
     const delivery = { outbox: [] } satisfies ReplyDelivery;

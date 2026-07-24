@@ -3,7 +3,8 @@ import {
   SEND_FILE_TOOL_NAME,
   SYSTEM_CONFIG_TOOL_NAME,
   CRON_TOOL_NAME,
-  WORKSPACE_BASH_TOOL_NAME,
+  DOCKER_BASH_TOOL_NAME,
+  NATIVE_BASH_TOOL_NAME,
   WRITE_FILE_TOOL_NAME,
   ACTIVATE_SKILL_TOOL_NAME,
   READ_SKILL_RESOURCE_TOOL_NAME,
@@ -39,7 +40,8 @@ const localDataTools = new Set([
   SEND_FILE_TOOL_NAME,
   READ_FILE_TOOL_NAME,
   WRITE_FILE_TOOL_NAME,
-  WORKSPACE_BASH_TOOL_NAME,
+  NATIVE_BASH_TOOL_NAME,
+  DOCKER_BASH_TOOL_NAME,
   ACTIVATE_SKILL_TOOL_NAME,
   READ_SKILL_RESOURCE_TOOL_NAME,
   RUN_SKILL_SCRIPT_TOOL_NAME,
@@ -61,7 +63,8 @@ const restrictedToolNames = new Set([
   SEND_FILE_TOOL_NAME,
   READ_FILE_TOOL_NAME,
   WRITE_FILE_TOOL_NAME,
-  WORKSPACE_BASH_TOOL_NAME,
+  NATIVE_BASH_TOOL_NAME,
+  DOCKER_BASH_TOOL_NAME,
   ACTIVATE_SKILL_TOOL_NAME,
   READ_SKILL_RESOURCE_TOOL_NAME,
   RUN_SKILL_SCRIPT_TOOL_NAME
@@ -226,8 +229,11 @@ function restrictedBatchError(calls: ResponseFunctionCallItem[]) {
   if (calls.some((call) => isWorkbenchFileToolName(call.name))) {
     return "read_file and write_file must be called alone before any other tool.";
   }
-  if (calls.some((call) => call.name === WORKSPACE_BASH_TOOL_NAME)) {
-    return "workspace_bash must be called alone before any other tool.";
+  const bashCall = calls.find((call) => (
+    call.name === NATIVE_BASH_TOOL_NAME || call.name === DOCKER_BASH_TOOL_NAME
+  ));
+  if (bashCall) {
+    return `${bashCall.name} must be called alone before any other tool.`;
   }
   if (calls.some((call) => call.name === ACTIVATE_SKILL_TOOL_NAME)) {
     return "activate_skill must be called alone before any other tool.";

@@ -53,6 +53,7 @@ export class CommandRouter<Context, Result = void> {
   match(text: string, botNames: string[] = []): CommandMatch<Context, Result> | undefined {
     const parsed = parseCommandText(text);
     if (!parsed) return undefined;
+    if (!parsed.botName) return undefined;
     if (parsed.botName && !botNames.some((name) => normalizeCommandName(name) === normalizeCommandName(parsed.botName))) {
       return undefined;
     }
@@ -71,8 +72,12 @@ export class CommandRouter<Context, Result = void> {
   restore(invocation: CommandInvocation): CommandMatch<Context, Result> {
     const definition = this.definitionsById.get(invocation.id);
     if (!definition) throw new Error(`Unknown command id: ${invocation.id}`);
+    const snapshot = commandInvocationSnapshot(invocation);
+    if (!parseCommandText(snapshot.rawText)?.botName) {
+      throw new Error("Command invocation must target a bot.");
+    }
     return {
-      ...commandInvocationSnapshot(invocation),
+      ...snapshot,
       definition
     };
   }

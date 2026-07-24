@@ -149,6 +149,29 @@ export function conversationReplyEnabled(record: Pick<ConversationRecord, "reply
 export function conversationOrchestratorEnabled(record: Pick<ConversationRecord, "orchestratorEnabled"> | undefined) {
   return record?.orchestratorEnabled !== false;
 }
+export function normalizeConversationOrchestratorResponseTimeMs(value: unknown) {
+  return Number.isInteger(value) && Number(value) >= 1_000 && Number(value) <= 3_600_000
+    ? Number(value)
+    : undefined;
+}
+export function conversationOrchestratorResponseTimeMs(
+  record: Pick<
+    ConversationRecord,
+    "orchestratorResponseTimeOverrideEnabled" | "orchestratorResponseTimeMs"
+  > | undefined,
+  defaultResponseTimeMs: number
+) {
+  if (record?.orchestratorResponseTimeOverrideEnabled === true) {
+    const override = normalizeConversationOrchestratorResponseTimeMs(record.orchestratorResponseTimeMs);
+    if (override !== undefined) return override;
+  }
+  return defaultResponseTimeMs;
+}
+export function conversationDirectorEventsEnabled(
+  record: Pick<ConversationRecord, "directorEventsEnabled"> | undefined
+) {
+  return record?.directorEventsEnabled === true;
+}
 export function normalizeConversationId(value: unknown) {
   const text = String(value ?? "").trim();
   return /^(?:account:[A-Za-z0-9_-]+:)?(?:private|group):\d+$/.test(text) ? text : "";

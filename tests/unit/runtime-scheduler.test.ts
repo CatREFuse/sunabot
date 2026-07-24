@@ -71,7 +71,7 @@ describe("runtime reply scheduling helpers", () => {
     };
     internals.replyToIncoming = replyToIncoming;
     internals.replyWithGroupChatSummary = replyWithGroupChatSummary;
-    const incoming = groupIncoming("/总结群聊");
+    const incoming = groupIncoming("/总结群聊@普拉娜");
     incoming.scope = "bot_group";
     const command = internals.commandRouter.match(incoming.text, ["普拉娜"]);
 
@@ -112,7 +112,7 @@ describe("runtime reply scheduling helpers", () => {
     internals.persistConversationRecords = vi.fn();
     internals.sessionCoordinator.enqueueEvent = enqueueEvent;
 
-    await runtime.handleInboundMessage(groupIncoming("/总结群聊", 171419991), {} as never);
+    await runtime.handleInboundMessage(groupIncoming("/总结群聊@普拉娜", 171419991), {} as never);
 
     expect(enqueueEvent).not.toHaveBeenCalled();
     expect(internals.persistConversationRecords).not.toHaveBeenCalled();
@@ -232,7 +232,7 @@ describe("runtime reply scheduling helpers", () => {
       const internals = runtime as unknown as {
         resolveIncomingReplyRoute(incoming: ParsedIncomingMessage, command: boolean): string;
       };
-      const incoming = groupIncoming("/总结群聊", 998877665);
+      const incoming = groupIncoming("/总结群聊@普拉娜", 998877665);
       incoming.scope = scope;
       incoming.groupId = scope === "private" ? undefined : 3003;
 
@@ -259,7 +259,7 @@ describe("runtime reply scheduling helpers", () => {
       };
       internals.sessionCoordinator.enqueueEvent = enqueueEvent;
       internals.recordIncomingMessage = recordIncomingMessage;
-      const incoming = groupIncoming("/总结群聊", 1234);
+      const incoming = groupIncoming("/总结群聊@普拉娜", 1234);
       incoming.scope = scope;
       incoming.groupId = scope === "private" ? undefined : 3003;
 
@@ -490,6 +490,88 @@ describe("runtime reply scheduling helpers", () => {
     expect(invalidateConversation).not.toHaveBeenCalled();
   });
 
+  it("persists a conversation response-time override and reschedules its pending timer", () => {
+    vi.useFakeTimers();
+    const runtime = createRuntime();
+    const scheduleAmbientIdleReply = vi.fn();
+    const job = { channelKey: "group:3003" };
+    const internals = runtime as unknown as {
+      conversationRecords: Map<string, Record<string, unknown>>;
+      ambientIdleTimers: Map<string, { timer: NodeJS.Timeout; job: typeof job }>;
+      persistConversationRecords(): void;
+      scheduleAmbientIdleReply: typeof scheduleAmbientIdleReply;
+    };
+    internals.persistConversationRecords = vi.fn();
+    internals.scheduleAmbientIdleReply = scheduleAmbientIdleReply;
+    internals.conversationRecords.set("group:3003", {
+      id: "group:3003",
+      scope: "user_group",
+      title: "群聊",
+      userId: 2002,
+      groupId: 3003,
+      messageCount: 1,
+      lastAt: "2026-07-10T00:00:00.000Z",
+      lastText: "待处理消息",
+      messages: [],
+      replyEnabled: true,
+      orchestratorEnabled: true
+    });
+    internals.ambientIdleTimers.set("group:3003", {
+      timer: setTimeout(() => undefined, 60_000),
+      job
+    });
+
+    const updated = runtime.setConversationReplyEnabled({
+      id: "group:3003",
+      orchestratorResponseTimeOverrideEnabled: true,
+      orchestratorResponseTimeMs: 15_000
+    });
+
+    expect(updated).toMatchObject({
+      orchestratorResponseTimeOverrideEnabled: true,
+      orchestratorResponseTimeMs: 15_000,
+      orchestratorStatus: { activeWindowMs: 15_000 }
+    });
+    expect(internals.persistConversationRecords).toHaveBeenCalledOnce();
+    expect(scheduleAmbientIdleReply).toHaveBeenCalledWith(job);
+  });
+
+  it("uses the current Agent response time when enabling an override without a submitted time", () => {
+    const config = createAdminTestConfig("/tmp/sunabot-runtime-router-test");
+    config.bot.orchestrator.recentMessageWindowMs = 60_000;
+    const runtime = createRuntime(config);
+    const internals = runtime as unknown as {
+      conversationRecords: Map<string, Record<string, unknown>>;
+      persistConversationRecords(): void;
+    };
+    internals.persistConversationRecords = vi.fn();
+    internals.conversationRecords.set("group:3003", {
+      id: "group:3003",
+      scope: "user_group",
+      title: "群聊",
+      userId: 2002,
+      groupId: 3003,
+      messageCount: 0,
+      lastAt: "2026-07-10T00:00:00.000Z",
+      lastText: "",
+      messages: [],
+      replyEnabled: true,
+      orchestratorEnabled: true
+    });
+
+    const updated = runtime.setConversationReplyEnabled({
+      id: "group:3003",
+      orchestratorResponseTimeOverrideEnabled: true
+    });
+
+    expect(updated).toMatchObject({
+      orchestratorResponseTimeOverrideEnabled: true,
+      orchestratorResponseTimeMs: 60_000,
+      orchestratorStatus: { activeWindowMs: 60_000 }
+    });
+    expect(internals.persistConversationRecords).toHaveBeenCalledOnce();
+  });
+
   it("exposes the actual orchestrator trigger progress for a user group", () => {
     const config = createAdminTestConfig("/tmp/sunabot-runtime-router-test");
     config.bot.orchestrator.enabled = true;
@@ -529,6 +611,8 @@ describe("runtime reply scheduling helpers", () => {
       ],
       replyEnabled: true,
       orchestratorEnabled: true,
+      orchestratorResponseTimeOverrideEnabled: false,
+      orchestratorResponseTimeMs: 15_000,
       orchestratorCheckedMessageCount: 12,
       orchestratorCheckedAt: "2026-07-10T00:00:00.000Z"
     });
@@ -932,6 +1016,8 @@ describe("runtime reply scheduling helpers", () => {
       })),
       replyEnabled: true,
       orchestratorEnabled: true,
+      orchestratorResponseTimeOverrideEnabled: true,
+      orchestratorResponseTimeMs: 15_000,
       orchestratorCheckedMessageCount: 0
     };
     const internals = runtime as unknown as {
@@ -952,7 +1038,7 @@ describe("runtime reply scheduling helpers", () => {
     internals.queueAmbientReply = queueAmbientReply;
 
     await runtime.handleInboundMessage(groupIncoming("普通群消息", 171419991), {} as never);
-    await vi.advanceTimersByTimeAsync(59_999);
+    await vi.advanceTimersByTimeAsync(14_999);
     expect(queueAmbientReply).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
     expect(queueAmbientReply).toHaveBeenCalledOnce();

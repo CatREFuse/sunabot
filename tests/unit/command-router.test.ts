@@ -11,9 +11,9 @@ import {
 
 describe("CommandRouter", () => {
   it.each([
-    ["/总结群聊", "", "总结群聊"],
-    ["／总结群聊 最近三小时", "最近三小时", "总结群聊"],
-    ["/SUMMARY today", "today", "SUMMARY"],
+    ["/总结群聊@普拉娜", "", "总结群聊"],
+    ["／总结群聊@普拉娜 最近三小时", "最近三小时", "总结群聊"],
+    ["/SUMMARY@普拉娜 today", "today", "SUMMARY"],
     ["/summary@普拉娜 today", "today", "summary"]
   ])("matches registered command forms: %s", (text, args, invokedName) => {
     const handler = vi.fn(async () => undefined);
@@ -33,8 +33,11 @@ describe("CommandRouter", () => {
   it.each([
     "ping",
     "普拉娜 ping",
+    "/总结群聊",
+    "／总结群聊 最近三小时",
     "/unknown",
     "/summary-extra",
+    "/summary now",
     "/summary@其他机器人"
   ])("leaves noncommands and unknown commands for the main model: %s", (text) => {
     const router = new CommandRouter([
@@ -49,7 +52,7 @@ describe("CommandRouter", () => {
     const router = new CommandRouter<{ channel: string }, string>([
       { id: "group-summary", names: ["总结群聊"], handler }
     ]);
-    const match = router.match("/总结群聊 最近三小时");
+    const match = router.match("/总结群聊@Plana 最近三小时", ["Plana"]);
     expect(match).toBeDefined();
 
     const result = await router.dispatch(match!, { channel: "group:1" });
@@ -85,7 +88,7 @@ describe("CommandRouter", () => {
     const router = new CommandRouter([
       { id: "group-summary", names: ["summary"], handler: async () => undefined }
     ]);
-    const match = router.match("/summary now");
+    const match = router.match("/summary@Plana now", ["Plana"]);
     expect(match).toBeDefined();
 
     const snapshot = commandInvocationSnapshot(match!);
@@ -94,7 +97,7 @@ describe("CommandRouter", () => {
       id: "group-summary",
       invokedName: "summary",
       args: "now",
-      rawText: "/summary now"
+      rawText: "/summary@Plana now"
     });
     expect(snapshot).not.toHaveProperty("definition");
   });
@@ -108,7 +111,7 @@ describe("CommandRouter", () => {
       id: "removed-command",
       invokedName: "summary",
       args: "",
-      rawText: "/summary"
+      rawText: "/summary@Plana"
     })).toThrow(/unknown command id/i);
   });
 
@@ -117,9 +120,9 @@ describe("CommandRouter", () => {
       { id: "group-summary", names: ["summary"], handler: async () => undefined }
     ]);
 
-    expect(() => router.match(`/summary ${"a".repeat(MAX_COMMAND_INVOCATION_ARGS_CHARACTERS + 1)}`))
+    expect(() => router.match(`/summary@Plana ${"a".repeat(MAX_COMMAND_INVOCATION_ARGS_CHARACTERS + 1)}`, ["Plana"]))
       .toThrow(/exceeds durable limits/i);
-    expect(() => router.match(`${" ".repeat(MAX_COMMAND_INVOCATION_RAW_TEXT_CHARACTERS)}/summary`))
+    expect(() => router.match(`${" ".repeat(MAX_COMMAND_INVOCATION_RAW_TEXT_CHARACTERS)}/summary@Plana`, ["Plana"]))
       .toThrow(/exceeds durable limits/i);
   });
 
@@ -132,8 +135,21 @@ describe("CommandRouter", () => {
       id: "group-summary",
       invokedName: "summary",
       args: "\0",
-      rawText: "/summary"
+      rawText: "/summary@Plana"
     })).toThrow(/invalid command invocation/i);
+  });
+
+  it("rejects a frozen slash command that was not targeted at a bot", () => {
+    const router = new CommandRouter([
+      { id: "group-summary", names: ["summary"], handler: async () => undefined }
+    ]);
+
+    expect(() => router.restore({
+      id: "group-summary",
+      invokedName: "summary",
+      args: "",
+      rawText: "/summary"
+    })).toThrow(/must target a bot/i);
   });
 
   it("rejects duplicate command names during registration", () => {

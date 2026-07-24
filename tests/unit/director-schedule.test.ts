@@ -61,6 +61,28 @@ describe("director schedule contract", () => {
     });
   });
 
+  it("keeps a committed character revision with no remaining daily shares readable", () => {
+    const noShareItems = validDraft().items.map((item) => ({
+      ...item,
+      share: { enabled: false, at: null, textIntent: null, selfiePrompt: null } as const
+    }));
+    const revision: DirectorScheduleV1 = {
+      ...validDraft(),
+      items: noShareItems,
+      revision: 2,
+      source: "character_revision",
+      generatedAt: "2026-07-20T07:00:00.000Z",
+      updatedAt: "2026-07-20T18:00:00.000Z"
+    };
+
+    expect(isDirectorSchedule(revision)).toBe(true);
+    expect(isDirectorSchedule({ ...revision, source: "daily_plan" })).toBe(false);
+    expect(() => normalizeDirectorScheduleDraft({
+      ...validDraft(),
+      items: noShareItems
+    }, expected())).toThrow("1 to 3 daily shares");
+  });
+
   it("keeps provider schemas compatible while enforcing unique participants locally", () => {
     expect(JSON.stringify([
       directorDailyPlanPromptTemplate(),

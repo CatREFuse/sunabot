@@ -317,7 +317,7 @@ score = 0.55 × BM25
 
 ### 7.2 工具组合边界
 
-`webfetch` 必须加入 `toolResponsePreflight.ts` 的 `outboundNetworkTools`。它与 `read_file`、`write_file`、`send_file`、`workspace_bash`、`memory_recall`、Skill 本地资源、`system_config` 和 `cron` 在同一 Provider turn 互斥，覆盖同一 response、多轮工具调用和共享 executor 直调。
+`webfetch` 必须加入 `toolResponsePreflight.ts` 的 `outboundNetworkTools`。它与 `read_file`、`write_file`、`send_file`、`native_bash`、`docker_bash`、`memory_recall`、Skill 本地资源、`system_config` 和 `cron` 在同一 Provider turn 互斥，覆盖同一 response、多轮工具调用和共享 executor 直调。
 
 `websearch` 后使用 `webfetch` 属于两个出站网络工具，可以在同一 turn 顺序执行；它们仍受全局工具调用上限、取消信号和响应预算限制。
 

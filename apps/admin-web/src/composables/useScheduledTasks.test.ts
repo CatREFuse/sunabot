@@ -141,6 +141,23 @@ describe("useScheduledTasks", () => {
     expect(data.tasks.value[0]).toMatchObject({ id: "archived", archived: true });
   });
 
+  it("preserves the initial category when an Agent context is activated", async () => {
+    apiRequest.mockImplementation((path: string) => {
+      if (path === "/api/conversations?agentId=plana") return Promise.resolve({ conversations: [] });
+      if (path.includes("category=director&page=1")) return Promise.resolve(page([]));
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    const data = useScheduledTasks("director");
+
+    await data.load("plana");
+
+    expect(data.category.value).toBe("director");
+    expect(apiRequest).toHaveBeenCalledWith(
+      expect.stringContaining("category=director"),
+      expect.any(Object)
+    );
+  });
+
   it("updates permanent retention with only the revision and requested value", async () => {
     const archived = { ...task("archived", "归档任务", 4), archived: true };
     let reads = 0;

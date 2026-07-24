@@ -10,7 +10,7 @@ const draft = defineModel<ConfigSectionValueMap["bash"]>({ required: true });
   <section class="grid gap-8">
     <div>
       <h2 class="section-title">命令执行</h2>
-      <p class="mt-2 text-sm text-mute">每条 Docker Bash 命令均由独立审批 Agent 对抗审核。</p>
+      <p class="mt-2 text-sm text-mute">每条 Native Bash 与 Docker Bash 命令均由独立审批 Agent 对抗审核。</p>
     </div>
     <div class="settings-group grid gap-5">
       <h3 class="settings-group-title">命令审批</h3>
@@ -27,7 +27,11 @@ const draft = defineModel<ConfigSectionValueMap["bash"]>({ required: true });
       <dl class="border-y border-line">
         <div class="divider-row">
           <dt class="field-label">管理员 QQ 私聊</dt>
-          <dd class="inline-state"><i class="bx bx-cube mr-1" aria-hidden="true"></i>Docker Bash</dd>
+          <dd class="inline-state"><i class="bx bx-terminal mr-1" aria-hidden="true"></i>Native Bash · Docker Bash</dd>
+        </div>
+        <div class="divider-row">
+          <dt class="field-label">管理 Web Chat</dt>
+          <dd class="inline-state"><i class="bx bx-terminal mr-1" aria-hidden="true"></i>Native Bash · Docker Bash</dd>
         </div>
         <div class="divider-row">
           <dt class="field-label">全部群聊与其他 QQ 私聊</dt>
@@ -35,15 +39,11 @@ const draft = defineModel<ConfigSectionValueMap["bash"]>({ required: true });
         </div>
         <div class="divider-row">
           <dt class="field-label">共享配置</dt>
-          <dd class="inline-state"><i class="bx bx-lock-alt mr-1" aria-hidden="true"></i>Skill 与 MCP · Docker 只读</dd>
+          <dd class="inline-state"><i class="bx bx-lock-alt mr-1" aria-hidden="true"></i>Skill 与 MCP · 只读</dd>
         </div>
         <div class="divider-row">
           <dt class="field-label">工作目录</dt>
-          <dd class="inline-state"><i class="bx bx-folder mr-1" aria-hidden="true"></i>Agent workbench</dd>
-        </div>
-        <div class="divider-row">
-          <dt class="field-label">Web Chat</dt>
-          <dd class="inline-state"><i class="bx bx-block mr-1" aria-hidden="true"></i>不可用</dd>
+          <dd class="inline-state"><i class="bx bx-folder mr-1" aria-hidden="true"></i>Native：Agent workbench · Docker：隔离 workbench</dd>
         </div>
       </dl>
     </div>

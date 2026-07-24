@@ -27,6 +27,7 @@ export interface ProviderConfigRouteOptions {
 
 const openObject = { type: "object", additionalProperties: true } as const;
 const passthroughBody = {} as const;
+const GLOBAL_CONFIG_SECTIONS = new Set(["server", "providers", "broadcastStorm", "normalReply"]);
 
 export function registerProviderConfigRoutes(
   app: FastifyInstance,
@@ -47,18 +48,18 @@ export function registerProviderConfigRoutes(
   app.get("/api/config", {
     schema: { querystring: openObject, response: { 200: openObject } }
   }, async (request) => {
-    const agentId = requestAgentId(request.query);
+    const agentId = optionalAgentId(request.query, options.agentConfigService);
     return options.agentConfigService
-      ? options.agentConfigService.readEnvelope(agentId)
+      ? agentId ? options.agentConfigService.readEnvelope(agentId) : options.configService.readEnvelope()
       : options.configService.readEnvelope();
   });
 
   app.patch("/api/config/group-reply", {
     schema: { body: passthroughBody, response: { 200: openObject } }
   }, async (request) => {
-    const agentId = requestAgentId(request.query);
+    const agentId = options.agentConfigService ? requestAgentId(request.query) : undefined;
     return options.agentConfigService
-      ? options.agentConfigService.patchGroupReply(agentId, request.body)
+      ? options.agentConfigService.patchGroupReply(agentId!, request.body)
       : options.configService.patchGroupReply(request.body);
   });
 
@@ -75,10 +76,13 @@ export function registerProviderConfigRoutes(
     }
   }, async (request) => {
     const params = request.params as { section?: string };
-    const agentId = requestAgentId(request.query);
+    const section = String(params.section ?? "");
+    const agentId = optionalAgentId(request.query, options.agentConfigService, section);
     return options.agentConfigService
-      ? options.agentConfigService.patch(agentId, String(params.section ?? ""), request.body)
-      : options.configService.patch(String(params.section ?? ""), request.body);
+      ? agentId
+        ? options.agentConfigService.patch(agentId, section, request.body)
+        : options.configService.patch(section, request.body)
+      : options.configService.patch(section, request.body);
   });
 
   app.get("/api/models", {
@@ -146,6 +150,13 @@ export function registerProviderConfigRoutes(
     const result = await (options.probeProviderVision ?? probeProviderMultimodal)(provider);
     return { ok: true, ...result };
   });
+}
+
+function optionalAgentId(query: unknown, agentConfigService: ProviderConfigRouteOptions["agentConfigService"], section?: string) {
+  if (!agentConfigService) return undefined;
+  const value = query && typeof query === "object" ? (query as { agentId?: unknown }).agentId : undefined;
+  if (value === undefined && section && !GLOBAL_CONFIG_SECTIONS.has(section)) return requestAgentId(query);
+  return value === undefined ? undefined : requestAgentId(query);
 }
 
 function providerFromBody(body: unknown, code: string) {

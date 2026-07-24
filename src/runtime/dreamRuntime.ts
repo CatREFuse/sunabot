@@ -14,6 +14,14 @@ import {
   type DreamMemoryRecord,
   type DreamRecallStatsSnapshot
 } from "../../services/memory/dream/public.js";
+import {
+  readWorkingMemoryDocument,
+  recordMemoryOperation,
+  replaceWorkingMemoryDocument,
+  workingMemoryItemToEntry,
+  workingMemoryItemsFromFacts,
+  type MemoryFactInput
+} from "../../services/memory/public.js";
 import type { PromptVariableValue, RenderedPromptRequest } from "../../services/agent/promptSystem.js";
 import { AgentFileRepository } from "../admin/agentFiles.js";
 import { appendRequestLog } from "../../adapters/observability/requestLog.js";
@@ -42,6 +50,9 @@ export function createRuntimeDreamsForHost(host: SunaRuntime) {
     agentId: host.config.persona.defaultAgentId,
     store: applicationDataStore(host.config).dreams as unknown as RuntimeDreamStorePort,
     context: { capture: (input) => captureDreamContext(host, input) },
+    workingMemory: {
+      compareAndSwap: (input) => compareAndSwapDreamWorkingMemory(host, input)
+    },
     prompt: {
       render: (id, variables) => host.renderPromptRequest(
         id,
@@ -73,20 +84,49 @@ export function createRuntimeDreamsForHost(host: SunaRuntime) {
       olderMemoryLimit: host.config.bot.memory.dreamOlderMemoryLimit
     }),
     log: {
-      write: (event) => appendRequestLog({
-        category: "runtime.action",
-        action: event.action,
-        request: { localDate: event.localDate, level: event.level },
-        response: event.data ?? {},
-        metadata: {
-          conversationId: `dream:${host.config.persona.defaultAgentId}`,
-          runId: event.runId,
-          stage: "memory",
-          promptFamily: DREAM_PROMPT_ID
-        }
-      })
+      write: (event) => {
+        const conversationId = `dream:${host.config.persona.defaultAgentId}`;
+        recordMemoryOperation(host.config, {
+          source: "dream",
+          operation: event.action.replace(/^dream[.:]/u, ""),
+          actor: "dream",
+          outcome: dreamAuditOutcome(event.action, event.level),
+          batchId: event.runId,
+          conversationId,
+          conversationScope: "dream",
+          reasonCode: dreamAuditReason(event.data)
+        });
+        return appendRequestLog({
+          category: "runtime.action",
+          action: event.action,
+          request: { localDate: event.localDate, level: event.level },
+          response: event.data ?? {},
+          metadata: {
+            conversationId,
+            runId: event.runId,
+            stage: "memory",
+            promptFamily: DREAM_PROMPT_ID
+          }
+        });
+      }
     }
   });
+}
+
+function dreamAuditOutcome(action: string, level: string) {
+  if (level === "error" || /failed|error/u.test(action)) return "failed" as const;
+  if (/skipped|unchanged|noop/u.test(action)) return "unchanged" as const;
+  return "applied" as const;
+}
+
+function dreamAuditReason(data: unknown) {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return undefined;
+  const record = data as Record<string, unknown>;
+  for (const key of ["code", "reasonCode", "reason"] as const) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) return value;
+  }
+  return undefined;
 }
 
 export async function forceRuntimeDreamForHost(host: SunaRuntime, input: { accountId: string }) {
@@ -127,7 +167,12 @@ async function captureDreamContext(
   }
 ): Promise<RuntimeDreamContextSnapshot> {
   const repository = applicationDataStore(host.config);
-  const workingJson = repository.readMemory("working") as DreamStoreJsonObject[];
+  const workingDocument = await readWorkingMemoryDocument(host.config);
+  const workingJson = workingDocument.items.map((item) => ({
+    ...workingMemoryItemToEntry(item),
+    source: dreamWorkingMemorySource(item.sourceKind),
+    fact: item.content
+  })) as DreamStoreJsonObject[];
   const longTermJson = repository.readMemory("long_term") as DreamStoreJsonObject[];
   const { workingRecords, longTermRecords } = normalizeDreamMemorySnapshot({
     workingRecords: workingJson as DreamMemoryRecord[],
@@ -148,6 +193,7 @@ async function captureDreamContext(
     workingRecords,
     longTermRecords,
     workingDigest: digestDreamMemorySnapshot(workingJson),
+    workingRevision: workingDocument.revision,
     longTermDigest: digestDreamMemorySnapshot(longTermJson),
     recallStats,
     userProfiles: jsonClone(repository.readMemory("user_profile").slice(-MAX_DREAM_PROFILE_RECORDS)),
@@ -156,6 +202,157 @@ async function captureDreamContext(
     plannedDailySchedule: jsonClone(repository.director.read(previousScheduleDate) ?? null),
     persona: personaSnapshot(host)
   };
+}
+
+async function compareAndSwapDreamWorkingMemory(
+  host: SunaRuntime,
+  input: {
+    expectedRevision: string;
+    records: readonly DreamMemoryRecord[];
+    runId: string;
+    localDate: string;
+  }
+) {
+  const current = await readWorkingMemoryDocument(host.config);
+  const conversationId = `dream:${host.config.persona.defaultAgentId}`;
+  if (current.revision !== input.expectedRevision) {
+    recordMemoryOperation(host.config, {
+      source: "working",
+      operation: "dream_replace",
+      actor: "dream",
+      outcome: "conflict",
+      batchId: input.runId,
+      conversationId,
+      conversationScope: "dream",
+      beforeCount: current.items.length,
+      afterCount: current.items.length,
+      changedCount: 0,
+      beforeRevision: current.revision,
+      reasonCode: "snapshot_conflict"
+    });
+    return { status: "conflict" as const, revision: current.revision };
+  }
+  const facts = input.records.map(dreamWorkingMemoryFact);
+  const nextItems = workingMemoryItemsFromFacts(
+    facts,
+    current.items,
+    {
+      batchId: input.runId,
+      conversationId,
+      conversationScope: "dream",
+      conversationTitle: `Dream ${input.localDate}`
+    },
+    (_fact, index) => `working_dream_${input.localDate.replaceAll("-", "_")}_${index}`,
+    "dream"
+  );
+  const replaced = await replaceWorkingMemoryDocument(host.config, current.revision, nextItems);
+  if (replaced.status === "conflict") {
+    recordMemoryOperation(host.config, {
+      source: "working",
+      operation: "dream_replace",
+      actor: "dream",
+      outcome: "conflict",
+      batchId: input.runId,
+      conversationId,
+      conversationScope: "dream",
+      beforeCount: current.items.length,
+      afterCount: replaced.current.items.length,
+      changedCount: 0,
+      beforeRevision: current.revision,
+      afterRevision: replaced.current.revision,
+      reasonCode: "revision_conflict"
+    });
+    return { status: "conflict" as const, revision: replaced.current.revision };
+  }
+  recordMemoryOperation(host.config, {
+    source: "working",
+    operation: "dream_replace",
+    actor: "dream",
+    outcome: replaced.status === "unchanged" ? "unchanged" : "applied",
+    recordIds: nextItems.map((item) => item.id),
+    batchId: input.runId,
+    conversationId,
+    conversationScope: "dream",
+    beforeCount: current.items.length,
+    afterCount: replaced.current.items.length,
+    changedCount: replaced.status === "unchanged" ? 0 : replaced.current.items.length,
+    beforeRevision: current.revision,
+    afterRevision: replaced.current.revision
+  });
+  return {
+    status: replaced.status,
+    revision: replaced.current.revision,
+    rollback: async () => {
+      if (replaced.status === "unchanged") return true;
+      const rolledBack = await replaceWorkingMemoryDocument(
+        host.config,
+        replaced.current.revision,
+        current.items
+      );
+      recordMemoryOperation(host.config, {
+        source: "working",
+        operation: "dream_rollback",
+        actor: "dream",
+        outcome: rolledBack.status === "conflict" ? "conflict" : "applied",
+        recordIds: current.items.map((item) => item.id),
+        batchId: input.runId,
+        conversationId,
+        conversationScope: "dream",
+        beforeCount: replaced.current.items.length,
+        afterCount: rolledBack.current.items.length,
+        changedCount: rolledBack.status === "conflict" ? 0 : current.items.length,
+        beforeRevision: replaced.current.revision,
+        afterRevision: rolledBack.current.revision,
+        reasonCode: rolledBack.status === "conflict" ? "revision_conflict" : undefined
+      });
+      return rolledBack.status !== "conflict";
+    }
+  };
+}
+
+function dreamWorkingMemoryFact(record: DreamMemoryRecord, index: number): MemoryFactInput {
+  const fact = dreamString(record.fact);
+  const id = dreamString(record.id);
+  if (!fact || !id) throw new Error(`Dream working memory ${index} is missing id or fact.`);
+  return {
+    id,
+    fact,
+    occurredAt: dreamString(record.occurredAt),
+    occurredEndAt: dreamString(record.occurredEndAt) || null,
+    userId: dreamString(record.userId),
+    userIds: dreamStrings(record.userIds),
+    userName: dreamString(record.userName),
+    addressNames: dreamStrings(record.addressNames),
+    eventType: dreamString(record.eventType),
+    subjectKey: dreamString(record.subjectKey),
+    eventKey: dreamString(record.eventKey),
+    causalChainKey: dreamString(record.causalChainKey),
+    batchId: dreamString(record.batchId),
+    sourceMemoryIds: dreamStrings(record.sourceMemoryIds),
+    memoryKind: dreamString(record.memoryKind),
+    realityStatus: dreamString(record.realityStatus),
+    factuality: dreamString(record.factuality),
+    dreamRunId: dreamString(record.dreamRunId),
+    dreamDate: dreamString(record.dreamDate),
+    dreamReviewedAt: dreamString(record.dreamReviewedAt)
+  };
+}
+
+function dreamWorkingMemorySource(sourceKind: string) {
+  if (sourceKind === "admin") return "sunabot.memory.admin";
+  if (sourceKind === "dream") return "sunabot.dream";
+  if (sourceKind === "add_workmemory") return "sunabot.add_workmemory";
+  return "sunabot.memory.compress";
+}
+
+function dreamString(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function dreamStrings(value: unknown) {
+  return Array.isArray(value)
+    ? value.flatMap((item) => dreamString(item) ?? [])
+    : undefined;
 }
 
 function observedConversations(

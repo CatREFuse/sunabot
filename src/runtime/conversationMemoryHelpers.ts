@@ -18,18 +18,9 @@ import {
   ParsedIncomingMessage
 } from "../types.js";
 import {
-  hasForbiddenMemoryRecallPhrase,
-  hasInvalidQqIdentity,
-  hasMemoryIdentity,
-  hasOnlyTrustedMemoryIdentityMarkers,
-  hasUntrustedMemoryQq,
-  isRoleFirstPersonMemory,
-  isRoleFirstPersonProfile,
   normalizeQqId,
   normalizeQqIds,
-  replaceReportedMemoryIdentity,
-  resolveFactUsers,
-  trustedParticipantName
+  resolveFactUsers
 } from "./conversationMemoryIdentity.js";
 import { conversationRecordId, escapeRegExp, formatAttachmentListForContext, formatQuoteReferencesForContext, matchesMentionName, readRecord, uniqueStrings } from "./messagingAttachmentHelpers.js";
 import { AdminIdentity, BatchUserInfo, DEFAULT_ADMIN_NAME, GROUP_CHAT_SUMMARY_WINDOW_MS, MAX_STORED_CONVERSATION_MESSAGES, WorkingMemoryMergeOutput } from "./runtimeContracts.js";
@@ -342,8 +333,8 @@ export function parseWorkingMemoryMergeOutput(text: string): WorkingMemoryMergeO
     allPreviousMemoriesInvalidated: record.allPreviousMemoriesInvalidated === true
   };
 }
-export function invalidWorkingMemoryClear(output: WorkingMemoryMergeOutput, previousCount: number) {
-  return output.allPreviousMemoriesInvalidated && (output.facts.length > 0 || previousCount === 0);
+export function parseCompleteWorkingMemoryMergeOutput(text: string): WorkingMemoryMergeOutput | null {
+  return parseWorkingMemoryMergeOutput(text);
 }
 export function parseMemoryFactOutput(text: string): MemoryFactInput[] | null {
   const parsed = parseModelJson(text);
@@ -352,19 +343,20 @@ export function parseMemoryFactOutput(text: string): MemoryFactInput[] | null {
   const values = record.profiles ?? record.facts ?? record.memories ?? record.items;
   return Array.isArray(values) ? normalizeMemoryFacts(values) : null;
 }
+export function parseCompleteMemoryFactOutput(text: string): MemoryFactInput[] | null {
+  return parseMemoryFactOutput(text);
+}
 export function normalizeMemoryFacts(values: unknown[]): MemoryFactInput[] {
   const facts: MemoryFactInput[] = [];
   for (const value of values) {
     const record = readRecord(value);
     const rawFact = record.fact ?? record.text ?? record.summary ?? record.memory ?? record.impression ?? record.profile;
-    if (hasForbiddenMemoryRecallPhrase(rawFact)) continue;
     const id = stringValue(record.id);
     const fact = normalizeMemoryFactText(rawFact);
     if (!fact) continue;
     const time = stringValue(record.time ?? record.at ?? record.createdAt ?? record.date);
     const rawUserId = record.userId ?? record.qq ?? record.qqId;
     const rawUserIds = record.userIds ?? record.user_ids ?? record.qqs;
-    if (hasInvalidQqIdentity(rawUserId) || hasInvalidQqIdentity(rawUserIds)) continue;
     const userId = normalizeQqId(rawUserId);
     const userIds = uniqueStrings([
       ...normalizeQqIds(rawUserIds),
@@ -383,8 +375,9 @@ export function normalizeMemoryFacts(values: unknown[]): MemoryFactInput[] {
     const subjectKey = stringValue(record.subjectKey ?? record.subject_key);
     const eventKey = stringValue(record.eventKey ?? record.event_key);
     const rawCausalChainKey = record.causalChainKey ?? record.causal_chain_key;
-    const causalChainKey = stringValue(rawCausalChainKey);
-    if (rawCausalChainKey != null && !isMemoryCausalChainKey(rawCausalChainKey)) continue;
+    const causalChainKey = isMemoryCausalChainKey(rawCausalChainKey)
+      ? stringValue(rawCausalChainKey)
+      : "";
     const eventFingerprint = stringValue(record.eventFingerprint ?? record.event_fingerprint);
     const longTermId = stringValue(record.longTermId ?? record.long_term_id);
     const batchId = stringValue(record.batchId ?? record.batch_id);
@@ -415,34 +408,19 @@ export function normalizeMemoryFacts(values: unknown[]): MemoryFactInput[] {
   return facts;
 }
 export function attachUsersToMemoryFacts(facts: MemoryFactInput[], participants: BatchUserInfo[]) {
-  return facts.flatMap((fact) => {
-    if (hasForbiddenMemoryRecallPhrase(fact.fact)) return [];
-    if (hasUntrustedMemoryQq(fact, participants)) return [];
+  return facts.map((fact) => {
     const relatedUsers = resolveFactUsers(fact, participants);
-    if (!relatedUsers.length) return [fact];
-
-    const identities = relatedUsers.flatMap((user) => {
-      const addressName = (user.addressNames ?? user.names ?? []).find((name) => hasMemoryIdentity(fact.fact, {
-        userId: user.userId,
-        userName: name
-      })) ?? trustedParticipantName(user);
-      return addressName ? [{ userId: user.userId, userName: addressName }] : [];
-    });
-    if (identities.length !== relatedUsers.length) return [];
-    const normalizedFact = identities.length === 1
-      ? replaceReportedMemoryIdentity(fact.fact, identities[0]!, fact.userName)
-      : fact.fact;
-    if (identities.some((identity) => !hasMemoryIdentity(normalizedFact, identity))) return [];
-    if (!hasOnlyTrustedMemoryIdentityMarkers(normalizedFact, participants)) return [];
-    if (!isRoleFirstPersonMemory(normalizedFact, identities)) return [];
-    return [{
+    const addressNames = uniqueStrings([
+      ...(fact.addressNames ?? []),
+      ...(fact.addressName ? [fact.addressName] : [])
+    ].map(stringValue).filter(Boolean));
+    return {
       ...fact,
-      fact: normalizedFact,
-      userId: fact.userId ?? (relatedUsers.length === 1 ? relatedUsers[0]!.userId : undefined),
-      userIds: uniqueStrings(relatedUsers.map((user) => user.userId)),
-      userName: undefined,
-      addressNames: uniqueStrings(identities.map((identity) => identity.userName))
-    }];
+      userId: relatedUsers.length === 1 ? relatedUsers[0]!.userId : undefined,
+      userIds: relatedUsers.length ? uniqueStrings(relatedUsers.map((user) => user.userId)) : undefined,
+      addressNames: addressNames.length ? addressNames : undefined,
+      addressName: undefined
+    };
   });
 }
 export function normalizeUserProfileFacts(
@@ -450,48 +428,57 @@ export function normalizeUserProfileFacts(
   participants: BatchUserInfo[],
   messages: Array<{ text: string }> = []
 ) {
-  return facts.flatMap((fact) => {
-    if (hasForbiddenMemoryRecallPhrase(fact.fact)) return [];
-    if (hasUntrustedMemoryQq(fact, participants)) return [];
-    const relatedUsers = resolveFactUsers(fact, participants);
-    if (relatedUsers.length !== 1) return [];
-    return relatedUsers.flatMap((user) => {
-      const proposedAddressNames = uniqueStrings([
-        ...(fact.addressNames ?? []),
-        ...(fact.addressName ? [fact.addressName] : [])
-      ].map(stringValue).filter(Boolean));
-      if (proposedAddressNames.some((name) => !isObservedAddressName(name, user, messages))) return [];
-      const addressNames = uniqueStrings([
-        ...(user.addressNames ?? user.names ?? []),
-        ...proposedAddressNames
-      ]);
-      const addressName = addressNames.find((name) => hasMemoryIdentity(fact.fact, {
-        userId: user.userId,
-        userName: name
-      }));
-      if (!addressName) return [];
-      const strippedFact = normalizeMemoryFactText(stripUserProfilePrefix(fact.fact, user.userId, addressName));
-      const identity = { userId: user.userId, userName: addressName };
-      if (!hasMemoryIdentity(strippedFact, identity)) return [];
-      if (!hasOnlyTrustedMemoryIdentityMarkers(strippedFact, [{ ...user, addressNames }])) return [];
-      if (!isRoleFirstPersonProfile(strippedFact, [identity])
-        || (!strippedFact.includes(user.userId) && !strippedFact.includes(addressName))) return [];
-      return {
-        ...fact,
-        fact: strippedFact,
-        userId: user.userId,
-        userIds: [user.userId],
-        userName: user.currentName || undefined,
-        addressNames,
-        addressName: undefined
-      };
-    });
-  });
+  return validateUserProfileFacts(facts, participants, messages).accepted;
 }
-function isObservedAddressName(name: string, user: BatchUserInfo, messages: Array<{ text: string }>) {
-  if (!name || normalizeQqId(name) || name.length > 120) return false;
-  if ((user.addressNames ?? []).includes(name) || user.names.includes(name)) return true;
-  return messages.some((message) => message.text.includes(name));
+
+export type UserProfileValidationReasonCode =
+  | "related_user_count"
+  | "empty_fact";
+
+export function validateUserProfileFacts(
+  facts: MemoryFactInput[],
+  participants: BatchUserInfo[],
+  messages: Array<{ text: string }> = []
+) {
+  const accepted: MemoryFactInput[] = [];
+  const rejected: Array<{ index: number; reasonCode: UserProfileValidationReasonCode }> = [];
+  facts.forEach((fact, index) => {
+    const result = validateUserProfileFact(fact, participants, messages);
+    if ("fact" in result) accepted.push(result.fact);
+    else rejected.push({ index, reasonCode: result.reasonCode });
+  });
+  return { accepted, rejected };
+}
+
+function validateUserProfileFact(
+  fact: MemoryFactInput,
+  participants: BatchUserInfo[],
+  _messages: Array<{ text: string }>
+): { fact: MemoryFactInput } | { reasonCode: UserProfileValidationReasonCode } {
+  const relatedUsers = resolveFactUsers(fact, participants);
+  if (relatedUsers.length !== 1) return { reasonCode: "related_user_count" };
+  const user = relatedUsers[0]!;
+  const proposedAddressNames = uniqueStrings([
+    ...(fact.addressNames ?? []),
+    ...(fact.addressName ? [fact.addressName] : [])
+  ].map(stringValue).filter(Boolean));
+  const addressNames = uniqueStrings([
+    ...(user.addressNames ?? user.names ?? []),
+    ...proposedAddressNames
+  ]);
+  const content = normalizeMemoryFactText(fact.fact);
+  if (!content) return { reasonCode: "empty_fact" };
+  return {
+    fact: {
+      ...fact,
+      fact: content,
+      userId: user.userId,
+      userIds: [user.userId],
+      userName: fact.userName || user.currentName || undefined,
+      addressNames: addressNames.length ? addressNames : undefined,
+      addressName: undefined
+    }
+  };
 }
 export function normalizeMemoryFactText(value: unknown) {
   return stringValue(value);

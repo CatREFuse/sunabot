@@ -7,6 +7,7 @@ export function mergeManifestBotConfig(
 ) {
   const bot = structuredClone(manifest);
   bot.tone = { ...structuredClone(shared.tone), ...structuredClone(bot.tone ?? {}) };
+  bot.director = { ...structuredClone(shared.director), ...structuredClone(bot.director ?? {}) };
   bot.orchestrator = {
     ...structuredClone(shared.orchestrator),
     ...structuredClone(bot.orchestrator),

@@ -11,6 +11,7 @@ const SPA_ROUTE_SEGMENTS = [
   "images",
   "emojis",
   "scheduled-tasks",
+  "director",
   "voice",
   "logs",
   "agents",

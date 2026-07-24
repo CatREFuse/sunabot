@@ -10,11 +10,12 @@ import type {
 } from "../types/scheduledTasks";
 import { apiRequest } from "./useAdminApi";
 
-export function useScheduledTasks() {
+export function useScheduledTasks(initialCategory: ScheduledTaskCategory = "all") {
   const pageSize = 20;
+  const defaultCategory = initialCategory;
   const tasks = shallowRef<ScheduledTask[]>([]);
   const conversations = shallowRef<ConversationRecord[]>([]);
-  const category = shallowRef<ScheduledTaskCategory>("all");
+  const category = shallowRef<ScheduledTaskCategory>(initialCategory);
   const pagination = shallowRef({ page: 1, pageSize, total: 0, pageCount: 1 });
   const loading = shallowRef(false);
   const saving = shallowRef(false);
@@ -281,7 +282,7 @@ export function useScheduledTasks() {
     conversationController?.abort();
     tasks.value = [];
     conversations.value = [];
-    category.value = "all";
+    category.value = defaultCategory;
     pagination.value = { page: 1, pageSize, total: 0, pageCount: 1 };
     loading.value = false;
     saving.value = false;

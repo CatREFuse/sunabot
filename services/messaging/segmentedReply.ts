@@ -24,18 +24,29 @@ export function parseSegmentedReplyXml(value: string): SegmentedReplyPackageV1 {
     const opening = readOpeningTag(value, cursor);
     cursor = opening.end;
     if (opening.selfClosing) {
-      if (opening.name !== "img" && opening.name !== "voice" && opening.name !== "file") {
+      if (opening.name === "exp") {
+        const attributes = parseAttributes(opening.attributes);
+        if (attributes.size !== 1 || !attributes.has("key")) {
+          throw segmentedReplyError("<exp/> 必须且只能包含 key 属性。");
+        }
+        const marker = decodeXmlText(attributes.get("key")!).trim();
+        if (!/^\[\/[^\]\r\n]{1,64}\]$/u.test(marker) || hasControlCharacter(marker)) {
+          throw segmentedReplyError("<exp/> 的 key 必须是一个表情标记。");
+        }
+        nodes.push({ type: "expression", marker });
+      } else if (opening.name !== "img" && opening.name !== "voice" && opening.name !== "file") {
         throw segmentedReplyError(`分段回复不支持自闭合标签 <${opening.name}/>。`);
+      } else {
+        const attributes = parseAttributes(opening.attributes);
+        if (attributes.size !== 1 || !attributes.has("src")) {
+          throw segmentedReplyError(`<${opening.name}/> 只能包含 src 属性。`);
+        }
+        const src = decodeXmlText(attributes.get("src")!).trim();
+        if (!src || src.length > 2_048 || hasControlCharacter(src)) {
+          throw segmentedReplyError(`<${opening.name}/> 的 src 无效。`);
+        }
+        nodes.push({ type: opening.name === "img" ? "image" : opening.name, src });
       }
-      const attributes = parseAttributes(opening.attributes);
-      if (attributes.size !== 1 || !attributes.has("src")) {
-        throw segmentedReplyError(`<${opening.name}/> 只能包含 src 属性。`);
-      }
-      const src = decodeXmlText(attributes.get("src")!).trim();
-      if (!src || src.length > 2_048 || hasControlCharacter(src)) {
-        throw segmentedReplyError(`<${opening.name}/> 的 src 无效。`);
-      }
-      nodes.push({ type: opening.name === "img" ? "image" : opening.name, src });
     } else {
       if (opening.name !== "dialog" && opening.name !== "dialogc" && opening.name !== "exp") {
         throw segmentedReplyError(`分段回复不支持标签 <${opening.name}>。`);

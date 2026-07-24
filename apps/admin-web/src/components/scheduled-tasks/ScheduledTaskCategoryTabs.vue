@@ -9,7 +9,6 @@ const emit = defineEmits<{ change: [category: ScheduledTaskCategory] }>();
 
 const categories: Array<{ id: ScheduledTaskCategory; label: string }> = [
   { id: "all", label: "全部" },
-  { id: "director", label: "导演任务" },
   { id: "recurring", label: "循环" },
   { id: "scheduled", label: "定时" },
   { id: "archived", label: "归档" }

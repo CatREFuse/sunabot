@@ -609,6 +609,9 @@ export async function runtime_deliverSessionOutbox(
     if (!isRuntimeIncomingMessage(payload.incoming)) {
       throw new Error(`Outbox 消息格式无效：${outbox.id}`);
     }
+    if (this.scheduledTasks.isDisabledDirectorReply(payload.incoming.text)) {
+      return { delivered: true };
+    }
     if (context?.phase !== "settle" && !this.isReplySenderAllowed(payload.incoming.userId)) {
       return { delivered: false, skipped: "sender_not_allowed" };
     }

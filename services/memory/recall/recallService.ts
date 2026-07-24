@@ -6,6 +6,7 @@ import { readSourceEntries } from "../application/queries.js";
 import { selectSources } from "../application/sources.js";
 import { memoryRepository } from "../persistence.js";
 import { dreamLocalDate, dreamSystemTimeZone } from "../dream/schedule.js";
+import { recordMemoryOperation } from "../operationAudit.js";
 
 export async function recallMemory(
   config: AppConfig,
@@ -14,6 +15,18 @@ export async function recallMemory(
   const query = normalizeText(input.query);
   const limit = normalizeLimit(input.limit, 8);
   if (!query) {
+    for (const source of selectSources(input.source)) {
+      recordMemoryOperation(config, {
+        source: source.id,
+        operation: "recall",
+        actor: "memory_recall",
+        outcome: "rejected",
+        beforeCount: 0,
+        afterCount: 0,
+        changedCount: 0,
+        reasonCode: "empty_query"
+      });
+    }
     return {
       ok: false,
       query,
@@ -25,6 +38,19 @@ export async function recallMemory(
   const sources = selectSources(input.source);
   const corpus = (await Promise.all(sources.map((source) => readSourceEntries(config, source)))).flat();
   const matches = bm25Search(query, corpus, limit);
+  for (const source of sources) {
+    const sourceMatches = matches.filter((entry) => entry.source === source.id);
+    recordMemoryOperation(config, {
+      source: source.id,
+      operation: "recall",
+      actor: "memory_recall",
+      outcome: "recorded",
+      recordIds: sourceMatches.map((entry) => entry.id),
+      beforeCount: corpus.filter((entry) => entry.source === source.id).length,
+      afterCount: sourceMatches.length,
+      changedCount: 0
+    });
+  }
   return {
     ok: true,
     query,
@@ -44,15 +70,25 @@ export function recordModelContextRecall(
   const localDate = usage.localDate ?? dreamLocalDate(recalledAt, dreamSystemTimeZone());
   const repository = memoryRepository(config);
   if (!repository.recordActualRecall) return;
+  const recordedIds: string[] = [];
   for (const match of matches) {
     if (match.source !== "long_term") continue;
-    repository.recordActualRecall({
+    const result = repository.recordActualRecall({
       recordId: match.id,
       recallKey,
       localDate,
       at: recalledAt
     });
+    if (result.recorded) recordedIds.push(match.id);
   }
+  recordMemoryOperation(config, {
+    source: "long_term",
+    operation: "record_recall",
+    actor: "memory_recall",
+    outcome: "recorded",
+    recordIds: recordedIds,
+    changedCount: recordedIds.length
+  });
 }
 
 export function reserveModelContextRecall(
@@ -66,6 +102,7 @@ export function reserveModelContextRecall(
   const repository = memoryRepository(config);
   const accepted: MemoryEntry[] = [];
   const stale: MemoryEntry[] = [];
+  const reservedIds: string[] = [];
   for (const match of matches) {
     if (match.source !== "long_term") {
       accepted.push(match);
@@ -76,8 +113,20 @@ export function reserveModelContextRecall(
       recallKey,
       at
     });
+    if (result.reserved) reservedIds.push(match.id);
     (result.recordPresent ? accepted : stale).push(match);
   }
+  recordMemoryOperation(config, {
+    source: "long_term",
+    operation: "reserve_recall",
+    actor: "memory_recall",
+    outcome: "reserved",
+    recordIds: reservedIds,
+    beforeCount: matches.filter((match) => match.source === "long_term").length,
+    afterCount: accepted.filter((match) => match.source === "long_term").length,
+    changedCount: reservedIds.length,
+    reasonCode: stale.length ? "stale_records_filtered" : undefined
+  });
   return { accepted, stale };
 }
 
@@ -92,7 +141,10 @@ export function formatMemoryMatchesForPrompt(matches: MemoryEntry[]) {
         ? ` ${addressName}（QQ ${userId}）`
         : "";
       const reality = item.eventType === "dream" ? "（梦境，非现实经历）" : "";
-      return `${item.sourceTitle}${reality}${suffix}${identity}：${item.text}`;
+      const provenance = item.source === "working" && item.conversationId
+        ? ` [记录时间=${item.recordedAt ?? date}; 会话来源=${item.conversationId}（${item.conversationScope ?? "unknown"}）]`
+        : "";
+      return `${item.sourceTitle}${reality}${suffix}${identity}${provenance}：${item.text}`;
     })
     .join("\n");
 }

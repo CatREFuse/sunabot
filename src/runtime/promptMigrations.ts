@@ -18,8 +18,12 @@ import {
   migrateUserGroupOrchestratorResultSchema,
   readPromptTextFile
 } from "../../services/agent/promptWorkspace.js";
+import { migrateWorkingMemoryDocumentPrompt } from "../../services/agent/workingMemoryDocumentPromptMigration.js";
 import { migrateToneSegmentedReplyPrompt } from "../../services/agent/tonePromptMigration.js";
 import { migrateConversationWebFetchPrompt } from "../../services/agent/webFetchPromptMigration.js";
+import { migrateConversationBashToolsPrompt } from "../../services/agent/bashToolPromptMigration.js";
+import { migrateConversationBashWorkbenchPrompt } from "../../services/agent/bashWorkbenchPromptMigration.js";
+import { migrateConversationPromptCacheLayout } from "../../services/agent/promptCacheLayoutMigration.js";
 import {
   migrateConversationDirectorPrompt,
   migrateDirectorScheduleSchemaPrompt
@@ -164,7 +168,12 @@ function runtimePromptMigrations(config: AppConfig, selfiePromptDefault: string)
   for (const file of [DIRECTOR_DAILY_PLAN_PROMPT_FILE, DIRECTOR_SCHEDULE_REVISION_PROMPT_FILE]) {
     add("director-schema-v1", "system", file, () => migrateDirectorScheduleSchemaPrompt(config, file), dependency(file));
   }
-  add("dream-schema-v1", "system", DREAM_PROMPT_FILE, () => migrateDreamSchemaPrompt(config, DREAM_PROMPT_FILE));
+  add(
+    "dream-flex-contract-v3",
+    "system",
+    DREAM_PROMPT_FILE,
+    () => migrateDreamSchemaPrompt(config, DREAM_PROMPT_FILE)
+  );
   add(
     "scheduled-agent-loop-v2",
     "system",
@@ -216,6 +225,7 @@ function runtimePromptMigrations(config: AppConfig, selfiePromptDefault: string)
     [selfieReferenceId]
   );
 
+  const memoryPerspectiveIds = new Map<string, string>();
   for (const [file, promptId] of [
     [PRIVATE_CONVERSATION_REPLY_PROMPT_FILE, "conversation.private-reply"],
     [GROUP_CONVERSATION_REPLY_PROMPT_FILE, "conversation.group-reply"]
@@ -255,12 +265,37 @@ function runtimePromptMigrations(config: AppConfig, selfiePromptDefault: string)
       () => migrateConversationInboundMessagePrompt(config, file),
       [directorId]
     );
-    add(
+    const bashToolsId = add(
+      "conversation-bash-tools-v1",
+      "system",
+      file,
+      () => migrateConversationBashToolsPrompt(
+        config,
+        file,
+        ADMIN_RUNTIME_PROMPT_DEFAULTS[promptId] ?? ""
+      ),
+      [inboundId]
+    );
+    const bashWorkbenchId = add(
+      "conversation-bash-workbench-v1",
+      "system",
+      file,
+      () => migrateConversationBashWorkbenchPrompt(config, file),
+      [bashToolsId]
+    );
+    const recoverableId = add(
       "recoverable-output-v1",
       "system",
       file,
       () => migrateRecoverableOutputErrorPrompt(config, file),
-      [inboundId]
+      [bashWorkbenchId]
+    );
+    add(
+      "conversation-cache-layout-v1",
+      "system",
+      file,
+      () => migrateConversationPromptCacheLayout(config, file),
+      [recoverableId]
     );
   }
 
@@ -291,14 +326,21 @@ function runtimePromptMigrations(config: AppConfig, selfiePromptDefault: string)
     [config.bot.memory.workMemoryCompressOutPrompt, "memory.compress-out"],
     [config.bot.memory.userProfilePrompt, "memory.user-profile"]
   ] as const) {
-    add(
-      "memory-perspective-v2",
+    memoryPerspectiveIds.set(file, add(
+      "memory-perspective-v6",
       "system",
       file,
       () => migrateMemoryPerspectivePrompt(config, file, ADMIN_RUNTIME_PROMPT_DEFAULTS[promptId] ?? ""),
       dependency(file)
-    );
+    ));
   }
+  add(
+    "working-memory-document-v1",
+    "system",
+    config.bot.memory.workMemoryCompressInPrompt,
+    () => migrateWorkingMemoryDocumentPrompt(config, config.bot.memory.workMemoryCompressInPrompt),
+    [requiredMigrationId(memoryPerspectiveIds, config.bot.memory.workMemoryCompressInPrompt)]
+  );
   return definitions;
 }
 

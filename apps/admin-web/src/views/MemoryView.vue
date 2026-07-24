@@ -3,8 +3,10 @@ import { computed, onBeforeUnmount, shallowRef, watch } from "vue";
 import { activeAgentIdState } from "../composables/agentScope";
 import { useDreams } from "../composables/useDreams";
 import { useMemory } from "../composables/useMemory";
+import { useMemoryOperationLogs } from "../composables/useMemoryOperationLogs";
 import type { MemoryEntry, MemorySourceId, MemoryWritePayload } from "../types";
 import DreamHistoryPanel from "../components/memory/DreamHistoryPanel.vue";
+import MemoryOperationLogDrawer from "../components/memory/MemoryOperationLogDrawer.vue";
 import PageHeader from "../components/ui/PageHeader.vue";
 import MemoryEditorDialog from "../components/memory/MemoryEditorDialog.vue";
 import MemoryEntryRow from "../components/memory/MemoryEntryRow.vue";
@@ -16,6 +18,7 @@ const PAGE_SIZE = 20;
 type MemorySectionId = MemorySourceId | "dream";
 
 const data = useMemory();
+const operationLogs = useMemoryOperationLogs();
 const agentId = computed(() => activeAgentIdState.value || "plana");
 const dreams = useDreams(agentId.value);
 const source = shallowRef<MemorySourceId>("working");
@@ -31,6 +34,7 @@ const editorError = shallowRef("");
 const pendingDelete = shallowRef("");
 const status = shallowRef("");
 const statusKind = shallowRef<"success" | "error" | "">("");
+const operationLogsOpen = shallowRef(false);
 const sections = computed<readonly { id: MemorySectionId; title: string }[]>(() => [
   ...data.sources.value.map((item) => ({ id: item.id, title: item.title })),
   { id: "dream", title: "梦境" }
@@ -68,6 +72,10 @@ const sortedEntries = computed(() => sortByMemoryTime(
     lastRecalledAt: entry.lastRecalledAt
   })
 ));
+const workingDocumentText = computed(() => (data.document.value?.content ?? "")
+  .replace(/^<!-- sunabot-workmemory:[^\n]* -->\n?/gmu, "")
+  .replace(/\n{3,}/gu, "\n\n")
+  .trim());
 const pageCount = computed(() => Math.max(1, Math.ceil(sortedEntries.value.length / PAGE_SIZE)));
 const visibleEntries = computed(() => {
   const offset = (page.value - 1) * PAGE_SIZE;
@@ -76,6 +84,7 @@ const visibleEntries = computed(() => {
 
 onBeforeUnmount(data.dispose);
 onBeforeUnmount(dreams.dispose);
+onBeforeUnmount(operationLogs.dispose);
 watch(source, (next) => {
   query.value = "";
   data.clearMatches();
@@ -91,6 +100,8 @@ watch(agentId, (nextAgentId) => {
   pendingDelete.value = "";
   status.value = "";
   statusKind.value = "";
+  operationLogsOpen.value = false;
+  operationLogs.reset();
   void data.load(source.value, nextAgentId);
   void dreams.load(nextAgentId);
 }, { immediate: true });
@@ -148,13 +159,18 @@ function submitSearch() {
 function changePage(next: number) {
   page.value = Math.min(Math.max(next, 1), pageCount.value);
 }
+function openOperationLogs() {
+  operationLogsOpen.value = true;
+  void operationLogs.load(agentId.value, 1);
+}
 function selectSection(next: MemorySectionId) {
   activeSection.value = next;
-  if (next === "dream") {
+  if (next === "dream" || next === "working") {
     editorOpen.value = false;
     editing.value = null;
     editorError.value = "";
     pendingDelete.value = "";
+    if (next === "working") source.value = "working";
     return;
   }
   source.value = next;
@@ -180,15 +196,19 @@ function selectSection(next: MemorySectionId) {
           </nav>
         </template>
         <template #actions>
+          <button class="btn btn-ghost" type="button" @click="openOperationLogs">
+            <i class="bx bx-history" aria-hidden="true"></i>操作日志
+          </button>
           <template v-if="activeSection !== 'dream'">
             <span v-if="status" class="inline-state" :data-kind="statusKind || undefined">{{ status }}</span>
             <button class="icon-btn" type="button" aria-label="刷新记忆" @click="data.load(source, agentId)"><i class="bx bx-refresh text-xl" aria-hidden="true"></i></button>
-            <button class="btn btn-primary" type="button" @click="openCreate"><i class="bx bx-plus" aria-hidden="true"></i>新增</button>
+            <button v-if="activeSection !== 'working'" class="btn btn-primary" type="button" @click="openCreate"><i class="bx bx-plus" aria-hidden="true"></i>新增</button>
           </template>
         </template>
       </PageHeader>
 
       <section
+        v-if="activeSection !== 'working'"
         class="mt-8 flex min-w-0 justify-end py-2"
         :class="activeSection === 'dream' ? '' : 'border-y border-visible'"
       >
@@ -211,7 +231,7 @@ function selectSection(next: MemorySectionId) {
         @trigger="dreams.trigger(agentId)"
       />
 
-      <section v-if="activeSection !== 'dream'" class="mt-6 flex min-h-12 min-w-0 flex-col gap-2 border-y border-visible py-2 sm:flex-row sm:items-center">
+      <section v-if="activeSection !== 'dream' && activeSection !== 'working'" class="mt-6 flex min-h-12 min-w-0 flex-col gap-2 border-y border-visible py-2 sm:flex-row sm:items-center">
         <div class="segmented shrink-0" aria-label="搜索方式">
           <button class="segmented-button" type="button" :aria-pressed="searchMode === 'filter'" @click="searchMode = 'filter'"><i class="bx bx-filter-alt mr-1" aria-hidden="true"></i>筛选</button>
           <button class="segmented-button" type="button" :aria-pressed="searchMode === 'recall'" @click="searchMode = 'recall'"><i class="bx bx-brain mr-1" aria-hidden="true"></i>语义召回</button>
@@ -223,7 +243,19 @@ function selectSection(next: MemorySectionId) {
         <button v-if="searchMode === 'recall'" class="btn btn-primary shrink-0" type="button" :disabled="!query.trim() || data.loading.value" @click="recall"><i class="bx bx-search" aria-hidden="true"></i>召回</button>
       </section>
 
-      <section v-if="activeSection !== 'dream'" class="mt-8 border-t border-visible">
+      <section v-if="activeSection === 'working'" class="mt-8 min-w-0 border-y border-visible" aria-label="工作记忆原文">
+        <p v-if="data.error.value" class="py-4 text-xs text-accent">{{ data.error.value }}</p>
+        <pre
+          v-else-if="workingDocumentText"
+          class="min-w-0 whitespace-pre-wrap break-words py-6 font-mono text-[13px] leading-7 text-display"
+        >{{ workingDocumentText }}</pre>
+        <div v-else class="empty-state">
+          <div v-if="data.loading.value"><strong>正在读取工作记忆</strong></div>
+          <div v-else><strong>没有工作记忆</strong></div>
+        </div>
+      </section>
+
+      <section v-if="activeSection !== 'dream' && activeSection !== 'working'" class="mt-8 border-t border-visible">
         <p v-if="data.error.value" class="border-b border-line py-4 text-xs text-accent">{{ data.error.value }}</p>
         <MemoryEntryRow
           v-for="entry in visibleEntries"
@@ -250,6 +282,19 @@ function selectSection(next: MemorySectionId) {
       </section>
     </div>
 
-    <MemoryEditorDialog v-if="activeSection !== 'dream'" :open="editorOpen" :entry="editing" :sources="data.sources.value" :busy="data.mutating.value" :error="editorError" @close="editorOpen = false" @save="save" />
+    <MemoryEditorDialog v-if="activeSection !== 'dream' && activeSection !== 'working'" :open="editorOpen" :entry="editing" :sources="data.sources.value" :busy="data.mutating.value" :error="editorError" @close="editorOpen = false" @save="save" />
+    <MemoryOperationLogDrawer
+      :open="operationLogsOpen"
+      :logs="operationLogs.logs.value"
+      :page="operationLogs.page.value"
+      :page-size="operationLogs.pageSize"
+      :total="operationLogs.total.value"
+      :page-count="operationLogs.pageCount.value"
+      :loading="operationLogs.loading.value"
+      :error="operationLogs.error.value"
+      @close="operationLogsOpen = false"
+      @refresh="operationLogs.load(agentId, operationLogs.page.value)"
+      @page="operationLogs.load(agentId, $event)"
+    />
   </div>
 </template>

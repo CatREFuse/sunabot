@@ -101,14 +101,27 @@ function executionBackend(value: unknown): "native" | "docker" | undefined {
 }
 
 function bashEnvironments(value: unknown): SunaTool["bashEnvironments"] | undefined {
-  if (!isRecord(value) || !isRecord(value.docker)) return undefined;
-  const dockerStarted = booleanValue(value.docker.started);
-  if (dockerStarted === undefined) return undefined;
+  if (!isRecord(value)) return undefined;
+  const nativeAvailable = isRecord(value.native) ? booleanValue(value.native.available) : undefined;
+  const dockerStarted = isRecord(value.docker) ? booleanValue(value.docker.started) : undefined;
+  if (nativeAvailable === undefined && dockerStarted === undefined) return undefined;
   return {
-    docker: {
-      started: dockerStarted,
-      ...(stringValue(value.docker.reasonCode) ? { reasonCode: stringValue(value.docker.reasonCode) } : {})
-    }
+    ...(nativeAvailable === undefined ? {} : {
+      native: {
+        available: nativeAvailable,
+        ...(stringValue((value.native as Record<string, unknown>).reasonCode)
+          ? { reasonCode: stringValue((value.native as Record<string, unknown>).reasonCode) }
+          : {})
+      }
+    }),
+    ...(dockerStarted === undefined ? {} : {
+      docker: {
+        started: dockerStarted,
+        ...(stringValue((value.docker as Record<string, unknown>).reasonCode)
+          ? { reasonCode: stringValue((value.docker as Record<string, unknown>).reasonCode) }
+          : {})
+      }
+    })
   };
 }
 

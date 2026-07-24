@@ -24,6 +24,8 @@ import {
 } from "../../services/tools/generateImgTool.js";
 import { SELFIE_TOOL_NAME } from "../../services/tools/selfieTool.js";
 import { appendRequestLog } from "../../adapters/observability/requestLog.js";
+import { applicationDataStore } from "../../adapters/sqlite/applicationDataStore.js";
+import type { GeneratedImageMetadata } from "../../adapters/model/provider/contracts.js";
 import type { SunaRuntime } from "../runtime.js";
 import {
   type AssistantMessageOrigin,
@@ -69,6 +71,7 @@ import {
   GROUP_CHAT_SUMMARY_COMMAND,
   GROUP_CHAT_SUMMARY_WINDOW_MS,
   MAX_CURRENT_CONTEXT_IMAGES,
+  type DirectorReplyAccess,
   type DeferredCodexTurn,
   type ReplyDelivery
 } from "./runtimeContracts.js";
@@ -89,6 +92,7 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
       allowAsyncImage?: boolean;
       allowImageTools?: boolean;
       atomicImageReply?: boolean;
+      directorAccess?: DirectorReplyAccess;
       promptOverride?: string;
       messageOrigin?: AssistantMessageOrigin;
       seedToolNames?: readonly string[];
@@ -219,6 +223,9 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
       const conversationMessages = this.buildRecentContextMessages(incoming, debounceContext.historyCaptureSequence), markerId = nanoid();
       const currentInputMarker = incoming.scope === "private" ? undefined : { start: `\uE000sunabot-current-input:${markerId}:start\uE001`, end: `\uE000sunabot-current-input:${markerId}:end\uE001` };
       const voiceSnapshot = await this.voiceSnapshot();
+      const directorContext = options.directorAccess === "none"
+        ? ""
+        : await this.director.promptContext();
       let promptRequest = await this.renderPromptRequest(promptId, {
         ...buildCommonPromptVariables(this.config, { scope: incoming.scope,
           userName: senderDisplayName(incoming.sender) || String(incoming.userId) }),
@@ -229,7 +236,7 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
           longTerm: longTermMemoryMatches, userProfile: currentUserProfileMemoryMatches }),
         "messages_64": messages64,
         "conversation.messages": conversationMessages,
-        [DIRECTOR_CONVERSATION_SCHEDULE_VARIABLE]: await this.director.promptContext(),
+        [DIRECTOR_CONVERSATION_SCHEDULE_VARIABLE]: directorContext,
         ...(incoming.scope === "private" ? {} : { "conversation.group.thread_context": serializeGroupThreadPromptContext(threadPromptContext), "conversation.group.orchestrator_result": serializeUserGroupOrchestratorResult(options.orchestratorResult) }),
         "user.input": currentInputMarker ? `${currentInputMarker.start}${prompt}${currentInputMarker.end}` : prompt
       });
@@ -291,13 +298,19 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
         metadata: logContext
       });
       const toolCapabilities = await this.resolveToolCapabilities(null);
-      const bash = await this.resolveProviderBashHandle(incoming, options.promptOverride);
+      const [nativeBash, dockerBash] = await Promise.all([
+        this.resolveProviderBashHandle(incoming, options.promptOverride, "native"),
+        this.resolveProviderBashHandle(incoming, options.promptOverride, "docker")
+      ]);
       const turn = await this.completePromptTurn(provider, promptRequest, {
         signal: options.signal,
         modelRequestMaxRetries: this.config.normalReply.maxRetries,
         allowNoReply: true,
         workbenchFiles: providerWorkbenchFilesForIncoming(this.config, incoming, options.promptOverride),
-        bash,
+        bash: {
+          ...(nativeBash ? { native: nativeBash } : {}),
+          ...(dockerBash ? { docker: dockerBash } : {})
+        },
         conversationAssets: options.atomicImageReply ? undefined : this.conversationAssetProviderOptions(
           incoming,
           gateway,
@@ -344,8 +357,9 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
         onToolCall: (name) => {
           usedToolNames.add(name);
         },
-        onImageGenerated: (image) => {
+        onImageGenerated: (image, metadata) => {
           generatedImages.push(image);
+          recordGeneratedImageHistory(this.config, image, metadata);
         },
         referenceImageUrls: inboundImageUrls(incoming),
         imageReferences: generateImgReferenceContext,
@@ -372,14 +386,18 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
         asyncImage: options.atomicImageReply ? false : options.allowAsyncImage ?? true,
         imageTools: options.allowImageTools ?? true,
         systemConfig: systemConfigLifecycle?.toolPort, cron: this.scheduledTasks.toolPort(incoming, isAdmin, options.promptOverride),
-        director: this.director.toolPort(),
+        director: options.directorAccess === "none" ? undefined : this.director.toolPort(),
         ...(options.promptOverride === undefined ? { air: this.air.toolPort(incoming, [...messages64, { role: "user", content: prompt }]) } : {}),
+        ...(options.promptOverride === undefined ? { workingMemory: this.workingMemory.toolPort(incoming) } : {}),
         skills: runtimeAgentExtensions?.skills,
         mcp: runtimeAgentExtensions?.mcp,
         logContext
       });
       if (turn.kind === "deferred") usedToolNames.add(turn.toolCall.name);
       const turnToolNames = finalizeToolNames();
+      if (options.promptOverride === undefined) {
+        this.workingMemory.recordToolDecision(incoming, turnToolNames);
+      }
       if (turn.kind !== "completed") systemConfigLifecycle?.discard();
       if (options.signal?.aborted || (options.isCurrent && !options.isCurrent())) {
         systemConfigLifecycle?.discard();
@@ -676,6 +694,13 @@ export async function runtime_processDeferredToolJob(this: RuntimeHost, job: Too
             logContext
           })
         : { ok: false, error: `不支持的异步工具：${job.toolName}` };
+    if (isSuccessfulGeneratedImageResult(result)) {
+      recordGeneratedImageHistory(this.config, result.image, {
+        prompt: readStringField(result, "prompt"),
+        size: readStringField(result, "size"),
+        resolution: readStringField(result, "resolution")
+      });
+    }
     const record = result as { ok?: unknown; error?: unknown };
     return record.ok === true
       ? { status: "succeeded" as const, result }
@@ -704,4 +729,31 @@ function readReferenceImageUrls(value: unknown) {
     .map((item) => item.trim())
     .filter(Boolean))
     .slice(0, 4);
+}
+
+function recordGeneratedImageHistory(config: SunaRuntime["config"], image: ImageResult, metadata?: GeneratedImageMetadata) {
+  const url = String(image.url ?? "").trim();
+  if (!url && !image.filePath) return;
+  const id = (url.split(/[\\/]/).pop() || image.filePath?.split(/[\\/]/).pop() || "generated-image").trim();
+  applicationDataStore(config).appendImageHistory({
+    id,
+    url,
+    ...(image.filePath ? { filePath: image.filePath } : {}),
+    ...(metadata?.prompt ? { prompt: metadata.prompt } : {}),
+    ...(metadata?.size ? { size: metadata.size } : {}),
+    ...(metadata?.resolution === "1K" || metadata?.resolution === "2K" || metadata?.resolution === "4K"
+      ? { resolution: metadata.resolution }
+      : {}),
+    createdAt: new Date().toISOString()
+  });
+}
+
+function isSuccessfulGeneratedImageResult(value: unknown): value is { ok: true; image: ImageResult } & Record<string, unknown> {
+  const result = value as { ok?: unknown; image?: ImageResult };
+  return result?.ok === true && Boolean(result.image?.url || result.image?.filePath);
+}
+
+function readStringField(value: Record<string, unknown>, key: string) {
+  const field = value[key];
+  return typeof field === "string" && field.trim() ? field : undefined;
 }

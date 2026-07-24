@@ -1,5 +1,10 @@
 import type { ConversationMessageRecord, ConversationRecord } from "../types";
 
+type ConversationIdentityRecord = Pick<
+  ConversationRecord,
+  "id" | "scope" | "title" | "userId" | "groupId" | "nickname" | "remark"
+>;
+
 export function qqAvatarUrl(userId: string | number | undefined) {
   const id = positiveId(userId);
   return id ? `/api/media/qq-avatar?kind=user&id=${encodeURIComponent(id)}` : "";
@@ -10,15 +15,15 @@ export function qqGroupAvatarUrl(groupId: string | number | undefined) {
   return id ? `/api/media/qq-avatar?kind=group&id=${encodeURIComponent(id)}` : "";
 }
 
-export function conversationAvatarUrl(conversation: ConversationRecord) {
+export function conversationAvatarUrl<T extends ConversationIdentityRecord>(conversation: T) {
   return conversation.groupId ? qqGroupAvatarUrl(conversation.groupId) : qqAvatarUrl(conversation.userId);
 }
 
-export function conversationAddress(conversation: ConversationRecord) {
+export function conversationAddress<T extends ConversationIdentityRecord>(conversation: T) {
   return conversation.groupId ? `群 ${conversation.groupId}` : `QQ ${conversation.userId}`;
 }
 
-export function conversationIdentityDetail(conversation: ConversationRecord) {
+export function conversationIdentityDetail<T extends ConversationIdentityRecord>(conversation: T) {
   if (conversation.groupId) return conversationAddress(conversation);
   const nickname = String(conversation.nickname ?? "").trim();
   const remark = String(conversation.remark ?? "").trim();

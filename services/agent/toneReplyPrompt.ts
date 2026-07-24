@@ -35,7 +35,7 @@ export const SEGMENTED_TONE_OUTPUT_CONTRACT = [
   "只输出 XML 片段，不要输出根标签、解释、Markdown 或标签外文本。",
   "允许的 XML 标签严格限定为 dialogc、dialog、exp、img、voice、file；不得使用规定之外的任何 XML 或 HTML 标签。",
   '第一个文字气泡使用 <dialogc replay="msg_id">文字</dialogc>，后续文字气泡使用 <dialog>文字</dialog>。',
-  "只有本轮明确允许的表情标记才能按原顺序输出为独立的 <exp>；不得为 key 添加前缀，不得新增、删除、改写或重排。",
+  '只有本轮明确允许的表情标记才能按原顺序输出为独立的 <exp>[/key]</exp> 或 <exp key="[/key]"/>；两种形式含义相同，不得为 key 添加前缀，不得新增、删除、改写或重排。',
   '图片、语音和文件分别使用 <img src="..."/>、<voice src="..."/>、<file src="..."/>。',
   "src 只能逐字使用 tone_available_assets 中提供的值，每个资源必须按原顺序恰好输出一次。",
   "所有节点必须平铺在顶层，每个顶层 XML 节点对应一个聊天气泡；任何节点内绝对不可嵌套标签，包括 <br/>、HTML 标签或本合同允许的其他标签。",

@@ -3,12 +3,7 @@ import { appendRequestLog } from "../../observability/requestLog.js";
 import type { OpenAIToolDefinition } from "../../../services/agent/promptSystem.js";
 import type { MemoryRecallInput } from "../../../services/memory/memoryService.js";
 import type { KnowledgeSearchInput } from "../../../services/knowledge/public.js";
-import {
-  WORKSPACE_BASH_TOOL_NAME,
-  isWorkspaceBashProviderOptions,
-  runWorkspaceBash,
-  type WorkspaceBashInput
-} from "../../../services/tools/bashTool.js";
+import { DOCKER_BASH_TOOL_NAME, NATIVE_BASH_TOOL_NAME } from "../../../services/tools/bashTool.js";
 import {
   MEMORY_RECALL_TOOL_NAME,
   WEBSEARCH_TOOL_NAME
@@ -57,7 +52,7 @@ import {
   providerToolExecutionMode,
   resolveProviderToolDefinitions
 } from "../../../services/tools/toolRegistry.js";
-import { WORKSPACE_BASH_EXECUTION_TIMEOUT_MS } from "../../../services/tools/bashRuntime.js";
+import { executeProviderBash } from "./bashToolExecutor.js";
 import {
   ACTIVATE_SKILL_TOOL_NAME,
   readActivateSkillInput
@@ -104,6 +99,8 @@ import {
 } from "./toolResponsePreflight.js";
 import { runWebFetch } from "./webFetchExecutor.js";
 import { READ_AIR_TOOL_NAME, executeReadAirTool } from "./readAirExecutor.js";
+import { ADD_WORKMEMORY_TOOL_NAME } from "../../../services/tools/public.js";
+import { executeAddWorkMemoryTool } from "./addWorkMemoryExecutor.js";
 
 export { mcpToolLogSummary } from "./mcpToolLog.js";
 
@@ -117,13 +114,15 @@ const inlineExecutors: ReadonlyMap<string, InlineExecutor> = new Map([
   [ASSISTANT_TEXT_TOOL_NAME, runAssistantText],
   [READ_FILE_TOOL_NAME, runReadFile],
   [WRITE_FILE_TOOL_NAME, runWriteFile],
-  [WORKSPACE_BASH_TOOL_NAME, runBash],
+  [NATIVE_BASH_TOOL_NAME, runNativeBash],
+  [DOCKER_BASH_TOOL_NAME, runDockerBash],
   [WEBSEARCH_TOOL_NAME, runWebSearch],
   [WEBFETCH_TOOL_NAME, runWebFetch],
   [GENERATE_IMG_TOOL_NAME, runImageGeneration],
   [SELFIE_TOOL_NAME, runSelfie],
   [SEND_FILE_TOOL_NAME, runSendFile],
   [MEMORY_RECALL_TOOL_NAME, runMemoryRecall],
+  [ADD_WORKMEMORY_TOOL_NAME, executeAddWorkMemoryTool],
   [READ_AIR_TOOL_NAME, executeReadAirTool],
   [KNOWLEDGE_SEARCH_TOOL_NAME, runKnowledgeSearch],
   [SYSTEM_CONFIG_TOOL_NAME, runSystemConfigTool],
@@ -580,44 +579,31 @@ function isToolEnabledForTurn(name: string, definitions: readonly Record<string,
   return definitions.some((definition) => readToolName(definition) === name);
 }
 
-async function runBash(
+async function runNativeBash(
   args: Record<string, unknown>,
   call: ResponseFunctionCallItem,
   options: ProviderCompleteOptions
 ) {
-  if (!isWorkspaceBashProviderOptions(options.bash)) return { ok: false, error: "Bash is not enabled." };
-  try {
-    if (!options.bash.isCurrent()) return { ok: false, error: "Bash is not enabled." };
-  } catch {
-    return { ok: false, error: "Bash is not enabled." };
-  }
-  const input = readWorkspaceBashInput(args);
-  if (!input) return { ok: false, error: "Invalid Bash arguments." };
-  const result = await runWorkspaceBash(input, options.bash.workspacePath, {
-    backend: options.bash.backend,
-    accessMode: options.bash.accessMode,
-    strictMode: options.bash.strictMode,
-    isCurrent: options.bash.isCurrent,
-    audit: options.bash.audit,
-    approvalContext: options.bash.approvalContext,
-    runtime: options.bash.runtime,
-    ...(options.bash.confirmedApprovalId ? { confirmedApprovalId: options.bash.confirmedApprovalId } : {}),
-    ...(options.signal ? { abortSignal: options.signal } : {})
-  });
-  await appendToolLog(WORKSPACE_BASH_TOOL_NAME, call, args, result, options);
-  return result;
+  return runBash(NATIVE_BASH_TOOL_NAME, args, call, options);
 }
 
-function readWorkspaceBashInput(args: Record<string, unknown>): WorkspaceBashInput | undefined {
-  const keys = Object.keys(args);
-  if (
-    keys.length !== 2
-    || !keys.includes("command")
-    || !keys.includes("timeoutMs")
-    || typeof args.command !== "string"
-    || (args.timeoutMs !== null && args.timeoutMs !== WORKSPACE_BASH_EXECUTION_TIMEOUT_MS)
-  ) return undefined;
-  return { command: args.command, timeoutMs: args.timeoutMs };
+async function runDockerBash(
+  args: Record<string, unknown>,
+  call: ResponseFunctionCallItem,
+  options: ProviderCompleteOptions
+) {
+  return runBash(DOCKER_BASH_TOOL_NAME, args, call, options);
+}
+
+async function runBash(
+  toolName: typeof NATIVE_BASH_TOOL_NAME | typeof DOCKER_BASH_TOOL_NAME,
+  args: Record<string, unknown>,
+  call: ResponseFunctionCallItem,
+  options: ProviderCompleteOptions
+) {
+  const result = await executeProviderBash(toolName, args, options);
+  await appendToolLog(toolName, call, args, result, options);
+  return result;
 }
 
 async function runWebSearch(
@@ -653,7 +639,7 @@ async function runImageGeneration(
     defaultReferenceImageUrls: options.referenceImageUrls ?? [],
     availableHistoricalReferenceImageCount: options.imageReferences?.historyImageUrls?.length ?? 0
   }, pickToolLogResult(result), options);
-  if (isGeneratedImageResult(result)) options.onImageGenerated?.(result.image);
+  if (isGeneratedImageResult(result)) options.onImageGenerated?.(result.image, generatedImageMetadata(result));
   return result;
 }
 
@@ -673,7 +659,7 @@ async function runSelfie(
     ...args,
     defaultReferenceImageUrls: options.selfie.referenceImageUrls ?? []
   }, pickToolLogResult(result), options);
-  if (isGeneratedImageResult(result)) options.onImageGenerated?.(result.image);
+  if (isGeneratedImageResult(result)) options.onImageGenerated?.(result.image, generatedImageMetadata(result));
   return result;
 }
 
@@ -777,6 +763,19 @@ function isGeneratedImageResult(value: unknown): value is { ok: true; image: Ima
   const result = value as { ok?: unknown; image?: unknown };
   const image = result?.image as ImageResult | undefined;
   return result?.ok === true && Boolean(image?.url || image?.filePath);
+}
+
+function generatedImageMetadata(value: unknown) {
+  const result = value as Record<string, unknown>;
+  return {
+    prompt: stringField(result.prompt),
+    size: stringField(result.size),
+    resolution: stringField(result.resolution)
+  };
+}
+
+function stringField(value: unknown) {
+  return typeof value === "string" && value.trim() ? value : undefined;
 }
 
 function pickToolLogResult(value: unknown) {

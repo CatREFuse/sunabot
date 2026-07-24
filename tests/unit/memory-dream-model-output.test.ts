@@ -66,61 +66,92 @@ function validOutput() {
 }
 
 describe("Dream model output", () => {
-  it("strictly parses schema v1, counts Unicode code points, and preserves imagined status", () => {
+  it("parses the preferred JSON shape and preserves the raw generated output", () => {
     const output = parseDreamModelOutput(JSON.stringify(validOutput()), expected);
     expect(Array.from(output.dream.text)).toHaveLength(160);
     expect(output.dream.factuality).toBe("imagined");
+    expect(output.rawOutput).toContain("\"workingReviews\"");
     expect(output.longTermReviews[0]).toMatchObject({ action: "merge", sourceIds: ["long_term_a", "long_term_b"] });
   });
 
-  it("rejects unsupported schemas, fields, factual dreams, and out-of-range descriptions", () => {
-    expect(() => normalizeDreamModelOutput({ ...validOutput(), schemaVersion: 2 }, expected))
-      .toThrow("schemaVersion must be 1");
-    expect(() => normalizeDreamModelOutput({ ...validOutput(), extra: true }, expected))
-      .toThrow("unsupported field extra");
-    expect(() => normalizeDreamModelOutput({
-      ...validOutput(),
-      dream: { text: "梦".repeat(160), factuality: "factual" }
-    }, expected)).toThrow("factuality must be imagined");
-    expect(() => normalizeDreamModelOutput({
-      ...validOutput(),
-      dream: { text: "梦".repeat(159), factuality: "imagined" }
-    }, expected)).toThrow("160 to 260");
-    expect(() => normalizeDreamModelOutput({
-      ...validOutput(),
-      dream: { text: "梦".repeat(261), factuality: "imagined" }
-    }, expected)).toThrow("160 to 260");
+  it("accepts non-JSON generated text and safely retains every memory", () => {
+    const output = parseDreamModelOutput("梦里只有一条没有 JSON 包装的走廊。", expected);
+    expect(output).toMatchObject({
+      dream: { text: "梦里只有一条没有 JSON 包装的走廊。", factuality: "imagined" },
+      longTermReviews: [
+        { sourceIds: ["long_term_a"], action: "retain", confidence: 0 },
+        { sourceIds: ["long_term_b"], action: "retain", confidence: 0 },
+        { sourceIds: ["long_term_c"], action: "retain", confidence: 0 }
+      ],
+      workingReviews: [
+        { sourceIds: ["working_a"], action: "retain", confidence: 0 },
+        { sourceIds: ["working_b"], action: "retain", confidence: 0 }
+      ]
+    });
+    expect(output.rawOutput).toBe("梦里只有一条没有 JSON 包装的走廊。");
   });
 
-  it("requires exact input partitions and rejects unknown, missing, or duplicate ids", () => {
-    const unknown = validOutput();
-    unknown.longTermReviews[1]!.sourceIds = ["long_term_fabricated"];
-    expect(() => normalizeDreamModelOutput(unknown, expected)).toThrow("unknown memory id long_term_fabricated");
+  it("treats generated schema, extra fields, factuality, and length as soft guidance", () => {
+    const output = normalizeDreamModelOutput({
+      ...validOutput(),
+      schemaVersion: 99,
+      extra: true,
+      dream: { text: "短梦", factuality: "factual", style: "free" }
+    }, expected);
+    expect(output.dream).toEqual({ text: "短梦", factuality: "imagined" });
 
-    const missing = validOutput();
-    missing.workingReviews.pop();
-    expect(() => normalizeDreamModelOutput(missing, expected)).toThrow("missing memory id working_b");
-
-    const duplicate = validOutput();
-    duplicate.workingReviews[1]!.sourceIds = ["working_a"];
-    expect(() => normalizeDreamModelOutput(duplicate, expected)).toThrow("duplicate memory id working_a");
+    const long = normalizeDreamModelOutput({
+      ...validOutput(),
+      dream: { text: "梦".repeat(5_000), factuality: "imagined" }
+    }, expected);
+    expect(Array.from(long.dream.text)).toHaveLength(4_096);
   });
 
-  it("requires at least two sources and canonical text for merges", () => {
+  it("ignores unknown and duplicate generated ids and fills every missing source with retain", () => {
+    const malformed = validOutput();
+    malformed.longTermReviews[1]!.sourceIds = ["long_term_fabricated"];
+    malformed.workingReviews[1]!.sourceIds = ["working_a"];
+    const output = normalizeDreamModelOutput(malformed, expected);
+    expect(output.longTermReviews.flatMap((review) => review.sourceIds)).toEqual([
+      "long_term_a",
+      "long_term_b",
+      "long_term_c"
+    ]);
+    expect(output.longTermReviews.at(-1)).toMatchObject({
+      sourceIds: ["long_term_c"],
+      action: "retain",
+      confidence: 0
+    });
+    expect(output.workingReviews).toEqual([
+      expect.objectContaining({ sourceIds: ["working_a"], action: "promote" }),
+      expect.objectContaining({ sourceIds: ["working_b"], action: "retain", confidence: 0 })
+    ]);
+  });
+
+  it("downgrades unusable generated actions to safe retain operations", () => {
     const singleMerge = validOutput();
     singleMerge.longTermReviews = [
       { ...singleMerge.longTermReviews[0]!, sourceIds: ["long_term_a"] },
       { ...singleMerge.longTermReviews[1]!, sourceIds: ["long_term_b"] },
       { ...singleMerge.longTermReviews[1]!, sourceIds: ["long_term_c"] }
     ];
-    expect(() => normalizeDreamModelOutput(singleMerge, expected)).toThrow("merge requires at least 2 sourceIds");
-
-    const missingCanonical = validOutput();
-    missingCanonical.longTermReviews[0]!.canonical = null;
-    expect(() => normalizeDreamModelOutput(missingCanonical, expected)).toThrow("merge requires canonical memory");
+    singleMerge.workingReviews[0]!.confidence = undefined as unknown as number;
+    singleMerge.workingReviews[0]!.reason = undefined as unknown as string;
+    const output = normalizeDreamModelOutput(singleMerge, expected);
+    expect(output.longTermReviews[0]).toMatchObject({
+      sourceIds: ["long_term_a"],
+      action: "retain",
+      confidence: 0
+    });
+    expect(output.workingReviews[0]).toMatchObject({
+      sourceIds: ["working_a"],
+      action: "promote",
+      confidence: 0,
+      reason: ""
+    });
   });
 
-  it("accepts an explicit single-memory rewrite and rejects a rewrite without canonical text", () => {
+  it("accepts a usable rewrite and retains the source when generated canonical text is missing", () => {
     const rewrite = validOutput();
     rewrite.longTermReviews[1] = {
       ...rewrite.longTermReviews[1]!,
@@ -143,11 +174,11 @@ describe("Dream model output", () => {
       action: "rewrite",
       canonical: null
     };
-    expect(() => normalizeDreamModelOutput(missingCanonical, expected))
-      .toThrow("rewrite requires canonical memory");
+    expect(normalizeDreamModelOutput(missingCanonical, expected).workingReviews[1])
+      .toMatchObject({ sourceIds: ["working_b"], action: "retain" });
   });
 
-  it("allows only adaptive persona targets backed by known factual memory ids", () => {
+  it("keeps a valid persona proposal and drops malformed generated proposals without failing Dream", () => {
     const relation = validOutput();
     relation.personaAdjustment = {
       kind: "relationship_tendency",
@@ -159,10 +190,21 @@ describe("Dream model output", () => {
 
     const coreFile = validOutput();
     coreFile.personaAdjustment!.targetFile = "SOUL.md" as "PREFERENCE.md";
-    expect(() => normalizeDreamModelOutput(coreFile, expected)).toThrow("targetFile is invalid");
+    expect(normalizeDreamModelOutput(coreFile, expected).personaAdjustment).toBeNull();
 
     const dreamEvidence = validOutput();
     dreamEvidence.personaAdjustment!.evidenceMemoryIds[2] = "working_b";
-    expect(() => normalizeDreamModelOutput(dreamEvidence, expected)).toThrow("unknown or imagined evidence id working_b");
+    expect(normalizeDreamModelOutput(dreamEvidence, expected).personaAdjustment).toBeNull();
+
+    const overlongStatement = validOutput();
+    overlongStatement.personaAdjustment!.statement = "倾".repeat(81);
+    expect(normalizeDreamModelOutput(overlongStatement, expected).personaAdjustment).toBeNull();
+  });
+
+  it("still rejects invalid host expectations because they are a code boundary", () => {
+    expect(() => normalizeDreamModelOutput(validOutput(), {
+      ...expected,
+      workingMemoryIds: ["working_a", "working_a"]
+    })).toThrow("workingMemoryIds must not contain duplicates");
   });
 });

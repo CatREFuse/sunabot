@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { applicationDataStore, closeApplicationDataStores } from "../../adapters/sqlite/applicationDataStore.js";
 import { SunaRuntime } from "../../src/runtime.js";
 import { createAdminTestConfig } from "./admin-fixtures.js";
+import { normalizeConversationDisabledTools } from "../../services/tools/conversationToolPolicy.js";
 
 const roots: string[] = [];
 const runtimes: SunaRuntime[] = [];
@@ -17,6 +18,10 @@ afterEach(async () => {
 });
 
 describe("conversation tool policy", () => {
+  it("does not allow add_workmemory to be disabled by conversation settings", () => {
+    expect(normalizeConversationDisabledTools(["add_workmemory", "read_file"])).toEqual(["read_file"]);
+  });
+
   it("persists an independent policy for QQ and Web Chat conversations", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-conversation-tools-"));
     roots.push(root);
@@ -33,12 +38,12 @@ describe("conversation tool policy", () => {
       disabledTools: ["read_file", "workspace_bash"]
     })).toEqual({
       conversationId: "private:171419991",
-      disabledTools: ["read_file", "workspace_bash"]
+      disabledTools: ["read_file", "native_bash", "docker_bash"]
     });
     runtime.setConversationToolPolicy({ id: "web:admin", disabledTools: ["codex"] });
 
     expect(applicationDataStore(config).readConversations()).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: "private:171419991", disabledTools: ["read_file", "workspace_bash"] }),
+      expect.objectContaining({ id: "private:171419991", disabledTools: ["read_file", "native_bash", "docker_bash"] }),
       expect.objectContaining({ id: "web:admin", disabledTools: ["codex"] })
     ]));
 
@@ -48,7 +53,7 @@ describe("conversation tool policy", () => {
     const reloaded = new SunaRuntime(config, { attachmentService: {} as never });
     runtimes.push(reloaded);
     expect(reloaded.getConversationToolPolicy("private:171419991").disabledTools)
-      .toEqual(["read_file", "workspace_bash"]);
+      .toEqual(["read_file", "native_bash", "docker_bash"]);
     expect(reloaded.getConversationToolPolicy("web:admin").disabledTools).toEqual(["codex"]);
   });
 });

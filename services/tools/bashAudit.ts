@@ -65,6 +65,7 @@ export interface BashAuditModelRequest {
 }
 
 export interface BashApprovalContext {
+  backend: BashExecutionBackend;
   agentId: string;
   accountId: string;
   transport: string;
@@ -274,6 +275,7 @@ function commandHash(command: string) {
 
 function approvalContextKey(context: BashApprovalContext) {
   const fields = [
+    context.backend,
     context.agentId,
     context.accountId,
     context.transport,
@@ -281,10 +283,11 @@ function approvalContextKey(context: BashApprovalContext) {
     context.userId,
     context.groupId ?? ""
   ];
-  if (fields.slice(0, 5).some((field) => typeof field !== "string" || !field.trim() || field.includes("\0"))) {
+  if ((context.backend !== "native" && context.backend !== "docker")
+    || fields.slice(0, 6).some((field) => typeof field !== "string" || !field.trim() || field.includes("\0"))) {
     return undefined;
   }
-  if (typeof fields[5] !== "string" || fields[5].includes("\0")) return undefined;
+  if (typeof fields[6] !== "string" || fields[6].includes("\0")) return undefined;
   return fields.join("\0");
 }
 

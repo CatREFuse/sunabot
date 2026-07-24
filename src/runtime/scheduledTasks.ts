@@ -16,7 +16,6 @@ import {
   type MessagingPort
 } from "../../packages/contracts/messaging/messages.js";
 import {
-  DIRECTOR_SCHEDULED_TASK_ID_PREFIX,
   normalizeScheduledTaskDraft,
   normalizeScheduledTaskId,
   normalizeScheduledTaskResult,
@@ -53,7 +52,6 @@ import { formatModelTimestamp, systemModelTimeZone } from "../../services/agent/
 import { buildCallbackInput, readCallbackInput } from "../../services/agent/callbackInput.js";
 import { appendRequestLog, appendRequestLogStrict } from "../../adapters/observability/requestLog.js";
 import type { ConversationRecord, ParsedIncomingMessage } from "../types.js";
-import { conversationRecordId } from "./messagingAttachmentHelpers.js";
 import { createSystemConfigHeldConfirmationPort } from "./systemConfigReply.js";
 import type { DeferredCodexTurn, ReplyDelivery } from "./runtimeContracts.js";
 import {
@@ -61,6 +59,11 @@ import {
   type ScheduledTaskAdminPage,
   type ScheduledTaskAdminView
 } from "./scheduledTaskAdmin.js";
+import {
+  isDirectorScheduledTaskId,
+  scheduledCallbackTaskId
+} from "./scheduledTaskDirectorBoundary.js";
+import { resolveScheduledTaskCurrentTargets } from "./scheduledTaskTargetResolver.js";
 import type { SunaRuntime } from "../runtime.js";
 
 export type { ScheduledTaskAdminPage, ScheduledTaskAdminView } from "./scheduledTaskAdmin.js";
@@ -108,6 +111,11 @@ export class RuntimeScheduledTasks {
 
   stop() {
     this.scheduler.stop();
+  }
+
+  isDisabledDirectorReply(text: string) {
+    const taskId = scheduledCallbackTaskId(text);
+    return taskId != null && this.isDisabledDirectorTask(taskId);
   }
 
   wake() {
@@ -233,6 +241,9 @@ export class RuntimeScheduledTasks {
     if (payload.target.conversationId !== event.sessionId) {
       throw new Error(`Scheduled callback event ${event.id} targets another conversation.`);
     }
+    if (this.isDisabledDirectorTask(payload.taskId)) {
+      return { status: "no_reply" };
+    }
     if (readCallbackInput(payload.text)) {
       return this.runAgentCallback(payload, turnContext);
     }
@@ -264,6 +275,7 @@ export class RuntimeScheduledTasks {
     turnContext?: SessionTurnContext
   ): Promise<SessionHandleResult> {
     const signal = turnContext?.signal ?? new AbortController().signal;
+    const directorTask = isDirectorScheduledTaskId(payload.taskId);
     const incoming = scheduledCallbackIncoming(this.host, payload.target, payload.triggeredAt, payload.text);
     const delivery: ReplyDelivery = {
       outbox: [],
@@ -283,8 +295,9 @@ export class RuntimeScheduledTasks {
         isCurrent: () => !signal.aborted,
         delivery,
         onDeferred: (value) => { deferred = value; },
+        directorAccess: directorTask ? "full" : "none",
         messageOrigin: "async_tool_callback",
-        ...(payload.taskId.startsWith(DIRECTOR_SCHEDULED_TASK_ID_PREFIX)
+        ...(directorTask
           ? { atomicImageReply: true }
           : {})
       }
@@ -314,6 +327,9 @@ export class RuntimeScheduledTasks {
       throw new Error(`Unsupported scheduled callback outbox: ${outbox.kind}`);
     }
     const payload = decodeScheduledCallbackOutbox(outbox.payload);
+    if (this.isDisabledDirectorTask(payload.taskId)) {
+      return { delivered: true };
+    }
     if (
       payload.target.conversationId !== outbox.sessionId ||
       payload.target.accountId !== outbox.deliveryPartition
@@ -382,7 +398,7 @@ export class RuntimeScheduledTasks {
 
   private async executeTool(input: CronToolInput, incoming: ParsedIncomingMessage) {
     try {
-      const resolved = this.resolveCurrentTargets(input, incoming);
+      const resolved = resolveScheduledTaskCurrentTargets(input, incoming);
       if (resolved.operation === "create") {
         return { ok: true, operation: "create", task: this.createScheduledTask(cronCreateInput(resolved)) };
       }
@@ -425,25 +441,6 @@ export class RuntimeScheduledTasks {
     }
   }
 
-  private resolveCurrentTargets(input: CronToolInput, incoming: ParsedIncomingMessage): CronToolInput {
-    if (!input.targets?.some((target) => target.conversationId === "current")) return input;
-    if (incoming.transport === "web") {
-      throw new ServiceError(
-        400,
-        "SCHEDULED_TASK_TARGET_INVALID",
-        "Web Chat 中不能使用 current，请选择一个已有 QQ 会话。"
-      );
-    }
-    const current = conversationRecordId(incoming);
-    return {
-      ...input,
-      targets: input.targets.map((target) => ({
-        ...target,
-        conversationId: target.conversationId === "current" ? current : target.conversationId
-      }))
-    };
-  }
-
   private createDraft(input: unknown): CreateScheduledTaskInput {
     const value = strictRecord(input, "SCHEDULED_TASK_CREATE_INVALID", "定时任务创建内容无效。");
     assertOnlyKeys(value, ["name", "enabled", "schedule", "context", "targets"]);
@@ -484,6 +481,9 @@ export class RuntimeScheduledTasks {
 
   private async generate(run: ScheduledTaskRun, signal: AbortSignal) {
     if (signal.aborted) throw signal.reason ?? new Error("Scheduled task generation aborted.");
+    if (this.isDisabledDirectorTask(run.taskId)) {
+      throw new Error("Director is disabled.");
+    }
     const payload = {
       schemaVersion: 1,
       systemTimeZone: systemModelTimeZone(),
@@ -512,6 +512,7 @@ export class RuntimeScheduledTasks {
   }
 
   private async enqueueDeliveries(run: ScheduledTaskRun, signal: AbortSignal) {
+    if (this.isDisabledDirectorTask(run.taskId)) return;
     const text = normalizeScheduledTaskResult(run.resultText ?? "");
     const triggeredAt = run.generatedAt ?? run.updatedAt;
     for (const target of run.snapshot.targets) {
@@ -551,6 +552,7 @@ export class RuntimeScheduledTasks {
   }
 
   private enqueueCallback(payload: ScheduledCallbackPayloadV1) {
+    if (this.isDisabledDirectorTask(payload.taskId)) return;
     const dedupeKey = callbackDedupeKey(payload.runId);
     this.host.sessionCoordinator.enqueueEvent({
       sessionId: payload.target.conversationId,
@@ -565,6 +567,10 @@ export class RuntimeScheduledTasks {
         id: `${payload.runId}:${payload.target.conversationId}`
       })
     });
+  }
+
+  private isDisabledDirectorTask(taskId: string) {
+    return isDirectorScheduledTaskId(taskId) && !this.host.config.bot.director.enabled;
   }
 }
 

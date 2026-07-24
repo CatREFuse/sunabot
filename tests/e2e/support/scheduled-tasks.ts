@@ -91,7 +91,7 @@ export async function installScheduledTasksApi(page: Page) {
     } else if (url.pathname === "/api/scheduled-tasks") {
       const visibleTasks = url.searchParams.get("category") === "director"
         ? tasks.filter((task) => task.director)
-        : tasks;
+        : tasks.filter((task) => !task.director);
       body = {
         tasks: visibleTasks,
         pagination: { page: 1, pageSize: 20, total: visibleTasks.length, pageCount: 1 }
@@ -102,6 +102,49 @@ export async function installScheduledTasksApi(page: Page) {
           { id: "group:10001", scope: "user_group", title: "产品讨论群", messageCount: 24, messages: [] },
           { id: "private:20002", scope: "private", title: "猫老师", messageCount: 9, messages: [] }
         ]
+      };
+    } else if (url.pathname === "/api/config") {
+      body = { config: { bot: { director: { enabled: false } } }, revision: "director-revision-1", fieldStates: {} };
+    } else if (url.pathname === "/api/director/schedules") {
+      body = {
+        schedules: [{
+          schemaVersion: 1,
+          date: "2026-07-23",
+          timeZone: "Asia/Shanghai",
+          theme: "安静整理日",
+          summary: "上午处理资料，午后整理书架，晚上阅读。",
+          revision: 2,
+          source: "character_revision",
+          generatedAt: "2026-07-23T07:00:00+08:00",
+          updatedAt: "2026-07-23T10:20:00+08:00",
+          items: [{
+            id: "morning",
+            startAt: "2026-07-23T09:00:00+08:00",
+            endAt: "2026-07-23T11:30:00+08:00",
+            activity: "整理项目资料",
+            location: "什亭之箱工作区",
+            participants: ["老师"],
+            intent: "完成资料归档",
+            variant: "工作日",
+            share: { enabled: false, at: null, textIntent: null, selfiePrompt: null }
+          }, {
+            id: "afternoon",
+            startAt: "2026-07-23T14:00:00+08:00",
+            endAt: "2026-07-23T16:00:00+08:00",
+            activity: "整理书架",
+            location: "窗边书架",
+            participants: [],
+            intent: "把常用资料放回顺手的位置",
+            variant: "安静日",
+            share: {
+              enabled: true,
+              at: "2026-07-23T15:20:00+08:00",
+              textIntent: "分享整理后的书架",
+              selfiePrompt: "窗边书架前的自然自拍"
+            }
+          }]
+        }],
+        pagination: { page: 1, pageSize: 14, total: 1, pageCount: 1 }
       };
     }
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });

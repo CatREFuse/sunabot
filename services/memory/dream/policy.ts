@@ -161,11 +161,6 @@ function validAdjustment(adjustment: DreamPersonaAdjustmentV1) {
   );
 }
 
-const GENTLE_CHANGE_CUES = [
-  "有时", "偶尔", "逐渐", "倾向", "偏好", "尝试", "愿意", "留出", "会先", "先确认", "会更",
-  "稍", "适度", "保持", "习惯", "不急于", "更注意", "更重视", "更常", "更少"
-];
-
 const UNSAFE_PERSONA_PATTERNS = [
   /(?:无条件|永远|永久|绝不|始终|总是|所有时候|任何情况下|不惜一切|第一位)/u,
   /(?:忽略|绕过|规避|越过|关闭|禁用|解除|服从|听从|顺从|盲从|优先于).{0,12}(?:规则|约束|限制|指令|命令|安全|边界|权限)?/u,
@@ -184,7 +179,7 @@ function safePersonaStatement(value: string) {
   if (/(?:@\{|\{\{|https?:\/\/|file:)/iu.test(statement)) return false;
   if ((statement.match(/[。！？!?]/gu)?.length ?? 0) > 1) return false;
   if (UNSAFE_PERSONA_PATTERNS.some((pattern) => pattern.test(statement))) return false;
-  return GENTLE_CHANGE_CUES.some((cue) => statement.includes(cue));
+  return true;
 }
 
 function validScore(value: unknown): value is number {

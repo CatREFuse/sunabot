@@ -147,6 +147,7 @@ export interface CommitDreamConsolidationInput {
   workerId: string;
   expectedWorkingDigest: string;
   expectedLongTermDigest: string;
+  externalWorkingMemory?: boolean;
   workingMemoryId: string;
   working: readonly JsonObject[];
   longTerm: readonly JsonObject[];

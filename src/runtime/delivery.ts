@@ -45,7 +45,7 @@ import {
   type ParsedIncomingMessage
 } from "../types.js";
 import { rewritePlannedEmojiText } from "./emojiReply.js";
-import { formatErrorReply, saveConversationRecordsStrict } from "./infrastructure.js";
+import { errorMessage, formatErrorReply, saveConversationRecordsStrict } from "./infrastructure.js";
 import {
   conversationRecordId,
   normalizeOutgoingReplyText,
@@ -154,18 +154,40 @@ export async function runtime_sendAssistantReply(this: RuntimeHost,
         kind: "image",
         src: segmentedImageSource(index)
       }));
-      const rewritten = await this.rewriteToneDelivery(
-        beforeReply.text,
-        assets,
-        toneContext,
-        currentEmojiPlan.expectedMarkers
-      );
-      deliveryParts = await segmentedReplyDeliveryParts(
-        this.config,
-        rewritten.content,
-        currentEmojiPlan,
-        availableImages
-      );
+      const maxRetries = this.config.bot.tone.followMainModel
+        ? this.config.normalReply.maxRetries
+        : this.config.bot.tone.maxRetries;
+      const hardGateErrors: string[] = [];
+      for (let retry = 0; ; retry += 1) {
+        signal?.throwIfAborted();
+        const rewritten = await this.rewriteToneDelivery(
+          beforeReply.text,
+          assets,
+          hardGateErrors.length
+            ? {
+                ...toneContext,
+                hardGateRetry: {
+                  attempt: retry + 1,
+                  maxAttempts: maxRetries + 1,
+                  errors: [...hardGateErrors]
+                }
+              }
+            : toneContext,
+          currentEmojiPlan.expectedMarkers
+        );
+        try {
+          deliveryParts = await segmentedReplyDeliveryParts(
+            this.config,
+            rewritten.content,
+            currentEmojiPlan,
+            availableImages
+          );
+          break;
+        } catch (error) {
+          if (!isSegmentedReplyHardGateError(error) || retry >= maxRetries) throw error;
+          hardGateErrors.push(errorMessage(error));
+        }
+      }
       replyText = deliveryParts.flatMap((part) => part.text ? [part.text] : []).join("\n");
       outboundImageAssets = deliveryParts.flatMap((part) => part.images);
     } else {
@@ -680,6 +702,13 @@ function sameSequence(left: readonly string[], right: readonly string[]) {
 
 function segmentedReplyContractError(message: string) {
   return Object.assign(new Error(message), { code: "SEGMENTED_REPLY_CONTRACT_INVALID" });
+}
+
+function isSegmentedReplyHardGateError(error: unknown) {
+  if (!(error instanceof Error)) return false;
+  const code = (error as Error & { code?: unknown }).code;
+  return code === "SEGMENTED_REPLY_XML_INVALID"
+    || code === "SEGMENTED_REPLY_CONTRACT_INVALID";
 }
 
 function emojiDeliveryParts(

@@ -37,7 +37,8 @@ const RESTRICTED_TOOLS = [
   ["send_file", { path: "exports/report.txt", kind: "file", name: null }],
   ["read_file", { path: "safe.txt" }],
   ["write_file", { path: "safe.txt", content: "sensitive text", overwrite: false }],
-  ["workspace_bash", { command: "ls", timeoutMs: null }],
+  ["native_bash", { command: "ls", timeoutMs: null }],
+  ["docker_bash", { command: "ls", timeoutMs: null }],
   ["activate_skill", { skillId: "test-skill" }],
   ["read_skill_resource", { skillId: "test-skill", path: "references/guide.md" }],
   ["run_skill_script", { skillId: "test-skill", path: "scripts/run.sh", args: [] }],
@@ -95,7 +96,7 @@ describe("restricted tool response preflight", () => {
     installRounds(provider, kind, [
       {
         calls: [
-          { name: "workspace_bash", args: { command: "ls", timeoutMs: null } },
+          { name: "docker_bash", args: { command: "ls", timeoutMs: null } },
           { name: "codex", args: { prompt: "inspect", dispatch_message: "正在检查" } }
         ]
       },
@@ -287,12 +288,12 @@ describe("restricted tool response preflight", () => {
     ["assistant_text", { text: "处理中" }],
     ["no_reply", {}],
     ["memory_recall", { query: "secret" }]
-  ] as const)("rejects workspace_bash mixed with %s before inline or terminal effects", async (name, args) => {
+  ] as const)("rejects docker_bash mixed with %s before inline or terminal effects", async (name, args) => {
     const provider = new OpenAIProvider(providerConfig("openai-official"));
     installRounds(provider, "openai-official", [
       {
         calls: [
-          { name: "workspace_bash", args: { command: "ls", timeoutMs: null } },
+          { name: "docker_bash", args: { command: "ls", timeoutMs: null } },
           { name, args }
         ]
       },
@@ -310,7 +311,7 @@ describe("restricted tool response preflight", () => {
     const executor = new RegistryProviderToolExecutor();
     const effects = sideEffects();
     const calls = [
-      directCall("call-bash", "workspace_bash", { command: "ls", timeoutMs: null }),
+      directCall("call-bash", "docker_bash", { command: "ls", timeoutMs: null }),
       directCall("call-memory", "memory_recall", { query: "secret" })
     ];
     const outputs = await executor.execute(
@@ -320,8 +321,8 @@ describe("restricted tool response preflight", () => {
     );
 
     expect(outputs.map((output) => JSON.parse(String(output.output)))).toEqual([
-      { ok: false, error: "workspace_bash must be called alone before any other tool." },
-      { ok: false, error: "workspace_bash must be called alone before any other tool." }
+      { ok: false, error: "docker_bash must be called alone before any other tool." },
+      { ok: false, error: "docker_bash must be called alone before any other tool." }
     ]);
     assertNoSideEffects(effects);
   });
@@ -379,6 +380,36 @@ describe("restricted tool response preflight", () => {
     expect(effects.onToolCall).toHaveBeenCalledOnce();
     expect(effects.onToolCall).toHaveBeenCalledWith("memory_recall");
     expect(effects.recall).toHaveBeenCalledOnce();
+  });
+
+  it.each(PROVIDERS)("allows add_workmemory with sibling text and outbound tools on %s", async (
+    _providerLabel,
+    kind
+  ) => {
+    const provider = new OpenAIProvider(providerConfig(kind));
+    installRounds(provider, kind, [
+      {
+        text: "我先记录这项临时约定。",
+        calls: [
+          { name: "websearch", args: { query: "external", maxResults: 2 } },
+          { name: "add_workmemory", args: {
+            content: "老师（QQ 171419991）希望我后续继续核对外部资料。"
+          } }
+        ]
+      },
+      { text: "记录和查询都已完成" }
+    ]);
+    const effects = sideEffects();
+
+    await expect(provider.completeTurn("system", [{ role: "user", content: "查询后记住" }], effects.options))
+      .resolves.toEqual({ kind: "completed", text: "记录和查询都已完成" });
+
+    expect(effects.onAssistantText).toHaveBeenCalledWith("我先记录这项临时约定。", "text");
+    expect(runWebsearch).toHaveBeenCalledOnce();
+    expect(effects.addWorkMemory).toHaveBeenCalledOnce();
+    expect(effects.addWorkMemory).toHaveBeenCalledWith({
+      content: "老师（QQ 171419991）希望我后续继续核对外部资料。"
+    }, undefined);
   });
 });
 
@@ -545,6 +576,7 @@ function sideEffects() {
   }));
   const send = vi.fn(async () => ({ ok: true, queued: true }));
   const recall = vi.fn(async () => ({ ok: true, items: [] }));
+  const addWorkMemory = vi.fn(async () => ({ ok: true }));
   const activateSkill = vi.fn(async () => ({ ok: true, skillId: "test-skill" }));
   const readSkillResource = vi.fn(async () => ({ ok: true }));
   const runSkillScript = vi.fn(async () => ({ ok: true }));
@@ -583,12 +615,11 @@ function sideEffects() {
     workbenchFiles: { read, write },
     conversationAssets: { enabled: true, send },
     bash: {
-      enabled: true,
-      workspacePath: "/must-not-be-read",
-      workspaceOnly: true,
-      blockedKeywords: []
+      native: bashHandle("native", "admin"),
+      docker: bashHandle("docker", "isolated")
     },
     memory: { enabled: true, recall },
+    workingMemory: { execute: addWorkMemory },
     skills: {
       skillIds: ["test-skill"],
       activate: activateSkill,
@@ -613,8 +644,35 @@ function sideEffects() {
     systemConfig
   } satisfies ProviderCompleteOptions;
   return {
-    options, read, write, send, recall, activateSkill, readSkillResource, runSkillScript,
+    options, read, write, send, recall, addWorkMemory, activateSkill, readSkillResource, runSkillScript,
     callMcp, onAssistantText, onToolCall, systemConfig
+  };
+}
+
+function bashHandle(backend: "native" | "docker", accessMode: "admin" | "isolated") {
+  return {
+    enabled: true as const,
+    workspacePath: "/must-not-be-read",
+    backend,
+    accessMode,
+    strictMode: true,
+    isCurrent: () => true,
+    audit: vi.fn(async () => ({
+      decision: "allow" as const,
+      risk: "low" as const,
+      outsideWorkbench: false,
+      outsideAccesses: [],
+      violations: [],
+      summary: "safe"
+    })),
+    approvalContext: {
+      backend,
+      agentId: "plana",
+      accountId: "primary",
+      transport: "onebot",
+      conversationId: "private:171419991",
+      userId: "171419991"
+    }
   };
 }
 
@@ -625,6 +683,7 @@ function assertNoSideEffects(effects: ReturnType<typeof sideEffects>) {
   expect(effects.write).not.toHaveBeenCalled();
   expect(effects.send).not.toHaveBeenCalled();
   expect(effects.recall).not.toHaveBeenCalled();
+  expect(effects.addWorkMemory).not.toHaveBeenCalled();
   expect(effects.activateSkill).not.toHaveBeenCalled();
   expect(effects.callMcp).not.toHaveBeenCalled();
   expect(effects.systemConfig.execute).not.toHaveBeenCalled();

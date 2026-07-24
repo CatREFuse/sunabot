@@ -33,11 +33,27 @@ import { badRequest, editableSource, sourceById } from "./sources.js";
 import { readMemorySourceEntries } from "./queries.js";
 import { memoryMutationMutex } from "./mutationMutex.js";
 import { memorySourcePath, readMemoryRecords, writeMemoryRecords } from "./repositoryStorage.js";
+import {
+  appendWorkingMemoryDocumentItem,
+  readWorkingMemoryDocument,
+  replaceWorkingMemoryDocument,
+  workingMemoryItemToEntry,
+  workingMemoryItemsFromFacts
+} from "../workingMemoryDocument.js";
+import { recordMemoryOperation, type MemoryOperationActor } from "../operationAudit.js";
 
 export async function createMemoryEntry(config: AppConfig, input: MemoryWriteInput = {}) {
   const source = editableSource(input.source);
   const text = normalizeText(input.text);
   if (!text) badRequest("MEMORY_INVALID", "记忆内容为空。", "text");
+  if (source.id === "working") {
+    const result = await appendWorkingMemoryDocumentItem(config, text, {
+      conversationId: "web:admin",
+      scope: "admin",
+      title: "记忆管理"
+    }, "admin");
+    return workingMemoryItemToEntry(result.item);
+  }
 
   const filePath = memorySourcePath(config, source);
   return memoryMutationMutex.runExclusive(async () => {
@@ -74,10 +90,34 @@ export async function createMemoryEntry(config: AppConfig, input: MemoryWriteInp
       await writeMemoryRecords(filePath, mergedRecords);
       const userId = normalizeUserId(value.userId);
       const merged = mergedRecords.find((item) => profileRecordUserIds(item.value).includes(userId));
-      if (merged) return toMemoryEntry(source, merged);
+      if (merged) {
+        const entry = toMemoryEntry(source, merged);
+        recordMemoryOperation(config, {
+          source: source.id,
+          operation: "create",
+          actor: "admin",
+          outcome: "applied",
+          recordIds: [entry.id],
+          beforeCount: records.length - 1,
+          afterCount: mergedRecords.length,
+          changedCount: 1
+        });
+        return entry;
+      }
     }
     await writeMemoryRecords(filePath, records);
-    return toMemoryEntry(source, record);
+    const entry = toMemoryEntry(source, record);
+    recordMemoryOperation(config, {
+      source: source.id,
+      operation: "create",
+      actor: "admin",
+      outcome: "applied",
+      recordIds: [entry.id],
+      beforeCount: records.length - 1,
+      afterCount: records.length,
+      changedCount: 1
+    });
+    return entry;
   });
 }
 
@@ -87,6 +127,47 @@ export async function updateMemoryEntry(config: AppConfig, input: MemoryWriteInp
   const text = normalizeText(input.text);
   if (!id) badRequest("MEMORY_INVALID", "记忆 ID 为空。", "id");
   if (!text) badRequest("MEMORY_INVALID", "记忆内容为空。", "text");
+  if (source.id === "working") {
+    return memoryMutationMutex.runExclusive(async () => {
+      const current = await readWorkingMemoryDocument(config);
+      const item = current.items.find((candidate) => candidate.id === id);
+      if (!item) throw new ServiceError(404, "MEMORY_NOT_FOUND", "记忆不存在。", "id");
+      const result = await replaceWorkingMemoryDocument(
+        config,
+        current.revision,
+        current.items.map((candidate) => candidate.id === id ? { ...candidate, content: text } : candidate)
+      );
+      if (result.status === "conflict") {
+        recordMemoryOperation(config, {
+          source: "working",
+          operation: "update",
+          actor: "admin",
+          outcome: "conflict",
+          recordIds: [id],
+          beforeCount: current.items.length,
+          afterCount: current.items.length,
+          changedCount: 0,
+          beforeRevision: current.revision,
+          reasonCode: "revision_conflict"
+        });
+        throw new ServiceError(409, "MEMORY_REVISION_CONFLICT", "工作记忆已变化，请刷新后重试。");
+      }
+      const entry = workingMemoryItemToEntry(result.current.items.find((candidate) => candidate.id === id)!);
+      recordMemoryOperation(config, {
+        source: "working",
+        operation: "update",
+        actor: "admin",
+        outcome: result.status === "unchanged" ? "unchanged" : "applied",
+        recordIds: [id],
+        beforeCount: current.items.length,
+        afterCount: result.current.items.length,
+        changedCount: result.status === "unchanged" ? 0 : 1,
+        beforeRevision: current.revision,
+        afterRevision: result.current.revision
+      });
+      return entry;
+    });
+  }
 
   const filePath = memorySourcePath(config, source);
   return memoryMutationMutex.runExclusive(async () => {
@@ -119,7 +200,18 @@ export async function updateMemoryEntry(config: AppConfig, input: MemoryWriteInp
     }
 
     await writeMemoryRecords(filePath, records);
-    return toMemoryEntry(source, record);
+    const entry = toMemoryEntry(source, record);
+    recordMemoryOperation(config, {
+      source: source.id,
+      operation: "update",
+      actor: "admin",
+      outcome: "applied",
+      recordIds: [id],
+      beforeCount: records.length,
+      afterCount: records.length,
+      changedCount: 1
+    });
+    return entry;
   });
 }
 
@@ -127,6 +219,44 @@ export async function deleteMemoryEntry(config: AppConfig, input: MemoryWriteInp
   const source = editableSource(input.source);
   const id = normalizeText(input.id);
   if (!id) badRequest("MEMORY_INVALID", "记忆 ID 为空。", "id");
+  if (source.id === "working") {
+    return memoryMutationMutex.runExclusive(async () => {
+      const current = await readWorkingMemoryDocument(config);
+      const next = current.items.filter((candidate) => candidate.id !== id);
+      if (next.length === current.items.length) {
+        throw new ServiceError(404, "MEMORY_NOT_FOUND", "记忆不存在。", "id");
+      }
+      const result = await replaceWorkingMemoryDocument(config, current.revision, next);
+      if (result.status === "conflict") {
+        recordMemoryOperation(config, {
+          source: "working",
+          operation: "delete",
+          actor: "admin",
+          outcome: "conflict",
+          recordIds: [id],
+          beforeCount: current.items.length,
+          afterCount: current.items.length,
+          changedCount: 0,
+          beforeRevision: current.revision,
+          reasonCode: "revision_conflict"
+        });
+        throw new ServiceError(409, "MEMORY_REVISION_CONFLICT", "工作记忆已变化，请刷新后重试。");
+      }
+      recordMemoryOperation(config, {
+        source: "working",
+        operation: "delete",
+        actor: "admin",
+        outcome: "applied",
+        recordIds: [id],
+        beforeCount: current.items.length,
+        afterCount: result.current.items.length,
+        changedCount: 1,
+        beforeRevision: current.revision,
+        afterRevision: result.current.revision
+      });
+      return { ok: true };
+    });
+  }
 
   const filePath = memorySourcePath(config, source);
   return memoryMutationMutex.runExclusive(async () => {
@@ -135,6 +265,16 @@ export async function deleteMemoryEntry(config: AppConfig, input: MemoryWriteInp
     if (nextRecords.length === records.length) throw new ServiceError(404, "MEMORY_NOT_FOUND", "记忆不存在。", "id");
 
     await writeMemoryRecords(filePath, nextRecords.map((record, index) => ({ ...record, index })));
+    recordMemoryOperation(config, {
+      source: source.id,
+      operation: "delete",
+      actor: "admin",
+      outcome: "applied",
+      recordIds: [id],
+      beforeCount: records.length,
+      afterCount: nextRecords.length,
+      changedCount: 1
+    });
     return { ok: true };
   });
 }
@@ -150,11 +290,93 @@ export async function appendMemoryFacts(
 
   const normalizedFacts = normalizeMemoryFactInputs(facts);
   if (!normalizedFacts.length) return [];
+  if (source.id === "working") {
+    return memoryMutationMutex.runExclusive(async () => {
+      const current = await readWorkingMemoryDocument(config);
+      const items = workingMemoryItemsFromFacts(
+        [
+          ...current.items.map((item) => ({
+            id: item.id,
+            fact: item.content,
+            userId: item.userId,
+            userIds: item.userIds,
+            userName: item.userName,
+            addressNames: item.addressNames,
+            occurredAt: item.occurredAt,
+            occurredEndAt: item.occurredEndAt,
+            eventType: item.eventType,
+            subjectKey: item.subjectKey,
+            eventKey: item.eventKey,
+            causalChainKey: item.causalChainKey
+          })),
+          ...normalizedFacts
+        ],
+        current.items,
+        {
+          ...metadata,
+          conversationId: metadata.conversationId ?? "system:memory",
+          conversationScope: metadata.conversationScope ?? "system",
+          conversationTitle: metadata.conversationTitle ?? "系统记忆"
+        },
+        (_fact, index) => `working_${nanoid()}_${index}`
+      );
+      const result = await replaceWorkingMemoryDocument(config, current.revision, items);
+      if (result.status === "conflict") {
+        recordMemoryOperation(config, {
+          source: "working",
+          operation: "append",
+          actor: memoryActor(metadata),
+          outcome: "conflict",
+          beforeCount: current.items.length,
+          afterCount: current.items.length,
+          changedCount: 0,
+          beforeRevision: current.revision,
+          batchId: optionalString(metadata.batchId),
+          conversationId: optionalString(metadata.conversationId),
+          conversationScope: optionalString(metadata.conversationScope),
+          reasonCode: "revision_conflict"
+        });
+        throw new ServiceError(409, "MEMORY_REVISION_CONFLICT", "工作记忆已变化，请重试。");
+      }
+      const entries = result.current.items.slice(current.items.length).map(workingMemoryItemToEntry);
+      recordMemoryOperation(config, {
+        source: "working",
+        operation: "append",
+        actor: memoryActor(metadata),
+        outcome: result.status === "unchanged" ? "unchanged" : "applied",
+        recordIds: entries.map((entry) => entry.id),
+        batchId: optionalString(metadata.batchId),
+        conversationId: optionalString(metadata.conversationId),
+        conversationScope: optionalString(metadata.conversationScope),
+        beforeCount: current.items.length,
+        afterCount: result.current.items.length,
+        changedCount: entries.length,
+        beforeRevision: current.revision,
+        afterRevision: result.current.revision
+      });
+      return entries;
+    });
+  }
 
   const filePath = memorySourcePath(config, source);
   return memoryMutationMutex.runExclusive(async () => {
     if (source.id === "user_profile") {
-      return appendUserProfileFacts(config, source, normalizedFacts, metadata);
+      const beforeCount = (await readMemoryRecords(filePath)).length;
+      const entries = await appendUserProfileFacts(config, source, normalizedFacts, metadata);
+      recordMemoryOperation(config, {
+        source: source.id,
+        operation: "append",
+        actor: memoryActor(metadata),
+        outcome: "applied",
+        recordIds: entries.map((entry) => entry.id),
+        batchId: optionalString(metadata.batchId),
+        conversationId: optionalString(metadata.conversationId),
+        conversationScope: optionalString(metadata.conversationScope),
+        beforeCount,
+        afterCount: entries.length,
+        changedCount: normalizedFacts.length
+      });
+      return entries;
     }
 
     const records = await readMemoryRecords(filePath);
@@ -169,7 +391,21 @@ export async function appendMemoryFacts(
 
     records.push(...nextRecords);
     await writeMemoryRecords(filePath, records);
-    return nextRecords.map((record) => toMemoryEntry(source, record));
+    const entries = nextRecords.map((record) => toMemoryEntry(source, record));
+    recordMemoryOperation(config, {
+      source: source.id,
+      operation: "append",
+      actor: memoryActor(metadata),
+      outcome: "applied",
+      recordIds: entries.map((entry) => entry.id),
+      batchId: optionalString(metadata.batchId),
+      conversationId: optionalString(metadata.conversationId),
+      conversationScope: optionalString(metadata.conversationScope),
+      beforeCount: records.length - nextRecords.length,
+      afterCount: records.length,
+      changedCount: nextRecords.length
+    });
+    return entries;
   });
 }
 
@@ -180,9 +416,28 @@ export async function mergeUserProfileMemory(config: AppConfig) {
     const records = await readMemoryRecords(filePath);
     const nextRecords = mergeUserProfileRecords(config, source, records, []);
     if (memoryRecordsEqual(records, nextRecords)) {
+      recordMemoryOperation(config, {
+        source: "user_profile",
+        operation: "merge",
+        actor: "system",
+        outcome: "unchanged",
+        beforeCount: records.length,
+        afterCount: nextRecords.length,
+        changedCount: 0
+      });
       return nextRecords.map((record) => toMemoryEntry(source, record));
     }
     await writeMemoryRecords(filePath, nextRecords);
+    recordMemoryOperation(config, {
+      source: "user_profile",
+      operation: "merge",
+      actor: "system",
+      outcome: "applied",
+      recordIds: nextRecords.map((record) => optionalString(record.value.id)).filter(Boolean) as string[],
+      beforeCount: records.length,
+      afterCount: nextRecords.length,
+      changedCount: nextRecords.length
+    });
     return nextRecords.map((record) => toMemoryEntry(source, record));
   });
 }
@@ -190,7 +445,7 @@ export async function mergeUserProfileMemory(config: AppConfig) {
 export async function normalizeEventMemorySchema(config: AppConfig) {
   return memoryMutationMutex.runExclusive(async () => {
     let updated = 0;
-    for (const sourceId of ["working", "long_term"] as const) {
+    for (const sourceId of ["long_term"] as const) {
       const source = sourceById(sourceId);
       const filePath = memorySourcePath(config, source);
       const records = await readMemoryRecords(filePath);
@@ -208,7 +463,18 @@ export async function normalizeEventMemorySchema(config: AppConfig) {
         if (!memoryRecordsEqual([record], [{ ...record, value }])) updated += 1;
         return { ...record, value };
       });
-      if (!memoryRecordsEqual(records, nextRecords)) await writeMemoryRecords(filePath, nextRecords);
+      if (!memoryRecordsEqual(records, nextRecords)) {
+        await writeMemoryRecords(filePath, nextRecords);
+      }
+      recordMemoryOperation(config, {
+        source: source.id,
+        operation: "normalize",
+        actor: "system",
+        outcome: updated ? "applied" : "unchanged",
+        beforeCount: records.length,
+        afterCount: nextRecords.length,
+        changedCount: updated
+      });
     }
     return { updated };
   });
@@ -247,7 +513,54 @@ export function resolveUserAddressNames(
 export async function clearMemorySource(config: AppConfig, sourceInput: MemorySourceId) {
   const source = sourceById(sourceInput);
   if (!source.editable) badRequest("MEMORY_SOURCE_READ_ONLY", "该记忆来源不可编辑。", "source");
-  await memoryMutationMutex.runExclusive(() => writeMemoryRecords(memorySourcePath(config, source), []));
+  if (source.id === "working") {
+    await memoryMutationMutex.runExclusive(async () => {
+      const current = await readWorkingMemoryDocument(config);
+      const result = await replaceWorkingMemoryDocument(config, current.revision, []);
+      if (result.status === "conflict") {
+        recordMemoryOperation(config, {
+          source: "working",
+          operation: "clear",
+          actor: "admin",
+          outcome: "conflict",
+          beforeCount: current.items.length,
+          afterCount: current.items.length,
+          changedCount: 0,
+          beforeRevision: current.revision,
+          reasonCode: "revision_conflict"
+        });
+        throw new ServiceError(409, "MEMORY_REVISION_CONFLICT", "工作记忆已变化，请重试。");
+      }
+      recordMemoryOperation(config, {
+        source: "working",
+        operation: "clear",
+        actor: "admin",
+        outcome: result.status === "unchanged" ? "unchanged" : "applied",
+        recordIds: current.items.map((item) => item.id),
+        beforeCount: current.items.length,
+        afterCount: 0,
+        changedCount: current.items.length,
+        beforeRevision: current.revision,
+        afterRevision: result.current.revision
+      });
+    });
+    return;
+  }
+  await memoryMutationMutex.runExclusive(async () => {
+    const filePath = memorySourcePath(config, source);
+    const records = await readMemoryRecords(filePath);
+    await writeMemoryRecords(filePath, []);
+    recordMemoryOperation(config, {
+      source: source.id,
+      operation: "clear",
+      actor: "admin",
+      outcome: records.length ? "applied" : "unchanged",
+      recordIds: records.map((record) => optionalString(record.value.id)).filter(Boolean) as string[],
+      beforeCount: records.length,
+      afterCount: 0,
+      changedCount: records.length
+    });
+  });
 }
 
 export async function appendUserProfileFacts(
@@ -261,4 +574,12 @@ export async function appendUserProfileFacts(
   const nextRecords = mergeUserProfileRecords(config, source, records, facts, metadata);
   await writeMemoryRecords(filePath, nextRecords);
   return nextRecords.map((record) => toMemoryEntry(source, record));
+}
+
+function memoryActor(metadata: Record<string, unknown>): MemoryOperationActor {
+  const source = optionalString(metadata.source) ?? "";
+  if (source.includes("dream")) return "dream";
+  if (source.includes("batch") || source.includes("compress")) return "memory_pipeline";
+  if (source.includes("ui") || source.includes("admin")) return "admin";
+  return "system";
 }

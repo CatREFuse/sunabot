@@ -48,6 +48,7 @@ export interface DreamModelOutputV1 {
   longTermReviews: DreamLongTermReviewV1[];
   workingReviews: DreamWorkingReviewV1[];
   personaAdjustment: DreamPersonaAdjustmentV1 | null;
+  rawOutput?: string;
 }
 
 export interface DreamModelOutputExpectations {

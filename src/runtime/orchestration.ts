@@ -22,7 +22,7 @@ import {
 } from "../types.js";
 import { adminIdentityFromBot, appendConversationMessage, hasIncomingReplyContent, indexedConversationMessages, isAdminUserId, isExplicitWakeMessage, resolveRuntimePersonaName, toContextChatMessage } from "./conversationMemoryHelpers.js";
 import { errorMessage, isAbortError, sanitizeErrorDetail, withAbortTimeout } from "./infrastructure.js";
-import { conversationOrchestratorEnabled, conversationRecordId, conversationReplyEnabled, incomingConversationMessageId, persistedAttachments, persistedQuoteReferences, persistentIncomingKey, restoredGroupIncoming, uniqueStrings } from "./messagingAttachmentHelpers.js";
+import { conversationOrchestratorEnabled, conversationOrchestratorResponseTimeMs, conversationRecordId, conversationReplyEnabled, incomingConversationMessageId, persistedAttachments, persistedQuoteReferences, persistentIncomingKey, restoredGroupIncoming, uniqueStrings } from "./messagingAttachmentHelpers.js";
 import { AMBIENT_ORCHESTRATOR_TIMEOUT_MS, AdminIdentity, AmbientReplyJob, AmbientReplyState, DEDUPE_TTL_MS, MAX_DEDUPE_KEYS, ORCHESTRATOR_MAX_RETRIES } from "./runtimeContracts.js";
 import { conversationLastText } from "./selfieHelpers.js";
 
@@ -212,7 +212,11 @@ export function runtime_scheduleAmbientIdleReply(this: RuntimeHost, job: Ambient
     if (!latest) return;
     const lastMessageAt = Date.parse(latest.message.at);
     const elapsed = Number.isFinite(lastMessageAt) ? Math.max(0, Date.now() - lastMessageAt) : 0;
-    const delay = Math.max(0, this.config.bot.orchestrator.recentMessageWindowMs - elapsed);
+    const responseTimeMs = conversationOrchestratorResponseTimeMs(
+      record,
+      this.config.bot.orchestrator.recentMessageWindowMs
+    );
+    const delay = Math.max(0, responseTimeMs - elapsed);
     const timer = setTimeout(() => {
       this.ambientIdleTimers.delete(job.channelKey);
       if (!this.isReplyTaskCurrent(job.incoming, job.gate)) return;
@@ -333,6 +337,10 @@ export async function runtime_runUserGroupchatOrchestrator(this: RuntimeHost,
       stage: "orchestrator",
       promptFamily: "orchestrator.user-group"
     };
+    const responseTimeMs = conversationOrchestratorResponseTimeMs(
+      record,
+      this.config.bot.orchestrator.recentMessageWindowMs
+    );
 
     try {
       const replyCandidateMessageIds = this.pendingOrchestratorUserMessages(
@@ -356,7 +364,7 @@ export async function runtime_runUserGroupchatOrchestrator(this: RuntimeHost,
         trigger: {
           wakeWordHit: false,
           messageThreshold: this.config.bot.orchestrator.messageThreshold,
-          recentMessageWindowMs: this.config.bot.orchestrator.recentMessageWindowMs
+          recentMessageWindowMs: responseTimeMs
         },
         conversation: {
           id: record.id,
@@ -450,7 +458,7 @@ export async function runtime_runUserGroupchatOrchestrator(this: RuntimeHost,
         action: "orchestrator.decision",
         request: {
           messageThreshold: this.config.bot.orchestrator.messageThreshold,
-          recentMessageWindowMs: this.config.bot.orchestrator.recentMessageWindowMs
+          recentMessageWindowMs: responseTimeMs
         },
         response: {
           shouldReply,
@@ -486,7 +494,7 @@ export async function runtime_runUserGroupchatOrchestrator(this: RuntimeHost,
         action: "orchestrator.failed",
         request: {
           messageThreshold: this.config.bot.orchestrator.messageThreshold,
-          recentMessageWindowMs: this.config.bot.orchestrator.recentMessageWindowMs
+          recentMessageWindowMs: responseTimeMs
         },
         response: { ok: false, error: detail },
         metadata: {

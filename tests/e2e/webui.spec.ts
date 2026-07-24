@@ -182,13 +182,15 @@ test("Agent 设置只保留有效且唯一的配置入口", async ({ page }) => 
   await expect(page.getByLabel("工作记忆上限")).toHaveCount(1);
 
   await page.goto("/agent-settings/tools");
-  await expect(page.getByLabel("启用 Bash")).toBeVisible();
+  await expect(page.getByLabel("启用 Native Bash")).toBeVisible();
+  await expect(page.getByLabel("启用 Docker Bash")).toBeVisible();
   await expect(page.getByLabel("启用 Codex")).toBeVisible();
   await page.getByRole("tab", { name: "运行参数", exact: true }).click();
   await expect(page.getByLabel("启动 Codex Worker")).toHaveCount(0);
 
   await page.goto("/agent-settings/bash");
-  await expect(page.getByLabel("启用 Bash")).toHaveCount(0);
+  await expect(page.getByLabel("启用 Native Bash")).toHaveCount(0);
+  await expect(page.getByLabel("启用 Docker Bash")).toHaveCount(0);
   await expect(page.getByLabel("严格审批")).toBeVisible();
   await expect(page.getByLabel("对抗审批 Agent")).toBeVisible();
   await expect(page.getByLabel("管理员身份门禁")).toHaveCount(0);
@@ -870,7 +872,7 @@ test("工具目录支持启停、全局说明和继承说明恢复", async ({ pa
 
   await expect(page.getByRole("tab", { name: "工具目录", exact: true })).toHaveAttribute("aria-selected", "true");
   await expect(page.getByLabel("搜索工具")).toBeVisible();
-  await expect(page.getByLabel(/^启用 /)).toHaveCount(21);
+  await expect(page.getByLabel(/^启用 /)).toHaveCount(22);
   for (const name of [
     "assistant_text",
     "no_reply",
@@ -885,7 +887,8 @@ test("工具目录支持启停、全局说明和继承说明恢复", async ({ pa
     "write_file",
     "send_file",
     "send_voice_message",
-    "workspace_bash",
+    "native_bash",
+    "docker_bash",
     "codex",
     "activate_skill",
     "read_skill_resource",
@@ -900,7 +903,7 @@ test("工具目录支持启停、全局说明和继承说明恢复", async ({ pa
   await expect(page.getByText("onebot.send_message", { exact: true })).toHaveCount(0);
   await expect(page.getByText("provider.test", { exact: true })).toHaveCount(0);
 
-  for (const [id, title] of [["workspace_bash", "Bash"], ["codex", "Codex"]] as const) {
+  for (const [id, title] of [["docker_bash", "Docker Bash"], ["codex", "Codex"]] as const) {
     const row = page.locator("article").filter({ has: page.getByText(id, { exact: true }) });
     await expect(row.getByText("配置已启用", { exact: true })).toBeVisible();
     await expect(row.getByText("能力可用", { exact: true })).toHaveCount(0);
@@ -912,16 +915,20 @@ test("工具目录支持启停、全局说明和继承说明恢复", async ({ pa
     await row.getByLabel(`启用 ${title}`).check({ force: true });
   }
 
-  const bashRow = page.locator("article").filter({ has: page.getByText("workspace_bash", { exact: true }) });
-  await expect(bashRow.getByText("全部 QQ 会话 Docker", { exact: true })).toBeVisible();
-  await expect(bashRow.getByText("Docker Bash 已启动", { exact: true })).toBeVisible();
-  await bashRow.getByRole("button", { name: "查看 Bash 详情" }).click();
-  const bashDialog = page.getByRole("dialog", { name: "Bash" });
+  const nativeBashRow = page.locator("article").filter({ has: page.getByText("native_bash", { exact: true }) });
+  await expect(nativeBashRow.getByText("管理员私聊与 Web Chat 可用", { exact: true })).toBeVisible();
+  await expect(nativeBashRow.getByText("Native Bash 可用", { exact: true })).toBeVisible();
+  const dockerBashRow = page.locator("article").filter({ has: page.getByText("docker_bash", { exact: true }) });
+  await expect(dockerBashRow.getByText("全部允许会话可用", { exact: true })).toBeVisible();
+  await expect(dockerBashRow.getByText("Docker Bash 已启动", { exact: true })).toBeVisible();
+  await dockerBashRow.getByRole("button", { name: "查看 Docker Bash 详情" }).click();
+  const bashDialog = page.getByRole("dialog", { name: "Docker Bash" });
   await expect(bashDialog.getByText("适用会话", { exact: true })).toBeVisible();
-  await expect(bashDialog.getByText("Docker Bash", { exact: true })).toBeVisible();
+  await expect(bashDialog.locator("dt").filter({ hasText: /^Docker Bash$/ })).toBeVisible();
   await bashDialog.getByRole("button", { name: "关闭工具详情" }).click();
   await expect(page.locator('[data-slot="settings-auto-save-status"]')).toHaveCount(0);
-  await expect(page.getByLabel("启用 Bash")).toBeChecked();
+  await expect(page.getByLabel("启用 Native Bash")).toBeChecked();
+  await expect(page.getByLabel("启用 Docker Bash")).toBeChecked();
   await expect(page.getByLabel("启用 Codex")).toBeChecked();
 
   for (const id of ["activate_skill", "read_skill_resource"] as const) {
@@ -1291,7 +1298,7 @@ test("每个会话都有独立设置侧栏且 Agent 总开关优先", async ({ p
   const settingsPanel = page.locator('[data-slot="conversation-side-panel"]');
   await expect(settingsDialog).toBeVisible();
   await expect(settingsPanel).toBeVisible();
-  await settingsPanel.getByRole("checkbox", { name: /^编排器/ }).uncheck();
+  await settingsPanel.getByRole("checkbox", { name: "编排器 自动判断是否参与群聊", exact: true }).uncheck();
   await expect.poll(() => state.conversationReplyRequests.at(-1)).toEqual({
     conversationId: "group:10001",
     replyEnabled: true,
@@ -1344,7 +1351,9 @@ test("独立会话设置自动同步并在失败时保留当前输入", async ({
   await expect.poll(() => state.conversationReplyRequests.at(-1)).toEqual({
     conversationId: "group:10001",
     replyEnabled: false,
-    orchestratorEnabled: true
+    orchestratorEnabled: true,
+    orchestratorResponseTimeOverrideEnabled: false,
+    orchestratorResponseTimeMs: 60_000
   });
   await expect(page.getByRole("dialog", { name: "放弃未保存的设置？" })).toHaveCount(0);
 
@@ -1358,6 +1367,26 @@ test("独立会话设置自动同步并在失败时保留当前输入", async ({
   await expect(page.getByText("工具权限同步失败。", { exact: true })).toBeVisible();
   await expect(page.getByLabel("启用 读取文件")).not.toBeChecked();
   await expect(page.getByRole("button", { name: /保存|放弃/ })).toHaveCount(0);
+});
+
+test("群聊会话开启编排器时间覆盖后可设置独立响应时间", async ({ page }) => {
+  const state = await installMockApi(page);
+  await page.goto("/conversations/group%3A10001/settings/general");
+
+  const override = page.getByLabel("编排器时间覆盖", { exact: true });
+  await expect(override).not.toBeChecked();
+  await expect(page.getByLabel("编排器响应时间")).toHaveCount(0);
+
+  await override.check();
+  const responseTime = page.getByLabel("编排器响应时间");
+  await expect(responseTime).toHaveValue("60");
+  await responseTime.fill("15");
+  await responseTime.press("Tab");
+
+  await expect.poll(() => state.conversationReplySettings["group:10001"]).toMatchObject({
+    orchestratorResponseTimeOverrideEnabled: true,
+    orchestratorResponseTimeMs: 15_000
+  });
 });
 
 test("路由按需加载对应脚本分块", async ({ page }) => {
@@ -1404,10 +1433,24 @@ test("记忆页分页并区分称呼与昵称、显示事件范围和保留称�
   const sortField = page.getByLabel("排序字段");
   const sortDirection = page.getByLabel("排序方向");
   await expect(sourceTabs.getByRole("button")).toHaveText(["工作记忆", "长期记忆", "用户画像", "梦境"]);
-  await expect(sortField).toHaveValue("updatedAt");
-  await expect(sortDirection).toHaveValue("desc");
+  await expect(page.getByRole("region", { name: "工作记忆原文" })).toContainText("WebUI 使用 Vue 3、TypeScript 与 Tailwind。");
+  await expect(page.getByRole("region", { name: "工作记忆原文" })).not.toContainText("sunabot-workmemory:item");
+  await page.getByRole("button", { name: "操作日志", exact: true }).click();
+  const operationLogDialog = page.getByRole("dialog", { name: "记忆操作日志" });
+  await expect(operationLogDialog).toBeVisible();
+  await expect(operationLogDialog.getByLabel("记忆操作日志列表").locator("li")).toHaveCount(3);
+  await expect(operationLogDialog).toContainText("工作记忆 · 追加");
+  await expect(operationLogDialog).toContainText("group:10001 · user_group");
+  await expect(operationLogDialog).toContainText("participant_binding_unresolved");
+  await operationLogDialog.getByRole("button", { name: "关闭", exact: true }).click();
+  await expect(operationLogDialog).toHaveCount(0);
+  await expect(sortField).toHaveCount(0);
+  await expect(sortDirection).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "新增", exact: true })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "梦境", exact: true })).toHaveCount(0);
   await sourceTabs.getByRole("button", { name: "梦境", exact: true }).click();
+  await expect(sortField).toHaveValue("updatedAt");
+  await expect(sortDirection).toHaveValue("desc");
   await expect(page.getByRole("heading", { name: "梦境", exact: true })).toBeVisible();
   await expect(page.getByText("Asia/Shanghai", { exact: true })).toBeVisible();
   await expect(page.getByText(/我沿着潮湿的石阶走进旧车站/)).toBeVisible();
@@ -1430,25 +1473,27 @@ test("记忆页分页并区分称呼与昵称、显示事件范围和保留称�
   await expect(page.getByRole("button", { name: "新增", exact: true })).toHaveCount(0);
 
   await sourceTabs.getByRole("button", { name: "工作记忆" }).click();
-  await sortField.selectOption("updatedAt");
-  await expect(page.getByText(/发生 .* 至 .*/)).toBeVisible();
+  await expect(page.getByRole("region", { name: "工作记忆原文" })).toBeVisible();
+  await expect(page.getByLabel("搜索记忆")).toHaveCount(0);
+  await expect(page.getByRole("navigation", { name: "记忆分页" })).toHaveCount(0);
+  await expect(sortField).toHaveCount(0);
   const memoryRows = page.locator("article").filter({ has: page.getByRole("button", { name: "编辑记忆" }) });
+  await expect(memoryRows).toHaveCount(0);
+
+  await sourceTabs.getByRole("button", { name: "长期记忆" }).click();
   const pagination = page.getByRole("navigation", { name: "记忆分页" });
   await expect(pagination).toContainText("共 21 条 · 每页 20 条");
   await expect(memoryRows).toHaveCount(20);
-  await pagination.getByRole("button", { name: "下一页" }).click();
-  await expect(memoryRows).toHaveCount(1);
-  await expect(page.getByText("分页测试记忆 1", { exact: true })).toBeVisible();
-  await sortDirection.selectOption("asc");
-  await expect(pagination).toContainText("1 / 2");
-  await expect(memoryRows.first()).toContainText("分页测试记忆 1");
-
-  await sourceTabs.getByRole("button", { name: "长期记忆" }).click();
   await sortField.selectOption("lastRecalledAt");
   await sortDirection.selectOption("desc");
   await expect(page.getByText("召回 4 次", { exact: true })).toBeVisible();
   await expect(page.getByText("跨 3 天", { exact: true })).toBeVisible();
   await expect(page.getByText(/最近召回/)).toBeVisible();
+  await pagination.getByRole("button", { name: "下一页" }).click();
+  await expect(memoryRows).toHaveCount(1);
+  await expect(page.getByText("分页测试记忆 20", { exact: true })).toBeVisible();
+  await sortDirection.selectOption("asc");
+  await expect(pagination).toContainText("1 / 2");
 
   await sourceTabs.getByRole("button", { name: "用户画像" }).click();
   await sortField.selectOption("createdAt");

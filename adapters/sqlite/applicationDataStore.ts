@@ -14,6 +14,7 @@ import { EmojiStore, type EmojiRecord, type EmojiVersionRecord } from "./emojiSt
 import { SqliteScheduledTaskStore } from "./scheduledTaskStore.js";
 import { SqliteDirectorStore } from "./directorStore.js";
 import { SqliteDreamStore } from "./dreamStore.js";
+import { ImageHistoryStore } from "./imageHistoryStore.js";
 import {
   GroupThreadStateStore,
   type CommitGroupThreadStateInput,
@@ -33,11 +34,26 @@ export type {
   GroupThreadStateRecord
 } from "./groupThreadStateStore.js";
 export type { EmojiRecord, EmojiVersionRecord } from "./emojiStore.js";
+export { generatedImageHistoryRecords } from "./imageHistoryStore.js";
 
 export type MemoryDataSource = "working" | "long_term" | "user_profile";
 
 type JsonObject = Record<string, unknown>;
 type SqlRow = Record<string, unknown>;
+type CommitMemoryBatchInput = {
+  batchId: string;
+  baselineRevisions: MemorySourceRevisions;
+  working: readonly JsonObject[];
+  longTerm: readonly JsonObject[];
+  userProfile: readonly JsonObject[];
+  result: unknown;
+};
+type CommitUserProfileBatchInput = {
+  batchId: string;
+  expectedUserProfileRevision: number;
+  userProfile: readonly JsonObject[];
+  result: unknown;
+};
 
 export interface AgentRegistryRow {
   id: string;
@@ -109,6 +125,7 @@ export class ApplicationDataStore {
   private readonly groupThreads: GroupThreadStateStore;
   private readonly modelCalls: ModelCallStore;
   private readonly emojis: EmojiStore;
+  private readonly imageHistory: ImageHistoryStore;
   readonly scheduledTasks: ScheduledTaskStore;
   readonly director: SqliteDirectorStore;
   readonly dreams: SqliteDreamStore;
@@ -125,6 +142,7 @@ export class ApplicationDataStore {
     this.modelCalls = new ModelCallStore(this.database);
     migrateApplicationDataSchema(this.database, this.modelCalls);
     this.emojis = new EmojiStore(this.database);
+    this.imageHistory = new ImageHistoryStore(this.database);
     this.scheduledTasks = new SqliteScheduledTaskStore(this.database);
     this.director = new SqliteDirectorStore(this.database);
     this.dreams = new SqliteDreamStore(this.database);
@@ -261,14 +279,7 @@ export class ApplicationDataStore {
 
   listRecallStats(recordIds?: readonly string[]) { return this.dreams.listRecallStats(recordIds); }
 
-  commitMemoryBatch(input: {
-    batchId: string;
-    baselineRevisions: MemorySourceRevisions;
-    working: readonly JsonObject[];
-    longTerm: readonly JsonObject[];
-    userProfile: readonly JsonObject[];
-    result: unknown;
-  }) {
+  commitMemoryBatch(input: CommitMemoryBatchInput) {
     return this.transaction(() => {
       const existing = this.readMemoryBatch(input.batchId);
       if (existing !== undefined) return { status: "existing" as const, result: existing };
@@ -286,6 +297,12 @@ export class ApplicationDataStore {
       `).run(input.batchId, JSON.stringify(input.result), new Date().toISOString());
       return { status: "committed" as const, result: input.result };
     });
+  }
+
+  commitUserProfileBatch(input: CommitUserProfileBatchInput) {
+    return commitUserProfileBatch(this.database, input, (records) => (
+      this.replaceMemoryUnsafe("user_profile", records)
+    ));
   }
 
   readMemoryBatch(batchId: string) {
@@ -412,35 +429,23 @@ export class ApplicationDataStore {
   }
 
   readImageHistory() {
-    return this.database.prepare(`
-      SELECT data_json FROM image_history ORDER BY created_at DESC, id LIMIT 80
-    `).all().map((row) => JSON.parse(String((row as SqlRow).data_json)) as ImageHistoryRecord);
+    return this.imageHistory.read();
   }
 
   replaceImageHistory(records: readonly ImageHistoryRecord[]) {
-    this.transaction(() => {
-      this.database.prepare("DELETE FROM image_history").run();
-      const insert = this.database.prepare(`
-        INSERT INTO image_history (id, url, created_at, data_json) VALUES (?, ?, ?, ?)
-      `);
-      for (const record of records) insert.run(record.id, record.url, record.createdAt, JSON.stringify(record));
-    });
+    this.imageHistory.replace(records);
+  }
+
+  appendImageHistory(record: ImageHistoryRecord) {
+    this.imageHistory.append(record);
   }
 
   ensureLegacyImageHistoryImported(filePath: string) {
-    const marker = "legacy-image-history";
-    if (this.metadata(marker) === "done") return { imported: false, count: this.imageHistoryCount() };
-    const records = readImageHistoryJson(filePath);
-    this.transaction(() => {
-      if (this.imageHistoryCount() === 0) {
-        const insert = this.database.prepare(`
-          INSERT INTO image_history (id, url, created_at, data_json) VALUES (?, ?, ?, ?)
-        `);
-        for (const record of records) insert.run(record.id, record.url, record.createdAt, JSON.stringify(record));
-      }
-      this.setMetadata(marker, "done");
-    });
-    return { imported: records.length > 0, count: this.imageHistoryCount() };
+    return this.imageHistory.ensureLegacyImported(filePath);
+  }
+
+  ensureGeneratedImageHistoryIndexed(config?: Pick<AppConfig, "persona">) {
+    return this.imageHistory.ensureGeneratedIndexed(config);
   }
 
   readEmojis(): EmojiRecord[] {
@@ -477,6 +482,17 @@ export class ApplicationDataStore {
 
   appendRequestLog(record: JsonObject) {
     this.modelCalls.appendRequestLog(record);
+  }
+
+  appendMemoryOperationLog(record: JsonObject) {
+    this.modelCalls.appendRequestLog(record);
+  }
+
+  readMemoryOperationLogPage(options: { page: number; pageSize: number }) {
+    return this.modelCalls.readRequestLogCategoryPage({
+      category: "memory.operation",
+      ...options
+    });
   }
 
   appendRequestLogIdempotent(record: JsonObject) {
@@ -524,7 +540,7 @@ export class ApplicationDataStore {
       longTermMemory: this.memoryCount("long_term"),
       userProfiles: this.memoryCount("user_profile"),
       memorySchedulerConversations: this.memorySchedulerCount(),
-      imageHistory: this.imageHistoryCount()
+      imageHistory: this.imageHistory.count()
     };
   }
 
@@ -594,12 +610,39 @@ export class ApplicationDataStore {
     return count(this.database.prepare("SELECT COUNT(*) AS count FROM memory_scheduler").get());
   }
 
-  private imageHistoryCount() {
-    return count(this.database.prepare("SELECT COUNT(*) AS count FROM image_history").get());
-  }
-
   private requestLogCount() {
     return count(this.database.prepare("SELECT COUNT(*) AS count FROM request_logs").get());
+  }
+}
+
+function commitUserProfileBatch(
+  database: DatabaseSync,
+  input: CommitUserProfileBatchInput,
+  replaceUserProfile: (records: readonly JsonObject[]) => void
+) {
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    const existing = database.prepare(`
+      SELECT result_json FROM memory_batches WHERE batch_id = ?
+    `).get(input.batchId) as SqlRow | undefined;
+    if (existing) {
+      database.exec("COMMIT");
+      return { status: "existing" as const, result: JSON.parse(String(existing.result_json)) };
+    }
+    const current = readMemorySourceRevisions(database);
+    if (current.user_profile !== input.expectedUserProfileRevision) {
+      database.exec("ROLLBACK");
+      return { status: "snapshot_conflict" as const };
+    }
+    replaceUserProfile(input.userProfile);
+    database.prepare(`
+      INSERT INTO memory_batches (batch_id, result_json, committed_at) VALUES (?, ?, ?)
+    `).run(input.batchId, JSON.stringify(input.result), new Date().toISOString());
+    database.exec("COMMIT");
+    return { status: "committed" as const, result: input.result };
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
   }
 }
 
@@ -696,16 +739,4 @@ function readSchedulerJson(filePath: string) {
     throw new Error(`Invalid memory scheduler store at ${filePath}`);
   }
   return parsed.conversations as Record<string, JsonObject>;
-}
-
-function readImageHistoryJson(filePath: string) {
-  if (!fs.existsSync(filePath)) return [];
-  const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
-  if (!Array.isArray(parsed)) throw new Error(`Invalid image history store at ${filePath}`);
-  return parsed.filter((record): record is ImageHistoryRecord => Boolean(
-    record && typeof record === "object" &&
-    typeof (record as ImageHistoryRecord).id === "string" &&
-    typeof (record as ImageHistoryRecord).url === "string" &&
-    typeof (record as ImageHistoryRecord).createdAt === "string"
-  ));
 }

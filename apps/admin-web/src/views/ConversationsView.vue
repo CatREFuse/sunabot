@@ -85,6 +85,7 @@ function logs(runId?: string) { if (selectedId.value) void data.loadLogs(selecte
       :has-more="data.hasMore.value"
       :loading-messages="data.loadingMessages.value"
       :loading-logs="data.loadingLogs.value"
+      :settings-busy="Boolean(selected && data.mutationBusy.value[selected.id])"
       :error="data.error.value"
       v-model:side-panel="sidePanel"
       @back="back"
@@ -93,6 +94,8 @@ function logs(runId?: string) { if (selectedId.value) void data.loadLogs(selecte
       @logs="logs"
       @reply="selected && data.setReplyEnabled(selected, $event)"
       @orchestrator="selected && data.setOrchestratorEnabled(selected, $event)"
+      @orchestrator-response-time-override="selected && data.setOrchestratorResponseTimeOverrideEnabled(selected, $event)"
+      @orchestrator-response-time="selected && data.setOrchestratorResponseTime(selected, $event)"
     />
   </div>
 </template>

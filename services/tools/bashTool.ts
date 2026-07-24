@@ -42,8 +42,18 @@ import {
   type WorkspaceBashRuntimeExecutionResult,
   type WorkspaceBashRuntimePort
 } from "./bashRuntime.js";
+import {
+  dockerBashTool,
+  nativeBashTool
+} from "./bashToolDefinition.js";
 
-export const WORKSPACE_BASH_TOOL_NAME = "workspace_bash";
+export {
+  DOCKER_BASH_TOOL_NAME,
+  NATIVE_BASH_TOOL_NAME,
+  dockerBashTool,
+  nativeBashTool
+} from "./bashToolDefinition.js";
+
 const MAX_COMMAND_LENGTH = 4_000;
 const MAX_OUTPUT_CHARS = 24_000;
 const OUTSIDE_READ_APPROVAL_GUARANTEE = "仅授权读取既存 canonical regular file；完整父链身份已冻结，并会在只读 bind 前复验。";
@@ -109,31 +119,11 @@ export interface WorkspaceBashProviderOptions {
   runtime?: WorkspaceBashRuntimePort;
 }
 
-export const workspaceBashTool = {
-  type: "function",
-  name: WORKSPACE_BASH_TOOL_NAME,
-  description: "Run a command in an isolated Docker environment after an independent adversarial approval agent reviews it. QQ conversations use a dedicated Docker workbench with no network or Docker socket access; Skill and MCP configuration is mounted read-only.",
-  parameters: {
-    type: "object",
-    additionalProperties: false,
-    properties: {
-      command: {
-        type: "string",
-        description: "Bash command to run from the current Agent workbench."
-      },
-      timeoutMs: {
-        type: ["integer", "null"],
-        enum: [WORKSPACE_BASH_EXECUTION_TIMEOUT_MS, null],
-        description: "Tool execution timeout is fixed at 30000 milliseconds. Use null to apply it."
-      }
-    },
-    required: ["command", "timeoutMs"]
-  },
-  strict: true
-};
+/** @deprecated Use dockerBashTool. */
+export const workspaceBashTool = dockerBashTool;
 
-export function createWorkspaceBashTool(_options: WorkspaceBashOptions = {}) {
-  return workspaceBashTool;
+export function createWorkspaceBashTool(options: WorkspaceBashOptions = {}) {
+  return options.backend === "native" ? nativeBashTool : dockerBashTool;
 }
 export function isWorkspaceBashProviderOptions(value: unknown): value is WorkspaceBashProviderOptions {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -169,6 +159,7 @@ export function isWorkspaceBashProviderOptions(value: unknown): value is Workspa
     || typeof approvalContext !== "object"
     || Array.isArray(approvalContext)
     || !isValidBashApprovalContext(approvalContext as BashApprovalContext)
+    || (approvalContext as BashApprovalContext).backend !== options.backend
   ) return false;
   if (options.runtime !== undefined && (
     !options.runtime
@@ -277,7 +268,9 @@ export async function runWorkspaceBash(
   let approvedOutsideAccesses: BashPathAccess[] = policy.outsideAccesses;
   let frozenApprovalAccesses: BashApprovalAccess[] = [];
   if (policy.decision === "confirm") {
-    if (!options.approvalContext || !isValidBashApprovalContext(options.approvalContext)) {
+    if (!options.approvalContext
+      || !isValidBashApprovalContext(options.approvalContext)
+      || options.approvalContext.backend !== backend) {
       return blockedResult(command, workbenchRoot, backend, accessMode, "BASH_APPROVAL_CONTEXT_UNAVAILABLE", audit);
     }
     const store = options.approvalStore ?? bashApprovalStore;
@@ -482,6 +475,7 @@ export async function runWorkspaceBash(
       workbenchRoot,
       backend,
       accessMode,
+      exposeHostPaths: sandbox.kind === "host",
       timeoutMs,
       environment,
       audit,
@@ -512,6 +506,7 @@ interface ExecuteCommandOptions {
   workbenchRoot: string;
   backend: BashExecutionBackend;
   accessMode: BashAccessMode;
+  exposeHostPaths: boolean;
   timeoutMs: number;
   environment: Record<string, string>;
   audit: BashAuditResult;
@@ -569,15 +564,15 @@ function executeCommand(invocation: WorkspaceBashInvocation, options: ExecuteCom
       }
       resolve({
         ok: !error,
-        command: sanitizeHostText(options.command, options.workbenchRoot),
-        cwd: WORKSPACE_BASH_VIRTUAL_ROOT,
+        command: visibleBashText(options.command, options),
+        cwd: options.exposeHostPaths ? options.workbenchRoot : WORKSPACE_BASH_VIRTUAL_ROOT,
         backend: options.backend,
         accessMode: options.accessMode,
         exitCode: typeof nodeError?.code === "number" ? nodeError.code : error ? 1 : 0,
         signal: typeof nodeError?.signal === "string" ? nodeError.signal : null,
         timedOut,
-        stdout: truncateOutput(sanitizeHostText(stdout, options.workbenchRoot)),
-        stderr: truncateOutput(sanitizeHostText(resultStderr, options.workbenchRoot)),
+        stdout: truncateOutput(visibleBashText(stdout, options)),
+        stderr: truncateOutput(visibleBashText(resultStderr, options)),
         audit: sanitizeAuditResult(options.audit, options.workbenchRoot),
         cleanupAttempted: cleanup?.attempted,
         cleanupSucceeded: cleanup?.succeeded,
@@ -789,6 +784,10 @@ function sanitizeHostText(value: string, workbenchRoot: string) {
   ].reduce((text, [hostPath, virtualPath]) => hostPath && hostPath !== "/"
     ? text.split(hostPath).join(virtualPath)
     : text, value);
+}
+
+function visibleBashText(value: string, options: Pick<ExecuteCommandOptions, "exposeHostPaths" | "workbenchRoot">) {
+  return options.exposeHostPaths ? value : sanitizeHostText(value, options.workbenchRoot);
 }
 
 function truncateOutput(value: string) {

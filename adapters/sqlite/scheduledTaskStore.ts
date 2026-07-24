@@ -747,7 +747,8 @@ function listCategory(value: ListScheduledTaskPageInput["category"]) {
 
 function categoryWhere(category: ReturnType<typeof listCategory>) {
   if (category === "director") return `id GLOB '${DIRECTOR_SCHEDULED_TASK_ID_PREFIX}*'`;
-  if (category === "recurring") return "schedule_kind = 'cron'";
+  const nonDirector = `id NOT GLOB '${DIRECTOR_SCHEDULED_TASK_ID_PREFIX}*'`;
+  if (category === "recurring") return `${nonDirector} AND schedule_kind = 'cron'`;
   const archived = `
     schedule_kind = 'once'
     AND next_run_at IS NULL
@@ -758,9 +759,9 @@ function categoryWhere(category: ReturnType<typeof listCategory>) {
       LIMIT 1
     ) IN ('completed', 'failed')
   `;
-  if (category === "archived") return archived;
-  if (category === "scheduled") return `schedule_kind = 'once' AND NOT (${archived})`;
-  return "1 = 1";
+  if (category === "archived") return `${nonDirector} AND (${archived})`;
+  if (category === "scheduled") return `${nonDirector} AND schedule_kind = 'once' AND NOT (${archived})`;
+  return nonDirector;
 }
 
 function pageNumber(value: number) {

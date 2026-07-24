@@ -16,6 +16,7 @@ import {
 } from "../../services/agent/promptWorkspace.js";
 import {
   mergeUserProfileMemory,
+  ensureWorkingMemoryDocument,
   normalizeEventMemorySchema,
   recoverMemoryTransactions,
   type MemoryEntry
@@ -23,6 +24,7 @@ import {
 import { normalizeConversationDisabledTools } from "../../services/tools/conversationToolPolicy.js";
 import { resolveModelReasoningEffort } from "../../packages/contracts/admin/models.js";
 import { getDefaultProvider } from "../config.js";
+import { applicationDataStore } from "../../adapters/sqlite/applicationDataStore.js";
 import type { SunaRuntime } from "../runtime.js";
 import {
   AppConfig,
@@ -31,14 +33,16 @@ import {
   ReasoningEffort
 } from "../types.js";
 import { clampInteger, indexedConversationMessages, resolveRuntimePersonaName } from "./conversationMemoryHelpers.js";
-import { conversationOrchestratorEnabled, conversationReplyEnabled, enrichMemoryEntriesWithConversations, isWebConversationId, normalizeConversationLookupId, outboundForRecord } from "./messagingAttachmentHelpers.js";
+import { conversationDirectorEventsEnabled, conversationOrchestratorEnabled, conversationOrchestratorResponseTimeMs, conversationReplyEnabled, enrichMemoryEntriesWithConversations, isWebConversationId, normalizeConversationLookupId, normalizeConversationOrchestratorResponseTimeMs, outboundForRecord } from "./messagingAttachmentHelpers.js";
 import { ensureRuntimePromptWorkspace } from "./promptMigrations.js";
 import { ADMIN_PERSONA_FILES, ConversationReplyUpdateInput, ConversationToolPolicyUpdateInput, RuntimeConfigSnapshot, RuntimePromptSnapshot, personaFileNameForAdminId, runtimePromptDefaultContent } from "./runtimeContracts.js";
 import { conversationMemberNames } from "./selfieHelpers.js";
 type RuntimeHost = SunaRuntime;
 export async function runtime_initialize(this: RuntimeHost) {
     await this.attachmentService.initialize();
+    applicationDataStore(this.config).ensureGeneratedImageHistoryIndexed(this.config);
     await this.ensureAgentPromptFiles();
+    await ensureWorkingMemoryDocument(this.config);
     await mergeUserProfileMemory(this.config);
     await recoverMemoryTransactions(this.config);
     await normalizeEventMemorySchema(this.config);
@@ -62,6 +66,7 @@ export function runtime_close(this: RuntimeHost) {
   }
 export async function runtime_reload(this: RuntimeHost, config: AppConfig) {
     await this.ensureAgentPromptFiles(config);
+    await ensureWorkingMemoryDocument(config);
     await mergeUserProfileMemory(config);
     this.memoryScheduler.setConfig(config);
     await recoverMemoryTransactions(config);
@@ -82,6 +87,7 @@ export function runtime_commitReload(this: RuntimeHost, snapshot: RuntimeConfigS
     this.config = snapshot.config;
     this.memoryScheduler.setConfig(snapshot.config);
     this.persona = snapshot.persona;
+    this.director.configChanged(previous.bot.director?.enabled === true);
     if (previous.bot.memory.messageThreshold !== this.config.bot.memory.messageThreshold) {
       this.scheduleMemoryDrain();
     }
@@ -326,16 +332,21 @@ export function runtime_publicConversationRecord(this: RuntimeHost, record: Conv
       conversationReplyEnabled(record) &&
       conversationOrchestratorEnabled(record);
     const deciding = this.ambientReplies.get(record.id)?.deciding === true;
+    const responseTimeMs = conversationOrchestratorResponseTimeMs(
+      record,
+      this.config.bot.orchestrator.recentMessageWindowMs
+    );
     return {
       ...record,
       replyEnabled: conversationReplyEnabled(record),
       orchestratorEnabled: conversationOrchestratorEnabled(record),
+      directorEventsEnabled: conversationDirectorEventsEnabled(record),
       orchestratorStatus: record.scope === "user_group"
         ? {
             active: orchestratorEnabled && (deciding || pendingUserMessages.length > 0),
             messageCount: pendingUserMessages.length,
             messageTarget: this.config.bot.orchestrator.messageThreshold + 1,
-            activeWindowMs: this.config.bot.orchestrator.recentMessageWindowMs,
+            activeWindowMs: responseTimeMs,
             lastMessageAt: lastUserMessage?.message.at ?? record.lastAt,
             lastCheckedAt: record.orchestratorCheckedAt
           }
@@ -443,12 +454,56 @@ export function runtime_enrichMemoryEntries(this: RuntimeHost, entries: MemoryEn
   }
 export function runtime_setConversationReplyEnabled(this: RuntimeHost, input: ConversationReplyUpdateInput) {
     const record = this.upsertConversationRecordForReplySetting(input);
+    const previousDirectorEventsEnabled = conversationDirectorEventsEnabled(record);
+    const previousResponseTimeMs = conversationOrchestratorResponseTimeMs(
+      record,
+      this.config.bot.orchestrator.recentMessageWindowMs
+    );
+    const nextResponseTimeOverrideEnabled = typeof input.orchestratorResponseTimeOverrideEnabled === "boolean"
+      ? input.orchestratorResponseTimeOverrideEnabled
+      : record.orchestratorResponseTimeOverrideEnabled === true;
+    const hasSubmittedResponseTime = input.orchestratorResponseTimeMs !== undefined;
+    const submittedResponseTimeMs = !hasSubmittedResponseTime
+      ? undefined
+      : normalizeConversationOrchestratorResponseTimeMs(input.orchestratorResponseTimeMs);
+    const storedResponseTimeMs = normalizeConversationOrchestratorResponseTimeMs(
+      record.orchestratorResponseTimeMs
+    );
+    const nextResponseTimeMs = submittedResponseTimeMs
+      ?? storedResponseTimeMs
+      ?? (nextResponseTimeOverrideEnabled
+        ? normalizeConversationOrchestratorResponseTimeMs(this.config.bot.orchestrator.recentMessageWindowMs)
+        : undefined);
+    if (
+      record.scope === "user_group" &&
+      (
+        (hasSubmittedResponseTime && submittedResponseTimeMs === undefined) ||
+        (nextResponseTimeOverrideEnabled && nextResponseTimeMs === undefined)
+      )
+    ) {
+      throw new Error("编排器响应时间必须是 1 到 3600 秒之间的整数。");
+    }
     if (typeof input.replyEnabled === "boolean") {
       record.replyEnabled = input.replyEnabled;
     }
     if (record.scope === "user_group" && typeof input.orchestratorEnabled === "boolean") {
       record.orchestratorEnabled = input.orchestratorEnabled;
       if (!record.orchestratorEnabled) this.cancelAmbientReply(record.id);
+    }
+    if (record.scope === "user_group") {
+      record.orchestratorResponseTimeOverrideEnabled = nextResponseTimeOverrideEnabled;
+      if (submittedResponseTimeMs !== undefined) {
+        record.orchestratorResponseTimeMs = submittedResponseTimeMs;
+      } else if (
+        nextResponseTimeOverrideEnabled &&
+        storedResponseTimeMs === undefined &&
+        nextResponseTimeMs !== undefined
+      ) {
+        record.orchestratorResponseTimeMs = nextResponseTimeMs;
+      }
+    }
+    if (typeof input.directorEventsEnabled === "boolean") {
+      record.directorEventsEnabled = input.directorEventsEnabled;
     }
     if (!conversationReplyEnabled(record)) {
       record.memoryCompressedThroughMessageCount = record.messageCount;
@@ -457,6 +512,22 @@ export function runtime_setConversationReplyEnabled(this: RuntimeHost, input: Co
       this.cancelAmbientReply(record.id);
     }
     this.persistConversationRecords();
+    const nextEffectiveResponseTimeMs = conversationOrchestratorResponseTimeMs(
+      record,
+      this.config.bot.orchestrator.recentMessageWindowMs
+    );
+    const idleJob = this.ambientIdleTimers.get(record.id)?.job;
+    if (
+      idleJob &&
+      previousResponseTimeMs !== nextEffectiveResponseTimeMs &&
+      conversationReplyEnabled(record) &&
+      conversationOrchestratorEnabled(record)
+    ) {
+      this.scheduleAmbientIdleReply(idleJob);
+    }
+    if (previousDirectorEventsEnabled !== conversationDirectorEventsEnabled(record)) {
+      this.director.targetsChanged();
+    }
     return this.publicConversationRecord(record);
   }
 export function runtime_getConversationToolPolicy(this: RuntimeHost, conversationId: string) {

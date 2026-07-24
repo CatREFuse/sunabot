@@ -13,7 +13,8 @@ import {
   type RuntimeDreamModelPort,
   type RuntimeDreamPersonaPort,
   type RuntimeDreamRun,
-  type RuntimeDreamStorePort
+  type RuntimeDreamStorePort,
+  type RuntimeDreamWorkingMemoryPort
 } from "../../src/runtime/dreamPipeline.js";
 
 type StoreIsDirectlyCompatible = SqliteDreamStore extends RuntimeDreamStorePort ? true : false;
@@ -209,6 +210,60 @@ describe("RuntimeDreams", () => {
     expect(fixture.store.commitCalls).toHaveLength(2);
   });
 
+  it("commits the Dream working result through Markdown CAS before the SQLite consolidation", async () => {
+    const now = new Date("2026-07-20T04:05:00.000Z");
+    const fixture = createFixture(() => now, memorySnapshot({
+      workingRevision: "d".repeat(64)
+    }));
+
+    const completed = await fixture.runtime.tick(now);
+
+    expect(completed).toMatchObject({ status: "completed" });
+    expect(fixture.workingMemory.calls).toEqual([
+      expect.objectContaining({
+        expectedRevision: "d".repeat(64),
+        runId: expect.any(String),
+        localDate: "2026-07-20",
+        records: expect.arrayContaining([
+          expect.objectContaining({ id: "working_dream_2026_07_20" })
+        ])
+      })
+    ]);
+    expect(fixture.store.commitCalls[0]).toMatchObject({
+      externalWorkingMemory: true
+    });
+  });
+
+  it("fails closed before SQLite commit when the working Markdown revision changed", async () => {
+    const now = new Date("2026-07-20T04:05:00.000Z");
+    const fixture = createFixture(() => now, memorySnapshot({
+      workingRevision: "d".repeat(64)
+    }));
+    fixture.workingMemory.conflict = true;
+
+    const failed = await fixture.runtime.tick(now);
+
+    expect(failed).toMatchObject({
+      status: "failed",
+      errorCode: "DREAM_SNAPSHOT_CONFLICT",
+      nextRetryAt: null
+    });
+    expect(fixture.store.commitCalls).toHaveLength(0);
+  });
+
+  it("rolls the Markdown write back when the SQLite commit throws", async () => {
+    const now = new Date("2026-07-20T04:05:00.000Z");
+    const fixture = createFixture(() => now, memorySnapshot({
+      workingRevision: "d".repeat(64)
+    }));
+    fixture.store.commitFailures = 1;
+
+    const failed = await fixture.runtime.tick(now);
+
+    expect(failed).toMatchObject({ status: "failed" });
+    expect(fixture.workingMemory.rollbacks).toBe(1);
+  });
+
   it("stops retrying after three failed attempts", async () => {
     let now = new Date("2026-07-20T04:05:00.000Z");
     const fixture = createFixture(() => now);
@@ -242,6 +297,32 @@ describe("RuntimeDreams", () => {
     now = new Date("2026-07-20T04:21:00.000Z");
     await fixture.runtime.tick(now);
     expect(fixture.model.calls).toBe(1);
+  });
+
+  it("completes with raw generated text when the model ignores the preferred JSON format", async () => {
+    const now = new Date("2026-07-20T04:05:00.000Z");
+    const fixture = createFixture(() => now, memorySnapshot({
+      workingRevision: "d".repeat(64)
+    }));
+    fixture.model.response = "梦里出现了一段没有 JSON 包装的文字。";
+
+    const completed = await fixture.runtime.tick(now);
+
+    expect(completed).toMatchObject({
+      status: "completed",
+      dreamText: "梦里出现了一段没有 JSON 包装的文字。",
+      output: {
+        rawOutput: "梦里出现了一段没有 JSON 包装的文字。",
+        workingReviews: [
+          { sourceIds: ["work-1"], action: "retain", confidence: 0 }
+        ]
+      }
+    });
+    expect(fixture.model.calls).toBe(1);
+    expect(fixture.workingMemory.calls[0]?.records).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "work-1" }),
+      expect.objectContaining({ memoryKind: "dream", factuality: "imagined" })
+    ]));
   });
 
   it("manually runs today's Dream before 04:00 and notifies after the durable claim", async () => {
@@ -322,7 +403,7 @@ describe("RuntimeDreams", () => {
     expect(fixture.model.calls).toBe(0);
   });
 
-  it("rejects an incompatible persisted Dream schema before the Provider call", async () => {
+  it("rejects a structured Provider response contract before the Provider call", async () => {
     const now = new Date("2026-07-20T04:05:00.000Z");
     const fixture = createFixture(() => now);
     fixture.prompt.responseFormat = {
@@ -330,7 +411,7 @@ describe("RuntimeDreams", () => {
       json_schema: {
         name: "memory_dream",
         strict: true,
-        schema: { type: "array", uniqueItems: true }
+        schema: { type: "object" }
       }
     };
 
@@ -371,7 +452,7 @@ describe("RuntimeDreams", () => {
     expect(fixture.persona.content).toContain("- 在复杂讨论后留出片刻整理思路。");
   });
 
-  it("rejects imagined memory as persona evidence before any CAS write", async () => {
+  it("drops imagined persona evidence without blocking the Dream", async () => {
     const now = new Date("2026-07-20T04:05:00.000Z");
     const imagined = {
       ...memory("dream-old", "2026-06-01T09:00:00.000Z", "dream", "event:dream"),
@@ -394,8 +475,8 @@ describe("RuntimeDreams", () => {
       evidenceMemoryIds: ["dream-old", "lt-2", "lt-3"]
     };
 
-    const failed = await fixture.runtime.tick(now);
-    expect(failed).toMatchObject({ status: "failed", errorCode: "DREAM_RUN_FAILED" });
+    const completed = await fixture.runtime.tick(now);
+    expect(completed).toMatchObject({ status: "completed", personaStatus: "none" });
     expect(fixture.persona.writes).toHaveLength(0);
   });
 
@@ -605,6 +686,7 @@ class FakeModel implements RuntimeDreamModelPort {
   calls = 0;
   readonly requests: unknown[] = [];
   error?: Error;
+  response?: string;
   waitForAbort = false;
   adjustment: DreamPersonaAdjustmentV1 | null = null;
 
@@ -612,6 +694,7 @@ class FakeModel implements RuntimeDreamModelPort {
     this.calls += 1;
     this.requests.push(structuredClone(request));
     if (this.error) throw this.error;
+    if (this.response != null) return this.response;
     if (this.waitForAbort) {
       return new Promise<string>((_resolve, reject) => {
         const abort = () => reject(Object.assign(new Error("The operation was aborted"), { name: "AbortError" }));
@@ -664,6 +747,27 @@ class FakePersona implements RuntimeDreamPersonaPort {
   }
 }
 
+class FakeWorkingMemory implements RuntimeDreamWorkingMemoryPort {
+  readonly calls: Array<Parameters<RuntimeDreamWorkingMemoryPort["compareAndSwap"]>[0]> = [];
+  conflict = false;
+  rollbacks = 0;
+
+  async compareAndSwap(input: Parameters<RuntimeDreamWorkingMemoryPort["compareAndSwap"]>[0]) {
+    this.calls.push(structuredClone(input));
+    if (this.conflict) {
+      return { status: "conflict" as const, revision: "e".repeat(64) };
+    }
+    return {
+      status: "updated" as const,
+      revision: "f".repeat(64),
+      rollback: async () => {
+        this.rollbacks += 1;
+        return true;
+      }
+    };
+  }
+}
+
 function createFixture(
   clock: () => Date,
   snapshot = memorySnapshot(),
@@ -673,11 +777,9 @@ function createFixture(
   const context = new FakeContext(snapshot);
   const model = new FakeModel();
   const persona = new FakePersona();
+  const workingMemory = new FakeWorkingMemory();
   const prompt = {
-    responseFormat: {
-      type: "json_schema",
-      json_schema: { name: "memory_dream", strict: true, schema: { type: "object" } }
-    } as Record<string, unknown>,
+    responseFormat: { type: "text" } as Record<string, unknown>,
     async render(_id: string, variables: Readonly<Record<string, unknown>>) {
       return { ...variables, response_format: this.responseFormat };
     }
@@ -685,6 +787,7 @@ function createFixture(
   const runtime = new RuntimeDreams({
     store,
     context,
+    workingMemory,
     prompt,
     model,
     persona,
@@ -696,7 +799,7 @@ function createFixture(
     clock,
     retryDelayMs: 15 * 60_000
   });
-  return { runtime, store, context, model, persona, prompt };
+  return { runtime, store, context, model, persona, workingMemory, prompt };
 }
 
 function memorySnapshot(overrides: Partial<RuntimeDreamContextSnapshot> = {}): RuntimeDreamContextSnapshot {

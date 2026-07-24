@@ -14,11 +14,14 @@ const props = defineProps<{
   panel: "settings" | "usage";
   conversation: ConversationRecord;
   stats?: ConversationStatsPayload | null;
+  busy?: boolean;
 }>();
 const emit = defineEmits<{
   close: [];
   reply: [enabled: boolean];
   orchestrator: [enabled: boolean];
+  orchestratorResponseTimeOverride: [enabled: boolean];
+  orchestratorResponseTime: [milliseconds: number];
 }>();
 const settingsSection = shallowRef<"general" | "tools">("general");
 const toolPolicy = useConversationTools(() => props.conversation.id);
@@ -36,6 +39,16 @@ const replyEnabled = computed({
 const orchestratorEnabled = computed({
   get: () => props.conversation.orchestratorEnabled !== false,
   set: (value) => emit("orchestrator", value)
+});
+const orchestratorResponseTimeOverrideEnabled = computed({
+  get: () => props.conversation.orchestratorResponseTimeOverrideEnabled === true,
+  set: (value) => emit("orchestratorResponseTimeOverride", value)
+});
+const orchestratorResponseTimeSeconds = computed(() => {
+  const milliseconds = props.conversation.orchestratorResponseTimeMs
+    ?? props.conversation.orchestratorStatus?.activeWindowMs
+    ?? 60_000;
+  return Math.round(milliseconds / 1_000);
 });
 const scopeLabel = computed(() => {
   if (props.conversation.scope === "private") return "私聊";
@@ -98,6 +111,12 @@ async function setToolEnabled(name: ToolName, enabled: boolean) {
   toolStatus.value = toolPolicy.error.value || "工具权限保存失败";
   toolStatusKind.value = "error";
 }
+
+function updateOrchestratorResponseTime(event: Event) {
+  const seconds = Number((event.target as HTMLInputElement).value);
+  if (!Number.isInteger(seconds) || seconds < 1 || seconds > 3_600) return;
+  emit("orchestratorResponseTime", seconds * 1_000);
+}
 </script>
 
 <template>
@@ -133,8 +152,36 @@ async function setToolEnabled(name: ToolName, enabled: boolean) {
               class="py-2"
               label="编排器"
               description="自动判断是否参与群聊"
-              :disabled="!replyEnabled"
+              :disabled="busy || !replyEnabled"
             />
+            <ToggleSwitch
+              v-if="conversation.scope === 'user_group'"
+              v-model="orchestratorResponseTimeOverrideEnabled"
+              class="py-2"
+              label="编排器时间覆盖"
+              description="为当前会话设置独立响应时间"
+              :disabled="busy || !replyEnabled || !orchestratorEnabled"
+            />
+            <label
+              v-if="conversation.scope === 'user_group' && orchestratorResponseTimeOverrideEnabled"
+              class="flex items-center justify-between gap-6 py-3"
+            >
+              <span>
+                <strong class="block text-sm font-medium text-display">响应时间 / 秒</strong>
+                <span class="mt-1 block text-xs leading-5 text-mute">1—3600 秒</span>
+              </span>
+              <input
+                class="control w-28"
+                type="number"
+                min="1"
+                max="3600"
+                step="1"
+                :value="orchestratorResponseTimeSeconds"
+                :disabled="busy || !replyEnabled || !orchestratorEnabled"
+                aria-label="编排器响应时间"
+                @change="updateOrchestratorResponseTime"
+              >
+            </label>
           </div>
           <ConversationOrchestratorStatus
             v-if="conversation.scope === 'user_group' && replyEnabled && orchestratorEnabled && conversation.orchestratorStatus"

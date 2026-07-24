@@ -85,6 +85,9 @@ async function runConversationVisualScenario(page: Page, testInfo: TestInfo) {
       const settings = page.getByRole("dialog", { name: "会话设置" });
       await expect(settings.getByRole("heading", { name: "回复控制" })).toBeVisible();
       await capture(page, viewport.name, theme, "conversation-settings-panel", { fullPage: false });
+      await settings.getByLabel("编排器时间覆盖").check();
+      await expect(settings.getByLabel("编排器响应时间")).toBeEnabled();
+      await capture(page, viewport.name, theme, "conversation-settings-response-time", { fullPage: false });
       await settings.getByRole("button", { name: "关闭会话设置" }).click();
     }
   }
@@ -130,6 +133,19 @@ async function runMemoryVisualScenario(page: Page, testInfo: TestInfo) {
     await page.goto("/memory");
     const sourceTabs = page.getByRole("navigation", { name: "记忆类别" });
     await expect(sourceTabs.getByRole("button")).toHaveText(["工作记忆", "长期记忆", "用户画像", "梦境"]);
+    const workingDocument = page.getByRole("region", { name: "工作记忆原文" });
+    await expect(workingDocument).toContainText("WebUI 使用 Vue 3、TypeScript 与 Tailwind。");
+    await expect(page.getByLabel("排序字段")).toHaveCount(0);
+    await expect(page.getByRole("navigation", { name: "记忆分页" })).toHaveCount(0);
+    await workingDocument.scrollIntoViewIfNeeded();
+    await capture(page, viewport.name, theme, "memory-document", { fullPage: false });
+    await page.getByRole("button", { name: "操作日志", exact: true }).click();
+    const operationLogDialog = page.getByRole("dialog", { name: "记忆操作日志" });
+    await expect(operationLogDialog.getByLabel("记忆操作日志列表").locator("li")).toHaveCount(3);
+    await capture(page, viewport.name, theme, "memory-operation-log", { fullPage: false });
+    await operationLogDialog.getByRole("button", { name: "关闭", exact: true }).click();
+
+    await sourceTabs.getByRole("button", { name: "长期记忆", exact: true }).click();
     await expect(page.getByLabel("排序字段")).toHaveValue("updatedAt");
     await expect(page.getByLabel("排序方向")).toHaveValue("desc");
     const memoryRows = page.locator("article").filter({ has: page.getByRole("button", { name: "编辑记忆" }) });
@@ -199,13 +215,8 @@ async function runScheduledTasksVisualScenario(page: Page, testInfo: TestInfo) {
     await expect(page.getByRole("heading", { name: "定时任务", exact: true })).toBeVisible();
     await expect(page.getByText("工作日晨间简报", { exact: true })).toBeVisible();
     await expect(page.getByText("发行前检查", { exact: true })).toBeVisible();
+    await expect(page.getByText("日常导演 · 午后整理资料", { exact: true })).toBeHidden();
     await capture(page, viewport.name, theme, "scheduled-tasks-list");
-
-    await page.getByRole("tab", { name: "导演任务", exact: true }).click();
-    await expect(page.getByText("日常导演 · 午后整理资料", { exact: true })).toBeVisible();
-    await expect(page.getByText("工作日晨间简报", { exact: true })).toBeHidden();
-    await capture(page, viewport.name, theme, "scheduled-tasks-director");
-    await page.getByRole("tab", { name: "全部", exact: true }).click();
 
     const taskRow = page.locator("tr").filter({ hasText: "工作日晨间简报" });
     await taskRow.getByRole("button", { name: "编辑", exact: true }).click();
@@ -218,6 +229,15 @@ async function runScheduledTasksVisualScenario(page: Page, testInfo: TestInfo) {
     await dialog.getByRole("heading", { name: "回调目标", exact: true }).scrollIntoViewIfNeeded();
     await capture(page, viewport.name, theme, "scheduled-tasks-editor-targets");
     await dialog.getByRole("button", { name: "关闭", exact: true }).click();
+
+    await page.goto("/director");
+    await expect(page.getByRole("heading", { name: "导演系统", exact: true })).toBeVisible();
+    await expect(page.getByText("安静整理日", { exact: true })).toBeVisible();
+    await capture(page, viewport.name, theme, "director-decisions");
+    await page.getByRole("tab", { name: "计划任务", exact: true }).click();
+    await expect(page.getByText("日常导演 · 午后整理资料", { exact: true })).toBeVisible();
+    await expect(page.getByText("工作日晨间简报", { exact: true })).toBeHidden();
+    await capture(page, viewport.name, theme, "director-tasks");
   }
 }
 
@@ -385,6 +405,8 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
 
     await page.goto("/conversations/group%3A10001/settings/general");
     await expect(page.getByRole("heading", { name: "会话设置", exact: true })).toBeVisible();
+    await page.getByLabel("编排器时间覆盖", { exact: true }).check();
+    await expect(page.getByLabel("编排器响应时间")).toHaveValue("60");
     await expect(page.getByRole("status")).toContainText("已同步");
     await capture(page, viewport.name, theme, "conversation-settings-route-general");
     await page.getByRole("button", { name: "工具权限", exact: true }).click();
@@ -586,12 +608,13 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
 
     await page.goto("/memory");
     await expect(page.getByRole("heading", { name: "记忆", exact: true })).toBeVisible();
-    await capture(page, viewport.name, theme, "memory-list");
+    await expect(page.getByRole("region", { name: "工作记忆原文" })).toContainText("WebUI 使用 Vue 3、TypeScript 与 Tailwind。");
+    await capture(page, viewport.name, theme, "memory-document");
+    await page.getByRole("button", { name: "用户画像" }).click();
     await page.getByRole("button", { name: "新增" }).click();
     await expect(page.getByRole("heading", { name: "新增记忆" })).toBeVisible();
     await capture(page, viewport.name, theme, "memory-editor");
     await page.getByRole("button", { name: "关闭" }).click();
-    await page.getByRole("button", { name: "用户画像" }).click();
     const profileRow = page.locator("article").filter({ hasText: "称呼 猫老师、老师" });
     await profileRow.getByRole("button", { name: "编辑记忆" }).click();
     await expect(page.getByLabel("称呼")).toHaveValue("猫老师、老师");
@@ -730,7 +753,7 @@ test("工具目录四视口矩阵", async ({ page }, testInfo) => {
     await page.goto("/agent-settings/tools");
     await expect(page.getByRole("tab", { name: "工具目录", exact: true })).toHaveAttribute("aria-selected", "true");
     await expect(page.getByLabel("搜索工具")).toBeVisible();
-    await expect(page.getByLabel(/^启用 /)).toHaveCount(21);
+    await expect(page.getByLabel(/^启用 /)).toHaveCount(22);
     await expect(page.getByText("read_air", { exact: true })).toBeVisible();
     await expect(page.getByText("cron", { exact: true })).toBeVisible();
     await capture(page, viewport.name, theme, "settings-tools-catalog");
@@ -772,22 +795,22 @@ test("Bash 权限与会话状态四视口矩阵", async ({ page }, testInfo) => 
     await expect(page.getByRole("heading", { name: "命令执行" })).toBeVisible();
     await expect(page.getByText("对抗审批 Agent", { exact: true })).toBeVisible();
     await expect(page.getByLabel("严格审批")).toBeVisible();
-    await expect(page.getByText("Native Bash", { exact: true })).toHaveCount(0);
-    await expect(page.getByText("Docker Bash", { exact: true })).toHaveCount(2);
-    await expect(page.getByText("Skill 与 MCP · Docker 只读", { exact: true })).toBeVisible();
+    await expect(page.getByText("Native Bash · Docker Bash", { exact: true })).toHaveCount(2);
+    await expect(page.getByText("Docker Bash", { exact: true })).toBeVisible();
+    await expect(page.getByText("Skill 与 MCP · 只读", { exact: true })).toBeVisible();
     await capture(page, viewport.name, theme, "settings-bash-permissions");
 
     await page.goto("/agent-settings/tools");
-    await page.getByLabel("搜索工具").fill("workspace_bash");
-    const bashRow = page.locator("article").filter({ has: page.getByText("workspace_bash", { exact: true }) });
-    await expect(bashRow.getByText("全部 QQ 会话 Docker", { exact: true })).toBeVisible();
+    await page.getByLabel("搜索工具").fill("docker_bash");
+    const bashRow = page.locator("article").filter({ has: page.getByText("docker_bash", { exact: true }) });
+    await expect(bashRow.getByText("全部允许会话可用", { exact: true })).toBeVisible();
     await expect(bashRow.getByText("Docker Bash 已启动", { exact: true })).toBeVisible();
     await expect(bashRow.getByText("运行环境异常", { exact: true })).toHaveCount(0);
     await capture(page, viewport.name, theme, "settings-bash-session-scope");
-    await bashRow.getByRole("button", { name: "查看 Bash 详情" }).click();
-    const dialog = page.getByRole("dialog", { name: "Bash" });
+    await bashRow.getByRole("button", { name: "查看 Docker Bash 详情" }).click();
+    const dialog = page.getByRole("dialog", { name: "Docker Bash" });
     await expect(dialog.getByText("适用会话", { exact: true })).toBeVisible();
-    await expect(dialog.getByText("Docker Bash", { exact: true })).toBeVisible();
+    await expect(dialog.locator("dt").filter({ hasText: /^Docker Bash$/ })).toBeVisible();
     await capture(page, viewport.name, theme, "settings-bash-detail");
     await dialog.getByRole("button", { name: "关闭工具详情" }).click();
   }

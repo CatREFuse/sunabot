@@ -66,6 +66,7 @@ export const AGENT_TOOL_NAMES = [
   "assistant_text",
   "no_reply",
   "memory_recall",
+  "add_workmemory",
   "read_air",
   "knowledge_search",
   "websearch",
@@ -76,7 +77,8 @@ export const AGENT_TOOL_NAMES = [
   "write_file",
   "send_file",
   "send_voice_message",
-  "workspace_bash",
+  "native_bash",
+  "docker_bash",
   "codex",
   "activate_skill",
   "read_skill_resource",
@@ -140,6 +142,10 @@ export interface BotOrchestratorSettings {
   recentMessageWindowMs: number;
 }
 
+export interface BotDirectorSettings {
+  enabled: boolean;
+}
+
 export interface BroadcastStormConfig {
   enabled: boolean;
   windowMinutes: number;
@@ -189,6 +195,7 @@ export interface BotConfigShape<TTools extends BotToolSettingsBase> {
   emojiSendSize: EmojiSendSize;
   emojiSendSeparately: boolean;
   tone: BotToneSettings;
+  director: BotDirectorSettings;
   memory: BotMemorySettings;
   orchestrator: BotOrchestratorSettings;
   tools: TTools;

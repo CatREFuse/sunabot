@@ -454,8 +454,19 @@ export interface MockApiState {
   webChatRequests: string[];
   conversationTools: Record<string, string[]>;
   conversationToolRequests: Array<{ conversationId: string; disabledTools: string[] }>;
-  conversationReplySettings: Record<string, { replyEnabled: boolean; orchestratorEnabled?: boolean }>;
-  conversationReplyRequests: Array<{ conversationId: string; replyEnabled: boolean; orchestratorEnabled?: boolean }>;
+  conversationReplySettings: Record<string, {
+    replyEnabled: boolean;
+    orchestratorEnabled?: boolean;
+    orchestratorResponseTimeOverrideEnabled?: boolean;
+    orchestratorResponseTimeMs?: number;
+  }>;
+  conversationReplyRequests: Array<{
+    conversationId: string;
+    replyEnabled: boolean;
+    orchestratorEnabled?: boolean;
+    orchestratorResponseTimeOverrideEnabled?: boolean;
+    orchestratorResponseTimeMs?: number;
+  }>;
   extensions: Record<string, { skills: AgentSkillRecord[]; servers: AgentMcpServer[] }>;
   extensionRequests: Array<{ method: string; path: string; body?: unknown }>;
   mcpApprovals: McpApprovalTicket[];
@@ -1487,14 +1498,38 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
         state.nextConversationError = "";
         return json(route, { error: { code: "CONVERSATION_UPDATE_FAILED", message } }, 500);
       }
-      const body = request.postDataJSON() as { id?: string; replyEnabled?: boolean; orchestratorEnabled?: boolean };
+      const body = request.postDataJSON() as {
+        id?: string;
+        replyEnabled?: boolean;
+        orchestratorEnabled?: boolean;
+        orchestratorResponseTimeOverrideEnabled?: boolean;
+        orchestratorResponseTimeMs?: number;
+      };
       const id = body.id ?? "group:10001";
       const previous = state.conversationReplySettings[id] ?? { replyEnabled: true };
       const next = {
         replyEnabled: body.replyEnabled ?? previous.replyEnabled,
         ...(body.orchestratorEnabled === undefined && previous.orchestratorEnabled === undefined
           ? {}
-          : { orchestratorEnabled: body.orchestratorEnabled ?? previous.orchestratorEnabled ?? true })
+          : { orchestratorEnabled: body.orchestratorEnabled ?? previous.orchestratorEnabled ?? true }),
+        ...(body.orchestratorResponseTimeOverrideEnabled === undefined
+          && previous.orchestratorResponseTimeOverrideEnabled === undefined
+          ? {}
+          : {
+              orchestratorResponseTimeOverrideEnabled:
+                body.orchestratorResponseTimeOverrideEnabled
+                ?? previous.orchestratorResponseTimeOverrideEnabled
+                ?? false
+            }),
+        ...(body.orchestratorResponseTimeMs === undefined
+          && previous.orchestratorResponseTimeMs === undefined
+          ? {}
+          : {
+              orchestratorResponseTimeMs:
+                body.orchestratorResponseTimeMs
+                ?? previous.orchestratorResponseTimeMs
+                ?? 60_000
+            })
       };
       state.conversationReplySettings[id] = next;
       state.conversationReplyRequests.push({ conversationId: id, ...next });
@@ -1511,7 +1546,9 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
           active: false,
           messageCount: 0,
           messageTarget: 21,
-          activeWindowMs: 60_000,
+          activeWindowMs: next.orchestratorResponseTimeOverrideEnabled
+            ? next.orchestratorResponseTimeMs ?? 60_000
+            : 60_000,
           lastMessageAt: "2026-07-10T02:00:00.000Z",
           lastCheckedAt: "2026-07-10T02:00:10.000Z"
         },
@@ -1541,19 +1578,110 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
       return json(route, { url: "/generated-images/new-image.png", model: "gpt-image-2", providerId: "codex" });
     }
 
+    if (pathname === "/api/memory/operations" && method === "GET") {
+      const agentId = url.searchParams.get("agentId") || "plana";
+      return json(route, {
+        logs: [
+          {
+            id: "memory-operation-1",
+            at: "2026-07-24T02:18:00.000Z",
+            category: "memory.operation",
+            action: "working.append",
+            request: {
+              source: "working",
+              operation: "append",
+              actor: "model_tool",
+              conversationId: "group:10001",
+              conversationScope: "user_group"
+            },
+            response: {
+              outcome: "applied",
+              beforeCount: 1,
+              afterCount: 2,
+              changedCount: 1,
+              afterRevision: "working-revision-2"
+            },
+            metadata: { agentId, stage: "memory", memorySource: "working" }
+          },
+          {
+            id: "memory-operation-2",
+            at: "2026-07-24T02:12:00.000Z",
+            category: "memory.operation",
+            action: "user_profile.batch_validate",
+            request: {
+              source: "user_profile",
+              operation: "batch_validate",
+              actor: "memory_pipeline",
+              conversationId: "private:20002",
+              conversationScope: "private",
+              batchId: "memory-batch-2"
+            },
+            response: {
+              outcome: "rejected",
+              beforeCount: 1,
+              afterCount: 1,
+              changedCount: 0,
+              reasonCode: "participant_binding_unresolved"
+            },
+            metadata: { agentId, stage: "memory", memorySource: "user_profile" }
+          },
+          {
+            id: "memory-operation-3",
+            at: "2026-07-24T02:00:00.000Z",
+            category: "memory.operation",
+            action: "dream.consolidate",
+            request: {
+              source: "dream",
+              operation: "consolidate",
+              actor: "dream",
+              conversationId: "dream:plana",
+              conversationScope: "dream"
+            },
+            response: {
+              outcome: "failed",
+              reasonCode: "working_revision_conflict"
+            },
+            metadata: { agentId, stage: "memory", memorySource: "dream" }
+          }
+        ],
+        page: 1,
+        pageSize: 50,
+        total: 3,
+        pageCount: 1
+      });
+    }
     if (pathname === "/api/memory" && method === "GET") {
       return json(route, {
         sources: [
-          { id: "working", title: "工作记忆", fileName: "sunabot.sqlite#memory/working", editable: true },
+          { id: "working", title: "工作记忆", fileName: "WORKING_MEMORY.md", editable: true },
           { id: "long_term", title: "长期记忆", fileName: "sunabot.sqlite#memory/long-term", editable: true },
           { id: "user_profile", title: "用户画像", fileName: "sunabot.sqlite#memory/user-profile", editable: true }
         ],
+        document: {
+          fileName: "WORKING_MEMORY.md",
+          revision: "mock-working-memory-revision",
+          content: [
+            "# 工作记忆",
+            "",
+            "<!-- sunabot-workmemory:v1 -->",
+            "",
+            "<!-- sunabot-workmemory:item eyJpZCI6Im1lbW9yeS0xIn0 -->",
+            "## memory-1",
+            "",
+            "- 记录时间：2026-07-10T09:10:00.000+08:00 [Asia/Shanghai]",
+            "- 会话来源：group:10001（user_group）",
+            "- 会话标题：开发讨论",
+            "- 来源类型：add_workmemory",
+            "",
+            "WebUI 使用 Vue 3、TypeScript 与 Tailwind。"
+          ].join("\n")
+        },
         entries: [
           {
             id: "memory-1",
             source: "working",
             sourceTitle: "工作记忆",
-            fileName: "sunabot.sqlite#memory/working",
+            fileName: "WORKING_MEMORY.md",
             editable: true,
             key: "fact",
             value: "WebUI 使用 Vue 3、TypeScript 与 Tailwind。",
@@ -1566,9 +1694,9 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
           },
           ...Array.from({ length: 20 }, (_, index) => ({
             id: `memory-page-${index + 1}`,
-            source: "working",
-            sourceTitle: "工作记忆",
-            fileName: "sunabot.sqlite#memory/working",
+            source: "long_term",
+            sourceTitle: "长期记忆",
+            fileName: "sunabot.sqlite#memory/long-term",
             editable: true,
             key: `memory-page-${index + 1}`,
             value: `分页测试记忆 ${index + 1}`,
@@ -1700,7 +1828,7 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
       const tools = listToolMetadata({
         onAssistantText: () => undefined,
         allowNoReply: true,
-        bashAvailable: true,
+        bashAvailable: { native: true, docker: true },
         bot: state.config.bot,
         selfie: { enabled: true },
         memory: { enabled: true },
@@ -1709,18 +1837,23 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
         asyncCodex: true,
         asyncImage: true,
         skillCapabilities: BUILTIN_SKILL_TOOL_CAPABILITIES
-      }, prompt?.tools).map((tool) => tool.name === "workspace_bash"
+      }, prompt?.tools).map((tool) => tool.name === "native_bash"
         ? {
             ...tool,
+            description: `${tool.description} Native Bash 可用。`,
+            executionBackend: "native",
+            bashEnvironments: { native: { available: true } }
+          }
+        : tool.name === "docker_bash" ? {
+            ...tool,
             description: `${tool.description} Docker Bash 已启动。`,
-            accessLabel: "全部 QQ 会话 Docker",
-            accessDescription: "QQ 私聊与群聊使用 Docker Bash；Web Chat 不可用。",
+            executionBackend: "docker",
             bashEnvironments: {
               docker: { started: true }
             }
           }
         : tool).map((tool) => {
-        const configured = tool.name === "workspace_bash"
+        const configured = tool.name === "native_bash" || tool.name === "docker_bash"
           ? state.config.bot.bash.enabled
           : tool.name === "codex"
             ? state.config.bot.tools.codex.enabled

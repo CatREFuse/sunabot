@@ -57,6 +57,7 @@ export const DEDUPE_TTL_MS = 10 * 60 * 1000;
 export const MAX_DEDUPE_KEYS = 20_000;
 export const DEFAULT_ADMIN_NAME = "猫老师";
 export const GROUP_CHAT_SUMMARY_COMMAND = "/总结群聊";
+export type DirectorReplyAccess = "full" | "none";
 export const CONVERSATION_REPLY_PROMPT_FILE = "conversation_reply.json";
 export const PRIVATE_CONVERSATION_REPLY_PROMPT_FILE = "conversation_private_reply.json";
 export const GROUP_CONVERSATION_REPLY_PROMPT_FILE = "conversation_group_reply.json";
@@ -145,6 +146,9 @@ export interface ConversationReplyUpdateInput {
   groupId?: unknown;
   replyEnabled?: unknown;
   orchestratorEnabled?: unknown;
+  orchestratorResponseTimeOverrideEnabled?: unknown;
+  orchestratorResponseTimeMs?: unknown;
+  directorEventsEnabled?: unknown;
 }
 export interface ConversationToolPolicyUpdateInput {
   id?: unknown;

@@ -715,7 +715,7 @@ export async function migrateMemoryPerspectivePrompt(
   if (!content.trim()) return false;
   const template = parseFinalPromptTemplate(content);
   const canonical = parseFinalPromptTemplate(canonicalContent);
-  const migrated = migrateMemoryPerspectiveTemplate(template, canonical);
+  const migrated = migrateMemoryPerspectiveTemplateWithLegacy(template, canonical, LEGACY_MEMORY_PROMPT_PARAGRAPHS, { fileName });
   if (migrated !== template) {
     await atomicWriteText(filePath, `${JSON.stringify(migrated, null, 2)}\n`);
   }
