@@ -37,6 +37,7 @@ import {
   RuntimeAgentExtensions,
   type RuntimeAgentExtensionsPort
 } from "../../src/runtime/agentExtensions.js";
+import { BundledAgentSkillInstaller } from "./bundledAgentSkills.js";
 
 export interface AgentExtensionCompositionOptions {
   workspaceRoot: string;
@@ -65,6 +66,7 @@ export const MCP_OAUTH_VAULT_KEY_ENV = "SUNABOT_MCP_CREDENTIAL_VAULT_KEY";
 
 export function buildAgentExtensionComposition(options: AgentExtensionCompositionOptions) {
   const store = new AgentExtensionStore({ workspaceRoot: options.workspaceRoot });
+  const bundledSkills = new BundledAgentSkillInstaller(store);
   const oauth = buildOAuth(options);
   const factory = options.mcpClientFactory ?? defaultMcpClientFactory(
     options.workspaceRoot,
@@ -136,6 +138,9 @@ export function buildAgentExtensionComposition(options: AgentExtensionCompositio
     runtime,
     mcpRuntimeService,
     mcpOAuthService,
+    ensureBundledSkills(agentId: string) {
+      return bundledSkills.ensure(agentId);
+    },
     async skillToolCapabilities(agentId: string) {
       const index = await store.readSkillIndex(agentId);
       return {

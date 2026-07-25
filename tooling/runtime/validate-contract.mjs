@@ -269,6 +269,8 @@ expect(!coreDockerfile.toLowerCase().includes("libreoffice"),
   "Core image must not install the retired LibreOffice runtime");
 expect(coreDockerfile.includes("COPY tooling/runtime ./tooling/runtime"),
   "Core build stage must include API runtime helper modules");
+expect(coreDockerfile.includes("codex-skills/workbench-config"),
+  "Core image must include the bundled Workbench configuration Skill");
 expect(officeParser?.version === "7.2.3",
   "Office parser must stay on the reviewed release");
 expect(codex.optional !== true

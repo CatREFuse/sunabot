@@ -58,6 +58,7 @@ COPY --from=build --chown=1000:1000 /srv/sunabot/AGENTS.md ./AGENTS.md
 COPY --from=build --chown=1000:1000 /srv/sunabot/node_modules ./node_modules
 COPY --from=build --chown=1000:1000 /srv/sunabot/dist ./dist
 COPY --from=build --chown=1000:1000 /srv/sunabot/apps/admin-web/dist ./apps/admin-web/dist
+COPY --chown=1000:1000 codex-skills/workbench-config ./codex-skills/workbench-config
 COPY --chown=1000:1000 deploy/runtime-contract.json ./deploy/runtime-contract.json
 COPY --chown=1000:1000 deploy/docker/healthcheck.mjs ./deploy/docker/healthcheck.mjs
 COPY --chown=1000:1000 components/component.lock.json ./components/component.lock.json

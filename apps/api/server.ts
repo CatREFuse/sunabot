@@ -182,6 +182,11 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
   await agentRegistry.initialize();
   const defaultAgentConfig = await agentRegistry.config(config.persona.defaultAgentId, config);
   const agentExtensions = buildAgentExtensionApiComposition(options.agentExtensions, getWorkspaceDir(), agentRegistry);
+  if (options.initializeRuntime !== false) {
+    await Promise.all((await agentRegistry.list()).map((agent) => (
+      agentExtensions.ensureBundledSkills(agent.id)
+    )));
+  }
   const runtimeAgentExtensions = agentExtensions.runtime;
   const broadcastStormDetector = new BroadcastStormDetector(config.broadcastStorm);
   const outboundMedia = options.outboundMedia ?? new OutboundMediaDelivery({
@@ -541,6 +546,7 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
   registerAgentRoutes(app, agentRegistry, {
     decorateAgents: (agents) => agentRuntimeManager.decorateAgents(agents, onebotGateway.getStatus()),
     onAgentCreated: async (agentId) => {
+      if (options.initializeRuntime !== false) await agentExtensions.ensureBundledSkills(agentId);
       await agentRuntimeManager.start(agentId);
     },
     onAgentUpdated: async (agentId, enabled) => {

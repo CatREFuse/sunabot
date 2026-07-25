@@ -95,6 +95,7 @@ try {
     "apps/admin-web/vite.config.ts",
     "apps/admin-web/src",
     "apps/admin-web/dist",
+    "codex-skills/workbench-config",
     "docs",
     "deploy/docker",
     "deploy/runtime-contract.json",
@@ -121,6 +122,7 @@ try {
     "apps/admin-web/src/main.ts",
     "services/agents/agentRegistry.ts",
     "adapters/sqlite/applicationDataStore.ts",
+    "codex-skills/workbench-config/SKILL.md",
     "tooling/quality/clean-api-build.mjs"
   ]) {
     await fsPromises.access(path.join(stage, relative));
