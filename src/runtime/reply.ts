@@ -13,7 +13,6 @@ import {
 import { senderDisplayName } from "../../services/conversations/senderName.js";
 import { DIRECTOR_CONVERSATION_SCHEDULE_VARIABLE } from "../../services/director/public.js";
 import { searchKnowledge } from "../../services/knowledge/public.js";
-import { readUserProfileForUser } from "../../services/memory/memoryService.js";
 import { serializeUserGroupOrchestratorResult } from "../../services/orchestration/userGroupOrchestratorResult.js";
 import type { ToolJobRecord } from "../../services/sessions/sessionStore.js";
 import { DISPATCH_MESSAGE_MAX_CHARS } from "../../services/tools/deferredDispatch.js";
@@ -23,9 +22,6 @@ import {
   type GenerateImgReferenceContext
 } from "../../services/tools/generateImgTool.js";
 import { SELFIE_TOOL_NAME } from "../../services/tools/selfieTool.js";
-import { appendRequestLog } from "../../adapters/observability/requestLog.js";
-import { applicationDataStore } from "../../adapters/sqlite/applicationDataStore.js";
-import type { GeneratedImageMetadata } from "../../adapters/model/provider/contracts.js";
 import type { SunaRuntime } from "../runtime.js";
 import {
   type AssistantMessageOrigin,
@@ -34,22 +30,18 @@ import {
 } from "../types.js";
 import {
   applyRuntimeAgentExtensionPrompt,
-  collectRuntimeAgentExtensionBatchTexts,
-  parseExplicitSkillSelections
+  collectRuntimeAgentExtensionBatchTexts
 } from "./agentExtensions.js";
 import {
   buildMemoryPromptVariables,
-  buildUserProfileRecallQuery,
   buildUserPrompt,
-  buildWorkingMemoryRecallQuery,
   collectGroupChatSummaryMessages,
-  isAdminUserId,
-  uniqueMemoryEntries
+  isAdminUserId
 } from "./conversationMemoryHelpers.js";
 import { emojiPromptVariables, prepareRuntimeEmojiText } from "./emojiReply.js";
 import { currentPromptInputMessage, serializeGroupThreadPromptContext } from "./groupThreadPipeline.js";
+import { recordGeneratedImageHistory } from "./generatedImageHistory.js";
 import { errorMessage, isAbortError, isRuntimeIncomingMessage, sanitizeErrorDetail } from "./infrastructure.js";
-import { ModelContextMemoryRecall } from "./memoryRecallExposure.js";
 import { conversationRecordId, queueIncomingSnapshot, uniqueStrings } from "./messagingAttachmentHelpers.js";
 import {
   runtime_attachReplyReferences,
@@ -67,6 +59,13 @@ import {
 } from "./replyContext.js";
 import { ReplyDebounceContext, resolveReplyContextCaptureSequence, type ReplyDebounceContextOptions } from "./replyDebounceContext.js";
 import { runtime_replyToToolCompletion } from "./replyDebounceDispatch.js";
+import {
+  appendReplyActionLog,
+  appendReplySoftErrors,
+  isolateReplyModule
+} from "./replyModuleIsolation.js";
+import { prepareReplyAgentExtensions } from "./replyAgentExtensionIsolation.js";
+import { prepareReplyMemoryContext } from "./replyMemoryIsolation.js";
 import {
   GROUP_CHAT_SUMMARY_COMMAND,
   GROUP_CHAT_SUMMARY_WINDOW_MS,
@@ -117,6 +116,7 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
     let sent = false;
     let requestStarted = false;
     let systemConfigLifecycle: systemConfigReply.SystemConfigReplyLifecycle | undefined;
+    const replySoftErrors: string[] = [];
     const usedToolNames = new Set(options.seedToolNames ?? []);
     const currentToolNames = () => [...usedToolNames];
     const finalizeToolNames = () => {
@@ -127,7 +127,11 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
         if (payload.logRunId !== logRunId) continue;
         payload.toolNames = toolNames.length ? [...toolNames] : undefined;
       }
-      this.recordAssistantTurnTools(incoming, logRunId, toolNames);
+      try {
+        this.recordAssistantTurnTools(incoming, logRunId, toolNames);
+      } catch (error) {
+        console.error("[runtime] assistant tool trace unavailable", { error });
+      }
       return toolNames;
     };
     try {
@@ -138,48 +142,36 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
       });
       const threadContext = await debounceContext.prepareThreadContext();
       const threadPromptContext = this.groupThreadPromptContext(threadContext);
-      const exactUserProfile = await readUserProfileForUser(this.config, String(incoming.userId));
-      const modelContextMemory = new ModelContextMemoryRecall(this.config, logRunId);
-      const memoryResult = await modelContextMemory.search({
-        query: beforeContext.text,
-        source: "long_term",
-        limit: 8
-      });
-      const longTermMemoryMatches = memoryResult.ok ? memoryResult.matches : [];
-      const workingMemoryResult = await modelContextMemory.search({
-        query: buildWorkingMemoryRecallQuery(incoming, beforeContext.text),
-        source: "working",
-        limit: 8
-      });
-      const workingMemoryMatches = workingMemoryResult.ok ? workingMemoryResult.matches : [];
-      const userProfileResult = await modelContextMemory.search({
-        query: buildUserProfileRecallQuery(incoming, beforeContext.text, admin),
-        source: "user_profile",
-        limit: 6
-      });
-      const userProfileMemoryMatches = userProfileResult.ok ? userProfileResult.matches : [];
-      const currentUserProfileMemoryMatches = uniqueMemoryEntries([
-        ...(exactUserProfile ? [exactUserProfile] : []),
-        ...userProfileMemoryMatches
-      ]);
-      const memoryMatches = uniqueMemoryEntries([
-        ...workingMemoryMatches,
-        ...longTermMemoryMatches,
-        ...currentUserProfileMemoryMatches
-      ]);
-      await appendRequestLog({
+      const {
+        modelContextMemory,
+        longTermMemoryMatches,
+        workingMemoryMatches,
+        userProfileMemoryMatches,
+        currentUserProfileMemoryMatches,
+        memoryMatches,
+        exactUserProfile,
+        queries: memoryQueries
+      } = await prepareReplyMemoryContext(
+        this.config,
+        logRunId,
+        incoming,
+        beforeContext.text,
+        admin,
+        options.signal
+      );
+      await appendReplyActionLog({
         category: "runtime.action",
         action: "memory.recall.before_reply",
         request: {
-          longTermQuery: beforeContext.text,
-          workingQuery: buildWorkingMemoryRecallQuery(incoming, beforeContext.text),
-          userProfileQuery: buildUserProfileRecallQuery(incoming, beforeContext.text, admin)
+          longTermQuery: memoryQueries.longTerm,
+          workingQuery: memoryQueries.working,
+          userProfileQuery: memoryQueries.userProfile
         },
         response: {
           workingCount: workingMemoryMatches.length,
           longTermCount: longTermMemoryMatches.length,
           userProfileCount: userProfileMemoryMatches.length,
-          exactUserProfile: Boolean(exactUserProfile),
+          exactUserProfile,
           mergedCount: memoryMatches.length
         },
         metadata: logContext
@@ -209,7 +201,12 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
           }))
         }
       });
-      const attachmentContext = await debounceContext.buildAttachmentContext(afterContext.text);
+      const attachmentContext = await isolateReplyModule(
+        "attachments",
+        () => debounceContext.buildAttachmentContext(afterContext.text),
+        () => ({ text: "", localImagePaths: [], attachments: [] }),
+        { signal: options.signal }
+      );
       const basePrompt = options.promptOverride || readCallbackInput(afterContext.text)
         ? [afterContext.text, attachmentContext.text].filter(Boolean).join("\n\n")
         : buildUserPrompt(
@@ -226,7 +223,12 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
       const voiceSnapshot = await this.voiceSnapshot();
       const directorContext = options.directorAccess === "none"
         ? ""
-        : await this.director.promptContext();
+        : await isolateReplyModule(
+          "director",
+          () => this.director.promptContext(),
+          () => "",
+          { signal: options.signal }
+        );
       let promptRequest = await this.renderPromptRequest(promptId, {
         ...buildCommonPromptVariables(this.config, { scope: incoming.scope,
           userName: senderDisplayName(incoming.sender) || String(incoming.userId) }),
@@ -252,24 +254,20 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
           fallbackText: incoming.text
         })
         : [];
-      const runtimeAgentExtensions = options.promptOverride === undefined
-        ? await this.agentExtensions?.prepare({
+      const extensionPreparation = options.promptOverride === undefined
+        ? await prepareReplyAgentExtensions(this.agentExtensions, {
           agentId: this.config.persona.defaultAgentId,
           conversationId: conversationRecordId(incoming),
           accountId: incoming.accountId ?? "primary",
           transport: incoming.transport === "web" ? "web" : "onebot",
           userId: incoming.userId,
           confirmationTexts: extensionBatchTexts,
-          selectedSkillIds: parseExplicitSkillSelections(extensionBatchTexts),
           canApproveMcpTools: isAdmin,
           signal: options.signal
-        })
-        : undefined;
-      if (runtimeAgentExtensions?.requiredMcpFailures.length) {
-        throw Object.assign(new Error("所需 MCP 服务暂不可用。"), {
-          code: "AGENT_REQUIRED_MCP_UNAVAILABLE"
-        });
-      }
+        }, extensionBatchTexts)
+        : { prepared: undefined, softErrors: [] };
+      const runtimeAgentExtensions = extensionPreparation.prepared;
+      replySoftErrors.push(...extensionPreparation.softErrors);
       promptRequest = applyRuntimeAgentExtensionPrompt(promptRequest, runtimeAgentExtensions);
       systemConfigLifecycle = systemConfigReply.createSystemConfigReplyLifecycle(
         this, incoming, isAdmin, options.promptOverride, promptRequest
@@ -287,7 +285,7 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
       let assistantTextCount = 0;
       this.recordAssistantRequestStarted(incoming, logRunId);
       requestStarted = true;
-      await appendRequestLog({
+      await appendReplyActionLog({
         category: "runtime.action",
         action: "reply.started",
         request: {
@@ -298,7 +296,12 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
         response: { status: "running" },
         metadata: logContext
       });
-      const toolCapabilities = await this.resolveToolCapabilities(null);
+      const toolCapabilities = await isolateReplyModule(
+        "tool_capabilities",
+        () => this.resolveToolCapabilities(null),
+        () => ({ codex: false, workspaceBash: false }),
+        { signal: options.signal }
+      );
       const [nativeBash, dockerBash] = await Promise.all([
         this.resolveProviderBashHandle(incoming, options.promptOverride, "native"),
         this.resolveProviderBashHandle(incoming, options.promptOverride, "docker")
@@ -350,7 +353,7 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
             channelKey,
             incoming,
             gateway,
-            text,
+            appendReplySoftErrors(text, replySoftErrors),
             isAdmin,
             [],
             logRunId,
@@ -373,7 +376,11 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
         },
         onImageGenerated: (image, metadata) => {
           generatedImages.push(image);
-          recordGeneratedImageHistory(this.config, image, metadata);
+          try {
+            recordGeneratedImageHistory(this.config, image, metadata);
+          } catch (error) {
+            console.error("[runtime] generated image history unavailable", { error });
+          }
         },
         referenceImageUrls: inboundImageUrls(incoming),
         imageReferences: generateImgReferenceContext,
@@ -410,14 +417,24 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
       if (turn.kind === "deferred") usedToolNames.add(turn.toolCall.name);
       const turnToolNames = finalizeToolNames();
       if (options.promptOverride === undefined) {
-        this.workingMemory.recordToolDecision(incoming, turnToolNames);
+        await isolateReplyModule(
+          "memory.tool_decision",
+          async () => this.workingMemory.recordToolDecision(incoming, turnToolNames),
+          () => undefined,
+          { signal: options.signal }
+        );
       }
       if (turn.kind !== "completed") systemConfigLifecycle?.discard();
       if (options.signal?.aborted || (options.isCurrent && !options.isCurrent())) {
         systemConfigLifecycle?.discard();
         return sent;
       }
-      modelContextMemory.commit();
+      await isolateReplyModule(
+        "memory.recall_commit",
+        async () => modelContextMemory.commit(),
+        () => undefined,
+        { signal: options.signal }
+      );
       if (turn.kind === "no_reply" || (options.atomicImageReply && turn.kind === "completed" && generatedImages.length === 0)) {
         this.discardAssistantRequest(incoming, logRunId);
         if (options.delivery) options.delivery.terminalStatus = "no_reply";
@@ -449,7 +466,7 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
             try {
               await gateway.poke(target);
             } catch (error) {
-              await appendRequestLog({
+              await appendReplyActionLog({
                 category: "runtime.action",
                 action: "reply.no_reply.poke.failed",
                 request: target,
@@ -459,7 +476,7 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
             }
           }
         }
-        await appendRequestLog({
+        await appendReplyActionLog({
           category: "runtime.action",
           action: "reply.no_reply",
           request: {
@@ -477,8 +494,18 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
           { incoming, gateway, logRunId, isCurrent: options.isCurrent, delivery: options.delivery, signal: options.signal });
         const acknowledgement = turn.acknowledgement.trim();
         if (!acknowledgement) throw new Error("异步工具缺少 dispatch_message。");
-        const preparedAcknowledgement = await prepareRuntimeEmojiText(acknowledgement, this.config,
-          (value) => this.rewriteToneText(value, { incoming, signal: options.signal, logContext }));
+        const acknowledgementWithErrors = appendReplySoftErrors(acknowledgement, replySoftErrors);
+        const preparedAcknowledgement = await isolateReplyModule(
+          "tone.dispatch_message",
+          () => prepareRuntimeEmojiText(acknowledgementWithErrors, this.config,
+            (value) => this.rewriteToneText(value, { incoming, signal: options.signal, logContext })),
+          () => prepareRuntimeEmojiText(
+            appendReplySoftErrors(acknowledgementWithErrors, ["表达优化暂不可用"]),
+            this.config,
+            async (value) => value
+          ),
+          { signal: options.signal }
+        );
         if (preparedAcknowledgement.text.length > DISPATCH_MESSAGE_MAX_CHARS) {
           throw new Error(`Tone 处理后的 dispatch_message 不能超过 ${DISPATCH_MESSAGE_MAX_CHARS} 个字符。`);
         }
@@ -515,7 +542,7 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
       }
       const finalReply = {
         lifecycle: systemConfigLifecycle,
-        channelKey, incoming, gateway, text: turn.text, isAdmin,
+        channelKey, incoming, gateway, text: appendReplySoftErrors(turn.text, replySoftErrors), isAdmin,
         generatedImages, logRunId, isCurrent: options.isCurrent,
         delivery: options.delivery,
         signal: options.signal,
@@ -530,7 +557,7 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
       const failedToolNames = finalizeToolNames();
       const failure = options.signal?.reason ?? error;
       const aborted = options.signal?.aborted || isAbortError(error);
-      await appendRequestLog({
+      await appendReplyActionLog({
         category: "runtime.action",
         action: aborted ? "reply.cancelled" : "reply.failed",
         response: {
@@ -743,23 +770,6 @@ function readReferenceImageUrls(value: unknown) {
     .map((item) => item.trim())
     .filter(Boolean))
     .slice(0, 4);
-}
-
-function recordGeneratedImageHistory(config: SunaRuntime["config"], image: ImageResult, metadata?: GeneratedImageMetadata) {
-  const url = String(image.url ?? "").trim();
-  if (!url && !image.filePath) return;
-  const id = (url.split(/[\\/]/).pop() || image.filePath?.split(/[\\/]/).pop() || "generated-image").trim();
-  applicationDataStore(config).appendImageHistory({
-    id,
-    url,
-    ...(image.filePath ? { filePath: image.filePath } : {}),
-    ...(metadata?.prompt ? { prompt: metadata.prompt } : {}),
-    ...(metadata?.size ? { size: metadata.size } : {}),
-    ...(metadata?.resolution === "1K" || metadata?.resolution === "2K" || metadata?.resolution === "4K"
-      ? { resolution: metadata.resolution }
-      : {}),
-    createdAt: new Date().toISOString()
-  });
 }
 
 function isSuccessfulGeneratedImageResult(value: unknown): value is { ok: true; image: ImageResult } & Record<string, unknown> {

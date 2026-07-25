@@ -35,6 +35,7 @@ import {
 import {
   planAgentEmojiMarkers
 } from "../emojis/emojiAssets.js";
+import { SYSTEM_CONFIG_TOOL_NAME } from "../../services/tools/systemConfigTool.js";
 import { prepareEmojiDeliveryImages } from "../emojis/emojiDeliveryAssets.js";
 import { appendRequestLog, appendRequestLogStrict } from "../../adapters/observability/requestLog.js";
 import {
@@ -45,7 +46,7 @@ import {
   type ParsedIncomingMessage
 } from "../types.js";
 import { rewritePlannedEmojiText } from "./emojiReply.js";
-import { errorMessage, formatErrorReply, saveConversationRecordsStrict } from "./infrastructure.js";
+import { errorMessage, formatErrorReply, isAbortError, saveConversationRecordsStrict } from "./infrastructure.js";
 import {
   conversationRecordId,
   normalizeOutgoingReplyText,
@@ -57,8 +58,15 @@ import {
   type ReplyDelivery,
   type ReplyDeliveryDraft
 } from "./runtimeContracts.js";
+import { appendReplySoftError } from "./replyModuleIsolation.js";
+import {
+  appendSegmentedDeliverySoftError,
+  isEmojiToneContractError,
+  isSegmentedReplyHardGateError,
+  sameReplySequence,
+  segmentedReplyContractError
+} from "./segmentedReplyIsolation.js";
 import type { ToneRewriteContext } from "./tone.js";
-
 interface RuntimeHost {
   readonly config: AppConfig;
   readonly conversationRecords: Map<string, ConversationRecord>;
@@ -158,44 +166,81 @@ export async function runtime_sendAssistantReply(this: RuntimeHost,
         ? this.config.normalReply.maxRetries
         : this.config.bot.tone.maxRetries;
       const hardGateErrors: string[] = [];
-      for (let retry = 0; ; retry += 1) {
-        signal?.throwIfAborted();
-        const rewritten = await this.rewriteToneDelivery(
-          beforeReply.text,
-          assets,
-          hardGateErrors.length
-            ? {
-                ...toneContext,
-                hardGateRetry: {
-                  attempt: retry + 1,
-                  maxAttempts: maxRetries + 1,
-                  errors: [...hardGateErrors]
+      try {
+        for (let retry = 0; ; retry += 1) {
+          signal?.throwIfAborted();
+          const rewritten = await this.rewriteToneDelivery(
+            beforeReply.text,
+            assets,
+            hardGateErrors.length
+              ? {
+                  ...toneContext,
+                  hardGateRetry: {
+                    attempt: retry + 1,
+                    maxAttempts: maxRetries + 1,
+                    errors: [...hardGateErrors]
+                  }
                 }
-              }
-            : toneContext,
-          currentEmojiPlan.expectedMarkers
-        );
-        try {
-          deliveryParts = await segmentedReplyDeliveryParts(
-            this.config,
-            rewritten.content,
-            currentEmojiPlan,
-            availableImages
+              : toneContext,
+            currentEmojiPlan.expectedMarkers
           );
-          break;
-        } catch (error) {
-          if (!isSegmentedReplyHardGateError(error) || retry >= maxRetries) throw error;
-          hardGateErrors.push(errorMessage(error));
+          try {
+            deliveryParts = await segmentedReplyDeliveryParts(
+              this.config,
+              rewritten.content,
+              currentEmojiPlan,
+              availableImages
+            );
+            break;
+          } catch (error) {
+            if (!isSegmentedReplyHardGateError(error) || retry >= maxRetries) throw error;
+            hardGateErrors.push(errorMessage(error));
+          }
+        }
+      } catch (error) {
+        if (
+          signal?.aborted ||
+          isAbortError(error) ||
+          trace.toolNames?.includes(SYSTEM_CONFIG_TOOL_NAME)
+        ) throw error;
+        try {
+          deliveryParts = appendSegmentedDeliverySoftError(
+            await segmentedReplyDeliveryParts(
+              this.config,
+              beforeReply.text,
+              currentEmojiPlan,
+              availableImages
+            ),
+            "表达优化暂不可用"
+          );
+        } catch {
+          throw error;
         }
       }
       replyText = deliveryParts.flatMap((part) => part.text ? [part.text] : []).join("\n");
       outboundImageAssets = deliveryParts.flatMap((part) => part.images);
     } else {
-      const rewritten = await rewritePlannedEmojiText(
-        beforeReply.text,
-        plannedEmojiReply,
-        (value) => this.rewriteToneText(value, toneContext)
-      );
+      let rewritten;
+      try {
+        rewritten = await rewritePlannedEmojiText(
+          beforeReply.text,
+          plannedEmojiReply,
+          (value) => this.rewriteToneText(value, toneContext)
+        );
+      } catch (error) {
+        if (
+          signal?.aborted ||
+          isAbortError(error) ||
+          isEmojiToneContractError(error) ||
+          trace.toolNames?.includes(SYSTEM_CONFIG_TOOL_NAME)
+        ) throw error;
+        rewritten = await rewritePlannedEmojiText(
+          beforeReply.text,
+          plannedEmojiReply,
+          async (value) => value
+        );
+        rewritten.text = appendReplySoftError(rewritten.text, "表达优化暂不可用");
+      }
       const normalizedText = normalizeOutgoingReplyText(rewritten.text).trim();
       const preparedReply = prepareEmojiReply(
         normalizedText,
@@ -511,15 +556,22 @@ export async function runtime_sendErrorReply(this: RuntimeHost,
       !this.isReplySenderAllowed(incoming.userId) ||
       !isCurrent()
     ) return;
-    const message = await this.rewriteToneText(formatErrorReply(error), {
-      incoming,
-      signal,
-      logContext: {
-        conversationId: conversationRecordId(incoming),
-        incomingMessageId: incoming.messageId == null ? undefined : String(incoming.messageId),
-        runId: logRunId
-      }
-    });
+    const fallbackMessage = formatErrorReply(error);
+    let message: string;
+    try {
+      message = await this.rewriteToneText(fallbackMessage, {
+        incoming,
+        signal,
+        logContext: {
+          conversationId: conversationRecordId(incoming),
+          incomingMessageId: incoming.messageId == null ? undefined : String(incoming.messageId),
+          runId: logRunId
+        }
+      });
+    } catch (toneError) {
+      if (signal?.aborted || isAbortError(toneError)) throw toneError;
+      message = fallbackMessage;
+    }
     try {
       if (!isCurrent()) return;
       if (delivery) {
@@ -642,7 +694,7 @@ async function segmentedReplyDeliveryParts(
     ? parseSegmentedReplyXml(xml).nodes
     : images.map((_, index) => ({ type: "image" as const, src: segmentedImageSource(index) }));
   const actualMarkers = nodes.flatMap((node) => node.type === "expression" ? [node.marker] : []);
-  if (!sameSequence(actualMarkers, emojiPlan.expectedMarkers)) {
+  if (!sameReplySequence(actualMarkers, emojiPlan.expectedMarkers)) {
     throw segmentedReplyContractError("分段回复改变了原有表情标记。");
   }
   const actualAssets = nodes.flatMap((node) => (
@@ -694,21 +746,6 @@ async function segmentedReplyDeliveryParts(
     }
     throw segmentedReplyContractError("分段回复引用了未提供的资源。");
   });
-}
-
-function sameSequence(left: readonly string[], right: readonly string[]) {
-  return left.length === right.length && left.every((value, index) => value === right[index]);
-}
-
-function segmentedReplyContractError(message: string) {
-  return Object.assign(new Error(message), { code: "SEGMENTED_REPLY_CONTRACT_INVALID" });
-}
-
-function isSegmentedReplyHardGateError(error: unknown) {
-  if (!(error instanceof Error)) return false;
-  const code = (error as Error & { code?: unknown }).code;
-  return code === "SEGMENTED_REPLY_XML_INVALID"
-    || code === "SEGMENTED_REPLY_CONTRACT_INVALID";
 }
 
 function emojiDeliveryParts(

@@ -27,6 +27,7 @@ import {
   restoreConversationRecord
 } from "./inboundConversationGate.js";
 import { errorMessage, isAbortError, isRuntimeIncomingMessage, withAbortTimeout } from "./infrastructure.js";
+import { appendReplySoftError } from "./replyModuleIsolation.js";
 import {
   attachmentSourcePort,
   conversationMessageAttachments,
@@ -385,15 +386,21 @@ export async function runtime_processSessionEvent(this: RuntimeHost,
       const message = /timed out|timeout/i.test(errorMessage(error))
         ? "请求处理超时了，请稍后再试。"
         : "请求处理已取消。";
-      const tonedMessage = await this.rewriteToneText(message, {
-        incoming: timeoutIncoming,
-        logContext: {
-          conversationId: event.sessionId,
-          incomingMessageId: timeoutIncoming.messageId == null
-            ? undefined
-            : String(timeoutIncoming.messageId)
-        }
-      });
+      let tonedMessage = message;
+      try {
+        tonedMessage = await this.rewriteToneText(message, {
+          incoming: timeoutIncoming,
+          logContext: {
+            conversationId: event.sessionId,
+            incomingMessageId: timeoutIncoming.messageId == null
+              ? undefined
+              : String(timeoutIncoming.messageId)
+          }
+        });
+      } catch (toneError) {
+        console.error("[runtime] timeout reply tone unavailable", { error: toneError });
+        tonedMessage = appendReplySoftError(message, "表达优化暂不可用");
+      }
       return {
         status: "failed",
         error: { message: errorMessage(error) },

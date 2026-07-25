@@ -91,7 +91,7 @@ describe("tone outbound delivery", () => {
     });
   });
 
-  it("does not create an outbox draft or bypass raw text when tone fails", async () => {
+  it("delivers safe original text with a soft error when ordinary tone fails", async () => {
     const incoming: ParsedIncomingMessage = {
       schemaVersion: 1,
       scope: "private",
@@ -111,12 +111,17 @@ describe("tone outbound delivery", () => {
       config,
       isReplySenderAllowed: () => true,
       hooks: { run: vi.fn(async () => ({ text: "原始正文" })) },
-      rewriteToneText: vi.fn(async () => { throw failure; })
+      rewriteToneText: vi.fn(async () => { throw failure; }),
+      replyGates: new ReplyGateEpochs(),
+      groupReplyOptions: () => ({ replyToMessageId: undefined }),
+      replyDeliveryDraft(...args: Parameters<typeof runtime_replyDeliveryDraft>) {
+        return runtime_replyDeliveryDraft.call(host as unknown as SunaRuntime, ...args);
+      }
     };
     const delivery = { outbox: [] } satisfies ReplyDelivery;
     const gateway = { send: vi.fn() } as unknown as MessagingPort;
 
-    await expect(runtime_sendAssistantReply.call(
+    await runtime_sendAssistantReply.call(
       host as unknown as SunaRuntime,
       "private:1",
       incoming,
@@ -127,10 +132,103 @@ describe("tone outbound delivery", () => {
       undefined,
       () => true,
       delivery
-    )).rejects.toBe(failure);
+    );
 
-    expect(delivery.outbox).toEqual([]);
+    expect(delivery.outbox).toHaveLength(1);
+    expect(delivery.outbox[0]?.payload.payload.text).toBe(
+      "原始正文\n（错误：表达优化暂不可用）"
+    );
     expect(gateway.send).not.toHaveBeenCalled();
+  });
+
+  it("keeps system configuration confirmation fail-closed when tone fails", async () => {
+    const incoming: ParsedIncomingMessage = {
+      schemaVersion: 1,
+      scope: "private",
+      time: "2026-07-18T08:00:00.000Z",
+      userId: 1,
+      sender: { id: "1" },
+      text: "关闭自动回复",
+      media: [],
+      attachments: [],
+      replyMessageIds: [],
+      quoteReferences: [],
+      mentionedSelf: false
+    };
+    const failure = new Error("tone unavailable");
+    const config = defaultConfig();
+    const host = {
+      config,
+      isReplySenderAllowed: () => true,
+      hooks: { run: vi.fn(async () => ({ text: "已关闭自动回复" })) },
+      rewriteToneText: vi.fn(async () => { throw failure; })
+    };
+    const delivery = { outbox: [] } satisfies ReplyDelivery;
+
+    await expect(runtime_sendAssistantReply.call(
+      host as unknown as SunaRuntime,
+      "private:1",
+      incoming,
+      { send: vi.fn() } as unknown as MessagingPort,
+      "已关闭自动回复",
+      true,
+      [],
+      undefined,
+      () => true,
+      delivery,
+      true,
+      { messageOrigin: "text", toolNames: ["system_config"] }
+    )).rejects.toBe(failure);
+    expect(delivery.outbox).toEqual([]);
+  });
+
+  it("validates and delivers the original segmented draft when tone is unavailable", async () => {
+    const incoming: ParsedIncomingMessage = {
+      schemaVersion: 1,
+      scope: "private",
+      time: "2026-07-18T08:00:00.000Z",
+      userId: 1,
+      sender: { id: "1" },
+      text: "用户输入",
+      media: [],
+      attachments: [],
+      replyMessageIds: [],
+      quoteReferences: [],
+      mentionedSelf: false
+    };
+    const config = defaultConfig();
+    config.bot.tone.enabled = true;
+    config.bot.tone.segmentedReply = true;
+    const host = {
+      config,
+      isReplySenderAllowed: () => true,
+      hooks: { run: vi.fn(async () => ({ text: "<dialog>原始正文</dialog>" })) },
+      rewriteToneDelivery: vi.fn(async () => { throw new Error("tone unavailable"); }),
+      replyGates: new ReplyGateEpochs(),
+      groupReplyOptions: () => ({ replyToMessageId: undefined }),
+      replyDeliveryDraft(...args: Parameters<typeof runtime_replyDeliveryDraft>) {
+        return runtime_replyDeliveryDraft.call(host as unknown as SunaRuntime, ...args);
+      }
+    };
+    const delivery = { outbox: [] } satisfies ReplyDelivery;
+
+    await runtime_sendAssistantReply.call(
+      host as unknown as SunaRuntime,
+      "private:1",
+      incoming,
+      { send: vi.fn() } as unknown as MessagingPort,
+      "<dialog>原始正文</dialog>",
+      true,
+      [],
+      undefined,
+      () => true,
+      delivery
+    );
+
+    expect(delivery.outbox).toHaveLength(1);
+    expect(delivery.outbox[0]?.payload.payload.text).toBe(
+      "原始正文\n（错误：表达优化暂不可用）"
+    );
   });
 
   it("turns each XML node into one durable QQ bubble and quotes only the first bubble", async () => {

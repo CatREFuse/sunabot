@@ -61,7 +61,6 @@ import {
   withRequiredDispatchMessage,
   withoutDispatchMessage
 } from "../../../services/tools/deferredDispatch.js";
-import { assertProviderToolDefinitions } from "../../../services/tools/providerToolSchema.js";
 import { runWebsearch, type WebsearchInput } from "../webSearchTool.js";
 import { KNOWLEDGE_SEARCH_TOOL_NAME } from "../../../services/tools/knowledgeSearchTool.js";
 import type {
@@ -75,6 +74,7 @@ import { providerVoiceCompanionTurn } from "./voiceCompanionTurn.js";
 import { logContextMetadata } from "./logger.js";
 import { mcpToolLogSummary } from "./mcpToolLog.js";
 import { readToolName } from "./promptMapping.js";
+import { validProviderToolDefinitions } from "./toolDefinitionIsolation.js";
 import { errorMessage, parseJson } from "./valueUtils.js";
 import {
   createTurnToolState,
@@ -153,8 +153,7 @@ export class RegistryProviderToolExecutor implements ProviderToolExecutorPort {
     })].map((tool) => isProviderDeferredTool(readToolName(tool), options)
       ? withRequiredDispatchMessage(tool)
       : withoutDispatchMessage(tool));
-    assertProviderToolDefinitions(resolved);
-    return resolved;
+    return validProviderToolDefinitions(resolved);
   }
 
   companionTurn(

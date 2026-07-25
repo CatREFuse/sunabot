@@ -6,7 +6,13 @@ import { SELFIE_TOOL_NAME } from "../../services/tools/selfieTool.js";
 import type { ImageResult, ParsedIncomingMessage } from "../types.js";
 import type { runtime_replyDeliveryDraft } from "./delivery.js";
 import { conversationRecordId } from "./messagingAttachmentHelpers.js";
-import { buildAsyncToolCompletionPrompt, isRuntimeIncomingMessage, sanitizeErrorDetail } from "./infrastructure.js";
+import {
+  buildAsyncToolCompletionPrompt,
+  isAbortError,
+  isRuntimeIncomingMessage,
+  sanitizeErrorDetail
+} from "./infrastructure.js";
+import { appendReplySoftError } from "./replyModuleIsolation.js";
 import type { ReplyDelivery } from "./runtimeContracts.js";
 import type { ToneRewriteContext } from "./tone.js";
 
@@ -41,14 +47,20 @@ export async function runtime_replyToToolCompletion(
     const text = result.image
       ? ""
       : `图片生成失败：${sanitizeErrorDetail(result.error || "没有可用图片")}`;
-    const tonedText = await this.rewriteToneText(text, {
-      incoming,
-      signal,
-      logContext: {
-        conversationId: channelKey,
-        incomingMessageId: incoming.messageId == null ? undefined : String(incoming.messageId)
-      }
-    });
+    let tonedText = text;
+    try {
+      tonedText = await this.rewriteToneText(text, {
+        incoming,
+        signal,
+        logContext: {
+          conversationId: channelKey,
+          incomingMessageId: incoming.messageId == null ? undefined : String(incoming.messageId)
+        }
+      });
+    } catch (error) {
+      if (signal.aborted || isAbortError(error)) throw error;
+      if (text) tonedText = appendReplySoftError(text, "表达优化暂不可用");
+    }
     delivery.outbox.push(this.replyDeliveryDraft(
       incoming,
       tonedText,

@@ -38,6 +38,7 @@ import {
   closeApplicationDataStores
 } from "../../adapters/sqlite/applicationDataStore.js";
 import { SunaRuntime } from "../../src/runtime.js";
+import type { RuntimeAgentExtensionsPort } from "../../src/runtime/agentExtensions.js";
 import type { ReplyDelivery } from "../../src/runtime/runtimeContracts.js";
 import {
   conversationRecordId,
@@ -92,6 +93,35 @@ afterEach(() => {
 });
 
 describe("SunaRuntime reply debounce", () => {
+  it("continues an explicit Skill reply when the Agent extension directory changes", async () => {
+    const prepare = vi.fn(async () => {
+      throw Object.assign(new Error("Agent extension path changed."), {
+        code: "AGENT_EXTENSION_PATH_CHANGED"
+      });
+    });
+    const agentExtensions = {
+      prepare,
+      closeConversation: vi.fn(async () => undefined),
+      closeAgent: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined)
+    } satisfies RuntimeAgentExtensionsPort;
+    const harness = createRuntimeHarness(
+      async () => ({ kind: "completed", text: "仍可完成的正文" }),
+      { agentExtensions }
+    );
+    const incoming = harness.record(privateEvent(30_985, "$fixture-skill 继续回答"));
+    const delivery: ReplyDelivery = { outbox: [] };
+
+    await harness.reply(incoming, { delivery });
+
+    expect(prepare).toHaveBeenCalledOnce();
+    expect(harness.completeRequestTurn).toHaveBeenCalledOnce();
+    expect(delivery.outbox).toHaveLength(1);
+    expect(delivery.outbox[0]?.payload.payload.text).toBe(
+      "仍可完成的正文\n（错误：Agent 扩展正在更新，所选 Skill 暂不可用）"
+    );
+  });
+
   it("isolates ordinary scheduled callbacks from Director context and tools", async () => {
     const harness = createRuntimeHarness(async (_request, options) => {
       expect(options?.director).toBeUndefined();
@@ -2359,6 +2389,7 @@ function createRuntimeHarness(
     persistConversations?: boolean;
     loadPersistedConversations?: boolean;
     codexRunner?: CodexRunner;
+    agentExtensions?: RuntimeAgentExtensionsPort;
   } = {}
 ) {
   const store = new SessionStore(options.storeOptions ?? { databasePath: ":memory:" });
@@ -2379,6 +2410,7 @@ function createRuntimeHarness(
     attachmentService: options.attachmentService ?? {} as never,
     sessionStore: store,
     ...(options.codexRunner ? { codexRunner: options.codexRunner } : {}),
+    ...(options.agentExtensions ? { agentExtensions: options.agentExtensions } : {}),
     resolveToolCapabilities: async () => ({ codex: false, workspaceBash: false }),
     ...(options.replyDebounceMs === undefined
       ? {}

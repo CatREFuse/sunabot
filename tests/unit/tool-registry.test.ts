@@ -978,6 +978,48 @@ describe("ToolRegistry", () => {
     });
     expect(used).toEqual([]);
   });
+
+  it("quarantines one invalid dynamic tool without removing valid tools", () => {
+    const invalidName = `mcp_${"a".repeat(48)}`;
+    const validName = `mcp_${"b".repeat(48)}`;
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const executor = new RegistryProviderToolExecutor();
+    const definitions = executor.resolveDefinitions({
+      mcp: {
+        definitions: () => [
+          {
+            type: "function",
+            name: invalidName,
+            description: "Invalid external tool",
+            parameters: {
+              type: "object",
+              properties: {},
+              oneOf: [{ required: [] }]
+            }
+          },
+          {
+            type: "function",
+            name: validName,
+            description: "Valid external tool",
+            parameters: {
+              type: "object",
+              properties: {},
+              additionalProperties: true
+            }
+          }
+        ],
+        describe: () => ({ serverId: "fixture", transport: "streamable_http" }),
+        call: vi.fn()
+      }
+    }, []);
+
+    expect(definitions.map((definition) => definition.name)).toEqual([validName]);
+    expect(errorLog).toHaveBeenCalledWith(
+      "[provider] invalid tool definition quarantined",
+      expect.objectContaining({ tool: invalidName })
+    );
+    errorLog.mockRestore();
+  });
 });
 
 function staleTool(name: string): OpenAIToolDefinition {
