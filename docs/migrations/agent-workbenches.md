@@ -32,7 +32,7 @@ Native Bash 的 cwd 是宿主真实 `workbench/`，环境变量 `SUNABOT_DOCKER_
 | `knowledge/` | `workbench/knowledge/` |
 | 旧媒体目录中的 `emojis.jsonl` 与清单引用 PNG | `workbench/emoji/` |
 
-普通生成图片继续位于媒体目录。迁移先在 `workspace/backups/agent-workbenches-v2-<timestamp>/` 建立逐 Agent 文件备份、manifest 与 SHA-256，再执行同文件系统移动并补齐两个 `index.md`、四个资源入口及 Docker 投影点。已知旧默认入口会升级，其他非空管理员自定义入口不会覆盖。
+普通生成图片继续位于媒体目录。迁移先在 `workspace/backups/agent-workbenches-v2-<timestamp>/` 建立逐 Agent 文件备份、manifest 与 SHA-256，再执行同文件系统移动并补齐两个 `index.md`、四个资源入口及 Docker 投影点。已知旧默认入口会升级，其他非空管理员自定义入口不会覆盖。Agent 根、双工作区及受控资源目录统一收紧为当前运行用户拥有的 `0700`，固定管理入口为 `0600`；已有 marker 的重复 apply 也会幂等修复权限漂移，verify 对宽权限、错误属主、链接或特殊文件失败关闭。
 
 ## 执行
 
@@ -71,4 +71,5 @@ npm run migrate:agent-resources -- rollback \
 - Docker Bash 的 cwd 为 `/workbench`，`/workbench/native-workbench` 可读取完整 Native workbench。
 - Docker 投影对自拍、表情、Skills、知识库及其他 Native workbench 文件全部只读。
 - 管理后台与 Native workbench 使用同一份资源文件；Docker 通过投影读取相同字节。
+- Agent 根、双工作区及受控资源目录为 `0700`，固定管理入口为 `0600`；权限漂移会使 verify 与 Agent readiness 失败。
 - 重启后投影、资源入口、Agent 隔离和管理 API 均保持可用。

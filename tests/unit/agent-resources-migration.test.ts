@@ -50,6 +50,31 @@ describe("Agent resource layout migration", () => {
       .resolves.toContain("`emoji/`");
     await expect(fs.readFile(path.join(agent, "docker-workbench/index.md"), "utf8"))
       .resolves.toContain("`native-workbench/emoji/`");
+    for (const directory of [
+      agent,
+      workbench,
+      path.join(agent, "docker-workbench"),
+      path.join(agent, "docker-workbench/native-workbench"),
+      path.join(workbench, "selfie"),
+      path.join(workbench, "emoji"),
+      path.join(workbench, "skills"),
+      path.join(workbench, "knowledge"),
+      path.join(agent, "extensions"),
+      path.join(agent, "extensions/mcp")
+    ]) {
+      expect((await fs.lstat(directory)).mode & 0o777).toBe(0o700);
+    }
+    for (const filePath of [
+      path.join(workbench, "index.md"),
+      path.join(agent, "docker-workbench/index.md"),
+      path.join(workbench, "selfie/references.jsonl"),
+      path.join(workbench, "emoji/emojis.jsonl"),
+      path.join(workbench, "skills/index.json"),
+      path.join(workbench, "knowledge/index.json"),
+      path.join(agent, "extensions/mcp/servers.json")
+    ]) {
+      expect((await fs.lstat(filePath)).mode & 0o777).toBe(0o600);
+    }
     await expect(fs.lstat(path.join(agent, "selfie"))).rejects.toMatchObject({ code: "ENOENT" });
     await expect(verifyAgentResourcesMigration({ workspace })).resolves.toMatchObject({ ok: true });
 
@@ -58,6 +83,18 @@ describe("Agent resource layout migration", () => {
     await fs.appendFile(emojiCatalogPath, "\n");
     await expect(verifyAgentResourcesMigration({ workspace })).resolves.toMatchObject({ ok: true });
     await fs.writeFile(emojiCatalogPath, emojiCatalog);
+
+    await fs.chmod(workbench, 0o755);
+    await expect(verifyAgentResourcesMigration({ workspace })).rejects.toMatchObject({
+      code: "AGENT_RESOURCES_PERMISSION_INVALID"
+    });
+    const repaired = await applyAgentResourcesMigration({
+      workspace,
+      quiesced: true,
+      assertStopped: async () => undefined
+    });
+    expect(repaired.ok).toBe(true);
+    expect((await fs.lstat(workbench)).mode & 0o777).toBe(0o700);
 
     await rollbackAgentResourcesMigration({
       workspace,
@@ -104,6 +141,7 @@ async function fixture() {
     fs.mkdir(path.join(agent, "workbench"), { recursive: true }),
     fs.mkdir(emojiRoot, { recursive: true })
   ]);
+  await fs.chmod(path.join(agent, "workbench"), 0o755);
   await Promise.all([
     fs.writeFile(path.join(agent, "agent.json"), "{}\n"),
     fs.writeFile(path.join(agent, "workbench/index.md"), [

@@ -116,7 +116,11 @@ export async function applyAgentResourcesMigration(options) {
   const workspace = await resolveWorkspace(workspaceValue);
   await assertStopped();
   const markerPath = path.join(workspace, MARKER);
-  if (await exists(markerPath)) return verifyAgentResourcesMigration({ workspace });
+  if (await exists(markerPath)) {
+    const agents = await inspectAgents(workspace);
+    await secureResourceLayout(workspace, agents);
+    return verifyAgentResourcesMigration({ workspace });
+  }
   const agents = await inspectAgents(workspace);
   const backup = await createBackup(workspace, agents, now);
 
@@ -128,6 +132,7 @@ export async function applyAgentResourcesMigration(options) {
     await moveEmojiFiles(agent);
     await ensureResourceIndexes(agent, now.toISOString());
   }
+  await secureResourceLayout(workspace, agents);
 
   const migrated = await inspectAgents(workspace);
   const after = [];
@@ -170,10 +175,13 @@ export async function verifyAgentResourcesMigration({ workspace: workspaceValue 
     || !Array.isArray(marker.agents)
   ) invalid("资源迁移 marker 无效。", "AGENT_RESOURCES_MARKER_INVALID");
   const agents = await inspectAgents(workspace);
+  await verifyPrivateDirectory(path.join(workspace, "business", "agents"));
   for (const agent of agents) {
-    if (agent.changesRequired) {
+    if (agent.legacyChangesRequired) {
       invalid(`Agent 资源仍位于旧目录：${agent.agentId}`, "AGENT_RESOURCES_VERIFY_FAILED");
     }
+    await Promise.all(resourcePrivateDirectories(agent).map(verifyPrivateDirectory));
+    await Promise.all(resourcePrivateFiles(agent).map(verifyPrivateFile));
     await verifyIndexes(agent);
   }
   return {
@@ -261,11 +269,15 @@ async function inspectAgent(workspace, agentId) {
   ]);
   const legacyEmojiCatalog = path.join(agent.legacyEmoji, "emojis.jsonl");
   const emojiFiles = await emojiCatalogFiles(legacyEmojiCatalog);
+  const legacyChangesRequired = oldDirectories.some(Boolean) || emojiFiles.length > 0;
+  const permissionChangesRequired = await resourcePermissionsNeedRepair(agent);
   return {
     ...agent,
     legacyEmojiCatalog,
     emojiFiles,
-    changesRequired: oldDirectories.some(Boolean) || emojiFiles.length > 0
+    legacyChangesRequired,
+    permissionChangesRequired,
+    changesRequired: legacyChangesRequired || permissionChangesRequired
   };
 }
 
@@ -316,6 +328,65 @@ async function ensureResourceIndexes(agent, indexedAt) {
     revision: EMPTY_EXTENSION_REVISION,
     servers: []
   }, null, 2)}\n`);
+}
+
+async function secureResourceLayout(workspace, agents) {
+  await fs.chmod(path.join(workspace, "business", "agents"), 0o700);
+  for (const agent of agents) {
+    await Promise.all(resourcePrivateDirectories(agent).map((directory) => fs.chmod(directory, 0o700)));
+    await Promise.all(resourcePrivateFiles(agent).map((filePath) => fs.chmod(filePath, 0o600)));
+  }
+}
+
+function resourcePrivateDirectories(agent) {
+  return [
+    agent.root,
+    agent.workbench,
+    agent.dockerWorkbench,
+    agent.dockerWorkbenchProjection,
+    agent.selfie,
+    agent.emoji,
+    agent.skills,
+    agent.knowledge,
+    path.join(agent.root, "extensions"),
+    path.join(agent.root, "extensions", "mcp")
+  ];
+}
+
+function resourcePrivateFiles(agent) {
+  return [
+    path.join(agent.workbench, "index.md"),
+    path.join(agent.dockerWorkbench, "index.md"),
+    path.join(agent.selfie, "references.jsonl"),
+    path.join(agent.emoji, "emojis.jsonl"),
+    path.join(agent.skills, "index.json"),
+    path.join(agent.knowledge, "index.json"),
+    path.join(agent.root, "extensions", "mcp", "servers.json")
+  ];
+}
+
+async function resourcePermissionsNeedRepair(agent) {
+  const directoryRepairs = await Promise.all(resourcePrivateDirectories(agent).map(privateDirectoryNeedsRepair));
+  const fileRepairs = await Promise.all(resourcePrivateFiles(agent).map(privateFileNeedsRepair));
+  return directoryRepairs.some(Boolean) || fileRepairs.some(Boolean);
+}
+
+async function privateDirectoryNeedsRepair(directory) {
+  const stats = await lstatOptional(directory);
+  if (!stats) return false;
+  if (stats.isSymbolicLink() || !stats.isDirectory()) {
+    invalid(`目录无效：${directory}`, "AGENT_RESOURCES_PATH_INVALID");
+  }
+  return !isCurrentOwner(stats) || (stats.mode & 0o777) !== 0o700;
+}
+
+async function privateFileNeedsRepair(filePath) {
+  const stats = await lstatOptional(filePath);
+  if (!stats) return false;
+  if (stats.isSymbolicLink() || !stats.isFile()) {
+    invalid(`文件无效：${filePath}`, "AGENT_RESOURCES_PATH_INVALID");
+  }
+  return !isCurrentOwner(stats) || (stats.mode & 0o777) !== 0o600;
 }
 
 async function verifyIndexes(agent) {
@@ -545,6 +616,43 @@ async function assertDirectory(directory) {
   if (stats.isSymbolicLink() || !stats.isDirectory()) {
     invalid(`目录无效：${directory}`, "AGENT_RESOURCES_PATH_INVALID");
   }
+}
+
+async function verifyPrivateDirectory(directory) {
+  const stats = await fs.lstat(directory);
+  if (
+    stats.isSymbolicLink()
+    || !stats.isDirectory()
+    || !isCurrentOwner(stats)
+    || (stats.mode & 0o777) !== 0o700
+  ) {
+    invalid(`目录权限无效：${directory}`, "AGENT_RESOURCES_PERMISSION_INVALID");
+  }
+}
+
+async function verifyPrivateFile(filePath) {
+  const stats = await fs.lstat(filePath);
+  if (
+    stats.isSymbolicLink()
+    || !stats.isFile()
+    || !isCurrentOwner(stats)
+    || (stats.mode & 0o777) !== 0o600
+  ) {
+    invalid(`文件权限无效：${filePath}`, "AGENT_RESOURCES_PERMISSION_INVALID");
+  }
+}
+
+async function lstatOptional(candidate) {
+  try {
+    return await fs.lstat(candidate);
+  } catch (error) {
+    if (error?.code === "ENOENT") return undefined;
+    throw error;
+  }
+}
+
+function isCurrentOwner(stats) {
+  return typeof process.getuid !== "function" || stats.uid === process.getuid();
 }
 
 async function resolveWorkspace(value) {
