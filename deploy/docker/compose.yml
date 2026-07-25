@@ -56,7 +56,7 @@ services:
       context: .
       dockerfile: deploy/docker/Dockerfile
       args:
-        SUNABOT_RELEASE_VERSION: ${SUNABOT_RELEASE_VERSION:-0.1.2}
+        SUNABOT_RELEASE_VERSION: ${SUNABOT_RELEASE_VERSION:-0.1.3}
     image: sunabot-core:${SUNABOT_IMAGE_TAG:-local}
     platform: ${SUNABOT_CORE_PLATFORM:-linux/amd64}
     user: "${SUNABOT_RUNTIME_UID:-1000}:${SUNABOT_RUNTIME_GID:-1000}"

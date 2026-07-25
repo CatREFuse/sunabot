@@ -19,6 +19,7 @@ import type {
 import {
   type MemoryEntry
 } from "../../services/memory/memoryService.js";
+import { generateImgMediaHandle } from "../../services/tools/generateImgTool.js";
 import {
   ConversationMessageQuote,
   ConversationRecord,
@@ -340,10 +341,16 @@ export function formatQuoteReferencesForContext(references: ConversationMessageQ
   return references.map((reference) => {
     const sender = reference.senderName ? `${reference.senderName} ` : "";
     const text = reference.text || (reference.imageUrls?.length ? "[图片]" : reference.attachments?.length ? "[文件]" : "[消息]");
-    const files = reference.attachments?.length
-      ? ` 文件：${formatAttachmentListForContext(reference.attachments)}`
+    const imageCount = (reference.media ?? reference.imageUrls ?? []).length;
+    const images = imageCount
+      ? ` 图片：${Array.from({ length: Math.min(imageCount, 4) }, (_, index) => (
+        generateImgMediaHandle(String(reference.messageId), index)
+      )).join("、")}`
       : "";
-    return `${sender}#${reference.messageId} ${text}${files}`;
+    const files = reference.attachments?.length
+      ? ` 文件：${formatAttachmentListForContext(reference.attachments, String(reference.messageId))}`
+      : "";
+    return `${sender}#${reference.messageId} ${text}${images}${files}`;
   }).join("；");
 }
 export function readRecord(value: unknown): Record<string, unknown> {
@@ -521,8 +528,16 @@ export function persistedQuoteReferences(values: readonly ConversationMessageQuo
     attachments: quote.attachments ? persistedAttachments(quote.attachments) : undefined
   }));
 }
-export function formatAttachmentListForContext(values: readonly ParsedAttachment[]) {
-  return values.map((attachment) => `${attachment.name}（${attachmentStatusLabel(attachment.status)}）`).join("、");
+export function formatAttachmentListForContext(
+  values: readonly ParsedAttachment[],
+  messageId?: string
+) {
+  return values.map((attachment, index) => {
+    const handle = messageId && /^\d+$/.test(messageId)
+      ? `；媒体句柄：message:${messageId}:file:${index}`
+      : "";
+    return `${attachment.name}（${attachmentStatusLabel(attachment.status)}${handle}）`;
+  }).join("、");
 }
 export function attachmentStatusLabel(status: ParsedAttachment["status"]) {
   if (status === "ready") return "已读取";

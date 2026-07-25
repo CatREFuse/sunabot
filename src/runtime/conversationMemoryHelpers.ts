@@ -184,10 +184,20 @@ export function buildUserPrompt(
   const groupLine = incoming.groupId ? `群号：${incoming.groupId}\n` : "";
   const roleLine = isAdmin ? `角色：管理员；称呼：${admin.name}\n` : "";
   const imageCount = inboundImageUrls(incoming).length;
-  const imageLine = imageCount ? `图片：${imageCount} 张，类型与顺序见内容中的图片标记\n` : "";
+  const imageHandles = incoming.messageId == null
+    ? []
+    : inboundImageUrls(incoming).slice(0, 4).map((_, index) => (
+      generateImgMediaHandle(String(incoming.messageId), index)
+    ));
+  const imageLine = imageCount
+    ? `图片：${imageCount} 张，类型与顺序见内容中的图片标记${imageHandles.length ? `；媒体句柄：${imageHandles.join("、")}` : ""}\n`
+    : "";
   const quoteLine = incoming.quoteReferences.length ? `引用：${formatQuoteReferencesForContext(incoming.quoteReferences)}\n` : "";
-  const attachmentLine = boundedAttachmentContext ? `文件内容：\n${boundedAttachmentContext}\n` : "";
-  return `消息场景：${scopeName}\n${messageTimeLine}${groupLine}用户：${formatIncomingUserLabel(incoming, admin)}\n${roleLine}${imageLine}${quoteLine}${attachmentLine}内容：${boundedText}`;
+  const attachmentLine = incoming.messageId == null || !incoming.attachments.length
+    ? ""
+    : `文件：${formatAttachmentListForContext(incoming.attachments, String(incoming.messageId))}\n`;
+  const attachmentContentLine = boundedAttachmentContext ? `文件内容：\n${boundedAttachmentContext}\n` : "";
+  return `消息场景：${scopeName}\n${messageTimeLine}${groupLine}用户：${formatIncomingUserLabel(incoming, admin)}\n${roleLine}${imageLine}${quoteLine}${attachmentLine}${attachmentContentLine}内容：${boundedText}`;
 }
 
 export function buildMemoryPromptVariables(input: {
@@ -230,7 +240,7 @@ export function toContextChatMessage(
     ? ` 图片：${imageHandles.length} 张（媒体句柄：${imageHandles.join("、")}）`
     : "";
   const attachmentText = message.attachments?.length
-    ? ` 文件：${formatAttachmentListForContext(message.attachments)}`
+    ? ` 文件：${formatAttachmentListForContext(message.attachments, message.id)}`
     : "";
   const body = `${message.text}${quoteText}${imageText}${attachmentText}`;
   return {

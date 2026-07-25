@@ -16,6 +16,8 @@ import {
   SELFIE_TOOL_NAME,
   WEBFETCH_TOOL_NAME,
   WEBSEARCH_TOOL_NAME,
+  EXPORT_CHAT_MEDIA_TOOL_NAME,
+  IMPORT_CHAT_EMOJI_TOOL_NAME,
   isWorkbenchFileToolName
 } from "../../../services/tools/public.js";
 import { isMcpToolAlias } from "../../../services/extensions/public.js";
@@ -46,7 +48,9 @@ const localDataTools = new Set([
   READ_SKILL_RESOURCE_TOOL_NAME,
   RUN_SKILL_SCRIPT_TOOL_NAME,
   MEMORY_RECALL_TOOL_NAME,
-  KNOWLEDGE_SEARCH_TOOL_NAME
+  KNOWLEDGE_SEARCH_TOOL_NAME,
+  EXPORT_CHAT_MEDIA_TOOL_NAME,
+  IMPORT_CHAT_EMOJI_TOOL_NAME
 ]);
 
 const outboundNetworkTools = new Set([
@@ -67,7 +71,8 @@ const restrictedToolNames = new Set([
   DOCKER_BASH_TOOL_NAME,
   ACTIVATE_SKILL_TOOL_NAME,
   READ_SKILL_RESOURCE_TOOL_NAME,
-  RUN_SKILL_SCRIPT_TOOL_NAME
+  RUN_SKILL_SCRIPT_TOOL_NAME,
+  IMPORT_CHAT_EMOJI_TOOL_NAME
 ]);
 
 export function preflightProviderToolResponse(
@@ -228,6 +233,9 @@ function restrictedBatchError(calls: ResponseFunctionCallItem[]) {
   }
   if (calls.some((call) => isWorkbenchFileToolName(call.name))) {
     return "read_file and write_file must be called alone before any other tool.";
+  }
+  if (calls.some((call) => call.name === IMPORT_CHAT_EMOJI_TOOL_NAME)) {
+    return "import_chat_emoji must be called alone before any other tool.";
   }
   const bashCall = calls.find((call) => (
     call.name === NATIVE_BASH_TOOL_NAME || call.name === DOCKER_BASH_TOOL_NAME

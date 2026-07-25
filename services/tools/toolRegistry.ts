@@ -59,6 +59,13 @@ import {
   writeFileTool
 } from "./workbenchFileTool.js";
 import {
+  EXPORT_CHAT_MEDIA_TOOL_NAME,
+  IMPORT_CHAT_EMOJI_TOOL_NAME,
+  exportChatMediaTool,
+  importChatEmojiTool,
+  type ChatMediaToolPort
+} from "./chatMediaTool.js";
+import {
   SEND_FILE_TOOL_NAME,
   SEND_VOICE_MESSAGE_TOOL_NAME,
   createSendVoiceMessageTool,
@@ -87,6 +94,7 @@ export interface ToolAvailability {
     read(input: unknown): Promise<unknown>;
     write(input: unknown): Promise<unknown>;
   };
+  chatMedia?: ChatMediaToolPort;
   bash?: {
     native?: WorkspaceBashProviderOptions;
     docker?: WorkspaceBashProviderOptions;
@@ -284,6 +292,32 @@ const catalog: readonly ToolCatalogEntry[] = [
     unavailabilityKind: "session",
     accessLabel: "管理员 QQ 私聊可用",
     accessDescription: "Web Chat、群聊和普通用户私聊不可用。",
+    defaultEnabled: true,
+    execution: "inline"
+  },
+  {
+    name: EXPORT_CHAT_MEDIA_TOOL_NAME,
+    title: "导出聊天媒体",
+    summary: "把当前消息或明确引用消息中的图片、文件导出到当前 Agent workbench。",
+    definition: () => exportChatMediaTool,
+    available: (options) => typeof options.chatMedia?.export === "function",
+    unavailableReason: "当前消息没有可导出的受控媒体，或当前会话不允许导出。",
+    unavailabilityKind: "session",
+    accessLabel: "当前 QQ 消息媒体可用",
+    accessDescription: "只解析当前消息和明确引用消息中实际提供的媒体句柄。",
+    defaultEnabled: true,
+    execution: "inline"
+  },
+  {
+    name: IMPORT_CHAT_EMOJI_TOOL_NAME,
+    title: "导入聊天表情",
+    summary: "把当前消息或明确引用消息中的图片原子导入当前 Agent 表情库。",
+    definition: () => importChatEmojiTool,
+    available: (options) => typeof options.chatMedia?.importEmoji === "function",
+    unavailableReason: "当前会话没有管理员表情导入权限或可导入图片。",
+    unavailabilityKind: "session",
+    accessLabel: "管理员 QQ 私聊可用",
+    accessDescription: "仅管理员 QQ 私聊可把本轮受控图片导入当前 Agent 表情库。",
     defaultEnabled: true,
     execution: "inline"
   },
@@ -595,6 +629,8 @@ function applyRuntimeToolContract(
     && entry.name !== SELFIE_TOOL_NAME
     && entry.name !== READ_FILE_TOOL_NAME
     && entry.name !== WRITE_FILE_TOOL_NAME
+    && entry.name !== EXPORT_CHAT_MEDIA_TOOL_NAME
+    && entry.name !== IMPORT_CHAT_EMOJI_TOOL_NAME
     && entry.name !== SEND_FILE_TOOL_NAME
     && entry.name !== SEND_VOICE_MESSAGE_TOOL_NAME
     && entry.name !== ACTIVATE_SKILL_TOOL_NAME

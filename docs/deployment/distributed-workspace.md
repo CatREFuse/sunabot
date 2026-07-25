@@ -56,6 +56,15 @@ npm run upgrade:0.1.2 -- apply
 
 完整前置条件、恢复点、验收和回滚步骤见 `docs/migrations/upgrade-0.1.0-to-0.1.2.md`。
 
+从 `0.1.2` 升级到 `0.1.3` 使用：
+
+```bash
+npm run upgrade:0.1.3 -- plan
+npm run upgrade:0.1.3 -- apply
+```
+
+该版本不修改 SQLite schema 或资源布局；`apply` 仍先停服创建全 Agent 恢复点，再由启动期提示词迁移补齐聊天媒体规则，完整步骤见 `docs/migrations/upgrade-0.1.2-to-0.1.3.md`。
+
 ## 终端角色
 
 - 主业务终端：唯一运行生产 Core、NapCat、SQLite 和定时任务的实例。

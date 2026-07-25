@@ -96,6 +96,20 @@ export {
 } from "./workbenchFileTool.js";
 export { createWorkbenchFileToolPort } from "./workbenchFileStore.js";
 export {
+  CHAT_MEDIA_HANDLE_MAX_LENGTH,
+  EXPORT_CHAT_MEDIA_TOOL_NAME,
+  IMPORT_CHAT_EMOJI_TOOL_NAME,
+  exportChatMediaTool,
+  importChatEmojiTool,
+  readExportChatMediaInput,
+  readImportChatEmojiInput,
+  type ChatMediaToolPort,
+  type ExportChatMediaInput,
+  type ExportedChatMedia,
+  type ImportChatEmojiInput,
+  type ImportedChatEmoji
+} from "./chatMediaTool.js";
+export {
   SEND_FILE_TOOL_NAME,
   SEND_VOICE_MESSAGE_TOOL_NAME,
   sendFileTool,

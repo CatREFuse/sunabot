@@ -130,6 +130,12 @@ Agent 设置中的工具启停是所属 Agent 的总开关。每个 QQ 私聊、
 
 `read_file` 与 `write_file` V1 仅向当前 Agent 的真实 OneBot 管理员私聊开放；群聊、Web Chat、普通用户、缺少账号或消息身份、Agent 不匹配以及任何 `promptOverride` 请求都不获得运行端口。工具只接受当前 Agent `workbench/` 内的 POSIX 相对路径，分别读取有界 UTF-8 文本或以 0600 临时文件原子发布完整 UTF-8 文本；不接受账号、会话、宿主路径、建目录或追加写入参数。同一模型 Function Call 批次包含文件工具与任意其他工具时必须整批零副作用拒绝；文件工具前后出现已接受的助手消息、inline 或 deferred 工具时也必须拒绝。各 Provider 协议在发送同响应的普通 assistant 文本前还必须执行相同的整轮独占门禁。
 
+`export_chat_media` 只在无 `promptOverride` 的真实 OneBot 回合且当前消息或最多两条明确引用消息实际包含媒体时声明。参数对象只能包含运行时原样展示的单个 `handle`，固定拒绝 URL、Base64、源路径、目标路径、账号、会话和 Agent ID；运行时从冻结映射解析来源，图片最多 32 MiB，文件沿用 256 MiB 附件上限。文件来源必须已在当前 Agent 私有缓存中完成解析并复核 cache key、SHA-256、大小和单链接普通文件身份；图片只允许本轮冻结的 Data URL 或经现有 SSRF/重定向/超时门禁下载的精确消息 URL，模型不能提供下载目标。导出先复制到当前 Agent workbench 的 0600 临时文件，再复核摘要、MIME、扩展名和图片宽高，以 parent-inode 绑定的 create-if-missing 语义发布为 `chat-media-<sha256>.<ext>`；同摘要重试只复用已验证目标，冲突不覆盖。结果只返回相对路径、摘要、类型、扩展名、宽高、字节数和去重状态，不返回缓存路径、原始 URL、Base64 或宿主路径；Native Bash 直接寻址，Docker Bash 通过 `native-workbench/<path>` 只读寻址。
+
+`import_chat_emoji` 复用同一当前/引用图片映射，并额外要求真实管理员 QQ 私聊、当前 Agent 一致且本轮没有 `promptOverride`；群聊、普通私聊、Web Chat 和伪造 Function Call 均无写入端口。参数只允许图片 handle 与合法 key，工具必须独占所在 Function Call 批次且不能携带 sibling assistant text；原始图片继续经过 8 MiB、PNG/JPEG/WebP、64M 像素和 Sharp 解码门禁，规范化为 1024×1024 PNG 后以内容 SHA-256 命名，复用表情 parent-bound 原子发布、版本上限、全局 key 上限和 `emojis.jsonl` 串行原子替换。Bash、`write_file` 与导出工具不能直接修改表情图片或清单。
+
+私聊与群聊默认模板共享 `<chat_media_export_contract version="1">`：提示 Agent 只使用本轮原样出现的 handle、工具不可用时停止通过 Bash 或联网旁路查找原件、Native/Docker 相对路径差异、管理员表情写入边界以及提示词不能扩大实际权限。既有公共与 Agent override 模板通过 `conversation-chat-media-v1` 在配置目录入口合同之后保留式追加，迁移保留原消息、角色、顺序、tools 与 response schema，并使用 prompt migration registry 的一次备份、journal 和摘要校验。
+
 `/api/tools` 与 Provider 使用同一实时能力来源计算 `send_file.available`：OneBot adapter 必须提供会话资源外发能力，且当前 Agent 至少有一个归属账号在线；resolver 缺失或异常时安全返回不可用。配置启用状态与实时能力状态分别返回，不能把 `available` 固定为真。
 
 `dispatch_message` 负责 deferred tool 的首次受理消息，`assistant_text` 负责 inline 工具开始前的进度或补充问题，最终结果继续使用普通正文。两类消息写入 durable outbox 后立即调度发送，Provider inline 工具与 deferred worker 随后独立执行，不等待远端发送结果；发送失败继续由 outbox 重试，callback 与最终正文保持同一会话 FIFO。单轮工具调用上限可配置，默认 20，最大 100；工具启用状态与描述热更新，权限、超时和并发继续由对应运行配置控制。

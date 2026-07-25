@@ -19,6 +19,7 @@ import type { ImageGenerationFailureContext } from "../imageGenerationRetry.js";
 import type { WorkspaceBashProviderOptions } from "../../../services/tools/bashTool.js";
 import type { SkillRuntimeToolPort } from "../../../services/tools/skillRuntimeTool.js";
 import type { VoiceLanguage } from "../../../services/voice/public.js";
+import type { ChatMediaToolPort } from "../../../services/tools/chatMediaTool.js";
 
 export interface ProviderCompleteOptions {
   signal?: AbortSignal;
@@ -26,6 +27,7 @@ export interface ProviderCompleteOptions {
   modelRequestAttemptTimeoutMs?: number;
   allowNoReply?: boolean;
   workbenchFiles?: ProviderWorkbenchFileOptions;
+  chatMedia?: ChatMediaToolPort;
   bash?: {
     native?: ProviderBashOptions;
     docker?: ProviderBashOptions;

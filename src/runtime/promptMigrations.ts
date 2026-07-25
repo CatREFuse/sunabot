@@ -26,6 +26,7 @@ import {
   migrateConversationBashWorkbenchPrompt,
   migrateConversationConfigurationIndexPrompt
 } from "../../services/agent/bashWorkbenchPromptMigration.js";
+import { migrateConversationChatMediaPrompt } from "../../services/agent/chatMediaPromptMigration.js";
 import { migrateConversationPromptCacheLayout } from "../../services/agent/promptCacheLayoutMigration.js";
 import {
   migrateConversationDirectorPrompt,
@@ -293,12 +294,19 @@ function runtimePromptMigrations(config: AppConfig, selfiePromptDefault: string)
       () => migrateConversationConfigurationIndexPrompt(config, file),
       [bashWorkbenchId]
     );
+    const chatMediaId = add(
+      "conversation-chat-media-v1",
+      "system",
+      file,
+      () => migrateConversationChatMediaPrompt(config, file),
+      [configurationIndexId]
+    );
     const recoverableId = add(
       "recoverable-output-v1",
       "system",
       file,
       () => migrateRecoverableOutputErrorPrompt(config, file),
-      [configurationIndexId]
+      [chatMediaId]
     );
     add(
       "conversation-cache-layout-v1",

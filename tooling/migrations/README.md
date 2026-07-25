@@ -15,11 +15,15 @@ SQLite schema 与 workspace 布局的前向迁移命令。迁移必须先停服�
 | `npm run migrate:agent-resources -- verify --workspace PATH` | 校验 marker、固定管理入口和旧路径退役状态 |
 | `npm run upgrade:0.1.2 -- plan [--workspace PATH]` | 只读检查 0.1.0 / 0.1.1 到 0.1.2 的版本与双工作区迁移状态 |
 | `npm run upgrade:0.1.2 -- apply [--workspace PATH]` | 自动停服、创建全 Agent SQLite 恢复点、迁移资源、启动并运行 status/doctor |
+| `npm run upgrade:0.1.3 -- plan [--workspace PATH]` | 只读检查 0.1.2 到 0.1.3 的版本、workspace 与聊天媒体提示词迁移目标 |
+| `npm run upgrade:0.1.3 -- apply [--workspace PATH]` | 自动停服、创建全 Agent SQLite 恢复点、启动迁移提示词并运行 status/doctor |
 
 单 Agent 迁移步骤见 `docs/migrations/single-agent-to-multi-agent.md`。
 Agent 双工作区、Native 只读投影、自拍 JSONL 验证及回滚步骤见
 `docs/migrations/agent-workbenches.md`。
 0.1.0 / 0.1.1 到 0.1.2 的完整升级与回滚步骤见
 `docs/migrations/upgrade-0.1.0-to-0.1.2.md`。
+0.1.2 到 0.1.3 的完整升级与回滚步骤见
+`docs/migrations/upgrade-0.1.2-to-0.1.3.md`。
 
 源码仓库中的 SQLite 与多 Agent 迁移会先构建 API，确保迁移使用当前 schema。Linux 发行包包含 schema v2 `release-manifest.json`、预构建 `dist` 和生产依赖；迁移 wrapper 核对真实平台、runtime contract、版本、Node、source commit、完整 `dist/`、`tooling/`、生产 `node_modules/` 与锁文件的文件集合和 SHA-256 后使用随包构建，无需安装 TypeScript 等开发依赖。

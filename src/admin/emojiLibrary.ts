@@ -97,6 +97,17 @@ export class EmojiLibraryRepository {
     });
   }
 
+  async importBytes(keyInput: unknown, bytes: Buffer): Promise<EmojiEnvelope> {
+    const key = requireEmojiKey(keyInput);
+    if (!Buffer.isBuffer(bytes) || bytes.length < 1 || bytes.length > MAX_EMOJI_UPLOAD_BYTES) {
+      throw new AdminApiError(413, "EMOJI_IMAGE_TOO_LARGE", "表情图片超过 8 MiB 限制。");
+    }
+    const config = await this.getConfig();
+    return this.withNormalizationAdmission(config, () => (
+      this.saveAdmitted(key, Buffer.from(bytes), "upload", config)
+    ));
+  }
+
   async bindGenerated(keyInput: unknown, image: ImageResult): Promise<EmojiEnvelope> {
     const key = requireEmojiKey(keyInput);
     const config = await this.getConfig();

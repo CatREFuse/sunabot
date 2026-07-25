@@ -1,5 +1,25 @@
 # 更新日志
 
+## [0.1.3] - 2026-07-25
+
+### 聊天媒体
+
+- 当前消息和明确引用消息中的图片、文件会提供受控媒体句柄。
+- `export_chat_media` 把原始媒体保存为当前 Agent Workbench 根目录下的 `chat-media-<sha256>.<ext>`，并返回相对路径、SHA-256、MIME、扩展名、宽高与字节数。
+- Native Bash 直接使用返回路径，Docker Bash 通过 `native-workbench/<path>` 只读访问同一文件。
+
+### 表情导入
+
+- 管理员 QQ 私聊可用 `import_chat_emoji` 把本轮图片导入当前 Agent 表情库。
+- 导入复用 8 MiB 图片门禁、1024×1024 PNG 规范化、哈希命名、内容去重和 `emojis.jsonl` 原子发布。
+- 普通私聊和群聊没有表情库写入端口，Bash 也不能绕过专用导入流程直接修改清单。
+
+### 安全与升级
+
+- 工具参数不接受 URL、Base64、宿主路径、目标路径、账号或 Agent ID，只解析运行时绑定的本轮句柄。
+- 导出会复核缓存文件身份、大小、摘要、MIME 与扩展名，拒绝符号链接、路径穿越、跨 Agent、过期回合和并发冲突。
+- 从 `0.1.2` 升级时会停服创建全 Agent SQLite 恢复点，启动后保留式升级系统提示词并执行状态与运行检查。
+
 ## [0.1.2] - 2026-07-25
 
 ### 双工作区
@@ -60,6 +80,7 @@ Bot 工作台、资源管理入口与 JSONL 清单完成统一升级。
 - 提示词编辑支持变量补全、搜索、折叠与冲突处理。
 - 新增当前版本与更新日志页面。
 
+[0.1.3]: https://github.com/CatREFuse/sunabot/releases/tag/v0.1.3
 [0.1.2]: https://github.com/CatREFuse/sunabot/releases/tag/v0.1.2
 [0.1.1]: https://github.com/CatREFuse/sunabot/releases/tag/v0.1.1
 [0.1.0]: https://github.com/CatREFuse/sunabot/releases/tag/v0.1.0

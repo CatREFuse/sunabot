@@ -4,24 +4,12 @@ import type { OpenAIToolDefinition } from "../../../services/agent/promptSystem.
 import type { MemoryRecallInput } from "../../../services/memory/memoryService.js";
 import type { KnowledgeSearchInput } from "../../../services/knowledge/public.js";
 import { DOCKER_BASH_TOOL_NAME, NATIVE_BASH_TOOL_NAME } from "../../../services/tools/bashTool.js";
-import {
-  MEMORY_RECALL_TOOL_NAME,
-  WEBSEARCH_TOOL_NAME
-} from "../../../services/tools/definitions.js";
-import {
-  GENERATE_IMG_TOOL_NAME,
-  runGenerateImg
-} from "../../../services/tools/generateImgTool.js";
+import { MEMORY_RECALL_TOOL_NAME, WEBSEARCH_TOOL_NAME } from "../../../services/tools/definitions.js";
+import { GENERATE_IMG_TOOL_NAME, runGenerateImg } from "../../../services/tools/generateImgTool.js";
 import { SELFIE_TOOL_NAME } from "../../../services/tools/selfieTool.js";
-import {
-  ASSISTANT_TEXT_TOOL_NAME,
-  readAssistantText
-} from "../../../services/tools/assistantTextTool.js";
+import { ASSISTANT_TEXT_TOOL_NAME, readAssistantText } from "../../../services/tools/assistantTextTool.js";
 import { NO_REPLY_TOOL_NAME } from "../../../services/tools/noReplyTool.js";
-import {
-  SYSTEM_CONFIG_TOOL_NAME,
-  runSystemConfig
-} from "../../../services/tools/systemConfigTool.js";
+import { SYSTEM_CONFIG_TOOL_NAME, runSystemConfig } from "../../../services/tools/systemConfigTool.js";
 import {
   CRON_TOOL_NAME,
   runCronTool
@@ -31,7 +19,11 @@ import {
   runCallDirector
 } from "../../../services/tools/callDirectorTool.js";
 import {
+  ADD_WORKMEMORY_TOOL_NAME,
+  EXPORT_CHAT_MEDIA_TOOL_NAME,
+  IMPORT_CHAT_EMOJI_TOOL_NAME,
   READ_FILE_TOOL_NAME,
+  WEBFETCH_TOOL_NAME,
   WRITE_FILE_TOOL_NAME,
   WORKBENCH_FILE_MAX_BYTES,
   isWorkbenchFileRelativePath,
@@ -71,7 +63,6 @@ import {
 } from "../../../services/tools/deferredDispatch.js";
 import { assertProviderToolDefinitions } from "../../../services/tools/providerToolSchema.js";
 import { runWebsearch, type WebsearchInput } from "../webSearchTool.js";
-import { WEBFETCH_TOOL_NAME } from "../../../services/tools/public.js";
 import { KNOWLEDGE_SEARCH_TOOL_NAME } from "../../../services/tools/knowledgeSearchTool.js";
 import type {
   ProviderCompleteOptions,
@@ -99,8 +90,8 @@ import {
 } from "./toolResponsePreflight.js";
 import { runWebFetch } from "./webFetchExecutor.js";
 import { READ_AIR_TOOL_NAME, executeReadAirTool } from "./readAirExecutor.js";
-import { ADD_WORKMEMORY_TOOL_NAME } from "../../../services/tools/public.js";
 import { executeAddWorkMemoryTool } from "./addWorkMemoryExecutor.js";
+import { runExportChatMedia, runImportChatEmoji } from "./chatMediaExecutor.js";
 
 export { mcpToolLogSummary } from "./mcpToolLog.js";
 
@@ -114,6 +105,8 @@ const inlineExecutors: ReadonlyMap<string, InlineExecutor> = new Map([
   [ASSISTANT_TEXT_TOOL_NAME, runAssistantText],
   [READ_FILE_TOOL_NAME, runReadFile],
   [WRITE_FILE_TOOL_NAME, runWriteFile],
+  [EXPORT_CHAT_MEDIA_TOOL_NAME, runExportChatMedia],
+  [IMPORT_CHAT_EMOJI_TOOL_NAME, runImportChatEmoji],
   [NATIVE_BASH_TOOL_NAME, runNativeBash],
   [DOCKER_BASH_TOOL_NAME, runDockerBash],
   [WEBSEARCH_TOOL_NAME, runWebSearch],

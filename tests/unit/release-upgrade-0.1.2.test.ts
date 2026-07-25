@@ -5,7 +5,6 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
-import { CURRENT_RELEASE_VERSION, RELEASE_CATALOG } from "../../packages/platform/releaseCatalog.js";
 import {
   applyEmojiCatalogMigration,
   applyReleaseUpgrade,
@@ -25,8 +24,9 @@ afterEach(async () => {
 });
 
 describe("0.1.0 or 0.1.1 to 0.1.2 release upgrade", () => {
-  it("keeps every release version entry and changelog on 0.1.2", async () => {
-    await expect(verifyTargetRelease(root)).resolves.toEqual({
+  it("keeps the historical upgrade verifier pinned to a complete 0.1.2 checkout", async () => {
+    const projectRoot = await createReleaseFixture({ packageVersion: "0.1.2" });
+    await expect(verifyTargetRelease(projectRoot)).resolves.toEqual({
       package: "0.1.2",
       packageLock: "0.1.2",
       packageLockRoot: "0.1.2",
@@ -35,13 +35,6 @@ describe("0.1.0 or 0.1.1 to 0.1.2 release upgrade", () => {
       dockerfile: "0.1.2",
       compose: "0.1.2"
     });
-    expect(CURRENT_RELEASE_VERSION).toBe("0.1.2");
-    expect(RELEASE_CATALOG.currentVersion).toBe("0.1.2");
-    expect(RELEASE_CATALOG.releases[0]?.version).toBe("0.1.2");
-    expect(RELEASE_CATALOG.releases.filter((release) => release.version === "0.1.2")).toHaveLength(1);
-    expect(await fs.readFile(path.join(root, "CHANGELOG.md"), "utf8")).toContain(
-      "## [0.1.2] - 2026-07-25"
-    );
   });
 
   it("rejects a partially updated target release before inspecting workspace data", async () => {
@@ -61,6 +54,7 @@ describe("0.1.0 or 0.1.1 to 0.1.2 release upgrade", () => {
   it("runs the offline recovery and resource migration before starting the target runtime", async () => {
     const events: string[] = [];
     const workspace = path.join(root, "workspace");
+    const projectRoot = await createReleaseFixture({ packageVersion: "0.1.2" });
     const planSelfie = async () => ({
       ok: true,
       command: "plan",
@@ -84,7 +78,7 @@ describe("0.1.0 or 0.1.1 to 0.1.2 release upgrade", () => {
       agents: [{ agentId: "plana", changesRequired: true }]
     });
     const result = await applyReleaseUpgrade({
-      projectRoot: root,
+      projectRoot,
       workspace,
       assertNonRoot: () => undefined,
       planSelfieReferencesMigration: planSelfie,
@@ -146,8 +140,9 @@ describe("0.1.0 or 0.1.1 to 0.1.2 release upgrade", () => {
   it("does not start the target runtime when the offline migration fails", async () => {
     const events: string[] = [];
     const workspace = path.join(root, "workspace");
+    const projectRoot = await createReleaseFixture({ packageVersion: "0.1.2" });
     await expect(applyReleaseUpgrade({
-      projectRoot: root,
+      projectRoot,
       workspace,
       assertNonRoot: () => undefined,
       planSelfieReferencesMigration: async () => ({

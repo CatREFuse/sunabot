@@ -49,6 +49,7 @@ import {
   BASH_WORKBENCH_CONTRACT,
   CONFIGURATION_DIRECTORY_INDEX_CONTRACT
 } from "./bashWorkbenchPromptMigration.js";
+import { CHAT_MEDIA_EXPORT_CONTRACT } from "./chatMediaPromptMigration.js";
 
 export const DEFAULT_WORK_MEMORY_COMPRESS_IN_PROMPT = [
   "你负责把一批聊天消息整理成高度压缩的工作记忆。fact 建议优先采用 @{bot.name} 的第一视角；使用“我”时，尽量让它指当前角色 @{bot.name}，并注意与聊天中用户的自述区分。",
@@ -354,6 +355,7 @@ export function defaultFinalPromptTemplate(id: string): FinalPromptTemplate | un
             "<tool_rules>@{runtime.tool_rules}</tool_rules>",
             BASH_WORKBENCH_CONTRACT,
             CONFIGURATION_DIRECTORY_INDEX_CONTRACT,
+            CHAT_MEDIA_EXPORT_CONTRACT,
             INBOUND_MESSAGE_INTERPRETATION_CONTRACT,
             RECOVERABLE_OUTPUT_ERROR_CONTRACT,
             ...(isGroupReply

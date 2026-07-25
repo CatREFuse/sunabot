@@ -78,6 +78,7 @@ import {
 import * as systemConfigReply from "./systemConfigReply.js";
 import { sendRuntimeVoiceFinalReply, startRuntimeDeferredVoiceSynthesis } from "./voiceReply.js";
 import { providerWorkbenchFilesForIncoming } from "./workbenchFiles.js";
+import { providerChatMediaForIncoming } from "./chatMedia.js";
 export { runtime_attachReplyReferences, runtime_buildRecentContextMessages, runtime_contextMessageLimit, runtime_generateImgReferenceContext, runtime_groupReplyOptions, runtime_isAdminUser, runtime_loadMessageDetails, runtime_loadQuoteReferences, runtime_refreshAttachmentCacheReferences, runtime_replyToToolCompletion, runtime_resolveProviderBashHandle, runtime_retainedConversationMessageLimit, runtime_selectRelevantAttachments };
 type RuntimeHost = SunaRuntime;
 export async function runtime_replyToIncoming(this: RuntimeHost,
@@ -302,11 +303,24 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
         this.resolveProviderBashHandle(incoming, options.promptOverride, "native"),
         this.resolveProviderBashHandle(incoming, options.promptOverride, "docker")
       ]);
+      const chatMediaEpoch = this.configEpoch;
+      const chatMedia = providerChatMediaForIncoming(
+        this.config,
+        incoming,
+        options.promptOverride,
+        this.attachmentService.cache,
+        () => (
+          this.configEpoch === chatMediaEpoch
+          && (!options.isCurrent || options.isCurrent())
+          && !options.signal?.aborted
+        )
+      );
       const turn = await this.completePromptTurn(provider, promptRequest, {
         signal: options.signal,
         modelRequestMaxRetries: this.config.normalReply.maxRetries,
         allowNoReply: true,
         workbenchFiles: providerWorkbenchFilesForIncoming(this.config, incoming, options.promptOverride),
+        chatMedia,
         bash: {
           ...(nativeBash ? { native: nativeBash } : {}),
           ...(dockerBash ? { docker: dockerBash } : {})

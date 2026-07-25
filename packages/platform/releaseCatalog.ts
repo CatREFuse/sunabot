@@ -17,12 +17,44 @@ export interface ReleaseCatalog {
   releases: readonly ReleaseRecord[];
 }
 
-export const CURRENT_RELEASE_VERSION = "0.1.2";
+export const CURRENT_RELEASE_VERSION = "0.1.3";
 
 export const RELEASE_CATALOG: ReleaseCatalog = {
   schemaVersion: 1,
   currentVersion: CURRENT_RELEASE_VERSION,
   releases: [
+    {
+      version: "0.1.3",
+      releasedAt: "2026-07-25",
+      title: "聊天媒体导出",
+      summary: "Agent 可以把本轮图片和文件安全保存到自己的 Workbench，并由管理员直接导入表情库。",
+      groups: [
+        {
+          title: "聊天媒体",
+          items: [
+            "当前消息和明确引用消息会提供可导出的图片与文件句柄。",
+            "导出结果使用 SHA-256 文件名并返回类型、尺寸和字节信息。",
+            "Native 与 Docker Bash 可在各自权限内继续处理已导出的文件。"
+          ]
+        },
+        {
+          title: "表情导入",
+          items: [
+            "管理员 QQ 私聊可把本轮图片直接导入当前 Agent 表情库。",
+            "导入统一执行图片校验、规范化、内容去重和 JSONL 原子更新。",
+            "系统提示词会说明句柄、工作区路径和表情写入边界。"
+          ]
+        },
+        {
+          title: "安全与升级",
+          items: [
+            "工具不接受任意 URL、宿主路径、目标路径或 Agent ID。",
+            "跨会话、跨 Agent、伪造句柄、类型伪装和超限文件会失败关闭。",
+            "0.1.2 可通过版本专用脚本创建恢复点并完成提示词迁移与重启检查。"
+          ]
+        }
+      ]
+    },
     {
       version: "0.1.2",
       releasedAt: "2026-07-25",

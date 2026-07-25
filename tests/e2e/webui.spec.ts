@@ -818,7 +818,7 @@ test("版本页面展示当前版本与更新日志", async ({ page }) => {
   expect((await initialRequest).method()).toBe("GET");
 
   await expect(page.getByRole("heading", { name: "版本更新", exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "v0.1.2", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "v0.1.3", exact: true })).toBeVisible();
   await expect(page.getByText("当前发行", { exact: true })).toBeVisible();
   await expect(page.getByText("2026年7月25日", { exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "更新日志", exact: true })).toBeVisible();
@@ -871,7 +871,7 @@ test("工具目录支持启停、全局说明和继承说明恢复", async ({ pa
 
   await expect(page.getByRole("tab", { name: "工具目录", exact: true })).toHaveAttribute("aria-selected", "true");
   await expect(page.getByLabel("搜索工具")).toBeVisible();
-  await expect(page.getByLabel(/^启用 /)).toHaveCount(22);
+  await expect(page.getByLabel(/^启用 /)).toHaveCount(24);
   for (const name of [
     "assistant_text",
     "no_reply",
@@ -884,6 +884,8 @@ test("工具目录支持启停、全局说明和继承说明恢复", async ({ pa
     "selfie",
     "read_file",
     "write_file",
+    "export_chat_media",
+    "import_chat_emoji",
     "send_file",
     "send_voice_message",
     "native_bash",
