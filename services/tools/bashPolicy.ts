@@ -26,7 +26,13 @@ export interface BashPolicyInput {
   accessMode: BashAccessMode;
   strictMode: boolean;
   workbenchRoot: string;
+  addressableWorkbenches?: readonly BashAddressableWorkbench[];
   audit: BashAuditResult;
+}
+
+export interface BashAddressableWorkbench {
+  root: string;
+  writable: boolean;
 }
 
 export interface BashPolicyResult {
@@ -127,7 +133,11 @@ export function evaluateBashPolicy(input: BashPolicyInput): BashPolicyResult {
     return denied(input.audit.risk, input.audit.summary, input.audit.outsideAccesses);
   }
 
-  const normalized = normalizeOutsideAccesses(input.audit.outsideAccesses, input.workbenchRoot);
+  const normalized = normalizeOutsideAccesses(
+    input.audit.outsideAccesses,
+    input.workbenchRoot,
+    input.addressableWorkbenches
+  );
   if (normalized.invalidReason) {
     return denied(maxRisk(input.audit.risk, "medium"), normalized.invalidReason, []);
   }
@@ -138,7 +148,7 @@ export function evaluateBashPolicy(input: BashPolicyInput): BashPolicyResult {
   }
 
   const outsideWorkbench = auditorRequiresConfirmation || (
-    input.audit.outsideWorkbench && !normalized.onlyReadOnlySharedAccesses
+    input.audit.outsideWorkbench && !normalized.onlyRecognizedWorkbenchAccesses
   ) ||
     outsideAccesses.length > 0 || hasParentTraversal(input.command);
   if (!outsideWorkbench) {
@@ -425,28 +435,58 @@ function hasParentTraversal(command: string) {
   return /(^|[\s:=/])\.\.(?:[\s/]|$)/.test(command);
 }
 
-function normalizeOutsideAccesses(accesses: BashPathAccess[], workbenchRoot: string) {
+function normalizeOutsideAccesses(
+  accesses: BashPathAccess[],
+  workbenchRoot: string,
+  addressableWorkbenches: readonly BashAddressableWorkbench[] = []
+) {
   const normalized = new Map<string, BashPathAccess>();
-  let readOnlySharedAccessCount = 0;
+  const validatedWorkbenches = normalizeAddressableWorkbenches(addressableWorkbenches);
+  if (validatedWorkbenches.invalidReason) {
+    return {
+      accesses: [],
+      invalidReason: validatedWorkbenches.invalidReason,
+      onlyRecognizedWorkbenchAccesses: false
+    };
+  }
+  let recognizedWorkbenchAccessCount = 0;
   for (const access of accesses) {
     const rawPath = access.path.trim();
     if (!rawPath || rawPath.includes("\0") || !path.isAbsolute(rawPath)) {
-      return { accesses: [], invalidReason: "审计返回了非绝对或无效的 workbench 外路径。" };
+      return invalidOutsideAccess("审计返回了非绝对或无效的 workbench 外路径。");
     }
     if (rawPath.split(/[\\/]+/).includes("..")) {
-      return { accesses: [], invalidReason: "审计返回了包含父目录跳转的 workbench 外路径。" };
+      return invalidOutsideAccess("审计返回了包含父目录跳转的 workbench 外路径。");
     }
     if (isReadOnlySharedPath(rawPath)) {
       if (access.access !== "read") {
-        return { accesses: [], invalidReason: "Skill 与 MCP 共享配置只允许读取。" };
+        return invalidOutsideAccess("Skill 与 MCP 共享配置只允许读取。");
       }
-      readOnlySharedAccessCount += 1;
+      recognizedWorkbenchAccessCount += 1;
       continue;
     }
-    if (isWorkbenchPath(rawPath, workbenchRoot)) continue;
+    const addressable = validatedWorkbenches.workbenches.find((workbench) => (
+      isWithinPath(workbench.root, rawPath)
+    ));
+    if (addressable) {
+      if (!addressable.writable && access.access !== "read") {
+        return invalidOutsideAccess("Native workbench 只读投影不允许写入或删除。");
+      }
+      recognizedWorkbenchAccessCount += 1;
+      continue;
+    }
+    if (isWorkbenchPath(rawPath, workbenchRoot)) {
+      recognizedWorkbenchAccessCount += 1;
+      continue;
+    }
     const resolved = path.resolve(rawPath);
-    if (resolved === "/" || resolved.split(path.sep).filter(Boolean).length < 2 || isAncestorPath(resolved, workbenchRoot)) {
-      return { accesses: [], invalidReason: "审计返回了根目录、过宽目录或 workbench 父目录。" };
+    if (
+      resolved === "/"
+      || resolved.split(path.sep).filter(Boolean).length < 2
+      || isAncestorPath(resolved, workbenchRoot)
+      || validatedWorkbenches.workbenches.some((workbench) => isAncestorPath(resolved, workbench.root))
+    ) {
+      return invalidOutsideAccess("审计返回了根目录、过宽目录或 workbench 父目录。");
     }
     const key = `${access.access}\0${resolved}`;
     normalized.set(key, { path: resolved, access: access.access });
@@ -454,7 +494,45 @@ function normalizeOutsideAccesses(accesses: BashPathAccess[], workbenchRoot: str
   return {
     accesses: [...normalized.values()],
     invalidReason: "",
-    onlyReadOnlySharedAccesses: accesses.length > 0 && readOnlySharedAccessCount === accesses.length
+    onlyRecognizedWorkbenchAccesses: (
+      accesses.length > 0 && recognizedWorkbenchAccessCount === accesses.length
+    )
+  };
+}
+
+function normalizeAddressableWorkbenches(workbenches: readonly BashAddressableWorkbench[]) {
+  const normalized: BashAddressableWorkbench[] = [];
+  for (const workbench of workbenches) {
+    if (
+      !workbench
+      || typeof workbench.root !== "string"
+      || !path.isAbsolute(workbench.root)
+      || workbench.root.includes("\0")
+      || typeof workbench.writable !== "boolean"
+    ) {
+      return {
+        workbenches: [],
+        invalidReason: "可寻址 workbench 边界无效。"
+      };
+    }
+    const root = path.resolve(workbench.root);
+    if (root === "/" || root.split(path.sep).filter(Boolean).length < 1) {
+      return {
+        workbenches: [],
+        invalidReason: "可寻址 workbench 边界无效。"
+      };
+    }
+    normalized.push({ root, writable: workbench.writable });
+  }
+  normalized.sort((left, right) => right.root.length - left.root.length);
+  return { workbenches: normalized, invalidReason: "" };
+}
+
+function invalidOutsideAccess(invalidReason: string) {
+  return {
+    accesses: [] as BashPathAccess[],
+    invalidReason,
+    onlyRecognizedWorkbenchAccesses: false
   };
 }
 
@@ -465,9 +543,16 @@ function isReadOnlySharedPath(candidate: string) {
 
 function isWorkbenchPath(candidate: string, workbenchRoot: string) {
   if (candidate === "/workbench" || candidate.startsWith("/workbench/")) return true;
-  const resolved = path.resolve(candidate);
-  const relative = path.relative(path.resolve(workbenchRoot), resolved);
-  return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+  return isWithinPath(workbenchRoot, candidate);
+}
+
+function isWithinPath(root: string, candidate: string) {
+  const relative = path.relative(path.resolve(root), path.resolve(candidate));
+  return relative === "" || (
+    relative !== ".."
+    && !relative.startsWith(`..${path.sep}`)
+    && !path.isAbsolute(relative)
+  );
 }
 
 function isAncestorPath(candidate: string, workbenchRoot: string) {

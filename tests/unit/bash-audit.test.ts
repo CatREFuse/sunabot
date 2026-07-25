@@ -26,10 +26,15 @@ describe("independent Bash audit", () => {
     });
     expect(request.messages[0]?.content).toContain("Never execute it");
     expect(buildBashAuditRequest({ ...auditInput, accessMode: "isolated" }).messages[0]?.content)
-      .toContain("Isolated mode permits shell syntax with writable access only inside the Docker workbench");
+      .toContain("read-only access to the Native workbench projection");
     expect(request.messages[0]?.content).toContain("Skill and MCP configuration are exposed through SUNABOT_SKILLS and SUNABOT_MCP_CONFIG");
-    expect(buildBashAuditRequest({ ...auditInput, backend: "native", accessMode: "admin" }).messages[0]?.content)
+    const nativeRequest = buildBashAuditRequest({ ...auditInput, backend: "native", accessMode: "admin" });
+    expect(nativeRequest.messages[0]?.content)
+      .toContain("Native Bash may write both the current Agent Native workbench and the same Agent Docker workbench");
+    expect(nativeRequest.messages[0]?.content)
       .toContain("native backend runs as the Sunabot runtime OS user after approval");
+    expect(nativeRequest.messages[1]?.content).toContain('"docker":{"path":"$SUNABOT_DOCKER_WORKBENCH","access":"read-write"}');
+    expect(request.messages[1]?.content).toContain('"native":{"path":"/workbench/native-workbench","access":"read-only"}');
   });
 
   it("parses the auditor response and rejects incomplete outside-path reports", async () => {

@@ -8,6 +8,7 @@ import {
 } from "../../services/tools/bashPolicy.js";
 
 const workbenchRoot = "/srv/agents/plana/workbench";
+const dockerWorkbenchRoot = "/srv/agents/plana/docker-workbench";
 const allowedAudit = {
   decision: "allow" as const,
   risk: "low" as const,
@@ -75,6 +76,94 @@ describe("deterministic Bash policy", () => {
         risk: "medium",
         outsideWorkbench: true,
         outsideAccesses: [{ path, access }]
+      }
+    })).toMatchObject({ decision: "deny", risk: "medium" });
+  });
+
+  it.each(["read", "write", "delete"] as const)(
+    "treats the same Agent Docker workbench as Native Bash %s-addressable",
+    (access) => {
+      const target = `${dockerWorkbenchRoot}/tasks/result.txt`;
+      expect(evaluateBashPolicy({
+        command: access === "read" ? `cat ${target}` : access === "write" ? `touch ${target}` : `rm ${target}`,
+        backend: "native",
+        accessMode: "admin",
+        strictMode: true,
+        workbenchRoot,
+        addressableWorkbenches: [{ root: dockerWorkbenchRoot, writable: true }],
+        audit: {
+          ...allowedAudit,
+          risk: access === "read" ? "low" : "medium",
+          outsideWorkbench: true,
+          outsideAccesses: [{ path: target, access }]
+        }
+      })).toMatchObject({ decision: "allow", outsideAccesses: [] });
+    }
+  );
+
+  it("allows Docker Bash to read the Native projection but denies its mutation at policy level", () => {
+    const projection = "/workbench/native-workbench";
+    const target = `${projection}/knowledge/index.json`;
+    const addressableWorkbenches = [{ root: projection, writable: false }] as const;
+
+    expect(evaluateBashPolicy({
+      command: `cat ${target}`,
+      backend: "docker",
+      accessMode: "isolated",
+      strictMode: true,
+      workbenchRoot: dockerWorkbenchRoot,
+      addressableWorkbenches,
+      audit: {
+        ...allowedAudit,
+        outsideWorkbench: true,
+        outsideAccesses: [{ path: target, access: "read" }]
+      }
+    })).toMatchObject({ decision: "allow", outsideAccesses: [] });
+
+    for (const access of ["write", "delete"] as const) {
+      expect(evaluateBashPolicy({
+        command: access === "write" ? `touch ${target}` : `rm ${target}`,
+        backend: "docker",
+        accessMode: "isolated",
+        strictMode: true,
+        workbenchRoot: dockerWorkbenchRoot,
+        addressableWorkbenches,
+        audit: {
+          ...allowedAudit,
+          risk: "medium",
+          outsideWorkbench: true,
+          outsideAccesses: [{ path: target, access }]
+        }
+      })).toMatchObject({
+        decision: "deny",
+        risk: "medium",
+        reason: "Native workbench 只读投影不允许写入或删除。"
+      });
+    }
+  });
+
+  it("rejects malformed or overbroad secondary workbench boundaries", () => {
+    expect(evaluateBashPolicy({
+      command: "pwd",
+      backend: "native",
+      accessMode: "admin",
+      strictMode: true,
+      workbenchRoot,
+      addressableWorkbenches: [{ root: "docker-workbench", writable: true }],
+      audit: allowedAudit
+    })).toMatchObject({ decision: "deny", reason: "可寻址 workbench 边界无效。" });
+
+    expect(evaluateBashPolicy({
+      command: "cat /srv/agents/plana",
+      backend: "native",
+      accessMode: "admin",
+      strictMode: true,
+      workbenchRoot,
+      addressableWorkbenches: [{ root: dockerWorkbenchRoot, writable: true }],
+      audit: {
+        ...allowedAudit,
+        outsideWorkbench: true,
+        outsideAccesses: [{ path: "/srv/agents/plana", access: "read" }]
       }
     })).toMatchObject({ decision: "deny", risk: "medium" });
   });

@@ -181,6 +181,7 @@ describe("tool call timeout", () => {
       signal: expect.any(AbortSignal)
     });
     const workbenchRoot = await fs.realpath(path.join(temporaryRoot, "workbench"));
+    const dockerWorkbenchRoot = await fs.realpath(path.join(temporaryRoot, "docker-workbench"));
     const skillsRoot = await fs.realpath(path.join(temporaryRoot, "workbench/skills"));
     const mcpRoot = await fs.realpath(path.join(temporaryRoot, "extensions/mcp"));
     expect(probe).toHaveBeenCalledWith("/bin/bash", ["--noprofile", "--norc", "-lc", ":"]);
@@ -194,7 +195,9 @@ describe("tool call timeout", () => {
         HOME: workbenchRoot,
         PWD: workbenchRoot,
         SUNABOT_SKILLS: skillsRoot,
-        SUNABOT_MCP_CONFIG: mcpRoot
+        SUNABOT_MCP_CONFIG: mcpRoot,
+        SUNABOT_DOCKER_WORKBENCH: dockerWorkbenchRoot,
+        SUNABOT_NATIVE_WORKBENCH: workbenchRoot
       }
     });
     expect(processState.calls[0]?.env).not.toHaveProperty("DOCKER_HOST");
@@ -205,6 +208,45 @@ describe("tool call timeout", () => {
       cwd: workbenchRoot,
       stdout: `${workbenchRoot}\n`
     });
+  });
+
+  it("treats the same Agent Docker workbench as a writable Native Bash boundary", async () => {
+    temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-tool-native-dual-workbench-"));
+    await fs.mkdir(path.join(temporaryRoot, "docker-workbench"), { recursive: true });
+    const dockerWorkbenchRoot = await fs.realpath(path.join(temporaryRoot, "docker-workbench"));
+    const target = path.join(dockerWorkbenchRoot, "result.txt");
+    const audit = async () => ({
+      decision: "allow" as const,
+      risk: "medium" as const,
+      outsideWorkbench: true,
+      outsideAccesses: [{ path: target, access: "write" as const }],
+      violations: [],
+      summary: "same Agent Docker workbench write"
+    });
+
+    const result = await runWorkspaceBash({
+      command: `touch "${target}"`,
+      timeoutMs: null
+    }, temporaryRoot, {
+      backend: "native",
+      accessMode: "admin",
+      audit,
+      sandbox: {
+        platform: "darwin",
+        runtimeMode: "macos",
+        effectiveUid: 501,
+        access: async () => undefined,
+        probe: async () => undefined
+      }
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      backend: "native"
+    });
+    expect(result.approvalRequired).toBeUndefined();
+    expect(processState.calls).toHaveLength(1);
+    expect(processState.calls[0]?.env?.SUNABOT_DOCKER_WORKBENCH).toBe(dockerWorkbenchRoot);
   });
 
   it("does not execute plain Bash when isolation is unavailable", async () => {
@@ -792,6 +834,24 @@ describe("tool call timeout", () => {
     const audit = async () => {
       await fs.rename(workbenchRoot, `${workbenchRoot}-old`);
       await fs.mkdir(workbenchRoot);
+      return allowedAudit();
+    };
+
+    const result = await runWorkspaceBash({ command: "pwd", timeoutMs: null }, temporaryRoot, { audit });
+
+    expect(result).toMatchObject({ ok: false, cwd: "/workbench" });
+    expect(result.stderr).toContain("BASH_WORKBENCH_CHANGED");
+    expect(JSON.stringify(result)).not.toContain(temporaryRoot);
+    expect(processState.calls).toHaveLength(0);
+  });
+
+  it("refuses execution when the addressable Docker workbench identity changes after audit", async () => {
+    temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-tool-addressable-workbench-change-"));
+    const dockerWorkbenchRoot = path.join(temporaryRoot, "docker-workbench");
+    await fs.mkdir(dockerWorkbenchRoot);
+    const audit = async () => {
+      await fs.rename(dockerWorkbenchRoot, `${dockerWorkbenchRoot}-old`);
+      await fs.mkdir(dockerWorkbenchRoot);
       return allowedAudit();
     };
 

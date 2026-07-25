@@ -14,13 +14,13 @@ import {
   type BashPathAccess
 } from "./bashAudit.js";
 import {
-  captureWorkbenchIdentity,
+  captureWorkbenchIdentities,
   prepareOutsideApprovalAccesses,
   prepareRestrictedPaths,
   verifyApprovalAccesses,
-  verifyFrozenFilesystemIdentity,
+  verifyWorkbenchIdentities,
   verifyRestrictedPaths,
-  type FrozenFilesystemIdentity,
+  type FrozenWorkbenchIdentities,
   type FrozenRestrictedPath
 } from "./bashFilesystemGuard.js";
 import { evaluateBashPolicy } from "./bashPolicy.js";
@@ -192,7 +192,7 @@ export async function runWorkspaceBash(
     audit
   );
   if (!isBashConfigurationCurrent(options.isCurrent)) return stale();
-  let workbenchIdentity: FrozenFilesystemIdentity;
+  let workbenchIdentities: FrozenWorkbenchIdentities;
   try {
     const bashEnvironment = await resolveAgentBashEnvironment(agentWorkspacePath, backend);
     workbenchRoot = bashEnvironment.workbenchRoot;
@@ -200,7 +200,7 @@ export async function runWorkspaceBash(
     readOnlyMounts = bashEnvironment.readOnlyMounts;
     resourceMounts = bashEnvironment.projectionMounts;
     if (!isBashConfigurationCurrent(options.isCurrent)) return stale();
-    workbenchIdentity = await captureWorkbenchIdentity(workbenchRoot);
+    workbenchIdentities = await captureWorkbenchIdentities(workbenchRoot, addressableWorkbenchRoot);
     if (!isBashConfigurationCurrent(options.isCurrent)) return stale();
   } catch {
     if (!isBashConfigurationCurrent(options.isCurrent)) return stale();
@@ -246,6 +246,9 @@ export async function runWorkspaceBash(
     accessMode,
     strictMode: options.strictMode !== false,
     workbenchRoot,
+    addressableWorkbenches: [{ root: backend === "native"
+      ? (process.platform === "linux" ? WORKSPACE_BASH_DOCKER_PROJECTION_ROOT : addressableWorkbenchRoot)
+      : WORKSPACE_BASH_NATIVE_PROJECTION_ROOT, writable: backend === "native" }],
     audit
   });
   if (policy.decision === "deny") {
@@ -368,7 +371,7 @@ export async function runWorkspaceBash(
 
   if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
   try {
-    await verifyFrozenFilesystemIdentity(workbenchIdentity, "directory");
+    await verifyWorkbenchIdentities(workbenchIdentities);
   } catch {
     if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
     return blockedResult(
@@ -403,7 +406,7 @@ export async function runWorkspaceBash(
     );
     if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
     try {
-      await verifyFrozenFilesystemIdentity(workbenchIdentity, "directory");
+      await verifyWorkbenchIdentities(workbenchIdentities);
     } catch {
       if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
       return blockedResult(
