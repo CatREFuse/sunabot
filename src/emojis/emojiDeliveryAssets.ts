@@ -6,9 +6,9 @@ import { writeContentAddressedEmojiPng } from "../admin/emojiFileIo.js";
 import type { AppConfig } from "../types.js";
 import {
   assertPlannedEmojiAssetsIntegrity,
-  emojiMediaLocation,
   readPlannedEmojiAssets
 } from "./emojiAssets.js";
+import { emojiMediaLocation } from "./emojiStore.js";
 
 const MAX_EMOJI_INPUT_PIXELS = 64_000_000;
 const resizeInFlight = new Map<string, Promise<ImageResult>>();

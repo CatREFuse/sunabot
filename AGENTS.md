@@ -22,6 +22,8 @@
 | `docs/migrations/wsl2-migration-plan.md` | Windows 11、Windows Server、WSL2、Docker、打包、部署、验收和回滚方案 | 迁移、打包或调整跨平台部署时读取 |
 | `docs/migrations/one-container-to-split-runtime.md` | 现有单容器服务端拉取新代码后的停服、备份、切换、验证和回滚备忘录 | 旧服务端首次升级到 NapCat 独立容器前必读 |
 | `docs/migrations/single-agent-to-multi-agent.md` | 单 Agent 工作区迁移到 Plana、primary 和多 Agent 注册结构的预检、备份、执行、验收与回滚 | 首次启用多 Agent、多 QQ 前必读 |
+| `docs/migrations/agent-workbenches.md` | Agent 双 workbench、Native 只读投影、资源迁移、验证与回滚 | 调整 Bot 文件自由度、资源投影或执行资源迁移前必读 |
+| `docs/migrations/upgrade-0.1.0-to-0.1.2.md` | 0.1.0 / 0.1.1 到 0.1.2 的双工作区迁移、恢复点、升级脚本、验收与回滚 | 现有 0.1.0 或 0.1.1 实例升级到 0.1.2 前必读 |
 | `docs/setup-napcat.md` | sunabot、NapCat、WebUI 和 OneBot 反向 WebSocket 的本机启动配置 | 部署、重启或排查 OneBot 连接时读取 |
 | `docs/security/admin-access.md` | 管理员账号密码、会话、CSRF、限流、熔断与公网代理边界 | 修改鉴权、WebUI 外网访问或紧急处置时读取 |
 | `docs/deployment/distributed-workspace.md` | Git pull、新终端、workspace 分离、主实例切换、离线备份与 Agent 配置文件夹复制边界 | 多终端开发、更新、接管 workspace 或迁移单个 Agent 时读取 |
@@ -59,12 +61,13 @@
 
 ## 持久化规则
 
-- 增长型业务数据必须写入 SQLite。
+- 增长型业务数据必须写入 SQLite；唯一例外是每个 Agent 最多 64 个 key、每个 key 最多 20 个版本的有界表情目录清单 `emojis.jsonl`，它必须与内容寻址 PNG 同目录、整文件原子替换。
 - 默认 Plana 的注册/业务主库是 `workspace/business/data/sunabot.sqlite`，会话执行队列是 `workspace/business/data/session-queue.sqlite`。
 - 其他 Agent 的业务主库与队列分别是 `workspace/business/agents/<agentId>/data/sunabot.sqlite` 和 `workspace/business/agents/<agentId>/data/session-queue.sqlite`；附件分块是缓存项内的 `chunks.sqlite`。
 - 禁止新增会话、消息、记忆、调度队列、请求日志或历史索引的 JSON/JSONL 持久化。
-- Codex JSONL 仅用于子进程协议，可以保留。
+- JSONL 只允许用于 Codex 子进程协议、人工知识资料，以及上述有界表情目录清单，不能扩展为会话、消息、记忆、调度、请求日志或历史索引的持久化引擎。
 - 配置、人格、提示词、单项 manifest 和可重建小缓存可以继续使用 JSON 或 Markdown。
+- 每个向 Bot 暴露的配置或资源目录必须有且只有一个固定管理入口；当前固定为 workbench `index.md`、Skill `index.json`、MCP `servers.json`、自拍 `references.jsonl`、表情 `emojis.jsonl`、知识库 `index.json`。新增目录时必须同时定义入口文件、更新方式、权限和损坏处理。
 - 任何 schema 变更必须向前迁移，不能依赖删除数据库重建。
 
 ## 修改边界

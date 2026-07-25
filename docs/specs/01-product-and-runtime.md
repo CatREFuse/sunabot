@@ -61,6 +61,6 @@ Provider、Codex CLI 与联网工具的出站 HTTP(S) 可独立使用代理。AP
 
 后端固定使用 Node.js 24.18.0、TypeScript 和 Fastify，管理台由 Vue 3、Vue Router 和 Vite 构建。`.node-version`、`.nvmrc`、package/lock、CI、Native release manifest、runtime contract、component lock 和 Docker 必须保持同一 Node 版本；`npm run runtime:contract` 静态拒绝入口漂移，但不比较开发机当前进程。Native Core 与 Docker Core 的构建、安装和启动都会执行实际版本检查。生产服务由 `dist/apps/api/main.js` 启动；管理 API、Web 静态资源与 OneBot WebSocket 使用彼此独立的监听边界。Docker Core 的构建阶段必须包含 API 编译直接引用的 `tooling/runtime/` 运行辅助模块；缺失编译输入时失败关闭，不能发布仅能运行旧构建产物的镜像。
 
-当前公开版本为 `0.1.0`。`package.json`、`package-lock.json`、`deploy/runtime-contract.json` 与 `packages/platform/releaseCatalog.ts` 的当前版本必须一致；`GET /api/releases` 只读返回 schema v1 的当前版本和按时间倒序排列的更新日志。每个版本固定包含版本号、发布日期、名称、摘要和分组变更项；仓库根 `CHANGELOG.md` 与 GitHub `v<version>` Release 使用同一版本内容。升级版本时必须在同一提交中同步四处版本值、版本目录、仓库更新日志和 runtime contract 验证。
+当前公开版本为 `0.1.2`。`package.json`、`package-lock.json`、`deploy/runtime-contract.json`、`packages/platform/releaseCatalog.ts`、Core Dockerfile 与 Compose 默认值的当前版本必须一致；`GET /api/releases` 只读返回 schema v1 的当前版本和按时间倒序排列的更新日志。每个版本固定包含版本号、发布日期、名称、摘要和分组变更项；仓库根 `CHANGELOG.md` 与 GitHub `v<version>` Release 使用同一版本内容。升级版本时必须在同一提交中同步全部版本值、版本目录、仓库更新日志、版本专用迁移说明和 runtime contract 验证。`0.1.0` 或 `0.1.1` 到 `0.1.2` 使用 `npm run upgrade:0.1.2 -- plan|apply`；`apply` 固定执行停服、全 Agent SQLite 恢复点、资源迁移、启动、status 和 doctor。
 
 Linux Native release 必须保留根 `sunabot.sh`、Node 版本文件、生产依赖锁、管理台构建产物、Core 构建产物、配置模板、Core/NapCat Compose、workspace 与管理员工具；解压后继续通过根入口运行。发行包、源码和 `deploy/native/` 均不包含 Native NapCat 启动脚本或 systemd unit，NapCat 生命周期始终由统一 launcher 通过独立 Docker 容器管理。

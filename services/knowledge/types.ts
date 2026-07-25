@@ -27,6 +27,10 @@ export interface KnowledgeSnapshot {
   indexedAt: string;
 }
 
+export interface KnowledgeDirectoryIndex extends KnowledgeSnapshot {
+  schemaVersion: 1;
+}
+
 export interface KnowledgeSearchInput {
   query?: string | null;
   limit?: number | null;

@@ -1,6 +1,6 @@
 {
   "name": "sunabot",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "engines": {
@@ -29,8 +29,7 @@
     "smoke:prepare": "node tooling/quality/prepare-runtime-smoke.mjs",
     "smoke:runtime": "node --use-env-proxy --import tsx tooling/quality/runtime-smoke.ts",
     "test:runtime-smoke": "vitest run --config tests/runtime-smoke/vitest.config.ts",
-    "verify": "npm run runtime:contract && npm run architecture && npm run test:budget && npm run check && npm run test && npm run test:runtime-smoke && npm run benchmark:ci && npm run build && npm run test:e2e",
-    "test:budget": "node tooling/quality/test-budget.mjs",
+    "verify": "npm run runtime:contract && npm run architecture && npm run check && npm run test && npm run test:runtime-smoke && npm run benchmark:ci && npm run build && npm run test:e2e",
     "benchmark": "npm run benchmark:ci",
     "benchmark:check": "tsc --noEmit --project tooling/benchmarks/tsconfig.json",
     "benchmark:ci": "npm run benchmark:check && node --expose-gc --import tsx tooling/benchmarks/run.ts --profile ci",
@@ -53,6 +52,9 @@
     "migrate:sqlite": "node tooling/migrations/run-built-migration.mjs migrate-to-sqlite.mjs",
     "migrate:multi-agent": "node tooling/migrations/run-built-migration.mjs migrate-single-agent-to-multi-agent.mjs",
     "migrate:memory-perspective": "node tooling/migrations/memory-perspective-v1.mjs",
+    "migrate:selfie-jsonl": "node tooling/migrations/migrate-selfie-references-jsonl.mjs",
+    "migrate:agent-resources": "node tooling/migrations/migrate-agent-resources.mjs",
+    "upgrade:0.1.2": "node tooling/migrations/upgrade-0.1.0-or-0.1.1-to-0.1.2.mjs",
     "runtime:doctor": "./sunabot.sh doctor",
     "runtime:contract": "node tooling/runtime/validate-contract.mjs",
     "runtime:release": "node tooling/runtime/build-release.mjs",

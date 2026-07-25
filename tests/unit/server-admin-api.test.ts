@@ -34,8 +34,11 @@ describe("admin API smoke", () => {
       config,
       initializeRuntime: false,
       agentRegistry: {
-        workspaceRoot: temporaryDirectory,
+        workspaceRoot: path.join(temporaryDirectory, "business", "agents"),
         allowUnmarkedMigration: true
+      },
+      agentExtensions: {
+        workspaceRoot: temporaryDirectory
       },
       ...options
     };
@@ -49,11 +52,11 @@ describe("admin API smoke", () => {
     temporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-api-test-"));
     process.env.SUNABOT_CONFIG = path.join(temporaryDirectory, "sunabot.json");
     config = defaultConfig();
-    config.persona.agentWorkspace = path.join(temporaryDirectory, "agent");
+    config.persona.agentWorkspace = path.join(temporaryDirectory, "business", "agents", "plana");
     config.persona.systemPromptWorkspace = path.join(temporaryDirectory, "system-prompts");
     await Promise.all([
-      fs.mkdir(config.persona.agentWorkspace, { recursive: true }),
-      fs.mkdir(config.persona.systemPromptWorkspace, { recursive: true })
+      fs.mkdir(config.persona.agentWorkspace, { recursive: true, mode: 0o700 }),
+      fs.mkdir(config.persona.systemPromptWorkspace, { recursive: true, mode: 0o700 })
     ]);
     for (const definition of AGENT_FILE_DEFINITIONS) {
       const workspace = definition.scope === "system"

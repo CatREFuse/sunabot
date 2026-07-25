@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { AGENT_RESOURCE_LAYOUT } from "../../packages/platform/agentResourceLayout.js";
 import {
   OpenAIProvider
 } from "../../adapters/model/openaiProvider.js";
@@ -199,7 +200,7 @@ async function loadRuntimeSelfieReferences(runtime: RuntimeHost): Promise<Runtim
   const workspace = resolveProjectPath(runtime.config.persona.agentWorkspace);
   if (!workspace) return [];
 
-  const selfieDir = path.join(workspace, "selfie");
+  const selfieDir = path.join(workspace, AGENT_RESOURCE_LAYOUT.selfie);
   let selfieDirectoryStats;
   try {
     selfieDirectoryStats = await fsp.lstat(selfieDir);

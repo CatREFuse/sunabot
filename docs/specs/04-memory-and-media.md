@@ -52,9 +52,9 @@
 
 ### 5.4 Agent 知识库
 
-每个 Agent 的资料根目录固定为自身 workspace 下的 `knowledge/`，支持任意层级目录并递归扫描 `.jsonl`、`.md`、`.markdown` 与 `.txt` 普通文件；符号链接、硬链接、特殊文件和未知扩展名不进入索引。JSONL 按每个非空物理行独立分段，Markdown 与文本按空行分隔的自然段分段，并为每段保存从 1 开始的原始行号范围。单文件最多 8 MiB、单 Agent 最多 10,000 个文件、目录深度最多 32 层；UTF-8、文件身份或读取边界异常时，该文件以稳定错误状态进入清单且不产生检索分段。
+每个 Agent 的资料根目录固定为自身 workspace 下的 `workbench/knowledge/`，支持任意层级目录并递归扫描 `.jsonl`、`.md`、`.markdown` 与 `.txt` 普通文件；符号链接、硬链接、特殊文件和未知扩展名不进入索引。JSONL 按每个非空物理行独立分段，Markdown 与文本按空行分隔的自然段分段，并为每段保存从 1 开始的原始行号范围。单文件最多 8 MiB、单 Agent 最多 10,000 个文件、目录深度最多 32 层；UTF-8、文件身份或读取边界异常时，该文件以稳定错误状态进入清单且不产生检索分段。
 
-检索索引位于 `workspace/cache/knowledge/<agentId>.sqlite`，使用 FTS5 外部内容表和 BM25 排序，并为中英文正文和相对路径生成确定性检索 token。索引只保存可从资料树重建的文件元数据与分段，不属于业务恢复点；文件大小、mtime 或 ctime 变化时增量重建，管理员可显式全量重建。`knowledge_search` 只绑定当前 Agent，返回相对路径、精确行号和最多 4,000 字符的有界正文。
+资料根目录自身固定生成 `index.json` 管理入口，包含 schemaVersion、当前文档相对路径、格式、字节数、分段数、索引状态、稳定错误码和更新时间；每次同步先完成资料扫描与 FTS 事务，再以 0600 同目录原子替换该入口，入口自身不作为知识正文进入检索。检索索引位于 `workspace/cache/knowledge/<agentId>.sqlite`，使用 FTS5 外部内容表和 BM25 排序，并为中英文正文和相对路径生成确定性检索 token。索引只保存可从资料树重建的文件元数据与分段，不属于业务恢复点；文件大小、mtime 或 ctime 变化时增量重建，管理员可显式全量重建。`knowledge_search` 只绑定当前 Agent，返回相对路径、精确行号和最多 4,000 字符的有界正文。
 
 ### 5.5 场域知识
 
@@ -101,23 +101,29 @@ Provider 请求使用文本响应格式，提示词中的 JSON 只描述首选�
 
 OneBot 入站图片的媒体数组保持原消息中的可用地址顺序，正文使用同序号的 `[内容图片#N：摘要]` 或 `[表情图片#N：摘要]`。内容图片参与事实理解和后续受控媒体句柄解析；表情图片只提供情绪、语气与交流意图线索，除非用户明确要求分析该表情本身。合并转发聊天记录中的嵌套图片使用同一分类和媒体序号规则，并随展开后的发送者与消息顺序进入会话。
 
-图像生成支持尺寸、1K/2K/4K 分辨率、质量、参考图压缩、重试和 OneBot 外发。`generate_img` 与 `selfie` 的全部生图参数及聊天参考图使用意图由模型填写；历史消息中的图片以 `message:<message-id>:image:<index>` 媒体句柄提供给模型，精确句柄优先于显式 URL 和来源回退。来源回退包含 `none`、`current`、`previous_output`、`history`、`current_and_history`；群聊中的自动历史只选择当前用户的媒体，精确句柄只能解析当前会话和当前捕获序列内的媒体。异步图片任务持久化 dispatch 时的媒体映射快照，旧任务没有快照时按原捕获序列重建。聊天中的 `generate_img` 与 `selfie` 成功结果、管理台 playground 结果都写入当前 Agent 的 SQLite 图片历史。升级到 SQLite-only 图片历史时，运行时首次初始化按 Agent 扫描受控生成 PNG 并一次性回填缺失元数据，跳过 `emoji-*`、符号链接和其他文件；之后列表请求只读取 SQLite。历史生成图的 `/generated-images/` 路径只允许生成图片根目录下的受控 PNG 文件，并在进入模型前转为规范化 Data URL；聊天回复中发送的 `emoji-<sha256>.png` 表情不写入 assistant 的生成图片 URL、图片历史或后续生图参考集合，纯表情回复也不创建 assistant 会话记录。表情媒体在内部有序内容段中标记为 `sticker`，跨 Core/NapCat 继续传输受控图片字节并映射为 OneBot `image` + `sub_type=1`；普通生成图不携带该 subtype。自拍始终使用当前 Agent 的角色参考图与 `selfie_prompt_rewrite.json`；primary Plana 在新建、缺失或空白文件及渲染回退时使用普拉娜专用改写模板，所有其他 Agent 在相同路径使用只依赖当前人格与角色参考图的通用模板。当前 Agent workspace 的 `selfie/` 是最多 9 张的带备注素材库，每张图片必须具有可编辑备注；节点先读取全部 `{id,note}` 元数据，再严格选择 1—3 张。`references.json` 与目录一致的正常路径只读取所选图片并保持节点返回顺序；缺少或不一致的旧目录先执行有界内容哈希兼容扫描，管理台读取后把确定性备注持久化为清单。聊天参考图最多额外保留 1 张，并紧接已选择的 1—3 张自拍素材追加为实际最后一项，不填充空槽位；单次生图总参考数仍不超过 4。节点空选、未知、重复或超量 ID 时不得截断、随机回退或继续生图。管理台可在图像页上传、预览、编辑备注和删除素材；列表只读取展示图和低清占位图，打开预览时才读取原图。生成文件保存在忽略的运行目录，图片历史元数据保存在主 SQLite 数据库。
+图像生成支持尺寸、1K/2K/4K 分辨率、质量、参考图压缩、重试和 OneBot 外发。`generate_img` 与 `selfie` 的全部生图参数及聊天参考图使用意图由模型填写；历史消息中的图片以 `message:<message-id>:image:<index>` 媒体句柄提供给模型，精确句柄优先于显式 URL 和来源回退。来源回退包含 `none`、`current`、`previous_output`、`history`、`current_and_history`；群聊中的自动历史只选择当前用户的媒体，精确句柄只能解析当前会话和当前捕获序列内的媒体。异步图片任务持久化 dispatch 时的媒体映射快照，旧任务没有快照时按原捕获序列重建。聊天中的 `generate_img` 与 `selfie` 成功结果、管理台 playground 结果都写入当前 Agent 的 SQLite 图片历史。升级到 SQLite-only 图片历史时，运行时首次初始化按 Agent 扫描受控生成 PNG 并一次性回填缺失元数据，跳过 `emoji-*`、符号链接和其他文件；之后列表请求只读取 SQLite。历史生成图的 `/generated-images/` 路径只允许生成图片根目录下的受控 PNG 文件，并在进入模型前转为规范化 Data URL；聊天回复中发送的 `emoji-<sha256>.png` 表情不写入 assistant 的生成图片 URL、图片历史或后续生图参考集合，纯表情回复也不创建 assistant 会话记录。表情媒体在内部有序内容段中标记为 `sticker`，跨 Core/NapCat 继续传输受控图片字节并映射为 OneBot `image` + `sub_type=1`；普通生成图不携带该 subtype。自拍始终使用当前 Agent 的角色参考图与 `selfie_prompt_rewrite.json`；primary Plana 在新建、缺失或空白文件及渲染回退时使用普拉娜专用改写模板，所有其他 Agent 在相同路径使用只依赖当前人格与角色参考图的通用模板。当前 Agent workspace 的 `workbench/selfie/` 是最多 9 张的带备注素材库，每张图片必须具有可编辑备注；节点先读取全部 `{id,note}` 元数据，再严格选择 1—3 张。`references.jsonl` 每行保存一个 schemaVersion 1 的 `{id,fileName,note}` 记录，与目录一致时只读取所选图片并保持节点返回顺序；零字节或单个结尾换行表示空图库。升级迁移先在旧 `selfie/` 完成 JSONL 转换，再把完整目录移入 Native workbench；管理台、Native Bash 与 Docker 只读投影随后寻址同一清单。聊天参考图最多额外保留 1 张，并紧接已选择的 1—3 张自拍素材追加为实际最后一项，不填充空槽位；单次生图总参考数仍不超过 4。节点空选、未知、重复或超量 ID 时不得截断、随机回退或继续生图。管理台可在图像页上传、预览、编辑备注和删除素材；列表只读取展示图和低清占位图，打开预览时才读取原图。生成文件保存在忽略的运行目录，图片历史元数据保存在主 SQLite 数据库。
 
 自拍改写的 Provider strict JSON schema 只使用目标 Provider 支持的关键字，不在数组节点提交 `uniqueItems`。既有 `selfie_prompt_rewrite.json` 通过一次性保留式迁移只移除该关键字，管理员自定义正文与其他 schema 字段保持不变；节点空选、未知、重复或超量 ID 继续由运行时解码器严格拒绝。
 
 出站媒体必须先通过生成图片根目录、直接子文件、PNG 文件名、常规文件和大小校验，再读取为 OneBot `base64://` 内联数据。Native Core 与 Docker Core 使用同一传输方式，NapCat 不读取 Core workspace，不接受共享绝对路径。超过 OneBot 内联预算的文件必须使用独立、鉴权、限流、可过期的传输协议；不能用容器路径或宿主路径作为降级。
 
-每个 Agent 的表情图库最多保留 64 个 key，内置的 11 个预设 key 只作为管理台生成入口，不代表图片已经存在。key 必须先在原始 Unicode 上拒绝 C0/C1 控制字符、方括号、斜杠、反斜杠、replacement character 和孤立代理项，再执行 trim 与 NFC；结果要求 1—24 个 Unicode code point、最多 64 UTF-8 字节。上传只接受最大 8 MiB 的 PNG、JPEG 或 WebP；一键生成在调用 Provider 前必须取得当前 Agent 至少 1 张有效自拍参考图，最多使用 3 张，零张或不可读时返回可重试结果并保持 Provider、文件与数据库零写。上传与生图结果统一旋转、裁切并规范化为 1024×1024 内容寻址 PNG，文件名固定为 `emoji-<sha256>.png`，规范化文件最多 16 MiB；SQLite `emojis` 行保存 key、文件名、来源、字节数、尺寸和时间。
+每个 Agent 的表情图库最多保留 64 个 key，内置的 11 个预设 key 只作为管理台生成入口，不代表图片已经存在。key 必须先在原始 Unicode 上拒绝 C0/C1 控制字符、方括号、斜杠、反斜杠、replacement character 和孤立代理项，再执行 trim 与 NFC；结果要求 1—24 个 Unicode code point、最多 64 UTF-8 字节。上传只接受最大 8 MiB 的 PNG、JPEG 或 WebP；一键生成在调用 Provider 前必须取得当前 Agent 至少 1 张有效自拍参考图，最多使用 3 张，零张或不可读时返回可重试结果并保持 Provider、图片与目录清单零写。上传与生图结果统一旋转、裁切并规范化为 1024×1024 内容寻址 PNG，文件名固定为 `emoji-<sha256>.png`，规范化文件最多 16 MiB。
 
-提示词 key 列表只执行 SQLite 字段、内容寻址文件名、普通非符号链接文件与记录字节数的廉价候选检查，不同步读取或哈希最多 64 张图片；未被本轮选中的损坏文件不能阻断回复。API 列表、内容读取和本轮实际命中的唯一资产使用最多并发 2、最多等待 2 的异步完整性门禁，以 `O_NOFOLLOW` 打开同一文件句柄，复验完整父目录身份、fstat、大小、PNG 结构、1024×1024 解码、流式 SHA-256 与读后身份；dev、ino、size、mtime、ctime 未变时复用有界缓存，指纹变化必须重验。无效记录在列表中隐藏，命中无效资产时在 durable outbox 前失败关闭；延迟 OneBot 投递再次核对内容寻址摘要。
+表情目录以同目录 `emojis.jsonl` 作为唯一当前元数据源，一行对应一个 key，保存 schemaVersion、key 创建/更新时间、当前内容寻址文件名和最多 20 个版本的文件名、来源、字节数、尺寸与创建时间；每个 Agent 的清单与全部引用 PNG 位于自身 `workbench/emoji/`。清单最多 2 MiB，读取使用 UTF-8 fatal decoder、严格字段、key/版本唯一性、当前版本存在性、普通单链接文件与稳定身份校验；写入使用同目录 0600 临时文件、fsync、原子替换和目录 fsync。合法的外部原子替换通过文件身份变化触发重读，损坏清单失败关闭。
 
-生成门禁按 Agent 最多并行 2 个 key，同 key 在途返回 409，容量耗尽返回 429；上传与生成的规范化门禁按 Agent 最多并行 2 个且不排队，admission 必须早于上传 Base64 解析或生成文件读取，容量耗尽返回 429。409/429 均提供明确状态，429 携带 `Retry-After`，所有 slot 在成功或异常的 finally 中释放。目录创建与最终内容寻址文件发布使用 parent-bound 操作；父目录、最终目标或 worker 绑定后发生替换时，外部路径和 SQLite 都保持零写。
+既有 SQLite `emojis` 与 `emoji_versions` 只作为一次性迁移来源：当前 Agent 首次访问表情目录且清单缺失时完整读取当前项与版本，先持久化并复读 JSONL，再清空旧 SQLite 表情行；清单已经存在时以 JSONL 为准并清理残留旧行。中断发生在 JSONL 发布前时继续使用旧行重试，发生在发布后、清理前时下次访问复用已发布清单再清理，不得把旧行覆盖回 JSONL。
+
+提示词 key 列表只执行 JSONL 字段、内容寻址文件名、普通非符号链接文件与记录字节数的廉价候选检查，不同步读取或哈希最多 64 张图片；未被本轮选中的损坏文件不能阻断回复。API 列表、内容读取和本轮实际命中的唯一资产使用最多并发 2、最多等待 2 的异步完整性门禁，以 `O_NOFOLLOW` 打开同一文件句柄，复验完整父目录身份、fstat、大小、PNG 结构、1024×1024 解码、流式 SHA-256 与读后身份；dev、ino、size、mtime、ctime 未变时复用有界缓存，指纹变化必须重验。无效记录在列表中隐藏，命中无效资产时在 durable outbox 前失败关闭；延迟 OneBot 投递再次核对内容寻址摘要。
+
+生成门禁按 Agent 最多并行 2 个 key，同 key 在途返回 409，容量耗尽返回 429；上传与生成的规范化门禁按 Agent 最多并行 2 个且不排队，admission 必须早于上传 Base64 解析或生成文件读取，容量耗尽返回 429。409/429 均提供明确状态，429 携带 `Retry-After`，所有 slot 在成功或异常的 finally 中释放。目录创建与最终内容寻址文件发布使用 parent-bound 操作；父目录、最终目标或 worker 绑定后发生替换时，外部路径和表情 JSONL 都保持零写。
 
 NapCat 上报的 QQ 文件优先通过 OneBot action 返回的受控 URL 进入 Core；统一启动器固定开启 `get_file` Base64 回退。仅返回 NapCat 容器内路径时不能由 Core 直接打开，也不能为兼容该路径而挂载业务 workspace；超过现有 action 预算的文件使用后续明确的流式协议。
 
 ### 6.3 Agent workbench 文本文件
 
 每个 Agent 的 `workbench/` 是 `read_file`、`write_file` 与 Bash 共用的私有文件边界。文件工具只处理 well-formed UTF-16、NFC 规范化的 POSIX 相对路径，路径最长 1024 UTF-8 字节，单段最长 255 字节；绝对路径、反斜杠、空段、`.`、`..`、lone surrogate、NFD、C0/C1 控制字符、符号链接、非普通文件、多个硬链接和跨 Agent 路径全部拒绝。大小写与 Unicode replacement character 不折叠或替换。读取上限为 1 MiB，并另以 262,144 个 JavaScript 字符限制模型输出；UTF-8 使用 fatal decoder，文件开头的三字节 BOM 保留为正文首字符 `U+FEFF` 并计入 `byteLength`，无 BOM 正文不变。读取使用 `O_NOFOLLOW` 的同一描述符，在读前、读后及路径复验之间核对根目录、父链、设备、inode、ctime、mtime、大小和链接数，文件在检查后增长时最多读取上限加一个字节后拒绝。
+
+自拍、表情、Skills 与知识库直接位于 Native `workbench/`，分别使用 `selfie/references.jsonl`、`emoji/emojis.jsonl`、`skills/index.json` 与 `knowledge/index.json`。Docker Bash 的独立 cwd 为 `docker-workbench/`，运行时把完整 Native workbench 只读映射到 `/workbench/native-workbench/`；两个工作区不共享可写目录。Native Bash 通过宿主绝对路径与 `SUNABOT_DOCKER_WORKBENCH` 同时寻址两个工作区，Docker Bash 通过 `SUNABOT_NATIVE_WORKBENCH` 只读寻址 Native 投影。
 
 `write_file` 不创建父目录，只能在已经存在且身份稳定的安全目录中发布完整文本。正文先拒绝 lone surrogate 并执行字符与 UTF-8 字节预算校验，不改变正文的 Unicode normalization form；随后写入同目录随机 0600 临时文件，循环写完并 fsync，再从同一描述符冻结设备、inode、ctime、mtime、大小、权限、链接数、SHA-256 与实际正文。`afterTempSynced` 和 `beforePublish` 检查点都位于最终复验之前；发布前重新以 `O_RDONLY | O_NOFOLLOW` 打开临时文件，用同一描述符有界读取并核对路径身份、完整冻结快照、摘要和正文。无覆盖创建通过硬链接发布保证目标不存在，覆盖通过同文件系统 rename 原子替换，随后再次 fsync 目录，并从目标描述符复验安全身份、摘要和正文。失败时清理自身临时路径，错误响应和请求日志只保留稳定错误码、相对路径及大小，不包含正文、宿主绝对路径或文件系统错误元数据。
 

@@ -1019,7 +1019,7 @@ function httpMcpDescriptor(
 }
 
 function skillsRoot(agentId: string) {
-  return path.join(workspace, `business/agents/${agentId}/extensions/skills`);
+  return path.join(workspace, `business/agents/${agentId}/workbench/skills`);
 }
 
 function skillIndex(agentId: string) {

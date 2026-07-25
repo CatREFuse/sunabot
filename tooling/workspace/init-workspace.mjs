@@ -6,7 +6,7 @@ import { prepareFreshInstallMarker } from "../../packages/platform/multiAgentMig
 import { resolveProjectRoot, resolveWorkspace } from "../shared/paths.mjs";
 
 const WORKSPACE_DIRECTORIES = [
-  "business/agents/plana/selfie",
+  "business/agents/plana/workbench/selfie",
   "business/config",
   "business/data",
   "business/media/images",

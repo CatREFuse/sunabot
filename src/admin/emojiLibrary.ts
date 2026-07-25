@@ -3,7 +3,6 @@ import path from "node:path";
 import sharp from "sharp";
 import { fileTypeFromBuffer } from "file-type";
 import {
-  applicationDataStore,
   type EmojiRecord,
   type EmojiVersionRecord
 } from "../../adapters/sqlite/applicationDataStore.js";
@@ -19,10 +18,10 @@ import {
   EmojiNormalizationGate
 } from "../../services/emojis/emojiOperationGate.js";
 import {
-  emojiMediaLocation,
   filterVerifiedEmojiRecords,
   readVerifiedEmojiRecordFile
 } from "../emojis/emojiAssets.js";
+import { emojiMediaLocation, emojiStore } from "../emojis/emojiStore.js";
 import { loadConfig } from "../config.js";
 import type { AppConfig, ImageResult } from "../types.js";
 import { AdminApiError, badRequest, conflict, notFound } from "./errors.js";
@@ -111,7 +110,7 @@ export class EmojiLibraryRepository {
     const key = requireEmojiKey(keyInput);
     const config = await this.getConfig();
     return this.mutex.runExclusive(async () => {
-      if (!applicationDataStore(config).deleteEmoji(key)) {
+      if (!await emojiStore(config).delete(key)) {
         notFound("EMOJI_NOT_FOUND", "表情不存在。");
       }
     });
@@ -122,7 +121,7 @@ export class EmojiLibraryRepository {
     const nextKey = requireEmojiKey(nextKeyInput);
     const config = await this.getConfig();
     return this.mutex.runExclusive(async () => {
-      const result = applicationDataStore(config).renameEmoji(key, nextKey, new Date().toISOString());
+      const result = await emojiStore(config).rename(key, nextKey, new Date().toISOString());
       if (result === "missing") notFound("EMOJI_NOT_FOUND", "表情不存在。");
       if (result === "conflict") conflict("EMOJI_KEY_CONFLICT", "该表情 key 已存在。");
       return envelope(await filterVerifiedEmojiRecords(config));
@@ -132,10 +131,10 @@ export class EmojiLibraryRepository {
   async listVersions(keyInput: unknown): Promise<EmojiVersionEnvelope> {
     const key = requireEmojiKey(keyInput);
     const config = await this.getConfig();
-    const store = applicationDataStore(config);
-    if (!store.readEmoji(key)) notFound("EMOJI_NOT_FOUND", "表情不存在。");
-    const versions = await filterVerifiedEmojiRecords(config, store.readEmojiVersions(key));
-    const currentFileName = store.readEmoji(key)?.fileName;
+    const store = emojiStore(config);
+    if (!store.read(key)) notFound("EMOJI_NOT_FOUND", "表情不存在。");
+    const versions = await filterVerifiedEmojiRecords(config, store.readVersions(key));
+    const currentFileName = store.read(key)?.fileName;
     return {
       key,
       versions: versions.map((version) => ({
@@ -150,7 +149,7 @@ export class EmojiLibraryRepository {
     const fileName = requireEmojiFileName(fileNameInput);
     const config = await this.getConfig();
     return this.mutex.runExclusive(async () => {
-      const result = applicationDataStore(config).deleteEmojiVersion(key, fileName);
+      const result = await emojiStore(config).deleteVersion(key, fileName);
       if (result === "missing") notFound("EMOJI_VERSION_NOT_FOUND", "表情版本不存在。");
       if (result === "current") conflict("EMOJI_VERSION_CURRENT", "当前版本不能删除。");
     });
@@ -163,7 +162,7 @@ export class EmojiLibraryRepository {
   ): Promise<EmojiContent> {
     const key = requireEmojiKey(keyInput);
     const config = await this.getConfig();
-    const record = applicationDataStore(config).readEmoji(key);
+    const record = emojiStore(config).read(key);
     if (!record) notFound("EMOJI_NOT_FOUND", "表情不存在。");
     if (expectedFileName !== undefined) {
       const version = String(expectedFileName);
@@ -185,7 +184,7 @@ export class EmojiLibraryRepository {
     const key = requireEmojiKey(keyInput);
     const fileName = requireEmojiFileName(fileNameInput);
     const config = await this.getConfig();
-    const record = applicationDataStore(config).readEmojiVersion(key, fileName);
+    const record = emojiStore(config).readVersion(key, fileName);
     if (!record) notFound("EMOJI_VERSION_NOT_FOUND", "表情版本不存在。");
     return this.contentFromRecord(config, record, variant);
   }
@@ -242,22 +241,22 @@ export class EmojiLibraryRepository {
     const hash = crypto.createHash("sha256").update(normalized.bytes).digest("hex");
     const fileName = `emoji-${hash}.png`;
     return this.mutex.runExclusive(async () => {
-      const store = applicationDataStore(config);
-      const existing = store.readEmoji(key);
-      if (!existing && store.readEmojis().length >= MAX_AGENT_EMOJIS) {
+      const store = emojiStore(config);
+      const existing = store.read(key);
+      if (!existing && store.readAll().length >= MAX_AGENT_EMOJIS) {
         conflict("EMOJI_LIMIT_REACHED", `表情最多保留 ${MAX_AGENT_EMOJIS} 个。`);
       }
       if (
         existing
         && existing.fileName !== fileName
-        && store.readEmojiVersions(key).length >= MAX_EMOJI_VERSIONS_PER_KEY
+        && store.readVersions(key).length >= MAX_EMOJI_VERSIONS_PER_KEY
       ) {
         conflict("EMOJI_VERSION_LIMIT_REACHED", `每个表情最多保留 ${MAX_EMOJI_VERSIONS_PER_KEY} 个版本，请先删除旧版本。`);
       }
       const location = emojiMediaLocation(config, fileName);
       await writeContentAddressedEmojiPng(location.filePath, normalized.bytes, hash, this.hooks);
       const now = new Date().toISOString();
-      store.upsertEmoji({
+      await store.upsert({
         key,
         fileName,
         source,

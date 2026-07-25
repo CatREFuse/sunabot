@@ -181,7 +181,7 @@ describe("tool call timeout", () => {
       signal: expect.any(AbortSignal)
     });
     const workbenchRoot = await fs.realpath(path.join(temporaryRoot, "workbench"));
-    const skillsRoot = await fs.realpath(path.join(temporaryRoot, "extensions/skills"));
+    const skillsRoot = await fs.realpath(path.join(temporaryRoot, "workbench/skills"));
     const mcpRoot = await fs.realpath(path.join(temporaryRoot, "extensions/mcp"));
     expect(probe).toHaveBeenCalledWith("/bin/bash", ["--noprofile", "--norc", "-lc", ":"]);
     expect(processState.calls).toHaveLength(1);

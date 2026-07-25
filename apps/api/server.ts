@@ -3,6 +3,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 import fs, { existsSync } from "node:fs";
 import http from "node:http";
 import path from "node:path";
+import fsp from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { OpenAIProvider } from "../../adapters/model/openaiProvider.js";
 import { createDockerBashSupervisor } from "../../adapters/docker/dockerBashSupervisor.js";
@@ -36,6 +37,9 @@ import {
   outboundMediaReferenceMode
 } from "../../services/delivery/outboundMedia.js";
 import { knowledgeBaseForConfig } from "../../services/knowledge/public.js";
+import { AGENT_ID_PATTERN } from "../../packages/contracts/extensions/agentExtensions.js";
+import { isEmojiFileName } from "../../services/emojis/emojiCatalog.js";
+import { emojiMediaLocation } from "../../src/emojis/emojiStore.js";
 import { configureMemoryPersistence } from "../../services/memory/persistence.js";
 import { BroadcastStormDetector } from "../../services/orchestration/public.js";
 import {
@@ -182,6 +186,7 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
   const broadcastStormDetector = new BroadcastStormDetector(config.broadcastStorm);
   const outboundMedia = options.outboundMedia ?? new OutboundMediaDelivery({
     rootDir: getWorkspacePath(WORKSPACE_LAYOUT.mediaImages),
+    workspaceRoot: getWorkspaceDir(),
     referenceMode: outboundMediaReferenceMode(),
     maxInlineBytes: outboundMediaMaxInlineBytes()
   });
@@ -482,6 +487,28 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
     getRuntime: (agentId) => agentRuntimeManager.require(agentId),
     configService,
     getRuntimeProbeFacts
+  });
+
+  app.get("/generated-images/workbench/:agentId/emoji/:fileName", async (request, reply) => {
+    const params = request.params as { agentId?: string; fileName?: string };
+    const agentId = String(params.agentId ?? "");
+    const fileName = String(params.fileName ?? "");
+    if (!AGENT_ID_PATTERN.test(agentId) || !isEmojiFileName(fileName)) {
+      return reply.status(404).send({ code: "NOT_FOUND", message: "Not found." });
+    }
+    const location = emojiMediaLocation(getRuntime(agentId).config, fileName);
+    try {
+      const stats = await fsp.lstat(location.filePath);
+      if (!stats.isFile() || stats.isSymbolicLink()) {
+        return reply.status(404).send({ code: "NOT_FOUND", message: "Not found." });
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return reply.status(404).send({ code: "NOT_FOUND", message: "Not found." });
+      }
+      throw error;
+    }
+    return reply.type("image/png").send(fs.createReadStream(location.filePath));
   });
 
   await app.register(fastifyStatic, {

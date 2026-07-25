@@ -480,6 +480,10 @@ export class ApplicationDataStore {
     return this.emojis.delete(key);
   }
 
+  clearLegacyEmojis() {
+    this.emojis.clear();
+  }
+
   appendRequestLog(record: JsonObject) {
     this.modelCalls.appendRequestLog(record);
   }

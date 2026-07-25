@@ -36,7 +36,7 @@ const FILE_MOVES = [
   [".env", "secrets/runtime.env"]
 ];
 const REQUIRED_DIRECTORIES = [
-  "business/agents/plana/selfie",
+  "business/agents/plana/workbench/selfie",
   "business/config",
   "business/data/legacy",
   "business/media/images",

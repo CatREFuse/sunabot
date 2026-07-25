@@ -106,6 +106,7 @@ export function createWorkspaceBashCapabilityProbe(
     let failureRetryMs = ttlMs;
     const result = resolveAgentBashEnvironment(workspace, backend).then(
       async (bashEnvironment) => {
+        const resourceMounts = bashEnvironment.projectionMounts;
         if (usesDockerEngine(backend, platform, runtimeMode) && options.runtime) {
           try {
             const sandbox = await ensureWorkspaceBashIsolation(
@@ -117,6 +118,7 @@ export function createWorkspaceBashCapabilityProbe(
                 platform,
                 runtimeMode,
                 readOnlyMounts: bashEnvironment.readOnlyMounts,
+                resourceMounts,
                 skipDockerProbe: true
               }
             );
@@ -124,6 +126,7 @@ export function createWorkspaceBashCapabilityProbe(
               workbenchRoot: bashEnvironment.workbenchRoot,
               image: sandbox.image ?? WORKSPACE_BASH_DOCKER_IMAGE,
               readOnlyMounts: bashEnvironment.readOnlyMounts,
+              resourceMounts,
               dockerEnvironment: sandbox.launcherEnvironment,
               effectiveUid: options.sandbox?.effectiveUid
             });
@@ -141,7 +144,8 @@ export function createWorkspaceBashCapabilityProbe(
           ...options.sandbox,
           platform,
           runtimeMode,
-          readOnlyMounts: bashEnvironment.readOnlyMounts
+          readOnlyMounts: bashEnvironment.readOnlyMounts,
+          resourceMounts
         }).then(
           () => ({ available: true }),
           () => unavailableWorkspaceBashCapability(backend)

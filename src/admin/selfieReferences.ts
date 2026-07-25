@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { AGENT_RESOURCE_LAYOUT } from "../../packages/platform/agentResourceLayout.js";
 import sharp from "sharp";
 import {
   MAX_SELFIE_REFERENCE_BYTES,
@@ -222,17 +223,19 @@ export class SelfieReferenceRepository {
       await fs.mkdir(workspacePath, { recursive: true, mode: 0o700 });
       workspaceExists = true;
     }
-    if (!workspaceExists) return { directoryPath: path.join(workspacePath, "selfie"), exists: false };
+    if (!workspaceExists) {
+      return { directoryPath: path.join(workspacePath, AGENT_RESOURCE_LAYOUT.selfie), exists: false };
+    }
 
     const workspaceStats = await fs.lstat(workspacePath);
     if (workspaceStats.isSymbolicLink() || !workspaceStats.isDirectory()) {
       badRequest("AGENT_WORKSPACE_INVALID", "Agent workspace 必须是普通目录。", "persona.agentWorkspace");
     }
     const realWorkspace = await fs.realpath(workspacePath);
-    const directoryPath = path.join(realWorkspace, "selfie");
+    const directoryPath = path.join(realWorkspace, AGENT_RESOURCE_LAYOUT.selfie);
     let directoryExists = await pathExists(directoryPath);
     if (!directoryExists && create) {
-      await fs.mkdir(directoryPath, { mode: 0o700 });
+      await ensurePrivateDirectoryChain(realWorkspace, AGENT_RESOURCE_LAYOUT.selfie);
       directoryExists = true;
     }
     if (!directoryExists) return { directoryPath, exists: false };
@@ -243,6 +246,23 @@ export class SelfieReferenceRepository {
     }
     assertInside(realWorkspace, await fs.realpath(directoryPath));
     return { directoryPath, exists: true };
+  }
+}
+
+async function ensurePrivateDirectoryChain(root: string, relativePath: string) {
+  let current = root;
+  for (const segment of relativePath.split("/")) {
+    current = path.join(current, segment);
+    try {
+      const stats = await fs.lstat(current);
+      if (stats.isSymbolicLink() || !stats.isDirectory()) {
+        badRequest("SELFIE_REFERENCE_PATH_INVALID", "自拍参考图目录必须是普通目录。");
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      await fs.mkdir(current, { mode: 0o700 });
+    }
+    assertInside(root, await fs.realpath(current));
   }
 }
 

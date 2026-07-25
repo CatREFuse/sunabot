@@ -22,7 +22,10 @@ import { migrateWorkingMemoryDocumentPrompt } from "../../services/agent/working
 import { migrateToneSegmentedReplyPrompt } from "../../services/agent/tonePromptMigration.js";
 import { migrateConversationWebFetchPrompt } from "../../services/agent/webFetchPromptMigration.js";
 import { migrateConversationBashToolsPrompt } from "../../services/agent/bashToolPromptMigration.js";
-import { migrateConversationBashWorkbenchPrompt } from "../../services/agent/bashWorkbenchPromptMigration.js";
+import {
+  migrateConversationBashWorkbenchPrompt,
+  migrateConversationConfigurationIndexPrompt
+} from "../../services/agent/bashWorkbenchPromptMigration.js";
 import { migrateConversationPromptCacheLayout } from "../../services/agent/promptCacheLayoutMigration.js";
 import {
   migrateConversationDirectorPrompt,
@@ -277,18 +280,25 @@ function runtimePromptMigrations(config: AppConfig, selfiePromptDefault: string)
       [inboundId]
     );
     const bashWorkbenchId = add(
-      "conversation-bash-workbench-v1",
+      "conversation-bash-workbench-v3",
       "system",
       file,
       () => migrateConversationBashWorkbenchPrompt(config, file),
       [bashToolsId]
+    );
+    const configurationIndexId = add(
+      "conversation-configuration-index-v3",
+      "system",
+      file,
+      () => migrateConversationConfigurationIndexPrompt(config, file),
+      [bashWorkbenchId]
     );
     const recoverableId = add(
       "recoverable-output-v1",
       "system",
       file,
       () => migrateRecoverableOutputErrorPrompt(config, file),
-      [bashWorkbenchId]
+      [configurationIndexId]
     );
     add(
       "conversation-cache-layout-v1",

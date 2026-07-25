@@ -70,7 +70,6 @@ export class AgentExtensionStore implements AgentExtensionRepository {
   private readonly mcpStore: AgentMcpServerStore;
   private readonly skillMutations: AgentSkillMutationStore;
   private readonly extensionTransactions = new AgentExtensionTransactionCoordinator();
-
   constructor(private readonly options: AgentExtensionStoreOptions) {
     this.now = options.now ?? (() => new Date());
     this.pathGuard = new AgentExtensionPathGuard(options.workspaceRoot, options);
@@ -96,7 +95,6 @@ export class AgentExtensionStore implements AgentExtensionRepository {
       fault: (step) => this.fault(step)
     });
   }
-
   async ensureLayout(agentId: string) {
     return this.runLayoutCheck(agentId, this.extensionTransactions.owns(agentId), () => this.ensureLayoutOnce(agentId));
   }
@@ -131,22 +129,25 @@ export class AgentExtensionStore implements AgentExtensionRepository {
         allowCreated: this.pathGuard.controlledPaths(paths),
         allowChanged: [paths.skills, paths.mcp]
       });
-      const extensions = path.dirname(paths.skills);
-      const extensionsExisted = this.pathGuard.isPinned(paths, extensions);
+      const workbench = path.dirname(paths.skills);
+      const extensions = path.dirname(paths.mcp);
+      const workbenchExisted = this.pathGuard.isPinned(paths, workbench);
       const skillsExisted = this.pathGuard.isPinned(paths, paths.skills);
       await this.pathGuard.guard(paths, "ensure-layout");
       await mkdirChain(paths.workspace, path.relative(paths.workspace, paths.skills));
       await this.pathGuard.refresh(paths, {
-        allowCreated: [extensions, paths.skills],
-        allowChanged: extensionsExisted && !skillsExisted ? [extensions] : [],
-        allowAgentChange: !extensionsExisted
+        allowCreated: [workbench, paths.skills],
+        allowChanged: workbenchExisted && !skillsExisted ? [workbench] : [],
+        allowAgentChange: !workbenchExisted
       });
+      const extensionsExisted = this.pathGuard.isPinned(paths, extensions);
       const mcpExisted = this.pathGuard.isPinned(paths, paths.mcp);
       await this.pathGuard.guard(paths, "ensure-layout");
       await mkdirChain(paths.workspace, path.relative(paths.workspace, paths.mcp));
       await this.pathGuard.refresh(paths, {
-        allowCreated: [paths.mcp],
-        allowChanged: mcpExisted ? [] : [extensions]
+        allowCreated: [extensions, paths.mcp],
+        allowChanged: mcpExisted ? [] : [extensions],
+        allowAgentChange: !extensionsExisted
       });
       await this.pathGuard.guard(paths, "ensure-layout-config");
       await writeJsonIfMissing(

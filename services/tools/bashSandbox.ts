@@ -15,6 +15,8 @@ export const WORKSPACE_BASH_RESOURCE_LIMITER = "/usr/bin/prlimit";
 export const WORKSPACE_BASH_DOCKER_IMAGE = "sunabot-bash:local";
 export const WORKSPACE_BASH_NATIVE_HOST_EXECUTABLE = "/bin/bash";
 export const WORKSPACE_BASH_VIRTUAL_ROOT = "/workbench";
+export const WORKSPACE_BASH_NATIVE_PROJECTION_ROOT = "/workbench/native-workbench";
+export const WORKSPACE_BASH_DOCKER_PROJECTION_ROOT = "/docker-workbench";
 export const WORKSPACE_BASH_SKILLS_ROOT = "/skills";
 export const WORKSPACE_BASH_MCP_ROOT = "/mcp";
 const WORKSPACE_BASH_DOCKER_ENV_EXECUTABLE = "/usr/bin/env";
@@ -33,7 +35,8 @@ const WORKSPACE_BASH_TARGET_ENVIRONMENT = [
   "SHELL=/bin/bash",
   "USER=sunabot",
   `SUNABOT_SKILLS=${WORKSPACE_BASH_SKILLS_ROOT}`,
-  `SUNABOT_MCP_CONFIG=${WORKSPACE_BASH_MCP_ROOT}`
+  `SUNABOT_MCP_CONFIG=${WORKSPACE_BASH_MCP_ROOT}`,
+  `SUNABOT_NATIVE_WORKBENCH=${WORKSPACE_BASH_NATIVE_PROJECTION_ROOT}`
 ] as const;
 const WORKSPACE_BASH_PROXY_VARIABLES = [
   "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "FTP_PROXY", "NO_PROXY",
@@ -78,12 +81,35 @@ export interface WorkspaceBashSandboxOptions {
   access?: (filePath: string, mode: number) => Promise<void>;
   probe?: (file: string, args: string[], options?: { env?: Record<string, string> }) => Promise<void>;
   readOnlyMounts?: WorkspaceBashReadOnlyMounts;
+  resourceMounts?: WorkspaceBashResourceMounts;
   skipDockerProbe?: boolean;
 }
 
 export interface WorkspaceBashReadOnlyMounts {
   skills: string;
   mcp: string;
+}
+
+export interface WorkspaceBashResourceMounts {
+  nativeWorkbench?: string;
+  dockerWorkbench?: string;
+}
+
+export function buildWorkspaceBashEnvironment(): Record<string, string> {
+  return {
+    PATH: WORKSPACE_BASH_TARGET_PATH,
+    HOME: WORKSPACE_BASH_VIRTUAL_ROOT,
+    PWD: WORKSPACE_BASH_VIRTUAL_ROOT,
+    TMPDIR: "/tmp/",
+    TMP: "/tmp",
+    TEMP: "/tmp",
+    LANG: process.env.LANG || "C.UTF-8",
+    LC_ALL: process.env.LC_ALL || "",
+    SHELL: "/bin/bash",
+    USER: "sunabot",
+    SUNABOT_SKILLS: WORKSPACE_BASH_SKILLS_ROOT,
+    SUNABOT_MCP_CONFIG: WORKSPACE_BASH_MCP_ROOT
+  };
 }
 
 export class WorkspaceBashIsolationError extends Error {
@@ -104,6 +130,7 @@ export async function ensureWorkspaceBashIsolation(
   const platform = options.platform ?? process.platform;
   const runtimeMode = options.runtimeMode ?? process.env.SUNABOT_RUNTIME_MODE ?? "native";
   validateReadOnlyMounts(options.readOnlyMounts, workbenchRoot);
+  validateResourceMounts(options.resourceMounts, workbenchRoot);
   if (backend === "docker" && runtimeMode !== "docker" && platform !== "linux") {
     return ensureDockerSandbox(options);
   }
@@ -124,7 +151,8 @@ export function buildWorkspaceBashInvocation(
   environment: Readonly<Record<string, string>>,
   sandbox: WorkspaceBashSandbox,
   approvedOutsideAccesses: BashPathAccess[] = [],
-  readOnlyMounts?: WorkspaceBashReadOnlyMounts
+  readOnlyMounts?: WorkspaceBashReadOnlyMounts,
+  resourceMounts?: WorkspaceBashResourceMounts
 ): WorkspaceBashInvocation {
   if (sandbox.kind === "host") {
     return buildHostNativeInvocation(
@@ -144,7 +172,8 @@ export function buildWorkspaceBashInvocation(
       sandbox.image ?? WORKSPACE_BASH_DOCKER_IMAGE,
       undefined,
       sandbox.launcherEnvironment,
-      readOnlyMounts
+      readOnlyMounts,
+      resourceMounts
     );
   }
   if (!sandbox.resourceLimiter) {
@@ -157,7 +186,8 @@ export function buildWorkspaceBashInvocation(
     sandbox.executable,
     approvedOutsideAccesses,
     sandbox.resourceLimiter,
-    readOnlyMounts
+    readOnlyMounts,
+    resourceMounts
   );
 }
 
@@ -208,7 +238,8 @@ export function buildBubblewrapInvocation(
   executable = WORKSPACE_BASH_SANDBOX_EXECUTABLE,
   approvedOutsideAccesses: BashPathAccess[] = [],
   resourceLimiter = WORKSPACE_BASH_RESOURCE_LIMITER,
-  readOnlyMounts?: WorkspaceBashReadOnlyMounts
+  readOnlyMounts?: WorkspaceBashReadOnlyMounts,
+  resourceMounts?: WorkspaceBashResourceMounts
 ): WorkspaceBashInvocation {
   const args = [
     executable,
@@ -247,6 +278,7 @@ export function buildBubblewrapInvocation(
   }
   args.push("--bind", workbenchRoot, WORKSPACE_BASH_VIRTUAL_ROOT);
   addReadOnlySharedBinds(args, readOnlyMounts);
+  addBubblewrapResourceBinds(args, resourceMounts);
   for (const access of approvedOutsideAccesses) {
     if (access.access !== "read") {
       throw new WorkspaceBashIsolationError("Approved outside binds are read-only.");
@@ -279,13 +311,15 @@ export function buildDockerInvocation(
   image = WORKSPACE_BASH_DOCKER_IMAGE,
   containerName = createBashContainerName(),
   launcherEnvironment = buildDockerCliEnvironment(),
-  readOnlyMounts?: WorkspaceBashReadOnlyMounts
+  readOnlyMounts?: WorkspaceBashReadOnlyMounts,
+  resourceMounts?: WorkspaceBashResourceMounts
 ): WorkspaceBashInvocation {
   if (!path.isAbsolute(workbenchRoot) || /[\u0000\r\n,]/.test(workbenchRoot)) {
     throw new WorkspaceBashIsolationError("Docker Bash workbench mount source is invalid.");
   }
   validateDockerImage(image);
   validateReadOnlyMounts(readOnlyMounts, workbenchRoot);
+  validateResourceMounts(resourceMounts, workbenchRoot);
   if (!/^sunabot-bash-[a-f0-9]{32}$/.test(containerName)) {
     throw new WorkspaceBashIsolationError("Docker Bash container name is invalid.");
   }
@@ -310,6 +344,7 @@ export function buildDockerInvocation(
       "--mount", `type=bind,src=${readOnlyMounts.skills},dst=${WORKSPACE_BASH_SKILLS_ROOT},readonly`,
       "--mount", `type=bind,src=${readOnlyMounts.mcp},dst=${WORKSPACE_BASH_MCP_ROOT},readonly`
     ] : []),
+    ...dockerResourceMountArguments(resourceMounts),
     "--workdir", "/workbench"
   ];
   addClearedDockerProxyEnvironment(args);
@@ -367,7 +402,8 @@ async function ensureBubblewrapSandbox(
     executable,
     [],
     resourceLimiter,
-    options.readOnlyMounts
+    options.readOnlyMounts,
+    options.resourceMounts
   );
   await executeSandboxProbe(probe.file, probe.args, options, "bubblewrap resource and kernel isolation probe failed");
   return { kind: "bubblewrap", executable, resourceLimiter } as const;
@@ -406,6 +442,7 @@ async function ensureDockerSandbox(options: WorkspaceBashSandboxOptions) {
   const launcherEnvironment = buildDockerCliEnvironment(options.dockerEnvironment ?? process.env);
   validateDockerImage(image);
   validateReadOnlyMounts(options.readOnlyMounts);
+  validateResourceMounts(options.resourceMounts);
   try {
     if (path.isAbsolute(executable)) await (options.access ?? fs.access)(executable, fsConstants.X_OK);
     if (options.skipDockerProbe) {
@@ -422,7 +459,8 @@ async function ensureDockerSandbox(options: WorkspaceBashSandboxOptions) {
       ...(options.readOnlyMounts ? [
         "--mount", `type=bind,src=${options.readOnlyMounts.skills},dst=${WORKSPACE_BASH_SKILLS_ROOT},readonly`,
         "--mount", `type=bind,src=${options.readOnlyMounts.mcp},dst=${WORKSPACE_BASH_MCP_ROOT},readonly`
-      ] : [])
+      ] : []),
+      ...dockerResourceMountArguments(options.resourceMounts)
     ];
     addClearedDockerProxyEnvironment(args);
     args.push(
@@ -581,18 +619,57 @@ function addReadOnlySharedBinds(args: string[], mounts: WorkspaceBashReadOnlyMou
   );
 }
 
+function addBubblewrapResourceBinds(args: string[], mounts: WorkspaceBashResourceMounts | undefined) {
+  if (!mounts) return;
+  validateResourceMounts(mounts);
+  if (mounts.nativeWorkbench) {
+    args.push("--ro-bind", mounts.nativeWorkbench, WORKSPACE_BASH_NATIVE_PROJECTION_ROOT);
+  }
+  if (mounts.dockerWorkbench) {
+    args.push("--dir", WORKSPACE_BASH_DOCKER_PROJECTION_ROOT);
+    args.push("--bind", mounts.dockerWorkbench, WORKSPACE_BASH_DOCKER_PROJECTION_ROOT);
+  }
+}
+
+function dockerResourceMountArguments(mounts: WorkspaceBashResourceMounts | undefined) {
+  if (!mounts) return [];
+  validateResourceMounts(mounts);
+  return mounts.nativeWorkbench
+    ? ["--mount", `type=bind,src=${mounts.nativeWorkbench},dst=${WORKSPACE_BASH_NATIVE_PROJECTION_ROOT},readonly`]
+    : [];
+}
+
 function validateReadOnlyMounts(mounts: WorkspaceBashReadOnlyMounts | undefined, workbenchRoot?: string) {
   if (!mounts) return;
   for (const source of [mounts.skills, mounts.mcp]) {
     if (!path.isAbsolute(source) || /[\u0000\r\n,]/.test(source)) {
       throw new WorkspaceBashIsolationError("Bash shared configuration mount source is invalid.");
     }
-    if (workbenchRoot && (isWithin(source, workbenchRoot) || isWithin(workbenchRoot, source))) {
+    if (workbenchRoot && isWithin(source, workbenchRoot) && path.resolve(source) !== path.resolve(mounts.skills)) {
       throw new WorkspaceBashIsolationError("Bash shared configuration mounts must not overlap the workbench.");
     }
   }
   if (path.resolve(mounts.skills) === path.resolve(mounts.mcp)) {
     throw new WorkspaceBashIsolationError("Bash Skill and MCP mounts must be distinct.");
+  }
+}
+
+function validateResourceMounts(mounts: WorkspaceBashResourceMounts | undefined, workbenchRoot?: string) {
+  if (!mounts) return;
+  if (!mounts.nativeWorkbench && !mounts.dockerWorkbench) {
+    throw new WorkspaceBashIsolationError("Bash workbench projection source is missing.");
+  }
+  for (const source of [mounts.nativeWorkbench, mounts.dockerWorkbench]) {
+    if (!source) continue;
+    if (!path.isAbsolute(source) || /[\u0000\r\n,]/.test(source)) {
+      throw new WorkspaceBashIsolationError("Bash workbench projection source is invalid.");
+    }
+    if (workbenchRoot && (
+      isWithin(source, workbenchRoot)
+      || isWithin(workbenchRoot, source)
+    )) {
+      throw new WorkspaceBashIsolationError("Native and Docker workbenches must not overlap.");
+    }
   }
 }
 

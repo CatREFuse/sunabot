@@ -441,7 +441,7 @@ function extensionsRoot() {
 }
 
 function skillsRoot() {
-  return path.join(extensionsRoot(), "skills");
+  return path.join(workspace, "business/agents/agent-b/workbench/skills");
 }
 
 function skillIndex() {

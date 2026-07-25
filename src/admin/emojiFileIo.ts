@@ -11,7 +11,6 @@ import {
   type ParentBoundPathIdentity
 } from "../../adapters/filesystem/parentBoundFs.js";
 import { WORKSPACE_LAYOUT } from "../../packages/platform/workspaceLayout.js";
-import { emojiMediaLocation } from "../emojis/emojiAssets.js";
 import { getWorkspacePath } from "../config.js";
 import type { AppConfig, ImageResult } from "../types.js";
 import { AdminApiError } from "./errors.js";
@@ -66,10 +65,10 @@ export async function readGeneratedEmojiImage(
   if (!filePath || path.extname(filePath).toLowerCase() !== ".png") {
     throw generationUnavailable();
   }
-  const expectedDirectory = path.dirname(emojiMediaLocation(
-    config,
-    `emoji-${"0".repeat(64)}.png`
-  ).filePath);
+  const agentId = config.persona.defaultAgentId.trim() || "plana";
+  const expectedDirectory = agentId === "plana"
+    ? getWorkspacePath(WORKSPACE_LAYOUT.mediaImages)
+    : getWorkspacePath(WORKSPACE_LAYOUT.mediaImages, "agents", agentId);
   if (path.dirname(filePath) !== expectedDirectory) {
     throw new AdminApiError(502, "EMOJI_GENERATION_UNAVAILABLE", "生图结果不属于当前 Agent。");
   }
@@ -141,8 +140,8 @@ export async function writeContentAddressedEmojiPng(
     throw emojiImageConflict();
   }
   const workspaceRoot = path.resolve(getWorkspacePath());
-  const root = path.resolve(getWorkspacePath(WORKSPACE_LAYOUT.mediaImages));
   const directory = path.dirname(filePath);
+  const root = directory;
   const relativeDirectory = path.relative(root, directory);
   if (relativeDirectory.startsWith(`..${path.sep}`) || relativeDirectory === ".." || path.isAbsolute(relativeDirectory)) {
     throw emojiPathInvalid();

@@ -8,6 +8,7 @@ export {
 export { knowledgeFtsQuery, tokenizeKnowledgeText } from "./tokenizer.js";
 export type {
   KnowledgeChunk,
+  KnowledgeDirectoryIndex,
   KnowledgeDocument,
   KnowledgeDocumentFormat,
   KnowledgeSearchInput,

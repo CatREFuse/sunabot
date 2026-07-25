@@ -28,7 +28,10 @@ describe("workspace initialization", () => {
     const result = await initializeWorkspace({ root, workspace });
 
     expect(result.workspace).toBe(workspace);
-    await expect(fs.access(path.join(workspace, "business/agents/plana/selfie"))).resolves.toBeUndefined();
+    await expect(fs.access(path.join(
+      workspace,
+      "business/agents/plana/workbench/selfie"
+    ))).resolves.toBeUndefined();
     await expect(fs.access(path.join(workspace, "runtime/napcat/accounts"))).resolves.toBeUndefined();
     await expect(fs.access(path.join(workspace, "runtime/napcat/config-full"))).rejects.toMatchObject({ code: "ENOENT" });
     const marker = JSON.parse(await fs.readFile(path.join(workspace, MULTI_AGENT_MIGRATION_MARKER), "utf8"));

@@ -47,6 +47,15 @@ git pull --ff-only
 
 存在数据库或 workspace 前向迁移时，按发布文档先停服、备份和校验，再执行迁移。发现旧 `sunabot-qq-runtime` 容器时，改用 `docs/migrations/one-container-to-split-runtime.md`，不能直接启动新运行时。
 
+从 `0.1.0` 或 `0.1.1` 升级到 `0.1.2` 使用版本专用命令：
+
+```bash
+npm run upgrade:0.1.2 -- plan
+npm run upgrade:0.1.2 -- apply
+```
+
+完整前置条件、恢复点、验收和回滚步骤见 `docs/migrations/upgrade-0.1.0-to-0.1.2.md`。
+
 ## 终端角色
 
 - 主业务终端：唯一运行生产 Core、NapCat、SQLite 和定时任务的实例。

@@ -5,7 +5,8 @@ import path from "node:path";
 export const MAX_SELFIE_STORED_REFERENCE_IMAGES = 9;
 export const MAX_SELFIE_REFERENCE_BYTES = 8 * 1024 * 1024;
 export const MAX_SELFIE_REFERENCE_NOTE_LENGTH = 120;
-export const SELFIE_REFERENCE_MANIFEST_FILE = "references.json";
+export const SELFIE_REFERENCE_MANIFEST_FILE = "references.jsonl";
+export const LEGACY_SELFIE_REFERENCE_MANIFEST_FILE = "references.json";
 
 const MAX_MANIFEST_BYTES = 64 * 1024;
 const REFERENCE_ID_PATTERN = /^[a-f0-9]{64}$/;
@@ -32,6 +33,11 @@ export interface SelfieReferenceManifest {
 export interface ReadSelfieReferenceFile {
   bytes: Buffer;
   stats: Stats;
+}
+
+interface LoadedManifestFile {
+  manifest?: SelfieReferenceManifest;
+  source: "none" | "jsonl" | "legacy" | "both";
 }
 
 export class SelfieReferenceCatalogError extends Error {
@@ -71,8 +77,8 @@ export async function loadSelfieReferenceCatalog(
     identityIds.add(identity.id);
   }
 
-  const manifest = await readManifest(directoryPath);
-  const manifestById = new Map(manifest?.references.map((entry) => [entry.id, entry]));
+  const loadedManifest = await readManifest(directoryPath);
+  const manifestById = new Map(loadedManifest.manifest?.references.map((entry) => [entry.id, entry]));
   const references = normalizedIdentities.map((identity, index) => {
     const stored = manifestById.get(identity.id);
     return {
@@ -83,12 +89,13 @@ export async function loadSelfieReferenceCatalog(
   const canonical: SelfieReferenceManifest = { schemaVersion: 1, references };
   return {
     references,
-    needsWrite: !manifest || JSON.stringify(manifest) !== JSON.stringify(canonical)
+    needsWrite: loadedManifest.source !== "jsonl"
+      || JSON.stringify(loadedManifest.manifest) !== JSON.stringify(canonical)
   };
 }
 
-export function readSelfieReferenceManifest(directoryPath: string) {
-  return readManifest(directoryPath);
+export async function readSelfieReferenceManifest(directoryPath: string) {
+  return (await readManifest(directoryPath)).manifest;
 }
 
 export async function readSelfieReferenceImageFile(filePath: string): Promise<ReadSelfieReferenceFile> {
@@ -127,15 +134,20 @@ export async function writeSelfieReferenceCatalog(
   }
 
   const manifestPath = path.join(directoryPath, SELFIE_REFERENCE_MANIFEST_FILE);
+  const legacyManifestPath = path.join(directoryPath, LEGACY_SELFIE_REFERENCE_MANIFEST_FILE);
   await assertManifestTarget(manifestPath, true);
+  await assertManifestTarget(legacyManifestPath, true);
   const temporaryPath = path.join(
     directoryPath,
     `.${SELFIE_REFERENCE_MANIFEST_FILE}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`
   );
-  const content = `${JSON.stringify({ schemaVersion: 1, references: normalized }, null, 2)}\n`;
+  const content = normalized.length
+    ? `${normalized.map((entry) => JSON.stringify({ schemaVersion: 1, ...entry })).join("\n")}\n`
+    : "";
   try {
     await fs.writeFile(temporaryPath, content, { encoding: "utf8", flag: "wx", mode: 0o600 });
     await fs.rename(temporaryPath, manifestPath);
+    await fs.rm(legacyManifestPath, { force: true }).catch(() => undefined);
   } catch (error) {
     await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
     throw error;
@@ -157,19 +169,83 @@ export function deriveLegacySelfieReferenceNote(fileName: string, index: number)
   }
 }
 
-async function readManifest(directoryPath: string): Promise<SelfieReferenceManifest | undefined> {
+async function readManifest(directoryPath: string): Promise<LoadedManifestFile> {
   const manifestPath = path.join(directoryPath, SELFIE_REFERENCE_MANIFEST_FILE);
-  const file = await readRegularFileNoFollow(manifestPath, MAX_MANIFEST_BYTES, {
+  const legacyManifestPath = path.join(directoryPath, LEGACY_SELFIE_REFERENCE_MANIFEST_FILE);
+  const readOptions = {
     allowMissing: true,
     invalidCode: "SELFIE_REFERENCE_MANIFEST_INVALID",
     invalidMessage: "自拍参考图备注文件无效。",
     tooLargeCode: "SELFIE_REFERENCE_MANIFEST_INVALID",
     tooLargeMessage: "自拍参考图备注文件过大。"
+  } as const;
+  const file = await readRegularFileNoFollow(manifestPath, MAX_MANIFEST_BYTES, readOptions);
+  const legacyVisible = file ? await assertManifestTarget(legacyManifestPath, true) : undefined;
+  const legacyFile = !file || legacyVisible
+    ? await readRegularFileNoFollow(legacyManifestPath, MAX_MANIFEST_BYTES, {
+      allowMissing: true,
+      invalidCode: "SELFIE_REFERENCE_MANIFEST_INVALID",
+      invalidMessage: "自拍参考图备注文件无效。",
+      tooLargeCode: "SELFIE_REFERENCE_MANIFEST_INVALID",
+      tooLargeMessage: "自拍参考图备注文件过大。"
+    })
+    : undefined;
+  const manifest = file ? parseJsonlManifest(file.bytes) : undefined;
+  const legacyManifest = legacyFile ? parseLegacyManifest(legacyFile.bytes) : undefined;
+  if (
+    manifest
+    && legacyManifest
+    && JSON.stringify(manifest) !== JSON.stringify(legacyManifest)
+  ) {
+    throw new SelfieReferenceCatalogError(
+      "SELFIE_REFERENCE_MANIFEST_CONFLICT",
+      "自拍参考图的新旧清单内容冲突。"
+    );
+  }
+  return {
+    manifest: manifest ?? legacyManifest,
+    source: manifest && legacyManifest
+      ? "both"
+      : manifest
+        ? "jsonl"
+        : legacyManifest
+          ? "legacy"
+          : "none"
+  };
+}
+
+function parseJsonlManifest(bytes: Buffer): SelfieReferenceManifest {
+  let content: string;
+  try {
+    content = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw new SelfieReferenceCatalogError("SELFIE_REFERENCE_MANIFEST_INVALID", "自拍参考图备注文件无效。");
+  }
+  if (!content || content === "\n") return { schemaVersion: 1, references: [] };
+  const lines = content.endsWith("\n") ? content.slice(0, -1).split("\n") : content.split("\n");
+  if (lines.some((line) => !line)) {
+    throw new SelfieReferenceCatalogError("SELFIE_REFERENCE_MANIFEST_INVALID", "自拍参考图备注文件无效。");
+  }
+  const references = lines.map((line) => {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      throw new SelfieReferenceCatalogError("SELFIE_REFERENCE_MANIFEST_INVALID", "自拍参考图备注文件无效。");
+    }
+    const entry = exactRecord(parsed, ["schemaVersion", "id", "fileName", "note"]);
+    if (entry.schemaVersion !== 1) {
+      throw new SelfieReferenceCatalogError("SELFIE_REFERENCE_MANIFEST_INVALID", "自拍参考图备注文件无效。");
+    }
+    return parseManifestEntry(entry);
   });
-  if (!file) return undefined;
+  return validateManifestReferences(references);
+}
+
+function parseLegacyManifest(bytes: Buffer): SelfieReferenceManifest {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(file.bytes));
+    parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
   } catch {
     throw new SelfieReferenceCatalogError("SELFIE_REFERENCE_MANIFEST_INVALID", "自拍参考图备注文件无效。");
   }
@@ -178,20 +254,35 @@ async function readManifest(directoryPath: string): Promise<SelfieReferenceManif
 
 function parseManifest(value: unknown): SelfieReferenceManifest {
   const root = exactRecord(value, ["schemaVersion", "references"]);
-  if (root.schemaVersion !== 1 || !Array.isArray(root.references) || root.references.length > MAX_SELFIE_STORED_REFERENCE_IMAGES) {
+  if (
+    root.schemaVersion !== 1
+    || !Array.isArray(root.references)
+    || root.references.length > MAX_SELFIE_STORED_REFERENCE_IMAGES
+  ) {
     throw new SelfieReferenceCatalogError("SELFIE_REFERENCE_MANIFEST_INVALID", "自拍参考图备注文件无效。");
   }
-  const references = root.references.map((item) => {
-    const entry = exactRecord(item, ["id", "fileName", "note"]);
-    try {
-      return {
-        ...normalizeIdentity(entry),
-        note: requireSelfieReferenceNote(entry.note)
-      };
-    } catch {
-      throw new SelfieReferenceCatalogError("SELFIE_REFERENCE_MANIFEST_INVALID", "自拍参考图备注文件无效。");
-    }
-  });
+  return validateManifestReferences(root.references.map((item) => (
+    parseManifestEntry(exactRecord(item, ["id", "fileName", "note"]))
+  )));
+}
+
+function parseManifestEntry(entry: Record<string, unknown>): SelfieReferenceCatalogEntry {
+  try {
+    return {
+      ...normalizeIdentity(entry),
+      note: requireSelfieReferenceNote(entry.note)
+    };
+  } catch {
+    throw new SelfieReferenceCatalogError("SELFIE_REFERENCE_MANIFEST_INVALID", "自拍参考图备注文件无效。");
+  }
+}
+
+function validateManifestReferences(
+  references: SelfieReferenceCatalogEntry[]
+): SelfieReferenceManifest {
+  if (references.length > MAX_SELFIE_STORED_REFERENCE_IMAGES) {
+    throw new SelfieReferenceCatalogError("SELFIE_REFERENCE_MANIFEST_INVALID", "自拍参考图备注文件无效。");
+  }
   const ids = new Set<string>();
   for (const entry of references) {
     if (ids.has(entry.id)) {

@@ -1,16 +1,25 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  AGENT_RESOURCE_LAYOUT,
+  agentResourcePath
+} from "../../packages/platform/agentResourceLayout.js";
 
-export const AGENT_WORKBENCH_DIRECTORY = "workbench";
-export const AGENT_DOCKER_WORKBENCH_DIRECTORY = "docker-workbench";
-export const AGENT_SKILLS_DIRECTORY = "extensions/skills";
-export const AGENT_MCP_DIRECTORY = "extensions/mcp";
+export const AGENT_WORKBENCH_DIRECTORY = AGENT_RESOURCE_LAYOUT.workbench;
+export const AGENT_DOCKER_WORKBENCH_DIRECTORY = AGENT_RESOURCE_LAYOUT.dockerWorkbench;
+export const AGENT_SKILLS_DIRECTORY = AGENT_RESOURCE_LAYOUT.skills;
+export const AGENT_MCP_DIRECTORY = AGENT_RESOURCE_LAYOUT.mcp;
 
 export interface AgentBashEnvironment {
   workbenchRoot: string;
+  addressableWorkbenchRoot: string;
   readOnlyMounts: {
     skills: string;
     mcp: string;
+  };
+  projectionMounts: {
+    nativeWorkbench?: string;
+    dockerWorkbench?: string;
   };
 }
 
@@ -25,18 +34,30 @@ export async function resolveAgentBashEnvironment(
   backend: "native" | "docker"
 ): Promise<AgentBashEnvironment> {
   const workspaceRoot = await resolveWorkspaceRoot(path.resolve(agentWorkspace));
-  const [workbenchRoot, skills, mcp] = await Promise.all([
+  if (backend === "docker") {
+    await resolveRegularDirectory(workspaceRoot, AGENT_RESOURCE_LAYOUT.dockerWorkbenchProjection);
+  }
+  const [nativeWorkbench, dockerWorkbench, skills, mcp] = await Promise.all([
+    resolveRegularDirectory(workspaceRoot, AGENT_WORKBENCH_DIRECTORY),
+    resolveRegularDirectory(workspaceRoot, AGENT_DOCKER_WORKBENCH_DIRECTORY),
     resolveRegularDirectory(
       workspaceRoot,
-      backend === "native" ? AGENT_WORKBENCH_DIRECTORY : AGENT_DOCKER_WORKBENCH_DIRECTORY
+      AGENT_SKILLS_DIRECTORY
     ),
-    resolveRegularDirectory(workspaceRoot, AGENT_SKILLS_DIRECTORY),
     resolveRegularDirectory(workspaceRoot, AGENT_MCP_DIRECTORY)
   ]);
   return {
-    workbenchRoot,
-    readOnlyMounts: { skills, mcp }
+    workbenchRoot: backend === "native" ? nativeWorkbench : dockerWorkbench,
+    addressableWorkbenchRoot: backend === "native" ? dockerWorkbench : nativeWorkbench,
+    readOnlyMounts: { skills, mcp },
+    projectionMounts: backend === "docker"
+      ? { nativeWorkbench }
+      : { dockerWorkbench }
   };
+}
+
+export function resolveAgentResourceDirectory(agentWorkspace: string, kind: "selfie" | "emoji" | "skills" | "knowledge") {
+  return agentResourcePath(path.resolve(agentWorkspace), kind);
 }
 
 export async function resolveAgentWorkbenchFile(agentWorkspace: string, relativePath: string) {

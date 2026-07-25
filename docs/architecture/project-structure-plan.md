@@ -149,6 +149,10 @@ workspace/
 
 Plana 保留 `business/data/` 的历史稳定路径，同时承担 Agent 和 QQ 账号注册主库。其他 Agent 的业务数据只写入自己的 `data/` 双库。
 
+### 5.1 双工作区与资源入口
+
+Bot 可正式取用的自拍、表情、Skill 和知识资料直接位于当前 Agent 的 Native `workbench/`，并分别使用 `selfie/references.jsonl`、`emoji/emojis.jsonl`、`skills/index.json` 与 `knowledge/index.json` 作为唯一权威入口。`docker-workbench/` 是 Docker Bash 的独立可写 cwd；运行时通过隔离挂载把完整 Native workbench 只读投影到容器 `/workbench/native-workbench`，不能依赖容器不可达的宿主符号链接。Native Bash 通过 `SUNABOT_DOCKER_WORKBENCH` 寻址 Docker workbench。迁移、验证和恢复步骤见 `docs/migrations/agent-workbenches.md`。
+
 ## 6. 统一运行模型
 
 `deploy/runtime-contract.json` 定义 Node 版本、端口、服务模板、组件锁、健康检查、隔离能力和资源上限。它对 NapCat 声明的 `6099` 是起始 WebUI 端口，实际账号端口以 `agent_accounts.webui_port` 为准。

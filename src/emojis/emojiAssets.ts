@@ -4,10 +4,8 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";
 import {
-  applicationDataStore,
   type EmojiRecord
 } from "../../adapters/sqlite/applicationDataStore.js";
-import { WORKSPACE_LAYOUT } from "../../packages/platform/workspaceLayout.js";
 import {
   isEmojiFileName,
   isValidEmojiKey,
@@ -17,6 +15,9 @@ import {
 } from "../../services/emojis/emojiCatalog.js";
 import { getWorkspacePath } from "../config.js";
 import type { AppConfig } from "../types.js";
+import { emojiMediaLocation, emojiStore } from "./emojiStore.js";
+
+export { emojiMediaLocation };
 
 const NORMALIZED_EMOJI_SIZE = 1024;
 const MAX_STORED_EMOJI_BYTES = 16 * 1024 * 1024;
@@ -93,19 +94,8 @@ export class EmojiAssetIntegrityGate {
 
 const integrityGate = new EmojiAssetIntegrityGate();
 
-export function emojiMediaLocation(config: Pick<AppConfig, "persona">, fileName: string) {
-  if (!isEmojiFileName(fileName)) throw new Error("Emoji image file name is invalid.");
-  const agentId = config.persona.defaultAgentId.trim() || "plana";
-  const relativePath = agentId === "plana"
-    ? fileName
-    : path.join("agents", agentId, fileName);
-  const filePath = path.join(getWorkspacePath(WORKSPACE_LAYOUT.mediaImages), relativePath);
-  const urlPath = relativePath.split(path.sep).map(encodeURIComponent).join("/");
-  return { filePath, url: `/generated-images/${urlPath}` };
-}
-
 export function availableEmojiRecords(config: AppConfig) {
-  return applicationDataStore(config).readEmojis().filter((record) => emojiRecordFileIsCandidate(config, record));
+  return emojiStore(config).readAll().filter((record) => emojiRecordFileIsCandidate(config, record));
 }
 
 export function availableEmojiKeys(config: AppConfig) {
@@ -152,12 +142,12 @@ export async function readPlannedEmojiAssets(
 
 function plannedEmojiAssets(config: AppConfig, plan: EmojiMarkerPlan) {
   const assets: Array<Omit<VerifiedPlannedEmojiAsset, "bytes">> = [];
-  const store = applicationDataStore(config);
+  const store = emojiStore(config);
   for (let index = 0; index < plan.expectedKeys.length; index += 1) {
     const key = plan.expectedKeys[index];
     const image = plan.expectedImages[index];
     if (!key) throw emojiAssetUnavailable();
-    const record = store.readEmoji(key);
+    const record = store.read(key);
     if (!record || !image?.filePath) throw emojiAssetUnavailable();
     const location = emojiMediaLocation(config, record.fileName);
     if (path.resolve(image.filePath) !== path.resolve(location.filePath) || image.url !== location.url) {
@@ -355,8 +345,8 @@ async function lstatEmojiAsset(filePath: string, record: EmojiRecord): Promise<E
 
 async function lstatEmojiDirectoryChain(filePath: string) {
   const workspaceRoot = path.resolve(getWorkspacePath());
-  const mediaRoot = path.resolve(getWorkspacePath(WORKSPACE_LAYOUT.mediaImages));
   const directory = path.dirname(path.resolve(filePath));
+  const mediaRoot = directory;
   const mediaRelative = path.relative(workspaceRoot, mediaRoot);
   const directoryRelative = path.relative(workspaceRoot, directory);
   if (

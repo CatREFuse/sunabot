@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
+import { AGENT_RESOURCE_LAYOUT } from "../../packages/platform/agentResourceLayout.js";
 import * as yauzl from "yauzl";
 import { ServiceError } from "../../packages/contracts/errors/serviceError.js";
 import {
@@ -79,7 +80,9 @@ export async function materializeAgentConfigImport(
   for (const [relativePath, bytes] of plan.files) {
     if (relativePath === "agent.json") continue;
     if (options.skipAvatar && relativePath.startsWith("assets/avatar.")) continue;
-    const target = path.join(directory, ...relativePath.split("/"));
+    const target = relativePath.startsWith("selfie/")
+      ? path.join(directory, AGENT_RESOURCE_LAYOUT.selfie, ...relativePath.slice("selfie/".length).split("/"))
+      : path.join(directory, ...relativePath.split("/"));
     await fsWriteFile(target, bytes);
   }
   await normalizeImportedSelfies(directory, plan.files);
@@ -199,7 +202,11 @@ function missingComponents(files: ReadonlyMap<string, Buffer>, rules: AgentConfi
   if (!["assets/avatar.png", "assets/avatar.jpg", "assets/avatar.webp"].some((fileName) => files.has(fileName))) {
     missing.push("头像");
   }
-  if (![...files.keys()].some((fileName) => fileName.startsWith("selfie/") && fileName !== "selfie/references.json")) {
+  if (![...files.keys()].some((fileName) => (
+    fileName.startsWith("selfie/")
+    && fileName !== "selfie/references.json"
+    && fileName !== "selfie/references.jsonl"
+  ))) {
     missing.push("自拍参考图");
   }
   if (![...files.keys()].some((fileName) => fileName.startsWith("system-prompts/"))) {
@@ -213,7 +220,7 @@ function isAllowedPath(fileName: string, rules: AgentConfigImportRules) {
   if (rules.finalPromptFiles.includes(fileName)) return true;
   if (rules.systemPromptFiles.some((name) => fileName === `system-prompts/${name}`)) return true;
   if (/^assets\/avatar\.(?:png|jpg|webp)$/.test(fileName)) return true;
-  if (fileName === "selfie/references.json") return true;
+  if (fileName === "selfie/references.json" || fileName === "selfie/references.jsonl") return true;
   return /^selfie\/[A-Za-z0-9][A-Za-z0-9._ -]{0,239}\.(?:png|jpg|jpeg|webp)$/.test(fileName);
 }
 
@@ -267,7 +274,7 @@ async function normalizeImportedSelfies(directory: string, files: ReadonlyMap<st
     id: createHash("sha256").update(bytes).digest("hex"),
     fileName: path.basename(fileName)
   }));
-  const selfieDirectory = path.join(directory, "selfie");
+  const selfieDirectory = path.join(directory, AGENT_RESOURCE_LAYOUT.selfie);
   let manifest;
   try {
     manifest = await readSelfieReferenceManifest(selfieDirectory);

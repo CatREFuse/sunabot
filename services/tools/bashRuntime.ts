@@ -1,5 +1,6 @@
 import type {
   WorkspaceBashExecution,
+  WorkspaceBashResourceMounts,
   WorkspaceBashReadOnlyMounts
 } from "./bashSandbox.js";
 
@@ -20,6 +21,7 @@ export interface WorkspaceBashRuntimeCapabilityInput {
   workbenchRoot: string;
   image: string;
   readOnlyMounts?: WorkspaceBashReadOnlyMounts;
+  resourceMounts?: WorkspaceBashResourceMounts;
   dockerEnvironment?: Readonly<NodeJS.ProcessEnv>;
   effectiveUid?: number;
   effectiveGid?: number;

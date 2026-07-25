@@ -124,7 +124,10 @@ describe("MCP sandbox projection", () => {
     }).build({ agentId: "agent-a", server });
     temporaryPaths.push(projection.root);
     const copied = path.join(projection.skills, "test-skill/SKILL.md");
-    const source = path.join(workspace, "business/agents/agent-a/extensions/skills/test-skill/SKILL.md");
+    const source = path.join(
+      workspace,
+      "business/agents/agent-a/workbench/skills/test-skill/SKILL.md"
+    );
     expect(await fs.readFile(copied, "utf8")).toContain("name: test-skill");
     expect((await fs.stat(copied)).ino).not.toBe((await fs.stat(source)).ino);
     expect((await fs.stat(copied)).mode & 0o777).toBe(0o400);

@@ -11,6 +11,7 @@ import { chunkKnowledgeDocument } from "./chunking.js";
 import { knowledgeFtsQuery, tokenizeKnowledgeText } from "./tokenizer.js";
 import type {
   KnowledgeChunk,
+  KnowledgeDirectoryIndex,
   KnowledgeDocument,
   KnowledgeDocumentFormat,
   KnowledgeSearchInput,
@@ -19,8 +20,10 @@ import type {
   KnowledgeSnapshot,
   KnowledgeUploadInput
 } from "./types.js";
+import { AGENT_RESOURCE_LAYOUT } from "../../packages/platform/agentResourceLayout.js";
 
 const INDEX_SCHEMA_VERSION = "1";
+export const KNOWLEDGE_DIRECTORY_INDEX_FILE = "index.json";
 const PARSER_REVISION = "1";
 const MAX_FILE_BYTES = 8 * 1024 * 1024;
 const MAX_FILES = 10_000;
@@ -188,7 +191,9 @@ export class KnowledgeBaseService {
         setMetadata(database, "parser-revision", PARSER_REVISION);
         setMetadata(database, "indexed-at", indexedAt);
       });
-      return readSnapshot(database, indexedAt);
+      const snapshot = readSnapshot(database, indexedAt);
+      await writeDirectoryIndex(root, snapshot);
+      return snapshot;
     } finally {
       database.close();
     }
@@ -216,13 +221,82 @@ export class KnowledgeBaseService {
   }
 }
 
+async function writeDirectoryIndex(root: string, snapshot: KnowledgeSnapshot) {
+  const content: KnowledgeDirectoryIndex = { schemaVersion: 1, ...snapshot };
+  const filePath = path.join(root, KNOWLEDGE_DIRECTORY_INDEX_FILE);
+  const [parentStats, targetStats] = await Promise.all([
+    fs.lstat(root, { bigint: true }),
+    safeLstatBigInt(filePath)
+  ]);
+  if (
+    !parentStats.isDirectory()
+    || parentStats.isSymbolicLink()
+    || (targetStats && (
+      !targetStats.isFile()
+      || targetStats.isSymbolicLink()
+      || targetStats.nlink !== 1n
+    ))
+  ) {
+    throw new ServiceError(500, "KNOWLEDGE_INDEX_FILE_INVALID", "知识库目录索引不可用。");
+  }
+  const bytes = Buffer.from(`${JSON.stringify(content, null, 2)}\n`, "utf8");
+  const temporaryPath = path.join(
+    root,
+    `.${KNOWLEDGE_DIRECTORY_INDEX_FILE}.${process.pid}.${crypto.randomUUID()}.tmp`
+  );
+  let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
+  try {
+    handle = await fs.open(temporaryPath, "wx", 0o600);
+    await handle.writeFile(bytes);
+    await handle.sync();
+    await handle.close();
+    handle = undefined;
+    const [currentParent, currentTarget] = await Promise.all([
+      fs.lstat(root, { bigint: true }),
+      safeLstatBigInt(filePath)
+    ]);
+    if (
+      !currentParent.isDirectory()
+      || currentParent.isSymbolicLink()
+      || currentParent.dev !== parentStats.dev
+      || currentParent.ino !== parentStats.ino
+      || !sameOptionalFileIdentity(targetStats, currentTarget)
+    ) {
+      throw new ServiceError(500, "KNOWLEDGE_INDEX_FILE_INVALID", "知识库目录索引不可用。");
+    }
+    await fs.rename(temporaryPath, filePath);
+    await syncDirectory(root);
+  } finally {
+    await handle?.close().catch(() => undefined);
+    await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
+  }
+}
+
+function sameOptionalFileIdentity(
+  left: Awaited<ReturnType<typeof safeLstatBigInt>>,
+  right: Awaited<ReturnType<typeof safeLstatBigInt>>
+) {
+  if (!left || !right) return left === right;
+  return left.isFile()
+    && right.isFile()
+    && !left.isSymbolicLink()
+    && !right.isSymbolicLink()
+    && left.nlink === 1n
+    && right.nlink === 1n
+    && left.dev === right.dev
+    && left.ino === right.ino
+    && left.size === right.size
+    && left.mtimeNs === right.mtimeNs
+    && left.ctimeNs === right.ctimeNs;
+}
+
 export function knowledgeBaseForConfig(config: Pick<AppConfig, "persona">) {
   const agentId = config.persona.defaultAgentId;
   if (!AGENT_ID_PATTERN.test(agentId)) throw new Error(`Invalid knowledge base Agent ID: ${agentId}`);
   const agentWorkspace = resolveProjectPath(config.persona.agentWorkspace);
   if (!agentWorkspace) throw new Error(`Invalid knowledge base workspace: ${config.persona.agentWorkspace}`);
   return new KnowledgeBaseService({
-    sourceRoot: path.join(agentWorkspace, "knowledge"),
+    sourceRoot: path.join(agentWorkspace, AGENT_RESOURCE_LAYOUT.knowledge),
     indexPath: getWorkspacePath(WORKSPACE_LAYOUT.knowledgeCache, `${agentId}.sqlite`)
   });
 }
@@ -553,6 +627,15 @@ async function assertMissingTarget(target: string) {
 async function safeLstat(target: string) {
   try {
     return await fs.lstat(target);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+}
+
+async function safeLstatBigInt(target: string) {
+  try {
+    return await fs.lstat(target, { bigint: true });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw error;

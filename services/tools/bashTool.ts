@@ -26,13 +26,15 @@ import {
 import { evaluateBashPolicy } from "./bashPolicy.js";
 import { runBashAuditWithDeadline } from "./bashAuditDeadline.js";
 import {
+  WORKSPACE_BASH_DOCKER_PROJECTION_ROOT,
   WORKSPACE_BASH_ISOLATION_ERROR,
-  WORKSPACE_BASH_MCP_ROOT,
-  WORKSPACE_BASH_SKILLS_ROOT,
+  WORKSPACE_BASH_NATIVE_PROJECTION_ROOT,
   WORKSPACE_BASH_VIRTUAL_ROOT,
+  buildWorkspaceBashEnvironment,
   buildWorkspaceBashInvocation,
   ensureWorkspaceBashIsolation,
   type WorkspaceBashInvocation,
+  type WorkspaceBashResourceMounts,
   type WorkspaceBashReadOnlyMounts,
   type WorkspaceBashSandboxOptions
 } from "./bashSandbox.js";
@@ -179,7 +181,9 @@ export async function runWorkspaceBash(
   const accessMode = options.accessMode ?? "admin";
   const timeoutMs = normalizeTimeout(input.timeoutMs);
   let workbenchRoot = "";
+  let addressableWorkbenchRoot = "";
   let readOnlyMounts: WorkspaceBashReadOnlyMounts | undefined;
+  let resourceMounts: WorkspaceBashResourceMounts | undefined;
   const stale = (audit?: BashAuditResult) => configurationStaleResult(
     command,
     workbenchRoot,
@@ -192,7 +196,9 @@ export async function runWorkspaceBash(
   try {
     const bashEnvironment = await resolveAgentBashEnvironment(agentWorkspacePath, backend);
     workbenchRoot = bashEnvironment.workbenchRoot;
+    addressableWorkbenchRoot = bashEnvironment.addressableWorkbenchRoot;
     readOnlyMounts = bashEnvironment.readOnlyMounts;
+    resourceMounts = bashEnvironment.projectionMounts;
     if (!isBashConfigurationCurrent(options.isCurrent)) return stale();
     workbenchIdentity = await captureWorkbenchIdentity(workbenchRoot);
     if (!isBashConfigurationCurrent(options.isCurrent)) return stale();
@@ -375,7 +381,13 @@ export async function runWorkspaceBash(
     );
   }
   if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
-  const environment = buildWorkbenchEnv();
+  const environment = buildWorkspaceBashEnvironment();
+  environment.SUNABOT_DOCKER_WORKBENCH = backend === "native"
+    ? (process.platform === "linux" ? WORKSPACE_BASH_DOCKER_PROJECTION_ROOT : addressableWorkbenchRoot)
+    : WORKSPACE_BASH_VIRTUAL_ROOT;
+  environment.SUNABOT_NATIVE_WORKBENCH = backend === "docker"
+    ? WORKSPACE_BASH_NATIVE_PROJECTION_ROOT
+    : workbenchRoot;
   try {
     if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
     const sandbox = await ensureWorkspaceBashIsolation(
@@ -385,6 +397,7 @@ export async function runWorkspaceBash(
       {
         ...options.sandbox,
         readOnlyMounts,
+        resourceMounts,
         skipDockerProbe: Boolean(options.runtime)
       }
     );
@@ -447,6 +460,7 @@ export async function runWorkspaceBash(
         workbenchRoot,
         image: sandbox.image ?? "sunabot-bash:local",
         readOnlyMounts,
+        resourceMounts,
         dockerEnvironment: sandbox.launcherEnvironment,
         effectiveUid: options.sandbox?.effectiveUid,
         timeoutMs,
@@ -467,7 +481,8 @@ export async function runWorkspaceBash(
       environment,
       sandbox,
       approvedOutsideAccesses,
-      readOnlyMounts
+      readOnlyMounts,
+      resourceMounts
     );
     if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
     return await executeCommand(invocation, {
@@ -716,23 +731,6 @@ function configurationStaleResult(
     "BASH_CONFIGURATION_STALE: Bash configuration changed before execution.",
     audit
   );
-}
-
-function buildWorkbenchEnv(): Record<string, string> {
-  return {
-    PATH: "/usr/local/bin:/usr/bin:/bin",
-    HOME: WORKSPACE_BASH_VIRTUAL_ROOT,
-    PWD: WORKSPACE_BASH_VIRTUAL_ROOT,
-    TMPDIR: "/tmp/",
-    TMP: "/tmp",
-    TEMP: "/tmp",
-    LANG: process.env.LANG || "C.UTF-8",
-    LC_ALL: process.env.LC_ALL || "",
-    SHELL: "/bin/bash",
-    USER: "sunabot",
-    SUNABOT_SKILLS: WORKSPACE_BASH_SKILLS_ROOT,
-    SUNABOT_MCP_CONFIG: WORKSPACE_BASH_MCP_ROOT
-  };
 }
 
 function blockedResult(

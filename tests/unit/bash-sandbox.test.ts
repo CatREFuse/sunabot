@@ -16,8 +16,14 @@ import {
 
 const workbench = "/srv/sunabot/workspace/business/agents/plana/workbench";
 const readOnlyMounts = {
-  skills: "/srv/sunabot/workspace/business/agents/plana/extensions/skills",
+  skills: "/srv/sunabot/workspace/business/agents/plana/workbench/skills",
   mcp: "/srv/sunabot/workspace/business/agents/plana/extensions/mcp"
+};
+const resourceMounts = {
+  nativeWorkbench: "/srv/sunabot/workspace/business/agents/plana/workbench"
+};
+const nativeResourceMounts = {
+  dockerWorkbench: "/srv/sunabot/workspace/business/agents/plana/docker-workbench"
 };
 const environment = {
   PATH: "/usr/local/bin:/usr/bin:/bin",
@@ -134,7 +140,7 @@ describe("workspace Bash isolation", () => {
     )).toThrow(WorkspaceBashIsolationError);
   });
 
-  it("mounts the Docker workbench read-write and only Skill and MCP configuration read-only", () => {
+  it("mounts the Docker workbench read-write and Native workbench projection read-only", () => {
     const containerName = `sunabot-bash-${"a".repeat(32)}`;
     const invocation = buildDockerInvocation(
       { kind: "shell", command: "echo ok" },
@@ -143,7 +149,8 @@ describe("workspace Bash isolation", () => {
       "sunabot-bash:test",
       containerName,
       undefined,
-      readOnlyMounts
+      readOnlyMounts,
+      resourceMounts
     );
 
     expect(invocation.file).toBe("/fixture/docker");
@@ -155,6 +162,7 @@ describe("workspace Bash isolation", () => {
       "--mount", "type=bind,src=/host/agent/workbench,dst=/workbench",
       "--mount", `type=bind,src=${readOnlyMounts.skills},dst=/skills,readonly`,
       "--mount", `type=bind,src=${readOnlyMounts.mcp},dst=/mcp,readonly`,
+      "--mount", `type=bind,src=${resourceMounts.nativeWorkbench},dst=/workbench/native-workbench,readonly`,
       "--workdir", "/workbench", "--entrypoint", "/usr/bin/env", "sunabot-bash:test"
     ]));
     expect(invocation.args.slice(invocation.args.indexOf("sunabot-bash:test"))).toEqual([
@@ -162,6 +170,7 @@ describe("workspace Bash isolation", () => {
       "HOME=/workbench", "PWD=/workbench", "PATH=/usr/local/bin:/usr/bin:/bin",
       "LANG=C.UTF-8", "LC_ALL=C.UTF-8", "TMPDIR=/tmp", "TMP=/tmp", "TEMP=/tmp",
       "SHELL=/bin/bash", "USER=sunabot", "SUNABOT_SKILLS=/skills", "SUNABOT_MCP_CONFIG=/mcp",
+      "SUNABOT_NATIVE_WORKBENCH=/workbench/native-workbench",
       "/bin/bash", "--noprofile", "--norc", "-lc", "echo ok"
     ]);
     for (const variable of [
@@ -173,6 +182,46 @@ describe("workspace Bash isolation", () => {
     expect(invocation.cleanup).toMatchObject({ file: "/fixture/docker", args: ["rm", "-f", containerName] });
     expect(invocation.cleanup?.env).toBe(invocation.env);
     expect(invocation.args.join(" ")).not.toContain("docker.sock");
+  });
+
+  it("never overlays Native workbench subdirectories as writable", () => {
+    const invocation = buildDockerInvocation(
+      { kind: "shell", command: "echo ok" },
+      "/host/agent/docker-workbench",
+      "/fixture/docker",
+      "sunabot-bash:test",
+      `sunabot-bash-${"b".repeat(32)}`,
+      undefined,
+      readOnlyMounts,
+      resourceMounts
+    );
+
+    expect(invocation.args).toEqual(expect.arrayContaining([
+      "--mount", `type=bind,src=${resourceMounts.nativeWorkbench},dst=/workbench/native-workbench,readonly`
+    ]));
+    expect(invocation.args.join(" ")).not.toContain("dst=/workbench/native-workbench/selfie");
+    expect(invocation.args.join(" ")).not.toContain("dst=/workbench/native-workbench/emoji");
+  });
+
+  it("mounts Docker workbench as an addressable writable workspace for Linux Native Bash", () => {
+    const invocation = buildBubblewrapInvocation(
+      { kind: "shell", command: "touch \"$SUNABOT_DOCKER_WORKBENCH/probe\"" },
+      workbench,
+      { ...environment, SUNABOT_DOCKER_WORKBENCH: "/docker-workbench" },
+      "/fixture/bwrap",
+      [],
+      "/fixture/prlimit",
+      readOnlyMounts,
+      nativeResourceMounts
+    );
+
+    expect(hasSequence(invocation.args, ["--dir", "/docker-workbench"])).toBe(true);
+    expect(hasSequence(invocation.args, [
+      "--bind", nativeResourceMounts.dockerWorkbench, "/docker-workbench"
+    ])).toBe(true);
+    expect(hasSequence(invocation.args, [
+      "--setenv", "SUNABOT_DOCKER_WORKBENCH", "/docker-workbench"
+    ])).toBe(true);
   });
 
   it("runs restricted Docker argv directly with an unpredictable container name", () => {

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { WORKSPACE_LAYOUT } from "../../packages/platform/workspaceLayout.js";
@@ -11,6 +12,41 @@ import type { AgentManifest } from "./agentRegistry.js";
 import { DEFAULT_DIRECTOR_SEED } from "../director/public.js";
 import { DEFAULT_AIR_KNOWLEDGE } from "../air/public.js";
 import { WORKING_MEMORY_FILE, renderWorkingMemoryMarkdown } from "../memory/public.js";
+import { AGENT_RESOURCE_LAYOUT } from "../../packages/platform/agentResourceLayout.js";
+
+const WORKBENCH_INDEX = [
+  "# 文件工作区",
+  "",
+  "本目录用于保存当前 Agent 的计划、下载、转存文件和任务产物。",
+  "",
+  "当前工作区的配置与资料目录：",
+  "",
+  "- `selfie/`：自拍参考图，入口 `references.jsonl`。",
+  "- `emoji/`：表情，入口 `emojis.jsonl`。",
+  "- `skills/`：Skills，入口 `index.json`。",
+  "- `knowledge/`：知识库，入口 `index.json`。",
+  "",
+  "进入目录后先读取对应管理入口。入口缺失、损坏或引用不存在时停止猜测，并报告具体目录。",
+  "",
+  "Docker Bash 在 `native-workbench/` 中只读访问本目录；Native Bash 可通过环境变量 `SUNABOT_DOCKER_WORKBENCH` 寻址独立 Docker 工作区。",
+  ""
+].join("\n");
+const DOCKER_WORKBENCH_INDEX = [
+  "# Docker 文件工作区",
+  "",
+  "本目录用于保存 Docker Bash 的计划、下载、转存文件和任务产物。",
+  "",
+  "Native workbench 只读投影位于 `native-workbench/`：",
+  "",
+  "- `native-workbench/selfie/`：自拍参考图，入口 `references.jsonl`。",
+  "- `native-workbench/emoji/`：表情，入口 `emojis.jsonl`。",
+  "- `native-workbench/skills/`：Skills，入口 `index.json`。",
+  "- `native-workbench/knowledge/`：知识库，入口 `index.json`。",
+  "",
+  "进入目录后先读取对应管理入口。只读投影不可修改；需要写入的任务产物保存在当前 Docker 工作区。",
+  ""
+].join("\n");
+const EMPTY_EXTENSION_REVISION = createHash("sha256").update("[]").digest("hex");
 
 export function initialAgentWorkspaceFiles(
   config: AppConfig,
@@ -25,7 +61,35 @@ export function initialAgentWorkspaceFiles(
       ? defaultGenericSelfiePromptContent()
       : defaultPromptContent(definition.id, manifest.name)
   ] as const);
-  return [...fragments, [WORKING_MEMORY_FILE, renderWorkingMemoryMarkdown([])] as const, ...finalPrompts];
+  return [
+    ...fragments,
+    [WORKING_MEMORY_FILE, renderWorkingMemoryMarkdown([])] as const,
+    [`${AGENT_RESOURCE_LAYOUT.workbench}/index.md`, WORKBENCH_INDEX] as const,
+    [`${AGENT_RESOURCE_LAYOUT.dockerWorkbench}/index.md`, DOCKER_WORKBENCH_INDEX] as const,
+    [`${AGENT_RESOURCE_LAYOUT.selfie}/references.jsonl`, ""] as const,
+    [`${AGENT_RESOURCE_LAYOUT.emoji}/emojis.jsonl`, ""] as const,
+    [`${AGENT_RESOURCE_LAYOUT.skills}/index.json`, `${JSON.stringify({
+      schemaVersion: 1,
+      revision: EMPTY_EXTENSION_REVISION,
+      skills: []
+    }, null, 2)}\n`] as const,
+    [`${AGENT_RESOURCE_LAYOUT.knowledge}/index.json`, `${JSON.stringify({
+      schemaVersion: 1,
+      ok: true,
+      root: "knowledge",
+      documents: [],
+      fileCount: 0,
+      chunkCount: 0,
+      errorCount: 0,
+      indexedAt: manifest.createdAt
+    }, null, 2)}\n`] as const,
+    [`${AGENT_RESOURCE_LAYOUT.mcp}/servers.json`, `${JSON.stringify({
+      schemaVersion: 1,
+      revision: EMPTY_EXTENSION_REVISION,
+      servers: []
+    }, null, 2)}\n`] as const,
+    ...finalPrompts
+  ];
 }
 
 export async function ensureAccountRuntimeDirectories(workspace: string, accountId: string) {

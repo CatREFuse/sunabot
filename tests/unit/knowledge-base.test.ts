@@ -9,6 +9,7 @@ import {
 } from "../../services/knowledge/public.js";
 
 const temporaryRoots: string[] = [];
+const serviceRoots = new WeakMap<KnowledgeBaseService, string>();
 
 afterEach(async () => {
   await Promise.all(temporaryRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
@@ -46,6 +47,18 @@ describe("KnowledgeBaseService", () => {
       "产品/说明.txt",
       "产品/路线.md"
     ]);
+    const index = JSON.parse(await fs.readFile(path.join(serviceRoot(service), "knowledge", "index.json"), "utf8"));
+    expect(index).toMatchObject({
+      schemaVersion: 1,
+      root: "knowledge",
+      fileCount: 3,
+      documents: [
+        { path: "事件/记录.jsonl" },
+        { path: "产品/说明.txt" },
+        { path: "产品/路线.md" }
+      ]
+    });
+    expect((await service.list()).fileCount).toBe(3);
   });
 
   it("uses BM25 to recall Chinese and Latin terms with source lines", async () => {
@@ -95,6 +108,20 @@ describe("KnowledgeBaseService", () => {
 
     expect(snapshot.documents.map((document) => document.path)).toEqual(["visible.md"]);
   });
+
+  it("rejects a linked directory index without modifying its target", async () => {
+    const service = await fixture({ "visible.md": "可检索正文" });
+    const sourceRoot = path.join(serviceRoot(service), "knowledge");
+    const outside = path.join(serviceRoot(service), "outside-index.json");
+    await fs.writeFile(outside, "unchanged", { mode: 0o600 });
+    await fs.symlink(outside, path.join(sourceRoot, "index.json"));
+
+    await expect(service.list()).rejects.toMatchObject({
+      code: "KNOWLEDGE_INDEX_FILE_INVALID",
+      statusCode: 500
+    });
+    await expect(fs.readFile(outside, "utf8")).resolves.toBe("unchanged");
+  });
 });
 
 async function fixture(files: Record<string, string>) {
@@ -105,11 +132,17 @@ async function fixture(files: Record<string, string>) {
     await fs.mkdir(path.dirname(target), { recursive: true });
     await fs.writeFile(target, content, { mode: 0o600 });
   }
-  return new KnowledgeBaseService({
+  const service = new KnowledgeBaseService({
     sourceRoot,
     indexPath: path.join(root, "cache", "knowledge.sqlite"),
     now: () => new Date("2026-07-20T10:00:00.000Z")
   });
+  serviceRoots.set(service, root);
+  return service;
+}
+
+function serviceRoot(service: KnowledgeBaseService) {
+  return serviceRoots.get(service)!;
 }
 
 async function createRoot() {

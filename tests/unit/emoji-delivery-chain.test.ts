@@ -187,7 +187,7 @@ describe("emoji durable delivery chain", () => {
       "",
       false,
       [{
-        url: `/generated-images/agents/koharu/${emojiFileName}`,
+        url: `/generated-images/workbench/koharu/emoji/${emojiFileName}`,
         filePath: imagePath
       }],
       undefined,
@@ -351,7 +351,7 @@ describe("emoji durable delivery chain", () => {
       listAvailable: () => [{
         key: "开心",
         image: {
-          url: `/generated-images/agents/koharu/${emojiFileName}`,
+          url: `/generated-images/workbench/koharu/emoji/${emojiFileName}`,
           filePath: imagePath
         }
       }]
@@ -461,7 +461,8 @@ describe("emoji durable delivery chain", () => {
       { handleInboundMessage: vi.fn(async () => undefined) },
       {
         outboundMedia: new OutboundMediaDelivery({
-          rootDir: path.join(workspaceDirectory, "business", "media", "images")
+          rootDir: path.join(workspaceDirectory, "business", "media", "images"),
+          workspaceRoot: workspaceDirectory
         })
       }
     );
@@ -711,7 +712,7 @@ function emojiPlanFor(text: string) {
     listAvailable: () => ["开心", "哭"].map((key) => ({
       key,
       image: {
-        url: `/generated-images/agents/koharu/${emojiFileName}`,
+        url: `/generated-images/workbench/koharu/emoji/${emojiFileName}`,
         filePath: imagePath
       }
     }))

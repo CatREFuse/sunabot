@@ -5,9 +5,11 @@ import {
 } from "../../services/tools/bashPolicy.js";
 import {
   WORKSPACE_BASH_MCP_ROOT,
+  WORKSPACE_BASH_NATIVE_PROJECTION_ROOT,
   WORKSPACE_BASH_SKILLS_ROOT,
   WORKSPACE_BASH_VIRTUAL_ROOT,
   type WorkspaceBashExecution,
+  type WorkspaceBashResourceMounts,
   type WorkspaceBashReadOnlyMounts
 } from "../../services/tools/bashSandbox.js";
 import type {
@@ -49,7 +51,8 @@ const TARGET_ENVIRONMENT = [
   "SHELL=/bin/bash",
   "USER=sunabot",
   `SUNABOT_SKILLS=${WORKSPACE_BASH_SKILLS_ROOT}`,
-  `SUNABOT_MCP_CONFIG=${WORKSPACE_BASH_MCP_ROOT}`
+  `SUNABOT_MCP_CONFIG=${WORKSPACE_BASH_MCP_ROOT}`,
+  `SUNABOT_NATIVE_WORKBENCH=${WORKSPACE_BASH_NATIVE_PROJECTION_ROOT}`
 ] as const;
 const PROXY_VARIABLES = [
   "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "FTP_PROXY", "NO_PROXY",
@@ -464,7 +467,8 @@ export function buildContainerBody(
       Tmpfs: { "/tmp": "rw,nosuid,nodev,size=64m,mode=1777" },
       Mounts: [
         { Type: "bind", Source: input.workbenchRoot, Target: WORKSPACE_BASH_VIRTUAL_ROOT, ReadOnly: false },
-        ...(input.readOnlyMounts ? readOnlyMounts(input.readOnlyMounts) : [])
+        ...(input.readOnlyMounts ? readOnlyMounts(input.readOnlyMounts) : []),
+        ...(input.resourceMounts ? resourceMounts(input.resourceMounts) : [])
       ]
     }
   };
@@ -637,7 +641,9 @@ export function capabilityKey(endpointId: string, input: WorkspaceBashRuntimeCap
     deploymentWorkspaceId(input),
     deploymentRuntimeId(input),
     input.readOnlyMounts?.skills ?? "",
-    input.readOnlyMounts?.mcp ?? ""
+    input.readOnlyMounts?.mcp ?? "",
+    input.resourceMounts?.nativeWorkbench ?? "",
+    input.resourceMounts?.dockerWorkbench ?? ""
   ].join("\0");
 }
 
@@ -718,6 +724,15 @@ function readOnlyMounts(mounts: WorkspaceBashReadOnlyMounts) {
     { Type: "bind", Source: mounts.skills, Target: WORKSPACE_BASH_SKILLS_ROOT, ReadOnly: true },
     { Type: "bind", Source: mounts.mcp, Target: WORKSPACE_BASH_MCP_ROOT, ReadOnly: true }
   ];
+}
+
+function resourceMounts(mounts: WorkspaceBashResourceMounts) {
+  return mounts.nativeWorkbench ? [{
+    Type: "bind",
+    Source: mounts.nativeWorkbench,
+    Target: `${WORKSPACE_BASH_VIRTUAL_ROOT}/native-workbench`,
+    ReadOnly: true
+  }] : [];
 }
 
 function executionArguments(execution: WorkspaceBashExecution) {

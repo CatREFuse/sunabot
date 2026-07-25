@@ -124,6 +124,14 @@ describe("AgentRegistry", () => {
     }
     await expect(fs.readFile(path.join(agentDirectory, "selfie_prompt_rewrite.json"), "utf8"))
       .resolves.toContain("普拉娜");
+    await expect(fs.readFile(path.join(agentDirectory, "workbench", "index.md"), "utf8"))
+      .resolves.toContain("`skills/`：Skills，入口 `index.json`");
+    await expect(fs.readFile(path.join(agentDirectory, "docker-workbench", "index.md"), "utf8"))
+      .resolves.toContain("`native-workbench/knowledge/`：知识库，入口 `index.json`");
+    expect((await fs.readFile(
+      path.join(agentDirectory, "workbench/selfie/references.jsonl"),
+      "utf8"
+    )).trim()).toBe("");
   });
 
   it("fills missing default Plana files without overwriting legacy workspace customizations", async () => {
@@ -131,12 +139,14 @@ describe("AgentRegistry", () => {
     const agentDirectory = path.join(testPaths.workspace, "business", "agents", "plana");
     const customAgents = "保留旧工作区的 Agent 规则。\n";
     const customSelfiePrompt = "{\"custom\":true}\n";
+    const customWorkbenchIndex = "# 管理员入口\n";
     config.persona.name = "普拉娜";
     config.persona.agentWorkspace = agentDirectory;
-    await fs.mkdir(agentDirectory, { recursive: true });
+    await fs.mkdir(path.join(agentDirectory, "workbench"), { recursive: true });
     await Promise.all([
       fs.writeFile(path.join(agentDirectory, "AGENTS.md"), customAgents, "utf8"),
-      fs.writeFile(path.join(agentDirectory, "selfie_prompt_rewrite.json"), customSelfiePrompt, "utf8")
+      fs.writeFile(path.join(agentDirectory, "selfie_prompt_rewrite.json"), customSelfiePrompt, "utf8"),
+      fs.writeFile(path.join(agentDirectory, "workbench", "index.md"), customWorkbenchIndex, "utf8")
     ]);
     const registry = new AgentRegistry(config, {
       workspaceRoot: path.dirname(agentDirectory),
@@ -149,6 +159,8 @@ describe("AgentRegistry", () => {
     await expect(fs.readFile(path.join(agentDirectory, "AGENTS.md"), "utf8")).resolves.toBe(customAgents);
     await expect(fs.readFile(path.join(agentDirectory, "selfie_prompt_rewrite.json"), "utf8"))
       .resolves.toBe(customSelfiePrompt);
+    await expect(fs.readFile(path.join(agentDirectory, "workbench", "index.md"), "utf8"))
+      .resolves.toBe(customWorkbenchIndex);
     await expect(fs.readFile(path.join(agentDirectory, "SOUL.md"), "utf8")).resolves.toContain("普拉娜");
   });
 

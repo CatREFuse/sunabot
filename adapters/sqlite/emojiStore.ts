@@ -137,6 +137,10 @@ export class EmojiStore {
     return Number(this.database.prepare("DELETE FROM emojis WHERE emoji_key = ?").run(key).changes) > 0;
   }
 
+  clear() {
+    this.database.prepare("DELETE FROM emojis").run();
+  }
+
   private transaction<T>(operation: () => T) {
     this.database.exec("BEGIN IMMEDIATE");
     try {

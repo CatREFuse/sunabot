@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { AGENT_RESOURCE_LAYOUT } from "../../packages/platform/agentResourceLayout.js";
 import { nanoid } from "nanoid";
 import { ServiceError } from "../../packages/contracts/errors/serviceError.js";
 import { inspectMultiAgentMigrationGate, validateMultiAgentWorkspacePath } from "../../packages/platform/multiAgentMigrationGate.mjs";
@@ -564,7 +565,7 @@ export class AgentRegistry {
   private async writeInitialWorkspace(directory: string, manifest: AgentManifest, avatar?: AgentAvatarInput) {
     await fs.mkdir(path.join(directory, "assets"), { recursive: true, mode: 0o700 });
     await fs.mkdir(path.join(directory, "data"), { recursive: true, mode: 0o700 });
-    await fs.mkdir(path.join(directory, "selfie"), { recursive: true, mode: 0o700 });
+    await fs.mkdir(path.join(directory, AGENT_RESOURCE_LAYOUT.selfie), { recursive: true, mode: 0o700 });
     await fs.mkdir(path.join(directory, "files"), { recursive: true, mode: 0o700 });
     if (avatar) manifest.avatarPath = await writeAvatar(directory, avatar);
     await atomicWriteJson(path.join(directory, MANIFEST_FILE), manifest);

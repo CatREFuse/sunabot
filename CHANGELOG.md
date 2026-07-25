@@ -1,5 +1,43 @@
 # 更新日志
 
+## [0.1.2] - 2026-07-25
+
+### 双工作区
+
+- 自拍、表情、Skills 与知识库直接位于每个 Agent 的 Native `workbench/`。
+- Docker Bash 使用独立可写 `docker-workbench/`，并通过 `native-workbench/` 只读访问同一份 Native 工作区内容。
+- Native Bash 通过 `SUNABOT_DOCKER_WORKBENCH` 寻址当前 Agent 的 Docker 工作区。
+- 两个 `index.md` 分别列出当前环境可用的自拍、表情、Skills 与知识库入口。
+
+### 升级与恢复
+
+- 版本升级到 `0.1.2`。
+- 停服迁移会为全部 Agent 创建文件备份与校验清单，再迁移资源并补齐投影入口。
+- 迁移支持幂等验证与防覆盖回滚，完成后自动执行状态和运行检查。
+
+## [0.1.1] - 2026-07-25
+
+Bot 工作台、资源管理入口与 JSONL 清单完成统一升级。
+
+### 工作台
+
+- Bot 可在授权范围内通过 Bash 访问并操作自己的 workbench。
+- 工作目录、Skills、MCP、自拍、表情和知识库提供固定管理入口。
+- 系统提示词会先引导 Bot 查询目录入口，再使用对应资源。
+
+### 资源管理
+
+- 自拍参考图改用同目录 `references.jsonl` 清单。
+- 表情图片改用同目录 `emojis.jsonl` 清单，保留多版本记录。
+- 知识库提供可重建的 `index.json`，管理台修改仍会同步到资源目录。
+
+### 升级与恢复
+
+- 提供 0.1.0 到 0.1.1 的预检、离线备份、迁移和重启脚本。
+- 自拍清单迁移支持内容校验、冲突拒绝和独立回滚。
+- 资源布局迁移支持全 Agent 清单、文件备份、校验和冲突保护回滚。
+- 升级完成后自动执行运行状态与配置检查。
+
 ## [0.1.0] - 2026-07-22
 
 首次发布，多 Agent、消息投递、记忆与管理台能力完成首个可用版本整合。
@@ -22,4 +60,6 @@
 - 提示词编辑支持变量补全、搜索、折叠与冲突处理。
 - 新增当前版本与更新日志页面。
 
+[0.1.2]: https://github.com/CatREFuse/sunabot/releases/tag/v0.1.2
+[0.1.1]: https://github.com/CatREFuse/sunabot/releases/tag/v0.1.1
 [0.1.0]: https://github.com/CatREFuse/sunabot/releases/tag/v0.1.0
