@@ -295,7 +295,7 @@ function runtimePromptMigrations(config: AppConfig, selfiePromptDefault: string)
       [bashWorkbenchId]
     );
     const chatMediaId = add(
-      "conversation-chat-media-v1",
+      "conversation-chat-media-v2",
       "system",
       file,
       () => migrateConversationChatMediaPrompt(config, file),

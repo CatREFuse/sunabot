@@ -34,9 +34,7 @@ export function providerChatMediaForIncoming(
     publisher: chatMediaPublisher,
     isCurrent
   });
-  const emojiImportAllowed = incoming.scope === "private"
-    && incoming.groupId === undefined
-    && isAdminSender(incoming.userId, config.bot.adminQq.trim());
+  const emojiImportAllowed = isAdminSender(incoming.userId, config.bot.adminQq.trim());
   return Object.freeze({
     export: (input: ExportChatMediaInput) => exporter.export(input),
     ...(emojiImportAllowed

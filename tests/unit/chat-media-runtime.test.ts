@@ -77,7 +77,7 @@ describe("current-turn chat media capability", () => {
     expect(prompt).toContain("message:78:file:0");
   });
 
-  it("exposes export to real QQ turns while limiting emoji import to administrator private chat", async () => {
+  it("exposes export to real QQ turns while limiting emoji import to administrator QQ chats", async () => {
     const root = await fs.mkdtemp(path.join(TEST_ROOT, "gate-"));
     const config = createAdminTestConfig(root);
     config.persona.defaultAgentId = "arona";
@@ -101,7 +101,12 @@ describe("current-turn chat media capability", () => {
       groupId: 9988
     };
     expect(providerChatMediaForIncoming(config, groupAdmin, undefined, cache)?.importEmoji)
-      .toBeUndefined();
+      .toBeTypeOf("function");
+    expect(providerChatMediaForIncoming(config, {
+      ...ordinary,
+      scope: "user_group",
+      groupId: 9988
+    }, undefined, cache)?.importEmoji).toBeUndefined();
     expect(providerChatMediaForIncoming(config, { ...administrator, agentId: "plana" }, undefined, cache))
       .toBeUndefined();
     expect(providerChatMediaForIncoming(config, administrator, "override", cache))
@@ -110,7 +115,7 @@ describe("current-turn chat media capability", () => {
       .toBeUndefined();
   });
 
-  it("imports an administrator-provided image atomically with hash naming and idempotent deduplication", async () => {
+  it("imports an administrator group image atomically with hash naming and idempotent deduplication", async () => {
     await fs.mkdir(getWorkspacePath(), { recursive: true });
     const root = await fs.mkdtemp(path.join(getWorkspacePath(), ".test-chat-media-emoji-"));
     const config = createAdminTestConfig(root);
@@ -119,6 +124,8 @@ describe("current-turn chat media capability", () => {
     const cache = new CacheStore(path.join(root, "cache"), { minimumFreeBytes: 0 });
     await cache.initialize();
     const incoming = incomingMessage(config.bot.adminQq, "koharu");
+    incoming.scope = "user_group";
+    incoming.groupId = 9988;
     const port = providerChatMediaForIncoming(config, incoming, undefined, cache)!;
 
     const first = await port.importEmoji!({

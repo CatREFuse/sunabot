@@ -84,7 +84,7 @@ export const exportChatMediaTool = {
 export const importChatEmojiTool = {
   type: "function",
   name: IMPORT_CHAT_EMOJI_TOOL_NAME,
-  description: "Import one exact image from the current user message or an explicitly quoted message into the current Agent emoji library. This mutating capability is available only in an authorized administrator private chat. It validates the image, normalizes it, stores it under a SHA-256 name, deduplicates content, and atomically updates emojis.jsonl. Do not edit emoji files or emojis.jsonl with Bash.",
+  description: "Import one exact image from the current user message or an explicitly quoted message into the current Agent emoji library. This mutating capability is available only in an authorized administrator QQ private chat or group chat. It validates the image, normalizes it, stores it under a SHA-256 name, deduplicates content, and atomically updates emojis.jsonl. Native and Docker resource views address the same authoritative catalog; do not edit emoji files or emojis.jsonl with Bash.",
   strict: true,
   parameters: {
     type: "object",

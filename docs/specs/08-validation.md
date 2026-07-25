@@ -22,7 +22,7 @@ Agent 与系统设置的控件级保存回归必须覆盖 toggle 与选择项直
 
 管理台路由回归必须覆盖每个已登记一级页面的直接访问、尾斜杠和浏览器刷新，确认返回 `text/html` 且加载同一 Vue 应用；`/api/*`、相似前缀和未知路径不能进入 SPA fallback，继续返回对应 API 状态或 JSON 404。新增或移除前端一级路由时必须同步服务端 SPA 路由清单与该合同测试。
 
-版本与更新日志专项必须断言 `package.json`、`package-lock.json` 根版本、runtime contract、版本目录、Core Dockerfile 与 Compose 默认值均为 `0.1.3` 且一致，当前版本在目录中唯一存在并排在首位；`CHANGELOG.md` 必须包含目录中的全部分组和条目，README 必须链接更新日志与 GitHub Releases。API 回归必须覆盖鉴权后的 `GET /api/releases` 闭合 schema、无 workspace 写入与 `no-store`；管理台回归必须覆盖公共系统导航顺序、`/releases` 深链、当前发行、发布日期、分组日志、刷新和失败保留旧目录。视觉检查至少覆盖 390 与 1440px 的 light/dark 页面，确认大号版本号、三列日志与移动端单列无横向溢出。历史 `0.1.0` 或 `0.1.1` 到 `0.1.2` verifier 必须保持绑定完整 0.1.2 checkout；`0.1.2` 到 `0.1.3` 升级脚本回归必须覆盖目标版本不一致拒绝、plan 零写入、apply 的 down → 全 Agent SQLite 恢复点 → up → status → doctor 顺序、启动期 `conversation-chat-media-v1` 迁移声明，以及恢复点或启动失败时不伪称升级完成。
+版本与更新日志专项必须断言 `package.json`、`package-lock.json` 根版本、runtime contract、版本目录、Core Dockerfile 与 Compose 默认值均为 `0.1.3` 且一致，当前版本在目录中唯一存在并排在首位；`CHANGELOG.md` 必须包含目录中的全部分组和条目，README 必须链接更新日志与 GitHub Releases。API 回归必须覆盖鉴权后的 `GET /api/releases` 闭合 schema、无 workspace 写入与 `no-store`；管理台回归必须覆盖公共系统导航顺序、`/releases` 深链、当前发行、发布日期、分组日志、刷新和失败保留旧目录。视觉检查至少覆盖 390 与 1440px 的 light/dark 页面，确认大号版本号、三列日志与移动端单列无横向溢出。历史 `0.1.0` 或 `0.1.1` 到 `0.1.2` verifier 必须保持绑定完整 0.1.2 checkout；`0.1.2` 到 `0.1.3` 升级脚本回归必须覆盖目标版本不一致拒绝、plan 零写入、apply 的 down → 全 Agent SQLite 恢复点 → up → status → doctor 顺序、启动期 `conversation-chat-media-v2` 迁移声明，以及恢复点或启动失败时不伪称升级完成。
 
 聊天媒体导出与表情导入专项验收矩阵：
 
@@ -31,9 +31,9 @@ Agent 与系统设置的控件级保存回归必须覆盖 toggle 与选择项直
 | 句柄范围 | 当前图片/文件、两条明确引用、普通历史消息、伪造 message ID、过期回合、配置 epoch 变化、Web Chat、prompt override、Agent 不匹配 | 只为真实 OneBot 当前/引用媒体构造端口；模型上下文显示稳定句柄；历史、跨会话、跨 Agent、过期与伪造句柄在任何下载或 workbench 写前失败 |
 | 输入与下载 | URL、Base64、源路径、目标路径、账号、Agent ID、远端重定向、私网/本地地址、超时与超限 | strict 参数只接受 handle；模型不能发起任意 URL 下载；运行时冻结的精确消息 URL继续经过附件 fetcher 的 DNS、SSRF、重定向、超时和大小门禁 |
 | 文件校验与发布 | PNG/JPEG/WebP/GIF/PDF/Office/文本、空文件、未知二进制、损坏 JSON/ZIP、MIME/扩展伪装、cache symlink、hardlink、源变化、目标冲突、父目录替换、重复导出、发布中断 | 导出只发布 `chat-media-<sha256>.<ext>` 0600 单链接文件；类型、摘要、大小和图片宽高一致；parent-bound create-if-missing 不覆盖冲突目标，重复摘要返回去重，底层错误不泄露绝对路径 |
-| 权限 | 管理员/非管理员、私聊/群聊、新/旧 Agent、Native Core + NapCat Docker、Docker Core + NapCat Docker | 有本轮媒体的真实 QQ 会话可导出到当前 Agent Native workbench；表情写入仅管理员 QQ 私聊；Docker 只通过 Native workbench 只读投影读取导出结果 |
+| 权限 | 管理员/非管理员、私聊/群聊、新/旧 Agent、Native Core + NapCat Docker、Docker Core + NapCat Docker | 有本轮媒体的真实 QQ 会话可导出到当前 Agent Native workbench；表情写入仅当前 Agent 管理员 QQ 的私聊或群聊；后台与 Native 读取权威入口，Docker 通过 Native workbench 只读投影读取相同表情、Skill、自拍和知识配置 |
 | 表情导入 | PNG/JPEG/WebP、file handle、非法 key、8 MiB、64M 像素、同 key 同 hash、同 key 新 hash、并发、目录/清单竞态 | 只接受图片 handle；复用现有规范化 admission、哈希命名、版本/key 上限和 parent-bound 发布；`emojis.jsonl` 串行原子更新且不产生第二索引 |
-| 提示词与升级 | 默认私聊/群聊、公共/Agent override、自定义消息、重复 migration、0.1.2 plan/apply/失败恢复 | v1 合同说明 exact handle、工具不可用时停止旁路、Native/Docker 路径和管理员写边界；迁移保留模板结构且幂等；升级创建恢复点并以 status/doctor 收口 |
+| 提示词与升级 | 默认私聊/群聊、公共/Agent override、自定义消息、重复 migration、0.1.2 plan/apply/失败恢复 | v2 合同说明 exact handle、工具不可用时停止旁路、Native/Docker 同一资源入口和管理员 QQ 私聊/群聊写边界；v1 原位迁移保留模板结构且幂等；升级创建恢复点并以 status/doctor 收口 |
 
 Agent 配置文件夹导入专项必须覆盖：直接文件夹和单层包装目录、ZIP 兼容输入、缺少 `agent.json` 或部分 Bot/OneBot 字段时使用目标默认值补齐、包内头像与手动头像优先级、预检的包含/缺失列表，以及创建后注册表和工作区一致。负例必须覆盖 `.env`、Provider 或管理员密钥、SQLite/队列/日志/备份、未知文件、路径穿越、重复路径、非 NFC Unicode、控制字符、ZIP slip、符号链接、硬链接或特殊条目、归档与展开大小、文件数量、无效 UTF-8/JSON/图片和自拍清单；任一失败均不得物化目标目录或注册行。还必须注入目录发布、注册表写入和创建回调失败，证明临时目录清理、已发布目录回滚和既有 Agent/工作区拒绝覆盖。管理台回归必须覆盖 `webkitRelativePath` 文件夹载荷、ZIP 载荷、校验失败清空、弹层关闭后重开状态清空，以及 390、768、1440、1920px 的 light/dark 截图无横向溢出。
 

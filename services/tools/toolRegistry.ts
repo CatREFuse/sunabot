@@ -316,8 +316,8 @@ const catalog: readonly ToolCatalogEntry[] = [
     available: (options) => typeof options.chatMedia?.importEmoji === "function",
     unavailableReason: "当前会话没有管理员表情导入权限或可导入图片。",
     unavailabilityKind: "session",
-    accessLabel: "管理员 QQ 私聊可用",
-    accessDescription: "仅管理员 QQ 私聊可把本轮受控图片导入当前 Agent 表情库。",
+    accessLabel: "管理员 QQ 会话可用",
+    accessDescription: "当前 Agent 的管理员可在 QQ 私聊或群聊中把本轮受控图片导入同一表情库。",
     defaultEnabled: true,
     execution: "inline"
   },

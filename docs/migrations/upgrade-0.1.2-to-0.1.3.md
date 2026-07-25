@@ -5,8 +5,8 @@
 ## 变更范围
 
 - 新增 `export_chat_media`，只读取当前消息或明确引用消息中的运行时绑定媒体；
-- 新增管理员 QQ 私聊专用 `import_chat_emoji`；
-- 私聊与群聊持久系统提示词增加 `<chat_media_export_contract version="1">`；
+- 新增当前 Agent 管理员 QQ 私聊与群聊可用的 `import_chat_emoji`；
+- 私聊与群聊持久系统提示词增加 `<chat_media_export_contract version="2">`；
 - 不修改业务 SQLite schema，不搬移既有资源目录。
 
 ## 预检
@@ -29,7 +29,7 @@ npm run upgrade:0.1.3 -- apply
 1. `./sunabot.sh down`；
 2. 为默认 Plana 及全部 Agent 的业务库和 queue 创建离线 SQLite 恢复点；
 3. `./sunabot.sh up`；
-4. 各 Agent 启动时运行 `conversation-chat-media-v1` 提示词迁移，保留管理员消息、顺序、工具与 response schema，并在首次迁移前创建一次 0600 备份；
+4. 各 Agent 启动时运行 `conversation-chat-media-v2` 提示词迁移，保留管理员消息、顺序、工具与 response schema，并在首次迁移前创建一次 0600 备份；
 5. `./sunabot.sh status`；
 6. `./sunabot.sh doctor`。
 

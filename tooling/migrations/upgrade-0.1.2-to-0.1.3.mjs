@@ -9,7 +9,7 @@ import { createRecoveryPoint } from "../workspace/sqlite-recovery.mjs";
 
 export const FROM_VERSION = "0.1.2";
 export const TARGET_VERSION = "0.1.3";
-export const PROMPT_MIGRATION_ID = "conversation-chat-media-v1";
+export const PROMPT_MIGRATION_ID = "conversation-chat-media-v2";
 
 const root = resolveProjectRoot(import.meta.url);
 const IS_MAIN = process.argv[1]

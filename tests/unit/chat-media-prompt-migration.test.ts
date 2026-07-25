@@ -21,7 +21,8 @@ describe("chat media system prompt contract", () => {
       expect(system.content).toContain("`export_chat_media`");
       expect(system.content).toContain("`import_chat_emoji`");
       expect(system.content).toContain("不得猜测");
-      expect(system.content).toContain("管理员 QQ 私聊");
+      expect(system.content).toContain("管理员 QQ 私聊或群聊");
+      expect(system.content).toContain("native-workbench/emoji/emojis.jsonl");
     }
   );
 
@@ -58,5 +59,31 @@ describe("chat media system prompt contract", () => {
       { role: "developer", content: CHAT_MEDIA_EXPORT_CONTRACT },
       { role: "user", content: "@{user.input}" }
     ]);
+  });
+
+  it("upgrades the version 1 contract without changing surrounding administrator content", () => {
+    const template: FinalPromptTemplate = {
+      messages: [{
+        role: "system",
+        content: [
+          "管理员前置规则",
+          '<chat_media_export_contract version="1">',
+          "`import_chat_emoji` 仅在管理员 QQ 私聊中可用。",
+          "</chat_media_export_contract>",
+          "管理员后置规则"
+        ].join("\n")
+      }],
+      tools: [],
+      response_format: { type: "text" }
+    };
+
+    const migrated = migrateConversationChatMediaTemplate(template);
+    const content = (migrated.messages[0] as { content: string }).content;
+
+    expect(content).toContain("管理员前置规则");
+    expect(content).toContain("管理员后置规则");
+    expect(content).toContain('<chat_media_export_contract version="2">');
+    expect(content).not.toContain('<chat_media_export_contract version="1">');
+    expect(migrateConversationChatMediaTemplate(migrated)).toBe(migrated);
   });
 });

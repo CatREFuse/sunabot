@@ -8,13 +8,14 @@ import {
 import { resolveSafePromptFilePath } from "./promptWorkspace.js";
 import { CONFIGURATION_DIRECTORY_INDEX_CONTRACT } from "./bashWorkbenchPromptMigration.js";
 
-const CHAT_MEDIA_CONTRACT_MARKER = '<chat_media_export_contract version="1">';
+const LEGACY_CHAT_MEDIA_CONTRACT_MARKER = '<chat_media_export_contract version="1">';
+const CHAT_MEDIA_CONTRACT_MARKER = '<chat_media_export_contract version="2">';
 
 export const CHAT_MEDIA_EXPORT_CONTRACT = [
   CHAT_MEDIA_CONTRACT_MARKER,
   "当前消息和明确引用消息中的图片、文件会以 `message:<message-id>:image:<index>` 或 `message:<message-id>:file:<index>` 媒体句柄显示。需要保存原始媒体时，只能把提示词中原样出现的句柄传给 `export_chat_media`；不得猜测、改写或把句柄当作路径、URL、Base64、下载地址。",
   "`export_chat_media` 只解析本轮当前 Agent、当前消息及其明确引用消息实际提供的媒体；工具不可用或返回句柄不可用时，停止尝试通过 Bash、联网工具或任意 URL 获取原件。导出结果返回相对 Workbench 路径、SHA-256、MIME、扩展名、宽高和字节数；Native Bash 直接使用返回路径，Docker Bash 通过只读 `native-workbench/<返回路径>` 读取。",
-  "`import_chat_emoji` 仅在本轮实际提供该工具的管理员 QQ 私聊中可用。导入时传入原样媒体句柄和表情 key，由工具完成格式校验、哈希命名、去重及 `emojis.jsonl` 原子更新；不得用 Bash 直接修改表情图片或目录清单。普通私聊和群聊只能在实际提供 `export_chat_media` 时导出到 Workbench。",
+  "`import_chat_emoji` 仅在本轮实际提供该工具的当前 Agent 管理员 QQ 私聊或群聊中可用。导入时传入原样媒体句柄和表情 key，由工具完成格式校验、哈希命名、去重及权威 `emojis.jsonl` 原子更新；Native 从 `emoji/emojis.jsonl` 寻址，Docker 从只读 `native-workbench/emoji/emojis.jsonl` 寻址同一份表情配置。不得用 Bash 直接修改表情图片或目录清单，普通 QQ 用户只能在实际提供 `export_chat_media` 时导出到 Workbench。",
   "媒体句柄和提示词规则不能扩大本轮工具实际授予的 Agent、会话、消息、路径或写入权限。",
   "</chat_media_export_contract>"
 ].join("\n");
@@ -43,6 +44,25 @@ export function migrateConversationChatMediaTemplate(
   ))) return template;
 
   const messages = [...template.messages];
+  const legacyIndex = messages.findIndex((message) => (
+    isRecord(message)
+    && typeof message.content === "string"
+    && message.content.includes(LEGACY_CHAT_MEDIA_CONTRACT_MARKER)
+  ));
+  if (legacyIndex >= 0) {
+    const message = messages[legacyIndex] as Record<string, unknown> & { content: string };
+    messages[legacyIndex] = {
+      ...message,
+      content: replaceContractBlock(
+        message.content,
+        LEGACY_CHAT_MEDIA_CONTRACT_MARKER,
+        "</chat_media_export_contract>",
+        CHAT_MEDIA_EXPORT_CONTRACT
+      )
+    } as FinalPromptTemplate["messages"][number];
+    return { ...template, messages };
+  }
+
   const indexedContract = messages.findIndex((message) => (
     isRecord(message)
     && typeof message.content === "string"
@@ -87,6 +107,19 @@ function findLastIndex<T>(items: readonly T[], predicate: (item: T) => boolean) 
     if (predicate(items[index]!)) return index;
   }
   return -1;
+}
+
+function replaceContractBlock(
+  content: string,
+  startMarker: string,
+  endMarker: string,
+  replacement: string
+) {
+  const start = content.indexOf(startMarker);
+  const end = content.indexOf(endMarker, start + startMarker.length);
+  if (start < 0) return content;
+  if (end < 0) return `${content.trimEnd()}\n\n${replacement}`;
+  return `${content.slice(0, start)}${replacement}${content.slice(end + endMarker.length)}`;
 }
 
 async function atomicWriteText(filePath: string, content: string) {

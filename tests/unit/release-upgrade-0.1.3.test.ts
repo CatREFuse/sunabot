@@ -51,7 +51,7 @@ describe("0.1.2 to 0.1.3 release upgrade", () => {
       targetVersion: "0.1.3",
       changesRequired: true,
       promptMigration: {
-        id: "conversation-chat-media-v1",
+        id: "conversation-chat-media-v2",
         mode: "startup-preserving",
         backupPolicy: "once"
       },
@@ -84,7 +84,7 @@ describe("0.1.2 to 0.1.3 release upgrade", () => {
       fromVersion: "0.1.2",
       targetVersion: "0.1.3",
       promptMigration: {
-        id: "conversation-chat-media-v1",
+        id: "conversation-chat-media-v2",
         appliedBy: "runtime-startup"
       },
       runtime: {

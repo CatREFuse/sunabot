@@ -40,7 +40,7 @@ export const RELEASE_CATALOG: ReleaseCatalog = {
         {
           title: "表情导入",
           items: [
-            "管理员 QQ 私聊可把本轮图片直接导入当前 Agent 表情库。",
+            "当前 Agent 的管理员可在 QQ 私聊或群聊中把本轮图片直接导入同一表情库。",
             "导入统一执行图片校验、规范化、内容去重和 JSONL 原子更新。",
             "系统提示词会说明句柄、工作区路径和表情写入边界。"
           ]
