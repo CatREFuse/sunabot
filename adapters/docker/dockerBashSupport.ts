@@ -456,7 +456,7 @@ export function buildContainerBody(
         Type: "local",
         Config: { "max-size": "512k", "max-file": "1", compress: "false" }
       },
-      NetworkMode: "none",
+      NetworkMode: "bridge",
       ReadonlyRootfs: true,
       CapDrop: ["ALL"],
       SecurityOpt: ["no-new-privileges:true"],

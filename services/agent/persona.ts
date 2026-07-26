@@ -48,13 +48,13 @@ export function buildConversationPromptVariables(config: AppConfig) {
     "runtime.address_rules": buildAddressRules(config),
     "runtime.scope_rules": "当消息来自群聊时，注意区分用户群聊与 bot 群聊；bot 群聊当前只保留上下文，不主动编排。",
     "runtime.tool_rules": [
-      "当本轮没有必要回复、话题已经自然结束，或继续回应其他 Bot 的称呼可能引起循环广播时，单独调用 no_reply；必须在发送 assistant_text 或调用其他工具前决定，并且调用后不要输出正文。",
+      "当本轮没有必要继续回复、话题已经自然结束，或继续回应其他 Bot 的称呼可能引起循环广播时调用 no_reply；可以先查询记忆、知识库或调用其他工具，调用后不要再输出新的最终正文。",
       "当需要发出自己的形象、自拍、头像、照片或包含自身外观的图片时，调用 selfie 工具，不要用 generate_img 代替。",
       "当用户需要当前 Agent workbench 中已经存在的文件或图片时，调用 send_file；只填写 workbench 相对路径，不要指定、猜测或改投其他 QQ、群聊或 Bot 账号。",
       "当对话出现明确的称呼、偏好、反感、禁忌、边界、群规、关系变化，或解释了小团体黑话、暗号、内部梗与共同话题时，调用 read_air；在 insight 中写明角色对此的理解、适用场域、证据与不确定性。",
       "daily_schedule 是今天已经提交的生活事实；只有角色因对话、邀约、延误、职责或新想法产生具体的改期理由时才调用 call_director，并在 request 中写清想改什么和原因。不得自行改写行程，也不要为迎合用户频繁改期。",
       "调用 generate_img 或 selfie 时，默认使用 1K 清晰度；只有用户明确要求更高清、更清晰、壁纸、海报、打印、2K 或 4K 时，才把 resolution 设为 2K 或 4K。",
-      "调用异步 codex、generate_img 或 selfie 时，必须在 dispatch_message 中用当前人格简短告知用户已收到且已经开始处理；不要承诺成功或复述完整需求，并且该异步工具必须单独调用。"
+      "调用异步 codex、generate_img 或 selfie 时，必须在 dispatch_message 中用当前人格简短告知用户已收到且已经开始处理；不要承诺成功或复述完整需求，可在前置工具完成后发起，也可与同响应 inline 工具组合。"
     ].join("\n")
   };
 }
@@ -153,11 +153,11 @@ function buildSystemPrompt(files: PersonaFile[], config: AppConfig) {
     outputRules,
     buildAddressRules(config),
     "当消息来自群聊时，注意区分用户群聊与 bot 群聊；bot 群聊当前只保留上下文，不主动编排。",
-    "当本轮没有必要回复、话题已经自然结束，或继续回应其他 Bot 的称呼可能引起循环广播时，单独调用 no_reply；必须在发送 assistant_text 或调用其他工具前决定，并且调用后不要输出正文。",
+    "当本轮没有必要继续回复、话题已经自然结束，或继续回应其他 Bot 的称呼可能引起循环广播时调用 no_reply；可以先查询记忆、知识库或调用其他工具，调用后不要再输出新的最终正文。",
     "当需要发出自己的形象、自拍、头像、照片或包含自身外观的图片时，调用 selfie 工具，不要用 generate_img 代替。",
     "当用户需要当前 Agent workbench 中已经存在的文件或图片时，调用 send_file；只填写 workbench 相对路径，不要指定、猜测或改投其他 QQ、群聊或 Bot 账号。",
     "调用 generate_img 或 selfie 时，默认使用 1K 清晰度；只有用户明确要求更高清、更清晰、壁纸、海报、打印、2K 或 4K 时，才把 resolution 设为 2K 或 4K。",
-    "调用异步 codex、generate_img 或 selfie 时，必须在 dispatch_message 中用当前人格简短告知用户已收到且已经开始处理；不要承诺成功或复述完整需求，并且该异步工具必须单独调用。",
+    "调用异步 codex、generate_img 或 selfie 时，必须在 dispatch_message 中用当前人格简短告知用户已收到且已经开始处理；不要承诺成功或复述完整需求，可在前置工具完成后发起，也可与同响应 inline 工具组合。",
     sections
   ]
     .filter(Boolean)

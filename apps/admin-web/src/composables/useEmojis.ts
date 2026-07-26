@@ -12,7 +12,7 @@ import { emojiKeyValidationError, normalizeEmojiKey } from "../utils/emojiKey";
 import { apiRequest } from "./useAdminApi";
 
 const MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
-const ALLOWED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
+const ALLOWED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 
 export function useEmojis() {
   const emojis = shallowRef<EmojiRecord[]>([]);
@@ -414,7 +414,7 @@ function normalizeAgentId(agentId: string) {
 function validateUpload(key: string, file: File) {
   const keyError = emojiKeyValidationError(key);
   if (keyError) return keyError;
-  if (!ALLOWED_IMAGE_TYPES.has(file.type)) return "仅支持 PNG、JPEG、WebP";
+  if (!ALLOWED_IMAGE_TYPES.has(file.type)) return "仅支持 PNG、JPEG、WebP、GIF";
   if (!file.size || file.size > MAX_UPLOAD_BYTES) return "图片不能超过 8 MB";
   return "";
 }

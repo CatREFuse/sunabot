@@ -271,11 +271,17 @@ export async function runtime_resolveProviderBashHandle(
       backend: candidate.backend,
       accessMode: candidate.accessMode,
       strictMode: candidate.strictMode,
+      isAdmin: candidate.isAdmin,
+      userRequest: candidate.userRequest,
       approvalContext: candidate.approvalContext,
       isCurrent: () => this.configEpoch === epoch,
       audit: async (input: Parameters<ProviderBashOptions["audit"]>[0]) => {
         if (this.configEpoch !== epoch) throw new Error("BASH_AUDIT_UNAVAILABLE");
-        const result = await auditPort.run(config, input);
+        const result = await auditPort.run(config, {
+          ...input,
+          isAdmin: candidate.isAdmin,
+          userRequest: candidate.userRequest
+        });
         if (this.configEpoch !== epoch) throw new Error("BASH_AUDIT_UNAVAILABLE");
         return result;
       },
@@ -342,6 +348,8 @@ function resolveProviderBashCandidate(
     backend,
     accessMode: backend === "native" ? "admin" as const : "isolated" as const,
     strictMode: bash.strictMode,
+    isAdmin: administrator,
+    userRequest: incoming.text,
     approvalContext,
     ...(confirmedApprovalId ? { confirmedApprovalId } : {})
   });

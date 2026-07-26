@@ -38,5 +38,5 @@ export const nativeBashTool = bashToolDefinition(
 
 export const dockerBashTool = bashToolDefinition(
   DOCKER_BASH_TOOL_NAME,
-  "Run a command in an isolated Docker environment after an independent adversarial approval agent reviews it. The current Agent has a dedicated Docker workbench with no network or Docker socket access; Skill and MCP configuration is mounted read-only."
+  "Run a command in an isolated Docker environment after an independent adversarial approval agent reviews it. The current Agent has a dedicated writable Docker workbench and outbound network access, with no Docker socket; Native workbench, Skill, and MCP configuration are mounted read-only."
 );

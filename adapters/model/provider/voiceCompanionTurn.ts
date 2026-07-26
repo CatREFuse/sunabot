@@ -1,5 +1,4 @@
 import { SEND_VOICE_MESSAGE_TOOL_NAME } from "../../../services/tools/sendConversationAssetTool.js";
-import { ASSISTANT_TEXT_TOOL_NAME } from "../../../services/tools/assistantTextTool.js";
 import {
   isProviderDeferredTool,
   isProviderToolAvailable,
@@ -12,7 +11,7 @@ import type {
   TurnToolState,
 } from "./contracts.js";
 import { readToolName } from "./promptMapping.js";
-import { hasAcceptedTurnActivity, markAcceptedTool } from "./turnToolState.js";
+import { markAcceptedTool } from "./turnToolState.js";
 import { parseVoiceCompanion } from "./voiceCompanion.js";
 
 export function providerVoiceCompanionTurn(
@@ -27,16 +26,6 @@ export function providerVoiceCompanionTurn(
     isProviderDeferredTool(name, options),
   );
   if (!companion) return null;
-  if (
-    options.systemConfig?.mutationStaged() ||
-    options.systemConfig?.turnRejected() ||
-    state.acceptedToolNames.includes("system_config") ||
-    (hasAcceptedTurnActivity(state) && !deliveredAssistantText)
-  ) {
-    throw new Error(
-      "send_voice_message must be the first accepted activity in the provider turn.",
-    );
-  }
   assertEnabled(SEND_VOICE_MESSAGE_TOOL_NAME, options, definitions);
   if (!options.voice?.enabled) {
     throw new Error(
@@ -91,9 +80,7 @@ function crossRoundAssistantText(
     siblingText.trim() ||
     calls.length !== 1 ||
     calls[0]?.name !== SEND_VOICE_MESSAGE_TOOL_NAME ||
-    state.assistantTextDeliveryCount !== 1 ||
-    state.acceptedToolNames.length !== 1 ||
-    state.acceptedToolNames[0] !== ASSISTANT_TEXT_TOOL_NAME ||
+    state.assistantTextDeliveryCount < 1 ||
     state.terminal !== undefined ||
     state.deliveredAssistantText?.source !== "assistant_text"
   ) {

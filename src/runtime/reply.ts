@@ -17,6 +17,10 @@ import { serializeUserGroupOrchestratorResult } from "../../services/orchestrati
 import type { ToolJobRecord } from "../../services/sessions/sessionStore.js";
 import { DISPATCH_MESSAGE_MAX_CHARS } from "../../services/tools/deferredDispatch.js";
 import {
+  codexControlAvailable,
+  codexTurnAvailable
+} from "../../services/tools/codexControlPolicy.js";
+import {
   GENERATE_IMG_TOOL_NAME,
   runGenerateImg,
   type GenerateImgReferenceContext
@@ -101,6 +105,8 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
     const provider = this.getProvider();
     const admin = this.adminIdentity();
     const isAdmin = isAdminUserId(incoming.userId, admin);
+    const codexControl = !options.atomicImageReply && codexControlAvailable(
+      { isAdmin, scope: incoming.scope, promptOverride: options.promptOverride });
     const promptId = incoming.scope === "private"
       ? "conversation.private-reply"
       : "conversation.group-reply";
@@ -401,9 +407,16 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
             logContext
           })
         },
-        asyncCodex: !options.atomicImageReply && (options.allowAsyncCodex ?? true)
-          && this.config.bot.tools.codex.enabled
-          && toolCapabilities.codex,
+        asyncCodex: codexTurnAvailable({
+          enabled: this.config.bot.tools.codex.enabled,
+          control: codexControl,
+          workerAvailable: isAdmin
+            && options.promptOverride === undefined
+            && !options.atomicImageReply
+            && (options.allowAsyncCodex ?? true)
+            && toolCapabilities.codex
+        }),
+        codexControl,
         asyncImage: options.atomicImageReply ? false : options.allowAsyncImage ?? true,
         imageTools: options.allowImageTools ?? true,
         systemConfig: systemConfigLifecycle?.toolPort, cron: this.scheduledTasks.toolPort(incoming, isAdmin, options.promptOverride),
@@ -424,7 +437,6 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
           { signal: options.signal }
         );
       }
-      if (turn.kind !== "completed") systemConfigLifecycle?.discard();
       if (options.signal?.aborted || (options.isCurrent && !options.isCurrent())) {
         systemConfigLifecycle?.discard();
         return sent;
@@ -435,6 +447,9 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
         () => undefined,
         { signal: options.signal }
       );
+      if (turn.kind !== "completed") {
+        await systemConfigLifecycle?.commitWithoutConfirmation();
+      }
       if (turn.kind === "no_reply" || (options.atomicImageReply && turn.kind === "completed" && generatedImages.length === 0)) {
         this.discardAssistantRequest(incoming, logRunId);
         if (options.delivery) options.delivery.terminalStatus = "no_reply";

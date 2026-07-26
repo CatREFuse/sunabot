@@ -18,6 +18,7 @@ const ScheduledTasksView = () => import("./views/ScheduledTasksView.vue");
 const DirectorView = () => import("./views/DirectorView.vue");
 const VoiceView = () => import("./views/VoiceView.vue");
 const ReleasesView = () => import("./views/ReleasesView.vue");
+const DesignDemoView = () => import("./views/DesignDemoView.vue");
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -47,6 +48,7 @@ export const router = createRouter({
     { path: "/settings/:section?", name: "settings", component: SettingsView, props: { scope: "system" } },
     { path: "/config-doctor", name: "config-doctor", component: ConfigDoctorView },
     { path: "/releases", name: "releases", component: ReleasesView },
+    { path: "/design-demo/:panel?", name: "design-demo", component: DesignDemoView },
     { path: "/:pathMatch(.*)*", redirect: "/overview" }
   ],
   scrollBehavior: () => ({ top: 0 })

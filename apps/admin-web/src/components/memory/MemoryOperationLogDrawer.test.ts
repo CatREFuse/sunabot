@@ -7,6 +7,7 @@ describe("MemoryOperationLogDrawer", () => {
     const wrapper = mount(MemoryOperationLogDrawer, {
       props: {
         open: true,
+        agentId: "plana",
         logs: [{
           id: "operation-1",
           at: "2026-07-24T01:00:00.000Z",
@@ -48,9 +49,9 @@ describe("MemoryOperationLogDrawer", () => {
     expect(wrapper.get('[aria-label="记忆操作日志列表"]').text()).toContain("group:10001 · user_group");
     expect(wrapper.get('[aria-label="记忆操作日志列表"]').text()).toContain("数量 1 → 2 · 变更 1");
 
-    await wrapper.get('[aria-label="记忆操作日志分页"]').findAll("button")[1]!.trigger("click");
+    await wrapper.get('[aria-label="记忆操作日志分页"]').get('button[aria-label="下一页"]').trigger("click");
     expect(wrapper.emitted("page")).toEqual([[2]]);
-    await wrapper.findAll("button").find((button) => button.text() === "关闭")!.trigger("click");
+    await wrapper.get('button[aria-label="关闭"]').trigger("click");
     expect(wrapper.emitted("close")).toHaveLength(1);
   });
 });

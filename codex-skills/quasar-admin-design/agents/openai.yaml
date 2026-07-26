@@ -1,0 +1,4 @@
+interface:
+  display_name: "Quasar Admin Design"
+  short_description: "复刻 Quasar 灰阶、圆角、动效与管理台界面组件"
+  default_prompt: "Use $quasar-admin-design to design or refine a Sunabot admin interface with the Quasar visual system."

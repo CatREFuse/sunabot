@@ -45,6 +45,7 @@ export interface ProviderCompleteOptions {
   conversationAssets?: ProviderConversationAssetOptions;
   voice?: ProviderVoiceCapability;
   asyncCodex?: boolean;
+  codexControl?: boolean;
   asyncImage?: boolean;
   imageTools?: boolean;
   systemConfig?: SystemConfigToolPort;

@@ -281,7 +281,7 @@ function runtimePromptMigrations(config: AppConfig, selfiePromptDefault: string)
       [inboundId]
     );
     const bashWorkbenchId = add(
-      "conversation-bash-workbench-v3",
+      "conversation-bash-workbench-v4",
       "system",
       file,
       () => migrateConversationBashWorkbenchPrompt(config, file),
@@ -345,19 +345,33 @@ function runtimePromptMigrations(config: AppConfig, selfiePromptDefault: string)
     [config.bot.memory.userProfilePrompt, "memory.user-profile"]
   ] as const) {
     memoryPerspectiveIds.set(file, add(
-      "memory-perspective-v6",
+      "memory-perspective-v7",
       "system",
       file,
       () => migrateMemoryPerspectivePrompt(config, file, ADMIN_RUNTIME_PROMPT_DEFAULTS[promptId] ?? ""),
       dependency(file)
     ));
   }
-  add(
+  const workingMemoryDocumentId = add(
     "working-memory-document-v1",
     "system",
     config.bot.memory.workMemoryCompressInPrompt,
     () => migrateWorkingMemoryDocumentPrompt(config, config.bot.memory.workMemoryCompressInPrompt),
     [requiredMigrationId(memoryPerspectiveIds, config.bot.memory.workMemoryCompressInPrompt)]
+  );
+  const workingMemoryModelOwnedId = add(
+    "working-memory-model-owned-v1",
+    "system",
+    config.bot.memory.workMemoryCompressInPrompt,
+    () => migrateWorkingMemoryDocumentPrompt(config, config.bot.memory.workMemoryCompressInPrompt),
+    [workingMemoryDocumentId]
+  );
+  add(
+    "working-memory-model-owned-v2",
+    "system",
+    config.bot.memory.workMemoryCompressInPrompt,
+    () => migrateWorkingMemoryDocumentPrompt(config, config.bot.memory.workMemoryCompressInPrompt),
+    [workingMemoryModelOwnedId]
   );
   return definitions;
 }

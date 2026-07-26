@@ -43,7 +43,7 @@ export async function runtime_replyToToolCompletion(
   const isCurrent = () => this.isReplyTaskCurrent(incoming, gate, signal);
   if (!isCurrent()) return;
   if (payload.toolName === GENERATE_IMG_TOOL_NAME || payload.toolName === SELFIE_TOOL_NAME) {
-    const result = readDeferredImageResult(payload.outcome.result);
+    const result = readDeferredImageResult(payload.outcome.result, payload.outcome.error);
     const text = result.image
       ? ""
       : `图片生成失败：${sanitizeErrorDetail(result.error || "没有可用图片")}`;
@@ -97,13 +97,31 @@ export async function runtime_replyToToolCompletion(
   });
 }
 
-function readDeferredImageResult(value: unknown) {
+function readDeferredImageResult(value: unknown, outcomeError: unknown) {
   const result = value && typeof value === "object" && !Array.isArray(value)
     ? value as { image?: ImageResult; error?: unknown }
     : {};
   const image = result.image;
   return {
     image: image && (image.url || image.filePath) ? image : undefined,
-    error: typeof result.error === "string" ? result.error : ""
+    error: readDeferredError(result.error) || readDeferredError(outcomeError)
   };
+}
+
+function readDeferredError(value: unknown) {
+  if (typeof value === "string") return userFacingImageError(value);
+  if (!value || typeof value !== "object" || Array.isArray(value)) return "";
+  const error = value as { name?: unknown; message?: unknown };
+  const message = typeof error.message === "string" ? error.message : "";
+  if (error.name === "ImageGenerationTransportError") {
+    return "上游生图连接中断，请稍后重试";
+  }
+  return userFacingImageError(message);
+}
+
+function userFacingImageError(message: string) {
+  return message === "terminated" ||
+    message === "Image generation transport failed before the response completed."
+    ? "上游生图连接中断，请稍后重试"
+    : message;
 }

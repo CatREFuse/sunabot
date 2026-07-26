@@ -8,14 +8,20 @@ export async function prepareUserTestWorkspace(input: {
   source: string;
   destination: string;
   confirmCredentialCopy: boolean;
+  agentId?: string;
 }) {
   const prepared = await prepareProviderSmokeWorkspace({
     source: input.source,
     destination: input.destination,
-    confirmCredentialCopy: input.confirmCredentialCopy
+    confirmCredentialCopy: input.confirmCredentialCopy,
+    agentId: input.agentId
   });
   await preparePromptWorkspace(prepared.source, prepared.destination, prepared.configPath);
-  const isolatedAgentRoot = path.join(prepared.destination, "business/agents/plana");
+  const isolatedAgentRoot = path.join(
+    prepared.destination,
+    "business/agents",
+    prepared.agentId
+  );
   await fs.chmod(path.join(prepared.destination, "business/agents"), 0o700);
   await Promise.all([
     "WORKING_MEMORY.md",
@@ -31,7 +37,8 @@ export async function prepareUserTestWorkspace(input: {
     schemaVersion: 1,
     purpose: "sunabot-user-test-harness",
     createdAt: new Date().toISOString(),
-    sourceDigest: path.basename(path.resolve(input.source))
+    sourceDigest: path.basename(path.resolve(input.source)),
+    agentId: prepared.agentId
   };
   await fs.writeFile(
     path.join(prepared.destination, MARKER_FILE),

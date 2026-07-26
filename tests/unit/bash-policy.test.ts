@@ -44,6 +44,39 @@ describe("deterministic Bash policy", () => {
   });
 
   it.each([
+    "./index.md",
+    "knowledge/index.json",
+    "$PWD/knowledge/bash-freedom.md",
+    "${PWD}/knowledge/.bash-freedom.md.tmp"
+  ])("ignores an allow audit's accidental workbench-relative outside entry: %s", (reportedPath) => {
+    expect(evaluateBashPolicy({
+      command: "cat index.md && printf ok > knowledge/bash-freedom.md",
+      backend: "native",
+      accessMode: "admin",
+      strictMode: true,
+      workbenchRoot,
+      audit: {
+        ...allowedAudit,
+        outsideAccesses: [{ path: reportedPath, access: "read" }]
+      }
+    })).toMatchObject({ decision: "allow", outsideAccesses: [] });
+  });
+
+  it("still rejects parent traversal in an allow audit's relative path entry", () => {
+    expect(evaluateBashPolicy({
+      command: "cat index.md",
+      backend: "native",
+      accessMode: "admin",
+      strictMode: true,
+      workbenchRoot,
+      audit: {
+        ...allowedAudit,
+        outsideAccesses: [{ path: "../outside", access: "read" }]
+      }
+    })).toMatchObject({ decision: "deny", risk: "medium" });
+  });
+
+  it.each([
     { backend: "native" as const, accessMode: "admin" as const, path: "/mcp/servers.json" },
     { backend: "docker" as const, accessMode: "isolated" as const, path: "/skills/example/SKILL.md" }
   ])("allows audited read-only shared configuration access in $backend Bash", ({ backend, accessMode, path }) => {

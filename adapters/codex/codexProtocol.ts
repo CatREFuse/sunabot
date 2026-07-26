@@ -11,6 +11,8 @@ export interface CodexJsonlSnapshot {
   usage?: Record<string, number>;
   errorMessages: string[];
   itemTypes: string[];
+  outputTruncated: boolean;
+  outputBytes: number;
 }
 
 export class CodexJsonlLifecycleParser {
@@ -19,9 +21,11 @@ export class CodexJsonlLifecycleParser {
   private state: CodexJsonlSnapshot = {
     turnStarted: false,
     turnCompleted: false,
-    turnFailed: false,
-    errorMessages: [],
-    itemTypes: []
+      turnFailed: false,
+      errorMessages: [],
+      itemTypes: [],
+      outputTruncated: false,
+      outputBytes: 0
   };
 
   get snapshot(): CodexJsonlSnapshot {
@@ -36,9 +40,8 @@ export class CodexJsonlLifecycleParser {
   push(chunk: Buffer | string) {
     const text = String(chunk);
     this.totalBytes += Buffer.byteLength(text);
-    if (this.totalBytes > CODEX_MAX_STDOUT_BYTES) {
-      throw new CodexProtocolError("stdout_limit", `Codex JSONL exceeded ${CODEX_MAX_STDOUT_BYTES} bytes.`);
-    }
+    this.state.outputBytes = this.totalBytes;
+    if (this.totalBytes > CODEX_MAX_STDOUT_BYTES) this.state.outputTruncated = true;
     this.buffer += text;
     let newline = this.buffer.indexOf("\n");
     while (newline >= 0) {
@@ -101,13 +104,16 @@ export class CodexJsonlLifecycleParser {
     }
     if (type === "error") {
       const message = String(event.message ?? "Codex reported an error.").trim();
-      if (message) this.state.errorMessages.push(message.slice(0, 4_000));
+      if (message) {
+        this.state.errorMessages.push(message.slice(0, 4_000));
+        if (this.state.errorMessages.length > 64) this.state.errorMessages.shift();
+      }
       return;
     }
     if (type === "item.started" || type === "item.completed") {
       const item = readRecord(event.item);
       const itemType = String(item.type ?? "unknown");
-      this.state.itemTypes.push(itemType);
+      if (this.state.itemTypes.length < 256) this.state.itemTypes.push(itemType);
       if (type === "item.completed" && itemType === "agent_message") {
         const text = String(item.text ?? "").trim();
         if (text) this.state.lastAgentText = text;

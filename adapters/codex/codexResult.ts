@@ -5,12 +5,12 @@ import type {
   CodexTaskStatus,
   CodexToolResult
 } from "../../packages/contracts/tools/codex.js";
-import {
-  CODEX_MAX_STDOUT_BYTES,
-  CodexProtocolError
-} from "./codexProtocol.js";
+import { CodexProtocolError } from "./codexProtocol.js";
 
-interface ModelResult {
+const CODEX_MAX_RESULT_BYTES = 32 * 1024 * 1024;
+const CODEX_SUMMARY_CHARS = 32 * 1024;
+
+export interface ModelResult {
   status: "succeeded" | "failed" | "needs_input" | "unknown";
   content?: string | null;
   question?: string | null;
@@ -22,17 +22,21 @@ export const CODEX_RESULT_SCHEMA = {
   additionalProperties: false,
   properties: {
     status: { type: "string", enum: ["succeeded", "failed", "needs_input", "unknown"] },
-    content: { type: ["string", "null"] },
-    question: { type: ["string", "null"] },
-    error: { type: ["string", "null"] }
+    content: { type: ["string", "null"], maxLength: CODEX_SUMMARY_CHARS },
+    question: { type: ["string", "null"], maxLength: 4_000 },
+    error: { type: ["string", "null"], maxLength: 4_000 }
   },
   required: ["status", "content", "question", "error"]
 } as const;
 
 export async function readCodexResult(filePath: string): Promise<ModelResult> {
   const raw = await fs.readFile(filePath, "utf8");
-  if (Buffer.byteLength(raw) > CODEX_MAX_STDOUT_BYTES) {
-    throw new CodexProtocolError("result_limit", `Codex result exceeded ${CODEX_MAX_STDOUT_BYTES} bytes.`);
+  return parseCodexResultText(raw);
+}
+
+export function parseCodexResultText(raw: string): ModelResult {
+  if (Buffer.byteLength(raw) > CODEX_MAX_RESULT_BYTES) {
+    throw new CodexProtocolError("result_limit", `Codex result exceeded ${CODEX_MAX_RESULT_BYTES} bytes.`);
   }
   const parsed = JSON.parse(raw) as Record<string, unknown>;
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("result must be an object");
@@ -45,6 +49,23 @@ export async function readCodexResult(filePath: string): Promise<ModelResult> {
     content: nullableString(parsed.content),
     question: nullableString(parsed.question),
     error: nullableString(parsed.error)
+  };
+}
+
+export function withTruncatedOutputNotice(
+  result: CodexToolResult,
+  details: { outputBytes: number; reportFile: string }
+): CodexToolResult {
+  const notice = `Codex 输出已截断。报告位置：${details.reportFile}`;
+  const summary = result.content?.trim()
+    ? `${result.content.trim().slice(0, CODEX_SUMMARY_CHARS)}\n\n${notice}`
+    : notice;
+  return {
+    ...result,
+    content: summary,
+    resultFile: details.reportFile,
+    outputTruncated: true,
+    outputBytes: details.outputBytes
   };
 }
 

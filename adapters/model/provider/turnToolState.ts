@@ -33,16 +33,6 @@ export function withTurnToolState(
   };
 }
 
-export function hasAcceptedTurnActivity(state: TurnToolState) {
-  return state.assistantTextSent || state.acceptedToolNames.length > 0 || state.terminal !== undefined;
-}
-
 export function markAcceptedTool(state: TurnToolState, name: string) {
   state.acceptedToolNames.push(name);
-}
-
-export function toolOrderingError(name: string) {
-  return name === "no_reply"
-    ? "no_reply must be called before assistant text or any other tool."
-    : `Deferred tool ${name} must be called before assistant text or any other tool.`;
 }

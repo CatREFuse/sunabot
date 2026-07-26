@@ -20,6 +20,7 @@ export async function prepareProviderSmokeWorkspace(options) {
   ]);
   if (!sourceConfigPath) throw new Error("源 workspace 没有 Sunabot 配置。");
   const config = JSON.parse(await fs.readFile(sourceConfigPath, "utf8"));
+  const agentId = validAgentId(options.agentId ?? config.persona?.defaultAgentId ?? "plana");
   const provider = config.providers?.items?.find((item) => item?.id === config.providers?.defaultProviderId);
   if (!provider?.id || !provider.apiKeyEnv) throw new Error("源 workspace 的默认 Provider 配置无效。");
   const sourceEnvPath = resolveSourcePath(source, provider.envFile || "workspace/secrets/runtime.env");
@@ -39,15 +40,22 @@ export async function prepareProviderSmokeWorkspace(options) {
 
   const destinationConfigPath = path.join(destination, "business/config/sunabot.json");
   const destinationEnvPath = path.join(destination, "secrets/runtime.env");
-  const agentSource = resolveSourcePath(source, config.persona?.agentWorkspace || "workspace/agents/plana");
-  const agentDestination = path.join(destination, "business/agents/plana");
+  const configuredDefaultAgentId = validAgentId(config.persona?.defaultAgentId ?? "plana");
+  const configuredAgentWorkspace = agentId === configuredDefaultAgentId
+    ? config.persona?.agentWorkspace
+    : undefined;
+  const agentSource = resolveSourcePath(
+    source,
+    configuredAgentWorkspace || `workspace/business/agents/${agentId}`
+  );
+  const agentDestination = path.join(destination, "business/agents", agentId);
   const preparedConfig = {
     ...config,
     server: { ...config.server, host: "127.0.0.1", port: options.apiPort ?? 18_876 },
     persona: {
       ...config.persona,
-      defaultAgentId: "plana",
-      agentWorkspace: "workspace/business/agents/plana"
+      defaultAgentId: agentId,
+      agentWorkspace: `workspace/business/agents/${agentId}`
     },
     providers: {
       defaultProviderId: provider.id,
@@ -55,9 +63,13 @@ export async function prepareProviderSmokeWorkspace(options) {
     }
   };
 
+  const agentSourceExists = await directoryExists(agentSource);
+  if (!agentSourceExists && options.agentId != null) {
+    throw new Error(`源 workspace 不存在 Agent：${agentId}`);
+  }
   await fs.mkdir(path.dirname(destinationConfigPath), { recursive: true, mode: 0o700 });
   await fs.mkdir(path.dirname(destinationEnvPath), { recursive: true, mode: 0o700 });
-  if (await directoryExists(agentSource)) {
+  if (agentSourceExists) {
     await assertPathInside(agentSource, source, "Agent workspace");
     await fs.cp(agentSource, agentDestination, { recursive: true, errorOnExist: true, force: false });
   } else {
@@ -78,6 +90,7 @@ export async function prepareProviderSmokeWorkspace(options) {
     destination,
     configPath: destinationConfigPath,
     envPath: destinationEnvPath,
+    agentId,
     provider: { id: provider.id, kind: provider.kind, model: provider.model, apiKeyEnv: provider.apiKeyEnv }
   };
 }
@@ -146,6 +159,14 @@ function samePath(left, right) {
   return path.normalize(left).toLowerCase() === path.normalize(right).toLowerCase();
 }
 
+function validAgentId(value) {
+  const agentId = String(value ?? "").trim();
+  if (!/^[a-z0-9][a-z0-9_-]{0,63}$/u.test(agentId)) {
+    throw new Error("Agent ID 无效。");
+  }
+  return agentId;
+}
+
 function option(name) {
   const prefix = `--${name}=`;
   const inline = process.argv.find((value) => value.startsWith(prefix));
@@ -159,9 +180,11 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToP
     source: option("source"),
     destination: option("destination"),
     confirmCredentialCopy: process.argv.includes("--confirm-copy-provider-credential"),
+    agentId: option("agent"),
     apiPort: Number(option("api-port") || 18_876)
   });
   console.log(`隔离 Provider workspace 已准备：${result.destination}`);
+  console.log(`agent: ${result.agentId}`);
   console.log(`provider: ${result.provider.id} / ${result.provider.kind} / ${result.provider.model}`);
   console.log(`credential: configured (${result.provider.apiKeyEnv}); value hidden`);
 }

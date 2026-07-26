@@ -79,7 +79,14 @@ function dreamInput(
     longTerm: fixture.longTerm,
     userProfiles: fixture.userProfiles,
     persona: fixture.persona,
-    conversations: fixture.conversations,
+    conversations: fixture.conversations.map((conversation) => ({
+      ...conversation,
+      messages: conversation.messages.map(({
+        imageCount: _imageCount,
+        quoteCount: _quoteCount,
+        ...message
+      }) => message)
+    })),
     activeTasks: templateTimeline.activeTasks,
     directorSchedule: templateTimeline.directorSchedule
   };
@@ -99,7 +106,9 @@ function memoryCompressionInput(
   return {
     timePolicy: templateInput.timePolicy,
     now: fixture.now,
-    workingMemory: fixture.workingMemory,
+    workingMemory: fixture.workingMemory.filter((item) => (
+      item.conversationId === conversation.id
+    )),
     longTerm: fixture.longTerm,
     userProfiles: fixture.userProfiles,
     conversation: {
@@ -111,8 +120,8 @@ function memoryCompressionInput(
     },
     messages: conversation.messages.map((message) => ({
       ...message,
-      imageCount: 0,
-      quoteCount: 0
+      imageCount: message.imageCount ?? 0,
+      quoteCount: message.quoteCount ?? 0
     }))
   };
 }

@@ -166,6 +166,7 @@ async function generateCodexImage(
     const attemptMetadata = { ...metadata, ...attemptContext };
     await context.logger.request("codex.image.generate", requestBody, attemptMetadata);
     let response: Response;
+    let text: string;
     try {
       response = await fetch(normalizeCodexResponsesUrl(context.provider.baseUrl), {
         method: "POST",
@@ -176,12 +177,12 @@ async function generateCodexImage(
         },
         body: JSON.stringify(requestBody)
       });
+      text = await response.text();
     } catch (error) {
       if (isImageGenerationCancellation(error)) throw error;
       throw new ImageGenerationTransportError(error);
     }
 
-    const text = await response.text();
     const payload = parseResponsesSsePayload(text) ?? parseJson(text);
     if (!response.ok) {
       throw new ImageGenerationHttpError(

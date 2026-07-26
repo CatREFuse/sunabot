@@ -15,6 +15,7 @@ import {
 } from "./bashTool.js";
 import {
   CODEX_TOOL_NAME,
+  codexControlTool,
   codexTool,
   MEMORY_RECALL_TOOL_NAME,
   memoryRecallTool,
@@ -110,6 +111,7 @@ export interface ToolAvailability {
   conversationAssets?: { enabled: boolean };
   voice?: { enabled: boolean; languages: readonly VoiceLanguage[]; defaultLanguage: VoiceLanguage };
   asyncCodex?: boolean;
+  codexControl?: boolean;
   asyncImage?: boolean;
   imageTools?: boolean;
   systemConfig?: SystemConfigToolPort;
@@ -324,10 +326,12 @@ const catalog: readonly ToolCatalogEntry[] = [
   {
     name: SEND_FILE_TOOL_NAME,
     title: "发送文件",
-    summary: "向当前单聊或群聊发送 Agent workbench 中的文件或图片。",
+    summary: "向当前单聊或群聊发送当前会话 workbench 中的文件或图片。",
     definition: () => sendFileTool,
     available: (options) => options.conversationAssets?.enabled === true,
     unavailableReason: "当前会话不支持文件发送。",
+    accessLabel: "全部 QQ 会话可用",
+    accessDescription: "群聊与普通私聊发送 Docker workbench 文件；管理员私聊发送 Native workbench 文件。",
     defaultEnabled: true,
     execution: "inline"
   },
@@ -374,9 +378,12 @@ const catalog: readonly ToolCatalogEntry[] = [
     name: CODEX_TOOL_NAME,
     title: "Codex",
     summary: "把长任务交给异步 Codex worker。",
-    definition: () => codexTool,
+    definition: (options) => options.codexControl === true ? codexControlTool : codexTool,
     available: (options) => options.asyncCodex === true,
     unavailableReason: "Codex CLI 未安装或未登录。",
+    unavailabilityKind: "session",
+    accessLabel: "仅管理员可用",
+    accessDescription: "管理员触发的 QQ 会话与已认证管理员 Web Chat 可用。",
     execution: "deferred"
   },
   {
@@ -620,6 +627,7 @@ function applyRuntimeToolContract(
 ) {
   if (
     entry.name !== SYSTEM_CONFIG_TOOL_NAME
+    && entry.name !== CODEX_TOOL_NAME
     && entry.name !== CRON_TOOL_NAME
     && entry.name !== CALL_DIRECTOR_TOOL_NAME
     && entry.name !== READ_AIR_TOOL_NAME

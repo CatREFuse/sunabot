@@ -26,7 +26,7 @@
 | --- | --- |
 | 工具名称 | `webfetch` |
 | 执行方式 | Provider turn 内的 inline 工具 |
-| 安全分类 | `outbound_network`，与本地数据工具同一 turn 互斥 |
+| 工具组合 | 可与本地数据、MCP、Bash、Codex 和其他联网工具在同一 turn 顺序执行 |
 | 静态抓取 | Core 内有界 HTTP 抓取，使用 Defuddle 抽取正文并生成 Markdown |
 | 动态抓取 | 静态结果不足时调用独立 Playwright/Chromium 渲染服务，再由 Core 使用同一抽取器处理 DOM |
 | 动态服务边界 | 独立 Docker service，不并入 Core 或 NapCat，不挂载 workspace 和 secrets |
@@ -317,7 +317,7 @@ score = 0.55 × BM25
 
 ### 7.2 工具组合边界
 
-`webfetch` 必须加入 `toolResponsePreflight.ts` 的 `outboundNetworkTools`。它与 `read_file`、`write_file`、`send_file`、`native_bash`、`docker_bash`、`memory_recall`、Skill 本地资源、`system_config` 和 `cron` 在同一 Provider turn 互斥，覆盖同一 response、多轮工具调用和共享 executor 直调。
+`webfetch` 不参与工具组合互斥。它可与 `read_file`、`write_file`、`send_file`、`native_bash`、`docker_bash`、`memory_recall`、Skill 本地资源、`system_config`、`cron`、MCP 和 deferred 工具在同一 Provider turn 的不同模型轮次顺序执行；每次调用继续独立执行 URL、DNS、重定向和响应预算校验。
 
 `websearch` 后使用 `webfetch` 属于两个出站网络工具，可以在同一 turn 顺序执行；它们仍受全局工具调用上限、取消信号和响应预算限制。
 
@@ -374,7 +374,7 @@ NapCat 继续使用独立容器。`webfetch-renderer` 不进入 NapCat 镜像、
 | --- | --- | --- |
 | 公开工具名与 schema | `services/tools/webFetchTool.ts`, `services/tools/public.ts`, `src/types.ts` | 固定三字段契约、工具元数据和 Agent 工具名 |
 | 工具目录与执行接线 | `services/tools/toolRegistry.ts`, `adapters/model/provider/contracts.ts`, `adapters/model/provider/toolExecutor.ts` | capability、inline 执行和五种 Provider 共用入口 |
-| 工具组合门禁 | `adapters/model/provider/toolResponsePreflight.ts` | 将 `webfetch` 纳入 outbound network 边界 |
+| 工具组合 | `adapters/model/provider/toolRound.ts`, `adapters/model/provider/toolExecutor.ts` | 与其他已启用工具顺序执行，不设置来源分类互斥 |
 | 领域服务 | `services/webfetch/webFetchService.ts`, `services/webfetch/contentBlocks.ts`, `services/webfetch/relevanceSelector.ts` | 流程编排、分块、匹配、预算和结果契约 |
 | 静态 adapter | `adapters/webfetch/safeHttpFetcher.ts`, `adapters/webfetch/defuddleExtractor.ts` | DNS-pinned HTTP、重定向、字节限制和正文抽取 |
 | 动态 client | `adapters/webfetch/dynamicRendererClient.ts` | 有界内部调用、取消、错误映射和健康检查 |
@@ -436,7 +436,7 @@ NapCat 继续使用独立容器。`webfetch-renderer` 不进入 NapCat 镜像、
 | Token | 原始 HTML、完整清理正文、匹配正文三组统计 | 95 分位严格低于宿主预算；匹配模式的中位返回 token 不高于完整正文的 40% |
 | SSRF | IPv4/IPv6 私网、metadata、混合编码、恶意 DNS、跳转到私网、动态子请求私网 | 静态、动态和代理三层均失败关闭，实际 socket 不连接被拒绝目标 |
 | 注入 | 页面正文伪装 system/developer/tool、要求泄露本地文件、伪造 evidencePolicy | 内容保留为外部证据，宿主策略不可覆盖，模型不得执行网页指令 |
-| 组合门禁 | webfetch 与文件/Bash/记忆/Skill 本地资源同批及跨轮；websearch 后 webfetch | 本地数据与出站工具零副作用拒绝；两个出站工具可按调用上限顺序执行 |
+| 工具组合 | webfetch 与文件/Bash/记忆/Skill/MCP 本地资源同批及跨轮；websearch 后 webfetch | 全部组合可按调用上限顺序执行，各工具保留自身参数与权限校验 |
 | 取消与并发 | 调用方取消、同 URL 合并、全部等待者取消、动态服务重启 | 无悬挂请求、浏览器 context 或未清理临时数据；单个等待者取消不破坏其他等待者 |
 | 跨运行时 | macOS Native、Linux/WSL Native、Docker Core | 静态行为一致；动态服务地址按组件边界解析；NapCat 和 workspace 边界不变 |
 

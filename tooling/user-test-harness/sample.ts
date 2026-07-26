@@ -15,7 +15,9 @@ export async function sampleBranchFixture(input: {
   agentId: string;
   outputPath: string;
   conversationLimit?: number;
+  messageLimit?: number;
   memoryLimit?: number;
+  includeWorkingMemoryConversations?: boolean;
 }) {
   const workspace = path.resolve(input.sourceWorkspace);
   const agentId = validAgentId(input.agentId);
@@ -52,10 +54,37 @@ export async function sampleBranchFixture(input: {
   let userProfiles: unknown[] = [];
   try {
     database.exec("PRAGMA query_only = ON");
-    conversations = database.prepare(
+    const conversationLimit = boundedLimit(input.conversationLimit, 8, 1, 32);
+    const recentConversations = database.prepare(
       "SELECT data_json FROM conversations ORDER BY last_at DESC, id ASC LIMIT ?"
-    ).all(boundedLimit(input.conversationLimit, 8, 1, 32))
-      .map((row) => parseJson((row as Record<string, unknown>).data_json));
+    ).all(conversationLimit)
+      .map((row) => parseJson((row as Record<string, unknown>).data_json))
+      .map((conversation) => limitConversationMessages(
+        conversation,
+        boundedLimit(input.messageLimit, 64, 1, 256)
+      ));
+    const selectedConversations = new Map<string, unknown>();
+    if (input.includeWorkingMemoryConversations) {
+      const statement = database.prepare(
+        "SELECT data_json FROM conversations WHERE id = ? LIMIT 1"
+      );
+      for (const conversationId of uniqueWorkingMemoryConversationIds(workingMemory)) {
+        const row = statement.get(conversationId) as Record<string, unknown> | undefined;
+        if (!row) continue;
+        const conversation = limitConversationMessages(
+          parseJson(row.data_json),
+          boundedLimit(input.messageLimit, 64, 1, 256)
+        );
+        selectedConversations.set(conversationId, conversation);
+        if (selectedConversations.size >= conversationLimit) break;
+      }
+    }
+    for (const conversation of recentConversations) {
+      if (selectedConversations.size >= conversationLimit) break;
+      const id = conversationRecordId(conversation);
+      if (id) selectedConversations.set(id, conversation);
+    }
+    conversations = [...selectedConversations.values()];
     const memoryLimit = boundedLimit(input.memoryLimit, 64, 1, 256);
     const memoryStatement = database.prepare(
       "SELECT data_json FROM memory_records WHERE source = ? ORDER BY position DESC, data_json ASC LIMIT ?"
@@ -79,7 +108,11 @@ export async function sampleBranchFixture(input: {
     outputPath,
     digest: crypto.createHash("sha256").update(JSON.stringify(sample)).digest("hex"),
     counts: {
-      conversations: conversations.length,
+      conversations: sample.fixture.conversations.length,
+      messages: sample.fixture.conversations.reduce(
+        (total, conversation) => total + conversation.messages.length,
+        0
+      ),
       longTerm: longTerm.length,
       userProfiles: userProfiles.length
     }
@@ -188,4 +221,27 @@ function boundedLimit(value: number | undefined, fallback: number, minimum: numb
 
 function parseJson(value: unknown) {
   return JSON.parse(String(value));
+}
+
+function uniqueWorkingMemoryConversationIds(
+  workingMemory: ReadonlyArray<{ conversationId: string }>
+) {
+  return [...new Set(workingMemory.map((item) => item.conversationId.trim()).filter(Boolean))];
+}
+
+function conversationRecordId(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return "";
+  return String((value as Record<string, unknown>).id ?? "").trim();
+}
+
+function limitConversationMessages(value: unknown, limit: number) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const conversation = value as Record<string, unknown>;
+  const messages = Array.isArray(conversation.messages)
+    ? conversation.messages.slice(-limit)
+    : [];
+  return {
+    ...conversation,
+    messages
+  };
 }

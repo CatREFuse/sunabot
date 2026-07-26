@@ -110,7 +110,7 @@ export function groupUserProfileFacts(
         userName: "",
         addressNames: [],
         facts: [],
-        createdAt: time,
+        createdAt: fact.createdAt || now,
         updatedAt: now,
         time,
         source: fact.source || fallbackSource

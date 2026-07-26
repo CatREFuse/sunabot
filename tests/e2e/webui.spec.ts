@@ -1430,14 +1430,13 @@ test("记忆页分页并区分称呼与昵称、显示事件范围和保留称�
   const state = await installMockApi(page);
   await page.goto("/memory");
 
-  const sourceTabs = page.getByRole("navigation", { name: "记忆类别" });
+  const sourceTabs = page.getByRole("tablist", { name: "记忆类别" });
   const sortField = page.getByLabel("排序字段");
-  const sortDirection = page.getByLabel("排序方向");
-  await expect(sourceTabs.getByRole("button")).toHaveText(["工作记忆", "长期记忆", "用户画像", "梦境"]);
-  await expect(page.getByRole("region", { name: "工作记忆原文" })).toContainText("WebUI 使用 Vue 3、TypeScript 与 Tailwind。");
-  await expect(page.getByRole("region", { name: "工作记忆原文" })).not.toContainText("sunabot-workmemory:item");
+  await expect(sourceTabs.getByRole("tab")).toHaveCount(4);
+  await expect(page.getByRole("tabpanel", { name: "工作记忆" })).toContainText("WebUI 使用 Vue 3、TypeScript 与 Tailwind。");
+  await expect(page.getByRole("tabpanel", { name: "工作记忆" })).not.toContainText("sunabot-workmemory:item");
   await page.getByRole("button", { name: "操作日志", exact: true }).click();
-  const operationLogDialog = page.getByRole("dialog", { name: "记忆操作日志" });
+  const operationLogDialog = page.getByRole("dialog", { name: "操作日志" });
   await expect(operationLogDialog).toBeVisible();
   await expect(operationLogDialog.getByLabel("记忆操作日志列表").locator("li")).toHaveCount(3);
   await expect(operationLogDialog).toContainText("工作记忆 · 追加");
@@ -1446,73 +1445,64 @@ test("记忆页分页并区分称呼与昵称、显示事件范围和保留称�
   await operationLogDialog.getByRole("button", { name: "关闭", exact: true }).click();
   await expect(operationLogDialog).toHaveCount(0);
   await expect(sortField).toHaveCount(0);
-  await expect(sortDirection).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "新增", exact: true })).toHaveCount(0);
-  await expect(page.getByRole("heading", { name: "梦境", exact: true })).toHaveCount(0);
-  await sourceTabs.getByRole("button", { name: "梦境", exact: true }).click();
-  await expect(sortField).toHaveValue("updatedAt");
-  await expect(sortDirection).toHaveValue("desc");
-  await expect(page.getByRole("heading", { name: "梦境", exact: true })).toBeVisible();
-  await expect(page.getByText("Asia/Shanghai", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "新增记忆", exact: true })).toHaveCount(0);
+  await sourceTabs.getByRole("tab", { name: "梦境", exact: true }).click();
+  await expect(sortField).toHaveCount(0);
+  await expect(page.getByRole("tabpanel", { name: "梦境" })).toBeVisible();
+  await expect(page.getByText(/Asia\/Shanghai/)).toBeVisible();
   await expect(page.getByText(/我沿着潮湿的石阶走进旧车站/)).toBeVisible();
   await expect(page.getByText("合并 2 · 归档 1 · 转存 1", { exact: true })).toBeVisible();
-  await expect(page.getByText("人格已微调", { exact: true })).toBeVisible();
+  await expect(page.getByText("已微调", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "立即做梦", exact: true }).click();
   await expect(page.getByText("梦境已完成", { exact: true })).toBeVisible();
   expect(state.dreamTriggers).toBe(1);
-  await sortField.selectOption("createdAt");
-  await sortDirection.selectOption("asc");
   await expect(page.getByText(/我在雨后的图书馆里寻找一页/)).toBeVisible();
-  await expect(page.getByText(/我沿着潮湿的石阶走进旧车站/)).toHaveCount(0);
-  await sortDirection.selectOption("desc");
-  await expect(page.getByText(/我沿着潮湿的石阶走进旧车站/)).toBeVisible();
-  await page.getByRole("button", { name: "展开 1 条历史", exact: true }).click();
-  await expect(page.getByText(/我在雨后的图书馆里寻找一页/)).toBeVisible();
-  await page.getByRole("button", { name: "收起历史", exact: true }).click();
   await expect(page.getByLabel("搜索记忆")).toHaveCount(0);
   await expect(page.getByRole("navigation", { name: "记忆分页" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "新增", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "新增记忆", exact: true })).toHaveCount(0);
 
-  await sourceTabs.getByRole("button", { name: "工作记忆" }).click();
-  await expect(page.getByRole("region", { name: "工作记忆原文" })).toBeVisible();
+  await sourceTabs.getByRole("tab", { name: "工作记忆", exact: true }).click();
+  await expect(page.getByRole("tabpanel", { name: "工作记忆" })).toBeVisible();
   await expect(page.getByLabel("搜索记忆")).toHaveCount(0);
   await expect(page.getByRole("navigation", { name: "记忆分页" })).toHaveCount(0);
   await expect(sortField).toHaveCount(0);
-  const memoryRows = page.locator("article").filter({ has: page.getByRole("button", { name: "编辑记忆" }) });
+  const memoryRows = page.getByRole("button", { name: "查看长期记忆详情" });
   await expect(memoryRows).toHaveCount(0);
 
-  await sourceTabs.getByRole("button", { name: "长期记忆" }).click();
+  await sourceTabs.getByRole("tab", { name: "长期记忆", exact: true }).click();
   const pagination = page.getByRole("navigation", { name: "记忆分页" });
-  await expect(pagination).toContainText("共 21 条 · 每页 20 条");
+  await expect(pagination).toContainText("21 条 · 1 / 2");
   await expect(memoryRows).toHaveCount(20);
   await sortField.selectOption("lastRecalledAt");
-  await sortDirection.selectOption("desc");
-  await expect(page.getByText("召回 4 次", { exact: true })).toBeVisible();
-  await expect(page.getByText("跨 3 天", { exact: true })).toBeVisible();
+  await expect(page.getByText("召回 4 次 · 跨 3 天", { exact: true })).toBeVisible();
   await expect(page.getByText(/最近召回/)).toBeVisible();
   await pagination.getByRole("button", { name: "下一页" }).click();
   await expect(memoryRows).toHaveCount(1);
-  await expect(page.getByText("分页测试记忆 20", { exact: true })).toBeVisible();
-  await sortDirection.selectOption("asc");
+  await expect(memoryRows).toContainText("分页测试记忆 20");
+  await page.getByRole("button", { name: "当前新到旧，切换为旧到新" }).click();
   await expect(pagination).toContainText("1 / 2");
 
-  await sourceTabs.getByRole("button", { name: "用户画像" }).click();
+  await sourceTabs.getByRole("tab", { name: "用户画像", exact: true }).click();
   await sortField.selectOption("createdAt");
   await expect(page.getByRole("navigation", { name: "记忆分页" })).toHaveCount(0);
-  await expect(page.getByText("称呼 猫老师、老师", { exact: true })).toBeVisible();
-  await expect(page.getByText("QQ 昵称 猫老师原昵称", { exact: true })).toBeVisible();
-  await expect(page.getByText("群名片 猫老师 · 群 10001", { exact: true })).toBeVisible();
+  const profileRows = page.getByRole("button", { name: "查看用户画像详情" });
+  await expect(profileRows).toContainText("猫老师、老师");
+  await expect(profileRows).toContainText("猫老师原昵称");
 
   const filter = page.getByLabel("搜索记忆");
   await filter.fill("猫老师");
-  const profileRow = page.locator("article").filter({ hasText: "称呼 猫老师、老师" });
+  const profileRow = page.getByRole("button", { name: "查看用户画像详情" }).filter({ hasText: "猫老师、老师" });
   await expect(profileRow).toBeVisible();
-  await expect(memoryRows).toHaveCount(1);
+  await expect(profileRows).toHaveCount(1);
 
-  await profileRow.getByRole("button", { name: "编辑记忆" }).click();
+  await profileRow.click();
+  const profileInspector = page.getByRole("complementary", { name: "记忆详情", exact: true }).filter({ visible: true });
+  await expect(profileInspector).toContainText("猫老师");
+  await expect(profileInspector).toContainText("10001");
+  await profileInspector.getByRole("button", { name: "编辑", exact: true }).click();
   await expect(page.getByLabel("称呼")).toHaveValue("猫老师、老师");
   await page.getByLabel("正文").fill("正文已经更新。");
-  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await page.getByRole("button", { name: "保存更改", exact: true }).click();
 
   await expect.poll(() => state.memoryWrites.length).toBe(1);
   expect(state.memoryWrites[0]).toMatchObject({
@@ -1524,6 +1514,24 @@ test("记忆页分页并区分称呼与昵称、显示事件范围和保留称�
       addressNames: ["猫老师", "老师"]
     }
   });
+});
+
+test("记忆移动详情切换到桌面布局时释放模态门禁", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await installMockApi(page);
+  await page.goto("/memory");
+  await page.getByRole("tab", { name: "长期记忆", exact: true }).click();
+  await page.getByRole("button", { name: "查看长期记忆详情" }).first().click();
+
+  const mobileInspector = page.getByRole("dialog", { name: "移动记忆详情" });
+  await expect(mobileInspector).toBeVisible();
+  await expect(page.locator("#app")).toHaveAttribute("inert", "");
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+
+  await expect(mobileInspector).toHaveCount(0);
+  await expect(page.locator("#app")).not.toHaveAttribute("inert", "");
+  await expect(page.getByRole("complementary", { name: "记忆详情", exact: true })).toBeVisible();
 });
 
 test("移动端主题入口、触控目标与键盘焦点可用", async ({ page }) => {

@@ -1076,7 +1076,7 @@ async function assertDockerCoreBwrap(context) {
       "exec",
       core.id,
       "/usr/bin/bwrap",
-      ...bubblewrapProbeArguments("/srv/sunabot/workspace")
+      ...bubblewrapProbeArguments("/srv/sunabot/workspace", true)
     ], { capture: true });
   } catch (error) {
     const detail = message(error);
@@ -1126,15 +1126,14 @@ async function inspectDockerCodex(context) {
   }
 }
 
-export function bubblewrapProbeArguments(workspace) {
-  return [
+export function bubblewrapProbeArguments(workspace, networkAccess = false) {
+  const args = [
     "--die-with-parent",
     "--new-session",
     "--unshare-user",
     "--unshare-pid",
     "--unshare-uts",
     "--unshare-ipc",
-    "--unshare-net",
     "--unshare-cgroup-try",
     "--uid", "0",
     "--gid", "0",
@@ -1147,6 +1146,8 @@ export function bubblewrapProbeArguments(workspace) {
     "--clearenv",
     "--", "/bin/bash", "--noprofile", "--norc", "-lc", ":"
   ];
+  if (!networkAccess) args.splice(args.indexOf("--unshare-cgroup-try"), 0, "--unshare-net");
+  return args;
 }
 
 async function startNativeCore(context, onebotListenHost) {
@@ -1753,7 +1754,7 @@ async function inspectNativeCapabilities(context) {
   if (process.platform !== "linux") context.dockerSocket = undefined;
   try {
     if (process.platform === "linux") {
-      await command("/usr/bin/bwrap", bubblewrapProbeArguments(context.workspace), { capture: true });
+      await command("/usr/bin/bwrap", bubblewrapProbeArguments(context.workspace, true), { capture: true });
       workspaceBash = { ok: true, detail: "bubblewrap namespace probe passed" };
     } else {
       context.dockerSocket = await resolveEffectiveDockerSocket(
@@ -1762,7 +1763,7 @@ async function inspectNativeCapabilities(context) {
       );
       const image = context.runtimeEnvironment.SUNABOT_BASH_IMAGE || "sunabot-bash:local";
       await dockerCommand(context, [
-        "run", "--rm", "--pull", "never", "--network", "none", "--read-only",
+        "run", "--rm", "--pull", "never", "--network", "bridge", "--read-only",
         "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
         "--pids-limit", "64", "--memory", "512m", "--cpus", "1",
         "--entrypoint", "/usr/bin/env", image, "-i",

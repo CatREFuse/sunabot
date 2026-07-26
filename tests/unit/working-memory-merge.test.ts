@@ -37,7 +37,11 @@ describe("working memory semantic merge", () => {
         messages: Array<{ text: string; at: string }>;
       };
       expect(systemPrompt).toContain("输出合并后的完整工作记忆集合");
-      expect(systemPrompt).toContain("合并语义相同、相近、重复或存在因果关系的事实");
+      expect(systemPrompt).toContain("当前角色对一件事的主观叙述");
+      expect(systemPrompt).toContain("整理时同时参考 fact 内部叙述的时间");
+      expect(systemPrompt).toContain("消息顺序");
+      expect(systemPrompt).toContain("新的综合工作记忆");
+      expect(systemPrompt).toContain("联想只用于发现输入中已有的联系");
       expect(payload.previousWorkingMemories).toEqual([
         expect.objectContaining({ id: first!.id, fact: "海边用户（QQ 10001）在 7 月 1 日提出迁移。" }),
         expect.objectContaining({ id: progress!.id, fact: "海边用户（QQ 10001）在 7 月 3 日开始迁移。" }),

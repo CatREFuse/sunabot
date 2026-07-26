@@ -86,11 +86,34 @@ describe("conversation Bash workbench prompt contract", () => {
     const content = (migrated.messages[0] as { content: string }).content;
 
     expect(content).toContain("管理员自定义规则");
-    expect(content).toContain('<bash_workbench_contract version="3">');
+    expect(content).toContain('<bash_workbench_contract version="4">');
     expect(content).toContain('<configuration_directory_index_contract version="3">');
     expect(content).toContain("`references.jsonl`");
     expect(content).not.toContain('<bash_workbench_contract version="1">');
     expect(content).not.toContain('<configuration_directory_index_contract version="1">');
+  });
+
+  it("upgrades the persisted v3 workbench contract to the Docker file-loop contract", () => {
+    const template: FinalPromptTemplate = {
+      messages: [{
+        role: "system",
+        content: [
+          "管理员自定义规则",
+          '<bash_workbench_contract version="3">\n旧 Docker 规则\n</bash_workbench_contract>'
+        ].join("\n\n")
+      }],
+      tools: [],
+      response_format: { type: "text" }
+    };
+
+    const migrated = migrateConversationBashWorkbenchTemplate(template);
+    const content = (migrated.messages[0] as { content: string }).content;
+
+    expect(content).toContain("管理员自定义规则");
+    expect(content).toContain('<bash_workbench_contract version="4">');
+    expect(content).toContain("`export_chat_media`");
+    expect(content).toContain("`send_file`");
+    expect(content).not.toContain('<bash_workbench_contract version="3">');
   });
 
   it("inserts a developer contract when no system message exists", () => {

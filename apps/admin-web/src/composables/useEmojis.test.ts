@@ -313,8 +313,26 @@ describe("useEmojis", () => {
     });
 
     expect(saved).toBe(false);
-    expect(data.status.value).toEqual({ kind: "error", message: "仅支持 PNG、JPEG、WebP" });
+    expect(data.status.value).toEqual({ kind: "error", message: "仅支持 PNG、JPEG、WebP、GIF" });
     expect(apiRequest).not.toHaveBeenCalled();
+  });
+
+  it("accepts a GIF upload", async () => {
+    apiRequest.mockResolvedValue({ presetKeys: ["挥手"], emojis: [] });
+    const data = useEmojis();
+    const saved = await data.upload("koharu", {
+      key: "挥手",
+      file: new File(["gif"], "wave.gif", { type: "image/gif" })
+    });
+
+    expect(saved).toBe(true);
+    const uploadCall = apiRequest.mock.calls.find(([path, init]) => (
+      path === "/api/emojis?agentId=koharu" && init?.method === "POST"
+    ));
+    expect(JSON.parse(String(uploadCall?.[1]?.body))).toMatchObject({
+      key: "挥手",
+      fileName: "wave.gif"
+    });
   });
 
   it("rejects invalid Unicode before upload, generation, or URL encoding", async () => {

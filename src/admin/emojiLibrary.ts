@@ -27,7 +27,7 @@ import type { AppConfig, ImageResult } from "../types.js";
 import { AdminApiError, badRequest, conflict, notFound } from "./errors.js";
 import {
   readGeneratedEmojiImage,
-  writeContentAddressedEmojiPng,
+  writeContentAddressedEmojiFile,
   type EmojiLibraryOperationHooks
 } from "./emojiFileIo.js";
 import { adminMutationMutex, type AdminMutationMutex } from "./mutation.js";
@@ -38,11 +38,13 @@ export const MAX_EMOJI_UPLOAD_BYTES = 8 * 1024 * 1024;
 export const MAX_EMOJI_VERSIONS_PER_KEY = 20;
 const MAX_BASE64_LENGTH = Math.ceil(MAX_EMOJI_UPLOAD_BYTES / 3) * 4;
 const IMAGE_INPUT_PIXEL_LIMIT = 64_000_000;
+const MAX_STORED_EMOJI_BYTES = 16 * 1024 * 1024;
 const SUPPORTED_IMAGE_TYPES = new Map([
   [".png", "image/png"],
   [".jpg", "image/jpeg"],
   [".jpeg", "image/jpeg"],
-  [".webp", "image/webp"]
+  [".webp", "image/webp"],
+  [".gif", "image/gif"]
 ] as const);
 
 export type EmojiImageVariant = "original" | "display" | "placeholder";
@@ -54,7 +56,7 @@ export interface EmojiEnvelope {
 
 export interface EmojiContent {
   bytes: Buffer;
-  contentType: "image/png" | "image/webp";
+  contentType: "image/png" | "image/webp" | "image/gif";
 }
 
 export interface EmojiVersionEnvelope {
@@ -211,8 +213,13 @@ export class EmojiLibraryRepository {
     } catch {
       throw new AdminApiError(415, "EMOJI_IMAGE_INVALID", "表情图片无法解码。");
     }
-    await assertStoredEmojiPng(bytes, record);
-    if (variant === "original") return { bytes, contentType: "image/png" };
+    await assertStoredEmojiImage(bytes, record);
+    if (variant === "original") {
+      return {
+        bytes,
+        contentType: record.fileName.endsWith(".gif") ? "image/gif" : "image/png"
+      };
+    }
     try {
       const resized = await sharp(bytes, sharpOptions())
         .resize({
@@ -248,9 +255,9 @@ export class EmojiLibraryRepository {
     source: EmojiRecord["source"],
     config: AppConfig
   ): Promise<EmojiEnvelope> {
-    const normalized = await normalizeSquarePng(sourceBytes);
+    const normalized = await normalizeEmojiImage(sourceBytes);
     const hash = crypto.createHash("sha256").update(normalized.bytes).digest("hex");
-    const fileName = `emoji-${hash}.png`;
+    const fileName = `emoji-${hash}.${normalized.format}`;
     return this.mutex.runExclusive(async () => {
       const store = emojiStore(config);
       const existing = store.read(key);
@@ -265,7 +272,7 @@ export class EmojiLibraryRepository {
         conflict("EMOJI_VERSION_LIMIT_REACHED", `每个表情最多保留 ${MAX_EMOJI_VERSIONS_PER_KEY} 个版本，请先删除旧版本。`);
       }
       const location = emojiMediaLocation(config, fileName);
-      await writeContentAddressedEmojiPng(location.filePath, normalized.bytes, hash, this.hooks);
+      await writeContentAddressedEmojiFile(location.filePath, normalized.bytes, hash, this.hooks);
       const now = new Date().toISOString();
       await store.upsert({
         key,
@@ -298,9 +305,11 @@ async function parseUpload(input: unknown) {
   if (!fileName || fileName.length > 160 || fileName.includes("\0") || path.basename(fileName) !== fileName) {
     badRequest("EMOJI_UPLOAD_INVALID", "文件名无效。", "fileName");
   }
-  const expectedMime = SUPPORTED_IMAGE_TYPES.get(path.extname(fileName).toLowerCase() as ".png" | ".jpg" | ".jpeg" | ".webp");
+  const expectedMime = SUPPORTED_IMAGE_TYPES.get(
+    path.extname(fileName).toLowerCase() as ".png" | ".jpg" | ".jpeg" | ".webp" | ".gif"
+  );
   if (!expectedMime) {
-    throw new AdminApiError(415, "EMOJI_IMAGE_UNSUPPORTED", "仅支持 PNG、JPEG 和 WebP 图片。", "fileName");
+    throw new AdminApiError(415, "EMOJI_IMAGE_UNSUPPORTED", "仅支持 PNG、JPEG、WebP 和 GIF 图片。", "fileName");
   }
   if (typeof body.dataBase64 !== "string" || !body.dataBase64 || body.dataBase64.length > MAX_BASE64_LENGTH) {
     throw new AdminApiError(413, "EMOJI_IMAGE_TOO_LARGE", "表情图片超过 8 MiB 限制。", "dataBase64");
@@ -336,29 +345,47 @@ function requireEmojiFileName(value: unknown) {
   return fileName;
 }
 
-async function normalizeSquarePng(bytes: Buffer) {
+async function normalizeEmojiImage(bytes: Buffer) {
   try {
-    const result = await sharp(bytes, sharpOptions())
+    const detected = await fileTypeFromBuffer(bytes);
+    const format = detected?.mime === "image/gif" ? "gif" : "png";
+    const pipeline = sharp(bytes, sharpOptions(format === "gif"))
       .rotate()
-      .resize({ width: 1024, height: 1024, fit: "cover", position: "attention" })
-      .png({ compressionLevel: 9, adaptiveFiltering: true })
-      .toBuffer({ resolveWithObject: true });
-    return { bytes: result.data, width: result.info.width, height: result.info.height };
-  } catch {
+      .resize({
+        width: 1024,
+        height: 1024,
+        fit: "cover",
+        position: format === "gif" ? "centre" : "attention"
+      });
+    const result = format === "gif"
+      ? await pipeline.gif().toBuffer({ resolveWithObject: true })
+      : await pipeline.png({ compressionLevel: 9, adaptiveFiltering: true }).toBuffer({ resolveWithObject: true });
+    if (result.data.byteLength > MAX_STORED_EMOJI_BYTES) {
+      throw new AdminApiError(413, "EMOJI_IMAGE_TOO_LARGE", "规范化表情图片超过 16 MiB 限制。", "dataBase64");
+    }
+    return {
+      bytes: result.data,
+      width: result.info.width,
+      height: result.info.pageHeight ?? result.info.height,
+      format
+    };
+  } catch (error) {
+    if (error instanceof AdminApiError) throw error;
     throw new AdminApiError(415, "EMOJI_IMAGE_INVALID", "表情图片无法解码。", "dataBase64");
   }
 }
 
-async function assertStoredEmojiPng(bytes: Buffer, record: EmojiRecord) {
+async function assertStoredEmojiImage(bytes: Buffer, record: EmojiRecord) {
   try {
+    const gif = record.fileName.endsWith(".gif");
     const [detected, metadata] = await Promise.all([
       fileTypeFromBuffer(bytes),
-      sharp(bytes, sharpOptions()).metadata()
+      sharp(bytes, sharpOptions(gif)).metadata()
     ]);
-    if (detected?.mime !== "image/png"
-      || metadata.format !== "png"
+    if (detected?.mime !== (gif ? "image/gif" : "image/png")
+      || metadata.format !== (gif ? "gif" : "png")
       || metadata.width !== record.width
-      || metadata.height !== record.height
+      || (metadata.pageHeight ?? metadata.height) !== record.height
       || bytes.byteLength !== record.sizeBytes) {
       throw new Error("Stored emoji metadata mismatch.");
     }
@@ -373,8 +400,12 @@ function isCanonicalBase64(value: string) {
     && Buffer.from(value, "base64").toString("base64") === value;
 }
 
-function sharpOptions() {
-  return {
+function sharpOptions(animated = false) {
+  return animated ? {
+    animated: true,
+    failOn: "error" as const,
+    limitInputPixels: IMAGE_INPUT_PIXEL_LIMIT
+  } : {
     animated: false,
     page: 0,
     pages: 1,

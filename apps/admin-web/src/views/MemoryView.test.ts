@@ -4,8 +4,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MemoryEntry } from "../types";
 import { activeAgentIdState } from "../composables/agentScope";
 import DreamHistoryPanel from "../components/memory/DreamHistoryPanel.vue";
+import DialogOverlay from "../components/ui/DialogOverlay.vue";
 import MemoryEntryRow from "../components/memory/MemoryEntryRow.vue";
 import MemoryEditorDialog from "../components/memory/MemoryEditorDialog.vue";
+import MemoryInspector from "../components/memory/MemoryInspector.vue";
 import MemoryOperationLogDrawer from "../components/memory/MemoryOperationLogDrawer.vue";
 import MemoryPagination from "../components/memory/MemoryPagination.vue";
 import MemorySortControl from "../components/memory/MemorySortControl.vue";
@@ -20,7 +22,7 @@ const memory = vi.hoisted(() => ({
   entries: { value: [] as MemoryEntry[] },
   document: { value: {
     fileName: "WORKING_MEMORY.md",
-    content: "# 工作记忆\n\n<!-- sunabot-workmemory:v1 -->\n\n<!-- sunabot-workmemory:item eyJpZCI6Im1lbW9yeS0xIn0 -->\n## memory-1\n\n- 记录时间：2026-07-24T03:19:26.000+08:00 [Asia/Shanghai]\n- 会话来源：group:10001（user_group）\n- 会话标题：测试群\n- 来源类型：add_workmemory\n\n完整工作记忆正文。",
+    content: "<!-- sunabot-workmemory:v2 -->\n\n<!-- sunabot-workmemory:item eyJpZCI6Im1lbW9yeS0xIn0 -->\n完整工作记忆正文。",
     revision: "working-revision"
   } },
   matches: { value: [] as MemoryEntry[] },
@@ -71,13 +73,7 @@ vi.mock("../composables/useMemory", () => ({ useMemory: () => memory }));
 vi.mock("../composables/useMemoryOperationLogs", () => ({ useMemoryOperationLogs: () => operationLogs }));
 
 function mountMemoryView() {
-  return shallowMount(MemoryView, {
-    global: {
-      stubs: {
-        PageHeader: { template: '<header><slot name="titleAfter"/><slot name="actions"/></header>' }
-      }
-    }
-  });
+  return shallowMount(MemoryView);
 }
 
 function entry(index: number, overrides: Partial<MemoryEntry> = {}): MemoryEntry {
@@ -98,6 +94,9 @@ function entry(index: number, overrides: Partial<MemoryEntry> = {}): MemoryEntry
 describe("MemoryView pagination", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    memory.create.mockResolvedValue(true);
+    memory.update.mockResolvedValue(true);
+    memory.remove.mockResolvedValue(true);
     (activeAgentIdState as { value: string }).value = "plana";
     memory.entries.value = Array.from({ length: 25 }, (_, index) => entry(index + 1));
   });
@@ -166,21 +165,15 @@ describe("MemoryView pagination", () => {
   });
 
   it("shows dreams as a peer tab without sending dream to the memory API", async () => {
-    const wrapper = shallowMount(MemoryView, {
-      global: {
-        stubs: {
-          PageHeader: { template: '<header><slot name="titleAfter"/><slot name="actions"/></header>' }
-        }
-      }
-    });
+    const wrapper = shallowMount(MemoryView);
     const tabs = wrapper.get('nav[aria-label="记忆类别"]');
 
-    expect(tabs.findAll("button").map((button) => button.text())).toEqual([
-      "工作记忆",
-      "长期记忆",
-      "用户画像",
-      "梦境"
-    ]);
+    expect(tabs.findAll("button").map((button) => button.text())).toEqual(expect.arrayContaining([
+      expect.stringContaining("工作记忆"),
+      expect.stringContaining("长期记忆"),
+      expect.stringContaining("用户画像"),
+      expect.stringContaining("梦境")
+    ]));
     await tabs.findAll("button")[3]!.trigger("click");
 
     expect(wrapper.findComponent(DreamHistoryPanel).props()).toMatchObject({
@@ -189,7 +182,7 @@ describe("MemoryView pagination", () => {
       sortField: "updatedAt",
       sortDirection: "desc"
     });
-    expect(wrapper.findComponent(MemorySortControl).exists()).toBe(true);
+    expect(wrapper.findComponent(MemorySortControl).exists()).toBe(false);
     expect(wrapper.find('input[aria-label="搜索记忆"]').exists()).toBe(false);
     expect(wrapper.findComponent(MemoryPagination).exists()).toBe(false);
     expect(wrapper.findAllComponents(MemoryEntryRow)).toHaveLength(0);
@@ -213,13 +206,7 @@ describe("MemoryView pagination", () => {
   });
 
   it("reloads both sections and clears transient actions when Agent changes", async () => {
-    const wrapper = shallowMount(MemoryView, {
-      global: {
-        stubs: {
-          PageHeader: { template: '<header><slot name="titleAfter"/><slot name="actions"/></header>' }
-        }
-      }
-    });
+    const wrapper = shallowMount(MemoryView);
     await wrapper.get('nav[aria-label="记忆类别"]').findAll("button")[1]!.trigger("click");
     const firstRow = wrapper.findAllComponents(MemoryEntryRow)[0]!;
     const editor = wrapper.findComponent(MemoryEditorDialog);
@@ -228,18 +215,21 @@ describe("MemoryView pagination", () => {
     expect(dreams.load).toHaveBeenCalledWith("plana");
     expect(wrapper.findComponent(DreamHistoryPanel).exists()).toBe(false);
 
-    firstRow.vm.$emit("edit", entry(1));
+    await wrapper.findAll("button").find((button) => button.text().includes("新增"))!.trigger("click");
     await nextTick();
     expect(editor.props("open")).toBe(true);
+    expect(editor.props("source")).toBe("long_term");
     editor.vm.$emit("save", { source: "long_term", text: "新记忆" });
     await flushPromises();
+    expect(memory.create).toHaveBeenCalledWith({ source: "long_term", text: "新记忆" }, "plana");
     expect(wrapper.text()).toContain("已保存");
 
-    firstRow.vm.$emit("edit", entry(1));
-    firstRow.vm.$emit("remove", entry(1));
+    firstRow.vm.$emit("select", entry(1));
     await nextTick();
-    expect(editor.props("open")).toBe(true);
-    expect(firstRow.props("pendingDelete")).toBe(true);
+    const inspector = wrapper.findComponent(MemoryInspector);
+    inspector.vm.$emit("remove", entry(1));
+    await nextTick();
+    expect(inspector.props("pendingDelete")).toBe(true);
 
     (activeAgentIdState as { value: string }).value = "arona";
     await nextTick();
@@ -247,11 +237,135 @@ describe("MemoryView pagination", () => {
     expect(memory.load).toHaveBeenLastCalledWith("long_term", "arona");
     expect(dreams.load).toHaveBeenLastCalledWith("arona");
     expect(editor.props("open")).toBe(false);
-    expect(firstRow.props("pendingDelete")).toBe(false);
+    expect(wrapper.findComponent(MemoryInspector).exists()).toBe(false);
     expect(wrapper.text()).not.toContain("已保存");
 
     wrapper.unmount();
     expect(memory.dispose).toHaveBeenCalledOnce();
     expect(dreams.dispose).toHaveBeenCalledOnce();
+  });
+
+  it("locks new entries to the active editable source", async () => {
+    const wrapper = mountMemoryView();
+    const tabs = wrapper.get('nav[aria-label="记忆类别"]');
+
+    await tabs.findAll("button")[2]!.trigger("click");
+    await wrapper.findAll("button").find((button) => button.text().includes("新增"))!.trigger("click");
+
+    expect(wrapper.findComponent(MemoryEditorDialog).props()).toMatchObject({
+      open: true,
+      source: "user_profile"
+    });
+  });
+
+  it("supports roving keyboard focus across memory tabs", async () => {
+    const wrapper = shallowMount(MemoryView, { attachTo: document.body });
+    const tabs = wrapper.get('nav[aria-label="记忆类别"]').findAll('[role="tab"]');
+
+    expect(tabs.map((tab) => tab.attributes("tabindex"))).toEqual(["0", "-1", "-1", "-1"]);
+    await tabs[0]!.trigger("keydown", { key: "End" });
+    await nextTick();
+
+    expect(tabs[3]!.attributes("aria-selected")).toBe("true");
+    expect(tabs.map((tab) => tab.attributes("tabindex"))).toEqual(["-1", "-1", "-1", "0"]);
+
+    await tabs[3]!.trigger("keydown", { key: "ArrowRight" });
+    await nextTick();
+    expect(tabs[0]!.attributes("aria-selected")).toBe("true");
+    wrapper.unmount();
+  });
+
+  it("does not hijack the search shortcut from editors or open dialogs", async () => {
+    const wrapper = shallowMount(MemoryView, { attachTo: document.body });
+    await wrapper.get('nav[aria-label="记忆类别"]').findAll("button")[1]!.trigger("click");
+    const search = wrapper.get<HTMLInputElement>('input[aria-label="搜索记忆"]');
+    const focus = vi.spyOn(search.element, "focus");
+    const textarea = document.createElement("textarea");
+    document.body.append(textarea);
+
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "k", metaKey: true, bubbles: true }));
+    expect(focus).not.toHaveBeenCalled();
+
+    await wrapper.findAll("button").find((button) => button.text().includes("新增"))!.trigger("click");
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", metaKey: true }));
+    expect(focus).not.toHaveBeenCalled();
+
+    textarea.remove();
+    wrapper.unmount();
+  });
+
+  it("closes the mobile inspector when the viewport crosses into the desktop layout", async () => {
+    let desktopChange: ((event: MediaQueryListEvent) => void) | undefined;
+    const desktopQuery = {
+      matches: false,
+      media: "(min-width: 1280px)",
+      onchange: null,
+      addEventListener: vi.fn((_type: string, listener: EventListenerOrEventListenerObject) => {
+        if (typeof listener === "function") {
+          desktopChange = listener as (event: MediaQueryListEvent) => void;
+        }
+      }),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn()
+    } as unknown as MediaQueryList;
+    const mobileQuery = {
+      ...desktopQuery,
+      matches: true,
+      media: "(max-width: 1279px)",
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn()
+    } satisfies MediaQueryList;
+    vi.stubGlobal("matchMedia", vi.fn((query: string) =>
+      query === "(min-width: 1280px)" ? desktopQuery : mobileQuery));
+    const wrapper = mountMemoryView();
+    await wrapper.get('nav[aria-label="记忆类别"]').findAll("button")[1]!.trigger("click");
+    wrapper.findAllComponents(MemoryEntryRow)[0]!.vm.$emit("select", entry(1));
+    await nextTick();
+
+    expect(wrapper.findComponent(DialogOverlay).props("open")).toBe(true);
+
+    desktopChange?.({ matches: true } as MediaQueryListEvent);
+    await nextTick();
+
+    expect(wrapper.findComponent(DialogOverlay).props("open")).toBe(false);
+    wrapper.unmount();
+    vi.unstubAllGlobals();
+  });
+
+  it("gives each memory row a distinct accessible name", () => {
+    const wrapper = shallowMount(MemoryEntryRow, {
+      props: {
+        entry: entry(7, { text: "用户偏爱夜间整理信息" }),
+        selected: false
+      }
+    });
+
+    expect(wrapper.get("button").attributes("aria-label")).toContain("用户偏爱夜间整理信息");
+    expect(wrapper.get("button").attributes("aria-label")).toContain("memory-7");
+  });
+
+  it("keeps memory summaries clamped without overriding the clamp display mode", () => {
+    const longTerm = shallowMount(MemoryEntryRow, {
+      props: { entry: entry(8, { text: "很长的长期记忆正文" }), selected: false }
+    });
+    const profile = shallowMount(MemoryEntryRow, {
+      props: {
+        entry: entry(9, {
+          source: "user_profile",
+          sourceTitle: "用户画像",
+          userId: "171419991",
+          userNickname: "猫老师",
+          text: "很长的用户画像正文"
+        }),
+        selected: false
+      }
+    });
+
+    const longSummary = longTerm.get(".line-clamp-3");
+    const profileSummary = profile.get(".line-clamp-2");
+    expect(longSummary.classes()).not.toContain("block");
+    expect(profileSummary.classes()).not.toContain("block");
   });
 });

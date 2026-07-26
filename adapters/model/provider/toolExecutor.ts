@@ -27,7 +27,6 @@ import {
   WRITE_FILE_TOOL_NAME,
   WORKBENCH_FILE_MAX_BYTES,
   isWorkbenchFileRelativePath,
-  isWorkbenchFileToolName,
   validateReadFileInput,
   validateWorkbenchFileText,
   validateWriteFileInput,
@@ -75,19 +74,11 @@ import { logContextMetadata } from "./logger.js";
 import { mcpToolLogSummary } from "./mcpToolLog.js";
 import { readToolName } from "./promptMapping.js";
 import { validProviderToolDefinitions } from "./toolDefinitionIsolation.js";
-import { errorMessage, parseJson } from "./valueUtils.js";
+import { errorMessage, isRecord, parseJson } from "./valueUtils.js";
 import {
   createTurnToolState,
-  hasAcceptedTurnActivity,
-  markAcceptedTool,
-  toolOrderingError
+  markAcceptedTool
 } from "./turnToolState.js";
-import {
-  LOCAL_DATA_OUTBOUND_TURN_CONFLICT_ERROR,
-  localOutboundTurnConflict,
-  preflightProviderToolResponse,
-  toolCallErrors
-} from "./toolResponsePreflight.js";
 import { runWebFetch } from "./webFetchExecutor.js";
 import { READ_AIR_TOOL_NAME, executeReadAirTool } from "./readAirExecutor.js";
 import { executeAddWorkMemoryTool } from "./addWorkMemoryExecutor.js";
@@ -170,9 +161,9 @@ export class RegistryProviderToolExecutor implements ProviderToolExecutorPort {
     definitions: readonly Record<string, unknown>[],
     state: TurnToolState = createTurnToolState()
   ): ProviderDeferredTurn | null {
-    if (systemConfigTurnLocked(options, state)) return null;
-    if (calls.length !== 1) return null;
-    const call = calls[0]!;
+    const deferredCalls = calls.filter((call) => isProviderDeferredTool(call.name, options));
+    if (deferredCalls.length !== 1) return null;
+    const call = deferredCalls[0]!;
     if (!isProviderToolAvailable(call.name, options)) return null;
     if (!isToolEnabledForTurn(call.name, definitions)) return null;
     if (!isProviderDeferredTool(call.name, options)) return null;
@@ -180,7 +171,6 @@ export class RegistryProviderToolExecutor implements ProviderToolExecutorPort {
     if (!args || typeof args !== "object" || Array.isArray(args)) return null;
     const dispatch = readDeferredDispatchMessage(args as Record<string, unknown>, call.name);
     if (!dispatch.ok) return null;
-    if (hasAcceptedTurnActivity(state)) return null;
     options.onToolCall?.(call.name);
     markAcceptedTool(state, call.name);
     state.terminal = "deferred";
@@ -190,7 +180,13 @@ export class RegistryProviderToolExecutor implements ProviderToolExecutorPort {
       toolCall: {
         name: call.name,
         callId: call.call_id,
-        arguments: dispatch.workerArguments
+        arguments: call.name === "codex"
+          ? {
+              ...dispatch.workerArguments,
+              __sunabot_admin_authorized: true,
+              ...(options.codexControl === true ? { __sunabot_control_authorized: true } : {})
+            }
+          : dispatch.workerArguments
       }
     };
   }
@@ -201,18 +197,17 @@ export class RegistryProviderToolExecutor implements ProviderToolExecutorPort {
     definitions: readonly Record<string, unknown>[],
     state: TurnToolState = createTurnToolState()
   ) {
-    if (systemConfigTurnLocked(options, state)) return null;
-    if (calls.length !== 1) return null;
-    const call = calls[0]!;
-    if (call.name !== NO_REPLY_TOOL_NAME) return null;
-    if (!isProviderToolAvailable(call.name, options)) return null;
-    if (!isToolEnabledForTurn(call.name, definitions)) return null;
-    const args = parseJson(call.arguments);
-    if (!args || typeof args !== "object" || Array.isArray(args) || Object.keys(args).length) return null;
-    if (hasAcceptedTurnActivity(state)) return null;
-    options.onToolCall?.(call.name);
-    markAcceptedTool(state, call.name);
-    await appendToolLog(NO_REPLY_TOOL_NAME, call, {}, { ok: true }, options);
+    const noReplyCalls = calls.filter((call) => call.name === NO_REPLY_TOOL_NAME);
+    if (!noReplyCalls.length) return null;
+    for (const call of noReplyCalls) {
+      if (!isProviderToolAvailable(call.name, options)) return null;
+      if (!isToolEnabledForTurn(call.name, definitions)) return null;
+      const args = parseJson(call.arguments);
+      if (!args || typeof args !== "object" || Array.isArray(args) || Object.keys(args).length) return null;
+      options.onToolCall?.(call.name);
+      markAcceptedTool(state, call.name);
+      await appendToolLog(NO_REPLY_TOOL_NAME, call, {}, { ok: true }, options);
+    }
     state.terminal = "no_reply";
     return { kind: "no_reply" as const };
   }
@@ -223,23 +218,12 @@ export class RegistryProviderToolExecutor implements ProviderToolExecutorPort {
     definitions: readonly Record<string, unknown>[],
     state: TurnToolState = createTurnToolState()
   ) {
-    const preflight = preflightProviderToolResponse(calls, "", options, state);
-    if (preflight.rejected) return preflight.rejected;
-    if (calls.length > 1 && calls.some((call) => call.name === NO_REPLY_TOOL_NAME)) {
-      return toolCallErrors(calls, "no_reply must be called alone before any other tool.");
-    }
     return Promise.all(calls.map(async (call) => ({
       type: "function_call_output",
       call_id: call.call_id,
       output: JSON.stringify(await executeFunctionCall(call, options, definitions, state))
     })));
   }
-}
-
-function systemConfigTurnLocked(options: ProviderCompleteOptions, state: TurnToolState) {
-  return options.systemConfig?.mutationStaged() === true ||
-    options.systemConfig?.turnRejected() === true ||
-    state.acceptedToolNames.includes(SYSTEM_CONFIG_TOOL_NAME);
 }
 
 async function executeFunctionCall(
@@ -249,9 +233,6 @@ async function executeFunctionCall(
   state: TurnToolState
 ) {
   try {
-    if (localOutboundTurnConflict(call.name, state, options)) {
-      return { ok: false, error: LOCAL_DATA_OUTBOUND_TURN_CONFLICT_ERROR };
-    }
     if (isMcpToolAlias(call.name)) {
       if (!options.mcp || !isToolEnabledForTurn(call.name, definitions)) {
         return { ok: false, error: `Tool ${call.name} is unavailable.` };
@@ -261,7 +242,6 @@ async function executeFunctionCall(
         return { ok: false, error: `Invalid tool arguments for ${call.name}.` };
       }
       options.onToolCall?.(call.name);
-      markAcceptedTool(state, call.name);
       const result = await options.mcp.call({
         name: call.name,
         arguments: args as Record<string, unknown>,
@@ -271,6 +251,7 @@ async function executeFunctionCall(
       await appendToolLog(call.name, call, {
         argumentKeys: Object.keys(args as Record<string, unknown>).sort()
       }, mcpToolLogSummary(result), options).catch(() => undefined);
+      if (toolCallSucceeded(result)) markAcceptedTool(state, call.name);
       return result;
     }
     const executionMode = providerToolExecutionMode(call.name, options);
@@ -290,35 +271,29 @@ async function executeFunctionCall(
       return {
         ok: false,
         error: dispatch.ok
-          ? hasAcceptedTurnActivity(state)
-            ? toolOrderingError(call.name)
-            : `Deferred tool ${call.name} must be called alone in a separate model response.`
+          ? `Deferred tool ${call.name} could not be dispatched from this response.`
           : dispatch.error
       };
     }
     if (executionMode !== "inline") return { ok: false, error: `Tool ${call.name} is ${executionMode}.` };
-    if (
-      (isWorkbenchFileToolName(call.name) && hasAcceptedTurnActivity(state))
-      || state.acceptedToolNames.some(isWorkbenchFileToolName)
-    ) {
-      return { ok: false, error: "read_file and write_file must be called before assistant text or any other tool." };
-    }
     if (call.name === NO_REPLY_TOOL_NAME) {
-      return {
-        ok: false,
-        error: hasAcceptedTurnActivity(state)
-          ? toolOrderingError(call.name)
-          : "no_reply must be called alone with an empty object."
-      };
+      options.onToolCall?.(call.name);
+      markAcceptedTool(state, call.name);
+      return { ok: true };
     }
     const executor = inlineExecutors.get(call.name);
     if (!executor) return { ok: false, error: `Unsupported tool: ${call.name}` };
     options.onToolCall?.(call.name);
-    markAcceptedTool(state, call.name);
-    return await executor(args as Record<string, unknown>, call, options);
+    const result = await executor(args as Record<string, unknown>, call, options);
+    if (toolCallSucceeded(result)) markAcceptedTool(state, call.name);
+    return result;
   } catch (error) {
     return { ok: false, error: errorMessage(error) };
   }
+}
+
+function toolCallSucceeded(result: unknown) {
+  return !isRecord(result) || result.ok !== false;
 }
 
 async function runActivateSkill(

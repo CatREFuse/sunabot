@@ -13,6 +13,7 @@ import { parseOneBotInboundMessage } from "../../adapters/onebot/inboundMessageA
 import { readRequestLogs } from "../../adapters/observability/requestLog.js";
 import { applicationDataStore } from "../../adapters/sqlite/applicationDataStore.js";
 import { resolveProjectPath } from "../../packages/platform/projectPaths.js";
+import { runWithAgentRuntimeContext } from "../../packages/platform/runtimeAgentContext.js";
 import { systemModelTimeZone } from "../../packages/platform/systemTime.js";
 import { readAirKnowledge, replaceAirKnowledge } from "../../services/air/public.js";
 import { resolveAgentWorkbench } from "../../services/agents/public.js";
@@ -127,7 +128,10 @@ export async function runRuntimeUserTest(
         actual: result.run?.status ?? "no_run"
       });
     }
-    observation.requestLogs = (await readRequestLogs({ config, limit: 500 }))
+    observation.requestLogs = (await readRequestLogs({
+      config: built.runtime.config,
+      limit: 500
+    }))
       .filter((entry) => Date.parse(String((entry as Record<string, unknown>).at ?? "")) >= requestLogStart);
     observation.toolCalls = extractToolCallObservations(observation.requestLogs);
     observation.tools = extractCalledToolNames(observation.requestLogs);
@@ -542,7 +546,10 @@ async function runDreamCase(
   const repository = applicationDataStore(built.runtime.config);
   const before = await readWorkingMemoryDocument(built.runtime.config);
   const memoryBefore = branchMemorySnapshot(repository);
-  const run = await built.runtime.dreams.force(now);
+  const run = await runWithAgentRuntimeContext(
+    built.runtime.config,
+    () => built.runtime.dreams.force(now)
+  );
   const after = await readWorkingMemoryDocument(built.runtime.config);
   const memoryAfter = branchMemorySnapshot(repository);
   return {

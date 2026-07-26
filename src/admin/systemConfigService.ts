@@ -57,30 +57,22 @@ export class SystemConfigService {
 
   createTurn(context: SystemConfigTurnContext): SystemConfigTurn {
     let pending: PendingMutation | undefined;
-    let rejected = false;
     return {
       execute: async (input) => {
-        if (rejected) return failure("SYSTEM_CONFIG_TURN_REJECTED", "system_config 必须在当前模型回合中单独调用。");
         if (context.conversationId === WEB_CHAT_CONVERSATION_ID && isMutation(input)) {
           return failure(DURABLE_DELIVERY_REQUIRED_CODE, DURABLE_DELIVERY_REQUIRED_MESSAGE);
         }
-        if (pending) return failure("SYSTEM_CONFIG_MUTATION_PENDING", "配置修改后请直接完成当前回复。");
         if (input.operation === "get_settings") return this.settings(context);
         if (input.operation === "get_status") return this.status(context);
         if (input.operation === "list_groups") return this.groups(context, input);
+        if (pending) return failure("SYSTEM_CONFIG_MUTATION_PENDING", "当前回合已有一项待提交的配置修改。");
         const prepared = await this.prepareMutation(context, input);
         if ("pending" in prepared && prepared.pending) pending = prepared.pending;
         return prepared.result;
       },
       mutationStaged: () => Boolean(pending),
       stagedMutation: () => pending ? structuredClone(pending.descriptor) : undefined,
-      rejectTurn: () => {
-        pending = undefined;
-        rejected = true;
-      },
-      turnRejected: () => rejected,
       commit: async () => {
-        if (rejected) throw new Error("已拒绝的 system_config 回合不能提交配置。");
         const mutation = pending;
         if (!mutation) return;
         await mutation.commit();

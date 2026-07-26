@@ -4,6 +4,14 @@ export type CodexTaskStatus = "succeeded" | "failed" | "timed_out" | "cancelled"
 export interface CodexToolInput {
   task?: unknown;
   kind?: unknown;
+  action?: unknown;
+  ssh_host?: unknown;
+  workspace_path?: unknown;
+  thread_id?: unknown;
+  query?: unknown;
+  limit?: unknown;
+  __sunabot_admin_authorized?: unknown;
+  __sunabot_control_authorized?: unknown;
 }
 
 export interface CodexToolError {
@@ -22,6 +30,8 @@ export interface CodexToolResult {
   error?: CodexToolError;
   threadId?: string;
   resultFile?: string;
+  outputTruncated?: boolean;
+  outputBytes?: number;
   usage?: Record<string, number>;
   exitCode?: number | null;
   signal?: NodeJS.Signals | null;
@@ -73,5 +83,9 @@ export interface CodexSupervisor {
 }
 
 export interface CodexRunner {
+  run(input: CodexToolInput, context: CodexToolExecutionContext): Promise<CodexToolResult>;
+}
+
+export interface CodexControlRunner {
   run(input: CodexToolInput, context: CodexToolExecutionContext): Promise<CodexToolResult>;
 }

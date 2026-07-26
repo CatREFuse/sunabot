@@ -34,8 +34,6 @@ export interface SystemConfigInput {
 export interface SystemConfigToolPort {
   execute(input: SystemConfigInput): Promise<unknown>;
   mutationStaged(): boolean;
-  rejectTurn(): void;
-  turnRejected(): boolean;
 }
 
 export interface SystemConfigMutationDescriptor {

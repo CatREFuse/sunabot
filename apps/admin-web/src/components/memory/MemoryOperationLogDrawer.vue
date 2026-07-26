@@ -5,6 +5,7 @@ import DialogOverlay from "../ui/DialogOverlay.vue";
 
 defineProps<{
   open: boolean;
+  agentId: string;
   logs: readonly MemoryOperationLogEntry[];
   page: number;
   pageSize: number;
@@ -106,6 +107,7 @@ function hasDetails(log: MemoryOperationLogEntry) {
   return Boolean(
     log.request?.batchId
     || log.request?.recordIds?.length
+    || log.response?.reasonCode
     || log.response?.beforeRevision
     || log.response?.afterRevision
   );
@@ -114,53 +116,47 @@ function hasDetails(log: MemoryOperationLogEntry) {
 
 <template>
   <DialogOverlay :open="open" placement="right" labelledby="memory-operation-log-title" @close="emit('close')">
-    <aside class="h-full w-full max-w-xl overflow-y-auto border-l border-visible bg-panel p-4 md:p-6">
-      <header class="flex items-center justify-between gap-4 border-b border-line pb-4">
+    <aside class="flex h-full w-full max-w-xl flex-col border-l border-visible bg-panel px-5 py-6 md:px-8">
+      <header class="flex items-start justify-between gap-5 border-b border-line pb-6">
         <div class="min-w-0">
-          <h2 id="memory-operation-log-title" class="text-xl font-medium text-display">记忆操作日志</h2>
-          <p class="mt-1 font-mono text-[10px] text-mute">{{ total.toLocaleString("zh-CN") }} 条记录</p>
+          <p class="field-label">Agent {{ agentId }}</p>
+          <h2 id="memory-operation-log-title" class="mt-2 text-2xl font-medium tracking-[-0.02em] text-display">操作日志</h2>
+          <p class="mt-2 font-mono text-[11px] text-mute">{{ total.toLocaleString("zh-CN") }} 条记忆操作</p>
         </div>
         <div class="flex shrink-0 items-center gap-2">
-          <button class="btn btn-ghost" type="button" :disabled="loading" @click="emit('refresh')">刷新</button>
-          <button class="btn btn-ghost" type="button" @click="emit('close')">关闭</button>
+          <button class="icon-btn" type="button" :disabled="loading" aria-label="刷新操作日志" @click="emit('refresh')"><i class="bx bx-refresh" :class="loading ? 'bx-spin' : ''" aria-hidden="true"></i></button>
+          <button class="icon-btn" type="button" aria-label="关闭" @click="emit('close')"><i class="bx bx-x" aria-hidden="true"></i></button>
         </div>
       </header>
 
       <p v-if="error" class="mt-5 inline-state" data-kind="error" role="alert">{{ error }}</p>
-      <p v-if="loading && !logs.length" class="py-12 text-center font-mono text-xs text-mute">加载中</p>
-      <ol v-else-if="logs.length" class="mt-5 border-t border-line" aria-label="记忆操作日志列表">
+      <p v-if="loading && !logs.length" class="py-16 text-center font-mono text-xs text-mute">[正在读取操作日志]</p>
+      <ol v-else-if="logs.length" class="min-h-0 flex-1 overflow-y-auto" aria-label="记忆操作日志列表">
         <li v-for="log in logs" :key="log.id" class="border-b border-line py-5">
-          <div class="flex min-w-0 flex-wrap items-start justify-between gap-3">
+          <div class="flex min-w-0 items-start justify-between gap-4">
             <div class="min-w-0">
-              <div class="flex min-w-0 flex-wrap items-center gap-2">
-                <span class="inline-state" :data-kind="outcomeKind(log)">{{ outcomeLabel(log) }}</span>
-                <h3 class="text-sm font-medium text-display">{{ sourceLabel(log) }} · {{ operationLabel(log) }}</h3>
-              </div>
-              <p class="mt-2 font-mono text-[10px] text-mute">{{ log.action }}</p>
+              <span class="inline-state" :data-kind="outcomeKind(log)">{{ outcomeLabel(log) }}</span>
+              <h3 class="mt-2 text-sm font-medium text-display">{{ sourceLabel(log) }} · {{ operationLabel(log) }}</h3>
+              <p class="mt-2 text-xs text-mute">{{ actorLabel(log) || "系统" }}</p>
             </div>
-            <time class="shrink-0 font-mono text-[10px] text-disabled">{{ formatFullDateTime(log.at) }}</time>
+            <time class="shrink-0 text-right font-mono text-[11px] text-mute">{{ formatFullDateTime(log.at) }}</time>
           </div>
-          <dl class="mt-3 grid min-w-0 grid-cols-[max-content_1fr] gap-x-3 gap-y-2 text-xs">
-            <dt class="text-disabled">执行者</dt>
-            <dd class="min-w-0 break-all text-mute">{{ actorLabel(log) || "—" }}</dd>
+          <dl class="mt-4 grid min-w-0 grid-cols-[max-content_1fr] gap-x-3 gap-y-2 text-xs">
             <template v-if="log.request?.conversationId">
-              <dt class="text-disabled">会话</dt>
-              <dd class="min-w-0 break-all font-mono text-[11px] text-mute">
+              <dt class="text-mute">会话</dt>
+              <dd class="min-w-0 break-all font-mono text-[11px] text-ink">
                 {{ log.request.conversationId }}<span v-if="log.request.conversationScope"> · {{ log.request.conversationScope }}</span>
               </dd>
             </template>
             <template v-if="countText(log)">
-              <dt class="text-disabled">变化</dt>
-              <dd class="min-w-0 text-mute">{{ countText(log) }}</dd>
-            </template>
-            <template v-if="log.response?.reasonCode">
-              <dt class="text-disabled">原因</dt>
-              <dd class="min-w-0 break-all font-mono text-[11px] text-mute">{{ log.response.reasonCode }}</dd>
+              <dt class="text-mute">变化</dt>
+              <dd class="min-w-0 text-ink">{{ countText(log) }}</dd>
             </template>
           </dl>
           <details v-if="hasDetails(log)" class="mt-3 border-t border-line pt-2">
             <summary class="flex min-h-11 cursor-pointer items-center font-mono text-[10px] text-mute">技术信息</summary>
             <dl class="grid min-w-0 grid-cols-[max-content_1fr] gap-x-3 gap-y-2 pb-2 font-mono text-[10px] text-disabled">
+              <template v-if="log.response?.reasonCode"><dt>原因</dt><dd class="break-all">{{ log.response.reasonCode }}</dd></template>
               <template v-if="log.request?.batchId"><dt>批次</dt><dd class="break-all">{{ log.request.batchId }}</dd></template>
               <template v-if="log.request?.recordIds?.length"><dt>记录</dt><dd class="break-all">{{ log.request.recordIds.join("、") }}</dd></template>
               <template v-if="log.response?.beforeRevision"><dt>原 revision</dt><dd class="break-all">{{ log.response.beforeRevision }}</dd></template>
@@ -169,15 +165,15 @@ function hasDetails(log: MemoryOperationLogEntry) {
           </details>
         </li>
       </ol>
-      <div v-else-if="!error" class="empty-state"><div><strong>还没有记忆操作记录</strong></div></div>
+      <div v-else-if="!error" class="empty-state"><div><strong>还没有记忆操作</strong></div></div>
 
-      <nav v-if="pageCount > 1" class="mt-5 flex items-center justify-between gap-3 border-t border-line pt-4" aria-label="记忆操作日志分页">
-        <button class="btn btn-ghost" type="button" :disabled="loading || page <= 1" @click="emit('page', page - 1)">
-          <i class="bx bx-chevron-left" aria-hidden="true"></i>上一页
+      <nav v-if="pageCount > 1" class="flex items-center justify-between gap-3 border-t border-line pt-4" aria-label="记忆操作日志分页">
+        <button class="icon-btn" type="button" :disabled="loading || page <= 1" aria-label="上一页" @click="emit('page', page - 1)">
+          <i class="bx bx-left-arrow-alt" aria-hidden="true"></i>
         </button>
-        <span class="font-mono text-[10px] text-mute">{{ page }} / {{ pageCount }} · 每页 {{ pageSize }}</span>
-        <button class="btn btn-ghost" type="button" :disabled="loading || page >= pageCount" @click="emit('page', page + 1)">
-          下一页<i class="bx bx-chevron-right" aria-hidden="true"></i>
+        <span class="font-mono text-[11px] text-mute">{{ page }} / {{ pageCount }} · 每页 {{ pageSize }}</span>
+        <button class="icon-btn" type="button" :disabled="loading || page >= pageCount" aria-label="下一页" @click="emit('page', page + 1)">
+          <i class="bx bx-right-arrow-alt" aria-hidden="true"></i>
         </button>
       </nav>
     </aside>

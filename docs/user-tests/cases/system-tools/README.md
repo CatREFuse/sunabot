@@ -16,7 +16,7 @@ All live runs require an isolated workspace, a Provider explicitly authorized to
 | Knowledge and web | `02-admin-private-knowledge-web.md` | Provider, network, or source fixture unavailable is `blocked` |
 | Files and Bash | `03-admin-private-files-bash.md` | `07-user-private-scope.md`, `09-user-group-scope.md` |
 | Media and voice | `04-admin-private-media.md`, `13-admin-private-generate-image.md`, `14-admin-private-selfie-voice-boundary.md` | Missing media handles or image Provider is `blocked`; the current missing voice profile is asserted from the effective catalog |
-| Control and deferred work | `05-admin-private-controls.md`, `08-admin-group-collaboration.md` | `07-user-private-scope.md`, `09-user-group-scope.md` |
+| Control and deferred work | `05-admin-private-controls.md`, `08-admin-group-collaboration.md`, `15-admin-private-codex-control.md` | `07-user-private-scope.md`, `09-user-group-scope.md` |
 | Skills | `10-skill-activation-resource.md`, `11-skill-script-rejection.md` | Current Skill state is a preflight block; script execution remains unavailable |
 | Dynamic MCP | `12-mcp-empty-catalog.md` | No current alias exists; no alias call may be fabricated |
 

@@ -1,0 +1,87 @@
+.quasar-scope {
+  --quasar-canvas: #f4f4f5;
+  --quasar-overlay: #ffffff;
+  --quasar-raised: #f4f4f5;
+  --quasar-ink: #27272a;
+  --quasar-secondary: #71717a;
+  --quasar-tertiary: #a1a1aa;
+  --quasar-line: #e4e4e7;
+  --quasar-watermark: #e4e4e7;
+  --quasar-accent: #3b82f6;
+  --quasar-on-accent: #ffffff;
+  --quasar-surface-radius: 24px;
+  --quasar-field-radius: 16px;
+  --quasar-track-radius: 12px;
+  --quasar-option-radius: 8px;
+  --quasar-shadow: 0 25px 50px -12px rgb(0 0 0 / 25%);
+  --quasar-motion-fast: 125ms;
+  --quasar-motion-ease: cubic-bezier(0.08, 0.58, 0.58, 1);
+  color: var(--quasar-ink);
+  background: var(--quasar-canvas);
+}
+
+:root[data-theme="dark"] .quasar-scope {
+  --quasar-canvas: #18181b;
+  --quasar-overlay: #27272a;
+  --quasar-raised: #3f3f46;
+  --quasar-ink: #ffffff;
+  --quasar-secondary: #a1a1aa;
+  --quasar-tertiary: #52525b;
+  --quasar-line: #3f3f46;
+  --quasar-watermark: #27272a;
+}
+
+.quasar-scope .quasar-surface {
+  border-radius: var(--quasar-surface-radius);
+  background: var(--quasar-overlay);
+  box-shadow: var(--quasar-shadow);
+}
+
+.quasar-scope .quasar-field {
+  min-height: 56px;
+  border: 0.5px solid var(--quasar-line);
+  border-radius: var(--quasar-field-radius);
+  background: var(--quasar-overlay);
+}
+
+.quasar-scope .quasar-chip {
+  min-height: 48px;
+  border-radius: var(--quasar-field-radius);
+  background: var(--quasar-overlay);
+}
+
+.quasar-scope .quasar-chip[aria-pressed="true"] {
+  color: var(--quasar-on-accent);
+  background: var(--quasar-accent);
+}
+
+.quasar-scope .quasar-segmented {
+  display: inline-flex;
+  gap: 6px;
+  padding: 6px;
+  border-radius: var(--quasar-track-radius);
+  background: var(--quasar-raised);
+}
+
+.quasar-scope .quasar-segmented > button {
+  min-height: 28px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: var(--quasar-option-radius);
+  color: var(--quasar-secondary);
+  background: transparent;
+}
+
+.quasar-scope .quasar-segmented > button[aria-pressed="true"] {
+  color: var(--quasar-on-accent);
+  background: var(--quasar-accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .quasar-scope *,
+  .quasar-scope *::before,
+  .quasar-scope *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}

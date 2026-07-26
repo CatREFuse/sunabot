@@ -27,12 +27,9 @@ const sortedItems = computed(() => sortByMemoryTime(
     updatedAt: item.completedAt ?? item.scheduledFor
   })
 ));
+const latestItem = computed(() => sortedItems.value[0]);
 const historyItems = computed(() => sortedItems.value.slice(1));
-const visibleItems = computed(() => {
-  const first = sortedItems.value[0];
-  if (!first) return [];
-  return historyExpanded.value ? [first, ...historyItems.value] : [first];
-});
+const visibleHistory = computed(() => historyExpanded.value ? historyItems.value : historyItems.value.slice(0, 3));
 const nextScheduleLabel = computed(() => formatDateTime(props.nextScheduledFor));
 
 function statusLabel(status: DreamRunStatus) {
@@ -84,19 +81,22 @@ function summaryLabel(item: DreamHistoryItem) {
 </script>
 
 <template>
-  <section class="mt-8 py-2" aria-labelledby="dream-history-title">
-    <header class="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+  <section aria-labelledby="dream-history-title">
+    <header class="flex min-w-0 flex-col gap-4 border-b border-line pb-6 sm:flex-row sm:items-end sm:justify-between">
       <div class="min-w-0">
-        <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-          <h2 id="dream-history-title" class="section-title">梦境</h2>
-          <span v-if="timeZone" class="font-mono text-[10px] text-mute">{{ timeZone }}</span>
+        <p class="field-label">最近运行</p>
+        <div class="mt-2 flex flex-wrap items-baseline gap-x-4 gap-y-2">
+          <h2 id="dream-history-title" class="text-3xl font-medium tracking-[-0.03em] text-display">
+            {{ latestItem ? statusLabel(latestItem.status) : "等待第一次梦境" }}
+          </h2>
+          <span v-if="latestItem" class="inline-state" :data-kind="statusKind(latestItem.status)">{{ dateLabel(latestItem.date) }}</span>
         </div>
-        <p v-if="nextScheduleLabel" class="mt-1 font-mono text-[10px] text-mute">
-          下次做梦 <time :datetime="nextScheduledFor">{{ nextScheduleLabel }}</time>
+        <p v-if="nextScheduleLabel" class="mt-3 font-mono text-[11px] text-mute">
+          下次 <time :datetime="nextScheduledFor">{{ nextScheduleLabel }}</time><span v-if="timeZone"> · {{ timeZone }}</span>
         </p>
       </div>
-      <div class="flex self-end items-center gap-2 sm:self-auto">
-        <span v-if="triggerStatus" class="inline-state" :data-kind="triggerStatusKind || undefined" role="status">{{ triggerStatus }}</span>
+      <div class="flex flex-wrap items-center gap-2">
+        <span v-if="triggerStatus" class="inline-state" :data-kind="triggerStatusKind || undefined" role="status" aria-live="polite">{{ triggerStatus }}</span>
         <button class="btn btn-primary" type="button" :disabled="loading || triggering" @click="emit('trigger')">
           <i class="bx bx-moon" aria-hidden="true"></i>
           {{ triggering ? "做梦中" : "立即做梦" }}
@@ -107,39 +107,81 @@ function summaryLabel(item: DreamHistoryItem) {
       </div>
     </header>
 
-    <p v-if="error" class="inline-state mt-4" data-kind="error" role="alert">{{ error }}</p>
+    <p v-if="error" class="inline-state mt-5" data-kind="error" role="alert">{{ error }}</p>
 
-    <div v-if="visibleItems.length" class="mt-5 space-y-6">
-      <article v-for="item in visibleItems" :key="item.id" class="grid gap-3 py-2 md:grid-cols-[152px_minmax(0,1fr)] md:gap-6">
-        <div class="flex min-w-0 items-center justify-between gap-3 md:block">
-          <time class="font-mono text-xs text-display" :datetime="item.date">{{ dateLabel(item.date) }}</time>
-          <span class="inline-state md:mt-2 md:block" :data-kind="statusKind(item.status)">{{ statusLabel(item.status) }}</span>
+    <article v-if="latestItem" class="grid gap-8 border-b border-line py-8 lg:grid-cols-[minmax(0,1fr)_240px]">
+      <div class="min-w-0">
+        <p v-if="latestItem.dreamText" class="max-w-3xl whitespace-pre-wrap text-base leading-8 text-ink">{{ latestItem.dreamText }}</p>
+        <p v-else class="text-sm text-mute">{{ latestItem.status === "failed" ? "梦境生成失败" : "梦境尚未生成" }}</p>
+      </div>
+      <dl class="grid content-start grid-cols-[max-content_1fr] gap-x-4 gap-y-3 text-xs">
+        <dt class="text-mute">计划</dt>
+        <dd class="text-right font-mono text-[11px] text-ink">{{ formatDateTime(latestItem.scheduledFor) || "--" }}</dd>
+        <template v-if="latestItem.completedAt">
+          <dt class="text-mute">完成</dt>
+          <dd class="text-right font-mono text-[11px] text-ink">{{ formatDateTime(latestItem.completedAt) || "--" }}</dd>
+        </template>
+        <template v-if="summaryLabel(latestItem)">
+          <dt class="text-mute">整理</dt>
+          <dd class="text-right font-mono text-[11px] text-ink">{{ summaryLabel(latestItem) }}</dd>
+        </template>
+        <template v-if="latestItem.personalityChanged">
+          <dt class="text-mute">人格</dt>
+          <dd class="text-right font-mono text-[11px] text-success">已微调</dd>
+        </template>
+      </dl>
+    </article>
+
+    <section v-if="historyItems.length" class="pt-8" aria-labelledby="dream-history-list-title">
+      <div class="flex items-center justify-between gap-4">
+        <div>
+          <p class="field-label">历史</p>
+          <h3 id="dream-history-list-title" class="mt-2 text-lg font-medium text-display">过往梦境</h3>
         </div>
-        <div class="min-w-0">
-          <p v-if="item.dreamText" class="whitespace-pre-wrap text-sm leading-7 text-ink">{{ item.dreamText }}</p>
-          <p v-else class="text-sm text-mute">{{ item.status === "failed" ? "梦境生成失败" : "梦境尚未生成" }}</p>
-          <div class="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-[10px] text-mute">
-            <span>计划 <time :datetime="item.scheduledFor">{{ formatDateTime(item.scheduledFor) || "--" }}</time></span>
-            <span v-if="item.completedAt">完成 <time :datetime="item.completedAt">{{ formatDateTime(item.completedAt) || "--" }}</time></span>
-            <span v-if="summaryLabel(item)">{{ summaryLabel(item) }}</span>
-            <span v-if="item.personalityChanged" class="text-success">人格已微调</span>
+        <button
+          v-if="historyItems.length > 3"
+          class="btn btn-ghost"
+          type="button"
+          :aria-expanded="historyExpanded"
+          @click="historyExpanded = !historyExpanded"
+        >
+          {{ historyExpanded ? "收起" : `查看全部 ${historyItems.length} 条` }}
+          <i class="bx" :class="historyExpanded ? 'bx-chevron-up' : 'bx-chevron-down'" aria-hidden="true"></i>
+        </button>
+      </div>
+      <TransitionGroup name="memory-list" tag="ol" class="mt-4 border-t border-line" aria-label="梦境历史">
+        <li v-for="item in visibleHistory" :key="item.id" class="grid gap-3 border-b border-line py-5 md:grid-cols-[140px_minmax(0,1fr)_max-content] md:gap-6">
+          <div>
+            <time class="font-mono text-xs text-display" :datetime="item.date">{{ dateLabel(item.date) }}</time>
+            <span class="inline-state mt-2 block" :data-kind="statusKind(item.status)">{{ statusLabel(item.status) }}</span>
           </div>
-        </div>
-      </article>
-    </div>
+          <p class="line-clamp-2 min-w-0 text-sm leading-6 text-ink">{{ item.dreamText || (item.status === "failed" ? "梦境生成失败" : "梦境尚未生成") }}</p>
+          <span class="font-mono text-[11px] text-mute">{{ summaryLabel(item) || formatDateTime(item.completedAt || item.scheduledFor) }}</span>
+        </li>
+      </TransitionGroup>
+    </section>
 
-    <p v-else-if="loading" class="mt-5 font-mono text-xs text-mute" role="status">正在读取梦境</p>
-    <p v-else class="mt-5 text-sm text-mute">还没有梦境</p>
-
-    <button
-      v-if="historyItems.length"
-      class="btn btn-ghost mt-4"
-      type="button"
-      :aria-expanded="historyExpanded"
-      @click="historyExpanded = !historyExpanded"
-    >
-      <i class="bx" :class="historyExpanded ? 'bx-chevron-up' : 'bx-chevron-down'" aria-hidden="true"></i>
-      {{ historyExpanded ? "收起历史" : `展开 ${historyItems.length} 条历史` }}
-    </button>
+    <p v-if="!latestItem && loading" class="py-16 text-center font-mono text-xs text-mute" role="status">[正在读取梦境]</p>
+    <p v-else-if="!latestItem" class="py-16 text-center text-sm text-mute">还没有梦境</p>
   </section>
 </template>
+
+<style scoped>
+.memory-list-enter-active,
+.memory-list-leave-active {
+  transition: opacity 180ms var(--motion-ease), transform 180ms var(--motion-ease);
+}
+
+.memory-list-enter-from,
+.memory-list-leave-to {
+  opacity: 0;
+  transform: translateY(8px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .memory-list-enter-active,
+  .memory-list-leave-active {
+    transition: none;
+  }
+}
+</style>

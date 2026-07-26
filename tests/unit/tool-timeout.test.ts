@@ -178,6 +178,8 @@ describe("tool call timeout", () => {
       backend: "native",
       accessMode: "admin",
       strictMode: true,
+      isAdmin: true,
+      userRequest: "pwd",
       signal: expect.any(AbortSignal)
     });
     const workbenchRoot = await fs.realpath(path.join(temporaryRoot, "workbench"));

@@ -20,6 +20,7 @@ const AGENT_IDS = [
   "plana",
   "agent-b",
   "replace-agent",
+  "gif-agent",
   "invalid-agent",
   "limit-agent",
   "link-agent",
@@ -39,6 +40,7 @@ let redPng = Buffer.alloc(0);
 let bluePng = Buffer.alloc(0);
 let greenPng = Buffer.alloc(0);
 let redJpeg = Buffer.alloc(0);
+let animatedGif = Buffer.alloc(0);
 let configs = new Map<string, AppConfig>();
 let runtimes = new Map<string, SunaRuntime>();
 let generatedCalls = new Map<string, ReturnType<typeof vi.fn>>();
@@ -86,6 +88,7 @@ beforeAll(async () => {
     solidPng(sharp, { r: 30, g: 180, b: 80 })
   ]);
   redJpeg = await sharp(redPng).jpeg().toBuffer();
+  animatedGif = await twoFrameGif(sharp);
 
   for (const agentId of AGENT_IDS) {
     const config = fixturesModule.createAdminTestConfig(root);
@@ -222,6 +225,53 @@ describe("emoji production repository and Fastify routes", () => {
     expect(agentBContent.rawPayload).not.toEqual(planaContent.rawPayload);
     expect((await list("plana")).emojis.map((item: { key: string }) => item.key)).toEqual(["开心"]);
     expect((await list("agent-b")).emojis.map((item: { key: string }) => item.key)).toEqual(["开心"]);
+  });
+
+  it("keeps uploaded GIF animation through storage, content delivery, and configured resizing", async () => {
+    const agentId = "gif-agent";
+    const record = findEmoji(await upload(agentId, "挥手", "wave.gif", animatedGif), "挥手");
+    expect(record).toMatchObject({ width: 1024, height: 1024 });
+    expect(record.fileName).toMatch(/^emoji-[a-f0-9]{64}\.gif$/u);
+
+    const original = await app.inject({
+      method: "GET",
+      url: record.originalUrl,
+      headers: readHeaders()
+    });
+    expect(original.statusCode).toBe(200);
+    expect(original.headers["content-type"]).toContain("image/gif");
+    await expect(animatedMetadata(original.rawPayload)).resolves.toMatchObject({
+      format: "gif",
+      pages: 2,
+      pageHeight: 1024,
+      loop: 0,
+      delay: [90, 180]
+    });
+
+    const display = await app.inject({
+      method: "GET",
+      url: record.displayUrl,
+      headers: readHeaders()
+    });
+    expect(display.statusCode).toBe(200);
+    expect(display.headers["content-type"]).toContain("image/webp");
+
+    const config = requireConfig(agentId);
+    config.bot.emojiSendSize = 256;
+    const [assets, delivery] = await Promise.all([
+      import("../../src/emojis/emojiAssets.js"),
+      import("../../src/emojis/emojiDeliveryAssets.js")
+    ]);
+    const plan = assets.planAgentEmojiMarkers("[/挥手]", config);
+    const [resized] = await delivery.prepareEmojiDeliveryImages(config, plan);
+    expect(resized?.filePath).toMatch(/emoji-[a-f0-9]{64}\.gif$/u);
+    await expect(animatedMetadata(await fs.readFile(resized!.filePath!))).resolves.toMatchObject({
+      format: "gif",
+      pages: 2,
+      pageHeight: 256,
+      loop: 0,
+      delay: [90, 180]
+    });
   });
 
   it("lists and deletes old versions, renames keys, rejects stale current URLs and binds generated images", async () => {
@@ -670,4 +720,22 @@ async function solidPng(
   return sharp({
     create: { width: 24, height: 32, channels: 3, background }
   }).png().toBuffer();
+}
+
+async function twoFrameGif(sharp: typeof import("sharp")["default"]) {
+  const pixels = Buffer.alloc(24 * 64 * 4);
+  for (let offset = 0; offset < pixels.length / 2; offset += 4) {
+    pixels.set([240, 80, 80, 255], offset);
+  }
+  for (let offset = pixels.length / 2; offset < pixels.length; offset += 4) {
+    pixels.set([80, 80, 240, 255], offset);
+  }
+  return sharp(pixels, {
+    raw: { width: 24, height: 64, channels: 4, pageHeight: 32 }
+  }).gif({ delay: [90, 180], loop: 0 }).toBuffer();
+}
+
+async function animatedMetadata(bytes: Buffer) {
+  const sharp = (await import("sharp")).default;
+  return sharp(bytes, { animated: true }).metadata();
 }

@@ -103,36 +103,47 @@ describe("read_file and write_file provider contract", () => {
     }
   });
 
-  it("rejects a file tool mixed with assistant_text before either callback runs", async () => {
+  it("allows read_file and write_file in the same tool batch", async () => {
     const read = vi.fn(async () => ({ ok: true, path: "safe.txt", byteLength: 1, content: "x" }));
-    const write = vi.fn(async () => ({ ok: true, path: "safe.txt", byteLength: 1 }));
-    const onAssistantText = vi.fn();
+    const write = vi.fn(async () => ({
+      ok: true,
+      path: "safe.txt",
+      byteLength: 1,
+      created: false,
+      overwritten: true
+    }));
     const executor = new RegistryProviderToolExecutor();
-    const options = { workbenchFiles: { read, write }, onAssistantText } satisfies ProviderCompleteOptions;
+    const options = { workbenchFiles: { read, write } } satisfies ProviderCompleteOptions;
     const definitions = executor.resolveDefinitions(options, []);
     const outputs = await executor.execute([
       fileCall("read_file", { path: "safe.txt" }),
-      fileCall("assistant_text", { text: "do not send" })
+      fileCall("write_file", { path: "safe.txt", content: "y", overwrite: true })
     ], options, definitions);
 
-    expect(outputs.map((output) => JSON.parse(String(output.output)))).toEqual([
-      { ok: false, error: "read_file and write_file must be called alone before any other tool." },
-      { ok: false, error: "read_file and write_file must be called alone before any other tool." }
-    ]);
-    expect(read).not.toHaveBeenCalled();
-    expect(write).not.toHaveBeenCalled();
-    expect(onAssistantText).not.toHaveBeenCalled();
+    expect(outputs.map((output) => JSON.parse(String(output.output))))
+      .toEqual([
+        { ok: true, path: "safe.txt", byteLength: 1, content: "x" },
+        {
+          ok: true,
+          path: "safe.txt",
+          byteLength: 1,
+          created: false,
+          overwritten: true
+        }
+      ]);
+    expect(read).toHaveBeenCalledOnce();
+    expect(write).toHaveBeenCalledOnce();
   });
 
-  it("rejects file tools before and after any accepted tool activity", async () => {
+  it("allows file tools before and after other accepted tool activity", async () => {
     const options = fileOptions();
     const executor = new RegistryProviderToolExecutor();
     const definitions = executor.resolveDefinitions(options, []);
     const state = createTurnToolState();
     state.acceptedToolNames.push("memory_recall");
     const [lateRead] = await executor.execute([fileCall("read_file", { path: "safe.txt" })], options, definitions, state);
-    expect(JSON.parse(String(lateRead?.output))).toMatchObject({ ok: false });
-    expect(options.workbenchFiles.read).not.toHaveBeenCalled();
+    expect(JSON.parse(String(lateRead?.output))).toMatchObject({ ok: true });
+    expect(options.workbenchFiles.read).toHaveBeenCalledOnce();
 
     const freshState = createTurnToolState();
     const [write] = await executor.execute([
@@ -142,8 +153,8 @@ describe("read_file and write_file provider contract", () => {
     const [lateReadAfterWrite] = await executor.execute([
       fileCall("read_file", { path: "safe.txt" })
     ], options, definitions, freshState);
-    expect(JSON.parse(String(lateReadAfterWrite?.output))).toMatchObject({ ok: false });
-    expect(options.workbenchFiles.read).not.toHaveBeenCalled();
+    expect(JSON.parse(String(lateReadAfterWrite?.output))).toMatchObject({ ok: true });
+    expect(options.workbenchFiles.read).toHaveBeenCalledTimes(2);
   });
 
   it("returns a stable redacted failure if a custom port throws host metadata", async () => {

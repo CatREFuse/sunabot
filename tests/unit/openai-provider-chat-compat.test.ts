@@ -424,6 +424,96 @@ describe("provider protocols", () => {
     const provider = new OpenAIProvider(providerConfig("openai-compatible"));
     await expect(provider.generateImage("portrait", "1024x1024", "high")).rejects.toThrow(/不支持 Responses 图像生成/);
   });
+
+  it("retries Codex image generation when the response body stream terminates", async () => {
+    const provider = new OpenAIProvider({
+      ...providerConfig("codex-responses"),
+      baseUrl: "https://chatgpt.com/backend-api/codex"
+    }, {
+      imageRetrySleep: async () => undefined
+    });
+    vi.spyOn(provider as never, "getApiKey").mockReturnValue("test-token");
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(interruptedBodyResponse())
+      .mockResolvedValueOnce(interruptedBodyResponse("data: partial"))
+      .mockResolvedValueOnce(interruptedBodyResponse("data: response.output_item.done"));
+
+    await expect(provider.generateImage("portrait", "1024x1024", "high"))
+      .rejects.toThrow("Image generation transport failed before the response completed.");
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(appendRequestLog.mock.calls
+      .map(([entry]) => entry as Record<string, any>)
+      .filter((entry) => entry.category === "model.response" && entry.action === "codex.image.generate")
+      .map((entry) => ({
+        error: entry.response.error,
+        willRetry: entry.response.willRetry,
+        attempt: entry.metadata.attempt,
+        maxAttempts: entry.metadata.maxAttempts
+      })))
+      .toEqual([
+        {
+          error: "Image generation transport failed before the response completed.",
+          willRetry: true,
+          attempt: 1,
+          maxAttempts: 3
+        },
+        {
+          error: "Image generation transport failed before the response completed.",
+          willRetry: true,
+          attempt: 2,
+          maxAttempts: 3
+        },
+        {
+          error: "Image generation transport failed before the response completed.",
+          willRetry: false,
+          attempt: 3,
+          maxAttempts: 3
+        }
+      ]);
+  });
+
+  it("recovers from a terminated Codex image response without duplicating the image", async () => {
+    const provider = new OpenAIProvider({
+      ...providerConfig("codex-responses"),
+      baseUrl: "https://chatgpt.com/backend-api/codex"
+    }, {
+      imageRetrySleep: async () => undefined
+    });
+    vi.spyOn(provider as never, "getApiKey").mockReturnValue("test-token");
+    const image = { url: "/generated-images/recovered.png" };
+    const imageWriter = (provider as unknown as {
+      imageWriter: { write: (...args: unknown[]) => typeof image };
+    }).imageWriter;
+    const writeImage = vi.spyOn(imageWriter, "write").mockReturnValue(image);
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(interruptedBodyResponse("data: partial"))
+      .mockResolvedValueOnce(codexImageResponse());
+
+    await expect(provider.generateImage("portrait", "1024x1024", "high")).resolves.toEqual(image);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(writeImage).toHaveBeenCalledOnce();
+  });
+
+  it("does not retry cancellation while reading a Codex image response", async () => {
+    const provider = new OpenAIProvider({
+      ...providerConfig("codex-responses"),
+      baseUrl: "https://chatgpt.com/backend-api/codex"
+    }, {
+      imageRetrySleep: async () => undefined
+    });
+    vi.spyOn(provider as never, "getApiKey").mockReturnValue("test-token");
+    const abort = new Error("cancelled");
+    abort.name = "AbortError";
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(interruptedBodyResponse("", abort));
+
+    await expect(provider.generateImage("portrait", "1024x1024", "high"))
+      .rejects.toBe(abort);
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
 });
 
 function providerConfig(kind: ProviderKind): ProviderConfig {
@@ -464,13 +554,33 @@ function jsonResponse(payload: unknown) {
   return new Response(JSON.stringify(payload), { status: 200, headers: { "content-type": "application/json" } });
 }
 
-function interruptedBodyResponse() {
-  return {
-    ok: true,
+function interruptedBodyResponse(prefix = "", error: Error = new TypeError("terminated")) {
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      if (prefix) controller.enqueue(new TextEncoder().encode(prefix));
+      controller.error(error);
+    }
+  });
+  return new Response(body, {
     status: 200,
-    headers: new Headers(),
-    text: vi.fn(async () => { throw new TypeError("terminated"); })
-  } as unknown as Response;
+    headers: { "content-type": "text/event-stream" }
+  });
+}
+
+function codexImageResponse() {
+  const item = {
+    type: "image_generation_call",
+    status: "completed",
+    result: "ZmFrZQ=="
+  };
+  const events = [
+    { type: "response.output_item.done", output_index: 0, item },
+    { type: "response.completed", response: { status: "completed", output: [item] } }
+  ];
+  return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""), {
+    status: 200,
+    headers: { "content-type": "text/event-stream" }
+  });
 }
 
 function codexTextResponse(text: string) {

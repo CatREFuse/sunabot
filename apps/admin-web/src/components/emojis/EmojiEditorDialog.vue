@@ -111,10 +111,10 @@ function formatBytes(bytes: number) {
             <span v-else>
               <i class="bx bx-upload text-3xl text-mute" aria-hidden="true"></i>
               <strong class="mt-3 block text-sm font-medium text-display">拖入或选择图片</strong>
-              <span class="mt-1 block text-xs text-mute">PNG、JPEG、WebP</span>
+              <span class="mt-1 block text-xs text-mute">PNG、JPEG、WebP、GIF</span>
             </span>
           </button>
-          <input ref="fileInput" class="sr-only" type="file" accept="image/png,image/jpeg,image/webp" @change="selected">
+          <input ref="fileInput" class="sr-only" type="file" accept="image/png,image/jpeg,image/webp,image/gif" @change="selected">
         </div>
         <p v-if="localError || error" class="inline-state" data-kind="error">{{ localError || error }}</p>
       </div>

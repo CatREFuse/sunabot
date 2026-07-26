@@ -69,9 +69,9 @@ describe("chat media Provider tool boundary", () => {
     expect(importEmoji).not.toHaveBeenCalled();
   });
 
-  it("keeps emoji import solo and does not run either side of a mixed batch", async () => {
-    const exportMedia = vi.fn();
-    const importEmoji = vi.fn();
+  it("allows emoji import and media export in the same batch", async () => {
+    const exportMedia = vi.fn(async () => ({ ok: true, path: "chat-media-a.png" }));
+    const importEmoji = vi.fn(async () => ({ ok: true, key: "开心" }));
     const options: ProviderCompleteOptions = {
       chatMedia: {
         export: exportMedia,
@@ -97,10 +97,10 @@ describe("chat media Provider tool boundary", () => {
 
     expect(outputs.map((output) => JSON.parse(String(output.output))))
       .toEqual([
-        { ok: false, error: "import_chat_emoji must be called alone before any other tool." },
-        { ok: false, error: "import_chat_emoji must be called alone before any other tool." }
+        { ok: true, key: "开心" },
+        { ok: true, path: "chat-media-a.png" }
       ]);
-    expect(exportMedia).not.toHaveBeenCalled();
-    expect(importEmoji).not.toHaveBeenCalled();
+    expect(exportMedia).toHaveBeenCalledOnce();
+    expect(importEmoji).toHaveBeenCalledOnce();
   });
 });

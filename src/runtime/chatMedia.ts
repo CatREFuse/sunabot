@@ -49,7 +49,7 @@ export function providerChatMediaForIncoming(
             const imported = after.emojis.find((emoji) => emoji.key === input.key);
             if (!imported) throw new Error("CHAT_EMOJI_IMPORT_FAILED");
             const previous = before.emojis.find((emoji) => emoji.key === input.key);
-            const match = imported.fileName.match(/^emoji-([a-f0-9]{64})\.png$/);
+            const match = imported.fileName.match(/^emoji-([a-f0-9]{64})\.(?:png|gif)$/);
             if (!match) throw new Error("CHAT_EMOJI_IMPORT_FAILED");
             return {
               ok: true as const,

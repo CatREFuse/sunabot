@@ -148,9 +148,7 @@ export function registerAgentToolRoutes(app: FastifyInstance, options: AgentTool
       skillCapabilities,
       systemConfig: {
         execute: async () => ({ ok: false, error: "System configuration is not executable from the tool catalog." }),
-        mutationStaged: () => false,
-        rejectTurn: () => undefined,
-        turnRejected: () => false
+        mutationStaged: () => false
       },
       director: {
         execute: async () => ({ ok: false, error: "Daily director is not executable from the tool catalog." })

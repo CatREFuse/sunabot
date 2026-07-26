@@ -320,7 +320,14 @@ describe("user test harness", () => {
         dreamReviewedAt: ""
       }])}\n`
     );
-    await fs.writeFile(path.join(agentRoot, "SOUL.md"), "Alice protects /Users/alice/private.");
+    await fs.writeFile(
+      path.join(agentRoot, "SOUL.md"),
+      "Alice protects /Users/alice/private. Trace 1234567890123456789 must not leave the sampler."
+    );
+    await fs.writeFile(
+      path.join(agentRoot, "USER.md"),
+      "用户此前显示名为“HiddenAlias”，该别名必须替换。"
+    );
     const database = new DatabaseSync(databasePath);
     database.exec(`
       CREATE TABLE conversations (id TEXT PRIMARY KEY, last_at TEXT NOT NULL, data_json TEXT NOT NULL);
@@ -340,17 +347,52 @@ describe("user test harness", () => {
         scope: "private",
         userId: 123456789,
         title: "Alice",
-        messageCount: 1,
-        lastAt: "2026-07-26T07:00:00.000Z",
-        lastText: "Alice confirmed 123456789.",
+        messageCount: 5,
+        lastAt: "2026-07-26T07:02:00.000Z",
+        lastText: "[视频：private-release-video.mp4]",
         messages: [{
           id: "message-private-123456789-1",
           sequence: 1,
           role: "user",
           userId: 123456789,
           senderName: "Alice",
-          text: "Alice confirmed 123456789.",
-          at: "2026-07-26T07:00:00.000Z"
+          text: "old-message-outside-limit",
+          at: "2026-07-26T06:58:00.000Z"
+        }, {
+          id: "message-private-123456789-2",
+          sequence: 2,
+          role: "user",
+          userId: 123456789,
+          senderName: "Alice",
+          text: "[回复消息：private-reply-id] 转发小程序 JSON https://example.test/share/1234567890123456789",
+          at: "2026-07-26T06:59:00.000Z"
+        }, {
+          id: "message-private-123456789-3",
+          sequence: 3,
+          role: "user",
+          userId: 123456789,
+          senderName: "Alice",
+          text: "北京市朝阳区幸福路12号3栋。",
+          at: "2026-07-26T07:00:00.000Z",
+          imageUrls: ["https://example.test/private-image"]
+        }, {
+          id: "message-private-123456789-4",
+          sequence: 4,
+          role: "assistant",
+          userId: 123456789,
+          senderName: "Alice",
+          text: "internal-orchestrator-result-must-not-enter-sample",
+          at: "2026-07-26T07:01:00.000Z",
+          visibility: "internal",
+          eventKind: "orchestrator_decision"
+        }, {
+          id: "message-private-123456789-5",
+          sequence: 5,
+          role: "user",
+          userId: 123456789,
+          senderName: "Alice",
+          text: "[视频：private-release-video.mp4]",
+          at: "2026-07-26T07:02:00.000Z"
         }]
       })
     );
@@ -360,32 +402,62 @@ describe("user test harness", () => {
       id: 987654321,
       userIds: [22334455],
       groupIds: [99887766],
-      fact: "Alice owns account 123456789.",
+      fact: "Alice owns account 123456789. @44556677 [回复消息：77889900] 人物-3a01ef2d",
+      relatedUsers: "相关用户：QQ 99887766（光、静海教主）；QQ 22334455（光）；QQ 33445566（.）。光（QQ 99887766）负责复核。",
+      compressedMessageStart: 20_612,
+      compressedMessageEnd: 20_675,
+      createdAt: "2026-07-26T06:00:00.000Z 至 2026-07-26T07:00:00.000Z",
       historicalLabel: "2020-01-01T00:00:00.000Z"
     }));
     database.prepare(
       "INSERT INTO memory_records (source, position, data_json) VALUES (?, ?, ?)"
     ).run("user_profile", 1, JSON.stringify({
-      userId: 123456789,
+      userId: "123456789",
+      userIds: ["123456789", "22334455"],
       userName: "Alice",
       addressNames: ["Alice"],
-      preference: "Alice prefers release notes."
+      title: "生成",
+      preference: "Alice prefers release notes. 图像生成结果保持边界，各自执行，待导入工作区。"
+    }));
+    database.prepare(
+      "INSERT INTO memory_records (source, position, data_json) VALUES (?, ?, ?)"
+    ).run("user_profile", 2, JSON.stringify({
+      userId: "22334455",
+      userIds: ["22334455"],
+      userName: "Alice",
+      addressNames: ["Alice"],
+      preference: "Alice expects a separate scoped pseudonym."
     }));
     database.close();
     try {
       const result = await sampleBranchFixture({
         sourceWorkspace: source,
         agentId: "plana",
-        outputPath
+        outputPath,
+        messageLimit: 4
       });
       const sample = await fs.readFile(result.outputPath, "utf8");
       expect(sample).not.toContain("Alice");
+      expect(sample).not.toContain("HiddenAlias");
+      expect(sample).not.toContain("光");
+      expect(sample).not.toContain("静海教主");
       expect(sample).not.toContain("123456789");
       expect(sample).not.toContain("987654321");
       expect(sample).not.toContain("22334455");
       expect(sample).not.toContain("99887766");
+      expect(sample).not.toContain("33445566");
+      expect(sample).not.toContain("44556677");
+      expect(sample).not.toContain("77889900");
+      expect(sample).not.toContain("3a01ef2d");
       expect(sample).not.toContain("2026-07-26");
       expect(sample).not.toContain("/Users/alice");
+      expect(sample).not.toContain("1234567890123456789");
+      expect(sample).not.toContain("old-message-outside-limit");
+      expect(sample).not.toContain("internal-orchestrator-result-must-not-enter-sample");
+      expect(sample).not.toContain("private-reply-id");
+      expect(sample).not.toContain("private-release-video.mp4");
+      expect(sample).toContain("[forwarded-content-redacted]");
+      expect(sample).toContain("[sensitive-content-redacted]");
       expect(sample).not.toContain("\"userName\": \"\"");
       expect(sample).not.toContain("\"addressNames\": [\n        \"\"");
       for (const key of [
@@ -405,14 +477,63 @@ describe("user test harness", () => {
       }
       expect(sample).toContain("name-0001");
       expect(sample).toContain("9000001");
-      expect(JSON.parse(sample).fixture).toMatchObject({
+      expect(sample).toContain("图像生成结果保持边界，各自执行，待导入工作区。");
+      expect(sample).not.toContain("name-00[time]");
+      expect(sample).not.toContain("[number]");
+      expect(sample).not.toContain("[name]");
+      const parsedSample = JSON.parse(sample);
+      expect(parsedSample.fixture).toMatchObject({
         now: "2024-01-01T02:00:00.000Z",
-        userProfiles: [{ addressNames: ["name-0001"] }]
+        messageSelection: {
+          source: 4,
+          productionEligible: 3,
+          included: 2,
+          mediaSegments: 2,
+          quoteSegments: 1,
+          excluded: {
+            internal: 1,
+            failed: 0,
+            running: 0,
+            other: 0,
+            segmentOnly: 1
+          }
+        },
+        longTerm: [{
+          compressedMessageStart: 0,
+          compressedMessageEnd: 0,
+          createdAt: "2024-01-01T00:00:00.000Z"
+        }]
+      });
+      expect(parsedSample.fixture.userProfiles).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          userId: "9000001",
+          userIds: ["9000001", "9000002"],
+          addressNames: ["name-0001"]
+        }),
+        expect.objectContaining({
+          userId: "9000002",
+          userIds: ["9000002"]
+        })
+      ]));
+      expect(new Set(parsedSample.fixture.userProfiles.map(
+        (profile: { userName: string }) => profile.userName
+      )).size).toBe(2);
+      expect(parsedSample.fixture.conversations[0].messages.map(
+        (message: { sequence: number }) => message.sequence
+      )).toEqual([1, 2]);
+      expect(parsedSample.fixture.conversations[0].messages[1]).toMatchObject({
+        imageCount: 1,
+        quoteCount: 0
+      });
+      expect(parsedSample.fixture.conversations[0].messages[0]).toMatchObject({
+        imageCount: 0,
+        quoteCount: 1
       });
       expect(result.counts).toMatchObject({
         conversations: 1,
+        messages: 2,
         longTerm: 1,
-        userProfiles: 1
+        userProfiles: 2
       });
       expect(sample).toContain("\"schemaVersion\": 2");
       expect(sample).toContain("\"irreversible\": true");
@@ -544,12 +665,202 @@ describe("user test harness", () => {
     }
   });
 
+  it("includes an older conversation referenced by working memory before recent conversations", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-user-test-sample-reference-"));
+    const source = path.join(root, "source");
+    const databasePath = path.join(source, "business/data/sunabot.sqlite");
+    const agentRoot = path.join(source, "business/agents/plana");
+    const outputPath = path.join(root, "sample.json");
+    await fs.mkdir(path.dirname(databasePath), { recursive: true });
+    await fs.mkdir(agentRoot, { recursive: true });
+    await fs.writeFile(
+      path.join(agentRoot, "WORKING_MEMORY.md"),
+      `${renderWorkingMemoryMarkdown([{
+        id: "working_historical_reference",
+        content: "Referenced historical evidence remains available.",
+        recordedAt: "2026-07-20T06:00:00.000Z",
+        timeZone: "UTC",
+        conversationId: "private:historical-reference",
+        conversationScope: "private",
+        conversationTitle: "Historical reference",
+        sourceKind: "admin",
+        occurredAt: "2026-07-20T06:00:00.000Z",
+        userId: "historical-user",
+        userIds: ["historical-user"],
+        userName: "Historical user",
+        addressNames: ["Historical user"]
+      }])}\n`
+    );
+    const database = new DatabaseSync(databasePath);
+    database.exec(`
+      CREATE TABLE conversations (id TEXT PRIMARY KEY, last_at TEXT NOT NULL, data_json TEXT NOT NULL);
+      CREATE TABLE memory_records (
+        source TEXT NOT NULL,
+        position INTEGER NOT NULL,
+        data_json TEXT NOT NULL
+      );
+    `);
+    const insertConversation = database.prepare(
+      "INSERT INTO conversations (id, last_at, data_json) VALUES (?, ?, ?)"
+    );
+    insertConversation.run(
+      "private:recent",
+      "2026-07-26T07:00:00.000Z",
+      JSON.stringify({
+        id: "private:recent",
+        scope: "private",
+        title: "Recent",
+        messages: [{
+          id: "message-recent",
+          sequence: 1,
+          role: "user",
+          text: "Recent conversation should not displace referenced evidence.",
+          at: "2026-07-26T07:00:00.000Z"
+        }]
+      })
+    );
+    insertConversation.run(
+      "private:historical-reference",
+      "2026-07-20T06:00:00.000Z",
+      JSON.stringify({
+        id: "private:historical-reference",
+        scope: "private",
+        title: "Historical reference",
+        messages: [{
+          id: "message-historical",
+          sequence: 1,
+          role: "user",
+          text: "Referenced historical evidence remains available.",
+          at: "2026-07-20T06:00:00.000Z"
+        }]
+      })
+    );
+    database.close();
+    try {
+      await sampleBranchFixture({
+        sourceWorkspace: source,
+        agentId: "plana",
+        outputPath,
+        conversationLimit: 1,
+        includeWorkingMemoryConversations: true
+      });
+      const sample = JSON.parse(await fs.readFile(outputPath, "utf8"));
+      expect(sample.fixture.conversations).toHaveLength(1);
+      expect(sample.fixture.conversations[0].messages[0].text)
+        .toBe("Referenced historical evidence remains available.");
+      expect(sample.fixture.workingMemory[0].conversationId)
+        .toBe(sample.fixture.conversations[0].id);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("derives memory compression from one conversation without unrelated working memory", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-user-test-memory-derive-"));
+    const samplePath = path.join(root, "sample.json");
+    const templatePath = path.join(root, "template.md");
+    const fixture = {
+      now: "2024-01-01T02:00:00.000Z",
+      workingMemory: [{
+        id: "memory-0001",
+        content: "Selected conversation memory.",
+        occurredAt: "2024-01-01T00:00:00.000Z",
+        conversationId: "conversation-0001",
+        conversationScope: "private" as const,
+        conversationTitle: "conversation-0001",
+        sourceKind: "admin" as const
+      }, {
+        id: "memory-0002",
+        content: "Unrelated conversation memory.",
+        occurredAt: "2024-01-01T00:30:00.000Z",
+        conversationId: "conversation-0002",
+        conversationScope: "private" as const,
+        conversationTitle: "conversation-0002",
+        sourceKind: "admin" as const
+      }],
+      longTerm: [],
+      userProfiles: [],
+      persona: {
+        name: "fixture-agent",
+        soul: "",
+        preference: "",
+        user: "",
+        relation: "",
+        air: ""
+      },
+      conversations: [{
+        id: "conversation-0001",
+        scope: "private" as const,
+        title: "conversation-0001",
+        userId: 9_000_001,
+        messages: [{
+          id: "message-0001",
+          sequence: 1,
+          role: "user" as const,
+          text: "Keep the selected conversation grounded.",
+          at: "2024-01-01T01:00:00.000Z",
+          userId: 9_000_001,
+          senderName: "name-0001",
+          imageCount: 2,
+          quoteCount: 1
+        }]
+      }]
+    };
+    const sample = {
+      schemaVersion: 2,
+      kind: "sunabot.user-test.sanitized-branch-sample",
+      redaction: {
+        version: "sunabot-user-test-v2",
+        irreversible: true,
+        mappingPersisted: false,
+        timestampPolicy: "relative-shifted-utc-minute",
+        freeTextReviewRequired: true
+      },
+      integrity: {
+        canonicalization: "json-stringify-v1",
+        payloadSha256: cryptoDigest(fixture)
+      },
+      fixture
+    };
+    const templateCase = memoryCompressionCase();
+    await fs.writeFile(samplePath, JSON.stringify(sample));
+    await fs.writeFile(templatePath, [
+      "# Derived memory compression",
+      USER_TEST_CASE_MARKER,
+      "```json",
+      JSON.stringify(templateCase),
+      "```"
+    ].join("\n"));
+    try {
+      const result = await deriveBranchCaseFromSample({
+        samplePath,
+        templatePath,
+        outputRoot: root,
+        outputName: "derived.md",
+        conversationId: "conversation-0001",
+        confirmReviewedSanitizedSample: true
+      });
+      const derived = parseUserTestCaseDocument(await fs.readFile(result.outputPath, "utf8"));
+      expect(derived.input).toMatchObject({
+        workingMemory: [expect.objectContaining({ id: "memory-0001" })],
+        messages: [expect.objectContaining({ imageCount: 2, quoteCount: 1 })]
+      });
+      expect(JSON.stringify(derived.input)).not.toContain("memory-0002");
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("prepares the isolated Agent parent with private extension-safe permissions", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-user-test-prepare-"));
     const source = path.join(root, "source");
     const destination = path.join(root, "destination");
     await fs.mkdir(path.join(source, "business/config"), { recursive: true });
     await fs.mkdir(path.join(source, "business/agents/plana"), {
+      recursive: true,
+      mode: 0o700
+    });
+    await fs.mkdir(path.join(source, "business/agents/koharu"), {
       recursive: true,
       mode: 0o700
     });
@@ -586,35 +897,63 @@ describe("user test harness", () => {
       "private source memory\n"
     );
     await fs.writeFile(
+      path.join(source, "business/agents/koharu/SOUL.md"),
+      "Koharu fixture persona\n"
+    );
+    await fs.writeFile(
+      path.join(source, "business/agents/koharu/WORKING_MEMORY.md"),
+      "private Koharu source memory\n"
+    );
+    await fs.writeFile(
       path.join(source, "business/agents/plana/LONG_TERM_MEMORY.jsonl"),
       "{\"fact\":\"private legacy memory\"}\n"
     );
+    await fs.writeFile(
+      path.join(source, "business/agents/koharu/LONG_TERM_MEMORY.jsonl"),
+      "{\"fact\":\"private Koharu legacy memory\"}\n"
+    );
     await fs.mkdir(path.join(source, "business/agents/plana/data"), { recursive: true });
+    await fs.mkdir(path.join(source, "business/agents/koharu/data"), { recursive: true });
     await fs.writeFile(
       path.join(source, "business/agents/plana/data/sunabot.sqlite"),
       "private copied database"
+    );
+    await fs.writeFile(
+      path.join(source, "business/agents/koharu/data/sunabot.sqlite"),
+      "private copied Koharu database"
     );
     await fs.writeFile(
       path.join(source, "business/prompts/custom.json"),
       "{\"fixture\":true}\n"
     );
     try {
+      await expect(prepareUserTestWorkspace({
+        source,
+        destination: path.join(root, "missing-agent-destination"),
+        confirmCredentialCopy: true,
+        agentId: "missing"
+      })).rejects.toThrow("源 workspace 不存在 Agent：missing");
       await prepareUserTestWorkspace({
         source,
         destination,
-        confirmCredentialCopy: true
+        confirmCredentialCopy: true,
+        agentId: "koharu"
       });
       const stat = await fs.stat(path.join(destination, "business/agents"));
       expect(stat.mode & 0o777).toBe(0o700);
       await expect(fs.access(
-        path.join(destination, "business/agents/plana/WORKING_MEMORY.md")
+        path.join(destination, "business/agents/koharu/WORKING_MEMORY.md")
       )).rejects.toMatchObject({ code: "ENOENT" });
       await expect(fs.access(
-        path.join(destination, "business/agents/plana/LONG_TERM_MEMORY.jsonl")
+        path.join(destination, "business/agents/koharu/LONG_TERM_MEMORY.jsonl")
       )).rejects.toMatchObject({ code: "ENOENT" });
       await expect(fs.access(
-        path.join(destination, "business/agents/plana/data/sunabot.sqlite")
+        path.join(destination, "business/agents/koharu/data/sunabot.sqlite")
       )).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await fs.readFile(
+        path.join(destination, "business/agents/koharu/SOUL.md"),
+        "utf8"
+      )).toBe("Koharu fixture persona\n");
       expect(await fs.readFile(
         path.join(destination, "business/prompts/custom.json"),
         "utf8"
@@ -625,6 +964,10 @@ describe("user test harness", () => {
       ));
       expect(preparedConfig.persona.systemPromptWorkspace)
         .toBe("workspace/business/prompts");
+      expect(preparedConfig.persona).toMatchObject({
+        defaultAgentId: "koharu",
+        agentWorkspace: "workspace/business/agents/koharu"
+      });
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
@@ -927,8 +1270,8 @@ describe("user test harness", () => {
     const previousTimeout = process.env.SUNABOT_USER_TEST_TIMEOUT_MS;
     const config = defaultConfig();
     config.bot.adminQq = "10001";
-    config.persona.defaultAgentId = "plana";
-    config.persona.agentWorkspace = "workspace/business/agents/plana";
+    config.persona.defaultAgentId = "koharu";
+    config.persona.agentWorkspace = "workspace/business/agents/koharu";
     config.providers = {
       defaultProviderId: "fixture-provider",
       items: [{
@@ -943,7 +1286,7 @@ describe("user test harness", () => {
       }]
     };
     await fs.mkdir(path.join(source, "business/config"), { recursive: true });
-    await fs.mkdir(path.join(source, "business/agents/plana"), {
+    await fs.mkdir(path.join(source, "business/agents/koharu"), {
       recursive: true,
       mode: 0o700
     });
@@ -1014,7 +1357,7 @@ describe("user test harness", () => {
           activeTaskCount: 1,
           directorSchedule: {
             status: "committed",
-            date: "2026-07-26"
+            date: dreamReport.observation.branch.seeded.timeline.directorScheduleDate
           }
         }
       });

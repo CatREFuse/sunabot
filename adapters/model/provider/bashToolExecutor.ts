@@ -26,6 +26,8 @@ export async function executeProviderBash(
     backend: bash.backend,
     accessMode: bash.accessMode,
     strictMode: bash.strictMode,
+    isAdmin: bash.isAdmin,
+    userRequest: bash.userRequest,
     isCurrent: bash.isCurrent,
     audit: bash.audit,
     approvalContext: bash.approvalContext,

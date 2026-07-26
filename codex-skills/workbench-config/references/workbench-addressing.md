@@ -39,8 +39,8 @@ An entry that is missing, invalid, or points to absent content is a blocking con
 
 | Conversation | Bash | Managed-resource changes |
 | --- | --- | --- |
-| Administrator QQ private chat | Native and Docker Bash can be exposed under per-command approval | `import_chat_emoji` is released for the current Agent's configured administrator QQ when present in the current tool catalog; use other dedicated media and resource tools for their declared operations |
-| Authenticated administrator Web Chat | Native and Docker Bash can be exposed under per-command approval | Use administrator repositories and APIs |
+| Administrator QQ private chat | Native and Docker Bash can be exposed under per-command approval | Use writable Native Bash for Workbench resources; `import_chat_emoji` remains available when exposed |
+| Authenticated administrator Web Chat | Native and Docker Bash can be exposed under per-command approval | Use writable Native Bash for Workbench resources; use repositories for digest-bound Skill publication |
 | Administrator QQ group | Docker Bash | `import_chat_emoji` is released for the current Agent's configured administrator QQ when present in the current tool catalog; other managed resources stay on administrator repositories and APIs |
 | Ordinary QQ private or group chat | Docker Bash | May write Docker task artifacts and export bound chat media; cannot modify authoritative managed resources |
 
@@ -58,7 +58,9 @@ Do not provide arbitrary URLs, source paths, destination paths, or Agent IDs to 
 
 ### Emoji
 
-In the current Agent administrator QQ's private or group chat, use `import_chat_emoji` when exposed. The host tool writes the Native authoritative catalog; Native reads `emoji/emojis.jsonl`, while Docker reads the same configuration through read-only `native-workbench/emoji/emojis.jsonl`. Stored content uses:
+Native Bash may maintain an already validated local emoji asset and `emoji/emojis.jsonl` through the atomic JSONL module. For current chat media, use `export_chat_media` to obtain verified bytes first, or use `import_chat_emoji` when exposed to normalize and publish in one operation. The latter is the publication route in an administrator group because Docker cannot write the Native projection.
+
+Native reads `emoji/emojis.jsonl`, while Docker reads the same configuration through read-only `native-workbench/emoji/emojis.jsonl`. Stored content uses:
 
 `emoji-{sha256}.png`
 
@@ -66,15 +68,15 @@ or:
 
 `emoji-{sha256}.gif`
 
-The importer validates format, pixels, size, normalizes content where required, deduplicates by content, and atomically replaces `emojis.jsonl` under a serialized update. Repeating the same key and content digest is idempotent.
+The importer validates format, pixels, size, normalizes content where required, deduplicates by content, and atomically replaces `emojis.jsonl` under a serialized update. Repeating the same key and content digest is idempotent. A Bash update must preserve the same record schema, limits, content-addressed name, file validation, digest compare, and atomic readback.
 
 ### Skills
 
-Use the administrator Skill repository or API for install, replace, review, enable, disable, copy, and uninstall. Skill publication is tied to the package digest, reviewed digest, index revision compare-and-swap, transaction journal, and atomic directory/index publication. Bash cannot replace this flow.
+Use Bash to inspect, author, edit, validate, hash, and archive a Skill source package. Published packages are tied to their digest, reviewed digest, index revision compare-and-swap, transaction journal, and atomic directory/index publication. Finish install, replace, review, enable, disable, copy, or uninstall through the Skill repository so the Bash-authored bytes receive the required independent review. Never mint approval fields or reuse approval from an older digest.
 
 ### Selfie and knowledge resources
 
-Use their administrator repositories or APIs. `references.jsonl` is atomically replaced in its directory. Knowledge `index.json` is a rebuildable atomic catalog. Docker task files remain unpublished until a repository operation accepts them.
+Writable Native Bash may add, update, and remove selfie assets and knowledge source files. Preserve the exact selfie JSONL schema and atomically replace `references.jsonl`; knowledge source files are written with the same atomic module while `knowledge/index.json` remains a rebuildable consumer-owned catalog. Confirm a knowledge change with `knowledge_search` or a completed index sync. Docker task files remain unpublished until an authorized Native Bash or repository operation accepts them.
 
 ## Content-Addressing Checks
 

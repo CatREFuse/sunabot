@@ -43,7 +43,7 @@ describe("unified runtime launcher", () => {
     );
 
     expect(nativeCapabilities).toContain('dockerCommand(context, [');
-    expect(nativeCapabilities).toContain('"--network", "none"');
+    expect(nativeCapabilities).toContain('"--network", "bridge"');
     expect(nativeCapabilities).toContain('"--cap-drop", "ALL"');
     expect(nativeCapabilities).toContain("Docker Bash isolation probe passed");
     expect(nativeCapabilities).not.toContain('command("/bin/bash"');
@@ -62,6 +62,7 @@ describe("unified runtime launcher", () => {
     ]));
     expect(args.filter((argument) => argument === "--unshare-net")).toHaveLength(1);
     expect(args.indexOf("--unshare-net")).toBeLessThan(args.indexOf("--"));
+    expect(bubblewrapProbeArguments("/srv/sunabot/workspace", true)).not.toContain("--unshare-net");
   });
 
   it("prepares the dedicated Docker Bash image for Native Core startup", () => {

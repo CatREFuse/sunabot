@@ -24,7 +24,7 @@ export interface ImageGenerationRetryOptions {
 
 export class ImageGenerationTransportError extends Error {
   constructor(cause: unknown) {
-    super("Image generation request failed before receiving an HTTP response.", { cause });
+    super("Image generation transport failed before the response completed.", { cause });
     this.name = "ImageGenerationTransportError";
   }
 }

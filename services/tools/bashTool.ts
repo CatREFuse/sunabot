@@ -39,11 +39,17 @@ import {
   type WorkspaceBashSandboxOptions
 } from "./bashSandbox.js";
 import {
-  WORKSPACE_BASH_EXECUTION_TIMEOUT_MS,
   type WorkspaceBashRuntimeErrorCode,
   type WorkspaceBashRuntimeExecutionResult,
   type WorkspaceBashRuntimePort
 } from "./bashRuntime.js";
+import {
+  isBashConfigurationCurrent,
+  normalizeBashCommand,
+  normalizeBashTimeout,
+  normalizeBashUserRequest,
+  validateBasicBashCommand
+} from "./bashToolInput.js";
 import {
   dockerBashTool,
   nativeBashTool
@@ -56,7 +62,6 @@ export {
   nativeBashTool
 } from "./bashToolDefinition.js";
 
-const MAX_COMMAND_LENGTH = 4_000;
 const MAX_OUTPUT_CHARS = 24_000;
 const OUTSIDE_READ_APPROVAL_GUARANTEE = "仅授权读取既存 canonical regular file；完整父链身份已冻结，并会在只读 bind 前复验。";
 
@@ -94,6 +99,8 @@ export interface WorkspaceBashOptions {
   backend?: BashExecutionBackend;
   accessMode?: BashAccessMode;
   strictMode?: boolean;
+  isAdmin?: boolean;
+  userRequest?: string;
   audit?: BashAuditRunner;
   approvalContext?: BashApprovalContext;
   confirmedApprovalId?: string;
@@ -114,6 +121,8 @@ export interface WorkspaceBashProviderOptions {
   backend: BashExecutionBackend;
   accessMode: BashAccessMode;
   strictMode: boolean;
+  isAdmin: boolean;
+  userRequest: string;
   isCurrent: () => boolean;
   audit: BashAuditRunner;
   approvalContext: BashApprovalContext;
@@ -137,6 +146,8 @@ export function isWorkspaceBashProviderOptions(value: unknown): value is Workspa
     "backend",
     "accessMode",
     "strictMode",
+    "isAdmin",
+    "userRequest",
     "isCurrent",
     "audit",
     "approvalContext",
@@ -155,6 +166,10 @@ export function isWorkspaceBashProviderOptions(value: unknown): value is Workspa
       || (options.backend === "docker" && options.accessMode === "isolated")
     )
     || typeof options.strictMode !== "boolean"
+    || typeof options.isAdmin !== "boolean"
+    || typeof options.userRequest !== "string"
+    || !options.userRequest.trim()
+    || options.userRequest.length > 32_000
     || typeof options.isCurrent !== "function"
     || typeof options.audit !== "function"
     || !approvalContext
@@ -176,10 +191,12 @@ export async function runWorkspaceBash(
   agentWorkspacePath: string,
   options: WorkspaceBashOptions = {}
 ): Promise<WorkspaceBashResult> {
-  const command = normalizeCommand(input.command);
+  const command = normalizeBashCommand(input.command);
   const backend = options.backend ?? "native";
   const accessMode = options.accessMode ?? "admin";
-  const timeoutMs = normalizeTimeout(input.timeoutMs);
+  const isAdmin = options.isAdmin ?? accessMode === "admin";
+  const userRequest = normalizeBashUserRequest(options.userRequest, command);
+  const timeoutMs = normalizeBashTimeout(input.timeoutMs);
   let workbenchRoot = "";
   let addressableWorkbenchRoot = "";
   let readOnlyMounts: WorkspaceBashReadOnlyMounts | undefined;
@@ -212,7 +229,7 @@ export async function runWorkspaceBash(
       "BASH_WORKBENCH_INVALID: current Agent workbench is unavailable."
     );
   }
-  const basicReason = validateBasicCommand(command);
+  const basicReason = validateBasicBashCommand(command);
   if (basicReason) return blockedResult(command, workbenchRoot, backend, accessMode, basicReason);
 
   if (!options.audit) {
@@ -226,7 +243,9 @@ export async function runWorkspaceBash(
       command,
       backend,
       accessMode,
-      strictMode: options.strictMode !== false
+      strictMode: options.strictMode !== false,
+      isAdmin,
+      userRequest
     }, options.abortSignal);
     if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
   } catch {
@@ -667,14 +686,6 @@ function cleanupInvocation(cleanup: NonNullable<WorkspaceBashInvocation["cleanup
   });
 }
 
-function normalizeCommand(value: unknown) {
-  return String(value ?? "").trim();
-}
-
-function normalizeTimeout(_value: unknown) {
-  return WORKSPACE_BASH_EXECUTION_TIMEOUT_MS;
-}
-
 function runtimeExecutionResult(
   result: WorkspaceBashRuntimeExecutionResult,
   options: Pick<ExecuteCommandOptions, "command" | "workbenchRoot" | "backend" | "accessMode" | "audit">
@@ -701,22 +712,6 @@ function runtimeExecutionResult(
     errorCode: result.errorCode,
     retryAfterMs: result.retryAfterMs
   };
-}
-
-function validateBasicCommand(command: string) {
-  if (!command) return "Empty bash command.";
-  if (command.length > MAX_COMMAND_LENGTH) return `Command is too long. Maximum length is ${MAX_COMMAND_LENGTH} characters.`;
-  if (/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/.test(command)) return "Control characters are not allowed.";
-  return "";
-}
-
-function isBashConfigurationCurrent(isCurrent?: () => boolean) {
-  if (!isCurrent) return true;
-  try {
-    return isCurrent() === true;
-  } catch {
-    return false;
-  }
 }
 
 function configurationStaleResult(

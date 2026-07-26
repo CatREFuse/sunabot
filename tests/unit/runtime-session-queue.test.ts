@@ -1577,6 +1577,56 @@ describe("SunaRuntime Session queue bridge", () => {
     ]);
   });
 
+  it("does not deliver an asynchronous Codex completion owned by another Agent", async () => {
+    const completeRequestTurn = vi.fn(async (): Promise<ProviderTurnResult> => ({
+      kind: "completed",
+      text: "不应发送的阿罗娜结果"
+    }));
+    const harness = createRuntimeHarness(completeRequestTurn);
+    const incoming = parseOneBotInboundMessage(privateEvent(30_101, "阿罗娜任务"))!;
+    incoming.agentId = "arona";
+    incoming.accountId = "primary";
+    const sessionId = conversationRecordId(incoming);
+    const replyGate = harness.runtime.replyGates.capture(incoming.scope, sessionId);
+
+    harness.coordinator.enqueueEvent({
+      sessionId,
+      kind: "tool_completion",
+      dedupeKey: "foreign-agent-tool-completion",
+      payload: toolCompletionEnvelope({
+        type: "tool_result",
+        toolJobId: "foreign-agent-job",
+        providerCallId: "foreign-agent-call",
+        toolName: "codex",
+        originalRequest: {
+          incoming,
+          captureSequence: 1,
+          contextThroughSequence: 1,
+          replyGate,
+          replyQuote: { enabled: true, replyToMessageId: incoming.messageId! }
+        },
+        arguments: { task: "foreign task", kind: "analysis" },
+        outcome: {
+          status: "succeeded",
+          result: { content: "阿罗娜结果" },
+          error: null
+        }
+      }, {
+        conversationId: sessionId,
+        correlationId: "foreign-agent-call",
+        idempotencyKey: "foreign-agent-tool-completion"
+      })
+    });
+
+    await harness.coordinator.waitForIdle({ timeoutMs: 3_000 });
+
+    expect(completeRequestTurn).not.toHaveBeenCalled();
+    expect(sentTexts(harness.gateway)).toEqual([]);
+    expect(harness.store.listEvents(sessionId)).toEqual([
+      expect.objectContaining({ kind: "tool_completion", status: "completed" })
+    ]);
+  });
+
   it("queues deferred voice after the acknowledgement and tool job commit without blocking either", async () => {
     const voiceGate = deferred<void>();
     const voiceStarted = deferred<void>();
@@ -1718,6 +1768,52 @@ describe("SunaRuntime Session queue bridge", () => {
     });
   });
 
+  it("returns the persisted asynchronous image failure instead of a generic missing-image message", async () => {
+    const harness = createRuntimeHarness(async () => ({ kind: "completed", text: "unused" }));
+    const incoming = parseOneBotInboundMessage(privateEvent(30_002, "生成一张自拍"))!;
+    harness.runtime.recordIncomingMessage(incoming);
+    const rewriteToneText = vi.fn(async (text: string) => text);
+    (harness.runtime as unknown as { rewriteToneText: typeof rewriteToneText }).rewriteToneText = rewriteToneText;
+    const delivery = { outbox: [] } satisfies ReplyDelivery;
+    const conversationId = conversationRecordId(incoming);
+    const payload = {
+      type: "tool_result",
+      toolJobId: "job-selfie-failed",
+      providerCallId: "call-selfie-failed",
+      toolName: "selfie",
+      originalRequest: {
+        incoming,
+        replyGate: harness.runtime.replyGates.capture(incoming.scope, conversationId),
+        replyQuote: { enabled: false, replyToMessageId: null }
+      },
+      arguments: { scene: "图书馆" },
+      outcome: {
+        status: "failed",
+        result: null,
+        error: { name: "TypeError", message: "terminated" }
+      }
+    } satisfies AsyncToolCompletionPayload;
+
+    await harness.runtime.replyToToolCompletion(
+      payload,
+      harness.gateway,
+      new AbortController().signal,
+      delivery
+    );
+
+    expect(rewriteToneText).toHaveBeenCalledWith(
+      "图片生成失败：上游生图连接中断，请稍后重试",
+      expect.objectContaining({ incoming })
+    );
+    expect(delivery.outbox).toHaveLength(1);
+    expect(delivery.outbox[0]?.payload.payload).toMatchObject({
+      text: "图片生成失败：上游生图连接中断，请稍后重试",
+      generatedImages: [],
+      messageOrigin: "async_tool_callback",
+      toolNames: ["selfie"]
+    });
+  });
+
   it("fails closed for a legacy group callback without frozen gate and quote snapshots", async () => {
     let callbackRequest: RenderedPromptRequest | undefined;
     const harness = createRuntimeHarness(async (request) => {
@@ -1846,6 +1942,26 @@ describe("SunaRuntime Session queue bridge", () => {
     );
 
     await handleOneBotEvent(harness.runtime, privateEvent(22_002, "capability check"), harness.gateway);
+    await harness.coordinator.waitForIdle({ timeoutMs: 3_000 });
+
+    expect(completeRequestTurn).toHaveBeenCalledOnce();
+  });
+
+  it("keeps Codex unavailable for an ordinary group member", async () => {
+    const completeRequestTurn = vi.fn(async (
+      _request: RenderedPromptRequest,
+      options: ProviderCompleteOptions = {}
+    ): Promise<ProviderTurnResult> => {
+      expect(options.asyncCodex).toBe(false);
+      return { kind: "completed", text: "管理员工具未开放" };
+    });
+    const harness = createRuntimeHarness(completeRequestTurn);
+
+    await handleOneBotEvent(
+      harness.runtime,
+      groupEvent(22_006, 605, "ordinary codex request", 998_103),
+      harness.gateway
+    );
     await harness.coordinator.waitForIdle({ timeoutMs: 3_000 });
 
     expect(completeRequestTurn).toHaveBeenCalledOnce();

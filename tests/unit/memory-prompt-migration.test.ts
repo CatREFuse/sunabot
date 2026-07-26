@@ -38,6 +38,29 @@ const promptFixtures = [
   ]]
 ] as const;
 
+const previousV6WorkingMemoryNarrativeReplacements = [[
+  0,
+  "你负责把一批聊天消息整理成高度压缩的工作记忆。fact 建议优先采用 @{bot.name} 的第一视角；使用“我”时，尽量让它指当前角色 @{bot.name}，并注意与聊天中用户的自述区分。"
+], [
+  3,
+  "工作记忆只记录发生过或正在发生的事件。事件是时间轴上的动作、变化或结果，例如决定、约定、承诺、授权、开始、停止、进展、完成、失败、关系变化、项目状态变化和待跟进事项。"
+], [
+  4,
+  "只保留最近最影响后续回复的少数事件。完整工作记忆通常保留 3 至 6 条，最多 8 条；信息不足时可以更少。即使每条信息本身已经清晰，也要主动检查语义相同、相近、重复、互为因果或属于同一事件不同阶段的内容，把它们压缩成一条概括记忆，写清原因、先后变化、当前状态、关键承诺、重要结果和仍需留意的不确定点，并用 occurredAt 保留最早起点、occurredEndAt 保留最新结果或结束时间。"
+], [
+  5,
+  "fact 建议写成自然、连贯的短句或短段，并优先使用“我”或“我的”表达当前角色的感受、看法、判断、担心、期待或打算。注意区分用户自述中的“我”；尽量避免“我记得”等回忆提示语。个人特质可以影响取舍和措辞，情绪允许克制；依据不足时保持轻度感受或保留判断，不夸大情绪，不虚构内心活动。"
+], [
+  6,
+  "fact 正文不得使用列表、字段标签、分类标题或模板化前缀，不得写“事实：”“情绪：”“认知：”“用户：”“相关用户：”，也不得解释来源、压缩过程、数据结构或评分。事实、情绪与认知必须融合在自然叙述里。"
+], [
+  10,
+  "合并语义相同、相近、重复或存在因果关系的事实；新消息补充、修正或替代旧事实时输出更新后的完整概述，并保留从最早原因到最新结果的时间关系。超过数量目标时优先保留仍在进行、影响关系、包含承诺或会改变后续行动的内容，删除已经完成且不再影响未来的小事。"
+], [
+  11,
+  "previousWorkingMemories 中已有的纯人物属性、细碎流水账、格式化说明和缺少后续价值的旧事必须从输出 facts 中删除。旧正文是第三人称或标签格式时，按当前人格改写为第一人称的自然记忆。冲突事件优先采用有明确时间且更新的可靠信息；无法判断时只保留必要的不确定性，不要猜测。"
+]] as const;
+
 afterEach(async () => {
   vi.restoreAllMocks();
   await Promise.all(temporaryDirectories.splice(0).map((directory) => (
@@ -46,6 +69,28 @@ afterEach(async () => {
 });
 
 describe("memory prompt startup migration", () => {
+  it("migrates the exact v6 working-memory narrative and preserves custom content", () => {
+    const canonical = parseFinalPromptTemplate(defaultPromptContent("memory.compress-in"));
+    const previous = structuredClone(canonical);
+    const systemMessage = previous.messages.find((message) => (
+      typeof message === "object" && message.role === "system"
+    ));
+    if (!systemMessage || typeof systemMessage.content !== "string") throw new Error("missing system fixture");
+    const paragraphs = systemMessage.content.trim().split(/\n{2,}/);
+    for (const [index, replacement] of previousV6WorkingMemoryNarrativeReplacements) {
+      paragraphs[index] = replacement;
+    }
+    systemMessage.content = [...paragraphs, "管理员自定义迁移保留段落。"].join("\n\n");
+
+    const migrated = migrateMemoryPerspectiveTemplate(previous, canonical);
+
+    expect(migrated).not.toBe(previous);
+    expect(systemContent(migrated)).toContain(systemContent(canonical));
+    expect(systemContent(migrated)).toContain("管理员自定义迁移保留段落。");
+    expect(migrated.tools).toEqual(previous.tools);
+    expect(migrated.response_format).toEqual(previous.response_format);
+  });
+
   it.each(promptFixtures)("migrates the exact published hard %s template and preserves custom content", (id, replacements) => {
     const canonical = parseFinalPromptTemplate(defaultPromptContent(id));
     const previous = structuredClone(canonical);
@@ -94,9 +139,9 @@ describe("memory prompt startup migration", () => {
 
     expect(await fs.readFile(filePath, "utf8")).toBe(original);
     expect(await fs.readFile(
-      path.join(config.persona.systemPromptWorkspace, `.${fileName}.memory-perspective-v6`),
+      path.join(config.persona.systemPromptWorkspace, `.${fileName}.memory-perspective-v7`),
       "utf8"
-    )).toBe("memory-perspective-v6\n");
+    )).toBe("memory-perspective-v7\n");
     expect(warning).toHaveBeenCalledWith(
       "[prompt-migration] preserved unrecognized memory prompt",
       expect.objectContaining({

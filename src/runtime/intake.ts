@@ -344,8 +344,11 @@ export async function runtime_processSessionEvent(this: RuntimeHost,
           const payload = decodeToolCompletion(event.payload);
           timeoutIncoming = payload.originalRequest?.incoming;
           timeoutReplyQuote = payload.originalRequest?.replyQuote;
+          const expectedAgentId = this.config.persona.defaultAgentId.trim();
           if (
             !timeoutIncoming ||
+            conversationRecordId(timeoutIncoming) !== event.sessionId ||
+            (timeoutIncoming.agentId != null && timeoutIncoming.agentId !== expectedAgentId) ||
             !this.isReplySenderAllowed(timeoutIncoming.userId)
           ) return { status: "no_reply" };
           await appendRequestLog({

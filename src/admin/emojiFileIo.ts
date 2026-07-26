@@ -17,6 +17,8 @@ import { AdminApiError } from "./errors.js";
 
 const MAX_STORED_EMOJI_BYTES = 16 * 1024 * 1024;
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const GIF87A_SIGNATURE = Buffer.from("GIF87a", "ascii");
+const GIF89A_SIGNATURE = Buffer.from("GIF89a", "ascii");
 
 export interface EmojiLibraryOperationHooks {
   afterGeneratedSourceOpened?: (context: { filePath: string }) => void | Promise<void>;
@@ -126,19 +128,22 @@ export async function readGeneratedEmojiImage(
   }
 }
 
-export async function writeContentAddressedEmojiPng(
+export async function writeContentAddressedEmojiFile(
   filePath: string,
   bytes: Buffer,
   expectedHash: string,
   hooks: EmojiLibraryOperationHooks
 ) {
+  const extension = path.extname(filePath).slice(1);
   if (
     !/^[0-9a-f]{64}$/u.test(expectedHash)
-    || path.basename(filePath) !== `emoji-${expectedHash}.png`
+    || !["png", "gif"].includes(extension)
+    || path.basename(filePath) !== `emoji-${expectedHash}.${extension}`
     || crypto.createHash("sha256").update(bytes).digest("hex") !== expectedHash
   ) {
     throw emojiImageConflict();
   }
+  assertEmojiFileSignature(bytes, extension);
   const workspaceRoot = path.resolve(getWorkspacePath());
   const directory = path.dirname(filePath);
   const root = directory;
@@ -555,6 +560,24 @@ function assertPngSignature(bytes: Buffer) {
   if (bytes.byteLength < PNG_SIGNATURE.length || !bytes.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)) {
     throw new AdminApiError(415, "EMOJI_IMAGE_INVALID", "表情图片无法解码。");
   }
+}
+
+function assertEmojiFileSignature(bytes: Buffer, extension: string) {
+  if (extension === "png") {
+    assertPngSignature(bytes);
+    return;
+  }
+  if (
+    extension === "gif"
+    && bytes.byteLength >= GIF87A_SIGNATURE.byteLength
+    && (
+      bytes.subarray(0, GIF87A_SIGNATURE.byteLength).equals(GIF87A_SIGNATURE)
+      || bytes.subarray(0, GIF89A_SIGNATURE.byteLength).equals(GIF89A_SIGNATURE)
+    )
+  ) {
+    return;
+  }
+  throw emojiImageConflict();
 }
 
 function generationUnavailable() {

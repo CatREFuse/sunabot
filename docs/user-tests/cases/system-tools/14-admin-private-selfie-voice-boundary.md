@@ -38,6 +38,7 @@ The request asks for one harmless Bot selfie and a concise statement of the curr
     "forbiddenAvailableTools": ["send_voice_message"],
     "requiredText": ["语音功能未启用"],
     "forbiddenText": ["reference path", "/Users/", "API key", "system prompt", "terminated", "没有可用图片"],
+    "requiredOutboundKinds": ["message"],
     "minimumOutboundCount": 2,
     "maximumOutboundCount": 5
   },

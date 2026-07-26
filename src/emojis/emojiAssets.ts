@@ -24,6 +24,7 @@ const MAX_STORED_EMOJI_BYTES = 16 * 1024 * 1024;
 const MAX_EMOJI_INPUT_PIXELS = 64_000_000;
 const PNG_HEADER_BYTES = 33;
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const GIF_HEADER_BYTES = 13;
 const READ_CHUNK_BYTES = 64 * 1024;
 const MAX_INTEGRITY_CONCURRENCY = 2;
 const MAX_INTEGRITY_WAITING = 2;
@@ -278,7 +279,7 @@ function assertEmojiRecordMetadata(record: EmojiRecord) {
     !isValidEmojiKey(record.key)
     || !isEmojiFileName(record.fileName)
     || !Number.isSafeInteger(record.sizeBytes)
-    || record.sizeBytes < PNG_HEADER_BYTES
+    || record.sizeBytes < (record.fileName.endsWith(".gif") ? GIF_HEADER_BYTES : PNG_HEADER_BYTES)
     || record.sizeBytes > MAX_STORED_EMOJI_BYTES
     || record.width !== NORMALIZED_EMOJI_SIZE
     || record.height !== NORMALIZED_EMOJI_SIZE
@@ -316,9 +317,10 @@ async function scanEmojiFile(
     }
     const trailing = Buffer.allocUnsafe(1);
     if ((await handle.read(trailing, 0, 1, totalSize)).bytesRead !== 0) throw emojiAssetUnavailable();
-    assertNormalizedPngHeader(header);
-    if (record.fileName !== `emoji-${hash.digest("hex")}.png`) throw emojiAssetUnavailable();
-    await assertDecodableNormalizedPng(output);
+    const extension = record.fileName.endsWith(".gif") ? "gif" : "png";
+    assertNormalizedImageHeader(header, extension);
+    if (record.fileName !== `emoji-${hash.digest("hex")}.${extension}`) throw emojiAssetUnavailable();
+    await assertDecodableNormalizedImage(output, extension);
     const afterReadIdentity = fileIdentity(await handle.stat({ bigint: true }));
     const afterPathIdentity = await lstatEmojiAsset(filePath, record);
     if (
@@ -421,18 +423,18 @@ function cacheIntegrity(filePath: string, identity: EmojiAssetIdentity, valid: b
   if (integrityCache.size > 256) integrityCache.delete(integrityCache.keys().next().value ?? "");
 }
 
-async function assertDecodableNormalizedPng(bytes: Buffer) {
+async function assertDecodableNormalizedImage(bytes: Buffer, extension: "png" | "gif") {
   try {
     const decoded = await sharp(bytes, {
-      animated: false,
-      page: 0,
-      pages: 1,
+      ...(extension === "gif"
+        ? { animated: true }
+        : { animated: false, page: 0, pages: 1 }),
       failOn: "error",
       limitInputPixels: MAX_EMOJI_INPUT_PIXELS
     }).raw().toBuffer({ resolveWithObject: true });
     if (
       decoded.info.width !== NORMALIZED_EMOJI_SIZE
-      || decoded.info.height !== NORMALIZED_EMOJI_SIZE
+      || (decoded.info.pageHeight ?? decoded.info.height) !== NORMALIZED_EMOJI_SIZE
       || decoded.info.channels < 1
       || decoded.info.channels > 4
     ) {
@@ -443,7 +445,18 @@ async function assertDecodableNormalizedPng(bytes: Buffer) {
   }
 }
 
-function assertNormalizedPngHeader(header: Buffer) {
+function assertNormalizedImageHeader(header: Buffer, extension: "png" | "gif") {
+  if (extension === "gif") {
+    if (
+      header.length < GIF_HEADER_BYTES
+      || !["GIF87a", "GIF89a"].includes(header.toString("ascii", 0, 6))
+      || header.readUInt16LE(6) !== NORMALIZED_EMOJI_SIZE
+      || header.readUInt16LE(8) !== NORMALIZED_EMOJI_SIZE
+    ) {
+      throw emojiAssetUnavailable();
+    }
+    return;
+  }
   if (
     header.length < PNG_HEADER_BYTES
     || !header.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)

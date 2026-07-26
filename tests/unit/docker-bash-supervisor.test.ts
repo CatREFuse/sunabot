@@ -107,7 +107,7 @@ describe("Docker Bash supervisor", () => {
         Type: "local",
         Config: { "max-size": "512k", "max-file": "1", compress: "false" }
       },
-      NetworkMode: "none",
+      NetworkMode: "bridge",
       ReadonlyRootfs: true,
       CapDrop: ["ALL"],
       PidsLimit: 64,

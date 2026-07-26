@@ -18,6 +18,7 @@ import { getWorkspacePath } from "../../src/config.js";
 
 const TEST_ROOT = testTempRoot("chat-media-runtime");
 let pngBytes: Buffer;
+let gifBytes: Buffer;
 
 beforeAll(async () => {
   await fs.mkdir(TEST_ROOT, { recursive: true });
@@ -29,6 +30,16 @@ beforeAll(async () => {
       background: { r: 50, g: 60, b: 70, alpha: 1 }
     }
   }).png().toBuffer();
+  const frames = Buffer.alloc(4 * 10 * 4);
+  for (let offset = 0; offset < frames.length / 2; offset += 4) {
+    frames.set([230, 90, 90, 255], offset);
+  }
+  for (let offset = frames.length / 2; offset < frames.length; offset += 4) {
+    frames.set([90, 90, 230, 255], offset);
+  }
+  gifBytes = await sharp(frames, {
+    raw: { width: 4, height: 10, channels: 4, pageHeight: 5 }
+  }).gif({ delay: [80, 160], loop: 0 }).toBuffer();
 });
 
 afterAll(async () => {
@@ -158,6 +169,46 @@ describe("current-turn chat media capability", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
+  it("imports an administrator-provided animated GIF without losing its format", async () => {
+    await fs.mkdir(getWorkspacePath(), { recursive: true });
+    const root = await fs.mkdtemp(path.join(getWorkspacePath(), ".test-chat-media-gif-"));
+    const config = createAdminTestConfig(root);
+    config.persona.defaultAgentId = "arona";
+    config.persona.agentWorkspace = path.join(root, "agent-workspace");
+    const cache = new CacheStore(path.join(root, "cache"), { minimumFreeBytes: 0 });
+    await cache.initialize();
+    const incoming = incomingMessage(config.bot.adminQq, "arona");
+    incoming.media = [inlineGif()];
+    const port = providerChatMediaForIncoming(config, incoming, undefined, cache)!;
+
+    const imported = await port.importEmoji!({
+      handle: "message:77:image:0",
+      key: "挥手"
+    });
+
+    expect(imported).toMatchObject({
+      ok: true,
+      key: "挥手",
+      fileName: `emoji-${imported.sha256}.gif`,
+      width: 1024,
+      height: 1024,
+      deduplicated: false
+    });
+    const stored = await fs.readFile(
+      path.join(config.persona.agentWorkspace, "workbench", "emoji", imported.fileName)
+    );
+    await expect(sharp(stored, { animated: true }).metadata()).resolves.toMatchObject({
+      format: "gif",
+      pages: 2,
+      pageHeight: 1024,
+      delay: [80, 160],
+      loop: 0
+    });
+    closeEmojiStores();
+    closeApplicationDataStores();
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
   it("expires the port without publishing when the turn is no longer current", async () => {
     const root = await fs.mkdtemp(path.join(TEST_ROOT, "expired-"));
     const config = createAdminTestConfig(root);
@@ -209,5 +260,14 @@ function inlineImage() {
     kind: "image" as const,
     source: "inline_data" as const,
     url: `data:image/png;base64,${pngBytes.toString("base64")}`
+  };
+}
+
+function inlineGif() {
+  return {
+    schemaVersion: 1 as const,
+    kind: "image" as const,
+    source: "inline_data" as const,
+    url: `data:image/gif;base64,${gifBytes.toString("base64")}`
   };
 }

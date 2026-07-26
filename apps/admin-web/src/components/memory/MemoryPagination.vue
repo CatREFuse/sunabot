@@ -15,14 +15,18 @@ function changePage(nextPage: number) {
 </script>
 
 <template>
-  <nav v-if="pageCount > 1" class="flex flex-col gap-3 border-t border-line pt-4 sm:flex-row sm:items-center sm:justify-between" aria-label="记忆分页">
-    <p class="font-mono text-[10px] text-mute">
-      共 {{ total.toLocaleString("zh-CN") }} 条 · 每页 {{ pageSize.toLocaleString("zh-CN") }} 条
+  <nav v-if="pageCount > 1" class="flex items-center justify-between gap-4 border-t border-line py-4" aria-label="记忆分页">
+    <p class="font-mono text-[11px] text-mute">
+      {{ total.toLocaleString("zh-CN") }} 条 · {{ page.toLocaleString("zh-CN") }} / {{ pageCount.toLocaleString("zh-CN") }}
     </p>
-    <div class="flex items-center justify-between gap-3 sm:justify-end">
-      <button class="btn btn-ghost" type="button" :disabled="loading || page <= 1" @click="changePage(page - 1)"><i class="bx bx-chevron-left" aria-hidden="true"></i>上一页</button>
-      <span class="min-w-16 text-center font-mono text-[10px] text-mute" aria-live="polite">{{ page.toLocaleString("zh-CN") }} / {{ pageCount.toLocaleString("zh-CN") }}</span>
-      <button class="btn btn-ghost" type="button" :disabled="loading || page >= pageCount" @click="changePage(page + 1)">下一页<i class="bx bx-chevron-right" aria-hidden="true"></i></button>
+    <div class="flex items-center gap-1">
+      <button class="icon-btn" type="button" :disabled="loading || page <= 1" aria-label="上一页" @click="changePage(page - 1)">
+        <i class="bx bx-left-arrow-alt" aria-hidden="true"></i>
+      </button>
+      <span class="hidden font-mono text-[11px] text-disabled sm:inline">每页 {{ pageSize.toLocaleString("zh-CN") }}</span>
+      <button class="icon-btn" type="button" :disabled="loading || page >= pageCount" aria-label="下一页" @click="changePage(page + 1)">
+        <i class="bx bx-right-arrow-alt" aria-hidden="true"></i>
+      </button>
     </div>
   </nav>
 </template>

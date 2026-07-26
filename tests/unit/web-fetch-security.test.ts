@@ -15,11 +15,6 @@ import {
 import { RendererLimiter, RendererQueueFullError } from "../../apps/webfetch-renderer/rendererLimiter.js";
 import { rejectConnect } from "../../apps/webfetch-renderer/safeProxy.js";
 import { Readable, type Duplex } from "node:stream";
-import {
-  LOCAL_DATA_OUTBOUND_TURN_CONFLICT_ERROR,
-  preflightProviderToolResponse
-} from "../../adapters/model/provider/toolResponsePreflight.js";
-import { createTurnToolState } from "../../adapters/model/provider/turnToolState.js";
 
 describe("WebFetch URL policy", () => {
   it("allows up to 90 seconds for the complete static fetch", () => {
@@ -233,42 +228,3 @@ describe("WebFetch renderer resource boundaries", () => {
     expect(end).toHaveBeenCalledWith(expect.stringContaining("405 Method Not Allowed"));
   });
 });
-
-describe("WebFetch provider boundary", () => {
-  it("blocks local data and webfetch in the same batch before execution", () => {
-    const calls = [
-      call("memory_recall", { query: "private context" }, "local"),
-      call("webfetch", { url: "https://example.com", semanticMatch: false }, "network")
-    ];
-    const result = preflightProviderToolResponse(calls, "", {}, createTurnToolState());
-
-    expect(result.rejected).toHaveLength(2);
-    expect(result.rejected?.map((output) => JSON.parse(output.output))).toEqual([
-      { ok: false, error: LOCAL_DATA_OUTBOUND_TURN_CONFLICT_ERROR },
-      { ok: false, error: LOCAL_DATA_OUTBOUND_TURN_CONFLICT_ERROR }
-    ]);
-  });
-
-  it("blocks webfetch after local activity and allows it after websearch activity", () => {
-    const localState = createTurnToolState();
-    localState.acceptedToolNames.push("memory_recall");
-    expect(preflightProviderToolResponse([
-      call("webfetch", { url: "https://example.com", semanticMatch: false }, "fetch")
-    ], "", {}, localState).rejected).toBeDefined();
-
-    const outboundState = createTurnToolState();
-    outboundState.acceptedToolNames.push("websearch");
-    expect(preflightProviderToolResponse([
-      call("webfetch", { url: "https://example.com", semanticMatch: false }, "fetch")
-    ], "", {}, outboundState).rejected).toBeUndefined();
-  });
-});
-
-function call(name: string, args: Record<string, unknown>, id: string) {
-  return {
-    type: "function_call" as const,
-    name,
-    call_id: id,
-    arguments: JSON.stringify(args)
-  };
-}

@@ -4,34 +4,38 @@ import type { MemorySortDirection, MemorySortField } from "../../utils/memorySor
 defineProps<{
   field: MemorySortField;
   direction: MemorySortDirection;
+  fields?: readonly MemorySortField[];
 }>();
 const emit = defineEmits<{
   "update:field": [field: MemorySortField];
   "update:direction": [direction: MemorySortDirection];
 }>();
+
+const labels: Readonly<Record<MemorySortField, string>> = {
+  createdAt: "添加时间",
+  updatedAt: "更新时间",
+  lastRecalledAt: "召回时间"
+};
+const defaultFields: readonly MemorySortField[] = ["createdAt", "updatedAt", "lastRecalledAt"];
 </script>
 
 <template>
-  <div class="flex w-full min-w-0 flex-col gap-2 sm:w-auto sm:flex-row sm:items-center" aria-label="记忆排序">
-    <span class="shrink-0 font-mono text-[10px] uppercase tracking-[0.06em] text-mute">排序</span>
+  <div class="flex min-w-0 items-center gap-1 border-l border-line pl-2" aria-label="记忆排序">
     <select
-      class="control sm:w-36"
+      class="min-h-11 min-w-0 appearance-none bg-transparent px-3 font-mono text-[11px] text-ink outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-0 focus-visible:outline-display"
       :value="field"
       aria-label="排序字段"
       @change="emit('update:field', ($event.target as HTMLSelectElement).value as MemorySortField)"
     >
-      <option value="createdAt">添加时间</option>
-      <option value="updatedAt">更新时间</option>
-      <option value="lastRecalledAt">召回时间</option>
+      <option v-for="option in fields ?? defaultFields" :key="option" :value="option">{{ labels[option] }}</option>
     </select>
-    <select
-      class="control sm:w-44"
-      :value="direction"
-      aria-label="排序方向"
-      @change="emit('update:direction', ($event.target as HTMLSelectElement).value as MemorySortDirection)"
+    <button
+      class="icon-btn"
+      type="button"
+      :aria-label="direction === 'desc' ? '当前新到旧，切换为旧到新' : '当前旧到新，切换为新到旧'"
+      @click="emit('update:direction', direction === 'desc' ? 'asc' : 'desc')"
     >
-      <option value="desc">逆序（新到旧）</option>
-      <option value="asc">正序（旧到新）</option>
-    </select>
+      <i class="bx" :class="direction === 'desc' ? 'bx-sort-down' : 'bx-sort-up'" aria-hidden="true"></i>
+    </button>
   </div>
 </template>

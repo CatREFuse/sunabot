@@ -50,6 +50,7 @@ export interface WorkspaceBashSandbox {
   executable: string;
   resourceLimiter?: string;
   image?: string;
+  networkAccess?: boolean;
   launcherEnvironment?: Record<string, string>;
 }
 
@@ -138,7 +139,7 @@ export async function ensureWorkspaceBashIsolation(
     return ensureNativeHostBash(options);
   }
   if (platform === "linux") {
-    return ensureBubblewrapSandbox(workbenchRoot, environment, options);
+    return ensureBubblewrapSandbox(workbenchRoot, environment, options, backend === "docker");
   }
   throw new WorkspaceBashIsolationError(
     `No strong ${backend} Bash isolation is available for ${platform}/${runtimeMode}. Use the Docker backend.`
@@ -187,7 +188,8 @@ export function buildWorkspaceBashInvocation(
     approvedOutsideAccesses,
     sandbox.resourceLimiter,
     readOnlyMounts,
-    resourceMounts
+    resourceMounts,
+    sandbox.networkAccess === true
   );
 }
 
@@ -239,7 +241,8 @@ export function buildBubblewrapInvocation(
   approvedOutsideAccesses: BashPathAccess[] = [],
   resourceLimiter = WORKSPACE_BASH_RESOURCE_LIMITER,
   readOnlyMounts?: WorkspaceBashReadOnlyMounts,
-  resourceMounts?: WorkspaceBashResourceMounts
+  resourceMounts?: WorkspaceBashResourceMounts,
+  networkAccess = false
 ): WorkspaceBashInvocation {
   const args = [
     executable,
@@ -249,7 +252,6 @@ export function buildBubblewrapInvocation(
     "--unshare-pid",
     "--unshare-uts",
     "--unshare-ipc",
-    "--unshare-net",
     "--unshare-cgroup",
     "--uid", "0",
     "--gid", "0",
@@ -263,6 +265,7 @@ export function buildBubblewrapInvocation(
     "--dir", WORKSPACE_BASH_SKILLS_ROOT,
     "--dir", WORKSPACE_BASH_MCP_ROOT
   ];
+  if (!networkAccess) args.splice(args.indexOf("--unshare-cgroup"), 0, "--unshare-net");
   for (const directory of ["/usr", "/bin", "/sbin", "/lib", "/lib64"]) {
     args.push("--dir", directory, "--ro-bind-try", directory, directory);
   }
@@ -330,7 +333,7 @@ export function buildDockerInvocation(
     "run", "--rm", "--init", "--pull", "never",
     "--name", containerName,
     "--user", `${uid}:${gid}`,
-    "--network", "none",
+    "--network", "bridge",
     "--read-only",
     "--cap-drop", "ALL",
     "--security-opt", "no-new-privileges:true",
@@ -371,7 +374,8 @@ function createBashContainerName() {
 async function ensureBubblewrapSandbox(
   workbenchRoot: string,
   environment: Readonly<Record<string, string>>,
-  options: WorkspaceBashSandboxOptions
+  options: WorkspaceBashSandboxOptions,
+  networkAccess: boolean
 ) {
   const effectiveUid = options.effectiveUid ?? (typeof process.getuid === "function" ? process.getuid() : -1);
   if (effectiveUid <= 0) {
@@ -403,10 +407,11 @@ async function ensureBubblewrapSandbox(
     [],
     resourceLimiter,
     options.readOnlyMounts,
-    options.resourceMounts
+    options.resourceMounts,
+    networkAccess
   );
   await executeSandboxProbe(probe.file, probe.args, options, "bubblewrap resource and kernel isolation probe failed");
-  return { kind: "bubblewrap", executable, resourceLimiter } as const;
+  return { kind: "bubblewrap", executable, resourceLimiter, networkAccess } as const;
 }
 
 async function ensureNativeHostBash(options: WorkspaceBashSandboxOptions) {
@@ -453,7 +458,7 @@ async function ensureDockerSandbox(options: WorkspaceBashSandboxOptions) {
     const args = [
       "run", "--rm", "--name", probeName, "--pull", "never",
       "--user", `${effectiveUid}:${effectiveGid}`,
-      "--network", "none", "--read-only", "--cap-drop", "ALL",
+      "--network", "bridge", "--read-only", "--cap-drop", "ALL",
       "--security-opt", "no-new-privileges:true", "--pids-limit", "16",
       "--memory", "64m", "--cpus", "0.25",
       ...(options.readOnlyMounts ? [
@@ -476,7 +481,7 @@ async function ensureDockerSandbox(options: WorkspaceBashSandboxOptions) {
   } catch (error) {
     throw new WorkspaceBashIsolationError(`Docker Bash image is unavailable: ${errorMessage(error)}`);
   }
-  return { kind: "docker", executable, image, launcherEnvironment } as const;
+  return { kind: "docker", executable, image, networkAccess: true, launcherEnvironment } as const;
 }
 
 function buildDockerCapabilityProbeScript() {

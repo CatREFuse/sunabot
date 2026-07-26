@@ -28,7 +28,7 @@ const memoryPrompts = [
 ] as const;
 
 describe("memory perspective prompt contract", () => {
-  it.each(memoryPrompts)("keeps %s persona-aware, softly first-person and highly compressed", (id) => {
+  it.each(memoryPrompts)("keeps %s persona-aware, first-person and highly compressed", (id) => {
     const template = parseFinalPromptTemplate(defaultPromptContent(id, "阿罗娜"));
     const systemPrompt = template.messages
       .filter((message) => typeof message === "object" && message.role === "system")
@@ -43,18 +43,54 @@ describe("memory perspective prompt contract", () => {
     expect(systemPrompt).toMatch(/第一人称|第一视角/);
     expect(systemPrompt).toMatch(/感受|情绪/);
     expect(systemPrompt).toMatch(/看法|判断|认知/);
-    expect(systemPrompt).toMatch(/少数|3 至 6|3 至 8|1 至 3/);
+    if (id === "memory.compress-in") {
+      expect(systemPrompt).toContain("由你根据当前上下文自行决定保留多少内容");
+      expect(systemPrompt).not.toContain("完整工作记忆通常保留 3 至 6 条");
+    } else {
+      expect(systemPrompt).toMatch(/少数|3 至 8|1 至 3/);
+    }
     expect(systemPrompt).toMatch(/模板化前缀|字段标签/);
-    expect(systemPrompt).toMatch(/fact (?:建议|可以)优先/);
-    expect(systemPrompt).toContain("尽量");
+    if (id === "memory.compress-in") {
+      expect(systemPrompt).toContain("每条 fact 写成自然、连贯的第一人称短段");
+    } else {
+      expect(systemPrompt).toMatch(/fact (?:建议|可以)优先/);
+      expect(systemPrompt).toContain("尽量");
+    }
     expect(systemPrompt).not.toContain("fact 中的“我”始终指当前角色 @{bot.name}");
     expect(systemPrompt).not.toContain("QQ 号与称呼必须同时存在");
     expect(systemPrompt).not.toContain("例如“我记得");
-    expect(systemPrompt).toMatch(/相同、相近、重复|相同、相近/);
+    if (id === "memory.compress-in") {
+      expect(systemPrompt).toMatch(/彼此确有联系|能够由输入确认的连续变化/);
+    } else {
+      expect(systemPrompt).toMatch(/相同、相近、重复|相同、相近/);
+    }
     expect(systemPrompt).toMatch(/因果关系|互为因果/);
     expect(systemPrompt).toMatch(/时间关系|时间先后|最早起点/);
     expect(systemPrompt).toMatch(/称呼.*QQ|QQ.*称呼/);
     expect(systemPrompt).not.toContain("普拉娜唯一");
+  });
+
+  it("asks working-memory generation and consolidation for natural subjective events linked by time", () => {
+    const template = parseFinalPromptTemplate(defaultPromptContent("memory.compress-in"));
+    const systemPrompt = template.messages
+      .filter((message) => typeof message === "object" && message.role === "system")
+      .map((message) => typeof message === "object" ? message.content : "")
+      .join("\n");
+
+    expect(systemPrompt).toContain("当前角色对一件事的主观叙述");
+    expect(systemPrompt).toContain("第一人称");
+    expect(systemPrompt).toMatch(/时间、地点或会话场域、在场人物、事件经过、变化或结果/);
+    expect(systemPrompt).toContain("感受和判断");
+    expect(systemPrompt).toContain("不机械凑齐要素");
+    expect(systemPrompt).toContain("正文始终保持自然叙述");
+    expect(systemPrompt).toContain("fact 内部叙述的时间");
+    expect(systemPrompt).toContain("occurredAt");
+    expect(systemPrompt).toContain("occurredEndAt");
+    expect(systemPrompt).toContain("消息顺序");
+    expect(systemPrompt).toContain("新的综合工作记忆");
+    expect(systemPrompt).toContain("联想只用于发现输入中已有的联系");
+    expect(systemPrompt).toContain("不能补造");
+    expect(systemPrompt).toContain("保持为不同记忆");
   });
 
   it.each(memoryPrompts)("accepts the current soft %s prompt during migration detection", (id) => {

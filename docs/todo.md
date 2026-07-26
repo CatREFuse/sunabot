@@ -93,8 +93,8 @@
   - 证据：Cookie+CSRF、Provider HTTP、OneBot WebSocket 入站到 QQ 回复受控 E2E，以及 6 个边界各 resume/rollback 的 12 次真实子进程 SIGKILL 通过；真实 macOS Native 与 Linux/WSL Docker Core 双 QQ 验收继续由 `DEPLOY-FIX-005` 跟踪。
 
 - [x] **FLOW-003｜P2｜Provider 跨轮 TurnToolState**
-  - 各协议共享本轮 `assistant_text`、工具、deferred 与 `no_reply` 状态，拒绝跨轮非法顺序。
-  - 证据：Responses、Chat Completions、Anthropic、Gemini 和 Codex 覆盖跨轮非法顺序，合法首轮 `no_reply` 与 deferred 保持通过。
+  - 各协议共享本轮 `assistant_text`、工具、deferred 与 `no_reply` 状态，用于跨轮累计调用次数、终止活动与已投递内容，同时允许后续合法工具继续组合。
+  - 证据：Responses、Chat Completions、Anthropic、Gemini 和 Codex 覆盖正文与 inline、deferred、`no_reply`、语音和失败后续调用的组合顺序，单项 schema、权限与终止 companion 约束保持通过。
 
 - [x] **RECOVERY-001｜P2｜中断恢复可继续或回滚**
   - restore 每次文件替换写入可 fsync 的 journal，重跑按 per-file 状态幂等 resume/rollback；也可使用完整 staging tree 校验后原子切换。
@@ -124,22 +124,22 @@
   - 风险：计时、持久事件与 reply/runtime 共享顺序语义；任何重复发送、漏回、引用漂移或恢复后提前执行都阻断集成。
 
 - [ ] **MEDIA-FIX-002｜P1｜`send_file` 与默认禁用语音发送**
-  - `send_file` V1 只向当前管理员触发消息提供 capability，支持管理员私聊或管理员所在群聊，目标始终冻结为当前会话；普通私聊、普通群成员、伪造 Function Call、直接 queue 与伪造 durable outbox 均 fail closed。工具只能把当前 Agent `workbench` 内的相对路径发送到当前单聊或群聊；图片使用消息段，普通文件使用目标会话对应的上传 action，不能接受任意 QQ、群号或宿主绝对路径。
+  - `send_file` 向允许回复的真实 QQ 私聊与群聊提供 capability，目标始终冻结为当前会话；管理员私聊只发送当前 Agent Native `workbench`，管理员群聊与普通 QQ 会话只发送当前 Agent `docker-workbench`。伪造 Function Call、直接 queue、伪造 durable outbox、sender 已关闭和根身份漂移均 fail closed。图片使用消息段，普通文件使用目标会话对应的上传 action，不能接受任意 QQ、群号或宿主绝对路径。
   - 独立 `send_voice_message` 与 OneBot `record` 能力完成实现和测试，但本轮不注册、不向模型声明且默认不可调用。跨 Core/NapCat 媒体使用 `base64://`，outbox 只保存有界引用与内容摘要，投递前重新校验文件未被替换。
   - 功能与 durable conversation asset 合同已由 clean commit `2a23d44b4c7b883ed0dc65048399fb292aa97666` 收口，并通过独立终审的 14 files / 257 tests、类型、架构、runtime contract、生产构建与冻结指纹门禁；与 held/debounce/system_config/Bash/file tools 的冲突合并及真实 QQ/NapCat 冒烟仍由 `INTEGRATION-001` 完成，本项保持未完成。
-  - 验收：覆盖管理员私聊/群聊的 capability 与当前目标冻结，普通私聊/普通群成员/伪造调用的零读取、零 outbox、零远端发送，以及图片/普通文件/语音协议、`account_id` 定向、越界、绝对路径、符号链接、非常规文件、大小/类型限制、排队后替换、读取失败、离线重试、未声明语音调用拒绝和 Native/Docker 相同消息契约。
+  - 验收：覆盖管理员私聊 Native 根、管理员群聊与普通 QQ 会话 Docker 根、当前目标冻结、伪造调用零读取/零 outbox/零远端发送，以及图片/普通文件/语音协议、`account_id` 定向、越界、绝对路径、符号链接、非常规文件、大小/类型限制、排队后替换、读取失败、离线重试、未声明语音调用拒绝和 Native/Docker 相同消息契约。
   - 风险：大文件不能长期写入 SQLite 或绕过内联预算；账号串发、Core/NapCat 共享路径或文件替换后误发均阻断集成。普通 outbox fingerprint 只覆盖稳定副作用身份并刻意排除每次尝试可能变化的 `logRunId` 与 `replyGate`；完整 payload 继续由 canonical row、idempotency key 与有界 replay lineage 约束，规范与最终集成不得把两层合同混写。
 
 - [ ] **BASH-FIX-001｜P0｜分会话 Bash 审计、确认与强隔离**
-  - 基础安全模块、Provider/runtime/server 原子 wiring 与 response preflight 已进入当前集成线。全部真实 OneBot QQ 私聊和群聊固定使用 Docker `isolated`，Web Chat 与伪造调用始终拒绝；系统配置不能切换 backend。每条命令先经过 10 秒硬期限的独立模型审计，再经过不可被模型覆盖的确定性策略与一次性、绑定命令和会话的审批票据。
-  - macOS Native Core 固定使用 launcher 解析的 Unix socket 和一次性容器，宿主 `/bin/bash` 永久关闭；Linux/WSL Native 与 Docker Core 继续使用 bubblewrap，Docker Core 不挂载 Docker socket。业务写入只进入当前 Agent `docker-workbench`，Skill 与 MCP 配置只读，容器无网络、无额外 capability、只读根并限制 PID、内存、CPU、文件大小和日志。
+  - 基础安全模块及 Provider/runtime/server 原子 wiring 已进入当前集成线。管理员私聊可使用 Native 或 Docker backend，其他真实 OneBot QQ 私聊和群聊固定使用 Docker `isolated`，Web Chat 与伪造调用始终拒绝；系统配置不能切换 backend。Bash 可与正文和其他工具组合，每条命令仍先经过 10 秒硬期限的独立模型审计，再经过不可被模型覆盖的确定性策略与一次性、绑定命令和会话的审批票据。
+  - macOS Native Core 的 Docker backend 固定使用 launcher 解析的 Unix socket和一次性容器；管理员私聊 Native backend 可使用受审批的宿主 `/bin/bash`。Linux/WSL Native 与 Docker Core 继续使用 bubblewrap，Docker Core 不挂载 Docker socket。Docker 业务写入只进入当前 Agent `docker-workbench`，Native、Skill 与 MCP 投影只读；Docker backend 允许出站网络并清空代理环境，同时保持无额外 capability、只读根及 PID、内存、CPU、文件大小和日志限制。
   - 2026-07-22 已实现共享 Docker Engine supervisor：2 秒控制请求、300 毫秒安全重试、create/start 状态对账与命令零重放、30 秒容器 watchdog、45 秒总预算、并发 2/排队 1 秒、3/10/30/60 秒熔断与 half-open 单飞、输出上限、清理失败熔断、1/5/30 秒清理重试和过期回收。launcher 同步固定 endpoint 与 canonical labels，全部非流式命令具有默认 timeout、TERM→KILL 和无 exit 硬结束；doctor 使用平台准确错误码。
   - 自动化验收覆盖固定会话路由、模型审计失败与超时、永久拒绝、一次性确认重放、路径/符号链接/挂载/子进程/环境逃逸、create/start/wait/log/delete 故障注入、并发与预算、熔断恢复、残留归属、launcher 超时、runtime contract、类型、架构和构建。最终证据以本任务验证记录为准，不能沿用历史分支测试数量冒充当前结果。
   - 2026-07-22 已在本机 Colima 完成 supervisor capability、真实命令、容器 watchdog、删除确认与零残留冒烟，未重启运行中的 Core/NapCat。未完成：macOS Native Core 重启后的接线集成冒烟、Linux/WSL Native 与 Docker Core bubblewrap parity、Core 强杀后的残留恢复和真实 QQ 全链路仍需在授权环境执行；这些外部证据齐备前本项保持未完成。
 
 - [ ] **TOOL-FIX-002｜P1｜独立 `read_file` / `write_file` 工具**
   - 在 Bash 安全边界稳定后实现独立工具，不通过拼接任意 Bash 命令提供文件能力。两项工具只处理当前 Agent `workbench` 相对路径，复用唯一真实路径解析与符号链接逃逸门禁。
-  - 工具、Provider 日志正文投影、BOM 保真、权限与 runtime 宿主合同已由 clean commit `bbdc0557b4f48bdc453255bfa2807ad4afd7fe37` 收口，并通过全量 189 files / 1,424 tests、类型、架构、runtime contract、生产构建及两轮独立增量终审；五种 Provider 的发送前独占门禁已由最终集成 commit `76fdf807155322c6e043cad93f381db48b829f1d` 统一关闭，覆盖 sibling assistant 文本、其他 inline/deferred/`no_reply`/Bash 混批与 staged mutation discard，并通过全量 200 files / 1,857 tests。真实隔离冒烟完成前本项保持未完成且不可单独上线。
+  - 工具、Provider 日志正文投影、BOM 保真、权限与 runtime 宿主合同已由 clean commit `bbdc0557b4f48bdc453255bfa2807ad4afd7fe37` 收口，并通过全量 189 files / 1,424 tests、类型、架构、runtime contract、生产构建及两轮独立增量终审。2026-07-26 按当前产品决策移除五种 Provider 的发送前独占、跨轮文件独占、本地/联网互斥、失败污染和 deferred/`no_reply` 顺序门禁；文件参数、身份、路径、原子写入和会话权限继续由工具自身校验。真实隔离冒烟完成前本项保持未完成且不可单独上线。
   - 验收：覆盖 UTF-8/二进制拒绝策略、大小和输出预算、目录与不存在文件、绝对路径/`..`/符号链接/竞态替换、原子写入、覆盖策略、并发写、权限错误、普通用户/群聊权限和 Agent 隔离；写入失败不能留下半文件。
   - 依赖：`BASH-FIX-001` 的 `agentWorkbench` 合同与 ToolRegistry/权限门禁。
 
@@ -152,7 +152,7 @@
   - 使用专用 `activate_skill` 工具按需激活，参数枚举只包含当前 Agent 的有效 Skill；结果只返回完整 `SKILL.md` 正文、虚拟 Skill 目录与有界资源清单，不主动读取资源。资源按引用继续读取，同一会话重复激活去重，激活指令在上下文压缩中受保护；无关 Skill 内容不得进入每轮提示词。
   - 可选 `agents/openai.yaml` 的 `allow_implicit_invocation=false` 必须进入目录 metadata 并从可隐式选择集合排除，但仍允许用户显式 `activate_skill`。其中声明的 MCP tool dependency 只作为缺依赖/待安装提示；Skill 包不能自动安装、启用或信任 MCP URL/transport，目标 Agent 必须逐项显式确认并经过同一 MCP 安全验证与 secret 授权。
   - Skill 脚本只经独立审计的 Bash 沙箱执行；若通过 Bash 读取资源，只提供固定 `/skills` 的受审计只读操作，不能把通用文件能力放宽到第二个宿主根。运行时禁止 `npx`、`uvx`、`bunx` 等临时联网下载；需要下载的依赖进入单独的锁版本、审核与缓存阶段，正常执行只使用预装或离线依赖。
-  - 安装阶段可使用不含生产凭据的独立受控 downloader/validator 联网，依赖必须锁版本、hash、许可证与来源并产出 digest-pinned 不可变包，随后进入受信镜像或 Agent 扩展层；runtime Skill 与 Bash 继续 `network none`，并拒绝 `npx`、`uvx`、`pip`、`npm` 等运行时安装。
+  - 安装阶段可使用不含生产凭据的独立受控 downloader/validator 联网，依赖必须锁版本、hash、许可证与来源并产出 digest-pinned 不可变包，随后进入受信镜像或 Agent 扩展层；runtime Skill 继续 `network none`，Docker Bash 仅允许经独立审计的任务相关获取，并拒绝 `npx`、`uvx`、`pip`、`npm` 等运行时安装。
   - 每次 Skill 安全审计至少记录 scripts、外部 URL、MCP 依赖、声明的文件访问面、内容 digest、来源与审核版本；任何内容变化使审核失效并要求重新审计。Skill 与脚本按软件安装对待，必须审查完整目录、硬编码凭据和工具组合。
   - 跨 Agent 迁移必须先展示来源、版本、文件清单、MCP 依赖、环境变量名、完整 MCP command/args 和冲突，再以预览 revision/内容摘要 CAS 复制、重新校验并原子安装。拒绝 symlink、hardlink、device、FIFO、archive traversal、未知文件与共享 inode；不复制密钥值、运行态、数据库或宿主路径。本地 MCP server 的 command/args 必须由管理员显式确认后才能应用。
   - Sunabot 刻意不跟随 Codex 本地 authoring 可接受的 Skill 目录 symlink；安装、迁移、快照与投影阶段的目录链和 leaf symlink 一律拒绝。迁移将重新校验的普通文件树复制到临时目录，计算 digest 后原子 rename，不复制 inode、MCP secret 或 OAuth 凭据。
@@ -179,7 +179,7 @@
   - Docker/等价隔离 backend 启动时按内容摘要冻结当前 Agent 已启用 Skill、脱敏后的 MCP 配置和明确声明且获批的环境变量名；Skill 与配置以只读快照投影，`workbench` 是唯一可写数据卷。配置只保存 env 名或 secret reference，值只按显式 allowlist 注入单个进程；禁止继承整份宿主 env、代理变量、Docker `Config.Env`、生产 secrets、Docker socket、其他 Agent 目录、Agent workspace 或宿主绝对路径。
   - 沙箱固定暴露 `/skills` 只读、`/workbench` 读写与脱敏 MCP 配置只读，不扫描宿主 HOME，也不提供隐式网络。远端 Streamable HTTP 由 Core 受控 client 访问；stdio MCP 与离线 Skill 可以使用现有无网沙箱。新沙箱读取最新摘要，运行中的快照不随安装、删除或版本切换漂移。
   - `/run/sunabot/extensions/mcp.json` 只投影非秘密配置与 secret reference。MCP secret 绝不能进入通用 `workspace_bash`、Skill 脚本或整个沙箱环境；每个 stdio server 启动时由宿主从 secret store 解析该 server 的 allowlist，以 clearenv/`env -i` 只注入该进程，server A 看不到 server B 凭据。远端 token 只在 Core 受控 HTTP transport 内组装；切换 Agent、禁用、迁移或删除时销毁旧投影、client、环境与 OAuth state。
-  - Phase A Bash 继续 `network none`。stdio MCP 默认无网；声明网络需求的 server 只可进入按域名 allowlist 的独立受控执行配置，禁止 Docker socket、宿主代理 env 与宽泛 `*` egress。
+  - Docker Bash 允许经独立审计的出站获取并保持无 Docker socket、宿主代理 env 与本地文件外发；Skill 与 stdio MCP 默认无网。声明网络需求的 server 只可进入按域名 allowlist 的独立受控执行配置，禁止宽泛 `*` egress。
   - 验收：覆盖 Skill/MCP 新增、删除、版本切换后的新沙箱可见性，digest 固定快照、只读 Skill/配置、`workbench` 持久化、环境变量缺失/拒绝/脱敏与零泄漏、跨 Agent 读取、roots 仅 `file:///workbench`、无 socket/无 HOME/无隐式网络、容器销毁、Native/Docker parity 和 capability probe。
   - 安全负例覆盖 Bash/Skill script 看不到任何 MCP secret、server 间 token 隔离、旧 client/env/OAuth state 在禁用或迁移后不可消费、非 localhost callback/`0.0.0.0`/state 重放/resource 或 redirect mismatch 拒绝、配置/HTTP错误/stdout/stderr/tool result/审计日志零 token 与零宿主路径，以及 required server 故障只降级所属 Agent。
   - 依赖：`BASH-FIX-001`、`AGENT-CAP-001`；任何凭据泄漏、越界挂载或配置串 Agent 都阻断交付。

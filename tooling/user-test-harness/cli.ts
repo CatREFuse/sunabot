@@ -18,9 +18,11 @@ export async function main(argv = process.argv.slice(2)) {
     const prepared = await prepareUserTestWorkspace({
       source: required(args, "source"),
       destination: required(args, "destination"),
-      confirmCredentialCopy: flag(args, "confirm-copy-provider-credential")
+      confirmCredentialCopy: flag(args, "confirm-copy-provider-credential"),
+      agentId: optional(args, "agent")
     });
     console.log(`isolated user test workspace ready: ${prepared.destination}`);
+    console.log(`agent: ${prepared.agentId}`);
     console.log(`provider: ${prepared.provider.id} / ${prepared.provider.kind} / ${prepared.provider.model}`);
     return;
   }
@@ -31,7 +33,9 @@ export async function main(argv = process.argv.slice(2)) {
       agentId: required(args, "agent"),
       outputPath: required(args, "output"),
       conversationLimit: optionalInteger(args, "conversation-limit"),
-      memoryLimit: optionalInteger(args, "memory-limit")
+      messageLimit: optionalInteger(args, "message-limit"),
+      memoryLimit: optionalInteger(args, "memory-limit"),
+      includeWorkingMemoryConversations: flag(args, "include-working-memory-conversations")
     });
     console.log(`redacted fixture sample ready: ${result.outputPath}`);
     console.log(`digest: ${result.digest}`);

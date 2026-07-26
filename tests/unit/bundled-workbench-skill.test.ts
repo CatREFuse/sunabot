@@ -67,9 +67,30 @@ describe("bundled Workbench configuration Skill", () => {
       workspace,
       "business/agents/plana/workbench/skills/workbench-config/references/workbench-addressing.md"
     ), "utf8");
+    const skill = fs.readFile(path.join(
+      workspace,
+      "business/agents/plana/workbench/skills/workbench-config/SKILL.md"
+    ), "utf8");
+    const bashOperations = fs.readFile(path.join(
+      workspace,
+      "business/agents/plana/workbench/skills/workbench-config/references/bash-resource-operations.md"
+    ), "utf8");
     await expect(addressing).resolves.toContain("/workbench/native-workbench");
     await expect(addressing).resolves.toContain(
-      "current Agent administrator QQ's private or group chat"
+      "administrator group because Docker cannot write the Native projection"
+    );
+    await expect(skill).resolves.toContain("Use Bash as the primary way");
+    await expect(skill).resolves.not.toContain(
+      "Do not edit Skills, emoji, selfie, knowledge, or MCP manifests with Bash"
+    );
+    await expect(bashOperations).resolves.toContain("Compare and atomically replace");
+    await expect(bashOperations).resolves.toContain("Manage knowledge");
+    await expect(bashOperations).resolves.toContain("Manage selfie references");
+    await expect(bashOperations).resolves.toContain("Manage emoji");
+    await expect(bashOperations).resolves.toContain("Maintain Skill source packages");
+    await expect(bashOperations).resolves.toContain("mv -f -- \"$temporary\" \"$target\"");
+    await expect(bashOperations).resolves.toContain(
+      "Use `import_chat_emoji` when the source is a current chat media handle"
     );
   }, 15_000);
 });

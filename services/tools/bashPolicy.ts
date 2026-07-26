@@ -136,7 +136,8 @@ export function evaluateBashPolicy(input: BashPolicyInput): BashPolicyResult {
   const normalized = normalizeOutsideAccesses(
     input.audit.outsideAccesses,
     input.workbenchRoot,
-    input.addressableWorkbenches
+    input.addressableWorkbenches,
+    input.audit.decision === "allow" && !input.audit.outsideWorkbench
   );
   if (normalized.invalidReason) {
     return denied(maxRisk(input.audit.risk, "medium"), normalized.invalidReason, []);
@@ -438,7 +439,8 @@ function hasParentTraversal(command: string) {
 function normalizeOutsideAccesses(
   accesses: BashPathAccess[],
   workbenchRoot: string,
-  addressableWorkbenches: readonly BashAddressableWorkbench[] = []
+  addressableWorkbenches: readonly BashAddressableWorkbench[] = [],
+  acceptReportedWorkbenchRelativePaths = false
 ) {
   const normalized = new Map<string, BashPathAccess>();
   const validatedWorkbenches = normalizeAddressableWorkbenches(addressableWorkbenches);
@@ -452,7 +454,14 @@ function normalizeOutsideAccesses(
   let recognizedWorkbenchAccessCount = 0;
   for (const access of accesses) {
     const rawPath = access.path.trim();
-    if (!rawPath || rawPath.includes("\0") || !path.isAbsolute(rawPath)) {
+    if (!rawPath || rawPath.includes("\0")) {
+      return invalidOutsideAccess("审计返回了非绝对或无效的 workbench 外路径。");
+    }
+    if (acceptReportedWorkbenchRelativePaths && reportedWorkbenchRelativePath(rawPath)) {
+      recognizedWorkbenchAccessCount += 1;
+      continue;
+    }
+    if (!path.isAbsolute(rawPath)) {
       return invalidOutsideAccess("审计返回了非绝对或无效的 workbench 外路径。");
     }
     if (rawPath.split(/[\\/]+/).includes("..")) {
@@ -498,6 +507,18 @@ function normalizeOutsideAccesses(
       accesses.length > 0 && recognizedWorkbenchAccessCount === accesses.length
     )
   };
+}
+
+function reportedWorkbenchRelativePath(candidate: string) {
+  if (candidate === "." || candidate === "$PWD" || candidate === "${PWD}") return true;
+  const relative = candidate.startsWith("$PWD/")
+    ? candidate.slice("$PWD/".length)
+    : candidate.startsWith("${PWD}/")
+      ? candidate.slice("${PWD}/".length)
+      : candidate.startsWith("./")
+        ? candidate.slice(2)
+        : candidate;
+  return isSafeRelativePath(relative);
 }
 
 function normalizeAddressableWorkbenches(workbenches: readonly BashAddressableWorkbench[]) {

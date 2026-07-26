@@ -12,7 +12,9 @@ const auditInput = {
   command: "cat report.txt",
   backend: "docker" as const,
   accessMode: "restricted" as const,
-  strictMode: true
+  strictMode: true,
+  isAdmin: false,
+  userRequest: "把聊天里的报告整理成压缩包"
 };
 
 describe("independent Bash audit", () => {
@@ -25,6 +27,12 @@ describe("independent Bash audit", () => {
       json_schema: { name: "bash_security_audit", strict: true }
     });
     expect(request.messages[0]?.content).toContain("Never execute it");
+    expect(request.messages[0]?.content).toContain("isAdmin boolean is authoritative");
+    expect(request.messages[0]?.content).toContain("directly instruct the Bot to enumerate");
+    expect(request.messages[0]?.content).toContain("High-level business outcomes are allowed");
+    expect(request.messages[0]?.content).toContain("allow only retrieval needed");
+    expect(request.messages[1]?.content).toContain('"isAdmin":false');
+    expect(request.messages[1]?.content).toContain('"userRequest":"把聊天里的报告整理成压缩包"');
     expect(buildBashAuditRequest({ ...auditInput, accessMode: "isolated" }).messages[0]?.content)
       .toContain("read-only access to the Native workbench projection");
     expect(request.messages[0]?.content).toContain("Skill and MCP configuration are exposed through SUNABOT_SKILLS and SUNABOT_MCP_CONFIG");
@@ -33,6 +41,8 @@ describe("independent Bash audit", () => {
       .toContain("Native Bash may write both the current Agent Native workbench and the same Agent Docker workbench");
     expect(nativeRequest.messages[0]?.content)
       .toContain("native backend runs as the Sunabot runtime OS user after approval");
+    expect(nativeRequest.messages[0]?.content)
+      .toContain("outsideAccesses must list only absolute paths outside every declared workbench");
     expect(nativeRequest.messages[1]?.content).toContain('"docker":{"path":"$SUNABOT_DOCKER_WORKBENCH","access":"read-write"}');
     expect(request.messages[1]?.content).toContain('"native":{"path":"/workbench/native-workbench","access":"read-only"}');
   });

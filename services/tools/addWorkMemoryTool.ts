@@ -14,7 +14,8 @@ export const addWorkMemoryTool = {
   description: [
     "Immediately record a short-lived working memory whenever information should remain consistent beyond the current conversation context but should not enter long-term memory yet.",
     "Use it proactively for temporary agreements, current context, the present situation, follow-up priorities, and important information specific to the current conversation field.",
-    "Prefer recording when future consistency could benefit. Do not pre-screen or rewrite the content for first-person wording, trusted salutations, identity markers, or event-schema compliance; later consolidation can review and normalize it.",
+    "When the information is clear, write content as the current Agent's concise first-person natural-language account of one event, naturally including the known time, place or conversation field, people, event, and feelings without turning them into labeled fields or inventing missing details.",
+    "Prefer recording when future consistency could benefit. The host does not reject content for perspective, wording, salutations, identity markers, or event-schema style; later consolidation can connect related memories along their internal timeline and rewrite them as a new coherent memory.",
     "Provide only the useful content. The host binds the current Agent and conversation source and records the authoritative time."
   ].join(" "),
   parameters: {

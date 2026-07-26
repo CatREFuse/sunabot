@@ -156,7 +156,7 @@ describe("workspace Bash isolation", () => {
     expect(invocation.file).toBe("/fixture/docker");
     expect(invocation.args).toEqual(expect.arrayContaining([
       "run", "--rm", "--pull", "never", "--name", containerName, "--read-only", "--cap-drop", "ALL",
-      "--network", "none",
+      "--network", "bridge",
       "--security-opt", "no-new-privileges:true",
       "--ulimit", "fsize=268435456:268435456",
       "--mount", "type=bind,src=/host/agent/workbench,dst=/workbench",
@@ -234,7 +234,7 @@ describe("workspace Bash isolation", () => {
 
     const name = invocation.args[invocation.args.indexOf("--name") + 1];
     expect(name).toMatch(/^sunabot-bash-[a-f0-9]{32}$/);
-    expect(hasSequence(invocation.args, ["--network", "none"])).toBe(true);
+    expect(hasSequence(invocation.args, ["--network", "bridge"])).toBe(true);
     expect(hasSequence(invocation.args, ["--entrypoint", "/usr/bin/env"])).toBe(true);
     expect(invocation.args.slice(-2)).toEqual(["/usr/bin/ls", "-la"]);
     expect(invocation.args.indexOf("-i")).toBeLessThan(invocation.args.indexOf("/usr/bin/ls"));
@@ -307,7 +307,7 @@ describe("workspace Bash isolation", () => {
     expect(probe.mock.calls[0]?.[0]).toBe("/fixture/docker");
     const probeArgs = probe.mock.calls[0]?.[1] ?? [];
     expect(probeArgs).toEqual(expect.arrayContaining([
-      "run", "--rm", "--pull", "never", "--network", "none",
+      "run", "--rm", "--pull", "never", "--network", "bridge",
       "--entrypoint", "/usr/bin/env", "sunabot-bash:test", "-i",
       "PATH=/usr/local/bin:/usr/bin:/bin", "/bin/bash", "--noprofile", "--norc", "-ec"
     ]));
@@ -424,7 +424,8 @@ describe("workspace Bash isolation", () => {
     })).resolves.toEqual({
       kind: "bubblewrap",
       executable: "/fixture/bwrap",
-      resourceLimiter: "/fixture/prlimit"
+      resourceLimiter: "/fixture/prlimit",
+      networkAccess: false
     });
     expect(probe).toHaveBeenCalledOnce();
     expect(probe.mock.calls[0]?.[0]).toBe("/fixture/prlimit");
@@ -454,7 +455,9 @@ describe("workspace Bash isolation", () => {
       access: async () => undefined,
       probe
     })).resolves.toMatchObject({ kind: "bubblewrap" });
-    expect(probe.mock.calls[0]?.[1].join(" ")).not.toContain("docker.sock");
+    const probeArgs = probe.mock.calls[0]?.[1] ?? [];
+    expect(probeArgs.join(" ")).not.toContain("docker.sock");
+    expect(probeArgs).not.toContain("--unshare-net");
   });
 });
 

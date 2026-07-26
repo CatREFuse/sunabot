@@ -1,8 +1,20 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
-import { runAddWorkMemory } from "../../services/tools/addWorkMemoryTool.js";
+import {
+  addWorkMemoryTool,
+  runAddWorkMemory
+} from "../../services/tools/addWorkMemoryTool.js";
 
 describe("add_workmemory tool", () => {
+  it("guides the model toward natural first-person event memory without adding a host wording gate", () => {
+    expect(addWorkMemoryTool.description).toContain("first-person natural-language account");
+    expect(addWorkMemoryTool.description).toContain("time, place or conversation field, people, event, and feelings");
+    expect(addWorkMemoryTool.description).toContain("without turning them into labeled fields");
+    expect(addWorkMemoryTool.description).toContain("later consolidation can connect related memories");
+    expect(addWorkMemoryTool.description).toContain("internal timeline");
+    expect(addWorkMemoryTool.description).toContain("The host does not reject content");
+  });
+
   it("passes only trimmed content to the host-bound runtime port", async () => {
     const execute = vi.fn(async () => ({ ok: true }));
     await expect(runAddWorkMemory({ content: "  继续跟进 Markdown 记忆门禁  " }, { execute }))

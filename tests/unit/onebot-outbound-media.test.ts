@@ -114,17 +114,19 @@ describe("OneBot outbound media adapter", () => {
     );
   });
 
-  it("accepts only content-addressed emoji PNGs from an Agent workbench", async () => {
+  it("accepts only content-addressed emoji PNGs and GIFs from an Agent workbench", async () => {
     const workspaceRoot = path.join(temporaryDirectory, "workspace");
     const generatedRoot = path.join(workspaceRoot, "business", "media", "images");
     const emojiRoot = path.join(workspaceRoot, "business", "agents", "arona", "workbench", "emoji");
     const content = Buffer.from("workbench-emoji");
     const digest = crypto.createHash("sha256").update(content).digest("hex");
     const emojiPath = path.join(emojiRoot, `emoji-${digest}.png`);
+    const gifPath = path.join(emojiRoot, `emoji-${digest}.gif`);
     const arbitraryPath = path.join(emojiRoot, "arbitrary.png");
     await fs.mkdir(generatedRoot, { recursive: true });
     await fs.mkdir(emojiRoot, { recursive: true });
     await fs.writeFile(emojiPath, content);
+    await fs.writeFile(gifPath, content);
     await fs.writeFile(arbitraryPath, content);
     const inlineDelivery = new OutboundMediaDelivery({
       rootDir: generatedRoot,
@@ -132,6 +134,9 @@ describe("OneBot outbound media adapter", () => {
     });
 
     await expect(inlineDelivery.createReference(emojiPath)).resolves.toBe(
+      `base64://${content.toString("base64")}`
+    );
+    await expect(inlineDelivery.createReference(gifPath)).resolves.toBe(
       `base64://${content.toString("base64")}`
     );
     await expect(inlineDelivery.createReference(arbitraryPath)).rejects.toThrow(

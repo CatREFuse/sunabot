@@ -662,7 +662,7 @@ describe("runtime reply scheduling helpers", () => {
     });
   });
 
-  it("records the orchestrator decision as an internal conversation result", async () => {
+  it("records a negative decision without disabling the conversation orchestrator", async () => {
     const config = createAdminTestConfig("/tmp/sunabot-runtime-router-test");
     config.bot.orchestrator.enabled = true;
     const runtime = createRuntime(config);
@@ -689,7 +689,7 @@ describe("runtime reply scheduling helpers", () => {
       }
     });
     expect(record.orchestratorCheckedMessageCount).toBe(1);
-    expect(record.orchestratorEnabled).toBe(false);
+    expect(record.orchestratorEnabled).toBe(true);
   });
 
   it("injects one image token per image into the user-group orchestrator payload", async () => {
@@ -1096,7 +1096,7 @@ describe("runtime reply scheduling helpers", () => {
     });
   });
 
-  it("keeps an automatically closed orchestrator dormant after reconnect", () => {
+  it("keeps a manually disabled orchestrator dormant after reconnect", () => {
     const config = createAdminTestConfig("/tmp/sunabot-runtime-router-test");
     config.bot.orchestrator.enabled = true;
     const runtime = createRuntime(config);

@@ -7,7 +7,8 @@ export const codexTool = {
   type: "function",
   name: CODEX_TOOL_NAME,
   description: [
-    "Delegate complex local inspection tasks, deep multi-source research or search tasks, and long-form analysis or reasoning to an asynchronous Codex worker.",
+    "Delegate complex local workspace tasks, deep multi-source research or search tasks, and long-form analysis or reasoning to an asynchronous Codex worker.",
+    "The worker may modify files inside its selected workspace and is available only for administrator-triggered turns.",
     "Use websearch for ordinary web lookups and short current-information queries."
   ].join(" "),
   parameters: {
@@ -23,10 +24,72 @@ export const codexTool = {
       kind: {
         type: "string",
         enum: ["local", "research", "analysis"],
-        description: "local inspects workspace files; research performs deep web research; analysis handles long reasoning."
+        description: "local may inspect and modify workspace files; research performs deep web research; analysis handles long reasoning."
       }
     },
     required: ["task", "kind"]
+  },
+  strict: true
+} as const;
+
+export const codexControlTool = {
+  type: "function",
+  name: CODEX_TOOL_NAME,
+  description: [
+    "Control an asynchronous Codex app-server on this Mac or an administrator-managed SSH host.",
+    "List visible Codex sessions, start a workspace maintenance session, or continue an exact session by thread ID.",
+    "Started and resumed turns may modify files only inside the selected workspace."
+  ].join(" "),
+  parameters: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      action: {
+        type: "string",
+        enum: ["list_sessions", "start", "resume"],
+        description: "List sessions, start a new visible session, or continue an existing session."
+      },
+      ssh_host: {
+        type: ["string", "null"],
+        maxLength: 128,
+        description: "Configured SSH host or alias. Use null for this Mac."
+      },
+      task: {
+        type: ["string", "null"],
+        maxLength: CODEX_MAX_TASK_CHARS,
+        description: "Complete maintenance task for start/resume. Use null when listing sessions."
+      },
+      workspace_path: {
+        type: ["string", "null"],
+        maxLength: 4_096,
+        description: "Absolute project directory on the selected host. Required for start/resume and optional for list filtering."
+      },
+      thread_id: {
+        type: ["string", "null"],
+        maxLength: 160,
+        description: "Exact Codex thread ID for resume. Use null for start/list."
+      },
+      query: {
+        type: ["string", "null"],
+        maxLength: 512,
+        description: "Optional title/content search when listing sessions."
+      },
+      limit: {
+        type: ["integer", "null"],
+        minimum: 1,
+        maximum: 50,
+        description: "Maximum sessions to return. Use null for 10."
+      }
+    },
+    required: [
+      "action",
+      "ssh_host",
+      "task",
+      "workspace_path",
+      "thread_id",
+      "query",
+      "limit"
+    ]
   },
   strict: true
 } as const;

@@ -821,7 +821,6 @@ async function createRuntimeHarness(
 
 function stagedSystemConfigTurn(commitEffect: () => Promise<void> = async () => undefined) {
   let staged = false;
-  let rejected = false;
   let descriptor: ReturnType<SystemConfigTurn["stagedMutation"]>;
   const commit = vi.fn(async () => {
     await commitEffect();
@@ -844,12 +843,6 @@ function stagedSystemConfigTurn(commitEffect: () => Promise<void> = async () => 
     }),
     mutationStaged: () => staged,
     stagedMutation: () => descriptor,
-    rejectTurn: () => {
-      staged = false;
-      descriptor = undefined;
-      rejected = true;
-    },
-    turnRejected: () => rejected,
     commit,
     discard
   };
@@ -861,8 +854,6 @@ function idleSystemConfigTurn(): SystemConfigTurn {
     execute: vi.fn(async () => ({ ok: true })),
     mutationStaged: () => false,
     stagedMutation: () => undefined,
-    rejectTurn: () => undefined,
-    turnRejected: () => false,
     commit: vi.fn(async () => undefined),
     discard: vi.fn()
   };

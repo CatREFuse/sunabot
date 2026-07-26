@@ -96,4 +96,94 @@ describe("useMemory", () => {
     expect(memory.entries.value).toEqual([aronaEntry]);
     expect(memory.document.value).toEqual(aronaDocument);
   });
+
+  it("binds recall and mutations to the loaded Agent", async () => {
+    apiRequest.mockImplementation((path: string, options?: RequestInit) => {
+      if (path === "/api/memory?source=working&agentId=plana") return Promise.resolve(payload);
+      if (path === "/api/memory/recall?agentId=plana") return Promise.resolve({ ok: true, query: "已有", matches: [entry] });
+      if (path === "/api/memory?agentId=plana" && options?.method === "POST") return Promise.resolve({ ok: true });
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    const memory = useMemory();
+
+    await memory.load("working", "plana");
+    await memory.recall("已有", "working", 20, "plana");
+    await memory.create({ source: "working", text: "新增" }, "plana");
+
+    expect(apiRequest.mock.calls.map(([path]) => path)).toEqual([
+      "/api/memory?source=working&agentId=plana",
+      "/api/memory/recall?agentId=plana",
+      "/api/memory?agentId=plana",
+      "/api/memory?source=working&agentId=plana"
+    ]);
+  });
+
+  it("drops a recall response after the Agent changes", async () => {
+    let resolveRecall!: (value: { ok: true; query: string; matches: MemoryEntry[] }) => void;
+    const recallResponse = new Promise<{ ok: true; query: string; matches: MemoryEntry[] }>((resolve) => { resolveRecall = resolve; });
+    apiRequest.mockImplementation((path: string) => {
+      if (path === "/api/memory?source=working&agentId=plana") return Promise.resolve(payload);
+      if (path === "/api/memory/recall?agentId=plana") return recallResponse;
+      if (path === "/api/memory?source=working&agentId=arona") return Promise.resolve({ ...payload, entries: [] });
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    const memory = useMemory();
+
+    await memory.load("working", "plana");
+    const pendingRecall = memory.recall("旧查询", "working", 20, "plana");
+    await memory.load("working", "arona");
+    resolveRecall({ ok: true, query: "旧查询", matches: [entry] });
+
+    await expect(pendingRecall).resolves.toBe(false);
+    expect(memory.recallActive.value).toBe(false);
+    expect(memory.matches.value).toEqual([]);
+  });
+
+  it("does not reload a stale mutation after the Agent changes", async () => {
+    let resolveMutation!: (value: { ok: true }) => void;
+    const mutationResponse = new Promise<{ ok: true }>((resolve) => { resolveMutation = resolve; });
+    apiRequest.mockImplementation((path: string, options?: RequestInit) => {
+      if (path === "/api/memory?source=working&agentId=plana") return Promise.resolve(payload);
+      if (path === "/api/memory?agentId=plana" && options?.method === "POST") return mutationResponse;
+      if (path === "/api/memory?source=working&agentId=arona") return Promise.resolve({ ...payload, entries: [], document: null });
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    const memory = useMemory();
+
+    await memory.load("working", "plana");
+    const pendingMutation = memory.create({ source: "working", text: "旧 Agent 新增" }, "plana");
+    await memory.load("working", "arona");
+    resolveMutation({ ok: true });
+
+    await expect(pendingMutation).resolves.toBe(false);
+    expect(apiRequest.mock.calls.map(([path]) => path)).toEqual([
+      "/api/memory?source=working&agentId=plana",
+      "/api/memory?agentId=plana",
+      "/api/memory?source=working&agentId=arona"
+    ]);
+    expect(memory.entries.value).toEqual([]);
+  });
+
+  it("aborts and invalidates an in-flight recall when matches are cleared", async () => {
+    let resolveRecall!: (value: { ok: true; query: string; matches: MemoryEntry[] }) => void;
+    const recallResponse = new Promise<{ ok: true; query: string; matches: MemoryEntry[] }>((resolve) => { resolveRecall = resolve; });
+    apiRequest.mockImplementation((path: string) => {
+      if (path === "/api/memory?source=working&agentId=plana") return Promise.resolve(payload);
+      if (path === "/api/memory/recall?agentId=plana") return recallResponse;
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    const memory = useMemory();
+
+    await memory.load("working", "plana");
+    const pendingRecall = memory.recall("待清除", "working", 20, "plana");
+    const recallSignal = apiRequest.mock.calls[1]?.[1]?.signal as AbortSignal;
+    memory.clearMatches();
+    resolveRecall({ ok: true, query: "待清除", matches: [entry] });
+
+    await expect(pendingRecall).resolves.toBe(false);
+    expect(recallSignal.aborted).toBe(true);
+    expect(memory.loading.value).toBe(false);
+    expect(memory.recallActive.value).toBe(false);
+    expect(memory.matches.value).toEqual([]);
+  });
 });

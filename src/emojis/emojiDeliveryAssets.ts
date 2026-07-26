@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import sharp from "sharp";
 import type { ImageResult } from "../../packages/contracts/media/media.js";
 import type { EmojiMarkerPlan } from "../../services/emojis/emojiCatalog.js";
-import { writeContentAddressedEmojiPng } from "../admin/emojiFileIo.js";
+import { writeContentAddressedEmojiFile } from "../admin/emojiFileIo.js";
 import type { AppConfig } from "../types.js";
 import {
   assertPlannedEmojiAssetsIntegrity,
@@ -39,35 +39,46 @@ function resizedEmoji(config: AppConfig, sourceFileName: string, sourceBytes: Bu
   const operationKey = `${agentId}\0${sourceFileName}\0${config.bot.emojiSendSize}`;
   const existing = resizeInFlight.get(operationKey);
   if (existing) return existing;
-  const operation = createResizedEmoji(config, sourceBytes).finally(() => {
+  const operation = createResizedEmoji(config, sourceFileName, sourceBytes).finally(() => {
     if (resizeInFlight.get(operationKey) === operation) resizeInFlight.delete(operationKey);
   });
   resizeInFlight.set(operationKey, operation);
   return operation;
 }
 
-async function createResizedEmoji(config: AppConfig, sourceBytes: Buffer): Promise<ImageResult> {
+async function createResizedEmoji(
+  config: AppConfig,
+  sourceFileName: string,
+  sourceBytes: Buffer
+): Promise<ImageResult> {
   const size = config.bot.emojiSendSize;
+  const format = sourceFileName.endsWith(".gif") ? "gif" : "png";
   let resized: Buffer;
   try {
-    const output = await sharp(sourceBytes, {
-      animated: false,
-      page: 0,
-      pages: 1,
+    const pipeline = sharp(sourceBytes, {
+      ...(format === "gif"
+        ? { animated: true }
+        : { animated: false, page: 0, pages: 1 }),
       failOn: "error",
       limitInputPixels: MAX_EMOJI_INPUT_PIXELS
     })
-      .resize({ width: size, height: size, fit: "inside", withoutEnlargement: true })
-      .png({ compressionLevel: 9, adaptiveFiltering: true })
-      .toBuffer({ resolveWithObject: true });
-    if (output.info.width > size || output.info.height > size) throw new Error("Emoji resize exceeded configured size.");
+      .resize({ width: size, height: size, fit: "inside", withoutEnlargement: true });
+    const output = format === "gif"
+      ? await pipeline.gif().toBuffer({ resolveWithObject: true })
+      : await pipeline.png({ compressionLevel: 9, adaptiveFiltering: true }).toBuffer({ resolveWithObject: true });
+    if (
+      output.info.width > size
+      || (output.info.pageHeight ?? output.info.height) > size
+    ) {
+      throw new Error("Emoji resize exceeded configured size.");
+    }
     resized = output.data;
   } catch {
     throw new Error("表情图片缩放失败。");
   }
   const hash = crypto.createHash("sha256").update(resized).digest("hex");
-  const fileName = `emoji-${hash}.png`;
+  const fileName = `emoji-${hash}.${format}`;
   const location = emojiMediaLocation(config, fileName);
-  await writeContentAddressedEmojiPng(location.filePath, resized, hash, {});
+  await writeContentAddressedEmojiFile(location.filePath, resized, hash, {});
   return { url: location.url, filePath: location.filePath };
 }

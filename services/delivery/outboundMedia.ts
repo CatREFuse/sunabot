@@ -71,11 +71,12 @@ export class OutboundMediaDelivery {
     if (!fileName) {
       throw new Error("Outbound media file must be a direct child of the outbound media root.");
     }
-    if (!isSafePngFileName(fileName)) {
+    if (boundary.emojiWorkbench) {
+      if (!contentAddressedEmojiDigest(fileName)) {
+        throw new Error("Outbound workbench emoji must use a content-addressed PNG or GIF file name.");
+      }
+    } else if (!isSafePngFileName(fileName)) {
       throw new Error("Outbound media file must be a PNG image.");
-    }
-    if (boundary.emojiWorkbench && !contentAddressedEmojiDigest(fileName)) {
-      throw new Error("Outbound workbench emoji must use a content-addressed PNG file name.");
     }
 
     const stats = await regularFileStats(resolvedPath);
@@ -283,7 +284,7 @@ function isSafePngFileName(fileName: string) {
 }
 
 function contentAddressedEmojiDigest(fileName: string) {
-  return /^emoji-([a-f0-9]{64})\.png$/u.exec(fileName)?.[1];
+  return /^emoji-([a-f0-9]{64})\.(?:png|gif)$/u.exec(fileName)?.[1];
 }
 
 function pathLikeBaseName(value: string) {

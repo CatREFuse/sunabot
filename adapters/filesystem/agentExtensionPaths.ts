@@ -160,7 +160,7 @@ export class AgentExtensionPathGuard {
       );
       return this.workspaceIdentity;
     }
-    await verifyPinnedDirectory(this.workspaceRoot, this.workspaceIdentity);
+    this.workspaceIdentity = await refreshPinnedDirectory(this.workspaceRoot, this.workspaceIdentity);
     return this.workspaceIdentity;
   }
 }

@@ -27,6 +27,7 @@ import { AgentFileRepository } from "../admin/agentFiles.js";
 import { appendRequestLog } from "../../adapters/observability/requestLog.js";
 import type { ConversationRecord } from "../types.js";
 import type { SunaRuntime } from "../runtime.js";
+import { isMemoryEligibleConversationMessage } from "./conversationMemoryHelpers.js";
 import {
   createRuntimeDreams,
   type RuntimeDreamContextSnapshot,
@@ -365,7 +366,10 @@ function observedConversations(
     const messages = record.messages
       .filter((message) => {
         const at = Date.parse(message.at);
-        return Number.isFinite(at) && at >= start && at < end;
+        return isMemoryEligibleConversationMessage(message) &&
+          Number.isFinite(at) &&
+          at >= start &&
+          at < end;
       })
       .slice(-MAX_DREAM_MESSAGES_PER_CONVERSATION)
       .map((message) => ({

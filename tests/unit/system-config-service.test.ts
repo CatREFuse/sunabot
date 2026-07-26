@@ -410,7 +410,7 @@ describe("SystemConfigService", () => {
     expect(second).toEqual({
       ok: false,
       code: "SYSTEM_CONFIG_MUTATION_PENDING",
-      error: "配置修改后请直接完成当前回复。"
+      error: "当前回合已有一项待提交的配置修改。"
     });
     expect(turn.mutationStaged()).toBe(true);
     expect(harness.patch).not.toHaveBeenCalled();
@@ -423,6 +423,22 @@ describe("SystemConfigService", () => {
       revision: configRevision(harness.config),
       value: { ...harness.config.bot.orchestrator, enabled: true }
     });
+  });
+
+  it("allows settings queries before staging a mutation in the same turn", async () => {
+    const harness = createHarness();
+    const turn = harness.service.createTurn(harness.context);
+
+    await expect(turn.execute(systemInput("get_settings")))
+      .resolves.toMatchObject({ ok: true, operation: "get_settings" });
+    await expect(turn.execute(systemInput("set_search", { enabled: true })))
+      .resolves.toMatchObject({
+        ok: true,
+        operation: "set_search",
+        staged: true
+      });
+    expect(turn.mutationStaged()).toBe(true);
+    expect(harness.patch).not.toHaveBeenCalled();
   });
 
   it("discards a staged mutation without persisting it", async () => {
@@ -439,7 +455,7 @@ describe("SystemConfigService", () => {
     expect(harness.patch).not.toHaveBeenCalled();
   });
 
-  it("exposes the normalized private-gate descriptor and rejects the whole turn without side effects", async () => {
+  it("keeps a staged mutation while allowing later read operations", async () => {
     const harness = createHarness();
     const turn = harness.service.createTurn(harness.context);
     const input = systemInput("set_auto_reply", { replyScope: "private", enabled: false });
@@ -452,13 +468,11 @@ describe("SystemConfigService", () => {
       closesCurrentPrivateReplyGate: true
     });
 
-    turn.rejectTurn();
-
-    expect(turn.turnRejected()).toBe(true);
-    expect(turn.mutationStaged()).toBe(false);
-    expect(turn.stagedMutation()).toBeUndefined();
-    await expect(turn.commit()).rejects.toThrow("已拒绝的 system_config 回合不能提交配置");
-    expect(harness.patch).not.toHaveBeenCalled();
+    await expect(turn.execute(systemInput("get_status")))
+      .resolves.toMatchObject({ ok: true, operation: "get_status" });
+    expect(turn.mutationStaged()).toBe(true);
+    await turn.commit();
+    expect(harness.patch).toHaveBeenCalledOnce();
   });
 
   it("does not mark unrelated mutations as closing the current private gate", async () => {

@@ -8,7 +8,8 @@ import {
   WORKING_MEMORY_MAX_BYTES,
   appendWorkingMemoryDocumentItem,
   readWorkingMemoryDocument,
-  replaceWorkingMemoryDocument
+  replaceWorkingMemoryDocument,
+  workingMemoryItemsFromFacts
 } from "../../services/memory/public.js";
 import type { AppConfig } from "../../src/types.js";
 import { createAdminTestConfig } from "./admin-fixtures.js";
@@ -54,8 +55,9 @@ describe("working-memory Markdown document", () => {
         sourceKind: "add_workmemory"
       })
     ]);
-    expect(snapshot.content).toContain(`- 记录时间：${first.item.recordedAt} [${first.item.timeZone}]`);
-    expect(snapshot.content).toContain("- 会话来源：account:primary:group:30003（user_group）");
+    expect(snapshot.content).toContain("当前要继续验证记忆门禁。");
+    expect(snapshot.content).not.toContain("记录时间：");
+    expect(snapshot.content).not.toContain("会话来源：");
     expect((await readWorkingMemoryDocument(other)).items[0]?.content).toBe("另一个 Agent 的事项。");
   });
 
@@ -97,17 +99,15 @@ describe("working-memory Markdown document", () => {
     });
   });
 
-  it("rejects visible provenance or recorded-time edits that do not match host metadata", async () => {
+  it("rejects damaged hidden provenance metadata", async () => {
     await appendWorkingMemoryDocumentItem(config, "保持旧文档。", {
       conversationId: "private:10001",
       scope: "private"
     });
     const filePath = path.join(config.persona.agentWorkspace, WORKING_MEMORY_FILE);
     const original = await fs.readFile(filePath, "utf8");
-    await fs.writeFile(filePath, original.replace(
-      "- 会话来源：private:10001（private）",
-      "- 会话来源：private:99999（private）"
-    ));
+    await fs.writeFile(filePath, original.replace(/sunabot-workmemory:item [A-Za-z0-9_-]+/u,
+      "sunabot-workmemory:item invalid-metadata"));
     await expect(readWorkingMemoryDocument(config)).rejects.toMatchObject({
       code: "WORKING_MEMORY_DOCUMENT_INVALID"
     });
@@ -126,6 +126,44 @@ describe("working-memory Markdown document", () => {
       content: "人工修订后的事项。",
       conversationId: "private:10001",
       conversationScope: "private"
+    });
+  });
+
+  it("keeps exact retained memory identity and provenance when the model omits metadata", async () => {
+    await appendWorkingMemoryDocumentItem(config, "保留原事项。", {
+      conversationId: "private:10001",
+      scope: "private",
+      title: "原会话"
+    });
+    const current = await readWorkingMemoryDocument(config);
+    const previous = [{
+      ...current.items[0]!,
+      userId: "10001",
+      userIds: ["10001"],
+      userName: "原用户",
+      addressNames: ["原称呼"]
+    }];
+    const [retained] = workingMemoryItemsFromFacts(
+      [{ id: previous[0]!.id, fact: previous[0]!.content }],
+      previous,
+      {
+        conversationId: "group:20002",
+        conversationScope: "user_group",
+        conversationTitle: "新会话",
+        batchId: "new-batch"
+      },
+      () => "unused"
+    );
+
+    expect(retained).toMatchObject({
+      content: "保留原事项。",
+      conversationId: "private:10001",
+      conversationScope: "private",
+      conversationTitle: "原会话",
+      userId: "10001",
+      userIds: ["10001"],
+      userName: "原用户",
+      addressNames: ["原称呼"]
     });
   });
 

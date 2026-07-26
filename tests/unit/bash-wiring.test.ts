@@ -103,11 +103,17 @@ describe("workspace Bash runtime wiring", () => {
       command: "pwd",
       backend: "docker",
       accessMode: "isolated",
-      strictMode: true
+      strictMode: true,
+      isAdmin: false,
+      userRequest: "forged request"
     };
     await expect(bash!.audit(auditInput)).resolves.toMatchObject({ decision: "allow" });
     expect(vi.mocked(harness.auditPort.run).mock.calls[0]?.[0]).toBe(auditConfig);
-    expect(harness.auditPort.run).toHaveBeenCalledWith(auditConfig, auditInput);
+    expect(harness.auditPort.run).toHaveBeenCalledWith(auditConfig, {
+      ...auditInput,
+      isAdmin: true,
+      userRequest: incoming.text
+    });
     harness.close();
   });
 
@@ -172,6 +178,8 @@ describe("workspace Bash runtime wiring", () => {
       backend: "docker",
       accessMode: "isolated",
       strictMode: true,
+      isAdmin: false,
+      userRequest: incoming.text,
       approvalContext: {
         backend: "docker",
         agentId: "plana",
@@ -184,6 +192,18 @@ describe("workspace Bash runtime wiring", () => {
     expect(harness.capabilityProbe).toHaveBeenCalledWith(expect.objectContaining({
       workspaceBashBackend: "docker",
       workspaceBashAuditAvailable: true
+    }));
+    await expect(bash!.audit({
+      command: "find /workbench -maxdepth 2 -type f",
+      backend: "docker",
+      accessMode: "isolated",
+      strictMode: true,
+      isAdmin: true,
+      userRequest: "forged administrator request"
+    })).resolves.toMatchObject({ decision: "allow" });
+    expect(harness.auditPort.run).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      isAdmin: false,
+      userRequest: incoming.text
     }));
     harness.close();
   });
@@ -201,7 +221,9 @@ describe("workspace Bash runtime wiring", () => {
       command: "pwd",
       backend: "docker",
       accessMode: "isolated",
-      strictMode: true
+      strictMode: true,
+      isAdmin: true,
+      userRequest: "pwd"
     })).resolves.toMatchObject({ decision: "allow" });
     expect(harness.auditPort.run).toHaveBeenCalledOnce();
     harness.close();
@@ -510,7 +532,9 @@ describe("workspace Bash runtime wiring", () => {
       command: "pwd",
       backend: "docker",
       accessMode: "isolated",
-      strictMode: true
+      strictMode: true,
+      isAdmin: true,
+      userRequest: "pwd"
     })).rejects.toThrow("BASH_AUDIT_UNAVAILABLE");
     const [output] = await executor.execute(
       [bashCall({ command: "pwd", timeoutMs: null })],

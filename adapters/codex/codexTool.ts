@@ -5,6 +5,7 @@ import path from "node:path";
 import { CODEX_MAX_TASK_CHARS } from "../../services/tools/definitions.js";
 export { CODEX_MAX_TASK_CHARS, CODEX_TOOL_NAME, codexTool } from "../../services/tools/definitions.js";
 import type {
+  CodexControlRunner,
   CodexProcessIdentity,
   CodexRunner,
   CodexSupervisor,
@@ -14,6 +15,7 @@ import type {
   CodexToolInput,
   CodexToolResult
 } from "../../packages/contracts/tools/codex.js";
+import { CodexAppServerRunner } from "./codexAppServerTool.js";
 import {
   CodexPreparationError,
   buildIsolatedEnvironment,
@@ -27,6 +29,7 @@ import {
   signalCodexProcessGroup
 } from "./codexProcess.js";
 import {
+  CODEX_MAX_STDOUT_BYTES,
   CodexJsonlLifecycleParser,
   CodexProtocolError
 } from "./codexProtocol.js";
@@ -34,7 +37,8 @@ import {
   CODEX_RESULT_SCHEMA,
   failureResult,
   normalizeModelResult,
-  readCodexResult
+  readCodexResult,
+  withTruncatedOutputNotice
 } from "./codexResult.js";
 export type {
   CodexAuthStrategy,
@@ -64,14 +68,33 @@ export {
   CodexProtocolError,
   type CodexJsonlSnapshot
 } from "./codexProtocol.js";
+export {
+  CodexAppServerRunner,
+  parseControlInput,
+  type CodexAppServerRunnerOptions
+} from "./codexAppServerTool.js";
 
 export const CODEX_DEFAULT_TIMEOUT_MS = 15 * 60 * 1000;
 export const CODEX_MAX_STDERR_CHARS = 64 * 1024;
 
 export class CodexToolRunner implements CodexRunner {
-  constructor(private readonly supervisor: CodexSupervisor = new CodexProcessSupervisor()) {}
+  constructor(
+    private readonly supervisor: CodexSupervisor = new CodexProcessSupervisor(),
+    private readonly controlRunner: CodexControlRunner = new CodexAppServerRunner()
+  ) {}
 
   async run(input: CodexToolInput, context: CodexToolExecutionContext) {
+    if (input.__sunabot_admin_authorized !== true) {
+      return failureResult(
+        context.jobId,
+        normalizeKind(input.kind),
+        "failed",
+        "admin_unauthorized",
+        "Codex was not authorized by an administrator turn.",
+        false
+      );
+    }
+    if (input.action != null) return this.controlRunner.run(input, context);
     const parsed = parseCodexToolInput(input);
     if (!parsed.ok) {
       return failureResult(
@@ -419,11 +442,24 @@ export class CodexProcessSupervisor implements CodexSupervisor {
           return;
         }
 
+        const resultStats = await fs.stat(prepared.resultFile).catch(() => undefined);
         const modelResult = await readCodexResult(prepared.resultFile).catch((error) => ({
           status: "unknown" as const,
           error: `Unable to read Codex result: ${errorMessage(error)}`
         }));
-        resolve(normalizeModelResult(request, modelResult, common));
+        const normalized = normalizeModelResult(request, modelResult, common);
+        const outputBytes = Math.max(
+          parser.snapshot.outputBytes,
+          resultStats?.size ?? 0
+        );
+        resolve(
+          parser.snapshot.outputTruncated || (resultStats?.size ?? 0) > CODEX_MAX_STDOUT_BYTES
+            ? withTruncatedOutputNotice(normalized, {
+                outputBytes,
+                reportFile: prepared.resultFile
+              })
+            : normalized
+        );
       };
     });
   }
@@ -542,7 +578,7 @@ function buildCodexArguments(
 ) {
   const args = [
     "--ask-for-approval", "never",
-    "--sandbox", "read-only",
+    "--sandbox", "workspace-write",
     "--strict-config",
     "--disable", "multi_agent"
   ];
@@ -573,10 +609,10 @@ function buildCodexArguments(
 
 function buildCodexPrompt(request: CodexSupervisorRequest) {
   const kindInstruction = request.kind === "local"
-    ? "Inspect the provided local workspace with read-only operations. Do not modify files."
+    ? "Work inside the provided local workspace. You may create, edit, move, or delete workspace files when the task requires it, and must keep all file changes inside that workspace."
     : request.kind === "research"
-      ? "Perform deep, source-backed research. Use live web search; ordinary single lookups belong to the websearch tool."
-      : "Perform careful long-form analysis using only the task content and available read-only context.";
+      ? "Perform deep, source-backed research. Use live web search; ordinary single lookups belong to the websearch tool. You may create research artifacts inside the isolated task workspace."
+      : "Perform careful long-form analysis using the task content and available context. You may create analysis artifacts inside the isolated task workspace.";
   return [
     "You are an asynchronous worker for SunaBot.",
     kindInstruction,

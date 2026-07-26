@@ -83,7 +83,7 @@ export function isValidEmojiKey(value: string) {
 }
 
 export function isEmojiFileName(value: string) {
-  return /^emoji-[a-f0-9]{64}\.png$/u.test(value);
+  return /^emoji-[a-f0-9]{64}\.(?:png|gif)$/u.test(value);
 }
 
 export function planEmojiMarkers(text: string, port: EmojiCatalogPort): EmojiMarkerPlan {

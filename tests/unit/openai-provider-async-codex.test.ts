@@ -69,7 +69,10 @@ describe("OpenAIProvider asynchronous Codex tool turns", () => {
       toolCall: {
         name: "codex",
         callId: "call_codex_ack",
-        arguments: workerArguments
+        arguments: {
+          ...workerArguments,
+          __sunabot_admin_authorized: true
+        }
       }
     });
     expect(fetchMock).toHaveBeenCalledOnce();
@@ -111,7 +114,10 @@ describe("OpenAIProvider asynchronous Codex tool turns", () => {
       toolCall: {
         name: "codex",
         callId: "call_codex_repaired",
-        arguments: workerArguments
+        arguments: {
+          ...workerArguments,
+          __sunabot_admin_authorized: true
+        }
       }
     });
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -211,7 +217,7 @@ describe("OpenAIProvider asynchronous Codex tool turns", () => {
     expect(toolNames(fetchRequestBody(fetchMock, 0))).toContain("assistant_text");
   });
 
-  it("rejects deferred completion after assistant_text was accepted in an earlier round", async () => {
+  it("uses one deferred status message when assistant_text appears in the same response", async () => {
     const provider = codexProvider();
     const onAssistantText = vi.fn(async () => undefined);
     const task = { task: "检查多工具响应", kind: "analysis" };
@@ -220,11 +226,7 @@ describe("OpenAIProvider asynchronous Codex tool turns", () => {
       codexSseResponse([
         functionCall("assistant_text", "call_progress", { text: "我先确认一下。" }),
         functionCall("codex", "call_mixed_codex", { ...task, dispatch_message: "我开始检查。" })
-      ]),
-      codexSseResponse([
-        functionCall("codex", "call_single_codex", { ...task, dispatch_message: "我开始检查。" })
-      ]),
-      codexSseResponse([assistantMessage("检查完成。")])
+      ])
     );
 
     const result = await provider.completeTurn("system", [{ role: "user", content: "检查" }], {
@@ -232,12 +234,58 @@ describe("OpenAIProvider asynchronous Codex tool turns", () => {
       onAssistantText
     });
 
-    expect(onAssistantText).toHaveBeenCalledWith("我先确认一下。", "assistant_text");
-    expect(result).toEqual({ kind: "completed", text: "检查完成。" });
-    expect(fetchMock).toHaveBeenCalledTimes(3);
-    const thirdInput = fetchRequestBody(fetchMock, 2).input as Array<Record<string, unknown>>;
-    const rejected = thirdInput.find((item) => item.type === "function_call_output" && item.call_id === "call_single_codex");
-    expect(JSON.parse(String(rejected?.output)).error).toContain("before assistant text or any other tool");
+    expect(onAssistantText).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      kind: "deferred",
+      acknowledgement: "我开始检查。",
+      toolCall: { name: "codex", callId: "call_mixed_codex", arguments: task }
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("exports chat media before dispatching Codex from the same model response", async () => {
+    const provider = codexProvider();
+    const exportMedia = vi.fn(async () => ({
+      ok: true as const,
+      path: "chat-media-test.png",
+      sha256: "a".repeat(64),
+      mimeType: "image/png",
+      extension: "png",
+      byteLength: 128,
+      width: 16,
+      height: 16,
+      deduplicated: false
+    }));
+    const task = { task: "检查导出的图片", kind: "analysis" };
+    const fetchMock = mockCodexToken(provider, codexSseResponse([
+      functionCall("export_chat_media", "call_export_media", {
+        handle: "message:123:image:0"
+      }),
+      functionCall("codex", "call_media_codex", {
+        ...task,
+        dispatch_message: "图片已导出，开始检查。"
+      })
+    ]));
+
+    const result = await provider.completeTurn("system", [{ role: "user", content: "检查这张图片" }], {
+      asyncCodex: true,
+      chatMedia: { export: exportMedia }
+    });
+
+    expect(exportMedia).toHaveBeenCalledWith({ handle: "message:123:image:0" });
+    expect(result).toMatchObject({
+      kind: "deferred",
+      acknowledgement: "图片已导出，开始检查。",
+      toolCall: {
+        name: "codex",
+        callId: "call_media_codex",
+        arguments: {
+          ...task,
+          __sunabot_admin_authorized: true
+        }
+      }
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 
   it("returns an image task dispatch before image generation starts", async () => {
@@ -424,6 +472,51 @@ describe("OpenAIProvider asynchronous Codex tool turns", () => {
     expect(onToolCall.mock.calls.map(([name]) => name)).toEqual([
       "assistant_text",
       "send_voice_message",
+    ]);
+  });
+
+  it("returns matching text and voice after an earlier websearch round", async () => {
+    const provider = codexProvider();
+    const onToolCall = vi.fn();
+    const fetchMock = mockCodexToken(
+      provider,
+      codexSseResponse([
+        functionCall("websearch", "call_voice_search", {
+          query: "current weather",
+          maxResults: 2
+        })
+      ]),
+      codexSseResponse([
+        assistantMessage("今天晴，最高 28°C。"),
+        functionCall("send_voice_message", "call_voice_after_search", {
+          text: "今天晴，最高 28°C。"
+        })
+      ])
+    );
+
+    const result = await provider.completeTurn(
+      "system",
+      [{ role: "user", content: "查天气后用语音告诉我" }],
+      {
+        bot: websearchBotConfig(),
+        voice: { enabled: true, languages: ["ja"], defaultLanguage: "ja" },
+        onToolCall
+      }
+    );
+
+    expect(result).toMatchObject({
+      kind: "completed",
+      text: "今天晴，最高 28°C。",
+      voice: {
+        text: "今天晴，最高 28°C。",
+        callId: "call_voice_after_search"
+      }
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(runWebsearch).toHaveBeenCalledOnce();
+    expect(onToolCall.mock.calls.map(([name]) => name)).toEqual([
+      "websearch",
+      "send_voice_message"
     ]);
   });
 

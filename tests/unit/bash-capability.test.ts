@@ -49,7 +49,7 @@ describe("workspace Bash capability probe", () => {
     expect(probe.mock.calls[0]?.[0]).toBe("/fixture/docker");
     const probeArgs = probe.mock.calls[0]?.[1] ?? [];
     expect(probeArgs).toEqual(expect.arrayContaining([
-      "run", "--rm", "--pull", "never", "--network", "none",
+      "run", "--rm", "--pull", "never", "--network", "bridge",
       "--entrypoint", "/usr/bin/env", "sunabot-bash:test", "-i",
       "PATH=/usr/local/bin:/usr/bin:/bin", "/bin/bash", "--noprofile", "--norc", "-ec"
     ]));

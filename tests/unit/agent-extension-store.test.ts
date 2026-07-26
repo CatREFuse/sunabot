@@ -89,6 +89,34 @@ describe("Agent extension filesystem store", () => {
     expect(recoveryLockAttempts).toBe(1);
   });
 
+  it("keeps extension catalogs readable after an unrelated workspace root entry is created", async () => {
+    const store = new AgentExtensionStore({ workspaceRoot: workspace });
+    const service = new AgentExtensionService(store);
+    await store.ensureLayout("agent-a");
+
+    await fs.mkdir(path.join(workspace, "runtime-sibling"), { mode: 0o700 });
+
+    await expect(store.readSkillIndex("agent-a")).resolves.toMatchObject({ skills: [] });
+    await expect(store.readMcpServerIndex("agent-a")).resolves.toMatchObject({ servers: [] });
+    await expect(service.overview("agent-a")).resolves.toMatchObject({
+      agentId: "agent-a",
+      skills: [],
+      mcp: { servers: [] }
+    });
+  });
+
+  it("rejects a replaced workspace root after the extension layout was pinned", async () => {
+    const store = new AgentExtensionStore({ workspaceRoot: workspace });
+    await store.ensureLayout("agent-a");
+    const originalWorkspace = `${workspace}-original`;
+    temporaryPaths.push(originalWorkspace);
+    await fs.rename(workspace, originalWorkspace);
+    await fs.mkdir(workspace, { mode: 0o700 });
+
+    await expect(store.readSkillIndex("agent-a"))
+      .rejects.toMatchObject({ code: "AGENT_EXTENSION_PATH_CHANGED" });
+  });
+
   it("installs one public Skill name per Agent and persists strict metadata as unreviewed evidence", async () => {
     const service = new AgentExtensionService(new AgentExtensionStore({
       workspaceRoot: workspace,

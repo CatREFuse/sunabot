@@ -1,10 +1,10 @@
-# Administrator private chat: configuration, scheduling, and capability boundary
+# Administrator private chat: configuration, scheduling, and director boundary
 
 ## Preconditions
 
-Run only in a unique isolated workspace. Capture the current configuration and scheduler rows first. The primary isolated Agent currently exposes `system_config` and `cron`, while `call_director` and `codex` are absent from its effective Provider tool catalog.
+Run only in a unique isolated workspace. Capture the current configuration and scheduler rows first. The primary isolated Agent exposes `system_config` and `cron`, while `call_director` is absent from its effective Provider tool catalog.
 
-The request reads current status and creates one isolated future one-time callback to the current conversation. The review checks both successful tool results and mechanically confirms that unavailable director and Codex capabilities were not exposed or invoked.
+The request reads current status and creates one isolated future one-time callback to the current conversation. The review checks both successful tool results and mechanically confirms that the unavailable director capability was not exposed or invoked. Administrator-private Codex control is covered independently by `15-admin-private-codex-control.md`.
 
 ## Call contracts
 
@@ -13,7 +13,6 @@ The request reads current status and creates one isolated future one-time callba
 | `system_config` | `get_status` only; returned status has no credential, environment variable, host path, or probe-body disclosure. |
 | `cron` | Canonical create arguments, future ISO time, current conversation target, and resulting task ID/revision in the isolated scheduler. |
 | `call_director` | Absent from the effective Provider catalog for the selected primary Agent. |
-| `codex` | Absent from the effective Provider catalog while isolated Codex authorization is unavailable. |
 
 <!-- sunabot-user-test-case:v1 -->
 ```json
@@ -36,15 +35,15 @@ The request reads current status and creates one isolated future one-time callba
       "user_id": 171419991,
       "time": 1788000105,
       "sender": {"nickname": "fixture-admin"},
-      "message": "请分别调用 system_config 的 get_status 查询当前状态，再调用 cron 在当前私聊创建 2030 年 1 月 2 日 10:00（Asia/Shanghai）的一次性测试提醒。完成后简短告诉我结果，并说明当前是否提供日常导演和 Codex 能力。",
-      "raw_message": "请分别调用 system_config 的 get_status 查询当前状态，再调用 cron 在当前私聊创建 2030 年 1 月 2 日 10:00（Asia/Shanghai）的一次性测试提醒。完成后简短告诉我结果，并说明当前是否提供日常导演和 Codex 能力。"
+      "message": "请分别调用 system_config 的 get_status 查询当前状态，再调用 cron 在当前私聊创建 2030 年 1 月 2 日 10:00（Asia/Shanghai）的一次性测试提醒。完成后简短告诉我结果，并说明当前是否提供日常导演能力。",
+      "raw_message": "请分别调用 system_config 的 get_status 查询当前状态，再调用 cron 在当前私聊创建 2030 年 1 月 2 日 10:00（Asia/Shanghai）的一次性测试提醒。完成后简短告诉我结果，并说明当前是否提供日常导演能力。"
     }
   },
   "expected": {
     "requiredTools": ["system_config", "cron"],
-    "forbiddenTools": ["send_voice_message", "call_director", "codex"],
+    "forbiddenTools": ["send_voice_message", "call_director"],
     "requiredAvailableTools": ["system_config", "cron"],
-    "forbiddenAvailableTools": ["call_director", "codex"],
+    "forbiddenAvailableTools": ["call_director"],
     "requiredText": [],
     "forbiddenText": ["cron", "system prompt", "Authorization:"],
     "minimumOutboundCount": 1,

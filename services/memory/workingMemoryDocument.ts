@@ -13,7 +13,8 @@ export const WORKING_MEMORY_FILE = "WORKING_MEMORY.md";
 export const WORKING_MEMORY_MAX_BYTES = 64 * 1024;
 export const WORKING_MEMORY_MAX_ITEM_CHARS = 4_000;
 
-const DOCUMENT_HEADER = "# 工作记忆\n\n<!-- sunabot-workmemory:v1 -->";
+const LEGACY_DOCUMENT_HEADER = "# 工作记忆\n\n<!-- sunabot-workmemory:v1 -->";
+const DOCUMENT_HEADER = "<!-- sunabot-workmemory:v2 -->";
 const ITEM_MARKER = "<!-- sunabot-workmemory:item ";
 const ITEM_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u;
 const OFFSET_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}(?:Z|[+-]\d{2}:\d{2})$/u;
@@ -218,7 +219,26 @@ export function workingMemoryItemsFromFacts(
     }
     seen.add(id);
     const content = normalizeContent(fact.fact);
-    const semantic = {
+    const semantic = existing?.content === content ? {
+      content,
+      userId: existing.userId,
+      userIds: existing.userIds,
+      userName: existing.userName,
+      addressNames: existing.addressNames,
+      occurredAt: existing.occurredAt,
+      occurredEndAt: existing.occurredEndAt,
+      eventType: existing.eventType,
+      subjectKey: existing.subjectKey,
+      eventKey: existing.eventKey,
+      causalChainKey: existing.causalChainKey,
+      sourceMemoryIds: existing.sourceMemoryIds,
+      memoryKind: existing.memoryKind,
+      realityStatus: existing.realityStatus,
+      factuality: existing.factuality,
+      dreamRunId: existing.dreamRunId,
+      dreamDate: existing.dreamDate,
+      dreamReviewedAt: existing.dreamReviewedAt
+    } : {
       content,
       userId: optionalLine(fact.userId, 64),
       userIds: normalizedStringArray(fact.userIds, 64),
@@ -244,11 +264,11 @@ export function workingMemoryItemsFromFacts(
       ...semantic,
       recordedAt: unchanged ? existing.recordedAt : recordedAt,
       timeZone: unchanged ? existing.timeZone : timeZone,
-      conversationId: unchanged ? existing.conversationId : conversationId,
-      conversationScope: unchanged ? existing.conversationScope : conversationScope,
-      conversationTitle: unchanged ? existing.conversationTitle : conversationTitle,
-      sourceKind: unchanged ? existing.sourceKind : sourceKind,
-      batchId: unchanged ? existing.batchId : batchId
+      conversationId: existing?.conversationId ?? conversationId,
+      conversationScope: existing?.conversationScope ?? conversationScope,
+      conversationTitle: existing?.conversationTitle ?? conversationTitle,
+      sourceKind: existing?.sourceKind ?? sourceKind,
+      batchId: existing?.batchId ?? batchId
     });
   });
 }
@@ -320,7 +340,7 @@ export function workingMemoryItemToEntry(item: WorkingMemoryDocumentItem): Memor
 }
 
 export function renderWorkingMemoryMarkdown(items: readonly WorkingMemoryDocumentItem[]) {
-  if (!items.length) return `${DOCUMENT_HEADER}\n\n当前没有工作记忆事项。`;
+  if (!items.length) return DOCUMENT_HEADER;
   return [
     DOCUMENT_HEADER,
     "",
@@ -329,13 +349,6 @@ export function renderWorkingMemoryMarkdown(items: readonly WorkingMemoryDocumen
         ...item,
         content: undefined
       }), "utf8").toString("base64url")} -->`,
-      `## ${item.id}`,
-      "",
-      `- 记录时间：${item.recordedAt} [${item.timeZone}]`,
-      `- 会话来源：${item.conversationId}（${item.conversationScope}）`,
-      `- 会话标题：${item.conversationTitle || "未命名"}`,
-      `- 来源类型：${item.sourceKind}`,
-      "",
       item.content,
       ...(index === items.length - 1 ? [] : [""])
     ])
@@ -345,11 +358,13 @@ export function renderWorkingMemoryMarkdown(items: readonly WorkingMemoryDocumen
 export function parseWorkingMemoryMarkdown(content: string) {
   assertDocumentSize(content);
   const normalized = content.replace(/\r\n/g, "\n").trimEnd();
-  if (!normalized.startsWith(DOCUMENT_HEADER)) {
+  const legacy = normalized.startsWith(LEGACY_DOCUMENT_HEADER);
+  const header = legacy ? LEGACY_DOCUMENT_HEADER : DOCUMENT_HEADER;
+  if (!normalized.startsWith(header)) {
     throw workingMemoryError("WORKING_MEMORY_DOCUMENT_INVALID", "Working memory document header is invalid.");
   }
-  const rest = normalized.slice(DOCUMENT_HEADER.length);
-  if (rest === "\n\n当前没有工作记忆事项。") return [];
+  const rest = normalized.slice(header.length);
+  if (!rest.trim() || (legacy && rest === "\n\n当前没有工作记忆事项。")) return [];
 
   const markerPattern = /^<!-- sunabot-workmemory:item ([A-Za-z0-9_-]+) -->$/gmu;
   const matches = [...rest.matchAll(markerPattern)];
@@ -371,19 +386,9 @@ export function parseWorkingMemoryMarkdown(content: string) {
       ...(metadata as Record<string, unknown>),
       content: "pending"
     });
-    const prefix = [
-      `## ${itemMetadata.id}`,
-      "",
-      `- 记录时间：${itemMetadata.recordedAt} [${itemMetadata.timeZone}]`,
-      `- 会话来源：${itemMetadata.conversationId}（${itemMetadata.conversationScope}）`,
-      `- 会话标题：${itemMetadata.conversationTitle || "未命名"}`,
-      `- 来源类型：${itemMetadata.sourceKind}`,
-      ""
-    ].join("\n");
-    if (!block.startsWith(prefix)) {
-      throw workingMemoryError("WORKING_MEMORY_DOCUMENT_INVALID", "Working memory visible metadata does not match its host metadata.");
-    }
-    const visibleContent = block.slice(prefix.length).trim();
+    const visibleContent = legacy
+      ? parseLegacyWorkingMemoryBlock(block, itemMetadata)
+      : block;
     return validateWorkingMemoryItem({
       ...(metadata as Record<string, unknown>),
       content: visibleContent
@@ -393,6 +398,28 @@ export function parseWorkingMemoryMarkdown(content: string) {
     throw workingMemoryError("WORKING_MEMORY_DOCUMENT_INVALID", "Working memory item IDs are duplicated.");
   }
   return items;
+}
+
+function parseLegacyWorkingMemoryBlock(
+  block: string,
+  itemMetadata: WorkingMemoryDocumentItem
+) {
+  const prefix = [
+    `## ${itemMetadata.id}`,
+    "",
+    `- 记录时间：${itemMetadata.recordedAt} [${itemMetadata.timeZone}]`,
+    `- 会话来源：${itemMetadata.conversationId}（${itemMetadata.conversationScope}）`,
+    `- 会话标题：${itemMetadata.conversationTitle || "未命名"}`,
+    `- 来源类型：${itemMetadata.sourceKind}`,
+    ""
+  ].join("\n");
+  if (!block.startsWith(prefix)) {
+    throw workingMemoryError(
+      "WORKING_MEMORY_DOCUMENT_INVALID",
+      "Legacy working memory visible metadata does not match its host metadata."
+    );
+  }
+  return block.slice(prefix.length).trim();
 }
 
 function validateWorkingMemoryItem(input: unknown): WorkingMemoryDocumentItem {

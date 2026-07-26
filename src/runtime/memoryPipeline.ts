@@ -424,6 +424,10 @@ export async function runtime_requestWorkingMemoryMerge(this: RuntimeHost,
           subjectKey: entry.subjectKey,
           eventKey: entry.eventKey
         })),
+        evidenceConstraints: [
+          "imageCount、quoteCount 和图片或回复占位文本只证明存在对应消息段，不能证明不可见图片、被回复正文或媒体内容；不得据此补写其内容。",
+          "把动作、原话、偏好或立场归给某位参与者时，必须由该参与者自己的可见消息直接支持；仅在同一会话出现不能作为归因依据。"
+        ],
         messages: context.messages.map((message) => ({
           ...message,
           at: formatModelTimestamp(message.at)

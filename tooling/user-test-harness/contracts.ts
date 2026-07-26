@@ -168,6 +168,8 @@ export interface DreamUserTestInput {
       at: string;
       userId?: number;
       senderName?: string;
+      imageCount?: number;
+      quoteCount?: number;
     }>;
   }>;
   activeTasks: DreamActiveTaskFixture[];
@@ -190,6 +192,20 @@ export interface SanitizedBranchSampleV2 {
   };
   fixture: {
     now: string;
+    messageSelection: {
+      source: number;
+      productionEligible: number;
+      included: number;
+      mediaSegments: number;
+      quoteSegments: number;
+      excluded: {
+        internal: number;
+        failed: number;
+        running: number;
+        other: number;
+        segmentOnly: number;
+      };
+    };
     workingMemory: WorkingMemoryFixtureItem[];
     longTerm: JsonFixtureRecord[];
     userProfiles: JsonFixtureRecord[];

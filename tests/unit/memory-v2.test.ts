@@ -59,8 +59,9 @@ describe("memory v2 storage", () => {
       fileName: "WORKING_MEMORY.md",
       revision: expect.any(String)
     });
-    expect(payload.document?.content).toContain("# 工作记忆");
+    expect(payload.document?.content).toContain("<!-- sunabot-workmemory:v2 -->");
     expect(payload.document?.content).toContain("整份工作记忆正文");
+    expect(payload.document?.content).not.toContain("记录时间：");
     expect(payload.entries).toHaveLength(1);
   });
 
@@ -185,8 +186,9 @@ describe("memory v2 storage", () => {
     expect(range!.observedAt).toBe(range!.recordedAt);
     expect(legacy).toMatchObject({ text: "旧时间文本" });
     expect(raw).toEqual([]);
-    expect(await fs.readFile(path.join(workspace, "WORKING_MEMORY.md"), "utf8"))
-      .toContain(`- 记录时间：${range!.recordedAt}`);
+    const document = await fs.readFile(path.join(workspace, "WORKING_MEMORY.md"), "utf8");
+    expect(document).toContain("完成部署");
+    expect(document).not.toContain("记录时间：");
   });
 
   it("leaves legacy SQLite working rows untouched while normalizing long-term records", async () => {
@@ -269,7 +271,12 @@ describe("memory v2 storage", () => {
         subjectKey: "memory:batch-1",
         promoteToLongTerm: true
       }],
-      userProfileFacts: [{ fact: "我知道圆圆（QQ 703084445）喜欢测试。", userId: "703084445", addressNames: ["圆圆"] }],
+      userProfileFacts: [{
+        fact: "我知道圆圆（QQ 703084445）喜欢测试。",
+        time: "2026-07-10 09:00 至 2026-07-10 10:00",
+        userId: "703084445",
+        addressNames: ["圆圆"]
+      }],
       longTermFacts: [],
       metadata: {
         replaceUserProfileFacts: true,
@@ -287,11 +294,13 @@ describe("memory v2 storage", () => {
     expect(replayed).toMatchObject({ status: "applied", transactionId: (applied as { transactionId: string }).transactionId });
     expect((await readMemorySourceEntries(config, "working"))[0]).toMatchObject({
       text: "新工作事实",
-      conversationId: "group:batch-test",
-      conversationScope: "user_group",
+      conversationId: "system:memory",
+      conversationScope: "system",
       sourceKind: "model_merge"
     });
-    expect(await readUserProfileForUser(config, "703084445")).toMatchObject({ addressNames: ["圆圆"] });
+    const profile = await readUserProfileForUser(config, "703084445");
+    expect(profile).toMatchObject({ addressNames: ["圆圆"] });
+    expect(Number.isFinite(Date.parse(profile!.createdAt!))).toBe(true);
     expect(await readMemorySourceEntries(config, "long_term")).toHaveLength(0);
     expect(applicationDataStore(config).hasMemoryBatch(input.batchId)).toBe(true);
   });

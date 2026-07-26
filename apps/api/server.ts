@@ -513,7 +513,9 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
       }
       throw error;
     }
-    return reply.type("image/png").send(fs.createReadStream(location.filePath));
+    return reply
+      .type(fileName.endsWith(".gif") ? "image/gif" : "image/png")
+      .send(fs.createReadStream(location.filePath));
   });
 
   await app.register(fastifyStatic, {
