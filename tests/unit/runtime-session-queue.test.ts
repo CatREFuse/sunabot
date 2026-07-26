@@ -115,6 +115,7 @@ describe("SunaRuntime Session queue bridge", () => {
       event: privateEvent(19_980, "发送报告"),
       accountId: undefined,
       sessionId: "private:171419991",
+      workbenchDirectory: "workbench",
       target: { accountId: "primary", scope: "private", userId: 171419991 }
     },
     {
@@ -122,12 +123,14 @@ describe("SunaRuntime Session queue bridge", () => {
       event: groupEvent(19_981, 602, "发送报告"),
       accountId: "account-b",
       sessionId: "account:account-b:group:602",
+      workbenchDirectory: "docker-workbench",
       target: { accountId: "account-b", scope: "user_group", userId: 171419991, groupId: 602 }
     }
   ])("queues send_file for the current $label conversation and account", async ({
     event,
     accountId,
     sessionId,
+    workbenchDirectory,
     target
   }) => {
     expect(parseOneBotInboundMessage(event)?.transport).toBeUndefined();
@@ -152,7 +155,11 @@ describe("SunaRuntime Session queue bridge", () => {
       });
       return { kind: "completed", text: "文件已发送" };
     });
-    const workbench = path.join(harness.runtime.config.persona.agentWorkspace, "workbench", "exports");
+    const workbench = path.join(
+      harness.runtime.config.persona.agentWorkspace,
+      workbenchDirectory,
+      "exports"
+    );
     fs.mkdirSync(workbench, { recursive: true });
     fs.writeFileSync(path.join(workbench, "report.txt"), "report");
 
@@ -176,6 +183,84 @@ describe("SunaRuntime Session queue bridge", () => {
     expect(harness.store.listOutbox(sessionId).find((outbox) => outbox.kind === "onebot.conversation_asset"))
       .toMatchObject({ deliveryPartition: accountId ?? "primary" });
     expect(sentTexts(harness.gateway)).toEqual(["文件已发送"]);
+  });
+
+  it("lets an administrator private turn return a file created by explicit Docker Bash", async () => {
+    const completeRequestTurn = vi.fn(async (
+      _request: RenderedPromptRequest,
+      options: ProviderCompleteOptions = {}
+    ): Promise<ProviderTurnResult> => {
+      await expect(options.conversationAssets!.send({
+        path: "exports/docker-report.txt",
+        kind: "file"
+      }, {
+        callId: "call-admin-docker-send-file",
+        toolName: "send_file"
+      })).resolves.toMatchObject({
+        ok: true,
+        queued: true,
+        name: "docker-report.txt"
+      });
+      return { kind: "completed", text: "文件已发送" };
+    });
+    const harness = createRuntimeHarness(completeRequestTurn);
+    const dockerWorkbench = path.join(
+      harness.runtime.config.persona.agentWorkspace,
+      "docker-workbench",
+      "exports"
+    );
+    fs.mkdirSync(dockerWorkbench, { recursive: true });
+    fs.writeFileSync(path.join(dockerWorkbench, "docker-report.txt"), "docker report");
+
+    await handleOneBotEvent(harness.runtime, privateEvent(19_983, "使用 Docker 生成并发送报告"), harness.gateway);
+    await harness.coordinator.waitForIdle({ timeoutMs: 3_000 });
+
+    expect(harness.gateway.sendConversationAsset).toHaveBeenCalledOnce();
+    expect(harness.gateway.sendConversationAsset).toHaveBeenCalledWith(expect.objectContaining({
+      scope: "private",
+      asset: expect.objectContaining({
+        name: "docker-report.txt",
+        source: `base64://${Buffer.from("docker report").toString("base64")}`
+      })
+    }));
+  });
+
+  it.each([
+    {
+      label: "ordinary private",
+      event: privateEvent(19_984, "发送 Native 文件", 998_104)
+    },
+    {
+      label: "ordinary group",
+      event: groupEvent(19_985, 603, "发送 Native 文件", 998_105)
+    }
+  ])("does not let an $label turn fall back from Docker to the Native workbench", async ({ event }) => {
+    const completeRequestTurn = vi.fn(async (
+      _request: RenderedPromptRequest,
+      options: ProviderCompleteOptions = {}
+    ): Promise<ProviderTurnResult> => {
+      await expect(options.conversationAssets!.send({
+        path: "exports/native-only.txt",
+        kind: "file"
+      }, {
+        callId: "call-ordinary-native-send-file",
+        toolName: "send_file"
+      })).rejects.toMatchObject({ code: "SEND_FILE_SOURCE_MISSING" });
+      return { kind: "completed", text: "文件不可用" };
+    });
+    const harness = createRuntimeHarness(completeRequestTurn);
+    const nativeWorkbench = path.join(
+      harness.runtime.config.persona.agentWorkspace,
+      "workbench",
+      "exports"
+    );
+    fs.mkdirSync(nativeWorkbench, { recursive: true });
+    fs.writeFileSync(path.join(nativeWorkbench, "native-only.txt"), "native only");
+
+    await handleOneBotEvent(harness.runtime, event, harness.gateway);
+    await harness.coordinator.waitForIdle({ timeoutMs: 3_000 });
+
+    expect(harness.gateway.sendConversationAsset).not.toHaveBeenCalled();
   });
 
   it("delivers send_file after preparation mutates non-identity incoming fields", async () => {
@@ -1794,7 +1879,7 @@ describe("SunaRuntime Session queue bridge", () => {
       event: groupEvent(22_005, 604, "ordinary group asset request", 998_102),
       sessionId: "group:604"
     }
-  ])("keeps send_file definitions and forged calls unavailable for an ordinary $label", async ({
+  ])("allows an ordinary $label to return a Docker workbench file", async ({
     event,
     sessionId
   }) => {
@@ -1802,24 +1887,27 @@ describe("SunaRuntime Session queue bridge", () => {
       _request: RenderedPromptRequest,
       options: ProviderCompleteOptions = {}
     ): Promise<ProviderTurnResult> => {
-      expect(options.conversationAssets).toBeUndefined();
+      expect(options.conversationAssets?.enabled).toBe(true);
       const executor = new RegistryProviderToolExecutor();
       const definitions = executor.resolveDefinitions(options, [{ type: "function", function: sendFileTool }]);
-      expect(definitions.map((definition) => definition.name)).not.toContain("send_file");
+      expect(definitions.map((definition) => definition.name)).toContain("send_file");
       const [output] = await executor.execute([{
         type: "function_call",
         name: "send_file",
         call_id: "forged-ordinary-send-file",
         arguments: JSON.stringify({ path: "exports/report.txt", kind: "file", name: null })
       }], options, definitions);
-      expect(JSON.parse(String(output?.output))).toEqual({
-        ok: false,
-        error: "Tool send_file is unavailable."
+      expect(JSON.parse(String(output?.output))).toMatchObject({
+        ok: true,
+        queued: true,
+        kind: "file",
+        name: "report.txt",
+        byteLength: 6
       });
-      return { kind: "completed", text: "asset capability closed" };
+      return { kind: "completed", text: "文件已发送" };
     });
     const harness = createRuntimeHarness(completeRequestTurn);
-    const workbench = path.join(harness.runtime.config.persona.agentWorkspace, "workbench", "exports");
+    const workbench = path.join(harness.runtime.config.persona.agentWorkspace, "docker-workbench", "exports");
     fs.mkdirSync(workbench, { recursive: true });
     fs.writeFileSync(path.join(workbench, "report.txt"), "report");
 
@@ -1827,9 +1915,9 @@ describe("SunaRuntime Session queue bridge", () => {
     await harness.coordinator.waitForIdle({ timeoutMs: 3_000 });
 
     expect(completeRequestTurn).toHaveBeenCalledOnce();
-    expect(harness.gateway.sendConversationAsset).not.toHaveBeenCalled();
+    expect(harness.gateway.sendConversationAsset).toHaveBeenCalledOnce();
     expect(harness.store.listOutbox(sessionId).some((outbox) => outbox.kind === "onebot.conversation_asset"))
-      .toBe(false);
+      .toBe(true);
   });
 });
 

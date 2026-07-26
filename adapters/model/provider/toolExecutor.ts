@@ -195,7 +195,7 @@ export class RegistryProviderToolExecutor implements ProviderToolExecutorPort {
     };
   }
 
-  noReplyTurn(
+  async noReplyTurn(
     calls: ResponseFunctionCallItem[],
     options: ProviderCompleteOptions,
     definitions: readonly Record<string, unknown>[],
@@ -212,6 +212,7 @@ export class RegistryProviderToolExecutor implements ProviderToolExecutorPort {
     if (hasAcceptedTurnActivity(state)) return null;
     options.onToolCall?.(call.name);
     markAcceptedTool(state, call.name);
+    await appendToolLog(NO_REPLY_TOOL_NAME, call, {}, { ok: true }, options);
     state.terminal = "no_reply";
     return { kind: "no_reply" as const };
   }

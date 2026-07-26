@@ -31,6 +31,9 @@
 | `docs/deployment/online-voice-synthesis.md` | 在线语音协议、Provider 配置、音色 ID、安全边界与真实 QQ 外发流程 | 配置、迁移或验收在线语音合成前读取 |
 | `docs/operations/sqlite-backup-recovery.md` | 默认 Plana 与全部 Agent 业务库/queue 数据库对的一致恢复点、7/30 天保留、恢复校验、季度演练和故障门禁 | 执行每日备份、恢复、保留清理或故障演练时读取 |
 | `docs/references/README.md` | OneBot v11、v12 协议资料的来源、版本和本地入口 | 核对 OneBot 事件、消息段、动作或兼容性时读取 |
+| `docs/user-tests/README.md` | user test harness、用例文档、隔离 workspace、质量评审与上线门禁 | 开发任何功能、编写 user test case 或执行上线前验证时读取 |
+| `docs/user-tests/sampled-memory-compression.md` | 运行中测试账号 V2 样本的内容无关记忆压缩模板 | 从只读样本派生真实数据记忆压缩 case 时读取 |
+| `docs/user-tests/sampled-dream.md` | 运行中测试账号 V2 样本的内容无关 Dream 模板 | 从只读样本派生真实数据 Dream case 时读取 |
 
 新增、移动、重命名或删除 `docs/` 下的有效文档时，必须同步更新本索引。历史方案不进入当前索引。
 
@@ -96,6 +99,22 @@
 - 服务端拉取代码后若发现旧 `sunabot-qq-runtime` 容器或 `qq-runtime` Compose service，必须在首次执行 `./sunabot.sh up` 前完整执行 `docs/migrations/one-container-to-split-runtime.md`；不得删除旧容器、跳过离线双库备份或边运行边迁移。
 
 ## 验证
+
+### User test harness
+
+- 所有功能在开发前必须先写 user test case Markdown，完整描述用户目标、角色/环境、输入、预期工具与输出、质量标准。主对话角色必须明确为管理员私聊、非管理员私聊、管理员群聊或非管理员群聊之一。
+- 默认验证顺序为：受影响单元测试 → user test harness → 其他集成、安全、迁移、runtime、构建、E2E、视觉与跨平台测试。任一阶段失败都不能上线，必须由主 Agent 汇总证据并返工。
+- harness 优先交给 subagent 执行，可使用 `terra` 等次旗舰模型。尽可能让多个 fixture Agent 并行测试；核心流程或复杂功能的同一个 case 可以交给多个 fixture Agent 独立复测。
+- fixture Agent 只运行夹具、查验机械断言与输出质量、写报告，不分析或修改产品代码。具体根因、修复方案、代码改动和复测收口由主 Agent 完成。
+- 主对话夹具必须从原始 OneBot event 进入 production ingress，并使用隔离 workspace、mock MessagingPort 和真实 Session/Provider/tool/outbox 链。`actor` 是 case 声明的可移植角色，run 只在进程内把事件用户投影为管理员或非管理员，不能依赖源 workspace 的真实管理员 QQ，也不能写回配置。不得直接调用 reply 方法后声称覆盖真实入站。
+- 主对话前置数据必须写入 case 的 `input.fixture`，由 harness 在 raw OneBot ingress 前机械 seed 隔离工作记忆、长期记忆、用户画像、AIR 或 Native/Docker Workbench 文件；不能只在 Markdown 段落中要求 fixture Agent 手工猜测或准备。静默、媒体等 case 使用 outbound kind 断言区分 `message`、`asset` 与 `poke`。
+- 每个独立 run 及网络/权限重试必须重新 prepare 全新隔离 workspace；相同 OneBot event 不得在同一 workspace 重跑并复用旧 Session/outbox。只有 case 文档明确声明的状态链式套件可以按不同 case 和不同 message ID 顺序复用一个 workspace。
+- macOS Colima 的 Docker Bash case 必须把隔离 workspace 放在 VM 可挂载的宿主共享路径，例如仓库内已忽略的 `.user-test-runs/workspaces/`；不得把 `/private/tmp` 的 bind-mount 失败归因于产品。
+- Dream、记忆压缩等分支夹具直接调用对应业务管线并把输入与持久化定向到临时 workspace。工作记忆、长期记忆、用户画像、会话及 Dream 的人格、任务、Director 日程必须在 case 中显式声明；live branch case 必须声明逻辑 `now` 与 `timePolicy: "rebase_to_runtime"`，所有结构化事件时间按同一偏移平移，Director 日程按目标 Dream 日期保留本地时刻重映射，报告保留不含正文的 timeline 证据。不得隐式继承源账号记忆。可以从正在运行的测试账号只读取样，但必须使用只读 SQLite 生成不可逆脱敏、时间平移的 V2 快照，先由 fixture Agent 人工复核自由文本，再通过 `derive-branch-case` 注入预先写好的 case；禁止在真实测试账号 workspace 上构造 Runtime、执行 migration、初始化 recall tracking 或写回数据。
+- harness 报告必须同时包含机械断言和质量评审。工具是否调用、参数/结果、分支状态、持久化 diff、outbox 属于机械证据；准确性、完整性、可用性、语气、是否虚构属于质量证据。缺少独立质量评审的 run 保持 `inconclusive`，不能上线。
+- required tool 只有在对应 `tool.call` 结果成功时才算通过；失败、仅排队或只出现在 Provider tool catalog 中都不能计为成功。动态 MCP tool 也必须保留调用与结果证据。
+- `runtime:release` 前必须使用 `.user-test-runs/release-manifest.json` 通过 release gate；清单必须覆盖本次功能的全部 case，并绑定当前 Git revision、当前 case digest、独立 run 与 reviewer。复杂核心 case 在清单中提高 `minimumIndependentRuns`，不得复用同一 run 或 reviewer 冒充并行复测。
+- 用法、case 模板、review/gate 命令与覆盖边界见 `docs/user-tests/README.md`。harness 不能替代协议拒绝、安全故障注入、迁移恢复、并发幂等、视觉、跨平台或真实 NapCat/QQ 验收。
 
 基础验证：
 

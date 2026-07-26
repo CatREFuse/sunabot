@@ -72,7 +72,7 @@ export class RuntimeConversationAssets {
     delivery: ReplyDelivery | undefined
   ) {
     if (incoming.transport === "web") return undefined;
-    if (!this.host.isAdminUser(incoming.userId)) return undefined;
+    if (!this.host.isReplySenderAllowed(incoming.userId)) return undefined;
     if (!gateway.sendConversationAsset || !delivery?.emitOutbox) return undefined;
     return {
       enabled: true,
@@ -88,9 +88,6 @@ export class RuntimeConversationAssets {
     const voice = toolName === "send_voice_message";
     if (options.incoming.transport === "web") {
       throw conversationAssetContractError();
-    }
-    if (!voice && !this.host.isAdminUser(options.incoming.userId)) {
-      throw new Error("send_file is unavailable for the current user.");
     }
     if (
       (voice && options.input.kind !== "voice")
@@ -111,7 +108,12 @@ export class RuntimeConversationAssets {
     }
     const target = conversationAssetTarget(options.incoming, expectedAgentId);
     const incomingFingerprint = conversationAssetIncomingFingerprint(options.incoming, target);
-    const { relativePath, prepared, rootIdentity } = await this.prepare(options.input);
+    const { relativePath, prepared, rootIdentity } = await this.prepare(
+      options.input,
+      undefined,
+      undefined,
+      conversationAssetWorkbench(options.incoming, this.host.isAdminUser(options.incoming.userId))
+    );
     if (options.isCurrent && !options.isCurrent()) {
       throw new Error("当前会话回复已关闭，文件未排队。");
     }
@@ -170,9 +172,6 @@ export class RuntimeConversationAssets {
     if (!isRuntimeIncomingMessage(authoritativeIncoming)) {
       throw new Error(`Outbox 消息格式无效：${outbox.id}`);
     }
-    if (context.phase !== "settle" && payload.toolName === "send_file" && !this.host.isAdminUser(authoritativeIncoming.userId)) {
-      throw new Error("send_file is unavailable for the current user.");
-    }
     if (context.phase !== "settle" && !this.host.isReplySenderAllowed(authoritativeIncoming.userId)) {
       return { delivered: false, skipped: "sender_not_allowed" };
     }
@@ -200,7 +199,10 @@ export class RuntimeConversationAssets {
       }, {
         byteLength: payload.asset.byteLength,
         sha256: payload.asset.sha256
-      }, payload.asset.rootIdentity);
+      }, payload.asset.rootIdentity, conversationAssetWorkbench(
+        authoritativeIncoming,
+        this.host.isAdminUser(authoritativeIncoming.userId)
+      ));
       const sendAsset = () => sendOutboundBubble(
         gateway,
         outboundAssetBubble(assetTarget(payload, prepared))
@@ -242,24 +244,47 @@ export class RuntimeConversationAssets {
   private async prepare(
     input: PrepareOutboundConversationAssetInput,
     expected?: { byteLength: number; sha256: string },
-    expectedRootIdentity?: QueuedConversationAssetRootIdentityV1
+    expectedRootIdentity?: QueuedConversationAssetRootIdentityV1,
+    preferredWorkbench: "native" | "docker" = "native"
   ) {
     try {
       const agentWorkspace = resolveProjectPath(this.host.config.persona.agentWorkspace);
       if (!agentWorkspace) throw new Error("当前 Agent 工作区未配置。");
-      const workbenchRoot = await resolveAgentWorkbench(agentWorkspace);
-      const rootIdentity = captureOutboundConversationAssetRootIdentity(workbenchRoot);
-      if (expectedRootIdentity && !sameQueuedRootIdentity(expectedRootIdentity, rootIdentity)) {
-        throw new OutboundConversationAssetSourceError(
-          "SEND_FILE_ROOT_CHANGED",
-          "The Agent workbench root changed after the file was queued."
-        );
+      const candidates = expectedRootIdentity
+        ? ([preferredWorkbench, preferredWorkbench === "native" ? "docker" : "native"] as const)
+        : preferredWorkbench === "native"
+          ? (["native", "docker"] as const)
+          : (["docker"] as const);
+      for (const backend of candidates) {
+        try {
+          const workbenchRoot = await resolveAgentWorkbench(agentWorkspace, backend);
+          const rootIdentity = captureOutboundConversationAssetRootIdentity(workbenchRoot);
+          if (expectedRootIdentity && !sameQueuedRootIdentity(expectedRootIdentity, rootIdentity)) {
+            continue;
+          }
+          const resolvedFile = await resolveAgentWorkbenchFile(agentWorkspace, input.path, backend);
+          const relativePath = safeQueuedConversationAssetPath(rootIdentity.canonicalPath, resolvedFile);
+          const delivery = new OutboundConversationAssetDelivery({
+            rootDir: workbenchRoot,
+            rootIdentity
+          });
+          const prepared = await delivery.prepare(input, expected);
+          return { relativePath, prepared, rootIdentity };
+        } catch (error) {
+          const normalized = normalizeOutboundConversationAssetError(error);
+          const mayTryDocker = !expectedRootIdentity
+            && preferredWorkbench === "native"
+            && backend === "native"
+            && normalized instanceof OutboundConversationAssetSourceError
+            && normalized.code === "SEND_FILE_SOURCE_MISSING";
+          if (mayTryDocker) continue;
+          throw normalized;
+        }
       }
-      const resolvedFile = await resolveAgentWorkbenchFile(agentWorkspace, input.path);
-      const relativePath = safeQueuedConversationAssetPath(rootIdentity.canonicalPath, resolvedFile);
-      const delivery = new OutboundConversationAssetDelivery({ rootDir: workbenchRoot, rootIdentity });
-      const prepared = await delivery.prepare(input, expected);
-      return { relativePath, prepared, rootIdentity };
+      throw new OutboundConversationAssetSourceError(
+        "SEND_FILE_ROOT_CHANGED",
+        "The Agent workbench root changed after the file was queued."
+      );
     } catch (error) {
       throw normalizeOutboundConversationAssetError(error);
     }
@@ -366,6 +391,15 @@ export class RuntimeConversationAssets {
     }
     throw conversationAssetContractError();
   }
+}
+
+function conversationAssetWorkbench(
+  incoming: ParsedIncomingMessage,
+  isAdmin: boolean
+): "native" | "docker" {
+  return isAdmin && incoming.scope === "private" && incoming.groupId === undefined
+    ? "native"
+    : "docker";
 }
 
 function conversationAssetContractError() {

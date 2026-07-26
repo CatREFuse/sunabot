@@ -198,7 +198,7 @@ export interface ProviderToolExecutorPort {
     options: ProviderCompleteOptions,
     definitions: readonly Record<string, unknown>[],
     state?: TurnToolState
-  ): ProviderNoReplyTurn | null;
+  ): Promise<ProviderNoReplyTurn | null>;
   execute(
     calls: ResponseFunctionCallItem[],
     options: ProviderCompleteOptions,

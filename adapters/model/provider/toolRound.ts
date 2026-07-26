@@ -39,7 +39,7 @@ export async function processProviderToolRound(
   if (!preflight.rejected) {
     const deferred = executor.deferredTurn(calls, options, definitions, state);
     if (deferred) return { terminal: deferred };
-    const noReply = executor.noReplyTurn(calls, options, definitions, state);
+    const noReply = await executor.noReplyTurn(calls, options, definitions, state);
     if (noReply) return { terminal: noReply };
     if (preflight.emitAssistantText) await input.emitAssistantText();
   }

@@ -4,10 +4,7 @@ import type { Duplex } from "node:stream";
 import { URL } from "node:url";
 import { nanoid } from "nanoid";
 import { WebSocket, WebSocketServer } from "ws";
-import {
-  prepareOutboundImageSources,
-  type OutboundMediaDelivery
-} from "../../services/delivery/outboundMedia.js";
+import { prepareOutboundImageSources, type OutboundMediaDelivery } from "../../services/delivery/outboundMedia.js";
 import type { AppConfig } from "../../packages/contracts/admin/public.js";
 import type {
   AttachmentResolutionInput,
@@ -16,7 +13,6 @@ import type {
 } from "../../packages/contracts/media/media.js";
 import type {
   ConversationDirectoryPort,
-  InboundMessageV1,
   MessageLookupContextV1,
   MessagingConnectionContextV1,
   MessagingPort,
@@ -32,10 +28,14 @@ import { MAX_OUTBOUND_CONVERSATION_ASSET_INLINE_BYTES } from "../../packages/con
 import {
   extractOneBotMessageDetails,
   extractOneBotReceiptMessageId,
-  extractOneBotSender,
-  hydrateOneBotForwardContent,
-  parseOneBotInboundMessage
+  extractOneBotSender
 } from "./inboundMessageAdapter.js";
+import {
+  ingestOneBotEvent,
+  type OneBotEventDelegate,
+  type OneBotEventTrace,
+  type OneBotIngressOptions
+} from "./onebotEventIngress.js";
 import type { OneBotEvent } from "./protocol.js";
 import { normalizeMentionUserIds } from "./outboundMentions.js";
 import {
@@ -54,26 +54,7 @@ interface PendingAction {
 export const ONEBOT_AUTHENTICATED_MAX_PAYLOAD_BYTES = 16 * 1024 * 1024;
 export const ONEBOT_LOOPBACK_MAX_PAYLOAD_BYTES = 8 * 1024 * 1024;
 
-export interface OneBotEventTrace {
-  receivedAt: string;
-  accountId?: string;
-  postType?: string;
-  messageType?: string;
-  detailType?: string;
-  selfId?: number;
-  userId?: number;
-  groupId?: number;
-  messageId?: number;
-  text?: string;
-}
-
-export interface OneBotGatewayDelegate {
-  handleInboundMessage(
-    message: InboundMessageV1,
-    gateway: MessagingPort,
-    connection: MessagingConnectionContextV1
-  ): Promise<void>;
-}
+export type { OneBotEventTrace, OneBotIngressOptions } from "./onebotEventIngress.js";
 
 export interface OutboundImageAsset {
   url?: string;
@@ -100,7 +81,7 @@ export class OneBotGateway extends EventEmitter implements MessagingPort, Conver
   constructor(
     private readonly server: http.Server,
     private config: AppConfig,
-    private readonly delegate: OneBotGatewayDelegate,
+    private readonly delegate: OneBotEventDelegate,
     private readonly options: OneBotGatewayOptions = {}
   ) {
     super();
@@ -506,22 +487,16 @@ export class OneBotGateway extends EventEmitter implements MessagingPort, Conver
     }
 
     if (event.post_type) {
-      this.lastEventAtValue = new Date().toISOString();
-      if (event.post_type === "message") {
-        this.lastMessageEventAtValue = this.lastEventAtValue;
-      }
       const connection = this.sockets.get(ws);
-      this.recordEventTrace(event, this.lastEventAtValue, connection?.accountId);
-      this.emit("event", event);
-      const inbound = parseOneBotInboundMessage(event);
-      if (!inbound || !connection) return;
-      inbound.accountId = connection.accountId;
-      await hydrateOneBotForwardContent(
-        inbound,
-        event,
-        (messageId) => this.sendAction("get_forward_msg", { message_id: messageId }, connection.accountId)
-      );
-      void this.delegate.handleInboundMessage(inbound, this, connection).catch((error) => {
+      if (!connection) {
+        const receivedAt = new Date().toISOString();
+        this.lastEventAtValue = receivedAt;
+        if (event.post_type === "message") this.lastMessageEventAtValue = receivedAt;
+        this.recordEventTrace(event, receivedAt);
+        this.emit("event", event);
+        return;
+      }
+      void this.ingestEvent(event, connection).catch((error) => {
         console.error("[onebot] event handling failed", {
           postType: event.post_type,
           messageType: event.message_type,
@@ -532,6 +507,31 @@ export class OneBotGateway extends EventEmitter implements MessagingPort, Conver
         });
       });
     }
+  }
+
+  async ingestEvent(
+    event: OneBotEvent,
+    connection: MessagingConnectionContextV1,
+    options: OneBotIngressOptions = {}
+  ) {
+    return ingestOneBotEvent({
+      event,
+      connection,
+      options,
+      defaultTransport: this,
+      defaultResolveForwardMessage: (messageId) => this.sendAction(
+        "get_forward_msg",
+        { message_id: messageId },
+        connection.accountId
+      ),
+      delegate: this.delegate,
+      onReceived: (receivedAt) => {
+        this.lastEventAtValue = receivedAt;
+        if (event.post_type === "message") this.lastMessageEventAtValue = receivedAt;
+        this.recordEventTrace(event, receivedAt, connection.accountId);
+        this.emit("event", event);
+      }
+    });
   }
 
   private recordEventTrace(event: OneBotEvent, receivedAt: string, accountId?: string) {

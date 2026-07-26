@@ -27,7 +27,7 @@ export interface SendVoiceMessageInput {
 export const sendFileTool = {
   type: "function",
   name: SEND_FILE_TOOL_NAME,
-  description: "Send an existing file or image from the current Agent workbench to the current private or group conversation. The path must be relative to the Agent workbench. Use image for visible chat images, file for downloadable attachments, or auto to detect images and otherwise send a file.",
+  description: "Send an existing file or image from the current conversation workbench to the current private or group conversation. Administrator private chat prefers the Native workbench and may return a same-Agent Docker workbench file when the relative path is absent from Native; group chats and ordinary private chats use only the isolated Docker workbench. The path must be relative to the selected workbench. Use image for visible chat images, file for downloadable attachments, or auto to detect images and otherwise send a file.",
   parameters: {
     type: "object",
     additionalProperties: false,

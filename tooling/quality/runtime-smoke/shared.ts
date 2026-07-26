@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import type { RuntimeLayout, SmokeContext } from "./types.js";
+import type { RuntimeLayout } from "./types.js";
 
 const redactionValues = new Set<string>();
 
@@ -87,18 +87,6 @@ export function boundedTimeout(name: string, fallback: number, minimum: number, 
     throw new Error(`${name} 必须在 ${minimum}-${maximum} 毫秒之间。`);
   }
   return value;
-}
-
-export function isolateRuntimeEnvironment(context: SmokeContext) {
-  for (const key of context.config.providers.items.map((provider) => provider.apiKeyEnv).filter(Boolean)) {
-    delete process.env[key];
-  }
-  delete process.env[context.config.onebot.accessTokenEnv];
-  delete process.env.SUNABOT_DATABASE_PATH;
-  process.env.SUNABOT_WORKSPACE = context.workspace;
-  process.env.SUNABOT_CONFIG = context.configPath;
-  process.env[context.provider.apiKeyEnv] = context.providerToken;
-  process.env[context.config.onebot.accessTokenEnv] = context.onebotToken;
 }
 
 export function rememberSecret(secret: string) {

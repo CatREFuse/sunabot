@@ -32,6 +32,15 @@ describe("no_reply provider termination", () => {
 
     expect(onAssistantText).not.toHaveBeenCalled();
     expect(onToolCall).toHaveBeenCalledWith("no_reply");
+    expect(appendRequestLog).toHaveBeenCalledWith(expect.objectContaining({
+      category: "tool.call",
+      action: "no_reply",
+      request: {
+        callId: "call-openai-no-reply",
+        arguments: {}
+      },
+      response: { ok: true }
+    }));
     expect((create.mock.calls[0]?.[0] as Record<string, any>).tools)
       .toEqual(expect.arrayContaining([expect.objectContaining({ name: "no_reply" })]));
   });

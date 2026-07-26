@@ -23,10 +23,16 @@ export interface AgentBashEnvironment {
   };
 }
 
-export async function resolveAgentWorkbench(agentWorkspace: string) {
+export async function resolveAgentWorkbench(
+  agentWorkspace: string,
+  backend: "native" | "docker" = "native"
+) {
   const workspace = path.resolve(agentWorkspace);
   const workspaceRoot = await resolveWorkspaceRoot(workspace);
-  return resolveRegularDirectory(workspaceRoot, AGENT_WORKBENCH_DIRECTORY);
+  return resolveRegularDirectory(
+    workspaceRoot,
+    backend === "docker" ? AGENT_DOCKER_WORKBENCH_DIRECTORY : AGENT_WORKBENCH_DIRECTORY
+  );
 }
 
 export async function resolveAgentBashEnvironment(
@@ -60,12 +66,16 @@ export function resolveAgentResourceDirectory(agentWorkspace: string, kind: "sel
   return agentResourcePath(path.resolve(agentWorkspace), kind);
 }
 
-export async function resolveAgentWorkbenchFile(agentWorkspace: string, relativePath: string) {
+export async function resolveAgentWorkbenchFile(
+  agentWorkspace: string,
+  relativePath: string,
+  backend: "native" | "docker" = "native"
+) {
   const requested = relativePath.trim();
   if (!requested || path.isAbsolute(requested)) {
     throw new Error("AGENT_WORKBENCH_PATH_INVALID: path must be relative to workbench.");
   }
-  const workbenchRoot = await resolveAgentWorkbench(agentWorkspace);
+  const workbenchRoot = await resolveAgentWorkbench(agentWorkspace, backend);
   const candidate = path.resolve(workbenchRoot, requested);
   assertWithin(workbenchRoot, candidate, "AGENT_WORKBENCH_PATH_INVALID");
   const resolved = await fs.realpath(candidate);
