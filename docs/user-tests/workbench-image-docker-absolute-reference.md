@@ -10,7 +10,7 @@ Run in a fresh isolated workspace with Docker Bash and an authorized image Provi
 
 ## Expected quality
 
-The tool trace must show Docker Bash creating `/workbench/fixtures/reference.png` and `generate_img` receiving that absolute container path unchanged. The path must resolve to one reference image without exposing the host mount source.
+The system prompt must tell the Bot that an authorized Bash image path can be passed unchanged through `generate_img.referenceImagePaths`. The tool trace must show Docker Bash creating `/workbench/fixtures/reference.png` and `generate_img` receiving that absolute container path unchanged. The path must resolve to one reference image without exposing the host mount source.
 
 <!-- sunabot-user-test-case:v1 -->
 ```json

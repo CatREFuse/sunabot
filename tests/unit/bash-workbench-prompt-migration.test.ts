@@ -26,6 +26,10 @@ describe("conversation Bash workbench prompt contract", () => {
       expect((system as { content: string }).content).toContain("当前 Agent 的 `workbench/`");
       expect((system as { content: string }).content).toContain("独立 `docker-workbench/`");
       expect((system as { content: string }).content).toContain("你可以使用本轮实际提供的");
+      expect((system as { content: string }).content).toContain("`generate_img`");
+      expect((system as { content: string }).content).toContain("`selfie`");
+      expect((system as { content: string }).content).toContain("`referenceImagePaths`");
+      expect((system as { content: string }).content).toContain("原样传入");
       expect((system as { content: string }).content).toContain("`references.jsonl`");
     }
   );
@@ -86,7 +90,7 @@ describe("conversation Bash workbench prompt contract", () => {
     const content = (migrated.messages[0] as { content: string }).content;
 
     expect(content).toContain("管理员自定义规则");
-    expect(content).toContain('<bash_workbench_contract version="4">');
+    expect(content).toContain('<bash_workbench_contract version="5">');
     expect(content).toContain('<configuration_directory_index_contract version="3">');
     expect(content).toContain("`references.jsonl`");
     expect(content).not.toContain('<bash_workbench_contract version="1">');
@@ -110,10 +114,34 @@ describe("conversation Bash workbench prompt contract", () => {
     const content = (migrated.messages[0] as { content: string }).content;
 
     expect(content).toContain("管理员自定义规则");
-    expect(content).toContain('<bash_workbench_contract version="4">');
+    expect(content).toContain('<bash_workbench_contract version="5">');
     expect(content).toContain("`export_chat_media`");
     expect(content).toContain("`send_file`");
     expect(content).not.toContain('<bash_workbench_contract version="3">');
+  });
+
+  it("upgrades the persisted v4 contract with the image reference path rule", () => {
+    const template: FinalPromptTemplate = {
+      messages: [{
+        role: "system",
+        content: [
+          "管理员自定义规则",
+          '<bash_workbench_contract version="4">\n旧 Workbench 规则\n</bash_workbench_contract>'
+        ].join("\n\n")
+      }],
+      tools: [],
+      response_format: { type: "text" }
+    };
+
+    const migrated = migrateConversationBashWorkbenchTemplate(template);
+    const content = (migrated.messages[0] as { content: string }).content;
+
+    expect(content).toContain("管理员自定义规则");
+    expect(content).toContain('<bash_workbench_contract version="5">');
+    expect(content).toContain("`generate_img`");
+    expect(content).toContain("`selfie`");
+    expect(content).toContain("`referenceImagePaths`");
+    expect(content).not.toContain('<bash_workbench_contract version="4">');
   });
 
   it("inserts a developer contract when no system message exists", () => {

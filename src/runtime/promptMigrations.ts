@@ -281,7 +281,7 @@ function runtimePromptMigrations(config: AppConfig, selfiePromptDefault: string)
       [inboundId]
     );
     const bashWorkbenchId = add(
-      "conversation-bash-workbench-v4",
+      "conversation-bash-workbench-v5",
       "system",
       file,
       () => migrateConversationBashWorkbenchPrompt(config, file),
