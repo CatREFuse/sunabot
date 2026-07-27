@@ -288,6 +288,7 @@ export class SunaRuntime {
   deliverSessionOutbox(...args: Parameters<typeof runtimeIntake.runtime_deliverSessionOutbox>) { return this.inAgentContext(() => runtimeIntake.runtime_deliverSessionOutbox.call(this, ...args)); }
   conversationAssetProviderOptions(...args: Parameters<RuntimeConversationAssets["providerOptions"]>) { return this.conversationAssets.providerOptions(...args); }
   queueConversationAsset(...args: Parameters<RuntimeConversationAssets["queue"]>) { return this.inAgentContext(() => this.conversationAssets.queue(...args)); }
+  resolveWorkbenchImageReferences(...args: Parameters<RuntimeConversationAssets["resolveImageReferences"]>) { return this.inAgentContext(() => this.conversationAssets.resolveImageReferences(...args)); }
   deliverConversationAssetOutbox(...args: Parameters<RuntimeConversationAssets["deliver"]>) { return this.inAgentContext(() => this.conversationAssets.deliver(...args)); }
   voiceSnapshot(...args: Parameters<RuntimeVoice["snapshot"]>) { return this.inAgentContext(() => this.voice.snapshot(...args)); }
   voiceProviderCapability(...args: Parameters<RuntimeVoice["providerCapability"]>) { return this.voice.providerCapability(...args); }

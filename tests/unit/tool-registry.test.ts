@@ -653,6 +653,10 @@ describe("ToolRegistry", () => {
       type: ["array", "null"],
       maxItems: 4
     });
+    expect(parameters.properties.referenceImagePaths).toMatchObject({
+      type: ["array", "null"],
+      maxItems: 4
+    });
     expect(parameters.properties.referenceImageSource.enum).toEqual([
       "none",
       "current",
@@ -662,6 +666,7 @@ describe("ToolRegistry", () => {
     ]);
     expect(parameters.required).toEqual(expect.arrayContaining([
       "referenceMediaHandles",
+      "referenceImagePaths",
       "referenceImageSource",
       "dispatch_message"
     ]));
@@ -687,6 +692,10 @@ describe("ToolRegistry", () => {
       type: ["array", "null"],
       maxItems: 1
     });
+    expect(parameters.properties.referenceImagePaths).toMatchObject({
+      type: ["array", "null"],
+      maxItems: 1
+    });
     expect(parameters.properties.referenceImageSource.enum).toEqual([
       "none",
       "current",
@@ -696,6 +705,7 @@ describe("ToolRegistry", () => {
     ]);
     expect(parameters.required).toEqual(expect.arrayContaining([
       "referenceMediaHandles",
+      "referenceImagePaths",
       "referenceImageSource",
       "dispatch_message"
     ]));
@@ -719,6 +729,7 @@ describe("ToolRegistry", () => {
       resolution: "1K",
       quality: "high",
       referenceImageUrls: null,
+      referenceImagePaths: null,
       referenceMediaHandles: null,
       referenceImageSource: "none",
       dispatch_message: "图片生成完成后发送"
@@ -732,7 +743,7 @@ describe("ToolRegistry", () => {
       });
       expect(valid.statusCode).toBe(200);
 
-      for (const field of ["referenceImageUrls", "referenceMediaHandles"] as const) {
+      for (const field of ["referenceImageUrls", "referenceImagePaths", "referenceMediaHandles"] as const) {
         const invalid = await app.inject({
           method: "POST",
           url: "/validate-selfie",

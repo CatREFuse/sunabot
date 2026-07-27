@@ -21,8 +21,9 @@ import {
   readMemorySourceEntries
 } from "../../services/memory/memoryService.js";
 import {
-  resolveGenerateImgReferences,
-  type GenerateImgReferenceContext
+  resolveGenerateImgReferencesForRun,
+  type GenerateImgReferenceContext,
+  type WorkbenchImagePathResolver
 } from "../../services/tools/generateImgTool.js";
 import type { SelfieInput, SelfieRunResult } from "../../services/tools/selfieTool.js";
 import { resolveProjectPath } from "../config.js";
@@ -78,6 +79,7 @@ export async function runtime_runSelfie(this: RuntimeHost,
     options: {
       chatReferenceImageUrls?: string[];
       imageReferences?: GenerateImgReferenceContext;
+      resolveWorkbenchImagePaths?: WorkbenchImagePathResolver;
       logContext?: ProviderLogContext;
     } = {}
   ): Promise<SelfieRunResult> {
@@ -96,10 +98,11 @@ export async function runtime_runSelfie(this: RuntimeHost,
     }
 
     const defaultChatReferenceImageUrls = normalizeSelfieReferenceImageUrls(options.chatReferenceImageUrls);
-    const chatReferenceImageUrls = resolveGenerateImgReferences(input, {
+    const chatReferenceImageUrls = (await resolveGenerateImgReferencesForRun(input, {
       referenceImageUrls: defaultChatReferenceImageUrls,
-      imageReferences: options.imageReferences
-    }).referenceImageUrls.slice(0, MAX_SELFIE_REFERENCE_IMAGES - MAX_SELFIE_WORKSPACE_REFERENCE_IMAGES);
+      imageReferences: options.imageReferences,
+      resolveWorkbenchImagePaths: options.resolveWorkbenchImagePaths
+    })).referenceImageUrls.slice(0, MAX_SELFIE_REFERENCE_IMAGES - MAX_SELFIE_WORKSPACE_REFERENCE_IMAGES);
     const resolution = normalizeSelfieResolution(input.resolution, this.config.bot.tools.generateImg.resolution);
     const size = normalizeSelfieSize(input.size, this.config.bot.tools.generateImg.size, resolution);
     const quality = normalizeSelfieQuality(input.quality, this.config.bot.tools.generateImg.quality);

@@ -6,7 +6,8 @@ import type { MemoryRecallInput } from "../../../services/memory/memoryService.j
 import type { KnowledgeSearchToolPort } from "../../../services/tools/knowledgeSearchTool.js";
 import type {
   GenerateImageRunner,
-  GenerateImgReferenceContext
+  GenerateImgReferenceContext,
+  WorkbenchImagePathResolver
 } from "../../../services/tools/generateImgTool.js";
 import type { SelfieRunner } from "../../../services/tools/selfieTool.js";
 import type { SystemConfigToolPort } from "../../../services/tools/systemConfigTool.js";
@@ -39,6 +40,7 @@ export interface ProviderCompleteOptions {
   onImageGenerated?: (image: ImageResult, metadata?: GeneratedImageMetadata) => void;
   referenceImageUrls?: string[];
   imageReferences?: GenerateImgReferenceContext;
+  resolveWorkbenchImagePaths?: WorkbenchImagePathResolver;
   memory?: ProviderMemoryOptions;
   knowledge?: KnowledgeSearchToolPort;
   selfie?: ProviderSelfieOptions;

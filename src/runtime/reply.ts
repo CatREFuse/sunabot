@@ -20,11 +20,7 @@ import {
   codexControlAvailable,
   codexTurnAvailable
 } from "../../services/tools/codexControlPolicy.js";
-import {
-  GENERATE_IMG_TOOL_NAME,
-  runGenerateImg,
-  type GenerateImgReferenceContext
-} from "../../services/tools/generateImgTool.js";
+import { GENERATE_IMG_TOOL_NAME, runGenerateImg } from "../../services/tools/generateImgTool.js";
 import { SELFIE_TOOL_NAME } from "../../services/tools/selfieTool.js";
 import type { SunaRuntime } from "../runtime.js";
 import {
@@ -46,7 +42,12 @@ import { emojiPromptVariables, prepareRuntimeEmojiText } from "./emojiReply.js";
 import { currentPromptInputMessage, serializeGroupThreadPromptContext } from "./groupThreadPipeline.js";
 import { recordGeneratedImageHistory } from "./generatedImageHistory.js";
 import { errorMessage, isAbortError, isRuntimeIncomingMessage, sanitizeErrorDetail } from "./infrastructure.js";
-import { conversationRecordId, queueIncomingSnapshot, uniqueStrings } from "./messagingAttachmentHelpers.js";
+import { conversationRecordId, queueIncomingSnapshot } from "./messagingAttachmentHelpers.js";
+import {
+  deferredWorkbenchImageResolver,
+  readGenerateImgReferenceContext,
+  snapshotDeferredWorkbenchImages
+} from "./deferredImageReferences.js";
 import {
   runtime_attachReplyReferences,
   runtime_buildRecentContextMessages,
@@ -351,6 +352,11 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
           referenceImageUrls,
           childLogContext ?? logContext
         ),
+        resolveWorkbenchImagePaths: (paths) => this.resolveWorkbenchImageReferences(
+          incoming,
+          paths,
+          () => !options.signal?.aborted && (!options.isCurrent || options.isCurrent())
+        ),
         onAssistantText: options.atomicImageReply ? undefined : async (text, source = "text") => {
           if (options.isCurrent && !options.isCurrent()) return;
           const quoteReply = assistantTextCount === 0;
@@ -404,6 +410,11 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
           run: (input) => this.runSelfie(input, provider, {
             chatReferenceImageUrls: selfieChatReferenceImageUrls,
             imageReferences: generateImgReferenceContext,
+            resolveWorkbenchImagePaths: (paths) => this.resolveWorkbenchImageReferences(
+              incoming,
+              paths,
+              () => !options.signal?.aborted && (!options.isCurrent || options.isCurrent())
+            ),
             logContext
           })
         },
@@ -524,11 +535,18 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
         if (preparedAcknowledgement.text.length > DISPATCH_MESSAGE_MAX_CHARS) {
           throw new Error(`Tone 处理后的 dispatch_message 不能超过 ${DISPATCH_MESSAGE_MAX_CHARS} 个字符。`);
         }
+        const workbenchImagesByPath = await snapshotDeferredWorkbenchImages(
+          this,
+          incoming,
+          turn.toolCall,
+          () => !options.signal?.aborted && (!options.isCurrent || options.isCurrent())
+        );
         const originalRequest = {
           incoming: queueIncomingSnapshot(incoming),
           captureSequence: options.captureSequence,
           contextThroughSequence: options.contextThroughSequence,
           imageReferences: generateImgReferenceContext,
+          ...(workbenchImagesByPath ? { workbenchImagesByPath } : {}),
           replyGate: this.replyGates.capture(incoming.scope, conversationRecordId(incoming)),
           ...(options.delivery?.replyQuote ? { replyQuote: options.delivery.replyQuote } : {}),
           ...(options.delivery?.mentionUserIds?.length ? { mentionUserIds: [...options.delivery.mentionUserIds] } : {}),
@@ -716,6 +734,7 @@ export async function runtime_processDeferredToolJob(this: RuntimeHost, job: Too
       captureSequence?: unknown;
       contextThroughSequence?: unknown;
       imageReferences?: unknown;
+      workbenchImagesByPath?: unknown;
     };
     const incoming = originalRequest.incoming;
     if (!isRuntimeIncomingMessage(incoming)) {
@@ -736,17 +755,22 @@ export async function runtime_processDeferredToolJob(this: RuntimeHost, job: Too
     );
     const imageReferences = readGenerateImgReferenceContext(originalRequest.imageReferences) ??
       runtime_generateImgReferenceContext.call(this, incoming, captureSequence);
+    const resolveWorkbenchImagePaths = deferredWorkbenchImageResolver(
+      originalRequest.workbenchImagesByPath
+    );
     const result = job.toolName === GENERATE_IMG_TOOL_NAME
       ? await runGenerateImg(input, this.config.bot, (prompt, size, quality, referenceImageUrls, childLogContext) =>
           provider.generateImage(prompt, size, quality, referenceImageUrls, childLogContext ?? logContext), {
           referenceImageUrls: inboundImageUrls(incoming),
           imageReferences,
+          resolveWorkbenchImagePaths,
           logContext
         })
       : job.toolName === SELFIE_TOOL_NAME
         ? await this.runSelfie(input, provider, {
             chatReferenceImageUrls: this.collectSelfieChatReferenceImages(incoming, captureSequence),
             imageReferences,
+            resolveWorkbenchImagePaths,
             logContext
           })
         : { ok: false, error: `不支持的异步工具：${job.toolName}` };
@@ -762,31 +786,6 @@ export async function runtime_processDeferredToolJob(this: RuntimeHost, job: Too
       ? { status: "succeeded" as const, result }
       : { status: "failed" as const, result, error: { message: String(record.error ?? "图片生成失败。") } };
   }
-function readGenerateImgReferenceContext(value: unknown): GenerateImgReferenceContext | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  const record = value as Record<string, unknown>;
-  const mediaByHandleValue = record.mediaByHandle;
-  const mediaByHandle = mediaByHandleValue && typeof mediaByHandleValue === "object" && !Array.isArray(mediaByHandleValue)
-    ? Object.fromEntries(Object.entries(mediaByHandleValue)
-        .filter((entry): entry is [string, string] => typeof entry[1] === "string" && Boolean(entry[1].trim())))
-    : {};
-  return {
-    currentImageUrls: readReferenceImageUrls(record.currentImageUrls),
-    previousOutputImageUrls: readReferenceImageUrls(record.previousOutputImageUrls),
-    historyImageUrls: readReferenceImageUrls(record.historyImageUrls),
-    mediaByHandle
-  };
-}
-
-function readReferenceImageUrls(value: unknown) {
-  if (!Array.isArray(value)) return [];
-  return uniqueStrings(value
-    .filter((item): item is string => typeof item === "string")
-    .map((item) => item.trim())
-    .filter(Boolean))
-    .slice(0, 4);
-}
-
 function isSuccessfulGeneratedImageResult(value: unknown): value is { ok: true; image: ImageResult } & Record<string, unknown> {
   const result = value as { ok?: unknown; image?: ImageResult };
   return result?.ok === true && Boolean(result.image?.url || result.image?.filePath);

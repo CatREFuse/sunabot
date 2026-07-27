@@ -83,6 +83,7 @@ describe("generate_img historical reference context", () => {
       arguments: {
         prompt: "edit the selected image",
         referenceImageUrls: null,
+        referenceImagePaths: ["references/workbench.png"],
         referenceMediaHandles: ["message:generated:image:0"],
         referenceImageSource: "none"
       },
@@ -93,6 +94,9 @@ describe("generate_img historical reference context", () => {
           mediaByHandle: {
             "message:generated:image:0": "/generated-images/agents/arona/generated.png"
           }
+        },
+        workbenchImagesByPath: {
+          "references/workbench.png": "/generated-images/conversation-assets/agents/arona/workbench.png"
         }
       }
     } as never, new AbortController().signal);
@@ -102,7 +106,10 @@ describe("generate_img historical reference context", () => {
       "edit the selected image",
       expect.any(String),
       expect.any(String),
-      ["/generated-images/agents/arona/generated.png"],
+      [
+        "/generated-images/agents/arona/generated.png",
+        "/generated-images/conversation-assets/agents/arona/workbench.png"
+      ],
       expect.objectContaining({ stage: "async_image_tool" })
     );
   });

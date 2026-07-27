@@ -57,6 +57,7 @@ describe("generate_img quality", () => {
       resolution: "1K",
       quality: "high",
       referenceImageUrls: ["https://example.test/explicit.png"],
+      referenceImagePaths: ["references/workbench.png"],
       referenceMediaHandles: ["message:generated-1:image:0"],
       referenceImageSource: "previous_output"
     }, botConfig("high"), generateImage, {
@@ -67,19 +68,25 @@ describe("generate_img quality", () => {
         mediaByHandle: {
           "message:generated-1:image:0": "/generated-images/handled.png"
         }
-      }
+      },
+      resolveWorkbenchImagePaths: vi.fn(async () => [
+        "/generated-images/conversation-assets/agents/arona/workbench.png"
+      ])
     });
 
     expect(generateImage.mock.calls[0]?.[3]).toEqual([
       "/generated-images/handled.png",
+      "/generated-images/conversation-assets/agents/arona/workbench.png",
       "https://example.test/explicit.png",
       "/generated-images/previous.png"
     ]);
     expect(result).toMatchObject({
       referenceImageSource: "previous_output",
+      referenceImagePathCount: 1,
+      resolvedReferenceImagePathCount: 1,
       referenceMediaHandleCount: 1,
       resolvedReferenceMediaHandleCount: 1,
-      referenceImageCount: 3
+      referenceImageCount: 4
     });
   });
 

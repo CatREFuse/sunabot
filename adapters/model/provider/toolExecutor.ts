@@ -597,6 +597,7 @@ async function runImageGeneration(
     result = await runGenerateImg(args, options.bot, options.generateImage, {
       referenceImageUrls: options.referenceImageUrls,
       imageReferences: options.imageReferences,
+      resolveWorkbenchImagePaths: options.resolveWorkbenchImagePaths,
       logContext: options.logContext
     });
   } catch (error) {

@@ -254,6 +254,15 @@ function generatedImageRelativePath(imageUrl: string) {
   ) {
     return path.join("agents", segments[1]!, segments[2]!);
   }
+  if (
+    segments.length === 4 &&
+    segments[0] === "conversation-assets" &&
+    segments[1] === "agents" &&
+    isSafeAgentId(segments[2] ?? "") &&
+    isSafeConversationImageFileName(segments[3] ?? "")
+  ) {
+    return path.join("conversation-assets", "agents", segments[2]!, segments[3]!);
+  }
   return undefined;
 }
 
@@ -263,6 +272,13 @@ function isSafeAgentId(value: string) {
 
 function isSafeGeneratedImageFileName(value: string) {
   return /^[A-Za-z0-9][A-Za-z0-9._-]*\.png$/i.test(value) &&
+    path.basename(value) === value &&
+    !value.includes("/") &&
+    !value.includes("\\");
+}
+
+function isSafeConversationImageFileName(value: string) {
+  return /^[a-f0-9]{64}\.(?:png|jpe?g|gif|webp|avif|tiff?|bmp|heic|heif|flif|jxl|jxr|psd|ico|cr2|dng|arw|ktx2?)$/i.test(value) &&
     path.basename(value) === value &&
     !value.includes("/") &&
     !value.includes("\\");

@@ -37,11 +37,16 @@ import {
 import type { ConversationRecord, ParsedIncomingMessage } from "../../src/types.js";
 import { replyDebounceSessionId } from "../../src/runtime/replyDebounce.js";
 import { conversationRecordId } from "../../src/runtime/messagingAttachmentHelpers.js";
+import { runtime_generateImgReferenceContext } from "../../src/runtime/replyContext.js";
 import { createAdminTestConfig } from "./admin-fixtures.js";
 
 const appendRequestLog = vi.hoisted(() => vi.fn(async () => undefined));
 const recallMemory = vi.hoisted(() => vi.fn(async () => ({ ok: true, matches: [] })));
 const readUserProfileForUser = vi.hoisted(() => vi.fn(async () => undefined));
+const archiveConversationImage = vi.hoisted(() => vi.fn(async (
+  agentId: string,
+  prepared: { sha256?: string }
+) => `/generated-images/conversation-assets/agents/${agentId}/${prepared.sha256}.png`));
 
 vi.mock("../../adapters/observability/requestLog.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../adapters/observability/requestLog.js")>()),
@@ -51,6 +56,9 @@ vi.mock("../../services/memory/memoryService.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../services/memory/memoryService.js")>()),
   recallMemory,
   readUserProfileForUser
+}));
+vi.mock("../../services/media/conversationImageArchive.js", () => ({
+  archiveConversationImage
 }));
 
 const runtimes: SunaRuntime[] = [];
@@ -183,6 +191,70 @@ describe("SunaRuntime Session queue bridge", () => {
     expect(harness.store.listOutbox(sessionId).find((outbox) => outbox.kind === "onebot.conversation_asset"))
       .toMatchObject({ deliveryPartition: accountId ?? "primary" });
     expect(sentTexts(harness.gateway)).toEqual(["文件已发送"]);
+  });
+
+  it("projects a successfully sent workbench image into reusable assistant history", async () => {
+    archiveConversationImage.mockClear();
+    const harness = createRuntimeHarness(async (
+      _request: RenderedPromptRequest,
+      options: ProviderCompleteOptions = {}
+    ): Promise<ProviderTurnResult> => {
+      await options.conversationAssets!.send({
+        path: "exports/reference.png",
+        kind: "image"
+      }, {
+        callId: "call-send-reference-image",
+        toolName: "send_file"
+      });
+      return { kind: "completed", text: "图片已发送" };
+    });
+    const sendConversationAsset = harness.gateway.sendConversationAsset as unknown as ReturnType<typeof vi.fn>;
+    sendConversationAsset.mockResolvedValue({ accepted: true, messageId: "asset-image-9001" });
+    const workbench = path.join(
+      harness.runtime.config.persona.agentWorkspace,
+      "workbench",
+      "exports"
+    );
+    fs.mkdirSync(workbench, { recursive: true });
+    fs.writeFileSync(path.join(workbench, "reference.png"), Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+      "base64"
+    ));
+
+    const event = privateEvent(19_982, "把参考图发给我");
+    await handleOneBotEvent(harness.runtime, event, harness.gateway);
+    await harness.coordinator.waitForIdle({ timeoutMs: 3_000 });
+
+    const incoming = parseOneBotInboundMessage(event)!;
+    incoming.agentId = harness.runtime.config.persona.defaultAgentId;
+    incoming.accountId = "primary";
+    const record = harness.runtime.conversationRecords.get(conversationRecordId(incoming))!;
+    const imageMessage = record.messages.find((message) => message.id === "asset-image-9001");
+    expect(imageMessage).toMatchObject({
+      role: "assistant",
+      text: "[图片]",
+      toolNames: ["send_file"],
+      imageUrls: [expect.stringMatching(
+        /^\/generated-images\/conversation-assets\/agents\/plana\/[a-f0-9]{64}\.png$/
+      )]
+    });
+    expect(archiveConversationImage).toHaveBeenCalledOnce();
+    expect(harness.store.listOutbox("private:171419991").find(
+      (outbox) => outbox.kind === "onebot.conversation_asset"
+    )?.remoteReceipt).toMatchObject({
+      accepted: true,
+      messageId: "asset-image-9001",
+      conversationImageUrl: imageMessage?.imageUrls?.[0]
+    });
+    const references = runtime_generateImgReferenceContext.call(
+      harness.runtime as never,
+      { ...incoming, messageId: 19_983 },
+      record.messageCount + 1
+    );
+    expect(references.mediaByHandle).toHaveProperty(
+      "message:asset-image-9001:image:0",
+      imageMessage?.imageUrls?.[0]
+    );
   });
 
   it("lets an administrator private turn return a file created by explicit Docker Bash", async () => {

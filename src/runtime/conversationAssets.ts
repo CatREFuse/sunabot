@@ -31,6 +31,7 @@ import {
   outboundAssetBubble,
   sendOutboundBubble
 } from "../../packages/contracts/messaging/messages.js";
+import { archiveConversationImage } from "../../services/media/conversationImageArchive.js";
 import {
   OutboxDisconnectedError,
   type OutboxDeliveryContext
@@ -44,7 +45,7 @@ import { appendRequestLogStrict } from "../../adapters/observability/requestLog.
 import type { ParsedIncomingMessage } from "../types.js";
 import type { ConversationAssetDeliveryDraft, ReplyDelivery } from "./runtimeContracts.js";
 import { conversationRecordId } from "./messagingAttachmentHelpers.js";
-import { isRuntimeIncomingMessage } from "./infrastructure.js";
+import { isRuntimeIncomingMessage, saveConversationRecordsStrict } from "./infrastructure.js";
 
 import type { SunaRuntime } from "../runtime.js";
 
@@ -160,6 +161,22 @@ export class RuntimeConversationAssets {
     };
   }
 
+  async resolveImageReferences(
+    incoming: ParsedIncomingMessage,
+    paths: readonly string[],
+    isCurrent: () => boolean = () => true
+  ) {
+    const backend = conversationAssetWorkbench(incoming, this.host.isAdminUser(incoming.userId));
+    const urls: string[] = [];
+    for (const imagePath of [...new Set(paths.map((item) => String(item ?? "").trim()).filter(Boolean))].slice(0, 4)) {
+      if (!isCurrent()) throw new Error("当前会话回复已关闭，参考图未读取。");
+      const { prepared } = await this.prepare({ path: imagePath, kind: "image" }, undefined, undefined, backend);
+      if (!isCurrent()) throw new Error("当前会话回复已关闭，参考图未读取。");
+      urls.push(await archiveConversationImage(this.host.config.persona.defaultAgentId, prepared));
+    }
+    return urls;
+  }
+
   async deliver(outbox: OutboxRecord, delivery: OutboxDeliveryContext | AbortSignal) {
     if (!isOutboxDeliveryContext(delivery)) throw conversationAssetContractError();
     const context = delivery;
@@ -203,10 +220,16 @@ export class RuntimeConversationAssets {
         authoritativeIncoming,
         this.host.isAdminUser(authoritativeIncoming.userId)
       ));
-      const sendAsset = () => sendOutboundBubble(
-        gateway,
-        outboundAssetBubble(assetTarget(payload, prepared))
-      );
+      const conversationImageUrl = prepared.kind === "image"
+        ? await archiveConversationImage(payload.target.agentId, prepared)
+        : undefined;
+      const sendAsset = async () => {
+        const receipt = await sendOutboundBubble(
+          gateway,
+          outboundAssetBubble(assetTarget(payload, prepared))
+        );
+        return conversationImageUrl ? { ...receipt, conversationImageUrl } : receipt;
+      };
       remoteReceipt = await context.sendRemote(sendAsset);
     }
 
@@ -228,6 +251,29 @@ export class RuntimeConversationAssets {
       runId: payload.logRunId,
       stage: "reply"
     };
+    if (payload.asset.kind === "image") {
+      await context.settleStep("conversation_projection", async (idempotencyKey) => {
+        const receipt = context.remoteReceipt ?? remoteReceipt;
+        const imageUrl = conversationImageReceiptUrl(receipt, payload.target.agentId, payload.asset.sha256) ??
+          await this.archiveQueuedImage(payload, authoritativeIncoming);
+        const messageId = messagingReceiptMessageId(context.remoteReceipt ?? remoteReceipt) ?? idempotencyKey;
+        this.host.recordAssistantMessage(
+          authoritativeIncoming,
+          "[图片]",
+          [imageUrl],
+          payload.logRunId,
+          undefined,
+          { toolNames: [payload.toolName] },
+          { persist: false, messageId }
+        );
+        saveConversationRecordsStrict(
+          [...this.host.conversationRecords.values()],
+          idempotencyKey,
+          this.host.config,
+          this.host.protectedConversationIds()
+        );
+      });
+    }
     await context.settleStep("request_log", (idempotencyKey) => appendRequestLogStrict({
       category: "runtime.action",
       action: "reply.asset.sent",
@@ -239,6 +285,24 @@ export class RuntimeConversationAssets {
       delivered: true,
       remoteReceipt: context.remoteReceipt ?? remoteReceipt
     };
+  }
+
+  private async archiveQueuedImage(
+    payload: ConversationAssetOutboxPayload,
+    incoming: ParsedIncomingMessage
+  ) {
+    const { prepared } = await this.prepare({
+      path: payload.asset.path,
+      kind: payload.asset.kind,
+      name: payload.asset.name
+    }, {
+      byteLength: payload.asset.byteLength,
+      sha256: payload.asset.sha256
+    }, payload.asset.rootIdentity, conversationAssetWorkbench(
+      incoming,
+      this.host.isAdminUser(incoming.userId)
+    ));
+    return archiveConversationImage(payload.target.agentId, prepared);
   }
 
   private async prepare(
@@ -391,6 +455,24 @@ export class RuntimeConversationAssets {
     }
     throw conversationAssetContractError();
   }
+}
+
+function messagingReceiptMessageId(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const messageId = (value as { messageId?: unknown }).messageId;
+  return typeof messageId === "string" && messageId.trim() ? messageId.trim() : undefined;
+}
+
+function conversationImageReceiptUrl(value: unknown, agentId: string, sha256: string) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const imageUrl = (value as { conversationImageUrl?: unknown }).conversationImageUrl;
+  if (typeof imageUrl !== "string") return undefined;
+  const prefix = `/generated-images/conversation-assets/agents/${encodeURIComponent(agentId)}/`;
+  if (!imageUrl.startsWith(prefix)) return undefined;
+  const fileName = imageUrl.slice(prefix.length);
+  return fileName.startsWith(`${sha256}.`) && /^[a-f0-9]{64}\.[a-z0-9]+$/i.test(fileName)
+    ? imageUrl
+    : undefined;
 }
 
 function conversationAssetWorkbench(
