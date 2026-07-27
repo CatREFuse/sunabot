@@ -32,6 +32,7 @@ import {
   sendOutboundBubble
 } from "../../packages/contracts/messaging/messages.js";
 import { archiveConversationImage } from "../../services/media/conversationImageArchive.js";
+import { resolveWorkbenchImageReferenceAddress } from "../../services/media/workbenchImageReference.js";
 import {
   OutboxDisconnectedError,
   type OutboxDeliveryContext
@@ -167,10 +168,19 @@ export class RuntimeConversationAssets {
     isCurrent: () => boolean = () => true
   ) {
     const backend = conversationAssetWorkbench(incoming, this.host.isAdminUser(incoming.userId));
+    const agentWorkspace = resolveProjectPath(this.host.config.persona.agentWorkspace);
+    if (!agentWorkspace) throw new Error("当前 Agent 工作区未配置。");
     const urls: string[] = [];
     for (const imagePath of [...new Set(paths.map((item) => String(item ?? "").trim()).filter(Boolean))].slice(0, 4)) {
       if (!isCurrent()) throw new Error("当前会话回复已关闭，参考图未读取。");
-      const { prepared } = await this.prepare({ path: imagePath, kind: "image" }, undefined, undefined, backend);
+      const address = await resolveWorkbenchImageReferenceAddress(agentWorkspace, backend, imagePath);
+      const { prepared } = await this.prepare(
+        { path: address.path, kind: "image" },
+        undefined,
+        undefined,
+        address.backend,
+        address.exactBackend
+      );
       if (!isCurrent()) throw new Error("当前会话回复已关闭，参考图未读取。");
       urls.push(await archiveConversationImage(this.host.config.persona.defaultAgentId, prepared));
     }
@@ -309,16 +319,19 @@ export class RuntimeConversationAssets {
     input: PrepareOutboundConversationAssetInput,
     expected?: { byteLength: number; sha256: string },
     expectedRootIdentity?: QueuedConversationAssetRootIdentityV1,
-    preferredWorkbench: "native" | "docker" = "native"
+    preferredWorkbench: "native" | "docker" = "native",
+    exactWorkbench = false
   ) {
     try {
       const agentWorkspace = resolveProjectPath(this.host.config.persona.agentWorkspace);
       if (!agentWorkspace) throw new Error("当前 Agent 工作区未配置。");
-      const candidates = expectedRootIdentity
+      const candidates: readonly ("native" | "docker")[] = expectedRootIdentity
         ? ([preferredWorkbench, preferredWorkbench === "native" ? "docker" : "native"] as const)
-        : preferredWorkbench === "native"
-          ? (["native", "docker"] as const)
-          : (["docker"] as const);
+        : exactWorkbench
+          ? ([preferredWorkbench] as const)
+          : preferredWorkbench === "native"
+            ? (["native", "docker"] as const)
+            : (["docker"] as const);
       for (const backend of candidates) {
         try {
           const workbenchRoot = await resolveAgentWorkbench(agentWorkspace, backend);
@@ -337,6 +350,7 @@ export class RuntimeConversationAssets {
         } catch (error) {
           const normalized = normalizeOutboundConversationAssetError(error);
           const mayTryDocker = !expectedRootIdentity
+            && !exactWorkbench
             && preferredWorkbench === "native"
             && backend === "native"
             && normalized instanceof OutboundConversationAssetSourceError

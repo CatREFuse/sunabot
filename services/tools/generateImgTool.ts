@@ -61,7 +61,7 @@ export interface ResolvedGenerateImgReferences {
 export const generateImgTool = {
   type: "function",
   name: GENERATE_IMG_TOOL_NAME,
-  description: "Generate or edit an image from a prompt. The model must decide every image parameter and whether reference media is needed. It can pass current-workbench images directly through referenceImagePaths, using relative paths only. Prefer exact historical media handles shown in conversation history when the user identifies a sent or received chat image; use referenceImageSource as a fallback when no exact handle is suitable. Use previous_output for edits or retries of the last generated image, history for earlier same-user media, current for current or quoted media, current_and_history to combine them, and none for a fresh image. Resolved historical media handles have highest priority, followed by resolved workbench paths. Default clarity is 1K. Use resolution 2K or 4K only when the user asks for higher resolution, clearer output, wallpaper, poster, print, or explicitly says 2K/4K. Returns the saved image metadata. The system sends generated images separately; do not print local file paths or CQ codes.",
+  description: "Generate or edit an image from a prompt. The model must decide every image parameter and whether reference media is needed. It can pass current-workbench images directly through referenceImagePaths, using either a relative path or the exact authorized absolute path returned by Bash. Native Bash absolute paths must remain inside the current Agent workbench; Docker Bash paths use /workbench or its native-workbench read-only projection. Prefer exact historical media handles shown in conversation history when the user identifies a sent or received chat image; use referenceImageSource as a fallback when no exact handle is suitable. Use previous_output for edits or retries of the last generated image, history for earlier same-user media, current for current or quoted media, current_and_history to combine them, and none for a fresh image. Resolved historical media handles have highest priority, followed by resolved workbench paths. Default clarity is 1K. Use resolution 2K or 4K only when the user asks for higher resolution, clearer output, wallpaper, poster, print, or explicitly says 2K/4K. Returns the saved image metadata. The system sends generated images separately; do not print local file paths or CQ codes.",
   parameters: {
     type: "object",
     additionalProperties: false,
@@ -105,7 +105,7 @@ export const generateImgTool = {
         type: ["array", "null"],
         items: { type: "string" },
         maxItems: 4,
-        description: "Relative paths of existing image files in the current conversation workbench. Use the exact path found through Bash or another workbench tool; never pass an absolute path, URL, media handle, Base64 value, or guessed path. Use null when no workbench image is needed."
+        description: "Paths of existing images in the current authorized workbench. Pass either a workbench-relative path or the exact absolute path returned by Bash. Native absolute paths must remain under the current Agent workbench; Docker absolute paths use /workbench, including /workbench/native-workbench for its read-only Native projection. Never pass a URL, media handle, Base64 value, guessed path, or a path outside those roots. Use null when no workbench image is needed."
       },
       referenceMediaHandles: {
         type: ["array", "null"],

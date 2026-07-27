@@ -33,6 +33,8 @@
 | `docs/references/README.md` | OneBot v11、v12 协议资料的来源、版本和本地入口 | 核对 OneBot 事件、消息段、动作或兼容性时读取 |
 | `docs/user-tests/README.md` | user test harness、用例文档、隔离 workspace、质量评审与上线门禁 | 开发任何功能、编写 user test case 或执行上线前验证时读取 |
 | `docs/user-tests/workbench-image-reference.md` | workbench 图片相对路径直接进入生图工具的用户用例 | 修改 workbench 图片参数或生图参考解析时读取 |
+| `docs/user-tests/workbench-image-native-absolute-reference.md` | Native workbench 真实绝对路径直接进入生图工具的用户用例 | 修改 Native workbench 绝对路径参数解析时读取 |
+| `docs/user-tests/workbench-image-docker-absolute-reference.md` | Docker `/workbench` 绝对路径直接进入生图工具的用户用例 | 修改 Docker workbench 绝对路径参数解析时读取 |
 | `docs/user-tests/sent-image-reuse-send.md` | Bot 发送 workbench 图片并持久化可复用历史的链式首步用例 | 修改 `send_file` 图片历史投影时读取 |
 | `docs/user-tests/sent-image-reuse.md` | 精确引用 Bot 上一轮已发图片再次生图的链式次步用例 | 修改 assistant 图片句柄或历史生图参考时读取 |
 | `docs/user-tests/sampled-memory-compression.md` | 运行中测试账号 V2 样本的内容无关记忆压缩模板 | 从只读样本派生真实数据记忆压缩 case 时读取 |

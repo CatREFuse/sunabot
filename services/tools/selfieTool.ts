@@ -39,7 +39,7 @@ export type SelfieRunResult =
 export const selfieTool = {
   type: "function",
   name: SELFIE_TOOL_NAME,
-  description: "Generate a selfie or broad image of the bot's own appearance. Use when the user asks the bot to show itself, take a selfie, make an avatar, make a photo with the bot, or make the bot hold/wear/use something from chat images. A selfie can be interpreted broadly as any image where the bot's own appearance is present, not only a phone selfie pose. The selfie prompt node selects 1 to 3 stored bot references from the configured catalog by their notes. The model decides whether one additional external reference is needed: select at most one exact historical media handle, current-workbench image path, explicit URL, or automatic chat source, in that priority order. Workbench paths must be relative to the current conversation workbench. Use previous_output for edits or retries of the latest generated image, history for earlier same-user media, current for current or quoted media, current_and_history to combine them, and none when only stored bot references are needed. Do not print local file paths or CQ codes.",
+  description: "Generate a selfie or broad image of the bot's own appearance. Use when the user asks the bot to show itself, take a selfie, make an avatar, make a photo with the bot, or make the bot hold/wear/use something from chat images. A selfie can be interpreted broadly as any image where the bot's own appearance is present, not only a phone selfie pose. The selfie prompt node selects 1 to 3 stored bot references from the configured catalog by their notes. The model decides whether one additional external reference is needed: select at most one exact historical media handle, current-workbench image path, explicit URL, or automatic chat source, in that priority order. Workbench paths may be relative or the exact authorized absolute path returned by Native or Docker Bash. Use previous_output for edits or retries of the latest generated image, history for earlier same-user media, current for current or quoted media, current_and_history to combine them, and none when only stored bot references are needed. Do not print local file paths or CQ codes.",
   parameters: {
     type: "object",
     additionalProperties: false,
@@ -83,7 +83,7 @@ export const selfieTool = {
         type: ["array", "null"],
         items: { type: "string" },
         maxItems: 1,
-        description: "At most one relative path of an existing image in the current conversation workbench. Use the exact path found through Bash or another workbench tool; never pass an absolute path, URL, media handle, Base64 value, or guessed path. Use null when no workbench image is needed."
+        description: "At most one path of an existing image in the current authorized workbench. Pass either a workbench-relative path or the exact absolute path returned by Bash. Native absolute paths must remain under the current Agent workbench; Docker absolute paths use /workbench, including /workbench/native-workbench for its read-only Native projection. Never pass a URL, media handle, Base64 value, guessed path, or a path outside those roots. Use null when no workbench image is needed."
       },
       referenceMediaHandles: {
         type: ["array", "null"],

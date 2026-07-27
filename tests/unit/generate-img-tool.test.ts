@@ -90,6 +90,30 @@ describe("generate_img quality", () => {
     });
   });
 
+  it("passes an absolute workbench path to the authorized resolver unchanged", async () => {
+    const generateImage = vi.fn(async () => ({
+      url: "/generated-images/absolute.png",
+      filePath: "/tmp/absolute.png"
+    }));
+    const resolveWorkbenchImagePaths = vi.fn(async () => [
+      "/generated-images/conversation-assets/agents/arona/absolute.png"
+    ]);
+
+    await runGenerateImg({
+      prompt: "use the exact workbench file",
+      referenceImagePaths: ["/workbench/fixtures/reference.png"],
+      referenceImageUrls: null,
+      referenceMediaHandles: null,
+      referenceImageSource: "none"
+    }, botConfig("high"), generateImage, {
+      resolveWorkbenchImagePaths
+    });
+
+    expect(resolveWorkbenchImagePaths).toHaveBeenCalledWith([
+      "/workbench/fixtures/reference.png"
+    ]);
+  });
+
   it("honors the model choice to generate without automatic reference images", async () => {
     const generateImage = vi.fn(async () => ({
       url: "/generated-images/test.png",
