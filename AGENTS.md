@@ -37,6 +37,8 @@
 | `docs/user-tests/workbench-image-docker-absolute-reference.md` | Docker `/workbench` 绝对路径直接进入生图工具的用户用例 | 修改 Docker workbench 绝对路径参数解析时读取 |
 | `docs/user-tests/sent-image-reuse-send.md` | Bot 发送 workbench 图片并持久化可复用历史的链式首步用例 | 修改 `send_file` 图片历史投影时读取 |
 | `docs/user-tests/sent-image-reuse.md` | 精确引用 Bot 上一轮已发图片再次生图的链式次步用例 | 修改 assistant 图片句柄或历史生图参考时读取 |
+| `docs/user-tests/sent-emoji-reuse-send.md` | Bot 发送自身图库表情并持久化可复用媒体的链式首步用例 | 修改表情投递后的会话媒体投影时读取 |
+| `docs/user-tests/sent-emoji-reuse.md` | 精确引用 Bot 上一轮已发表情再次生图的链式次步用例 | 修改表情历史句柄或表情参考生图时读取 |
 | `docs/user-tests/sampled-memory-compression.md` | 运行中测试账号 V2 样本的内容无关记忆压缩模板 | 从只读样本派生真实数据记忆压缩 case 时读取 |
 | `docs/user-tests/sampled-dream.md` | 运行中测试账号 V2 样本的内容无关 Dream 模板 | 从只读样本派生真实数据 Dream case 时读取 |
 

@@ -33,6 +33,7 @@ let workspaceDirectory = "";
 let imagePath = "";
 let imageBytes: Buffer;
 let emojiFileName = "";
+let emojiArchiveUrl = "";
 let config: AppConfig;
 let closeApplicationDataStores: typeof import("../../adapters/sqlite/applicationDataStore.js").closeApplicationDataStores;
 let SessionStore: typeof import("../../services/sessions/sessionStore.js").SessionStore;
@@ -89,6 +90,7 @@ beforeAll(async () => {
     }
   }).png().toBuffer();
   emojiFileName = `emoji-${createHash("sha256").update(imageBytes).digest("hex")}.png`;
+  emojiArchiveUrl = `/generated-images/conversation-assets/agents/koharu/${emojiFileName.slice("emoji-".length)}`;
   imagePath = emojiMediaLocation(config, emojiFileName).filePath;
   await fs.mkdir(path.dirname(imagePath), { recursive: true });
   await fs.writeFile(imagePath, imageBytes);
@@ -111,7 +113,7 @@ afterAll(async () => {
 });
 
 describe("emoji durable delivery chain", () => {
-  it("records mixed text without emoji history and skips pure emoji conversation records", async () => {
+  it("records sent emojis as reusable conversation media while keeping pure emojis out of memory", async () => {
     const incoming = privateIncoming();
     const providerText = "收到[/开心]";
     const host = deliveryHost(vi.fn(async (value: string) => value), providerText);
@@ -139,12 +141,17 @@ describe("emoji durable delivery chain", () => {
     expect(recordAssistantMessage).toHaveBeenCalledWith(
       incoming,
       "收到",
-      [],
+      [emojiArchiveUrl],
       undefined,
       undefined,
       { messageOrigin: "text" },
       expect.objectContaining({ messageId: "sent-emoji" })
     );
+    await expect(fs.readFile(path.join(
+      workspaceDirectory,
+      "business/media/images/conversation-assets/agents/koharu",
+      emojiFileName.slice("emoji-".length)
+    ))).resolves.toEqual(imageBytes);
 
     const pureEmojiText = "[/开心]";
     recordAssistantMessage.mockClear();
@@ -167,13 +174,23 @@ describe("emoji durable delivery chain", () => {
       undefined,
       emojiPlanFor(pureEmojiText)
     );
-    expect(recordAssistantMessage).not.toHaveBeenCalled();
+    expect(recordAssistantMessage).toHaveBeenCalledWith(
+      incoming,
+      "[图片]",
+      [emojiArchiveUrl],
+      undefined,
+      undefined,
+      { messageOrigin: "text" },
+      expect.objectContaining({ messageId: "direct-pure-emoji" })
+    );
 
     const scheduleMemoryCompression = vi.fn();
     const enqueueConversationMemory = vi.fn(async () => undefined);
+    recordAssistantMessage.mockClear();
     Object.assign(host, {
       conversationRecords: new Map(),
       enqueueConversationMemory,
+      protectedConversationIds: () => new Set<string>(),
       scheduleMemoryCompression,
       scheduleMemoryDrain: vi.fn(),
       hooks: {
@@ -187,7 +204,7 @@ describe("emoji durable delivery chain", () => {
       "",
       false,
       [{
-        url: `/generated-images/workbench/koharu/emoji/${emojiFileName}`,
+        url: emojiArchiveUrl,
         filePath: imagePath
       }],
       undefined,
@@ -216,7 +233,15 @@ describe("emoji durable delivery chain", () => {
         }
       }
     );
-    expect(recordAssistantMessage).not.toHaveBeenCalled();
+    expect(recordAssistantMessage).toHaveBeenCalledWith(
+      incoming,
+      "[图片]",
+      [emojiArchiveUrl],
+      undefined,
+      undefined,
+      { messageOrigin: "text", toolNames: undefined },
+      expect.objectContaining({ messageId: "durable-emoji", persist: false })
+    );
     expect(scheduleMemoryCompression).not.toHaveBeenCalled();
     expect(enqueueConversationMemory).not.toHaveBeenCalled();
   });
@@ -254,7 +279,7 @@ describe("emoji durable delivery chain", () => {
         text: "",
         quoteReply: false,
         replyToMessageId: null,
-        generatedImages: [expect.objectContaining({ filePath: imagePath })],
+        generatedImages: [expect.objectContaining({ url: emojiArchiveUrl, filePath: imagePath })],
         contentSegments: [{ type: "sticker", imageIndex: 0 }]
       })
     ]);
@@ -301,7 +326,7 @@ describe("emoji durable delivery chain", () => {
     if (draft?.kind !== "onebot.reply") throw new Error("expected onebot reply draft");
     expect(draft.payload.payload).toMatchObject({
       text: "",
-      generatedImages: [{ filePath: imagePath }],
+      generatedImages: [{ url: emojiArchiveUrl, filePath: imagePath }],
       contentSegments: [{ type: "sticker", imageIndex: 0 }]
     });
   });
@@ -698,7 +723,10 @@ describe("emoji durable delivery chain", () => {
         { type: "sticker", imageIndex: 0 },
         { type: "text", text: "马上处理" }
       ],
-      generatedImages: [{ filePath: imagePath }]
+      generatedImages: [{
+        url: `/generated-images/workbench/koharu/emoji/${emojiFileName}`,
+        filePath: imagePath
+      }]
     });
     expect(deferred?.acknowledgement.dedupeKey).toBe("tool-ack:codex:emoji-deferred-call");
     expect(deferred?.deferred.toolCall.arguments).not.toHaveProperty("dispatch_message");

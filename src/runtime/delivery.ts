@@ -263,6 +263,7 @@ export async function runtime_sendAssistantReply(this: RuntimeHost,
       deliveryParts = [{ text: replyText, images: outboundImageAssets, primary: true }];
     }
     const generatedImageUrls = generatedImages.flatMap((image) => image.url ? [image.url] : []);
+    const sentImageUrls = [...new Set(outboundImageAssets.flatMap((image) => image.url ? [image.url] : []))];
     if (!replyText && !outboundImageAssets.length) {
       throw new Error("模型回复为空。");
     }
@@ -324,10 +325,10 @@ export async function runtime_sendAssistantReply(this: RuntimeHost,
     const pureEmojiReply = !replyText
       && outboundImageAssets.length > 0
       && outboundImageAssets.every(isEmojiImageResult);
-    const record = pureEmojiReply ? undefined : this.recordAssistantMessage(
+    const record = this.recordAssistantMessage(
         incoming,
         replyText || "[图片]",
-        generatedImageUrls,
+        sentImageUrls,
         logRunId,
         undefined,
         trace,
@@ -364,7 +365,7 @@ export async function runtime_sendAssistantReply(this: RuntimeHost,
       context: { scope: incoming.scope, userId: incoming.userId, groupId: incoming.groupId, isAdmin }
     });
 
-    return record;
+    return pureEmojiReply ? undefined : record;
   }
 export function runtime_replyDeliveryDraft(this: RuntimeHost,
     incoming: ParsedIncomingMessage,
@@ -439,12 +440,11 @@ export async function runtime_deliverReplyOutbox(
   }
 
     const settleConversation = (idempotencyKey?: string) => {
-      if (pureEmojiReply) return undefined;
       const outboundMessageId = messagingReceiptMessageId(delivery?.remoteReceipt ?? remoteReceipt);
       const record = this.recordAssistantMessage(
         incoming,
         payload.text || "[图片]",
-        generatedImageUrls,
+        [...new Set(generatedImageAssets.flatMap((image) => image.url ? [image.url] : []))],
         payload.logRunId,
         undefined,
         {
@@ -465,7 +465,7 @@ export async function runtime_deliverReplyOutbox(
           this.config,
           this.protectedConversationIds()
         );
-      } else {
+      } else if (!pureEmojiReply) {
         this.scheduleMemoryCompression(record);
       }
       return record;

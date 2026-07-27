@@ -2,10 +2,10 @@ import crypto from "node:crypto";
 import sharp from "sharp";
 import type { ImageResult } from "../../packages/contracts/media/media.js";
 import type { EmojiMarkerPlan } from "../../services/emojis/emojiCatalog.js";
+import { archiveConversationImage } from "../../services/media/conversationImageArchive.js";
 import { writeContentAddressedEmojiFile } from "../admin/emojiFileIo.js";
 import type { AppConfig } from "../types.js";
 import {
-  assertPlannedEmojiAssetsIntegrity,
   readPlannedEmojiAssets
 } from "./emojiAssets.js";
 import { emojiMediaLocation } from "./emojiStore.js";
@@ -18,11 +18,23 @@ export async function prepareEmojiDeliveryImages(
   plan: EmojiMarkerPlan
 ): Promise<ImageResult[]> {
   if (!plan.expectedImages.length) return [];
-  if (config.bot.emojiSendSize === 1024) {
-    await assertPlannedEmojiAssetsIntegrity(config, plan);
-    return plan.expectedImages.map((image) => ({ ...image }));
-  }
   const assets = await readPlannedEmojiAssets(config, plan);
+  if (config.bot.emojiSendSize === 1024) {
+    const resolved = new Map<string, Promise<ImageResult>>();
+    return Promise.all(assets.map((asset) => {
+      let image = resolved.get(asset.record.fileName);
+      if (!image) {
+        image = archiveEmojiReference(
+          config,
+          asset.record.fileName,
+          asset.image.filePath!,
+          asset.bytes
+        );
+        resolved.set(asset.record.fileName, image);
+      }
+      return image.then((value) => ({ ...value }));
+    }));
+  }
   const resolved = new Map<string, ImageResult>();
   for (const asset of assets) {
     let image = resolved.get(asset.record.fileName);
@@ -80,5 +92,27 @@ async function createResizedEmoji(
   const fileName = `emoji-${hash}.${format}`;
   const location = emojiMediaLocation(config, fileName);
   await writeContentAddressedEmojiFile(location.filePath, resized, hash, {});
-  return { url: location.url, filePath: location.filePath };
+  return archiveEmojiReference(config, fileName, location.filePath, resized);
+}
+
+async function archiveEmojiReference(
+  config: AppConfig,
+  fileName: string,
+  filePath: string,
+  bytes: Buffer
+) {
+  const digest = crypto.createHash("sha256").update(bytes).digest("hex");
+  const format = fileName.endsWith(".gif") ? "gif" : "png";
+  if (fileName !== `emoji-${digest}.${format}`) {
+    throw new Error("表情图片内容校验失败。");
+  }
+  const url = await archiveConversationImage(config.persona.defaultAgentId, {
+    kind: "image",
+    name: fileName,
+    source: `base64://${bytes.toString("base64")}`,
+    byteLength: bytes.byteLength,
+    sha256: digest,
+    mimeType: format === "gif" ? "image/gif" : "image/png"
+  });
+  return { url, filePath };
 }

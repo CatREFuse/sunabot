@@ -8,6 +8,7 @@ import {
 } from "../../src/runtime/reply.js";
 import { runtime_collectSelfieChatReferenceImages } from "../../src/runtime/selfie.js";
 import { conversationRecordId } from "../../src/runtime/messagingAttachmentHelpers.js";
+import { runGenerateImg } from "../../services/tools/generateImgTool.js";
 import { createAdminTestConfig } from "./admin-fixtures.js";
 
 describe("generate_img historical reference context", () => {
@@ -20,6 +21,54 @@ describe("generate_img historical reference context", () => {
 
     expect(toContextChatMessage(message, false, { userId: "9", name: "Admin" }).content)
       .toContain("message:generated-1:image:0");
+  });
+
+  it("passes a sent catalog emoji handle through the next generate_img call", async () => {
+    const incoming = incomingMessage();
+    const emojiUrl = "/generated-images/conversation-assets/agents/arona/emoji.png";
+    const record: ConversationRecord = {
+      id: conversationRecordId(incoming),
+      accountId: incoming.accountId,
+      agentId: incoming.agentId,
+      scope: incoming.scope,
+      title: "group",
+      userId: incoming.userId,
+      groupId: incoming.groupId,
+      messageCount: 2,
+      lastAt: incoming.time,
+      lastText: incoming.text,
+      messages: [
+        conversationMessage({
+          id: "sent-catalog-emoji",
+          role: "assistant",
+          sequence: 0,
+          imageUrls: [emojiUrl]
+        }),
+        conversationMessage({
+          id: String(incoming.messageId),
+          role: "user",
+          sequence: 1
+        })
+      ]
+    };
+    const references = runtime_generateImgReferenceContext.call({
+      conversationRecords: new Map([[record.id, record]]),
+      contextMessageLimit: () => 48
+    } as never, incoming, 2);
+    const generateImage = vi.fn(async () => ({
+      url: "/generated-images/agents/arona/output.png",
+      filePath: "/tmp/output.png"
+    }));
+
+    await runGenerateImg({
+      prompt: "use the exact sent sticker",
+      referenceMediaHandles: ["message:sent-catalog-emoji:image:0"],
+      referenceImageSource: "none"
+    }, createAdminTestConfig(process.cwd()).bot, generateImage, {
+      imageReferences: references
+    });
+
+    expect(generateImage.mock.calls[0]?.[3]).toEqual([emojiUrl]);
   });
 
   it("keeps explicit handles conversation-scoped while automatic history stays on the same user", () => {

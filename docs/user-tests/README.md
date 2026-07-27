@@ -76,6 +76,11 @@ Executable branch examples:
 - [`sampled-memory-compression.md`](./sampled-memory-compression.md)
 - [`sampled-dream.md`](./sampled-dream.md)
 
+Stateful media chains:
+
+- [`sent-image-reuse-send.md`](./sent-image-reuse-send.md) → [`sent-image-reuse.md`](./sent-image-reuse.md)
+- [`sent-emoji-reuse-send.md`](./sent-emoji-reuse-send.md) → [`sent-emoji-reuse.md`](./sent-emoji-reuse.md)
+
 ## Read-only test-account sampling
 
 Branch cases may sample the active test accounts:
