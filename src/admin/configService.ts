@@ -12,11 +12,7 @@ import type {
   BroadcastStormConfig,
   ProviderConfig
 } from "../types.js";
-import {
-  AGENT_TOOL_NAMES,
-  MAX_REPLY_DEBOUNCE_MS,
-  MIN_REPLY_DEBOUNCE_MS
-} from "../types.js";
+import { AGENT_TOOL_NAMES } from "../types.js";
 import { AdminApiError, badRequest, conflict } from "./errors.js";
 import { getModelCatalogEntry } from "../../packages/contracts/admin/models.js";
 import {
@@ -63,6 +59,10 @@ import { validateNormalReplyConfig } from "./normalReplyConfig.js";
 import { ConfigDoctorApplyService, type DoctorCandidateInput } from "./configDoctorApply.js";
 import { configFieldStates, type ConfigFieldStates } from "./configFieldStates.js";
 import { validateMemoryConfig } from "./memoryConfigValidation.js";
+import {
+  validateBotConfigSection,
+  type BotConfigSection
+} from "./botConfigValidation.js";
 export type { DoctorCandidateInput } from "./configDoctorApply.js";
 export { configFieldStates } from "./configFieldStates.js";
 export { configRevision, stableJson } from "./configRevision.js";
@@ -82,7 +82,7 @@ export interface ConfigSectionValueMap {
   providers: AppConfig["providers"];
   broadcastStorm: BroadcastStormConfig;
   normalReply: AppConfig["normalReply"];
-  bot: Pick<BotConfig, "adminQq" | "adminName" | "replyDebounceMs" | "pokeOnNoReply" | "quoteGroupReplies" | "quoteGroupReplyExcludedUserIds" | "contextMessageLimit" | "emojiSendSize" | "emojiSendSeparately">;
+  bot: BotConfigSection;
   tone: BotToneSettings;
   memory: BotMemorySettings;
   director: BotDirectorSettings;
@@ -278,7 +278,7 @@ export function validateConfigSectionValue<S extends ConfigSection>(
     case "providers": return validateProviders(value, current?.providers) as ConfigSectionValueMap[S];
     case "broadcastStorm": return validateBroadcastStormConfig(value) as ConfigSectionValueMap[S];
     case "normalReply": return validateNormalReplyConfig(value) as ConfigSectionValueMap[S];
-    case "bot": return validateBot(value, current?.bot) as ConfigSectionValueMap[S];
+    case "bot": return validateBotConfigSection(value, current) as ConfigSectionValueMap[S];
     case "tone": return validateTone(value, current?.providers) as ConfigSectionValueMap[S];
     case "memory": return validateMemoryConfig(value) as ConfigSectionValueMap[S];
     case "director": return validateDirector(value) as ConfigSectionValueMap[S];
@@ -412,53 +412,6 @@ function validateProvider(input: unknown, field: string): ProviderConfig {
     ...(visionProviderId ? { visionProviderId } : {}),
     ...(visionModel ? { visionModel } : {})
   };
-}
-
-function validateBot(input: unknown, current?: BotConfig): ConfigSectionValueMap["bot"] {
-  const value = object(input, "bot");
-  exactKeys(value, [
-    "adminQq", "adminName", "replyDebounceMs", "pokeOnNoReply", "quoteGroupReplies", "quoteGroupReplyExcludedUserIds", "contextMessageLimit", "emojiSendSize", "emojiSendSeparately"
-  ], "bot");
-  const adminQq = requiredString(value.adminQq, "bot.adminQq", { trim: true, min: 0, max: 32, allowEmpty: true });
-  if (adminQq && !/^\d+$/.test(adminQq)) badRequest("CONFIG_INVALID", "管理员 QQ 必须是数字。", "bot.adminQq");
-  const quoteGroupReplyExcludedUserIds = stringArray(
-    value.quoteGroupReplyExcludedUserIds,
-    "bot.quoteGroupReplyExcludedUserIds",
-    100,
-    32
-  );
-  const invalidIndex = quoteGroupReplyExcludedUserIds.findIndex((userId) => !/^\d+$/.test(userId));
-  if (invalidIndex >= 0) {
-    badRequest(
-      "CONFIG_INVALID",
-      "过滤名单中的 QQ 必须是数字。",
-      `bot.quoteGroupReplyExcludedUserIds.${invalidIndex}`
-    );
-  }
-  return {
-    adminQq,
-    adminName: requiredString(value.adminName, "bot.adminName", { trim: true, min: 1, max: 80 }),
-    replyDebounceMs: integer(
-      value.replyDebounceMs,
-      "bot.replyDebounceMs",
-      MIN_REPLY_DEBOUNCE_MS,
-      MAX_REPLY_DEBOUNCE_MS
-    ),
-    pokeOnNoReply: boolean(value.pokeOnNoReply, "bot.pokeOnNoReply"),
-    quoteGroupReplies: boolean(value.quoteGroupReplies, "bot.quoteGroupReplies"),
-    quoteGroupReplyExcludedUserIds: uniqueStrings(quoteGroupReplyExcludedUserIds),
-    contextMessageLimit: integer(value.contextMessageLimit, "bot.contextMessageLimit", 1, 120),
-    emojiSendSize: emojiSendSize(value.emojiSendSize, current?.emojiSendSize ?? 512),
-    emojiSendSeparately: boolean(value.emojiSendSeparately, "bot.emojiSendSeparately")
-  };
-}
-
-function emojiSendSize(value: unknown, fallback: BotConfig["emojiSendSize"]) {
-  const candidate = value == null ? fallback : value;
-  if (candidate === 64 || candidate === 128 || candidate === 256 || candidate === 512 || candidate === 1024) {
-    return candidate;
-  }
-  badRequest("CONFIG_INVALID", "表情发送尺寸无效。", "bot.emojiSendSize");
 }
 
 function validateTone(input: unknown, providers?: AppConfig["providers"]): BotToneSettings {
@@ -719,9 +672,12 @@ export function validateCompleteConfig(config: AppConfig) {
   validateProviders(config.providers);
   validateBroadcastStormConfig(config.broadcastStorm);
   validateNormalReplyConfig(config.normalReply);
-  validateBot({
+  validateBotConfigSection({
     adminQq: config.bot.adminQq,
     adminName: config.bot.adminName,
+    replyModel: config.bot.replyModel,
+    replyReasoningEffort: config.bot.replyReasoningEffort,
+    imageReader: config.bot.imageReader,
     replyDebounceMs: config.bot.replyDebounceMs,
     pokeOnNoReply: config.bot.pokeOnNoReply,
     quoteGroupReplies: config.bot.quoteGroupReplies,
@@ -729,7 +685,7 @@ export function validateCompleteConfig(config: AppConfig) {
     contextMessageLimit: config.bot.contextMessageLimit,
     emojiSendSize: config.bot.emojiSendSize,
     emojiSendSeparately: config.bot.emojiSendSeparately
-  });
+  }, config);
   validateTone(config.bot.tone, config.providers);
   validateDirector(config.bot.director ?? { enabled: false });
   validateMemoryConfig(config.bot.memory);

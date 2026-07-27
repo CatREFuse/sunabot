@@ -531,14 +531,18 @@ describe("SunaRuntime Session queue bridge", () => {
     const promptIds: string[] = [];
     const classifierModels: Array<{ model: string; effort?: string }> = [];
     const harness = createRuntimeHarness(async () => ({ kind: "completed", text: "routed" }));
+    const getProviderForModel = harness.runtime.getProviderForModel.bind(harness.runtime);
     const internals = harness.runtime as unknown as {
       renderPromptRequest(id: string, variables: Record<string, unknown>): Promise<RenderedPromptRequest>;
       getProviderForModel(model: string, effort?: string): OpenAIProvider;
       completePrompt(provider: OpenAIProvider, request: RenderedPromptRequest): Promise<string>;
     };
     internals.getProviderForModel = (model, effort) => {
-      classifierModels.push({ model, effort });
-      return {} as OpenAIProvider;
+      if (model === "gpt-5.4-mini") {
+        classifierModels.push({ model, effort });
+        return {} as OpenAIProvider;
+      }
+      return getProviderForModel(model, effort as never);
     };
     internals.completePrompt = async () => JSON.stringify({
       schema_version: 1,
@@ -588,6 +592,7 @@ describe("SunaRuntime Session queue bridge", () => {
       return { kind: "completed", text: `raw reply ${mainRequests.length}` };
     });
     const harness = createRuntimeHarness(completeRequestTurn);
+    const getProviderForModel = harness.runtime.getProviderForModel.bind(harness.runtime);
     const classifierFailure = vi.fn(async () => {
       throw new Error("thread classifier unavailable");
     });
@@ -596,7 +601,9 @@ describe("SunaRuntime Session queue bridge", () => {
       completePrompt(provider: OpenAIProvider, request: RenderedPromptRequest): Promise<string>;
       renderPromptRequest(id: string, variables: Record<string, unknown>): Promise<RenderedPromptRequest>;
     };
-    internals.getProviderForModel = () => ({} as OpenAIProvider);
+    internals.getProviderForModel = (model, effort) => model === "gpt-5.4-mini"
+      ? ({} as OpenAIProvider)
+      : getProviderForModel(model, effort as never);
     internals.completePrompt = classifierFailure;
     internals.renderPromptRequest = async (id, variables) => {
       if (id === "orchestrator.group-thread") {

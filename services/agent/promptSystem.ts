@@ -248,6 +248,7 @@ function normalizeRenderedMessages(value: unknown): ChatMessage[] {
       );
     }
     const imageUrls = stringArray(message.imageUrls);
+    const imageAltTexts = stringArray(message.imageAltTexts);
     const localImagePaths = stringArray(message.localImagePaths);
     return {
       role: message.role,
@@ -255,6 +256,7 @@ function normalizeRenderedMessages(value: unknown): ChatMessage[] {
         ? message.content
         : stringifyVariable(message.content as PromptVariableValue),
       ...(imageUrls.length ? { imageUrls } : {}),
+      ...(imageAltTexts.length ? { imageAltTexts } : {}),
       ...(localImagePaths.length ? { localImagePaths } : {})
     };
   });

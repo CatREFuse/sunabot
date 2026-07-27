@@ -89,6 +89,20 @@ describe("workbench image reference addresses", () => {
       "/etc/passwd"
     )).rejects.toThrow("WORKBENCH_IMAGE_PATH_OUTSIDE_AUTHORIZED_ROOT");
   });
+
+  it("resolves portable knowledge image paths from the Native workbench", async () => {
+    const workspace = await temporaryAgentWorkspace();
+
+    await expect(resolveWorkbenchImageReferenceAddress(
+      workspace,
+      "docker",
+      "knowledge/memory-images/reference.png"
+    )).resolves.toEqual({
+      path: path.join("knowledge", "memory-images", "reference.png"),
+      backend: "native",
+      exactBackend: true
+    });
+  });
 });
 
 async function temporaryAgentWorkspace() {

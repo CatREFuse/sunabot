@@ -123,6 +123,7 @@ describe("generate_img historical reference context", () => {
     const host = {
       config: createAdminTestConfig(process.cwd()),
       getProvider: () => ({ generateImage }),
+      getProviderForModel: () => ({ generateImage }),
       conversationRecords: new Map(),
       contextMessageLimit: () => 48
     };
@@ -195,6 +196,7 @@ describe("generate_img historical reference context", () => {
     const host = {
       config: createAdminTestConfig(process.cwd()),
       getProvider: () => ({}),
+      getProviderForModel: () => ({}),
       conversationRecords: new Map([[record.id, record]]),
       contextMessageLimit: () => 48,
       collectSelfieChatReferenceImages: runtime_collectSelfieChatReferenceImages,

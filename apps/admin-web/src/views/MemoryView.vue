@@ -6,6 +6,7 @@ import { useMemory } from "../composables/useMemory";
 import { useMemoryOperationLogs } from "../composables/useMemoryOperationLogs";
 import type { MemoryEntry, MemorySourceId, MemoryWritePayload } from "../types";
 import DreamHistoryPanel from "../components/memory/DreamHistoryPanel.vue";
+import AirMemoryPanel from "../components/memory/AirMemoryPanel.vue";
 import MemoryEditorDialog from "../components/memory/MemoryEditorDialog.vue";
 import MemoryEntryRow from "../components/memory/MemoryEntryRow.vue";
 import MemoryInspector from "../components/memory/MemoryInspector.vue";
@@ -16,7 +17,7 @@ import DialogOverlay from "../components/ui/DialogOverlay.vue";
 import { sortByMemoryTime, type MemorySortDirection, type MemorySortField } from "../utils/memorySort";
 
 const PAGE_SIZE = 20;
-type MemorySectionId = MemorySourceId | "dream";
+type MemorySectionId = MemorySourceId | "air" | "dream";
 type EditableMemorySourceId = Exclude<MemorySourceId, "working">;
 
 const data = useMemory();
@@ -45,6 +46,7 @@ let desktopInspectorMediaQuery: MediaQueryList | undefined;
 
 const sections = computed<readonly { id: MemorySectionId; title: string }[]>(() => [
   ...data.sources.value.map((item) => ({ id: item.id, title: item.title })),
+  { id: "air", title: "场域知识" },
   { id: "dream", title: "梦境" }
 ]);
 const activeTitle = computed(() => sections.value.find((item) => item.id === activeSection.value)?.title ?? "记忆");
@@ -57,6 +59,7 @@ const shortWorkingRevision = computed(() => data.document.value?.revision?.slice
 const sourceEntries = computed(() => data.entries.value.filter((entry) => entry.source === source.value));
 const currentTotal = computed(() => {
   if (activeSection.value === "working") return workingCount.value;
+  if (activeSection.value === "air") return 1;
   if (activeSection.value === "dream") return dreams.items.value.length;
   return sourceEntries.value.length;
 });
@@ -64,6 +67,7 @@ const metricLabel = computed(() => ({
   working: "条工作记忆",
   long_term: "条长期记忆",
   user_profile: "位用户",
+  air: "份场域知识",
   dream: "次梦境"
 } satisfies Record<MemorySectionId, string>)[activeSection.value]);
 const editableSource = computed<EditableMemorySourceId>(() => source.value === "user_profile" ? "user_profile" : "long_term");
@@ -288,7 +292,7 @@ function selectSection(next: MemorySectionId) {
   mobileInspectorOpen.value = false;
   status.value = "";
   statusKind.value = "";
-  if (next !== "dream") source.value = next;
+  if (next !== "dream" && next !== "air") source.value = next;
 }
 function sectionCount(sectionId: MemorySectionId) {
   if (sectionId === "dream") return dreams.items.value.length;
@@ -309,7 +313,7 @@ function sectionCount(sectionId: MemorySectionId) {
             <button class="btn btn-ghost" type="button" @click="openOperationLogs">
               <i class="bx bx-history" aria-hidden="true"></i>操作日志
             </button>
-            <button v-if="activeSection !== 'dream'" class="icon-btn" type="button" aria-label="刷新记忆" @click="data.load(source, agentId)">
+            <button v-if="activeSection !== 'dream' && activeSection !== 'air'" class="icon-btn" type="button" aria-label="刷新记忆" @click="data.load(source, agentId)">
               <i class="bx bx-refresh" :class="data.loading.value ? 'bx-spin' : ''" aria-hidden="true"></i>
             </button>
             <button v-if="listSection" class="btn btn-primary" type="button" aria-label="新增记忆" @click="openCreate">
@@ -380,6 +384,15 @@ function sectionCount(sectionId: MemorySectionId) {
           <div v-if="data.loading.value"><strong>[正在读取工作记忆]</strong></div>
           <div v-else><strong>没有工作记忆</strong></div>
         </div>
+      </section>
+
+      <section
+        v-else-if="activeSection === 'air'"
+        id="memory-panel-air"
+        role="tabpanel"
+        aria-labelledby="memory-tab-air"
+      >
+        <AirMemoryPanel :agent-id="agentId" />
       </section>
 
       <section

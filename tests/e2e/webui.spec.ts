@@ -553,6 +553,13 @@ test("防抖时间、回复开关、名称和命令前缀只在回复行为分�
   await page.goto("/agent-settings/bot");
 
   await expect(page.getByRole("heading", { name: "回复行为" })).toBeVisible();
+  await expect(page.getByRole("combobox", { name: "模型", exact: true })).toHaveValue("gpt-5.6-sol");
+  await expect(page.getByLabel("生成图片描述")).toBeChecked();
+  await expect(page.getByLabel("读图模型")).toHaveValue("gpt-5.4-mini");
+  await page.getByLabel("生成图片描述").uncheck();
+  await expect.poll(() => state.config.bot.imageReader.enabled).toBe(false);
+  await page.getByLabel("生成图片描述").check();
+  await expect.poll(() => state.config.bot.imageReader.enabled).toBe(true);
   await expect(page.getByLabel("启用私聊")).toBeChecked();
   await expect(page.getByLabel("启用 Bot 群聊")).not.toBeChecked();
   await page.getByLabel("启用私聊").uncheck();
@@ -585,6 +592,9 @@ test("防抖时间、回复开关、名称和命令前缀只在回复行为分�
   await expect(page.getByLabel("名称")).toHaveCount(0);
   await expect(page.getByLabel("命令前缀")).toHaveCount(0);
   await expect(page.getByLabel("过滤名单")).toHaveCount(0);
+
+  await page.goto("/settings/providers");
+  await expect(page.getByLabel("读图模型")).toHaveCount(0);
 });
 
 test("Agent 可独立配置语气处理并打开提示词", async ({ page }) => {
@@ -1014,10 +1024,10 @@ test("提示词库列出全部文件并支持快捷保存与冲突恢复", async
 
   await expect(page.getByRole("heading", { name: "核心人格" })).toBeVisible();
   const fileList = page.locator("aside").filter({ has: page.getByLabel("搜索文件") });
-  await expect(fileList.getByRole("button")).toHaveCount(8);
+  await expect(fileList.getByRole("button")).toHaveCount(7);
   await expect(fileList.getByRole("button", { name: /自拍提示词改写/ })).toBeVisible();
   await page.getByLabel("覆盖系统提示词").check();
-  await expect(fileList.getByRole("button")).toHaveCount(18);
+  await expect(fileList.getByRole("button")).toHaveCount(17);
   expect(state.promptOverrides.plana).toBe(true);
   const editor = page.getByLabel("提示词正文");
   await expect(editor).toContainText("冷静、诚实、可靠");
@@ -1432,7 +1442,7 @@ test("记忆页分页并区分称呼与昵称、显示事件范围和保留称�
 
   const sourceTabs = page.getByRole("tablist", { name: "记忆类别" });
   const sortField = page.getByLabel("排序字段");
-  await expect(sourceTabs.getByRole("tab")).toHaveCount(4);
+  await expect(sourceTabs.getByRole("tab")).toHaveCount(5);
   await expect(page.getByRole("tabpanel", { name: "工作记忆" })).toContainText("WebUI 使用 Vue 3、TypeScript 与 Tailwind。");
   await expect(page.getByRole("tabpanel", { name: "工作记忆" })).not.toContainText("sunabot-workmemory:item");
   await page.getByRole("button", { name: "操作日志", exact: true }).click();
@@ -1460,6 +1470,18 @@ test("记忆页分页并区分称呼与昵称、显示事件范围和保留称�
   await expect(page.getByLabel("搜索记忆")).toHaveCount(0);
   await expect(page.getByRole("navigation", { name: "记忆分页" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "新增记忆", exact: true })).toHaveCount(0);
+
+  await sourceTabs.getByRole("tab", { name: "场域知识", exact: true }).click();
+  await expect(page.getByLabel("场域知识正文")).toHaveValue(/按会话范围理解/);
+  await page.getByLabel("场域知识正文").fill("# 场域知识\n\n## 会话场域\n\n记住这次测试。");
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await expect.poll(() => state.fileWrites.at(-1)).toMatchObject({
+    id: "persona.air",
+    body: {
+      content: "# 场域知识\n\n## 会话场域\n\n记住这次测试。",
+      revision: "persona.air-r1"
+    }
+  });
 
   await sourceTabs.getByRole("tab", { name: "工作记忆", exact: true }).click();
   await expect(page.getByRole("tabpanel", { name: "工作记忆" })).toBeVisible();

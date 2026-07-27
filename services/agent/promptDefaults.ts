@@ -119,7 +119,7 @@ export const DEFAULT_USER_PROFILE_PROMPT = [
 
 export const DEFAULT_USER_GROUPCHAT_ORCHESTRATOR_PROMPT = [
   "你是群聊编排器，只判断当前 Agent 是否需要在当前用户群聊中主动回复。",
-  "你需要在推理中对上下文进行严格的指代消解。",
+  "你需要在推理中对上下文进行严格的指代消解：同时解析“他、她、它、这个、那个、这件事”等对人和对事的指代，以及“这个文件、那张图、上一个附件、刚才的文档”等对文件和媒体的指代；综合紧邻消息、发送者 display_name/uid、reply_to_message_id、文件名、媒体句柄和图片替代文本判断。证据不足时保持未解析，禁止猜测。",
   "策略保持懒惰；只有当前阶段明显需要当前 Agent 的角色职责、群友隐式提到当前 Agent、唤醒词对应的问题，或上下文连贯确实需要当前 Agent 回应时才回复。",
   "唤醒词会在输入中给出。看到唤醒词只代表需要判断，不代表必须回复。",
   "完成以上判断后，再根据当前角色的人格判断其是否会主动回复；如果结果是「是」，本轮可以主动发送消息。",
@@ -135,6 +135,7 @@ export const DEFAULT_GROUP_THREAD_CONTEXT_PROMPT = [
   "必须使用完整 payload.messages 理解紧邻上下文，并且只为 payload.target_message_ids 中每条消息输出一个 message_assignments 项。不得为其他上下文消息输出归属。message_id 必须来自 target_message_ids。primary_thread_key 引用本次 threads 中的 thread_key；一条消息可通过 related_thread_keys 关联最多两个其他 Thread。",
   "已有 Thread 继续使用时，threads 项的 existing_thread_id 必须填写 previous_state 中真实存在的 thread_id；新 Thread 的 existing_thread_id 必须为 null。thread_key 只是本次 JSON 内部引用，不能伪造稳定 thread_id。",
   "明确回复已有消息时优先继承被回复消息的 Thread。relation 只允许 new、continue、reply、switch、bridge、unresolved；只有确实跨越多个话题时使用 bridge。无法可靠判断时使用 unresolved 并降低 confidence，禁止为了显得完整而猜测。",
+  "为每条目标消息归属 Thread 前，必须同时完成对人、对事和对文件或媒体的指代消解；综合紧邻消息、display_name、uid、reply_to_message_id、文件名、媒体句柄和图片替代文本判断“他、这件事、这个文件、那张图、上一个附件”等具体指向。证据不足时使用 unresolved，禁止猜测。",
   "topic 必须是 8 到 160 个字符的简短完整句子，说清参与者正在讨论什么，以及当前的问题、行为或进展；禁止只输出一个词或词组。",
   "status 只允许 active、dormant、closed。active_thread_key 可以为 null；有明确当前话题时引用本次 threads 中的 thread_key。",
   "只输出符合 schema 的 JSON 对象，不要输出 Markdown、解释或额外文字。"
@@ -208,6 +209,7 @@ export const DEFAULT_GROUP_CONTEXT_CONTRACT = [
   "active_thread_id 表示本轮主要延续或询问的话题，不代表群聊中只存在这一个话题。一条消息可以拥有一个 primary_thread_id，并通过 related_thread_ids 关联其他话题。",
   "threads 中的 topic 必须是一个简短的完整句子，说清谁在讨论什么，以及当前的问题、行为或进展；不要只写一个词或词组标签。",
   "原始消息是事实依据。当 thread_context 与原始消息冲突、confidence 较低或 relation 为 unresolved 时，应根据完整原始消息完成本轮判断。",
+  "回复前必须同时消解对人、对事和对文件或媒体的指代；综合紧邻消息、display_name、uid、reply_to_message_id、文件名、媒体句柄和图片替代文本判断“他、这件事、这个文件、那张图、上一个附件”等具体指向。证据不足时明确保留不确定性，禁止猜测。",
   "对用户的回复中不得输出 thread_id、message_id、sequence、confidence 或 thread_context 内部结构。"
 ].join("\n");
 const WORKING_MEMORY_FACT_SCHEMA = {

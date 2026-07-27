@@ -6,6 +6,12 @@ export function mergeManifestBotConfig(
   defaultAgent: boolean
 ) {
   const bot = structuredClone(manifest);
+  bot.replyModel = bot.replyModel?.trim() || shared.replyModel;
+  bot.replyReasoningEffort = bot.replyReasoningEffort ?? shared.replyReasoningEffort;
+  bot.imageReader = {
+    ...structuredClone(shared.imageReader),
+    ...structuredClone(bot.imageReader ?? {})
+  };
   bot.tone = { ...structuredClone(shared.tone), ...structuredClone(bot.tone ?? {}) };
   bot.director = { ...structuredClone(shared.director), ...structuredClone(bot.director ?? {}) };
   bot.orchestrator = {

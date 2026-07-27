@@ -32,7 +32,7 @@
 
 导演事件使用独立的会话级 `directorEventsEnabled` 开关，不继承“允许回复”或群聊编排器状态。旧会话缺失该字段时按关闭处理，新会话创建时显式关闭；只有显式开启的 QQ 会话进入导演主动分享目标。开关变化后立即按当前启用会话重算当天尚未执行的导演任务目标，关闭不会影响普通回复、普通定时任务或其他会话。
 
-用户群聊编排器的 payload 必须在 `conversation.recentMessages` 和 `currentMessage.text` 中保留每张真实图片的语义标记。OneBot 新入站优先使用 `[内容图片#N：摘要]` 或 `[表情图片#N：摘要]`；旧消息缺少语义标记时才按缺少数量补充 `[图片]`。已有语义标记和旧 `[图片]` 都计入图片数量，不能重复注入。图片媒体仍与正文分离保存，编排器继续接收 `imageCount` 和历史媒体句柄用于判断，不直接接收图片 URL、Data URL 或本地路径。
+用户群聊编排器的 payload 必须在 `conversation.recentMessages` 和 `currentMessage.text` 中保留每张真实图片的语义标记。OneBot 新入站优先使用 `[内容图片#N：摘要]` 或 `[表情图片#N：摘要]`；旧消息缺少语义标记时才按缺少数量补充 `[图片]`。已有语义标记和旧 `[图片]` 都计入图片数量，不能重复注入。图片媒体仍与正文分离保存，编排器继续接收 `imageCount` 和历史媒体句柄用于判断，不直接接收图片 URL、Data URL 或本地路径。编排器、Thread 与群聊回复必须同时消解对人、对事和对文件或媒体的指代：结合发送者、回复链、消息顺序、文件名、图片 alt text 与媒体句柄确定“他”“那个事”“刚才的图”“上面的文件”等指向；存在多个合理候选时保留歧义并询问，不能凭最近一项强行绑定。
 
 用户群聊编排器的结构化输出只接受未包裹的单个 JSON object，字段集合必须精确为 `should_reply`、`reason`、`reply_to_message_id`：`should_reply` 是 boolean，`reason` 是合法 string，肯定结果的 `reply_to_message_id` 只能是本批 `conversation.replyCandidateMessageIds` 中的 string，否定结果必须显式为 `null`。别名、缺失或额外字段、数值 ID、类型异常、Markdown code fence、说明文字或其他文本包裹全部失败关闭，不得创建回复任务。肯定结果以有界 `UserGroupOrchestratorResultV1` 随 ambient 防抖、真实回复事件和 deferred 原始请求持久传递，重启、尾随消息和异步回调不能改写原因或目标 ID；直接回复、命令和其他非编排器路径不携带该结果。
 

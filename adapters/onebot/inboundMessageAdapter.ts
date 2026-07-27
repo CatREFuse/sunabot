@@ -40,7 +40,7 @@ export function parseOneBotInboundMessage(event: OneBotEvent): InboundMessageV1 
     ...(positiveInteger(selfId) ? { selfId: positiveInteger(selfId) } : {}),
     sender: senderIdentity(event.sender ?? {}, event.user_id),
     text: rendered.text,
-    media: rendered.imageUrls.map(imageMediaAsset),
+    media: rendered.imageUrls.map((url) => imageMediaAsset(url)),
     attachments: pendingAttachments(extractOneBotAttachments(message, {
       source: "message",
       messageId: event.message_id,
@@ -71,7 +71,7 @@ export function extractOneBotMessageDetails(
   };
   return {
     text: rendered.text,
-    media: rendered.imageUrls.map(imageMediaAsset),
+    media: rendered.imageUrls.map((url) => imageMediaAsset(url)),
     attachments: pendingAttachments(extractOneBotAttachments(message, attachmentContext)),
     replyMessageIds: extractReplyMessageIds(message),
     sender: senderIdentity(record(payloadSource.sender), userId)
@@ -99,7 +99,7 @@ export async function hydrateOneBotForwardContent(
     forwardPayloads
   });
   incoming.text = rendered.text;
-  incoming.media = rendered.imageUrls.map(imageMediaAsset);
+  incoming.media = rendered.imageUrls.map((url) => imageMediaAsset(url));
   return incoming;
 }
 

@@ -35,6 +35,10 @@ import {
 import { migrateDreamSchemaPrompt } from "../../services/agent/dreamPromptMigration.js";
 import { migrateConversationInboundMessagePrompt } from "../../services/agent/inboundMessagePromptMigration.js";
 import { migrateRecoverableOutputErrorPrompt } from "../../services/agent/recoverableOutputErrorPromptMigration.js";
+import {
+  migrateConversationReferenceToolDescriptions,
+  migrateGroupReferenceResolutionPrompt
+} from "../../services/agent/referencePromptMigration.js";
 import { ensureAirPromptWorkspace } from "../../services/agent/airPromptWorkspace.js";
 import { parseFinalPromptTemplate } from "../../services/agent/promptSystem.js";
 import {
@@ -214,6 +218,20 @@ function runtimePromptMigrations(config: AppConfig, selfiePromptDefault: string)
     ),
     dependency(config.bot.orchestrator.promptFile)
   );
+  add(
+    "group-reference-resolution-v1",
+    "system",
+    config.bot.orchestrator.promptFile,
+    () => migrateGroupReferenceResolutionPrompt(config, config.bot.orchestrator.promptFile, "orchestrator"),
+    dependency(config.bot.orchestrator.promptFile)
+  );
+  add(
+    "group-reference-resolution-v1",
+    "system",
+    GROUP_THREAD_CONTEXT_PROMPT_FILE,
+    () => migrateGroupReferenceResolutionPrompt(config, GROUP_THREAD_CONTEXT_PROMPT_FILE, "thread"),
+    dependency(GROUP_THREAD_CONTEXT_PROMPT_FILE)
+  );
   const selfieReferenceId = add(
     "selfie-reference-v1",
     "persona",
@@ -308,12 +326,28 @@ function runtimePromptMigrations(config: AppConfig, selfiePromptDefault: string)
       () => migrateRecoverableOutputErrorPrompt(config, file),
       [chatMediaId]
     );
+    const referenceToolsId = add(
+      "conversation-reference-tools-v1",
+      "system",
+      file,
+      () => migrateConversationReferenceToolDescriptions(config, file),
+      [recoverableId]
+    );
+    const groupReferenceId = file === GROUP_CONVERSATION_REPLY_PROMPT_FILE
+      ? add(
+        "group-reference-resolution-v1",
+        "system",
+        file,
+        () => migrateGroupReferenceResolutionPrompt(config, file, "reply"),
+        [referenceToolsId]
+      )
+      : referenceToolsId;
     add(
       "conversation-cache-layout-v1",
       "system",
       file,
       () => migrateConversationPromptCacheLayout(config, file),
-      [recoverableId]
+      [groupReferenceId]
     );
   }
 

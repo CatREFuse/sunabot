@@ -428,6 +428,34 @@ describe("tool configuration", () => {
     expect(config.bot.tools.codex.enabled).toBe(false);
   });
 
+  it("migrates the reply model and image reader from legacy Provider settings", async () => {
+    await fs.writeFile(configPath, JSON.stringify({
+      providers: {
+        defaultProviderId: "text",
+        items: [{
+          ...defaultConfig().providers.items[0],
+          id: "text",
+          model: "reply-model",
+          visionProviderId: "vision",
+          visionModel: "vision-model"
+        }, {
+          ...defaultConfig().providers.items[1],
+          id: "vision",
+          model: "vision-fallback"
+        }]
+      }
+    }), "utf8");
+
+    const config = await loadConfig();
+
+    expect(config.bot.replyModel).toBe("reply-model");
+    expect(config.bot.imageReader).toMatchObject({
+      enabled: true,
+      providerId: "vision",
+      model: "vision-model"
+    });
+  });
+
   it("migrates a direct key from the legacy Tavily env field", async () => {
     await fs.writeFile(configPath, JSON.stringify({
       bot: {

@@ -204,8 +204,23 @@ export function inboundImageUrls(message: Pick<InboundMessageV1, "media">) {
   return Array.isArray(legacy) ? legacy.filter((value): value is string => typeof value === "string") : [];
 }
 
-export function replaceInboundImageUrls(message: InboundMessageV1, urls: readonly string[]) {
-  message.media = [...new Set(urls.map((url) => url.trim()).filter(Boolean))].map(imageMediaAsset);
+export function inboundImageAltTexts(message: Pick<InboundMessageV1, "media">) {
+  return Array.isArray(message.media)
+    ? message.media.flatMap((asset) => asset.url ? [asset.altText?.trim() ?? ""] : [])
+    : [];
+}
+
+export function replaceInboundImageUrls(
+  message: InboundMessageV1,
+  urls: readonly string[],
+  altTexts: readonly string[] = inboundImageAltTexts(message)
+) {
+  const byUrl = new Map<string, string>();
+  urls.forEach((url, index) => {
+    const normalized = url.trim();
+    if (normalized && !byUrl.has(normalized)) byUrl.set(normalized, altTexts[index]?.trim() ?? "");
+  });
+  message.media = [...byUrl].map(([url, altText]) => imageMediaAsset(url, altText));
 }
 
 export function decodeInboundMessageV1(value: unknown): InboundMessageV1 {
@@ -227,7 +242,7 @@ export function decodeInboundMessageV1(value: unknown): InboundMessageV1 {
   );
   const media = Array.isArray(input.media)
     ? input.media.map(normalizeMediaAsset).filter((asset): asset is MediaAssetRefV1 => Boolean(asset))
-    : stringArray(input.imageUrls).map(imageMediaAsset);
+    : stringArray(input.imageUrls).map((url) => imageMediaAsset(url));
 
   return {
     schemaVersion: 1,
@@ -263,7 +278,7 @@ function normalizeQuotes(value: unknown): MessageQuoteV1[] {
     const imageUrls = stringArray(quote.imageUrls);
     const media = Array.isArray(quote.media)
       ? quote.media.map(normalizeMediaAsset).filter((asset): asset is MediaAssetRefV1 => Boolean(asset))
-      : imageUrls.map(imageMediaAsset);
+      : imageUrls.map((url) => imageMediaAsset(url));
     return [{
       messageId,
       ...(typeof quote.text === "string" ? { text: quote.text } : {}),
@@ -285,11 +300,18 @@ function normalizeMediaAsset(value: unknown): MediaAssetRefV1 | undefined {
       kind: "image",
       source: "shared_file",
       filePath: asset.filePath,
-      ...(typeof asset.url === "string" && asset.url.trim() ? { url: asset.url } : {})
+      ...(typeof asset.url === "string" && asset.url.trim() ? { url: asset.url } : {}),
+      ...(typeof asset.altText === "string" && asset.altText.trim() ? { altText: asset.altText.trim() } : {})
     };
   }
   if ((asset.source === "remote_url" || asset.source === "inline_data") && typeof asset.url === "string" && asset.url.trim()) {
-    return { schemaVersion: 1, kind: "image", source: asset.source, url: asset.url };
+    return {
+      schemaVersion: 1,
+      kind: "image",
+      source: asset.source,
+      url: asset.url,
+      ...(typeof asset.altText === "string" && asset.altText.trim() ? { altText: asset.altText.trim() } : {})
+    };
   }
   return undefined;
 }

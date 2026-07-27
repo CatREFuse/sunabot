@@ -176,11 +176,17 @@ export function runtime_getProvider(this: RuntimeHost, providerId?: string) {
     }
     return new OpenAIProvider({ ...provider, reasoningEffort: resolved.effort });
   }
-export function runtime_getProviderForModel(this: RuntimeHost, model: string, requestedEffort?: ReasoningEffort) {
-    const provider = getDefaultProvider(this.config);
-    if (!provider) {
-      throw new Error("No provider configured.");
-    }
+export function runtime_getProviderForModel(
+  this: RuntimeHost,
+  model: string,
+  requestedEffort?: ReasoningEffort,
+  providerId?: string
+) {
+    const baseProvider = this.getProvider(providerId);
+    const provider = (baseProvider as unknown as {
+      configuration?: () => ReturnType<OpenAIProvider["configuration"]>;
+    }).configuration?.();
+    if (!provider) return baseProvider;
     const modelName = model.trim() || provider.model;
     const resolved = resolveModelReasoningEffort(modelName, requestedEffort, provider.reasoningEffort ?? "medium");
     if (resolved.adjusted) {
@@ -286,24 +292,38 @@ async function prepareVisionFallback(
   const needsFallback = providerConfig.multimodal === "disabled"
     || (providerConfig.multimodal === "auto" && detectedMultimodal === false);
   if (!needsFallback) return request;
-  const helperConfig = runtime.config.providers.items.find((item) => item.id === providerConfig.visionProviderId);
-  if (!helperConfig) throw new Error("当前模型不支持图片，请配置读图辅助 Provider。");
   const imageUrls = request.messages.flatMap((message) => message.imageUrls ?? []);
   const localImagePaths = request.messages.flatMap((message) => message.localImagePaths ?? []);
-  const helper = new OpenAIProvider({
-    ...helperConfig,
-    id: `${helperConfig.id}:vision-helper`,
-    model: providerConfig.visionModel?.trim() || helperConfig.model
-  });
-  const description = await helper.complete(
-    "准确描述输入图片中的主体、文字、关系和与用户请求有关的细节，不要猜测不可见内容。",
-    [{ role: "user", content: "请读取这些图片并给出可供另一个模型使用的描述。", imageUrls, localImagePaths }],
-    { signal: options.signal, logContext: options.logContext }
-  );
+  const persistedAltTexts = request.messages.flatMap((message) => message.imageAltTexts ?? []).filter(Boolean);
+  let fallbackAltTexts = persistedAltTexts;
+  if ((localImagePaths.length || persistedAltTexts.length < imageUrls.length) && runtime.config.bot.imageReader.enabled) {
+    const settings = runtime.config.bot.imageReader;
+    const helper = runtime.getProviderForModel(
+      settings.model,
+      settings.reasoningEffort,
+      settings.providerId
+    );
+    const description = await helper.complete(
+      "准确描述输入图片中的主体、动作、场景、重要物品和清晰文字。只输出简洁中文，不猜测不可见内容。",
+      [{
+        role: "user",
+        content: "请描述这些尚无替代文本的图片。",
+        imageUrls: imageUrls.slice(persistedAltTexts.length),
+        localImagePaths
+      }],
+      { signal: options.signal, logContext: options.logContext }
+    );
+    fallbackAltTexts = [...persistedAltTexts, description.trim()].filter(Boolean);
+  }
+  if (!fallbackAltTexts.length) {
+    throw new Error("当前回复模型不支持图片，且没有可用的图片替代文本。");
+  }
   const next = structuredClone(request);
   next.messages = next.messages.map((message) => ({ ...message, imageUrls: [], localImagePaths: [] }));
   const lastUser = [...next.messages].reverse().find((message) => message.role === "user");
-  if (lastUser) lastUser.content = `${lastUser.content}\n\n<image_description>${description}</image_description>`;
+  if (lastUser) {
+    lastUser.content = `${lastUser.content}\n\n<image_alt_texts>${fallbackAltTexts.join("\n")}</image_alt_texts>`;
+  }
   return next;
 }
 

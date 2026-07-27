@@ -48,6 +48,14 @@ export function createAdminTestConfig(rootDir: string): AppConfig {
     bot: {
       adminQq: "171419991",
       adminName: "Test Admin",
+      replyModel: "gpt-5.5",
+      replyReasoningEffort: "medium",
+      imageReader: {
+        enabled: true,
+        providerId: "test-provider",
+        model: "gpt-5.4-mini",
+        reasoningEffort: "low"
+      },
       replyDebounceMs: 5_000,
       pokeOnNoReply: false,
       quoteGroupReplies: true,

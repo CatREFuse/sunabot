@@ -93,6 +93,9 @@ describe("ConfigService", () => {
       value: {
         adminQq: "3971235731",
         adminName: "Updated Admin",
+        replyModel: before.bot.replyModel,
+        replyReasoningEffort: before.bot.replyReasoningEffort,
+        imageReader: before.bot.imageReader,
         replyDebounceMs: 7_500,
         pokeOnNoReply: true,
         quoteGroupReplies: false,
@@ -386,6 +389,9 @@ function botSection(adminName: string) {
   return {
     adminQq: bot.adminQq,
     adminName,
+    replyModel: bot.replyModel,
+    replyReasoningEffort: bot.replyReasoningEffort,
+    imageReader: bot.imageReader,
     replyDebounceMs: bot.replyDebounceMs,
     pokeOnNoReply: bot.pokeOnNoReply,
     quoteGroupReplies: bot.quoteGroupReplies,

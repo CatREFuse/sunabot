@@ -6,7 +6,7 @@
 
 ### 4.1 Provider
 
-Provider 类型包括 Codex 订阅、OpenAI 官方、Anthropic 官方、Gemini 官方，以及 OpenAI、Anthropic、Gemini 三种兼容协议。类型在创建时确定，创建后不可切换；官方地址由前后端共同固定，兼容地址可配置。Codex 订阅访问令牌临近过期或已经过期时，Provider 调用与运行探针必须通过 Codex app-server 的 `account/read` 管理接口请求续期，同一授权文件的并发续期合并为一次，续期失败按凭据不可用处理，不能自行调用未公开的 OAuth 端点。Provider 支持远程拉取模型 ID 或自定义 ID，多模态能力可通过已知颜色图片的实际识别结果自动探测，也可手动指定；纯文本模型可配置独立的读图 Provider 与模型，运行时先生成图片描述再交给主模型。配置还包含图像模型、API key 环境变量、推理强度、温度和输出 token 上限。每次模型传输的实际请求体与 Provider 返回 payload 都写入请求日志，使最终提示词、消息、工具定义和原始返回结构可以倒查；模型 payload 的单字符串最多保留 8 MiB，其他日志继续使用常规长字符串边界。密钥、授权字段和 URL key 必须递归脱敏，`read_file`、`write_file` 与 MCP 的参数、结果仍使用专用安全投影，不能因记录原始 payload 暴露文件正文、外部 MCP 文本、宿主路径或 token；Gemini API key 只能通过请求头发送，不能进入 URL。SDK 隐式重试必须关闭，发送请求与读取响应正文属于同一次显式传输尝试，正文断流按真实尝试记录并重试；由 `fetchTextWithTransportRetry` 管理的单次传输默认最多等待 60 秒，调用级内部预算可以显式覆盖，未指定调用级重试次数时仅在调用方仍有效的情况下重试一次，调用方取消不能触发重试；取消信号在写入请求日志前检查，429/5xx 退避优先遵守 `Retry-After` 或 `Retry-After-Ms`。
+Provider 类型包括 Codex 订阅、OpenAI 官方、Anthropic 官方、Gemini 官方，以及 OpenAI、Anthropic、Gemini 三种兼容协议。类型在创建时确定，创建后不可切换；官方地址由前后端共同固定，兼容地址可配置。Codex 订阅访问令牌临近过期或已经过期时，Provider 调用与运行探针必须通过 Codex app-server 的 `account/read` 管理接口请求续期，同一授权文件的并发续期合并为一次，续期失败按凭据不可用处理，不能自行调用未公开的 OAuth 端点。Provider 支持远程拉取模型 ID 或自定义 ID，多模态能力可通过已知颜色图片的实际识别结果自动探测，也可手动指定。Provider 页面只管理连接、模型目录和能力；当前 Agent 的回复模型、推理强度以及独立读图 Provider、模型和推理强度位于 Bot 设置的“回复行为”。每张入站图片在主回复前由读图节点生成一条有界中文 alt text 并持久化到消息记录；纯文本主模型使用该文本理解图片，多模态主模型同时获得图片与 alt text，以便先判断是否需要通过媒体句柄取得原图。单张读图失败只缺失该图的 alt text，不阻断其余图片和主回复。配置还包含图像模型、API key 环境变量、温度和输出 token 上限。每次模型传输的实际请求体与 Provider 返回 payload 都写入请求日志，使最终提示词、消息、工具定义和原始返回结构可以倒查；模型 payload 的单字符串最多保留 8 MiB，其他日志继续使用常规长字符串边界。密钥、授权字段和 URL key 必须递归脱敏，`read_file`、`write_file` 与 MCP 的参数、结果仍使用专用安全投影，不能因记录原始 payload 暴露文件正文、外部 MCP 文本、宿主路径或 token；Gemini API key 只能通过请求头发送，不能进入 URL。SDK 隐式重试必须关闭，发送请求与读取响应正文属于同一次显式传输尝试，正文断流按真实尝试记录并重试；由 `fetchTextWithTransportRetry` 管理的单次传输默认最多等待 60 秒，调用级内部预算可以显式覆盖，未指定调用级重试次数时仅在调用方仍有效的情况下重试一次，调用方取消不能触发重试；取消信号在写入请求日志前检查，429/5xx 退避优先遵守 `Retry-After` 或 `Retry-After-Ms`。
 
 正常回复的每轮 Provider 请求使用公共 `normalReply.maxRetries`，值表示首次失败后的额外重试次数，默认 3、允许 0—10，因此默认最多执行 4 次相同请求。该设置热更新并由全部 Agent 共用，只作用于 `replyToIncoming` 的普通回复、群聊总结和异步结果回复，不改变编排器、记忆、生图、工具任务、outbox 或 Provider 健康检查的重试策略。显式请求必须复用同一请求体，只重试网络错误、正文读取错误、408、409、429、5xx，以及 Codex Responses 在 HTTP 200 流内返回的过载、限流、服务不可用、临时错误或超时；调用方取消、确定性响应体错误或其他非重试状态立即停止。响应体错误必须使用 Provider 原始 message 上报，不能降格为“模型没有返回可发送内容”。每次真实尝试分别写入请求日志，并记录当前尝试序号与最大尝试次数。
 
@@ -31,6 +31,12 @@ GPT-5.6 及后续支持该协议的 OpenAI 官方 Responses 请求必须在最�
 - `cachedInput` 是 `input` 的子集，不额外计入 `total`。只有 Provider 明确返回缓存字段的记录才进入缓存率分母；单条记录或聚合桶的缓存率为这些记录的 `ΣcachedInput / Σinput` 并限制在 `0..1`。明确返回缓存字段但分母为 0 时返回 `0`；桶内全部记录都没有缓存字段时返回 `null`。缺失、负数和非有限数按 0 处理，任何 API 与界面值都不能出现 `NaN` 或 `Infinity`。
 
 ### 4.2 最终提示词
+
+入站图片的 alt text 是与媒体句柄对应的可检索简要语义，所有主回复模型都会接收；多模态模型仍保留原图输入，只有需要核对视觉细节时才通过句柄取得原图。
+
+图片记忆必须先用 `export_chat_media` 取得本轮授权图片，再由获准的 Bash 将图片与可检索说明放入当前 Agent 的 `knowledge/`；`add_workmemory` 正文只保存 `knowledge/...` 相对链接，该链接之后可直接交给 `send_file`、`generate_img` 或 `selfie`。
+
+`generate_img` 和 `selfie` 遇到用户要求生成特定人物、影视或动漫角色、某个非公共物品，而当前上下文没有足以确认其外貌的真实图片时，必须先通过 `webfetch` 或 `knowledge_search` 找到参考图，并把实际参考图片路径作为必要输入。只找到文字资料或只凭名称推测外观时不能调用生图；联网图片需要先由获准的 Bash 保存到当前 Agent workbench。
 
 最终提示词使用 JSON 文档，支持：
 

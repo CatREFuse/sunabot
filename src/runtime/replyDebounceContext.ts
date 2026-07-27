@@ -5,7 +5,7 @@ import type {
 import type { AttachmentService } from "../../services/media/attachments/service.js";
 import type { AttachmentModelContext } from "../../services/media/attachments/types.js";
 import type { ConversationRecord, ParsedIncomingMessage } from "../types.js";
-import { inboundImageUrls } from "../../packages/contracts/messaging/messages.js";
+import { inboundImageAltTexts, inboundImageUrls } from "../../packages/contracts/messaging/messages.js";
 import { isAdminUserId, toContextChatMessage } from "./conversationMemoryHelpers.js";
 import type { PrepareGroupThreadContextOptions } from "./groupThreadPipeline.js";
 import { conversationRecordId } from "./messagingAttachmentHelpers.js";
@@ -86,6 +86,13 @@ export class ReplyDebounceContext {
       ...inboundImageUrls(this.incoming),
       ...this.currentBatchMessages().flatMap((message) => message.imageUrls ?? [])
     ])];
+  }
+
+  currentImageAltTexts() {
+    return [
+      ...inboundImageAltTexts(this.incoming),
+      ...this.currentBatchMessages().flatMap((message) => message.imageAltTexts ?? [])
+    ].filter(Boolean);
   }
 
   async prepareThreadContext(): Promise<GroupThreadContextSnapshotV1 | undefined> {

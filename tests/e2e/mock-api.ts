@@ -86,6 +86,14 @@ const initialConfig = {
   bot: {
     adminQq: "171419991",
     adminName: "猫老师",
+    replyModel: "gpt-5.6-sol",
+    replyReasoningEffort: "high",
+    imageReader: {
+      enabled: true,
+      providerId: "codex",
+      model: "gpt-5.4-mini",
+      reasoningEffort: "low"
+    },
     replyDebounceMs: 5_000,
     pokeOnNoReply: false,
     quoteGroupReplies: true,

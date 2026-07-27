@@ -1,5 +1,6 @@
 import { nanoid } from "nanoid";
 import {
+  inboundImageAltTexts,
   inboundImageUrls,
   type MessagingPort
 } from "../../packages/contracts/messaging/messages.js";
@@ -171,6 +172,7 @@ export function runtime_patchIncomingMessage(
     message.senderNickname = identity.nickname || undefined;
     message.senderCard = identity.card || undefined;
     message.imageUrls = inboundImageUrls(incoming);
+    message.imageAltTexts = inboundImageAltTexts(incoming);
     message.attachments = persistedAttachments(incoming.attachments);
     message.replyMessageIds = incoming.replyMessageIds;
     message.quoteReferences = persistedQuoteReferences(incoming.quoteReferences);

@@ -1,4 +1,5 @@
 import {
+  inboundImageAltTexts,
   inboundImageUrls
 } from "../../packages/contracts/messaging/messages.js";
 import { formatModelTimestamp, systemModelTimeZone } from "../../services/agent/modelTime.js";
@@ -190,7 +191,7 @@ export function buildUserPrompt(
       generateImgMediaHandle(String(incoming.messageId), index)
     ));
   const imageLine = imageCount
-    ? `图片：${imageCount} 张，类型与顺序见内容中的图片标记${imageHandles.length ? `；媒体句柄：${imageHandles.join("、")}` : ""}\n`
+    ? `图片：${imageCount} 张${inboundImageAltTexts(incoming).filter(Boolean).length ? `；内容：${inboundImageAltTexts(incoming).filter(Boolean).join("；")}` : ""}${imageHandles.length ? `；媒体句柄：${imageHandles.join("、")}` : ""}\n`
     : "";
   const quoteLine = incoming.quoteReferences.length ? `引用：${formatQuoteReferencesForContext(incoming.quoteReferences)}\n` : "";
   const attachmentLine = incoming.messageId == null || !incoming.attachments.length
@@ -237,7 +238,7 @@ export function toContextChatMessage(
   const quoteText = message.quoteReferences?.length ? ` 引用：${formatQuoteReferencesForContext(message.quoteReferences)}` : "";
   const imageHandles = (message.imageUrls ?? []).map((_, index) => generateImgMediaHandle(message.id, index));
   const imageText = imageHandles.length
-    ? ` 图片：${imageHandles.length} 张（媒体句柄：${imageHandles.join("、")}）`
+    ? ` 图片：${imageHandles.length} 张${message.imageAltTexts?.filter(Boolean).length ? `（${message.imageAltTexts.filter(Boolean).join("；")}）` : ""}（媒体句柄：${imageHandles.join("、")}）`
     : "";
   const attachmentText = message.attachments?.length
     ? ` 文件：${formatAttachmentListForContext(message.attachments, message.id)}`
@@ -248,7 +249,8 @@ export function toContextChatMessage(
     content: message.groupId == null
       ? `${formatContextTime(message.at, timeZone)} [${timeZone}] ${speaker}：${body}`
       : `${formatGroupContextMessageHeader(message, timeZone)}\n${body}`,
-    imageUrls: message.imageUrls
+    imageUrls: message.imageUrls,
+    imageAltTexts: message.imageAltTexts
   };
 }
 export function formatGroupContextMessageHeader(

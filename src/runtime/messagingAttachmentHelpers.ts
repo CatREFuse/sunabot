@@ -58,7 +58,7 @@ export function restoredConversationIncoming(
       ...(message.senderName ? { displayName: message.senderName } : {})
     },
     text: message.text,
-    media: (message.imageUrls ?? []).map(imageMediaAsset),
+    media: (message.imageUrls ?? []).map((url) => imageMediaAsset(url)),
     attachments: message.attachments ?? [],
     replyMessageIds: message.replyMessageIds ?? [],
     quoteReferences: message.quoteReferences ?? [],
@@ -342,8 +342,9 @@ export function formatQuoteReferencesForContext(references: ConversationMessageQ
     const sender = reference.senderName ? `${reference.senderName} ` : "";
     const text = reference.text || (reference.imageUrls?.length ? "[图片]" : reference.attachments?.length ? "[文件]" : "[消息]");
     const imageCount = (reference.media ?? reference.imageUrls ?? []).length;
+    const altTexts = (reference.media ?? []).flatMap((asset) => asset.altText ? [asset.altText] : []);
     const images = imageCount
-      ? ` 图片：${Array.from({ length: Math.min(imageCount, 4) }, (_, index) => (
+      ? ` 图片：${altTexts.length ? `${altTexts.join("；")}；` : ""}${Array.from({ length: Math.min(imageCount, 4) }, (_, index) => (
         generateImgMediaHandle(String(reference.messageId), index)
       )).join("、")}`
       : "";

@@ -255,6 +255,9 @@ async function logout() {
             v-else-if="current === 'bot'"
             v-model="workspace.drafts.bot"
             v-model:reply="workspace.drafts.onebot"
+            :models="catalog.models.value"
+            :providers="workspace.drafts.providers.items"
+            :default-provider-id="workspace.drafts.providers.defaultProviderId"
           />
           <ToneSettingsForm
             v-else-if="current === 'tone'"

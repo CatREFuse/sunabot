@@ -17,6 +17,7 @@ import type {
 
 export type {
   BotMemorySettings,
+  BotImageReaderSettings,
   BotDirectorSettings,
   BotOrchestratorSettings,
   BotToneSettings,
@@ -114,7 +115,7 @@ export interface ConfigSectionValueMap {
   providers: AppConfig["providers"];
   broadcastStorm: BroadcastStormConfig;
   normalReply: NormalReplyConfig;
-  bot: Pick<BotConfig, "adminQq" | "adminName" | "replyDebounceMs" | "pokeOnNoReply" | "quoteGroupReplies" | "quoteGroupReplyExcludedUserIds" | "contextMessageLimit" | "emojiSendSize" | "emojiSendSeparately">;
+  bot: Pick<BotConfig, "adminQq" | "adminName" | "replyModel" | "replyReasoningEffort" | "imageReader" | "replyDebounceMs" | "pokeOnNoReply" | "quoteGroupReplies" | "quoteGroupReplyExcludedUserIds" | "contextMessageLimit" | "emojiSendSize" | "emojiSendSeparately">;
   tone: BotToneSettings;
   memory: BotMemorySettings;
   director: BotDirectorSettings;
@@ -316,6 +317,7 @@ export interface ConversationMessageRecord {
   isAdmin?: boolean;
   selfId?: number;
   imageUrls?: string[];
+  imageAltTexts?: string[];
   replyMessageIds?: number[];
   quoteReferences?: ConversationMessageQuote[];
   logRunId?: string;

@@ -27,16 +27,10 @@ const currentType = computed(() => current.value ? providerType(current.value.ki
 const currentIsDefault = computed(() => Boolean(current.value && draft.value.defaultProviderId === current.value.id));
 const currentEnabledDescription = computed(() => currentIsDefault.value ? "默认" : "");
 const enabledProviders = computed(() => draft.value.items.filter((provider) => provider.enabled));
-const visionProviders = computed(() => draft.value.items.filter((provider) => provider.enabled
-  && provider.id !== current.value?.id
-  && provider.multimodal !== "disabled"
-  && !(provider.multimodal === "auto" && provider.detectedMultimodal === false)));
 const secretConfigured = computed(() => {
   const provider = current.value;
   return provider ? props.fieldStates?.[`providers.items.${provider.id}.apiKeyEnv`]?.secretConfigured : undefined;
 });
-const effectiveNonVision = computed(() => current.value?.multimodal === "disabled"
-  || (current.value?.multimodal === "auto" && current.value.detectedMultimodal === false));
 const remoteModelItems = computed<ModelCatalogItem[]>(() => {
   const provider = current.value;
   if (!provider) return [];
@@ -267,10 +261,6 @@ function setStatus(message: string, kind: "" | "success" | "error" | "warning") 
           <div class="grid gap-5 sm:grid-cols-2">
             <label class="field"><span class="field-label">图片能力</span><select v-model="current.multimodal" class="control"><option value="auto">自动探测</option><option value="enabled">支持图片</option><option value="disabled">仅文本</option></select></label>
             <div class="field"><span class="field-label">探测结果</span><button class="btn justify-self-start" type="button" :disabled="probingVision" @click="probeVision"><i class="bx bx-scan" aria-hidden="true"></i>{{ probingVision ? "探测中" : "探测多模态" }}</button><small v-if="current.detectedMultimodal != null" class="font-mono text-[10px]" :class="current.detectedMultimodal ? 'text-success' : 'text-warning'">{{ current.detectedMultimodal ? "支持图片" : "仅文本" }}</small></div>
-            <template v-if="effectiveNonVision">
-              <label class="field"><span class="field-label">读图辅助 Provider</span><select v-model="current.visionProviderId" class="control"><option value="">选择 Provider</option><option v-for="provider in visionProviders" :key="provider.id" :value="provider.id">{{ provider.label }}</option></select></label>
-              <label class="field"><span class="field-label">读图模型</span><SettingsConfirmInput v-model.trim="current.visionModel" type="text" placeholder="留空使用默认模型" confirm-label="确认读图模型" /></label>
-            </template>
           </div>
         </section>
 

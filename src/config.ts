@@ -6,6 +6,7 @@ import {
   AppConfig,
   BotConfig,
   BotDirectorSettings,
+  BotImageReaderSettings,
   BotMemorySettings,
   BotOrchestratorSettings,
   BotToneSettings,
@@ -115,6 +116,14 @@ export function defaultConfig(): AppConfig {
     bot: {
       adminQq: "",
       adminName: "猫老师",
+      replyModel: providers[0]?.model ?? "gpt-5.5",
+      replyReasoningEffort: "medium",
+      imageReader: {
+        enabled: true,
+        providerId: providers[0]?.id ?? "",
+        model: providers[0]?.model ?? "gpt-5.5",
+        reasoningEffort: "low"
+      },
       replyDebounceMs: DEFAULT_REPLY_DEBOUNCE_MS,
       pokeOnNoReply: false,
       quoteGroupReplies: true,
@@ -349,8 +358,35 @@ function mergeConfig(
   incoming: Partial<AppConfig>,
   applyRuntimeOverrides: boolean
 ): AppConfig {
-  const bot = mergeBotConfig(base.bot, incoming.bot as Partial<BotConfig> | undefined, incoming.onebot?.quoteGroupReplies);
   const providerItems = incoming.providers?.items?.length ? incoming.providers.items : base.providers.items;
+  const providers = {
+    ...base.providers,
+    ...incoming.providers,
+    items: providerItems.map(normalizeProviderReasoningEffort)
+  };
+  const selectedProvider = providers.items.find((provider) => provider.id === providers.defaultProviderId)
+    ?? providers.items.find((provider) => provider.enabled)
+    ?? providers.items[0];
+  const legacyVisionProvider = providers.items.find((provider) => provider.id === selectedProvider?.visionProviderId);
+  const bot = mergeBotConfig(
+    base.bot,
+    incoming.bot as Partial<BotConfig> | undefined,
+    incoming.onebot?.quoteGroupReplies,
+    {
+      replyModel: selectedProvider?.model ?? base.bot.replyModel,
+      imageReader: {
+        enabled: true,
+        providerId: legacyVisionProvider?.id ?? selectedProvider?.id ?? base.bot.imageReader.providerId,
+        model: selectedProvider?.visionModel?.trim()
+          || legacyVisionProvider?.model
+          || selectedProvider?.model
+          || base.bot.imageReader.model,
+        reasoningEffort: legacyVisionProvider?.reasoningEffort
+          ?? selectedProvider?.reasoningEffort
+          ?? base.bot.imageReader.reasoningEffort
+      }
+    }
+  );
   const fileServer = { ...base.server, ...incoming.server };
   return {
     schemaVersion: CONFIG_SCHEMA_VERSION,
@@ -366,11 +402,7 @@ function mergeConfig(
       systemPromptOverride: incoming.persona?.systemPromptOverride ?? base.persona.systemPromptOverride,
       ...(incoming.persona?.avatarPath ? { avatarPath: incoming.persona.avatarPath } : {})
     },
-    providers: {
-      ...base.providers,
-      ...incoming.providers,
-      items: providerItems.map(normalizeProviderReasoningEffort)
-    },
+    providers,
     broadcastStorm: mergeBroadcastStormConfig(base.broadcastStorm, incoming.broadcastStorm),
     normalReply: {
       maxRetries: normalizeInteger(incoming.normalReply?.maxRetries, base.normalReply.maxRetries, 0, 10)
@@ -425,11 +457,31 @@ function normalizeProviderReasoningEffort(provider: ProviderConfig): ProviderCon
   };
 }
 
-function mergeBotConfig(base: BotConfig, incoming: Partial<BotConfig> | undefined, legacyQuoteGroupReplies?: boolean): BotConfig {
+function mergeBotConfig(
+  base: BotConfig,
+  incoming: Partial<BotConfig> | undefined,
+  legacyQuoteGroupReplies?: boolean,
+  legacyModels: { replyModel: string; imageReader: BotImageReaderSettings } = {
+    replyModel: base.replyModel,
+    imageReader: base.imageReader
+  }
+): BotConfig {
   const bash = incoming?.bash as Partial<BotConfig["bash"]> | undefined;
+  const replyModel = normalizeModelName(incoming?.replyModel, legacyModels.replyModel);
   return {
     adminQq: typeof incoming?.adminQq === "string" ? incoming.adminQq.trim() : base.adminQq,
     adminName: normalizeString(incoming?.adminName, base.adminName),
+    replyModel,
+    replyReasoningEffort: resolveModelReasoningEffort(
+      replyModel,
+      isReasoningEffort(incoming?.replyReasoningEffort) ? incoming.replyReasoningEffort : undefined,
+      base.replyReasoningEffort
+    ).effort,
+    imageReader: mergeBotImageReaderSettings(
+      base.imageReader,
+      incoming?.imageReader as Partial<BotImageReaderSettings> | undefined,
+      legacyModels.imageReader
+    ),
     replyDebounceMs: normalizeInteger(
       incoming?.replyDebounceMs,
       base.replyDebounceMs,
@@ -462,6 +514,27 @@ function mergeBotConfig(base: BotConfig, incoming: Partial<BotConfig> | undefine
       workspaceOnly: bash?.workspaceOnly ?? base.bash.workspaceOnly,
       blockedKeywords: ensureStringList(bash?.blockedKeywords, base.bash.blockedKeywords)
     }
+  };
+}
+
+function mergeBotImageReaderSettings(
+  base: BotImageReaderSettings,
+  incoming: Partial<BotImageReaderSettings> | undefined,
+  legacy: BotImageReaderSettings
+): BotImageReaderSettings {
+  const model = normalizeModelName(incoming?.model, legacy.model || base.model);
+  const providerId = typeof incoming?.providerId === "string"
+    ? incoming.providerId.trim()
+    : legacy.providerId || base.providerId;
+  return {
+    enabled: incoming?.enabled ?? legacy.enabled ?? base.enabled,
+    providerId,
+    model,
+    reasoningEffort: resolveModelReasoningEffort(
+      model,
+      isReasoningEffort(incoming?.reasoningEffort) ? incoming.reasoningEffort : undefined,
+      legacy.reasoningEffort ?? base.reasoningEffort
+    ).effort
   };
 }
 

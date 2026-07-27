@@ -58,11 +58,13 @@
 
 ### 5.5 场域知识
 
-场域知识是当前角色可编辑的人格片段，不属于工作记忆、长期记忆、用户画像或 Agent 资料库。它保存在当前 Agent workspace 的 `AIR.md`，记录一个实时社交场域中默认知道但不会每轮重述的内容，包括会话范围、昵称与身份映射、小团体黑话和内部梗、共同话题与近期事件、关系亲疏与冲突变化、气氛和幽默边界、明确禁忌、群规、临时约定、礼节，以及公共流行语的语气、更新时间、失效状态与纠错信息。
+场域知识是当前角色可编辑的场域记忆，不属于工作记忆、长期记忆、用户画像或 Agent 资料库；管理台将它作为记忆页的平级来源展示和编辑，不再列入 Agent 提示词。它保存在当前 Agent workspace 的 `AIR.md`，记录一个实时社交场域中默认知道但不会每轮重述的内容，包括会话范围、昵称与身份映射、小团体黑话和内部梗、共同话题与近期事件、关系亲疏与冲突变化、气氛和幽默边界、明确禁忌、群规、临时约定、礼节，以及公共流行语的语气、更新时间、失效状态与纠错信息。
 
 明确表达的“不要做某事”“讨厌某事”“请这样称呼我”和“这个梗在这里表示某意思”必须作为强证据保留；无人解释但反复出现的模式只能标为低置信观察。公共热梗与单个会话私梗分区保存，所有私聊、用户群聊和 Bot 群聊条目都必须携带范围，不能跨场域传播。公共语境只提供理解基线，允许识别惩罚性或暴力意象的戏谑表达，但不能把玩笑升级为真实行动，也不能用热梗替代用户在当前场域中的明确纠正。
 
 `read_air` 调用使用独立模型请求把原有场域知识、最新聊天记录和角色注入理解合并成完整替换稿。工具写入不追加增长型历史，不使用 JSON/JSONL 或业务 SQLite；`AIR.md` 与其他人格 Markdown 一样属于小型配置文件。文件写入使用 64 KiB 上限、符号链接拒绝、revision CAS、串行队列和原子替换，成功后热重载当前人格；模型请求、工具调用和成功或失败结果进入请求日志，但不得把秘密或宿主绝对路径写入日志。
+
+图片消息在入站准备阶段由当前 Agent 的独立读图节点生成简短中文 alt text，推荐表达为“一张包含……的图片”或“一张有……的图片，他们正在……”。alt text 与图片媒体分离保存到消息记录，进入后续会话历史、群聊编排、Thread 与主回复上下文；多模态主模型也必须收到该文本。alt text 只提供快速语义，媒体句柄仍是获取原图和核对细节的唯一会话引用。
 
 ### 5.6 每日 Dream
 
@@ -128,7 +130,7 @@ NapCat 上报的 QQ 文件优先通过 OneBot action 返回的受控 URL 进入 
 
 每个 Agent 的 `workbench/` 是 `read_file`、`write_file` 与 Bash 共用的私有文件边界。文件工具只处理 well-formed UTF-16、NFC 规范化的 POSIX 相对路径，路径最长 1024 UTF-8 字节，单段最长 255 字节；绝对路径、反斜杠、空段、`.`、`..`、lone surrogate、NFD、C0/C1 控制字符、符号链接、非普通文件、多个硬链接和跨 Agent 路径全部拒绝。大小写与 Unicode replacement character 不折叠或替换。读取上限为 1 MiB，并另以 262,144 个 JavaScript 字符限制模型输出；UTF-8 使用 fatal decoder，文件开头的三字节 BOM 保留为正文首字符 `U+FEFF` 并计入 `byteLength`，无 BOM 正文不变。读取使用 `O_NOFOLLOW` 的同一描述符，在读前、读后及路径复验之间核对根目录、父链、设备、inode、ctime、mtime、大小和链接数，文件在检查后增长时最多读取上限加一个字节后拒绝。
 
-自拍、表情、Skills 与知识库直接位于 Native `workbench/`，分别使用 `selfie/references.jsonl`、`emoji/emojis.jsonl`、`skills/index.json` 与 `knowledge/index.json`。Docker Bash 的独立 cwd 为 `docker-workbench/`，运行时把完整 Native workbench 只读映射到 `/workbench/native-workbench/`；两个工作区不共享可写目录。Native Bash 通过宿主绝对路径与 `SUNABOT_DOCKER_WORKBENCH` 同时寻址两个工作区，Docker Bash 通过 `SUNABOT_NATIVE_WORKBENCH` 只读寻址 Native 投影。
+自拍、表情、Skills 与知识库直接位于 Native `workbench/`，分别使用 `selfie/references.jsonl`、`emoji/emojis.jsonl`、`skills/index.json` 与 `knowledge/index.json`。需要长期记住的聊天图片先由 `export_chat_media` 导出，再由获准的 Bash 放入 `knowledge/` 并创建可索引的相邻资料；`add_workmemory` 正文只保存 `knowledge/...` 相对链接。该可移植路径由 Native 资源解析器直接定位，可继续作为 `send_file`、`generate_img` 或 `selfie` 的素材输入，不依赖当前会话句柄、宿主绝对路径或 Docker cwd。Docker Bash 的独立 cwd 为 `docker-workbench/`，运行时把完整 Native workbench 只读映射到 `/workbench/native-workbench/`；两个工作区不共享可写目录。Native Bash 通过宿主绝对路径与 `SUNABOT_DOCKER_WORKBENCH` 同时寻址两个工作区，Docker Bash 通过 `SUNABOT_NATIVE_WORKBENCH` 只读寻址 Native 投影。
 
 每个 Agent 预装并启用指令型 `workbench-config` Skill，用于表情、Skills、自拍、知识库、聊天媒体和双 Workbench 内容寻址。发行包以 `codex-skills/workbench-config/` 为唯一来源；启动和新增 Agent 时通过现有 Skill 包摘要、确定性安全审查、双摘要批准、事务日志与原子索引发布链路安装或升级，并以 `source.kind=bundled` 标记来源。相同 ID 的非预装 Skill 属于显式冲突，启动不得覆盖。Skill 明确以本轮获准 Bash 作为 Workbench 文件检索、创建、转换、整理和维护的首选路径：Native Bash 可在同一 Agent 的权威 `workbench/` 内按固定入口、现有 schema、写前摘要或 revision、同目录原子替换和发布后回读更新资源；Docker Bash 可写独立 `/workbench` 并从只读 `native-workbench/` 取用正式资源，不能把 Docker 产物伪装成已发布资源。当前 Agent 配置的管理员 QQ 在私聊和群聊中均可于本轮实际提供 `import_chat_emoji` 时导入表情，群聊依靠该工具跨越 Docker 只读投影完成原子发布；Native 从 `emoji/emojis.jsonl`、Docker 从只读 `native-workbench/emoji/emojis.jsonl` 寻址同一权威清单。聊天媒体句柄仍先由 `export_chat_media` 取得受控字节，Skill 安装、替换、独立审查、启用与删除仍由 Skill 仓库执行摘要绑定和 CAS，Bash 负责源包创作、维护、验证、哈希与归档且不能伪造批准字段。该 Skill 只能说明并调用当前会话已经暴露的工具，不能扩大 Bash、文件、聊天媒体或资源仓库权限。
 

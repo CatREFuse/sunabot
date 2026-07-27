@@ -5,7 +5,7 @@ import {
   ParsedIncomingMessage,
   type AppConfig
 } from "../types.js";
-import { inboundImageUrls } from "../../packages/contracts/messaging/messages.js";
+import { inboundImageAltTexts, inboundImageUrls } from "../../packages/contracts/messaging/messages.js";
 import { senderDisplayName, senderIdentity } from "../../services/conversations/senderName.js";
 import {
   ACTIVE_CONVERSATION_WINDOW_MS,
@@ -79,6 +79,7 @@ export function runtime_recordIncomingMessage(this: RuntimeHost,
       isAdmin: this.isAdminUser(incoming.userId),
       selfId: incoming.selfId,
       imageUrls: inboundImageUrls(incoming),
+      imageAltTexts: inboundImageAltTexts(incoming),
       attachments: persistedAttachments(incoming.attachments),
       replyMessageIds: incoming.replyMessageIds,
       quoteReferences: persistedQuoteReferences(incoming.quoteReferences)

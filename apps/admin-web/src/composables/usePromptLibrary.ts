@@ -17,7 +17,6 @@ const allFiles: AgentFileSummary[] = [
   ),
   file("persona.user", "USER", "persona", "USER.md", "fragment"),
   file("persona.relation", "RELATION", "persona", "RELATION.md", "fragment"),
-  file("persona.air", "场域知识", "persona", "AIR.md", "fragment"),
   file("conversation.private-reply", "单聊回复", "conversation", "conversation_private_reply.json", "final"),
   file("conversation.group-reply", "群聊回复", "conversation", "conversation_group_reply.json", "final"),
   file("conversation.tone-rewrite", "语气改写", "conversation", "tone_rewrite.json", "final"),

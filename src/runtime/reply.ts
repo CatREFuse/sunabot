@@ -71,6 +71,7 @@ import {
 } from "./replyModuleIsolation.js";
 import { prepareReplyAgentExtensions } from "./replyAgentExtensionIsolation.js";
 import { prepareReplyMemoryContext } from "./replyMemoryIsolation.js";
+import { replyProvider } from "./replyProvider.js";
 import {
   GROUP_CHAT_SUMMARY_COMMAND,
   GROUP_CHAT_SUMMARY_WINDOW_MS,
@@ -103,7 +104,7 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
       seedToolNames?: readonly string[];
     } = {}
   ) {
-    const provider = this.getProvider();
+    const provider = replyProvider(this);
     const admin = this.adminIdentity();
     const isAdmin = isAdminUserId(incoming.userId, admin);
     const codexControl = !options.atomicImageReply && codexControlAvailable(
@@ -282,6 +283,7 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
       const currentUserMessage = currentPromptInputMessage(promptRequest, currentInputMarker);
       if (currentUserMessage) {
         currentUserMessage.imageUrls = debounceContext.currentImageUrls().slice(0, MAX_CURRENT_CONTEXT_IMAGES);
+        currentUserMessage.imageAltTexts = debounceContext.currentImageAltTexts().slice(0, MAX_CURRENT_CONTEXT_IMAGES);
         currentUserMessage.localImagePaths = attachmentContext.localImagePaths;
       }
       const selfieChatReferenceImageUrls = this.collectSelfieChatReferenceImages(
@@ -681,7 +683,7 @@ export async function runtime_replyWithGroupChatSummary(this: RuntimeHost,
         if (replyRecord) this.scheduleMemoryCompression(replyRecord);
         return;
       }
-      const provider = this.getProvider();
+      const provider = replyProvider(this);
       const now = new Date();
       const payload = {
         command: GROUP_CHAT_SUMMARY_COMMAND,
@@ -740,7 +742,7 @@ export async function runtime_processDeferredToolJob(this: RuntimeHost, job: Too
     if (!isRuntimeIncomingMessage(incoming)) {
       return { status: "failed" as const, error: { message: "异步图片任务缺少原始请求。" } };
     }
-    const provider = this.getProvider();
+    const provider = replyProvider(this);
     const logContext = {
       conversationId: conversationRecordId(incoming),
       incomingMessageId: incoming.messageId == null ? undefined : String(incoming.messageId),
@@ -790,7 +792,6 @@ function isSuccessfulGeneratedImageResult(value: unknown): value is { ok: true; 
   const result = value as { ok?: unknown; image?: ImageResult };
   return result?.ok === true && Boolean(result.image?.url || result.image?.filePath);
 }
-
 function readStringField(value: Record<string, unknown>, key: string) {
   const field = value[key];
   return typeof field === "string" && field.trim() ? field : undefined;

@@ -27,8 +27,16 @@ export {
   nativeBashTool,
   workspaceBashTool
 } from "./bashTool.js";
-export { GENERATE_IMG_TOOL_NAME, generateImgTool } from "./generateImgTool.js";
-export { SELFIE_TOOL_NAME, selfieTool } from "./selfieTool.js";
+export {
+  GENERATE_IMG_TOOL_NAME,
+  LEGACY_GENERATE_IMG_TOOL_DESCRIPTION,
+  generateImgTool
+} from "./generateImgTool.js";
+export {
+  LEGACY_SELFIE_TOOL_DESCRIPTION,
+  SELFIE_TOOL_NAME,
+  selfieTool
+} from "./selfieTool.js";
 export { ASSISTANT_TEXT_TOOL_NAME, assistantTextTool, readAssistantText } from "./assistantTextTool.js";
 export { NO_REPLY_TOOL_NAME, noReplyTool } from "./noReplyTool.js";
 export {
@@ -110,6 +118,7 @@ export {
   type ImportedChatEmoji
 } from "./chatMediaTool.js";
 export {
+  LEGACY_SEND_FILE_TOOL_DESCRIPTION,
   SEND_FILE_TOOL_NAME,
   SEND_VOICE_MESSAGE_TOOL_NAME,
   sendFileTool,

@@ -76,6 +76,9 @@ describe("ConfigService section semantics", () => {
       value: {
         adminQq: envelope.config.bot.adminQq,
         adminName: envelope.config.bot.adminName,
+        replyModel: envelope.config.bot.replyModel,
+        replyReasoningEffort: envelope.config.bot.replyReasoningEffort,
+        imageReader: envelope.config.bot.imageReader,
         replyDebounceMs: 7_500,
         pokeOnNoReply: envelope.config.bot.pokeOnNoReply,
         quoteGroupReplies: envelope.config.bot.quoteGroupReplies,
@@ -100,6 +103,9 @@ describe("ConfigService section semantics", () => {
       value: {
         adminQq: envelope.config.bot.adminQq,
         adminName: envelope.config.bot.adminName,
+        replyModel: envelope.config.bot.replyModel,
+        replyReasoningEffort: envelope.config.bot.replyReasoningEffort,
+        imageReader: envelope.config.bot.imageReader,
         replyDebounceMs,
         pokeOnNoReply: envelope.config.bot.pokeOnNoReply,
         quoteGroupReplies: envelope.config.bot.quoteGroupReplies,
@@ -496,6 +502,9 @@ describe("ConfigService section semantics", () => {
       value: {
         adminQq: envelope.config.bot.adminQq,
         adminName: envelope.config.bot.adminName,
+        replyModel: envelope.config.bot.replyModel,
+        replyReasoningEffort: envelope.config.bot.replyReasoningEffort,
+        imageReader: envelope.config.bot.imageReader,
         replyDebounceMs: envelope.config.bot.replyDebounceMs,
         pokeOnNoReply: envelope.config.bot.pokeOnNoReply,
         quoteGroupReplies: !envelope.config.bot.quoteGroupReplies,
@@ -519,6 +528,9 @@ describe("ConfigService section semantics", () => {
       value: {
         adminQq: envelope.config.bot.adminQq,
         adminName: envelope.config.bot.adminName,
+        replyModel: envelope.config.bot.replyModel,
+        replyReasoningEffort: envelope.config.bot.replyReasoningEffort,
+        imageReader: envelope.config.bot.imageReader,
         replyDebounceMs: envelope.config.bot.replyDebounceMs,
         pokeOnNoReply: envelope.config.bot.pokeOnNoReply,
         quoteGroupReplies: envelope.config.bot.quoteGroupReplies,

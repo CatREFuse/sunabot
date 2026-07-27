@@ -10,7 +10,7 @@ export interface SettingsSectionDefinition {
 
 export const settingsCatalog: readonly SettingsSectionDefinition[] = [
   { id: "persona", label: "Agent 身份", group: "身份与回复", description: "头像、Agent 标识与管理员身份", scope: "agent" },
-  { id: "bot", label: "回复行为", group: "身份与回复", description: "回复时机、范围、引用与唤醒方式", scope: "agent" },
+  { id: "bot", label: "回复行为", group: "身份与回复", description: "回复模型、读图、时机、范围与唤醒", scope: "agent" },
   { id: "tone", label: "语气处理", group: "身份与回复", description: "语气改写、分段发送与独立模型", scope: "agent" },
   { id: "memory", label: "记忆处理", group: "上下文与编排", description: "压缩模型、容量、Dream 抽样与提示词", scope: "agent" },
   { id: "orchestrator", label: "群聊编排", group: "上下文与编排", description: "Thread 拆分与主动回复", scope: "agent" },

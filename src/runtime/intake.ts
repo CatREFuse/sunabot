@@ -56,6 +56,7 @@ import {
   SCHEDULED_CALLBACK_OUTBOX_KIND
 } from "./scheduledTasks.js";
 import { conversationLastText } from "./selfieHelpers.js";
+import { populateInboundImageAltTexts } from "./imageAltText.js";
 import {
   createSystemConfigHeldConfirmationPort,
   sameCanonicalOutbox,
@@ -718,13 +719,23 @@ export async function runtime_prepareIncomingMessage(this: RuntimeHost, incoming
     await withAbortTimeout(async (signal) => {
       await this.senderNameResolver.hydrate(incoming, gateway);
       await this.attachReplyReferences(incoming, gateway, signal);
-      if (!incoming.attachments.length) return;
-      incoming.attachments = await this.attachmentService.processIncoming(
-        incoming.attachments,
-        attachmentSourcePort(gateway),
-        incoming.text,
-        incomingAttachmentReferenceScope(incoming)
-      );
-      incoming.quoteReferences = replaceQuoteAttachments(incoming.quoteReferences, incoming.attachments);
+      if (incoming.attachments.length) {
+        incoming.attachments = await this.attachmentService.processIncoming(
+          incoming.attachments,
+          attachmentSourcePort(gateway),
+          incoming.text,
+          incomingAttachmentReferenceScope(incoming)
+        );
+        incoming.quoteReferences = replaceQuoteAttachments(incoming.quoteReferences, incoming.attachments);
+      }
+      await populateInboundImageAltTexts(this, incoming, {
+        signal,
+        logContext: {
+          conversationId: conversationRecordId(incoming),
+          incomingMessageId: incoming.messageId == null ? undefined : String(incoming.messageId),
+          stage: "image_alt_text",
+          promptFamily: "image.alt-text"
+        }
+      });
     }, PREPARE_TIMEOUT_MS);
   }

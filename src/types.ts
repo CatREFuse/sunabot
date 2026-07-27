@@ -26,6 +26,7 @@ export type {
   AgentToolName,
   BotBashSettings,
   BotDirectorSettings,
+  BotImageReaderSettings,
   BotMemorySettings,
   BotOrchestratorSettings,
   BotToneSettings,
@@ -107,6 +108,7 @@ export interface ConversationMessageRecord {
   isAdmin?: boolean;
   selfId?: number;
   imageUrls?: string[];
+  imageAltTexts?: string[];
   attachments?: ParsedAttachment[];
   replyMessageIds?: number[];
   quoteReferences?: ConversationMessageQuote[];

@@ -132,7 +132,7 @@ async function runMemoryVisualScenario(page: Page, testInfo: TestInfo) {
     await page.setViewportSize(viewport);
     await page.goto("/memory");
     const sourceTabs = page.getByRole("tablist", { name: "记忆类别" });
-    await expect(sourceTabs.getByRole("tab")).toHaveCount(4);
+    await expect(sourceTabs.getByRole("tab")).toHaveCount(5);
     await expect(sourceTabs.getByRole("tab", { name: "工作记忆", exact: true })).toHaveAttribute("aria-selected", "true");
     const workingDocument = page.getByRole("tabpanel", { name: "工作记忆" });
     await expect(workingDocument).toContainText("WebUI 使用 Vue 3、TypeScript 与 Tailwind。");
@@ -156,6 +156,12 @@ async function runMemoryVisualScenario(page: Page, testInfo: TestInfo) {
     await expect(pagination).toContainText("21 条 · 1 / 2");
     await pagination.scrollIntoViewIfNeeded();
     await capture(page, viewport.name, theme, "memory-pagination", { fullPage: false });
+
+    await sourceTabs.getByRole("tab", { name: "场域知识", exact: true }).click();
+    const air = page.getByRole("tabpanel", { name: "场域知识" });
+    await expect(air.getByLabel("场域知识正文")).toHaveValue(/按会话范围理解/);
+    await air.scrollIntoViewIfNeeded();
+    await capture(page, viewport.name, theme, "memory-air", { fullPage: false });
 
     await sourceTabs.getByRole("tab", { name: "梦境", exact: true }).click();
     const dream = page.getByRole("tabpanel", { name: "梦境" });
@@ -559,6 +565,13 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     await page.goto("/agent-settings/persona");
     await expect(page.getByRole("heading", { name: "Agent 身份" })).toBeVisible();
     await capture(page, viewport.name, theme, "settings-agent-identity");
+
+    await page.goto("/agent-settings/bot");
+    await expect(page.getByRole("heading", { name: "回复模型" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "读图" })).toBeVisible();
+    await expect(page.getByLabel("生成图片描述")).toBeChecked();
+    await expect(page.getByLabel("读图模型")).toHaveValue("gpt-5.4-mini");
+    await capture(page, viewport.name, theme, "settings-reply-model-image-reader");
 
     await page.goto("/agent-settings/memory");
     await expect(page.getByRole("heading", { name: "记忆处理" })).toBeVisible();

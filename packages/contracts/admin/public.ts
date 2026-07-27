@@ -148,6 +148,13 @@ export interface BotDirectorSettings {
   enabled: boolean;
 }
 
+export interface BotImageReaderSettings {
+  enabled: boolean;
+  providerId: string;
+  model: string;
+  reasoningEffort?: ReasoningEffort;
+}
+
 export interface BroadcastStormConfig {
   enabled: boolean;
   windowMinutes: number;
@@ -189,6 +196,9 @@ export interface BotBashSettings {
 export interface BotConfigShape<TTools extends BotToolSettingsBase> {
   adminQq: string;
   adminName: string;
+  replyModel: string;
+  replyReasoningEffort?: ReasoningEffort;
+  imageReader: BotImageReaderSettings;
   replyDebounceMs: number;
   pokeOnNoReply: boolean;
   quoteGroupReplies: boolean;

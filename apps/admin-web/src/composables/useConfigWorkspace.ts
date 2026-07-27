@@ -45,6 +45,14 @@ const emptyConfig: AppConfig = {
   bot: {
     adminQq: "",
     adminName: "",
+    replyModel: "gpt-5.5",
+    replyReasoningEffort: "medium",
+    imageReader: {
+      enabled: true,
+      providerId: "",
+      model: "gpt-5.5",
+      reasoningEffort: "low"
+    },
     replyDebounceMs: 5_000,
     pokeOnNoReply: false,
     quoteGroupReplies: true,
@@ -466,6 +474,9 @@ function valuesFromConfig(config: AppConfig): SectionDrafts {
     bot: {
       adminQq: config.bot.adminQq,
       adminName: config.bot.adminName,
+      replyModel: config.bot.replyModel,
+      replyReasoningEffort: config.bot.replyReasoningEffort,
+      imageReader: clone(config.bot.imageReader),
       replyDebounceMs: config.bot.replyDebounceMs ?? emptyConfig.bot.replyDebounceMs,
       pokeOnNoReply: config.bot.pokeOnNoReply,
       quoteGroupReplies: config.bot.quoteGroupReplies,

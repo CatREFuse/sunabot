@@ -4,6 +4,7 @@ export interface ChatMessage {
   role: ChatRole;
   content: string;
   imageUrls?: string[];
+  imageAltTexts?: string[];
   localImagePaths?: string[];
 }
 

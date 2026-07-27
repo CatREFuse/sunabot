@@ -1,10 +1,18 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import ToggleSwitch from "../ui/ToggleSwitch.vue";
+import ModelSelect from "./ModelSelect.vue";
+import ReasoningEffortSelect from "./ReasoningEffortSelect.vue";
 import SettingsConfirmInput from "./SettingsConfirmInput.vue";
-import type { ConfigSectionValueMap } from "../../types";
+import type { ConfigSectionValueMap, ModelCatalogItem, ProviderConfig } from "../../types";
 const draft = defineModel<ConfigSectionValueMap["bot"]>({ required: true });
 const reply = defineModel<ConfigSectionValueMap["onebot"]>("reply", { required: true });
+const props = defineProps<{
+  models: readonly ModelCatalogItem[];
+  providers: readonly ProviderConfig[];
+  defaultProviderId: string;
+}>();
+const enabledProviders = computed(() => props.providers.filter((provider) => provider.enabled));
 const names = computed({
   get: () => reply.value.mentionNames.join(", "),
   set: (value: string) => (reply.value.mentionNames = split(value))
@@ -30,7 +38,48 @@ function split(value: string) {
   <section class="grid gap-8">
     <div>
       <h2 class="section-title">回复行为</h2>
-      <p class="mt-2 text-sm leading-6 text-mute">设置回复时机、范围、群聊引用和唤醒方式。</p>
+      <p class="mt-2 text-sm leading-6 text-mute">设置回复模型、读图、时机、范围和唤醒方式。</p>
+    </div>
+    <div class="settings-group grid gap-5">
+      <h3 class="settings-group-title">回复模型</h3>
+      <div class="grid gap-5 sm:grid-cols-2">
+        <ModelSelect v-model="draft.replyModel" :models="props.models" label="模型" />
+        <ReasoningEffortSelect
+          v-model="draft.replyReasoningEffort"
+          :model="draft.replyModel"
+          :models="props.models"
+        />
+      </div>
+    </div>
+    <div class="settings-group grid gap-5">
+      <h3 class="settings-group-title">读图</h3>
+      <ToggleSwitch
+        v-model="draft.imageReader.enabled"
+        label="生成图片描述"
+        description="将图片内容写入消息记录"
+      />
+      <div class="grid gap-5 sm:grid-cols-2">
+        <label class="field">
+          <span class="field-label">Provider</span>
+          <select v-model="draft.imageReader.providerId" class="control" :disabled="!draft.imageReader.enabled">
+            <option v-for="provider in enabledProviders" :key="provider.id" :value="provider.id">
+              {{ provider.id === props.defaultProviderId ? `${provider.label} · 默认` : provider.label }}
+            </option>
+          </select>
+        </label>
+        <ModelSelect
+          v-model="draft.imageReader.model"
+          :models="props.models"
+          label="读图模型"
+          :disabled="!draft.imageReader.enabled"
+        />
+        <ReasoningEffortSelect
+          v-model="draft.imageReader.reasoningEffort"
+          :model="draft.imageReader.model"
+          :models="props.models"
+          :disabled="!draft.imageReader.enabled"
+        />
+      </div>
     </div>
     <div class="settings-group grid gap-5">
       <h3 class="settings-group-title">回复时机</h3>

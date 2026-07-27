@@ -108,6 +108,7 @@ export type MediaAssetRefV1 =
       kind: "image";
       source: "remote_url" | "inline_data";
       url: string;
+      altText?: string;
       filePath?: never;
     }
   | {
@@ -116,6 +117,7 @@ export type MediaAssetRefV1 =
       source: "shared_file";
       filePath: string;
       url?: string;
+      altText?: string;
     };
 
 export interface ImageResult {
@@ -124,12 +126,13 @@ export interface ImageResult {
   revisedPrompt?: string;
 }
 
-export function imageMediaAsset(url: string): MediaAssetRefV1 {
+export function imageMediaAsset(url: string, altText?: string): MediaAssetRefV1 {
   return {
     schemaVersion: 1,
     kind: "image",
     source: /^data:image\//i.test(url) ? "inline_data" : "remote_url",
-    url
+    url,
+    ...(altText?.trim() ? { altText: altText.trim() } : {})
   };
 }
 

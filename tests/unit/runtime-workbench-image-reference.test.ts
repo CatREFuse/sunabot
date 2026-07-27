@@ -66,6 +66,25 @@ describe("Runtime workbench image references", () => {
       })
     );
   });
+
+  it("reads a knowledge image by portable relative path from a Docker conversation", async () => {
+    const workspace = await temporaryAgentWorkspace();
+    const workbench = await resolveAgentWorkbench(workspace, "native");
+    await fs.mkdir(path.join(workbench, "knowledge", "memory-images"), { recursive: true });
+    await fs.writeFile(
+      path.join(workbench, "knowledge", "memory-images", "reference.png"),
+      Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64")
+    );
+    const assets = new RuntimeConversationAssets({
+      config: { persona: { agentWorkspace: workspace, defaultAgentId: "plana" } },
+      isAdminUser: () => false
+    } as never);
+
+    await expect(assets.resolveImageReferences(
+      { ...adminPrivateIncoming(), scope: "user_group", groupId: 20 } as ParsedIncomingMessage,
+      ["knowledge/memory-images/reference.png"]
+    )).resolves.toHaveLength(1);
+  });
 });
 
 async function temporaryAgentWorkspace() {

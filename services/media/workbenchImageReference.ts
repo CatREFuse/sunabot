@@ -40,6 +40,15 @@ export async function resolveWorkbenchImageReferenceAddress(
   }
 
   if (!path.isAbsolute(requested)) {
+    const normalized = path.posix.normalize(requested);
+    if (normalized === "knowledge" || normalized.startsWith("knowledge/")) {
+      if (normalized === "knowledge" || normalized.includes("../")) throw outsideAuthorizedWorkbench();
+      return {
+        path: normalized.split("/").join(path.sep),
+        backend: "native",
+        exactBackend: true
+      };
+    }
     return {
       path: requested,
       backend: conversationBackend,

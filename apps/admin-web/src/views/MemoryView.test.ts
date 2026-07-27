@@ -172,9 +172,10 @@ describe("MemoryView pagination", () => {
       expect.stringContaining("工作记忆"),
       expect.stringContaining("长期记忆"),
       expect.stringContaining("用户画像"),
+      expect.stringContaining("场域知识"),
       expect.stringContaining("梦境")
     ]));
-    await tabs.findAll("button")[3]!.trigger("click");
+    await tabs.findAll("button")[4]!.trigger("click");
 
     expect(wrapper.findComponent(DreamHistoryPanel).props()).toMatchObject({
       timeZone: "Asia/Shanghai",
@@ -262,14 +263,14 @@ describe("MemoryView pagination", () => {
     const wrapper = shallowMount(MemoryView, { attachTo: document.body });
     const tabs = wrapper.get('nav[aria-label="记忆类别"]').findAll('[role="tab"]');
 
-    expect(tabs.map((tab) => tab.attributes("tabindex"))).toEqual(["0", "-1", "-1", "-1"]);
+    expect(tabs.map((tab) => tab.attributes("tabindex"))).toEqual(["0", "-1", "-1", "-1", "-1"]);
     await tabs[0]!.trigger("keydown", { key: "End" });
     await nextTick();
 
-    expect(tabs[3]!.attributes("aria-selected")).toBe("true");
-    expect(tabs.map((tab) => tab.attributes("tabindex"))).toEqual(["-1", "-1", "-1", "0"]);
+    expect(tabs[4]!.attributes("aria-selected")).toBe("true");
+    expect(tabs.map((tab) => tab.attributes("tabindex"))).toEqual(["-1", "-1", "-1", "-1", "0"]);
 
-    await tabs[3]!.trigger("keydown", { key: "ArrowRight" });
+    await tabs[4]!.trigger("keydown", { key: "ArrowRight" });
     await nextTick();
     expect(tabs[0]!.attributes("aria-selected")).toBe("true");
     wrapper.unmount();

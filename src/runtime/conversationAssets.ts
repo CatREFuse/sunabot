@@ -110,11 +110,18 @@ export class RuntimeConversationAssets {
     }
     const target = conversationAssetTarget(options.incoming, expectedAgentId);
     const incomingFingerprint = conversationAssetIncomingFingerprint(options.incoming, target);
+    const agentWorkspace = resolveProjectPath(this.host.config.persona.agentWorkspace);
+    if (!agentWorkspace) throw new Error("当前 Agent 工作区未配置。");
+    const workbench = conversationAssetWorkbench(options.incoming, this.host.isAdminUser(options.incoming.userId));
+    const address = voice
+      ? { path: options.input.path, backend: workbench, exactBackend: false }
+      : await resolveWorkbenchImageReferenceAddress(agentWorkspace, workbench, options.input.path);
     const { relativePath, prepared, rootIdentity } = await this.prepare(
-      options.input,
+      { ...options.input, path: address.path },
       undefined,
       undefined,
-      conversationAssetWorkbench(options.incoming, this.host.isAdminUser(options.incoming.userId))
+      address.backend,
+      address.exactBackend
     );
     if (options.isCurrent && !options.isCurrent()) {
       throw new Error("当前会话回复已关闭，文件未排队。");

@@ -24,6 +24,16 @@ import {
 import type { ConversationRecord } from "../../src/types.js";
 
 describe("group context prompt contract", () => {
+  it("requires person, event, and file coreference resolution", () => {
+    for (const id of ["orchestrator.user-group", "orchestrator.group-thread", "conversation.group-reply"] as const) {
+      const content = defaultPromptContent(id);
+      expect(content).toContain("对人");
+      expect(content).toContain("对事");
+      expect(content).toMatch(/文件|媒体/);
+      expect(content).toContain("图片替代文本");
+    }
+  });
+
   it("keeps shared orchestration prompts generic for every Agent", () => {
     for (const id of ["orchestrator.user-group", "conversation.group-summary"] as const) {
       const template = defaultFinalPromptTemplate(id)!;
@@ -58,6 +68,19 @@ describe("group context prompt contract", () => {
       "[timestamp=2026-07-16T19:57:00.000+08:00 | timezone=Asia/Shanghai | sequence=8789 | message_id=248637222 | display_name=王橘子 | uid=2218471571 | reply_to_message_id=753224704]\n" +
       "消息正文 引用：王友利奈绪 #753224704 引用内容"
     );
+  });
+
+  it("includes persisted image alt text beside the media handle", () => {
+    const message = conversationMessage({
+      id: "248637223",
+      imageUrls: ["https://example.test/image.png"],
+      imageAltTexts: ["一张两个人正在查看文档的图片"]
+    });
+
+    expect(toContextChatMessage(message, false, { userId: "9", name: "Admin" }).content)
+      .toContain("一张两个人正在查看文档的图片");
+    expect(toContextChatMessage(message, false, { userId: "9", name: "Admin" }).content)
+      .toContain("message:248637223:image:0");
   });
 
   it("uses the bot QQ as uid for assistant messages", () => {
