@@ -14,6 +14,12 @@ The reviewer must confirm that the successful `webfetch` tool result reports
 rendered table content without any Renderer token, host path, Cookie, request
 header, or browser diagnostic text.
 
+The lifecycle regression for this case runs `./sunabot.sh restart` twice after
+one successful `./sunabot.sh bootstrap`. The second restart must reuse the
+dependency-keyed Renderer browser layer: its build output may validate cached
+layers, but it must not run Playwright browser installation, fetch browser
+archives, or install Chromium operating-system packages.
+
 <!-- sunabot-user-test-case:v1 -->
 ```json
 {
