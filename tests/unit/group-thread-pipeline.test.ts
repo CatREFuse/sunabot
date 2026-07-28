@@ -291,7 +291,7 @@ describe("group thread runtime pipeline", () => {
     expect(snapshot?.messageAssignments.find((assignment) => assignment.messageId === "2")?.relation).toBe("reply");
   });
 
-  it("allows a valid Thread classification to complete after ten seconds", async () => {
+  it("allows a valid Thread classification to complete after eighteen seconds", async () => {
     vi.useFakeTimers();
     const record: ConversationRecord = {
       id: "group:1030412235",
@@ -325,7 +325,7 @@ describe("group thread runtime pipeline", () => {
       getProviderForModel: vi.fn(() => ({})),
       renderPromptRequest: vi.fn(async () => promptRequest([{ role: "user", content: "classify" }])),
       completePrompt: vi.fn(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 10_000));
+        await new Promise((resolve) => setTimeout(resolve, 18_000));
         return JSON.stringify({
           schema_version: 1,
           active_thread_key: "dinner",
@@ -349,7 +349,7 @@ describe("group thread runtime pipeline", () => {
     const pending = runtime_prepareGroupThreadContext.call(runtime, groupIncoming(), {
       captureSequence: 1
     });
-    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(18_000);
     const snapshot = await pending;
 
     expect(store.commitGroupThreadState).toHaveBeenCalledOnce();

@@ -26,7 +26,7 @@ const PROMPT_THREAD_LIMIT = 72;
 const CLASSIFIER_PREVIOUS_THREAD_LIMIT = 64;
 const PROMPT_PARTICIPANT_LIMIT = 16;
 const PROMPT_THREAD_MESSAGE_LIMIT = 16;
-const GROUP_THREAD_TIMEOUT_MS = 15_000;
+const GROUP_THREAD_TIMEOUT_MS = 20_000;
 const GROUP_THREAD_PROMPT_REVISION = "orchestrator.group-thread:v1";
 
 interface GroupThreadRuntimeHost extends Omit<RuntimePromptPort, "getProvider"> { readonly conversationRecords: ReadonlyMap<string, ConversationRecord>; buildRecentContextMessages(incoming: ParsedIncomingMessage, captureSequence?: number, messageLimit?: number): Array<{ content: string }>; getProviderForModel(model: string, requestedEffort?: ReasoningEffort): ReturnType<RuntimePromptPort["getProvider"]>; }
