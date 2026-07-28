@@ -17,12 +17,44 @@ export interface ReleaseCatalog {
   releases: readonly ReleaseRecord[];
 }
 
-export const CURRENT_RELEASE_VERSION = "0.1.4";
+export const CURRENT_RELEASE_VERSION = "1.0.0";
 
 export const RELEASE_CATALOG: ReleaseCatalog = {
   schemaVersion: 1,
   currentVersion: CURRENT_RELEASE_VERSION,
   releases: [
+    {
+      version: "1.0.0",
+      releasedAt: "2026-07-29",
+      title: "跨平台网页渲染",
+      summary: "动态网页渲染按宿主平台进入独立隔离环境，并复用已经安装的 Chromium。",
+      groups: [
+        {
+          title: "动态渲染",
+          items: [
+            "macOS Native Core 使用独立 Docker Renderer，Linux 与 WSL Native Core 使用 Bubblewrap Renderer。",
+            "Docker Core 继续通过 Compose 私有网络访问独立 Renderer。",
+            "Renderer 不可用时保留静态 WebFetch，并明确报告动态能力降级。"
+          ]
+        },
+        {
+          title: "隔离与鉴权",
+          items: [
+            "宿主 Renderer 只监听回环地址，并使用每次启动重新生成的 bearer token。",
+            "Renderer 不挂载 Agent workspace、数据库、Provider、Codex 或 OneBot 凭据。",
+            "doctor 会验证 Renderer 运行环境与 Chromium sandbox，缺失时不会静默降级。"
+          ]
+        },
+        {
+          title: "启动与升级",
+          items: [
+            "Chromium 在首次依赖同步或 Playwright 升级时安装，普通启动和重启复用现有镜像或浏览器。",
+            "启动器监管 Native Renderer 的进程组、健康、日志、退出与残留回收。",
+            "0.1.4 可通过版本专用脚本创建恢复点并完成重启、状态和运行检查。"
+          ]
+        }
+      ]
+    },
     {
       version: "0.1.4",
       releasedAt: "2026-07-28",

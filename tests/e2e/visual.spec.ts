@@ -531,7 +531,7 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
 
       await page.goto("/releases");
       await expect(page.getByRole("heading", { name: "版本更新", exact: true })).toBeVisible();
-      await expect(page.getByRole("heading", { name: "v0.1.4", exact: true })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "v1.0.0", exact: true })).toBeVisible();
       await capture(page, viewport.name, theme, "releases");
     }
 

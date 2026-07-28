@@ -1,5 +1,25 @@
 # 更新日志
 
+## [1.0.0] - 2026-07-29
+
+### 动态渲染
+
+- macOS Native Core 使用独立 Docker Renderer，Linux 与 WSL Native Core 使用 Bubblewrap Renderer。
+- Docker Core 继续通过 Compose 私有网络访问独立 Renderer。
+- Renderer 不可用时保留静态 WebFetch，并明确报告动态能力降级。
+
+### 隔离与鉴权
+
+- 宿主 Renderer 只监听回环地址，并使用每次启动重新生成的 bearer token。
+- Renderer 不挂载 Agent workspace、数据库、Provider、Codex 或 OneBot 凭据。
+- doctor 会验证 Renderer 运行环境与 Chromium sandbox，缺失时不会静默降级。
+
+### 启动与升级
+
+- Chromium 在首次依赖同步或 Playwright 升级时安装，普通启动和重启复用现有镜像或浏览器。
+- 启动器监管 Native Renderer 的进程组、健康、日志、退出与残留回收。
+- 0.1.4 可通过版本专用脚本创建恢复点并完成重启、状态和运行检查。
+
 ## [0.1.4] - 2026-07-28
 
 ### 图片参考
@@ -98,6 +118,7 @@ Bot 工作台、资源管理入口与 JSONL 清单完成统一升级。
 - 提示词编辑支持变量补全、搜索、折叠与冲突处理。
 - 新增当前版本与更新日志页面。
 
+[1.0.0]: https://github.com/CatREFuse/sunabot/releases/tag/v1.0.0
 [0.1.4]: https://github.com/CatREFuse/sunabot/releases/tag/v0.1.4
 [0.1.3]: https://github.com/CatREFuse/sunabot/releases/tag/v0.1.3
 [0.1.2]: https://github.com/CatREFuse/sunabot/releases/tag/v0.1.2
