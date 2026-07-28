@@ -13,7 +13,7 @@ import {
 import type { RenderedPromptRequest } from "../../services/agent/promptSystem.js";
 import { appendRequestLog } from "../../adapters/observability/requestLog.js";
 import { conversationRecordId } from "./messagingAttachmentHelpers.js";
-import { parseGroupContextMetadataValue } from "./conversationMemoryHelpers.js";
+import { isModelVisibleConversationMessage, parseGroupContextMetadataValue } from "./conversationMemoryHelpers.js";
 import { errorMessage, sanitizeErrorDetail, withAbortTimeout } from "./infrastructure.js";
 import { formatModelTimestamp, systemModelTimeZone } from "../../services/agent/modelTime.js";
 import type { RuntimePromptPort } from "./runtimeContracts.js";
@@ -26,7 +26,7 @@ const PROMPT_THREAD_LIMIT = 72;
 const CLASSIFIER_PREVIOUS_THREAD_LIMIT = 64;
 const PROMPT_PARTICIPANT_LIMIT = 16;
 const PROMPT_THREAD_MESSAGE_LIMIT = 16;
-const GROUP_THREAD_TIMEOUT_MS = 5_000;
+const GROUP_THREAD_TIMEOUT_MS = 15_000;
 const GROUP_THREAD_PROMPT_REVISION = "orchestrator.group-thread:v1";
 
 interface GroupThreadRuntimeHost extends Omit<RuntimePromptPort, "getProvider"> { readonly conversationRecords: ReadonlyMap<string, ConversationRecord>; buildRecentContextMessages(incoming: ParsedIncomingMessage, captureSequence?: number, messageLimit?: number): Array<{ content: string }>; getProviderForModel(model: string, requestedEffort?: ReasoningEffort): ReturnType<RuntimePromptPort["getProvider"]>; }
@@ -75,7 +75,7 @@ export async function runtime_prepareGroupThreadContext(
     : options.captureSequence;
   const historyCaptureSequence = currentBatchFromSequence ?? options.captureSequence;
   const sourceMessages = record.messages
-    .filter((message) => message.role === "user" || message.role === "assistant")
+    .filter(isModelVisibleConversationMessage)
     .filter((message) => Number.isSafeInteger(message.sequence) && Number(message.sequence) > 0)
     .filter((message) => sourceThroughSequence == null || Number(message.sequence) <= sourceThroughSequence)
     .filter((message) => currentBatchFromSequence == null ||

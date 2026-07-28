@@ -12,7 +12,7 @@ import type { RuntimeToolCapabilityResolver } from "../../services/tools/bashCap
 import type { WorkspaceBashRuntimePort } from "../../services/tools/bashRuntime.js";
 import { resolveProjectPath } from "../config.js";
 import type { AppConfig, ChatMessage, ConversationMessageQuote, ConversationRecord, ParsedIncomingMessage } from "../types.js";
-import { clampInteger, estimatePromptTokens, isAdminUserId, toContextChatMessage } from "./conversationMemoryHelpers.js";
+import { clampInteger, estimatePromptTokens, isAdminUserId, isModelVisibleConversationMessage, toContextChatMessage } from "./conversationMemoryHelpers.js";
 import {
   conversationMessageAttachments,
   conversationRecordId,
@@ -147,7 +147,7 @@ export function runtime_buildRecentContextMessages(
   const admin = this.adminIdentity();
   const candidates = record.messages
     .filter((message) => !currentMessageId || message.id !== currentMessageId)
-    .filter((message) => message.role === "user" || message.role === "assistant")
+    .filter(isModelVisibleConversationMessage)
     .filter((message) => captureSequence == null || Number(message.sequence ?? 0) < captureSequence)
     .slice(-clampInteger(messageLimit, this.contextMessageLimit(), 1, 120))
     .map((message) => toContextChatMessage(message, isAdminUserId(message.userId, admin), admin));
@@ -180,7 +180,7 @@ export function runtime_generateImgReferenceContext(
   const currentMessageId = incoming.messageId == null ? "" : String(incoming.messageId);
   const candidates = (record?.messages ?? [])
     .filter((message) => !currentMessageId || message.id !== currentMessageId)
-    .filter((message) => message.role === "user" || message.role === "assistant")
+    .filter(isModelVisibleConversationMessage)
     .filter((message) => captureSequence == null || Number(message.sequence ?? 0) < captureSequence)
     .filter((message) => (
       currentBatchFromSequence == null ||
@@ -193,6 +193,20 @@ export function runtime_generateImgReferenceContext(
   for (const message of candidates) {
     for (const [index, imageUrl] of (message.imageUrls ?? []).slice(0, 4).entries()) {
       if (imageUrl) mediaByHandle[generateImgMediaHandle(message.id, index)] = imageUrl;
+    }
+  }
+  for (const [index, imageUrl] of inboundImageUrls(incoming).slice(0, 4).entries()) {
+    if (currentMessageId && imageUrl) {
+      mediaByHandle[generateImgMediaHandle(currentMessageId, index)] = imageUrl;
+    }
+  }
+  for (const quote of incoming.quoteReferences.slice(0, 2)) {
+    const quoteImageUrls = uniqueStrings([
+      ...(quote.media ?? []).flatMap((asset) => asset.url ? [asset.url] : []),
+      ...(quote.imageUrls ?? [])
+    ]).slice(0, 4);
+    for (const [index, imageUrl] of quoteImageUrls.entries()) {
+      mediaByHandle[generateImgMediaHandle(String(quote.messageId), index)] = imageUrl;
     }
   }
   const sameUserLatestFirst = [...candidates]

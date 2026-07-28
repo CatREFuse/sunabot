@@ -21,7 +21,7 @@ import {
   ConversationRecord,
   ParsedIncomingMessage
 } from "../types.js";
-import { adminIdentityFromBot, appendConversationMessage, hasIncomingReplyContent, indexedConversationMessages, isAdminUserId, isExplicitWakeMessage, resolveRuntimePersonaName, toContextChatMessage } from "./conversationMemoryHelpers.js";
+import { adminIdentityFromBot, appendConversationMessage, hasIncomingReplyContent, indexedConversationMessages, isAdminUserId, isExplicitWakeMessage, isModelVisibleConversationMessage, resolveRuntimePersonaName, toContextChatMessage } from "./conversationMemoryHelpers.js";
 import { errorMessage, isAbortError, sanitizeErrorDetail, withAbortTimeout } from "./infrastructure.js";
 import { conversationOrchestratorEnabled, conversationOrchestratorResponseTimeMs, conversationRecordId, conversationReplyEnabled, incomingConversationMessageId, persistedAttachments, persistedQuoteReferences, persistentIncomingKey, restoredGroupIncoming, uniqueStrings } from "./messagingAttachmentHelpers.js";
 import { AMBIENT_ORCHESTRATOR_TIMEOUT_MS, AdminIdentity, AmbientReplyJob, AmbientReplyState, DEDUPE_TTL_MS, MAX_DEDUPE_KEYS, ORCHESTRATOR_MAX_RETRIES } from "./runtimeContracts.js";
@@ -375,7 +375,7 @@ export async function runtime_runUserGroupchatOrchestrator(this: RuntimeHost,
           messageCount: record.messageCount,
           replyCandidateMessageIds,
           recentMessages: record.messages
-            .filter((message) => message.role === "user" || message.role === "assistant")
+            .filter(isModelVisibleConversationMessage)
             .filter((message) => options.captureSequence == null || Number(message.sequence ?? 0) <= options.captureSequence)
             .slice(-this.contextMessageLimit())
             .map((message) => {

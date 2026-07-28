@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SunaRuntime } from "../../src/runtime.js";
 import type { ConversationRecord, ParsedIncomingMessage } from "../../src/types.js";
 import type { RenderedPromptRequest } from "../../services/agent/promptSystem.js";
@@ -32,6 +32,10 @@ describe("group thread runtime pipeline", () => {
   beforeEach(() => {
     store.readGroupThreadState.mockReset();
     store.commitGroupThreadState.mockReset();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("keeps retained threads in the snake_case sidecar while indexing only messages_64", async () => {
@@ -285,6 +289,73 @@ describe("group thread runtime pipeline", () => {
     expect(payload?.target_message_ids).toEqual(["3"]);
     expect(snapshot?.messageAssignments.map((assignment) => assignment.messageId)).toEqual(["1", "2", "3"]);
     expect(snapshot?.messageAssignments.find((assignment) => assignment.messageId === "2")?.relation).toBe("reply");
+  });
+
+  it("allows a valid Thread classification to complete after ten seconds", async () => {
+    vi.useFakeTimers();
+    const record: ConversationRecord = {
+      id: "group:1030412235",
+      scope: "user_group",
+      title: "慢响应测试群",
+      userId: 753224704,
+      groupId: 1030412235,
+      messageCount: 1,
+      lastAt: "2026-07-16T11:58:00.000Z",
+      lastText: "晚餐吃什么",
+      messages: [
+        conversationMessage("message-1", 1, 753224704, "晚餐吃什么")
+      ]
+    };
+    store.readGroupThreadState.mockReturnValue(undefined);
+    store.commitGroupThreadState.mockImplementation((input: { state: GroupThreadStateV1 }) => ({
+      status: "committed",
+      record: {
+        conversationId: record.id,
+        revision: input.state.revision,
+        state: input.state
+      }
+    }));
+    const runtime = {
+      config: { bot: { orchestrator: { groupThreadModel: "configured-cheap-model" } } },
+      conversationRecords: new Map([[record.id, record]]),
+      buildRecentContextMessages: () => [{
+        role: "user" as const,
+        content: "[sequence=1 | message_id=message-1 | uid=753224704]\n晚餐吃什么"
+      }],
+      getProviderForModel: vi.fn(() => ({})),
+      renderPromptRequest: vi.fn(async () => promptRequest([{ role: "user", content: "classify" }])),
+      completePrompt: vi.fn(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10_000));
+        return JSON.stringify({
+          schema_version: 1,
+          active_thread_key: "dinner",
+          threads: [{
+            thread_key: "dinner",
+            existing_thread_id: null,
+            topic: "群成员正在讨论晚餐吃什么。",
+            status: "active"
+          }],
+          message_assignments: [{
+            message_id: "message-1",
+            primary_thread_key: "dinner",
+            related_thread_keys: [],
+            relation: "new",
+            confidence: 0.96
+          }]
+        });
+      })
+    } as unknown as SunaRuntime;
+
+    const pending = runtime_prepareGroupThreadContext.call(runtime, groupIncoming(), {
+      captureSequence: 1
+    });
+    await vi.advanceTimersByTimeAsync(10_000);
+    const snapshot = await pending;
+
+    expect(store.commitGroupThreadState).toHaveBeenCalledOnce();
+    expect(snapshot?.messageAssignments).toEqual([
+      expect.objectContaining({ messageId: "message-1" })
+    ]);
   });
 
   it("freezes the debounce Thread window through the handoff sequence without reordering messages", async () => {

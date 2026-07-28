@@ -44,6 +44,9 @@
 | `docs/user-tests/sent-image-reuse.md` | 精确引用 Bot 上一轮已发图片再次生图的链式次步用例 | 修改 assistant 图片句柄或历史生图参考时读取 |
 | `docs/user-tests/sent-emoji-reuse-send.md` | Bot 发送自身图库表情并持久化可复用媒体的链式首步用例 | 修改表情投递后的会话媒体投影时读取 |
 | `docs/user-tests/sent-emoji-reuse.md` | 精确引用 Bot 上一轮已发表情再次生图的链式次步用例 | 修改表情历史句柄或表情参考生图时读取 |
+| `docs/user-tests/orchestrator-internal-history-seed.md` | 生成用户不可见的群聊编排器内部审计记录的链式首步用例 | 修改编排器内部记录或群聊模型历史过滤时读取 |
+| `docs/user-tests/orchestrator-internal-history-reply.md` | 验证内部编排器记录不进入后续主回复上下文的链式次步用例 | 修改群聊上下文、编排器变量或内部消息可见性时读取 |
+| `docs/user-tests/current-message-image-reference.md` | 当前群消息图片以精确媒体句柄进入异步生图的用户用例 | 修改当前图片句柄、dispatch 快照或参考图解析时读取 |
 | `docs/user-tests/sampled-memory-compression.md` | 运行中测试账号 V2 样本的内容无关记忆压缩模板 | 从只读样本派生真实数据记忆压缩 case 时读取 |
 | `docs/user-tests/sampled-dream.md` | 运行中测试账号 V2 样本的内容无关 Dream 模板 | 从只读样本派生真实数据 Dream case 时读取 |
 

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ConversationRecord, ParsedIncomingMessage } from "../../src/types.js";
 import { toContextChatMessage } from "../../src/runtime/conversationMemoryHelpers.js";
 import {
+  runtime_buildRecentContextMessages,
   runtime_generateImgReferenceContext,
   runtime_processDeferredToolJob
 } from "../../src/runtime/reply.js";
@@ -12,6 +13,61 @@ import { runGenerateImg } from "../../services/tools/generateImgTool.js";
 import { createAdminTestConfig } from "./admin-fixtures.js";
 
 describe("generate_img historical reference context", () => {
+  it("excludes internal orchestrator audit records from model conversation history", () => {
+    const incoming = incomingMessage();
+    const record: ConversationRecord = {
+      id: conversationRecordId(incoming),
+      accountId: incoming.accountId,
+      agentId: incoming.agentId,
+      scope: incoming.scope,
+      title: "group",
+      userId: incoming.userId,
+      groupId: incoming.groupId,
+      messageCount: 3,
+      lastAt: incoming.time,
+      lastText: incoming.text,
+      messages: [
+        conversationMessage({
+          id: "visible-user",
+          role: "user",
+          sequence: 1,
+          text: "正常群聊历史"
+        }),
+        conversationMessage({
+          id: "internal-orchestrator",
+          role: "assistant",
+          sequence: 2,
+          text: "编排器结果",
+          visibility: "internal",
+          eventKind: "orchestrator_decision",
+          orchestratorDecision: {
+            status: "completed",
+            shouldReply: false,
+            reason: "仅供内部审计",
+            raw: "{}"
+          }
+        }),
+        conversationMessage({
+          id: String(incoming.messageId),
+          role: "user",
+          sequence: 3
+        })
+      ]
+    };
+
+    const messages = runtime_buildRecentContextMessages.call({
+      conversationRecords: new Map([[record.id, record]]),
+      contextMessageLimit: () => 48,
+      adminIdentity: () => ({ userId: "9", name: "Admin" })
+    } as never, incoming, 3);
+
+    expect(messages.map((message) => message.content)).toEqual([
+      expect.stringContaining("正常群聊历史")
+    ]);
+    expect(JSON.stringify(messages)).not.toContain("编排器结果");
+    expect(JSON.stringify(messages)).not.toContain("仅供内部审计");
+  });
+
   it("exposes stable media handles to the model", () => {
     const message = conversationMessage({
       id: "generated-1",
@@ -112,6 +168,94 @@ describe("generate_img historical reference context", () => {
       "message:other-user:image:0": "https://example.test/other.png"
     });
     expect(references.mediaByHandle).not.toHaveProperty("message:later:image:0");
+  });
+
+  it("freezes the current message image under the exact handle exposed to the model", () => {
+    const incoming = incomingMessage();
+    incoming.media = [{
+      schemaVersion: 1,
+      kind: "image",
+      source: "remote_url",
+      url: "https://example.test/current.png"
+    }];
+    const record: ConversationRecord = {
+      id: conversationRecordId(incoming),
+      accountId: incoming.accountId,
+      agentId: incoming.agentId,
+      scope: incoming.scope,
+      title: "group",
+      userId: incoming.userId,
+      groupId: incoming.groupId,
+      messageCount: 1,
+      lastAt: incoming.time,
+      lastText: incoming.text,
+      messages: [
+        conversationMessage({
+          id: String(incoming.messageId),
+          role: "user",
+          sequence: 1,
+          imageUrls: ["https://example.test/current.png"]
+        })
+      ]
+    };
+
+    const references = runtime_generateImgReferenceContext.call({
+      conversationRecords: new Map([[record.id, record]]),
+      contextMessageLimit: () => 48
+    } as never, incoming, 1);
+
+    expect(references.currentImageUrls).toEqual(["https://example.test/current.png"]);
+    expect(references.mediaByHandle).toMatchObject({
+      "message:400:image:0": "https://example.test/current.png"
+    });
+  });
+
+  it("freezes quoted image handles under the quoted message ID exposed to the model", () => {
+    const incoming = incomingMessage();
+    incoming.quoteReferences = [{
+      messageId: 399,
+      media: [{
+        schemaVersion: 1,
+        kind: "image",
+        source: "remote_url",
+        url: "https://example.test/quoted.png"
+      }]
+    }];
+
+    const references = runtime_generateImgReferenceContext.call({
+      conversationRecords: new Map(),
+      contextMessageLimit: () => 48
+    } as never, incoming, 1);
+
+    expect(references.mediaByHandle).toMatchObject({
+      "message:399:image:0": "https://example.test/quoted.png"
+    });
+  });
+
+  it("fails before generation when an explicitly requested media handle cannot be resolved", async () => {
+    const generateImage = vi.fn(async () => ({
+      url: "/generated-images/agents/arona/output.png",
+      filePath: "/tmp/output.png"
+    }));
+
+    const result = await runGenerateImg({
+      prompt: "edit the exact current image",
+      referenceMediaHandles: ["message:400:image:0"],
+      referenceImageSource: "none"
+    }, createAdminTestConfig(process.cwd()).bot, generateImage, {
+      imageReferences: {
+        currentImageUrls: ["https://example.test/current.png"],
+        mediaByHandle: {}
+      }
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: "One or more reference media handles are unavailable.",
+      referenceMediaHandleCount: 1,
+      resolvedReferenceMediaHandleCount: 0
+    });
+    expect(generateImage).not.toHaveBeenCalled();
   });
 
   it("uses the dispatch-time media snapshot when the deferred image job runs", async () => {

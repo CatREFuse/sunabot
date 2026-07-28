@@ -77,7 +77,7 @@ export function collectGroupChatSummaryMessages(
       const at = Date.parse(message.at);
       return Number.isFinite(at) && now - at <= GROUP_CHAT_SUMMARY_WINDOW_MS;
     })
-    .filter((message) => message.role === "user" || message.role === "assistant")
+    .filter(isModelVisibleConversationMessage)
     .flatMap((message) => {
       const text = groupSummaryMessageText(message);
       if (!text) return [];
@@ -324,9 +324,12 @@ export function indexedConversationMessages(record: ConversationRecord) {
     message
   }));
 }
-export function isMemoryEligibleConversationMessage(message: ConversationRecord["messages"][number]) {
+export function isModelVisibleConversationMessage(message: ConversationRecord["messages"][number]) {
   if (message.role !== "user" && message.role !== "assistant") return false;
-  if (message.visibility === "internal" || message.eventKind === "orchestrator_decision") return false;
+  return message.visibility !== "internal" && message.eventKind !== "orchestrator_decision";
+}
+export function isMemoryEligibleConversationMessage(message: ConversationRecord["messages"][number]) {
+  if (!isModelVisibleConversationMessage(message)) return false;
   if (message.requestStatus === "running" || message.requestStatus === "failed") return false;
   return Boolean(message.text.trim());
 }

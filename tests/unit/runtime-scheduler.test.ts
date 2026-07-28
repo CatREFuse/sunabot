@@ -707,7 +707,7 @@ describe("runtime reply scheduling helpers", () => {
       userId: 2002,
       groupId: 3003,
       selfId: 4004,
-      messageCount: 3,
+      messageCount: 4,
       lastAt: "2026-07-10T00:01:00.000Z",
       lastText: "这两张有什么区别",
       messages: [
@@ -732,11 +732,20 @@ describe("runtime reply scheduling helpers", () => {
           imageUrls: ["https://example.test/first.png"]
         },
         {
+          id: "internal-orchestrator",
+          role: "assistant" as const,
+          text: "编排器结果",
+          at: "2026-07-10T00:00:30.000Z",
+          sequence: 3,
+          visibility: "internal" as const,
+          eventKind: "orchestrator_decision" as const
+        },
+        {
           id: "1001",
           role: "user" as const,
           text: "这两张有什么区别 [内容图片#1：图表] [表情图片#2：疑惑]",
           at: "2026-07-10T00:01:00.000Z",
-          sequence: 3,
+          sequence: 4,
           userId: 2002,
           groupId: 3003,
           imageUrls: [
@@ -756,7 +765,7 @@ describe("runtime reply scheduling helpers", () => {
       { schemaVersion: 1, kind: "image", source: "remote_url", url: "https://example.test/third.png" }
     ];
     await expect(internals.runUserGroupchatOrchestrator(incoming, {
-      captureSequence: 3
+      captureSequence: 4
     })).resolves.toBeUndefined();
 
     const requestMessages = complete.mock.calls[0]?.[1] ?? [];
@@ -782,6 +791,7 @@ describe("runtime reply scheduling helpers", () => {
       "这两张有什么区别 [内容图片#1：图表] [表情图片#2：疑惑]"
     );
     expect(JSON.stringify(payload)).not.toContain("example.test");
+    expect(JSON.stringify(payload)).not.toContain("编排器结果");
   });
 
   it("records a failed orchestrator result and action log before consuming the batch", async () => {

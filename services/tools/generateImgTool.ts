@@ -157,6 +157,19 @@ export async function runGenerateImg(
   const size = normalizeImageSize(input.size, botConfig.tools.generateImg.size, resolution);
   const quality = normalizeImageQuality(input.quality, botConfig.tools.generateImg.quality);
   const references = await resolveGenerateImgReferencesForRun(input, options);
+  const unresolvedReferenceMediaHandles = references.referenceMediaHandles.filter((handle) => (
+    normalizeReferenceImageUrls([options.imageReferences?.mediaByHandle?.[handle]]).length === 0
+  ));
+  const resolvedReferenceMediaHandleCount =
+    references.referenceMediaHandles.length - unresolvedReferenceMediaHandles.length;
+  if (unresolvedReferenceMediaHandles.length) {
+    return {
+      ok: false,
+      error: "One or more reference media handles are unavailable.",
+      referenceMediaHandleCount: references.referenceMediaHandles.length,
+      resolvedReferenceMediaHandleCount
+    };
+  }
   const image = await generateImage(prompt, size, quality, references.referenceImageUrls, options.logContext);
   return {
     ok: true,
@@ -169,7 +182,7 @@ export async function runGenerateImg(
     referenceImagePathCount: references.referenceImagePaths.length,
     resolvedReferenceImagePathCount: references.resolvedWorkbenchImageUrls.length,
     referenceMediaHandleCount: references.referenceMediaHandles.length,
-    resolvedReferenceMediaHandleCount: references.resolvedHandleImageUrls.length,
+    resolvedReferenceMediaHandleCount,
     referenceImageCount: references.referenceImageUrls.length,
     image
   };
