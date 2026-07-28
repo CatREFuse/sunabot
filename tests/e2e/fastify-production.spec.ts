@@ -130,7 +130,7 @@ test("Fastify 生产服务提供静态资源、深链接回退与管理鉴权", 
   expect(releaseCatalog.headers()["cache-control"]).toBe("no-store");
   expect(await releaseCatalog.json()).toMatchObject({
     schemaVersion: 1,
-    currentVersion: "0.1.3"
+    currentVersion: "0.1.4"
   });
 });
 

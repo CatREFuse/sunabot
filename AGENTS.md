@@ -28,6 +28,7 @@
 | `docs/migrations/one-container-to-split-runtime.md` | 现有单容器服务端拉取新代码后的停服、备份、切换、验证和回滚备忘录 | 旧服务端首次升级到 NapCat 独立容器前必读 |
 | `docs/migrations/single-agent-to-multi-agent.md` | 单 Agent 工作区迁移到 Plana、primary 和多 Agent 注册结构的预检、备份、执行、验收与回滚 | 首次启用多 Agent、多 QQ 前必读 |
 | `docs/migrations/upgrade-0.1.2-to-0.1.3.md` | 0.1.2 到 0.1.3 的聊天媒体工具、提示词保留式迁移、恢复点、验证与回滚 | 既有服务升级到 0.1.3 前必读 |
+| `docs/migrations/upgrade-0.1.3-to-0.1.4.md` | 0.1.3 到 0.1.4 的图片任务可靠性、编排器上下文隔离、恢复点、验证与回滚 | 既有服务升级到 0.1.4 前必读 |
 | `docs/migrations/agent-workbenches.md` | Agent 双 workbench、Native 只读投影、资源迁移、验证与回滚 | 调整 Bot 文件自由度、资源投影或执行资源迁移前必读 |
 | `docs/migrations/upgrade-0.1.0-to-0.1.2.md` | 0.1.0 / 0.1.1 到 0.1.2 的双工作区迁移、恢复点、升级脚本、验收与回滚 | 现有 0.1.0 或 0.1.1 实例升级到 0.1.2 前必读 |
 | `docs/setup-napcat.md` | sunabot、NapCat、WebUI 和 OneBot 反向 WebSocket 的本机启动配置 | 部署、重启或排查 OneBot 连接时读取 |

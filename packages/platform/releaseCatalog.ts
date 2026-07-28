@@ -17,12 +17,42 @@ export interface ReleaseCatalog {
   releases: readonly ReleaseRecord[];
 }
 
-export const CURRENT_RELEASE_VERSION = "0.1.3";
+export const CURRENT_RELEASE_VERSION = "0.1.4";
 
 export const RELEASE_CATALOG: ReleaseCatalog = {
   schemaVersion: 1,
   currentVersion: CURRENT_RELEASE_VERSION,
   releases: [
+    {
+      version: "0.1.4",
+      releasedAt: "2026-07-28",
+      title: "图片任务可靠性",
+      summary: "异步图片任务会在派发时冻结参考图，并隔离群聊编排器内部记录。",
+      groups: [
+        {
+          title: "图片参考",
+          items: [
+            "当前、引用和历史图片会在任务派发时下载并写入内容寻址媒体归档。",
+            "图片下载最多重试三次，队列只保存不可变摘要和归档引用。",
+            "Provider 请求前核对参考图数量，必需图片解析失败会返回明确错误。"
+          ]
+        },
+        {
+          title: "群聊稳定性",
+          items: [
+            "群聊编排器内部结果不会进入主回复模型的会话上下文。",
+            "thread 分类器等待时间延长到 20 秒。"
+          ]
+        },
+        {
+          title: "升级",
+          items: [
+            "0.1.3 可通过版本专用脚本创建恢复点并完成重启、状态和运行检查。",
+            "本次升级不修改 SQLite schema、系统提示词或资源目录。"
+          ]
+        }
+      ]
+    },
     {
       version: "0.1.3",
       releasedAt: "2026-07-25",

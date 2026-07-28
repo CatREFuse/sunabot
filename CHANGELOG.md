@@ -1,5 +1,23 @@
 # 更新日志
 
+## [0.1.4] - 2026-07-28
+
+### 图片参考
+
+- 当前、引用和历史图片会在任务派发时下载并写入内容寻址媒体归档。
+- 图片下载最多重试三次，队列只保存不可变摘要和归档引用。
+- Provider 请求前核对参考图数量，必需图片解析失败会返回明确错误。
+
+### 群聊稳定性
+
+- 群聊编排器内部结果不会进入主回复模型的会话上下文。
+- thread 分类器等待时间延长到 20 秒。
+
+### 升级
+
+- 0.1.3 可通过版本专用脚本创建恢复点并完成重启、状态和运行检查。
+- 本次升级不修改 SQLite schema、系统提示词或资源目录。
+
 ## [0.1.3] - 2026-07-25
 
 ### 聊天媒体
@@ -80,6 +98,7 @@ Bot 工作台、资源管理入口与 JSONL 清单完成统一升级。
 - 提示词编辑支持变量补全、搜索、折叠与冲突处理。
 - 新增当前版本与更新日志页面。
 
+[0.1.4]: https://github.com/CatREFuse/sunabot/releases/tag/v0.1.4
 [0.1.3]: https://github.com/CatREFuse/sunabot/releases/tag/v0.1.3
 [0.1.2]: https://github.com/CatREFuse/sunabot/releases/tag/v0.1.2
 [0.1.1]: https://github.com/CatREFuse/sunabot/releases/tag/v0.1.1

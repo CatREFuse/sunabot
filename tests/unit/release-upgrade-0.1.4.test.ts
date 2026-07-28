@@ -4,11 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { RELEASE_CATALOG } from "../../packages/platform/releaseCatalog.js";
+import { CURRENT_RELEASE_VERSION, RELEASE_CATALOG } from "../../packages/platform/releaseCatalog.js";
 import {
   applyReleaseUpgrade,
-  planReleaseUpgrade
-} from "../../tooling/migrations/upgrade-0.1.2-to-0.1.3.mjs";
+  planReleaseUpgrade,
+  verifyTargetRelease
+} from "../../tooling/migrations/upgrade-0.1.3-to-0.1.4.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const temporaryDirectories: string[] = [];
@@ -19,30 +20,37 @@ afterEach(async () => {
   )));
 });
 
-describe("0.1.2 to 0.1.3 release upgrade", () => {
-  it("keeps the historical release catalog and changelog entry", async () => {
-    expect(RELEASE_CATALOG.releases.filter((release) => release.version === "0.1.3"))
+describe("0.1.3 to 0.1.4 release upgrade", () => {
+  it("keeps every current release version entry and changelog on 0.1.4", async () => {
+    await expect(verifyTargetRelease(root)).resolves.toEqual({
+      package: "0.1.4",
+      packageLock: "0.1.4",
+      packageLockRoot: "0.1.4",
+      runtimeContract: "0.1.4",
+      releaseCatalog: "0.1.4",
+      dockerfile: "0.1.4",
+      compose: "0.1.4"
+    });
+    expect(CURRENT_RELEASE_VERSION).toBe("0.1.4");
+    expect(RELEASE_CATALOG.currentVersion).toBe("0.1.4");
+    expect(RELEASE_CATALOG.releases[0]?.version).toBe("0.1.4");
+    expect(RELEASE_CATALOG.releases.filter((release) => release.version === "0.1.4"))
       .toHaveLength(1);
     expect(await fs.readFile(path.join(root, "CHANGELOG.md"), "utf8"))
-      .toContain("## [0.1.3] - 2026-07-25");
+      .toContain("## [0.1.4] - 2026-07-28");
   });
 
-  it("plans without writing workspace data and reports only the prompt migration", async () => {
+  it("plans without writing workspace data and reports no data migration", async () => {
     const workspace = await workspaceFixture();
-    const projectRoot = await releaseProjectFixture();
     const before = await directorySnapshot(workspace);
 
-    await expect(planReleaseUpgrade({ projectRoot, workspace })).resolves.toMatchObject({
+    await expect(planReleaseUpgrade({ projectRoot: root, workspace })).resolves.toMatchObject({
       ok: true,
       command: "plan",
-      fromVersion: "0.1.2",
-      targetVersion: "0.1.3",
+      fromVersion: "0.1.3",
+      targetVersion: "0.1.4",
       changesRequired: true,
-      promptMigration: {
-        id: "conversation-chat-media-v2",
-        mode: "startup-preserving",
-        backupPolicy: "once"
-      },
+      promptMigration: false,
       databaseMigration: false,
       resourceMigration: false
     });
@@ -51,10 +59,9 @@ describe("0.1.2 to 0.1.3 release upgrade", () => {
 
   it("stops, creates a recovery point, starts, then runs status and doctor", async () => {
     const workspace = await workspaceFixture();
-    const projectRoot = await releaseProjectFixture();
     const events: string[] = [];
     const result = await applyReleaseUpgrade({
-      projectRoot,
+      projectRoot: root,
       workspace,
       assertNonRoot: () => undefined,
       runCommand: async (_command: string, args: string[]) => {
@@ -70,12 +77,11 @@ describe("0.1.2 to 0.1.3 release upgrade", () => {
     expect(result).toMatchObject({
       ok: true,
       command: "apply",
-      fromVersion: "0.1.2",
-      targetVersion: "0.1.3",
-      promptMigration: {
-        id: "conversation-chat-media-v2",
-        appliedBy: "runtime-startup"
-      },
+      fromVersion: "0.1.3",
+      targetVersion: "0.1.4",
+      promptMigration: false,
+      databaseMigration: false,
+      resourceMigration: false,
       runtime: {
         started: true,
         status: "passed",
@@ -86,11 +92,10 @@ describe("0.1.2 to 0.1.3 release upgrade", () => {
 
   it("keeps the service stopped when recovery point creation fails", async () => {
     const workspace = await workspaceFixture();
-    const projectRoot = await releaseProjectFixture();
     const events: string[] = [];
 
     await expect(applyReleaseUpgrade({
-      projectRoot,
+      projectRoot: root,
       workspace,
       assertNonRoot: () => undefined,
       runCommand: async (_command: string, args: string[]) => {
@@ -110,49 +115,12 @@ describe("0.1.2 to 0.1.3 release upgrade", () => {
 });
 
 async function workspaceFixture() {
-  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-release-0.1.3-"));
+  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-release-0.1.4-"));
   temporaryDirectories.push(workspace);
   const configPath = path.join(workspace, "business", "config", "sunabot.json");
   await fs.mkdir(path.dirname(configPath), { recursive: true });
   await fs.writeFile(configPath, "{}\n");
   return fs.realpath(workspace);
-}
-
-async function releaseProjectFixture() {
-  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-code-0.1.3-"));
-  temporaryDirectories.push(projectRoot);
-  await Promise.all([
-    writeFixture(projectRoot, "package.json", JSON.stringify({ version: "0.1.3" })),
-    writeFixture(projectRoot, "package-lock.json", JSON.stringify({
-      version: "0.1.3",
-      packages: { "": { version: "0.1.3" } }
-    })),
-    writeFixture(projectRoot, "deploy/runtime-contract.json", JSON.stringify({
-      releaseVersion: "0.1.3"
-    })),
-    writeFixture(
-      projectRoot,
-      "packages/platform/releaseCatalog.ts",
-      'export const CURRENT_RELEASE_VERSION = "0.1.3";\n'
-    ),
-    writeFixture(
-      projectRoot,
-      "deploy/docker/Dockerfile",
-      "ARG SUNABOT_RELEASE_VERSION=0.1.3\n"
-    ),
-    writeFixture(
-      projectRoot,
-      "deploy/docker/compose.yml",
-      "SUNABOT_RELEASE_VERSION: ${SUNABOT_RELEASE_VERSION:-0.1.3}\n"
-    )
-  ]);
-  return fs.realpath(projectRoot);
-}
-
-async function writeFixture(projectRoot: string, relativePath: string, content: string) {
-  const target = path.join(projectRoot, relativePath);
-  await fs.mkdir(path.dirname(target), { recursive: true });
-  await fs.writeFile(target, content);
 }
 
 async function directorySnapshot(directory: string) {
