@@ -10,7 +10,7 @@ Use a fresh isolated workspace with an authorized Provider. The current OneBot m
 
 ## Expected quality
 
-The Agent exports the exact current image, stores it below `knowledge/memory-images/`, writes a searchable Markdown note, confirms the note through `knowledge_search`, records only the portable relative image path in working memory, and sends the stored image without exposing a host path.
+The Agent exports the exact current image, stores it below `knowledge/`, writes a searchable Markdown note containing a relative Markdown image link, confirms the note through `knowledge_search`, records a portable Markdown link whose target starts with `knowledge/` in working memory, and sends the stored image without exposing a host path.
 
 <!-- sunabot-user-test-case:v1 -->
 ```json
@@ -19,7 +19,7 @@ The Agent exports the exact current image, stores it below `knowledge/memory-ima
   "id": "image-memory.memory-image-relative-path",
   "title": "Remember and reuse a knowledge image",
   "kind": "conversation",
-  "goal": "Store a conversation image as indexed Agent knowledge, remember its relative path, and send it from that path.",
+  "goal": "Store a conversation image as indexed Agent knowledge, remember it through a portable Markdown relative link, and send it from that link target.",
   "input": {
     "actor": "admin_private",
     "accountId": "primary",
@@ -44,18 +44,18 @@ The Agent exports the exact current image, stores it below `knowledge/memory-ima
         {
           "type": "text",
           "data": {
-            "text": "把这张图作为“红色方块参考”记住：保存到知识库并建立索引，在工作记忆中只写相对路径，然后从记住的相对路径把图片发回来。"
+            "text": "把这张图作为“红色方块参考”记住：保存到知识库并建立索引，知识资料中用相对 Markdown 图片链接指向它，工作记忆中写一个目标以 knowledge/... 开头的 Markdown 相对链接，然后从这个链接目标把图片发回来。"
           }
         },
         {
           "type": "image",
           "data": {
             "file": "fixture-memory-image.png",
-            "url": "https://dummyimage.com/256x256/ff0000/ff0000.png"
+            "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAP0lEQVRYhe3XsREAQAgCweu/ab4LP9nA3BkRjlb7OVlgThAR5g3HiMaKE0aJ4wGSQbJAabB8islUs5TTznXwAFQN+GqzUAe3AAAAAElFTkSuQmCC"
           }
         }
       ],
-      "raw_message": "把这张图作为“红色方块参考”记住：保存到知识库并建立索引，在工作记忆中只写相对路径，然后从记住的相对路径把图片发回来。[图片]"
+      "raw_message": "把这张图作为“红色方块参考”记住：保存到知识库并建立索引，知识资料中用相对 Markdown 图片链接指向它，工作记忆中写一个目标以 knowledge/... 开头的 Markdown 相对链接，然后从这个链接目标把图片发回来。[图片]"
     }
   },
   "expected": {
@@ -93,12 +93,12 @@ The Agent exports the exact current image, stores it below `knowledge/memory-ima
     "criteria": [
       {
         "id": "knowledge_publication",
-        "description": "The exact current image is stored below knowledge/memory-images and a searchable Markdown note links to it by relative path.",
+        "description": "The exact current image is stored below knowledge/ and a searchable Markdown note links to it with a real relative Markdown link.",
         "minimumScore": 4
       },
       {
         "id": "portable_memory",
-        "description": "The successful add_workmemory call records a knowledge/... relative image path and does not store a host, Docker, URL, or data path.",
+        "description": "The successful add_workmemory call records a real Markdown link whose target starts with knowledge/... and does not store a host, Docker, URL, data path, media handle, or bare path.",
         "minimumScore": 4
       },
       {

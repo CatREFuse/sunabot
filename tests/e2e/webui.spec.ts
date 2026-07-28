@@ -729,6 +729,25 @@ test("旧版系统配置缺少回复重试时仍可打开设置页", async ({ pa
   await expect(page.getByText('"undefined" is not valid JSON', { exact: true })).toHaveCount(0);
 });
 
+test("旧版 Agent 配置缺少回复模型和读图设置时仍可打开设置页", async ({ page }) => {
+  const state = await installMockApi(page);
+  delete (state.config.bot as Partial<typeof state.config.bot>).replyModel;
+  delete (state.config.bot as Partial<typeof state.config.bot>).replyReasoningEffort;
+  delete (state.config.bot as Partial<typeof state.config.bot>).imageReader;
+
+  await page.goto("/agent-settings/bot");
+
+  await expect(page.getByRole("heading", { name: "回复行为" })).toBeVisible();
+  await expect(page.getByRole("combobox", { name: "模型", exact: true })).toHaveValue("gpt-5.5");
+  await expect(page.getByLabel("推理强度").first()).toHaveValue("medium");
+  await expect(page.getByLabel("生成图片描述")).toBeChecked();
+  await expect(page.getByLabel("Provider")).toHaveValue("codex");
+  await expect(page.getByLabel("读图模型")).toHaveValue("gpt-5.5");
+  await expect(page.getByLabel("推理强度").last()).toHaveValue("low");
+  await expect(page.getByText('"undefined" is not valid JSON', { exact: true })).toHaveCount(0);
+  expect(state.patchRequests).toHaveLength(0);
+});
+
 test("连接监控按字段确认且失败时保留当前输入", async ({ page }) => {
   const state = await installMockApi(page);
   await page.goto("/settings/onebot");

@@ -15,6 +15,14 @@ describe("add_workmemory tool", () => {
     expect(addWorkMemoryTool.description).toContain("The host does not reject content");
   });
 
+  it("requires portable Markdown links for remembered knowledge images", () => {
+    expect(addWorkMemoryTool.description).toContain("![红色方块参考](red-square.png)");
+    expect(addWorkMemoryTool.description).toContain("![红色方块参考](knowledge/references/red-square.png)");
+    expect(addWorkMemoryTool.description).toContain("rather than leaving a bare path");
+    expect(addWorkMemoryTool.parameters.properties.content.description)
+      .toContain("real Markdown link whose target starts with knowledge/");
+  });
+
   it("passes only trimmed content to the host-bound runtime port", async () => {
     const execute = vi.fn(async () => ({ ok: true }));
     await expect(runAddWorkMemory({ content: "  继续跟进 Markdown 记忆门禁  " }, { execute }))

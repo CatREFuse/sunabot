@@ -16,7 +16,7 @@ export const addWorkMemoryTool = {
     "Use it proactively for temporary agreements, current context, the present situation, follow-up priorities, and important information specific to the current conversation field.",
     "When the information is clear, write content as the current Agent's concise first-person natural-language account of one event, naturally including the known time, place or conversation field, people, event, and feelings without turning them into labeled fields or inventing missing details.",
     "Prefer recording when future consistency could benefit. The host does not reject content for perspective, wording, salutations, identity markers, or event-schema style; later consolidation can connect related memories along their internal timeline and rewrite them as a new coherent memory.",
-    "When the memory depends on an image, first use export_chat_media when it comes from chat, then use the permitted Bash tool to copy or save the exact image under knowledge/ and create or update a nearby searchable Markdown note so knowledge_search can index it. Store only the portable knowledge/... relative image link in this memory. Later, use that same relative path with send_file or as referenceImagePaths for generate_img or selfie.",
+    "When the memory depends on an image, first use export_chat_media when it comes from chat, then use the permitted Bash tool to copy or save the exact image under knowledge/ and create or update a nearby searchable Markdown note so knowledge_search can index it. The note must link or embed the image with a real relative Markdown link whose target is relative to that note, for example ![红色方块参考](red-square.png), rather than leaving a bare path. Store a portable Markdown link in this memory whose target starts with knowledge/ (for example ![红色方块参考](knowledge/references/red-square.png)), rather than a host path, URL, data URI, media handle, or bare path. Later, use that same knowledge/... link target with send_file or as referenceImagePaths for generate_img or selfie.",
     "Provide only the useful content. The host binds the current Agent and conversation source and records the authoritative time."
   ].join(" "),
   parameters: {
@@ -27,7 +27,7 @@ export const addWorkMemoryTool = {
         type: "string",
         minLength: 1,
         maxLength: 4_000,
-        description: "The concise working-memory item to retain. Image memories use a portable knowledge/... relative link after the image and its searchable Markdown note have been saved with Bash."
+        description: "The concise working-memory item to retain. Image memories include a real Markdown link whose target starts with knowledge/... after the image and a searchable Markdown note with its own relative image link have been saved with Bash."
       }
     },
     required: ["content"]

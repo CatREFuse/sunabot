@@ -474,9 +474,12 @@ function valuesFromConfig(config: AppConfig): SectionDrafts {
     bot: {
       adminQq: config.bot.adminQq,
       adminName: config.bot.adminName,
-      replyModel: config.bot.replyModel,
-      replyReasoningEffort: config.bot.replyReasoningEffort,
-      imageReader: clone(config.bot.imageReader),
+      replyModel: config.bot.replyModel ?? emptyConfig.bot.replyModel,
+      replyReasoningEffort: config.bot.replyReasoningEffort ?? emptyConfig.bot.replyReasoningEffort,
+      imageReader: clone(config.bot.imageReader ?? {
+        ...emptyConfig.bot.imageReader,
+        providerId: config.providers.defaultProviderId
+      }),
       replyDebounceMs: config.bot.replyDebounceMs ?? emptyConfig.bot.replyDebounceMs,
       pokeOnNoReply: config.bot.pokeOnNoReply,
       quoteGroupReplies: config.bot.quoteGroupReplies,

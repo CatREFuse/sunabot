@@ -6,11 +6,11 @@ Verify that image generation for a non-public fixture character first finds an a
 
 ## Preconditions
 
-Use a fresh isolated workspace with an authorized image Provider. The fixture places a character note and a Base64 image inside the Agent Native knowledge directory. The Agent can use Native Bash, knowledge search, and image generation.
+Use a fresh isolated workspace with an authorized image Provider. The fixture places a character note and a Base64 image inside the Agent Native knowledge directory. The Agent can use permitted Bash, knowledge search, and image generation.
 
 ## Expected quality
 
-The Agent searches the knowledge base, decodes the exact fixture reference into `knowledge/characters/mint-keeper.png`, and supplies that relative path to `generate_img`. The generated prompt preserves the reference character instead of inventing an appearance from the name.
+The Agent searches the knowledge base, materializes the exact fixture reference in an authorized workbench, and supplies the resolved image to `generate_img`. The generated prompt preserves the reference character instead of inventing an appearance from the name.
 
 <!-- sunabot-user-test-case:v1 -->
 ```json
@@ -33,12 +33,12 @@ The Agent searches the knowledge base, decodes the exact fixture reference into 
         {
           "backend": "native",
           "path": "knowledge/characters/mint-keeper.md",
-          "content": "# Mint Keeper\n\nMint Keeper 是只存在于本夹具中的非公共角色。参考图路径：knowledge/characters/mint-keeper.png。"
+          "content": "# Mint Keeper\n\nMint Keeper 是只存在于本夹具中的非公共角色。参考图的 Base64 源文件位于 knowledge/characters/mint-keeper.b64；使用前必须通过允许的 Bash 解码到当前授权工作区，并将解码所得 PNG 作为生图参考。参考图中的固定外观是薄荷绿色头发、深绿色制服和金色钥匙吊坠。"
         },
         {
           "backend": "native",
           "path": "knowledge/characters/mint-keeper.b64",
-          "content": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+          "content": "iVBORw0KGgoAAAANSUhEUgAAAIAAAACABAMAAAAxEHz4AAAAMFBMVEXf9+//2MIdbWFmya3vy2IqfGru+vWr0sFVoI6qa05saj0bPjrk3bCtq4jPx27cs6J7rKkUAAAACXBIWXMAAAsTAAALEwEAmpwYAAADkklEQVRo3u2Xv0sbYRjHE601g4MvDoU2JfJKSBAKqdc2DlqE3iRWQkQaOhShULsUotIfQ6FiSOu/cF2k4tIWCl2bRcExS1spONgOTZcOgls7iH3vfd+7e3N5k3ueuyoIfge998j3c9/nRwIXi53pTGc6AfXV61P1emh73ZQKidg2PW2GSN8wzSgEx7+/3whH4Pmnvxq2vocgcL+wM403sIRz9uMNRTvsxhSiAX4/lrCt5lcIm/Dnmz8NvxrgDLb/VovfGLfvT4RrgNBNYIQ+bQGyCChA6zeuAZvQpgJewwRsCvoKWA3ATTDaCubvbQ8oRwXkQIBuz7BanWUqVUICRmcdOYg8CLAk/dVZRRU8oMnPQsDHoPhLq+zqxV7VJUDG0Of5ee7nhJA/9mkGA7juhh4jtlIMWKzAABdk/4U/T4SSVZ4oBwS0+AWhZFyFAewCfH5exQwIMMADVPx+Qi4z6FiwPz5gj2Cm1U/IMzBgtKTzE1Zcvh8EMCru/JoEB8j98WsAAVjQ+EkSDMhvsabvec69z+L/EhDA47+vvXH8F2ufZA0gQH5BmByXzZKwJASQFKZLtVrNAbDLj+LqKQBAOgGScIC2BEKCATHP1dpEQmJwgG6MKIBeJwGId/L3nwpALGIL/gPArSEVrgIPsLsmV8rCAdwadi2+gCnLQlXgAZhz7YAcsr9IgFvDX4trDVmBMofDJj80gLpLqaOjA4IO0G4VEO9M8dBr3CkC6rUvHjGALgL23Teq308I8/of1c87mTz8sRXa/0BRKMD5iIDeV54/kQvhX0l7EUbSy2jACqU3HP8cpRRLGGGeQQfwkB3SZZQ/wSw06wAW+QnVgKJtoU8kQJwKCMBj7qAvhX9enBBFyAA0IwA94kTvYAPQtACsUGwEGUA2Yd45gSMkXEfBGaKMAN8hqSF3iEKwber1DJRt81zRO2ZAgB4FwAZ5XzmmwVvsPvLRN5UHq0E1XJnc+KKeM6gZsMiNyY3pIrKGLuXz98zJDfOXGqGMGSKlOzbgtgooINaQBTZtgFlENUHdgmHLev3WstaVW1lUD+++41IBFNXDbGsCmsOskaYHwV1Uh6CZAh3E7KFmD+gQYgiaTQweQ6Lp03T494f15jsU8V3mBL8/aJm7aJAC5rgYCFiGr4FeBcQaaDUI/i62UQaxR1oNRQVkEYt4PIDOv6vdUQGJYACNDCgfK6Dn9AO6AIDmH4R/DiVLcMaMNukAAAAASUVORK5CYII="
         }
       ]
     },
@@ -59,7 +59,6 @@ The Agent searches the knowledge base, decodes the exact fixture reference into 
   "expected": {
     "requiredTools": [
       "knowledge_search",
-      "native_bash",
       "generate_img"
     ],
     "forbiddenTools": [],
@@ -67,6 +66,7 @@ The Agent searches the knowledge base, decodes the exact fixture reference into 
     "requiredAvailableTools": [
       "knowledge_search",
       "native_bash",
+      "docker_bash",
       "generate_img"
     ],
     "forbiddenAvailableTools": [],
@@ -78,7 +78,7 @@ The Agent searches the knowledge base, decodes the exact fixture reference into 
       "file://"
     ],
     "requiredOutboundKinds": [
-      "asset"
+      "message"
     ],
     "forbiddenOutboundKinds": [],
     "minimumOutboundCount": 2,
@@ -93,7 +93,7 @@ The Agent searches the knowledge base, decodes the exact fixture reference into 
       },
       {
         "id": "reference_input",
-        "description": "The generate_img call uses knowledge/characters/mint-keeper.png as a resolved referenceImagePaths input.",
+        "description": "The generate_img call uses the successfully materialized PNG derived from the exact knowledge fixture as a resolved reference input.",
         "minimumScore": 4
       },
       {

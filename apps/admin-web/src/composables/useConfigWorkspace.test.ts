@@ -332,6 +332,9 @@ describe("useConfigWorkspace", () => {
   it("normalizes legacy defaults without creating save work", async () => {
     const legacy = envelope("r1", "initial");
     delete (legacy.config as Partial<AppConfig>).normalReply;
+    delete (legacy.config.bot as Partial<AppConfig["bot"]>).replyModel;
+    delete (legacy.config.bot as Partial<AppConfig["bot"]>).replyReasoningEffort;
+    delete (legacy.config.bot as Partial<AppConfig["bot"]>).imageReader;
     delete (legacy.config.bot as Partial<AppConfig["bot"]>).replyDebounceMs;
     delete (legacy.config.bot.tone as Partial<AppConfig["bot"]["tone"]>).segmentedReply;
     delete (legacy.config.bot.tools as Partial<AppConfig["bot"]["tools"]>).overrides;
@@ -341,6 +344,14 @@ describe("useConfigWorkspace", () => {
     await workspace.load();
 
     expect(workspace.drafts.normalReply).toEqual({ maxRetries: 3 });
+    expect(workspace.drafts.bot.replyModel).toBe("gpt-5.5");
+    expect(workspace.drafts.bot.replyReasoningEffort).toBe("medium");
+    expect(workspace.drafts.bot.imageReader).toEqual({
+      enabled: true,
+      providerId: "codex",
+      model: "gpt-5.5",
+      reasoningEffort: "low"
+    });
     expect(workspace.drafts.bot.replyDebounceMs).toBe(5_000);
     expect(workspace.drafts.tone).toMatchObject({ enabled: false, segmentedReply: false, providerId: "", maxRetries: 2 });
     expect(workspace.drafts.tools.overrides).toEqual({});
