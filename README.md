@@ -2,7 +2,7 @@
 
 sunabot 是面向个人自托管场景的多 Agent QQ 服务。每个 Agent 可以绑定多个 QQ 账号，并拥有独立的人格、记忆、会话、图片和工具配置；Provider、系统提示词与管理安全由同一个 Sunabot Core 统一管理。
 
-当前版本：`0.1.0` · [更新日志](CHANGELOG.md) · [GitHub Releases](https://github.com/CatREFuse/sunabot/releases)
+当前版本：`1.0.0` · [更新日志](CHANGELOG.md) · [GitHub Releases](https://github.com/CatREFuse/sunabot/releases)
 
 ## 功能
 
@@ -204,6 +204,7 @@ git pull --ff-only
 - 旧 `sunabot-qq-runtime` 容器或 `qq-runtime` Compose service：[单容器到分离运行时](docs/migrations/one-container-to-split-runtime.md)
 - 旧单 Agent workspace：[单 Agent 到多 Agent](docs/migrations/single-agent-to-multi-agent.md)
 - Windows/WSL2 迁移：[WSL2 部署与迁移](docs/migrations/wsl2-migration-plan.md)
+- 0.1.4 升级到 1.0.0：[跨平台 WebFetch Renderer 升级](docs/migrations/upgrade-0.1.4-to-1.0.0.md)
 
 launcher 会在写入 workspace 前校验 `business/migrations/multi-agent-v1.json`。真正空目录会自动创建首次安装标记；主库出现后，门禁会核对全部 Agent 的 manifest 与双库、全部 QQ 的归属与运行目录、Plana/primary 基线，以及所有必需路径。完成标记还绑定迁移目标的 workspace 和 primary 端口。既有目录缺少标记、状态漂移或路径含符号链接时停止启动；结构已就绪但未标记的 workspace 仍需停服执行 `migrate:multi-agent --apply --quiesced`，由迁移器在确认全部账号端口和当前 workspace 的活动容器已经停止后创建恢复点、四类复制/保留证据、迁移报告和完成标记。
 
