@@ -23,6 +23,7 @@ const allFiles: AgentFileSummary[] = [
   file("memory.compress-in", "记忆写入压缩", "memory", "work_memory_compress_in.json", "final"),
   file("memory.compress-out", "记忆归档压缩", "memory", "work_memory_compress_out.json", "final"),
   file("memory.user-profile", "用户画像", "memory", "user_profile_prompt.json", "final"),
+  file("memory.dream", "梦境整理", "memory", "memory_dream.json", "final"),
   file("orchestrator.user-group", "用户群聊编排器", "orchestrator", "user_groupchat_orchestrator.json", "final"),
   file("conversation.group-summary", "群聊摘要", "conversation", "group_chat_summary.json", "final"),
   file("scheduler.cron-callback", "定时任务回调", "调度", "cron_callback.json", "final"),

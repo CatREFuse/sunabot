@@ -47,7 +47,7 @@ defineProps<{ models: readonly ModelCatalogItem[] }>();
     </div>
     <div class="settings-group">
       <h3 class="settings-group-title">提示词文件</h3>
-      <div class="mt-4 grid gap-5 lg:grid-cols-3">
+      <div class="mt-4 grid gap-5 lg:grid-cols-4">
         <label class="field">
           <span class="field-label">写入压缩</span>
           <SettingsConfirmInput v-model.trim="draft.workMemoryCompressInPrompt" type="text" confirm-label="确认写入压缩文件" />
@@ -63,6 +63,11 @@ defineProps<{ models: readonly ModelCatalogItem[] }>();
           <SettingsConfirmInput v-model.trim="draft.userProfilePrompt" type="text" confirm-label="确认用户画像文件" />
           <RouterLink class="font-mono text-[11px] text-[rgb(var(--color-interactive))]" to="/system-prompts/memory.user-profile">编辑正文 →</RouterLink>
         </label>
+        <div class="field">
+          <span class="field-label">Dream</span>
+          <span class="control flex items-center font-mono text-xs">memory_dream.json</span>
+          <RouterLink class="font-mono text-[11px] text-[rgb(var(--color-interactive))]" to="/system-prompts/memory.dream">编辑正文 →</RouterLink>
+        </div>
       </div>
     </div>
   </section>

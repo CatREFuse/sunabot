@@ -349,7 +349,7 @@ export function renderWorkingMemoryMarkdown(items: readonly WorkingMemoryDocumen
         ...item,
         content: undefined
       }), "utf8").toString("base64url")} -->`,
-      item.content,
+      renderWorkingMemoryVisibleContent(item),
       ...(index === items.length - 1 ? [] : [""])
     ])
   ].join("\n");
@@ -388,7 +388,7 @@ export function parseWorkingMemoryMarkdown(content: string) {
     });
     const visibleContent = legacy
       ? parseLegacyWorkingMemoryBlock(block, itemMetadata)
-      : block;
+      : parseWorkingMemoryVisibleContent(block, itemMetadata);
     return validateWorkingMemoryItem({
       ...(metadata as Record<string, unknown>),
       content: visibleContent
@@ -398,6 +398,32 @@ export function parseWorkingMemoryMarkdown(content: string) {
     throw workingMemoryError("WORKING_MEMORY_DOCUMENT_INVALID", "Working memory item IDs are duplicated.");
   }
   return items;
+}
+
+function renderWorkingMemoryVisibleContent(item: WorkingMemoryDocumentItem) {
+  const label = dreamVisibleLabel(item);
+  return label ? `${label}\n${item.content}` : item.content;
+}
+
+function parseWorkingMemoryVisibleContent(
+  block: string,
+  itemMetadata: WorkingMemoryDocumentItem
+) {
+  const label = dreamVisibleLabel(itemMetadata);
+  const prefix = label ? `${label}\n` : "";
+  return prefix && block.startsWith(prefix)
+    ? block.slice(prefix.length).trim()
+    : block;
+}
+
+function dreamVisibleLabel(item: WorkingMemoryDocumentItem) {
+  if (item.sourceKind !== "dream" && item.memoryKind !== "dream") return "";
+  const dreamedAt = item.dreamReviewedAt || item.occurredAt || item.recordedAt;
+  const timestamp = formatModelTimestamp(dreamedAt, item.timeZone);
+  if (!timestamp) {
+    throw workingMemoryError("WORKING_MEMORY_ITEM_INVALID", "Dream time is invalid.");
+  }
+  return `【梦境｜做梦时间：${timestamp.slice(0, 16).replace("T", " ")}】`;
 }
 
 function parseLegacyWorkingMemoryBlock(

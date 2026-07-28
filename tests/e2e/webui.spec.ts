@@ -1046,7 +1046,8 @@ test("提示词库列出全部文件并支持快捷保存与冲突恢复", async
   await expect(fileList.getByRole("button")).toHaveCount(7);
   await expect(fileList.getByRole("button", { name: /自拍提示词改写/ })).toBeVisible();
   await page.getByLabel("覆盖系统提示词").check();
-  await expect(fileList.getByRole("button")).toHaveCount(17);
+  await expect(fileList.getByRole("button")).toHaveCount(18);
+  await expect(fileList.getByRole("button", { name: /梦境整理/ })).toBeVisible();
   expect(state.promptOverrides.plana).toBe(true);
   const editor = page.getByLabel("提示词正文");
   await expect(editor).toContainText("冷静、诚实、可靠");

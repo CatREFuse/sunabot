@@ -192,5 +192,7 @@ describe("working-memory Markdown document", () => {
       dreamDate: "2026-07-24",
       sourceMemoryIds: ["working-a", "long-term-b"]
     });
+    expect(replaced.current.content).toContain("【梦境｜做梦时间：2026-07-24 04:00】\n梦见旧车站漂在海面上。");
+    expect(replaced.current.items[0]?.content).toBe("梦见旧车站漂在海面上。");
   });
 });

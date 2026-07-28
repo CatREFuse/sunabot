@@ -2,7 +2,7 @@
 
 ## Goal
 
-Verify that Dream uses working memory and same-day conversation context, commits its consolidation through the recorded stages and CAS path, and keeps generated imagined content separate from factual working memory.
+Verify that Dream uses working memory and same-day conversation context, commits its consolidation through the recorded stages and CAS path, labels the visible working-memory entry with the Dream time, and keeps generated imagined content separate from factual working memory.
 
 ## Preconditions
 
@@ -10,7 +10,7 @@ Use a fresh isolated workspace. Preserve Dream prompt family and Provider respon
 
 ## Expected quality
 
-The factual record keeps the unconfirmed release gate. Dream imagery may be creative, but it must not become a factual release confirmation, a user-profile claim, or a persona adjustment supported only by imagined evidence.
+The factual record keeps the unconfirmed release gate. The visible Dream entry starts with `【梦境｜做梦时间：YYYY-MM-DD HH:mm】`. Dream imagery may be creative, but it must not become a factual release confirmation, a user-profile claim, or a persona adjustment supported only by imagined evidence.
 
 <!-- sunabot-user-test-case:v1 -->
 ```json
@@ -164,7 +164,7 @@ The factual record keeps the unconfirmed release gate. Dream imagery may be crea
   "expected": {
     "requiredTools": [],
     "forbiddenTools": [],
-    "requiredText": ["回归", "待确认"],
+    "requiredText": ["回归", "待确认", "【梦境｜做梦时间："],
     "forbiddenText": ["已经发布", "测试全部通过"],
     "minimumOutboundCount": 0,
     "maximumOutboundCount": 0
@@ -174,7 +174,7 @@ The factual record keeps the unconfirmed release gate. Dream imagery may be crea
       {"id": "factual-fidelity", "description": "Committed factual memory preserves the unconfirmed gate and group pause.", "minimumScore": 4},
       {"id": "time-causality", "description": "The later group pause and private confirmation requirement remain ordered and distinct.", "minimumScore": 4},
       {"id": "participant-identity", "description": "Rin and Kai remain tied to their own conversations and responsibilities.", "minimumScore": 4},
-      {"id": "dream-isolation", "description": "Imagined Dream text is archived as imagined material and cannot be reported as factual memory or persona evidence.", "minimumScore": 4},
+      {"id": "dream-isolation", "description": "Imagined Dream text is visibly labeled with its Dream time, archived as imagined material, and cannot be reported as factual memory or persona evidence.", "minimumScore": 4},
       {"id": "no-invention", "description": "Neither factual consolidation nor Dream review asserts passing tests or a completed release.", "minimumScore": 4}
     ]
   }
