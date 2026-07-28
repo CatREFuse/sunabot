@@ -353,6 +353,7 @@ describe("unified runtime launcher", () => {
     { args: ["up"], invocation: "up" },
     { args: ["start"], invocation: "start" },
     { args: ["restart"], invocation: "restart" },
+    { args: ["bootstrap"], invocation: "bootstrap" },
     { args: ["--core=docker"], invocation: "--core=docker" },
     { args: ["--core", "docker"], invocation: "--core docker" },
     { args: ["--dev"], invocation: "--dev" }

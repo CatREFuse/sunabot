@@ -18,7 +18,7 @@ usage() {
   status      读取运行状态
   doctor      读取环境与运行诊断
   logs        跟随当前运行日志
-  bootstrap   安装锁定的运行依赖
+  bootstrap   安装锁定的运行依赖与 Renderer 浏览器
   rollback-first-run  回滚未完成的首次运行
   help        显示帮助
 
@@ -77,10 +77,6 @@ if command -v fnm >/dev/null 2>&1 && fnm exec --using="$VERSION" node -e "" >/de
       missing_dependencies
     fi
   fi
-  if [ "$COMMAND" = "bootstrap" ]; then
-    echo "运行依赖已准备。"
-    exit 0
-  fi
   ensure_macos_homebrew_path
   exec fnm exec --using="$VERSION" node "$ROOT/tooling/runtime/launcher.mjs" "$@"
 fi
@@ -103,11 +99,6 @@ if needs_install; then
   else
     missing_dependencies
   fi
-fi
-
-if [ "$COMMAND" = "bootstrap" ]; then
-  echo "运行依赖已准备。"
-  exit 0
 fi
 
 ensure_macos_homebrew_path
