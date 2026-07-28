@@ -161,7 +161,7 @@ workspace/runtime/napcat/accounts/<accountId>/
 ./sunabot.sh --help
 ```
 
-`status`、`doctor`、`logs` 和 `down` 不安装依赖。`bootstrap` 显式安装锁定依赖；`up` 与 `restart` 在需要时执行安装。`status`、`doctor` 与管理 API 共用同一只读探针，分别报告 Core、OneBot、每个 QQ、Provider、Codex、bubblewrap、workspace 和迁移状态。Provider 状态区分“已验证可用”“当前不可用”和“未配置”。
+`status`、`doctor`、`logs` 和 `down` 不安装依赖。`bootstrap` 显式安装锁定依赖，并准备当前平台的 WebFetch Renderer 与 Chromium：macOS 或 Docker Core 构建独立 renderer 镜像，Linux/WSL Native Core 准备 Bubblewrap renderer 缓存。`up` 与 `restart` 只在依赖或 renderer 源码摘要变化时同步；摘要一致时 Renderer 使用 `--no-build` 启动。`status`、`doctor` 与管理 API 共用同一只读探针，分别报告 Core、OneBot、每个 QQ、Provider、Codex、bubblewrap、WebFetch Renderer、workspace 和迁移状态。Provider 状态区分“已验证可用”“当前不可用”和“未配置”。
 
 无需启动 Core，也可以从 Bash 直接读取现代 Office 正文：
 

@@ -164,6 +164,7 @@ export function resolveLauncherContract(contract, options) {
     coreProfile: coreService.profile ?? docker.coreProfile ?? "core-docker",
     napcatService: napcatService.name ?? docker.napcatService ?? "napcat",
     webfetchRendererService: webfetchRendererService.name ?? "webfetch-renderer",
+    webfetchRendererImage: webfetchRendererService.image ?? "sunabot-webfetch-renderer",
     webfetchRendererPort: positivePort(webfetchRendererService.port ?? 8790, "WebFetch Renderer 端口"),
     coreReadyTimeoutSeconds: positiveInteger(
       contract.startup?.coreReadyTimeoutSeconds ?? 60

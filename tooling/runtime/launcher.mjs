@@ -21,6 +21,15 @@ import {
   listNativeCoreProcessGroups,
   stopNativeCoreProcessGroups
 } from "./native-core-process.mjs";
+import {
+  createNativeWebfetchRendererLaunch,
+  prepareNativeWebfetchRendererInstallation,
+  verifyNativeWebfetchRendererIsolation
+} from "./native-webfetch-renderer.mjs";
+import {
+  listNativeWebfetchRendererProcessGroups,
+  stopNativeWebfetchRendererProcessGroups
+} from "./native-webfetch-renderer-process.mjs";
 import { buildRuntimeProbe, collectWorkspaceProbeFacts } from "./probe.mjs";
 import { removeLegacyVoiceContainers } from "./legacy-voice-cleanup.mjs";
 import { accountRuntimeState, planAccountReconciliation } from "./account-reconciler.mjs";
@@ -135,7 +144,7 @@ export async function runLauncher(argv = process.argv.slice(2), environment = pr
       printHelp();
       break;
     case "bootstrap":
-      console.log("运行依赖已准备。");
+      await bootstrapRuntime(context);
       break;
     case "reconcile-account":
       await reconcileAccount(context, parsed.accountId);
@@ -165,6 +174,7 @@ async function restartRuntime(context) {
   await beginFirstRunBootstrap(context.workspace);
   const secrets = await prepareSecrets(context);
   await ensureAdminCredentials(context);
+  context.composeOverrides.SUNABOT_WEBFETCH_RENDERER_TOKEN = crypto.randomBytes(32).toString("base64url");
   await assertComposeServices(context);
   await down(context);
   const baseline = await assertRuntimeEmpty(context);
@@ -197,13 +207,13 @@ async function upNative(context, before, secrets) {
   if (!context.dev) await ensureNativeBuild(context);
   await prepareNativeBashImage(context);
   await compose(context, ["build", context.contract.napcatService]);
-  await prepareWebfetchRenderer(context);
+  const renderer = await prepareWebfetchRendererForNativeCore(context);
   const onebotListenHost = await resolveNativeOnebotListenHost(context);
   if (await tcpOpen(onebotListenHost, context.contract.onebotPort)) {
     throw new Error(`${onebotListenHost}:${context.contract.onebotPort} 已被非当前 launcher 管理的进程占用。`);
   }
   try {
-    native = await startNativeCore(context, onebotListenHost);
+    native = await startNativeCore(context, onebotListenHost, renderer?.token);
     await waitForHttp(
       `http://127.0.0.1:${context.contract.adminPort}${context.contract.healthPath}`,
       context.contract.coreReadyTimeoutSeconds * 1_000
@@ -232,6 +242,19 @@ async function upNative(context, before, secrets) {
     await stopNapcatContainers(context).catch(() => {});
     await compose(context, ["--profile", context.contract.coreProfile, "down", "--remove-orphans"]).catch(() => {});
     await stopNativeCore(context, native.record, { removeState: true }).catch(() => {});
+    const rendererGroups = await listNativeWebfetchRendererProcessGroups({
+      workspaceId: context.identity
+    }).catch(() => []);
+    if (rendererGroups.length > 0) {
+      await stopNativeWebfetchRendererProcessGroups({
+        workspaceId: context.identity,
+        groups: rendererGroups,
+        timeoutMs: context.contract.shutdownTimeoutSeconds * 1_000
+      }).catch(() => {});
+    }
+    if (renderer?.record?.runRoot) {
+      await fs.rm(renderer.record.runRoot, { recursive: true, force: true }).catch(() => {});
+    }
     throw error;
   }
 }
@@ -253,9 +276,23 @@ async function prepareNativeBashImage(context) {
   }
 }
 
-async function prepareWebfetchRenderer(context) {
+async function prepareDockerWebfetchRenderer(context) {
   try {
-    await compose(context, ["up", "-d", "--build", context.contract.webfetchRendererService]);
+    const digest = await dockerWebfetchRendererSourceDigest(context.root);
+    context.composeOverrides.SUNABOT_WEBFETCH_RENDERER_SOURCE_DIGEST = digest;
+    const tag = context.environment.SUNABOT_IMAGE_TAG?.trim() || "local";
+    const image = `${context.contract.webfetchRendererImage}:${tag}`;
+    const currentDigest = await dockerCommand(context, [
+      "image",
+      "inspect",
+      "--format",
+      '{{index .Config.Labels "io.sunabot.webfetch-renderer.source-digest"}}',
+      image
+    ], { capture: true }).then((value) => value.trim()).catch(() => "");
+    if (currentDigest !== digest) {
+      await compose(context, ["build", context.contract.webfetchRendererService]);
+    }
+    await compose(context, ["up", "-d", "--no-build", context.contract.webfetchRendererService]);
     await waitForHttp(
       `http://127.0.0.1:${context.contract.webfetchRendererPort}/healthz`,
       context.contract.coreReadyTimeoutSeconds * 1_000
@@ -267,13 +304,147 @@ async function prepareWebfetchRenderer(context) {
   }
 }
 
+async function buildDockerWebfetchRendererImage(context) {
+  const digest = await dockerWebfetchRendererSourceDigest(context.root);
+  const tag = context.environment.SUNABOT_IMAGE_TAG?.trim() || "local";
+  const image = `${context.contract.webfetchRendererImage}:${tag}`;
+  await dockerCommand(context, [
+    "build",
+    "--platform", webfetchRendererPlatform(),
+    "--build-arg", `SUNABOT_WEBFETCH_RENDERER_SOURCE_DIGEST=${digest}`,
+    "--file", path.join(context.root, "deploy/docker/Dockerfile.webfetch-renderer"),
+    "--tag", image,
+    context.root
+  ], { timeoutMs: BUILD_COMMAND_TIMEOUT_MS });
+}
+
+async function bootstrapRuntime(context) {
+  assertNonRootRuntimeUser();
+  if (context.mode === "native" && nativeWebfetchRendererDeployment() === "native") {
+    await ensureNativeDependencies(context);
+    await ensureNativeBuild(context);
+    await prepareNativeWebfetchRendererInstallation(context, {
+      command,
+      repairBrowser: true
+    });
+    console.log("Native WebFetch Renderer 依赖与 Chromium 已准备。");
+    return;
+  }
+  await assertDockerAvailable(context);
+  await buildDockerWebfetchRendererImage(context);
+  console.log("WebFetch Renderer 镜像与 Chromium 已准备。");
+}
+
+async function dockerWebfetchRendererSourceDigest(projectRoot) {
+  const hash = crypto.createHash("sha256");
+  for (const relative of [
+    "package.json",
+    "package-lock.json",
+    "tsconfig.json",
+    "deploy/docker/Dockerfile.webfetch-renderer",
+    "apps/webfetch-renderer",
+    "adapters",
+    "services",
+    "src",
+    "packages"
+  ]) {
+    await updateDigestFromPath(hash, path.join(projectRoot, relative), projectRoot);
+  }
+  return hash.digest("hex");
+}
+
+async function updateDigestFromPath(hash, target, base) {
+  const stat = await fs.lstat(target);
+  hash.update(path.relative(base, target));
+  if (stat.isDirectory()) {
+    for (const entry of (await fs.readdir(target)).sort()) {
+      await updateDigestFromPath(hash, path.join(target, entry), base);
+    }
+  } else if (stat.isFile()) {
+    hash.update(await fs.readFile(target));
+  } else {
+    throw new Error(`Renderer 构建输入不是普通文件：${target}`);
+  }
+}
+
+async function prepareNativeWebfetchRenderer(context) {
+  const token = crypto.randomBytes(32).toString("base64url");
+  let launch;
+  let child;
+  try {
+    const installation = await prepareNativeWebfetchRendererInstallation(context, { command });
+    launch = await createNativeWebfetchRendererLaunch(context, installation);
+    await verifyNativeWebfetchRendererIsolation(context, launch, command);
+    const log = await fs.open(launch.logPath, "a", 0o600);
+    child = spawn(launch.executable, launch.args, {
+      cwd: launch.runRoot,
+      detached: true,
+      env: launch.environment,
+      stdio: ["ignore", log.fd, log.fd, "pipe"]
+    });
+    await new Promise((resolve, reject) => {
+      child.once("error", reject);
+      child.once("spawn", resolve);
+    });
+    child.stdio[3].end(token);
+    child.unref();
+    await log.close();
+    const observed = await waitForProcessObservation(child.pid, 3_000);
+    const record = {
+      pid: child.pid,
+      signature: observed.signature,
+      entry: installation.supervisorEntry,
+      processGroup: child.pid,
+      startedAt: new Date().toISOString(),
+      isolation: launch.runtimeIsolation,
+      logPath: launch.logPath,
+      runRoot: launch.runRoot
+    };
+    const state = await readState(context.statePath);
+    await writeState(context, {
+      ...withoutUpdatedAt(state),
+      mode: "native",
+      dev: context.dev,
+      webfetchRenderer: record
+    });
+    const health = await waitForRendererHealth(
+      `http://127.0.0.1:${context.contract.webfetchRendererPort}/healthz`,
+      context.contract.coreReadyTimeoutSeconds * 1_000
+    );
+    if (health.browserIsolation !== "chromium-sandbox"
+      || health.runtimeIsolation !== launch.runtimeIsolation) {
+      throw new Error("WEBFETCH_RENDERER_ISOLATION_UNVERIFIED");
+    }
+    return { record, token };
+  } catch (error) {
+    if (child?.pid) {
+      try {
+        process.kill(-child.pid, "SIGKILL");
+      } catch {}
+    }
+    if (launch?.runRoot) await fs.rm(launch.runRoot, { recursive: true, force: true }).catch(() => {});
+    console.warn(`WebFetch Native 动态渲染服务准备失败，静态抓取保持可用：${message(error)}`);
+    return undefined;
+  }
+}
+
+async function prepareWebfetchRendererForNativeCore(context) {
+  if (nativeWebfetchRendererDeployment() === "native") return prepareNativeWebfetchRenderer(context);
+  const ready = await prepareDockerWebfetchRenderer(context);
+  return ready ? { token: context.composeOverrides.SUNABOT_WEBFETCH_RENDERER_TOKEN } : undefined;
+}
+
+export function nativeWebfetchRendererDeployment(platform = process.platform) {
+  return platform === "darwin" ? "docker" : "native";
+}
+
 async function upDocker(context, before, secrets) {
   if (!before.dockerCore.running && await tcpOpen("127.0.0.1", context.contract.adminPort)) {
     throw new Error(`127.0.0.1:${context.contract.adminPort} 已被非当前 Docker Core 占用。`);
   }
   try {
     await prepareWslDockerProxy(context);
-    await prepareWebfetchRenderer(context);
+    await prepareDockerWebfetchRenderer(context);
     await compose(context, [
       "--profile",
       context.contract.coreProfile,
@@ -337,6 +508,16 @@ async function down(context) {
       timeoutMs: context.contract.shutdownTimeoutSeconds * 1_000
     });
   }
+  if (runtime.nativeWebfetchRendererGroups.length > 0) {
+    await stopNativeWebfetchRendererProcessGroups({
+      workspaceId: context.identity,
+      groups: runtime.nativeWebfetchRendererGroups,
+      timeoutMs: context.contract.shutdownTimeoutSeconds * 1_000
+    });
+  }
+  if (runtime.state?.webfetchRenderer?.runRoot) {
+    await fs.rm(runtime.state.webfetchRenderer.runRoot, { recursive: true, force: true });
+  }
   await removeWorkspaceContainers(context);
   await removeLegacyVoiceContainers({
     workspaceId: context.identity,
@@ -381,6 +562,9 @@ async function assertRuntimeEmpty(context) {
   if (runtime.state) residuals.push("launcher state");
   if (runtime.nativeProcessGroups.length > 0) {
     residuals.push(`Native Core 进程组 ${runtime.nativeProcessGroups.map((item) => item.processGroup).join(", ")}`);
+  }
+  if (runtime.nativeWebfetchRendererGroups.length > 0) {
+    residuals.push(`Native Renderer 进程组 ${runtime.nativeWebfetchRendererGroups.map((item) => item.processGroup).join(", ")}`);
   }
   if (runtime.reconciler.processes.length > 0) {
     residuals.push(`账号调和进程 ${runtime.reconciler.processes.map((item) => item.pid).join(", ")}`);
@@ -514,10 +698,23 @@ async function collectRuntimeProbeFacts(context) {
       .catch(() => false);
   }
   const onebotReady = runtime.native.running ? await httpReady(onebotPath) : dockerCoreHealthy;
-  const webfetchRendererReady = runtime.webfetchRenderer.matches.length === 1
-    && await componentHealthStatus(context, runtime.webfetchRenderer.matches[0].id)
-      .then((status) => status === "healthy")
-      .catch(() => false);
+  const rendererHealth = await readRendererHealth(
+    `http://127.0.0.1:${context.contract.webfetchRendererPort}/healthz`
+  );
+  const nativeRendererUsesDocker = context.mode === "native"
+    && nativeWebfetchRendererDeployment() === "docker";
+  const webfetchRendererReady = context.mode === "native" && !nativeRendererUsesDocker
+    ? runtime.nativeWebfetchRendererGroups.some((group) => group.members.some(
+      (member) => member.pid === runtime.state?.webfetchRenderer?.pid
+    ))
+      && rendererHealth?.browserIsolation === "chromium-sandbox"
+      && rendererHealth?.runtimeIsolation === "linux-bubblewrap"
+    : runtime.webfetchRenderer.matches.length === 1
+      && await componentHealthStatus(context, runtime.webfetchRenderer.matches[0].id)
+        .then((status) => status === "healthy")
+        .catch(() => false)
+      && rendererHealth?.browserIsolation === "chromium-sandbox"
+      && rendererHealth?.runtimeIsolation === "docker";
   const conflicts = accountRuntimeConflicts(runtime.reconciler, context);
 
   const docker = await dockerAvailable(context);
@@ -626,7 +823,9 @@ async function collectRuntimeProbeFacts(context) {
       ...capabilities,
       webfetchDynamicRenderer: {
         ok: webfetchRendererReady,
-        detail: webfetchRendererReady ? "renderer healthy" : "renderer unavailable"
+        detail: webfetchRendererReady
+          ? `renderer healthy (${rendererHealth.runtimeIsolation}, chromium-sandbox)`
+          : "renderer unavailable or isolation unverified"
       }
     }
   };
@@ -666,12 +865,21 @@ function printHelp() {
 
 async function logs(context) {
   const runtime = await inspectRuntime(context);
-  if (!runtime.native.running && !runtime.dockerCore.running && !runtime.napcat.running && !runtime.webfetchRenderer.running) {
+  if (!runtime.native.running
+    && !runtime.dockerCore.running
+    && !runtime.napcat.running
+    && !runtime.webfetchRenderer.running
+    && runtime.nativeWebfetchRendererGroups.length === 0) {
     throw new Error("Sunabot 尚未运行。");
   }
   const children = [];
   if (runtime.native.running && await exists(context.coreLog)) {
     children.push(spawn("tail", ["-n", "120", "-F", context.coreLog], { stdio: "inherit" }));
+  }
+  if (runtime.nativeWebfetchRendererGroups.length > 0
+    && runtime.state?.webfetchRenderer?.logPath
+    && await exists(runtime.state.webfetchRenderer.logPath)) {
+    children.push(spawn("tail", ["-n", "120", "-F", runtime.state.webfetchRenderer.logPath], { stdio: "inherit" }));
   }
   if (runtime.containers.length > 0) {
     const services = [
@@ -1150,7 +1358,7 @@ export function bubblewrapProbeArguments(workspace, networkAccess = false) {
   return args;
 }
 
-async function startNativeCore(context, onebotListenHost) {
+async function startNativeCore(context, onebotListenHost, rendererToken) {
   await fs.mkdir(path.dirname(context.coreLog), { recursive: true, mode: 0o700 });
   const log = await fs.open(context.coreLog, "a", 0o600);
   const command = context.dev ? "npm" : process.execPath;
@@ -1159,13 +1367,16 @@ async function startNativeCore(context, onebotListenHost) {
   const child = spawn(command, args, {
     cwd: context.root,
     detached: true,
-    stdio: ["ignore", log.fd, log.fd],
-    env: nativeCoreEnvironment(context, onebotListenHost)
+    stdio: rendererToken
+      ? ["ignore", log.fd, log.fd, "pipe"]
+      : ["ignore", log.fd, log.fd],
+    env: nativeCoreEnvironment(context, onebotListenHost, process.platform, Boolean(rendererToken))
   });
   await new Promise((resolve, reject) => {
     child.once("error", reject);
     child.once("spawn", resolve);
   });
+  if (rendererToken) child.stdio[3].end(rendererToken);
   child.unref();
   await log.close();
   let observed;
@@ -1184,7 +1395,13 @@ async function startNativeCore(context, onebotListenHost) {
     processGroup: child.pid,
     startedAt: new Date().toISOString()
   };
-  await writeState(context, { mode: "native", dev: context.dev, core: record });
+  const state = await readState(context.statePath);
+  await writeState(context, {
+    ...withoutUpdatedAt(state),
+    mode: "native",
+    dev: context.dev,
+    core: record
+  });
   return { running: true, alive: true, pid: child.pid, record };
 }
 
@@ -1332,11 +1549,18 @@ async function inspectRuntime(context, options = {}) {
       record: state.core
     };
   }
-  const [reconciler, containers, legacyContainers, nativeProcessGroups] = await Promise.all([
+  const [
+    reconciler,
+    containers,
+    legacyContainers,
+    nativeProcessGroups,
+    nativeWebfetchRendererGroups
+  ] = await Promise.all([
     inspectAccountRuntime(context, state?.reconciler),
     labeledContainers(context, { includeOneoffs: options.includeOneoffs === true }),
     findLegacyContainers(context),
-    listNativeCoreProcessGroups({ root: context.root, workspace: context.workspace })
+    listNativeCoreProcessGroups({ root: context.root, workspace: context.workspace }),
+    listNativeWebfetchRendererProcessGroups({ workspaceId: context.identity })
   ]);
   const dockerCore = componentStatus(containers, "core");
   const napcat = componentStatus(containers, "napcat");
@@ -1348,6 +1572,7 @@ async function inspectRuntime(context, options = {}) {
     state,
     native,
     nativeProcessGroups,
+    nativeWebfetchRendererGroups,
     reconciler,
     containers,
     legacyContainers,
@@ -1690,8 +1915,7 @@ function composeEnvironment(context, project = context.project) {
     SUNABOT_RUNTIME_ID: context.contract.runtimeId,
     SUNABOT_RUNTIME_UID: String(process.getuid?.() ?? 1000),
     SUNABOT_RUNTIME_GID: String(process.getgid?.() ?? 1000),
-    SUNABOT_WEBFETCH_PLATFORM:
-      process.platform === "darwin" && process.arch === "arm64" ? "linux/arm64" : "linux/amd64",
+    SUNABOT_WEBFETCH_PLATFORM: webfetchRendererPlatform(),
     SUNABOT_CORE_PLATFORM:
       process.platform === "darwin" && process.arch === "arm64" ? "linux/arm64" : "linux/amd64",
     SUNABOT_WEBFETCH_CHROMIUM_SANDBOX: "1",
@@ -1701,6 +1925,10 @@ function composeEnvironment(context, project = context.project) {
   };
 }
 
+function webfetchRendererPlatform(platform = process.platform, architecture = process.arch) {
+  return platform === "darwin" && architecture === "arm64" ? "linux/arm64" : "linux/amd64";
+}
+
 function nativeProcessEnvironment(context) {
   return {
     ...context.environment,
@@ -1708,7 +1936,12 @@ function nativeProcessEnvironment(context) {
   };
 }
 
-export function nativeCoreEnvironment(context, onebotListenHost, platform = process.platform) {
+export function nativeCoreEnvironment(
+  context,
+  onebotListenHost,
+  platform = process.platform,
+  rendererTokenFd = false
+) {
   const environment = {
     ...nativeProcessEnvironment(context),
     NODE_ENV: context.dev ? "development" : "production",
@@ -1719,8 +1952,11 @@ export function nativeCoreEnvironment(context, onebotListenHost, platform = proc
     SUNABOT_HOST: context.contract.adminHost,
     SUNABOT_PORT: String(context.contract.adminPort),
     SUNABOT_ONEBOT_HOST: onebotListenHost,
-    SUNABOT_ONEBOT_PORT: String(context.contract.onebotPort)
+    SUNABOT_ONEBOT_PORT: String(context.contract.onebotPort),
+    SUNABOT_WEBFETCH_RENDERER_URL: `http://127.0.0.1:${context.contract.webfetchRendererPort}`
   };
+  if (rendererTokenFd) environment.SUNABOT_WEBFETCH_RENDERER_TOKEN_FD = "3";
+  else delete environment.SUNABOT_WEBFETCH_RENDERER_TOKEN_FD;
   if (platform === "darwin" && context.dockerSocket) {
     environment.SUNABOT_DOCKER_SOCKET = context.dockerSocket;
   } else {
@@ -1996,6 +2232,47 @@ async function waitForHttp(url, timeoutMs) {
     await delay(250);
   }
   throw new Error(`健康检查超时：${url}`);
+}
+
+async function waitForRendererHealth(url, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const health = await readRendererHealth(url);
+    if (health?.ok === true) return health;
+    await delay(250);
+  }
+  throw new Error(`WEBFETCH_RENDERER_HEALTH_TIMEOUT:${url}`);
+}
+
+function readRendererHealth(url) {
+  return new Promise((resolve) => {
+    const request = http.get(url, { timeout: 1_500 }, (response) => {
+      const chunks = [];
+      let bytes = 0;
+      response.on("data", (chunk) => {
+        bytes += chunk.length;
+        if (bytes > 4_096) response.destroy();
+        else chunks.push(chunk);
+      });
+      response.once("end", () => {
+        if (!response.statusCode || response.statusCode < 200 || response.statusCode >= 300) {
+          resolve(null);
+          return;
+        }
+        try {
+          const value = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+          resolve(value && typeof value === "object" ? value : null);
+        } catch {
+          resolve(null);
+        }
+      });
+    });
+    request.once("timeout", () => {
+      request.destroy();
+      resolve(null);
+    });
+    request.once("error", () => resolve(null));
+  });
 }
 
 function httpReady(url) {

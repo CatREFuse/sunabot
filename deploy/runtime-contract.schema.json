@@ -242,7 +242,7 @@
           "type": "array",
           "minItems": 3,
           "maxItems": 3,
-          "prefixItems": [{ "const": "webfetch-renderer" }, { "const": "core-native" }, { "const": "napcat" }],
+          "prefixItems": [{ "const": "webfetch-renderer-platform" }, { "const": "core-native" }, { "const": "napcat" }],
           "items": false
         },
         "dockerCoreOrder": {
@@ -447,9 +447,72 @@
     "native": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["napcatManagedBy"],
+      "required": ["napcatManagedBy", "webfetchRenderer"],
       "properties": {
-        "napcatManagedBy": { "const": "docker" }
+        "napcatManagedBy": { "const": "docker" },
+        "webfetchRenderer": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "managedBy",
+            "host",
+            "port",
+            "authentication",
+            "browserSandboxRequired",
+            "deploymentByPlatform",
+            "sandboxByPlatform",
+            "tokenDeliveryByPlatform",
+            "runtimeDirectories"
+          ],
+          "properties": {
+            "managedBy": { "const": "platform" },
+            "host": { "const": "127.0.0.1" },
+            "port": { "const": 8790 },
+            "authentication": { "const": "ephemeral-token" },
+            "browserSandboxRequired": { "const": true },
+            "deploymentByPlatform": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["macos", "wsl", "linux"],
+              "properties": {
+                "macos": { "const": "docker" },
+                "wsl": { "const": "launcher" },
+                "linux": { "const": "launcher" }
+              }
+            },
+            "sandboxByPlatform": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["macos", "wsl", "linux"],
+              "properties": {
+                "macos": { "const": "docker-seccomp" },
+                "wsl": { "const": "bubblewrap" },
+                "linux": { "const": "bubblewrap" }
+              }
+            },
+            "tokenDeliveryByPlatform": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["macos", "wsl", "linux"],
+              "properties": {
+                "macos": { "const": "renderer-container-env-core-fd" },
+                "wsl": { "const": "renderer-fd-core-fd" },
+                "linux": { "const": "renderer-fd-core-fd" }
+              }
+            },
+            "runtimeDirectories": {
+              "type": "array",
+              "minItems": 3,
+              "maxItems": 3,
+              "prefixItems": [
+                { "const": "home" },
+                { "const": "cache" },
+                { "const": "run" }
+              ],
+              "items": false
+            }
+          }
+        }
       }
     },
     "componentsLock": { "const": "components/component.lock.json" }

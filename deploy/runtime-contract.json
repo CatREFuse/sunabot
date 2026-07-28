@@ -94,7 +94,7 @@
     "noProxyRequired": ["localhost", "127.0.0.1", "::1", "[::1]"]
   },
   "startup": {
-    "nativeCoreOrder": ["webfetch-renderer", "core-native", "napcat"],
+    "nativeCoreOrder": ["webfetch-renderer-platform", "core-native", "napcat"],
     "dockerCoreOrder": ["webfetch-renderer", "core", "napcat"],
     "shutdownOrder": ["napcat", "core", "webfetch-renderer"],
     "coreReadyTimeoutSeconds": 60,
@@ -220,7 +220,30 @@
     }
   },
   "native": {
-    "napcatManagedBy": "docker"
+    "napcatManagedBy": "docker",
+    "webfetchRenderer": {
+      "managedBy": "platform",
+      "host": "127.0.0.1",
+      "port": 8790,
+      "authentication": "ephemeral-token",
+      "browserSandboxRequired": true,
+      "deploymentByPlatform": {
+        "macos": "docker",
+        "wsl": "launcher",
+        "linux": "launcher"
+      },
+      "sandboxByPlatform": {
+        "macos": "docker-seccomp",
+        "wsl": "bubblewrap",
+        "linux": "bubblewrap"
+      },
+      "tokenDeliveryByPlatform": {
+        "macos": "renderer-container-env-core-fd",
+        "wsl": "renderer-fd-core-fd",
+        "linux": "renderer-fd-core-fd"
+      },
+      "runtimeDirectories": ["home", "cache", "run"]
+    }
   },
   "componentsLock": "components/component.lock.json"
 }
