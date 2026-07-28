@@ -269,11 +269,17 @@ const codex = lock.components["codex-cli"];
 const officeParser = lock.components.officeparser;
 expect(coreDockerfile.includes(`${node.image}@${node.digest}`),
   "Core Dockerfile must pin the Node image digest");
-const rendererNodeModulesCopy = webfetchRendererDockerfile.indexOf(
-  "COPY --from=build --chown=1000:1000 /srv/sunabot/node_modules ./node_modules"
+const rendererRuntimeDependencies = webfetchRendererDockerfile.indexOf(
+  "FROM ${NODE_IMAGE} AS runtime-dependencies"
+);
+const rendererProductionInstall = webfetchRendererDockerfile.indexOf(
+  "RUN npm ci --omit=dev"
 );
 const rendererChromiumInstall = webfetchRendererDockerfile.indexOf(
   "RUN /usr/local/bin/node node_modules/playwright/cli.js install --with-deps chromium"
+);
+const rendererRuntime = webfetchRendererDockerfile.indexOf(
+  "FROM runtime-dependencies AS runtime"
 );
 const rendererDistCopy = webfetchRendererDockerfile.indexOf(
   "COPY --from=build --chown=1000:1000 /srv/sunabot/dist ./dist"
@@ -281,10 +287,12 @@ const rendererDistCopy = webfetchRendererDockerfile.indexOf(
 expect(webfetchRendererDockerfile.includes("io.sunabot.webfetch-renderer.source-digest"),
   "WebFetch renderer image must expose the source digest used to skip ordinary rebuilds");
 expect(
-  rendererNodeModulesCopy >= 0
-    && rendererChromiumInstall > rendererNodeModulesCopy
-    && rendererDistCopy > rendererChromiumInstall,
-  "WebFetch renderer must install Chromium after production dependencies and before application dist so business code changes reuse the browser layer"
+  rendererRuntimeDependencies >= 0
+    && rendererProductionInstall > rendererRuntimeDependencies
+    && rendererChromiumInstall > rendererProductionInstall
+    && rendererRuntime > rendererChromiumInstall
+    && rendererDistCopy > rendererRuntime,
+  "WebFetch renderer must key production dependencies and Chromium before the application runtime stage so ordinary source rebuilds reuse the browser layer"
 );
 const nativeUp = launcher.slice(
   launcher.indexOf("async function upNative"),

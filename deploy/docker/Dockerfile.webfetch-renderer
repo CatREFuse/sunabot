@@ -14,25 +14,26 @@ COPY services ./services
 COPY adapters ./adapters
 COPY packages ./packages
 COPY apps/webfetch-renderer ./apps/webfetch-renderer
-RUN npx tsc && npm prune --omit=dev
+RUN npx tsc
 
-FROM ${NODE_IMAGE} AS runtime
+FROM ${NODE_IMAGE} AS runtime-dependencies
 ARG NODE_VERSION
-ARG SUNABOT_WEBFETCH_RENDERER_SOURCE_DIGEST=unknown
 ENV NODE_ENV=production \
     PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
     HOME=/tmp/webfetch-home \
     XDG_CACHE_HOME=/tmp/webfetch-cache
-LABEL io.sunabot.webfetch-renderer.source-digest="${SUNABOT_WEBFETCH_RENDERER_SOURCE_DIGEST}"
 RUN test "$(/usr/local/bin/node -p 'process.versions.node')" = "$NODE_VERSION" \
     && mkdir -p /srv/sunabot /ms-playwright /tmp/webfetch-home /tmp/webfetch-cache \
     && chown -R 1000:1000 /srv/sunabot /ms-playwright /tmp/webfetch-home /tmp/webfetch-cache
 WORKDIR /srv/sunabot
-COPY --from=build --chown=1000:1000 /srv/sunabot/package.json ./package.json
-COPY --from=build --chown=1000:1000 /srv/sunabot/package-lock.json ./package-lock.json
-COPY --from=build --chown=1000:1000 /srv/sunabot/node_modules ./node_modules
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
 RUN /usr/local/bin/node node_modules/playwright/cli.js install --with-deps chromium \
     && rm -rf /var/lib/apt/lists/* /root/.cache
+
+FROM runtime-dependencies AS runtime
+ARG SUNABOT_WEBFETCH_RENDERER_SOURCE_DIGEST=unknown
+LABEL io.sunabot.webfetch-renderer.source-digest="${SUNABOT_WEBFETCH_RENDERER_SOURCE_DIGEST}"
 COPY --from=build --chown=1000:1000 /srv/sunabot/dist ./dist
 
 USER 1000:1000
