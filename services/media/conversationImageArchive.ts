@@ -4,6 +4,27 @@ import path from "node:path";
 import type { PreparedOutboundConversationAssetV1 } from "../../packages/contracts/messaging/messages.js";
 import { WORKSPACE_LAYOUT } from "../../packages/platform/workspaceLayout.js";
 import { getWorkspacePath } from "../../packages/platform/projectPaths.js";
+import {
+  AttachmentCacheError,
+  type CacheStore,
+  type CachedAttachment
+} from "./attachments/cache.js";
+import { detectAttachmentType } from "./attachments/detect.js";
+
+const MAX_CONVERSATION_REFERENCE_BYTES = 64 * 1024 * 1024;
+const CONVERSATION_REFERENCE_RETRY_DELAYS_MS = [250, 500, 1_000] as const;
+
+export interface ArchivedConversationImageReferenceV1 {
+  schemaVersion: 1;
+  sha256: string;
+  url: string;
+}
+
+export interface ArchiveConversationImageReferenceOptions {
+  signal?: AbortSignal;
+  mediaRoot?: string;
+  retrySleep?: (milliseconds: number) => Promise<void>;
+}
 
 const IMAGE_EXTENSIONS_BY_MIME = new Map<string, string>([
   ["image/png", "png"],
@@ -72,6 +93,191 @@ export async function archiveConversationImage(
     await writeArchiveAtomically(directory, filePath, bytes, digest);
   }
   return `/generated-images/conversation-assets/agents/${encodeURIComponent(normalizedAgentId)}/${fileName}`;
+}
+
+export async function archiveConversationImageReference(
+  agentId: string,
+  sourceUrl: string,
+  cache: CacheStore,
+  options: ArchiveConversationImageReferenceOptions = {}
+): Promise<ArchivedConversationImageReferenceV1> {
+  const normalizedAgentId = agentId.trim();
+  if (!/^[a-z][a-z0-9-]{1,31}$/.test(normalizedAgentId)) {
+    throw new Error("必需参考图归档 Agent 无效，图片任务已取消。");
+  }
+  const normalizedSourceUrl = sourceUrl.trim();
+  if (!normalizedSourceUrl) throw new Error("必需参考图地址为空，图片任务已取消。");
+  if (options.signal?.aborted) {
+    throw options.signal.reason ?? new Error("异步图片任务已取消。");
+  }
+  try {
+    const cached = await cacheConversationImageSource(
+      normalizedSourceUrl,
+      cache,
+      options,
+      normalizedAgentId
+    );
+    const detected = await detectAttachmentType(cached.filePath, {
+      fileName: sourceImageFileName(normalizedSourceUrl),
+      maxBytes: MAX_CONVERSATION_REFERENCE_BYTES
+    });
+    if (detected.kind !== "image" || !detected.mimeType) {
+      throw new Error("必需参考图内容不是受支持的图片，图片任务已取消。");
+    }
+    const bytes = await fs.readFile(cached.filePath);
+    if (bytes.byteLength !== cached.sizeBytes) {
+      throw new Error("必需参考图下载后发生变化，图片任务已取消。");
+    }
+    const digest = createHash("sha256").update(bytes).digest("hex");
+    if (digest !== cached.sha256) {
+      throw new Error("必需参考图摘要校验失败，图片任务已取消。");
+    }
+    const url = await archiveConversationImage(normalizedAgentId, {
+      kind: "image",
+      name: sourceImageFileName(normalizedSourceUrl),
+      source: `base64://${bytes.toString("base64")}`,
+      byteLength: bytes.byteLength,
+      sha256: digest,
+      mimeType: detected.mimeType
+    }, options.mediaRoot);
+    return {
+      schemaVersion: 1,
+      sha256: digest,
+      url
+    };
+  } catch (error) {
+    if (error instanceof Error && (
+      error.message.startsWith("必需参考图") ||
+      error.message === "异步图片任务已取消。"
+    )) {
+      throw error;
+    }
+    throw new Error("必需参考图归档失败，图片任务已取消。", { cause: error });
+  }
+}
+
+async function cacheConversationImageSource(
+  sourceUrl: string,
+  cache: CacheStore,
+  options: ArchiveConversationImageReferenceOptions,
+  agentId: string
+): Promise<CachedAttachment> {
+  if (/^https?:\/\//i.test(sourceUrl)) {
+    return downloadConversationImageWithRetry(sourceUrl, cache, options);
+  }
+  const dataImage = sourceUrl.match(/^data:image\/[a-z0-9.+-]+;base64,(.+)$/is);
+  if (dataImage) {
+    return cache.writeBase64(dataImage[1]!, {
+      maxBytes: MAX_CONVERSATION_REFERENCE_BYTES
+    });
+  }
+  if (sourceUrl.startsWith("/generated-images/")) {
+    const localPath = await resolveGeneratedImageArchiveSource(
+      sourceUrl,
+      options.mediaRoot,
+      agentId
+    );
+    return cache.importFile(localPath, {
+      signal: options.signal,
+      maxBytes: MAX_CONVERSATION_REFERENCE_BYTES
+    });
+  }
+  throw new Error("必需参考图地址不受支持，图片任务已取消。");
+}
+
+async function downloadConversationImageWithRetry(
+  sourceUrl: string,
+  cache: CacheStore,
+  options: ArchiveConversationImageReferenceOptions
+) {
+  const sleep = options.retrySleep ?? defaultRetrySleep;
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await cache.downloadHttp(sourceUrl, {
+        signal: options.signal,
+        maxBytes: MAX_CONVERSATION_REFERENCE_BYTES
+      });
+    } catch (error) {
+      if (!isRetryableConversationImageDownload(error) ||
+          attempt >= CONVERSATION_REFERENCE_RETRY_DELAYS_MS.length) {
+        throw new Error("必需参考图下载失败，图片任务已取消。", { cause: error });
+      }
+      await sleep(CONVERSATION_REFERENCE_RETRY_DELAYS_MS[attempt]!);
+    }
+  }
+}
+
+function isRetryableConversationImageDownload(error: unknown) {
+  return error instanceof AttachmentCacheError && (
+    error.code === "connect_timeout" ||
+    error.code === "download_failed" ||
+    error.code === "http_status" ||
+    error.code === "idle_timeout" ||
+    error.code === "missing_response_body"
+  );
+}
+
+function defaultRetrySleep(milliseconds: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function resolveGeneratedImageArchiveSource(
+  imageUrl: string,
+  mediaRoot: string | undefined,
+  agentId: string
+) {
+  if (imageUrl.includes("?") || imageUrl.includes("#")) {
+    throw new Error("必需参考图归档地址无效，图片任务已取消。");
+  }
+  const root = path.resolve(mediaRoot ?? getWorkspacePath(WORKSPACE_LAYOUT.mediaImages));
+  let segments: string[];
+  try {
+    segments = imageUrl.slice("/generated-images/".length)
+      .split("/")
+      .map((segment) => decodeURIComponent(segment));
+  } catch {
+    throw new Error("必需参考图归档地址无效，图片任务已取消。");
+  }
+  if (!segments.length || segments.some((segment) => (
+    !segment || segment === "." || segment === ".." || segment.includes("/") || segment.includes("\\")
+  ))) {
+    throw new Error("必需参考图归档地址无效，图片任务已取消。");
+  }
+  if (
+    (segments[0] === "agents" && segments[1] !== agentId) ||
+    (segments[0] === "conversation-assets" && segments[1] === "agents" && segments[2] !== agentId)
+  ) {
+    throw new Error("必需参考图不属于当前 Agent，图片任务已取消。");
+  }
+  const candidate = path.resolve(root, ...segments);
+  const relative = path.relative(root, candidate);
+  if (relative.startsWith(`..${path.sep}`) || relative === ".." || path.isAbsolute(relative)) {
+    throw new Error("必需参考图归档地址越界，图片任务已取消。");
+  }
+  const [rootRealPath, stats] = await Promise.all([
+    fs.realpath(root),
+    fs.lstat(candidate)
+  ]);
+  if (!stats.isFile() || stats.isSymbolicLink() || stats.nlink !== 1) {
+    throw new Error("必需参考图归档不可用，图片任务已取消。");
+  }
+  const candidateRealPath = await fs.realpath(candidate);
+  const realRelative = path.relative(rootRealPath, candidateRealPath);
+  if (realRelative.startsWith(`..${path.sep}`) || realRelative === ".." || path.isAbsolute(realRelative)) {
+    throw new Error("必需参考图归档越界，图片任务已取消。");
+  }
+  return candidateRealPath;
+}
+
+function sourceImageFileName(sourceUrl: string) {
+  try {
+    const parsed = new URL(sourceUrl, "https://sunabot.invalid");
+    const baseName = path.basename(parsed.pathname);
+    if (baseName && baseName !== "/") return baseName;
+  } catch {
+    // Detection uses content magic when the source has no usable name.
+  }
+  return "reference-image";
 }
 
 function decodePreparedImage(source: string) {

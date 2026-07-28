@@ -6,11 +6,11 @@
 
 ## Preconditions
 
-使用全新隔离 workspace、授权文本与图像 Provider以及 mock MessagingPort。输入图片来自稳定的公开 PNG，只用于验证当前消息媒体句柄在 dispatch 时被冻结并由异步任务解析。
+使用全新隔离 workspace、授权文本与图像 Provider以及 mock MessagingPort。输入图片来自稳定的公开 PNG，只用于验证当前消息媒体句柄在 dispatch 时完成下载、内容寻址归档并由异步任务解析。
 
 ## Expected quality
 
-工具调用必须使用 `message:930103:image:0`，结果中的请求句柄数、已解析句柄数和最终参考图数都应为 1。参考图无法解析时任务必须失败，不得用纯文字提示生成并报告成功。
+工具调用必须使用 `message:930103:image:0`，派发快照只能保存图片 SHA-256 与不可变归档 URL，不能保存原始远程 URL；结果中的请求句柄数、已解析句柄数和最终参考图数都应为 1。下载失败允许在初始请求后重试 3 次。参考图无法归档或在 Provider 输入阶段无法解析时任务必须失败，且图像 Provider 保持零调用。
 
 <!-- sunabot-user-test-case:v1 -->
 ```json

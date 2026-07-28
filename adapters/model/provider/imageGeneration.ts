@@ -37,6 +37,13 @@ export async function generateProviderImage(
   const imageModel = context.provider.imageModel?.trim() || DEFAULT_IMAGE_MODEL;
   const imageSize = normalizeImageSize(size);
   const content = await buildImageGenerationContent(prompt, referenceImageUrls);
+  const expectedReferenceImageCount = uniqueStrings(referenceImageUrls).slice(0, 4).length;
+  const resolvedReferenceImageCount = countInputImages(content);
+  if (resolvedReferenceImageCount !== expectedReferenceImageCount) {
+    throw new Error(
+      `必需参考图不可用，图片生成已取消（需要 ${expectedReferenceImageCount} 张，实际解析 ${resolvedReferenceImageCount} 张）。`
+    );
+  }
 
   if (context.provider.kind === "codex-responses") {
     return generateCodexImage(context, content, imageModel, imageSize, quality, referenceImageUrls, logContext);

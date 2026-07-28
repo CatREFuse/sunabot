@@ -208,6 +208,8 @@ export interface DeferredCodexTurn {
     incoming: ParsedIncomingMessage;
     captureSequence?: number;
     contextThroughSequence?: number;
+    imageReferences?: unknown;
+    workbenchImagesByPath?: unknown;
     replyGate?: ReplyGateSnapshot;
     replyQuote?: ReplyQuoteSnapshotV1;
     mentionUserIds?: number[];

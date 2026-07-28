@@ -425,6 +425,35 @@ describe("provider protocols", () => {
     await expect(provider.generateImage("portrait", "1024x1024", "high")).rejects.toThrow(/不支持 Responses 图像生成/);
   });
 
+  it("stops before the Provider when a required reference image cannot become input_image", async () => {
+    const provider = new OpenAIProvider(providerConfig("codex-responses"));
+    vi.spyOn(provider as never, "getApiKey").mockReturnValue("provider-key");
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+
+    await expect(provider.generateImage(
+      "follow the required reference",
+      "1024x1024",
+      "high",
+      ["/generated-images/conversation-assets/agents/arona/missing.png"]
+    )).rejects.toThrow("必需参考图不可用");
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("does not create an OpenAI client when a required reference image is unavailable", async () => {
+    const provider = new OpenAIProvider(providerConfig("openai-official"));
+    const createClient = vi.spyOn(provider as never, "createClient");
+
+    await expect(provider.generateImage(
+      "follow the required reference",
+      "1024x1024",
+      "high",
+      ["/generated-images/conversation-assets/agents/arona/missing.png"]
+    )).rejects.toThrow("必需参考图不可用");
+
+    expect(createClient).not.toHaveBeenCalled();
+  });
+
   it("retries Codex image generation when the response body stream terminates", async () => {
     const provider = new OpenAIProvider({
       ...providerConfig("codex-responses"),

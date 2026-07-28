@@ -46,7 +46,7 @@ import { conversationRecordId, queueIncomingSnapshot } from "./messagingAttachme
 import {
   deferredWorkbenchImageResolver,
   readGenerateImgReferenceContext,
-  snapshotDeferredWorkbenchImages
+  snapshotDeferredImageTask
 } from "./deferredImageReferences.js";
 import {
   runtime_attachReplyReferences,
@@ -537,18 +537,14 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
         if (preparedAcknowledgement.text.length > DISPATCH_MESSAGE_MAX_CHARS) {
           throw new Error(`Tone 处理后的 dispatch_message 不能超过 ${DISPATCH_MESSAGE_MAX_CHARS} 个字符。`);
         }
-        const workbenchImagesByPath = await snapshotDeferredWorkbenchImages(
-          this,
-          incoming,
-          turn.toolCall,
-          () => !options.signal?.aborted && (!options.isCurrent || options.isCurrent())
-        );
+        const deferredImages = await snapshotDeferredImageTask(this, incoming, turn.toolCall, generateImgReferenceContext,
+          () => !options.signal?.aborted && (!options.isCurrent || options.isCurrent()));
         const originalRequest = {
-          incoming: queueIncomingSnapshot(incoming),
+          incoming: deferredImages.incoming,
           captureSequence: options.captureSequence,
           contextThroughSequence: options.contextThroughSequence,
-          imageReferences: generateImgReferenceContext,
-          ...(workbenchImagesByPath ? { workbenchImagesByPath } : {}),
+          imageReferences: deferredImages.imageReferences,
+          ...(deferredImages.workbenchImagesByPath ? { workbenchImagesByPath: deferredImages.workbenchImagesByPath } : {}),
           replyGate: this.replyGates.capture(incoming.scope, conversationRecordId(incoming)),
           ...(options.delivery?.replyQuote ? { replyQuote: options.delivery.replyQuote } : {}),
           ...(options.delivery?.mentionUserIds?.length ? { mentionUserIds: [...options.delivery.mentionUserIds] } : {}),
@@ -556,7 +552,10 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
           ...(options.orchestratorResult ? { orchestratorResult: options.orchestratorResult } : {})
         };
         options.onDeferred?.({
-          deferred: turn,
+          deferred: {
+            ...turn,
+            toolCall: deferredImages.toolCall
+          },
           originalRequest,
           acknowledgement: this.replyDeliveryDraft(
             incoming,
