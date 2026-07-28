@@ -17,7 +17,7 @@
 | [功能—代码文件索引](./07-code-map.md) | 业务功能到主要代码文件的映射 | 定位实现入口，或新增、移动、删除主要代码文件时 |
 | [验证标准与已知限制](./08-validation.md) | 基础验证、专项验收、跨平台验证和当前待完成的真实环境验收 | 制定验证范围、提交改动或更新验收状态时 |
 
-专题实现遵循 [WebFetch 工具设计](../design/webfetch.md)，其中固定公开参数、静态与动态抓取边界、语义匹配、token 预算、SSRF 防护、独立渲染器和降级状态。
+专题实现遵循 [WebFetch 工具设计](../design/webfetch.md)，其中固定公开参数、静态与动态抓取边界、macOS Docker/Linux Native Renderer 平台选择、一次性 Chromium 同步、进程鉴权与监管、语义匹配、token 预算、SSRF 防护和降级状态。
 
 在线语音实现遵循 [在线语音合成](../deployment/online-voice-synthesis.md)，其中 OpenAI Audio 兼容协议、逐 Agent 音色 ID、凭据边界、合成响应门禁和真实 QQ 外发构成当前运行合同。
 

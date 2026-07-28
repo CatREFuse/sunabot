@@ -2,16 +2,19 @@ import { createHash } from "node:crypto";
 import Fastify from "fastify";
 import { chromium, type Browser, type Page } from "playwright";
 import { resolvePublicWebTarget } from "../../adapters/webfetch/urlPolicy.js";
+import { readRendererAuthToken, rendererRequestAuthorized } from "../../adapters/webfetch/rendererAuth.js";
 import { RendererLimiter, RendererQueueFullError } from "./rendererLimiter.js";
 import { startSafeWebProxy } from "./safeProxy.js";
 
-const HOST = process.env.SUNABOT_WEBFETCH_RENDERER_HOST?.trim() || "0.0.0.0";
+const HOST = readHost(process.env.SUNABOT_WEBFETCH_RENDERER_HOST);
 const PORT = readPort(process.env.SUNABOT_WEBFETCH_RENDERER_PORT, 8790);
 const MAX_DOM_BYTES = 4 * 1024 * 1024;
 const NAVIGATION_TIMEOUT_MS = 12_000;
 const MAX_CONCURRENCY = 2;
 const MAX_QUEUED_RENDERS = 16;
 const CHROMIUM_SANDBOX = readChromiumSandbox(process.env.SUNABOT_WEBFETCH_CHROMIUM_SANDBOX);
+const RUNTIME_ISOLATION = readRuntimeIsolation(process.env.SUNABOT_WEBFETCH_RUNTIME_ISOLATION);
+const AUTH_TOKEN = readRendererAuthToken();
 const blockedResourceTypes = new Set(["image", "media", "font"]);
 
 const app = Fastify({ logger: false, bodyLimit: 8 * 1024 });
@@ -23,11 +26,19 @@ let shuttingDown = false;
 app.get("/healthz", async (_request, reply) => {
   reply.code(browser.isConnected() ? 200 : 503).send({
     ok: browser.isConnected(),
-    browserIsolation: CHROMIUM_SANDBOX ? "chromium-sandbox" : "container-sandbox"
+    browserIsolation: "chromium-sandbox",
+    runtimeIsolation: RUNTIME_ISOLATION
   });
 });
 
 app.post<{ Body: { url?: unknown } }>("/render", async (request, reply) => {
+  if (!rendererRequestAuthorized(request.headers.authorization, AUTH_TOKEN)) {
+    reply.header("cache-control", "no-store").code(401).send({
+      ok: false,
+      code: "RENDERER_AUTH_REQUIRED"
+    });
+    return;
+  }
   if (!request.body
     || typeof request.body.url !== "string"
     || request.body.url.trim().length < 1
@@ -76,6 +87,7 @@ const shutdown = async () => {
 };
 browser.once("disconnected", () => {
   if (shuttingDown) return;
+  console.error("WebFetch Renderer 浏览器连接中断。");
   void shutdown().finally(() => process.exit(1));
 });
 process.once("SIGTERM", () => void shutdown().finally(() => process.exit(0)));
@@ -84,9 +96,11 @@ process.once("SIGINT", () => void shutdown().finally(() => process.exit(0)));
 await app.listen({ host: HOST, port: PORT });
 
 async function launchBrowser(proxyUrl: string) {
+  const browserExecutable = process.env.SUNABOT_WEBFETCH_CHROMIUM_EXECUTABLE?.trim();
   return chromium.launch({
     headless: true,
     chromiumSandbox: CHROMIUM_SANDBOX,
+    ...(browserExecutable ? { executablePath: browserExecutable } : {}),
     proxy: { server: proxyUrl },
     args: [
       "--disable-background-networking",
@@ -202,6 +216,19 @@ function readPort(value: string | undefined, fallback: number) {
 
 function readChromiumSandbox(value: string | undefined) {
   if (value == null || value.trim() === "" || value === "1") return true;
-  if (value === "0") return false;
-  throw new Error("SUNABOT_WEBFETCH_CHROMIUM_SANDBOX must be 0 or 1");
+  throw new Error("WEBFETCH_CHROMIUM_SANDBOX_REQUIRED");
+}
+
+function readHost(value: string | undefined) {
+  const host = value?.trim() || "127.0.0.1";
+  if (host !== "127.0.0.1" && host !== "0.0.0.0") {
+    throw new Error("WEBFETCH_RENDERER_HOST_INVALID");
+  }
+  return host;
+}
+
+function readRuntimeIsolation(value: string | undefined) {
+  const isolation = value?.trim();
+  if (isolation === "docker" || isolation === "linux-bubblewrap") return isolation;
+  throw new Error("WEBFETCH_RUNTIME_ISOLATION_REQUIRED");
 }

@@ -1,8 +1,8 @@
 # WebFetch 工具设计
 
-版本：2026-07-20
+版本：2026-07-28
 
-状态：实现复核中；静态、语义匹配和动态浏览器冒烟已通过，动态容器强制出站隔离未验收
+状态：平台运行边界已实现；macOS 使用独立 Docker renderer，Linux/WSL Native 使用 Bubblewrap renderer；动态容器强制出站隔离仍按第 14 节单独复核
 
 适用范围：Sunabot Core、Provider 工具循环、独立动态网页渲染服务、Docker/Native 运行时与联网工具安全边界
 
@@ -29,7 +29,7 @@
 | 工具组合 | 可与本地数据、MCP、Bash、Codex 和其他联网工具在同一 turn 顺序执行 |
 | 静态抓取 | Core 内有界 HTTP 抓取，使用 Defuddle 抽取正文并生成 Markdown |
 | 动态抓取 | 静态结果不足时调用独立 Playwright/Chromium 渲染服务，再由 Core 使用同一抽取器处理 DOM |
-| 动态服务边界 | 独立 Docker service，不并入 Core 或 NapCat，不挂载 workspace 和 secrets |
+| 动态服务边界 | macOS Native Core 与 Docker Core 使用独立 Docker service；Linux/WSL Native Core 使用独立 Bubblewrap 进程；均不并入 Core、NapCat 或 Bash，不读取 workspace 和 secrets |
 | 内容匹配 | 标题分块、BM25、中文字符 n-gram、标题命中和邻接上下文组成的本地相关性排序 |
 | 模型摘要 | 不调用；正文截取与相关性筛选均为确定性处理 |
 | 输出预算 | 宿主固定预算，首版不向模型暴露可调长度 |
@@ -208,8 +208,9 @@ Core 不能使用普通 `fetch(url)` 完成安全抓取后再信任结果。安�
 动态网页由 `webfetch-renderer` 独立 service 处理：
 
 - 基于固定版本 Playwright/Chromium；
-- Docker Core 通过 Compose 私有网络访问；Native Core 只通过宿主回环地址访问；
+- macOS Native Core 通过宿主回环访问独立 Docker renderer，Docker Core 通过 Compose 私有网络访问，Linux/WSL Native Core 通过宿主回环访问独立 Bubblewrap renderer；
 - 不发布局域网或公网端口；
+- `/render` 必须校验每次启动重新生成的 32 字节 bearer token；`/healthz` 只返回有界健康与隔离状态，不能返回 token、路径或环境；
 - 使用非 root 用户、只读根文件系统、临时目录限额、CPU/内存/PID 限额和请求并发上限；
 - 不挂载仓库、Agent workspace、数据库、Provider key、Codex 授权、OneBot token 或浏览器用户目录；
 - 每个请求创建无持久 context，禁用历史、Cookie、凭据、Service Worker、下载、剪贴板、摄像头、麦克风、地理位置和通知；
@@ -220,6 +221,12 @@ Core 不能使用普通 `fetch(url)` 完成安全抓取后再信任结果。安�
 - 最多返回 4 MiB 的序列化 DOM；渲染服务不抽取正文、不执行语义匹配，也不接收 `query`。
 
 Linux/WSL renderer 使用 `linux/amd64` 镜像，Apple Silicon 使用原生 `linux/arm64` 镜像，避免通过 QEMU 执行 Chromium。两种镜像均使用 Chromium 用户命名空间沙箱和 Playwright seccomp 允许项，并保留 Docker VM、非 root、只读根文件系统、`cap_drop=ALL`、no-new-privileges、临时目录和资源限额。健康接口返回当前 `browserIsolation`。
+
+macOS 不使用宿主 `sandbox-exec` 启动 Chromium。实测表明外层 Seatbelt 会使 Chromium 子进程的内部沙箱初始化返回 `Operation not permitted`，关闭 Chromium 内部沙箱又违反浏览器安全合同，因此 macOS Native Core 固定使用 Docker renderer。Linux/WSL Native renderer 由 launcher 以 Bubblewrap 启动，在用户命名空间内映射为无特权 UID/GID 65534，使用独立临时 `HOME`、cache 和 run 目录，遮蔽仓库、workspace、`.ssh`、`.codex`、`.config`、密钥环和浏览器用户目录；缺少 Bubblewrap、Chromium、有效 token 或隔离探针失败时不启动动态 renderer。
+
+Renderer token 不写入 launcher state、日志或 workspace。macOS Renderer 容器只接收该 token 环境变量，不读取 `runtime.env`；Native Core 通过匿名文件描述符接收 token。Linux/WSL Native renderer 和 Native Core 分别通过匿名文件描述符接收同一轮启动生成的 token，读取后关闭描述符并清除环境标记。
+
+`./sunabot.sh bootstrap` 是显式依赖同步入口：macOS 或 Docker Core 构建 renderer 镜像，Linux/WSL Native Core 准备 production 依赖和 Playwright Chromium。普通 `up|start|restart` 先比较 renderer 源码摘要与镜像 label；摘要一致时只执行 `docker compose up -d --no-build`。业务 `dist` 在 Chromium 安装层之后复制，普通业务代码变化可以复用浏览器层；锁文件或 Playwright 版本变化才进入依赖与 Chromium 同步阶段。已记录安装标记但浏览器文件缺失时 Linux/WSL Native 启动失败并保持静态 degraded，只有显式 `bootstrap` 执行修复。
 
 `query` 只在 Core 内用于结果筛选，禁止加入目标 URL、请求头、请求体、浏览器脚本或动态服务请求，从而避免把用户问题额外发送给目标站点。
 
@@ -350,11 +357,11 @@ const WEBFETCH_EVIDENCE_POLICY = {
 
 | Core 模式 | 静态抓取 | 动态渲染访问方式 |
 | --- | --- | --- |
-| macOS Native Core | Core 进程 | `127.0.0.1` 上仅回环发布的 renderer 端口 |
-| Linux/WSL Native Core | Core 进程 | `127.0.0.1` 上仅回环发布的 renderer 端口 |
+| macOS Native Core | Core 进程 | 独立 Docker renderer，仅发布 `127.0.0.1:8790` |
+| Linux/WSL Native Core | Core 进程 | 独立 Bubblewrap renderer，仅监听 `127.0.0.1:8790` |
 | Docker Core | Core 容器 | Compose 私有网络中的 renderer service 名称 |
 
-NapCat 继续使用独立容器。`webfetch-renderer` 不进入 NapCat 镜像、Core 镜像或 Native 进程管理单元；`sunabot.sh up|start|restart` 负责按统一清空后启动流程调和该服务，`down|status|logs|doctor` 提供相应生命周期和状态。
+NapCat 继续使用独立容器。`webfetch-renderer` 不进入 NapCat、Core 或 Bash 运行单元；`sunabot.sh up|start|restart` 负责按平台选择 renderer 并执行统一清空后启动流程，`down` 按 workspace 标签或进程身份回收，`status|logs|doctor` 报告对应容器或进程状态。Renderer 异常不阻止 Core 提供静态 WebFetch。
 
 ### 8.2 能力状态
 
@@ -379,7 +386,7 @@ NapCat 继续使用独立容器。`webfetch-renderer` 不进入 NapCat 镜像、
 | 静态 adapter | `adapters/webfetch/safeHttpFetcher.ts`, `adapters/webfetch/defuddleExtractor.ts` | DNS-pinned HTTP、重定向、字节限制和正文抽取 |
 | 动态 client | `adapters/webfetch/dynamicRendererClient.ts` | 有界内部调用、取消、错误映射和健康检查 |
 | 动态 service | `apps/webfetch-renderer/` | Chromium 生命周期、请求拦截、DOM 稳定判断和有界输出 |
-| 运行与打包 | `deploy/docker/`, `tooling/runtime/launcher.mjs`, `tooling/runtime/launcher-core.mjs`, `sunabot.sh` | renderer 镜像、网络、回环端口、状态与 doctor |
+| 运行与打包 | `deploy/docker/`, `tooling/runtime/launcher.mjs`, `tooling/runtime/native-webfetch-renderer*.mjs`, `sunabot.sh` | 平台选择、renderer 镜像与 Native 进程、鉴权、缓存、回环端口、残留回收和 doctor |
 | 配置与管理台 | 现有工具目录配置和诊断组件 | 只增加工具开关、三字段详情与动态能力状态，不增加抓取参数表单 |
 | 测试 | `tests/unit/web-fetch-*.test.ts`, `tests/integration/web-fetch-*.test.ts`, `tests/runtime-smoke/` | 输入、抽取、动态渲染、安全、Provider 和跨运行时验证 |
 
@@ -411,7 +418,7 @@ NapCat 继续使用独立容器。`webfetch-renderer` 不进入 NapCat 镜像、
 
 - 新增独立 Playwright/Chromium service 与强制出站策略代理；
 - 实现静态质量判断、动态降级、DOM 稳定等待和静态/动态结果择优；
-- 接入 Native 回环与 Docker 私有网络两种地址解析；
+- 接入 macOS Native Core 的 Docker 回环、Linux/WSL Native 的 Bubblewrap 回环与 Docker Core 私有网络三种部署路径；
 - 扩展 `sunabot.sh`、launcher、status、logs 和 doctor；
 - 完成无 workspace/secret 挂载、非 root、只读文件系统及资源上限检查。
 
@@ -438,7 +445,7 @@ NapCat 继续使用独立容器。`webfetch-renderer` 不进入 NapCat 镜像、
 | 注入 | 页面正文伪装 system/developer/tool、要求泄露本地文件、伪造 evidencePolicy | 内容保留为外部证据，宿主策略不可覆盖，模型不得执行网页指令 |
 | 工具组合 | webfetch 与文件/Bash/记忆/Skill/MCP 本地资源同批及跨轮；websearch 后 webfetch | 全部组合可按调用上限顺序执行，各工具保留自身参数与权限校验 |
 | 取消与并发 | 调用方取消、同 URL 合并、全部等待者取消、动态服务重启 | 无悬挂请求、浏览器 context 或未清理临时数据；单个等待者取消不破坏其他等待者 |
-| 跨运行时 | macOS Native、Linux/WSL Native、Docker Core | 静态行为一致；动态服务地址按组件边界解析；NapCat 和 workspace 边界不变 |
+| 跨运行时 | macOS Native + Docker renderer、Linux/WSL Native + Bubblewrap renderer、Docker Core + Docker renderer | 静态行为一致；动态服务地址、鉴权与监管按平台解析；NapCat、Bash 和 workspace 边界不变 |
 
 相关性测试使用人工标注的中英文网页集合。首版门槛为关键答案块召回率至少 90%，匹配模式中位 token 不高于完整清理正文的 40%，安全负例必须 100% 失败关闭。未达到召回门槛时不得通过降低输出预算掩盖问题。
 
@@ -476,3 +483,15 @@ NapCat 继续使用独立容器。`webfetch-renderer` 不进入 NapCat 镜像、
 - WebFetch 专项、工具目录回归、类型检查、架构门禁、runtime contract 与生产构建通过。
 
 当前阻断：同一生产约束容器内直接执行普通 `fetch("https://example.com")` 仍返回 HTTP 200，证明网络层没有强制所有浏览器容器出站经过 `safeProxy`；HTTPS CONNECT 也是透明隧道，无法执行解压后响应体上限。动态能力因此尚未达到第 4.3 节“容器不能建立绕过代理的外连”和第 7.1 节响应限制，不能标记为完成。后续实现必须把 Core 可访问的 renderer API、浏览器 worker 与出站代理拆到受控网络边界，或者提供等价且可故障注入验证的强制 egress 方案；不得使用 `seccomp=unconfined`、关闭 Chromium sandbox、增加宿主网络权限或仅依赖浏览器代理参数代替。
+
+## 15. 2026-07-28 平台运行边界
+
+本轮将 Renderer 生命周期从“每次 Compose build”改为平台选择与摘要缓存：
+
+- macOS Native Core 继续使用独立 Docker renderer。宿主 Seatbelt 与 Chromium 内部 Seatbelt 的冲突已通过真实页面创建复现，错误包含 `Failed to initialize sandbox`、`Operation not permitted` 和 Chromium `SIGTRAP`；因此不提供关闭 Chromium sandbox 或仅约束 Node 进程的静默降级。
+- Linux/WSL Native Core 使用 launcher 监管的 Bubblewrap renderer。监管记录绑定 workspace ID、PID、进程组与启动签名；异常退出按有界退避重启，`down|restart` 复验身份后执行 TERM/KILL 并清理独立临时目录。
+- Docker Core 保持独立 renderer service。镜像 label 记录源码摘要；摘要匹配时启动命令固定使用 `--no-build`，Chromium 安装层位于 production 依赖与应用 `dist` 之间。
+- Renderer API 加入 bearer 鉴权。Core 和 renderer 不共享 Provider、Codex、OneBot、NapCat 或 Agent workspace 权限；健康接口保持无凭据，只报告 `runtimeIsolation` 与 `browserIsolation`。
+- 任一 renderer 路径启动失败、浏览器缺失、鉴权缺失或健康隔离值不匹配时，动态能力报告 degraded，静态 WebFetch 保持可用。
+
+该变更收敛部署、缓存、鉴权和进程监管，不关闭第 14 节记录的强制 egress 验收项。网络层强制代理需要独立设计和故障注入证据，不能由本轮平台迁移结果替代。

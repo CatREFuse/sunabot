@@ -5,6 +5,8 @@ services:
     build:
       context: .
       dockerfile: deploy/docker/Dockerfile.webfetch-renderer
+      args:
+        SUNABOT_WEBFETCH_RENDERER_SOURCE_DIGEST: ${SUNABOT_WEBFETCH_RENDERER_SOURCE_DIGEST:-unknown}
     image: sunabot-webfetch-renderer:${SUNABOT_IMAGE_TAG:-local}
     platform: ${SUNABOT_WEBFETCH_PLATFORM:-linux/amd64}
     user: "${SUNABOT_RUNTIME_UID:-1000}:${SUNABOT_RUNTIME_GID:-1000}"
@@ -14,7 +16,9 @@ services:
       NODE_ENV: production
       SUNABOT_WEBFETCH_RENDERER_HOST: 0.0.0.0
       SUNABOT_WEBFETCH_RENDERER_PORT: 8790
+      SUNABOT_WEBFETCH_RENDERER_TOKEN: ${SUNABOT_WEBFETCH_RENDERER_TOKEN:-}
       SUNABOT_WEBFETCH_CHROMIUM_SANDBOX: ${SUNABOT_WEBFETCH_CHROMIUM_SANDBOX:-1}
+      SUNABOT_WEBFETCH_RUNTIME_ISOLATION: docker
     ports:
       - "127.0.0.1:8790:8790"
     expose:
@@ -78,6 +82,7 @@ services:
       SUNABOT_PROXY_MODE: ${SUNABOT_PROXY_MODE:-auto}
       SUNABOT_PROXY_DISCOVERED_URL: ${SUNABOT_PROXY_DISCOVERED_URL:-}
       SUNABOT_WEBFETCH_RENDERER_URL: http://webfetch-renderer:8790
+      SUNABOT_WEBFETCH_RENDERER_TOKEN: ${SUNABOT_WEBFETCH_RENDERER_TOKEN:-}
       NO_PROXY: "${NO_PROXY:-localhost,127.0.0.1,::1,[::1],core,webfetch-renderer,host.docker.internal}"
       no_proxy: "${no_proxy:-localhost,127.0.0.1,::1,[::1],core,webfetch-renderer,host.docker.internal}"
     ports:

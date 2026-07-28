@@ -33,7 +33,11 @@ const [
   dockerSeccompProfile,
   buildRelease,
   packageManifest,
-  packageLock
+  packageLock,
+  nativeWebfetchRenderer,
+  nativeWebfetchRendererProcess,
+  webfetchRendererMain,
+  webfetchRendererClient
 ] = await Promise.all([
   readJson("deploy/runtime-contract.json"),
   readJson("deploy/runtime-contract.schema.json"),
@@ -57,7 +61,11 @@ const [
   readJson("deploy/docker/seccomp-bwrap.json"),
   read("tooling/runtime/build-release.mjs"),
   readJson("package.json"),
-  readJson("package-lock.json")
+  readJson("package-lock.json"),
+  read("tooling/runtime/native-webfetch-renderer.mjs"),
+  read("tooling/runtime/native-webfetch-renderer-process.mjs"),
+  read("apps/webfetch-renderer/main.ts"),
+  read("adapters/webfetch/dynamicRendererClient.ts")
 ]);
 
 const errors = [
@@ -168,6 +176,18 @@ expect(JSON.stringify(contract.outboundProxy) === JSON.stringify(PROXY_RUNTIME_C
   "outbound proxy runtime contract must match packages/platform");
 expect(contract.native.napcatManagedBy === "docker",
   "NapCat must be Docker-managed in every Core mode");
+expect(contract.native.webfetchRenderer?.managedBy === "platform"
+  && contract.native.webfetchRenderer?.host === "127.0.0.1"
+  && contract.native.webfetchRenderer?.authentication === "ephemeral-token"
+  && contract.native.webfetchRenderer?.browserSandboxRequired === true
+  && contract.native.webfetchRenderer?.deploymentByPlatform?.macos === "docker"
+  && contract.native.webfetchRenderer?.deploymentByPlatform?.linux === "launcher"
+  && contract.native.webfetchRenderer?.deploymentByPlatform?.wsl === "launcher"
+  && contract.native.webfetchRenderer?.sandboxByPlatform?.macos === "docker-seccomp"
+  && contract.native.webfetchRenderer?.sandboxByPlatform?.linux === "bubblewrap"
+  && contract.native.webfetchRenderer?.sandboxByPlatform?.wsl === "bubblewrap"
+  && contract.native.webfetchRenderer?.tokenDeliveryByPlatform?.macos === "renderer-container-env-core-fd",
+"Native Core WebFetch Renderer must be platform-managed, authenticated, loopback-only and fail closed on platform sandboxing");
 expect(contract.capabilities.workspaceBash.service === "core"
   && contract.capabilities.workspaceBash.isolation === "bubblewrap"
   && contract.capabilities.workspaceBash.failClosed === true,
@@ -214,9 +234,13 @@ expect(rendererBlock.includes('127.0.0.1:8790:8790')
   && rendererBlock.includes("read_only: true")
   && rendererBlock.includes("no-new-privileges:true")
   && rendererBlock.includes("seccomp=deploy/docker/seccomp-webfetch-renderer.json")
+  && rendererBlock.includes('SUNABOT_WEBFETCH_RENDERER_TOKEN: ${SUNABOT_WEBFETCH_RENDERER_TOKEN:-}')
+  && rendererBlock.includes("SUNABOT_WEBFETCH_RUNTIME_ISOLATION: docker")
   && !rendererBlock.includes("env_file:")
   && !rendererBlock.includes("volumes:"),
 "WebFetch renderer must be loopback-only, read-only and isolated from Core secrets and workspace mounts");
+expect(coreBlock.includes('SUNABOT_WEBFETCH_RENDERER_TOKEN: ${SUNABOT_WEBFETCH_RENDERER_TOKEN:-}'),
+  "Core and Renderer token interpolation must remain compatible with token-free down and logs");
 expect(coreBlock.includes("127.0.0.1:8787:8787"),
   "Core admin port must publish to host loopback only");
 expect(coreBlock.includes('expose:\n      - "8788"') && !coreBlock.includes(":8788:8788"),
@@ -254,12 +278,42 @@ const rendererChromiumInstall = webfetchRendererDockerfile.indexOf(
 const rendererDistCopy = webfetchRendererDockerfile.indexOf(
   "COPY --from=build --chown=1000:1000 /srv/sunabot/dist ./dist"
 );
+expect(webfetchRendererDockerfile.includes("io.sunabot.webfetch-renderer.source-digest"),
+  "WebFetch renderer image must expose the source digest used to skip ordinary rebuilds");
 expect(
   rendererNodeModulesCopy >= 0
     && rendererChromiumInstall > rendererNodeModulesCopy
     && rendererDistCopy > rendererChromiumInstall,
   "WebFetch renderer must install Chromium after production dependencies and before application dist so business code changes reuse the browser layer"
 );
+const nativeUp = launcher.slice(
+  launcher.indexOf("async function upNative"),
+  launcher.indexOf("export function nativeBashImageComposeArguments")
+);
+expect(nativeUp.includes("prepareWebfetchRendererForNativeCore(context)"),
+"Native Core startup must select the Renderer deployment from the host platform");
+expect(launcher.includes('["up", "-d", "--no-build", context.contract.webfetchRendererService]')
+  && launcher.includes("dockerWebfetchRendererSourceDigest")
+  && launcher.includes('return platform === "darwin" ? "docker" : "native"'),
+"macOS Native Core and Docker Core must reuse a matching Renderer image while Linux Native Core uses the host Renderer");
+expect(nativeWebfetchRenderer.includes('"/usr/bin/bwrap"')
+  && nativeWebfetchRenderer.includes("WEBFETCH_MACOS_NATIVE_RENDERER_UNSUPPORTED")
+  && nativeWebfetchRenderer.includes("WEBFETCH_BROWSER_MISSING")
+  && nativeWebfetchRenderer.includes("SUNABOT_WEBFETCH_RENDERER_TOKEN_FD")
+  && nativeWebfetchRenderer.includes('"--uid", "65534"')
+  && nativeWebfetchRenderer.includes('"--gid", "65534"')
+  && nativeWebfetchRenderer.includes("fs.mkdtemp"),
+"Linux Native Renderer must use bubblewrap, one-time browser installation, token FD authentication and ephemeral runtime directories");
+expect(nativeWebfetchRendererProcess.includes("stopNativeWebfetchRendererProcessGroups")
+  && nativeWebfetchRendererProcess.includes("SUNABOT_WEBFETCH_RENDERER_WORKSPACE_ID"),
+"Native Renderer residual cleanup must require a workspace-bound process identity");
+expect(webfetchRendererMain.includes("rendererRequestAuthorized")
+  && webfetchRendererMain.includes('"chromium-sandbox"')
+  && webfetchRendererMain.includes("WEBFETCH_CHROMIUM_SANDBOX_REQUIRED"),
+"Renderer must authenticate render requests and require the Chromium sandbox");
+expect(webfetchRendererClient.includes("authorization: `Bearer ${this.authToken}`")
+  && webfetchRendererClient.includes("DYNAMIC_RENDERER_UNAVAILABLE"),
+"Core must authenticate Renderer requests and degrade when authentication is unavailable");
 expect(!/napcat|\/opt\/QQ|xvfb-run/i.test(coreDockerfile),
   "Core Dockerfile must not contain QQ or NapCat");
 expect(coreDockerfile.includes("dist/apps/api/main.js")

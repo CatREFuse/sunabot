@@ -2,26 +2,36 @@ import {
   WebFetchError,
   type DynamicRendererPort
 } from "../../services/webfetch/public.js";
+import { readRendererAuthToken, validateRendererAuthToken } from "./rendererAuth.js";
 import { resolvePublicWebTarget } from "./urlPolicy.js";
 
 const RENDER_TIMEOUT_MS = 15_000;
 const MAX_RENDER_RESPONSE_BYTES = 4 * 1024 * 1024;
+const PROCESS_RENDERER_AUTH_TOKEN = loadProcessRendererAuthToken();
 
 export class HttpDynamicRendererClient implements DynamicRendererPort {
   private readonly endpoint: string;
+  private readonly authToken?: string;
 
-  constructor(endpoint = defaultRendererEndpoint()) {
+  constructor(endpoint = defaultRendererEndpoint(), authToken = defaultRendererAuthToken()) {
     this.endpoint = normalizeRendererEndpoint(endpoint);
+    this.authToken = authToken ? validateRendererAuthToken(authToken) : undefined;
   }
 
   async render(url: string, options: { signal?: AbortSignal } = {}) {
+    if (!this.authToken) {
+      throw new WebFetchError("DYNAMIC_RENDERER_UNAVAILABLE", "Renderer authentication is unavailable.");
+    }
     const timeout = AbortSignal.timeout(RENDER_TIMEOUT_MS);
     const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
     let response: Response;
     try {
       response = await fetch(new URL("/render", this.endpoint), {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: {
+          authorization: `Bearer ${this.authToken}`,
+          "content-type": "application/json"
+        },
         body: JSON.stringify({ url }),
         signal
       });
@@ -63,6 +73,18 @@ export class HttpDynamicRendererClient implements DynamicRendererPort {
     } catch {
       return false;
     }
+  }
+}
+
+function defaultRendererAuthToken() {
+  return PROCESS_RENDERER_AUTH_TOKEN;
+}
+
+function loadProcessRendererAuthToken() {
+  try {
+    return readRendererAuthToken();
+  } catch {
+    return undefined;
   }
 }
 

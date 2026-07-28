@@ -22,8 +22,9 @@ sunabot 是面向个人自托管场景的 QQ 多 Agent 服务。系统通过 One
 │   ├── AgentRuntimeManager
 │   │   └── 每个启用 Agent 一个 SunaRuntime / SessionCoordinator
 │   └── Agent 注册主库 / 各 Agent 业务库与队列库
-├── WebFetch Renderer（独立 Playwright/Chromium Docker service）
-│   ├── Native Core 通过宿主回环 127.0.0.1:8790 访问
+├── WebFetch Renderer（独立 Playwright/Chromium 运行单元）
+│   ├── macOS Native Core 使用 Docker renderer，经宿主回环 127.0.0.1:8790 访问
+│   ├── Linux/WSL Native Core 使用 Bubblewrap renderer，经宿主回环访问
 │   └── Docker Core 通过 Compose 私有网络访问，不挂载 workspace 或 secrets
 └── NapCat Docker × QQ 账号
     ├── 每个账号独立容器、配置与 QQ 登录态
@@ -45,7 +46,7 @@ NapCat 在 macOS、WSL2 和 Linux 上始终运行于独立 Docker 容器。Sunab
 
 Native Core 启动时必须通过独立 `deploy/docker/compose.bash.yml` 准备 `sunabot-bash` 强隔离镜像。`native_bash` 只向管理员 QQ 私聊和已认证管理员 Web Chat 开放；macOS Native Core 以非 root Core 用户调用宿主 `/bin/bash`，Linux/WSL Native 与 Docker Core 继续使用 bubblewrap。`docker_bash` 向全部真实 QQ 私聊与群聊以及已认证管理员 Web Chat 开放；macOS Native Core 在具有出站网络、无 Docker socket 的短生命周期容器中执行，Linux/WSL Native 与 Docker Core 使用共享宿主网络 namespace 的 bubblewrap 强隔离。每条命令都必须先通过独立对抗审批，审批票据绑定执行后端。审计输入必须携带宿主重新确认的管理员身份和原始用户请求；普通用户直接要求枚举、读取、披露或修改工作区时拒绝，高层级文件任务可在 Docker workbench 内完成并按需下载公开文件。macOS Docker capability 在首次使用和熔断恢复时运行完整镜像探针并共享结果，不为每条命令额外创建探针容器，也不使用定时健康探针容器。单条 Docker 控制请求硬期限为 2 秒；只对安全控制操作和已经证明容器不存在的 create 提供一次 300 毫秒后重试，start 状态不明时只按唯一名称和完整 owner 标签对账，无法证明状态时返回 unknown 且禁止重放。命令在容器内固定 30 秒 TERM watchdog、2 秒后 KILL，整个执行预算 45 秒；全局并发 2，排队 1 秒。基础设施故障按 3/10/30/60 秒熔断，half-open 只允许一个完整探针；清理未确认视为失败并触发熔断，随后由 1/5/30 秒后台重试、过期回收和 launcher 恢复清理共同兜底。隔离环境准备失败只降低对应 Bash capability 并输出稳定原因码，`docker_bash` 不能回退到宿主 shell；Docker 镜像不启动常驻服务、不发布端口，Skill、MCP 配置与 Native workbench 投影只读挂载，业务写入只进入当前 Agent 的隔离 workbench。
 
-WebFetch 静态 HTML 抓取在 Core 内执行，DNS、连接、重定向和正文读取共用同一总期限；正文不足时才调用独立 `webfetch-renderer`。renderer 只接收 URL，通过强制安全代理逐请求解析并固定公网 IP；每次渲染最多排队 16 项、并发 2 项、32 个 HTTP 请求和 8 MiB 聚合响应，客户端断开会取消排队或浏览器上下文。动态 HTTPS 当前失败关闭为 `DYNAMIC_HTTPS_DISABLED`，代理拒绝 `CONNECT`、WebSocket、非 GET、压缩响应和无预算请求，避免未受控 TLS 隧道；静态 HTTPS 抓取继续可用。query、Agent workspace、数据库、Provider key、OneBot token 和浏览器持久状态均不能进入 renderer，服务失败只降低 `webfetch-dynamic-renderer` 可选 capability。Docker Core 与 renderer 在 Linux/WSL 使用 `linux/amd64`，Apple Silicon 使用原生 `linux/arm64`；Node 基础镜像固定到同一多架构 OCI index，两种架构保持 Chromium 用户命名空间沙箱、Docker VM、非 root、只读根、`cap_drop=ALL`、no-new-privileges、seccomp、临时目录和资源限额。renderer 镜像在 production `node_modules` 就绪后、复制应用 `dist` 前安装 Chromium，业务代码编译产物变化不得使浏览器与系统依赖层失去缓存。
+WebFetch 静态 HTML 抓取在 Core 内执行，DNS、连接、重定向和正文读取共用同一总期限；正文不足时才调用独立 `webfetch-renderer`。macOS Native Core 固定使用 Docker renderer，Linux/WSL Native Core 使用 launcher 监管的 Bubblewrap renderer，Docker Core 使用 Compose renderer；三条路径均不并入 Core、NapCat 或 Bash。renderer 只接收 URL 和每次启动重新生成的 bearer token，通过安全代理逐请求解析并固定公网 IP；每次渲染最多排队 16 项、并发 2 项、32 个 HTTP 请求和 8 MiB 聚合响应，客户端断开会取消排队或浏览器上下文。动态 HTTPS 当前失败关闭为 `DYNAMIC_HTTPS_DISABLED`，代理拒绝 `CONNECT`、WebSocket、非 GET、压缩响应和无预算请求；静态 HTTPS 抓取继续可用。query、Agent workspace、数据库、Provider key、Codex 授权、OneBot token、NapCat 配置和浏览器持久状态均不能进入 renderer，服务失败只降低 `webfetch-dynamic-renderer` 可选 capability。macOS 不使用宿主 Seatbelt 包裹 Chromium，因为外层 Seatbelt 会阻止 Chromium 子进程启用自身沙箱；关闭 Chromium sandbox 不属于允许的降级。Linux/WSL Native renderer 使用独立临时 HOME/cache/run、遮蔽仓库、workspace、凭据和浏览器用户目录，并在 Bubblewrap、浏览器或隔离探针缺失时失败关闭。Docker Core 与 renderer 在 Linux/WSL 使用 `linux/amd64`，Apple Silicon 使用原生 `linux/arm64`；两种架构保持 Chromium 用户命名空间沙箱、Docker VM、非 root、只读根、`cap_drop=ALL`、no-new-privileges、seccomp、临时目录和资源限额。renderer 镜像 label 记录源码摘要，摘要一致的普通 `up|start|restart` 只执行 `compose up -d --no-build`；Chromium 安装层位于 production `node_modules` 与应用 `dist` 之间。显式 `bootstrap` 负责准备或修复平台对应的 Renderer 依赖与 Chromium。
 
 宿主 account runtime daemon 按 workspace 保持单实例。owner 记录以当前用户拥有的 0600 普通文件原子发布，并绑定 workspace 身份、入口、PID/进程组、进程启动身份和随机 owner token；发布、claim 或回收中断时保留可验证的同 inode 恢复证据，claim 后还必须复验读取期间稳定的文件大小与内容摘要，不能因文件系统快速复用 `dev/ino` 而把 replacement owner 当成旧文件。只有能够证明旧 owner 已退出或身份失配时才回收。损坏、符号链接、额外硬链接、身份不明或 PID 复用都失败关闭，不能向未证明属于当前 workspace 的进程发送信号。`status` 必须报告 owner 丢失与 split-brain；`down` 和 `restart` 还要发现同 workspace 的旧入口与无参数 daemon，停止全部可证明安全的实例并保留无关进程。
 

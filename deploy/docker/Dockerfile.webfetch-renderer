@@ -18,10 +18,12 @@ RUN npx tsc && npm prune --omit=dev
 
 FROM ${NODE_IMAGE} AS runtime
 ARG NODE_VERSION
+ARG SUNABOT_WEBFETCH_RENDERER_SOURCE_DIGEST=unknown
 ENV NODE_ENV=production \
     PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
     HOME=/tmp/webfetch-home \
     XDG_CACHE_HOME=/tmp/webfetch-cache
+LABEL io.sunabot.webfetch-renderer.source-digest="${SUNABOT_WEBFETCH_RENDERER_SOURCE_DIGEST}"
 RUN test "$(/usr/local/bin/node -p 'process.versions.node')" = "$NODE_VERSION" \
     && mkdir -p /srv/sunabot /ms-playwright /tmp/webfetch-home /tmp/webfetch-cache \
     && chown -R 1000:1000 /srv/sunabot /ms-playwright /tmp/webfetch-home /tmp/webfetch-cache
