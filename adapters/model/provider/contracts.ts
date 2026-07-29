@@ -211,7 +211,7 @@ export interface ProviderToolExecutorPort {
 }
 
 export interface GeneratedImageWriterPort {
-  write(payload: unknown, imageModel: string, size: string): ImageResult;
+  write(payload: unknown, imageModel: string, size: string): ImageResult | Promise<ImageResult>;
 }
 
 export interface ProviderTransportFactories {

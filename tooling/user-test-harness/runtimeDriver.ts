@@ -224,6 +224,7 @@ async function runConversationCase(
       session: { skipped: "actor_contract_failed" }
     };
   }
+  ensureConversationFixtureAccount(built, input);
   const conversationId = conversationRecordId(parsed);
   assertFreshConversationEvent(built.runtime, conversationId, parsed);
   if (input.replyEnabled !== false) {
@@ -331,6 +332,36 @@ async function runConversationCase(
   } finally {
     await gateway.close();
     await manager.close();
+  }
+}
+
+function ensureConversationFixtureAccount(
+  built: Awaited<ReturnType<typeof import("../../apps/api/server.js")["buildApp"]>>,
+  input: ConversationUserTestInput
+) {
+  if (built.agentRegistry.account(input.accountId)) return;
+  const agentId = built.runtime.config.persona.defaultAgentId;
+  const repository = [
+    applicationDataStore(built.getConfig()),
+    applicationDataStore(built.runtime.config)
+  ].find((candidate) => candidate.readAgent(agentId));
+  if (!repository) throw new Error("USER_TEST_FIXTURE_AGENT_NOT_REGISTERED");
+  const createdAt = new Date().toISOString();
+  try {
+    repository.createAgentAccount({
+      id: input.accountId,
+      agentId,
+      label: "User test fixture",
+      qqId: input.selfId,
+      enabled: true,
+      webuiPort: repository.nextAgentAccountWebuiPort(),
+      createdAt,
+      updatedAt: createdAt
+    });
+  } catch (error) {
+    throw new Error(
+      `USER_TEST_FIXTURE_ACCOUNT_CREATE_FAILED: ${error instanceof Error ? error.message : String(error)}`
+    );
   }
 }
 

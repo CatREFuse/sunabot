@@ -3,8 +3,12 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import sharp from "sharp";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveInputImageUrl } from "../../adapters/model/provider/imageInput.js";
+import {
+  buildImageGenerationContent,
+  resolveInputImageUrl
+} from "../../adapters/model/provider/imageInput.js";
 import {
   archiveConversationImage,
   archiveConversationImageReference
@@ -18,10 +22,40 @@ const PNG_BYTES = Buffer.from(
 );
 
 afterEach(async () => {
+  vi.unstubAllGlobals();
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
 });
 
 describe("conversation image archive", () => {
+  it("normalizes a high-resolution remote image even when its source bytes are below 8 MiB", async () => {
+    const source = await sharp({
+      create: {
+        width: 4_000,
+        height: 3_000,
+        channels: 3,
+        background: { r: 24, g: 96, b: 180 }
+      }
+    }).jpeg({ quality: 95 }).toBuffer();
+    expect(source.byteLength).toBeLessThan(8 * 1024 * 1024);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(source, {
+      status: 200,
+      headers: {
+        "content-type": "image/jpeg",
+        "content-length": String(source.byteLength)
+      }
+    })));
+
+    const resolved = await resolveInputImageUrl("https://cdn.example.test/high-resolution.jpg");
+    const encoded = resolved?.split(",", 2)[1];
+    expect(encoded).toBeTruthy();
+    const normalized = Buffer.from(encoded!, "base64");
+    const metadata = await sharp(normalized).metadata();
+
+    expect(resolved).toMatch(/^data:image\/jpeg;base64,/);
+    expect(metadata.width).toBe(2_048);
+    expect(metadata.height).toBe(1_536);
+  });
+
   it("archives a sent image by content hash and resolves it for image generation", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-conversation-image-"));
     roots.push(root);
@@ -46,6 +80,79 @@ describe("conversation image archive", () => {
     ))).toEqual(PNG_BYTES);
     await expect(resolveInputImageUrl(url, { generatedImageRoot: root }))
       .resolves.toMatch(/^data:image\/png;base64,/);
+  });
+
+  it("keeps archived source bytes and derives separate bounded copies for vision and image generation", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-conversation-original-reference-"));
+    roots.push(root);
+    const source = await sharp({
+      create: {
+        width: 4_000,
+        height: 3_000,
+        channels: 3,
+        background: { r: 48, g: 112, b: 176 }
+      }
+    }).jpeg({ quality: 95 }).toBuffer();
+    const sha256 = createHash("sha256").update(source).digest("hex");
+    const url = await archiveConversationImage("arona", {
+      kind: "image",
+      name: "reference.jpg",
+      source: `base64://${source.toString("base64")}`,
+      byteLength: source.byteLength,
+      sha256,
+      mimeType: "image/jpeg"
+    }, root);
+
+    const modelInput = await resolveInputImageUrl(url, { generatedImageRoot: root });
+    const generationContent = await buildImageGenerationContent("edit this image", [url], {
+      generatedImageRoot: root
+    });
+    const modelBytes = Buffer.from(modelInput!.split(",", 2)[1]!, "base64");
+    const generationUrl = String(generationContent[1]?.image_url ?? "");
+    const generationBytes = Buffer.from(generationUrl.split(",", 2)[1]!, "base64");
+    const archivedBytes = await fs.readFile(path.join(
+      root,
+      "conversation-assets",
+      "agents",
+      "arona",
+      `${sha256}.jpg`
+    ));
+    const generationMetadata = await sharp(generationBytes).metadata();
+
+    await expect(sharp(modelBytes).metadata()).resolves.toMatchObject({
+      width: 2_048,
+      height: 1_536
+    });
+    expect(archivedBytes).toEqual(source);
+    expect(createHash("sha256").update(archivedBytes).digest("hex")).toBe(sha256);
+    expect(generationBytes).not.toEqual(source);
+    expect(generationBytes.byteLength).toBeLessThanOrEqual(16 * 1024 * 1024);
+    expect(Math.max(generationMetadata.width!, generationMetadata.height!)).toBeLessThanOrEqual(3_840);
+    expect(generationMetadata.width! * generationMetadata.height!).toBeLessThanOrEqual(8_294_400);
+    expect(Math.max(generationMetadata.width!, generationMetadata.height!)).toBeGreaterThan(2_048);
+  });
+
+  it("normalizes data URL references through the image-generation reference pipeline", async () => {
+    const source = await sharp({
+      create: {
+        width: 4_000,
+        height: 3_000,
+        channels: 3,
+        background: { r: 80, g: 120, b: 160 }
+      }
+    }).jpeg({ quality: 95 }).toBuffer();
+    const content = await buildImageGenerationContent(
+      "edit this image",
+      [`data:image/jpeg;base64,${source.toString("base64")}`]
+    );
+    const generationUrl = String(content[1]?.image_url ?? "");
+    const generationBytes = Buffer.from(generationUrl.split(",", 2)[1]!, "base64");
+    const metadata = await sharp(generationBytes).metadata();
+
+    expect(generationBytes).not.toEqual(source);
+    expect(generationBytes.byteLength).toBeLessThanOrEqual(16 * 1024 * 1024);
+    expect(Math.max(metadata.width!, metadata.height!)).toBeLessThanOrEqual(3_840);
+    expect(metadata.width! * metadata.height!).toBeLessThanOrEqual(8_294_400);
   });
 
   it("downloads a remote reference with three retry opportunities before archiving it", async () => {

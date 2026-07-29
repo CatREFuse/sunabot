@@ -1147,8 +1147,8 @@ describe("user test harness", () => {
     config.bot.adminQq = "10001";
     config.bot.replyDebounceMs = 0;
     config.bot.orchestrator.enabled = true;
-    config.persona.defaultAgentId = "plana";
-    config.persona.agentWorkspace = "workspace/business/agents/plana";
+    config.persona.defaultAgentId = "koharu";
+    config.persona.agentWorkspace = "workspace/business/agents/koharu";
     config.providers = {
       defaultProviderId: "fixture-provider",
       items: [{
@@ -1163,7 +1163,7 @@ describe("user test harness", () => {
       }]
     };
     await fs.mkdir(path.join(source, "business/config"), { recursive: true });
-    await fs.mkdir(path.join(source, "business/agents/plana"), {
+    await fs.mkdir(path.join(source, "business/agents/koharu"), {
       recursive: true,
       mode: 0o700
     });
@@ -1240,7 +1240,7 @@ describe("user test harness", () => {
       expect(await fs.readFile(
         path.join(
           destination,
-          "business/agents/plana/workbench/tool-fixtures/input.txt"
+          "business/agents/koharu/workbench/tool-fixtures/input.txt"
         ),
         "utf8"
       )).toBe("fixture input\n");

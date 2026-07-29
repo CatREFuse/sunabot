@@ -49,6 +49,7 @@
 | `docs/user-tests/orchestrator-internal-history-seed.md` | 生成用户不可见的群聊编排器内部审计记录的链式首步用例 | 修改编排器内部记录或群聊模型历史过滤时读取 |
 | `docs/user-tests/orchestrator-internal-history-reply.md` | 验证内部编排器记录不进入后续主回复上下文的链式次步用例 | 修改群聊上下文、编排器变量或内部消息可见性时读取 |
 | `docs/user-tests/current-message-image-reference.md` | 当前群消息图片以精确媒体句柄进入异步生图的用户用例 | 修改当前图片句柄、dispatch 快照或参考图解析时读取 |
+| `docs/user-tests/current-message-image-4k-retry-budget.md` | 当前私聊图片在预处理后以完整回复重试预算进入 4K 异步生图的用户用例 | 修改图片预处理、普通回复超时或 4K 生图派发时读取 |
 | `docs/user-tests/sampled-memory-compression.md` | 运行中测试账号 V2 样本的内容无关记忆压缩模板 | 从只读样本派生真实数据记忆压缩 case 时读取 |
 | `docs/user-tests/sampled-dream.md` | 运行中测试账号 V2 样本的内容无关 Dream 模板 | 从只读样本派生真实数据 Dream case 时读取 |
 

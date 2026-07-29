@@ -64,6 +64,7 @@ Thread 状态按会话增量维护。宿主规则优先处理对已归属消息�
 
 - 每个会话拥有有序事件流，事件、turn、异步工具任务和 outbox 使用 SQLite 持久化。
 - 同一会话按序处理；不同会话允许受控并发。
+- 直接回复 Session turn 的总期限由最多 90 秒入站准备预算与 300 秒回复执行预算组成。图片替代文本、引用补全和附件解析使用前一段有界预算；进入普通回复后仍保留完整 300 秒，不能让准备耗时提前截断公共 `normalReply.maxRetries` 的最后一次合法 Provider 尝试。父级取消继续同时中止准备、Provider、工具和 outbox 前处理。
 - 回复防抖使用独立的 per-sender synthetic Session 和持久化 `reply_debounce` 事件，`availableAt` 保存当前截止时间；它不能占用真实会话 FIFO 的队首。Session Coordinator 根据全部可 claim 事件中最早的未来 `availableAt` 维护可重置唤醒，期间没有新入站消息时也必须按期恢复执行，进程重启后继续从 SQLite 中的截止时间恢复。
 - `bot.replyDebounceMs` 热更新只改变之后新建候选和之后收到同发送者消息时的 deadline 重置长度；已经持久化且没有新输入的候选继续按其 `availableAt` 执行，保存设置不能批量改写、提前释放或延后现有 durable 事件。
 - 同一发送者的新消息可以重排 pending 防抖事件，也可以更新已经 running 但尚未 handoff 的事件。首触发与最近的有界 follow-up tail 保存在 `reply_debounce` payload 中，更早的窗口消息保存在业务会话库；追加去重后的 follow-up 快照和更新 `availableAt` 必须由 Session store 在同一事务、同一比较更新中提交，不能依赖当前消息已经写入业务会话数据库。重启恢复或分配新 conversation sequence 前，运行时先按 message ID 幂等物化该会话内的 durable 防抖快照，避免 queue 已提交而业务会话尚未落盘时，同发送者或不同发送者的新消息抢占首条 sequence。重复投递同一 message ID 既不追加快照，也不延长截止时间。

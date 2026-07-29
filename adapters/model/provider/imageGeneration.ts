@@ -107,7 +107,7 @@ async function generateOpenAIImage(
     maxAttempts: result.maxAttempts
   };
   try {
-    const image = context.imageWriter.write(result.value, imageModel, imageSize);
+    const image = await context.imageWriter.write(result.value, imageModel, imageSize);
     await context.logger.response("image.generate", {
       ok: true,
       summary: summarizeResponsesPayload(result.value, ""),
@@ -214,7 +214,7 @@ async function generateCodexImage(
     maxAttempts: result.maxAttempts
   };
   try {
-    const image = context.imageWriter.write(result.value.payload, imageModel, size);
+    const image = await context.imageWriter.write(result.value.payload, imageModel, size);
     await context.logger.response("codex.image.generate", {
       ok: true,
       status: result.value.status,
