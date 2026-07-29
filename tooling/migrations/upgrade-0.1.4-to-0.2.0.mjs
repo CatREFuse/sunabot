@@ -8,7 +8,7 @@ import { resolveProjectRoot } from "../shared/paths.mjs";
 import { createRecoveryPoint } from "../workspace/sqlite-recovery.mjs";
 
 export const FROM_VERSION = "0.1.4";
-export const TARGET_VERSION = "1.0.0";
+export const TARGET_VERSION = "0.2.0";
 
 const root = resolveProjectRoot(import.meta.url);
 const IS_MAIN = process.argv[1]
@@ -205,10 +205,10 @@ async function readJson(filePath) {
 
 function usage() {
   return `用法：
-  npm run upgrade:1.0.0 -- plan [--workspace /absolute/path]
-  npm run upgrade:1.0.0 -- apply [--workspace /absolute/path]
+  npm run upgrade:0.2.0 -- plan [--workspace /absolute/path]
+  npm run upgrade:0.2.0 -- apply [--workspace /absolute/path]
 
-plan 只读检查 1.0.0 代码与 workspace；apply 停服创建全 Agent SQLite 恢复点，
+plan 只读检查 0.2.0 代码与 workspace；apply 停服创建全 Agent SQLite 恢复点，
 随后启动服务并运行 status 与 doctor。`;
 }
 

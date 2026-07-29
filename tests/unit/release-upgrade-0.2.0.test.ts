@@ -9,7 +9,7 @@ import {
   applyReleaseUpgrade,
   planReleaseUpgrade,
   verifyTargetRelease
-} from "../../tooling/migrations/upgrade-0.1.4-to-1.0.0.mjs";
+} from "../../tooling/migrations/upgrade-0.1.4-to-0.2.0.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const temporaryDirectories: string[] = [];
@@ -20,24 +20,24 @@ afterEach(async () => {
   )));
 });
 
-describe("0.1.4 to 1.0.0 release upgrade", () => {
-  it("keeps every current release version entry and changelog on 1.0.0", async () => {
+describe("0.1.4 to 0.2.0 release upgrade", () => {
+  it("keeps every current release version entry and changelog on 0.2.0", async () => {
     await expect(verifyTargetRelease(root)).resolves.toEqual({
-      package: "1.0.0",
-      packageLock: "1.0.0",
-      packageLockRoot: "1.0.0",
-      runtimeContract: "1.0.0",
-      releaseCatalog: "1.0.0",
-      dockerfile: "1.0.0",
-      compose: "1.0.0"
+      package: "0.2.0",
+      packageLock: "0.2.0",
+      packageLockRoot: "0.2.0",
+      runtimeContract: "0.2.0",
+      releaseCatalog: "0.2.0",
+      dockerfile: "0.2.0",
+      compose: "0.2.0"
     });
-    expect(CURRENT_RELEASE_VERSION).toBe("1.0.0");
-    expect(RELEASE_CATALOG.currentVersion).toBe("1.0.0");
-    expect(RELEASE_CATALOG.releases[0]?.version).toBe("1.0.0");
-    expect(RELEASE_CATALOG.releases.filter((release) => release.version === "1.0.0"))
+    expect(CURRENT_RELEASE_VERSION).toBe("0.2.0");
+    expect(RELEASE_CATALOG.currentVersion).toBe("0.2.0");
+    expect(RELEASE_CATALOG.releases[0]?.version).toBe("0.2.0");
+    expect(RELEASE_CATALOG.releases.filter((release) => release.version === "0.2.0"))
       .toHaveLength(1);
     expect(await fs.readFile(path.join(root, "CHANGELOG.md"), "utf8"))
-      .toContain("## [1.0.0] - 2026-07-29");
+      .toContain("## [0.2.0] - 2026-07-29");
   });
 
   it("plans without writing workspace data and reports no data migration", async () => {
@@ -48,7 +48,7 @@ describe("0.1.4 to 1.0.0 release upgrade", () => {
       ok: true,
       command: "plan",
       fromVersion: "0.1.4",
-      targetVersion: "1.0.0",
+      targetVersion: "0.2.0",
       changesRequired: true,
       promptMigration: false,
       databaseMigration: false,
@@ -78,7 +78,7 @@ describe("0.1.4 to 1.0.0 release upgrade", () => {
       ok: true,
       command: "apply",
       fromVersion: "0.1.4",
-      targetVersion: "1.0.0",
+      targetVersion: "0.2.0",
       promptMigration: false,
       databaseMigration: false,
       resourceMigration: false,
@@ -115,7 +115,7 @@ describe("0.1.4 to 1.0.0 release upgrade", () => {
 });
 
 async function workspaceFixture() {
-  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-release-1.0.0-"));
+  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-release-0.2.0-"));
   temporaryDirectories.push(workspace);
   const configPath = path.join(workspace, "business", "config", "sunabot.json");
   await fs.mkdir(path.dirname(configPath), { recursive: true });

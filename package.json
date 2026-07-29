@@ -1,6 +1,6 @@
 {
   "name": "sunabot",
-  "version": "1.0.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -61,7 +61,7 @@
     "upgrade:0.1.2": "node tooling/migrations/upgrade-0.1.0-or-0.1.1-to-0.1.2.mjs",
     "upgrade:0.1.3": "node tooling/migrations/upgrade-0.1.2-to-0.1.3.mjs",
     "upgrade:0.1.4": "node tooling/migrations/upgrade-0.1.3-to-0.1.4.mjs",
-    "upgrade:1.0.0": "node tooling/migrations/upgrade-0.1.4-to-1.0.0.mjs",
+    "upgrade:0.2.0": "node tooling/migrations/upgrade-0.1.4-to-0.2.0.mjs",
     "runtime:doctor": "./sunabot.sh doctor",
     "runtime:contract": "node tooling/runtime/validate-contract.mjs",
     "runtime:release": "npm run user-test -- release-gate --manifest .user-test-runs/release-manifest.json && node tooling/runtime/build-release.mjs",

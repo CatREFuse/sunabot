@@ -1,6 +1,6 @@
-# 0.1.4 升级到 1.0.0
+# 0.1.4 升级到 0.2.0
 
-状态：`1.0.0` 已将动态 WebFetch Renderer 按平台放入独立受监管隔离环境，并把 Chromium 下载移到首次依赖同步或 Playwright 版本升级阶段。
+状态：`0.2.0` 已将动态 WebFetch Renderer 按平台放入独立受监管隔离环境，并把 Chromium 下载移到首次依赖同步或 Playwright 版本升级阶段。
 
 ## 变更范围
 
@@ -15,8 +15,8 @@
 ## 预检
 
 ```bash
-npm run upgrade:1.0.0 -- plan
-npm run upgrade:1.0.0 -- plan --workspace /absolute/path/to/workspace
+npm run upgrade:0.2.0 -- plan
+npm run upgrade:0.2.0 -- plan --workspace /absolute/path/to/workspace
 ```
 
 `plan` 只读取版本文件、workspace 目录身份和主配置，不停止服务，不写数据库、提示词或资源。
@@ -26,7 +26,7 @@ npm run upgrade:1.0.0 -- plan --workspace /absolute/path/to/workspace
 ## 执行
 
 ```bash
-npm run upgrade:1.0.0 -- apply
+npm run upgrade:0.2.0 -- apply
 ```
 
 `apply` 固定执行：
@@ -37,13 +37,13 @@ npm run upgrade:1.0.0 -- apply
 4. `./sunabot.sh status`；
 5. `./sunabot.sh doctor`。
 
-首次启动 1.0.0 或 Playwright 版本发生变化时会同步 Chromium。后续普通启动和重启复用同一镜像或宿主浏览器安装。
+首次启动 0.2.0 或 Playwright 版本发生变化时会同步 Chromium。后续普通启动和重启复用同一镜像或宿主浏览器安装。
 
 任一步失败都会返回 `serviceMayBeStopped`；恢复点创建后、服务启动前失败时保持停止，不能继续运行新旧混合状态。
 
 ## 验证
 
-- 全部当前版本文件均为 `1.0.0`；
+- 全部当前版本文件均为 `0.2.0`；
 - macOS Native Core 的 Renderer health 报告 `docker` 与 `chromium-sandbox`；
 - Linux 或 WSL Native Core 的 Renderer health 报告 `bubblewrap` 与 `chromium-sandbox`；
 - Docker Core 的 Renderer 只在 Compose 私有网络内供 Core 访问；
@@ -58,4 +58,4 @@ npm run upgrade:1.0.0 -- apply
 3. 若需要恢复业务数据库，使用本次输出的 SQLite 恢复点；
 4. 使用 `./sunabot.sh up`、`status`、`doctor` 验证。
 
-1.0.0 不修改 SQLite schema、系统提示词或 Agent 资源；回滚不会自动删除 Renderer 镜像、宿主浏览器缓存或临时运行目录。
+0.2.0 不修改 SQLite schema、系统提示词或 Agent 资源；回滚不会自动删除 Renderer 镜像、宿主浏览器缓存或临时运行目录。

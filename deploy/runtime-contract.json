@@ -2,7 +2,7 @@
   "$schema": "./runtime-contract.schema.json",
   "schemaVersion": 2,
   "runtimeId": "sunabot-qq-runtime",
-  "releaseVersion": "1.0.0",
+  "releaseVersion": "0.2.0",
   "supportedPlatforms": ["linux/amd64", "linux/arm64"],
   "nodeVersion": "24.18.0",
   "runtimeUsers": {
