@@ -32,7 +32,7 @@ Agent 与系统设置的控件级保存回归必须覆盖 toggle 与选择项直
 
 管理台路由回归必须覆盖每个已登记一级页面的直接访问、尾斜杠和浏览器刷新，确认返回 `text/html` 且加载同一 Vue 应用；`/api/*`、相似前缀和未知路径不能进入 SPA fallback，继续返回对应 API 状态或 JSON 404。新增或移除前端一级路由时必须同步服务端 SPA 路由清单与该合同测试。
 
-版本与更新日志专项必须断言 `package.json`、`package-lock.json` 根版本、runtime contract、版本目录、Core Dockerfile 与 Compose 默认值均为 `1.0.0` 且一致，当前版本在目录中唯一存在并排在首位；`CHANGELOG.md` 必须包含目录中的全部分组和条目，README 必须显示当前版本并链接更新日志与 GitHub Releases。API 回归必须覆盖鉴权后的 `GET /api/releases` 闭合 schema、无 workspace 写入与 `no-store`；管理台回归必须覆盖公共系统导航顺序、`/releases` 深链、当前发行、发布日期、分组日志、刷新和失败保留旧目录。视觉检查至少覆盖 390 与 1440px 的 light/dark 页面，确认大号版本号、三列日志与移动端单列无横向溢出。历史版本 verifier 必须使用对应目标版本的完整 checkout fixture，不能把旧版本当成当前版本；`0.1.4` 到 `1.0.0` 升级脚本回归必须覆盖全部当前版本入口一致、plan 零写入、apply 的 down → 全 Agent SQLite 恢复点 → up → status → doctor 顺序，以及恢复点或启动失败时不伪称升级完成。真实升级还必须验证首次同步 Chromium 后的同版本二次 restart 不重新构建 Renderer 或下载浏览器。
+版本与更新日志专项必须断言 `package.json`、`package-lock.json` 根版本、runtime contract、版本目录、Core Dockerfile 与 Compose 默认值均为 `0.2.0` 且一致，当前版本在目录中唯一存在并排在首位；`CHANGELOG.md` 必须包含目录中的全部分组和条目，README 必须显示当前版本并链接更新日志与 GitHub Releases。API 回归必须覆盖鉴权后的 `GET /api/releases` 闭合 schema、无 workspace 写入与 `no-store`；管理台回归必须覆盖公共系统导航顺序、`/releases` 深链、当前发行、发布日期、分组日志、刷新和失败保留旧目录。视觉检查至少覆盖 390 与 1440px 的 light/dark 页面，确认大号版本号、三列日志与移动端单列无横向溢出。历史版本 verifier 必须使用对应目标版本的完整 checkout fixture，不能把旧版本当成当前版本；`0.1.4` 到 `0.2.0` 升级脚本回归必须覆盖全部当前版本入口一致、plan 零写入、apply 的 down → 全 Agent SQLite 恢复点 → up → status → doctor 顺序，以及恢复点或启动失败时不伪称升级完成。真实升级还必须验证首次同步 Chromium 后的同版本二次 restart 不重新构建 Renderer 或下载浏览器。
 
 聊天媒体导出与表情导入专项验收矩阵：
 

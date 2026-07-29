@@ -17,14 +17,14 @@ export interface ReleaseCatalog {
   releases: readonly ReleaseRecord[];
 }
 
-export const CURRENT_RELEASE_VERSION = "1.0.0";
+export const CURRENT_RELEASE_VERSION = "0.2.0";
 
 export const RELEASE_CATALOG: ReleaseCatalog = {
   schemaVersion: 1,
   currentVersion: CURRENT_RELEASE_VERSION,
   releases: [
     {
-      version: "1.0.0",
+      version: "0.2.0",
       releasedAt: "2026-07-29",
       title: "跨平台网页渲染",
       summary: "动态网页渲染按宿主平台进入独立隔离环境，并复用已经安装的 Chromium。",

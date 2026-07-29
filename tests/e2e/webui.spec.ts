@@ -847,7 +847,7 @@ test("版本页面展示当前版本与更新日志", async ({ page }) => {
   expect((await initialRequest).method()).toBe("GET");
 
   await expect(page.getByRole("heading", { name: "版本更新", exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "v1.0.0", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "v0.2.0", exact: true })).toBeVisible();
   await expect(page.getByText("当前发行", { exact: true })).toBeVisible();
   await expect(page.getByText("2026年7月29日", { exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "更新日志", exact: true })).toBeVisible();
