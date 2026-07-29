@@ -35,6 +35,23 @@ const DOCKER_WORKBENCH_INDEX = [
   "",
   "本目录用于保存 Docker Bash 的计划、下载、转存文件和任务产物。",
   "",
+  "本工作区拥有独立的配置与资料目录：",
+  "",
+  "- `selfie/`：自拍参考图，入口 `references.jsonl`。",
+  "- `emoji/`：表情，入口 `emojis.jsonl`。",
+  "- `skills/`：Skills，入口 `index.json`。",
+  "- `knowledge/`：知识库，入口 `index.json`。",
+  "",
+  "Native workbench 只读投影位于 `native-workbench/`，其中包含另一套同名目录和入口。",
+  "",
+  "进入目录后先读取当前目录的管理入口；需要同时取用两套资源时，再读取 `native-workbench/` 下的对应入口。只读投影不可修改。",
+  ""
+].join("\n");
+const LEGACY_DOCKER_WORKBENCH_INDEX = [
+  "# Docker 文件工作区",
+  "",
+  "本目录用于保存 Docker Bash 的计划、下载、转存文件和任务产物。",
+  "",
   "Native workbench 只读投影位于 `native-workbench/`：",
   "",
   "- `native-workbench/selfie/`：自拍参考图，入口 `references.jsonl`。",
@@ -118,6 +135,7 @@ export async function applyAgentResourcesMigration(options) {
   const markerPath = path.join(workspace, MARKER);
   if (await exists(markerPath)) {
     const agents = await inspectAgents(workspace);
+    for (const agent of agents) await ensureResourceIndexes(agent, new Date().toISOString());
     await secureResourceLayout(workspace, agents);
     return verifyAgentResourcesMigration({ workspace });
   }
@@ -257,6 +275,10 @@ async function inspectAgent(workspace, agentId) {
     emoji: path.join(root, "workbench", "emoji"),
     skills: path.join(root, "workbench", "skills"),
     knowledge: path.join(root, "workbench", "knowledge"),
+    dockerSelfie: path.join(root, "docker-workbench", "selfie"),
+    dockerEmoji: path.join(root, "docker-workbench", "emoji"),
+    dockerSkills: path.join(root, "docker-workbench", "skills"),
+    dockerKnowledge: path.join(root, "docker-workbench", "knowledge"),
     legacySelfie: path.join(root, "selfie"),
     legacySkills: path.join(root, "extensions", "skills"),
     legacyKnowledge: path.join(root, "knowledge"),
@@ -304,8 +326,16 @@ async function moveEmojiFiles(agent) {
 
 async function ensureResourceIndexes(agent, indexedAt) {
   await fs.mkdir(agent.dockerWorkbenchProjection, { recursive: true, mode: 0o700 });
-  await writeWorkbenchIndex(path.join(agent.workbench, "index.md"), WORKBENCH_INDEX);
-  await writeWorkbenchIndex(path.join(agent.dockerWorkbench, "index.md"), DOCKER_WORKBENCH_INDEX);
+  await writeWorkbenchIndex(
+    path.join(agent.workbench, "index.md"),
+    WORKBENCH_INDEX,
+    [LEGACY_WORKBENCH_INDEX]
+  );
+  await writeWorkbenchIndex(
+    path.join(agent.dockerWorkbench, "index.md"),
+    DOCKER_WORKBENCH_INDEX,
+    [LEGACY_DOCKER_WORKBENCH_INDEX]
+  );
   await writeIfMissingOrEmpty(path.join(agent.selfie, "references.jsonl"), "");
   await writeIfMissingOrEmpty(path.join(agent.emoji, "emojis.jsonl"), "");
   await writeIfMissingOrEmpty(path.join(agent.skills, "index.json"), `${JSON.stringify({
@@ -314,6 +344,23 @@ async function ensureResourceIndexes(agent, indexedAt) {
     skills: []
   }, null, 2)}\n`);
   await writeIfMissingOrEmpty(path.join(agent.knowledge, "index.json"), `${JSON.stringify({
+    schemaVersion: 1,
+    ok: true,
+    root: "knowledge",
+    documents: [],
+    fileCount: 0,
+    chunkCount: 0,
+    errorCount: 0,
+    indexedAt
+  }, null, 2)}\n`);
+  await writeIfMissingOrEmpty(path.join(agent.dockerSelfie, "references.jsonl"), "");
+  await writeIfMissingOrEmpty(path.join(agent.dockerEmoji, "emojis.jsonl"), "");
+  await writeIfMissingOrEmpty(path.join(agent.dockerSkills, "index.json"), `${JSON.stringify({
+    schemaVersion: 1,
+    revision: EMPTY_EXTENSION_REVISION,
+    skills: []
+  }, null, 2)}\n`);
+  await writeIfMissingOrEmpty(path.join(agent.dockerKnowledge, "index.json"), `${JSON.stringify({
     schemaVersion: 1,
     ok: true,
     root: "knowledge",
@@ -348,6 +395,10 @@ function resourcePrivateDirectories(agent) {
     agent.emoji,
     agent.skills,
     agent.knowledge,
+    agent.dockerSelfie,
+    agent.dockerEmoji,
+    agent.dockerSkills,
+    agent.dockerKnowledge,
     path.join(agent.root, "extensions"),
     path.join(agent.root, "extensions", "mcp")
   ];
@@ -361,6 +412,10 @@ function resourcePrivateFiles(agent) {
     path.join(agent.emoji, "emojis.jsonl"),
     path.join(agent.skills, "index.json"),
     path.join(agent.knowledge, "index.json"),
+    path.join(agent.dockerSelfie, "references.jsonl"),
+    path.join(agent.dockerEmoji, "emojis.jsonl"),
+    path.join(agent.dockerSkills, "index.json"),
+    path.join(agent.dockerKnowledge, "index.json"),
     path.join(agent.root, "extensions", "mcp", "servers.json")
   ];
 }
@@ -397,6 +452,10 @@ async function verifyIndexes(agent) {
   await emojiCatalogFiles(path.join(agent.emoji, "emojis.jsonl"));
   await verifyJson(path.join(agent.skills, "index.json"));
   await verifyJson(path.join(agent.knowledge, "index.json"));
+  await verifyJsonl(path.join(agent.dockerSelfie, "references.jsonl"));
+  await emojiCatalogFiles(path.join(agent.dockerEmoji, "emojis.jsonl"));
+  await verifyJson(path.join(agent.dockerSkills, "index.json"));
+  await verifyJson(path.join(agent.dockerKnowledge, "index.json"));
   await verifyJson(path.join(agent.root, "extensions", "mcp", "servers.json"));
 }
 
@@ -517,7 +576,11 @@ async function agentResourceDigest(agent) {
     agent.selfie,
     agent.emoji,
     agent.skills,
-    agent.knowledge
+    agent.knowledge,
+    agent.dockerSelfie,
+    agent.dockerEmoji,
+    agent.dockerSkills,
+    agent.dockerKnowledge
   ].map(async (directory) => [path.basename(directory), await treeDigest(directory)])))));
 }
 
@@ -568,14 +631,14 @@ async function writeIfMissingOrEmpty(filePath, content) {
   await atomicWrite(filePath, Buffer.from(content));
 }
 
-async function writeWorkbenchIndex(filePath, content) {
+async function writeWorkbenchIndex(filePath, content, knownLegacyContents) {
   await fs.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
   try {
     const stats = await fs.lstat(filePath);
     if (stats.isSymbolicLink() || !stats.isFile()) invalid(`管理入口无效：${filePath}`, "AGENT_RESOURCES_PATH_INVALID");
     if (stats.size > 0) {
       const current = (await readRegularFile(filePath, 2 * 1024 * 1024)).toString("utf8");
-      if (current.trimEnd() !== LEGACY_WORKBENCH_INDEX.trimEnd()) return;
+      if (!knownLegacyContents.some((legacy) => current.trimEnd() === legacy.trimEnd())) return;
     }
   } catch (error) {
     if (error?.code !== "ENOENT") throw error;

@@ -150,8 +150,8 @@ export function defaultConfig(): AppConfig {
         reasoningEffort: "low",
         messageThreshold: 48,
         workingMemoryMaxEntries: 100,
-        dreamRecentWindowHours: 48,
-        dreamRecentMemoryLimit: 12,
+        dreamRecentWindowHours: 24,
+        dreamRecentMemoryLimit: 24,
         dreamOlderMemoryLimit: 12,
         workMemoryCompressInPrompt: "work_memory_compress_in.json",
         workMemoryCompressOutPrompt: "work_memory_compress_out.json",
@@ -565,9 +565,9 @@ function mergeBotToneSettings(
 
 function mergeBotMemorySettings(base: BotMemorySettings, incoming: Partial<BotMemorySettings> | undefined): BotMemorySettings {
   const memoryModel = normalizeModelName(incoming?.memoryModel, base.memoryModel);
-  const recentLimit = normalizeDreamInteger(incoming?.dreamRecentMemoryLimit, base.dreamRecentMemoryLimit, 0, 24);
-  const olderLimit = normalizeDreamInteger(incoming?.dreamOlderMemoryLimit, base.dreamOlderMemoryLimit, 0, 24);
-  const validSelectionSize = recentLimit + olderLimit >= 1 && recentLimit + olderLimit <= 24;
+  const recentLimit = normalizeDreamInteger(incoming?.dreamRecentMemoryLimit, base.dreamRecentMemoryLimit, 0, 48);
+  const olderLimit = normalizeDreamInteger(incoming?.dreamOlderMemoryLimit, base.dreamOlderMemoryLimit, 0, 48);
+  const validSelectionSize = recentLimit + olderLimit >= 1 && recentLimit + olderLimit <= 48;
   return {
     memoryModel,
     reasoningEffort: normalizeModelEffort(memoryModel, incoming?.reasoningEffort),

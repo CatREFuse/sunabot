@@ -9,6 +9,7 @@ import type {
   ExportChatMediaInput,
   ExportedChatMedia
 } from "../tools/public.js";
+import type { AgentWorkbenchBackend } from "../../packages/platform/agentResourceLayout.js";
 import type { CacheStore } from "./attachments/cache.js";
 import { detectAttachmentType, type DetectedAttachmentType } from "./attachments/detect.js";
 import { FILE_SIZE_LIMIT_BYTES } from "./attachments/limits.js";
@@ -31,6 +32,7 @@ export interface ChatMediaExportServiceOptions {
   sources: ReadonlyMap<string, ChatMediaBoundSource>;
   publisher: ChatMediaPublisher;
   isCurrent?: () => boolean;
+  backend?: AgentWorkbenchBackend;
 }
 
 export interface ChatMediaDirectoryIdentity {
@@ -76,6 +78,7 @@ export class ChatMediaExportService {
   private readonly sources: ReadonlyMap<string, ChatMediaBoundSource>;
   private readonly publisher: ChatMediaPublisher;
   private readonly isCurrent: () => boolean;
+  private readonly backend: AgentWorkbenchBackend;
 
   constructor(options: ChatMediaExportServiceOptions) {
     this.agentWorkspace = path.resolve(options.agentWorkspace);
@@ -83,6 +86,7 @@ export class ChatMediaExportService {
     this.sources = options.sources;
     this.publisher = options.publisher;
     this.isCurrent = options.isCurrent ?? (() => true);
+    this.backend = options.backend ?? "native";
   }
 
   async export(input: ExportChatMediaInput): Promise<ExportedChatMedia> {
@@ -104,7 +108,7 @@ export class ChatMediaExportService {
   private async exportBound(input: ExportChatMediaInput): Promise<ExportedChatMedia> {
     this.assertCurrent();
     const source = this.requireSource(input.handle);
-    const workbenchRoot = await resolveAgentWorkbench(this.agentWorkspace);
+    const workbenchRoot = await resolveAgentWorkbench(this.agentWorkspace, this.backend);
     const materialized = await this.materialize(source);
     this.assertCurrent();
     const inspected = await copyAndInspect(materialized, workbenchRoot);

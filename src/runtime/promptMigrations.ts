@@ -32,7 +32,10 @@ import {
   migrateConversationDirectorPrompt,
   migrateDirectorScheduleSchemaPrompt
 } from "../../services/agent/directorPromptMigration.js";
-import { migrateDreamSchemaPrompt } from "../../services/agent/dreamPromptMigration.js";
+import {
+  migrateDreamMemoryContractPrompt,
+  migrateDreamSchemaPrompt
+} from "../../services/agent/dreamPromptMigration.js";
 import { migrateConversationInboundMessagePrompt } from "../../services/agent/inboundMessagePromptMigration.js";
 import { migrateRecoverableOutputErrorPrompt } from "../../services/agent/recoverableOutputErrorPromptMigration.js";
 import {
@@ -176,11 +179,18 @@ function runtimePromptMigrations(config: AppConfig, selfiePromptDefault: string)
   for (const file of [DIRECTOR_DAILY_PLAN_PROMPT_FILE, DIRECTOR_SCHEDULE_REVISION_PROMPT_FILE]) {
     add("director-schema-v1", "system", file, () => migrateDirectorScheduleSchemaPrompt(config, file), dependency(file));
   }
-  add(
+  const dreamFlexId = add(
     "dream-flex-contract-v3",
     "system",
     DREAM_PROMPT_FILE,
     () => migrateDreamSchemaPrompt(config, DREAM_PROMPT_FILE)
+  );
+  add(
+    "dream-memory-contract-v4",
+    "system",
+    DREAM_PROMPT_FILE,
+    () => migrateDreamMemoryContractPrompt(config, DREAM_PROMPT_FILE),
+    [dreamFlexId]
   );
   add(
     "scheduled-agent-loop-v2",
@@ -299,21 +309,21 @@ function runtimePromptMigrations(config: AppConfig, selfiePromptDefault: string)
       [inboundId]
     );
     const bashWorkbenchId = add(
-      "conversation-bash-workbench-v5",
+      "conversation-bash-workbench-v7",
       "system",
       file,
       () => migrateConversationBashWorkbenchPrompt(config, file),
       [bashToolsId]
     );
     const configurationIndexId = add(
-      "conversation-configuration-index-v3",
+      "conversation-configuration-index-v5",
       "system",
       file,
       () => migrateConversationConfigurationIndexPrompt(config, file),
       [bashWorkbenchId]
     );
     const chatMediaId = add(
-      "conversation-chat-media-v2",
+      "conversation-chat-media-v4",
       "system",
       file,
       () => migrateConversationChatMediaPrompt(config, file),

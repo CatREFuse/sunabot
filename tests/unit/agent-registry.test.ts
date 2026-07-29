@@ -127,7 +127,23 @@ describe("AgentRegistry", () => {
     await expect(fs.readFile(path.join(agentDirectory, "workbench", "index.md"), "utf8"))
       .resolves.toContain("`skills/`：Skills，入口 `index.json`");
     await expect(fs.readFile(path.join(agentDirectory, "docker-workbench", "index.md"), "utf8"))
-      .resolves.toContain("`native-workbench/knowledge/`：知识库，入口 `index.json`");
+      .resolves.toContain("`knowledge/`：知识库，入口 `index.json`");
+    await expect(fs.readFile(
+      path.join(agentDirectory, "docker-workbench", "selfie", "references.jsonl"),
+      "utf8"
+    )).resolves.toBe("\n");
+    await expect(fs.readFile(
+      path.join(agentDirectory, "docker-workbench", "emoji", "emojis.jsonl"),
+      "utf8"
+    )).resolves.toBe("\n");
+    expect(JSON.parse(await fs.readFile(
+      path.join(agentDirectory, "docker-workbench", "skills", "index.json"),
+      "utf8"
+    ))).toMatchObject({ schemaVersion: 1, skills: [] });
+    expect(JSON.parse(await fs.readFile(
+      path.join(agentDirectory, "docker-workbench", "knowledge", "index.json"),
+      "utf8"
+    ))).toMatchObject({ schemaVersion: 1, root: "knowledge", documents: [] });
     expect((await fs.readFile(
       path.join(agentDirectory, "workbench/selfie/references.jsonl"),
       "utf8"

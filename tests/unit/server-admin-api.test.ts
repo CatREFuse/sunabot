@@ -294,7 +294,7 @@ describe("admin API smoke", () => {
       method: "POST",
       url: "/api/providers/test",
       headers,
-      payload: { provider: config.providers.items[0] }
+      payload: { provider: { ...config.providers.items[0], multimodal: "disabled" } }
     });
     const after = await fs.readFile(process.env.SUNABOT_CONFIG!, "utf8");
     expect(response.statusCode).toBe(200);

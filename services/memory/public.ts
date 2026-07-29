@@ -33,19 +33,23 @@ export {
   WORKING_MEMORY_MAX_ITEM_CHARS,
   appendWorkingMemoryDocumentItem,
   ensureWorkingMemoryDocument,
+  isDreamWorkingMemoryItem,
   parseWorkingMemoryMarkdown,
   readWorkingMemoryDocument,
   renderWorkingMemoryMarkdown,
   replaceWorkingMemoryDocument,
   workingMemoryItemToEntry,
   workingMemoryItemsFromFacts,
+  workingMemoryItemsFromFactsPreservingDreams,
   type WorkingMemoryConversationSource,
   type WorkingMemoryDocumentItem,
   type WorkingMemoryDocumentSnapshot
 } from "./workingMemoryDocument.js";
 export {
+  DREAM_CONTRACT,
   DREAM_PAYLOAD_VARIABLE,
   DREAM_PROMPT_FILE,
   DREAM_PROMPT_ID,
+  LEGACY_DREAM_CONTRACT_V3,
   dreamPromptTemplate
 } from "./dream/public.js";

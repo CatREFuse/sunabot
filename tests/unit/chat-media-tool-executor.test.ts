@@ -69,13 +69,15 @@ describe("chat media Provider tool boundary", () => {
     expect(importEmoji).not.toHaveBeenCalled();
   });
 
-  it("allows emoji import and media export in the same batch", async () => {
+  it("allows emoji, selfie and media export in the same batch", async () => {
     const exportMedia = vi.fn(async () => ({ ok: true, path: "chat-media-a.png" }));
     const importEmoji = vi.fn(async () => ({ ok: true, key: "开心" }));
+    const importSelfie = vi.fn(async () => ({ ok: true, id: "a".repeat(64) }));
     const options: ProviderCompleteOptions = {
       chatMedia: {
         export: exportMedia,
-        importEmoji
+        importEmoji,
+        importSelfie
       }
     };
     const executor = new RegistryProviderToolExecutor();
@@ -90,6 +92,14 @@ describe("chat media Provider tool boundary", () => {
       })
     }, {
       type: "function_call",
+      name: "import_chat_selfie",
+      call_id: "import-selfie-2",
+      arguments: JSON.stringify({
+        handle: "message:77:image:0",
+        note: "正面常服"
+      })
+    }, {
+      type: "function_call",
       name: "export_chat_media",
       call_id: "export-2",
       arguments: JSON.stringify({ handle: "message:77:image:0" })
@@ -98,9 +108,14 @@ describe("chat media Provider tool boundary", () => {
     expect(outputs.map((output) => JSON.parse(String(output.output))))
       .toEqual([
         { ok: true, key: "开心" },
+        { ok: true, id: "a".repeat(64) },
         { ok: true, path: "chat-media-a.png" }
       ]);
     expect(exportMedia).toHaveBeenCalledOnce();
     expect(importEmoji).toHaveBeenCalledOnce();
+    expect(importSelfie).toHaveBeenCalledWith({
+      handle: "message:77:image:0",
+      note: "正面常服"
+    });
   });
 });

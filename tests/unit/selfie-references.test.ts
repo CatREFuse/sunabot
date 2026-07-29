@@ -608,6 +608,57 @@ describe("selfie reference routes", () => {
       .toBe(planaReference.id);
     await app.close();
   });
+
+  it("addresses Native and Docker Workbench selfie catalogs independently", async () => {
+    const config = createAdminTestConfig(root);
+    const repositories = {
+      native: new SelfieReferenceRepository({
+        getConfig: () => config,
+        mutex: new AdminMutationMutex(),
+        backend: "native"
+      }),
+      docker: new SelfieReferenceRepository({
+        getConfig: () => config,
+        mutex: new AdminMutationMutex(),
+        backend: "docker"
+      })
+    };
+    const app = Fastify();
+    registerSelfieReferenceRoutes(app, {
+      repository: repositories.native,
+      getRepository: (_agentId, backend) => repositories[backend]
+    });
+
+    const bytes = await image(64, 64, "#eff8ff");
+    const upload = await app.inject({
+      method: "POST",
+      url: "/api/selfie-references?agentId=plana&workbench=docker",
+      payload: {
+        fileName: "docker.png",
+        dataBase64: bytes.toString("base64"),
+        note: "Docker 参考图"
+      }
+    });
+    expect(upload.statusCode, upload.body).toBe(201);
+    const reference = upload.json().images[0];
+    expect(reference.displayUrl).toContain("&workbench=docker");
+
+    const [nativeList, dockerList] = await Promise.all([
+      app.inject({ method: "GET", url: "/api/selfie-references?agentId=plana" }),
+      app.inject({ method: "GET", url: "/api/selfie-references?agentId=plana&workbench=docker" })
+    ]);
+    expect(nativeList.json().images).toEqual([]);
+    expect(dockerList.json().images).toHaveLength(1);
+    const content = await app.inject({ method: "GET", url: reference.displayUrl });
+    expect(content.statusCode).toBe(200);
+    await expect(fs.access(path.join(
+      config.persona.agentWorkspace,
+      "docker-workbench",
+      "selfie",
+      reference.fileName
+    ))).resolves.toBeUndefined();
+    await app.close();
+  });
 });
 
 async function image(width: number, height: number, background: string) {

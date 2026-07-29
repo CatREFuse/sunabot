@@ -15,6 +15,7 @@ import {
 } from "../../services/media/selfieReferenceCatalog.js";
 import { loadConfig, resolveProjectPath } from "../config.js";
 import type { AppConfig } from "../types.js";
+import type { AgentWorkbenchBackend } from "../../packages/platform/agentResourceLayout.js";
 import { AdminApiError, badRequest, conflict, notFound } from "./errors.js";
 import { adminMutationMutex, type AdminMutationMutex } from "./mutation.js";
 
@@ -52,6 +53,7 @@ export interface SelfieReferenceContent {
 export interface SelfieReferenceRepositoryOptions {
   getConfig?: () => AppConfig | Promise<AppConfig>;
   mutex?: AdminMutationMutex;
+  backend?: AgentWorkbenchBackend;
 }
 
 interface StoredSelfieReferenceFile extends Omit<SelfieReferenceImage, "note"> {
@@ -97,10 +99,12 @@ interface DecodedImage {
 export class SelfieReferenceRepository {
   private readonly getConfig: () => AppConfig | Promise<AppConfig>;
   private readonly mutex: AdminMutationMutex;
+  private readonly backend: AgentWorkbenchBackend;
 
   constructor(options: SelfieReferenceRepositoryOptions = {}) {
     this.getConfig = options.getConfig ?? loadConfig;
     this.mutex = options.mutex ?? adminMutationMutex;
+    this.backend = options.backend ?? "native";
   }
 
   async list(): Promise<SelfieReferenceEnvelope> {
@@ -224,7 +228,7 @@ export class SelfieReferenceRepository {
       workspaceExists = true;
     }
     if (!workspaceExists) {
-      return { directoryPath: path.join(workspacePath, AGENT_RESOURCE_LAYOUT.selfie), exists: false };
+      return { directoryPath: path.join(workspacePath, this.relativeDirectory()), exists: false };
     }
 
     const workspaceStats = await fs.lstat(workspacePath);
@@ -232,10 +236,11 @@ export class SelfieReferenceRepository {
       badRequest("AGENT_WORKSPACE_INVALID", "Agent workspace 必须是普通目录。", "persona.agentWorkspace");
     }
     const realWorkspace = await fs.realpath(workspacePath);
-    const directoryPath = path.join(realWorkspace, AGENT_RESOURCE_LAYOUT.selfie);
+    const relativeDirectory = this.relativeDirectory();
+    const directoryPath = path.join(realWorkspace, relativeDirectory);
     let directoryExists = await pathExists(directoryPath);
     if (!directoryExists && create) {
-      await ensurePrivateDirectoryChain(realWorkspace, AGENT_RESOURCE_LAYOUT.selfie);
+      await ensurePrivateDirectoryChain(realWorkspace, relativeDirectory);
       directoryExists = true;
     }
     if (!directoryExists) return { directoryPath, exists: false };
@@ -246,6 +251,12 @@ export class SelfieReferenceRepository {
     }
     assertInside(realWorkspace, await fs.realpath(directoryPath));
     return { directoryPath, exists: true };
+  }
+
+  private relativeDirectory() {
+    return this.backend === "native"
+      ? AGENT_RESOURCE_LAYOUT.selfie
+      : AGENT_RESOURCE_LAYOUT.dockerSelfie;
   }
 }
 

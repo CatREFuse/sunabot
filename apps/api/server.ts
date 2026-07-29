@@ -305,15 +305,17 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
   const agentFiles = new AgentFileRepository({ runtime });
   const agentFilesFor = (agentId: string) => new AgentFileRepository({ runtime: getRuntime(agentId) });
   const selfieReferences = new Map<string, SelfieReferenceRepository>();
-  const selfieReferencesFor = (agentId: string) => {
-    const existing = selfieReferences.get(agentId);
+  const selfieReferencesFor = (agentId: string, backend: "native" | "docker" = "native") => {
+    const key = `${agentId}:${backend}`;
+    const existing = selfieReferences.get(key);
     if (existing) return existing;
     const repository = new SelfieReferenceRepository({
       getConfig: () => agentId === config.persona.defaultAgentId
         ? config
-        : agentRegistry.config(agentId, config)
+        : agentRegistry.config(agentId, config),
+      backend
     });
-    selfieReferences.set(agentId, repository);
+    selfieReferences.set(key, repository);
     return repository;
   };
   const configService = new ConfigService({
@@ -494,14 +496,19 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
     getRuntimeProbeFacts
   });
 
-  app.get("/generated-images/workbench/:agentId/emoji/:fileName", async (request, reply) => {
-    const params = request.params as { agentId?: string; fileName?: string };
+  app.get("/generated-images/:workbench/:agentId/emoji/:fileName", async (request, reply) => {
+    const params = request.params as { workbench?: string; agentId?: string; fileName?: string };
+    const backend = params.workbench === "workbench"
+      ? "native" as const
+      : params.workbench === "docker-workbench"
+        ? "docker" as const
+        : undefined;
     const agentId = String(params.agentId ?? "");
     const fileName = String(params.fileName ?? "");
-    if (!AGENT_ID_PATTERN.test(agentId) || !isEmojiFileName(fileName)) {
+    if (!backend || !AGENT_ID_PATTERN.test(agentId) || !isEmojiFileName(fileName)) {
       return reply.status(404).send({ code: "NOT_FOUND", message: "Not found." });
     }
-    const location = emojiMediaLocation(getRuntime(agentId).config, fileName);
+    const location = emojiMediaLocation(getRuntime(agentId).config, fileName, backend);
     try {
       const stats = await fsp.lstat(location.filePath);
       if (!stats.isFile() || stats.isSymbolicLink()) {
@@ -598,7 +605,9 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
     getAgentContext: getRuntimeContext,
     resolveDreamAccountId: (agentId) => resolveDreamAccountId(agentId, onebotGateway, agentRegistry)
   });
-  registerKnowledgeRoutes(app, { getService: (agentId) => knowledgeBaseForConfig(getRuntime(agentId).config) });
+  registerKnowledgeRoutes(app, {
+    getService: (agentId, backend) => knowledgeBaseForConfig(getRuntime(agentId).config, backend)
+  });
   registerAgentToolRoutes(app, {
     agentFiles,
     resolveToolCapabilities: (backend) => runtime.resolveToolCapabilities(backend),

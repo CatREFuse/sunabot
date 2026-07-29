@@ -22,6 +22,7 @@ import {
   EmojiNormalizationBusyError
 } from "../../../services/emojis/emojiOperationGate.js";
 import { requestAgentId } from "../requestAgentId.js";
+import type { AgentWorkbenchBackend } from "../../../packages/platform/agentResourceLayout.js";
 
 const openObject = { type: "object", additionalProperties: true } as const;
 const passthroughBody = {} as const;
@@ -43,7 +44,7 @@ const emojiVersionParams = {
 
 export interface EmojiRouteOptions {
   repository: EmojiLibraryRepository;
-  getRepository?: (agentId: string) => EmojiLibraryRepository;
+  getRepository?: (agentId: string, backend: AgentWorkbenchBackend) => EmojiLibraryRepository;
   getConfig(): AppConfig;
   runtime: SunaRuntime;
   getAgentContext?: (agentId: string) => { config: AppConfig; runtime: SunaRuntime };
@@ -74,7 +75,7 @@ export function registerEmojiRoutes(app: FastifyInstance, options: EmojiRouteOpt
       context.repository.list(),
       readEmojiSettings(options, context.agentId)
     ]);
-    return withContentUrls(envelope, context.agentId, settings);
+    return withContentUrls(envelope, context.agentId, context.backend, settings);
   });
 
   app.patch("/api/emojis/settings", {
@@ -85,7 +86,7 @@ export function registerEmojiRoutes(app: FastifyInstance, options: EmojiRouteOpt
       throw new AdminApiError(409, "EMOJI_SETTINGS_UNAVAILABLE", "表情设置暂不可用。");
     }
     const settings = await options.settings.update(context.agentId, parseEmojiSettingsBody(request.body));
-    return withContentUrls(await context.repository.list(), context.agentId, settings);
+    return withContentUrls(await context.repository.list(), context.agentId, context.backend, settings);
   });
 
   app.post("/api/emojis", {
@@ -98,7 +99,7 @@ export function registerEmojiRoutes(app: FastifyInstance, options: EmojiRouteOpt
       reply,
       () => context.repository.upload(request.body)
     );
-    return withContentUrls(result, context.agentId, await readEmojiSettings(options, context.agentId));
+    return withContentUrls(result, context.agentId, context.backend, await readEmojiSettings(options, context.agentId));
   });
 
   app.post("/api/emojis/generate", {
@@ -145,7 +146,12 @@ export function registerEmojiRoutes(app: FastifyInstance, options: EmojiRouteOpt
         () => repository.repository.bindGenerated(body.key, result)
       );
       saveGeneratedImageHistory(runtimeContext.config, provider.getModelInfo().imageModel, prompt, result);
-      return withContentUrls(envelope, repository.agentId, await readEmojiSettings(options, repository.agentId));
+      return withContentUrls(
+        envelope,
+        repository.agentId,
+        repository.backend,
+        await readEmojiSettings(options, repository.agentId)
+      );
     } finally {
       admission.release();
     }
@@ -157,7 +163,12 @@ export function registerEmojiRoutes(app: FastifyInstance, options: EmojiRouteOpt
     const params = request.params as { key?: string };
     const context = repositoryContext(options, request.query);
     const envelope = await context.repository.rename(params.key ?? "", parseRenameBody(request.body));
-    return withContentUrls(envelope, context.agentId, await readEmojiSettings(options, context.agentId));
+    return withContentUrls(
+      envelope,
+      context.agentId,
+      context.backend,
+      await readEmojiSettings(options, context.agentId)
+    );
   });
 
   app.get("/api/emojis/:key/versions", {
@@ -166,7 +177,7 @@ export function registerEmojiRoutes(app: FastifyInstance, options: EmojiRouteOpt
     const params = request.params as { key?: string };
     const context = repositoryContext(options, request.query);
     const envelope = await context.repository.listVersions(params.key ?? "");
-    return withVersionContentUrls(envelope, context.agentId);
+    return withVersionContentUrls(envelope, context.agentId, context.backend);
   });
 
   app.get("/api/emojis/:key/versions/:fileName/content", {
@@ -235,9 +246,14 @@ async function withNormalizationBusyResponse<T>(
 
 function repositoryContext(options: EmojiRouteOptions, query: unknown) {
   const agentId = requestAgentId(query);
+  const backend = requestWorkbenchBackend(query);
+  if (!options.getRepository && backend === "docker") {
+    badRequest("WORKBENCH_BACKEND_UNAVAILABLE", "当前接口未配置 Docker Workbench。", "workbench");
+  }
   return {
     agentId,
-    repository: options.getRepository?.(agentId) ?? options.repository
+    backend,
+    repository: options.getRepository?.(agentId, backend) ?? options.repository
   };
 }
 
@@ -245,7 +261,12 @@ function agentContext(options: EmojiRouteOptions, agentId: string) {
   return options.getAgentContext?.(agentId) ?? { config: options.getConfig(), runtime: options.runtime };
 }
 
-function withContentUrls(envelope: EmojiEnvelope, agentId: string, settings: EmojiSettingsEnvelope) {
+function withContentUrls(
+  envelope: EmojiEnvelope,
+  agentId: string,
+  backend: AgentWorkbenchBackend,
+  settings: EmojiSettingsEnvelope
+) {
   return {
     presetKeys: envelope.presetKeys,
     sendSize: settings.sendSize,
@@ -253,7 +274,8 @@ function withContentUrls(envelope: EmojiEnvelope, agentId: string, settings: Emo
     revision: settings.revision,
     emojis: envelope.emojis.map((emoji) => {
       const base = `/api/emojis/${encodeURIComponent(emoji.key)}/content`;
-      const scope = `&agentId=${encodeURIComponent(agentId)}&v=${encodeURIComponent(emoji.fileName)}`;
+      const workbench = backend === "docker" ? "&workbench=docker" : "";
+      const scope = `&agentId=${encodeURIComponent(agentId)}&v=${encodeURIComponent(emoji.fileName)}${workbench}`;
       return {
         ...emoji,
         originalUrl: `${base}?variant=original${scope}`,
@@ -266,13 +288,15 @@ function withContentUrls(envelope: EmojiEnvelope, agentId: string, settings: Emo
 
 function withVersionContentUrls(
   envelope: Awaited<ReturnType<EmojiLibraryRepository["listVersions"]>>,
-  agentId: string
+  agentId: string,
+  backend: AgentWorkbenchBackend = "native"
 ) {
   return {
     key: envelope.key,
     versions: envelope.versions.map((version) => {
       const base = `/api/emojis/${encodeURIComponent(envelope.key)}/versions/${encodeURIComponent(version.fileName)}/content`;
-      const scope = `&agentId=${encodeURIComponent(agentId)}`;
+      const workbench = backend === "docker" ? "&workbench=docker" : "";
+      const scope = `&agentId=${encodeURIComponent(agentId)}${workbench}`;
       return {
         ...version,
         originalUrl: `${base}?variant=original${scope}`,
@@ -281,6 +305,15 @@ function withVersionContentUrls(
       };
     })
   };
+}
+
+function requestWorkbenchBackend(query: unknown): AgentWorkbenchBackend {
+  const value = query && typeof query === "object" && !Array.isArray(query)
+    ? (query as { workbench?: unknown }).workbench
+    : undefined;
+  if (value === undefined || value === "" || value === "native") return "native";
+  if (value === "docker") return "docker";
+  badRequest("WORKBENCH_BACKEND_INVALID", "Workbench 参数无效。", "workbench");
 }
 
 function setEmojiContentHeaders(reply: FastifyReply, contentType: string) {

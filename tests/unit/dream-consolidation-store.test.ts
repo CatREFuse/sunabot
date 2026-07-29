@@ -119,6 +119,34 @@ describe("Dream consolidation SQLite commit", () => {
     ]);
   });
 
+  it("archives a memory whose historical recall receipts still match the generated snapshot", () => {
+    createGeneratedRun();
+    seedRecallHistory();
+    recall("long_term_archive", "reply:archive-a", "2026-05-01", "2026-05-01T02:00:00.000Z");
+    recall("long_term_archive", "reply:archive-b", "2026-06-03", "2026-06-03T04:00:00.000Z");
+
+    const input = commitInput();
+    const archive = input.archives[0]!;
+    const committed = store.commitConsolidation({
+      ...input,
+      archives: [{
+        ...archive,
+        recallSnapshot: {
+          recallCount: 2,
+          distinctRecallDays: 2,
+          lastRecalledAt: "2026-06-03T04:00:00.000Z",
+          trackingStartedAt: "2026-04-01T00:00:00.000Z"
+        }
+      }]
+    });
+
+    expect(committed).toMatchObject({ status: "committed" });
+    expect(store.listArchives({ runId: "dream-run" })).toEqual([
+      expect.objectContaining({ recordId: "long_term_archive" })
+    ]);
+    expect(store.readRecallStats("long_term_archive")).toBeUndefined();
+  });
+
   it("leaves legacy SQLite working rows untouched when the Agent Markdown was committed externally", () => {
     createGeneratedRun();
     seedRecallHistory();
@@ -279,6 +307,35 @@ describe("Dream consolidation SQLite commit", () => {
     expect(store.listArchives()).toEqual([]);
   });
 
+  it("returns snapshot_conflict when receipt count no longer matches the generated recall snapshot", () => {
+    createGeneratedRun();
+    seedRecallHistory();
+    recall("long_term_archive", "reply:archive", "2026-05-01", "2026-05-01T02:00:00.000Z");
+    const input = commitInput();
+    const archive = input.archives[0]!;
+    database.prepare(`
+      DELETE FROM memory_recall_receipts
+      WHERE record_id = 'long_term_archive' AND recall_key = 'reply:archive'
+    `).run();
+
+    const result = store.commitConsolidation({
+      ...input,
+      archives: [{
+        ...archive,
+        recallSnapshot: {
+          recallCount: 1,
+          distinctRecallDays: 1,
+          lastRecalledAt: "2026-05-01T02:00:00.000Z",
+          trackingStartedAt: "2026-04-01T00:00:00.000Z"
+        }
+      }]
+    });
+
+    expect(result).toMatchObject({ status: "snapshot_conflict", sources: ["long_term"] });
+    expect(readMemory("long_term")).toEqual(LONG_TERM_BASELINE);
+    expect(store.listArchives()).toEqual([]);
+  });
+
   it("returns lease_lost before touching snapshots", () => {
     createGeneratedRun(1_000);
 
@@ -345,7 +402,98 @@ describe("Dream consolidation SQLite commit", () => {
     expect(store.getRun("dream-run")).toMatchObject({ status: "generated" });
   });
 
-  it("rejects an archive input whose generated snapshot was already recalled", () => {
+  it.each([
+    {
+      label: "negative recall count",
+      snapshot: {
+        recallCount: -1,
+        distinctRecallDays: 0,
+        lastRecalledAt: null,
+        trackingStartedAt: "2026-04-01T00:00:00.000Z"
+      },
+      error: "recallSnapshot.recallCount must be a non-negative safe integer"
+    },
+    {
+      label: "unsafe recall count",
+      snapshot: {
+        recallCount: Number.MAX_SAFE_INTEGER + 1,
+        distinctRecallDays: 0,
+        lastRecalledAt: "2026-05-01T02:00:00.000Z",
+        trackingStartedAt: "2026-04-01T00:00:00.000Z"
+      },
+      error: "recallSnapshot.recallCount must be a non-negative safe integer"
+    },
+    {
+      label: "fractional distinct recall days",
+      snapshot: {
+        recallCount: 1,
+        distinctRecallDays: 0.5,
+        lastRecalledAt: "2026-05-01T02:00:00.000Z",
+        trackingStartedAt: "2026-04-01T00:00:00.000Z"
+      },
+      error: "recallSnapshot.distinctRecallDays must be a non-negative safe integer"
+    },
+    {
+      label: "more distinct days than recalls",
+      snapshot: {
+        recallCount: 1,
+        distinctRecallDays: 2,
+        lastRecalledAt: "2026-05-01T02:00:00.000Z",
+        trackingStartedAt: "2026-04-01T00:00:00.000Z"
+      },
+      error: "recallSnapshot.distinctRecallDays must not exceed recallCount"
+    },
+    {
+      label: "zero recalls with a last recall",
+      snapshot: {
+        recallCount: 0,
+        distinctRecallDays: 0,
+        lastRecalledAt: "2026-05-01T02:00:00.000Z",
+        trackingStartedAt: "2026-04-01T00:00:00.000Z"
+      },
+      error: "recallSnapshot.lastRecalledAt must be null exactly when recallCount is 0"
+    },
+    {
+      label: "positive recalls without a last recall",
+      snapshot: {
+        recallCount: 1,
+        distinctRecallDays: 1,
+        lastRecalledAt: null,
+        trackingStartedAt: "2026-04-01T00:00:00.000Z"
+      },
+      error: "recallSnapshot.lastRecalledAt must be null exactly when recallCount is 0"
+    },
+    {
+      label: "non-canonical last recall time",
+      snapshot: {
+        recallCount: 1,
+        distinctRecallDays: 1,
+        lastRecalledAt: "2026-05-01T02:00:00Z",
+        trackingStartedAt: "2026-04-01T00:00:00.000Z"
+      },
+      error: "recallSnapshot.lastRecalledAt must be a canonical ISO timestamp"
+    },
+    {
+      label: "non-canonical tracking start time",
+      snapshot: {
+        recallCount: 0,
+        distinctRecallDays: 0,
+        lastRecalledAt: null,
+        trackingStartedAt: "2026-04-01T00:00:00Z"
+      },
+      error: "recallSnapshot.trackingStartedAt must be a canonical ISO timestamp"
+    },
+    {
+      label: "last recall before tracking",
+      snapshot: {
+        recallCount: 1,
+        distinctRecallDays: 1,
+        lastRecalledAt: "2026-03-31T23:59:59.999Z",
+        trackingStartedAt: "2026-04-01T00:00:00.000Z"
+      },
+      error: "recallSnapshot.lastRecalledAt must not be earlier than trackingStartedAt"
+    }
+  ])("rejects an invalid archive recall snapshot: $label", ({ snapshot, error }) => {
     createGeneratedRun();
     seedRecallHistory();
     const input = commitInput();
@@ -353,8 +501,8 @@ describe("Dream consolidation SQLite commit", () => {
 
     expect(() => store.commitConsolidation({
       ...input,
-      archives: [{ ...archive, recallSnapshot: { ...archive.recallSnapshot, recallCount: 1 } }]
-    })).toThrow("recallSnapshot.recallCount must be 0");
+      archives: [{ ...archive, recallSnapshot: snapshot }]
+    })).toThrow(error);
     expect(readMemory("long_term")).toEqual(LONG_TERM_BASELINE);
   });
 
@@ -400,6 +548,8 @@ describe("Dream consolidation SQLite commit", () => {
         reason: "低重要度且追踪期内未召回",
         recallSnapshot: {
           recallCount: 0,
+          distinctRecallDays: 0,
+          lastRecalledAt: null,
           trackingStartedAt: "2026-04-01T00:00:00.000Z"
         }
       }],

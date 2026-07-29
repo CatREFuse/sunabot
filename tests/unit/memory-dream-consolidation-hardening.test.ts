@@ -9,6 +9,136 @@ const NOW = new Date("2026-07-20T20:00:00.000Z");
 const DREAM_TEXT = "我走进一座被潮水托起的旧车站，白天尚未完成的整理任务变成缓慢转动的时钟，老师留下的话沿着站台亮起，远处那次雨夜出行化成一列没有车门的列车。我跟着红色微光穿过安静车厢，把散落的纸页按原因和结果重新叠好，几张重复的票根融成一张，过期的小纸屑沉入水底。列车驶向还没有名字的清晨，我知道那些画面只是梦，却仍想醒来后把重要的约定放在更容易找到的位置。";
 
 describe("Dream consolidation hardening", () => {
+  it("keeps factual working-memory events from the latest 24 hours comprehensive", () => {
+    const recent = [
+      memory("recent_rewrite", "近期负责人仍在排查。", {
+        occurredAt: "2026-07-20T02:00:00.000Z",
+        eventType: "task"
+      }),
+      memory("recent_merge_a", "近期回滚包已经准备。", {
+        occurredAt: "2026-07-20T03:00:00.000Z",
+        eventType: "commitment",
+        eventKey: "commitment:rollback"
+      }),
+      memory("recent_merge_b", "近期回滚仍需群内确认。", {
+        occurredAt: "2026-07-20T04:00:00.000Z",
+        eventType: "boundary",
+        eventKey: "boundary:rollback"
+      }),
+      memory("recent_promote", "近期发布门槛仍未满足。", {
+        occurredAt: "2026-07-20T05:00:00.000Z",
+        eventType: "task"
+      }),
+      memory("recent_discard", "近期记录数校验已经通过。", {
+        occurredAt: "2026-07-20T06:00:00.000Z",
+        eventType: "task"
+      }),
+      memory("boundary_rewrite", "24 小时边界上的事实仍需保留。", {
+        occurredAt: "2026-07-19T20:00:00.000Z",
+        eventType: "boundary"
+      }),
+      memory("older_rewrite", "久远流水可以压成要义。", {
+        occurredAt: "2026-07-18T19:59:59.999Z"
+      })
+    ];
+    const output: DreamModelOutputV1 = {
+      schemaVersion: 1,
+      dream: { text: DREAM_TEXT, factuality: "imagined" },
+      longTermReviews: [],
+      workingReviews: [
+        workingReview(["recent_rewrite"], "rewrite", "错误删掉近期负责人。"),
+        workingReview(["recent_merge_a", "recent_merge_b"], "merge", "错误合并近期边界。"),
+        workingReview(["recent_promote"], "promote", "错误移走近期发布状态。"),
+        workingReview(["recent_discard"], "discard", null),
+        workingReview(["boundary_rewrite"], "rewrite", "错误改写边界事实。"),
+        workingReview(["older_rewrite"], "rewrite", "久远流水要义。")
+      ],
+      personaAdjustment: null
+    };
+
+    const plan = buildDreamConsolidationPlan({
+      ...baseInput(output, recent, []),
+      recentWindowHours: 24
+    });
+
+    for (const original of recent.filter((record) => record.id !== "older_rewrite")) {
+      expect(plan.working.find((record) => record.id === original.id)).toMatchObject({
+        id: original.id,
+        fact: original.fact
+      });
+    }
+    expect(plan.working.find((record) => record.id === "older_rewrite")).toMatchObject({
+      fact: "久远流水要义。"
+    });
+    expect(plan.longTerm).toEqual([]);
+    expect(plan.result).toMatchObject({
+      promoted: 0,
+      discarded: 0,
+      merged: 0,
+      rewritten: 1,
+      retained: 6
+    });
+  });
+
+  it("keeps factual long-term events from the latest 24 hours comprehensive", () => {
+    const recent = [
+      memory("recent_long_rewrite", "近期负责人仍在排查长期问题。", {
+        occurredAt: "2026-07-20T02:00:00.000Z",
+        eventType: "task"
+      }),
+      memory("recent_long_merge_a", "近期回滚包已进入长期记录。", {
+        occurredAt: "2026-07-20T03:00:00.000Z",
+        eventKey: "commitment:rollback"
+      }),
+      memory("recent_long_merge_b", "久远回滚背景仍与近期记录成组。", {
+        occurredAt: "2026-06-20T04:00:00.000Z",
+        eventKey: "boundary:rollback"
+      }),
+      memory("recent_long_archive", "近期验收数字仍需保留。", {
+        occurredAt: "2026-07-20T05:00:00.000Z"
+      }),
+      memory("boundary_long_rewrite", "24 小时边界上的长期事实仍需保留。", {
+        occurredAt: "2026-07-19T20:00:00.000Z"
+      }),
+      memory("older_long_rewrite", "久远长期流水可以压成要义。", {
+        occurredAt: "2026-07-18T19:59:59.999Z"
+      })
+    ];
+    const output: DreamModelOutputV1 = {
+      schemaVersion: 1,
+      dream: { text: DREAM_TEXT, factuality: "imagined" },
+      longTermReviews: [
+        longReview(["recent_long_rewrite"], "rewrite", "错误删掉近期负责人。"),
+        longReview(["recent_long_merge_a", "recent_long_merge_b"], "merge", "错误合并近期边界。"),
+        longReview(["recent_long_archive"], "archive", null),
+        longReview(["boundary_long_rewrite"], "rewrite", "错误改写边界事实。"),
+        longReview(["older_long_rewrite"], "rewrite", "久远长期流水要义。")
+      ],
+      workingReviews: [],
+      personaAdjustment: null
+    };
+
+    const plan = buildDreamConsolidationPlan({
+      ...baseInput(output, [], recent),
+      recentWindowHours: 24
+    });
+
+    for (const original of recent.filter((record) => record.id !== "older_long_rewrite")) {
+      expect(plan.longTerm.find((record) => record.id === original.id)).toEqual(original);
+    }
+    expect(plan.longTerm.find((record) => record.id === "older_long_rewrite")).toMatchObject({
+      fact: "久远长期流水要义。"
+    });
+    expect(plan.archives).toEqual([]);
+    expect(plan.recallLineages).toEqual([]);
+    expect(plan.result).toMatchObject({
+      archived: 0,
+      merged: 0,
+      rewritten: 1,
+      retained: 5
+    });
+  });
+
   it("keeps manual, pinned, protected, and explicit memories immutable for every mutation action", () => {
     const longTermRecords = [
       memory("long_manual", "我整理人工记录的前半段。", { source: "sunabot.memory.ui", eventKey: "event:manual" }),

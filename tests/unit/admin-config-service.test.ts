@@ -234,7 +234,7 @@ describe("ConfigService section semantics", () => {
 
   it.each([
     [{ dreamRecentWindowHours: 0 }, "memory.dreamRecentWindowHours"],
-    [{ dreamRecentMemoryLimit: 13, dreamOlderMemoryLimit: 12 }, "memory.dreamRecentMemoryLimit"],
+    [{ dreamRecentMemoryLimit: 37, dreamOlderMemoryLimit: 12 }, "memory.dreamRecentMemoryLimit"],
     [{ dreamRecentMemoryLimit: 0, dreamOlderMemoryLimit: 0 }, "memory.dreamRecentMemoryLimit"]
   ] as const)("rejects invalid Dream sampling settings %#", async (patch, field) => {
     const subject = service();

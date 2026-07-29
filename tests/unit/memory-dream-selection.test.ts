@@ -3,7 +3,11 @@ import { describe, expect, it } from "vitest";
 import {
   DREAM_MAX_MEMORY_SELECTION,
   DREAM_MEMORY_BUCKET_SELECTION,
+  DREAM_OLDER_MEMORY_SELECTION,
   DREAM_RECENT_MEMORY_DAYS,
+  DREAM_RECENT_MEMORY_SELECTION,
+  normalizeDreamMemorySnapshot,
+  projectDreamRecallStats,
   selectDreamMemories,
   type DreamMemoryRecord,
   type DreamRecallStatsSnapshot
@@ -12,14 +16,14 @@ import {
 const NOW = new Date("2026-07-20T20:00:00.000Z");
 
 describe("Dream memory selection", () => {
-  it("samples one unified batch with 12 memories from the latest 2 days and 12 older memories", () => {
+  it("selects 24 memories from the latest day and 12 older memories with input-order independence", () => {
     const workingRecords = Array.from({ length: 40 }, (_, index) => memory(
       `working_${String(index).padStart(3, "0")}`,
-      index < 20 ? "2026-07-19T00:00:00.000Z" : "2025-01-01T00:00:00.000Z"
+      index < 20 ? "2026-07-20T00:00:00.000Z" : "2025-01-01T00:00:00.000Z"
     ));
     const longTermRecords = Array.from({ length: 40 }, (_, index) => memory(
       `long_${String(index).padStart(3, "0")}`,
-      index < 20 ? "2026-07-20T00:00:00.000Z" : "2024-01-01T00:00:00.000Z"
+      index < 20 ? "2026-07-20T10:00:00.000Z" : "2024-01-01T00:00:00.000Z"
     ));
     const recallStats = longTermRecords.map((record, index) => stats(String(record.id), index % 4));
     const first = selectDreamMemories({
@@ -38,21 +42,25 @@ describe("Dream memory selection", () => {
     });
 
     expect(first).toEqual(second);
-    expect(first.sourceMemoryIds).toHaveLength(DREAM_MAX_MEMORY_SELECTION);
-    expect(new Set(first.sourceMemoryIds)).toHaveLength(DREAM_MAX_MEMORY_SELECTION);
+    expect(DREAM_MAX_MEMORY_SELECTION).toBe(48);
+    expect(DREAM_MEMORY_BUCKET_SELECTION).toBe(DREAM_OLDER_MEMORY_SELECTION);
+    expect(first.sourceMemoryIds)
+      .toHaveLength(DREAM_RECENT_MEMORY_SELECTION + DREAM_OLDER_MEMORY_SELECTION);
+    expect(new Set(first.sourceMemoryIds))
+      .toHaveLength(DREAM_RECENT_MEMORY_SELECTION + DREAM_OLDER_MEMORY_SELECTION);
     const selected = [...first.selectedWorking, ...first.selectedLongTerm];
     expect(selected.filter((item) => item.selectedBy === "recent"))
-      .toHaveLength(DREAM_MEMORY_BUCKET_SELECTION);
+      .toHaveLength(DREAM_RECENT_MEMORY_SELECTION);
     expect(selected.filter((item) => item.selectedBy === "remote"))
-      .toHaveLength(DREAM_MEMORY_BUCKET_SELECTION);
+      .toHaveLength(DREAM_OLDER_MEMORY_SELECTION);
     expect(selected.filter((item) => item.scoreComponents.ageDays! <= DREAM_RECENT_MEMORY_DAYS))
-      .toHaveLength(DREAM_MEMORY_BUCKET_SELECTION);
+      .toHaveLength(DREAM_RECENT_MEMORY_SELECTION);
     expect(selected.filter((item) => item.scoreComponents.ageDays! > DREAM_RECENT_MEMORY_DAYS))
-      .toHaveLength(DREAM_MEMORY_BUCKET_SELECTION);
+      .toHaveLength(DREAM_OLDER_MEMORY_SELECTION);
     expect(first.selectedLongTerm.every((item) => item.score >= 0 && item.score <= 1)).toBe(true);
   });
 
-  it("uses the exact 48-hour boundary and does not backfill a short time bucket", () => {
+  it("uses the exact 24-hour boundary and does not backfill a short time bucket", () => {
     const boundary = new Date(NOW.getTime() - DREAM_RECENT_MEMORY_DAYS * 24 * 60 * 60_000);
     const workingRecords = [
       memory("recent_exact", boundary.toISOString()),
@@ -75,8 +83,8 @@ describe("Dream memory selection", () => {
     expect(selected.filter((item) => item.selectedBy === "recent").map((item) => item.id).sort())
       .toEqual(["recent_exact", "recent_now"]);
     expect(selected.filter((item) => item.selectedBy === "remote"))
-      .toHaveLength(DREAM_MEMORY_BUCKET_SELECTION);
-    expect(selection.sourceMemoryIds).toHaveLength(DREAM_MEMORY_BUCKET_SELECTION + 2);
+      .toHaveLength(DREAM_OLDER_MEMORY_SELECTION);
+    expect(selection.sourceMemoryIds).toHaveLength(DREAM_OLDER_MEMORY_SELECTION + 2);
   });
 
   it("uses configured window and per-bucket limits without cross-bucket backfill", () => {
@@ -110,7 +118,115 @@ describe("Dream memory selection", () => {
     expect(selected.find((item) => item.id === "older_by_one_ms")?.reasons).not.toContain("recent_fragment");
   });
 
-  it("keeps review, recall, salience, task, and imagined metadata without biasing the random sample", () => {
+  it("keeps every recent candidate when the bucket stays within its limit", () => {
+    const workingRecords = Array.from({ length: 13 }, (_, index) => memory(
+      `recent_work_${String(index).padStart(2, "0")}`,
+      `2026-07-20T${String(index).padStart(2, "0")}:00:00.000Z`
+    ));
+    const longTermRecords = Array.from({ length: 11 }, (_, index) => memory(
+      `recent_long_${String(index).padStart(2, "0")}`,
+      "2026-07-20T19:00:00.000Z"
+    ));
+    const expectedIds = [...workingRecords, ...longTermRecords]
+      .map((record) => String(record.id))
+      .sort();
+    const selectIds = (seed: string) => selectDreamMemories({
+      seed,
+      now: NOW,
+      workingRecords,
+      longTermRecords,
+      recallStats: longTermRecords.map((record) => stats(String(record.id), 1))
+    }).sourceMemoryIds.slice().sort();
+
+    expect(selectIds("complete-a")).toEqual(expectedIds);
+    expect(selectIds("complete-b")).toEqual(expectedIds);
+  });
+
+  it("prioritizes working memory, active commitments and high-relevance recent items on overflow", () => {
+    const workingRecords = Array.from({ length: 10 }, (_, index) => memory(
+      `recent_working_${String(index).padStart(2, "0")}`,
+      "2026-07-20T18:00:00.000Z"
+    ));
+    const longTermRecords = Array.from({ length: 20 }, (_, index) => memory(
+      `recent_long_${String(index).padStart(2, "0")}`,
+      "2026-07-20T18:30:00.000Z",
+      index === 0
+        ? { eventType: "commitment" }
+        : index === 1
+          ? { eventType: "boundary" }
+          : {}
+    ));
+    const recallStats = longTermRecords.map((record, index) => stats(String(record.id), 3, {
+      importance: index === 2 ? 0.95 : 0.1,
+      futureRelevance: index === 3 ? 0.95 : 0.1,
+      emotionalSalience: index === 4 ? 0.95 : 0.1
+    }));
+    const selection = selectDreamMemories({
+      seed: "recent-overflow",
+      now: NOW,
+      workingRecords,
+      longTermRecords,
+      recallStats
+    });
+    const selectedIds = new Set(selection.sourceMemoryIds);
+
+    expect(selection.sourceMemoryIds).toHaveLength(DREAM_RECENT_MEMORY_SELECTION);
+    expect(workingRecords.every((record) => selectedIds.has(String(record.id)))).toBe(true);
+    for (const id of [
+      "recent_long_00",
+      "recent_long_01",
+      "recent_long_02",
+      "recent_long_03",
+      "recent_long_04"
+    ]) {
+      expect(selectedIds.has(id), id).toBe(true);
+    }
+  });
+
+  it("ranks older memories by recall need, salience, task relevance and review need", () => {
+    const longTermRecords = [
+      memory("older_recall", "2025-01-01T00:00:00.000Z"),
+      memory("older_important", "2025-01-01T00:00:00.000Z"),
+      memory("older_future", "2025-01-01T00:00:00.000Z"),
+      memory("older_emotional", "2025-01-01T00:00:00.000Z"),
+      memory("older_task", "2025-01-01T00:00:00.000Z", { eventType: "commitment" }),
+      memory("older_review", "2025-01-01T00:00:00.000Z"),
+      ...Array.from({ length: 12 }, (_, index) => memory(
+        `older_low_${String(index).padStart(2, "0")}`,
+        "2025-01-01T00:00:00.000Z"
+      ))
+    ];
+    const recallStats = longTermRecords.map((record) => {
+      const id = String(record.id);
+      const value = stats(id, id === "older_recall" ? 0 : 5, {
+        importance: id === "older_important" ? 1 : 0,
+        futureRelevance: id === "older_future" ? 1 : 0,
+        emotionalSalience: id === "older_emotional" ? 1 : 0
+      });
+      value.lastReviewedAt = id === "older_review" ? null : NOW.toISOString();
+      return value;
+    });
+    const selection = selectDreamMemories({
+      seed: "older-priority",
+      now: NOW,
+      workingRecords: [],
+      longTermRecords,
+      recallStats,
+      recentMemoryLimit: 0,
+      olderMemoryLimit: 6
+    });
+
+    expect(selection.sourceMemoryIds.slice().sort()).toEqual([
+      "older_emotional",
+      "older_future",
+      "older_important",
+      "older_recall",
+      "older_review",
+      "older_task"
+    ]);
+  });
+
+  it("keeps review, recall, salience, task, and imagined metadata", () => {
     const workingRecords = [
       memory("working_recent", "2026-07-20T10:00:00.000Z"),
       memory("working_task", "2026-07-19T10:00:00.000Z", { eventType: "task" }),
@@ -226,22 +342,75 @@ describe("Dream memory selection", () => {
     ]));
   });
 
-  it("uses the run seed to vary both recent and older random samples", () => {
-    const longTermRecords = Array.from({ length: 40 }, (_, index) => memory(
+  it("uses the run seed to vary tied recent and older overflow samples", () => {
+    const longTermRecords = Array.from({ length: 80 }, (_, index) => memory(
       `equal_${String(index).padStart(2, "0")}`,
-      index < 20 ? "2026-07-20T00:00:00.000Z" : "2025-07-20T00:00:00.000Z"
+      index < 40 ? "2026-07-20T00:00:00.000Z" : "2025-07-20T00:00:00.000Z"
     ));
     const recallStats = longTermRecords.map((record) => stats(String(record.id), 5));
-    const selectedIds = (seed: string) => selectDreamMemories({
-      seed,
-      now: NOW,
-      workingRecords: [],
-      longTermRecords,
-      recallStats
-    }).selectedLongTerm.map((item) => item.id);
+    const selectedIds = (seed: string) => {
+      const selection = selectDreamMemories({
+        seed,
+        now: NOW,
+        workingRecords: [],
+        longTermRecords,
+        recallStats
+      });
+      return {
+        recent: selection.selectedLongTerm
+          .filter((item) => item.selectedBy === "recent")
+          .map((item) => item.id),
+        remote: selection.selectedLongTerm
+          .filter((item) => item.selectedBy === "remote")
+          .map((item) => item.id)
+      };
+    };
 
-    expect(selectedIds("seed-a")).not.toEqual(selectedIds("seed-b"));
+    expect(selectedIds("seed-a").recent).not.toEqual(selectedIds("seed-b").recent);
+    expect(selectedIds("seed-a").remote).not.toEqual(selectedIds("seed-b").remote);
     expect(selectedIds("seed-a")).toEqual(selectedIds("seed-a"));
+  });
+
+  it("exposes only factual scoped agreements as field-knowledge evidence", () => {
+    const selection = selectDreamMemories({
+      seed: "field-knowledge",
+      now: NOW,
+      workingRecords: [
+        memory("field_boundary", "2026-07-20T10:00:00.000Z", { eventType: "boundary" }),
+        memory("field_rule", "2026-07-20T11:00:00.000Z", {
+          eventType: "rule",
+          contextKey: "",
+          conversationId: "group:20001"
+        }),
+        memory("field_dream", "2026-07-20T12:00:00.000Z", {
+          eventType: "commitment",
+          memoryKind: "dream"
+        }),
+        memory("field_unscoped", "2026-07-20T13:00:00.000Z", {
+          eventType: "preference",
+          contextKey: ""
+        }),
+        memory("field_trivia", "2026-07-20T14:00:00.000Z", {
+          eventType: "conversation"
+        }),
+        memory("field_uncertain", "2026-07-20T15:00:00.000Z", {
+          eventType: "relationship",
+          realityStatus: "uncertain"
+        })
+      ],
+      longTermRecords: [
+        memory("field_convention", "2026-06-01T00:00:00.000Z", {
+          eventType: "convention"
+        })
+      ],
+      recallStats: [stats("field_convention", 1)]
+    });
+
+    expect(selection.fieldKnowledgeEvidenceIds.slice().sort()).toEqual([
+      "field_boundary",
+      "field_convention",
+      "field_rule"
+    ]);
   });
 
   it("rejects invalid ids, duplicate records, unknown or inconsistent stats, time, and seed", () => {
@@ -274,7 +443,7 @@ describe("Dream memory selection", () => {
     expect(() => selectDreamMemories({ ...base, recentMemoryLimit: -1 })).toThrow("recentMemoryLimit");
     expect(() => selectDreamMemories({
       ...base,
-      recentMemoryLimit: 13,
+      recentMemoryLimit: 37,
       olderMemoryLimit: 12
     })).toThrow("total memory limit");
     expect(() => selectDreamMemories({
@@ -282,6 +451,37 @@ describe("Dream memory selection", () => {
       recentMemoryLimit: 0,
       olderMemoryLimit: 0
     })).toThrow("total memory limit");
+  });
+
+  it("keeps an uncalled legacy-id memory selectable without inventing a recall", () => {
+    const normalized = normalizeDreamMemorySnapshot({
+      workingRecords: [],
+      longTermRecords: [{
+        ...memory("legacy id with spaces", "2026-01-01T00:00:00.000Z"),
+        id: "legacy id with spaces"
+      }]
+    });
+    const recallStats = projectDreamRecallStats({
+      records: normalized.longTermRecords,
+      stats: [],
+      trackingStartedAt: "2026-07-20T20:00:00.000Z"
+    });
+
+    expect(recallStats).toEqual([
+      expect.objectContaining({
+        recordId: String(normalized.longTermRecords[0]?.id),
+        recallCount: 0,
+        distinctRecallDays: 0,
+        lastRecalledAt: null
+      })
+    ]);
+    expect(() => selectDreamMemories({
+      seed: "legacy-id-no-recall",
+      now: NOW,
+      workingRecords: [],
+      longTermRecords: normalized.longTermRecords,
+      recallStats
+    })).not.toThrow();
   });
 });
 

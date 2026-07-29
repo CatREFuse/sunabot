@@ -42,12 +42,18 @@ export interface DreamPersonaAdjustmentV1 {
   evidenceMemoryIds: string[];
 }
 
+export interface DreamFieldKnowledgeV1 {
+  content: string;
+  evidenceMemoryIds: string[];
+}
+
 export interface DreamModelOutputV1 {
   schemaVersion: 1;
   dream: DreamNarrativeV1;
   longTermReviews: DreamLongTermReviewV1[];
   workingReviews: DreamWorkingReviewV1[];
   personaAdjustment: DreamPersonaAdjustmentV1 | null;
+  fieldKnowledge?: DreamFieldKnowledgeV1 | null;
   rawOutput?: string;
 }
 
@@ -55,10 +61,13 @@ export interface DreamModelOutputExpectations {
   longTermMemoryIds: readonly string[];
   workingMemoryIds: readonly string[];
   personaEvidenceIds: readonly string[];
+  fieldKnowledgeEvidenceIds?: readonly string[];
 }
 
 export interface DreamLongTermArchiveCandidate {
   recallCount: number;
+  distinctRecallDays: number;
+  lastRecalledAt: string | null;
   trackingStartedAt: string;
   importance: number;
   futureRelevance: number;
@@ -71,8 +80,7 @@ export interface DreamLongTermArchiveCandidate {
 
 export type DreamArchiveRejectionReason =
   | "invalid_candidate"
-  | "recalled"
-  | "tracking_too_recent"
+  | "dormancy_too_short"
   | "importance_too_high"
   | "future_relevance_too_high"
   | "emotional_salience_too_high"

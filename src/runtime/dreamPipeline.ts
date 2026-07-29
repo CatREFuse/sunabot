@@ -1,17 +1,33 @@
-import { createHash, randomUUID } from "node:crypto";
-import {
-  dreamPersonaPromptVariables,
-  projectDreamContextPayload
-} from "./dreamContextProjection.js";
+import { randomUUID } from "node:crypto";
+import { dreamPersonaPromptVariables, projectDreamContext, restoreDreamFieldKnowledge, type DreamFieldKnowledgeBinding } from "./dreamContextProjection.js";
 import {
   dreamHistoryItem,
   dreamRunSummary,
   nextDreamScheduledAt
 } from "./dreamHistory.js";
 import { assertDreamProviderRequest } from "./dreamProviderRequest.js";
-import { commitDreamWithWorkingMemory, type RuntimeDreamWorkingMemoryPort } from "./dreamWorkingMemoryCommit.js";
+import {
+  commitDreamWithWorkingMemory,
+  type RuntimeDreamFieldKnowledgePort,
+  type RuntimeDreamWorkingMemoryPort
+} from "./dreamWorkingMemoryCommit.js";
+import {
+  boundedDreamPipelineId as boundedId,
+  digestDreamPipelineJson as digestJson,
+  digestDreamPipelineText as digestText,
+  dreamPipelineFieldKnowledgeBindings,
+  dreamPipelineErrorMessage as errorMessage,
+  isDreamPipelineAbortError as abortError,
+  isDreamPipelineObject as isObject,
+  positiveDreamInterval as positiveInterval,
+  toDreamPipelineJsonObject as toJsonObject,
+  validDreamPipelineDate as validDate,
+  validDreamPipelineDigest as validDigest,
+  validatedDreamTimeZone as validatedTimeZone,
+  type DreamPipelineJsonObject as JsonObject
+} from "./dreamPipelineSupport.js";
 import type { RuntimeDreamContextPort, RuntimeDreamContextSnapshot, RuntimeDreamPromptPort } from "./dreamPorts.js";
-export type { RuntimeDreamWorkingMemoryPort } from "./dreamWorkingMemoryCommit.js";
+export type { RuntimeDreamWorkingMemoryPort, RuntimeDreamFieldKnowledgePort } from "./dreamWorkingMemoryCommit.js";
 export type { RuntimeDreamContextPort, RuntimeDreamContextSnapshot, RuntimeDreamPromptPort } from "./dreamPorts.js";
 import {
   DREAM_PAYLOAD_VARIABLE,
@@ -39,7 +55,6 @@ const DREAM_RETRY_DELAY_MS = 15 * 60_000;
 const DREAM_MAX_ATTEMPTS = 3;
 const DREAM_HISTORY_LIMIT = 30;
 const PERSONA_SECTION = "## 缓慢形成的倾向";
-type JsonObject = Record<string, unknown>;
 export type RuntimeDreamRunStatus = "running" | "generated" | "consolidated" | "completed" | "failed";
 export type RuntimeDreamPersonaStatus = "pending" | "none" | "proposed" | "applied" | "skipped" | "failed";
 export interface RuntimeDreamRun {
@@ -110,7 +125,12 @@ export interface RuntimeDreamStorePort {
       recordId: string;
       data: DreamMemoryRecord;
       reason: string;
-      recallSnapshot: { recallCount: number; trackingStartedAt: string };
+      recallSnapshot: {
+        recallCount: number;
+        distinctRecallDays: number;
+        lastRecalledAt: string | null;
+        trackingStartedAt: string;
+      };
     }[];
     recallLineages: readonly { targetId: string; sourceIds: readonly string[] }[];
     reviews: readonly {
@@ -175,6 +195,7 @@ export interface RuntimeDreamsOptions {
   store: RuntimeDreamStorePort;
   context: RuntimeDreamContextPort;
   workingMemory?: RuntimeDreamWorkingMemoryPort;
+  fieldKnowledge?: RuntimeDreamFieldKnowledgePort;
   prompt: RuntimeDreamPromptPort;
   model: RuntimeDreamModelPort;
   persona: RuntimeDreamPersonaPort;
@@ -208,6 +229,8 @@ interface PersistedDreamInput {
   schemaVersion: 1;
   workingDigest: string;
   workingRevision?: string;
+  fieldKnowledgeRevision?: string;
+  fieldKnowledgeBindings?: DreamFieldKnowledgeBinding[];
   longTermDigest: string;
   payload: JsonObject;
 }
@@ -369,15 +392,16 @@ export class RuntimeDreams {
       window
     }));
     const seed = digestText(`${occurrence.localDate}:${this.seedFactory()}`);
+    const selectionSettings = this.options.selection?.();
     const selection = selectDreamMemories({
       seed,
       now,
       workingRecords: snapshot.workingRecords,
       longTermRecords: snapshot.longTermRecords,
       recallStats: snapshot.recallStats,
-      ...this.options.selection?.()
+      ...selectionSettings
     });
-    const payload = projectDreamContextPayload(toJsonObject({
+    const projection = projectDreamContext(toJsonObject({
       schemaVersion: 1,
       seed,
       localDate: occurrence.localDate,
@@ -388,6 +412,8 @@ export class RuntimeDreams {
       longTermMemories: selection.selectedLongTerm.map(promptMemory),
       recallStats: selection.selectedLongTerm.flatMap((item) => item.recallStats ? [item.recallStats] : []),
       personaEvidenceIds: selection.personaEvidenceIds,
+      fieldKnowledgeEvidenceIds: selection.fieldKnowledgeEvidenceIds,
+      recentWindowHours: selectionSettings?.recentWindowHours ?? 24,
       sourceMemoryIds: selection.sourceMemoryIds,
       userProfiles: snapshot.userProfiles,
       observedConversations: snapshot.recentConversations,
@@ -395,12 +421,21 @@ export class RuntimeDreams {
       plannedDailySchedule: snapshot.plannedDailySchedule,
       persona: snapshot.persona
     }, "dream payload"));
+    const payload = projection.payload;
     return {
       input: {
         schemaVersion: 1,
         workingDigest: validDigest(snapshot.workingDigest, "workingDigest"),
         ...(snapshot.workingRevision ? {
           workingRevision: validDigest(snapshot.workingRevision, "workingRevision")
+        } : {}),
+        ...(snapshot.fieldKnowledgeRevision && payload.fieldKnowledgeWritable === true ? {
+          fieldKnowledgeRevision: validDigest(
+            snapshot.fieldKnowledgeRevision,
+            "fieldKnowledgeRevision"
+          ),
+          ...(projection.fieldKnowledgeBindings.length
+            ? { fieldKnowledgeBindings: projection.fieldKnowledgeBindings } : {})
         } : {}),
         longTermDigest: validDigest(snapshot.longTermDigest, "longTermDigest"),
         payload
@@ -447,7 +482,6 @@ export class RuntimeDreams {
         run = generated;
         await this.log("info", "dream.generated", run, { dreamChars: [...output.dream.text].length });
       }
-
       if (run.status === "generated") {
         const output = normalizeStoredOutput(run.output, expected);
         const snapshot = initialSnapshot ?? normalizedMemorySnapshot(await this.options.context.capture({
@@ -466,15 +500,20 @@ export class RuntimeDreams {
           output,
           workingRecords: snapshot.workingRecords,
           longTermRecords: snapshot.longTermRecords,
-          recallStats: recallStatsFromPayload(input.payload)
+          recallStats: recallStatsFromPayload(input.payload),
+          recentWindowHours: recentWindowHoursFromPayload(input.payload)
         });
-        const committed = await commitDreamWithWorkingMemory({
+        const externalCommit = await commitDreamWithWorkingMemory({
           workingMemory: this.options.workingMemory,
           workingRevision: input.workingRevision,
           records: plan.working,
+          fieldKnowledge: this.options.fieldKnowledge,
+          fieldKnowledgeRevision: input.fieldKnowledgeRevision,
+          fieldKnowledgeContent: output.fieldKnowledge?.content == null ? undefined
+            : restoreDreamFieldKnowledge(output.fieldKnowledge.content, input.fieldKnowledgeBindings ?? []),
           runId: run.id,
           localDate: run.localDate,
-          commit: (externalWorkingMemory) => this.options.store.commitConsolidation({
+          commit: (externalWorkingMemory, fieldKnowledgeUpdated) => this.options.store.commitConsolidation({
             runId: run.id,
             workerId: this.workerId,
             expectedWorkingDigest: input.workingDigest,
@@ -486,10 +525,14 @@ export class RuntimeDreams {
             archives: plan.archives,
             recallLineages: composeDreamRecallLineages(plan.recallLineages, snapshot.longTermRecords),
             reviews: plan.reviews,
-            result: toJsonObject(plan.result, "dream consolidation result"),
+            result: toJsonObject({
+              ...plan.result,
+              fieldKnowledgeUpdated
+            }, "dream consolidation result"),
             now: this.clock()
           })
         });
+        const committed = externalCommit.committed;
         if (committed.status === "snapshot_conflict") {
           throw new DreamRunError(
             "DREAM_SNAPSHOT_CONFLICT",
@@ -504,9 +547,11 @@ export class RuntimeDreams {
           throw new DreamRunError("DREAM_RESULT_CONFLICT", "Dream consolidation result conflicted.", false);
         }
         run = committed.run;
-        await this.log("info", "dream.consolidated", run, plan.result);
+        await this.log("info", "dream.consolidated", run, {
+          ...plan.result,
+          fieldKnowledgeUpdated: externalCommit.fieldKnowledgeUpdated
+        });
       }
-
       if (run.status === "consolidated") {
         if (signal.aborted) return undefined;
         run = await this.applyPersona(run, normalizeStoredOutput(run.output, expected));
@@ -656,6 +701,11 @@ function persistedInput(value: JsonObject): PersistedDreamInput {
     ...(value.workingRevision == null ? {} : {
       workingRevision: validDigest(value.workingRevision, "workingRevision")
     }),
+    ...(value.fieldKnowledgeRevision == null || value.payload.fieldKnowledgeWritable !== true ? {} : {
+      fieldKnowledgeRevision: validDigest(value.fieldKnowledgeRevision, "fieldKnowledgeRevision"),
+      ...(value.fieldKnowledgeBindings == null ? {}
+        : { fieldKnowledgeBindings: dreamPipelineFieldKnowledgeBindings(value.fieldKnowledgeBindings) })
+    }),
     longTermDigest: validDigest(value.longTermDigest, "longTermDigest"),
     payload: value.payload
   };
@@ -664,8 +714,20 @@ function modelExpectations(payload: JsonObject) {
   return {
     workingMemoryIds: promptMemoryIds(payload.workingMemories, "workingMemories"),
     longTermMemoryIds: promptMemoryIds(payload.longTermMemories, "longTermMemories"),
-    personaEvidenceIds: stringArray(payload.personaEvidenceIds, "personaEvidenceIds")
+    personaEvidenceIds: stringArray(payload.personaEvidenceIds, "personaEvidenceIds"),
+    fieldKnowledgeEvidenceIds: stringArray(
+      payload.fieldKnowledgeEvidenceIds ?? [],
+      "fieldKnowledgeEvidenceIds"
+    )
   };
+}
+function recentWindowHoursFromPayload(payload: JsonObject) {
+  const value = payload.recentWindowHours;
+  if (value == null) return 48;
+  if (!Number.isSafeInteger(value) || Number(value) < 1 || Number(value) > 720) {
+    throw new DreamRunError("DREAM_INPUT_INVALID", "recentWindowHours is invalid.", false);
+  }
+  return Number(value);
 }
 function promptMemoryIds(value: unknown, field: string) {
   if (!Array.isArray(value)) throw new DreamRunError("DREAM_INPUT_INVALID", `${field} is invalid.`, false);
@@ -712,65 +774,11 @@ function appendPersonaStatement(content: string, statement: string) {
   if (base.includes(PERSONA_SECTION)) return `${base}\n- ${normalized}\n`;
   return `${base}${base ? "\n\n" : ""}${PERSONA_SECTION}\n\n- ${normalized}\n`;
 }
-function digestJson(value: unknown) {
-  return digestText(canonicalJson(value));
-}
-function digestText(value: string) {
-  return createHash("sha256").update(value).digest("hex");
-}
-function canonicalJson(value: unknown): string {
-  if (value === null || typeof value === "string" || typeof value === "boolean") return JSON.stringify(value);
-  if (typeof value === "number" && Number.isFinite(value)) return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  if (isObject(value)) {
-    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
-  }
-  throw new Error("Dream input must contain JSON values only.");
-}
-function toJsonObject(value: unknown, field: string): JsonObject {
-  const serialized = JSON.stringify(value);
-  if (serialized == null) throw new Error(`${field} must be a JSON object.`);
-  const parsed: unknown = JSON.parse(serialized);
-  if (!isObject(parsed)) throw new Error(`${field} must be a JSON object.`);
-  canonicalJson(parsed);
-  return parsed;
-}
 function stringArray(value: unknown, field: string) {
   if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
     throw new DreamRunError("DREAM_INPUT_INVALID", `${field} is invalid.`, false);
   }
   return value as string[];
-}
-function validDigest(value: unknown, field: string) {
-  if (typeof value !== "string" || !/^[a-f0-9]{64}$/u.test(value)) {
-    throw new Error(`${field} must be a SHA-256 digest.`);
-  }
-  return value;
-}
-function validDate(value: Date, field: string) {
-  if (!(value instanceof Date) || !Number.isFinite(value.getTime())) throw new Error(`${field} is invalid.`);
-  return new Date(value.getTime());
-}
-function validatedTimeZone(value: string) {
-  const normalized = value.trim();
-  try {
-    new Intl.DateTimeFormat("en-US", { timeZone: normalized }).format(new Date(0));
-  } catch {
-    throw new Error(`Invalid Dream time zone: ${value}`);
-  }
-  return normalized;
-}
-function boundedId(value: string, field: string) {
-  const normalized = value.trim();
-  if (!normalized || [...normalized].length > 128) throw new Error(`${field} is invalid.`);
-  return normalized;
-}
-function positiveInterval(value: number, field: string) {
-  if (!Number.isSafeInteger(value) || value < 100) throw new Error(`${field} must be at least 100ms.`);
-  return value;
-}
-function isObject(value: unknown): value is JsonObject {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 function errorCode(error: unknown) {
   if (error instanceof DreamRunError) return error.code;
@@ -787,10 +795,4 @@ function retryableDreamError(error: unknown) {
   const status = Number((error as { status?: unknown }).status);
   if (!Number.isFinite(status)) return true;
   return status === 408 || status === 409 || status === 429 || status >= 500;
-}
-function errorMessage(error: unknown) {
-  return error instanceof Error && error.message.trim() ? error.message : String(error || "Dream run failed.");
-}
-function abortError(error: unknown) {
-  return error instanceof Error && (error.name === "AbortError" || error.message === "The operation was aborted");
 }

@@ -8,6 +8,7 @@ export interface RuntimeDreamContextSnapshot {
   longTermRecords: DreamMemoryRecord[];
   workingDigest: string;
   workingRevision?: string;
+  fieldKnowledgeRevision?: string;
   longTermDigest: string;
   recallStats: DreamRecallStatsSnapshot[];
   userProfiles: unknown[];

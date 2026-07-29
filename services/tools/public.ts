@@ -107,15 +107,20 @@ export {
   CHAT_MEDIA_HANDLE_MAX_LENGTH,
   EXPORT_CHAT_MEDIA_TOOL_NAME,
   IMPORT_CHAT_EMOJI_TOOL_NAME,
+  IMPORT_CHAT_SELFIE_TOOL_NAME,
   exportChatMediaTool,
   importChatEmojiTool,
+  importChatSelfieTool,
   readExportChatMediaInput,
   readImportChatEmojiInput,
+  readImportChatSelfieInput,
   type ChatMediaToolPort,
   type ExportChatMediaInput,
   type ExportedChatMedia,
   type ImportChatEmojiInput,
-  type ImportedChatEmoji
+  type ImportedChatEmoji,
+  type ImportChatSelfieInput,
+  type ImportedChatSelfie
 } from "./chatMediaTool.js";
 export {
   LEGACY_SEND_FILE_TOOL_DESCRIPTION,

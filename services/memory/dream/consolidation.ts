@@ -42,6 +42,7 @@ export interface DreamConsolidationInput {
   workingRecords: readonly DreamMemoryRecord[];
   longTermRecords: readonly DreamMemoryRecord[];
   recallStats: readonly DreamRecallStatsSnapshot[];
+  recentWindowHours?: number;
 }
 
 export interface DreamConsolidationPlan {
@@ -54,6 +55,8 @@ export interface DreamConsolidationPlan {
     reason: string;
     recallSnapshot: {
       recallCount: number;
+      distinctRecallDays: number;
+      lastRecalledAt: string | null;
       trackingStartedAt: string;
     };
   }>;
@@ -78,7 +81,9 @@ export interface DreamConsolidationPlan {
 }
 
 export function buildDreamConsolidationPlan(input: DreamConsolidationInput): DreamConsolidationPlan {
-  const now = validDate(input.now).toISOString();
+  const validNow = validDate(input.now);
+  const now = validNow.toISOString();
+  const recentCutoff = validNow.getTime() - recentWindowHours(input.recentWindowHours) * 60 * 60_000;
   const working = recordMap(input.workingRecords, "working");
   const longTerm = recordMap(input.longTermRecords, "long_term");
   const stats = new Map(input.recallStats.map((item) => [item.recordId, item]));
@@ -103,6 +108,10 @@ export function buildDreamConsolidationPlan(input: DreamConsolidationInput): Dre
     if (review.action === "retain") {
       retained += 1;
       reviews.push(reviewUpdate(review.sourceIds[0]!, review.sourceIds, review));
+      continue;
+    }
+    if (records.some((record) => recentFactualMemory(record, recentCutoff))) {
+      retained += retainLongTermRecords(review, reviews);
       continue;
     }
     if (records.some(immutableMemory)) {
@@ -143,6 +152,8 @@ export function buildDreamConsolidationPlan(input: DreamConsolidationInput): Dre
     }
     const policy = evaluateDreamArchiveCandidate({
       recallCount: recordStats.recallCount,
+      distinctRecallDays: recordStats.distinctRecallDays,
+      lastRecalledAt: recordStats.lastRecalledAt,
       trackingStartedAt: recordStats.trackingStartedAt,
       importance: review.importance,
       futureRelevance: review.futureRelevance,
@@ -175,6 +186,8 @@ export function buildDreamConsolidationPlan(input: DreamConsolidationInput): Dre
       reason: review.reason || "dream_archive_policy",
       recallSnapshot: {
         recallCount: recordStats.recallCount,
+        distinctRecallDays: recordStats.distinctRecallDays,
+        lastRecalledAt: recordStats.lastRecalledAt,
         trackingStartedAt: recordStats.trackingStartedAt
       }
     });
@@ -184,6 +197,11 @@ export function buildDreamConsolidationPlan(input: DreamConsolidationInput): Dre
   for (const review of input.output.workingReviews) {
     const records = review.sourceIds.map((id) => requireRecord(working, id, "working"));
     const oldDreams = records.filter((record) => isDreamMemory(record) && dreamDate(record) < input.localDate);
+    if (records.some((record) => recentFactualMemory(record, recentCutoff))) {
+      markMutableWorkingReviewed(working, records, now);
+      retained += records.length;
+      continue;
+    }
     if (records.some(immutableMemory)) {
       markMutableWorkingReviewed(working, records, now);
       retained += records.length;
@@ -496,6 +514,20 @@ function isDreamMemory(record: DreamMemoryRecord) {
     || normalizeText(record.factuality) === "imagined";
 }
 
+function recentFactualMemory(record: DreamMemoryRecord, cutoff: number) {
+  if (isDreamMemory(record)) return false;
+  for (const value of [
+    record.occurredAt,
+    record.observedAt,
+    record.updatedAt,
+    record.createdAt
+  ]) {
+    const timestamp = normalizeIsoTimestamp(value);
+    if (timestamp) return Date.parse(timestamp) >= cutoff;
+  }
+  return false;
+}
+
 function dreamDate(record: DreamMemoryRecord) {
   return normalizeText(record.dreamDate) || normalizeIsoTimestamp(record.occurredAt).slice(0, 10);
 }
@@ -556,4 +588,12 @@ function timestampValues(records: readonly DreamMemoryRecord[], field: string) {
 function validDate(value: Date) {
   if (!(value instanceof Date) || !Number.isFinite(value.getTime())) throw new Error("Dream consolidation time is invalid.");
   return value;
+}
+
+function recentWindowHours(value: number | undefined) {
+  const hours = value ?? 24;
+  if (!Number.isSafeInteger(hours) || hours < 1 || hours > 720) {
+    throw new Error("Dream consolidation recentWindowHours must be an integer between 1 and 720.");
+  }
+  return hours;
 }

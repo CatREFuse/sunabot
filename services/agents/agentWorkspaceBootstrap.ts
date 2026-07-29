@@ -36,14 +36,16 @@ const DOCKER_WORKBENCH_INDEX = [
   "",
   "本目录用于保存 Docker Bash 的计划、下载、转存文件和任务产物。",
   "",
-  "Native workbench 只读投影位于 `native-workbench/`：",
+  "本工作区拥有独立的配置与资料目录：",
   "",
-  "- `native-workbench/selfie/`：自拍参考图，入口 `references.jsonl`。",
-  "- `native-workbench/emoji/`：表情，入口 `emojis.jsonl`。",
-  "- `native-workbench/skills/`：Skills，入口 `index.json`。",
-  "- `native-workbench/knowledge/`：知识库，入口 `index.json`。",
+  "- `selfie/`：自拍参考图，入口 `references.jsonl`。",
+  "- `emoji/`：表情，入口 `emojis.jsonl`。",
+  "- `skills/`：Skills，入口 `index.json`。",
+  "- `knowledge/`：知识库，入口 `index.json`。",
   "",
-  "进入目录后先读取对应管理入口。只读投影不可修改；需要写入的任务产物保存在当前 Docker 工作区。",
+  "Native workbench 只读投影位于 `native-workbench/`，其中包含另一套同名目录和入口。",
+  "",
+  "进入目录后先读取当前目录的管理入口；需要同时取用两套资源时，再读取 `native-workbench/` 下的对应入口。只读投影不可修改。",
   ""
 ].join("\n");
 const EMPTY_EXTENSION_REVISION = createHash("sha256").update("[]").digest("hex");
@@ -74,6 +76,23 @@ export function initialAgentWorkspaceFiles(
       skills: []
     }, null, 2)}\n`] as const,
     [`${AGENT_RESOURCE_LAYOUT.knowledge}/index.json`, `${JSON.stringify({
+      schemaVersion: 1,
+      ok: true,
+      root: "knowledge",
+      documents: [],
+      fileCount: 0,
+      chunkCount: 0,
+      errorCount: 0,
+      indexedAt: manifest.createdAt
+    }, null, 2)}\n`] as const,
+    [`${AGENT_RESOURCE_LAYOUT.dockerSelfie}/references.jsonl`, ""] as const,
+    [`${AGENT_RESOURCE_LAYOUT.dockerEmoji}/emojis.jsonl`, ""] as const,
+    [`${AGENT_RESOURCE_LAYOUT.dockerSkills}/index.json`, `${JSON.stringify({
+      schemaVersion: 1,
+      revision: EMPTY_EXTENSION_REVISION,
+      skills: []
+    }, null, 2)}\n`] as const,
+    [`${AGENT_RESOURCE_LAYOUT.dockerKnowledge}/index.json`, `${JSON.stringify({
       schemaVersion: 1,
       ok: true,
       root: "knowledge",

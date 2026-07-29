@@ -41,6 +41,7 @@ const statusKind = shallowRef<"success" | "error" | "">("");
 const operationLogsOpen = shallowRef(false);
 const selectedEntry = shallowRef<MemoryEntry | null>(null);
 const mobileInspectorOpen = shallowRef(false);
+const desktopInspectorActive = shallowRef(false);
 const searchInput = useTemplateRef<HTMLInputElement>("searchInput");
 let desktopInspectorMediaQuery: MediaQueryList | undefined;
 
@@ -118,12 +119,12 @@ onBeforeUnmount(operationLogs.dispose);
 onMounted(() => {
   window.addEventListener("keydown", focusSearchShortcut);
   desktopInspectorMediaQuery = window.matchMedia?.("(min-width: 1280px)");
-  desktopInspectorMediaQuery?.addEventListener("change", closeMobileInspectorOnDesktop);
-  if (desktopInspectorMediaQuery?.matches) mobileInspectorOpen.value = false;
+  desktopInspectorMediaQuery?.addEventListener("change", syncInspectorBreakpoint);
+  if (desktopInspectorMediaQuery) syncInspectorBreakpoint(desktopInspectorMediaQuery);
 });
 onBeforeUnmount(() => {
   window.removeEventListener("keydown", focusSearchShortcut);
-  desktopInspectorMediaQuery?.removeEventListener("change", closeMobileInspectorOnDesktop);
+  desktopInspectorMediaQuery?.removeEventListener("change", syncInspectorBreakpoint);
   desktopInspectorMediaQuery = undefined;
 });
 
@@ -162,7 +163,7 @@ watch([source, searchMode, query, sortField, sortDirection], () => { page.value 
 watch(pageCount, (next) => { page.value = Math.min(page.value, next); });
 watch(visibleEntries, (entries) => {
   if (selectedEntry.value && entries.some((entry) => entry.id === selectedEntry.value?.id)) return;
-  selectedEntry.value = entries[0] ?? null;
+  selectedEntry.value = desktopInspectorActive.value ? entries[0] ?? null : null;
   mobileInspectorOpen.value = false;
 });
 
@@ -179,8 +180,14 @@ function focusSearchShortcut(event: KeyboardEvent) {
   event.preventDefault();
   searchInput.value?.focus();
 }
-function closeMobileInspectorOnDesktop(event: MediaQueryListEvent) {
-  if (event.matches) mobileInspectorOpen.value = false;
+function syncInspectorBreakpoint(event: Pick<MediaQueryList, "matches"> | MediaQueryListEvent) {
+  desktopInspectorActive.value = event.matches;
+  if (!event.matches) {
+    mobileInspectorOpen.value = false;
+    return;
+  }
+  mobileInspectorOpen.value = false;
+  if (listSection.value && !selectedEntry.value) selectedEntry.value = visibleEntries.value[0] ?? null;
 }
 function moveSectionFocus(event: KeyboardEvent, index: number) {
   const keyOffsets: Partial<Record<string, number>> = { ArrowLeft: -1, ArrowRight: 1 };
@@ -309,9 +316,9 @@ function sectionCount(sectionId: MemorySectionId) {
             <h1 class="text-[32px] font-medium leading-none tracking-[-0.04em] text-display">记忆</h1>
             <span class="hidden font-mono text-[11px] uppercase tracking-[0.08em] text-mute sm:inline">Agent {{ agentId }}</span>
           </div>
-          <div class="flex shrink-0 items-center gap-0">
-            <button class="btn btn-ghost" type="button" @click="openOperationLogs">
-              <i class="bx bx-history" aria-hidden="true"></i>操作日志
+          <div class="flex shrink-0 items-center gap-1">
+            <button class="btn btn-ghost" type="button" aria-label="操作日志" @click="openOperationLogs">
+              <i class="bx bx-history" aria-hidden="true"></i><span class="hidden sm:inline">操作日志</span>
             </button>
             <button v-if="activeSection !== 'dream' && activeSection !== 'air'" class="icon-btn" type="button" aria-label="刷新记忆" @click="data.load(source, agentId)">
               <i class="bx bx-refresh" :class="data.loading.value ? 'bx-spin' : ''" aria-hidden="true"></i>
@@ -323,7 +330,7 @@ function sectionCount(sectionId: MemorySectionId) {
         </div>
 
         <nav class="-mx-2 mt-4 overflow-x-auto px-2 sm:mt-5" aria-label="记忆类别" role="tablist">
-          <div class="flex w-max min-w-full gap-7">
+          <div class="flex w-max min-w-full gap-4 sm:gap-7">
             <button
               v-for="(item, index) in sections"
               :id="`memory-tab-${item.id}`"
@@ -349,7 +356,7 @@ function sectionCount(sectionId: MemorySectionId) {
 
       <section class="flex min-w-0 items-baseline justify-between gap-6 py-5" aria-label="记忆数量">
         <div class="flex min-w-0 items-baseline gap-3">
-          <strong class="font-display text-[48px] font-normal leading-none tracking-[-0.05em] text-display md:text-[56px]">{{ currentTotal }}</strong>
+          <strong class="font-display text-[40px] font-normal leading-none tracking-[-0.05em] text-display md:text-[48px]">{{ currentTotal }}</strong>
           <span class="font-mono text-[11px] uppercase tracking-[0.08em] text-mute">{{ metricLabel }}</span>
         </div>
         <p v-if="listSection && sortedEntries.length !== currentTotal" class="text-right font-mono text-[11px] text-mute">
@@ -481,7 +488,7 @@ function sectionCount(sectionId: MemorySectionId) {
                 v-for="entry in visibleEntries"
                 :key="`${entry.source}-${entry.id}`"
                 :entry="entry"
-                :selected="selectedEntry?.id === entry.id"
+                :selected="selectedEntry?.id === entry.id && (desktopInspectorActive || mobileInspectorOpen)"
                 @select="selectEntry"
               />
             </TransitionGroup>

@@ -11,10 +11,12 @@ import type {
 import type { DreamFactuality } from "./types.js";
 import { DREAM_PERSONA_MIN_IMPACT_SCORE, dreamPersonaImpactScore } from "./policy.js";
 
-export const DREAM_RECENT_MEMORY_HOURS = 48;
+export const DREAM_RECENT_MEMORY_HOURS = 24;
 export const DREAM_RECENT_MEMORY_DAYS = DREAM_RECENT_MEMORY_HOURS / 24;
-export const DREAM_MEMORY_BUCKET_SELECTION = 12;
-export const DREAM_MAX_MEMORY_SELECTION = 24;
+export const DREAM_RECENT_MEMORY_SELECTION = 24;
+export const DREAM_OLDER_MEMORY_SELECTION = 12;
+export const DREAM_MEMORY_BUCKET_SELECTION = DREAM_OLDER_MEMORY_SELECTION;
+export const DREAM_MAX_MEMORY_SELECTION = 48;
 export const DREAM_MAX_RECENT_MEMORY_HOURS = 720;
 
 export interface DreamMemorySelectionSettings {
@@ -87,6 +89,7 @@ export interface DreamMemorySelection {
   selectedWorking: DreamSelectedMemory[];
   selectedLongTerm: DreamSelectedMemory[];
   personaEvidenceIds: string[];
+  fieldKnowledgeEvidenceIds: string[];
   sourceMemoryIds: string[];
 }
 
@@ -96,6 +99,16 @@ const DAY_MS = 24 * 60 * 60 * 1_000;
 const MEMORY_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
 const REMOTE_ANCHOR_DAYS = 180;
 const SALIENCE_THRESHOLD = 0.65;
+const FIELD_KNOWLEDGE_EVENT_TYPES = new Set([
+  "boundary",
+  "commitment",
+  "convention",
+  "rule",
+  "safety",
+  "preference",
+  "relationship",
+  "relationship_change"
+]);
 
 export function selectDreamMemories(input: DreamMemorySelectionInput): DreamMemorySelection {
   const seed = validSeed(input.seed);
@@ -125,15 +138,13 @@ export function selectDreamMemories(input: DreamMemorySelectionInput): DreamMemo
 
   const candidates = [...workingCandidates, ...longTermCandidates];
   const selected = [
-    ...randomSample(
+    ...selectRecentCandidates(
       candidates.filter((candidate) => recentMemory(candidate, recentCutoff)),
-      settings.recentMemoryLimit,
-      "recent"
+      settings.recentMemoryLimit
     ),
-    ...randomSample(
+    ...selectOlderCandidates(
       candidates.filter((candidate) => !recentMemory(candidate, recentCutoff)),
-      settings.olderMemoryLimit,
-      "remote"
+      settings.olderMemoryLimit
     )
   ];
   const selectedWorking = selected.filter((item) => item.source === "working");
@@ -143,6 +154,9 @@ export function selectDreamMemories(input: DreamMemorySelectionInput): DreamMemo
     selectedLongTerm,
     personaEvidenceIds: selected
       .filter((item) => eligiblePersonaEvidence(item.record, item.factuality, item.recallStats, now))
+      .map((item) => item.id),
+    fieldKnowledgeEvidenceIds: selected
+      .filter((item) => eligibleFieldKnowledgeEvidence(item.record, item.factuality))
       .map((item) => item.id),
     sourceMemoryIds: uniqueStrings(selected.map((item) => item.id))
   };
@@ -195,15 +209,53 @@ function buildCandidate(
   };
 }
 
-function randomSample(
+function selectRecentCandidates(
   candidates: readonly Candidate[],
-  limit: number,
-  selectedBy: "recent" | "remote"
+  limit: number
 ): DreamSelectedMemory[] {
   return [...candidates].sort((left, right) => (
-    right.scoreComponents.seededAssociation - left.scoreComponents.seededAssociation
+    sourcePriority(right) - sourcePriority(left)
+    || right.scoreComponents.taskRelevance - left.scoreComponents.taskRelevance
+    || recentRelevance(right.scoreComponents) - recentRelevance(left.scoreComponents)
+    || right.scoreComponents.seededAssociation - left.scoreComponents.seededAssociation
     || left.id.localeCompare(right.id)
-  )).slice(0, limit).map((candidate) => ({ ...candidate, selectedBy }));
+  )).slice(0, limit).map((candidate) => ({ ...candidate, selectedBy: "recent" }));
+}
+
+function selectOlderCandidates(
+  candidates: readonly Candidate[],
+  limit: number
+): DreamSelectedMemory[] {
+  return [...candidates].sort((left, right) => (
+    olderRelevance(right.scoreComponents) - olderRelevance(left.scoreComponents)
+    || right.scoreComponents.seededAssociation - left.scoreComponents.seededAssociation
+    || left.id.localeCompare(right.id)
+  )).slice(0, limit).map((candidate) => ({ ...candidate, selectedBy: "remote" }));
+}
+
+function sourcePriority(candidate: Candidate) {
+  return candidate.source === "working" ? 1 : 0;
+}
+
+function recentRelevance(value: DreamSelectionScoreComponents) {
+  return rounded(
+    value.futureRelevance * 0.3
+    + value.importance * 0.25
+    + value.emotionalSalience * 0.2
+    + value.recency * 0.15
+    + value.reviewNeed * 0.1
+  );
+}
+
+function olderRelevance(value: DreamSelectionScoreComponents) {
+  return rounded(
+    value.recallNeed * 0.25
+    + value.importance * 0.2
+    + value.futureRelevance * 0.2
+    + value.emotionalSalience * 0.15
+    + value.taskRelevance * 0.1
+    + value.reviewNeed * 0.1
+  );
 }
 
 function recentMemory(candidate: Candidate, cutoff: number) {
@@ -242,29 +294,18 @@ function selectionReasons(
 
 function workingScore(value: DreamSelectionScoreComponents) {
   return rounded(
-    value.recency * 0.3
+    value.recency * 0.38
     + value.remoteness * 0.04
     + value.importance * 0.11
     + value.futureRelevance * 0.12
     + value.emotionalSalience * 0.12
     + value.taskRelevance * 0.13
     + value.dreamMaterial * 0.1
-    + value.seededAssociation * 0.08
   );
 }
 
 function longTermScore(value: DreamSelectionScoreComponents) {
-  return rounded(
-    value.recency * 0.14
-    + value.remoteness * 0.14
-    + value.recallNeed * 0.2
-    + value.importance * 0.14
-    + value.futureRelevance * 0.13
-    + value.emotionalSalience * 0.1
-    + value.taskRelevance * 0.05
-    + value.dreamMaterial * 0.05
-    + value.seededAssociation * 0.05
-  );
+  return olderRelevance(value);
 }
 
 function recallNeed(stats: DreamRecallStatsSnapshot | null, now: Date) {
@@ -354,6 +395,25 @@ function eligiblePersonaEvidence(
   if (dreamPersonaImpactScore(record, recallStats) < DREAM_PERSONA_MIN_IMPACT_SCORE) return false;
   const occurredAt = firstTimestamp(record.occurredAt, record.createdAt);
   return Boolean(occurredAt) && Date.parse(occurredAt) <= now.getTime();
+}
+
+function eligibleFieldKnowledgeEvidence(
+  record: DreamMemoryRecord,
+  factuality: DreamFactuality
+) {
+  if (factuality !== "factual") return false;
+  const declaredFactuality = normalizeText(record.factuality).toLowerCase();
+  const realityStatus = normalizeText(record.realityStatus).toLowerCase();
+  if (declaredFactuality && declaredFactuality !== "factual") return false;
+  if (realityStatus && realityStatus !== "factual") return false;
+  if (!FIELD_KNOWLEDGE_EVENT_TYPES.has(normalizeText(record.eventType).toLowerCase())) return false;
+  return [
+    record.conversationId,
+    record.contextKey,
+    record.contextRef,
+    record.conversationScope,
+    record.scope
+  ].some((value) => Boolean(normalizeText(value)));
 }
 
 function validateRecords(
@@ -459,13 +519,13 @@ function selectionSettings(input: DreamMemorySelectionInput): DreamMemorySelecti
     DREAM_MAX_RECENT_MEMORY_HOURS
   );
   const recentMemoryLimit = selectionInteger(
-    input.recentMemoryLimit ?? DREAM_MEMORY_BUCKET_SELECTION,
+    input.recentMemoryLimit ?? DREAM_RECENT_MEMORY_SELECTION,
     "recentMemoryLimit",
     0,
     DREAM_MAX_MEMORY_SELECTION
   );
   const olderMemoryLimit = selectionInteger(
-    input.olderMemoryLimit ?? DREAM_MEMORY_BUCKET_SELECTION,
+    input.olderMemoryLimit ?? DREAM_OLDER_MEMORY_SELECTION,
     "olderMemoryLimit",
     0,
     DREAM_MAX_MEMORY_SELECTION

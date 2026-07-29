@@ -335,6 +335,47 @@ describe("MemoryView pagination", () => {
     vi.unstubAllGlobals();
   });
 
+  it("does not show an unrequested selected row in the mobile list", async () => {
+    const mobileQuery = {
+      matches: false,
+      media: "(min-width: 1280px)",
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn()
+    } as unknown as MediaQueryList;
+    vi.stubGlobal("matchMedia", vi.fn(() => mobileQuery));
+    const wrapper = mountMemoryView();
+
+    await wrapper.get('nav[aria-label="记忆类别"]').findAll("button")[1]!.trigger("click");
+    await nextTick();
+
+    expect(wrapper.findAllComponents(MemoryEntryRow)[0]!.props("selected")).toBe(false);
+    wrapper.unmount();
+    vi.unstubAllGlobals();
+  });
+
+  it("explains that the first profile address name has priority", () => {
+    const wrapper = shallowMount(MemoryEditorDialog, {
+      props: {
+        open: true,
+        entry: entry(10, {
+          source: "user_profile",
+          sourceTitle: "用户画像",
+          userId: "10001",
+          addressNames: ["猫老师", "老师"]
+        }),
+        source: "user_profile",
+        busy: false,
+        error: ""
+      }
+    });
+
+    expect(wrapper.get('input[aria-label="称呼"]').attributes("placeholder")).toContain("第一个");
+  });
+
   it("gives each memory row a distinct accessible name", () => {
     const wrapper = shallowMount(MemoryEntryRow, {
       props: {

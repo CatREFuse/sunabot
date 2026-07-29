@@ -203,7 +203,18 @@ async function loadRuntimeSelfieReferences(runtime: RuntimeHost): Promise<Runtim
   const workspace = resolveProjectPath(runtime.config.persona.agentWorkspace);
   if (!workspace) return [];
 
-  const selfieDir = path.join(workspace, AGENT_RESOURCE_LAYOUT.selfie);
+  const references = (await Promise.all([
+    AGENT_RESOURCE_LAYOUT.selfie,
+    AGENT_RESOURCE_LAYOUT.dockerSelfie
+  ].map((relativePath) => loadRuntimeSelfieDirectory(path.join(workspace, relativePath))))).flat();
+  const byId = new Map<string, RuntimeSelfieReference>();
+  for (const reference of references) {
+    if (!byId.has(reference.id)) byId.set(reference.id, reference);
+  }
+  return [...byId.values()];
+}
+
+async function loadRuntimeSelfieDirectory(selfieDir: string): Promise<RuntimeSelfieReference[]> {
   let selfieDirectoryStats;
   try {
     selfieDirectoryStats = await fsp.lstat(selfieDir);

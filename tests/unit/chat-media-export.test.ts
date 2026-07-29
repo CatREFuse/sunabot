@@ -8,7 +8,8 @@ import { CacheStore } from "../../services/media/attachments/cache.js";
 import { ChatMediaExportService } from "../../services/media/chatMediaExport.js";
 import {
   readExportChatMediaInput,
-  readImportChatEmojiInput
+  readImportChatEmojiInput,
+  readImportChatSelfieInput
 } from "../../services/tools/chatMediaTool.js";
 import { testTempRoot } from "./test-temp-root.js";
 
@@ -97,6 +98,33 @@ describe("chat media export", () => {
     });
     await expect(fs.readFile(path.join(agentWorkspace, "workbench", result.path)))
       .resolves.toEqual(content);
+  });
+
+  it("exports group media into Docker Workbench", async () => {
+    const root = await fixtureRoot();
+    const agentWorkspace = path.join(root, "agent");
+    const cache = await cacheFixture(root);
+    const service = new ChatMediaExportService({
+      agentWorkspace,
+      cache,
+      sources: new Map([["message:202:image:0", {
+        kind: "image" as const,
+        asset: {
+          schemaVersion: 1 as const,
+          kind: "image" as const,
+          source: "inline_data" as const,
+          url: pngDataUrl("image/png")
+        }
+      }]]),
+      publisher: chatMediaPublisher,
+      backend: "docker"
+    });
+
+    const result = await service.export({ handle: "message:202:image:0" });
+
+    await expect(fs.readFile(path.join(agentWorkspace, "docker-workbench", result.path)))
+      .resolves.toEqual(pngBytes);
+    await expect(fs.access(path.join(agentWorkspace, "workbench", result.path))).rejects.toBeTruthy();
   });
 
   it("rejects unknown handles before resolving any source", async () => {
@@ -202,6 +230,14 @@ describe("chat media export", () => {
       { handle: "message:1:image:0", key: "ok", url: "https://example.test" }
     ]) {
       expect(() => readImportChatEmojiInput(input)).toThrow();
+    }
+    for (const input of [
+      { handle: "message:1:file:0", note: "正面" },
+      { handle: "message:1:image:0", note: "" },
+      { handle: "message:1:image:0", note: "含\n换行" },
+      { handle: "message:1:image:0", note: "正面", path: "outside.png" }
+    ]) {
+      expect(() => readImportChatSelfieInput(input)).toThrow();
     }
   });
 });

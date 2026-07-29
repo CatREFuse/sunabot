@@ -77,6 +77,7 @@ export const AGENT_TOOL_NAMES = [
   "write_file",
   "export_chat_media",
   "import_chat_emoji",
+  "import_chat_selfie",
   "send_file",
   "send_voice_message",
   "native_bash",

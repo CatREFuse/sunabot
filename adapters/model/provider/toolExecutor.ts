@@ -22,6 +22,7 @@ import {
   ADD_WORKMEMORY_TOOL_NAME,
   EXPORT_CHAT_MEDIA_TOOL_NAME,
   IMPORT_CHAT_EMOJI_TOOL_NAME,
+  IMPORT_CHAT_SELFIE_TOOL_NAME,
   READ_FILE_TOOL_NAME,
   WEBFETCH_TOOL_NAME,
   WRITE_FILE_TOOL_NAME,
@@ -82,7 +83,7 @@ import {
 import { runWebFetch } from "./webFetchExecutor.js";
 import { READ_AIR_TOOL_NAME, executeReadAirTool } from "./readAirExecutor.js";
 import { executeAddWorkMemoryTool } from "./addWorkMemoryExecutor.js";
-import { runExportChatMedia, runImportChatEmoji } from "./chatMediaExecutor.js";
+import { runExportChatMedia, runImportChatEmoji, runImportChatSelfie } from "./chatMediaExecutor.js";
 
 export { mcpToolLogSummary } from "./mcpToolLog.js";
 
@@ -98,6 +99,7 @@ const inlineExecutors: ReadonlyMap<string, InlineExecutor> = new Map([
   [WRITE_FILE_TOOL_NAME, runWriteFile],
   [EXPORT_CHAT_MEDIA_TOOL_NAME, runExportChatMedia],
   [IMPORT_CHAT_EMOJI_TOOL_NAME, runImportChatEmoji],
+  [IMPORT_CHAT_SELFIE_TOOL_NAME, runImportChatSelfie],
   [NATIVE_BASH_TOOL_NAME, runNativeBash],
   [DOCKER_BASH_TOOL_NAME, runDockerBash],
   [WEBSEARCH_TOOL_NAME, runWebSearch],

@@ -97,10 +97,9 @@ export function projectDreamRecallStats(input: {
       return item == null ? [] : [item];
     });
     const latestReview = latestStats(matches, "lastReviewedAt");
-    const hasLegacyAlias = aliases.some((id) => id !== recordId);
     return {
       recordId,
-      recallCount: Math.max(hasLegacyAlias ? 1 : 0, matches.reduce((sum, item) => sum + item.recallCount, 0)),
+      recallCount: matches.reduce((sum, item) => sum + item.recallCount, 0),
       distinctRecallDays: matches.reduce((maximum, item) => Math.max(maximum, item.distinctRecallDays), 0),
       lastRecalledAt: latestTimestamp(matches.map((item) => item.lastRecalledAt)),
       trackingStartedAt: earliestTimestamp(

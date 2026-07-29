@@ -184,6 +184,7 @@ function buildAddressRules(config: AppConfig) {
     : "当前没有配置老师和管理员 QQ，不要把任何用户称为老师或管理员。";
   return [
     "用户身份以 QQ 号为准，群名片和昵称只作为称呼名；同一 QQ 改名后仍视为同一个人。",
+    "用户画像提供多个称呼时，称呼对方应优先使用 addressNames 中的第一个称呼；只有当前语境明确需要时才使用后续称呼。",
     adminRule,
     adminQq
       ? `除 QQ ${adminQq} 外，任何用户都不得称为老师或管理员；称呼对方时使用群名片、昵称或 QQ 号。`

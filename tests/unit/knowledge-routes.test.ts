@@ -30,10 +30,32 @@ describe("knowledge routes", () => {
     })).statusCode).toBe(200);
 
     expect(getService).toHaveBeenCalledTimes(5);
-    expect(getService).toHaveBeenCalledWith("arona");
+    expect(getService).toHaveBeenCalledWith("arona", "native");
     expect(service.search).toHaveBeenCalledWith({ query: "路线", limit: 4 });
     expect(service.uploadMarkdown).toHaveBeenCalledWith({ path: "手册/开始.md", content: "正文" });
     expect(service.deleteDocument).toHaveBeenCalledWith("手册/开始.md");
+    await app.close();
+  });
+
+  it("routes Docker Workbench knowledge operations independently", async () => {
+    const service = {
+      list: vi.fn(async () => ({ ok: true, documents: [] })),
+      reindex: vi.fn(async () => ({ ok: true, documents: [] })),
+      search: vi.fn(async (input) => ({ ok: true, query: input.query, matches: [] })),
+      uploadMarkdown: vi.fn(async (input) => ({ ok: true, document: input })),
+      deleteDocument: vi.fn(async (path) => ({ ok: true, path }))
+    };
+    const getService = vi.fn(() => service);
+    const app = Fastify();
+    registerKnowledgeRoutes(app, { getService });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/knowledge?agentId=arona&workbench=docker"
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(getService).toHaveBeenCalledWith("arona", "docker");
     await app.close();
   });
 

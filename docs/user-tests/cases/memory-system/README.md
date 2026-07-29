@@ -1,10 +1,10 @@
 # Memory-system fixture suite
 
-This suite verifies the isolated Agent memory path in seven ordered cases. Cases can use synthetic fixtures or a reviewed V2 sanitized sample derived read-only from a running test account. Sampling a real workspace and transmitting any case data to an external Provider remain separate authorization boundaries.
+This suite verifies the isolated Agent memory path in nine cases. Cases can use synthetic fixtures or a reviewed V2 sanitized sample derived read-only from a running test account. Sampling a real workspace and transmitting any case data to an external Provider remain separate authorization boundaries.
 
 ## Execution order
 
-Run cases 01 and 02 in fresh isolated workspaces to keep private and group evidence independent. Run cases 03 through 07 in one fresh isolated workspace in numeric order. Case 03 establishes explicit working memory, case 04 proves its retrieval, case 05 records scoped AIR, case 06 consolidates the same-day record and its imagined Dream material, and case 07 checks the later reply remains grounded in factual memory.
+Run cases 01 and 02 in fresh isolated workspaces to keep private and group evidence independent. Run cases 03 through 07 in one fresh isolated workspace in numeric order. Case 03 establishes explicit working memory, case 04 proves its retrieval, case 05 records scoped AIR, case 06 consolidates the same-day record and its imagined Dream material, and case 07 checks the later reply remains grounded in factual memory. Run cases 08 and 09 independently in fresh isolated workspaces: case 08 verifies recent-comprehensive and older-compact retention, while case 09 verifies field-agreement filtering and evidence-bound persona impressions.
 
 Each live run requires a separate authorization to send its case prompt, rendered persona and system prompts, relevant memory/context, and tool schemas to the selected external Provider. Credential copying is separately gated. No case permits a real QQ or NapCat send.
 

@@ -32,18 +32,20 @@ Choose the authoritative resource root from the backend:
 ```bash
 case "$(pwd -P)" in
   /workbench)
-    resource_root="${SUNABOT_NATIVE_WORKBENCH:-/workbench/native-workbench}"
-    resource_mode=read-only
+    resource_root="$(pwd -P)"
+    other_resource_root="${SUNABOT_NATIVE_WORKBENCH:-/workbench/native-workbench}"
+    resource_mode=writable
     ;;
   *)
     resource_root="$(pwd -P)"
+    other_resource_root="${SUNABOT_DOCKER_WORKBENCH:?Docker Workbench path is unavailable}"
     resource_mode=writable
     ;;
 esac
 test -f "$resource_root/index.md"
 ```
 
-Do not infer a host path from the Agent name. In Native Bash, `$SUNABOT_DOCKER_WORKBENCH` may be used for same-Agent Docker task files. In Docker, the Native projection remains read-only even if a command proposes another path.
+Do not infer a host path from the Agent name. Both roots belong to the same Agent. In Docker, `other_resource_root` remains read-only even if a command proposes another path.
 
 ## 2. Resolve a safe relative target
 
@@ -193,7 +195,7 @@ The filename extension may be `.png` or `.gif`; the basename digest must match t
 
 Use Bash directly when the source is already a validated local PNG/GIF and the active root is writable. Build the complete candidate JSONL, validate every line and referenced asset, compare the old catalog digest, then atomically replace `emojis.jsonl` and read it back.
 
-Use `import_chat_emoji` when the source is a current chat media handle, requires JPEG/WebP normalization, or the conversation has only Docker Bash. The tool writes the same Native catalog; its use complements the Bash workflow and does not create a second resource tree.
+Use `import_chat_emoji` when the source is a current chat media handle, requires JPEG/WebP normalization, or the conversation has only Docker Bash. The tool writes Native in private chat and Docker in group chat.
 
 ## 9. Maintain Skill source packages
 

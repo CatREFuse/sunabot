@@ -5,8 +5,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { ServiceError } from "../../packages/contracts/errors/serviceError.js";
 import {
   KnowledgeBaseService,
-  chunkKnowledgeDocument
+  chunkKnowledgeDocument,
+  searchKnowledge
 } from "../../services/knowledge/public.js";
+import { createAdminTestConfig } from "./admin-fixtures.js";
 
 const temporaryRoots: string[] = [];
 const serviceRoots = new WeakMap<KnowledgeBaseService, string>();
@@ -121,6 +123,44 @@ describe("KnowledgeBaseService", () => {
       statusCode: 500
     });
     await expect(fs.readFile(outside, "utf8")).resolves.toBe("unchanged");
+  });
+});
+
+describe("dual Workbench knowledge search", () => {
+  it("returns matches from Native and Docker Workbench with distinct paths", async () => {
+    const root = await createRoot();
+    const previousWorkspace = process.env.SUNABOT_WORKSPACE;
+    process.env.SUNABOT_WORKSPACE = root;
+    try {
+      const config = createAdminTestConfig(root);
+      config.persona.defaultAgentId = "dual-knowledge";
+      config.persona.agentWorkspace = path.join(root, "business/agents/dual-knowledge");
+      await Promise.all([
+        fs.mkdir(path.join(config.persona.agentWorkspace, "workbench/knowledge"), { recursive: true }),
+        fs.mkdir(path.join(config.persona.agentWorkspace, "docker-workbench/knowledge"), { recursive: true })
+      ]);
+      await Promise.all([
+        fs.writeFile(
+          path.join(config.persona.agentWorkspace, "workbench/knowledge/native.md"),
+          "双工作区检索包含 Native 文档。"
+        ),
+        fs.writeFile(
+          path.join(config.persona.agentWorkspace, "docker-workbench/knowledge/docker.md"),
+          "双工作区检索包含 Docker 文档。"
+        )
+      ]);
+
+      const result = await searchKnowledge(config, { query: "双工作区检索文档", limit: 10 });
+
+      expect(result.ok).toBe(true);
+      expect(result.matches.map((match) => match.path)).toEqual(expect.arrayContaining([
+        "native.md",
+        "docker-workbench/docker.md"
+      ]));
+    } finally {
+      if (previousWorkspace == null) delete process.env.SUNABOT_WORKSPACE;
+      else process.env.SUNABOT_WORKSPACE = previousWorkspace;
+    }
   });
 });
 

@@ -6,7 +6,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { applicationDataStore } from "../../adapters/sqlite/applicationDataStore.js";
 import {
   appendMemoryFacts,
-  readMemorySourceEntries
+  readMemorySourceEntries,
+  readWorkingMemoryDocument,
+  replaceWorkingMemoryDocument
 } from "../../services/memory/memoryService.js";
 import { SunaRuntime } from "../../src/runtime.js";
 import type { AppConfig, ConversationRecord } from "../../src/types.js";
@@ -79,6 +81,70 @@ describe("working memory semantic merge", () => {
       })
     ]);
     expect((await readMemorySourceEntries(config, "working"))[0]?.text).not.toContain("我记得");
+    expect(complete).toHaveBeenCalledOnce();
+  });
+
+  it("keeps Dream entries outside ordinary working-memory consolidation", async () => {
+    const [factual] = await appendMemoryFacts(config, "working", [{
+      fact: "普通事实等待后续确认。",
+      occurredAt: "2026-07-01T00:00:00.000Z"
+    }]);
+    const beforeDream = await readWorkingMemoryDocument(config);
+    const dream = {
+      ...beforeDream.items[0]!,
+      id: "working_dream_2026_07_10",
+      content: "梦见一座漂浮的车站。",
+      sourceKind: "dream" as const,
+      memoryKind: "dream",
+      realityStatus: "imagined",
+      factuality: "imagined",
+      eventType: "dream",
+      eventKey: "dream:2026-07-10",
+      dreamRunId: "dream-run-2026-07-10",
+      dreamDate: "2026-07-10",
+      dreamReviewedAt: "2026-07-10T04:00:00.000+08:00",
+      occurredAt: "2026-07-10T04:00:00.000+08:00",
+      conversationId: "dream:test-agent",
+      conversationScope: "dream",
+      conversationTitle: "Dream 2026-07-10"
+    };
+    const seeded = await replaceWorkingMemoryDocument(
+      config,
+      beforeDream.revision,
+      [...beforeDream.items, dream]
+    );
+    expect(seeded.status).toBe("updated");
+
+    const complete = vi.fn(async (_systemPrompt: string, messages: Array<{ content: string }>) => {
+      const payload = parsePromptPayload(messages[0]!.content) as {
+        previousWorkingMemories: Array<{ id: string; fact: string }>;
+      };
+      expect(payload.previousWorkingMemories).toEqual([
+        expect.objectContaining({ id: factual!.id, fact: "普通事实等待后续确认。" })
+      ]);
+      return JSON.stringify({
+        facts: [{
+          id: factual!.id,
+          fact: "普通事实仍在等待后续确认。",
+          occurredAt: "2026-07-01T00:00:00.000Z"
+        }],
+        allPreviousMemoriesInvalidated: false
+      });
+    });
+    const runtime = runtimeWithProvider(config, complete);
+
+    const result = await mergeConversation(runtime, "还没有新的确认结果");
+    const after = await readWorkingMemoryDocument(config);
+
+    expect(result).toMatchObject({ ok: true, beforeCount: 2, afterCount: 2 });
+    expect(after.items).toEqual([
+      expect.objectContaining({
+        id: factual!.id,
+        content: "普通事实仍在等待后续确认。"
+      }),
+      dream
+    ]);
+    expect(after.content.match(/【梦境｜做梦时间：/gu)).toHaveLength(1);
     expect(complete).toHaveBeenCalledOnce();
   });
 

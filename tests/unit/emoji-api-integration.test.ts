@@ -25,6 +25,7 @@ const AGENT_IDS = [
   "limit-agent",
   "link-agent",
   "content-agent",
+  "docker-agent",
   "poison-agent",
   "external-agent",
   "zero-reference-agent",
@@ -225,6 +226,40 @@ describe("emoji production repository and Fastify routes", () => {
     expect(agentBContent.rawPayload).not.toEqual(planaContent.rawPayload);
     expect((await list("plana")).emojis.map((item: { key: string }) => item.key)).toEqual(["开心"]);
     expect((await list("agent-b")).emojis.map((item: { key: string }) => item.key)).toEqual(["开心"]);
+  });
+
+  it("addresses Native and Docker Workbench emoji catalogs independently", async () => {
+    const agentId = "docker-agent";
+    const dockerUpload = await app.inject({
+      method: "POST",
+      url: `/api/emojis?agentId=${agentId}&workbench=docker`,
+      headers: mutationHeaders(),
+      payload: uploadPayload("开心", "docker.png", greenPng)
+    });
+    expect(dockerUpload.statusCode, dockerUpload.body).toBe(200);
+    const dockerRecord = findEmoji(dockerUpload.json(), "开心");
+    expect(dockerRecord.originalUrl).toContain("&workbench=docker");
+
+    const [nativeList, dockerList] = await Promise.all([
+      app.inject({
+        method: "GET",
+        url: `/api/emojis?agentId=${agentId}`,
+        headers: readHeaders()
+      }),
+      app.inject({
+        method: "GET",
+        url: `/api/emojis?agentId=${agentId}&workbench=docker`,
+        headers: readHeaders()
+      })
+    ]);
+    expect(nativeList.json().emojis).toEqual([]);
+    expect(dockerList.json().emojis).toHaveLength(1);
+    await expect(fs.access(path.join(
+      requireConfig(agentId).persona.agentWorkspace,
+      "docker-workbench",
+      "emoji",
+      dockerRecord.fileName
+    ))).resolves.toBeUndefined();
   });
 
   it("keeps uploaded GIF animation through storage, content delivery, and configured resizing", async () => {

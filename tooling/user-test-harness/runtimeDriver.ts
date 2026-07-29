@@ -577,12 +577,14 @@ async function runDreamCase(
   const repository = applicationDataStore(built.runtime.config);
   const before = await readWorkingMemoryDocument(built.runtime.config);
   const memoryBefore = branchMemorySnapshot(repository);
+  const personaBefore = await dreamPersonaFileSnapshot(built.runtime.config);
   const run = await runWithAgentRuntimeContext(
     built.runtime.config,
     () => built.runtime.dreams.force(now)
   );
   const after = await readWorkingMemoryDocument(built.runtime.config);
   const memoryAfter = branchMemorySnapshot(repository);
+  const personaAfter = await dreamPersonaFileSnapshot(built.runtime.config);
   return {
     seeded: {
       ...seeded,
@@ -599,6 +601,10 @@ async function runDreamCase(
     memory: {
       before: memoryBefore,
       after: memoryAfter
+    },
+    personaFiles: {
+      before: personaBefore,
+      after: personaAfter
     },
     operationLog: repository.readMemoryOperationLogPage({ page: 1, pageSize: 100 })
   };
@@ -659,13 +665,8 @@ async function seedDreamFixture(
         expectedRevision: 0,
         now: new Date(input.now)
       });
-  const persona = await loadPersona(config, {
-    "SOUL.md": input.persona.soul,
-    "PREFERENCE.md": input.persona.preference,
-    "USER.md": input.persona.user,
-    "RELATION.md": input.persona.relation,
-    "AIR.md": input.persona.air
-  });
+  await seedDreamPersonaFiles(config, input.persona);
+  const persona = await loadPersona(config);
   built.runtime.persona = { ...persona, name: input.persona.name };
   return {
     workingMemoryCount: seededWorkingMemory.count,
@@ -750,6 +751,59 @@ function branchMemorySnapshot(
   };
 }
 
+async function seedDreamPersonaFiles(
+  config: AppConfig,
+  persona: DreamUserTestInput["persona"]
+) {
+  const workspace = resolveProjectPath(config.persona.agentWorkspace);
+  if (!workspace) throw new Error("USER_TEST_DREAM_PERSONA_WORKSPACE_INVALID");
+  await fs.mkdir(workspace, { recursive: true, mode: 0o700 });
+  await Promise.all([
+    ["SOUL.md", persona.soul],
+    ["PREFERENCE.md", persona.preference],
+    ["USER.md", persona.user],
+    ["RELATION.md", persona.relation]
+  ].map(([fileName, content]) => fs.writeFile(
+    path.join(workspace, fileName!),
+    `${content!.trim()}\n`,
+    { encoding: "utf8", mode: 0o600 }
+  )));
+  if (persona.air.trim()) {
+    const current = await readAirKnowledge(config);
+    const replaced = await replaceAirKnowledge(config, current.revision, persona.air);
+    if (replaced.status === "conflict") throw new Error("USER_TEST_DREAM_AIR_CONFLICT");
+  }
+}
+
+async function dreamPersonaFileSnapshot(config: AppConfig) {
+  const workspace = resolveProjectPath(config.persona.agentWorkspace);
+  if (!workspace) throw new Error("USER_TEST_DREAM_PERSONA_WORKSPACE_INVALID");
+  const read = async (fileName: string) => {
+    const content = await fs.readFile(path.join(workspace, fileName), "utf8")
+      .catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return "";
+        throw error;
+      });
+    return {
+      content,
+      revision: crypto.createHash("sha256").update(content).digest("hex")
+    };
+  };
+  const [preference, relation, air] = await Promise.all([
+    read("PREFERENCE.md"),
+    read("RELATION.md"),
+    readAirKnowledge(config)
+  ]);
+  return {
+    preference,
+    relation,
+    air: {
+      content: air.content,
+      revision: air.revision
+    }
+  };
+}
+
 function assertFreshDreamFixtureState(
   repository: ReturnType<typeof applicationDataStore>
 ) {
@@ -791,7 +845,16 @@ function assertionTextValues(
   }
   const run = recordValue(branch?.run);
   const workingMemory = recordValue(branch?.workingMemory);
-  return [run?.dreamText, run?.output, workingMemory?.afterContent];
+  const personaFiles = recordValue(branch?.personaFiles);
+  const afterPersona = recordValue(personaFiles?.after);
+  return [
+    run?.dreamText,
+    run?.output,
+    workingMemory?.afterContent,
+    recordValue(afterPersona?.air)?.content,
+    recordValue(afterPersona?.preference)?.content,
+    recordValue(afterPersona?.relation)?.content
+  ];
 }
 
 function recordValue(value: unknown) {

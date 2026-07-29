@@ -134,11 +134,22 @@ async function runMemoryVisualScenario(page: Page, testInfo: TestInfo) {
     const sourceTabs = page.getByRole("tablist", { name: "记忆类别" });
     await expect(sourceTabs.getByRole("tab")).toHaveCount(5);
     await expect(sourceTabs.getByRole("tab", { name: "工作记忆", exact: true })).toHaveAttribute("aria-selected", "true");
+    if (viewport.width === 390) {
+      const tabFit = await sourceTabs.evaluate((element) => {
+        const container = element.getBoundingClientRect();
+        const tabs = [...element.querySelectorAll<HTMLElement>('[role="tab"]')];
+        return tabs.every((tab) => {
+          const bounds = tab.getBoundingClientRect();
+          return bounds.left >= container.left - 1 && bounds.right <= container.right + 1;
+        });
+      });
+      expect(tabFit).toBe(true);
+    }
     const workingDocument = page.getByRole("tabpanel", { name: "工作记忆" });
     await expect(workingDocument).toContainText("WebUI 使用 Vue 3、TypeScript 与 Tailwind。");
     await expect(page.getByLabel("排序字段")).toHaveCount(0);
     await expect(page.getByRole("navigation", { name: "记忆分页" })).toHaveCount(0);
-    await workingDocument.scrollIntoViewIfNeeded();
+    await workingDocument.evaluate((element) => element.scrollIntoView({ block: "start" }));
     await capture(page, viewport.name, theme, "memory-document", { fullPage: false });
     await page.getByRole("button", { name: "操作日志", exact: true }).click();
     const operationLogDialog = page.getByRole("dialog", { name: "操作日志" });
@@ -151,16 +162,19 @@ async function runMemoryVisualScenario(page: Page, testInfo: TestInfo) {
     await expect(page.getByRole("button", { name: "当前新到旧，切换为旧到新" })).toBeVisible();
     const memoryRows = page.getByRole("button", { name: "查看长期记忆详情" });
     await expect(memoryRows).toHaveCount(20);
+    if (viewport.width < 1_280) {
+      await expect(memoryRows.first().locator("..")).not.toHaveAttribute("aria-current");
+    }
     await capture(page, viewport.name, theme, "memory-list", { fullPage: false });
     const pagination = page.getByRole("navigation", { name: "记忆分页" });
     await expect(pagination).toContainText("21 条 · 1 / 2");
-    await pagination.scrollIntoViewIfNeeded();
+    await pagination.evaluate((element) => element.scrollIntoView({ block: "start" }));
     await capture(page, viewport.name, theme, "memory-pagination", { fullPage: false });
 
     await sourceTabs.getByRole("tab", { name: "场域知识", exact: true }).click();
     const air = page.getByRole("tabpanel", { name: "场域知识" });
     await expect(air.getByLabel("场域知识正文")).toHaveValue(/按会话范围理解/);
-    await air.scrollIntoViewIfNeeded();
+    await air.evaluate((element) => element.scrollIntoView({ block: "start" }));
     await capture(page, viewport.name, theme, "memory-air", { fullPage: false });
 
     await sourceTabs.getByRole("tab", { name: "梦境", exact: true }).click();
@@ -169,7 +183,7 @@ async function runMemoryVisualScenario(page: Page, testInfo: TestInfo) {
     await expect(dream.getByText(/我沿着潮湿的石阶走进旧车站/)).toBeVisible();
     await expect(dream.getByText("合并 2 · 归档 1 · 转存 1", { exact: true })).toBeVisible();
     await expect(dream.getByText("已微调", { exact: true })).toBeVisible();
-    await dream.scrollIntoViewIfNeeded();
+    await dream.evaluate((element) => element.scrollIntoView({ block: "start" }));
     await capture(page, viewport.name, theme, "memory-dream", { fullPage: false });
 
     await sourceTabs.getByRole("tab", { name: "长期记忆", exact: true }).click();
@@ -184,7 +198,7 @@ async function runMemoryVisualScenario(page: Page, testInfo: TestInfo) {
       scrollWidth: element.scrollWidth
     }));
     expect(inspectorWidth.scrollWidth).toBeLessThanOrEqual(inspectorWidth.clientWidth);
-    await recall.scrollIntoViewIfNeeded();
+    await recall.evaluate((element) => element.scrollIntoView({ block: "center" }));
     await capture(page, viewport.name, theme, "memory-recall-stats", { fullPage: false });
   }
 }
@@ -576,11 +590,11 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     await page.goto("/agent-settings/memory");
     await expect(page.getByRole("heading", { name: "记忆处理" })).toBeVisible();
     await capture(page, viewport.name, theme, "settings-memory");
-    const dreamSampling = page.getByRole("heading", { name: "Dream 抽样" });
-    await dreamSampling.scrollIntoViewIfNeeded();
-    await expect(page.getByLabel("近期窗口（小时）")).toHaveValue("48");
-    await expect(page.getByLabel("近期记忆数")).toHaveValue("12");
-    await expect(page.getByLabel("更早记忆数")).toHaveValue("12");
+    const dreamSampling = page.getByRole("heading", { name: "Dream 记忆整理" });
+    await dreamSampling.evaluate((element) => element.scrollIntoView({ block: "start" }));
+    await expect(page.getByLabel("近期窗口（小时）")).toHaveValue("24");
+    await expect(page.getByLabel("24 小时记忆数")).toHaveValue("24");
+    await expect(page.getByLabel("久远记忆数")).toHaveValue("12");
     await capture(page, viewport.name, theme, "settings-memory-dream");
 
     await page.goto("/agent-settings/tools");
@@ -776,8 +790,9 @@ test("工具目录四视口矩阵", async ({ page }, testInfo) => {
     await page.goto("/agent-settings/tools");
     await expect(page.getByRole("tab", { name: "工具目录", exact: true })).toHaveAttribute("aria-selected", "true");
     await expect(page.getByLabel("搜索工具")).toBeVisible();
-    await expect(page.getByLabel(/^启用 /)).toHaveCount(24);
+    await expect(page.getByLabel(/^启用 /)).toHaveCount(25);
     await expect(page.getByText("read_air", { exact: true })).toBeVisible();
+    await expect(page.getByText("import_chat_selfie", { exact: true })).toBeVisible();
     await expect(page.getByText("cron", { exact: true })).toBeVisible();
     await capture(page, viewport.name, theme, "settings-tools-catalog");
 

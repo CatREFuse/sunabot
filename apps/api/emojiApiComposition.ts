@@ -5,6 +5,7 @@ import type { ConfigService } from "../../src/admin/configService.js";
 import { EmojiLibraryRepository } from "../../src/admin/emojiLibrary.js";
 import type { SunaRuntime } from "../../src/runtime.js";
 import type { AppConfig, BotConfig, EmojiSendSize } from "../../packages/contracts/admin/public.js";
+import type { AgentWorkbenchBackend } from "../../packages/platform/agentResourceLayout.js";
 import { registerEmojiRoutes } from "./plugins/emojiRoutes.js";
 
 export function registerAgentEmojiApi(
@@ -25,15 +26,17 @@ export function registerAgentEmojiApi(
       throw new AdminApiError(409, "EMOJI_AGENT_UNAVAILABLE", "Agent 尚未就绪。");
     }
   };
-  const repositoryFor = (agentId: string) => {
-    const existing = repositories.get(agentId);
+  const repositoryFor = (agentId: string, backend: AgentWorkbenchBackend = "native") => {
+    const key = `${agentId}:${backend}`;
+    const existing = repositories.get(key);
     if (existing) return existing;
     const repository = new EmojiLibraryRepository({
       getConfig: () => agentId === options.getConfig().persona.defaultAgentId
         ? options.getConfig()
-        : runtimeFor(agentId).config
+        : runtimeFor(agentId).config,
+      backend
     });
-    repositories.set(agentId, repository);
+    repositories.set(key, repository);
     return repository;
   };
   const configEnvelopeFor = (agentId: string) => (

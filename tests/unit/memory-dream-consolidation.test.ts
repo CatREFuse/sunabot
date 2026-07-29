@@ -66,7 +66,12 @@ describe("Dream memory consolidation", () => {
       expect.objectContaining({
         recordId: "long_low",
         reason: "低价值且没有未来用途",
-        recallSnapshot: { recallCount: 0, trackingStartedAt: "2026-01-01T00:00:00.000Z" }
+        recallSnapshot: expect.objectContaining({
+          recallCount: 0,
+          distinctRecallDays: 0,
+          lastRecalledAt: null,
+          trackingStartedAt: "2026-01-01T00:00:00.000Z"
+        })
       })
     ]);
     expect(plan.longTerm.find((record) => record.id === "long_a")).toMatchObject({
@@ -321,7 +326,7 @@ describe("Dream memory consolidation", () => {
       seed: "fixed-seed",
       now: NOW,
       output,
-      workingRecords: [memory("work_verbose", "我今天继续整理发布清单，重复记录了很多过程。", "2026-07-20T01:00:00.000Z", {
+      workingRecords: [memory("work_verbose", "我今天继续整理发布清单，重复记录了很多过程。", "2026-07-18T01:00:00.000Z", {
         eventKey: "event:work"
       })],
       longTermRecords: [memory("long_verbose", "我经历发布延期，讨论了许多重复过程，最后确认周五继续验收。", "2026-06-01T00:00:00.000Z", {

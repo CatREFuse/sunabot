@@ -37,10 +37,16 @@ describe("AIR.md repository", () => {
 
   it("rejects malformed replacement content", () => {
     expect(() => normalizeAirKnowledge("普通文本")).toThrow("# 场域知识");
-    expect(() => normalizeAirKnowledge("# 场域知识\n\n## 使用边界\n内容")).toThrow("当前中文互联网公共语境");
+    expect(() => normalizeAirKnowledge("# 场域知识\n\n## 使用边界\n内容")).toThrow("场域约定");
+    expect(() => normalizeAirKnowledge(
+      "# 场域知识\n\n## 使用边界\n内容\n\n## 公共百科\n内容\n\n## 场域约定\n内容"
+    )).toThrow("unsupported or misplaced heading");
+    expect(() => normalizeAirKnowledge(
+      "# 场域知识\n\n## 场域约定\n内容\n\n## 使用边界\n内容"
+    )).toThrow("unsupported or misplaced heading");
   });
 });
 
 function document(value: string) {
-  return `# 场域知识\n\n## 使用边界\n${value}\n\n## 当前中文互联网公共语境\n${value}\n\n## 会话场域\n${value}\n`;
+  return `# 场域知识\n\n## 使用边界\n${value}\n\n## 场域约定\n${value}\n`;
 }

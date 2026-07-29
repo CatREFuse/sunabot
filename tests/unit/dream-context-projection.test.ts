@@ -3,7 +3,8 @@ import {
   DREAM_CONTEXT_PROJECTION_LIMITS,
   dreamContextPayloadByteLength,
   projectDreamContext,
-  projectDreamContextPayload
+  projectDreamContextPayload,
+  restoreDreamFieldKnowledge
 } from "../../src/runtime/dreamContextProjection.js";
 
 const SEED = "a".repeat(64);
@@ -56,15 +57,56 @@ describe("Dream context projection", () => {
     });
     expect(String(workingMemory.fact)).toContain("人物-");
     expect(payload.sourceMemoryIds).toEqual(["working-1", "long-1"]);
+    expect(payload.fieldKnowledgeEvidenceIds).toEqual(["working-1"]);
+    expect(payload.fieldKnowledgeWritable).toBe(false);
+    expect(payload.recentWindowHours).toBe(24);
     expect(objectArray(payload.activeTasks)[0]).toMatchObject({ enabled: true, status: "running" });
     expect(objectValue(payload.persona)).toHaveProperty("preference");
     expect(payload.scheduledFor).toBe("2026-07-20T04:00:00.000+08:00");
     expect(Object.keys(payload)).toEqual([
       "schemaVersion", "seed", "localDate", "scheduledFor", "timeZone", "memoryWindow",
       "workingMemories", "longTermMemories", "recallStats", "personaEvidenceIds",
+      "fieldKnowledgeEvidenceIds", "fieldKnowledgeWritable", "recentWindowHours",
       "sourceMemoryIds", "userProfiles", "observedConversations", "activeTasks",
       "plannedDailySchedule", "persona"
     ]);
+  });
+
+  it("allows field-knowledge replacement only when the projected AIR is lossless", () => {
+    const raw = sensitivePayload();
+    raw.persona.air = [
+      "# 场域知识",
+      "",
+      "## 使用边界",
+      "",
+      "- 仅适用于发布验收。",
+      "",
+      "## 场域约定",
+      "",
+      "- 发布前需要双人复核。"
+    ].join("\r\n");
+
+    const payload = projectDreamContextPayload(raw);
+
+    expect(payload.fieldKnowledgeWritable).toBe(true);
+    expect(objectValue(payload.persona).air).toBe(raw.persona.air.replaceAll("\r\n", "\n"));
+  });
+
+  it("keeps AIR identity aliases reversible without exposing them to the Provider payload", () => {
+    const raw = sensitivePayload();
+    raw.persona.air = "# 场域知识\n\n## 使用边界\n\n- 只在协作群生效。\n\n## 场域约定\n\n- 海老师负责发布前复核。";
+
+    const projection = projectDreamContext(raw);
+    const projectedAir = String(objectValue(projection.payload.persona).air);
+
+    expect(projection.payload.fieldKnowledgeWritable).toBe(true);
+    expect(projectedAir).not.toContain("海老师");
+    expect(projectedAir).toMatch(/人物-[a-f0-9]{24}/u);
+    expect(projection.fieldKnowledgeBindings).toEqual([
+      expect.objectContaining({ value: "海老师" })
+    ]);
+    expect(restoreDreamFieldKnowledge(projectedAir, projection.fieldKnowledgeBindings))
+      .toBe(raw.persona.air);
   });
 
   it("redacts unregistered identifiers, credentials, signed URLs, and absolute paths without removing schedule values", () => {
@@ -143,6 +185,7 @@ describe("Dream context projection", () => {
     expect(stringArray(payload.sourceMemoryIds)).toEqual(retainedIds);
     expect(stringArray(payload.personaEvidenceIds).every((id) => retainedIds.includes(id))).toBe(true);
     expect(objectArray(payload.recallStats).every((item) => retainedIds.includes(String(item.recordId)))).toBe(true);
+    expect(payload.fieldKnowledgeWritable).toBe(false);
   });
 
   it("fails closed on an invalid seed or a secret-shaped memory id", () => {
@@ -222,6 +265,8 @@ function sensitivePayload() {
       secret: "extension-secret"
     }],
     personaEvidenceIds: ["working-1", "long-1", "unknown-id"],
+    fieldKnowledgeEvidenceIds: ["working-1", "unknown-id"],
+    recentWindowHours: 24,
     sourceMemoryIds: ["working-1", "long-1", "unknown-id"],
     userProfiles: [{
       id: "profile_12345678",

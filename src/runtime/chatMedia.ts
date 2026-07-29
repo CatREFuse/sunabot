@@ -8,12 +8,19 @@ import { isAdminSender, isReplySenderAllowed } from "../../services/messaging/re
 import type {
   ChatMediaToolPort,
   ExportChatMediaInput,
-  ImportChatEmojiInput
+  ImportChatEmojiInput,
+  ImportChatSelfieInput
 } from "../../services/tools/chatMediaTool.js";
 import { generateImgMediaHandle } from "../../services/tools/generateImgTool.js";
 import { EmojiLibraryRepository, MAX_EMOJI_UPLOAD_BYTES } from "../admin/emojiLibrary.js";
+import {
+  MAX_SELFIE_REFERENCE_BYTES,
+  SelfieReferenceRepository
+} from "../admin/selfieReferences.js";
 import { resolveProjectPath } from "../config.js";
 import type { AppConfig, ParsedIncomingMessage } from "../types.js";
+import { fileTypeFromBuffer } from "file-type";
+import crypto from "node:crypto";
 
 export function providerChatMediaForIncoming(
   config: AppConfig,
@@ -27,12 +34,14 @@ export function providerChatMediaForIncoming(
   if (!sources.size) return undefined;
   const agentWorkspace = resolveProjectPath(config.persona.agentWorkspace);
   if (!agentWorkspace) return undefined;
+  const backend = incoming.scope === "private" ? "native" as const : "docker" as const;
   const exporter = new ChatMediaExportService({
     agentWorkspace,
     cache,
     sources,
     publisher: chatMediaPublisher,
-    isCurrent
+    isCurrent,
+    backend
   });
   const emojiImportAllowed = isAdminSender(incoming.userId, config.bot.adminQq.trim());
   return Object.freeze({
@@ -41,7 +50,7 @@ export function providerChatMediaForIncoming(
       ? {
           importEmoji: async (input: ImportChatEmojiInput) => {
             if (!isCurrent()) throw new Error("CHAT_MEDIA_TURN_EXPIRED");
-            const repository = new EmojiLibraryRepository({ getConfig: () => config });
+            const repository = new EmojiLibraryRepository({ getConfig: () => config, backend });
             const before = await repository.list();
             const bytes = await exporter.readImage(input.handle, MAX_EMOJI_UPLOAD_BYTES);
             if (!isCurrent()) throw new Error("CHAT_MEDIA_TURN_EXPIRED");
@@ -61,10 +70,45 @@ export function providerChatMediaForIncoming(
               height: imported.height,
               deduplicated: previous?.fileName === imported.fileName
             };
+          },
+          importSelfie: async (input: ImportChatSelfieInput) => {
+            if (!isCurrent()) throw new Error("CHAT_MEDIA_TURN_EXPIRED");
+            const bytes = await exporter.readImage(input.handle, MAX_SELFIE_REFERENCE_BYTES);
+            const detected = await fileTypeFromBuffer(bytes);
+            const extension = selfieExtension(detected?.mime);
+            if (!extension) throw new Error("CHAT_SELFIE_IMPORT_TYPE_INVALID");
+            if (!isCurrent()) throw new Error("CHAT_MEDIA_TURN_EXPIRED");
+            const repository = new SelfieReferenceRepository({ getConfig: () => config, backend });
+            const before = await repository.list();
+            const id = crypto.createHash("sha256").update(bytes).digest("hex");
+            const after = await repository.create({
+              fileName: `chat-selfie.${extension}`,
+              dataBase64: bytes.toString("base64"),
+              note: input.note
+            });
+            const imported = after.images.find((image) => image.id === id);
+            if (!imported) throw new Error("CHAT_SELFIE_IMPORT_FAILED");
+            return {
+              ok: true as const,
+              id: imported.id,
+              fileName: imported.fileName,
+              note: imported.note,
+              byteLength: imported.sizeBytes,
+              width: imported.width,
+              height: imported.height,
+              deduplicated: before.images.some((image) => image.id === imported.id)
+            };
           }
         }
       : {})
   });
+}
+
+function selfieExtension(mimeType: string | undefined) {
+  if (mimeType === "image/png") return "png";
+  if (mimeType === "image/jpeg") return "jpg";
+  if (mimeType === "image/webp") return "webp";
+  return undefined;
 }
 
 export function currentAndQuotedMediaSources(incoming: ParsedIncomingMessage) {

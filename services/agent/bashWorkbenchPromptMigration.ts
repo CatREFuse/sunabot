@@ -8,17 +8,21 @@ import {
 import { resolveSafePromptFilePath } from "./promptWorkspace.js";
 
 const LEGACY_CONTRACT_MARKERS = [
+  '<bash_workbench_contract version="6">',
+  '<bash_workbench_contract version="5">',
   '<bash_workbench_contract version="4">',
   '<bash_workbench_contract version="3">',
   '<bash_workbench_contract version="2">',
   '<bash_workbench_contract version="1">'
 ];
-const CONTRACT_MARKER = '<bash_workbench_contract version="5">';
+const CONTRACT_MARKER = '<bash_workbench_contract version="7">';
 const LEGACY_CONFIGURATION_INDEX_MARKERS = [
+  '<configuration_directory_index_contract version="4">',
+  '<configuration_directory_index_contract version="3">',
   '<configuration_directory_index_contract version="2">',
   '<configuration_directory_index_contract version="1">'
 ];
-const CONFIGURATION_INDEX_MARKER = '<configuration_directory_index_contract version="3">';
+const CONFIGURATION_INDEX_MARKER = '<configuration_directory_index_contract version="5">';
 
 export const BASH_WORKBENCH_CONTRACT = [
   CONTRACT_MARKER,
@@ -34,7 +38,7 @@ export const BASH_WORKBENCH_CONTRACT = [
 export const CONFIGURATION_DIRECTORY_INDEX_CONTRACT = [
   CONFIGURATION_INDEX_MARKER,
   "本轮 Bash 可直接访问的每个配置或资源目录都必须有一个固定管理入口。进入目录后先读取入口，再按其中的文件名、状态和说明取用内容；入口缺失或损坏时停止猜测目录内容，并报告具体目录。",
-  "固定入口为：两个工作目录各自的 `index.md`、Skills `index.json`、MCP `servers.json`、自拍参考图 `references.jsonl`、表情 `emojis.jsonl`、知识库 `index.json`。Native Bash 从 `workbench/` 直接寻址这些资源；Docker Bash 从 `native-workbench/` 只读寻址同一份资源。只有本轮实际暴露的目录才可读取，入口文件不能扩大 Bash 的会话、路径或写入权限。",
+  "固定入口为：两个工作目录各自的 `index.md`，以及两套独立的 Skills `skills/index.json`、自拍参考图 `selfie/references.jsonl`、表情 `emoji/emojis.jsonl`、知识库 `knowledge/index.json`；MCP 入口仍是 `servers.json`。Native Bash 从 `workbench/` 直接寻址 Native 资源，并通过 `SUNABOT_DOCKER_WORKBENCH` 寻址 Docker 资源；Docker Bash 从 `/workbench` 寻址 Docker 资源，并从只读 `native-workbench/` 寻址 Native 资源。运行时同时取用两套表情、自拍和知识入口，管理 API 可选择目标 Workbench；Skill 激活仍要求 Native `workbench/skills/` 内经过审查的仓库记录。只有本轮实际暴露的目录才可读取，入口文件不能扩大 Bash 的会话、路径或写入权限。",
   "</configuration_directory_index_contract>"
 ].join("\n");
 

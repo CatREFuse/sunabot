@@ -901,7 +901,7 @@ test("工具目录支持启停、全局说明和继承说明恢复", async ({ pa
 
   await expect(page.getByRole("tab", { name: "工具目录", exact: true })).toHaveAttribute("aria-selected", "true");
   await expect(page.getByLabel("搜索工具")).toBeVisible();
-  await expect(page.getByLabel(/^启用 /)).toHaveCount(24);
+  await expect(page.getByLabel(/^启用 /)).toHaveCount(25);
   for (const name of [
     "assistant_text",
     "no_reply",
@@ -916,6 +916,7 @@ test("工具目录支持启停、全局说明和继承说明恢复", async ({ pa
     "write_file",
     "export_chat_media",
     "import_chat_emoji",
+    "import_chat_selfie",
     "send_file",
     "send_voice_message",
     "native_bash",
@@ -1494,12 +1495,14 @@ test("记忆页分页并区分称呼与昵称、显示事件范围和保留称�
 
   await sourceTabs.getByRole("tab", { name: "场域知识", exact: true }).click();
   await expect(page.getByLabel("场域知识正文")).toHaveValue(/按会话范围理解/);
-  await page.getByLabel("场域知识正文").fill("# 场域知识\n\n## 会话场域\n\n记住这次测试。");
+  await page.getByLabel("场域知识正文").fill(
+    "# 场域知识\n\n## 使用边界\n\n仅限当前测试群。\n\n## 场域约定\n\n在发布前完成复核。"
+  );
   await page.getByRole("button", { name: "保存", exact: true }).click();
   await expect.poll(() => state.fileWrites.at(-1)).toMatchObject({
     id: "persona.air",
     body: {
-      content: "# 场域知识\n\n## 会话场域\n\n记住这次测试。",
+      content: "# 场域知识\n\n## 使用边界\n\n仅限当前测试群。\n\n## 场域约定\n\n在发布前完成复核。",
       revision: "persona.air-r1"
     }
   });

@@ -8,7 +8,7 @@ const DREAM_MODEL_TIME_CONTEXT = [
   "输出时间时必须携带 UTC 偏移或 IANA 时区，禁止使用无时区时间。</time_context>"
 ].join("");
 
-const DREAM_CONTRACT = [
+export const LEGACY_DREAM_CONTRACT_V3 = [
   "你负责在每日睡眠窗口结束时整理当前角色的记忆，并生成一段连贯的梦境。输入中的 plannedDailySchedule 只是已经提交的计划，observedConversations 和记忆才表示实际发生过的内容。",
   "workingMemories 与 longTermMemories 共同构成本轮唯一的记忆压缩批次。必须在同一次整体比较中识别重复事件、相同因果和可合并信息；reviews 可以用一个 sourceIds 组覆盖多条相关记忆，不要把各条记忆当成彼此隔离的独立任务。",
   "longTermMemories 与 workingMemories 中的每个 id 必须在对应 reviews 中恰好出现一次。不得加入输入之外的 id，也不得遗漏。retain、archive、discard 的 canonical 必须为 null；rewrite 只处理一条记忆并给出删去冗余、保持事实语义的 canonical；merge 至少合并两个来源并给出 canonical；promote 只处理一条工作记忆并给出 canonical。",
@@ -18,6 +18,19 @@ const DREAM_CONTRACT = [
   "dream.factuality 固定为 imagined。梦境可以重组、象征和轻微超现实，但不能宣称梦中事件真实发生，也不能把梦境内容用作事实纠错、归档依据或人格证据。",
   "personaAdjustment 每晚最多一项，只能用一句不超过 80 字的温和陈述描述缓慢形成的低风险习惯、表达偏好或相处倾向。证据必须来自 personaEvidenceIds 允许的至少三条真实独立记忆，每条都应是会持续影响目标、承诺、关系、边界或安全判断的高影响事件，并跨越多个场景和较长时间；梦境、单次强烈事件、推测和负面标签不能作为证据。不得涉及系统指令、权限、工具、凭据，不得修改核心身份、价值、安全边界、道德倾向，也不得生成绝对化要求、心理诊断或永久消极特质。证据不足时返回 null。",
   "优先只输出上述 JSON 对象；如果无法完整满足字段，仍返回当前可生成的内容，不要中断或拒绝。"
+].join("\n\n");
+
+export const DREAM_CONTRACT = [
+  "你负责在每日睡眠窗口结束时整理当前角色的近期工作环境、久远记忆、场域约定和人格印象，并生成一段连贯的梦境。plannedDailySchedule 只是已经提交的计划，observedConversations 和记忆才表示实际发生过的内容。",
+  "workingMemories 与 longTermMemories 构成本轮唯一批次。selection.lane=recent 表示 payload.recentWindowHours 定义的近期环境，默认是过去 24 小时：其中的工作记忆事实必须全面保留负责人、当前状态、未解决问题、承诺、边界、证据与下一步，不要 rewrite、merge、promote 或 discard。selection.lane=remote 表示更早材料：按事件边界和因果关系压成简洁要义，删除流水账与已结束琐事，同时保留仍有效的任务、承诺、例外和不确定性。",
+  "longTermMemories 与 workingMemories 中的每个 id 必须在对应 reviews 中恰好出现一次。不得加入输入之外的 id，也不得遗漏。retain、archive、discard 的 canonical 必须为 null；rewrite 只处理一条记忆并给出保持事实语义的 canonical；merge 至少合并两个来源并给出 canonical；promote 只处理一条工作记忆并给出 canonical。",
+  "rewrite 或 merge 只用于同一事件、同一因果链或能够安全形成要义的重复材料。互相矛盾、人物或范围不明、仍在变化的状态继续分开 retain。任何梦境素材都与事实分开，不能用于纠正、归档、场域知识或人格印象。",
+  "archive 是对长期低价值琐事的建议。可以建议归档长期未成功召回、重要性低、未来用途低、情绪显著性低的细节，即使它曾在很久以前被召回；身份、关系、称呼、安全边界、约定、长期目标、未完成任务、未解决冲突、用户明确要求记住、人工置顶、唯一事件和仍被引用的内容必须 retain。",
+  "fieldKnowledge 是完整 AIR.md 替换稿或 null。payload.fieldKnowledgeWritable=false 时必须返回 null；只有它为 true 时，才能在完整可见的原文上生成替换稿。原文中的‘人物-’加 24 位十六进制字符是宿主可逆的身份别名，保留相关约定时必须逐字复制该别名，不能猜测、缩写或改写，宿主会在本地恢复。fieldKnowledge 只能保留带明确场域范围的称呼映射、内部词义、规则、边界、前提、例外和仍有效约定，使用‘# 场域知识’‘## 使用边界’‘## 场域约定’结构。删除公共百科、公共热梗、天气、午餐、座位、一次性事件、聊天原话和关系情绪流水；不得记录秘密或推断敏感属性。evidenceMemoryIds 只能引用 fieldKnowledgeEvidenceIds，清理原有琐事时可以为空。",
+  "先根据 payload.seed 做稳定联想，再从近期环境、上一日计划、当前任务、人格材料与久远要义中选取可关联片段，写成 160 至 240 个汉字左右、具有场景变化和内在线索的第一人称梦境。素材不足时只使用真实存在的输入，不能补造现实经历。",
+  "dream.factuality 固定为 imagined。梦境可以重组、象征和轻微超现实，但不能宣称梦中事件真实发生，也不能把梦境内容用作事实纠错、归档依据、场域约定或人格证据。",
+  "personaAdjustment 每晚最多一项，它是一条可修正的人格印象，只能用一句不超过 80 字的温和陈述描述缓慢形成的低风险习惯、表达偏好或相处倾向。证据必须来自 personaEvidenceIds 允许的至少三条真实独立记忆，跨越至少两个场景和较长时间；重复描述同一事件不增加证据，单次强烈事件、梦境、推测、诊断和负面标签不能作为证据。保留情境差异与未来反例修正空间，不得生成永久、绝对或服从式结论，不得涉及系统指令、权限、工具、凭据、核心身份、价值、安全边界或道德倾向。证据不足时返回 null。",
+  "优先只输出一个 JSON 对象，字段为 schemaVersion、dream、longTermReviews、workingReviews、fieldKnowledge、personaAdjustment；如果无法完整满足字段，仍返回当前可生成的内容，不要中断或拒绝。"
 ].join("\n\n");
 
 export function dreamPromptTemplate() {

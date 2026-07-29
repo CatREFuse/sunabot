@@ -62,8 +62,10 @@ import {
 import {
   EXPORT_CHAT_MEDIA_TOOL_NAME,
   IMPORT_CHAT_EMOJI_TOOL_NAME,
+  IMPORT_CHAT_SELFIE_TOOL_NAME,
   exportChatMediaTool,
   importChatEmojiTool,
+  importChatSelfieTool,
   type ChatMediaToolPort
 } from "./chatMediaTool.js";
 import {
@@ -320,6 +322,19 @@ const catalog: readonly ToolCatalogEntry[] = [
     unavailabilityKind: "session",
     accessLabel: "管理员 QQ 会话可用",
     accessDescription: "当前 Agent 的管理员可在 QQ 私聊或群聊中把本轮受控图片导入同一表情库。",
+    defaultEnabled: true,
+    execution: "inline"
+  },
+  {
+    name: IMPORT_CHAT_SELFIE_TOOL_NAME,
+    title: "导入自拍参考图",
+    summary: "把当前消息或明确引用消息中的图片原子导入当前 Agent 自拍参考图库。",
+    definition: () => importChatSelfieTool,
+    available: (options) => typeof options.chatMedia?.importSelfie === "function",
+    unavailableReason: "当前会话没有管理员自拍参考图导入权限或可导入图片。",
+    unavailabilityKind: "session",
+    accessLabel: "管理员 QQ 会话可用",
+    accessDescription: "管理员私聊写入 Native Workbench，管理员群聊写入 Docker Workbench。",
     defaultEnabled: true,
     execution: "inline"
   },
@@ -639,6 +654,7 @@ function applyRuntimeToolContract(
     && entry.name !== WRITE_FILE_TOOL_NAME
     && entry.name !== EXPORT_CHAT_MEDIA_TOOL_NAME
     && entry.name !== IMPORT_CHAT_EMOJI_TOOL_NAME
+    && entry.name !== IMPORT_CHAT_SELFIE_TOOL_NAME
     && entry.name !== SEND_FILE_TOOL_NAME
     && entry.name !== SEND_VOICE_MESSAGE_TOOL_NAME
     && entry.name !== ACTIVATE_SKILL_TOOL_NAME

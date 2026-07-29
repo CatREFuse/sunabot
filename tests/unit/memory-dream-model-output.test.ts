@@ -8,7 +8,8 @@ import {
 const expected = {
   longTermMemoryIds: ["long_term_a", "long_term_b", "long_term_c"],
   workingMemoryIds: ["working_a", "working_b"],
-  personaEvidenceIds: ["long_term_a", "long_term_b", "working_a"]
+  personaEvidenceIds: ["long_term_a", "long_term_b", "working_a"],
+  fieldKnowledgeEvidenceIds: ["long_term_c", "working_a"]
 };
 
 function validOutput() {
@@ -61,6 +62,10 @@ function validOutput() {
       targetFile: "PREFERENCE.md",
       statement: "交流时会更主动确认对方真正关心的结果。",
       evidenceMemoryIds: ["long_term_a", "long_term_b", "working_a"]
+    },
+    fieldKnowledge: {
+      content: "# 场域知识\n\n## 使用边界\n\n- 约定只在明确范围内生效。\n\n## 场域约定\n\n### context:release\n\n- 发布前需要双人复核。",
+      evidenceMemoryIds: ["long_term_c", "unknown", "working_a"]
     }
   };
 }
@@ -72,6 +77,10 @@ describe("Dream model output", () => {
     expect(output.dream.factuality).toBe("imagined");
     expect(output.rawOutput).toContain("\"workingReviews\"");
     expect(output.longTermReviews[0]).toMatchObject({ action: "merge", sourceIds: ["long_term_a", "long_term_b"] });
+    expect(output.fieldKnowledge).toEqual({
+      content: expect.stringContaining("## 场域约定"),
+      evidenceMemoryIds: ["long_term_c", "working_a"]
+    });
   });
 
   it("accepts non-JSON generated text and safely retains every memory", () => {
@@ -199,6 +208,44 @@ describe("Dream model output", () => {
     const overlongStatement = validOutput();
     overlongStatement.personaAdjustment!.statement = "倾".repeat(81);
     expect(normalizeDreamModelOutput(overlongStatement, expected).personaAdjustment).toBeNull();
+  });
+
+  it("keeps only scoped field-knowledge documents backed by allowed factual memories", () => {
+    const invalidDocument = validOutput();
+    invalidDocument.fieldKnowledge!.content = "# 场域知识\n\n今天下雨，午餐吃了披萨。";
+    expect(normalizeDreamModelOutput(invalidDocument, expected).fieldKnowledge).toBeNull();
+
+    const extraHeading = validOutput();
+    extraHeading.fieldKnowledge!.content = [
+      "# 场域知识",
+      "## 使用边界",
+      "仅限项目群。",
+      "## 公共百科",
+      "今天下雨。",
+      "## 场域约定",
+      "在项目群称小林为林老师。"
+    ].join("\n\n");
+    expect(normalizeDreamModelOutput(extraHeading, expected).fieldKnowledge).toBeNull();
+
+    const misplacedHeading = validOutput();
+    misplacedHeading.fieldKnowledge!.content = [
+      "# 场域知识",
+      "## 场域约定",
+      "在项目群称小林为林老师。",
+      "## 使用边界",
+      "仅限项目群。"
+    ].join("\n\n");
+    expect(normalizeDreamModelOutput(misplacedHeading, expected).fieldKnowledge).toBeNull();
+
+    const unknownEvidence = validOutput();
+    unknownEvidence.fieldKnowledge!.evidenceMemoryIds = ["fabricated"];
+    expect(normalizeDreamModelOutput(unknownEvidence, expected).fieldKnowledge).toBeNull();
+
+    const cleanupOnly = validOutput();
+    cleanupOnly.fieldKnowledge!.evidenceMemoryIds = [];
+    expect(normalizeDreamModelOutput(cleanupOnly, expected).fieldKnowledge).toMatchObject({
+      evidenceMemoryIds: []
+    });
   });
 
   it("still rejects invalid host expectations because they are a code boundary", () => {

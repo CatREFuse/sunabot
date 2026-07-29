@@ -1,5 +1,6 @@
 import type {
   DreamCanonicalMemoryV1,
+  DreamFieldKnowledgeV1,
   DreamLongTermReviewV1,
   DreamModelOutputExpectations,
   DreamModelOutputV1,
@@ -23,6 +24,7 @@ const PERSONA_KINDS = new Set<DreamPersonaAdjustmentKind>([
   "relationship_tendency"
 ]);
 const PERSONA_TARGETS = new Set<DreamPersonaTargetFile>(["PREFERENCE.md", "RELATION.md"]);
+const FIELD_KNOWLEDGE_MAX_CODE_POINTS = 16_000;
 
 export function parseDreamModelOutput(
   text: string,
@@ -69,6 +71,10 @@ function normalizeDreamModelOutputValue(
     record?.personaAdjustment ?? record?.persona_adjustment ?? null,
     new Set(expectedIds.personaEvidenceIds)
   );
+  const fieldKnowledge = normalizeFieldKnowledge(
+    record?.fieldKnowledge ?? record?.field_knowledge ?? null,
+    new Set(expectedIds.fieldKnowledgeEvidenceIds)
+  );
 
   return {
     schemaVersion: 1,
@@ -76,8 +82,36 @@ function normalizeDreamModelOutputValue(
     longTermReviews,
     workingReviews,
     personaAdjustment,
+    fieldKnowledge,
     ...(rawOutput ? { rawOutput } : {})
   };
+}
+
+function normalizeFieldKnowledge(
+  value: unknown,
+  allowedEvidenceIds: ReadonlySet<string>
+): DreamFieldKnowledgeV1 | null {
+  if (value === null) return null;
+  const record = optionalRecord(value);
+  if (!record) return null;
+  const content = generatedText(
+    record.content ?? record.document ?? record.text,
+    FIELD_KNOWLEDGE_MAX_CODE_POINTS
+  );
+  if (!validFieldKnowledgeHeadings(content)) return null;
+  const requestedIds = generatedIds(record.evidenceMemoryIds ?? record.evidence_memory_ids);
+  const evidenceMemoryIds = requestedIds.filter((id) => allowedEvidenceIds.has(id));
+  if (requestedIds.length > 0 && evidenceMemoryIds.length === 0) return null;
+  return { content, evidenceMemoryIds };
+}
+
+function validFieldKnowledgeHeadings(content: string) {
+  const headings = content.split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter((line) => /^#{1,2}\s/u.test(line));
+  const expected = ["# 场域知识", "## 使用边界", "## 场域约定"];
+  return headings.length === expected.length
+    && headings.every((heading, index) => heading === expected[index]);
 }
 
 function dreamNarrative(
@@ -241,7 +275,11 @@ function normalizeExpectations(expected: DreamModelOutputExpectations) {
   return {
     longTermMemoryIds: expectedIds(expected.longTermMemoryIds, "longTermMemoryIds"),
     workingMemoryIds: expectedIds(expected.workingMemoryIds, "workingMemoryIds"),
-    personaEvidenceIds: expectedIds(expected.personaEvidenceIds, "personaEvidenceIds")
+    personaEvidenceIds: expectedIds(expected.personaEvidenceIds, "personaEvidenceIds"),
+    fieldKnowledgeEvidenceIds: expectedIds(
+      expected.fieldKnowledgeEvidenceIds ?? [],
+      "fieldKnowledgeEvidenceIds"
+    )
   };
 }
 

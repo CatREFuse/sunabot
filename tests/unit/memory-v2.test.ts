@@ -14,9 +14,11 @@ import {
   readMemorySourceEntries,
   readStrictJsonlFile,
   readUserProfileForUser,
+  readWorkingMemoryDocument,
   readWorkingMemorySnapshot,
   recallMemory,
   recoverMemoryTransactions,
+  replaceWorkingMemoryDocument,
   resolveUserAddressName,
   updateMemoryEntry,
   upsertLongTermMemoryFacts
@@ -303,6 +305,61 @@ describe("memory v2 storage", () => {
     expect(Number.isFinite(Date.parse(profile!.createdAt!))).toBe(true);
     expect(await readMemorySourceEntries(config, "long_term")).toHaveLength(0);
     expect(applicationDataStore(config).hasMemoryBatch(input.batchId)).toBe(true);
+  });
+
+  it("preserves Dream entries when the scheduler commits an ordinary memory batch", async () => {
+    const [working] = await appendMemoryFacts(config, "working", [{ fact: "普通工作事实" }]);
+    const current = await readWorkingMemoryDocument(config);
+    const dream = {
+      ...current.items[0]!,
+      id: "working_dream_2026_07_10",
+      content: "梦见星光落进湖里。",
+      sourceKind: "dream" as const,
+      memoryKind: "dream",
+      realityStatus: "imagined",
+      factuality: "imagined",
+      eventType: "dream",
+      eventKey: "dream:2026-07-10",
+      dreamRunId: "dream-run-2026-07-10",
+      dreamDate: "2026-07-10",
+      dreamReviewedAt: "2026-07-10T04:00:00.000+08:00",
+      occurredAt: "2026-07-10T04:00:00.000+08:00",
+      conversationId: "dream:test-agent",
+      conversationScope: "dream",
+      conversationTitle: "Dream 2026-07-10"
+    };
+    const seeded = await replaceWorkingMemoryDocument(config, current.revision, [...current.items, dream]);
+    expect(seeded.status).toBe("updated");
+
+    const applied = await applyMemoryBatchTransaction(config, {
+      batchId: "batch-preserve-dream",
+      expectedWorkingSnapshotToken: seeded.current.revision,
+      workingFacts: [{
+        id: working!.id,
+        fact: "普通工作事实已经更新"
+      }, {
+        id: dream.id,
+        fact: "普通整理试图改写梦境"
+      }],
+      userProfileFacts: [],
+      longTermFacts: [],
+      metadata: {
+        conversationId: "group:batch-test",
+        conversationScope: "user_group",
+        conversationTitle: "批次测试群"
+      }
+    });
+    const after = await readWorkingMemoryDocument(config);
+
+    expect(applied).toMatchObject({ status: "applied" });
+    expect(after.items).toEqual([
+      expect.objectContaining({
+        id: working!.id,
+        content: "普通工作事实已经更新"
+      }),
+      dream
+    ]);
+    expect(after.content).not.toContain("普通整理试图改写梦境");
   });
 
   it("does not need file-journal recovery after SQLite transactions", async () => {

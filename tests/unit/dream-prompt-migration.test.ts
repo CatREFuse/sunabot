@@ -1,8 +1,15 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { migrateDreamSchemaTemplate } from "../../services/agent/dreamPromptMigration.js";
+import {
+  migrateDreamMemoryContractTemplate,
+  migrateDreamSchemaTemplate
+} from "../../services/agent/dreamPromptMigration.js";
 import type { FinalPromptTemplate } from "../../services/agent/promptSystem.js";
-import { dreamPromptTemplate } from "../../services/memory/dream/public.js";
+import {
+  DREAM_CONTRACT,
+  LEGACY_DREAM_CONTRACT_V3,
+  dreamPromptTemplate
+} from "../../services/memory/dream/public.js";
 
 function legacyTemplate(): FinalPromptTemplate {
   return {
@@ -57,5 +64,44 @@ describe("Dream flexible-contract prompt migration", () => {
     const migrated = migrateDreamSchemaTemplate(legacyTemplate());
     expect(migrated).toBeDefined();
     expect(migrateDreamSchemaTemplate(migrated!)).toBeUndefined();
+  });
+
+  it("upgrades the exact official memory contract while preserving administrator additions", () => {
+    const original = dreamPromptTemplate();
+    const messages = original.messages.map((message) => (
+      message.role === "system" && typeof message.content === "string"
+        ? {
+            ...message,
+            content: `管理员前缀。\n\n${message.content.replace(DREAM_CONTRACT, LEGACY_DREAM_CONTRACT_V3)}\n\n管理员后缀。`
+          }
+        : message
+    ));
+    const migrated = migrateDreamMemoryContractTemplate({ ...original, messages });
+    const system = migrated?.messages.find((message) => message.role === "system");
+
+    expect(system?.content).toContain("管理员前缀。");
+    expect(system?.content).toContain(DREAM_CONTRACT);
+    expect(system?.content).toContain("管理员后缀。");
+    expect(system?.content).not.toContain(LEGACY_DREAM_CONTRACT_V3);
+    expect(migrated?.tools).toEqual(original.tools);
+    expect(migrated?.response_format).toEqual(original.response_format);
+    expect(migrateDreamMemoryContractTemplate(migrated!)).toBeUndefined();
+  });
+
+  it("does not overwrite a customized legacy contract", () => {
+    const original = dreamPromptTemplate();
+    const messages = original.messages.map((message) => (
+      message.role === "system" && typeof message.content === "string"
+        ? {
+            ...message,
+            content: message.content.replace(
+              DREAM_CONTRACT,
+              LEGACY_DREAM_CONTRACT_V3.replace("每日睡眠窗口", "管理员自定义窗口")
+            )
+          }
+        : message
+    ));
+
+    expect(migrateDreamMemoryContractTemplate({ ...original, messages })).toBeUndefined();
   });
 });

@@ -195,4 +195,21 @@ describe("working-memory Markdown document", () => {
     expect(replaced.current.content).toContain("【梦境｜做梦时间：2026-07-24 04:00】\n梦见旧车站漂在海面上。");
     expect(replaced.current.items[0]?.content).toBe("梦见旧车站漂在海面上。");
   });
+
+  it("does not label a factual item only because its write source is Dream", async () => {
+    await appendWorkingMemoryDocumentItem(config, "普通工作记忆仍然是事实。", {
+      conversationId: "dream:agent-a",
+      scope: "dream",
+      title: "Dream review"
+    }, "dream");
+
+    const current = await readWorkingMemoryDocument(config);
+
+    expect(current.items[0]).toMatchObject({
+      sourceKind: "dream",
+      content: "普通工作记忆仍然是事实。"
+    });
+    expect(current.items[0]?.memoryKind).toBeFalsy();
+    expect(current.content).not.toContain("【梦境｜做梦时间：");
+  });
 });

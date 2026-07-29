@@ -5,6 +5,7 @@ import type {
   KnowledgeUploadInput
 } from "../../../services/knowledge/public.js";
 import { requestAgentId } from "../requestAgentId.js";
+import type { AgentWorkbenchBackend } from "../../../packages/platform/agentResourceLayout.js";
 
 type KnowledgeRouteService = Pick<
   KnowledgeBaseService,
@@ -12,7 +13,7 @@ type KnowledgeRouteService = Pick<
 >;
 
 export interface KnowledgeRouteOptions {
-  getService(agentId: string): KnowledgeRouteService;
+  getService(agentId: string, backend: AgentWorkbenchBackend): KnowledgeRouteService;
 }
 
 const openObject = { type: "object", additionalProperties: true } as const;
@@ -20,7 +21,10 @@ const agentQuery = {
   type: "object",
   required: ["agentId"],
   additionalProperties: false,
-  properties: { agentId: { type: "string", minLength: 1, maxLength: 32 } }
+  properties: {
+    agentId: { type: "string", minLength: 1, maxLength: 32 },
+    workbench: { type: "string", enum: ["native", "docker"] }
+  }
 } as const;
 const searchQuery = {
   type: "object",
@@ -28,6 +32,7 @@ const searchQuery = {
   required: ["q"],
   properties: {
     agentId: { type: "string", minLength: 1, maxLength: 32 },
+    workbench: { type: "string", enum: ["native", "docker"] },
     q: { type: "string", minLength: 1, maxLength: 1_000 },
     limit: { type: "integer", minimum: 1, maximum: 20 }
   }
@@ -49,7 +54,10 @@ const deleteBody = {
 } as const;
 
 export function registerKnowledgeRoutes(app: FastifyInstance, options: KnowledgeRouteOptions) {
-  const serviceFor = (request: { query: unknown }) => options.getService(requestAgentId(request.query));
+  const serviceFor = (request: { query: unknown }) => options.getService(
+    requestAgentId(request.query),
+    requestWorkbenchBackend(request.query)
+  );
 
   app.get("/api/knowledge", {
     schema: { querystring: agentQuery, response: { 200: openObject } }
@@ -78,4 +86,11 @@ export function registerKnowledgeRoutes(app: FastifyInstance, options: Knowledge
     const body = request.body as { path?: string };
     return serviceFor(request).deleteDocument(body.path);
   });
+}
+
+function requestWorkbenchBackend(query: unknown): AgentWorkbenchBackend {
+  const value = query && typeof query === "object" && !Array.isArray(query)
+    ? (query as { workbench?: unknown }).workbench
+    : undefined;
+  return value === "docker" ? "docker" : "native";
 }

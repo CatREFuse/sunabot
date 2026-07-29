@@ -77,7 +77,7 @@ describe("bundled Workbench configuration Skill", () => {
     ), "utf8");
     await expect(addressing).resolves.toContain("/workbench/native-workbench");
     await expect(addressing).resolves.toContain(
-      "administrator group because Docker cannot write the Native projection"
+      "group-chat imports write Docker"
     );
     await expect(skill).resolves.toContain("Use Bash as the primary way");
     await expect(skill).resolves.not.toContain(
@@ -92,5 +92,6 @@ describe("bundled Workbench configuration Skill", () => {
     await expect(bashOperations).resolves.toContain(
       "Use `import_chat_emoji` when the source is a current chat media handle"
     );
+    await expect(skill).resolves.toContain("`import_chat_selfie`");
   }, 15_000);
 });

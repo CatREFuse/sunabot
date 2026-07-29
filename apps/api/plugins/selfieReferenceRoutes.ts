@@ -6,6 +6,7 @@ import {
   type SelfieReferenceVariant
 } from "../../../src/admin/selfieReferences.js";
 import { badRequest } from "../../../src/admin/errors.js";
+import type { AgentWorkbenchBackend } from "../../../packages/platform/agentResourceLayout.js";
 import { requestAgentId } from "../requestAgentId.js";
 
 const openObject = { type: "object", additionalProperties: true } as const;
@@ -19,7 +20,7 @@ const referenceParams = {
 
 export interface SelfieReferenceRouteOptions {
   repository: SelfieReferenceRepository;
-  getRepository?: (agentId: string) => SelfieReferenceRepository;
+  getRepository?: (agentId: string, backend: AgentWorkbenchBackend) => SelfieReferenceRepository;
 }
 
 export function registerSelfieReferenceRoutes(app: FastifyInstance, options: SelfieReferenceRouteOptions) {
@@ -27,7 +28,7 @@ export function registerSelfieReferenceRoutes(app: FastifyInstance, options: Sel
     schema: { querystring: openObject, response: { 200: openObject } }
   }, async (request) => {
     const context = repositoryContext(options, request.query);
-    return withContentUrls(await context.repository.list(), context.agentId);
+    return withContentUrls(await context.repository.list(), context.agentId, context.backend);
   });
 
   app.post("/api/selfie-references", {
@@ -36,7 +37,7 @@ export function registerSelfieReferenceRoutes(app: FastifyInstance, options: Sel
   }, async (request, reply) => {
     const context = repositoryContext(options, request.query);
     const envelope = await context.repository.create(request.body);
-    return reply.status(201).send(withContentUrls(envelope, context.agentId));
+    return reply.status(201).send(withContentUrls(envelope, context.agentId, context.backend));
   });
 
   app.patch("/api/selfie-references/:id", {
@@ -45,7 +46,7 @@ export function registerSelfieReferenceRoutes(app: FastifyInstance, options: Sel
     const params = request.params as { id?: string };
     const context = repositoryContext(options, request.query);
     const envelope = await context.repository.updateNote(String(params.id ?? ""), request.body);
-    return withContentUrls(envelope, context.agentId);
+    return withContentUrls(envelope, context.agentId, context.backend);
   });
 
   app.get("/api/selfie-references/:id/content", {
@@ -74,27 +75,51 @@ export function registerSelfieReferenceRoutes(app: FastifyInstance, options: Sel
 }
 
 function repositoryContext(options: SelfieReferenceRouteOptions, query: unknown) {
-  if (!options.getRepository) return { repository: options.repository };
+  const backend = requestWorkbenchBackend(query);
+  if (!options.getRepository) {
+    if (backend === "docker") {
+      badRequest("WORKBENCH_BACKEND_UNAVAILABLE", "当前接口未配置 Docker Workbench。", "workbench");
+    }
+    return { repository: options.repository, backend };
+  }
   const agentId = requestAgentId(query);
-  return { agentId, repository: options.getRepository(agentId) };
+  return { agentId, backend, repository: options.getRepository(agentId, backend) };
 }
 
-function withContentUrls(envelope: SelfieReferenceEnvelope, agentId?: string) {
+function withContentUrls(
+  envelope: SelfieReferenceEnvelope,
+  agentId: string | undefined,
+  backend: AgentWorkbenchBackend
+) {
   return {
     maxImages: envelope.maxImages,
-    images: envelope.images.map((image) => publicImage(image, agentId))
+    images: envelope.images.map((image) => publicImage(image, agentId, backend))
   };
 }
 
-function publicImage(image: SelfieReferenceImage, agentId?: string) {
+function publicImage(
+  image: SelfieReferenceImage,
+  agentId: string | undefined,
+  backend: AgentWorkbenchBackend
+) {
   const base = `/api/selfie-references/${encodeURIComponent(image.id)}/content`;
   const scope = agentId ? `&agentId=${encodeURIComponent(agentId)}` : "";
+  const workbench = backend === "docker" ? "&workbench=docker" : "";
   return {
     ...image,
-    originalUrl: `${base}?variant=original${scope}`,
-    displayUrl: `${base}?variant=display${scope}`,
-    placeholderUrl: `${base}?variant=placeholder${scope}`
+    originalUrl: `${base}?variant=original${scope}${workbench}`,
+    displayUrl: `${base}?variant=display${scope}${workbench}`,
+    placeholderUrl: `${base}?variant=placeholder${scope}${workbench}`
   };
+}
+
+function requestWorkbenchBackend(query: unknown): AgentWorkbenchBackend {
+  const value = query && typeof query === "object" && !Array.isArray(query)
+    ? (query as { workbench?: unknown }).workbench
+    : undefined;
+  if (value === undefined || value === "" || value === "native") return "native";
+  if (value === "docker") return "docker";
+  badRequest("WORKBENCH_BACKEND_INVALID", "Workbench 参数无效。", "workbench");
 }
 
 function parseVariant(value: string | undefined): SelfieReferenceVariant {

@@ -2,6 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { AppConfig } from "../../packages/contracts/admin/public.js";
 import {
+  DREAM_CONTRACT,
+  LEGACY_DREAM_CONTRACT_V3
+} from "../memory/public.js";
+import {
   parseFinalPromptTemplate,
   type FinalPromptTemplate
 } from "./promptSystem.js";
@@ -25,6 +29,16 @@ export async function migrateDreamSchemaPrompt(config: AppConfig, fileName: stri
   return Boolean(migrated);
 }
 
+export async function migrateDreamMemoryContractPrompt(config: AppConfig, fileName: string) {
+  const filePath = await resolveSafePromptFilePath(config, "system", fileName);
+  const content = await readOptional(filePath);
+  if (!content.trim()) return false;
+  const migrated = migrateDreamMemoryContractTemplate(parseFinalPromptTemplate(content));
+  if (!migrated) return false;
+  await atomicWriteText(filePath, `${JSON.stringify(migrated, null, 2)}\n`);
+  return true;
+}
+
 export function migrateDreamSchemaTemplate(
   template: FinalPromptTemplate
 ): FinalPromptTemplate | undefined {
@@ -32,6 +46,30 @@ export function migrateDreamSchemaTemplate(
   const migrated = structuredClone(template);
   migrated.response_format = { type: "text" };
   return migrated;
+}
+
+export function migrateDreamMemoryContractTemplate(
+  template: FinalPromptTemplate
+): FinalPromptTemplate | undefined {
+  let changed = false;
+  const messages = template.messages.map((message) => {
+    if (
+      typeof message !== "object"
+      || message == null
+      || Array.isArray(message)
+      || message.role !== "system"
+      || typeof message.content !== "string"
+      || !message.content.includes(LEGACY_DREAM_CONTRACT_V3)
+    ) {
+      return message;
+    }
+    changed = true;
+    return {
+      ...message,
+      content: message.content.replace(LEGACY_DREAM_CONTRACT_V3, DREAM_CONTRACT)
+    };
+  });
+  return changed ? { ...template, messages } : undefined;
 }
 
 async function readOptional(filePath: string) {

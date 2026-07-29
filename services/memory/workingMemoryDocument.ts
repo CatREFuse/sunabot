@@ -273,6 +273,47 @@ export function workingMemoryItemsFromFacts(
   });
 }
 
+export function workingMemoryItemsFromFactsPreservingDreams(
+  facts: readonly MemoryFactInput[],
+  previous: readonly WorkingMemoryDocumentItem[],
+  metadata: Record<string, unknown>,
+  allocateId: (fact: MemoryFactInput, index: number) => string,
+  sourceKind: WorkingMemoryDocumentItem["sourceKind"] = "model_merge"
+) {
+  const protectedIds = new Set(previous
+    .filter(isDreamWorkingMemoryItem)
+    .map((item) => item.id));
+  const ordinaryFacts = facts.filter((fact) => {
+    const requestedId = optionalLine(fact.id, 128);
+    return !requestedId || !protectedIds.has(requestedId);
+  });
+  const ordinaryPrevious = previous.filter((item) => !isDreamWorkingMemoryItem(item));
+  const nextOrdinary = workingMemoryItemsFromFacts(
+    ordinaryFacts,
+    ordinaryPrevious,
+    metadata,
+    allocateId,
+    sourceKind
+  );
+  const nextItems = [...nextOrdinary];
+  let ordinaryBefore = 0;
+  let insertedDreams = 0;
+  for (const item of previous) {
+    if (!isDreamWorkingMemoryItem(item)) {
+      ordinaryBefore += 1;
+      continue;
+    }
+    const insertionIndex = Math.min(ordinaryBefore + insertedDreams, nextItems.length);
+    nextItems.splice(insertionIndex, 0, item);
+    insertedDreams += 1;
+  }
+  return nextItems;
+}
+
+export function isDreamWorkingMemoryItem(item: Pick<WorkingMemoryDocumentItem, "memoryKind">) {
+  return item.memoryKind === "dream";
+}
+
 function semanticWorkingMemoryFields(item: WorkingMemoryDocumentItem) {
   return JSON.stringify({
     content: item.content,
@@ -417,7 +458,7 @@ function parseWorkingMemoryVisibleContent(
 }
 
 function dreamVisibleLabel(item: WorkingMemoryDocumentItem) {
-  if (item.sourceKind !== "dream" && item.memoryKind !== "dream") return "";
+  if (!isDreamWorkingMemoryItem(item)) return "";
   const dreamedAt = item.dreamReviewedAt || item.occurredAt || item.recordedAt;
   const timestamp = formatModelTimestamp(dreamedAt, item.timeZone);
   if (!timestamp) {

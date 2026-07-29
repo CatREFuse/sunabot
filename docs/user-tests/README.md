@@ -86,6 +86,7 @@ Current-message media:
 
 - [`current-message-image-reference.md`](./current-message-image-reference.md)
 - [`current-message-image-4k-retry-budget.md`](./current-message-image-4k-retry-budget.md)
+- [`cases/workbench-resources/admin-group-imports.md`](./cases/workbench-resources/admin-group-imports.md)
 
 ## Read-only test-account sampling
 

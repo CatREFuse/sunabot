@@ -14,12 +14,16 @@ workspace/business/agents/<agentId>/
 │   └── knowledge/index.json
 └── docker-workbench/
     ├── index.md
+    ├── selfie/references.jsonl
+    ├── emoji/emojis.jsonl
+    ├── skills/index.json
+    ├── knowledge/index.json
     └── native-workbench/       # 运行时只读 bind projection
 ```
 
-`workbench/` 是 Native Bash 与管理后台使用的资源真值目录。`docker-workbench/` 是 Docker Bash 的独立可写 cwd；容器内固定为 `/workbench`。运行时把完整 Native workbench 只读挂载到 `/workbench/native-workbench`，不依赖跨容器宿主符号链接。
+`workbench/` 与 `docker-workbench/` 各自保存一套独立资源和管理入口。前者是 Native Bash 的 cwd，后者是 Docker Bash 的独立可写 cwd并在容器内固定为 `/workbench`。运行时把完整 Native workbench 只读挂载到 `/workbench/native-workbench`，不依赖跨容器宿主符号链接。
 
-Native Bash 的 cwd 是宿主真实 `workbench/`，环境变量 `SUNABOT_DOCKER_WORKBENCH` 指向同一 Agent 的 `docker-workbench/`。Docker Bash 使用 `SUNABOT_NATIVE_WORKBENCH=/workbench/native-workbench` 寻址只读投影。两个工作区各自使用 `index.md`，并在入口中列出当前环境实际可访问的自拍、表情、Skills 与知识库路径。
+Native Bash 的 cwd 是宿主真实 `workbench/`，环境变量 `SUNABOT_DOCKER_WORKBENCH` 指向同一 Agent 的 `docker-workbench/`。Docker Bash 使用 `SUNABOT_NATIVE_WORKBENCH=/workbench/native-workbench` 寻址只读投影。两个工作区各自使用 `index.md` 和四个资源入口；运行时同时读取两套自拍、表情与知识库，管理 API 可按 Workbench 独立寻址。Docker Skill 目录可用于源包工作，激活仍要求仓库审查并发布到 Native Skill 索引。
 
 ## 迁移内容
 
@@ -32,7 +36,7 @@ Native Bash 的 cwd 是宿主真实 `workbench/`，环境变量 `SUNABOT_DOCKER_
 | `knowledge/` | `workbench/knowledge/` |
 | 旧媒体目录中的 `emojis.jsonl` 与清单引用 PNG | `workbench/emoji/` |
 
-普通生成图片继续位于媒体目录。迁移先在 `workspace/backups/agent-workbenches-v2-<timestamp>/` 建立逐 Agent 文件备份、manifest 与 SHA-256，再执行同文件系统移动并补齐两个 `index.md`、四个资源入口及 Docker 投影点。已知旧默认入口会升级，其他非空管理员自定义入口不会覆盖。Agent 根、双工作区及受控资源目录统一收紧为当前运行用户拥有的 `0700`，固定管理入口为 `0600`；已有 marker 的重复 apply 也会幂等修复权限漂移，verify 对宽权限、错误属主、链接或特殊文件失败关闭。
+普通生成图片继续位于媒体目录。迁移先在 `workspace/backups/agent-workbenches-v2-<timestamp>/` 建立逐 Agent 文件备份、manifest 与 SHA-256，再执行同文件系统移动并补齐两个 `index.md`、两套各四个资源入口及 Docker 投影点。已知旧默认入口会升级，其他非空管理员自定义入口不会覆盖。Agent 根、双工作区及受控资源目录统一收紧为当前运行用户拥有的 `0700`，固定管理入口为 `0600`；已有 marker 的重复 apply 也会幂等补齐 Docker 资源入口并修复权限漂移，verify 对宽权限、错误属主、链接或特殊文件失败关闭。
 
 ## 执行
 
@@ -66,10 +70,11 @@ npm run migrate:agent-resources -- rollback \
 
 ## 验收
 
-- 新建与既有 Agent 均具备两个 `index.md` 和四个资源管理入口。
+- 新建与既有 Agent 均具备两个 `index.md` 和两套各四个资源管理入口。
 - Native Bash 的 cwd 为真实 `workbench/`，且 `SUNABOT_DOCKER_WORKBENCH` 可读取 Docker 工作区。
 - Docker Bash 的 cwd 为 `/workbench`，`/workbench/native-workbench` 可读取完整 Native workbench。
 - Docker 投影对自拍、表情、Skills、知识库及其他 Native workbench 文件全部只读。
-- 管理后台与 Native workbench 使用同一份资源文件；Docker 通过投影读取相同字节。
+- Bot 同时读取两套自拍、表情与知识库；管理 API 可选择 Native 或 Docker 资源，Docker 还可通过只读投影读取 Native 的相同字节。
+- Skill 只从经过仓库审查并发布到 Native `workbench/skills/` 的索引激活；Docker `skills/` 不绕过审查。
 - Agent 根、双工作区及受控资源目录为 `0700`，固定管理入口为 `0600`；权限漂移会使 verify 与 Agent readiness 失败。
 - 重启后投影、资源入口、Agent 隔离和管理 API 均保持可用。

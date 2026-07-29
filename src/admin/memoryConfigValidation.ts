@@ -20,13 +20,13 @@ export function validateMemoryConfig(input: unknown): BotMemorySettings {
   const memoryModel = requiredString(value.memoryModel, "memory.memoryModel", { trim: true, min: 1, max: 200 });
   const reasoningEffort = optionalReasoningEffort(value.reasoningEffort, "memory.reasoningEffort");
   validateCatalogEffort(memoryModel, reasoningEffort, "memory.reasoningEffort");
-  const dreamRecentMemoryLimit = integer(value.dreamRecentMemoryLimit, "memory.dreamRecentMemoryLimit", 0, 24);
-  const dreamOlderMemoryLimit = integer(value.dreamOlderMemoryLimit, "memory.dreamOlderMemoryLimit", 0, 24);
+  const dreamRecentMemoryLimit = integer(value.dreamRecentMemoryLimit, "memory.dreamRecentMemoryLimit", 0, 48);
+  const dreamOlderMemoryLimit = integer(value.dreamOlderMemoryLimit, "memory.dreamOlderMemoryLimit", 0, 48);
   if (dreamRecentMemoryLimit + dreamOlderMemoryLimit < 1) {
     badRequest("CONFIG_INVALID", "Dream 至少需要抽取一条记忆。", "memory.dreamRecentMemoryLimit");
   }
-  if (dreamRecentMemoryLimit + dreamOlderMemoryLimit > 24) {
-    badRequest("CONFIG_INVALID", "Dream 每次最多抽取 24 条记忆。", "memory.dreamRecentMemoryLimit");
+  if (dreamRecentMemoryLimit + dreamOlderMemoryLimit > 48) {
+    badRequest("CONFIG_INVALID", "Dream 每次最多抽取 48 条记忆。", "memory.dreamRecentMemoryLimit");
   }
   return {
     memoryModel,

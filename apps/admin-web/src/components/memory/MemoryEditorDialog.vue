@@ -71,7 +71,14 @@ function save() {
           </label>
           <label class="field">
             <span class="field-label">称呼</span>
-            <input v-model="form.addressNames" class="control" type="text" autocomplete="off" placeholder="多个称呼用顿号分隔">
+            <input
+              v-model="form.addressNames"
+              class="control"
+              type="text"
+              autocomplete="off"
+              aria-label="称呼"
+              placeholder="第一个为优先称呼，多个用顿号分隔"
+            >
           </label>
         </div>
         <label class="field">

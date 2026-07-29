@@ -30,7 +30,7 @@ describe("conversation Bash workbench prompt contract", () => {
       expect((system as { content: string }).content).toContain("`selfie`");
       expect((system as { content: string }).content).toContain("`referenceImagePaths`");
       expect((system as { content: string }).content).toContain("原样传入");
-      expect((system as { content: string }).content).toContain("`references.jsonl`");
+      expect((system as { content: string }).content).toContain("`selfie/references.jsonl`");
     }
   );
 
@@ -90,9 +90,9 @@ describe("conversation Bash workbench prompt contract", () => {
     const content = (migrated.messages[0] as { content: string }).content;
 
     expect(content).toContain("管理员自定义规则");
-    expect(content).toContain('<bash_workbench_contract version="5">');
-    expect(content).toContain('<configuration_directory_index_contract version="3">');
-    expect(content).toContain("`references.jsonl`");
+    expect(content).toContain('<bash_workbench_contract version="7">');
+    expect(content).toContain('<configuration_directory_index_contract version="5">');
+    expect(content).toContain("`selfie/references.jsonl`");
     expect(content).not.toContain('<bash_workbench_contract version="1">');
     expect(content).not.toContain('<configuration_directory_index_contract version="1">');
   });
@@ -114,7 +114,7 @@ describe("conversation Bash workbench prompt contract", () => {
     const content = (migrated.messages[0] as { content: string }).content;
 
     expect(content).toContain("管理员自定义规则");
-    expect(content).toContain('<bash_workbench_contract version="5">');
+    expect(content).toContain('<bash_workbench_contract version="7">');
     expect(content).toContain("`export_chat_media`");
     expect(content).toContain("`send_file`");
     expect(content).not.toContain('<bash_workbench_contract version="3">');
@@ -137,7 +137,7 @@ describe("conversation Bash workbench prompt contract", () => {
     const content = (migrated.messages[0] as { content: string }).content;
 
     expect(content).toContain("管理员自定义规则");
-    expect(content).toContain('<bash_workbench_contract version="5">');
+    expect(content).toContain('<bash_workbench_contract version="7">');
     expect(content).toContain("`generate_img`");
     expect(content).toContain("`selfie`");
     expect(content).toContain("`referenceImagePaths`");

@@ -9,7 +9,10 @@ import type {
 } from "./types.js";
 import { normalizeText } from "../domain/normalizers.js";
 
-export const DREAM_ARCHIVE_MIN_TRACKING_DAYS = 90;
+export const DREAM_ARCHIVE_MIN_DORMANCY_DAYS = 90;
+export const DREAM_ARCHIVE_RECALL_DAY_EXTENSION_DAYS = 30;
+export const DREAM_ARCHIVE_MAX_RECALL_EXTENSION_DAYS = 180;
+export const DREAM_ARCHIVE_MIN_TRACKING_DAYS = DREAM_ARCHIVE_MIN_DORMANCY_DAYS;
 export const DREAM_ARCHIVE_LOW_SCORE_MAX = 0.25;
 export const DREAM_PERSONA_MIN_EVIDENCE_EVENTS = 3;
 export const DREAM_PERSONA_MIN_CONTEXTS = 2;
@@ -63,12 +66,25 @@ export function evaluateDreamArchiveCandidate(
   const reasons: DreamArchiveRejectionReason[] = [];
   const nowTime = now.getTime();
   const trackingStartedAt = Date.parse(candidate.trackingStartedAt);
+  const lastRecalledAt = candidate.lastRecalledAt == null
+    ? null
+    : Date.parse(candidate.lastRecalledAt);
   if (
     !Number.isFinite(nowTime)
     || !Number.isSafeInteger(candidate.recallCount)
     || candidate.recallCount < 0
+    || !Number.isSafeInteger(candidate.distinctRecallDays)
+    || candidate.distinctRecallDays < 0
+    || candidate.distinctRecallDays > candidate.recallCount
     || !Number.isFinite(trackingStartedAt)
     || trackingStartedAt > nowTime
+    || (candidate.recallCount === 0 && candidate.lastRecalledAt !== null)
+    || (candidate.recallCount > 0 && (
+      lastRecalledAt === null
+      || !Number.isFinite(lastRecalledAt)
+      || lastRecalledAt < trackingStartedAt
+      || lastRecalledAt > nowTime
+    ))
     || !validScore(candidate.importance)
     || !validScore(candidate.futureRelevance)
     || !validScore(candidate.emotionalSalience)
@@ -77,9 +93,14 @@ export function evaluateDreamArchiveCandidate(
     reasons.push("invalid_candidate");
     return { eligible: false, reasons };
   }
-  if (candidate.recallCount !== 0) reasons.push("recalled");
-  if (nowTime - trackingStartedAt < DREAM_ARCHIVE_MIN_TRACKING_DAYS * DAY_MS) {
-    reasons.push("tracking_too_recent");
+  const recallExtensionDays = Math.min(
+    candidate.distinctRecallDays * DREAM_ARCHIVE_RECALL_DAY_EXTENSION_DAYS,
+    DREAM_ARCHIVE_MAX_RECALL_EXTENSION_DAYS
+  );
+  const requiredDormancyDays = DREAM_ARCHIVE_MIN_DORMANCY_DAYS + recallExtensionDays;
+  const dormancyAnchor = lastRecalledAt ?? trackingStartedAt;
+  if (nowTime - dormancyAnchor < requiredDormancyDays * DAY_MS) {
+    reasons.push("dormancy_too_short");
   }
   if (candidate.importance > DREAM_ARCHIVE_LOW_SCORE_MAX) reasons.push("importance_too_high");
   if (candidate.futureRelevance > DREAM_ARCHIVE_LOW_SCORE_MAX) reasons.push("future_relevance_too_high");

@@ -8,7 +8,7 @@ All live runs require an isolated workspace, a Provider explicitly authorized to
 
 ## Current catalog snapshot
 
-`AGENT_TOOL_NAMES` has 25 names and exactly matches the fixed ToolRegistry catalog, including `read_air`, `export_chat_media`, and `import_chat_emoji`. The suite covers all 25 fixed names; runtime-generated MCP aliases are tracked separately:
+`AGENT_TOOL_NAMES` has 26 names and exactly matches the fixed ToolRegistry catalog, including `read_air`, `export_chat_media`, `import_chat_emoji`, and `import_chat_selfie`. The suite covers all 26 fixed names; runtime-generated MCP aliases are tracked separately:
 
 | Tool family | Successful-call case | Denial or blocked contract |
 | --- | --- | --- |

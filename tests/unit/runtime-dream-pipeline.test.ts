@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { SqliteDreamStore } from "../../adapters/sqlite/dreamStore.js";
 import {
   DREAM_PAYLOAD_VARIABLE,
+  type DreamFieldKnowledgeV1,
   type DreamMemorySelectionSettings,
   type DreamMemoryRecord,
   type DreamPersonaAdjustmentV1
@@ -10,6 +11,7 @@ import {
   RuntimeDreams,
   type RuntimeDreamContextPort,
   type RuntimeDreamContextSnapshot,
+  type RuntimeDreamFieldKnowledgePort,
   type RuntimeDreamModelPort,
   type RuntimeDreamPersonaPort,
   type RuntimeDreamRun,
@@ -72,7 +74,7 @@ describe("RuntimeDreams", () => {
     ]);
   });
 
-  it("sends one model request with a unified 12-recent and 12-older memory batch", async () => {
+  it("sends one model request with a unified 24-recent and 12-older memory batch", async () => {
     const now = new Date("2026-07-20T04:05:00.000Z");
     const recentWorking = Array.from({ length: 20 }, (_, index) => memory(
       `recent-work-${index}`,
@@ -82,7 +84,7 @@ describe("RuntimeDreams", () => {
     ));
     const recentLongTerm = Array.from({ length: 20 }, (_, index) => memory(
       `recent-long-${index}`,
-      "2026-07-18T12:00:00.000Z",
+      "2026-07-19T12:00:00.000Z",
       "conversation",
       `event:recent-long-${index}`
     ));
@@ -113,8 +115,8 @@ describe("RuntimeDreams", () => {
       ...promptIds(payload.workingMemories),
       ...promptIds(payload.longTermMemories)
     ];
-    expect(ids).toHaveLength(24);
-    expect(ids.filter((id) => id.startsWith("recent-"))).toHaveLength(12);
+    expect(ids).toHaveLength(36);
+    expect(ids.filter((id) => id.startsWith("recent-"))).toHaveLength(24);
     expect(ids.filter((id) => id.startsWith("older-"))).toHaveLength(12);
   });
 
@@ -195,7 +197,9 @@ describe("RuntimeDreams", () => {
 
   it("resumes persisted generated output without a second model call", async () => {
     let now = new Date("2026-07-20T04:05:00.000Z");
-    const fixture = createFixture(() => now);
+    const fixture = createFixture(() => now, memorySnapshot({
+      workingRevision: "d".repeat(64)
+    }));
     fixture.store.commitFailures = 1;
 
     const failed = await fixture.runtime.tick(now);
@@ -261,6 +265,159 @@ describe("RuntimeDreams", () => {
     const failed = await fixture.runtime.tick(now);
 
     expect(failed).toMatchObject({ status: "failed" });
+    expect(fixture.workingMemory.rollbacks).toBe(1);
+  });
+
+  it("commits scoped field knowledge through CAS before SQLite consolidation", async () => {
+    const now = new Date("2026-07-20T04:05:00.000Z");
+    const fixture = createFixture(() => now, memorySnapshot({
+      workingRevision: "d".repeat(64)
+    }));
+    fixture.model.fieldKnowledge = {
+      content: "# 场域知识\n\n## 使用边界\n\n- 约定只在明确范围内生效。\n\n## 场域约定\n\n### context:relationship\n\n- 发布前需要双人复核。",
+      evidenceMemoryIds: ["long-1"]
+    };
+
+    const completed = await fixture.runtime.tick(now);
+
+    expect(completed).toMatchObject({
+      status: "completed",
+      result: expect.objectContaining({ fieldKnowledgeUpdated: true })
+    });
+    expect(fixture.fieldKnowledge.calls).toEqual([
+      expect.objectContaining({
+        expectedRevision: "e".repeat(64),
+        content: expect.stringContaining("## 场域约定")
+      })
+    ]);
+    expect(fixture.store.commitCalls[0]?.result).toMatchObject({
+      fieldKnowledgeUpdated: true
+    });
+  });
+
+  it("restores AIR identity aliases locally before the CAS write", async () => {
+    const now = new Date("2026-07-20T04:05:00.000Z");
+    const identifiedWorking = {
+      ...memory("work-1", "2026-07-19T18:00:00.000Z", "conversation", "event:work"),
+      userId: "95011",
+      userName: "Rin",
+      addressNames: ["Rin"]
+    };
+    const originalAir = "# 场域知识\n\n## 使用边界\n\n- 约定只在协作群生效。\n\n## 场域约定\n\n- Rin 负责发布前双人复核。";
+    const fixture = createFixture(() => now, memorySnapshot({
+      workingRevision: "d".repeat(64),
+      workingRecords: [identifiedWorking],
+      persona: { preference: "表达清楚", relation: "重视长期相处", air: originalAir }
+    }));
+    fixture.model.fieldKnowledgeFactory = (payload) => ({
+      content: String((payload.persona as Record<string, unknown>).air),
+      evidenceMemoryIds: []
+    });
+
+    const completed = await fixture.runtime.tick(now);
+    const persistedInput = fixture.store.claimCalls[0]?.input as Record<string, unknown>;
+    const providerPayload = persistedInput.payload as Record<string, unknown>;
+
+    expect(completed).toMatchObject({
+      status: "completed",
+      result: expect.objectContaining({ fieldKnowledgeUpdated: true })
+    });
+    expect(JSON.stringify(providerPayload)).not.toContain("Rin");
+    expect(persistedInput.fieldKnowledgeBindings).toEqual([
+      expect.objectContaining({ value: "Rin" })
+    ]);
+    expect(fixture.fieldKnowledge.calls[0]?.content).toBe(originalAir);
+    expect(fixture.fieldKnowledge.calls[0]?.content).not.toMatch(/人物-[a-f0-9]{24}/u);
+  });
+
+  it("does not replace field knowledge when the projected AIR is lossy", async () => {
+    const now = new Date("2026-07-20T04:05:00.000Z");
+    const fixture = createFixture(() => now, memorySnapshot({
+      workingRevision: "d".repeat(64),
+      persona: {
+        preference: "表达清楚",
+        relation: "重视长期相处",
+        air: "# 场域知识\n\n## 使用边界\n\n- 工作区在 /Users/example/project。\n\n## 场域约定\n\n- password=super-secret-value。"
+      }
+    }));
+    fixture.model.fieldKnowledge = {
+      content: "# 场域知识\n\n## 使用边界\n\n- 约定只在明确范围内生效。\n\n## 场域约定\n\n- 发布前需要双人复核。",
+      evidenceMemoryIds: ["long-1"]
+    };
+
+    const completed = await fixture.runtime.tick(now);
+
+    expect(completed).toMatchObject({
+      status: "completed",
+      result: expect.objectContaining({ fieldKnowledgeUpdated: false })
+    });
+    expect(fixture.fieldKnowledge.calls).toEqual([]);
+  });
+
+  it("does not replace field knowledge when a persisted run predates the write gate", async () => {
+    let now = new Date("2026-07-20T04:05:00.000Z");
+    const fixture = createFixture(() => now, memorySnapshot({
+      workingRevision: "d".repeat(64)
+    }));
+    fixture.model.fieldKnowledge = {
+      content: "# 场域知识\n\n## 使用边界\n\n- 约定只在明确范围内生效。\n\n## 场域约定\n\n- 发布前需要双人复核。",
+      evidenceMemoryIds: ["long-1"]
+    };
+    fixture.store.commitFailures = 1;
+
+    const failed = await fixture.runtime.tick(now);
+    expect(failed).toMatchObject({ status: "failed" });
+    const persistedPayload = failed?.input.payload as Record<string, unknown>;
+    delete persistedPayload.fieldKnowledgeWritable;
+    fixture.fieldKnowledge.calls.length = 0;
+    now = new Date("2026-07-20T04:21:00.000Z");
+
+    const recovered = await fixture.runtime.tick(now);
+
+    expect(recovered).toMatchObject({
+      status: "completed",
+      result: expect.objectContaining({ fieldKnowledgeUpdated: false })
+    });
+    expect(fixture.fieldKnowledge.calls).toEqual([]);
+  });
+
+  it("fails before SQLite and rolls working memory back when field knowledge changed", async () => {
+    const now = new Date("2026-07-20T04:05:00.000Z");
+    const fixture = createFixture(() => now, memorySnapshot({
+      workingRevision: "d".repeat(64)
+    }));
+    fixture.model.fieldKnowledge = {
+      content: "# 场域知识\n\n## 使用边界\n\n- 约定只在明确范围内生效。\n\n## 场域约定\n\n- 发布前需要双人复核。",
+      evidenceMemoryIds: ["long-1"]
+    };
+    fixture.fieldKnowledge.conflict = true;
+
+    const failed = await fixture.runtime.tick(now);
+
+    expect(failed).toMatchObject({
+      status: "failed",
+      errorCode: "DREAM_SNAPSHOT_CONFLICT",
+      nextRetryAt: null
+    });
+    expect(fixture.workingMemory.rollbacks).toBe(1);
+    expect(fixture.store.commitCalls).toHaveLength(0);
+  });
+
+  it("rolls field knowledge and working memory back when SQLite commit throws", async () => {
+    const now = new Date("2026-07-20T04:05:00.000Z");
+    const fixture = createFixture(() => now, memorySnapshot({
+      workingRevision: "d".repeat(64)
+    }));
+    fixture.model.fieldKnowledge = {
+      content: "# 场域知识\n\n## 使用边界\n\n- 约定只在明确范围内生效。\n\n## 场域约定\n\n- 发布前需要双人复核。",
+      evidenceMemoryIds: ["long-1"]
+    };
+    fixture.store.commitFailures = 1;
+
+    const failed = await fixture.runtime.tick(now);
+
+    expect(failed).toMatchObject({ status: "failed" });
+    expect(fixture.fieldKnowledge.rollbacks).toBe(1);
     expect(fixture.workingMemory.rollbacks).toBe(1);
   });
 
@@ -689,6 +846,8 @@ class FakeModel implements RuntimeDreamModelPort {
   response?: string;
   waitForAbort = false;
   adjustment: DreamPersonaAdjustmentV1 | null = null;
+  fieldKnowledge: DreamFieldKnowledgeV1 | null = null;
+  fieldKnowledgeFactory?: (payload: Record<string, unknown>) => DreamFieldKnowledgeV1 | null;
 
   async complete(request: unknown, options: Parameters<RuntimeDreamModelPort["complete"]>[1]) {
     this.calls += 1;
@@ -726,6 +885,7 @@ class FakeModel implements RuntimeDreamModelPort {
         confidence: 1,
         reason: "仍有清晰意义"
       })),
+      fieldKnowledge: this.fieldKnowledgeFactory?.(payload) ?? this.fieldKnowledge,
       personaAdjustment: this.adjustment
     });
   }
@@ -768,6 +928,27 @@ class FakeWorkingMemory implements RuntimeDreamWorkingMemoryPort {
   }
 }
 
+class FakeFieldKnowledge implements RuntimeDreamFieldKnowledgePort {
+  readonly calls: Array<Parameters<RuntimeDreamFieldKnowledgePort["compareAndSwap"]>[0]> = [];
+  conflict = false;
+  rollbacks = 0;
+
+  async compareAndSwap(input: Parameters<RuntimeDreamFieldKnowledgePort["compareAndSwap"]>[0]) {
+    this.calls.push(structuredClone(input));
+    if (this.conflict) {
+      return { status: "conflict" as const, revision: "f".repeat(64) };
+    }
+    return {
+      status: "updated" as const,
+      revision: "1".repeat(64),
+      rollback: async () => {
+        this.rollbacks += 1;
+        return true;
+      }
+    };
+  }
+}
+
 function createFixture(
   clock: () => Date,
   snapshot = memorySnapshot(),
@@ -778,6 +959,7 @@ function createFixture(
   const model = new FakeModel();
   const persona = new FakePersona();
   const workingMemory = new FakeWorkingMemory();
+  const fieldKnowledge = new FakeFieldKnowledge();
   const prompt = {
     responseFormat: { type: "text" } as Record<string, unknown>,
     async render(_id: string, variables: Readonly<Record<string, unknown>>) {
@@ -788,6 +970,7 @@ function createFixture(
     store,
     context,
     workingMemory,
+    fieldKnowledge,
     prompt,
     model,
     persona,
@@ -799,7 +982,16 @@ function createFixture(
     clock,
     retryDelayMs: 15 * 60_000
   });
-  return { runtime, store, context, model, persona, workingMemory, prompt };
+  return {
+    runtime,
+    store,
+    context,
+    model,
+    persona,
+    workingMemory,
+    fieldKnowledge,
+    prompt
+  };
 }
 
 function memorySnapshot(overrides: Partial<RuntimeDreamContextSnapshot> = {}): RuntimeDreamContextSnapshot {
@@ -807,13 +999,18 @@ function memorySnapshot(overrides: Partial<RuntimeDreamContextSnapshot> = {}): R
     workingRecords: [memory("work-1", "2026-07-19T18:00:00.000Z", "conversation", "event:work")],
     longTermRecords: [memory("long-1", "2026-02-01T09:00:00.000Z", "relationship", "event:long")],
     workingDigest: WORKING_DIGEST,
+    fieldKnowledgeRevision: "e".repeat(64),
     longTermDigest: LONG_TERM_DIGEST,
     recallStats: [],
     userProfiles: [{ id: "profile-1", fact: "用户喜欢有条理的讨论。" }],
     recentConversations: [{ id: "conversation-1", text: "今天完成了一个长期任务。" }],
     activeTasks: [{ id: "task-1", title: "整理书架" }],
     plannedDailySchedule: { date: "2026-07-19", summary: "阅读与散步" },
-    persona: { preference: "表达清楚", relation: "重视长期相处" },
+    persona: {
+      preference: "表达清楚",
+      relation: "重视长期相处",
+      air: "# 场域知识\n\n## 使用边界\n\n- 约定只在明确范围内生效。\n\n## 场域约定\n\n- 发布前需要双人复核。"
+    },
     ...overrides
   };
 }

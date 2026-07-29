@@ -24,7 +24,7 @@ import {
   readWorkingMemoryDocument,
   replaceWorkingMemoryDocument,
   workingMemoryItemToEntry,
-  workingMemoryItemsFromFacts
+  workingMemoryItemsFromFactsPreservingDreams
 } from "../workingMemoryDocument.js";
 import { recordMemoryOperation } from "../operationAudit.js";
 
@@ -67,7 +67,7 @@ export async function replaceWorkingMemoryFacts(
       });
       return { status: "snapshot_conflict" };
     }
-    const nextItems = workingMemoryItemsFromFacts(
+    const nextItems = workingMemoryItemsFromFactsPreservingDreams(
       normalizedFacts,
       snapshot.items,
       options.metadata ?? {},
@@ -198,7 +198,7 @@ export async function applyMemoryBatchTransaction(
     }
 
     const metadata = { ...(input.metadata ?? {}), batchId };
-    const nextWorkingItems = workingMemoryItemsFromFacts(
+    const nextWorkingItems = workingMemoryItemsFromFactsPreservingDreams(
       workingFacts,
       workingSnapshot.items,
       metadata,

@@ -66,6 +66,17 @@ export function resolveAgentResourceDirectory(agentWorkspace: string, kind: "sel
   return agentResourcePath(path.resolve(agentWorkspace), kind);
 }
 
+export function resolveAgentResourceDirectories(
+  agentWorkspace: string,
+  kind: "selfie" | "emoji" | "skills" | "knowledge"
+) {
+  const workspace = path.resolve(agentWorkspace);
+  return {
+    native: agentResourcePath(workspace, kind, "native"),
+    docker: agentResourcePath(workspace, kind, "docker")
+  };
+}
+
 export async function resolveAgentWorkbenchFile(
   agentWorkspace: string,
   relativePath: string,

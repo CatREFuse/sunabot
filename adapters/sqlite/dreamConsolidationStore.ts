@@ -50,7 +50,12 @@ interface NormalizedConsolidationInput {
     data: JsonObject;
     encoded: string;
     reason: string;
-    recallSnapshot: { recallCount: number; trackingStartedAt: string };
+    recallSnapshot: {
+      recallCount: number;
+      distinctRecallDays: number;
+      lastRecalledAt: string | null;
+      trackingStartedAt: string;
+    };
   }>;
   recallLineages: Array<{ targetId: string; sourceIds: string[] }>;
   reviews: Array<{
@@ -305,19 +310,52 @@ function normalizeInput(input: CommitDreamConsolidationInput): NormalizedConsoli
 }
 
 function normalizeArchiveRecallSnapshot(
-  snapshot: { recallCount: number; trackingStartedAt: string },
+  snapshot: {
+    recallCount: number;
+    distinctRecallDays: number;
+    lastRecalledAt: string | null;
+    trackingStartedAt: string;
+  },
   index: number
 ) {
-  if (!Number.isSafeInteger(snapshot.recallCount) || snapshot.recallCount !== 0) {
-    throw new Error(`archives[${index}].recallSnapshot.recallCount must be 0.`);
+  const prefix = `archives[${index}].recallSnapshot`;
+  if (!Number.isSafeInteger(snapshot.recallCount) || snapshot.recallCount < 0) {
+    throw new Error(`${prefix}.recallCount must be a non-negative safe integer.`);
   }
-  const field = `archives[${index}].recallSnapshot.trackingStartedAt`;
-  const trackingStartedAt = boundedText(snapshot.trackingStartedAt, field, 1, 80);
-  const timestamp = Date.parse(trackingStartedAt);
-  if (!Number.isFinite(timestamp) || new Date(timestamp).toISOString() !== trackingStartedAt) {
+  if (!Number.isSafeInteger(snapshot.distinctRecallDays) || snapshot.distinctRecallDays < 0) {
+    throw new Error(`${prefix}.distinctRecallDays must be a non-negative safe integer.`);
+  }
+  if (snapshot.distinctRecallDays > snapshot.recallCount) {
+    throw new Error(`${prefix}.distinctRecallDays must not exceed recallCount.`);
+  }
+  const trackingStartedAt = canonicalIsoTimestamp(
+    snapshot.trackingStartedAt,
+    `${prefix}.trackingStartedAt`
+  );
+  const lastRecalledAt = snapshot.lastRecalledAt == null
+    ? null
+    : canonicalIsoTimestamp(snapshot.lastRecalledAt, `${prefix}.lastRecalledAt`);
+  if ((snapshot.recallCount === 0) !== (lastRecalledAt == null)) {
+    throw new Error(`${prefix}.lastRecalledAt must be null exactly when recallCount is 0.`);
+  }
+  if (lastRecalledAt != null && lastRecalledAt < trackingStartedAt) {
+    throw new Error(`${prefix}.lastRecalledAt must not be earlier than trackingStartedAt.`);
+  }
+  return {
+    recallCount: snapshot.recallCount,
+    distinctRecallDays: snapshot.distinctRecallDays,
+    lastRecalledAt,
+    trackingStartedAt
+  };
+}
+
+function canonicalIsoTimestamp(value: string, field: string) {
+  const normalized = boundedText(value, field, 1, 80);
+  const timestamp = Date.parse(normalized);
+  if (!Number.isFinite(timestamp) || new Date(timestamp).toISOString() !== normalized) {
     throw new Error(`${field} must be a canonical ISO timestamp.`);
   }
-  return { recallCount: 0, trackingStartedAt };
+  return normalized;
 }
 
 function archiveRecallSnapshotsCurrent(
@@ -325,14 +363,18 @@ function archiveRecallSnapshotsCurrent(
   archives: NormalizedConsolidationInput["archives"]
 ) {
   const read = database.prepare(`
-    SELECT recall_count, tracking_started_at,
+    SELECT recall_count, distinct_recall_days, last_recalled_at, tracking_started_at,
       (SELECT COUNT(*) FROM memory_recall_receipts WHERE record_id = ?) AS receipt_count
     FROM memory_recall_stats WHERE record_id = ?
   `);
   return archives.every((archive) => {
     const row = read.get(archive.recordId, archive.recordId) as SqlRow | undefined;
-    return row != null && archive.recallSnapshot.recallCount === 0 &&
-      Number(row.recall_count) === 0 && Number(row.receipt_count) === 0 &&
+    const lastRecalledAt = row?.last_recalled_at == null ? null : String(row.last_recalled_at);
+    return row != null &&
+      Number(row.recall_count) === archive.recallSnapshot.recallCount &&
+      Number(row.receipt_count) === archive.recallSnapshot.recallCount &&
+      Number(row.distinct_recall_days) === archive.recallSnapshot.distinctRecallDays &&
+      lastRecalledAt === archive.recallSnapshot.lastRecalledAt &&
       String(row.tracking_started_at) === archive.recallSnapshot.trackingStartedAt;
   });
 }

@@ -1,5 +1,6 @@
 export const EXPORT_CHAT_MEDIA_TOOL_NAME = "export_chat_media";
 export const IMPORT_CHAT_EMOJI_TOOL_NAME = "import_chat_emoji";
+export const IMPORT_CHAT_SELFIE_TOOL_NAME = "import_chat_selfie";
 export const CHAT_MEDIA_HANDLE_MAX_LENGTH = 512;
 
 export interface ExportChatMediaInput {
@@ -9,6 +10,11 @@ export interface ExportChatMediaInput {
 export interface ImportChatEmojiInput {
   handle: string;
   key: string;
+}
+
+export interface ImportChatSelfieInput {
+  handle: string;
+  note: string;
 }
 
 export interface ExportedChatMedia {
@@ -34,9 +40,21 @@ export interface ImportedChatEmoji {
   deduplicated: boolean;
 }
 
+export interface ImportedChatSelfie {
+  ok: true;
+  id: string;
+  fileName: string;
+  note: string;
+  byteLength: number;
+  width: number;
+  height: number;
+  deduplicated: boolean;
+}
+
 export interface ChatMediaToolPort {
   export(input: ExportChatMediaInput): Promise<ExportedChatMedia>;
   importEmoji?: (input: ImportChatEmojiInput) => Promise<ImportedChatEmoji>;
+  importSelfie?: (input: ImportChatSelfieInput) => Promise<ImportedChatSelfie>;
 }
 
 export function readExportChatMediaInput(value: unknown): ExportChatMediaInput {
@@ -58,6 +76,19 @@ export function readImportChatEmojiInput(value: unknown): ImportChatEmojiInput {
     handle,
     key
   };
+}
+
+export function readImportChatSelfieInput(value: unknown): ImportChatSelfieInput {
+  const input = strictRecord(value, ["handle", "note"]);
+  const handle = chatMediaHandle(input.handle);
+  if (!handle.includes(":image:")) {
+    throw new Error("Chat selfie import requires an image handle.");
+  }
+  const note = typeof input.note === "string" ? input.note.normalize("NFC").trim() : "";
+  if (!note || [...note].length > 120 || /[\u0000-\u001f\u007f-\u009f]/u.test(note)) {
+    throw new Error("Selfie reference note must be 1 to 120 characters without control characters.");
+  }
+  return { handle, note };
 }
 
 export const exportChatMediaTool = {
@@ -105,6 +136,33 @@ export const importChatEmojiTool = {
       }
     },
     required: ["handle", "key"]
+  }
+} as const;
+
+export const importChatSelfieTool = {
+  type: "function",
+  name: IMPORT_CHAT_SELFIE_TOOL_NAME,
+  description: "Import one exact image from the current user message or an explicitly quoted message into the current Agent selfie-reference library. This mutating capability is available only in an authorized administrator QQ private chat or group chat. Private chat writes the Native Workbench catalog; group chat writes the Docker Workbench catalog. It validates the image, stores it with a content-derived ID, deduplicates content, and atomically updates references.jsonl.",
+  strict: true,
+  parameters: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      handle: {
+        type: "string",
+        minLength: 1,
+        maxLength: CHAT_MEDIA_HANDLE_MAX_LENGTH,
+        pattern: "^message:[0-9]+:image:[0-9]+$",
+        description: "An exact current-message or quoted-message image handle shown in the prompt."
+      },
+      note: {
+        type: "string",
+        minLength: 1,
+        maxLength: 120,
+        description: "A concrete note describing the character appearance, view, pose, clothing, or other useful selection cues."
+      }
+    },
+    required: ["handle", "note"]
   }
 } as const;
 

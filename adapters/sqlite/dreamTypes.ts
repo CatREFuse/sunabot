@@ -125,6 +125,8 @@ export interface DreamConsolidationArchiveInput {
   reason: string;
   recallSnapshot: {
     recallCount: number;
+    distinctRecallDays: number;
+    lastRecalledAt: string | null;
     trackingStartedAt: string;
   };
 }

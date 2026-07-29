@@ -2,8 +2,10 @@ import { appendRequestLog } from "../../observability/requestLog.js";
 import {
   EXPORT_CHAT_MEDIA_TOOL_NAME,
   IMPORT_CHAT_EMOJI_TOOL_NAME,
+  IMPORT_CHAT_SELFIE_TOOL_NAME,
   readExportChatMediaInput,
-  readImportChatEmojiInput
+  readImportChatEmojiInput,
+  readImportChatSelfieInput
 } from "../../../services/tools/public.js";
 import type {
   ProviderCompleteOptions,
@@ -34,6 +36,20 @@ export async function runImportChatEmoji(
   const input = readImportChatEmojiInput(args);
   const result = await options.chatMedia.importEmoji(input);
   await appendChatMediaLog(IMPORT_CHAT_EMOJI_TOOL_NAME, call, { ...input }, result, options);
+  return result;
+}
+
+export async function runImportChatSelfie(
+  args: Record<string, unknown>,
+  call: ResponseFunctionCallItem,
+  options: ProviderCompleteOptions
+) {
+  if (!options.chatMedia?.importSelfie) {
+    return { ok: false, error: "Chat selfie import is not available." };
+  }
+  const input = readImportChatSelfieInput(args);
+  const result = await options.chatMedia.importSelfie(input);
+  await appendChatMediaLog(IMPORT_CHAT_SELFIE_TOOL_NAME, call, { ...input }, result, options);
   return result;
 }
 

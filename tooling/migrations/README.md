@@ -13,6 +13,9 @@ SQLite schema 与 workspace 布局的前向迁移命令。迁移必须先停服�
 | `npm run migrate:agent-resources -- plan --workspace PATH` | 只读枚举全部 Agent 的旧资源路径、表情引用和迁移需求 |
 | `npm run migrate:agent-resources -- apply --workspace PATH --quiesced` | 停服后备份并把自拍、表情、Skills、知识库迁入 Native `workbench/` |
 | `npm run migrate:agent-resources -- verify --workspace PATH` | 校验 marker、固定管理入口和旧路径退役状态 |
+| `npm run migrate:dream-working-memory -- dry-run --workspace PATH` | 只读识别被历史 Dream 写回误标的普通工作记忆和缺少语义字段的真实 Dream |
+| `npm run migrate:dream-working-memory -- apply --workspace PATH --quiesced` | 停服后备份并原子修复工作记忆 Dream 边界 |
+| `npm run migrate:dream-working-memory -- rollback --workspace PATH --backup backups/<name> --quiesced` | 工作记忆未发生后续变化时从迁移备份回滚 |
 | `npm run upgrade:0.1.2 -- plan [--workspace PATH]` | 只读检查 0.1.0 / 0.1.1 到 0.1.2 的版本与双工作区迁移状态 |
 | `npm run upgrade:0.1.2 -- apply [--workspace PATH]` | 自动停服、创建全 Agent SQLite 恢复点、迁移资源、启动并运行 status/doctor |
 | `npm run upgrade:0.1.3 -- plan [--workspace PATH]` | 只读检查 0.1.2 到 0.1.3 的版本、workspace 与聊天媒体提示词迁移目标 |

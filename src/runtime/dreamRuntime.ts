@@ -22,6 +22,12 @@ import {
   workingMemoryItemsFromFacts,
   type MemoryFactInput
 } from "../../services/memory/public.js";
+import {
+  normalizeAirKnowledge,
+  readAirKnowledge,
+  replaceAirKnowledge
+} from "../../services/air/public.js";
+import { loadPersona } from "../../services/agent/public.js";
 import type { PromptVariableValue, RenderedPromptRequest } from "../../services/agent/promptSystem.js";
 import { AgentFileRepository } from "../admin/agentFiles.js";
 import { appendRequestLog } from "../../adapters/observability/requestLog.js";
@@ -53,6 +59,9 @@ export function createRuntimeDreamsForHost(host: SunaRuntime) {
     context: { capture: (input) => captureDreamContext(host, input) },
     workingMemory: {
       compareAndSwap: (input) => compareAndSwapDreamWorkingMemory(host, input)
+    },
+    fieldKnowledge: {
+      compareAndSwap: (input) => compareAndSwapDreamFieldKnowledge(host, input)
     },
     prompt: {
       render: (id, variables) => host.renderPromptRequest(
@@ -169,6 +178,7 @@ async function captureDreamContext(
 ): Promise<RuntimeDreamContextSnapshot> {
   const repository = applicationDataStore(host.config);
   const workingDocument = await readWorkingMemoryDocument(host.config);
+  const fieldKnowledge = await readAirKnowledge(host.config);
   const workingJson = workingDocument.items.map((item) => ({
     ...workingMemoryItemToEntry(item),
     source: dreamWorkingMemorySource(item.sourceKind),
@@ -195,13 +205,14 @@ async function captureDreamContext(
     longTermRecords,
     workingDigest: digestDreamMemorySnapshot(workingJson),
     workingRevision: workingDocument.revision,
+    fieldKnowledgeRevision: fieldKnowledge.revision,
     longTermDigest: digestDreamMemorySnapshot(longTermJson),
     recallStats,
     userProfiles: jsonClone(repository.readMemory("user_profile").slice(-MAX_DREAM_PROFILE_RECORDS)),
     recentConversations: observedConversations(repository.readConversations(), input.window),
     activeTasks: jsonClone(repository.scheduledTasks.list({ enabled: true, limit: MAX_DREAM_TASKS }).items),
     plannedDailySchedule: jsonClone(repository.director.read(previousScheduleDate) ?? null),
-    persona: personaSnapshot(host)
+    persona: personaSnapshot(host, fieldKnowledge.content)
   };
 }
 
@@ -243,7 +254,9 @@ async function compareAndSwapDreamWorkingMemory(
       conversationScope: "dream",
       conversationTitle: `Dream ${input.localDate}`
     },
-    (_fact, index) => `working_dream_${input.localDate.replaceAll("-", "_")}_${index}`,
+    (fact, index) => fact.memoryKind === "dream" && fact.id
+      ? fact.id
+      : `working_dream_${input.localDate.replaceAll("-", "_")}_${index}`,
     "dream"
   );
   const replaced = await replaceWorkingMemoryDocument(host.config, current.revision, nextItems);
@@ -306,6 +319,89 @@ async function compareAndSwapDreamWorkingMemory(
         afterRevision: rolledBack.current.revision,
         reasonCode: rolledBack.status === "conflict" ? "revision_conflict" : undefined
       });
+      return rolledBack.status !== "conflict";
+    }
+  };
+}
+
+async function compareAndSwapDreamFieldKnowledge(
+  host: SunaRuntime,
+  input: {
+    expectedRevision: string;
+    content: string;
+    runId: string;
+    localDate: string;
+  }
+) {
+  const current = await readAirKnowledge(host.config);
+  const conversationId = `dream:${host.config.persona.defaultAgentId}`;
+  if (current.revision !== input.expectedRevision) {
+    recordMemoryOperation(host.config, {
+      source: "dream",
+      operation: "field_knowledge_replace",
+      actor: "dream",
+      outcome: "conflict",
+      batchId: input.runId,
+      conversationId,
+      conversationScope: "dream",
+      beforeRevision: current.revision,
+      reasonCode: "snapshot_conflict"
+    });
+    return { status: "conflict" as const, revision: current.revision };
+  }
+  const normalizedContent = normalizeAirKnowledge(input.content);
+  const nextPersona = await loadPersona(host.config, { "AIR.md": normalizedContent });
+  const replaced = await replaceAirKnowledge(host.config, current.revision, normalizedContent);
+  if (replaced.status === "conflict") {
+    recordMemoryOperation(host.config, {
+      source: "dream",
+      operation: "field_knowledge_replace",
+      actor: "dream",
+      outcome: "conflict",
+      batchId: input.runId,
+      conversationId,
+      conversationScope: "dream",
+      beforeRevision: current.revision,
+      afterRevision: replaced.current.revision,
+      reasonCode: "revision_conflict"
+    });
+    return { status: "conflict" as const, revision: replaced.current.revision };
+  }
+  if (replaced.status === "updated") host.persona = nextPersona;
+  recordMemoryOperation(host.config, {
+    source: "dream",
+    operation: "field_knowledge_replace",
+    actor: "dream",
+    outcome: replaced.status === "unchanged" ? "unchanged" : "applied",
+    batchId: input.runId,
+    conversationId,
+    conversationScope: "dream",
+    beforeRevision: current.revision,
+    afterRevision: replaced.current.revision
+  });
+  return {
+    status: replaced.status,
+    revision: replaced.current.revision,
+    rollback: async () => {
+      if (replaced.status === "unchanged") return true;
+      const rolledBack = await replaceAirKnowledge(
+        host.config,
+        replaced.current.revision,
+        current.content
+      );
+      recordMemoryOperation(host.config, {
+        source: "dream",
+        operation: "field_knowledge_rollback",
+        actor: "dream",
+        outcome: rolledBack.status === "conflict" ? "conflict" : "applied",
+        batchId: input.runId,
+        conversationId,
+        conversationScope: "dream",
+        beforeRevision: replaced.current.revision,
+        afterRevision: rolledBack.current.revision,
+        reasonCode: rolledBack.status === "conflict" ? "revision_conflict" : undefined
+      });
+      if (rolledBack.status !== "conflict") host.persona = await loadPersona(host.config);
       return rolledBack.status !== "conflict";
     }
   };
@@ -389,7 +485,7 @@ function observedConversations(
   }).slice(0, MAX_DREAM_CONVERSATIONS);
 }
 
-function personaSnapshot(host: SunaRuntime): Record<string, unknown> {
+function personaSnapshot(host: SunaRuntime, fieldKnowledge: string): Record<string, unknown> {
   const content = (name: string) => host.persona?.files.find((file) => file.name === name)?.content ?? "";
   return {
     id: host.persona?.id ?? host.config.persona.defaultAgentId,
@@ -398,7 +494,7 @@ function personaSnapshot(host: SunaRuntime): Record<string, unknown> {
     preference: content("PREFERENCE.md"),
     user: content("USER.md"),
     relation: content("RELATION.md"),
-    air: content("AIR.md")
+    air: fieldKnowledge
   };
 }
 

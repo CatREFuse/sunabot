@@ -1,13 +1,18 @@
-import { createHash } from "node:crypto";
+import {
+  buildDreamIdentityIndex,
+  dreamIdentityValues as identityValues,
+  dreamOpaqueReference as opaqueReference,
+  type DreamIdentityIndex as IdentityIndex
+} from "./dreamContextIdentity.js";
 
 type JsonRecord = Record<string, unknown>;
 
 export const DREAM_CONTEXT_PROJECTION_LIMITS = {
   totalPayloadBytes: 256 * 1024,
   arrays: {
-    workingMemories: 24,
-    longTermMemories: 24,
-    recallStats: 24,
+    workingMemories: 48,
+    longTermMemories: 48,
+    recallStats: 48,
     identityReferences: 128,
     sourceMemoryIds: 128,
     userProfiles: 64,
@@ -65,6 +70,12 @@ const MEMORY_SCORE_FIELDS = ["importance", "futureRelevance", "emotionalSalience
 export interface DreamContextProjectionResult {
   payload: JsonRecord;
   byteLength: number;
+  fieldKnowledgeBindings: DreamFieldKnowledgeBinding[];
+}
+
+export interface DreamFieldKnowledgeBinding {
+  token: string;
+  value: string;
 }
 
 export function projectDreamContextPayload(value: unknown): JsonRecord {
@@ -84,7 +95,8 @@ export function dreamPersonaPromptVariables(value: unknown) {
 export function projectDreamContext(value: unknown): DreamContextProjectionResult {
   const input = requiredRecord(value, "Dream context");
   const seed = requiredSeed(input.seed);
-  const identities = buildIdentityIndex(input, seed);
+  const identities = buildDreamIdentityIndex(input, seed, DREAM_CONTEXT_PROJECTION_LIMITS);
+  const sourceFieldKnowledge = normalizedProjectionSourceText(recordValue(input.persona).air);
   const workingMemories = projectMemoryGroup(input.workingMemories, "workingMemories", identities, seed);
   const longTermMemories = projectMemoryGroup(input.longTermMemories, "longTermMemories", identities, seed);
   const retainedIds = new Set([...workingMemories, ...longTermMemories].map(memoryItemId));
@@ -100,6 +112,9 @@ export function projectDreamContext(value: unknown): DreamContextProjectionResul
     longTermMemories,
     recallStats: projectRecallStats(input.recallStats, new Set(longTermMemories.map(memoryItemId))),
     personaEvidenceIds: projectMemoryIdList(input.personaEvidenceIds, retainedIds),
+    fieldKnowledgeEvidenceIds: projectMemoryIdList(input.fieldKnowledgeEvidenceIds, retainedIds),
+    fieldKnowledgeWritable: false,
+    recentWindowHours: boundedInteger(input.recentWindowHours, 1, 720),
     sourceMemoryIds: sourceMemoryIds.length ? sourceMemoryIds : [...retainedIds],
     userProfiles: projectUserProfiles(input.userProfiles, identities, seed),
     observedConversations: projectConversations(input.observedConversations, identities, seed),
@@ -109,15 +124,35 @@ export function projectDreamContext(value: unknown): DreamContextProjectionResul
   };
   enforceTotalPayloadLimit(payload);
   synchronizeMemoryReferences(payload);
+  const projectedFieldKnowledge = typeof recordValue(payload.persona).air === "string"
+    ? String(recordValue(payload.persona).air)
+    : "";
+  const fieldKnowledgeBindings = identities.bindingsForText(projectedFieldKnowledge);
+  payload.fieldKnowledgeWritable = sourceFieldKnowledge.length > 0
+    && restoreDreamFieldKnowledge(projectedFieldKnowledge, fieldKnowledgeBindings) === sourceFieldKnowledge;
   const byteLength = dreamContextPayloadByteLength(payload);
   if (byteLength > DREAM_CONTEXT_PROJECTION_LIMITS.totalPayloadBytes) {
     throw new Error("Projected Dream context exceeds its total payload limit.");
   }
-  return { payload, byteLength };
+  return {
+    payload,
+    byteLength,
+    fieldKnowledgeBindings: payload.fieldKnowledgeWritable === true ? fieldKnowledgeBindings : []
+  };
 }
 
 export function dreamContextPayloadByteLength(value: unknown) {
   return new TextEncoder().encode(JSON.stringify(value)).byteLength;
+}
+
+export function restoreDreamFieldKnowledge(
+  value: string,
+  bindings: readonly DreamFieldKnowledgeBinding[]
+) {
+  const replacements = new Map(bindings.map((binding) => [binding.token, binding.value]));
+  let restored = value;
+  for (const [token, original] of replacements) restored = restored.replaceAll(token, original);
+  return restored.includes("人物-") ? undefined : restored;
 }
 
 function projectMemoryGroup(
@@ -419,6 +454,8 @@ function synchronizeMemoryReferences(payload: JsonRecord) {
   const longTermIds = new Set(longTerm.map(memoryItemId));
   payload.sourceMemoryIds = arrayValue(payload.sourceMemoryIds).filter((id) => typeof id === "string" && ids.has(id));
   payload.personaEvidenceIds = arrayValue(payload.personaEvidenceIds).filter((id) => typeof id === "string" && ids.has(id));
+  payload.fieldKnowledgeEvidenceIds = arrayValue(payload.fieldKnowledgeEvidenceIds)
+    .filter((id) => typeof id === "string" && ids.has(id));
   payload.recallStats = arrayValue(payload.recallStats).filter((item) => {
     const record = recordValue(item);
     return typeof record.recordId === "string" && longTermIds.has(record.recordId);
@@ -464,177 +501,6 @@ function popArray(value: unknown) {
   return true;
 }
 
-class IdentityIndex {
-  private readonly parent = new Map<string, string>();
-  private readonly aliases = new Map<string, Set<string>>();
-  private canonicalByRoot = new Map<string, string>();
-  constructor(private readonly seed: string) {}
-  addGroup(values: readonly unknown[]) {
-    const keys = values.flatMap((value) => identityAlias(value)).filter(Boolean);
-    if (!keys.length) return;
-    for (const { key, raw } of keys) {
-      if (!this.parent.has(key)) this.parent.set(key, key);
-      const variants = this.aliases.get(key) ?? new Set<string>();
-      variants.add(raw);
-      this.aliases.set(key, variants);
-    }
-    for (const item of keys.slice(1)) this.union(keys[0]!.key, item.key);
-  }
-  finalize() {
-    const members = new Map<string, string[]>();
-    for (const key of this.parent.keys()) {
-      const root = this.find(key);
-      const values = members.get(root) ?? [];
-      values.push(key);
-      members.set(root, values);
-    }
-    this.canonicalByRoot = new Map([...members].map(([root, values]) => [root, values.sort(aliasOrder)[0]!]));
-  }
-  ref(value: unknown) {
-    const alias = identityAlias(value)[0];
-    const canonical = alias && this.parent.has(alias.key)
-      ? this.canonicalByRoot.get(this.find(alias.key)) ?? alias.key
-      : alias?.key ?? "unknown";
-    return this.refForKey(canonical);
-  }
-  refForGroup(values: readonly unknown[]) {
-    const first = values.flatMap((value) => identityAlias(value))[0];
-    return first ? this.ref(first.raw) : undefined;
-  }
-  refsForRecord(record: JsonRecord) {
-    return uniqueStrings(identityValues(record).map((value) => this.ref(value)))
-      .slice(0, DREAM_CONTEXT_PROJECTION_LIMITS.arrays.identityReferences);
-  }
-  redact(value: string) {
-    let text = value;
-    const replacements = [...this.aliases.entries()].flatMap(([key, variants]) => {
-      const canonical = this.canonicalByRoot.get(this.find(key)) ?? key;
-      const display = `人物-${this.refForKey(canonical).slice(-10)}`;
-      return [...variants].map((raw) => ({ raw, display }));
-    }).sort((a, b) => b.raw.length - a.raw.length || a.raw.localeCompare(b.raw));
-    for (const [index, replacement] of replacements.entries()) {
-      const marker = `\u{E000}${index.toString(36)}\u{E001}`;
-      text = replaceIdentityLiteral(text, replacement.raw, marker);
-      text = text.replaceAll(marker, replacement.display);
-    }
-    return text;
-  }
-  private refForKey(key: string) {
-    return opaqueReference(this.seed, "person", key);
-  }
-  private find(key: string): string {
-    const parent = this.parent.get(key) ?? key;
-    if (parent === key) return key;
-    const root = this.find(parent);
-    this.parent.set(key, root);
-    return root;
-  }
-  private union(left: string, right: string) {
-    const leftRoot = this.find(left);
-    const rightRoot = this.find(right);
-    if (leftRoot === rightRoot) return;
-    const [parent, child] = aliasOrder(leftRoot, rightRoot) <= 0
-      ? [leftRoot, rightRoot] : [rightRoot, leftRoot];
-    this.parent.set(child, parent);
-  }
-}
-
-function buildIdentityIndex(input: JsonRecord, seed: string) {
-  const identities = new IdentityIndex(seed);
-  for (const field of ["workingMemories", "longTermMemories"] as const) {
-    for (const raw of arrayValue(input[field]).slice(0, DREAM_CONTEXT_PROJECTION_LIMITS.arrays[field])) {
-      identitiesForRecord(recordValue(recordValue(raw).memory), identities);
-    }
-  }
-  for (const raw of arrayValue(input.userProfiles).slice(0, DREAM_CONTEXT_PROJECTION_LIMITS.arrays.userProfiles)) {
-    identitiesForRecord(recordValue(raw), identities);
-  }
-  for (const raw of arrayValue(input.observedConversations).slice(0, DREAM_CONTEXT_PROJECTION_LIMITS.arrays.conversations)) {
-    const conversation = recordValue(raw);
-    for (const message of arrayValue(conversation.messages).slice(0, DREAM_CONTEXT_PROJECTION_LIMITS.arrays.messagesPerConversation)) {
-      identities.addGroup(identityValues(recordValue(message)));
-    }
-  }
-  for (const raw of arrayValue(input.activeTasks).slice(0, DREAM_CONTEXT_PROJECTION_LIMITS.arrays.activeTasks)) {
-    for (const target of arrayValue(recordValue(raw).targets).slice(0, DREAM_CONTEXT_PROJECTION_LIMITS.arrays.taskTargets)) {
-      for (const userId of arrayValue(recordValue(target).mentionUserIds).slice(0, DREAM_CONTEXT_PROJECTION_LIMITS.arrays.taskMentions)) {
-        identities.addGroup([userId]);
-      }
-    }
-  }
-  const schedule = recordValue(input.plannedDailySchedule);
-  for (const raw of arrayValue(schedule.items).slice(0, DREAM_CONTEXT_PROJECTION_LIMITS.arrays.directorItems)) {
-    for (const participant of arrayValue(recordValue(raw).participants).slice(0, DREAM_CONTEXT_PROJECTION_LIMITS.arrays.directorParticipants)) {
-      identities.addGroup([participant]);
-    }
-  }
-  const persona = recordValue(input.persona);
-  identities.addGroup([persona.id, persona.name]);
-  identities.finalize();
-  return identities;
-}
-
-function identitiesForRecord(record: JsonRecord, identities: IdentityIndex) {
-  const ids = uniqueIdentityValues([record.userId, ...arrayValue(record.userIds)]);
-  const names = uniqueIdentityValues([
-    record.userName, record.addressName, ...arrayValue(record.addressNames), record.senderName,
-    record.senderNickname, record.senderCard
-  ]);
-  if (ids.length === 1) identities.addGroup([...ids, ...names]);
-  else if (ids.length && ids.length === names.length) ids.forEach((id, index) => identities.addGroup([id, names[index]]));
-  else {
-    ids.forEach((id) => identities.addGroup([id]));
-    names.forEach((name) => identities.addGroup([name]));
-  }
-}
-
-function identityValues(record: JsonRecord) {
-  return uniqueIdentityValues([
-    record.userId, ...arrayValue(record.userIds), record.userName, record.addressName,
-    ...arrayValue(record.addressNames), record.senderName, record.senderNickname, record.senderCard
-  ]);
-}
-
-function uniqueIdentityValues(values: readonly unknown[]) {
-  return uniqueStrings(values.flatMap((value) => typeof value === "string" || typeof value === "number" ? [String(value).trim()] : []).filter(Boolean));
-}
-
-function identityAlias(value: unknown) {
-  if (typeof value !== "string" && typeof value !== "number") return [];
-  const raw = String(value).normalize("NFKC").trim().slice(0, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.opaqueId);
-  if (!raw) return [];
-  const kind = /^\d+$/u.test(raw) ? "0" : "1";
-  return [{ key: `${kind}:${raw.toLowerCase()}`, raw }];
-}
-
-function aliasOrder(left: string, right: string) {
-  return left.localeCompare(right);
-}
-
-function replaceIdentityLiteral(value: string, literal: string, replacement: string) {
-  const escaped = literal.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-  if (!escaped) return value;
-  if (/^\d+$/u.test(literal)) {
-    return value.replace(new RegExp(`(^|[^0-9])${escaped}(?=$|[^0-9])`, "gu"), `$1${replacement}`);
-  }
-  if (/^[A-Za-z0-9_]+$/u.test(literal)) {
-    return value.replace(new RegExp(`(^|[^A-Za-z0-9_])${escaped}(?=$|[^A-Za-z0-9_])`, "gu"), `$1${replacement}`);
-  }
-  return value.replace(new RegExp(escaped, "gu"), replacement);
-}
-
-function opaqueReference(seed: string, namespace: string, value: string) {
-  const digest = createHash("sha256")
-    .update(seed)
-    .update("\0")
-    .update(namespace)
-    .update("\0")
-    .update(value.normalize("NFKC").trim().toLowerCase())
-    .digest("hex")
-    .slice(0, 24);
-  return `${namespace}:${digest}`;
-}
-
 function boundedText(value: unknown, maxChars: number, identities?: IdentityIndex) {
   if (typeof value !== "string") return "";
   let text = value.normalize("NFC").trim();
@@ -643,6 +509,13 @@ function boundedText(value: unknown, maxChars: number, identities?: IdentityInde
     .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/gu, "")
     .replace(/\r\n?/gu, "\n");
   return [...text].slice(0, maxChars).join("");
+}
+
+function normalizedProjectionSourceText(value: unknown) {
+  if (typeof value !== "string") return "";
+  return value.normalize("NFC").trim()
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/gu, "")
+    .replace(/\r\n?/gu, "\n");
 }
 
 function redactSensitiveText(value: string) {

@@ -12,10 +12,10 @@ export const readAirTool = {
   type: "function",
   name: READ_AIR_TOOL_NAME,
   description: [
-    "Update the character's social field knowledge after the conversation reveals durable context needed to read the room.",
-    "Always use it for explicit preferences, dislikes, taboos, boundaries, requested nicknames, local rules, corrections, relationship changes, shared topics, or an explained group-specific meme, code word, implication, or running joke.",
-    "Also use it when repeated chat evidence makes a local expression understandable. Do not use it for a transient factual question or unsupported speculation.",
-    "In insight, state the character's interpretation, relevant scope, evidence, uncertainty, and what future conversations need to understand. The host supplies the existing AIR.md and recent chat automatically."
+    "Update the character's social field knowledge only when the conversation establishes a durable scoped convention.",
+    "Use it for an explicitly confirmed nickname or form of address, local rule, boundary, correction, precondition, exception, default etiquette, or explained group-specific code word.",
+    "Do not use it for public knowledge, public trends or memes, news, chat summaries, project progress, relationship mood, weather, meals, temporary plans, one-off behavior, or unsupported speculation.",
+    "In insight, state the exact scope, confirmed convention, applicable preconditions or exceptions, evidence, and uncertainty. The host supplies the existing AIR.md and recent chat automatically."
   ].join(" "),
   parameters: {
     type: "object",
@@ -25,7 +25,7 @@ export const readAirTool = {
         type: "string",
         minLength: 1,
         maxLength: 4_000,
-        description: "The character's scoped interpretation of what the social field now means and why it matters."
+        description: "The confirmed scoped convention, including its boundary, preconditions, exceptions, evidence, and uncertainty."
       }
     },
     required: ["insight"]

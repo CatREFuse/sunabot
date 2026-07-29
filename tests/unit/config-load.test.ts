@@ -71,8 +71,8 @@ describe("tool configuration", () => {
       maxRetries: 2
     });
     expect(config.bot.memory).toMatchObject({
-      dreamRecentWindowHours: 48,
-      dreamRecentMemoryLimit: 12,
+      dreamRecentWindowHours: 24,
+      dreamRecentMemoryLimit: 24,
       dreamOlderMemoryLimit: 12
     });
   });
@@ -101,16 +101,16 @@ describe("tool configuration", () => {
       bot: {
         memory: {
           dreamRecentWindowHours: 900,
-          dreamRecentMemoryLimit: 20,
-          dreamOlderMemoryLimit: 20
+          dreamRecentMemoryLimit: 30,
+          dreamOlderMemoryLimit: 30
         }
       }
     }), "utf8");
     await expect(loadConfig()).resolves.toMatchObject({
       bot: {
         memory: {
-          dreamRecentWindowHours: 48,
-          dreamRecentMemoryLimit: 12,
+          dreamRecentWindowHours: 24,
+          dreamRecentMemoryLimit: 24,
           dreamOlderMemoryLimit: 12
         }
       }

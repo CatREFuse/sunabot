@@ -49,12 +49,16 @@ describe("Agent resource layout migration", () => {
     await expect(fs.readFile(path.join(agent, "workbench/index.md"), "utf8"))
       .resolves.toContain("`emoji/`");
     await expect(fs.readFile(path.join(agent, "docker-workbench/index.md"), "utf8"))
-      .resolves.toContain("`native-workbench/emoji/`");
+      .resolves.toContain("Native workbench 只读投影位于 `native-workbench/`");
     for (const directory of [
       agent,
       workbench,
       path.join(agent, "docker-workbench"),
       path.join(agent, "docker-workbench/native-workbench"),
+      path.join(agent, "docker-workbench/selfie"),
+      path.join(agent, "docker-workbench/emoji"),
+      path.join(agent, "docker-workbench/skills"),
+      path.join(agent, "docker-workbench/knowledge"),
       path.join(workbench, "selfie"),
       path.join(workbench, "emoji"),
       path.join(workbench, "skills"),
@@ -124,6 +128,65 @@ describe("Agent resource layout migration", () => {
     await expect(verifyAgentResourcesMigration({ workspace })).rejects.toMatchObject({
       code: "AGENT_RESOURCES_INDEX_INVALID"
     });
+  });
+
+  it("upgrades the known legacy Docker index after an existing migration marker", async () => {
+    const workspace = await fixture();
+    await applyAgentResourcesMigration({
+      workspace,
+      quiesced: true,
+      now: new Date("2026-07-25T00:00:00.000Z"),
+      assertStopped: async () => undefined
+    });
+    const dockerWorkbench = path.join(workspace, "business/agents/plana/docker-workbench");
+    await Promise.all([
+      fs.rm(path.join(dockerWorkbench, "selfie"), { recursive: true, force: true }),
+      fs.rm(path.join(dockerWorkbench, "emoji"), { recursive: true, force: true }),
+      fs.rm(path.join(dockerWorkbench, "skills"), { recursive: true, force: true }),
+      fs.rm(path.join(dockerWorkbench, "knowledge"), { recursive: true, force: true })
+    ]);
+    await fs.writeFile(path.join(dockerWorkbench, "index.md"), [
+      "# Docker 文件工作区",
+      "",
+      "本目录用于保存 Docker Bash 的计划、下载、转存文件和任务产物。",
+      "",
+      "Native workbench 只读投影位于 `native-workbench/`：",
+      "",
+      "- `native-workbench/selfie/`：自拍参考图，入口 `references.jsonl`。",
+      "- `native-workbench/emoji/`：表情，入口 `emojis.jsonl`。",
+      "- `native-workbench/skills/`：Skills，入口 `index.json`。",
+      "- `native-workbench/knowledge/`：知识库，入口 `index.json`。",
+      "",
+      "进入目录后先读取对应管理入口。只读投影不可修改；需要写入的任务产物保存在当前 Docker 工作区。",
+      ""
+    ].join("\n"));
+
+    await applyAgentResourcesMigration({
+      workspace,
+      quiesced: true,
+      assertStopped: async () => undefined
+    });
+
+    await expect(fs.readFile(path.join(dockerWorkbench, "index.md"), "utf8"))
+      .resolves.toContain("本工作区拥有独立的配置与资料目录");
+    await expect(fs.readFile(path.join(dockerWorkbench, "selfie/references.jsonl"), "utf8"))
+      .resolves.toBe("");
+    await expect(fs.readFile(path.join(dockerWorkbench, "emoji/emojis.jsonl"), "utf8"))
+      .resolves.toBe("");
+    await expect(fs.readFile(path.join(dockerWorkbench, "skills/index.json"), "utf8"))
+      .resolves.toContain("\"skills\": []");
+    await expect(fs.readFile(path.join(dockerWorkbench, "knowledge/index.json"), "utf8"))
+      .resolves.toContain("\"root\": \"knowledge\"");
+
+    const customIndex = "# 管理员自定义 Docker 入口\n";
+    await fs.writeFile(path.join(dockerWorkbench, "index.md"), customIndex);
+    await applyAgentResourcesMigration({
+      workspace,
+      quiesced: true,
+      assertStopped: async () => undefined
+    });
+    await expect(fs.readFile(path.join(dockerWorkbench, "index.md"), "utf8"))
+      .resolves.toBe(customIndex);
   });
 });
 

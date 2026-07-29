@@ -357,7 +357,8 @@ export async function runtime_mergeWorkingMemory(this: RuntimeHost, context: Wor
     for (let attempt = 1; attempt <= 2; attempt += 1) {
       const snapshot = await readWorkingMemorySnapshot(this.config);
       beforeCount = snapshot.entries.length;
-      const merged = await this.requestWorkingMemoryMerge(context, snapshot.entries);
+      const ordinaryEntries = snapshot.entries.filter((entry) => entry.memoryKind !== "dream");
+      const merged = await this.requestWorkingMemoryMerge(context, ordinaryEntries);
       if (!merged) {
         return { ok: false as const, status: "model_invalid" as const, beforeCount };
       }

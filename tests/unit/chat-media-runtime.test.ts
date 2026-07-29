@@ -88,7 +88,7 @@ describe("current-turn chat media capability", () => {
     expect(prompt).toContain("message:78:file:0");
   });
 
-  it("exposes export to real QQ turns while limiting emoji import to administrator QQ chats", async () => {
+  it("exposes export to real QQ turns while limiting catalog imports to administrator QQ chats", async () => {
     const root = await fs.mkdtemp(path.join(TEST_ROOT, "gate-"));
     const config = createAdminTestConfig(root);
     config.persona.defaultAgentId = "arona";
@@ -100,11 +100,13 @@ describe("current-turn chat media capability", () => {
     const adminPort = providerChatMediaForIncoming(config, administrator, undefined, cache);
     expect(adminPort?.export).toBeTypeOf("function");
     expect(adminPort?.importEmoji).toBeTypeOf("function");
+    expect(adminPort?.importSelfie).toBeTypeOf("function");
 
     const ordinary = incomingMessage("171419992", "arona");
     const ordinaryPort = providerChatMediaForIncoming(config, ordinary, undefined, cache);
     expect(ordinaryPort?.export).toBeTypeOf("function");
     expect(ordinaryPort?.importEmoji).toBeUndefined();
+    expect(ordinaryPort?.importSelfie).toBeUndefined();
 
     const groupAdmin = {
       ...administrator,
@@ -113,11 +115,18 @@ describe("current-turn chat media capability", () => {
     };
     expect(providerChatMediaForIncoming(config, groupAdmin, undefined, cache)?.importEmoji)
       .toBeTypeOf("function");
+    expect(providerChatMediaForIncoming(config, groupAdmin, undefined, cache)?.importSelfie)
+      .toBeTypeOf("function");
     expect(providerChatMediaForIncoming(config, {
       ...ordinary,
       scope: "user_group",
       groupId: 9988
     }, undefined, cache)?.importEmoji).toBeUndefined();
+    expect(providerChatMediaForIncoming(config, {
+      ...ordinary,
+      scope: "user_group",
+      groupId: 9988
+    }, undefined, cache)?.importSelfie).toBeUndefined();
     expect(providerChatMediaForIncoming(config, { ...administrator, agentId: "plana" }, undefined, cache))
       .toBeUndefined();
     expect(providerChatMediaForIncoming(config, administrator, "override", cache))
@@ -147,7 +156,11 @@ describe("current-turn chat media capability", () => {
       handle: "message:77:image:0",
       key: "开心"
     });
-    const catalogPath = path.join(config.persona.agentWorkspace, "workbench", "emoji", "emojis.jsonl");
+    const selfie = await port.importSelfie!({
+      handle: "message:77:image:0",
+      note: "群聊新增的正面角色参考"
+    });
+    const catalogPath = path.join(config.persona.agentWorkspace, "docker-workbench", "emoji", "emojis.jsonl");
     const catalog = await fs.readFile(catalogPath, "utf8");
 
     expect(first).toMatchObject({
@@ -162,8 +175,19 @@ describe("current-turn chat media capability", () => {
     expect(catalog.trim().split("\n")).toHaveLength(1);
     expect(catalog).toContain(first.fileName);
     await expect(fs.readFile(
-      path.join(config.persona.agentWorkspace, "workbench", "emoji", first.fileName)
+      path.join(config.persona.agentWorkspace, "docker-workbench", "emoji", first.fileName)
     )).resolves.toHaveLength(first.byteLength);
+    expect(selfie).toMatchObject({
+      ok: true,
+      note: "群聊新增的正面角色参考",
+      width: 4,
+      height: 5,
+      deduplicated: false
+    });
+    await expect(fs.readFile(
+      path.join(config.persona.agentWorkspace, "docker-workbench", "selfie", "references.jsonl"),
+      "utf8"
+    )).resolves.toContain(selfie.id);
     closeEmojiStores();
     closeApplicationDataStores();
     await fs.rm(root, { recursive: true, force: true });

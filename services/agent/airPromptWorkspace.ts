@@ -5,7 +5,10 @@ import {
   AIR_KNOWLEDGE_PROMPT_ID,
   DEFAULT_AIR_KNOWLEDGE
 } from "../air/public.js";
-import { migrateConversationAirPrompt } from "./airPromptMigration.js";
+import {
+  migrateAirKnowledgePrompt,
+  migrateConversationAirPrompt
+} from "./airPromptMigration.js";
 import { defaultPromptContent } from "./promptDefaults.js";
 import { ensurePromptTextFile, migratePromptTimeContext } from "./promptWorkspace.js";
 
@@ -20,6 +23,7 @@ export async function ensureAirPromptWorkspace(config: AppConfig) {
     ensurePromptTextFile(config, "system", AIR_KNOWLEDGE_PROMPT_FILE, prompt)
   ]);
   await migratePromptTimeContext(config, "system", AIR_KNOWLEDGE_PROMPT_FILE);
+  await migrateAirKnowledgePrompt(config, AIR_KNOWLEDGE_PROMPT_FILE, prompt);
   await Promise.all([
     ["conversation_private_reply.json", "conversation.private-reply"],
     ["conversation_group_reply.json", "conversation.group-reply"]
