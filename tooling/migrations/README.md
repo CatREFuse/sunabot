@@ -2,6 +2,9 @@
 
 SQLite schema 与 workspace 布局的前向迁移命令。迁移必须先停服务并完成备份、校验和回滚准备。
 
+跨多个版本升级时从
+`docs/migrations/upgrade-old-versions-to-current.md` 选择起点并逐级执行。每个版本升级命令必须在对应目标版本的完整代码包中运行，不能用当前版本脚本代替中间版本。
+
 | 命令 | 用途 |
 | --- | --- |
 | `npm run workspace:migrate` | 旧 `config/agents/artifacts/security/napcat` 布局迁移到当前 workspace 边界 |
@@ -37,5 +40,8 @@ Agent 双工作区、Native 只读投影、自拍 JSONL 验证及回滚步骤见
 
 0.1.4 到 0.2.0 的完整升级与回滚步骤见
 `docs/migrations/upgrade-0.1.4-to-0.2.0.md`。
+
+0.1.0—0.2.0 老实例升级到当前 revision 的完整路线、双 Workbench 资源验收和总回滚边界见
+`docs/migrations/upgrade-old-versions-to-current.md`。
 
 源码仓库中的 SQLite 与多 Agent 迁移会先构建 API，确保迁移使用当前 schema。Linux 发行包包含 schema v2 `release-manifest.json`、预构建 `dist` 和生产依赖；迁移 wrapper 核对真实平台、runtime contract、版本、Node、source commit、完整 `dist/`、`tooling/`、生产 `node_modules/` 与锁文件的文件集合和 SHA-256 后使用随包构建，无需安装 TypeScript 等开发依赖。

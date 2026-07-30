@@ -130,6 +130,8 @@ Agent 根目录及 `extensions`、`skills`、`mcp` 控制目录必须是当前�
 
 ### 8.3 旧数据迁移
 
+`0.1.0`—`0.2.0` 老实例升级到当前 revision 时必须按目标版本逐级执行版本专用脚本；每个脚本只允许在对应目标版本的完整代码包中运行，不能跳过中间版本或通过修改版本文件绕过 `TARGET_RELEASE_MISMATCH`。达到 `0.2.0` 后，切换当前批准 revision，保持停服创建并验证新的全 Agent SQLite 恢复点，执行双 Workbench 布局验证，再启动当前 schema 的前向迁移。完整路线、表情/自拍参考图/知识库双来源验收和回滚边界见 `docs/migrations/upgrade-old-versions-to-current.md`。
+
 `npm run migrate:sqlite` 执行以下操作：
 
 1. 确认 sunabot 服务已经停止。

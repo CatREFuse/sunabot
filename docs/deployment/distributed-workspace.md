@@ -47,6 +47,8 @@ git pull --ff-only
 
 存在数据库或 workspace 前向迁移时，按发布文档先停服、备份和校验，再执行迁移。发现旧 `sunabot-qq-runtime` 容器时，改用 `docs/migrations/one-container-to-split-runtime.md`，不能直接启动新运行时。
 
+跨多个版本升级，或需要把 `0.1.0`—`0.2.0` 老实例接入当前双 Workbench 资源寻址时，统一从 `docs/migrations/upgrade-old-versions-to-current.md` 选择起点、目标代码包、恢复点和回滚路径。
+
 从 `0.1.0` 或 `0.1.1` 升级到 `0.1.2` 使用版本专用命令：
 
 ```bash
