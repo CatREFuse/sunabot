@@ -53,6 +53,10 @@ export interface ImportedChatSelfie {
 
 export interface ChatMediaToolPort {
   export(input: ExportChatMediaInput): Promise<ExportedChatMedia>;
+  freezeCodexInputs?: (
+    handles: readonly string[],
+    jobDir: string
+  ) => Promise<import("../../packages/contracts/tools/codex.js").FrozenCodexInputV1[]>;
   importEmoji?: (input: ImportChatEmojiInput) => Promise<ImportedChatEmoji>;
   importSelfie?: (input: ImportChatSelfieInput) => Promise<ImportedChatSelfie>;
 }

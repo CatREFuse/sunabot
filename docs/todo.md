@@ -53,10 +53,10 @@
 - [x] **FLOW-FIX-003｜secondary 账号恢复、引用与身份路由**
   - 重启编排、引用与附件查询、嵌套引用、发送者身份缓存和历史身份补全全程携带 account ID。
 
-- [x] **FLOW-FIX-004｜群聊 Thread 上下文前置节点**
-  - 原始 `messages_64` 保持时间顺序、数量和正文，完整元数据用于索引；增量 Thread 状态进入 SQLite，显式引用由宿主继承，歧义由独立低成本模型分类，动态 sidecar 在主回复前受管注入。
-  - Thread 模型在每个 Agent 的“群聊编排”设置中独立配置；旧 Agent manifest 回退 `gpt-5.4-mini`。模板渲染不依赖动态 sidecar 占位，分类失败和异步旧任务均保留原始消息并继续回复。
-  - 证据：相关 20 个测试文件 280/280、runtime smoke 14/14、Thread 首次运行门禁、TypeScript/Vue 类型检查、runtime contract、architecture、生产构建、benchmark、E2E 36/36 和 light/dark 视觉回归 8/8 通过；真实 Native Core 重启后 readiness 为 ready，旧模板缺变量已用实际渲染器复现并修复，22:09 的真实群消息已成功写入 assistant 回复。
+- [x] **FLOW-FIX-004｜群聊主回复内部话题判断**
+  - 原始 `messages_64` 保持时间顺序、数量、正文与完整元数据；主回复模型在同一次推理中内部梳理并行话题、判断当前话题并完成指代消解，最终只输出正常回复。
+  - 独立分类 Provider 请求、专用模型配置、动态索引变量、附加上下文、增量分类状态和新建状态表均已下线；旧数据库中的历史表作为未知附加表随备份恢复保留，不参与当前运行。
+  - 验证证据维护在群聊内部话题判断专项用例与当前 release gate，不沿用已下线实现的历史通过结果。
 
 - [x] **ONBOARD-FIX-004｜兼容注销定向与 Agent 创建补偿**
   - primary 兼容注销只定向 primary；primary 可以退出 QQ 登录但不能移除，API 返回 `PRIMARY_ACCOUNT_REQUIRED` 且管理台隐藏移除入口；Agent 运行时初始化失败时删除注册记录、workspace 与临时回滚目录。
@@ -119,7 +119,7 @@
 - [ ] **FLOW-FIX-005｜P1｜同发送者回复防抖与持久恢复**
   - 功能与恢复合同已由 clean commit `2d427f7d097ba9fee40633f6d28558a13388708d` 收口，并通过第二人 12 files / 244 tests、类型、架构、runtime contract 与生产构建门禁；真实 OneBot/重启冒烟和与 held/send_file/system_config 的冲突合并仍由 `INTEGRATION-001` 完成，本项保持未完成。
   - 私聊和群聊按 `conversation + sender` 执行 trailing 5 秒防抖；第一条满足触发条件的消息固定 route、引用目标与 reply gate，同发送者后续消息重置计时，其他发送者互不影响。
-  - 释放时冻结 `contextThroughSequence`，把等待窗口内新增正文、图片、附件与群聊 Thread 注入同一次回复；ambient 判定进入同一链路，synthetic Session、未来 `availableAt`、running bump 与 source→target 原子 handoff 支持重启恢复。
+  - 释放时冻结 `contextThroughSequence`，把等待窗口内新增正文、图片和附件注入同一次回复；ambient 判定进入同一链路，synthetic Session、未来 `availableAt`、running bump 与 source→target 原子 handoff 支持重启恢复。
   - 验收：覆盖单条、连续同发送者、并行不同发送者、私聊/群聊/ambient、首条引用不漂移、上下文截止点、图片/附件、取消与 reply gate、截止点竞态、进程重启、重复唤醒、跨 Agent/QQ 隔离和现有 FIFO/异步回调回归。
   - 风险：计时、持久事件与 reply/runtime 共享顺序语义；任何重复发送、漏回、引用漂移或恢复后提前执行都阻断集成。
 

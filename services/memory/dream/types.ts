@@ -38,8 +38,21 @@ export type DreamPersonaTargetFile = "PREFERENCE.md" | "RELATION.md";
 export interface DreamPersonaAdjustmentV1 {
   kind: DreamPersonaAdjustmentKind;
   targetFile: DreamPersonaTargetFile;
+  topicKey: string;
   statement: string;
   evidenceMemoryIds: string[];
+}
+
+export type DreamPersonaImpressionLevel = "observation" | "stable" | "core";
+
+export interface DreamPersonaImpressionV1 extends DreamPersonaAdjustmentV1 {
+  level: DreamPersonaImpressionLevel;
+}
+
+export interface DreamPersonaImpressionRecord {
+  id: string;
+  appliedAt: string;
+  impression: DreamPersonaImpressionV1;
 }
 
 export interface DreamFieldKnowledgeV1 {
@@ -113,13 +126,12 @@ export type DreamPersonaRejectionReason =
   | "insufficient_independent_events"
   | "insufficient_contexts"
   | "invalid_evidence_time"
-  | "insufficient_time_span"
-  | "invalid_cooldown"
-  | "cooldown_active";
+  | "insufficient_time_span";
 
 export interface DreamPersonaPolicyResult {
   eligible: boolean;
   reasons: DreamPersonaRejectionReason[];
+  level: DreamPersonaImpressionLevel | null;
 }
 
 export interface DreamScheduleOccurrence {

@@ -2,9 +2,14 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ParsedIncomingMessage } from "../../src/types.js";
 import {
+  deferredWorkbenchImageResolver,
   readGenerateImgReferenceContext,
-  snapshotDeferredChatImages
+  snapshotDeferredChatImages,
+  snapshotDeferredWorkbenchImages
 } from "../../src/runtime/deferredImageReferences.js";
+import {
+  OutboundConversationAssetSourceError
+} from "../../services/delivery/outboundConversationAsset.js";
 
 describe("deferred chat image references", () => {
   it("freezes required current and exact-handle images as digest-bound archive references", async () => {
@@ -85,6 +90,64 @@ describe("deferred chat image references", () => {
       () => true,
       { archive: vi.fn() }
     )).rejects.toThrow("必需参考图无法解析");
+  });
+
+  it("keeps an immutable workbench snapshot after the original path is unavailable", async () => {
+    const archivedUrl = `/generated-images/conversation-assets/agents/arona/${"c".repeat(64)}.png`;
+    const resolveWorkbenchImageReferences = vi.fn(async () => [archivedUrl]);
+    const snapshot = await snapshotDeferredWorkbenchImages(
+      { resolveWorkbenchImageReferences } as never,
+      fixtureIncoming("", ""),
+      {
+        name: "selfie",
+        arguments: {
+          referenceImagePaths: ["references/plana.png"]
+        }
+      },
+      () => true
+    );
+    resolveWorkbenchImageReferences.mockRejectedValue(new Error("source removed"));
+
+    const resolveSnapshot = deferredWorkbenchImageResolver(snapshot);
+    await expect(resolveSnapshot?.(["references/plana.png"])).resolves.toEqual([archivedUrl]);
+    expect(resolveWorkbenchImageReferences).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    {
+      toolName: "selfie",
+      expectedCode: "SELFIE_REFERENCE_SOURCE_MISSING"
+    },
+    {
+      toolName: "generate_img",
+      expectedCode: "GENERATE_IMG_REFERENCE_SOURCE_MISSING"
+    }
+  ])("reports a tool-specific missing-reference error for $toolName", async ({
+    toolName,
+    expectedCode
+  }) => {
+    const resolveWorkbenchImageReferences = vi.fn(async () => {
+      throw new OutboundConversationAssetSourceError(
+        "SEND_FILE_SOURCE_MISSING",
+        "The requested workbench file is unavailable."
+      );
+    });
+
+    await expect(snapshotDeferredWorkbenchImages(
+      { resolveWorkbenchImageReferences } as never,
+      fixtureIncoming("", ""),
+      {
+        name: toolName,
+        arguments: {
+          referenceImagePaths: ["knowledge/references/plana.png"]
+        }
+      },
+      () => true
+    )).rejects.toThrow(
+      `${expectedCode}: The requested Workbench reference image is unavailable ` +
+      "(path: knowledge/references/plana.png)."
+    );
+    expect(resolveWorkbenchImageReferences).toHaveBeenCalledTimes(1);
   });
 });
 

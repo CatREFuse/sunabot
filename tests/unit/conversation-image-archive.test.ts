@@ -82,6 +82,30 @@ describe("conversation image archive", () => {
       .resolves.toMatch(/^data:image\/png;base64,/);
   });
 
+  it("keeps an archived Workbench reference available after the source file is removed", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-workbench-reference-lifecycle-"));
+    roots.push(root);
+    const sourcePath = path.join(root, "workbench", "references", "plana.png");
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(sourcePath, PNG_BYTES);
+    const sha256 = createHash("sha256").update(PNG_BYTES).digest("hex");
+
+    const url = await archiveConversationImage("arona", {
+      kind: "image",
+      name: "plana.png",
+      source: `base64://${(await fs.readFile(sourcePath)).toString("base64")}`,
+      byteLength: PNG_BYTES.byteLength,
+      sha256,
+      mimeType: "image/png"
+    }, path.join(root, "media"));
+    await fs.rm(sourcePath);
+
+    await expect(fs.stat(sourcePath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(resolveInputImageUrl(url, {
+      generatedImageRoot: path.join(root, "media")
+    })).resolves.toMatch(/^data:image\/png;base64,/);
+  });
+
   it("keeps archived source bytes and derives separate bounded copies for vision and image generation", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-conversation-original-reference-"));
     roots.push(root);

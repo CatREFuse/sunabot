@@ -93,31 +93,6 @@ export interface ReplyGateSnapshotV1 {
   conversationEpoch: number;
 }
 
-export interface GroupThreadContextSnapshotV1 {
-  schemaVersion: 1;
-  revision: number;
-  processedThroughSequence: number;
-  activeThreadId?: string;
-  omittedThreadCount?: number;
-  threads: Array<{
-    threadId: string;
-    topic: string;
-    status: "active" | "dormant" | "closed";
-    participantUids: string[];
-    omittedParticipantCount?: number;
-    messageIds: string[];
-    omittedMessageCount?: number;
-  }>;
-  messageAssignments: Array<{
-    messageId: string;
-    sequence: number;
-    primaryThreadId: string;
-    relatedThreadIds: string[];
-    relation: "new" | "continue" | "reply" | "switch" | "bridge" | "unresolved";
-    confidence: number;
-  }>;
-}
-
 export interface AsyncToolCompletionPayload {
   type: "tool_result";
   toolJobId: string;
@@ -129,7 +104,6 @@ export interface AsyncToolCompletionPayload {
     contextThroughSequence?: number;
     replyGate?: ReplyGateSnapshotV1;
     replyQuote?: ReplyQuoteSnapshotV1;
-    threadContext?: GroupThreadContextSnapshotV1;
     orchestratorResult?: UserGroupOrchestratorResultV1;
     mentionUserIds?: number[];
   };
@@ -163,7 +137,6 @@ export interface AssistantReplyOutboxPayload {
   deliverySemantics?: "system_config_confirmation";
   bubbleSequence?: OutboxBubbleSequenceV1;
   replyGate?: ReplyGateSnapshotV1;
-  threadContext?: GroupThreadContextSnapshotV1;
 }
 
 export interface NoReplyPokeOutboxPayload {
@@ -308,7 +281,6 @@ export function decodeToolCompletion(value: unknown): AsyncToolCompletionPayload
     contextThroughSequence: rawContextThroughSequence,
     replyGate: rawReplyGate,
     replyQuote: rawReplyQuote,
-    threadContext: rawThreadContext,
     orchestratorResult: rawOrchestratorResult,
     mentionUserIds: rawMentionUserIds,
     ...originalRequestFields
@@ -320,7 +292,6 @@ export function decodeToolCompletion(value: unknown): AsyncToolCompletionPayload
   );
   validateSequenceRange(captureSequence, contextThroughSequence);
   const incoming = decodeInboundMessageV1(originalRequestFields.incoming);
-  const threadContext = readGroupThreadContextSnapshot(rawThreadContext);
   const orchestratorResult = readUserGroupOrchestratorResult(rawOrchestratorResult);
   if (rawOrchestratorResult != null && (!orchestratorResult || incoming.scope !== "user_group")) {
     throw contractError("contract_field_invalid", "持久化消息字段 orchestratorResult 无效。");
@@ -338,7 +309,6 @@ export function decodeToolCompletion(value: unknown): AsyncToolCompletionPayload
       ...(contextThroughSequence == null ? {} : { contextThroughSequence }),
       ...(replyGate == null ? {} : { replyGate }),
       ...(replyQuote == null ? {} : { replyQuote }),
-      ...(threadContext ? { threadContext } : {}),
       ...(orchestratorResult ? { orchestratorResult } : {}),
       ...(mentionUserIds.length ? { mentionUserIds } : {})
     }
@@ -348,7 +318,6 @@ export function decodeToolCompletion(value: unknown): AsyncToolCompletionPayload
 export function decodeAssistantReply(value: unknown): AssistantReplyOutboxPayload {
   const payload = decode(value, "runtime.assistant_reply", "assistant_reply");
   const {
-    threadContext: rawThreadContext,
     replyToMessageId: rawReplyToMessageId,
     deliverySemantics: rawDeliverySemantics,
     bubbleSequence: rawBubbleSequence,
@@ -359,7 +328,6 @@ export function decodeAssistantReply(value: unknown): AssistantReplyOutboxPayloa
   if (rawDeliverySemantics !== undefined && rawDeliverySemantics !== "system_config_confirmation") {
     throw contractError("contract_field_invalid", "持久化消息字段 deliverySemantics 无效。");
   }
-  const threadContext = readGroupThreadContextSnapshot(rawThreadContext);
   const hasReplyTargetField = Object.hasOwn(payload, "replyToMessageId");
   const replyToMessageId = rawReplyToMessageId === null
     ? null
@@ -380,90 +348,8 @@ export function decodeAssistantReply(value: unknown): AssistantReplyOutboxPayloa
       : {}),
     ...(bubbleSequence ? { bubbleSequence } : {}),
     ...(contentSegments ? { contentSegments } : {}),
-    ...(mentionUserIds.length ? { mentionUserIds } : {}),
-    ...(threadContext ? { threadContext } : {})
+    ...(mentionUserIds.length ? { mentionUserIds } : {})
   } as AssistantReplyOutboxPayload;
-}
-
-export function readGroupThreadContextSnapshot(value: unknown): GroupThreadContextSnapshotV1 | undefined {
-  if (!isRecord(value) || value.schemaVersion !== 1) return undefined;
-  if (!nonNegativeInteger(value.revision) || !nonNegativeInteger(value.processedThroughSequence)) return undefined;
-  if (value.activeThreadId != null && !validSnapshotThreadId(value.activeThreadId)) return undefined;
-  if (!Array.isArray(value.threads) || !Array.isArray(value.messageAssignments)) return undefined;
-  if (value.omittedThreadCount != null && !nonNegativeInteger(value.omittedThreadCount)) return undefined;
-  if (value.threads.length > 72 || value.messageAssignments.length > 64) return undefined;
-  const threads: GroupThreadContextSnapshotV1["threads"] = [];
-  const threadIds = new Set<string>();
-  for (const rawThread of value.threads) {
-    if (!isRecord(rawThread) || !validSnapshotThreadId(rawThread.threadId)
-      || threadIds.has(rawThread.threadId) || !validSnapshotTopic(rawThread.topic)) return undefined;
-    if (rawThread.status !== "active" && rawThread.status !== "dormant" && rawThread.status !== "closed") return undefined;
-    const participantUids = boundedStringArray(rawThread.participantUids, 16, 128);
-    const messageIds = boundedStringArray(rawThread.messageIds, 16, 256);
-    if (!participantUids || !messageIds
-      || new Set(participantUids).size !== participantUids.length
-      || new Set(messageIds).size !== messageIds.length) return undefined;
-    if (rawThread.omittedParticipantCount != null
-      && !nonNegativeInteger(rawThread.omittedParticipantCount)) return undefined;
-    if (rawThread.omittedMessageCount != null && !nonNegativeInteger(rawThread.omittedMessageCount)) return undefined;
-    threads.push({
-      threadId: rawThread.threadId,
-      topic: rawThread.topic,
-      status: rawThread.status,
-      participantUids,
-      ...(rawThread.omittedParticipantCount == null
-        ? {}
-        : { omittedParticipantCount: Number(rawThread.omittedParticipantCount) }),
-      messageIds,
-      ...(rawThread.omittedMessageCount == null
-        ? {}
-        : { omittedMessageCount: Number(rawThread.omittedMessageCount) })
-    });
-    threadIds.add(rawThread.threadId);
-  }
-  if (value.activeThreadId != null) {
-    const activeThread = threads.find((thread) => thread.threadId === value.activeThreadId);
-    if (!activeThread || activeThread.status !== "active") return undefined;
-  }
-  const messageAssignments: GroupThreadContextSnapshotV1["messageAssignments"] = [];
-  const assignmentMessageIds = new Set<string>();
-  let previousSequence = 0;
-  for (const rawAssignment of value.messageAssignments) {
-    if (!isRecord(rawAssignment) || !boundedSnapshotString(rawAssignment.messageId, 256)
-      || assignmentMessageIds.has(rawAssignment.messageId)
-      || !Number.isSafeInteger(rawAssignment.sequence) || Number(rawAssignment.sequence) <= previousSequence
-      || Number(rawAssignment.sequence) > Number(value.processedThroughSequence)
-      || !validSnapshotThreadId(rawAssignment.primaryThreadId)
-      || !threadIds.has(rawAssignment.primaryThreadId)) return undefined;
-    const relatedThreadIds = boundedStringArray(rawAssignment.relatedThreadIds, 2, 39);
-    if (!relatedThreadIds || new Set(relatedThreadIds).size !== relatedThreadIds.length
-      || relatedThreadIds.some((threadId) => !validSnapshotThreadId(threadId)
-        || !threadIds.has(threadId) || threadId === rawAssignment.primaryThreadId)
-      || !threadRelation(rawAssignment.relation)
-      || typeof rawAssignment.confidence !== "number" || !Number.isFinite(rawAssignment.confidence)
-      || rawAssignment.confidence < 0 || rawAssignment.confidence > 1) return undefined;
-    messageAssignments.push({
-      messageId: rawAssignment.messageId,
-      sequence: Number(rawAssignment.sequence),
-      primaryThreadId: rawAssignment.primaryThreadId,
-      relatedThreadIds,
-      relation: rawAssignment.relation,
-      confidence: rawAssignment.confidence
-    });
-    assignmentMessageIds.add(rawAssignment.messageId);
-    previousSequence = Number(rawAssignment.sequence);
-  }
-  return {
-    schemaVersion: 1,
-    revision: Number(value.revision),
-    processedThroughSequence: Number(value.processedThroughSequence),
-    ...(typeof value.activeThreadId === "string" ? { activeThreadId: value.activeThreadId } : {}),
-    ...(value.omittedThreadCount == null
-      ? {}
-      : { omittedThreadCount: Number(value.omittedThreadCount) }),
-    threads,
-    messageAssignments
-  };
 }
 
 export function readUserGroupOrchestratorResult(
@@ -715,12 +601,6 @@ function nonNegativeInteger(value: unknown) {
   return Number.isSafeInteger(value) && Number(value) >= 0;
 }
 
-function boundedStringArray(value: unknown, maxItems: number, maxLength: number) {
-  if (!Array.isArray(value) || value.length > maxItems
-    || value.some((item) => !boundedSnapshotString(item, maxLength))) return undefined;
-  return [...value] as string[];
-}
-
 function boundedSnapshotString(value: unknown, maxLength: number): value is string {
   return typeof value === "string" && value.trim().length > 0
     && Array.from(value).length <= maxLength && !/[\u0000-\u001f\u007f]/u.test(value);
@@ -728,19 +608,4 @@ function boundedSnapshotString(value: unknown, maxLength: number): value is stri
 
 function positiveSafeInteger(value: unknown) {
   return Number.isSafeInteger(value) && Number(value) > 0;
-}
-
-function validSnapshotThreadId(value: unknown): value is string {
-  return typeof value === "string" && /^thread:[a-f0-9]{32}$/u.test(value);
-}
-
-function validSnapshotTopic(value: unknown): value is string {
-  const length = typeof value === "string" ? Array.from(value.trim()).length : 0;
-  return typeof value === "string" && length >= 8 && length <= 160
-    && !/[\r\n\u0000-\u001f\u007f]/u.test(value);
-}
-
-function threadRelation(value: unknown): value is GroupThreadContextSnapshotV1["messageAssignments"][number]["relation"] {
-  return value === "new" || value === "continue" || value === "reply" || value === "switch"
-    || value === "bridge" || value === "unresolved";
 }

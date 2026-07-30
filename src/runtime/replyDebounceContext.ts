@@ -1,13 +1,9 @@
-import type {
-  GroupThreadContextSnapshotV1,
-  UserGroupOrchestratorResultV1
-} from "../../packages/contracts/session/runtimeMessages.js";
+import type { UserGroupOrchestratorResultV1 } from "../../packages/contracts/session/runtimeMessages.js";
 import type { AttachmentService } from "../../services/media/attachments/service.js";
 import type { AttachmentModelContext } from "../../services/media/attachments/types.js";
 import type { ConversationRecord, ParsedIncomingMessage } from "../types.js";
 import { inboundImageAltTexts, inboundImageUrls } from "../../packages/contracts/messaging/messages.js";
 import { isAdminUserId, toContextChatMessage } from "./conversationMemoryHelpers.js";
-import type { PrepareGroupThreadContextOptions } from "./groupThreadPipeline.js";
 import { conversationRecordId } from "./messagingAttachmentHelpers.js";
 import type { AdminIdentity } from "./runtimeContracts.js";
 
@@ -15,12 +11,10 @@ export interface ReplyDebounceContextOptions {
   captureSequence?: number;
   contextThroughSequence?: number;
   signal?: AbortSignal;
-  threadContext?: GroupThreadContextSnapshotV1;
   orchestratorResult?: UserGroupOrchestratorResultV1;
-  skipGroupThreadPreparation?: boolean;
 }
 
-interface ReplyDebounceContextHost { readonly attachmentService: Pick<AttachmentService, "buildModelContext">; readonly conversationRecords: ReadonlyMap<string, ConversationRecord>; adminIdentity(): AdminIdentity; prepareGroupThreadContext(incoming: ParsedIncomingMessage, options: PrepareGroupThreadContextOptions): Promise<GroupThreadContextSnapshotV1 | undefined>; selectRelevantAttachments(incoming: ParsedIncomingMessage, query: string, contextThroughSequence?: number, contextFromSequence?: number): Parameters<AttachmentService["buildModelContext"]>[0]; }
+interface ReplyDebounceContextHost { readonly attachmentService: Pick<AttachmentService, "buildModelContext">; readonly conversationRecords: ReadonlyMap<string, ConversationRecord>; adminIdentity(): AdminIdentity; selectRelevantAttachments(incoming: ParsedIncomingMessage, query: string, contextThroughSequence?: number, contextFromSequence?: number): Parameters<AttachmentService["buildModelContext"]>[0]; }
 
 export function resolveReplyContextCaptureSequence(
   captureSequence: unknown,
@@ -93,21 +87,6 @@ export class ReplyDebounceContext {
       ...inboundImageAltTexts(this.incoming),
       ...this.currentBatchMessages().flatMap((message) => message.imageAltTexts ?? [])
     ].filter(Boolean);
-  }
-
-  async prepareThreadContext(): Promise<GroupThreadContextSnapshotV1 | undefined> {
-    if (
-      this.incoming.scope === "private" ||
-      this.options.threadContext ||
-      this.options.skipGroupThreadPreparation
-    ) return this.options.threadContext;
-    return this.host.prepareGroupThreadContext(this.incoming, {
-      captureSequence: this.options.captureSequence,
-      contextThroughSequence: this.senderOnlyGroupBatch
-        ? this.options.captureSequence
-        : this.options.contextThroughSequence,
-      signal: this.options.signal
-    });
   }
 
   async buildAttachmentContext(query: string): Promise<AttachmentModelContext> {

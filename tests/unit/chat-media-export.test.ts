@@ -5,6 +5,7 @@ import sharp from "sharp";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { chatMediaPublisher } from "../../adapters/filesystem/chatMediaPublisher.js";
 import { CacheStore } from "../../services/media/attachments/cache.js";
+import { SqliteChunkWriter } from "../../services/media/attachments/chunks.js";
 import { ChatMediaExportService } from "../../services/media/chatMediaExport.js";
 import {
   readExportChatMediaInput,
@@ -98,6 +99,227 @@ describe("chat media export", () => {
     });
     await expect(fs.readFile(path.join(agentWorkspace, "workbench", result.path)))
       .resolves.toEqual(content);
+  });
+
+  it("exports an explicitly acquired PDF even when its parser state is parse_failed", async () => {
+    const root = await fixtureRoot();
+    const agentWorkspace = path.join(root, "agent");
+    const cache = await cacheFixture(root);
+    const content = Buffer.from("%PDF-1.7\nbroken\n", "utf8");
+    const cached = await cache.writeBase64(content.toString("base64"));
+    const service = new ChatMediaExportService({
+      agentWorkspace,
+      cache,
+      sources: new Map([["message:103:file:0", {
+        kind: "file" as const,
+        attachment: {
+          id: "parse-failed-file",
+          source: "message" as const,
+          name: "待人工核对.pdf",
+          status: "failed" as const,
+          parseStatus: "parse_failed" as const,
+          acquisition: {
+            status: "acquired" as const,
+            blob: {
+              schemaVersion: 1 as const,
+              cacheKey: cached.cacheKey,
+              sha256: cached.sha256,
+              sizeBytes: cached.sizeBytes,
+              detectedMimeType: "application/pdf"
+            }
+          },
+          sizeBytes: cached.sizeBytes,
+          sha256: cached.sha256,
+          cacheKey: cached.cacheKey,
+          mimeType: "application/pdf",
+          format: "pdf",
+          errorCode: "parse_failed"
+        }
+      }]]),
+      publisher: chatMediaPublisher
+    });
+
+    const result = await service.export({ handle: "message:103:file:0" });
+
+    expect(result).toMatchObject({
+      sha256: cached.sha256,
+      mimeType: "application/pdf",
+      extension: "pdf",
+      byteLength: content.length
+    });
+    await expect(fs.readFile(path.join(agentWorkspace, "workbench", result.path)))
+      .resolves.toEqual(content);
+  });
+
+  it("does not infer acquisition from a legacy failed attachment with cache fields", async () => {
+    const root = await fixtureRoot();
+    const agentWorkspace = path.join(root, "agent");
+    const cache = await cacheFixture(root);
+    const content = Buffer.from("%PDF-1.7\nbroken\n", "utf8");
+    const cached = await cache.writeBase64(content.toString("base64"));
+    const service = new ChatMediaExportService({
+      agentWorkspace,
+      cache,
+      sources: new Map([["message:104:file:0", {
+        kind: "file" as const,
+        attachment: {
+          id: "legacy-failed-file",
+          source: "message" as const,
+          name: "legacy.pdf",
+          status: "failed" as const,
+          sizeBytes: cached.sizeBytes,
+          sha256: cached.sha256,
+          cacheKey: cached.cacheKey,
+          mimeType: "application/pdf",
+          format: "pdf",
+          errorCode: "parse_failed"
+        }
+      }]]),
+      publisher: chatMediaPublisher
+    });
+
+    await expect(service.export({ handle: "message:104:file:0" }))
+      .rejects.toThrow("CHAT_MEDIA_SOURCE_UNAVAILABLE");
+  });
+
+  it("freezes exact chat handles as read-only Codex inputs before dispatch", async () => {
+    const root = await fixtureRoot();
+    const agentWorkspace = path.join(root, "agent");
+    const cache = await cacheFixture(root);
+    const content = Buffer.from("CODEX-INPUT-ARTIFACT-OK-20260730\n", "utf8");
+    const cached = await cache.writeBase64(content.toString("base64"));
+    const service = new ChatMediaExportService({
+      agentWorkspace,
+      cache,
+      sources: new Map([["message:885282522:file:0", {
+        kind: "file" as const,
+        attachment: {
+          id: "codex-input",
+          source: "message" as const,
+          name: "codex-input.txt",
+          status: "ready" as const,
+          parseStatus: "ready" as const,
+          acquisition: {
+            status: "acquired" as const,
+            blob: {
+              schemaVersion: 1 as const,
+              cacheKey: cached.cacheKey,
+              sha256: cached.sha256,
+              sizeBytes: cached.sizeBytes,
+              detectedMimeType: "text/plain"
+            }
+          },
+          sizeBytes: cached.sizeBytes,
+          sha256: cached.sha256,
+          cacheKey: cached.cacheKey,
+          mimeType: "text/plain",
+          format: "txt"
+        }
+      }]]),
+      publisher: chatMediaPublisher
+    });
+    const jobDir = path.join(root, "codex-job");
+
+    const [input] = await service.freezeCodexInputs(
+      ["message:885282522:file:0"],
+      jobDir
+    );
+    const storedPath = path.join(jobDir, input!.relativePath);
+    const stats = await fs.lstat(storedPath);
+
+    expect(input).toMatchObject({
+      schemaVersion: 1,
+      handle: "message:885282522:file:0",
+      kind: "file",
+      displayName: "codex-input.txt",
+      sha256: cached.sha256,
+      sizeBytes: content.length,
+      mimeType: "text/plain",
+      textProjection: {
+        schemaVersion: 1,
+        source: "raw_text",
+        truncated: false
+      }
+    });
+    await expect(fs.readFile(storedPath)).resolves.toEqual(content);
+    await expect(fs.readFile(
+      path.join(jobDir, input!.textProjection!.relativePath),
+      "utf8"
+    )).resolves.toContain("CODEX-INPUT-ARTIFACT-OK-20260730");
+    expect(stats.isFile()).toBe(true);
+    expect(stats.isSymbolicLink()).toBe(false);
+    expect(stats.nlink).toBe(1);
+    expect(stats.mode & 0o777).toBe(0o400);
+  });
+
+  it("freezes parsed PDF text as a bounded verified Codex projection", async () => {
+    const root = await fixtureRoot();
+    const agentWorkspace = path.join(root, "agent");
+    const cache = await cacheFixture(root);
+    const pdfBytes = Buffer.from("%PDF-1.7\nfixture\n%%EOF\n", "utf8");
+    const cached = await cache.writeBase64(pdfBytes.toString("base64"));
+    const chunksPath = path.join(
+      path.dirname(cached.filePath),
+      "artifacts",
+      "chunks.sqlite"
+    );
+    const writer = await SqliteChunkWriter.open(chunksPath);
+    await writer.write({
+      index: 0,
+      text: "PDF-CODEX-PROJECTION-OK-20260730",
+      startChar: 0,
+      endChar: 32,
+      title: "第 1 页",
+      pageNumber: 1
+    });
+    await writer.commit();
+    const service = new ChatMediaExportService({
+      agentWorkspace,
+      cache,
+      sources: new Map([["message:885282523:file:0", {
+        kind: "file" as const,
+        attachment: {
+          id: "codex-pdf-input",
+          source: "message" as const,
+          name: "input.pdf",
+          status: "ready" as const,
+          parseStatus: "ready" as const,
+          acquisition: {
+            status: "acquired" as const,
+            blob: {
+              schemaVersion: 1 as const,
+              cacheKey: cached.cacheKey,
+              sha256: cached.sha256,
+              sizeBytes: cached.sizeBytes,
+              detectedMimeType: "application/pdf"
+            }
+          },
+          sizeBytes: cached.sizeBytes,
+          sha256: cached.sha256,
+          cacheKey: cached.cacheKey,
+          mimeType: "application/pdf",
+          format: "pdf",
+          chunkIndexPath: path.relative(cache.rootDir, chunksPath)
+        }
+      }]]),
+      publisher: chatMediaPublisher
+    });
+    const jobDir = path.join(root, "codex-pdf-job");
+
+    const [input] = await service.freezeCodexInputs(
+      ["message:885282523:file:0"],
+      jobDir
+    );
+
+    expect(input?.textProjection).toMatchObject({
+      schemaVersion: 1,
+      source: "parsed_text",
+      truncated: false
+    });
+    await expect(fs.readFile(
+      path.join(jobDir, input!.textProjection!.relativePath),
+      "utf8"
+    )).resolves.toBe("PDF-CODEX-PROJECTION-OK-20260730");
   });
 
   it("exports group media into Docker Workbench", async () => {

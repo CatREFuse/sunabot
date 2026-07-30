@@ -112,7 +112,6 @@ describe("admin API smoke", () => {
       "memory.user-profile",
       "memory.dream",
       "orchestrator.user-group",
-      "orchestrator.group-thread",
       "conversation.group-summary",
       "scheduler.cron-callback",
       "director.daily-plan",
@@ -129,16 +128,8 @@ describe("admin API smoke", () => {
       ])
     }));
     expect(systemFiles.json().files).toContainEqual(expect.objectContaining({
-      id: "conversation.group-reply",
-      variables: expect.arrayContaining([
-        expect.objectContaining({
-          name: "conversation.group.thread_context",
-          description: expect.any(String)
-        })
-      ])
+      id: "conversation.group-reply"
     }));
-    expect(systemFiles.json().files.find(({ id }: { id: string }) => id === "conversation.private-reply")?.variables)
-      .not.toContainEqual(expect.objectContaining({ name: "conversation.group.thread_context" }));
     expect(systemFiles.json().files).toContainEqual(expect.objectContaining({
       id: "conversation.tone-rewrite",
       kind: "final",
@@ -148,7 +139,6 @@ describe("admin API smoke", () => {
       ])
     }));
     expect(files.json().files).toContainEqual(expect.objectContaining({ id: "image.selfie-rewrite" }));
-    expect(systemFiles.json().files).toContainEqual(expect.objectContaining({ id: "orchestrator.group-thread" }));
     expect(systemFiles.json().files).toContainEqual(expect.objectContaining({
       id: "scheduler.cron-callback",
       kind: "final",

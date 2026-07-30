@@ -26,6 +26,7 @@ export type SessionHandleResult =
     }
   | {
       status: "deferred";
+      jobId?: string;
       providerCallId: string;
       toolName: string;
       arguments: unknown;
@@ -68,6 +69,7 @@ export class SessionTurnResultCoordinator {
         turnId: claim.turn.id,
         workerId: this.options.workerId,
         job: {
+          ...(result.jobId ? { id: result.jobId } : {}),
           providerCallId: requiredText(result.providerCallId, "providerCallId"),
           toolName: result.toolName,
           ...(result.toolName === "codex" ? {

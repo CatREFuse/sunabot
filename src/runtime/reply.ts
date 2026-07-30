@@ -4,6 +4,7 @@ import {
   type MessagingPort
 } from "../../packages/contracts/messaging/messages.js";
 import { noReplyPokeEnvelope } from "../../packages/contracts/session/runtimeMessages.js";
+import { WORKSPACE_LAYOUT } from "../../packages/platform/workspaceLayout.js";
 import { readCallbackInput } from "../../services/agent/callbackInput.js";
 import { formatModelTimestamp, systemModelTimeZone } from "../../services/agent/modelTime.js";
 import {
@@ -14,15 +15,13 @@ import { senderDisplayName } from "../../services/conversations/senderName.js";
 import { DIRECTOR_CONVERSATION_SCHEDULE_VARIABLE } from "../../services/director/public.js";
 import { searchKnowledge } from "../../services/knowledge/public.js";
 import { serializeUserGroupOrchestratorResult } from "../../services/orchestration/userGroupOrchestratorResult.js";
-import type { ToolJobRecord } from "../../services/sessions/sessionStore.js";
 import { DISPATCH_MESSAGE_MAX_CHARS } from "../../services/tools/deferredDispatch.js";
 import {
   codexControlAvailable,
   codexTurnAvailable
 } from "../../services/tools/codexControlPolicy.js";
-import { GENERATE_IMG_TOOL_NAME, runGenerateImg } from "../../services/tools/generateImgTool.js";
-import { SELFIE_TOOL_NAME } from "../../services/tools/selfieTool.js";
 import type { SunaRuntime } from "../runtime.js";
+import { getAgentPrivatePath } from "../config.js";
 import {
   type AssistantMessageOrigin,
   type ImageResult,
@@ -39,13 +38,11 @@ import {
   isAdminUserId
 } from "./conversationMemoryHelpers.js";
 import { emojiPromptVariables, prepareRuntimeEmojiText } from "./emojiReply.js";
-import { currentPromptInputMessage, serializeGroupThreadPromptContext } from "./groupThreadPipeline.js";
+import { currentPromptInputMessage } from "./promptRequestHelpers.js";
 import { recordGeneratedImageHistory } from "./generatedImageHistory.js";
-import { errorMessage, isAbortError, isRuntimeIncomingMessage, sanitizeErrorDetail } from "./infrastructure.js";
+import { errorMessage, isAbortError, sanitizeErrorDetail } from "./infrastructure.js";
 import { conversationRecordId, queueIncomingSnapshot } from "./messagingAttachmentHelpers.js";
 import {
-  deferredWorkbenchImageResolver,
-  readGenerateImgReferenceContext,
   snapshotDeferredImageTask
 } from "./deferredImageReferences.js";
 import {
@@ -62,7 +59,7 @@ import {
   runtime_retainedConversationMessageLimit,
   runtime_selectRelevantAttachments
 } from "./replyContext.js";
-import { ReplyDebounceContext, resolveReplyContextCaptureSequence, type ReplyDebounceContextOptions } from "./replyDebounceContext.js";
+import { ReplyDebounceContext, type ReplyDebounceContextOptions } from "./replyDebounceContext.js";
 import { runtime_replyToToolCompletion } from "./replyDebounceDispatch.js";
 import {
   appendReplyActionLog,
@@ -84,6 +81,9 @@ import * as systemConfigReply from "./systemConfigReply.js";
 import { sendRuntimeVoiceFinalReply, startRuntimeDeferredVoiceSynthesis } from "./voiceReply.js";
 import { providerWorkbenchFilesForIncoming } from "./workbenchFiles.js";
 import { providerChatMediaForIncoming } from "./chatMedia.js";
+import { conversationCapabilityForIncoming } from "./conversationCapability.js";
+import { snapshotDeferredCodexTask } from "./deferredCodexArtifacts.js";
+export { runtime_processDeferredToolJob } from "./deferredImageJobs.js";
 export { runtime_attachReplyReferences, runtime_buildRecentContextMessages, runtime_contextMessageLimit, runtime_generateImgReferenceContext, runtime_groupReplyOptions, runtime_isAdminUser, runtime_loadMessageDetails, runtime_loadQuoteReferences, runtime_refreshAttachmentCacheReferences, runtime_replyToToolCompletion, runtime_resolveProviderBashHandle, runtime_retainedConversationMessageLimit, runtime_selectRelevantAttachments };
 type RuntimeHost = SunaRuntime;
 export async function runtime_replyToIncoming(this: RuntimeHost,
@@ -107,6 +107,12 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
     const provider = replyProvider(this);
     const admin = this.adminIdentity();
     const isAdmin = isAdminUserId(incoming.userId, admin);
+    const capabilityContext = conversationCapabilityForIncoming(
+      incoming,
+      this.config.persona.defaultAgentId,
+      isAdmin,
+      this.configEpoch
+    );
     const codexControl = !options.atomicImageReply && codexControlAvailable(
       { isAdmin, scope: incoming.scope, promptOverride: options.promptOverride });
     const promptId = incoming.scope === "private"
@@ -148,8 +154,6 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
         text: options.promptOverride ?? incoming.text,
         context: { scope: incoming.scope, userId: incoming.userId, groupId: incoming.groupId, isAdmin }
       });
-      const threadContext = await debounceContext.prepareThreadContext();
-      const threadPromptContext = this.groupThreadPromptContext(threadContext);
       const {
         modelContextMemory,
         longTermMemoryMatches,
@@ -248,7 +252,7 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
         "messages_64": messages64,
         "conversation.messages": conversationMessages,
         [DIRECTOR_CONVERSATION_SCHEDULE_VARIABLE]: directorContext,
-        ...(incoming.scope === "private" ? {} : { "conversation.group.thread_context": serializeGroupThreadPromptContext(threadPromptContext), "conversation.group.orchestrator_result": serializeUserGroupOrchestratorResult(options.orchestratorResult) }),
+        ...(incoming.scope === "private" ? {} : { "conversation.group.orchestrator_result": serializeUserGroupOrchestratorResult(options.orchestratorResult) }),
         "user.input": currentInputMarker ? `${currentInputMarker.start}${prompt}${currentInputMarker.end}` : prompt
       });
       modelContextMemory.includePromptVariable(promptRequest, "memory.long_term", longTermMemoryMatches);
@@ -312,38 +316,54 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
         { signal: options.signal }
       );
       const [nativeBash, dockerBash] = await Promise.all([
-        this.resolveProviderBashHandle(incoming, options.promptOverride, "native"),
-        this.resolveProviderBashHandle(incoming, options.promptOverride, "docker")
+        capabilityContext
+          ? this.resolveProviderBashHandle(incoming, options.promptOverride, "native", capabilityContext)
+          : Promise.resolve(undefined),
+        capabilityContext
+          ? this.resolveProviderBashHandle(incoming, options.promptOverride, "docker", capabilityContext)
+          : Promise.resolve(undefined)
       ]);
-      const chatMediaEpoch = this.configEpoch;
-      const chatMedia = providerChatMediaForIncoming(
-        this.config,
-        incoming,
-        options.promptOverride,
-        this.attachmentService.cache,
-        () => (
-          this.configEpoch === chatMediaEpoch
-          && (!options.isCurrent || options.isCurrent())
-          && !options.signal?.aborted
+      const chatMedia = capabilityContext
+        ? providerChatMediaForIncoming(
+          this.config,
+          incoming,
+          options.promptOverride,
+          this.attachmentService.cache,
+          () => (
+            this.configEpoch === capabilityContext.configEpoch
+            && (!options.isCurrent || options.isCurrent())
+            && !options.signal?.aborted
+          ),
+          capabilityContext
         )
-      );
+        : undefined;
       const turn = await this.completePromptTurn(provider, promptRequest, {
         signal: options.signal,
         modelRequestMaxRetries: this.config.normalReply.maxRetries,
         allowNoReply: true,
-        workbenchFiles: providerWorkbenchFilesForIncoming(this.config, incoming, options.promptOverride),
+        workbenchFiles: capabilityContext
+          ? providerWorkbenchFilesForIncoming(
+            this.config,
+            incoming,
+            options.promptOverride,
+            capabilityContext
+          )
+          : undefined,
         chatMedia,
         bash: {
           ...(nativeBash ? { native: nativeBash } : {}),
           ...(dockerBash ? { docker: dockerBash } : {})
         },
-        conversationAssets: options.atomicImageReply ? undefined : this.conversationAssetProviderOptions(
-          incoming,
-          gateway,
-          logRunId,
-          options.isCurrent,
-          options.delivery
-        ),
+        conversationAssets: options.atomicImageReply || !capabilityContext
+          ? undefined
+          : this.conversationAssetProviderOptions(
+            incoming,
+            gateway,
+            logRunId,
+            options.isCurrent,
+            options.delivery,
+            capabilityContext
+          ),
         voice: options.atomicImageReply ? undefined : this.voiceProviderCapability(voiceSnapshot.profile, incoming, gateway, options.delivery),
         bot: this.config.bot,
         disabledTools: this.conversationRecords.get(conversationRecordId(incoming))?.disabledTools,
@@ -354,11 +374,14 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
           referenceImageUrls,
           childLogContext ?? logContext
         ),
-        resolveWorkbenchImagePaths: (paths) => this.resolveWorkbenchImageReferences(
-          incoming,
-          paths,
-          () => !options.signal?.aborted && (!options.isCurrent || options.isCurrent())
-        ),
+        resolveWorkbenchImagePaths: capabilityContext
+          ? (paths) => this.resolveWorkbenchImageReferences(
+            incoming,
+            paths,
+            () => !options.signal?.aborted && (!options.isCurrent || options.isCurrent()),
+            capabilityContext
+          )
+          : undefined,
         onAssistantText: options.atomicImageReply ? undefined : async (text, source = "text") => {
           if (options.isCurrent && !options.isCurrent()) return;
           const quoteReply = assistantTextCount === 0;
@@ -412,11 +435,14 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
           run: (input) => this.runSelfie(input, provider, {
             chatReferenceImageUrls: selfieChatReferenceImageUrls,
             imageReferences: generateImgReferenceContext,
-            resolveWorkbenchImagePaths: (paths) => this.resolveWorkbenchImageReferences(
-              incoming,
-              paths,
-              () => !options.signal?.aborted && (!options.isCurrent || options.isCurrent())
-            ),
+            resolveWorkbenchImagePaths: capabilityContext
+              ? (paths) => this.resolveWorkbenchImageReferences(
+                incoming,
+                paths,
+                () => !options.signal?.aborted && (!options.isCurrent || options.isCurrent()),
+                capabilityContext
+              )
+              : undefined,
             logContext
           })
         },
@@ -427,6 +453,7 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
             && options.promptOverride === undefined
             && !options.atomicImageReply
             && (options.allowAsyncCodex ?? true)
+            && Boolean(capabilityContext)
             && toolCapabilities.codex
         }),
         codexControl,
@@ -537,7 +564,23 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
         if (preparedAcknowledgement.text.length > DISPATCH_MESSAGE_MAX_CHARS) {
           throw new Error(`Tone 处理后的 dispatch_message 不能超过 ${DISPATCH_MESSAGE_MAX_CHARS} 个字符。`);
         }
-        const deferredImages = await snapshotDeferredImageTask(this, incoming, turn.toolCall, generateImgReferenceContext,
+        const deferredCodex = await snapshotDeferredCodexTask({
+          toolCall: turn.toolCall,
+          capability: capabilityContext,
+          chatMedia,
+          jobRoot: getAgentPrivatePath(
+            this.config,
+            WORKSPACE_LAYOUT.codexJobs,
+            "runtime",
+            "codex-jobs"
+          ),
+          isCurrent: () => (
+            (!capabilityContext || this.configEpoch === capabilityContext.configEpoch)
+            && !options.signal?.aborted
+            && (!options.isCurrent || options.isCurrent())
+          )
+        });
+        const deferredImages = await snapshotDeferredImageTask(this, incoming, deferredCodex.toolCall, generateImgReferenceContext,
           () => !options.signal?.aborted && (!options.isCurrent || options.isCurrent()));
         const originalRequest = {
           incoming: deferredImages.incoming,
@@ -548,10 +591,10 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
           replyGate: this.replyGates.capture(incoming.scope, conversationRecordId(incoming)),
           ...(options.delivery?.replyQuote ? { replyQuote: options.delivery.replyQuote } : {}),
           ...(options.delivery?.mentionUserIds?.length ? { mentionUserIds: [...options.delivery.mentionUserIds] } : {}),
-          ...(threadContext ? { threadContext } : {}),
           ...(options.orchestratorResult ? { orchestratorResult: options.orchestratorResult } : {})
         };
         options.onDeferred?.({
+          ...(deferredCodex.jobId ? { jobId: deferredCodex.jobId } : {}),
           deferred: {
             ...turn,
             toolCall: deferredImages.toolCall
@@ -728,70 +771,3 @@ export async function runtime_replyWithGroupChatSummary(this: RuntimeHost,
       await this.sendErrorReply(incoming, gateway, error, isCurrent, undefined, delivery, { messageOrigin: "text" }, signal);
     }
   }
-export async function runtime_processDeferredToolJob(this: RuntimeHost, job: ToolJobRecord, signal: AbortSignal) {
-    if (signal.aborted) throw signal.reason ?? new Error("异步工具任务已取消。");
-    const originalRequest = job.originalRequest as {
-      incoming?: unknown;
-      captureSequence?: unknown;
-      contextThroughSequence?: unknown;
-      imageReferences?: unknown;
-      workbenchImagesByPath?: unknown;
-    };
-    const incoming = originalRequest.incoming;
-    if (!isRuntimeIncomingMessage(incoming)) {
-      return { status: "failed" as const, error: { message: "异步图片任务缺少原始请求。" } };
-    }
-    const provider = replyProvider(this);
-    const logContext = {
-      conversationId: conversationRecordId(incoming),
-      incomingMessageId: incoming.messageId == null ? undefined : String(incoming.messageId),
-      runId: job.id,
-      stage: "async_image_tool"
-    };
-    const input = job.arguments && typeof job.arguments === "object" && !Array.isArray(job.arguments)
-      ? job.arguments as Record<string, unknown>
-      : {};
-    const captureSequence = resolveReplyContextCaptureSequence(
-      originalRequest.captureSequence, originalRequest.contextThroughSequence
-    );
-    const imageReferences = readGenerateImgReferenceContext(originalRequest.imageReferences) ??
-      runtime_generateImgReferenceContext.call(this, incoming, captureSequence);
-    const resolveWorkbenchImagePaths = deferredWorkbenchImageResolver(
-      originalRequest.workbenchImagesByPath
-    );
-    const result = job.toolName === GENERATE_IMG_TOOL_NAME
-      ? await runGenerateImg(input, this.config.bot, (prompt, size, quality, referenceImageUrls, childLogContext) =>
-          provider.generateImage(prompt, size, quality, referenceImageUrls, childLogContext ?? logContext), {
-          referenceImageUrls: inboundImageUrls(incoming),
-          imageReferences,
-          resolveWorkbenchImagePaths,
-          logContext
-        })
-      : job.toolName === SELFIE_TOOL_NAME
-        ? await this.runSelfie(input, provider, {
-            chatReferenceImageUrls: this.collectSelfieChatReferenceImages(incoming, captureSequence),
-            imageReferences,
-            resolveWorkbenchImagePaths,
-            logContext
-          })
-        : { ok: false, error: `不支持的异步工具：${job.toolName}` };
-    if (isSuccessfulGeneratedImageResult(result)) {
-      recordGeneratedImageHistory(this.config, result.image, {
-        prompt: readStringField(result, "prompt"),
-        size: readStringField(result, "size"),
-        resolution: readStringField(result, "resolution")
-      });
-    }
-    const record = result as { ok?: unknown; error?: unknown };
-    return record.ok === true
-      ? { status: "succeeded" as const, result }
-      : { status: "failed" as const, result, error: { message: String(record.error ?? "图片生成失败。") } };
-  }
-function isSuccessfulGeneratedImageResult(value: unknown): value is { ok: true; image: ImageResult } & Record<string, unknown> {
-  const result = value as { ok?: unknown; image?: ImageResult };
-  return result?.ok === true && Boolean(result.image?.url || result.image?.filePath);
-}
-function readStringField(value: Record<string, unknown>, key: string) {
-  const field = value[key];
-  return typeof field === "string" && field.trim() ? field : undefined;
-}

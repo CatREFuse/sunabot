@@ -51,5 +51,6 @@ export {
   DREAM_PROMPT_FILE,
   DREAM_PROMPT_ID,
   LEGACY_DREAM_CONTRACT_V3,
+  LEGACY_DREAM_CONTRACT_V4,
   dreamPromptTemplate
 } from "./dream/public.js";

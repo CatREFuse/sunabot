@@ -58,6 +58,29 @@ export async function assertUserTestWorkspace(workspace: string) {
   return path.resolve(workspace);
 }
 
+export async function resetUserTestKnowledgeDirectory(
+  workspace: string,
+  workbenchRoot: string
+) {
+  const isolatedWorkspace = await assertUserTestWorkspace(workspace);
+  const [realWorkspace, realWorkbenchRoot] = await Promise.all([
+    fs.realpath(isolatedWorkspace),
+    fs.realpath(workbenchRoot)
+  ]);
+  assertInside(realWorkbenchRoot, realWorkspace, "USER_TEST_KNOWLEDGE_RESET_OUTSIDE_WORKSPACE");
+  const knowledgeRoot = path.join(realWorkbenchRoot, "knowledge");
+  try {
+    const stats = await fs.lstat(knowledgeRoot);
+    if (!stats.isDirectory() || stats.isSymbolicLink()) {
+      throw new Error("USER_TEST_CONVERSATION_FIXTURE_KNOWLEDGE_DIRECTORY_INVALID");
+    }
+    await fs.rm(knowledgeRoot, { recursive: true, force: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  await fs.mkdir(knowledgeRoot, { mode: 0o700 });
+}
+
 export async function claimUserTestWorkspaceCase(input: {
   workspace: string;
   caseId: string;

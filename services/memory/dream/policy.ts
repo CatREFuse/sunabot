@@ -4,21 +4,29 @@ import type {
   DreamLongTermArchiveCandidate,
   DreamPersonaAdjustmentV1,
   DreamPersonaEvidence,
+  DreamPersonaImpressionLevel,
   DreamPersonaPolicyResult,
   DreamPersonaRejectionReason
 } from "./types.js";
 import { normalizeText } from "../domain/normalizers.js";
+import {
+  isSafeDreamPersonaStatement,
+  normalizeDreamPersonaTopicKey
+} from "./personaImpressions.js";
 
 export const DREAM_ARCHIVE_MIN_DORMANCY_DAYS = 90;
 export const DREAM_ARCHIVE_RECALL_DAY_EXTENSION_DAYS = 30;
 export const DREAM_ARCHIVE_MAX_RECALL_EXTENSION_DAYS = 180;
 export const DREAM_ARCHIVE_MIN_TRACKING_DAYS = DREAM_ARCHIVE_MIN_DORMANCY_DAYS;
 export const DREAM_ARCHIVE_LOW_SCORE_MAX = 0.25;
-export const DREAM_PERSONA_MIN_EVIDENCE_EVENTS = 3;
+export const DREAM_PERSONA_MIN_EVIDENCE_EVENTS = 2;
 export const DREAM_PERSONA_MIN_CONTEXTS = 2;
-export const DREAM_PERSONA_MIN_SPAN_DAYS = 14;
-export const DREAM_PERSONA_COOLDOWN_DAYS = 30;
-export const DREAM_PERSONA_STATEMENT_MAX_CHARS = 80;
+export const DREAM_PERSONA_STABLE_MIN_EVIDENCE_EVENTS = 3;
+export const DREAM_PERSONA_STABLE_MIN_CONTEXTS = 2;
+export const DREAM_PERSONA_STABLE_MIN_SPAN_DAYS = 3;
+export const DREAM_PERSONA_CORE_MIN_EVIDENCE_EVENTS = 4;
+export const DREAM_PERSONA_CORE_MIN_CONTEXTS = 3;
+export const DREAM_PERSONA_CORE_MIN_SPAN_DAYS = 7;
 export const DREAM_PERSONA_MIN_IMPACT_SCORE = 0.65;
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
@@ -115,13 +123,13 @@ export function evaluateDreamArchiveCandidate(
 export function evaluateDreamPersonaAdjustment(
   adjustment: DreamPersonaAdjustmentV1,
   evidence: readonly DreamPersonaEvidence[],
-  options: { now?: Date; lastAppliedAt?: string | null } = {}
+  options: { now?: Date } = {}
 ): DreamPersonaPolicyResult {
   const reasons: DreamPersonaRejectionReason[] = [];
   const now = options.now ?? new Date();
   const nowTime = now.getTime();
   if (!validAdjustment(adjustment)) reasons.push("unsupported_adjustment");
-  else if (!safePersonaStatement(adjustment.statement)) reasons.push("unsafe_adjustment");
+  else if (!isSafeDreamPersonaStatement(adjustment.statement)) reasons.push("unsafe_adjustment");
 
   const evidenceIds = Array.isArray(adjustment.evidenceMemoryIds)
     ? adjustment.evidenceMemoryIds
@@ -152,29 +160,19 @@ export function evaluateDreamPersonaAdjustment(
     || evidenceTimes.some((timestamp) => !Number.isFinite(timestamp) || timestamp > nowTime)
   ) {
     reasons.push("invalid_evidence_time");
-  } else if (
-    evidenceTimes.length < DREAM_PERSONA_MIN_EVIDENCE_EVENTS
-    || Math.max(...evidenceTimes) - Math.min(...evidenceTimes) < DREAM_PERSONA_MIN_SPAN_DAYS * DAY_MS
-  ) {
-    reasons.push("insufficient_time_span");
-  }
-
-  if (options.lastAppliedAt) {
-    const lastAppliedAt = Date.parse(options.lastAppliedAt);
-    if (!Number.isFinite(nowTime) || !Number.isFinite(lastAppliedAt) || lastAppliedAt > nowTime) {
-      reasons.push("invalid_cooldown");
-    } else if (nowTime - lastAppliedAt < DREAM_PERSONA_COOLDOWN_DAYS * DAY_MS) {
-      reasons.push("cooldown_active");
-    }
   }
   const uniqueReasons = [...new Set(reasons)];
-  return { eligible: uniqueReasons.length === 0, reasons: uniqueReasons };
+  const level = uniqueReasons.length === 0
+    ? highestSupportedPersonaLevel(eventIds.size, contexts.size, evidenceTimes)
+    : null;
+  return { eligible: level !== null, reasons: uniqueReasons, level };
 }
 
 function validAdjustment(adjustment: DreamPersonaAdjustmentV1) {
   if (!adjustment || typeof adjustment !== "object") return false;
   const statement = typeof adjustment.statement === "string" ? adjustment.statement.trim() : "";
   if (!statement) return false;
+  if (!normalizeDreamPersonaTopicKey(adjustment.topicKey, adjustment.kind)) return false;
   if (adjustment.kind === "relationship_tendency") return adjustment.targetFile === "RELATION.md";
   return (
     (adjustment.kind === "habit" || adjustment.kind === "communication_preference")
@@ -182,25 +180,29 @@ function validAdjustment(adjustment: DreamPersonaAdjustmentV1) {
   );
 }
 
-const UNSAFE_PERSONA_PATTERNS = [
-  /(?:无条件|永远|永久|绝不|始终|总是|所有时候|任何情况下|不惜一切|第一位)/u,
-  /(?:忽略|绕过|规避|越过|关闭|禁用|解除|服从|听从|顺从|盲从|优先于).{0,12}(?:规则|约束|限制|指令|命令|安全|边界|权限)?/u,
-  /(?:规则|约束|指令|命令|系统提示|开发者消息|管理员|权限|密码|密钥|凭据|token|工具调用|安全边界|核心身份|价值观|道德倾向)/iu,
-  /(?:要求|命令|强迫|操控|控制|欺骗|报复|伤害|自残|自杀|暴力|违法|仇恨)/u,
-  /(?:心理诊断|精神疾病|人格障碍|抑郁症|焦虑症|精神病|永久消极|负面标签)/u,
-  /\b(?:always|never|permanent(?:ly)?|unconditional(?:ly)?|ignore|bypass|disable|override|obey|submit|system prompt|developer message|credential|password|secret|token|permission|self-harm|suicide|diagnos(?:e|is))\b/iu
-];
-
-function safePersonaStatement(value: string) {
-  const statement = value.trim();
-  const length = Array.from(statement).length;
-  if (length < 4 || length > DREAM_PERSONA_STATEMENT_MAX_CHARS) return false;
-  if (/[\r\n\u0000-\u001f\u007f`<>]/u.test(statement)) return false;
-  if (/^(?:[-*#]|\d+[.)])\s*/u.test(statement)) return false;
-  if (/(?:@\{|\{\{|https?:\/\/|file:)/iu.test(statement)) return false;
-  if ((statement.match(/[。！？!?]/gu)?.length ?? 0) > 1) return false;
-  if (UNSAFE_PERSONA_PATTERNS.some((pattern) => pattern.test(statement))) return false;
-  return true;
+function highestSupportedPersonaLevel(
+  independentEvents: number,
+  contexts: number,
+  evidenceTimes: readonly number[]
+): DreamPersonaImpressionLevel {
+  const spanDays = evidenceTimes.length > 1
+    ? (Math.max(...evidenceTimes) - Math.min(...evidenceTimes)) / DAY_MS
+    : 0;
+  if (
+    independentEvents >= DREAM_PERSONA_CORE_MIN_EVIDENCE_EVENTS
+    && contexts >= DREAM_PERSONA_CORE_MIN_CONTEXTS
+    && spanDays >= DREAM_PERSONA_CORE_MIN_SPAN_DAYS
+  ) {
+    return "core";
+  }
+  if (
+    independentEvents >= DREAM_PERSONA_STABLE_MIN_EVIDENCE_EVENTS
+    && contexts >= DREAM_PERSONA_STABLE_MIN_CONTEXTS
+    && spanDays >= DREAM_PERSONA_STABLE_MIN_SPAN_DAYS
+  ) {
+    return "stable";
+  }
+  return "observation";
 }
 
 function validScore(value: unknown): value is number {

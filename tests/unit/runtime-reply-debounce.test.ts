@@ -1485,7 +1485,7 @@ describe("SunaRuntime reply debounce", () => {
       .map((message) => message.text)).toEqual(["running handoff first", "running handoff bump"]);
   });
 
-  it("freezes text, image, attachment, and Thread context at the debounce handoff boundary", async () => {
+  it("freezes text, image, and attachment context at the debounce handoff boundary", async () => {
     const requests: RenderedPromptRequest[] = [];
     const providerOptions: ProviderCompleteOptions[] = [];
     const buildModelContext = vi.fn(async (attachments) => ({
@@ -1502,8 +1502,6 @@ describe("SunaRuntime reply debounce", () => {
       attachmentService,
       replyDebounceMs: 120
     });
-    const prepareGroupThreadContext = vi.fn(async () => undefined);
-    harness.runtime.prepareGroupThreadContext = prepareGroupThreadContext;
     harness.runtime.prepareIncomingMessage = async (incoming) => {
       incoming.attachments = incoming.attachments.map((attachment) => ({
         ...attachment,
@@ -1534,11 +1532,6 @@ describe("SunaRuntime reply debounce", () => {
     releaseTarget.resolve();
     await harness.waitForOutbounds(1);
 
-    expect(prepareGroupThreadContext).toHaveBeenCalledOnce();
-    expect(prepareGroupThreadContext.mock.calls[0]?.[1]).toEqual(expect.objectContaining({
-      captureSequence: 1,
-      contextThroughSequence: 1
-    }));
     const followupHistory = requests[0]!.messages.find((message) => (
       message.content.includes("followup text with media")
     ));
@@ -2442,7 +2435,6 @@ function createRuntimeHarness(
   runtime.enqueueConversationMemory = async () => undefined;
   runtime.scheduleMemoryDrain = () => undefined;
   if (!options.persistConversations) runtime.persistConversationRecords = () => undefined;
-  runtime.prepareGroupThreadContext = async () => undefined;
   runtime.renderPromptRequest = async (_id, variables) => ({
     messages: [
       { role: "system", content: "test system" },

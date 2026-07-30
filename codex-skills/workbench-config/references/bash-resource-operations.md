@@ -191,7 +191,7 @@ Read `emoji/emojis.jsonl`. Each line contains exactly:
 }
 ```
 
-The filename extension may be `.png` or `.gif`; the basename digest must match the actual bytes. A stored asset must be a single-link regular file, at most 16 MiB, and decode as 1024×1024. The catalog allows at most 64 unique keys, 20 unique versions per key, 2 MiB total, and no unknown fields. Preserve the original `createdAt`, set `updatedAt` for a changed key, put the new version in `versions`, and point `currentFileName` at it.
+The filename extension may be `.png` or `.gif`; the basename digest must match the actual bytes. A stored asset must be a single-link regular file, at most 16 MiB, and decode as 1024×1024. The catalog allows at most 64 unique keys, 20 unique versions per key, and no unknown fields. The 2 MiB limit applies only to `emojis.jsonl` itself. Do not add the byte sizes of referenced emoji images together or use that sum as a catalog-wide gate. Preserve the original `createdAt`, set `updatedAt` for a changed key, put the new version in `versions`, and point `currentFileName` at it.
 
 Use Bash directly when the source is already a validated local PNG/GIF and the active root is writable. Build the complete candidate JSONL, validate every line and referenced asset, compare the old catalog digest, then atomically replace `emojis.jsonl` and read it back.
 

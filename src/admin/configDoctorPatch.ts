@@ -26,7 +26,6 @@ const RULE_REPAIRABLE_PATHS = new Set([
   "/bot/memory/messageThreshold",
   "/bot/memory/workingMemoryMaxEntries",
   "/bot/orchestrator/enabled",
-  "/bot/orchestrator/groupThreadModel",
   "/bot/orchestrator/reasoningEffort",
   "/bot/orchestrator/messageThreshold",
   "/bot/orchestrator/recentMessageWindowMs",

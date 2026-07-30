@@ -3,7 +3,6 @@ import type { AttachmentService } from "../../services/media/attachments/service
 import type {
   AssistantReplyOutboxEnvelope,
   ConversationAssetOutboxEnvelope,
-  GroupThreadContextSnapshotV1,
   NoReplyPokeOutboxEnvelope,
   ReplyQuoteSnapshotV1,
   UserGroupOrchestratorResultV1
@@ -64,7 +63,6 @@ export const GROUP_CONVERSATION_REPLY_PROMPT_FILE = "conversation_group_reply.js
 export const TONE_PROMPT_FILE = "tone_rewrite.json";
 export const SELFIE_PROMPT_FILE = "selfie_prompt_rewrite.json";
 export const GROUP_CHAT_SUMMARY_PROMPT_FILE = "group_chat_summary.json";
-export const GROUP_THREAD_CONTEXT_PROMPT_FILE = "group_thread_context.json";
 export const ADMIN_PERSONA_FILES: Readonly<Record<string, string>> = {
   "persona.agents": "AGENTS.md",
   "persona.soul": "SOUL.md",
@@ -83,7 +81,6 @@ export const ADMIN_RUNTIME_PROMPT_DEFAULTS: Readonly<Record<string, string>> = {
   "memory.compress-out": defaultFinalPromptContent("memory.compress-out"),
   "memory.user-profile": defaultFinalPromptContent("memory.user-profile"),
   "orchestrator.user-group": defaultFinalPromptContent("orchestrator.user-group"),
-  "orchestrator.group-thread": defaultFinalPromptContent("orchestrator.group-thread"),
   "conversation.group-summary": defaultFinalPromptContent("conversation.group-summary"),
   [SCHEDULED_TASK_CALLBACK_PROMPT_ID]: defaultFinalPromptContent(SCHEDULED_TASK_CALLBACK_PROMPT_ID),
   [DIRECTOR_DAILY_PLAN_PROMPT_ID]: defaultFinalPromptContent(DIRECTOR_DAILY_PLAN_PROMPT_ID),
@@ -203,6 +200,7 @@ export interface ReplyDelivery {
   terminalStatus?: "no_reply" | "replied";
 }
 export interface DeferredCodexTurn {
+  jobId?: string;
   deferred: ProviderDeferredTurn;
   originalRequest: {
     incoming: ParsedIncomingMessage;
@@ -213,7 +211,6 @@ export interface DeferredCodexTurn {
     replyGate?: ReplyGateSnapshot;
     replyQuote?: ReplyQuoteSnapshotV1;
     mentionUserIds?: number[];
-    threadContext?: GroupThreadContextSnapshotV1;
     orchestratorResult?: UserGroupOrchestratorResultV1;
   };
   acknowledgement: ReplyDeliveryDraft;

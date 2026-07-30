@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import path from "node:path";
 import { imageMediaAsset, type AttachmentExtractionContext, type IncomingAttachment } from "../../packages/contracts/media/media.js";
 import type {
   InboundMessageV1,
@@ -19,6 +20,7 @@ const MAX_FILE_IDENTIFIER_LENGTH = 2_048;
 interface NormalizedFileSegment {
   name: string;
   fileId?: string;
+  fileToken?: string;
   sizeBytes?: number;
   url?: string;
   busId?: number;
@@ -139,6 +141,7 @@ export function extractOneBotAttachments(
       name: normalized.name
     };
     if (normalized.fileId) attachment.fileId = normalized.fileId;
+    if (normalized.fileToken) attachment.fileToken = normalized.fileToken;
     if (normalized.sizeBytes !== undefined) attachment.sizeBytes = normalized.sizeBytes;
     if (normalized.url) attachment.url = normalized.url;
     if (normalized.busId !== undefined) attachment.busId = normalized.busId;
@@ -219,11 +222,12 @@ function normalizeFileSegment(data: Record<string, unknown>): NormalizedFileSegm
   const explicitUrl = httpUrl(data.url);
   const fileUrl = httpUrl(rawFile);
   const explicitFileId = safeFileIdentifier(data.file_id);
-  const fileId = explicitFileId || (rawFile && !fileUrl ? safeFileIdentifier(rawFile) : undefined);
+  const fileToken = rawFile && !fileUrl ? safeFileIdentifier(rawFile) : undefined;
   const nameSource = normalizedString(data.name) || fileNameFromUrl(fileUrl) || rawFile || explicitFileId;
   return {
     name: sanitizeAttachmentName(nameSource),
-    fileId,
+    fileId: explicitFileId,
+    fileToken,
     sizeBytes: nonNegativeInteger(data.file_size),
     url: explicitUrl ?? fileUrl,
     busId: nonNegativeInteger(data.busid)
@@ -253,6 +257,7 @@ function decodeCqValue(value: string) {
 
 function attachmentDedupeKey(attachment: NormalizedFileSegment) {
   if (attachment.fileId) return `file:${attachment.fileId}`;
+  if (attachment.fileToken) return `token:${attachment.fileToken}`;
   if (attachment.url) return `url:${attachment.url}`;
   return ["meta", attachment.name, attachment.sizeBytes ?? "", attachment.busId ?? ""].join("\u0000");
 }
@@ -263,7 +268,14 @@ function stableAttachmentId(dedupeKey: string, context: AttachmentExtractionCont
 }
 
 function mergeAttachment(existing: IncomingAttachment, incoming: NormalizedFileSegment) {
-  return { ...existing, fileId: existing.fileId ?? incoming.fileId, sizeBytes: existing.sizeBytes ?? incoming.sizeBytes, url: existing.url ?? incoming.url, busId: existing.busId ?? incoming.busId };
+  return {
+    ...existing,
+    fileId: existing.fileId ?? incoming.fileId,
+    fileToken: existing.fileToken ?? incoming.fileToken,
+    sizeBytes: existing.sizeBytes ?? incoming.sizeBytes,
+    url: existing.url ?? incoming.url,
+    busId: existing.busId ?? incoming.busId
+  };
 }
 
 function readOneBotMessage(value: unknown): string | OneBotMessageSegment[] | undefined {
@@ -278,8 +290,18 @@ function normalizedString(value: unknown) {
 }
 
 function safeFileIdentifier(value: unknown) {
-  const result = normalizedString(value);
-  if (!result || result.length > MAX_FILE_IDENTIFIER_LENGTH || /^(?:data:[^,]*;base64,|base64:\/\/)/i.test(result)) return undefined;
+  const source = typeof value === "string" || typeof value === "number" ? String(value) : "";
+  if (/[\u0000-\u001f\u007f-\u009f]/u.test(source)) return undefined;
+  const result = source.trim();
+  if (
+    !result ||
+    result.length > MAX_FILE_IDENTIFIER_LENGTH ||
+    result.includes("\\") ||
+    /^[a-z]:/i.test(result) ||
+    path.posix.isAbsolute(result) ||
+    path.win32.isAbsolute(result) ||
+    /^[a-z][a-z0-9+.-]*:/i.test(result)
+  ) return undefined;
   return result;
 }
 

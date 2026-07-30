@@ -120,6 +120,44 @@ describe("RuntimeDreams", () => {
     expect(ids.filter((id) => id.startsWith("older-"))).toHaveLength(12);
   });
 
+  it("builds the active impression catalog from more than one hundred retained Dream runs", async () => {
+    const now = new Date("2026-07-20T04:05:00.000Z");
+    const fixture = createFixture(() => now);
+    for (let index = 0; index < 101; index += 1) {
+      const localDate = new Date(Date.UTC(2026, 3, 1 + index)).toISOString().slice(0, 10);
+      fixture.store.addRun(runRecord({
+        id: `persona-history-${index}`,
+        localDate,
+        scheduledFor: `${localDate}T04:00:00.000Z`,
+        status: "completed",
+        personaStatus: "applied",
+        personaUpdatedAt: `${localDate}T04:05:00.000Z`,
+        persona: {
+          impression: {
+            kind: "communication_preference",
+            targetFile: "PREFERENCE.md",
+            topicKey: "communication.history_depth",
+            level: index === 0 ? "core" : "observation",
+            statement: index === 0 ? "会长期保留能够复核的协作证据。" : `观察到第 ${index} 条协作线索。`,
+            evidenceMemoryIds: ["history-a", "history-b"]
+          }
+        }
+      }));
+    }
+
+    await fixture.runtime.tick(now);
+
+    const request = fixture.model.requests[0] as Record<string, unknown>;
+    const payload = request[DREAM_PAYLOAD_VARIABLE] as Record<string, unknown>;
+    expect(payload.personaImpressions).toEqual([
+      expect.objectContaining({
+        level: "core",
+        topicKey: "communication.history_depth",
+        statement: "会长期保留能够复核的协作证据。"
+      })
+    ]);
+  });
+
   it("reads current Dream selection settings when creating a new persisted run", async () => {
     const now = new Date("2026-07-20T04:05:00.000Z");
     const settings = vi.fn((): DreamMemorySelectionSettings => ({
@@ -596,6 +634,7 @@ describe("RuntimeDreams", () => {
     fixture.model.adjustment = {
       kind: "communication_preference",
       targetFile: "PREFERENCE.md",
+      topicKey: "communication.thinking_pause",
       statement: "在复杂讨论后留出片刻整理思路。",
       evidenceMemoryIds: ["lt-1", "lt-2", "lt-3"]
     };
@@ -607,6 +646,126 @@ describe("RuntimeDreams", () => {
     ]);
     expect(fixture.persona.content).toContain("## 缓慢形成的倾向");
     expect(fixture.persona.content).toContain("- 在复杂讨论后留出片刻整理思路。");
+  });
+
+  it("retains a lower impression in history while projecting the higher level for the same topic", async () => {
+    const now = new Date("2026-07-20T04:05:00.000Z");
+    const snapshot = memorySnapshot({
+      workingRecords: [],
+      longTermRecords: [
+        memory("lt-1", "2026-06-01T09:00:00.000Z", "conversation", "event:1"),
+        memory("lt-2", "2026-06-18T09:00:00.000Z", "shared_task", "event:2"),
+        memory("lt-3", "2026-07-01T09:00:00.000Z", "conversation", "event:3")
+      ]
+    });
+    const fixture = createFixture(() => now, snapshot);
+    fixture.store.addRun(runRecord({
+      id: "persona-low",
+      localDate: "2026-07-18",
+      scheduledFor: "2026-07-18T04:00:00.000Z",
+      status: "completed",
+      personaStatus: "applied",
+      personaUpdatedAt: "2026-07-18T04:05:00.000Z",
+      persona: {
+        impression: {
+          kind: "communication_preference",
+          targetFile: "PREFERENCE.md",
+          topicKey: "coordination.evidence",
+          level: "observation",
+          statement: "协作时会留意是否有清晰证据。",
+          evidenceMemoryIds: ["old-1", "old-2"]
+        }
+      }
+    }));
+    fixture.persona.content = [
+      "# 偏好",
+      "",
+      "保持清楚、温和的表达。",
+      "",
+      "## 缓慢形成的倾向",
+      "",
+      "- 协作时会留意是否有清晰证据。",
+      ""
+    ].join("\n");
+    fixture.model.adjustment = {
+      kind: "communication_preference",
+      targetFile: "PREFERENCE.md",
+      topicKey: "coordination.evidence",
+      statement: "协作时会把可核验证据作为稳定判断依据。",
+      evidenceMemoryIds: ["lt-1", "lt-2", "lt-3"]
+    };
+
+    const completed = await fixture.runtime.tick(now);
+
+    expect(completed).toMatchObject({
+      status: "completed",
+      personaStatus: "applied",
+      persona: {
+        impression: { level: "stable", topicKey: "coordination.evidence" },
+        effective: true
+      }
+    });
+    expect(fixture.persona.content).toContain("- 协作时会把可核验证据作为稳定判断依据。");
+    expect(fixture.persona.content).not.toContain("- 协作时会留意是否有清晰证据。");
+    expect(fixture.store.getRunByLocalDate("2026-07-18")?.persona)
+      .toMatchObject({ impression: { level: "observation" } });
+  });
+
+  it("stores a later lower-level impression without changing an existing core projection", async () => {
+    const now = new Date("2026-07-20T04:05:00.000Z");
+    const fixture = createFixture(() => now);
+    fixture.store.addRun(runRecord({
+      id: "persona-core",
+      localDate: "2026-07-18",
+      scheduledFor: "2026-07-18T04:00:00.000Z",
+      status: "completed",
+      personaStatus: "applied",
+      personaUpdatedAt: "2026-07-18T04:05:00.000Z",
+      persona: {
+        impression: {
+          kind: "communication_preference",
+          targetFile: "PREFERENCE.md",
+          topicKey: "communication.evidence",
+          level: "core",
+          statement: "会长期把可核验证据作为协作判断依据。",
+          evidenceMemoryIds: ["core-a", "core-b", "core-c", "core-d"]
+        }
+      }
+    }));
+    fixture.persona.content = [
+      "# 偏好",
+      "",
+      "保持清楚、温和的表达。",
+      "",
+      "<!-- sunabot-dream-persona:active:start -->",
+      "## 缓慢形成的倾向",
+      "",
+      "- 会长期把可核验证据作为协作判断依据。",
+      "<!-- sunabot-dream-persona:active:end -->",
+      ""
+    ].join("\n");
+    fixture.model.adjustment = {
+      kind: "communication_preference",
+      targetFile: "PREFERENCE.md",
+      topicKey: "communication.evidence",
+      statement: "有时会先确认当前证据是否清楚。",
+      evidenceMemoryIds: ["work-1", "long-1"]
+    };
+
+    const completed = await fixture.runtime.tick(now);
+
+    expect(completed).toMatchObject({
+      personaStatus: "applied",
+      persona: {
+        impression: { level: "observation" },
+        effective: false,
+        coveredBy: "persona-core",
+        projectionChanged: false
+      }
+    });
+    expect(fixture.persona.writes).toHaveLength(0);
+    expect(fixture.persona.content).toContain("- 会长期把可核验证据作为协作判断依据。");
+    expect(fixture.persona.content).not.toContain("- 有时会先确认当前证据是否清楚。");
   });
 
   it("drops imagined persona evidence without blocking the Dream", async () => {
@@ -628,6 +787,7 @@ describe("RuntimeDreams", () => {
     fixture.model.adjustment = {
       kind: "habit",
       targetFile: "PREFERENCE.md",
+      topicKey: "habit.dream_hint",
       statement: "把梦中的暗示当作稳定习惯。",
       evidenceMemoryIds: ["dream-old", "lt-2", "lt-3"]
     };
@@ -651,6 +811,7 @@ describe("RuntimeDreams", () => {
     fixture.model.adjustment = {
       kind: "habit",
       targetFile: "PREFERENCE.md",
+      topicKey: "habit.goal_check",
       statement: "整理长任务时先确认仍然有效的目标。",
       evidenceMemoryIds: ["lt-1", "lt-2", "lt-3"]
     };

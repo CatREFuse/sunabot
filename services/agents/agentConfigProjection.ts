@@ -3,7 +3,7 @@ import type { BotConfig } from "../../packages/contracts/admin/public.js";
 export function mergeManifestBotConfig(
   shared: BotConfig,
   manifest: BotConfig,
-  defaultAgent: boolean
+  _defaultAgent: boolean
 ) {
   const bot = structuredClone(manifest);
   bot.replyModel = bot.replyModel?.trim() || shared.replyModel;
@@ -14,12 +14,17 @@ export function mergeManifestBotConfig(
   };
   bot.tone = { ...structuredClone(shared.tone), ...structuredClone(bot.tone ?? {}) };
   bot.director = { ...structuredClone(shared.director), ...structuredClone(bot.director ?? {}) };
-  bot.orchestrator = {
+  const orchestrator = {
     ...structuredClone(shared.orchestrator),
-    ...structuredClone(bot.orchestrator),
-    groupThreadModel: defaultAgent
-      ? shared.orchestrator.groupThreadModel
-      : bot.orchestrator?.groupThreadModel?.trim() || shared.orchestrator.groupThreadModel
+    ...structuredClone(bot.orchestrator)
+  };
+  bot.orchestrator = {
+    enabled: orchestrator.enabled,
+    userGroupchatOrchestratorModel: orchestrator.userGroupchatOrchestratorModel,
+    reasoningEffort: orchestrator.reasoningEffort,
+    promptFile: orchestrator.promptFile,
+    messageThreshold: orchestrator.messageThreshold,
+    recentMessageWindowMs: orchestrator.recentMessageWindowMs
   };
   bot.bash = { ...structuredClone(shared.bash), ...structuredClone(bot.bash) };
   return bot;

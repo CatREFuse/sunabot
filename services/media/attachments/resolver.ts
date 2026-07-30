@@ -24,7 +24,7 @@ export async function resolveAttachmentSource(
 }
 
 export function resolveAttachmentFallback(
-  input: Pick<AttachmentResolutionInput, "fileId" | "file">,
+  input: Pick<AttachmentResolutionInput, "accountId" | "fileId" | "file">,
   port: AttachmentSourcePort,
   options: AttachmentResolverOptions = {}
 ) {

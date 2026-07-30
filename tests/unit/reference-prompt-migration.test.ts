@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   migrateConversationReferenceToolDescriptions,
-  migrateGroupReferenceResolutionPrompt
+  migrateOrchestratorReferenceResolutionPrompt
 } from "../../services/agent/referencePromptMigration.js";
 import { LEGACY_GENERATE_IMG_TOOL_DESCRIPTION } from "../../services/tools/generateImgTool.js";
 import { generateImgTool } from "../../services/tools/generateImgTool.js";
@@ -30,13 +30,13 @@ afterEach(async () => {
 });
 
 describe("reference prompt migrations", () => {
-  it("adds file and media coreference rules while preserving administrator messages", async () => {
+  it("adds file and media coreference rules to the orchestrator while preserving administrator messages", async () => {
     await writeTemplate("group.json", {
       messages: [
         { role: "system", content: "管理员自定义开头。" },
         {
           role: "developer",
-          content: "原始消息是事实依据。当 thread_context 与原始消息冲突、confidence 较低或 relation 为 unresolved 时，应根据完整原始消息完成本轮判断。"
+          content: "你需要在推理中对上下文进行严格的指代消解。"
         },
         { role: "user", content: "@{user.input}" }
       ],
@@ -44,12 +44,12 @@ describe("reference prompt migrations", () => {
       response_format: { type: "text" }
     });
 
-    await expect(migrateGroupReferenceResolutionPrompt(config, "group.json", "reply")).resolves.toBe(true);
+    await expect(migrateOrchestratorReferenceResolutionPrompt(config, "group.json")).resolves.toBe(true);
     const migrated = await readTemplate("group.json");
     expect(migrated.messages[0]).toEqual({ role: "system", content: "管理员自定义开头。" });
-    expect(migrated.messages[1].content).toContain("对文件或媒体的指代");
+    expect(migrated.messages[1].content).toContain("对文件和媒体的指代");
     expect(migrated.messages[1].content).toContain("图片替代文本");
-    await expect(migrateGroupReferenceResolutionPrompt(config, "group.json", "reply")).resolves.toBe(false);
+    await expect(migrateOrchestratorReferenceResolutionPrompt(config, "group.json")).resolves.toBe(false);
   });
 
   it("updates only exact legacy tool descriptions and keeps administrator overrides", async () => {

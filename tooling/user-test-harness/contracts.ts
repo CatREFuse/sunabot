@@ -19,8 +19,27 @@ export interface UserTestExpectedOutput {
   forbiddenText?: string[];
   requiredOutboundKinds?: Array<"message" | "asset" | "poke">;
   forbiddenOutboundKinds?: Array<"message" | "asset" | "poke">;
+  requiredInboundAttachments?: ExpectedInboundAttachment[];
   minimumOutboundCount?: number;
   maximumOutboundCount?: number;
+}
+
+export interface ExpectedInboundAttachment {
+  messageId: string;
+  index: number;
+  name: string;
+  status: "ready" | "partial" | "unsupported" | "too_large" | "failed";
+  acquisitionStatus?: "pending" | "acquired" | "failed";
+  parseStatus?: "not_started" | "pending" | "ready" | "partial" | "unsupported" | "parse_failed";
+  blobSha256?: string;
+  blobSizeBytes?: number;
+  blobMimeType?: string;
+  format?: string;
+  mimeType?: string;
+  sizeBytes?: number;
+  sha256?: string;
+  pageCount?: number;
+  handle?: string;
 }
 
 export interface ConversationFixtureFile {
@@ -29,12 +48,20 @@ export interface ConversationFixtureFile {
   content: string;
 }
 
+export interface ConversationFixtureAttachmentSource {
+  fileId: string;
+  name: string;
+  contentBase64: string;
+}
+
 export interface ConversationFixtureState {
   workingMemory?: WorkingMemoryFixtureItem[];
   longTerm?: JsonFixtureRecord[];
   userProfiles?: JsonFixtureRecord[];
   air?: string;
+  resetKnowledge?: Array<"native" | "docker">;
   workbenchFiles?: ConversationFixtureFile[];
+  attachmentSources?: ConversationFixtureAttachmentSource[];
 }
 
 export interface ConversationUserTestInput {
@@ -247,10 +274,38 @@ export interface HarnessToolCallObservation {
 export interface HarnessObservation {
   inbound?: unknown;
   outbound: unknown[];
+  inboundAttachments?: HarnessInboundAttachmentObservation[];
+  attachmentResolutions?: HarnessAttachmentResolutionObservation[];
   tools: string[];
   toolCalls: HarnessToolCallObservation[];
   requestLogs: unknown[];
   branch?: unknown;
+}
+
+export interface HarnessInboundAttachmentObservation {
+  messageId: string;
+  index: number;
+  name: string;
+  status: string;
+  acquisitionStatus?: string;
+  parseStatus?: string;
+  blobSha256?: string;
+  blobSizeBytes?: number;
+  blobMimeType?: string;
+  format?: string;
+  mimeType?: string;
+  sizeBytes?: number;
+  sha256?: string;
+  pageCount?: number;
+  handle?: string;
+}
+
+export interface HarnessAttachmentResolutionObservation {
+  accountId?: string;
+  fileId?: string;
+  file?: string;
+  strategy: "resolve" | "fallback";
+  outcome: "resolved" | "missing" | "account_mismatch";
 }
 
 export interface UserTestRunReport {

@@ -41,7 +41,8 @@ describe("codex tool contract", () => {
     expect(codexTool.description).toContain("deep multi-source research");
     expect(codexTool.description).toContain("long-form analysis");
     expect(codexTool.description).toContain("Use websearch for ordinary web lookups");
-    expect(codexTool.parameters.required).toEqual(["task", "kind"]);
+    expect(codexTool.parameters.required).toEqual(["task", "kind", "inputHandles"]);
+    expect(codexTool.parameters.properties.inputHandles.type).toEqual(["array", "null"]);
     expect(codexTool.parameters.properties.kind.enum).toEqual(["local", "research", "analysis"]);
   });
 

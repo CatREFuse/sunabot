@@ -109,6 +109,8 @@ async function runKnowledgeVisualScenario(page: Page, testInfo: TestInfo) {
     await page.getByLabel("检索知识库").fill("火星基地供电");
     await page.getByRole("button", { name: "检索", exact: true }).click();
     await expect(page.getByText("火星基地采用核能供电，水循环系统保持独立冗余。", { exact: true })).toBeVisible();
+    await expect(page.getByText("Native", { exact: true }).first()).toBeVisible();
+    await expect(page.getByText("Docker", { exact: true }).first()).toBeVisible();
     await capture(page, viewport.name, theme, "knowledge-search");
 
     await page.getByRole("button", { name: "添加 Markdown", exact: true }).first().click();
@@ -212,6 +214,7 @@ async function runEmojiVisualScenario(page: Page, testInfo: TestInfo) {
     await expect(page.getByRole("heading", { name: "表情", exact: true })).toBeVisible();
     await expect(page.getByRole("heading", { name: "预设表情", exact: true })).toBeVisible();
     await expect(page.getByRole("heading", { name: "摸鱼", exact: true })).toBeAttached();
+    await expect(page.getByRole("heading", { name: "门缝小春", exact: true })).toBeAttached();
     await expect(page.getByAltText("开心表情")).toBeVisible();
     await expect(page.getByRole("group", { name: "表情发送尺寸" })).toBeVisible();
     await capture(page, viewport.name, theme, "emoji-catalog", { checkPageShell: true });
@@ -514,10 +517,10 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     const selfieHeading = page.getByRole("heading", { name: "自拍参考图" });
     const selfieManager = page.getByRole("region", { name: "自拍参考图" });
     await expect(selfieHeading).toBeVisible();
-    await expect(page.getByText("3 / 9 张", { exact: true })).toBeVisible();
+    await expect(page.getByText("Native 3 / 9 · Docker 1 / 9", { exact: true })).toBeVisible();
     await selfieHeading.evaluate((element) => element.scrollIntoView({ block: "start", behavior: "auto" }));
     await capture(page, viewport.name, theme, "images-selfie");
-    await selfieManager.getByRole("button", { name: "编辑备注 常服正面" }).click();
+    await selfieManager.getByRole("button", { name: "编辑备注 Native 常服正面" }).click();
     const selfieNoteDialog = page.getByRole("dialog", { name: "编辑图片备注" });
     await expect(selfieNoteDialog.getByLabel("01-neutral-face.png 的备注")).toHaveValue("常服正面");
     await capture(page, viewport.name, theme, "images-selfie-note");
@@ -557,7 +560,6 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     await page.goto("/agent-settings/orchestrator");
     await expect(page.getByRole("heading", { name: "群聊编排器" })).toBeVisible();
     await page.getByLabel("启用编排器", { exact: true }).uncheck();
-    await expect(page.getByLabel("Thread 拆分模型")).toBeEnabled();
     await expect(page.getByLabel("启动时间 / 秒")).toHaveValue("60");
     await page.getByLabel("启动时间 / 秒").scrollIntoViewIfNeeded();
     await capture(page, viewport.name, theme, "settings-orchestrator-disabled");
@@ -695,12 +697,12 @@ test("自拍素材与备注四视口矩阵", async ({ page }, testInfo) => {
   for (const viewport of viewports) {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await page.goto("/images");
-    await expect(page.getByText("3 / 9 张", { exact: true })).toBeVisible();
+    await expect(page.getByText("Native 3 / 9 · Docker 1 / 9", { exact: true })).toBeVisible();
     const manager = page.getByRole("region", { name: "自拍参考图" });
     await expect(manager.getByText("常服正面", { exact: true })).toBeVisible();
     await capture(page, viewport.name, theme, "selfie-manager-inline");
 
-    await manager.getByRole("button", { name: "编辑备注 常服正面" }).click();
+    await manager.getByRole("button", { name: "编辑备注 Native 常服正面" }).click();
     const noteDialog = page.getByRole("dialog", { name: "编辑图片备注" });
     await expect(noteDialog.getByLabel("01-neutral-face.png 的备注")).toHaveValue("常服正面");
     await capture(page, viewport.name, theme, "selfie-note");

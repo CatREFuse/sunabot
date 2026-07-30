@@ -34,8 +34,8 @@ describe("useEmojis", () => {
     let resolveKoharu!: (payload: EmojiPayload) => void;
     const koharuResponse = new Promise<EmojiPayload>((resolve) => { resolveKoharu = resolve; });
     apiRequest.mockImplementation((path: string) => {
-      if (path === "/api/emojis?agentId=koharu") return koharuResponse;
-      if (path === "/api/emojis?agentId=plana") return Promise.resolve({ presetKeys: ["哭"], emojis: [] });
+      if (path === "/api/emojis?agentId=koharu&workbench=all") return koharuResponse;
+      if (path === "/api/emojis?agentId=plana&workbench=all") return Promise.resolve({ presetKeys: ["哭"], emojis: [] });
       throw new Error(`Unexpected request: ${path}`);
     });
     const data = useEmojis();
@@ -61,16 +61,16 @@ describe("useEmojis", () => {
       { presetKeys: ["开心"], emojis: [] }
     ];
     apiRequest.mockImplementation((path: string, init?: RequestInit) => {
-      if (path === "/api/emojis?agentId=koharu" && !init?.method) {
+      if (path === "/api/emojis?agentId=koharu&workbench=all" && !init?.method) {
         return Promise.resolve(canonicalPayloads.shift());
       }
-      if (path === "/api/emojis?agentId=koharu" && init?.method === "POST") {
+      if (path === "/api/emojis?agentId=koharu&workbench=native" && init?.method === "POST") {
         return Promise.resolve({ presetKeys: ["开心"], emojis: [] });
       }
-      if (path === "/api/emojis/generate?agentId=koharu" && init?.method === "POST") {
+      if (path === "/api/emojis/generate?agentId=koharu&workbench=native" && init?.method === "POST") {
         return Promise.resolve({ presetKeys: ["开心"], emojis: [uploadRecord] });
       }
-      if (path === `/api/emojis/${encodeURIComponent("开心")}?agentId=koharu` && init?.method === "DELETE") {
+      if (path === `/api/emojis/${encodeURIComponent("开心")}?agentId=koharu&workbench=native` && init?.method === "DELETE") {
         return Promise.resolve(undefined);
       }
       throw new Error(`Unexpected request: ${path}`);
@@ -84,7 +84,7 @@ describe("useEmojis", () => {
     });
     expect(uploaded).toBe(true);
     const uploadCall = apiRequest.mock.calls.find(([path, init]) => (
-      path === "/api/emojis?agentId=koharu" && init?.method === "POST"
+      path === "/api/emojis?agentId=koharu&workbench=native" && init?.method === "POST"
     ));
     expect(JSON.parse(String(uploadCall?.[1]?.body))).toEqual({
       key: "开心",
@@ -95,7 +95,7 @@ describe("useEmojis", () => {
 
     expect(await data.generate("koharu", "开心")).toBe(true);
     const generateCall = apiRequest.mock.calls.find(([path, init]) => (
-      path === "/api/emojis/generate?agentId=koharu" && init?.method === "POST"
+      path === "/api/emojis/generate?agentId=koharu&workbench=native" && init?.method === "POST"
     ));
     expect(JSON.parse(String(generateCall?.[1]?.body))).toEqual({ key: "开心" });
     expect(data.emojis.value).toEqual([happy]);
@@ -105,9 +105,38 @@ describe("useEmojis", () => {
     expect(data.status.value).toEqual({ kind: "success", message: "“开心”已删除" });
   });
 
+  it("loads both Workbench sources and keeps Docker operations source-bound", async () => {
+    const dockerEmoji: EmojiRecord = {
+      ...serious,
+      key: "门缝小春",
+      workbench: "docker"
+    };
+    let listed = false;
+    apiRequest.mockImplementation((path: string, init?: RequestInit) => {
+      if (path === "/api/emojis?agentId=koharu&workbench=all" && !init?.method) {
+        if (!listed) {
+          listed = true;
+          return Promise.resolve({ presetKeys: ["开心"], emojis: [happy, dockerEmoji] });
+        }
+        return Promise.resolve({ presetKeys: ["开心"], emojis: [happy] });
+      }
+      if (
+        path === `/api/emojis/${encodeURIComponent("门缝小春")}?agentId=koharu&workbench=docker`
+        && init?.method === "DELETE"
+      ) return Promise.resolve(undefined);
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    const data = useEmojis();
+
+    await expect(data.load("koharu")).resolves.toBe(true);
+    expect(data.emojis.value).toEqual([happy, dockerEmoji]);
+    await expect(data.remove("koharu", "门缝小春", "docker")).resolves.toBe(true);
+    expect(data.emojis.value).toEqual([happy]);
+  });
+
   it("saves the selected sending size with the loaded revision", async () => {
     apiRequest.mockImplementation((path: string, init?: RequestInit) => {
-      if (path === "/api/emojis?agentId=arona" && !init?.method) {
+      if (path === "/api/emojis?agentId=arona&workbench=all" && !init?.method) {
         return Promise.resolve({
           presetKeys: ["开心"], emojis: [], sendSize: 512, sendSeparately: false, revision: "arona-r1"
         });
@@ -137,7 +166,7 @@ describe("useEmojis", () => {
 
   it("saves whether emojis use a separate message", async () => {
     apiRequest.mockImplementation((path: string, init?: RequestInit) => {
-      if (path === "/api/emojis?agentId=arona" && !init?.method) {
+      if (path === "/api/emojis?agentId=arona&workbench=all" && !init?.method) {
         return Promise.resolve({
           presetKeys: ["开心"], emojis: [], sendSize: 512, sendSeparately: false, revision: "arona-r1"
         });
@@ -175,17 +204,17 @@ describe("useEmojis", () => {
     let listCount = 0;
     let versionCount = 0;
     apiRequest.mockImplementation((path: string, init?: RequestInit) => {
-      if (path === "/api/emojis?agentId=arona" && !init?.method) {
+      if (path === "/api/emojis?agentId=arona&workbench=all" && !init?.method) {
         listCount += 1;
         return Promise.resolve({ presetKeys: ["开心"], emojis: listCount === 1 ? [happy] : [renamed] });
       }
-      if (path === `/api/emojis/${encodeURIComponent("开心")}/versions?agentId=arona`) {
+      if (path === `/api/emojis/${encodeURIComponent("开心")}/versions?agentId=arona&workbench=native`) {
         return Promise.resolve({ key: "开心", versions: [currentVersion, oldVersion] });
       }
-      if (path === `/api/emojis/${encodeURIComponent("开心")}?agentId=arona` && init?.method === "PATCH") {
+      if (path === `/api/emojis/${encodeURIComponent("开心")}?agentId=arona&workbench=native` && init?.method === "PATCH") {
         return Promise.resolve({ presetKeys: ["开心"], emojis: [renamed] });
       }
-      if (path === `/api/emojis/${encodeURIComponent("大笑")}/versions?agentId=arona`) {
+      if (path === `/api/emojis/${encodeURIComponent("大笑")}/versions?agentId=arona&workbench=native`) {
         versionCount += 1;
         return Promise.resolve({
           key: "大笑",
@@ -195,7 +224,7 @@ describe("useEmojis", () => {
         });
       }
       if (
-        path === `/api/emojis/${encodeURIComponent("大笑")}/versions/${encodeURIComponent(oldVersion.fileName)}?agentId=arona`
+        path === `/api/emojis/${encodeURIComponent("大笑")}/versions/${encodeURIComponent(oldVersion.fileName)}?agentId=arona&workbench=native`
         && init?.method === "DELETE"
       ) return Promise.resolve(undefined);
       throw new Error(`Unexpected request: ${path}`);
@@ -220,13 +249,13 @@ describe("useEmojis", () => {
     const secondRefresh = deferred<EmojiPayload>();
     let getCount = 0;
     apiRequest.mockImplementation((path: string, init?: RequestInit) => {
-      if (path === "/api/emojis?agentId=koharu" && !init?.method) {
+      if (path === "/api/emojis?agentId=koharu&workbench=all" && !init?.method) {
         getCount += 1;
         if (getCount === 1) return Promise.resolve({ presetKeys: ["开心", "认真"], emojis: [] });
         if (getCount === 2) return firstRefresh.promise;
         if (getCount === 3) return secondRefresh.promise;
       }
-      if (path === "/api/emojis/generate?agentId=koharu" && init?.method === "POST") {
+      if (path === "/api/emojis/generate?agentId=koharu&workbench=native" && init?.method === "POST") {
         const key = JSON.parse(String(init.body)).key;
         if (key === "开心") return firstMutation.promise;
         if (key === "认真") return secondMutation.promise;
@@ -260,16 +289,16 @@ describe("useEmojis", () => {
     const generateRefresh = deferred<EmojiPayload>();
     let getCount = 0;
     apiRequest.mockImplementation((path: string, init?: RequestInit) => {
-      if (path === "/api/emojis?agentId=koharu" && !init?.method) {
+      if (path === "/api/emojis?agentId=koharu&workbench=all" && !init?.method) {
         getCount += 1;
         if (getCount === 1) return Promise.resolve({ presetKeys: ["开心", "认真"], emojis: [happy] });
         if (getCount === 2) return deleteRefresh.promise;
         if (getCount === 3) return generateRefresh.promise;
       }
-      if (path === "/api/emojis/generate?agentId=koharu" && init?.method === "POST") {
+      if (path === "/api/emojis/generate?agentId=koharu&workbench=native" && init?.method === "POST") {
         return generateMutation.promise;
       }
-      if (path === `/api/emojis/${encodeURIComponent("开心")}?agentId=koharu` && init?.method === "DELETE") {
+      if (path === `/api/emojis/${encodeURIComponent("开心")}?agentId=koharu&workbench=native` && init?.method === "DELETE") {
         return deleteMutation.promise;
       }
       throw new Error(`Unexpected request: ${path}`);
@@ -327,7 +356,7 @@ describe("useEmojis", () => {
 
     expect(saved).toBe(true);
     const uploadCall = apiRequest.mock.calls.find(([path, init]) => (
-      path === "/api/emojis?agentId=koharu" && init?.method === "POST"
+      path === "/api/emojis?agentId=koharu&workbench=native" && init?.method === "POST"
     ));
     expect(JSON.parse(String(uploadCall?.[1]?.body))).toMatchObject({
       key: "挥手",

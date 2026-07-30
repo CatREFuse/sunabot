@@ -51,7 +51,6 @@ const labels: Record<string, string> = {
   "memory.userProfilePrompt": "用户画像",
   "orchestrator.enabled": "编排器",
   "orchestrator.userGroupchatOrchestratorModel": "模型",
-  "orchestrator.groupThreadModel": "Thread 拆分模型",
   "orchestrator.reasoningEffort": "推理强度",
   "orchestrator.messageThreshold": "消息阈值",
   "orchestrator.recentMessageWindowMs": "启动时间 / 秒",

@@ -1,6 +1,8 @@
 import type { KnowledgeSearchInput } from "../knowledge/public.js";
 
 export const KNOWLEDGE_SEARCH_TOOL_NAME = "knowledge_search";
+export const KNOWLEDGE_PATH_VERIFICATION_TOOL_INSTRUCTION =
+  "A knowledge result path is relative to its knowledge root. Use a local image only from a real Markdown image link or an explicit Workbench-relative path in matched content. For a Native Markdown image link, resolve the link target against the source document path, prefix knowledge/ exactly once, and verify that exact Workbench path with Bash before passing it to another tool. An explicit Workbench-relative path already starts at the Workbench root and must be used unchanged. Never guess a missing path or add knowledge/ twice.";
 
 export interface KnowledgeSearchToolPort {
   enabled: boolean;
@@ -10,7 +12,7 @@ export interface KnowledgeSearchToolPort {
 export const knowledgeSearchTool = {
   type: "function",
   name: KNOWLEDGE_SEARCH_TOOL_NAME,
-  description: "Search the current Agent knowledge base with BM25. Use it for facts, policies, references, notes, and documents that may exist in the managed local knowledge files. Results include the source path and exact line range.",
+  description: `Search the current Agent knowledge base with BM25. Use it for facts, policies, references, notes, and documents that may exist in the managed local knowledge files. Results include the knowledge source path and exact line range. ${KNOWLEDGE_PATH_VERIFICATION_TOOL_INSTRUCTION}`,
   parameters: {
     type: "object",
     additionalProperties: false,

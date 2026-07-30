@@ -20,7 +20,6 @@ const MAIN_TABLES = [
   "agent_accounts",
   "agents",
   "app_metadata",
-  "conversation_thread_states",
   "conversations",
   "director_daily_schedule_revisions",
   "director_daily_schedules",
@@ -275,10 +274,6 @@ function validateMainSchema(database) {
   requireColumns(database, "agent_accounts", [
     "id", "agent_id", "label", "qq_id", "enabled", "webui_port", "created_at", "updated_at"
   ]);
-  requireColumns(database, "conversation_thread_states", [
-    "conversation_id", "state_schema_version", "revision", "processed_through_sequence",
-    "last_run_key", "classifier_model", "prompt_revision", "state_json", "created_at", "updated_at"
-  ]);
   requireColumns(database, "emojis", [
     "emoji_key", "file_name", "source", "size_bytes", "width", "height", "created_at", "updated_at"
   ]);
@@ -311,16 +306,6 @@ function validateMainSchema(database) {
   ))) {
     throw new Error("agent_accounts foreign key is invalid");
   }
-  const threadForeignKeys = database.prepare("PRAGMA foreign_key_list(conversation_thread_states)").all();
-  if (!threadForeignKeys.some((row) => (
-    row.table === "conversations"
-    && row.from === "conversation_id"
-    && row.to === "id"
-    && row.on_update === "CASCADE"
-    && row.on_delete === "CASCADE"
-  ))) {
-    throw new Error("conversation_thread_states foreign key is invalid");
-  }
   const emojiVersionForeignKeys = database.prepare("PRAGMA foreign_key_list(emoji_versions)").all();
   if (!emojiVersionForeignKeys.some((row) => (
     row.table === "emojis"
@@ -336,13 +321,6 @@ function validateMainSchema(database) {
     "check (enabled in (0, 1))",
     "check (webui_port between 1 and 65535)",
     "unique (webui_port)"
-  ]);
-  requireSchemaSql(database, "conversation_thread_states", [
-    "strict",
-    "check (state_schema_version = 1)",
-    "check (revision >= 1)",
-    "check (processed_through_sequence >= 0)",
-    "check (json_valid(state_json))"
   ]);
   requireSchemaSql(database, "emojis", [
     "strict",

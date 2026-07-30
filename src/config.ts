@@ -160,7 +160,6 @@ export function defaultConfig(): AppConfig {
       orchestrator: {
         enabled: false,
         userGroupchatOrchestratorModel: "gpt-5.4-mini",
-        groupThreadModel: "gpt-5.4-mini",
         reasoningEffort: "medium",
         promptFile: "user_groupchat_orchestrator.json",
         messageThreshold: 10,
@@ -595,14 +594,9 @@ function mergeBotOrchestratorSettings(
     incoming?.userGroupchatOrchestratorModel,
     base.userGroupchatOrchestratorModel
   );
-  const groupThreadModel = normalizeModelName(
-    incoming?.groupThreadModel,
-    base.groupThreadModel
-  );
   return {
     enabled: incoming?.enabled ?? base.enabled,
     userGroupchatOrchestratorModel: model,
-    groupThreadModel,
     reasoningEffort: normalizeModelEffort(model, incoming?.reasoningEffort),
     promptFile: normalizePromptFile(incoming?.promptFile, base.promptFile),
     messageThreshold: normalizeInteger(incoming?.messageThreshold, base.messageThreshold, 0, 200),

@@ -60,6 +60,7 @@ function validOutput() {
     personaAdjustment: {
       kind: "communication_preference",
       targetFile: "PREFERENCE.md",
+      topicKey: "communication.result_focus",
       statement: "交流时会更主动确认对方真正关心的结果。",
       evidenceMemoryIds: ["long_term_a", "long_term_b", "working_a"]
     },
@@ -192,10 +193,24 @@ describe("Dream model output", () => {
     relation.personaAdjustment = {
       kind: "relationship_tendency",
       targetFile: "RELATION.md",
+      topicKey: "relationship.commitment",
       statement: "相处时会更留意持续兑现的承诺。",
       evidenceMemoryIds: ["long_term_a", "long_term_b", "working_a"]
     };
     expect(normalizeDreamModelOutput(relation, expected).personaAdjustment?.targetFile).toBe("RELATION.md");
+
+    const missingTopic = validOutput();
+    delete (missingTopic.personaAdjustment as { topicKey?: string }).topicKey;
+    expect(normalizeDreamModelOutput(missingTopic, expected).personaAdjustment).toBeNull();
+
+    const invalidTopic = validOutput();
+    invalidTopic.personaAdjustment!.topicKey = "无效主题";
+    expect(normalizeDreamModelOutput(invalidTopic, expected).personaAdjustment).toBeNull();
+
+    const observation = validOutput();
+    observation.personaAdjustment!.evidenceMemoryIds = ["long_term_a", "working_a"];
+    expect(normalizeDreamModelOutput(observation, expected).personaAdjustment?.evidenceMemoryIds)
+      .toEqual(["long_term_a", "working_a"]);
 
     const coreFile = validOutput();
     coreFile.personaAdjustment!.targetFile = "SOUL.md" as "PREFERENCE.md";

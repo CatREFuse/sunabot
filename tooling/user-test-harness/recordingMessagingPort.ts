@@ -8,18 +8,29 @@ import type {
   SenderIdentityV1,
   SenderLookupV1
 } from "../../packages/contracts/messaging/messages.js";
+import type {
+  AttachmentResolutionInput,
+  AttachmentResolverOptions,
+  AttachmentSourcePort
+} from "../../packages/contracts/media/media.js";
+import type {
+  ConversationFixtureAttachmentSource,
+  HarnessAttachmentResolutionObservation
+} from "./contracts.js";
 
 export interface RecordingMessagingPortOptions {
   selfId: string;
   accountId: string;
   messages?: Record<string, MessageDetailsV1>;
+  attachmentSources?: ConversationFixtureAttachmentSource[];
   sendFailure?: string;
 }
 
-export class RecordingMessagingPort implements MessagingPort {
+export class RecordingMessagingPort implements MessagingPort, AttachmentSourcePort {
   readonly outboundMessages: OutboundMessageV1[] = [];
   readonly outboundAssets: OutboundConversationAssetV1[] = [];
   readonly pokes: PokeTargetV1[] = [];
+  readonly attachmentResolutionCalls: HarnessAttachmentResolutionObservation[] = [];
   private receiptSequence = 0;
 
   constructor(private readonly options: RecordingMessagingPortOptions) {}
@@ -69,11 +80,65 @@ export class RecordingMessagingPort implements MessagingPort {
     };
   }
 
+  async resolveAttachment(
+    input: AttachmentResolutionInput,
+    _options: AttachmentResolverOptions = {}
+  ) {
+    return this.resolveFixtureAttachment(input, "resolve");
+  }
+
+  async resolveAttachmentFallback(
+    input: Pick<AttachmentResolutionInput, "accountId" | "fileId" | "file">,
+    _options: AttachmentResolverOptions = {}
+  ) {
+    try {
+      return this.resolveFixtureAttachment(input, "fallback");
+    } catch (error) {
+      if (error instanceof Error && error.message === "USER_TEST_ATTACHMENT_SOURCE_UNAVAILABLE") {
+        return undefined;
+      }
+      throw error;
+    }
+  }
+
   observations() {
     return [
       ...this.outboundMessages.map((message) => ({ kind: "message", value: message })),
       ...this.outboundAssets.map((asset) => ({ kind: "asset", value: asset })),
       ...this.pokes.map((target) => ({ kind: "poke", value: target }))
     ];
+  }
+
+  private resolveFixtureAttachment(
+    input: Pick<AttachmentResolutionInput, "accountId" | "fileId" | "file">,
+    strategy: HarnessAttachmentResolutionObservation["strategy"]
+  ) {
+    if (input.accountId !== this.options.accountId) {
+      this.attachmentResolutionCalls.push({
+        ...(input.accountId ? { accountId: input.accountId } : {}),
+        ...(input.fileId ? { fileId: input.fileId } : {}),
+        ...(input.file ? { file: input.file } : {}),
+        strategy,
+        outcome: "account_mismatch"
+      });
+      throw new Error("USER_TEST_ATTACHMENT_ACCOUNT_MISMATCH");
+    }
+    const source = this.options.attachmentSources?.find((candidate) => (
+      candidate.fileId === input.fileId ||
+      (!input.fileId && candidate.name === input.file)
+    ));
+    this.attachmentResolutionCalls.push({
+      accountId: input.accountId,
+      ...(input.fileId ? { fileId: input.fileId } : {}),
+      ...(input.file ? { file: input.file } : {}),
+      strategy,
+      outcome: source ? "resolved" : "missing"
+    });
+    if (!source) throw new Error("USER_TEST_ATTACHMENT_SOURCE_UNAVAILABLE");
+    return {
+      kind: "base64" as const,
+      base64: source.contentBase64,
+      via: "file_content" as const
+    };
   }
 }

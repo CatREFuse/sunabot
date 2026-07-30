@@ -630,6 +630,16 @@ describe("selfie reference routes", () => {
     });
 
     const bytes = await image(64, 64, "#eff8ff");
+    const nativeUpload = await app.inject({
+      method: "POST",
+      url: "/api/selfie-references?agentId=plana&workbench=native",
+      payload: {
+        fileName: "native.png",
+        dataBase64: bytes.toString("base64"),
+        note: "Native 参考图"
+      }
+    });
+    expect(nativeUpload.statusCode, nativeUpload.body).toBe(201);
     const upload = await app.inject({
       method: "POST",
       url: "/api/selfie-references?agentId=plana&workbench=docker",
@@ -647,8 +657,18 @@ describe("selfie reference routes", () => {
       app.inject({ method: "GET", url: "/api/selfie-references?agentId=plana" }),
       app.inject({ method: "GET", url: "/api/selfie-references?agentId=plana&workbench=docker" })
     ]);
-    expect(nativeList.json().images).toEqual([]);
+    expect(nativeList.json().images).toHaveLength(1);
     expect(dockerList.json().images).toHaveLength(1);
+    const allList = await app.inject({
+      method: "GET",
+      url: "/api/selfie-references?agentId=plana&workbench=all"
+    });
+    expect(allList.statusCode, allList.body).toBe(200);
+    expect(allList.json().images).toEqual([
+      expect.objectContaining({ note: "Native 参考图", workbench: "native" }),
+      expect.objectContaining({ note: "Docker 参考图", workbench: "docker" })
+    ]);
+    expect(allList.json().images[1].displayUrl).toContain("&workbench=docker");
     const content = await app.inject({ method: "GET", url: reference.displayUrl });
     expect(content.statusCode).toBe(200);
     await expect(fs.access(path.join(

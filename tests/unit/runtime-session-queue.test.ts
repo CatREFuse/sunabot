@@ -16,8 +16,7 @@ import type { MessagingPort } from "../../packages/contracts/messaging/messages.
 import {
   incomingReplyEnvelope,
   toolCompletionEnvelope,
-  type AsyncToolCompletionPayload,
-  type GroupThreadContextSnapshotV1
+  type AsyncToolCompletionPayload
 } from "../../packages/contracts/session/runtimeMessages.js";
 import { defaultFinalPromptTemplate } from "../../services/agent/promptDefaults.js";
 import {
@@ -529,38 +528,10 @@ describe("SunaRuntime Session queue bridge", () => {
 
   it("routes private and group replies to independent prompt families", async () => {
     const promptIds: string[] = [];
-    const classifierModels: Array<{ model: string; effort?: string }> = [];
     const harness = createRuntimeHarness(async () => ({ kind: "completed", text: "routed" }));
-    const getProviderForModel = harness.runtime.getProviderForModel.bind(harness.runtime);
     const internals = harness.runtime as unknown as {
       renderPromptRequest(id: string, variables: Record<string, unknown>): Promise<RenderedPromptRequest>;
-      getProviderForModel(model: string, effort?: string): OpenAIProvider;
-      completePrompt(provider: OpenAIProvider, request: RenderedPromptRequest): Promise<string>;
     };
-    internals.getProviderForModel = (model, effort) => {
-      if (model === "gpt-5.4-mini") {
-        classifierModels.push({ model, effort });
-        return {} as OpenAIProvider;
-      }
-      return getProviderForModel(model, effort as never);
-    };
-    internals.completePrompt = async () => JSON.stringify({
-      schema_version: 1,
-      active_thread_key: "routing",
-      threads: [{
-        thread_key: "routing",
-        existing_thread_id: null,
-        topic: "群成员正在确认私聊和群聊分别使用哪个提示词。",
-        status: "active"
-      }],
-      message_assignments: [{
-        message_id: "20003",
-        primary_thread_key: "routing",
-        related_thread_keys: [],
-        relation: "new",
-        confidence: 0.99
-      }]
-    });
     internals.renderPromptRequest = async (id, variables) => {
       promptIds.push(id);
       return {
@@ -579,47 +550,25 @@ describe("SunaRuntime Session queue bridge", () => {
 
     expect(promptIds).toEqual([
       "conversation.private-reply",
-      "orchestrator.group-thread",
       "conversation.group-reply"
     ]);
-    expect(classifierModels).toEqual([{ model: "gpt-5.4-mini", effort: "low" }]);
   });
 
-  it("keeps the complete ordered group context when the thread classifier fails", async () => {
+  it("keeps the complete ordered group context in the main reply", async () => {
     const mainRequests: RenderedPromptRequest[] = [];
     const completeRequestTurn = vi.fn(async (request: RenderedPromptRequest): Promise<ProviderTurnResult> => {
       mainRequests.push(request);
       return { kind: "completed", text: `raw reply ${mainRequests.length}` };
     });
     const harness = createRuntimeHarness(completeRequestTurn);
-    const getProviderForModel = harness.runtime.getProviderForModel.bind(harness.runtime);
-    const classifierFailure = vi.fn(async () => {
-      throw new Error("thread classifier unavailable");
-    });
     const internals = harness.runtime as unknown as {
-      getProviderForModel(model: string, effort?: string): OpenAIProvider;
-      completePrompt(provider: OpenAIProvider, request: RenderedPromptRequest): Promise<string>;
       renderPromptRequest(id: string, variables: Record<string, unknown>): Promise<RenderedPromptRequest>;
     };
-    internals.getProviderForModel = (model, effort) => model === "gpt-5.4-mini"
-      ? ({} as OpenAIProvider)
-      : getProviderForModel(model, effort as never);
-    internals.completePrompt = classifierFailure;
     internals.renderPromptRequest = async (id, variables) => {
-      if (id === "orchestrator.group-thread") {
-        return {
-          messages: [{ role: "user", content: JSON.stringify(variables["thread.payload"]) }],
-          response_format: { type: "text" }
-        };
-      }
       return {
         messages: [
           { role: "system", content: id },
           ...((variables["messages_64"] ?? []) as RenderedPromptRequest["messages"]),
-          {
-            role: "developer",
-            content: `<thread_context>${String(variables["conversation.group.thread_context"] ?? "")}</thread_context>`
-          },
           { role: "user", content: String(variables["user.input"] ?? "") }
         ],
         response_format: { type: "text" }
@@ -631,18 +580,14 @@ describe("SunaRuntime Session queue bridge", () => {
     await handleOneBotEvent(harness.runtime, groupEvent(20_005, 603, "second raw message"), harness.gateway);
     await harness.coordinator.waitForIdle({ timeoutMs: 3_000 });
 
-    expect(classifierFailure).toHaveBeenCalledTimes(2);
     expect(sentTexts(harness.gateway)).toEqual(["raw reply 1", "raw reply 2"]);
     const secondRequest = mainRequests[1]!;
     const firstHistoryIndex = secondRequest.messages.findIndex((message) => message.content.includes("message_id=20004"));
     const assistantHistoryIndex = secondRequest.messages.findIndex((message) => message.content.includes("raw reply 1"));
-    const threadContextIndex = secondRequest.messages.findIndex((message) => message.content.includes("<thread_context>"));
     const currentInputIndex = secondRequest.messages.findLastIndex((message) => message.role === "user");
     expect(firstHistoryIndex).toBeGreaterThan(0);
     expect(assistantHistoryIndex).toBeGreaterThan(firstHistoryIndex);
-    expect(threadContextIndex).toBeGreaterThan(assistantHistoryIndex);
-    expect(currentInputIndex).toBeGreaterThan(threadContextIndex);
-    expect(secondRequest.messages[threadContextIndex]?.content).toContain('"active_thread_id":null');
+    expect(currentInputIndex).toBeGreaterThan(assistantHistoryIndex);
   });
 
   it("keeps model starts and sends FIFO in one group while another group progresses", async () => {
@@ -1215,8 +1160,7 @@ describe("SunaRuntime Session queue bridge", () => {
       }
     });
     const harness = createRuntimeHarness(completeRequestTurn);
-    // This property test measures the Session queue; classifiers and memory have dedicated coverage.
-    vi.spyOn(harness.runtime, "prepareGroupThreadContext").mockResolvedValue(undefined);
+    // This property test measures the Session queue; memory has dedicated coverage.
     vi.spyOn(harness.runtime, "processMemoryClaim").mockResolvedValue(true);
 
     for (let index = 0; index < 100; index += 1) {
@@ -1491,13 +1435,16 @@ describe("SunaRuntime Session queue bridge", () => {
     const toolStarted = deferred<void>();
     const dispatchPrompts: string[] = [];
     const completionPrompts: string[] = [];
-    const completionThreadContexts: string[] = [];
     const providerStarts: string[] = [];
     const asyncCodexFlags: Array<boolean | undefined> = [];
     const cronToolFlags: boolean[] = [];
     const runner: CodexRunner = {
       async run(input, context) {
-        expect(input).toEqual({ task: "perform long analysis", kind: "analysis" });
+        expect(input).toMatchObject({
+          task: "perform long analysis",
+          kind: "analysis",
+          __sunabot_artifact_backend: "docker"
+        });
         expect(context.authFile).toBe(path.join(process.cwd(), "workspace/secrets/codex/auth.json"));
         toolStarted.resolve();
         await toolGate.promise;
@@ -1529,9 +1476,6 @@ describe("SunaRuntime Session queue bridge", () => {
       if (userText.includes("<tool_result>")) {
         providerStarts.push("tool_completion");
         completionPrompts.push(userText);
-        completionThreadContexts.push(request.messages.find((message) => (
-          message.role === "developer" && message.content.includes("<thread_context>")
-        ))?.content ?? "");
         return { kind: "completed", text: finalReply };
       }
       if (userText.includes("delegate")) {
@@ -1560,20 +1504,6 @@ describe("SunaRuntime Session queue bridge", () => {
       undefined,
       35
     );
-    const dispatchThreadContext = runtimeThreadSnapshot(
-      "群成员正在委托 Agent 执行一项耗时分析任务。",
-      301
-    );
-    const laterThreadContext = runtimeThreadSnapshot(
-      "群成员正在任务执行期间讨论另一条后来消息。",
-      302
-    );
-    const prepareGroupThreadContext = vi.fn(async (incoming: { messageId?: number }) => (
-      incoming.messageId === 301 ? dispatchThreadContext : laterThreadContext
-    ));
-    (harness.runtime as unknown as {
-      prepareGroupThreadContext: typeof prepareGroupThreadContext;
-    }).prepareGroupThreadContext = prepareGroupThreadContext;
     const acknowledgement = "我收到委托，开始检查。";
 
     await handleOneBotEvent(harness.runtime, groupEvent(301, 300, "delegate"), harness.gateway);
@@ -1587,8 +1517,7 @@ describe("SunaRuntime Session queue bridge", () => {
     expect(harness.store.listToolJobs("group:300")[0]?.arguments).not.toHaveProperty("dispatch_message");
     expect(harness.store.listToolJobs("group:300")[0]?.originalRequest).toMatchObject({
       captureSequence: 1,
-      contextThroughSequence: 2,
-      threadContext: dispatchThreadContext
+      contextThroughSequence: 2
     });
     expect(dispatchPrompts).toHaveLength(1);
     expect(dispatchPrompts[0]!.indexOf("delegate"))
@@ -1626,9 +1555,6 @@ describe("SunaRuntime Session queue bridge", () => {
     expect(completionPrompts[0]!.match(/supplemental task details/g)).toHaveLength(1);
     expect(completionPrompts[0]).toContain('"providerCallId": "call-runtime-codex"');
     expect(completionPrompts[0]).toContain(`"status": "${toolStatus}"`);
-    expect(completionThreadContexts[0]).toContain("群成员正在委托 Agent 执行一项耗时分析任务。");
-    expect(completionThreadContexts[0]).not.toContain("后来消息");
-    expect(prepareGroupThreadContext.mock.calls.map(([incoming]) => incoming.messageId)).toEqual([301, 302]);
     expect(asyncCodexFlags).toEqual([true, true, true]);
     expect(cronToolFlags).toEqual([true, true, true]);
     expect(runtimeConversation(harness.runtime, "group:300")?.messages
@@ -1901,12 +1827,6 @@ describe("SunaRuntime Session queue bridge", () => {
     });
     const incoming = parseOneBotInboundMessage(groupEvent(30_003, 304, "legacy callback"))!;
     harness.runtime.recordIncomingMessage(incoming);
-    const prepareGroupThreadContext = vi.fn(async () => {
-      throw new Error("legacy callbacks must not rebuild thread context");
-    });
-    (harness.runtime as unknown as {
-      prepareGroupThreadContext: typeof prepareGroupThreadContext;
-    }).prepareGroupThreadContext = prepareGroupThreadContext;
     const delivery = { outbox: [] } satisfies ReplyDelivery;
     const payload = {
       type: "tool_result",
@@ -1929,7 +1849,6 @@ describe("SunaRuntime Session queue bridge", () => {
       delivery
     );
 
-    expect(prepareGroupThreadContext).not.toHaveBeenCalled();
     expect(callbackRequest).toBeUndefined();
     expect(delivery.outbox).toEqual([]);
     expect(delivery.terminalStatus).toBe("no_reply");
@@ -2217,10 +2136,6 @@ function createRuntimeHarness(
     messages: [
       { role: "system", content: "test system" },
       ...((variables["messages_64"] ?? []) as RenderedPromptRequest["messages"]),
-      ...(id === "conversation.group-reply" ? [{
-        role: "developer" as const,
-        content: `<thread_context>${String(variables["conversation.group.thread_context"] ?? "")}</thread_context>`
-      }] : []),
       { role: "user", content: String(variables["user.input"] ?? "") }
     ],
     response_format: { type: "text" }
@@ -2334,31 +2249,6 @@ function memoryEntry(input: Pick<MemoryEntry, "id" | "source" | "sourceTitle" | 
     value: input.text,
     field: "fact",
     ...input
-  };
-}
-
-function runtimeThreadSnapshot(topic: string, processedThroughSequence: number): GroupThreadContextSnapshotV1 {
-  const threadId = "thread:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
-  return {
-    schemaVersion: 1,
-    revision: processedThroughSequence,
-    processedThroughSequence,
-    activeThreadId: threadId,
-    threads: [{
-      threadId,
-      topic,
-      status: "active",
-      participantUids: ["171419991"],
-      messageIds: [String(processedThroughSequence)]
-    }],
-    messageAssignments: [{
-      messageId: String(processedThroughSequence),
-      sequence: processedThroughSequence,
-      primaryThreadId: threadId,
-      relatedThreadIds: [],
-      relation: "continue",
-      confidence: 0.95
-    }]
   };
 }
 

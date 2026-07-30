@@ -411,30 +411,31 @@ test("自拍参考图可预览、编辑备注、删除和逐图备注上传", as
   const state = await installMockApi(page);
   await page.goto("/images");
 
-  await expect(page.getByText("3 / 9 张", { exact: true })).toBeVisible();
+  await expect(page.getByText("Native 3 / 9 · Docker 1 / 9", { exact: true })).toBeVisible();
   const manager = page.getByRole("region", { name: "自拍参考图" });
   await expect(manager).toBeVisible();
-  await expect(manager.getByText("素材库最多 9 张，每次自拍选用 1–3 张", { exact: true })).toBeVisible();
+  await expect(manager.getByText("每个 Workbench 最多 9 张，每次自拍选用 1–3 张", { exact: true })).toBeVisible();
+  await expect(manager.getByText("群聊参考", { exact: true })).toBeVisible();
   await expect(page.getByRole("dialog", { name: "自拍参考图" })).toHaveCount(0);
 
-  await manager.getByRole("button", { name: "编辑备注 常服正面" }).click();
+  await manager.getByRole("button", { name: "编辑备注 Native 常服正面" }).click();
   const editDialog = page.getByRole("dialog", { name: "编辑图片备注" });
   await editDialog.getByLabel("01-neutral-face.png 的备注").fill("泳装");
   await editDialog.getByRole("button", { name: "保存", exact: true }).click();
   await expect(manager.getByText("备注已保存", { exact: true })).toBeVisible();
   expect(state.selfieReferences[0]?.note).toBe("泳装");
 
-  await manager.getByRole("button", { name: "查看原图 泳装" }).first().click();
+  await manager.getByRole("button", { name: "查看原图 Native 泳装" }).first().click();
   const preview = page.getByRole("dialog", { name: "自拍参考图预览" });
   await expect(preview).toBeVisible();
   await expect(preview.locator('img[src*="variant=original"]')).toBeVisible();
   await preview.getByRole("button", { name: "关闭预览" }).click();
 
-  await manager.getByRole("button", { name: "删除 泳装" }).click();
+  await manager.getByRole("button", { name: "删除 Native 泳装" }).click();
   await expect(page.getByRole("heading", { name: "删除这张参考图？" })).toBeVisible();
   await page.getByRole("button", { name: "删除", exact: true }).click();
   await expect(manager.getByText("参考图已删除", { exact: true })).toBeVisible();
-  await expect(manager.locator("article")).toHaveCount(2);
+  await expect(manager.locator("article")).toHaveCount(3);
   expect(state.selfieReferences).toHaveLength(2);
 
   await manager.locator('input[type="file"]').setInputFiles({

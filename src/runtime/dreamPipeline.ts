@@ -12,6 +12,10 @@ import {
   type RuntimeDreamWorkingMemoryPort
 } from "./dreamWorkingMemoryCommit.js";
 import {
+  activeDreamPersonaImpressionCatalog,
+  applyDreamPersonaImpressionProjection
+} from "./dreamPersonaImpressions.js";
+import {
   boundedDreamPipelineId as boundedId,
   digestDreamPipelineJson as digestJson,
   digestDreamPipelineText as digestText,
@@ -45,7 +49,6 @@ import {
   selectDreamMemories,
   type DreamMemorySelectionSettings, type DreamMemoryRecord,
   type DreamModelOutputV1,
-  type DreamPersonaAdjustmentV1,
   type DreamRecallStatsSnapshot,
   type DreamScheduleOccurrence
 } from "../../services/memory/dream/public.js";
@@ -54,7 +57,6 @@ const DREAM_LEASE_MS = 45 * 60_000;
 const DREAM_RETRY_DELAY_MS = 15 * 60_000;
 const DREAM_MAX_ATTEMPTS = 3;
 const DREAM_HISTORY_LIMIT = 30;
-const PERSONA_SECTION = "## 缓慢形成的倾向";
 export type RuntimeDreamRunStatus = "running" | "generated" | "consolidated" | "completed" | "failed";
 export type RuntimeDreamPersonaStatus = "pending" | "none" | "proposed" | "applied" | "skipped" | "failed";
 export interface RuntimeDreamRun {
@@ -419,7 +421,8 @@ export class RuntimeDreams {
       observedConversations: snapshot.recentConversations,
       activeTasks: snapshot.activeTasks,
       plannedDailySchedule: snapshot.plannedDailySchedule,
-      persona: snapshot.persona
+      persona: snapshot.persona,
+      personaImpressions: activeDreamPersonaImpressionCatalog(this.options.store)
     }, "dream payload"));
     const payload = projection.payload;
     return {
@@ -589,22 +592,26 @@ export class RuntimeDreams {
     if (!adjustment) return this.requirePersonaMark(run, "none", null);
     const input = persistedInput(run.input);
     const evidence = buildPersonaEvidence(promptRecords(input.payload), recallStatsFromPayload(input.payload));
-    const lastAppliedAt = this.options.store.listRuns({ limit: 100 })
-      .find((item) => item.id !== run.id && item.personaStatus === "applied")?.personaUpdatedAt ?? null;
+    const now = this.clock();
     const policy = evaluateDreamPersonaAdjustment(adjustment, evidence, {
-      now: this.clock(),
-      lastAppliedAt
+      now
     });
     const persona = toJsonObject({ adjustment, reasons: policy.reasons }, "dream persona result");
     if (!policy.eligible) return this.requirePersonaMark(run, "skipped", persona);
     try {
-      const id = personaFileId(adjustment);
-      const current = await this.options.persona.read(id);
-      const next = appendPersonaStatement(current.content, adjustment.statement);
-      if (next !== current.content) {
-        await this.options.persona.compareAndSwap({ id, revision: current.revision, content: next });
-      }
-      return this.requirePersonaMark(run, "applied", persona);
+      const projection = await applyDreamPersonaImpressionProjection({
+        store: this.options.store,
+        persona: this.options.persona,
+        adjustment,
+        level: policy.level!,
+        runId: run.id,
+        appliedAt: now.toISOString()
+      });
+      return this.requirePersonaMark(run, "applied", toJsonObject({
+        adjustment,
+        reasons: policy.reasons,
+        ...projection
+      }, "dream persona result"));
     } catch (error) {
       return this.requirePersonaMark(run, "failed", toJsonObject({
         adjustment,
@@ -763,16 +770,6 @@ function normalizeStoredOutput(
 ) {
   if (!output) throw new DreamRunError("DREAM_OUTPUT_MISSING", "Stored Dream output is missing.", false);
   return normalizeDreamModelOutput(output, expected);
-}
-function personaFileId(adjustment: DreamPersonaAdjustmentV1) {
-  return adjustment.targetFile === "PREFERENCE.md" ? "persona.preference" as const : "persona.relation" as const;
-}
-function appendPersonaStatement(content: string, statement: string) {
-  const normalized = statement.trim();
-  if (content.split(/\r?\n/u).some((line) => line.trim() === `- ${normalized}`)) return content;
-  const base = content.trimEnd();
-  if (base.includes(PERSONA_SECTION)) return `${base}\n- ${normalized}\n`;
-  return `${base}${base ? "\n\n" : ""}${PERSONA_SECTION}\n\n- ${normalized}\n`;
 }
 function stringArray(value: unknown, field: string) {
   if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {

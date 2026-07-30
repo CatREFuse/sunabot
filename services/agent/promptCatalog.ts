@@ -96,12 +96,6 @@ const conversationVariables = [
 const groupConversationVariables = [
   ...conversationVariables,
   variable(
-    "conversation.group.thread_context",
-    "群聊 Thread 前置节点生成的安全序列化话题索引",
-    "string",
-    "群聊上下文前置节点"
-  ),
-  variable(
     "conversation.group.orchestrator_result",
     "主动群聊编排器的触发原因与回复消息 ID；非编排器触发时为空字符串",
     "string",
@@ -177,13 +171,6 @@ export const PROMPT_FILE_DEFINITIONS = [
     "编排器",
     (config) => config.bot.orchestrator.promptFile,
     [variable("orchestrator.payload", "群聊触发条件、上下文和当前消息", "json", "群聊编排器")]
-  ),
-  final(
-    "orchestrator.group-thread",
-    "群聊 Thread 拆分",
-    "编排器",
-    () => "group_thread_context.json",
-    [variable("thread.payload", "已有 Thread 状态和本次新增的完整群聊消息", "json", "群聊上下文前置节点")]
   ),
   final(
     "conversation.group-summary",

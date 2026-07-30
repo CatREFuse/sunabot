@@ -691,7 +691,6 @@ describe("emoji durable delivery chain", () => {
     runtime.enqueueConversationMemory = async () => undefined;
     runtime.scheduleMemoryDrain = () => undefined;
     runtime.persistConversationRecords = () => undefined;
-    runtime.prepareGroupThreadContext = async () => undefined;
     runtime.renderPromptRequest = async (_id, variables) => ({
       messages: [
         { role: "system", content: "test system" },

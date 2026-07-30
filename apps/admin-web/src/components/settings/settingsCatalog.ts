@@ -13,7 +13,7 @@ export const settingsCatalog: readonly SettingsSectionDefinition[] = [
   { id: "bot", label: "回复行为", group: "身份与回复", description: "回复模型、读图、时机、范围与唤醒", scope: "agent" },
   { id: "tone", label: "语气处理", group: "身份与回复", description: "语气改写、分段发送与独立模型", scope: "agent" },
   { id: "memory", label: "记忆处理", group: "上下文与编排", description: "压缩模型、容量、Dream 记忆整理与提示词", scope: "agent" },
-  { id: "orchestrator", label: "群聊编排", group: "上下文与编排", description: "Thread 拆分与主动回复", scope: "agent" },
+  { id: "orchestrator", label: "群聊编排", group: "上下文与编排", description: "主动回复", scope: "agent" },
   { id: "tools", label: "Agent 工具", group: "能力与权限", description: "工具目录与运行参数", scope: "agent" },
   { id: "bash", label: "命令执行", group: "能力与权限", description: "审批 Agent 与会话执行边界", scope: "agent" },
   { id: "providers", label: "模型服务", group: "模型与回复", description: "Provider、连接、模型与生成参数", scope: "system" },

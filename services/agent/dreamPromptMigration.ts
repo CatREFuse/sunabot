@@ -3,7 +3,8 @@ import path from "node:path";
 import type { AppConfig } from "../../packages/contracts/admin/public.js";
 import {
   DREAM_CONTRACT,
-  LEGACY_DREAM_CONTRACT_V3
+  LEGACY_DREAM_CONTRACT_V3,
+  LEGACY_DREAM_CONTRACT_V4
 } from "../memory/public.js";
 import {
   parseFinalPromptTemplate,
@@ -59,14 +60,17 @@ export function migrateDreamMemoryContractTemplate(
       || Array.isArray(message)
       || message.role !== "system"
       || typeof message.content !== "string"
-      || !message.content.includes(LEGACY_DREAM_CONTRACT_V3)
     ) {
       return message;
     }
+    const content = message.content;
+    const legacy = [LEGACY_DREAM_CONTRACT_V4, LEGACY_DREAM_CONTRACT_V3]
+      .find((contract) => content.includes(contract));
+    if (!legacy) return message;
     changed = true;
     return {
       ...message,
-      content: message.content.replace(LEGACY_DREAM_CONTRACT_V3, DREAM_CONTRACT)
+      content: content.replace(legacy, DREAM_CONTRACT)
     };
   });
   return changed ? { ...template, messages } : undefined;

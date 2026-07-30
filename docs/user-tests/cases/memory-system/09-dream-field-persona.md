@@ -1,25 +1,25 @@
-# Dream distills field agreements and forms a cautious persona impression
+# Dream distills field agreements and layers persona impressions
 
 ## Goal
 
-Verify that Dream reduces field knowledge to scoped agreements, removes incidental event detail, and changes persona only when repeated factual evidence supports one bounded impression.
+Verify that Dream reduces field knowledge to scoped agreements, removes incidental event detail, retains every accepted persona impression, and exposes only the highest evidence level for each target and topic.
 
 ## Preconditions
 
-Use a fresh isolated workspace. Preserve AIR.md and PREFERENCE.md before/after content and revisions, selected persona evidence IDs, event and context identities, `fieldKnowledgeWritable`, host-only identity bindings, model output, Dream stage history, working-memory and SQLite changes, CAS outcomes, and memory operation logs. Confirm that raw identity aliases stay out of the Provider payload and are restored locally before the AIR.md CAS. Review field knowledge and persona output independently from the imagined Dream narrative.
+Use a fresh isolated workspace. Preserve AIR.md and PREFERENCE.md before/after content and revisions, selected persona evidence IDs, event and context identities, the computed impression level and topic key, retained Dream persona history, effective persona projection, `fieldKnowledgeWritable`, host-only identity bindings, model output, Dream stage history, working-memory and SQLite changes, CAS outcomes, and memory operation logs. Confirm that raw identity aliases stay out of the Provider payload and are restored locally before the AIR.md CAS. Review field knowledge and persona output independently from the imagined Dream narrative.
 
 ## Expected quality
 
-AIR.md keeps only the group scope, Rin's accepted address, the two-person release review, and the no-token rule. Lunch, weather, seats, and one-off chat wording disappear. A persona impression may describe the character's learned preference for evidence-backed coordination, but it must cite three factual events across two contexts and more than 14 days, remain one gentle sentence, and avoid diagnosis, permanence, obedience, or a core-identity rewrite.
+AIR.md keeps only the group scope, Rin's accepted address, the two-person release review, and the no-token rule. Lunch, weather, seats, and one-off chat wording disappear. A persona impression may describe the character's learned preference for evidence-backed coordination. The host computes the highest supported level from factual independent events: observation needs two events across two contexts, stable needs three events across two contexts and three days, and core needs four events across three contexts and seven days. Every accepted level remains in Dream history. Within the same target file and topic key, a higher level is always the only effective impression even when a lower level is newer; unrelated topics remain effective independently. Statements stay gentle and revisable and avoid diagnosis, permanence, obedience, or a core-identity rewrite.
 
 <!-- sunabot-user-test-case:v1 -->
 ```json
 {
   "schemaVersion": 1,
   "id": "memory.dream-field-persona",
-  "title": "Dream keeps scoped agreements and evidence-based impressions",
+  "title": "Dream keeps scoped agreements and layered impressions",
   "kind": "dream",
-  "goal": "Dream compacts AIR.md into scoped agreements and applies at most one cautious persona impression grounded in repeated factual evidence.",
+  "goal": "Dream compacts AIR.md into scoped agreements, retains every accepted persona impression, and activates the highest evidence level for each target and topic.",
   "input": {
     "timePolicy": "rebase_to_runtime",
     "now": "2026-07-30T12:00:00.000+08:00",
@@ -185,18 +185,18 @@ AIR.md keeps only the group scope, Rin's accepted address, the two-person releas
         "minimumScore": 5
       },
       {
-        "id": "persona-evidence",
-        "description": "Any applied persona impression is supported by at least three factual independent events across two contexts and more than 14 days; imagined Dream material is excluded.",
+        "id": "persona-level",
+        "description": "The host derives observation, stable, or core from factual independent events, contexts, and time span; imagined Dream material is excluded.",
         "minimumScore": 5
       },
       {
-        "id": "persona-restraint",
-        "description": "At most one gentle, revisable tendency is added without diagnosis, permanence, obedience, core-identity change, or unsafe instruction.",
+        "id": "persona-retention-and-overlay",
+        "description": "Every accepted impression remains in Dream history, while only the highest level for the same target and topic is effective and unrelated topics remain independent.",
         "minimumScore": 5
       },
       {
-        "id": "scope-and-identity",
-        "description": "The address R remains scoped to group:95001, Kai keeps his own private safety instruction, and the two people are not merged.",
+        "id": "scope-identity-and-restraint",
+        "description": "The address R remains scoped to group:95001, Kai keeps his own private safety instruction, the two people are not merged, and persona text avoids diagnosis, permanence, obedience, core-identity change, or unsafe instruction.",
         "minimumScore": 5
       }
     ]

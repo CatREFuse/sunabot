@@ -5,6 +5,7 @@ export interface IncomingAttachment {
   source: AttachmentSource;
   name: string;
   fileId?: string;
+  fileToken?: string;
   sizeBytes?: number;
   url?: string;
   busId?: number;
@@ -20,8 +21,31 @@ export type AttachmentStatus =
   | "too_large"
   | "failed";
 
+export interface AttachmentBlobRefV1 {
+  schemaVersion: 1;
+  cacheKey: string;
+  sha256: string;
+  sizeBytes: number;
+  detectedMimeType?: string;
+}
+
+export type AttachmentAcquisitionState =
+  | { status: "pending" }
+  | { status: "acquired"; blob: AttachmentBlobRefV1 }
+  | { status: "failed"; errorCode?: string };
+
+export type AttachmentParseStatus =
+  | "not_started"
+  | "pending"
+  | "ready"
+  | "partial"
+  | "unsupported"
+  | "parse_failed";
+
 export interface ParsedAttachment extends IncomingAttachment {
   status: AttachmentStatus;
+  acquisition?: AttachmentAcquisitionState;
+  parseStatus?: AttachmentParseStatus;
   mimeType?: string;
   format?: string;
   sha256?: string;
@@ -51,6 +75,7 @@ export interface AttachmentExtractionContext {
 }
 
 export interface AttachmentResolutionInput {
+  accountId?: string;
   fileId?: string;
   file?: string;
   url?: string;
@@ -97,7 +122,7 @@ export interface AttachmentSourcePort {
     options?: AttachmentResolverOptions
   ): Promise<ResolvedAttachmentSource>;
   resolveAttachmentFallback(
-    input: Pick<AttachmentResolutionInput, "fileId" | "file">,
+    input: Pick<AttachmentResolutionInput, "accountId" | "fileId" | "file">,
     options?: AttachmentResolverOptions
   ): Promise<ResolvedAttachmentSource | undefined>;
 }

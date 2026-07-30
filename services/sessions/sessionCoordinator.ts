@@ -27,6 +27,7 @@ import {
 import type {
   ClaimedToolTask,
   CodexCoordinatorSettings,
+  CodexResultFinalizer,
   CodexToolUsageObserver,
   DeferredToolRunner,
   OutboxDeliveryContext,
@@ -84,6 +85,7 @@ export interface SessionCoordinatorOptions {
   codexRunner: CodexRunner;
   codexSettings(): CodexCoordinatorSettings;
   runDeferredTool?: DeferredToolRunner;
+  finalizeCodexResult?: CodexResultFinalizer;
   turnTimeoutMs?: number;
   outboxTimeoutMs?: number;
   maxSessionConcurrency?: number;
@@ -224,6 +226,7 @@ export class SessionCoordinator {
         message: "Codex process cleanup port is not configured."
       })),
       runDeferredTool: options.runDeferredTool,
+      finalizeCodexResult: options.finalizeCodexResult,
       observeCodexToolUsage: options.observeCodexToolUsage,
       workerId: this.workerId,
       isStopped: () => this.stopped,

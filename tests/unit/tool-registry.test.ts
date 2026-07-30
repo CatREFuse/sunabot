@@ -657,6 +657,9 @@ describe("ToolRegistry", () => {
       type: ["array", "null"],
       maxItems: 4
     });
+    expect(parameters.properties.referenceImagePaths.description).toContain(
+      "prefix knowledge/ exactly once"
+    );
     expect(parameters.properties.referenceImageSource.enum).toEqual([
       "none",
       "current",
@@ -684,6 +687,10 @@ describe("ToolRegistry", () => {
     const parameters = definition?.parameters as Record<string, any>;
 
     expect(definition?.description).toContain("historical media handles");
+    expect(definition?.description).toContain(
+      "The generated image is saved and sent by the system after this tool completes"
+    );
+    expect(definition?.description).toContain("do not call send_file");
     expect(parameters.properties.referenceMediaHandles).toMatchObject({
       type: ["array", "null"],
       maxItems: 1
@@ -696,6 +703,9 @@ describe("ToolRegistry", () => {
       type: ["array", "null"],
       maxItems: 1
     });
+    expect(parameters.properties.referenceImagePaths.description).toContain(
+      "prefix knowledge/ exactly once"
+    );
     expect(parameters.properties.referenceImageSource.enum).toEqual([
       "none",
       "current",

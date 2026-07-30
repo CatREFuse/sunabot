@@ -32,7 +32,8 @@ import {
 import {
   applyDetectionWarnings,
   attachmentDetectionHint,
-  failAttachment
+  failAttachment,
+  parsedAttachmentState
 } from "./attachmentServiceSupport.js";
 
 const MAX_WORKER_RESULT_FILE_BYTES = 1024 * 1024;
@@ -90,24 +91,24 @@ export class ParserPipeline {
     filePath: string,
     query: string
   ): Promise<ParsedAttachment> {
-    const detected = await detectAttachmentType(filePath, {
-      fileName: attachment.name,
-      maxBytes: FILE_SIZE_LIMIT_BYTES
-    });
-    attachment.mimeType = detected.mimeType;
-    attachment.format = detected.format;
-    if (detected.kind === "unsupported") {
-      return this.finishParse(failAttachment(
-        attachment,
-        "unsupported",
-        "unsupported_file_type",
-        "暂时无法读取这种文件格式。"
-      ));
-    }
-
-    const artifactsDir = path.join(this.cacheRoot, attachment.cacheKey!, "artifacts");
-    await mkdir(artifactsDir, { recursive: true, mode: 0o700 });
     try {
+      const detected = await detectAttachmentType(filePath, {
+        fileName: attachment.name,
+        maxBytes: FILE_SIZE_LIMIT_BYTES
+      });
+      attachment.mimeType = detected.mimeType;
+      attachment.format = detected.format;
+      if (detected.kind === "unsupported") {
+        return this.finishParse(parsedAttachmentState(failAttachment(
+          attachment,
+          "unsupported",
+          "unsupported_file_type",
+          "暂时无法读取这种文件格式。"
+        ), "unsupported"));
+      }
+
+      const artifactsDir = path.join(this.cacheRoot, attachment.cacheKey!, "artifacts");
+      await mkdir(artifactsDir, { recursive: true, mode: 0o700 });
       let parsed: ParsedAttachment;
       if (detected.kind === "text") {
         parsed = await this.parseText(attachment, filePath, artifactsDir, detected);
@@ -118,16 +119,20 @@ export class ParserPipeline {
       } else {
         parsed = await this.parseOffice(attachment, filePath, artifactsDir, detected, query);
       }
-      return this.finishParse(applyDetectionWarnings(parsed, detected));
+      const warned = applyDetectionWarnings(parsed, detected);
+      return this.finishParse(parsedAttachmentState(
+        warned,
+        warned.status === "partial" ? "partial" : "ready"
+      ));
     } catch (error) {
-      return this.finishParse(failAttachment(
+      return this.finishParse(parsedAttachmentState(failAttachment(
         attachment,
         "failed",
         "parse_failed",
         error instanceof Error && /password|encrypted/i.test(error.message)
           ? "文件无法解析，可能已加密或损坏。"
           : "文件无法解析，可能已损坏。"
-      ));
+      ), "parse_failed"));
     }
   }
 
@@ -176,6 +181,17 @@ export class ParserPipeline {
       return {
         ...attachment,
         status: manifest.status,
+        acquisition: {
+          status: "acquired",
+          blob: {
+            schemaVersion: 1,
+            cacheKey: manifest.cacheKey,
+            sha256: manifest.sha256,
+            sizeBytes: Number(manifest.sizeBytes),
+            ...(manifest.mimeType ? { detectedMimeType: manifest.mimeType } : {})
+          }
+        },
+        parseStatus: manifest.status === "ready" ? "ready" : "partial",
         mimeType: manifest.mimeType,
         format: manifest.format,
         sizeBytes: manifest.sizeBytes,

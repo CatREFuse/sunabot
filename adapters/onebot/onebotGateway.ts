@@ -437,7 +437,7 @@ export class OneBotGateway extends EventEmitter implements MessagingPort, Conver
   }
 
   resolveAttachmentFallback(
-    input: Pick<AttachmentResolutionInput, "fileId" | "file">,
+    input: Pick<AttachmentResolutionInput, "accountId" | "fileId" | "file">,
     options: AttachmentResolverOptions = {}
   ) {
     return resolveOneBotAttachmentFallback(this, input, options);

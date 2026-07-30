@@ -1,12 +1,15 @@
 <script setup lang="ts">
 import { computed, shallowRef, watch } from "vue";
 import type { EmojiRecord } from "../../types/emojis";
+import type { WorkbenchBackend } from "../../types/workbench";
+import { workbenchLabel } from "../../types/workbench";
 import { emojiKeyValidationError, normalizeEmojiKey } from "../../utils/emojiKey";
 import AuthenticatedImage from "../ui/AuthenticatedImage.vue";
 
 const props = defineProps<{
   emojiKey: string;
   emoji: EmojiRecord | null;
+  workbench: WorkbenchBackend;
   preset: boolean;
   generating: boolean;
   uploading: boolean;
@@ -128,6 +131,7 @@ function formatBytes(bytes: number) {
         <div v-else class="flex min-w-0 items-center gap-2">
           <h3 class="min-w-0 truncate text-sm font-medium text-display">{{ emojiKey }}</h3>
           <span v-if="preset" class="inline-state shrink-0 px-1.5 py-0.5 text-[9px]">预设</span>
+          <span class="inline-state shrink-0 px-1.5 py-0.5 text-[9px]">{{ workbenchLabel(workbench) }}</span>
           <button v-if="emoji" class="icon-btn size-7 shrink-0" type="button" :disabled="busy" :aria-label="`修改 ${emojiKey} key`" @click="startRename"><i class="bx bx-pencil" aria-hidden="true"></i></button>
         </div>
         <p v-if="renameError" class="mt-1 text-[10px] text-accent">{{ renameError }}</p>

@@ -6,6 +6,7 @@ import { CODEX_MAX_TASK_CHARS } from "../../services/tools/definitions.js";
 export { CODEX_MAX_TASK_CHARS, CODEX_TOOL_NAME, codexTool } from "../../services/tools/definitions.js";
 import type {
   CodexControlRunner,
+  FrozenCodexInputV1,
   CodexProcessIdentity,
   CodexRunner,
   CodexSupervisor,
@@ -25,6 +26,13 @@ import {
   resolveCodexExecutable
 } from "./codexEnvironment.js";
 import {
+  buildFrozenInputInstructions,
+  copyFrozenCodexInputs,
+  readCodexInputHandles,
+  readFrozenCodexInputs,
+  type PreparedCodexInput
+} from "./codexInputs.js";
+import {
   CODEX_DEFAULT_TERMINATION_GRACE_MS,
   signalCodexProcessGroup
 } from "./codexProcess.js";
@@ -38,6 +46,7 @@ import {
   failureResult,
   normalizeModelResult,
   readCodexResult,
+  validateCodexResultArtifacts,
   withTruncatedOutputNotice
 } from "./codexResult.js";
 export type {
@@ -73,6 +82,10 @@ export {
   parseControlInput,
   type CodexAppServerRunnerOptions
 } from "./codexAppServerTool.js";
+export type {
+  PreparedCodexInput,
+  PreparedCodexTextProjection
+} from "./codexInputs.js";
 
 export const CODEX_DEFAULT_TIMEOUT_MS = 15 * 60 * 1000;
 export const CODEX_MAX_STDERR_CHARS = 64 * 1024;
@@ -135,6 +148,9 @@ export interface PreparedCodexRun {
   runDir: string;
   runToken: string;
   attempt: number;
+  inputDir: string;
+  outputDir: string;
+  inputs: PreparedCodexInput[];
 }
 
 export class CodexProcessSupervisor implements CodexSupervisor {
@@ -447,7 +463,31 @@ export class CodexProcessSupervisor implements CodexSupervisor {
           status: "unknown" as const,
           error: `Unable to read Codex result: ${errorMessage(error)}`
         }));
-        const normalized = normalizeModelResult(request, modelResult, common);
+        let artifacts: CodexToolResult["artifacts"] = undefined;
+        if (modelResult.status === "succeeded" && modelResult.artifacts?.length) {
+          try {
+            artifacts = await validateCodexResultArtifacts({
+              declarations: modelResult.artifacts,
+              outputDir: prepared.outputDir,
+              jobDir: request.jobDir
+            });
+          } catch (error) {
+            resolve(failureResult(
+              request.jobId,
+              request.kind,
+              "failed",
+              "codex_artifact_invalid",
+              errorMessage(error),
+              false,
+              common
+            ));
+            return;
+          }
+        }
+        const normalized = normalizeModelResult(request, modelResult, {
+          ...common,
+          ...(artifacts?.length ? { artifacts } : {})
+        });
         const outputBytes = Math.max(
           parser.snapshot.outputBytes,
           resultStats?.size ?? 0
@@ -490,6 +530,8 @@ export async function prepareCodexRun(
   const xdgCacheDir = path.join(runtimeDir, "xdg-cache");
   const tempDir = path.join(runtimeDir, "tmp");
   const isolatedWorkspace = path.join(runtimeDir, "workspace");
+  const inputDir = path.join(runtimeDir, "inputs");
+  const outputDir = path.join(runtimeDir, "outputs");
   const shimDir = path.join(runtimeDir, "bin");
   const workspaceDir = request.kind === "local" && request.workspacePath
     ? validateAbsolutePath(request.workspacePath, "workspacePath")
@@ -506,8 +548,15 @@ export async function prepareCodexRun(
     fs.mkdir(xdgCacheDir, { recursive: true, mode: 0o700 }),
     fs.mkdir(tempDir, { recursive: true, mode: 0o700 }),
     fs.mkdir(isolatedWorkspace, { recursive: true, mode: 0o700 }),
+    fs.mkdir(inputDir, { recursive: true, mode: 0o700 }),
+    fs.mkdir(outputDir, { recursive: true, mode: 0o700 }),
     fs.mkdir(shimDir, { recursive: true, mode: 0o700 })
   ]);
+  const jobStat = await fs.lstat(request.jobDir);
+  if (!jobStat.isDirectory() || jobStat.isSymbolicLink()) {
+    throw new CodexPreparationError("invalid_job", "Codex job directory is invalid.");
+  }
+  const inputs = await copyFrozenCodexInputs(request, inputDir);
   await fs.writeFile(schemaFile, `${JSON.stringify(CODEX_RESULT_SCHEMA, null, 2)}\n`, { mode: 0o600 });
   await fs.rm(resultFile, { force: true });
   await installNestedCodexShim(shimDir, platform);
@@ -528,14 +577,21 @@ export async function prepareCodexRun(
     tempDir,
     shimDir
   });
-  const args = buildCodexArguments(request, workspaceDir, resultFile, schemaFile);
+  const args = buildCodexArguments(
+    request,
+    workspaceDir,
+    resultFile,
+    schemaFile,
+    outputDir,
+    inputs
+  );
 
   return {
     executable,
     args,
     cwd: workspaceDir,
     env,
-    prompt: buildCodexPrompt(request),
+    prompt: buildCodexPrompt(request, inputs, outputDir),
     resultFile,
     schemaFile,
     homeDir,
@@ -543,12 +599,23 @@ export async function prepareCodexRun(
     workspaceDir,
     runDir: runtimeDir,
     runToken,
-    attempt
+    attempt,
+    inputDir,
+    outputDir,
+    inputs
   };
 }
 
 function parseCodexToolInput(input: CodexToolInput):
-  | { ok: true; value: { task: string; kind: CodexTaskKind } }
+  | {
+      ok: true;
+      value: {
+        task: string;
+        kind: CodexTaskKind;
+        inputHandles?: string[];
+        frozenInputs?: FrozenCodexInputV1[];
+      };
+    }
   | { ok: false; error: string } {
   const task = typeof input.task === "string" ? input.task.trim() : "";
   if (!task) return { ok: false, error: "Codex task is required." };
@@ -559,7 +626,26 @@ function parseCodexToolInput(input: CodexToolInput):
   if (!isCodexTaskKind(input.kind)) {
     return { ok: false, error: "Codex kind must be local, research, or analysis." };
   }
-  return { ok: true, value: { task, kind } };
+  try {
+    const inputHandles = readCodexInputHandles(input.inputHandles);
+    const frozenInputs = readFrozenCodexInputs(input.__sunabot_frozen_inputs);
+    if (
+      inputHandles.length !== frozenInputs.length
+      || inputHandles.some((handle, index) => frozenInputs[index]?.handle !== handle)
+    ) {
+      return { ok: false, error: "Codex input handles were not frozen by the runtime." };
+    }
+    return {
+      ok: true,
+      value: {
+        task,
+        kind,
+        ...(inputHandles.length ? { inputHandles, frozenInputs } : {})
+      }
+    };
+  } catch (error) {
+    return { ok: false, error: errorMessage(error) };
+  }
 }
 
 function validateExecutionRequest(request: CodexSupervisorRequest) {
@@ -574,7 +660,9 @@ function buildCodexArguments(
   request: CodexSupervisorRequest,
   workspaceDir: string,
   resultFile: string,
-  schemaFile: string
+  schemaFile: string,
+  outputDir: string,
+  inputs: readonly PreparedCodexInput[]
 ) {
   const args = [
     "--ask-for-approval", "never",
@@ -595,8 +683,12 @@ function buildCodexArguments(
     "--ignore-rules",
     "--skip-git-repo-check",
     "--output-schema", schemaFile,
-    "--output-last-message", resultFile
+    "--output-last-message", resultFile,
+    "--add-dir", outputDir
   ];
+  for (const input of inputs) {
+    if (input.kind === "image") execOptions.push("--image", input.workerPath);
+  }
   if (request.resumeThreadId) {
     args.push("resume", ...execOptions, request.resumeThreadId, "-");
   } else {
@@ -607,12 +699,17 @@ function buildCodexArguments(
   return args;
 }
 
-function buildCodexPrompt(request: CodexSupervisorRequest) {
+function buildCodexPrompt(
+  request: CodexSupervisorRequest,
+  inputs: readonly PreparedCodexInput[],
+  outputDir: string
+) {
   const kindInstruction = request.kind === "local"
     ? "Work inside the provided local workspace. You may create, edit, move, or delete workspace files when the task requires it, and must keep all file changes inside that workspace."
     : request.kind === "research"
       ? "Perform deep, source-backed research. Use live web search; ordinary single lookups belong to the websearch tool. You may create research artifacts inside the isolated task workspace."
       : "Perform careful long-form analysis using the task content and available context. You may create analysis artifacts inside the isolated task workspace.";
+  const frozenInputInstructions = buildFrozenInputInstructions(request.kind, inputs);
   return [
     "You are an asynchronous worker for SunaBot.",
     kindInstruction,
@@ -622,11 +719,15 @@ function buildCodexPrompt(request: CodexSupervisorRequest) {
     "Use status=succeeded with content for a completed task.",
     "Use status=needs_input only when user information is essential, and put one precise question in question.",
     "Use status=failed with a concise error when the task cannot be completed. Use status=unknown only for an indeterminate outcome.",
+    `Write every file that should be returned to the conversation under this output directory: ${outputDir}`,
+    "For each returned file, add one artifacts entry whose relativePath is relative to that output directory and whose displayName is the user-facing filename. Return artifacts=[] when there is no file.",
+    ...frozenInputInstructions,
     `Task kind: ${request.kind}`,
     "Task:",
     request.task
   ].join("\n");
 }
+
 
 function isCodexTaskKind(value: unknown): value is CodexTaskKind {
   return value === "local" || value === "research" || value === "analysis";

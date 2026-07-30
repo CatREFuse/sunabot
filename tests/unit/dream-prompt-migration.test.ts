@@ -8,6 +8,7 @@ import type { FinalPromptTemplate } from "../../services/agent/promptSystem.js";
 import {
   DREAM_CONTRACT,
   LEGACY_DREAM_CONTRACT_V3,
+  LEGACY_DREAM_CONTRACT_V4,
   dreamPromptTemplate
 } from "../../services/memory/dream/public.js";
 
@@ -86,6 +87,20 @@ describe("Dream flexible-contract prompt migration", () => {
     expect(migrated?.tools).toEqual(original.tools);
     expect(migrated?.response_format).toEqual(original.response_format);
     expect(migrateDreamMemoryContractTemplate(migrated!)).toBeUndefined();
+  });
+
+  it("upgrades the previous layered-memory contract to the impression-level contract", () => {
+    const original = dreamPromptTemplate();
+    const messages = original.messages.map((message) => (
+      message.role === "system" && typeof message.content === "string"
+        ? { ...message, content: message.content.replace(DREAM_CONTRACT, LEGACY_DREAM_CONTRACT_V4) }
+        : message
+    ));
+    const migrated = migrateDreamMemoryContractTemplate({ ...original, messages });
+    const system = migrated?.messages.find((message) => message.role === "system");
+
+    expect(system?.content).toContain(DREAM_CONTRACT);
+    expect(system?.content).not.toContain(LEGACY_DREAM_CONTRACT_V4);
   });
 
   it("does not overwrite a customized legacy contract", () => {

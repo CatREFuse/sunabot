@@ -92,6 +92,12 @@ describe("bundled Workbench configuration Skill", () => {
     await expect(bashOperations).resolves.toContain(
       "Use `import_chat_emoji` when the source is a current chat media handle"
     );
+    await expect(bashOperations).resolves.toContain(
+      "The 2 MiB limit applies only to `emojis.jsonl` itself"
+    );
+    await expect(bashOperations).resolves.toContain(
+      "Do not add the byte sizes of referenced emoji images together"
+    );
     await expect(skill).resolves.toContain("`import_chat_selfie`");
   }, 15_000);
 });

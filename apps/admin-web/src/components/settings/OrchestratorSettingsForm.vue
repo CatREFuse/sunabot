@@ -24,14 +24,7 @@ const startupSeconds = computed({
   <section class="grid gap-8">
     <div>
       <h2 class="section-title">群聊编排器</h2>
-      <p class="mt-2 text-sm leading-6 text-mute">分离群聊主题，并控制 Agent 的主动回复。</p>
-    </div>
-    <div class="settings-group grid gap-5 sm:grid-cols-2">
-      <div class="sm:col-span-2">
-        <h3 class="settings-group-title">Thread 拆分</h3>
-        <p class="settings-group-description">用于识别同一群聊中的并行话题。</p>
-      </div>
-      <ModelSelect v-model="draft.groupThreadModel" :models="models" label="Thread 拆分模型" />
+      <p class="mt-2 text-sm leading-6 text-mute">控制 Agent 是否主动参与群聊。</p>
     </div>
     <div class="settings-group grid gap-4">
       <h3 class="settings-group-title">主动回复</h3>

@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";
 import type { MediaAssetRefV1, ParsedAttachment } from "../../packages/contracts/media/media.js";
+import type { FrozenCodexInputV1 } from "../../packages/contracts/tools/codex.js";
 import { resolveAgentWorkbench } from "../agents/public.js";
 import type {
   ExportChatMediaInput,
@@ -11,8 +12,14 @@ import type {
 } from "../tools/public.js";
 import type { AgentWorkbenchBackend } from "../../packages/platform/agentResourceLayout.js";
 import type { CacheStore } from "./attachments/cache.js";
+import { attachmentBlobRef } from "./attachments/attachmentServiceSupport.js";
 import { detectAttachmentType, type DetectedAttachmentType } from "./attachments/detect.js";
 import { FILE_SIZE_LIMIT_BYTES } from "./attachments/limits.js";
+import {
+  CODEX_TEXT_PROJECTION_MAX_BYTES,
+  CODEX_TEXT_PROJECTION_TOTAL_BYTES,
+  freezeCodexTextProjection
+} from "./codexInputProjection.js";
 
 export const CHAT_IMAGE_EXPORT_MAX_BYTES = 32 * 1024 * 1024;
 
@@ -33,6 +40,8 @@ export interface ChatMediaExportServiceOptions {
   publisher: ChatMediaPublisher;
   isCurrent?: () => boolean;
   backend?: AgentWorkbenchBackend;
+  allowUnsupportedFiles?: boolean;
+  contentAddressedNamePrefix?: string;
 }
 
 export interface ChatMediaDirectoryIdentity {
@@ -79,6 +88,8 @@ export class ChatMediaExportService {
   private readonly publisher: ChatMediaPublisher;
   private readonly isCurrent: () => boolean;
   private readonly backend: AgentWorkbenchBackend;
+  private readonly allowUnsupportedFiles: boolean;
+  private readonly contentAddressedNamePrefix: string;
 
   constructor(options: ChatMediaExportServiceOptions) {
     this.agentWorkspace = path.resolve(options.agentWorkspace);
@@ -87,6 +98,10 @@ export class ChatMediaExportService {
     this.publisher = options.publisher;
     this.isCurrent = options.isCurrent ?? (() => true);
     this.backend = options.backend ?? "native";
+    this.allowUnsupportedFiles = options.allowUnsupportedFiles === true;
+    this.contentAddressedNamePrefix = safeContentAddressedNamePrefix(
+      options.contentAddressedNamePrefix ?? "chat-media"
+    );
   }
 
   async export(input: ExportChatMediaInput): Promise<ExportedChatMedia> {
@@ -105,19 +120,92 @@ export class ChatMediaExportService {
     }
   }
 
+  async freezeCodexInputs(
+    handles: readonly string[],
+    jobDir: string
+  ): Promise<FrozenCodexInputV1[]> {
+    this.assertCurrent();
+    if (!path.isAbsolute(jobDir)) throw chatMediaError("CODEX_INPUT_ROOT_INVALID");
+    const uniqueHandles = [...new Set(handles)];
+    if (
+      uniqueHandles.length !== handles.length
+      || uniqueHandles.length < 1
+      || uniqueHandles.length > 8
+    ) {
+      throw chatMediaError("CODEX_INPUT_HANDLES_INVALID");
+    }
+    await fs.mkdir(jobDir, { recursive: true, mode: 0o700 });
+    const jobStat = await fs.lstat(jobDir);
+    if (!jobStat.isDirectory() || jobStat.isSymbolicLink()) {
+      throw chatMediaError("CODEX_INPUT_ROOT_INVALID");
+    }
+    const inputRoot = path.join(jobDir, "inputs");
+    await fs.mkdir(inputRoot, { recursive: true, mode: 0o700 });
+    const rootStat = await fs.lstat(inputRoot);
+    if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
+      throw chatMediaError("CODEX_INPUT_ROOT_INVALID");
+    }
+    const frozen: FrozenCodexInputV1[] = [];
+    const perInputTextBytes = Math.min(
+      CODEX_TEXT_PROJECTION_MAX_BYTES,
+      Math.floor(CODEX_TEXT_PROJECTION_TOTAL_BYTES / uniqueHandles.length)
+    );
+    try {
+      for (const [index, handle] of uniqueHandles.entries()) {
+        this.assertCurrent();
+        const source = this.requireSource(handle);
+        const materialized = await this.materialize(source);
+        const inspected = await copyAndInspect(materialized, inputRoot, {
+          allowUnsupportedFile: source.kind === "file"
+        });
+        const targetName = `input-${index + 1}-${inspected.sha256}.${inspected.extension}`;
+        const targetPath = path.join(inputRoot, targetName);
+        await publishFrozenInput(inspected.temporaryPath, targetPath, inspected);
+        const textProjection = source.kind === "file"
+          ? await freezeCodexTextProjection({
+              attachment: source.attachment,
+              cacheRoot: this.cache.rootDir,
+              frozenRawPath: targetPath,
+              inputRoot,
+              inputIndex: index,
+              maxBytes: perInputTextBytes
+            })
+          : undefined;
+        frozen.push({
+          schemaVersion: 1,
+          handle,
+          kind: source.kind,
+          relativePath: path.posix.join("inputs", targetName),
+          displayName: safeFrozenInputName(materialized.originalName, index, inspected.extension),
+          sha256: inspected.sha256,
+          sizeBytes: inspected.byteLength,
+          mimeType: inspected.mimeType,
+          ...(textProjection ? { textProjection } : {})
+        });
+      }
+      this.assertCurrent();
+      return frozen;
+    } catch (error) {
+      await fs.rm(inputRoot, { recursive: true, force: true }).catch(() => undefined);
+      throw error;
+    }
+  }
+
   private async exportBound(input: ExportChatMediaInput): Promise<ExportedChatMedia> {
     this.assertCurrent();
     const source = this.requireSource(input.handle);
     const workbenchRoot = await resolveAgentWorkbench(this.agentWorkspace, this.backend);
     const materialized = await this.materialize(source);
     this.assertCurrent();
-    const inspected = await copyAndInspect(materialized, workbenchRoot);
+    const inspected = await copyAndInspect(materialized, workbenchRoot, {
+      allowUnsupportedFile: this.allowUnsupportedFiles && source.kind === "file"
+    });
     const rootIdentity = await directoryIdentity(workbenchRoot);
     let published = false;
     try {
       this.assertCurrent();
       await assertSameDirectory(workbenchRoot, rootIdentity);
-      const fileName = `chat-media-${inspected.sha256}.${inspected.extension}`;
+      const fileName = `${this.contentAddressedNamePrefix}-${inspected.sha256}.${inspected.extension}`;
       const targetPath = path.join(workbenchRoot, fileName);
       const deduplicated = await publishContentAddressed(
         inspected.temporaryPath,
@@ -192,19 +280,13 @@ export class ChatMediaExportService {
   }
 
   private async materializeAttachment(attachment: ParsedAttachment): Promise<MaterializedSource> {
-    if (
-      (attachment.status !== "ready" && attachment.status !== "partial")
-      || !attachment.cacheKey
-      || !attachment.sha256
-      || attachment.cacheKey !== attachment.sha256
-    ) {
-      throw chatMediaError("CHAT_MEDIA_SOURCE_UNAVAILABLE");
-    }
-    const entry = await this.cache.getEntry(attachment.cacheKey);
+    const blob = attachmentBlobRef(attachment);
+    if (!blob) throw chatMediaError("CHAT_MEDIA_SOURCE_UNAVAILABLE");
+    const entry = await this.cache.getEntry(blob.cacheKey);
     if (
       !entry
-      || entry.sha256 !== attachment.sha256
-      || entry.originalSizeBytes !== attachment.sizeBytes
+      || entry.sha256 !== blob.sha256
+      || entry.originalSizeBytes !== blob.sizeBytes
     ) {
       throw chatMediaError("CHAT_MEDIA_SOURCE_CHANGED");
     }
@@ -212,8 +294,8 @@ export class ChatMediaExportService {
     return {
       filePath,
       maxBytes: FILE_SIZE_LIMIT_BYTES,
-      expectedSha256: attachment.sha256,
-      expectedMimeType: attachment.mimeType,
+      expectedSha256: blob.sha256,
+      expectedMimeType: blob.detectedMimeType ?? attachment.mimeType,
       originalName: attachment.name,
       kind: "file"
     };
@@ -224,7 +306,11 @@ export class ChatMediaExportService {
   }
 }
 
-async function copyAndInspect(source: MaterializedSource, workbenchRoot: string): Promise<InspectedSource> {
+async function copyAndInspect(
+  source: MaterializedSource,
+  workbenchRoot: string,
+  options: { allowUnsupportedFile?: boolean } = {}
+): Promise<InspectedSource> {
   const sourceHandle = await fs.open(
     source.filePath,
     fsConstants.O_RDONLY | requiredFlag("O_NOFOLLOW")
@@ -267,8 +353,12 @@ async function copyAndInspect(source: MaterializedSource, workbenchRoot: string)
       contentType: source.expectedMimeType,
       maxBytes: source.maxBytes
     });
-    validateDetection(detection, source);
-    const dimensions = detection.kind === "image"
+    const validated = validateDetection(
+      detection,
+      source,
+      options.allowUnsupportedFile === true
+    );
+    const dimensions = validated.kind === "image"
       ? await imageDimensions(temporaryPath)
       : { width: null, height: null };
     keepTemporary = true;
@@ -276,8 +366,8 @@ async function copyAndInspect(source: MaterializedSource, workbenchRoot: string)
       temporaryPath,
       sha256,
       byteLength,
-      mimeType: detection.mimeType!,
-      extension: detection.format!,
+      mimeType: validated.mimeType,
+      extension: validated.extension,
       ...dimensions
     };
   } finally {
@@ -287,13 +377,33 @@ async function copyAndInspect(source: MaterializedSource, workbenchRoot: string)
   }
 }
 
-function validateDetection(detection: DetectedAttachmentType, source: MaterializedSource) {
+function validateDetection(
+  detection: DetectedAttachmentType,
+  source: MaterializedSource,
+  allowUnsupportedFile = false
+) {
   if (
     detection.kind === "unsupported"
     || !detection.mimeType
     || !detection.format
     || detection.extensionMismatch
   ) {
+    if (
+      allowUnsupportedFile
+      && source.kind === "file"
+      && detection.kind === "unsupported"
+      && !detection.extensionMismatch
+    ) {
+      return {
+        kind: "unsupported" as const,
+        mimeType: detection.source === "magic" && detection.mimeType
+          ? detection.mimeType
+          : "application/octet-stream",
+        extension: detection.source === "magic" && detection.format
+          ? detection.format
+          : "bin"
+      };
+    }
     throw chatMediaError("CHAT_MEDIA_TYPE_INVALID");
   }
   if (source.kind === "image" && detection.kind !== "image") {
@@ -303,6 +413,47 @@ function validateDetection(detection: DetectedAttachmentType, source: Materializ
   if (expectedMime && detection.mimeType !== expectedMime) {
     throw chatMediaError("CHAT_MEDIA_TYPE_INVALID");
   }
+  return {
+    kind: detection.kind,
+    mimeType: detection.mimeType,
+    extension: detection.format
+  };
+}
+
+function safeContentAddressedNamePrefix(value: string) {
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,160}$/u.test(value)) {
+    throw chatMediaError("CHAT_MEDIA_PREFIX_INVALID");
+  }
+  return value;
+}
+
+async function publishFrozenInput(
+  temporaryPath: string,
+  targetPath: string,
+  expected: Pick<InspectedSource, "sha256" | "byteLength">
+) {
+  let created = false;
+  try {
+    await fs.link(temporaryPath, targetPath);
+    created = true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+  } finally {
+    await fs.unlink(temporaryPath).catch(() => undefined);
+  }
+  if (created) await fs.chmod(targetPath, 0o400);
+  await assertPublishedFile(targetPath, expected);
+}
+
+function safeFrozenInputName(
+  originalName: string | undefined,
+  index: number,
+  extension: string
+) {
+  const cleaned = path.basename(originalName ?? "")
+    .replace(/[\u0000-\u001f\u007f/\\]/gu, "_")
+    .trim();
+  return cleaned.slice(0, 180) || `input-${index + 1}.${extension}`;
 }
 
 async function imageDimensions(filePath: string) {

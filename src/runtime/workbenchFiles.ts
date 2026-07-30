@@ -4,11 +4,16 @@ import { isAdminSender } from "../../services/messaging/replySenderPolicy.js";
 import { createWorkbenchFileToolPort } from "../../services/tools/public.js";
 import { resolveProjectPath } from "../config.js";
 import type { AppConfig } from "../types.js";
+import {
+  resolveConversationWorkbench,
+  type ConversationCapabilityContextV1
+} from "../../services/conversations/conversationCapability.js";
 
 export function providerWorkbenchFilesForIncoming(
   config: AppConfig,
   incoming: InboundMessageV1,
-  promptOverride: string | undefined
+  promptOverride: string | undefined,
+  capability?: Readonly<ConversationCapabilityContextV1>
 ): ProviderWorkbenchFileOptions | undefined {
   const adminQq = config.bot.adminQq.trim();
   if (
@@ -24,6 +29,12 @@ export function providerWorkbenchFilesForIncoming(
     || Number(incoming.selfId) <= 0
     || !adminQq
     || !isAdminSender(incoming.userId, adminQq)
+  ) {
+    return undefined;
+  }
+  if (
+    capability
+    && resolveConversationWorkbench(capability, "read_file").primaryBackend !== "native"
   ) {
     return undefined;
   }

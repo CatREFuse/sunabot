@@ -91,7 +91,6 @@ describe("AgentFileRepository", () => {
       ["memory.user-profile", "user_profile_prompt.json"],
       ["memory.dream", "memory_dream.json"],
       ["orchestrator.user-group", "user_groupchat_orchestrator.json"],
-      ["orchestrator.group-thread", "group_thread_context.json"],
       ["conversation.group-summary", "group_chat_summary.json"],
       ["scheduler.cron-callback", "cron_callback.json"],
       ["director.daily-plan", "director_daily_plan.json"],

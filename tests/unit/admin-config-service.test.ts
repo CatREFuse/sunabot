@@ -246,44 +246,6 @@ describe("ConfigService section semantics", () => {
     })).rejects.toMatchObject({ statusCode: 400, code: "CONFIG_INVALID", field });
   });
 
-  it("persists an independent group thread model while the orchestrator is disabled", async () => {
-    const subject = service();
-    const envelope = await subject.readEnvelope();
-
-    const result = await subject.patch("orchestrator", {
-      revision: envelope.revision,
-      value: {
-        ...envelope.config.bot.orchestrator,
-        enabled: false,
-        groupThreadModel: "  custom-low-cost-model  "
-      }
-    });
-
-    expect(result.config.bot.orchestrator).toMatchObject({
-      enabled: false,
-      userGroupchatOrchestratorModel: "gpt-5.4-mini",
-      groupThreadModel: "custom-low-cost-model"
-    });
-    expect(result.applyMode).toBe("hot");
-  });
-
-  it("rejects an empty group thread model", async () => {
-    const subject = service();
-    const envelope = await subject.readEnvelope();
-
-    await expect(subject.patch("orchestrator", {
-      revision: envelope.revision,
-      value: {
-        ...envelope.config.bot.orchestrator,
-        groupThreadModel: "   "
-      }
-    })).rejects.toMatchObject({
-      statusCode: 400,
-      code: "CONFIG_INVALID",
-      field: "orchestrator.groupThreadModel"
-    });
-  });
-
   it("accepts every catalog model for Codex", async () => {
     const subject = service();
 

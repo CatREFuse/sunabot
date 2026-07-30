@@ -9,6 +9,7 @@ export function evaluateHarnessAssertions(input: {
   expected: UserTestExpectedOutput;
   toolCalls: readonly HarnessToolCallObservation[];
   outbound: readonly unknown[];
+  inboundAttachments?: readonly Record<string, unknown>[];
   requestLogs?: readonly unknown[];
   textValues?: readonly unknown[];
 }) {
@@ -91,6 +92,19 @@ export function evaluateHarnessAssertions(input: {
       passed: !outboundKinds.includes(kind),
       expected: `no ${kind} outbound`,
       actual: outboundKinds
+    });
+  }
+  for (const expected of input.expected.requiredInboundAttachments ?? []) {
+    const actual = input.inboundAttachments?.find((attachment) => (
+      attachment.messageId === expected.messageId &&
+      attachment.index === expected.index
+    ));
+    const fields = Object.entries(expected);
+    assertions.push({
+      id: `attachment.required:${expected.messageId}:${expected.index}`,
+      passed: Boolean(actual) && fields.every(([key, value]) => actual?.[key] === value),
+      expected,
+      actual: actual ?? "missing"
     });
   }
   if (input.expected.minimumOutboundCount != null) {

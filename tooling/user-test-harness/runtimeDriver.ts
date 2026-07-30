@@ -46,6 +46,7 @@ import {
   materializeDreamAtRuntime,
   materializeMemoryCompressionAtRuntime
 } from "./timeline.js";
+import { resetUserTestKnowledgeDirectory } from "./workspace.js";
 import {
   evaluateHarnessAssertions,
   evaluateProviderEvidence,
@@ -101,6 +102,8 @@ export async function runRuntimeUserTest(
       );
       observation.inbound = result.inbound;
       observation.outbound = result.transport.observations();
+      observation.inboundAttachments = result.inboundAttachments;
+      observation.attachmentResolutions = result.transport.attachmentResolutionCalls;
       observation.branch = result.session;
       assertions.push(...result.assertions);
     } else if (testCase.kind === "memory_compression") {
@@ -140,6 +143,7 @@ export async function runRuntimeUserTest(
       expected: testCase.expected,
       toolCalls: observation.toolCalls,
       outbound: observation.outbound,
+      inboundAttachments: observation.inboundAttachments,
       requestLogs: observation.requestLogs,
       textValues: assertionTextValues(testCase.kind, observation)
     }));
@@ -219,8 +223,10 @@ async function runConversationCase(
       assertions,
       transport: new RecordingMessagingPort({
         selfId: input.selfId,
-        accountId: input.accountId
+        accountId: input.accountId,
+        attachmentSources: input.fixture?.attachmentSources
       }),
+      inboundAttachments: [],
       session: { skipped: "actor_contract_failed" }
     };
   }
@@ -239,7 +245,8 @@ async function runConversationCase(
   }
   const transport = new RecordingMessagingPort({
     selfId: input.selfId,
-    accountId: input.accountId
+    accountId: input.accountId,
+    attachmentSources: input.fixture?.attachmentSources
   });
   const manager = new AgentRuntimeManager(built.agentRegistry, {
     defaultRuntime: built.runtime,
@@ -276,6 +283,7 @@ async function runConversationCase(
         inbound: parsed,
         assertions,
         transport,
+        inboundAttachments: [],
         session: { skipped: "account_contract_failed" }
       };
     }
@@ -317,10 +325,60 @@ async function runConversationCase(
         ? "completed"
         : `timeout with ${completion.activeEvents.length} active event(s)`
     });
+    for (const source of input.fixture?.attachmentSources ?? []) {
+      const calls = transport.attachmentResolutionCalls.filter(
+        (call) => call.fileId === source.fileId
+      );
+      assertions.push({
+        id: `attachment.account:${source.fileId}`,
+        passed: calls.some((call) => (
+          call.accountId === input.accountId &&
+          call.strategy === "resolve" &&
+          call.outcome === "resolved"
+        )) && calls.every((call) => call.accountId === input.accountId),
+        expected: {
+          accountId: input.accountId,
+          fileId: source.fileId,
+          strategy: "resolve",
+          outcome: "resolved"
+        },
+        actual: calls
+      });
+    }
+    const completedRecord = built.runtime.getConversationRecords()
+      .find((record) => record.id === conversationId);
+    const completedMessage = completedRecord?.messages
+      .find((message) => message.id === String(inbound.messageId));
+    const inboundAttachments = (completedMessage?.attachments ?? []).map(
+      (attachment, index) => ({
+        messageId: String(inbound.messageId),
+        index,
+        name: attachment.name,
+        status: attachment.status,
+        ...(attachment.acquisition ? {
+          acquisitionStatus: attachment.acquisition.status
+        } : {}),
+        ...(attachment.parseStatus ? { parseStatus: attachment.parseStatus } : {}),
+        ...(attachment.acquisition?.status === "acquired" ? {
+          blobSha256: attachment.acquisition.blob.sha256,
+          blobSizeBytes: attachment.acquisition.blob.sizeBytes,
+          ...(attachment.acquisition.blob.detectedMimeType
+            ? { blobMimeType: attachment.acquisition.blob.detectedMimeType }
+            : {})
+        } : {}),
+        ...(attachment.format ? { format: attachment.format } : {}),
+        ...(attachment.mimeType ? { mimeType: attachment.mimeType } : {}),
+        ...(attachment.sizeBytes == null ? {} : { sizeBytes: attachment.sizeBytes }),
+        ...(attachment.sha256 ? { sha256: attachment.sha256 } : {}),
+        ...(attachment.pageCount == null ? {} : { pageCount: attachment.pageCount }),
+        handle: `message:${String(inbound.messageId)}:file:${index}`
+      })
+    );
     return {
       inbound,
       assertions,
       transport,
+      inboundAttachments,
       session: {
         conversationId,
         completion,
@@ -388,11 +446,22 @@ async function seedConversationFixture(
       throw new Error("USER_TEST_CONVERSATION_FIXTURE_AIR_CONFLICT");
     }
   }
-  if (fixture.workbenchFiles?.length) {
+  if (fixture.resetKnowledge?.length || fixture.workbenchFiles?.length) {
     const agentWorkspace = resolveProjectPath(built.runtime.config.persona.agentWorkspace);
     if (!agentWorkspace) throw new Error("USER_TEST_CONVERSATION_FIXTURE_WORKSPACE_INVALID");
     const roots = new Map<"native" | "docker", string>();
-    for (const file of fixture.workbenchFiles) {
+    for (const backend of fixture.resetKnowledge ?? []) {
+      let root = roots.get(backend);
+      if (!root) {
+        root = await resolveAgentWorkbench(agentWorkspace, backend);
+        roots.set(backend, root);
+      }
+      await resetUserTestKnowledgeDirectory(
+        String(process.env.SUNABOT_WORKSPACE ?? ""),
+        root
+      );
+    }
+    for (const file of fixture.workbenchFiles ?? []) {
       let root = roots.get(file.backend);
       if (!root) {
         root = await resolveAgentWorkbench(agentWorkspace, file.backend);

@@ -6,6 +6,9 @@ import {
 } from "../../services/tools/generateImgTool.js";
 import { SELFIE_TOOL_NAME } from "../../services/tools/selfieTool.js";
 import {
+  OutboundConversationAssetSourceError
+} from "../../services/delivery/public.js";
+import {
   archiveConversationImageReference,
   type ArchivedConversationImageReferenceV1
 } from "../../services/media/conversationImageArchive.js";
@@ -159,7 +162,12 @@ export async function snapshotDeferredWorkbenchImages(
   const limit = toolCall.name === SELFIE_TOOL_NAME ? 1 : 4;
   const paths = readReferenceImagePaths(toolCall.arguments.referenceImagePaths, limit);
   if (!paths.length) return undefined;
-  const urls = await runtime.resolveWorkbenchImageReferences(incoming, paths, isCurrent);
+  let urls: string[];
+  try {
+    urls = await runtime.resolveWorkbenchImageReferences(incoming, paths, isCurrent);
+  } catch (error) {
+    throw normalizeDeferredWorkbenchReferenceError(toolCall.name, paths, error);
+  }
   if (urls.length !== paths.length) throw new Error("Workbench reference image snapshot is incomplete.");
   return Object.fromEntries(paths.map((imagePath, index) => [imagePath, urls[index]!]));
 }
@@ -221,6 +229,57 @@ function readReferenceMediaHandles(value: unknown, limit: number) {
     .map((item) => item.trim())
     .filter(Boolean))
     .slice(0, limit);
+}
+
+function normalizeDeferredWorkbenchReferenceError(
+  toolName: string,
+  paths: readonly string[],
+  error: unknown
+) {
+  const prefix = toolName === SELFIE_TOOL_NAME ? "SELFIE" : "GENERATE_IMG";
+  const referencePath = safeReferencePathLabel(paths[0]);
+  if (error instanceof OutboundConversationAssetSourceError) {
+    const suffix = error.code.replace(/^SEND_FILE_/u, "");
+    const message = suffix === "SOURCE_MISSING"
+      ? "The requested Workbench reference image is unavailable"
+      : suffix === "SOURCE_FORBIDDEN"
+        ? "The requested Workbench reference image cannot be accessed"
+        : suffix === "SOURCE_UNSAFE"
+          ? "The requested Workbench reference image path is unsafe"
+          : suffix === "ROOT_CHANGED"
+            ? "The authorized Workbench root changed during reference validation"
+            : "The requested Workbench reference image is unavailable due to a filesystem failure";
+    return new Error(`${prefix}_REFERENCE_${suffix}: ${message} (path: ${referencePath}).`, {
+      cause: error
+    });
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  if (message === "WORKBENCH_IMAGE_PATH_INVALID") {
+    return new Error(`${prefix}_REFERENCE_PATH_INVALID: The Workbench reference image path is invalid.`, {
+      cause: error
+    });
+  }
+  if (message === "WORKBENCH_IMAGE_PATH_OUTSIDE_AUTHORIZED_ROOT") {
+    return new Error(
+      `${prefix}_REFERENCE_OUTSIDE_AUTHORIZED_ROOT: The Workbench reference image is outside the authorized root.`,
+      { cause: error }
+    );
+  }
+  return error instanceof Error ? error : new Error(message);
+}
+
+function safeReferencePathLabel(value: string | undefined) {
+  const candidate = String(value ?? "").trim();
+  if (
+    !candidate ||
+    candidate.length > 256 ||
+    candidate.includes("\0") ||
+    /[\u0000-\u001f\u007f]/u.test(candidate)
+  ) return "[invalid]";
+  if (/^(?:\/(?!workbench(?:\/|$))|[A-Za-z]:[\\/]|\\\\)/u.test(candidate)) {
+    return "[authorized-absolute-path]";
+  }
+  return candidate;
 }
 
 function mapArchivedReferences(

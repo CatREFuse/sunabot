@@ -26,7 +26,6 @@ Agent 配置文件夹是跨终端传输角色配置的唯一推荐和支持模�
 | `agents`                      | Agent ID、名称、启用状态、workspace 与头像路径                                                          |
 | `agent_accounts`              | QQ 接入账号、所属 Agent、QQ 号、启用状态与独立 WebUI 端口                                               |
 | `conversations`               | 会话及其消息数组，每个会话一行                                                                          |
-| `conversation_thread_states`  | 群聊 Thread 增量状态、处理游标、模型和提示词 revision，每个会话至多一行                                 |
 | `memory_records`              | 长期记忆、用户画像，以及只读保留的历史工作记忆                                                        |
 | `memory_batches`              | 已提交记忆批次及幂等结果                                                                                |
 | `memory_scheduler`            | 各会话的记忆待处理队列与重试状态                                                                        |
@@ -38,7 +37,7 @@ Agent 配置文件夹是跨终端传输角色配置的唯一推荐和支持模�
 | `scheduled_task_runs`         | 到期 occurrence 的不可变任务快照、状态、lease、生成正文、错误与完成时间                                 |
 | `admin_sessions`              | 管理 Cookie 哈希、CSRF Token、访问时间与有效期                                                          |
 
-当前业务主库 schema 版本是 17；schema 10→11 创建的 STRICT `emojis` 与 schema 11→12 创建的 `emoji_versions` 仅保留为旧安装的表情 JSONL 迁移输入，当前表情 CRUD 不再向这两张表写入。schema 12→13 前向创建 STRICT `scheduled_tasks`、`scheduled_task_runs` 及 `scheduled_tasks_due`、`scheduled_task_runs_status`、`scheduled_task_runs_task` 三个索引，schema 15→16 为既有 `scheduled_tasks` 前向补充默认关闭的 `permanent_retention` 并创建 `scheduled_tasks_archive` 索引，schema 16→17 创建 STRICT `memory_source_revisions` 与三项记忆 revision trigger，并为 `scheduled_task_runs` 补充投递尝试、最后错误和下次投递时间。`conversation_thread_states` 使用 STRICT 表和 `conversations.id` 外键，删除会话时级联删除 Thread 状态；`state_schema_version` 当前为 1。写入以 revision CAS、单调 `processed_through_sequence` 和 `last_run_key` 幂等约束防止旧快照覆盖新状态，读取和写入都执行完整领域结构校验。message assignment、Thread message ID 和已无保留消息的非活动 Thread 随 `conversations` 的消息保留边界清理，单 Thread participant uid 最多保留 256 个；原始会话消息不由 Thread 节点删除。模型输出、提示词和运行时错误不能回退游标或破坏已提交状态；Thread 状态仍属于业务库恢复范围，不新增 JSON/JSONL 增长型持久化。异步 Thread 快照读取时复核字符串长度、稳定 Thread ID、active/primary/related 引用、唯一性、sequence 和提示词容量边界；损坏或旧格式快照降级为空 sidecar。恢复门禁只允许当前规范明确支持的旧 schema 作为迁移输入，并分别复核真实版本；当前 schema 缺任一必需表、索引、记忆 revision trigger 或投递列都判定为不完整。
+当前业务主库 schema 版本是 17；schema 10→11 创建的 STRICT `emojis` 与 schema 11→12 创建的 `emoji_versions` 仅保留为旧安装的表情 JSONL 迁移输入，当前表情 CRUD 不再向这两张表写入。schema 12→13 前向创建 STRICT `scheduled_tasks`、`scheduled_task_runs` 及 `scheduled_tasks_due`、`scheduled_task_runs_status`、`scheduled_task_runs_task` 三个索引，schema 15→16 为既有 `scheduled_tasks` 前向补充默认关闭的 `permanent_retention` 并创建 `scheduled_tasks_archive` 索引，schema 16→17 创建 STRICT `memory_source_revisions` 与三项记忆 revision trigger，并为 `scheduled_task_runs` 补充投递尝试、最后错误和下次投递时间。已升级 workspace 中可能保留停用的话题索引历史表；当前运行时不创建、不检查、不读取、不写入或删除该表。备份清单记录数据库实际表集和 storage schema version，恢复时原样保留额外历史表。恢复门禁只允许当前规范明确支持的旧 schema 作为迁移输入，并分别复核真实版本；当前 schema 缺任一必需表、索引、记忆 revision trigger 或投递列都判定为不完整。
 
 当前工作记忆位于每个 Agent workspace 根目录的 `WORKING_MEMORY.md`，不要求 Git 跟踪。可见正文只由模型提供，宿主时间、会话来源和事项身份保存在隐藏 metadata；文件以 SHA-256 revision、64 KiB 上限、普通文件与符号链接拒绝、同目录 0600 临时文件和原子 rename 提交，模型、工具、管理 API 与 Dream 共用该文件安全边界。长期记忆与用户画像继续使用 SQLite source revision。实时记忆批处理在任何写入前确认 Provider 返回可解析，再分别复核工作记忆文件 revision 与用户画像 SQLite revision；工作记忆文件和用户画像事务各自原子提交，当前不声称跨 Markdown 与 SQLite 的单一原子事务。长期记忆不参与实时工作记忆批处理。Dream 同时捕获 `WORKING_MEMORY.md` 与 `AIR.md` revision，提交顺序为工作记忆文件 CAS、场域知识文件 CAS、长期记忆 SQLite 事务；后一步失败时按新 revision 逆序回滚已写文件。进程在步骤之间强制终止仍不具备跨介质原子回滚，操作日志必须保留恢复证据。
 
@@ -106,7 +105,7 @@ Plana 的 `workspace/business/data/session-queue.sqlite` 与其他 Agent 的 `wo
 - Agent 人格、公共系统提示词和 Agent 系统提示词覆盖：需要人工审阅和管理台编辑；
 - 单个附件 manifest、好友/群目录缓存：体积小且可重建；
 - 图片与文档二进制：文件系统更适合流式访问；
-- Codex JSONL：`exec --json` 与 `app-server --stdio` 子进程通信协议；deferred worker 只接受运行时添加的管理员授权标记，使用 `workspace-write` sandbox，隔离 Codex home 仍位于任务目录。管理员控制模式的本机线程保存在主 Codex home、远端线程保存在目标主机 Codex home。Sunabot SQLite 只保存异步 job 参数、终态、回调和运行中进程身份，不复制或另建 Codex 会话历史。
+- Codex JSONL：`exec --json` 与 `app-server --stdio` 子进程通信协议；deferred worker 只接受运行时添加的管理员授权标记，使用 `workspace-write` sandbox，隔离 Codex home 仍位于任务目录。管理员控制模式的本机线程保存在主 Codex home、远端线程保存在目标主机 Codex home。Sunabot SQLite 只保存异步 job 参数、冻结输入的相对路径/摘要/大小/文本投影元数据、终态、回调和运行中进程身份，不复制附件正文、原件字节、宿主路径、授权文件或 Codex 会话历史。产物声明只能落在当前 claim 的 exact attempt-token `outputs/`，`codex-home`、workspace、result/schema、输入和其他 attempt 目录都不能注册为产物；完成回调在 durable 终态提交前持有可回滚发布，提交后才解除补偿。rename 已落盘但 worker 响应丢失时，只在源消失、目标仍为同一 dev/ino 且绑定父目录身份未变时恢复发布所有权，使后续失败仍能补偿删除。旧 job 没有产物声明时保留原终态；出现产物声明但缺少冻结 Workbench backend 时以 `codex_artifact_backend_missing` 失败，不能猜测目标或静默丢弃文件。`analysis` 与 `research` 只取得受控文本投影并关闭 shell；`local` worker 可读冻结原件，并因 attempt 内认证材料而属于管理员授权的受信任执行主体。当前输出白名单与路径脱敏不构成对恶意附件提示注入后凭据转写的硬隔离；把 `local` worker 作为不受信任主体前，必须引入进程外短期认证或等价凭据代理。
 - 表情 JSONL：只允许上述 64 key × 20 版本、2 MiB 上限的有界目录清单，不得复用于会话、消息、记忆、任务、日志或历史索引。
 
 Bot 可见配置目录只认一个权威管理入口：workbench 使用 `index.md`，Skill 使用 `index.json`，MCP 使用 `servers.json`，自拍使用 `references.jsonl`，表情使用 `emojis.jsonl`，知识库使用 `index.json`。已有专用清单的目录不能再生成第二份通用索引；管理后台和 Bot Bash 必须读取同一入口，入口缺失、未知 schema、损坏或引用不存在时失败关闭。

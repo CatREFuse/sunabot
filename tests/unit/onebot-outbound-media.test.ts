@@ -114,6 +114,39 @@ describe("OneBot outbound media adapter", () => {
     );
   });
 
+  it("rejects a missing generated image before OneBot reports a send", async () => {
+    const inlineDelivery = new OutboundMediaDelivery({
+      rootDir: temporaryDirectory
+    });
+    const gateway = new OneBotGateway(
+      http.createServer(),
+      defaultConfig(),
+      { handleInboundMessage: vi.fn(async () => undefined) },
+      { outboundMedia: inlineDelivery }
+    );
+    const sendAction = vi.spyOn(gateway, "sendAction").mockResolvedValue({ status: "ok" });
+
+    await expect(gateway.send({
+      schemaVersion: 1,
+      id: "missing-generated-image",
+      conversationId: "private:7",
+      accountId: "primary",
+      scope: "private",
+      userId: 7,
+      text: "",
+      media: [{
+        schemaVersion: 1,
+        kind: "image",
+        source: "shared_file",
+        filePath: path.join(temporaryDirectory, "missing.png"),
+        url: "/generated-images/missing.png"
+      }]
+    })).rejects.toThrow(
+      "OUTBOUND_MEDIA_SOURCE_MISSING: Generated image file is unavailable before send."
+    );
+    expect(sendAction).not.toHaveBeenCalled();
+  });
+
   it("accepts only content-addressed emoji PNGs and GIFs from an Agent workbench", async () => {
     const workspaceRoot = path.join(temporaryDirectory, "workspace");
     const generatedRoot = path.join(workspaceRoot, "business", "media", "images");

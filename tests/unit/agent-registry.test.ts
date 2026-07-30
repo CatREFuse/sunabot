@@ -214,7 +214,6 @@ describe("AgentRegistry", () => {
     delete (manifest.bot as Record<string, unknown>).replyDebounceMs;
     delete (manifest.bot as Record<string, unknown>).quoteGroupReplyExcludedUserIds;
     delete (manifest.bot as Record<string, unknown>).tone;
-    delete ((manifest.bot as Record<string, unknown>).orchestrator as Record<string, unknown>).groupThreadModel;
     delete ((manifest.bot as Record<string, unknown>).bash as Record<string, unknown>).adminPrivateBackend;
     delete ((manifest.bot as Record<string, unknown>).bash as Record<string, unknown>).auditModel;
     delete ((manifest.bot as Record<string, unknown>).bash as Record<string, unknown>).strictMode;
@@ -233,35 +232,12 @@ describe("AgentRegistry", () => {
           model: "gpt-5.4-mini",
           maxRetries: 2
         },
-        orchestrator: { groupThreadModel: "gpt-5.4-mini" },
         bash: {
           adminPrivateBackend: "docker",
           auditModel: "gpt-5.4-mini",
           strictMode: true
         }
       }
-    });
-  });
-
-  it("uses shared Thread model updates for Plana without overriding custom Agents", async () => {
-    const config = createAdminTestConfig(temporaryDirectory);
-    config.persona.agentWorkspace = path.join(testPaths.workspace, "business", "agents", "plana");
-    config.bot.orchestrator.groupThreadModel = "initial-thread-model";
-    const registry = new AgentRegistry(config, {
-      workspaceRoot: path.join(testPaths.workspace, "business", "agents"),
-      store,
-      allowUnmarkedMigration: true
-    });
-    await registry.initialize();
-    await registry.create({ id: "arona", name: "阿罗娜" });
-    const updatedShared = structuredClone(config);
-    updatedShared.bot.orchestrator.groupThreadModel = "updated-thread-model";
-
-    await expect(registry.config("plana", updatedShared)).resolves.toMatchObject({
-      bot: { orchestrator: { groupThreadModel: "updated-thread-model" } }
-    });
-    await expect(registry.config("arona", updatedShared)).resolves.toMatchObject({
-      bot: { orchestrator: { groupThreadModel: "initial-thread-model" } }
     });
   });
 

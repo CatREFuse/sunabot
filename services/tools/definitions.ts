@@ -25,9 +25,21 @@ export const codexTool = {
         type: "string",
         enum: ["local", "research", "analysis"],
         description: "local may inspect and modify workspace files; research performs deep web research; analysis handles long reasoning."
+      },
+      inputHandles: {
+        type: ["array", "null"],
+        maxItems: 8,
+        uniqueItems: true,
+        items: {
+          type: "string",
+          minLength: 1,
+          maxLength: 512,
+          pattern: "^message:[0-9]+:(image|file):[0-9]+$"
+        },
+        description: "Exact media handles from the current or explicitly quoted message. Use null when no media input is needed. The runtime freezes supplied handles as read-only worker inputs before dispatch."
       }
     },
-    required: ["task", "kind"]
+    required: ["task", "kind", "inputHandles"]
   },
   strict: true
 } as const;

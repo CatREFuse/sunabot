@@ -504,7 +504,7 @@ describe("image quality configuration", () => {
 });
 
 describe("prompt template configuration", () => {
-  it("fills the default group thread model when loading a legacy orchestrator config", async () => {
+  it("fills the remaining orchestrator defaults when loading a partial config", async () => {
     await fs.writeFile(configPath, JSON.stringify({
       bot: {
         orchestrator: {
@@ -517,7 +517,7 @@ describe("prompt template configuration", () => {
     const config = await loadConfig();
 
     expect(config.bot.orchestrator.userGroupchatOrchestratorModel).toBe("gpt-5.6-luna");
-    expect(config.bot.orchestrator.groupThreadModel).toBe("gpt-5.4-mini");
+    expect(config.bot.orchestrator.promptFile).toBe("user_groupchat_orchestrator.json");
   });
 
   it("migrates the legacy default MD request names to final JSON templates", async () => {

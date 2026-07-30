@@ -61,6 +61,14 @@ describe("Dream context projection", () => {
     expect(payload.fieldKnowledgeWritable).toBe(false);
     expect(payload.recentWindowHours).toBe(24);
     expect(objectArray(payload.activeTasks)[0]).toMatchObject({ enabled: true, status: "running" });
+    expect(objectArray(payload.personaImpressions)[0]).toMatchObject({
+      topicKey: "communication.evidence",
+      level: "stable",
+      targetFile: "PREFERENCE.md"
+    });
+    expect(String(objectArray(payload.personaImpressions)[0]?.impressionRef))
+      .toMatch(/^impression:[a-f0-9]{24}$/u);
+    expect(String(objectArray(payload.personaImpressions)[0]?.statement)).toContain("人物-");
     expect(objectValue(payload.persona)).toHaveProperty("preference");
     expect(payload.scheduledFor).toBe("2026-07-20T04:00:00.000+08:00");
     expect(Object.keys(payload)).toEqual([
@@ -68,7 +76,7 @@ describe("Dream context projection", () => {
       "workingMemories", "longTermMemories", "recallStats", "personaEvidenceIds",
       "fieldKnowledgeEvidenceIds", "fieldKnowledgeWritable", "recentWindowHours",
       "sourceMemoryIds", "userProfiles", "observedConversations", "activeTasks",
-      "plannedDailySchedule", "persona"
+      "plannedDailySchedule", "personaImpressions", "persona"
     ]);
   });
 
@@ -329,6 +337,16 @@ function sensitivePayload() {
       }],
       secret: "extension-secret"
     },
+    personaImpressions: [{
+      id: "persona-run-1",
+      appliedAt: "2026-07-19T04:05:00.000Z",
+      kind: "communication_preference",
+      targetFile: "PREFERENCE.md",
+      topicKey: "communication.evidence",
+      level: "stable",
+      statement: "与海老师协作时会重视可核验证据。",
+      secret: "extension-secret"
+    }],
     persona: {
       id: "plana",
       name: "Plana",

@@ -1,7 +1,8 @@
 import type {
   CodexProcessCleanupResult,
   CodexProcessIdentity,
-  CodexTaskStatus
+  CodexTaskStatus,
+  CodexToolResult
 } from "../../packages/contracts/tools/codex.js";
 import type { ToolJobRecord } from "./sessionStore.js";
 
@@ -66,3 +67,20 @@ export interface CodexToolUsageObservation {
 export type CodexToolUsageObserver = (
   observation: CodexToolUsageObservation
 ) => unknown | Promise<unknown>;
+
+export interface CodexResultFinalizationInput {
+  job: ToolJobRecord;
+  settings: CodexCoordinatorSettings;
+  result: CodexToolResult;
+  signal: AbortSignal;
+}
+
+export interface CodexResultFinalization {
+  result: CodexToolResult;
+  commit(): void;
+  rollback(): Promise<void>;
+}
+
+export type CodexResultFinalizer = (
+  input: CodexResultFinalizationInput
+) => CodexResultFinalization | Promise<CodexResultFinalization>;

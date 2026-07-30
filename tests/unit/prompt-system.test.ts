@@ -67,14 +67,13 @@ describe("prompt system", () => {
       ],
       response_format: { type: "text" }
     }));
-    const rawHistory = "正文 @{bot.name} @{messages_64} @{conversation.group.thread_context}";
+    const rawHistory = "正文 @{bot.name} @{messages_64} @{conversation.group.orchestrator_result}";
     const rawInput = "当前输入 @{bot.name}";
 
     const rendered = renderFinalPromptTemplate(template, {
       messages_64: [{ role: "user", content: rawHistory }],
       "user.input": rawInput,
-      "bot.name": "普拉娜",
-      "conversation.group.thread_context": ""
+      "bot.name": "普拉娜"
     }, { opaqueVariables: new Set(["messages_64", "user.input"]) });
 
     expect(rendered.messages[1]?.content).toBe(rawHistory);

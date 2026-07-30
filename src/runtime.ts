@@ -45,7 +45,6 @@ import { RuntimeMemoryPipeline } from "./runtime/memoryPipeline.js";
 import * as runtimeDelivery from "./runtime/delivery.js";
 import * as runtimeConversations from "./runtime/conversations.js";
 import { RuntimeSelfie } from "./runtime/selfie.js";
-import { RuntimeGroupThreads } from "./runtime/groupThreadPipeline.js";
 import { RuntimeReplyDebounce } from "./runtime/replyDebounce.js";
 import { RuntimeConversationAssets } from "./runtime/conversationAssets.js";
 import { RuntimeScheduledTasks } from "./runtime/scheduledTasks.js";
@@ -54,6 +53,7 @@ import { RuntimeDirector } from "./runtime/director.js";
 import { RuntimeAir } from "./runtime/air.js";
 import { RuntimeWorkingMemory } from "./runtime/workMemory.js";
 import { RuntimeDreams } from "./runtime/dreamPipeline.js";
+import { stageCodexResultArtifacts } from "./runtime/codexArtifacts.js";
 import { createRuntimeDreamsForHost, forceRuntimeDreamForHost } from "./runtime/dreamRuntime.js";
 import { RuntimeTone } from "./runtime/tone.js";
 import { TaskLimiter, errorMessage, loadConversationRecords } from "./runtime/infrastructure.js";
@@ -63,6 +63,7 @@ import type {
   WorkspaceBashUnavailableReason
 } from "../services/tools/bashCapability.js";
 import type { BashExecutionBackend } from "../services/tools/bashAudit.js";
+import type { ConversationCapabilityContextV1 } from "../services/conversations/conversationCapability.js";
 import type { SystemConfigRuntimePort } from "../services/tools/systemConfigTool.js";
 import type { WorkspaceBashRuntimePort } from "../services/tools/bashRuntime.js";
 import type { ReplyTaskGate } from "../services/orchestration/broadcastStormDetector.js";
@@ -123,7 +124,6 @@ export class SunaRuntime {
   private readonly memory: RuntimeMemoryPipeline;
   private readonly tone: RuntimeTone;
   private readonly selfie: RuntimeSelfie;
-  private readonly groupThreads: RuntimeGroupThreads;
   private readonly replyDebounce: RuntimeReplyDebounce;
   private readonly conversationAssets: RuntimeConversationAssets;
   private readonly voice: RuntimeVoice;
@@ -155,6 +155,10 @@ export class SunaRuntime {
         codexRunner: options.codexRunner ?? new CodexToolRunner(),
         cleanupCodexProcess: cleanupPersistedCodexProcess,
         runDeferredTool: (job, signal) => this.inAgentContext(() => this.processDeferredToolJob(job, signal)),
+        finalizeCodexResult: (input) => this.inAgentContext(() => stageCodexResultArtifacts({
+          ...input,
+          cache: this.attachmentService.cache
+        })),
         observeCodexToolUsage: (observation) => this.inAgentContext(async () => {
           await appendRequestLog({
             category: "model.response",
@@ -232,7 +236,6 @@ export class SunaRuntime {
       this.memory = new RuntimeMemoryPipeline(this);
       this.tone = new RuntimeTone(this);
       this.selfie = new RuntimeSelfie(this);
-      this.groupThreads = new RuntimeGroupThreads(this);
       this.replyDebounce = new RuntimeReplyDebounce(
         this,
         optionalNonNegativeReplyDebounceMs(options.replyDebounceMs)
@@ -312,14 +315,16 @@ export class SunaRuntime {
   resolveProviderBashHandle(
     incoming: ParsedIncomingMessage,
     promptOverride?: string,
-    backend: BashExecutionBackend = "docker"
+    backend: BashExecutionBackend = "docker",
+    capability?: Readonly<ConversationCapabilityContextV1>
   ) {
     return runtimeReply.runtime_resolveProviderBashHandle.call(
       this,
       incoming,
       promptOverride,
       this.rawToolCapabilityResolver,
-      backend
+      backend,
+      capability
     );
   }
   async resolveToolCapabilities(
@@ -454,8 +459,6 @@ export class SunaRuntime {
   rewriteSelfiePrompt(...args: Parameters<RuntimeSelfie["rewriteSelfiePrompt"]>) { return this.inAgentContext(() => this.selfie.rewriteSelfiePrompt(...args)); }
   collectSelfieChatReferenceImages(...args: Parameters<RuntimeSelfie["collectSelfieChatReferenceImages"]>) { return this.selfie.collectSelfieChatReferenceImages(...args); }
   loadSelfieReferenceImages(...args: Parameters<RuntimeSelfie["loadSelfieReferenceImages"]>) { return this.selfie.loadSelfieReferenceImages(...args); }
-  prepareGroupThreadContext(...args: Parameters<RuntimeGroupThreads["prepareGroupThreadContext"]>) { return this.inAgentContext(() => this.groupThreads.prepareGroupThreadContext(...args)); }
-  groupThreadPromptContext(...args: Parameters<RuntimeGroupThreads["promptContext"]>) { return this.groupThreads.promptContext(...args); }
   activeReplyDebounce(...args: Parameters<RuntimeReplyDebounce["activeEvent"]>) { return this.replyDebounce.activeEvent(...args); }
   handlePersistedReplyDuplicate(...args: Parameters<RuntimeReplyDebounce["handlePersistedDuplicate"]>) { return this.replyDebounce.handlePersistedDuplicate(...args); }
   handleActiveReplyDebounceIncoming(...args: Parameters<RuntimeReplyDebounce["handleActiveIncoming"]>) { return this.replyDebounce.handleActiveIncoming(...args); }

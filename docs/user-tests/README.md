@@ -63,6 +63,10 @@ Conversation cases pass a raw OneBot event through the same parser, forward-mess
 
 `input.fixture` makes conversation preconditions executable. It can replace declared working-memory, long-term-memory and user-profile collections, replace a valid `AIR.md`, and create bounded UTF-8 files in the isolated Native or Docker workbench before raw OneBot ingress. Workbench paths are relative, traversal and symbolic-link directory components are rejected, and an existing target fails closed. Use `expected.requiredOutboundKinds` and `forbiddenOutboundKinds` to distinguish `message`, `asset`, and `poke`; total-count assertions alone are insufficient for silent and media cases.
 
+`input.fixture.attachmentSources` provides bounded Base64 file bytes for raw OneBot attachment events. The recording transport resolves them only when the request keeps the case `accountId`; reports retain safe resolution evidence and `expected.requiredInboundAttachments` can assert the parsed name, status, format, MIME, byte count, SHA-256, page count and stable handle.
+
+`resetKnowledge` may list `native`, `docker`, or both. Before fixture files are written, the driver removes copied source knowledge only inside a marker-verified isolated user-test workspace and recreates an empty `knowledge/` directory; duplicate or unknown backends are rejected. Use it whenever a case must prove that knowledge or media came only from `input.fixture`.
+
 Memory compression cases require a logical `now` plus `timePolicy: "rebase_to_runtime"`, replace the isolated working-memory document plus the complete declared `longTerm` and `userProfiles` collections, reload the isolated persona, then call the production `processMemoryClaim` pipeline with mock messages. Before seeding, every structured timestamp is shifted by the same offset from logical `now` to one captured runtime clock value, preserving event order and relative age. Reports include the non-content timeline evidence, working-memory diff, and user-profile before/after evidence.
 
 Dream cases require logical `now`, `timePolicy: "rebase_to_runtime"`, explicit `workingMemory`, `longTerm`, `userProfiles`, `persona`, `conversations`, `activeTasks`, and nullable `directorSchedule` fields. The driver shifts event timestamps and tasks to one captured runtime clock value, remaps Director items to the target Dream date while preserving their local wall-clock times, replaces the complete memory and conversation collections, creates declared active tasks, commits the declared Director schedule, reloads the declared persona files, and calls the production Dream branch without the manual-trigger notification, so no OneBot message is created. Timeline evidence records the fixture anchor, runtime anchor, offset, Dream schedule date, and Director date without content. `timePolicy: "fixed"` is accepted only as a declarative contract for controlled-clock unit tests and a live `run` rejects it. A Dream run requires a fresh isolated task/Director/Dream-history state; arbitrary prior Dream history, recall counters, system timezone, and per-case selection configuration remain deterministic unit-test responsibilities because production exposes no safe bulk seeding API for them.
@@ -84,9 +88,29 @@ Stateful media chains:
 
 Current-message media:
 
+- [`qq-private-pdf-attachment.md`](./qq-private-pdf-attachment.md)
+- [`parse-failed-attachment-export.md`](./parse-failed-attachment-export.md)
+- [`user-private-attachment-docker-workbench.md`](./user-private-attachment-docker-workbench.md)
 - [`current-message-image-reference.md`](./current-message-image-reference.md)
 - [`current-message-image-4k-retry-budget.md`](./current-message-image-4k-retry-budget.md)
 - [`cases/workbench-resources/admin-group-imports.md`](./cases/workbench-resources/admin-group-imports.md)
+
+Workbench resources:
+
+- [`dual-workbench-resource-addressing.md`](./dual-workbench-resource-addressing.md)
+
+Codex artifacts:
+
+- [`codex-chat-artifact-roundtrip.md`](./codex-chat-artifact-roundtrip.md)
+
+Selfie delivery:
+
+- [`selfie-direct-delivery.md`](./selfie-direct-delivery.md)
+- [`selfie-knowledge-reference-direct-delivery.md`](./selfie-knowledge-reference-direct-delivery.md)
+
+Group conversation reasoning:
+
+- [`group-topic-internal-reasoning.md`](./group-topic-internal-reasoning.md)
 
 ## Read-only test-account sampling
 

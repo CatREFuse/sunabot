@@ -16,7 +16,7 @@ import { appendReplySoftError } from "./replyModuleIsolation.js";
 import type { ReplyDelivery } from "./runtimeContracts.js";
 import type { ToneRewriteContext } from "./tone.js";
 
-type AsyncToolCallbackOptions = Pick<AsyncToolCompletionPayload["originalRequest"], "captureSequence" | "contextThroughSequence" | "threadContext" | "orchestratorResult"> & { signal: AbortSignal; isCurrent: () => boolean; delivery: ReplyDelivery; skipGroupThreadPreparation: true; messageOrigin: "async_tool_callback"; seedToolNames: string[]; };
+type AsyncToolCallbackOptions = Pick<AsyncToolCompletionPayload["originalRequest"], "captureSequence" | "contextThroughSequence" | "orchestratorResult"> & { signal: AbortSignal; isCurrent: () => boolean; delivery: ReplyDelivery; messageOrigin: "async_tool_callback"; seedToolNames: string[]; };
 
 interface ToolCompletionRuntimeHost { isReplyTaskCurrent(incoming: ParsedIncomingMessage, gate: ReplyGateSnapshot, signal?: AbortSignal): boolean; rewriteToneText(text: string, context?: ToneRewriteContext): Promise<string>; isAdminUser(userId: number): boolean; replyDeliveryDraft(...args: Parameters<typeof runtime_replyDeliveryDraft>): ReturnType<typeof runtime_replyDeliveryDraft>; replyToIncoming(channelKey: string, incoming: ParsedIncomingMessage, gateway: MessagingPort, options: AsyncToolCallbackOptions): Promise<unknown>; }
 
@@ -89,9 +89,7 @@ export async function runtime_replyToToolCompletion(
     delivery,
     captureSequence: payload.originalRequest.captureSequence,
     contextThroughSequence: payload.originalRequest.contextThroughSequence,
-    threadContext: payload.originalRequest.threadContext,
     orchestratorResult: payload.originalRequest.orchestratorResult,
-    skipGroupThreadPreparation: true,
     messageOrigin: "async_tool_callback",
     seedToolNames: [payload.toolName]
   });

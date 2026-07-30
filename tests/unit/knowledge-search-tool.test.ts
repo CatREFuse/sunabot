@@ -4,13 +4,20 @@ import { listToolMetadata } from "../../services/tools/toolRegistry.js";
 
 describe("knowledge_search tool", () => {
   it("is default-enabled only when the current Agent knowledge port is available", () => {
-    expect(listToolMetadata({ knowledge: { enabled: true, search: vi.fn() } }, [])
-      .find((tool) => tool.name === "knowledge_search")).toMatchObject({
+    const metadata = listToolMetadata({ knowledge: { enabled: true, search: vi.fn() } }, [])
+      .find((tool) => tool.name === "knowledge_search");
+    expect(metadata).toMatchObject({
         enabled: true,
         available: true,
         effectiveEnabled: true,
         execution: "inline"
       });
+    expect(metadata?.description).toContain(
+      "real Markdown image link"
+    );
+    expect(metadata?.description).toContain(
+      "prefix knowledge/ exactly once"
+    );
     expect(listToolMetadata({}, []).find((tool) => tool.name === "knowledge_search")).toMatchObject({
       available: false,
       effectiveEnabled: false

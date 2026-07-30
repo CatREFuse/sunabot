@@ -82,8 +82,7 @@ describe("SunaRuntime system_config boundary", () => {
       incoming,
       harness.gateway,
       {
-        ...(promptOverride === undefined ? {} : { promptOverride }),
-        ...(incoming.scope === "private" ? {} : { skipGroupThreadPreparation: true })
+        ...(promptOverride === undefined ? {} : { promptOverride })
       }
     );
 

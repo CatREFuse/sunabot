@@ -21,20 +21,29 @@ import { resolveProjectPath } from "../config.js";
 import type { AppConfig, ParsedIncomingMessage } from "../types.js";
 import { fileTypeFromBuffer } from "file-type";
 import crypto from "node:crypto";
+import {
+  resolveConversationWorkbench,
+  type ConversationCapabilityContextV1
+} from "../../services/conversations/conversationCapability.js";
 
 export function providerChatMediaForIncoming(
   config: AppConfig,
   incoming: ParsedIncomingMessage,
   promptOverride: string | undefined,
   cache: CacheStore,
-  isCurrent: () => boolean = () => true
+  isCurrent: () => boolean = () => true,
+  capability?: Readonly<ConversationCapabilityContextV1>
 ): ChatMediaToolPort | undefined {
   if (!isEligibleOneBotTurn(config, incoming, promptOverride)) return undefined;
   const sources = currentAndQuotedMediaSources(incoming);
   if (!sources.size) return undefined;
   const agentWorkspace = resolveProjectPath(config.persona.agentWorkspace);
   if (!agentWorkspace) return undefined;
-  const backend = incoming.scope === "private" ? "native" as const : "docker" as const;
+  const backend = capability
+    ? resolveConversationWorkbench(capability, "chat_media_export").primaryBackend
+    : incoming.scope === "private"
+      ? "native" as const
+      : "docker" as const;
   const exporter = new ChatMediaExportService({
     agentWorkspace,
     cache,
@@ -46,6 +55,9 @@ export function providerChatMediaForIncoming(
   const emojiImportAllowed = isAdminSender(incoming.userId, config.bot.adminQq.trim());
   return Object.freeze({
     export: (input: ExportChatMediaInput) => exporter.export(input),
+    freezeCodexInputs: (handles: readonly string[], jobDir: string) => (
+      exporter.freezeCodexInputs(handles, jobDir)
+    ),
     ...(emojiImportAllowed
       ? {
           importEmoji: async (input: ImportChatEmojiInput) => {

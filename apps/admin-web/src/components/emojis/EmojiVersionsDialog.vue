@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import type { EmojiVersionRecord } from "../../types/emojis";
+import type { WorkbenchBackend } from "../../types/workbench";
+import { workbenchLabel } from "../../types/workbench";
 import AuthenticatedImage from "../ui/AuthenticatedImage.vue";
 import DialogOverlay from "../ui/DialogOverlay.vue";
 
 defineProps<{
   emojiKey: string;
+  workbench: WorkbenchBackend;
   versions: readonly EmojiVersionRecord[];
   loading: boolean;
   deletingFileName: string;
@@ -31,7 +34,7 @@ function formatTime(value: string) {
       <header class="flex items-center justify-between gap-4 border-b border-line p-4">
         <div class="min-w-0">
           <h2 id="emoji-versions-title" class="truncate text-lg font-medium text-display">{{ emojiKey }} · 版本</h2>
-          <p class="mt-1 font-mono text-[10px] text-mute">{{ versions.length.toLocaleString("zh-CN") }} / 20</p>
+          <p class="mt-1 flex items-center gap-2 font-mono text-[10px] text-mute"><span class="inline-state px-1.5 py-0.5 text-[9px]">{{ workbenchLabel(workbench) }}</span>{{ versions.length.toLocaleString("zh-CN") }} / 20</p>
         </div>
         <button class="icon-btn" type="button" aria-label="关闭" @click="emit('close')"><i class="bx bx-x text-2xl" aria-hidden="true"></i></button>
       </header>

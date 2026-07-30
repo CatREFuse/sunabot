@@ -72,7 +72,6 @@ export async function ensurePromptTextFile(
   return filePath;
 }
 
-const GROUP_THREAD_CONTEXT_VARIABLE = "conversation.group.thread_context";
 const GROUP_ORCHESTRATOR_RESULT_VARIABLE = "conversation.group.orchestrator_result";
 const EMOJI_KEYS_VARIABLE = "conversation.emoji.keys";
 const EMOJI_SYNTAX_VARIABLE = "conversation.emoji.syntax";
@@ -237,55 +236,6 @@ const LEGACY_MEMORY_PROMPT_PARAGRAPHS: Record<MemoryPromptSchemaName, readonly s
     "如果没有值得记录的用户认知，输出 {\"profiles\":[]}。"
   ]
 };
-
-export async function migrateGroupReplyThreadContextVariable(
-  config: AppConfig,
-  fileName: string
-) {
-  const filePath = await resolveSafePromptFilePath(config, "system", fileName);
-  const markerPath = await resolveSafePromptFilePath(
-    config,
-    "system",
-    `.${path.basename(fileName)}.thread-context-v1`
-  );
-  if (await readOptional(markerPath)) return false;
-
-  const content = await readOptional(filePath);
-  if (!content.trim()) return false;
-  const template = parseFinalPromptTemplate(content);
-  const migrated = migrateGroupReplyThreadContextTemplate(template);
-  if (migrated !== template) {
-    await atomicWriteText(filePath, `${JSON.stringify(migrated, null, 2)}\n`);
-  }
-  await atomicWriteText(markerPath, "thread-context-v1\n");
-  return migrated !== template;
-}
-
-export function migrateGroupReplyThreadContextTemplate(
-  template: FinalPromptTemplate
-): FinalPromptTemplate {
-  if (extractPromptVariables(JSON.stringify(template)).includes(GROUP_THREAD_CONTEXT_VARIABLE)) {
-    return template;
-  }
-  const messages = [...template.messages];
-  const currentInputIndex = messages.findIndex((message) => (
-    typeof message === "object"
-    && message.role === "user"
-    && typeof message.content === "string"
-    && extractPromptVariables(message.content).includes("user.input")
-  ));
-  const finalUserIndex = findLastIndex(messages, (message) => (
-    typeof message === "object" && message.role === "user"
-  ));
-  const insertionIndex = currentInputIndex >= 0
-    ? currentInputIndex
-    : finalUserIndex >= 0 ? finalUserIndex : messages.length;
-  messages.splice(insertionIndex, 0, {
-    role: "developer",
-    content: `<thread_context>@{${GROUP_THREAD_CONTEXT_VARIABLE}}</thread_context>`
-  });
-  return { ...template, messages };
-}
 
 export async function migrateGroupReplyOrchestratorResultVariable(
   config: AppConfig,

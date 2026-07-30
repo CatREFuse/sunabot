@@ -1,3 +1,4 @@
+import path from "node:path";
 import { nanoid } from "nanoid";
 import {
   generatedImageMediaAsset,
@@ -108,12 +109,25 @@ export function outboundForRecord(record: ConversationRecord, text: string): Out
     media: []
   };
 }
-export function attachmentSourcePort(port: MessagingPort) {
+export function attachmentSourcePort(port: MessagingPort, accountId?: string) {
   const candidate = port as MessagingPort & Partial<AttachmentSourcePort>;
   if (typeof candidate.resolveAttachment !== "function" || typeof candidate.resolveAttachmentFallback !== "function") {
     throw new Error("Messaging adapter does not support attachment resolution.");
   }
-  return candidate as MessagingPort & AttachmentSourcePort;
+  const sourcePort = candidate as MessagingPort & AttachmentSourcePort;
+  const normalizedAccountId = accountId?.trim();
+  if (!normalizedAccountId) return sourcePort;
+  return {
+    resolveAttachment(input, options) {
+      return sourcePort.resolveAttachment({ ...input, accountId: normalizedAccountId }, options);
+    },
+    resolveAttachmentFallback(input, options) {
+      return sourcePort.resolveAttachmentFallback(
+        { ...input, accountId: normalizedAccountId },
+        options
+      );
+    }
+  } satisfies AttachmentSourcePort;
 }
 export function persistentIncomingKey(incoming: ParsedIncomingMessage) {
   return `${incoming.selfId ?? ""}:${conversationRecordId(incoming)}:${inboundMessageIdentityV1(incoming)}`;
@@ -128,13 +142,13 @@ export function queueIncomingSnapshot(incoming: ParsedIncomingMessage): ParsedIn
     ...incoming,
     sender: { ...incoming.sender },
     media: incoming.media.map((asset) => ({ ...asset })),
-    attachments: incoming.attachments.map((attachment) => ({ ...attachment })),
+    attachments: incoming.attachments.map(cloneRuntimeAttachment),
     replyMessageIds: [...incoming.replyMessageIds],
     quoteReferences: incoming.quoteReferences.map((quote) => ({
       ...quote,
       media: quote.media?.map((asset) => ({ ...asset })),
       imageUrls: quote.imageUrls ? [...quote.imageUrls] : undefined,
-      attachments: quote.attachments?.map((attachment) => ({ ...attachment }))
+      attachments: quote.attachments?.map(cloneRuntimeAttachment)
     }))
   };
 }
@@ -495,8 +509,26 @@ export function sanitizeAttachmentForPersistence(attachment: ParsedAttachment): 
   return {
     ...persisted,
     fileId: safePersistedFileIdentifier(persisted.fileId),
+    fileToken: safePersistedFileIdentifier(persisted.fileToken),
+    acquisition: persisted.acquisition?.status === "acquired"
+      ? { status: "acquired", blob: { ...persisted.acquisition.blob } }
+      : persisted.acquisition
+        ? { ...persisted.acquisition }
+        : undefined,
     textPreview: persistedAttachmentPreview(persisted),
     visualPagePaths: persisted.visualPagePaths?.slice(0, 12)
+  };
+}
+
+function cloneRuntimeAttachment(attachment: ParsedAttachment): ParsedAttachment {
+  return {
+    ...attachment,
+    acquisition: attachment.acquisition?.status === "acquired"
+      ? { status: "acquired", blob: { ...attachment.acquisition.blob } }
+      : attachment.acquisition
+        ? { ...attachment.acquisition }
+        : undefined,
+    visualPagePaths: attachment.visualPagePaths?.slice()
   };
 }
 export function persistedAttachmentPreview(attachment: ParsedAttachment) {
@@ -515,9 +547,17 @@ export function persistedAttachmentPreview(attachment: ParsedAttachment) {
   return partialLength > 0 ? `${preview.slice(0, partialLength)}…` : undefined;
 }
 export function safePersistedFileIdentifier(value: string | undefined) {
-  const result = value?.trim();
-  if (!result || result.length > 2_048) return undefined;
-  if (/^(?:data:[^,]*;base64,|base64:\/\/|https?:\/\/|file:)/i.test(result)) return undefined;
+  if (!value || /[\u0000-\u001f\u007f-\u009f]/u.test(value)) return undefined;
+  const result = value.trim();
+  if (
+    !result ||
+    result.length > 2_048 ||
+    result.includes("\\") ||
+    /^[a-z]:/i.test(result) ||
+    path.posix.isAbsolute(result) ||
+    path.win32.isAbsolute(result) ||
+    /^[a-z][a-z0-9+.-]*:/i.test(result)
+  ) return undefined;
   return result;
 }
 export function persistedAttachments(values: readonly ParsedAttachment[]) {
@@ -537,14 +577,23 @@ export function formatAttachmentListForContext(
     const handle = messageId && /^\d+$/.test(messageId)
       ? `；媒体句柄：message:${messageId}:file:${index}`
       : "";
-    return `${attachment.name}（${attachmentStatusLabel(attachment.status)}${handle}）`;
+    return `${attachment.name}（${attachmentStatusLabel(attachment)}${handle}）`;
   }).join("、");
 }
-export function attachmentStatusLabel(status: ParsedAttachment["status"]) {
+export function attachmentStatusLabel(
+  input: ParsedAttachment["status"] | Pick<ParsedAttachment, "status" | "acquisition" | "parseStatus">
+) {
+  const attachment = typeof input === "string" ? undefined : input;
+  const status = typeof input === "string" ? input : input.status;
   if (status === "ready") return "已读取";
   if (status === "partial") return "部分读取";
   if (status === "too_large") return "超过 256 MB";
   if (status === "unsupported") return "格式不支持";
+  if (
+    status === "failed"
+    && attachment?.acquisition?.status === "acquired"
+    && attachment.parseStatus === "parse_failed"
+  ) return "正文读取失败，原文件可导出";
   if (status === "failed") return "读取失败";
   return "处理中";
 }

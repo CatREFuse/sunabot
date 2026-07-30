@@ -83,6 +83,7 @@ function validateUserTestCase(value: unknown): UserTestCase {
     "forbiddenText",
     "requiredOutboundKinds",
     "forbiddenOutboundKinds",
+    "requiredInboundAttachments",
     "minimumOutboundCount",
     "maximumOutboundCount"
   ], true);
@@ -110,6 +111,7 @@ function validateUserTestCase(value: unknown): UserTestCase {
       ...optionalStringArray(expected.forbiddenText, "forbiddenText"),
       ...optionalOutboundKindArray(expected.requiredOutboundKinds, "requiredOutboundKinds"),
       ...optionalOutboundKindArray(expected.forbiddenOutboundKinds, "forbiddenOutboundKinds"),
+      ...optionalInboundAttachmentArray(expected.requiredInboundAttachments),
       ...optionalCount(expected.minimumOutboundCount, "minimumOutboundCount"),
       ...optionalCount(expected.maximumOutboundCount, "maximumOutboundCount")
     },
@@ -263,8 +265,27 @@ function validateConversationFixture(value: unknown) {
     "longTerm",
     "userProfiles",
     "air",
-    "workbenchFiles"
+    "resetKnowledge",
+    "workbenchFiles",
+    "attachmentSources"
   ], true);
+  const resetKnowledge = fixture.resetKnowledge == null
+    ? undefined
+    : array(
+        fixture.resetKnowledge,
+        "USER_TEST_CASE_CONVERSATION_FIXTURE_RESET_KNOWLEDGE_INVALID"
+      ).map((backend) => {
+        if (backend !== "native" && backend !== "docker") {
+          throw new Error("USER_TEST_CASE_CONVERSATION_FIXTURE_RESET_KNOWLEDGE_INVALID");
+        }
+        return backend;
+      });
+  if (
+    resetKnowledge &&
+    (resetKnowledge.length > 2 || new Set(resetKnowledge).size !== resetKnowledge.length)
+  ) {
+    throw new Error("USER_TEST_CASE_CONVERSATION_FIXTURE_RESET_KNOWLEDGE_INVALID");
+  }
   const files = fixture.workbenchFiles == null
     ? undefined
     : array(
@@ -303,6 +324,61 @@ function validateConversationFixture(value: unknown) {
   if (files && files.length > 64) {
     throw new Error("USER_TEST_CASE_CONVERSATION_FIXTURE_FILES_INVALID");
   }
+  const attachmentSources = fixture.attachmentSources == null
+    ? undefined
+    : array(
+        fixture.attachmentSources,
+        "USER_TEST_CASE_CONVERSATION_FIXTURE_ATTACHMENTS_INVALID"
+      ).map((item, index) => {
+        const source = record(
+          item,
+          "USER_TEST_CASE_CONVERSATION_FIXTURE_ATTACHMENTS_INVALID"
+        );
+        exactKeys(source, ["fileId", "name", "contentBase64"]);
+        const fileId = boundedText(
+          source.fileId,
+          `fixture.attachmentSources[${index}].fileId`,
+          1,
+          2_048
+        );
+        if (/^(?:data:|base64:\/\/|https?:\/\/|file:)/iu.test(fileId)) {
+          throw new Error("USER_TEST_CASE_CONVERSATION_FIXTURE_ATTACHMENT_ID_INVALID");
+        }
+        const contentBase64 = boundedText(
+          source.contentBase64,
+          `fixture.attachmentSources[${index}].contentBase64`,
+          4,
+          1_500_000,
+          /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u
+        );
+        const content = Buffer.from(contentBase64, "base64");
+        if (
+          content.length === 0 ||
+          content.length > 1_000_000 ||
+          content.toString("base64") !== contentBase64
+        ) {
+          throw new Error("USER_TEST_CASE_CONVERSATION_FIXTURE_ATTACHMENT_BASE64_INVALID");
+        }
+        return {
+          fileId,
+          name: boundedText(
+            source.name,
+            `fixture.attachmentSources[${index}].name`,
+            1,
+            180
+          ),
+          contentBase64
+        };
+      });
+  if (
+    attachmentSources &&
+    (
+      attachmentSources.length > 4 ||
+      new Set(attachmentSources.map((item) => item.fileId)).size !== attachmentSources.length
+    )
+  ) {
+    throw new Error("USER_TEST_CASE_CONVERSATION_FIXTURE_ATTACHMENTS_INVALID");
+  }
   return {
     ...(fixture.workingMemory == null ? {} : {
       workingMemory: validateWorkingMemoryFixture(fixture.workingMemory)
@@ -316,7 +392,9 @@ function validateConversationFixture(value: unknown) {
     ...(fixture.air == null ? {} : {
       air: boundedText(fixture.air, "fixture.air", 1, 64 * 1_024)
     }),
-    ...(files == null ? {} : { workbenchFiles: files })
+    ...(resetKnowledge == null ? {} : { resetKnowledge }),
+    ...(files == null ? {} : { workbenchFiles: files }),
+    ...(attachmentSources == null ? {} : { attachmentSources })
   };
 }
 
@@ -687,6 +765,150 @@ function optionalOutboundKindArray(value: unknown, key: string) {
     throw new Error(`USER_TEST_CASE_${key.toUpperCase()}_INVALID`);
   }
   return { [key]: [...new Set(items)] };
+}
+
+function optionalInboundAttachmentArray(value: unknown) {
+  if (value == null) return {};
+  const attachments = array(
+    value,
+    "USER_TEST_CASE_REQUIRED_INBOUND_ATTACHMENTS_INVALID"
+  ).map((item, index) => {
+    const attachment = record(
+      item,
+      "USER_TEST_CASE_REQUIRED_INBOUND_ATTACHMENTS_INVALID"
+    );
+    exactKeys(attachment, [
+      "messageId",
+      "index",
+      "name",
+      "status",
+      "acquisitionStatus",
+      "parseStatus",
+      "blobSha256",
+      "blobSizeBytes",
+      "blobMimeType",
+      "format",
+      "mimeType",
+      "sizeBytes",
+      "sha256",
+      "pageCount",
+      "handle"
+    ], true);
+    if (!["ready", "partial", "unsupported", "too_large", "failed"].includes(String(attachment.status))) {
+      throw new Error("USER_TEST_CASE_REQUIRED_INBOUND_ATTACHMENT_STATUS_INVALID");
+    }
+    if (
+      attachment.acquisitionStatus != null
+      && !["pending", "acquired", "failed"].includes(String(attachment.acquisitionStatus))
+    ) {
+      throw new Error("USER_TEST_CASE_REQUIRED_INBOUND_ATTACHMENT_ACQUISITION_INVALID");
+    }
+    if (
+      attachment.parseStatus != null
+      && !["not_started", "pending", "ready", "partial", "unsupported", "parse_failed"]
+        .includes(String(attachment.parseStatus))
+    ) {
+      throw new Error("USER_TEST_CASE_REQUIRED_INBOUND_ATTACHMENT_PARSE_INVALID");
+    }
+    return {
+      messageId: boundedText(
+        attachment.messageId,
+        `requiredInboundAttachments[${index}].messageId`,
+        1,
+        128
+      ),
+      index: nonNegativeInteger(
+        attachment.index,
+        `requiredInboundAttachments[${index}].index`
+      ),
+      name: boundedText(
+        attachment.name,
+        `requiredInboundAttachments[${index}].name`,
+        1,
+        180
+      ),
+      status: attachment.status,
+      ...(attachment.acquisitionStatus == null ? {} : {
+        acquisitionStatus: attachment.acquisitionStatus
+      }),
+      ...(attachment.parseStatus == null ? {} : {
+        parseStatus: attachment.parseStatus
+      }),
+      ...(attachment.blobSha256 == null ? {} : {
+        blobSha256: boundedText(
+          attachment.blobSha256,
+          `requiredInboundAttachments[${index}].blobSha256`,
+          64,
+          64,
+          /^[a-f0-9]{64}$/u
+        )
+      }),
+      ...(attachment.blobSizeBytes == null ? {} : {
+        blobSizeBytes: nonNegativeInteger(
+          attachment.blobSizeBytes,
+          `requiredInboundAttachments[${index}].blobSizeBytes`
+        )
+      }),
+      ...(attachment.blobMimeType == null ? {} : {
+        blobMimeType: boundedText(
+          attachment.blobMimeType,
+          `requiredInboundAttachments[${index}].blobMimeType`,
+          1,
+          128
+        )
+      }),
+      ...(attachment.format == null ? {} : {
+        format: boundedText(
+          attachment.format,
+          `requiredInboundAttachments[${index}].format`,
+          1,
+          32
+        )
+      }),
+      ...(attachment.mimeType == null ? {} : {
+        mimeType: boundedText(
+          attachment.mimeType,
+          `requiredInboundAttachments[${index}].mimeType`,
+          1,
+          128
+        )
+      }),
+      ...(attachment.sizeBytes == null ? {} : {
+        sizeBytes: nonNegativeInteger(
+          attachment.sizeBytes,
+          `requiredInboundAttachments[${index}].sizeBytes`
+        )
+      }),
+      ...(attachment.sha256 == null ? {} : {
+        sha256: boundedText(
+          attachment.sha256,
+          `requiredInboundAttachments[${index}].sha256`,
+          64,
+          64,
+          /^[a-f0-9]{64}$/u
+        )
+      }),
+      ...(attachment.pageCount == null ? {} : {
+        pageCount: nonNegativeInteger(
+          attachment.pageCount,
+          `requiredInboundAttachments[${index}].pageCount`
+        )
+      }),
+      ...(attachment.handle == null ? {} : {
+        handle: boundedText(
+          attachment.handle,
+          `requiredInboundAttachments[${index}].handle`,
+          1,
+          256,
+          /^message:[^:]+:file:\d+$/u
+        )
+      })
+    };
+  });
+  if (attachments.length > 4) {
+    throw new Error("USER_TEST_CASE_REQUIRED_INBOUND_ATTACHMENTS_INVALID");
+  }
+  return { requiredInboundAttachments: attachments };
 }
 
 function optionalCount(value: unknown, key: string) {

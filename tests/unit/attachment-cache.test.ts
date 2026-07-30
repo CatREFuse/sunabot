@@ -7,8 +7,10 @@ import {
   mkdir,
   readFile,
   readdir,
+  rename,
   rm,
   stat,
+  symlink,
   writeFile
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -287,6 +289,94 @@ describe("attachment cache", () => {
       cacheHit: true
     });
     expect(Object.keys((await store.getIndex()).entries)).toEqual([imported.sha256]);
+  });
+
+  it("rejects a symbolic-link import source without reading its target", async () => {
+    const root = await temporaryRoot();
+    const outsidePath = path.join(root, "outside.bin");
+    const linkPath = path.join(root, "source-link.bin");
+    await writeFile(outsidePath, "outside bytes");
+    await symlink(outsidePath, linkPath);
+    const store = new CacheStore(path.join(root, "cache"), {
+      minimumFreeBytes: 0,
+      statfsImpl: ampleStatFs
+    });
+
+    await expect(store.importFile(linkPath)).rejects.toEqual(
+      expect.objectContaining({ code: "import_failed" })
+    );
+    expect(await partFiles(path.join(root, "cache"))).toEqual([]);
+  });
+
+  it("never imports replacement bytes when the source path changes mid-stream", async () => {
+    const root = await temporaryRoot();
+    const sourcePath = path.join(root, "source.bin");
+    const movedPath = path.join(root, "source-opened.bin");
+    const originalBytes = Buffer.alloc(2 * 1024 * 1024, 0x41);
+    const replacementBytes = Buffer.from("replacement path bytes");
+    await writeFile(sourcePath, originalBytes);
+    const store = new CacheStore(path.join(root, "cache"), {
+      minimumFreeBytes: 0,
+      statfsImpl: ampleStatFs
+    });
+    await store.initialize();
+    let releaseRead!: () => void;
+    let signalRead!: () => void;
+    const readStarted = new Promise<void>((resolve) => {
+      signalRead = resolve;
+    });
+    const continueRead = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    const ensureAvailableSpace = store.janitor.ensureAvailableSpace.bind(store.janitor);
+    let blocked = false;
+    vi.spyOn(store.janitor, "ensureAvailableSpace").mockImplementation(async (bytes) => {
+      await ensureAvailableSpace(bytes);
+      if (!blocked) {
+        blocked = true;
+        signalRead();
+        await continueRead;
+      }
+    });
+
+    const importing = store.importFile(sourcePath);
+    await readStarted;
+    await rename(sourcePath, movedPath);
+    await writeFile(sourcePath, replacementBytes);
+    releaseRead();
+    const outcome = await importing.then(
+      (value) => ({ ok: true as const, value }),
+      (error) => ({ ok: false as const, error })
+    );
+    if (outcome.ok) {
+      expect(outcome.value.sha256)
+        .toBe(createHash("sha256").update(originalBytes).digest("hex"));
+      await expect(readFile(outcome.value.filePath)).resolves.toEqual(originalBytes);
+    } else {
+      expect(outcome.error).toEqual(expect.objectContaining({ code: "import_failed" }));
+    }
+    expect(await store.getEntry(createHash("sha256").update(replacementBytes).digest("hex")))
+      .toBeUndefined();
+    await expect(readFile(sourcePath)).resolves.toEqual(replacementBytes);
+  });
+
+  it("releases a retained active task when post-commit cleanup fails", async () => {
+    const root = await temporaryRoot();
+    const sourcePath = path.join(root, "source.bin");
+    const bytes = Buffer.from("cleanup failure fixture");
+    await writeFile(sourcePath, bytes);
+    const store = new CacheStore(path.join(root, "cache"), {
+      minimumFreeBytes: 0,
+      statfsImpl: ampleStatFs
+    });
+    await store.initialize();
+    vi.spyOn(store.janitor, "cleanup").mockRejectedValueOnce(new Error("cleanup failed"));
+
+    await expect(store.importFile(sourcePath, { retainActiveTask: true }))
+      .rejects.toEqual(expect.objectContaining({ code: "import_failed" }));
+
+    expect(store.indexRepository.listReclaimableEntries().map((entry) => entry.sha256))
+      .toContain(createHash("sha256").update(bytes).digest("hex"));
   });
 
   it("rejects an oversized shared file before creating a part", async () => {

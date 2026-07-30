@@ -7,6 +7,7 @@ import KnowledgeSearchPanel from "../components/knowledge/KnowledgeSearchPanel.v
 import KnowledgeUploadDialog from "../components/knowledge/KnowledgeUploadDialog.vue";
 import PageHeader from "../components/ui/PageHeader.vue";
 import type { KnowledgeDocument } from "../types/knowledge";
+import { workbenchResourceKey } from "../types/workbench";
 
 const data = useKnowledgeBase();
 const agentId = computed(() => activeAgentIdState.value || "plana");
@@ -66,11 +67,12 @@ async function upload(input: { path: string; content: string }) {
 }
 
 async function remove(document: KnowledgeDocument) {
-  if (pendingDelete.value !== document.path) {
-    pendingDelete.value = document.path;
+  const key = workbenchResourceKey(document.workbench ?? "native", document.path);
+  if (pendingDelete.value !== key) {
+    pendingDelete.value = key;
     return;
   }
-  const ok = await data.remove(document.path, agentId.value);
+  const ok = await data.remove(document, agentId.value);
   pendingDelete.value = "";
   status.value = ok ? "已删除" : data.error.value;
   statusKind.value = ok ? "success" : "error";

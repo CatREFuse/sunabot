@@ -35,8 +35,7 @@ describe("SystemConfigService", () => {
       autoReply: { private: true, userGroup: true, botGroup: false },
       orchestrator: {
         enabled: false,
-        scope: "ambient_group_replies",
-        groupThreadClassifierControlled: false
+        scope: "ambient_group_replies"
       },
       tone: {
         enabled: false,
@@ -404,7 +403,6 @@ describe("SystemConfigService", () => {
       persisted: false,
       effectiveFrom: "next_turn",
       scope: "ambient_group_replies",
-      groupThreadClassifierControlled: false,
       changes: ["orchestrator.enabled"]
     });
     expect(second).toEqual({

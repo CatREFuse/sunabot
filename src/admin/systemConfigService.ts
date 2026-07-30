@@ -110,11 +110,9 @@ export class SystemConfigService {
       orchestrator: {
         enabled: config.bot.orchestrator.enabled,
         model: config.bot.orchestrator.userGroupchatOrchestratorModel,
-        groupThreadModel: config.bot.orchestrator.groupThreadModel,
         messageThreshold: config.bot.orchestrator.messageThreshold,
         recentMessageWindowMs: config.bot.orchestrator.recentMessageWindowMs,
-        scope: "ambient_group_replies",
-        groupThreadClassifierControlled: false
+        scope: "ambient_group_replies"
       },
       search: {
         implementation: config.bot.tools.websearch.provider,
@@ -252,8 +250,7 @@ export class SystemConfigService {
     const after = { enabled: input.enabled! };
     const changes = changedFields(before, after, "orchestrator");
     if (!changes.length) return noOp("set_orchestrator", before, after, {
-      scope: "ambient_group_replies",
-      groupThreadClassifierControlled: false
+      scope: "ambient_group_replies"
     });
     const orchestrator = structuredClone(config.bot.orchestrator);
     orchestrator.enabled = after.enabled;
@@ -263,8 +260,7 @@ export class SystemConfigService {
         value: orchestrator
       });
     }, {
-      scope: "ambient_group_replies",
-      groupThreadClassifierControlled: false
+      scope: "ambient_group_replies"
     });
   }
 

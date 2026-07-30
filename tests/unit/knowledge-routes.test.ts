@@ -59,6 +59,94 @@ describe("knowledge routes", () => {
     await app.close();
   });
 
+  it("merges Native and Docker list and search results with source locations", async () => {
+    const snapshot = (path: string) => ({
+      ok: true as const,
+      root: "knowledge" as const,
+      documents: [{
+        path,
+        format: "markdown" as const,
+        sizeBytes: 24,
+        chunkCount: 1,
+        status: "indexed" as const,
+        updatedAt: "2026-07-30T08:00:00.000Z"
+      }],
+      fileCount: 1,
+      chunkCount: 1,
+      errorCount: 0,
+      indexedAt: "2026-07-30T08:00:00.000Z"
+    });
+    const services = {
+      native: {
+        list: vi.fn(async () => snapshot("native.md")),
+        reindex: vi.fn(async () => snapshot("native.md")),
+        search: vi.fn(async () => ({
+          ok: true,
+          query: "双工作区",
+          matches: [{
+            path: "native.md",
+            format: "markdown" as const,
+            ordinal: 0,
+            startLine: 1,
+            endLine: 1,
+            content: "Native",
+            score: 2
+          }]
+        })),
+        uploadMarkdown: vi.fn(),
+        deleteDocument: vi.fn()
+      },
+      docker: {
+        list: vi.fn(async () => snapshot("docker.md")),
+        reindex: vi.fn(async () => snapshot("docker.md")),
+        search: vi.fn(async () => ({
+          ok: true,
+          query: "双工作区",
+          matches: [{
+            path: "docker.md",
+            format: "markdown" as const,
+            ordinal: 0,
+            startLine: 1,
+            endLine: 1,
+            content: "Docker",
+            score: 3
+          }]
+        })),
+        uploadMarkdown: vi.fn(),
+        deleteDocument: vi.fn()
+      }
+    };
+    const app = Fastify();
+    registerKnowledgeRoutes(app, {
+      getService: (_agentId, backend) => services[backend]
+    });
+
+    const list = await app.inject({
+      method: "GET",
+      url: "/api/knowledge?agentId=plana&workbench=all"
+    });
+    expect(list.statusCode, list.body).toBe(200);
+    expect(list.json()).toMatchObject({
+      fileCount: 2,
+      chunkCount: 2,
+      documents: [
+        { path: "native.md", workbench: "native" },
+        { path: "docker.md", workbench: "docker" }
+      ]
+    });
+
+    const search = await app.inject({
+      method: "GET",
+      url: "/api/knowledge/search?agentId=plana&workbench=all&q=双工作区&limit=2"
+    });
+    expect(search.statusCode, search.body).toBe(200);
+    expect(search.json().matches).toEqual([
+      expect.objectContaining({ path: "docker.md", workbench: "docker" }),
+      expect.objectContaining({ path: "native.md", workbench: "native" })
+    ]);
+    await app.close();
+  });
+
   it("rejects invalid search and upload payloads before service execution", async () => {
     const service = {
       list: vi.fn(), reindex: vi.fn(), search: vi.fn(), uploadMarkdown: vi.fn(), deleteDocument: vi.fn()

@@ -449,14 +449,9 @@ function validateTone(input: unknown, providers?: AppConfig["providers"]): BotTo
 function validateOrchestrator(input: unknown): BotOrchestratorSettings {
   const value = object(input, "orchestrator");
   exactKeys(value, [
-    "enabled", "userGroupchatOrchestratorModel", "groupThreadModel", "reasoningEffort", "promptFile", "messageThreshold", "recentMessageWindowMs"
+    "enabled", "userGroupchatOrchestratorModel", "reasoningEffort", "promptFile", "messageThreshold", "recentMessageWindowMs"
   ], "orchestrator");
   const model = requiredString(value.userGroupchatOrchestratorModel, "orchestrator.userGroupchatOrchestratorModel", {
-    trim: true,
-    min: 1,
-    max: 200
-  });
-  const groupThreadModel = requiredString(value.groupThreadModel, "orchestrator.groupThreadModel", {
     trim: true,
     min: 1,
     max: 200
@@ -466,7 +461,6 @@ function validateOrchestrator(input: unknown): BotOrchestratorSettings {
   return {
     enabled: boolean(value.enabled, "orchestrator.enabled"),
     userGroupchatOrchestratorModel: model,
-    groupThreadModel,
     ...(reasoningEffort ? { reasoningEffort } : {}),
     promptFile: pathString(value.promptFile, "orchestrator.promptFile", true),
     messageThreshold: integer(value.messageThreshold, "orchestrator.messageThreshold", 0, 200),

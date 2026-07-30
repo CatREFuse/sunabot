@@ -436,6 +436,7 @@ export interface SelfieReferenceImage {
   originalUrl: string;
   displayUrl: string;
   placeholderUrl: string;
+  workbench?: "native" | "docker";
 }
 
 export interface SelfieReferencePayload {

@@ -184,14 +184,6 @@ describe("first-run bootstrap journal", () => {
       }
     },
     {
-      label: "missing group thread state table",
-      mutate(workspace: string) {
-        const database = new DatabaseSync(path.join(workspace, "business/data/sunabot.sqlite"));
-        database.exec("DROP TABLE conversation_thread_states");
-        database.close();
-      }
-    },
-    {
       label: "missing emojis table",
       mutate(workspace: string) {
         const database = new DatabaseSync(path.join(workspace, "business/data/sunabot.sqlite"));

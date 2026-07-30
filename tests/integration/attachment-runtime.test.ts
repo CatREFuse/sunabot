@@ -80,12 +80,86 @@ describe("attachment runtime integration", () => {
         source: "message",
         status: "pending",
         name: "发布计划.pdf",
-        fileId: "cq-file-id",
+        fileToken: "cq-file-id",
         sizeBytes: 4096,
         busId: 103,
         userId: 2002
       })
     ]);
+  });
+
+  it("keeps OneBot file_id, file token, temporary URL and display name separate", () => {
+    const incoming = parseOneBotInboundMessage({
+      post_type: "message",
+      message_type: "private",
+      message_id: 1004,
+      user_id: 2002,
+      message: [{
+        type: "file",
+        data: {
+          name: "显示名称.pdf",
+          file_id: "protocol-file-id",
+          file: "protocol-file-token",
+          url: "https://cdn.example.test/temporary.pdf",
+          file_size: 64
+        }
+      }]
+    });
+
+    expect(incoming?.attachments[0]).toMatchObject({
+      name: "显示名称.pdf",
+      fileId: "protocol-file-id",
+      fileToken: "protocol-file-token",
+      url: "https://cdn.example.test/temporary.pdf",
+      sizeBytes: 64
+    });
+  });
+
+  it("rejects path-like and non-token file identifiers before runtime and persistence", () => {
+    const unsafeIdentifiers = [
+      "/private/tmp/qq-private.pdf",
+      "C:\\NapCat\\temp\\qq-private.pdf",
+      "relative\\windows\\qq-private.pdf",
+      "https://qq.example.test/temporary.pdf",
+      "protocol-token\u0000suffix"
+    ];
+
+    for (const identifier of unsafeIdentifiers) {
+      const incoming = parseOneBotInboundMessage({
+        post_type: "message",
+        message_type: "private",
+        message_id: 1005,
+        user_id: 2002,
+        message: [{
+          type: "file",
+          data: {
+            name: "显示名称.pdf",
+            file_id: identifier,
+            file: identifier
+          }
+        }]
+      });
+      expect(incoming?.attachments[0]).not.toHaveProperty("fileId");
+      expect(incoming?.attachments[0]).not.toHaveProperty("fileToken");
+
+      const persisted = sanitizeAttachmentForPersistence({
+        ...readyAttachment(`unsafe-${unsafeIdentifiers.indexOf(identifier)}`, "显示名称.pdf"),
+        fileId: identifier,
+        fileToken: identifier
+      });
+      expect(persisted.fileId).toBeUndefined();
+      expect(persisted.fileToken).toBeUndefined();
+    }
+
+    const persistedTokens = sanitizeAttachmentForPersistence({
+      ...readyAttachment("safe-identifiers", "显示名称.pdf"),
+      fileId: "protocol-file-id",
+      fileToken: "protocol-file-token"
+    });
+    expect(persistedTokens).toMatchObject({
+      fileId: "protocol-file-id",
+      fileToken: "protocol-file-token"
+    });
   });
 
   it("extracts a quoted file from a get_msg response", () => {

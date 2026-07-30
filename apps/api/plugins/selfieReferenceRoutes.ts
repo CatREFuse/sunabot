@@ -27,6 +27,29 @@ export function registerSelfieReferenceRoutes(app: FastifyInstance, options: Sel
   app.get("/api/selfie-references", {
     schema: { querystring: openObject, response: { 200: openObject } }
   }, async (request) => {
+    if (requestWorkbenchScope(request.query) === "all") {
+      const agentId = requestAgentId(request.query);
+      if (!options.getRepository) {
+        badRequest("WORKBENCH_BACKEND_UNAVAILABLE", "当前接口未配置双 Workbench。", "workbench");
+      }
+      const [native, docker] = await Promise.all([
+        options.getRepository(agentId, "native").list(),
+        options.getRepository(agentId, "docker").list()
+      ]);
+      return {
+        maxImages: Math.max(native.maxImages, docker.maxImages),
+        images: [
+          ...native.images.map((image) => ({
+            ...publicImage(image, agentId, "native"),
+            workbench: "native" as const
+          })),
+          ...docker.images.map((image) => ({
+            ...publicImage(image, agentId, "docker"),
+            workbench: "docker" as const
+          }))
+        ]
+      };
+    }
     const context = repositoryContext(options, request.query);
     return withContentUrls(await context.repository.list(), context.agentId, context.backend);
   });
@@ -120,6 +143,13 @@ function requestWorkbenchBackend(query: unknown): AgentWorkbenchBackend {
   if (value === undefined || value === "" || value === "native") return "native";
   if (value === "docker") return "docker";
   badRequest("WORKBENCH_BACKEND_INVALID", "Workbench 参数无效。", "workbench");
+}
+
+function requestWorkbenchScope(query: unknown): AgentWorkbenchBackend | "all" {
+  const value = query && typeof query === "object" && !Array.isArray(query)
+    ? (query as { workbench?: unknown }).workbench
+    : undefined;
+  return value === "all" ? "all" : requestWorkbenchBackend(query);
 }
 
 function parseVariant(value: string | undefined): SelfieReferenceVariant {

@@ -10,6 +10,10 @@ import {
 } from "../../services/tools/bashAudit.js";
 import type { RuntimeToolCapabilityResolver } from "../../services/tools/bashCapability.js";
 import type { WorkspaceBashRuntimePort } from "../../services/tools/bashRuntime.js";
+import {
+  resolveConversationWorkbench,
+  type ConversationCapabilityContextV1
+} from "../../services/conversations/conversationCapability.js";
 import { resolveProjectPath } from "../config.js";
 import type { AppConfig, ChatMessage, ConversationMessageQuote, ConversationRecord, ParsedIncomingMessage } from "../types.js";
 import { clampInteger, estimatePromptTokens, isAdminUserId, isModelVisibleConversationMessage, toContextChatMessage } from "./conversationMemoryHelpers.js";
@@ -245,13 +249,21 @@ export async function runtime_resolveProviderBashHandle(
   incoming: ParsedIncomingMessage,
   promptOverride: string | undefined,
   capabilityResolver?: RuntimeToolCapabilityResolver,
-  backend: BashExecutionBackend = "docker"
+  backend: BashExecutionBackend = "docker",
+  capability?: Readonly<ConversationCapabilityContextV1>
 ): Promise<ProviderBashOptions | undefined> {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const epoch = this.configEpoch;
+    if (capability && capability.configEpoch !== epoch) return undefined;
     const config = deepFreeze(structuredClone(this.config));
     const auditPort = this.bashAudit;
-    const candidate = resolveProviderBashCandidate(config, incoming, promptOverride, backend);
+    const candidate = resolveProviderBashCandidate(
+      config,
+      incoming,
+      promptOverride,
+      backend,
+      capability
+    );
     if (!candidate || !auditPort || !capabilityResolver) return undefined;
 
     let auditAvailable = false;
@@ -312,7 +324,8 @@ function resolveProviderBashCandidate(
   config: Readonly<AppConfig>,
   incoming: ParsedIncomingMessage,
   promptOverride: string | undefined,
-  backend: BashExecutionBackend
+  backend: BashExecutionBackend,
+  capability?: Readonly<ConversationCapabilityContextV1>
 ) {
   const bash = config.bot.bash;
   const senderId = incoming.sender?.id?.trim();
@@ -331,6 +344,17 @@ function resolveProviderBashCandidate(
     && Number.isSafeInteger(incoming.selfId)
     && Number(incoming.selfId) > 0
     && (privateConversation || groupConversation);
+  if (capability) {
+    try {
+      const plan = resolveConversationWorkbench(
+        capability,
+        backend === "native" ? "bash_native" : "bash_docker"
+      );
+      if (plan.primaryBackend !== backend) return undefined;
+    } catch {
+      return undefined;
+    }
+  }
   if (
     !bash.enabled
     || promptOverride !== undefined

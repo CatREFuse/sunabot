@@ -9,6 +9,8 @@ import type {
   EmojiVersionsPayload
 } from "../types/emojis";
 import { emojiKeyValidationError, normalizeEmojiKey } from "../utils/emojiKey";
+import type { WorkbenchBackend } from "../types/workbench";
+import { workbenchResourceKey } from "../types/workbench";
 import { apiRequest } from "./useAdminApi";
 
 const MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
@@ -26,6 +28,7 @@ export function useEmojis() {
   const uploadingKey = shallowRef("");
   const deletingKey = shallowRef("");
   const versionKey = shallowRef("");
+  const versionWorkbench = shallowRef<WorkbenchBackend>("native");
   const versions = shallowRef<EmojiVersionRecord[]>([]);
   const loadingVersions = shallowRef(false);
   const deletingVersion = shallowRef("");
@@ -46,7 +49,7 @@ export function useEmojis() {
     loading.value = true;
     status.value = { kind: "idle", message: "" };
     try {
-      const payload = await apiRequest<EmojiPayload>(agentPath("/api/emojis", normalizedAgentId), {
+      const payload = await apiRequest<EmojiPayload>(agentPath("/api/emojis", normalizedAgentId, "all"), {
         signal: controller.signal
       });
       if (!isCurrent(normalizedAgentId, context) || generation !== loadGeneration) return false;
@@ -63,7 +66,11 @@ export function useEmojis() {
     }
   }
 
-  async function upload(agentId: string, input: EmojiUploadInput) {
+  async function upload(
+    agentId: string,
+    input: EmojiUploadInput,
+    workbench: WorkbenchBackend = "native"
+  ) {
     const normalizedAgentId = normalizeAgentId(agentId);
     activate(normalizedAgentId);
     if (uploading.value) return false;
@@ -75,10 +82,10 @@ export function useEmojis() {
     const key = normalizeEmojiKey(input.key);
     const context = contextGeneration;
     uploading.value = true;
-    uploadingKey.value = key;
+    uploadingKey.value = workbenchResourceKey(workbench, key);
     status.value = { kind: "idle", message: "" };
     try {
-      await apiRequest<EmojiPayload>(agentPath("/api/emojis", normalizedAgentId), {
+      await apiRequest<EmojiPayload>(agentPath("/api/emojis", normalizedAgentId, workbench), {
         method: "POST",
         body: JSON.stringify({
           key,
@@ -88,7 +95,9 @@ export function useEmojis() {
       });
       if (!isCurrent(normalizedAgentId, context)) return false;
       if (!await load(normalizedAgentId)) return false;
-      if (versionKey.value === key) await loadVersions(normalizedAgentId, key);
+      if (versionKey.value === key && versionWorkbench.value === workbench) {
+        await loadVersions(normalizedAgentId, key, workbench);
+      }
       status.value = { kind: "success", message: `“${key}”已保存` };
       return true;
     } catch (caught) {
@@ -104,7 +113,11 @@ export function useEmojis() {
     }
   }
 
-  async function generate(agentId: string, emojiKey: string) {
+  async function generate(
+    agentId: string,
+    emojiKey: string,
+    workbench: WorkbenchBackend = "native"
+  ) {
     const normalizedAgentId = normalizeAgentId(agentId);
     activate(normalizedAgentId);
     const validationError = emojiKeyValidationError(emojiKey);
@@ -113,12 +126,13 @@ export function useEmojis() {
       return false;
     }
     const key = normalizeEmojiKey(emojiKey);
-    if (generatingKeys.value.has(key)) return false;
+    const resourceKey = workbenchResourceKey(workbench, key);
+    if (generatingKeys.value.has(resourceKey)) return false;
     const context = contextGeneration;
-    setGenerating(key, true);
+    setGenerating(resourceKey, true);
     status.value = { kind: "idle", message: "" };
     try {
-      await apiRequest<EmojiPayload>(agentPath("/api/emojis/generate", normalizedAgentId), {
+      await apiRequest<EmojiPayload>(agentPath("/api/emojis/generate", normalizedAgentId, workbench), {
         method: "POST",
         body: JSON.stringify({ key })
       });
@@ -132,11 +146,15 @@ export function useEmojis() {
       }
       return false;
     } finally {
-      if (isCurrent(normalizedAgentId, context)) setGenerating(key, false);
+      if (isCurrent(normalizedAgentId, context)) setGenerating(resourceKey, false);
     }
   }
 
-  async function remove(agentId: string, emojiKey: string) {
+  async function remove(
+    agentId: string,
+    emojiKey: string,
+    workbench: WorkbenchBackend = "native"
+  ) {
     const normalizedAgentId = normalizeAgentId(agentId);
     activate(normalizedAgentId);
     const validationError = emojiKeyValidationError(emojiKey);
@@ -147,15 +165,15 @@ export function useEmojis() {
     const key = normalizeEmojiKey(emojiKey);
     if (deletingKey.value) return false;
     const context = contextGeneration;
-    deletingKey.value = key;
+    deletingKey.value = workbenchResourceKey(workbench, key);
     status.value = { kind: "idle", message: "" };
     try {
-      await apiRequest<void>(agentPath(`/api/emojis/${encodeURIComponent(key)}`, normalizedAgentId), {
+      await apiRequest<void>(agentPath(`/api/emojis/${encodeURIComponent(key)}`, normalizedAgentId, workbench), {
         method: "DELETE"
       });
       if (!isCurrent(normalizedAgentId, context)) return false;
       if (!await load(normalizedAgentId)) return false;
-      if (versionKey.value === key) clearVersions();
+      if (versionKey.value === key && versionWorkbench.value === workbench) clearVersions();
       status.value = { kind: "success", message: `“${key}”已删除` };
       return true;
     } catch (caught) {
@@ -168,7 +186,12 @@ export function useEmojis() {
     }
   }
 
-  async function rename(agentId: string, emojiKey: string, nextEmojiKey: string) {
+  async function rename(
+    agentId: string,
+    emojiKey: string,
+    nextEmojiKey: string,
+    workbench: WorkbenchBackend = "native"
+  ) {
     const normalizedAgentId = normalizeAgentId(agentId);
     activate(normalizedAgentId);
     const currentKey = normalizeEmojiKey(emojiKey);
@@ -182,15 +205,19 @@ export function useEmojis() {
     const context = contextGeneration;
     status.value = { kind: "idle", message: "" };
     try {
-      await apiRequest<EmojiPayload>(agentPath(`/api/emojis/${encodeURIComponent(currentKey)}`, normalizedAgentId), {
+      await apiRequest<EmojiPayload>(agentPath(
+        `/api/emojis/${encodeURIComponent(currentKey)}`,
+        normalizedAgentId,
+        workbench
+      ), {
         method: "PATCH",
         body: JSON.stringify({ key: nextKey })
       });
       if (!isCurrent(normalizedAgentId, context)) return false;
       if (!await load(normalizedAgentId)) return false;
-      if (versionKey.value === currentKey) {
+      if (versionKey.value === currentKey && versionWorkbench.value === workbench) {
         versionKey.value = nextKey;
-        await loadVersions(normalizedAgentId, nextKey);
+        await loadVersions(normalizedAgentId, nextKey, workbench);
       }
       status.value = { kind: "success", message: `“${nextKey}”已保存` };
       return true;
@@ -202,31 +229,53 @@ export function useEmojis() {
     }
   }
 
-  async function loadVersions(agentId: string, emojiKey: string) {
+  async function loadVersions(
+    agentId: string,
+    emojiKey: string,
+    workbench: WorkbenchBackend = "native"
+  ) {
     const normalizedAgentId = normalizeAgentId(agentId);
     activate(normalizedAgentId);
     const key = normalizeEmojiKey(emojiKey);
     const context = contextGeneration;
     versionKey.value = key;
+    versionWorkbench.value = workbench;
     loadingVersions.value = true;
     try {
       const payload = await apiRequest<EmojiVersionsPayload>(
-        agentPath(`/api/emojis/${encodeURIComponent(key)}/versions`, normalizedAgentId)
+        agentPath(`/api/emojis/${encodeURIComponent(key)}/versions`, normalizedAgentId, workbench)
       );
-      if (!isCurrent(normalizedAgentId, context) || versionKey.value !== key) return false;
-      versions.value = [...payload.versions];
+      if (
+        !isCurrent(normalizedAgentId, context)
+        || versionKey.value !== key
+        || versionWorkbench.value !== workbench
+      ) return false;
+      versions.value = payload.versions.map((version) => ({ ...version, workbench }));
       return true;
     } catch (caught) {
-      if (isCurrent(normalizedAgentId, context) && versionKey.value === key) {
+      if (
+        isCurrent(normalizedAgentId, context)
+        && versionKey.value === key
+        && versionWorkbench.value === workbench
+      ) {
         status.value = { kind: "error", message: errorMessage(caught, "版本读取失败") };
       }
       return false;
     } finally {
-      if (isCurrent(normalizedAgentId, context) && versionKey.value === key) loadingVersions.value = false;
+      if (
+        isCurrent(normalizedAgentId, context)
+        && versionKey.value === key
+        && versionWorkbench.value === workbench
+      ) loadingVersions.value = false;
     }
   }
 
-  async function removeVersion(agentId: string, emojiKey: string, fileName: string) {
+  async function removeVersion(
+    agentId: string,
+    emojiKey: string,
+    fileName: string,
+    workbench: WorkbenchBackend = versionWorkbench.value
+  ) {
     const normalizedAgentId = normalizeAgentId(agentId);
     activate(normalizedAgentId);
     if (deletingVersion.value) return false;
@@ -236,10 +285,11 @@ export function useEmojis() {
     try {
       await apiRequest<void>(agentPath(
         `/api/emojis/${encodeURIComponent(key)}/versions/${encodeURIComponent(fileName)}`,
-        normalizedAgentId
+        normalizedAgentId,
+        workbench
       ), { method: "DELETE" });
       if (!isCurrent(normalizedAgentId, context)) return false;
-      if (!await loadVersions(normalizedAgentId, key)) return false;
+      if (!await loadVersions(normalizedAgentId, key, workbench)) return false;
       status.value = { kind: "success", message: "旧版本已删除" };
       return true;
     } catch (caught) {
@@ -254,6 +304,7 @@ export function useEmojis() {
 
   function clearVersions() {
     versionKey.value = "";
+    versionWorkbench.value = "native";
     versions.value = [];
     loadingVersions.value = false;
     deletingVersion.value = "";
@@ -276,7 +327,7 @@ export function useEmojis() {
         })
       });
       if (!isCurrent(normalizedAgentId, context)) return false;
-      applyPayload(payload);
+      applySettings(payload);
       status.value = { kind: "success", message: `发送尺寸已设为 ${formatSendSize(nextSize)}` };
       return true;
     } catch (caught) {
@@ -306,7 +357,7 @@ export function useEmojis() {
         })
       });
       if (!isCurrent(normalizedAgentId, context)) return false;
-      applyPayload(payload);
+      applySettings(payload);
       status.value = { kind: "success", message: enabled ? "表情将单独发送" : "表情将随正文发送" };
       return true;
     } catch (caught) {
@@ -356,6 +407,10 @@ export function useEmojis() {
   function applyPayload(payload: EmojiPayload) {
     presetKeys.value = [...payload.presetKeys];
     emojis.value = [...payload.emojis];
+    applySettings(payload);
+  }
+
+  function applySettings(payload: EmojiPayload) {
     if (isEmojiSendSize(payload.sendSize)) sendSize.value = payload.sendSize;
     if (typeof payload.sendSeparately === "boolean") sendSeparately.value = payload.sendSeparately;
     if (typeof payload.revision === "string") settingsRevision.value = payload.revision;
@@ -379,6 +434,7 @@ export function useEmojis() {
     uploadingKey: readonly(uploadingKey),
     deletingKey: readonly(deletingKey),
     versionKey: readonly(versionKey),
+    versionWorkbench: readonly(versionWorkbench),
     versions: readonly(versions),
     loadingVersions: readonly(loadingVersions),
     deletingVersion: readonly(deletingVersion),
@@ -419,9 +475,14 @@ function validateUpload(key: string, file: File) {
   return "";
 }
 
-function agentPath(path: string, agentId: string) {
+function agentPath(
+  path: string,
+  agentId: string,
+  workbench?: WorkbenchBackend | "all"
+) {
   const separator = path.includes("?") ? "&" : "?";
-  return `${path}${separator}agentId=${encodeURIComponent(agentId)}`;
+  const scope = workbench ? `&workbench=${encodeURIComponent(workbench)}` : "";
+  return `${path}${separator}agentId=${encodeURIComponent(agentId)}${scope}`;
 }
 
 function fileToBase64(file: File) {

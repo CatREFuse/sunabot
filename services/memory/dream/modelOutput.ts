@@ -9,7 +9,10 @@ import type {
   DreamPersonaTargetFile,
   DreamWorkingReviewV1
 } from "./types.js";
-import { DREAM_PERSONA_STATEMENT_MAX_CHARS } from "./policy.js";
+import {
+  DREAM_PERSONA_STATEMENT_MAX_CHARS,
+  normalizeDreamPersonaTopicKey
+} from "./personaImpressions.js";
 
 export const DREAM_TEXT_MIN_CODE_POINTS = 1;
 export const DREAM_TEXT_MAX_CODE_POINTS = 4_096;
@@ -198,14 +201,18 @@ function normalizePersonaAdjustment(
   ) {
     return null;
   }
-  const evidenceMemoryIds = generatedIds(record.evidenceMemoryIds ?? record.evidence_memory_ids)
-    .filter((id) => allowedEvidenceIds.has(id));
-  if (evidenceMemoryIds.length < 3) return null;
+  const topicKey = normalizeDreamPersonaTopicKey(record.topicKey ?? record.topic_key);
+  if (!topicKey) return null;
+  const requestedEvidenceIds = generatedIds(record.evidenceMemoryIds ?? record.evidence_memory_ids);
+  if (requestedEvidenceIds.some((id) => !allowedEvidenceIds.has(id))) return null;
+  const evidenceMemoryIds = requestedEvidenceIds;
+  if (evidenceMemoryIds.length < 2) return null;
   const statement = generatedText(record.statement, DREAM_PERSONA_STATEMENT_MAX_CHARS + 1);
   if (!statement || Array.from(statement).length > DREAM_PERSONA_STATEMENT_MAX_CHARS) return null;
   return {
     kind,
     targetFile,
+    topicKey,
     statement,
     evidenceMemoryIds
   };

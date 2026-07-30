@@ -16,23 +16,12 @@ import { SqliteDirectorStore } from "./directorStore.js";
 import { SqliteDreamStore } from "./dreamStore.js";
 import { ImageHistoryStore } from "./imageHistoryStore.js";
 import {
-  GroupThreadStateStore,
-  type CommitGroupThreadStateInput,
-  type CommitGroupThreadStateResult,
-  type GroupThreadStateRecord
-} from "./groupThreadStateStore.js";
-import {
   ModelCallStore,
   type ModelCallAggregateRow,
   type ModelCallModelAggregateRow
 } from "./modelCallStore.js";
 
 export type { ModelCallAggregateRow, ModelCallModelAggregateRow } from "./modelCallStore.js";
-export type {
-  CommitGroupThreadStateInput,
-  CommitGroupThreadStateResult,
-  GroupThreadStateRecord
-} from "./groupThreadStateStore.js";
 export type { EmojiRecord, EmojiVersionRecord } from "./emojiStore.js";
 export { generatedImageHistoryRecords } from "./imageHistoryStore.js";
 
@@ -122,7 +111,6 @@ export const sqliteMemoryPersistence: MemoryPersistenceProvider = {
 
 export class ApplicationDataStore {
   private readonly database: DatabaseSync;
-  private readonly groupThreads: GroupThreadStateStore;
   private readonly modelCalls: ModelCallStore;
   private readonly emojis: EmojiStore;
   private readonly imageHistory: ImageHistoryStore;
@@ -147,7 +135,6 @@ export class ApplicationDataStore {
     this.director = new SqliteDirectorStore(this.database);
     this.dreams = new SqliteDreamStore(this.database);
     initializeLongTermRecallTracking(this);
-    this.groupThreads = new GroupThreadStateStore(this.database);
   }
 
   close() {
@@ -388,14 +375,6 @@ export class ApplicationDataStore {
 
   upsertConversation(record: ConversationRecord) {
     this.transaction(() => this.upsertConversationUnsafe(record));
-  }
-
-  readGroupThreadState(conversationId: string): GroupThreadStateRecord | undefined {
-    return this.groupThreads.read(conversationId);
-  }
-
-  commitGroupThreadState(input: CommitGroupThreadStateInput): CommitGroupThreadStateResult {
-    return this.groupThreads.commit(input);
   }
 
   replaceConversationsIdempotent(idempotencyKey: string, records: readonly ConversationRecord[]) {

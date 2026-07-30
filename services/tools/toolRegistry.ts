@@ -24,12 +24,17 @@ import {
 } from "./definitions.js";
 import { WEBFETCH_TOOL_NAME, webfetchTool } from "./webFetchTool.js";
 import {
+  KNOWLEDGE_PATH_VERIFICATION_TOOL_INSTRUCTION,
   KNOWLEDGE_SEARCH_TOOL_NAME,
   knowledgeSearchTool,
   type KnowledgeSearchToolPort
 } from "./knowledgeSearchTool.js";
 import { GENERATE_IMG_TOOL_NAME, generateImgTool } from "./generateImgTool.js";
-import { SELFIE_TOOL_NAME, selfieTool } from "./selfieTool.js";
+import {
+  SELFIE_DIRECT_DELIVERY_TOOL_INSTRUCTION,
+  SELFIE_TOOL_NAME,
+  selfieTool
+} from "./selfieTool.js";
 import { ASSISTANT_TEXT_TOOL_NAME, assistantTextTool } from "./assistantTextTool.js";
 import { NO_REPLY_TOOL_NAME, noReplyTool } from "./noReplyTool.js";
 import {
@@ -669,13 +674,26 @@ function applyRuntimeToolContract(
 }
 
 function runtimeToolDescription(entry: ToolCatalogEntry, description: string, _options: ToolAvailability) {
+  let resolved = description.trim();
   if (
-    (entry.name !== GENERATE_IMG_TOOL_NAME && entry.name !== SELFIE_TOOL_NAME) ||
-    description.includes("historical media handles")
+    (entry.name === GENERATE_IMG_TOOL_NAME || entry.name === SELFIE_TOOL_NAME) &&
+    !resolved.includes("historical media handles")
   ) {
-    return description;
+    resolved = `${resolved} Prefer exact historical media handles shown in conversation history; use the reference source only as a fallback.`.trim();
   }
-  return `${description.trim()} Prefer exact historical media handles shown in conversation history; use the reference source only as a fallback.`.trim();
+  if (
+    entry.name === SELFIE_TOOL_NAME &&
+    !resolved.includes(SELFIE_DIRECT_DELIVERY_TOOL_INSTRUCTION)
+  ) {
+    resolved = `${resolved} ${SELFIE_DIRECT_DELIVERY_TOOL_INSTRUCTION}`.trim();
+  }
+  if (
+    entry.name === KNOWLEDGE_SEARCH_TOOL_NAME &&
+    !resolved.includes(KNOWLEDGE_PATH_VERIFICATION_TOOL_INSTRUCTION)
+  ) {
+    resolved = `${resolved} ${KNOWLEDGE_PATH_VERIFICATION_TOOL_INSTRUCTION}`.trim();
+  }
+  return resolved;
 }
 
 function applyDispatchSchema(tool: Record<string, unknown>, execution: ToolExecution) {

@@ -47,6 +47,10 @@ import type { ParsedIncomingMessage } from "../types.js";
 import type { ConversationAssetDeliveryDraft, ReplyDelivery } from "./runtimeContracts.js";
 import { conversationRecordId } from "./messagingAttachmentHelpers.js";
 import { isRuntimeIncomingMessage, saveConversationRecordsStrict } from "./infrastructure.js";
+import {
+  resolveConversationWorkbench,
+  type ConversationCapabilityContextV1
+} from "../../services/conversations/conversationCapability.js";
 
 import type { SunaRuntime } from "../runtime.js";
 
@@ -61,6 +65,7 @@ export interface QueueConversationAssetOptions {
   isCurrent?: () => boolean;
   delivery: ReplyDelivery;
   toolName?: "send_file" | "send_voice_message";
+  capability?: Readonly<ConversationCapabilityContextV1>;
 }
 
 export class RuntimeConversationAssets {
@@ -71,7 +76,8 @@ export class RuntimeConversationAssets {
     gateway: MessagingPort,
     logRunId: string,
     isCurrent: (() => boolean) | undefined,
-    delivery: ReplyDelivery | undefined
+    delivery: ReplyDelivery | undefined,
+    capability?: Readonly<ConversationCapabilityContextV1>
   ) {
     if (incoming.transport === "web") return undefined;
     if (!this.host.isReplySenderAllowed(incoming.userId)) return undefined;
@@ -81,7 +87,17 @@ export class RuntimeConversationAssets {
       send: (
         input: PrepareOutboundConversationAssetInput,
         context: { callId: string; toolName: "send_file" }
-      ) => this.queue({ incoming, gateway, input, callId: context.callId, logRunId, isCurrent, delivery, toolName: context.toolName })
+      ) => this.queue({
+        incoming,
+        gateway,
+        input,
+        callId: context.callId,
+        logRunId,
+        isCurrent,
+        delivery,
+        toolName: context.toolName,
+        capability
+      })
     };
   }
 
@@ -112,7 +128,11 @@ export class RuntimeConversationAssets {
     const incomingFingerprint = conversationAssetIncomingFingerprint(options.incoming, target);
     const agentWorkspace = resolveProjectPath(this.host.config.persona.agentWorkspace);
     if (!agentWorkspace) throw new Error("当前 Agent 工作区未配置。");
-    const workbench = conversationAssetWorkbench(options.incoming, this.host.isAdminUser(options.incoming.userId));
+    const workbench = conversationAssetWorkbench(
+      options.incoming,
+      this.host.isAdminUser(options.incoming.userId),
+      options.capability
+    );
     const address = voice
       ? { path: options.input.path, backend: workbench, exactBackend: false }
       : await resolveWorkbenchImageReferenceAddress(agentWorkspace, workbench, options.input.path);
@@ -172,9 +192,15 @@ export class RuntimeConversationAssets {
   async resolveImageReferences(
     incoming: ParsedIncomingMessage,
     paths: readonly string[],
-    isCurrent: () => boolean = () => true
+    isCurrent: () => boolean = () => true,
+    capability?: Readonly<ConversationCapabilityContextV1>
   ) {
-    const backend = conversationAssetWorkbench(incoming, this.host.isAdminUser(incoming.userId));
+    const backend = conversationAssetWorkbench(
+      incoming,
+      this.host.isAdminUser(incoming.userId),
+      capability,
+      "image_reference"
+    );
     const agentWorkspace = resolveProjectPath(this.host.config.persona.agentWorkspace);
     if (!agentWorkspace) throw new Error("当前 Agent 工作区未配置。");
     const urls: string[] = [];
@@ -498,8 +524,13 @@ function conversationImageReceiptUrl(value: unknown, agentId: string, sha256: st
 
 function conversationAssetWorkbench(
   incoming: ParsedIncomingMessage,
-  isAdmin: boolean
+  isAdmin: boolean,
+  capability?: Readonly<ConversationCapabilityContextV1>,
+  purpose: "send_file" | "image_reference" = "send_file"
 ): "native" | "docker" {
+  if (capability) {
+    return resolveConversationWorkbench(capability, purpose).primaryBackend;
+  }
   return isAdmin && incoming.scope === "private" && incoming.groupId === undefined
     ? "native"
     : "docker";

@@ -85,6 +85,38 @@ describe("Runtime workbench image references", () => {
       ["knowledge/memory-images/reference.png"]
     )).resolves.toHaveLength(1);
   });
+
+  it("keeps ordinary relative image paths inside the conversation Workbench", async () => {
+    const workspace = await temporaryAgentWorkspace();
+    const nativeWorkbench = await resolveAgentWorkbench(workspace, "native");
+    const dockerWorkbench = await resolveAgentWorkbench(workspace, "docker");
+    const imageBytes = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+      "base64"
+    );
+    await fs.mkdir(path.join(nativeWorkbench, "references"), { recursive: true });
+    await fs.writeFile(path.join(nativeWorkbench, "references", "plana.png"), imageBytes);
+    const assets = new RuntimeConversationAssets({
+      config: { persona: { agentWorkspace: workspace, defaultAgentId: "arona" } },
+      isAdminUser: () => false
+    } as never);
+    const dockerIncoming = {
+      ...adminPrivateIncoming(),
+      userId: 20_002
+    } as ParsedIncomingMessage;
+
+    await expect(assets.resolveImageReferences(
+      dockerIncoming,
+      ["references/plana.png"]
+    )).rejects.toMatchObject({ code: "SEND_FILE_SOURCE_MISSING" });
+
+    await fs.mkdir(path.join(dockerWorkbench, "references"), { recursive: true });
+    await fs.writeFile(path.join(dockerWorkbench, "references", "plana.png"), imageBytes);
+    await expect(assets.resolveImageReferences(
+      dockerIncoming,
+      ["references/plana.png"]
+    )).resolves.toHaveLength(1);
+  });
 });
 
 async function temporaryAgentWorkspace() {

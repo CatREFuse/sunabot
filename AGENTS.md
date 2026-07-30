@@ -22,6 +22,7 @@
 | `docs/audits/2026-07-24-memory-system-topology-and-logs-audit.md` | 工作记忆、长期记忆、用户画像、召回、Dream、调度器与操作日志的运行证据和高问题节点 | 排查记忆不更新、积压、模型门禁、Dream 失败或记忆操作历史前读取 |
 | `docs/design/settings-information-architecture.md` | 管理台设置的信息层级、Provider 类型、字段归属与交互约束 | 调整设置页、Provider 配置或账号操作前读取 |
 | `docs/design/multi-agent-information-architecture.md` | 多 Agent、多 QQ、管理台导航、Agent 工作区与统计口径 | 新增 Agent、调整 Agent 切换、多 QQ 接入或按 Agent 隔离数据前读取 |
+| `docs/design/conversation-artifact-capabilities.md` | 会话文件、图片、Workbench、Codex 输入输出的统一产物句柄、能力上下文与分阶段迁移 | 调整附件获取、聊天媒体、Workbench 路由、Codex 产物或文件外发前读取 |
 | `docs/design/webfetch.md` | WebFetch 的公开工具契约、静态与动态网页抓取、相关内容筛选、出站安全和实施验收计划 | 新增或修改 WebFetch、动态渲染服务、网页正文抽取或联网工具安全边界前读取 |
 | `docs/architecture/project-structure-plan.md` | 目标项目结构、模块边界、组件通信、数据分层、Core Native/Docker 模型和迁移顺序 | 调整目录、拆分模块、设计协议或修改运行打包前读取 |
 | `docs/migrations/wsl2-migration-plan.md` | Windows 11、Windows Server、WSL2、Docker、打包、部署、验收和回滚方案 | 迁移、打包或调整跨平台部署时读取 |
@@ -42,14 +43,22 @@
 | `docs/user-tests/workbench-image-reference.md` | workbench 图片相对路径直接进入生图工具的用户用例 | 修改 workbench 图片参数或生图参考解析时读取 |
 | `docs/user-tests/workbench-image-native-absolute-reference.md` | Native workbench 真实绝对路径直接进入生图工具的用户用例 | 修改 Native workbench 绝对路径参数解析时读取 |
 | `docs/user-tests/workbench-image-docker-absolute-reference.md` | Docker `/workbench` 绝对路径直接进入生图工具的用户用例 | 修改 Docker workbench 绝对路径参数解析时读取 |
+| `docs/user-tests/dual-workbench-resource-addressing.md` | 管理台聚合寻址 Native 与 Docker 的表情、自拍参考图和知识资料 | 修改双 Workbench 资源管理与来源路由时读取 |
 | `docs/user-tests/sent-image-reuse-send.md` | Bot 发送 workbench 图片并持久化可复用历史的链式首步用例 | 修改 `send_file` 图片历史投影时读取 |
 | `docs/user-tests/sent-image-reuse.md` | 精确引用 Bot 上一轮已发图片再次生图的链式次步用例 | 修改 assistant 图片句柄或历史生图参考时读取 |
 | `docs/user-tests/sent-emoji-reuse-send.md` | Bot 发送自身图库表情并持久化可复用媒体的链式首步用例 | 修改表情投递后的会话媒体投影时读取 |
 | `docs/user-tests/sent-emoji-reuse.md` | 精确引用 Bot 上一轮已发表情再次生图的链式次步用例 | 修改表情历史句柄或表情参考生图时读取 |
 | `docs/user-tests/orchestrator-internal-history-seed.md` | 生成用户不可见的群聊编排器内部审计记录的链式首步用例 | 修改编排器内部记录或群聊模型历史过滤时读取 |
 | `docs/user-tests/orchestrator-internal-history-reply.md` | 验证内部编排器记录不进入后续主回复上下文的链式次步用例 | 修改群聊上下文、编排器变量或内部消息可见性时读取 |
+| `docs/user-tests/group-topic-internal-reasoning.md` | 验证群聊主 Agent 在内部完成当前话题判断且不暴露判断过程 | 修改群聊话题判断、主回复上下文或旧实现清理边界时读取 |
 | `docs/user-tests/current-message-image-reference.md` | 当前群消息图片以精确媒体句柄进入异步生图的用户用例 | 修改当前图片句柄、dispatch 快照或参考图解析时读取 |
 | `docs/user-tests/current-message-image-4k-retry-budget.md` | 当前私聊图片在预处理后以完整回复重试预算进入 4K 异步生图的用户用例 | 修改图片预处理、普通回复超时或 4K 生图派发时读取 |
+| `docs/user-tests/qq-private-pdf-attachment.md` | 副账号 QQ 私聊 PDF 经账号定向下载、解析并进入主回复的用户用例 | 修改 QQ 文件查询、附件源 fallback、PDF 解析或多账号附件路由时读取 |
+| `docs/user-tests/parse-failed-attachment-export.md` | QQ 文件获取成功但解析失败后仍可导出原件的用户用例 | 修改附件获取/解析状态或聊天媒体导出前读取 |
+| `docs/user-tests/user-private-attachment-docker-workbench.md` | 普通 QQ 私聊文件统一导出到 Docker Workbench 并回传的用户用例 | 修改会话 Workbench 路由、聊天媒体导出或文件回传前读取 |
+| `docs/user-tests/codex-chat-artifact-roundtrip.md` | 聊天文件句柄冻结为 Codex 输入并将产物回传原会话的用户用例 | 修改 Codex 异步输入、产物校验或会话资产回传前读取 |
+| `docs/user-tests/selfie-direct-delivery.md` | 阿罗娜单人自拍由异步图片任务直接回传的用户用例 | 修改自拍工具派发、完成回调或媒体发送时读取 |
+| `docs/user-tests/selfie-knowledge-reference-direct-delivery.md` | 阿罗娜使用知识库普拉娜参考图生成双人自拍并直接回传的用户用例 | 修改自拍知识参考、Workbench 路径快照或异步媒体发送时读取 |
 | `docs/user-tests/address-name-priority.md` | 多称呼用户画像在主回复中优先使用第一个称呼的用户用例 | 修改称呼数组、用户画像提示上下文或回复称呼规则时读取 |
 | `docs/user-tests/sampled-memory-compression.md` | 运行中测试账号 V2 样本的内容无关记忆压缩模板 | 从只读样本派生真实数据记忆压缩 case 时读取 |
 | `docs/user-tests/sampled-dream.md` | 运行中测试账号 V2 样本的内容无关 Dream 模板 | 从只读样本派生真实数据 Dream case 时读取 |

@@ -21,12 +21,16 @@ import type {
 import { AttachmentWorkerSupervisor } from "./worker.js";
 import { createParserWorkerSupervisor, ParserPipeline } from "./parserPipeline.js";
 import {
+  acquiredAttachment,
   attachmentSourceKey,
   cacheResolvedAttachment,
   cloneAttachment,
   failAttachment,
+  failedAcquisition,
   logAttachmentProcessing,
+  parsedAttachmentState,
   parsedReuseKey,
+  pendingAttachment,
   rebindParsedAttachment,
   shouldTryGetFileFallback,
   userFacingAttachmentError
@@ -81,12 +85,12 @@ export class AttachmentService {
     for (let index = 0; index < incoming.length; index += 1) {
       const attachment = incoming[index]!;
       if (index >= MAX_ATTACHMENTS_PER_MESSAGE) {
-        const limited: ParsedAttachment = {
-          ...attachment,
-          status: "unsupported",
-          errorCode: "attachment_count_limit",
-          errorMessage: "一条消息最多读取 4 个文件。"
-        };
+        const limited = failedAcquisition(
+          pendingAttachment(attachment),
+          "attachment_count_limit",
+          "一条消息最多读取 4 个文件。",
+          "unsupported"
+        );
         logAttachmentProcessing(limited, {
           referenceScope,
           durationMs: 0,
@@ -132,13 +136,13 @@ export class AttachmentService {
     let resolvedVia: string | undefined;
     let sourceKind: string | undefined;
     let cacheHit: boolean | undefined;
-    const pending: ParsedAttachment = { ...attachment, status: "pending" };
+    const pending = pendingAttachment(attachment);
     if ((attachment.sizeBytes ?? 0) > FILE_SIZE_LIMIT_BYTES) {
-      const result = failAttachment(
+      const result = failedAcquisition(
         pending,
         "too_large",
-        "too_large",
-        "这个文件超过 256 MB，暂时无法读取。"
+        "这个文件超过 256 MB，暂时无法读取。",
+        "too_large"
       );
       logAttachmentProcessing(result, {
         referenceScope: cacheReference,
@@ -152,7 +156,7 @@ export class AttachmentService {
     try {
       const source = await resolveAttachmentSource({
         fileId: attachment.fileId,
-        file: attachment.name,
+        file: attachment.fileToken,
         url: attachment.url,
         busId: attachment.busId,
         groupId: attachment.groupId
@@ -166,7 +170,7 @@ export class AttachmentService {
         if (source.kind !== "url" || !shouldTryGetFileFallback(error)) throw error;
         const fallback = await resolveAttachmentFallback({
           fileId: attachment.fileId,
-          file: attachment.name
+          file: attachment.fileToken
         }, sourcePort);
         if (!fallback || (fallback.kind === "url" && fallback.url === source.url)) throw error;
         resolvedVia = `${source.via}->file_content`;
@@ -180,15 +184,20 @@ export class AttachmentService {
         activeTaskHeld = true;
       }
       try {
-        const parsed: ParsedAttachment = {
-          ...pending,
-          sizeBytes: cached.sizeBytes,
-          sha256: cached.sha256,
-          cacheKey: cached.cacheKey
-        };
-        if (!cached.cacheHit) this.clearParsedResults(cached.cacheKey);
-        const result = await this.getOrParseCached(parsed, cached.filePath, query, cached.cacheHit);
         if (cacheReference) await this.cache.addReference(cached.cacheKey, cacheReference);
+        const parsed = acquiredAttachment(pending, cached);
+        if (!cached.cacheHit) this.clearParsedResults(cached.cacheKey);
+        let result: ParsedAttachment;
+        try {
+          result = await this.getOrParseCached(parsed, cached.filePath, query, cached.cacheHit);
+        } catch {
+          result = parsedAttachmentState(failAttachment(
+            parsed,
+            "failed",
+            "parse_failed",
+            "文件无法解析，可能已损坏。"
+          ), "parse_failed");
+        }
         const rebound = rebindParsedAttachment(result, parsed);
         logAttachmentProcessing(rebound, {
           referenceScope: cacheReference,
@@ -204,11 +213,11 @@ export class AttachmentService {
       }
     } catch (error) {
       if (error instanceof AttachmentTooLargeError) {
-        return failAttachment(
+        return failedAcquisition(
           pending,
           "too_large",
-          "too_large",
-          "这个文件超过 256 MB，暂时无法读取。"
+          "这个文件超过 256 MB，暂时无法读取。",
+          "too_large"
         );
       }
       const code = error instanceof AttachmentCacheError
@@ -216,7 +225,7 @@ export class AttachmentService {
         : error instanceof Error && "code" in error
           ? String(error.code)
           : "attachment_failed";
-      const result = failAttachment(pending, "failed", code, userFacingAttachmentError(code));
+      const result = failedAcquisition(pending, code, userFacingAttachmentError(code));
       logAttachmentProcessing(result, {
         referenceScope: cacheReference,
         durationMs: Date.now() - startedAt,
@@ -294,5 +303,5 @@ export class AttachmentService {
 }
 
 export function pendingAttachments(values: readonly IncomingAttachment[]): ParsedAttachment[] {
-  return values.map((value) => ({ ...value, status: "pending" }));
+  return values.map(pendingAttachment);
 }

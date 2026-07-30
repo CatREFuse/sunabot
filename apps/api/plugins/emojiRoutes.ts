@@ -70,6 +70,18 @@ export function registerEmojiRoutes(app: FastifyInstance, options: EmojiRouteOpt
   app.get("/api/emojis", {
     schema: { querystring: openObject, response: { 200: openObject } }
   }, async (request) => {
+    if (requestWorkbenchScope(request.query) === "all") {
+      const agentId = requestAgentId(request.query);
+      if (!options.getRepository) {
+        badRequest("WORKBENCH_BACKEND_UNAVAILABLE", "当前接口未配置双 Workbench。", "workbench");
+      }
+      const [native, docker, settings] = await Promise.all([
+        options.getRepository(agentId, "native").list(),
+        options.getRepository(agentId, "docker").list(),
+        readEmojiSettings(options, agentId)
+      ]);
+      return withAllContentUrls({ native, docker }, agentId, settings);
+    }
     const context = repositoryContext(options, request.query);
     const [envelope, settings] = await Promise.all([
       context.repository.list(),
@@ -286,6 +298,25 @@ function withContentUrls(
   };
 }
 
+function withAllContentUrls(
+  envelopes: Record<AgentWorkbenchBackend, EmojiEnvelope>,
+  agentId: string,
+  settings: EmojiSettingsEnvelope
+) {
+  const native = withContentUrls(envelopes.native, agentId, "native", settings);
+  const docker = withContentUrls(envelopes.docker, agentId, "docker", settings);
+  return {
+    presetKeys: [...new Set([...native.presetKeys, ...docker.presetKeys])],
+    sendSize: settings.sendSize,
+    sendSeparately: settings.sendSeparately,
+    revision: settings.revision,
+    emojis: [
+      ...native.emojis.map((emoji) => ({ ...emoji, workbench: "native" as const })),
+      ...docker.emojis.map((emoji) => ({ ...emoji, workbench: "docker" as const }))
+    ]
+  };
+}
+
 function withVersionContentUrls(
   envelope: Awaited<ReturnType<EmojiLibraryRepository["listVersions"]>>,
   agentId: string,
@@ -314,6 +345,13 @@ function requestWorkbenchBackend(query: unknown): AgentWorkbenchBackend {
   if (value === undefined || value === "" || value === "native") return "native";
   if (value === "docker") return "docker";
   badRequest("WORKBENCH_BACKEND_INVALID", "Workbench 参数无效。", "workbench");
+}
+
+function requestWorkbenchScope(query: unknown): AgentWorkbenchBackend | "all" {
+  const value = query && typeof query === "object" && !Array.isArray(query)
+    ? (query as { workbench?: unknown }).workbench
+    : undefined;
+  return value === "all" ? "all" : requestWorkbenchBackend(query);
 }
 
 function setEmojiContentHeaders(reply: FastifyReply, contentType: string) {

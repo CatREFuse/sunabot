@@ -102,7 +102,7 @@ export function buildAsyncToolCompletionPrompt(
     ...(options.includeOriginalUserRequest === false
       ? {}
       : { originalUserRequest: payload.originalRequest.incoming.text }),
-    arguments: payload.arguments,
+    arguments: publicToolArguments(payload.arguments),
     outcome: payload.outcome
   }, null, 2);
   const maxChars = 120_000;
@@ -120,6 +120,15 @@ export function buildAsyncToolCompletionPrompt(
     toolResult: envelope.length > maxChars ? boundedEnvelope : JSON.parse(envelope)
   });
 }
+
+export function publicToolArguments(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter(([key]) => !key.startsWith("__sunabot_"))
+  );
+}
+
 export function errorMessage(error: unknown) {
   if (error instanceof Error) {
     return error.message || error.name;

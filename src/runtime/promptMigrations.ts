@@ -8,7 +8,6 @@ import {
   migrateConversationEmojiVariables,
   migrateConversationVoicePrompt,
   migrateGroupReplyOrchestratorResultVariable,
-  migrateGroupReplyThreadContextVariable,
   migrateMemoryPerspectivePrompt,
   migratePromptTimeContext,
   migrateScheduledTaskAgentLoopPrompt,
@@ -18,6 +17,7 @@ import {
   migrateUserGroupOrchestratorResultSchema,
   readPromptTextFile
 } from "../../services/agent/promptWorkspace.js";
+import { migrateGroupReplyTopicReasoning } from "../../services/agent/groupReplyTopicReasoningMigration.js";
 import { migrateWorkingMemoryDocumentPrompt } from "../../services/agent/workingMemoryDocumentPromptMigration.js";
 import { migrateToneSegmentedReplyPrompt } from "../../services/agent/tonePromptMigration.js";
 import { migrateConversationWebFetchPrompt } from "../../services/agent/webFetchPromptMigration.js";
@@ -40,7 +40,7 @@ import { migrateConversationInboundMessagePrompt } from "../../services/agent/in
 import { migrateRecoverableOutputErrorPrompt } from "../../services/agent/recoverableOutputErrorPromptMigration.js";
 import {
   migrateConversationReferenceToolDescriptions,
-  migrateGroupReferenceResolutionPrompt
+  migrateOrchestratorReferenceResolutionPrompt
 } from "../../services/agent/referencePromptMigration.js";
 import { ensureAirPromptWorkspace } from "../../services/agent/airPromptWorkspace.js";
 import { parseFinalPromptTemplate } from "../../services/agent/promptSystem.js";
@@ -60,7 +60,6 @@ import {
   CONVERSATION_REPLY_PROMPT_FILE,
   GROUP_CHAT_SUMMARY_PROMPT_FILE,
   GROUP_CONVERSATION_REPLY_PROMPT_FILE,
-  GROUP_THREAD_CONTEXT_PROMPT_FILE,
   PRIVATE_CONVERSATION_REPLY_PROMPT_FILE,
   SELFIE_PROMPT_FILE,
   TONE_PROMPT_FILE,
@@ -93,7 +92,6 @@ export async function ensureRuntimePromptWorkspace(config: AppConfig) {
     ensurePromptTextFile(config, "system", config.bot.memory.workMemoryCompressOutPrompt, ADMIN_RUNTIME_PROMPT_DEFAULTS["memory.compress-out"] ?? ""),
     ensurePromptTextFile(config, "system", config.bot.memory.userProfilePrompt, ADMIN_RUNTIME_PROMPT_DEFAULTS["memory.user-profile"] ?? ""),
     ensurePromptTextFile(config, "system", config.bot.orchestrator.promptFile, ADMIN_RUNTIME_PROMPT_DEFAULTS["orchestrator.user-group"] ?? ""),
-    ensurePromptTextFile(config, "system", GROUP_THREAD_CONTEXT_PROMPT_FILE, ADMIN_RUNTIME_PROMPT_DEFAULTS["orchestrator.group-thread"] ?? ""),
     ensurePromptTextFile(config, "system", GROUP_CHAT_SUMMARY_PROMPT_FILE, ADMIN_RUNTIME_PROMPT_DEFAULTS["conversation.group-summary"] ?? ""),
     ensurePromptTextFile(config, "system", SCHEDULED_TASK_CALLBACK_PROMPT_FILE, ADMIN_RUNTIME_PROMPT_DEFAULTS[SCHEDULED_TASK_CALLBACK_PROMPT_ID] ?? ""),
     ...([
@@ -158,7 +156,6 @@ function runtimePromptMigrations(config: AppConfig, selfiePromptDefault: string)
     config.bot.memory.workMemoryCompressOutPrompt,
     config.bot.memory.userProfilePrompt,
     config.bot.orchestrator.promptFile,
-    GROUP_THREAD_CONTEXT_PROMPT_FILE,
     GROUP_CHAT_SUMMARY_PROMPT_FILE,
     SCHEDULED_TASK_CALLBACK_PROMPT_FILE,
     DIRECTOR_DAILY_PLAN_PROMPT_FILE,
@@ -186,7 +183,7 @@ function runtimePromptMigrations(config: AppConfig, selfiePromptDefault: string)
     () => migrateDreamSchemaPrompt(config, DREAM_PROMPT_FILE)
   );
   add(
-    "dream-memory-contract-v4",
+    "dream-memory-contract-v5",
     "system",
     DREAM_PROMPT_FILE,
     () => migrateDreamMemoryContractPrompt(config, DREAM_PROMPT_FILE),
@@ -203,11 +200,11 @@ function runtimePromptMigrations(config: AppConfig, selfiePromptDefault: string)
     ),
     dependency(SCHEDULED_TASK_CALLBACK_PROMPT_FILE)
   );
-  const groupThreadId = add(
-    "group-thread-context-v1",
+  const groupTopicReasoningId = add(
+    "group-topic-reasoning-v1",
     "system",
     GROUP_CONVERSATION_REPLY_PROMPT_FILE,
-    () => migrateGroupReplyThreadContextVariable(config, GROUP_CONVERSATION_REPLY_PROMPT_FILE),
+    () => migrateGroupReplyTopicReasoning(config, GROUP_CONVERSATION_REPLY_PROMPT_FILE),
     dependency(GROUP_CONVERSATION_REPLY_PROMPT_FILE)
   );
   const groupOrchestratorId = add(
@@ -215,7 +212,7 @@ function runtimePromptMigrations(config: AppConfig, selfiePromptDefault: string)
     "system",
     GROUP_CONVERSATION_REPLY_PROMPT_FILE,
     () => migrateGroupReplyOrchestratorResultVariable(config, GROUP_CONVERSATION_REPLY_PROMPT_FILE),
-    [groupThreadId]
+    [groupTopicReasoningId]
   );
   add(
     "user-group-result-schema-v1",
@@ -232,15 +229,8 @@ function runtimePromptMigrations(config: AppConfig, selfiePromptDefault: string)
     "group-reference-resolution-v1",
     "system",
     config.bot.orchestrator.promptFile,
-    () => migrateGroupReferenceResolutionPrompt(config, config.bot.orchestrator.promptFile, "orchestrator"),
+    () => migrateOrchestratorReferenceResolutionPrompt(config, config.bot.orchestrator.promptFile),
     dependency(config.bot.orchestrator.promptFile)
-  );
-  add(
-    "group-reference-resolution-v1",
-    "system",
-    GROUP_THREAD_CONTEXT_PROMPT_FILE,
-    () => migrateGroupReferenceResolutionPrompt(config, GROUP_THREAD_CONTEXT_PROMPT_FILE, "thread"),
-    dependency(GROUP_THREAD_CONTEXT_PROMPT_FILE)
   );
   const selfieReferenceId = add(
     "selfie-reference-v1",
@@ -343,21 +333,12 @@ function runtimePromptMigrations(config: AppConfig, selfiePromptDefault: string)
       () => migrateConversationReferenceToolDescriptions(config, file),
       [recoverableId]
     );
-    const groupReferenceId = file === GROUP_CONVERSATION_REPLY_PROMPT_FILE
-      ? add(
-        "group-reference-resolution-v1",
-        "system",
-        file,
-        () => migrateGroupReferenceResolutionPrompt(config, file, "reply"),
-        [referenceToolsId]
-      )
-      : referenceToolsId;
     add(
       "conversation-cache-layout-v1",
       "system",
       file,
       () => migrateConversationPromptCacheLayout(config, file),
-      [groupReferenceId]
+      [referenceToolsId]
     );
   }
 

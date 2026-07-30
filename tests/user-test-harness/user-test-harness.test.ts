@@ -28,7 +28,10 @@ import {
 } from "../../tooling/user-test-harness/assertions.js";
 import { validateAndSealUserTestReport } from "../../tooling/user-test-harness/review.js";
 import { sampleBranchFixture } from "../../tooling/user-test-harness/sample.js";
-import { prepareUserTestWorkspace } from "../../tooling/user-test-harness/workspace.js";
+import {
+  prepareUserTestWorkspace,
+  resetUserTestKnowledgeDirectory
+} from "../../tooling/user-test-harness/workspace.js";
 import { appendMarkdownReport } from "../../tooling/user-test-harness/markdownReport.js";
 import { gateUserTestReleaseManifest } from "../../tooling/user-test-harness/releaseGate.js";
 import { deriveBranchCaseFromSample } from "../../tooling/user-test-harness/deriveBranchCase.js";
@@ -62,12 +65,32 @@ describe("user test harness", () => {
       workingMemory: [],
       longTerm: [],
       userProfiles: [],
+      resetKnowledge: ["native", "docker"],
       workbenchFiles: [{
         backend: "native",
         path: "tool-fixtures/input.txt",
         content: "fixture input\n"
+      }],
+      attachmentSources: [{
+        fileId: "fixture-file-id",
+        name: "fixture.pdf",
+        contentBase64: "JVBERi0xLjQK"
       }]
     };
+    testCase.expected.requiredInboundAttachments = [{
+      messageId: "99",
+      index: 0,
+      name: "fixture.pdf",
+      status: "ready",
+      acquisitionStatus: "acquired",
+      parseStatus: "ready",
+      blobSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      blobSizeBytes: 9,
+      blobMimeType: "application/pdf",
+      format: "pdf",
+      sizeBytes: 9,
+      handle: "message:99:file:0"
+    }];
     const document = (definition: UserTestCase) => [
       "# Conversation fixture",
       USER_TEST_CASE_MARKER,
@@ -84,6 +107,22 @@ describe("user test harness", () => {
     traversal.input.fixture.workbenchFiles[0]!.path = "../outside.txt";
     expect(() => parseUserTestCaseDocument(document(traversal)))
       .toThrow("USER_TEST_CASE_CONVERSATION_FIXTURE_PATH_INVALID");
+
+    const duplicateReset = structuredClone(testCase);
+    if (duplicateReset.kind !== "conversation" || !duplicateReset.input.fixture) {
+      throw new Error("conversation fixture required");
+    }
+    duplicateReset.input.fixture.resetKnowledge = ["native", "native"];
+    expect(() => parseUserTestCaseDocument(document(duplicateReset)))
+      .toThrow("USER_TEST_CASE_CONVERSATION_FIXTURE_RESET_KNOWLEDGE_INVALID");
+
+    const invalidBase64 = structuredClone(testCase);
+    if (invalidBase64.kind !== "conversation" || !invalidBase64.input.fixture?.attachmentSources) {
+      throw new Error("conversation attachment fixture required");
+    }
+    invalidBase64.input.fixture.attachmentSources[0]!.contentBase64 = "not-base64";
+    expect(() => parseUserTestCaseDocument(document(invalidBase64)))
+      .toThrow("USER_TEST_CASE_FIXTURE.ATTACHMENTSOURCES[0].CONTENTBASE64_INVALID");
   });
 
   it.each([
@@ -143,6 +182,47 @@ describe("user test harness", () => {
     await gateway.close();
     }
   );
+
+  it("binds attachment fixtures to the declared OneBot account", async () => {
+    const transport = new RecordingMessagingPort({
+      accountId: "fixture-secondary",
+      selfId: "40004",
+      attachmentSources: [{
+        fileId: "fixture-private-pdf",
+        name: "fixture.pdf",
+        contentBase64: "JVBERi0xLjQK"
+      }]
+    });
+
+    await expect(transport.resolveAttachment({
+      accountId: "fixture-secondary",
+      fileId: "fixture-private-pdf",
+      file: "fixture.pdf"
+    })).resolves.toEqual({
+      kind: "base64",
+      base64: "JVBERi0xLjQK",
+      via: "file_content"
+    });
+    await expect(transport.resolveAttachment({
+      accountId: "primary",
+      fileId: "fixture-private-pdf",
+      file: "fixture.pdf"
+    })).rejects.toThrow("USER_TEST_ATTACHMENT_ACCOUNT_MISMATCH");
+    expect(transport.attachmentResolutionCalls).toEqual([
+      expect.objectContaining({
+        accountId: "fixture-secondary",
+        fileId: "fixture-private-pdf",
+        strategy: "resolve",
+        outcome: "resolved"
+      }),
+      expect.objectContaining({
+        accountId: "primary",
+        fileId: "fixture-private-pdf",
+        strategy: "resolve",
+        outcome: "account_mismatch"
+      })
+    ]);
+  });
 
   it("requires explicit Dream working-memory and conversation fixtures", () => {
     const testCase: UserTestCase = {
@@ -968,6 +1048,20 @@ describe("user test harness", () => {
         defaultAgentId: "koharu",
         agentWorkspace: "workspace/business/agents/koharu"
       });
+      const isolatedWorkbench = path.join(
+        destination,
+        "business/agents/koharu/workbench"
+      );
+      await fs.mkdir(path.join(isolatedWorkbench, "knowledge"), { recursive: true });
+      await fs.writeFile(
+        path.join(isolatedWorkbench, "knowledge/source-only.md"),
+        "copied source knowledge\n"
+      );
+      await resetUserTestKnowledgeDirectory(destination, isolatedWorkbench);
+      await expect(fs.access(
+        path.join(isolatedWorkbench, "knowledge/source-only.md")
+      )).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await fs.readdir(path.join(isolatedWorkbench, "knowledge"))).toEqual([]);
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
@@ -1167,6 +1261,10 @@ describe("user test harness", () => {
       recursive: true,
       mode: 0o700
     });
+    await fs.mkdir(path.join(source, "business/agents/koharu/workbench/knowledge"), {
+      recursive: true,
+      mode: 0o700
+    });
     await fs.mkdir(path.join(source, "secrets"), { recursive: true });
     await fs.writeFile(
       path.join(source, "business/config/sunabot.json"),
@@ -1176,28 +1274,15 @@ describe("user test harness", () => {
       path.join(source, "secrets/runtime.env"),
       "FIXTURE_PROVIDER_KEY=fixture-token\n"
     );
+    await fs.writeFile(
+      path.join(source, "business/agents/koharu/workbench/knowledge/source-only.md"),
+      "source knowledge must not survive fixture reset\n"
+    );
     const providerOutputs = [
       JSON.stringify({
         should_reply: true,
         reason: "The fixture user explicitly requested a result.",
         reply_to_message_id: "99"
-      }),
-      JSON.stringify({
-        schema_version: 1,
-        active_thread_key: "fixture-thread",
-        threads: [{
-          thread_key: "fixture-thread",
-          existing_thread_id: null,
-          topic: "测试用户正在确认主对话夹具能够完成群聊回复。",
-          status: "active"
-        }],
-        message_assignments: [{
-          message_id: "99",
-          primary_thread_key: "fixture-thread",
-          related_thread_keys: [],
-          relation: "new",
-          confidence: 1
-        }]
       }),
       "夹具主对话已收到。"
     ];
@@ -1218,9 +1303,10 @@ describe("user test harness", () => {
       const runtimeCase = conversationCase("admin_group", "group", 20002, 30003);
       if (runtimeCase.kind !== "conversation") throw new Error("conversation case required");
       runtimeCase.input.fixture = {
+        resetKnowledge: ["native"],
         workbenchFiles: [{
           backend: "native",
-          path: "tool-fixtures/input.txt",
+          path: "knowledge/fixture-only.md",
           content: "fixture input\n"
         }]
       };
@@ -1235,15 +1321,19 @@ describe("user test harness", () => {
       ).toBe("passed");
       expect(report.execution.assertions.every((assertion) => assertion.passed)).toBe(true);
       expect(report.observation.tools).toEqual([]);
-      expect(JSON.stringify(report.observation.outbound)).toContain("夹具主对话已收到");
-      expect(fetchMock).toHaveBeenCalledTimes(3);
       expect(await fs.readFile(
         path.join(
           destination,
-          "business/agents/koharu/workbench/tool-fixtures/input.txt"
+          "business/agents/koharu/workbench/knowledge/fixture-only.md"
         ),
         "utf8"
       )).toBe("fixture input\n");
+      await expect(fs.access(path.join(
+        destination,
+        "business/agents/koharu/workbench/knowledge/source-only.md"
+      ))).rejects.toMatchObject({ code: "ENOENT" });
+      expect(JSON.stringify(report.observation.outbound)).toContain("夹具主对话已收到");
+      expect(fetchMock).toHaveBeenCalledTimes(2);
     } finally {
       vi.unstubAllGlobals();
       if (previousWorkspace == null) delete process.env.SUNABOT_WORKSPACE;

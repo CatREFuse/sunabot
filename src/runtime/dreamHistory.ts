@@ -11,6 +11,7 @@ export interface DreamHistorySource {
   scheduledFor: string;
   completedAt: string | null;
   personaStatus: "pending" | "none" | "proposed" | "applied" | "skipped" | "failed";
+  persona?: JsonObject | null;
   result: JsonObject | null;
 }
 
@@ -23,7 +24,7 @@ export function dreamHistoryItem(run: DreamHistorySource) {
     ...(run.dreamText ? { dreamText: run.dreamText } : {}),
     scheduledFor: run.scheduledFor,
     ...(run.completedAt ? { completedAt: run.completedAt } : {}),
-    personalityChanged: run.personaStatus === "applied",
+    personalityChanged: run.personaStatus === "applied" && run.persona?.projectionChanged !== false,
     ...(summary ? { summary } : {})
   };
 }

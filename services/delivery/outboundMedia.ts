@@ -80,7 +80,11 @@ export class OutboundMediaDelivery {
     }
 
     const stats = await regularFileStats(resolvedPath);
-    if (!stats) throw new Error("Outbound media file is not a regular file.");
+    if (!stats) {
+      throw new Error(
+        "OUTBOUND_MEDIA_SOURCE_MISSING: Generated image file is unavailable before send."
+      );
+    }
     await assertUnredirectedPath(boundary.rootDir, resolvedPath, boundary.relativePath);
     if (this.referenceMode === "inline-base64") {
       if (stats.size > this.maxInlineBytes) {

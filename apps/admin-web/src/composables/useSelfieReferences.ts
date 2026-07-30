@@ -1,6 +1,7 @@
 import { readonly, shallowRef } from "vue";
 import type { SelfieReferenceImage, SelfieReferencePayload } from "../types";
-import { agentScopedPath } from "./agentScope";
+import type { WorkbenchBackend } from "../types/workbench";
+import { workbenchResourceKey } from "../types/workbench";
 import { apiRequest } from "./useAdminApi";
 
 const MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
@@ -30,7 +31,7 @@ export function useSelfieReferences() {
   let loadGeneration = 0;
   let loadController: AbortController | undefined;
 
-  async function load(agentId: string) {
+  async function loadAll(agentId: string) {
     const normalizedAgentId = activate(agentId);
     const context = contextGeneration;
     const generation = ++loadGeneration;
@@ -38,7 +39,11 @@ export function useSelfieReferences() {
     loadController = new AbortController();
     loading.value = true;
     try {
-      const payload = await apiRequest<SelfieReferencePayload>(agentScopedPath("/api/selfie-references", normalizedAgentId), {
+      const payload = await apiRequest<SelfieReferencePayload>(workbenchPath(
+        "/api/selfie-references",
+        normalizedAgentId,
+        "all"
+      ), {
         signal: loadController.signal
       });
       if (!isCurrent(normalizedAgentId, context) || generation !== loadGeneration) return false;
@@ -58,7 +63,8 @@ export function useSelfieReferences() {
     const normalizedAgentId = activate(agentId);
     const context = contextGeneration;
     if (!entries.length || uploading.value) return false;
-    const available = Math.max(0, maxImages.value - images.value.length);
+    const nativeCount = images.value.filter((image) => (image.workbench ?? "native") === "native").length;
+    const available = Math.max(0, maxImages.value - nativeCount);
     if (entries.length > available) {
       status.value = { kind: "error", message: `还可添加 ${available} 张` };
       return false;
@@ -91,12 +97,16 @@ export function useSelfieReferences() {
       for (const { file, note } of normalizedEntries) {
         const dataBase64 = await fileToBase64(file);
         if (!isCurrent(normalizedAgentId, context)) return false;
-        const payload = await apiRequest<SelfieReferencePayload>(agentScopedPath("/api/selfie-references", normalizedAgentId), {
+        const payload = await apiRequest<SelfieReferencePayload>(workbenchPath(
+          "/api/selfie-references",
+          normalizedAgentId,
+          "native"
+        ), {
           method: "POST",
           body: JSON.stringify({ fileName: file.name, dataBase64, note })
         });
         if (!isCurrent(normalizedAgentId, context)) return false;
-        applyPayload(payload);
+        applyBackendPayload(payload, "native");
       }
       if (!isCurrent(normalizedAgentId, context)) return false;
       status.value = { kind: "success", message: `${entries.length} 张已保存` };
@@ -110,7 +120,12 @@ export function useSelfieReferences() {
     }
   }
 
-  async function updateNote(agentId: string, id: string, note: string) {
+  async function updateNote(
+    agentId: string,
+    id: string,
+    note: string,
+    workbench: WorkbenchBackend = "native"
+  ) {
     const normalizedAgentId = activate(agentId);
     const context = contextGeneration;
     if (!id || updatingId.value) return false;
@@ -123,15 +138,19 @@ export function useSelfieReferences() {
       return false;
     }
     supersedeLoad();
-    updatingId.value = id;
+    updatingId.value = workbenchResourceKey(workbench, id);
     status.value = { kind: "idle", message: "" };
     try {
-      const payload = await apiRequest<SelfieReferencePayload>(agentScopedPath(`/api/selfie-references/${encodeURIComponent(id)}`, normalizedAgentId), {
+      const payload = await apiRequest<SelfieReferencePayload>(workbenchPath(
+        `/api/selfie-references/${encodeURIComponent(id)}`,
+        normalizedAgentId,
+        workbench
+      ), {
         method: "PATCH",
         body: JSON.stringify({ note: normalized })
       });
       if (!isCurrent(normalizedAgentId, context)) return false;
-      applyPayload(payload);
+      applyBackendPayload(payload, workbench);
       status.value = { kind: "success", message: "备注已保存" };
       return true;
     } catch (caught) {
@@ -143,17 +162,27 @@ export function useSelfieReferences() {
     }
   }
 
-  async function remove(agentId: string, id: string) {
+  async function remove(
+    agentId: string,
+    id: string,
+    workbench: WorkbenchBackend = "native"
+  ) {
     const normalizedAgentId = activate(agentId);
     const context = contextGeneration;
     if (!id || deletingId.value) return false;
     supersedeLoad();
-    deletingId.value = id;
+    deletingId.value = workbenchResourceKey(workbench, id);
     status.value = { kind: "idle", message: "" };
     try {
-      await apiRequest<void>(agentScopedPath(`/api/selfie-references/${encodeURIComponent(id)}`, normalizedAgentId), { method: "DELETE" });
+      await apiRequest<void>(workbenchPath(
+        `/api/selfie-references/${encodeURIComponent(id)}`,
+        normalizedAgentId,
+        workbench
+      ), { method: "DELETE" });
       if (!isCurrent(normalizedAgentId, context)) return false;
-      images.value = images.value.filter((image) => image.id !== id);
+      images.value = images.value.filter((image) => (
+        image.id !== id || (image.workbench ?? "native") !== workbench
+      ));
       status.value = { kind: "success", message: "参考图已删除" };
       return true;
     } catch (caught) {
@@ -202,6 +231,14 @@ export function useSelfieReferences() {
     maxImages.value = payload.maxImages;
   }
 
+  function applyBackendPayload(payload: SelfieReferencePayload, workbench: WorkbenchBackend) {
+    images.value = [
+      ...images.value.filter((image) => (image.workbench ?? "native") !== workbench),
+      ...payload.images.map((image) => workbench === "native" ? image : { ...image, workbench })
+    ];
+    maxImages.value = payload.maxImages;
+  }
+
   return {
     images: readonly(images),
     maxImages: readonly(maxImages),
@@ -210,7 +247,7 @@ export function useSelfieReferences() {
     updatingId: readonly(updatingId),
     deletingId: readonly(deletingId),
     status: readonly(status),
-    load,
+    load: loadAll,
     upload,
     updateNote,
     remove,
@@ -266,4 +303,13 @@ function errorMessage(error: unknown, fallback: string) {
 
 function isAbortError(error: unknown) {
   return error instanceof DOMException && error.name === "AbortError";
+}
+
+function workbenchPath(
+  path: string,
+  agentId: string,
+  workbench: WorkbenchBackend | "all"
+) {
+  const search = new URLSearchParams({ agentId, workbench });
+  return `${path}?${search.toString()}`;
 }

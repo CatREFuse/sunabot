@@ -1,6 +1,7 @@
 import { shallowReadonly, shallowRef } from "vue";
 import { apiRequest } from "./useAdminApi";
 import type {
+  KnowledgeDocument,
   KnowledgeSearchMatch,
   KnowledgeSearchResult,
   KnowledgeSnapshot
@@ -22,9 +23,7 @@ export function useKnowledgeBase() {
     const context = beginContext(agentId);
     loading.value = true;
     try {
-      const payload = await apiRequest<KnowledgeSnapshot>(endpoint("/api/knowledge", context.agentId), {
-        signal: context.controller.signal
-      });
+      const payload = await readAllSnapshot(context);
       if (!isCurrent(context)) return false;
       snapshot.value = payload;
       error.value = "";
@@ -40,7 +39,9 @@ export function useKnowledgeBase() {
     const context = beginContext(agentId);
     mutating.value = true;
     try {
-      const payload = await apiRequest<KnowledgeSnapshot>(endpoint("/api/knowledge/reindex", context.agentId), {
+      const payload = await apiRequest<KnowledgeSnapshot>(endpoint("/api/knowledge/reindex", context.agentId, {
+        workbench: "all"
+      }), {
         method: "POST",
         signal: context.controller.signal
       });
@@ -60,6 +61,7 @@ export function useKnowledgeBase() {
     const context = beginContext(agentId, false);
     searching.value = true;
     const path = endpoint("/api/knowledge/search", context.agentId, {
+      workbench: "all",
       q: query,
       limit: String(limit)
     });
@@ -82,7 +84,7 @@ export function useKnowledgeBase() {
     mutating.value = true;
     try {
       const payload = await apiRequest<{ snapshot: KnowledgeSnapshot }>(
-        endpoint("/api/knowledge/documents", context.agentId),
+        endpoint("/api/knowledge/documents", context.agentId, { workbench: "native" }),
         {
           method: "POST",
           body: JSON.stringify(input),
@@ -90,7 +92,8 @@ export function useKnowledgeBase() {
         }
       );
       if (!isCurrent(context)) return false;
-      snapshot.value = payload.snapshot;
+      void payload;
+      snapshot.value = await readAllSnapshot(context);
       clearSearch();
       error.value = "";
       return true;
@@ -102,20 +105,23 @@ export function useKnowledgeBase() {
     }
   }
 
-  async function remove(documentPath: string, agentId: string) {
+  async function remove(document: KnowledgeDocument, agentId: string) {
     const context = beginContext(agentId, false);
     mutating.value = true;
     try {
       const payload = await apiRequest<{ snapshot: KnowledgeSnapshot }>(
-        endpoint("/api/knowledge/documents", context.agentId),
+        endpoint("/api/knowledge/documents", context.agentId, {
+          workbench: document.workbench ?? "native"
+        }),
         {
           method: "DELETE",
-          body: JSON.stringify({ path: documentPath }),
+          body: JSON.stringify({ path: document.path }),
           signal: context.controller.signal
         }
       );
       if (!isCurrent(context)) return false;
-      snapshot.value = payload.snapshot;
+      void payload;
+      snapshot.value = await readAllSnapshot(context);
       clearSearch();
       error.value = "";
       return true;
@@ -162,6 +168,17 @@ export function useKnowledgeBase() {
     if (caught instanceof DOMException && caught.name === "AbortError") return false;
     error.value = caught instanceof Error ? caught.message : fallback;
     return false;
+  }
+
+  function readAllSnapshot(context: {
+    agentId: string;
+    controller: AbortController;
+  }) {
+    return apiRequest<KnowledgeSnapshot>(endpoint("/api/knowledge", context.agentId, {
+      workbench: "all"
+    }), {
+      signal: context.controller.signal
+    });
   }
 
   return {

@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
-import { createReadStream } from "node:fs";
-import { mkdir, open, rm, stat, type FileHandle } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
+import { mkdir, open, rm, type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import {
   AttachmentCacheError,
@@ -87,22 +87,36 @@ export class ContentAddressedStore {
     const maxBytes = boundedFileLimit(options.maxBytes, this.maxFileBytes);
     const partPath = this.createPartPath();
     let fileHandle: FileHandle | undefined;
-    let sourceStream: ReturnType<typeof createReadStream> | undefined;
+    let sourceHandle: FileHandle | undefined;
+    let sourceStream: ReturnType<FileHandle["createReadStream"]> | undefined;
     let releaseReservation: (() => Promise<void>) | undefined;
     if (options.signal?.aborted) {
       throw new AttachmentCacheError("cancelled", "Attachment import was cancelled.");
     }
 
     try {
-      const sourceStat = await stat(filePath);
-      if (!sourceStat.isFile()) {
+      sourceHandle = await open(
+        filePath,
+        fsConstants.O_RDONLY | requiredNoFollowFlag()
+      );
+      const sourceBefore = await sourceHandle.stat({ bigint: true });
+      if (!sourceBefore.isFile() || sourceBefore.nlink !== 1n) {
         throw new AttachmentCacheError("import_failed", "Attachment source is not a file.");
       }
-      if (sourceStat.size > maxBytes) throw new AttachmentTooLargeError(maxBytes, sourceStat.size);
-      releaseReservation = await this.janitor.reserveWriteBytes(sourceStat.size);
+      if (sourceBefore.size > BigInt(maxBytes)) {
+        throw new AttachmentTooLargeError(maxBytes, Number(sourceBefore.size));
+      }
+      const expectedSize = Number(sourceBefore.size);
+      if (!Number.isSafeInteger(expectedSize) || expectedSize < 0) {
+        throw new AttachmentCacheError("import_failed", "Attachment source size is invalid.");
+      }
+      releaseReservation = await this.janitor.reserveWriteBytes(expectedSize);
       await mkdir(this.repository.temporaryDir, { recursive: true, mode: 0o700 });
       fileHandle = await open(partPath, "wx", 0o600);
-      sourceStream = createReadStream(filePath, { signal: options.signal });
+      sourceStream = sourceHandle.createReadStream({
+        autoClose: false,
+        signal: options.signal
+      });
       const hash = createHash("sha256");
       let sizeBytes = 0;
 
@@ -119,6 +133,18 @@ export class ContentAddressedStore {
         sizeBytes = nextSize;
       }
 
+      const sourceAfter = await sourceHandle.stat({ bigint: true });
+      if (
+        sourceBefore.dev !== sourceAfter.dev
+        || sourceBefore.ino !== sourceAfter.ino
+        || sourceBefore.size !== sourceAfter.size
+        || sourceBefore.ctimeNs !== sourceAfter.ctimeNs
+        || sourceBefore.mtimeNs !== sourceAfter.mtimeNs
+        || sourceBefore.nlink !== sourceAfter.nlink
+        || sizeBytes !== expectedSize
+      ) {
+        throw new AttachmentCacheError("import_failed", "Attachment source changed during import.");
+      }
       await fileHandle.close();
       fileHandle = undefined;
       return await this.commitCompletedPart({
@@ -140,6 +166,7 @@ export class ContentAddressedStore {
         cause: error
       });
     } finally {
+      await sourceHandle?.close().catch(() => undefined);
       await releaseReservation?.();
     }
   }
@@ -150,13 +177,26 @@ export class ContentAddressedStore {
 
   async commitCompletedPart(completed: CompletedAttachmentPart, retainActiveTask = false) {
     const cached = await this.repository.commitPart(completed);
+    let handedOffActiveTask = false;
     try {
       await this.janitor.cleanup();
+      handedOffActiveTask = retainActiveTask;
       return retainActiveTask ? { ...cached, activeTaskRetained: true as const } : cached;
     } finally {
-      if (!retainActiveTask) await this.repository.endActiveTask(cached.sha256);
+      if (!handedOffActiveTask) await this.repository.endActiveTask(cached.sha256);
     }
   }
+}
+
+function requiredNoFollowFlag() {
+  const value = fsConstants.O_NOFOLLOW;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
+    throw new AttachmentCacheError(
+      "import_failed",
+      "Attachment import requires no-follow file support."
+    );
+  }
+  return value;
 }
 
 function boundedFileLimit(value: number | undefined, fallback: number) {

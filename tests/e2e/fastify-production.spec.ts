@@ -53,11 +53,21 @@ test.beforeAll(async () => {
     sourceRoot: knowledgeRoot,
     indexPath: path.join(temporaryDirectory, "cache", "knowledge", "plana.sqlite")
   });
+  const dockerKnowledgeRoot = path.join(temporaryDirectory, "docker-knowledge");
+  await fs.mkdir(path.join(dockerKnowledgeRoot, "事件"), { recursive: true });
+  await fs.writeFile(
+    path.join(dockerKnowledgeRoot, "事件", "运行记录.md"),
+    "# 运行记录\n\nDocker Workbench 运行记录。\n"
+  );
+  const dockerKnowledgeService = new KnowledgeBaseService({
+    sourceRoot: dockerKnowledgeRoot,
+    indexPath: path.join(temporaryDirectory, "cache", "knowledge", "plana-docker.sqlite")
+  });
   knowledgeApp = Fastify({ logger: false });
   registerKnowledgeRoutes(knowledgeApp, {
-    getService(agentId) {
+    getService(agentId, backend) {
       if (agentId !== "plana") throw new Error(`Unexpected knowledge Agent: ${agentId}`);
-      return knowledgeService;
+      return backend === "docker" ? dockerKnowledgeService : knowledgeService;
     }
   });
   knowledgeOrigin = await knowledgeApp.listen({ host: "127.0.0.1", port: 0 });
@@ -152,7 +162,9 @@ test("知识库 WebUI 通过真实 Fastify 临时 workspace 完成检索、上�
   await page.goto("/knowledge");
   await expect(page.getByRole("heading", { name: "知识库", exact: true })).toBeVisible();
   await expect(page.getByText("产品", { exact: true })).toBeVisible();
+  await expect(page.getByText("事件", { exact: true })).toBeVisible();
   await expect(page.getByText("路线.md", { exact: true })).toBeVisible();
+  await expect(page.getByText("运行记录.md", { exact: true })).toBeVisible();
   await page.getByLabel("检索知识库").fill("火星基地供电");
   await page.getByRole("button", { name: "检索", exact: true }).click();
   await expect(page.getByText("火星基地采用核能供电，水循环系统保持独立冗余。", { exact: true })).toBeVisible();
@@ -176,8 +188,8 @@ test("知识库 WebUI 通过真实 Fastify 临时 workspace 完成检索、上�
   );
   await expect(fs.readFile(uploadedPath, "utf8")).resolves.toContain("检查恢复点");
 
-  await page.getByRole("button", { name: "删除 运维/应急手册.md" }).click();
-  await page.getByRole("button", { name: "确认删除 运维/应急手册.md" }).click();
+  await page.getByRole("button", { name: "删除 Native 运维/应急手册.md" }).click();
+  await page.getByRole("button", { name: "确认删除 Native 运维/应急手册.md" }).click();
   await expect(page.getByText("应急手册.md", { exact: true })).toHaveCount(0);
   await expect(fs.stat(uploadedPath)).rejects.toMatchObject({ code: "ENOENT" });
 });

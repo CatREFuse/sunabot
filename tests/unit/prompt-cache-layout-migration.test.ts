@@ -18,7 +18,6 @@ const dynamicVariables = [
   "conversation.voice.settings",
   "conversation.voice.trigger_policy",
   "conversation.director.schedule",
-  "conversation.group.thread_context",
   "conversation.group.orchestrator_result",
   "persona.air",
   "memory.working",
@@ -55,10 +54,6 @@ describe("conversation prompt cache layout migration", () => {
           ].join("\n\n")
         },
         "@{messages_64}",
-        {
-          role: "developer",
-          content: "<thread_context>@{conversation.group.thread_context}</thread_context>"
-        },
         {
           role: "developer",
           content: "<orchestrator_result>@{conversation.group.orchestrator_result}</orchestrator_result>"
@@ -100,14 +95,13 @@ describe("conversation prompt cache layout migration", () => {
     expect(variableMessageIndex(migrated, "conversation.emoji.keys")).toBe(2);
     expect(variableMessageIndex(migrated, "conversation.voice.settings")).toBe(3);
     expect(variableMessageIndex(migrated, "conversation.director.schedule")).toBe(4);
-    expect(variableMessageIndex(migrated, "conversation.group.thread_context")).toBe(5);
-    expect(variableMessageIndex(migrated, "conversation.group.orchestrator_result")).toBe(6);
-    expect(variableMessageIndex(migrated, "persona.air")).toBe(7);
-    expect(variableMessageIndex(migrated, "memory.working")).toBe(7);
-    expect(variableMessageIndex(migrated, "memory.long_term")).toBe(7);
-    expect(variableMessageIndex(migrated, "memory.user_profile")).toBe(7);
-    expect(variableMessageIndex(migrated, "runtime.current_time")).toBe(7);
-    expect(variableMessageIndex(migrated, "user.input")).toBe(7);
+    expect(variableMessageIndex(migrated, "conversation.group.orchestrator_result")).toBe(5);
+    expect(variableMessageIndex(migrated, "persona.air")).toBe(6);
+    expect(variableMessageIndex(migrated, "memory.working")).toBe(6);
+    expect(variableMessageIndex(migrated, "memory.long_term")).toBe(6);
+    expect(variableMessageIndex(migrated, "memory.user_profile")).toBe(6);
+    expect(variableMessageIndex(migrated, "runtime.current_time")).toBe(6);
+    expect(variableMessageIndex(migrated, "user.input")).toBe(6);
     expect(systemVariables(migrated)).toEqual(["persona.soul"]);
     expect(migrated.tools).toBe(tools);
     expect(migrated.response_format).toBe(responseFormat);
@@ -265,7 +259,6 @@ function conversationVariables(suffix: string) {
     "conversation.voice.settings": { enabled: true },
     "conversation.voice.trigger_policy": "voice policy",
     "conversation.director.schedule": `schedule-${suffix}`,
-    "conversation.group.thread_context": `thread-${suffix}`,
     "conversation.group.orchestrator_result": `orchestrator-${suffix}`,
     "messages_64": [{ role: "user", content: `history-${suffix}` }],
     "memory.working": `working-${suffix}`,

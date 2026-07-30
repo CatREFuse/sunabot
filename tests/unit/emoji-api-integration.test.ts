@@ -230,6 +230,13 @@ describe("emoji production repository and Fastify routes", () => {
 
   it("addresses Native and Docker Workbench emoji catalogs independently", async () => {
     const agentId = "docker-agent";
+    const nativeUpload = await app.inject({
+      method: "POST",
+      url: `/api/emojis?agentId=${agentId}&workbench=native`,
+      headers: mutationHeaders(),
+      payload: uploadPayload("认真", "native.png", redPng)
+    });
+    expect(nativeUpload.statusCode, nativeUpload.body).toBe(200);
     const dockerUpload = await app.inject({
       method: "POST",
       url: `/api/emojis?agentId=${agentId}&workbench=docker`,
@@ -252,8 +259,19 @@ describe("emoji production repository and Fastify routes", () => {
         headers: readHeaders()
       })
     ]);
-    expect(nativeList.json().emojis).toEqual([]);
+    expect(nativeList.json().emojis).toHaveLength(1);
     expect(dockerList.json().emojis).toHaveLength(1);
+    const allList = await app.inject({
+      method: "GET",
+      url: `/api/emojis?agentId=${agentId}&workbench=all`,
+      headers: readHeaders()
+    });
+    expect(allList.statusCode, allList.body).toBe(200);
+    expect(allList.json().emojis).toEqual([
+      expect.objectContaining({ key: "认真", workbench: "native" }),
+      expect.objectContaining({ key: "开心", workbench: "docker" })
+    ]);
+    expect(allList.json().emojis[1].originalUrl).toContain("&workbench=docker");
     await expect(fs.access(path.join(
       requireConfig(agentId).persona.agentWorkspace,
       "docker-workbench",

@@ -125,7 +125,6 @@ const initialConfig = {
     orchestrator: {
       enabled: true,
       userGroupchatOrchestratorModel: "gpt-5.6-luna",
-      groupThreadModel: "gpt-5.4-mini",
       reasoningEffort: "max",
       promptFile: "user_groupchat_orchestrator.json",
       messageThreshold: 10,
@@ -415,10 +414,10 @@ function knowledgeSnapshot(documents: KnowledgeDocument[]) {
 }
 
 const knowledgeDocuments: KnowledgeDocument[] = [
-  { path: "产品/路线.md", format: "markdown", sizeBytes: 2_840, chunkCount: 4, status: "indexed", updatedAt: "2026-07-20T10:00:00.000Z" },
-  { path: "产品/发布/检查清单.md", format: "markdown", sizeBytes: 1_560, chunkCount: 6, status: "indexed", updatedAt: "2026-07-20T10:00:00.000Z" },
-  { path: "事件/运行记录.jsonl", format: "jsonl", sizeBytes: 4_096, chunkCount: 18, status: "indexed", updatedAt: "2026-07-20T10:00:00.000Z" },
-  { path: "说明.txt", format: "text", sizeBytes: 640, chunkCount: 3, status: "indexed", updatedAt: "2026-07-20T10:00:00.000Z" }
+  { path: "产品/路线.md", format: "markdown", sizeBytes: 2_840, chunkCount: 4, status: "indexed", updatedAt: "2026-07-20T10:00:00.000Z", workbench: "native" },
+  { path: "产品/发布/检查清单.md", format: "markdown", sizeBytes: 1_560, chunkCount: 6, status: "indexed", updatedAt: "2026-07-20T10:00:00.000Z", workbench: "native" },
+  { path: "事件/运行记录.jsonl", format: "jsonl", sizeBytes: 4_096, chunkCount: 18, status: "indexed", updatedAt: "2026-07-20T10:00:00.000Z", workbench: "docker" },
+  { path: "说明.txt", format: "text", sizeBytes: 640, chunkCount: 3, status: "indexed", updatedAt: "2026-07-20T10:00:00.000Z", workbench: "native" }
 ];
 
 export interface MockApiState {
@@ -491,6 +490,7 @@ export interface MockApiState {
     displayUrl: string;
     placeholderUrl: string;
   }>;
+  dockerSelfieReferences: MockApiState["selfieReferences"];
   voiceProfiles: Record<string, VoiceProfile>;
   voiceProvider: VoiceProviderStatus;
   voiceServiceRequests: string[];
@@ -557,6 +557,9 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
       selfieReference("01-neutral-face.png", "常服正面", 458, 501, 241_664),
       selfieReference("02-gentle-smile.png", "温柔微笑", 458, 501, 244_736),
       selfieReference("03-full-outfit.jpg", "制服全身", 1200, 1393, 441_344)
+    ],
+    dockerSelfieReferences: [
+      selfieReference("docker-group-reference.png", "群聊参考", 640, 640, 131_072)
     ],
     voiceProfiles: structuredClone(initialVoiceProfiles),
     voiceProvider: structuredClone(readyVoiceProvider),
@@ -1057,10 +1060,26 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
       return route.fulfill({ status: 200, contentType: "image/png", body: await imageFixture });
     }
     if (pathname === "/api/selfie-references" && method === "GET") {
-      return json(route, { images: state.selfieReferences, maxImages: 9 });
+      const workbench = url.searchParams.get("workbench") || "native";
+      if (workbench === "all") {
+        return json(route, {
+          images: [
+            ...state.selfieReferences.map((reference) => withSelfieWorkbench(reference, "native")),
+            ...state.dockerSelfieReferences.map((reference) => withSelfieWorkbench(reference, "docker"))
+          ],
+          maxImages: 9
+        });
+      }
+      const references = workbench === "docker" ? state.dockerSelfieReferences : state.selfieReferences;
+      return json(route, {
+        images: references.map((reference) => withSelfieWorkbench(reference, workbench === "docker" ? "docker" : "native")),
+        maxImages: 9
+      });
     }
     if (pathname === "/api/selfie-references" && method === "POST") {
-      if (state.selfieReferences.length >= 9) {
+      const workbench = url.searchParams.get("workbench") === "docker" ? "docker" : "native";
+      const references = workbench === "docker" ? state.dockerSelfieReferences : state.selfieReferences;
+      if (references.length >= 9) {
         return json(route, { error: { code: "SELFIE_REFERENCE_LIMIT", message: "最多保留 9 张参考图。" } }, 409);
       }
       const body = request.postDataJSON() as { fileName?: string; note?: string };
@@ -1068,24 +1087,37 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
       if (!note) {
         return json(route, { error: { code: "SELFIE_REFERENCE_NOTE_INVALID", message: "自拍参考图备注无效。" } }, 400);
       }
-      state.selfieReferences.push(selfieReference(body.fileName || "reference.png", note, 640, 640, 16_384));
-      return json(route, { images: state.selfieReferences, maxImages: 9 }, 201);
+      references.push(selfieReference(body.fileName || "reference.png", note, 640, 640, 16_384));
+      return json(route, {
+        images: references.map((reference) => withSelfieWorkbench(reference, workbench)),
+        maxImages: 9
+      }, 201);
     }
     const selfieReferenceMatch = pathname.match(/^\/api\/selfie-references\/([^/]+)$/);
     if (selfieReferenceMatch && method === "PATCH") {
       const id = decodeURIComponent(selfieReferenceMatch[1]);
       const body = request.postDataJSON() as { note?: string };
       const note = body.note?.trim() ?? "";
-      const reference = state.selfieReferences.find((image) => image.id === id);
+      const workbench = url.searchParams.get("workbench") === "docker" ? "docker" : "native";
+      const references = workbench === "docker" ? state.dockerSelfieReferences : state.selfieReferences;
+      const reference = references.find((image) => image.id === id);
       if (!reference || !note) {
         return json(route, { error: { code: "SELFIE_REFERENCE_NOTE_INVALID", message: "自拍参考图备注无效。" } }, 400);
       }
       reference.note = note;
-      return json(route, { images: state.selfieReferences, maxImages: 9 });
+      return json(route, {
+        images: references.map((image) => withSelfieWorkbench(image, workbench)),
+        maxImages: 9
+      });
     }
     if (selfieReferenceMatch && method === "DELETE") {
       const id = decodeURIComponent(selfieReferenceMatch[1]);
-      state.selfieReferences = state.selfieReferences.filter((image) => image.id !== id);
+      const workbench = url.searchParams.get("workbench") === "docker" ? "docker" : "native";
+      if (workbench === "docker") {
+        state.dockerSelfieReferences = state.dockerSelfieReferences.filter((image) => image.id !== id);
+      } else {
+        state.selfieReferences = state.selfieReferences.filter((image) => image.id !== id);
+      }
       return route.fulfill({ status: 204 });
     }
 
@@ -1775,16 +1807,18 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
             startLine: 4,
             endLine: 5,
             content: "火星基地采用核能供电，水循环系统保持独立冗余。",
-            score: 2.7183
+            score: 2.7183,
+            workbench: "native"
           },
           {
-            path: "产品/发布/检查清单.md",
-            format: "markdown",
-            ordinal: 3,
-            startLine: 12,
-            endLine: 14,
-            content: "发布前检查供电、网络和数据恢复点。",
-            score: 1.2048
+            path: "事件/运行记录.jsonl",
+            format: "jsonl",
+            ordinal: 8,
+            startLine: 8,
+            endLine: 8,
+            content: "运行记录确认供电、网络和数据恢复点。",
+            score: 1.2048,
+            workbench: "docker"
           }
         ] : []
       });
@@ -2222,6 +2256,20 @@ function selfieReference(fileName: string, note: string, width: number, height: 
     originalUrl: `${path}?variant=original`,
     displayUrl: `${path}?variant=display`,
     placeholderUrl: `${path}?variant=placeholder`
+  };
+}
+
+function withSelfieWorkbench(
+  reference: MockApiState["selfieReferences"][number],
+  workbench: "native" | "docker"
+) {
+  const suffix = workbench === "docker" ? "&workbench=docker" : "";
+  return {
+    ...reference,
+    workbench,
+    originalUrl: `${reference.originalUrl}${suffix}`,
+    displayUrl: `${reference.displayUrl}${suffix}`,
+    placeholderUrl: `${reference.placeholderUrl}${suffix}`
   };
 }
 

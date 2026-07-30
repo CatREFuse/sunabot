@@ -29,10 +29,6 @@ const DYNAMIC_BLOCKS: readonly DynamicBlock[] = [
     role: "developer"
   },
   {
-    variables: ["conversation.group.thread_context"],
-    role: "developer"
-  },
-  {
     variables: ["conversation.group.orchestrator_result"],
     role: "developer"
   },

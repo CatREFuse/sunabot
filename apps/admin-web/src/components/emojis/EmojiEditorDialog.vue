@@ -1,12 +1,15 @@
 <script setup lang="ts">
 import { computed, shallowRef, useTemplateRef, watch } from "vue";
 import type { EmojiUploadInput } from "../../types/emojis";
+import type { WorkbenchBackend } from "../../types/workbench";
+import { workbenchLabel } from "../../types/workbench";
 import { emojiKeyValidationError, normalizeEmojiKey } from "../../utils/emojiKey";
 import DialogOverlay from "../ui/DialogOverlay.vue";
 
 const props = defineProps<{
   open: boolean;
   emojiKey: string;
+  workbench: WorkbenchBackend;
   busy: boolean;
   error: string;
 }>();
@@ -92,6 +95,10 @@ function formatBytes(bytes: number) {
       </header>
 
       <div class="grid min-h-0 flex-1 content-start gap-5 overflow-y-auto p-4 md:p-5">
+        <div class="flex min-w-0 items-center justify-between gap-4 border-y border-line py-3">
+          <span class="meta-label">位置</span>
+          <span class="inline-state">{{ workbenchLabel(workbench) }}</span>
+        </div>
         <label class="field">
           <span class="field-label">名称</span>
           <input v-model="keyInput" class="control" type="text" maxlength="24" autocomplete="off" :disabled="fixedKey" :data-dialog-initial-focus="fixedKey ? undefined : ''">

@@ -133,7 +133,7 @@ export async function runtime_performHydrateConversationRecords(this: RuntimeHos
         const processedAttachments = unresolvedAttachments.length
           ? await this.attachmentService.processIncoming(
             unresolvedAttachments,
-            attachmentSourcePort(gateway),
+            attachmentSourcePort(gateway, target.record.accountId),
             details.text,
             `${target.record.id}/${target.message.id}`
           )
@@ -514,6 +514,7 @@ export async function runtime_processIncomingReplyEvent(this: RuntimeHost,
       });
       return {
         status: "deferred",
+        ...(deferred.jobId ? { jobId: deferred.jobId } : {}),
         providerCallId: deferred.deferred.toolCall.callId,
         toolName: deferred.deferred.toolCall.name,
         arguments: deferred.deferred.toolCall.arguments,
@@ -722,7 +723,7 @@ export async function runtime_prepareIncomingMessage(this: RuntimeHost, incoming
       if (incoming.attachments.length) {
         incoming.attachments = await this.attachmentService.processIncoming(
           incoming.attachments,
-          attachmentSourcePort(gateway),
+          attachmentSourcePort(gateway, incoming.accountId),
           incoming.text,
           incomingAttachmentReferenceScope(incoming)
         );

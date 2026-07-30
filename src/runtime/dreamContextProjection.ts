@@ -13,6 +13,7 @@ export const DREAM_CONTEXT_PROJECTION_LIMITS = {
     workingMemories: 48,
     longTermMemories: 48,
     recallStats: 48,
+    personaImpressions: 64,
     identityReferences: 128,
     sourceMemoryIds: 128,
     userProfiles: 64,
@@ -57,6 +58,10 @@ const MEMORY_REASONS = new Set([
 ]);
 const MESSAGE_ROLES = new Set(["user", "assistant", "event"]);
 const TASK_STATUSES = new Set(["pending", "running", "generated", "completed", "failed"]);
+const PERSONA_IMPRESSION_KINDS = new Set(["habit", "communication_preference", "relationship_tendency"]);
+const PERSONA_IMPRESSION_LEVELS = new Set(["observation", "stable", "core"]);
+const PERSONA_IMPRESSION_TARGETS = new Set(["PREFERENCE.md", "RELATION.md"]);
+const PERSONA_TOPIC_PATTERN = /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/u;
 const MEMORY_TEXT_FIELDS = [
   "eventType", "memoryKind", "occurredAt", "occurredEndAt", "observedAt", "createdAt", "updatedAt",
   "dreamDate", "dreamReviewedAt"
@@ -120,6 +125,7 @@ export function projectDreamContext(value: unknown): DreamContextProjectionResul
     observedConversations: projectConversations(input.observedConversations, identities, seed),
     activeTasks: projectTasks(input.activeTasks, identities, seed),
     plannedDailySchedule: projectDirectorSchedule(input.plannedDailySchedule, identities, seed),
+    personaImpressions: projectPersonaImpressions(input.personaImpressions, identities, seed),
     persona: projectPersona(input.persona, identities)
   };
   enforceTotalPayloadLimit(payload);
@@ -139,6 +145,38 @@ export function projectDreamContext(value: unknown): DreamContextProjectionResul
     byteLength,
     fieldKnowledgeBindings: payload.fieldKnowledgeWritable === true ? fieldKnowledgeBindings : []
   };
+}
+
+function projectPersonaImpressions(value: unknown, identities: IdentityIndex, seed: string) {
+  return arrayValue(value)
+    .slice(-DREAM_CONTEXT_PROJECTION_LIMITS.arrays.personaImpressions)
+    .flatMap((raw) => {
+      const record = recordValue(raw);
+      const kind = typeof record.kind === "string" && PERSONA_IMPRESSION_KINDS.has(record.kind)
+        ? record.kind : null;
+      const targetFile = typeof record.targetFile === "string"
+        && PERSONA_IMPRESSION_TARGETS.has(record.targetFile) ? record.targetFile : null;
+      const level = typeof record.level === "string" && PERSONA_IMPRESSION_LEVELS.has(record.level)
+        ? record.level : null;
+      const topicKey = typeof record.topicKey === "string"
+        && PERSONA_TOPIC_PATTERN.test(record.topicKey) ? record.topicKey : null;
+      const statement = typeof record.statement === "string"
+        ? boundedText(record.statement, 80, identities) : "";
+      if (!kind || !targetFile || !level || !topicKey || !statement) return [];
+      const rawId = optionalIdentityValue(record.id);
+      return [compactObject({
+        impressionRef: rawId ? opaqueReference(seed, "impression", rawId) : undefined,
+        appliedAt: optionalBoundedText(
+          record.appliedAt,
+          DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.timestamp
+        ),
+        kind,
+        targetFile,
+        topicKey,
+        level,
+        statement
+      })];
+    });
 }
 
 export function dreamContextPayloadByteLength(value: unknown) {

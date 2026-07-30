@@ -10,6 +10,8 @@ import type { SessionStore, ToolJobRecord } from "./sessionStore.js";
 import type {
   ClaimedToolTask,
   CodexProcessCleanup,
+  CodexResultFinalization,
+  CodexResultFinalizer,
   CodexToolUsageObserver,
   DeferredToolRunner,
   SessionClaimState
@@ -20,6 +22,7 @@ export interface SessionToolJobProcessorOptions {
   codexRunner: CodexRunner;
   cleanupCodexProcess: CodexProcessCleanup;
   runDeferredTool?: DeferredToolRunner;
+  finalizeCodexResult?: CodexResultFinalizer;
   observeCodexToolUsage?: CodexToolUsageObserver;
   workerId: string;
   isStopped(): boolean;
@@ -37,6 +40,7 @@ export class SessionToolJobProcessor {
     const attemptToken = requiredText(job.attemptToken, "tool job attemptToken");
     let codexProcessStarted = false;
     let codexAttemptResult: CodexToolResult | undefined;
+    let stagedFinalization: CodexResultFinalization | undefined;
     try {
       if (job.toolName !== "codex") {
         const runner = this.options.runDeferredTool;
@@ -81,7 +85,7 @@ export class SessionToolJobProcessor {
           job.processIdentity.runToken
         );
       }
-      const result: CodexToolResult = await this.options.codexRunner.run(job.arguments as CodexToolInput, {
+      const runnerResult: CodexToolResult = await this.options.codexRunner.run(job.arguments as CodexToolInput, {
         jobId: job.id,
         jobDir: path.join(settings.jobRoot, job.id),
         workspacePath: settings.workspacePath,
@@ -103,6 +107,31 @@ export class SessionToolJobProcessor {
           );
         }
       });
+      codexAttemptResult = runnerResult;
+      this.options.assertClaimUsable(state, signal);
+      let result = runnerResult;
+      try {
+        if (this.options.finalizeCodexResult) {
+          stagedFinalization = await this.options.finalizeCodexResult({
+            job,
+            settings,
+            result: runnerResult,
+            signal
+          });
+          result = stagedFinalization.result;
+        } else if (runnerResult.artifacts?.length) {
+          throw Object.assign(new Error("Codex artifact finalizer is not configured."), {
+            code: "codex_artifact_finalizer_unavailable"
+          });
+        }
+      } catch (error) {
+        const finalizationError = sanitizedCodexArtifactError(
+          error,
+          path.join(settings.jobRoot, job.id)
+        );
+        codexAttemptResult = codexArtifactFailureResult(runnerResult, finalizationError);
+        throw finalizationError;
+      }
       codexAttemptResult = result;
       this.options.assertClaimUsable(state, signal);
       this.options.store.completeToolJob({
@@ -114,8 +143,12 @@ export class SessionToolJobProcessor {
         result,
         error: result.ok ? undefined : result.error
       });
+      stagedFinalization?.commit();
+      stagedFinalization = undefined;
       state.finalized = true;
     } catch (error) {
+      await stagedFinalization?.rollback().catch(() => undefined);
+      stagedFinalization = undefined;
       const status: CodexTaskStatus = signal.aborted ? "timed_out" : "failed";
       if (job.toolName === "codex" && codexProcessStarted && !codexAttemptResult) {
         codexAttemptResult = {
@@ -212,4 +245,35 @@ function serializeError(error: unknown) {
 function requiredText(value: unknown, name: string) {
   if (typeof value !== "string" || !value.trim()) throw new Error(`${name} is required.`);
   return value.trim();
+}
+
+function codexArtifactFailureResult(
+  result: CodexToolResult,
+  error: unknown
+): CodexToolResult {
+  return {
+    ...result,
+    ok: false,
+    status: "failed",
+    artifacts: undefined,
+    error: {
+      code: typeof (error as { code?: unknown } | undefined)?.code === "string"
+        ? String((error as { code: string }).code)
+        : "codex_artifact_publish_failed",
+      message: error instanceof Error ? error.message : String(error),
+      retryable: false
+    }
+  };
+}
+
+function sanitizedCodexArtifactError(error: unknown, jobDir: string) {
+  const rawCode = typeof (error as { code?: unknown } | undefined)?.code === "string"
+    ? String((error as { code: string }).code)
+    : "codex_artifact_publish_failed";
+  const code = /^codex_artifact_[a-z_]+$/u.test(rawCode)
+    ? rawCode
+    : "codex_artifact_publish_failed";
+  const rawMessage = error instanceof Error ? error.message : String(error);
+  const message = rawMessage.split(path.resolve(jobDir)).join("Codex artifact job directory");
+  return Object.assign(new Error(message), { code });
 }
