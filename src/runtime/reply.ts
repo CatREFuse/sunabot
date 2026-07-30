@@ -74,6 +74,7 @@ import {
   GROUP_CHAT_SUMMARY_COMMAND,
   GROUP_CHAT_SUMMARY_WINDOW_MS,
   MAX_CURRENT_CONTEXT_IMAGES,
+  MESSAGE_32_CONTEXT_TOKEN_BUDGET,
   type DirectorReplyAccess,
   type DeferredCodexTurn,
   type ReplyDelivery
@@ -247,6 +248,12 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
           attachmentContext.text
         );
       const prompt = debounceContext.buildCurrentPrompt(basePrompt, Boolean(options.promptOverride));
+      const message32 = this.buildRecentContextMessages(
+        incoming,
+        debounceContext.historyCaptureSequence,
+        32,
+        MESSAGE_32_CONTEXT_TOKEN_BUDGET
+      );
       const messages64 = this.buildRecentContextMessages(incoming, debounceContext.historyCaptureSequence, 64);
       const conversationMessages = this.buildRecentContextMessages(incoming, debounceContext.historyCaptureSequence), markerId = nanoid();
       const currentInputMarker = incoming.scope === "private" ? undefined : { start: `\uE000sunabot-current-input:${markerId}:start\uE001`, end: `\uE000sunabot-current-input:${markerId}:end\uE001` };
@@ -267,6 +274,7 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
         ...voiceSnapshot.variables,
         ...buildMemoryPromptVariables({ working: workingMemoryMatches,
           longTerm: longTermMemoryMatches, userProfile: currentUserProfileMemoryMatches }),
+        "message_32": message32,
         "messages_64": messages64,
         "conversation.messages": conversationMessages,
         [DIRECTOR_CONVERSATION_SCHEDULE_VARIABLE]: directorContext,

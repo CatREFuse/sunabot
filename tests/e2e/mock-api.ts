@@ -98,7 +98,7 @@ const initialConfig = {
     pokeOnNoReply: false,
     quoteGroupReplies: true,
     quoteGroupReplyExcludedUserIds: [],
-    contextMessageLimit: 48,
+    contextMessageLimit: 32,
     tone: {
       enabled: false,
       segmentedReply: false,

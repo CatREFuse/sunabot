@@ -24,6 +24,7 @@ import {
   type WorkingMemoryDocumentItem
 } from "../../services/memory/workingMemoryDocument.js";
 import { loadPersona } from "../../services/agent/persona.js";
+import { appendConversationMessage } from "../../src/runtime/conversationMemoryHelpers.js";
 import {
   conversationRecordId,
   persistentIncomingKey
@@ -287,7 +288,7 @@ async function runConversationCase(
         session: { skipped: "account_contract_failed" }
       };
     }
-    await seedConversationFixture(built, input);
+    await seedConversationFixture(built, input, parsed);
     const inbound = await gateway.ingestEvent(
       event,
       { accountId: input.accountId, selfId: input.selfId },
@@ -425,7 +426,8 @@ function ensureConversationFixtureAccount(
 
 async function seedConversationFixture(
   built: Awaited<ReturnType<typeof import("../../apps/api/server.js")["buildApp"]>>,
-  input: ConversationUserTestInput
+  input: ConversationUserTestInput,
+  incoming: NonNullable<ReturnType<typeof parseOneBotInboundMessage>>
 ) {
   const fixture = input.fixture;
   if (!fixture) return;
@@ -434,6 +436,49 @@ async function seedConversationFixture(
   if (fixture.userProfiles) repository.replaceMemory("user_profile", fixture.userProfiles);
   if (fixture.workingMemory) {
     await seedWorkingMemoryFixture(built, fixture.workingMemory);
+  }
+  if (fixture.conversationMessages) {
+    const lastFixtureMessage = fixture.conversationMessages.at(-1);
+    if (!lastFixtureMessage) {
+      throw new Error("USER_TEST_CONVERSATION_FIXTURE_MESSAGES_INVALID");
+    }
+    const record = built.runtime.ensureConversationRecord(incoming, incoming.time);
+    if (record.messageCount !== 0 || record.messages.length !== 0) {
+      throw new Error("USER_TEST_CONVERSATION_FIXTURE_NOT_FRESH");
+    }
+    const currentMessageId = incoming.messageId == null ? "" : String(incoming.messageId);
+    if (
+      currentMessageId &&
+      fixture.conversationMessages.some((message) => message.id === currentMessageId)
+    ) {
+      throw new Error("USER_TEST_CONVERSATION_FIXTURE_MESSAGE_ID_COLLISION");
+    }
+    if (
+      Date.parse(lastFixtureMessage.at) >= Date.parse(incoming.time)
+    ) {
+      throw new Error("USER_TEST_CONVERSATION_FIXTURE_TIME_INVALID");
+    }
+    for (const message of fixture.conversationMessages) {
+      appendConversationMessage(record, {
+        id: message.id,
+        role: message.role,
+        text: message.text,
+        at: message.at,
+        sequence: message.sequence,
+        ...(message.userId == null ? {} : {
+          userId: message.userId,
+          isAdmin: built.runtime.isAdminUser(message.userId)
+        }),
+        ...(incoming.groupId == null ? {} : { groupId: incoming.groupId }),
+        ...(message.senderName == null ? {} : { senderName: message.senderName }),
+        selfId: incoming.selfId
+      });
+    }
+    record.memoryCompressedThroughMessageCount = record.messageCount;
+    if (record.scope === "user_group") {
+      record.orchestratorCheckedMessageCount = record.messageCount;
+    }
+    built.runtime.persistConversationRecords();
   }
   if (fixture.air != null) {
     const current = await readAirKnowledge(built.runtime.config);

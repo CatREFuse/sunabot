@@ -79,6 +79,7 @@ const conversationVariables = [
   variable("conversation.emoji.syntax", "表情发送标记规则", "string", "Agent 表情库"),
   variable("conversation.voice.settings", "当前 Agent 的语音开关、默认语言和在线音色状态", "json", "Agent 语音设置"),
   variable("conversation.voice.trigger_policy", "语音伴生消息的触发边界", "string", "Agent 语音设置"),
+  variable("message_32", "当前消息之前最近最多 32 条完整会话消息；群聊消息包含时间、顺序、消息 ID、显示名、uid 和引用目标", "message[]", "会话上下文"),
   variable("messages_64", "当前消息之前最近最多 64 条完整会话消息；群聊消息包含时间、顺序、消息 ID、显示名、uid 和引用目标", "message[]", "会话上下文"),
   variable("conversation.messages", "当前消息之前可直接发送给模型的会话消息", "message[]", "会话上下文"),
   variable("memory.working", "工作记忆召回结果", "string", "记忆召回"),

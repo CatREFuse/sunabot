@@ -30,6 +30,10 @@ import { migrateConversationChatMediaPrompt } from "../../services/agent/chatMed
 import { migrateConversationCodexOutputPrompt } from "../../services/agent/codexOutputPromptMigration.js";
 import { migrateConversationPromptCacheLayout } from "../../services/agent/promptCacheLayoutMigration.js";
 import {
+  CONVERSATION_MESSAGE_32_MIGRATION_VERSION,
+  migrateConversationMessage32Prompt
+} from "../../services/agent/conversationHistoryPromptMigration.js";
+import {
   migrateConversationDirectorPrompt,
   migrateDirectorScheduleSchemaPrompt
 } from "../../services/agent/directorPromptMigration.js";
@@ -349,12 +353,19 @@ function runtimePromptMigrations(config: AppConfig, selfiePromptDefault: string)
       () => migrateConversationReferenceToolDescriptions(config, file),
       [codexOutputId]
     );
-    add(
+    const cacheLayoutId = add(
       "conversation-cache-layout-v1",
       "system",
       file,
       () => migrateConversationPromptCacheLayout(config, file),
       [referenceToolsId]
+    );
+    add(
+      CONVERSATION_MESSAGE_32_MIGRATION_VERSION,
+      "system",
+      file,
+      () => migrateConversationMessage32Prompt(config, file),
+      [cacheLayoutId]
     );
   }
 

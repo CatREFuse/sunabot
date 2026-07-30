@@ -38,7 +38,7 @@ import type { RuntimeVoiceOptions } from "./voice.js";
 
 export { SYSTEM_CONFIG_NEUTRAL_CONFIRMATION_TEXT } from "../../packages/contracts/session/runtimeMessages.js";
 
-export const DEFAULT_CONTEXT_MESSAGE_LIMIT = 48;
+export const DEFAULT_CONTEXT_MESSAGE_LIMIT = 32;
 export const MAX_STORED_CONVERSATION_MESSAGES = 2000;
 export const GROUP_CHAT_SUMMARY_WINDOW_MS = 6 * 60 * 60 * 1000;
 export const MAX_SELFIE_REFERENCE_IMAGES = 4;
@@ -52,6 +52,7 @@ export const ORCHESTRATOR_MAX_RETRIES = 3;
 export const PREPARE_TIMEOUT_MS = 90 * 1000;
 export const DIRECT_REPLY_TIMEOUT_MS = PREPARE_TIMEOUT_MS + TOOL_CALL_TIMEOUT_MS;
 export const RECENT_CONTEXT_TOKEN_BUDGET = 2_048;
+export const MESSAGE_32_CONTEXT_TOKEN_BUDGET = 4_096;
 export const DEDUPE_TTL_MS = 10 * 60 * 1000;
 export const MAX_DEDUPE_KEYS = 20_000;
 export const DEFAULT_ADMIN_NAME = "猫老师";

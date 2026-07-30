@@ -163,7 +163,7 @@ describe("conversation prompt cache layout migration", () => {
       const template = defaultFinalPromptTemplate(promptId);
       expect(template).toBeDefined();
       if (!template) return;
-      const historyIndex = template.messages.indexOf("@{messages_64}");
+      const historyIndex = template.messages.indexOf("@{message_32}");
       expect(historyIndex).toBeGreaterThanOrEqual(0);
       expect(systemVariables(template)).not.toEqual(
         expect.arrayContaining(dynamicVariables)
@@ -260,7 +260,7 @@ function conversationVariables(suffix: string) {
     "conversation.voice.trigger_policy": "voice policy",
     "conversation.director.schedule": `schedule-${suffix}`,
     "conversation.group.orchestrator_result": `orchestrator-${suffix}`,
-    "messages_64": [{ role: "user", content: `history-${suffix}` }],
+    "message_32": [{ role: "user", content: `history-${suffix}` }],
     "memory.working": `working-${suffix}`,
     "memory.long_term": `long-${suffix}`,
     "memory.user_profile": `profile-${suffix}`,

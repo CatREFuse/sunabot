@@ -1195,7 +1195,7 @@ test("最终请求支持消息组、排序、结构测试和 JSON 存储同步",
   await expect(systemPrompt).toContainText("<user_input>@{user.input}</user_input>");
 
   await page.getByRole("tab", { name: "消息组 2" }).click();
-  await expect(page.getByLabel("消息组变量")).toHaveValue("messages_64");
+  await expect(page.getByLabel("消息组变量")).toHaveValue("message_32");
   await page.getByRole("button", { name: "后移消息 2" }).click();
 
   await page.getByRole("tab", { name: "user 消息" }).click();
@@ -1213,7 +1213,7 @@ test("最终请求支持消息组、排序、结构测试和 JSON 存储同步",
   expect(saved).toBeDefined();
   const document = JSON.parse(saved?.content ?? "{}");
   expect(document.messages[0].content).toContain("<user_input>@{user.input}</user_input>");
-  expect(document.messages[2]).toBe("@{messages_64}");
+  expect(document.messages[2]).toBe("@{message_32}");
   expect(document.tools[0].function.name).toBe("workspace_bash_v2");
   expect(document.response_format).toEqual({ type: "text" });
 });
@@ -1264,7 +1264,7 @@ test("最终提示词在不同宽度保持单槽位双栏编辑", async ({ page 
   await page.getByRole("button", { name: "保存", exact: true }).click();
   await expect(page.getByText("已保存", { exact: true })).toBeVisible();
   const saved = state.files.find((file) => file.id === "conversation.private-reply");
-  expect(JSON.parse(saved?.content ?? "{}").messages).toContain("@{messages_64}");
+  expect(JSON.parse(saved?.content ?? "{}").messages).toContain("@{message_32}");
 });
 
 test("管理员账号密码建立 HttpOnly 会话且不写入浏览器存储", async ({ page }) => {

@@ -81,6 +81,7 @@ function validateUserTestCase(value: unknown): UserTestCase {
     "forbiddenAvailableTools",
     "requiredText",
     "forbiddenText",
+    "providerPrompt",
     "requiredOutboundKinds",
     "forbiddenOutboundKinds",
     "requiredInboundAttachments",
@@ -109,6 +110,7 @@ function validateUserTestCase(value: unknown): UserTestCase {
       ...optionalStringArray(expected.forbiddenAvailableTools, "forbiddenAvailableTools"),
       ...optionalStringArray(expected.requiredText, "requiredText"),
       ...optionalStringArray(expected.forbiddenText, "forbiddenText"),
+      ...optionalProviderPrompt(expected.providerPrompt),
       ...optionalOutboundKindArray(expected.requiredOutboundKinds, "requiredOutboundKinds"),
       ...optionalOutboundKindArray(expected.forbiddenOutboundKinds, "forbiddenOutboundKinds"),
       ...optionalInboundAttachmentArray(expected.requiredInboundAttachments),
@@ -267,7 +269,8 @@ function validateConversationFixture(value: unknown) {
     "air",
     "resetKnowledge",
     "workbenchFiles",
-    "attachmentSources"
+    "attachmentSources",
+    "conversationMessages"
   ], true);
   const resetKnowledge = fixture.resetKnowledge == null
     ? undefined
@@ -379,6 +382,9 @@ function validateConversationFixture(value: unknown) {
   ) {
     throw new Error("USER_TEST_CASE_CONVERSATION_FIXTURE_ATTACHMENTS_INVALID");
   }
+  const conversationMessages = fixture.conversationMessages == null
+    ? undefined
+    : validateConversationFixtureMessages(fixture.conversationMessages);
   return {
     ...(fixture.workingMemory == null ? {} : {
       workingMemory: validateWorkingMemoryFixture(fixture.workingMemory)
@@ -394,8 +400,90 @@ function validateConversationFixture(value: unknown) {
     }),
     ...(resetKnowledge == null ? {} : { resetKnowledge }),
     ...(files == null ? {} : { workbenchFiles: files }),
-    ...(attachmentSources == null ? {} : { attachmentSources })
+    ...(attachmentSources == null ? {} : { attachmentSources }),
+    ...(conversationMessages == null ? {} : { conversationMessages })
   };
+}
+
+function validateConversationFixtureMessages(value: unknown) {
+  const messages = array(
+    value,
+    "USER_TEST_CASE_CONVERSATION_FIXTURE_MESSAGES_INVALID"
+  ).map((item, index) => {
+    const message = record(
+      item,
+      "USER_TEST_CASE_CONVERSATION_FIXTURE_MESSAGES_INVALID"
+    );
+    exactKeys(message, [
+      "id",
+      "sequence",
+      "role",
+      "text",
+      "at",
+      "userId",
+      "senderName"
+    ], true);
+    if (message.role !== "user" && message.role !== "assistant") {
+      throw new Error("USER_TEST_CASE_CONVERSATION_FIXTURE_MESSAGES_INVALID");
+    }
+    if (message.sequence !== index + 1) {
+      throw new Error("USER_TEST_CASE_CONVERSATION_FIXTURE_MESSAGES_INVALID");
+    }
+    if (message.role === "user" && message.userId == null) {
+      throw new Error("USER_TEST_CASE_CONVERSATION_FIXTURE_MESSAGES_INVALID");
+    }
+    return {
+      id: boundedText(
+        message.id,
+        `fixture.conversationMessages[${index}].id`,
+        1,
+        128,
+        /^[A-Za-z0-9][A-Za-z0-9._:-]*$/u
+      ),
+      sequence: positiveInteger(
+        message.sequence,
+        `fixture.conversationMessages[${index}].sequence`
+      ),
+      role: message.role,
+      text: boundedText(
+        message.text,
+        `fixture.conversationMessages[${index}].text`,
+        1,
+        20_000
+      ),
+      at: isoTimestamp(
+        message.at,
+        `fixture.conversationMessages[${index}].at`
+      ),
+      ...(message.userId == null ? {} : {
+        userId: positiveInteger(
+          message.userId,
+          `fixture.conversationMessages[${index}].userId`
+        )
+      }),
+      ...(message.senderName == null ? {} : {
+        senderName: boundedText(
+          message.senderName,
+          `fixture.conversationMessages[${index}].senderName`,
+          1,
+          200
+        )
+      })
+    };
+  });
+  if (
+    messages.length === 0 ||
+    messages.length > 120 ||
+    new Set(messages.map((message) => message.id)).size !== messages.length
+  ) {
+    throw new Error("USER_TEST_CASE_CONVERSATION_FIXTURE_MESSAGES_INVALID");
+  }
+  for (let index = 1; index < messages.length; index += 1) {
+    if (Date.parse(messages[index]!.at) <= Date.parse(messages[index - 1]!.at)) {
+      throw new Error("USER_TEST_CASE_CONVERSATION_FIXTURE_MESSAGES_INVALID");
+    }
+  }
+  return messages;
 }
 
 function validateWorkingMemoryFixture(value: unknown) {
@@ -756,6 +844,55 @@ function optionalStringArray(value: unknown, key: string) {
   const items = array(value, `USER_TEST_CASE_${key.toUpperCase()}_INVALID`)
     .map((item) => boundedText(item, key, 1, 500));
   return { [key]: [...new Set(items)] };
+}
+
+function optionalProviderPrompt(value: unknown) {
+  if (value == null) return {};
+  const expectation = record(value, "USER_TEST_CASE_PROVIDER_PROMPT_INVALID");
+  exactKeys(expectation, ["promptFamily", "orderedText", "forbiddenText"], true);
+  const orderedText = array(
+    expectation.orderedText,
+    "USER_TEST_CASE_PROVIDER_PROMPT_INVALID"
+  ).map((item, index) => boundedText(
+    item,
+    `providerPrompt.orderedText[${index}]`,
+    1,
+    500
+  ));
+  const forbiddenText = expectation.forbiddenText == null
+    ? undefined
+    : array(
+        expectation.forbiddenText,
+        "USER_TEST_CASE_PROVIDER_PROMPT_INVALID"
+      ).map((item, index) => boundedText(
+        item,
+        `providerPrompt.forbiddenText[${index}]`,
+        1,
+        500
+      ));
+  if (
+    orderedText.length === 0 ||
+    orderedText.length > 64 ||
+    new Set(orderedText).size !== orderedText.length ||
+    (forbiddenText?.length ?? 0) > 64 ||
+    (forbiddenText && new Set(forbiddenText).size !== forbiddenText.length) ||
+    forbiddenText?.some((item) => orderedText.includes(item))
+  ) {
+    throw new Error("USER_TEST_CASE_PROVIDER_PROMPT_INVALID");
+  }
+  return {
+    providerPrompt: {
+      promptFamily: boundedText(
+        expectation.promptFamily,
+        "providerPrompt.promptFamily",
+        1,
+        120,
+        /^[a-z][a-z0-9.-]*$/u
+      ),
+      orderedText,
+      ...(forbiddenText == null ? {} : { forbiddenText })
+    }
+  };
 }
 
 function optionalOutboundKindArray(value: unknown, key: string) {

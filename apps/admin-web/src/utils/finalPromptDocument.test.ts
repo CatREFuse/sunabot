@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { validateFinalPromptDocument } from "./finalPromptDocument";
 
 const variables = [
+  { name: "message_32", description: "最近 32 条消息", type: "message[]" as const, source: "会话", required: true },
   { name: "messages_64", description: "最近 64 条消息", type: "message[]" as const, source: "会话", required: true },
   { name: "user.input", description: "当前输入", type: "string" as const, source: "请求", required: true }
 ];
@@ -14,7 +15,7 @@ describe("final prompt document validation", () => {
   it("accepts ordered messages mixed with a message group", () => {
     const result = validateFinalPromptDocument(template([
       { role: "system", content: "系统" },
-      "@{messages_64}",
+      "@{message_32}",
       { role: "user", content: "@{user.input}" }
     ]), variables);
 

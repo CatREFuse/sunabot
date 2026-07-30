@@ -17,11 +17,18 @@ export interface UserTestExpectedOutput {
   forbiddenAvailableTools?: string[];
   requiredText?: string[];
   forbiddenText?: string[];
+  providerPrompt?: ProviderPromptExpectation;
   requiredOutboundKinds?: Array<"message" | "asset" | "poke">;
   forbiddenOutboundKinds?: Array<"message" | "asset" | "poke">;
   requiredInboundAttachments?: ExpectedInboundAttachment[];
   minimumOutboundCount?: number;
   maximumOutboundCount?: number;
+}
+
+export interface ProviderPromptExpectation {
+  promptFamily: string;
+  orderedText: string[];
+  forbiddenText?: string[];
 }
 
 export interface ExpectedInboundAttachment {
@@ -54,6 +61,16 @@ export interface ConversationFixtureAttachmentSource {
   contentBase64: string;
 }
 
+export interface ConversationFixtureMessage {
+  id: string;
+  sequence: number;
+  role: "user" | "assistant";
+  text: string;
+  at: string;
+  userId?: number;
+  senderName?: string;
+}
+
 export interface ConversationFixtureState {
   workingMemory?: WorkingMemoryFixtureItem[];
   longTerm?: JsonFixtureRecord[];
@@ -62,6 +79,7 @@ export interface ConversationFixtureState {
   resetKnowledge?: Array<"native" | "docker">;
   workbenchFiles?: ConversationFixtureFile[];
   attachmentSources?: ConversationFixtureAttachmentSource[];
+  conversationMessages?: ConversationFixtureMessage[];
 }
 
 export interface ConversationUserTestInput {

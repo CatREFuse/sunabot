@@ -7,7 +7,7 @@ import PromptTextField from "./PromptTextField.vue";
 const content = `${JSON.stringify({
   messages: [
     { role: "system", content: "@{persona.soul}" },
-    "@{messages_64}",
+    "@{message_32}",
     { role: "user", content: "@{user.input}" }
   ],
   tools: [
@@ -27,6 +27,7 @@ const content = `${JSON.stringify({
 
 const variables = [
   { name: "persona.soul", description: "核心人格", type: "string" as const, source: "SOUL.md", required: true },
+  { name: "message_32", description: "最近 32 条消息", type: "message[]" as const, source: "会话上下文", required: true },
   { name: "messages_64", description: "最近 64 条消息", type: "message[]" as const, source: "会话上下文", required: true },
   { name: "user.input", description: "当前输入", type: "string" as const, source: "当前请求", required: true },
   { name: "conversation.voice.settings", description: "语音语言设置", type: "json" as const, source: "Voice Profile", required: true }
@@ -38,7 +39,7 @@ describe("FinalPromptForm", () => {
 
     expect(wrapper.find('[aria-label="system 提示词"]').exists()).toBe(true);
     expect(wrapper.find('[aria-label="user 提示词"]').exists()).toBe(true);
-    expect(wrapper.get('[aria-label="消息组变量"]').element).toMatchObject({ value: "messages_64" });
+    expect(wrapper.get('[aria-label="消息组变量"]').element).toMatchObject({ value: "message_32" });
     expect(wrapper.text()).toContain("Function Call");
     expect(wrapper.text()).toContain("search_content");
     expect(wrapper.text()).toContain("提示词内说明");
@@ -57,12 +58,12 @@ describe("FinalPromptForm", () => {
     expect(JSON.parse(latest).messages).toEqual([
       { role: "system", content: "@{persona.soul}" },
       { role: "user", content: "@{user.input}" },
-      "@{messages_64}"
+      "@{message_32}"
     ]);
 
     await wrapper.get('[aria-label="添加消息组"]').trigger("click");
     latest = String(wrapper.emitted("update:modelValue")?.at(-1)?.[0] ?? "");
-    expect(JSON.parse(latest).messages.at(-1)).toBe("@{messages_64}");
+    expect(JSON.parse(latest).messages.at(-1)).toBe("@{message_32}");
   });
 
   it("tests OpenAI structure and keeps Function fields synchronized", async () => {

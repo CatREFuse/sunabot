@@ -336,6 +336,7 @@ describe("useConfigWorkspace", () => {
     delete (legacy.config.bot as Partial<AppConfig["bot"]>).replyReasoningEffort;
     delete (legacy.config.bot as Partial<AppConfig["bot"]>).imageReader;
     delete (legacy.config.bot as Partial<AppConfig["bot"]>).replyDebounceMs;
+    delete (legacy.config.bot as Partial<AppConfig["bot"]>).contextMessageLimit;
     delete (legacy.config.bot.tone as Partial<AppConfig["bot"]["tone"]>).segmentedReply;
     delete (legacy.config.bot.tools as Partial<AppConfig["bot"]["tools"]>).overrides;
     apiRequest.mockResolvedValueOnce(legacy);
@@ -353,6 +354,7 @@ describe("useConfigWorkspace", () => {
       reasoningEffort: "low"
     });
     expect(workspace.drafts.bot.replyDebounceMs).toBe(5_000);
+    expect(workspace.drafts.bot.contextMessageLimit).toBe(32);
     expect(workspace.drafts.tone).toMatchObject({ enabled: false, segmentedReply: false, providerId: "", maxRetries: 2 });
     expect(workspace.drafts.tools.overrides).toEqual({});
     expect(apiRequest).toHaveBeenCalledTimes(1);

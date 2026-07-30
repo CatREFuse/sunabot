@@ -124,6 +124,7 @@ describe("admin API smoke", () => {
       fileName: "conversation_private_reply.json",
       variables: expect.arrayContaining([
         expect.objectContaining({ name: "persona.dialogue_style_examples", description: expect.any(String) }),
+        expect.objectContaining({ name: "message_32", type: "message[]" }),
         expect.objectContaining({ name: "user.input", description: expect.any(String) })
       ])
     }));

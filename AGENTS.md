@@ -52,6 +52,8 @@
 | `docs/user-tests/orchestrator-internal-history-seed.md` | 生成用户不可见的群聊编排器内部审计记录的链式首步用例 | 修改编排器内部记录或群聊模型历史过滤时读取 |
 | `docs/user-tests/orchestrator-internal-history-reply.md` | 验证内部编排器记录不进入后续主回复上下文的链式次步用例 | 修改群聊上下文、编排器变量或内部消息可见性时读取 |
 | `docs/user-tests/group-topic-internal-reasoning.md` | 验证群聊主 Agent 在内部完成当前话题判断且不暴露判断过程 | 修改群聊话题判断、主回复上下文或旧实现清理边界时读取 |
+| `docs/user-tests/conversation-message-32-private.md` | 验证单聊默认提示词只接收最近 32 条历史消息 | 修改单聊上下文窗口、对话提示词变量或默认上下文数量时读取 |
+| `docs/user-tests/conversation-message-32-group.md` | 验证群聊默认提示词只接收最近 32 条原序历史消息 | 修改群聊上下文窗口、群聊提示词变量或默认上下文数量时读取 |
 | `docs/user-tests/current-message-image-reference.md` | 当前群消息图片以精确媒体句柄进入异步生图的用户用例 | 修改当前图片句柄、dispatch 快照或参考图解析时读取 |
 | `docs/user-tests/current-message-image-4k-retry-budget.md` | 当前私聊图片在预处理后以完整回复重试预算进入 4K 异步生图的用户用例 | 修改图片预处理、普通回复超时或 4K 生图派发时读取 |
 | `docs/user-tests/qq-private-pdf-attachment.md` | 副账号 QQ 私聊 PDF 经账号定向下载、解析并进入主回复的用户用例 | 修改 QQ 文件查询、附件源 fallback、PDF 解析或多账号附件路由时读取 |

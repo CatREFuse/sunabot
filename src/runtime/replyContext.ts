@@ -143,7 +143,8 @@ export function runtime_buildRecentContextMessages(
   this: RuntimeHost,
   incoming: ParsedIncomingMessage,
   captureSequence?: number,
-  messageLimit = this.contextMessageLimit()
+  messageLimit = this.contextMessageLimit(),
+  tokenBudget = RECENT_CONTEXT_TOKEN_BUDGET
 ): ChatMessage[] {
   const record = this.conversationRecords.get(conversationRecordId(incoming));
   if (!record) return [];
@@ -157,9 +158,15 @@ export function runtime_buildRecentContextMessages(
     .map((message) => toContextChatMessage(message, isAdminUserId(message.userId, admin), admin));
   const selected: ChatMessage[] = [];
   let usedTokens = 0;
+  const boundedTokenBudget = clampInteger(
+    tokenBudget,
+    RECENT_CONTEXT_TOKEN_BUDGET,
+    1,
+    65_536
+  );
   for (const message of candidates.reverse()) {
     const messageTokens = estimatePromptTokens(message.content);
-    if (selected.length && usedTokens + messageTokens > RECENT_CONTEXT_TOKEN_BUDGET) break;
+    if (usedTokens + messageTokens > boundedTokenBudget) break;
     selected.unshift(message);
     usedTokens += messageTokens;
   }

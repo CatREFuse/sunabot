@@ -35,7 +35,7 @@ describe("group reply topic reasoning", () => {
       `<group_context_contract>${DEFAULT_GROUP_CONTEXT_CONTRACT}</group_context_contract>`
     );
     expect(DEFAULT_GROUP_CONTEXT_CONTRACT).toContain("<internal_topic_reasoning>");
-    expect(DEFAULT_GROUP_CONTEXT_CONTRACT).toContain("在内部按 messages_64 的原始顺序梳理并行话题");
+    expect(DEFAULT_GROUP_CONTEXT_CONTRACT).toContain("在内部按 message_32 的原始顺序梳理并行话题");
     expect(DEFAULT_GROUP_CONTEXT_CONTRACT).toContain("不得输出话题划分过程、内部推理");
   });
 
@@ -76,7 +76,7 @@ describe("group reply topic reasoning", () => {
         "memory.user_profile": "",
         "runtime.current_time": "2026-07-30T12:00:00+08:00",
         "utils.roll": 50,
-        "messages_64": [{ role: "assistant", content: "历史回复" }],
+        "message_32": [{ role: "assistant", content: "历史回复" }],
         "user.input": "当前输入"
       }
     );

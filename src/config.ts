@@ -128,7 +128,7 @@ export function defaultConfig(): AppConfig {
       pokeOnNoReply: false,
       quoteGroupReplies: true,
       quoteGroupReplyExcludedUserIds: [],
-      contextMessageLimit: 48,
+      contextMessageLimit: 32,
       emojiSendSize: 512,
       emojiSendSeparately: false,
       tone: {

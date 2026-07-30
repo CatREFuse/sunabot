@@ -63,6 +63,10 @@ Conversation cases pass a raw OneBot event through the same parser, forward-mess
 
 `input.fixture` makes conversation preconditions executable. It can replace declared working-memory, long-term-memory and user-profile collections, replace a valid `AIR.md`, and create bounded UTF-8 files in the isolated Native or Docker workbench before raw OneBot ingress. Workbench paths are relative, traversal and symbolic-link directory components are rejected, and an existing target fails closed. Use `expected.requiredOutboundKinds` and `forbiddenOutboundKinds` to distinguish `message`, `asset`, and `poke`; total-count assertions alone are insufficient for silent and media cases.
 
+`input.fixture.conversationMessages` seeds 1–120 declared model-visible history messages into the target conversation through the normal conversation record and persistence path before raw OneBot ingress. Message IDs must be unique, sequences must start at 1 without gaps, timestamps must increase strictly and precede the current event, and user messages must declare `userId`. The driver marks only the seeded history as already considered by memory compression and group orchestration so the new inbound event remains the sole fresh work item.
+
+`expected.providerPrompt` selects every round-zero `model.request` transport attempt for one exact `promptFamily`. In each attempt, every `orderedText` token must occur exactly once and in the declared order, while every optional `forbiddenText` token must be absent. Reports retain per-attempt token counts and order results without copying matched prompt bodies into assertion output.
+
 `input.fixture.attachmentSources` provides bounded Base64 file bytes for raw OneBot attachment events. The recording transport resolves them only when the request keeps the case `accountId`; reports retain safe resolution evidence and `expected.requiredInboundAttachments` can assert the parsed name, status, format, MIME, byte count, SHA-256, page count and stable handle.
 
 `resetKnowledge` may list `native`, `docker`, or both. Before fixture files are written, the driver removes copied source knowledge only inside a marker-verified isolated user-test workspace and recreates an empty `knowledge/` directory; duplicate or unknown backends are rejected. Use it whenever a case must prove that knowledge or media came only from `input.fixture`.
@@ -78,6 +82,8 @@ Executable branch examples:
 - [`memory-compression-smoke.md`](./memory-compression-smoke.md)
 - [`dream-smoke.md`](./dream-smoke.md)
 - [`add-workmemory-direct-write.md`](./add-workmemory-direct-write.md)
+- [`conversation-message-32-private.md`](./conversation-message-32-private.md)
+- [`conversation-message-32-group.md`](./conversation-message-32-group.md)
 - [`sampled-memory-compression.md`](./sampled-memory-compression.md)
 - [`sampled-dream.md`](./sampled-dream.md)
 

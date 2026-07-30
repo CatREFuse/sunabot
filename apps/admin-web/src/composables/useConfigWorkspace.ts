@@ -57,7 +57,7 @@ const emptyConfig: AppConfig = {
     pokeOnNoReply: false,
     quoteGroupReplies: true,
     quoteGroupReplyExcludedUserIds: [],
-    contextMessageLimit: 48,
+    contextMessageLimit: 32,
     emojiSendSize: 512,
     emojiSendSeparately: false,
     tone: {
@@ -483,7 +483,7 @@ function valuesFromConfig(config: AppConfig): SectionDrafts {
       pokeOnNoReply: config.bot.pokeOnNoReply,
       quoteGroupReplies: config.bot.quoteGroupReplies,
       quoteGroupReplyExcludedUserIds: [...(config.bot.quoteGroupReplyExcludedUserIds ?? [])],
-      contextMessageLimit: config.bot.contextMessageLimit,
+      contextMessageLimit: config.bot.contextMessageLimit ?? emptyConfig.bot.contextMessageLimit,
       emojiSendSize: config.bot.emojiSendSize ?? emptyConfig.bot.emojiSendSize,
       emojiSendSeparately: config.bot.emojiSendSeparately === true
     },

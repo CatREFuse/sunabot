@@ -7,6 +7,7 @@ import {
   runtime_generateImgReferenceContext,
   runtime_processDeferredToolJob
 } from "../../src/runtime/reply.js";
+import { MESSAGE_32_CONTEXT_TOKEN_BUDGET } from "../../src/runtime/runtimeContracts.js";
 import { runtime_collectSelfieChatReferenceImages } from "../../src/runtime/selfie.js";
 import { conversationRecordId } from "../../src/runtime/messagingAttachmentHelpers.js";
 import { runGenerateImg } from "../../services/tools/generateImgTool.js";
@@ -66,6 +67,43 @@ describe("generate_img historical reference context", () => {
     ]);
     expect(JSON.stringify(messages)).not.toContain("编排器结果");
     expect(JSON.stringify(messages)).not.toContain("仅供内部审计");
+  });
+
+  it("keeps an oversized latest message outside the message_32 token budget", () => {
+    const incoming = incomingMessage();
+    const record: ConversationRecord = {
+      id: conversationRecordId(incoming),
+      accountId: incoming.accountId,
+      agentId: incoming.agentId,
+      scope: incoming.scope,
+      title: "group",
+      userId: incoming.userId,
+      groupId: incoming.groupId,
+      messageCount: 2,
+      lastAt: incoming.time,
+      lastText: incoming.text,
+      messages: [
+        conversationMessage({
+          id: "oversized-history",
+          role: "user",
+          sequence: 1,
+          text: "超".repeat(5_000)
+        }),
+        conversationMessage({
+          id: String(incoming.messageId),
+          role: "user",
+          sequence: 2
+        })
+      ]
+    };
+
+    const messages = runtime_buildRecentContextMessages.call({
+      conversationRecords: new Map([[record.id, record]]),
+      contextMessageLimit: () => 32,
+      adminIdentity: () => ({ userId: "9", name: "Admin" })
+    } as never, incoming, 2, 32, MESSAGE_32_CONTEXT_TOKEN_BUDGET);
+
+    expect(messages).toEqual([]);
   });
 
   it("exposes stable media handles to the model", () => {

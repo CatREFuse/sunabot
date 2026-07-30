@@ -88,10 +88,11 @@ describe("workspace prompt runtime", () => {
       "runtime.scope_rules": "识别会话范围。",
       "runtime.tool_rules": "按需调用工具。",
       "runtime.current_time": "2026-07-19T22:43:55.000+08:00 [system_timezone=Asia/Shanghai]",
-      "messages_64": [
+      "message_32": [
         { role: "user", content: "上一条问题" },
         { role: "assistant", content: "上一条回复" }
       ],
+      "messages_64": [{ role: "user", content: "旧模板兼容历史" }],
       "memory.working": "工作记忆 A",
       "memory.long_term": "长期记忆 B",
       "memory.user_profile": "画像 C",
@@ -123,6 +124,7 @@ describe("workspace prompt runtime", () => {
     expect(rendered.messages[3]?.content).toContain('"认真"');
     expect(rendered.messages[3]?.content).toContain("<emoji_syntax>需要发送表情时输出 [/表情key]。</emoji_syntax>");
     expect(rendered.messages.at(-1)?.content).toContain("<current_input>当前问题</current_input>");
+    expect(JSON.stringify(rendered.messages)).not.toContain("旧模板兼容历史");
     expect(rendered.tools?.map((tool) => tool.function.name)).toEqual([
       "assistant_text",
       "no_reply",
@@ -171,6 +173,8 @@ describe("workspace prompt runtime", () => {
     }
     const conversation = PROMPT_FILE_DEFINITIONS.find((item) => item.id === "conversation.private-reply")!;
     expect(conversation.variables.map((item) => item.name)).toEqual(expect.arrayContaining([
+      "message_32",
+      "messages_64",
       "memory.working",
       "memory.long_term",
       "memory.user_profile"

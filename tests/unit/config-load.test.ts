@@ -57,6 +57,7 @@ describe("tool configuration", () => {
     expect(config.providers.items.every((provider) => provider.envFile === "workspace/secrets/runtime.env")).toBe(true);
     expect(config.bot.adminQq).toBe("");
     expect(config.bot.replyDebounceMs).toBe(5_000);
+    expect(config.bot.contextMessageLimit).toBe(32);
     expect(config.bot.emojiSendSize).toBe(512);
     expect(config.bot.emojiSendSeparately).toBe(false);
     expect(config.bot.tone).toEqual({
@@ -142,6 +143,20 @@ describe("tool configuration", () => {
     await fs.writeFile(configPath, JSON.stringify({ bot: {} }), "utf8");
     await expect(loadConfig()).resolves.toMatchObject({
       bot: { replyDebounceMs: 5_000 }
+    });
+  });
+
+  it("defaults conversation context to 32 messages while preserving an explicit legacy value", async () => {
+    await fs.writeFile(configPath, JSON.stringify({
+      bot: { contextMessageLimit: 48 }
+    }), "utf8");
+    await expect(loadConfig()).resolves.toMatchObject({
+      bot: { contextMessageLimit: 48 }
+    });
+
+    await fs.writeFile(configPath, JSON.stringify({ bot: {} }), "utf8");
+    await expect(loadConfig()).resolves.toMatchObject({
+      bot: { contextMessageLimit: 32 }
     });
   });
 

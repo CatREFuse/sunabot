@@ -48,13 +48,13 @@
 
 首条触发消息固定本轮 route、幂等键和最终引用目标，窗口内后续消息不能替换这些字段。触发时把当时已经生效的引用开关、排除规则结果和首条 message ID 编码为必填的 `ReplyQuoteSnapshotV1`；防抖 handoff、主回复、命令投递、deferred acknowledgement/callback 和 timeout/error outbox 只消费该快照，窗口内或重启后的引用配置热更新不能重新计算引用。命令 route 同时保存只含稳定命令 ID、调用名、参数和原始文本的有界 `CommandInvocationV1`，执行时按 ID 恢复当前静态定义，不能重新使用热 mention/persona 名称匹配；未知 ID、超限字段、原始文本不一致或任何可执行字段都失败关闭，普通 route 不能携带 invocation，也不能在等待期间因新名称启用而晋升为命令。
 
-`messages_64` 只读取首条触发以前的模型可见历史；`visibility=internal` 或 `eventKind=orchestrator_decision` 的编排审计记录继续持久化供管理和排障查看，但不得进入主回复、群聊总结或主动编排器的模型上下文。首条触发至防抖释放边界内已持久化、且发送者与首条主动唤醒者相同的消息按 conversation sequence 合并成 current batch，因此 Provider 看到的顺序始终是历史、首条触发、同一发送者的窗口后续消息，首条触发不会重复。其他发送者在窗口内的消息继续按原顺序保存到群聊原始记录，并可供其后续回复或编排器批次使用，但不得进入本轮 current batch、附件、图片、自拍参考或图片工具媒体句柄，也不得阻塞本轮等待。释放后才到达的消息进入后续窗口，不能追加入已经 handoff 的回复。deferred 工具回调继续携带首条触发消息、派发时的 `contextThroughSequence`、门控和引用快照，并复用相同的有序同发送者 current batch，不在任务完成时重新扩展上下文。当前 schema 的 `reply_debounce` 与 `incoming_reply` 缺少或损坏门控、引用快照时必须失败关闭；只有明确版本化的旧记录可以走兼容读取，兼容路径也不能从当前热配置补写冻结决策。
+`message_32` 只读取首条触发以前最近最多 32 条模型可见历史，并使用独立的 4,096 Token 上限；`visibility=internal` 或 `eventKind=orchestrator_decision` 的编排审计记录继续持久化供管理和排障查看，但不得进入主回复、群聊总结或主动编排器的模型上下文。首条触发至防抖释放边界内已持久化、且发送者与首条主动唤醒者相同的消息按 conversation sequence 合并成 current batch，因此 Provider 看到的顺序始终是历史、首条触发、同一发送者的窗口后续消息，首条触发不会重复。其他发送者在窗口内的消息继续按原顺序保存到群聊原始记录，并可供其后续回复或编排器批次使用，但不得进入本轮 current batch、附件、图片、自拍参考或图片工具媒体句柄，也不得阻塞本轮等待。释放后才到达的消息进入后续窗口，不能追加入已经 handoff 的回复。deferred 工具回调继续携带首条触发消息、派发时的 `contextThroughSequence`、门控和引用快照，并复用相同的有序同发送者 current batch，不在任务完成时重新扩展上下文。当前 schema 的 `reply_debounce` 与 `incoming_reply` 缺少或损坏门控、引用快照时必须失败关闭；只有明确版本化的旧记录可以走兼容读取，兼容路径也不能从当前热配置补写冻结决策。
 
 私聊、群聊命令与主动直接回复使用同一条持久化防抖链路；群聊 ambient 候选在编排器确认应回复后直接创建 `incoming_reply`，不创建 synthetic `reply_debounce`，同时继续持久传递结构化编排结果、门控和引用快照。首条主动触发时捕获 `ReplyGateSnapshotV1`，防抖释放和真实回复执行前都重新校验发送者、会话开关、scope/conversation epoch 与 generation；等待期间关闭门控会取消旧候选，同一进程内重新开启不能恢复该候选。广播风暴只阻止静默期内新建候选，已经进入防抖链路的候选继续遵守既有已 dispatch 任务语义。
 
 ### 3.4 群聊上下文与话题判断
 
-`messages_64` 按原始时间顺序注入群聊主回复，消息正文中的 `@{...}` 等文本按不透明数据原样传递，完整原始消息始终是主回复模型的事实依据。私聊消息格式保持不变；群聊消息正文前使用完整字段名记录 `timestamp`、`sequence`、`message_id`、`display_name`、`uid` 和可选的 `reply_to_message_id`。元数据中的百分号、竖线、方括号和换行使用可逆百分号转义，正文保持原样，群名片不能伪造 uid 或引用字段。当前平台是 QQ，`uid` 表示 QQ 号；未来平台使用各自的平台用户 ID，不因数值相同自动合并身份。OneBot 文字与图片资产外发回执的 message ID 和实际引用目标写入 assistant 会话记录；成功的 `send_file` 图片资产单独形成一条带受控图片 URL 的 assistant 消息，后续上下文使用该回执 ID 生成媒体句柄。异步 outbox 在派发时固化引用目标，后续配置变化不能改写已发送消息的引用边。
+`message_32` 按原始时间顺序注入群聊主回复，消息正文中的 `@{...}` 等文本按不透明数据原样传递，完整原始消息始终是主回复模型的事实依据。私聊消息格式保持不变；群聊消息正文前使用完整字段名记录 `timestamp`、`sequence`、`message_id`、`display_name`、`uid` 和可选的 `reply_to_message_id`。元数据中的百分号、竖线、方括号和换行使用可逆百分号转义，正文保持原样，群名片不能伪造 uid 或引用字段。当前平台是 QQ，`uid` 表示 QQ 号；未来平台使用各自的平台用户 ID，不因数值相同自动合并身份。`messages_64` 继续作为旧自定义模板的兼容变量注册并注入，但不再进入新默认模板。OneBot 文字与图片资产外发回执的 message ID 和实际引用目标写入 assistant 会话记录；成功的 `send_file` 图片资产单独形成一条带受控图片 URL 的 assistant 消息，后续上下文使用该回执 ID 生成媒体句柄。异步 outbox 在派发时固化引用目标，后续配置变化不能改写已发送消息的引用边。
 
 群聊话题判断由主回复模型在同一次推理中完成，不运行独立分类模型，不生成附加索引，不维护会话级话题状态，也不增加前置超时。`<internal_topic_reasoning>` 标记要求主回复在生成答案前，按原始顺序梳理并行话题，结合紧邻消息、发送者、时间、显式引用、文件名、媒体句柄和图片替代文本判断当前输入延续、切换或连接的话题，同时完成对人、事、文件与媒体的指代消解。证据不足时保留不确定性，不能猜测。
 

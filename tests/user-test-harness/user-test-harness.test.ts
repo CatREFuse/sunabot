@@ -125,6 +125,83 @@ describe("user test harness", () => {
       .toThrow("USER_TEST_CASE_FIXTURE.ATTACHMENTSOURCES[0].CONTENTBASE64_INVALID");
   });
 
+  it("validates deterministic conversation history and Provider prompt expectations", () => {
+    const testCase = conversationCase("user_private", "private", 20002);
+    if (testCase.kind !== "conversation") throw new Error("conversation case required");
+    testCase.input.fixture = {
+      conversationMessages: [{
+        id: "history-1",
+        sequence: 1,
+        role: "user",
+        text: "HISTORY_TOKEN_1",
+        at: "2026-08-29T09:00:01.000Z",
+        userId: 20002,
+        senderName: "Fixture user"
+      }, {
+        id: "history-2",
+        sequence: 2,
+        role: "assistant",
+        text: "HISTORY_TOKEN_2",
+        at: "2026-08-29T09:00:02.000Z",
+        senderName: "Fixture Bot"
+      }]
+    };
+    testCase.expected.providerPrompt = {
+      promptFamily: "conversation.private-reply",
+      orderedText: ["HISTORY_TOKEN_1", "HISTORY_TOKEN_2"],
+      forbiddenText: ["HISTORY_TOKEN_0"]
+    };
+    const document = (definition: UserTestCase) => [
+      "# Conversation history fixture",
+      USER_TEST_CASE_MARKER,
+      "```json",
+      JSON.stringify(definition),
+      "```"
+    ].join("\n");
+
+    expect(parseUserTestCaseDocument(document(testCase))).toEqual(testCase);
+
+    const sequenceGap = structuredClone(testCase);
+    if (sequenceGap.kind !== "conversation" || !sequenceGap.input.fixture?.conversationMessages) {
+      throw new Error("conversation messages required");
+    }
+    sequenceGap.input.fixture.conversationMessages[1]!.sequence = 3;
+    expect(() => parseUserTestCaseDocument(document(sequenceGap)))
+      .toThrow("USER_TEST_CASE_CONVERSATION_FIXTURE_MESSAGES_INVALID");
+
+    const duplicateId = structuredClone(testCase);
+    if (duplicateId.kind !== "conversation" || !duplicateId.input.fixture?.conversationMessages) {
+      throw new Error("conversation messages required");
+    }
+    duplicateId.input.fixture.conversationMessages[1]!.id = "history-1";
+    expect(() => parseUserTestCaseDocument(document(duplicateId)))
+      .toThrow("USER_TEST_CASE_CONVERSATION_FIXTURE_MESSAGES_INVALID");
+
+    const reversedTime = structuredClone(testCase);
+    if (reversedTime.kind !== "conversation" || !reversedTime.input.fixture?.conversationMessages) {
+      throw new Error("conversation messages required");
+    }
+    reversedTime.input.fixture.conversationMessages[1]!.at = "2026-08-29T09:00:00.000Z";
+    expect(() => parseUserTestCaseDocument(document(reversedTime)))
+      .toThrow("USER_TEST_CASE_CONVERSATION_FIXTURE_MESSAGES_INVALID");
+
+    const missingUserId = structuredClone(testCase);
+    if (missingUserId.kind !== "conversation" || !missingUserId.input.fixture?.conversationMessages) {
+      throw new Error("conversation messages required");
+    }
+    delete missingUserId.input.fixture.conversationMessages[0]!.userId;
+    expect(() => parseUserTestCaseDocument(document(missingUserId)))
+      .toThrow("USER_TEST_CASE_CONVERSATION_FIXTURE_MESSAGES_INVALID");
+
+    const overlappingPromptAssertions = structuredClone(testCase);
+    if (!overlappingPromptAssertions.expected.providerPrompt) {
+      throw new Error("Provider prompt expectation required");
+    }
+    overlappingPromptAssertions.expected.providerPrompt.forbiddenText = ["HISTORY_TOKEN_1"];
+    expect(() => parseUserTestCaseDocument(document(overlappingPromptAssertions)))
+      .toThrow("USER_TEST_CASE_PROVIDER_PROMPT_INVALID");
+  });
+
   it.each([
     ["admin_private", "private", 10001, undefined],
     ["user_private", "private", 20002, undefined],
@@ -1229,7 +1306,7 @@ describe("user test harness", () => {
     }
   });
 
-  it("drives a raw OneBot message through Runtime, a successful Provider response, and outbox", {
+  it("seeds 33 messages through raw private and group ingress and exposes the latest 32", {
     timeout: 30_000
   }, async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-user-test-runtime-"));
@@ -1292,6 +1369,13 @@ describe("user test harness", () => {
           name: "add_workmemory",
           args: { action: "skip", content: null }
         }]
+      },
+      {
+        text: "夹具私聊已收到。",
+        calls: [{
+          name: "add_workmemory",
+          args: { action: "skip", content: null }
+        }]
       }
     ];
     const fetchMock = vi.fn(async () => {
@@ -1314,13 +1398,36 @@ describe("user test harness", () => {
       );
       const runtimeCase = conversationCase("admin_group", "group", 20002, 30003);
       if (runtimeCase.kind !== "conversation") throw new Error("conversation case required");
+      const conversationMessages = (prefix: string) => Array.from({ length: 33 }, (_, index) => {
+        const sequence = index + 1;
+        return {
+          id: `${prefix.toLowerCase()}-history-${String(sequence).padStart(2, "0")}`,
+          sequence,
+          role: "user" as const,
+          text: `${prefix}_${String(sequence).padStart(2, "0")}`,
+          at: new Date(Date.parse("2026-08-29T09:00:00.000Z") + sequence * 1_000)
+            .toISOString(),
+          userId: 20002,
+          senderName: "Fixture user"
+        };
+      });
+      const expectedHistory = (prefix: string) => Array.from(
+        { length: 32 },
+        (_, index) => `${prefix}_${String(index + 2).padStart(2, "0")}`
+      );
       runtimeCase.input.fixture = {
         resetKnowledge: ["native"],
         workbenchFiles: [{
           backend: "native",
           path: "knowledge/fixture-only.md",
           content: "fixture input\n"
-        }]
+        }],
+        conversationMessages: conversationMessages("RUNTIME_GROUP")
+      };
+      runtimeCase.expected.providerPrompt = {
+        promptFamily: "conversation.group-reply",
+        orderedText: expectedHistory("RUNTIME_GROUP"),
+        forbiddenText: ["RUNTIME_GROUP_01"]
       };
       const report = await runRuntimeUserTest(runtimeCase, "b".repeat(64));
       expect(
@@ -1332,6 +1439,10 @@ describe("user test harness", () => {
         }, null, 2)
       ).toBe("passed");
       expect(report.execution.assertions.every((assertion) => assertion.passed)).toBe(true);
+      expect(report.execution.assertions).toContainEqual(expect.objectContaining({
+        id: "provider_prompt.ordered:conversation.group-reply",
+        passed: true
+      }));
       expect(report.observation.tools).toEqual(["add_workmemory"]);
       expect(await fs.readFile(
         path.join(
@@ -1345,7 +1456,32 @@ describe("user test harness", () => {
         "business/agents/koharu/workbench/knowledge/source-only.md"
       ))).rejects.toMatchObject({ code: "ENOENT" });
       expect(JSON.stringify(report.observation.outbound)).toContain("夹具主对话已收到");
-      expect(fetchMock).toHaveBeenCalledTimes(2);
+
+      const privateCase = conversationCase("user_private", "private", 20002);
+      if (privateCase.kind !== "conversation") throw new Error("conversation case required");
+      privateCase.input.fixture = {
+        conversationMessages: conversationMessages("RUNTIME_PRIVATE")
+      };
+      privateCase.expected.providerPrompt = {
+        promptFamily: "conversation.private-reply",
+        orderedText: expectedHistory("RUNTIME_PRIVATE"),
+        forbiddenText: ["RUNTIME_PRIVATE_01"]
+      };
+      const privateReport = await runRuntimeUserTest(privateCase, "c".repeat(64));
+      expect(
+        privateReport.execution.status,
+        JSON.stringify({
+          execution: privateReport.execution,
+          branch: privateReport.observation.branch,
+          requestLogs: privateReport.observation.requestLogs
+        }, null, 2)
+      ).toBe("passed");
+      expect(privateReport.execution.assertions).toContainEqual(expect.objectContaining({
+        id: "provider_prompt.ordered:conversation.private-reply",
+        passed: true
+      }));
+      expect(JSON.stringify(privateReport.observation.outbound)).toContain("夹具私聊已收到");
+      expect(fetchMock).toHaveBeenCalledTimes(3);
     } finally {
       vi.unstubAllGlobals();
       if (previousWorkspace == null) delete process.env.SUNABOT_WORKSPACE;
@@ -1534,6 +1670,89 @@ describe("user test harness", () => {
       }]
     });
     expect(availability.every((assertion) => assertion.passed)).toBe(true);
+  });
+
+  it("checks every round-zero transport attempt for one prompt family without exposing prompt text", () => {
+    const expected = {
+      providerPrompt: {
+        promptFamily: "conversation.private-reply",
+        orderedText: ["PROMPT_TOKEN_02", "PROMPT_TOKEN_03"],
+        forbiddenText: ["PROMPT_TOKEN_01"]
+      }
+    };
+    const logs = [{
+      category: "model.request",
+      request: { input: "PROMPT_TOKEN_01 belongs to another prompt family" },
+      metadata: { promptFamily: "conversation.tone-rewrite", round: 0 }
+    }, {
+      at: "2026-08-29T09:00:02.000Z",
+      category: "model.request",
+      request: { input: "PROMPT_TOKEN_02 PROMPT_TOKEN_03 PROMPT_TOKEN_01" },
+      metadata: {
+        promptFamily: "conversation.private-reply",
+        round: 0,
+        transportAttempt: 2
+      }
+    }, {
+      at: "2026-08-29T09:00:01.000Z",
+      category: "model.request",
+      request: {
+        input: [
+          { role: "user", content: "PROMPT_TOKEN_02" },
+          { role: "assistant", content: "PROMPT_TOKEN_03" }
+        ]
+      },
+      metadata: {
+        promptFamily: "conversation.private-reply",
+        round: 0,
+        transportAttempt: 1
+      }
+    }, {
+      category: "model.request",
+      request: { input: "PROMPT_TOKEN_02 PROMPT_TOKEN_03 PROMPT_TOKEN_01" },
+      metadata: { promptFamily: "conversation.private-reply", round: 1 }
+    }];
+    const inconsistent = evaluateHarnessAssertions({
+      expected,
+      toolCalls: [],
+      outbound: [],
+      requestLogs: logs
+    });
+    expect(inconsistent.find((assertion) => assertion.id.includes(".request:"))?.passed)
+      .toBe(true);
+    expect(inconsistent.find((assertion) => assertion.id.includes(".ordered:"))?.passed)
+      .toBe(true);
+    expect(inconsistent.find((assertion) => assertion.id.includes(".forbidden:"))?.passed)
+      .toBe(false);
+
+    const consistentLogs = structuredClone(logs);
+    const retry = consistentLogs.find((log) => log.metadata.transportAttempt === 2);
+    if (!retry) throw new Error("retry request required");
+    retry.request = { input: "PROMPT_TOKEN_02 PROMPT_TOKEN_03" };
+    const passed = evaluateHarnessAssertions({
+      expected,
+      toolCalls: [],
+      outbound: [],
+      requestLogs: consistentLogs
+    });
+    expect(passed).toHaveLength(3);
+    expect(passed.every((assertion) => assertion.passed)).toBe(true);
+    expect(JSON.stringify(passed)).not.toContain("belongs to another prompt family");
+
+    const duplicated = evaluateHarnessAssertions({
+      expected,
+      toolCalls: [],
+      outbound: [],
+      requestLogs: [{
+        category: "model.request",
+        request: { input: "PROMPT_TOKEN_02 PROMPT_TOKEN_03 PROMPT_TOKEN_02 PROMPT_TOKEN_01" },
+        metadata: { promptFamily: "conversation.private-reply", round: 0 }
+      }]
+    });
+    expect(duplicated.find((assertion) => assertion.id.includes(".ordered:"))?.passed)
+      .toBe(false);
+    expect(duplicated.find((assertion) => assertion.id.includes(".forbidden:"))?.passed)
+      .toBe(false);
   });
 
   it("records dynamic MCP tools and requires a successful tool result", () => {

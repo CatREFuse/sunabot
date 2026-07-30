@@ -343,7 +343,7 @@ export function defaultFinalPromptTemplate(id: string): FinalPromptTemplate | un
               : [])
           ].join("\n\n")
         },
-        "@{messages_64}",
+        "@{message_32}",
         {
           role: "developer",
           content: [

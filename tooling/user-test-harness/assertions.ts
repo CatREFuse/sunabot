@@ -75,6 +75,12 @@ export function evaluateHarnessAssertions(input: {
       actual: text
     });
   }
+  if (input.expected.providerPrompt) {
+    assertions.push(...evaluateProviderPromptAssertions(
+      input.expected.providerPrompt,
+      input.requestLogs ?? []
+    ));
+  }
   const outboundKinds = input.outbound
     .map((value) => asRecord(value)?.kind)
     .filter((value): value is string => typeof value === "string");
@@ -124,6 +130,101 @@ export function evaluateHarnessAssertions(input: {
     });
   }
   return assertions;
+}
+
+function evaluateProviderPromptAssertions(
+  expected: NonNullable<UserTestExpectedOutput["providerPrompt"]>,
+  logs: readonly unknown[]
+) {
+  const requestLogs = logs
+    .map(asRecord)
+    .filter((log) => {
+      if (log?.category !== "model.request") return false;
+      const metadata = asRecord(log.metadata);
+      return metadata?.promptFamily === expected.promptFamily && metadata.round === 0;
+    })
+    .sort(compareProviderRequestOrder);
+  const evidence = requestLogs.map((requestLog, index) => {
+    const requestText = collectText([requestLog.request]);
+    const orderedOccurrences = expected.orderedText.map((value) => ({
+      value,
+      count: literalOccurrenceCount(requestText, value),
+      index: requestText.indexOf(value)
+    }));
+    return {
+      transportAttempt: positiveFiniteNumber(asRecord(requestLog.metadata)?.transportAttempt) ===
+          Number.MAX_SAFE_INTEGER
+        ? index + 1
+        : positiveFiniteNumber(asRecord(requestLog.metadata)?.transportAttempt),
+      orderedOccurrences,
+      exactOnce: orderedOccurrences.every((item) => item.count === 1),
+      inOrder: orderedOccurrences.every((item, itemIndex) => (
+        itemIndex === 0 || item.index > orderedOccurrences[itemIndex - 1]!.index
+      )),
+      forbiddenOccurrences: (expected.forbiddenText ?? []).map((value) => ({
+        value,
+        count: literalOccurrenceCount(requestText, value)
+      }))
+    };
+  });
+  return [
+    {
+      id: `provider_prompt.request:${expected.promptFamily}`,
+      passed: requestLogs.length > 0,
+      expected: {
+        promptFamily: expected.promptFamily,
+        round: 0,
+        transportAttempts: "all"
+      },
+      actual: {
+        promptFamily: expected.promptFamily,
+        round: 0,
+        transportAttempts: evidence.map((item) => item.transportAttempt)
+      }
+    },
+    {
+      id: `provider_prompt.ordered:${expected.promptFamily}`,
+      passed: evidence.length > 0 && evidence.every((item) => item.exactOnce && item.inOrder),
+      expected: {
+        orderedText: expected.orderedText,
+        occurrenceCountPerTransportAttempt: 1
+      },
+      actual: evidence.map((item) => ({
+        transportAttempt: item.transportAttempt,
+        counts: item.orderedOccurrences.map(({ value, count }) => ({ value, count })),
+        inOrder: item.inOrder
+      }))
+    },
+    {
+      id: `provider_prompt.forbidden:${expected.promptFamily}`,
+      passed: evidence.length > 0 && evidence.every((item) => (
+        item.forbiddenOccurrences.every((occurrence) => occurrence.count === 0)
+      )),
+      expected: {
+        forbiddenText: expected.forbiddenText ?? [],
+        occurrenceCountPerTransportAttempt: 0
+      },
+      actual: evidence.map((item) => ({
+        transportAttempt: item.transportAttempt,
+        occurrences: item.forbiddenOccurrences
+      }))
+    }
+  ];
+}
+
+function compareProviderRequestOrder(
+  left: Record<string, unknown>,
+  right: Record<string, unknown>
+) {
+  const leftMetadata = asRecord(left.metadata);
+  const rightMetadata = asRecord(right.metadata);
+  const leftAttempt = positiveFiniteNumber(leftMetadata?.transportAttempt);
+  const rightAttempt = positiveFiniteNumber(rightMetadata?.transportAttempt);
+  if (leftAttempt !== rightAttempt) return leftAttempt - rightAttempt;
+  const leftAt = Date.parse(String(left.at ?? ""));
+  const rightAt = Date.parse(String(right.at ?? ""));
+  if (Number.isFinite(leftAt) && Number.isFinite(rightAt)) return leftAt - rightAt;
+  return 0;
 }
 
 export function extractConversationUserFacingTextValues(outbound: readonly unknown[]) {
@@ -284,6 +385,23 @@ function collectText(values: readonly unknown[]) {
   };
   values.forEach(visit);
   return strings.join("\n");
+}
+
+function literalOccurrenceCount(text: string, value: string) {
+  let count = 0;
+  let from = 0;
+  while (from <= text.length - value.length) {
+    const index = text.indexOf(value, from);
+    if (index < 0) break;
+    count += 1;
+    from = index + value.length;
+  }
+  return count;
+}
+
+function positiveFiniteNumber(value: unknown) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : Number.MAX_SAFE_INTEGER;
 }
 
 function digestLabel(value: string) {
