@@ -269,4 +269,5 @@ export interface SunaRuntimeOptions {
   voice?: RuntimeVoiceOptions;
   replyTaskGate?: ReplyTaskGate;
   replyDebounceMs?: number;
+  resolveAdminNotificationAccountId?: () => Promise<string | undefined>;
 }

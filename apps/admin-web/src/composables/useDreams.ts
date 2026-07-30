@@ -7,9 +7,15 @@ export interface DreamHistoryItem {
   id: string;
   date: string;
   status: DreamRunStatus;
+  attemptCount: number;
+  maxAttempts: 3;
   dreamText?: string;
   scheduledFor: string;
   completedAt?: string;
+  errorCode?: string;
+  errorText?: string;
+  nextRetryAt?: string;
+  failedAt?: string;
   personalityChanged?: boolean;
   summary?: {
     merged: number;

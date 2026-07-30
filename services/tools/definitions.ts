@@ -3,14 +3,39 @@ export const CODEX_MAX_TASK_CHARS = 32_000;
 export const WEBSEARCH_TOOL_NAME = "websearch";
 export const MEMORY_RECALL_TOOL_NAME = "memory_recall";
 
+export const LEGACY_CODEX_TOOL_DESCRIPTION = [
+  "Delegate complex local workspace tasks, deep multi-source research or search tasks, and long-form analysis or reasoning to an asynchronous Codex worker.",
+  "The worker may modify files inside its selected workspace and is available only for administrator-triggered turns.",
+  "Use websearch for ordinary web lookups and short current-information queries."
+].join(" ");
+
+export const LEGACY_CODEX_TOOL_DESCRIPTION_V0 = [
+  "Delegate complex local inspection tasks, deep multi-source research or search tasks, and long-form analysis or reasoning to an asynchronous Codex worker.",
+  "Use websearch for ordinary web lookups and short current-information queries."
+].join(" ");
+
+export const CODEX_TOOL_DESCRIPTION = [
+  "Run complex local workspace tasks, deep multi-source research or search tasks, and long-form analysis or reasoning through Codex.",
+  "Depending on the active schema, this delegates an asynchronous worker or controls a permitted app-server session; both are available only for administrator-triggered turns.",
+  "The runtime sets every local Codex execution's current working directory to its unique contract output directory.",
+  "When files must be returned, name the deliverables in task but do not provide or guess a host output path; require every returned file to be created under cwd and declared relative to that directory.",
+  "A local execution may inspect and modify files in its separately authorized project workspace, but conversation deliverables must still be copied or created under cwd.",
+  "Remote SSH control can modify its selected workspace and return text, but cannot return file artifacts through the local conversation artifact bridge.",
+  "Use websearch for ordinary web lookups and short current-information queries."
+].join(" ");
+
+export const CODEX_CONTROL_TOOL_DESCRIPTION = [
+  "Control an asynchronous Codex app-server on this Mac or an administrator-managed SSH host.",
+  "List visible Codex sessions, start a workspace maintenance session, or continue an exact session by thread ID.",
+  "For local start and resume, workspace_path is the exact authorized project directory while the runtime assigns the turn's current working directory as its contract output directory.",
+  "Require every file that must be returned to the conversation to be created under the turn cwd and declared relative to it.",
+  "Remote SSH sessions can modify their selected workspace and return text, but cannot return file artifacts through the local conversation artifact bridge."
+].join(" ");
+
 export const codexTool = {
   type: "function",
   name: CODEX_TOOL_NAME,
-  description: [
-    "Delegate complex local workspace tasks, deep multi-source research or search tasks, and long-form analysis or reasoning to an asynchronous Codex worker.",
-    "The worker may modify files inside its selected workspace and is available only for administrator-triggered turns.",
-    "Use websearch for ordinary web lookups and short current-information queries."
-  ].join(" "),
+  description: CODEX_TOOL_DESCRIPTION,
   parameters: {
     type: "object",
     additionalProperties: false,
@@ -19,7 +44,7 @@ export const codexTool = {
         type: "string",
         minLength: 1,
         maxLength: CODEX_MAX_TASK_CHARS,
-        description: "The complete, self-contained task for the Codex worker."
+        description: "The complete, self-contained task. Name required deliverable files, but do not provide or guess the runtime-owned output path."
       },
       kind: {
         type: "string",
@@ -29,7 +54,6 @@ export const codexTool = {
       inputHandles: {
         type: ["array", "null"],
         maxItems: 8,
-        uniqueItems: true,
         items: {
           type: "string",
           minLength: 1,
@@ -47,11 +71,7 @@ export const codexTool = {
 export const codexControlTool = {
   type: "function",
   name: CODEX_TOOL_NAME,
-  description: [
-    "Control an asynchronous Codex app-server on this Mac or an administrator-managed SSH host.",
-    "List visible Codex sessions, start a workspace maintenance session, or continue an exact session by thread ID.",
-    "Started and resumed turns may modify files only inside the selected workspace."
-  ].join(" "),
+  description: CODEX_CONTROL_TOOL_DESCRIPTION,
   parameters: {
     type: "object",
     additionalProperties: false,
@@ -69,12 +89,12 @@ export const codexControlTool = {
       task: {
         type: ["string", "null"],
         maxLength: CODEX_MAX_TASK_CHARS,
-        description: "Complete maintenance task for start/resume. Use null when listing sessions."
+        description: "Complete maintenance task for start/resume. Name required deliverables without supplying an output path; local file results must be created under the runtime-assigned turn cwd. Use null when listing sessions."
       },
       workspace_path: {
         type: ["string", "null"],
         maxLength: 4_096,
-        description: "Absolute project directory on the selected host. Required for start/resume and optional for list filtering."
+        description: "Exact absolute project directory on the selected host. Required for start/resume and optional for list filtering; local turns receive a separate runtime-owned contract output cwd."
       },
       thread_id: {
         type: ["string", "null"],

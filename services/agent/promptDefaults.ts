@@ -50,6 +50,7 @@ import {
   CONFIGURATION_DIRECTORY_INDEX_CONTRACT
 } from "./bashWorkbenchPromptMigration.js";
 import { CHAT_MEDIA_EXPORT_CONTRACT } from "./chatMediaPromptMigration.js";
+import { CODEX_OUTPUT_CONTRACT } from "./codexOutputPromptMigration.js";
 import { DEFAULT_GROUP_CONTEXT_CONTRACT } from "./groupReplyPrompt.js";
 
 export { DEFAULT_GROUP_CONTEXT_CONTRACT } from "./groupReplyPrompt.js";
@@ -334,6 +335,7 @@ export function defaultFinalPromptTemplate(id: string): FinalPromptTemplate | un
             BASH_WORKBENCH_CONTRACT,
             CONFIGURATION_DIRECTORY_INDEX_CONTRACT,
             CHAT_MEDIA_EXPORT_CONTRACT,
+            CODEX_OUTPUT_CONTRACT,
             INBOUND_MESSAGE_INTERPRETATION_CONTRACT,
             RECOVERABLE_OUTPUT_ERROR_CONTRACT,
             ...(isGroupReply

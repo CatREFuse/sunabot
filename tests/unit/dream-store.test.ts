@@ -524,6 +524,55 @@ describe("Dream SQLite store", () => {
     });
   });
 
+  it("clears invalid generated artifacts before recovering the run at generation", () => {
+    const run = store.claimDailyRun(claimInput("worker:a")).run;
+    now += 10;
+    expect(store.markGenerated({
+      runId: run.id,
+      workerId: "worker:a",
+      output: {
+        schemaVersion: 1,
+        dream: { text: "旧版宽松输出", factuality: "imagined" }
+      },
+      dreamText: "旧版宽松输出",
+      now: new Date(now)
+    })).toMatchObject({
+      status: "generated",
+      output: expect.any(Object),
+      dreamText: "旧版宽松输出",
+      generatedAt: new Date(now).toISOString()
+    });
+
+    now += 10;
+    const failed = store.markFailed({
+      runId: run.id,
+      workerId: "worker:a",
+      errorCode: "DREAM_OUTPUT_CONTRACT_INVALID",
+      errorText: "Dream 输出格式校验未通过。",
+      resetGeneratedOutput: true,
+      retryAt: new Date(now + 500),
+      now: new Date(now)
+    });
+    expect(failed).toMatchObject({
+      status: "failed",
+      output: null,
+      dreamText: null,
+      generatedAt: null
+    });
+
+    now += 500;
+    expect(store.claimDailyRun(claimInput("worker:b"))).toMatchObject({
+      status: "recovered",
+      run: {
+        status: "running",
+        attemptCount: 2,
+        output: null,
+        dreamText: null,
+        generatedAt: null
+      }
+    });
+  });
+
   it("terminally fails a retryable failure when the third attempt becomes due", () => {
     const run = store.claimDailyRun(claimInput("worker:a")).run;
     for (const [index, worker] of ["worker:a", "worker:b", "worker:c"].entries()) {

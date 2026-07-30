@@ -497,9 +497,18 @@ export interface MemoryDocument {
   content: string;
   revision: string;
 }
+export interface MemoryProcessingHealth {
+  windowHours: 24;
+  windowStartedAt: string;
+  measuredAt: string;
+  successful: number;
+  attempted: number;
+  pending: number;
+}
 export interface MemoryPayload {
   sources: MemorySource[];
   entries: MemoryEntry[];
+  health: MemoryProcessingHealth;
   document?: MemoryDocument;
 }
 export interface MemoryRecallPayload { ok: boolean; query: string; matches: MemoryEntry[]; error?: string }

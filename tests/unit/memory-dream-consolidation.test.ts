@@ -11,6 +11,66 @@ const NOW = new Date("2026-07-20T20:00:00.000Z");
 const DREAM_TEXT = "我走进一座被潮水托起的旧车站，白天尚未完成的整理任务变成缓慢转动的时钟，老师留下的话沿着站台亮起，远处那次雨夜出行化成一列没有车门的列车。我跟着红色微光穿过安静车厢，把散落的纸页按原因和结果重新叠好，几张重复的票根融成一张，过期的小纸屑沉入水底。列车驶向还没有名字的清晨，我知道那些画面只是梦，却仍想醒来后把重要的约定放在更容易找到的位置。";
 
 describe("Dream memory consolidation", () => {
+  it("maps a factual working-memory promotion into the long-term runtime contract", () => {
+    const canonicalFact = "  每次发布都必须在回归测试全部通过后才能确认上线。  ";
+    const source = memory(
+      "working_release_gate",
+      "每次发布前都要完成回归测试。",
+      "2026-07-01T08:00:00.000Z",
+      {
+        userIds: ["10001"],
+        addressNames: ["老师"],
+        occurredEndAt: "2026-07-02T09:00:00.000Z",
+        eventType: "boundary",
+        subjectKey: "release-gate",
+        eventKey: "boundary:release-gate",
+        causalChainKey: "causal:release"
+      }
+    );
+    const plan = buildDreamConsolidationPlan({
+      runId: "dream-run-promotion-contract",
+      localDate: "2026-07-21",
+      scheduledFor: NOW.toISOString(),
+      seed: "fixed-seed",
+      now: NOW,
+      output: {
+        schemaVersion: 1,
+        dream: { text: DREAM_TEXT, factuality: "imagined" },
+        longTermReviews: [],
+        workingReviews: [{
+          sourceIds: ["working_release_gate"],
+          action: "promote",
+          canonical: { fact: canonicalFact },
+          confidence: 1,
+          reason: "持续影响未来发布"
+        }],
+        personaAdjustment: null,
+        fieldKnowledge: null
+      },
+      workingRecords: [source],
+      longTermRecords: [],
+      recallStats: []
+    });
+
+    expect(plan.longTerm).toEqual([
+      expect.objectContaining({
+        schemaVersion: 2,
+        fact: canonicalFact,
+        sourceWorkingMemoryIds: ["working_release_gate"],
+        userIds: ["10001"],
+        addressNames: ["老师"],
+        occurredAt: "2026-07-01T08:00:00.000Z",
+        occurredEndAt: "2026-07-02T09:00:00.000Z",
+        eventKey: "boundary:release-gate",
+        causalChainKey: "causal:release",
+        dreamRunId: "dream-run-promotion-contract",
+        consolidatedBy: "sunabot.dream",
+        updatedAt: NOW.toISOString()
+      })
+    ]);
+    expect(plan.longTerm[0]?.eventFingerprint).toMatch(/^sha256:[a-f0-9]{64}$/u);
+  });
+
   it("merges causal memories, gates archives, promotes old dreams, and writes today's imagined dream", () => {
     const output = dreamOutput();
     const plan = buildDreamConsolidationPlan({

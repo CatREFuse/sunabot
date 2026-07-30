@@ -1,7 +1,7 @@
 import { shallowReadonly, shallowRef } from "vue";
 import { apiRequest } from "./useAdminApi";
 import { memorySourceIds } from "../types";
-import type { MemoryDocument, MemoryEntry, MemoryPayload, MemoryRecallPayload, MemorySource, MemorySourceId, MemoryWritePayload } from "../types";
+import type { MemoryDocument, MemoryEntry, MemoryPayload, MemoryProcessingHealth, MemoryRecallPayload, MemorySource, MemorySourceId, MemoryWritePayload } from "../types";
 
 const supportedSources = new Set<string>(memorySourceIds);
 
@@ -9,6 +9,7 @@ export function useMemory() {
   const sources = shallowRef<MemorySource[]>([]);
   const entries = shallowRef<MemoryEntry[]>([]);
   const document = shallowRef<MemoryDocument | null>(null);
+  const health = shallowRef<MemoryProcessingHealth | null>(null);
   const matches = shallowRef<MemoryEntry[]>([]);
   const recallActive = shallowRef(false);
   const loading = shallowRef(false);
@@ -33,6 +34,8 @@ export function useMemory() {
     if (requestAgentId && normalizedAgentId && requestAgentId !== normalizedAgentId) {
       entries.value = [];
       document.value = null;
+      health.value = null;
+      error.value = "";
       clearMatches();
     }
     requestAgentId = normalizedAgentId;
@@ -44,6 +47,7 @@ export function useMemory() {
       sources.value = payload.sources.filter((item) => supportedSources.has(String(item.id)));
       entries.value = payload.entries.filter((item) => supportedSources.has(String(item.source)));
       document.value = source === "working" ? payload.document ?? null : null;
+      health.value = payload.health;
       error.value = "";
       return true;
     } catch (caught) {
@@ -149,5 +153,5 @@ export function useMemory() {
     loading.value = false;
   }
 
-  return { sources: shallowReadonly(sources), entries: shallowReadonly(entries), document: shallowReadonly(document), matches: shallowReadonly(matches), recallActive: shallowReadonly(recallActive), loading: shallowReadonly(loading), mutating: shallowReadonly(mutating), error: shallowReadonly(error), load, recall, create, update, remove, clearMatches, dispose };
+  return { sources: shallowReadonly(sources), entries: shallowReadonly(entries), document: shallowReadonly(document), health: shallowReadonly(health), matches: shallowReadonly(matches), recallActive: shallowReadonly(recallActive), loading: shallowReadonly(loading), mutating: shallowReadonly(mutating), error: shallowReadonly(error), load, recall, create, update, remove, clearMatches, dispose };
 }

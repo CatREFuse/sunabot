@@ -34,6 +34,8 @@ export interface MemoryRepositoryPort {
   hasMemoryBatch(batchId: string): boolean;
   readMemoryScheduler(): Record<string, object>;
   replaceMemoryScheduler(conversations: Readonly<Record<string, object>>): void;
+  readMemoryDebtAlertState(): MemoryRecordData | undefined;
+  writeMemoryDebtAlertState(state: MemoryRecordData): void;
   ensureLegacyMemorySchedulerImported(filePath: string): void;
   initializeRecallTracking?(recordIds: readonly string[], at?: Date): MemoryRecallStats[];
   reserveActualRecall(input: ReserveActualMemoryRecallInput): ReserveActualMemoryRecallResult;
@@ -46,6 +48,10 @@ export interface MemoryRepositoryPort {
     pageSize: number;
     total: number;
     pageCount: number;
+  };
+  readMemoryProcessingAttemptCounts?(options: { since: string; until: string }): {
+    successful: number;
+    attempted: number;
   };
 }
 

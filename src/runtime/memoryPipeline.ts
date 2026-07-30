@@ -79,6 +79,7 @@ export async function runtime_enqueueConversationMemory(this: RuntimeHost, recor
       committedThrough: record.memoryCompressedThroughMessageCount,
       reconcileGroupHistory: true
     });
+    await syncMemoryDebtAlertSafely(this);
   }
 export function runtime_scheduleMemoryDrain(this: RuntimeHost) {
     this.memoryDrainDirty = true;
@@ -102,7 +103,7 @@ export function runtime_scheduleMemoryDrain(this: RuntimeHost) {
   }
 export async function runtime_armMemoryWakeTimer(this: RuntimeHost) {
     if (this.memoryWakeTimer) clearTimeout(this.memoryWakeTimer);
-    const threshold = clampInteger(this.config.bot.memory.messageThreshold, 48, 1, 200);
+    const threshold = clampInteger(this.config.bot.memory.messageThreshold, 16, 1, 200);
     const wakeAt = await this.memoryScheduler.nextWakeAt(threshold);
     if (wakeAt == null) return;
     const delay = Math.max(0, Math.min(wakeAt - Date.now(), 2_147_000_000));
@@ -112,13 +113,14 @@ export async function runtime_armMemoryWakeTimer(this: RuntimeHost) {
     }, delay);
   }
 export async function runtime_drainMemoryScheduler(this: RuntimeHost) {
-    const threshold = clampInteger(this.config.bot.memory.messageThreshold, 48, 1, 200);
+    const threshold = clampInteger(this.config.bot.memory.messageThreshold, 16, 1, 200);
     while (true) {
       const claim = await this.memoryScheduler.claimNext(threshold);
       if (!claim) return;
       if (await isMemoryBatchCommitted(this.config, claim.batchId)) {
         await this.memoryScheduler.complete(claim, Date.now(), { refundAttempt: true });
         this.projectMemoryCursor(claim);
+        await syncMemoryDebtAlertSafely(this);
         continue;
       }
       const ok = await this.processMemoryClaim(claim).catch((error) => {
@@ -129,12 +131,51 @@ export async function runtime_drainMemoryScheduler(this: RuntimeHost) {
         });
         return false;
       });
+      recordMemoryOperation(this.config, {
+        source: "working",
+        operation: "compression_attempt",
+        actor: "memory_pipeline",
+        outcome: ok ? "applied" : "failed",
+        batchId: claim.batchId,
+        conversationId: claim.conversation.id,
+        conversationScope: claim.conversation.scope,
+        ...(ok ? {} : { reasonCode: "memory_processing_failed" })
+      });
       if (ok) {
         await this.memoryScheduler.complete(claim);
         this.projectMemoryCursor(claim);
       }
       else await this.memoryScheduler.fail(claim);
+      await syncMemoryDebtAlertSafely(this);
     }
+  }
+export async function runtime_syncMemoryDebtAlert(this: RuntimeHost) {
+    const claim = await this.memoryScheduler.claimDebtAlert();
+    if (!claim) return { queued: false as const, reason: "not_due" as const };
+    let targetConversationId = claim.targetConversationId;
+    if (!targetConversationId) {
+      const target = await this.scheduledTasks.resolveMemoryDebtAlertTarget();
+      if (!target.resolved) return { queued: false as const, reason: target.reason };
+      targetConversationId = await this.memoryScheduler.bindDebtAlertTarget(
+        claim.episodeId,
+        target.conversationId
+      );
+      if (!targetConversationId) {
+        return { queued: false as const, reason: "episode_changed" as const };
+      }
+    }
+    const queued = await this.memoryScheduler.enqueueDebtAlertIfDue(
+      claim.episodeId,
+      targetConversationId,
+      () => this.scheduledTasks.enqueueMemoryDebtAlert({
+        episodeId: claim.episodeId,
+        targetConversationId
+      })
+    );
+    if (!queued.executed) {
+      return { queued: false as const, reason: queued.reason };
+    }
+    return queued.result;
   }
 export function runtime_projectMemoryCursor(this: RuntimeHost, claim: MemoryClaim) {
     const record = this.conversationRecords.get(claim.conversation.id);
@@ -317,6 +358,12 @@ function rejectionReasonCounts(
     counts[item.reasonCode] = (counts[item.reasonCode] ?? 0) + 1;
     return counts;
   }, {});
+}
+
+async function syncMemoryDebtAlertSafely(host: RuntimeHost) {
+  await runtime_syncMemoryDebtAlert.call(host).catch((error) => {
+    console.error("[runtime] memory debt alert failed", { error });
+  });
 }
 export async function runtime_mergeConversationWorkingMemory(this: RuntimeHost,
     record: ConversationRecord,
@@ -584,6 +631,7 @@ export class RuntimeMemoryPipeline {
   scheduleMemoryDrain(...args: Parameters<typeof runtime_scheduleMemoryDrain>) { return runtime_scheduleMemoryDrain.call(this.host, ...args); }
   armMemoryWakeTimer(...args: Parameters<typeof runtime_armMemoryWakeTimer>) { return runtime_armMemoryWakeTimer.call(this.host, ...args); }
   drainMemoryScheduler(...args: Parameters<typeof runtime_drainMemoryScheduler>) { return runtime_drainMemoryScheduler.call(this.host, ...args); }
+  syncMemoryDebtAlert(...args: Parameters<typeof runtime_syncMemoryDebtAlert>) { return runtime_syncMemoryDebtAlert.call(this.host, ...args); }
   projectMemoryCursor(...args: Parameters<typeof runtime_projectMemoryCursor>) { return runtime_projectMemoryCursor.call(this.host, ...args); }
   processMemoryClaim(...args: Parameters<typeof runtime_processMemoryClaim>) { return runtime_processMemoryClaim.call(this.host, ...args); }
   enrichParticipantAddressNames(...args: Parameters<typeof runtime_enrichParticipantAddressNames>) { return runtime_enrichParticipantAddressNames.call(this.host, ...args); }

@@ -9,15 +9,19 @@
 - 主对话角色：管理员私聊。
 - 输入从原始 OneBot v11 `file` 消息段进入 production ingress。
 - 使用全新隔离 workspace、mock MessagingPort、固定文本附件和允许执行的 Codex worker。
-- Codex worker 只能读取任务输入目录，并只能从受控输出目录声明产物。
+- 主 Bot 的 Codex 工具协议明确要求：任务需要交付文件时写清成品名称和内容，不猜测或传递宿主输出路径。
+- Codex worker 的实际 cwd 就是运行时为当前 attempt 分配的受控输出目录；冻结输入和获准 workspace 通过独立只读或显式授权路径提供。
+- worker 必须在 cwd 中使用相对路径生成需要回传的文件，并只能从该目录声明产物。
 
 ## 输入与预期
 
-`codex` 调用必须包含 `inputHandles: ["message:885282522:file:0"]`。worker 读取文件中的 `CODEX-INPUT-ARTIFACT-OK-20260730`，生成 `codex-result.txt`，结果产物通过完成回调注册到原会话，随后由 `send_file` 发回。
+`codex` 调用必须包含 `inputHandles: ["message:885282522:file:0"]`，并在 task 中写清需要交付 `codex-result.txt`，不得指定宿主绝对目录。worker 从 cwd 读取目标输出语义，通过冻结输入读取 `CODEX-INPUT-ARTIFACT-OK-20260730`，以相对路径生成 `codex-result.txt`，结果产物通过完成回调注册到原会话，随后由 `send_file` 发回。
+
+Provider 收到的 `codex` function schema 必须能够被当前严格模式接受，`inputHandles` 不包含 Provider 禁止的 `uniqueItems`。兼容门禁检查 canonical schema、prompt override、MCP 和动态补入的 `dispatch_message` 合并后的最终定义，并覆盖各 Provider 协议映射后的实际请求结构。重复句柄仍由 Sunabot 在冻结输入和 worker 准备两个边界拒绝，不能重复读取或派发同一份输入。
 
 ## 质量标准
 
-结果文件包含固定校验文本，且来自冻结输入。模型不需要先调用 `export_chat_media` 或猜测路径，回复不暴露 job 目录、宿主路径、缓存地址或内部产物句柄。
+结果文件包含固定校验文本，且来自冻结输入。Codex 的实际 cwd 与当前 attempt 的合约输出目录一致，声明的产物路径相对该 cwd；目录外文件不能被注册或发送。模型不需要先调用 `export_chat_media` 或猜测路径，回复不暴露 job 目录、宿主路径、缓存地址或内部产物句柄。
 
 <!-- sunabot-user-test-case:v1 -->
 ```json
@@ -105,12 +109,22 @@
     "criteria": [
       {
         "id": "frozen-input",
-        "description": "The Codex call uses message:885282522:file:0 as inputHandles and reads the exact 33-byte frozen input.",
+        "description": "The successful Codex call uses message:885282522:file:0 as inputHandles and reads the exact 33-byte frozen input; duplicate handles remain rejected by both host parsers.",
+        "minimumScore": 5
+      },
+      {
+        "id": "provider-schema-contract",
+        "description": "The final resolved and protocol-mapped Provider function schema is accepted without uniqueItems after canonical definitions, prompt overrides, MCP tools, and dispatch_message are composed.",
         "minimumScore": 5
       },
       {
         "id": "artifact-result",
         "description": "The delivered codex-result.txt contains CODEX-INPUT-ARTIFACT-OK-20260730 and is registered from the validated worker output.",
+        "minimumScore": 5
+      },
+      {
+        "id": "contract-output-directory",
+        "description": "The Codex worker runs with the runtime-assigned contract output directory as cwd, creates the deliverable by relative path there, and no file outside that directory is registered or delivered.",
         "minimumScore": 5
       },
       {

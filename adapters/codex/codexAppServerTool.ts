@@ -3,7 +3,6 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { CODEX_MAX_TASK_CHARS } from "../../services/tools/definitions.js";
 import type {
   CodexControlRunner,
   CodexProcessIdentity,
@@ -12,6 +11,12 @@ import type {
   CodexToolInput,
   CodexToolResult
 } from "../../packages/contracts/tools/codex.js";
+import {
+  buildAppServerTask,
+  parseControlInput,
+  type CodexControlAction,
+  type ParsedControlInput
+} from "./codexAppServerContract.js";
 import { CodexPreparationError, resolveCodexExecutable } from "./codexEnvironment.js";
 import {
   CODEX_DEFAULT_TERMINATION_GRACE_MS,
@@ -23,26 +28,13 @@ import {
   failureResult,
   normalizeModelResult,
   parseCodexResultText,
+  validateCodexResultArtifacts,
   withTruncatedOutputNotice
 } from "./codexResult.js";
 
 const APP_SERVER_TIMEOUT_MS = 15 * 60 * 1000;
 const APP_SERVER_STDERR_CHARS = 64 * 1024;
-const DEFAULT_SESSION_LIMIT = 10;
-const SSH_HOST_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
-const THREAD_ID_PATTERN = /^[A-Za-z0-9._:-]{1,160}$/u;
-
-type CodexControlAction = "list_sessions" | "start" | "resume";
-
-interface ParsedControlInput {
-  action: CodexControlAction;
-  sshHost?: string;
-  task?: string;
-  workspacePath?: string;
-  threadId?: string;
-  query?: string;
-  limit: number;
-}
+export { parseControlInput } from "./codexAppServerContract.js";
 
 interface AppServerRequest {
   id: number;
@@ -192,6 +184,22 @@ export class CodexAppServerRunner implements CodexControlRunner {
     const runToken = normalizeRunToken(context.runToken ?? randomUUID());
     const runDir = path.join(context.jobDir, ".codex-app-server", `attempt-${attempt}-${runToken}`);
     await fs.mkdir(runDir, { recursive: true, mode: 0o700 });
+    const outputDir = !input.sshHost && input.action !== "list_sessions"
+      ? path.join(
+          context.jobDir,
+          ".codex-worker",
+          `attempt-${attempt}-${runToken}`,
+          "outputs"
+        )
+      : undefined;
+    if (outputDir) {
+      await fs.mkdir(outputDir, { recursive: true, mode: 0o700 });
+      await validateCodexResultArtifacts({
+        declarations: [],
+        outputDir,
+        jobDir: context.jobDir
+      });
+    }
     const env = appServerEnvironment(this.environment);
     env.HOME = this.homeDir;
 
@@ -231,6 +239,7 @@ export class CodexAppServerRunner implements CodexControlRunner {
       env,
       commandMarker: runDir,
       reportFile: path.join(runDir, "result.json"),
+      outputDir,
       attempt,
       runToken
     };
@@ -319,7 +328,7 @@ export class CodexAppServerRunner implements CodexControlRunner {
         }
       });
 
-      void this.execute(client, input, context, prepared.reportFile).then(finish, fail);
+      void this.execute(client, input, context, prepared).then(finish, fail);
     });
   }
 
@@ -327,7 +336,7 @@ export class CodexAppServerRunner implements CodexControlRunner {
     client: AppServerClient,
     input: ParsedControlInput,
     context: CodexToolExecutionContext,
-    reportFile: string
+    prepared: PreparedAppServer
   ): Promise<CodexToolResult> {
     await client.request("initialize", {
       clientInfo: {
@@ -412,29 +421,77 @@ export class CodexAppServerRunner implements CodexControlRunner {
     });
     await client.request("turn/start", {
       threadId,
-      input: [{ type: "text", text: input.task }],
+      input: [{
+        type: "text",
+        text: buildAppServerTask(
+          input.task!,
+          input.workspacePath!,
+          prepared.outputDir
+        )
+      }],
       approvalPolicy: "never",
-      cwd: input.workspacePath,
+      cwd: prepared.outputDir ?? input.workspacePath,
       sandboxPolicy: {
         type: "workspaceWrite",
-        writableRoots: [input.workspacePath],
+        writableRoots: prepared.outputDir
+          ? [prepared.outputDir, input.workspacePath]
+          : [input.workspacePath],
         networkAccess: true
       },
-      ...(this.experimentalApi ? { runtimeWorkspaceRoots: [input.workspacePath] } : {}),
+      ...(this.experimentalApi ? {
+        runtimeWorkspaceRoots: prepared.outputDir
+          ? [prepared.outputDir, input.workspacePath]
+          : [input.workspacePath]
+      } : {}),
       outputSchema: CODEX_RESULT_SCHEMA
     });
     await completed;
     const modelResult = parseCodexResultText(finalText);
+    let artifacts: CodexToolResult["artifacts"] = undefined;
+    if (modelResult.status === "succeeded" && modelResult.artifacts?.length) {
+      if (!prepared.outputDir) {
+        return failureResult(
+          context.jobId,
+          "local",
+          "failed",
+          "codex_remote_artifact_unsupported",
+          "Remote Codex sessions cannot return file artifacts to this conversation.",
+          false,
+          { threadId, usage }
+        );
+      }
+      try {
+        artifacts = await validateCodexResultArtifacts({
+          declarations: modelResult.artifacts,
+          outputDir: prepared.outputDir,
+          jobDir: context.jobDir
+        });
+      } catch (error) {
+        return failureResult(
+          context.jobId,
+          "local",
+          "failed",
+          "codex_artifact_invalid",
+          errorMessage(error),
+          false,
+          { threadId, usage }
+        );
+      }
+    }
     const normalized = normalizeModelResult({
       ...context,
       task: input.task!,
       kind: "local"
-    }, modelResult, { threadId, usage });
+    }, modelResult, {
+      threadId,
+      usage,
+      ...(artifacts?.length ? { artifacts } : {})
+    });
     if (!client.outputTruncated) return normalized;
-    await fs.writeFile(reportFile, finalText, { encoding: "utf8", mode: 0o600 });
+    await fs.writeFile(prepared.reportFile, finalText, { encoding: "utf8", mode: 0o600 });
     return withTruncatedOutputNotice(normalized, {
       outputBytes: client.outputBytes,
-      reportFile
+      reportFile: prepared.reportFile
     });
   }
 }
@@ -446,6 +503,7 @@ interface PreparedAppServer {
   env: NodeJS.ProcessEnv;
   commandMarker: string;
   reportFile: string;
+  outputDir?: string;
   attempt: number;
   runToken: string;
 }
@@ -566,58 +624,6 @@ class AppServerProtocolError extends Error {
     super(message);
     this.name = "AppServerProtocolError";
   }
-}
-
-export function parseControlInput(input: CodexToolInput):
-  | { ok: true; value: ParsedControlInput }
-  | { ok: false; code: string; error: string } {
-  if (input.__sunabot_control_authorized !== true) {
-    return { ok: false, code: "control_unauthorized", error: "Codex session control was not authorized by the runtime." };
-  }
-  const action = input.action;
-  if (action !== "list_sessions" && action !== "start" && action !== "resume") {
-    return { ok: false, code: "invalid_input", error: "Codex control action is invalid." };
-  }
-  const sshHost = optionalText(input.ssh_host);
-  if (sshHost && !SSH_HOST_PATTERN.test(sshHost)) {
-    return { ok: false, code: "invalid_input", error: "SSH host must be a configured host name or alias." };
-  }
-  const workspacePath = optionalText(input.workspace_path);
-  if (workspacePath && !path.posix.isAbsolute(workspacePath)) {
-    return { ok: false, code: "invalid_input", error: "workspace_path must be an absolute path on the selected host." };
-  }
-  const task = optionalText(input.task);
-  const threadId = optionalText(input.thread_id);
-  const query = optionalText(input.query);
-  const limit = input.limit == null ? DEFAULT_SESSION_LIMIT : Number(input.limit);
-  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 50) {
-    return { ok: false, code: "invalid_input", error: "limit must be between 1 and 50." };
-  }
-  if (task && task.length > CODEX_MAX_TASK_CHARS) {
-    return { ok: false, code: "invalid_input", error: `Codex task exceeds ${CODEX_MAX_TASK_CHARS} characters.` };
-  }
-  if (workspacePath && workspacePath.length > 4_096) {
-    return { ok: false, code: "invalid_input", error: "workspace_path is too long." };
-  }
-  if (query && query.length > 512) {
-    return { ok: false, code: "invalid_input", error: "query is too long." };
-  }
-  if (threadId && !THREAD_ID_PATTERN.test(threadId)) {
-    return { ok: false, code: "invalid_input", error: "thread_id is invalid." };
-  }
-  if (action === "list_sessions") {
-    if (task || threadId) return { ok: false, code: "invalid_input", error: "list_sessions does not accept task or thread_id." };
-  } else if (action === "start") {
-    if (!task || !workspacePath || threadId || query || input.limit != null) {
-      return { ok: false, code: "invalid_input", error: "start requires task and workspace_path only." };
-    }
-  } else if (!task || !threadId || !workspacePath || query || input.limit != null) {
-    return { ok: false, code: "invalid_input", error: "resume requires task, thread_id, and workspace_path." };
-  }
-  return {
-    ok: true,
-    value: { action, sshHost, task, workspacePath, threadId, query, limit }
-  };
 }
 
 function appServerEnvironment(source: NodeJS.ProcessEnv) {

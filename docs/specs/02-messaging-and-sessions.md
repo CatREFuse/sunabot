@@ -103,6 +103,8 @@
 
 普通定时任务生成结果后按目标创建幂等 Session 事件；目标投递失败写入 run 的 `delivery_attempts`、`last_delivery_error` 和 `next_delivery_at`，以带随机抖动的有界指数退避最多尝试三次。第三次失败转为持久 `failed` 终态，不再由调度循环无限 claim；Core 重启只恢复尚未到期的下一次投递或未超过上限的 run。管理员可从失败记录发起一次显式重新投递，服务端原子清理旧投递错误并把既有生成结果恢复为可 claim 状态，不重复生成正文，也不允许对非失败记录执行该操作。
 
+`system:memory-debt-alert` 是固定字面量的系统通知，只在当前 Agent 记忆队列连续超过 100 条的一个 episode 内排入一次管理员私聊。它直接生成受校验的 `scheduled_callback` Session 事件，不渲染定时任务提示词，也不调用 Provider；投递继续复用目标账号分区、Session FIFO、durable outbox、离线暂停、重试和重启恢复。远端成功后只结算请求日志，不建立 assistant 会话投影，也不触发记忆入队，避免告警自身增加记忆债务。
+
 ### 3.7 Dream 与会话边界
 
 Dream 只读取当前 Agent 在当日睡眠窗口内已经持久化的会话投影，并以有界、去标识化的模型输入参与记忆整理。每日 04:00 自动运行不建立用户 turn、内部回调、Session 事件、outbox 或 OneBot 外发；生成失败只进入 Dream 运行状态和请求日志，不向任一会话发送错误消息。管理员手动触发时，运行权持久化成功后向所选 Agent 的在线 QQ 账号与已配置管理员私聊排入一次 `scheduled_callback`；回调沿既有 Session、完整 Agent loop、durable outbox 和 OneBot 出站链路投递，由当前人格、关系与可编辑提示词生成“已经睡着、正在进入梦境”的即时消息，业务层不能硬编码最终文案或直接调用 Gateway。当天已完成、运行中、缺少在线账号或缺少有效管理员 QQ 时拒绝触发且不排入通知；通知入队失败时本次 Dream 终止为不可自动重试失败，管理员可再次手动触发。

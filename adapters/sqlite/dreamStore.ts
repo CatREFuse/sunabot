@@ -73,13 +73,16 @@ export class SqliteDreamStore {
 
   initializeRecallTracking(recordIds: readonly string[], at?: Date) {
     const timestamp = this.inputDate(at).toISOString();
-    return this.transaction(() => initializeRecallTrackingUnsafe(this.database, recordIds, timestamp));
+    return withImmediateTransaction(
+      this.database,
+      () => initializeRecallTrackingUnsafe(this.database, recordIds, timestamp)
+    );
   }
 
   reserveActualRecall(input: ReserveActualRecallInput) {
     const recallKey = boundedText(input.recallKey, "recallKey", 1, 256);
     const exposedAt = this.inputDate(input.at);
-    return this.transaction(() => reserveActualRecallUnsafe(this.database, {
+    return withImmediateTransaction(this.database, () => reserveActualRecallUnsafe(this.database, {
       recordId: input.recordId,
       recallKey,
       exposedAt: exposedAt.toISOString(),
@@ -91,7 +94,7 @@ export class SqliteDreamStore {
     const recallKey = boundedText(input.recallKey, "recallKey", 1, 256);
     const localDate = normalizeLocalDate(input.localDate, "localDate");
     const recalledAt = this.inputDate(input.at).toISOString();
-    return this.transaction(() => recordActualRecallUnsafe(this.database, {
+    return withImmediateTransaction(this.database, () => recordActualRecallUnsafe(this.database, {
       recordId: input.recordId,
       recallKey,
       localDate,
@@ -137,7 +140,7 @@ export class SqliteDreamStore {
 
   claimDailyRun(input: ClaimDailyDreamRunInput): DreamRunClaimResult {
     const normalized = normalizeClaim(input, this.idFactory, this.clock);
-    return this.transaction(() => {
+    return withImmediateTransaction(this.database, () => {
       const existing = this.readRunByLocalDate(normalized.localDate);
       if (!existing) {
         this.database.prepare(`
@@ -339,7 +342,10 @@ export class SqliteDreamStore {
 
   commitConsolidation(input: CommitDreamConsolidationInput) {
     const now = this.inputDate(input.now);
-    return this.transaction(() => commitDreamConsolidationUnsafe(this.database, input, now));
+    return withImmediateTransaction(
+      this.database,
+      () => commitDreamConsolidationUnsafe(this.database, input, now)
+    );
   }
 
   markPersona(input: {
@@ -380,6 +386,7 @@ export class SqliteDreamStore {
     workerId: string;
     errorCode: string;
     errorText: string;
+    resetGeneratedOutput?: boolean;
     retryAt?: Date | null;
     now?: Date;
   }) {
@@ -393,17 +400,40 @@ export class SqliteDreamStore {
     if (nextRetryAt != null && nextRetryAt <= nowIso) {
       throw new Error("retryAt must be later than now.");
     }
+    const resetGeneratedOutput = input.resetGeneratedOutput === true ? 1 : 0;
     const updated = this.database.prepare(`
       UPDATE dream_runs SET
         status = 'failed', worker_id = NULL, lease_until = NULL,
+        output_json = CASE WHEN ? = 1 THEN NULL ELSE output_json END,
+        dream_text = CASE WHEN ? = 1 THEN NULL ELSE dream_text END,
+        generated_at = CASE WHEN ? = 1 THEN NULL ELSE generated_at END,
         error_code = ?, error_text = ?, next_retry_at = ?, failed_at = ?, updated_at = ?
       WHERE id = ? AND worker_id = ?
         AND status IN ('running', 'generated', 'consolidated') AND lease_until > ?
-    `).run(errorCode, errorText, nextRetryAt, nowIso, nowIso, runId, workerId, nowIso);
+        AND (? = 0 OR status = 'generated')
+    `).run(
+      resetGeneratedOutput,
+      resetGeneratedOutput,
+      resetGeneratedOutput,
+      errorCode,
+      errorText,
+      nextRetryAt,
+      nowIso,
+      nowIso,
+      runId,
+      workerId,
+      nowIso,
+      resetGeneratedOutput
+    );
     if (Number(updated.changes) === 1) return this.requireRun(runId);
     const current = this.readRun(runId);
     return current && current.status === "failed" && current.errorCode === errorCode &&
-      current.errorText === errorText && current.nextRetryAt === nextRetryAt
+      current.errorText === errorText && current.nextRetryAt === nextRetryAt &&
+      (!input.resetGeneratedOutput || (
+        current.output == null
+        && current.dreamText == null
+        && current.generatedAt == null
+      ))
       ? current
       : undefined;
   }
@@ -476,7 +506,7 @@ export class SqliteDreamStore {
   purgeArchivedMemories(input: { now?: Date; limit?: number } = {}) {
     const nowIso = this.inputDate(input.now).toISOString();
     const limit = listLimit(input.limit);
-    return this.transaction(() => {
+    return withImmediateTransaction(this.database, () => {
       const due = (this.database.prepare(`
         SELECT ${ARCHIVE_COLUMNS} FROM dream_memory_archive
         WHERE purge_after <= ? ORDER BY purge_after, record_id LIMIT ?
@@ -522,16 +552,16 @@ export class SqliteDreamStore {
   private inputDate(value?: Date) {
     return validDate(value ?? this.clock(), value ? "date" : "clock");
   }
+}
 
-  private transaction<T>(operation: () => T) {
-    this.database.exec("BEGIN IMMEDIATE");
-    try {
-      const result = operation();
-      this.database.exec("COMMIT");
-      return result;
-    } catch (error) {
-      this.database.exec("ROLLBACK");
-      throw error;
-    }
+function withImmediateTransaction<T>(database: DatabaseSync, operation: () => T) {
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    const result = operation();
+    database.exec("COMMIT");
+    return result;
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
   }
 }

@@ -148,7 +148,7 @@ export function defaultConfig(): AppConfig {
       memory: {
         memoryModel: "gpt-5.4-mini",
         reasoningEffort: "low",
-        messageThreshold: 48,
+        messageThreshold: 16,
         workingMemoryMaxEntries: 100,
         dreamRecentWindowHours: 24,
         dreamRecentMemoryLimit: 24,

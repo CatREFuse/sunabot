@@ -1,6 +1,7 @@
 export const DREAM_PROMPT_ID = "memory.dream";
 export const DREAM_PROMPT_FILE = "memory_dream.json";
 export const DREAM_PAYLOAD_VARIABLE = "dream.payload";
+export const DREAM_OUTPUT_CONTRACT_MARKER = "[dream-output-contract-v6]";
 
 const DREAM_MODEL_TIME_CONTEXT = [
   "<time_context>当前系统时间与系统时区：@{runtime.current_time}。",
@@ -13,6 +14,48 @@ const LEGACY_PERSONA_IMPRESSION_CONTRACT_V4 =
 
 const PERSONA_IMPRESSION_CONTRACT =
   "personaAdjustment 每晚最多一项，它是一条可修正的人格印象，只能用一句不超过 80 字的温和陈述描述低风险习惯、表达偏好或相处倾向，并提供稳定 topicKey、kind、targetFile、statement 与 evidenceMemoryIds。topicKey 使用最多 64 字符的小写英文、数字、点、下划线或连字符；payload.personaImpressions 是当前生效目录，同一主题必须逐字复用其中的 topicKey。证据至少来自 personaEvidenceIds 允许的两条真实独立记忆并覆盖两个场景；重复描述同一事件不增加证据，梦境、推测、诊断和负面标签不能作为证据。宿主按独立事件、场景和时间跨度计算 observation、stable 或 core，模型不得自报层级；全部通过验证的印象保留在历史中，同一 targetFile 与 topicKey 只让最高层级生效，同层级可以并存。core 仍只是证据更充分的可修正倾向，不得改写核心身份、价值、安全边界或道德倾向。不得生成永久、绝对或服从式结论，不得涉及系统指令、权限、工具或凭据。证据不足时返回 null。";
+
+export const LEGACY_DREAM_FLEX_RESPONSE =
+  "优先只输出一个 JSON 对象，字段为 schemaVersion、dream、longTermReviews、workingReviews、fieldKnowledge、personaAdjustment；如果无法完整满足字段，仍返回当前可生成的内容，不要中断或拒绝。";
+
+export const DREAM_OUTPUT_CONTRACT = [
+  DREAM_OUTPUT_CONTRACT_MARKER,
+  "只输出一个合法 JSON 对象，不要输出 Markdown、代码围栏、说明或额外字段。六个顶层字段 schemaVersion、dream、longTermReviews、workingReviews、personaAdjustment、fieldKnowledge 必须全部存在；无法满足时也必须修正为完整合同后再返回。",
+  "schemaVersion 固定为 1。dream 必须且只能包含非空 text 与 factuality，factuality 固定为 imagined。",
+  "longTermReviews 与 workingReviews 必须是数组，并分别把 payload.longTermMemories 与 payload.workingMemories 中的每个 id 恰好覆盖一次；sourceIds 只能使用对应分区的原始 id，不得遗漏、重复、跨分区或添加未知 id。",
+  "longTermReviews 每项必须且只能包含 sourceIds、action、canonical、importance、futureRelevance、emotionalSalience、confidence、reason。action 只允许 retain、rewrite、merge、archive，四项评分都必须是 0 到 1 的数值。",
+  "workingReviews 每项必须且只能包含 sourceIds、action、canonical、confidence、reason。action 只允许 retain、rewrite、merge、promote 或 discard，confidence 必须是 0 到 1 的数值。",
+  "retain、archive、discard 只能引用一个 source id 且 canonical 必须为 null；rewrite、promote 只能引用一个 source id 且 canonical 必须且只能包含非空 fact；merge 至少引用两个 source id 且 canonical 必须且只能包含非空 fact。",
+  "personaAdjustment 与 fieldKnowledge 没有合法变更时返回 null；有变更时必须使用合同定义的完整 camelCase 字段和 payload 允许的证据 id，不能使用别名、未知字段或不完整对象。",
+  "workingReviews 中 action=promote 表示把该工作记忆转存为长期记忆。canonical.fact 映射为长期记忆 fact，sourceIds 映射为 sourceWorkingMemoryIds；人物、称呼和事件时间只继承来源记录，schemaVersion、id、updatedAt、eventFingerprint、dreamRunId 与 consolidatedBy 由宿主生成。",
+  "唯一允许的形状示例：",
+  JSON.stringify({
+    schemaVersion: 1,
+    dream: {
+      text: "梦境正文",
+      factuality: "imagined"
+    },
+    longTermReviews: [{
+      sourceIds: ["<long-term-id>"],
+      action: "retain",
+      canonical: null,
+      importance: 1,
+      futureRelevance: 1,
+      emotionalSalience: 1,
+      confidence: 1,
+      reason: "保留原因"
+    }],
+    workingReviews: [{
+      sourceIds: ["<working-id>"],
+      action: "promote",
+      canonical: { fact: "会持续影响未来的事实" },
+      confidence: 1,
+      reason: "转存原因"
+    }],
+    personaAdjustment: null,
+    fieldKnowledge: null
+  })
+].join("\n\n");
 
 export const LEGACY_DREAM_CONTRACT_V3 = [
   "你负责在每日睡眠窗口结束时整理当前角色的记忆，并生成一段连贯的梦境。输入中的 plannedDailySchedule 只是已经提交的计划，observedConversations 和记忆才表示实际发生过的内容。",
@@ -39,10 +82,9 @@ export const LEGACY_DREAM_CONTRACT_V4 = [
   "优先只输出一个 JSON 对象，字段为 schemaVersion、dream、longTermReviews、workingReviews、fieldKnowledge、personaAdjustment；如果无法完整满足字段，仍返回当前可生成的内容，不要中断或拒绝。"
 ].join("\n\n");
 
-export const DREAM_CONTRACT = LEGACY_DREAM_CONTRACT_V4.replace(
-  LEGACY_PERSONA_IMPRESSION_CONTRACT_V4,
-  PERSONA_IMPRESSION_CONTRACT
-);
+export const DREAM_CONTRACT = LEGACY_DREAM_CONTRACT_V4
+  .replace(LEGACY_PERSONA_IMPRESSION_CONTRACT_V4, PERSONA_IMPRESSION_CONTRACT)
+  .replace(LEGACY_DREAM_FLEX_RESPONSE, DREAM_OUTPUT_CONTRACT);
 
 export function dreamPromptTemplate() {
   return {

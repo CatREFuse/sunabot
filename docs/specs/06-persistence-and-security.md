@@ -22,7 +22,7 @@ Agent 配置文件夹是跨终端传输角色配置的唯一推荐和支持模�
 
 | 表                            | 数据                                                                                                    |
 | ----------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `app_metadata`                | schema 与旧数据导入标记                                                                                 |
+| `app_metadata`                | schema、旧数据导入标记与记忆债务告警 episode latch                                                      |
 | `agents`                      | Agent ID、名称、启用状态、workspace 与头像路径                                                          |
 | `agent_accounts`              | QQ 接入账号、所属 Agent、QQ 号、启用状态与独立 WebUI 端口                                               |
 | `conversations`               | 会话及其消息数组，每个会话一行                                                                          |
@@ -43,7 +43,17 @@ Agent 配置文件夹是跨终端传输角色配置的唯一推荐和支持模�
 
 记忆操作审计复用当前 Agent 的 `request_logs`，不新增表或 JSON/JSONL。`memory.operation` 记录来源、操作、执行者、结果、稳定原因码、宿主时间、可用的 batch/conversation/record 标识、数量与 revision；正文、模型原始返回和宿主绝对路径禁止进入该事件。读取沿用现有请求日志分页与搜索，写入必须由当前 Agent 配置选择业务库，不能跨 Agent 汇总落盘。
 
+`add_workmemory` 把 durable `incoming_reply` event ID 作为有界 `sourceDecisionKey` 写入 `WORKING_MEMORY.md` 的隐藏事项 metadata，不新增 SQLite 表或用户可见字段。追加在每次 revision CAS 前先查找相同决策键；崩溃恢复、重复 Provider 请求或 CAS 冲突重读命中时返回原事项和 revision，正文不再次追加。决策键在后续普通工作记忆整理中随稳定事项保留，整份文档拒绝重复键。
+
+`memory_scheduler` 现有状态对象持久保存队首 `currentBatch`、`failureCount`、`nextRetryAt`、`lastFailureCode` 与 `earlyRetryConsumedThroughCount`，不增加 SQLite 列或 schema 版本。失败时保留同一 batch ID 和原消息，重启把遗留 `running` 恢复为可重试队首；重试成功后才推进已处理游标。后来入队的消息保持原序，不参与失败批次重建，也不被计作该批次已经消费的新批次窗口额度；提前唤醒水位只防止同一完整窗口在失败后立即重复唤醒。
+
+记忆页 24 小时处理成功率直接聚合当前 Agent `request_logs` 中 `memory.operation/working.compression_attempt` 的终态事件，待处理数直接聚合当前 Agent `memory_scheduler`，不持久化派生百分比、不跨 Agent 建立汇总表，也不推进 schema。每次真实 claim 只写一个 `applied` 或 `failed` 终态；已提交批次的恢复性游标结算不写伪尝试。
+
+记忆债务告警 latch 使用当前 Agent 业务库 `app_metadata` 中的版本化对象保存活动 episode ID、首次解析并持久绑定的 `targetConversationId`、是否已经排入 durable Session 事件和更新时间，不新增增长型文件或 schema 表。队列检查与 latch 写入由同一 Agent 的记忆调度串行化，固定执行目标解析、目标绑定、事件入队、queued 标记；并发绑定只保留第一个合法私聊目标。事件入队成功后才标记 queued，若进程在目标绑定后、事件写入后或 queued 标记前终止，重试继续使用相同目标与 episode run ID，由 Session dedupe 收敛为同一事件。待处理总数回落到 100 条或更少时持久重置活动状态与目标。
+
 Dream 分层窗口与两个时间桶上限属于现有 Agent JSON 配置的 `bot.memory` 字段，不推进 SQLite schema。缺少三项字段的旧配置分别补为 24、24、12；窗口允许 1—720 小时，两桶分别允许 0—48 条且合计必须为 1—48 条，超范围手工配置回退到安全默认组合。新建 Dream 运行把入选批次、窗口、场域知识 revision 与证据 ID 写入既有 `dream_runs.input_json`，后续重试不受配置再次修改影响；缺少窗口字段的旧持久运行按历史 48 小时解释。
+
+Dream 严格输出解析失败复用 `dream_runs` 现有 `attempt_count`、`error_code`、`error_text`、`next_retry_at` 与失败时间字段。无效输出在 `markGenerated` 之前失败，自动 claim 最多累计三次；第三次后 `next_retry_at` 为空。恢复到旧 `generated` 产物后若持久原文不能通过当前合同，失败事务同时把 `output_json`、`dream_text` 与 `generated_at` 清空，下一次 claim 回到 `running` 重新调用模型；其他 consolidation 失败继续保留合法生成产物。错误只保存白名单稳定代码与按代码生成的固定安全说明，Dream 操作日志只保存代码，历史 API 忽略旧 `error_text` 原文并重新映射安全文案，不保存无效模型原文、Provider payload、秘密或宿主路径，且不产生工作记忆、长期记忆、场域知识或人格写入。
 
 `emojis.jsonl` 一行对应一个 key，并严格保存当前文件名、key 创建/更新时间以及版本数组；`source` 只允许 `upload` 或 `generated`。单 Agent 最多 64 行，每行最多 20 个版本，清单最多 2 MiB。统一 key 校验层在任何清单或图片写入前拒绝原始孤立代理项、replacement character、C0/C1 控制字符、方括号、斜杠和反斜杠，再执行 trim/NFC，并限制为 1—24 个 code point、最多 64 UTF-8 字节；清单中的未知字段、重复 key、重复版本、悬空当前版本或非法值使读取失败关闭。旧 SQLite 毒值在迁移读取时隐藏，不能进入 JSONL 或令列表和内容 API 持续 500。
 

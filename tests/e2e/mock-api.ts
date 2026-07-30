@@ -113,7 +113,7 @@ const initialConfig = {
     memory: {
       memoryModel: "gpt-5.4-mini",
       reasoningEffort: "medium",
-      messageThreshold: 48,
+      messageThreshold: 16,
       workingMemoryMaxEntries: 100,
       dreamRecentWindowHours: 24,
       dreamRecentMemoryLimit: 24,
@@ -1663,6 +1663,14 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
           { id: "long_term", title: "长期记忆", fileName: "sunabot.sqlite#memory/long-term", editable: true },
           { id: "user_profile", title: "用户画像", fileName: "sunabot.sqlite#memory/user-profile", editable: true }
         ],
+        health: {
+          windowHours: 24,
+          windowStartedAt: "2026-07-30T12:00:00.000Z",
+          measuredAt: "2026-07-31T12:00:00.000Z",
+          successful: 19,
+          attempted: 20,
+          pending: 84
+        },
         document: {
           fileName: "WORKING_MEMORY.md",
           revision: "mock-working-memory-revision",

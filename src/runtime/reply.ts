@@ -20,6 +20,7 @@ import {
   codexControlAvailable,
   codexTurnAvailable
 } from "../../services/tools/codexControlPolicy.js";
+import type { AddWorkMemoryToolPort } from "../../services/tools/public.js";
 import type { SunaRuntime } from "../runtime.js";
 import { getAgentPrivatePath } from "../config.js";
 import {
@@ -102,6 +103,7 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
       promptOverride?: string;
       messageOrigin?: AssistantMessageOrigin;
       seedToolNames?: readonly string[];
+      memoryDecisionKey?: string;
     } = {}
   ) {
     const provider = replyProvider(this);
@@ -130,6 +132,8 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
     let sent = false;
     let requestStarted = false;
     let systemConfigLifecycle: systemConfigReply.SystemConfigReplyLifecycle | undefined;
+    let workingMemoryTurn: AddWorkMemoryToolPort | undefined;
+    let workingMemoryDecisionAudited = false;
     const replySoftErrors: string[] = [];
     const usedToolNames = new Set(options.seedToolNames ?? []);
     const currentToolNames = () => [...usedToolNames];
@@ -147,6 +151,20 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
         console.error("[runtime] assistant tool trace unavailable", { error });
       }
       return toolNames;
+    };
+    const auditWorkingMemoryDecision = async (toolNames: readonly string[]) => {
+      if (
+        workingMemoryDecisionAudited
+        || !workingMemoryTurn
+        || workingMemoryTurn.decisionResolved?.() === true
+      ) return;
+      workingMemoryDecisionAudited = true;
+      await isolateReplyModule(
+        "memory.tool_decision",
+        async () => this.workingMemory.recordToolDecision(incoming, toolNames),
+        () => undefined,
+        { signal: options.signal }
+      );
     };
     try {
       const beforeContext = await this.hooks.run("before_context", {
@@ -337,6 +355,9 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
           capabilityContext
         )
         : undefined;
+      workingMemoryTurn = options.promptOverride === undefined
+        ? this.workingMemory.toolPort(incoming, options.memoryDecisionKey)
+        : undefined;
       const turn = await this.completePromptTurn(provider, promptRequest, {
         signal: options.signal,
         modelRequestMaxRetries: this.config.normalReply.maxRetries,
@@ -462,21 +483,14 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
         systemConfig: systemConfigLifecycle?.toolPort, cron: this.scheduledTasks.toolPort(incoming, isAdmin, options.promptOverride),
         director: options.directorAccess === "none" ? undefined : this.director.toolPort(),
         ...(options.promptOverride === undefined ? { air: this.air.toolPort(incoming, [...messages64, { role: "user", content: prompt }]) } : {}),
-        ...(options.promptOverride === undefined ? { workingMemory: this.workingMemory.toolPort(incoming) } : {}),
+        ...(workingMemoryTurn ? { workingMemory: workingMemoryTurn } : {}),
         skills: runtimeAgentExtensions?.skills,
         mcp: runtimeAgentExtensions?.mcp,
         logContext
       });
       if (turn.kind === "deferred") usedToolNames.add(turn.toolCall.name);
       const turnToolNames = finalizeToolNames();
-      if (options.promptOverride === undefined) {
-        await isolateReplyModule(
-          "memory.tool_decision",
-          async () => this.workingMemory.recordToolDecision(incoming, turnToolNames),
-          () => undefined,
-          { signal: options.signal }
-        );
-      }
+      await auditWorkingMemoryDecision(turnToolNames);
       if (options.signal?.aborted || (options.isCurrent && !options.isCurrent())) {
         systemConfigLifecycle?.discard();
         return sent;
@@ -632,6 +646,7 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
     } catch (error) {
       systemConfigLifecycle?.discard();
       const failedToolNames = finalizeToolNames();
+      await auditWorkingMemoryDecision(failedToolNames);
       const failure = options.signal?.reason ?? error;
       const aborted = options.signal?.aborted || isAbortError(error);
       await appendReplyActionLog({

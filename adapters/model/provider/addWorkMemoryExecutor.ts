@@ -5,20 +5,37 @@ import {
 } from "../../../services/tools/public.js";
 import type { ProviderCompleteOptions, ResponseFunctionCallItem } from "./contracts.js";
 import { logContextMetadata } from "./logger.js";
+import {
+  projectAddWorkMemoryArgumentsLog,
+  projectAddWorkMemoryResultLog
+} from "./requestLogProjection.js";
+import { errorMessage } from "./valueUtils.js";
 
 export async function executeAddWorkMemoryTool(
   args: Record<string, unknown>,
   call: ResponseFunctionCallItem,
   options: ProviderCompleteOptions
 ) {
-  const result = options.workingMemory
-    ? await runAddWorkMemory(args, options.workingMemory, options.signal)
-    : { ok: false, code: "ADD_WORKMEMORY_UNAVAILABLE", error: "Working-memory update is unavailable." };
+  let result: unknown;
+  try {
+    result = options.workingMemory
+      ? await runAddWorkMemory(args, options.workingMemory, options.signal)
+      : { ok: false, code: "ADD_WORKMEMORY_UNAVAILABLE", error: "Working-memory update is unavailable." };
+  } catch (error) {
+    result = {
+      ok: false,
+      code: "ADD_WORKMEMORY_FAILED",
+      error: errorMessage(error)
+    };
+  }
   await appendRequestLog({
     category: "tool.call",
     action: ADD_WORKMEMORY_TOOL_NAME,
-    request: { callId: call.call_id, arguments: args },
-    response: result,
+    request: {
+      callId: call.call_id,
+      ...projectAddWorkMemoryArgumentsLog(args)
+    },
+    response: projectAddWorkMemoryResultLog(result),
     metadata: logContextMetadata(options.logContext)
   });
   return result;

@@ -28,12 +28,7 @@ import {
   type ScheduledTaskTarget,
   type UpdateScheduledTaskInput
 } from "../../services/scheduling/public.js";
-import {
-  cronCreateInput,
-  cronUpdateInput,
-  type CronToolInput,
-  type CronToolPort
-} from "../../services/tools/cronTool.js";
+import type { CronToolPort } from "../../services/tools/cronTool.js";
 import {
   OutboxDisconnectedError,
   type OutboxDeliveryContext,
@@ -63,12 +58,14 @@ import {
   isDirectorScheduledTaskId,
   scheduledCallbackTaskId
 } from "./scheduledTaskDirectorBoundary.js";
-import { resolveScheduledTaskCurrentTargets } from "./scheduledTaskTargetResolver.js";
+import { executeScheduledTaskTool } from "./scheduledTaskToolExecution.js";
+import { enqueueLiteralSystemNotification, enqueueMemoryDebtAlert, MEMORY_DEBT_ALERT_TASK_ID,
+  resolveMemoryDebtAlertTarget,
+  SCHEDULED_CALLBACK_EVENT_KIND, type RuntimeLiteralSystemNotificationInput } from "./systemNotifications.js";
 import type { SunaRuntime } from "../runtime.js";
 
 export type { ScheduledTaskAdminPage, ScheduledTaskAdminView } from "./scheduledTaskAdmin.js";
-
-export const SCHEDULED_CALLBACK_EVENT_KIND = "scheduled_callback_delivery";
+export { SCHEDULED_CALLBACK_EVENT_KIND } from "./systemNotifications.js";
 export const SCHEDULED_CALLBACK_OUTBOX_KIND = "onebot.scheduled_callback";
 
 export interface RuntimeSystemCallbackInput {
@@ -128,6 +125,14 @@ export class RuntimeScheduledTasks {
 
   enqueueSystemCallback(input: RuntimeSystemCallbackInput) {
     return enqueueRuntimeSystemCallback(this.host, input, (payload) => this.enqueueCallback(payload));
+  }
+
+  enqueueLiteralSystemNotification(input: RuntimeLiteralSystemNotificationInput) { return enqueueLiteralSystemNotification(this.host, input); }
+
+  resolveMemoryDebtAlertTarget() { return resolveMemoryDebtAlertTarget(this.host); }
+
+  enqueueMemoryDebtAlert(input: { episodeId: string; targetConversationId?: string; triggeredAt?: Date }) {
+    return enqueueMemoryDebtAlert(this.host, input);
   }
 
   listScheduledTasks(input: unknown = {}): ScheduledTaskAdminPage {
@@ -226,7 +231,13 @@ export class RuntimeScheduledTasks {
     );
     if (!authorized) return undefined;
     return {
-      execute: (input) => this.executeTool(input, incoming)
+      execute: (input) => executeScheduledTaskTool(input, incoming, {
+        create: (value) => this.createScheduledTask(value),
+        get: (id) => this.getScheduledTask(id),
+        list: () => this.adminCatalog.listAll(),
+        update: (id, value) => this.updateScheduledTask(id, value),
+        delete: (id, value) => this.deleteScheduledTask(id, value)
+      })
     };
   }
 
@@ -359,21 +370,23 @@ export class RuntimeScheduledTasks {
       })));
     }
 
-    await context.settleStep("conversation_projection", (idempotencyKey) => {
-      const incoming = scheduledCallbackIncoming(this.host, payload.target, payload.triggeredAt);
-      const receiptMessageId = messagingReceiptMessageId(context.remoteReceipt);
-      const record = this.host.recordAssistantMessage(
-        incoming,
-        payload.text,
-        [],
-        payload.runId,
-        undefined,
-        { messageOrigin: "text" },
-        { messageId: receiptMessageId ?? idempotencyKey }
-      );
-      this.host.scheduleMemoryCompression(record);
-      return record.id;
-    });
+    if (payload.taskId !== MEMORY_DEBT_ALERT_TASK_ID) {
+      await context.settleStep("conversation_projection", (idempotencyKey) => {
+        const incoming = scheduledCallbackIncoming(this.host, payload.target, payload.triggeredAt);
+        const receiptMessageId = messagingReceiptMessageId(context.remoteReceipt);
+        const record = this.host.recordAssistantMessage(
+          incoming,
+          payload.text,
+          [],
+          payload.runId,
+          undefined,
+          { messageOrigin: "text" },
+          { messageId: receiptMessageId ?? idempotencyKey }
+        );
+        this.host.scheduleMemoryCompression(record);
+        return record.id;
+      });
+    }
     await context.settleStep("request_log", (idempotencyKey) => appendRequestLogStrict({
       category: "runtime.action",
       action: "scheduled_callback.sent",
@@ -394,51 +407,6 @@ export class RuntimeScheduledTasks {
       }
     }, idempotencyKey));
     return { delivered: true, remoteReceipt: context.remoteReceipt };
-  }
-
-  private async executeTool(input: CronToolInput, incoming: ParsedIncomingMessage) {
-    try {
-      const resolved = resolveScheduledTaskCurrentTargets(input, incoming);
-      if (resolved.operation === "create") {
-        return { ok: true, operation: "create", task: this.createScheduledTask(cronCreateInput(resolved)) };
-      }
-      if (resolved.operation === "get") {
-        return { ok: true, operation: "get", task: this.getScheduledTask(resolved.taskId!) };
-      }
-      if (resolved.operation === "list") {
-        return { ok: true, operation: "list", tasks: this.adminCatalog.listAll() };
-      }
-      if (resolved.operation === "update") {
-        const update = cronUpdateInput(resolved);
-        return {
-          ok: true,
-          operation: "update",
-          task: this.updateScheduledTask(update.id, {
-            revision: update.expectedRevision,
-            ...(update.name == null ? {} : { name: update.name }),
-            ...(update.enabled == null ? {} : { enabled: update.enabled }),
-            ...(update.schedule == null ? {} : { schedule: update.schedule }),
-            ...(update.context == null ? {} : { context: update.context }),
-            ...(update.targets == null ? {} : { targets: update.targets })
-          })
-        };
-      }
-      return {
-        ok: true,
-        operation: "delete",
-        result: this.deleteScheduledTask(resolved.taskId!, { revision: resolved.revision })
-      };
-    } catch (error) {
-      if (error instanceof ServiceError) {
-        return {
-          ok: false,
-          code: error.code,
-          error: error.message,
-          ...(error.latestRevision ? { latestRevision: error.latestRevision } : {})
-        };
-      }
-      return { ok: false, code: "SCHEDULED_TASK_FAILED", error: errorMessage(error) };
-    }
   }
 
   private createDraft(input: unknown): CreateScheduledTaskInput {
@@ -554,7 +522,7 @@ export class RuntimeScheduledTasks {
   private enqueueCallback(payload: ScheduledCallbackPayloadV1) {
     if (this.isDisabledDirectorTask(payload.taskId)) return;
     const dedupeKey = callbackDedupeKey(payload.runId);
-    this.host.sessionCoordinator.enqueueEvent({
+    return this.host.sessionCoordinator.enqueueEvent({
       sessionId: payload.target.conversationId,
       kind: SCHEDULED_CALLBACK_EVENT_KIND,
       dedupeKey,

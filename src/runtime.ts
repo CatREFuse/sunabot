@@ -114,6 +114,7 @@ export class SunaRuntime {
   readonly systemConfig?: SystemConfigRuntimePort;
   readonly agentExtensions?: RuntimeAgentExtensionsPort;
   readonly replyTaskGate: ReplyTaskGate;
+  readonly resolveAdminNotificationAccountId?: () => Promise<string | undefined>;
   readonly incomingPreparations = new Map<string, {
       promise: Promise<void>;
       incoming: ParsedIncomingMessage;
@@ -137,6 +138,7 @@ export class SunaRuntime {
       this.systemConfig = options.systemConfig;
       this.agentExtensions = options.agentExtensions;
       this.replyTaskGate = options.replyTaskGate ?? { canCreateTaskFor: () => true };
+      this.resolveAdminNotificationAccountId = options.resolveAdminNotificationAccountId;
       this.memoryScheduler = new MemorySchedulerStore(config);
       this.attachmentService = options.attachmentService ?? new AttachmentService(getRootDir(), {
         cacheRoot: getAgentPrivatePath(config, WORKSPACE_LAYOUT.attachmentCache, "cache", "attachments"),
@@ -425,6 +427,13 @@ export class SunaRuntime {
   scheduleMemoryCompression(...args: Parameters<RuntimeMemoryPipeline["scheduleMemoryCompression"]>) { return this.memory.scheduleMemoryCompression(...args); }
   seedMemoryScheduler(...args: Parameters<RuntimeMemoryPipeline["seedMemoryScheduler"]>) { return this.memory.seedMemoryScheduler(...args); }
   enqueueConversationMemory(...args: Parameters<RuntimeMemoryPipeline["enqueueConversationMemory"]>) { return this.memory.enqueueConversationMemory(...args); }
+  async memoryProcessingPendingCount() {
+    return this.inAgentContext(async () => {
+      const snapshot = await this.memoryScheduler.snapshot();
+      return Object.values(snapshot.conversations)
+        .reduce((total, conversation) => total + conversation.pendingMessages.length, 0);
+    });
+  }
   scheduleMemoryDrain(...args: Parameters<RuntimeMemoryPipeline["scheduleMemoryDrain"]>) { return this.memory.scheduleMemoryDrain(...args); }
   armMemoryWakeTimer(...args: Parameters<RuntimeMemoryPipeline["armMemoryWakeTimer"]>) { return this.memory.armMemoryWakeTimer(...args); }
   drainMemoryScheduler(...args: Parameters<RuntimeMemoryPipeline["drainMemoryScheduler"]>) { return this.inAgentContext(() => this.memory.drainMemoryScheduler(...args)); }

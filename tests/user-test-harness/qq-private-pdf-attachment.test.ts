@@ -43,8 +43,22 @@ describe("QQ private PDF attachment user test", () => {
       _input: string | URL | Request,
       init?: RequestInit
     ) => {
-      providerRequestBodies.push(String(init?.body ?? ""));
-      return codexSseResponse("已成功读取文件：PDF-ATTACHMENT-ROUTING-OK-20260730");
+      const requestBody = String(init?.body ?? "");
+      providerRequestBodies.push(requestBody);
+      const parsed = JSON.parse(requestBody) as {
+        tool_choice?: { name?: unknown; function?: { name?: unknown } };
+      };
+      const requiredTool = parsed.tool_choice?.name
+        ?? parsed.tool_choice?.function?.name;
+      return requiredTool === "add_workmemory"
+        ? codexSseResponse(
+            "已成功读取文件：PDF-ATTACHMENT-ROUTING-OK-20260730",
+            [{
+              name: "add_workmemory",
+              args: { action: "skip", content: null }
+            }]
+          )
+        : codexSseResponse("BLUE");
     }));
     try {
       await fs.mkdir(path.join(source, "business/config"), { recursive: true });
@@ -121,21 +135,31 @@ describe("QQ private PDF attachment user test", () => {
   });
 });
 
-function codexSseResponse(text: string) {
+function codexSseResponse(
+  text: string,
+  calls: Array<{ name: string; args: Record<string, unknown> }> = []
+) {
   const output = [{
     type: "message",
     role: "assistant",
     status: "completed",
     content: [{ type: "output_text", text }]
-  }];
-  const events = [{
+  }, ...calls.map((call, index) => ({
+    type: "function_call",
+    name: call.name,
+    call_id: `fixture-call-${index}-${call.name}`,
+    arguments: JSON.stringify(call.args),
+    status: "completed"
+  }))];
+  const events = output.map((item, outputIndex) => ({
     type: "response.output_item.done",
-    output_index: 0,
-    item: output[0]
-  }, {
+    output_index: outputIndex,
+    item
+  }));
+  events.push({
     type: "response.completed",
     response: { status: "completed", output }
-  }];
+  } as never);
   return new Response(
     events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""),
     {

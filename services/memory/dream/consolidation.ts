@@ -266,13 +266,15 @@ export function buildDreamConsolidationPlan(input: DreamConsolidationInput): Dre
       longTermId: undefined
     });
     const existing = longTerm.get(targetId);
-    longTerm.set(targetId, existing
+    const nextLongTerm = existing
       ? mergeMemoryRecords([existing, promotedRecord], targetId, canonicalText, now, {
           dreamRunId: input.runId,
           dreamReviewedAt: now,
           sourceWorkingMemoryIds: review.sourceIds
         })
-      : promotedRecord);
+      : promotedRecord;
+    assertPromotedLongTermMapping(nextLongTerm, review.sourceIds, records, canonicalText, input.runId, now);
+    longTerm.set(targetId, nextLongTerm);
     promoted += 1;
   }
 
@@ -387,7 +389,7 @@ function mergeMemoryRecords(
     ...overrides,
     schemaVersion: 2,
     id,
-    fact: normalizeText(fact),
+    fact,
     userIds,
     addressNames: uniqueStrings(records.flatMap((record) => normalizeAddressNames(record.addressNames))).sort(),
     sourceWorkingMemoryIds: uniqueStrings([
@@ -417,6 +419,70 @@ function mergeMemoryRecords(
   delete next.salutation;
   if (overrides.longTermId === undefined) delete next.longTermId;
   return next;
+}
+
+function assertPromotedLongTermMapping(
+  record: DreamMemoryRecord,
+  sourceIds: readonly string[],
+  sources: readonly DreamMemoryRecord[],
+  canonicalFact: string,
+  runId: string,
+  updatedAt: string
+) {
+  const expectedUserIds = uniqueStrings(sources.flatMap((source) => [
+    ...normalizeUserIds(source.userIds),
+    ...normalizeUserIds(source.userId)
+  ])).sort();
+  const expectedAddressNames = uniqueStrings(
+    sources.flatMap((source) => normalizeAddressNames(source.addressNames))
+  ).sort();
+  const expectedSourceIds = uniqueStrings([
+    ...sources.flatMap((source) => normalizeStringArray(source.sourceWorkingMemoryIds)),
+    ...sourceIds
+  ]).sort();
+  const expectedOccurredAt = earliestTimestamp(sources, "occurredAt");
+  const expectedOccurredEndAt = latestTimestamp(sources, "occurredEndAt");
+  const expectedEventType = sameText(sources, "eventType")
+    || normalizeText(oldestRecord(sources).eventType)
+    || "other";
+  const expectedSubjectKey = sameText(sources, "subjectKey")
+    || normalizeText(oldestRecord(sources).subjectKey);
+  const expectedEventKey = sameText(sources, "eventKey")
+    || (
+      expectedEventType && expectedSubjectKey
+        ? computeMemoryEventKey(expectedEventType, expectedSubjectKey, expectedUserIds)
+        : ""
+    );
+  const expectedCausalChainKey = retainedCausalChainKey(sources);
+  const expectedFingerprint = computeMemoryEventFingerprint({
+    fact: canonicalFact,
+    userIds: expectedUserIds,
+    occurredAt: expectedOccurredAt,
+    occurredEndAt: expectedOccurredEndAt
+  });
+  const valid = record.schemaVersion === 2
+    && recordId(record, false) === promotedLongTermId(sources, runId)
+    && record.fact === canonicalFact
+    && JSON.stringify(normalizeStringArray(record.sourceWorkingMemoryIds).sort())
+      === JSON.stringify(expectedSourceIds)
+    && JSON.stringify(normalizeUserIds(record.userIds).sort()) === JSON.stringify(expectedUserIds)
+    && JSON.stringify(normalizeAddressNames(record.addressNames).sort()) === JSON.stringify(expectedAddressNames)
+    && normalizeIsoTimestamp(record.occurredAt) === expectedOccurredAt
+    && normalizeIsoTimestamp(record.occurredEndAt) === expectedOccurredEndAt
+    && normalizeText(record.eventKey) === expectedEventKey
+    && normalizeText(record.causalChainKey) === expectedCausalChainKey
+    && normalizeText(record.dreamRunId) === runId
+    && normalizeText(record.consolidatedBy) === "sunabot.dream"
+    && normalizeIsoTimestamp(record.updatedAt) === updatedAt
+    && normalizeText(record.eventFingerprint) === expectedFingerprint;
+  if (valid) return;
+  throw Object.assign(
+    new Error("Dream promotion did not satisfy the long-term memory mapping contract."),
+    {
+      code: "DREAM_CONSOLIDATION_MAPPING_INVALID",
+      retryable: false
+    }
+  );
 }
 
 function reviewUpdate(

@@ -93,6 +93,35 @@ afterEach(() => {
 });
 
 describe("SunaRuntime reply debounce", () => {
+  it.each([
+    [[], "decision_missing"],
+    [["add_workmemory"], "decision_unresolved"]
+  ] as const)(
+    "records an unresolved working-memory decision when the Provider turn fails: %s",
+    async (toolNames, reasonCode) => {
+      const harness = createRuntimeHarness(async (_request, options) => {
+        for (const name of toolNames) options?.onToolCall?.(name);
+        throw Object.assign(
+          new Error("The main reply model did not complete its required working-memory decision."),
+          { code: "WORKING_MEMORY_DECISION_REQUIRED" }
+        );
+      });
+      const incoming = harness.record(privateEvent(30_984, "检查记忆决策审计"));
+
+      await harness.reply(incoming, { delivery: { outbox: [] } });
+
+      const audit = applicationDataStore(harness.runtime.config).readRequestLogs({
+        query: "working.tool_decision",
+        limit: 10
+      });
+      expect(audit).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          response: expect.objectContaining({ reasonCode })
+        })
+      ]));
+    }
+  );
+
   it("continues an explicit Skill reply when the Agent extension directory changes", async () => {
     const prepare = vi.fn(async () => {
       throw Object.assign(new Error("Agent extension path changed."), {

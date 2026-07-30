@@ -30,7 +30,7 @@
 | 获取与解析状态 | 原始字节先形成 acquired blob，再独立记录 `ready`、`partial`、`unsupported` 或 `parse_failed`；解析失败仍可受控导出原件 | 旧失败记录不反推原件存在 |
 | Workbench 选择 | 单一会话能力快照决定 Native/Docker；管理员私聊使用 Native，群聊和普通私聊使用 Docker，`send_file` 只保留管理员私聊的 source-missing Docker fallback | Voice 仍使用独立系统资产合同 |
 | Codex 输入 | `inputHandles` 在 durable dispatch 前冻结；图片使用 Codex 原生图片输入，文本/PDF/Office 使用宿主解析后的有界、只读、哈希绑定文本投影；local worker 同时可读冻结原件 | 无可靠文本投影的非图片二进制只能由 local worker 读取；local worker 当前属于受信任的管理员执行主体，尚未具备抵御恶意附件提示注入后转存自身授权材料的硬隔离 |
-| Codex 输出 | 只接受当前 lease 对应 `attempt-<n>-<token>/outputs/` 内的常规文件，执行路径、链接、大小、哈希和类型复验，再以两阶段发布写入冻结 Workbench；rename 已落盘但响应丢失时按绑定目录与 inode 恢复发布所有权 | 稳定 Codex handle 尚未进入跨后续回合的统一产物目录 |
+| Codex 输出 | CLI worker 与本机 app-server turn 都把当前 lease 对应 `attempt-<n>-<token>/outputs/` 设为 cwd，只接受其中的常规文件，执行路径、链接、大小、哈希和类型复验，再以两阶段发布写入冻结 Workbench；rename 已落盘但响应丢失时按绑定目录与 inode 恢复发布所有权 | SSH app-server 尚无远端文件传输合同；稳定 Codex handle 尚未进入跨后续回合的统一产物目录 |
 | 能力可见性 | Bash、聊天媒体、Workbench 文件、会话资产与 Codex dispatch 共用当前会话能力快照；缺少快照时相关端口不进入 Provider catalog | 全部工具的静态目录和管理台可观测性仍属阶段 4 |
 | 查询失败证据 | action 账号与有限失败分类已进入现有诊断链，文件 token、临时 URL 与正文不写日志 | 需要真实 QQ 环境补齐路由、过期和权限失败样本 |
 
@@ -156,7 +156,7 @@ interface CodexResultArtifactV1 {
 }
 ```
 
-worker 只能声明其隔离输出目录中的常规文件。宿主逐个执行根身份、路径、符号链接、大小、哈希与 MIME 校验，随后生成 `ConversationArtifactRefV1`。模型可继续分析正文，也可通过现有 durable 会话资产链路把产物发送给原会话。
+CLI worker 与本机 app-server turn 的 cwd 都是当前 attempt 隔离输出目录。`local` 项目目录只作为单独 writable root，源代码修改可留在项目目录，需要回传的文件必须在 cwd 中以相对路径创建并声明。宿主逐个执行根身份、路径、符号链接、大小、哈希与 MIME 校验，随后生成 `ConversationArtifactRefV1`。模型可继续分析正文，也可通过现有 durable 会话资产链路把产物发送给原会话。SSH app-server 没有远端文件传输合同，只允许文本结果与远端项目修改。
 
 `analysis` 与 `research` 只读取宿主生成的受控文本投影，并关闭 shell 与 unified exec。`local` worker 可以读取冻结原件，也需要使用 attempt 内的隔离 Codex home 完成认证；因此它当前是管理员授权的受信任执行主体。输出目录白名单、哈希复验和路径脱敏可以阻止直接声明 `codex-home/auth.json`，无法阻止已取得本地执行能力的模型把授权内容改写后放入合法输出目录。若未来需要把 `local` worker 降为不受信任主体，必须增加短期凭据代理或进程外认证通道，并为附件分析提供独立的只读能力沙箱。
 
@@ -214,10 +214,11 @@ flowchart LR
 
 ### 阶段 3：Codex 会话产物桥
 
-状态：本次任务已实现输入冻结、文本投影、图片输入、输出校验、两阶段 Workbench 发布和当前完成回调中的 `send_file` 闭环。跨后续回合的统一产物目录留在阶段 4。
+状态：本次任务已实现输入冻结、文本投影、图片输入、CLI 与本机 app-server 的 cwd 输出合同、输出校验、两阶段 Workbench 发布和当前完成回调中的 `send_file` 闭环。SSH 文件传输与跨后续回合的统一产物目录留在阶段 4。
 
 - 增加 `inputHandles`，在派发前冻结只读输入。
 - 增加 Codex `artifacts`，校验后注册为会话产物。
+- 将每次本机 Codex turn 的 cwd 固定为 attempt 输出目录，项目目录只作为独立授权根。
 - 将产物接入既有 durable outbox 和 `send_file`。
 - Codex 超时、重试、恢复和继续线程都复用冻结输入身份。
 

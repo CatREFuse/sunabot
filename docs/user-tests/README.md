@@ -77,6 +77,7 @@ Executable branch examples:
 
 - [`memory-compression-smoke.md`](./memory-compression-smoke.md)
 - [`dream-smoke.md`](./dream-smoke.md)
+- [`add-workmemory-direct-write.md`](./add-workmemory-direct-write.md)
 - [`sampled-memory-compression.md`](./sampled-memory-compression.md)
 - [`sampled-dream.md`](./sampled-dream.md)
 

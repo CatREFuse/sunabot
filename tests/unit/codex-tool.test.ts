@@ -41,6 +41,9 @@ describe("codex tool contract", () => {
     expect(codexTool.description).toContain("deep multi-source research");
     expect(codexTool.description).toContain("long-form analysis");
     expect(codexTool.description).toContain("Use websearch for ordinary web lookups");
+    expect(codexTool.description).toContain("current working directory");
+    expect(codexTool.description).toContain("do not provide or guess");
+    expect(codexTool.description).toContain("declared relative to that directory");
     expect(codexTool.parameters.required).toEqual(["task", "kind", "inputHandles"]);
     expect(codexTool.parameters.properties.inputHandles.type).toEqual(["array", "null"]);
     expect(codexTool.parameters.properties.kind.enum).toEqual(["local", "research", "analysis"]);
@@ -366,12 +369,33 @@ describe("Codex app-server control", () => {
     expect(start?.params).not.toHaveProperty("runtimeWorkspaceRoots");
     const turn = requests.find((request) => request.method === "turn/start");
     expect(turn?.params).toMatchObject({
+      cwd: expect.stringMatching(
+        /\.codex-worker\/attempt-1-start-run\/outputs$/u
+      ),
       sandboxPolicy: {
         type: "workspaceWrite",
-        writableRoots: ["/Users/admin/Developer/project"],
+        writableRoots: [
+          expect.stringMatching(
+            /\.codex-worker\/attempt-1-start-run\/outputs$/u
+          ),
+          "/Users/admin/Developer/project"
+        ],
         networkAccess: true
       }
     });
+    const turnParams = turn?.params as {
+      cwd?: string;
+      input?: Array<{ type?: string; text?: string }>;
+    };
+    expect(turnParams.input?.[0]?.text).toContain(
+      `current working directory (cwd) is the contract output directory: ${turnParams.cwd}`
+    );
+    expect(turnParams.input?.[0]?.text).toContain(
+      "authorized project workspace is: /Users/admin/Developer/project"
+    );
+    expect(turnParams.input?.[0]?.text).toContain(
+      "Create every file that must be returned to the conversation inside cwd"
+    );
     expect(turn?.params).not.toHaveProperty("runtimeWorkspaceRoots");
   });
 
@@ -435,10 +459,99 @@ describe("Codex app-server control", () => {
       capabilities: { experimentalApi: true }
     });
     for (const method of ["thread/start", "turn/start"]) {
-      expect(requests.find((request) => request.method === method)?.params).toMatchObject({
-        runtimeWorkspaceRoots: ["/Users/admin/Developer/project"]
-      });
+      const roots = (
+        requests.find((request) => request.method === method)?.params as {
+          runtimeWorkspaceRoots?: string[];
+        }
+      ).runtimeWorkspaceRoots;
+      if (method === "thread/start") {
+        expect(roots).toEqual(["/Users/admin/Developer/project"]);
+      } else {
+        expect(roots).toEqual([
+          expect.stringMatching(
+            /\.codex-worker\/attempt-1-experimental-run\/outputs$/u
+          ),
+          "/Users/admin/Developer/project"
+        ]);
+      }
     }
+  });
+
+  it("accepts local app-server artifacts only from the contract output cwd", async () => {
+    temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-codex-app-artifact-"));
+    const child = fakeChild();
+    const requests: Array<Record<string, unknown>> = [];
+    attachAppServer(child, requests, (request) => {
+      if (request.method === "initialize") return {};
+      if (request.method === "thread/start") return { thread: { id: "thread-artifact" } };
+      if (request.method === "turn/start") {
+        const params = request.params as { cwd: string };
+        queueMicrotask(async () => {
+          await fs.writeFile(
+            path.join(params.cwd, "codex-result.txt"),
+            "app-server contract artifact\n",
+            "utf8"
+          );
+          child.stdout?.write(`${JSON.stringify({
+            method: "item/completed",
+            params: {
+              threadId: "thread-artifact",
+              item: {
+                type: "agentMessage",
+                text: JSON.stringify({
+                  status: "succeeded",
+                  content: "产物已生成",
+                  question: null,
+                  error: null,
+                  artifacts: [{
+                    relativePath: "codex-result.txt",
+                    displayName: "codex-result.txt"
+                  }]
+                })
+              }
+            }
+          })}\n`);
+          child.stdout?.write(`${JSON.stringify({
+            method: "turn/completed",
+            params: { threadId: "thread-artifact", turn: { status: "completed" } }
+          })}\n`);
+        });
+        return { turn: { id: "turn-artifact" } };
+      }
+      return undefined;
+    });
+    const runner = new CodexAppServerRunner({
+      spawnProcess: () => child,
+      signalProcessGroup: vi.fn(),
+      environment: { PATH: "/usr/bin:/bin" },
+      platform: "darwin",
+      homeDir: temporaryRoot
+    });
+
+    const result = await runner.run({
+      action: "start",
+      task: "生成并回传 codex-result.txt",
+      workspace_path: "/Users/admin/Developer/project",
+      __sunabot_admin_authorized: true,
+      __sunabot_control_authorized: true
+    }, {
+      jobId: "job-app-artifact",
+      jobDir: temporaryRoot,
+      executable: "/custom/codex",
+      runToken: "app-artifact"
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      status: "succeeded",
+      content: "产物已生成",
+      artifacts: [{
+        schemaVersion: 1,
+        relativePath: ".codex-worker/attempt-1-app-artifact/outputs/codex-result.txt",
+        displayName: "codex-result.txt",
+        sizeBytes: 29
+      }]
+    });
   });
 
   it("keeps an app-server result after aggregate stdout exceeds 4 MiB", async () => {
@@ -625,6 +738,81 @@ describe("Codex app-server control", () => {
     expect(requests.find((request) => request.method === "thread/resume")?.params)
       .not.toHaveProperty("runtimeWorkspaceRoots");
   });
+
+  it("rejects a remote app-server artifact declaration without a transfer contract", async () => {
+    temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-codex-app-remote-artifact-"));
+    const child = fakeChild();
+    const requests: Array<Record<string, unknown>> = [];
+    attachAppServer(child, requests, (request) => {
+      if (request.method === "initialize") return {};
+      if (request.method === "thread/start") return { thread: { id: "thread-remote-artifact" } };
+      if (request.method === "turn/start") {
+        queueMicrotask(() => {
+          child.stdout?.write(`${JSON.stringify({
+            method: "item/completed",
+            params: {
+              threadId: "thread-remote-artifact",
+              item: {
+                type: "agentMessage",
+                text: JSON.stringify({
+                  status: "succeeded",
+                  content: "远端文件已生成",
+                  question: null,
+                  error: null,
+                  artifacts: [{
+                    relativePath: "remote-result.txt",
+                    displayName: "remote-result.txt"
+                  }]
+                })
+              }
+            }
+          })}\n`);
+          child.stdout?.write(`${JSON.stringify({
+            method: "turn/completed",
+            params: {
+              threadId: "thread-remote-artifact",
+              turn: { status: "completed" }
+            }
+          })}\n`);
+        });
+        return { turn: { id: "turn-remote-artifact" } };
+      }
+      return undefined;
+    });
+    const runner = new CodexAppServerRunner({
+      spawnProcess: () => child,
+      signalProcessGroup: vi.fn(),
+      environment: { PATH: "/usr/bin:/bin" },
+      platform: "darwin",
+      homeDir: temporaryRoot
+    });
+
+    const result = await runner.run({
+      action: "start",
+      ssh_host: "development-mac",
+      task: "生成并回传远端文件",
+      workspace_path: "/Users/admin/Developer/project",
+      __sunabot_admin_authorized: true,
+      __sunabot_control_authorized: true
+    }, {
+      jobId: "job-remote-artifact",
+      jobDir: temporaryRoot,
+      runToken: "remote-artifact"
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: "failed",
+      error: { code: "codex_remote_artifact_unsupported" }
+    });
+    const turn = requests.find((request) => request.method === "turn/start");
+    expect((turn?.params as { cwd?: string }).cwd).toBe(
+      "/Users/admin/Developer/project"
+    );
+    expect((turn?.params as {
+      input?: Array<{ text?: string }>;
+    }).input?.[0]?.text).toContain("set artifacts=[]");
+  });
 });
 
 describe("isolated Codex preparation", () => {
@@ -657,6 +845,10 @@ describe("isolated Codex preparation", () => {
     expect(prepared.env.SUNABOT_SECRET).toBeUndefined();
     expect(prepared.env.OPENAI_API_KEY).toBeUndefined();
     expect(prepared.env.PATH?.split(path.delimiter)[0]).toBe(path.join(prepared.runDir, "bin"));
+    expect(prepared.cwd).toBe(prepared.outputDir);
+    expect(prepared.args.slice(prepared.args.indexOf("-C"), prepared.args.indexOf("-C") + 2))
+      .toEqual(["-C", prepared.outputDir]);
+    expect(prepared.args).not.toContain("--add-dir");
     expect(prepared.args).toEqual(expect.arrayContaining([
       "--sandbox", "workspace-write",
       "--search",
@@ -669,6 +861,8 @@ describe("isolated Codex preparation", () => {
     ]));
     expect(prepared.prompt).toContain("Never invoke Codex");
     expect(prepared.prompt).toContain("create research artifacts");
+    expect(prepared.prompt).toContain("current working directory is the contract output directory");
+    expect(prepared.prompt).toContain("Create every returned file by a path relative to cwd");
 
     const copiedAuth = path.join(prepared.codexHomeDir, "auth.json");
     expect(await fs.readFile(copiedAuth, "utf8")).toContain("test-only");
@@ -677,6 +871,30 @@ describe("isolated Codex preparation", () => {
     expect(copiedStats.mode & 0o077).toBe(0);
     expect(await fs.readFile(path.join(prepared.runDir, "bin", "codex"), "utf8"))
       .toContain("Nested Codex invocation is disabled");
+  });
+
+  it("uses the contract output directory as cwd and grants a local project separately", async () => {
+    temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-codex-local-cwd-"));
+    const workspacePath = path.join(temporaryRoot, "project");
+    await fs.mkdir(workspacePath, { recursive: true });
+
+    const prepared = await prepareCodexRun(baseRequest(path.join(temporaryRoot, "job"), {
+      kind: "local",
+      workspacePath,
+      runToken: "local-contract"
+    }), {
+      environment: { PATH: "/usr/bin:/bin" },
+      platform: "darwin"
+    });
+
+    expect(prepared.cwd).toBe(prepared.outputDir);
+    expect(prepared.args.slice(prepared.args.indexOf("-C"), prepared.args.indexOf("-C") + 2))
+      .toEqual(["-C", prepared.outputDir]);
+    expect(prepared.args.filter((argument) => argument === "--add-dir")).toHaveLength(1);
+    expect(prepared.args.slice(prepared.args.indexOf("--add-dir"), prepared.args.indexOf("--add-dir") + 2))
+      .toEqual(["--add-dir", workspacePath]);
+    expect(prepared.prompt).toContain(`authorized project workspace is: ${workspacePath}`);
+    expect(prepared.prompt).toContain("returned conversation deliverables");
   });
 
   it("isolates the full runtime tree for every attempt token", async () => {
@@ -758,7 +976,11 @@ describe("Codex process supervisor", () => {
     });
     expect(command).toBe("/custom/codex");
     expect(args).toContain("--json");
-    expect(options).toMatchObject({ shell: false, detached: true, cwd: expect.any(String) });
+    expect(options).toMatchObject({
+      shell: false,
+      detached: true,
+      cwd: expect.stringMatching(/\.codex-worker\/attempt-1-[^/]+\/outputs$/u)
+    });
     expect(stdin).toContain("Task:\nInvestigate this deeply.");
   });
 

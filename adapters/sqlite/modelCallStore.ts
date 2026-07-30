@@ -165,6 +165,26 @@ export class ModelCallStore {
     };
   }
 
+  readMemoryProcessingAttemptCounts(options: { since: string; until: string }) {
+    const row = this.database.prepare(`
+      SELECT
+        COUNT(*) AS attempted,
+        COALESCE(SUM(
+          CASE WHEN json_extract(data_json, '$.response.outcome') = 'applied' THEN 1 ELSE 0 END
+        ), 0) AS successful
+      FROM request_logs
+      WHERE category = 'memory.operation'
+        AND action = 'working.compression_attempt'
+        AND json_extract(data_json, '$.response.outcome') IN ('applied', 'failed')
+        AND at >= ?
+        AND at <= ?
+    `).get(options.since, options.until) as SqlRow;
+    return {
+      successful: Number(row.successful ?? 0),
+      attempted: Number(row.attempted ?? 0)
+    };
+  }
+
   readTokenUsageRecords(since: string) {
     return this.database.prepare(`
       SELECT data_json FROM request_logs

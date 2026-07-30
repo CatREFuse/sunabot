@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { dreamPersonaPromptVariables, projectDreamContext, restoreDreamFieldKnowledge, type DreamFieldKnowledgeBinding } from "./dreamContextProjection.js";
 import {
+  dreamErrorCode,
+  dreamFailureText,
   dreamHistoryItem,
   dreamRunSummary,
   nextDreamScheduledAt
@@ -20,8 +22,8 @@ import {
   digestDreamPipelineJson as digestJson,
   digestDreamPipelineText as digestText,
   dreamPipelineFieldKnowledgeBindings,
-  dreamPipelineErrorMessage as errorMessage,
   isDreamPipelineAbortError as abortError,
+  isRetryableDreamPipelineError as retryableDreamError,
   isDreamPipelineObject as isObject,
   positiveDreamInterval as positiveInterval,
   toDreamPipelineJsonObject as toJsonObject,
@@ -41,11 +43,11 @@ import {
   composeDreamRecallLineages,
   dreamLocalDate,
   dreamSystemTimeZone,
+  DreamModelOutputContractError,
   evaluateDreamPersonaAdjustment,
   latestDreamScheduleOccurrence,
   normalizeDreamMemorySnapshot,
-  normalizeDreamModelOutput,
-  parseDreamModelOutput,
+  parseStrictDreamModelOutput,
   selectDreamMemories,
   type DreamMemorySelectionSettings, type DreamMemoryRecord,
   type DreamModelOutputV1,
@@ -57,6 +59,7 @@ const DREAM_LEASE_MS = 45 * 60_000;
 const DREAM_RETRY_DELAY_MS = 15 * 60_000;
 const DREAM_MAX_ATTEMPTS = 3;
 const DREAM_HISTORY_LIMIT = 30;
+const DREAM_PERSONA_PROJECTION_FAILED = "DREAM_PERSONA_PROJECTION_FAILED";
 export type RuntimeDreamRunStatus = "running" | "generated" | "consolidated" | "completed" | "failed";
 export type RuntimeDreamPersonaStatus = "pending" | "none" | "proposed" | "applied" | "skipped" | "failed";
 export interface RuntimeDreamRun {
@@ -160,6 +163,7 @@ export interface RuntimeDreamStorePort {
     workerId: string;
     errorCode: string;
     errorText: string;
+    resetGeneratedOutput?: boolean;
     retryAt?: Date | null;
     now?: Date;
   }): RuntimeDreamRun | undefined;
@@ -216,9 +220,12 @@ export interface RuntimeDreamHistoryItem {
   id: string;
   date: string;
   status: "pending" | "running" | "generated" | "completed" | "failed";
+  attemptCount: number; maxAttempts: 3;
   dreamText?: string;
   scheduledFor: string;
   completedAt?: string;
+  errorCode?: string; errorText?: string;
+  nextRetryAt?: string; failedAt?: string;
   personalityChanged?: boolean;
   summary?: { merged: number; archived: number; promoted: number };
 }
@@ -473,7 +480,7 @@ export class RuntimeDreams {
           }
         });
         if (signal.aborted) return undefined;
-        const output = parseDreamModelOutput(text, expected);
+        const output = parseStrictDreamModelOutput(text, expected);
         const generated = this.options.store.markGenerated({
           runId: run.id,
           workerId: this.workerId,
@@ -571,6 +578,7 @@ export class RuntimeDreams {
     } catch (error) {
       if (signal.aborted || abortError(error)) return undefined;
       const failedAt = this.clock();
+      const failureCode = dreamErrorCode(error);
       const retryable = retryableDreamError(error);
       const retryAt = retryable && run.attemptCount < DREAM_MAX_ATTEMPTS
         ? new Date(failedAt.getTime() + this.retryDelayMs)
@@ -578,8 +586,10 @@ export class RuntimeDreams {
       const failed = this.options.store.markFailed({
         runId: run.id,
         workerId: this.workerId,
-        errorCode: errorCode(error),
-        errorText: errorMessage(error),
+        errorCode: failureCode,
+        errorText: dreamFailureText(failureCode),
+        ...(failureCode === "DREAM_OUTPUT_CONTRACT_INVALID" && run.status === "generated"
+          ? { resetGeneratedOutput: true } : {}),
         retryAt,
         now: failedAt
       });
@@ -615,7 +625,8 @@ export class RuntimeDreams {
     } catch (error) {
       return this.requirePersonaMark(run, "failed", toJsonObject({
         adjustment,
-        error: errorMessage(error)
+        reasons: policy.reasons,
+        errorCode: DREAM_PERSONA_PROJECTION_FAILED
       }, "dream persona failure"));
     }
   }
@@ -650,7 +661,7 @@ export class RuntimeDreams {
     });
   }
   private async logFailure(action: string, error: unknown, run?: RuntimeDreamRun) {
-    await this.log("error", action, run, { error: errorMessage(error) }).catch(() => undefined);
+    await this.log("error", action, run, { errorCode: dreamErrorCode(error) }).catch(() => undefined);
   }
 }
 export function createRuntimeDreams(options: RuntimeDreamsOptions) {
@@ -725,7 +736,8 @@ function modelExpectations(payload: JsonObject) {
     fieldKnowledgeEvidenceIds: stringArray(
       payload.fieldKnowledgeEvidenceIds ?? [],
       "fieldKnowledgeEvidenceIds"
-    )
+    ),
+    fieldKnowledgeWritable: payload.fieldKnowledgeWritable === true
   };
 }
 function recentWindowHoursFromPayload(payload: JsonObject) {
@@ -769,27 +781,14 @@ function normalizeStoredOutput(
   expected: ReturnType<typeof modelExpectations>
 ) {
   if (!output) throw new DreamRunError("DREAM_OUTPUT_MISSING", "Stored Dream output is missing.", false);
-  return normalizeDreamModelOutput(output, expected);
+  if (typeof output.rawOutput !== "string") {
+    throw new DreamModelOutputContractError("stored rawOutput must be present");
+  }
+  return parseStrictDreamModelOutput(output.rawOutput, expected);
 }
 function stringArray(value: unknown, field: string) {
   if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
     throw new DreamRunError("DREAM_INPUT_INVALID", `${field} is invalid.`, false);
   }
   return value as string[];
-}
-function errorCode(error: unknown) {
-  if (error instanceof DreamRunError) return error.code;
-  if (error && typeof error === "object" && typeof (error as { code?: unknown }).code === "string") {
-    return String((error as { code: string }).code).slice(0, 128);
-  }
-  return "DREAM_RUN_FAILED";
-}
-function retryableDreamError(error: unknown) {
-  if (error instanceof DreamRunError) return error.retryable;
-  if (!error || typeof error !== "object") return true;
-  const declared = (error as { retryable?: unknown }).retryable;
-  if (typeof declared === "boolean") return declared;
-  const status = Number((error as { status?: unknown }).status);
-  if (!Number.isFinite(status)) return true;
-  return status === 408 || status === 409 || status === 429 || status >= 500;
 }

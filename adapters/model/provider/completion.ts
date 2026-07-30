@@ -40,12 +40,23 @@ import {
 import { errorMessage, isRecord, parseJson } from "./valueUtils.js";
 import { completeAnthropicMessages } from "./anthropicCompletion.js";
 import { completeGeminiGenerateContent } from "./geminiCompletion.js";
-import { claimToolCalls, resolveMaxToolCalls, toolCallLimitError } from "./toolLoopLimits.js";
+import {
+  claimBusinessToolCalls,
+  resolveMaxToolCalls,
+  resolveToolRoundLimit,
+  toolCallLimitError
+} from "./toolLoopLimits.js";
 import {
   createTurnToolState,
   withTurnToolState
 } from "./turnToolState.js";
 import { processProviderToolRound } from "./toolRound.js";
+import { assertMappedProviderToolDefinitions } from "../../../services/tools/providerToolSchema.js";
+import {
+  assertWorkingMemoryDecisionResolved,
+  chatWorkingMemoryToolChoice,
+  responsesWorkingMemoryToolChoice
+} from "./workingMemoryDecision.js";
 
 export async function completeProviderTurn(
   context: ProviderAdapterContext,
@@ -70,7 +81,12 @@ async function completeOpenAIResponses(
   state: TurnToolState
 ): Promise<ProviderTurnResult> {
   const client = context.createResponsesClient({ maxRetries: 0 });
-  const tools = context.toolExecutor.resolveDefinitions(options, request.tools);
+  const tools = context.toolExecutor.resolveDefinitions(
+    options,
+    request.tools,
+    "openai-responses"
+  );
+  assertMappedProviderToolDefinitions(tools, "openai-responses");
   const toolNames = tools.map(readToolName);
   const explicitCache = supportsExplicitPromptCaching(context.provider);
   const instructionBoundary = leadingInstructionBoundary(request.messages);
@@ -86,8 +102,9 @@ async function completeOpenAIResponses(
   });
   const requestFields = promptRequestFields(request);
   const maxToolCalls = resolveMaxToolCalls(options);
+  const toolRoundLimit = resolveToolRoundLimit(options, maxToolCalls);
 
-  for (let round = 0; round <= maxToolCalls; round += 1) {
+  for (let round = 0; round <= toolRoundLimit; round += 1) {
     const requestBody = {
       model: context.provider.model,
       temperature: context.provider.temperature,
@@ -98,6 +115,7 @@ async function completeOpenAIResponses(
       prompt_cache_key: cacheKey,
       input: input as never,
       tools: tools.length ? tools as never : undefined,
+      tool_choice: responsesWorkingMemoryToolChoice(options),
       parallel_tool_calls: tools.length ? requestFields.parallel_tool_calls ?? false : undefined
     };
     const metadata = withLogContext({
@@ -123,8 +141,9 @@ async function completeOpenAIResponses(
     }, attempt.metadata);
 
     const toolCalls = extractFunctionCalls(response);
-    state.toolCallCount = claimToolCalls(state.toolCallCount, toolCalls.length, maxToolCalls);
+    state.toolCallCount = claimBusinessToolCalls(state.toolCallCount, toolCalls, maxToolCalls);
     if (!toolCalls.length) {
+      assertWorkingMemoryDecisionResolved(options);
       const text = extractProviderText(response);
       if (!text) throw new Error("模型没有返回可发送内容。");
       return { kind: "completed", text };
@@ -156,7 +175,12 @@ async function completeCodexResponses(
   const apiKey = await context.getApiKeyAsync();
   if (!apiKey) throw new Error("Codex 未登录。请先运行 codex login，或设置 CODEX_ACCESS_TOKEN。");
 
-  const tools = context.toolExecutor.resolveDefinitions(options, request.tools);
+  const tools = context.toolExecutor.resolveDefinitions(
+    options,
+    request.tools,
+    "codex-responses"
+  );
+  assertMappedProviderToolDefinitions(tools, "codex-responses");
   const systemPrompt = request.messages
     .filter((message) => message.role === "system")
     .map((message) => message.content)
@@ -181,8 +205,9 @@ async function completeCodexResponses(
   });
   const requestFields = promptRequestFields(request);
   const maxToolCalls = resolveMaxToolCalls(options);
+  const toolRoundLimit = resolveToolRoundLimit(options, maxToolCalls);
 
-  for (let round = 0; round <= maxToolCalls; round += 1) {
+  for (let round = 0; round <= toolRoundLimit; round += 1) {
     const requestBody = {
       model: context.provider.model,
       store: false,
@@ -197,6 +222,7 @@ async function completeCodexResponses(
       input,
       instructions: stableInputCache ? undefined : systemPrompt,
       tools: tools.length ? tools : undefined,
+      tool_choice: responsesWorkingMemoryToolChoice(options),
       parallel_tool_calls: tools.length ? requestFields.parallel_tool_calls ?? false : undefined
     };
     const metadata = withLogContext({
@@ -263,8 +289,9 @@ async function completeCodexResponses(
     }, responseMetadata);
 
     const toolCalls = extractFunctionCalls(payload);
-    state.toolCallCount = claimToolCalls(state.toolCallCount, toolCalls.length, maxToolCalls);
+    state.toolCallCount = claimBusinessToolCalls(state.toolCallCount, toolCalls, maxToolCalls);
     if (!toolCalls.length) {
+      assertWorkingMemoryDecisionResolved(options);
       const outputText = extractResponsesTextFromSse(text) || extractResponsesText(payload);
       if (!outputText) throw new Error("模型没有返回可发送内容。");
       return { kind: "completed", text: outputText };
@@ -325,11 +352,17 @@ async function completeChatCompletions(
 ): Promise<ProviderTurnResult> {
   const client = context.createChatClient({ maxRetries: 0 });
   const messages: Array<Record<string, unknown>> = await Promise.all(request.messages.map(toChatCompletionMessage));
-  const definitions = context.toolExecutor.resolveDefinitions(options, request.tools);
+  const definitions = context.toolExecutor.resolveDefinitions(
+    options,
+    request.tools,
+    "openai-chat-completions"
+  );
   const tools = definitions.map(toChatCompletionTool);
+  assertMappedProviderToolDefinitions(tools, "openai-chat-completions");
   const maxToolCalls = resolveMaxToolCalls(options);
+  const toolRoundLimit = resolveToolRoundLimit(options, maxToolCalls);
 
-  for (let round = 0; round <= maxToolCalls; round += 1) {
+  for (let round = 0; round <= toolRoundLimit; round += 1) {
     const requestBody = {
       model: context.provider.model,
       messages,
@@ -337,6 +370,7 @@ async function completeChatCompletions(
       max_completion_tokens: context.provider.maxOutputTokens,
       reasoning_effort: undefined,
       tools: tools.length ? tools : undefined,
+      tool_choice: chatWorkingMemoryToolChoice(options),
       parallel_tool_calls: tools.length ? false : undefined,
       response_format: request.response_format?.type === "text" ? undefined : request.response_format
     };
@@ -376,8 +410,9 @@ async function completeChatCompletions(
         arguments: call.function.arguments
       }];
     });
-    state.toolCallCount = claimToolCalls(state.toolCallCount, calls.length, maxToolCalls);
+    state.toolCallCount = claimBusinessToolCalls(state.toolCallCount, calls, maxToolCalls);
     if (!calls.length) {
+      assertWorkingMemoryDecisionResolved(options);
       const text = choice.content?.trim();
       if (!text) throw new Error("模型没有返回可发送内容。");
       return { kind: "completed", text };

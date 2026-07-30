@@ -1279,14 +1279,26 @@ describe("user test harness", () => {
       "source knowledge must not survive fixture reset\n"
     );
     const providerOutputs = [
-      JSON.stringify({
-        should_reply: true,
-        reason: "The fixture user explicitly requested a result.",
-        reply_to_message_id: "99"
-      }),
-      "夹具主对话已收到。"
+      {
+        text: JSON.stringify({
+          should_reply: true,
+          reason: "The fixture user explicitly requested a result.",
+          reply_to_message_id: "99"
+        })
+      },
+      {
+        text: "夹具主对话已收到。",
+        calls: [{
+          name: "add_workmemory",
+          args: { action: "skip", content: null }
+        }]
+      }
     ];
-    const fetchMock = vi.fn(async () => codexSseResponse(providerOutputs.shift()!));
+    const fetchMock = vi.fn(async () => {
+      const output = providerOutputs.shift();
+      if (!output) throw new Error("unexpected fixture Provider request");
+      return codexSseResponse(output.text, output.calls);
+    });
     vi.stubGlobal("fetch", fetchMock);
     try {
       await prepareUserTestWorkspace({
@@ -1320,7 +1332,7 @@ describe("user test harness", () => {
         }, null, 2)
       ).toBe("passed");
       expect(report.execution.assertions.every((assertion) => assertion.passed)).toBe(true);
-      expect(report.observation.tools).toEqual([]);
+      expect(report.observation.tools).toEqual(["add_workmemory"]);
       expect(await fs.readFile(
         path.join(
           destination,
@@ -1398,7 +1410,32 @@ describe("user test harness", () => {
         }],
         allPreviousMemoriesInvalidated: true
       }),
-      "我梦见测试清单变成一条发光的路，只有回归测试全部通过，0.1.4 才走向发布终点。"
+      JSON.stringify({
+        schemaVersion: 1,
+        dream: {
+          text: "我梦见测试清单变成一条发光的路，只有回归测试全部通过，0.1.4 才走向发布终点。",
+          factuality: "imagined"
+        },
+        longTermReviews: [{
+          sourceIds: ["long_fixture_release"],
+          action: "retain",
+          canonical: null,
+          importance: 0.9,
+          futureRelevance: 0.9,
+          emotionalSalience: 0.4,
+          confidence: 1,
+          reason: "发布门禁仍然有效。"
+        }],
+        workingReviews: [{
+          sourceIds: ["working_fixture_release"],
+          action: "retain",
+          canonical: null,
+          confidence: 1,
+          reason: "近期发布约束保持不变。"
+        }],
+        personaAdjustment: null,
+        fieldKnowledge: null
+      })
     ];
     const fetchMock = vi.fn(async () => {
       const output = providerOutputs.shift();
@@ -2080,21 +2117,31 @@ function directorScheduleFixture() {
   };
 }
 
-function codexSseResponse(text: string) {
+function codexSseResponse(
+  text: string,
+  calls: Array<{ name: string; args: Record<string, unknown> }> = []
+) {
   const output = [{
     type: "message",
     role: "assistant",
     status: "completed",
     content: [{ type: "output_text", text }]
-  }];
-  const events = [{
+  }, ...calls.map((call, index) => ({
+    type: "function_call",
+    name: call.name,
+    call_id: `fixture-call-${index}-${call.name}`,
+    arguments: JSON.stringify(call.args),
+    status: "completed"
+  }))];
+  const events = output.map((item, outputIndex) => ({
     type: "response.output_item.done",
-    output_index: 0,
-    item: output[0]
-  }, {
+    output_index: outputIndex,
+    item
+  }));
+  events.push({
     type: "response.completed",
     response: { status: "completed", output }
-  }];
+  } as never);
   return new Response(
     events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""),
     {

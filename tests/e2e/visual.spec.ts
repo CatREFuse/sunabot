@@ -136,6 +136,9 @@ async function runMemoryVisualScenario(page: Page, testInfo: TestInfo) {
     const sourceTabs = page.getByRole("tablist", { name: "记忆类别" });
     await expect(sourceTabs.getByRole("tab")).toHaveCount(5);
     await expect(sourceTabs.getByRole("tab", { name: "工作记忆", exact: true })).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByLabel("24 小时记忆处理成功率")).toContainText("95%");
+    await expect(page.getByLabel("24 小时记忆处理成功率")).toContainText("19 / 20");
+    await expect(page.getByLabel("待处理记忆消息")).toContainText("84");
     if (viewport.width === 390) {
       const tabFit = await sourceTabs.evaluate((element) => {
         const container = element.getBoundingClientRect();
@@ -152,7 +155,10 @@ async function runMemoryVisualScenario(page: Page, testInfo: TestInfo) {
     await expect(page.getByLabel("排序字段")).toHaveCount(0);
     await expect(page.getByRole("navigation", { name: "记忆分页" })).toHaveCount(0);
     await workingDocument.evaluate((element) => element.scrollIntoView({ block: "start" }));
-    await capture(page, viewport.name, theme, "memory-document", { fullPage: false });
+    await capture(page, viewport.name, theme, "memory-document", {
+      fullPage: false,
+      checkPageShell: true
+    });
     await page.getByRole("button", { name: "操作日志", exact: true }).click();
     const operationLogDialog = page.getByRole("dialog", { name: "操作日志" });
     await expect(operationLogDialog.getByLabel("记忆操作日志列表").locator("li")).toHaveCount(3);

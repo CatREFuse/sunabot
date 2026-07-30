@@ -100,6 +100,7 @@ import { registerDirectorRoutes } from "./plugins/directorRoutes.js";
 import { registerSelfieReferenceRoutes } from "./plugins/selfieReferenceRoutes.js";
 import { isSpaRoute } from "./spaRouting.js";
 import { buildVoiceApiComposition, registerVoiceApi } from "./voiceApiComposition.js";
+import { resolveEnabledAgentAccountId } from "./agentNotificationComposition.js";
 import {
   assertOneBotAccessToken,
   closeOneBotHttpServer,
@@ -212,6 +213,7 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
   });
   const bashAudit = options.bashAudit ?? createBashAuditRuntimePort();
   let systemConfigService: SystemConfigService | undefined;
+  let readConnectedAccountIds = (): string[] => [];
   const systemConfigRuntime: SystemConfigRuntimePort = {
     createTurn(context) {
       if (!systemConfigService) throw new Error("System configuration service is not ready.");
@@ -224,7 +226,12 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
     bashRuntime,
     systemConfig: systemConfigRuntime,
     agentExtensions: runtimeAgentExtensions,
-    replyTaskGate: broadcastStormDetector
+    replyTaskGate: broadcastStormDetector,
+    resolveAdminNotificationAccountId: () => resolveEnabledAgentAccountId(
+      agentConfig.persona.defaultAgentId,
+      agentRegistry,
+      readConnectedAccountIds()
+    )
   });
   const runtime = createRuntime(defaultAgentConfig);
   const agentRuntimeManager = new AgentRuntimeManager(agentRegistry, {
@@ -235,6 +242,17 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
     readAccountRuntimeStatus,
     probeExtensionReadiness: (agentId) => agentExtensions.mcpRuntimeService.readiness(agentId)
   });
+  const listenerOptions = options.onebotListener === false ? undefined : options.onebotListener;
+  const onebotServer = options.onebotListener === false
+    ? undefined
+    : listenerOptions?.server ?? createOneBotHttpServer();
+  const gatewayServer = onebotServer ?? http.createServer();
+  const onebotGateway = new OneBotGateway(gatewayServer, config, agentRuntimeManager, {
+    outboundMedia,
+    isAccountAllowed: (accountId) => Boolean(agentRegistry.account(accountId))
+  });
+  readConnectedAccountIds = () => (onebotGateway.getStatus().accounts ?? [])
+    .map((account) => account.accountId);
   await agentRuntimeManager.initialize();
   const getRuntime = (agentId: string) => agentRuntimeManager.require(agentId);
   const getRuntimeContext = (agentId: string) => {
@@ -273,15 +291,6 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
   });
   const app = Fastify({ logger: options.logger ?? false, trustProxy: false });
   const monitorSettings = new MonitorSettingsStore(getWorkspacePath(WORKSPACE_LAYOUT.secretsEnv));
-  const listenerOptions = options.onebotListener === false ? undefined : options.onebotListener;
-  const onebotServer = options.onebotListener === false
-    ? undefined
-    : listenerOptions?.server ?? createOneBotHttpServer();
-  const gatewayServer = onebotServer ?? http.createServer();
-  const onebotGateway = new OneBotGateway(gatewayServer, config, agentRuntimeManager, {
-    outboundMedia,
-    isAccountAllowed: (accountId) => Boolean(agentRegistry.account(accountId))
-  });
   const conversationDirectory = new ConversationDirectory({
     cachePath: getWorkspacePath(WORKSPACE_LAYOUT.conversationDirectoryCache)
   });

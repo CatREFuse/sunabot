@@ -76,9 +76,10 @@ describe("Codex frozen inputs", () => {
     expect((await fs.stat(prepared.inputs[0]!.workerPath)).mode & 0o777).toBe(0o400);
     expect((await fs.stat(prepared.inputs[1]!.workerPath)).mode & 0o777).toBe(0o400);
 
-    const addDirIndex = prepared.args.indexOf("--add-dir");
-    expect(addDirIndex).toBeGreaterThan(-1);
-    expect(prepared.args[addDirIndex + 1]).toBe(prepared.outputDir);
+    expect(prepared.cwd).toBe(prepared.outputDir);
+    expect(prepared.args.slice(prepared.args.indexOf("-C"), prepared.args.indexOf("-C") + 2))
+      .toEqual(["-C", prepared.outputDir]);
+    expect(prepared.args).not.toContain("--add-dir");
     expect(prepared.args).toEqual(expect.arrayContaining([
       "--image",
       prepared.inputs[1]!.workerPath
@@ -186,9 +187,9 @@ describe("Codex result artifacts", () => {
     temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-codex-output-"));
     const artifactBytes = Buffer.from("host validated artifact\n", "utf8");
     const child = fakeChild();
-    const spawnProcess: CodexSpawn = (_command, args, _options: SpawnOptions) => {
+    const spawnProcess: CodexSpawn = (_command, args, options: SpawnOptions) => {
       queueMicrotask(async () => {
-        const outputDir = requiredArgument(args, "--add-dir");
+        const outputDir = String(options.cwd);
         const resultFile = requiredArgument(args, "--output-last-message");
         await fs.mkdir(path.join(outputDir, "reports"), { recursive: true });
         await fs.writeFile(path.join(outputDir, "reports", "result.txt"), artifactBytes);

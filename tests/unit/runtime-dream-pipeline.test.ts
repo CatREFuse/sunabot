@@ -12,6 +12,7 @@ import {
   type RuntimeDreamContextPort,
   type RuntimeDreamContextSnapshot,
   type RuntimeDreamFieldKnowledgePort,
+  type RuntimeDreamLogPort,
   type RuntimeDreamModelPort,
   type RuntimeDreamPersonaPort,
   type RuntimeDreamRun,
@@ -233,6 +234,47 @@ describe("RuntimeDreams", () => {
     });
   });
 
+  it("preserves a strict promoted canonical fact longer than one thousand characters", async () => {
+    const now = new Date("2026-07-20T04:05:00.000Z");
+    const canonicalFact = `  ${"长期可复核的发布约定。".repeat(120)}  `;
+    expect(Array.from(canonicalFact).length).toBeGreaterThan(1_000);
+    const fixture = createFixture(() => now, memorySnapshot({
+      workingRecords: [
+        memory("work-1", "2026-06-01T18:00:00.000Z", "conversation", "event:work")
+      ]
+    }));
+    fixture.model.response = JSON.stringify({
+      schemaVersion: 1,
+      dream: { text: dreamText(), factuality: "imagined" },
+      longTermReviews: [{
+        sourceIds: ["long-1"],
+        action: "retain",
+        canonical: null,
+        importance: 0.7,
+        futureRelevance: 0.5,
+        emotionalSalience: 0.4,
+        confidence: 0.9,
+        reason: "仍有清晰意义"
+      }],
+      workingReviews: [{
+        sourceIds: ["work-1"],
+        action: "promote",
+        canonical: { fact: canonicalFact },
+        confidence: 1,
+        reason: "仍会影响后续工作"
+      }],
+      personaAdjustment: null,
+      fieldKnowledge: null
+    });
+
+    const completed = await fixture.runtime.tick(now);
+
+    expect(completed).toMatchObject({ status: "completed" });
+    expect(fixture.store.commitCalls[0]?.longTerm).toEqual(expect.arrayContaining([
+      expect.objectContaining({ fact: canonicalFact })
+    ]));
+  });
+
   it("resumes persisted generated output without a second model call", async () => {
     let now = new Date("2026-07-20T04:05:00.000Z");
     const fixture = createFixture(() => now, memorySnapshot({
@@ -368,7 +410,7 @@ describe("RuntimeDreams", () => {
     expect(fixture.fieldKnowledge.calls[0]?.content).not.toMatch(/人物-[a-f0-9]{24}/u);
   });
 
-  it("does not replace field knowledge when the projected AIR is lossy", async () => {
+  it("rejects non-null field knowledge when the projected AIR is not writable", async () => {
     const now = new Date("2026-07-20T04:05:00.000Z");
     const fixture = createFixture(() => now, memorySnapshot({
       workingRevision: "d".repeat(64),
@@ -383,16 +425,22 @@ describe("RuntimeDreams", () => {
       evidenceMemoryIds: ["long-1"]
     };
 
-    const completed = await fixture.runtime.tick(now);
+    const failed = await fixture.runtime.tick(now);
+    const request = fixture.model.requests[0] as Record<string, unknown>;
+    const payload = request[DREAM_PAYLOAD_VARIABLE] as Record<string, unknown>;
 
-    expect(completed).toMatchObject({
-      status: "completed",
-      result: expect.objectContaining({ fieldKnowledgeUpdated: false })
+    expect(payload.fieldKnowledgeWritable).toBe(false);
+    expect(failed).toMatchObject({
+      status: "failed",
+      errorCode: "DREAM_OUTPUT_CONTRACT_INVALID",
+      output: null,
+      dreamText: null
     });
     expect(fixture.fieldKnowledge.calls).toEqual([]);
+    expect(fixture.workingMemory.calls).toEqual([]);
   });
 
-  it("does not replace field knowledge when a persisted run predates the write gate", async () => {
+  it("clears a generated field update when a persisted run predates the write gate", async () => {
     let now = new Date("2026-07-20T04:05:00.000Z");
     const fixture = createFixture(() => now, memorySnapshot({
       workingRevision: "d".repeat(64)
@@ -410,13 +458,27 @@ describe("RuntimeDreams", () => {
     fixture.fieldKnowledge.calls.length = 0;
     now = new Date("2026-07-20T04:21:00.000Z");
 
+    const rejected = await fixture.runtime.tick(now);
+
+    expect(rejected).toMatchObject({
+      status: "failed",
+      errorCode: "DREAM_OUTPUT_CONTRACT_INVALID",
+      output: null,
+      dreamText: null,
+      generatedAt: null
+    });
+    expect(fixture.fieldKnowledge.calls).toEqual([]);
+    expect(fixture.model.calls).toBe(1);
+
+    fixture.model.fieldKnowledge = null;
+    now = new Date("2026-07-20T04:37:00.000Z");
     const recovered = await fixture.runtime.tick(now);
 
     expect(recovered).toMatchObject({
       status: "completed",
       result: expect.objectContaining({ fieldKnowledgeUpdated: false })
     });
-    expect(fixture.fieldKnowledge.calls).toEqual([]);
+    expect(fixture.model.calls).toBe(2);
   });
 
   it("fails before SQLite and rolls working memory back when field knowledge changed", async () => {
@@ -494,30 +556,132 @@ describe("RuntimeDreams", () => {
     expect(fixture.model.calls).toBe(1);
   });
 
-  it("completes with raw generated text when the model ignores the preferred JSON format", async () => {
+  it("persists and logs only stable failure metadata for Provider errors", async () => {
     const now = new Date("2026-07-20T04:05:00.000Z");
+    const fixture = createFixture(() => now);
+    fixture.model.error = Object.assign(
+      new Error("provider payload sk-live-secret failed at /Users/private/workspace"),
+      { code: "SK_LIVE_SECRET_ABC123" }
+    );
+
+    const failed = await fixture.runtime.tick(now);
+
+    expect(failed).toMatchObject({
+      status: "failed",
+      errorCode: "DREAM_RUN_FAILED",
+      errorText: "Dream 处理失败。"
+    });
+    expect(fixture.store.failedCalls[0]).toMatchObject({
+      errorCode: "DREAM_RUN_FAILED",
+      errorText: "Dream 处理失败。"
+    });
+    expect(JSON.stringify(fixture.logs)).not.toMatch(
+      /SK_LIVE_SECRET|sk-live-secret|\/Users\/private|provider payload/u
+    );
+  });
+
+  it("retries malformed generated output three times without marking it generated", async () => {
+    let now = new Date("2026-07-20T04:05:00.000Z");
     const fixture = createFixture(() => now, memorySnapshot({
       workingRevision: "d".repeat(64)
     }));
     fixture.model.response = "梦里出现了一段没有 JSON 包装的文字。";
 
-    const completed = await fixture.runtime.tick(now);
+    const first = await fixture.runtime.tick(now);
+    expect(first).toMatchObject({
+      status: "failed",
+      attemptCount: 1,
+      errorCode: "DREAM_OUTPUT_CONTRACT_INVALID",
+      output: null,
+      dreamText: null,
+      nextRetryAt: "2026-07-20T04:20:00.000Z"
+    });
 
-    expect(completed).toMatchObject({
-      status: "completed",
-      dreamText: "梦里出现了一段没有 JSON 包装的文字。",
-      output: {
-        rawOutput: "梦里出现了一段没有 JSON 包装的文字。",
-        workingReviews: [
-          { sourceIds: ["work-1"], action: "retain", confidence: 0 }
-        ]
-      }
+    now = new Date("2026-07-20T04:21:00.000Z");
+    const second = await fixture.runtime.tick(now);
+    expect(second).toMatchObject({
+      status: "failed",
+      attemptCount: 2,
+      errorCode: "DREAM_OUTPUT_CONTRACT_INVALID",
+      output: null
+    });
+
+    now = new Date("2026-07-20T04:37:00.000Z");
+    const terminal = await fixture.runtime.tick(now);
+    expect(terminal).toMatchObject({
+      status: "failed",
+      attemptCount: 3,
+      errorCode: "DREAM_OUTPUT_CONTRACT_INVALID",
+      output: null,
+      nextRetryAt: null
+    });
+    expect(terminal?.errorText).toBe("Dream 输出格式校验未通过。");
+    expect(fixture.store.failedCalls).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        errorCode: "DREAM_OUTPUT_CONTRACT_INVALID",
+        errorText: "Dream 输出格式校验未通过。"
+      })
+    ]));
+    expect(fixture.logs.filter((event) => event.action === "dream.run.failed"))
+      .toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          data: { errorCode: "DREAM_OUTPUT_CONTRACT_INVALID" }
+        })
+      ]));
+    expect(JSON.stringify(fixture.logs)).not.toContain("没有 JSON");
+    expect(fixture.model.calls).toBe(3);
+    expect(fixture.store.commitCalls).toHaveLength(0);
+    expect(fixture.workingMemory.calls).toHaveLength(0);
+
+    now = new Date("2026-07-20T05:30:00.000Z");
+    await fixture.runtime.tick(now);
+    expect(fixture.model.calls).toBe(3);
+  });
+
+  it("clears a legacy generated output that cannot pass the strict contract before retrying the model", async () => {
+    let now = new Date("2026-07-20T04:05:00.000Z");
+    const fixture = createFixture(() => now, memorySnapshot({
+      workingRevision: "d".repeat(64)
+    }));
+    fixture.store.commitFailures = 1;
+
+    const interrupted = await fixture.runtime.tick(now);
+    expect(interrupted).toMatchObject({
+      status: "failed",
+      output: expect.objectContaining({ rawOutput: expect.any(String) })
+    });
+    const legacyRawOutput = JSON.stringify({
+      schemaVersion: 1,
+      dream: { text: dreamText(), factuality: "imagined" },
+      personaAdjustment: null,
+      fieldKnowledge: null
+    });
+    interrupted!.output = {
+      schemaVersion: 1,
+      dream: { text: dreamText(), factuality: "imagined" },
+      rawOutput: legacyRawOutput
+    };
+
+    now = new Date("2026-07-20T04:21:00.000Z");
+    const rejected = await fixture.runtime.tick(now);
+    expect(rejected).toMatchObject({
+      status: "failed",
+      attemptCount: 2,
+      errorCode: "DREAM_OUTPUT_CONTRACT_INVALID",
+      output: null,
+      dreamText: null,
+      generatedAt: null,
+      nextRetryAt: "2026-07-20T04:36:00.000Z"
     });
     expect(fixture.model.calls).toBe(1);
-    expect(fixture.workingMemory.calls[0]?.records).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: "work-1" }),
-      expect.objectContaining({ memoryKind: "dream", factuality: "imagined" })
-    ]));
+    expect(fixture.store.failedCalls.at(-1)).toMatchObject({
+      resetGeneratedOutput: true
+    });
+
+    now = new Date("2026-07-20T04:37:00.000Z");
+    const completed = await fixture.runtime.tick(now);
+    expect(completed).toMatchObject({ status: "completed", attemptCount: 3 });
+    expect(fixture.model.calls).toBe(2);
   });
 
   it("manually runs today's Dream before 04:00 and notifies after the durable claim", async () => {
@@ -768,7 +932,7 @@ describe("RuntimeDreams", () => {
     expect(fixture.persona.content).not.toContain("- 有时会先确认当前证据是否清楚。");
   });
 
-  it("drops imagined persona evidence without blocking the Dream", async () => {
+  it("rejects imagined persona evidence before marking the Dream generated", async () => {
     const now = new Date("2026-07-20T04:05:00.000Z");
     const imagined = {
       ...memory("dream-old", "2026-06-01T09:00:00.000Z", "dream", "event:dream"),
@@ -792,9 +956,15 @@ describe("RuntimeDreams", () => {
       evidenceMemoryIds: ["dream-old", "lt-2", "lt-3"]
     };
 
-    const completed = await fixture.runtime.tick(now);
-    expect(completed).toMatchObject({ status: "completed", personaStatus: "none" });
+    const failed = await fixture.runtime.tick(now);
+    expect(failed).toMatchObject({
+      status: "failed",
+      personaStatus: "pending",
+      errorCode: "DREAM_OUTPUT_CONTRACT_INVALID",
+      output: null
+    });
     expect(fixture.persona.writes).toHaveLength(0);
+    expect(fixture.workingMemory.calls).toHaveLength(0);
   });
 
   it("completes the dream with a failed persona status when CAS conflicts", async () => {
@@ -815,11 +985,17 @@ describe("RuntimeDreams", () => {
       statement: "整理长任务时先确认仍然有效的目标。",
       evidenceMemoryIds: ["lt-1", "lt-2", "lt-3"]
     };
-    fixture.persona.error = new Error("revision conflict");
+    fixture.persona.error = new Error(
+      "revision conflict at /Users/private/agent/PERSONA.md with sk-live-secret"
+    );
 
     const completed = await fixture.runtime.tick(now);
     expect(completed).toMatchObject({ status: "completed", personaStatus: "failed" });
-    expect(completed?.persona).toMatchObject({ error: "revision conflict" });
+    expect(completed?.persona).toMatchObject({
+      errorCode: "DREAM_PERSONA_PROJECTION_FAILED"
+    });
+    expect(JSON.stringify(completed?.persona)).not.toContain("/Users/private");
+    expect(JSON.stringify(completed?.persona)).not.toContain("sk-live-secret");
   });
 
   it("maps persisted runs to the memory-management history contract", () => {
@@ -841,6 +1017,8 @@ describe("RuntimeDreams", () => {
         id: "history-run",
         date: "2026-07-20",
         status: "completed",
+        attemptCount: 1,
+        maxAttempts: 3,
         dreamText: dreamText(),
         scheduledFor: "2026-07-20T04:00:00.000Z",
         completedAt: "2026-07-20T04:03:00.000Z",
@@ -966,6 +1144,11 @@ class FakeStore implements RuntimeDreamStorePort {
       status: "failed",
       workerId: null,
       leaseUntil: null,
+      ...(input.resetGeneratedOutput ? {
+        output: null,
+        dreamText: null,
+        generatedAt: null
+      } : {}),
       errorCode: input.errorCode,
       errorText: input.errorText,
       nextRetryAt: input.retryAt?.toISOString() ?? null,
@@ -1121,6 +1304,7 @@ function createFixture(
   const persona = new FakePersona();
   const workingMemory = new FakeWorkingMemory();
   const fieldKnowledge = new FakeFieldKnowledge();
+  const logs: Array<Parameters<RuntimeDreamLogPort["write"]>[0]> = [];
   const prompt = {
     responseFormat: { type: "text" } as Record<string, unknown>,
     async render(_id: string, variables: Readonly<Record<string, unknown>>) {
@@ -1135,6 +1319,11 @@ function createFixture(
     prompt,
     model,
     persona,
+    log: {
+      write(event) {
+        logs.push(structuredClone(event));
+      }
+    },
     ...(selection ? { selection } : {}),
     agentId: "plana",
     timeZone: UTC,
@@ -1151,7 +1340,8 @@ function createFixture(
     persona,
     workingMemory,
     fieldKnowledge,
-    prompt
+    prompt,
+    logs
   };
 }
 

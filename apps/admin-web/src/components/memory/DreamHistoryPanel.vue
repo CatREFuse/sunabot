@@ -17,22 +17,55 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{ refresh: []; trigger: [] }>();
 
+type DreamStateKind = "success" | "error" | "warning" | undefined;
+type DreamHistoryDisplayItem = DreamHistoryItem & {
+  statusLabel: string;
+  statusKind: DreamStateKind;
+  dateLabel: string;
+  scheduledLabel: string;
+  completedLabel: string;
+  failedLabel: string;
+  retryLabel: string;
+  summaryLabel: string;
+  failureHeadline: string;
+  bodyText: string;
+};
+
 const historyExpanded = shallowRef(false);
-const sortedItems = computed(() => sortByMemoryTime(
-  props.items,
-  props.sortField,
-  props.sortDirection,
-  (item) => ({
-    createdAt: item.scheduledFor,
-    updatedAt: item.completedAt ?? item.scheduledFor
-  })
+const sortedItems = computed<DreamHistoryDisplayItem[]>(() => (
+  sortByMemoryTime(
+    props.items,
+    props.sortField,
+    props.sortDirection,
+    (item) => ({
+      createdAt: item.scheduledFor,
+      updatedAt: item.completedAt ?? item.failedAt ?? item.scheduledFor
+    })
+  ).map((item) => presentHistoryItem(item))
 ));
 const latestItem = computed(() => sortedItems.value[0]);
 const historyItems = computed(() => sortedItems.value.slice(1));
 const visibleHistory = computed(() => historyExpanded.value ? historyItems.value : historyItems.value.slice(0, 3));
 const nextScheduleLabel = computed(() => formatDateTime(props.nextScheduledFor));
 
-function statusLabel(status: DreamRunStatus) {
+function presentHistoryItem(item: DreamHistoryItem): DreamHistoryDisplayItem {
+  const failureHeadline = dreamFailureHeadline(item);
+  return {
+    ...item,
+    statusLabel: statusLabel(item.status),
+    statusKind: statusKind(item.status),
+    dateLabel: dateLabel(item.date),
+    scheduledLabel: formatDateTime(item.scheduledFor),
+    completedLabel: formatDateTime(item.completedAt),
+    failedLabel: formatDateTime(item.failedAt),
+    retryLabel: formatDateTime(item.nextRetryAt),
+    summaryLabel: summaryLabel(item),
+    failureHeadline,
+    bodyText: item.dreamText || failureHeadline || "梦境尚未生成"
+  };
+}
+
+function statusLabel(status: DreamRunStatus): string {
   return ({
     pending: "等待中",
     running: "正在做梦",
@@ -42,7 +75,7 @@ function statusLabel(status: DreamRunStatus) {
   } satisfies Record<DreamRunStatus, string>)[status];
 }
 
-function statusKind(status: DreamRunStatus) {
+function statusKind(status: DreamRunStatus): DreamStateKind {
   if (status === "completed") return "success";
   if (status === "failed") return "error";
   if (status === "running" || status === "generated") return "warning";
@@ -78,6 +111,20 @@ function summaryLabel(item: DreamHistoryItem) {
   if (!item.summary) return "";
   return `合并 ${item.summary.merged} · 归档 ${item.summary.archived} · 转存 ${item.summary.promoted}`;
 }
+
+function dreamFailureHeadline(item: DreamHistoryItem) {
+  if (item.status !== "failed") return "";
+  if (item.errorCode !== "DREAM_OUTPUT_CONTRACT_INVALID") return "梦境生成失败";
+  const maximum = item.maxAttempts || 3;
+  const attempt = Math.min(Math.max(item.attemptCount || 0, 1), maximum);
+  if (attempt >= maximum && !item.nextRetryAt) {
+    return `Dream 输出格式连续 ${maximum} 次未通过`;
+  }
+  if (item.nextRetryAt && attempt < maximum) {
+    return `输出格式未通过 · 第 ${attempt}/${maximum} 次 · 等待重试`;
+  }
+  return "Dream 输出格式未通过";
+}
 </script>
 
 <template>
@@ -87,9 +134,9 @@ function summaryLabel(item: DreamHistoryItem) {
         <p class="field-label">最近运行</p>
         <div class="mt-2 flex flex-wrap items-baseline gap-x-4 gap-y-2">
           <h2 id="dream-history-title" class="text-3xl font-medium tracking-[-0.03em] text-display">
-            {{ latestItem ? statusLabel(latestItem.status) : "等待第一次梦境" }}
+            {{ latestItem ? latestItem.statusLabel : "等待第一次梦境" }}
           </h2>
-          <span v-if="latestItem" class="inline-state" :data-kind="statusKind(latestItem.status)">{{ dateLabel(latestItem.date) }}</span>
+          <span v-if="latestItem" class="inline-state" :data-kind="latestItem.statusKind">{{ latestItem.dateLabel }}</span>
         </div>
         <p v-if="nextScheduleLabel" class="mt-3 font-mono text-[11px] text-mute">
           下次 <time :datetime="nextScheduledFor">{{ nextScheduleLabel }}</time><span v-if="timeZone"> · {{ timeZone }}</span>
@@ -112,18 +159,34 @@ function summaryLabel(item: DreamHistoryItem) {
     <article v-if="latestItem" class="grid gap-8 border-b border-line py-8 lg:grid-cols-[minmax(0,1fr)_240px]">
       <div class="min-w-0">
         <p v-if="latestItem.dreamText" class="max-w-3xl whitespace-pre-wrap text-base leading-8 text-ink">{{ latestItem.dreamText }}</p>
-        <p v-else class="text-sm text-mute">{{ latestItem.status === "failed" ? "梦境生成失败" : "梦境尚未生成" }}</p>
+        <div v-else-if="latestItem.failureHeadline" class="max-w-3xl" role="status" aria-live="polite">
+          <p class="text-sm font-medium text-display">{{ latestItem.failureHeadline }}</p>
+          <p v-if="latestItem.errorText" class="mt-2 break-words text-xs leading-5 text-mute">{{ latestItem.errorText }}</p>
+        </div>
+        <p v-else class="text-sm text-mute">梦境尚未生成</p>
       </div>
       <dl class="grid content-start grid-cols-[max-content_1fr] gap-x-4 gap-y-3 text-xs">
         <dt class="text-mute">计划</dt>
-        <dd class="text-right font-mono text-[11px] text-ink">{{ formatDateTime(latestItem.scheduledFor) || "--" }}</dd>
-        <template v-if="latestItem.completedAt">
+        <dd class="text-right font-mono text-[11px] text-ink">{{ latestItem.scheduledLabel || "--" }}</dd>
+        <template v-if="latestItem.completedLabel">
           <dt class="text-mute">完成</dt>
-          <dd class="text-right font-mono text-[11px] text-ink">{{ formatDateTime(latestItem.completedAt) || "--" }}</dd>
+          <dd class="text-right font-mono text-[11px] text-ink">{{ latestItem.completedLabel }}</dd>
         </template>
-        <template v-if="summaryLabel(latestItem)">
+        <template v-if="latestItem.failedLabel">
+          <dt class="text-mute">失败</dt>
+          <dd class="text-right font-mono text-[11px] text-ink">{{ latestItem.failedLabel }}</dd>
+        </template>
+        <template v-if="latestItem.retryLabel">
+          <dt class="text-mute">重试</dt>
+          <dd data-testid="dream-retry-time" class="text-right font-mono text-[11px] text-ink">{{ latestItem.retryLabel }}</dd>
+        </template>
+        <template v-if="latestItem.errorCode">
+          <dt class="text-mute">错误</dt>
+          <dd class="break-all text-right font-mono text-[11px] text-accent">{{ latestItem.errorCode }}</dd>
+        </template>
+        <template v-if="latestItem.summaryLabel">
           <dt class="text-mute">整理</dt>
-          <dd class="text-right font-mono text-[11px] text-ink">{{ summaryLabel(latestItem) }}</dd>
+          <dd class="text-right font-mono text-[11px] text-ink">{{ latestItem.summaryLabel }}</dd>
         </template>
         <template v-if="latestItem.personalityChanged">
           <dt class="text-mute">人格</dt>
@@ -152,11 +215,14 @@ function summaryLabel(item: DreamHistoryItem) {
       <TransitionGroup name="memory-list" tag="ol" class="mt-4 border-t border-line" aria-label="梦境历史">
         <li v-for="item in visibleHistory" :key="item.id" class="grid gap-3 border-b border-line py-5 md:grid-cols-[140px_minmax(0,1fr)_max-content] md:gap-6">
           <div>
-            <time class="font-mono text-xs text-display" :datetime="item.date">{{ dateLabel(item.date) }}</time>
-            <span class="inline-state mt-2 block" :data-kind="statusKind(item.status)">{{ statusLabel(item.status) }}</span>
+            <time class="font-mono text-xs text-display" :datetime="item.date">{{ item.dateLabel }}</time>
+            <span class="inline-state mt-2 block" :data-kind="item.statusKind">{{ item.statusLabel }}</span>
           </div>
-          <p class="line-clamp-2 min-w-0 text-sm leading-6 text-ink">{{ item.dreamText || (item.status === "failed" ? "梦境生成失败" : "梦境尚未生成") }}</p>
-          <span class="font-mono text-[11px] text-mute">{{ summaryLabel(item) || formatDateTime(item.completedAt || item.scheduledFor) }}</span>
+          <div class="min-w-0">
+            <p class="line-clamp-2 text-sm leading-6 text-ink">{{ item.bodyText }}</p>
+            <p v-if="item.errorCode" class="mt-1 break-all font-mono text-[10px] text-accent">{{ item.errorCode }}</p>
+          </div>
+          <span class="font-mono text-[11px] text-mute">{{ item.summaryLabel || item.retryLabel || item.completedLabel || item.scheduledLabel }}</span>
         </li>
       </TransitionGroup>
     </section>

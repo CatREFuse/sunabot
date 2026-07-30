@@ -61,6 +61,7 @@
 | `docs/user-tests/selfie-direct-delivery.md` | 阿罗娜单人自拍由异步图片任务直接回传的用户用例 | 修改自拍工具派发、完成回调或媒体发送时读取 |
 | `docs/user-tests/selfie-knowledge-reference-direct-delivery.md` | 阿罗娜使用知识库普拉娜参考图生成双人自拍并直接回传的用户用例 | 修改自拍知识参考、Workbench 路径快照或异步媒体发送时读取 |
 | `docs/user-tests/address-name-priority.md` | 多称呼用户画像在主回复中优先使用第一个称呼的用户用例 | 修改称呼数组、用户画像提示上下文或回复称呼规则时读取 |
+| `docs/user-tests/add-workmemory-direct-write.md` | 主对话模型同轮调用 `add_workmemory` 直写短期工作记忆的用户用例 | 修改工作记忆工具、主回复工具调用规则或直写审计前读取 |
 | `docs/user-tests/sampled-memory-compression.md` | 运行中测试账号 V2 样本的内容无关记忆压缩模板 | 从只读样本派生真实数据记忆压缩 case 时读取 |
 | `docs/user-tests/sampled-dream.md` | 运行中测试账号 V2 样本的内容无关 Dream 模板 | 从只读样本派生真实数据 Dream case 时读取 |
 

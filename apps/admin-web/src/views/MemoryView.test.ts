@@ -25,6 +25,14 @@ const memory = vi.hoisted(() => ({
     content: "<!-- sunabot-workmemory:v2 -->\n\n<!-- sunabot-workmemory:item eyJpZCI6Im1lbW9yeS0xIn0 -->\n完整工作记忆正文。",
     revision: "working-revision"
   } },
+  health: { value: {
+    windowHours: 24,
+    windowStartedAt: "2026-07-30T12:00:00.000Z",
+    measuredAt: "2026-07-31T12:00:00.000Z",
+    successful: 7,
+    attempted: 8,
+    pending: 13
+  } },
   matches: { value: [] as MemoryEntry[] },
   recallActive: { value: false },
   loading: { value: false },
@@ -99,6 +107,28 @@ describe("MemoryView pagination", () => {
     memory.remove.mockResolvedValue(true);
     (activeAgentIdState as { value: string }).value = "plana";
     memory.entries.value = Array.from({ length: 25 }, (_, index) => entry(index + 1));
+    memory.health.value = {
+      windowHours: 24,
+      windowStartedAt: "2026-07-30T12:00:00.000Z",
+      measuredAt: "2026-07-31T12:00:00.000Z",
+      successful: 7,
+      attempted: 8,
+      pending: 13
+    };
+  });
+
+  it("shows the exact 24-hour processing ratio and current pending count", () => {
+    const wrapper = mountMemoryView();
+
+    expect(wrapper.get('[aria-label="24 小时记忆处理成功率"]').text()).toContain("87.5%");
+    expect(wrapper.get('[aria-label="24 小时记忆处理成功率"]').text()).toContain("7 / 8");
+    expect(wrapper.get('[aria-label="待处理记忆消息"]').text()).toContain("13");
+    wrapper.unmount();
+
+    memory.health.value = { ...memory.health.value, successful: 0, attempted: 0 };
+    const emptyWindow = mountMemoryView();
+    expect(emptyWindow.get('[aria-label="24 小时记忆处理成功率"]').text()).toContain("--");
+    expect(emptyWindow.get('[aria-label="24 小时记忆处理成功率"]').text()).toContain("0 / 0");
   });
 
   it("opens the selected Agent memory operation log and closes it after Agent switching", async () => {

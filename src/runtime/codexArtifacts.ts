@@ -14,6 +14,11 @@ import type {
   CodexResultFinalization,
   CodexResultFinalizationInput
 } from "../../services/sessions/sessionCoordinatorTypes.js";
+import {
+  codexResultSensitivePaths,
+  redactCodexSensitivePaths,
+  sanitizeCodexArtifactError
+} from "../../services/sessions/codexResultSanitizer.js";
 import type { CacheStore, CachedAttachment } from "../../services/media/attachments/cache.js";
 import {
   ChatMediaExportService,
@@ -54,7 +59,22 @@ export async function finalizeCodexResultArtifacts(
 export async function stageCodexResultArtifacts(
   input: FinalizeCodexArtifactsInput
 ): Promise<CodexResultFinalization> {
-  const sensitivePaths = await resultSensitivePaths(input);
+  const sensitivePaths = await codexResultSensitivePaths({
+    job: input.job,
+    settings: input.settings,
+    resultFile: input.result.resultFile
+  });
+  try {
+    return await stageCodexResultArtifactsUnchecked(input, sensitivePaths);
+  } catch (error) {
+    throw sanitizeCodexArtifactError(error, sensitivePaths);
+  }
+}
+
+async function stageCodexResultArtifactsUnchecked(
+  input: FinalizeCodexArtifactsInput,
+  sensitivePaths: readonly string[]
+): Promise<CodexResultFinalization> {
   if (!input.result.ok || input.result.status !== "succeeded") {
     return completedFinalization(withoutWorkerArtifacts(input.result, sensitivePaths));
   }
@@ -400,50 +420,23 @@ function withoutWorkerArtifacts(
   return {
     ...safeResult,
     ...(safeResult.content
-      ? { content: redactWorkerPaths(safeResult.content, sensitivePaths) }
+      ? { content: redactCodexSensitivePaths(safeResult.content, sensitivePaths) }
       : {}),
     ...(safeResult.question
-      ? { question: redactWorkerPaths(safeResult.question, sensitivePaths) }
+      ? { question: redactCodexSensitivePaths(safeResult.question, sensitivePaths) }
       : {}),
     ...(safeResult.stderr
-      ? { stderr: redactWorkerPaths(safeResult.stderr, sensitivePaths) }
+      ? { stderr: redactCodexSensitivePaths(safeResult.stderr, sensitivePaths) }
       : {}),
     ...(safeResult.error
       ? {
           error: {
             ...safeResult.error,
-            message: redactWorkerPaths(safeResult.error.message, sensitivePaths)
+            message: redactCodexSensitivePaths(safeResult.error.message, sensitivePaths)
           }
         }
       : {})
   };
-}
-
-async function resultSensitivePaths(input: FinalizeCodexArtifactsInput) {
-  const candidates = [
-    typeof input.result.resultFile === "string" ? input.result.resultFile : "",
-    path.resolve(input.settings.jobRoot, input.job.id),
-    input.settings.workspacePath,
-    path.resolve(input.settings.workspacePath),
-    ...(input.settings.authFile && path.isAbsolute(input.settings.authFile)
-      ? [input.settings.authFile, path.resolve(input.settings.authFile)]
-      : []),
-    ...(input.settings.executable && path.isAbsolute(input.settings.executable)
-      ? [input.settings.executable, path.resolve(input.settings.executable)]
-      : [])
-  ].filter(Boolean);
-  for (const candidate of candidates.slice()) {
-    const realPath = await fs.realpath(candidate).catch(() => undefined);
-    if (realPath) candidates.push(realPath);
-  }
-  return [...new Set(candidates)].sort((left, right) => right.length - left.length);
-}
-
-function redactWorkerPaths(value: string, sensitivePaths: readonly string[]) {
-  return sensitivePaths.reduce(
-    (current, sensitivePath) => current.split(sensitivePath).join("受控任务目录"),
-    value
-  );
 }
 
 function readFrozenBackend(value: unknown): AgentWorkbenchBackend | undefined {

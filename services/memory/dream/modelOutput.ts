@@ -16,7 +16,7 @@ import {
 
 export const DREAM_TEXT_MIN_CODE_POINTS = 1;
 export const DREAM_TEXT_MAX_CODE_POINTS = 4_096;
-export const DREAM_RAW_OUTPUT_MAX_CODE_POINTS = 16_000;
+export const DREAM_RAW_OUTPUT_MAX_CODE_POINTS = 64_000;
 
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
 const LONG_TERM_ACTIONS = new Set(["retain", "rewrite", "merge", "archive"]);

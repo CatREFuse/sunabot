@@ -17,6 +17,11 @@ export {
   type MemoryOperationSource
 } from "./operationAudit.js";
 export {
+  MEMORY_PROCESSING_HEALTH_WINDOW_HOURS,
+  readMemoryProcessingHealth,
+  type MemoryProcessingHealth
+} from "./processingHealth.js";
+export {
   MemorySchedulerStore,
   type MemoryEnqueueOptions,
   type MemoryQueuedMessage
@@ -47,9 +52,12 @@ export {
 } from "./workingMemoryDocument.js";
 export {
   DREAM_CONTRACT,
+  DREAM_OUTPUT_CONTRACT,
+  DREAM_OUTPUT_CONTRACT_MARKER,
   DREAM_PAYLOAD_VARIABLE,
   DREAM_PROMPT_FILE,
   DREAM_PROMPT_ID,
+  LEGACY_DREAM_FLEX_RESPONSE,
   LEGACY_DREAM_CONTRACT_V3,
   LEGACY_DREAM_CONTRACT_V4,
   dreamPromptTemplate

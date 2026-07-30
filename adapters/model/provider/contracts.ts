@@ -21,6 +21,7 @@ import type { WorkspaceBashProviderOptions } from "../../../services/tools/bashT
 import type { SkillRuntimeToolPort } from "../../../services/tools/skillRuntimeTool.js";
 import type { VoiceLanguage } from "../../../services/voice/public.js";
 import type { ChatMediaToolPort } from "../../../services/tools/chatMediaTool.js";
+import type { ProviderToolSchemaProtocol } from "../../../services/tools/providerToolSchema.js";
 
 export interface ProviderCompleteOptions {
   signal?: AbortSignal;
@@ -182,7 +183,11 @@ export interface ProviderLoggerPort {
 }
 
 export interface ProviderToolExecutorPort {
-  resolveDefinitions(options: ProviderCompleteOptions, definitions?: OpenAIToolDefinition[]): Record<string, unknown>[];
+  resolveDefinitions(
+    options: ProviderCompleteOptions,
+    definitions?: OpenAIToolDefinition[],
+    protocol?: ProviderToolSchemaProtocol
+  ): Record<string, unknown>[];
   companionTurn(
     calls: ResponseFunctionCallItem[],
     siblingText: string,

@@ -50,6 +50,26 @@ export function toChatCompletionTool(tool: Record<string, unknown>) {
   };
 }
 
+export function toAnthropicTool(tool: Record<string, unknown>) {
+  return {
+    name: String(tool.name ?? ""),
+    description: String(tool.description ?? ""),
+    input_schema: isRecord(tool.parameters)
+      ? tool.parameters
+      : { type: "object", properties: {} }
+  };
+}
+
+export function toGeminiFunctionDeclaration(tool: Record<string, unknown>) {
+  return {
+    name: String(tool.name ?? ""),
+    description: String(tool.description ?? ""),
+    parametersJsonSchema: isRecord(tool.parameters)
+      ? tool.parameters
+      : { type: "object", properties: {} }
+  };
+}
+
 export function normalizeGeminiReasoningEffort(effort: ProviderConfig["reasoningEffort"]) {
   return effort && ["minimal", "low", "medium", "high"].includes(effort) ? effort : undefined;
 }

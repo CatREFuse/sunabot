@@ -114,3 +114,12 @@ export function isDreamPipelineAbortError(error: unknown) {
   return error instanceof Error
     && (error.name === "AbortError" || error.message === "The operation was aborted");
 }
+
+export function isRetryableDreamPipelineError(error: unknown) {
+  if (!error || typeof error !== "object") return true;
+  const declared = (error as { retryable?: unknown }).retryable;
+  if (typeof declared === "boolean") return declared;
+  const status = Number((error as { status?: unknown }).status);
+  if (!Number.isFinite(status)) return true;
+  return status === 408 || status === 409 || status === 429 || status >= 500;
+}

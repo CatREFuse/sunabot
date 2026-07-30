@@ -87,6 +87,23 @@ describe("working-memory Markdown document", () => {
     });
   });
 
+  it("uses Unicode characters for the 4000-character item boundary", async () => {
+    const content = "😀".repeat(4_000);
+    await expect(appendWorkingMemoryDocumentItem(config, content, {
+      conversationId: "private:10001",
+      scope: "private"
+    })).resolves.toMatchObject({
+      item: { content }
+    });
+
+    await expect(appendWorkingMemoryDocumentItem(config, "😀".repeat(4_001), {
+      conversationId: "private:10001",
+      scope: "private"
+    })).rejects.toMatchObject({
+      code: "WORKING_MEMORY_ITEM_INVALID"
+    });
+  });
+
   it("rejects an Agent workspace that is itself a symbolic link", async () => {
     const target = path.join(root, "workspace-target");
     const linkedConfig = createAdminTestConfig(path.join(root, "linked-agent"));
@@ -133,7 +150,8 @@ describe("working-memory Markdown document", () => {
     await appendWorkingMemoryDocumentItem(config, "保留原事项。", {
       conversationId: "private:10001",
       scope: "private",
-      title: "原会话"
+      title: "原会话",
+      sourceDecisionKey: "event-retained-source-decision"
     });
     const current = await readWorkingMemoryDocument(config);
     const previous = [{
@@ -160,6 +178,7 @@ describe("working-memory Markdown document", () => {
       conversationId: "private:10001",
       conversationScope: "private",
       conversationTitle: "原会话",
+      sourceDecisionKey: "event-retained-source-decision",
       userId: "10001",
       userIds: ["10001"],
       userName: "原用户",

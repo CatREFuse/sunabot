@@ -493,7 +493,8 @@ export async function runtime_processIncomingReplyEvent(this: RuntimeHost,
       delivery,
       (value) => { deferred = value; },
       payload.contextThroughSequence,
-      payload.orchestratorResult
+      payload.orchestratorResult,
+      event.id
     );
     if (deferred) {
       await appendRequestLog({
@@ -680,7 +681,8 @@ export async function runtime_handleIncomingMessage(this: RuntimeHost,
     delivery?: ReplyDelivery,
     onDeferred?: (value: DeferredCodexTurn) => void,
     contextThroughSequence?: number,
-    orchestratorResult?: RuntimeIncomingReplyEventPayload["orchestratorResult"]
+    orchestratorResult?: RuntimeIncomingReplyEventPayload["orchestratorResult"],
+    memoryDecisionKey?: string
   ) {
     if (command) {
       try {
@@ -713,7 +715,8 @@ export async function runtime_handleIncomingMessage(this: RuntimeHost,
       isCurrent,
       delivery,
       onDeferred,
-      orchestratorResult
+      orchestratorResult,
+      memoryDecisionKey
     });
   }
 export async function runtime_prepareIncomingMessage(this: RuntimeHost, incoming: ParsedIncomingMessage, gateway: MessagingPort) {

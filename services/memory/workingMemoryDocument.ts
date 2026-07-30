@@ -23,6 +23,7 @@ export interface WorkingMemoryConversationSource {
   conversationId: string;
   scope: string;
   title?: string;
+  sourceDecisionKey?: string;
 }
 
 export interface WorkingMemoryDocumentItem {
@@ -34,6 +35,7 @@ export interface WorkingMemoryDocumentItem {
   conversationScope: string;
   conversationTitle: string;
   sourceKind: "model_merge" | "add_workmemory" | "admin" | "dream";
+  sourceDecisionKey?: string;
   batchId?: string;
   userId?: string;
   userIds?: string[];
@@ -137,6 +139,7 @@ export async function appendWorkingMemoryDocumentItem(
 ) {
   const content = normalizeContent(contentInput);
   const timeZone = systemModelTimeZone();
+  const sourceDecisionKey = optionalLine(source.sourceDecisionKey, 256);
   const item: WorkingMemoryDocumentItem = {
     id: `working_${nanoid()}`,
     content,
@@ -145,12 +148,34 @@ export async function appendWorkingMemoryDocumentItem(
     conversationId: requiredLine(source.conversationId, "conversationId", 256),
     conversationScope: requiredLine(source.scope, "conversationScope", 64),
     conversationTitle: optionalLine(source.title, 500),
-    sourceKind
+    sourceKind,
+    ...(sourceDecisionKey ? { sourceDecisionKey } : {})
   };
   let lastRevision = "";
   let lastCount = 0;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const current = await readWorkingMemoryDocument(config);
+    const existing = sourceDecisionKey
+      ? current.items.find((candidate) => candidate.sourceDecisionKey === sourceDecisionKey)
+      : undefined;
+    if (existing) {
+      recordMemoryOperation(config, {
+        source: "working",
+        operation: "append",
+        actor: workingMemoryActor(sourceKind),
+        outcome: "unchanged",
+        recordIds: [existing.id],
+        conversationId: existing.conversationId,
+        conversationScope: existing.conversationScope,
+        beforeCount: current.items.length,
+        afterCount: current.items.length,
+        changedCount: 0,
+        beforeRevision: current.revision,
+        afterRevision: current.revision,
+        reasonCode: "idempotent_replay"
+      });
+      return { item: existing, revision: current.revision, deduplicated: true };
+    }
     lastRevision = current.revision;
     lastCount = current.items.length;
     const result = await replaceWorkingMemoryDocument(config, current.revision, [...current.items, item]);
@@ -169,7 +194,7 @@ export async function appendWorkingMemoryDocumentItem(
         beforeRevision: current.revision,
         afterRevision: result.current.revision
       });
-      return { item, revision: result.current.revision };
+      return { item, revision: result.current.revision, deduplicated: false };
     }
   }
   recordMemoryOperation(config, {
@@ -268,6 +293,7 @@ export function workingMemoryItemsFromFacts(
       conversationScope: existing?.conversationScope ?? conversationScope,
       conversationTitle: existing?.conversationTitle ?? conversationTitle,
       sourceKind: existing?.sourceKind ?? sourceKind,
+      sourceDecisionKey: existing?.sourceDecisionKey,
       batchId: existing?.batchId ?? batchId
     });
   });
@@ -438,6 +464,12 @@ export function parseWorkingMemoryMarkdown(content: string) {
   if (new Set(items.map((item) => item.id)).size !== items.length) {
     throw workingMemoryError("WORKING_MEMORY_DOCUMENT_INVALID", "Working memory item IDs are duplicated.");
   }
+  const sourceDecisionKeys = items
+    .map((item) => item.sourceDecisionKey)
+    .filter((value): value is string => Boolean(value));
+  if (new Set(sourceDecisionKeys).size !== sourceDecisionKeys.length) {
+    throw workingMemoryError("WORKING_MEMORY_DOCUMENT_INVALID", "Working memory decision keys are duplicated.");
+  }
   return items;
 }
 
@@ -513,6 +545,7 @@ function validateWorkingMemoryItem(input: unknown): WorkingMemoryDocumentItem {
     sourceKind !== "admin" && sourceKind !== "dream") {
     throw workingMemoryError("WORKING_MEMORY_ITEM_INVALID", "Working memory source kind is invalid.");
   }
+  const sourceDecisionKey = optionalLine(value.sourceDecisionKey, 256);
   return {
     id,
     content: normalizeContent(value.content),
@@ -522,6 +555,7 @@ function validateWorkingMemoryItem(input: unknown): WorkingMemoryDocumentItem {
     conversationScope: requiredLine(value.conversationScope, "conversationScope", 64),
     conversationTitle: optionalLine(value.conversationTitle, 500),
     sourceKind,
+    ...(sourceDecisionKey ? { sourceDecisionKey } : {}),
     batchId: optionalLine(value.batchId, 256),
     userId: optionalLine(value.userId, 64),
     userIds: normalizedStringArray(value.userIds, 64),
@@ -600,7 +634,11 @@ async function readOptionalRegularFile(filePath: string) {
 
 function normalizeContent(value: unknown) {
   const content = String(value ?? "").replace(/\r\n/g, "\n").trim();
-  if (!content || content.length > WORKING_MEMORY_MAX_ITEM_CHARS || content.includes(ITEM_MARKER)) {
+  if (
+    !content
+    || Array.from(content).length > WORKING_MEMORY_MAX_ITEM_CHARS
+    || content.includes(ITEM_MARKER)
+  ) {
     throw workingMemoryError(
       "WORKING_MEMORY_ITEM_INVALID",
       `Working memory content must contain 1 to ${WORKING_MEMORY_MAX_ITEM_CHARS} characters.`

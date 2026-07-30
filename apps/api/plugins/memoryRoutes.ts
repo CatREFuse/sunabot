@@ -5,6 +5,7 @@ import {
   deleteMemoryEntry,
   listMemoryEntries,
   listMemoryOperationLogs,
+  readMemoryProcessingHealth,
   recallMemory,
   updateMemoryEntry,
   type MemoryEntry
@@ -23,6 +24,7 @@ const sourceQuery = {
 const operations = {
   listMemoryEntries,
   listMemoryOperationLogs,
+  readMemoryProcessingHealth,
   recallMemory,
   createMemoryEntry,
   updateMemoryEntry,
@@ -31,6 +33,7 @@ const operations = {
 
 export interface MemoryRouteRuntime {
   enrichMemoryEntries(entries: MemoryEntry[]): MemoryEntry[];
+  memoryProcessingPendingCount(): Promise<number>;
   reload(config: AppConfig): Promise<void>;
   listDreamHistory?(limit: number): DreamHistoryEnvelope | Promise<DreamHistoryEnvelope>;
   forceDream?(input: { accountId: string }): Promise<{
@@ -60,8 +63,15 @@ export function registerMemoryRoutes(app: FastifyInstance, dependencies: MemoryR
   }, async (request) => {
     const query = request.query as { source?: string };
     const context = contextFor(request);
-    const payload = await memory.listMemoryEntries(context.config, query.source);
-    return { ...payload, entries: context.runtime.enrichMemoryEntries(payload.entries) };
+    const [payload, pending] = await Promise.all([
+      memory.listMemoryEntries(context.config, query.source),
+      context.runtime.memoryProcessingPendingCount()
+    ]);
+    return {
+      ...payload,
+      entries: context.runtime.enrichMemoryEntries(payload.entries),
+      health: memory.readMemoryProcessingHealth(context.config, { pending })
+    };
   });
 
   app.get("/api/memory/operations", {

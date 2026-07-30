@@ -249,9 +249,11 @@ describe("provider protocols", () => {
       expect.objectContaining({ inlineData: { mimeType: "image/png", data: "AAAA" } })
     ]));
     const geminiCodex = body.tools[0].functionDeclarations.find((tool: Record<string, unknown>) => tool.name === "codex");
-    expect(geminiCodex.parameters.required).toContain("dispatch_message");
+    expect(geminiCodex.parametersJsonSchema.required).toContain("dispatch_message");
     expectProviderSafeWebFetch({
-      ...body.tools[0].functionDeclarations.find((tool: Record<string, unknown>) => tool.name === "webfetch"),
+      parameters: body.tools[0].functionDeclarations
+        .find((tool: Record<string, unknown>) => tool.name === "webfetch")
+        .parametersJsonSchema,
       strict: false
     });
   });

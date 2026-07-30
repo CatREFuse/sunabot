@@ -40,7 +40,8 @@ describe("MemorySchedulerStore", () => {
     expect(replay?.messageIds).toEqual(claim?.messageIds);
 
     await recovered.complete(replay!);
-    expect(await recovered.claimNext(3, Date.now())).toBeUndefined();
+    expect((await recovered.claimNext(3, Date.now()))?.messages.map((item) => item.sequence))
+      .toEqual([4, 5, 6]);
   });
 
   it("does not flush a partial batch after a silence deadline", async () => {
@@ -80,26 +81,288 @@ describe("MemorySchedulerStore", () => {
     expect(snapshot.conversations[privateConversation().id]?.pendingMessages.map((item) => item.sequence)).toEqual([3]);
   });
 
-  it("spends one full message window before retrying a failed batch", async () => {
+  it("retries the same failed batch after backoff without consuming newer messages", async () => {
     const scheduler = await createScheduler();
     await scheduler.enqueue(privateConversation(), [message(1), message(2)]);
     const claim = await scheduler.claimNext(2, 1_000);
     await scheduler.fail(claim!, 1_000);
 
     const recovered = await createSchedulerFrom(scheduler);
-    expect(await recovered.claimNext(2, 999_999)).toBeUndefined();
+    expect(await recovered.claimNext(2, 60_999)).toBeUndefined();
     await recovered.enqueue(privateConversation(), [message(3)]);
-    expect(await recovered.claimNext(2, 999_999)).toBeUndefined();
-    await recovered.enqueue(privateConversation(), [message(4)]);
-    const retry = await recovered.claimNext(2, 1_000_000);
+    expect(await recovered.claimNext(2, 60_999)).toBeUndefined();
+    expect(await recovered.nextWakeAt(2, 60_999)).toBe(61_000);
+
+    const retry = await recovered.claimNext(2, 61_000);
     expect(retry?.batchId).toBe(claim?.batchId);
-    await recovered.complete(retry!, 1_000_001);
+    expect(retry?.messageIds).toEqual(claim?.messageIds);
+    expect(retry?.attemptMessageCount).toBe(0);
+    await recovered.complete(retry!, 61_001);
+
+    await recovered.enqueue(privateConversation(), [message(4)]);
+    const next = await recovered.claimNext(2, 61_002);
+    expect(next?.messages.map((item) => item.sequence)).toEqual([3, 4]);
 
     const snapshot = await recovered.snapshot();
     expect(snapshot.conversations[privateConversation().id]?.failureCount).toBe(0);
-    expect(await recovered.claimNext(2, 1_000_002)).toBeUndefined();
-    await recovered.enqueue(privateConversation(), [message(5), message(6)]);
-    expect((await recovered.claimNext(2, 1_000_003))?.messages.map((item) => item.sequence)).toEqual([3, 4]);
+  });
+
+  it("increments exponential backoff after each recovered running-batch crash", async () => {
+    const scheduler = await createScheduler();
+    await scheduler.enqueue(privateConversation(), [message(1), message(2)]);
+    const first = await scheduler.claimNext(2);
+    expect(first).toBeDefined();
+
+    const recoveredOnce = await reopenSchedulerFrom(scheduler);
+    const firstRecovery = (await recoveredOnce.snapshot())
+      .conversations[privateConversation().id]!;
+    expect(firstRecovery.failureCount).toBe(1);
+    expect(Date.parse(firstRecovery.nextRetryAt!) - Date.parse(firstRecovery.updatedAt))
+      .toBe(60_000);
+
+    const secondClaim = await recoveredOnce.claimNext(2, Date.parse(firstRecovery.nextRetryAt!));
+    expect(secondClaim?.batchId).toBe(first?.batchId);
+
+    const recoveredTwice = await reopenSchedulerFrom(recoveredOnce);
+    const secondRecovery = (await recoveredTwice.snapshot())
+      .conversations[privateConversation().id]!;
+    expect(secondRecovery.failureCount).toBe(2);
+    expect(Date.parse(secondRecovery.nextRetryAt!) - Date.parse(secondRecovery.updatedAt))
+      .toBe(120_000);
+  });
+
+  it("spends one early retry per later full window without exceeding the available windows", async () => {
+    const scheduler = await createScheduler();
+    await scheduler.enqueue(privateConversation(), [message(1), message(2)]);
+    const first = await scheduler.claimNext(2, 1_000);
+    await scheduler.fail(first!, 1_000);
+
+    await scheduler.enqueue(
+      privateConversation(),
+      [message(3), message(4), message(5), message(6)]
+    );
+    const earlyRetry = await scheduler.claimNext(2, 1_001);
+    expect(earlyRetry?.batchId).toBe(first?.batchId);
+    expect(earlyRetry?.messageIds).toEqual(first?.messageIds);
+    await scheduler.fail(earlyRetry!, 1_001);
+
+    const secondEarlyRetry = await scheduler.claimNext(2, 1_001);
+    expect(secondEarlyRetry?.batchId).toBe(first?.batchId);
+    expect(secondEarlyRetry?.messageIds).toEqual(first?.messageIds);
+    await scheduler.fail(secondEarlyRetry!, 1_001);
+
+    expect(await scheduler.claimNext(2, 1_001)).toBeUndefined();
+    expect(await scheduler.nextWakeAt(2, 1_001)).toBe(241_001);
+
+    const recovered = await reopenSchedulerFrom(scheduler);
+    expect(await recovered.claimNext(2, 241_000)).toBeUndefined();
+    const scheduledRetry = await recovered.claimNext(2, 241_001);
+    expect(scheduledRetry?.batchId).toBe(first?.batchId);
+    await recovered.complete(scheduledRetry!, 241_002);
+
+    const second = await recovered.claimNext(2, 241_003);
+    expect(second?.messages.map((item) => item.sequence)).toEqual([3, 4]);
+    await recovered.complete(second!, 241_004);
+    expect((await recovered.claimNext(2, 241_005))?.messages.map((item) => item.sequence))
+      .toEqual([5, 6]);
+  });
+
+  it("persists one debt-alert latch per continuous over-limit episode", async () => {
+    const scheduler = await createScheduler();
+    await scheduler.enqueue(
+      privateConversation(),
+      Array.from({ length: 101 }, (_, index) => message(index + 1))
+    );
+
+    const first = await scheduler.claimDebtAlert(100, 1_000);
+    expect(first).toMatchObject({ pendingMessageCount: 101, threshold: 100 });
+
+    const recoveredBeforeQueue = await createSchedulerFrom(scheduler);
+    expect(await recoveredBeforeQueue.claimDebtAlert(100, 2_000)).toEqual(first);
+    await recoveredBeforeQueue.bindDebtAlertTarget(
+      first!.episodeId,
+      "private:171419991",
+      2_500
+    );
+    expect(await recoveredBeforeQueue.markDebtAlertQueued(first!.episodeId, 3_000)).toBe(true);
+    expect(await recoveredBeforeQueue.claimDebtAlert(100, 4_000)).toBeUndefined();
+
+    const recoveredAfterQueue = await reopenSchedulerFrom(recoveredBeforeQueue);
+    expect(await recoveredAfterQueue.claimDebtAlert(100, 5_000)).toBeUndefined();
+
+    const processed = await recoveredAfterQueue.claimNext(1, 5_000);
+    await recoveredAfterQueue.complete(processed!, 5_001);
+    expect(await recoveredAfterQueue.claimDebtAlert(100, 6_000)).toBeUndefined();
+
+    await recoveredAfterQueue.enqueue(privateConversation(), [message(102)]);
+    const second = await recoveredAfterQueue.claimDebtAlert(100, 7_000);
+    expect(second).toMatchObject({ pendingMessageCount: 101, threshold: 100 });
+    expect(second?.episodeId).not.toBe(first?.episodeId);
+  });
+
+  it("does not acknowledge a stale debt-alert episode", async () => {
+    const scheduler = await createScheduler();
+    await scheduler.enqueue(
+      privateConversation(),
+      Array.from({ length: 101 }, (_, index) => message(index + 1))
+    );
+    const claim = await scheduler.claimDebtAlert();
+
+    expect(await scheduler.markDebtAlertQueued("stale-episode")).toBe(false);
+    expect(await scheduler.claimDebtAlert()).toEqual(claim);
+  });
+
+  it("refuses to mark an unbound debt-alert episode as queued", async () => {
+    const scheduler = await createScheduler();
+    await scheduler.enqueue(
+      privateConversation(),
+      Array.from({ length: 101 }, (_, index) => message(index + 1))
+    );
+    const claim = await scheduler.claimDebtAlert(100, 1_000);
+
+    expect(await scheduler.markDebtAlertQueued(claim!.episodeId, 2_000)).toBe(false);
+    expect(await scheduler.claimDebtAlert(100, 3_000)).toEqual(claim);
+  });
+
+  it("safely reopens a legacy queued debt-alert episode that has no target", async () => {
+    const { scheduler, config } = await createUninitializedScheduler();
+    await scheduler.initialize();
+    await scheduler.enqueue(
+      privateConversation(),
+      Array.from({ length: 101 }, (_, index) => message(index + 1))
+    );
+    applicationDataStore(config).writeMemoryDebtAlertState({
+      schemaVersion: 1,
+      active: true,
+      episodeId: "legacy-unbound-episode",
+      queued: true,
+      updatedAt: "2026-07-31T00:00:00.000Z"
+    });
+
+    await expect(scheduler.claimDebtAlert(100, 1_000)).resolves.toMatchObject({
+      episodeId: "legacy-unbound-episode",
+      pendingMessageCount: 101
+    });
+    expect(applicationDataStore(config).readMemoryDebtAlertState()).toMatchObject({
+      active: true,
+      episodeId: "legacy-unbound-episode",
+      queued: false
+    });
+  });
+
+  it("persists the first debt-alert target before queueing and reuses it after recovery", async () => {
+    const scheduler = await createScheduler();
+    await scheduler.enqueue(
+      privateConversation(),
+      Array.from({ length: 101 }, (_, index) => message(index + 1))
+    );
+    const claim = await scheduler.claimDebtAlert(100, 1_000);
+
+    await expect(scheduler.bindDebtAlertTarget(
+      claim!.episodeId,
+      "account:connected-a:private:171419991",
+      2_000
+    )).resolves.toBe("account:connected-a:private:171419991");
+
+    const recovered = await reopenSchedulerFrom(scheduler);
+    await expect(recovered.claimDebtAlert(100, 3_000)).resolves.toEqual({
+      ...claim,
+      targetConversationId: "account:connected-a:private:171419991"
+    });
+    await expect(recovered.bindDebtAlertTarget(
+      claim!.episodeId,
+      "account:connected-b:private:171419991",
+      4_000
+    )).resolves.toBe("account:connected-a:private:171419991");
+  });
+
+  it("rechecks the episode and pending threshold before enqueueing a debt alert", async () => {
+    const { scheduler, config } = await createUninitializedScheduler();
+    await scheduler.initialize();
+    await scheduler.enqueue(
+      privateConversation(),
+      Array.from({ length: 101 }, (_, index) => message(index + 1))
+    );
+    const claim = await scheduler.claimDebtAlert(100, 1_000);
+    const targetConversationId = "private:171419991";
+    await scheduler.bindDebtAlertTarget(claim!.episodeId, targetConversationId, 2_000);
+
+    const processed = await scheduler.claimNext(1, 3_000);
+    await scheduler.complete(processed!, 3_001);
+    let enqueueCalls = 0;
+    await expect(scheduler.enqueueDebtAlertIfDue(
+      claim!.episodeId,
+      targetConversationId,
+      async () => {
+        enqueueCalls += 1;
+        return { queued: true };
+      },
+      100,
+      4_000
+    )).resolves.toEqual({ executed: false, reason: "not_due" });
+    expect(enqueueCalls).toBe(0);
+    expect(applicationDataStore(config).readMemoryDebtAlertState()).toMatchObject({
+      active: false,
+      episodeId: null,
+      queued: false
+    });
+  });
+
+  it("marks the bound episode queued inside the same scheduler lock as Session enqueue", async () => {
+    const scheduler = await createScheduler();
+    await scheduler.enqueue(
+      privateConversation(),
+      Array.from({ length: 101 }, (_, index) => message(index + 1))
+    );
+    const claim = await scheduler.claimDebtAlert(100, 1_000);
+    const targetConversationId = "private:171419991";
+    await scheduler.bindDebtAlertTarget(claim!.episodeId, targetConversationId, 2_000);
+
+    await expect(scheduler.enqueueDebtAlertIfDue(
+      claim!.episodeId,
+      targetConversationId,
+      async () => ({ queued: true, eventId: "event-1" }),
+      100,
+      3_000
+    )).resolves.toEqual({
+      executed: true,
+      result: { queued: true, eventId: "event-1" }
+    });
+    expect(await scheduler.claimDebtAlert(100, 4_000)).toBeUndefined();
+  });
+
+  it("keeps debt-alert latches isolated between Agent databases", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-memory-agent-alert-"));
+    temporaryDirectories.push(root);
+    const planaConfig = createAdminTestConfig(path.join(root, "plana"));
+    const aronaConfig = createAdminTestConfig(path.join(root, "agents", "arona"));
+    aronaConfig.persona.defaultAgentId = "arona";
+    const plana = new MemorySchedulerStore(planaConfig);
+    const arona = new MemorySchedulerStore(aronaConfig);
+    await Promise.all([plana.initialize(), arona.initialize()]);
+    await Promise.all([
+      plana.enqueue(privateConversation(), Array.from({ length: 101 }, (_, index) => message(index + 1))),
+      arona.enqueue(privateConversation(), Array.from({ length: 101 }, (_, index) => message(index + 1)))
+    ]);
+
+    const [planaClaim, aronaClaim] = await Promise.all([
+      plana.claimDebtAlert(100, 1_000),
+      arona.claimDebtAlert(100, 1_000)
+    ]);
+    expect(planaClaim?.episodeId).not.toBe(aronaClaim?.episodeId);
+    await plana.bindDebtAlertTarget(planaClaim!.episodeId, "private:171419991", 2_000);
+    await arona.bindDebtAlertTarget(
+      aronaClaim!.episodeId,
+      "account:arona-connected:private:171419991",
+      2_000
+    );
+    await plana.markDebtAlertQueued(planaClaim!.episodeId, 3_000);
+
+    expect(await plana.claimDebtAlert(100, 4_000)).toBeUndefined();
+    expect(await arona.claimDebtAlert(100, 4_000)).toMatchObject({
+      episodeId: aronaClaim!.episodeId,
+      targetConversationId: "account:arona-connected:private:171419991"
+    });
   });
 
   it("does not re-enqueue messages at or before the committed cursor", async () => {

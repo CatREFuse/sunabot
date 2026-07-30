@@ -15,6 +15,7 @@ import type {
 import { CacheStore } from "../../services/media/attachments/cache.js";
 import type {
   CodexCoordinatorSettings,
+  CodexToolUsageObserver,
   SessionClaimState
 } from "../../services/sessions/sessionCoordinatorTypes.js";
 import { SessionStore, type ToolJobRecord } from "../../services/sessions/sessionStore.js";
@@ -41,6 +42,9 @@ describe("Codex artifact finalizer", () => {
     "revalidates and publishes a runner artifact into the frozen %s Workbench",
     async (backend) => {
       const fixture = await artifactFixture(backend);
+      const controlWorkspace = path.join(fixture.root, "selected-project");
+      (fixture.job.arguments as Record<string, unknown>).workspace_path = controlWorkspace;
+      fixture.result.content = `Created the result from ${controlWorkspace} in ${fixture.jobDir}.`;
 
       const finalized = await finalizeCodexResultArtifacts({
         job: fixture.job,
@@ -63,6 +67,7 @@ describe("Codex artifact finalizer", () => {
       });
       expect(finalized.resultFile).toBeUndefined();
       expect(finalized.content).not.toContain(fixture.jobDir);
+      expect(finalized.content).not.toContain(controlWorkspace);
       expect(artifact?.relativePath).not.toContain(fixture.jobDir);
       await expect(fs.readFile(path.join(
         fixture.settings.workspacePath,
@@ -396,9 +401,12 @@ describe("Codex artifact finalizer", () => {
     const fixture = await artifactFixture("native");
     fixture.settings.authFile = path.join(fixture.root, "secrets", "codex", "auth.json");
     fixture.settings.executable = path.join(fixture.root, "bin", "codex");
+    const controlWorkspace = path.join(fixture.root, "selected-project");
+    (fixture.job.arguments as Record<string, unknown>).workspace_path = controlWorkspace;
     const exposed = [
       fixture.jobDir,
       fixture.settings.workspacePath,
+      controlWorkspace,
       fixture.settings.authFile,
       fixture.settings.executable
     ].join(" ");
@@ -421,8 +429,66 @@ describe("Codex artifact finalizer", () => {
 
     expect(JSON.stringify(finalized)).not.toContain(fixture.jobDir);
     expect(JSON.stringify(finalized)).not.toContain(fixture.settings.workspacePath);
+    expect(JSON.stringify(finalized)).not.toContain(controlWorkspace);
     expect(JSON.stringify(finalized)).not.toContain(fixture.settings.authFile);
     expect(JSON.stringify(finalized)).not.toContain(fixture.settings.executable);
+  });
+
+  it("redacts every sensitive path from publication exceptions", async () => {
+    const fixture = await artifactFixture("native");
+    fixture.settings.authFile = path.join(fixture.root, "secrets", "codex", "auth.json");
+    fixture.settings.executable = path.join(fixture.root, "bin", "codex");
+    const controlWorkspace = path.join(fixture.root, "selected-project");
+    (fixture.job.arguments as Record<string, unknown>).workspace_path = controlWorkspace;
+    const exposed = [
+      fixture.jobDir,
+      fixture.settings.workspacePath,
+      controlWorkspace,
+      fixture.settings.authFile,
+      fixture.settings.executable
+    ].join(" ");
+
+    const failure = await finalizeCodexResultArtifacts({
+      job: fixture.job,
+      settings: fixture.settings,
+      result: fixture.result,
+      signal: new AbortController().signal,
+      cache: fixture.cache,
+      publisher: {
+        async publish() {
+          throw Object.assign(new Error(exposed), {
+            code: "codex_artifact_publish_failed"
+          });
+        }
+      }
+    }).catch((error: unknown) => error);
+
+    expect(failure).toMatchObject({ code: "codex_artifact_publish_failed" });
+    expect(failure).toBeInstanceOf(Error);
+    const message = (failure as Error).message;
+    expect(message).not.toContain(fixture.jobDir);
+    expect(message).not.toContain(fixture.settings.workspacePath);
+    expect(message).not.toContain(controlWorkspace);
+    expect(message).not.toContain(fixture.settings.authFile);
+    expect(message).not.toContain(fixture.settings.executable);
+  });
+
+  it("redacts a missing job root from filesystem exceptions", async () => {
+    const fixture = await artifactFixture("native");
+    const missingJobRoot = path.join(fixture.root, "missing-job-root");
+    fixture.settings.jobRoot = missingJobRoot;
+
+    const failure = await finalizeCodexResultArtifacts({
+      job: fixture.job,
+      settings: fixture.settings,
+      result: fixture.result,
+      signal: new AbortController().signal,
+      cache: fixture.cache
+    }).catch((error: unknown) => error);
+
+    expect(failure).toMatchObject({ code: "codex_artifact_publish_failed" });
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).not.toContain(missingJobRoot);
   });
 
   it("keeps a legacy result with no artifact declarations", async () => {
@@ -547,6 +613,50 @@ describe("SessionToolJobProcessor artifact finalization", () => {
     store.close();
   });
 
+  it("redacts finalizer paths before persisting the durable failure", async () => {
+    const store = new SessionStore({ databasePath: ":memory:" });
+    const job = claimCodexJob(store);
+    const controlWorkspace = path.join(TEST_ROOT, "processor-selected-project");
+    (job.arguments as Record<string, unknown>).workspace_path = controlWorkspace;
+    const processor = processorFixture(store, {
+      async run() {
+        return codexResult(job.id);
+      }
+    }, async () => {
+      const exposed = [
+        path.join(processor.settings.jobRoot, job.id),
+        processor.settings.workspacePath,
+        controlWorkspace,
+        processor.settings.authFile,
+        processor.settings.executable
+      ].join(" ");
+      throw Object.assign(new Error(exposed), {
+        code: "codex_artifact_source_changed"
+      });
+    });
+    processor.settings.workspacePath = path.join(TEST_ROOT, "processor-agent");
+    processor.settings.authFile = path.join(TEST_ROOT, "processor-auth.json");
+    processor.settings.executable = path.join(TEST_ROOT, "processor-codex");
+
+    await processor.processor.process(
+      { job, settings: processor.settings, state: processor.state },
+      new AbortController().signal
+    );
+
+    const persisted = store.getToolJob(job.id);
+    expect(persisted).toMatchObject({
+      status: "failed",
+      error: { code: "codex_artifact_source_changed" }
+    });
+    const serialized = JSON.stringify(persisted?.error);
+    expect(serialized).not.toContain(path.join(processor.settings.jobRoot, job.id));
+    expect(serialized).not.toContain(processor.settings.workspacePath);
+    expect(serialized).not.toContain(controlWorkspace);
+    expect(serialized).not.toContain(processor.settings.authFile);
+    expect(serialized).not.toContain(processor.settings.executable);
+    store.close();
+  });
+
   it("rolls back staged publication when the claim expires before durable completion", async () => {
     const store = new SessionStore({ databasePath: ":memory:" });
     const job = claimCodexJob(store);
@@ -577,6 +687,57 @@ describe("SessionToolJobProcessor artifact finalization", () => {
       status: "failed",
       error: { message: "claim expired" }
     });
+    store.close();
+  });
+
+  it("persists a stable failure when staged publication rollback fails", async () => {
+    const store = new SessionStore({ databasePath: ":memory:" });
+    const job = claimCodexJob(store);
+    const residualPath = path.join(TEST_ROOT, "rollback-residual", "artifact.txt");
+    await fs.mkdir(path.dirname(residualPath), { recursive: true });
+    await fs.writeFile(residualPath, "residual artifact");
+    const observeCodexToolUsage = vi.fn();
+    let claimChecks = 0;
+    const processor = processorFixture(store, {
+      async run() {
+        return {
+          ...codexResult(job.id),
+          usage: { input_tokens: 21, output_tokens: 4 }
+        };
+      }
+    }, async ({ result }) => ({
+      result,
+      commit() {},
+      async rollback() {
+        throw new Error(`could not remove ${residualPath}`);
+      }
+    }), {
+      assertClaimUsable() {
+        claimChecks += 1;
+        if (claimChecks === 2) throw new Error("claim expired");
+      },
+      observeCodexToolUsage
+    });
+
+    await processor.processor.process(
+      { job, settings: processor.settings, state: processor.state },
+      new AbortController().signal
+    );
+
+    await expect(fs.readFile(residualPath, "utf8")).resolves.toBe("residual artifact");
+    expect(store.getToolJob(job.id)).toMatchObject({
+      status: "failed",
+      error: {
+        code: "codex_artifact_rollback_failed",
+        message: "codex_artifact_rollback_failed"
+      }
+    });
+    expect(JSON.stringify(store.getToolJob(job.id)?.error)).not.toContain(residualPath);
+    expect(observeCodexToolUsage).toHaveBeenCalledWith(expect.objectContaining({
+      ok: false,
+      status: "failed",
+      usage: { input_tokens: 21, output_tokens: 4 }
+    }));
     store.close();
   });
 });
@@ -655,6 +816,7 @@ function processorFixture(
       state: SessionClaimState,
       signal: AbortSignal
     ) => void;
+    observeCodexToolUsage?: CodexToolUsageObserver;
   } = {}
 ) {
   const settings: CodexCoordinatorSettings = {
@@ -678,6 +840,7 @@ function processorFixture(
       codexRunner,
       cleanupCodexProcess: async () => ({ status: "terminated" }),
       finalizeCodexResult,
+      observeCodexToolUsage: overrides.observeCodexToolUsage,
       workerId: "artifact-finalizer-worker",
       isStopped: () => false,
       assertClaimUsable: overrides.assertClaimUsable ?? ((claim, signal) => {

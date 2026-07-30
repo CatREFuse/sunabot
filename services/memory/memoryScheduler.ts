@@ -9,9 +9,21 @@ import {
   orderedUniqueMemoryMessages,
   selectGroupMemoryMessagesNearAssistant
 } from "./groupMemoryWindow.js";
+import {
+  bindMemoryDebtAlertTarget,
+  claimMemoryDebtAlert,
+  enqueueMemoryDebtAlertIfDue,
+  markMemoryDebtAlertQueued,
+  MEMORY_DEBT_ALERT_THRESHOLD,
+  type MemoryDebtAlertClaim
+} from "./memoryDebtAlert.js";
 import { memoryDatabasePath, memoryRepository } from "./persistence.js";
 
+export { MEMORY_DEBT_ALERT_THRESHOLD } from "./memoryDebtAlert.js";
+export type { MemoryDebtAlertClaim } from "./memoryDebtAlert.js";
 export type MemorySchedulerStatus = "idle" | "queued" | "running";
+export const MEMORY_RETRY_BASE_DELAY_MS = 60_000;
+export const MEMORY_RETRY_MAX_DELAY_MS = 30 * 60_000;
 
 export interface MemoryConversationDescriptor {
   id: string;
@@ -61,7 +73,10 @@ interface StoredConversation {
   groupMemorySelectionSource?: MemoryQueuedMessage[];
   dirty: boolean;
   failureCount: number;
+  nextRetryAt?: string;
+  lastFailureCode?: string;
   unattemptedMessageCount?: number;
+  earlyRetryConsumedThroughCount?: number;
   lastCommittedSequence: number;
   updatedAt: string;
 }
@@ -87,6 +102,7 @@ export class MemorySchedulerStore {
     return this.exclusive(async () => {
       const store = await this.read();
       let changed = false;
+      const now = new Date();
       for (const conversation of Object.values(store.conversations)) {
         if (conversation.unattemptedMessageCount == null) {
           conversation.unattemptedMessageCount = conversation.currentBatch || conversation.failureCount > 0
@@ -94,18 +110,41 @@ export class MemorySchedulerStore {
             : conversation.pendingMessages.length;
           changed = true;
         }
+        if (conversation.currentBatch) {
+          const availableEarlyRetryCount = conversation.unattemptedMessageCount ?? 0;
+          if (
+            !Number.isSafeInteger(conversation.earlyRetryConsumedThroughCount) ||
+            Number(conversation.earlyRetryConsumedThroughCount) < 0
+          ) {
+            conversation.earlyRetryConsumedThroughCount = 0;
+            changed = true;
+          } else if (Number(conversation.earlyRetryConsumedThroughCount) > availableEarlyRetryCount) {
+            conversation.earlyRetryConsumedThroughCount = availableEarlyRetryCount;
+            changed = true;
+          }
+        } else if (conversation.earlyRetryConsumedThroughCount != null) {
+          conversation.earlyRetryConsumedThroughCount = undefined;
+          changed = true;
+        }
         if (conversation.state === "running") {
           conversation.state = "queued";
           conversation.dirty = true;
-          conversation.updatedAt = new Date().toISOString();
+          if (conversation.currentBatch) {
+            conversation.failureCount = Math.max(0, conversation.failureCount) + 1;
+            conversation.nextRetryAt = new Date(
+              now.getTime() + memoryRetryDelayMs(conversation.failureCount)
+            ).toISOString();
+          }
+          conversation.updatedAt = now.toISOString();
           changed = true;
         }
         if ("silenceDueAt" in conversation) {
           delete (conversation as StoredConversation & { silenceDueAt?: string }).silenceDueAt;
           changed = true;
         }
-        if ("nextRetryAt" in conversation) {
-          delete (conversation as StoredConversation & { nextRetryAt?: string }).nextRetryAt;
+        if (!conversation.currentBatch && (conversation.nextRetryAt || conversation.lastFailureCode)) {
+          conversation.nextRetryAt = undefined;
+          conversation.lastFailureCode = undefined;
           changed = true;
         }
         if (
@@ -200,7 +239,7 @@ export class MemorySchedulerStore {
       const store = await this.read();
       const candidates = Object.values(store.conversations)
         .filter((item) => item.pendingMessages.length > 0 && item.state !== "running")
-        .filter((item) => this.isConversationReady(item, threshold))
+        .filter((item) => this.isConversationReady(item, threshold, nowMs))
         .sort((left, right) => {
           const leftAt = left.pendingMessages[0]?.at ?? left.updatedAt;
           const rightAt = right.pendingMessages[0]?.at ?? right.updatedAt;
@@ -209,6 +248,7 @@ export class MemorySchedulerStore {
       const selected = candidates[0];
       if (!selected) return undefined;
       const currentBatchCommitted = this.isCurrentBatchCommitted(selected);
+      const retryingCurrentBatch = Boolean(selected.currentBatch);
 
       let messages: MemoryQueuedMessage[];
       let batchId: string;
@@ -216,6 +256,12 @@ export class MemorySchedulerStore {
         const ids = new Set(selected.currentBatch.messageIds);
         messages = selected.pendingMessages.filter((message) => ids.has(messageKey(message)));
         batchId = selected.currentBatch.batchId;
+        if (this.hasUnusedEarlyRetryWindow(selected, threshold)) {
+          selected.earlyRetryConsumedThroughCount = Math.min(
+            selected.unattemptedMessageCount ?? 0,
+            (selected.earlyRetryConsumedThroughCount ?? 0) + threshold
+          );
+        }
       } else {
         messages = selected.pendingMessages.slice(0, Math.max(1, threshold));
         batchId = createBatchId(selected.conversation.id, messages);
@@ -224,9 +270,11 @@ export class MemorySchedulerStore {
           messageIds: messages.map(messageKey),
           startedAt: new Date(nowMs).toISOString()
         };
+        selected.earlyRetryConsumedThroughCount = 0;
       }
       if (!messages.length) {
         selected.currentBatch = undefined;
+        selected.earlyRetryConsumedThroughCount = undefined;
         selected.state = selected.pendingMessages.length ? "queued" : "idle";
         selected.updatedAt = new Date(nowMs).toISOString();
         await this.write(store);
@@ -234,7 +282,8 @@ export class MemorySchedulerStore {
       }
       selected.state = "running";
       selected.dirty = false;
-      const attemptMessageCount = currentBatchCommitted ? 0 : threshold;
+      selected.nextRetryAt = undefined;
+      const attemptMessageCount = currentBatchCommitted || retryingCurrentBatch ? 0 : threshold;
       selected.unattemptedMessageCount = Math.max(
         0,
         (selected.unattemptedMessageCount ?? 0) - attemptMessageCount
@@ -264,7 +313,10 @@ export class MemorySchedulerStore {
         ...completedMessages.map((message) => message.sequence)
       );
       conversation.currentBatch = undefined;
+      conversation.earlyRetryConsumedThroughCount = undefined;
       conversation.failureCount = 0;
+      conversation.nextRetryAt = undefined;
+      conversation.lastFailureCode = undefined;
       if (options.refundAttempt) {
         conversation.unattemptedMessageCount = (conversation.unattemptedMessageCount ?? 0) + claim.attemptMessageCount;
       }
@@ -275,7 +327,11 @@ export class MemorySchedulerStore {
     });
   }
 
-  async fail(claim: MemoryClaim, nowMs = Date.now()) {
+  async fail(
+    claim: MemoryClaim,
+    nowMs = Date.now(),
+    options: { reasonCode?: string } = {}
+  ) {
     return this.exclusive(async () => {
       const store = await this.read();
       const conversation = store.conversations[claim.conversation.id];
@@ -283,24 +339,104 @@ export class MemorySchedulerStore {
       conversation.failureCount += 1;
       conversation.state = "queued";
       conversation.dirty = true;
+      conversation.nextRetryAt = new Date(
+        nowMs + memoryRetryDelayMs(conversation.failureCount)
+      ).toISOString();
+      conversation.lastFailureCode = normalizedFailureCode(options.reasonCode);
       conversation.updatedAt = new Date(nowMs).toISOString();
       await this.write(store);
     });
   }
 
-  async nextWakeAt(threshold: number) {
+  async nextWakeAt(threshold: number, nowMs = Date.now()) {
     return this.exclusive(async () => {
       const store = await this.read();
+      let nextRetryAt: number | undefined;
       for (const conversation of Object.values(store.conversations)) {
         if (!conversation.pendingMessages.length || conversation.state === "running") continue;
-        if (this.isConversationReady(conversation, threshold)) return Date.now();
+        if (isGroupMemoryScope(conversation.conversation.scope)) {
+          if (conversation.groupMemorySelectionPolicy !== GROUP_MEMORY_SELECTION_POLICY) continue;
+          const source = normalizeGroupMemorySelectionSource(conversation.groupMemorySelectionSource);
+          if (
+            !source?.length
+            || !sameMessages(conversation.groupMemorySelectionSource ?? [], source)
+          ) continue;
+        }
+        if (this.isCurrentBatchCommitted(conversation)) return nowMs;
+        if (conversation.currentBatch) {
+          const retryAt = Date.parse(conversation.nextRetryAt ?? "");
+          if (!Number.isFinite(retryAt) || retryAt <= nowMs) return nowMs;
+          if (this.hasUnusedEarlyRetryWindow(conversation, threshold)) return nowMs;
+          nextRetryAt = nextRetryAt == null ? retryAt : Math.min(nextRetryAt, retryAt);
+          continue;
+        }
+        if ((conversation.unattemptedMessageCount ?? 0) >= threshold) return nowMs;
       }
-      return undefined;
+      return nextRetryAt;
     });
   }
 
   async snapshot() {
     return this.exclusive(() => this.read());
+  }
+
+  async claimDebtAlert(
+    threshold = MEMORY_DEBT_ALERT_THRESHOLD,
+    nowMs = Date.now()
+  ): Promise<MemoryDebtAlertClaim | undefined> {
+    return this.exclusive(async () => {
+      const store = await this.read();
+      return claimMemoryDebtAlert(
+        memoryRepository(this.config),
+        schedulerPendingMessageCount(store),
+        threshold,
+        nowMs
+      );
+    });
+  }
+
+  async bindDebtAlertTarget(
+    episodeId: string,
+    targetConversationId: string,
+    nowMs = Date.now()
+  ) {
+    return this.exclusive(async () => {
+      return bindMemoryDebtAlertTarget(
+        memoryRepository(this.config),
+        episodeId,
+        targetConversationId,
+        nowMs
+      );
+    });
+  }
+
+  async enqueueDebtAlertIfDue<T extends { queued: boolean }>(
+    episodeId: string,
+    targetConversationId: string,
+    enqueue: () => Promise<T>,
+    threshold = MEMORY_DEBT_ALERT_THRESHOLD,
+    nowMs = Date.now()
+  ): Promise<
+    | { executed: false; reason: "not_due" | "episode_changed" }
+    | { executed: true; result: T }
+  > {
+    return this.exclusive(async () => {
+      const store = await this.read();
+      return enqueueMemoryDebtAlertIfDue(
+        memoryRepository(this.config),
+        schedulerPendingMessageCount(store),
+        { episodeId, targetConversationId, threshold, nowMs },
+        enqueue
+      );
+    });
+  }
+
+  async markDebtAlertQueued(episodeId: string, nowMs = Date.now()) {
+    return this.exclusive(async () => markMemoryDebtAlertQueued(
+      memoryRepository(this.config),
+      episodeId,
+      nowMs
+    ));
   }
 
   databasePath() {
@@ -360,6 +496,7 @@ export class MemorySchedulerStore {
       }
     } else {
       conversation.currentBatch = undefined;
+      conversation.earlyRetryConsumedThroughCount = undefined;
       conversation.failureCount = 0;
     }
 
@@ -367,6 +504,12 @@ export class MemorySchedulerStore {
     conversation.unattemptedMessageCount = conversation.pendingMessages
       .filter((message) => !currentBatchKeys.has(messageKey(message)))
       .length;
+    if (conversation.currentBatch) {
+      conversation.earlyRetryConsumedThroughCount = Math.min(
+        conversation.earlyRetryConsumedThroughCount ?? 0,
+        conversation.unattemptedMessageCount
+      );
+    }
     conversation.groupMemorySelectionPolicy = GROUP_MEMORY_SELECTION_POLICY;
     conversation.groupMemorySelectionSource = selectionSource.slice(-GROUP_MEMORY_SELECTION_CONTEXT_LIMIT);
     conversation.state = conversation.pendingMessages.length ? "queued" : "idle";
@@ -395,7 +538,11 @@ export class MemorySchedulerStore {
     return "valid" as const;
   }
 
-  private isConversationReady(conversation: StoredConversation, threshold: number) {
+  private isConversationReady(
+    conversation: StoredConversation,
+    threshold: number,
+    nowMs: number
+  ) {
     if (isGroupMemoryScope(conversation.conversation.scope)) {
       if (conversation.groupMemorySelectionPolicy !== GROUP_MEMORY_SELECTION_POLICY) return false;
       const source = normalizeGroupMemorySelectionSource(conversation.groupMemorySelectionSource);
@@ -404,8 +551,23 @@ export class MemorySchedulerStore {
         !sameMessages(conversation.groupMemorySelectionSource ?? [], source)
       ) return false;
     }
-    return this.isCurrentBatchCommitted(conversation) ||
-      (conversation.unattemptedMessageCount ?? 0) >= threshold;
+    if (this.isCurrentBatchCommitted(conversation)) return true;
+    if (conversation.currentBatch) {
+      const retryAt = Date.parse(conversation.nextRetryAt ?? "");
+      return !Number.isFinite(retryAt) ||
+        retryAt <= nowMs ||
+        this.hasUnusedEarlyRetryWindow(conversation, threshold);
+    }
+    return (conversation.unattemptedMessageCount ?? 0) >= threshold;
+  }
+
+  private hasUnusedEarlyRetryWindow(
+    conversation: StoredConversation,
+    threshold: number
+  ) {
+    const available = conversation.unattemptedMessageCount ?? 0;
+    const consumedThrough = conversation.earlyRetryConsumedThroughCount ?? 0;
+    return available - consumedThrough >= threshold;
   }
 }
 
@@ -420,10 +582,31 @@ function newConversationState(
     pendingMessages: [],
     dirty: false,
     failureCount: 0,
+    nextRetryAt: undefined,
+    lastFailureCode: undefined,
     unattemptedMessageCount: 0,
+    earlyRetryConsumedThroughCount: undefined,
     lastCommittedSequence: committedThrough,
     updatedAt: now
   };
+}
+
+export function memoryRetryDelayMs(failureCount: number) {
+  const exponent = Math.max(0, Math.min(20, Math.trunc(failureCount) - 1));
+  return Math.min(MEMORY_RETRY_MAX_DELAY_MS, MEMORY_RETRY_BASE_DELAY_MS * (2 ** exponent));
+}
+
+function normalizedFailureCode(value: unknown) {
+  if (typeof value !== "string") return "memory_processing_failed";
+  const normalized = value.trim().replace(/[^A-Za-z0-9._:-]/gu, "_").slice(0, 120);
+  return normalized || "memory_processing_failed";
+}
+
+function schedulerPendingMessageCount(store: SchedulerFile) {
+  return Object.values(store.conversations).reduce(
+    (total, conversation) => total + conversation.pendingMessages.length,
+    0
+  );
 }
 
 function createBatchId(conversationId: string, messages: MemoryQueuedMessage[]) {

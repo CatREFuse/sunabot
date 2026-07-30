@@ -6,6 +6,10 @@ import type {
   CodexToolResult
 } from "../../packages/contracts/tools/codex.js";
 import { SessionActorTaskTimeoutError } from "./sessionActor.js";
+import {
+  codexResultSensitivePaths,
+  sanitizeCodexArtifactError
+} from "./codexResultSanitizer.js";
 import type { SessionStore, ToolJobRecord } from "./sessionStore.js";
 import type {
   ClaimedToolTask,
@@ -125,10 +129,12 @@ export class SessionToolJobProcessor {
           });
         }
       } catch (error) {
-        const finalizationError = sanitizedCodexArtifactError(
-          error,
-          path.join(settings.jobRoot, job.id)
-        );
+        const sensitivePaths = await codexResultSensitivePaths({
+          job,
+          settings,
+          resultFile: runnerResult.resultFile
+        });
+        const finalizationError = sanitizeCodexArtifactError(error, sensitivePaths);
         codexAttemptResult = codexArtifactFailureResult(runnerResult, finalizationError);
         throw finalizationError;
       }
@@ -147,16 +153,41 @@ export class SessionToolJobProcessor {
       stagedFinalization = undefined;
       state.finalized = true;
     } catch (error) {
-      await stagedFinalization?.rollback().catch(() => undefined);
+      let terminalError = error;
+      let rollbackFailed = false;
+      if (stagedFinalization) {
+        try {
+          await stagedFinalization.rollback();
+        } catch {
+          rollbackFailed = true;
+          terminalError = Object.assign(
+            new Error("codex_artifact_rollback_failed"),
+            { code: "codex_artifact_rollback_failed" }
+          );
+          if (codexAttemptResult) {
+            codexAttemptResult = codexArtifactFailureResult(
+              codexAttemptResult,
+              terminalError
+            );
+          }
+        }
+      }
       stagedFinalization = undefined;
-      const status: CodexTaskStatus = signal.aborted ? "timed_out" : "failed";
+      const status: CodexTaskStatus = rollbackFailed
+        ? "failed"
+        : signal.aborted ? "timed_out" : "failed";
       if (job.toolName === "codex" && codexProcessStarted && !codexAttemptResult) {
         codexAttemptResult = {
           ok: false,
           status,
           jobId: job.id,
           kind: "analysis",
-          error: { code: "worker_failed", message: error instanceof Error ? error.message : String(error) }
+          error: {
+            code: "worker_failed",
+            message: terminalError instanceof Error
+              ? terminalError.message
+              : String(terminalError)
+          }
         };
       }
       if (state.finalized || this.options.isStopped()) return;
@@ -166,7 +197,7 @@ export class SessionToolJobProcessor {
         attempt: job.attempts,
         attemptToken,
         status,
-        error: serializeError(error)
+        error: serializeError(terminalError)
       });
       state.finalized = true;
     } finally {
@@ -264,16 +295,4 @@ function codexArtifactFailureResult(
       retryable: false
     }
   };
-}
-
-function sanitizedCodexArtifactError(error: unknown, jobDir: string) {
-  const rawCode = typeof (error as { code?: unknown } | undefined)?.code === "string"
-    ? String((error as { code: string }).code)
-    : "codex_artifact_publish_failed";
-  const code = /^codex_artifact_[a-z_]+$/u.test(rawCode)
-    ? rawCode
-    : "codex_artifact_publish_failed";
-  const rawMessage = error instanceof Error ? error.message : String(error);
-  const message = rawMessage.split(path.resolve(jobDir)).join("Codex artifact job directory");
-  return Object.assign(new Error(message), { code });
 }

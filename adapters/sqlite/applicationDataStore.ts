@@ -44,6 +44,8 @@ type CommitUserProfileBatchInput = {
   result: unknown;
 };
 
+const MEMORY_DEBT_ALERT_METADATA_KEY = "memory-debt-alert-v1";
+
 export interface AgentRegistryRow {
   id: string;
   name: string;
@@ -334,6 +336,13 @@ export class ApplicationDataStore {
     });
   }
 
+  readMemoryDebtAlertState() {
+    const value = this.metadata(MEMORY_DEBT_ALERT_METADATA_KEY);
+    return value == null ? undefined : parseObject(value);
+  }
+
+  writeMemoryDebtAlertState(state: JsonObject) { this.setMetadata(MEMORY_DEBT_ALERT_METADATA_KEY, JSON.stringify(state)); }
+
   ensureLegacyMemorySchedulerImported(filePath: string) {
     const marker = "legacy-memory-scheduler";
     if (this.metadata(marker) === "done") return { imported: false, count: this.memorySchedulerCount() };
@@ -476,6 +485,10 @@ export class ApplicationDataStore {
       category: "memory.operation",
       ...options
     });
+  }
+
+  readMemoryProcessingAttemptCounts(options: { since: string; until: string }) {
+    return this.modelCalls.readMemoryProcessingAttemptCounts(options);
   }
 
   appendRequestLogIdempotent(record: JsonObject) {

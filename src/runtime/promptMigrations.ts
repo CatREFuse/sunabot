@@ -27,12 +27,14 @@ import {
   migrateConversationConfigurationIndexPrompt
 } from "../../services/agent/bashWorkbenchPromptMigration.js";
 import { migrateConversationChatMediaPrompt } from "../../services/agent/chatMediaPromptMigration.js";
+import { migrateConversationCodexOutputPrompt } from "../../services/agent/codexOutputPromptMigration.js";
 import { migrateConversationPromptCacheLayout } from "../../services/agent/promptCacheLayoutMigration.js";
 import {
   migrateConversationDirectorPrompt,
   migrateDirectorScheduleSchemaPrompt
 } from "../../services/agent/directorPromptMigration.js";
 import {
+  migrateDreamCanonicalOutputContractPrompt,
   migrateDreamMemoryContractPrompt,
   migrateDreamSchemaPrompt
 } from "../../services/agent/dreamPromptMigration.js";
@@ -182,12 +184,19 @@ function runtimePromptMigrations(config: AppConfig, selfiePromptDefault: string)
     DREAM_PROMPT_FILE,
     () => migrateDreamSchemaPrompt(config, DREAM_PROMPT_FILE)
   );
-  add(
+  const dreamMemoryId = add(
     "dream-memory-contract-v5",
     "system",
     DREAM_PROMPT_FILE,
     () => migrateDreamMemoryContractPrompt(config, DREAM_PROMPT_FILE),
     [dreamFlexId]
+  );
+  add(
+    "dream-output-contract-v6",
+    "system",
+    DREAM_PROMPT_FILE,
+    () => migrateDreamCanonicalOutputContractPrompt(config, DREAM_PROMPT_FILE),
+    [dreamMemoryId]
   );
   add(
     "scheduled-agent-loop-v2",
@@ -326,12 +335,19 @@ function runtimePromptMigrations(config: AppConfig, selfiePromptDefault: string)
       () => migrateRecoverableOutputErrorPrompt(config, file),
       [chatMediaId]
     );
+    const codexOutputId = add(
+      "conversation-codex-output-v1",
+      "system",
+      file,
+      () => migrateConversationCodexOutputPrompt(config, file),
+      [recoverableId]
+    );
     const referenceToolsId = add(
       "conversation-reference-tools-v1",
       "system",
       file,
       () => migrateConversationReferenceToolDescriptions(config, file),
-      [recoverableId]
+      [codexOutputId]
     );
     add(
       "conversation-cache-layout-v1",

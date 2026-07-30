@@ -4,6 +4,7 @@ import { RegistryProviderToolExecutor } from "../../adapters/model/provider/tool
 import { createTurnToolState } from "../../adapters/model/provider/turnToolState.js";
 import type { ProviderCompleteOptions } from "../../adapters/model/openaiProvider.js";
 import type { OpenAIToolDefinition } from "../../services/agent/promptSystem.js";
+import { defaultFinalPromptTemplate } from "../../services/agent/promptDefaults.js";
 import { sendFileTool } from "../../services/tools/sendConversationAssetTool.js";
 import { AGENT_TOOL_NAMES } from "../../src/types.js";
 import {
@@ -575,6 +576,7 @@ describe("ToolRegistry", () => {
       minLength: 1,
       maxLength: 200
     });
+    expect(parameters.properties.inputHandles).not.toHaveProperty("uniqueItems");
     expect(parameters.required).toContain("dispatch_message");
     expect(codex?.strict).toBe(true);
   });
@@ -591,6 +593,16 @@ describe("ToolRegistry", () => {
     expect(parameters.properties.action.enum).toEqual(["list_sessions", "start", "resume"]);
     expect(parameters.properties.thread_id).toBeDefined();
     expect(parameters.required).toContain("dispatch_message");
+    const [defaultControl] = executor.resolveDefinitions(
+      options,
+      defaultFinalPromptTemplate("conversation.private-reply")?.tools
+    );
+    expect(defaultControl?.description).toContain(
+      "Depending on the active schema"
+    );
+    expect(defaultControl?.description).toContain(
+      "Remote SSH control"
+    );
 
     const turn = executor.deferredTurn([{
       type: "function_call",

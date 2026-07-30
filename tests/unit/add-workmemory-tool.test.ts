@@ -23,11 +23,43 @@ describe("add_workmemory tool", () => {
       .toContain("real Markdown link whose target starts with knowledge/");
   });
 
-  it("passes only trimmed content to the host-bound runtime port", async () => {
+  it("passes a record decision with only trimmed content to the host-bound runtime port", async () => {
     const execute = vi.fn(async () => ({ ok: true }));
-    await expect(runAddWorkMemory({ content: "  继续跟进 Markdown 记忆门禁  " }, { execute }))
+    await expect(runAddWorkMemory({
+      action: "record",
+      content: "  继续跟进 Markdown 记忆门禁  "
+    }, { execute }))
       .resolves.toEqual({ ok: true });
-    expect(execute).toHaveBeenCalledWith({ content: "继续跟进 Markdown 记忆门禁" }, undefined);
+    expect(execute).toHaveBeenCalledWith({
+      action: "record",
+      content: "继续跟进 Markdown 记忆门禁"
+    }, undefined);
+  });
+
+  it("passes a skip decision only when content is null", async () => {
+    const execute = vi.fn(async () => ({ ok: true }));
+    await expect(runAddWorkMemory({ action: "skip", content: null }, { execute }))
+      .resolves.toEqual({ ok: true });
+    expect(execute).toHaveBeenCalledWith({ action: "skip" }, undefined);
+  });
+
+  it("uses Unicode characters for the 4000-character boundary", async () => {
+    const execute = vi.fn(async () => ({ ok: true }));
+    const content = "😀".repeat(4_000);
+
+    await expect(runAddWorkMemory({ action: "record", content }, { execute }))
+      .resolves.toEqual({ ok: true });
+    expect(execute).toHaveBeenCalledWith({ action: "record", content }, undefined);
+
+    execute.mockClear();
+    await expect(runAddWorkMemory({
+      action: "record",
+      content: "😀".repeat(4_001)
+    }, { execute })).resolves.toMatchObject({
+      ok: false,
+      code: "ADD_WORKMEMORY_INVALID"
+    });
+    expect(execute).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -36,17 +68,21 @@ describe("add_workmemory tool", () => {
     "相关用户：QQ 999999999；稍后再核对称呼与事件结构。"
   ])("passes semantically unreviewed content through for later consolidation: %s", async (content) => {
     const execute = vi.fn(async () => ({ ok: true }));
-    await expect(runAddWorkMemory({ content }, { execute })).resolves.toEqual({ ok: true });
-    expect(execute).toHaveBeenCalledWith({ content }, undefined);
+    await expect(runAddWorkMemory({ action: "record", content }, { execute })).resolves.toEqual({ ok: true });
+    expect(execute).toHaveBeenCalledWith({ action: "record", content }, undefined);
   });
 
   it.each([
     [null],
     [{}],
     [{ content: "" }],
+    [{ action: "record", content: null }],
+    [{ action: "skip", content: "" }],
+    [{ action: "skip" }],
+    [{ action: "other", content: null }],
     [{ content: "有效", recordedAt: "1999-01-01T00:00:00+00:00" }],
     [{ content: "有效", conversationId: "other-agent:private:1" }],
-    [{ content: "x".repeat(4_001) }]
+    [{ action: "record", content: "x".repeat(4_001) }]
   ])("rejects forged metadata and invalid arguments %#", async (input) => {
     const execute = vi.fn();
     await expect(runAddWorkMemory(input, { execute })).resolves.toMatchObject({

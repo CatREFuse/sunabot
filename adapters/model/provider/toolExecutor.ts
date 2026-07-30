@@ -75,6 +75,7 @@ import { logContextMetadata } from "./logger.js";
 import { mcpToolLogSummary } from "./mcpToolLog.js";
 import { readToolName } from "./promptMapping.js";
 import { validProviderToolDefinitions } from "./toolDefinitionIsolation.js";
+import type { ProviderToolSchemaProtocol } from "../../../services/tools/providerToolSchema.js";
 import { errorMessage, isRecord, parseJson } from "./valueUtils.js";
 import {
   createTurnToolState,
@@ -134,7 +135,11 @@ async function runAssistantText(
 }
 
 export class RegistryProviderToolExecutor implements ProviderToolExecutorPort {
-  resolveDefinitions(options: ProviderCompleteOptions, definitions?: OpenAIToolDefinition[]) {
+  resolveDefinitions(
+    options: ProviderCompleteOptions,
+    definitions?: OpenAIToolDefinition[],
+    protocol: ProviderToolSchemaProtocol = "openai-responses"
+  ) {
     const configured = resolveProviderToolDefinitions(options, definitions) as Record<string, unknown>[];
     const dynamicMcp = options.mcp?.definitions().filter((tool) => isMcpToolAlias(readToolName(tool))) ?? [];
     const seen = new Set(configured.map(readToolName));
@@ -146,7 +151,7 @@ export class RegistryProviderToolExecutor implements ProviderToolExecutorPort {
     })].map((tool) => isProviderDeferredTool(readToolName(tool), options)
       ? withRequiredDispatchMessage(tool)
       : withoutDispatchMessage(tool));
-    return validProviderToolDefinitions(resolved);
+    return validProviderToolDefinitions(resolved, protocol);
   }
 
   companionTurn(

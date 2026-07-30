@@ -20,6 +20,14 @@ const entry: MemoryEntry = {
 const payload: MemoryPayload = {
   sources: [{ id: "working", title: "工作记忆", fileName: "WORKING_MEMORY.md", editable: true }],
   entries: [entry],
+  health: {
+    windowHours: 24,
+    windowStartedAt: "2026-07-30T12:00:00.000Z",
+    measuredAt: "2026-07-31T12:00:00.000Z",
+    successful: 7,
+    attempted: 8,
+    pending: 13
+  },
   document: {
     fileName: "WORKING_MEMORY.md",
     content: "# 工作记忆\n\n完整原文",
@@ -49,6 +57,43 @@ describe("useMemory", () => {
     expect(memory.matches.value).toEqual([]);
     expect(memory.entries.value).toEqual([entry]);
     expect(memory.document.value).toEqual(payload.document);
+    expect(memory.health.value).toEqual(payload.health);
+  });
+
+  it("clears another Agent's processing health while its replacement is loading", async () => {
+    let resolveArona!: (value: MemoryPayload) => void;
+    const aronaRequest = new Promise<MemoryPayload>((resolve) => { resolveArona = resolve; });
+    apiRequest
+      .mockResolvedValueOnce(payload)
+      .mockReturnValueOnce(aronaRequest);
+    const memory = useMemory();
+    await memory.load("working", "plana");
+
+    const pendingLoad = memory.load("working", "arona");
+    expect(memory.health.value).toBeNull();
+
+    const aronaHealth = { ...payload.health, successful: 2, attempted: 3, pending: 21 };
+    resolveArona({ ...payload, health: aronaHealth });
+    await pendingLoad;
+    expect(memory.health.value).toEqual(aronaHealth);
+  });
+
+  it("clears another Agent's error while its replacement is loading", async () => {
+    let resolveArona!: (value: MemoryPayload) => void;
+    const aronaRequest = new Promise<MemoryPayload>((resolve) => { resolveArona = resolve; });
+    apiRequest
+      .mockRejectedValueOnce(new Error("Plana 记忆读取失败"))
+      .mockReturnValueOnce(aronaRequest);
+    const memory = useMemory();
+    await memory.load("working", "plana");
+    expect(memory.error.value).toBe("Plana 记忆读取失败");
+
+    const pendingLoad = memory.load("working", "arona");
+    expect(memory.error.value).toBe("");
+
+    resolveArona(payload);
+    await pendingLoad;
+    expect(memory.error.value).toBe("");
   });
 
   it("drops sources and entries outside the supported active set", async () => {

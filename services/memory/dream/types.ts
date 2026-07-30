@@ -75,6 +75,7 @@ export interface DreamModelOutputExpectations {
   workingMemoryIds: readonly string[];
   personaEvidenceIds: readonly string[];
   fieldKnowledgeEvidenceIds?: readonly string[];
+  fieldKnowledgeWritable?: boolean;
 }
 
 export interface DreamLongTermArchiveCandidate {
@@ -153,9 +154,15 @@ export interface DreamHistoryItem {
   id: string;
   date: string;
   status: DreamHistoryStatus;
+  attemptCount: number;
+  maxAttempts: 3;
   scheduledFor: string;
   dreamText?: string;
   completedAt?: string;
+  errorCode?: string;
+  errorText?: string;
+  nextRetryAt?: string;
+  failedAt?: string;
   personalityChanged?: boolean;
   summary?: {
     merged: number;
