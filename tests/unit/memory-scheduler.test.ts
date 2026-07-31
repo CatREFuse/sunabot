@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  MEMORY_PARTIAL_BATCH_MAX_WAIT_MS,
   MemorySchedulerStore,
   selectGroupMemoryMessagesNearAssistant,
   type MemoryQueuedMessage
@@ -44,17 +45,53 @@ describe("MemorySchedulerStore", () => {
       .toEqual([4, 5, 6]);
   });
 
-  it("does not flush a partial batch after a silence deadline", async () => {
+  it("drains a partial FIFO tail after ten quiet minutes and persists its wake deadline", async () => {
     const scheduler = await createScheduler();
-    const now = Date.now();
     await scheduler.enqueue(
       privateConversation(),
-      [message(1, new Date(now - 10_000).toISOString(), "user")]
+      [message(1, "2026-07-31T01:00:00.000Z", "user")]
     );
+    const state = (await scheduler.snapshot()).conversations[privateConversation().id]!;
+    const dueAt = Date.parse(state.updatedAt) + MEMORY_PARTIAL_BATCH_MAX_WAIT_MS;
 
-    const claim = await scheduler.claimNext(5, now);
-    expect(claim).toBeUndefined();
-    expect(await scheduler.nextWakeAt(5)).toBeUndefined();
+    expect(await scheduler.claimNext(5, dueAt - 1)).toBeUndefined();
+    expect(await scheduler.nextWakeAt(5, dueAt - 1)).toBe(dueAt);
+
+    const recovered = await createSchedulerFrom(scheduler);
+    const claim = await recovered.claimNext(5, dueAt);
+    expect(claim?.messages.map((item) => item.sequence)).toEqual([1]);
+    expect(claim?.attemptMessageCount).toBe(1);
+    await recovered.complete(claim!, dueAt + 1);
+    expect((await recovered.snapshot()).conversations[privateConversation().id]?.pendingMessages)
+      .toEqual([]);
+  });
+
+  it("selects the oldest ready partial tail across conversations", async () => {
+    const scheduler = await createScheduler();
+    const laterConversation = {
+      ...privateConversation(),
+      id: "private:91012",
+      userId: 91012
+    };
+    await scheduler.enqueue(
+      laterConversation,
+      [message(1, "2026-07-31T02:00:00.000Z", "user")]
+    );
+    await scheduler.enqueue(
+      privateConversation(),
+      [message(1, "2026-07-31T01:00:00.000Z", "user")]
+    );
+    const states = (await scheduler.snapshot()).conversations;
+    const dueAt = Math.max(
+      Date.parse(states[laterConversation.id]!.updatedAt),
+      Date.parse(states[privateConversation().id]!.updatedAt)
+    ) + MEMORY_PARTIAL_BATCH_MAX_WAIT_MS;
+
+    const first = await scheduler.claimNext(5, dueAt);
+    expect(first?.conversation.id).toBe(privateConversation().id);
+    await scheduler.complete(first!, dueAt + 1);
+    expect((await scheduler.claimNext(5, dueAt + 2))?.conversation.id)
+      .toBe(laterConversation.id);
   });
 
   it("uses the configured message threshold as the compression window", async () => {

@@ -96,6 +96,7 @@ Executable branch examples:
 - [`sampled-memory-compression.md`](./sampled-memory-compression.md)
 - [`sampled-dream.md`](./sampled-dream.md)
 - [`cases/memory-system/10-memory-provider-long-response.md`](./cases/memory-system/10-memory-provider-long-response.md)
+- [`cases/memory-system/11-memory-fifo-quiet-tail.md`](./cases/memory-system/11-memory-fifo-quiet-tail.md)
 
 Web Chat lifecycle:
 

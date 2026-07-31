@@ -24,6 +24,7 @@ export type { MemoryDebtAlertClaim } from "./memoryDebtAlert.js";
 export type MemorySchedulerStatus = "idle" | "queued" | "running";
 export const MEMORY_RETRY_BASE_DELAY_MS = 60_000;
 export const MEMORY_RETRY_MAX_DELAY_MS = 30 * 60_000;
+export const MEMORY_PARTIAL_BATCH_MAX_WAIT_MS = 10 * 60_000;
 
 export interface MemoryConversationDescriptor {
   id: string;
@@ -283,7 +284,7 @@ export class MemorySchedulerStore {
       selected.state = "running";
       selected.dirty = false;
       selected.nextRetryAt = undefined;
-      const attemptMessageCount = currentBatchCommitted || retryingCurrentBatch ? 0 : threshold;
+      const attemptMessageCount = currentBatchCommitted || retryingCurrentBatch ? 0 : messages.length;
       selected.unattemptedMessageCount = Math.max(
         0,
         (selected.unattemptedMessageCount ?? 0) - attemptMessageCount
@@ -371,6 +372,10 @@ export class MemorySchedulerStore {
           continue;
         }
         if ((conversation.unattemptedMessageCount ?? 0) >= threshold) return nowMs;
+        const partialDueAt = partialBatchDueAt(conversation);
+        if (partialDueAt == null) continue;
+        if (partialDueAt <= nowMs) return nowMs;
+        nextRetryAt = nextRetryAt == null ? partialDueAt : Math.min(nextRetryAt, partialDueAt);
       }
       return nextRetryAt;
     });
@@ -558,7 +563,9 @@ export class MemorySchedulerStore {
         retryAt <= nowMs ||
         this.hasUnusedEarlyRetryWindow(conversation, threshold);
     }
-    return (conversation.unattemptedMessageCount ?? 0) >= threshold;
+    const partialDueAt = partialBatchDueAt(conversation);
+    return (conversation.unattemptedMessageCount ?? 0) >= threshold ||
+      (partialDueAt != null && partialDueAt <= nowMs);
   }
 
   private hasUnusedEarlyRetryWindow(
@@ -607,6 +614,14 @@ function schedulerPendingMessageCount(store: SchedulerFile) {
     (total, conversation) => total + conversation.pendingMessages.length,
     0
   );
+}
+
+function partialBatchDueAt(conversation: StoredConversation) {
+  if ((conversation.unattemptedMessageCount ?? 0) <= 0) return undefined;
+  const updatedAt = Date.parse(conversation.updatedAt);
+  return Number.isFinite(updatedAt)
+    ? updatedAt + MEMORY_PARTIAL_BATCH_MAX_WAIT_MS
+    : undefined;
 }
 
 function createBatchId(conversationId: string, messages: MemoryQueuedMessage[]) {

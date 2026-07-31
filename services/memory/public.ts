@@ -22,6 +22,7 @@ export {
   type MemoryProcessingHealth
 } from "./processingHealth.js";
 export {
+  MEMORY_PARTIAL_BATCH_MAX_WAIT_MS,
   MemorySchedulerStore,
   type MemoryEnqueueOptions,
   type MemoryQueuedMessage
