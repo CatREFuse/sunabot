@@ -67,5 +67,17 @@ describe("Codex control policy", () => {
       control: true,
       workerAvailable: true
     })).toBe(false);
+    expect(codexTurnAvailable({
+      enabled: true,
+      control: true,
+      workerAvailable: false,
+      requiresWorker: true
+    })).toBe(false);
+    expect(codexTurnAvailable({
+      enabled: true,
+      control: true,
+      workerAvailable: true,
+      requiresWorker: true
+    })).toBe(true);
   });
 });

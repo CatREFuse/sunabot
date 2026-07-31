@@ -1,4 +1,5 @@
 import path from "node:path";
+import { runModelTaskWithinDeadline } from "../../packages/contracts/model/modelTaskDeadline.js";
 import type {
   CodexRunner,
   CodexTaskStatus,
@@ -49,7 +50,10 @@ export class SessionToolJobProcessor {
       if (job.toolName !== "codex") {
         const runner = this.options.runDeferredTool;
         if (!runner) throw new Error(`Deferred tool runner is not configured for ${job.toolName}.`);
-        const outcome = await runner(job, signal);
+        const outcome = await runModelTaskWithinDeadline(
+          (taskSignal) => runner(job, taskSignal),
+          { parentSignal: signal }
+        );
         this.options.assertClaimUsable(state, signal);
         this.options.store.completeToolJob({
           jobId: job.id,
@@ -175,7 +179,7 @@ export class SessionToolJobProcessor {
       stagedFinalization = undefined;
       const status: CodexTaskStatus = rollbackFailed
         ? "failed"
-        : signal.aborted ? "timed_out" : "failed";
+        : signal.aborted || isTimeoutError(terminalError) ? "timed_out" : "failed";
       if (job.toolName === "codex" && codexProcessStarted && !codexAttemptResult) {
         codexAttemptResult = {
           ok: false,
@@ -258,6 +262,10 @@ function combineSignals(...signals: AbortSignal[]) {
     signal.addEventListener("abort", () => abort(signal), { once: true });
   }
   return controller.signal;
+}
+
+function isTimeoutError(error: unknown) {
+  return error instanceof Error && error.name === "TimeoutError";
 }
 
 function serializeError(error: unknown) {

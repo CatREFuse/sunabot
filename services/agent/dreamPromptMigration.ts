@@ -3,8 +3,10 @@ import path from "node:path";
 import type { AppConfig } from "../../packages/contracts/admin/public.js";
 import {
   DREAM_CONTRACT,
+  DREAM_RAW_IDENTITY_GUIDANCE,
   DREAM_OUTPUT_CONTRACT,
   DREAM_OUTPUT_CONTRACT_MARKER,
+  LEGACY_DREAM_IDENTITY_ALIAS_GUIDANCE,
   LEGACY_DREAM_FLEX_RESPONSE,
   LEGACY_DREAM_CONTRACT_V3,
   LEGACY_DREAM_CONTRACT_V4
@@ -59,6 +61,16 @@ export async function migrateDreamCanonicalOutputContractPrompt(
   return true;
 }
 
+export async function migrateDreamRawIdentityPrompt(config: AppConfig, fileName: string) {
+  const filePath = await resolveSafePromptFilePath(config, "system", fileName);
+  const content = await readOptional(filePath);
+  if (!content.trim()) return false;
+  const migrated = migrateDreamRawIdentityTemplate(parseFinalPromptTemplate(content));
+  if (!migrated) return false;
+  await atomicWriteText(filePath, `${JSON.stringify(migrated, null, 2)}\n`);
+  return true;
+}
+
 export function migrateDreamSchemaTemplate(
   template: FinalPromptTemplate
 ): FinalPromptTemplate | undefined {
@@ -90,6 +102,33 @@ export function migrateDreamMemoryContractTemplate(
     return {
       ...message,
       content: content.replace(legacy, DREAM_CONTRACT)
+    };
+  });
+  return changed ? { ...template, messages } : undefined;
+}
+
+export function migrateDreamRawIdentityTemplate(
+  template: FinalPromptTemplate
+): FinalPromptTemplate | undefined {
+  let changed = false;
+  const messages = template.messages.map((message) => {
+    if (
+      typeof message !== "object"
+      || message == null
+      || Array.isArray(message)
+      || message.role !== "system"
+      || typeof message.content !== "string"
+      || !message.content.includes(LEGACY_DREAM_IDENTITY_ALIAS_GUIDANCE)
+    ) {
+      return message;
+    }
+    changed = true;
+    return {
+      ...message,
+      content: message.content.replaceAll(
+        LEGACY_DREAM_IDENTITY_ALIAS_GUIDANCE,
+        DREAM_RAW_IDENTITY_GUIDANCE
+      )
     };
   });
   return changed ? { ...template, messages } : undefined;

@@ -85,8 +85,10 @@ export async function readWorkingMemoryDocument(config: AppConfig): Promise<Work
 export async function replaceWorkingMemoryDocument(
   config: AppConfig,
   expectedRevision: string,
-  items: readonly WorkingMemoryDocumentItem[]
+  items: readonly WorkingMemoryDocumentItem[],
+  signal?: AbortSignal
 ) {
+  signal?.throwIfAborted();
   const normalizedItems = items.map(validateWorkingMemoryItem);
   const content = renderWorkingMemoryMarkdown(normalizedItems);
   assertDocumentSize(content);
@@ -96,14 +98,17 @@ export async function replaceWorkingMemoryDocument(
   }
 
   const current = await readWorkingMemoryDocument(config);
+  signal?.throwIfAborted();
   if (current.revision !== expectedRevision) return { status: "conflict" as const, current };
   if (current.content === content) return { status: "unchanged" as const, current: { ...current, items: parsed } };
 
   await assertWorkspaceDirectory(path.dirname(current.filePath));
+  signal?.throwIfAborted();
   const temporary = path.join(
     path.dirname(current.filePath),
     `.${WORKING_MEMORY_FILE}.tmp-${process.pid}-${Date.now()}-${crypto.randomBytes(6).toString("hex")}`
   );
+  signal?.throwIfAborted();
   const handle = await fs.open(
     temporary,
     fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW,
@@ -111,24 +116,36 @@ export async function replaceWorkingMemoryDocument(
   );
   try {
     await handle.writeFile(`${content}\n`, "utf8");
+    signal?.throwIfAborted();
     await handle.sync();
+    signal?.throwIfAborted();
   } finally {
     await handle.close();
   }
+  let renamed = false;
   try {
+    signal?.throwIfAborted();
     const latest = await readWorkingMemoryDocument(config);
+    signal?.throwIfAborted();
     if (latest.revision !== expectedRevision) {
       await fs.rm(temporary, { force: true });
       return { status: "conflict" as const, current: latest };
     }
     await assertReplaceTarget(current.filePath);
+    signal?.throwIfAborted();
     await fs.rename(temporary, current.filePath);
+    renamed = true;
+    signal?.throwIfAborted();
+    const updated = await readWorkingMemoryDocument(config);
+    signal?.throwIfAborted();
+    return { status: "updated" as const, current: updated };
   } catch (error) {
     await fs.rm(temporary, { force: true }).catch(() => undefined);
+    if (renamed && signal?.aborted) {
+      await restoreCancelledWorkingMemoryWrite(config, revision(content), current.content);
+    }
     throw error;
   }
-  const updated = await readWorkingMemoryDocument(config);
-  return { status: "updated" as const, current: updated };
 }
 
 export async function appendWorkingMemoryDocumentItem(
@@ -218,6 +235,49 @@ function workingMemoryActor(sourceKind: WorkingMemoryDocumentItem["sourceKind"])
   if (sourceKind === "add_workmemory") return "model_tool";
   if (sourceKind === "admin") return "admin";
   return "memory_pipeline";
+}
+
+async function restoreCancelledWorkingMemoryWrite(
+  config: AppConfig,
+  expectedRevision: string,
+  previousContent: string
+) {
+  const current = await readWorkingMemoryDocument(config);
+  if (current.revision !== expectedRevision) {
+    throw workingMemoryError(
+      "WORKING_MEMORY_CANCEL_ROLLBACK_CONFLICT",
+      "Working memory changed before a cancelled write could be restored."
+    );
+  }
+  const temporary = path.join(
+    path.dirname(current.filePath),
+    `.${WORKING_MEMORY_FILE}.rollback-${process.pid}-${Date.now()}-${crypto.randomBytes(6).toString("hex")}`
+  );
+  const handle = await fs.open(
+    temporary,
+    fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW,
+    0o600
+  );
+  try {
+    await handle.writeFile(previousContent ? `${previousContent}\n` : "", "utf8");
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+  try {
+    const latest = await readWorkingMemoryDocument(config);
+    if (latest.revision !== expectedRevision) {
+      throw workingMemoryError(
+        "WORKING_MEMORY_CANCEL_ROLLBACK_CONFLICT",
+        "Working memory changed before a cancelled write could be restored."
+      );
+    }
+    await assertReplaceTarget(current.filePath);
+    await fs.rename(temporary, current.filePath);
+  } catch (error) {
+    await fs.rm(temporary, { force: true }).catch(() => undefined);
+    throw error;
+  }
 }
 
 export function workingMemoryItemsFromFacts(

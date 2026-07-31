@@ -24,6 +24,7 @@ export interface RuntimeDreamContextPort {
     localDate: string;
     timeZone: string;
     window: { start: string; end: string };
+    signal?: AbortSignal;
   }): Promise<RuntimeDreamContextSnapshot>;
 }
 

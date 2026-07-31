@@ -13,11 +13,14 @@ import type {
 import { parseOneBotInboundMessage } from "../../adapters/onebot/inboundMessageAdapter.js";
 import type { OneBotEvent } from "../../adapters/onebot/protocol.js";
 import type { MessagingPort } from "../../packages/contracts/messaging/messages.js";
+import { AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS } from "../../packages/contracts/model/modelGateway.js";
 import {
   incomingReplyEnvelope,
   toolCompletionEnvelope,
   type AsyncToolCompletionPayload
 } from "../../packages/contracts/session/runtimeMessages.js";
+import { scheduledCallbackDeliveryEnvelope } from "../../packages/contracts/session/scheduledTaskRuntimeMessages.js";
+import { buildCallbackInput } from "../../services/agent/callbackInput.js";
 import { defaultFinalPromptTemplate } from "../../services/agent/promptDefaults.js";
 import {
   renderFinalPromptTemplate,
@@ -103,6 +106,7 @@ describe("SunaRuntime Session queue bridge", () => {
       options: ProviderCompleteOptions = {}
     ): Promise<ProviderTurnResult> => {
       expect(options.modelRequestMaxRetries).toBe(6);
+      expect(options.modelRequestAttemptTimeoutMs).toBeUndefined();
       return { kind: "completed", text: "已完成" };
     });
     const harness = createRuntimeHarness(completeRequestTurn, undefined, (config) => {
@@ -114,6 +118,59 @@ describe("SunaRuntime Session queue bridge", () => {
 
     expect(completeRequestTurn).toHaveBeenCalledOnce();
     expect(sentTexts(harness.gateway)).toEqual(["已完成"]);
+  });
+
+  it("gives a scheduled callback Provider request the shared 10-minute attempt budget", async () => {
+    const completeRequestTurn = vi.fn(async (
+      _request: RenderedPromptRequest,
+      options: ProviderCompleteOptions = {}
+    ): Promise<ProviderTurnResult> => {
+      expect(options.modelRequestAttemptTimeoutMs).toBe(AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS);
+      return { kind: "completed", text: "定时任务已完成" };
+    });
+    const harness = createRuntimeHarness(completeRequestTurn);
+    const sessionId = "private:171419991";
+    const occurredAt = "2026-07-31T02:00:00.000Z";
+    harness.runtime.activeGateway = harness.gateway;
+    (harness.runtime as unknown as {
+      sessionCoordinator: {
+        enqueueEvent(input: Parameters<SessionStore["enqueueEvent"]>[0]): unknown;
+      };
+    }).sessionCoordinator.enqueueEvent({
+      sessionId,
+      kind: "scheduled_callback_delivery",
+      dedupeKey: "scheduled-callback-budget",
+      payload: scheduledCallbackDeliveryEnvelope({
+        type: "scheduled_callback",
+        taskId: "scheduled-budget",
+        taskRevision: 1,
+        runId: "scheduled-budget-run",
+        taskName: "预算测试",
+        scheduledFor: occurredAt,
+        triggeredAt: occurredAt,
+        text: buildCallbackInput("scheduled_task", {
+          promptMessages: [{ role: "user", content: "执行定时任务" }]
+        }),
+        target: {
+          conversationId: sessionId,
+          accountId: "primary",
+          scope: "private",
+          userId: 171419991,
+          mentionUserIds: []
+        }
+      }, {
+        conversationId: sessionId,
+        correlationId: "scheduled-budget-run",
+        idempotencyKey: "scheduled-callback-budget",
+        occurredAt
+      })
+    });
+
+    await harness.coordinator.waitForIdle({ timeoutMs: 3_000 });
+    await waitUntil(() => sentTexts(harness.gateway).includes("定时任务已完成"));
+
+    expect(completeRequestTurn).toHaveBeenCalledOnce();
+    expect(sentTexts(harness.gateway)).toEqual(["定时任务已完成"]);
   });
 
   it.each([
@@ -1438,6 +1495,7 @@ describe("SunaRuntime Session queue bridge", () => {
     const providerStarts: string[] = [];
     const asyncCodexFlags: Array<boolean | undefined> = [];
     const cronToolFlags: boolean[] = [];
+    const attemptTimeouts: Array<number | undefined> = [];
     const runner: CodexRunner = {
       async run(input, context) {
         expect(input).toMatchObject({
@@ -1473,6 +1531,7 @@ describe("SunaRuntime Session queue bridge", () => {
       const userText = lastUserText(request);
       asyncCodexFlags.push(options.asyncCodex);
       cronToolFlags.push(Boolean(options.cron));
+      attemptTimeouts.push(options.modelRequestAttemptTimeoutMs);
       if (userText.includes("<tool_result>")) {
         providerStarts.push("tool_completion");
         completionPrompts.push(userText);
@@ -1557,6 +1616,11 @@ describe("SunaRuntime Session queue bridge", () => {
     expect(completionPrompts[0]).toContain(`"status": "${toolStatus}"`);
     expect(asyncCodexFlags).toEqual([true, true, true]);
     expect(cronToolFlags).toEqual([true, true, true]);
+    expect(attemptTimeouts).toEqual([
+      undefined,
+      undefined,
+      AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS
+    ]);
     expect(runtimeConversation(harness.runtime, "group:300")?.messages
       .filter((message) => message.role === "assistant")
       .map((message) => ({
@@ -1580,6 +1644,81 @@ describe("SunaRuntime Session queue bridge", () => {
         toolNames: ["codex"]
       }
     ]);
+  });
+
+  it("keeps a deferred image job independent from a low Codex timeout", async () => {
+    const imageStarted = deferred<void>();
+    const releaseImage = deferred<void>();
+    let imageSignal: AbortSignal | undefined;
+    const completeRequestTurn = vi.fn(async (
+      request: RenderedPromptRequest
+    ): Promise<ProviderTurnResult> => {
+      const userText = lastUserText(request);
+      if (userText.includes("<tool_result>")) {
+        return { kind: "completed", text: "图片完成" };
+      }
+      return {
+        kind: "deferred",
+        acknowledgement: "图片开始生成。",
+        toolCall: {
+          name: "generate_img",
+          callId: "call-low-codex-timeout-image",
+          arguments: {
+            prompt: "画一张夜空",
+            size: null,
+            resolution: null,
+            quality: null,
+            referenceImageUrls: null,
+            referenceImagePaths: null,
+            referenceMediaHandles: null,
+            referenceImageSource: "none"
+          }
+        }
+      };
+    });
+    const harness = createRuntimeHarness(completeRequestTurn, undefined, (config) => {
+      config.bot.tools.codex.timeoutMs = 1;
+    });
+    const provider = (harness.runtime as unknown as {
+      getProvider(): OpenAIProvider;
+    }).getProvider();
+    (provider.generateImage as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      async (
+        _prompt: string,
+        _size: string,
+        _quality: string,
+        _references: string[],
+        _logContext: unknown,
+        signal: AbortSignal
+      ) => {
+        imageSignal = signal;
+        imageStarted.resolve();
+        await releaseImage.promise;
+        return { url: "/generated-images/low-codex-timeout.png" };
+      }
+    );
+
+    await handleOneBotEvent(
+      harness.runtime,
+      privateEvent(30_090, "生成夜空图片"),
+      harness.gateway
+    );
+    await imageStarted.promise;
+    await delay(25);
+
+    expect(imageSignal?.aborted).toBe(false);
+    expect(harness.store.listToolJobs("private:171419991")[0]?.status).toBe("running");
+
+    releaseImage.resolve();
+    await harness.coordinator.waitForIdle({ timeoutMs: 3_000 });
+
+    expect(harness.store.listToolJobs("private:171419991")[0]?.status).toBe("succeeded");
+    expect(sentTexts(harness.gateway)).toEqual(["图片开始生成。", ""]);
+    const send = harness.gateway.send as unknown as ReturnType<typeof vi.fn>;
+    expect(send.mock.calls[1]?.[0]).toMatchObject({
+      text: "",
+      media: [{ url: "/generated-images/low-codex-timeout.png" }]
+    });
   });
 
   it("does not deliver an asynchronous Codex completion owned by another Agent", async () => {

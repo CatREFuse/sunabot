@@ -2,7 +2,7 @@
 
 ## Preconditions
 
-Use an isolated administrator-private conversation whose selected image Provider has passed its capability probe. The request contains no reference media and asks for one deterministic, harmless illustration. Record the async submit and completion rows, generated image metadata, mock outbox target, and final asset.
+Use an isolated administrator-private conversation whose selected image Provider has passed its capability probe. The request contains no reference media and asks for one deterministic, harmless illustration. Record the async submit and completion rows, generated image metadata, mock outbox target, and final asset. Deterministic behavior tests must give the deferred runner one 600-second execution deadline from claim, propagate that same signal through frozen Workbench reference resolution and every image or selfie Provider stage, and reserve the following five seconds only for durable terminal settlement. At 599,999 ms the runner remains active; at 600,000 ms an implementation that ignores cancellation still settles as `timed_out`, produces one completion event, writes no generated-image history, and cannot turn a late result into success.
 
 The case remains separate from file delivery and selfie generation because `generate_img` is an asynchronous terminal media path. A queued result alone does not pass.
 

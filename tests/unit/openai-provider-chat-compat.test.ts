@@ -7,6 +7,7 @@ vi.mock("../../adapters/observability/requestLog.js", () => ({ appendRequestLog 
 
 import { OpenAIProvider } from "../../adapters/model/openaiProvider.js";
 import { normalizeChatBaseUrl } from "../../adapters/model/provider/transport.js";
+import { AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS } from "../../packages/contracts/model/modelGateway.js";
 
 beforeEach(() => {
   appendRequestLog.mockReset();
@@ -427,6 +428,53 @@ describe("provider protocols", () => {
     await expect(provider.generateImage("portrait", "1024x1024", "high")).rejects.toThrow(/不支持 Responses 图像生成/);
   });
 
+  it("gives a model-backed Provider health probe the shared 10-minute budget", async () => {
+    const provider = new OpenAIProvider(providerConfig("openai-compatible"));
+    const complete = vi.spyOn(provider, "complete").mockResolvedValue("OK");
+
+    await expect(provider.test()).resolves.toMatchObject({ ok: true });
+
+    expect(complete).toHaveBeenCalledWith(
+      "只返回 OK。",
+      [{ role: "user", content: "ping" }],
+      expect.objectContaining({
+        signal: expect.any(AbortSignal),
+        modelRequestAttemptTimeoutMs: AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS
+      })
+    );
+  });
+
+  it("passes the shared image deadline to the OpenAI SDK request", async () => {
+    const provider = new OpenAIProvider(providerConfig("openai-official"));
+    const create = vi.fn(async (
+      _body: unknown,
+      _options?: { signal?: AbortSignal }
+    ) => ({ output: [] }));
+    const createClient = vi.spyOn(provider as never, "createClient")
+      .mockReturnValue({ responses: { create } });
+    const image = { url: "/generated-images/openai-sdk.png" };
+    const imageWriter = (provider as unknown as {
+      imageWriter: { write: (...args: unknown[]) => typeof image };
+    }).imageWriter;
+    vi.spyOn(imageWriter, "write").mockReturnValue(image);
+    const caller = new AbortController();
+
+    await expect(provider.generateImage(
+      "portrait",
+      "1024x1024",
+      "high",
+      [],
+      undefined,
+      caller.signal
+    )).resolves.toEqual(image);
+
+    expect(createClient).toHaveBeenCalledWith({ maxRetries: 0 });
+    const requestSignal = create.mock.calls[0]?.[1]?.signal as AbortSignal;
+    expect(requestSignal.aborted).toBe(false);
+    caller.abort(new DOMException("cancelled", "AbortError"));
+    expect(requestSignal.aborted).toBe(true);
+  });
+
   it("stops before the Provider when a required reference image cannot become input_image", async () => {
     const provider = new OpenAIProvider(providerConfig("codex-responses"));
     vi.spyOn(provider as never, "getApiKey").mockReturnValue("provider-key");
@@ -524,6 +572,8 @@ describe("provider protocols", () => {
     await expect(provider.generateImage("portrait", "1024x1024", "high")).resolves.toEqual(image);
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
+    const signals = fetchMock.mock.calls.map((call) => call[1]?.signal);
+    expect(signals[0]).toBe(signals[1]);
     expect(writeImage).toHaveBeenCalledOnce();
   });
 
@@ -542,6 +592,44 @@ describe("provider protocols", () => {
 
     await expect(provider.generateImage("portrait", "1024x1024", "high"))
       .rejects.toBe(abort);
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("shares one 10-minute deadline across Codex image attempts", async () => {
+    const timeoutController = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutController.signal);
+    const provider = new OpenAIProvider({
+      ...providerConfig("codex-responses"),
+      baseUrl: "https://chatgpt.com/backend-api/codex"
+    }, {
+      imageRetrySleep: async () => undefined
+    });
+    vi.spyOn(provider as never, "getApiKey").mockReturnValue("test-token");
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(
+      (_input, init) => new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        if (!signal) return;
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      })
+    );
+    let settled = false;
+
+    const pending = provider.generateImage("portrait", "1024x1024", "high");
+    void pending.then(
+      () => { settled = true; },
+      () => { settled = true; }
+    );
+    await vi.waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledOnce();
+    });
+
+    expect(settled).toBe(false);
+    expect(timeout).toHaveBeenCalledWith(AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS);
+
+    const rejected = expect(pending).rejects.toMatchObject({ name: "TimeoutError" });
+    timeoutController.abort(new DOMException("timed out", "TimeoutError"));
+    await rejected;
 
     expect(fetchMock).toHaveBeenCalledOnce();
   });

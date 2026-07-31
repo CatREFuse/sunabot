@@ -14,6 +14,7 @@ import type {
   ProviderCompleteOptions,
   ProviderDeferredTurn
 } from "../../adapters/model/openaiProvider.js";
+import { AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS } from "../../packages/contracts/model/modelGateway.js";
 import type { MessagingPort } from "../../packages/contracts/messaging/messages.js";
 import type { AgentPersona } from "../../services/agent/persona.js";
 import type { CodexRunner } from "../../packages/contracts/tools/codex.js";
@@ -23,7 +24,6 @@ import type { WorkspaceBashRuntimePort } from "../../services/tools/bashRuntime.
 import type { SystemConfigRuntimePort } from "../../services/tools/systemConfigTool.js";
 import type { ReplyTaskGate } from "../../services/orchestration/broadcastStormDetector.js";
 import type { SessionStore } from "../../services/sessions/sessionStore.js";
-import { TOOL_CALL_TIMEOUT_MS } from "../../services/tools/tools.js";
 import { defaultPromptContent as defaultFinalPromptContent } from "../../services/agent/promptDefaults.js";
 import { SCHEDULED_TASK_CALLBACK_PROMPT_ID } from "../../services/agent/scheduledTaskPrompt.js";
 import {
@@ -47,10 +47,9 @@ export const MAX_CURRENT_CONTEXT_IMAGES = 4;
 export const MAX_HISTORY_CONTEXT_IMAGES = 2;
 export const HYDRATE_MESSAGE_WINDOW_MS = 2 * 60 * 60 * 1000;
 export const ACTIVE_CONVERSATION_WINDOW_MS = 24 * 60 * 60 * 1000;
-export const AMBIENT_ORCHESTRATOR_TIMEOUT_MS = 8 * 1000;
 export const ORCHESTRATOR_MAX_RETRIES = 3;
-export const PREPARE_TIMEOUT_MS = 90 * 1000;
-export const DIRECT_REPLY_TIMEOUT_MS = PREPARE_TIMEOUT_MS + TOOL_CALL_TIMEOUT_MS;
+export const PREPARE_TIMEOUT_MS = AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS;
+export const DIRECT_REPLY_TIMEOUT_MS = AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS;
 export const RECENT_CONTEXT_TOKEN_BUDGET = 2_048;
 export const MESSAGE_32_CONTEXT_TOKEN_BUDGET = 4_096;
 export const DEDUPE_TTL_MS = 10 * 60 * 1000;

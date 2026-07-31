@@ -77,12 +77,16 @@ export class AttachmentService {
     incoming: readonly IncomingAttachment[],
     sourcePort: AttachmentSourcePort,
     query = "",
-    referenceScope = ""
+    referenceScope = "",
+    signal?: AbortSignal
   ): Promise<ParsedAttachment[]> {
+    signal?.throwIfAborted();
     await this.initialize();
+    signal?.throwIfAborted();
     const results: ParsedAttachment[] = [];
     const processedSources = new Map<string, ParsedAttachment>();
     for (let index = 0; index < incoming.length; index += 1) {
+      signal?.throwIfAborted();
       const attachment = incoming[index]!;
       if (index >= MAX_ATTACHMENTS_PER_MESSAGE) {
         const limited = failedAcquisition(
@@ -108,9 +112,11 @@ export class AttachmentService {
           attachment,
           sourcePort,
           query,
-          referenceScope ? `${referenceScope}/${attachment.id}` : undefined
+          referenceScope ? `${referenceScope}/${attachment.id}` : undefined,
+          signal
         );
       if (existing && parsed.cacheKey && referenceScope) {
+        signal?.throwIfAborted();
         await this.cache.addReference(parsed.cacheKey, `${referenceScope}/${attachment.id}`);
       }
       if (sourceKey && !existing) processedSources.set(sourceKey, parsed);
@@ -130,8 +136,10 @@ export class AttachmentService {
     attachment: IncomingAttachment,
     sourcePort: AttachmentSourcePort,
     query: string,
-    cacheReference?: string
+    cacheReference?: string,
+    signal?: AbortSignal
   ): Promise<ParsedAttachment> {
+    signal?.throwIfAborted();
     const startedAt = Date.now();
     let resolvedVia: string | undefined;
     let sourceKind: string | undefined;
@@ -161,22 +169,25 @@ export class AttachmentService {
         busId: attachment.busId,
         groupId: attachment.groupId
       }, sourcePort);
+      signal?.throwIfAborted();
       resolvedVia = source.via;
       sourceKind = source.kind;
       let cached;
       try {
-        cached = await cacheResolvedAttachment(this.cache, source);
+        cached = await cacheResolvedAttachment(this.cache, source, signal);
       } catch (error) {
         if (source.kind !== "url" || !shouldTryGetFileFallback(error)) throw error;
         const fallback = await resolveAttachmentFallback({
           fileId: attachment.fileId,
           file: attachment.fileToken
         }, sourcePort);
+        signal?.throwIfAborted();
         if (!fallback || (fallback.kind === "url" && fallback.url === source.url)) throw error;
         resolvedVia = `${source.via}->file_content`;
         sourceKind = fallback.kind;
-        cached = await cacheResolvedAttachment(this.cache, fallback);
+        cached = await cacheResolvedAttachment(this.cache, fallback, signal);
       }
+      signal?.throwIfAborted();
       cacheHit = cached.cacheHit;
       let activeTaskHeld = cached.activeTaskRetained === true;
       if (!activeTaskHeld) {
@@ -184,13 +195,24 @@ export class AttachmentService {
         activeTaskHeld = true;
       }
       try {
-        if (cacheReference) await this.cache.addReference(cached.cacheKey, cacheReference);
+        if (cacheReference) {
+          signal?.throwIfAborted();
+          await this.cache.addReference(cached.cacheKey, cacheReference);
+        }
+        signal?.throwIfAborted();
         const parsed = acquiredAttachment(pending, cached);
         if (!cached.cacheHit) this.clearParsedResults(cached.cacheKey);
         let result: ParsedAttachment;
         try {
-          result = await this.getOrParseCached(parsed, cached.filePath, query, cached.cacheHit);
+          result = await this.getOrParseCached(
+            parsed,
+            cached.filePath,
+            query,
+            cached.cacheHit,
+            signal
+          );
         } catch {
+          signal?.throwIfAborted();
           result = parsedAttachmentState(failAttachment(
             parsed,
             "failed",
@@ -198,6 +220,7 @@ export class AttachmentService {
             "文件无法解析，可能已损坏。"
           ), "parse_failed");
         }
+        signal?.throwIfAborted();
         const rebound = rebindParsedAttachment(result, parsed);
         logAttachmentProcessing(rebound, {
           referenceScope: cacheReference,
@@ -212,6 +235,7 @@ export class AttachmentService {
         if (activeTaskHeld) await this.cache.endActiveTask(cached.cacheKey);
       }
     } catch (error) {
+      if (signal?.aborted) throw signal.reason ?? error;
       if (error instanceof AttachmentTooLargeError) {
         return failedAcquisition(
           pending,
@@ -242,8 +266,10 @@ export class AttachmentService {
     attachment: ParsedAttachment,
     filePath: string,
     query: string,
-    cacheHit: boolean
+    cacheHit: boolean,
+    signal?: AbortSignal
   ) {
+    signal?.throwIfAborted();
     const cacheKey = attachment.cacheKey!;
     const reuseKey = parsedReuseKey(cacheKey, attachment.name);
     const reusable = this.getParsedResult(reuseKey);
@@ -251,15 +277,18 @@ export class AttachmentService {
 
     const previous = this.parseQueuesByCacheKey.get(cacheKey) ?? Promise.resolve();
     const task = previous.catch(() => undefined).then(async () => {
+      signal?.throwIfAborted();
       const inMemory = this.getParsedResult(reuseKey);
       const queuedReusable = inMemory ?? (cacheHit
         ? await this.parser.loadParsedManifest(attachment)
         : undefined);
+      signal?.throwIfAborted();
       if (queuedReusable) {
         if (!inMemory) this.rememberParsedResult(reuseKey, queuedReusable);
         return queuedReusable;
       }
-      const parsed = await this.parser.parseCached(attachment, filePath, query);
+      const parsed = await this.parser.parseCached(attachment, filePath, query, signal);
+      signal?.throwIfAborted();
       if (parsed.status === "ready" || parsed.status === "partial") {
         this.rememberParsedResult(reuseKey, parsed);
       }

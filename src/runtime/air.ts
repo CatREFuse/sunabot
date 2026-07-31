@@ -16,6 +16,10 @@ import type {
 } from "../../services/tools/public.js";
 import { appendRequestLog } from "../../adapters/observability/requestLog.js";
 import type { ChatMessage, ConversationRecord, ParsedIncomingMessage } from "../types.js";
+import {
+  auxiliaryModelSignal,
+  auxiliaryProviderCompleteOptions
+} from "./auxiliaryModelBudget.js";
 import { errorMessage } from "./infrastructure.js";
 import { conversationRecordId } from "./messagingAttachmentHelpers.js";
 import type { RuntimePromptPort } from "./runtimeContracts.js";
@@ -63,17 +67,18 @@ export class RuntimeAir {
     signal?: AbortSignal
   ): Promise<unknown> {
     const runId = `read-air:${nanoid()}`;
+    const modelSignal = auxiliaryModelSignal(signal);
     try {
       for (let attempt = 1; attempt <= READ_AIR_MAX_ATTEMPTS; attempt += 1) {
-        if (signal?.aborted) throw signal.reason ?? new Error("read_air aborted");
+        if (modelSignal.aborted) throw modelSignal.reason ?? new Error("read_air aborted");
         const current = await readAirKnowledge(this.host.config);
         const request = await this.host.renderPromptRequest(AIR_KNOWLEDGE_PROMPT_ID, {
           [AIR_KNOWLEDGE_VARIABLE]: current.content,
           [AIR_CONVERSATION_VARIABLE]: boundedConversation(context),
           [AIR_INSIGHT_VARIABLE]: input.insight
         });
-        const next = await this.host.completePrompt(this.host.getProvider(), request, {
-          signal,
+        const next = await this.host.completePrompt(this.host.getProvider(), request, auxiliaryProviderCompleteOptions({
+          signal: modelSignal,
           logContext: {
             conversationId: context.conversationId,
             runId,
@@ -81,8 +86,13 @@ export class RuntimeAir {
             promptFamily: AIR_KNOWLEDGE_PROMPT_ID,
             attempt
           }
-        });
-        const committed = await replaceAirKnowledge(this.host.config, current.revision, next);
+        }));
+        const committed = await replaceAirKnowledge(
+          this.host.config,
+          current.revision,
+          next,
+          modelSignal
+        );
         if (committed.status === "conflict") continue;
         if (committed.status === "updated") this.host.persona = await loadPersona(this.host.config);
         await appendRequestLog({

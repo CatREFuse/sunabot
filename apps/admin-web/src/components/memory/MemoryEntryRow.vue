@@ -63,8 +63,7 @@ const recallLabel = computed(() => {
       </span>
 
       <span class="flex min-w-0 items-center justify-between gap-4 sm:block sm:text-right">
-        <span class="hidden max-w-52 truncate font-mono text-[11px] text-mute sm:block">#{{ entry.key || entry.id }}</span>
-        <time v-if="timestamp" class="block font-mono text-[11px] text-mute sm:mt-2">{{ formatFullDateTime(timestamp) }}</time>
+        <time v-if="timestamp" class="block font-mono text-[11px] text-mute">{{ formatFullDateTime(timestamp) }}</time>
         <i class="bx bx-right-arrow-alt ml-auto text-xl text-disabled transition-transform duration-200 group-hover:translate-x-1 group-hover:text-display sm:mt-3 sm:block" aria-hidden="true"></i>
       </span>
     </button>

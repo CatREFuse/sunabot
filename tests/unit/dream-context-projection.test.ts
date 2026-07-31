@@ -3,27 +3,28 @@ import {
   DREAM_CONTEXT_PROJECTION_LIMITS,
   dreamContextPayloadByteLength,
   projectDreamContext,
-  projectDreamContextPayload,
-  restoreDreamFieldKnowledge
+  projectDreamContextPayload
 } from "../../src/runtime/dreamContextProjection.js";
 
 const SEED = "a".repeat(64);
 const OTHER_SEED = "b".repeat(64);
 
 describe("Dream context projection", () => {
-  it("projects raw context through a closed schema and links identities with seeded pseudonyms", () => {
+  it("projects a closed schema while preserving original names, address names, and QQ identities", () => {
     const raw = sensitivePayload();
     const before = structuredClone(raw);
     const payload = projectDreamContextPayload(raw);
     const serialized = JSON.stringify(payload);
 
     expect(raw).toEqual(before);
-    expect(serialized).not.toContain("12345678");
-    expect(serialized).not.toContain("海老师");
-    expect(serialized).not.toContain("private:12345678");
+    expect(serialized).toContain("12345678");
+    expect(serialized).toContain("海老师");
+    expect(serialized).toContain("private:12345678");
     expect(serialized).not.toContain("/Users/tanshow/Developer/sunabot");
     expect(serialized).not.toContain("super-secret-value");
     expect(serialized).not.toContain("extension-secret");
+    expect(serialized).not.toMatch(/人物-[a-f0-9]{24}/u);
+    expect(serialized).not.toMatch(/\b(?:person|profile|context|event|causal|subject|task|schedule|impression):[a-f0-9]{24}\b/u);
     expect(serialized).toContain("[已隐藏路径]");
     expect(serialized).toContain("[已隐藏敏感信息]");
     expect(findForbiddenKeys(payload)).toEqual([]);
@@ -37,39 +38,70 @@ describe("Dream context projection", () => {
     const message = objectArray(conversation.messages)[0]!;
     const director = objectValue(payload.plannedDailySchedule);
     const directorItem = objectArray(director.items)[0]!;
-    const participantRef = stringArray(workingMemory.participantRefs)[0];
 
-    expect(participantRef).toMatch(/^person:[a-f0-9]{24}$/u);
-    expect(stringArray(profile.participantRefs)).toContain(participantRef);
-    expect(message.speakerRef).toBe(participantRef);
-    expect(stringArray(directorItem.participantRefs)).toContain(participantRef);
-    expect(workingMemory.contextRef).toBe(conversation.contextRef);
-    expect(workingMemory.eventRef).toBe(longTermMemory.eventRef);
-    expect(workingMemory.causalChainRef).toBe(longTermMemory.causalChainRef);
     expect(workingMemory).toMatchObject({
       id: "working-1",
       factuality: "factual",
+      userId: "12345678",
+      userIds: ["12345678"],
+      userName: "海老师",
+      addressNames: ["海老师"],
+      conversationId: "private:12345678",
+      contextKey: "private:12345678",
+      eventKey: "event:old-station",
+      causalChainKey: "cause:promise-and-task",
+      subjectKey: "subject:12345678",
       eventType: "task",
       importance: 0.8,
       futureRelevance: 0.9,
       emotionalSalience: 0.7,
       promoteToLongTerm: true
     });
-    expect(String(workingMemory.fact)).toContain("人物-");
+    expect(longTermMemory).toMatchObject({
+      userId: "12345678",
+      eventKey: "event:old-station",
+      causalChainKey: "cause:promise-and-task"
+    });
+    expect(String(workingMemory.fact)).toContain("海老师（12345678）");
+    expect(profile).toMatchObject({
+      id: "profile_12345678",
+      userId: "12345678",
+      userName: "海老师",
+      addressNames: ["海老师"]
+    });
+    expect(conversation).toMatchObject({
+      id: "private:12345678",
+      title: "海老师"
+    });
+    expect(message).toMatchObject({
+      userId: "12345678",
+      senderName: "海老师"
+    });
+    expect(directorItem).toMatchObject({
+      id: "director-item-secret",
+      participants: ["海老师"]
+    });
     expect(payload.sourceMemoryIds).toEqual(["working-1", "long-1"]);
     expect(payload.fieldKnowledgeEvidenceIds).toEqual(["working-1"]);
     expect(payload.fieldKnowledgeWritable).toBe(false);
     expect(payload.recentWindowHours).toBe(24);
     expect(objectArray(payload.activeTasks)[0]).toMatchObject({ enabled: true, status: "running" });
     expect(objectArray(payload.personaImpressions)[0]).toMatchObject({
+      id: "persona-run-1",
       topicKey: "communication.evidence",
       level: "stable",
       targetFile: "PREFERENCE.md"
     });
-    expect(String(objectArray(payload.personaImpressions)[0]?.impressionRef))
-      .toMatch(/^impression:[a-f0-9]{24}$/u);
-    expect(String(objectArray(payload.personaImpressions)[0]?.statement)).toContain("人物-");
-    expect(objectValue(payload.persona)).toHaveProperty("preference");
+    expect(String(objectArray(payload.personaImpressions)[0]?.statement)).toContain("海老师");
+    expect(objectValue(payload.persona)).toMatchObject({
+      id: "plana",
+      name: "Plana",
+      user: "海老师是长期伙伴。"
+    });
+    expect(objectArray(objectArray(payload.activeTasks)[0]?.targets)[0]).toEqual({
+      conversationId: "private:12345678",
+      mentionUserIds: ["12345678"]
+    });
     expect(payload.scheduledFor).toBe("2026-07-20T04:00:00.000+08:00");
     expect(Object.keys(payload)).toEqual([
       "schemaVersion", "seed", "localDate", "scheduledFor", "timeZone", "memoryWindow",
@@ -100,7 +132,7 @@ describe("Dream context projection", () => {
     expect(objectValue(payload.persona).air).toBe(raw.persona.air.replaceAll("\r\n", "\n"));
   });
 
-  it("keeps AIR identity aliases reversible without exposing them to the Provider payload", () => {
+  it("keeps AIR identities readable without a local alias-binding contract", () => {
     const raw = sensitivePayload();
     raw.persona.air = "# 场域知识\n\n## 使用边界\n\n- 只在协作群生效。\n\n## 场域约定\n\n- 海老师负责发布前复核。";
 
@@ -108,16 +140,12 @@ describe("Dream context projection", () => {
     const projectedAir = String(objectValue(projection.payload.persona).air);
 
     expect(projection.payload.fieldKnowledgeWritable).toBe(true);
-    expect(projectedAir).not.toContain("海老师");
-    expect(projectedAir).toMatch(/人物-[a-f0-9]{24}/u);
-    expect(projection.fieldKnowledgeBindings).toEqual([
-      expect.objectContaining({ value: "海老师" })
-    ]);
-    expect(restoreDreamFieldKnowledge(projectedAir, projection.fieldKnowledgeBindings))
-      .toBe(raw.persona.air);
+    expect(projectedAir).toBe(raw.persona.air);
+    expect(JSON.stringify(projection)).not.toContain("fieldKnowledgeBindings");
+    expect(projectedAir).not.toMatch(/人物-[a-f0-9]{24}/u);
   });
 
-  it("redacts unregistered identifiers, credentials, signed URLs, and absolute paths without removing schedule values", () => {
+  it("preserves identity numbers while redacting credentials, signed URLs, email, and absolute paths", () => {
     const raw = sensitivePayload();
     const awsAccess = "AKIAIOSFODNN7EXAMPLE";
     const awsSessionAccess = "ASIAIOSFODNN7EXAMPLE";
@@ -139,11 +167,13 @@ describe("Dream context projection", () => {
 
     const soul = String(objectValue(projectDreamContextPayload(raw).persona).soul);
     for (const sensitive of [
-      "87654321", "62220202020202020202", "dreamer@example.com", awsAccess, awsSessionAccess,
+      "dreamer@example.com", awsAccess, awsSessionAccess,
       awsSecret, awsSession, jwt, basic, bearer, "deadbeef", "private-policy", "signed-value", "pair-id",
       "/workspace", "/srv", "/app", "/data", "/mnt", "/run", "/usr/local/bin/node",
       "C:\\Users\\Alice", "D:/Data", "\\\\nas01\\private$", "//nas02/private$"
     ]) expect(soul).not.toContain(sensitive);
+    expect(soul).toContain("QQ 87654321");
+    expect(soul).toContain("长号 62220202020202020202");
     expect(soul).not.toMatch(/\b(?:Basic|Bearer)\b/iu);
     expect(soul).toContain("[已隐藏敏感信息]");
     expect(soul).toContain("[已隐藏路径]");
@@ -154,7 +184,76 @@ describe("Dream context projection", () => {
     expect(soul).toContain("step=*/5 * * * *");
   });
 
-  it("is deterministic for a run seed and rotates every pseudonym when the seed changes", () => {
+  it("applies the same sensitive-text redaction to every structured identity surface", () => {
+    const raw = sensitivePayload();
+    const tokenAssignment = "token=identity-secret-value";
+    const email = "identity@example.com";
+    const privateKey = [
+      "-----BEGIN PRIVATE KEY-----",
+      "identity-private-key-value",
+      "-----END PRIVATE KEY-----"
+    ].join("\n");
+    const bearer = "Bearer identity-bearer-token";
+    const awsAccess = "AKIAIOSFODNN7EXAMPLE";
+    const signedUrl = "https://bucket.example.com/report?X-Amz-Signature=identity-signature";
+    const absolutePath = "/Users/alice/private/identity.txt";
+    const githubToken = "ghp_identitysecretvalue";
+
+    const workingMemory = objectValue(raw.workingMemories[0]!.memory);
+    workingMemory.userName = tokenAssignment;
+    workingMemory.addressNames = [email];
+    raw.userProfiles[0]!.id = privateKey;
+    raw.observedConversations[0]!.messages[0]!.senderName = bearer;
+    raw.activeTasks[0]!.id = signedUrl;
+    raw.activeTasks[0]!.targets[0]!.conversationId = signedUrl;
+    raw.activeTasks[0]!.targets[0]!.mentionUserIds = [awsAccess];
+    raw.plannedDailySchedule.items[0]!.id = absolutePath;
+    raw.plannedDailySchedule.items[0]!.participants = [absolutePath];
+    raw.personaImpressions[0]!.id = githubToken;
+    raw.persona.id = absolutePath;
+    raw.persona.name = tokenAssignment;
+
+    const payload = projectDreamContextPayload(raw);
+    const serialized = JSON.stringify(payload);
+    for (const sensitive of [
+      "identity-secret-value", email, "identity-private-key-value",
+      "identity-bearer-token", awsAccess, "identity-signature",
+      absolutePath, githubToken
+    ]) expect(serialized).not.toContain(sensitive);
+
+    expect(serialized).toContain("[已隐藏敏感信息]");
+    expect(serialized).toContain("[已隐藏路径]");
+    const projectedMemory = objectValue(objectArray(payload.workingMemories)[0]?.memory);
+    expect(projectedMemory).toMatchObject({
+      userId: "12345678",
+      userName: "token=[已隐藏敏感信息]",
+      addressNames: ["[已隐藏敏感信息]"]
+    });
+    expect(objectArray(payload.userProfiles)[0]?.id).toBe("[已隐藏敏感信息]");
+    const projectedConversation = objectArray(payload.observedConversations)[0]!;
+    expect(objectArray(projectedConversation.messages)[0]?.senderName).toBe("[已隐藏敏感信息]");
+    expect(objectArray(projectedConversation.messages)[1]?.senderName).toBe("T");
+    const projectedTask = objectArray(payload.activeTasks)[0]!;
+    expect(projectedTask.id).toBe(
+      "https://bucket.example.com/report?X-Amz-Signature=[已隐藏敏感信息]"
+    );
+    expect(objectArray(projectedTask.targets)[0]).toEqual({
+      conversationId: "https://bucket.example.com/report?X-Amz-Signature=[已隐藏敏感信息]",
+      mentionUserIds: ["[已隐藏敏感信息]"]
+    });
+    const projectedDirector = objectValue(payload.plannedDailySchedule);
+    expect(objectArray(projectedDirector.items)[0]).toMatchObject({
+      id: "[已隐藏路径]",
+      participants: ["[已隐藏路径]"]
+    });
+    expect(objectArray(payload.personaImpressions)[0]?.id).toBe("[已隐藏敏感信息]");
+    expect(objectValue(payload.persona)).toMatchObject({
+      id: "[已隐藏路径]",
+      name: "token=[已隐藏敏感信息]"
+    });
+  });
+
+  it("is deterministic and keeps original identity fields stable when the seed changes", () => {
     const raw = sensitivePayload();
     const first = projectDreamContextPayload(raw);
     const second = projectDreamContextPayload(raw);
@@ -163,10 +262,9 @@ describe("Dream context projection", () => {
     const rotatedMemory = objectValue(objectArray(rotated.workingMemories)[0]!.memory);
 
     expect(second).toEqual(first);
-    expect(rotatedMemory.participantRefs).not.toEqual(firstMemory.participantRefs);
-    expect(rotatedMemory.contextRef).not.toBe(firstMemory.contextRef);
-    expect(rotatedMemory.eventRef).not.toBe(firstMemory.eventRef);
-    expect(rotatedMemory.eventType).toBe(firstMemory.eventType);
+    expect(rotatedMemory).toEqual(firstMemory);
+    expect(rotated.seed).toBe(OTHER_SEED);
+    expect(first.seed).toBe(SEED);
   });
 
   it("applies explicit field, array, and total payload limits with deterministic tail clipping", () => {
@@ -430,10 +528,10 @@ function findForbiddenKeys(value: unknown, path = "$"): string[] {
   return Object.entries(record).flatMap(([key, item]) => {
     const current = `${path}.${key}`;
     const forbidden = new Set([
-      "conversationId", "contextKey", "userId", "userIds", "userName", "addressName", "addressNames",
-      "senderName", "senderNickname", "senderCard", "title", "id", "secret", "arbitrary", "filePath"
+      "secret", "arbitrary", "filePath", "participantRefs", "speakerRef", "profileRef",
+      "contextRef", "eventRef", "causalChainRef", "subjectRef", "taskRef", "itemRef",
+      "impressionRef", "fieldKnowledgeBindings"
     ]);
-    const isAllowedMemoryId = key === "id" && (path.includes("workingMemories") || path.includes("longTermMemories"));
-    return [...forbidden.has(key) && !isAllowedMemoryId ? [current] : [], ...findForbiddenKeys(item, current)];
+    return [...forbidden.has(key) ? [current] : [], ...findForbiddenKeys(item, current)];
   });
 }

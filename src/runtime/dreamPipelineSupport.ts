@@ -1,13 +1,30 @@
 import { createHash } from "node:crypto";
+import { containsLegacyHostIdentityAlias } from "../../services/memory/dream/public.js";
+import { projectDreamContext } from "./dreamContextProjection.js";
 
 export type DreamPipelineJsonObject = Record<string, unknown>;
-export interface DreamPipelineFieldKnowledgeBinding {
-  token: string;
-  value: string;
-}
 
 export function digestDreamPipelineJson(value: unknown) {
   return digestDreamPipelineText(canonicalDreamPipelineJson(value));
+}
+
+export function isCurrentDreamPipelineInput(
+  stored: DreamPipelineJsonObject,
+  normalized: unknown
+) {
+  if (!isDreamPipelineObject(normalized)
+    || !isDreamPipelineObject(normalized.payload)
+    || containsLegacyHostIdentityAlias(stored)) return false;
+  try {
+    const payload = projectDreamContext(normalized.payload).payload;
+    if (normalized.payload.fieldKnowledgeWritable === false
+      && payload.fieldKnowledgeWritable === true) {
+      payload.fieldKnowledgeWritable = false;
+    }
+    return digestDreamPipelineJson({ ...normalized, payload }) === digestDreamPipelineJson(stored);
+  } catch {
+    return false;
+  }
 }
 
 export function digestDreamPipelineText(value: string) {
@@ -75,29 +92,6 @@ export function positiveDreamInterval(value: number, field: string) {
     throw new Error(`${field} must be at least 100ms.`);
   }
   return value;
-}
-
-export function dreamPipelineFieldKnowledgeBindings(
-  value: unknown
-): DreamPipelineFieldKnowledgeBinding[] {
-  if (value == null) return [];
-  if (!Array.isArray(value) || value.length > 256) {
-    throw new Error("fieldKnowledgeBindings is invalid.");
-  }
-  const tokens = new Set<string>();
-  return value.map((item, index) => {
-    if (!isDreamPipelineObject(item)
-      || typeof item.token !== "string"
-      || !/^人物-[a-f0-9]{24}$/u.test(item.token)
-      || typeof item.value !== "string"
-      || !item.value.trim()
-      || [...item.value].length > 256
-      || tokens.has(item.token)) {
-      throw new Error(`fieldKnowledgeBindings[${index}] is invalid.`);
-    }
-    tokens.add(item.token);
-    return { token: item.token, value: item.value };
-  });
 }
 
 export function isDreamPipelineObject(value: unknown): value is DreamPipelineJsonObject {

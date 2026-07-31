@@ -7,10 +7,13 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
 import { OneBotGateway } from "../../adapters/onebot/onebotGateway.js";
+import { RegistryProviderToolExecutor } from "../../adapters/model/provider/toolExecutor.js";
+import { BundledAgentSkillInstaller } from "../../apps/api/bundledAgentSkills.js";
 import { defaultConfig } from "../../src/config.js";
 import {
   renderWorkingMemoryMarkdown
 } from "../../services/memory/workingMemoryDocument.js";
+import { resolveAgentWorkbench } from "../../services/agents/public.js";
 import {
   parseUserTestCaseDocument,
   readUserTestCaseDocument
@@ -29,6 +32,8 @@ import {
 import { validateAndSealUserTestReport } from "../../tooling/user-test-harness/review.js";
 import { sampleBranchFixture } from "../../tooling/user-test-harness/sample.js";
 import {
+  assertUserTestWorkspace,
+  installIsolatedCodexGuiHome,
   prepareUserTestWorkspace,
   resetUserTestKnowledgeDirectory
 } from "../../tooling/user-test-harness/workspace.js";
@@ -1008,7 +1013,9 @@ describe("user test harness", () => {
     }
   });
 
-  it("prepares the isolated Agent parent with private extension-safe permissions", async () => {
+  it("prepares the isolated Agent parent with private extension-safe permissions", {
+    timeout: 15_000
+  }, async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-user-test-prepare-"));
     const source = path.join(root, "source");
     const destination = path.join(root, "destination");
@@ -1058,6 +1065,22 @@ describe("user test harness", () => {
       "Koharu fixture persona\n"
     );
     await fs.writeFile(
+      path.join(source, "business/agents/koharu/agent.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        id: "koharu",
+        name: "Koharu",
+        enabled: true,
+        createdAt: "2026-07-31T00:00:00.000Z",
+        updatedAt: "2026-07-31T00:00:00.000Z",
+        prompts: { overrideSystem: true }
+      })
+    );
+    await fs.writeFile(
+      path.join(source, "business/agents/koharu/AIR.md"),
+      "private production identities\n"
+    );
+    await fs.writeFile(
       path.join(source, "business/agents/koharu/WORKING_MEMORY.md"),
       "private Koharu source memory\n"
     );
@@ -1079,10 +1102,60 @@ describe("user test harness", () => {
       path.join(source, "business/agents/koharu/data/sunabot.sqlite"),
       "private copied Koharu database"
     );
+    await fs.mkdir(
+      path.join(source, "business/agents/koharu/system-prompts"),
+      { recursive: true }
+    );
+    await fs.writeFile(
+      path.join(
+        source,
+        "business/agents/koharu/system-prompts/conversation_private_reply.json"
+      ),
+      "{\"messages\":[{\"role\":\"user\",\"content\":\"@{user.input}\"}]}\n"
+    );
+    await fs.writeFile(
+      path.join(source, "business/agents/koharu/selfie_prompt_rewrite.json"),
+      "{\"messages\":[{\"role\":\"user\",\"content\":\"fixture selfie\"}]}\n"
+    );
+    for (const [relative, content] of [
+      ["runtime/codex-jobs/history.json", "private runtime"],
+      ["cache/attachments/index.json", "private cache"],
+      [".prompt-migration-backups/history.json", "private backup"],
+      ["voice/profile.json", "private voice"],
+      ["workbench/knowledge/source-only.md", "private native resource"],
+      ["docker-workbench/source-only.md", "private docker resource"],
+      ["files/history.txt", "private file"],
+      ["assets/avatar.png", "private avatar"],
+      ["extensions/mcp/servers.json", "private extension"],
+      [".sunabot-prompt-migrations.json", "private migration state"],
+      ["history.json", "private undeclared root data"]
+    ] as const) {
+      const target = path.join(source, "business/agents/koharu", relative);
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      await fs.writeFile(target, content);
+    }
+    await fs.symlink(
+      path.join(source, "business/agents/koharu/SOUL.md"),
+      path.join(source, "business/agents/koharu/runtime/source-persona-link")
+    );
     await fs.writeFile(
       path.join(source, "business/prompts/custom.json"),
       "{\"fixture\":true}\n"
     );
+    await fs.mkdir(
+      path.join(source, "business/prompts/.prompt-migration-backups/private"),
+      { recursive: true }
+    );
+    await fs.writeFile(
+      path.join(source, "business/prompts/.prompt-migration-backups/private/00.json"),
+      "{\"private\":\"historical prompt\"}\n"
+    );
+    await fs.writeFile(
+      path.join(source, "business/prompts/.sunabot-prompt-migrations.json"),
+      "{\"private\":\"migration state\"}\n"
+    );
+    const agentSource = path.join(source, "business/agents/koharu");
+    const copySpy = vi.spyOn(fs, "cp");
     try {
       await expect(prepareUserTestWorkspace({
         source,
@@ -1090,6 +1163,26 @@ describe("user test harness", () => {
         confirmCredentialCopy: true,
         agentId: "missing"
       })).rejects.toThrow("源 workspace 不存在 Agent：missing");
+      await fs.symlink(
+        path.join(source, "business/agents/koharu/SOUL.md"),
+        path.join(
+          source,
+          "business/agents/koharu/system-prompts/conversation_group_reply.json"
+        )
+      );
+      await expect(prepareUserTestWorkspace({
+        source,
+        destination: path.join(root, "symlink-destination"),
+        confirmCredentialCopy: true,
+        agentId: "koharu"
+      })).rejects.toThrow("USER_TEST_AGENT_WORKSPACE_SYMLINK");
+      await expect(fs.access(
+        path.join(root, "symlink-destination")
+      )).rejects.toMatchObject({ code: "ENOENT" });
+      await fs.unlink(path.join(
+        source,
+        "business/agents/koharu/system-prompts/conversation_group_reply.json"
+      ));
       await prepareUserTestWorkspace({
         source,
         destination,
@@ -1111,10 +1204,81 @@ describe("user test harness", () => {
         path.join(destination, "business/agents/koharu/SOUL.md"),
         "utf8"
       )).toBe("Koharu fixture persona\n");
+      expect(JSON.parse(await fs.readFile(
+        path.join(destination, "business/agents/koharu/agent.json"),
+        "utf8"
+      ))).toMatchObject({ id: "koharu", prompts: { overrideSystem: true } });
+      expect(await fs.readFile(
+        path.join(
+          destination,
+          "business/agents/koharu/system-prompts/conversation_private_reply.json"
+        ),
+        "utf8"
+      )).toContain("@{user.input}");
+      expect(await fs.readFile(
+        path.join(destination, "business/agents/koharu/selfie_prompt_rewrite.json"),
+        "utf8"
+      )).toContain("fixture selfie");
       expect(await fs.readFile(
         path.join(destination, "business/prompts/custom.json"),
         "utf8"
       )).toBe("{\"fixture\":true}\n");
+      await expect(fs.access(
+        path.join(destination, "business/prompts/.prompt-migration-backups")
+      )).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.access(
+        path.join(destination, "business/prompts/.sunabot-prompt-migrations.json")
+      )).rejects.toMatchObject({ code: "ENOENT" });
+      for (const relative of [
+        "AIR.md",
+        "runtime",
+        "cache",
+        ".prompt-migration-backups",
+        "voice",
+        "docker-workbench",
+        "files",
+        "assets",
+        "history.json",
+        ".sunabot-prompt-migrations.json"
+      ]) {
+        await expect(fs.access(
+          path.join(destination, "business/agents/koharu", relative)
+        )).rejects.toMatchObject({ code: "ENOENT" });
+      }
+      await expect(fs.access(path.join(
+        destination,
+        "business/agents/koharu/workbench/knowledge/source-only.md"
+      ))).rejects.toMatchObject({ code: "ENOENT" });
+      const mcpIndex = JSON.parse(await fs.readFile(
+        path.join(destination, "business/agents/koharu/extensions/mcp/servers.json"),
+        "utf8"
+      ));
+      expect(mcpIndex.servers).toEqual([]);
+      const skillIndex = JSON.parse(await fs.readFile(
+        path.join(destination, "business/agents/koharu/workbench/skills/index.json"),
+        "utf8"
+      ));
+      expect(skillIndex.skills).toContainEqual(expect.objectContaining({
+        id: "workbench-config",
+        enabled: true,
+        source: { kind: "bundled", bundleId: "workbench-config" }
+      }));
+      await expect(fs.access(path.join(
+        destination,
+        "business/agents/koharu/workbench/skills/workbench-config/SKILL.md"
+      ))).resolves.toBeUndefined();
+      const copiedEntries = await collectRelativePaths(
+        path.join(destination, "business/agents/koharu")
+      );
+      expect(copiedEntries.some((entry) => entry.kind === "symlink")).toBe(false);
+      expect(copySpy.mock.calls.some(([copiedSource]) => (
+        path.resolve(String(copiedSource)) === path.resolve(agentSource)
+      ))).toBe(false);
+      const dockerWorkbench = await resolveAgentWorkbench(
+        path.join(destination, "business/agents/koharu"),
+        "docker"
+      );
+      expect(await fs.readdir(dockerWorkbench)).toEqual([]);
       const preparedConfig = JSON.parse(await fs.readFile(
         path.join(destination, "business/config/sunabot.json"),
         "utf8"
@@ -1125,6 +1289,22 @@ describe("user test harness", () => {
         defaultAgentId: "koharu",
         agentWorkspace: "workspace/business/agents/koharu"
       });
+      const ordinaryGuiHome = path.join(root, "ordinary-real-codex-home");
+      const ordinaryEnvironment = {
+        SUNABOT_WORKSPACE: destination,
+        SUNABOT_CODEX_GUI_HOME: ordinaryGuiHome
+      };
+      const restoreOrdinaryGuiHome = await installIsolatedCodexGuiHome(
+        ordinaryEnvironment
+      );
+      expect(ordinaryEnvironment.SUNABOT_CODEX_GUI_HOME).toBe(ordinaryGuiHome);
+      restoreOrdinaryGuiHome();
+      const ordinaryProjection = await projectHarnessProviderOptions(
+        destination,
+        { asyncCodex: true, codexControl: true }
+      );
+      expect(ordinaryProjection.wrapped).toBe(false);
+      expect(ordinaryProjection.options.blockedToolExecutions).toBeUndefined();
       const isolatedWorkbench = path.join(
         destination,
         "business/agents/koharu/workbench"
@@ -1139,6 +1319,297 @@ describe("user test harness", () => {
         path.join(isolatedWorkbench, "knowledge/source-only.md")
       )).rejects.toMatchObject({ code: "ENOENT" });
       expect(await fs.readdir(path.join(isolatedWorkbench, "knowledge"))).toEqual([]);
+    } finally {
+      copySpy.mockRestore();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("locks every prepared Provider route and removes a workspace changed before final validation", {
+    timeout: 15_000
+  }, async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-user-test-provider-lock-"));
+    const source = path.join(root, "source");
+    const destination = path.join(root, "destination");
+    const authDestination = path.join(root, "auth-destination");
+    const invalidDestination = path.join(root, "invalid-destination");
+    const config = defaultConfig() as unknown as Record<string, any>;
+    config.persona.defaultAgentId = "arona";
+    config.persona.agentWorkspace = "workspace/business/agents/arona";
+    config.providers = {
+      defaultProviderId: "unused-provider",
+      items: [{
+        id: "unused-provider",
+        kind: "openai-official",
+        model: "unused-model",
+        apiKeyEnv: "UNUSED_KEY",
+        envFile: "workspace/secrets/runtime.env"
+      }, {
+        id: "open-arona-codex",
+        kind: "codex-responses",
+        model: "source-codex-model",
+        imageModel: "preserved-image-model",
+        apiKeyEnv: "CODEX_ACCESS_TOKEN",
+        apiKey: "shared-provider-inline-secret",
+        envFile: "workspace/secrets/runtime.env"
+      }]
+    };
+    applyOffRouteBot(config.bot, "shared-provider", "shared-model");
+    config.bot.tools.generateImg.provider = "preserved-image-provider";
+    config.bot.tools.websearch.tavilyApiKey = "shared-tavily-inline-secret";
+    config.bot.tools.websearch.tavilyApiKeys = ["shared-tavily-inline-secret-2"];
+    const agentBot = applyOffRouteBot({}, "agent-provider", "agent-model");
+    agentBot.tools.websearch = {
+      tavilyApiKey: "agent-tavily-inline-secret",
+      tavilyApiKeys: ["agent-tavily-inline-secret-2"],
+      tavilyApiKeyEnv: "TAVILY_API_KEY"
+    };
+    const manifest = {
+      schemaVersion: 1,
+      id: "arona",
+      name: "Arona",
+      enabled: true,
+      createdAt: "2026-07-31T00:00:00.000Z",
+      updatedAt: "2026-07-31T00:00:00.000Z",
+      providers: {
+        defaultProviderId: "agent-provider",
+        items: [{ id: "agent-provider", token: "agent-provider-inline-secret" }]
+      },
+      bot: agentBot
+    };
+    await fs.mkdir(path.join(source, "business/config"), { recursive: true });
+    await fs.mkdir(path.join(source, "business/agents/arona"), { recursive: true });
+    await fs.mkdir(path.join(source, "secrets"), { recursive: true });
+    await fs.writeFile(
+      path.join(source, "business/config/sunabot.json"),
+      JSON.stringify(config)
+    );
+    await fs.writeFile(
+      path.join(source, "business/agents/arona/agent.json"),
+      JSON.stringify(manifest)
+    );
+    await fs.writeFile(
+      path.join(source, "secrets/runtime.env"),
+      "CODEX_ACCESS_TOKEN=fixture-token\nUNUSED_KEY=unused-token\n"
+    );
+    const codexAuthContent = `${JSON.stringify({
+      auth_mode: "chatgpt",
+      tokens: {
+        access_token: "fixture-codex-auth-token",
+        refresh_token: "fixture-codex-refresh-token"
+      }
+    }, null, 2)}\n`;
+    await fs.mkdir(path.join(source, "secrets/codex"), { recursive: true });
+    await fs.writeFile(
+      path.join(source, "secrets/codex/auth.json"),
+      codexAuthContent
+    );
+    try {
+      await prepareUserTestWorkspace({
+        source,
+        destination,
+        confirmCredentialCopy: true,
+        agentId: "arona",
+        providerId: "open-arona-codex",
+        model: "gpt-5.6-sol",
+        lockProviderRoutes: true
+      });
+      const preparedConfig = JSON.parse(await fs.readFile(
+        path.join(destination, "business/config/sunabot.json"),
+        "utf8"
+      ));
+      const preparedAgent = JSON.parse(await fs.readFile(
+        path.join(destination, "business/agents/arona/agent.json"),
+        "utf8"
+      ));
+      expect(preparedConfig.providers).toMatchObject({
+        defaultProviderId: "open-arona-codex",
+        items: [expect.objectContaining({
+          id: "open-arona-codex",
+          kind: "codex-responses",
+          model: "gpt-5.6-sol",
+          imageModel: "preserved-image-model"
+        })]
+      });
+      expect(preparedConfig.bot.tools.generateImg.provider)
+        .toBe("preserved-image-provider");
+      expect(preparedAgent).not.toHaveProperty("providers");
+      expect(JSON.stringify(preparedConfig)).not.toContain("inline-secret");
+      expect(JSON.stringify(preparedAgent)).not.toContain("inline-secret");
+      const isolatedEnvironmentNames = (await fs.readFile(
+        path.join(destination, "secrets/runtime.env"),
+        "utf8"
+      ))
+        .trim()
+        .split("\n")
+        .map((line) => line.slice(0, line.indexOf("=")))
+        .sort();
+      expect(isolatedEnvironmentNames)
+        .toEqual(["CODEX_ACCESS_TOKEN", "ONEBOT_ACCESS_TOKEN"]);
+      await expect(fs.access(path.join(destination, "secrets/codex/auth.json")))
+        .rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.readdir(path.join(destination, "secrets/codex")))
+        .resolves.toEqual([]);
+      const defaultMarker = JSON.parse(await fs.readFile(
+        path.join(destination, ".sunabot-user-test-workspace.json"),
+        "utf8"
+      ));
+      expect(defaultMarker.codexAuthCopied).toBe(false);
+      expect(defaultMarker.providerRouteLock).toEqual({
+        providerId: "open-arona-codex",
+        model: "gpt-5.6-sol",
+        providerApiKeyEnv: "CODEX_ACCESS_TOKEN",
+        onebotAccessTokenEnv: "ONEBOT_ACCESS_TOKEN"
+      });
+      for (const document of [preparedConfig, preparedAgent]) {
+        expectLockedBot(document.bot, "open-arona-codex", "gpt-5.6-sol");
+      }
+      await expect(assertUserTestWorkspace(destination)).resolves.toBe(destination);
+      preparedConfig.providers.items[0].baseUrl = "https://attacker.invalid/codex";
+      await fs.writeFile(
+        path.join(destination, "business/config/sunabot.json"),
+        JSON.stringify(preparedConfig)
+      );
+      await expect(assertUserTestWorkspace(destination)).rejects.toThrow(
+        "USER_TEST_PROVIDER_ROUTE_LOCK_INVALID: shared.providers.items[0]"
+      );
+      preparedConfig.providers.items[0].baseUrl =
+        "https://chatgpt.com/backend-api/codex";
+      await fs.writeFile(
+        path.join(destination, "business/config/sunabot.json"),
+        JSON.stringify(preparedConfig)
+      );
+      await expect(assertUserTestWorkspace(destination)).resolves.toBe(destination);
+
+      await prepareUserTestWorkspace({
+        source,
+        destination: authDestination,
+        confirmCredentialCopy: true,
+        agentId: "arona",
+        providerId: "open-arona-codex",
+        model: "gpt-5.6-sol",
+        lockProviderRoutes: true,
+        copyCodexAuth: true
+      });
+      await expect(fs.readFile(
+        path.join(authDestination, "secrets/codex/auth.json"),
+        "utf8"
+      )).resolves.toBe(codexAuthContent);
+      const authMarker = JSON.parse(await fs.readFile(
+        path.join(authDestination, ".sunabot-user-test-workspace.json"),
+        "utf8"
+      ));
+      expect(authMarker.codexAuthCopied).toBe(true);
+      expect(Object.keys(authMarker).sort()).toEqual([
+        "agentId",
+        "codexAuthCopied",
+        "createdAt",
+        "providerRouteLock",
+        "purpose",
+        "schemaVersion",
+        "sourceDigest"
+      ]);
+      const externalGuiHome = path.join(root, "real-user-codex-home");
+      const defaultEnvironment = {
+        SUNABOT_WORKSPACE: destination,
+        SUNABOT_CODEX_GUI_HOME: externalGuiHome
+      };
+      const restoreDefaultGuiHome = await installIsolatedCodexGuiHome(defaultEnvironment);
+      expect(defaultEnvironment.SUNABOT_CODEX_GUI_HOME).toBe(
+        await fs.realpath(path.join(destination, "secrets/codex"))
+      );
+      expect(defaultEnvironment.SUNABOT_CODEX_GUI_HOME).not.toBe(externalGuiHome);
+      restoreDefaultGuiHome();
+      expect(defaultEnvironment.SUNABOT_CODEX_GUI_HOME).toBe(externalGuiHome);
+      const isolatedEnvironment = {
+        SUNABOT_WORKSPACE: authDestination,
+        SUNABOT_CODEX_GUI_HOME: externalGuiHome
+      };
+      const restoreIsolatedGuiHome = await installIsolatedCodexGuiHome(isolatedEnvironment);
+      expect(isolatedEnvironment.SUNABOT_CODEX_GUI_HOME).toBe(
+        await fs.realpath(path.join(authDestination, "secrets/codex"))
+      );
+      expect(isolatedEnvironment.SUNABOT_CODEX_GUI_HOME).not.toBe(externalGuiHome);
+      restoreIsolatedGuiHome();
+      expect(isolatedEnvironment.SUNABOT_CODEX_GUI_HOME).toBe(externalGuiHome);
+
+      const blockedProjection = await projectHarnessProviderOptions(
+        destination,
+        { asyncCodex: true }
+      );
+      expect(blockedProjection.wrapped).toBe(true);
+      expect(blockedProjection.options.blockedToolExecutions)
+        .toEqual(expect.arrayContaining(["codex"]));
+      for (const control of [false, true]) {
+        const observation = await observeCodexDispatch(
+          {
+            ...blockedProjection.options,
+            codexControl: control
+          },
+          control
+        );
+        expect(observation.deferred).toBeNull();
+        expect(observation.runner).not.toHaveBeenCalled();
+        expect(observation.onToolCall).not.toHaveBeenCalled();
+        expect(observation.output).toMatchObject({
+          ok: false,
+          error: "Tool codex is unavailable in this run."
+        });
+      }
+
+      const allowedProjection = await projectHarnessProviderOptions(
+        authDestination,
+        { asyncCodex: true }
+      );
+      expect(allowedProjection.wrapped).toBe(true);
+      expect(allowedProjection.options.blockedToolExecutions)
+        .not.toEqual(expect.arrayContaining(["codex"]));
+      for (const control of [false, true]) {
+        const observation = await observeCodexDispatch(
+          {
+            ...allowedProjection.options,
+            codexControl: control
+          },
+          control
+        );
+        expect(observation.deferred).toMatchObject({
+          kind: "deferred",
+          toolCall: { name: "codex" }
+        });
+        expect(observation.runner).toHaveBeenCalledOnce();
+        expect(observation.onToolCall).toHaveBeenCalledWith("codex");
+        expect(observation.output).toBeUndefined();
+      }
+
+      const ensureSpy = vi.spyOn(
+        BundledAgentSkillInstaller.prototype,
+        "ensure"
+      ).mockImplementation(async () => {
+        const agentPath = path.join(
+          invalidDestination,
+          "business/agents/arona/agent.json"
+        );
+        const changed = JSON.parse(await fs.readFile(agentPath, "utf8"));
+        changed.bot.orchestrator.groupThreadModel = "missed-route-model";
+        await fs.writeFile(agentPath, JSON.stringify(changed), "utf8");
+      });
+      try {
+        await expect(prepareUserTestWorkspace({
+          source,
+          destination: invalidDestination,
+          confirmCredentialCopy: true,
+          agentId: "arona",
+          providerId: "open-arona-codex",
+          model: "gpt-5.6-sol",
+          lockProviderRoutes: true
+        })).rejects.toThrow(
+          "USER_TEST_PROVIDER_ROUTE_LOCK_INVALID: agent.bot.orchestrator.groupThreadModel"
+        );
+        await expect(fs.access(invalidDestination))
+          .rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        ensureSpy.mockRestore();
+      }
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
@@ -2370,6 +2841,151 @@ function codexSseResponse(
   );
 }
 
+function applyOffRouteBot(
+  bot: Record<string, any>,
+  providerId: string,
+  model: string
+) {
+  bot.replyProviderId = providerId;
+  bot.replyModel = model;
+  bot.imageReader = { ...(bot.imageReader ?? {}), providerId, model };
+  bot.tone = { ...(bot.tone ?? {}), providerId, model };
+  bot.memory = { ...(bot.memory ?? {}), memoryProviderId: providerId, memoryModel: model };
+  bot.orchestrator = {
+    ...(bot.orchestrator ?? {}),
+    userGroupchatOrchestratorProviderId: providerId,
+    userGroupchatOrchestratorModel: model,
+    groupThreadProviderId: providerId,
+    groupThreadModel: model
+  };
+  bot.tools = {
+    ...(bot.tools ?? {}),
+    codex: { ...(bot.tools?.codex ?? {}), model }
+  };
+  bot.bash = { ...(bot.bash ?? {}), auditModel: model };
+  return bot;
+}
+
+function expectLockedBot(
+  bot: Record<string, any>,
+  providerId: string,
+  model: string
+) {
+  expect(bot).toMatchObject({
+    replyProviderId: providerId,
+    replyModel: model,
+    imageReader: { providerId, model },
+    tone: { providerId, model },
+    memory: { memoryProviderId: providerId, memoryModel: model },
+    orchestrator: {
+      userGroupchatOrchestratorProviderId: providerId,
+      userGroupchatOrchestratorModel: model,
+      groupThreadProviderId: providerId,
+      groupThreadModel: model
+    },
+    tools: { codex: { model } },
+    bash: { auditModel: model }
+  });
+}
+
+async function projectHarnessProviderOptions(
+  workspace: string,
+  options: Record<string, any>
+) {
+  const original = vi.fn(async (
+    _provider: unknown,
+    _request: unknown,
+    providerOptions: Record<string, any> = {}
+  ) => providerOptions);
+  const runtime = { completePromptTurn: original };
+  const { installProviderEgressLock } = await import(
+    "../../tooling/user-test-harness/runtimeDriver.js"
+  );
+  await installProviderEgressLock(
+    runtime as never,
+    { SUNABOT_WORKSPACE: workspace }
+  );
+  const wrapped = runtime.completePromptTurn !== original;
+  const projected = await runtime.completePromptTurn(
+    undefined,
+    undefined,
+    options
+  );
+  return { wrapped, options: projected };
+}
+
+async function observeCodexDispatch(
+  options: Record<string, any>,
+  control: boolean
+) {
+  const executor = new RegistryProviderToolExecutor();
+  const onToolCall = vi.fn();
+  const runner = vi.fn();
+  const providerOptions = {
+    ...options,
+    asyncCodex: true,
+    codexControl: control,
+    onToolCall
+  };
+  const definitions = executor.resolveDefinitions(providerOptions);
+  const call = {
+    type: "function_call" as const,
+    name: "codex",
+    call_id: control ? "control-codex" : "worker-codex",
+    arguments: JSON.stringify(control
+      ? {
+          action: "list_sessions",
+          ssh_host: null,
+          task: null,
+          workspace_path: null,
+          thread_id: null,
+          query: null,
+          limit: null,
+          dispatch_message: "正在查询隔离任务。"
+        }
+      : {
+          task: "检查隔离工作区。",
+          kind: "analysis",
+          inputHandles: null,
+          dispatch_message: "正在检查隔离工作区。"
+        })
+  };
+  const deferred = executor.deferredTurn(
+    [call],
+    providerOptions,
+    definitions
+  );
+  if (deferred) runner(deferred.toolCall);
+  const output = deferred
+    ? undefined
+    : JSON.parse(String((await executor.execute(
+        [call],
+        providerOptions,
+        definitions
+      ))[0]?.output));
+  return { deferred, runner, onToolCall, output };
+}
+
 function cryptoDigest(value: unknown) {
   return crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
+async function collectRelativePaths(root: string) {
+  const output: Array<{ path: string; kind: "directory" | "file" | "symlink" | "other" }> = [];
+  const visit = async (directory: string, prefix = ""): Promise<void> => {
+    for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+      const relative = path.join(prefix, entry.name);
+      const kind = entry.isSymbolicLink()
+        ? "symlink"
+        : entry.isDirectory()
+          ? "directory"
+          : entry.isFile()
+            ? "file"
+            : "other";
+      output.push({ path: relative, kind });
+      if (kind === "directory") await visit(path.join(directory, entry.name), relative);
+    }
+  };
+  await visit(root);
+  return output;
 }

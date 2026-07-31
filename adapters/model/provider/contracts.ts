@@ -58,6 +58,7 @@ export interface ProviderCompleteOptions {
   workingMemory?: AddWorkMemoryToolPort;
   skills?: SkillRuntimeToolPort;
   disabledTools?: readonly AgentToolName[];
+  blockedToolExecutions?: readonly AgentToolName[];
   mcp?: ProviderMcpOptions;
   logContext?: ProviderLogContext;
 }

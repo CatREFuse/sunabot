@@ -37,7 +37,8 @@ export type GenerateImageRunner = (
   size: string,
   quality: ImageQuality,
   referenceImageUrls?: string[],
-  logContext?: ProviderLogContext
+  logContext?: ProviderLogContext,
+  signal?: AbortSignal
 ) => Promise<ImageResult>;
 
 export interface GenerateImgRunOptions {
@@ -45,9 +46,13 @@ export interface GenerateImgRunOptions {
   imageReferences?: GenerateImgReferenceContext;
   resolveWorkbenchImagePaths?: WorkbenchImagePathResolver;
   logContext?: ProviderLogContext;
+  signal?: AbortSignal;
 }
 
-export type WorkbenchImagePathResolver = (paths: readonly string[]) => Promise<string[]>;
+export type WorkbenchImagePathResolver = (
+  paths: readonly string[],
+  signal?: AbortSignal
+) => Promise<string[]>;
 
 export interface ResolvedGenerateImgReferences {
   referenceImageSource: GenerateImgReferenceSource;
@@ -147,6 +152,7 @@ export async function runGenerateImg(
   if (!generateImage) {
     return { ok: false, error: "Image generation is not configured." };
   }
+  options.signal?.throwIfAborted();
 
   const prompt = normalizePrompt(input.prompt);
   if (!prompt) {
@@ -157,6 +163,7 @@ export async function runGenerateImg(
   const size = normalizeImageSize(input.size, botConfig.tools.generateImg.size, resolution);
   const quality = normalizeImageQuality(input.quality, botConfig.tools.generateImg.quality);
   const references = await resolveGenerateImgReferencesForRun(input, options);
+  options.signal?.throwIfAborted();
   const unresolvedReferenceMediaHandles = references.referenceMediaHandles.filter((handle) => (
     normalizeReferenceImageUrls([options.imageReferences?.mediaByHandle?.[handle]]).length === 0
   ));
@@ -170,7 +177,15 @@ export async function runGenerateImg(
       resolvedReferenceMediaHandleCount
     };
   }
-  const image = await generateImage(prompt, size, quality, references.referenceImageUrls, options.logContext);
+  const image = await generateImage(
+    prompt,
+    size,
+    quality,
+    references.referenceImageUrls,
+    options.logContext,
+    options.signal
+  );
+  options.signal?.throwIfAborted();
   return {
     ok: true,
     provider: "codex-image-gen",
@@ -228,9 +243,14 @@ export async function resolveGenerateImgReferencesForRun(
 ): Promise<ResolvedGenerateImgReferences> {
   const references = resolveGenerateImgReferences(input, options);
   const referenceImagePaths = normalizeReferenceImagePaths(input.referenceImagePaths);
+  options.signal?.throwIfAborted();
   const resolvedWorkbenchImageUrls = options.resolveWorkbenchImagePaths && referenceImagePaths.length
-    ? normalizeReferenceImageUrls(await options.resolveWorkbenchImagePaths(referenceImagePaths))
+    ? normalizeReferenceImageUrls(await options.resolveWorkbenchImagePaths(
+        referenceImagePaths,
+        options.signal
+      ))
     : [];
+  options.signal?.throwIfAborted();
   return {
     ...references,
     referenceImagePaths,

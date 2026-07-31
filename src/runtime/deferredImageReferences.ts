@@ -181,12 +181,14 @@ export function deferredWorkbenchImageResolver(value: unknown): WorkbenchImagePa
       imageUrl.startsWith("/generated-images/conversation-assets/agents/")
     )));
   if (!Object.keys(snapshot).length) return undefined;
-  return async (paths: readonly string[]) => {
+  return async (paths: readonly string[], signal?: AbortSignal) => {
+    signal?.throwIfAborted();
     const normalized = readReferenceImagePaths(paths, 4);
     const resolved = normalized.map((imagePath) => snapshot[imagePath]).filter(Boolean);
     if (resolved.length !== normalized.length) {
       throw new Error("Workbench reference image snapshot is unavailable.");
     }
+    signal?.throwIfAborted();
     return resolved;
   };
 }

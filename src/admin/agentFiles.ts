@@ -106,24 +106,31 @@ export class AgentFileRepository {
     };
   }
 
-  async put(id: string, body: unknown, config?: AppConfig) {
+  async put(id: string, body: unknown, config?: AppConfig, signal?: AbortSignal) {
+    signal?.throwIfAborted();
     const definition = definitionById(id);
     const request = parseWriteRequest(body, definition);
 
     return this.mutex.runExclusive(async () => {
+      signal?.throwIfAborted();
       const recoveryError = this.recoveryState.get();
       if (recoveryError) {
         throw new AdminApiError(503, "CONFIG_RECOVERY_REQUIRED", recoveryError);
       }
       const activeConfig = config ?? await loadConfig();
+      signal?.throwIfAborted();
       const resolved = await resolveAgentFile(activeConfig, definition);
+      signal?.throwIfAborted();
       const current = await readFileState(resolved);
+      signal?.throwIfAborted();
       if (request.revision !== current.revision) {
         conflict("AGENT_FILE_REVISION_CONFLICT", "文件已被其他操作修改，请重新载入。", current.revision);
       }
 
       await ensureSafeParent(resolved);
+      signal?.throwIfAborted();
       const latest = await readFileState(resolved);
+      signal?.throwIfAborted();
       if (latest.revision !== current.revision) {
         conflict("AGENT_FILE_REVISION_CONFLICT", "文件已在外部修改，请重新载入。", latest.revision);
       }
@@ -132,6 +139,7 @@ export class AgentFileRepository {
       const preparedPrompt = reloadRuntime && this.options.runtime.preparePromptReload
         ? await this.options.runtime.preparePromptReload(id, request.content, activeConfig)
         : undefined;
+      signal?.throwIfAborted();
 
       const temporaryPath = path.join(
         path.dirname(resolved.filePath),
@@ -141,15 +149,19 @@ export class AgentFileRepository {
       let backupWritten = false;
       try {
         await fs.writeFile(temporaryPath, request.content, { encoding: "utf8", mode: 0o600, flag: "wx" });
+        signal?.throwIfAborted();
         const beforeBackup = await readFileState(resolved);
+        signal?.throwIfAborted();
         if (beforeBackup.revision !== current.revision) {
           conflict("AGENT_FILE_REVISION_CONFLICT", "文件已在准备期间修改，请重新载入。", beforeBackup.revision);
         }
         if (current.exists) {
           await atomicWrite(backupPath, current.content);
           backupWritten = true;
+          signal?.throwIfAborted();
         }
         const beforeRename = await readFileState(resolved);
+        signal?.throwIfAborted();
         if (beforeRename.revision !== current.revision) {
           conflict("AGENT_FILE_REVISION_CONFLICT", "文件已在提交前修改，请重新载入。", beforeRename.revision);
         }
@@ -159,7 +171,9 @@ export class AgentFileRepository {
         throw error;
       }
       try {
+        signal?.throwIfAborted();
         await fs.rename(temporaryPath, resolved.filePath);
+        signal?.throwIfAborted();
         if (reloadRuntime) {
           if (preparedPrompt !== undefined && this.options.runtime.commitPromptReload) {
             this.options.runtime.commitPromptReload(preparedPrompt);
@@ -167,6 +181,15 @@ export class AgentFileRepository {
             await this.options.runtime.reloadPrompts(activeConfig);
           }
         }
+        signal?.throwIfAborted();
+        await fs.rm(backupPath, { force: true }).catch(() => undefined);
+        const saved = await readFileState(resolved);
+        signal?.throwIfAborted();
+        return {
+          ok: true,
+          ...publicMetadata(resolved, saved),
+          content: saved.content
+        };
       } catch (error) {
         await fs.rm(temporaryPath, { force: true });
         try {
@@ -184,14 +207,6 @@ export class AgentFileRepository {
         }
         throw error;
       }
-
-      await fs.rm(backupPath, { force: true }).catch(() => undefined);
-      const saved = await readFileState(resolved);
-      return {
-        ok: true,
-        ...publicMetadata(resolved, saved),
-        content: saved.content
-      };
     });
   }
 }

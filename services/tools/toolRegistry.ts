@@ -398,7 +398,7 @@ const catalog: readonly ToolCatalogEntry[] = [
     name: CODEX_TOOL_NAME,
     title: "Codex",
     summary: "把长任务交给异步 Codex worker。",
-    definition: (options) => options.codexControl === true ? codexControlTool : codexTool,
+    definition: (options) => providerCodexControlMode(options) ? codexControlTool : codexTool,
     available: (options) => options.asyncCodex === true,
     unavailableReason: "Codex CLI 未安装或未登录。",
     unavailabilityKind: "session",
@@ -561,6 +561,11 @@ export function providerToolExecutionMode(name: string, options: ToolAvailabilit
   if (!isConversationToolEnabled(options.disabledTools, name)) return undefined;
   const entry = catalog.find((candidate) => candidate.name === name);
   return entry ? effectiveExecution(entry, options) : undefined;
+}
+
+export function providerCodexControlMode(options: ToolAvailability = {}) {
+  return options.codexControl === true
+    && typeof options.chatMedia?.freezeCodexInputs !== "function";
 }
 
 export function isProviderToolAvailable(name: string, options: ToolAvailability = {}) {

@@ -18,7 +18,14 @@ export interface ParsedControlInput {
   limit: number;
 }
 
-export function parseControlInput(input: CodexToolInput):
+export interface ControlInputContext {
+  trustedLocalWorkspacePath?: string;
+}
+
+export function parseControlInput(
+  input: CodexToolInput,
+  context: ControlInputContext = {}
+):
   | { ok: true; value: ParsedControlInput }
   | { ok: false; code: string; error: string } {
   if (input.__sunabot_control_authorized !== true) {
@@ -32,7 +39,12 @@ export function parseControlInput(input: CodexToolInput):
   if (sshHost && !SSH_HOST_PATTERN.test(sshHost)) {
     return { ok: false, code: "invalid_input", error: "SSH host must be a configured host name or alias." };
   }
-  const workspacePath = optionalText(input.workspace_path);
+  const workspacePath = optionalText(input.workspace_path)
+    ?? (
+      !sshHost && action !== "list_sessions"
+        ? optionalText(context.trustedLocalWorkspacePath)
+        : undefined
+    );
   if (workspacePath && !path.posix.isAbsolute(workspacePath)) {
     return { ok: false, code: "invalid_input", error: "workspace_path must be an absolute path on the selected host." };
   }

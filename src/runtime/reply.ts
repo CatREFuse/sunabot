@@ -3,6 +3,7 @@ import {
   inboundImageUrls,
   type MessagingPort
 } from "../../packages/contracts/messaging/messages.js";
+import { AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS } from "../../packages/contracts/model/modelGateway.js";
 import { noReplyPokeEnvelope } from "../../packages/contracts/session/runtimeMessages.js";
 import { WORKSPACE_LAYOUT } from "../../packages/platform/workspaceLayout.js";
 import { readCallbackInput } from "../../services/agent/callbackInput.js";
@@ -369,6 +370,7 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
       const turn = await this.completePromptTurn(provider, promptRequest, {
         signal: options.signal,
         modelRequestMaxRetries: this.config.normalReply.maxRetries,
+        ...(options.messageOrigin === "async_tool_callback" ? { modelRequestAttemptTimeoutMs: AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS } : {}),
         allowNoReply: true,
         workbenchFiles: capabilityContext
           ? providerWorkbenchFilesForIncoming(
@@ -401,7 +403,7 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
           size,
           quality,
           referenceImageUrls,
-          childLogContext ?? logContext
+          childLogContext ?? logContext, options.signal
         ),
         resolveWorkbenchImagePaths: capabilityContext
           ? (paths) => this.resolveWorkbenchImageReferences(
@@ -472,12 +474,13 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
                 capabilityContext
               )
               : undefined,
-            logContext
+            logContext, signal: options.signal
           })
         },
         asyncCodex: codexTurnAvailable({
           enabled: this.config.bot.tools.codex.enabled,
           control: codexControl,
+          requiresWorker: typeof chatMedia?.freezeCodexInputs === "function",
           workerAvailable: isAdmin
             && options.promptOverride === undefined
             && !options.atomicImageReply
@@ -733,7 +736,6 @@ export async function runtime_replyWithGroupChatSummary(this: RuntimeHost,
         if (record) this.scheduleMemoryCompression(record);
         return;
       }
-
       const record = this.conversationRecords.get(conversationRecordId(incoming));
       const summaryMessages = collectGroupChatSummaryMessages(
         record,

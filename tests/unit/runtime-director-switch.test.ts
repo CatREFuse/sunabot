@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ProviderCompleteOptions } from "../../adapters/model/openaiProvider.js";
 import type { SunaRuntime } from "../../src/runtime.js";
 import type { ConversationRecord } from "../../src/types.js";
 import { RuntimeDirector } from "../../src/runtime/director.js";
@@ -18,7 +19,8 @@ const repository = vi.hoisted(() => ({
       createdAt: "2026-07-23T07:00:00.000Z"
     }]),
     linkTask: vi.fn(),
-    deleteTaskLink: vi.fn()
+    deleteTaskLink: vi.fn(),
+    commit: vi.fn()
   },
   scheduledTasks: {
     get: vi.fn(() => ({
@@ -35,8 +37,13 @@ vi.mock("../../adapters/sqlite/applicationDataStore.js", () => ({
   applicationDataStore: () => repository
 }));
 
+vi.mock("../../adapters/observability/requestLog.js", () => ({
+  appendRequestLog: vi.fn()
+}));
+
 describe("RuntimeDirector switch", () => {
   beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.useRealTimers());
 
   it("removes every runtime capability and pending share while disabled", async () => {
     const wake = vi.fn();
@@ -126,6 +133,167 @@ describe("RuntimeDirector switch", () => {
     expect(updated).toMatchObject({ id: "private:9", directorEventsEnabled: true });
     expect(persistConversationRecords).toHaveBeenCalledOnce();
     expect(targetsChanged).toHaveBeenCalledOnce();
+  });
+
+  it("propagates one task cancellation through schedule lookup and revision", async () => {
+    let providerSignal: AbortSignal | undefined;
+    let markProviderStarted!: () => void;
+    const providerStarted = new Promise<void>((resolve) => {
+      markProviderStarted = resolve;
+    });
+    const completePrompt = vi.fn((
+      _provider: unknown,
+      _request: unknown,
+      options: ProviderCompleteOptions
+    ) => new Promise<string>((_resolve, reject) => {
+      providerSignal = options.signal;
+      markProviderStarted();
+      options.signal?.addEventListener(
+        "abort",
+        () => reject(options.signal?.reason),
+        { once: true }
+      );
+    }));
+    const host = {
+      config: {
+        bot: { director: { enabled: true } },
+        persona: { defaultAgentId: "plana", name: "Plana", agentWorkspace: "" }
+      },
+      scheduledTasks: { wake: vi.fn() },
+      conversationRecords: new Map(),
+      getProvider: vi.fn(() => ({})),
+      renderPromptRequest: vi.fn(async () => ({ messages: [] })),
+      completePrompt
+    } as unknown as SunaRuntime;
+    const director = new RuntimeDirector(host);
+    let scheduleSignal: AbortSignal | undefined;
+    vi.spyOn(director, "ensureToday").mockImplementation(async (
+      _now,
+      _force,
+      signal
+    ) => {
+      scheduleSignal = signal;
+      return schedule();
+    });
+    const caller = new AbortController();
+    const pending = director.toolPort()!.execute(
+      { request: "把晚上的整理延后一小时" },
+      caller.signal
+    );
+    await providerStarted;
+
+    expect(scheduleSignal?.aborted).toBe(false);
+    expect(providerSignal?.aborted).toBe(false);
+
+    const reason = new DOMException("cancelled", "AbortError");
+    caller.abort(reason);
+
+    await expect(pending).rejects.toBe(reason);
+    expect(scheduleSignal?.reason).toBe(reason);
+    expect(providerSignal?.reason).toBe(reason);
+    expect(completePrompt).toHaveBeenCalledOnce();
+  });
+
+  it("does not reset the 600-second revision budget after schedule and prompt preparation", async () => {
+    vi.useFakeTimers();
+    let renderStarted!: () => void;
+    const rendering = new Promise<void>((resolve) => {
+      renderStarted = resolve;
+    });
+    let providerStarted!: () => void;
+    const providerRunning = new Promise<void>((resolve) => {
+      providerStarted = resolve;
+    });
+    let providerSignal: AbortSignal | undefined;
+    const host = {
+      config: {
+        bot: { director: { enabled: true } },
+        persona: { defaultAgentId: "plana", name: "Plana", agentWorkspace: "" }
+      },
+      scheduledTasks: { wake: vi.fn() },
+      conversationRecords: new Map(),
+      getProvider: vi.fn(() => ({})),
+      renderPromptRequest: vi.fn(() => {
+        renderStarted();
+        return new Promise((resolve) => {
+          setTimeout(() => resolve({ messages: [] }), 199_000);
+        });
+      }),
+      completePrompt: vi.fn((
+        _provider: unknown,
+        _request: unknown,
+        options: ProviderCompleteOptions
+      ) => {
+        providerSignal = options.signal;
+        providerStarted();
+        return new Promise<string>(() => undefined);
+      })
+    } as unknown as SunaRuntime;
+    const director = new RuntimeDirector(host);
+    vi.spyOn(director, "ensureToday").mockImplementation((
+      _now,
+      _force,
+      signal
+    ) => new Promise((resolve, reject) => {
+      const timer = setTimeout(() => resolve(schedule()), 400_000);
+      signal?.addEventListener("abort", () => {
+        clearTimeout(timer);
+        reject(signal.reason);
+      }, { once: true });
+    }));
+
+    const pending = director.toolPort()!.execute({ request: "调整日程" });
+    await vi.advanceTimersByTimeAsync(400_000);
+    await rendering;
+    await vi.advanceTimersByTimeAsync(199_000);
+    await providerRunning;
+    await vi.advanceTimersByTimeAsync(999);
+
+    expect(providerSignal?.aborted).toBe(false);
+    expect(repository.director.commit).not.toHaveBeenCalled();
+
+    const rejected = expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    await vi.advanceTimersByTimeAsync(1);
+    await rejected;
+    expect(providerSignal?.aborted).toBe(true);
+    expect(repository.director.commit).not.toHaveBeenCalled();
+  });
+
+  it("hard-settles an in-flight revision on stop and rejects a late Provider commit", async () => {
+    let providerStarted!: () => void;
+    const running = new Promise<void>((resolve) => {
+      providerStarted = resolve;
+    });
+    let providerSignal: AbortSignal | undefined;
+    const host = {
+      config: {
+        bot: { director: { enabled: true } },
+        persona: { defaultAgentId: "plana", name: "Plana", agentWorkspace: "" }
+      },
+      scheduledTasks: { wake: vi.fn() },
+      conversationRecords: new Map(),
+      getProvider: vi.fn(() => ({})),
+      renderPromptRequest: vi.fn(async () => ({ messages: [] })),
+      completePrompt: vi.fn((
+        _provider: unknown,
+        _request: unknown,
+        options: ProviderCompleteOptions
+      ) => {
+        providerSignal = options.signal;
+        providerStarted();
+        return new Promise<string>(() => undefined);
+      })
+    } as unknown as SunaRuntime;
+    const director = new RuntimeDirector(host);
+    vi.spyOn(director, "ensureToday").mockResolvedValue(schedule());
+
+    const pending = director.toolPort()!.execute({ request: "停止后不得提交" });
+    await running;
+    director.stop();
+
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    expect(providerSignal?.aborted).toBe(true);
+    expect(repository.director.commit).not.toHaveBeenCalled();
   });
 });
 

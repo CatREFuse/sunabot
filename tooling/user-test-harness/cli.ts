@@ -19,7 +19,11 @@ export async function main(argv = process.argv.slice(2)) {
       source: required(args, "source"),
       destination: required(args, "destination"),
       confirmCredentialCopy: flag(args, "confirm-copy-provider-credential"),
-      agentId: optional(args, "agent")
+      agentId: optional(args, "agent"),
+      providerId: optional(args, "provider-id"),
+      model: optional(args, "model"),
+      lockProviderRoutes: flag(args, "lock-provider-routes"),
+      copyCodexAuth: flag(args, "copy-codex-auth")
     });
     console.log(`isolated user test workspace ready: ${prepared.destination}`);
     console.log(`agent: ${prepared.agentId}`);

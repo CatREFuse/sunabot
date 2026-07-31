@@ -72,6 +72,8 @@ export interface AttachmentWorkerSupervisorOptions {
 
 interface QueueItem<T> {
   task: AttachmentWorkerTask;
+  signal?: AbortSignal;
+  onQueuedAbort?: () => void;
   resolve: (result: AttachmentWorkerSuccess<T>) => void;
   reject: (error: unknown) => void;
 }
@@ -123,10 +125,28 @@ export class AttachmentWorkerSupervisor {
     return this.queue.length;
   }
 
-  run<T = unknown>(task: AttachmentWorkerTask): Promise<AttachmentWorkerSuccess<T>> {
+  run<T = unknown>(
+    task: AttachmentWorkerTask,
+    signal?: AbortSignal
+  ): Promise<AttachmentWorkerSuccess<T>> {
     validateTask(task);
+    signal?.throwIfAborted();
     return new Promise<AttachmentWorkerSuccess<T>>((resolve, reject) => {
-      this.queue.push({ task, resolve: resolve as QueueItem<unknown>["resolve"], reject });
+      const item: QueueItem<unknown> = {
+        task,
+        signal,
+        resolve: resolve as QueueItem<unknown>["resolve"],
+        reject
+      };
+      const onQueuedAbort = () => {
+        const index = this.queue.indexOf(item);
+        if (index < 0) return;
+        this.queue.splice(index, 1);
+        reject(signal?.reason ?? new Error("Attachment worker cancelled."));
+      };
+      item.onQueuedAbort = onQueuedAbort;
+      signal?.addEventListener("abort", onQueuedAbort, { once: true });
+      this.queue.push(item);
       this.drain();
     });
   }
@@ -134,8 +154,13 @@ export class AttachmentWorkerSupervisor {
   private drain() {
     while (this.active < this.maxConcurrency && this.queue.length > 0) {
       const item = this.queue.shift()!;
+      item.signal?.removeEventListener("abort", item.onQueuedAbort!);
+      if (item.signal?.aborted) {
+        item.reject(item.signal.reason ?? new Error("Attachment worker cancelled."));
+        continue;
+      }
       this.active += 1;
-      void this.execute(item.task)
+      void this.execute(item.task, item.signal)
         .then(item.resolve, item.reject)
         .finally(() => {
           this.active -= 1;
@@ -144,8 +169,13 @@ export class AttachmentWorkerSupervisor {
     }
   }
 
-  private async execute(task: AttachmentWorkerTask): Promise<AttachmentWorkerSuccess> {
+  private async execute(
+    task: AttachmentWorkerTask,
+    signal?: AbortSignal
+  ): Promise<AttachmentWorkerSuccess> {
+    signal?.throwIfAborted();
     await fs.mkdir(task.workDir, { recursive: true });
+    signal?.throwIfAborted();
     const child = this.spawnWorker();
     const processGroupId = child.pid;
     if (!processGroupId) {
@@ -161,6 +191,15 @@ export class AttachmentWorkerSupervisor {
       let stderr = "";
       let killTimer: NodeJS.Timeout | undefined;
       const terminationGraceMs = this.terminationGraceMs;
+      const onAbort = () => {
+        terminate(new AttachmentWorkerError(
+          "worker_task_failed",
+          "Attachment worker was cancelled.",
+          { taskId: task.taskId }
+        ));
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+      if (signal?.aborted) onAbort();
 
       const timeout = setTimeout(() => {
         terminate(new AttachmentWorkerError("worker_timeout", `Attachment worker exceeded ${this.timeoutMs} ms`, {
@@ -251,9 +290,10 @@ export class AttachmentWorkerSupervisor {
         }));
       });
 
-      child.once("exit", (code, signal) => {
+      child.once("exit", (code, exitSignal) => {
         if (completed) return;
         completed = true;
+        signal?.removeEventListener?.("abort", onAbort);
         clearTimeout(timeout);
         clearInterval(monitor);
         if (killTimer) clearTimeout(killTimer);
@@ -272,7 +312,7 @@ export class AttachmentWorkerSupervisor {
         reject(new AttachmentWorkerError("worker_crashed", "Attachment worker exited without a result", {
           taskId: task.taskId,
           exitCode: code,
-          signal,
+          signal: exitSignal,
           stderr: stderr.trim()
         }));
       });

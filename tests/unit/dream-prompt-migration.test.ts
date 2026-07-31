@@ -4,14 +4,17 @@ import {
   assertDreamCanonicalOutputContractTemplate,
   migrateDreamCanonicalOutputContractTemplate,
   migrateDreamMemoryContractTemplate,
+  migrateDreamRawIdentityTemplate,
   migrateDreamSchemaTemplate
 } from "../../services/agent/dreamPromptMigration.js";
 import type { FinalPromptTemplate } from "../../services/agent/promptSystem.js";
 import {
   DREAM_CONTRACT,
+  DREAM_RAW_IDENTITY_GUIDANCE,
   DREAM_OUTPUT_CONTRACT,
   DREAM_OUTPUT_CONTRACT_MARKER,
   LEGACY_DREAM_FLEX_RESPONSE,
+  LEGACY_DREAM_IDENTITY_ALIAS_GUIDANCE,
   LEGACY_DREAM_CONTRACT_V3,
   LEGACY_DREAM_CONTRACT_V4,
   dreamPromptTemplate
@@ -224,6 +227,31 @@ describe("Dream flexible-contract prompt migration", () => {
 
     expect(system?.content).toContain(DREAM_CONTRACT);
     expect(system?.content).not.toContain(LEGACY_DREAM_CONTRACT_V4);
+  });
+
+  it("replaces the exact legacy identity-alias guidance while preserving administrator content", () => {
+    const original = dreamPromptTemplate();
+    const messages = original.messages.map((message) => (
+      message.role === "system" && typeof message.content === "string"
+        ? {
+            ...message,
+            content: `管理员前缀。\n\n${message.content.replace(
+              DREAM_RAW_IDENTITY_GUIDANCE,
+              LEGACY_DREAM_IDENTITY_ALIAS_GUIDANCE
+            )}\n\n管理员后缀。`
+          }
+        : message
+    ));
+    const migrated = migrateDreamRawIdentityTemplate({ ...original, messages });
+    const system = migrated?.messages.find((message) => message.role === "system");
+
+    expect(system?.content).toContain("管理员前缀。");
+    expect(system?.content).toContain(DREAM_RAW_IDENTITY_GUIDANCE);
+    expect(system?.content).toContain("管理员后缀。");
+    expect(system?.content).not.toContain(LEGACY_DREAM_IDENTITY_ALIAS_GUIDANCE);
+    expect(migrated?.tools).toEqual(original.tools);
+    expect(migrated?.response_format).toEqual(original.response_format);
+    expect(migrateDreamRawIdentityTemplate(migrated!)).toBeUndefined();
   });
 
   it("does not overwrite a customized legacy contract", () => {

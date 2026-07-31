@@ -339,7 +339,7 @@ describe("Codex app-server control", () => {
       action: "start",
       ssh_host: null,
       task: "修复测试并验证",
-      workspace_path: "/Users/admin/Developer/project",
+      workspace_path: null,
       thread_id: null,
       query: null,
       limit: null,
@@ -348,6 +348,7 @@ describe("Codex app-server control", () => {
     }, {
       jobId: "job-start",
       jobDir: temporaryRoot,
+      workspacePath: "/Users/admin/Developer/project",
       executable: "/custom/codex",
       runToken: "start-run"
     });
@@ -646,6 +647,38 @@ describe("Codex app-server control", () => {
       ok: false,
       error: { code: "control_unauthorized" }
     });
+  });
+
+  it("does not substitute the local runtime workspace for a remote control call", async () => {
+    const spawnProcess = vi.fn();
+    const runner = new CodexAppServerRunner({
+      spawnProcess,
+      environment: { PATH: "/usr/bin:/bin" },
+      platform: "darwin"
+    });
+    const result = await runner.run({
+      action: "start",
+      ssh_host: "development-mac",
+      task: "检查远端项目",
+      workspace_path: null,
+      thread_id: null,
+      query: null,
+      limit: null,
+      __sunabot_admin_authorized: true,
+      __sunabot_control_authorized: true
+    }, {
+      jobId: "job-remote-null-workspace",
+      jobDir: "/tmp/job-remote-null-workspace",
+      workspacePath: "/Users/admin/Developer/local-project"
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: "failed",
+      error: { code: "invalid_input" }
+    });
+    expect(result.error?.message).toContain("workspace_path");
+    expect(spawnProcess).not.toHaveBeenCalled();
   });
 
   it("resumes an exact remote session through the fixed SSH app-server command", async () => {

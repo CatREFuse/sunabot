@@ -25,6 +25,7 @@ describe("generate_img quality", () => {
       "1024x1024",
       "high",
       [],
+      undefined,
       undefined
     );
     expect(result).toMatchObject({ ok: true, quality: "high" });
@@ -109,9 +110,49 @@ describe("generate_img quality", () => {
       resolveWorkbenchImagePaths
     });
 
-    expect(resolveWorkbenchImagePaths).toHaveBeenCalledWith([
-      "/workbench/fixtures/reference.png"
-    ]);
+    expect(resolveWorkbenchImagePaths).toHaveBeenCalledWith(
+      ["/workbench/fixtures/reference.png"],
+      undefined
+    );
+  });
+
+  it("uses the caller signal for workbench resolution and Provider generation", async () => {
+    const controller = new AbortController();
+    let resolverSignal: AbortSignal | undefined;
+    let providerSignal: AbortSignal | undefined;
+    const resolveWorkbenchImagePaths = vi.fn(async (
+      _paths: readonly string[],
+      signal?: AbortSignal
+    ) => {
+      resolverSignal = signal;
+      return ["/generated-images/conversation-assets/agents/arona/reference.png"];
+    });
+    const generateImage = vi.fn(async (
+      _prompt: string,
+      _size: string,
+      _quality: string,
+      _references: string[] = [],
+      _logContext?: unknown,
+      signal?: AbortSignal
+    ) => {
+      providerSignal = signal;
+      return {
+        url: "/generated-images/result.png",
+        filePath: "/tmp/result.png"
+      };
+    });
+
+    await expect(runGenerateImg({
+      prompt: "use the workbench reference",
+      referenceImagePaths: ["references/source.png"],
+      referenceImageSource: "none"
+    }, botConfig("high"), generateImage, {
+      resolveWorkbenchImagePaths,
+      signal: controller.signal
+    })).resolves.toMatchObject({ ok: true });
+
+    expect(resolverSignal).toBe(controller.signal);
+    expect(providerSignal).toBe(controller.signal);
   });
 
   it("honors the model choice to generate without automatic reference images", async () => {

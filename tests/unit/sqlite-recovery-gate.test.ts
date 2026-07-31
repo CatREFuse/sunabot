@@ -91,6 +91,27 @@ describe("SQLite recovery and fault-injection gate", () => {
     expect(restored.verification.crossDatabaseInvariants.agents.plana.outboxStatusCounts).toEqual({ sent: 1 });
   });
 
+  it("awaits a database-closed observer after every recovery database verification", async () => {
+    const fixture = await createFixture();
+    const created = await createRecoveryPoint({ workspace: fixture.workspace, quiesced: true });
+    const events: string[] = [];
+
+    await expect(verifyRecoveryPoint(created.directory, {
+      databaseOpenObserver(event: { id: string; phase?: string }) {
+        if (!event.phase) events.push(`open:${event.id}`);
+      },
+      async databaseClosedObserver(event: { id: string }) {
+        await Promise.resolve();
+        events.push(`closed:${event.id}`);
+      }
+    })).resolves.toMatchObject({ ok: true });
+
+    expect(events).toEqual(created.manifest.databases.flatMap((entry: { id: string }) => [
+      `open:${entry.id}`,
+      `closed:${entry.id}`
+    ]));
+  });
+
   it("canonicalizes the controlled macOS var directory alias before identity pinning", async () => {
     if (process.platform !== "darwin") return;
     const fixture = await createFixture();

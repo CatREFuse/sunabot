@@ -1263,6 +1263,11 @@ describe("SunaRuntime reply debounce", () => {
     const abortError = new Error("operation timed out in quote test");
     abortError.name = "AbortError";
     controller.abort(abortError);
+    const rewriteToneText = vi.spyOn(harness.runtime, "rewriteToneText")
+      .mockImplementation(async (text, context) => {
+        expect(context.signal?.aborted).toBe(true);
+        return text;
+      });
 
     const result = await harness.runtime.processSessionEvent(committed.event, {
       signal: controller.signal,
@@ -1271,6 +1276,7 @@ describe("SunaRuntime reply debounce", () => {
     });
     const draft = (result as { outbox: Array<{ payload: unknown }> }).outbox[0]!;
     const timeoutReply = decodeAssistantReply(draft.payload);
+    expect(rewriteToneText).toHaveBeenCalledOnce();
     expect(timeoutReply.replyToMessageId).toBe(31_129);
     await harness.runtime.deliverReplyOutbox(timeoutReply, harness.gateway);
     expect(sentOutbounds(harness.gateway)[0]?.replyToMessageId).toBe(31_129);

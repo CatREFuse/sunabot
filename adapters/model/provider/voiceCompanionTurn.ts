@@ -21,6 +21,12 @@ export function providerVoiceCompanionTurn(
   definitions: readonly Record<string, unknown>[],
   state: TurnToolState,
 ): ProviderCompletedTurn | ProviderDeferredTurn | null {
+  if (
+    options.blockedToolExecutions?.includes(SEND_VOICE_MESSAGE_TOOL_NAME)
+    && calls.some((call) => call.name === SEND_VOICE_MESSAGE_TOOL_NAME)
+  ) {
+    return null;
+  }
   const deliveredAssistantText = crossRoundAssistantText(calls, siblingText, state);
   const companion = parseVoiceCompanion(calls, deliveredAssistantText?.text ?? siblingText, (name) =>
     isProviderDeferredTool(name, options),

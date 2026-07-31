@@ -628,6 +628,52 @@ describe("ToolRegistry", () => {
     expect(turn?.toolCall.arguments).not.toHaveProperty("dispatch_message");
   });
 
+  it("keeps media-bearing administrator turns on the Codex worker schema", () => {
+    const executor = new RegistryProviderToolExecutor();
+    const options = {
+      asyncCodex: true,
+      codexControl: true,
+      chatMedia: {
+        export: vi.fn(),
+        freezeCodexInputs: vi.fn()
+      }
+    } as ProviderCompleteOptions;
+    const codex = executor.resolveDefinitions(options, [staleTool("codex")])
+      .find((definition) => definition.name === "codex");
+    const parameters = codex?.parameters as Record<string, any>;
+
+    expect(parameters.properties.task).toMatchObject({ type: "string" });
+    expect(parameters.properties.kind.enum).toEqual(["local", "research", "analysis"]);
+    expect(parameters.properties.inputHandles).toBeDefined();
+    expect(parameters.properties.action).toBeUndefined();
+    expect(parameters.required).toEqual(expect.arrayContaining([
+      "task",
+      "kind",
+      "inputHandles",
+      "dispatch_message"
+    ]));
+
+    const turn = executor.deferredTurn([{
+      type: "function_call",
+      name: "codex",
+      call_id: "call-worker-with-media",
+      arguments: JSON.stringify({
+        task: "读取当前附件并生成结果文件。",
+        kind: "local",
+        inputHandles: ["message:885282522:file:0"],
+        dispatch_message: "正在处理附件。"
+      })
+    }], options, [codex!]);
+
+    expect(turn?.toolCall.arguments).toMatchObject({
+      task: "读取当前附件并生成结果文件。",
+      kind: "local",
+      inputHandles: ["message:885282522:file:0"],
+      __sunabot_admin_authorized: true
+    });
+    expect(turn?.toolCall.arguments).not.toHaveProperty("__sunabot_control_authorized");
+  });
+
   it("treats image tools as deferred only in asynchronous image turns", () => {
     const executor = new RegistryProviderToolExecutor();
     const base = {

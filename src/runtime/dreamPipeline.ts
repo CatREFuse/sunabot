@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { dreamPersonaPromptVariables, projectDreamContext, restoreDreamFieldKnowledge, type DreamFieldKnowledgeBinding } from "./dreamContextProjection.js";
+import { runModelTaskWithinDeadline } from "../../packages/contracts/model/modelTaskDeadline.js";
+import { dreamPersonaPromptVariables, projectDreamContext } from "./dreamContextProjection.js";
 import {
   dreamErrorCode,
   dreamFailureText,
@@ -21,7 +22,7 @@ import {
   boundedDreamPipelineId as boundedId,
   digestDreamPipelineJson as digestJson,
   digestDreamPipelineText as digestText,
-  dreamPipelineFieldKnowledgeBindings,
+  isCurrentDreamPipelineInput as currentInput,
   isDreamPipelineAbortError as abortError,
   isRetryableDreamPipelineError as retryableDreamError,
   isDreamPipelineObject as isObject,
@@ -32,6 +33,14 @@ import {
   validatedDreamTimeZone as validatedTimeZone,
   type DreamPipelineJsonObject as JsonObject
 } from "./dreamPipelineSupport.js";
+import {
+  combineDreamPipelineSignals as combineSignals,
+  dreamPipelineModelExpectations as modelExpectations,
+  dreamPipelinePromptRecords as promptRecords,
+  dreamPipelineRecallStats as recallStatsFromPayload,
+  dreamPipelineRecentWindowHours as recentWindowHoursFromPayload,
+  DreamRunError
+} from "./dreamPipelineExecutionSupport.js";
 import type { RuntimeDreamContextPort, RuntimeDreamContextSnapshot, RuntimeDreamPromptPort } from "./dreamPorts.js";
 export type { RuntimeDreamWorkingMemoryPort, RuntimeDreamFieldKnowledgePort } from "./dreamWorkingMemoryCommit.js";
 export type { RuntimeDreamContextPort, RuntimeDreamContextSnapshot, RuntimeDreamPromptPort } from "./dreamPorts.js";
@@ -51,7 +60,6 @@ import {
   selectDreamMemories,
   type DreamMemorySelectionSettings, type DreamMemoryRecord,
   type DreamModelOutputV1,
-  type DreamRecallStatsSnapshot,
   type DreamScheduleOccurrence
 } from "../../services/memory/dream/public.js";
 const DREAM_TICK_INTERVAL_MS = 60_000;
@@ -181,11 +189,15 @@ export interface RuntimeDreamModelPort {
   }): Promise<string>;
 }
 export interface RuntimeDreamPersonaPort {
-  read(id: "persona.preference" | "persona.relation"): Promise<{ content: string; revision: string }>;
+  read(
+    id: "persona.preference" | "persona.relation",
+    signal?: AbortSignal
+  ): Promise<{ content: string; revision: string }>;
   compareAndSwap(input: {
     id: "persona.preference" | "persona.relation";
     revision: string;
     content: string;
+    signal?: AbortSignal;
   }): Promise<void>;
 }
 export interface RuntimeDreamLogPort {
@@ -215,6 +227,7 @@ export interface RuntimeDreamsOptions {
   tickIntervalMs?: number;
   leaseMs?: number;
   retryDelayMs?: number;
+  lifecycleSignal?: AbortSignal;
 }
 export interface RuntimeDreamHistoryItem {
   id: string;
@@ -239,7 +252,6 @@ interface PersistedDreamInput {
   workingDigest: string;
   workingRevision?: string;
   fieldKnowledgeRevision?: string;
-  fieldKnowledgeBindings?: DreamFieldKnowledgeBinding[];
   longTermDigest: string;
   payload: JsonObject;
 }
@@ -312,7 +324,18 @@ export class RuntimeDreams {
     }
     const controller = new AbortController();
     this.controller = controller;
-    const task = this.runTick(now, controller.signal, options).finally(() => {
+    const task = runModelTaskWithinDeadline(
+      (signal) => this.runTick(now, signal, options),
+      { parentSignal: combineSignals(controller.signal, this.options.lifecycleSignal) }
+    ).catch((error) => {
+      if (
+        controller.signal.aborted
+        || this.options.lifecycleSignal?.aborted
+        || abortError(error)
+        || (error instanceof Error && error.name === "TimeoutError")
+      ) return undefined;
+      throw error;
+    }).finally(() => {
       if (this.controller === controller) this.controller = undefined;
       if (this.inFlight === task) this.inFlight = undefined;
     });
@@ -331,7 +354,9 @@ export class RuntimeDreams {
     };
   }
   private async runTick(now: Date, signal: AbortSignal, options: DreamTickOptions) {
+    signal.throwIfAborted();
     this.options.store.purgeArchivedMemories?.({ now, limit: 100 });
+    signal.throwIfAborted();
     const occurrence = options.occurrence ?? latestDreamScheduleOccurrence({ now, timeZone: this.timeZone });
     const existing = this.options.store.getRunByLocalDate(occurrence.localDate);
     if (!options.force && !existing && this.isFreshInstallBeforeFirstRun(now, occurrence)) return undefined;
@@ -355,7 +380,7 @@ export class RuntimeDreams {
       };
     } else {
       const window = dreamWindow(occurrence);
-      prepared = await this.prepareNewRun(now, occurrence, window);
+      prepared = await this.prepareNewRun(now, occurrence, window, signal);
       claimInput = {
         localDate: occurrence.localDate,
         scheduledFor: occurrence.scheduledAt,
@@ -370,8 +395,9 @@ export class RuntimeDreams {
         now
       };
     }
-    if (signal.aborted) return undefined;
+    signal.throwIfAborted();
     const claimed = this.options.store.claimDailyRun(claimInput);
+    signal.throwIfAborted();
     if (claimed.status === "busy" || claimed.status === "existing") {
       if (options.force) {
         const completed = claimed.run.status === "completed";
@@ -392,14 +418,18 @@ export class RuntimeDreams {
   private async prepareNewRun(
     now: Date,
     occurrence: DreamScheduleOccurrence,
-    window: { start: string; end: string }
+    window: { start: string; end: string },
+    signal: AbortSignal
   ): Promise<PreparedDreamRun> {
+    signal.throwIfAborted();
     const snapshot = normalizedMemorySnapshot(await this.options.context.capture({
       now,
       localDate: occurrence.localDate,
       timeZone: occurrence.timeZone,
-      window
+      window,
+      signal
     }));
+    signal.throwIfAborted();
     const seed = digestText(`${occurrence.localDate}:${this.seedFactory()}`);
     const selectionSettings = this.options.selection?.();
     const selection = selectDreamMemories({
@@ -443,9 +473,7 @@ export class RuntimeDreams {
           fieldKnowledgeRevision: validDigest(
             snapshot.fieldKnowledgeRevision,
             "fieldKnowledgeRevision"
-          ),
-          ...(projection.fieldKnowledgeBindings.length
-            ? { fieldKnowledgeBindings: projection.fieldKnowledgeBindings } : {})
+          )
         } : {}),
         longTermDigest: validDigest(snapshot.longTermDigest, "longTermDigest"),
         payload
@@ -461,7 +489,11 @@ export class RuntimeDreams {
   ): Promise<RuntimeDreamRun | undefined> {
     let run = initial;
     try {
-      if (onAccepted) await onAccepted(run);
+      signal.throwIfAborted();
+      if (onAccepted) {
+        await onAccepted(run);
+        signal.throwIfAborted();
+      }
       const input = persistedInput(run.input);
       const expected = modelExpectations(input.payload);
       if (run.status === "running") {
@@ -469,6 +501,7 @@ export class RuntimeDreams {
           [DREAM_PAYLOAD_VARIABLE]: input.payload,
           ...dreamPersonaPromptVariables(input.payload)
         });
+        signal.throwIfAborted();
         assertDreamProviderRequest(request);
         const text = await this.options.model.complete(request, {
           signal,
@@ -479,8 +512,9 @@ export class RuntimeDreams {
             promptFamily: DREAM_PROMPT_ID
           }
         });
-        if (signal.aborted) return undefined;
+        signal.throwIfAborted();
         const output = parseStrictDreamModelOutput(text, expected);
+        signal.throwIfAborted();
         const generated = this.options.store.markGenerated({
           runId: run.id,
           workerId: this.workerId,
@@ -490,6 +524,7 @@ export class RuntimeDreams {
         });
         if (!generated) throw new DreamRunError("DREAM_LEASE_LOST", "Dream generation lease was lost.");
         run = generated;
+        signal.throwIfAborted();
         await this.log("info", "dream.generated", run, { dreamChars: [...output.dream.text].length });
       }
       if (run.status === "generated") {
@@ -498,9 +533,10 @@ export class RuntimeDreams {
           now: this.clock(),
           localDate: run.localDate,
           timeZone: run.timeZone,
-          window: run.window
+          window: run.window,
+          signal
         }));
-        if (signal.aborted) return undefined;
+        signal.throwIfAborted();
         const plan = buildDreamConsolidationPlan({
           runId: run.id,
           localDate: run.localDate,
@@ -520,9 +556,10 @@ export class RuntimeDreams {
           fieldKnowledge: this.options.fieldKnowledge,
           fieldKnowledgeRevision: input.fieldKnowledgeRevision,
           fieldKnowledgeContent: output.fieldKnowledge?.content == null ? undefined
-            : restoreDreamFieldKnowledge(output.fieldKnowledge.content, input.fieldKnowledgeBindings ?? []),
+            : output.fieldKnowledge.content,
           runId: run.id,
           localDate: run.localDate,
+          signal,
           commit: (externalWorkingMemory, fieldKnowledgeUpdated) => this.options.store.commitConsolidation({
             runId: run.id,
             workerId: this.workerId,
@@ -542,6 +579,7 @@ export class RuntimeDreams {
             now: this.clock()
           })
         });
+        signal.throwIfAborted();
         const committed = externalCommit.committed;
         if (committed.status === "snapshot_conflict") {
           throw new DreamRunError(
@@ -557,14 +595,16 @@ export class RuntimeDreams {
           throw new DreamRunError("DREAM_RESULT_CONFLICT", "Dream consolidation result conflicted.", false);
         }
         run = committed.run;
+        signal.throwIfAborted();
         await this.log("info", "dream.consolidated", run, {
           ...plan.result,
           fieldKnowledgeUpdated: externalCommit.fieldKnowledgeUpdated
         });
       }
       if (run.status === "consolidated") {
-        if (signal.aborted) return undefined;
-        run = await this.applyPersona(run, normalizeStoredOutput(run.output, expected));
+        signal.throwIfAborted();
+        run = await this.applyPersona(run, normalizeStoredOutput(run.output, expected), signal);
+        signal.throwIfAborted();
         const completed = this.options.store.complete({
           runId: run.id,
           workerId: this.workerId,
@@ -572,6 +612,7 @@ export class RuntimeDreams {
         });
         if (!completed) throw new DreamRunError("DREAM_LEASE_LOST", "Dream completion lease was lost.");
         run = completed;
+        signal.throwIfAborted();
         await this.log("info", "dream.completed", run, dreamRunSummary(run.result));
       }
       return run;
@@ -597,9 +638,14 @@ export class RuntimeDreams {
       return failed ?? run;
     }
   }
-  private async applyPersona(run: RuntimeDreamRun, output: DreamModelOutputV1) {
+  private async applyPersona(
+    run: RuntimeDreamRun,
+    output: DreamModelOutputV1,
+    signal: AbortSignal
+  ) {
+    signal.throwIfAborted();
     const adjustment = output.personaAdjustment;
-    if (!adjustment) return this.requirePersonaMark(run, "none", null);
+    if (!adjustment) return this.requirePersonaMark(run, "none", null, signal);
     const input = persistedInput(run.input);
     const evidence = buildPersonaEvidence(promptRecords(input.payload), recallStatsFromPayload(input.payload));
     const now = this.clock();
@@ -607,7 +653,7 @@ export class RuntimeDreams {
       now
     });
     const persona = toJsonObject({ adjustment, reasons: policy.reasons }, "dream persona result");
-    if (!policy.eligible) return this.requirePersonaMark(run, "skipped", persona);
+    if (!policy.eligible) return this.requirePersonaMark(run, "skipped", persona, signal);
     try {
       const projection = await applyDreamPersonaImpressionProjection({
         store: this.options.store,
@@ -615,26 +661,31 @@ export class RuntimeDreams {
         adjustment,
         level: policy.level!,
         runId: run.id,
-        appliedAt: now.toISOString()
+        appliedAt: now.toISOString(),
+        signal
       });
+      signal.throwIfAborted();
       return this.requirePersonaMark(run, "applied", toJsonObject({
         adjustment,
         reasons: policy.reasons,
         ...projection
-      }, "dream persona result"));
+      }, "dream persona result"), signal);
     } catch (error) {
+      if (signal.aborted) throw signal.reason ?? error;
       return this.requirePersonaMark(run, "failed", toJsonObject({
         adjustment,
         reasons: policy.reasons,
         errorCode: DREAM_PERSONA_PROJECTION_FAILED
-      }, "dream persona failure"));
+      }, "dream persona failure"), signal);
     }
   }
   private requirePersonaMark(
     run: RuntimeDreamRun,
     status: Exclude<RuntimeDreamPersonaStatus, "pending" | "proposed">,
-    persona: JsonObject | null
+    persona: JsonObject | null,
+    signal: AbortSignal
   ) {
+    signal.throwIfAborted();
     const updated = this.options.store.markPersona({
       runId: run.id,
       workerId: this.workerId,
@@ -642,6 +693,7 @@ export class RuntimeDreams {
       persona,
       now: this.clock()
     });
+    signal.throwIfAborted();
     if (!updated) throw new DreamRunError("DREAM_LEASE_LOST", "Dream persona lease was lost.");
     return updated;
   }
@@ -666,15 +718,6 @@ export class RuntimeDreams {
 }
 export function createRuntimeDreams(options: RuntimeDreamsOptions) {
   return new RuntimeDreams(options);
-}
-class DreamRunError extends Error {
-  constructor(
-    readonly code: string,
-    message: string,
-    readonly retryable = true
-  ) {
-    super(message);
-  }
 }
 function claimableRun(run: RuntimeDreamRun, now: Date) {
   if (run.status === "completed") return false;
@@ -713,68 +756,25 @@ function persistedInput(value: JsonObject): PersistedDreamInput {
   if (value.schemaVersion !== 1 || !isObject(value.payload)) {
     throw new DreamRunError("DREAM_INPUT_INVALID", "Stored Dream input is invalid.", false);
   }
-  return {
+  const input: PersistedDreamInput = {
     schemaVersion: 1,
     workingDigest: validDigest(value.workingDigest, "workingDigest"),
     ...(value.workingRevision == null ? {} : {
       workingRevision: validDigest(value.workingRevision, "workingRevision")
     }),
     ...(value.fieldKnowledgeRevision == null || value.payload.fieldKnowledgeWritable !== true ? {} : {
-      fieldKnowledgeRevision: validDigest(value.fieldKnowledgeRevision, "fieldKnowledgeRevision"),
-      ...(value.fieldKnowledgeBindings == null ? {}
-        : { fieldKnowledgeBindings: dreamPipelineFieldKnowledgeBindings(value.fieldKnowledgeBindings) })
+      fieldKnowledgeRevision: validDigest(value.fieldKnowledgeRevision, "fieldKnowledgeRevision")
     }),
     longTermDigest: validDigest(value.longTermDigest, "longTermDigest"),
     payload: value.payload
   };
-}
-function modelExpectations(payload: JsonObject) {
-  return {
-    workingMemoryIds: promptMemoryIds(payload.workingMemories, "workingMemories"),
-    longTermMemoryIds: promptMemoryIds(payload.longTermMemories, "longTermMemories"),
-    personaEvidenceIds: stringArray(payload.personaEvidenceIds, "personaEvidenceIds"),
-    fieldKnowledgeEvidenceIds: stringArray(
-      payload.fieldKnowledgeEvidenceIds ?? [],
-      "fieldKnowledgeEvidenceIds"
-    ),
-    fieldKnowledgeWritable: payload.fieldKnowledgeWritable === true
-  };
-}
-function recentWindowHoursFromPayload(payload: JsonObject) {
-  const value = payload.recentWindowHours;
-  if (value == null) return 48;
-  if (!Number.isSafeInteger(value) || Number(value) < 1 || Number(value) > 720) {
-    throw new DreamRunError("DREAM_INPUT_INVALID", "recentWindowHours is invalid.", false);
+  if (!currentInput(value, input)) {
+    throw new DreamRunError(
+      "DREAM_INPUT_INVALID",
+      "Stored Dream input does not match the current safety contract."
+    );
   }
-  return Number(value);
-}
-function promptMemoryIds(value: unknown, field: string) {
-  if (!Array.isArray(value)) throw new DreamRunError("DREAM_INPUT_INVALID", `${field} is invalid.`, false);
-  return value.map((item, index) => {
-    if (!isObject(item) || typeof item.id !== "string") {
-      throw new DreamRunError("DREAM_INPUT_INVALID", `${field}[${index}] is invalid.`, false);
-    }
-    return item.id;
-  });
-}
-function recallStatsFromPayload(payload: JsonObject): DreamRecallStatsSnapshot[] {
-  if (!Array.isArray(payload.recallStats)) {
-    throw new DreamRunError("DREAM_INPUT_INVALID", "recallStats is invalid.", false);
-  }
-  return payload.recallStats as DreamRecallStatsSnapshot[];
-}
-function promptRecords(payload: JsonObject) {
-  return [payload.workingMemories, payload.longTermMemories].flatMap((value, groupIndex) => {
-    if (!Array.isArray(value)) {
-      throw new DreamRunError("DREAM_INPUT_INVALID", `memory group ${groupIndex} is invalid.`, false);
-    }
-    return value.map((item, index) => {
-      if (!isObject(item) || !isObject(item.memory)) {
-        throw new DreamRunError("DREAM_INPUT_INVALID", `memory group ${groupIndex}[${index}] is invalid.`, false);
-      }
-      return item.memory;
-    });
-  });
+  return input;
 }
 function normalizeStoredOutput(
   output: JsonObject | null,
@@ -785,10 +785,4 @@ function normalizeStoredOutput(
     throw new DreamModelOutputContractError("stored rawOutput must be present");
   }
   return parseStrictDreamModelOutput(output.rawOutput, expected);
-}
-function stringArray(value: unknown, field: string) {
-  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
-    throw new DreamRunError("DREAM_INPUT_INVALID", `${field} is invalid.`, false);
-  }
-  return value as string[];
 }

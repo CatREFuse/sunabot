@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS } from "../../packages/contracts/model/modelGateway.js";
 import {
   type CodexRunner,
   type CodexProcessCleanupResult,
@@ -56,6 +57,7 @@ const DEFAULT_OUTBOX_CONCURRENCY = 8;
 const DEFAULT_OUTBOX_ATTEMPTS = 3;
 const DEFAULT_OUTBOX_RETRY_DELAY_MS = 250;
 const DEFAULT_OUTBOX_DISCONNECTED_PROBE_DELAY_MS = 5_000;
+const TOOL_ACTOR_SETTLEMENT_GRACE_MS = 5_000;
 const IDLE_POLL_MS = 2;
 
 export type { CodexCoordinatorSettings, OutboxDeliveryContext } from "./sessionCoordinatorTypes.js";
@@ -357,7 +359,7 @@ export class SessionCoordinator {
         );
         this.turnClaims.set(claim.turn.id, state);
         void this.turnActor.enqueue(claim.event.sessionId, { claim, state }, {
-          timeoutMs: this.turnTimeoutMs
+          timeoutMs: sessionEventTimeoutMs(claim.event.kind, this.turnTimeoutMs)
         }).catch((error) => this.turnServices.results.failActorTask(claim, state, error)).finally(() => {
           state.stopRenewal();
           this.turnClaims.delete(claim.turn.id);
@@ -592,7 +594,7 @@ export class SessionCoordinator {
         this.toolClaims.set(job.id, state);
         const actorKey = toolActorKey(job, jobSettings.workspacePath);
         void this.toolActor.enqueue(actorKey, { job, settings: jobSettings, state }, {
-          timeoutMs: positiveInteger(jobSettings.timeoutMs, DEFAULT_TURN_TIMEOUT_MS, "codex.timeoutMs") + 5_000
+          timeoutMs: toolJobActorTimeoutMs(job, jobSettings)
         }).catch((error) => this.toolJobProcessor.fail(job, state, error)).finally(() => {
           state.stopRenewal();
           this.toolClaims.delete(job.id);
@@ -633,6 +635,19 @@ export class SessionCoordinator {
   private deferScan(callback: () => void) {
     queueMicrotask(callback);
   }
+}
+
+function sessionEventTimeoutMs(kind: string, regularTimeoutMs: number) {
+  return kind === "tool_completion" || kind === "scheduled_callback_delivery"
+    ? AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS + TOOL_ACTOR_SETTLEMENT_GRACE_MS
+    : regularTimeoutMs;
+}
+
+function toolJobActorTimeoutMs(job: ToolJobRecord, settings: CodexCoordinatorSettings) {
+  const taskTimeoutMs = job.toolName === "codex"
+    ? positiveInteger(settings.timeoutMs, DEFAULT_TURN_TIMEOUT_MS, "codex.timeoutMs")
+    : AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS;
+  return taskTimeoutMs + TOOL_ACTOR_SETTLEMENT_GRACE_MS;
 }
 
 function toolActorKey(job: ToolJobRecord, workspacePath: string) {

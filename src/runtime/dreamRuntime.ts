@@ -33,6 +33,7 @@ import { AgentFileRepository } from "../admin/agentFiles.js";
 import { appendRequestLog } from "../../adapters/observability/requestLog.js";
 import type { ConversationRecord } from "../types.js";
 import type { SunaRuntime } from "../runtime.js";
+import { auxiliaryProviderCompleteOptions } from "./auxiliaryModelBudget.js";
 import { isMemoryEligibleConversationMessage } from "./conversationMemoryHelpers.js";
 import {
   createRuntimeDreams,
@@ -55,6 +56,7 @@ export function createRuntimeDreamsForHost(host: SunaRuntime) {
   const agentFiles = new AgentFileRepository({ runtime: host });
   return createRuntimeDreams({
     agentId: host.config.persona.defaultAgentId,
+    lifecycleSignal: host.runtimeSignal,
     store: applicationDataStore(host.config).dreams as unknown as RuntimeDreamStorePort,
     context: { capture: (input) => captureDreamContext(host, input) },
     workingMemory: {
@@ -76,16 +78,20 @@ export function createRuntimeDreamsForHost(host: SunaRuntime) {
           host.config.bot.memory.reasoningEffort
         ),
         request as RenderedPromptRequest,
-        options
+        auxiliaryProviderCompleteOptions(options)
       )
     },
     persona: {
-      read: async (id) => {
+      read: async (id, signal) => {
+        signal?.throwIfAborted();
         const file = await agentFiles.get(id, host.config);
+        signal?.throwIfAborted();
         return { content: file.content, revision: file.revision };
       },
-      compareAndSwap: async ({ id, revision, content }) => {
-        await agentFiles.put(id, { revision, content }, host.config);
+      compareAndSwap: async ({ id, revision, content, signal }) => {
+        signal?.throwIfAborted();
+        await agentFiles.put(id, { revision, content }, host.config, signal);
+        signal?.throwIfAborted();
       }
     },
     selection: () => ({
@@ -174,11 +180,15 @@ async function captureDreamContext(
     localDate: string;
     timeZone: string;
     window: { start: string; end: string };
+    signal?: AbortSignal;
   }
 ): Promise<RuntimeDreamContextSnapshot> {
+  input.signal?.throwIfAborted();
   const repository = applicationDataStore(host.config);
   const workingDocument = await readWorkingMemoryDocument(host.config);
+  input.signal?.throwIfAborted();
   const fieldKnowledge = await readAirKnowledge(host.config);
+  input.signal?.throwIfAborted();
   const workingJson = workingDocument.items.map((item) => ({
     ...workingMemoryItemToEntry(item),
     source: dreamWorkingMemorySource(item.sourceKind),
@@ -190,7 +200,9 @@ async function captureDreamContext(
     longTermRecords: longTermJson as DreamMemoryRecord[]
   });
   const trackingIds = dreamRecallTrackingIds(longTermJson as DreamMemoryRecord[]);
+  input.signal?.throwIfAborted();
   repository.dreams.initializeRecallTracking(trackingIds, input.now);
+  input.signal?.throwIfAborted();
   const recallStats = projectDreamRecallStats({
     records: longTermRecords,
     stats: repository.dreams.listRecallStats(dreamRecallLookupIds(longTermRecords)) as DreamRecallStatsSnapshot[],
@@ -223,9 +235,12 @@ async function compareAndSwapDreamWorkingMemory(
     records: readonly DreamMemoryRecord[];
     runId: string;
     localDate: string;
+    signal?: AbortSignal;
   }
 ) {
+  input.signal?.throwIfAborted();
   const current = await readWorkingMemoryDocument(host.config);
+  input.signal?.throwIfAborted();
   const conversationId = `dream:${host.config.persona.defaultAgentId}`;
   if (current.revision !== input.expectedRevision) {
     recordMemoryOperation(host.config, {
@@ -259,9 +274,15 @@ async function compareAndSwapDreamWorkingMemory(
       : `working_dream_${input.localDate.replaceAll("-", "_")}_${index}`,
     "dream"
   );
-  const replaced = await replaceWorkingMemoryDocument(host.config, current.revision, nextItems);
+  input.signal?.throwIfAborted();
+  const replaced = await replaceWorkingMemoryDocument(
+    host.config,
+    current.revision,
+    nextItems,
+    input.signal
+  );
   if (replaced.status === "conflict") {
-    recordMemoryOperation(host.config, {
+    if (!input.signal?.aborted) recordMemoryOperation(host.config, {
       source: "working",
       operation: "dream_replace",
       actor: "dream",
@@ -278,7 +299,7 @@ async function compareAndSwapDreamWorkingMemory(
     });
     return { status: "conflict" as const, revision: replaced.current.revision };
   }
-  recordMemoryOperation(host.config, {
+  if (!input.signal?.aborted) recordMemoryOperation(host.config, {
     source: "working",
     operation: "dream_replace",
     actor: "dream",
@@ -331,9 +352,12 @@ async function compareAndSwapDreamFieldKnowledge(
     content: string;
     runId: string;
     localDate: string;
+    signal?: AbortSignal;
   }
 ) {
+  input.signal?.throwIfAborted();
   const current = await readAirKnowledge(host.config);
+  input.signal?.throwIfAborted();
   const conversationId = `dream:${host.config.persona.defaultAgentId}`;
   if (current.revision !== input.expectedRevision) {
     recordMemoryOperation(host.config, {
@@ -351,9 +375,15 @@ async function compareAndSwapDreamFieldKnowledge(
   }
   const normalizedContent = normalizeAirKnowledge(input.content);
   const nextPersona = await loadPersona(host.config, { "AIR.md": normalizedContent });
-  const replaced = await replaceAirKnowledge(host.config, current.revision, normalizedContent);
+  input.signal?.throwIfAborted();
+  const replaced = await replaceAirKnowledge(
+    host.config,
+    current.revision,
+    normalizedContent,
+    input.signal
+  );
   if (replaced.status === "conflict") {
-    recordMemoryOperation(host.config, {
+    if (!input.signal?.aborted) recordMemoryOperation(host.config, {
       source: "dream",
       operation: "field_knowledge_replace",
       actor: "dream",
@@ -367,8 +397,8 @@ async function compareAndSwapDreamFieldKnowledge(
     });
     return { status: "conflict" as const, revision: replaced.current.revision };
   }
-  if (replaced.status === "updated") host.persona = nextPersona;
-  recordMemoryOperation(host.config, {
+  if (replaced.status === "updated" && !input.signal?.aborted) host.persona = nextPersona;
+  if (!input.signal?.aborted) recordMemoryOperation(host.config, {
     source: "dream",
     operation: "field_knowledge_replace",
     actor: "dream",

@@ -8,8 +8,12 @@ import {
   buildVoiceApiComposition,
   registerVoiceApi,
 } from "../../apps/api/voiceApiComposition.js";
-import { registerVoiceProfileRoutes } from "../../apps/api/plugins/voiceProfileRoutes.js";
+import {
+  VOICE_HEALTH_PROBE_TIMEOUT_MS,
+  registerVoiceProfileRoutes
+} from "../../apps/api/plugins/voiceProfileRoutes.js";
 import { ServiceError } from "../../packages/contracts/errors/serviceError.js";
+import { AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS } from "../../packages/contracts/model/modelGateway.js";
 import {
   VoiceProfileRepository,
   defaultVoiceProfile,
@@ -210,6 +214,7 @@ describe("voice profile routes", () => {
       ready: true,
       latencyMs: 9,
     });
+    expect(VOICE_HEALTH_PROBE_TIMEOUT_MS).toBe(AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS);
     expect(
       await app.inject({
         method: "POST",

@@ -40,6 +40,7 @@ import {
 import {
   migrateDreamCanonicalOutputContractPrompt,
   migrateDreamMemoryContractPrompt,
+  migrateDreamRawIdentityPrompt,
   migrateDreamSchemaPrompt
 } from "../../services/agent/dreamPromptMigration.js";
 import { migrateConversationInboundMessagePrompt } from "../../services/agent/inboundMessagePromptMigration.js";
@@ -195,12 +196,19 @@ function runtimePromptMigrations(config: AppConfig, selfiePromptDefault: string)
     () => migrateDreamMemoryContractPrompt(config, DREAM_PROMPT_FILE),
     [dreamFlexId]
   );
+  const dreamRawIdentityId = add(
+    "dream-raw-identity-v1",
+    "system",
+    DREAM_PROMPT_FILE,
+    () => migrateDreamRawIdentityPrompt(config, DREAM_PROMPT_FILE),
+    [dreamMemoryId]
+  );
   add(
     "dream-output-contract-v6",
     "system",
     DREAM_PROMPT_FILE,
     () => migrateDreamCanonicalOutputContractPrompt(config, DREAM_PROMPT_FILE),
-    [dreamMemoryId]
+    [dreamRawIdentityId]
   );
   add(
     "scheduled-agent-loop-v2",

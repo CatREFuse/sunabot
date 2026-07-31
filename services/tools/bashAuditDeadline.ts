@@ -3,8 +3,9 @@ import type {
   BashAuditResult,
   BashAuditRunner
 } from "./bashAudit.js";
+import { AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS } from "../../packages/contracts/model/modelGateway.js";
 
-export const WORKSPACE_BASH_AUDIT_TIMEOUT_MS = 10_000;
+export const WORKSPACE_BASH_AUDIT_TIMEOUT_MS = AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS;
 
 export function runBashAuditWithDeadline(
   audit: BashAuditRunner,

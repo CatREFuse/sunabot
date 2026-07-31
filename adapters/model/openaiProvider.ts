@@ -1,7 +1,11 @@
 import type OpenAI from "openai";
 import type { ImageQuality, ProviderConfig } from "../../packages/contracts/admin/public.js";
 import type { ImageResult } from "../../packages/contracts/media/media.js";
-import type { ChatMessage, ProviderLogContext } from "../../packages/contracts/model/modelGateway.js";
+import {
+  AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS,
+  type ChatMessage,
+  type ProviderLogContext
+} from "../../packages/contracts/model/modelGateway.js";
 import type { RenderedPromptRequest } from "../../services/agent/promptSystem.js";
 import { completeProviderTurn } from "./provider/completion.js";
 import type {
@@ -65,7 +69,10 @@ export class OpenAIProvider {
       const client = this.createClient();
       await client.models.list();
     } else {
-      await this.complete("只返回 OK。", [{ role: "user", content: "ping" }]);
+      await this.complete("只返回 OK。", [{ role: "user", content: "ping" }], {
+        signal: AbortSignal.timeout(AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS),
+        modelRequestAttemptTimeoutMs: AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS
+      });
     }
     return {
       ok: true,
@@ -109,7 +116,8 @@ export class OpenAIProvider {
     size: string,
     quality: ImageQuality,
     referenceImageUrls: string[] = [],
-    logContext?: ProviderLogContext
+    logContext?: ProviderLogContext,
+    signal?: AbortSignal
   ): Promise<ImageResult> {
     return generateProviderImage(
       this.adapterContext(),
@@ -117,7 +125,8 @@ export class OpenAIProvider {
       size,
       quality,
       referenceImageUrls,
-      logContext
+      logContext,
+      signal
     );
   }
 

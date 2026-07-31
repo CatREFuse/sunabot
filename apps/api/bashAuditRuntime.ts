@@ -6,6 +6,7 @@ import {
 } from "../../services/tools/bashAudit.js";
 import type { RuntimeBashAuditPort } from "../../src/runtime/runtimeContracts.js";
 import type { AppConfig, ProviderConfig } from "../../packages/contracts/admin/public.js";
+import { auxiliaryProviderCompleteOptions } from "../../src/runtime/auxiliaryModelBudget.js";
 
 interface BashAuditProviderPort {
   hasApiKey(): boolean;
@@ -62,9 +63,9 @@ function bashAuditProviderConfig(config: AppConfig): ProviderConfig | undefined 
 }
 
 function bashAuditRequestOptions(input: BashAuditInput): ProviderCompleteOptions {
-  return {
+  return auxiliaryProviderCompleteOptions({
     ...(input.signal ? { signal: input.signal } : {}),
     modelRequestMaxRetries: 0,
     logContext: { stage: "bash_audit", promptFamily: "bash_audit" }
-  };
+  });
 }

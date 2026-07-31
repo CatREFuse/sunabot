@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   WORKING_MEMORY_FILE,
   WORKING_MEMORY_MAX_BYTES,
@@ -25,6 +25,7 @@ describe("working-memory Markdown document", () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await fs.rm(root, { recursive: true, force: true });
   });
 
@@ -85,6 +86,30 @@ describe("working-memory Markdown document", () => {
     await expect(readWorkingMemoryDocument(config)).rejects.toMatchObject({
       code: "WORKING_MEMORY_TOO_LARGE"
     });
+  });
+
+  it("restores the previous document when cancellation lands after atomic rename", async () => {
+    await appendWorkingMemoryDocumentItem(config, "关闭前的工作记忆。", {
+      conversationId: "private:10001",
+      scope: "private"
+    });
+    const before = await readWorkingMemoryDocument(config);
+    const controller = new AbortController();
+    const originalRename = fs.rename.bind(fs);
+    vi.spyOn(fs, "rename").mockImplementationOnce(async (oldPath, newPath) => {
+      await originalRename(oldPath, newPath);
+      controller.abort(new DOMException("Runtime closed.", "AbortError"));
+    });
+
+    await expect(replaceWorkingMemoryDocument(config, before.revision, [{
+      ...before.items[0]!,
+      content: "关闭后的迟到工作记忆。"
+    }], controller.signal)).rejects.toMatchObject({ name: "AbortError" });
+
+    const restored = await readWorkingMemoryDocument(config);
+    expect(restored.revision).toBe(before.revision);
+    expect(restored.content).toBe(before.content);
+    expect(await fs.readdir(config.persona.agentWorkspace)).toEqual([WORKING_MEMORY_FILE]);
   });
 
   it("uses Unicode characters for the 4000-character item boundary", async () => {

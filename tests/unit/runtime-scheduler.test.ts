@@ -999,6 +999,76 @@ describe("runtime reply scheduling helpers", () => {
     expect(appendRequestLog).not.toHaveBeenCalledWith(expect.objectContaining({ action: "orchestrator.failed" }));
   });
 
+  it("shares one hard 600-second budget across ambient preparation and Provider work", async () => {
+    vi.useFakeTimers();
+    const config = createAdminTestConfig(TEST_WORKSPACE);
+    config.bot.orchestrator.enabled = true;
+    const runtime = createRuntime(config);
+    const incoming = groupIncoming("需要等待编排器判断", 171419991);
+    const record = orchestratorRecord(171419991);
+    const persistConversationRecords = vi.fn();
+    let providerStarted!: () => void;
+    const providerRunning = new Promise<void>((resolve) => {
+      providerStarted = resolve;
+    });
+    let taskSignal: AbortSignal | undefined;
+    const runUserGroupchatOrchestrator = vi.fn((
+      _incoming: ParsedIncomingMessage,
+      options: { signal: AbortSignal }
+    ) => new Promise<undefined>((_resolve) => {
+      taskSignal = options.signal;
+      setTimeout(() => {
+        providerStarted();
+      }, 590_000);
+    }));
+    const internals = runtime as unknown as {
+      conversationRecords: Map<string, typeof record>;
+      replyGates: {
+        capture(scope: "user_group", conversationId: string): unknown;
+      };
+      runUserGroupchatOrchestrator: typeof runUserGroupchatOrchestrator;
+      persistConversationRecords: typeof persistConversationRecords;
+      pumpAmbientReply(
+        channelKey: string,
+        state: {
+          epoch: number;
+          running: boolean;
+          next?: unknown;
+          controller?: AbortController;
+        }
+      ): Promise<void>;
+    };
+    internals.conversationRecords.set(record.id, record);
+    internals.runUserGroupchatOrchestrator = runUserGroupchatOrchestrator;
+    internals.persistConversationRecords = persistConversationRecords;
+    const state = {
+      epoch: 0,
+      running: false,
+      next: {
+        channelKey: record.id,
+        incoming,
+        gateway: {},
+        captureSequence: 1,
+        gate: internals.replyGates.capture("user_group", record.id)
+      }
+    };
+
+    const pending = internals.pumpAmbientReply(record.id, state);
+    await vi.advanceTimersByTimeAsync(590_000);
+    await providerRunning;
+    await vi.advanceTimersByTimeAsync(9_999);
+
+    expect(taskSignal?.aborted).toBe(false);
+    expect(state.running).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(pending).resolves.toBeUndefined();
+    expect(taskSignal?.aborted).toBe(true);
+    expect(state.running).toBe(false);
+    expect(record.orchestratorCheckedMessageCount).toBe(0);
+    expect(persistConversationRecords).not.toHaveBeenCalled();
+  });
+
   it("queues an ambient decision when pending messages reach the idle timeout", async () => {
     vi.useFakeTimers();
     vi.setSystemTime("2026-07-10T00:01:00.000Z");

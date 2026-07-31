@@ -27,7 +27,8 @@ export const CODEX_TOOL_DESCRIPTION = [
 export const CODEX_CONTROL_TOOL_DESCRIPTION = [
   "Control an asynchronous Codex app-server on this Mac or an administrator-managed SSH host.",
   "List visible Codex sessions, start a workspace maintenance session, or continue an exact session by thread ID.",
-  "For local start and resume, workspace_path is the exact authorized project directory while the runtime assigns the turn's current working directory as its contract output directory.",
+  "For local start and resume, workspace_path may be null to use the runtime-authorized project directory; an SSH start or resume requires an exact absolute workspace_path on that host.",
+  "The runtime assigns each local turn's current working directory as its contract output directory.",
   "Require every file that must be returned to the conversation to be created under the turn cwd and declared relative to it.",
   "Remote SSH sessions can modify their selected workspace and return text, but cannot return file artifacts through the local conversation artifact bridge."
 ].join(" ");
@@ -94,7 +95,7 @@ export const codexControlTool = {
       workspace_path: {
         type: ["string", "null"],
         maxLength: 4_096,
-        description: "Exact absolute project directory on the selected host. Required for start/resume and optional for list filtering; local turns receive a separate runtime-owned contract output cwd."
+        description: "Exact absolute project directory on the selected host. For local start/resume, null uses the runtime-authorized project directory; SSH start/resume requires an absolute value. Null leaves list_sessions unfiltered. Local turns receive a separate runtime-owned contract output cwd."
       },
       thread_id: {
         type: ["string", "null"],

@@ -6,6 +6,7 @@ export interface RuntimeDreamWorkingMemoryPort {
     records: readonly DreamMemoryRecord[];
     runId: string;
     localDate: string;
+    signal?: AbortSignal;
   }): Promise<
     | { status: "updated" | "unchanged"; revision: string; rollback: () => Promise<boolean> }
     | { status: "conflict"; revision: string }
@@ -18,6 +19,7 @@ export interface RuntimeDreamFieldKnowledgePort {
     content: string;
     runId: string;
     localDate: string;
+    signal?: AbortSignal;
   }): Promise<
     | { status: "updated" | "unchanged"; revision: string; rollback: () => Promise<boolean> }
     | { status: "conflict"; revision: string }
@@ -33,16 +35,23 @@ export async function commitDreamWithWorkingMemory<T extends { status: string }>
   fieldKnowledgeContent?: string | null;
   runId: string;
   localDate: string;
+  signal?: AbortSignal;
   commit(externalWorkingMemory: boolean, fieldKnowledgeUpdated: boolean): T;
 }) {
+  input.signal?.throwIfAborted();
   const workingCommit = input.workingMemory && input.workingRevision
     ? await input.workingMemory.compareAndSwap({
         expectedRevision: input.workingRevision,
         records: input.records,
         runId: input.runId,
-        localDate: input.localDate
+        localDate: input.localDate,
+        signal: input.signal
       })
     : undefined;
+  if (input.signal?.aborted) {
+    await rollbackExternalCommits([{ commit: workingCommit, source: "working" }]);
+    throw input.signal.reason ?? new Error("Dream commit aborted.");
+  }
   if (workingCommit?.status === "conflict") {
     throw dreamCommitError("DREAM_SNAPSHOT_CONFLICT", "Dream memory snapshot changed: working.");
   }
@@ -57,12 +66,20 @@ export async function commitDreamWithWorkingMemory<T extends { status: string }>
           expectedRevision: input.fieldKnowledgeRevision,
           content: input.fieldKnowledgeContent,
           runId: input.runId,
-          localDate: input.localDate
+          localDate: input.localDate,
+          signal: input.signal
         })
       : undefined;
   } catch (error) {
     await rollbackExternalCommits([{ commit: workingCommit, source: "working" }]);
     throw error;
+  }
+  if (input.signal?.aborted) {
+    await rollbackExternalCommits([
+      { commit: fieldKnowledgeCommit, source: "field_knowledge" },
+      { commit: workingCommit, source: "working" }
+    ]);
+    throw input.signal.reason ?? new Error("Dream commit aborted.");
   }
   if (fieldKnowledgeCommit?.status === "conflict") {
     await rollbackExternalCommits([{ commit: workingCommit, source: "working" }]);
@@ -74,6 +91,7 @@ export async function commitDreamWithWorkingMemory<T extends { status: string }>
   const fieldKnowledgeUpdated = fieldKnowledgeCommit?.status === "updated";
   let committed: T;
   try {
+    input.signal?.throwIfAborted();
     committed = input.commit(workingCommit != null, fieldKnowledgeUpdated);
   } catch (error) {
     await rollbackExternalCommits([

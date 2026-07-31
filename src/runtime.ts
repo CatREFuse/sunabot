@@ -120,6 +120,7 @@ export class SunaRuntime {
       incoming: ParsedIncomingMessage;
     }>();
   activeGateway?: MessagingPort;
+  private readonly runtimeController = new AbortController();
   private readonly lifecycle: RuntimeLifecycle;
   private readonly orchestration: RuntimeOrchestration;
   private readonly memory: RuntimeMemoryPipeline;
@@ -246,6 +247,11 @@ export class SunaRuntime {
       this.voice = new RuntimeVoice(this, options.voice);
   }
   private inAgentContext<T>(operation: () => T): T { return runWithAgentRuntimeContext(this.config, operation); }
+  get runtimeSignal() { return this.runtimeController.signal; }
+  isRuntimeActive() { return !this.runtimeController.signal.aborted; }
+  abortRuntime(reason: unknown = new DOMException("Runtime closed.", "AbortError")) {
+    if (!this.runtimeController.signal.aborted) this.runtimeController.abort(reason);
+  }
   initialize(...args: Parameters<RuntimeLifecycle["initialize"]>) { return this.inAgentContext(() => this.lifecycle.initialize(...args)); }
   close(...args: Parameters<RuntimeLifecycle["close"]>) { return this.inAgentContext(() => this.lifecycle.close(...args)); }
   reload(...args: Parameters<RuntimeLifecycle["reload"]>) { return this.inAgentContext(() => this.lifecycle.reload(...args)); }

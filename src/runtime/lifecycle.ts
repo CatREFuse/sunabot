@@ -33,6 +33,7 @@ import {
   ReasoningEffort
 } from "../types.js";
 import { clampInteger, indexedConversationMessages, resolveRuntimePersonaName } from "./conversationMemoryHelpers.js";
+import { auxiliaryProviderCompleteOptions } from "./auxiliaryModelBudget.js";
 import { conversationDirectorEventsEnabled, conversationOrchestratorEnabled, conversationOrchestratorResponseTimeMs, conversationReplyEnabled, enrichMemoryEntriesWithConversations, isWebConversationId, normalizeConversationLookupId, normalizeConversationOrchestratorResponseTimeMs, outboundForRecord } from "./messagingAttachmentHelpers.js";
 import { ensureRuntimePromptWorkspace } from "./promptMigrations.js";
 import { ADMIN_PERSONA_FILES, ConversationReplyUpdateInput, ConversationToolPolicyUpdateInput, RuntimeConfigSnapshot, RuntimePromptSnapshot, personaFileNameForAdminId, runtimePromptDefaultContent } from "./runtimeContracts.js";
@@ -56,11 +57,21 @@ export async function runtime_initialize(this: RuntimeHost) {
     this.scheduleMemoryDrain();
   }
 export function runtime_close(this: RuntimeHost) {
+    this.abortRuntime();
+    this.memoryDrainDirty = false;
+    this.attachmentRefreshDirty = false;
+    this.cancelAllAmbientReplies();
+    for (const controller of this.activeDirectControllers.values()) {
+      controller.abort(this.runtimeSignal.reason);
+    }
+    this.activeDirectControllers.clear();
+    this.incomingPreparations.clear();
     this.scheduledTasks.stop();
     this.director.stop();
     this.dreams.stop();
     if (this.memoryWakeTimer) clearTimeout(this.memoryWakeTimer);
     this.memoryWakeTimer = undefined;
+    this.activeGateway = undefined;
     this.sessionCoordinator.stop();
     if (this.ownsSessionStore) this.sessionStore.close();
   }
@@ -287,7 +298,7 @@ async function prepareVisionFallback(
   const hasImages = request.messages.some((message) => message.imageUrls?.length || message.localImagePaths?.length);
   if (!hasImages) return request;
   const detectedMultimodal = providerConfig.multimodal === "auto" && providerConfig.detectedMultimodal == null
-    ? await cachedMultimodalProbe(providerConfig)
+    ? await cachedMultimodalProbe(providerConfig, options.signal)
     : providerConfig.detectedMultimodal;
   const needsFallback = providerConfig.multimodal === "disabled"
     || (providerConfig.multimodal === "auto" && detectedMultimodal === false);
@@ -311,7 +322,10 @@ async function prepareVisionFallback(
         imageUrls: imageUrls.slice(persistedAltTexts.length),
         localImagePaths
       }],
-      { signal: options.signal, logContext: options.logContext }
+      auxiliaryProviderCompleteOptions({
+        signal: options.signal,
+        logContext: options.logContext
+      })
     );
     fallbackAltTexts = [...persistedAltTexts, description.trim()].filter(Boolean);
   }
@@ -329,11 +343,14 @@ async function prepareVisionFallback(
 
 const multimodalProbeCache = new Map<string, boolean>();
 
-async function cachedMultimodalProbe(provider: ReturnType<OpenAIProvider["configuration"]>) {
+async function cachedMultimodalProbe(
+  provider: ReturnType<OpenAIProvider["configuration"]>,
+  signal?: AbortSignal
+) {
   const key = [provider.id, provider.kind, provider.model, provider.baseUrl ?? "", provider.apiKeyEnv].join("\0");
   const cached = multimodalProbeCache.get(key);
   if (cached != null) return cached;
-  const result = await probeProviderMultimodal(provider);
+  const result = await probeProviderMultimodal(provider, undefined, signal);
   multimodalProbeCache.set(key, result.multimodal);
   return result.multimodal;
 }

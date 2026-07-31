@@ -1,6 +1,8 @@
 import { MODEL_CATALOG } from "../../packages/contracts/admin/models.js";
 import type { ProviderConfig } from "../../packages/contracts/admin/public.js";
+import { AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS } from "../../packages/contracts/model/modelGateway.js";
 import { OpenAIProvider } from "./openaiProvider.js";
+import type { ProviderCompleteOptions } from "./provider/contracts.js";
 import {
   normalizeAnthropicBaseUrl,
   normalizeChatBaseUrl,
@@ -11,7 +13,11 @@ import {
 import { isRecord, parseJson } from "./provider/valueUtils.js";
 
 const PROBE_IMAGE = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgAQMAAABJtOi3AAAAA1BMVEX/AAAZ4gk3AAAADElEQVQI12NgGNwAAACgAAFhJX1HAAAAAElFTkSuQmCC";
-type VisionProbeCompletion = (system: string, messages: Array<{ role: "user"; content: string; imageUrls: string[] }>) => Promise<string>;
+type VisionProbeCompletion = (
+  system: string,
+  messages: Array<{ role: "user"; content: string; imageUrls: string[] }>,
+  options: ProviderCompleteOptions
+) => Promise<string>;
 
 export async function discoverProviderModels(provider: ProviderConfig) {
   if (provider.kind === "codex-responses") return MODEL_CATALOG.map((model) => model.id);
@@ -38,12 +44,19 @@ export async function discoverProviderModels(provider: ProviderConfig) {
 
 export async function probeProviderMultimodal(
   provider: ProviderConfig,
-  complete: VisionProbeCompletion = (system, messages) => new OpenAIProvider(provider).complete(system, messages)
+  complete?: VisionProbeCompletion,
+  signal?: AbortSignal
 ) {
   try {
-    const result = await complete(
+    const timeout = AbortSignal.timeout(AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS);
+    const result = await (complete ?? ((system, messages, options) =>
+      new OpenAIProvider(provider).complete(system, messages, options)))(
       "识别输入图片的主色，只返回一个大写英文颜色单词。",
-      [{ role: "user", content: "这张图片的主色是什么？", imageUrls: [PROBE_IMAGE] }]
+      [{ role: "user", content: "这张图片的主色是什么？", imageUrls: [PROBE_IMAGE] }],
+      {
+        signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+        modelRequestAttemptTimeoutMs: AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS
+      }
     );
     if (/\bRED\b/i.test(result)) return { multimodal: true };
     return { multimodal: false, reason: `模型未识别探测图片：${result.trim().slice(0, 120) || "空响应"}` };

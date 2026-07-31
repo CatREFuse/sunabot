@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -194,7 +195,7 @@ describe("conversation API plugin", () => {
     assertRequestAndResponseSchemas(routeSchemas);
   });
 
-  it("keeps a valid Web Chat turn alive after the HTTP request body closes", async () => {
+  it("keeps a valid Web Chat turn alive through an asynchronous HTTP handler", async () => {
     const app = Fastify();
     apps.push(app);
     app.setErrorHandler((error, _request, reply) => error instanceof ServiceError
@@ -244,18 +245,14 @@ describe("conversation API plugin", () => {
       describe: vi.fn((value: unknown) => value)
     } as unknown as ConversationDirectory;
     registerConversationRoutes(app, { runtime, onebotGateway, conversationDirectory });
-    await app.listen({ host: "127.0.0.1", port: 0 });
-    const address = app.server.address();
-    if (!address || typeof address === "string") throw new Error("Fastify test server has no TCP address.");
-
-    const response = await fetch(`http://127.0.0.1:${address.port}/api/web-chat/messages`, {
+    const response = await app.inject({
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text: "请确认连接" })
+      url: "/api/web-chat/messages",
+      payload: { text: "请确认连接" }
     });
 
-    expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
       ok: true,
       delivered: 1,
       conversationId: "web:admin",
@@ -265,6 +262,129 @@ describe("conversation API plugin", () => {
       ]
     });
     expect(replyToIncoming).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels Web Chat through the request socket close signal", async () => {
+    const started = deferred<AbortSignal>();
+    const runtime = {
+      adminIdentity: () => ({ userId: "171419991", name: "管理员" }),
+      incomingCaptureSequence: () => 1,
+      recordIncomingMessage: vi.fn(),
+      replyToIncoming: vi.fn(async (
+        _channel: string,
+        _incoming: unknown,
+        _delivery: unknown,
+        options: { signal: AbortSignal }
+      ) => {
+        started.resolve(options.signal);
+        await new Promise<never>(() => undefined);
+      }),
+      getConversationMessages: () => ({
+        conversationId: "web:admin",
+        messages: [],
+        hasMore: false,
+        memberNames: {}
+      })
+    } as unknown as SunaRuntime;
+    const handlers = new Map<string, (request: never, reply: never) => unknown>();
+    const fakeApp = {
+      addHook: vi.fn(),
+      get: (url: string, _options: unknown, handler: (request: never, reply: never) => unknown) => {
+        handlers.set(`GET ${url}`, handler);
+      },
+      post: (url: string, _options: unknown, handler: (request: never, reply: never) => unknown) => {
+        handlers.set(`POST ${url}`, handler);
+      },
+      put: (url: string, _options: unknown, handler: (request: never, reply: never) => unknown) => {
+        handlers.set(`PUT ${url}`, handler);
+      }
+    } as unknown as ReturnType<typeof Fastify>;
+    const onebotGateway = { getStatus: () => ({ connected: false }) } as unknown as OneBotGateway;
+    const conversationDirectory = {
+      enrich: vi.fn(),
+      describe: vi.fn((value: unknown) => value)
+    } as unknown as ConversationDirectory;
+    registerConversationRoutes(fakeApp, { runtime, onebotGateway, conversationDirectory });
+    const handler = handlers.get("POST /api/web-chat/messages");
+    if (!handler) throw new Error("Web Chat POST handler was not registered.");
+    const requestRaw = new EventEmitter() as EventEmitter & {
+      socket: EventEmitter;
+    };
+    requestRaw.socket = new EventEmitter();
+    const replyRaw = new EventEmitter() as EventEmitter & {
+      writableEnded: boolean;
+      writableFinished: boolean;
+    };
+    replyRaw.writableEnded = false;
+    replyRaw.writableFinished = false;
+    const response = Promise.resolve(handler({
+      body: { text: "测试断开" },
+      query: {},
+      raw: requestRaw
+    } as never, {
+      raw: replyRaw
+    } as never));
+    const taskSignal = await started.promise;
+
+    requestRaw.socket.emit("close");
+
+    await expect(response).rejects.toMatchObject({
+      statusCode: 499,
+      code: "WEB_CHAT_REQUEST_ABORTED"
+    });
+    expect(taskSignal.aborted).toBe(true);
+  });
+
+  it("aborts an in-flight Web Chat turn from Fastify preClose", async () => {
+    const app = Fastify();
+    apps.push(app);
+    app.setErrorHandler((error, _request, reply) => error instanceof ServiceError
+      ? reply.status(error.statusCode).send(error.toJSON())
+      : reply.status(500).send({ error: { code: "INTERNAL_ERROR", message: String(error) } }));
+    const started = deferred<AbortSignal>();
+    const runtime = {
+      adminIdentity: () => ({ userId: "171419991", name: "管理员" }),
+      incomingCaptureSequence: () => 1,
+      recordIncomingMessage: vi.fn(),
+      replyToIncoming: vi.fn(async (
+        _channel: string,
+        _incoming: unknown,
+        _delivery: unknown,
+        options: { signal: AbortSignal }
+      ) => {
+        started.resolve(options.signal);
+        await new Promise<never>(() => undefined);
+      }),
+      getConversationMessages: () => ({
+        conversationId: "web:admin",
+        messages: [],
+        hasMore: false,
+        memberNames: {}
+      })
+    } as unknown as SunaRuntime;
+    const onebotGateway = { getStatus: () => ({ connected: false }) } as unknown as OneBotGateway;
+    const conversationDirectory = {
+      enrich: vi.fn(),
+      describe: vi.fn((value: unknown) => value)
+    } as unknown as ConversationDirectory;
+    registerConversationRoutes(app, { runtime, onebotGateway, conversationDirectory });
+    const response = app.inject({
+      method: "POST",
+      url: "/api/web-chat/messages",
+      payload: { text: "测试关闭" }
+    });
+    const taskSignal = await started.promise;
+
+    const closing = app.close();
+
+    await vi.waitFor(() => expect(taskSignal.aborted).toBe(true));
+    expect((await response).json()).toEqual({
+      error: {
+        code: "WEB_CHAT_SHUTTING_DOWN",
+        message: "Web Chat 正在关闭，请稍后重试。"
+      }
+    });
+    await closing;
   });
 
   it("serializes concurrent HTTP sends with stable per-Agent Web Chat message ids", async () => {

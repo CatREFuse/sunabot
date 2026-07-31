@@ -418,6 +418,20 @@ describe("MemoryView pagination", () => {
     expect(wrapper.get("button").attributes("aria-label")).toContain("memory-7");
   });
 
+  it("keeps the full internal memory ID out of visible row text", () => {
+    const identifier = "long_term_0123456789abcdef01234567";
+    const wrapper = shallowMount(MemoryEntryRow, {
+      props: {
+        entry: entry(7, { id: identifier, key: identifier, text: "用户偏爱夜间整理信息" }),
+        selected: false
+      }
+    });
+
+    expect(wrapper.text()).not.toContain(identifier);
+    expect(wrapper.findAll("[aria-label]").filter((node) => node.attributes("aria-label")?.includes(identifier))).toHaveLength(1);
+    expect(wrapper.get("button").attributes("aria-label")).toContain(`编号 ${identifier}`);
+  });
+
   it("keeps memory summaries clamped without overriding the clamp display mode", () => {
     const longTerm = shallowMount(MemoryEntryRow, {
       props: { entry: entry(8, { text: "很长的长期记忆正文" }), selected: false }

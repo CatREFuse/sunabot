@@ -9,6 +9,7 @@
 - 主对话角色：管理员私聊。
 - 输入从原始 OneBot v11 `file` 消息段进入 production ingress。
 - 使用全新隔离 workspace、mock MessagingPort、固定文本附件和允许执行的 Codex worker。
+- 即使当前 macOS Native 管理员私聊同时具备 Codex control 权限，只要当前或引用消息存在可冻结媒体，Provider 仍只能获得带 `inputHandles` 的 worker schema，control schema 不得抢占本轮 `codex`。
 - 主 Bot 的 Codex 工具协议明确要求：任务需要交付文件时写清成品名称和内容，不猜测或传递宿主输出路径。
 - Codex worker 的实际 cwd 就是运行时为当前 attempt 分配的受控输出目录；冻结输入和获准 workspace 通过独立只读或显式授权路径提供。
 - worker 必须在 cwd 中使用相对路径生成需要回传的文件，并只能从该目录声明产物。
@@ -17,7 +18,7 @@
 
 `codex` 调用必须包含 `inputHandles: ["message:885282522:file:0"]`，并在 task 中写清需要交付 `codex-result.txt`，不得指定宿主绝对目录。worker 从 cwd 读取目标输出语义，通过冻结输入读取 `CODEX-INPUT-ARTIFACT-OK-20260730`，以相对路径生成 `codex-result.txt`，结果产物通过完成回调注册到原会话，随后由 `send_file` 发回。
 
-Provider 收到的 `codex` function schema 必须能够被当前严格模式接受，`inputHandles` 不包含 Provider 禁止的 `uniqueItems`。兼容门禁检查 canonical schema、prompt override、MCP 和动态补入的 `dispatch_message` 合并后的最终定义，并覆盖各 Provider 协议映射后的实际请求结构。重复句柄仍由 Sunabot 在冻结输入和 worker 准备两个边界拒绝，不能重复读取或派发同一份输入。
+Provider 收到的 `codex` function schema 必须是 worker schema，包含 required nullable `inputHandles` 与 deferred `dispatch_message`，且能够被当前严格模式接受；同一回合不得出现仅支持 `action`、`workspace_path` 的 control schema。`inputHandles` 不包含 Provider 禁止的 `uniqueItems`。兼容门禁检查 canonical schema、prompt override、MCP 和动态补入的 `dispatch_message` 合并后的最终定义，并覆盖各 Provider 协议映射后的实际请求结构。重复句柄仍由 Sunabot 在冻结输入和 worker 准备两个边界拒绝，不能重复读取或派发同一份输入。
 
 ## 质量标准
 
@@ -114,7 +115,7 @@ Provider 收到的 `codex` function schema 必须能够被当前严格模式接�
       },
       {
         "id": "provider-schema-contract",
-        "description": "The final resolved and protocol-mapped Provider function schema is accepted without uniqueItems after canonical definitions, prompt overrides, MCP tools, and dispatch_message are composed.",
+        "description": "A media-bearing Native administrator turn keeps the deferred worker schema with required nullable inputHandles and dispatch_message; the final resolved and protocol-mapped schema is accepted without uniqueItems after canonical definitions, prompt overrides, MCP tools, and dispatch_message are composed.",
         "minimumScore": 5
       },
       {

@@ -66,6 +66,7 @@ vi.mock("node:child_process", () => ({
 
 import { runWorkspaceBash, workspaceBashTool } from "../../services/tools/bashTool.js";
 import { BashApprovalStore } from "../../services/tools/bashAudit.js";
+import { AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS } from "../../packages/contracts/model/modelGateway.js";
 import { DIRECT_REPLY_TIMEOUT_MS, PREPARE_TIMEOUT_MS } from "../../src/runtime/runtimeContracts.js";
 import { TOOL_CALL_TIMEOUT_MS } from "../../services/tools/tools.js";
 import { WORKSPACE_BASH_EXECUTION_TIMEOUT_MS } from "../../services/tools/bashRuntime.js";
@@ -114,7 +115,7 @@ afterEach(async () => {
 });
 
 describe("tool call timeout", () => {
-  it("reserves image preparation time before the 300-second reply budget and limits Bash execution to 30 seconds", async () => {
+  it("gives reply preparation and the direct turn 10 minutes while limiting Bash execution to 30 seconds", async () => {
     temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-tool-timeout-"));
     await fs.mkdir(path.join(temporaryRoot, "workbench"));
     const workbenchRoot = await fs.realpath(path.join(temporaryRoot, "workbench"));
@@ -133,8 +134,8 @@ describe("tool call timeout", () => {
     });
 
     expect(TOOL_CALL_TIMEOUT_MS).toBe(300_000);
-    expect(PREPARE_TIMEOUT_MS).toBe(90_000);
-    expect(DIRECT_REPLY_TIMEOUT_MS).toBe(PREPARE_TIMEOUT_MS + TOOL_CALL_TIMEOUT_MS);
+    expect(PREPARE_TIMEOUT_MS).toBe(AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS);
+    expect(DIRECT_REPLY_TIMEOUT_MS).toBe(AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS);
     expect(processState.calls[0]?.timeout).toBe(0);
     expect(processState.calls[0]?.killSignal).toBe("SIGKILL");
     expect(processState.calls[0]?.file).toBe("/fixture/prlimit");

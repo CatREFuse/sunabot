@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { performance } from "node:perf_hooks";
+import { AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS } from "../../packages/contracts/model/modelGateway.js";
 import { isWaveAudio } from "../../services/voice/audio.js";
 import {
   MAX_VOICE_OUTPUT_BYTES,
@@ -12,7 +13,7 @@ import type {
   VoiceSynthesisResult,
 } from "../../services/voice/synthesis.js";
 
-export const DEFAULT_OPENAI_SPEECH_TIMEOUT_MS = 120_000;
+export const DEFAULT_OPENAI_SPEECH_TIMEOUT_MS = AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS;
 const MAX_MODEL_RESPONSE_BYTES = 64 * 1024;
 
 export type OpenAiSpeechErrorCode =
@@ -66,8 +67,8 @@ export class OpenAiSpeechClient implements VoiceSynthesisClient {
     this.timeoutMs = boundedInteger(
       options.timeoutMs,
       DEFAULT_OPENAI_SPEECH_TIMEOUT_MS,
-      1_000,
-      300_000,
+      AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS,
+      AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS,
     );
     this.maxOutputBytes = boundedInteger(
       options.maxOutputBytes,

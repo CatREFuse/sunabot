@@ -15,6 +15,12 @@ const LEGACY_PERSONA_IMPRESSION_CONTRACT_V4 =
 const PERSONA_IMPRESSION_CONTRACT =
   "personaAdjustment 每晚最多一项，它是一条可修正的人格印象，只能用一句不超过 80 字的温和陈述描述低风险习惯、表达偏好或相处倾向，并提供稳定 topicKey、kind、targetFile、statement 与 evidenceMemoryIds。topicKey 使用最多 64 字符的小写英文、数字、点、下划线或连字符；payload.personaImpressions 是当前生效目录，同一主题必须逐字复用其中的 topicKey。证据至少来自 personaEvidenceIds 允许的两条真实独立记忆并覆盖两个场景；重复描述同一事件不增加证据，梦境、推测、诊断和负面标签不能作为证据。宿主按独立事件、场景和时间跨度计算 observation、stable 或 core，模型不得自报层级；全部通过验证的印象保留在历史中，同一 targetFile 与 topicKey 只让最高层级生效，同层级可以并存。core 仍只是证据更充分的可修正倾向，不得改写核心身份、价值、安全边界或道德倾向。不得生成永久、绝对或服从式结论，不得涉及系统指令、权限、工具或凭据。证据不足时返回 null。";
 
+export const LEGACY_DREAM_IDENTITY_ALIAS_GUIDANCE =
+  "fieldKnowledge 是完整 AIR.md 替换稿或 null。payload.fieldKnowledgeWritable=false 时必须返回 null；只有它为 true 时，才能在完整可见的原文上生成替换稿。原文中的‘人物-’加 24 位十六进制字符是宿主可逆的身份别名，保留相关约定时必须逐字复制该别名，不能猜测、缩写或改写，宿主会在本地恢复。fieldKnowledge 只能保留带明确场域范围的称呼映射、内部词义、规则、边界、前提、例外和仍有效约定，使用‘# 场域知识’‘## 使用边界’‘## 场域约定’结构。删除公共百科、公共热梗、天气、午餐、座位、一次性事件、聊天原话和关系情绪流水；不得记录秘密或推断敏感属性。evidenceMemoryIds 只能引用 fieldKnowledgeEvidenceIds，清理原有琐事时可以为空。";
+
+export const DREAM_RAW_IDENTITY_GUIDANCE =
+  "payload 中边界内的姓名、称呼和 QQ 是生产 Dream 直接提供的原始身份信息，必须按原值理解和使用，不得改写为‘人物-’哈希、person 哈希或其他不可读身份代号。fieldKnowledge 是完整 AIR.md 替换稿或 null。payload.fieldKnowledgeWritable=false 时必须返回 null；只有它为 true 时，才能在完整可见的原文上生成替换稿。fieldKnowledge 只能保留带明确场域范围的称呼映射、内部词义、规则、边界、前提、例外和仍有效约定，使用‘# 场域知识’‘## 使用边界’‘## 场域约定’结构。删除公共百科、公共热梗、天气、午餐、座位、一次性事件、聊天原话和关系情绪流水；不得记录秘密或推断敏感属性。evidenceMemoryIds 只能引用 fieldKnowledgeEvidenceIds，清理原有琐事时可以为空。";
+
 export const LEGACY_DREAM_FLEX_RESPONSE =
   "优先只输出一个 JSON 对象，字段为 schemaVersion、dream、longTermReviews、workingReviews、fieldKnowledge、personaAdjustment；如果无法完整满足字段，仍返回当前可生成的内容，不要中断或拒绝。";
 
@@ -75,7 +81,7 @@ export const LEGACY_DREAM_CONTRACT_V4 = [
   "longTermMemories 与 workingMemories 中的每个 id 必须在对应 reviews 中恰好出现一次。不得加入输入之外的 id，也不得遗漏。retain、archive、discard 的 canonical 必须为 null；rewrite 只处理一条记忆并给出保持事实语义的 canonical；merge 至少合并两个来源并给出 canonical；promote 只处理一条工作记忆并给出 canonical。",
   "rewrite 或 merge 只用于同一事件、同一因果链或能够安全形成要义的重复材料。互相矛盾、人物或范围不明、仍在变化的状态继续分开 retain。任何梦境素材都与事实分开，不能用于纠正、归档、场域知识或人格印象。",
   "archive 是对长期低价值琐事的建议。可以建议归档长期未成功召回、重要性低、未来用途低、情绪显著性低的细节，即使它曾在很久以前被召回；身份、关系、称呼、安全边界、约定、长期目标、未完成任务、未解决冲突、用户明确要求记住、人工置顶、唯一事件和仍被引用的内容必须 retain。",
-  "fieldKnowledge 是完整 AIR.md 替换稿或 null。payload.fieldKnowledgeWritable=false 时必须返回 null；只有它为 true 时，才能在完整可见的原文上生成替换稿。原文中的‘人物-’加 24 位十六进制字符是宿主可逆的身份别名，保留相关约定时必须逐字复制该别名，不能猜测、缩写或改写，宿主会在本地恢复。fieldKnowledge 只能保留带明确场域范围的称呼映射、内部词义、规则、边界、前提、例外和仍有效约定，使用‘# 场域知识’‘## 使用边界’‘## 场域约定’结构。删除公共百科、公共热梗、天气、午餐、座位、一次性事件、聊天原话和关系情绪流水；不得记录秘密或推断敏感属性。evidenceMemoryIds 只能引用 fieldKnowledgeEvidenceIds，清理原有琐事时可以为空。",
+  LEGACY_DREAM_IDENTITY_ALIAS_GUIDANCE,
   "先根据 payload.seed 做稳定联想，再从近期环境、上一日计划、当前任务、人格材料与久远要义中选取可关联片段，写成 160 至 240 个汉字左右、具有场景变化和内在线索的第一人称梦境。素材不足时只使用真实存在的输入，不能补造现实经历。",
   "dream.factuality 固定为 imagined。梦境可以重组、象征和轻微超现实，但不能宣称梦中事件真实发生，也不能把梦境内容用作事实纠错、归档依据、场域约定或人格证据。",
   LEGACY_PERSONA_IMPRESSION_CONTRACT_V4,
@@ -84,6 +90,7 @@ export const LEGACY_DREAM_CONTRACT_V4 = [
 
 export const DREAM_CONTRACT = LEGACY_DREAM_CONTRACT_V4
   .replace(LEGACY_PERSONA_IMPRESSION_CONTRACT_V4, PERSONA_IMPRESSION_CONTRACT)
+  .replace(LEGACY_DREAM_IDENTITY_ALIAS_GUIDANCE, DREAM_RAW_IDENTITY_GUIDANCE)
   .replace(LEGACY_DREAM_FLEX_RESPONSE, DREAM_OUTPUT_CONTRACT);
 
 export function dreamPromptTemplate() {

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SqliteDreamStore } from "../../adapters/sqlite/dreamStore.js";
 import {
   DREAM_PAYLOAD_VARIABLE,
@@ -19,6 +19,7 @@ import {
   type RuntimeDreamStorePort,
   type RuntimeDreamWorkingMemoryPort
 } from "../../src/runtime/dreamPipeline.js";
+import { projectDreamContextPayload } from "../../src/runtime/dreamContextProjection.js";
 
 type StoreIsDirectlyCompatible = SqliteDreamStore extends RuntimeDreamStorePort ? true : false;
 const storeIsDirectlyCompatible: StoreIsDirectlyCompatible = true;
@@ -29,6 +30,8 @@ const WORKING_DIGEST = "a".repeat(64);
 const LONG_TERM_DIGEST = "b".repeat(64);
 
 describe("RuntimeDreams", () => {
+  afterEach(() => vi.useRealTimers());
+
   it("skips yesterday on a fresh install before 04:00, then runs today once", async () => {
     let now = new Date("2026-07-20T03:30:00.000Z");
     const fixture = createFixture(() => now);
@@ -375,7 +378,7 @@ describe("RuntimeDreams", () => {
     });
   });
 
-  it("restores AIR identity aliases locally before the CAS write", async () => {
+  it("sends AIR identities directly and writes the returned text without alias restoration", async () => {
     const now = new Date("2026-07-20T04:05:00.000Z");
     const identifiedWorking = {
       ...memory("work-1", "2026-07-19T18:00:00.000Z", "conversation", "event:work"),
@@ -402,10 +405,8 @@ describe("RuntimeDreams", () => {
       status: "completed",
       result: expect.objectContaining({ fieldKnowledgeUpdated: true })
     });
-    expect(JSON.stringify(providerPayload)).not.toContain("Rin");
-    expect(persistedInput.fieldKnowledgeBindings).toEqual([
-      expect.objectContaining({ value: "Rin" })
-    ]);
+    expect(JSON.stringify(providerPayload)).toContain("Rin");
+    expect(persistedInput).not.toHaveProperty("fieldKnowledgeBindings");
     expect(fixture.fieldKnowledge.calls[0]?.content).toBe(originalAir);
     expect(fixture.fieldKnowledge.calls[0]?.content).not.toMatch(/人物-[a-f0-9]{24}/u);
   });
@@ -440,7 +441,7 @@ describe("RuntimeDreams", () => {
     expect(fixture.workingMemory.calls).toEqual([]);
   });
 
-  it("clears a generated field update when a persisted run predates the write gate", async () => {
+  it("rejects a generated run predating the current input gate before another Provider call", async () => {
     let now = new Date("2026-07-20T04:05:00.000Z");
     const fixture = createFixture(() => now, memorySnapshot({
       workingRevision: "d".repeat(64)
@@ -462,23 +463,86 @@ describe("RuntimeDreams", () => {
 
     expect(rejected).toMatchObject({
       status: "failed",
-      errorCode: "DREAM_OUTPUT_CONTRACT_INVALID",
-      output: null,
-      dreamText: null,
-      generatedAt: null
+      errorCode: "DREAM_INPUT_INVALID",
+      output: expect.any(Object),
+      dreamText: expect.any(String),
+      nextRetryAt: "2026-07-20T04:36:00.000Z"
     });
     expect(fixture.fieldKnowledge.calls).toEqual([]);
     expect(fixture.model.calls).toBe(1);
+  });
 
-    fixture.model.fieldKnowledge = null;
-    now = new Date("2026-07-20T04:37:00.000Z");
-    const recovered = await fixture.runtime.tick(now);
+  it("retries a legacy aliased persisted input to the attempt limit without calling the Provider", async () => {
+    let now = new Date("2026-07-20T04:05:00.000Z");
+    const fixture = createFixture(() => now);
+    const input = currentPersistedDreamInput();
+    const payload = input.payload as Record<string, unknown>;
+    payload.userProfiles = [{
+      profileRef: `profile:${"a".repeat(24)}`,
+      participantRefs: [`person:${"b".repeat(24)}`],
+      facts: ["人物-" + "c".repeat(24) + "负责发布复核。"]
+    }];
+    (input as Record<string, unknown>).fieldKnowledgeBindings = [{
+      token: `人物-${"c".repeat(24)}`,
+      value: "Rin"
+    }];
+    fixture.store.addRun(runRecord({
+      id: "legacy-input",
+      localDate: "2026-07-20",
+      scheduledFor: "2026-07-20T04:00:00.000Z",
+      status: "failed",
+      attemptCount: 1,
+      input,
+      nextRetryAt: "2026-07-20T04:00:00.000Z"
+    }));
 
-    expect(recovered).toMatchObject({
-      status: "completed",
-      result: expect.objectContaining({ fieldKnowledgeUpdated: false })
+    const second = await fixture.runtime.tick(now);
+    expect(second).toMatchObject({
+      status: "failed",
+      attemptCount: 2,
+      errorCode: "DREAM_INPUT_INVALID",
+      nextRetryAt: "2026-07-20T04:20:00.000Z"
     });
-    expect(fixture.model.calls).toBe(2);
+    expect(fixture.model.calls).toBe(0);
+
+    now = new Date("2026-07-20T04:21:00.000Z");
+    const terminal = await fixture.runtime.tick(now);
+    expect(terminal).toMatchObject({
+      status: "failed",
+      attemptCount: 3,
+      errorCode: "DREAM_INPUT_INVALID",
+      nextRetryAt: null
+    });
+    expect(fixture.model.calls).toBe(0);
+    expect(fixture.store.commitCalls).toHaveLength(0);
+  });
+
+  it("accepts a current closed persisted payload on retry", async () => {
+    const now = new Date("2026-07-20T04:05:00.000Z");
+    const fixture = createFixture(() => now, memorySnapshot({
+      workingRecords: [],
+      longTermRecords: [],
+      recallStats: [],
+      userProfiles: [],
+      recentConversations: [],
+      activeTasks: [],
+      plannedDailySchedule: null,
+      persona: {}
+    }));
+    fixture.store.addRun(runRecord({
+      id: "current-input",
+      localDate: "2026-07-20",
+      scheduledFor: "2026-07-20T04:00:00.000Z",
+      status: "failed",
+      attemptCount: 1,
+      input: currentPersistedDreamInput(),
+      nextRetryAt: "2026-07-20T04:00:00.000Z"
+    }));
+
+    const completed = await fixture.runtime.tick(now);
+
+    expect(completed).toMatchObject({ status: "completed", attemptCount: 2 });
+    expect(fixture.model.calls).toBe(1);
   });
 
   it("fails before SQLite and rolls working memory back when field knowledge changed", async () => {
@@ -1043,6 +1107,53 @@ describe("RuntimeDreams", () => {
     expect(fixture.store.failedCalls).toHaveLength(0);
     expect(fixture.store.getRunByLocalDate("2026-07-20")).toMatchObject({ status: "running" });
   });
+
+  it("shares one 600-second budget across context capture and the Provider stage", async () => {
+    vi.useFakeTimers();
+    const now = new Date("2026-07-20T04:05:00.000Z");
+    const fixture = createFixture(() => now);
+    fixture.context.delayMs = 590_000;
+    fixture.model.ignoreAbort = true;
+    let settled = false;
+
+    const pending = fixture.runtime.tick(now);
+    void pending.finally(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(590_000);
+
+    expect(fixture.model.calls).toBe(1);
+    expect(fixture.context.captureCalls[0]?.signal).toBe(fixture.model.lastSignal);
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(settled).toBe(false);
+    expect(fixture.model.lastSignal?.aborted).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(pending).resolves.toBeUndefined();
+    expect(fixture.model.lastSignal?.aborted).toBe(true);
+    expect(fixture.store.commitCalls).toHaveLength(0);
+    expect(fixture.store.failedCalls).toHaveLength(0);
+    expect(fixture.store.getRunByLocalDate("2026-07-20")).toMatchObject({ status: "running" });
+  });
+
+  it("hard-settles during context capture without claiming or persisting a run", async () => {
+    vi.useFakeTimers();
+    const now = new Date("2026-07-20T04:05:00.000Z");
+    const fixture = createFixture(() => now);
+    fixture.context.delayMs = 600_001;
+
+    const pending = fixture.runtime.tick(now);
+    await vi.advanceTimersByTimeAsync(600_000);
+    await expect(pending).resolves.toBeUndefined();
+
+    expect(fixture.context.captureCalls[0]?.signal?.aborted).toBe(true);
+    expect(fixture.store.claimCalls).toHaveLength(0);
+    expect(fixture.store.commitCalls).toHaveLength(0);
+    expect(fixture.store.failedCalls).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fixture.store.claimCalls).toHaveLength(0);
+  });
 });
 
 class FakeStore implements RuntimeDreamStorePort {
@@ -1174,11 +1285,15 @@ class FakeStore implements RuntimeDreamStorePort {
 
 class FakeContext implements RuntimeDreamContextPort {
   readonly captureCalls: Array<Parameters<RuntimeDreamContextPort["capture"]>[0]> = [];
+  delayMs = 0;
 
   constructor(private readonly snapshot: RuntimeDreamContextSnapshot) {}
 
   async capture(input: Parameters<RuntimeDreamContextPort["capture"]>[0]) {
     this.captureCalls.push(input);
+    if (this.delayMs) {
+      await new Promise<void>((resolve) => setTimeout(resolve, this.delayMs));
+    }
     return structuredClone(this.snapshot);
   }
 }
@@ -1189,6 +1304,8 @@ class FakeModel implements RuntimeDreamModelPort {
   error?: Error;
   response?: string;
   waitForAbort = false;
+  ignoreAbort = false;
+  lastSignal?: AbortSignal;
   adjustment: DreamPersonaAdjustmentV1 | null = null;
   fieldKnowledge: DreamFieldKnowledgeV1 | null = null;
   fieldKnowledgeFactory?: (payload: Record<string, unknown>) => DreamFieldKnowledgeV1 | null;
@@ -1196,6 +1313,7 @@ class FakeModel implements RuntimeDreamModelPort {
   async complete(request: unknown, options: Parameters<RuntimeDreamModelPort["complete"]>[1]) {
     this.calls += 1;
     this.requests.push(structuredClone(request));
+    this.lastSignal = options.signal;
     if (this.error) throw this.error;
     if (this.response != null) return this.response;
     if (this.waitForAbort) {
@@ -1205,6 +1323,7 @@ class FakeModel implements RuntimeDreamModelPort {
         else options.signal.addEventListener("abort", abort, { once: true });
       });
     }
+    if (this.ignoreAbort) return new Promise<string>(() => undefined);
     const variables = request as Record<string, unknown>;
     const payload = variables[DREAM_PAYLOAD_VARIABLE] as Record<string, unknown>;
     const workingIds = promptIds(payload.workingMemories);
@@ -1342,6 +1461,38 @@ function createFixture(
     fieldKnowledge,
     prompt,
     logs
+  };
+}
+
+function currentPersistedDreamInput() {
+  return {
+    schemaVersion: 1,
+    workingDigest: WORKING_DIGEST,
+    longTermDigest: LONG_TERM_DIGEST,
+    payload: projectDreamContextPayload({
+      schemaVersion: 1,
+      seed: "d".repeat(64),
+      localDate: "2026-07-20",
+      scheduledFor: "2026-07-20T04:00:00.000Z",
+      timeZone: UTC,
+      memoryWindow: {
+        start: "2026-07-19T04:00:00.000Z",
+        end: "2026-07-20T04:00:00.000Z"
+      },
+      workingMemories: [],
+      longTermMemories: [],
+      recallStats: [],
+      personaEvidenceIds: [],
+      fieldKnowledgeEvidenceIds: [],
+      recentWindowHours: 24,
+      sourceMemoryIds: [],
+      userProfiles: [],
+      observedConversations: [],
+      activeTasks: [],
+      plannedDailySchedule: null,
+      personaImpressions: [],
+      persona: {}
+    })
   };
 }
 

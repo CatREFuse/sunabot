@@ -44,29 +44,47 @@ function airPathError() {
 export async function replaceAirKnowledge(
   config: AppConfig,
   expectedRevision: string,
-  content: string
+  content: string,
+  signal?: AbortSignal
 ) {
+  signal?.throwIfAborted();
   const normalized = normalizeAirKnowledge(content);
   const current = await readAirKnowledge(config);
+  signal?.throwIfAborted();
   if (current.revision !== expectedRevision) return { status: "conflict" as const, current };
   if (current.content === normalized) return { status: "unchanged" as const, current };
+  const previousRaw = await readOptional(current.filePath);
+  signal?.throwIfAborted();
+  if (revision(previousRaw) !== current.revision) {
+    return { status: "conflict" as const, current: await readAirKnowledge(config) };
+  }
 
   const temporary = `${current.filePath}.tmp-${process.pid}-${Date.now()}`;
   await fs.mkdir(path.dirname(current.filePath), { recursive: true, mode: 0o700 });
+  signal?.throwIfAborted();
   await fs.writeFile(temporary, `${normalized}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
+  let renamed = false;
   try {
+    signal?.throwIfAborted();
     const latest = await readAirKnowledge(config);
+    signal?.throwIfAborted();
     if (latest.revision !== expectedRevision) {
       await fs.rm(temporary, { force: true });
       return { status: "conflict" as const, current: latest };
     }
     await fs.rename(temporary, current.filePath);
+    renamed = true;
+    signal?.throwIfAborted();
+    const updated = await readAirKnowledge(config);
+    signal?.throwIfAborted();
+    return { status: "updated" as const, current: updated };
   } catch (error) {
     await fs.rm(temporary, { force: true }).catch(() => undefined);
+    if (renamed && signal?.aborted) {
+      await restoreCancelledAirWrite(current.filePath, revision(`${normalized}\n`), previousRaw);
+    }
     throw error;
   }
-  const updated = await readAirKnowledge(config);
-  return { status: "updated" as const, current: updated };
 }
 
 export function normalizeAirKnowledge(value: string) {
@@ -107,4 +125,33 @@ async function readOptional(filePath: string) {
     if (error.code === "ENOENT") return "";
     throw error;
   });
+}
+
+async function restoreCancelledAirWrite(
+  filePath: string,
+  expectedRevision: string,
+  previousRaw: string
+) {
+  const currentRaw = await readOptional(filePath);
+  if (revision(currentRaw) !== expectedRevision) {
+    throw Object.assign(
+      new Error("AIR.md changed before a cancelled write could be restored."),
+      { code: "AIR_CANCEL_ROLLBACK_CONFLICT" }
+    );
+  }
+  const temporary = `${filePath}.rollback-${process.pid}-${Date.now()}`;
+  await fs.writeFile(temporary, previousRaw, { encoding: "utf8", mode: 0o600, flag: "wx" });
+  try {
+    const latestRaw = await readOptional(filePath);
+    if (revision(latestRaw) !== expectedRevision) {
+      throw Object.assign(
+        new Error("AIR.md changed before a cancelled write could be restored."),
+        { code: "AIR_CANCEL_ROLLBACK_CONFLICT" }
+      );
+    }
+    await fs.rename(temporary, filePath);
+  } catch (error) {
+    await fs.rm(temporary, { force: true }).catch(() => undefined);
+    throw error;
+  }
 }

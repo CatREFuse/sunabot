@@ -81,7 +81,9 @@ export class CodexAppServerRunner implements CodexControlRunner {
 
   async run(input: CodexToolInput, context: CodexToolExecutionContext): Promise<CodexToolResult> {
     const startedAt = this.now();
-    const parsed = parseControlInput(input);
+    const parsed = parseControlInput(input, {
+      trustedLocalWorkspacePath: context.workspacePath
+    });
     if (!parsed.ok) {
       return failureResult(context.jobId, "analysis", "failed", parsed.code, parsed.error, false);
     }

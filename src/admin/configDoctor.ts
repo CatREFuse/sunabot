@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { TextDecoder } from "node:util";
+import { AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS } from "../../packages/contracts/model/modelGateway.js";
 import type { RenderedPromptRequest } from "../../services/agent/promptSystem.js";
 import {
   defaultConfig,
@@ -154,7 +155,7 @@ export class ConfigDoctorService {
       responseText = await this.options.runModel({
         provider,
         request,
-        signal: AbortSignal.timeout(60_000)
+        signal: AbortSignal.timeout(AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS)
       });
     } catch (error) {
       throw new AdminApiError(

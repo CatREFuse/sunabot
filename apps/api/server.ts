@@ -66,6 +66,7 @@ import {
   loadConfig
 } from "../../src/config.js";
 import { SunaRuntime } from "../../src/runtime.js";
+import { auxiliaryProviderCompleteOptions } from "../../src/runtime/auxiliaryModelBudget.js";
 import type { RuntimeBashAuditPort } from "../../src/runtime/runtimeContracts.js";
 import { ServiceMonitor } from "../../src/serviceMonitor.js";
 import {
@@ -373,11 +374,11 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
     getActiveConfig: () => config,
     isModelAvailable: (provider) => new OpenAIProvider(provider).hasApiKey(),
     runModel: options.configDoctorModelRunner ?? (async ({ provider, request, signal }) => (
-      new OpenAIProvider(provider).completeRequest(request, {
+      new OpenAIProvider(provider).completeRequest(request, auxiliaryProviderCompleteOptions({
         signal,
         modelRequestMaxRetries: 0,
         logContext: { stage: "config_doctor", promptFamily: "config_doctor" }
-      })
+      }))
     ))
   });
   const agentConfigService = new AgentConfigService(agentRegistry, agentRuntimeManager, configService);

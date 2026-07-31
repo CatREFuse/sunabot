@@ -27,7 +27,11 @@ import {
   type ScheduledTaskTarget
 } from "../../services/scheduling/public.js";
 import { appendRequestLog } from "../../adapters/observability/requestLog.js";
+import { AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS } from "../../packages/contracts/model/modelGateway.js";
+import { runModelTaskWithinDeadline } from "../../packages/contracts/model/modelTaskDeadline.js";
 import type { SunaRuntime } from "../runtime.js";
+import { auxiliaryProviderCompleteOptions } from "./auxiliaryModelBudget.js";
+import { withAbortTimeout } from "./infrastructure.js";
 import {
   conversationDirectorEventsEnabled,
   isWebConversationId
@@ -40,6 +44,7 @@ const DIRECTOR_TARGET_CHUNK_SIZE = 20;
 export class RuntimeDirector {
   private timer?: NodeJS.Timeout;
   private inFlight?: Promise<DirectorScheduleV1 | undefined>;
+  private controller = new AbortController();
 
   constructor(private readonly host: SunaRuntime) {}
 
@@ -49,14 +54,22 @@ export class RuntimeDirector {
 
   start() {
     if (this.timer) return;
-    void this.tick().catch((error) => this.logFailure("director.daily_plan.failed", error));
+    if (this.controller.signal.aborted) this.controller = new AbortController();
+    void this.tick().catch((error) => {
+      if (!isAbort(error)) void this.logFailure("director.daily_plan.failed", error);
+    });
     this.timer = setInterval(() => {
-      void this.tick().catch((error) => this.logFailure("director.daily_plan.failed", error));
+      void this.tick().catch((error) => {
+        if (!isAbort(error)) void this.logFailure("director.daily_plan.failed", error);
+      });
     }, DIRECTOR_TICK_INTERVAL_MS);
     this.timer.unref?.();
   }
 
   stop() {
+    if (!this.controller.signal.aborted) {
+      this.controller.abort(new DOMException("Director stopped.", "AbortError"));
+    }
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
   }
@@ -64,19 +77,25 @@ export class RuntimeDirector {
   configChanged(previousEnabled: boolean) {
     if (previousEnabled === this.enabled) return;
     if (!this.enabled) {
+      this.stop();
       this.removePendingScheduledShares(new Date());
       return;
     }
-    void this.tick().catch((error) => this.logFailure("director.daily_plan.failed", error));
+    this.start();
   }
 
   targetsChanged(now = new Date()) {
-    if (!this.enabled) return;
+    if (!this.enabled || !runtimeActive(this.host)) return;
     const schedule = applicationDataStore(this.host.config).director.read(
       directorLocalDate(now, directorTimeZone())
     );
     if (!schedule) return;
-    void this.reconcileScheduledShares(schedule, now).catch((error) => {
+    void this.reconcileScheduledShares(
+      schedule,
+      now,
+      combineSignals(this.controller.signal, runtimeSignal(this.host))
+    ).catch((error) => {
+      if (isAbort(error)) return;
       void this.logFailure("director.targets.reconcile_failed", error);
     });
   }
@@ -93,38 +112,53 @@ export class RuntimeDirector {
 
   toolPort(): CallDirectorToolPort | undefined {
     if (!this.enabled) return undefined;
-    return { execute: (input) => this.reviseToday(input) };
+    return { execute: (input, signal) => this.reviseToday(input, signal) };
   }
 
-  async ensureToday(now = new Date(), allowBeforeWake = false): Promise<DirectorScheduleV1 | undefined> {
-    if (!this.enabled) return undefined;
+  async ensureToday(
+    now = new Date(),
+    allowBeforeWake = false,
+    signal?: AbortSignal
+  ): Promise<DirectorScheduleV1 | undefined> {
+    if (!this.enabled || !runtimeActive(this.host)) return undefined;
+    const taskSignal = combineSignals(
+      signal,
+      this.controller.signal,
+      runtimeSignal(this.host)
+    );
+    taskSignal?.throwIfAborted();
     const timeZone = directorTimeZone();
     const date = directorLocalDate(now, timeZone);
     const store = applicationDataStore(this.host.config).director;
     const existing = store.read(date);
     if (existing) {
-      await this.reconcileScheduledShares(existing, now);
+      await this.reconcileScheduledShares(existing, now, taskSignal);
       return existing;
     }
     if (!allowBeforeWake && directorLocalHour(now, timeZone) < DIRECTOR_WAKE_HOUR) return undefined;
     if (!this.inFlight) {
-      this.inFlight = this.generateToday(now, date, timeZone).finally(() => {
+      this.inFlight = runModelTaskWithinDeadline(
+        (taskSignal) => this.generateToday(now, date, timeZone, taskSignal),
+        { parentSignal: taskSignal }
+      ).finally(() => {
         this.inFlight = undefined;
       });
     }
-    return this.inFlight;
+    return taskSignal ? waitForSignal(this.inFlight, taskSignal) : this.inFlight;
   }
 
   private async tick() {
     await this.ensureToday(new Date());
   }
 
-  private async generateToday(now: Date, date: string, timeZone: string) {
-    if (!this.enabled) return undefined;
+  private async generateToday(now: Date, date: string, timeZone: string, signal?: AbortSignal) {
+    if (!this.enabled || !runtimeActive(this.host)) return undefined;
+    signal?.throwIfAborted();
     const repository = applicationDataStore(this.host.config);
     const existing = repository.director.read(date);
     if (existing) return existing;
     const seed = await readDirectorSeed(this.host.config);
+    signal?.throwIfAborted();
     const payload = {
       schemaVersion: 1,
       date,
@@ -141,19 +175,23 @@ export class RuntimeDirector {
       [DIRECTOR_SEED_VARIABLE]: seed,
       [DIRECTOR_DAILY_PLAN_PAYLOAD_VARIABLE]: payload
     });
-    const text = await this.host.completePrompt(this.host.getProvider(), request, {
+    signal?.throwIfAborted();
+    const text = await this.host.completePrompt(this.host.getProvider(), request, auxiliaryProviderCompleteOptions({
+      signal,
       logContext: {
         conversationId: `director:${this.host.config.persona.defaultAgentId}:${date}`,
         runId: `director-plan:${date}`,
         stage: "director",
         promptFamily: DIRECTOR_DAILY_PLAN_PROMPT_ID
       }
-    });
-    if (!this.enabled) return undefined;
+    }));
+    signal?.throwIfAborted();
+    if (!this.enabled || !runtimeActive(this.host)) return undefined;
     const draft = parseDirectorScheduleDraft(text, { date, timeZone });
     if (!draft.items.some((item) => item.share.enabled && Date.parse(item.share.at!) > now.getTime())) {
       throw new Error("Director daily plan must contain a future share.");
     }
+    signal?.throwIfAborted();
     const committed = repository.director.commit({
       draft,
       seedHash: directorSeedHash(seed),
@@ -161,7 +199,8 @@ export class RuntimeDirector {
       now
     });
     const schedule = committed.schedule;
-    await this.reconcileScheduledShares(schedule, now);
+    await this.reconcileScheduledShares(schedule, now, signal);
+    signal?.throwIfAborted();
     await appendRequestLog({
       category: "runtime.action",
       action: "director.daily_plan.committed",
@@ -180,16 +219,28 @@ export class RuntimeDirector {
     return schedule;
   }
 
-  private async reviseToday(input: CallDirectorToolInput) {
+  private async reviseToday(input: CallDirectorToolInput, signal?: AbortSignal) {
+    return withAbortTimeout(
+      (taskSignal) => this.reviseTodayWithinBudget(input, taskSignal),
+      AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS,
+      undefined,
+      combineSignals(signal, this.controller.signal, runtimeSignal(this.host))
+    );
+  }
+
+  private async reviseTodayWithinBudget(input: CallDirectorToolInput, signal: AbortSignal) {
     try {
+      signal.throwIfAborted();
       if (!this.enabled) {
         return { ok: false, code: "DIRECTOR_DISABLED", error: "Daily director is disabled." };
       }
       const now = new Date();
       const timeZone = directorTimeZone();
-      const current = await this.ensureToday(now, true);
+      const current = await this.ensureToday(now, true, signal);
+      signal.throwIfAborted();
       if (!current) return { ok: false, code: "DIRECTOR_PLAN_UNAVAILABLE", error: "Today's schedule is unavailable." };
       const seed = await readDirectorSeed(this.host.config);
+      signal.throwIfAborted();
       const request = await this.host.renderPromptRequest(DIRECTOR_SCHEDULE_REVISION_PROMPT_ID, {
         [DIRECTOR_SEED_VARIABLE]: seed,
         [DIRECTOR_SCHEDULE_REVISION_PAYLOAD_VARIABLE]: {
@@ -201,16 +252,20 @@ export class RuntimeDirector {
           currentSchedule: current
         }
       });
-      const text = await this.host.completePrompt(this.host.getProvider(), request, {
+      signal.throwIfAborted();
+      const text = await this.host.completePrompt(this.host.getProvider(), request, auxiliaryProviderCompleteOptions({
+        signal,
         logContext: {
           conversationId: `director:${this.host.config.persona.defaultAgentId}:${current.date}`,
           runId: `director-revision:${current.date}:${current.revision + 1}`,
           stage: "director",
           promptFamily: DIRECTOR_SCHEDULE_REVISION_PROMPT_ID
         }
-      });
+      }));
+      signal.throwIfAborted();
       const draft = parseDirectorScheduleDraft(text, { date: current.date, timeZone });
       assertStartedItemsPreserved(current, draft, now);
+      signal.throwIfAborted();
       const repository = applicationDataStore(this.host.config);
       const committed = repository.director.commit({
         draft,
@@ -228,7 +283,8 @@ export class RuntimeDirector {
           revision: committed.schedule.revision
         };
       }
-      await this.reconcileScheduledShares(committed.schedule, now);
+      await this.reconcileScheduledShares(committed.schedule, now, signal);
+      signal.throwIfAborted();
       await appendRequestLog({
         category: "runtime.action",
         action: "director.schedule.revised",
@@ -248,19 +304,26 @@ export class RuntimeDirector {
         remainingItems: committed.schedule.items.filter((item) => Date.parse(item.endAt) > now.getTime())
       };
     } catch (error) {
+      if (signal.aborted || isAbort(error)) throw signal.reason ?? error;
       await this.logFailure("director.schedule.revision_failed", error);
       return { ok: false, code: "DIRECTOR_REVISION_FAILED", error: errorMessage(error) };
     }
   }
 
-  private async reconcileScheduledShares(schedule: DirectorScheduleV1, now: Date) {
-    if (!this.enabled) {
+  private async reconcileScheduledShares(
+    schedule: DirectorScheduleV1,
+    now: Date,
+    signal?: AbortSignal
+  ) {
+    signal?.throwIfAborted();
+    if (!this.enabled || !runtimeActive(this.host)) {
       this.removePendingScheduledShares(now);
       return;
     }
     const repository = applicationDataStore(this.host.config);
     const links = repository.director.listTaskLinks(schedule.date);
     for (const link of links) {
+      signal?.throwIfAborted();
       if (link.revision === schedule.revision) continue;
       const task = repository.scheduledTasks.get(link.taskId);
       if (task) deleteScheduledTask(repository.scheduledTasks, task);
@@ -275,6 +338,7 @@ export class RuntimeDirector {
       draft: CreateScheduledTaskInput;
     }> = [];
     for (const item of schedule.items) {
+      signal?.throwIfAborted();
       const runAt = item.share.at;
       if (!item.share.enabled || !runAt || Date.parse(runAt) <= now.getTime()) continue;
       for (const [chunkIndex, chunkTargets] of targetChunks.entries()) {
@@ -296,6 +360,7 @@ export class RuntimeDirector {
     }
     const desiredIds = new Set(desired.map(({ draft }) => draft.id!));
     for (const link of links) {
+      signal?.throwIfAborted();
       if (
         link.revision !== schedule.revision
         || Date.parse(link.runAt) <= now.getTime()
@@ -306,6 +371,7 @@ export class RuntimeDirector {
       repository.director.deleteTaskLink(link.taskId);
     }
     for (const { item, runAt, draft } of desired) {
+      signal?.throwIfAborted();
       const current = repository.scheduledTasks.get(draft.id!);
       if (current && !sameDirectorTaskDraft(current, draft)) {
         deleteScheduledTask(repository.scheduledTasks, current);
@@ -321,6 +387,7 @@ export class RuntimeDirector {
         createdAt: now.toISOString()
       });
     }
+    signal?.throwIfAborted();
     this.host.scheduledTasks.wake();
   }
 
@@ -344,6 +411,7 @@ export class RuntimeDirector {
   }
 
   private async logFailure(action: string, error: unknown) {
+    if (!runtimeActive(this.host) || isAbort(error)) return;
     await appendRequestLog({
       category: "runtime.error",
       action,
@@ -355,6 +423,38 @@ export class RuntimeDirector {
       }
     }).catch(() => undefined);
   }
+}
+
+function runtimeActive(host: SunaRuntime) {
+  const value = (host as { isRuntimeActive?: () => boolean }).isRuntimeActive;
+  return typeof value !== "function" || value.call(host);
+}
+
+function runtimeSignal(host: SunaRuntime) {
+  return (host as { runtimeSignal?: AbortSignal }).runtimeSignal;
+}
+
+function combineSignals(...signals: Array<AbortSignal | undefined>) {
+  const values = signals.filter((signal): signal is AbortSignal => Boolean(signal));
+  if (!values.length) return undefined;
+  return values.length === 1 ? values[0] : AbortSignal.any(values);
+}
+
+function isAbort(error: unknown) {
+  return error instanceof Error && (
+    error.name === "AbortError"
+    || error.name === "TimeoutError"
+    || /abort|cancel|timed out|timeout|stopped/i.test(error.message)
+  );
+}
+
+function waitForSignal<T>(promise: Promise<T>, signal: AbortSignal) {
+  signal.throwIfAborted();
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason ?? new Error("Director task aborted."));
+    signal.addEventListener("abort", onAbort, { once: true });
+    void promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+  });
 }
 
 function directorTaskId(

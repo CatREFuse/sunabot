@@ -137,6 +137,8 @@ interface CodexTaskInputV2 {
 }
 ```
 
+当 macOS Native 管理员私聊或已认证管理员 Web Chat 同时符合 app-server control 条件时，当前或引用消息只要形成了可冻结媒体目录，本轮同名 `codex` 仍使用 worker schema，保留 required nullable `inputHandles` 与 deferred dispatch，并且不附加内部 control 授权标记。control schema 只用于没有媒体输入的合格回合，不能覆盖附件冻结链。
+
 运行时在异步派发前完成以下动作：
 
 1. 在当前会话和捕获序列内解析句柄。
@@ -157,6 +159,8 @@ interface CodexResultArtifactV1 {
 ```
 
 CLI worker 与本机 app-server turn 的 cwd 都是当前 attempt 隔离输出目录。`local` 项目目录只作为单独 writable root，源代码修改可留在项目目录，需要回传的文件必须在 cwd 中以相对路径创建并声明。宿主逐个执行根身份、路径、符号链接、大小、哈希与 MIME 校验，随后生成 `ConversationArtifactRefV1`。模型可继续分析正文，也可通过现有 durable 会话资产链路把产物发送给原会话。SSH app-server 没有远端文件传输合同，只允许文本结果与远端项目修改。
+
+没有媒体输入的本机 control `start` 或 `resume` 可以把 `workspace_path` 传为 `null`，解析器只从 durable tool job 的运行时上下文取得既有受信项目 workspace。SSH `start` 或 `resume` 仍必须显式提供远端绝对路径，不能借用本机上下文路径。
 
 `analysis` 与 `research` 只读取宿主生成的受控文本投影，并关闭 shell 与 unified exec。`local` worker 可以读取冻结原件，也需要使用 attempt 内的隔离 Codex home 完成认证；因此它当前是管理员授权的受信任执行主体。输出目录白名单、哈希复验和路径脱敏可以阻止直接声明 `codex-home/auth.json`，无法阻止已取得本地执行能力的模型把授权内容改写后放入合法输出目录。若未来需要把 `local` worker 降为不受信任主体，必须增加短期凭据代理或进程外认证通道，并为附件分析提供独立的只读能力沙箱。
 

@@ -57,26 +57,31 @@ export async function runtime_attachReplyReferences(
   this: RuntimeHost,
   incoming: ParsedIncomingMessage,
   gateway: MessagingPort,
-  _signal?: AbortSignal
+  signal?: AbortSignal
 ) {
+  signal?.throwIfAborted();
   if (!incoming.replyMessageIds.length) return;
   const imageUrls: string[] = inboundImageUrls(incoming);
   const quoteReferences: ConversationMessageQuote[] = [...incoming.quoteReferences];
   for (const messageId of incoming.replyMessageIds.slice(0, 2)) {
     try {
+      signal?.throwIfAborted();
       const details = await this.loadMessageDetails(gateway, messageId, {
         ...(incoming.accountId ? { accountId: incoming.accountId } : {}),
         source: "quote",
         groupId: incoming.groupId,
         userId: incoming.userId
       });
+      signal?.throwIfAborted();
       imageUrls.push(...details.media.flatMap((asset) => asset.url ? [asset.url] : []));
       incoming.attachments.push(...details.attachments);
       quoteReferences.push(toConversationQuote(messageId, details));
     } catch (error) {
+      if (signal?.aborted) throw signal.reason ?? error;
       console.error("[runtime] load replied message failed", { messageId, error });
     }
   }
+  signal?.throwIfAborted();
   replaceInboundImageUrls(incoming, uniqueStrings(imageUrls));
   incoming.attachments = uniqueAttachments(incoming.attachments);
   incoming.quoteReferences = uniqueQuotes(quoteReferences);

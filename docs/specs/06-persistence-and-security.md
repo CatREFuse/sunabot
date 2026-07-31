@@ -41,6 +41,8 @@ Agent 配置文件夹是跨终端传输角色配置的唯一推荐和支持模�
 
 当前工作记忆位于每个 Agent workspace 根目录的 `WORKING_MEMORY.md`，不要求 Git 跟踪。可见正文只由模型提供，宿主时间、会话来源和事项身份保存在隐藏 metadata；文件以 SHA-256 revision、64 KiB 上限、普通文件与符号链接拒绝、同目录 0600 临时文件和原子 rename 提交，模型、工具、管理 API 与 Dream 共用该文件安全边界。长期记忆与用户画像继续使用 SQLite source revision。实时记忆批处理在任何写入前确认 Provider 返回可解析，再分别复核工作记忆文件 revision 与用户画像 SQLite revision；工作记忆文件和用户画像事务各自原子提交，当前不声称跨 Markdown 与 SQLite 的单一原子事务。长期记忆不参与实时工作记忆批处理。Dream 同时捕获 `WORKING_MEMORY.md` 与 `AIR.md` revision，提交顺序为工作记忆文件 CAS、场域知识文件 CAS、长期记忆 SQLite 事务；后一步失败时按新 revision 逆序回滚已写文件。进程在步骤之间强制终止仍不具备跨介质原子回滚，操作日志必须保留恢复证据。
 
+生产 Dream 的 Provider 数据边界包含当前 Agent 快照中已存在的姓名、称呼、QQ 和参与者身份：这些值在封闭、有界的投影字段与事实正文中保持原值并发送给配置的 Dream Provider，不建立 `人物-*`、`person:*` 或其他身份哈希映射，也不把真实身份绑定另存为恢复表。凭据、秘密、邮箱、签名参数和宿主绝对路径仍在 Provider 请求前脱敏；旧式宿主身份代号不能进入新的有效模型输出或后续记忆、Dream、人格和 `AIR.md` 提交。user-test workspace 只复制非数据配置和明确授权的 Provider 凭据，生产业务 SQLite、WAL/SHM、记忆、会话、AIR、任务、Director、人格运行状态、runtime/cache/backup/voice、workbench、extensions 与链接均不复制；需要内容样本时只能使用只读来源生成独立的不可逆脱敏快照。
+
 记忆操作审计复用当前 Agent 的 `request_logs`，不新增表或 JSON/JSONL。`memory.operation` 记录来源、操作、执行者、结果、稳定原因码、宿主时间、可用的 batch/conversation/record 标识、数量与 revision；正文、模型原始返回和宿主绝对路径禁止进入该事件。读取沿用现有请求日志分页与搜索，写入必须由当前 Agent 配置选择业务库，不能跨 Agent 汇总落盘。
 
 `add_workmemory` 把 durable `incoming_reply` event ID 作为有界 `sourceDecisionKey` 写入 `WORKING_MEMORY.md` 的隐藏事项 metadata，不新增 SQLite 表或用户可见字段。追加在每次 revision CAS 前先查找相同决策键；崩溃恢复、重复 Provider 请求或 CAS 冲突重读命中时返回原事项和 revision，正文不再次追加。决策键在后续普通工作记忆整理中随稳定事项保留，整份文档拒绝重复键。

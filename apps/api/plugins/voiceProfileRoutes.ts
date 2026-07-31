@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS } from "../../../packages/contracts/model/modelGateway.js";
 import { AdminApiError } from "../../../src/admin/errors.js";
 import {
   VOICE_LANGUAGES,
@@ -12,7 +13,7 @@ import { requestAgentId } from "../requestAgentId.js";
 
 const openObject = { type: "object", additionalProperties: true } as const;
 const passthroughBody = {} as const;
-const VOICE_HEALTH_PROBE_TIMEOUT_MS = 5_000;
+export const VOICE_HEALTH_PROBE_TIMEOUT_MS = AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS;
 const languageParams = {
   type: "object",
   required: ["language"],

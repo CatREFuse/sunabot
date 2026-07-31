@@ -44,6 +44,8 @@ const PERSONA_TARGETS = new Set<DreamPersonaTargetFile>([
 const REVIEW_REASON_MAX_CODE_POINTS = 500;
 const FIELD_KNOWLEDGE_MAX_CODE_POINTS = 16_000;
 const MAX_SOURCE_IDS_PER_REVIEW = 24;
+const LEGACY_HOST_IDENTITY_ALIAS_PATTERN =
+  /(?:人物-[a-f0-9]{10,}|(?:person|profile|context|event|causal|subject|task|schedule|impression):[a-f0-9]{24})/iu;
 
 type JsonObject = Record<string, unknown>;
 
@@ -71,6 +73,9 @@ export function parseStrictDreamModelOutput(
     fail("response must be valid JSON");
   }
   const root = objectValue(value, "$");
+  if (containsLegacyHostIdentityAlias(root)) {
+    fail("response contains a legacy host-generated identity alias");
+  }
   exactKeys(root, [
     "schemaVersion",
     "dream",
@@ -114,6 +119,13 @@ export function parseStrictDreamModelOutput(
     fieldKnowledge,
     rawOutput: text
   };
+}
+
+export function containsLegacyHostIdentityAlias(value: unknown): boolean {
+  if (typeof value === "string") return LEGACY_HOST_IDENTITY_ALIAS_PATTERN.test(value);
+  if (Array.isArray(value)) return value.some(containsLegacyHostIdentityAlias);
+  if (value == null || typeof value !== "object") return false;
+  return Object.values(value as JsonObject).some(containsLegacyHostIdentityAlias);
 }
 
 function dreamValue(value: unknown): DreamModelOutputV1["dream"] {

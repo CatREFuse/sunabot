@@ -16,10 +16,10 @@ import { parseSegmentedReplyXml } from "../../services/messaging/segmentedReply.
 import { resolveModelReasoningEffort } from "../../packages/contracts/admin/models.js";
 import { AGENT_TOOL_NAMES } from "../types.js";
 import type { ParsedIncomingMessage } from "../types.js";
+import { auxiliaryProviderCompleteOptions } from "./auxiliaryModelBudget.js";
 import type { RuntimePromptPort } from "./runtimeContracts.js";
 
 const TONE_PROMPT_ID = "conversation.tone-rewrite";
-const TONE_REQUEST_TIMEOUT_MS = 60_000;
 
 export interface ToneRewriteContext {
   incoming?: ParsedIncomingMessage;
@@ -106,15 +106,14 @@ export class RuntimeTone {
       [TONE_AVAILABLE_ASSETS_VARIABLE]: serializeToneAvailableAssets(assets)
     });
     const retryMessage = toneHardGateRetryMessage(context.hardGateRetry);
-    const signal = toneSignal(context.signal);
     const output = await this.host.completePrompt(provider, {
       messages: retryMessage
         ? [...request.messages, { role: "developer", content: retryMessage }]
         : request.messages,
       tools: [],
       response_format: { type: "text" }
-    }, {
-      signal,
+    }, auxiliaryProviderCompleteOptions({
+      signal: context.signal,
       modelRequestMaxRetries: followMainModel
         ? this.host.config.normalReply.maxRetries
         : settings.maxRetries,
@@ -124,7 +123,7 @@ export class RuntimeTone {
         stage: "tone",
         promptFamily: TONE_PROMPT_ID
       }
-    });
+    }));
     const rewritten = output.trim();
     if (!rewritten) throw new Error("Tone 节点没有返回可发送内容。");
     return rewritten;
@@ -143,11 +142,6 @@ function toneHardGateRetryMessage(state: ToneRewriteContext["hardGateRetry"]) {
     "请根据全部累计错误重新生成完整结果，严格遵守 tone_output_contract，不要重复任何已经指出的错误。",
     "</tone_retry_state>"
   ].join("\n");
-}
-
-function toneSignal(parent: AbortSignal | undefined) {
-  const timeout = AbortSignal.timeout(TONE_REQUEST_TIMEOUT_MS);
-  return parent ? AbortSignal.any([parent, timeout]) : timeout;
 }
 
 function preserveFormattedError(source: string, rewritten: string) {

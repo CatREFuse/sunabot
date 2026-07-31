@@ -31,6 +31,7 @@ import {
   ParsedIncomingMessage
 } from "../types.js";
 import { isMemoryEntryRelatedToUsers, resolveRuntimePersonaName } from "./conversationMemoryHelpers.js";
+import { auxiliaryModelSignal, auxiliaryProviderCompleteOptions } from "./auxiliaryModelBudget.js";
 import { conversationRecordId, uniqueStrings } from "./messagingAttachmentHelpers.js";
 import { BatchUserInfo, MAX_SELFIE_REFERENCE_IMAGES, MAX_SELFIE_WORKSPACE_REFERENCE_IMAGES } from "./runtimeContracts.js";
 import { isSelfieImageFile, normalizeSelfiePrompt, normalizeSelfieQuality, normalizeSelfieReferenceImageUrls, normalizeSelfieResolution, normalizeSelfieSize, selfieMimeType } from "./selfieHelpers.js";
@@ -81,6 +82,7 @@ export async function runtime_runSelfie(this: RuntimeHost,
       imageReferences?: GenerateImgReferenceContext;
       resolveWorkbenchImagePaths?: WorkbenchImagePathResolver;
       logContext?: ProviderLogContext;
+      signal?: AbortSignal;
     } = {}
   ): Promise<SelfieRunResult> {
     if (this.config.bot.tools.generateImg.provider === "custom") {
@@ -91,8 +93,11 @@ export async function runtime_runSelfie(this: RuntimeHost,
     if (!prompt) {
       return { ok: false, error: "Selfie prompt is empty." };
     }
+    const taskSignal = auxiliaryModelSignal(options.signal);
+    taskSignal.throwIfAborted();
 
     const workspaceReferences = await loadRuntimeSelfieReferences(this);
+    taskSignal.throwIfAborted();
     if (!workspaceReferences.length) {
       return { ok: false, error: "Selfie reference images are not configured." };
     }
@@ -101,21 +106,33 @@ export async function runtime_runSelfie(this: RuntimeHost,
     const chatReferenceImageUrls = (await resolveGenerateImgReferencesForRun(input, {
       referenceImageUrls: defaultChatReferenceImageUrls,
       imageReferences: options.imageReferences,
-      resolveWorkbenchImagePaths: options.resolveWorkbenchImagePaths
+      resolveWorkbenchImagePaths: options.resolveWorkbenchImagePaths,
+      signal: taskSignal
     })).referenceImageUrls.slice(0, MAX_SELFIE_REFERENCE_IMAGES - MAX_SELFIE_WORKSPACE_REFERENCE_IMAGES);
+    taskSignal.throwIfAborted();
     const resolution = normalizeSelfieResolution(input.resolution, this.config.bot.tools.generateImg.resolution);
     const size = normalizeSelfieSize(input.size, this.config.bot.tools.generateImg.size, resolution);
     const quality = normalizeSelfieQuality(input.quality, this.config.bot.tools.generateImg.quality);
     const rewrittenPrompt = await this.rewriteSelfiePrompt(provider, prompt, size, {
       workspaceSelfies: workspaceReferences.map(({ id, note }) => ({ id, note })),
       chatReferenceImageCount: chatReferenceImageUrls.length
-    }, options.logContext);
+    }, options.logContext, taskSignal);
+    taskSignal.throwIfAborted();
     const workspaceReferencesById = new Map(workspaceReferences.map((reference) => [reference.id, reference]));
     const workspaceReferenceImageUrls = await Promise.all(rewrittenPrompt.selectedSelfieReferenceIds.map((id) =>
-      readRuntimeSelfieReference(workspaceReferencesById.get(id)!)
+      readRuntimeSelfieReference(workspaceReferencesById.get(id)!, taskSignal)
     ));
+    taskSignal.throwIfAborted();
     const referenceImageUrls = [...workspaceReferenceImageUrls, ...chatReferenceImageUrls];
-    const image = await provider.generateImage(rewrittenPrompt.prompt, size, quality, referenceImageUrls, options.logContext);
+    const image = await provider.generateImage(
+      rewrittenPrompt.prompt,
+      size,
+      quality,
+      referenceImageUrls,
+      options.logContext,
+      taskSignal
+    );
+    taskSignal.throwIfAborted();
     return {
       ok: true,
       provider: "codex-image-gen",
@@ -138,8 +155,10 @@ export async function runtime_rewriteSelfiePrompt(this: RuntimeHost,
       workspaceSelfies: Array<{ id: string; note: string }>;
       chatReferenceImageCount: number;
     },
-    logContext?: ProviderLogContext
+    logContext?: ProviderLogContext,
+    signal?: AbortSignal
   ): Promise<RewrittenSelfiePrompt> {
+    signal?.throwIfAborted();
     const payload = {
           request: prompt,
           size,
@@ -158,9 +177,12 @@ export async function runtime_rewriteSelfiePrompt(this: RuntimeHost,
     const promptRequest = await this.renderPromptRequest("image.selfie-rewrite", {
       "selfie.payload": payload
     });
-    const rewritten = await this.completePrompt(provider, promptRequest, {
+    signal?.throwIfAborted();
+    const rewritten = await this.completePrompt(provider, promptRequest, auxiliaryProviderCompleteOptions({
+      signal,
       logContext: { ...logContext, promptFamily: "image.selfie-rewrite" }
-    });
+    }));
+    signal?.throwIfAborted();
     return parseRewrittenSelfiePrompt(rewritten, new Set(references.workspaceSelfies.map(({ id }) => id)));
   }
 export function runtime_collectSelfieChatReferenceImages(
@@ -196,7 +218,7 @@ export async function runtime_loadSelfieReferenceImages(this: RuntimeHost) {
     const references = await loadRuntimeSelfieReferences(this);
     return Promise.all(references
       .slice(0, MAX_SELFIE_WORKSPACE_REFERENCE_IMAGES)
-      .map(readRuntimeSelfieReference));
+      .map((reference) => readRuntimeSelfieReference(reference)));
   }
 
 async function loadRuntimeSelfieReferences(runtime: RuntimeHost): Promise<RuntimeSelfieReference[]> {
@@ -290,10 +312,17 @@ async function loadRuntimeSelfieDirectory(selfieDir: string): Promise<RuntimeSel
   }));
 }
 
-async function readRuntimeSelfieReference(reference: RuntimeSelfieReference) {
+async function readRuntimeSelfieReference(
+  reference: RuntimeSelfieReference,
+  signal?: AbortSignal
+) {
+  signal?.throwIfAborted();
   await assertRuntimeSelfieDirectory(reference);
+  signal?.throwIfAborted();
   const { bytes } = await readSelfieReferenceImageFile(reference.filePath);
+  signal?.throwIfAborted();
   await assertRuntimeSelfieDirectory(reference);
+  signal?.throwIfAborted();
   if (!bytes.length) throw new Error("Selfie reference image is empty.");
   const actualId = crypto.createHash("sha256").update(bytes).digest("hex");
   if (actualId !== reference.id) {

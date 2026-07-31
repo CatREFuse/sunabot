@@ -158,11 +158,14 @@ export async function upsertLongTermMemoryFacts(
 
 export async function applyMemoryBatchTransaction(
   config: AppConfig,
-  input: MemoryBatchTransactionInput
+  input: MemoryBatchTransactionInput,
+  signal?: AbortSignal
 ): Promise<ApplyMemoryBatchTransactionResult> {
+  signal?.throwIfAborted();
   const batchId = normalizeText(input.batchId);
   if (!batchId) badRequest("MEMORY_INVALID", "记忆批次 ID 为空。", "batchId");
   return memoryMutationMutex.runExclusive(async () => {
+    signal?.throwIfAborted();
     const store = memoryStore(config, sourceById("user_profile"));
     const existing = store.readMemoryBatch(batchId);
     if (existing !== undefined) {
@@ -179,6 +182,7 @@ export async function applyMemoryBatchTransaction(
     const snapshot = store.readMemorySnapshot();
     const profileRecords = snapshot.records.user_profile.map((value, index) => ({ index, value }));
     const workingSnapshot = await readWorkingMemoryDocument(config);
+    signal?.throwIfAborted();
     if (workingSnapshot.revision !== input.expectedWorkingSnapshotToken) {
       recordBatchAudit(config, input, {
         working: "conflict",
@@ -219,11 +223,28 @@ export async function applyMemoryBatchTransaction(
       userProfileEntries: nextProfileRecords.map((record) => toMemoryEntry(profileSource, record)),
       longTermEntries: []
     };
-    const workingCommitted = await replaceWorkingMemoryDocument(
+    let workingCommitted = await replaceWorkingMemoryDocument(
       config,
       workingSnapshot.revision,
-      nextWorkingItems
+      nextWorkingItems,
+      signal
     );
+    if (signal?.aborted && workingCommitted.status === "updated") {
+      const rollback = await replaceWorkingMemoryDocument(
+        config,
+        workingCommitted.current.revision,
+        workingSnapshot.items
+      );
+      if (rollback.status === "conflict") {
+        throw Object.assign(
+          new Error("Working memory changed before a cancelled batch could be restored."),
+          { code: "WORKING_MEMORY_CANCEL_ROLLBACK_CONFLICT" }
+        );
+      }
+      workingCommitted = rollback;
+      throw signal.reason ?? new Error("Memory batch cancelled.");
+    }
+    signal?.throwIfAborted();
     if (workingCommitted.status === "conflict") {
       recordBatchAudit(config, input, {
         working: "conflict",
@@ -233,12 +254,14 @@ export async function applyMemoryBatchTransaction(
       });
       return { status: "snapshot_conflict" };
     }
+    signal?.throwIfAborted();
     const committed = store.commitUserProfileBatch({
       batchId,
       expectedUserProfileRevision: snapshot.revisions.user_profile,
       userProfile: nextProfileRecords.map((record) => record.value),
       result
     });
+    signal?.throwIfAborted();
     if (committed.status === "snapshot_conflict") {
       recordBatchAudit(config, input, {
         working: workingCommitted.status === "unchanged" ? "unchanged" : "applied",

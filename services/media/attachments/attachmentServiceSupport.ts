@@ -42,15 +42,16 @@ export function logAttachmentProcessing(
 
 export function cacheResolvedAttachment(
   cache: CacheStore,
-  source: ResolvedAttachmentSource
+  source: ResolvedAttachmentSource,
+  signal?: AbortSignal
 ) {
   if (source.kind === "url") {
-    return cache.downloadHttp(source.url, { retainActiveTask: true });
+    return cache.downloadHttp(source.url, { retainActiveTask: true, signal });
   }
   if (source.kind === "base64") {
-    return cache.writeBase64(source.base64, { retainActiveTask: true });
+    return cache.writeBase64(source.base64, { retainActiveTask: true, signal });
   }
-  return cache.importFile(source.filePath, { retainActiveTask: true });
+  return cache.importFile(source.filePath, { retainActiveTask: true, signal });
 }
 
 export function shouldTryGetFileFallback(error: unknown) {

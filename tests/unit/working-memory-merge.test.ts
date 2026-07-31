@@ -3,7 +3,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ProviderCompleteOptions } from "../../adapters/model/openaiProvider.js";
 import { applicationDataStore } from "../../adapters/sqlite/applicationDataStore.js";
+import { AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS } from "../../packages/contracts/model/modelGateway.js";
 import {
   appendMemoryFacts,
   readMemorySourceEntries,
@@ -24,7 +26,103 @@ describe("working memory semantic merge", () => {
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     await fs.rm(rootDir, { recursive: true, force: true });
+  });
+
+  it("accepts one memory Provider response after the former 120-second cutoff", async () => {
+    vi.useFakeTimers();
+    let resolveComplete: ((value: string) => void) | undefined;
+    let markStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    let capturedOptions: ProviderCompleteOptions | undefined;
+    const complete = vi.fn((
+      _systemPrompt: string,
+      _messages: Array<{ content: string }>,
+      options?: ProviderCompleteOptions
+    ) => {
+      capturedOptions = options;
+      markStarted?.();
+      return new Promise<string>((resolve) => {
+        resolveComplete = resolve;
+      });
+    });
+    const runtime = runtimeWithProvider(config, complete);
+
+    const pending = mergeConversation(runtime, "记忆处理最长等待窗口是十分钟");
+    await started;
+    await vi.advanceTimersByTimeAsync(120_001);
+
+    expect(complete).toHaveBeenCalledOnce();
+    expect(capturedOptions?.modelRequestMaxRetries).toBe(0);
+    expect(capturedOptions?.modelRequestAttemptTimeoutMs)
+      .toBe(AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS);
+    expect(capturedOptions?.signal?.aborted).toBe(false);
+
+    resolveComplete?.(JSON.stringify({
+      facts: [{ fact: "我会让记忆处理等待最长十分钟。" }],
+      allPreviousMemoriesInvalidated: false
+    }));
+    await expect(pending).resolves.toMatchObject({ ok: true, status: "applied" });
+    expect((await readMemorySourceEntries(config, "working")).map((entry) => entry.text))
+      .toEqual(["我会让记忆处理等待最长十分钟。"]);
+  });
+
+  it("cancels one memory Provider response at the shared 10-minute boundary", async () => {
+    vi.useFakeTimers();
+    let markStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    let capturedOptions: ProviderCompleteOptions | undefined;
+    const complete = vi.fn((
+      _systemPrompt: string,
+      _messages: Array<{ content: string }>,
+      options?: ProviderCompleteOptions
+    ) => {
+      capturedOptions = options;
+      markStarted?.();
+      return new Promise<string>(() => undefined);
+    });
+    const runtime = runtimeWithProvider(config, complete);
+    const before = await readWorkingMemoryDocument(config);
+    let settled = false;
+
+    const pending = mergeConversation(runtime, "等待十分钟后仍无响应");
+    await started;
+    void pending.then(
+      () => { settled = true; },
+      () => { settled = true; }
+    );
+    await vi.advanceTimersByTimeAsync(AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS - 1);
+
+    expect(settled).toBe(false);
+    expect(capturedOptions?.signal?.aborted).toBe(false);
+    expect(complete).toHaveBeenCalledOnce();
+
+    const rejected = expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    await vi.advanceTimersByTimeAsync(1);
+    await rejected;
+    expect(capturedOptions?.signal?.aborted).toBe(true);
+    expect(complete).toHaveBeenCalledOnce();
+    expect((await readWorkingMemoryDocument(config)).revision).toBe(before.revision);
+  });
+
+  it("does not retry or commit an invalid memory Provider response", async () => {
+    await appendMemoryFacts(config, "working", [{ fact: "必须保留的事实" }]);
+    const before = await readWorkingMemoryDocument(config);
+    const complete = vi.fn(async () => "{\"facts\":");
+    const runtime = runtimeWithProvider(config, complete);
+
+    await expect(mergeConversation(runtime, "这次返回无法解析"))
+      .resolves.toMatchObject({ ok: false, status: "model_invalid" });
+
+    expect(complete).toHaveBeenCalledOnce();
+    expect((await readWorkingMemoryDocument(config)).revision).toBe(before.revision);
+    expect((await readMemorySourceEntries(config, "working")).map((entry) => entry.text))
+      .toEqual(["必须保留的事实"]);
   });
 
   it("sends all previous memories with the current messages and replaces them with the merged set", async () => {
@@ -214,18 +312,35 @@ describe("working memory semantic merge", () => {
   it("continues the batch when profile wording would previously have failed semantic validation", async () => {
     await appendMemoryFacts(config, "working", [{ fact: "必须保留的旧事实" }]);
     const runtime = runtimeWithProvider(config, vi.fn(async () => "unused"));
-    vi.spyOn(runtime, "compressUserProfiles").mockResolvedValue([{
-      fact: "我知道海边用户（QQ 10001）喜欢测试。",
-      userIds: ["10001"],
-      userName: "海边用户"
-    }, {
-      fact: "我喜欢摄影。",
-      userIds: ["10001"],
-      userName: "海边用户"
-    }]);
-    const workingMerge = vi.spyOn(runtime, "requestWorkingMemoryMerge").mockResolvedValue({
-      facts: [{ fact: "工作记忆正文" }],
-      allPreviousMemoriesInvalidated: false
+    let profileSignal: AbortSignal | undefined;
+    let workingSignal: AbortSignal | undefined;
+    vi.spyOn(runtime, "compressUserProfiles").mockImplementation(async (
+      _record,
+      _batch,
+      _participants,
+      signal
+    ) => {
+      profileSignal = signal;
+      return [{
+        fact: "我知道海边用户（QQ 10001）喜欢测试。",
+        userIds: ["10001"],
+        userName: "海边用户"
+      }, {
+        fact: "我喜欢摄影。",
+        userIds: ["10001"],
+        userName: "海边用户"
+      }];
+    });
+    const workingMerge = vi.spyOn(runtime, "requestWorkingMemoryMerge").mockImplementation(async (
+      _context,
+      _memories,
+      signal
+    ) => {
+      workingSignal = signal;
+      return {
+        facts: [{ fact: "工作记忆正文" }],
+        allPreviousMemoriesInvalidated: false
+      };
     });
 
     const result = await runtime.processMemoryClaim({
@@ -254,12 +369,165 @@ describe("working memory semantic merge", () => {
 
     expect(result).toBe(true);
     expect(workingMerge).toHaveBeenCalledOnce();
+    expect(profileSignal).toBeDefined();
+    expect(workingSignal).toBe(profileSignal);
     expect((await readMemorySourceEntries(config, "working")).map((entry) => entry.text)).toEqual([
       "工作记忆正文"
     ]);
     expect(await readMemorySourceEntries(config, "long_term")).toEqual([]);
     expect((await readMemorySourceEntries(config, "user_profile"))[0]?.text).toContain("我知道海边用户（QQ 10001）喜欢测试。");
     expect((await readMemorySourceEntries(config, "user_profile"))[0]?.text).toContain("我喜欢摄影。");
+  });
+
+  it("shares one 10-minute deadline across the profile and working-memory stages", async () => {
+    vi.useFakeTimers();
+    const runtime = runtimeWithProvider(config, vi.fn(async () => "unused"));
+    const before = await readWorkingMemoryDocument(config);
+    let profileStarted!: () => void;
+    const profileStage = new Promise<void>((resolve) => {
+      profileStarted = resolve;
+    });
+    let workingStarted!: () => void;
+    const workingStage = new Promise<void>((resolve) => {
+      workingStarted = resolve;
+    });
+    let profileSignal: AbortSignal | undefined;
+    let workingSignal: AbortSignal | undefined;
+    vi.spyOn(runtime, "compressUserProfiles").mockImplementation((
+      _record,
+      _batch,
+      _participants,
+      signal
+    ) => {
+      profileSignal = signal;
+      profileStarted();
+      return new Promise((resolve) => {
+        setTimeout(() => resolve([]), 120_001);
+      });
+    });
+    const workingMerge = vi.spyOn(runtime, "requestWorkingMemoryMerge").mockImplementation((
+      _context,
+      _memories,
+      signal
+    ) => {
+      workingSignal = signal;
+      workingStarted();
+      return new Promise((_resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+    });
+    const pending = runtime.processMemoryClaim({
+      conversation: {
+        id: "group:30003",
+        scope: "user_group",
+        title: "测试群",
+        userId: 10001,
+        groupId: 30003
+      },
+      batchId: "shared-memory-budget",
+      messageIds: ["message-budget"],
+      messages: [{
+        id: "message-budget",
+        sequence: 1,
+        role: "user",
+        text: "两阶段共享十分钟预算",
+        at: "2026-07-10T00:00:00.000Z",
+        userId: 10001,
+        senderName: "海边用户",
+        imageCount: 0,
+        quoteCount: 0
+      }],
+      attemptMessageCount: 1
+    });
+    await profileStage;
+    let settled = false;
+    const observed = pending.then(
+      (value) => ({ value, error: undefined }),
+      (error: unknown) => ({ value: undefined, error })
+    ).finally(() => {
+      settled = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(120_001);
+    await workingStage;
+    await vi.advanceTimersByTimeAsync(
+      AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS - 120_001 - 1
+    );
+
+    expect(settled).toBe(false);
+    expect(profileSignal).toBeDefined();
+    expect(workingSignal).toBe(profileSignal);
+    expect(workingSignal?.aborted).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    const outcome = await observed;
+
+    expect(outcome.error).toMatchObject({ name: "AbortError" });
+    expect(workingSignal?.aborted).toBe(true);
+    expect(workingMerge).toHaveBeenCalledOnce();
+    expect((await readWorkingMemoryDocument(config)).revision).toBe(before.revision);
+  });
+
+  it("cancels an in-flight memory claim on runtime close without a late commit or wake timer", async () => {
+    const runtime = runtimeWithProvider(config, vi.fn(async () => "unused"));
+    const before = await readWorkingMemoryDocument(config);
+    let started!: () => void;
+    const profileStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    let releaseProfile!: (value: []) => void;
+    let claimSignal: AbortSignal | undefined;
+    vi.spyOn(runtime, "compressUserProfiles").mockImplementation((
+      _record,
+      _batch,
+      _participants,
+      signal
+    ) => {
+      claimSignal = signal;
+      started();
+      return new Promise<[]>((resolve) => {
+        releaseProfile = resolve;
+      });
+    });
+    const workingMerge = vi.spyOn(runtime, "requestWorkingMemoryMerge");
+    const pending = runtime.processMemoryClaim({
+      conversation: {
+        id: "group:30003",
+        scope: "user_group",
+        title: "测试群",
+        userId: 10001,
+        groupId: 30003
+      },
+      batchId: "runtime-close-memory-claim",
+      messageIds: ["message-close"],
+      messages: [{
+        id: "message-close",
+        sequence: 1,
+        role: "user",
+        text: "关闭后不得写入记忆",
+        at: "2026-07-10T00:00:00.000Z",
+        userId: 10001,
+        senderName: "海边用户",
+        imageCount: 0,
+        quoteCount: 0
+      }],
+      attemptMessageCount: 1
+    });
+    await profileStarted;
+
+    runtime.close();
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    expect(claimSignal?.aborted).toBe(true);
+    expect((runtime as unknown as { memoryWakeTimer?: NodeJS.Timeout }).memoryWakeTimer)
+      .toBeUndefined();
+
+    releaseProfile([]);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(workingMerge).not.toHaveBeenCalled();
+    expect((await readWorkingMemoryDocument(config)).revision).toBe(before.revision);
+    expect((runtime as unknown as { memoryWakeTimer?: NodeJS.Timeout }).memoryWakeTimer)
+      .toBeUndefined();
   });
 
   it("accepts an explicit signal when every previous fact is invalidated", async () => {
@@ -380,7 +648,11 @@ describe("working memory semantic merge", () => {
 
 function runtimeWithProvider(
   config: AppConfig,
-  complete: (systemPrompt: string, messages: Array<{ content: string }>) => Promise<string>
+  complete: (
+    systemPrompt: string,
+    messages: Array<{ content: string }>,
+    options?: ProviderCompleteOptions
+  ) => Promise<string>
 ) {
   const runtime = new SunaRuntime(config, { attachmentService: {} as never });
   (runtime as unknown as {

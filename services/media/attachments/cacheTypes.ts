@@ -132,6 +132,7 @@ export interface DownloadHttpOptions {
 }
 
 export interface WriteBase64Options {
+  signal?: AbortSignal;
   maxBytes?: number;
   chunkCharacters?: number;
   retainActiveTask?: boolean;

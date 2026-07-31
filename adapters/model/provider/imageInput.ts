@@ -17,6 +17,7 @@ const MAX_IMAGE_FETCH_BYTES = 64 * 1024 * 1024;
 
 export interface ImageGenerationContentOptions {
   generatedImageRoot?: string;
+  signal?: AbortSignal;
 }
 
 export async function buildImageGenerationContent(
@@ -32,11 +33,13 @@ export async function buildImageGenerationContent(
   ];
 
   for (const imageUrl of uniqueStrings(referenceImageUrls).slice(0, 4)) {
+    options.signal?.throwIfAborted();
     const resolvedImageUrl = await resolveInputImageUrl(imageUrl, {
       source: "image_generation.reference",
       logFailures: true,
       generatedImageRoot: options.generatedImageRoot,
-      purpose: "image_generation_reference"
+      purpose: "image_generation_reference",
+      signal: options.signal
     });
     if (!resolvedImageUrl) continue;
     content.push({
@@ -177,6 +180,7 @@ export interface ResolveInputImageOptions {
   logFailures?: boolean;
   generatedImageRoot?: string;
   purpose?: ResolveInputImagePurpose;
+  signal?: AbortSignal;
 }
 
 export type ResolveInputImagePurpose = "model_vision" | "image_generation_reference";
@@ -209,8 +213,9 @@ export async function resolveInputImageUrl(imageUrl: string, options: ResolveInp
   }
 
   try {
+    const timeout = AbortSignal.timeout(15_000);
     const response = await fetch(imageUrl, {
-      signal: AbortSignal.timeout(15_000)
+      signal: options.signal ? AbortSignal.any([options.signal, timeout]) : timeout
     });
     if (!response.ok) {
       await logInputImageResolveFailure(imageUrl, "http_status", options, {
@@ -278,6 +283,7 @@ export async function resolveInputImageUrl(imageUrl: string, options: ResolveInp
     });
     return `data:${normalized.contentType};base64,${normalized.bytes.toString("base64")}`;
   } catch (error) {
+    if (options.signal?.aborted) throw options.signal.reason ?? error;
     await logInputImageResolveFailure(imageUrl, "fetch_error", options, {
       error: errorMessage(error)
     });

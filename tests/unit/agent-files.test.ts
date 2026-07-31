@@ -146,6 +146,34 @@ describe("AgentFileRepository", () => {
     expect(await fs.readFile(filePath, "utf8")).toBe("updated soul\n");
   });
 
+  it("rolls back a persona file when its lifecycle is aborted after the atomic rename", async () => {
+    const filePath = path.join(workspaceDir, "PREFERENCE.md");
+    await fs.writeFile(filePath, "original preference\n", "utf8");
+    const current = await repository.get("persona.preference");
+    const controller = new AbortController();
+    const commitPromptReload = vi.fn(() => {
+      controller.abort(new DOMException("Runtime closed.", "AbortError"));
+    });
+    const abortAwareRepository = new AgentFileRepository({
+      runtime: {
+        reloadPrompts,
+        preparePromptReload: vi.fn(async () => ({ prepared: true })),
+        commitPromptReload
+      },
+      mutex: new AdminMutationMutex()
+    });
+
+    await expect(abortAwareRepository.put("persona.preference", {
+      content: "late dream preference\n",
+      revision: current.revision
+    }, currentConfig(), controller.signal)).rejects.toMatchObject({ name: "AbortError" });
+
+    expect(commitPromptReload).toHaveBeenCalledOnce();
+    expect(reloadPrompts).toHaveBeenCalledOnce();
+    expect(await fs.readFile(filePath, "utf8")).toBe("original preference\n");
+    expect(await fs.readdir(workspaceDir)).toEqual(["PREFERENCE.md"]);
+  });
+
   it("saves system prompts without replacing an Agent runtime configuration", async () => {
     const filePath = path.join(workspaceDir, "conversation_private_reply.json");
     await fs.writeFile(filePath, defaultPromptContent("conversation.private-reply"), "utf8");

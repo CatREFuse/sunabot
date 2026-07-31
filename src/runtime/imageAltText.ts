@@ -1,6 +1,7 @@
 import type { ReasoningEffort } from "../../packages/contracts/admin/public.js";
 import type { InboundMessageV1 } from "../../packages/contracts/messaging/messages.js";
 import type { OpenAIProvider, ProviderCompleteOptions } from "../../adapters/model/openaiProvider.js";
+import { auxiliaryProviderCompleteOptions } from "./auxiliaryModelBudget.js";
 
 const IMAGE_ALT_SYSTEM_PROMPT = [
   "你负责把图片转换成一条简洁、准确的中文替代文本。",
@@ -41,8 +42,10 @@ export async function populateInboundImageAltTexts(
     settings.reasoningEffort,
     settings.providerId
   );
+  const completionOptions = auxiliaryProviderCompleteOptions(options);
   for (const target of targets) {
     try {
+      completionOptions.signal?.throwIfAborted();
       const result = await provider.complete(
         IMAGE_ALT_SYSTEM_PROMPT,
         [{
@@ -50,13 +53,17 @@ export async function populateInboundImageAltTexts(
           content: "请生成这张图片的替代文本。",
           imageUrls: [target.url]
         }],
-        options
+        completionOptions
       );
+      completionOptions.signal?.throwIfAborted();
       const altText = normalizeImageAltText(result);
       target.assets.forEach((asset) => {
         asset.altText = altText;
       });
     } catch (error) {
+      if (completionOptions.signal?.aborted) {
+        throw completionOptions.signal.reason ?? error;
+      }
       console.error("[runtime] image alt text failed", { error });
     }
   }

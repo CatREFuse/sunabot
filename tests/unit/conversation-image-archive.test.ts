@@ -56,6 +56,26 @@ describe("conversation image archive", () => {
     expect(metadata.height).toBe(1_536);
   });
 
+  it("propagates caller cancellation while downloading an image-generation reference", async () => {
+    const fetchMock = vi.fn((_input: string | URL | Request, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+      }));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+    const pending = buildImageGenerationContent(
+      "edit this image",
+      ["https://cdn.example.test/reference.png"],
+      { signal: controller.signal }
+    );
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    const reason = new DOMException("cancelled", "AbortError");
+
+    controller.abort(reason);
+
+    await expect(pending).rejects.toBe(reason);
+  });
+
   it("archives a sent image by content hash and resolves it for image generation", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-conversation-image-"));
     roots.push(root);

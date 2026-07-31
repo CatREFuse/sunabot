@@ -20,11 +20,15 @@ export interface RuntimeDreamPersonaHistoryPort {
 }
 
 export interface RuntimeDreamPersonaProjectionPort {
-  read(id: "persona.preference" | "persona.relation"): Promise<{ content: string; revision: string }>;
+  read(
+    id: "persona.preference" | "persona.relation",
+    signal?: AbortSignal
+  ): Promise<{ content: string; revision: string }>;
   compareAndSwap(input: {
     id: "persona.preference" | "persona.relation";
     revision: string;
     content: string;
+    signal?: AbortSignal;
   }): Promise<void>;
 }
 
@@ -47,7 +51,9 @@ export async function applyDreamPersonaImpressionProjection(input: {
   level: DreamPersonaImpressionLevel;
   runId: string;
   appliedAt: string;
+  signal?: AbortSignal;
 }) {
+  input.signal?.throwIfAborted();
   const impression = { ...input.adjustment, level: input.level };
   const retained = [
     ...appliedDreamPersonaImpressions(input.store),
@@ -57,10 +63,17 @@ export async function applyDreamPersonaImpressionProjection(input: {
   const id = input.adjustment.targetFile === "PREFERENCE.md"
     ? "persona.preference" as const
     : "persona.relation" as const;
-  const current = await input.persona.read(id);
+  const current = await input.persona.read(id, input.signal);
+  input.signal?.throwIfAborted();
   const next = renderActiveDreamPersonaImpressions(current.content, retained, input.adjustment.targetFile);
   if (next !== current.content) {
-    await input.persona.compareAndSwap({ id, revision: current.revision, content: next });
+    await input.persona.compareAndSwap({
+      id,
+      revision: current.revision,
+      content: next,
+      signal: input.signal
+    });
+    input.signal?.throwIfAborted();
   }
   const covered = resolution.covered.find((item) => item.id === input.runId);
   return {

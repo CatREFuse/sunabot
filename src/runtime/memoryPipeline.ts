@@ -29,11 +29,22 @@ import { BatchUserInfo, WorkingMemoryMergeContext, WorkingMemoryMergeOutput } fr
 import type { SunaRuntime } from "../runtime.js";
 type RuntimeHost = SunaRuntime;
 
+function runtimeActive(host: RuntimeHost) {
+  const value = (host as { isRuntimeActive?: () => boolean }).isRuntimeActive;
+  return typeof value !== "function" || value.call(host);
+}
+
+function runtimeSignal(host: RuntimeHost) {
+  return (host as { runtimeSignal?: AbortSignal }).runtimeSignal;
+}
+
 export function runtime_scheduleAttachmentCacheRefresh(this: RuntimeHost) {
+    if (!runtimeActive(this)) return;
     this.attachmentRefreshDirty = true;
     if (this.attachmentRefreshPromise) return;
     this.attachmentRefreshPromise = (async () => {
       while (this.attachmentRefreshDirty) {
+        if (!runtimeActive(this)) return;
         this.attachmentRefreshDirty = false;
         await this.refreshAttachmentCacheReferences();
       }
@@ -41,21 +52,28 @@ export function runtime_scheduleAttachmentCacheRefresh(this: RuntimeHost) {
       .catch((error) => console.error("[runtime] refresh attachment references failed", error))
       .finally(() => {
         this.attachmentRefreshPromise = undefined;
-        if (this.attachmentRefreshDirty) this.scheduleAttachmentCacheRefresh();
+        if (this.attachmentRefreshDirty && runtimeActive(this)) this.scheduleAttachmentCacheRefresh();
       });
   }
 export function runtime_scheduleMemoryCompression(this: RuntimeHost, record: ConversationRecord) {
+    if (!runtimeActive(this)) return;
     void this.enqueueConversationMemory(record)
       .then(() => this.scheduleMemoryDrain())
-      .catch((error) => console.error("[runtime] memory enqueue failed", { conversationId: record.id, error }));
+      .catch((error) => {
+        if (runtimeActive(this)) {
+          console.error("[runtime] memory enqueue failed", { conversationId: record.id, error });
+        }
+      });
   }
 export async function runtime_seedMemoryScheduler(this: RuntimeHost) {
     for (const record of this.conversationRecords.values()) {
+      runtimeSignal(this)?.throwIfAborted();
       if (!conversationReplyEnabled(record)) continue;
       await this.enqueueConversationMemory(record);
     }
   }
 export async function runtime_enqueueConversationMemory(this: RuntimeHost, record: ConversationRecord) {
+    runtimeSignal(this)?.throwIfAborted();
     const messages = indexedConversationMessages(record)
       .filter(({ message }) => isMemoryEligibleConversationMessage(message))
       .map(({ sequence, message }): MemoryQueuedMessage => ({
@@ -79,9 +97,11 @@ export async function runtime_enqueueConversationMemory(this: RuntimeHost, recor
       committedThrough: record.memoryCompressedThroughMessageCount,
       reconcileGroupHistory: true
     });
+    runtimeSignal(this)?.throwIfAborted();
     await syncMemoryDebtAlertSafely(this);
   }
 export function runtime_scheduleMemoryDrain(this: RuntimeHost) {
+    if (!runtimeActive(this)) return;
     this.memoryDrainDirty = true;
     if (this.memoryWakeTimer) {
       clearTimeout(this.memoryWakeTimer);
@@ -90,6 +110,7 @@ export function runtime_scheduleMemoryDrain(this: RuntimeHost) {
     if (this.memoryDrainPromise) return;
     this.memoryDrainPromise = (async () => {
       while (this.memoryDrainDirty) {
+        if (!runtimeActive(this)) return;
         this.memoryDrainDirty = false;
         await this.drainMemoryScheduler();
       }
@@ -97,33 +118,41 @@ export function runtime_scheduleMemoryDrain(this: RuntimeHost) {
       .catch((error) => console.error("[runtime] memory scheduler failed", error))
       .finally(() => {
         this.memoryDrainPromise = undefined;
+        if (!runtimeActive(this)) return;
         void this.armMemoryWakeTimer();
         if (this.memoryDrainDirty) this.scheduleMemoryDrain();
       });
   }
 export async function runtime_armMemoryWakeTimer(this: RuntimeHost) {
+    if (!runtimeActive(this)) return;
     if (this.memoryWakeTimer) clearTimeout(this.memoryWakeTimer);
     const threshold = clampInteger(this.config.bot.memory.messageThreshold, 16, 1, 200);
     const wakeAt = await this.memoryScheduler.nextWakeAt(threshold);
+    if (!runtimeActive(this)) return;
     if (wakeAt == null) return;
     const delay = Math.max(0, Math.min(wakeAt - Date.now(), 2_147_000_000));
     this.memoryWakeTimer = setTimeout(() => {
       this.memoryWakeTimer = undefined;
+      if (!runtimeActive(this)) return;
       this.scheduleMemoryDrain();
     }, delay);
   }
 export async function runtime_drainMemoryScheduler(this: RuntimeHost) {
     const threshold = clampInteger(this.config.bot.memory.messageThreshold, 16, 1, 200);
-    while (true) {
+    while (runtimeActive(this)) {
       const claim = await this.memoryScheduler.claimNext(threshold);
+      if (!runtimeActive(this)) return;
       if (!claim) return;
       if (await isMemoryBatchCommitted(this.config, claim.batchId)) {
+        if (!runtimeActive(this)) return;
         await this.memoryScheduler.complete(claim, Date.now(), { refundAttempt: true });
+        if (!runtimeActive(this)) return;
         this.projectMemoryCursor(claim);
         await syncMemoryDebtAlertSafely(this);
         continue;
       }
       const ok = await this.processMemoryClaim(claim).catch((error) => {
+        if (!runtimeActive(this)) throw error;
         console.error("[runtime] memory compression failed", {
           conversationId: claim.conversation.id,
           batchId: claim.batchId,
@@ -131,6 +160,7 @@ export async function runtime_drainMemoryScheduler(this: RuntimeHost) {
         });
         return false;
       });
+      if (!runtimeActive(this)) return;
       recordMemoryOperation(this.config, {
         source: "working",
         operation: "compression_attempt",
@@ -143,6 +173,7 @@ export async function runtime_drainMemoryScheduler(this: RuntimeHost) {
       });
       if (ok) {
         await this.memoryScheduler.complete(claim);
+        if (!runtimeActive(this)) return;
         this.projectMemoryCursor(claim);
       }
       else await this.memoryScheduler.fail(claim);
@@ -150,7 +181,9 @@ export async function runtime_drainMemoryScheduler(this: RuntimeHost) {
     }
   }
 export async function runtime_syncMemoryDebtAlert(this: RuntimeHost) {
+    if (!runtimeActive(this)) return { queued: false as const, reason: "runtime_closed" as const };
     const claim = await this.memoryScheduler.claimDebtAlert();
+    if (!runtimeActive(this)) return { queued: false as const, reason: "runtime_closed" as const };
     if (!claim) return { queued: false as const, reason: "not_due" as const };
     let targetConversationId = claim.targetConversationId;
     if (!targetConversationId) {
@@ -178,6 +211,7 @@ export async function runtime_syncMemoryDebtAlert(this: RuntimeHost) {
     return queued.result;
   }
 export function runtime_projectMemoryCursor(this: RuntimeHost, claim: MemoryClaim) {
+    if (!runtimeActive(this)) return;
     const record = this.conversationRecords.get(claim.conversation.id);
     const lastSequence = claim.messages[claim.messages.length - 1]?.sequence;
     if (!record || lastSequence == null) return;
@@ -189,6 +223,20 @@ export function runtime_projectMemoryCursor(this: RuntimeHost, claim: MemoryClai
     this.persistConversationRecords();
   }
 export async function runtime_processMemoryClaim(this: RuntimeHost, claim: MemoryClaim) {
+  return withAbortTimeout(
+    (signal) => processMemoryClaimWithinBudget.call(this, claim, signal),
+    MEMORY_PROVIDER_TOTAL_TIMEOUT_MS,
+    undefined,
+    runtimeSignal(this)
+  );
+}
+
+async function processMemoryClaimWithinBudget(
+  this: RuntimeHost,
+  claim: MemoryClaim,
+  signal: AbortSignal
+) {
+    signal.throwIfAborted();
     const existingRecord = this.conversationRecords.get(claim.conversation.id);
     const record: ConversationRecord = existingRecord ?? {
       id: claim.conversation.id,
@@ -216,7 +264,9 @@ export async function runtime_processMemoryClaim(this: RuntimeHost, claim: Memor
     }));
     const admin = this.adminIdentity();
     const participants = await this.enrichParticipantAddressNames(collectBatchUsers(batch, admin));
-    const userProfileOutput = await this.compressUserProfiles(record, batch, participants);
+    signal.throwIfAborted();
+    const userProfileOutput = await this.compressUserProfiles(record, batch, participants, signal);
+    signal.throwIfAborted();
     if (!userProfileOutput) {
       recordMemoryOperation(this.config, {
         source: "user_profile",
@@ -302,7 +352,9 @@ export async function runtime_processMemoryClaim(this: RuntimeHost, claim: Memor
 
     for (let attempt = 1; attempt <= 2; attempt += 1) {
       const snapshot = await readWorkingMemorySnapshot(this.config);
-      const merged = await this.requestWorkingMemoryMerge(context, snapshot.entries);
+      signal.throwIfAborted();
+      const merged = await this.requestWorkingMemoryMerge(context, snapshot.entries, signal);
+      signal.throwIfAborted();
       if (!merged) return false;
       const acceptedWorkingFacts = attachUsersToMemoryFacts(merged.facts, memoryParticipants);
       const allWorkingFacts = acceptedWorkingFacts.map((fact) => ({
@@ -311,6 +363,7 @@ export async function runtime_processMemoryClaim(this: RuntimeHost, claim: Memor
       }));
       const maxWorkingEntries = clampInteger(this.config.bot.memory.workingMemoryMaxEntries, 100, 1, 1000);
       const workingFacts = allWorkingFacts.slice(-maxWorkingEntries);
+      signal.throwIfAborted();
       const result = await applyMemoryBatchTransaction(this.config, {
         batchId: claim.batchId,
         expectedWorkingSnapshotToken: snapshot.token,
@@ -323,9 +376,10 @@ export async function runtime_processMemoryClaim(this: RuntimeHost, claim: Memor
           replaceUserProfileFacts: true,
           attempt
         }
-      });
+      }, signal);
       if (result.status === "applied") {
         this.persona = await loadPersona(this.config);
+        signal.throwIfAborted();
         return true;
       }
       if (result.status !== "snapshot_conflict") return false;
@@ -400,17 +454,29 @@ export async function runtime_mergeConversationWorkingMemory(this: RuntimeHost,
     });
   }
 export async function runtime_mergeWorkingMemory(this: RuntimeHost, context: WorkingMemoryMergeContext) {
+  return withAbortTimeout(
+    (signal) => mergeWorkingMemoryWithinBudget.call(this, context, signal),
+    MEMORY_PROVIDER_TOTAL_TIMEOUT_MS
+  );
+}
+
+async function mergeWorkingMemoryWithinBudget(
+  this: RuntimeHost,
+  context: WorkingMemoryMergeContext,
+  signal: AbortSignal
+) {
     let beforeCount = 0;
     for (let attempt = 1; attempt <= 2; attempt += 1) {
       const snapshot = await readWorkingMemorySnapshot(this.config);
       beforeCount = snapshot.entries.length;
       const ordinaryEntries = snapshot.entries.filter((entry) => entry.memoryKind !== "dream");
-      const merged = await this.requestWorkingMemoryMerge(context, ordinaryEntries);
+      const merged = await this.requestWorkingMemoryMerge(context, ordinaryEntries, signal);
       if (!merged) {
         return { ok: false as const, status: "model_invalid" as const, beforeCount };
       }
 
       const facts = attachUsersToMemoryFacts(merged.facts, context.participants);
+      signal.throwIfAborted();
       const replaced = await replaceWorkingMemoryFacts(this.config, facts, {
         expectedSnapshotToken: snapshot.token,
         metadata: {
@@ -438,9 +504,12 @@ export async function runtime_mergeWorkingMemory(this: RuntimeHost, context: Wor
   }
 export async function runtime_requestWorkingMemoryMerge(this: RuntimeHost,
     context: WorkingMemoryMergeContext,
-    previousWorkingMemories: MemoryEntry[]
+    previousWorkingMemories: MemoryEntry[],
+    parentSignal?: AbortSignal
   ): Promise<WorkingMemoryMergeOutput | null> {
+    const signal = parentSignal ?? AbortSignal.timeout(MEMORY_PROVIDER_TOTAL_TIMEOUT_MS);
     try {
+      signal.throwIfAborted();
       const provider = this.getProviderForModel(
         this.config.bot.memory.memoryModel,
         this.config.bot.memory.reasoningEffort
@@ -484,15 +553,14 @@ export async function runtime_requestWorkingMemoryMerge(this: RuntimeHost,
       const promptRequest = await this.renderPromptRequest("memory.compress-in", {
         "memory.payload": payload
       });
-      const output = await withAbortTimeout(
-        (signal) => this.completePrompt(provider, promptRequest, memoryProviderCompleteOptions(signal, {
-            conversationId: context.conversation.id,
-            stage: "memory",
-            promptFamily: "memory.compress-in",
-            memoryKind: "working_long_term"
-        })),
-        MEMORY_PROVIDER_TOTAL_TIMEOUT_MS
-      );
+      signal.throwIfAborted();
+      const output = await this.completePrompt(provider, promptRequest, memoryProviderCompleteOptions(signal, {
+        conversationId: context.conversation.id,
+        stage: "memory",
+        promptFamily: "memory.compress-in",
+        memoryKind: "working_long_term"
+      }));
+      signal.throwIfAborted();
       const parsed = parseCompleteWorkingMemoryMergeOutput(output);
       if (!parsed) {
         console.error("[runtime] rejected invalid memory model output", {
@@ -517,6 +585,7 @@ export async function runtime_requestWorkingMemoryMerge(this: RuntimeHost,
       }
       return parsed;
     } catch (error) {
+      if (signal.aborted) throw signal.reason ?? error;
       console.error("[runtime] work memory compression failed", {
         conversationId: context.conversation.id,
         error
@@ -540,11 +609,14 @@ export async function runtime_requestWorkingMemoryMerge(this: RuntimeHost,
 export async function runtime_compressUserProfiles(this: RuntimeHost,
     record: ConversationRecord,
     batch: Array<{ sequence: number; message: ConversationRecord["messages"][number] }>,
-    participants: BatchUserInfo[]
+    participants: BatchUserInfo[],
+    parentSignal?: AbortSignal
   ) {
     if (!participants.length) return [];
 
+    const signal = parentSignal ?? AbortSignal.timeout(MEMORY_PROVIDER_TOTAL_TIMEOUT_MS);
     try {
+      signal.throwIfAborted();
       const provider = this.getProviderForModel(
         this.config.bot.memory.memoryModel,
         this.config.bot.memory.reasoningEffort
@@ -579,18 +651,18 @@ export async function runtime_compressUserProfiles(this: RuntimeHost,
           quoteCount: message.quoteReferences?.length ?? 0
         }))
       };
+      signal.throwIfAborted();
       const promptRequest = await this.renderPromptRequest("memory.user-profile", {
         "profile.payload": payload
       });
-      const output = await withAbortTimeout(
-        (signal) => this.completePrompt(provider, promptRequest, memoryProviderCompleteOptions(signal, {
-            conversationId: record.id,
-            stage: "memory",
-            promptFamily: "memory.user-profile",
-            memoryKind: "user_profile"
-        })),
-        MEMORY_PROVIDER_TOTAL_TIMEOUT_MS
-      );
+      signal.throwIfAborted();
+      const output = await this.completePrompt(provider, promptRequest, memoryProviderCompleteOptions(signal, {
+        conversationId: record.id,
+        stage: "memory",
+        promptFamily: "memory.user-profile",
+        memoryKind: "user_profile"
+      }));
+      signal.throwIfAborted();
       const parsed = parseCompleteMemoryFactOutput(output);
       if (!parsed) {
         recordMemoryOperation(this.config, {
@@ -605,6 +677,7 @@ export async function runtime_compressUserProfiles(this: RuntimeHost,
       }
       return parsed;
     } catch (error) {
+      if (signal.aborted) throw signal.reason ?? error;
       console.error("[runtime] user profile compression failed", {
         conversationId: record.id,
         error

@@ -9,6 +9,7 @@ import type { AgentToolName } from "../../../packages/contracts/admin/public.js"
 import { isAgentToolName } from "../../../services/tools/toolRegistry.js";
 import { normalizeConversationLookupId } from "../../../src/runtime/messagingAttachmentHelpers.js";
 import { requestAgentId } from "../requestAgentId.js";
+import { withFastifyRequestSignal } from "./requestAbortSignal.js";
 
 export interface ConversationRouteOptions {
   runtime: SunaRuntime;
@@ -30,14 +31,20 @@ export function registerConversationRoutes(app: FastifyInstance, options: Conver
   const { onebotGateway, conversationDirectory } = options;
   const runtimeFor = (request: { query: unknown }) => options.getRuntime?.(requestAgentId(request.query)) ?? options.runtime;
   const webChats = new WeakMap<SunaRuntime, WebChatService>();
+  const webChatShutdownController = new AbortController();
   const webChatFor = (request: { query: unknown }) => {
     const runtime = runtimeFor(request);
     const existing = webChats.get(runtime);
     if (existing) return existing;
-    const webChat = new WebChatService(runtime);
+    const webChat = new WebChatService(runtime, webChatShutdownController.signal);
     webChats.set(runtime, webChat);
     return webChat;
   };
+  app.addHook("preClose", async () => {
+    if (!webChatShutdownController.signal.aborted) {
+      webChatShutdownController.abort(new Error("WEB_CHAT_SHUTTING_DOWN"));
+    }
+  });
 
   app.get("/api/web-chat/messages", {
     schema: { querystring: openObject, response: { 200: openObject } }
@@ -45,7 +52,7 @@ export function registerConversationRoutes(app: FastifyInstance, options: Conver
 
   app.post("/api/web-chat/messages", {
     schema: { body: passthroughBody, response: { 200: openObject } }
-  }, async (request) => {
+  }, async (request, reply) => {
     const webChat = webChatFor(request);
     const text = String((request.body as { text?: unknown } | undefined)?.text ?? "").trim();
     if (!text || text.length > 16_000) {
@@ -55,7 +62,12 @@ export function registerConversationRoutes(app: FastifyInstance, options: Conver
         "text"
       );
     }
-    return webChat.send(text);
+    return withFastifyRequestSignal(
+      request,
+      reply,
+      "WEB_CHAT_REQUEST_ABORTED",
+      (signal) => webChat.send(text, signal)
+    );
   });
 
   app.get("/api/conversations", {

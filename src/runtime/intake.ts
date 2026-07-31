@@ -51,6 +51,7 @@ import {
   type ReplyDelivery,
   type RuntimeCommandContext
 } from "./runtimeContracts.js";
+import { AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS } from "../../packages/contracts/model/modelGateway.js";
 import {
   SCHEDULED_CALLBACK_EVENT_KIND,
   SCHEDULED_CALLBACK_OUTBOX_KIND
@@ -180,6 +181,7 @@ export async function runtime_performHydrateConversationRecords(this: RuntimeHos
     }
   }
 export async function runtime_handleInboundMessage(this: RuntimeHost, incoming: ParsedIncomingMessage, gateway: MessagingPort) {
+    if (!this.isRuntimeActive()) return;
     this.activeGateway = gateway;
     if (this.isDuplicateIncoming(incoming)) return;
     if (!this.isReplySenderAllowed(incoming.userId)) {
@@ -239,8 +241,12 @@ export async function runtime_handleInboundMessage(this: RuntimeHost, incoming: 
         incomingPersisted = true;
         this.cancelAmbientReply(channelKey);
         const preparation = this.prepareIncomingMessage(incoming, gateway)
-          .then(() => this.patchIncomingMessage(record, incoming, durableMessageId))
+          .then(() => {
+            this.runtimeSignal.throwIfAborted();
+            this.patchIncomingMessage(record, incoming, durableMessageId);
+          })
           .catch((error) => {
+            if (!this.isRuntimeActive() || isAbortError(error)) return;
             console.error("[runtime] prepare incoming message failed; continuing with degraded context", {
               channel: channelKey,
               messageId: incoming.messageId,
@@ -378,7 +384,9 @@ export async function runtime_processSessionEvent(this: RuntimeHost,
             : { status: "no_reply" };
         }
         throw new Error(`不支持的 Session 事件：${event.kind}`);
-      }, DIRECT_REPLY_TIMEOUT_MS, (value) => {
+      }, asynchronousSessionEvent(event.kind)
+        ? AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS
+        : DIRECT_REPLY_TIMEOUT_MS, (value) => {
         controller = value;
         this.activeDirectControllers.set(event.sessionId, value);
       }, coordinatorSignal);
@@ -394,6 +402,7 @@ export async function runtime_processSessionEvent(this: RuntimeHost,
       try {
         tonedMessage = await this.rewriteToneText(message, {
           incoming: timeoutIncoming,
+          signal: controller?.signal ?? coordinatorSignal,
           logContext: {
             conversationId: event.sessionId,
             incomingMessageId: timeoutIncoming.messageId == null
@@ -403,7 +412,9 @@ export async function runtime_processSessionEvent(this: RuntimeHost,
         });
       } catch (toneError) {
         console.error("[runtime] timeout reply tone unavailable", { error: toneError });
-        tonedMessage = appendReplySoftError(message, "表达优化暂不可用");
+        tonedMessage = controller?.signal.aborted || coordinatorSignal.aborted
+          ? message
+          : appendReplySoftError(message, "表达优化暂不可用");
       }
       return {
         status: "failed",
@@ -660,6 +671,10 @@ function isOutboxDeliveryContext(value: OutboxDeliveryContext | AbortSignal): va
   return typeof (value as OutboxDeliveryContext).sendRemote === "function";
 }
 
+function asynchronousSessionEvent(kind: string) {
+  return kind === "tool_completion" || kind === SCHEDULED_CALLBACK_EVENT_KIND;
+}
+
 function isOutboxAccountConnected(gateway: MessagingPort, accountId?: string) {
   const status = gateway.getStatus();
   if (!status.connected) return false;
@@ -721,15 +736,20 @@ export async function runtime_handleIncomingMessage(this: RuntimeHost,
   }
 export async function runtime_prepareIncomingMessage(this: RuntimeHost, incoming: ParsedIncomingMessage, gateway: MessagingPort) {
     await withAbortTimeout(async (signal) => {
+      signal.throwIfAborted();
       await this.senderNameResolver.hydrate(incoming, gateway);
+      signal.throwIfAborted();
       await this.attachReplyReferences(incoming, gateway, signal);
+      signal.throwIfAborted();
       if (incoming.attachments.length) {
         incoming.attachments = await this.attachmentService.processIncoming(
           incoming.attachments,
           attachmentSourcePort(gateway, incoming.accountId),
           incoming.text,
-          incomingAttachmentReferenceScope(incoming)
+          incomingAttachmentReferenceScope(incoming),
+          signal
         );
+        signal.throwIfAborted();
         incoming.quoteReferences = replaceQuoteAttachments(incoming.quoteReferences, incoming.attachments);
       }
       await populateInboundImageAltTexts(this, incoming, {
@@ -741,5 +761,6 @@ export async function runtime_prepareIncomingMessage(this: RuntimeHost, incoming
           promptFamily: "image.alt-text"
         }
       });
-    }, PREPARE_TIMEOUT_MS);
+      signal.throwIfAborted();
+    }, PREPARE_TIMEOUT_MS, undefined, this.runtimeSignal);
   }

@@ -236,6 +236,56 @@ describe("strict Dream model output contract", () => {
     expectContractFailure(fieldKnowledge);
   });
 
+  it.each([
+    ["dream text", (value: ReturnType<typeof validOutput>) => {
+      value.dream.text = `我梦见人物-${"a".repeat(24)}站在车站。`;
+    }],
+    ["legacy dream text", (value: ReturnType<typeof validOutput>) => {
+      value.dream.text = `我梦见人物-${"a".repeat(10)}站在车站。`;
+    }],
+    ["canonical fact", (value: ReturnType<typeof validOutput>) => {
+      value.workingReviews[0]!.canonical = { fact: `person:${"b".repeat(24)}负责发布。` };
+    }],
+    ["persona statement", (value: ReturnType<typeof validOutput>) => {
+      value.personaAdjustment = {
+        kind: "habit",
+        targetFile: "PREFERENCE.md",
+        topicKey: "release.habit",
+        statement: `与人物-${"c".repeat(24)}协作时会重视证据。`,
+        evidenceMemoryIds: ["working_a", "long_term_a"]
+      };
+    }],
+    ["field knowledge", (value: ReturnType<typeof validOutput>) => {
+      value.fieldKnowledge = {
+        content: `# 场域知识\n## 使用边界\n- 只在协作群生效。\n## 场域约定\n- profile:${"d".repeat(24)}负责复核。`,
+        evidenceMemoryIds: []
+      };
+    }],
+    ["case-varied alias", (value: ReturnType<typeof validOutput>) => {
+      value.dream.text = `我梦见 Person:${"A".repeat(24)} 站在车站。`;
+    }],
+    ["prefixed alias fragment", (value: ReturnType<typeof validOutput>) => {
+      value.dream.text = `我梦见 xperson:${"e".repeat(24)} 站在车站。`;
+    }],
+    ["suffixed alias fragment", (value: ReturnType<typeof validOutput>) => {
+      value.dream.text = `我梦见 person:${"f".repeat(24)}_suffix 站在车站。`;
+    }],
+    ["case-varied surrounded alias fragment", (value: ReturnType<typeof validOutput>) => {
+      value.dream.text = `我梦见 XPROFILE:${"C".repeat(24)}Z 站在车站。`;
+    }]
+  ])("rejects legacy host-generated identity aliases in %s", (_name, mutate) => {
+    const value = structuredClone(validOutput());
+    mutate(value);
+    expectContractFailure(value);
+  });
+
+  it("accepts ordinary Chinese identity prose and short human-readable labels", () => {
+    const value = validOutput();
+    value.dream.text = "我梦见人物关系图与 person:review 标签被放进同一只抽屉。";
+
+    expect(parse(value).dream.text).toBe(value.dream.text);
+  });
+
   it("requires null field knowledge when the persisted input is not writable", () => {
     const value = validOutput();
     value.fieldKnowledge = {

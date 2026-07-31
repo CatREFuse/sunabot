@@ -1,10 +1,3 @@
-import {
-  buildDreamIdentityIndex,
-  dreamIdentityValues as identityValues,
-  dreamOpaqueReference as opaqueReference,
-  type DreamIdentityIndex as IdentityIndex
-} from "./dreamContextIdentity.js";
-
 type JsonRecord = Record<string, unknown>;
 
 export const DREAM_CONTEXT_PROJECTION_LIMITS = {
@@ -14,7 +7,7 @@ export const DREAM_CONTEXT_PROJECTION_LIMITS = {
     longTermMemories: 48,
     recallStats: 48,
     personaImpressions: 64,
-    identityReferences: 128,
+    identityValues: 128,
     sourceMemoryIds: 128,
     userProfiles: 64,
     profileFacts: 16,
@@ -75,12 +68,6 @@ const MEMORY_SCORE_FIELDS = ["importance", "futureRelevance", "emotionalSalience
 export interface DreamContextProjectionResult {
   payload: JsonRecord;
   byteLength: number;
-  fieldKnowledgeBindings: DreamFieldKnowledgeBinding[];
-}
-
-export interface DreamFieldKnowledgeBinding {
-  token: string;
-  value: string;
 }
 
 export function projectDreamContextPayload(value: unknown): JsonRecord {
@@ -100,10 +87,9 @@ export function dreamPersonaPromptVariables(value: unknown) {
 export function projectDreamContext(value: unknown): DreamContextProjectionResult {
   const input = requiredRecord(value, "Dream context");
   const seed = requiredSeed(input.seed);
-  const identities = buildDreamIdentityIndex(input, seed, DREAM_CONTEXT_PROJECTION_LIMITS);
   const sourceFieldKnowledge = normalizedProjectionSourceText(recordValue(input.persona).air);
-  const workingMemories = projectMemoryGroup(input.workingMemories, "workingMemories", identities, seed);
-  const longTermMemories = projectMemoryGroup(input.longTermMemories, "longTermMemories", identities, seed);
+  const workingMemories = projectMemoryGroup(input.workingMemories, "workingMemories");
+  const longTermMemories = projectMemoryGroup(input.longTermMemories, "longTermMemories");
   const retainedIds = new Set([...workingMemories, ...longTermMemories].map(memoryItemId));
   const sourceMemoryIds = projectMemoryIdList(input.sourceMemoryIds, retainedIds);
   const payload: JsonRecord = {
@@ -121,33 +107,31 @@ export function projectDreamContext(value: unknown): DreamContextProjectionResul
     fieldKnowledgeWritable: false,
     recentWindowHours: boundedInteger(input.recentWindowHours, 1, 720),
     sourceMemoryIds: sourceMemoryIds.length ? sourceMemoryIds : [...retainedIds],
-    userProfiles: projectUserProfiles(input.userProfiles, identities, seed),
-    observedConversations: projectConversations(input.observedConversations, identities, seed),
-    activeTasks: projectTasks(input.activeTasks, identities, seed),
-    plannedDailySchedule: projectDirectorSchedule(input.plannedDailySchedule, identities, seed),
-    personaImpressions: projectPersonaImpressions(input.personaImpressions, identities, seed),
-    persona: projectPersona(input.persona, identities)
+    userProfiles: projectUserProfiles(input.userProfiles),
+    observedConversations: projectConversations(input.observedConversations),
+    activeTasks: projectTasks(input.activeTasks),
+    plannedDailySchedule: projectDirectorSchedule(input.plannedDailySchedule),
+    personaImpressions: projectPersonaImpressions(input.personaImpressions),
+    persona: projectPersona(input.persona)
   };
   enforceTotalPayloadLimit(payload);
   synchronizeMemoryReferences(payload);
   const projectedFieldKnowledge = typeof recordValue(payload.persona).air === "string"
     ? String(recordValue(payload.persona).air)
     : "";
-  const fieldKnowledgeBindings = identities.bindingsForText(projectedFieldKnowledge);
   payload.fieldKnowledgeWritable = sourceFieldKnowledge.length > 0
-    && restoreDreamFieldKnowledge(projectedFieldKnowledge, fieldKnowledgeBindings) === sourceFieldKnowledge;
+    && projectedFieldKnowledge === sourceFieldKnowledge;
   const byteLength = dreamContextPayloadByteLength(payload);
   if (byteLength > DREAM_CONTEXT_PROJECTION_LIMITS.totalPayloadBytes) {
     throw new Error("Projected Dream context exceeds its total payload limit.");
   }
   return {
     payload,
-    byteLength,
-    fieldKnowledgeBindings: payload.fieldKnowledgeWritable === true ? fieldKnowledgeBindings : []
+    byteLength
   };
 }
 
-function projectPersonaImpressions(value: unknown, identities: IdentityIndex, seed: string) {
+function projectPersonaImpressions(value: unknown) {
   return arrayValue(value)
     .slice(-DREAM_CONTEXT_PROJECTION_LIMITS.arrays.personaImpressions)
     .flatMap((raw) => {
@@ -161,11 +145,11 @@ function projectPersonaImpressions(value: unknown, identities: IdentityIndex, se
       const topicKey = typeof record.topicKey === "string"
         && PERSONA_TOPIC_PATTERN.test(record.topicKey) ? record.topicKey : null;
       const statement = typeof record.statement === "string"
-        ? boundedText(record.statement, 80, identities) : "";
+        ? boundedText(record.statement, 80) : "";
       if (!kind || !targetFile || !level || !topicKey || !statement) return [];
       const rawId = optionalIdentityValue(record.id);
       return [compactObject({
-        impressionRef: rawId ? opaqueReference(seed, "impression", rawId) : undefined,
+        id: rawId,
         appliedAt: optionalBoundedText(
           record.appliedAt,
           DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.timestamp
@@ -183,21 +167,9 @@ export function dreamContextPayloadByteLength(value: unknown) {
   return new TextEncoder().encode(JSON.stringify(value)).byteLength;
 }
 
-export function restoreDreamFieldKnowledge(
-  value: string,
-  bindings: readonly DreamFieldKnowledgeBinding[]
-) {
-  const replacements = new Map(bindings.map((binding) => [binding.token, binding.value]));
-  let restored = value;
-  for (const [token, original] of replacements) restored = restored.replaceAll(token, original);
-  return restored.includes("人物-") ? undefined : restored;
-}
-
 function projectMemoryGroup(
   value: unknown,
-  field: "workingMemories" | "longTermMemories",
-  identities: IdentityIndex,
-  seed: string
+  field: "workingMemories" | "longTermMemories"
 ) {
   const limit = DREAM_CONTEXT_PROJECTION_LIMITS.arrays[field];
   return arrayValue(value).slice(0, limit).map((raw, index) => {
@@ -209,7 +181,7 @@ function projectMemoryGroup(
     return {
       id,
       factuality,
-      memory: projectMemoryRecord(memory, id, factuality, identities, seed),
+      memory: projectMemoryRecord(memory, id, factuality),
       recallStats: projectOptionalRecallStats(item.recallStats, id),
       selection: projectSelection(item.selection)
     };
@@ -219,14 +191,13 @@ function projectMemoryGroup(
 function projectMemoryRecord(
   record: JsonRecord,
   id: string,
-  factuality: "factual" | "imagined",
-  identities: IdentityIndex,
-  seed: string
+  factuality: "factual" | "imagined"
 ) {
   const projected: JsonRecord = {
     id,
-    fact: boundedText(record.fact, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.memoryFact, identities),
-    factuality
+    fact: boundedText(record.fact, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.memoryFact),
+    factuality,
+    ...projectIdentityFields(record)
   };
   for (const field of MEMORY_TEXT_FIELDS) {
     const text = optionalBoundedText(record[field], textLimitForMemoryField(field));
@@ -239,16 +210,12 @@ function projectMemoryRecord(
     const score = boundedNumber(record[field], 0, 1);
     if (score !== null) projected[field] = score;
   }
-  const participantRefs = identities.refsForRecord(record);
-  if (participantRefs.length) projected.participantRefs = participantRefs;
-  const eventKey = optionalIdentityValue(record.eventKey);
-  const causalChainKey = optionalIdentityValue(record.causalChainKey);
-  const subjectKey = optionalIdentityValue(record.subjectKey);
-  const contextKey = optionalIdentityValue(record.conversationId) ?? optionalIdentityValue(record.contextKey);
-  if (eventKey) projected.eventRef = opaqueReference(seed, "event", eventKey);
-  if (causalChainKey) projected.causalChainRef = opaqueReference(seed, "causal", causalChainKey);
-  if (subjectKey) projected.subjectRef = opaqueReference(seed, "subject", subjectKey);
-  if (contextKey) projected.contextRef = opaqueReference(seed, "context", contextKey);
+  for (const field of [
+    "conversationId", "contextKey", "eventKey", "causalChainKey", "subjectKey"
+  ] as const) {
+    const value = optionalIdentityValue(record[field]);
+    if (value) projected[field] = value;
+  }
   const longTermId = optionalMemoryId(record.longTermId);
   if (longTermId) projected.linkedLongTermId = longTermId;
   for (const field of ["sourceWorkingMemoryIds", "sourceLongTermMemoryIds"] as const) {
@@ -309,18 +276,19 @@ function projectRecallStatsRecord(record: JsonRecord, id: string) {
   };
 }
 
-function projectUserProfiles(value: unknown, identities: IdentityIndex, seed: string) {
+function projectUserProfiles(value: unknown) {
   return arrayValue(value).slice(0, DREAM_CONTEXT_PROJECTION_LIMITS.arrays.userProfiles).map((raw, index) => {
     const profile = recordValue(raw);
-    const refs = identities.refsForRecord(profile);
     const rawId = optionalIdentityValue(profile.id) ?? `profile-${index}`;
     const facts = [profile.fact, ...arrayValue(profile.facts)]
-      .flatMap((fact) => typeof fact === "string" ? [boundedText(fact, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.profileFact, identities)] : [])
+      .flatMap((fact) => typeof fact === "string"
+        ? [boundedText(fact, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.profileFact)]
+        : [])
       .filter(Boolean)
       .slice(0, DREAM_CONTEXT_PROJECTION_LIMITS.arrays.profileFacts);
     return compactObject({
-      profileRef: opaqueReference(seed, "profile", rawId),
-      participantRefs: refs.length ? refs : undefined,
+      id: rawId,
+      ...projectIdentityFields(profile),
       facts,
       createdAt: optionalBoundedText(profile.createdAt, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.timestamp),
       updatedAt: optionalBoundedText(profile.updatedAt ?? profile.time, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.timestamp)
@@ -328,57 +296,57 @@ function projectUserProfiles(value: unknown, identities: IdentityIndex, seed: st
   });
 }
 
-function projectConversations(value: unknown, identities: IdentityIndex, seed: string) {
+function projectConversations(value: unknown) {
   return arrayValue(value).slice(0, DREAM_CONTEXT_PROJECTION_LIMITS.arrays.conversations).flatMap((raw, index) => {
     const conversation = recordValue(raw);
     const rawId = optionalIdentityValue(conversation.id) ?? `conversation-${index}`;
     const messages = arrayValue(conversation.messages)
       .slice(0, DREAM_CONTEXT_PROJECTION_LIMITS.arrays.messagesPerConversation)
-      .map((message) => projectConversationMessage(message, identities));
+      .map(projectConversationMessage);
     if (!messages.length && typeof conversation.text === "string") {
       messages.push({
         role: "event",
-        text: boundedText(conversation.text, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.conversationText, identities)
+        text: boundedText(conversation.text, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.conversationText)
       });
     }
     if (!messages.length) return [];
     const scope = conversation.scope === "private" || conversation.scope === "user_group" || conversation.scope === "bot_group"
       ? conversation.scope : undefined;
     return [compactObject({
-      contextRef: opaqueReference(seed, "context", rawId),
+      id: rawId,
       scope,
+      title: optionalBoundedText(conversation.title, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.label),
       messages
     })];
   });
 }
 
-function projectConversationMessage(value: unknown, identities: IdentityIndex) {
+function projectConversationMessage(value: unknown) {
   const message = recordValue(value);
   const role = typeof message.role === "string" && MESSAGE_ROLES.has(message.role) ? message.role : "event";
-  const speaker = identities.refForGroup(identityValues(message));
   return compactObject({
     role,
-    text: boundedText(message.text, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.conversationText, identities),
+    text: boundedText(message.text, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.conversationText),
     at: optionalBoundedText(message.at, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.timestamp),
-    speakerRef: role === "assistant" ? undefined : speaker
+    ...(role === "assistant" ? {} : projectIdentityFields(message))
   });
 }
 
-function projectTasks(value: unknown, identities: IdentityIndex, seed: string) {
+function projectTasks(value: unknown) {
   return arrayValue(value).slice(0, DREAM_CONTEXT_PROJECTION_LIMITS.arrays.activeTasks).map((raw, index) => {
     const task = recordValue(raw);
     const rawId = optionalIdentityValue(task.id) ?? `task-${index}`;
     const status = typeof task.status === "string" && TASK_STATUSES.has(task.status) ? task.status : undefined;
     return compactObject({
-      taskRef: opaqueReference(seed, "task", rawId),
-      name: optionalBoundedText(task.name ?? task.title, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.label, identities),
+      id: rawId,
+      name: optionalBoundedText(task.name ?? task.title, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.label),
       enabled: typeof task.enabled === "boolean" ? task.enabled : true,
       status,
       schedule: projectTaskSchedule(task.schedule),
-      context: optionalBoundedText(task.context, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.taskContext, identities),
+      context: optionalBoundedText(task.context, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.taskContext),
       nextRunAt: nullableBoundedText(task.nextRunAt, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.timestamp),
       lastScheduledAt: nullableBoundedText(task.lastScheduledAt, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.timestamp),
-      targets: projectTaskTargets(task.targets, identities, seed)
+      targets: projectTaskTargets(task.targets)
     });
   });
 }
@@ -401,63 +369,89 @@ function projectTaskSchedule(value: unknown) {
   return undefined;
 }
 
-function projectTaskTargets(value: unknown, identities: IdentityIndex, seed: string) {
+function projectTaskTargets(value: unknown) {
   return arrayValue(value).slice(0, DREAM_CONTEXT_PROJECTION_LIMITS.arrays.taskTargets).map((raw) => {
     const target = recordValue(raw);
     const conversation = optionalIdentityValue(target.conversationId);
-    const participantRefs = arrayValue(target.mentionUserIds)
+    const mentionUserIds = arrayValue(target.mentionUserIds)
       .slice(0, DREAM_CONTEXT_PROJECTION_LIMITS.arrays.taskMentions)
-      .flatMap((item) => typeof item === "string" || typeof item === "number" ? [identities.ref(String(item))] : []);
+      .flatMap((item) => {
+        const identity = optionalIdentityValue(item);
+        return identity ? [identity] : [];
+      });
     return compactObject({
-      contextRef: conversation ? opaqueReference(seed, "context", conversation) : undefined,
-      participantRefs: uniqueStrings(participantRefs)
+      conversationId: conversation,
+      mentionUserIds: uniqueStrings(mentionUserIds)
     });
   });
 }
 
-function projectDirectorSchedule(value: unknown, identities: IdentityIndex, seed: string) {
+function projectIdentityFields(value: JsonRecord) {
+  const projected: JsonRecord = {};
+  for (const field of [
+    "userId", "userName", "addressName", "senderName", "senderNickname", "senderCard"
+  ] as const) {
+    const identity = optionalIdentityValue(value[field]);
+    if (identity) projected[field] = identity;
+  }
+  for (const field of ["userIds", "addressNames"] as const) {
+    const identities = uniqueStrings(arrayValue(value[field]).flatMap((item) => {
+      const identity = optionalIdentityValue(item);
+      return identity ? [identity] : [];
+    })).slice(0, DREAM_CONTEXT_PROJECTION_LIMITS.arrays.identityValues);
+    if (identities.length) projected[field] = identities;
+  }
+  return projected;
+}
+
+function projectDirectorSchedule(value: unknown) {
   if (value == null) return null;
   const schedule = recordValue(value);
   return compactObject({
     date: optionalBoundedText(schedule.date, 16),
     timeZone: optionalBoundedText(schedule.timeZone, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.timezone),
-    theme: optionalBoundedText(schedule.theme, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.directorText, identities),
-    summary: optionalBoundedText(schedule.summary, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.directorText, identities),
+    theme: optionalBoundedText(schedule.theme, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.directorText),
+    summary: optionalBoundedText(schedule.summary, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.directorText),
     items: arrayValue(schedule.items).slice(0, DREAM_CONTEXT_PROJECTION_LIMITS.arrays.directorItems).map((raw, index) => {
       const item = recordValue(raw);
       const rawId = optionalIdentityValue(item.id) ?? `schedule-item-${index}`;
-      const participantRefs = arrayValue(item.participants)
+      const participants = arrayValue(item.participants)
         .slice(0, DREAM_CONTEXT_PROJECTION_LIMITS.arrays.directorParticipants)
-        .flatMap((participant) => typeof participant === "string" ? [identities.ref(participant)] : []);
+        .flatMap((participant) => {
+          const identity = optionalIdentityValue(participant);
+          return identity ? [identity] : [];
+        });
       const share = recordValue(item.share);
       return compactObject({
-        itemRef: opaqueReference(seed, "schedule", rawId),
+        id: rawId,
         startAt: optionalBoundedText(item.startAt, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.timestamp),
         endAt: optionalBoundedText(item.endAt, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.timestamp),
-        activity: optionalBoundedText(item.activity, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.directorText, identities),
-        location: optionalBoundedText(item.location, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.label, identities),
-        participantRefs: uniqueStrings(participantRefs),
-        intent: optionalBoundedText(item.intent, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.directorText, identities),
-        variant: optionalBoundedText(item.variant, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.label, identities),
+        activity: optionalBoundedText(item.activity, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.directorText),
+        location: optionalBoundedText(item.location, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.label),
+        participants: uniqueStrings(participants),
+        intent: optionalBoundedText(item.intent, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.directorText),
+        variant: optionalBoundedText(item.variant, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.label),
         share: compactObject({
           enabled: typeof share.enabled === "boolean" ? share.enabled : false,
           at: nullableBoundedText(share.at, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.timestamp),
-          textIntent: nullableBoundedText(share.textIntent, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.directorText, identities),
-          selfiePrompt: nullableBoundedText(share.selfiePrompt, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.directorText, identities)
+          textIntent: nullableBoundedText(share.textIntent, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.directorText),
+          selfiePrompt: nullableBoundedText(share.selfiePrompt, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.directorText)
         })
       });
     })
   });
 }
 
-function projectPersona(value: unknown, identities: IdentityIndex) {
+function projectPersona(value: unknown) {
   const persona = recordValue(value);
   return compactObject({
-    soul: optionalBoundedText(persona.soul, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.personaSection, identities),
-    preference: optionalBoundedText(persona.preference, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.personaSection, identities),
-    user: optionalBoundedText(persona.user, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.personaSection, identities),
-    relation: optionalBoundedText(persona.relation, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.personaSection, identities),
-    air: optionalBoundedText(persona.air, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.personaSection, identities)
+    id: optionalIdentityValue(persona.id),
+    name: optionalIdentityValue(persona.name),
+    soul: optionalBoundedText(persona.soul, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.personaSection),
+    preference: optionalBoundedText(persona.preference, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.personaSection),
+    user: optionalBoundedText(persona.user, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.personaSection),
+    relation: optionalBoundedText(persona.relation, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.personaSection),
+    air: optionalBoundedText(persona.air, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.personaSection)
   });
 }
 
@@ -539,11 +533,9 @@ function popArray(value: unknown) {
   return true;
 }
 
-function boundedText(value: unknown, maxChars: number, identities?: IdentityIndex) {
+function boundedText(value: unknown, maxChars: number) {
   if (typeof value !== "string") return "";
-  let text = value.normalize("NFC").trim();
-  if (identities) text = identities.redact(text);
-  text = redactSensitiveText(text)
+  const text = redactSensitiveText(value.normalize("NFC").trim())
     .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/gu, "")
     .replace(/\r\n?/gu, "\n");
   return [...text].slice(0, maxChars).join("");
@@ -562,13 +554,12 @@ function redactSensitiveText(value: string) {
     .replace(/\b(?:(?:proxy-)?authorization\s*:\s*)?(?:basic|bearer)\s+[A-Za-z0-9._~+\/=-]{8,}/giu, REDACTED_SECRET)
     .replace(/\b[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/gu, REDACTED_SECRET)
     .replace(/\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/gu, REDACTED_SECRET)
-    .replace(/\b(?:sk|rk|pk|ghp|github_pat|xox[baprs])-[_A-Za-z0-9-]{8,}/gu, REDACTED_SECRET)
+    .replace(/\b(?:sk|rk|pk|ghp|github_pat|xox[baprs])[-_][_A-Za-z0-9-]{8,}/gu, REDACTED_SECRET)
     .replace(/\b((?:(?:aws[_-]?)?(?:access[_-]?key[_-]?id|secret[_-]?access[_-]?key|session[_-]?token))["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;"']+)/giu, `$1${REDACTED_SECRET}`)
     .replace(/\b((?:api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret|password|passwd|authorization)["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;"']+)/giu, `$1${REDACTED_SECRET}`)
     .replace(/([?&](?:x-amz-(?:algorithm|credential|date|expires|signedheaders|security-token|signature)|x-goog-(?:algorithm|credential|date|expires|signedheaders|signature)|awsaccesskeyid|googleaccessid|key-pair-id|api[_-]?key|access[_-]?token|key|token|secret|password|policy|signature|expires|sig)=)[^&#\s]+/giu, `$1${REDACTED_SECRET}`)
     .replace(/(https?:\/\/)[^\s\/@:]+:[^\s\/@]+@/giu, `$1${REDACTED_SECRET}@`)
     .replace(/(?<![\p{L}\p{N}.!#$%&'*+/=?^_`{|}~-])[\p{L}\p{N}.!#$%&'*+/=?^_`{|}~-]{1,64}@[A-Za-z0-9.-]{1,253}\.[A-Za-z]{2,63}/gu, REDACTED_SECRET)
-    .replace(/(?<![\p{L}\p{N}])\d{5,}(?![\p{L}\p{N}])/gu, REDACTED_SECRET)
     .replace(/file:\/\/(?:\/[A-Za-z]:)?[^\s"'<>]+/giu, REDACTED_PATH)
     .replace(/\\\\[A-Za-z0-9._-]+\\[A-Za-z0-9$._-]+(?:\\[^\s"'<>|?*]+)*/gu, REDACTED_PATH)
     .replace(/(?<![:/])\/\/[A-Za-z0-9._-]+\/[A-Za-z0-9$._-]+(?:\/[^\s"'<>?*]+)*/gu, REDACTED_PATH)
@@ -630,24 +621,25 @@ function containsSecretToken(value: string) {
 
 function optionalIdentityValue(value: unknown) {
   if (typeof value !== "string" && typeof value !== "number") return undefined;
-  const text = String(value).normalize("NFKC").trim();
+  const text = redactSensitiveText(String(value).normalize("NFC").trim())
+    .replace(/[\u0000-\u001F\u007F-\u009F]/gu, "");
   return text ? [...text].slice(0, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.opaqueId).join("") : undefined;
 }
 
-function boundedRequiredText(value: unknown, field: string, maxChars: number, identities?: IdentityIndex) {
-  const text = boundedText(value, maxChars, identities);
+function boundedRequiredText(value: unknown, field: string, maxChars: number) {
+  const text = boundedText(value, maxChars);
   if (!text) throw new Error(`${field} must be a non-empty string.`);
   return text;
 }
 
-function optionalBoundedText(value: unknown, maxChars: number, identities?: IdentityIndex) {
-  const text = boundedText(value, maxChars, identities);
+function optionalBoundedText(value: unknown, maxChars: number) {
+  const text = boundedText(value, maxChars);
   return text || undefined;
 }
 
-function nullableBoundedText(value: unknown, maxChars: number, identities?: IdentityIndex) {
+function nullableBoundedText(value: unknown, maxChars: number) {
   if (value == null) return null;
-  return optionalBoundedText(value, maxChars, identities) ?? null;
+  return optionalBoundedText(value, maxChars) ?? null;
 }
 
 function boundedNumber(value: unknown, min: number, max: number) {

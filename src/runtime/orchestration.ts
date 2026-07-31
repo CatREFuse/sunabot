@@ -17,14 +17,19 @@ import {
   userGroupOrchestratorResult
 } from "../../services/orchestration/userGroupOrchestratorResult.js";
 import { appendRequestLog } from "../../adapters/observability/requestLog.js";
+import { runModelTaskWithinDeadline } from "../../packages/contracts/model/modelTaskDeadline.js";
 import {
   ConversationRecord,
   ParsedIncomingMessage
 } from "../types.js";
+import {
+  auxiliaryModelSignal,
+  auxiliaryProviderCompleteOptions
+} from "./auxiliaryModelBudget.js";
 import { adminIdentityFromBot, appendConversationMessage, hasIncomingReplyContent, indexedConversationMessages, isAdminUserId, isExplicitWakeMessage, isModelVisibleConversationMessage, resolveRuntimePersonaName, toContextChatMessage } from "./conversationMemoryHelpers.js";
-import { errorMessage, isAbortError, sanitizeErrorDetail, withAbortTimeout } from "./infrastructure.js";
+import { errorMessage, isAbortError, sanitizeErrorDetail } from "./infrastructure.js";
 import { conversationOrchestratorEnabled, conversationOrchestratorResponseTimeMs, conversationRecordId, conversationReplyEnabled, incomingConversationMessageId, persistedAttachments, persistedQuoteReferences, persistentIncomingKey, restoredGroupIncoming, uniqueStrings } from "./messagingAttachmentHelpers.js";
-import { AMBIENT_ORCHESTRATOR_TIMEOUT_MS, AdminIdentity, AmbientReplyJob, AmbientReplyState, DEDUPE_TTL_MS, MAX_DEDUPE_KEYS, ORCHESTRATOR_MAX_RETRIES } from "./runtimeContracts.js";
+import { AdminIdentity, AmbientReplyJob, AmbientReplyState, DEDUPE_TTL_MS, MAX_DEDUPE_KEYS, ORCHESTRATOR_MAX_RETRIES } from "./runtimeContracts.js";
 import { conversationLastText } from "./selfieHelpers.js";
 
 import type { SunaRuntime } from "../runtime.js";
@@ -85,6 +90,7 @@ export function runtime_isReplyTaskCurrent(this: RuntimeHost,
     signal?: AbortSignal
   ) {
     if (
+      !this.isRuntimeActive() ||
       signal?.aborted ||
       !this.isReplySenderAllowed(incoming.userId) ||
       !this.replyGates.isCurrent(gate)
@@ -113,6 +119,7 @@ export function runtime_cancelAllAmbientReplies(this: RuntimeHost) {
     }
   }
 export function runtime_resumeUserGroupOrchestrators(this: RuntimeHost, gateway: MessagingPort) {
+    if (!this.isRuntimeActive()) return;
     this.activeGateway = gateway;
     this.sessionCoordinator.resume();
     let initialized = false;
@@ -205,6 +212,7 @@ export function runtime_pendingOrchestratorUserMessages(this: RuntimeHost, recor
       ));
   }
 export function runtime_scheduleAmbientIdleReply(this: RuntimeHost, job: AmbientReplyJob) {
+    if (!this.isRuntimeActive()) return;
     this.cancelAmbientIdleTimer(job.channelKey);
     const record = this.conversationRecords.get(job.channelKey);
     const pending = record
@@ -221,6 +229,7 @@ export function runtime_scheduleAmbientIdleReply(this: RuntimeHost, job: Ambient
     const delay = Math.max(0, responseTimeMs - elapsed);
     const timer = setTimeout(() => {
       this.ambientIdleTimers.delete(job.channelKey);
+      if (!this.isRuntimeActive()) return;
       if (!this.isReplyTaskCurrent(job.incoming, job.gate)) return;
       const currentRecord = this.conversationRecords.get(job.channelKey);
       if (!currentRecord || !this.pendingOrchestratorUserMessages(currentRecord, job.captureSequence).length) return;
@@ -236,7 +245,7 @@ export function runtime_cancelAmbientIdleTimer(this: RuntimeHost, channelKey: st
     this.ambientIdleTimers.delete(channelKey);
   }
 export function runtime_queueAmbientReply(this: RuntimeHost, job: AmbientReplyJob) {
-    if (!this.isReplySenderAllowed(job.incoming.userId)) return;
+    if (!this.isRuntimeActive() || !this.isReplySenderAllowed(job.incoming.userId)) return;
     this.cancelAmbientIdleTimer(job.channelKey);
     const state = this.ambientReplies.get(job.channelKey) ?? { epoch: 0, running: false };
     state.next = job;
@@ -245,7 +254,7 @@ export function runtime_queueAmbientReply(this: RuntimeHost, job: AmbientReplyJo
   }
 export async function runtime_pumpAmbientReply(this: RuntimeHost, channelKey: string, state: AmbientReplyState) {
     const job = state.next;
-    if (!job || state.running) return;
+    if (!job || state.running || !this.isRuntimeActive()) return;
     state.next = undefined;
     state.running = true;
     const epoch = state.epoch;
@@ -260,12 +269,16 @@ export async function runtime_pumpAmbientReply(this: RuntimeHost, channelKey: st
       state.deciding = true;
       const controller = new AbortController();
       state.controller = controller;
-      const orchestratorResult = await this.ambientLimiter.run(() => this.runUserGroupchatOrchestrator(job.incoming, {
-        signal: controller.signal,
-        captureSequence: job.captureSequence
-      }));
+      const orchestratorResult = await runModelTaskWithinDeadline(
+        (signal) => this.ambientLimiter.run(() => this.runUserGroupchatOrchestrator(job.incoming, {
+          signal,
+          captureSequence: job.captureSequence
+        })),
+        { parentSignal: AbortSignal.any([controller.signal, this.runtimeSignal]) }
+      );
       state.deciding = false;
       state.controller = undefined;
+      this.runtimeSignal.throwIfAborted();
       if (!orchestratorResult || !this.isAmbientReplyCurrent(job, state, epoch)) return;
       if (isOrchestratorReplyRateLimited(record.orchestratorLastReplyAt)) return;
 
@@ -278,18 +291,25 @@ export async function runtime_pumpAmbientReply(this: RuntimeHost, channelKey: st
         gate: job.gate,
         orchestratorResult
       });
+      this.runtimeSignal.throwIfAborted();
       this.consumeOrchestratorBatch(record, job.captureSequence);
       record.orchestratorLastReplyAt = new Date().toISOString();
       this.persistConversationRecords();
       this.sessionCoordinator.resume(job.incoming.accountId ?? "primary");
     } catch (error) {
       state.deciding = false;
-      if (!isAbortError(error)) console.error("[runtime] ambient reply failed", { channel: channelKey, error });
+      if (
+        !state.controller?.signal.aborted
+        && !this.runtimeSignal.aborted
+        && !isAbortError(error)
+      ) {
+        console.error("[runtime] ambient reply failed", { channel: channelKey, error });
+      }
     } finally {
       state.deciding = false;
       state.controller = undefined;
       state.running = false;
-      if (state.next) {
+      if (state.next && this.isRuntimeActive()) {
         void this.pumpAmbientReply(channelKey, state);
       } else if (this.ambientReplies.get(channelKey) === state) {
         this.ambientReplies.delete(channelKey);
@@ -327,6 +347,7 @@ export async function runtime_runUserGroupchatOrchestrator(this: RuntimeHost,
     incoming: ParsedIncomingMessage,
     options: { signal?: AbortSignal; captureSequence?: number } = {}
   ) {
+    if (options.signal?.aborted || this.runtimeSignal.aborted) return undefined;
     const record = this.conversationRecords.get(conversationRecordId(incoming));
     if (!record) return undefined;
     let consumeBatch = false;
@@ -399,7 +420,9 @@ export async function runtime_runUserGroupchatOrchestrator(this: RuntimeHost,
       const promptRequest = await this.renderPromptRequest("orchestrator.user-group", {
         "orchestrator.payload": payload
       });
+      options.signal?.throwIfAborted();
       let output = "";
+      const modelSignal = auxiliaryModelSignal(options.signal);
       for (let attempt = 1; attempt <= ORCHESTRATOR_MAX_RETRIES + 1; attempt += 1) {
         const attemptContext = {
           ...logContext,
@@ -409,13 +432,16 @@ export async function runtime_runUserGroupchatOrchestrator(this: RuntimeHost,
         };
         lastAttempt = attempt;
         try {
-          if (options.signal?.aborted) throw options.signal.reason ?? new Error("ambient reply cancelled");
-          output = await withAbortTimeout(
-            (signal) => this.completePrompt(provider, promptRequest, { logContext: attemptContext, signal }),
-            AMBIENT_ORCHESTRATOR_TIMEOUT_MS,
-            undefined,
-            options.signal
+          if (modelSignal.aborted) throw modelSignal.reason ?? new Error("ambient reply cancelled");
+          output = await this.completePrompt(
+            provider,
+            promptRequest,
+            auxiliaryProviderCompleteOptions({
+              logContext: attemptContext,
+              signal: modelSignal
+            })
           );
+          modelSignal.throwIfAborted();
           await appendRequestLog({
             category: "runtime.action",
             action: "orchestrator.attempt",
@@ -425,8 +451,7 @@ export async function runtime_runUserGroupchatOrchestrator(this: RuntimeHost,
           break;
         } catch (error) {
           const detail = sanitizeErrorDetail(errorMessage(options.signal?.reason ?? error));
-          const timedOut = /timed out|timeout/i.test(detail);
-          if (options.signal?.aborted && !timedOut) throw error;
+          if (options.signal?.aborted) throw options.signal.reason ?? error;
           const willRetry = attempt <= ORCHESTRATOR_MAX_RETRIES;
           await appendRequestLog({
             category: "runtime.action",
@@ -445,6 +470,7 @@ export async function runtime_runUserGroupchatOrchestrator(this: RuntimeHost,
       };
       const decision = parseUserGroupOrchestratorDecision(output, replyCandidateMessageIds);
       if (!decision) throw new Error("编排器输出缺少有效的触发原因或回复消息 ID。");
+      options.signal?.throwIfAborted();
       const result = userGroupOrchestratorResult(decision);
       const shouldReply = Boolean(result);
       this.recordOrchestratorDecision(record, {
@@ -476,7 +502,7 @@ export async function runtime_runUserGroupchatOrchestrator(this: RuntimeHost,
     } catch (error) {
       const detail = sanitizeErrorDetail(errorMessage(options.signal?.reason ?? error));
       const timedOut = /timed out|timeout/i.test(detail);
-      if (options.signal?.aborted && !timedOut) return undefined;
+      if (options.signal?.aborted) return undefined;
       console.error("[runtime] user groupchat orchestrator failed", {
         groupId: incoming.groupId,
         messageId: incoming.messageId,
@@ -508,7 +534,7 @@ export async function runtime_runUserGroupchatOrchestrator(this: RuntimeHost,
       consumeBatch = true;
       return undefined;
     } finally {
-      if (consumeBatch) {
+      if (consumeBatch && !options.signal?.aborted && this.isRuntimeActive()) {
         this.consumeOrchestratorBatch(record, options.captureSequence ?? record.messageCount);
         this.persistConversationRecords();
       }

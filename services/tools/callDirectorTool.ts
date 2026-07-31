@@ -5,7 +5,7 @@ export interface CallDirectorToolInput {
 }
 
 export interface CallDirectorToolPort {
-  execute(input: CallDirectorToolInput): Promise<unknown>;
+  execute(input: CallDirectorToolInput, signal?: AbortSignal): Promise<unknown>;
 }
 
 export const callDirectorTool = {
@@ -32,7 +32,11 @@ export const callDirectorTool = {
   strict: true
 } as const;
 
-export async function runCallDirector(input: unknown, port: CallDirectorToolPort) {
+export async function runCallDirector(
+  input: unknown,
+  port: CallDirectorToolPort,
+  signal?: AbortSignal
+) {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     return { ok: false, code: "CALL_DIRECTOR_INVALID", error: "call_director arguments must be an object." };
   }
@@ -43,5 +47,5 @@ export async function runCallDirector(input: unknown, port: CallDirectorToolPort
   if (typeof record.request !== "string" || !record.request.trim() || record.request.length > 4_000) {
     return { ok: false, code: "CALL_DIRECTOR_INVALID", error: "request must contain 1 to 4000 characters." };
   }
-  return port.execute({ request: record.request.trim() });
+  return port.execute({ request: record.request.trim() }, signal);
 }

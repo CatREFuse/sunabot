@@ -41,6 +41,7 @@ import {
 import {
   isProviderToolAvailable,
   isProviderDeferredTool,
+  providerCodexControlMode,
   providerToolExecutionMode,
   resolveProviderToolDefinitions
 } from "../../../services/tools/toolRegistry.js";
@@ -171,6 +172,7 @@ export class RegistryProviderToolExecutor implements ProviderToolExecutorPort {
     const deferredCalls = calls.filter((call) => isProviderDeferredTool(call.name, options));
     if (deferredCalls.length !== 1) return null;
     const call = deferredCalls[0]!;
+    if (isToolExecutionBlocked(call.name, options)) return null;
     if (!isProviderToolAvailable(call.name, options)) return null;
     if (!isToolEnabledForTurn(call.name, definitions)) return null;
     if (!isProviderDeferredTool(call.name, options)) return null;
@@ -191,7 +193,9 @@ export class RegistryProviderToolExecutor implements ProviderToolExecutorPort {
           ? {
               ...dispatch.workerArguments,
               __sunabot_admin_authorized: true,
-              ...(options.codexControl === true ? { __sunabot_control_authorized: true } : {})
+              ...(providerCodexControlMode(options)
+                ? { __sunabot_control_authorized: true }
+                : {})
             }
           : dispatch.workerArguments
       }
@@ -240,6 +244,9 @@ async function executeFunctionCall(
   state: TurnToolState
 ) {
   try {
+    if (isToolExecutionBlocked(call.name, options)) {
+      return { ok: false, error: `Tool ${call.name} is unavailable in this run.` };
+    }
     if (isMcpToolAlias(call.name)) {
       if (!options.mcp || !isToolEnabledForTurn(call.name, definitions)) {
         return { ok: false, error: `Tool ${call.name} is unavailable.` };
@@ -297,6 +304,10 @@ async function executeFunctionCall(
   } catch (error) {
     return { ok: false, error: errorMessage(error) };
   }
+}
+
+function isToolExecutionBlocked(name: string, options: ProviderCompleteOptions) {
+  return options.blockedToolExecutions?.some((toolName) => toolName === name) === true;
 }
 
 function toolCallSucceeded(result: unknown) {
@@ -605,7 +616,8 @@ async function runImageGeneration(
       referenceImageUrls: options.referenceImageUrls,
       imageReferences: options.imageReferences,
       resolveWorkbenchImagePaths: options.resolveWorkbenchImagePaths,
-      logContext: options.logContext
+      logContext: options.logContext,
+      signal: options.signal
     });
   } catch (error) {
     result = { ok: false, error: errorMessage(error) };
@@ -687,7 +699,7 @@ async function executeCallDirectorTool(
   options: ProviderCompleteOptions
 ) {
   if (!options.director) return { ok: false, error: "Daily director is unavailable." };
-  const result = await runCallDirector(args, options.director);
+  const result = await runCallDirector(args, options.director, options.signal);
   await appendToolLog(CALL_DIRECTOR_TOOL_NAME, call, args, result, options);
   return result;
 }

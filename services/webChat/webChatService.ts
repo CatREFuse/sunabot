@@ -9,11 +9,14 @@ import type {
   SenderLookupV1
 } from "../../packages/contracts/messaging/messages.js";
 import { ServiceError } from "../../packages/contracts/errors/serviceError.js";
+import { runModelTaskWithinDeadline } from "../../packages/contracts/model/modelTaskDeadline.js";
+import { AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS } from "../../packages/contracts/model/modelGateway.js";
 
 const WEB_CHAT_CONVERSATION_ID = "web:admin";
-const WEB_CHAT_REPLY_TIMEOUT_MS = 300_000;
+export const WEB_CHAT_REPLY_TIMEOUT_MS = AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS;
 
 export interface WebChatRuntimePort {
+  readonly runtimeSignal?: AbortSignal;
   adminIdentity(): { userId: string; name: string };
   getConversationMessages(conversationId: string, options: { limit: number }): object;
   incomingCaptureSequence(message: InboundMessageV1): number;
@@ -35,20 +38,57 @@ export interface WebChatRuntimePort {
 export class WebChatService {
   private messageSequence = 0;
   private pendingTurn: Promise<void> = Promise.resolve();
+  private readonly shutdownController = new AbortController();
 
-  constructor(private readonly runtime: WebChatRuntimePort) {}
+  constructor(
+    private readonly runtime: WebChatRuntimePort,
+    private readonly apiShutdownSignal?: AbortSignal
+  ) {}
 
   messages() {
     return this.runtime.getConversationMessages(WEB_CHAT_CONVERSATION_ID, { limit: 200 });
   }
 
-  async send(text: string) {
-    const turn = this.pendingTurn.then(() => this.runTurn(text));
+  send(text: string, callerSignal?: AbortSignal) {
+    const previousTurn = this.pendingTurn;
+    const parentSignals = [
+      this.shutdownController.signal,
+      ...(this.runtime.runtimeSignal ? [this.runtime.runtimeSignal] : []),
+      ...(this.apiShutdownSignal ? [this.apiShutdownSignal] : []),
+      ...(callerSignal ? [callerSignal] : [])
+    ];
+    const parentSignal = parentSignals.length === 1
+      ? parentSignals[0]!
+      : AbortSignal.any(parentSignals);
+    const turn = runModelTaskWithinDeadline(async (signal) => {
+      await previousTurn;
+      signal.throwIfAborted();
+      return this.runTurn(text, signal);
+    }, {
+      timeoutMs: WEB_CHAT_REPLY_TIMEOUT_MS,
+      parentSignal,
+      timeoutError: () => webChatTimeoutError()
+    }).catch((error) => {
+      throw normalizeWebChatAbort(
+        error,
+        callerSignal,
+        this.shutdownController.signal,
+        this.apiShutdownSignal,
+        this.runtime.runtimeSignal
+      );
+    });
     this.pendingTurn = turn.then(() => undefined, () => undefined);
     return turn;
   }
 
-  private async runTurn(text: string) {
+  close() {
+    if (!this.shutdownController.signal.aborted) {
+      this.shutdownController.abort(webChatShuttingDownError());
+    }
+  }
+
+  private async runTurn(text: string, signal: AbortSignal) {
+    signal.throwIfAborted();
     const admin = this.runtime.adminIdentity();
     const userId = Number(admin.userId);
     if (!Number.isSafeInteger(userId) || userId <= 0) {
@@ -78,11 +118,13 @@ export class WebChatService {
       quoteReferences: [],
       mentionedSelf: true
     };
+    signal.throwIfAborted();
     const captureSequence = this.runtime.incomingCaptureSequence(incoming);
+    signal.throwIfAborted();
     this.runtime.recordIncomingMessage(incoming, { expectedSequence: captureSequence });
+    signal.throwIfAborted();
 
-    const delivery = new WebChatDeliveryAdapter();
-    const signal = AbortSignal.timeout(WEB_CHAT_REPLY_TIMEOUT_MS);
+    const delivery = new WebChatDeliveryAdapter(signal);
     await this.runtime.replyToIncoming(WEB_CHAT_CONVERSATION_ID, incoming, delivery, {
       captureSequence,
       signal,
@@ -92,6 +134,7 @@ export class WebChatService {
       allowAsyncImage: false,
       allowImageTools: false
     });
+    signal.throwIfAborted();
     return { ok: true, delivered: delivery.messages.length, ...this.messages() };
   }
 }
@@ -99,12 +142,16 @@ export class WebChatService {
 class WebChatDeliveryAdapter implements MessagingPort {
   readonly messages: OutboundMessageV1[] = [];
 
+  constructor(private readonly signal: AbortSignal) {}
+
   getStatus(): MessagingStatusV1 {
     return { connected: true, connections: 1, selfIds: ["web"] };
   }
 
   async send(message: OutboundMessageV1): Promise<MessagingReceiptV1> {
+    this.signal.throwIfAborted();
     this.messages.push(message);
+    this.signal.throwIfAborted();
     return { accepted: true, messageId: message.id };
   }
 
@@ -115,4 +162,43 @@ class WebChatDeliveryAdapter implements MessagingPort {
   async getMessage(_messageId: number): Promise<MessageDetailsV1> {
     throw new Error("Web Chat 不支持读取外部消息。");
   }
+}
+
+function normalizeWebChatAbort(
+  error: unknown,
+  callerSignal: AbortSignal | undefined,
+  shutdownSignal: AbortSignal,
+  apiShutdownSignal: AbortSignal | undefined,
+  runtimeSignal: AbortSignal | undefined
+) {
+  if (error instanceof ServiceError) return error;
+  if (shutdownSignal.aborted || apiShutdownSignal?.aborted || runtimeSignal?.aborted) {
+    return webChatShuttingDownError();
+  }
+  if (callerSignal?.aborted) return webChatRequestAbortedError();
+  return error;
+}
+
+function webChatTimeoutError() {
+  return new ServiceError(
+    504,
+    "WEB_CHAT_REPLY_TIMEOUT",
+    "Web Chat 回复超时，请重试。"
+  );
+}
+
+function webChatRequestAbortedError() {
+  return new ServiceError(
+    499,
+    "WEB_CHAT_REQUEST_ABORTED",
+    "请求已取消。"
+  );
+}
+
+function webChatShuttingDownError() {
+  return new ServiceError(
+    503,
+    "WEB_CHAT_SHUTTING_DOWN",
+    "Web Chat 正在关闭，请稍后重试。"
+  );
 }

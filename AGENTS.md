@@ -66,6 +66,8 @@
 | `docs/user-tests/add-workmemory-direct-write.md` | 主对话模型同轮调用 `add_workmemory` 直写短期工作记忆的用户用例 | 修改工作记忆工具、主回复工具调用规则或直写审计前读取 |
 | `docs/user-tests/sampled-memory-compression.md` | 运行中测试账号 V2 样本的内容无关记忆压缩模板 | 从只读样本派生真实数据记忆压缩 case 时读取 |
 | `docs/user-tests/sampled-dream.md` | 运行中测试账号 V2 样本的内容无关 Dream 模板 | 从只读样本派生真实数据 Dream case 时读取 |
+| `docs/user-tests/cases/memory-system/10-memory-provider-long-response.md` | 记忆 Provider 跨过旧 120 秒边界并受 10 分钟总预算约束 | 修改记忆模型超时、传输重试或异步 Provider 预算时读取 |
+| `docs/user-tests/cases/admin-console/web-chat-deadline-cancellation.md` | Web Chat 十分钟硬截止、客户端断开与服务关闭取消 | 修改 Web Chat 回复期限、请求取消或关闭生命周期时读取 |
 
 新增、移动、重命名或删除 `docs/` 下的有效文档时，必须同步更新本索引。历史方案不进入当前索引。
 

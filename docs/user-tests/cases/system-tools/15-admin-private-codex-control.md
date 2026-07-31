@@ -6,11 +6,13 @@ An administrator uses the macOS Native Codex control surface to list visible loc
 
 ## Preconditions
 
-Run only in a unique isolated workspace on macOS Native Core with the Codex app-server executable and the administrator-private control authorization available. The selected Provider is explicitly authorized to receive the rendered persona, system prompt, relevant isolated context, and effective tool schemas. The mock transport must remain active; do not connect to NapCat or send a real QQ message.
+Run only in a unique isolated workspace on macOS Native Core with the Codex app-server executable and the administrator-private control authorization available. This turn contains no current or quoted media, so the control schema remains eligible. The selected Provider is explicitly authorized to receive the rendered persona, system prompt, relevant isolated context, and effective tool schemas. The mock transport must remain active; do not connect to NapCat or send a real QQ message.
 
 ## Mechanical review
 
 Confirm that the effective Provider catalog contains the control-mode `codex` schema and that the successful call uses `action=list_sessions`, `ssh_host=null`, `task=null`, `workspace_path=null`, `thread_id=null`, `query=null`, and a limit no greater than five. The completed callback may report an empty list or visible sessions, but it must not start or resume a thread, mutate a workspace, disclose Provider credentials, or claim an unavailable result.
+
+For the same no-media local control contract, `start` and `resume` may also submit `workspace_path=null`; the host must use only the runtime-provided trusted project workspace. An SSH `start` or `resume` with `workspace_path=null` remains invalid and must not fall back to a local path.
 
 <!-- sunabot-user-test-case:v1 -->
 ```json

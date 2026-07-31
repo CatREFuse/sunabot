@@ -18,6 +18,8 @@ export function codexTurnAvailable(input: {
   enabled: boolean;
   control: boolean;
   workerAvailable: boolean;
+  requiresWorker?: boolean;
 }) {
-  return input.enabled && (input.control || input.workerAvailable);
+  return input.enabled
+    && (input.workerAvailable || (input.control && input.requiresWorker !== true));
 }

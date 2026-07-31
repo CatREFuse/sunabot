@@ -6,7 +6,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { nanoid } from "nanoid";
-import type { AppConfig } from "../../packages/contracts/admin/public.js";
+import type { AgentToolName, AppConfig } from "../../packages/contracts/admin/public.js";
 import type { OneBotEvent } from "../../adapters/onebot/protocol.js";
 import { OneBotGateway } from "../../adapters/onebot/onebotGateway.js";
 import { parseOneBotInboundMessage } from "../../adapters/onebot/inboundMessageAdapter.js";
@@ -47,7 +47,12 @@ import {
   materializeDreamAtRuntime,
   materializeMemoryCompressionAtRuntime
 } from "./timeline.js";
-import { resetUserTestKnowledgeDirectory } from "./workspace.js";
+import {
+  assertUserTestWorkspace,
+  installIsolatedCodexGuiHome,
+  isProviderRouteLockMarker,
+  resetUserTestKnowledgeDirectory
+} from "./workspace.js";
 import {
   evaluateHarnessAssertions,
   evaluateProviderEvidence,
@@ -58,6 +63,13 @@ import {
 } from "./assertions.js";
 
 const REPOSITORY_ROOT = fileURLToPath(new URL("../..", import.meta.url));
+const BLOCKED_EXTERNAL_TOOL_EXECUTIONS = [
+  "websearch",
+  "webfetch",
+  "generate_img",
+  "selfie",
+  "send_voice_message"
+] as const satisfies readonly AgentToolName[];
 
 export async function runRuntimeUserTest(
   testCase: UserTestCase,
@@ -76,7 +88,11 @@ export async function runRuntimeUserTest(
   };
   let executionStatus: UserTestRunReport["execution"]["status"] = "passed";
   let executionError: string | undefined;
+  let restoreCodexGuiHome = () => undefined;
   try {
+    const workspace = String(process.env.SUNABOT_WORKSPACE ?? "").trim();
+    if (workspace) await assertUserTestWorkspace(workspace);
+    restoreCodexGuiHome = await installIsolatedCodexGuiHome();
     const [{ loadConfig }, { buildApp }] = await Promise.all([
       import("../../src/config.js"),
       import("../../apps/api/server.js")
@@ -93,6 +109,7 @@ export async function runRuntimeUserTest(
       logger: false
     });
     projectConversationActor(built.runtime.config, testCase);
+    await installProviderEgressLock(built.runtime);
     await prepareRuntime(built.runtime, config);
     const requestLogStart = Date.now();
     if (testCase.kind === "conversation") {
@@ -154,6 +171,7 @@ export async function runRuntimeUserTest(
     executionError = stableError(error);
   } finally {
     await built?.app.close().catch(() => undefined);
+    restoreCodexGuiHome();
   }
   return {
     schemaVersion: 1,
@@ -181,6 +199,37 @@ export async function runRuntimeUserTest(
         ? "fail"
         : "inconclusive"
   };
+}
+
+export async function installProviderEgressLock(
+  runtime: Awaited<ReturnType<typeof import("../../apps/api/server.js")["buildApp"]>>["runtime"],
+  environment: NodeJS.ProcessEnv = process.env
+) {
+  const workspace = environment.SUNABOT_WORKSPACE;
+  if (!workspace) return;
+  const marker = JSON.parse(await fs.readFile(
+    path.join(workspace, ".sunabot-user-test-workspace.json"),
+    "utf8"
+  )) as Record<string, unknown>;
+  const routeLock = marker.providerRouteLock;
+  if (!isProviderRouteLockMarker(routeLock)) return;
+  const blockedByHarness = marker.codexAuthCopied === true
+    ? BLOCKED_EXTERNAL_TOOL_EXECUTIONS
+    : [...BLOCKED_EXTERNAL_TOOL_EXECUTIONS, "codex"] as const;
+  const original = runtime.completePromptTurn.bind(runtime);
+  runtime.completePromptTurn = ((provider, request, options = {}) => original(
+    provider,
+    request,
+    {
+      ...options,
+      blockedToolExecutions: [
+        ...new Set([
+          ...(options.blockedToolExecutions ?? []),
+          ...blockedByHarness
+        ])
+      ]
+    }
+  )) as typeof runtime.completePromptTurn;
 }
 
 function projectConversationActor(config: AppConfig, testCase: UserTestCase) {

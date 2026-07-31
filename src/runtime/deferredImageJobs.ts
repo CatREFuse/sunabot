@@ -54,27 +54,45 @@ export async function runtime_processDeferredToolJob(
     originalRequest.workbenchImagesByPath
   );
   const result = job.toolName === GENERATE_IMG_TOOL_NAME
-    ? await runGenerateImg(input, this.config.bot, (prompt, size, quality, referenceImageUrls, childLogContext) =>
-        provider.generateImage(prompt, size, quality, referenceImageUrls, childLogContext ?? logContext), {
+    ? await runGenerateImg(input, this.config.bot, (
+        prompt,
+        size,
+        quality,
+        referenceImageUrls,
+        childLogContext,
+        childSignal
+      ) =>
+        provider.generateImage(
+          prompt,
+          size,
+          quality,
+          referenceImageUrls,
+          childLogContext ?? logContext,
+          childSignal ?? signal
+        ), {
         referenceImageUrls: inboundImageUrls(incoming),
         imageReferences,
         resolveWorkbenchImagePaths,
-        logContext
+        logContext,
+        signal
       })
     : job.toolName === SELFIE_TOOL_NAME
       ? await this.runSelfie(input, provider, {
           chatReferenceImageUrls: this.collectSelfieChatReferenceImages(incoming, captureSequence),
           imageReferences,
           resolveWorkbenchImagePaths,
-          logContext
+          logContext,
+          signal
         })
       : { ok: false, error: `不支持的异步工具：${job.toolName}` };
+  signal.throwIfAborted();
   if (isSuccessfulGeneratedImageResult(result)) {
     recordGeneratedImageHistory(this.config, result.image, {
       prompt: readStringField(result, "prompt"),
       size: readStringField(result, "size"),
       resolution: readStringField(result, "resolution")
     });
+    signal.throwIfAborted();
   }
   const record = result as { ok?: unknown; error?: unknown };
   return record.ok === true

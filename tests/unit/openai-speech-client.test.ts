@@ -2,9 +2,11 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import {
+  DEFAULT_OPENAI_SPEECH_TIMEOUT_MS,
   OpenAiSpeechClient,
   OpenAiSpeechError,
 } from "../../adapters/voice/openAiSpeechClient.js";
+import { AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS } from "../../packages/contracts/model/modelGateway.js";
 
 describe("OpenAiSpeechClient", () => {
   it("checks the configured model with bearer authentication", async () => {
@@ -26,6 +28,19 @@ describe("OpenAiSpeechClient", () => {
       redirect: "error",
       headers: { Authorization: "Bearer secret-key" },
     });
+    expect(DEFAULT_OPENAI_SPEECH_TIMEOUT_MS).toBe(AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS);
+  });
+
+  it("rejects a voice response deadline shorter than 10 minutes", () => {
+    expect(() => new OpenAiSpeechClient({
+      baseUrl: "https://voice.example/v1",
+      apiKey: "secret-key",
+      model: "gpt-4o-mini-tts",
+      timeoutMs: AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS - 1,
+      fetchImpl: vi.fn()
+    })).toThrowError(expect.objectContaining({
+      code: "VOICE_PROVIDER_CONFIG_INVALID"
+    }));
   });
 
   it("generates WAV with built-in and custom OpenAI voice values", async () => {

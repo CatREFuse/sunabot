@@ -2,11 +2,13 @@
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS } from "../../packages/contracts/model/modelGateway.js";
 import type { CodexRunner } from "../../packages/contracts/tools/codex.js";
 import { SessionActorTaskTimeoutError } from "../../services/sessions/sessionActor.js";
 import type {
   CodexCoordinatorSettings,
   CodexToolUsageObserver,
+  DeferredToolRunner,
   SessionClaimState
 } from "../../services/sessions/sessionCoordinatorTypes.js";
 import { SessionStore, type ToolJobRecord } from "../../services/sessions/sessionStore.js";
@@ -16,11 +18,99 @@ const TOOL_WORKER_ID = "tool-worker";
 const stores: SessionStore[] = [];
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   for (const store of stores.splice(0)) store.close();
 });
 
 describe("SessionToolJobProcessor Codex usage observation", () => {
+  it("hard-settles a deferred runner at 600 seconds before the 605-second actor deadline", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-31T00:00:00.000Z"));
+    const store = trackStore(new SessionStore({ databasePath: ":memory:" }));
+    const job = claimDeferredJob(store, "group:image-hard-deadline", "generate_img");
+    const lateResult = deferred<{
+      status: "succeeded";
+      result: { ok: true };
+    }>();
+    let taskSignal: AbortSignal | undefined;
+    const runDeferredTool: DeferredToolRunner = vi.fn(async (_job, signal) => {
+      taskSignal = signal;
+      return lateResult.promise;
+    });
+    const harness = createProcessorHarness(
+      store,
+      { run: vi.fn() } as unknown as CodexRunner,
+      vi.fn(),
+      runDeferredTool
+    );
+
+    const processing = harness.processor.process(
+      { job, settings: harness.settings, state: harness.state },
+      harness.actor.signal
+    );
+    await vi.advanceTimersByTimeAsync(AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS - 1);
+
+    expect(taskSignal?.aborted).toBe(false);
+    expect(harness.actor.signal.aborted).toBe(false);
+    expect(store.getToolJob(job.id)?.status).toBe("running");
+
+    await vi.advanceTimersByTimeAsync(1);
+    await processing;
+
+    expect(taskSignal?.aborted).toBe(true);
+    expect(taskSignal?.reason).toMatchObject({ name: "TimeoutError" });
+    expect(harness.actor.signal.aborted).toBe(false);
+    expect(store.getToolJob(job.id)).toMatchObject({
+      status: "timed_out",
+      error: {
+        name: "TimeoutError",
+        message: `model task timed out after ${AUXILIARY_MODEL_RESPONSE_TIMEOUT_MS}ms`
+      }
+    });
+    expect(store.listEvents(job.sessionId).filter((event) => event.kind === "tool_completion"))
+      .toHaveLength(1);
+
+    lateResult.resolve({ status: "succeeded", result: { ok: true } });
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(store.getToolJob(job.id)?.status).toBe("timed_out");
+    expect(store.listEvents(job.sessionId).filter((event) => event.kind === "tool_completion"))
+      .toHaveLength(1);
+  });
+
+  it("persists a deferred Provider timeout as timed_out", async () => {
+    const store = trackStore(new SessionStore({ databasePath: ":memory:" }));
+    const job = claimDeferredJob(store, "group:image-timeout", "generate_img");
+    const timeout = new DOMException("image response timed out", "TimeoutError");
+    const runDeferredTool = vi.fn(async () => {
+      throw timeout;
+    });
+    const harness = createProcessorHarness(
+      store,
+      { run: vi.fn() } as unknown as CodexRunner,
+      vi.fn(),
+      runDeferredTool
+    );
+
+    await harness.processor.process(
+      { job, settings: harness.settings, state: harness.state },
+      harness.actor.signal
+    );
+
+    expect(runDeferredTool).toHaveBeenCalledOnce();
+    expect(store.getToolJob(job.id)).toMatchObject({
+      status: "timed_out",
+      error: {
+        name: "TimeoutError",
+        message: "image response timed out"
+      }
+    });
+    expect(store.listEvents(job.sessionId).filter((event) => event.kind === "tool_completion"))
+      .toHaveLength(1);
+  });
+
   it("commits the terminal result before waiting for the usage observer", async () => {
     const store = trackStore(new SessionStore({ databasePath: ":memory:" }));
     const job = claimCodexJob(store, "group:slow-observer");
@@ -193,11 +283,13 @@ describe("SessionToolJobProcessor Codex usage observation", () => {
 function createProcessorHarness(
   store: SessionStore,
   codexRunner: CodexRunner,
-  observeCodexToolUsage: CodexToolUsageObserver
+  observeCodexToolUsage: CodexToolUsageObserver,
+  runDeferredTool?: DeferredToolRunner
 ) {
   const state: SessionClaimState = {
     controller: new AbortController(),
     finalized: false,
+    finalizationAttempted: false,
     stopRenewal: () => undefined
   };
   const actor = new AbortController();
@@ -214,6 +306,7 @@ function createProcessorHarness(
     codexRunner,
     cleanupCodexProcess: async () => ({ status: "terminated" }),
     observeCodexToolUsage,
+    runDeferredTool,
     workerId: TOOL_WORKER_ID,
     isStopped: () => false,
     assertClaimUsable(claim, signal) {
@@ -227,6 +320,15 @@ function createProcessorHarness(
 }
 
 function claimCodexJob(store: SessionStore, sessionId: string): ToolJobRecord {
+  return claimDeferredJob(store, sessionId, "codex", "analysis");
+}
+
+function claimDeferredJob(
+  store: SessionStore,
+  sessionId: string,
+  toolName: string,
+  taskKind?: string
+): ToolJobRecord {
   store.enqueueEvent({ sessionId, kind: "incoming", payload: { text: "run" } });
   const turn = store.claimNextTurn({ workerId: "turn-worker", sessionId })!;
   store.deferTurn({
@@ -234,10 +336,12 @@ function claimCodexJob(store: SessionStore, sessionId: string): ToolJobRecord {
     workerId: "turn-worker",
     job: {
       providerCallId: `call:${sessionId}`,
-      toolName: "codex",
-      taskKind: "analysis",
+      toolName,
+      ...(taskKind ? { taskKind } : {}),
       originalRequest: turn.event.payload,
-      arguments: { task: "inspect", kind: "analysis" }
+      arguments: toolName === "codex"
+        ? { task: "inspect", kind: "analysis" }
+        : { prompt: "draw" }
     },
     acknowledgement: { kind: "reply", payload: { text: "started" } }
   });

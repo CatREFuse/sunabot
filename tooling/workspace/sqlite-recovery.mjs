@@ -423,6 +423,7 @@ export async function verifyRecoveryPoint(backupDirectoryInput, options = {}) {
     const inspection = verifyDatabaseFile(databasePath, definition, expected, {
       databaseInspectionExtension: options.databaseInspectionExtension
     });
+    await options.databaseClosedObserver?.({ databasePath, id: definition.id });
     const afterOpen = await fs.lstat(databasePath);
     assertRecoveryFileIdentity(afterOpen, identity, definition.id);
     inspections.push({
