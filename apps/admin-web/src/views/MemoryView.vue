@@ -112,18 +112,6 @@ const visibleEntries = computed(() => {
   return sortedEntries.value.slice(offset, offset + PAGE_SIZE);
 });
 const recallStale = computed(() => data.recallActive.value && query.value.trim() !== committedRecallQuery.value);
-const processingSuccessRate = computed(() => {
-  const health = data.health.value;
-  if (!health?.attempted) return "--";
-  const percentage = (health.successful / health.attempted) * 100;
-  return `${Number.isInteger(percentage) ? percentage : percentage.toFixed(1)}%`;
-});
-const processingAttemptRatio = computed(() => {
-  const health = data.health.value;
-  return `${health?.successful ?? 0} / ${health?.attempted ?? 0}`;
-});
-const pendingMemoryMessages = computed(() => data.health.value?.pending ?? "--");
-
 onBeforeUnmount(data.dispose);
 onBeforeUnmount(dreams.dispose);
 onBeforeUnmount(operationLogs.dispose);
@@ -373,18 +361,6 @@ function sectionCount(sectionId: MemorySectionId) {
         <p v-if="listSection && sortedEntries.length !== currentTotal" class="memory-visible-count text-right font-mono text-[11px] text-mute">
           当前显示 {{ sortedEntries.length }} 条
         </p>
-        <div class="memory-health-strip" :aria-busy="data.loading.value">
-          <div class="memory-health-metric" aria-label="24 小时记忆处理成功率">
-            <strong>{{ processingSuccessRate }}</strong>
-            <span>24 小时成功率</span>
-            <small>{{ processingAttemptRatio }}</small>
-          </div>
-          <div class="memory-health-metric" aria-label="待处理记忆消息">
-            <strong>{{ pendingMemoryMessages }}</strong>
-            <span>待处理</span>
-            <small>条消息</small>
-          </div>
-        </div>
       </section>
 
       <p v-if="status" class="mb-5 inline-state" :data-kind="statusKind || undefined" role="status" aria-live="polite">{{ status }}</p>
@@ -605,48 +581,6 @@ function sectionCount(sectionId: MemorySectionId) {
   align-self: end;
 }
 
-.memory-health-strip {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  border-top: 1px solid rgb(var(--color-line));
-  padding-top: 16px;
-}
-
-.memory-health-metric {
-  display: grid;
-  min-width: 0;
-  grid-template-columns: max-content minmax(0, 1fr);
-  align-items: baseline;
-  column-gap: 8px;
-}
-
-.memory-health-metric + .memory-health-metric {
-  border-left: 1px solid rgb(var(--color-line));
-  padding-left: 16px;
-}
-
-.memory-health-metric strong {
-  font-family: "Doto Variable", "Doto", ui-monospace, monospace;
-  font-size: 24px;
-  font-weight: 600;
-  line-height: 1;
-  letter-spacing: -0.04em;
-  color: rgb(var(--color-display));
-}
-
-.memory-health-metric span,
-.memory-health-metric small {
-  font-family: "Space Mono", ui-monospace, monospace;
-  font-size: 10px;
-  white-space: nowrap;
-  color: rgb(var(--color-mute));
-}
-
-.memory-health-metric small {
-  grid-column: 1 / -1;
-  margin-top: 6px;
-}
-
 .memory-command-bar {
   display: grid;
   grid-template-areas:
@@ -699,22 +633,6 @@ function sectionCount(sectionId: MemorySectionId) {
 
   .memory-visible-count {
     grid-column: 1;
-  }
-
-  .memory-health-strip {
-    grid-column: 2;
-    grid-row: 1 / span 2;
-    min-width: 0;
-    border-top: 0;
-    padding-top: 0;
-  }
-
-  .memory-health-metric {
-    padding-inline: 20px;
-  }
-
-  .memory-health-metric:first-child {
-    border-left: 1px solid rgb(var(--color-line));
   }
 
   .memory-command-bar {

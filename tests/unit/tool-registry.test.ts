@@ -46,9 +46,10 @@ describe("ToolRegistry", () => {
     expect(metadata.some((tool) => tool.name === "docker_bash")).toBe(true);
     expect(metadata.some((tool) => tool.name === "bash.run")).toBe(false);
     expect(metadata.map((tool) => tool.name)).toEqual(
-      AGENT_TOOL_NAMES.filter((name) => name !== "add_workmemory")
+      AGENT_TOOL_NAMES.filter((name) => name !== "add_workmemory" && name !== "add_user_profile")
     );
     expect(metadata.some((tool) => tool.name === "add_workmemory")).toBe(false);
+    expect(metadata.some((tool) => tool.name === "add_user_profile")).toBe(false);
     expect(metadata.some((tool) => tool.name === "system.time")).toBe(false);
     expect(metadata.some((tool) => tool.name === "onebot.send_message")).toBe(false);
     expect(metadata.some((tool) => tool.name === "provider.test")).toBe(false);
@@ -75,6 +76,22 @@ describe("ToolRegistry", () => {
       .toEqual(["add_workmemory"]);
     expect(isProviderToolAvailable("add_workmemory", options)).toBe(true);
     expect(listToolMetadata(options).some((tool) => tool.name === "add_workmemory")).toBe(false);
+  });
+
+  it("always exposes add_user_profile in ordinary host-bound turns without a settings switch", () => {
+    const options = {
+      userProfile: { execute: vi.fn() },
+      disabledTools: ["add_user_profile"] as const,
+      bot: {
+        tools: {
+          overrides: { add_user_profile: { enabled: false } }
+        }
+      }
+    } as unknown as ProviderCompleteOptions;
+    expect(resolveProviderToolDefinitions(options, []).map((tool) => tool.name))
+      .toEqual(["add_user_profile"]);
+    expect(isProviderToolAvailable("add_user_profile", options)).toBe(true);
+    expect(listToolMetadata(options).some((tool) => tool.name === "add_user_profile")).toBe(false);
   });
 
   it("applies the conversation selection after the Agent master switch", async () => {

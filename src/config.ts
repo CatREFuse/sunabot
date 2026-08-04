@@ -148,14 +148,10 @@ export function defaultConfig(): AppConfig {
       memory: {
         memoryModel: "gpt-5.4-mini",
         reasoningEffort: "low",
-        messageThreshold: 16,
-        workingMemoryMaxEntries: 100,
         dreamRecentWindowHours: 24,
         dreamRecentMemoryLimit: 24,
         dreamOlderMemoryLimit: 12,
-        workMemoryCompressInPrompt: "work_memory_compress_in.json",
-        workMemoryCompressOutPrompt: "work_memory_compress_out.json",
-        userProfilePrompt: "user_profile_prompt.json"
+        workMemoryCompressOutPrompt: "work_memory_compress_out.json"
       },
       orchestrator: {
         enabled: false,
@@ -570,8 +566,6 @@ function mergeBotMemorySettings(base: BotMemorySettings, incoming: Partial<BotMe
   return {
     memoryModel,
     reasoningEffort: normalizeModelEffort(memoryModel, incoming?.reasoningEffort),
-    messageThreshold: normalizeInteger(incoming?.messageThreshold, base.messageThreshold, 1, 200),
-    workingMemoryMaxEntries: normalizeInteger(incoming?.workingMemoryMaxEntries, base.workingMemoryMaxEntries, 1, 1000),
     dreamRecentWindowHours: normalizeDreamInteger(
       incoming?.dreamRecentWindowHours,
       base.dreamRecentWindowHours,
@@ -580,9 +574,7 @@ function mergeBotMemorySettings(base: BotMemorySettings, incoming: Partial<BotMe
     ),
     dreamRecentMemoryLimit: validSelectionSize ? recentLimit : base.dreamRecentMemoryLimit,
     dreamOlderMemoryLimit: validSelectionSize ? olderLimit : base.dreamOlderMemoryLimit,
-    workMemoryCompressInPrompt: normalizePromptFile(incoming?.workMemoryCompressInPrompt, base.workMemoryCompressInPrompt),
-    workMemoryCompressOutPrompt: normalizePromptFile(incoming?.workMemoryCompressOutPrompt, base.workMemoryCompressOutPrompt),
-    userProfilePrompt: normalizePromptFile(incoming?.userProfilePrompt, base.userProfilePrompt)
+    workMemoryCompressOutPrompt: normalizePromptFile(incoming?.workMemoryCompressOutPrompt, base.workMemoryCompressOutPrompt)
   };
 }
 

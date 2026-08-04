@@ -28,7 +28,6 @@ const sourceLabels: Readonly<Record<string, string>> = {
 };
 const actorLabels: Readonly<Record<string, string>> = {
   model_tool: "模型工具",
-  memory_pipeline: "记忆整理",
   admin: "管理台",
   dream: "Dream",
   system: "系统",

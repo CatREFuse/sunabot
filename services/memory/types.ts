@@ -106,34 +106,6 @@ export interface MemoryFactInput {
   promoteToLongTerm?: boolean;
 }
 
-export interface WorkingMemorySnapshot {
-  token: string;
-  entries: MemoryEntry[];
-}
-
-export type ReplaceWorkingMemoryFactsResult =
-  | { status: "applied"; entries: MemoryEntry[] }
-  | { status: "snapshot_conflict" };
-
-export interface MemoryBatchTransactionInput {
-  batchId: string;
-  expectedWorkingSnapshotToken: string;
-  workingFacts: MemoryFactInput[];
-  userProfileFacts: MemoryFactInput[];
-  longTermFacts: MemoryFactInput[];
-  metadata?: Record<string, unknown>;
-}
-
-export type ApplyMemoryBatchTransactionResult =
-  | {
-    status: "applied";
-    transactionId: string;
-    workingEntries: MemoryEntry[];
-    userProfileEntries: MemoryEntry[];
-    longTermEntries: MemoryEntry[];
-  }
-  | { status: "snapshot_conflict" };
-
 export interface MemoryRecallInput {
   query?: unknown;
   source?: unknown;
@@ -239,17 +211,6 @@ export interface UserProfileAggregate {
   addressNames: string[];
   facts: string[];
   factKeys: Set<string>;
-  createdAt: string;
-  updatedAt: string;
-  time: string;
-  source: string;
-}
-
-export interface UserProfileFactGroup {
-  userId: string;
-  userName: string;
-  addressNames: string[];
-  facts: string[];
   createdAt: string;
   updatedAt: string;
   time: string;

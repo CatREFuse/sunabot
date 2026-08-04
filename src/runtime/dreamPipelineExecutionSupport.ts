@@ -21,16 +21,9 @@ export function combineDreamPipelineSignals(...signals: Array<AbortSignal | unde
 }
 
 export function dreamPipelineModelExpectations(payload: DreamPipelineJsonObject) {
-  return {
-    workingMemoryIds: promptMemoryIds(payload.workingMemories, "workingMemories"),
-    longTermMemoryIds: promptMemoryIds(payload.longTermMemories, "longTermMemories"),
-    personaEvidenceIds: stringArray(payload.personaEvidenceIds, "personaEvidenceIds"),
-    fieldKnowledgeEvidenceIds: stringArray(
-      payload.fieldKnowledgeEvidenceIds ?? [],
-      "fieldKnowledgeEvidenceIds"
-    ),
-    fieldKnowledgeWritable: payload.fieldKnowledgeWritable === true
-  };
+  if (typeof payload.workingMemory !== "string") {
+    throw new DreamRunError("DREAM_INPUT_INVALID", "workingMemory is invalid.", false);
+  }
 }
 
 export function dreamPipelineRecentWindowHours(payload: DreamPipelineJsonObject) {
@@ -52,32 +45,14 @@ export function dreamPipelineRecallStats(
 }
 
 export function dreamPipelinePromptRecords(payload: DreamPipelineJsonObject) {
-  return [payload.workingMemories, payload.longTermMemories].flatMap((value, groupIndex) => {
-    if (!Array.isArray(value)) {
-      throw new DreamRunError("DREAM_INPUT_INVALID", `memory group ${groupIndex} is invalid.`, false);
-    }
-    return value.map((item, index) => {
-      if (!isDreamPipelineObject(item) || !isDreamPipelineObject(item.memory)) {
-        throw new DreamRunError("DREAM_INPUT_INVALID", `memory group ${groupIndex}[${index}] is invalid.`, false);
-      }
-      return item.memory;
-    });
-  });
-}
-
-function promptMemoryIds(value: unknown, field: string) {
-  if (!Array.isArray(value)) throw new DreamRunError("DREAM_INPUT_INVALID", `${field} is invalid.`, false);
-  return value.map((item, index) => {
-    if (!isDreamPipelineObject(item) || typeof item.id !== "string") {
-      throw new DreamRunError("DREAM_INPUT_INVALID", `${field}[${index}] is invalid.`, false);
-    }
-    return item.id;
-  });
-}
-
-function stringArray(value: unknown, field: string) {
-  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
-    throw new DreamRunError("DREAM_INPUT_INVALID", `${field} is invalid.`, false);
+  const value = payload.longTermMemories;
+  if (!Array.isArray(value)) {
+    throw new DreamRunError("DREAM_INPUT_INVALID", "longTermMemories is invalid.", false);
   }
-  return value as string[];
+  return value.map((item, index) => {
+    if (!isDreamPipelineObject(item) || !isDreamPipelineObject(item.memory)) {
+      throw new DreamRunError("DREAM_INPUT_INVALID", `longTermMemories[${index}] is invalid.`, false);
+    }
+    return item.memory;
+  });
 }

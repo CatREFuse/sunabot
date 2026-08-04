@@ -139,25 +139,11 @@ export const PROMPT_FILE_DEFINITIONS = [
     ]
   ),
   final(
-    "memory.compress-in",
-    "工作记忆提取",
-    "记忆",
-    (config) => config.bot.memory.workMemoryCompressInPrompt,
-    [variable("memory.payload", "原工作记忆、参与者和本批消息", "json", "记忆引擎")]
-  ),
-  final(
     "memory.compress-out",
     "长期记忆压缩",
     "记忆",
     (config) => config.bot.memory.workMemoryCompressOutPrompt,
     [variable("memory.payload", "待压缩的完整工作记忆", "json", "记忆引擎")]
-  ),
-  final(
-    "memory.user-profile",
-    "用户画像提取",
-    "记忆",
-    (config) => config.bot.memory.userProfilePrompt,
-    [variable("profile.payload", "参与者、原画像和本批消息", "json", "用户画像引擎")]
   ),
   final(
     DREAM_PROMPT_ID,

@@ -8,18 +8,29 @@ import {
 } from "./caseDocument.js";
 import type {
   DreamUserTestInput,
-  MemoryCompressionUserTestInput,
   UserTestCase
 } from "./contracts.js";
 import { validateSanitizedBranchSample } from "./sanitizedSample.js";
 import { rebaseDreamTemplateToFixture } from "./timeline.js";
+
+const SANITIZED_REDACTION_MARKER = "[sensitive-content-redacted]";
+const EMPTY_SANITIZED_AIR = [
+  "# 场域知识",
+  "",
+  "## 使用边界",
+  "",
+  "当前没有可用于本次脱敏夹具的场域边界。",
+  "",
+  "## 场域约定",
+  "",
+  "当前没有可用于本次脱敏夹具的场域约定。"
+].join("\n");
 
 export async function deriveBranchCaseFromSample(input: {
   samplePath: string;
   templatePath: string;
   outputRoot: string;
   outputName: string;
-  conversationId?: string;
   confirmReviewedSanitizedSample: boolean;
 }) {
   if (!input.confirmReviewedSanitizedSample) {
@@ -40,18 +51,12 @@ export async function deriveBranchCaseFromSample(input: {
     readUserTestCaseDocument(templatePath)
   ]);
   const sample = validateSanitizedBranchSample(parseJson(sampleSource));
-  if (template.case.kind === "conversation") {
+  if (template.case.kind !== "dream") {
     throw new Error("USER_TEST_DERIVE_BRANCH_TEMPLATE_REQUIRED");
   }
   const nextCase: UserTestCase = {
     ...template.case,
-    input: template.case.kind === "dream"
-      ? dreamInput(sample.fixture, template.case.input as DreamUserTestInput)
-      : memoryCompressionInput(
-          sample.fixture,
-          template.case.input as MemoryCompressionUserTestInput,
-          input.conversationId
-        )
+    input: dreamInput(sample.fixture, template.case.input as DreamUserTestInput)
   };
   const output = replaceUserTestCaseDocumentDefinition(template.source, nextCase);
   await writeExclusiveRegularFile(outputPath, output);
@@ -78,7 +83,12 @@ function dreamInput(
     workingMemory: fixture.workingMemory,
     longTerm: fixture.longTerm,
     userProfiles: fixture.userProfiles,
-    persona: fixture.persona,
+    persona: {
+      ...fixture.persona,
+      air: fixture.persona.air.trim() === SANITIZED_REDACTION_MARKER
+        ? EMPTY_SANITIZED_AIR
+        : fixture.persona.air
+    },
     conversations: fixture.conversations.map((conversation) => ({
       ...conversation,
       messages: conversation.messages.map(({
@@ -89,40 +99,6 @@ function dreamInput(
     })),
     activeTasks: templateTimeline.activeTasks,
     directorSchedule: templateTimeline.directorSchedule
-  };
-}
-
-function memoryCompressionInput(
-  fixture: ReturnType<typeof validateSanitizedBranchSample>["fixture"],
-  templateInput: MemoryCompressionUserTestInput,
-  requestedConversationId?: string
-): MemoryCompressionUserTestInput {
-  const conversation = requestedConversationId
-    ? fixture.conversations.find(({ id }) => id === requestedConversationId)
-    : fixture.conversations[0];
-  if (!conversation?.messages.length) {
-    throw new Error("USER_TEST_DERIVE_CONVERSATION_NOT_FOUND");
-  }
-  return {
-    timePolicy: templateInput.timePolicy,
-    now: fixture.now,
-    workingMemory: fixture.workingMemory.filter((item) => (
-      item.conversationId === conversation.id
-    )),
-    longTerm: fixture.longTerm,
-    userProfiles: fixture.userProfiles,
-    conversation: {
-      id: conversation.id,
-      scope: conversation.scope,
-      title: conversation.title,
-      userId: conversation.userId,
-      ...(conversation.groupId == null ? {} : { groupId: conversation.groupId })
-    },
-    messages: conversation.messages.map((message) => ({
-      ...message,
-      imageCount: message.imageCount ?? 0,
-      quoteCount: message.quoteCount ?? 0
-    }))
   };
 }
 

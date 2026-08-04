@@ -11,13 +11,8 @@ import {
 import { assertDreamProviderRequest } from "./dreamProviderRequest.js";
 import {
   commitDreamWithWorkingMemory,
-  type RuntimeDreamFieldKnowledgePort,
   type RuntimeDreamWorkingMemoryPort
 } from "./dreamWorkingMemoryCommit.js";
-import {
-  activeDreamPersonaImpressionCatalog,
-  applyDreamPersonaImpressionProjection
-} from "./dreamPersonaImpressions.js";
 import {
   boundedDreamPipelineId as boundedId,
   digestDreamPipelineJson as digestJson,
@@ -36,30 +31,22 @@ import {
 import {
   combineDreamPipelineSignals as combineSignals,
   dreamPipelineModelExpectations as modelExpectations,
-  dreamPipelinePromptRecords as promptRecords,
-  dreamPipelineRecallStats as recallStatsFromPayload,
-  dreamPipelineRecentWindowHours as recentWindowHoursFromPayload,
   DreamRunError
 } from "./dreamPipelineExecutionSupport.js";
 import type { RuntimeDreamContextPort, RuntimeDreamContextSnapshot, RuntimeDreamPromptPort } from "./dreamPorts.js";
-export type { RuntimeDreamWorkingMemoryPort, RuntimeDreamFieldKnowledgePort } from "./dreamWorkingMemoryCommit.js";
+export type { RuntimeDreamWorkingMemoryPort } from "./dreamWorkingMemoryCommit.js";
 export type { RuntimeDreamContextPort, RuntimeDreamContextSnapshot, RuntimeDreamPromptPort } from "./dreamPorts.js";
 import {
   DREAM_PAYLOAD_VARIABLE,
   DREAM_PROMPT_ID,
-  buildPersonaEvidence,
-  buildDreamConsolidationPlan,
-  composeDreamRecallLineages,
+  buildDreamMinimalConsolidationPlan,
   dreamLocalDate,
   dreamSystemTimeZone,
-  DreamModelOutputContractError,
-  evaluateDreamPersonaAdjustment,
   latestDreamScheduleOccurrence,
   normalizeDreamMemorySnapshot,
-  parseStrictDreamModelOutput,
-  selectDreamMemories,
-  type DreamMemorySelectionSettings, type DreamMemoryRecord,
-  type DreamModelOutputV1,
+  parseStrictMinimalDreamModelOutput,
+  type DreamMemoryRecord,
+  type DreamMinimalModelOutput,
   type DreamScheduleOccurrence
 } from "../../services/memory/dream/public.js";
 const DREAM_TICK_INTERVAL_MS = 60_000;
@@ -67,7 +54,6 @@ const DREAM_LEASE_MS = 45 * 60_000;
 const DREAM_RETRY_DELAY_MS = 15 * 60_000;
 const DREAM_MAX_ATTEMPTS = 3;
 const DREAM_HISTORY_LIMIT = 30;
-const DREAM_PERSONA_PROJECTION_FAILED = "DREAM_PERSONA_PROJECTION_FAILED";
 export type RuntimeDreamRunStatus = "running" | "generated" | "consolidated" | "completed" | "failed";
 export type RuntimeDreamPersonaStatus = "pending" | "none" | "proposed" | "applied" | "skipped" | "failed";
 export interface RuntimeDreamRun {
@@ -101,7 +87,6 @@ export interface RuntimeDreamRun {
   failedAt: string | null;
 }
 export interface RuntimeDreamStorePort {
-  purgeArchivedMemories?(input?: { now?: Date; limit?: number }): unknown[];
   getRunByLocalDate(localDate: string): RuntimeDreamRun | undefined;
   listRuns(input?: { beforeLocalDate?: string; limit?: number }): RuntimeDreamRun[];
   claimDailyRun(input: {
@@ -131,7 +116,7 @@ export interface RuntimeDreamStorePort {
     expectedWorkingDigest: string;
     expectedLongTermDigest: string;
     externalWorkingMemory?: boolean;
-    workingMemoryId: string;
+    workingMemoryId: string | null;
     working: readonly DreamMemoryRecord[];
     longTerm: readonly DreamMemoryRecord[];
     archives: readonly {
@@ -159,13 +144,6 @@ export interface RuntimeDreamStorePort {
     | { status: "committed" | "existing"; run: RuntimeDreamRun }
     | { status: "snapshot_conflict"; sources: Array<"working" | "long_term"> }
     | { status: "lease_lost" | "result_conflict"; run: RuntimeDreamRun };
-  markPersona(input: {
-    runId: string;
-    workerId: string;
-    status: Exclude<RuntimeDreamPersonaStatus, "pending">;
-    persona?: JsonObject | null;
-    now?: Date;
-  }): RuntimeDreamRun | undefined;
   markFailed(input: {
     runId: string;
     workerId: string;
@@ -188,24 +166,14 @@ export interface RuntimeDreamModelPort {
     };
   }): Promise<string>;
 }
-export interface RuntimeDreamPersonaPort {
-  read(
-    id: "persona.preference" | "persona.relation",
-    signal?: AbortSignal
-  ): Promise<{ content: string; revision: string }>;
-  compareAndSwap(input: {
-    id: "persona.preference" | "persona.relation";
-    revision: string;
-    content: string;
-    signal?: AbortSignal;
-  }): Promise<void>;
-}
 export interface RuntimeDreamLogPort {
   write(event: {
     level: "info" | "error";
     action: string;
     runId?: string;
     localDate?: string;
+    attemptCount?: number;
+    maxAttempts?: number;
     data?: JsonObject;
   }): Promise<void> | void;
 }
@@ -213,11 +181,8 @@ export interface RuntimeDreamsOptions {
   store: RuntimeDreamStorePort;
   context: RuntimeDreamContextPort;
   workingMemory?: RuntimeDreamWorkingMemoryPort;
-  fieldKnowledge?: RuntimeDreamFieldKnowledgePort;
   prompt: RuntimeDreamPromptPort;
   model: RuntimeDreamModelPort;
-  persona: RuntimeDreamPersonaPort;
-  selection?: () => DreamMemorySelectionSettings;
   log?: RuntimeDreamLogPort;
   timeZone?: string;
   agentId: string;
@@ -239,8 +204,10 @@ export interface RuntimeDreamHistoryItem {
   completedAt?: string;
   errorCode?: string; errorText?: string;
   nextRetryAt?: string; failedAt?: string;
-  personalityChanged?: boolean;
-  summary?: { merged: number; archived: number; promoted: number };
+  summary?: {
+    workingMemoryReduced: number;
+    longTermAdded: number;
+  };
 }
 export interface RuntimeDreamHistory {
   items: RuntimeDreamHistoryItem[];
@@ -251,7 +218,6 @@ interface PersistedDreamInput {
   schemaVersion: 1;
   workingDigest: string;
   workingRevision?: string;
-  fieldKnowledgeRevision?: string;
   longTermDigest: string;
   payload: JsonObject;
 }
@@ -355,8 +321,6 @@ export class RuntimeDreams {
   }
   private async runTick(now: Date, signal: AbortSignal, options: DreamTickOptions) {
     signal.throwIfAborted();
-    this.options.store.purgeArchivedMemories?.({ now, limit: 100 });
-    signal.throwIfAborted();
     const occurrence = options.occurrence ?? latestDreamScheduleOccurrence({ now, timeZone: this.timeZone });
     const existing = this.options.store.getRunByLocalDate(occurrence.localDate);
     if (!options.force && !existing && this.isFreshInstallBeforeFirstRun(now, occurrence)) return undefined;
@@ -431,15 +395,6 @@ export class RuntimeDreams {
     }));
     signal.throwIfAborted();
     const seed = digestText(`${occurrence.localDate}:${this.seedFactory()}`);
-    const selectionSettings = this.options.selection?.();
-    const selection = selectDreamMemories({
-      seed,
-      now,
-      workingRecords: snapshot.workingRecords,
-      longTermRecords: snapshot.longTermRecords,
-      recallStats: snapshot.recallStats,
-      ...selectionSettings
-    });
     const projection = projectDreamContext(toJsonObject({
       schemaVersion: 1,
       seed,
@@ -447,19 +402,21 @@ export class RuntimeDreams {
       scheduledFor: occurrence.scheduledAt,
       timeZone: occurrence.timeZone,
       memoryWindow: window,
-      workingMemories: selection.selectedWorking.map(promptMemory),
-      longTermMemories: selection.selectedLongTerm.map(promptMemory),
-      recallStats: selection.selectedLongTerm.flatMap((item) => item.recallStats ? [item.recallStats] : []),
-      personaEvidenceIds: selection.personaEvidenceIds,
-      fieldKnowledgeEvidenceIds: selection.fieldKnowledgeEvidenceIds,
-      recentWindowHours: selectionSettings?.recentWindowHours ?? 24,
-      sourceMemoryIds: selection.sourceMemoryIds,
+      workingMemory: snapshot.workingMemory,
+      longTermMemories: snapshot.longTermRecords.map(promptMemory),
+      recallStats: [],
+      personaEvidenceIds: [],
+      fieldKnowledgeEvidenceIds: [],
+      recentWindowHours: 24,
+      sourceMemoryIds: [
+        ...snapshot.longTermRecords.map(memoryRecordId)
+      ],
       userProfiles: snapshot.userProfiles,
       observedConversations: snapshot.recentConversations,
       activeTasks: snapshot.activeTasks,
       plannedDailySchedule: snapshot.plannedDailySchedule,
       persona: snapshot.persona,
-      personaImpressions: activeDreamPersonaImpressionCatalog(this.options.store)
+      personaImpressions: []
     }, "dream payload"));
     const payload = projection.payload;
     return {
@@ -468,12 +425,6 @@ export class RuntimeDreams {
         workingDigest: validDigest(snapshot.workingDigest, "workingDigest"),
         ...(snapshot.workingRevision ? {
           workingRevision: validDigest(snapshot.workingRevision, "workingRevision")
-        } : {}),
-        ...(snapshot.fieldKnowledgeRevision && payload.fieldKnowledgeWritable === true ? {
-          fieldKnowledgeRevision: validDigest(
-            snapshot.fieldKnowledgeRevision,
-            "fieldKnowledgeRevision"
-          )
         } : {}),
         longTermDigest: validDigest(snapshot.longTermDigest, "longTermDigest"),
         payload
@@ -495,7 +446,7 @@ export class RuntimeDreams {
         signal.throwIfAborted();
       }
       const input = persistedInput(run.input);
-      const expected = modelExpectations(input.payload);
+      modelExpectations(input.payload);
       if (run.status === "running") {
         const request = await this.options.prompt.render(DREAM_PROMPT_ID, {
           [DREAM_PAYLOAD_VARIABLE]: input.payload,
@@ -513,22 +464,24 @@ export class RuntimeDreams {
           }
         });
         signal.throwIfAborted();
-        const output = parseStrictDreamModelOutput(text, expected);
+        const output = parseStrictMinimalDreamModelOutput(text);
         signal.throwIfAborted();
         const generated = this.options.store.markGenerated({
           runId: run.id,
           workerId: this.workerId,
           output: toJsonObject(output, "dream output"),
-          dreamText: output.dream.text,
+          dreamText: output.dreamDescription,
           now: this.clock()
         });
         if (!generated) throw new DreamRunError("DREAM_LEASE_LOST", "Dream generation lease was lost.");
         run = generated;
         signal.throwIfAborted();
-        await this.log("info", "dream.generated", run, { dreamChars: [...output.dream.text].length });
+        await this.log("info", "dream.generated", run, {
+          dreamChars: [...output.dreamDescription].length
+        });
       }
       if (run.status === "generated") {
-        const output = normalizeStoredOutput(run.output, expected);
+        const output = normalizeStoredOutput(run.output);
         const snapshot = initialSnapshot ?? normalizedMemorySnapshot(await this.options.context.capture({
           now: this.clock(),
           localDate: run.localDate,
@@ -537,7 +490,7 @@ export class RuntimeDreams {
           signal
         }));
         signal.throwIfAborted();
-        const plan = buildDreamConsolidationPlan({
+        const plan = buildDreamMinimalConsolidationPlan({
           runId: run.id,
           localDate: run.localDate,
           scheduledFor: run.scheduledFor,
@@ -545,37 +498,28 @@ export class RuntimeDreams {
           now: this.clock(),
           output,
           workingRecords: snapshot.workingRecords,
-          longTermRecords: snapshot.longTermRecords,
-          recallStats: recallStatsFromPayload(input.payload),
-          recentWindowHours: recentWindowHoursFromPayload(input.payload)
+          longTermRecords: snapshot.storedLongTermRecords
         });
         const externalCommit = await commitDreamWithWorkingMemory({
           workingMemory: this.options.workingMemory,
-          workingRevision: input.workingRevision,
-          records: plan.working,
-          fieldKnowledge: this.options.fieldKnowledge,
-          fieldKnowledgeRevision: input.fieldKnowledgeRevision,
-          fieldKnowledgeContent: output.fieldKnowledge?.content == null ? undefined
-            : output.fieldKnowledge.content,
+          workingRevision: snapshot.workingRevision,
+          content: plan.workingMemoryCompression,
           runId: run.id,
           localDate: run.localDate,
           signal,
-          commit: (externalWorkingMemory, fieldKnowledgeUpdated) => this.options.store.commitConsolidation({
+          commit: (externalWorkingMemory) => this.options.store.commitConsolidation({
             runId: run.id,
             workerId: this.workerId,
-            expectedWorkingDigest: input.workingDigest,
-            expectedLongTermDigest: input.longTermDigest,
+            expectedWorkingDigest: snapshot.workingDigest,
+            expectedLongTermDigest: snapshot.longTermDigest,
             externalWorkingMemory,
             workingMemoryId: plan.workingMemoryId,
             working: plan.working,
             longTerm: plan.longTerm,
-            archives: plan.archives,
-            recallLineages: composeDreamRecallLineages(plan.recallLineages, snapshot.longTermRecords),
-            reviews: plan.reviews,
-            result: toJsonObject({
-              ...plan.result,
-              fieldKnowledgeUpdated
-            }, "dream consolidation result"),
+            archives: [],
+            recallLineages: [],
+            reviews: [],
+            result: toJsonObject(plan.result, "dream consolidation result"),
             now: this.clock()
           })
         });
@@ -597,13 +541,10 @@ export class RuntimeDreams {
         run = committed.run;
         signal.throwIfAborted();
         await this.log("info", "dream.consolidated", run, {
-          ...plan.result,
-          fieldKnowledgeUpdated: externalCommit.fieldKnowledgeUpdated
+          ...toJsonObject(plan.result, "dream consolidation result")
         });
       }
       if (run.status === "consolidated") {
-        signal.throwIfAborted();
-        run = await this.applyPersona(run, normalizeStoredOutput(run.output, expected), signal);
         signal.throwIfAborted();
         const completed = this.options.store.complete({
           runId: run.id,
@@ -638,65 +579,6 @@ export class RuntimeDreams {
       return failed ?? run;
     }
   }
-  private async applyPersona(
-    run: RuntimeDreamRun,
-    output: DreamModelOutputV1,
-    signal: AbortSignal
-  ) {
-    signal.throwIfAborted();
-    const adjustment = output.personaAdjustment;
-    if (!adjustment) return this.requirePersonaMark(run, "none", null, signal);
-    const input = persistedInput(run.input);
-    const evidence = buildPersonaEvidence(promptRecords(input.payload), recallStatsFromPayload(input.payload));
-    const now = this.clock();
-    const policy = evaluateDreamPersonaAdjustment(adjustment, evidence, {
-      now
-    });
-    const persona = toJsonObject({ adjustment, reasons: policy.reasons }, "dream persona result");
-    if (!policy.eligible) return this.requirePersonaMark(run, "skipped", persona, signal);
-    try {
-      const projection = await applyDreamPersonaImpressionProjection({
-        store: this.options.store,
-        persona: this.options.persona,
-        adjustment,
-        level: policy.level!,
-        runId: run.id,
-        appliedAt: now.toISOString(),
-        signal
-      });
-      signal.throwIfAborted();
-      return this.requirePersonaMark(run, "applied", toJsonObject({
-        adjustment,
-        reasons: policy.reasons,
-        ...projection
-      }, "dream persona result"), signal);
-    } catch (error) {
-      if (signal.aborted) throw signal.reason ?? error;
-      return this.requirePersonaMark(run, "failed", toJsonObject({
-        adjustment,
-        reasons: policy.reasons,
-        errorCode: DREAM_PERSONA_PROJECTION_FAILED
-      }, "dream persona failure"), signal);
-    }
-  }
-  private requirePersonaMark(
-    run: RuntimeDreamRun,
-    status: Exclude<RuntimeDreamPersonaStatus, "pending" | "proposed">,
-    persona: JsonObject | null,
-    signal: AbortSignal
-  ) {
-    signal.throwIfAborted();
-    const updated = this.options.store.markPersona({
-      runId: run.id,
-      workerId: this.workerId,
-      status,
-      persona,
-      now: this.clock()
-    });
-    signal.throwIfAborted();
-    if (!updated) throw new DreamRunError("DREAM_LEASE_LOST", "Dream persona lease was lost.");
-    return updated;
-  }
   private async log(
     level: "info" | "error",
     action: string,
@@ -709,6 +591,8 @@ export class RuntimeDreams {
       action,
       runId: run?.id,
       localDate: run?.localDate,
+      attemptCount: run?.attemptCount,
+      maxAttempts: DREAM_MAX_ATTEMPTS,
       data
     });
   }
@@ -735,22 +619,30 @@ function dreamWindow(occurrence: DreamScheduleOccurrence) {
   });
   return { start: previous.scheduledAt, end: occurrence.scheduledAt };
 }
-function promptMemory(item: ReturnType<typeof selectDreamMemories>["selectedWorking"][number]) {
+function promptMemory(record: DreamMemoryRecord) {
   return {
-    id: item.id,
-    factuality: item.factuality,
-    memory: item.record,
-    recallStats: item.recallStats,
-    selection: {
-      lane: item.selectedBy,
-      reasons: item.reasons,
-      score: item.score,
-      scoreComponents: item.scoreComponents
-    }
+    id: memoryRecordId(record),
+    factuality: record.factuality === "imagined" || record.realityStatus === "imagined"
+      ? "imagined" : "factual",
+    memory: record,
+    recallStats: null,
+    selection: { lane: "seeded_mix", reasons: [], score: 0, scoreComponents: {} }
   };
 }
+function memoryRecordId(record: DreamMemoryRecord) {
+  if (typeof record.id !== "string" || !record.id) {
+    throw new DreamRunError("DREAM_INPUT_INVALID", "Dream memory id is invalid.", false);
+  }
+  return record.id;
+}
 function normalizedMemorySnapshot(snapshot: RuntimeDreamContextSnapshot): RuntimeDreamContextSnapshot {
-  return { ...snapshot, ...normalizeDreamMemorySnapshot(snapshot) };
+  return {
+    ...snapshot,
+    workingMemory: typeof snapshot.workingMemory === "string"
+      ? snapshot.workingMemory
+      : snapshot.workingRecords.map((record) => String(record.fact ?? "").trim()).filter(Boolean).join("\n\n"),
+    ...normalizeDreamMemorySnapshot(snapshot)
+  };
 }
 function persistedInput(value: JsonObject): PersistedDreamInput {
   if (value.schemaVersion !== 1 || !isObject(value.payload)) {
@@ -761,9 +653,6 @@ function persistedInput(value: JsonObject): PersistedDreamInput {
     workingDigest: validDigest(value.workingDigest, "workingDigest"),
     ...(value.workingRevision == null ? {} : {
       workingRevision: validDigest(value.workingRevision, "workingRevision")
-    }),
-    ...(value.fieldKnowledgeRevision == null || value.payload.fieldKnowledgeWritable !== true ? {} : {
-      fieldKnowledgeRevision: validDigest(value.fieldKnowledgeRevision, "fieldKnowledgeRevision")
     }),
     longTermDigest: validDigest(value.longTermDigest, "longTermDigest"),
     payload: value.payload
@@ -777,12 +666,8 @@ function persistedInput(value: JsonObject): PersistedDreamInput {
   return input;
 }
 function normalizeStoredOutput(
-  output: JsonObject | null,
-  expected: ReturnType<typeof modelExpectations>
-) {
+  output: JsonObject | null
+): DreamMinimalModelOutput {
   if (!output) throw new DreamRunError("DREAM_OUTPUT_MISSING", "Stored Dream output is missing.", false);
-  if (typeof output.rawOutput !== "string") {
-    throw new DreamModelOutputContractError("stored rawOutput must be present");
-  }
-  return parseStrictDreamModelOutput(output.rawOutput, expected);
+  return parseStrictMinimalDreamModelOutput(JSON.stringify(output));
 }

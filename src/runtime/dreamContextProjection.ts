@@ -3,8 +3,7 @@ type JsonRecord = Record<string, unknown>;
 export const DREAM_CONTEXT_PROJECTION_LIMITS = {
   totalPayloadBytes: 256 * 1024,
   arrays: {
-    workingMemories: 48,
-    longTermMemories: 48,
+    longTermMemories: 64,
     recallStats: 48,
     personaImpressions: 64,
     identityValues: 128,
@@ -22,6 +21,7 @@ export const DREAM_CONTEXT_PROJECTION_LIMITS = {
     selectionReasons: 16
   },
   stringChars: {
+    workingMemory: 64 * 1024,
     opaqueId: 256,
     reference: 72,
     timestamp: 64,
@@ -88,9 +88,12 @@ export function projectDreamContext(value: unknown): DreamContextProjectionResul
   const input = requiredRecord(value, "Dream context");
   const seed = requiredSeed(input.seed);
   const sourceFieldKnowledge = normalizedProjectionSourceText(recordValue(input.persona).air);
-  const workingMemories = projectMemoryGroup(input.workingMemories, "workingMemories");
+  const workingMemory = boundedText(
+    input.workingMemory,
+    DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.workingMemory
+  );
   const longTermMemories = projectMemoryGroup(input.longTermMemories, "longTermMemories");
-  const retainedIds = new Set([...workingMemories, ...longTermMemories].map(memoryItemId));
+  const retainedIds = new Set(longTermMemories.map(memoryItemId));
   const sourceMemoryIds = projectMemoryIdList(input.sourceMemoryIds, retainedIds);
   const payload: JsonRecord = {
     schemaVersion: 1,
@@ -99,7 +102,7 @@ export function projectDreamContext(value: unknown): DreamContextProjectionResul
     scheduledFor: boundedRequiredText(input.scheduledFor, "scheduledFor", DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.timestamp),
     timeZone: boundedRequiredText(input.timeZone, "timeZone", DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.timezone),
     memoryWindow: projectMemoryWindow(input.memoryWindow),
-    workingMemories,
+    workingMemory,
     longTermMemories,
     recallStats: projectRecallStats(input.recallStats, new Set(longTermMemories.map(memoryItemId))),
     personaEvidenceIds: projectMemoryIdList(input.personaEvidenceIds, retainedIds),
@@ -169,7 +172,7 @@ export function dreamContextPayloadByteLength(value: unknown) {
 
 function projectMemoryGroup(
   value: unknown,
-  field: "workingMemories" | "longTermMemories"
+  field: "longTermMemories"
 ) {
   const limit = DREAM_CONTEXT_PROJECTION_LIMITS.arrays[field];
   return arrayValue(value).slice(0, limit).map((raw, index) => {
@@ -218,10 +221,6 @@ function projectMemoryRecord(
   }
   const longTermId = optionalMemoryId(record.longTermId);
   if (longTermId) projected.linkedLongTermId = longTermId;
-  for (const field of ["sourceWorkingMemoryIds", "sourceLongTermMemoryIds"] as const) {
-    const ids = projectProvenanceIds(record[field]);
-    if (ids.length) projected[field] = ids;
-  }
   return projected;
 }
 
@@ -357,7 +356,10 @@ function projectTaskSchedule(value: unknown) {
     return compactObject({
       kind: "cron",
       expression: optionalBoundedText(schedule.expression, 256),
-      timeZone: optionalBoundedText(schedule.timezone, DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.timezone)
+      timeZone: optionalBoundedText(
+        schedule.timezone ?? schedule.timeZone,
+        DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.timezone
+      )
     });
   }
   if (schedule.kind === "once") {
@@ -480,9 +482,8 @@ function enforceTotalPayloadLimit(payload: JsonRecord) {
 }
 
 function synchronizeMemoryReferences(payload: JsonRecord) {
-  const working = arrayValue(payload.workingMemories);
   const longTerm = arrayValue(payload.longTermMemories);
-  const ids = new Set([...working, ...longTerm].map(memoryItemId));
+  const ids = new Set(longTerm.map(memoryItemId));
   const longTermIds = new Set(longTerm.map(memoryItemId));
   payload.sourceMemoryIds = arrayValue(payload.sourceMemoryIds).filter((id) => typeof id === "string" && ids.has(id));
   payload.personaEvidenceIds = arrayValue(payload.personaEvidenceIds).filter((id) => typeof id === "string" && ids.has(id));
@@ -495,11 +496,9 @@ function synchronizeMemoryReferences(payload: JsonRecord) {
 }
 
 function popMemory(payload: JsonRecord) {
-  const working = arrayValue(payload.workingMemories);
   const longTerm = arrayValue(payload.longTermMemories);
-  if (!working.length && !longTerm.length) return false;
-  if (longTerm.length >= working.length && longTerm.length) longTerm.pop();
-  else working.pop();
+  if (!longTerm.length) return false;
+  longTerm.pop();
   return true;
 }
 
@@ -572,13 +571,6 @@ function projectMemoryIdList(value: unknown, allowed: ReadonlySet<string>) {
     const id = optionalMemoryId(item);
     return id && allowed.has(id) ? [id] : [];
   })).slice(0, DREAM_CONTEXT_PROJECTION_LIMITS.arrays.sourceMemoryIds);
-}
-
-function projectProvenanceIds(value: unknown) {
-  return uniqueStrings(arrayValue(value).flatMap((item) => {
-    const id = optionalMemoryId(item);
-    return id ? [id] : [];
-  })).slice(0, DREAM_CONTEXT_PROJECTION_LIMITS.arrays.provenanceIds);
 }
 
 function memoryItemId(value: unknown) {

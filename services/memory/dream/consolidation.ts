@@ -80,6 +80,7 @@ export interface DreamConsolidationPlan {
   };
 }
 
+
 export function buildDreamConsolidationPlan(input: DreamConsolidationInput): DreamConsolidationPlan {
   const validNow = validDate(input.now);
   const now = validNow.toISOString();
@@ -104,7 +105,8 @@ export function buildDreamConsolidationPlan(input: DreamConsolidationInput): Dre
   let retained = 0;
 
   for (const review of input.output.longTermReviews) {
-    const records = review.sourceIds.map((id) => requireRecord(longTerm, id, "long-term"));
+    const records = softLinkedRecords(longTerm, review.sourceIds);
+    if (!records) continue;
     if (review.action === "retain") {
       retained += 1;
       reviews.push(reviewUpdate(review.sourceIds[0]!, review.sourceIds, review));
@@ -195,7 +197,8 @@ export function buildDreamConsolidationPlan(input: DreamConsolidationInput): Dre
   }
 
   for (const review of input.output.workingReviews) {
-    const records = review.sourceIds.map((id) => requireRecord(working, id, "working"));
+    const records = softLinkedRecords(working, review.sourceIds);
+    if (!records) continue;
     const oldDreams = records.filter((record) => isDreamMemory(record) && dreamDate(record) < input.localDate);
     if (records.some((record) => recentFactualMemory(record, recentCutoff))) {
       markMutableWorkingReviewed(working, records, now);
@@ -326,6 +329,16 @@ export function buildPersonaEvidence(
       impactScore: dreamPersonaImpactScore(record, statsById.get(id))
     }];
   });
+}
+
+function softLinkedRecords(
+  records: ReadonlyMap<string, DreamMemoryRecord>,
+  sourceIds: readonly string[]
+) {
+  const linked = sourceIds.map((id) => records.get(id));
+  return linked.some((record) => record == null)
+    ? null
+    : linked as DreamMemoryRecord[];
 }
 
 function dreamWorkingMemory(input: DreamConsolidationInput, id: string, now: string): DreamMemoryRecord {
@@ -611,12 +624,6 @@ function recordMap(records: readonly DreamMemoryRecord[], source: string) {
     result.set(id, structuredClone(record));
   }
   return result;
-}
-
-function requireRecord(records: ReadonlyMap<string, DreamMemoryRecord>, id: string, source: string) {
-  const record = records.get(id);
-  if (!record) throw new Error(`Unknown ${source} memory id ${id}.`);
-  return record;
 }
 
 function recordId(record: DreamMemoryRecord, required = true) {

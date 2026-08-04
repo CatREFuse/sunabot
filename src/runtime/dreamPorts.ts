@@ -4,11 +4,12 @@ import type {
 } from "../../services/memory/dream/public.js";
 
 export interface RuntimeDreamContextSnapshot {
+  workingMemory: string;
   workingRecords: DreamMemoryRecord[];
   longTermRecords: DreamMemoryRecord[];
+  storedLongTermRecords: DreamMemoryRecord[];
   workingDigest: string;
   workingRevision?: string;
-  fieldKnowledgeRevision?: string;
   longTermDigest: string;
   recallStats: DreamRecallStatsSnapshot[];
   userProfiles: unknown[];

@@ -2,6 +2,7 @@ export * from "./canonicalFact.js";
 export * from "./consolidation.js";
 export * from "./modelOutput.js";
 export * from "./modelOutputContract.js";
+export * from "./minimalConsolidation.js";
 export * from "./memoryNormalization.js";
 export * from "./personaImpressions.js";
 export * from "./policy.js";

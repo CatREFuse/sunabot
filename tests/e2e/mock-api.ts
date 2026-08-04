@@ -113,14 +113,10 @@ const initialConfig = {
     memory: {
       memoryModel: "gpt-5.4-mini",
       reasoningEffort: "medium",
-      messageThreshold: 16,
-      workingMemoryMaxEntries: 100,
       dreamRecentWindowHours: 24,
       dreamRecentMemoryLimit: 24,
       dreamOlderMemoryLimit: 12,
-      workMemoryCompressInPrompt: "work_memory_compress_in.json",
-      workMemoryCompressOutPrompt: "work_memory_compress_out.json",
-      userProfilePrompt: "user_profile_prompt.json"
+      workMemoryCompressOutPrompt: "work_memory_compress_out.json"
     },
     orchestrator: {
       enabled: true,
@@ -207,9 +203,7 @@ const initialAgentFiles = [
     "tone_rewrite.json",
     defaultPromptContent("conversation.tone-rewrite")
   ),
-  file("memory.compress-in", "工作记忆提取", "记忆", "work_memory_compress_in.json", defaultPromptContent("memory.compress-in")),
   file("memory.compress-out", "长期记忆压缩", "记忆", "work_memory_compress_out.json", defaultPromptContent("memory.compress-out")),
-  file("memory.user-profile", "用户画像提取", "记忆", "user_profile_prompt.json", defaultPromptContent("memory.user-profile")),
   file("orchestrator.user-group", "群聊编排", "编排器", "user_groupchat_orchestrator.json", defaultPromptContent("orchestrator.user-group")),
   file("conversation.group-summary", "群聊总结", "对话", "group_chat_summary.json", defaultPromptContent("conversation.group-summary")),
   file("scheduler.cron-callback", "定时任务回调", "调度", "cron_callback.json", defaultPromptContent("scheduler.cron-callback")),
@@ -1617,7 +1611,7 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
             request: {
               source: "user_profile",
               operation: "batch_validate",
-              actor: "memory_pipeline",
+              actor: "model_tool",
               conversationId: "private:20002",
               conversationScope: "private",
               batchId: "memory-batch-2"
@@ -1772,8 +1766,10 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
             dreamText: "我沿着潮湿的石阶走进旧车站，白天写到一半的信从时刻表后飘出来，像一群安静的鸟绕着四点的钟面盘旋。远处的月台堆着整理好的旧照片，我把几张模糊的留在风里，又将一张发亮的放进口袋。列车没有鸣笛，只载着未完成的清单穿过海面，窗外的人朝我挥手，我忽然想起该更耐心地听完他们的话。醒来前，车站变成书桌，晨光正落在下一页空白处。",
             scheduledFor: "2026-07-20T04:00:00.000+08:00",
             completedAt: "2026-07-20T04:02:00.000+08:00",
-            personalityChanged: true,
-            summary: { merged: 2, archived: 1, promoted: 1 }
+            summary: {
+              workingMemoryReduced: 2,
+              longTermAdded: 1
+            }
           },
           {
             id: "dream-2026-07-19",
@@ -1782,8 +1778,10 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
             dreamText: "我在雨后的图书馆里寻找一页被风带走的笔记。",
             scheduledFor: "2026-07-19T04:00:00.000+08:00",
             completedAt: "2026-07-19T04:01:00.000+08:00",
-            personalityChanged: false,
-            summary: { merged: 1, archived: 0, promoted: 1 }
+            summary: {
+              workingMemoryReduced: 1,
+              longTermAdded: 0
+            }
           }
         ],
         timeZone: "Asia/Shanghai",
@@ -1880,8 +1878,163 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
         tools
       });
     }
+    if (/^\/api\/request-logs\/[^/]+\/trace$/u.test(pathname)) {
+      return json(route, { logs: [] });
+    }
     if (pathname === "/api/request-logs") {
       const logs = [
+        {
+          id: "log-59",
+          at: "2026-07-10T02:15:00.000Z",
+          category: "model.response",
+          action: "responses.complete",
+          providerId: "codex",
+          model: "gpt-5.6-sol",
+          response: { ok: false, status: 503, error: "Provider 暂时不可用", willRetry: true },
+          metadata: {
+            conversationId: "account:primary:private:171419991",
+            runId: "reply-run-1",
+            stage: "reply",
+            transportAttempt: 2,
+            maxTransportAttempts: 3
+          },
+          presentation: {
+            businessNode: "private_conversation",
+            businessNodes: ["private_conversation"],
+            status: "error",
+            attempt: 2,
+            maxAttempts: 3,
+            retryCount: 1,
+            willRetry: true
+          }
+        },
+        {
+          id: "log-58",
+          at: "2026-07-10T02:14:59.000Z",
+          category: "tool.call",
+          action: "add_workmemory",
+          request: { callId: "call-memory-1", arguments: { summary: "[REDACTED]" } },
+          response: { ok: true, revision: "wm-2" },
+          metadata: { conversationId: "account:primary:private:171419991", runId: "reply-run-1" },
+          presentation: {
+            businessNode: "memory_recording",
+            businessNodes: ["private_conversation", "memory_recording"],
+            memoryTool: "working_memory",
+            status: "success",
+            attempt: 1,
+            maxAttempts: 1,
+            retryCount: 0,
+            willRetry: false
+          }
+        },
+        {
+          id: "log-57",
+          at: "2026-07-10T02:14:58.000Z",
+          category: "model.request",
+          action: "responses.complete",
+          providerId: "codex",
+          model: "gpt-5.6-sol",
+          request: { model: "gpt-5.6-sol", input: [{ role: "user", content: "检查运行情况" }] },
+          metadata: { conversationId: "account:primary:private:171419991", runId: "reply-run-1", stage: "reply" },
+          presentation: {
+            businessNode: "private_conversation",
+            businessNodes: ["private_conversation"],
+            status: "neutral",
+            attempt: 1,
+            maxAttempts: 1,
+            retryCount: 0,
+            willRetry: false
+          }
+        },
+        {
+          id: "log-dream",
+          at: "2026-07-10T02:13:30.000Z",
+          category: "runtime.action",
+          action: "dream.completed",
+          response: { attemptCount: 1, maxAttempts: 3 },
+          metadata: { conversationId: "dream:plana", runId: "dream-run-1", stage: "memory", promptFamily: "memory.dream" },
+          presentation: {
+            businessNode: "dream",
+            businessNodes: ["dream"],
+            status: "success",
+            attempt: 1,
+            maxAttempts: 3,
+            retryCount: 0,
+            willRetry: false
+          }
+        },
+        {
+          id: "log-memory-compress",
+          at: "2026-07-10T02:13:20.000Z",
+          category: "model.response",
+          action: "responses.complete",
+          response: { ok: true },
+          metadata: { conversationId: "private:legacy", stage: "memory", promptFamily: "memory.compress" },
+          presentation: {
+            businessNode: "memory_compression",
+            businessNodes: ["private_conversation", "memory_compression"],
+            status: "success",
+            attempt: 1,
+            maxAttempts: 1,
+            retryCount: 0,
+            willRetry: false
+          }
+        },
+        {
+          id: "log-group",
+          at: "2026-07-10T02:13:10.000Z",
+          category: "runtime.action",
+          action: "orchestrator.decision",
+          response: { reply: true },
+          metadata: { conversationId: "account:primary:group:10001", stage: "orchestrator" },
+          presentation: {
+            businessNode: "group_conversation",
+            businessNodes: ["group_conversation"],
+            status: "neutral",
+            attempt: 1,
+            maxAttempts: 1,
+            retryCount: 0,
+            willRetry: false
+          }
+        },
+        {
+          id: "log-air",
+          at: "2026-07-10T02:13:00.000Z",
+          category: "tool.call",
+          action: "read_air",
+          request: { callId: "call-air-1", arguments: {} },
+          response: { ok: true, count: 3 },
+          metadata: { conversationId: "account:primary:private:171419991", runId: "reply-run-air" },
+          presentation: {
+            businessNode: "memory_recording",
+            businessNodes: ["private_conversation", "memory_recording"],
+            memoryTool: "air",
+            status: "success",
+            attempt: 1,
+            maxAttempts: 1,
+            retryCount: 0,
+            willRetry: false
+          }
+        },
+        {
+          id: "log-profile",
+          at: "2026-07-10T02:12:30.000Z",
+          category: "tool.call",
+          action: "add_user_profile",
+          request: { callId: "call-profile-1", arguments: { impression: "[REDACTED]" } },
+          response: { ok: true },
+          metadata: { conversationId: "account:primary:private:171419991", runId: "reply-run-profile" },
+          presentation: {
+            businessNode: "memory_recording",
+            businessNodes: ["private_conversation", "memory_recording"],
+            memoryTool: "user_profile",
+            status: "success",
+            attempt: 1,
+            maxAttempts: 1,
+            retryCount: 0,
+            willRetry: false
+          }
+        },
         {
           id: "log-56",
           at: "2026-07-10T02:12:00.000Z",
@@ -1941,6 +2094,12 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
           metadata: { sequence: 50 - index }
         }))
       ];
+      const node = url.searchParams.get("node") ?? "all";
+      const memoryTool = url.searchParams.get("memoryTool") ?? "all";
+      const filteredLogs = logs.filter((log) => {
+        if (node !== "all" && !log.presentation?.businessNodes.includes(node)) return false;
+        return node !== "memory_recording" || memoryTool === "all" || log.presentation?.memoryTool === memoryTool;
+      });
       const pageNumber = Math.max(1, Number(url.searchParams.get("page") ?? 1));
       const pageSize = Math.max(1, Number(url.searchParams.get("pageSize") ?? url.searchParams.get("limit") ?? 50));
       const start = (pageNumber - 1) * pageSize;
@@ -1948,9 +2107,9 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
         filePath: "/data/sunabot.sqlite",
         page: pageNumber,
         pageSize,
-        total: logs.length,
-        pageCount: Math.ceil(logs.length / pageSize),
-        logs: logs.slice(start, start + pageSize)
+        total: filteredLogs.length,
+        pageCount: Math.max(1, Math.ceil(filteredLogs.length / pageSize)),
+        logs: filteredLogs.slice(start, start + pageSize)
       });
     }
     if (pathname === "/api/providers/test") {
@@ -1967,7 +2126,24 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
         ? { connected: true, data: { user_id: 123456, nickname: "普拉娜" } }
         : { connected: false, error: "OneBot 未连接。" });
     }
-    if (pathname === "/api/onebot/events") return json(route, { events: [{ receivedAt: "2026-07-10T02:06:00.000Z", postType: "message", messageType: "private", text: "收到管理员消息" }] });
+    if (pathname === "/api/onebot/events") return json(route, {
+      events: [
+        {
+          receivedAt: "2026-07-10T02:06:05.000Z",
+          accountId: "primary",
+          postType: "meta_event",
+          detailType: "heartbeat",
+          selfId: 123456
+        },
+        {
+          receivedAt: "2026-07-10T02:06:00.000Z",
+          accountId: "primary",
+          postType: "message",
+          messageType: "private",
+          text: "收到管理员消息"
+        }
+      ]
+    });
     if (pathname === "/api/onebot/chats") return json(route, { connected: true, private: [], groups: [] });
     if (pathname === "/api/onebot/qq-logout" && method === "POST") {
       state.qqOnline = false;

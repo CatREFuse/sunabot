@@ -50,15 +50,22 @@ describe("QQ private PDF attachment user test", () => {
       };
       const requiredTool = parsed.tool_choice?.name
         ?? parsed.tool_choice?.function?.name;
-      return requiredTool === "add_workmemory"
-        ? codexSseResponse(
-            "已成功读取文件：PDF-ATTACHMENT-ROUTING-OK-20260730",
-            [{
-              name: "add_workmemory",
-              args: { action: "skip", content: null }
-            }]
-          )
-        : codexSseResponse("BLUE");
+      if (requiredTool === "add_workmemory") {
+        return codexSseResponse("", [{
+          name: "add_workmemory",
+          args: { action: "skip", content: null }
+        }]);
+      }
+      if (requiredTool === "add_user_profile") {
+        return codexSseResponse(
+          "已成功读取文件：PDF-ATTACHMENT-ROUTING-OK-20260730",
+          [{
+            name: "add_user_profile",
+            args: { action: "skip", profile: null, addressNames: null }
+          }]
+        );
+      }
+      return codexSseResponse("BLUE");
     }));
     try {
       await fs.mkdir(path.join(source, "business/config"), { recursive: true });

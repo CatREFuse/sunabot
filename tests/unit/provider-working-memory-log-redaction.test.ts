@@ -2,7 +2,10 @@
 import { describe, expect, it } from "vitest";
 import {
   PROVIDER_FILE_LOG_REDACTED,
+  PROVIDER_USER_PROFILE_LOG_REDACTED,
   PROVIDER_WORKMEMORY_LOG_REDACTED,
+  projectAddUserProfileArgumentsLog,
+  projectAddUserProfileResultLog,
   projectAddWorkMemoryResultLog,
   projectProviderRequestLogForStorage,
   projectProviderResponseLogForStorage
@@ -28,6 +31,33 @@ const callResult = {
 };
 
 describe("Provider add_workmemory log redaction", () => {
+  it("redacts add_user_profile text and address names while retaining bounded status", () => {
+    const argumentsLog = projectAddUserProfileArgumentsLog({
+      action: "record",
+      profile: "PROFILE_SECRET",
+      addressNames: ["老师", "Tan"]
+    });
+    const resultLog = projectAddUserProfileResultLog({
+      ok: true,
+      action: "record",
+      profileId: "user_profile_171419991",
+      addressNameCount: 2,
+      message: "PROFILE_SECRET"
+    });
+    const text = JSON.stringify({ argumentsLog, resultLog });
+
+    expect(text).not.toContain("PROFILE_SECRET");
+    expect(text).not.toContain("老师");
+    expect(text).not.toContain("Tan");
+    expect(text).toContain(PROVIDER_USER_PROFILE_LOG_REDACTED);
+    expect(resultLog).toMatchObject({
+      ok: true,
+      action: "record",
+      addressNameCount: 2
+    });
+    expect(resultLog).not.toHaveProperty("profileId");
+  });
+
   it.each(providerLogCases())(
     "redacts call content and error detail while retaining status on $label",
     ({ action, request, response }) => {

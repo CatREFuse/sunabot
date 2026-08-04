@@ -23,8 +23,6 @@ const RULE_REPAIRABLE_PATHS = new Set([
   "/bot/quoteGroupReplies",
   "/bot/contextMessageLimit",
   "/bot/memory/reasoningEffort",
-  "/bot/memory/messageThreshold",
-  "/bot/memory/workingMemoryMaxEntries",
   "/bot/orchestrator/enabled",
   "/bot/orchestrator/reasoningEffort",
   "/bot/orchestrator/messageThreshold",

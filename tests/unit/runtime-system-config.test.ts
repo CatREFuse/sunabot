@@ -783,7 +783,6 @@ async function createRuntimeHarness(
     persona: NonNullable<SunaRuntime["persona"]>;
     getProvider(): OpenAIProvider;
     renderPromptRequest(): Promise<RenderedPromptRequest>;
-    scheduleMemoryCompression(): void;
     scheduleAttachmentCacheRefresh(): void;
     persistConversationRecords(): void;
   };
@@ -811,7 +810,6 @@ async function createRuntimeHarness(
     }],
     response_format: { type: "text" }
   });
-  internals.scheduleMemoryCompression = () => undefined;
   internals.scheduleAttachmentCacheRefresh = () => undefined;
   internals.persistConversationRecords = () => undefined;
   const { gateway, connection } = fakeGateway();

@@ -163,6 +163,50 @@ describe("Dream consolidation SQLite commit", () => {
     expect(readMemory("long_term")).toEqual(LONG_TERM_FINAL);
   });
 
+  it("commits a minimal Dream by preserving every existing long-term record and appending additions", () => {
+    createGeneratedRun();
+    const addition = { id: "long_term_dream_addition", fact: "用户明确计划周五复查记忆。" };
+
+    const committed = store.commitConsolidation(commitInput({
+      workingMemoryId: null,
+      longTerm: [...LONG_TERM_BASELINE, addition],
+      archives: [],
+      recallLineages: [],
+      reviews: [],
+      result: minimalResult({ requested: 1, added: 1, duplicate: 0, unavailable: 0 })
+    }));
+
+    expect(committed).toMatchObject({ status: "committed" });
+    expect(committed).toMatchObject({ run: { workingMemoryId: null } });
+    expect(readMemory("long_term")).toEqual([...LONG_TERM_BASELINE, addition]);
+    expect(store.readRecallStats(addition.id)).toBeUndefined();
+  });
+
+  it("rejects a minimal Dream that removes or rewrites existing long-term memory", () => {
+    createGeneratedRun();
+    let failure: unknown;
+    try {
+      store.commitConsolidation(commitInput({
+        longTerm: LONG_TERM_BASELINE.slice(1),
+        archives: [],
+        recallLineages: [],
+        reviews: [],
+        result: minimalResult({
+          requested: 0,
+          added: 0,
+          duplicate: 0,
+          unavailable: 0
+        })
+      }));
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toMatchObject({ code: "DREAM_LONG_TERM_ADD_ONLY_VIOLATION" });
+    expect(readMemory("long_term")).toEqual(LONG_TERM_BASELINE);
+    expect(store.getRun("dream-run")).toMatchObject({ status: "generated" });
+  });
+
   it("atomically migrates recall stats and receipts from a non-canonical legacy id", () => {
     const legacyId = "legacy id with spaces";
     const targetId = "legacy_long_term_target";
@@ -576,6 +620,19 @@ describe("Dream consolidation SQLite commit", () => {
       result: { schemaVersion: 1, merged: 1, archived: 1, promoted: 0 },
       now: NOW,
       ...overrides
+    };
+  }
+
+  function minimalResult(longTermMemoryAdditions: JsonObject): JsonObject {
+    return {
+      schemaVersion: 2,
+      workingMemoryCompression: {
+        sourceCount: WORKING_BASELINE.length,
+        outputCount: WORKING_BASELINE.length,
+        reducedBy: 0,
+        unavailable: 0
+      },
+      longTermMemoryAdditions
     };
   }
 

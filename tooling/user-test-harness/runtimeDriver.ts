@@ -30,23 +30,18 @@ import {
   persistentIncomingKey
 } from "../../src/runtime/messagingAttachmentHelpers.js";
 import type { ConversationRecord } from "../../src/types.js";
-import type { MemoryClaim } from "../../services/memory/memoryScheduler.js";
 import { AgentRuntimeManager } from "../../services/agents/agentRuntimeManager.js";
 import { BroadcastStormDetector } from "../../services/orchestration/broadcastStormDetector.js";
 import type {
   ConversationUserTestInput,
   DreamUserTestInput,
   HarnessAssertion,
-  MemoryCompressionUserTestInput,
   UserTestCase,
   UserTestRunReport,
   WorkingMemoryFixtureItem
 } from "./contracts.js";
 import { RecordingMessagingPort } from "./recordingMessagingPort.js";
-import {
-  materializeDreamAtRuntime,
-  materializeMemoryCompressionAtRuntime
-} from "./timeline.js";
+import { materializeDreamAtRuntime } from "./timeline.js";
 import {
   assertUserTestWorkspace,
   installIsolatedCodexGuiHome,
@@ -124,18 +119,6 @@ export async function runRuntimeUserTest(
       observation.attachmentResolutions = result.transport.attachmentResolutionCalls;
       observation.branch = result.session;
       assertions.push(...result.assertions);
-    } else if (testCase.kind === "memory_compression") {
-      const result = await runMemoryCompressionCase(
-        built,
-        testCase.input as MemoryCompressionUserTestInput
-      );
-      observation.branch = result;
-      assertions.push({
-        id: "memory_compression.completed",
-        passed: result.ok,
-        expected: true,
-        actual: result.ok
-      });
     } else {
       const result = await runDreamCase(
         built,
@@ -252,7 +235,6 @@ async function prepareRuntime(
 ) {
   await runtime.ensureAgentPromptFiles(config);
   await ensureWorkingMemoryDocument(config);
-  await runtime.memoryScheduler.initialize();
   runtime.persona = await loadPersona(config);
 }
 
@@ -672,60 +654,6 @@ async function waitForConversationCompletion(
   }
 }
 
-async function runMemoryCompressionCase(
-  built: Awaited<ReturnType<typeof import("../../apps/api/server.js")["buildApp"]>>,
-  input: MemoryCompressionUserTestInput
-) {
-  const materialized = materializeMemoryCompressionAtRuntime(input, new Date());
-  const runtimeInput = materialized.input;
-  const repository = applicationDataStore(built.runtime.config);
-  const claim: MemoryClaim = {
-    conversation: runtimeInput.conversation,
-    batchId: `user-test-${crypto.createHash("sha256")
-      .update(JSON.stringify(runtimeInput))
-      .digest("hex")
-      .slice(0, 24)}`,
-    messageIds: runtimeInput.messages.map((message) => message.id),
-    messages: runtimeInput.messages.map((message) => ({
-      ...message,
-      imageCount: message.imageCount ?? 0,
-      quoteCount: message.quoteCount ?? 0
-    })),
-    attemptMessageCount: runtimeInput.messages.length
-  };
-  repository.replaceMemory("long_term", runtimeInput.longTerm);
-  repository.replaceMemory("user_profile", runtimeInput.userProfiles);
-  const seeded = await seedWorkingMemoryFixture(built, runtimeInput.workingMemory);
-  built.runtime.persona = await loadPersona(built.runtime.config);
-  const before = await readWorkingMemoryDocument(built.runtime.config);
-  const memoryBefore = branchMemorySnapshot(repository);
-  const ok = await built.runtime.processMemoryClaim(claim);
-  const after = await readWorkingMemoryDocument(built.runtime.config);
-  const memoryAfter = branchMemorySnapshot(repository);
-  return {
-    ok,
-    batchId: claim.batchId,
-    seeded: {
-      ...seeded,
-      longTermCount: runtimeInput.longTerm.length,
-      userProfileCount: runtimeInput.userProfiles.length,
-      timeline: materialized.timeline
-    },
-    before: {
-      revision: before.revision,
-      itemCount: before.items.length,
-      content: before.content,
-      ...memoryBefore
-    },
-    after: {
-      revision: after.revision,
-      itemCount: after.items.length,
-      content: after.content,
-      ...memoryAfter
-    }
-  };
-}
-
 async function runDreamCase(
   built: Awaited<ReturnType<typeof import("../../apps/api/server.js")["buildApp"]>>,
   input: DreamUserTestInput
@@ -1003,9 +931,6 @@ function assertionTextValues(
     return extractConversationUserFacingTextValues(observation.outbound);
   }
   const branch = recordValue(observation.branch);
-  if (kind === "memory_compression") {
-    return [recordValue(branch?.after)?.content];
-  }
   const run = recordValue(branch?.run);
   const workingMemory = recordValue(branch?.workingMemory);
   const personaFiles = recordValue(branch?.personaFiles);

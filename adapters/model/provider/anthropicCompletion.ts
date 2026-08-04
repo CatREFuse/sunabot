@@ -15,9 +15,9 @@ import { errorMessage, isRecord, parseJson } from "./valueUtils.js";
 import { processProviderToolRound } from "./toolRound.js";
 import { assertMappedProviderToolDefinitions } from "../../../services/tools/providerToolSchema.js";
 import {
-  anthropicWorkingMemoryToolChoice,
-  assertWorkingMemoryDecisionResolved
-} from "./workingMemoryDecision.js";
+  anthropicMemoryToolChoice,
+  assertMemoryToolDecisionsResolved
+} from "./memoryToolDecisions.js";
 
 export async function completeAnthropicMessages(
   context: ProviderAdapterContext,
@@ -52,7 +52,7 @@ export async function completeAnthropicMessages(
       temperature: Math.min(context.provider.temperature, 1),
       max_tokens: context.provider.maxOutputTokens,
       tools: tools.length ? tools : undefined,
-      tool_choice: anthropicWorkingMemoryToolChoice(options)
+      tool_choice: anthropicMemoryToolChoice(options)
     };
     const metadata = withLogContext({ round, toolCallCount: state.toolCallCount, maxToolCalls, toolNames: tools.map(readToolName) }, options.logContext);
     let responseMetadata = metadata;
@@ -97,7 +97,7 @@ export async function completeAnthropicMessages(
       : []);
     state.toolCallCount = claimBusinessToolCalls(state.toolCallCount, calls, maxToolCalls);
     if (!calls.length) {
-      assertWorkingMemoryDecisionResolved(options);
+      assertMemoryToolDecisionsResolved(options);
       if (!text) throw new Error("模型没有返回可发送内容。");
       return { kind: "completed", text };
     }

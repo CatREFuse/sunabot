@@ -15,10 +15,8 @@ import {
   readPromptTextFile
 } from "../../services/agent/promptWorkspace.js";
 import {
-  mergeUserProfileMemory,
   ensureWorkingMemoryDocument,
   normalizeEventMemorySchema,
-  recoverMemoryTransactions,
   type MemoryEntry
 } from "../../services/memory/memoryService.js";
 import { normalizeConversationDisabledTools } from "../../services/tools/conversationToolPolicy.js";
@@ -44,21 +42,15 @@ export async function runtime_initialize(this: RuntimeHost) {
     applicationDataStore(this.config).ensureGeneratedImageHistoryIndexed(this.config);
     await this.ensureAgentPromptFiles();
     await ensureWorkingMemoryDocument(this.config);
-    await mergeUserProfileMemory(this.config);
-    await recoverMemoryTransactions(this.config);
     await normalizeEventMemorySchema(this.config);
-    await this.memoryScheduler.initialize();
-    await this.seedMemoryScheduler();
     this.persona = await loadPersona(this.config);
     await this.refreshAttachmentCacheReferences();
     this.scheduledTasks.start();
     this.director.start();
     this.dreams.start();
-    this.scheduleMemoryDrain();
   }
 export function runtime_close(this: RuntimeHost) {
     this.abortRuntime();
-    this.memoryDrainDirty = false;
     this.attachmentRefreshDirty = false;
     this.cancelAllAmbientReplies();
     for (const controller of this.activeDirectControllers.values()) {
@@ -69,8 +61,6 @@ export function runtime_close(this: RuntimeHost) {
     this.scheduledTasks.stop();
     this.director.stop();
     this.dreams.stop();
-    if (this.memoryWakeTimer) clearTimeout(this.memoryWakeTimer);
-    this.memoryWakeTimer = undefined;
     this.activeGateway = undefined;
     this.sessionCoordinator.stop();
     if (this.ownsSessionStore) this.sessionStore.close();
@@ -78,14 +68,8 @@ export function runtime_close(this: RuntimeHost) {
 export async function runtime_reload(this: RuntimeHost, config: AppConfig) {
     await this.ensureAgentPromptFiles(config);
     await ensureWorkingMemoryDocument(config);
-    await mergeUserProfileMemory(config);
-    this.memoryScheduler.setConfig(config);
-    await recoverMemoryTransactions(config);
     await normalizeEventMemorySchema(config);
-    await this.memoryScheduler.initialize();
     this.commitReload(await this.prepareReload(config));
-    await this.seedMemoryScheduler();
-    this.scheduleMemoryDrain();
   }
 export async function runtime_prepareReload(this: RuntimeHost, config: AppConfig): Promise<RuntimeConfigSnapshot> {
     return {
@@ -96,12 +80,8 @@ export async function runtime_prepareReload(this: RuntimeHost, config: AppConfig
 export function runtime_commitReload(this: RuntimeHost, snapshot: RuntimeConfigSnapshot) {
     const previous = this.config;
     this.config = snapshot.config;
-    this.memoryScheduler.setConfig(snapshot.config);
     this.persona = snapshot.persona;
     this.director.configChanged(previous.bot.director?.enabled === true);
-    if (previous.bot.memory.messageThreshold !== this.config.bot.memory.messageThreshold) {
-      this.scheduleMemoryDrain();
-    }
     if (previous.bot.adminQq.trim() !== this.config.bot.adminQq.trim()) {
       this.cancelScopeReplies("private");
       this.cancelScopeReplies("user_group");
@@ -154,20 +134,6 @@ export function runtime_getProviderStatus(this: RuntimeHost) {
       imageModel: provider?.imageModel ?? "",
       apiKeyConfigured: Boolean(openaiProvider?.hasApiKey())
     };
-  }
-export async function runtime_consolidateWorkingMemory(this: RuntimeHost) {
-    const result = await this.mergeWorkingMemory({
-      conversation: {
-        id: "maintenance:working-memory",
-        scope: "maintenance",
-        title: "工作记忆整理"
-      },
-      participants: [],
-      messages: [],
-      metadata: { source: "sunabot.memory.merge" }
-    });
-    if (result.ok) this.persona = await loadPersona(this.config);
-    return result;
   }
 export function runtime_getProvider(this: RuntimeHost, providerId?: string) {
     const provider =
@@ -543,7 +509,6 @@ export function runtime_setConversationReplyEnabled(this: RuntimeHost, input: Co
       record.directorEventsEnabled = input.directorEventsEnabled;
     }
     if (!conversationReplyEnabled(record)) {
-      record.memoryCompressedThroughMessageCount = record.messageCount;
       this.replyGates.invalidateConversation(record.id);
       this.activeDirectControllers.get(record.id)?.abort(new Error("conversation replies disabled"));
       this.cancelAmbientReply(record.id);
@@ -641,7 +606,6 @@ export class RuntimeLifecycle {
   commitPromptReload(...args: Parameters<typeof runtime_commitPromptReload>) { return runtime_commitPromptReload.call(this.host, ...args); }
   getPersonaStatus(...args: Parameters<typeof runtime_getPersonaStatus>) { return runtime_getPersonaStatus.call(this.host, ...args); }
   getProviderStatus(...args: Parameters<typeof runtime_getProviderStatus>) { return runtime_getProviderStatus.call(this.host, ...args); }
-  consolidateWorkingMemory(...args: Parameters<typeof runtime_consolidateWorkingMemory>) { return runtime_consolidateWorkingMemory.call(this.host, ...args); }
   getProvider(...args: Parameters<typeof runtime_getProvider>) { return runtime_getProvider.call(this.host, ...args); }
   getProviderForModel(...args: Parameters<typeof runtime_getProviderForModel>) { return runtime_getProviderForModel.call(this.host, ...args); }
   ensureAgentPromptFiles(...args: Parameters<typeof runtime_ensureAgentPromptFiles>) { return runtime_ensureAgentPromptFiles.call(this.host, ...args); }

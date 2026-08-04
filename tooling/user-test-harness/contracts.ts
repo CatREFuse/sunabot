@@ -1,6 +1,6 @@
 export const USER_TEST_CASE_MARKER = "<!-- sunabot-user-test-case:v1 -->";
 
-export type UserTestCaseKind = "conversation" | "memory_compression" | "dream";
+export type UserTestCaseKind = "conversation" | "dream";
 export type UserTestVerdict = "pass" | "fail" | "blocked" | "inconclusive";
 
 export interface UserTestQualityCriterion {
@@ -124,32 +124,6 @@ export interface WorkingMemoryFixtureItem {
 export type JsonFixtureRecord = Record<string, unknown>;
 export type BranchFixtureTimePolicy = "fixed" | "rebase_to_runtime";
 
-export interface MemoryCompressionUserTestInput {
-  timePolicy: BranchFixtureTimePolicy;
-  now: string;
-  workingMemory: WorkingMemoryFixtureItem[];
-  longTerm: JsonFixtureRecord[];
-  userProfiles: JsonFixtureRecord[];
-  conversation: {
-    id: string;
-    scope: "private" | "user_group" | "bot_group";
-    title: string;
-    userId?: number;
-    groupId?: number;
-  };
-  messages: Array<{
-    id: string;
-    sequence: number;
-    role: "user" | "assistant";
-    text: string;
-    at: string;
-    userId?: number;
-    senderName?: string;
-    imageCount?: number;
-    quoteCount?: number;
-  }>;
-}
-
 export interface DreamPersonaFixture {
   name: string;
   soul: string;
@@ -265,7 +239,7 @@ export interface UserTestCase {
   title: string;
   kind: UserTestCaseKind;
   goal: string;
-  input: ConversationUserTestInput | MemoryCompressionUserTestInput | DreamUserTestInput;
+  input: ConversationUserTestInput | DreamUserTestInput;
   expected: UserTestExpectedOutput;
   quality: {
     criteria: UserTestQualityCriterion[];

@@ -13,9 +13,9 @@ import {
 export function validateMemoryConfig(input: unknown): BotMemorySettings {
   const value = object(input, "memory");
   exactKeys(value, [
-    "memoryModel", "reasoningEffort", "messageThreshold", "workingMemoryMaxEntries",
+    "memoryModel", "reasoningEffort",
     "dreamRecentWindowHours", "dreamRecentMemoryLimit", "dreamOlderMemoryLimit",
-    "workMemoryCompressInPrompt", "workMemoryCompressOutPrompt", "userProfilePrompt"
+    "workMemoryCompressOutPrompt"
   ], "memory");
   const memoryModel = requiredString(value.memoryModel, "memory.memoryModel", { trim: true, min: 1, max: 200 });
   const reasoningEffort = optionalReasoningEffort(value.reasoningEffort, "memory.reasoningEffort");
@@ -31,13 +31,9 @@ export function validateMemoryConfig(input: unknown): BotMemorySettings {
   return {
     memoryModel,
     ...(reasoningEffort ? { reasoningEffort } : {}),
-    messageThreshold: integer(value.messageThreshold, "memory.messageThreshold", 1, 200),
-    workingMemoryMaxEntries: integer(value.workingMemoryMaxEntries, "memory.workingMemoryMaxEntries", 1, 1_000),
     dreamRecentWindowHours: integer(value.dreamRecentWindowHours, "memory.dreamRecentWindowHours", 1, 720),
     dreamRecentMemoryLimit,
     dreamOlderMemoryLimit,
-    workMemoryCompressInPrompt: pathString(value.workMemoryCompressInPrompt, "memory.workMemoryCompressInPrompt", true),
-    workMemoryCompressOutPrompt: pathString(value.workMemoryCompressOutPrompt, "memory.workMemoryCompressOutPrompt", true),
-    userProfilePrompt: pathString(value.userProfilePrompt, "memory.userProfilePrompt", true)
+    workMemoryCompressOutPrompt: pathString(value.workMemoryCompressOutPrompt, "memory.workMemoryCompressOutPrompt", true)
   };
 }

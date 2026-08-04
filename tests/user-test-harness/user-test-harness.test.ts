@@ -42,7 +42,6 @@ import { gateUserTestReleaseManifest } from "../../tooling/user-test-harness/rel
 import { deriveBranchCaseFromSample } from "../../tooling/user-test-harness/deriveBranchCase.js";
 import {
   materializeDreamAtRuntime,
-  materializeMemoryCompressionAtRuntime,
   rebaseDreamTemplateToFixture
 } from "../../tooling/user-test-harness/timeline.js";
 
@@ -382,25 +381,6 @@ describe("user test harness", () => {
   });
 
   it("rebases branch timelines without mutating facts or losing Director wall-clock time", () => {
-    const memory = memoryCompressionCase();
-    if (memory.kind !== "memory_compression") throw new Error("memory case required");
-    memory.input.longTerm = [{
-      id: "long-time",
-      createdAt: "2026-07-25T06:05:00.000+08:00",
-      fact: "The literal date 2026-07-25 remains part of this sentence."
-    }];
-    const memorySource = structuredClone(memory.input);
-    const materializedMemory = materializeMemoryCompressionAtRuntime(
-      memory.input,
-      new Date("2026-07-27T06:05:00.000+08:00")
-    );
-    expect(materializedMemory.input.longTerm).toEqual([{
-      id: "long-time",
-      createdAt: "2026-07-25T22:05:00.000Z",
-      fact: "The literal date 2026-07-25 remains part of this sentence."
-    }]);
-    expect(memory.input).toEqual(memorySource);
-
     const dream = dreamCase();
     if (dream.kind !== "dream") throw new Error("Dream case required");
     const dreamSource = structuredClone(dream.input);
@@ -741,7 +721,7 @@ describe("user test harness", () => {
         preference: "",
         user: "",
         relation: "",
-        air: ""
+        air: "[sensitive-content-redacted]"
       },
       conversations: [{
         id: "conversation-0001",
@@ -820,7 +800,20 @@ describe("user test harness", () => {
       expect(parseUserTestCaseDocument(first).input).toMatchObject({
         now: fixture.now,
         workingMemory: fixture.workingMemory,
-        conversations: fixture.conversations
+        conversations: fixture.conversations,
+        persona: {
+          air: [
+            "# 场域知识",
+            "",
+            "## 使用边界",
+            "",
+            "当前没有可用于本次脱敏夹具的场域边界。",
+            "",
+            "## 场域约定",
+            "",
+            "当前没有可用于本次脱敏夹具的场域约定。"
+          ].join("\n")
+        }
       });
     } finally {
       await fs.rm(root, { recursive: true, force: true });
@@ -917,101 +910,6 @@ describe("user test harness", () => {
     }
   });
 
-  it("derives memory compression from one conversation without unrelated working memory", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-user-test-memory-derive-"));
-    const samplePath = path.join(root, "sample.json");
-    const templatePath = path.join(root, "template.md");
-    const fixture = {
-      now: "2024-01-01T02:00:00.000Z",
-      workingMemory: [{
-        id: "memory-0001",
-        content: "Selected conversation memory.",
-        occurredAt: "2024-01-01T00:00:00.000Z",
-        conversationId: "conversation-0001",
-        conversationScope: "private" as const,
-        conversationTitle: "conversation-0001",
-        sourceKind: "admin" as const
-      }, {
-        id: "memory-0002",
-        content: "Unrelated conversation memory.",
-        occurredAt: "2024-01-01T00:30:00.000Z",
-        conversationId: "conversation-0002",
-        conversationScope: "private" as const,
-        conversationTitle: "conversation-0002",
-        sourceKind: "admin" as const
-      }],
-      longTerm: [],
-      userProfiles: [],
-      persona: {
-        name: "fixture-agent",
-        soul: "",
-        preference: "",
-        user: "",
-        relation: "",
-        air: ""
-      },
-      conversations: [{
-        id: "conversation-0001",
-        scope: "private" as const,
-        title: "conversation-0001",
-        userId: 9_000_001,
-        messages: [{
-          id: "message-0001",
-          sequence: 1,
-          role: "user" as const,
-          text: "Keep the selected conversation grounded.",
-          at: "2024-01-01T01:00:00.000Z",
-          userId: 9_000_001,
-          senderName: "name-0001",
-          imageCount: 2,
-          quoteCount: 1
-        }]
-      }]
-    };
-    const sample = {
-      schemaVersion: 2,
-      kind: "sunabot.user-test.sanitized-branch-sample",
-      redaction: {
-        version: "sunabot-user-test-v2",
-        irreversible: true,
-        mappingPersisted: false,
-        timestampPolicy: "relative-shifted-utc-minute",
-        freeTextReviewRequired: true
-      },
-      integrity: {
-        canonicalization: "json-stringify-v1",
-        payloadSha256: cryptoDigest(fixture)
-      },
-      fixture
-    };
-    const templateCase = memoryCompressionCase();
-    await fs.writeFile(samplePath, JSON.stringify(sample));
-    await fs.writeFile(templatePath, [
-      "# Derived memory compression",
-      USER_TEST_CASE_MARKER,
-      "```json",
-      JSON.stringify(templateCase),
-      "```"
-    ].join("\n"));
-    try {
-      const result = await deriveBranchCaseFromSample({
-        samplePath,
-        templatePath,
-        outputRoot: root,
-        outputName: "derived.md",
-        conversationId: "conversation-0001",
-        confirmReviewedSanitizedSample: true
-      });
-      const derived = parseUserTestCaseDocument(await fs.readFile(result.outputPath, "utf8"));
-      expect(derived.input).toMatchObject({
-        workingMemory: [expect.objectContaining({ id: "memory-0001" })],
-        messages: [expect.objectContaining({ imageCount: 2, quoteCount: 1 })]
-      });
-      expect(JSON.stringify(derived.input)).not.toContain("memory-0002");
-    } finally {
-      await fs.rm(root, { recursive: true, force: true });
-    }
-  });
 
   it("prepares the isolated Agent parent with private extension-safe permissions", {
     timeout: 15_000
@@ -1835,7 +1733,21 @@ describe("user test harness", () => {
         })
       },
       {
+        text: "",
+        calls: [{
+          name: "add_workmemory",
+          args: { action: "skip", content: null }
+        }]
+      },
+      {
         text: "夹具主对话已收到。",
+        calls: [{
+          name: "add_user_profile",
+          args: { action: "skip", profile: null, addressNames: null }
+        }]
+      },
+      {
+        text: "",
         calls: [{
           name: "add_workmemory",
           args: { action: "skip", content: null }
@@ -1844,8 +1756,8 @@ describe("user test harness", () => {
       {
         text: "夹具私聊已收到。",
         calls: [{
-          name: "add_workmemory",
-          args: { action: "skip", content: null }
+          name: "add_user_profile",
+          args: { action: "skip", profile: null, addressNames: null }
         }]
       }
     ];
@@ -1914,7 +1826,7 @@ describe("user test harness", () => {
         id: "provider_prompt.ordered:conversation.group-reply",
         passed: true
       }));
-      expect(report.observation.tools).toEqual(["add_workmemory"]);
+      expect(report.observation.tools).toEqual(["add_user_profile", "add_workmemory"]);
       expect(await fs.readFile(
         path.join(
           destination,
@@ -1952,7 +1864,7 @@ describe("user test harness", () => {
         passed: true
       }));
       expect(JSON.stringify(privateReport.observation.outbound)).toContain("夹具私聊已收到");
-      expect(fetchMock).toHaveBeenCalledTimes(3);
+      expect(fetchMock).toHaveBeenCalledTimes(5);
     } finally {
       vi.unstubAllGlobals();
       if (previousWorkspace == null) delete process.env.SUNABOT_WORKSPACE;
@@ -1969,7 +1881,7 @@ describe("user test harness", () => {
     }
   });
 
-  it("drives memory compression and Dream through their production branches", {
+  it("drives Dream through its production branch", {
     timeout: 30_000
   }, async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-user-test-branches-"));
@@ -2009,39 +1921,10 @@ describe("user test harness", () => {
       "FIXTURE_PROVIDER_KEY=fixture-token\n"
     );
     const providerOutputs = [
-      JSON.stringify({ profiles: [] }),
       JSON.stringify({
-        facts: [{
-          id: null,
-          fact: "0.1.4 必须在回归测试全部通过后发布。"
-        }],
-        allPreviousMemoriesInvalidated: true
-      }),
-      JSON.stringify({
-        schemaVersion: 1,
-        dream: {
-          text: "我梦见测试清单变成一条发光的路，只有回归测试全部通过，0.1.4 才走向发布终点。",
-          factuality: "imagined"
-        },
-        longTermReviews: [{
-          sourceIds: ["long_fixture_release"],
-          action: "retain",
-          canonical: null,
-          importance: 0.9,
-          futureRelevance: 0.9,
-          emotionalSalience: 0.4,
-          confidence: 1,
-          reason: "发布门禁仍然有效。"
-        }],
-        workingReviews: [{
-          sourceIds: ["working_fixture_release"],
-          action: "retain",
-          canonical: null,
-          confidence: 1,
-          reason: "近期发布约束保持不变。"
-        }],
-        personaAdjustment: null,
-        fieldKnowledge: null
+        workingMemoryCompression: "0.1.4 必须在回归测试全部通过后发布。",
+        longTermMemoryAdditions: ["回归测试全部通过后才能发布 0.1.4。"],
+        dreamDescription: "我梦见测试清单变成一条发光的路，只有回归测试全部通过，0.1.4 才走向发布终点。"
       })
     ];
     const fetchMock = vi.fn(async () => {
@@ -2062,14 +1945,6 @@ describe("user test harness", () => {
       const { runRuntimeUserTest } = await import(
         "../../tooling/user-test-harness/runtimeDriver.js"
       );
-      const memoryReport = await runRuntimeUserTest(
-        memoryCompressionCase(),
-        "c".repeat(64)
-      );
-      expect(memoryReport.execution.status).toBe("passed");
-      expect(memoryReport.execution.assertions.every((assertion) => assertion.passed)).toBe(true);
-      expect(JSON.stringify(memoryReport.observation.branch)).toContain("0.1.4");
-
       const dreamReport = await runRuntimeUserTest(
         dreamCase(),
         "d".repeat(64)
@@ -2093,9 +1968,23 @@ describe("user test harness", () => {
             status: "committed",
             date: dreamReport.observation.branch.seeded.timeline.directorScheduleDate
           }
+        },
+        run: {
+          output: {
+            workingMemoryCompression: "0.1.4 必须在回归测试全部通过后发布。",
+            longTermMemoryAdditions: ["回归测试全部通过后才能发布 0.1.4。"],
+            dreamDescription: "我梦见测试清单变成一条发光的路，只有回归测试全部通过，0.1.4 才走向发布终点。"
+          }
+        },
+        memory: {
+          after: {
+            longTerm: expect.arrayContaining([
+              expect.objectContaining({ fact: "回归测试全部通过后才能发布 0.1.4。" })
+            ])
+          }
         }
       });
-      expect(fetchMock).toHaveBeenCalledTimes(3);
+      expect(fetchMock).toHaveBeenCalledOnce();
     } finally {
       vi.unstubAllGlobals();
       if (previousWorkspace == null) delete process.env.SUNABOT_WORKSPACE;
@@ -2620,50 +2509,6 @@ function conversationCase(
       criteria: [{
         id: "accuracy",
         description: "The answer is accurate and grounded in tool output.",
-        minimumScore: 4
-      }]
-    }
-  };
-}
-
-function memoryCompressionCase(): UserTestCase {
-  return {
-    schemaVersion: 1,
-    id: "branch.memory-compression",
-    title: "Memory compression",
-    kind: "memory_compression",
-    goal: "The release gate is retained in working memory.",
-    input: {
-      timePolicy: "rebase_to_runtime",
-      now: "2026-07-26T06:05:00.000+08:00",
-      workingMemory: [],
-      longTerm: [],
-      userProfiles: [],
-      conversation: {
-        id: "private:20002",
-        scope: "private",
-        title: "Fixture user",
-        userId: 20002
-      },
-      messages: [{
-        id: "memory-message-1",
-        sequence: 1,
-        role: "user",
-        text: "0.1.4 必须在回归测试全部通过后发布。",
-        at: "2026-07-26T06:00:00.000+08:00",
-        userId: 20002,
-        senderName: "Fixture user"
-      }]
-    },
-    expected: {
-      requiredText: ["0.1.4", "回归测试"],
-      minimumOutboundCount: 0,
-      maximumOutboundCount: 0
-    },
-    quality: {
-      criteria: [{
-        id: "grounding",
-        description: "The memory remains grounded in the fixture.",
         minimumScore: 4
       }]
     }

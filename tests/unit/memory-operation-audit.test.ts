@@ -12,7 +12,6 @@ import {
   createMemoryEntry,
   deleteMemoryEntry,
   listMemoryOperationLogs,
-  readMemoryProcessingHealth,
   recallMemory,
   recordMemoryOperation,
   updateMemoryEntry
@@ -141,59 +140,6 @@ describe("memory operation audit", () => {
     expect(second.logs).toHaveLength(1);
     expect([...first.logs, ...second.logs].every((entry) => entry.category === "memory.operation")).toBe(true);
     expect([...first.logs, ...second.logs].map((entry) => entry.id)).not.toContain("unrelated-log");
-  });
-
-  it("counts only explicit compression attempts inside the exact 24-hour window", () => {
-    const store = applicationDataStore(config);
-    const appendAttempt = (
-      id: string,
-      at: string,
-      outcome: "applied" | "failed" | "unchanged" | "rejected",
-      action = "working.compression_attempt"
-    ) => store.appendMemoryOperationLog({
-      id,
-      at,
-      category: "memory.operation",
-      action,
-      response: { outcome }
-    });
-    appendAttempt("attempt-boundary-success", "2026-07-30T12:00:00.000Z", "applied");
-    appendAttempt("attempt-failed", "2026-07-31T01:00:00.000Z", "failed");
-    appendAttempt("attempt-success", "2026-07-31T11:59:59.000Z", "applied");
-    appendAttempt("attempt-too-old", "2026-07-30T11:59:59.999Z", "applied");
-    appendAttempt("attempt-future", "2026-07-31T12:00:00.001Z", "applied");
-    appendAttempt("attempt-unchanged", "2026-07-31T09:00:00.000Z", "unchanged");
-    appendAttempt("attempt-rejected", "2026-07-31T09:30:00.000Z", "rejected");
-    appendAttempt("unrelated-memory-operation", "2026-07-31T10:00:00.000Z", "failed", "working.batch_validate");
-    store.appendMemoryOperationLog({
-      id: "attempt-malformed",
-      at: "2026-07-31T10:30:00.000Z",
-      category: "memory.operation",
-      action: "working.compression_attempt",
-      response: { outcome: { invalid: true } }
-    });
-
-    expect(readMemoryProcessingHealth(config, {
-      measuredAt: new Date("2026-07-31T12:00:00.000Z"),
-      pending: 17
-    })).toEqual({
-      windowHours: 24,
-      windowStartedAt: "2026-07-30T12:00:00.000Z",
-      measuredAt: "2026-07-31T12:00:00.000Z",
-      successful: 2,
-      attempted: 3,
-      pending: 17
-    });
-  });
-
-  it("rejects invalid processing-health boundaries", () => {
-    expect(() => readMemoryProcessingHealth(config, { pending: -1 })).toThrow(
-      "Memory processing pending count is invalid."
-    );
-    expect(() => readMemoryProcessingHealth(config, {
-      pending: 0,
-      measuredAt: new Date(Number.NaN)
-    })).toThrow("Memory processing health time is invalid.");
   });
 
   it("does not roll back a successful memory mutation when audit append fails", async () => {

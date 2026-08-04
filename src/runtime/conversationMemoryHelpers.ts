@@ -6,9 +6,7 @@ import { formatModelTimestamp, systemModelTimeZone } from "../../services/agent/
 import { senderDisplayName } from "../../services/conversations/senderName.js";
 import {
   formatMemoryMatchesForPrompt,
-  isMemoryCausalChainKey,
-  type MemoryEntry,
-  type MemoryFactInput
+  type MemoryEntry
 } from "../../services/memory/memoryService.js";
 import { isAdminSender } from "../../services/messaging/replySenderPolicy.js";
 import { generateImgMediaHandle } from "../../services/tools/generateImgTool.js";
@@ -18,16 +16,9 @@ import {
   ConversationRecord,
   ParsedIncomingMessage
 } from "../types.js";
-import {
-  normalizeQqId,
-  normalizeQqIds,
-  resolveFactUsers
-} from "./conversationMemoryIdentity.js";
-import { conversationRecordId, escapeRegExp, formatAttachmentListForContext, formatQuoteReferencesForContext, matchesMentionName, readRecord, uniqueStrings } from "./messagingAttachmentHelpers.js";
-import { AdminIdentity, BatchUserInfo, DEFAULT_ADMIN_NAME, GROUP_CHAT_SUMMARY_WINDOW_MS, MAX_STORED_CONVERSATION_MESSAGES, WorkingMemoryMergeOutput } from "./runtimeContracts.js";
+import { conversationRecordId, formatAttachmentListForContext, formatQuoteReferencesForContext, matchesMentionName } from "./messagingAttachmentHelpers.js";
+import { AdminIdentity, DEFAULT_ADMIN_NAME, GROUP_CHAT_SUMMARY_WINDOW_MS, MAX_STORED_CONVERSATION_MESSAGES } from "./runtimeContracts.js";
 import { conversationLastText, conversationTitle } from "./selfieHelpers.js";
-
-export { normalizeQqId, normalizeQqIds, resolveFactUsers } from "./conversationMemoryIdentity.js";
 
 export function resolveRuntimePersonaName(personaName: string | undefined, configuredName: string | undefined) {
   return personaName?.trim() || configuredName?.trim() || "助手";
@@ -115,28 +106,6 @@ export function stripImageTokens(text: string) {
     .replace(/\s+/g, " ")
     .trim();
 }
-export function collectBatchUsers(
-  batch: Array<{ sequence: number; message: ConversationRecord["messages"][number] }>,
-  admin: AdminIdentity
-) {
-  const users = new Map<string, BatchUserInfo>();
-  for (const { message } of batch) {
-    if (message.role !== "user" || message.userId == null) continue;
-    const userId = String(message.userId);
-    const existing = users.get(userId);
-    const currentName = normalizeParticipantName(message.senderName, userId) || existing?.currentName || "";
-    const names = uniqueStrings([...(existing?.names ?? []), currentName].filter(Boolean));
-    const isAdmin = isAdminUserId(userId, admin);
-    users.set(userId, {
-      userId,
-      names,
-      currentName,
-      addressNames: uniqueStrings([isAdmin ? admin.name : "", currentName].filter(Boolean)),
-      isAdmin
-    });
-  }
-  return [...users.values()];
-}
 export function formatIncomingUserLabel(incoming: ParsedIncomingMessage, admin: AdminIdentity) {
   const userId = String(incoming.userId);
   if (isAdminUserId(userId, admin)) return `${admin.name}(${admin.userId})`;
@@ -156,9 +125,6 @@ export function buildWorkingMemoryRecallQuery(incoming: ParsedIncomingMessage, t
     conversationTitle(incoming),
     text
   ].filter(Boolean).join(" ");
-}
-export function formatBatchUserLabel(user: BatchUserInfo) {
-  return `QQ ${user.userId}（${user.addressNames.join("、") || "暂无称呼"}）`;
 }
 export function isMemoryEntryRelatedToUsers(entry: MemoryEntry, userIds: Set<string>) {
   if (entry.userId && userIds.has(entry.userId)) return true;
@@ -333,224 +299,8 @@ export function isMemoryEligibleConversationMessage(message: ConversationRecord[
   if (message.requestStatus === "running" || message.requestStatus === "failed") return false;
   return Boolean(message.text.trim());
 }
-export function parseWorkingMemoryMergeOutput(text: string): WorkingMemoryMergeOutput | null {
-  const parsed = parseModelJson(text);
-  if (Array.isArray(parsed)) {
-    return {
-      facts: normalizeMemoryFacts(parsed),
-      allPreviousMemoriesInvalidated: false
-    };
-  }
-  const record = readRecord(parsed);
-  if (!Array.isArray(record.facts)) return null;
-  return {
-    facts: normalizeMemoryFacts(record.facts),
-    allPreviousMemoriesInvalidated: record.allPreviousMemoriesInvalidated === true
-  };
-}
-export function parseCompleteWorkingMemoryMergeOutput(text: string): WorkingMemoryMergeOutput | null {
-  return parseWorkingMemoryMergeOutput(text);
-}
-export function parseMemoryFactOutput(text: string): MemoryFactInput[] | null {
-  const parsed = parseModelJson(text);
-  if (Array.isArray(parsed)) return normalizeMemoryFacts(parsed);
-  const record = readRecord(parsed);
-  const values = record.profiles ?? record.facts ?? record.memories ?? record.items;
-  return Array.isArray(values) ? normalizeMemoryFacts(values) : null;
-}
-export function parseCompleteMemoryFactOutput(text: string): MemoryFactInput[] | null {
-  return parseMemoryFactOutput(text);
-}
-export function normalizeMemoryFacts(values: unknown[]): MemoryFactInput[] {
-  const facts: MemoryFactInput[] = [];
-  for (const value of values) {
-    const record = readRecord(value);
-    const rawFact = record.fact ?? record.text ?? record.summary ?? record.memory ?? record.impression ?? record.profile;
-    const id = stringValue(record.id);
-    const fact = normalizeMemoryFactText(rawFact);
-    if (!fact) continue;
-    const time = stringValue(record.time ?? record.at ?? record.createdAt ?? record.date);
-    const rawUserId = record.userId ?? record.qq ?? record.qqId;
-    const rawUserIds = record.userIds ?? record.user_ids ?? record.qqs;
-    const userId = normalizeQqId(rawUserId);
-    const userIds = uniqueStrings([
-      ...normalizeQqIds(rawUserIds),
-      ...(userId ? [userId] : [])
-    ]);
-    const userName = stringValue(record.userName ?? record.user_name ?? record.name ?? record.nickname ?? record.card);
-    const addressNames = normalizeAddressNameValues(record.addressNames ?? record.address_names);
-    const addressName = stringValue(record.addressName ?? record.address_name ?? record.salutation);
-    const occurredAt = stringValue(record.occurredAt ?? record.occurred_at);
-    const occurredEndAtValue = record.occurredEndAt ?? record.occurred_end_at;
-    const occurredEndAt = occurredEndAtValue == null ? undefined : stringValue(occurredEndAtValue);
-    const observedAt = stringValue(record.observedAt ?? record.observed_at);
-    const sourceWorkingMemoryIds = normalizeStringIds(record.sourceWorkingMemoryIds ?? record.source_working_memory_ids);
-    const sourceCandidateIds = normalizeStringIds(record.sourceCandidateIds ?? record.source_candidate_ids);
-    const eventType = stringValue(record.eventType ?? record.event_type);
-    const subjectKey = stringValue(record.subjectKey ?? record.subject_key);
-    const eventKey = stringValue(record.eventKey ?? record.event_key);
-    const rawCausalChainKey = record.causalChainKey ?? record.causal_chain_key;
-    const causalChainKey = isMemoryCausalChainKey(rawCausalChainKey)
-      ? stringValue(rawCausalChainKey)
-      : "";
-    const eventFingerprint = stringValue(record.eventFingerprint ?? record.event_fingerprint);
-    const longTermId = stringValue(record.longTermId ?? record.long_term_id);
-    const batchId = stringValue(record.batchId ?? record.batch_id);
-    facts.push({
-      id: id || undefined,
-      fact,
-      time: time || undefined,
-      occurredAt: occurredAt || undefined,
-      occurredEndAt: occurredEndAt || undefined,
-      observedAt: observedAt || undefined,
-      userId: userId || undefined,
-      userIds: userIds.length ? userIds : undefined,
-      userName: userName || undefined,
-      addressNames: addressNames.length ? addressNames : undefined,
-      addressName: addressName || undefined,
-      sourceWorkingMemoryIds: sourceWorkingMemoryIds.length ? sourceWorkingMemoryIds : undefined,
-      sourceCandidateIds: sourceCandidateIds.length ? sourceCandidateIds : undefined,
-      eventType: eventType || undefined,
-      subjectKey: subjectKey || undefined,
-      eventKey: eventKey || undefined,
-      causalChainKey: causalChainKey || undefined,
-      eventFingerprint: eventFingerprint || undefined,
-      longTermId: longTermId || undefined,
-      batchId: batchId || undefined,
-      promoteToLongTerm: record.promoteToLongTerm === true || record.promote_to_long_term === true
-    });
-  }
-  return facts;
-}
-export function attachUsersToMemoryFacts(facts: MemoryFactInput[], participants: BatchUserInfo[]) {
-  return facts.map((fact) => {
-    const relatedUsers = resolveFactUsers(fact, participants);
-    const addressNames = uniqueStrings([
-      ...(fact.addressNames ?? []),
-      ...(fact.addressName ? [fact.addressName] : [])
-    ].map(stringValue).filter(Boolean));
-    return {
-      ...fact,
-      userId: relatedUsers.length === 1 ? relatedUsers[0]!.userId : undefined,
-      userIds: relatedUsers.length ? uniqueStrings(relatedUsers.map((user) => user.userId)) : undefined,
-      addressNames: addressNames.length ? addressNames : undefined,
-      addressName: undefined
-    };
-  });
-}
-export function normalizeUserProfileFacts(
-  facts: MemoryFactInput[],
-  participants: BatchUserInfo[],
-  messages: Array<{ text: string }> = []
-) {
-  return validateUserProfileFacts(facts, participants, messages).accepted;
-}
-
-export type UserProfileValidationReasonCode =
-  | "related_user_count"
-  | "empty_fact";
-
-export function validateUserProfileFacts(
-  facts: MemoryFactInput[],
-  participants: BatchUserInfo[],
-  messages: Array<{ text: string }> = []
-) {
-  const accepted: MemoryFactInput[] = [];
-  const rejected: Array<{ index: number; reasonCode: UserProfileValidationReasonCode }> = [];
-  facts.forEach((fact, index) => {
-    const result = validateUserProfileFact(fact, participants, messages);
-    if ("fact" in result) accepted.push(result.fact);
-    else rejected.push({ index, reasonCode: result.reasonCode });
-  });
-  return { accepted, rejected };
-}
-
-function validateUserProfileFact(
-  fact: MemoryFactInput,
-  participants: BatchUserInfo[],
-  _messages: Array<{ text: string }>
-): { fact: MemoryFactInput } | { reasonCode: UserProfileValidationReasonCode } {
-  const relatedUsers = resolveFactUsers(fact, participants);
-  if (relatedUsers.length !== 1) return { reasonCode: "related_user_count" };
-  const user = relatedUsers[0]!;
-  const proposedAddressNames = uniqueStrings([
-    ...(fact.addressNames ?? []),
-    ...(fact.addressName ? [fact.addressName] : [])
-  ].map(stringValue).filter(Boolean));
-  const addressNames = uniqueStrings([
-    ...(user.addressNames ?? user.names ?? []),
-    ...proposedAddressNames
-  ]);
-  const content = normalizeMemoryFactText(fact.fact);
-  if (!content) return { reasonCode: "empty_fact" };
-  return {
-    fact: {
-      ...fact,
-      fact: content,
-      userId: user.userId,
-      userIds: [user.userId],
-      userName: fact.userName || user.currentName || undefined,
-      addressNames: addressNames.length ? addressNames : undefined,
-      addressName: undefined
-    }
-  };
-}
-export function normalizeMemoryFactText(value: unknown) {
-  return stringValue(value);
-}
-export function stripUserProfilePrefix(text: string, userId: string, userName: string) {
-  const idPattern = escapeRegExp(userId);
-  const namePattern = userName ? `(?:[（(]${escapeRegExp(userName)}[）)])?` : "(?:[（(][^）)]*[）)])?";
-  const exactPrefix = new RegExp(`^\\s*(?:QQ\\s*)?${idPattern}\\s*${namePattern}\\s*[:：]\\s*`);
-  const genericPrefix = /^\s*QQ\s*\d{5,}\s*(?:[（(][^）)]*[）)])?\s*[:：]\s*/;
-  return stringValue(text)
-    .split(/\r?\n/)
-    .map((line) => line.replace(exactPrefix, "").replace(genericPrefix, "").trim())
-    .filter(Boolean)
-    .join("\n");
-}
-export function parseModelJson(text: string): unknown {
-  const trimmed = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
-  const direct = tryParseJson(trimmed);
-  if (direct !== undefined) return direct;
-
-  const objectStart = trimmed.indexOf("{");
-  const objectEnd = trimmed.lastIndexOf("}");
-  if (objectStart >= 0 && objectEnd > objectStart) {
-    const parsed = tryParseJson(trimmed.slice(objectStart, objectEnd + 1));
-    if (parsed !== undefined) return parsed;
-  }
-
-  const arrayStart = trimmed.indexOf("[");
-  const arrayEnd = trimmed.lastIndexOf("]");
-  if (arrayStart >= 0 && arrayEnd > arrayStart) {
-    const parsed = tryParseJson(trimmed.slice(arrayStart, arrayEnd + 1));
-    if (parsed !== undefined) return parsed;
-  }
-
-  return undefined;
-}
-export function tryParseJson(text: string) {
-  try {
-    return JSON.parse(text) as unknown;
-  } catch {
-    return undefined;
-  }
-}
 export function stringValue(value: unknown) {
   return String(value ?? "").trim();
-}
-export function normalizeStringIds(value: unknown) {
-  const values = Array.isArray(value)
-    ? value
-    : stringValue(value)
-      .split(/[\s,，、]+/)
-      .filter(Boolean);
-  return uniqueStrings(values.map(stringValue).filter(Boolean));
-}
-function normalizeAddressNameValues(value: unknown) {
-  if (!Array.isArray(value)) return [];
-  return uniqueStrings(value.map(stringValue).filter(Boolean));
 }
 export function adminIdentityFromBot(bot: AppConfig["bot"]): AdminIdentity {
   return {

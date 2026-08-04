@@ -76,8 +76,8 @@ export async function readWorkingMemoryDocument(config: AppConfig): Promise<Work
   if (!content) {
     return { filePath, content: "", revision: revision(""), items: [] };
   }
-  assertDocumentSize(content);
   const normalized = content.replace(/\r\n/g, "\n").trimEnd();
+  assertDocumentSize(normalized);
   const items = parseWorkingMemoryMarkdown(normalized);
   return { filePath, content: normalized, revision: revision(normalized), items };
 }
@@ -91,7 +91,7 @@ export async function replaceWorkingMemoryDocument(
   signal?.throwIfAborted();
   const normalizedItems = items.map(validateWorkingMemoryItem);
   const content = renderWorkingMemoryMarkdown(normalizedItems);
-  assertDocumentSize(content);
+  assertDocumentSize(`${content}\n`);
   const parsed = parseWorkingMemoryMarkdown(content);
   if (JSON.stringify(parsed) !== JSON.stringify(normalizedItems)) {
     throw workingMemoryError("WORKING_MEMORY_DOCUMENT_INVALID", "Working memory document failed round-trip validation.");
@@ -234,7 +234,8 @@ export async function appendWorkingMemoryDocumentItem(
 function workingMemoryActor(sourceKind: WorkingMemoryDocumentItem["sourceKind"]): MemoryOperationActor {
   if (sourceKind === "add_workmemory") return "model_tool";
   if (sourceKind === "admin") return "admin";
-  return "memory_pipeline";
+  if (sourceKind === "dream") return "dream";
+  return "system";
 }
 
 async function restoreCancelledWorkingMemoryWrite(
@@ -677,7 +678,7 @@ async function readOptionalRegularFile(filePath: string) {
     if (!stat.isFile()) {
       throw workingMemoryError("WORKING_MEMORY_PATH_INVALID", "WORKING_MEMORY.md must be a regular file.");
     }
-    if (stat.size > WORKING_MEMORY_MAX_BYTES) {
+    if (stat.size > WORKING_MEMORY_MAX_BYTES + 1) {
       throw workingMemoryError("WORKING_MEMORY_TOO_LARGE", "WORKING_MEMORY.md exceeds the 64 KiB limit.");
     }
     return await handle.readFile("utf8");

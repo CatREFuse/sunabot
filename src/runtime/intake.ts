@@ -256,7 +256,6 @@ export async function runtime_handleInboundMessage(this: RuntimeHost, incoming: 
           .finally(() => this.scheduleAttachmentCacheRefresh());
         this.incomingPreparations.set(preparationKey, { promise: preparation, incoming });
         this.trackReplyDebouncePreparation(incoming, preparation);
-        this.scheduleMemoryCompression(record);
       } catch (error) {
         if (rollback && activeDebounceConversation && !incomingPersisted) {
           restoreConversationRecord(activeDebounceConversation, rollback);
@@ -300,7 +299,6 @@ export async function runtime_handleInboundMessage(this: RuntimeHost, incoming: 
       })
       .finally(() => this.scheduleAttachmentCacheRefresh());
     this.trackReplyDebouncePreparation(incoming, preparation);
-    this.scheduleMemoryCompression(record);
 
     if (route === "ambient") {
       const thresholdReached = this.shouldRunUserGroupchatOrchestrator(incoming);
@@ -309,11 +307,11 @@ export async function runtime_handleInboundMessage(this: RuntimeHost, incoming: 
         const job = { channelKey, incoming, gateway, captureSequence, gate };
         if (thresholdReached) this.queueAmbientReply(job);
         else this.scheduleAmbientIdleReply(job);
-      }).finally(() => this.scheduleMemoryCompression(record));
+      });
       return;
     }
 
-    void preparation.finally(() => this.scheduleMemoryCompression(record));
+    void preparation;
   }
 export async function runtime_processSessionEvent(this: RuntimeHost,
     event: SessionEventRecord,

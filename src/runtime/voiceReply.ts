@@ -18,9 +18,6 @@ interface RuntimeVoiceReplyHost extends RuntimeConfigPort {
   sendAssistantReply(
     ...args: Parameters<typeof runtime_sendAssistantReply>
   ): ReturnType<typeof runtime_sendAssistantReply>;
-  scheduleMemoryCompression(
-    record: NonNullable<Awaited<ReturnType<typeof runtime_sendAssistantReply>>>
-  ): void;
 }
 
 interface RuntimeVoiceSynthesisInput {
@@ -124,6 +121,5 @@ export async function sendRuntimeVoiceFinalReply(
   }
   await input.lifecycle?.commitAndRelease();
   if (input.delivery) input.delivery.terminalStatus = "replied";
-  if (textResult.value) host.scheduleMemoryCompression(textResult.value);
   return Boolean(textResult.value);
 }

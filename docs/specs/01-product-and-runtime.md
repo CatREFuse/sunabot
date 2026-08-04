@@ -10,7 +10,7 @@ sunabot 是面向个人自托管场景的 QQ 多 Agent 服务。系统通过 One
 
 定时任务是当前 Agent 的主动回调能力。每项任务保存名称、启用状态、任务上下文、cron 或单次触发计划，以及一个或多个既有 QQ 会话目标和各目标的结构化 @ 对象。每次到期先冻结一份带 `role=callback` 的输入，再分别进入每个目标会话的 Session 队列；各目标按该会话正常 user input 的私聊/群聊最终提示词、历史、记忆、工具定义、能力过滤、deferred handoff 与 durable outbox 独立完成 Agent 回合。目标账号、会话和 @ 对象按任务快照执行，不能因当前管理台选择、后续任务编辑或其他 Agent 状态漂移。任务定义、运行记录、会话事件和 outbox 均按 Agent 隔离，Core 重启后从持久状态恢复。
 
-每个 Agent 具有独立的每日 Dream 管线。系统按宿主 IANA 时区在每天 04:00 整理前一段 04:00—04:00 窗口内的记忆、实际对话、活动任务、已提交日程与人格材料，生成约 200 字的虚构梦境并写回当日工作记忆；同一 Agent、自然日只提交一次。Dream 不产生 QQ 消息、Session 事件或 outbox，不跨 Agent 读取记忆、会话、日程或人格。
+每个 Agent 具有独立的每日 Dream 管线。系统按宿主 IANA 时区在每天 04:00 读取当前工作记忆、长期记忆只读索引、实际对话、活动任务、已提交日程与人格材料，通过一次模型请求按固定顺序生成工作记忆压缩、长期记忆添加和梦境描述，并把前两项作为同一运行的记忆提交结果，把梦境描述写回当日工作记忆；同一 Agent、自然日只提交一次。Dream 不改写或删除长期记忆，不处理长期记忆遗忘、召回评分、场域知识或人格文件，不产生 QQ 消息、Session 事件或 outbox，也不跨 Agent 读取数据。
 
 ## 2. 运行结构
 
@@ -58,7 +58,7 @@ Core 与 NapCat 是独立生命周期和文件系统边界。跨组件出站媒�
 
 生产组合根默认不提供 stdio MCP launcher。`SUNABOT_MCP_STDIO_BACKEND=docker` 只接受包含已预装 server 与批准清单的 digest 固定自定义镜像；`bubblewrap` 只在 Linux/WSL 使用绝对、root 所有且权限为 `0444` 的批准清单。Native 与 Docker Core 都禁止运行时下载 server 依赖。`SUNABOT_MCP_CREDENTIAL_VAULT_KEY` 必须是 32 字节 canonical base64url，缺失时 OAuth 管理端点保持不可用，远端无 OAuth MCP 仍可按自身能力运行。启动、`status` 与 `doctor` 必须使用同一份 `workspace/secrets/runtime.env` 解析 MCP 能力，不能用启动终端的空环境覆盖实际运行配置。
 
-Provider、Codex CLI 与联网工具的出站 HTTP(S) 可独立使用代理。API 在载入 composition root 前由 `packages/platform/proxy.mjs` 解析并安装 Undici dispatcher，优先级为 `SUNABOT_PROXY_URL`、标准 `HTTP_PROXY`/`HTTPS_PROXY`、WSL 默认网关与配置端口探测。`SUNABOT_PROXY_MODE` 支持 `auto`、`env`、`wsl-host` 和 `off`；网关只从当前默认路由动态发现，不写死地址。Native Core 与 Docker Core 使用 `deploy/runtime-contract.json` 中的同一代理契约。`NO_PROXY` 必须包含回环地址、Compose 服务名和启动器选择的宿主网关，代理 URL 与凭据不得进入日志、状态接口或 Git。
+Provider、Codex CLI 与联网工具的出站 HTTP(S) 可独立使用代理。API 在载入 composition root 前由 `packages/platform/proxy.mjs` 解析并安装 Undici dispatcher，优先级为 `SUNABOT_PROXY_URL`、标准 `HTTP_PROXY`/`HTTPS_PROXY`、WSL 默认网关与配置端口探测。代理建连上限固定为 60 秒，响应头与流式正文等待上限固定为 10 分钟；调用方更短的显式截止仍优先取消。`SUNABOT_PROXY_MODE` 支持 `auto`、`env`、`wsl-host` 和 `off`；网关只从当前默认路由动态发现，不写死地址。Native Core 与 Docker Core 使用 `deploy/runtime-contract.json` 中的同一代理契约。`NO_PROXY` 必须包含回环地址、Compose 服务名和启动器选择的宿主网关，代理 URL 与凭据不得进入日志、状态接口或 Git。
 
 后端固定使用 Node.js 24.18.0、TypeScript 和 Fastify，管理台由 Vue 3、Vue Router 和 Vite 构建。`.node-version`、`.nvmrc`、package/lock、CI、Native release manifest、runtime contract、component lock 和 Docker 必须保持同一 Node 版本；`npm run runtime:contract` 静态拒绝入口漂移，但不比较开发机当前进程。Native Core 与 Docker Core 的构建、安装和启动都会执行实际版本检查。生产服务由 `dist/apps/api/main.js` 启动；管理 API、Web 静态资源与 OneBot WebSocket 使用彼此独立的监听边界。Docker Core 的构建阶段必须包含 API 编译直接引用的 `tooling/runtime/` 运行辅助模块；缺失编译输入时失败关闭，不能发布仅能运行旧构建产物的镜像。
 

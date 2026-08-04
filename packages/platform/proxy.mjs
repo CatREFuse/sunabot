@@ -7,6 +7,8 @@ import { EnvHttpProxyAgent, setGlobalDispatcher } from "undici";
 const execFileAsync = promisify(execFile);
 const LOOPBACK_NO_PROXY = ["localhost", "127.0.0.1", "::1", "[::1]"];
 const SUPPORTED_MODES = new Set(["auto", "env", "wsl-host", "off"]);
+const PROXY_CONNECT_TIMEOUT_MS = 60_000;
+const PROXY_IO_TIMEOUT_MS = 10 * 60_000;
 
 export const PROXY_RUNTIME_CONTRACT = Object.freeze({
   defaultMode: "auto",
@@ -14,6 +16,9 @@ export const PROXY_RUNTIME_CONTRACT = Object.freeze({
   explicitUrlEnv: "SUNABOT_PROXY_URL",
   modeEnv: "SUNABOT_PROXY_MODE",
   portsEnv: "SUNABOT_PROXY_PORTS",
+  connectTimeoutMs: PROXY_CONNECT_TIMEOUT_MS,
+  headersTimeoutMs: PROXY_IO_TIMEOUT_MS,
+  bodyTimeoutMs: PROXY_IO_TIMEOUT_MS,
   noProxyRequired: Object.freeze([...LOOPBACK_NO_PROXY])
 });
 
@@ -36,7 +41,14 @@ export const PROXY_RUNTIME_CONTRACT = Object.freeze({
  *   probeTcpPort?: (host: string, port: number, timeoutMs: number) => Promise<boolean>
  * }} ResolveProxyOptions
  * @typedef {ResolveProxyOptions & {
- *   createDispatcher?: (options: {httpProxy?: string, httpsProxy?: string, noProxy: string}) => unknown,
+ *   createDispatcher?: (options: {
+ *     httpProxy?: string,
+ *     httpsProxy?: string,
+ *     noProxy: string,
+ *     connectTimeout: number,
+ *     headersTimeout: number,
+ *     bodyTimeout: number
+ *   }) => unknown,
  *   setDispatcher?: (dispatcher: unknown) => void
  * }} InstallProxyOptions
  */
@@ -173,7 +185,10 @@ export async function installGlobalProxyDispatcher(options = {}) {
   const dispatcherOptions = {
     httpProxy: configuration.httpProxy,
     httpsProxy: configuration.httpsProxy,
-    noProxy: configuration.noProxy
+    noProxy: configuration.noProxy,
+    connectTimeout: PROXY_CONNECT_TIMEOUT_MS,
+    headersTimeout: PROXY_IO_TIMEOUT_MS,
+    bodyTimeout: PROXY_IO_TIMEOUT_MS
   };
   const dispatcher = options.createDispatcher
     ? options.createDispatcher(dispatcherOptions)

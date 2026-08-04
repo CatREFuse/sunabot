@@ -42,17 +42,8 @@ export function migrateApplicationDataSchema(database: DatabaseSync, modelCalls:
       AFTER DELETE ON memory_records BEGIN
         UPDATE memory_source_revisions SET revision = revision + 1 WHERE source = OLD.source;
       END;
-    CREATE TABLE IF NOT EXISTS memory_batches (
-      batch_id TEXT PRIMARY KEY,
-      result_json TEXT NOT NULL CHECK (json_valid(result_json)),
-      committed_at TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS memory_scheduler (
-      conversation_id TEXT PRIMARY KEY,
-      updated_at TEXT NOT NULL,
-      data_json TEXT NOT NULL CHECK (json_valid(data_json))
-    );
-    CREATE INDEX IF NOT EXISTS memory_scheduler_updated_at ON memory_scheduler(updated_at);
+    DROP TABLE IF EXISTS memory_batches;
+    DROP TABLE IF EXISTS memory_scheduler;
     CREATE TABLE IF NOT EXISTS conversations (
       id TEXT PRIMARY KEY,
       last_at TEXT NOT NULL,

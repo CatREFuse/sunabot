@@ -9,7 +9,6 @@ import {
   closeApplicationDataStores,
   generatedImageHistoryRecords
 } from "../../adapters/sqlite/applicationDataStore.js";
-import { MemorySchedulerStore } from "../../services/memory/memoryScheduler.js";
 import { runWithAgentRuntimeContext } from "../../packages/platform/runtimeAgentContext.js";
 import { appendRequestLogStrict } from "../../adapters/observability/requestLog.js";
 import {
@@ -56,7 +55,6 @@ describe("application SQLite data store", () => {
   it("throws real SQLite failures from strict settle persistence", async () => {
     const config = createAdminTestConfig(root);
     const store = applicationDataStore(config);
-    const scheduler = new MemorySchedulerStore(config);
     store.close();
 
     expect(() => saveConversationRecordsStrict([
@@ -70,21 +68,6 @@ describe("application SQLite data store", () => {
       category: "test",
       action: "closed"
     }, "outbox:closed:request-log"))).rejects.toThrow();
-    await expect(scheduler.enqueue({
-      id: "private:1",
-      scope: "private",
-      title: "private:1",
-      userId: 1
-    }, [{
-      id: "message-1",
-      sequence: 1,
-      role: "assistant",
-      text: "hello",
-      at: "2026-07-10T01:00:00.000Z",
-      userId: 1,
-      imageCount: 0,
-      quoteCount: 0
-    }])).rejects.toThrow();
   });
 
   it("strictly upserts one conversation without replacing siblings", () => {
@@ -137,9 +120,6 @@ describe("application SQLite data store", () => {
     ]);
     store.appendRequestLog(log("log-1", "2026-07-10T01:00:00.000Z", "alpha"));
     store.appendRequestLog(log("log-2", "2026-07-10T02:00:00.000Z", "beta"));
-    store.replaceMemoryScheduler({
-      "private:1": { updatedAt: "2026-07-10T02:00:00.000Z", pendingMessages: [] }
-    });
     store.replaceImageHistory([{
       id: "image-1",
       url: "/generated-images/image-1.png",
@@ -151,7 +131,6 @@ describe("application SQLite data store", () => {
     expect(store.readRequestLogs({ query: "BETA", limit: 10 })).toEqual([
       expect.objectContaining({ id: "log-2", metadata: { marker: "beta" } })
     ]);
-    expect(store.readMemoryScheduler()).toHaveProperty("private:1");
     expect(store.readImageHistory()).toEqual([expect.objectContaining({ id: "image-1" })]);
     store.appendImageHistory({
       id: "image-2",
@@ -166,7 +145,6 @@ describe("application SQLite data store", () => {
     expect(store.counts()).toMatchObject({
       conversations: 2,
       requestLogs: 2,
-      memorySchedulerConversations: 1,
       imageHistory: 2
     });
   });

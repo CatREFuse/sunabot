@@ -20,6 +20,7 @@ import {
 } from "../../../services/tools/callDirectorTool.js";
 import {
   ADD_WORKMEMORY_TOOL_NAME,
+  ADD_USER_PROFILE_TOOL_NAME,
   EXPORT_CHAT_MEDIA_TOOL_NAME,
   IMPORT_CHAT_EMOJI_TOOL_NAME,
   IMPORT_CHAT_SELFIE_TOOL_NAME,
@@ -85,6 +86,7 @@ import {
 import { runWebFetch } from "./webFetchExecutor.js";
 import { READ_AIR_TOOL_NAME, executeReadAirTool } from "./readAirExecutor.js";
 import { executeAddWorkMemoryTool } from "./addWorkMemoryExecutor.js";
+import { executeAddUserProfileTool } from "./addUserProfileExecutor.js";
 import { runExportChatMedia, runImportChatEmoji, runImportChatSelfie } from "./chatMediaExecutor.js";
 
 export { mcpToolLogSummary } from "./mcpToolLog.js";
@@ -111,6 +113,7 @@ const inlineExecutors: ReadonlyMap<string, InlineExecutor> = new Map([
   [SEND_FILE_TOOL_NAME, runSendFile],
   [MEMORY_RECALL_TOOL_NAME, runMemoryRecall],
   [ADD_WORKMEMORY_TOOL_NAME, executeAddWorkMemoryTool],
+  [ADD_USER_PROFILE_TOOL_NAME, executeAddUserProfileTool],
   [READ_AIR_TOOL_NAME, executeReadAirTool],
   [KNOWLEDGE_SEARCH_TOOL_NAME, runKnowledgeSearch],
   [SYSTEM_CONFIG_TOOL_NAME, runSystemConfigTool],

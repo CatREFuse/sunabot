@@ -59,9 +59,11 @@ import {
   scheduledCallbackTaskId
 } from "./scheduledTaskDirectorBoundary.js";
 import { executeScheduledTaskTool } from "./scheduledTaskToolExecution.js";
-import { enqueueLiteralSystemNotification, enqueueMemoryDebtAlert, MEMORY_DEBT_ALERT_TASK_ID,
-  resolveMemoryDebtAlertTarget,
-  SCHEDULED_CALLBACK_EVENT_KIND, type RuntimeLiteralSystemNotificationInput } from "./systemNotifications.js";
+import {
+  enqueueLiteralSystemNotification,
+  SCHEDULED_CALLBACK_EVENT_KIND,
+  type RuntimeLiteralSystemNotificationInput
+} from "./systemNotifications.js";
 import type { SunaRuntime } from "../runtime.js";
 
 export type { ScheduledTaskAdminPage, ScheduledTaskAdminView } from "./scheduledTaskAdmin.js";
@@ -128,12 +130,6 @@ export class RuntimeScheduledTasks {
   }
 
   enqueueLiteralSystemNotification(input: RuntimeLiteralSystemNotificationInput) { return enqueueLiteralSystemNotification(this.host, input); }
-
-  resolveMemoryDebtAlertTarget() { return resolveMemoryDebtAlertTarget(this.host); }
-
-  enqueueMemoryDebtAlert(input: { episodeId: string; targetConversationId?: string; triggeredAt?: Date }) {
-    return enqueueMemoryDebtAlert(this.host, input);
-  }
 
   listScheduledTasks(input: unknown = {}): ScheduledTaskAdminPage {
     return this.adminCatalog.list(input);
@@ -370,23 +366,20 @@ export class RuntimeScheduledTasks {
       })));
     }
 
-    if (payload.taskId !== MEMORY_DEBT_ALERT_TASK_ID) {
-      await context.settleStep("conversation_projection", (idempotencyKey) => {
-        const incoming = scheduledCallbackIncoming(this.host, payload.target, payload.triggeredAt);
-        const receiptMessageId = messagingReceiptMessageId(context.remoteReceipt);
-        const record = this.host.recordAssistantMessage(
-          incoming,
-          payload.text,
-          [],
-          payload.runId,
-          undefined,
-          { messageOrigin: "text" },
-          { messageId: receiptMessageId ?? idempotencyKey }
-        );
-        this.host.scheduleMemoryCompression(record);
-        return record.id;
-      });
-    }
+    await context.settleStep("conversation_projection", (idempotencyKey) => {
+      const incoming = scheduledCallbackIncoming(this.host, payload.target, payload.triggeredAt);
+      const receiptMessageId = messagingReceiptMessageId(context.remoteReceipt);
+      const record = this.host.recordAssistantMessage(
+        incoming,
+        payload.text,
+        [],
+        payload.runId,
+        undefined,
+        { messageOrigin: "text" },
+        { messageId: receiptMessageId ?? idempotencyKey }
+      );
+      return record.id;
+    });
     await context.settleStep("request_log", (idempotencyKey) => appendRequestLogStrict({
       category: "runtime.action",
       action: "scheduled_callback.sent",

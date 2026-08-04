@@ -15,6 +15,7 @@ vi.mock("../../adapters/model/webSearchTool.js", async (importOriginal) => ({
 import { OpenAIProvider } from "../../adapters/model/openaiProvider.js";
 import { processProviderToolRound } from "../../adapters/model/provider/toolRound.js";
 import { ADD_WORKMEMORY_TOOL_NAME } from "../../services/tools/addWorkMemoryTool.js";
+import { ADD_USER_PROFILE_TOOL_NAME } from "../../services/tools/addUserProfileTool.js";
 
 const MCP_FIRST_TOOL_NAME = `mcp_${"a".repeat(48)}`;
 const MCP_SECOND_TOOL_NAME = `mcp_${"b".repeat(48)}`;
@@ -34,6 +35,59 @@ afterEach(() => {
 });
 
 describe("Provider tool composition", () => {
+  it.each(PROVIDERS)("requires working memory before user profile on %s", async (
+    _providerLabel,
+    kind
+  ) => {
+    const provider = new OpenAIProvider(providerConfig(kind));
+    const transport = installRounds(provider, kind, [
+      {
+        calls: [{
+          name: ADD_WORKMEMORY_TOOL_NAME,
+          args: { action: "skip", content: null }
+        }]
+      },
+      {
+        text: "这轮已经处理好了。",
+        calls: [{
+          name: ADD_USER_PROFILE_TOOL_NAME,
+          args: { action: "skip", profile: null, addressNames: null }
+        }]
+      }
+    ]);
+    const effects = sideEffects();
+    let workmemoryResolved = false;
+    let profileResolved = false;
+    const options: ProviderCompleteOptions = {
+      ...effects.options,
+      workingMemory: {
+        decisionRequired: true,
+        decisionResolved: () => workmemoryResolved,
+        execute: vi.fn(async () => {
+          workmemoryResolved = true;
+          return { ok: true, action: "skip" };
+        })
+      },
+      userProfile: {
+        decisionRequired: true,
+        decisionResolved: () => profileResolved,
+        execute: vi.fn(async () => {
+          profileResolved = true;
+          return { ok: true, action: "skip" };
+        })
+      }
+    };
+
+    await expect(provider.completeTurn(
+      "system",
+      [{ role: "user", content: "普通回复" }],
+      options
+    )).resolves.toEqual({ kind: "completed", text: "这轮已经处理好了。" });
+
+    expectWorkingMemoryToolChoice(transport.requestBody(0), kind);
+    expectMemoryToolChoice(transport.requestBody(1), kind, ADD_USER_PROFILE_TOOL_NAME);
+  });
+
   it.each(PROVIDERS)("requires the main reply model to record or skip working memory on %s", async (
     _providerLabel,
     kind
@@ -530,17 +584,25 @@ function mappedCodexTool(body: Record<string, any>, kind: ProviderKind) {
 }
 
 function expectWorkingMemoryToolChoice(body: Record<string, any>, kind: ProviderKind) {
+  expectMemoryToolChoice(body, kind, ADD_WORKMEMORY_TOOL_NAME);
+}
+
+function expectMemoryToolChoice(
+  body: Record<string, any>,
+  kind: ProviderKind,
+  toolName: string
+) {
   if (kind === "openai-compatible") {
     expect(body.tool_choice).toEqual({
       type: "function",
-      function: { name: ADD_WORKMEMORY_TOOL_NAME }
+      function: { name: toolName }
     });
     return;
   }
   if (kind === "anthropic-official") {
     expect(body.tool_choice).toEqual({
       type: "tool",
-      name: ADD_WORKMEMORY_TOOL_NAME,
+      name: toolName,
       disable_parallel_tool_use: true
     });
     return;
@@ -549,14 +611,14 @@ function expectWorkingMemoryToolChoice(body: Record<string, any>, kind: Provider
     expect(body.toolConfig).toEqual({
       functionCallingConfig: {
         mode: "ANY",
-        allowedFunctionNames: [ADD_WORKMEMORY_TOOL_NAME]
+        allowedFunctionNames: [toolName]
       }
     });
     return;
   }
   expect(body.tool_choice).toEqual({
     type: "function",
-    name: ADD_WORKMEMORY_TOOL_NAME
+    name: toolName
   });
 }
 

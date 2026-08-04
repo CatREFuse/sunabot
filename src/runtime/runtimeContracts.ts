@@ -1,4 +1,4 @@
-import type { AgentToolName, AppConfig, ConversationRecord, ParsedIncomingMessage } from "../types.js";
+import type { AgentToolName, AppConfig, ParsedIncomingMessage } from "../types.js";
 import type { AttachmentService } from "../../services/media/attachments/service.js";
 import type {
   AssistantReplyOutboxEnvelope,
@@ -8,7 +8,6 @@ import type {
   UserGroupOrchestratorResultV1
 } from "../../packages/contracts/session/runtimeMessages.js";
 import type { ReplyGateSnapshot } from "../../services/orchestration/groupReplyPolicy.js";
-import type { MemoryFactInput } from "../../services/memory/memoryService.js";
 import type {
   OpenAIProvider,
   ProviderCompleteOptions,
@@ -77,9 +76,7 @@ export const ADMIN_RUNTIME_PROMPT_DEFAULTS: Readonly<Record<string, string>> = {
   "conversation.private-reply": defaultFinalPromptContent("conversation.private-reply"),
   "conversation.group-reply": defaultFinalPromptContent("conversation.group-reply"),
   "conversation.tone-rewrite": defaultFinalPromptContent("conversation.tone-rewrite"),
-  "memory.compress-in": defaultFinalPromptContent("memory.compress-in"),
   "memory.compress-out": defaultFinalPromptContent("memory.compress-out"),
-  "memory.user-profile": defaultFinalPromptContent("memory.user-profile"),
   "orchestrator.user-group": defaultFinalPromptContent("orchestrator.user-group"),
   "conversation.group-summary": defaultFinalPromptContent("conversation.group-summary"),
   [SCHEDULED_TASK_CALLBACK_PROMPT_ID]: defaultFinalPromptContent(SCHEDULED_TASK_CALLBACK_PROMPT_ID),
@@ -95,38 +92,6 @@ export function runtimePromptDefaultContent(config: AppConfig, id: string) {
     config.persona.name,
     config.persona.defaultAgentId
   );
-}
-export interface BatchUserInfo {
-  userId: string;
-  names: string[];
-  currentName: string;
-  addressNames: string[];
-  isAdmin: boolean;
-}
-export interface WorkingMemoryMergeOutput {
-  facts: MemoryFactInput[];
-  allPreviousMemoriesInvalidated: boolean;
-}
-export interface WorkingMemoryMergeContext {
-  conversation: {
-    id: string;
-    scope: string;
-    title: string;
-    userId?: number;
-    groupId?: number;
-  };
-  participants: BatchUserInfo[];
-  messages: Array<{
-    sequence: number;
-    role: ConversationRecord["messages"][number]["role"];
-    text: string;
-    at: string;
-    userId?: number;
-    senderName?: string;
-    imageCount: number;
-    quoteCount: number;
-  }>;
-  metadata: Record<string, unknown>;
 }
 export function personaFileNameForAdminId(id: string) {
   return ADMIN_PERSONA_FILES[id];

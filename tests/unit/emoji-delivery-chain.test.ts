@@ -184,15 +184,10 @@ describe("emoji durable delivery chain", () => {
       expect.objectContaining({ messageId: "direct-pure-emoji" })
     );
 
-    const scheduleMemoryCompression = vi.fn();
-    const enqueueConversationMemory = vi.fn(async () => undefined);
     recordAssistantMessage.mockClear();
     Object.assign(host, {
       conversationRecords: new Map(),
-      enqueueConversationMemory,
       protectedConversationIds: () => new Set<string>(),
-      scheduleMemoryCompression,
-      scheduleMemoryDrain: vi.fn(),
       hooks: {
         run: vi.fn(async () => ({ text: providerText })),
         runEach: vi.fn(async () => undefined)
@@ -242,8 +237,6 @@ describe("emoji durable delivery chain", () => {
       { messageOrigin: "text", toolNames: undefined },
       expect.objectContaining({ messageId: "durable-emoji", persist: false })
     );
-    expect(scheduleMemoryCompression).not.toHaveBeenCalled();
-    expect(enqueueConversationMemory).not.toHaveBeenCalled();
   });
 
   it("creates a second durable message for emojis when separate sending is enabled", async () => {
@@ -687,9 +680,6 @@ describe("emoji durable delivery chain", () => {
     runtime.getProvider = () => provider;
     runtime.prepareIncomingMessage = async () => undefined;
     runtime.scheduleAttachmentCacheRefresh = () => undefined;
-    runtime.scheduleMemoryCompression = () => undefined;
-    runtime.enqueueConversationMemory = async () => undefined;
-    runtime.scheduleMemoryDrain = () => undefined;
     runtime.persistConversationRecords = () => undefined;
     runtime.renderPromptRequest = async (_id, variables) => ({
       messages: [

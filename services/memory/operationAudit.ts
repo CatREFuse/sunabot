@@ -5,7 +5,6 @@ import { memoryRepository } from "./persistence.js";
 export type MemoryOperationSource = "working" | "long_term" | "user_profile" | "dream";
 export type MemoryOperationActor =
   | "model_tool"
-  | "memory_pipeline"
   | "admin"
   | "dream"
   | "system"

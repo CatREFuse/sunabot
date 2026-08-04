@@ -1,4 +1,5 @@
-import { appendWorkingMemoryDocumentItem, recordMemoryOperation } from "../../services/memory/public.js";
+import { recordMemoryOperation } from "../../services/memory/public.js";
+import { appendWorkingMemoryDocumentItem } from "../../services/memory/workingMemoryDocument.js";
 import { ADD_WORKMEMORY_TOOL_NAME, type AddWorkMemoryToolPort } from "../../services/tools/public.js";
 import { isAddWorkMemoryStableErrorCode } from "../../services/tools/addWorkMemoryTool.js";
 import type { ConversationRecord, ParsedIncomingMessage } from "../types.js";

@@ -25,7 +25,15 @@ const actionNames: Record<string, string> = {
   "native_bash": "Native 命令执行",
   "docker_bash": "Docker 命令执行",
   "codex": "Codex 异步任务",
-  "input_image": "图片输入"
+  "input_image": "图片输入",
+  "add_workmemory": "记录工作记忆",
+  "read_air": "读取空气",
+  "add_user_profile": "记录用户印象",
+  "dream.generated": "梦境生成完成",
+  "dream.consolidated": "梦境整理完成",
+  "dream.completed": "梦境完成",
+  "dream.failed": "梦境失败",
+  "onebot.heartbeat": "OneBot 心跳"
 };
 
 const eventNames: Array<[RegExp, string]> = [
@@ -57,6 +65,18 @@ export function requestLogDirection(log: ConversationLogEntry) {
   if (log.category === "model.request") return "发送请求";
   if (log.category === "model.response") return "收到响应";
   return "运行记录";
+}
+
+export function requestLogBusinessNodeName(log: ConversationLogEntry) {
+  return {
+    private_conversation: "私聊对话",
+    group_conversation: "群聊对话",
+    memory_compression: "记忆压缩",
+    memory_recording: "记忆记录",
+    dream: "梦境",
+    onebot_heartbeat: "OneBot 心跳",
+    other: "其他"
+  }[log.presentation?.businessNode ?? "other"];
 }
 
 export function oneBotEventId(event: OneBotEventTrace) {

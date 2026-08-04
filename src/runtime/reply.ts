@@ -21,7 +21,10 @@ import {
   codexControlAvailable,
   codexTurnAvailable
 } from "../../services/tools/codexControlPolicy.js";
-import type { AddWorkMemoryToolPort } from "../../services/tools/public.js";
+import type {
+  AddUserProfileToolPort,
+  AddWorkMemoryToolPort
+} from "../../services/tools/public.js";
 import type { SunaRuntime } from "../runtime.js";
 import { getAgentPrivatePath } from "../config.js";
 import {
@@ -70,6 +73,7 @@ import {
 } from "./replyModuleIsolation.js";
 import { prepareReplyAgentExtensions } from "./replyAgentExtensionIsolation.js";
 import { prepareReplyMemoryContext } from "./replyMemoryIsolation.js";
+import { createMemoryToolDecisionAuditor } from "./memoryToolDecisionAudit.js";
 import { replyProvider } from "./replyProvider.js";
 import {
   GROUP_CHAT_SUMMARY_COMMAND,
@@ -135,7 +139,8 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
     let requestStarted = false;
     let systemConfigLifecycle: systemConfigReply.SystemConfigReplyLifecycle | undefined;
     let workingMemoryTurn: AddWorkMemoryToolPort | undefined;
-    let workingMemoryDecisionAudited = false;
+    let userProfileTurn: AddUserProfileToolPort | undefined;
+    const auditMemoryToolDecisions = createMemoryToolDecisionAuditor(this, incoming, options.signal);
     const replySoftErrors: string[] = [];
     const usedToolNames = new Set(options.seedToolNames ?? []);
     const currentToolNames = () => [...usedToolNames];
@@ -153,20 +158,6 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
         console.error("[runtime] assistant tool trace unavailable", { error });
       }
       return toolNames;
-    };
-    const auditWorkingMemoryDecision = async (toolNames: readonly string[]) => {
-      if (
-        workingMemoryDecisionAudited
-        || !workingMemoryTurn
-        || workingMemoryTurn.decisionResolved?.() === true
-      ) return;
-      workingMemoryDecisionAudited = true;
-      await isolateReplyModule(
-        "memory.tool_decision",
-        async () => this.workingMemory.recordToolDecision(incoming, toolNames),
-        () => undefined,
-        { signal: options.signal }
-      );
     };
     try {
       const beforeContext = await this.hooks.run("before_context", {
@@ -367,6 +358,9 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
       workingMemoryTurn = options.promptOverride === undefined
         ? this.workingMemory.toolPort(incoming, options.memoryDecisionKey)
         : undefined;
+      userProfileTurn = options.promptOverride === undefined
+        ? this.userProfile.toolPort(incoming, options.memoryDecisionKey)
+        : undefined;
       const turn = await this.completePromptTurn(provider, promptRequest, {
         signal: options.signal,
         modelRequestMaxRetries: this.config.normalReply.maxRetries,
@@ -495,13 +489,17 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
         director: options.directorAccess === "none" ? undefined : this.director.toolPort(),
         ...(options.promptOverride === undefined ? { air: this.air.toolPort(incoming, [...messages64, { role: "user", content: prompt }]) } : {}),
         ...(workingMemoryTurn ? { workingMemory: workingMemoryTurn } : {}),
+        ...(userProfileTurn ? { userProfile: userProfileTurn } : {}),
         skills: runtimeAgentExtensions?.skills,
         mcp: runtimeAgentExtensions?.mcp,
         logContext
       });
       if (turn.kind === "deferred") usedToolNames.add(turn.toolCall.name);
       const turnToolNames = finalizeToolNames();
-      await auditWorkingMemoryDecision(turnToolNames);
+      await auditMemoryToolDecisions(turnToolNames, {
+        workingMemory: workingMemoryTurn,
+        userProfile: userProfileTurn
+      });
       if (options.signal?.aborted || (options.isCurrent && !options.isCurrent())) {
         systemConfigLifecycle?.discard();
         return sent;
@@ -657,7 +655,10 @@ export async function runtime_replyToIncoming(this: RuntimeHost,
     } catch (error) {
       systemConfigLifecycle?.discard();
       const failedToolNames = finalizeToolNames();
-      await auditWorkingMemoryDecision(failedToolNames);
+      await auditMemoryToolDecisions(failedToolNames, {
+        workingMemory: workingMemoryTurn,
+        userProfile: userProfileTurn
+      });
       const failure = options.signal?.reason ?? error;
       const aborted = options.signal?.aborted || isAbortError(error);
       await appendReplyActionLog({
@@ -729,11 +730,10 @@ export async function runtime_replyWithGroupChatSummary(this: RuntimeHost,
     const isAdmin = isAdminUserId(incoming.userId, admin);
     try {
       if (!incoming.groupId) {
-        const record = await this.sendAssistantReply(
+        await this.sendAssistantReply(
           channelKey, incoming, gateway, "只能在群聊里总结群聊。", isAdmin, [], undefined, isCurrent, delivery,
           true, { messageOrigin: "text" }, "buffered", signal
         );
-        if (record) this.scheduleMemoryCompression(record);
         return;
       }
       const record = this.conversationRecords.get(conversationRecordId(incoming));
@@ -743,11 +743,10 @@ export async function runtime_replyWithGroupChatSummary(this: RuntimeHost,
         contextThroughSequence
       );
       if (!summaryMessages.length) {
-        const replyRecord = await this.sendAssistantReply(
+        await this.sendAssistantReply(
           channelKey, incoming, gateway, "最近 6 小时没有可总结的文字消息。", isAdmin, [], undefined, isCurrent, delivery,
           true, { messageOrigin: "text" }, "buffered", signal
         );
-        if (replyRecord) this.scheduleMemoryCompression(replyRecord);
         return;
       }
       const provider = replyProvider(this);
@@ -779,11 +778,10 @@ export async function runtime_replyWithGroupChatSummary(this: RuntimeHost,
           promptFamily: "conversation.group-summary"
         }
       });
-      const replyRecord = await this.sendAssistantReply(
+      await this.sendAssistantReply(
         channelKey, incoming, gateway, reply, isAdmin, [], undefined, isCurrent, delivery,
         true, { messageOrigin: "text" }, "buffered", signal
       );
-      if (replyRecord) this.scheduleMemoryCompression(replyRecord);
     } catch (error) {
       if (signal?.aborted || isAbortError(error)) return;
       console.error("[runtime] group chat summary failed", {

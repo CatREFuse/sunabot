@@ -344,7 +344,6 @@ async function createImportFixture(conversations: Array<{ id: string; lastAt: st
       working: path.join(root, "missing-working.jsonl"),
       longTerm: path.join(root, "missing-long-term.jsonl"),
       userProfile: path.join(root, "missing-profile.jsonl"),
-      memoryScheduler: path.join(root, "missing-scheduler.json"),
       imageHistory: path.join(root, "missing-images.json")
     }
   };

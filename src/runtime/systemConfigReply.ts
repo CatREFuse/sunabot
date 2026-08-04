@@ -50,7 +50,7 @@ interface ReplyGateCaptureHost { readonly replyGates: Pick<ReplyGateEpochs, "cap
 
 interface HeldSystemConfigValidationHost extends ReplyGateCaptureHost { readonly conversationRecords: ReadonlyMap<string, ConversationRecord>; readonly sessionStore: Pick<SessionStore, "getTurn" | "getOutbox">; isAdminUser(userId: number): boolean; isReplyTaskCurrent(incoming: ParsedIncomingMessage, gate: ReplyGateSnapshot, signal?: AbortSignal): boolean; }
 
-interface SystemConfigFinalReplyHost extends RuntimeConfigPort { readonly activeDirectControllers: Pick<Map<string, AbortController>, "delete">; scheduleMemoryCompression(record: ConversationRecord): void; sendAssistantReply(...args: Parameters<typeof runtime_sendAssistantReply>): ReturnType<typeof runtime_sendAssistantReply>; }
+interface SystemConfigFinalReplyHost extends RuntimeConfigPort { readonly activeDirectControllers: Pick<Map<string, AbortController>, "delete">; sendAssistantReply(...args: Parameters<typeof runtime_sendAssistantReply>): ReturnType<typeof runtime_sendAssistantReply>; }
 
 export class SystemConfigReplyLifecycle {
   readonly toolPort: SystemConfigTurn;
@@ -377,7 +377,6 @@ export async function sendSystemConfigAwareFinalReply(
     if (prepared?.timing === "immediate" && input.delivery) {
       input.delivery.terminalStatus = "replied";
     }
-    if (record) host.scheduleMemoryCompression(record);
     return Boolean(record);
   } catch (error) {
     const suppress = input.lifecycle?.suppressesOrdinaryFailureReply() === true;

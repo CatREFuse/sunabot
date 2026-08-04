@@ -390,99 +390,6 @@ describe("RuntimeScheduledTasks", () => {
     );
   });
 
-  it("queues and delivers the fixed memory-debt alert without a Provider call or memory feedback", async () => {
-    const gateway = fakeGateway({
-      connected: true,
-      accounts: ["secondary"],
-      receipt: { accepted: true, messageId: "remote-memory-alert" }
-    });
-    const harness = createHarness({ gateway });
-
-    await expect(harness.runtime.enqueueMemoryDebtAlert({
-      episodeId: "episode-1",
-      triggeredAt: new Date("2026-07-20T12:00:00.000Z")
-    })).resolves.toEqual({
-      queued: true,
-      conversationId: "account:secondary:private:10001",
-      runId: "memory-debt:episode-1"
-    });
-
-    expect(harness.renderPromptRequest).not.toHaveBeenCalled();
-    expect(harness.completePromptTurn).not.toHaveBeenCalled();
-    const event = harness.enqueuedEvents[0]!;
-    const callback = decodeScheduledCallbackDelivery(event.payload);
-    expect(callback).toMatchObject({
-      taskId: "system:memory-debt-alert",
-      taskName: "记忆处理提醒",
-      text: "有超过 100 条记忆待处理，请到管理台「记忆」查看状态。",
-      target: {
-        accountId: "secondary",
-        scope: "private",
-        userId: 10001
-      }
-    });
-    expect(readCallbackInput(callback.text)).toBeUndefined();
-
-    const turn = await harness.runtime.processEvent(sessionEventFromInput(event, 5));
-    expect(turn.status).toBe("completed");
-    expect(harness.replyToIncoming).not.toHaveBeenCalled();
-    const outbox = persistedOutbox(turn.outbox![0]!, callback.target.conversationId);
-    const delivery = deliveryContext();
-    await expect(harness.runtime.deliverOutbox(outbox, delivery.context)).resolves.toEqual({
-      delivered: true,
-      remoteReceipt: { accepted: true, messageId: "remote-memory-alert" }
-    });
-
-    expect(gateway.send).toHaveBeenCalledWith(expect.objectContaining({
-      accountId: "secondary",
-      conversationId: "account:secondary:private:10001",
-      userId: 10001,
-      text: callback.text
-    }));
-    expect(harness.recordAssistantMessage).not.toHaveBeenCalled();
-    expect(harness.scheduleMemoryCompression).not.toHaveBeenCalled();
-    expect(delivery.completedSteps).toEqual(new Set(["request_log"]));
-  });
-
-  it("queues a persisted memory-debt target without resolving a different account", async () => {
-    const harness = createHarness({ notificationAccountId: "replacement" });
-
-    await expect(harness.runtime.enqueueMemoryDebtAlert({
-      episodeId: "episode-bound-target",
-      targetConversationId: "account:secondary:private:10001"
-    })).resolves.toMatchObject({
-      queued: true,
-      conversationId: "account:secondary:private:10001"
-    });
-    expect(harness.host.resolveAdminNotificationAccountId).not.toHaveBeenCalled();
-    expect(decodeScheduledCallbackDelivery(harness.enqueuedEvents[0]!.payload).target)
-      .toMatchObject({ accountId: "secondary", userId: 10001 });
-  });
-
-  it("does not queue a memory-debt alert without a configured administrator or enabled account", async () => {
-    const withoutAdministrator = createHarness({ adminQq: "" });
-    await expect(withoutAdministrator.runtime.resolveMemoryDebtAlertTarget()).resolves.toEqual({
-      resolved: false,
-      reason: "administrator_unconfigured"
-    });
-    await expect(withoutAdministrator.runtime.enqueueMemoryDebtAlert({
-      episodeId: "episode-admin"
-    })).resolves.toEqual({
-      queued: false,
-      reason: "administrator_unconfigured"
-    });
-    expect(withoutAdministrator.enqueueEvent).not.toHaveBeenCalled();
-
-    const withoutAccount = createHarness({ notificationAccountId: null });
-    await expect(withoutAccount.runtime.enqueueMemoryDebtAlert({
-      episodeId: "episode-account"
-    })).resolves.toEqual({
-      queued: false,
-      reason: "account_unavailable"
-    });
-    expect(withoutAccount.enqueueEvent).not.toHaveBeenCalled();
-  });
-
   it("runs Director shares as atomic image replies without changing ordinary callbacks", async () => {
     const harness = createHarness();
     const payload = {
@@ -602,7 +509,6 @@ describe("RuntimeScheduledTasks", () => {
     } satisfies Partial<OutboundMessageV1>));
     expect(harness.recordAssistantMessage).toHaveBeenCalledOnce();
     expect(harness.recordAssistantMessage.mock.calls[0]?.[6]).toEqual({ messageId: "remote-9001" });
-    expect(harness.scheduleMemoryCompression).toHaveBeenCalledOnce();
     expect(delivery.completedSteps).toEqual(new Set(["conversation_projection", "request_log"]));
     expect(requestLog.appendStrict).toHaveBeenCalledOnce();
   });
@@ -681,7 +587,6 @@ function createHarness(options: HarnessOptions = {}) {
   });
   const projectionRecord = conversationRecords.get("account:secondary:group:20002")!;
   const recordAssistantMessage = vi.fn((..._args: unknown[]) => projectionRecord);
-  const scheduleMemoryCompression = vi.fn();
   const host = {
     config: {
       persona: { defaultAgentId: "plana" },
@@ -700,7 +605,6 @@ function createHarness(options: HarnessOptions = {}) {
     getProvider: vi.fn(() => ({ id: "test-provider" })),
     activeGateway: options.gateway,
     recordAssistantMessage,
-    scheduleMemoryCompression,
     resolveAdminNotificationAccountId: vi.fn(async () => (
       options.notificationAccountId === undefined ? "secondary" : options.notificationAccountId ?? undefined
     ))
@@ -716,8 +620,7 @@ function createHarness(options: HarnessOptions = {}) {
     renderPromptRequest,
     completePromptTurn,
     replyToIncoming,
-    recordAssistantMessage,
-    scheduleMemoryCompression
+    recordAssistantMessage
   };
 }
 

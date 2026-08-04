@@ -774,7 +774,6 @@ describe("SunaRuntime Session queue bridge", () => {
       expect(remoteReceipt).toEqual({ accepted: true, messageId: "remote-9001" });
       expect([...completedSteps]).toEqual([
         "conversation_projection",
-        "memory_enqueue",
         "request_log",
         ...(failingStep === "after_reply" ? ["after_reply:audit"] : [])
       ]);
@@ -934,11 +933,9 @@ describe("SunaRuntime Session queue bridge", () => {
 
   it.each([
     "conversation_projection",
-    "memory_enqueue",
     "request_log"
   ])("deduplicates the real %s side effect when its settle checkpoint fails", async (failingStep) => {
     const harness = createRuntimeHarness(async () => ({ kind: "completed", text: "durable reply" }));
-    vi.spyOn(harness.runtime, "scheduleMemoryDrain").mockImplementation(() => undefined);
     const completeStep = harness.store.completeOutboxSettleStep.bind(harness.store);
     let injected = false;
     vi.spyOn(harness.store, "completeOutboxSettleStep").mockImplementation((outboxId, workerId, step) => {
@@ -965,7 +962,7 @@ describe("SunaRuntime Session queue bridge", () => {
     expect(harness.gateway.send).toHaveBeenCalledOnce();
     expect(harness.store.listOutbox(conversationId)[0]).toMatchObject({
       status: "sent",
-      completedSettleSteps: ["conversation_projection", "memory_enqueue", "request_log"]
+      completedSettleSteps: ["conversation_projection", "request_log"]
     });
     const assistantMessages = runtimeConversation(harness.runtime, conversationId)?.messages
       .filter((message) => message.role === "assistant" && message.text === "durable reply") ?? [];
@@ -974,17 +971,10 @@ describe("SunaRuntime Session queue bridge", () => {
     const dataStore = applicationDataStore(harness.runtime.config);
     expect(dataStore.readRequestLogs({ query: "", limit: 100 })
       .filter((record) => record.action === "reply.sent")).toHaveLength(1);
-    const scheduler = dataStore.readMemoryScheduler()[conversationId] as {
-      pendingMessages?: Array<{ role?: string; text?: string }>;
-    } | undefined;
-    expect(scheduler?.pendingMessages?.filter((message) => (
-      message.role === "assistant" && message.text === "durable reply"
-    ))).toHaveLength(1);
   });
 
   it("quarantines an after_reply crash before the handler and resumes only after not-applied confirmation", async () => {
     const harness = createRuntimeHarness(async () => ({ kind: "completed", text: "hook before" }));
-    vi.spyOn(harness.runtime, "scheduleMemoryDrain").mockImplementation(() => undefined);
     let handlerRuns = 0;
     harness.runtime.hooks.register("after_reply", "audit", (payload) => {
       handlerRuns += 1;
@@ -1020,7 +1010,6 @@ describe("SunaRuntime Session queue bridge", () => {
 
   it("does not repeat completed after_reply handlers after a later handler becomes uncertain", async () => {
     const harness = createRuntimeHarness(async () => ({ kind: "completed", text: "hook partial" }));
-    vi.spyOn(harness.runtime, "scheduleMemoryDrain").mockImplementation(() => undefined);
     const runs = new Map<string, number>();
     const register = (id: string, fail = false) => harness.runtime.hooks.register("after_reply", id, (payload) => {
       const key = String(payload.context.idempotencyKey ?? "");
@@ -1217,9 +1206,6 @@ describe("SunaRuntime Session queue bridge", () => {
       }
     });
     const harness = createRuntimeHarness(completeRequestTurn);
-    // This property test measures the Session queue; memory has dedicated coverage.
-    vi.spyOn(harness.runtime, "processMemoryClaim").mockResolvedValue(true);
-
     for (let index = 0; index < 100; index += 1) {
       const marker = `job-${String(index).padStart(3, "0")}`;
       const groupId = index < groupIds.length
@@ -2240,7 +2226,6 @@ function createRuntimeHarness(
     prepareIncomingMessage(): Promise<void>;
     patchIncomingMessage(): void;
     scheduleAttachmentCacheRefresh(): void;
-    scheduleMemoryCompression(): void;
     persistConversationRecords(): void;
     renderPromptRequest(
       id: string,
@@ -2269,7 +2254,6 @@ function createRuntimeHarness(
   internals.prepareIncomingMessage = async () => undefined;
   internals.patchIncomingMessage = () => undefined;
   internals.scheduleAttachmentCacheRefresh = () => undefined;
-  internals.scheduleMemoryCompression = () => undefined;
   internals.persistConversationRecords = () => undefined;
   internals.renderPromptRequest = async (id, variables) => ({
     messages: [

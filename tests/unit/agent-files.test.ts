@@ -86,9 +86,7 @@ describe("AgentFileRepository", () => {
       ["conversation.private-reply", "conversation_private_reply.json"],
       ["conversation.group-reply", "conversation_group_reply.json"],
       ["conversation.tone-rewrite", "tone_rewrite.json"],
-      ["memory.compress-in", "work_memory_compress_in.json"],
       ["memory.compress-out", "work_memory_compress_out.json"],
-      ["memory.user-profile", "user_profile_prompt.json"],
       ["memory.dream", "memory_dream.json"],
       ["orchestrator.user-group", "user_groupchat_orchestrator.json"],
       ["conversation.group-summary", "group_chat_summary.json"],
@@ -215,10 +213,10 @@ describe("AgentFileRepository", () => {
       revision: currentPersona.revision
     })).rejects.toMatchObject({ code: "PROMPT_VARIABLE_UNKNOWN", field: "unknown.variable" });
 
-    const promptPath = path.join(workspaceDir, "work_memory_compress_in.json");
-    await fs.writeFile(promptPath, defaultPromptContent("memory.compress-in"), "utf8");
-    const prompt = await repository.get("memory.compress-in");
-    await expect(repository.put("memory.compress-in", {
+    const promptPath = path.join(workspaceDir, "work_memory_compress_out.json");
+    await fs.writeFile(promptPath, defaultPromptContent("memory.compress-out"), "utf8");
+    const prompt = await repository.get("memory.compress-out");
+    await expect(repository.put("memory.compress-out", {
       content: "  \n",
       revision: prompt.revision
     })).rejects.toMatchObject({
@@ -226,7 +224,7 @@ describe("AgentFileRepository", () => {
       code: "AGENT_FILE_EMPTY",
       field: "content"
     });
-    await expect(repository.put("memory.compress-in", {
+    await expect(repository.put("memory.compress-out", {
       content: "{\"messages\": []}\n",
       revision: prompt.revision
     })).rejects.toMatchObject({ code: "PROMPT_MESSAGES_INVALID", field: "messages" });
@@ -240,33 +238,17 @@ describe("AgentFileRepository", () => {
       content: `${JSON.stringify(wrongGroup, null, 2)}\n`,
       revision: conversation.revision
     })).rejects.toMatchObject({ code: "PROMPT_MESSAGE_GROUP_TYPE_INVALID", field: "user.input" });
-    expect(await fs.readFile(promptPath, "utf8")).toBe(defaultPromptContent("memory.compress-in"));
-  });
-
-  it("edits the user profile extraction prompt with persona variables", async () => {
-    const filePath = path.join(workspaceDir, "user_profile_prompt.json");
-    await fs.writeFile(filePath, defaultPromptContent("memory.user-profile"), "utf8");
-    const current = await repository.get("memory.user-profile");
-    const document = JSON.parse(current.content);
-    document.messages[0].content = `<soul>@{persona.soul}</soul>\n${document.messages[0].content}`;
-
-    const saved = await repository.put("memory.user-profile", {
-      content: `${JSON.stringify(document, null, 2)}\n`,
-      revision: current.revision
-    });
-
-    expect(saved.content).toContain("@{persona.soul}");
-    expect(await fs.readFile(filePath, "utf8")).toContain("@{persona.soul}");
+    expect(await fs.readFile(promptPath, "utf8")).toBe(defaultPromptContent("memory.compress-out"));
   });
 
   it("resolves the current dynamic prompt path on every operation", async () => {
     const config = currentConfig();
-    config.bot.memory.workMemoryCompressInPrompt = "nested/compress.json";
+    config.bot.memory.workMemoryCompressOutPrompt = "nested/compress.json";
     configStore.config = config;
     await fs.mkdir(path.join(workspaceDir, "nested"), { recursive: true });
-    await fs.writeFile(path.join(workspaceDir, "nested/compress.json"), defaultPromptContent("memory.compress-in"), "utf8");
+    await fs.writeFile(path.join(workspaceDir, "nested/compress.json"), defaultPromptContent("memory.compress-out"), "utf8");
 
-    await expect(repository.get("memory.compress-in")).resolves.toMatchObject({
+    await expect(repository.get("memory.compress-out")).resolves.toMatchObject({
       fileName: "nested/compress.json",
       kind: "final"
     });
@@ -274,9 +256,9 @@ describe("AgentFileRepository", () => {
 
   it("rejects lexical traversal and an existing symlink that leaves the workspace", async () => {
     const traversingConfig = currentConfig();
-    traversingConfig.bot.memory.workMemoryCompressInPrompt = "../outside.json";
+    traversingConfig.bot.memory.workMemoryCompressOutPrompt = "../outside.json";
     configStore.config = traversingConfig;
-    await expect(repository.get("memory.compress-in")).rejects.toMatchObject({
+    await expect(repository.get("memory.compress-out")).rejects.toMatchObject({
       statusCode: 400,
       code: "AGENT_FILE_PATH_INVALID"
     });
@@ -285,9 +267,9 @@ describe("AgentFileRepository", () => {
     await fs.mkdir(outsideDir, { recursive: true });
     await fs.symlink(outsideDir, path.join(workspaceDir, "linked"));
     const symlinkConfig = currentConfig();
-    symlinkConfig.bot.memory.workMemoryCompressInPrompt = "linked/prompt.json";
+    symlinkConfig.bot.memory.workMemoryCompressOutPrompt = "linked/prompt.json";
     configStore.config = symlinkConfig;
-    await expect(repository.get("memory.compress-in")).rejects.toMatchObject({
+    await expect(repository.get("memory.compress-out")).rejects.toMatchObject({
       statusCode: 400,
       code: "AGENT_FILE_PATH_INVALID"
     });
@@ -299,15 +281,15 @@ describe("AgentFileRepository", () => {
     await fs.symlink(realDir, path.join(workspaceDir, "linked"));
     await fs.writeFile(path.join(realDir, "prompt.json"), finalPrompt("first"), "utf8");
     const config = currentConfig();
-    config.bot.memory.workMemoryCompressInPrompt = "linked/prompt.json";
+    config.bot.memory.workMemoryCompressOutPrompt = "linked/prompt.json";
     configStore.config = config;
 
-    const current = await repository.get("memory.compress-in");
-    const first = await repository.put("memory.compress-in", {
+    const current = await repository.get("memory.compress-out");
+    const first = await repository.put("memory.compress-out", {
       content: finalPrompt("second"),
       revision: current.revision
     });
-    const second = await repository.put("memory.compress-in", {
+    const second = await repository.put("memory.compress-out", {
       content: finalPrompt("third"),
       revision: first.revision
     });

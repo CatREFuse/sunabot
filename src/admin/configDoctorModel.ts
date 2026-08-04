@@ -100,8 +100,6 @@ function redactForModel(value: Record<string, unknown>) {
       memory: {
         ...pickSafeValues(memory, [
           "reasoningEffort",
-          "messageThreshold",
-          "workingMemoryMaxEntries",
           "dreamRecentWindowHours",
           "dreamRecentMemoryLimit",
           "dreamOlderMemoryLimit"

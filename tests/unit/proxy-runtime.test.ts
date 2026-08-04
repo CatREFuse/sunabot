@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import {
+  PROXY_RUNTIME_CONTRACT,
   ProxyConfigurationError,
   installGlobalProxyDispatcher,
   mergeNoProxy,
@@ -32,8 +33,16 @@ describe("runtime proxy contract", () => {
     expect(JSON.stringify(summary)).not.toContain("proxy-password");
     expect(createDispatcher).toHaveBeenCalledWith(expect.objectContaining({
       httpProxy: "http://proxy-user:proxy-password@proxy.example:7890/",
-      httpsProxy: "http://proxy-user:proxy-password@proxy.example:7890/"
+      httpsProxy: "http://proxy-user:proxy-password@proxy.example:7890/",
+      connectTimeout: 60_000,
+      headersTimeout: 10 * 60_000,
+      bodyTimeout: 10 * 60_000
     }));
+    expect(PROXY_RUNTIME_CONTRACT).toMatchObject({
+      connectTimeoutMs: 60_000,
+      headersTimeoutMs: 10 * 60_000,
+      bodyTimeoutMs: 10 * 60_000
+    });
     expect(setDispatcher).toHaveBeenCalledWith(dispatcher);
     expect(env.HTTP_PROXY).toBe("http://proxy-user:proxy-password@proxy.example:7890/");
     expect(env.HTTPS_PROXY).toBe(env.HTTP_PROXY);

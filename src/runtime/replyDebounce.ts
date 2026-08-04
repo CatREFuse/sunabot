@@ -94,7 +94,6 @@ interface RuntimeReplyDebounceHost {
   recoverReplyDebounceMessages(payload: DurableReplyPayload): ConversationRecord;
   requireActiveGateway(): MessagingPort;
   scheduleAttachmentCacheRefresh(): void;
-  scheduleMemoryCompression(record: ConversationRecord): void;
   trackReplyDebouncePreparation(
     incoming: ParsedIncomingMessage,
     promise: Promise<void>,
@@ -170,7 +169,6 @@ export class RuntimeReplyDebounce {
       })
       .finally(() => this.host.scheduleAttachmentCacheRefresh());
     this.host.trackReplyDebouncePreparation(incoming, preparation, bumped.captureSequence);
-    this.host.scheduleMemoryCompression(record);
     this.host.sessionCoordinator.resume(incoming.accountId ?? "primary");
     return true;
   }

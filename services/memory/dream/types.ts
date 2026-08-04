@@ -78,6 +78,12 @@ export interface DreamModelOutputExpectations {
   fieldKnowledgeWritable?: boolean;
 }
 
+export interface DreamMinimalModelOutput {
+  workingMemoryCompression: string;
+  longTermMemoryAdditions: string[];
+  dreamDescription: string;
+}
+
 export interface DreamLongTermArchiveCandidate {
   recallCount: number;
   distinctRecallDays: number;
@@ -163,11 +169,9 @@ export interface DreamHistoryItem {
   errorText?: string;
   nextRetryAt?: string;
   failedAt?: string;
-  personalityChanged?: boolean;
   summary?: {
-    merged: number;
-    archived: number;
-    promoted: number;
+    workingMemoryReduced: number;
+    longTermAdded: number;
   };
 }
 

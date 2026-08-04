@@ -86,6 +86,18 @@ export {
   type AddWorkMemoryToolPort
 } from "./addWorkMemoryTool.js";
 export {
+  ADD_USER_PROFILE_MAX_ADDRESS_NAME_CHARS,
+  ADD_USER_PROFILE_MAX_ADDRESS_NAMES,
+  ADD_USER_PROFILE_MAX_CHARS,
+  ADD_USER_PROFILE_STABLE_ERROR_CODES,
+  ADD_USER_PROFILE_TOOL_NAME,
+  addUserProfileTool,
+  isAddUserProfileStableErrorCode,
+  runAddUserProfile,
+  type AddUserProfileToolInput,
+  type AddUserProfileToolPort
+} from "./addUserProfileTool.js";
+export {
   READ_FILE_TOOL_NAME,
   WRITE_FILE_TOOL_NAME,
   WORKBENCH_FILE_MAX_BYTES,

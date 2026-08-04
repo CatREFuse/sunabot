@@ -2,7 +2,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SunaRuntime } from "../../src/runtime.js";
 import { estimatePromptTokens, isExplicitWakeMessage } from "../../src/runtime/conversationMemoryHelpers.js";
-import { runtime_syncMemoryDebtAlert } from "../../src/runtime/memoryPipeline.js";
 import { appendRequestLog } from "../../adapters/observability/requestLog.js";
 import {
   decodeIncomingReply,
@@ -12,7 +11,6 @@ import {
 import { createAdminTestConfig } from "./admin-fixtures.js";
 import type { ParsedIncomingMessage } from "../../src/types.js";
 import { BroadcastStormDetector } from "../../services/orchestration/broadcastStormDetector.js";
-import { applicationDataStore } from "../../adapters/sqlite/applicationDataStore.js";
 
 const requestLog = vi.hoisted(() => vi.fn(async () => undefined));
 vi.mock("../../adapters/observability/requestLog.js", () => ({ appendRequestLog: requestLog }));
@@ -175,7 +173,6 @@ describe("runtime reply scheduling helpers", () => {
       prepareIncomingMessage(): Promise<void>;
       patchIncomingMessage(): void;
       scheduleAttachmentCacheRefresh(): void;
-      scheduleMemoryCompression(): void;
       scheduleReplyDebounce: typeof scheduleReplyDebounce;
     };
     internals.conversationRecords.set("group:3003", {
@@ -210,7 +207,6 @@ describe("runtime reply scheduling helpers", () => {
     internals.prepareIncomingMessage = vi.fn(async () => undefined);
     internals.patchIncomingMessage = vi.fn();
     internals.scheduleAttachmentCacheRefresh = vi.fn();
-    internals.scheduleMemoryCompression = vi.fn();
     internals.scheduleReplyDebounce = scheduleReplyDebounce;
 
     const incoming = groupIncoming("@普拉娜 看看这个", 171419991);
@@ -1107,7 +1103,6 @@ describe("runtime reply scheduling helpers", () => {
       prepareIncomingMessage(): Promise<void>;
       patchIncomingMessage(): void;
       scheduleAttachmentCacheRefresh(): void;
-      scheduleMemoryCompression(): void;
       persistConversationRecords(): void;
       queueAmbientReply: typeof queueAmbientReply;
     };
@@ -1115,7 +1110,6 @@ describe("runtime reply scheduling helpers", () => {
     internals.prepareIncomingMessage = vi.fn(async () => undefined);
     internals.patchIncomingMessage = vi.fn();
     internals.scheduleAttachmentCacheRefresh = vi.fn();
-    internals.scheduleMemoryCompression = vi.fn();
     internals.persistConversationRecords = vi.fn();
     internals.queueAmbientReply = queueAmbientReply;
 
@@ -1334,165 +1328,6 @@ describe("runtime reply scheduling helpers", () => {
     expect(internals.replyGates.isCurrent(stale)).toBe(false);
   });
 
-  it("applies the memory compression threshold setting immediately after a hot reload", async () => {
-    const config = createAdminTestConfig("/tmp/sunabot-runtime-router-test");
-    const runtime = createRuntime(config);
-    const scheduleMemoryDrain = vi.fn();
-    const claimNext = vi.fn(async () => undefined);
-    const internals = runtime as unknown as {
-      scheduleMemoryDrain: typeof scheduleMemoryDrain;
-      memoryScheduler: { claimNext: typeof claimNext };
-    };
-    internals.scheduleMemoryDrain = scheduleMemoryDrain;
-    internals.memoryScheduler.claimNext = claimNext;
-    const nextConfig = structuredClone(config);
-    nextConfig.bot.memory.messageThreshold = 17;
-
-    runtime.commitReload({
-      config: nextConfig,
-      persona: { id: "plana", name: "普拉娜", files: [], memoryItems: [], systemPrompt: "" }
-    });
-    await runtime.drainMemoryScheduler();
-
-    expect(scheduleMemoryDrain).toHaveBeenCalledOnce();
-    expect(claimNext).toHaveBeenCalledWith(17);
-    runtime.close();
-  });
-
-  it("records one terminal health event for each processed memory claim", async () => {
-    const config = createAdminTestConfig("workspace/memory-health-runtime-test");
-    const runtime = createRuntime(config);
-    const claim = (batchId: string, sequence: number) => ({
-      conversation: {
-        id: "private:171419991",
-        scope: "private",
-        title: "管理员",
-        userId: 171419991
-      },
-      batchId,
-      messageIds: [`${sequence}:message-${sequence}`],
-      messages: [{
-        id: `message-${sequence}`,
-        sequence,
-        role: "user" as const,
-        text: `memory health ${sequence}`,
-        at: `2026-07-31T01:00:0${sequence}.000Z`,
-        userId: 171419991,
-        imageCount: 0,
-        quoteCount: 0
-      }],
-      attemptMessageCount: 1
-    });
-    const applied = claim("health-attempt-applied", 1);
-    const failed = claim("health-attempt-failed", 2);
-    vi.spyOn(runtime.memoryScheduler, "claimNext")
-      .mockResolvedValueOnce(applied)
-      .mockResolvedValueOnce(failed)
-      .mockResolvedValueOnce(undefined);
-    const complete = vi.spyOn(runtime.memoryScheduler, "complete").mockResolvedValue(undefined);
-    const fail = vi.spyOn(runtime.memoryScheduler, "fail").mockResolvedValue(undefined);
-    vi.spyOn(runtime, "processMemoryClaim")
-      .mockResolvedValueOnce(true)
-      .mockResolvedValueOnce(false);
-
-    await runtime.drainMemoryScheduler();
-
-    const logs = applicationDataStore(config).readRequestLogs({
-      query: "working.compression_attempt",
-      limit: 20
-    }).filter((entry) => {
-      const batchId = (entry.request as { batchId?: string } | undefined)?.batchId;
-      return batchId === applied.batchId || batchId === failed.batchId;
-    });
-    expect(logs.map((entry) => ({
-      batchId: (entry.request as { batchId?: string }).batchId,
-      outcome: (entry.response as { outcome?: string }).outcome
-    }))).toEqual([
-      { batchId: failed.batchId, outcome: "failed" },
-      { batchId: applied.batchId, outcome: "applied" }
-    ]);
-    expect(complete).toHaveBeenCalledWith(applied);
-    expect(fail).toHaveBeenCalledWith(failed);
-    runtime.close();
-  });
-
-  it("binds a debt-alert target before queueing and reuses the bound target on recovery", async () => {
-    const episodeId = "runtime-alert-episode";
-    const targetConversationId = "account:connected:private:171419991";
-    const order: string[] = [];
-    const claimDebtAlert = vi.fn()
-      .mockResolvedValueOnce({ episodeId, pendingMessageCount: 101, threshold: 100 })
-      .mockResolvedValueOnce({
-        episodeId,
-        pendingMessageCount: 101,
-        threshold: 100,
-        targetConversationId
-      });
-    const resolveMemoryDebtAlertTarget = vi.fn(async () => {
-      order.push("resolve");
-      return { resolved: true as const, conversationId: targetConversationId };
-    });
-    const bindDebtAlertTarget = vi.fn(async () => {
-      order.push("bind");
-      return targetConversationId;
-    });
-    const enqueueMemoryDebtAlert = vi.fn(async (input: { targetConversationId: string }) => {
-      order.push("enqueue");
-      expect(input.targetConversationId).toBe(targetConversationId);
-      return { queued: true as const, conversationId: targetConversationId, runId: "memory-debt:runtime" };
-    });
-    const enqueueDebtAlertIfDue = vi.fn(async (
-      _episodeId: string,
-      _targetConversationId: string,
-      enqueue: () => Promise<{ queued: boolean }>
-    ) => {
-      order.push("lock");
-      const result = await enqueue();
-      order.push("mark");
-      return { executed: true as const, result };
-    });
-    const host = {
-      memoryScheduler: { claimDebtAlert, bindDebtAlertTarget, enqueueDebtAlertIfDue },
-      scheduledTasks: { resolveMemoryDebtAlertTarget, enqueueMemoryDebtAlert }
-    } as unknown as SunaRuntime;
-
-    await expect(runtime_syncMemoryDebtAlert.call(host)).resolves.toMatchObject({ queued: true });
-    expect(order).toEqual(["resolve", "bind", "lock", "enqueue", "mark"]);
-
-    order.length = 0;
-    await expect(runtime_syncMemoryDebtAlert.call(host)).resolves.toMatchObject({ queued: true });
-    expect(order).toEqual(["lock", "enqueue", "mark"]);
-    expect(resolveMemoryDebtAlertTarget).toHaveBeenCalledOnce();
-    expect(bindDebtAlertTarget).toHaveBeenCalledOnce();
-  });
-
-  it("does not enqueue a debt alert after the scheduler reports that the episode ended", async () => {
-    const enqueueMemoryDebtAlert = vi.fn();
-    const host = {
-      memoryScheduler: {
-        claimDebtAlert: vi.fn(async () => ({
-          episodeId: "ended-alert-episode",
-          pendingMessageCount: 101,
-          threshold: 100,
-          targetConversationId: "private:171419991"
-        })),
-        enqueueDebtAlertIfDue: vi.fn(async () => ({
-          executed: false as const,
-          reason: "not_due" as const
-        }))
-      },
-      scheduledTasks: {
-        resolveMemoryDebtAlertTarget: vi.fn(),
-        enqueueMemoryDebtAlert
-      }
-    } as unknown as SunaRuntime;
-
-    await expect(runtime_syncMemoryDebtAlert.call(host)).resolves.toEqual({
-      queued: false,
-      reason: "not_due"
-    });
-    expect(enqueueMemoryDebtAlert).not.toHaveBeenCalled();
-  });
 });
 
 function groupIncoming(text: string, userId = 2002): ParsedIncomingMessage {

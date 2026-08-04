@@ -143,6 +143,7 @@ describe("media API plugin", () => {
       "/api/overview/summary",
       "/api/playground/image",
       "/api/request-logs",
+      "/api/request-logs/:id/trace",
       "/api/token-usage"
     ]);
     assertRequestAndResponseSchemas(routeSchemas);

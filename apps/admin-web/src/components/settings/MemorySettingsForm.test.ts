@@ -9,14 +9,10 @@ describe("MemorySettingsForm", () => {
         modelValue: {
           memoryModel: "gpt-5.5",
           reasoningEffort: "medium",
-          messageThreshold: 48,
-          workingMemoryMaxEntries: 100,
           dreamRecentWindowHours: 24,
           dreamRecentMemoryLimit: 24,
           dreamOlderMemoryLimit: 12,
-          workMemoryCompressInPrompt: "work_memory_compress_in.json",
-          workMemoryCompressOutPrompt: "work_memory_compress_out.json",
-          userProfilePrompt: "user_profile_prompt.json"
+          workMemoryCompressOutPrompt: "work_memory_compress_out.json"
         },
         models: []
       },
@@ -34,5 +30,8 @@ describe("MemorySettingsForm", () => {
     expect(wrapper.text()).toContain("memory_dream.json");
     expect(dreamLink.exists()).toBe(true);
     expect(dreamLink.text()).toBe("编辑正文 →");
+    expect(wrapper.text()).not.toContain("近期窗口");
+    expect(wrapper.text()).not.toContain("久远记忆");
+    expect(wrapper.text()).not.toContain("归档压缩");
   });
 });

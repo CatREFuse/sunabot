@@ -67,6 +67,7 @@ export const AGENT_TOOL_NAMES = [
   "no_reply",
   "memory_recall",
   "add_workmemory",
+  "add_user_profile",
   "read_air",
   "knowledge_search",
   "websearch",
@@ -125,14 +126,10 @@ export interface BotToolSettings extends BotToolSettingsBase {
 export interface BotMemorySettings {
   memoryModel: string;
   reasoningEffort?: ReasoningEffort;
-  messageThreshold: number;
-  workingMemoryMaxEntries: number;
   dreamRecentWindowHours: number;
   dreamRecentMemoryLimit: number;
   dreamOlderMemoryLimit: number;
-  workMemoryCompressInPrompt: string;
   workMemoryCompressOutPrompt: string;
-  userProfilePrompt: string;
 }
 
 export interface BotOrchestratorSettings {

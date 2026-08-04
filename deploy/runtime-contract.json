@@ -91,6 +91,9 @@
     "explicitUrlEnv": "SUNABOT_PROXY_URL",
     "modeEnv": "SUNABOT_PROXY_MODE",
     "portsEnv": "SUNABOT_PROXY_PORTS",
+    "connectTimeoutMs": 60000,
+    "headersTimeoutMs": 600000,
+    "bodyTimeoutMs": 600000,
     "noProxyRequired": ["localhost", "127.0.0.1", "::1", "[::1]"]
   },
   "startup": {

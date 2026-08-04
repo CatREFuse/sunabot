@@ -199,6 +199,9 @@
         "explicitUrlEnv",
         "modeEnv",
         "portsEnv",
+        "connectTimeoutMs",
+        "headersTimeoutMs",
+        "bodyTimeoutMs",
         "noProxyRequired"
       ],
       "properties": {
@@ -218,6 +221,9 @@
         "explicitUrlEnv": { "const": "SUNABOT_PROXY_URL" },
         "modeEnv": { "const": "SUNABOT_PROXY_MODE" },
         "portsEnv": { "const": "SUNABOT_PROXY_PORTS" },
+        "connectTimeoutMs": { "const": 60000 },
+        "headersTimeoutMs": { "const": 600000 },
+        "bodyTimeoutMs": { "const": 600000 },
         "noProxyRequired": {
           "type": "array",
           "minItems": 4,

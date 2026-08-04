@@ -62,7 +62,7 @@ function config(adminName: string): AppConfig {
       emojiSendSeparately: false,
       tone: { enabled: false, segmentedReply: false, followMainModel: false, providerId: "", model: "gpt-5.4-mini", reasoningEffort: "low", temperature: 0.7, maxOutputTokens: 2400, maxRetries: 2 },
       director: { enabled: false },
-      memory: { memoryModel: "gpt-5.4-mini", reasoningEffort: "medium", messageThreshold: 48, workingMemoryMaxEntries: 100, dreamRecentWindowHours: 24, dreamRecentMemoryLimit: 24, dreamOlderMemoryLimit: 12, workMemoryCompressInPrompt: "in.md", workMemoryCompressOutPrompt: "out.md", userProfilePrompt: "user.md" },
+      memory: { memoryModel: "gpt-5.4-mini", reasoningEffort: "medium", dreamRecentWindowHours: 24, dreamRecentMemoryLimit: 24, dreamOlderMemoryLimit: 12, workMemoryCompressOutPrompt: "out.md" },
       orchestrator: { enabled: false, userGroupchatOrchestratorModel: "gpt-5.4-mini", reasoningEffort: "medium", promptFile: "orchestrator.md", messageThreshold: 10, recentMessageWindowMs: 60_000 },
       tools: {
         maxCalls: 20,
@@ -156,11 +156,11 @@ describe("useConfigWorkspace", () => {
     apiRequest
       .mockResolvedValueOnce(envelope("r1", "initial"))
       .mockReturnValueOnce(first.promise)
-      .mockResolvedValueOnce(patched("r3", "next", (value) => { value.bot.memory.messageThreshold = 64; }));
+      .mockResolvedValueOnce(patched("r3", "next", (value) => { value.bot.memory.dreamRecentWindowHours = 64; }));
     const workspace = useConfigWorkspace();
     await workspace.load();
     workspace.drafts.bot.adminName = "next";
-    workspace.drafts.memory.messageThreshold = 64;
+    workspace.drafts.memory.dreamRecentWindowHours = 64;
 
     const commits = Promise.all([workspace.commit("bot"), workspace.commit("memory")]);
     expect(apiRequest).toHaveBeenCalledTimes(2);

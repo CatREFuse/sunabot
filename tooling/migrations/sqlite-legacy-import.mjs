@@ -8,7 +8,6 @@ const IMPORTS = [
   { name: "working", count: "workingMemory" },
   { name: "longTerm", count: "longTermMemory" },
   { name: "userProfile", count: "userProfiles" },
-  { name: "memoryScheduler", count: "memorySchedulerConversations" },
   { name: "imageHistory", count: "imageHistory" }
 ];
 
@@ -36,7 +35,6 @@ export async function importLegacyApplicationData(options) {
   if (sources.working.present) options.store.ensureLegacyMemoryImported("working", options.legacy.working);
   if (sources.longTerm.present) options.store.ensureLegacyMemoryImported("long_term", options.legacy.longTerm);
   if (sources.userProfile.present) options.store.ensureLegacyMemoryImported("user_profile", options.legacy.userProfile);
-  if (sources.memoryScheduler.present) options.store.ensureLegacyMemorySchedulerImported(options.legacy.memoryScheduler);
   if (sources.imageHistory.present) options.store.ensureLegacyImageHistoryImported(options.legacy.imageHistory);
 
   const after = inspectImportKeys(options.databasePath);
@@ -80,7 +78,6 @@ function inspectImportKeys(databasePath) {
       working: memoryKeys(database, "working"),
       longTerm: memoryKeys(database, "long_term"),
       userProfile: memoryKeys(database, "user_profile"),
-      memoryScheduler: stringColumn(database, "SELECT conversation_id AS value FROM memory_scheduler"),
       imageHistory: stringColumn(database, "SELECT id AS value FROM image_history")
     };
   } finally {
@@ -121,12 +118,7 @@ async function readLegacySource(name, filePath) {
   } else {
     const parsed = JSON.parse(raw);
     if (name === "conversations") records = Array.isArray(parsed) ? parsed : parsed.conversations;
-    else if (name === "memoryScheduler") {
-      if (parsed?.version !== 1 || !parsed.conversations || typeof parsed.conversations !== "object") {
-        throw new Error(`Invalid memory scheduler store: ${filePath}`);
-      }
-      records = Object.entries(parsed.conversations).map(([id, value]) => ({ id, value }));
-    } else records = parsed;
+    else records = parsed;
     if (!Array.isArray(records)) throw new Error(`Invalid legacy store: ${filePath}`);
   }
   const keys = records.map((record, index) => sourceKey(name, record, index));
@@ -134,7 +126,7 @@ async function readLegacySource(name, filePath) {
 }
 
 function sourceKey(name, record, index) {
-  if (["conversations", "requestLogs", "imageHistory", "memoryScheduler"].includes(name)) {
+  if (["conversations", "requestLogs", "imageHistory"].includes(name)) {
     return requiredKey(record.id);
   }
   return memoryKey(record, index, record.id);

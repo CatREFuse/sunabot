@@ -22,13 +22,11 @@ Agent 配置文件夹是跨终端传输角色配置的唯一推荐和支持模�
 
 | 表                            | 数据                                                                                                    |
 | ----------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `app_metadata`                | schema、旧数据导入标记与记忆债务告警 episode latch                                                      |
+| `app_metadata`                | schema 与旧数据导入标记                                                                                  |
 | `agents`                      | Agent ID、名称、启用状态、workspace 与头像路径                                                          |
 | `agent_accounts`              | QQ 接入账号、所属 Agent、QQ 号、启用状态与独立 WebUI 端口                                               |
 | `conversations`               | 会话及其消息数组，每个会话一行                                                                          |
 | `memory_records`              | 长期记忆、用户画像，以及只读保留的历史工作记忆                                                        |
-| `memory_batches`              | 已提交记忆批次及幂等结果                                                                                |
-| `memory_scheduler`            | 各会话的记忆待处理队列与重试状态                                                                        |
 | `request_logs`                | 脱敏后的模型、工具、运行与 `memory.operation` 记忆操作日志；保留实际模型请求体、Provider 返回 payload、原始 usage 与统一 `tokenUsage` |
 | `model_call_aggregates`       | 当前 Agent 按会话与行为聚合的模型调用总量                                                               |
 | `model_call_model_aggregates` | 当前 Agent 按会话、模型、行为和记忆类型聚合的调用总量                                                   |
@@ -37,25 +35,21 @@ Agent 配置文件夹是跨终端传输角色配置的唯一推荐和支持模�
 | `scheduled_task_runs`         | 到期 occurrence 的不可变任务快照、状态、lease、生成正文、错误与完成时间                                 |
 | `admin_sessions`              | 管理 Cookie 哈希、CSRF Token、访问时间与有效期                                                          |
 
+业务节点、记忆工具类型、成功/失败、尝试序号、最大尝试次数和重试次数是读取 `request_logs` 时从既有 category、action、request、response 与 metadata 派生的展示字段，不推进 schema，也不回写历史记录。`GET /api/request-logs` 的 `node` 与 `memoryTool` 使用固定枚举和参数化 SQL；业务节点条件与全文搜索在 `LIMIT/OFFSET` 前组合，避免分页后前端过滤。详情先按日志 ID 定位记录，再以参数化 `runId` 查询最多 200 条同轮日志，使请求、工具和响应跨分页仍可组合；返回值仍是既有安全投影，不能重新读取未脱敏 Provider 数据、记忆正文、称呼值、MCP 原文或宿主路径。
+
 当前业务主库 schema 版本是 17；schema 10→11 创建的 STRICT `emojis` 与 schema 11→12 创建的 `emoji_versions` 仅保留为旧安装的表情 JSONL 迁移输入，当前表情 CRUD 不再向这两张表写入。schema 12→13 前向创建 STRICT `scheduled_tasks`、`scheduled_task_runs` 及 `scheduled_tasks_due`、`scheduled_task_runs_status`、`scheduled_task_runs_task` 三个索引，schema 15→16 为既有 `scheduled_tasks` 前向补充默认关闭的 `permanent_retention` 并创建 `scheduled_tasks_archive` 索引，schema 16→17 创建 STRICT `memory_source_revisions` 与三项记忆 revision trigger，并为 `scheduled_task_runs` 补充投递尝试、最后错误和下次投递时间。已升级 workspace 中可能保留停用的话题索引历史表；当前运行时不创建、不检查、不读取、不写入或删除该表。备份清单记录数据库实际表集和 storage schema version，恢复时原样保留额外历史表。恢复门禁只允许当前规范明确支持的旧 schema 作为迁移输入，并分别复核真实版本；当前 schema 缺任一必需表、索引、记忆 revision trigger 或投递列都判定为不完整。
 
-当前工作记忆位于每个 Agent workspace 根目录的 `WORKING_MEMORY.md`，不要求 Git 跟踪。可见正文只由模型提供，宿主时间、会话来源和事项身份保存在隐藏 metadata；文件以 SHA-256 revision、64 KiB 上限、普通文件与符号链接拒绝、同目录 0600 临时文件和原子 rename 提交，模型、工具、管理 API 与 Dream 共用该文件安全边界。长期记忆与用户画像继续使用 SQLite source revision。实时记忆批处理在任何写入前确认 Provider 返回可解析，再分别复核工作记忆文件 revision 与用户画像 SQLite revision；工作记忆文件和用户画像事务各自原子提交，当前不声称跨 Markdown 与 SQLite 的单一原子事务。长期记忆不参与实时工作记忆批处理。Dream 同时捕获 `WORKING_MEMORY.md` 与 `AIR.md` revision，提交顺序为工作记忆文件 CAS、场域知识文件 CAS、长期记忆 SQLite 事务；后一步失败时按新 revision 逆序回滚已写文件。进程在步骤之间强制终止仍不具备跨介质原子回滚，操作日志必须保留恢复证据。
+当前工作记忆位于每个 Agent workspace 根目录的 `WORKING_MEMORY.md`，不要求 Git 跟踪。可见正文只由模型提供，宿主时间、会话来源和事项身份保存在隐藏 metadata；文件以 SHA-256 revision、64 KiB 上限、普通文件与符号链接拒绝、同目录 0600 临时文件和原子 rename 提交，工具、管理 API 与 Dream 共用该文件安全边界。长期记忆与用户画像继续使用 SQLite source revision。主对话中的 `add_workmemory` 与 `add_user_profile` 分别提交工作记忆文件和用户画像 SQLite 记录。Dream 同时捕获供模型读取的规范化长期记忆投影与供 add-only 提交的原始存储快照；提交必须从原始存储快照逐字段保留全部既有记录，不能把投影阶段补入的 schema、身份数组或事件指纹写回历史记录。提交顺序为工作记忆文件 CAS、长期记忆 SQLite 添加事务；SQLite 失败时按新 revision 回滚工作记忆。工作记忆 revision 漂移按软链接处理并保留当前文件，长期记忆 digest 漂移保持事务冲突。Dream 不读写 `AIR.md`、人格文件、长期记忆归档或召回统计。
 
 生产 Dream 的 Provider 数据边界包含当前 Agent 快照中已存在的姓名、称呼、QQ 和参与者身份：这些值在封闭、有界的投影字段与事实正文中保持原值并发送给配置的 Dream Provider，不建立 `人物-*`、`person:*` 或其他身份哈希映射，也不把真实身份绑定另存为恢复表。凭据、秘密、邮箱、签名参数和宿主绝对路径仍在 Provider 请求前脱敏；旧式宿主身份代号不能进入新的有效模型输出或后续记忆、Dream、人格和 `AIR.md` 提交。user-test workspace 只复制非数据配置和明确授权的 Provider 凭据，生产业务 SQLite、WAL/SHM、记忆、会话、AIR、任务、Director、人格运行状态、runtime/cache/backup/voice、workbench、extensions 与链接均不复制；需要内容样本时只能使用只读来源生成独立的不可逆脱敏快照。
 
-记忆操作审计复用当前 Agent 的 `request_logs`，不新增表或 JSON/JSONL。`memory.operation` 记录来源、操作、执行者、结果、稳定原因码、宿主时间、可用的 batch/conversation/record 标识、数量与 revision；正文、模型原始返回和宿主绝对路径禁止进入该事件。读取沿用现有请求日志分页与搜索，写入必须由当前 Agent 配置选择业务库，不能跨 Agent 汇总落盘。
+记忆操作审计复用当前 Agent 的 `request_logs`，不新增表或 JSON/JSONL。`memory.operation` 记录来源、操作、执行者、结果、稳定原因码、宿主时间、可用的 conversation/record 标识、数量与 revision；正文、称呼值、模型原始返回和宿主绝对路径禁止进入该事件。读取沿用现有请求日志分页与搜索，写入必须由当前 Agent 配置选择业务库，不能跨 Agent 汇总落盘。
 
-`add_workmemory` 把 durable `incoming_reply` event ID 作为有界 `sourceDecisionKey` 写入 `WORKING_MEMORY.md` 的隐藏事项 metadata，不新增 SQLite 表或用户可见字段。追加在每次 revision CAS 前先查找相同决策键；崩溃恢复、重复 Provider 请求或 CAS 冲突重读命中时返回原事项和 revision，正文不再次追加。决策键在后续普通工作记忆整理中随稳定事项保留，整份文档拒绝重复键。
+`add_workmemory` 把 durable `incoming_reply` event ID 作为有界 `sourceDecisionKey` 写入 `WORKING_MEMORY.md` 的隐藏事项 metadata，不新增 SQLite 表或用户可见字段。追加在每次 revision CAS 前先查找相同决策键；崩溃恢复、重复 Provider 请求或 CAS 冲突重读命中时返回原事项和 revision，正文不再次追加。`add_user_profile` 使用相同决策键写入当前用户的聚合画像记录；重复执行命中该用户现有记录时返回去重结果，不新增第二条画像。旧 `memory_batches` 与 `memory_scheduler` 在 schema 初始化时显式删除，运行时没有对应 repository、队列或恢复逻辑。
 
-`memory_scheduler` 现有状态对象持久保存队首 `currentBatch`、`failureCount`、`nextRetryAt`、`lastFailureCode` 与 `earlyRetryConsumedThroughCount`，不增加 SQLite 列或 schema 版本。失败时保留同一 batch ID 和原消息，重启把遗留 `running` 恢复为可重试队首；重试成功后才推进已处理游标。后来入队的消息保持原序，不参与失败批次重建，也不被计作该批次已经消费的新批次窗口额度；提前唤醒水位只防止同一完整窗口在失败后立即重复唤醒。
+既有 `bot.memory.dreamRecentWindowHours`、`dreamRecentMemoryLimit` 与 `dreamOlderMemoryLimit` 只为旧配置读取兼容保留，不再进入管理台、Dream payload 或运行决策。新建 Dream 运行把完整有界工作记忆批次、长期记忆只读去重上下文和安全上下文写入既有 `dream_runs.input_json`；后续重试复用同一输入。
 
-记忆页 24 小时处理成功率直接聚合当前 Agent `request_logs` 中 `memory.operation/working.compression_attempt` 的终态事件，待处理数直接聚合当前 Agent `memory_scheduler`，不持久化派生百分比、不跨 Agent 建立汇总表，也不推进 schema。每次真实 claim 只写一个 `applied` 或 `failed` 终态；已提交批次的恢复性游标结算不写伪尝试。
-
-记忆债务告警 latch 使用当前 Agent 业务库 `app_metadata` 中的版本化对象保存活动 episode ID、首次解析并持久绑定的 `targetConversationId`、是否已经排入 durable Session 事件和更新时间，不新增增长型文件或 schema 表。队列检查与 latch 写入由同一 Agent 的记忆调度串行化，固定执行目标解析、目标绑定、事件入队、queued 标记；并发绑定只保留第一个合法私聊目标。事件入队成功后才标记 queued，若进程在目标绑定后、事件写入后或 queued 标记前终止，重试继续使用相同目标与 episode run ID，由 Session dedupe 收敛为同一事件。待处理总数回落到 100 条或更少时持久重置活动状态与目标。
-
-Dream 分层窗口与两个时间桶上限属于现有 Agent JSON 配置的 `bot.memory` 字段，不推进 SQLite schema。缺少三项字段的旧配置分别补为 24、24、12；窗口允许 1—720 小时，两桶分别允许 0—48 条且合计必须为 1—48 条，超范围手工配置回退到安全默认组合。新建 Dream 运行把入选批次、窗口、场域知识 revision 与证据 ID 写入既有 `dream_runs.input_json`，后续重试不受配置再次修改影响；缺少窗口字段的旧持久运行按历史 48 小时解释。
-
-Dream 严格输出解析失败复用 `dream_runs` 现有 `attempt_count`、`error_code`、`error_text`、`next_retry_at` 与失败时间字段。无效输出在 `markGenerated` 之前失败，自动 claim 最多累计三次；第三次后 `next_retry_at` 为空。恢复到旧 `generated` 产物后若持久原文不能通过当前合同，失败事务同时把 `output_json`、`dream_text` 与 `generated_at` 清空，下一次 claim 回到 `running` 重新调用模型；其他 consolidation 失败继续保留合法生成产物。错误只保存白名单稳定代码与按代码生成的固定安全说明，Dream 操作日志只保存代码，历史 API 忽略旧 `error_text` 原文并重新映射安全文案，不保存无效模型原文、Provider payload、秘密或宿主路径，且不产生工作记忆、长期记忆、场域知识或人格写入。
+Dream 严格输出解析失败复用 `dream_runs` 现有 `attempt_count`、`error_code`、`error_text`、`next_retry_at` 与失败时间字段。无效输出在 `markGenerated` 之前失败，自动 claim 最多累计三次；第三次后 `next_retry_at` 为空。generated 阶段只接受能够重新通过当前三字段合同的 parsed JSON；旧六字段、宽松或残缺产物清空生成结果并在下一次 claim 重新调用模型。错误只保存稳定代码与固定安全说明，不保存无效模型原文、Provider payload、秘密或宿主路径。
 
 `emojis.jsonl` 一行对应一个 key，并严格保存当前文件名、key 创建/更新时间以及版本数组；`source` 只允许 `upload` 或 `generated`。单 Agent 最多 64 行，每行最多 20 个版本，清单最多 2 MiB。统一 key 校验层在任何清单或图片写入前拒绝原始孤立代理项、replacement character、C0/C1 控制字符、方括号、斜杠和反斜杠，再执行 trim/NFC，并限制为 1—24 个 code point、最多 64 UTF-8 字节；清单中的未知字段、重复 key、重复版本、悬空当前版本或非法值使读取失败关闭。旧 SQLite 毒值在迁移读取时隐藏，不能进入 JSONL 或令列表和内容 API 持续 500。
 
@@ -177,9 +171,9 @@ Agent 根目录及 `extensions`、`skills`、`mcp` 控制目录必须是当前�
 
 ### 8.5 Dream schema v15
 
-业务 schema v15 在每个 Agent 的 `sunabot.sqlite` 前向创建四个 STRICT 表：`memory_recall_stats` 保存长期记忆累计召回、跨日计数、最近召回、tracking、最近审查及有界 pending exposure JSON；`memory_recall_receipts` 以 `recall_key + record_id` 去重实际模型上下文召回；`dream_runs` 保存自然日唯一运行、系统时区、04:00 窗口、输入摘要、模型输出、租约、重试、整理结果与人格状态；`dream_memory_archive` 保存待 30 天后清除的原记录、原因与期限。既有 v15/v16 数据库通过幂等补列取得 `pending_recall_json`，默认空数组且受 JSON 类型与 64 KiB 上限约束。迁移顺序固定为 Director v14、Dream v15、定时任务保留字段 v16、记忆 source CAS 与投递退避字段 v17；首次运行门禁在 schema 17 同时要求 Director 三表、Dream 四表、记忆 revision 表与 trigger，以及定时任务投递列。
+业务 schema v15 的既有 Dream 表继续前向兼容。`dream_runs` 保存自然日唯一运行、系统时区、04:00 窗口、输入摘要、三字段模型输出、租约、重试与添加结果；旧 `memory_recall_stats`、`memory_recall_receipts` 与 `dream_memory_archive` 表暂不删除，当前 Dream 管线不读取、初始化、更新、归档或清除其中数据，长期记忆遗忘功能后续单独设计。
 
-同一 Agent、系统时区自然日的 Dream run 唯一，claim、generated、consolidated、persona 与 completed 阶段均受租约和条件更新保护。模型输出先持久化为 generated，重启恢复直接继续整理，不能再次调用模型；暂时模型或传输故障最多尝试三次、间隔 15 分钟，永久输入、快照、结果冲突以及 Provider 明确返回的不可重试 HTTP 4xx 只尝试一次，running、generated 与 consolidated 任一租约在累计第三次 claim 后再次过期，都由下一次自动 claim 原子标记 `DREAM_ATTEMPT_LIMIT`，不得无限恢复。管理员手动触发可对当日 failed 行执行一次新的条件 claim，保留同一 run ID、输入、已生成结果和阶段并递增 `attempt_count`，因此不会建立第二条当日记录或重复已完成运行；该显式恢复可以超过自动三次上限，后续失败仍需再次由管理员明确触发。手动通知入队失败保存 `DREAM_NOTIFICATION_FAILED` 且不设置 `next_retry_at`。`WORKING_MEMORY.md` 与 `AIR.md` 复审结果由各自文件 CAS 提交；长期记忆替换、归档、召回 lineage、长期记忆复审时间、审查分数、tracking 初始化与运行阶段推进在同一 `BEGIN IMMEDIATE` 事务完成。任何从长期记忆移除的源还必须没有未过期 pending exposure；归档写入前按当前累计召回、跨日召回、最近召回、tracking、receipt 与 pending exposure 精确复验捕获快照，任一步失败整体回滚并触发已提交文件的受 revision 逆序回滚。
+同一 Agent、系统时区自然日的 Dream run 唯一，claim、generated、consolidated 与 completed 阶段继续受租约和条件更新保护；persona 阶段固定记为 `none`，不执行人格读写。模型输出先持久化为 generated，重启恢复直接继续提交；暂时模型或传输故障最多尝试三次、间隔 15 分钟，永久输入、长期记忆快照、结果冲突以及 Provider 明确返回的不可重试 HTTP 4xx 只尝试一次。工作记忆 CAS 与长期记忆 add-only 替换快照共享现有恢复和回滚边界，事务必须证明最终长期记忆集合包含提交前全部记录且只增加本次去重后的新记录。
 
 调度表达式固定为系统 IANA 时区的 `0 4 * * *`，按当地自然日唯一并由时区库处理夏令时。Core 在 04:00 后启动时只补最近一次未运行日期，不遍历历史欠账；全新安装在首次 04:00 之前不会补做安装前一天。运行时每分钟检查一次，stop 会取消当前模型请求并释放定时器，完成记录不会重复执行。
 

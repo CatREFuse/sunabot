@@ -2,7 +2,7 @@
 
 ## Goal
 
-Verify that an independently reviewed V2 sample from a running test account can enter the production Dream branch while factual memory, imagined Dream material, persona evidence, people, conversations, and time remain correctly separated.
+Verify that an independently reviewed V2 sample from a running test account enters the production Dream branch as one complete working-memory document, optional long-term fact additions, and one imagined Dream description, with no other write path.
 
 ## Preconditions
 
@@ -10,7 +10,7 @@ Derive this template only from a V2 sanitized sample whose digest and free text 
 
 ## Expected quality
 
-Dream may create imaginative material, but factual consolidation and persona changes remain traceable to the injected sample. Imagined events stay labeled as Dream evidence and cannot become claims about real people or completed actions.
+The compressed working-memory document must preserve unresolved facts and boundaries from the injected sample. Every long-term addition must be supported by that sample; an empty addition array is acceptable only when the sample contains no unrecorded durable fact. Imagined events stay confined to Dream history and cannot become claims about real people or completed actions.
 
 <!-- sunabot-user-test-case:v1 -->
 ```json
@@ -19,7 +19,7 @@ Dream may create imaginative material, but factual consolidation and persona cha
   "id": "harness.sampled-dream",
   "title": "Sampled test-account Dream",
   "kind": "dream",
-  "goal": "The production Dream branch processes the reviewed sanitized sample without crossing factual, identity, persona, or time boundaries.",
+  "goal": "The production Dream branch replaces the complete working-memory document, optionally adds only supported durable facts, stores one imagined Dream description, and performs no persona, field-knowledge, archive, forgetting, or outbound-message operation.",
   "input": {
     "timePolicy": "rebase_to_runtime",
     "now": "2026-07-26T12:00:00.000+08:00",
@@ -72,24 +72,29 @@ Dream may create imaginative material, but factual consolidation and persona cha
     "requiredText": [],
     "forbiddenText": [],
     "minimumOutboundCount": 0,
-    "maximumOutboundCount": 0
+    "maximumOutboundCount": 0,
+    "providerPrompt": {
+      "promptFamily": "memory.dream",
+      "orderedText": ["\"workingMemory\"", "\"longTermMemories\""],
+      "forbiddenText": ["\"workingMemories\"", "\"sourceIds\"", "\"sourceWorkingMemoryIds\""]
+    }
   },
   "quality": {
     "criteria": [
       {
-        "id": "factual-fidelity",
-        "description": "Factual memory and any persona evidence are directly supported by the injected sanitized sample.",
-        "minimumScore": 4
-      },
-      {
-        "id": "dream-isolation",
-        "description": "Imagined Dream material stays distinguishable from factual memory and real-world completion claims.",
+        "id": "working-memory-document",
+        "description": "The complete working-memory input is compressed into one coherent replacement document that preserves unresolved facts, commitments, boundaries, and next steps without item IDs or source mappings.",
         "minimumScore": 5
       },
       {
-        "id": "participant-identity",
-        "description": "People, names, IDs, conversations, and relationship scopes remain correctly attributed.",
-        "minimumScore": 4
+        "id": "long-term-additions",
+        "description": "Every long-term addition is a durable fact supported by the sampled working memory and absent from existing long-term memory; an empty array is acceptable only when no such fact exists.",
+        "minimumScore": 5
+      },
+      {
+        "id": "dream-isolation",
+        "description": "Imagined Dream material stays confined to Dream history and does not become working memory, long-term memory, or a real-world completion claim.",
+        "minimumScore": 5
       },
       {
         "id": "time-causality",
@@ -97,8 +102,8 @@ Dream may create imaginative material, but factual consolidation and persona cha
         "minimumScore": 4
       },
       {
-        "id": "no-invention",
-        "description": "The branch introduces no unsupported real event, commitment, relationship, or persona fact.",
+        "id": "minimal-write-scope",
+        "description": "The branch performs only whole-document working-memory replacement, add-only long-term writes, and Dream-history persistence; persona, field knowledge, archive, forgetting, and outbound messaging remain unchanged.",
         "minimumScore": 5
       }
     ]

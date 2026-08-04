@@ -142,8 +142,6 @@ export class SystemConfigService {
       },
       memory: {
         model: config.bot.memory.memoryModel,
-        messageThreshold: config.bot.memory.messageThreshold,
-        workingMemoryMaxEntries: config.bot.memory.workingMemoryMaxEntries,
         dreamRecentWindowHours: config.bot.memory.dreamRecentWindowHours,
         dreamRecentMemoryLimit: config.bot.memory.dreamRecentMemoryLimit,
         dreamOlderMemoryLimit: config.bot.memory.dreamOlderMemoryLimit

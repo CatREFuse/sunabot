@@ -13,7 +13,11 @@ import type { SelfieRunner } from "../../../services/tools/selfieTool.js";
 import type { SystemConfigToolPort } from "../../../services/tools/systemConfigTool.js";
 import type { CronToolPort } from "../../../services/tools/cronTool.js";
 import type { CallDirectorToolPort } from "../../../services/tools/callDirectorTool.js";
-import type { AddWorkMemoryToolPort, ReadAirToolPort } from "../../../services/tools/public.js";
+import type {
+  AddUserProfileToolPort,
+  AddWorkMemoryToolPort,
+  ReadAirToolPort
+} from "../../../services/tools/public.js";
 import type { PrepareOutboundConversationAssetInput } from "../../../services/delivery/public.js";
 import type { ProviderLogContext } from "../../../packages/contracts/model/modelGateway.js";
 import type { ImageGenerationFailureContext } from "../imageGenerationRetry.js";
@@ -56,6 +60,7 @@ export interface ProviderCompleteOptions {
   director?: CallDirectorToolPort;
   air?: ReadAirToolPort;
   workingMemory?: AddWorkMemoryToolPort;
+  userProfile?: AddUserProfileToolPort;
   skills?: SkillRuntimeToolPort;
   disabledTools?: readonly AgentToolName[];
   blockedToolExecutions?: readonly AgentToolName[];

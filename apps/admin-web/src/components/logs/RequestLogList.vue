@@ -1,16 +1,23 @@
 <script setup lang="ts">
 import { computed, shallowRef } from "vue";
+import { requestLogPresentation } from "../../../../../packages/contracts/observability/requestLogPresentation.js";
 import { formatFullDateTime } from "../../utils/format";
-import { requestLogDirection, requestLogDisplayName } from "../../utils/logDisplay";
+import {
+  requestLogBusinessNodeName,
+  requestLogDisplayName
+} from "../../utils/logDisplay";
+import { apiRequest } from "../../composables/useAdminApi";
 import type { ConversationLogEntry } from "../../types";
+import RequestLogDetailDialog from "./RequestLogDetailDialog.vue";
 import RequestLogTokenUsage from "./RequestLogTokenUsage.vue";
-import StructuredValue from "./StructuredValue.vue";
 
 const props = withDefaults(defineProps<{
   logs: readonly ConversationLogEntry[];
   enableSearch?: boolean;
 }>(), { enableSearch: false });
 const searchQuery = shallowRef("");
+const selected = shallowRef<ConversationLogEntry | null>(null);
+const selectedTrace = shallowRef<readonly ConversationLogEntry[]>([]);
 const normalizedSearchQuery = computed(() => searchQuery.value.trim().toLocaleLowerCase());
 const searchableLogs = computed(() => props.logs.map((log) => ({
   log,
@@ -21,6 +28,37 @@ const visibleLogs = computed(() => {
   if (!query) return props.logs;
   return searchableLogs.value.filter(({ text }) => text.includes(query)).map(({ log }) => log);
 });
+
+function presentation(log: ConversationLogEntry) {
+  return log.presentation ?? requestLogPresentation(log as unknown as Record<string, unknown>);
+}
+
+async function openDetail(log: ConversationLogEntry) {
+  selected.value = log;
+  selectedTrace.value = pageTrace(log);
+  if (log.category === "onebot.event") return;
+  const selectedId = log.id;
+  try {
+    const payload = await apiRequest<{ logs: ConversationLogEntry[] }>(
+      `/api/request-logs/${encodeURIComponent(selectedId)}/trace`
+    );
+    if (selected.value?.id === selectedId && payload.logs.length) selectedTrace.value = payload.logs;
+  } catch {
+    // The current page trace remains available if the bounded trace endpoint is unavailable.
+  }
+}
+
+function pageTrace(log: ConversationLogEntry) {
+  const runId = typeof log.metadata?.runId === "string" ? log.metadata.runId : "";
+  if (!runId) return [log];
+  const related = props.logs.filter((candidate) => candidate.metadata?.runId === runId);
+  return related.length ? related : [log];
+}
+
+function closeDetail() {
+  selected.value = null;
+  selectedTrace.value = [];
+}
 </script>
 
 <template>
@@ -38,62 +76,169 @@ const visibleLogs = computed(() => {
       <span class="request-list__count">{{ visibleLogs.length }} / {{ logs.length }}</span>
     </div>
     <div v-if="visibleLogs.length" class="request-list__timeline">
-      <article v-for="log in visibleLogs" :key="log.id" class="request-list__item" data-slot="request-log-item">
-        <span
-          class="request-list__marker"
-          :data-kind="log.category === 'model.response' ? 'success' : 'neutral'"
-          data-slot="request-direction-marker"
-          aria-hidden="true"
-        ></span>
-        <header class="flex min-w-0 flex-wrap items-start justify-between gap-3">
-          <div class="min-w-0">
-            <div class="flex min-w-0 flex-wrap items-center gap-2">
-              <span class="inline-state" :data-kind="log.category === 'model.response' ? 'success' : 'neutral'">
-                <i class="bx" :class="log.category === 'model.response' ? 'bx-down-arrow-alt' : 'bx-up-arrow-alt'" aria-hidden="true"></i>
-                {{ requestLogDirection(log) }}
+      <article
+        v-for="log in visibleLogs"
+        :key="log.id"
+        class="request-list__item"
+        :data-status="presentation(log).status"
+        data-slot="request-log-item"
+      >
+        <span class="request-list__marker" data-slot="request-direction-marker" aria-hidden="true"></span>
+        <button
+          class="request-list__trigger"
+          type="button"
+          :aria-label="`查看${requestLogDisplayName(log)}请求详情`"
+          @click="openDetail(log)"
+        >
+          <span class="request-list__main">
+            <span class="request-list__meta">
+              <span>{{ requestLogBusinessNodeName(log) }}</span>
+              <span v-if="presentation(log).status === 'error'" class="request-list__error">[ERROR]</span>
+              <span v-else-if="presentation(log).status === 'success'" class="request-list__success">[OK]</span>
+              <span v-if="presentation(log).retryCount > 0 || presentation(log).willRetry" class="request-list__retry">
+                RETRY {{ presentation(log).retryCount }} · {{ presentation(log).attempt }}/{{ presentation(log).maxAttempts }}
               </span>
-              <h3 class="text-sm font-medium text-display">{{ requestLogDisplayName(log) }}</h3>
-            </div>
-            <p class="mt-2 break-all font-mono text-[10px] text-mute">{{ log.action }}</p>
-            <p v-if="log.providerId || log.model" class="mt-1 break-all font-mono text-[10px] text-disabled">
+            </span>
+            <span class="request-list__title">{{ requestLogDisplayName(log) }}</span>
+            <span class="request-list__action">{{ log.action }}</span>
+            <span v-if="log.providerId || log.model" class="request-list__provider">
               {{ [log.providerId, log.model].filter(Boolean).join(" · ") }}
-            </p>
-          </div>
-          <time class="shrink-0 font-mono text-[10px] text-disabled">{{ formatFullDateTime(log.at) }}</time>
-        </header>
-
-        <RequestLogTokenUsage v-if="log.tokenUsage" :usage="log.tokenUsage" />
-
-        <details v-if="log.request !== undefined" class="request-list__details">
-          <summary class="request-list__summary min-h-11"><i class="bx bx-upload mr-1" aria-hidden="true"></i>请求体</summary>
-          <div class="request-list__payload"><StructuredValue :value="log.request" /></div>
-        </details>
-        <details v-if="log.response !== undefined" class="request-list__details">
-          <summary class="request-list__summary min-h-11"><i class="bx bx-download mr-1" aria-hidden="true"></i>响应体</summary>
-          <div class="request-list__payload"><StructuredValue :value="log.response" /></div>
-        </details>
-        <details v-if="log.metadata !== undefined" class="request-list__details">
-          <summary class="request-list__summary min-h-11"><i class="bx bx-info-circle mr-1" aria-hidden="true"></i>元数据</summary>
-          <div class="request-list__payload"><StructuredValue :value="log.metadata" /></div>
-        </details>
+            </span>
+          </span>
+          <span class="request-list__aside">
+            <time>{{ formatFullDateTime(log.at) }}</time>
+            <span class="request-list__inspect">INSPECT <i class="bx bx-right-arrow-alt" aria-hidden="true"></i></span>
+          </span>
+        </button>
+        <RequestLogTokenUsage v-if="log.tokenUsage" class="request-list__usage" :usage="log.tokenUsage" />
       </article>
     </div>
     <div v-else class="empty-state"><div><strong>{{ logs.length ? "没有匹配的请求日志" : "没有请求日志" }}</strong></div></div>
+
+    <RequestLogDetailDialog
+      :open="selected !== null"
+      :log="selected"
+      :logs="selectedTrace"
+      @close="closeDetail"
+    />
   </section>
 </template>
 
 <style scoped>
-.request-list__search { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
-.request-list__count { flex: 0 0 auto; color: rgb(var(--color-disabled)); font-family: "Space Mono", monospace; font-size: 10px; }
+.request-list__search {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.request-list__count {
+  flex: 0 0 auto;
+  color: rgb(var(--color-disabled));
+  font-family: "Space Mono", monospace;
+  font-size: 10px;
+}
 .request-list__timeline { border-top: 1px solid rgb(var(--color-line)); }
-.request-list__item { position: relative; padding: 20px 0 20px 16px; border-bottom: 1px solid rgb(var(--color-line)); }
-.request-list__marker { position: absolute; top: 20px; bottom: 20px; left: 0; width: 2px; background: rgb(var(--color-mute)); }
-.request-list__marker[data-kind="success"] { background: rgb(var(--color-success)); }
-.request-list__details { margin-top: 12px; border-top: 1px solid rgb(var(--color-line)); padding-top: 10px; }
-.request-list__summary { display: flex; align-items: center; cursor: pointer; color: rgb(var(--color-mute)); font-family: "Space Mono", monospace; font-size: 10px; }
-.request-list__payload { margin-top: 10px; border-left: 2px solid rgb(var(--color-visible)); padding-left: 12px; }
+.request-list__item {
+  position: relative;
+  border-bottom: 1px solid rgb(var(--color-line));
+}
+.request-list__marker {
+  position: absolute;
+  top: 16px;
+  bottom: 16px;
+  left: 0;
+  width: 2px;
+  background: rgb(var(--color-mute));
+}
+.request-list__item[data-status="success"] .request-list__marker { background: rgb(var(--color-success)); }
+.request-list__item[data-status="error"] .request-list__marker { background: rgb(var(--color-accent)); }
+.request-list__trigger {
+  display: grid;
+  width: 100%;
+  min-height: 96px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 24px;
+  padding: 16px 8px 16px 16px;
+  text-align: left;
+}
+.request-list__trigger:hover,
+.request-list__trigger:focus-visible {
+  background: rgb(var(--color-visible) / .05);
+}
+.request-list__main {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+}
+.request-list__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  font-family: "Space Mono", monospace;
+  font-size: 10px;
+  letter-spacing: .08em;
+  color: rgb(var(--color-mute));
+  text-transform: uppercase;
+}
+.request-list__error,
+.request-list__retry { color: rgb(var(--color-accent)); }
+.request-list__success { color: rgb(var(--color-success)); }
+.request-list__title {
+  margin-top: 10px;
+  color: rgb(var(--color-display));
+  font-size: 14px;
+  font-weight: 500;
+}
+.request-list__action,
+.request-list__provider,
+.request-list__aside {
+  font-family: "Space Mono", monospace;
+  font-size: 10px;
+}
+.request-list__action {
+  margin-top: 6px;
+  overflow-wrap: anywhere;
+  color: rgb(var(--color-mute));
+}
+.request-list__provider {
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+  color: rgb(var(--color-disabled));
+}
+.request-list__aside {
+  display: flex;
+  min-width: 128px;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: space-between;
+  color: rgb(var(--color-disabled));
+}
+.request-list__inspect {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: rgb(var(--color-mute));
+  letter-spacing: .08em;
+}
+.request-list__usage { margin: 0 8px 16px 16px; }
 @media (max-width: 560px) {
-  .request-list__search { align-items: stretch; flex-direction: column; gap: 8px; }
+  .request-list__search {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 8px;
+  }
   .request-list__count { align-self: flex-end; }
+  .request-list__trigger {
+    min-height: 112px;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+  }
+  .request-list__aside {
+    width: 100%;
+    min-width: 0;
+    flex-direction: row;
+    align-items: center;
+  }
 }
 </style>

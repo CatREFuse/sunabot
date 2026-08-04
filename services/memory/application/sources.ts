@@ -12,7 +12,7 @@ export const sourceDefinitions: SourceDefinition[] = [
     title: "工作记忆",
     fileName: "WORKING_MEMORY.md",
     legacyFileName: "WORKING_MEMORY.jsonl",
-    editable: true,
+    editable: false,
     field: "fact",
     fields: ["fact", "text", "content", "summary", "memory"],
     idPrefix: "mem"

@@ -42,7 +42,7 @@ interface NormalizedConsolidationInput {
   expectedWorkingDigest: string;
   expectedLongTermDigest: string;
   externalWorkingMemory: boolean;
-  workingMemoryId: string;
+  workingMemoryId: string | null;
   working: NormalizedMemoryRecord[];
   longTerm: NormalizedMemoryRecord[];
   archives: Array<{
@@ -67,6 +67,7 @@ interface NormalizedConsolidationInput {
   }>;
   result: JsonObject;
   resultJson: string;
+  minimalMemoryCycle: boolean;
 }
 
 interface PendingRecallExposure {
@@ -228,25 +229,32 @@ export function commitDreamConsolidationUnsafe(
   const sources: MemorySource[] = [];
   if (actualWorkingDigest !== normalized.expectedWorkingDigest) sources.push("working");
   if (actualLongTermDigest !== normalized.expectedLongTermDigest) sources.push("long_term");
-  if (!archiveRecallSnapshotsCurrent(database, normalized.archives) && !sources.includes("long_term")) {
-    sources.push("long_term");
-  }
-  if (pendingRecallBlocksRemoval(database, normalized.longTerm, nowIso) && !sources.includes("long_term")) {
-    sources.push("long_term");
+  if (!normalized.minimalMemoryCycle) {
+    if (!archiveRecallSnapshotsCurrent(database, normalized.archives) && !sources.includes("long_term")) {
+      sources.push("long_term");
+    }
+    if (pendingRecallBlocksRemoval(database, normalized.longTerm, nowIso) && !sources.includes("long_term")) {
+      sources.push("long_term");
+    }
   }
   if (sources.length > 0) {
     return { status: "snapshot_conflict", sources, actualWorkingDigest, actualLongTermDigest };
   }
+  if (normalized.minimalMemoryCycle) {
+    assertMinimalMemoryCycle(currentLongTerm, normalized);
+  }
 
   if (!normalized.externalWorkingMemory) replaceMemory(database, "working", normalized.working);
   replaceMemory(database, "long_term", normalized.longTerm);
-  archiveMemories(database, normalized, now);
-  for (const lineage of normalized.recallLineages) mergeRecallLineage(database, lineage);
-  for (const archive of normalized.archives) {
-    database.prepare("DELETE FROM memory_recall_stats WHERE record_id = ?").run(archive.recordId);
+  if (!normalized.minimalMemoryCycle) {
+    archiveMemories(database, normalized, now);
+    for (const lineage of normalized.recallLineages) mergeRecallLineage(database, lineage);
+    for (const archive of normalized.archives) {
+      database.prepare("DELETE FROM memory_recall_stats WHERE record_id = ?").run(archive.recordId);
+    }
+    initializeFinalTracking(database, normalized.longTerm, nowIso);
+    for (const review of normalized.reviews) writeReview(database, review, nowIso);
   }
-  initializeFinalTracking(database, normalized.longTerm, nowIso);
-  for (const review of normalized.reviews) writeReview(database, review, nowIso);
 
   const updated = database.prepare(`
     UPDATE dream_runs SET
@@ -271,9 +279,16 @@ function normalizeInput(input: CommitDreamConsolidationInput): NormalizedConsoli
   const longTerm = normalizeRecords(input.longTerm, "longTerm", true);
   const finalWorkingIds = new Set(working.flatMap((record) => record.id == null ? [] : [record.id]));
   const finalLongTermIds = new Set(longTerm.map((record) => record.id!));
-  const workingMemoryId = normalizeCanonicalMemoryId(input.workingMemoryId, "workingMemoryId");
-  if (!finalWorkingIds.has(workingMemoryId)) {
+  const resultJson = encodeJsonObject(input.result, "result");
+  const minimalMemoryCycle = input.result.schemaVersion === 2;
+  const workingMemoryId = input.workingMemoryId == null
+    ? null
+    : normalizeCanonicalMemoryId(input.workingMemoryId, "workingMemoryId");
+  if (workingMemoryId != null && !finalWorkingIds.has(workingMemoryId)) {
     throw new Error("workingMemoryId must exist in the final working memory snapshot.");
+  }
+  if (!minimalMemoryCycle && workingMemoryId == null) {
+    throw new Error("workingMemoryId is required for the legacy Dream consolidation contract.");
   }
 
   const archives = input.archives.map((archive, index) => {
@@ -291,7 +306,6 @@ function normalizeInput(input: CommitDreamConsolidationInput): NormalizedConsoli
   const archivedIds = new Set(archives.map((archive) => archive.recordId));
   const recallLineages = normalizeLineages(input.recallLineages, finalLongTermIds, archivedIds);
   const reviews = normalizeReviews(input.reviews, finalLongTermIds);
-  const resultJson = encodeJsonObject(input.result, "result");
   return {
     runId: normalizeId(input.runId, "runId"),
     workerId: normalizeWorkerId(input.workerId),
@@ -305,8 +319,29 @@ function normalizeInput(input: CommitDreamConsolidationInput): NormalizedConsoli
     recallLineages,
     reviews,
     result: input.result,
-    resultJson
+    resultJson,
+    minimalMemoryCycle
   };
+}
+
+function assertMinimalMemoryCycle(
+  currentLongTerm: readonly JsonObject[],
+  input: NormalizedConsolidationInput
+) {
+  if (input.archives.length > 0 || input.recallLineages.length > 0 || input.reviews.length > 0) {
+    throw minimalMemoryCycleError("Minimal Dream consolidation cannot archive, rewrite, or review long-term memory.");
+  }
+  const current = normalizeRecords(currentLongTerm, "currentLongTerm", true);
+  const finalById = new Map(input.longTerm.map((record) => [record.id!, record.encoded]));
+  for (const record of current) {
+    if (finalById.get(record.id!) !== record.encoded) {
+      throw minimalMemoryCycleError(`Minimal Dream consolidation changed long-term memory ${record.id}.`);
+    }
+  }
+}
+
+function minimalMemoryCycleError(message: string) {
+  return Object.assign(new Error(message), { code: "DREAM_LONG_TERM_ADD_ONLY_VIOLATION" });
 }
 
 function normalizeArchiveRecallSnapshot(

@@ -5,24 +5,19 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { applicationDataStore } from "../../adapters/sqlite/applicationDataStore.js";
 import {
-  appendMemoryFacts,
-  applyMemoryBatchTransaction,
-  isMemoryBatchCommitted,
+  createMemoryEntry,
   listMemoryEntries,
-  mergeUserProfileMemory,
   normalizeEventMemorySchema,
   readMemorySourceEntries,
   readStrictJsonlFile,
   readUserProfileForUser,
-  readWorkingMemoryDocument,
-  readWorkingMemorySnapshot,
   recallMemory,
-  recoverMemoryTransactions,
-  replaceWorkingMemoryDocument,
   resolveUserAddressName,
   updateMemoryEntry,
   upsertLongTermMemoryFacts
 } from "../../services/memory/public.js";
+import { replaceUserProfileFromTool } from "../../services/memory/application/userProfileTool.js";
+import { appendWorkingMemoryDocumentItem } from "../../services/memory/workingMemoryDocument.js";
 import type { AppConfig } from "../../src/types.js";
 import { loadPersona } from "../../services/agent/persona.js";
 import { createAdminTestConfig } from "./admin-fixtures.js";
@@ -46,6 +41,9 @@ describe("memory v2 storage", () => {
   it("only exposes active sources and rejects removed sources", async () => {
     const payload = await listMemoryEntries(config);
     expect(payload.sources.map((source) => source.id)).toEqual(["working", "long_term", "user_profile"]);
+    expect(payload.sources.find((source) => source.id === "working")?.editable).toBe(false);
+    await expect(createMemoryEntry(config, { source: "working", text: "旁路新增" }))
+      .rejects.toMatchObject({ code: "MEMORY_SOURCE_READ_ONLY" });
     await expect(listMemoryEntries(config, "dream")).rejects.toMatchObject({ code: "MEMORY_SOURCE_INVALID" });
     await expect(recallMemory(config, { query: "梦", source: "candidates" })).rejects.toMatchObject({
       code: "MEMORY_SOURCE_INVALID"
@@ -53,7 +51,11 @@ describe("memory v2 storage", () => {
   });
 
   it("returns the complete working-memory Markdown document for the admin view", async () => {
-    await appendMemoryFacts(config, "working", [{ fact: "整份工作记忆正文" }]);
+    await appendWorkingMemoryDocumentItem(config, "整份工作记忆正文", {
+      conversationId: "private:test",
+      scope: "private",
+      title: "测试会话"
+    });
 
     const payload = await listMemoryEntries(config, "working");
 
@@ -97,7 +99,7 @@ describe("memory v2 storage", () => {
     expect(persona.memoryItems).toHaveLength(120);
   });
 
-  it("normalizes salutation aliases and lets the user profile override the configured admin fallback", async () => {
+  it("keeps legacy salutation aliases readable and lets the profile tool replace the current user aggregate", async () => {
     await fs.writeFile(path.join(workspace, "USER_PROFILE.jsonl"), [
       JSON.stringify({
         id: "profile-admin",
@@ -115,25 +117,24 @@ describe("memory v2 storage", () => {
       })
     ].join("\n") + "\n");
 
-    await appendMemoryFacts(config, "user_profile", [{
-      fact: "喜欢明亮色彩",
+    await replaceUserProfileFromTool(config, {
       userId: "703084445",
       userName: "新昵称",
+      profile: "喜欢明亮色彩",
       addressNames: ["模型新称呼", "圆圆"]
-    }]);
-    await mergeUserProfileMemory(config);
+    });
 
     expect(await readUserProfileForUser(config, "171419991")).toMatchObject({
-      addressNames: ["Test Admin", "错误称呼"],
-      addressName: "Test Admin"
+      addressNames: ["错误称呼"],
+      addressName: "错误称呼"
     });
     const user = await readUserProfileForUser(config, "703084445");
     expect(user).toMatchObject({
-      addressNames: ["圆圆", "模型新称呼"],
-      addressName: "圆圆",
+      addressNames: ["模型新称呼", "圆圆"],
+      addressName: "模型新称呼",
       userName: "新昵称"
     });
-    expect(resolveUserAddressName(config, "703084445", user, "临时昵称")).toBe("圆圆");
+    expect(resolveUserAddressName(config, "703084445", user, "临时昵称")).toBe("模型新称呼");
     expect(resolveUserAddressName(config, "171419991", undefined, "临时昵称")).toBe("Test Admin");
 
     const admin = await readUserProfileForUser(config, "171419991");
@@ -160,37 +161,6 @@ describe("memory v2 storage", () => {
       userId: "703084445",
       addressNames: ["管理台称呼", "圆圆"]
     });
-  });
-
-  it("writes working-memory event time into Markdown while keeping recorded time host-authoritative", async () => {
-    const [range, legacy] = await appendMemoryFacts(config, "working", [
-      {
-        fact: "完成部署",
-        time: "2026-07-10T01:00:00.000Z/2026-07-10T02:00:00.000Z",
-        observedAt: "2026-07-10T02:01:00.000Z",
-        userIds: ["171419991"],
-        sourceWorkingMemoryIds: ["working-source-1"],
-        eventType: "task",
-        subjectKey: "sunabot:deploy",
-        promoteToLongTerm: true
-      },
-      { fact: "旧时间文本", time: "昨天下午" }
-    ]);
-    const raw = applicationDataStore(config).readMemory("working");
-
-    expect(range).toMatchObject({
-      occurredAt: "2026-07-10T01:00:00.000Z",
-      occurredEndAt: "2026-07-10T02:00:00.000Z",
-      recordedAt: expect.stringMatching(/(?:Z|[+-]\d{2}:\d{2})$/),
-      conversationId: "system:memory",
-      conversationScope: "system"
-    });
-    expect(range!.observedAt).toBe(range!.recordedAt);
-    expect(legacy).toMatchObject({ text: "旧时间文本" });
-    expect(raw).toEqual([]);
-    const document = await fs.readFile(path.join(workspace, "WORKING_MEMORY.md"), "utf8");
-    expect(document).toContain("完成部署");
-    expect(document).not.toContain("记录时间：");
   });
 
   it("leaves legacy SQLite working rows untouched while normalizing long-term records", async () => {
@@ -259,114 +229,4 @@ describe("memory v2 storage", () => {
     await expect(readStrictJsonlFile(filePath)).rejects.toThrow(/Duplicate JSONL id same/);
   });
 
-  it("commits the Markdown working document and SQLite profile as one replayable scheduler batch", async () => {
-    const [working] = await appendMemoryFacts(config, "working", [{ fact: "旧工作事实" }]);
-    const snapshot = await readWorkingMemorySnapshot(config);
-    const input = {
-      batchId: "batch-1",
-      expectedWorkingSnapshotToken: snapshot.token,
-      workingFacts: [{
-        id: working!.id,
-        fact: "新工作事实",
-        occurredAt: "2026-07-10T01:00:00.000Z",
-        eventType: "task",
-        subjectKey: "memory:batch-1",
-        promoteToLongTerm: true
-      }],
-      userProfileFacts: [{
-        fact: "我知道圆圆（QQ 703084445）喜欢测试。",
-        time: "2026-07-10 09:00 至 2026-07-10 10:00",
-        userId: "703084445",
-        addressNames: ["圆圆"]
-      }],
-      longTermFacts: [],
-      metadata: {
-        replaceUserProfileFacts: true,
-        conversationId: "group:batch-test",
-        conversationScope: "user_group",
-        conversationTitle: "批次测试群"
-      }
-    };
-    expect(await isMemoryBatchCommitted(config, input.batchId)).toBe(false);
-    const applied = await applyMemoryBatchTransaction(config, input);
-    expect(await isMemoryBatchCommitted(config, input.batchId)).toBe(true);
-    const replayed = await applyMemoryBatchTransaction(config, input);
-
-    expect(applied).toMatchObject({ status: "applied", transactionId: expect.any(String) });
-    expect(replayed).toMatchObject({ status: "applied", transactionId: (applied as { transactionId: string }).transactionId });
-    expect((await readMemorySourceEntries(config, "working"))[0]).toMatchObject({
-      text: "新工作事实",
-      conversationId: "system:memory",
-      conversationScope: "system",
-      sourceKind: "model_merge"
-    });
-    const profile = await readUserProfileForUser(config, "703084445");
-    expect(profile).toMatchObject({ addressNames: ["圆圆"] });
-    expect(Number.isFinite(Date.parse(profile!.createdAt!))).toBe(true);
-    expect(await readMemorySourceEntries(config, "long_term")).toHaveLength(0);
-    expect(applicationDataStore(config).hasMemoryBatch(input.batchId)).toBe(true);
-  });
-
-  it("preserves Dream entries when the scheduler commits an ordinary memory batch", async () => {
-    const [working] = await appendMemoryFacts(config, "working", [{ fact: "普通工作事实" }]);
-    const current = await readWorkingMemoryDocument(config);
-    const dream = {
-      ...current.items[0]!,
-      id: "working_dream_2026_07_10",
-      content: "梦见星光落进湖里。",
-      sourceKind: "dream" as const,
-      memoryKind: "dream",
-      realityStatus: "imagined",
-      factuality: "imagined",
-      eventType: "dream",
-      eventKey: "dream:2026-07-10",
-      dreamRunId: "dream-run-2026-07-10",
-      dreamDate: "2026-07-10",
-      dreamReviewedAt: "2026-07-10T04:00:00.000+08:00",
-      occurredAt: "2026-07-10T04:00:00.000+08:00",
-      conversationId: "dream:test-agent",
-      conversationScope: "dream",
-      conversationTitle: "Dream 2026-07-10"
-    };
-    const seeded = await replaceWorkingMemoryDocument(config, current.revision, [...current.items, dream]);
-    expect(seeded.status).toBe("updated");
-
-    const applied = await applyMemoryBatchTransaction(config, {
-      batchId: "batch-preserve-dream",
-      expectedWorkingSnapshotToken: seeded.current.revision,
-      workingFacts: [{
-        id: working!.id,
-        fact: "普通工作事实已经更新"
-      }, {
-        id: dream.id,
-        fact: "普通整理试图改写梦境"
-      }],
-      userProfileFacts: [],
-      longTermFacts: [],
-      metadata: {
-        conversationId: "group:batch-test",
-        conversationScope: "user_group",
-        conversationTitle: "批次测试群"
-      }
-    });
-    const after = await readWorkingMemoryDocument(config);
-
-    expect(applied).toMatchObject({ status: "applied" });
-    expect(after.items).toEqual([
-      expect.objectContaining({
-        id: working!.id,
-        content: "普通工作事实已经更新"
-      }),
-      dream
-    ]);
-    expect(after.content).not.toContain("普通整理试图改写梦境");
-  });
-
-  it("does not need file-journal recovery after SQLite transactions", async () => {
-    await appendMemoryFacts(config, "working", [{ fact: "事务内工作记忆" }]);
-    await expect(recoverMemoryTransactions(config)).resolves.toEqual({ recovered: 0 });
-    expect(await readMemorySourceEntries(config, "working")).toEqual([
-      expect.objectContaining({ text: "事务内工作记忆" })
-    ]);
-  });
 });

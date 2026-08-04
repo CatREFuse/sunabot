@@ -11,6 +11,43 @@ const NOW = new Date("2026-07-20T20:00:00.000Z");
 const DREAM_TEXT = "我走进一座被潮水托起的旧车站，白天尚未完成的整理任务变成缓慢转动的时钟，老师留下的话沿着站台亮起，远处那次雨夜出行化成一列没有车门的列车。我跟着红色微光穿过安静车厢，把散落的纸页按原因和结果重新叠好，几张重复的票根融成一张，过期的小纸屑沉入水底。列车驶向还没有名字的清晨，我知道那些画面只是梦，却仍想醒来后把重要的约定放在更容易找到的位置。";
 
 describe("Dream memory consolidation", () => {
+  it("skips reviews whose soft-linked source was removed after Dream input capture", () => {
+    const output = dreamOutput();
+    output.longTermReviews = [{
+      sourceIds: ["long_missing"],
+      action: "rewrite",
+      canonical: { fact: "已不存在的长期记忆不应重新写回。" },
+      importance: 0.8,
+      futureRelevance: 0.8,
+      emotionalSalience: 0.2,
+      confidence: 1,
+      reason: "过期引用"
+    }];
+    output.workingReviews = [{
+      sourceIds: ["working_missing"],
+      action: "rewrite",
+      canonical: { fact: "已不存在的工作记忆不应重新写回。" },
+      confidence: 1,
+      reason: "过期引用"
+    }];
+
+    const plan = buildDreamConsolidationPlan({
+      runId: "dream-run-soft-links",
+      localDate: "2026-07-21",
+      scheduledFor: NOW.toISOString(),
+      seed: "fixed-seed",
+      now: NOW,
+      output,
+      workingRecords: [],
+      longTermRecords: [],
+      recallStats: []
+    });
+
+    expect(plan.result).toMatchObject({ rewritten: 0, retained: 0 });
+    expect(plan.working).toEqual([expect.objectContaining({ id: plan.workingMemoryId })]);
+    expect(plan.longTerm).toEqual([]);
+  });
+
   it("maps a factual working-memory promotion into the long-term runtime contract", () => {
     const canonicalFact = "  每次发布都必须在回归测试全部通过后才能确认上线。  ";
     const source = memory(

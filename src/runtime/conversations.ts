@@ -259,8 +259,7 @@ export function runtime_persistConversationRecordStrict(
 ) {
     saveConversationRecordStrict(record, this.config);
   }
-export function runtime_markConversationMessagesAsRecordedOnly(this: RuntimeHost, record: ConversationRecord) {
-    record.memoryCompressedThroughMessageCount = record.messageCount;
+export function runtime_markConversationMessagesAsRecordedOnly(this: RuntimeHost, _record: ConversationRecord) {
     this.persistConversationRecords();
   }
 export function runtime_getActiveConversationRecords(this: RuntimeHost) {

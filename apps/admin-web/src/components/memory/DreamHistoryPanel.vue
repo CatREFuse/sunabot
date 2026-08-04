@@ -109,7 +109,7 @@ function formatDateTime(value?: string) {
 
 function summaryLabel(item: DreamHistoryItem) {
   if (!item.summary) return "";
-  return `合并 ${item.summary.merged} · 归档 ${item.summary.archived} · 转存 ${item.summary.promoted}`;
+  return `工作记忆减少 ${item.summary.workingMemoryReduced} · 长期记忆新增 ${item.summary.longTermAdded}`;
 }
 
 function dreamFailureHeadline(item: DreamHistoryItem) {
@@ -187,10 +187,6 @@ function dreamFailureHeadline(item: DreamHistoryItem) {
         <template v-if="latestItem.summaryLabel">
           <dt class="text-mute">整理</dt>
           <dd class="text-right font-mono text-[11px] text-ink">{{ latestItem.summaryLabel }}</dd>
-        </template>
-        <template v-if="latestItem.personalityChanged">
-          <dt class="text-mute">人格</dt>
-          <dd class="text-right font-mono text-[11px] text-success">已微调</dd>
         </template>
       </dl>
     </article>

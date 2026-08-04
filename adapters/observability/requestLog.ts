@@ -19,6 +19,13 @@ import {
   sumTokenCounts,
   type TokenUsageMeasurement
 } from "../../packages/contracts/model/tokenUsage.js";
+import {
+  normalizeRequestLogBusinessNode,
+  normalizeRequestLogMemoryTool,
+  requestLogPresentation,
+  type RequestLogBusinessNode,
+  type RequestLogMemoryTool
+} from "../../packages/contracts/observability/requestLogPresentation.js";
 import { getWorkspacePath } from "../../packages/platform/projectPaths.js";
 import { WORKSPACE_LAYOUT } from "../../packages/platform/workspaceLayout.js";
 
@@ -39,6 +46,8 @@ export interface RequestLogEntry {
 export interface ReadRequestLogsOptions {
   query?: string;
   limit?: number;
+  node?: RequestLogBusinessNode;
+  memoryTool?: RequestLogMemoryTool;
   config?: Pick<AppConfig, "persona">;
 }
 
@@ -46,6 +55,8 @@ export interface ReadRequestLogPageOptions {
   query?: string;
   page?: number;
   pageSize?: number;
+  node?: RequestLogBusinessNode;
+  memoryTool?: RequestLogMemoryTool;
   config?: Pick<AppConfig, "persona">;
 }
 
@@ -105,15 +116,28 @@ export async function readRequestLogs(options: ReadRequestLogsOptions = {}) {
   const limit = normalizeLimit(options.limit);
   const query = String(options.query ?? "").trim().toLowerCase();
 
-  return requestLogStore(options.config).readRequestLogs({ query, limit }).map(withTokenUsage);
+  return requestLogStore(options.config).readRequestLogs({
+    query,
+    limit,
+    node: normalizeRequestLogBusinessNode(options.node),
+    memoryTool: normalizeRequestLogMemoryTool(options.memoryTool)
+  }).map(withRequestLogPresentation);
 }
 
 export async function readRequestLogPage(options: ReadRequestLogPageOptions = {}) {
   const page = normalizePositiveInteger(options.page, 1, 100_000);
   const pageSize = normalizePositiveInteger(options.pageSize, 50, 100);
   const query = String(options.query ?? "").trim().toLowerCase();
-  const result = requestLogStore(options.config).readRequestLogPage({ query, page, pageSize });
-  return { ...result, logs: result.logs.map(withTokenUsage) };
+  const node = normalizeRequestLogBusinessNode(options.node);
+  const memoryTool = normalizeRequestLogMemoryTool(options.memoryTool);
+  const result = requestLogStore(options.config).readRequestLogPage({ query, page, pageSize, node, memoryTool });
+  return { ...result, node, memoryTool, logs: result.logs.map(withRequestLogPresentation) };
+}
+
+export function readRequestLogTrace(id: string, config?: Pick<AppConfig, "persona">) {
+  const normalizedId = typeof id === "string" ? id.trim() : "";
+  if (!normalizedId || normalizedId.length > 200) return [];
+  return requestLogStore(config).readRequestLogTrace(normalizedId).map(withRequestLogPresentation);
 }
 
 export function readTokenUsageSummary(
@@ -312,6 +336,11 @@ function usageBucket(usage: TokenUsageAccumulator) {
 function withTokenUsage(record: Record<string, unknown>) {
   const usage = normalizeTokenUsageRecord(record);
   return usage ? { ...record, tokenUsage: publicTokenUsage(usage) } : record;
+}
+
+function withRequestLogPresentation(record: Record<string, unknown>) {
+  const normalized = withTokenUsage(record);
+  return { ...normalized, presentation: requestLogPresentation(normalized) };
 }
 
 function sanitizeValue(value: unknown, depth = 0, maxStringLength = MAX_STRING_LENGTH): unknown {

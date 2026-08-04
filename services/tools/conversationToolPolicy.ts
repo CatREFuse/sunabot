@@ -1,5 +1,6 @@
 import { AGENT_TOOL_NAMES, type AgentToolName } from "../../packages/contracts/admin/public.js";
 import { ADD_WORKMEMORY_TOOL_NAME } from "./addWorkMemoryTool.js";
+import { ADD_USER_PROFILE_TOOL_NAME } from "./addUserProfileTool.js";
 
 export function normalizeConversationDisabledTools(value: unknown): AgentToolName[] {
   if (!Array.isArray(value)) return [];
@@ -9,6 +10,7 @@ export function normalizeConversationDisabledTools(value: unknown): AgentToolNam
   return [...new Set(normalized.filter((name): name is AgentToolName => (
     typeof name === "string"
     && name !== ADD_WORKMEMORY_TOOL_NAME
+    && name !== ADD_USER_PROFILE_TOOL_NAME
     && (AGENT_TOOL_NAMES as readonly string[]).includes(name)
   )))];
 }
@@ -17,6 +19,6 @@ export function isConversationToolEnabled(
   disabledTools: readonly AgentToolName[] | undefined,
   name: AgentToolName
 ) {
-  if (name === ADD_WORKMEMORY_TOOL_NAME) return true;
+  if (name === ADD_WORKMEMORY_TOOL_NAME || name === ADD_USER_PROFILE_TOOL_NAME) return true;
   return !disabledTools?.includes(name);
 }

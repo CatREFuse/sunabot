@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { containsLegacyHostIdentityAlias } from "../../services/memory/dream/public.js";
 import { projectDreamContext } from "./dreamContextProjection.js";
 
 export type DreamPipelineJsonObject = Record<string, unknown>;
@@ -13,8 +12,7 @@ export function isCurrentDreamPipelineInput(
   normalized: unknown
 ) {
   if (!isDreamPipelineObject(normalized)
-    || !isDreamPipelineObject(normalized.payload)
-    || containsLegacyHostIdentityAlias(stored)) return false;
+    || !isDreamPipelineObject(normalized.payload)) return false;
   try {
     const payload = projectDreamContext(normalized.payload).payload;
     if (normalized.payload.fieldKnowledgeWritable === false

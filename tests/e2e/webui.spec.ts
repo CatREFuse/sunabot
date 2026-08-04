@@ -296,16 +296,14 @@ test("状态页展示 Token 缓存、日历与小时分布，并安全处理未�
   expect(await page.getByLabel("Token 消耗统计").innerHTML()).not.toMatch(/NaN|Infinity/);
 });
 
-test("日志使用纵向时间轴、结构化用量与原始响应，并同时显示原始 ID 与中文名", async ({ page }) => {
+test("日志按业务节点筛选并在详情中显示请求、工具与响应", async ({ page }) => {
   await installMockApi(page);
   await page.goto("/logs");
 
-  const terminal = page.getByLabel("Bot 活动终端");
-  await expect(terminal).toContainText("[message.private] 收到私聊消息");
-  await page.getByRole("button", { name: "请求日志", exact: true }).click();
   const list = page.getByLabel("请求日志列表");
   await expect(list.locator(".request-list__timeline")).toBeVisible();
   await expect(list.locator(".request-list__marker").first()).toBeVisible();
+  await expect(page.getByRole("tab", { name: "全部", exact: true })).toHaveAttribute("aria-selected", "true");
   await expect(list.getByText("Codex 异步任务", { exact: true })).toBeVisible();
   await expect(list.getByText("codex.tool.complete", { exact: true })).toBeVisible();
   await expect(list.getByText("Responses 模型调用", { exact: true }).first()).toBeVisible();
@@ -326,13 +324,28 @@ test("日志使用纵向时间轴、结构化用量与原始响应，并同时�
   await expect(anthropic.getByText("缓存输入", { exact: true })).toBeVisible();
   await expect(anthropic.getByText("缓存率", { exact: true })).toBeVisible();
   await expect(anthropic.locator(".request-usage small")).toHaveCount(0);
-  await anthropic.getByText("响应体", { exact: true }).click();
-  await anthropic.locator("summary").filter({ hasText: /^usage/ }).click();
-  await expect(anthropic.getByText("cache_creation_input_tokens", { exact: true })).toBeVisible();
-  await expect(anthropic.getByText("cache_read_input_tokens", { exact: true })).toBeVisible();
 
-  await list.getByText("请求体", { exact: true }).click();
-  await expect(list.getByText("model", { exact: true }).first()).toBeVisible();
+  await page.getByRole("tab", { name: "私聊对话", exact: true }).click();
+  await expect(list.getByText("[ERROR]", { exact: true })).toBeVisible();
+  await expect(list.getByText("RETRY 1 · 2/3", { exact: true })).toBeVisible();
+  await list.getByRole("button", { name: "查看Responses 模型调用请求详情" }).first().click();
+  const detail = page.getByRole("dialog", { name: "请求详情" });
+  await expect(detail.getByText("REQUEST BODY", { exact: true })).toBeVisible();
+  await expect(detail.getByText("TOOL CALL", { exact: true })).toBeVisible();
+  await expect(detail.getByText("RESPONSE BODY", { exact: true })).toBeVisible();
+  await expect(detail.getByText("add_workmemory", { exact: true })).toBeVisible();
+  await expect(detail.getByText("Provider 暂时不可用", { exact: true })).toBeVisible();
+  await detail.getByRole("button", { name: "关闭请求详情" }).click();
+
+  await page.getByRole("tab", { name: "记忆记录", exact: true }).click();
+  await page.getByRole("button", { name: "读空气", exact: true }).click();
+  await expect(list.getByText("read_air", { exact: true })).toBeVisible();
+  await expect(list.getByText("add_workmemory", { exact: true })).toHaveCount(0);
+
+  await page.getByRole("tab", { name: "OneBot 心跳", exact: true }).click();
+  await expect(list.getByText("onebot.heartbeat", { exact: true })).toBeVisible();
+
+  await page.getByRole("tab", { name: "全部", exact: true }).click();
   await page.getByRole("button", { name: "下一页" }).click();
   await expect(page.getByText("2 / 2", { exact: true })).toBeVisible();
 });
@@ -1484,8 +1497,8 @@ test("记忆页分页并区分称呼与昵称、显示事件范围和保留称�
   await expect(page.getByRole("tabpanel", { name: "梦境" })).toBeVisible();
   await expect(page.getByText(/Asia\/Shanghai/)).toBeVisible();
   await expect(page.getByText(/我沿着潮湿的石阶走进旧车站/)).toBeVisible();
-  await expect(page.getByText("合并 2 · 归档 1 · 转存 1", { exact: true })).toBeVisible();
-  await expect(page.getByText("已微调", { exact: true })).toBeVisible();
+  await expect(page.getByText("工作记忆减少 2 · 长期记忆新增 1", { exact: true })).toBeVisible();
+  await expect(page.getByText("工作记忆减少 1 · 长期记忆新增 0", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "立即做梦", exact: true }).click();
   await expect(page.getByText("梦境已完成", { exact: true })).toBeVisible();
   expect(state.dreamTriggers).toBe(1);

@@ -25,9 +25,7 @@ const STANDARD_AGENT_PROMPT_FILES = [
   "conversation_private_reply.json",
   "conversation_group_reply.json",
   "tone_rewrite.json",
-  "work_memory_compress_in.json",
   "work_memory_compress_out.json",
-  "user_profile_prompt.json",
   "memory_dream.json",
   "user_groupchat_orchestrator.json",
   "group_thread_context.json",
@@ -459,9 +457,7 @@ function allowedPromptFiles(
     const memory = record(bot.memory);
     const orchestrator = record(bot.orchestrator);
     for (const value of [
-      memory.workMemoryCompressInPrompt,
       memory.workMemoryCompressOutPrompt,
-      memory.userProfilePrompt,
       orchestrator.promptFile
     ]) {
       const fileName = safePromptFileName(value);

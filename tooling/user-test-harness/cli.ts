@@ -53,7 +53,6 @@ export async function main(argv = process.argv.slice(2)) {
       templatePath: required(args, "template"),
       outputRoot: required(args, "output-root"),
       outputName: required(args, "output"),
-      conversationId: optional(args, "conversation"),
       confirmReviewedSanitizedSample: flag(args, "confirm-reviewed-sanitized-sample")
     });
     console.log(`derived user test case ready: ${result.outputPath}`);

@@ -59,6 +59,11 @@ import {
   type AddWorkMemoryToolPort
 } from "./addWorkMemoryTool.js";
 import {
+  ADD_USER_PROFILE_TOOL_NAME,
+  addUserProfileTool,
+  type AddUserProfileToolPort
+} from "./addUserProfileTool.js";
+import {
   READ_FILE_TOOL_NAME,
   WRITE_FILE_TOOL_NAME,
   readFileTool,
@@ -126,6 +131,7 @@ export interface ToolAvailability {
   director?: CallDirectorToolPort;
   air?: ReadAirToolPort;
   workingMemory?: AddWorkMemoryToolPort;
+  userProfile?: AddUserProfileToolPort;
   skills?: SkillRuntimeToolPort;
   skillCapabilities?: SkillToolCapabilitySnapshot;
   disabledTools?: readonly AgentToolName[];
@@ -213,6 +219,17 @@ const catalog: readonly ToolCatalogEntry[] = [
     definition: () => addWorkMemoryTool,
     available: (options) => Boolean(options.workingMemory),
     unavailableReason: "当前会话未提供工作记忆写入能力。",
+    unavailabilityKind: "session",
+    defaultEnabled: true,
+    execution: "inline"
+  },
+  {
+    name: ADD_USER_PROFILE_TOOL_NAME,
+    title: "更新用户画像",
+    summary: "更新当前发言者的聚合用户画像。",
+    definition: () => addUserProfileTool,
+    available: (options) => Boolean(options.userProfile),
+    unavailableReason: "当前会话未提供用户画像写入能力。",
     unavailabilityKind: "session",
     defaultEnabled: true,
     execution: "inline"
@@ -482,7 +499,10 @@ export function listToolMetadata(
   promptDefinitions?: OpenAIToolDefinition[]
 ): ToolMetadata[] {
   const promptByName = promptDefinitionMap(promptDefinitions);
-  return catalog.filter((entry) => entry.name !== ADD_WORKMEMORY_TOOL_NAME).map((entry) => {
+  return catalog.filter((entry) =>
+    entry.name !== ADD_WORKMEMORY_TOOL_NAME
+    && entry.name !== ADD_USER_PROFILE_TOOL_NAME
+  ).map((entry) => {
     const canonical = entry.definition(options);
     const prompt = promptByName?.get(entry.name);
     const override = toolOverride(options, entry.name);
@@ -622,7 +642,7 @@ function isSkillTool(name: AgentToolName) {
 }
 
 function toolOverride(options: ToolAvailability, name: AgentToolName): BotToolOverride | undefined {
-  if (name === ADD_WORKMEMORY_TOOL_NAME) return undefined;
+  if (name === ADD_WORKMEMORY_TOOL_NAME || name === ADD_USER_PROFILE_TOOL_NAME) return undefined;
   const override = options.bot?.tools.overrides?.[name];
   if (!override || (!isBashTool(name) && name !== CODEX_TOOL_NAME)) return override;
   return override.description == null ? undefined : { description: override.description };
@@ -657,6 +677,7 @@ function applyRuntimeToolContract(
     && entry.name !== CALL_DIRECTOR_TOOL_NAME
     && entry.name !== READ_AIR_TOOL_NAME
     && entry.name !== ADD_WORKMEMORY_TOOL_NAME
+    && entry.name !== ADD_USER_PROFILE_TOOL_NAME
     && entry.name !== WEBFETCH_TOOL_NAME
     && entry.name !== GENERATE_IMG_TOOL_NAME
     && entry.name !== SELFIE_TOOL_NAME

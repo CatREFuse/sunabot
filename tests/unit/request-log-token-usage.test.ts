@@ -1,7 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { applicationDataStore, closeApplicationDataStores } from "../../adapters/sqlite/applicationDataStore.js";
-import { appendRequestLog, readModelCallStats, readRequestLogPage, readTokenUsageSummary } from "../../adapters/observability/requestLog.js";
+import {
+  appendRequestLog,
+  readModelCallStats,
+  readRequestLogPage,
+  readRequestLogTrace,
+  readTokenUsageSummary
+} from "../../adapters/observability/requestLog.js";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -538,6 +544,183 @@ describe("request log token usage", () => {
     expect(firstPage.logs.map((log: { action?: string }) => log.action)).toEqual(["third", "second"]);
     const filtered = await readRequestLogPage({ query: `${marker} alpha`, page: 1, pageSize: 10 });
     expect(filtered).toMatchObject({ total: 2, pageCount: 1 });
+  });
+
+  it("filters business nodes before pagination and projects retry status", async () => {
+    const marker = randomUUID();
+    await appendRequestLog({
+      category: "model.request",
+      action: "responses.complete",
+      request: { marker },
+      metadata: { conversationId: `account:primary:private:${marker}`, stage: "reply", transportAttempt: 1, maxTransportAttempts: 3 }
+    });
+    await appendRequestLog({
+      category: "model.response",
+      action: "responses.complete",
+      response: { marker, ok: false, status: 503, willRetry: true },
+      metadata: { conversationId: `account:primary:private:${marker}`, stage: "reply", transportAttempt: 2, maxTransportAttempts: 3 }
+    });
+    await appendRequestLog({
+      category: "runtime.action",
+      action: "orchestrator.decision",
+      request: { marker },
+      metadata: { conversationId: `account:primary:group:${marker}`, stage: "orchestrator" }
+    });
+
+    const privatePage = await readRequestLogPage({
+      query: marker,
+      node: "private_conversation",
+      page: 1,
+      pageSize: 1
+    });
+    expect(privatePage).toMatchObject({
+      node: "private_conversation",
+      total: 2,
+      pageCount: 2
+    });
+    expect(privatePage.logs[0]).toMatchObject({
+      presentation: {
+        businessNode: "private_conversation",
+        businessNodes: ["private_conversation"],
+        status: "error",
+        attempt: 2,
+        maxAttempts: 3,
+        retryCount: 1,
+        willRetry: true
+      }
+    });
+
+    const groupPage = await readRequestLogPage({
+      query: marker,
+      node: "group_conversation",
+      page: 1,
+      pageSize: 10
+    });
+    expect(groupPage).toMatchObject({ total: 1 });
+    expect(groupPage.logs[0]).toMatchObject({
+      presentation: { businessNode: "group_conversation", businessNodes: ["group_conversation"] }
+    });
+  });
+
+  it("separates memory recording tools, historical compression, and Dream", async () => {
+    const marker = randomUUID();
+    for (const action of ["add_workmemory", "read_air", "add_user_profile"]) {
+      await appendRequestLog({
+        category: "tool.call",
+        action,
+        request: { marker, callId: `${action}-call` },
+        response: { ok: true },
+        metadata: { conversationId: `account:primary:private:${marker}`, runId: marker }
+      });
+    }
+    await appendRequestLog({
+      category: "model.response",
+      action: "responses.complete",
+      response: { marker, ok: true },
+      metadata: { conversationId: `private:${marker}`, stage: "memory", promptFamily: "memory.compress" }
+    });
+    await appendRequestLog({
+      category: "runtime.action",
+      action: "dream.failed",
+      request: { marker },
+      response: { errorCode: "DREAM_PROVIDER_FAILED", attemptCount: 3, maxAttempts: 3 },
+      metadata: {
+        conversationId: "dream:plana",
+        runId: marker,
+        stage: "memory",
+        promptFamily: "memory.dream",
+        attemptCount: 3,
+        maxAttempts: 3
+      }
+    });
+
+    const memoryRecords = await readRequestLogPage({
+      query: marker,
+      node: "memory_recording",
+      page: 1,
+      pageSize: 10
+    });
+    expect(memoryRecords.total).toBe(3);
+    expect(memoryRecords.logs.map((log: { presentation?: { memoryTool?: string } }) => log.presentation?.memoryTool).sort())
+      .toEqual(["air", "user_profile", "working_memory"]);
+
+    const profiles = await readRequestLogPage({
+      query: marker,
+      node: "memory_recording",
+      memoryTool: "user_profile",
+      page: 1,
+      pageSize: 10
+    });
+    expect(profiles).toMatchObject({ total: 1 });
+    expect(profiles.logs[0]).toMatchObject({
+      action: "add_user_profile",
+      presentation: { memoryTool: "user_profile" }
+    });
+
+    const compression = await readRequestLogPage({
+      query: marker,
+      node: "memory_compression",
+      page: 1,
+      pageSize: 10
+    });
+    expect(compression).toMatchObject({ total: 1 });
+    expect(compression.logs[0]).toMatchObject({
+      presentation: { businessNode: "memory_compression" }
+    });
+
+    const dream = await readRequestLogPage({
+      query: marker,
+      node: "dream",
+      page: 1,
+      pageSize: 10
+    });
+    expect(dream).toMatchObject({ total: 1 });
+    expect(dream.logs[0]).toMatchObject({
+      presentation: {
+        businessNode: "dream",
+        status: "error",
+        attempt: 3,
+        maxAttempts: 3,
+        retryCount: 2
+      }
+    });
+  });
+
+  it("loads a bounded run trace independently from the current page", async () => {
+    const runId = randomUUID();
+    await appendRequestLog({
+      category: "model.request",
+      action: "responses.complete",
+      request: { input: "hello" },
+      metadata: { runId, conversationId: "private:trace" }
+    });
+    await appendRequestLog({
+      category: "tool.call",
+      action: "read_air",
+      request: { callId: "call-trace", arguments: {} },
+      response: { ok: true },
+      metadata: { runId, conversationId: "private:trace" }
+    });
+    await appendRequestLog({
+      category: "model.response",
+      action: "responses.complete",
+      response: { ok: true },
+      metadata: { runId, conversationId: "private:trace" }
+    });
+
+    const page = await readRequestLogPage({ page: 1, pageSize: 1 });
+    const trace = readRequestLogTrace(String(page.logs[0]?.id ?? ""));
+    expect(trace.map((log: { category?: string }) => log.category)).toEqual([
+      "model.request",
+      "tool.call",
+      "model.response"
+    ]);
+    expect(trace[1]).toMatchObject({
+      presentation: {
+        businessNodes: ["private_conversation", "memory_recording"],
+        memoryTool: "air"
+      }
+    });
   });
 
   it("redacts a bare key query parameter from error strings", async () => {

@@ -45,8 +45,6 @@ describe("runtime lifecycle cancellation", () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(attachReplyReferences).not.toHaveBeenCalled();
-    expect((runtime as unknown as { memoryWakeTimer?: NodeJS.Timeout }).memoryWakeTimer)
-      .toBeUndefined();
   });
 
   it("aborts active reply work and removes every close-time timer", async () => {
@@ -64,9 +62,7 @@ describe("runtime lifecycle cancellation", () => {
       }>;
       ambientIdleTimers: Map<string, { timer: NodeJS.Timeout; job: unknown }>;
       incomingPreparations: Map<string, { promise: Promise<void>; incoming: ParsedIncomingMessage }>;
-      memoryDrainDirty: boolean;
       attachmentRefreshDirty: boolean;
-      memoryWakeTimer?: NodeJS.Timeout;
     };
     internals.activeDirectControllers.set("private:1", direct);
     internals.ambientReplies.set("group:1", {
@@ -83,9 +79,7 @@ describe("runtime lifecycle cancellation", () => {
       promise: new Promise<void>(() => undefined),
       incoming: privateIncoming()
     });
-    internals.memoryDrainDirty = true;
     internals.attachmentRefreshDirty = true;
-    internals.memoryWakeTimer = setTimeout(() => undefined, 60_000);
 
     runtime.close();
 
@@ -94,9 +88,7 @@ describe("runtime lifecycle cancellation", () => {
     expect(internals.activeDirectControllers.size).toBe(0);
     expect(internals.ambientIdleTimers.size).toBe(0);
     expect(internals.incomingPreparations.size).toBe(0);
-    expect(internals.memoryDrainDirty).toBe(false);
     expect(internals.attachmentRefreshDirty).toBe(false);
-    expect(internals.memoryWakeTimer).toBeUndefined();
     expect(vi.getTimerCount()).toBe(0);
   });
 });

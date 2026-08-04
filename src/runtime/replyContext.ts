@@ -246,7 +246,7 @@ export function runtime_retainedConversationMessageLimit(this: RuntimeHost) {
   return Math.max(
     MAX_STORED_CONVERSATION_MESSAGES,
     this.contextMessageLimit() * 2,
-    this.config.bot.memory.messageThreshold * 2 + 8
+    this.config.bot.contextMessageLimit * 2 + 8
   );
 }
 

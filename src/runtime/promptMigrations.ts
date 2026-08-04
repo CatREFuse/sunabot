@@ -18,7 +18,6 @@ import {
   readPromptTextFile
 } from "../../services/agent/promptWorkspace.js";
 import { migrateGroupReplyTopicReasoning } from "../../services/agent/groupReplyTopicReasoningMigration.js";
-import { migrateWorkingMemoryDocumentPrompt } from "../../services/agent/workingMemoryDocumentPromptMigration.js";
 import { migrateToneSegmentedReplyPrompt } from "../../services/agent/tonePromptMigration.js";
 import { migrateConversationWebFetchPrompt } from "../../services/agent/webFetchPromptMigration.js";
 import { migrateConversationBashToolsPrompt } from "../../services/agent/bashToolPromptMigration.js";
@@ -40,6 +39,7 @@ import {
 import {
   migrateDreamCanonicalOutputContractPrompt,
   migrateDreamMemoryContractPrompt,
+  migrateDreamMinimalContractPrompt,
   migrateDreamRawIdentityPrompt,
   migrateDreamSchemaPrompt
 } from "../../services/agent/dreamPromptMigration.js";
@@ -95,9 +95,7 @@ export async function ensureRuntimePromptWorkspace(config: AppConfig) {
       legacyConversationPrompt || ADMIN_RUNTIME_PROMPT_DEFAULTS["conversation.group-reply"] || ""
     ),
     ensurePromptTextFile(config, "system", TONE_PROMPT_FILE, ADMIN_RUNTIME_PROMPT_DEFAULTS["conversation.tone-rewrite"] ?? ""),
-    ensurePromptTextFile(config, "system", config.bot.memory.workMemoryCompressInPrompt, ADMIN_RUNTIME_PROMPT_DEFAULTS["memory.compress-in"] ?? ""),
     ensurePromptTextFile(config, "system", config.bot.memory.workMemoryCompressOutPrompt, ADMIN_RUNTIME_PROMPT_DEFAULTS["memory.compress-out"] ?? ""),
-    ensurePromptTextFile(config, "system", config.bot.memory.userProfilePrompt, ADMIN_RUNTIME_PROMPT_DEFAULTS["memory.user-profile"] ?? ""),
     ensurePromptTextFile(config, "system", config.bot.orchestrator.promptFile, ADMIN_RUNTIME_PROMPT_DEFAULTS["orchestrator.user-group"] ?? ""),
     ensurePromptTextFile(config, "system", GROUP_CHAT_SUMMARY_PROMPT_FILE, ADMIN_RUNTIME_PROMPT_DEFAULTS["conversation.group-summary"] ?? ""),
     ensurePromptTextFile(config, "system", SCHEDULED_TASK_CALLBACK_PROMPT_FILE, ADMIN_RUNTIME_PROMPT_DEFAULTS[SCHEDULED_TASK_CALLBACK_PROMPT_ID] ?? ""),
@@ -159,9 +157,7 @@ function runtimePromptMigrations(config: AppConfig, selfiePromptDefault: string)
     PRIVATE_CONVERSATION_REPLY_PROMPT_FILE,
     GROUP_CONVERSATION_REPLY_PROMPT_FILE,
     TONE_PROMPT_FILE,
-    config.bot.memory.workMemoryCompressInPrompt,
     config.bot.memory.workMemoryCompressOutPrompt,
-    config.bot.memory.userProfilePrompt,
     config.bot.orchestrator.promptFile,
     GROUP_CHAT_SUMMARY_PROMPT_FILE,
     SCHEDULED_TASK_CALLBACK_PROMPT_FILE,
@@ -203,12 +199,47 @@ function runtimePromptMigrations(config: AppConfig, selfiePromptDefault: string)
     () => migrateDreamRawIdentityPrompt(config, DREAM_PROMPT_FILE),
     [dreamMemoryId]
   );
-  add(
+  const dreamOutputV6Id = add(
     "dream-output-contract-v6",
     "system",
     DREAM_PROMPT_FILE,
     () => migrateDreamCanonicalOutputContractPrompt(config, DREAM_PROMPT_FILE),
     [dreamRawIdentityId]
+  );
+  const dreamMinimalV8Id = add(
+    "dream-minimal-contract-v8",
+    "system",
+    DREAM_PROMPT_FILE,
+    () => migrateDreamMinimalContractPrompt(config, DREAM_PROMPT_FILE),
+    [dreamOutputV6Id]
+  );
+  const dreamNoVisibleReasonId = add(
+    "dream-no-visible-reason-v2",
+    "system",
+    DREAM_PROMPT_FILE,
+    () => migrateDreamMinimalContractPrompt(config, DREAM_PROMPT_FILE),
+    [dreamMinimalV8Id]
+  );
+  const dreamSourcePartitionId = add(
+    "dream-source-partition-self-check-v1",
+    "system",
+    DREAM_PROMPT_FILE,
+    () => migrateDreamMinimalContractPrompt(config, DREAM_PROMPT_FILE),
+    [dreamMinimalV8Id]
+  );
+  const dreamMinimalV9Id = add(
+    "dream-minimal-contract-v9",
+    "system",
+    DREAM_PROMPT_FILE,
+    () => migrateDreamMinimalContractPrompt(config, DREAM_PROMPT_FILE),
+    [dreamNoVisibleReasonId, dreamSourcePartitionId]
+  );
+  add(
+    "dream-minimal-contract-v9-repair-v1",
+    "system",
+    DREAM_PROMPT_FILE,
+    () => migrateDreamMinimalContractPrompt(config, DREAM_PROMPT_FILE),
+    [dreamMinimalV9Id]
   );
   add(
     "scheduled-agent-loop-v2",
@@ -268,7 +299,6 @@ function runtimePromptMigrations(config: AppConfig, selfiePromptDefault: string)
     [selfieReferenceId]
   );
 
-  const memoryPerspectiveIds = new Map<string, string>();
   for (const [file, promptId] of [
     [PRIVATE_CONVERSATION_REPLY_PROMPT_FILE, "conversation.private-reply"],
     [GROUP_CONVERSATION_REPLY_PROMPT_FILE, "conversation.group-reply"]
@@ -399,39 +429,16 @@ function runtimePromptMigrations(config: AppConfig, selfiePromptDefault: string)
     [toneEmojiId]
   );
 
-  for (const [file, promptId] of [
-    [config.bot.memory.workMemoryCompressInPrompt, "memory.compress-in"],
-    [config.bot.memory.workMemoryCompressOutPrompt, "memory.compress-out"],
-    [config.bot.memory.userProfilePrompt, "memory.user-profile"]
-  ] as const) {
-    memoryPerspectiveIds.set(file, add(
-      "memory-perspective-v7",
-      "system",
-      file,
-      () => migrateMemoryPerspectivePrompt(config, file, ADMIN_RUNTIME_PROMPT_DEFAULTS[promptId] ?? ""),
-      dependency(file)
-    ));
-  }
-  const workingMemoryDocumentId = add(
-    "working-memory-document-v1",
-    "system",
-    config.bot.memory.workMemoryCompressInPrompt,
-    () => migrateWorkingMemoryDocumentPrompt(config, config.bot.memory.workMemoryCompressInPrompt),
-    [requiredMigrationId(memoryPerspectiveIds, config.bot.memory.workMemoryCompressInPrompt)]
-  );
-  const workingMemoryModelOwnedId = add(
-    "working-memory-model-owned-v1",
-    "system",
-    config.bot.memory.workMemoryCompressInPrompt,
-    () => migrateWorkingMemoryDocumentPrompt(config, config.bot.memory.workMemoryCompressInPrompt),
-    [workingMemoryDocumentId]
-  );
   add(
-    "working-memory-model-owned-v2",
+    "memory-perspective-v7",
     "system",
-    config.bot.memory.workMemoryCompressInPrompt,
-    () => migrateWorkingMemoryDocumentPrompt(config, config.bot.memory.workMemoryCompressInPrompt),
-    [workingMemoryModelOwnedId]
+    config.bot.memory.workMemoryCompressOutPrompt,
+    () => migrateMemoryPerspectivePrompt(
+      config,
+      config.bot.memory.workMemoryCompressOutPrompt,
+      ADMIN_RUNTIME_PROMPT_DEFAULTS["memory.compress-out"] ?? ""
+    ),
+    dependency(config.bot.memory.workMemoryCompressOutPrompt)
   );
   return definitions;
 }

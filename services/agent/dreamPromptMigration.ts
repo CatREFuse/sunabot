@@ -6,10 +6,17 @@ import {
   DREAM_RAW_IDENTITY_GUIDANCE,
   DREAM_OUTPUT_CONTRACT,
   DREAM_OUTPUT_CONTRACT_MARKER,
+  LEGACY_DREAM_MINIMAL_OUTPUT_CONTRACT_MARKER,
+  LEGACY_DREAM_REASONLESS_OUTPUT_CONTRACT_MARKER,
+  LEGACY_DREAM_OUTPUT_CONTRACT_MARKER,
+  LEGACY_DREAM_OUTPUT_CONTRACT_V6,
+  LEGACY_DREAM_OUTPUT_CONTRACT_V7,
+  LEGACY_DREAM_OUTPUT_CONTRACT_V8,
   LEGACY_DREAM_IDENTITY_ALIAS_GUIDANCE,
   LEGACY_DREAM_FLEX_RESPONSE,
   LEGACY_DREAM_CONTRACT_V3,
-  LEGACY_DREAM_CONTRACT_V4
+  LEGACY_DREAM_CONTRACT_V4,
+  LEGACY_DREAM_CONTRACT_V6
 } from "../memory/public.js";
 import {
   parseFinalPromptTemplate,
@@ -18,6 +25,10 @@ import {
 import { resolveSafePromptFilePath } from "./promptWorkspace.js";
 
 const MIGRATION_VERSION = "dream-flex-contract-v3";
+const LEGACY_DREAM_VISIBLE_REASON_GUIDANCE =
+  "再从事实工作记忆中提取会持续影响未来回复的新长期事实。payload.longTermMemories 只用于判断是否已经记录，不能提出改写、合并、归档、删除或遗忘。每次都要明确说明新增或零新增的原因。";
+const DREAM_REASONLESS_LONG_TERM_GUIDANCE =
+  "再从事实工作记忆中提取会持续影响未来回复的新长期事实。payload.longTermMemories 只用于判断是否已经记录，不能提出改写、合并、归档、删除或遗忘。";
 
 export async function migrateDreamSchemaPrompt(config: AppConfig, fileName: string) {
   const filePath = await resolveSafePromptFilePath(config, "system", fileName);
@@ -54,6 +65,19 @@ export async function migrateDreamCanonicalOutputContractPrompt(
   if (!content.trim()) return false;
   const template = parseFinalPromptTemplate(content);
   const migrated = migrateDreamCanonicalOutputContractTemplate(template);
+  const verified = migrated ?? template;
+  assertDreamCanonicalOutputContractTemplate(verified);
+  if (!migrated) return false;
+  await atomicWriteText(filePath, `${JSON.stringify(migrated, null, 2)}\n`);
+  return true;
+}
+
+export async function migrateDreamMinimalContractPrompt(config: AppConfig, fileName: string) {
+  const filePath = await resolveSafePromptFilePath(config, "system", fileName);
+  const content = await readOptional(filePath);
+  if (!content.trim()) return false;
+  const template = parseFinalPromptTemplate(content);
+  const migrated = migrateDreamMinimalContractTemplate(template);
   const verified = migrated ?? template;
   assertDreamCanonicalOutputContractTemplate(verified);
   if (!migrated) return false;
@@ -134,6 +158,79 @@ export function migrateDreamRawIdentityTemplate(
   return changed ? { ...template, messages } : undefined;
 }
 
+export function migrateDreamMinimalContractTemplate(
+  template: FinalPromptTemplate
+): FinalPromptTemplate | undefined {
+  let changed = false;
+  const messages = template.messages.map((message) => {
+    if (
+      typeof message !== "object"
+      || message == null
+      || Array.isArray(message)
+      || message.role !== "system"
+      || typeof message.content !== "string"
+    ) {
+      return message;
+    }
+    let content = message.content;
+    if (content.includes(LEGACY_DREAM_VISIBLE_REASON_GUIDANCE)) {
+      content = content.replaceAll(
+        LEGACY_DREAM_VISIBLE_REASON_GUIDANCE,
+        DREAM_REASONLESS_LONG_TERM_GUIDANCE
+      );
+      changed = true;
+    }
+    for (const legacy of [
+      LEGACY_DREAM_CONTRACT_V6,
+      LEGACY_DREAM_CONTRACT_V4,
+      LEGACY_DREAM_CONTRACT_V3
+    ]) {
+      if (!content.includes(legacy)) continue;
+      content = content.replaceAll(legacy, DREAM_CONTRACT);
+      changed = true;
+    }
+    const slotted = replaceLegacyDreamContractSlot(content);
+    if (slotted !== content) {
+      content = slotted;
+      changed = true;
+    }
+    return content === message.content ? message : { ...message, content };
+  });
+  const staged = changed ? { ...template, messages } : template;
+  const canonical = migrateDreamCanonicalOutputContractTemplate(staged);
+  return canonical ?? (changed ? staged : undefined);
+}
+
+function replaceLegacyDreamContractSlot(content: string) {
+  const starts = [
+    "你负责在每日睡眠窗口结束时完成一次最小 Dream 记忆循环。",
+    "你负责在每日睡眠窗口结束时整理当前角色的记忆",
+    "你负责在每日睡眠窗口结束时整理当前角色的近期工作环境"
+  ].map((opening) => content.indexOf(opening)).filter((offset) => offset >= 0);
+  if (!starts.length) return content;
+  const start = Math.min(...starts);
+  const boundaries = [
+    "<persona_soul>",
+    "<persona_preference>",
+    "<persona_user>",
+    "<persona_relation>",
+    DREAM_OUTPUT_CONTRACT_MARKER,
+    LEGACY_DREAM_REASONLESS_OUTPUT_CONTRACT_MARKER,
+    LEGACY_DREAM_MINIMAL_OUTPUT_CONTRACT_MARKER,
+    LEGACY_DREAM_OUTPUT_CONTRACT_MARKER
+  ].map((marker) => content.indexOf(marker, start)).filter((offset) => offset > start);
+  if (!boundaries.length) return content;
+  const end = Math.min(...boundaries);
+  const slot = content.slice(start, end);
+  if (
+    slot.startsWith("你负责在每日睡眠窗口结束时完成一次最小 Dream 记忆循环。")
+    && !slot.includes("payload.workingMemories")
+    && !slot.includes("workingMemoryCompression.items")
+    && !slot.includes("sourceWorkingMemoryIds")
+  ) return content;
+  return `${content.slice(0, start)}${DREAM_CONTRACT}\n\n${content.slice(end)}`;
+}
+
 export function migrateDreamCanonicalOutputContractTemplate(
   template: FinalPromptTemplate
 ): FinalPromptTemplate | undefined {
@@ -153,7 +250,11 @@ export function migrateDreamCanonicalOutputContractTemplate(
   const markerCount = systemContents
     .reduce((count, content) => count + occurrenceCount(content, DREAM_OUTPUT_CONTRACT_MARKER), 0);
   const legacyCount = systemContents
-    .reduce((count, content) => count + occurrenceCount(content, LEGACY_DREAM_FLEX_RESPONSE), 0);
+    .reduce((count, content) => count
+      + occurrenceCount(content, LEGACY_DREAM_FLEX_RESPONSE)
+      + occurrenceCount(content, LEGACY_DREAM_OUTPUT_CONTRACT_V6)
+      + occurrenceCount(content, LEGACY_DREAM_OUTPUT_CONTRACT_V7)
+      + occurrenceCount(content, LEGACY_DREAM_OUTPUT_CONTRACT_V8), 0);
   if (
     systemContents[0]!.includes(DREAM_OUTPUT_CONTRACT)
     && fullContractCount === 1
@@ -194,8 +295,17 @@ export function migrateDreamCanonicalOutputContractTemplate(
 function stripDreamCanonicalOutputContract(content: string) {
   const withoutKnownContracts = content
     .replaceAll(DREAM_OUTPUT_CONTRACT, "")
+    .replaceAll(LEGACY_DREAM_OUTPUT_CONTRACT_V8, "")
+    .replaceAll(LEGACY_DREAM_OUTPUT_CONTRACT_V7, "")
+    .replaceAll(LEGACY_DREAM_OUTPUT_CONTRACT_V6, "")
     .replaceAll(LEGACY_DREAM_FLEX_RESPONSE, "");
-  const partialMarkerAt = withoutKnownContracts.indexOf(DREAM_OUTPUT_CONTRACT_MARKER);
+  const markerOffsets = [
+    DREAM_OUTPUT_CONTRACT_MARKER,
+    LEGACY_DREAM_REASONLESS_OUTPUT_CONTRACT_MARKER,
+    LEGACY_DREAM_MINIMAL_OUTPUT_CONTRACT_MARKER,
+    LEGACY_DREAM_OUTPUT_CONTRACT_MARKER
+  ].map((marker) => withoutKnownContracts.indexOf(marker)).filter((offset) => offset >= 0);
+  const partialMarkerAt = markerOffsets.length ? Math.min(...markerOffsets) : -1;
   return partialMarkerAt < 0
     ? withoutKnownContracts
     : withoutKnownContracts.slice(0, partialMarkerAt);
@@ -218,7 +328,15 @@ export function assertDreamCanonicalOutputContractTemplate(
     .reduce((count, content) => count + occurrenceCount(content, DREAM_OUTPUT_CONTRACT), 0);
   const markerCount = systemContents
     .reduce((count, content) => count + occurrenceCount(content, DREAM_OUTPUT_CONTRACT_MARKER), 0);
-  const hasLegacyContract = systemContents.some((content) => content.includes(LEGACY_DREAM_FLEX_RESPONSE));
+  const hasLegacyContract = systemContents.some((content) =>
+    content.includes(LEGACY_DREAM_FLEX_RESPONSE)
+    || content.includes(LEGACY_DREAM_OUTPUT_CONTRACT_V6)
+    || content.includes(LEGACY_DREAM_OUTPUT_CONTRACT_V7)
+    || content.includes(LEGACY_DREAM_OUTPUT_CONTRACT_V8)
+    || content.includes(LEGACY_DREAM_REASONLESS_OUTPUT_CONTRACT_MARKER)
+    || content.includes(LEGACY_DREAM_MINIMAL_OUTPUT_CONTRACT_MARKER)
+    || content.includes(LEGACY_DREAM_OUTPUT_CONTRACT_MARKER)
+  );
   if (fullContractCount !== 1 || markerCount !== 1 || hasLegacyContract) {
     throw new Error("Dream prompt output contract is incomplete.");
   }

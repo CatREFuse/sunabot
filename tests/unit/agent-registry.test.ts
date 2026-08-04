@@ -183,7 +183,7 @@ describe("AgentRegistry", () => {
   it("rejects symbolic links in shared system prompt paths", async () => {
     const config = createAdminTestConfig(temporaryDirectory);
     config.persona.agentWorkspace = path.join(testPaths.workspace, "business", "agents", "plana");
-    config.bot.memory.workMemoryCompressInPrompt = "nested/compress.json";
+    config.bot.memory.workMemoryCompressOutPrompt = "nested/compress.json";
     const promptRoot = path.join(testPaths.workspace, "business", "prompts");
     const external = path.join(temporaryDirectory, "external-prompts");
     await fs.mkdir(promptRoot, { recursive: true });

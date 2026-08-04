@@ -5,6 +5,10 @@ import {
   type ModelCallBehaviorId,
   type ModelCallMeasurement
 } from "../../packages/contracts/model/modelCallStats.js";
+import type {
+  RequestLogBusinessNode,
+  RequestLogMemoryTool
+} from "../../packages/contracts/observability/requestLogPresentation.js";
 
 type JsonObject = Record<string, unknown>;
 type SqlRow = Record<string, unknown>;
@@ -113,28 +117,41 @@ export class ModelCallStore {
     }));
   }
 
-  readRequestLogs(options: { query?: string; limit: number }) {
-    return this.readRequestLogPage({ query: options.query, page: 1, pageSize: options.limit }).logs;
+  readRequestLogs(options: {
+    query?: string;
+    limit: number;
+    node?: RequestLogBusinessNode;
+    memoryTool?: RequestLogMemoryTool;
+  }) {
+    return this.readRequestLogPage({
+      query: options.query,
+      page: 1,
+      pageSize: options.limit,
+      node: options.node,
+      memoryTool: options.memoryTool
+    }).logs;
   }
 
-  readRequestLogPage(options: { query?: string; page: number; pageSize: number }) {
+  readRequestLogPage(options: {
+    query?: string;
+    page: number;
+    pageSize: number;
+    node?: RequestLogBusinessNode;
+    memoryTool?: RequestLogMemoryTool;
+  }) {
     const query = String(options.query ?? "").trim().toLowerCase();
     const offset = (options.page - 1) * options.pageSize;
-    const rows = query
-      ? this.database.prepare(`
-          SELECT data_json FROM request_logs
-          WHERE LOWER(data_json) LIKE ? ESCAPE '\\'
-          ORDER BY at DESC, row_id DESC LIMIT ? OFFSET ?
-        `).all(`%${escapeLike(query)}%`, options.pageSize, offset)
-      : this.database.prepare(`
-          SELECT data_json FROM request_logs ORDER BY at DESC, row_id DESC LIMIT ? OFFSET ?
-        `).all(options.pageSize, offset);
-    const countRow = query
-      ? this.database.prepare(`
-          SELECT COUNT(*) AS count FROM request_logs
-          WHERE LOWER(data_json) LIKE ? ESCAPE '\\'
-        `).get(`%${escapeLike(query)}%`) as SqlRow
-      : this.database.prepare("SELECT COUNT(*) AS count FROM request_logs").get() as SqlRow;
+    const filter = requestLogSqlFilter(options.node, options.memoryTool, query);
+    const where = filter.conditions.length ? `WHERE ${filter.conditions.join(" AND ")}` : "";
+    const rows = this.database.prepare(`
+      SELECT data_json FROM request_logs
+      ${where}
+      ORDER BY at DESC, row_id DESC LIMIT ? OFFSET ?
+    `).all(...filter.parameters, options.pageSize, offset);
+    const countRow = this.database.prepare(`
+      SELECT COUNT(*) AS count FROM request_logs
+      ${where}
+    `).get(...filter.parameters) as SqlRow;
     const total = Number(countRow.count ?? 0);
     return {
       logs: rows.map((row) => JSON.parse(String((row as SqlRow).data_json))),
@@ -165,24 +182,23 @@ export class ModelCallStore {
     };
   }
 
-  readMemoryProcessingAttemptCounts(options: { since: string; until: string }) {
-    const row = this.database.prepare(`
-      SELECT
-        COUNT(*) AS attempted,
-        COALESCE(SUM(
-          CASE WHEN json_extract(data_json, '$.response.outcome') = 'applied' THEN 1 ELSE 0 END
-        ), 0) AS successful
-      FROM request_logs
-      WHERE category = 'memory.operation'
-        AND action = 'working.compression_attempt'
-        AND json_extract(data_json, '$.response.outcome') IN ('applied', 'failed')
-        AND at >= ?
-        AND at <= ?
-    `).get(options.since, options.until) as SqlRow;
-    return {
-      successful: Number(row.successful ?? 0),
-      attempted: Number(row.attempted ?? 0)
-    };
+  readRequestLogTrace(id: string) {
+    const selected = this.database.prepare(`
+      SELECT data_json FROM request_logs WHERE id = ? LIMIT 1
+    `).get(id) as SqlRow | undefined;
+    if (!selected) return [];
+    const selectedRecord = parseObject(selected.data_json);
+    const metadata = selectedRecord.metadata && typeof selectedRecord.metadata === "object" && !Array.isArray(selectedRecord.metadata)
+      ? selectedRecord.metadata as JsonObject
+      : {};
+    const runId = typeof metadata.runId === "string" ? metadata.runId.trim() : "";
+    if (!runId) return [selectedRecord];
+    return (this.database.prepare(`
+      SELECT data_json FROM request_logs
+      WHERE json_extract(data_json, '$.metadata.runId') = ?
+      ORDER BY at ASC, row_id ASC
+      LIMIT 200
+    `).all(runId) as SqlRow[]).map((row) => parseObject(row.data_json));
   }
 
   readTokenUsageRecords(since: string) {
@@ -320,4 +336,71 @@ function setMetadata(database: DatabaseSync, key: string, value: string) {
 
 function escapeLike(value: string) {
   return value.replace(/[\\%_]/g, (match) => `\\${match}`);
+}
+
+function requestLogSqlFilter(
+  node: RequestLogBusinessNode | undefined,
+  memoryTool: RequestLogMemoryTool | undefined,
+  query: string
+) {
+  const conditions: string[] = [];
+  const parameters: string[] = [];
+  if (query) {
+    conditions.push("LOWER(data_json) LIKE ? ESCAPE '\\'");
+    parameters.push(`%${escapeLike(query)}%`);
+  }
+  const nodeCondition = requestLogNodeCondition(node);
+  if (nodeCondition) conditions.push(nodeCondition);
+  const memoryAction = node === "memory_recording" && memoryTool === "working_memory"
+    ? "add_workmemory"
+    : node === "memory_recording" && memoryTool === "air"
+      ? "read_air"
+      : node === "memory_recording" && memoryTool === "user_profile"
+        ? "add_user_profile"
+        : "";
+  if (memoryAction) {
+    conditions.push("category = 'tool.call' AND action = ?");
+    parameters.push(memoryAction);
+  }
+  return { conditions, parameters };
+}
+
+function requestLogNodeCondition(node: RequestLogBusinessNode | undefined) {
+  const conversationId = "COALESCE(json_extract(data_json, '$.metadata.conversationId'), '')";
+  const promptFamily = "COALESCE(json_extract(data_json, '$.metadata.promptFamily'), '')";
+  const stage = "COALESCE(json_extract(data_json, '$.metadata.stage'), '')";
+  const memoryKind = "COALESCE(json_extract(data_json, '$.metadata.memoryKind'), '')";
+  const scope = "COALESCE(json_extract(data_json, '$.request.scope'), '')";
+  const dream = `(action LIKE 'dream.%'
+    OR ${promptFamily} = 'memory.dream'
+    OR ${conversationId} LIKE 'dream:%')`;
+  const memoryRecording = "(category = 'tool.call' AND action IN ('add_workmemory', 'read_air', 'add_user_profile'))";
+  switch (node) {
+    case "onebot_heartbeat":
+      return "0";
+    case "private_conversation":
+      return `(${conversationId} LIKE '%:private:%'
+        OR ${conversationId} LIKE 'private:%'
+        OR ${conversationId} LIKE 'web:%'
+        OR ${scope} = 'private'
+        OR ${promptFamily} LIKE '%private%')`;
+    case "group_conversation":
+      return `(${conversationId} LIKE '%:group:%'
+        OR ${conversationId} LIKE 'group:%'
+        OR ${scope} = 'group'
+        OR ${promptFamily} LIKE '%group%'
+        OR ${stage} = 'orchestrator')`;
+    case "memory_compression":
+      return `(NOT ${dream}
+        AND NOT ${memoryRecording}
+        AND (${stage} = 'memory'
+          OR ${memoryKind} <> ''
+          OR (${promptFamily} LIKE 'memory.%' AND ${promptFamily} <> 'memory.dream')))`;
+    case "memory_recording":
+      return memoryRecording;
+    case "dream":
+      return dream;
+    default:
+      return "";
+  }
 }

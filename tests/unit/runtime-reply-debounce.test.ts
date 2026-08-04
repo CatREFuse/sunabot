@@ -2222,11 +2222,7 @@ describe("SunaRuntime reply debounce", () => {
       loadPersistedConversations: true
     });
     const prepareIncomingMessage = vi.fn(async () => undefined);
-    const scheduleMemoryCompression = vi.fn();
-    const enqueueConversationMemory = vi.fn(async () => undefined);
     after.runtime.prepareIncomingMessage = prepareIncomingMessage;
-    after.runtime.scheduleMemoryCompression = scheduleMemoryCompression;
-    after.runtime.enqueueConversationMemory = enqueueConversationMemory;
 
     const redelivered = await after.handle(event);
     await delay(80);
@@ -2235,8 +2231,6 @@ describe("SunaRuntime reply debounce", () => {
     expect(after.completeRequestTurn).not.toHaveBeenCalled();
     expect(sentOutbounds(after.gateway)).toEqual([]);
     expect(prepareIncomingMessage).toHaveBeenCalledOnce();
-    expect(scheduleMemoryCompression).not.toHaveBeenCalled();
-    expect(enqueueConversationMemory).not.toHaveBeenCalled();
     const userMessages = after.runtime.conversationRecords.get(conversationId)?.messages
       .filter((message) => message.role === "user");
     expect(userMessages).toEqual([expect.objectContaining({
@@ -2466,9 +2460,6 @@ function createRuntimeHarness(
   runtime.getProvider = () => provider;
   runtime.prepareIncomingMessage = async () => undefined;
   runtime.scheduleAttachmentCacheRefresh = () => undefined;
-  runtime.scheduleMemoryCompression = () => undefined;
-  runtime.enqueueConversationMemory = async () => undefined;
-  runtime.scheduleMemoryDrain = () => undefined;
   if (!options.persistConversations) runtime.persistConversationRecords = () => undefined;
   runtime.renderPromptRequest = async (_id, variables) => ({
     messages: [

@@ -77,14 +77,10 @@ export function createAdminTestConfig(rootDir: string): AppConfig {
       memory: {
         memoryModel: "gpt-5.4-mini",
         reasoningEffort: "medium",
-        messageThreshold: 48,
-        workingMemoryMaxEntries: 100,
         dreamRecentWindowHours: 24,
         dreamRecentMemoryLimit: 24,
         dreamOlderMemoryLimit: 12,
-        workMemoryCompressInPrompt: "work_memory_compress_in.json",
-        workMemoryCompressOutPrompt: "work_memory_compress_out.json",
-        userProfilePrompt: "user_profile_prompt.json"
+        workMemoryCompressOutPrompt: "work_memory_compress_out.json"
       },
       orchestrator: {
         enabled: false,

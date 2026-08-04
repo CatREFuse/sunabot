@@ -8,10 +8,11 @@ import type {
 import { NO_REPLY_TOOL_NAME } from "../../../services/tools/noReplyTool.js";
 import { ASSISTANT_TEXT_TOOL_NAME } from "../../../services/tools/assistantTextTool.js";
 import { ADD_WORKMEMORY_TOOL_NAME } from "../../../services/tools/addWorkMemoryTool.js";
+import { ADD_USER_PROFILE_TOOL_NAME } from "../../../services/tools/addUserProfileTool.js";
 import {
-  assertWorkingMemoryDecisionResolved,
-  workingMemoryDecisionPending
-} from "./workingMemoryDecision.js";
+  assertMemoryToolDecisionsResolved,
+  memoryToolDecisionPending
+} from "./memoryToolDecisions.js";
 
 interface ProcessProviderToolRoundInput {
   calls: ResponseFunctionCallItem[];
@@ -38,10 +39,10 @@ export async function processProviderToolRound(
     state,
     executor
   } = input;
-  const memoryDecisionWasPending = workingMemoryDecisionPending(options);
+  const memoryDecisionWasPending = memoryToolDecisionPending(options);
   const companion = executor.companionTurn(calls, siblingText, options, definitions, state);
   if (companion) {
-    assertWorkingMemoryDecisionResolved(options);
+    assertMemoryToolDecisionsResolved(options);
     return { terminal: companion };
   }
 
@@ -61,7 +62,7 @@ export async function processProviderToolRound(
     if (inlineCalls.length) {
       await executor.execute(inlineCalls, options, definitions, state);
     }
-    assertWorkingMemoryDecisionResolved(options);
+    assertMemoryToolDecisionsResolved(options);
     return { terminal: deferred ?? noReply! };
   }
 
@@ -69,10 +70,13 @@ export async function processProviderToolRound(
   const outputs = await executor.execute(calls, options, definitions, state);
   if (
     memoryDecisionWasPending
-    && !workingMemoryDecisionPending(options)
+    && !memoryToolDecisionPending(options)
     && siblingText.trim()
     && calls.length === 1
-    && calls[0]?.name === ADD_WORKMEMORY_TOOL_NAME
+    && (
+      calls[0]?.name === ADD_WORKMEMORY_TOOL_NAME
+      || calls[0]?.name === ADD_USER_PROFILE_TOOL_NAME
+    )
   ) {
     return {
       terminal: {

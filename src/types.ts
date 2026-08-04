@@ -139,8 +139,6 @@ export interface ConversationRecord extends ConversationContract {
   messageCount: number;
   lastAt: string;
   lastText: string;
-  memoryCompressedThroughMessageCount?: number;
-  memoryCompressedAt?: string;
   orchestratorCheckedMessageCount?: number;
   orchestratorCheckedAt?: string;
   orchestratorLastReplyAt?: string;

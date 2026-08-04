@@ -16,11 +16,9 @@ export interface DreamHistoryItem {
   errorText?: string;
   nextRetryAt?: string;
   failedAt?: string;
-  personalityChanged?: boolean;
   summary?: {
-    merged: number;
-    archived: number;
-    promoted: number;
+    workingMemoryReduced: number;
+    longTermAdded: number;
   };
 }
 

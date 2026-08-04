@@ -16,7 +16,6 @@ import { sqliteMemoryPersistence } from "../adapters/sqlite/applicationDataStore
 import { configureMemoryPersistence } from "../services/memory/persistence.js";
 import { ReplyGateEpochs } from "../services/orchestration/groupReplyPolicy.js";
 import { HookBus } from "../services/messaging/hookBus.js";
-import { MemorySchedulerStore } from "../services/memory/memoryScheduler.js";
 import type { MessagingPort } from "../packages/contracts/messaging/messages.js";
 import type { AgentPersona } from "../services/agent/persona.js";
 import { appendRequestLog } from "../adapters/observability/requestLog.js";
@@ -41,7 +40,6 @@ import { RuntimeLifecycle } from "./runtime/lifecycle.js";
 import * as runtimeIntake from "./runtime/intake.js";
 import * as runtimeReply from "./runtime/reply.js";
 import { RuntimeOrchestration } from "./runtime/orchestration.js";
-import { RuntimeMemoryPipeline } from "./runtime/memoryPipeline.js";
 import * as runtimeDelivery from "./runtime/delivery.js";
 import * as runtimeConversations from "./runtime/conversations.js";
 import { RuntimeSelfie } from "./runtime/selfie.js";
@@ -52,6 +50,8 @@ import { RuntimeVoice } from "./runtime/voice.js";
 import { RuntimeDirector } from "./runtime/director.js";
 import { RuntimeAir } from "./runtime/air.js";
 import { RuntimeWorkingMemory } from "./runtime/workMemory.js";
+import { RuntimeUserProfile } from "./runtime/userProfile.js";
+import { RuntimeAttachmentRefresh } from "./runtime/attachmentRefresh.js";
 import { RuntimeDreams } from "./runtime/dreamPipeline.js";
 import { stageCodexResultArtifacts } from "./runtime/codexArtifacts.js";
 import { createRuntimeDreamsForHost, forceRuntimeDreamForHost } from "./runtime/dreamRuntime.js";
@@ -93,10 +93,6 @@ export class SunaRuntime {
   hydrationPromise?: Promise<void>;
   attachmentRefreshPromise?: Promise<void>;
   attachmentRefreshDirty = false;
-  readonly memoryScheduler: MemorySchedulerStore;
-  memoryDrainPromise?: Promise<void>;
-  memoryDrainDirty = false;
-  memoryWakeTimer?: NodeJS.Timeout;
   readonly hooks = new HookBus();
   readonly attachmentService: AttachmentService;
   readonly senderNameResolver = new SenderNameResolver();
@@ -107,6 +103,7 @@ export class SunaRuntime {
   readonly director: RuntimeDirector;
   readonly air: RuntimeAir;
   readonly workingMemory: RuntimeWorkingMemory;
+  readonly userProfile: RuntimeUserProfile;
   readonly dreams: RuntimeDreams;
   readonly bashAudit?: RuntimeBashAuditPort;
   readonly bashRuntime?: WorkspaceBashRuntimePort;
@@ -123,7 +120,7 @@ export class SunaRuntime {
   private readonly runtimeController = new AbortController();
   private readonly lifecycle: RuntimeLifecycle;
   private readonly orchestration: RuntimeOrchestration;
-  private readonly memory: RuntimeMemoryPipeline;
+  private readonly attachmentRefresh: RuntimeAttachmentRefresh;
   private readonly tone: RuntimeTone;
   private readonly selfie: RuntimeSelfie;
   private readonly replyDebounce: RuntimeReplyDebounce;
@@ -140,7 +137,6 @@ export class SunaRuntime {
       this.agentExtensions = options.agentExtensions;
       this.replyTaskGate = options.replyTaskGate ?? { canCreateTaskFor: () => true };
       this.resolveAdminNotificationAccountId = options.resolveAdminNotificationAccountId;
-      this.memoryScheduler = new MemorySchedulerStore(config);
       this.attachmentService = options.attachmentService ?? new AttachmentService(getRootDir(), {
         cacheRoot: getAgentPrivatePath(config, WORKSPACE_LAYOUT.attachmentCache, "cache", "attachments"),
         cacheOptions: { trustedResolvedAddress: isTrustedQqFakeIp }
@@ -208,6 +204,7 @@ export class SunaRuntime {
       this.director = new RuntimeDirector(this);
       this.air = new RuntimeAir(this);
       this.workingMemory = new RuntimeWorkingMemory(this);
+      this.userProfile = new RuntimeUserProfile(this);
       this.dreams = createRuntimeDreamsForHost(this);
       this.commandRouter = new CommandRouter<RuntimeCommandContext>([
         {
@@ -236,7 +233,7 @@ export class SunaRuntime {
       ]);
         this.lifecycle = new RuntimeLifecycle(this);
       this.orchestration = new RuntimeOrchestration(this);
-      this.memory = new RuntimeMemoryPipeline(this);
+      this.attachmentRefresh = new RuntimeAttachmentRefresh(this);
       this.tone = new RuntimeTone(this);
       this.selfie = new RuntimeSelfie(this);
       this.replyDebounce = new RuntimeReplyDebounce(
@@ -262,7 +259,6 @@ export class SunaRuntime {
   commitPromptReload(...args: Parameters<RuntimeLifecycle["commitPromptReload"]>) { return this.inAgentContext(() => this.lifecycle.commitPromptReload(...args)); }
   getPersonaStatus(...args: Parameters<RuntimeLifecycle["getPersonaStatus"]>) { return this.lifecycle.getPersonaStatus(...args); }
   getProviderStatus(...args: Parameters<RuntimeLifecycle["getProviderStatus"]>) { return this.lifecycle.getProviderStatus(...args); }
-  consolidateWorkingMemory(...args: Parameters<RuntimeLifecycle["consolidateWorkingMemory"]>) { return this.inAgentContext(() => this.lifecycle.consolidateWorkingMemory(...args)); }
   getProvider(...args: Parameters<RuntimeLifecycle["getProvider"]>) { return this.lifecycle.getProvider(...args); }
   getProviderForModel(...args: Parameters<RuntimeLifecycle["getProviderForModel"]>) { return this.lifecycle.getProviderForModel(...args); }
   ensureAgentPromptFiles(...args: Parameters<RuntimeLifecycle["ensureAgentPromptFiles"]>) { return this.inAgentContext(() => this.lifecycle.ensureAgentPromptFiles(...args)); }
@@ -429,21 +425,7 @@ export class SunaRuntime {
   runUserGroupchatOrchestrator(...args: Parameters<RuntimeOrchestration["runUserGroupchatOrchestrator"]>) { return this.orchestration.runUserGroupchatOrchestrator(...args); }
   consumeOrchestratorBatch(...args: Parameters<RuntimeOrchestration["consumeOrchestratorBatch"]>) { return this.orchestration.consumeOrchestratorBatch(...args); }
   recordOrchestratorDecision(...args: Parameters<RuntimeOrchestration["recordOrchestratorDecision"]>) { return this.orchestration.recordOrchestratorDecision(...args); }
-  scheduleAttachmentCacheRefresh(...args: Parameters<RuntimeMemoryPipeline["scheduleAttachmentCacheRefresh"]>) { return this.memory.scheduleAttachmentCacheRefresh(...args); }
-  scheduleMemoryCompression(...args: Parameters<RuntimeMemoryPipeline["scheduleMemoryCompression"]>) { return this.memory.scheduleMemoryCompression(...args); }
-  seedMemoryScheduler(...args: Parameters<RuntimeMemoryPipeline["seedMemoryScheduler"]>) { return this.memory.seedMemoryScheduler(...args); }
-  enqueueConversationMemory(...args: Parameters<RuntimeMemoryPipeline["enqueueConversationMemory"]>) { return this.memory.enqueueConversationMemory(...args); }
-  async memoryProcessingPendingCount() {
-    return this.inAgentContext(async () => {
-      const snapshot = await this.memoryScheduler.snapshot();
-      return Object.values(snapshot.conversations)
-        .reduce((total, conversation) => total + conversation.pendingMessages.length, 0);
-    });
-  }
-  scheduleMemoryDrain(...args: Parameters<RuntimeMemoryPipeline["scheduleMemoryDrain"]>) { return this.memory.scheduleMemoryDrain(...args); }
-  armMemoryWakeTimer(...args: Parameters<RuntimeMemoryPipeline["armMemoryWakeTimer"]>) { return this.memory.armMemoryWakeTimer(...args); }
-  drainMemoryScheduler(...args: Parameters<RuntimeMemoryPipeline["drainMemoryScheduler"]>) { return this.inAgentContext(() => this.memory.drainMemoryScheduler(...args)); }
-  projectMemoryCursor(...args: Parameters<RuntimeMemoryPipeline["projectMemoryCursor"]>) { return this.memory.projectMemoryCursor(...args); }
+  scheduleAttachmentCacheRefresh() { return this.attachmentRefresh.schedule(); }
   rewriteToneText(...args: Parameters<RuntimeTone["rewrite"]>) { return this.inAgentContext(() => this.tone.rewrite(...args)); }
   rewriteToneDelivery(...args: Parameters<RuntimeTone["rewriteForDelivery"]>) { return this.inAgentContext(() => this.tone.rewriteForDelivery(...args)); }
   sendAssistantReply(...args: Parameters<typeof runtimeDelivery.runtime_sendAssistantReply>) { return runtimeDelivery.runtime_sendAssistantReply.call(this, ...args); }
@@ -463,12 +445,6 @@ export class SunaRuntime {
   markConversationMessagesAsRecordedOnly(...args: Parameters<typeof runtimeConversations.runtime_markConversationMessagesAsRecordedOnly>) { return runtimeConversations.runtime_markConversationMessagesAsRecordedOnly.call(this, ...args); }
   getActiveConversationRecords(...args: Parameters<typeof runtimeConversations.runtime_getActiveConversationRecords>) { return runtimeConversations.runtime_getActiveConversationRecords.call(this, ...args); }
   recordServiceMessage(...args: Parameters<typeof runtimeConversations.runtime_recordServiceMessage>) { return runtimeConversations.runtime_recordServiceMessage.call(this, ...args); }
-  processMemoryClaim(...args: Parameters<RuntimeMemoryPipeline["processMemoryClaim"]>) { return this.inAgentContext(() => this.memory.processMemoryClaim(...args)); }
-  enrichParticipantAddressNames(...args: Parameters<RuntimeMemoryPipeline["enrichParticipantAddressNames"]>) { return this.memory.enrichParticipantAddressNames(...args); }
-  mergeConversationWorkingMemory(...args: Parameters<RuntimeMemoryPipeline["mergeConversationWorkingMemory"]>) { return this.inAgentContext(() => this.memory.mergeConversationWorkingMemory(...args)); }
-  mergeWorkingMemory(...args: Parameters<RuntimeMemoryPipeline["mergeWorkingMemory"]>) { return this.inAgentContext(() => this.memory.mergeWorkingMemory(...args)); }
-  requestWorkingMemoryMerge(...args: Parameters<RuntimeMemoryPipeline["requestWorkingMemoryMerge"]>) { return this.inAgentContext(() => this.memory.requestWorkingMemoryMerge(...args)); }
-  compressUserProfiles(...args: Parameters<RuntimeMemoryPipeline["compressUserProfiles"]>) { return this.inAgentContext(() => this.memory.compressUserProfiles(...args)); }
   readRelevantUserProfiles(...args: Parameters<RuntimeSelfie["readRelevantUserProfiles"]>) { return this.selfie.readRelevantUserProfiles(...args); }
   runSelfie(...args: Parameters<RuntimeSelfie["runSelfie"]>) { return this.inAgentContext(() => this.selfie.runSelfie(...args)); }
   rewriteSelfiePrompt(...args: Parameters<RuntimeSelfie["rewriteSelfiePrompt"]>) { return this.inAgentContext(() => this.selfie.rewriteSelfiePrompt(...args)); }

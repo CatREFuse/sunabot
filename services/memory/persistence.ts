@@ -16,27 +16,6 @@ export interface MemoryRepositoryPort {
   readMemorySnapshot(): { records: Record<MemoryDataSource, MemoryRecordData[]>; revisions: MemorySourceRevisions };
   replaceMemory(source: MemoryDataSource, records: readonly MemoryRecordData[]): void;
   ensureLegacyMemoryImported(source: MemoryDataSource, filePath: string): void;
-  commitMemoryBatch(input: {
-    batchId: string;
-    baselineRevisions: MemorySourceRevisions;
-    working: readonly MemoryRecordData[];
-    longTerm: readonly MemoryRecordData[];
-    userProfile: readonly MemoryRecordData[];
-    result: unknown;
-  }): { status: "existing"; result: unknown } | { status: "snapshot_conflict" } | { status: "committed"; result: unknown };
-  commitUserProfileBatch(input: {
-    batchId: string;
-    expectedUserProfileRevision: number;
-    userProfile: readonly MemoryRecordData[];
-    result: unknown;
-  }): { status: "existing"; result: unknown } | { status: "snapshot_conflict" } | { status: "committed"; result: unknown };
-  readMemoryBatch(batchId: string): unknown;
-  hasMemoryBatch(batchId: string): boolean;
-  readMemoryScheduler(): Record<string, object>;
-  replaceMemoryScheduler(conversations: Readonly<Record<string, object>>): void;
-  readMemoryDebtAlertState(): MemoryRecordData | undefined;
-  writeMemoryDebtAlertState(state: MemoryRecordData): void;
-  ensureLegacyMemorySchedulerImported(filePath: string): void;
   initializeRecallTracking?(recordIds: readonly string[], at?: Date): MemoryRecallStats[];
   reserveActualRecall(input: ReserveActualMemoryRecallInput): ReserveActualMemoryRecallResult;
   recordActualRecall?(input: RecordActualMemoryRecallInput): RecordActualMemoryRecallResult;
@@ -48,10 +27,6 @@ export interface MemoryRepositoryPort {
     pageSize: number;
     total: number;
     pageCount: number;
-  };
-  readMemoryProcessingAttemptCounts?(options: { since: string; until: string }): {
-    successful: number;
-    attempted: number;
   };
 }
 

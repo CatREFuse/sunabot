@@ -1,6 +1,7 @@
 import type { ProviderCompleteOptions } from "./contracts.js";
 import type { ResponseFunctionCallItem } from "./contracts.js";
 import { ADD_WORKMEMORY_TOOL_NAME } from "../../../services/tools/addWorkMemoryTool.js";
+import { ADD_USER_PROFILE_TOOL_NAME } from "../../../services/tools/addUserProfileTool.js";
 
 const DEFAULT_MAX_TOOL_CALLS = 20;
 const MAX_CONFIGURED_TOOL_CALLS = 100;
@@ -21,7 +22,10 @@ export function claimBusinessToolCalls(
   calls: readonly ResponseFunctionCallItem[],
   maximum: number
 ) {
-  const additional = calls.filter((call) => call.name !== ADD_WORKMEMORY_TOOL_NAME).length;
+  const additional = calls.filter((call) =>
+    call.name !== ADD_WORKMEMORY_TOOL_NAME
+    && call.name !== ADD_USER_PROFILE_TOOL_NAME
+  ).length;
   return claimToolCalls(current, additional, maximum);
 }
 
@@ -29,9 +33,14 @@ export function resolveToolRoundLimit(
   options: ProviderCompleteOptions,
   maximum: number
 ) {
-  const dedicatedWorkingMemoryRound = options.workingMemory?.decisionRequired === true
-    && options.workingMemory.decisionResolved?.() !== true;
-  return maximum + (dedicatedWorkingMemoryRound ? 1 : 0);
+  const dedicatedMemoryRounds = [
+    options.workingMemory,
+    options.userProfile
+  ].filter((port) =>
+    port?.decisionRequired === true
+    && port.decisionResolved?.() !== true
+  ).length;
+  return maximum + dedicatedMemoryRounds;
 }
 
 export function toolCallLimitError(maximum: number) {

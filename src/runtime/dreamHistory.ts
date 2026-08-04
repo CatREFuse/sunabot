@@ -12,6 +12,7 @@ const DREAM_STABLE_ERROR_CODES = new Set([
   "DREAM_FIELD_KNOWLEDGE_ROLLBACK_CONFLICT",
   "DREAM_INPUT_INVALID",
   "DREAM_LEASE_LOST",
+  "DREAM_LONG_TERM_ADD_ONLY_VIOLATION",
   "DREAM_NOTIFICATION_FAILED",
   "DREAM_OUTPUT_CONTRACT_INVALID",
   "DREAM_OUTPUT_MISSING",
@@ -56,19 +57,20 @@ export function dreamHistoryItem(run: DreamHistorySource) {
     ...(errorText ? { errorText } : {}),
     ...(run.nextRetryAt ? { nextRetryAt: run.nextRetryAt } : {}),
     ...(run.failedAt ? { failedAt: run.failedAt } : {}),
-    personalityChanged: run.personaStatus === "applied" && run.persona?.projectionChanged !== false,
     ...(summary ? { summary } : {})
   };
 }
 
 export function dreamRunSummary(result: JsonObject | null) {
   if (!result) return undefined;
-  const merged = nonNegativeNumber(result.merged);
-  const archived = nonNegativeNumber(result.archived);
-  const promoted = nonNegativeNumber(result.promoted);
-  return merged == null || archived == null || promoted == null
+  const working = objectValue(result.workingMemoryCompression);
+  const longTerm = objectValue(result.longTermMemoryAdditions);
+  const workingMemoryReduced = nonNegativeNumber(working.reducedBy);
+  const longTermAdded = nonNegativeNumber(longTerm.added);
+  return workingMemoryReduced == null
+    || longTermAdded == null
     ? undefined
-    : { merged, archived, promoted };
+    : { workingMemoryReduced, longTermAdded };
 }
 
 export function nextDreamScheduledAt(now: Date, timeZone: string) {
@@ -78,6 +80,12 @@ export function nextDreamScheduledAt(now: Date, timeZone: string) {
 
 function nonNegativeNumber(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+function objectValue(value: unknown): JsonObject {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as JsonObject
+    : {};
 }
 
 function safeAttemptCount(value: number) {
@@ -110,6 +118,8 @@ export function dreamFailureText(code: string) {
       return "Dream 通知发送失败。";
     case "DREAM_LEASE_LOST":
       return "Dream 处理租约已失效。";
+    case "DREAM_LONG_TERM_ADD_ONLY_VIOLATION":
+      return "Dream 长期记忆仅允许新增。";
     default:
       return "Dream 处理失败。";
   }

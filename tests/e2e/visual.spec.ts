@@ -19,6 +19,7 @@ const avatarCropFixture = sharp({
 
 const migratedVisualScenarios = [
   { title: "会话标题栏与侧栏矩阵", timeoutMs: 120_000, run: runConversationVisualScenario },
+  { title: "日志工作台矩阵", timeoutMs: 90_000, run: runLogsVisualScenario },
   { title: "知识库页面与上传弹层矩阵", timeoutMs: 90_000, run: runKnowledgeVisualScenario },
   { title: "记忆、梦境与召回矩阵", timeoutMs: 120_000, run: runMemoryVisualScenario },
   { title: "表情目录与编辑弹层矩阵", timeoutMs: 120_000, run: runEmojiVisualScenario },
@@ -99,6 +100,39 @@ async function runConversationVisualScenario(page: Page, testInfo: TestInfo) {
   await expect(page.getByLabel("编排", { exact: true })).toBeDisabled();
 }
 
+async function runLogsVisualScenario(page: Page, testInfo: TestInfo) {
+  const theme = await prepareVisualPage(page, testInfo);
+  await installMockApi(page);
+  for (const viewport of viewports) {
+    await page.setViewportSize(viewport);
+    await page.goto("/logs");
+    await expect(page.getByRole("heading", { name: "日志", exact: true })).toBeVisible();
+    await expect(page.getByLabel("模型调用统计")).toContainText("128.4K Token");
+    await expect(page.getByRole("tab", { name: "全部", exact: true })).toHaveAttribute("aria-selected", "true");
+    await capture(page, viewport.name, theme, "logs-all");
+
+    await page.getByRole("tab", { name: "私聊对话", exact: true }).click();
+    const requestLogs = page.getByLabel("请求日志列表");
+    await expect(requestLogs.getByText("[ERROR]", { exact: true })).toBeVisible();
+    await expect(requestLogs.getByText("RETRY 1 · 2/3", { exact: true })).toBeVisible();
+    await capture(page, viewport.name, theme, "logs-private");
+
+    await requestLogs.getByRole("button", { name: "查看Responses 模型调用请求详情" }).first().click();
+    const requestDetail = page.getByRole("dialog", { name: "请求详情" });
+    await expect(requestDetail.getByText("REQUEST BODY", { exact: true })).toBeVisible();
+    await expect(requestDetail.getByText("TOOL CALL", { exact: true })).toBeVisible();
+    await expect(requestDetail.getByText("RESPONSE BODY", { exact: true })).toBeVisible();
+    await capture(page, viewport.name, theme, "logs-request-detail");
+    await requestDetail.getByRole("button", { name: "关闭请求详情" }).click();
+
+    await page.getByRole("tab", { name: "记忆记录", exact: true }).click();
+    await expect(page.getByRole("button", { name: "工作记忆", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "用户印象", exact: true }).click();
+    await expect(requestLogs.getByText("add_user_profile", { exact: true })).toBeVisible();
+    await capture(page, viewport.name, theme, "logs-memory-recording");
+  }
+}
+
 async function runKnowledgeVisualScenario(page: Page, testInfo: TestInfo) {
   const theme = await prepareVisualPage(page, testInfo);
   await installMockApi(page);
@@ -136,9 +170,8 @@ async function runMemoryVisualScenario(page: Page, testInfo: TestInfo) {
     const sourceTabs = page.getByRole("tablist", { name: "记忆类别" });
     await expect(sourceTabs.getByRole("tab")).toHaveCount(5);
     await expect(sourceTabs.getByRole("tab", { name: "工作记忆", exact: true })).toHaveAttribute("aria-selected", "true");
-    await expect(page.getByLabel("24 小时记忆处理成功率")).toContainText("95%");
-    await expect(page.getByLabel("24 小时记忆处理成功率")).toContainText("19 / 20");
-    await expect(page.getByLabel("待处理记忆消息")).toContainText("84");
+    await expect(page.getByLabel("24 小时记忆处理成功率")).toHaveCount(0);
+    await expect(page.getByLabel("待处理记忆消息")).toHaveCount(0);
     if (viewport.width === 390) {
       const tabFit = await sourceTabs.evaluate((element) => {
         const container = element.getBoundingClientRect();
@@ -189,8 +222,8 @@ async function runMemoryVisualScenario(page: Page, testInfo: TestInfo) {
     const dream = page.getByRole("tabpanel", { name: "梦境" });
     await expect(dream.getByRole("button", { name: "立即做梦", exact: true })).toBeVisible();
     await expect(dream.getByText(/我沿着潮湿的石阶走进旧车站/)).toBeVisible();
-    await expect(dream.getByText("合并 2 · 归档 1 · 转存 1", { exact: true })).toBeVisible();
-    await expect(dream.getByText("已微调", { exact: true })).toBeVisible();
+    await expect(dream.getByText("工作记忆减少 2 · 长期记忆新增 1", { exact: true })).toBeVisible();
+    await expect(dream.getByText("工作记忆减少 1 · 长期记忆新增 0", { exact: true })).toBeVisible();
     await dream.evaluate((element) => element.scrollIntoView({ block: "start" }));
     await capture(page, viewport.name, theme, "memory-dream", { fullPage: false });
 
@@ -503,22 +536,6 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     await expect(page.getByRole("tooltip")).toBeVisible();
     await capture(page, viewport.name, theme, "prompts-variable-tooltip");
 
-    await page.goto("/logs");
-    await expect(page.getByRole("heading", { name: "日志", exact: true })).toBeVisible();
-    await expect(page.getByLabel("模型调用统计")).toContainText("128.4K Token");
-    await expect(page.getByLabel("Bot 活动终端")).toBeVisible();
-    await capture(page, viewport.name, theme, "logs-terminal");
-    await page.getByRole("button", { name: "请求日志", exact: true }).click();
-    const requestLogs = page.getByLabel("请求日志列表");
-    await expect(requestLogs).toBeVisible();
-    await capture(page, viewport.name, theme, "logs-requests");
-    const responseLog = requestLogs.locator("article").filter({ hasText: "responses.complete" }).first();
-    await responseLog.getByText("响应体", { exact: true }).click();
-    await responseLog.locator("summary").filter({ hasText: /^summary/ }).click();
-    await responseLog.locator("summary").filter({ hasText: /^usage/ }).click();
-    await responseLog.scrollIntoViewIfNeeded();
-    await capture(page, viewport.name, theme, "logs-token-usage-structured");
-
     await page.goto("/images");
     const selfieHeading = page.getByRole("heading", { name: "自拍参考图" });
     const selfieManager = page.getByRole("region", { name: "自拍参考图" });
@@ -598,11 +615,11 @@ test("四视口界面矩阵", async ({ page }, testInfo) => {
     await page.goto("/agent-settings/memory");
     await expect(page.getByRole("heading", { name: "记忆处理" })).toBeVisible();
     await capture(page, viewport.name, theme, "settings-memory");
-    const dreamSampling = page.getByRole("heading", { name: "Dream 记忆整理" });
-    await dreamSampling.evaluate((element) => element.scrollIntoView({ block: "start" }));
-    await expect(page.getByLabel("近期窗口（小时）")).toHaveValue("24");
-    await expect(page.getByLabel("24 小时记忆数")).toHaveValue("24");
-    await expect(page.getByLabel("久远记忆数")).toHaveValue("12");
+    const dreamPrompt = page.getByRole("heading", { name: "提示词文件" });
+    await dreamPrompt.evaluate((element) => element.scrollIntoView({ block: "start" }));
+    await expect(page.getByText("memory_dream.json", { exact: true })).toBeVisible();
+    await expect(page.getByLabel("近期窗口（小时）")).toHaveCount(0);
+    await expect(page.getByLabel("久远记忆数")).toHaveCount(0);
     await capture(page, viewport.name, theme, "settings-memory-dream");
 
     await page.goto("/agent-settings/tools");
@@ -908,12 +925,12 @@ test("Final Prompt 输入框全选无文本重叠", async ({ page }, testInfo) =
   const theme = await prepareVisualPage(page, testInfo);
   await installMockApi(page);
   await page.setViewportSize({ width: 1532, height: 842 });
-  await page.goto("/system-prompts/memory.user-profile");
+  await page.goto("/system-prompts/memory.compress-out");
 
   const editor = page.getByRole("textbox", { name: "system 提示词" });
   await expect(editor).toBeVisible();
   await editor.fill(Array.from({ length: 48 }, (_, index) => (
-    `${index + 1}. 你负责以 @{bot.name} 的第一视角，从同一批聊天消息中整理我对各个用户的稳定认知和印象。`
+    `${index + 1}. 你负责以 @{bot.name} 的第一视角整理长期记忆。`
   )).join("\n"));
   await editor.press("ControlOrMeta+a");
   const editorFrame = page.locator(".prompt-field__editor").filter({ has: editor });

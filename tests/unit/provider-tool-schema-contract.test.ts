@@ -25,6 +25,7 @@ import type { OpenAIToolDefinition } from "../../services/agent/promptSystem.js"
 import { listToolMetadata } from "../../services/tools/toolRegistry.js";
 import { AGENT_TOOL_NAMES } from "../../packages/contracts/admin/public.js";
 import { addWorkMemoryTool } from "../../services/tools/addWorkMemoryTool.js";
+import { addUserProfileTool } from "../../services/tools/addUserProfileTool.js";
 
 describe("Provider tool schema compatibility contract", () => {
   it("keeps the recorded OpenAI strict unsupported keywords in one protocol contract", () => {
@@ -258,6 +259,32 @@ describe("Provider tool schema compatibility contract", () => {
     expect(mapped["gemini-generate-content"]).not.toHaveProperty("parameters");
   });
 
+  it("keeps add_user_profile strict with required nullable aggregate fields on every Provider protocol", () => {
+    const canonical = structuredClone(addUserProfileTool) as unknown as Record<string, any>;
+    expect(canonical).toMatchObject({
+      strict: true,
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        required: ["action", "profile", "addressNames"],
+        properties: {
+          action: { type: "string", enum: ["record", "skip"] },
+          profile: { type: ["string", "null"] },
+          addressNames: { type: ["array", "null"] }
+        }
+      }
+    });
+    for (const [protocol, mapped] of Object.entries({
+      "openai-responses": canonical,
+      "codex-responses": canonical,
+      "openai-chat-completions": toChatCompletionTool(canonical),
+      "anthropic-messages": toAnthropicTool(canonical),
+      "gemini-generate-content": toGeminiFunctionDeclaration(canonical)
+    }) as Array<[ProviderToolSchemaProtocol, Record<string, unknown>]>) {
+      expect(() => assertMappedProviderToolDefinitions([mapped], protocol)).not.toThrow();
+    }
+  });
+
   it.each([
     ["standard deferred tools", false, true],
     ["control Codex and inline image tools", true, false]
@@ -458,6 +485,7 @@ function fullToolOptions(mode: { codexControl: boolean; asyncImage: boolean }) {
     director: { execute: vi.fn() },
     air: { execute: vi.fn() },
     workingMemory: { execute: vi.fn() },
+    userProfile: { execute: vi.fn() },
     skills: {
       skillIds: ["fixture-skill"],
       activate: vi.fn(),

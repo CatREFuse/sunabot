@@ -33,7 +33,7 @@ import {
 import { isMemoryEntryRelatedToUsers, resolveRuntimePersonaName } from "./conversationMemoryHelpers.js";
 import { auxiliaryModelSignal, auxiliaryProviderCompleteOptions } from "./auxiliaryModelBudget.js";
 import { conversationRecordId, uniqueStrings } from "./messagingAttachmentHelpers.js";
-import { BatchUserInfo, MAX_SELFIE_REFERENCE_IMAGES, MAX_SELFIE_WORKSPACE_REFERENCE_IMAGES } from "./runtimeContracts.js";
+import { MAX_SELFIE_REFERENCE_IMAGES, MAX_SELFIE_WORKSPACE_REFERENCE_IMAGES } from "./runtimeContracts.js";
 import { isSelfieImageFile, normalizeSelfiePrompt, normalizeSelfieQuality, normalizeSelfieReferenceImageUrls, normalizeSelfieResolution, normalizeSelfieSize, selfieMimeType } from "./selfieHelpers.js";
 
 import type { SunaRuntime } from "../runtime.js";
@@ -53,7 +53,10 @@ interface RewrittenSelfiePrompt {
   selectedSelfieReferenceIds: string[];
 }
 
-export async function runtime_readRelevantUserProfiles(this: RuntimeHost, participants: BatchUserInfo[]) {
+export async function runtime_readRelevantUserProfiles(
+  this: RuntimeHost,
+  participants: Array<{ userId: string }>
+) {
     const userIds = new Set(participants.map((item) => item.userId));
     const entries = await readMemorySourceEntries(this.config, "user_profile");
     return entries

@@ -157,7 +157,7 @@ export class OpenAIProvider {
   }
 
   private async getApiKeyAsync() {
-    return this.getApiKey() || resolveProviderApiKeyAsync(this.provider);
+    return resolveProviderApiKeyAsync(this.provider);
   }
 
   configuration() {

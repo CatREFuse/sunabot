@@ -18,8 +18,12 @@ afterEach(async () => {
 });
 
 describe("conversation tool policy", () => {
-  it("does not allow add_workmemory to be disabled by conversation settings", () => {
-    expect(normalizeConversationDisabledTools(["add_workmemory", "read_file"])).toEqual(["read_file"]);
+  it("does not allow memory-decision tools to be disabled by conversation settings", () => {
+    expect(normalizeConversationDisabledTools([
+      "add_workmemory",
+      "add_user_profile",
+      "read_file"
+    ])).toEqual(["read_file"]);
   });
 
   it("persists an independent policy for QQ and Web Chat conversations", async () => {

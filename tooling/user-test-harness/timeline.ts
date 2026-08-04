@@ -7,38 +7,8 @@ import type {
   DreamDirectorScheduleFixture,
   DreamUserTestInput,
   JsonFixtureRecord,
-  MemoryCompressionUserTestInput,
   WorkingMemoryFixtureItem
 } from "./contracts.js";
-
-export function materializeMemoryCompressionAtRuntime(
-  input: MemoryCompressionUserTestInput,
-  runtimeNow: Date
-) {
-  assertRuntimeRebasePolicy(input.timePolicy);
-  const fixtureNowMs = Date.parse(input.now);
-  const runtimeNowMs = checkedDate(runtimeNow, "USER_TEST_RUNTIME_NOW_INVALID").getTime();
-  const offsetMs = runtimeNowMs - fixtureNowMs;
-  return {
-    input: {
-      ...input,
-      now: new Date(runtimeNowMs).toISOString(),
-      workingMemory: input.workingMemory.map((item) => shiftWorkingMemoryItem(item, offsetMs)),
-      longTerm: shiftJsonFixtureRecords(input.longTerm, offsetMs),
-      userProfiles: shiftJsonFixtureRecords(input.userProfiles, offsetMs),
-      messages: input.messages.map((message) => ({
-        ...message,
-        at: shiftIsoTimestamp(message.at, offsetMs)
-      }))
-    },
-    timeline: {
-      policy: input.timePolicy,
-      fixtureNow: new Date(fixtureNowMs).toISOString(),
-      runtimeNow: new Date(runtimeNowMs).toISOString(),
-      offsetMs
-    }
-  };
-}
 
 export function materializeDreamAtRuntime(
   input: DreamUserTestInput,

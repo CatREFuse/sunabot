@@ -72,7 +72,6 @@ interface RuntimeHost {
   readonly conversationRecords: Map<string, ConversationRecord>;
   readonly hooks: HookBus;
   readonly replyGates: ReplyGateEpochs;
-  enqueueConversationMemory(record: ConversationRecord): Promise<void>;
   groupReplyOptions(incoming: ParsedIncomingMessage): { replyToMessageId?: number };
   isAdminUser(userId: number | string): boolean;
   isReplySenderAllowed(userId: number | string): boolean;
@@ -107,8 +106,6 @@ interface RuntimeHost {
     emojiMarkers?: readonly string[]
   ): Promise<{ segmented: boolean; content: string }>;
   rewriteToneText(text: string, context?: ToneRewriteContext): Promise<string>;
-  scheduleMemoryCompression(record: ConversationRecord): void;
-  scheduleMemoryDrain(): void;
 }
 
 export async function runtime_sendAssistantReply(this: RuntimeHost,
@@ -419,10 +416,6 @@ export async function runtime_deliverReplyOutbox(
   const generatedImageUrls = generatedImageAssets
     .filter((image) => !isEmojiImageResult(image))
     .flatMap((image) => image.url ? [image.url] : []);
-  const containsEmoji = generatedImageAssets.some(isEmojiImageResult);
-  const pureEmojiReply = !payload.text
-    && containsEmoji
-    && generatedImageAssets.every(isEmojiImageResult);
   let remoteReceipt = delivery?.remoteReceipt;
   if (delivery?.phase === "send" || !delivery) {
       if (!gateway) throw new OutboxDisconnectedError("OneBot is not connected.");
@@ -465,20 +458,11 @@ export async function runtime_deliverReplyOutbox(
           this.config,
           this.protectedConversationIds()
         );
-      } else if (!pureEmojiReply) {
-        this.scheduleMemoryCompression(record);
       }
       return record;
     };
     if (delivery) {
       await delivery.settleStep("conversation_projection", settleConversation);
-      await delivery.settleStep("memory_enqueue", async () => {
-        if (pureEmojiReply) return;
-        const record = this.conversationRecords.get(conversationRecordId(incoming));
-        if (!record) throw new Error(`Conversation projection is missing: ${conversationRecordId(incoming)}`);
-        await this.enqueueConversationMemory(record);
-        this.scheduleMemoryDrain();
-      });
     } else settleConversation();
 
     const settleRequestLog = () => payload.logRunId ? appendRequestLog({

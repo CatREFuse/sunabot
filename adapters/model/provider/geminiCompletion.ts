@@ -15,9 +15,9 @@ import { errorMessage, isRecord, parseJson } from "./valueUtils.js";
 import { processProviderToolRound } from "./toolRound.js";
 import { assertMappedProviderToolDefinitions } from "../../../services/tools/providerToolSchema.js";
 import {
-  assertWorkingMemoryDecisionResolved,
-  geminiWorkingMemoryToolConfig
-} from "./workingMemoryDecision.js";
+  assertMemoryToolDecisionsResolved,
+  geminiMemoryToolConfig
+} from "./memoryToolDecisions.js";
 
 export async function completeGeminiGenerateContent(
   context: ProviderAdapterContext,
@@ -49,7 +49,7 @@ export async function completeGeminiGenerateContent(
       systemInstruction: system ? { parts: [{ text: system }] } : undefined,
       contents,
       tools: definitions.length ? [{ functionDeclarations: definitions }] : undefined,
-      toolConfig: geminiWorkingMemoryToolConfig(options),
+      toolConfig: geminiMemoryToolConfig(options),
       generationConfig: {
         temperature: context.provider.temperature,
         maxOutputTokens: context.provider.maxOutputTokens,
@@ -108,7 +108,7 @@ export async function completeGeminiGenerateContent(
     });
     state.toolCallCount = claimBusinessToolCalls(state.toolCallCount, calls, maxToolCalls);
     if (!calls.length) {
-      assertWorkingMemoryDecisionResolved(options);
+      assertMemoryToolDecisionsResolved(options);
       if (!text) throw new Error("模型没有返回可发送内容。");
       return { kind: "completed", text };
     }

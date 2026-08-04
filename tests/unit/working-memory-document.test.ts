@@ -6,11 +6,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   WORKING_MEMORY_FILE,
   WORKING_MEMORY_MAX_BYTES,
-  appendWorkingMemoryDocumentItem,
   readWorkingMemoryDocument,
+  renderWorkingMemoryMarkdown,
   replaceWorkingMemoryDocument,
   workingMemoryItemsFromFacts
 } from "../../services/memory/public.js";
+import { appendWorkingMemoryDocumentItem } from "../../services/memory/workingMemoryDocument.js";
 import type { AppConfig } from "../../src/types.js";
 import { createAdminTestConfig } from "./admin-fixtures.js";
 
@@ -85,6 +86,32 @@ describe("working-memory Markdown document", () => {
     await fs.writeFile(filePath, "x".repeat(WORKING_MEMORY_MAX_BYTES + 1));
     await expect(readWorkingMemoryDocument(config)).rejects.toMatchObject({
       code: "WORKING_MEMORY_TOO_LARGE"
+    });
+  });
+
+  it("reads a legacy 64 KiB document whose trailing newline made the raw file one byte larger", async () => {
+    const items = workingMemoryItemsFromFacts(
+      Array.from({ length: 16 }, (_, index) => ({ id: `working-limit-${index}`, fact: "x" })),
+      [],
+      { conversationId: "dream:limit", conversationScope: "dream" },
+      (_, index) => `working-limit-${index}`
+    );
+    let remaining = WORKING_MEMORY_MAX_BYTES - Buffer.byteLength(renderWorkingMemoryMarkdown(items), "utf8");
+    for (const item of items) {
+      const added = Math.min(Math.max(remaining, 0), 3_999);
+      item.content += "x".repeat(added);
+      remaining -= added;
+    }
+    const content = renderWorkingMemoryMarkdown(items);
+    expect(remaining).toBe(0);
+    expect(Buffer.byteLength(content, "utf8")).toBe(WORKING_MEMORY_MAX_BYTES);
+
+    const filePath = path.join(config.persona.agentWorkspace, WORKING_MEMORY_FILE);
+    await fs.writeFile(filePath, `${content}\n`);
+
+    await expect(readWorkingMemoryDocument(config)).resolves.toMatchObject({
+      content,
+      items: expect.arrayContaining([expect.objectContaining({ id: "working-limit-0" })])
     });
   });
 

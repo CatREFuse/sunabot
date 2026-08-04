@@ -12,8 +12,6 @@ import type { ConversationRecord } from "../types.js";
 import type { SunaRuntime } from "../runtime.js";
 
 export const SCHEDULED_CALLBACK_EVENT_KIND = "scheduled_callback_delivery";
-export const MEMORY_DEBT_ALERT_TASK_ID = "system:memory-debt-alert";
-export const MEMORY_DEBT_ALERT_TEXT = "有超过 100 条记忆待处理，请到管理台「记忆」查看状态。";
 
 export interface RuntimeLiteralSystemNotificationInput {
   id: string;
@@ -74,43 +72,6 @@ export async function enqueueLiteralSystemNotification(
   return { queued: true as const, conversationId: target.conversationId, runId };
 }
 
-export async function enqueueMemoryDebtAlert(
-  host: SunaRuntime,
-  input: { episodeId: string; targetConversationId?: string; triggeredAt?: Date }
-) {
-  const resolved = input.targetConversationId
-    ? {
-        resolved: true as const,
-        conversationId: validDebtAlertTargetConversationId(input.targetConversationId)
-      }
-    : await resolveMemoryDebtAlertTarget(host);
-  if (!resolved.resolved) return { queued: false as const, reason: resolved.reason };
-  return enqueueLiteralSystemNotification(host, {
-    id: `memory-debt:${requiredEpisodeId(input.episodeId)}`,
-    kind: "memory-debt-alert",
-    name: "记忆处理提醒",
-    text: MEMORY_DEBT_ALERT_TEXT,
-    target: { conversationId: resolved.conversationId, mentionUserIds: [] },
-    triggeredAt: input.triggeredAt
-  });
-}
-
-export async function resolveMemoryDebtAlertTarget(host: SunaRuntime) {
-  const administratorUserId = configuredAdministratorUserId(host.config.bot.adminQq);
-  if (administratorUserId == null) {
-    return { resolved: false as const, reason: "administrator_unconfigured" as const };
-  }
-  const accountId = await host.resolveAdminNotificationAccountId?.();
-  if (accountId == null) {
-    return { resolved: false as const, reason: "account_unavailable" as const };
-  }
-  const normalizedAccountId = validAccountId(accountId);
-  const conversationId = normalizedAccountId === "primary"
-    ? `private:${administratorUserId}`
-    : `account:${normalizedAccountId}:private:${administratorUserId}`;
-  return { resolved: true as const, conversationId };
-}
-
 function resolveTarget(
   record: ConversationRecord | undefined,
   target: ScheduledTaskTarget
@@ -140,38 +101,6 @@ function resolveTarget(
     groupId: numericId,
     mentionUserIds: target.mentionUserIds.map((value) => Number(value))
   };
-}
-
-function configuredAdministratorUserId(value: unknown) {
-  if (typeof value !== "string" || !/^[1-9]\d*$/u.test(value.trim())) return undefined;
-  const userId = Number(value.trim());
-  return Number.isSafeInteger(userId) && userId > 0 ? userId : undefined;
-}
-
-function validAccountId(value: string) {
-  const normalized = value.trim();
-  if (!/^[A-Za-z0-9_-]{1,64}$/u.test(normalized)) {
-    throw new Error("Administrator notification account id is invalid.");
-  }
-  return normalized;
-}
-
-function validDebtAlertTargetConversationId(value: string) {
-  const normalized = value.trim();
-  const match = normalized.match(/^(?:account:[A-Za-z0-9_-]{1,64}:)?private:([1-9]\d*)$/u);
-  const userId = Number(match?.[1]);
-  if (!match || !Number.isSafeInteger(userId) || userId <= 0) {
-    throw new Error("Memory debt alert target conversation id is invalid.");
-  }
-  return normalized;
-}
-
-function requiredEpisodeId(value: string) {
-  const normalized = value.trim();
-  if (!/^[A-Za-z0-9_-]{1,128}$/u.test(normalized)) {
-    throw new Error("Memory debt alert episode id is invalid.");
-  }
-  return normalized;
 }
 
 function requiredField(value: string, field: string, maxLength: number) {

@@ -5,6 +5,7 @@ import {
   projectDreamContext,
   projectDreamContextPayload
 } from "../../src/runtime/dreamContextProjection.js";
+import { isCurrentDreamPipelineInput } from "../../src/runtime/dreamPipelineSupport.js";
 
 const SEED = "a".repeat(64);
 const OTHER_SEED = "b".repeat(64);
@@ -23,15 +24,15 @@ describe("Dream context projection", () => {
     expect(serialized).not.toContain("/Users/tanshow/Developer/sunabot");
     expect(serialized).not.toContain("super-secret-value");
     expect(serialized).not.toContain("extension-secret");
+    expect(serialized).not.toContain("sourceWorkingMemoryIds");
+    expect(serialized).not.toContain("sourceLongTermMemoryIds");
     expect(serialized).not.toMatch(/人物-[a-f0-9]{24}/u);
     expect(serialized).not.toMatch(/\b(?:person|profile|context|event|causal|subject|task|schedule|impression):[a-f0-9]{24}\b/u);
     expect(serialized).toContain("[已隐藏路径]");
     expect(serialized).toContain("[已隐藏敏感信息]");
     expect(findForbiddenKeys(payload)).toEqual([]);
 
-    const working = objectArray(payload.workingMemories)[0]!;
     const longTerm = objectArray(payload.longTermMemories)[0]!;
-    const workingMemory = objectValue(working.memory);
     const longTermMemory = objectValue(longTerm.memory);
     const profile = objectArray(payload.userProfiles)[0]!;
     const conversation = objectArray(payload.observedConversations)[0]!;
@@ -39,30 +40,14 @@ describe("Dream context projection", () => {
     const director = objectValue(payload.plannedDailySchedule);
     const directorItem = objectArray(director.items)[0]!;
 
-    expect(workingMemory).toMatchObject({
-      id: "working-1",
-      factuality: "factual",
-      userId: "12345678",
-      userIds: ["12345678"],
-      userName: "海老师",
-      addressNames: ["海老师"],
-      conversationId: "private:12345678",
-      contextKey: "private:12345678",
-      eventKey: "event:old-station",
-      causalChainKey: "cause:promise-and-task",
-      subjectKey: "subject:12345678",
-      eventType: "task",
-      importance: 0.8,
-      futureRelevance: 0.9,
-      emotionalSalience: 0.7,
-      promoteToLongTerm: true
-    });
+    expect(String(payload.workingMemory)).toContain("海老师（12345678）");
+    expect(String(payload.workingMemory)).not.toContain("/Users/tanshow/Developer/sunabot");
+    expect(String(payload.workingMemory)).toContain("[已隐藏敏感信息]");
     expect(longTermMemory).toMatchObject({
       userId: "12345678",
       eventKey: "event:old-station",
       causalChainKey: "cause:promise-and-task"
     });
-    expect(String(workingMemory.fact)).toContain("海老师（12345678）");
     expect(profile).toMatchObject({
       id: "profile_12345678",
       userId: "12345678",
@@ -81,8 +66,8 @@ describe("Dream context projection", () => {
       id: "director-item-secret",
       participants: ["海老师"]
     });
-    expect(payload.sourceMemoryIds).toEqual(["working-1", "long-1"]);
-    expect(payload.fieldKnowledgeEvidenceIds).toEqual(["working-1"]);
+    expect(payload.sourceMemoryIds).toEqual(["long-1"]);
+    expect(payload.fieldKnowledgeEvidenceIds).toEqual([]);
     expect(payload.fieldKnowledgeWritable).toBe(false);
     expect(payload.recentWindowHours).toBe(24);
     expect(objectArray(payload.activeTasks)[0]).toMatchObject({ enabled: true, status: "running" });
@@ -105,7 +90,7 @@ describe("Dream context projection", () => {
     expect(payload.scheduledFor).toBe("2026-07-20T04:00:00.000+08:00");
     expect(Object.keys(payload)).toEqual([
       "schemaVersion", "seed", "localDate", "scheduledFor", "timeZone", "memoryWindow",
-      "workingMemories", "longTermMemories", "recallStats", "personaEvidenceIds",
+      "workingMemory", "longTermMemories", "recallStats", "personaEvidenceIds",
       "fieldKnowledgeEvidenceIds", "fieldKnowledgeWritable", "recentWindowHours",
       "sourceMemoryIds", "userProfiles", "observedConversations", "activeTasks",
       "plannedDailySchedule", "personaImpressions", "persona"
@@ -130,6 +115,62 @@ describe("Dream context projection", () => {
 
     expect(payload.fieldKnowledgeWritable).toBe(true);
     expect(objectValue(payload.persona).air).toBe(raw.persona.air.replaceAll("\r\n", "\n"));
+  });
+
+  it("reprojects persisted cron task schedules without dropping their time zone", () => {
+    const raw = sensitivePayload();
+    const activeTasks = raw.activeTasks as Array<Record<string, unknown>>;
+    activeTasks.push({
+      id: "task-cron",
+      title: "每日回归复核",
+      enabled: true,
+      status: "running",
+      schedule: { kind: "cron", expression: "0 9 * * *", timezone: "Asia/Shanghai" },
+      context: "每天复核回归结果。",
+      targets: [{ conversationId: "private:12345678", mentionUserIds: [] }]
+    });
+
+    const persisted = projectDreamContextPayload(raw);
+    const cronTask = objectArray(persisted.activeTasks).find((task) => task.id === "task-cron");
+
+    expect(objectValue(cronTask?.schedule)).toEqual({
+      kind: "cron",
+      expression: "0 9 * * *",
+      timeZone: "Asia/Shanghai"
+    });
+    expect(isCurrentDreamPipelineInput({
+      schemaVersion: 1,
+      workingDigest: "a".repeat(64),
+      longTermDigest: "b".repeat(64),
+      payload: persisted
+    }, {
+      schemaVersion: 1,
+      workingDigest: "a".repeat(64),
+      longTermDigest: "b".repeat(64),
+      payload: persisted
+    })).toBe(true);
+  });
+
+  it("keeps a persisted legacy identity alias compatible with Dream input replay", () => {
+    const raw = sensitivePayload();
+    const longTermMemories = raw.longTermMemories as Array<Record<string, unknown>>;
+    longTermMemories[0] = {
+      ...longTermMemories[0],
+      memory: {
+        ...(longTermMemories[0]?.memory as Record<string, unknown>),
+        fact: `人物-${"a".repeat(24)} 负责发布复核。`
+      }
+    };
+
+    const persisted = projectDreamContextPayload(raw);
+    const input = {
+      schemaVersion: 1,
+      workingDigest: "a".repeat(64),
+      longTermDigest: "b".repeat(64),
+      payload: persisted
+    };
+
+    expect(isCurrentDreamPipelineInput(input, input)).toBe(true);
   });
 
   it("keeps AIR identities readable without a local alias-binding contract", () => {
@@ -199,9 +240,7 @@ describe("Dream context projection", () => {
     const absolutePath = "/Users/alice/private/identity.txt";
     const githubToken = "ghp_identitysecretvalue";
 
-    const workingMemory = objectValue(raw.workingMemories[0]!.memory);
-    workingMemory.userName = tokenAssignment;
-    workingMemory.addressNames = [email];
+    raw.workingMemory = `${raw.workingMemory}\n${tokenAssignment}\n${email}`;
     raw.userProfiles[0]!.id = privateKey;
     raw.observedConversations[0]!.messages[0]!.senderName = bearer;
     raw.activeTasks[0]!.id = signedUrl;
@@ -223,12 +262,8 @@ describe("Dream context projection", () => {
 
     expect(serialized).toContain("[已隐藏敏感信息]");
     expect(serialized).toContain("[已隐藏路径]");
-    const projectedMemory = objectValue(objectArray(payload.workingMemories)[0]?.memory);
-    expect(projectedMemory).toMatchObject({
-      userId: "12345678",
-      userName: "token=[已隐藏敏感信息]",
-      addressNames: ["[已隐藏敏感信息]"]
-    });
+    expect(String(payload.workingMemory)).toContain("token=[已隐藏敏感信息]");
+    expect(String(payload.workingMemory)).toContain("[已隐藏敏感信息]");
     expect(objectArray(payload.userProfiles)[0]?.id).toBe("[已隐藏敏感信息]");
     const projectedConversation = objectArray(payload.observedConversations)[0]!;
     expect(objectArray(projectedConversation.messages)[0]?.senderName).toBe("[已隐藏敏感信息]");
@@ -258,11 +293,8 @@ describe("Dream context projection", () => {
     const first = projectDreamContextPayload(raw);
     const second = projectDreamContextPayload(raw);
     const rotated = projectDreamContextPayload({ ...raw, seed: OTHER_SEED });
-    const firstMemory = objectValue(objectArray(first.workingMemories)[0]!.memory);
-    const rotatedMemory = objectValue(objectArray(rotated.workingMemories)[0]!.memory);
-
     expect(second).toEqual(first);
-    expect(rotatedMemory).toEqual(firstMemory);
+    expect(rotated.workingMemory).toEqual(first.workingMemory);
     expect(rotated.seed).toBe(OTHER_SEED);
     expect(first.seed).toBe(SEED);
   });
@@ -272,19 +304,19 @@ describe("Dream context projection", () => {
     const first = projectDreamContext(huge);
     const second = projectDreamContext(huge);
     const payload = first.payload;
-    const working = objectArray(payload.workingMemories);
     const longTerm = objectArray(payload.longTermMemories);
-    const retainedIds = [...working, ...longTerm].map((item) => String(item.id));
+    const retainedIds = longTerm.map((item) => String(item.id));
 
     expect(second).toEqual(first);
     expect(first.byteLength).toBe(dreamContextPayloadByteLength(payload));
     expect(first.byteLength).toBeLessThanOrEqual(DREAM_CONTEXT_PROJECTION_LIMITS.totalPayloadBytes);
-    expect(working.length).toBeLessThanOrEqual(DREAM_CONTEXT_PROJECTION_LIMITS.arrays.workingMemories);
+    expect(Array.from(String(payload.workingMemory)).length)
+      .toBeLessThanOrEqual(DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.workingMemory);
     expect(longTerm.length).toBeLessThanOrEqual(DREAM_CONTEXT_PROJECTION_LIMITS.arrays.longTermMemories);
     expect(objectArray(payload.userProfiles).length).toBeLessThanOrEqual(DREAM_CONTEXT_PROJECTION_LIMITS.arrays.userProfiles);
     expect(objectArray(payload.observedConversations).length).toBeLessThanOrEqual(DREAM_CONTEXT_PROJECTION_LIMITS.arrays.conversations);
     expect(objectArray(payload.activeTasks).length).toBeLessThanOrEqual(DREAM_CONTEXT_PROJECTION_LIMITS.arrays.activeTasks);
-    for (const item of [...working, ...longTerm]) {
+    for (const item of longTerm) {
       const fact = String(objectValue(item.memory).fact);
       expect([...fact].length).toBeLessThanOrEqual(DREAM_CONTEXT_PROJECTION_LIMITS.stringChars.memoryFact);
     }
@@ -298,10 +330,10 @@ describe("Dream context projection", () => {
     expect(() => projectDreamContextPayload({ ...sensitivePayload(), seed: "not-a-digest" }))
       .toThrow("seed must be a SHA-256 digest");
     const raw = sensitivePayload();
-    raw.workingMemories[0]!.id = "sk-supersecretmemoryid";
+    raw.longTermMemories[0]!.id = "sk-supersecretmemoryid";
     expect(() => projectDreamContextPayload(raw)).toThrow("safe opaque memory id");
     const oversized = sensitivePayload();
-    oversized.workingMemories[0]!.id = "m".repeat(129);
+    oversized.longTermMemories[0]!.id = "m".repeat(129);
     expect(() => projectDreamContextPayload(oversized)).toThrow("safe opaque memory id");
   });
 });
@@ -331,6 +363,8 @@ function sensitivePayload() {
       futureRelevance: 0.9,
       emotionalSalience: 0.7,
       promoteToLongTerm: true,
+      sourceWorkingMemoryIds: ["working-legacy-1"],
+      sourceLongTermMemoryIds: ["long-legacy-1"],
       arbitrary: "extension-secret"
     },
     recallStats: null,
@@ -353,10 +387,7 @@ function sensitivePayload() {
       end: "2026-07-20T04:00:00.000+08:00",
       secret: "extension-secret"
     },
-    workingMemories: [memory(
-      "working-1",
-      "海老师（12345678）完成了承诺，记录在 /Users/tanshow/Developer/sunabot；api_key=super-secret-value。"
-    )],
+    workingMemory: "海老师（12345678）完成了承诺，记录在 /Users/tanshow/Developer/sunabot；api_key=super-secret-value。",
     longTermMemories: [memory("long-1", "海老师曾在旧车站提出同一个长期计划。")],
     recallStats: [{
       recordId: "long-1",
@@ -462,10 +493,10 @@ function sensitivePayload() {
 function oversizedPayload() {
   const raw = sensitivePayload();
   const memory = (prefix: string, index: number) => ({
-    ...raw.workingMemories[0]!,
+    ...raw.longTermMemories[0]!,
     id: `${prefix}-${index}`,
     memory: {
-      ...raw.workingMemories[0]!.memory,
+      ...raw.longTermMemories[0]!.memory,
       id: `${prefix}-${index}`,
       fact: `${prefix}-${index}:${"梦".repeat(5_000)}`,
       userId: undefined,
@@ -474,9 +505,9 @@ function oversizedPayload() {
       addressNames: []
     }
   });
-  raw.workingMemories = Array.from({ length: 100 }, (_, index) => memory("working", index));
+  raw.workingMemory = "工作记忆".repeat(40_000);
   raw.longTermMemories = Array.from({ length: 100 }, (_, index) => memory("long", index));
-  raw.sourceMemoryIds = [...raw.workingMemories, ...raw.longTermMemories].map((item) => item.id);
+  raw.sourceMemoryIds = raw.longTermMemories.map((item) => item.id);
   raw.personaEvidenceIds = [...raw.sourceMemoryIds];
   raw.recallStats = raw.longTermMemories.map((item) => ({
     recordId: item.id,

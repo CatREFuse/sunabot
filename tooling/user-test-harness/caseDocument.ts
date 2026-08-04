@@ -69,7 +69,7 @@ function validateUserTestCase(value: unknown): UserTestCase {
   ]);
   if (input.schemaVersion !== 1) throw new Error("USER_TEST_CASE_VERSION_UNSUPPORTED");
   const kind = input.kind;
-  if (kind !== "conversation" && kind !== "memory_compression" && kind !== "dream") {
+  if (kind !== "conversation" && kind !== "dream") {
     throw new Error("USER_TEST_CASE_KIND_INVALID");
   }
   const expected = record(input.expected, "USER_TEST_CASE_EXPECTED_INVALID");

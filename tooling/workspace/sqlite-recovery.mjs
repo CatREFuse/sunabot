@@ -24,17 +24,18 @@ const PARTIAL_OWNER_FILE = ".recovery-owner.json";
 const LOCK_FILE = ".sqlite-recovery.lock";
 const DEFAULT_AGENT_ID = "plana";
 const AGENT_ID_PATTERN = /^[a-z][a-z0-9-]{1,31}$/;
-const LEGACY_APPLICATION_REQUIRED_TABLES = [
+const APPLICATION_REQUIRED_TABLES = [
   "app_metadata",
   "conversations",
   "image_history",
-  "memory_batches",
   "memory_records",
-  "memory_scheduler",
   "request_logs"
 ];
+const LEGACY_APPLICATION_REQUIRED_TABLES = [
+  ...APPLICATION_REQUIRED_TABLES
+];
 const CURRENT_APPLICATION_REQUIRED_TABLES = [
-  ...LEGACY_APPLICATION_REQUIRED_TABLES,
+  ...APPLICATION_REQUIRED_TABLES,
   "admin_sessions",
   "agent_accounts",
   "agents",

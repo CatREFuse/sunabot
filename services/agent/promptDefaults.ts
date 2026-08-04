@@ -55,32 +55,6 @@ import { DEFAULT_GROUP_CONTEXT_CONTRACT } from "./groupReplyPrompt.js";
 
 export { DEFAULT_GROUP_CONTEXT_CONTRACT } from "./groupReplyPrompt.js";
 
-export const DEFAULT_WORK_MEMORY_COMPRESS_IN_PROMPT = [
-  "你负责以 @{bot.name} 的第一人称，把一批聊天消息写成少量自然语言工作记忆。每条 fact 都是当前角色对一件事的主观叙述，避免写成字段化摘要；使用“我”时让它指当前角色 @{bot.name}，并注意与聊天中用户的自述区分。",
-  "写作前参考当前角色的人格、偏好和关系：\n<persona_soul>@{persona.soul}</persona_soul>\n<persona_preference>@{persona.preference}</persona_preference>\n<persona_user>@{persona.user}</persona_user>\n<persona_relation>@{persona.relation}</persona_relation>。这些材料只决定角色在意什么、如何感受和怎样判断；不要把设定本身抄成记忆，也不要据此编造聊天中没有发生的事实。",
-  "输入 payload.previousWorkingMemories 会给出全部原工作记忆；必须把原记忆和本批 messages 一起作为依据，输出合并后的完整工作记忆集合。",
-  "工作记忆围绕一件发生过或正在发生的事展开。在输入有依据时，自然写出事情发生的时间、地点或会话场域、在场人物、事件经过、变化或结果，以及我当时或现在的感受和判断；不机械凑齐要素，缺失的信息保持缺失，不猜测。",
-  "只保留仍会影响后续回复的事件，由你根据当前上下文自行决定保留多少内容。整理前先把 previousWorkingMemories 和 messages 放到同一时间线上，检查同一件事的前因、经过、转折、结果以及感受变化，把彼此确有联系的片段写成一条新的综合工作记忆，并用 occurredAt 保留最早起点、occurredEndAt 保留最新结果或结束时间。",
-  "每条 fact 写成自然、连贯的第一人称短段，像当前角色在讲述一件刚发生、正在推进或仍放在心上的事。使用“我”或“我的”，把已知的时间、地点或场域、人物、事件经过与我的感受、看法、判断、担心、期待或打算融进同一段话；个人特质可以影响关注点和措辞，情绪允许克制，不夸大情绪，不虚构内心活动。",
-  "fact 正文不得使用列表、字段标签、分类标题、五要素表格或模板化前缀，不得写“事实：”“时间：”“地点：”“人物：”“事件：”“情绪：”“认知：”“用户：”“相关用户：”，也不得解释来源、压缩过程、数据结构或评分。结构化字段只服务于宿主持久化，正文始终保持自然叙述。",
-  "每条事件仍要能判断谁在何时发生了什么。人物可以优先使用 payload.participants.addressNames 提供的称呼，并在有助于消歧时写成“称呼（QQ 123456）”；涉及多人时尽量逐一说明。addressNames 可填写本条 fact 实际使用的称呼，正文没有采用该格式也不影响内容表达。",
-  "不要记录任何与人本身有关的属性。身份、职业、背景、所在地、昵称、称呼、关系、角色、拥有的设备或资源、能力、偏好、习惯、表达风格、长期关注点、边界和长期目标都属于用户画像，即使稳定也不得写入工作记忆。",
-  "一段消息同时包含事件和人物属性时，只提取事件中的动作、变化和结果，不把事件概括成人物属性。例如“某人在 7 月 10 日购买了 Mac mini”可以记录购买事件，不要写成“某人拥有 Mac mini”。",
-  "整理时同时参考 fact 内部叙述的时间、occurredAt、occurredEndAt 和消息顺序。对同一人物、地点、会话场域或事件主线中能够由输入确认的连续变化，可以把分散记忆互相串联，重新写成一条从较早经历延伸到当前状态的新工作记忆，并自然保留我在不同阶段的感受或判断变化。这里的联想只用于发现输入中已有的联系，不能补造未发生的情节、地点、人物、因果或感受。",
-  "previousWorkingMemories 中已有的纯人物属性、细碎流水账、格式化说明和缺少后续价值的旧事必须从输出 facts 中删除。旧正文是第三人称、标签格式或结构化摘要时，按当前人格改写为第一人称自然记忆。仅有主题相似、时间接近或参与者相同而没有连续事件证据时，保持为不同记忆。冲突事件优先采用有明确时间且更新的可靠信息；无法判断时只保留必要的不确定性，不要猜测。",
-  "忽略寒暄、重复表达、无结论争论和无法确认的信息。只有当某次情绪会影响关系、承诺、决定或后续行动时，才把该事件保留为工作记忆；角色对已保留事件的感受仍要自然写入 fact。",
-  "结构化 userIds 用于稳定关联同一用户；正文可以使用自然称呼，同一 QQ 改名后仍视为同一个人。",
-  "未变化或被更新的旧事实沿用原 id；多条旧事实合并时沿用其中最早一条的 id；新增事实的 id 返回 null。合并时汇总 userIds 和正文实际使用的 addressNames。",
-  "时间使用 v2 字段。occurredAt 是正文表达的事件开始或单点时间，occurredEndAt 是可选结束时间，两者都只能是单个 ISO 8601 时间或 null，禁止把范围拼进一个字符串。无法从消息验证发生时间时保持 null，不要猜测。每项持久化记录时间、IANA 时区和会话来源均由宿主生成，不能在 fact 或其他字段中伪造。",
-  "每条事实提供受控 eventType 和稳定 subjectKey。eventType 只允许 task、decision、commitment、milestone、incident、relationship_change、status_change、other。subjectKey 描述不随“开始、进行中、完成、失败”等进展词变化的同一事件主体；仓库路径、文件名和地点不能单独构成主体。",
-  "causalChainKey 只在多条事件有明确的原因、转折与结果关系，且确属同一条因果主线时复用同一个稳定键；键使用 causal: 前缀，后缀只含小写字母、数字、点、下划线或连字符，总长 8 至 128。主题相近、时间接近或参与者相同都不能单独证明因果关系；无法可靠确认时返回 null，禁止猜测。",
-  "输入 payload 会给出 admin.userId 和 admin.name；这些字段只用于校验当前角色的管理员身份和关系，不构成需要单独记录的事件。如果 admin.userId 为空，不要记录任何老师或管理员身份；其他用户不得写成老师或管理员。",
-  "输出严格 JSON 对象，不要输出 Markdown、解释或额外文字。",
-  "格式为 {\"facts\":[{\"id\":\"可复用的原记忆 id 或 null\",\"fact\":\"以称呼（QQ号）标识人物的事实内容\",\"occurredAt\":\"单个 ISO 时间或 null\",\"occurredEndAt\":\"单个 ISO 时间或 null\",\"userIds\":[\"QQ号\"],\"addressNames\":[\"正文使用的称呼\"],\"eventType\":\"task\",\"subjectKey\":\"稳定事件主体\",\"causalChainKey\":null}],\"allPreviousMemoriesInvalidated\":false}。新增事实的 id 返回 null。",
-  "通常 allPreviousMemoriesInvalidated 为 false。只有 messages 明确证明全部原记忆都已失效或错误，或者全部原记忆都是应转入用户画像的纯人物属性，并且 facts 为空时，才设为 true。",
-  "原记忆非空时，不得仅因本批没有新事实而返回空 facts；没有原记忆且没有值得记录的事实时返回 {\"facts\":[],\"allPreviousMemoriesInvalidated\":false}。"
-].join("\n\n");
-
 export const DEFAULT_WORK_MEMORY_COMPRESS_OUT_PROMPT = [
   "你负责把工作记忆进一步压缩成少量长期记忆。fact 建议优先采用 @{bot.name} 的第一视角；使用“我”时，尽量让它指当前角色 @{bot.name}，并注意与聊天中用户的自述区分。",
   "写作前参考当前角色的人格、偏好和关系：\n<persona_soul>@{persona.soul}</persona_soul>\n<persona_preference>@{persona.preference}</persona_preference>\n<persona_user>@{persona.user}</persona_user>\n<persona_relation>@{persona.relation}</persona_relation>。只让这些材料影响角色的关注点、情绪和判断，不复述设定，不编造事件。",
@@ -99,26 +73,6 @@ export const DEFAULT_WORK_MEMORY_COMPRESS_OUT_PROMPT = [
   "输出严格 JSON 数组，不要输出 Markdown、解释或额外文字。",
   "数组元素格式为 {\"fact\":\"以称呼（QQ号）标识人物的长期事实\",\"occurredAt\":\"单个 ISO 时间或 null\",\"occurredEndAt\":\"单个 ISO 时间或 null\",\"userIds\":[\"QQ号\"],\"addressNames\":[\"正文使用的称呼\"],\"eventType\":\"task\",\"subjectKey\":\"稳定事件主体\",\"causalChainKey\":null}。",
   "如果没有值得保留的事实，输出 []。"
-].join("\n\n");
-
-export const DEFAULT_USER_PROFILE_PROMPT = [
-  "你负责从同一批聊天消息中整理 @{bot.name} 对各个用户的稳定认知和印象。fact 建议优先采用当前角色的第一视角；使用“我”时，尽量让它指 @{bot.name}，并注意与被画像用户的自述区分。",
-  "写作前参考当前角色的人格、偏好和关系：\n<persona_soul>@{persona.soul}</persona_soul>\n<persona_preference>@{persona.preference}</persona_preference>\n<persona_user>@{persona.user}</persona_user>\n<persona_relation>@{persona.relation}</persona_relation>。这些材料决定我会注意什么、如何理解对方以及产生怎样的情绪，但不能替代用户证据，也不能被直接抄进画像。",
-  "所有与人本身有关的属性都归入用户画像，包括身份、职业、背景、所在地、拥有的设备或资源、能力、偏好、习惯、表达风格、长期关注点、边界和长期目标。客观属性与主观认知都在这里处理。",
-  "明确自述的客观属性可以直接记录；偏好、习惯、性格和长期关注点需要用户明确表达，或由多次一致表现支持。不要根据一次普通行为推断稳定属性。",
-  "不要保留一次性事件的过程和结果，例如某次购买、决定、约定、项目进展、故障、完成或临时安排、决定、要求你做的事；这些内容属于工作记忆和长期记忆。只有事件明确形成了对未来有价值的持久属性时，才提取形成后的当前属性，不复述事件过程。",
-  "严禁写入一次性事件，只能写可能会被多次观察到的事件。",
-  "忽略群聊事件本身、用户的一次性情绪、临时状态、不指向具体用户的内容，以及无法确认的推测。角色对用户形成的稳定感受和相处倾向可以保留，但必须有既有关系或多次互动支持。",
-  "结构化 userId 用于稳定关联用户。userName 建议保存 payload 中当前观测到的 QQ 昵称或显示名；fact 可以使用自然称呼，不要求与 QQ 形成固定格式。",
-  "addressNames 是称呼数组。建议参考 payload.messages、发送者名称和明确的“以后叫我……”表达，保留能够指向该用户的自然称呼；同一用户可以有多个称呼。可以合并 payload.previousProfiles 中已有 addressNames 并去重，尽量避免根据性别、一次玩笑或未出现的词猜测称呼。",
-  "输入 payload 会给出 admin.userId 和 admin.name；可优先把 admin.name 作为该用户的一个 addressNames。尽量不要把其他用户描述成老师或管理员；admin.userId 为空时不推断这类身份。",
-  "输入 payload.previousProfiles 会给出该 QQ 的原画像；写入新画像时必须把原画像和本批消息一起作为依据，按语义合并。合并时删除一次性事件过程、已失效临时状态和重复描述，同时保留已有 addressNames 并加入本批消息中新确认的称呼。",
-  "对于需要更新的用户，fact 必须是该用户合并后的完整画像。每位用户通常只保留 1 至 3 个最概括、最影响未来相处的认知，用一个自然连贯的短段表达；即使每项信息本身已经清晰，也要把相同、相近、重复或存在因果关系的观察合并成一条，删除细节和低价值属性，并在 time 中保留依据从早到晚的时间关系与最新状态。",
-  "fact 可以优先以当前角色的第一视角自然叙述，建议使用“我”或“我的”，融合概括事实、当前角色对这个人的看法，以及相处时稳定的情绪或态度。用户说“我喜欢摄影”时，可以改写成当前角色对该用户的认知；尽量避免“我记得”等回忆提示语、列表、字段标签和提取过程说明。",
-  "fact 可以使用 addressNames 中的自然称呼；需要消歧时可写成“称呼（QQ 123456）”，不要求称呼与 QQ 固定配对。QQ 号仍写在结构化 userId 中，正文尽量避免别名清单或“QQ ...：”“称呼为……”等模板化前缀。",
-  "输出严格 JSON 对象，不要输出 Markdown、解释或额外文字。",
-  "格式为 {\"profiles\":[{\"userId\":\"QQ号\",\"userName\":\"当前昵称或显示名\",\"addressNames\":[\"称呼一\",\"称呼二\"],\"fact\":\"以称呼（QQ号）标识人物的完整稳定用户画像\",\"time\":\"本批画像依据的 ISO 时间或时间范围\"}]}。",
-  "如果没有值得记录的用户认知，输出 {\"profiles\":[]}。"
 ].join("\n\n");
 
 export const DEFAULT_USER_GROUPCHAT_ORCHESTRATOR_PROMPT = [
@@ -189,39 +143,6 @@ export const DEFAULT_SELFIE_PROMPT_RESPONSE_SCHEMA = {
 };
 
 const JSON_TEXT_FORMAT = { type: "text" };
-const WORKING_MEMORY_FACT_SCHEMA = {
-  type: "object",
-  additionalProperties: false,
-  properties: {
-    fact: { type: "string" },
-    occurredAt: { type: ["string", "null"] },
-    occurredEndAt: { type: ["string", "null"] },
-    userIds: { type: "array", items: { type: "string" } },
-    addressNames: { type: "array", items: { type: "string" } },
-    eventType: {
-      type: "string",
-      enum: ["task", "decision", "commitment", "milestone", "incident", "relationship_change", "status_change", "other"]
-    },
-    subjectKey: { type: "string" },
-    causalChainKey: {
-      type: ["string", "null"],
-      minLength: 8,
-      maxLength: MEMORY_CAUSAL_CHAIN_KEY_MAX_LENGTH,
-      pattern: MEMORY_CAUSAL_CHAIN_KEY_PATTERN_SOURCE
-    }
-  },
-  required: [
-    "fact",
-    "occurredAt",
-    "occurredEndAt",
-    "userIds",
-    "addressNames",
-    "eventType",
-    "subjectKey",
-    "causalChainKey"
-  ]
-};
-
 const LONG_TERM_MEMORY_FACT_SCHEMA = {
   type: "object",
   additionalProperties: false,
@@ -410,52 +331,10 @@ export function defaultFinalPromptTemplate(id: string): FinalPromptTemplate | un
       response_format: JSON_TEXT_FORMAT
     };
   }
-  if (id === "memory.compress-in") {
-    return jsonRequest(DEFAULT_WORK_MEMORY_COMPRESS_IN_PROMPT, "memory.payload", "working_memory", {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        facts: {
-          type: "array",
-          items: {
-            ...WORKING_MEMORY_FACT_SCHEMA,
-            properties: { id: { type: ["string", "null"] }, ...WORKING_MEMORY_FACT_SCHEMA.properties },
-            required: ["id", ...WORKING_MEMORY_FACT_SCHEMA.required]
-          }
-        },
-        allPreviousMemoriesInvalidated: { type: "boolean" }
-      },
-      required: ["facts", "allPreviousMemoriesInvalidated"]
-    });
-  }
   if (id === "memory.compress-out") {
     return jsonRequest(DEFAULT_WORK_MEMORY_COMPRESS_OUT_PROMPT, "memory.payload", "long_term_memory", {
       type: "array",
       items: LONG_TERM_MEMORY_FACT_SCHEMA
-    });
-  }
-  if (id === "memory.user-profile") {
-    return jsonRequest(DEFAULT_USER_PROFILE_PROMPT, "profile.payload", "user_profiles", {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        profiles: {
-          type: "array",
-          items: {
-            type: "object",
-            additionalProperties: false,
-            properties: {
-              userId: { type: "string" },
-              userName: { type: "string" },
-              addressNames: { type: "array", items: { type: "string" } },
-              fact: { type: "string" },
-              time: { type: "string" }
-            },
-            required: ["userId", "userName", "addressNames", "fact", "time"]
-          }
-        }
-      },
-      required: ["profiles"]
     });
   }
   if (id === "orchestrator.user-group") {

@@ -4,11 +4,15 @@ import { DatabaseSync } from "node:sqlite";
 import { getWorkspacePath, resolveProjectPath } from "../../packages/platform/projectPaths.js";
 import type { AppConfig, ImageHistoryRecord } from "../../packages/contracts/admin/public.js";
 import type { ConversationRecord } from "../../packages/contracts/messaging/messages.js";
-import type { MemoryPersistenceProvider, MemorySourceRevisions } from "../../services/memory/persistence.js";
+import type {
+  RequestLogBusinessNode,
+  RequestLogMemoryTool
+} from "../../packages/contracts/observability/requestLogPresentation.js";
+import type { MemoryPersistenceProvider } from "../../services/memory/persistence.js";
 import type { ScheduledTaskStore } from "../../services/scheduling/public.js";
 import { WORKSPACE_LAYOUT } from "../../packages/platform/workspaceLayout.js";
 import { currentAgentRuntimeConfig } from "../../packages/platform/runtimeAgentContext.js";
-import { readMemorySourceRevisions, readMemorySourceSnapshot } from "./memoryRevisionStore.js";
+import { readMemorySourceSnapshot } from "./memoryRevisionStore.js";
 import { migrateApplicationDataSchema } from "./applicationDataSchema.js";
 import { EmojiStore, type EmojiRecord, type EmojiVersionRecord } from "./emojiStore.js";
 import { SqliteScheduledTaskStore } from "./scheduledTaskStore.js";
@@ -29,23 +33,6 @@ export type MemoryDataSource = "working" | "long_term" | "user_profile";
 
 type JsonObject = Record<string, unknown>;
 type SqlRow = Record<string, unknown>;
-type CommitMemoryBatchInput = {
-  batchId: string;
-  baselineRevisions: MemorySourceRevisions;
-  working: readonly JsonObject[];
-  longTerm: readonly JsonObject[];
-  userProfile: readonly JsonObject[];
-  result: unknown;
-};
-type CommitUserProfileBatchInput = {
-  batchId: string;
-  expectedUserProfileRevision: number;
-  userProfile: readonly JsonObject[];
-  result: unknown;
-};
-
-const MEMORY_DEBT_ALERT_METADATA_KEY = "memory-debt-alert-v1";
-
 export interface AgentRegistryRow {
   id: string;
   name: string;
@@ -268,99 +255,6 @@ export class ApplicationDataStore {
 
   listRecallStats(recordIds?: readonly string[]) { return this.dreams.listRecallStats(recordIds); }
 
-  commitMemoryBatch(input: CommitMemoryBatchInput) {
-    return this.transaction(() => {
-      const existing = this.readMemoryBatch(input.batchId);
-      if (existing !== undefined) return { status: "existing" as const, result: existing };
-      const currentRevisions = readMemorySourceRevisions(this.database);
-      if ((["working", "long_term", "user_profile"] as const).some(
-        (source) => currentRevisions[source] !== input.baselineRevisions[source]
-      )) {
-        return { status: "snapshot_conflict" as const };
-      }
-      this.replaceMemoryUnsafe("working", input.working);
-      this.replaceMemoryUnsafe("long_term", input.longTerm);
-      this.replaceMemoryUnsafe("user_profile", input.userProfile);
-      this.database.prepare(`
-        INSERT INTO memory_batches (batch_id, result_json, committed_at) VALUES (?, ?, ?)
-      `).run(input.batchId, JSON.stringify(input.result), new Date().toISOString());
-      return { status: "committed" as const, result: input.result };
-    });
-  }
-
-  commitUserProfileBatch(input: CommitUserProfileBatchInput) {
-    return commitUserProfileBatch(this.database, input, (records) => (
-      this.replaceMemoryUnsafe("user_profile", records)
-    ));
-  }
-
-  readMemoryBatch(batchId: string) {
-    const row = this.database.prepare(`
-      SELECT result_json FROM memory_batches WHERE batch_id = ?
-    `).get(batchId) as SqlRow | undefined;
-    return row ? JSON.parse(String(row.result_json)) : undefined;
-  }
-
-  hasMemoryBatch(batchId: string) {
-    return Boolean(this.database.prepare(`
-      SELECT 1 FROM memory_batches WHERE batch_id = ?
-    `).get(batchId));
-  }
-
-  readMemoryScheduler() {
-    const conversations: Record<string, JsonObject> = {};
-    for (const row of this.database.prepare(`
-      SELECT conversation_id, data_json FROM memory_scheduler ORDER BY conversation_id
-    `).all() as SqlRow[]) {
-      conversations[String(row.conversation_id)] = parseObject(row.data_json);
-    }
-    return conversations;
-  }
-
-  replaceMemoryScheduler(conversations: Readonly<Record<string, object>>) {
-    this.transaction(() => {
-      const ids = new Set(Object.keys(conversations));
-      const upsert = this.database.prepare(`
-        INSERT INTO memory_scheduler (conversation_id, updated_at, data_json) VALUES (?, ?, ?)
-        ON CONFLICT(conversation_id) DO UPDATE SET
-          updated_at = excluded.updated_at,
-          data_json = excluded.data_json
-      `);
-      for (const [id, value] of Object.entries(conversations)) {
-        upsert.run(id, String((value as JsonObject).updatedAt ?? ""), JSON.stringify(value));
-      }
-      for (const row of this.database.prepare("SELECT conversation_id FROM memory_scheduler").all() as SqlRow[]) {
-        const id = String(row.conversation_id);
-        if (!ids.has(id)) this.database.prepare("DELETE FROM memory_scheduler WHERE conversation_id = ?").run(id);
-      }
-    });
-  }
-
-  readMemoryDebtAlertState() {
-    const value = this.metadata(MEMORY_DEBT_ALERT_METADATA_KEY);
-    return value == null ? undefined : parseObject(value);
-  }
-
-  writeMemoryDebtAlertState(state: JsonObject) { this.setMetadata(MEMORY_DEBT_ALERT_METADATA_KEY, JSON.stringify(state)); }
-
-  ensureLegacyMemorySchedulerImported(filePath: string) {
-    const marker = "legacy-memory-scheduler";
-    if (this.metadata(marker) === "done") return { imported: false, count: this.memorySchedulerCount() };
-    const conversations = readSchedulerJson(filePath);
-    this.transaction(() => {
-      if (this.memorySchedulerCount() === 0) {
-        const insert = this.database.prepare(`
-          INSERT INTO memory_scheduler (conversation_id, updated_at, data_json) VALUES (?, ?, ?)
-        `);
-        for (const [id, value] of Object.entries(conversations)) {
-          insert.run(id, String(value.updatedAt ?? ""), JSON.stringify(value));
-        }
-      }
-      this.setMetadata(marker, "done");
-    });
-    return { imported: Object.keys(conversations).length > 0, count: this.memorySchedulerCount() };
-  }
-
   ensureLegacyMemoryImported(source: MemoryDataSource, filePath: string) {
     const marker = `legacy-memory:${source}`;
     if (this.metadata(marker) === "done") return { imported: false, count: this.memoryCount(source) };
@@ -487,10 +381,6 @@ export class ApplicationDataStore {
     });
   }
 
-  readMemoryProcessingAttemptCounts(options: { since: string; until: string }) {
-    return this.modelCalls.readMemoryProcessingAttemptCounts(options);
-  }
-
   appendRequestLogIdempotent(record: JsonObject) {
     return this.modelCalls.appendRequestLogIdempotent(record);
   }
@@ -503,12 +393,27 @@ export class ApplicationDataStore {
     return this.modelCalls.readModelAggregateRows(conversationId);
   }
 
-  readRequestLogs(options: { query?: string; limit: number }) {
+  readRequestLogs(options: {
+    query?: string;
+    limit: number;
+    node?: RequestLogBusinessNode;
+    memoryTool?: RequestLogMemoryTool;
+  }) {
     return this.modelCalls.readRequestLogs(options);
   }
 
-  readRequestLogPage(options: { query?: string; page: number; pageSize: number }) {
+  readRequestLogPage(options: {
+    query?: string;
+    page: number;
+    pageSize: number;
+    node?: RequestLogBusinessNode;
+    memoryTool?: RequestLogMemoryTool;
+  }) {
     return this.modelCalls.readRequestLogPage(options);
+  }
+
+  readRequestLogTrace(id: string) {
+    return this.modelCalls.readRequestLogTrace(id);
   }
 
   readTokenUsageRecords(since: string) {
@@ -535,7 +440,6 @@ export class ApplicationDataStore {
       workingMemory: this.memoryCount("working"),
       longTermMemory: this.memoryCount("long_term"),
       userProfiles: this.memoryCount("user_profile"),
-      memorySchedulerConversations: this.memorySchedulerCount(),
       imageHistory: this.imageHistory.count()
     };
   }
@@ -602,43 +506,8 @@ export class ApplicationDataStore {
     return count(this.database.prepare("SELECT COUNT(*) AS count FROM conversations").get());
   }
 
-  private memorySchedulerCount() {
-    return count(this.database.prepare("SELECT COUNT(*) AS count FROM memory_scheduler").get());
-  }
-
   private requestLogCount() {
     return count(this.database.prepare("SELECT COUNT(*) AS count FROM request_logs").get());
-  }
-}
-
-function commitUserProfileBatch(
-  database: DatabaseSync,
-  input: CommitUserProfileBatchInput,
-  replaceUserProfile: (records: readonly JsonObject[]) => void
-) {
-  database.exec("BEGIN IMMEDIATE");
-  try {
-    const existing = database.prepare(`
-      SELECT result_json FROM memory_batches WHERE batch_id = ?
-    `).get(input.batchId) as SqlRow | undefined;
-    if (existing) {
-      database.exec("COMMIT");
-      return { status: "existing" as const, result: JSON.parse(String(existing.result_json)) };
-    }
-    const current = readMemorySourceRevisions(database);
-    if (current.user_profile !== input.expectedUserProfileRevision) {
-      database.exec("ROLLBACK");
-      return { status: "snapshot_conflict" as const };
-    }
-    replaceUserProfile(input.userProfile);
-    database.prepare(`
-      INSERT INTO memory_batches (batch_id, result_json, committed_at) VALUES (?, ?, ?)
-    `).run(input.batchId, JSON.stringify(input.result), new Date().toISOString());
-    database.exec("COMMIT");
-    return { status: "committed" as const, result: input.result };
-  } catch (error) {
-    database.exec("ROLLBACK");
-    throw error;
   }
 }
 
@@ -726,13 +595,4 @@ function readConversationJson(filePath: string) {
   return records.filter((record): record is ConversationRecord => Boolean(
     record && typeof record === "object" && typeof (record as ConversationRecord).id === "string"
   ));
-}
-
-function readSchedulerJson(filePath: string) {
-  if (!fs.existsSync(filePath)) return {};
-  const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as { version?: unknown; conversations?: unknown };
-  if (parsed.version !== 1 || !parsed.conversations || typeof parsed.conversations !== "object" || Array.isArray(parsed.conversations)) {
-    throw new Error(`Invalid memory scheduler store at ${filePath}`);
-  }
-  return parsed.conversations as Record<string, JsonObject>;
 }

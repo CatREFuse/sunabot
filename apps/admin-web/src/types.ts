@@ -14,6 +14,11 @@ import type {
   ReasoningEffort,
   ToolOverride
 } from "../../../packages/contracts/admin/public.js";
+import type {
+  RequestLogBusinessNode,
+  RequestLogMemoryTool,
+  RequestLogPresentation
+} from "../../../packages/contracts/observability/requestLogPresentation.js";
 
 export type {
   BotMemorySettings,
@@ -349,8 +354,6 @@ export interface ConversationRecord {
   messageCount: number;
   lastAt: string;
   lastText: string;
-  memoryCompressedThroughMessageCount?: number;
-  memoryCompressedAt?: string;
   orchestratorCheckedMessageCount?: number;
   orchestratorCheckedAt?: string;
   orchestratorStatus?: ConversationOrchestratorStatus;
@@ -377,7 +380,10 @@ export interface ConversationLogEntry {
   response?: unknown;
   metadata?: Record<string, unknown>;
   tokenUsage?: TokenUsageBreakdown;
+  presentation?: RequestLogPresentation;
 }
+
+export type { RequestLogBusinessNode, RequestLogMemoryTool, RequestLogPresentation };
 
 export interface TokenUsageBreakdown {
   input: number;
@@ -497,18 +503,9 @@ export interface MemoryDocument {
   content: string;
   revision: string;
 }
-export interface MemoryProcessingHealth {
-  windowHours: 24;
-  windowStartedAt: string;
-  measuredAt: string;
-  successful: number;
-  attempted: number;
-  pending: number;
-}
 export interface MemoryPayload {
   sources: MemorySource[];
   entries: MemoryEntry[];
-  health: MemoryProcessingHealth;
   document?: MemoryDocument;
 }
 export interface MemoryRecallPayload { ok: boolean; query: string; matches: MemoryEntry[]; error?: string }
@@ -559,6 +556,7 @@ export interface OneBotChatList {
 
 export interface OneBotEventTrace {
   receivedAt: string;
+  accountId?: string;
   postType?: string;
   messageType?: string;
   detailType?: string;

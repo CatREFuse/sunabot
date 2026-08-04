@@ -58,15 +58,16 @@ function resolveConfiguredProviderApiKey(provider: ProviderConfig) {
 
 export async function resolveProviderApiKeyAsync(provider: ProviderConfig) {
   const configuredToken = resolveConfiguredProviderApiKey(provider);
-  if (configuredToken || provider.kind !== "codex-responses") return configuredToken;
+  if (provider.kind !== "codex-responses") return configuredToken;
   const authFile = resolveCodexAuthFile();
   try {
-    return await ensureCodexAccessToken({
+    const token = await ensureCodexAccessToken({
       authFile,
       codexHome: path.dirname(authFile)
     });
+    return token || configuredToken;
   } catch {
-    return "";
+    return configuredToken;
   }
 }
 

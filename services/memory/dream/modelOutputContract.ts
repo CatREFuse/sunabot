@@ -15,7 +15,8 @@ import type {
   DreamPersonaAdjustmentKind,
   DreamPersonaAdjustmentV1,
   DreamPersonaTargetFile,
-  DreamWorkingReviewV1
+  DreamWorkingReviewV1,
+  DreamMinimalModelOutput
 } from "./types.js";
 
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u;
@@ -46,6 +47,13 @@ const FIELD_KNOWLEDGE_MAX_CODE_POINTS = 16_000;
 const MAX_SOURCE_IDS_PER_REVIEW = 24;
 const LEGACY_HOST_IDENTITY_ALIAS_PATTERN =
   /(?:人物-[a-f0-9]{10,}|(?:person|profile|context|event|causal|subject|task|schedule|impression):[a-f0-9]{24})/iu;
+const MINIMAL_TOP_LEVEL_KEYS = [
+  "workingMemoryCompression",
+  "longTermMemoryAdditions",
+  "dreamDescription"
+] as const;
+const MAX_LONG_TERM_ADDITIONS = 64;
+const MINIMAL_WORKING_MEMORY_MAX_CODE_POINTS = 4_000;
 
 type JsonObject = Record<string, unknown>;
 
@@ -57,6 +65,63 @@ export class DreamModelOutputContractError extends Error {
     super(`Dream output contract is invalid: ${message}`);
     this.name = "DreamModelOutputContractError";
   }
+}
+
+export function parseStrictMinimalDreamModelOutput(
+  text: string
+): DreamMinimalModelOutput {
+  if (typeof text !== "string" || codePointLength(text) > DREAM_RAW_OUTPUT_MAX_CODE_POINTS) {
+    fail("response must be bounded JSON text");
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    fail("response must be valid JSON");
+  }
+  const root = objectValue(value, "$");
+  if (containsLegacyHostIdentityAlias(root)) {
+    fail("response contains a legacy host-generated identity alias");
+  }
+  const rootKeys = Object.keys(root);
+  if (
+    rootKeys.length !== MINIMAL_TOP_LEVEL_KEYS.length
+    || rootKeys.some((key, index) => key !== MINIMAL_TOP_LEVEL_KEYS[index])
+  ) {
+    fail(`top-level fields must appear in this order: ${MINIMAL_TOP_LEVEL_KEYS.join(", ")}`);
+  }
+  const workingMemoryCompression = boundedString(
+    root.workingMemoryCompression,
+    "$.workingMemoryCompression",
+    MINIMAL_WORKING_MEMORY_MAX_CODE_POINTS,
+    false
+  );
+  const longTermMemoryAdditions = minimalLongTermAdditions(root.longTermMemoryAdditions);
+  const dreamDescription = boundedString(
+    root.dreamDescription,
+    "$.dreamDescription",
+    DREAM_TEXT_MAX_CODE_POINTS,
+    true
+  );
+  return {
+    workingMemoryCompression,
+    longTermMemoryAdditions,
+    dreamDescription
+  };
+}
+
+function minimalLongTermAdditions(
+  value: unknown
+): DreamMinimalModelOutput["longTermMemoryAdditions"] {
+  if (!Array.isArray(value) || value.length > MAX_LONG_TERM_ADDITIONS) {
+    fail(`$.longTermMemoryAdditions must contain at most ${MAX_LONG_TERM_ADDITIONS} items`);
+  }
+  return value.map((item, index) => boundedString(
+    item,
+    `$.longTermMemoryAdditions[${index}]`,
+    DREAM_TEXT_MAX_CODE_POINTS,
+    true
+  ));
 }
 
 export function parseStrictDreamModelOutput(

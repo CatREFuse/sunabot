@@ -6,30 +6,19 @@ import {
 } from "../../adapters/sqlite/dreamStore.js";
 import {
   DREAM_PROMPT_ID,
-  dreamRecallLookupIds,
-  dreamRecallTrackingIds,
   latestDreamScheduleOccurrence,
   normalizeDreamMemorySnapshot,
-  projectDreamRecallStats,
-  type DreamMemoryRecord,
-  type DreamRecallStatsSnapshot
+  type DreamMemoryRecord
 } from "../../services/memory/dream/public.js";
 import {
   readWorkingMemoryDocument,
   recordMemoryOperation,
   replaceWorkingMemoryDocument,
   workingMemoryItemToEntry,
-  workingMemoryItemsFromFacts,
-  type MemoryFactInput
+  workingMemoryItemsFromFacts
 } from "../../services/memory/public.js";
-import {
-  normalizeAirKnowledge,
-  readAirKnowledge,
-  replaceAirKnowledge
-} from "../../services/air/public.js";
-import { loadPersona } from "../../services/agent/public.js";
+import { readAirKnowledge } from "../../services/air/public.js";
 import type { PromptVariableValue, RenderedPromptRequest } from "../../services/agent/promptSystem.js";
-import { AgentFileRepository } from "../admin/agentFiles.js";
 import { appendRequestLog } from "../../adapters/observability/requestLog.js";
 import type { ConversationRecord } from "../types.js";
 import type { SunaRuntime } from "../runtime.js";
@@ -53,7 +42,6 @@ const DREAM_SLEEP_NOTICE_CONTEXT = [
 ].join("\n");
 
 export function createRuntimeDreamsForHost(host: SunaRuntime) {
-  const agentFiles = new AgentFileRepository({ runtime: host });
   return createRuntimeDreams({
     agentId: host.config.persona.defaultAgentId,
     lifecycleSignal: host.runtimeSignal,
@@ -61,9 +49,6 @@ export function createRuntimeDreamsForHost(host: SunaRuntime) {
     context: { capture: (input) => captureDreamContext(host, input) },
     workingMemory: {
       compareAndSwap: (input) => compareAndSwapDreamWorkingMemory(host, input)
-    },
-    fieldKnowledge: {
-      compareAndSwap: (input) => compareAndSwapDreamFieldKnowledge(host, input)
     },
     prompt: {
       render: (id, variables) => host.renderPromptRequest(
@@ -81,24 +66,6 @@ export function createRuntimeDreamsForHost(host: SunaRuntime) {
         auxiliaryProviderCompleteOptions(options)
       )
     },
-    persona: {
-      read: async (id, signal) => {
-        signal?.throwIfAborted();
-        const file = await agentFiles.get(id, host.config);
-        signal?.throwIfAborted();
-        return { content: file.content, revision: file.revision };
-      },
-      compareAndSwap: async ({ id, revision, content, signal }) => {
-        signal?.throwIfAborted();
-        await agentFiles.put(id, { revision, content }, host.config, signal);
-        signal?.throwIfAborted();
-      }
-    },
-    selection: () => ({
-      recentWindowHours: host.config.bot.memory.dreamRecentWindowHours,
-      recentMemoryLimit: host.config.bot.memory.dreamRecentMemoryLimit,
-      olderMemoryLimit: host.config.bot.memory.dreamOlderMemoryLimit
-    }),
     log: {
       write: (event) => {
         const conversationId = `dream:${host.config.persona.defaultAgentId}`;
@@ -116,12 +83,18 @@ export function createRuntimeDreamsForHost(host: SunaRuntime) {
           category: "runtime.action",
           action: event.action,
           request: { localDate: event.localDate, level: event.level },
-          response: event.data ?? {},
+          response: {
+            ...(event.data ?? {}),
+            ...(event.attemptCount == null ? {} : { attemptCount: event.attemptCount }),
+            ...(event.maxAttempts == null ? {} : { maxAttempts: event.maxAttempts })
+          },
           metadata: {
             conversationId,
             runId: event.runId,
             stage: "memory",
-            promptFamily: DREAM_PROMPT_ID
+            promptFamily: DREAM_PROMPT_ID,
+            ...(event.attemptCount == null ? {} : { attemptCount: event.attemptCount }),
+            ...(event.maxAttempts == null ? {} : { maxAttempts: event.maxAttempts })
           }
         });
       }
@@ -195,31 +168,24 @@ async function captureDreamContext(
     fact: item.content
   })) as DreamStoreJsonObject[];
   const longTermJson = repository.readMemory("long_term") as DreamStoreJsonObject[];
+  const storedLongTermRecords = jsonClone(longTermJson) as DreamMemoryRecord[];
   const { workingRecords, longTermRecords } = normalizeDreamMemorySnapshot({
     workingRecords: workingJson as DreamMemoryRecord[],
-    longTermRecords: longTermJson as DreamMemoryRecord[]
-  });
-  const trackingIds = dreamRecallTrackingIds(longTermJson as DreamMemoryRecord[]);
-  input.signal?.throwIfAborted();
-  repository.dreams.initializeRecallTracking(trackingIds, input.now);
-  input.signal?.throwIfAborted();
-  const recallStats = projectDreamRecallStats({
-    records: longTermRecords,
-    stats: repository.dreams.listRecallStats(dreamRecallLookupIds(longTermRecords)) as DreamRecallStatsSnapshot[],
-    trackingStartedAt: input.now.toISOString()
+    longTermRecords: storedLongTermRecords
   });
   const previousScheduleDate = latestDreamScheduleOccurrence({
     now: new Date(Date.parse(input.window.end) - 1),
     timeZone: input.timeZone
   }).localDate;
   return {
+    workingMemory: workingDocument.items.map((item) => item.content).join("\n\n"),
     workingRecords,
     longTermRecords,
+    storedLongTermRecords,
     workingDigest: digestDreamMemorySnapshot(workingJson),
     workingRevision: workingDocument.revision,
-    fieldKnowledgeRevision: fieldKnowledge.revision,
     longTermDigest: digestDreamMemorySnapshot(longTermJson),
-    recallStats,
+    recallStats: [],
     userProfiles: jsonClone(repository.readMemory("user_profile").slice(-MAX_DREAM_PROFILE_RECORDS)),
     recentConversations: observedConversations(repository.readConversations(), input.window),
     activeTasks: jsonClone(repository.scheduledTasks.list({ enabled: true, limit: MAX_DREAM_TASKS }).items),
@@ -232,7 +198,7 @@ async function compareAndSwapDreamWorkingMemory(
   host: SunaRuntime,
   input: {
     expectedRevision: string;
-    records: readonly DreamMemoryRecord[];
+    content: string;
     runId: string;
     localDate: string;
     signal?: AbortSignal;
@@ -259,21 +225,20 @@ async function compareAndSwapDreamWorkingMemory(
     });
     return { status: "conflict" as const, revision: current.revision };
   }
-  const facts = input.records.map(dreamWorkingMemoryFact);
-  const nextItems = workingMemoryItemsFromFacts(
-    facts,
-    current.items,
-    {
-      batchId: input.runId,
-      conversationId,
-      conversationScope: "dream",
-      conversationTitle: `Dream ${input.localDate}`
-    },
-    (fact, index) => fact.memoryKind === "dream" && fact.id
-      ? fact.id
-      : `working_dream_${input.localDate.replaceAll("-", "_")}_${index}`,
-    "dream"
-  );
+  const nextItems = input.content.trim()
+    ? workingMemoryItemsFromFacts(
+        [{ fact: input.content }],
+        [],
+        {
+          batchId: input.runId,
+          conversationId,
+          conversationScope: "dream",
+          conversationTitle: `Dream ${input.localDate}`
+        },
+        (_fact, index) => `working_dream_${input.localDate.replaceAll("-", "_")}_${index}`,
+        "dream"
+      )
+    : [];
   input.signal?.throwIfAborted();
   const replaced = await replaceWorkingMemoryDocument(
     host.config,
@@ -345,141 +310,11 @@ async function compareAndSwapDreamWorkingMemory(
   };
 }
 
-async function compareAndSwapDreamFieldKnowledge(
-  host: SunaRuntime,
-  input: {
-    expectedRevision: string;
-    content: string;
-    runId: string;
-    localDate: string;
-    signal?: AbortSignal;
-  }
-) {
-  input.signal?.throwIfAborted();
-  const current = await readAirKnowledge(host.config);
-  input.signal?.throwIfAborted();
-  const conversationId = `dream:${host.config.persona.defaultAgentId}`;
-  if (current.revision !== input.expectedRevision) {
-    recordMemoryOperation(host.config, {
-      source: "dream",
-      operation: "field_knowledge_replace",
-      actor: "dream",
-      outcome: "conflict",
-      batchId: input.runId,
-      conversationId,
-      conversationScope: "dream",
-      beforeRevision: current.revision,
-      reasonCode: "snapshot_conflict"
-    });
-    return { status: "conflict" as const, revision: current.revision };
-  }
-  const normalizedContent = normalizeAirKnowledge(input.content);
-  const nextPersona = await loadPersona(host.config, { "AIR.md": normalizedContent });
-  input.signal?.throwIfAborted();
-  const replaced = await replaceAirKnowledge(
-    host.config,
-    current.revision,
-    normalizedContent,
-    input.signal
-  );
-  if (replaced.status === "conflict") {
-    if (!input.signal?.aborted) recordMemoryOperation(host.config, {
-      source: "dream",
-      operation: "field_knowledge_replace",
-      actor: "dream",
-      outcome: "conflict",
-      batchId: input.runId,
-      conversationId,
-      conversationScope: "dream",
-      beforeRevision: current.revision,
-      afterRevision: replaced.current.revision,
-      reasonCode: "revision_conflict"
-    });
-    return { status: "conflict" as const, revision: replaced.current.revision };
-  }
-  if (replaced.status === "updated" && !input.signal?.aborted) host.persona = nextPersona;
-  if (!input.signal?.aborted) recordMemoryOperation(host.config, {
-    source: "dream",
-    operation: "field_knowledge_replace",
-    actor: "dream",
-    outcome: replaced.status === "unchanged" ? "unchanged" : "applied",
-    batchId: input.runId,
-    conversationId,
-    conversationScope: "dream",
-    beforeRevision: current.revision,
-    afterRevision: replaced.current.revision
-  });
-  return {
-    status: replaced.status,
-    revision: replaced.current.revision,
-    rollback: async () => {
-      if (replaced.status === "unchanged") return true;
-      const rolledBack = await replaceAirKnowledge(
-        host.config,
-        replaced.current.revision,
-        current.content
-      );
-      recordMemoryOperation(host.config, {
-        source: "dream",
-        operation: "field_knowledge_rollback",
-        actor: "dream",
-        outcome: rolledBack.status === "conflict" ? "conflict" : "applied",
-        batchId: input.runId,
-        conversationId,
-        conversationScope: "dream",
-        beforeRevision: replaced.current.revision,
-        afterRevision: rolledBack.current.revision,
-        reasonCode: rolledBack.status === "conflict" ? "revision_conflict" : undefined
-      });
-      if (rolledBack.status !== "conflict") host.persona = await loadPersona(host.config);
-      return rolledBack.status !== "conflict";
-    }
-  };
-}
-
-function dreamWorkingMemoryFact(record: DreamMemoryRecord, index: number): MemoryFactInput {
-  const fact = dreamString(record.fact);
-  const id = dreamString(record.id);
-  if (!fact || !id) throw new Error(`Dream working memory ${index} is missing id or fact.`);
-  return {
-    id,
-    fact,
-    occurredAt: dreamString(record.occurredAt),
-    occurredEndAt: dreamString(record.occurredEndAt) || null,
-    userId: dreamString(record.userId),
-    userIds: dreamStrings(record.userIds),
-    userName: dreamString(record.userName),
-    addressNames: dreamStrings(record.addressNames),
-    eventType: dreamString(record.eventType),
-    subjectKey: dreamString(record.subjectKey),
-    eventKey: dreamString(record.eventKey),
-    causalChainKey: dreamString(record.causalChainKey),
-    batchId: dreamString(record.batchId),
-    sourceMemoryIds: dreamStrings(record.sourceMemoryIds),
-    memoryKind: dreamString(record.memoryKind),
-    realityStatus: dreamString(record.realityStatus),
-    factuality: dreamString(record.factuality),
-    dreamRunId: dreamString(record.dreamRunId),
-    dreamDate: dreamString(record.dreamDate),
-    dreamReviewedAt: dreamString(record.dreamReviewedAt)
-  };
-}
-
 function dreamWorkingMemorySource(sourceKind: string) {
   if (sourceKind === "admin") return "sunabot.memory.admin";
   if (sourceKind === "dream") return "sunabot.dream";
   if (sourceKind === "add_workmemory") return "sunabot.add_workmemory";
   return "sunabot.memory.compress";
-}
-
-function dreamString(value: unknown) {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function dreamStrings(value: unknown) {
-  return Array.isArray(value)
-    ? value.flatMap((item) => dreamString(item) ?? [])
-    : undefined;
 }
 
 function observedConversations(

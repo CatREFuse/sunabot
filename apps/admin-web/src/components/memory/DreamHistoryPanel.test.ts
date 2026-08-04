@@ -53,4 +53,29 @@ describe("DreamHistoryPanel", () => {
     expect(wrapper.text()).not.toContain("等待重试");
     expect(wrapper.find('[data-testid="dream-retry-time"]').exists()).toBe(false);
   });
+
+  it("shows memory reduction without exposing a zero-addition reason", () => {
+    const completed = {
+      ...props(1),
+      items: [{
+        id: "dream-run-completed",
+        date: "2026-07-20",
+        status: "completed" as const,
+        scheduledFor: "2026-07-20T04:00:00.000Z",
+        completedAt: "2026-07-20T04:08:00.000Z",
+        attemptCount: 1,
+        maxAttempts: 3 as const,
+        dreamText: "梦见雨声停在旧车站。",
+        summary: {
+          workingMemoryReduced: 2,
+          longTermAdded: 0
+        }
+      }]
+    };
+    const wrapper = mount(DreamHistoryPanel, { props: completed });
+
+    expect(wrapper.text()).toContain("工作记忆减少 2 · 长期记忆新增 0");
+    expect(wrapper.text()).not.toContain("候选事实已经存在于长期记忆。");
+    expect(wrapper.text()).not.toContain("人格");
+  });
 });

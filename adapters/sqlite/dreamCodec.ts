@@ -51,7 +51,9 @@ export function mapRun(row: SqlRow): DreamRun {
     (output == null || dreamText == null)) {
     throw new Error(`Stored ${status} dream is missing generated data.`);
   }
-  if ((status === "consolidated" || status === "completed") && (result == null || workingMemoryId == null)) {
+  if ((status === "consolidated" || status === "completed") && (
+    result == null || (workingMemoryId == null && result.schemaVersion !== 2)
+  )) {
     throw new Error(`Stored ${status} dream is missing consolidation data.`);
   }
   if ((status === "running" || status === "generated" || status === "consolidated") &&

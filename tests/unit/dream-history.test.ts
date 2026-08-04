@@ -23,6 +23,44 @@ function source(overrides: Record<string, unknown> = {}) {
 }
 
 describe("Dream history projection", () => {
+  it("projects work-memory reduction and long-term additions without a reason", () => {
+    const item = dreamHistoryItem(source({
+      status: "completed",
+      dreamText: "梦见雨声停在旧车站。",
+      completedAt: "2026-07-20T04:08:00.000Z",
+      errorCode: null,
+      errorText: null,
+      nextRetryAt: null,
+      failedAt: null,
+      result: {
+        schemaVersion: 2,
+        workingMemoryCompression: {
+          sourceCount: 3,
+          outputCount: 2,
+          reducedBy: 1,
+          unavailable: 0
+        },
+        longTermMemoryAdditions: {
+          requested: 0,
+          added: 0,
+          duplicate: 0,
+          unavailable: 0
+        }
+      }
+    }));
+
+    expect(item).toMatchObject({
+      status: "completed",
+      summary: {
+        workingMemoryReduced: 1,
+        longTermAdded: 0
+      }
+    });
+    expect(item.summary).not.toHaveProperty("longTermReasonCode");
+    expect(item.summary).not.toHaveProperty("longTermReason");
+    expect(item).not.toHaveProperty("personalityChanged");
+  });
+
   it("projects retry metadata with a fixed contract error message", () => {
     const item = dreamHistoryItem(source({
       errorText: [

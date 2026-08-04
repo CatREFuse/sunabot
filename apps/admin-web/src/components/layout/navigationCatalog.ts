@@ -31,7 +31,7 @@ export const navigationSections: readonly NavigationSection[] = [
       { to: "/images", label: "图像", mobileLabel: "图像", description: "查看图像历史", icon: "bx-image", mobilePlacement: "more", mobileOrder: 2 },
       { to: "/voice", label: "语音", mobileLabel: "语音", description: "语言与参考音频", icon: "bx-user-voice", mobilePlacement: "more", mobileOrder: 3 },
       { to: "/emojis", label: "表情", mobileLabel: "表情", description: "管理发送表情", icon: "bx-happy-alt", mobilePlacement: "more", mobileOrder: 4 },
-      { to: "/logs", label: "日志", mobileLabel: "日志", description: "活动终端与请求日志", icon: "bx-terminal", mobilePlacement: "more", mobileOrder: 5 },
+      { to: "/logs", label: "日志", mobileLabel: "日志", description: "业务节点与请求详情", icon: "bx-terminal", mobilePlacement: "more", mobileOrder: 5 },
       { to: "/extensions", label: "扩展", mobileLabel: "扩展", description: "Skill 与 MCP", icon: "bx-extension", mobilePlacement: "more", mobileOrder: 7 }
     ]
   },

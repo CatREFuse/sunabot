@@ -416,9 +416,7 @@ function systemPromptFileNames(config) {
     "conversation_reply.json",
     "conversation_private_reply.json",
     "conversation_group_reply.json",
-    config?.bot?.memory?.workMemoryCompressInPrompt ?? "work_memory_compress_in.json",
     config?.bot?.memory?.workMemoryCompressOutPrompt ?? "work_memory_compress_out.json",
-    config?.bot?.memory?.userProfilePrompt ?? "user_profile_prompt.json",
     config?.bot?.orchestrator?.promptFile ?? "user_groupchat_orchestrator.json",
     "group_chat_summary.json"
   ];

@@ -1,11 +1,8 @@
-import { nanoid } from "nanoid";
 import type {
   MemoryIdentityConfig,
   MemoryRecord,
-  NormalizedMemoryFact,
   SourceDefinition,
-  UserProfileAggregate,
-  UserProfileFactGroup
+  UserProfileAggregate
 } from "../types.js";
 import { readMemoryText } from "./memoryText.js";
 import {
@@ -23,13 +20,10 @@ import {
 export function mergeUserProfileRecords(
   config: MemoryIdentityConfig,
   source: SourceDefinition,
-  records: MemoryRecord[],
-  facts: NormalizedMemoryFact[],
-  metadata: Record<string, unknown> = {}
+  records: MemoryRecord[]
 ) {
   const profiles = new Map<string, UserProfileAggregate>();
   const looseRecords: MemoryRecord[] = [];
-  const replaceFacts = metadata.replaceUserProfileFacts === true;
 
   for (const record of records) {
     const userIds = profileRecordUserIds(record.value);
@@ -53,27 +47,6 @@ export function mergeUserProfileRecords(
     }
   }
 
-  const now = new Date().toISOString();
-  const incomingGroups = groupUserProfileFacts(source, facts, metadata, now, looseRecords);
-  for (const group of incomingGroups.values()) {
-    const profile = ensureUserProfileAggregate(profiles, group.userId, {
-      id: `${source.id}_${group.userId}`,
-      userName: group.userName,
-      addressNames: configuredAddressNames(config, group.userId, group.addressNames),
-      createdAt: group.createdAt,
-      updatedAt: group.updatedAt,
-      time: group.time,
-      source: group.source
-    });
-    if (group.userName) profile.userName = group.userName;
-    profile.addressNames = uniqueStrings([...profile.addressNames, ...group.addressNames]);
-    profile.updatedAt = latestIsoLike(profile.updatedAt, group.updatedAt);
-    profile.time = latestIsoLike(profile.time, group.time);
-    profile.source = group.source || profile.source || "sunabot.memory.user_profile";
-    if (replaceFacts) replaceUserProfileFacts(profile, group.facts);
-    else addUserProfileFacts(profile, group.facts);
-  }
-
   const profileRecords = [...profiles.values()]
     .sort((left, right) => left.userId.localeCompare(right.userId))
     .map((profile) => ({
@@ -84,48 +57,6 @@ export function mergeUserProfileRecords(
     index,
     value: record.value
   }));
-}
-
-export function groupUserProfileFacts(
-  source: SourceDefinition,
-  facts: NormalizedMemoryFact[],
-  metadata: Record<string, unknown>,
-  now: string,
-  looseRecords: MemoryRecord[]
-) {
-  const groups = new Map<string, UserProfileFactGroup>();
-  const fallbackSource = normalizeText(metadata.source) || "sunabot.memory.user_profile";
-
-  for (const fact of facts) {
-    const userIds = fact.userIds.length ? fact.userIds : fact.userId ? [fact.userId] : [];
-    if (!userIds.length) {
-      looseRecords.push(toLooseUserProfileRecord(source, looseRecords.length, fact, metadata, now));
-      continue;
-    }
-
-    for (const userId of userIds) {
-      const time = fact.time || fact.createdAt || now;
-      const group = groups.get(userId) ?? {
-        userId,
-        userName: "",
-        addressNames: [],
-        facts: [],
-        createdAt: fact.createdAt || now,
-        updatedAt: now,
-        time,
-        source: fact.source || fallbackSource
-      };
-      if (fact.userName) group.userName = fact.userName;
-      group.addressNames = uniqueStrings([...group.addressNames, ...fact.addressNames]);
-      group.createdAt = earliestIsoLike(group.createdAt, fact.createdAt || time);
-      group.updatedAt = latestIsoLike(group.updatedAt, now);
-      group.time = latestIsoLike(group.time, time);
-      group.source = fact.source || group.source || fallbackSource;
-      group.facts.push(...splitProfileFactText(stripUserProfileFactPrefix(fact.fact, userId, fact.userName)));
-      groups.set(userId, group);
-    }
-  }
-  return groups;
 }
 
 export function profileRecordUserIds(value: Record<string, unknown>) {
@@ -160,12 +91,6 @@ export function ensureUserProfileAggregate(
   };
   profiles.set(userId, profile);
   return profile;
-}
-
-export function replaceUserProfileFacts(profile: UserProfileAggregate, facts: string[]) {
-  profile.facts = [];
-  profile.factKeys = new Set();
-  addUserProfileFacts(profile, facts);
 }
 
 export function addUserProfileFacts(profile: UserProfileAggregate, facts: string[]) {
@@ -233,25 +158,4 @@ export function userProfileAggregateValue(config: MemoryIdentityConfig, source: 
   if (profile.time) value.time = profile.time;
   if (profile.updatedAt) value.updatedAt = profile.updatedAt;
   return value;
-}
-
-export function toLooseUserProfileRecord(
-  source: SourceDefinition,
-  offset: number,
-  fact: NormalizedMemoryFact,
-  metadata: Record<string, unknown>,
-  now: string
-) {
-  const time = fact.time || fact.createdAt || now;
-  return {
-    index: offset,
-    value: {
-      ...metadata,
-      id: `${source.id}_${nanoid()}`,
-      [source.field]: fact.fact,
-      time,
-      createdAt: fact.createdAt || time,
-      source: fact.source || normalizeText(metadata.source) || "sunabot.memory.user_profile"
-    }
-  };
 }

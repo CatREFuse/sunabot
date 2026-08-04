@@ -8,10 +8,20 @@ import type { FastifyInstance } from "fastify";
 import { applicationDataStore } from "../../../adapters/sqlite/applicationDataStore.js";
 import { isTrustedQqFakeIp } from "../../../adapters/onebot/qqMedia.js";
 import { WORKSPACE_LAYOUT } from "../../../packages/platform/workspaceLayout.js";
+import type {
+  RequestLogBusinessNode,
+  RequestLogMemoryTool
+} from "../../../packages/contracts/observability/requestLogPresentation.js";
 import { runWithAgentRuntimeContext } from "../../../packages/platform/runtimeAgentContext.js";
 import { AdminApiError, badRequest } from "../../../src/admin/errors.js";
 import { getWorkspacePath } from "../../../packages/platform/projectPaths.js";
-import { readModelCallStats, readRequestLogPage, readTokenUsageSummary, requestLogPath } from "../../../adapters/observability/requestLog.js";
+import {
+  readModelCallStats,
+  readRequestLogPage,
+  readRequestLogTrace,
+  readTokenUsageSummary,
+  requestLogPath
+} from "../../../adapters/observability/requestLog.js";
 import type { SunaRuntime } from "../../../src/runtime.js";
 import type { AppConfig, BotToolSettings, ImageHistoryRecord } from "../../../packages/contracts/admin/public.js";
 import { requestAgentId } from "../requestAgentId.js";
@@ -81,17 +91,34 @@ export function registerMediaRoutes(app: FastifyInstance, options: MediaRouteOpt
     schema: { querystring: openObject, response: { 200: openObject } }
   }, async (request) => {
     const { config } = contextFor(request);
-    const query = request.query as { q?: string; limit?: string; page?: string; pageSize?: string };
+    const query = request.query as {
+      q?: string;
+      limit?: string;
+      page?: string;
+      pageSize?: string;
+      node?: string;
+      memoryTool?: string;
+    };
     const page = await readRequestLogPage({
       query: query.q,
       page: Number(query.page ?? 1),
       pageSize: Number(query.pageSize ?? query.limit ?? 50),
+      node: query.node as RequestLogBusinessNode | undefined,
+      memoryTool: query.memoryTool as RequestLogMemoryTool | undefined,
       config
     });
     return {
       filePath: requestLogPath(config),
       ...page
     };
+  });
+
+  app.get("/api/request-logs/:id/trace", {
+    schema: { querystring: openObject, response: { 200: openObject } }
+  }, async (request) => {
+    const { config } = contextFor(request);
+    const params = request.params as { id?: string };
+    return { logs: readRequestLogTrace(String(params.id ?? ""), config) };
   });
 
   app.get("/api/token-usage", {

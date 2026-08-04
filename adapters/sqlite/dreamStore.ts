@@ -445,11 +445,12 @@ export class SqliteDreamStore {
     const updated = this.database.prepare(`
       UPDATE dream_runs SET
         status = 'completed', worker_id = NULL, lease_until = NULL,
+        persona_json = NULL, persona_status = 'none', persona_updated_at = ?,
         error_code = NULL, error_text = NULL, next_retry_at = NULL, failed_at = NULL,
         completed_at = ?, updated_at = ?
       WHERE id = ? AND worker_id = ? AND status = 'consolidated'
-        AND persona_status <> 'pending' AND lease_until > ?
-    `).run(nowIso, nowIso, runId, workerId, nowIso);
+        AND lease_until > ?
+    `).run(nowIso, nowIso, nowIso, runId, workerId, nowIso);
     if (Number(updated.changes) === 1) return this.requireRun(runId);
     const current = this.readRun(runId);
     return current?.status === "completed" ? current : undefined;

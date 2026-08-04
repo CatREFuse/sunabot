@@ -551,9 +551,9 @@ describe("prompt template configuration", () => {
 
     const config = await loadConfig();
 
-    expect(config.bot.memory.workMemoryCompressInPrompt).toBe("work_memory_compress_in.json");
     expect(config.bot.memory.workMemoryCompressOutPrompt).toBe("work_memory_compress_out.json");
-    expect(config.bot.memory.userProfilePrompt).toBe("user_profile_prompt.json");
+    expect(config.bot.memory).not.toHaveProperty("workMemoryCompressInPrompt");
+    expect(config.bot.memory).not.toHaveProperty("userProfilePrompt");
     expect(config.bot.orchestrator.promptFile).toBe("user_groupchat_orchestrator.json");
   });
 });
