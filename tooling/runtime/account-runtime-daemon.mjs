@@ -471,7 +471,8 @@ async function processRequest(options) {
     && `${request.requestId}.json` === name;
   const accountValid = kind === "account-reconcile"
     && /^[A-Za-z0-9_-]{1,64}$/.test(request.accountId ?? "")
-    && ["running", "stopped"].includes(request.desiredState);
+    && ["running", "stopped"].includes(request.desiredState)
+    && (request.forceRestart == null || typeof request.forceRestart === "boolean");
   const connectedAccountIds = request.connectedAccountIds ?? [];
   const probeValid = kind === "runtime-probe"
     && Array.isArray(connectedAccountIds)
@@ -491,7 +492,8 @@ async function processRequest(options) {
     const result = await execFileAsync(process.execPath, [
       path.join(root, "tooling/runtime/launcher.mjs"),
       "reconcile-account",
-      `--account=${request.accountId}`
+      `--account=${request.accountId}`,
+      ...(request.forceRestart === true ? ["--force-restart"] : [])
     ], {
       cwd: root,
       env: { ...process.env, SUNABOT_WORKSPACE: workspace },

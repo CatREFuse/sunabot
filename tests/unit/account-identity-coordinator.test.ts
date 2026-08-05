@@ -21,6 +21,7 @@ describe("AccountIdentityCoordinator", () => {
       "status:target",
       "manual:source",
       "exit:source",
+      "restart:source",
       "transfer:source->target"
     ]);
     expect(fixture.control.status).not.toHaveBeenCalled();
@@ -43,6 +44,7 @@ describe("AccountIdentityCoordinator", () => {
       "status:target",
       "status:source",
       "manual:source",
+      "restart:source",
       "transfer:source->target"
     ]);
     expect(fixture.gateway.exit).not.toHaveBeenCalled();
@@ -69,12 +71,32 @@ describe("AccountIdentityCoordinator", () => {
     expect(fixture.registry.updateAccountIdentity).not.toHaveBeenCalled();
   });
 
-  it("restores the previous quick-login state when its exit action fails", async () => {
+  it("uses the container restart when the previous exit action fails", async () => {
     const events: string[] = [];
     const fixture = coordinatorFixture({ connected: true, events });
     fixture.gateway.exit.mockImplementation(async (accountId) => {
       events.push(`exit:${accountId}`);
       throw new Error("transport unavailable");
+    });
+
+    await expect(fixture.coordinator.assign("target", "123456789")).resolves.toMatchObject({ transferred: true });
+
+    expect(events).toEqual([
+      "status:target",
+      "manual:source",
+      "exit:source",
+      "restart:source",
+      "transfer:source->target"
+    ]);
+    expect(fixture.control.cancelManualLogin).not.toHaveBeenCalled();
+  });
+
+  it("keeps the existing owner when the previous container cannot restart", async () => {
+    const events: string[] = [];
+    const fixture = coordinatorFixture({ connected: true, events });
+    fixture.restartAccount.mockImplementation(async (accountId) => {
+      events.push(`restart:${accountId}`);
+      throw new Error("restart unavailable");
     });
 
     await expect(fixture.coordinator.assign("target", "123456789")).rejects.toMatchObject({
@@ -86,6 +108,7 @@ describe("AccountIdentityCoordinator", () => {
       "status:target",
       "manual:source",
       "exit:source",
+      "restart:source",
       "cancel:source"
     ]);
     expect(fixture.registry.updateAccountIdentity).not.toHaveBeenCalled();
@@ -108,6 +131,7 @@ describe("AccountIdentityCoordinator", () => {
       "status:target",
       "manual:source",
       "exit:source",
+      "restart:source",
       "transfer:source->target",
       "cancel:source"
     ]);
@@ -126,7 +150,8 @@ describe("AccountIdentityCoordinator", () => {
       gateway: {
         isConnected: vi.fn(() => true),
         exit: vi.fn(),
-      }
+      },
+      restartAccount: vi.fn()
     });
 
     await expect(coordinator.assign("target", "123456789")).resolves.toEqual({
@@ -212,15 +237,20 @@ function coordinatorFixture(input: { connected: boolean; events: string[] }) {
       input.events.push(`exit:${accountId}`);
     }),
   };
+  const restartAccount = vi.fn(async (accountId: string) => {
+    input.events.push(`restart:${accountId}`);
+  });
   return {
     registry,
     control,
     targetControl,
     gateway,
+    restartAccount,
     coordinator: new AccountIdentityCoordinator({
       registry,
       controlFor: vi.fn((candidate) => candidate.id === source.id ? control : targetControl),
-      gateway
+      gateway,
+      restartAccount
     })
   };
 }

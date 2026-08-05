@@ -51,9 +51,11 @@ describe("OneBot account identity transfer routes", () => {
       getRecentEvents: vi.fn(() => [])
     } as unknown as OneBotGateway;
     const app = Fastify();
+    const restartAccount = vi.fn(async () => undefined);
     registerOneBotRoutes(app, gateway, {
       agentRegistry: registry,
-      napcatLoginControlFactory: (accountId) => controlFor(accountId)
+      napcatLoginControlFactory: (accountId) => controlFor(accountId),
+      restartAccount
     });
 
     const response = await app.inject({
@@ -65,7 +67,84 @@ describe("OneBot account identity transfer routes", () => {
     expect(response.json()).toMatchObject({ online: true, data: { user_id: 123456789 } });
     expect(controls.get(source.id)?.beginManualLogin).toHaveBeenCalledOnce();
     expect(gateway.dispatchAction).toHaveBeenCalledWith("bot_exit", {}, source.id, true);
+    expect(restartAccount).toHaveBeenCalledWith(source.id);
     expect(registry.updateAccountIdentity).toHaveBeenCalledWith(target.id, "123456789", undefined, true);
+    await app.close();
+  });
+
+  it("restarts a kicked account and returns a fresh login QR", async () => {
+    const primary = account("primary", "plana", "985436737");
+    let restarted = false;
+    const control = {
+      status: vi.fn(async () => restarted
+        ? {
+            isLogin: false,
+            manualLogin: true,
+            imageDataUrl: "data:image/png;base64,FRESH",
+            imageUpdatedAt: "2026-08-05T00:00:00.000Z"
+          }
+        : {
+            isLogin: true,
+            manualLogin: false,
+            loginError: "[KICKEDOFFLINE] [下线通知] 您的账号已在另一台终端登录。",
+            data: { user_id: 985436737, nickname: "A.R.O.N.A" }
+          }),
+      refreshQrCode: vi.fn(),
+      beginManualLogin: vi.fn(async () => undefined),
+      cancelManualLogin: vi.fn(async () => undefined),
+      startLoginCompletionWatch: vi.fn(),
+      close: vi.fn()
+    } satisfies NapcatLoginControlPort;
+    const registry = {
+      account: vi.fn(() => primary),
+      list: vi.fn(async () => [{ id: "plana", accounts: [primary] }]),
+      updateAccountIdentity: vi.fn(async () => primary)
+    } as unknown as AgentRegistry;
+    const gateway = {
+      getStatus: vi.fn(() => ({
+        connected: !restarted,
+        accounts: restarted ? [] : [{ accountId: "primary", selfId: "985436737", connectedAt: "2026-08-05T00:00:00.000Z" }]
+      })),
+      sendAction: vi.fn(async () => ({ data: { user_id: 985436737, nickname: "A.R.O.N.A" } })),
+      dispatchAction: vi.fn(async () => undefined),
+      getRecentEvents: vi.fn(() => [])
+    } as unknown as OneBotGateway;
+    const restartAccount = vi.fn(async () => { restarted = true; });
+    const app = Fastify();
+    registerOneBotRoutes(app, gateway, {
+      agentRegistry: registry,
+      napcatLoginControl: control,
+      napcatLoginControlFactory: () => control,
+      restartAccount
+    });
+
+    const status = await app.inject({
+      method: "GET",
+      url: "/api/agents/plana/accounts/primary/login/status"
+    });
+    expect(status.json()).toMatchObject({
+      connected: true,
+      online: false,
+      phase: "restarting",
+      action: "recover_login"
+    });
+    expect(status.json()).not.toHaveProperty("loginError");
+
+    const recovery = await app.inject({
+      method: "POST",
+      url: "/api/agents/plana/accounts/primary/login"
+    });
+    expect(recovery.statusCode).toBe(200);
+    expect(recovery.json()).toMatchObject({
+      connected: false,
+      online: false,
+      phase: "waiting_scan",
+      imageDataUrl: "data:image/png;base64,FRESH"
+    });
+    expect(control.beginManualLogin).toHaveBeenCalledOnce();
+    expect(gateway.dispatchAction).toHaveBeenCalledWith("bot_exit", {}, "primary", true);
+    expect(restartAccount).toHaveBeenCalledWith("primary");
+    expect(control.refreshQrCode).not.toHaveBeenCalled();
     await app.close();
   });
 });

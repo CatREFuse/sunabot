@@ -75,6 +75,31 @@ describe("useQqLogin", () => {
     expect(control.snapshot.value?.imageDataUrl).toBe("data:image/png;base64,CCCC");
   });
 
+  it("automatically recovers a kicked account and shows its replacement QR", async () => {
+    apiRequest.mockImplementation((route: string, init?: RequestInit) => {
+      if (route === "/api/onebot/qq-login/status") {
+        return Promise.resolve({
+          connected: true,
+          online: false,
+          available: true,
+          phase: "restarting",
+          action: "recover_login"
+        });
+      }
+      if (route === "/api/onebot/qq-login" && init?.method === "POST") {
+        return Promise.resolve(qrSnapshot("2026-08-05T00:00:01.000Z", "RECOVERED"));
+      }
+      throw new Error(`Unexpected request: ${route}`);
+    });
+    const control = mountControl();
+
+    await control.openDialog();
+
+    expect(apiRequest).toHaveBeenCalledWith("/api/onebot/qq-login", expect.objectContaining({ method: "POST" }));
+    expect(control.snapshot.value?.phase).toBe("waiting_scan");
+    expect(control.snapshot.value?.imageDataUrl).toBe("data:image/png;base64,RECOVERED");
+  });
+
   it("automatically replaces an expired QR image", async () => {
     let statusReads = 0;
     apiRequest.mockImplementation((route: string, init?: RequestInit) => {

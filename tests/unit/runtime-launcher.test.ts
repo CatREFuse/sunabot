@@ -26,6 +26,7 @@ import {
   commandTimeoutMs,
   nativeBashImageComposeArguments,
   nativeCoreEnvironment,
+  napcatAccountUpArguments,
   resolveEffectiveDockerSocket,
   shouldCleanupRemovedNapcatAccount,
   startupReportFailures,
@@ -81,6 +82,15 @@ describe("unified runtime launcher", () => {
     expect(commandTimeoutMs("docker", ["compose", "config"], undefined)).toBe(5 * 60_000);
     expect(commandTimeoutMs("codex", ["login", "status"], undefined)).toBe(30_000);
     expect(commandTimeoutMs("docker", ["info"], 1234)).toBe(1234);
+  });
+
+  it("force recreates only the selected NapCat account during login recovery", () => {
+    expect(napcatAccountUpArguments("start", "napcat")).toEqual([
+      "up", "-d", "--build", "napcat"
+    ]);
+    expect(napcatAccountUpArguments("restart", "napcat")).toEqual([
+      "up", "-d", "--build", "--force-recreate", "napcat"
+    ]);
   });
 
   it("gives graceful Docker stop and first-run credential input explicit longer budgets", async () => {
@@ -560,6 +570,12 @@ describe("unified runtime launcher", () => {
       command: "reconcile-account",
       accountId: "qq_arona"
     });
+    expect(parseLauncherArguments(["reconcile-account", "--account=qq_arona", "--force-restart"], {})).toMatchObject({
+      command: "reconcile-account",
+      accountId: "qq_arona",
+      forceRestart: true
+    });
+    expect(() => parseLauncherArguments(["status", "--force-restart"], {})).toThrow("--force-restart");
     expect(parseLauncherArguments(["probe-runtime"], {}).command).toBe("probe-runtime");
   });
 

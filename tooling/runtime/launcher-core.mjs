@@ -33,6 +33,7 @@ export function parseLauncherArguments(argv, environment = {}) {
   let requestedMode = environment.SUNABOT_CORE_MODE?.trim() || "auto";
   let dev = /^(?:1|true|yes)$/i.test(environment.SUNABOT_DEV?.trim() || "");
   let accountId;
+  let forceRestart = false;
   while (values.length > 0) {
     const value = values.shift();
     if (value === "--dev") {
@@ -55,7 +56,11 @@ export function parseLauncherArguments(argv, environment = {}) {
       accountId = value.slice("--account=".length);
       continue;
     }
-    throw new Error(`不支持的参数 ${value}。仅支持 --core=auto|native|docker、--dev 和 --account=<id>。`);
+    if (value === "--force-restart") {
+      forceRestart = true;
+      continue;
+    }
+    throw new Error(`不支持的参数 ${value}。仅支持 --core=auto|native|docker、--dev、--account=<id> 和 --force-restart。`);
   }
   if (!CORE_MODES.has(requestedMode)) {
     throw new Error(`SUNABOT_CORE_MODE 必须是 auto、native 或 docker，当前为 ${requestedMode || "空值"}。`);
@@ -66,7 +71,10 @@ export function parseLauncherArguments(argv, environment = {}) {
   if (command !== "reconcile-account" && accountId != null) {
     throw new Error("--account 仅支持 reconcile-account。");
   }
-  return { command, requestedMode, dev, ...(accountId ? { accountId } : {}) };
+  if (command !== "reconcile-account" && forceRestart) {
+    throw new Error("--force-restart 仅支持 reconcile-account。");
+  }
+  return { command, requestedMode, dev, ...(accountId ? { accountId } : {}), ...(forceRestart ? { forceRestart: true } : {}) };
 }
 
 export function isWslRuntime(options = {}) {

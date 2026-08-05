@@ -81,6 +81,20 @@ describe("account runtime daemon singleton", () => {
     ]);
   }, 20_000);
 
+  it("forwards a forced restart only for the requested account", async () => {
+    const fixture = await createDaemonFixture();
+    const workspace = await createWorkspace("sunabot-account-daemon-restart-");
+    const tracePath = path.join(fixture.root, "launcher-trace.log");
+    startDaemon({ fixture, workspace, token: token("restart"), tracePath });
+    await waitForOwner(workspace, fixture.entry);
+    const requestId = "00000000-0000-4000-8000-000000000003";
+
+    await writeRequest(workspace, requestId, "qq_arona", true);
+    await waitForPath(resultFile(workspace, requestId));
+
+    await expect(traceLines(tracePath)).resolves.toEqual(["reconcile-account:qq_arona:force-restart"]);
+  }, 20_000);
+
   it("keeps exactly one owner when two starts race to reclaim the same stale owner", async () => {
     const fixture = await createDaemonFixture({ injectStaleClaimPause: true });
     const workspace = await createWorkspace("sunabot-account-daemon-stale-race-");
@@ -578,7 +592,8 @@ async function createDaemonFixture(options: {
     "import fs from 'node:fs/promises';",
     "const command = process.argv[2];",
     "const account = process.argv.find((value) => value.startsWith('--account='))?.slice(10) ?? '';",
-    "await fs.appendFile(process.env.TRACE_FILE, `${command}:${account}\\n`);",
+    "const restart = process.argv.includes('--force-restart') ? ':force-restart' : '';",
+    "await fs.appendFile(process.env.TRACE_FILE, `${command}:${account}${restart}\\n`);",
     "if (account === 'hang') await new Promise(() => setInterval(() => {}, 1000));",
     "console.log(`SUNABOT_ACCOUNT_RECONCILE=${JSON.stringify({schemaVersion:1,accountId:account,desiredState:'running',observedState:'running',reconcileRequired:false,lastError:null,updatedAt:new Date().toISOString()})}`);"
   ].join("\n"));
@@ -782,7 +797,7 @@ async function waitForOwner(workspace: string, entry: string, excludedPid?: numb
   });
 }
 
-async function writeRequest(workspace: string, requestId: string, accountId: string) {
+async function writeRequest(workspace: string, requestId: string, accountId: string, forceRestart = false) {
   const directory = path.join(workspace, "runtime/account-reconciler/requests");
   await fs.mkdir(directory, { recursive: true, mode: 0o700 });
   await fs.writeFile(path.join(directory, `${requestId}.json`), `${JSON.stringify({
@@ -790,7 +805,8 @@ async function writeRequest(workspace: string, requestId: string, accountId: str
     kind: "account-reconcile",
     requestId,
     accountId,
-    desiredState: "running"
+    desiredState: "running",
+    ...(forceRestart ? { forceRestart: true } : {})
   })}\n`, { mode: 0o600 });
 }
 

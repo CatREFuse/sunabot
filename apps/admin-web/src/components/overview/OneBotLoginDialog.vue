@@ -33,7 +33,8 @@ const qrSource = computed(() => {
   const compact = qrcode.replace(/\s+/g, "");
   return /^[A-Za-z0-9+/=]+$/.test(compact) ? `data:image/png;base64,${compact}` : "";
 });
-const phaseLabel = computed(() => ({
+const recoveringLogin = computed(() => props.snapshot?.action === "recover_login");
+const phaseLabel = computed(() => recoveringLogin.value ? "正在恢复登录" : ({
   online: "已登录",
   connecting: "正在连接 OneBot",
   restarting: "正在退出",
@@ -72,6 +73,7 @@ const avatar = computed(() => /^\d{5,12}$/.test(String(qq.value)) ? `/api/media/
           <div v-else class="grid justify-items-center gap-3 text-mute"><i class="bx bx-loader-alt bx-spin text-4xl" aria-hidden="true"></i><p class="font-mono text-xs">{{ busy ? "加载中" : "等待二维码" }}</p></div>
         </div>
         <p v-if="effectiveError" class="inline-state" data-kind="error">{{ effectiveError }}</p>
+        <p v-else-if="recoveringLogin" class="text-sm text-mute">正在准备新的登录二维码。</p>
         <p v-else-if="snapshot?.online" class="text-sm text-mute">可以退出当前 QQ，再扫描新的账号。</p>
         <p v-else class="text-sm text-mute">使用手机 QQ 扫码并确认，二维码会自动更新。</p>
         <span v-if="snapshot?.imageUpdatedAt && !snapshot.online" class="font-mono text-[10px] text-mute">更新于 {{ formatFullDateTime(snapshot.imageUpdatedAt) }}</span>
@@ -83,7 +85,7 @@ const avatar = computed(() => /^\d{5,12}$/.test(String(qq.value)) ? `/api/media/
       </footer>
       <footer v-else class="flex justify-end gap-2 border-t border-line p-4 md:p-5">
         <button v-if="snapshot?.online" class="btn btn-danger" type="button" :disabled="busy" @click="emit('requestLogout')"><i class="bx bx-log-out" aria-hidden="true"></i>退出 QQ</button>
-        <button v-else class="btn btn-primary" type="button" :disabled="busy || snapshot?.phase === 'restarting'" @click="emit('refresh')"><i class="bx bx-refresh" :class="busy ? 'bx-spin' : ''" aria-hidden="true"></i>{{ snapshot?.phase === "expired" ? "重新获取" : "刷新二维码" }}</button>
+        <button v-else class="btn btn-primary" type="button" :disabled="busy || snapshot?.phase === 'restarting'" @click="emit('refresh')"><i class="bx bx-refresh" :class="busy ? 'bx-spin' : ''" aria-hidden="true"></i>{{ recoveringLogin ? "恢复中" : snapshot?.phase === "expired" ? "重新获取" : "刷新二维码" }}</button>
       </footer>
     </section>
   </DialogOverlay>

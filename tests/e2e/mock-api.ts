@@ -449,6 +449,7 @@ export interface MockApiState {
   nextConversationToolError: string;
   imageHistoryError: string;
   qqOnline: boolean;
+  qqKickedOffline: boolean;
   qrVersion: number;
   tokenUsage: MockTokenUsagePayload;
   tokenUsageRequests: string[];
@@ -526,6 +527,7 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
     nextConversationToolError: "",
     imageHistoryError: "",
     qqOnline: true,
+    qqKickedOffline: false,
     qrVersion: 1,
     tokenUsage: structuredClone(tokenUsageFixture),
     tokenUsageRequests: [],
@@ -999,6 +1001,21 @@ export async function installMockApi(page: Page, options: { requiredToken?: stri
     if (agentLoginMatch) {
       const accountId = decodeURIComponent(agentLoginMatch[2]);
       const account = state.agents.flatMap((item) => item.accounts).find((item) => item.id === accountId);
+      if (accountId === "primary" && state.qqKickedOffline) {
+        if (method === "POST") {
+          state.qqKickedOffline = false;
+          state.qqOnline = false;
+          state.offline = true;
+          if (account) account.connected = false;
+        }
+        return json(route, {
+          connected: method !== "POST",
+          online: false,
+          available: true,
+          phase: "restarting",
+          action: "recover_login"
+        });
+      }
       const online = Boolean(account?.connected && !(account.id === "primary" && state.offline));
       if (method === "POST" && !online) state.qrVersion += 1;
       const qr = (await imageFixture).toString("base64");

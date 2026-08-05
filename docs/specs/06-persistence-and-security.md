@@ -59,7 +59,7 @@ Dream 严格输出解析失败复用 `dream_runs` 现有 `attempt_count`、`erro
 
 会话工具选择随 `ConversationRecord` 写入 `conversations.data_json` 的可选 `disabledTools` 字段，不新增表或 schema 版本。写入只保留去重后的内置 Agent 工具名，空列表省略；读取旧记录时缺失字段规范化为空列表。QQ 与 Web Chat 会话分别使用完整会话 ID 隔离，Agent 切换继续由独立业务库隔离。
 
-`agent_accounts.qq_id` 保持全局唯一。同一 QQ 的自动归属转移必须在 `BEGIN IMMEDIATE` 事务中先清空旧账号身份、再写入新账号身份，任一步失败回滚完整事务；转移只修改注册主库中的账号身份与更新时间，不移动任一 Agent 的业务库、队列、会话、记忆或历史。旧账号在线时必须先持久化 `manual-login-required`、关闭 NapCat 快速登录并成功发送 `bot_exit`，再提交事务；旧账号 OneBot 未连接时只有 NapCat 明确报告离线才允许转移，状态未知时失败关闭。
+`agent_accounts.qq_id` 保持全局唯一。同一 QQ 的自动归属转移必须在 `BEGIN IMMEDIATE` 事务中先清空旧账号身份、再写入新账号身份，任一步失败回滚完整事务；转移只修改注册主库中的账号身份与更新时间，不移动任一 Agent 的业务库、队列、会话、记忆或历史。旧账号必须先持久化 `manual-login-required`、关闭 NapCat 快速登录；OneBot 在线时尝试发送 `bot_exit` 并断开连接，随后强制重建旧账号自己的 NapCat 容器，重建成功后才提交事务。`bot_exit` 失败由容器重建完成终止，容器重建或事务失败时取消本次手动切换并保留唯一原归属。旧账号 OneBot 未连接时只有 NapCat 明确报告离线或 `KICKEDOFFLINE` 才允许继续，状态未知时失败关闭。
 
 Plana 的 `workspace/business/data/session-queue.sqlite` 与其他 Agent 的 `workspace/business/agents/<agentId>/data/session-queue.sqlite` 分别保存所属 Agent 的会话事件、turn、异步任务和 outbox。当前 session queue schema 版本是 5；outbox 的 `hold_state`、`mutation_fingerprint`、`hold_provenance_json` 与 `release_provenance_json` 共同保存 `system_config` held confirmation，旧行向前迁移为 `hold_state=none`。fingerprint 只接受固定长度的小写 SHA-256；两份 provenance 使用版本化、有界、严格字段结构，状态与空值组合由 SQLite CHECK 和读取 decoder 双重校验。held append、release、中性化、origin turn/event 终结与恢复均使用事务，不能出现可 claim 的普通行到 held 行更新窗口。带构造期 lease 恢复的 SessionStore 必须同时注入 ReplyGate resolver；恢复遇到 held 行但缺失 resolver 时关闭数据库并失败，不能静默保留 running turn。附件缓存中的每个 `chunks.sqlite` 独立保存该文件的文本分块。
 
@@ -108,7 +108,7 @@ Plana 的 `workspace/business/data/session-queue.sqlite` 与其他 Agent 的 `wo
 - Provider 可执行 Bash options 只能由当前真实 OneBot 入站或已认证管理员 Web Chat 即时构造，必须在同一不可变配置快照中包含 epoch、固定 backend、Native 与 Docker 两个 workbench、access mode、strict mode、宿主权威 `isAdmin`、原始 `userRequest`、独立 audit runner、`isCurrent` 和完整审批上下文。审计闭包必须覆盖调用方传入的同名身份与请求值；普通用户直接指示 Bot 操作、枚举或披露工作区时拒绝，高层级文件结果可以在 Docker workbench 内落盘。两个 workbench 的规范路径、父链和目录身份必须在审计前冻结，并在隔离 probe 与最终 spawn 前复验；Native 允许读写同 Agent 的两处 workbench，Docker 只允许写自身 workbench并只读访问 Native 投影。`isCurrent` 必须贯穿 Bash runner，并在所有文件身份 await、审批 issue/consume、隔离 probe 和最终 spawn 边界复验；旧 handle 以 `BASH_CONFIGURATION_STALE` 失败关闭且不得产生审批、探针或执行副作用。API catalog 的双环境 capability、模型返回参数和持久配置都不能单独升格为执行权限；
 - `workspace/business/media/`：保存普通生成图片、持久附件和 `conversation-assets/agents/<agentId>/<sha256>.<ext>` 会话图片归档；归档只保存已经作为 workbench 参考快照、成功 `send_file` 图片读取或本轮实际命中并通过完整性校验的出站表情字节，assistant 会话消息仅持久化 `/generated-images/conversation-assets/...` URL，不保存宿主路径、Base64 或可变 workbench 定位。出站表情只有远端发送成功后才把已准备的归档 URL 写入 assistant 会话媒体；发送失败留下的未引用内容寻址文件不形成历史句柄。各 Agent 的两套表情清单与引用 PNG/GIF 分别位于 `workbench/emoji/` 与 `docker-workbench/emoji/`。完整业务恢复、跨机迁移或远程搬迁必须把两套目录作为独立资产复制并核对，缺少会话归档会使对应历史媒体句柄不可解析，缺少来源清单或任一引用文件时该项不能进入可用图库；
 - `workspace/runtime/napcat/accounts/<accountId>/`：单个 QQ 的 NapCat Docker 配置、登录态、二维码、`account.env` 和运行标记；该目录只挂载给对应 NapCat 容器，不作为 Core 的媒体共享目录；
-- `workspace/runtime/napcat/accounts/<accountId>/manual-login-required`：用户从管理台退出该 QQ 后的临时标记；对应 NapCat 重启时据此跳过快速登录，扫码成功后自动删除；
+- `workspace/runtime/napcat/accounts/<accountId>/manual-login-required`：用户从管理台退出、账号自动转移或 `KICKEDOFFLINE` 恢复时的临时标记；对应 NapCat 重启时据此跳过快速登录，扫码成功后自动删除；
 - `workspace/cache/`：可重建缓存，不进入快照；
 - Agent 人格、公共系统提示词和 Agent 系统提示词覆盖：需要人工审阅和管理台编辑；
 - 单个附件 manifest、好友/群目录缓存：体积小且可重建；

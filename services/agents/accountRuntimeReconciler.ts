@@ -16,6 +16,7 @@ export interface AccountRuntimeState {
 
 export interface AccountRuntimeReconcilerPort {
   reconcile(accountId: string): Promise<AccountRuntimeState>;
+  restart(accountId: string): Promise<AccountRuntimeState>;
 }
 
 export interface RuntimeProbeClientPort {
@@ -29,7 +30,15 @@ export class AccountRuntimeReconciler implements AccountRuntimeReconcilerPort {
     timeoutMs?: number;
   } = {}) {}
 
-  async reconcile(accountId: string): Promise<AccountRuntimeState> {
+  reconcile(accountId: string): Promise<AccountRuntimeState> {
+    return this.request(accountId, false);
+  }
+
+  restart(accountId: string): Promise<AccountRuntimeState> {
+    return this.request(accountId, true);
+  }
+
+  private async request(accountId: string, forceRestart: boolean): Promise<AccountRuntimeState> {
     if (!/^[A-Za-z0-9_-]{1,64}$/.test(accountId)) throw new Error("QQ 账号 ID 无效。");
     const workspace = this.options.workspace ?? getWorkspaceDir();
     const registry = desiredAccountState(workspace, accountId);
@@ -70,6 +79,7 @@ export class AccountRuntimeReconciler implements AccountRuntimeReconcilerPort {
       requestId,
       accountId,
       desiredState,
+      ...(forceRestart ? { forceRestart: true } : {}),
       requestedAt: new Date().toISOString()
     });
     const deadline = Date.now() + (this.options.timeoutMs ?? 130_000);

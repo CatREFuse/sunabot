@@ -3,7 +3,7 @@ import { AsyncMutex } from "../../packages/platform/mutex.js";
 import type { AgentAccount, AgentRegistry } from "./agentRegistry.js";
 
 export interface AccountIdentityLoginControl {
-  status(): Promise<{ isLogin: boolean; manualLogin: boolean; error?: string }>;
+  status(): Promise<{ isLogin: boolean; manualLogin: boolean; loginError?: string; error?: string }>;
   beginManualLogin(): Promise<void>;
   cancelManualLogin(): Promise<void>;
 }
@@ -26,6 +26,7 @@ export class AccountIdentityCoordinator {
     registry: AgentRegistry;
     controlFor: (account: AgentAccount) => AccountIdentityLoginControl;
     gateway: AccountIdentityGateway;
+    restartAccount: (accountId: string) => Promise<void>;
   }) {}
 
   assign(accountId: string, qqId: string): Promise<AccountIdentityAssignment> {
@@ -46,7 +47,7 @@ export class AccountIdentityCoordinator {
     }
 
     const currentStatus = await this.options.controlFor(current).status().catch(() => undefined);
-    if (!currentStatus || currentStatus.error || !currentStatus.isLogin || currentStatus.manualLogin) {
+    if (!currentStatus || currentStatus.error || currentStatus.loginError || !currentStatus.isLogin || currentStatus.manualLogin) {
       throw new ServiceError(
         409,
         "QQ_ACCOUNT_TRANSFER_UNAVAILABLE",
@@ -57,7 +58,7 @@ export class AccountIdentityCoordinator {
     const connected = this.options.gateway.isConnected(previous.id);
     if (!connected) {
       const status = await control.status().catch(() => undefined);
-      if (!status || status.error || status.isLogin) {
+      if (!status || status.error || (status.isLogin && !isKickedOffline(status.loginError))) {
         throw new ServiceError(
           409,
           "QQ_ACCOUNT_TRANSFER_UNAVAILABLE",
@@ -70,7 +71,8 @@ export class AccountIdentityCoordinator {
     try {
       await control.beginManualLogin();
       manualLoginPrepared = true;
-      if (connected) await this.options.gateway.exit(previous.id);
+      if (connected) await this.options.gateway.exit(previous.id).catch(() => undefined);
+      await this.options.restartAccount(previous.id);
       const account = await this.options.registry.updateAccountIdentity(accountId, qqId, undefined, true);
       return { account, previousAccount: previous, transferred: true };
     } catch (error) {
@@ -83,4 +85,8 @@ export class AccountIdentityCoordinator {
       );
     }
   }
+}
+
+function isKickedOffline(value?: string) {
+  return /\[KICKEDOFFLINE\]/i.test(value ?? "");
 }

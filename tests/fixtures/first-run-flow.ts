@@ -84,6 +84,18 @@ const built = await buildApp({
         lastError: null,
         updatedAt: "2026-07-14T00:01:00.000Z"
       };
+    },
+    restart: async (accountId) => {
+      reconciled.push(accountId);
+      return {
+        schemaVersion: 1,
+        accountId,
+        desiredState: "running",
+        observedState: "running",
+        reconcileRequired: false,
+        lastError: null,
+        updatedAt: "2026-07-14T00:01:00.000Z"
+      };
     }
   }
 });

@@ -108,7 +108,7 @@ macOS Native Core 启动时由 launcher 按 `DOCKER_CONTEXT`、`DOCKER_HOST`、�
 
 首次启动会为 Plana 创建“主账号”。打开管理台 `http://127.0.0.1:8787/agents`，选择 Agent 后进入对应账号登录；管理台每 2 秒同步登录状态，二维码轮换后自动更新，也可以主动刷新。
 
-每个 Agent 可以新增多个 QQ。管理台使用“新建 NapCat QQ Docker”登记账号，未运行时点击“运行”创建或启动对应独立容器，成功后点击“登录”扫码。新增、启停、运行或移除账号写入注册表后，宿主 account runtime daemon 只调和对应 NapCat；Docker Core 通过 workspace request/result bridge 请求宿主执行，不挂载 Docker socket。管理台显示期望状态、实际状态、是否仍需调和和最近错误；注册库不可读、daemon 缺失或请求超时时失败关闭，不停止或删除其他容器。QQ 在线后，账号弹窗提供退出操作；确认退出后该 NapCat 自动回到扫码态，扫描新账号成功后保存 QQ 号供后续快速登录。各 NapCat 原生 WebUI 只作为故障诊断入口。
+每个 Agent 可以新增多个 QQ。管理台使用“新建 NapCat QQ Docker”登记账号，未运行时点击“运行”创建或启动对应独立容器，成功后点击“登录”扫码。新增、启停、运行或移除账号写入注册表后，宿主 account runtime daemon 只调和对应 NapCat；Docker Core 通过 workspace request/result bridge 请求宿主执行，不挂载 Docker socket。管理台显示期望状态、实际状态、是否仍需调和和最近错误；注册库不可读、daemon 缺失或请求超时时失败关闭，不停止或删除其他容器。QQ 在线后，账号弹窗提供退出操作；确认退出后该 NapCat 自动回到扫码态，扫描新账号成功后保存 QQ 号供后续快速登录。账号收到 `KICKEDOFFLINE` 时，管理台自动请求强制重建该账号自己的 NapCat 容器并刷新二维码，无需重启 Core 或其他 QQ 容器。各 NapCat 原生 WebUI 只作为故障诊断入口。
 
 完成扫码后可以执行：
 

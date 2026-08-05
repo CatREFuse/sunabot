@@ -605,7 +605,13 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
       .filter((agent) => agent.enabled)
       .map((agent) => agentRegistry.config(agent.id)))
   });
-  registerOneBotRoutes(app, onebotGateway, { agentRegistry });
+  registerOneBotRoutes(app, onebotGateway, {
+    agentRegistry,
+    restartAccount: accountRuntimeReconciler ? async (accountId: string) => {
+      const state = await accountRuntimeReconciler.restart(accountId);
+      if (state.reconcileRequired) throw new ServiceError(503, "ACCOUNT_RUNTIME_RESTART_FAILED", state.lastError ?? "QQ 运行容器重启失败。");
+    } : undefined
+  });
   registerProviderConfigRoutes(app, { codexAuth, configService, agentConfigService, testProvider: options.testProvider });
   registerConfigDoctorRoutes(app, configDoctorService);
   registerReleaseRoutes(app);

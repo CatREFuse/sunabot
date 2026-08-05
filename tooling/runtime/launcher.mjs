@@ -147,7 +147,7 @@ export async function runLauncher(argv = process.argv.slice(2), environment = pr
       await bootstrapRuntime(context);
       break;
     case "reconcile-account":
-      await reconcileAccount(context, parsed.accountId);
+      await reconcileAccount(context, parsed.accountId, parsed.forceRestart);
       break;
     case "probe-runtime": {
       const facts = await collectRuntimeProbeFacts(context);
@@ -160,6 +160,14 @@ export async function runLauncher(argv = process.argv.slice(2), environment = pr
       break;
     }
   }
+}
+
+export function napcatAccountUpArguments(action, service) {
+  return [
+    "up", "-d", "--build",
+    ...(action === "restart" ? ["--force-recreate"] : []),
+    service
+  ];
 }
 
 async function restartRuntime(context) {
@@ -949,7 +957,7 @@ async function startNapcatAccounts(context, accounts, reverseWebSocket, secrets)
   }
 }
 
-async function reconcileAccount(context, accountId) {
+async function reconcileAccount(context, accountId, forceRestart = false) {
   if (databasePathOverrideConfigured(context.environment, context.runtimeEnvironment)) {
     throw new Error("SUNABOT_DATABASE_PATH 已停止支持；账号调和只读取 canonical 主库。");
   }
@@ -961,7 +969,8 @@ async function reconcileAccount(context, accountId) {
   const plan = planAccountReconciliation({
     accountId,
     account,
-    containers: runtime.napcat.matches
+    containers: runtime.napcat.matches,
+    forceRestart
   });
   const accountRoot = path.join(context.workspace, "runtime/napcat/accounts", accountId);
 
@@ -987,9 +996,9 @@ async function reconcileAccount(context, accountId) {
       if (!reverseWebSocket) throw new Error("Native OneBot 地址尚未写入 launcher 状态；请执行 ./sunabot.sh up。");
 
       const changed = await configureNapcat(context, reverseWebSocket, secrets, account);
-      if (plan.action === "start") await clearNapcatLoginQr(context, account);
-      if (plan.action === "start" || changed) {
-        await napcatCompose(context, account, ["up", "-d", "--build", context.contract.napcatService]);
+      if (plan.action === "start" || plan.action === "restart") await clearNapcatLoginQr(context, account);
+      if (plan.action === "start" || plan.action === "restart" || changed) {
+        await napcatCompose(context, account, napcatAccountUpArguments(plan.action, context.contract.napcatService));
       }
       await waitForNapcatAccountHealth(
         context,
