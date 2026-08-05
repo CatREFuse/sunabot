@@ -284,14 +284,14 @@ export class OneBotGateway extends EventEmitter implements MessagingPort, Conver
     }, options.accountId);
   }
 
-  async dispatchAction(action: string, params: Record<string, unknown>, accountId?: string) {
+  async dispatchAction(action: string, params: Record<string, unknown>, accountId?: string, disconnectAfterSend = false) {
     const ws = this.openSocket(accountId);
     if (!ws) throw new Error("OneBot is not connected.");
     const payload = JSON.stringify({ action, params });
     await new Promise<void>((resolve, reject) => {
       ws.send(payload, (error) => {
         if (error) reject(error instanceof Error ? error : new Error(String(error)));
-        else resolve();
+        else { if (disconnectAfterSend) ws.terminate(); resolve(); }
       });
     });
   }

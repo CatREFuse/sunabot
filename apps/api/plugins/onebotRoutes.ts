@@ -12,6 +12,7 @@ import { getWorkspacePath } from "../../../packages/platform/projectPaths.js";
 import type { OneBotLoginCheck, OneBotQrLogin } from "../../../packages/contracts/admin/public.js";
 import { AdminApiError, conflict, notFound } from "../../../src/admin/errors.js";
 import type { AgentRegistry } from "../../../services/agents/agentRegistry.js";
+import { AccountIdentityCoordinator } from "../../../services/agents/accountIdentityCoordinator.js";
 import type { AgentAccountRegistryRow } from "../../../adapters/sqlite/applicationDataStore.js";
 import { applicationDataStore } from "../../../adapters/sqlite/applicationDataStore.js";
 
@@ -36,6 +37,16 @@ export function registerOneBotRoutes(app: FastifyInstance, onebotGateway: OneBot
     }
     return control;
   };
+  const identityCoordinator = options.agentRegistry
+    ? new AccountIdentityCoordinator({
+        registry: options.agentRegistry,
+        controlFor: accountControl,
+        gateway: {
+          isConnected: (accountId) => Boolean(onebotGateway.getStatus().accounts?.some((item) => item.accountId === accountId)),
+          exit: (accountId) => onebotGateway.dispatchAction("bot_exit", {}, accountId, true)
+        }
+      })
+    : undefined;
   app.addHook("onClose", async () => {
     for (const control of accountControls.values()) control.close();
   });
@@ -109,7 +120,7 @@ export function registerOneBotRoutes(app: FastifyInstance, onebotGateway: OneBot
     const snapshot = async (account: AgentAccountRegistryRow, refreshed?: NapcatLoginSnapshot) => {
       const result = await getQqLoginSnapshot(onebotGateway, accountControl(account), account.id, refreshed);
       if (result.data?.user_id && String(result.data.user_id) !== account.qqId) {
-        await registry.updateAccountIdentity(account.id, String(result.data.user_id));
+        await identityCoordinator!.assign(account.id, String(result.data.user_id));
       }
       return result;
     };

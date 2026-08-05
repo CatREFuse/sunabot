@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import Fastify from "fastify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -412,6 +413,11 @@ describe("AgentRegistry", () => {
     await expect(registry.updateAccountIdentity(second.id, "123456789"))
       .rejects.toMatchObject({ statusCode: 409, code: "AGENT_CONFLICT" });
 
+    await expect(registry.updateAccountIdentity(second.id, "123456789", undefined, true))
+      .resolves.toMatchObject({ id: second.id, qqId: "123456789" });
+    expect(registry.account(first.id)?.qqId).toBeUndefined();
+    expect(registry.account(second.id)?.qqId).toBe("123456789");
+
     const aronaConfig = await registry.config("arona", config);
     expect(aronaConfig.persona).toMatchObject({ defaultAgentId: "arona", name: "阿罗娜" });
     expect(aronaConfig.persona).toMatchObject({
@@ -472,6 +478,38 @@ describe("AgentRegistry", () => {
       second.id,
       ".remove-on-stop"
     ))).resolves.toBeUndefined();
+  });
+
+  it("rolls back both QQ identity rows when an automatic transfer write fails", async () => {
+    const config = createAdminTestConfig(temporaryDirectory);
+    config.persona.agentWorkspace = path.join(testPaths.workspace, "business", "agents", "plana");
+    const registry = new AgentRegistry(config, {
+      workspaceRoot: path.join(testPaths.workspace, "business", "agents"),
+      store,
+      allowUnmarkedMigration: true,
+      now: () => new Date("2026-08-05T00:00:00.000Z")
+    });
+    await registry.initialize();
+    const target = await registry.createAccount("plana", { label: "备用账号" });
+    await registry.updateAccountIdentity("primary", "123456789");
+    const database = new DatabaseSync(store.databasePath);
+    try {
+      database.exec(`
+        CREATE TRIGGER fail_account_identity_transfer
+        BEFORE UPDATE OF qq_id ON agent_accounts
+        WHEN NEW.id <> 'primary' AND NEW.qq_id = '123456789'
+        BEGIN
+          SELECT RAISE(ABORT, 'injected account identity transfer failure');
+        END;
+      `);
+    } finally {
+      database.close();
+    }
+
+    await expect(registry.updateAccountIdentity(target.id, "123456789", undefined, true))
+      .rejects.toThrow("injected account identity transfer failure");
+    expect(registry.account("primary")?.qqId).toBe("123456789");
+    expect(registry.account(target.id)?.qqId).toBeUndefined();
   });
 
   it("removes the registry row and workspace when runtime initialization fails after creation", async () => {

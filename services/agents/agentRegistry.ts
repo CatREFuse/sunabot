@@ -312,8 +312,7 @@ export class AgentRegistry {
       throw mapSqliteConflict(error, "QQ 账号名称已存在。");
     }
   }
-
-  async updateAccountIdentity(accountId: string, qqId: string, label?: string) {
+  async updateAccountIdentity(accountId: string, qqId: string, label?: string, transfer = false) {
     const current = this.store.readAgentAccount(accountId);
     if (!current) notFound("AGENT_ACCOUNT_NOT_FOUND", "QQ 账号不存在。");
     const normalizedQq = qqId.trim();
@@ -324,14 +323,8 @@ export class AgentRegistry {
       qqId: normalizedQq,
       updatedAt: this.now().toISOString()
     };
-    try {
-      this.store.updateAgentAccount(updated);
-      return updated;
-    } catch (error) {
-      throw mapSqliteConflict(error, "QQ 号已绑定其他 Agent。");
-    }
+    return persistAccountIdentity(this.store, updated, transfer);
   }
-
   async clearAccountIdentity(accountId: string) {
     const current = this.store.readAgentAccount(accountId);
     if (!current) notFound("AGENT_ACCOUNT_NOT_FOUND", "QQ 账号不存在。");
@@ -780,6 +773,16 @@ function mapSqliteConflict(error: unknown, message = "Agent 已存在。") {
     return new ServiceError(409, "AGENT_CONFLICT", message);
   }
   return error;
+}
+
+function persistAccountIdentity(store: AgentRegistryRepository, updated: AgentAccountRegistryRow, transfer: boolean) {
+  if (transfer && !store.transferAgentAccountIdentity(updated.id, updated.qqId!, updated.updatedAt).updated) {
+    notFound("AGENT_ACCOUNT_NOT_FOUND", "QQ 账号不存在。");
+  }
+  if (transfer) return updated;
+  try { store.updateAgentAccount(updated); return updated; } catch (error) {
+    throw mapSqliteConflict(error, "QQ 号已绑定其他 Agent。");
+  }
 }
 
 function badRequest(code: string, message: string, field?: string): never {

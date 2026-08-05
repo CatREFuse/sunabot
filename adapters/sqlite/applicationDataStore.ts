@@ -223,6 +223,25 @@ export class ApplicationDataStore {
     return Number(result.changes) > 0;
   }
 
+  transferAgentAccountIdentity(accountId: string, qqId: string, updatedAt: string) {
+    return this.transaction(() => {
+      const target = this.database.prepare("SELECT id FROM agent_accounts WHERE id = ?").get(accountId) as SqlRow | undefined;
+      if (!target) return { updated: false };
+      const previous = this.database.prepare("SELECT id FROM agent_accounts WHERE qq_id = ?").get(qqId) as SqlRow | undefined;
+      const previousAccountId = previous ? String(previous.id) : undefined;
+      if (previousAccountId && previousAccountId !== accountId) {
+        this.database.prepare("UPDATE agent_accounts SET qq_id = NULL, updated_at = ? WHERE id = ? AND qq_id = ?")
+          .run(updatedAt, previousAccountId, qqId);
+      }
+      const result = this.database.prepare("UPDATE agent_accounts SET qq_id = ?, updated_at = ? WHERE id = ?")
+        .run(qqId, updatedAt, accountId);
+      return {
+        updated: Number(result.changes) > 0,
+        ...(previousAccountId && previousAccountId !== accountId ? { previousAccountId } : {})
+      };
+    });
+  }
+
   deleteAgentAccount(id: string) {
     return Number(this.database.prepare("DELETE FROM agent_accounts WHERE id = ?").run(id).changes) > 0;
   }

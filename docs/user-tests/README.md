@@ -100,6 +100,7 @@ Web Chat lifecycle:
 
 - [`cases/admin-console/web-chat-deadline-cancellation.md`](./cases/admin-console/web-chat-deadline-cancellation.md)
 - [`cases/admin-console/log-business-node-filtering.md`](./cases/admin-console/log-business-node-filtering.md)
+- [`cases/admin-console/qq-account-automatic-transfer.md`](./cases/admin-console/qq-account-automatic-transfer.md)
 
 Stateful media chains:
 
