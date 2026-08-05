@@ -94,6 +94,7 @@ Executable branch examples:
 - [`add-user-profile-tool.md`](./add-user-profile-tool.md)
 - [`conversation-message-32-private.md`](./conversation-message-32-private.md)
 - [`conversation-message-32-group.md`](./conversation-message-32-group.md)
+- [`card-message-conversation-history.md`](./card-message-conversation-history.md)
 - [`sampled-dream.md`](./sampled-dream.md)
 
 Web Chat lifecycle:

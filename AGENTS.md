@@ -54,6 +54,7 @@
 | `docs/user-tests/group-topic-internal-reasoning.md` | 验证群聊主 Agent 在内部完成当前话题判断且不暴露判断过程 | 修改群聊话题判断、主回复上下文或旧实现清理边界时读取 |
 | `docs/user-tests/conversation-message-32-private.md` | 验证单聊默认提示词只接收最近 32 条历史消息 | 修改单聊上下文窗口、对话提示词变量或默认上下文数量时读取 |
 | `docs/user-tests/conversation-message-32-group.md` | 验证群聊默认提示词只接收最近 32 条原序历史消息 | 修改群聊上下文窗口、群聊提示词变量或默认上下文数量时读取 |
+| `docs/user-tests/card-message-conversation-history.md` | QQ 卡片标题、正文、群名、群号与动作进入可读对话历史 | 修改 JSON/XML/小程序等卡片消息解析或会话历史投影时读取 |
 | `docs/user-tests/current-message-image-reference.md` | 当前群消息图片以精确媒体句柄进入异步生图的用户用例 | 修改当前图片句柄、dispatch 快照或参考图解析时读取 |
 | `docs/user-tests/current-message-image-4k-retry-budget.md` | 当前私聊图片在预处理后以完整回复重试预算进入 4K 异步生图的用户用例 | 修改图片预处理、普通回复超时或 4K 生图派发时读取 |
 | `docs/user-tests/qq-private-pdf-attachment.md` | 副账号 QQ 私聊 PDF 经账号定向下载、解析并进入主回复的用户用例 | 修改 QQ 文件查询、附件源 fallback、PDF 解析或多账号附件路由时读取 |

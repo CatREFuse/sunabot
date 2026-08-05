@@ -72,6 +72,36 @@
 ]
 ```
 
+## 卡片内容解析
+
+可解析的 `json` 与 `miniapp`/`lightapp` 段不会只保留顶层通用 `prompt`。解析器会在有界嵌套结构中提取标题、群名、群号、说明与动作，去除重复的可见值后按原卡片语义组合为同一条消息文本。群邀请、推荐群聊等已确认的群卡片还会从显式群字段或动作链接的群参数中提取群号，但动作 URL、应用标识、token、ticket 和其余传输元数据不会进入对话历史。
+
+### 原始消息示例
+
+```json
+{
+  "post_type": "message",
+  "message_type": "private",
+  "message_id": 9050,
+  "user_id": 10001,
+  "self_id": 20002,
+  "message": [
+    {
+      "type": "json",
+      "data": {
+        "data": "{\"prompt\":\"[邀请你加入群聊]\",\"meta\":{\"groupInvite\":{\"title\":\"邀请你加入群聊\",\"groupName\":\"夜航测试群\",\"brief\":\"邀请你加入群聊‘夜航测试群’，进入可查看详情。\",\"tag\":\"邀请加群\"}},\"extra\":{\"groupCode\":\"778899001\"}}"
+      }
+    }
+  ]
+}
+```
+
+进入队列并持久化到会话历史的 `text`：
+
+```text
+[JSON卡片：邀请你加入群聊；群名：夜航测试群；群号：778899001；邀请你加入群聊‘夜航测试群’，进入可查看详情。；邀请加群]
+```
+
 ## 聊天记录解析
 
 `forward` 表示 QQ 合并转发聊天记录。事件已经携带 `data.content` 时直接递归解析；只有 `data.id` 时，OneBot Gateway 在消息进入队列前调用 [`get_forward_msg`](https://napcat.apifox.cn/226656712e0)，取得记录后再生成带发送者、QQ 号、顺序和嵌套消息类型的文本。
@@ -171,9 +201,9 @@ NapCat 响应示例：
 | `contact` | `[推荐联系人：ID]`、`[推荐群聊：ID]` 或 `[联系人分享：ID]` | `type`, `id` |
 | `location` | `[位置：名称或经纬度]` | `title`, `content`, `lat`, `lon` |
 | `music` | `[音乐：标题 - 歌手]` | `title`, `name`, `id`, `singer`, `artist`, `content` |
-| `json` | `[JSON卡片：标题或摘要]` | `data`, `json` |
+| `json` | `[JSON卡片：标题；群名；群号；说明；动作]`，按实际可见字段省略空项 | `data`, `json` 内的有界卡片结构 |
 | `xml` | `[XML卡片：标题或摘要]` | `data`, `xml` |
-| `miniapp` | `[小程序：标题或摘要]` | `data`, `content` |
+| `miniapp` | `[小程序：标题；群名；群号；说明；动作]`，按实际可见字段省略空项 | `data`, `content` 内的有界卡片结构 |
 | `markdown` | `[Markdown消息]...[/Markdown消息]` | `content`, `markdown`, `text` |
 | `forward` | `[聊天记录开始]...逐条记录...[聊天记录结束]` | `id`, `message_id`, `content`, `messages` |
 | `node` | `序号. 发送者(QQ 号)：消息内容` | `nickname`, `name`, `user_id`, `uin`, `content` |
@@ -202,6 +232,7 @@ OneBot 使用 CQ 字符串上报时，同样按上述规则解析 `[CQ:type,...]
 - 嵌套消息最多解析 4 层。
 - 单个聊天记录最多注入 100 条记录。
 - 单条入站消息最多主动获取 8 个仅含 ID 的聊天记录。
+- JSON/小程序卡片最多访问 5 层、256 个节点并保留 12 个可见字段。
 - 最终注入文本最多 32,000 个 Unicode 字符；卡片摘要最多 240 个字符；单个 Markdown 段最多 4,000 个字符。
 - 超出边界的内容保留 `[消息内容已截断]`、`[嵌套消息已截断]` 或对应聊天记录截断标记。
 - 解析聊天记录失败时保留 `[聊天记录：ID ...，内容暂不可用]`，原消息不会消失。

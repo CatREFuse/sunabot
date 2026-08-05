@@ -6,6 +6,17 @@ const MAX_FORWARD_RECORDS = 100;
 const MAX_FORWARD_IDS = 8;
 const MAX_RENDERED_TEXT_CHARACTERS = 32_000;
 const MAX_CARD_SUMMARY_CHARACTERS = 240;
+const MAX_CARD_TREE_DEPTH = 5;
+const MAX_CARD_TREE_NODES = 256;
+const MAX_CARD_FIELDS = 12;
+
+const CARD_TITLE_KEYS = new Set(["prompt", "title"]);
+const CARD_DESCRIPTION_KEYS = new Set(["brief", "content", "desc", "description", "summary", "text"]);
+const CARD_ACTION_KEYS = new Set(["actiontext", "buttontext", "label", "tag"]);
+const CARD_GROUP_NAME_KEYS = new Set(["groupname", "groupnickname"]);
+const CARD_GROUP_ID_KEYS = new Set(["groupcode", "groupid", "groupnum", "groupnumber", "quncode"]);
+const CARD_LINK_KEYS = new Set(["actiondata", "jumpurl", "url"]);
+const CARD_NESTED_JSON_KEYS = new Set(["content", "data", "extra"]);
 
 export interface RenderedOneBotMessage {
   text: string;
@@ -306,19 +317,185 @@ function readMessage(value: unknown): string | OneBotMessageSegment[] {
   });
 }
 
+interface CardField {
+  priority: number;
+  order: number;
+  value: string;
+}
+
 function cardSummary(value: unknown) {
   const raw = typeof value === "string" ? value : JSON.stringify(value ?? "");
   if (!raw) return "";
   try {
     const parsed = typeof value === "string" ? JSON.parse(value) : value;
-    const root = record(parsed);
-    const meta = record(root.meta);
-    const detail = record(meta.detail);
-    const summary = root.prompt ?? root.title ?? root.desc ?? root.summary ?? detail.title ?? detail.desc;
-    return oneLine(summary ?? raw, MAX_CARD_SUMMARY_CHARACTERS);
+    const fields: CardField[] = [];
+    const state = { nodes: 0, order: 0 };
+    const groupCard = cardTreeHasGroupHint(parsed, 0, { nodes: 0 });
+    collectCardFields(parsed, fields, groupCard, [], 0, state);
+    const summary = uniqueCardFields(fields)
+      .slice(0, MAX_CARD_FIELDS)
+      .map((field) => field.value)
+      .join("；");
+    return oneLine(summary || raw, MAX_CARD_SUMMARY_CHARACTERS);
   } catch {
     return oneLine(raw, MAX_CARD_SUMMARY_CHARACTERS);
   }
+}
+
+function collectCardFields(
+  value: unknown,
+  output: CardField[],
+  groupCard: boolean,
+  path: string[],
+  depth: number,
+  state: { nodes: number; order: number }
+) {
+  if (depth > MAX_CARD_TREE_DEPTH || state.nodes >= MAX_CARD_TREE_NODES) return;
+  state.nodes += 1;
+  if (Array.isArray(value)) {
+    for (const item of value) collectCardFields(item, output, groupCard, path, depth + 1, state);
+    return;
+  }
+  if (!value || typeof value !== "object") return;
+  for (const [rawKey, child] of Object.entries(value as Record<string, unknown>)) {
+    if (state.nodes >= MAX_CARD_TREE_NODES) return;
+    state.nodes += 1;
+    const key = normalizedCardKey(rawKey);
+    const nextPath = [...path, key];
+    const scalar = cardScalar(child);
+    if (scalar) {
+      const nested = CARD_NESTED_JSON_KEYS.has(key) ? parseNestedCardJson(scalar) : undefined;
+      if (CARD_TITLE_KEYS.has(key)) addCardField(output, unwrappedCardTitle(scalar), 10, state);
+      else if (CARD_GROUP_NAME_KEYS.has(key)) addCardField(output, `群名：${scalar}`, 20, state);
+      else if (CARD_GROUP_ID_KEYS.has(key)) addCardGroupId(output, scalar, state);
+      else if (groupCard && ["contact", "nickname"].includes(key)) {
+        addCardField(output, `群名：${scalar}`, 20, state);
+      } else if (groupCard && key === "uin" && nextPath.includes("extra")) {
+        addCardGroupId(output, scalar, state);
+      } else if (CARD_DESCRIPTION_KEYS.has(key) && nested === undefined) addCardField(output, scalar, 40, state);
+      else if (CARD_ACTION_KEYS.has(key)) addCardField(output, scalar, 50, state);
+      if (groupCard && CARD_LINK_KEYS.has(key)) {
+        for (const groupId of groupIdsFromCardLink(scalar)) {
+          addCardGroupId(output, groupId, state);
+        }
+      }
+      if (nested !== undefined) collectCardFields(nested, output, groupCard, nextPath, depth + 1, state);
+    } else {
+      collectCardFields(child, output, groupCard, nextPath, depth + 1, state);
+    }
+  }
+}
+
+function cardTreeHasGroupHint(value: unknown, depth: number, state: { nodes: number }): boolean {
+  if (depth > MAX_CARD_TREE_DEPTH || state.nodes >= MAX_CARD_TREE_NODES) return false;
+  state.nodes += 1;
+  if (Array.isArray(value)) {
+    return value.some((item) => cardTreeHasGroupHint(item, depth + 1, state));
+  }
+  if (!value || typeof value !== "object") return false;
+  for (const [rawKey, child] of Object.entries(value as Record<string, unknown>)) {
+    if (state.nodes >= MAX_CARD_TREE_NODES) return false;
+    state.nodes += 1;
+    const key = normalizedCardKey(rawKey);
+    if (key.includes("group") || key.includes("qun")) return true;
+    const scalar = cardScalar(child);
+    if (scalar && /群聊|群名片|邀请加群|card_type=group/i.test(scalar)) return true;
+    if (scalar && CARD_NESTED_JSON_KEYS.has(key)) {
+      const nested = parseNestedCardJson(scalar);
+      if (nested !== undefined && cardTreeHasGroupHint(nested, depth + 1, state)) return true;
+    } else if (!scalar && cardTreeHasGroupHint(child, depth + 1, state)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function addCardField(output: CardField[], value: string, priority: number, state: { order: number }) {
+  const text = oneLine(value, MAX_CARD_SUMMARY_CHARACTERS);
+  const unlabelled = text.replace(/^(?:群名|群号)：/, "");
+  if (!text || looksLikeCardTransport(unlabelled)) return;
+  output.push({ priority, order: state.order, value: text });
+  state.order += 1;
+}
+
+function addCardGroupId(output: CardField[], value: string, state: { order: number }) {
+  const identifier = oneLine(value, 32);
+  if (/^[1-9]\d{0,31}$/.test(identifier)) addCardField(output, `群号：${identifier}`, 30, state);
+}
+
+function uniqueCardFields(fields: CardField[]) {
+  const result: CardField[] = [];
+  const indexes = new Map<string, number>();
+  for (const field of fields.sort((left, right) => left.priority - right.priority || left.order - right.order)) {
+    const key = cardFieldDedupeKey(field.value);
+    if (!key) continue;
+    const existingIndex = indexes.get(key);
+    if (existingIndex === undefined) {
+      indexes.set(key, result.length);
+      result.push(field);
+    } else if (hasCardFieldLabel(field.value) && !hasCardFieldLabel(result[existingIndex]!.value)) {
+      result[existingIndex] = field;
+    }
+  }
+  return result.sort((left, right) => left.priority - right.priority || left.order - right.order);
+}
+
+function cardFieldDedupeKey(value: string) {
+  return value
+    .replace(/^(?:群名|群号)：/, "")
+    .replace(/^[\[【](.*)[\]】]$/, "$1")
+    .trim();
+}
+
+function hasCardFieldLabel(value: string) {
+  return /^(?:群名|群号)：/.test(value);
+}
+
+function groupIdsFromCardLink(value: string) {
+  try {
+    const url = new URL(value);
+    const ids: string[] = [];
+    for (const [rawKey, rawValue] of url.searchParams) {
+      const key = normalizedCardKey(rawKey);
+      if (CARD_GROUP_ID_KEYS.has(key) || key === "uin") {
+        const id = oneLine(rawValue, 64);
+        if (id) ids.push(id);
+      }
+    }
+    return uniqueStrings(ids);
+  } catch {
+    return [];
+  }
+}
+
+function parseNestedCardJson(value: string): unknown | undefined {
+  const text = value.trim();
+  if (!(text.startsWith("{") && text.endsWith("}"))
+    && !(text.startsWith("[") && text.endsWith("]"))) return undefined;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizedCardKey(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function unwrappedCardTitle(value: string) {
+  const match = value.match(/^[\[【](.*)[\]】]$/);
+  return match?.[1]?.trim() || value;
+}
+
+function cardScalar(value: unknown) {
+  return typeof value === "string" || typeof value === "number"
+    ? oneLine(value, MAX_CARD_SUMMARY_CHARACTERS)
+    : "";
+}
+
+function looksLikeCardTransport(value: string) {
+  return /^(?:https?:\/\/|mqqapi:\/\/|[a-z][a-z0-9+.-]*:\/\/)/i.test(value);
 }
 
 function parseCqParams(input: string) {

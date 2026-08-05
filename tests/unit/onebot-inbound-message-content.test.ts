@@ -78,6 +78,76 @@ describe("OneBot inbound message content mapping", () => {
     expect(rendered.text.match(/\[内容图片/g)).toHaveLength(1);
   });
 
+  it("exposes a nested group invitation card in the queued conversation snapshot", () => {
+    const event = inboundEvent([
+      { type: "text", data: { text: "请读取这张邀请卡片" } },
+      {
+        type: "json",
+        data: {
+          data: JSON.stringify({
+            app: "com.tencent.qun.invite",
+            config: { token: "private-card-token" },
+            prompt: "[邀请你加入群聊]",
+            meta: {
+              groupInvite: {
+                title: "邀请你加入群聊",
+                groupName: "夜航测试群",
+                brief: "邀请你加入群聊‘夜航测试群’，进入可查看详情。",
+                tag: "邀请加群",
+                jumpUrl: "mqqapi://card/show_pslcard?card_type=group&uin=778899001&ticket=private-ticket"
+              }
+            },
+            extra: { token: "private-extra-token" },
+            view: "groupInvite"
+          })
+        }
+      }
+    ]);
+
+    const incoming = parseOneBotInboundMessage(event)!;
+    const queued = queueIncomingSnapshot(incoming);
+
+    expect(queued.text).toContain("请读取这张邀请卡片");
+    expect(queued.text).toContain("邀请你加入群聊");
+    expect(queued.text).toContain("群名：夜航测试群");
+    expect(queued.text).toContain("群号：778899001");
+    expect(queued.text).toContain("邀请你加入群聊‘夜航测试群’，进入可查看详情。");
+    expect(queued.text).toContain("邀请加群");
+    expect(queued.text).not.toContain("mqqapi://");
+    expect(queued.text).not.toContain("private-card-token");
+    expect(queued.text).not.toContain("private-ticket");
+    expect(queued.text).not.toContain("private-extra-token");
+    expect(queued.text).not.toContain("com.tencent.qun.invite");
+  });
+
+  it("keeps the readable fields of common nested news cards without transport metadata", () => {
+    const rendered = renderOneBotMessage([{
+      type: "json",
+      data: {
+        data: JSON.stringify({
+          app: "com.tencent.news",
+          prompt: "[项目动态]",
+          meta: {
+            news: {
+              title: "版本 2.0 已发布",
+              desc: "新增卡片消息适配",
+              tag: "查看详情",
+              jumpUrl: "https://example.test/release?token=private-news-token"
+            }
+          }
+        })
+      }
+    }]);
+
+    expect(rendered.text).toContain("项目动态");
+    expect(rendered.text).toContain("版本 2.0 已发布");
+    expect(rendered.text).toContain("新增卡片消息适配");
+    expect(rendered.text).toContain("查看详情");
+    expect(rendered.text).not.toContain("https://");
+    expect(rendered.text).not.toContain("private-news-token");
+    expect(rendered.text).not.toContain("com.tencent.news");
+  });
+
   it("maps every documented NapCat message segment family to readable injected text", () => {
     const message: OneBotMessageSegment[] = [
       { type: "text", data: { text: "正文" } },
