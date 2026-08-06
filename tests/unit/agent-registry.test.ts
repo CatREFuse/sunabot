@@ -325,6 +325,42 @@ describe("AgentRegistry", () => {
     expect(registry.account("primary")?.qqId).toBe("123456789");
   });
 
+  it("does not reclaim an inferred primary QQ identity owned by another account", async () => {
+    const config = createAdminTestConfig(temporaryDirectory);
+    config.persona.name = "普拉娜";
+    config.persona.agentWorkspace = path.join(testPaths.workspace, "business", "agents", "plana");
+    const registry = new AgentRegistry(config, {
+      workspaceRoot: path.join(testPaths.workspace, "business", "agents"),
+      store,
+      allowUnmarkedMigration: true,
+      now: () => new Date("2026-08-06T08:00:00.000Z")
+    });
+    await registry.initialize();
+    const owner = await registry.createAccount("plana", { label: "现有账号" });
+    await registry.updateAccountIdentity(owner.id, "123456789");
+    await fs.mkdir(path.join(
+      testPaths.workspace,
+      "runtime",
+      "napcat",
+      "accounts",
+      "primary",
+      "config-full"
+    ), { recursive: true });
+    await fs.writeFile(path.join(
+      testPaths.workspace,
+      "runtime",
+      "napcat",
+      "accounts",
+      "primary",
+      "config-full",
+      "onebot11_123456789.json"
+    ), "stale-primary-runtime\n", "utf8");
+
+    await expect(registry.initialize()).resolves.toBeUndefined();
+    expect(registry.account("primary")?.qqId).toBeUndefined();
+    expect(registry.account(owner.id)?.qqId).toBe("123456789");
+  });
+
   it("creates isolated Agent workspaces and allocates unique QQ runtimes", async () => {
     const config = createAdminTestConfig(temporaryDirectory);
     config.persona.name = "普拉娜";

@@ -4,6 +4,7 @@ import http from "node:http";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import sharp from "sharp";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultConfig } from "../../src/config.js";
 import { OneBotGateway } from "../../adapters/onebot/onebotGateway.js";
@@ -112,6 +113,30 @@ describe("OneBot outbound media adapter", () => {
     expect(() => outboundMediaReferenceMode({ SUNABOT_MEDIA_TRANSPORT: "shared-path" })).toThrow(
       "do not share a filesystem"
     );
+  });
+
+  it("encodes a wide generated PNG byte-for-byte without resizing or cropping", async () => {
+    const widePath = path.join(temporaryDirectory, "wide-generated.png");
+    const wideBytes = await sharp({
+      create: {
+        width: 160,
+        height: 90,
+        channels: 3,
+        background: { r: 12, g: 34, b: 56 }
+      }
+    }).png().toBuffer();
+    await fs.writeFile(widePath, wideBytes);
+    const inlineDelivery = new OutboundMediaDelivery({ rootDir: temporaryDirectory });
+
+    const reference = await inlineDelivery.createReference(widePath);
+    const decoded = Buffer.from(reference.slice("base64://".length), "base64");
+
+    expect(decoded.equals(wideBytes)).toBe(true);
+    await expect(sharp(decoded).metadata()).resolves.toMatchObject({
+      width: 160,
+      height: 90,
+      format: "png"
+    });
   });
 
   it("rejects a missing generated image before OneBot reports a send", async () => {

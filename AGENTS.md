@@ -57,6 +57,8 @@
 | `docs/user-tests/card-message-conversation-history.md` | QQ 卡片标题、正文、群名、群号与动作进入可读对话历史 | 修改 JSON/XML/小程序等卡片消息解析或会话历史投影时读取 |
 | `docs/user-tests/current-message-image-reference.md` | 当前群消息图片以精确媒体句柄进入异步生图的用户用例 | 修改当前图片句柄、dispatch 快照或参考图解析时读取 |
 | `docs/user-tests/current-message-image-4k-retry-budget.md` | 当前私聊图片在预处理后以完整回复重试预算进入 4K 异步生图的用户用例 | 修改图片预处理、普通回复超时或 4K 生图派发时读取 |
+| `docs/user-tests/generated-image-aspect-preservation.md` | 生图结果完整适配目标画布并保持 QQ 出站字节一致的用户用例 | 修改生成图尺寸适配、落盘或 OneBot 图片外发时读取 |
+| `docs/user-tests/tone-segmented-more-than-three.md` | Tone 在内容需要时生成并发送三个以上文字气泡的用户用例 | 修改 Tone 气泡数量建议、分段门禁或发送时读取 |
 | `docs/user-tests/qq-private-pdf-attachment.md` | 副账号 QQ 私聊 PDF 经账号定向下载、解析并进入主回复的用户用例 | 修改 QQ 文件查询、附件源 fallback、PDF 解析或多账号附件路由时读取 |
 | `docs/user-tests/parse-failed-attachment-export.md` | QQ 文件获取成功但解析失败后仍可导出原件的用户用例 | 修改附件获取/解析状态或聊天媒体导出前读取 |
 | `docs/user-tests/user-private-attachment-docker-workbench.md` | 普通 QQ 私聊文件统一导出到 Docker Workbench 并回传的用户用例 | 修改会话 Workbench 路由、聊天媒体导出或文件回传前读取 |

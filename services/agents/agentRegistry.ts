@@ -544,7 +544,7 @@ export class AgentRegistry {
       const primary = this.store.readAgentAccount("primary");
       if (primary && !primary.qqId) {
         const qqId = await inferPrimaryAccountQqId(this.workspaceDir());
-        if (qqId) {
+        if (qqId && !this.store.readAgentAccounts().some((account) => account.id !== primary.id && account.qqId === qqId)) {
           this.store.updateAgentAccount({ ...primary, qqId, updatedAt: this.now().toISOString() });
         }
       }

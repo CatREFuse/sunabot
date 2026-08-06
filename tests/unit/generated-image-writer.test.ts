@@ -48,4 +48,39 @@ describe("generated image writer", () => {
       format: "png"
     });
   });
+
+  it("preserves both edges when the Provider result and requested canvas have different aspects", async () => {
+    const source = await sharp(Buffer.from([
+      '<svg xmlns="http://www.w3.org/2000/svg" width="160" height="90">',
+      '<rect width="160" height="90" fill="#202020"/>',
+      '<rect width="18" height="90" fill="#ff0000"/>',
+      '<rect x="142" width="18" height="90" fill="#0066ff"/>',
+      '<circle cx="80" cy="45" r="22" fill="#00cc66"/>',
+      "</svg>"
+    ].join(""))).png().toBuffer();
+    const { FileGeneratedImageWriter } = await import(
+      "../../adapters/model/provider/imageWriter.js"
+    );
+
+    const image = await new FileGeneratedImageWriter().write({
+      output: [{
+        type: "image_generation_call",
+        result: source.toString("base64")
+      }]
+    }, "gpt-image-2", "320x480");
+
+    const { data, info } = await sharp(image.filePath)
+      .ensureAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    const pixelAt = (x: number, y: number) => {
+      const offset = (y * info.width + x) * info.channels;
+      return [...data.subarray(offset, offset + 4)];
+    };
+    expect(info).toMatchObject({ width: 320, height: 480, channels: 4 });
+    expect(pixelAt(160, 0)).toEqual([0, 0, 0, 0]);
+    expect(pixelAt(0, 240)).toEqual([255, 0, 0, 255]);
+    expect(pixelAt(319, 240)).toEqual([0, 102, 255, 255]);
+    expect(pixelAt(160, 240)).toEqual([0, 204, 102, 255]);
+  });
 });

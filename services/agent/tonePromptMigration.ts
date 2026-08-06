@@ -7,6 +7,8 @@ import {
   type FinalPromptTemplate
 } from "./promptSystem.js";
 import {
+  LEGACY_TONE_BUBBLE_COUNT_RULE,
+  TONE_BUBBLE_COUNT_GUIDANCE,
   TONE_AVAILABLE_ASSETS_VARIABLE,
   TONE_XML_REVIEW_RULE,
   TONE_OUTPUT_CONTRACT_VARIABLE,
@@ -18,11 +20,66 @@ import {
 } from "./promptWorkspace.js";
 
 const TONE_SEGMENTED_REPLY_MIGRATION_VERSION = "segmented-reply-v2";
+export const TONE_BUBBLE_COUNT_GUIDANCE_MIGRATION_VERSION = "bubble-count-guidance-v1";
 export const TONE_MESSAGE_PACKAGE_RULE = "不得新增、删除、改写或重排原始发言中的表情标记和可用媒体，并严格遵守本次请求提供的输出格式契约。";
+
+const LEGACY_TONE_XML_REVIEW_RULE_WITHOUT_BUBBLE_GUIDANCE = [
+  `<xml-check s-if="tone_mode == true">`,
+  "原始发言中的 XML 草稿会原样进入 Tone，不要在改写前拒绝或复述格式错误；你必须在本节点完成检查和订正。",
+  "检查并订正所有 XML：只保留 tone_output_contract 规定的标签、属性、顺序、表情标记和媒体句柄，正文事实、代码、命令、数字与原始顺序不得丢失或改写。",
+  "发现嵌套标签时必须展开为合法的顶层节点；发现 <br/> 或其他未规定的 XML/HTML 标签时，用普通换行、实体转义或新的顶层文字节点表达其原有内容，绝对不可把未规定标签带入最终输出。",
+  "最终输出前再次逐项核对 tone_output_contract；订正后的结果必须与宿主校验规则完全一致。",
+  "</xml-check>"
+].join("\n");
+
+const LEGACY_TONE_BUBBLE_REPLY_RULES = [
+  `<bubble_reply_rules s-if="tone_mode == true">`,
+  "根据内容长度判断文字气泡的拆分方式：",
+  "1. 信息较短时，可以按短句拆分，每个文字气泡只放一个短句，一般不超过 3 个。",
+  "2. 信息较长时，每个文字气泡承载一个完整段落；一个段落能讲清楚就只用一个文字气泡，讲不清楚时可以继续拆分，但文字气泡总数不超过 3 个。",
+  "3. 用户明确要求只用一个气泡时，使用一个文字气泡输出。",
+  "</bubble_reply_rules>"
+].join("\n");
+
+const TONE_BUBBLE_REPLY_GUIDANCE = [
+  `<bubble_reply_rules s-if="tone_mode == true">`,
+  "根据内容长度判断文字气泡的拆分方式：",
+  "1. 信息较短时，可以按短句拆分，每个文字气泡只放一个短句，推荐最多 3 个。",
+  "2. 信息较长时，每个文字气泡承载一个完整段落；一个段落能讲清楚就只用一个文字气泡。",
+  "3. 内容确实需要更多独立短句或段落、或用户明确要求时，可以生成 3 个以上的文字气泡。",
+  "4. 用户明确要求只用一个气泡时，使用一个文字气泡输出。",
+  "</bubble_reply_rules>"
+].join("\n");
 
 export async function migrateToneSegmentedReplyPrompt(
   config: AppConfig,
   fileName: string
+) {
+  return migrateTonePromptFile(
+    config,
+    fileName,
+    TONE_SEGMENTED_REPLY_MIGRATION_VERSION,
+    migrateToneSegmentedReplyTemplate
+  );
+}
+
+export async function migrateToneBubbleCountGuidancePrompt(
+  config: AppConfig,
+  fileName: string
+) {
+  return migrateTonePromptFile(
+    config,
+    fileName,
+    TONE_BUBBLE_COUNT_GUIDANCE_MIGRATION_VERSION,
+    migrateToneBubbleCountGuidanceTemplate
+  );
+}
+
+async function migrateTonePromptFile(
+  config: AppConfig,
+  fileName: string,
+  version: string,
+  migrate: (template: FinalPromptTemplate) => FinalPromptTemplate
 ) {
   const filePath = await resolveSafePromptFilePath(config, "system", fileName);
   const markerPath = await resolveSafePromptFilePath(
@@ -30,32 +87,67 @@ export async function migrateToneSegmentedReplyPrompt(
     "system",
     path.join(
       path.dirname(fileName),
-      `.${path.basename(fileName)}.${TONE_SEGMENTED_REPLY_MIGRATION_VERSION}`
+      `.${path.basename(fileName)}.${version}`
     )
   );
-  if (await readOptional(markerPath) === `${TONE_SEGMENTED_REPLY_MIGRATION_VERSION}\n`) return false;
+  if (await readOptional(markerPath) === `${version}\n`) return false;
   const content = await readOptional(filePath);
   if (!content.trim()) return false;
   const template = parseFinalPromptTemplate(content);
-  const migrated = migrateToneSegmentedReplyTemplate(template);
+  const migrated = migrate(template);
   if (migrated !== template) {
     await atomicWriteText(filePath, `${JSON.stringify(migrated, null, 2)}\n`);
   }
-  await atomicWriteText(markerPath, `${TONE_SEGMENTED_REPLY_MIGRATION_VERSION}\n`);
+  await atomicWriteText(markerPath, `${version}\n`);
   return migrated !== template;
+}
+
+export function migrateToneBubbleCountGuidanceTemplate(
+  template: FinalPromptTemplate
+): FinalPromptTemplate {
+  let changed = false;
+  const messages = template.messages.map((message) => {
+    if (!isRecord(message) || typeof message.content !== "string") return message;
+    let content = message.content;
+    if (content.includes(LEGACY_TONE_BUBBLE_COUNT_RULE)) {
+      content = content.replaceAll(LEGACY_TONE_BUBBLE_COUNT_RULE, TONE_BUBBLE_COUNT_GUIDANCE);
+    }
+    if (content.includes(LEGACY_TONE_BUBBLE_REPLY_RULES)) {
+      content = content.replaceAll(LEGACY_TONE_BUBBLE_REPLY_RULES, TONE_BUBBLE_REPLY_GUIDANCE);
+    }
+    if (
+      content.includes(TONE_XML_REVIEW_RULE)
+      && content.includes(LEGACY_TONE_XML_REVIEW_RULE_WITHOUT_BUBBLE_GUIDANCE)
+    ) {
+      content = removeKnownDuplicateBlock(
+        content,
+        LEGACY_TONE_XML_REVIEW_RULE_WITHOUT_BUBBLE_GUIDANCE
+      );
+    }
+    if (content === message.content) return message;
+    changed = true;
+    return { ...message, content };
+  });
+  return changed ? { ...template, messages } : template;
 }
 
 export function migrateToneSegmentedReplyTemplate(
   template: FinalPromptTemplate
 ): FinalPromptTemplate {
   let changed = false;
-  const messages = template.messages.map((message) => {
-    if (!isRecord(message) || typeof message.content !== "string"
-      || !message.content.includes(TONE_EMOJI_MARKER_RULE)) return message;
-    changed = true;
+  const guided = migrateToneBubbleCountGuidanceTemplate(template);
+  if (guided !== template) changed = true;
+  const messages = guided.messages.map((message) => {
+    if (!isRecord(message) || typeof message.content !== "string") return message;
+    let content = message.content;
+    if (content.includes(TONE_EMOJI_MARKER_RULE)) {
+      content = content.replaceAll(TONE_EMOJI_MARKER_RULE, TONE_MESSAGE_PACKAGE_RULE);
+      changed = true;
+    }
+    if (content === message.content) return message;
     return {
       ...message,
-      content: message.content.replaceAll(TONE_EMOJI_MARKER_RULE, TONE_MESSAGE_PACKAGE_RULE)
+      content
     };
   });
   if (!messages.some((message) => (
@@ -96,6 +188,12 @@ export function migrateToneSegmentedReplyTemplate(
     changed = true;
   }
   return changed ? { ...template, messages } : template;
+}
+
+function removeKnownDuplicateBlock(content: string, block: string) {
+  if (content.includes(`${block}\n\n`)) return content.replace(`${block}\n\n`, "");
+  if (content.includes(`\n\n${block}`)) return content.replace(`\n\n${block}`, "");
+  return content.replace(block, "");
 }
 
 function promptMessageVariables(template: FinalPromptTemplate) {

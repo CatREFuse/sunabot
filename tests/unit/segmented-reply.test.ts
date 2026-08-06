@@ -1,5 +1,8 @@
 // @vitest-environment node
-import { describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   outboundAssetBubble,
   outboundMessageBubble,
@@ -24,9 +27,22 @@ import {
   TONE_EMOJI_MARKER_RULE
 } from "../../services/agent/promptWorkspace.js";
 import {
+  TONE_BUBBLE_COUNT_GUIDANCE_MIGRATION_VERSION,
   TONE_MESSAGE_PACKAGE_RULE,
+  migrateToneBubbleCountGuidancePrompt,
+  migrateToneBubbleCountGuidanceTemplate,
   migrateToneSegmentedReplyTemplate
 } from "../../services/agent/tonePromptMigration.js";
+import { defaultConfig } from "../../src/config.js";
+import { planRuntimePromptMigrations } from "../../src/runtime/promptMigrations.js";
+
+const migrationRoots: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(migrationRoots.splice(0).map((root) => (
+    fs.rm(root, { recursive: true, force: true })
+  )));
+});
 
 describe("segmented reply XML", () => {
   it("parses every supported bubble type in source order", () => {
@@ -68,6 +84,23 @@ describe("segmented reply XML", () => {
     ["<dialog>第一条</dialog><dialogc replay=\"msg_id\">第二条</dialogc>", "第一个气泡"]
   ])("rejects malformed or ambiguous XML: %s", (xml, message) => {
     expect(() => parseSegmentedReplyXml(xml)).toThrow(message);
+  });
+
+  it("accepts more than three text bubbles when the content requires them", () => {
+    const parsed = parseSegmentedReplyXml([
+      '<dialogc replay="msg_id">春</dialogc>',
+      "<dialog>夏</dialog>",
+      "<dialog>秋</dialog>",
+      "<dialog>冬</dialog>"
+    ].join(""));
+
+    expect(parsed.nodes).toHaveLength(4);
+    expect(parsed.nodes.map((node) => node.type === "dialog" ? node.text : "")).toEqual([
+      "春",
+      "夏",
+      "秋",
+      "冬"
+    ]);
   });
 });
 
@@ -160,7 +193,9 @@ describe("tone segmented output prompt", () => {
     expect(JSON.stringify(segmented.messages)).toContain("XML 草稿会原样进入 Tone");
     expect(JSON.stringify(segmented.messages)).toContain("信息较短时，可以按短句拆分");
     expect(JSON.stringify(segmented.messages)).toContain("信息较长时，每个文字气泡承载一个完整段落");
-    expect(JSON.stringify(segmented.messages)).toContain("文字气泡总数不超过 3 个");
+    expect(JSON.stringify(segmented.messages)).toContain("推荐最多 3 个");
+    expect(JSON.stringify(segmented.messages)).toContain("可以生成 3 个以上");
+    expect(JSON.stringify(segmented.messages)).not.toContain("文字气泡总数不超过 3 个");
     expect(JSON.stringify(segmented.messages)).toContain("用户明确要求只用一个气泡时");
     expect(JSON.stringify(segmented.messages)).not.toContain("s-if=");
   });
@@ -182,5 +217,116 @@ describe("tone segmented output prompt", () => {
     expect(JSON.stringify(migrated)).toContain(`@{${TONE_AVAILABLE_ASSETS_VARIABLE}}`);
     expect(migrated.messages.at(-1)).toEqual(original.messages.at(-1));
     expect(migrateToneSegmentedReplyTemplate(migrated)).toBe(migrated);
+  });
+
+  it("migrates the former three-bubble hard limit into non-blocking guidance", () => {
+    const legacyRule = "根据内容长度判断文字气泡的拆分方式：信息较短时，可以按短句拆分，每个文字气泡只放一个短句，一般不超过 3 个；信息较长时，每个文字气泡承载一个完整段落，一个段落能讲清楚就只用一个文字气泡，讲不清楚时可以继续拆分，但文字气泡总数不超过 3 个。用户明确要求只用一个气泡时，使用一个文字气泡输出。";
+    const original = {
+      messages: [
+        { role: "system", content: `自定义规则\n\n${legacyRule}` },
+        { role: "user", content: "<original>@{tone.input}</original>" }
+      ],
+      tools: [],
+      response_format: { type: "text" }
+    } as const;
+
+    const migrated = migrateToneSegmentedReplyTemplate(original as never);
+    const serialized = JSON.stringify(migrated);
+    expect(serialized).toContain("推荐最多 3 个");
+    expect(serialized).toContain("可以生成 3 个以上");
+    expect(serialized).not.toContain("文字气泡总数不超过 3 个");
+    expect(migrated.messages.at(-1)).toEqual(original.messages.at(-1));
+  });
+
+  it("repairs the persisted structured limit and removes a known duplicate XML review block", () => {
+    const legacyXmlReview = [
+      '<xml-check s-if="tone_mode == true">',
+      "原始发言中的 XML 草稿会原样进入 Tone，不要在改写前拒绝或复述格式错误；你必须在本节点完成检查和订正。",
+      "检查并订正所有 XML：只保留 tone_output_contract 规定的标签、属性、顺序、表情标记和媒体句柄，正文事实、代码、命令、数字与原始顺序不得丢失或改写。",
+      "发现嵌套标签时必须展开为合法的顶层节点；发现 <br/> 或其他未规定的 XML/HTML 标签时，用普通换行、实体转义或新的顶层文字节点表达其原有内容，绝对不可把未规定标签带入最终输出。",
+      "最终输出前再次逐项核对 tone_output_contract；订正后的结果必须与宿主校验规则完全一致。",
+      "</xml-check>"
+    ].join("\n");
+    const structuredLimit = [
+      '<bubble_reply_rules s-if="tone_mode == true">',
+      "根据内容长度判断文字气泡的拆分方式：",
+      "1. 信息较短时，可以按短句拆分，每个文字气泡只放一个短句，一般不超过 3 个。",
+      "2. 信息较长时，每个文字气泡承载一个完整段落；一个段落能讲清楚就只用一个文字气泡，讲不清楚时可以继续拆分，但文字气泡总数不超过 3 个。",
+      "3. 用户明确要求只用一个气泡时，使用一个文字气泡输出。",
+      "</bubble_reply_rules>"
+    ].join("\n");
+    const original = {
+      messages: [
+        { role: "system", content: `${legacyXmlReview}\n\n${TONE_XML_REVIEW_RULE}` },
+        { role: "developer", content: structuredLimit },
+        { role: "user", content: "@{tone.input}" }
+      ],
+      tools: [],
+      response_format: { type: "text" },
+      administratorField: true
+    } as const;
+
+    const migrated = migrateToneBubbleCountGuidanceTemplate(original as never);
+    const serialized = JSON.stringify(migrated);
+    expect(serialized).toContain("推荐最多 3 个");
+    expect(serialized).toContain("可以生成 3 个以上");
+    expect(serialized).not.toContain("文字气泡总数不超过 3 个");
+    expect((migrated.messages[0] as { content: string }).content.match(/<xml-check/g)).toHaveLength(1);
+    expect(migrated).toMatchObject({ administratorField: true });
+    expect(migrateToneBubbleCountGuidanceTemplate(migrated)).toBe(migrated);
+  });
+
+  it("writes the bubble-guidance marker once and preserves later administrator edits", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "sunabot-tone-bubble-guidance-"));
+    migrationRoots.push(root);
+    const config = defaultConfig();
+    config.persona.systemPromptWorkspace = root;
+    const fileName = "nested/tone.json";
+    const filePath = path.join(root, fileName);
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, JSON.stringify({
+      messages: [
+        {
+          role: "system",
+          content: `管理员自定义规则\n\n根据内容长度判断文字气泡的拆分方式：信息较短时，可以按短句拆分，每个文字气泡只放一个短句，一般不超过 3 个；信息较长时，每个文字气泡承载一个完整段落，一个段落能讲清楚就只用一个文字气泡，讲不清楚时可以继续拆分，但文字气泡总数不超过 3 个。用户明确要求只用一个气泡时，使用一个文字气泡输出。`
+        },
+        { role: "user", content: "@{tone.input}" }
+      ],
+      tools: [],
+      response_format: { type: "text" },
+      administratorField: true
+    }), "utf8");
+
+    await expect(migrateToneBubbleCountGuidancePrompt(config, fileName)).resolves.toBe(true);
+    const migrated = await fs.readFile(filePath, "utf8");
+    expect(migrated).toContain("推荐最多 3 个");
+    expect(migrated).toContain("可以生成 3 个以上");
+    expect(migrated).not.toContain("文字气泡总数不超过 3 个");
+    expect(JSON.parse(migrated)).toMatchObject({ administratorField: true });
+    const markerPath = path.join(
+      root,
+      "nested",
+      `.tone.json.${TONE_BUBBLE_COUNT_GUIDANCE_MIGRATION_VERSION}`
+    );
+    await expect(fs.readFile(markerPath, "utf8")).resolves.toBe(
+      `${TONE_BUBBLE_COUNT_GUIDANCE_MIGRATION_VERSION}\n`
+    );
+
+    const administratorEdit = migrated.replace("管理员自定义规则", "管理员迁移后调整");
+    await fs.writeFile(filePath, administratorEdit, "utf8");
+    await expect(migrateToneBubbleCountGuidancePrompt(config, fileName)).resolves.toBe(false);
+    await expect(fs.readFile(filePath, "utf8")).resolves.toBe(administratorEdit);
+  });
+
+  it("registers bubble guidance after the segmented Tone migration", async () => {
+    const config = defaultConfig();
+    config.persona.systemPromptWorkspace = "/tmp/sunabot-tone-bubble-guidance-system";
+    config.persona.agentWorkspace = "/tmp/sunabot-tone-bubble-guidance-persona";
+
+    const ids = (await planRuntimePromptMigrations(config)).map((entry) => entry.id);
+    const segmented = ids.findIndex((id) => id.startsWith("tone-segmented-v1:system:"));
+    const guidance = ids.findIndex((id) => id.startsWith("tone-bubble-count-guidance-v1:system:"));
+    expect(segmented).toBeGreaterThanOrEqual(0);
+    expect(guidance).toBeGreaterThan(segmented);
   });
 });

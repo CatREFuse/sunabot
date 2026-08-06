@@ -18,7 +18,10 @@ import {
   readPromptTextFile
 } from "../../services/agent/promptWorkspace.js";
 import { migrateGroupReplyTopicReasoning } from "../../services/agent/groupReplyTopicReasoningMigration.js";
-import { migrateToneSegmentedReplyPrompt } from "../../services/agent/tonePromptMigration.js";
+import {
+  migrateToneBubbleCountGuidancePrompt,
+  migrateToneSegmentedReplyPrompt
+} from "../../services/agent/tonePromptMigration.js";
 import { migrateConversationWebFetchPrompt } from "../../services/agent/webFetchPromptMigration.js";
 import { migrateConversationBashToolsPrompt } from "../../services/agent/bashToolPromptMigration.js";
 import {
@@ -421,12 +424,19 @@ function runtimePromptMigrations(config: AppConfig, selfiePromptDefault: string)
     () => migrateToneEmojiMarkerRule(config, TONE_PROMPT_FILE),
     [toneRecoverableId]
   );
-  add(
+  const toneSegmentedId = add(
     "tone-segmented-v1",
     "system",
     TONE_PROMPT_FILE,
     () => migrateToneSegmentedReplyPrompt(config, TONE_PROMPT_FILE),
     [toneEmojiId]
+  );
+  add(
+    "tone-bubble-count-guidance-v1",
+    "system",
+    TONE_PROMPT_FILE,
+    () => migrateToneBubbleCountGuidancePrompt(config, TONE_PROMPT_FILE),
+    [toneSegmentedId]
   );
 
   add(
