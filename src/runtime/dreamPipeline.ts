@@ -270,13 +270,10 @@ export class RuntimeDreams {
     const checkedNow = validDate(now, "now");
     const localDate = dreamLocalDate(checkedNow, this.timeZone);
     const existing = this.options.store.getRunByLocalDate(localDate);
-    if (existing?.status === "completed") {
-      return Promise.reject(new DreamRunError("DREAM_ALREADY_COMPLETED", "今天的 Dream 已完成。", false));
-    }
-    if (existing && existing.status !== "failed" && !claimableRun(existing, checkedNow)) {
+    if (existing && existing.status !== "completed" && existing.status !== "failed" && !claimableRun(existing, checkedNow)) {
       return Promise.reject(new DreamRunError("DREAM_BUSY", "Dream 正在运行。", false));
     }
-    const occurrence = existing
+    const occurrence = existing && existing.status !== "completed"
       ? { localDate, scheduledAt: existing.scheduledFor, timeZone: existing.timeZone, trigger: "catch_up" as const }
       : { localDate, scheduledAt: checkedNow.toISOString(), timeZone: this.timeZone, trigger: "catch_up" as const };
     return this.launch(checkedNow, { occurrence, force: true, onAccepted });
@@ -325,9 +322,10 @@ export class RuntimeDreams {
     const existing = this.options.store.getRunByLocalDate(occurrence.localDate);
     if (!options.force && !existing && this.isFreshInstallBeforeFirstRun(now, occurrence)) return undefined;
     if (existing && !options.force && !claimableRun(existing, now)) return existing;
+    const restartCompleted = options.force === true && existing?.status === "completed";
     let prepared: PreparedDreamRun | undefined;
     let claimInput: Parameters<RuntimeDreamStorePort["claimDailyRun"]>[0];
-    if (existing) {
+    if (existing && !restartCompleted) {
       claimInput = {
         id: existing.id,
         localDate: existing.localDate,
@@ -346,6 +344,7 @@ export class RuntimeDreams {
       const window = dreamWindow(occurrence);
       prepared = await this.prepareNewRun(now, occurrence, window, signal);
       claimInput = {
+        ...(existing ? { id: existing.id } : {}),
         localDate: occurrence.localDate,
         scheduledFor: occurrence.scheduledAt,
         timeZone: occurrence.timeZone,
@@ -364,12 +363,7 @@ export class RuntimeDreams {
     signal.throwIfAborted();
     if (claimed.status === "busy" || claimed.status === "existing") {
       if (options.force) {
-        const completed = claimed.run.status === "completed";
-        throw new DreamRunError(
-          completed ? "DREAM_ALREADY_COMPLETED" : "DREAM_BUSY",
-          completed ? "今天的 Dream 已完成。" : "Dream 正在运行。",
-          false
-        );
+        throw new DreamRunError("DREAM_BUSY", "Dream 正在运行。", false);
       }
       return claimed.run;
     }

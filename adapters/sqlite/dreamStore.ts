@@ -172,6 +172,9 @@ export class SqliteDreamStore {
         );
         return { status: "created", run: this.requireRun(normalized.id) };
       }
+      if (existing.status === "completed" && normalized.force) {
+        return claimRestartedCompletedRun(this.database, existing.id, normalized);
+      }
       assertSameOccurrence(existing, normalized);
       if (existing.status === "completed") return { status: "existing", run: existing };
       if (existing.status === "failed" && normalized.force) {
@@ -553,6 +556,44 @@ export class SqliteDreamStore {
   private inputDate(value?: Date) {
     return validDate(value ?? this.clock(), value ? "date" : "clock");
   }
+}
+
+function claimRestartedCompletedRun(
+  database: DatabaseSync,
+  runId: string,
+  input: ReturnType<typeof normalizeClaim>
+): DreamRunClaimResult {
+  const restarted = database.prepare(`
+    UPDATE dream_runs SET
+      scheduled_for = ?, time_zone = ?, window_start = ?, window_end = ?,
+      status = 'running', worker_id = ?, lease_until = ?, attempt_count = 1,
+      seed = ?, input_digest = ?, input_json = ?, output_json = NULL,
+      dream_text = NULL, working_memory_id = NULL, persona_json = NULL,
+      persona_status = 'pending', result_json = NULL,
+      error_code = NULL, error_text = NULL, next_retry_at = NULL,
+      generated_at = NULL, consolidated_at = NULL, persona_updated_at = NULL,
+      completed_at = NULL, failed_at = NULL, updated_at = ?
+    WHERE id = ? AND status = 'completed'
+  `).run(
+    input.scheduledFor,
+    input.timeZone,
+    input.window.start,
+    input.window.end,
+    input.workerId,
+    input.leaseUntil,
+    input.seed,
+    input.inputDigest,
+    input.inputJson,
+    input.nowIso,
+    runId
+  );
+  const row = database.prepare(`SELECT ${RUN_COLUMNS} FROM dream_runs WHERE id = ?`)
+    .get(runId) as SqlRow | undefined;
+  if (!row) throw new Error(`Dream run not found: ${runId}`);
+  return {
+    status: Number(restarted.changes) === 1 ? "recovered" : "existing",
+    run: mapRun(row)
+  };
 }
 
 function withImmediateTransaction<T>(database: DatabaseSync, operation: () => T) {

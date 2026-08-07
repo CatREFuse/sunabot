@@ -73,6 +73,7 @@
 | `docs/user-tests/cases/admin-console/web-chat-deadline-cancellation.md` | Web Chat 十分钟硬截止、客户端断开与服务关闭取消 | 修改 Web Chat 回复期限、请求取消或关闭生命周期时读取 |
 | `docs/user-tests/cases/admin-console/log-business-node-filtering.md` | 日志业务节点筛选、失败重试标识与请求详情 | 修改日志分类、请求日志 API、日志详情或日志页时读取 |
 | `docs/user-tests/cases/admin-console/qq-account-automatic-transfer.md` | 已绑定 QQ 登录其他 Agent 时自动退出旧账号并转移唯一归属 | 修改 QQ 身份绑定、NapCat 登录退出或账号转移前读取 |
+| `docs/user-tests/cases/admin-console/manual-dream-repeat.md` | 当天 Dream 完成后仍可从管理台使用最新记忆再次手动触发 | 修改 Dream 手动触发、重复运行、按钮状态或当日完成门禁前读取 |
 
 新增、移动、重命名或删除 `docs/` 下的有效文档时，必须同步更新本索引。历史方案不进入当前索引。
 

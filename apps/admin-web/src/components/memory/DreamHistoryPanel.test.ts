@@ -54,7 +54,7 @@ describe("DreamHistoryPanel", () => {
     expect(wrapper.find('[data-testid="dream-retry-time"]').exists()).toBe(false);
   });
 
-  it("shows memory reduction without exposing a zero-addition reason", () => {
+  it("keeps manual Dream available after completion without exposing a zero-addition reason", async () => {
     const completed = {
       ...props(1),
       items: [{
@@ -77,5 +77,9 @@ describe("DreamHistoryPanel", () => {
     expect(wrapper.text()).toContain("工作记忆减少 2 · 长期记忆新增 0");
     expect(wrapper.text()).not.toContain("候选事实已经存在于长期记忆。");
     expect(wrapper.text()).not.toContain("人格");
+    expect(wrapper.get("button.btn-primary").attributes("disabled")).toBeUndefined();
+
+    await wrapper.get("button.btn-primary").trigger("click");
+    expect(wrapper.emitted("trigger")).toHaveLength(1);
   });
 });

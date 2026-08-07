@@ -496,6 +496,59 @@ describe("Dream SQLite store", () => {
     });
   });
 
+  it("restarts a completed daily run with a fresh manual snapshot and attempt budget", () => {
+    const created = store.claimDailyRun(claimInput("worker:a")).run;
+    now += 10;
+    store.markGenerated({
+      runId: created.id,
+      workerId: "worker:a",
+      output: { workingMemoryCompression: "旧压缩", longTermMemoryAdditions: [], dreamDescription: "旧梦" },
+      dreamText: "旧梦",
+      now: new Date(now)
+    });
+    store.markConsolidated({
+      runId: created.id,
+      workerId: "worker:a",
+      workingMemoryId: "working_dream_2026_07_21",
+      result: { workingMemoryReduced: 1, longTermAdded: 0 },
+      now: new Date(now)
+    });
+    store.complete({ runId: created.id, workerId: "worker:a", now: new Date(now) });
+
+    now += 60_000;
+    const manualInput = {
+      ...claimInput("worker:manual"),
+      scheduledFor: new Date(now).toISOString(),
+      window: {
+        start: "2026-07-20T20:00:00.000Z",
+        end: new Date(now).toISOString()
+      },
+      seed: "fresh-manual-seed",
+      inputDigest: "b".repeat(64),
+      input: { schemaVersion: 1, memoryIds: ["working_after_first_dream"] },
+      force: true
+    };
+
+    expect(store.claimDailyRun(manualInput)).toMatchObject({
+      status: "recovered",
+      run: {
+        id: created.id,
+        status: "running",
+        workerId: "worker:manual",
+        attemptCount: 1,
+        scheduledFor: manualInput.scheduledFor,
+        seed: "fresh-manual-seed",
+        inputDigest: "b".repeat(64),
+        input: { schemaVersion: 1, memoryIds: ["working_after_first_dream"] },
+        output: null,
+        dreamText: null,
+        workingMemoryId: null,
+        result: null,
+        completedAt: null
+      }
+    });
+  });
+
   it("records retryable failure and resumes from the last durable phase", () => {
     const run = store.claimDailyRun(claimInput("worker:a")).run;
     now += 50;

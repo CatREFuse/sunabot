@@ -88,6 +88,43 @@ describe("RuntimeDreams minimal pipeline", () => {
     expect(fixture.store.commitCalls[0]!.result.longTermMemoryAdditions).not.toHaveProperty("reasonCode");
   });
 
+  it("manually reruns a completed Dream on the same local date with a fresh snapshot", async () => {
+    let now = new Date("2026-08-04T04:05:00.000Z");
+    const fixture = createFixture(() => now);
+
+    await expect(fixture.runtime.tick(now)).resolves.toMatchObject({ status: "completed" });
+    now = new Date("2026-08-04T12:30:00.000Z");
+    const accepted: RuntimeDreamRun[] = [];
+
+    await expect(fixture.runtime.force(now, (run) => {
+      accepted.push(structuredClone(run));
+    })).resolves.toMatchObject({ status: "completed", scheduledFor: now.toISOString() });
+
+    expect(fixture.context.calls).toBe(2);
+    expect(fixture.model.calls).toBe(2);
+    expect(fixture.store.claimCalls).toHaveLength(2);
+    expect(fixture.store.claimCalls[1]).toMatchObject({
+      force: true,
+      localDate: "2026-08-04",
+      scheduledFor: now.toISOString()
+    });
+    expect(accepted).toHaveLength(1);
+    expect(accepted[0]).toMatchObject({ status: "running", attemptCount: 1 });
+  });
+
+  it("keeps an active Dream lease protected from a concurrent manual trigger", async () => {
+    const now = new Date("2026-08-04T04:05:00.000Z");
+    const fixture = createFixture(() => now);
+    fixture.model.waitForAbort = true;
+
+    const pending = fixture.runtime.tick(now);
+    await vi.waitFor(() => expect(fixture.model.calls).toBe(1));
+
+    await expect(fixture.runtime.force(now)).rejects.toMatchObject({ code: "DREAM_BUSY" });
+    fixture.runtime.stop();
+    await expect(pending).resolves.toBeUndefined();
+  });
+
   it("treats working-memory revision drift as a soft link and still commits add-only SQLite data", async () => {
     const now = new Date("2026-08-04T04:05:00.000Z");
     const fixture = createFixture(() => now);
@@ -192,6 +229,36 @@ class FakeStore implements RuntimeDreamStorePort {
       this.runs.set(created.localDate, created);
       return { status: "created" as const, run: created };
     }
+    if (current.status === "completed" && input.force) {
+      const restarted = updateRun(current, {
+        scheduledFor: input.scheduledFor,
+        timeZone: input.timeZone,
+        window: input.window,
+        status: "running",
+        workerId: input.workerId,
+        leaseUntil: new Date(now.getTime() + input.leaseMs).toISOString(),
+        attemptCount: 1,
+        seed: input.seed,
+        inputDigest: input.inputDigest,
+        input: input.input,
+        output: null,
+        dreamText: null,
+        workingMemoryId: null,
+        persona: null,
+        personaStatus: "pending",
+        result: null,
+        errorCode: null,
+        errorText: null,
+        nextRetryAt: null,
+        generatedAt: null,
+        consolidatedAt: null,
+        personaUpdatedAt: null,
+        completedAt: null,
+        failedAt: null,
+        updatedAt: now.toISOString()
+      });
+      return { status: "recovered" as const, run: restarted };
+    }
     const recovered = updateRun(current, {
       status: current.result ? "consolidated" : current.output ? "generated" : "running",
       workerId: input.workerId,
@@ -269,9 +336,12 @@ class FakeStore implements RuntimeDreamStorePort {
 }
 
 class FakeContext implements RuntimeDreamContextPort {
+  calls = 0;
+
   constructor(private readonly snapshot: RuntimeDreamContextSnapshot) {}
 
   async capture() {
+    this.calls += 1;
     return structuredClone(this.snapshot);
   }
 }

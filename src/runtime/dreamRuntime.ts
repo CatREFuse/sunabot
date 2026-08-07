@@ -124,7 +124,7 @@ export async function forceRuntimeDreamForHost(host: SunaRuntime, input: { accou
   const triggeredAt = new Date();
   const run = await host.dreams.force(triggeredAt, async (accepted) => {
     await host.scheduledTasks.enqueueSystemCallback({
-      id: manualNoticeId(accepted.id, accepted.attemptCount),
+      id: manualNoticeId(accepted.id, accepted.seed),
       kind: "dream-manual-start",
       name: "入睡通知",
       context: DREAM_SLEEP_NOTICE_CONTEXT,
@@ -386,6 +386,6 @@ function administratorQq(value: string) {
   return number;
 }
 
-function manualNoticeId(runId: string, attemptCount: number) {
-  return `dream:${createHash("sha256").update(`${runId}:${attemptCount}`).digest("hex").slice(0, 40)}`;
+function manualNoticeId(runId: string, seed: string) {
+  return `dream:${createHash("sha256").update(`${runId}:${seed}`).digest("hex").slice(0, 40)}`;
 }
