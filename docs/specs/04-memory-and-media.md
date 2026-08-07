@@ -66,7 +66,7 @@ Dream 的工作记忆与长期记忆 canonical 继续接受 nullable `causalChai
 
 Dream 的工作记忆输入固定读取当前 Agent workspace 的 `WORKING_MEMORY.md`，捕获时把文件 revision、当前长期记忆摘要和安全上下文写入当日 `dream_runs.input_json`。旧 SQLite 工作记忆不迁移、不恢复到 Markdown、不删除，也不参与新 Dream。一次 Dream 从输入捕获、持久运行 claim、payload 与提示词构建开始，到 Provider、工作记忆 CAS、长期记忆 SQLite 添加与运行完成结束，共享 600 秒硬预算；取消后不得继续提交状态、记忆或操作日志。
 
-模型只输出三个按序顶层字段。`workingMemoryCompression` 是最多 4,000 字符的完整压缩正文字符串，直接替换整份工作记忆；输入为空时允许返回空字符串，输出中没有单项、工作记忆 ID、来源映射或 discard 动作。`longTermMemoryAdditions` 是新增长期事实的字符串数组，只能依据整份工作记忆生成；宿主为每条事实生成稳定 ID、事件指纹、`dreamRunId` 与 `consolidatedBy=sunabot.dream`，并在当前长期记忆中按稳定 ID、事件指纹和规范化事实去重。既有长期记忆逐字段保留，Dream 不改写、合并、归档或删除它们。
+模型只输出三个按序顶层字段。`workingMemoryCompression` 是最多 4,000 字符的完整压缩正文字符串，直接替换整份工作记忆；输入为空时允许返回空字符串，输出中没有单项、工作记忆 ID、来源映射或 discard 动作。压缩后的每个事件或合并事件必须保留时间语义；多个精确时间可以在事实顺序和因果关系不变时归并为“昨天下午”“上周”“最近几天”等粗粒度时间段，不能删除全部时间信息。`longTermMemoryAdditions` 是新增长期事实的字符串数组，只能依据整份工作记忆生成；宿主为每条事实生成稳定 ID、事件指纹、`dreamRunId` 与 `consolidatedBy=sunabot.dream`，并在当前长期记忆中按稳定 ID、事件指纹和规范化事实去重。既有长期记忆逐字段保留，Dream 不改写、合并、归档或删除它们。
 
 模型在内部推理中判断候选事实是否值得长期保存，并在零新增时确认存在正当依据；最终 JSON 不输出判断过程、原因文本或决策码。启动迁移会清除旧 Dream 提示词中的单项工作记忆、来源 ID、显式原因与决策字段合同。模型提议因重复或提交时快照变化而实际新增为零时，宿主结果只记录 requested、added、duplicate 与 unavailable 数量。
 

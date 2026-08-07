@@ -26,6 +26,9 @@ import {
 import { defaultConfig } from "../../src/config.js";
 import { planRuntimePromptMigrations } from "../../src/runtime/promptMigrations.js";
 
+const DREAM_TIME_PRESERVATION_GUIDANCE =
+  "工作记忆压缩不得丢失时间语义：每个事件或合并事件都必须保留可判断发生时段、日期、先后或持续关系的时间信息。细粒度时间可以在不改变事实顺序和因果关系的前提下概括为粗粒度时间段，例如把多条“昨天 14:05、15:20、16:40”的相关记忆合并为“昨天下午发生的事情”；不得把带时间的记忆压缩成完全无时间的陈述。";
+
 function legacyTemplate(): FinalPromptTemplate {
   return {
     messages: [
@@ -74,11 +77,56 @@ describe("Dream flexible-contract prompt migration", () => {
     expect(repair).toBeGreaterThan(v9);
   });
 
+  it("registers time-preserving compression after the completed v9 repair", async () => {
+    const config = defaultConfig();
+    config.persona.systemPromptWorkspace = "/tmp/sunabot-dream-time-preservation-system";
+    config.persona.agentWorkspace = "/tmp/sunabot-dream-time-preservation-persona";
+
+    const ids = (await planRuntimePromptMigrations(config)).map((entry) => entry.id);
+    const repair = ids.findIndex((id) => id.startsWith("dream-minimal-contract-v9-repair-v1:system:"));
+    const timePreservation = ids.findIndex((id) => id.startsWith(
+      "dream-working-memory-time-preservation-v1:system:"
+    ));
+
+    expect(timePreservation).toBeGreaterThan(repair);
+  });
+
   it("uses text output for new prompt workspaces", () => {
     expect(dreamPromptTemplate().response_format).toEqual({ type: "text" });
     expect(JSON.stringify(dreamPromptTemplate())).toContain(DREAM_OUTPUT_CONTRACT_MARKER);
     expect(JSON.stringify(dreamPromptTemplate())).toContain("不得输出 items、工作记忆 ID");
+    expect(JSON.stringify(dreamPromptTemplate())).toContain(DREAM_TIME_PRESERVATION_GUIDANCE);
     expect(() => assertDreamCanonicalOutputContractTemplate(dreamPromptTemplate())).not.toThrow();
+  });
+
+  it("adds time-preserving compression to an existing v9 prompt without replacing administrator content", () => {
+    const original = dreamPromptTemplate();
+    const outdatedOutputContract = DREAM_OUTPUT_CONTRACT
+      .split("\n\n")
+      .filter((section) => section !== DREAM_TIME_PRESERVATION_GUIDANCE)
+      .join("\n\n");
+    const outdated = {
+      ...original,
+      messages: original.messages.map((message) => message.role === "system"
+        ? {
+            ...message,
+            content: `管理员自定义时间规则。\n\n${message.content.replace(
+              DREAM_OUTPUT_CONTRACT,
+              outdatedOutputContract
+            )}`
+          }
+        : message)
+    };
+    const migrated = migrateDreamMinimalContractTemplate(outdated);
+    const system = migrated?.messages.find((message) => message.role === "system")?.content ?? "";
+
+    expect(system).toContain("管理员自定义时间规则。");
+    expect(system).toContain(DREAM_TIME_PRESERVATION_GUIDANCE);
+    expect(system).toContain("<persona_soul>@{persona.soul}</persona_soul>");
+    expect(migrated?.tools).toEqual(outdated.tools);
+    expect(migrated?.response_format).toEqual(outdated.response_format);
+    expect(migrateDreamMinimalContractTemplate(migrated!)).toBeUndefined();
+    expect(() => assertDreamCanonicalOutputContractTemplate(migrated!)).not.toThrow();
   });
 
   it("appends the canonical output contract to a custom system prompt without replacing it", () => {

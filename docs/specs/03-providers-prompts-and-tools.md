@@ -214,11 +214,11 @@ macOS host 形态的 `native_bash` 向模型返回真实 Native workbench 绝对
 
 ### 4.5 Dream 提示词
 
-`dream-minimal-contract-v9-repair-v1` 在既有 v9 journal 之后执行一次幂等修复，确保已带 v9 输出标记但仍残留 `payload.workingMemories` 逐项指令的生产模板会重写为整文档合同。
+`dream-minimal-contract-v9-repair-v1` 在既有 v9 journal 之后执行一次幂等修复，确保已带 v9 输出标记但仍残留 `payload.workingMemories` 逐项指令的生产模板会重写为整文档合同。`dream-working-memory-time-preservation-v1` 随后把时间保留规则写入已存在的 v9 模板；迁移只替换官方输出合同，保留管理员自定义正文、消息顺序、人格变量、工具和 response 配置。
 
 `memory.dream` 是公共 system 最终提示词，文件固定为 `memory_dream.json`，唯一业务变量是安全序列化的 `dream.payload`，并显式使用系统时间及 `persona.soul`、`persona.preference`、`persona.user`、`persona.relation`。运行时按当前 Agent 的记忆模型与推理强度发起一次无工具请求；管理员模板仍由提示词工作区管理，运行时不在渲染后插入、删除、去重或重排消息。
 
-输出必须是一个合法 JSON 对象，顶层字段按 `workingMemoryCompression`、`longTermMemoryAdditions`、`dreamDescription` 的顺序出现，不能出现第四个字段。`workingMemoryCompression` 是最多 4,000 字符的完整压缩正文字符串，直接替换整份工作记忆；输入为空时可以返回空字符串，不能包含 `items`、工作记忆 ID、来源映射或逐项动作。`longTermMemoryAdditions` 是新增长期事实的字符串数组，没有应当新增的事实时返回空数组；它只能依据整份工作记忆生成，不能提出改写、合并、删除、归档或遗忘既有长期记忆。`dreamDescription` 是非空的虚构梦境正文，不能作为现实事实或长期记忆来源。
+输出必须是一个合法 JSON 对象，顶层字段按 `workingMemoryCompression`、`longTermMemoryAdditions`、`dreamDescription` 的顺序出现，不能出现第四个字段。`workingMemoryCompression` 是最多 4,000 字符的完整压缩正文字符串，直接替换整份工作记忆；输入为空时可以返回空字符串，不能包含 `items`、工作记忆 ID、来源映射或逐项动作。压缩不得丢失时间语义，每个事件或合并事件都要保留可判断发生时段、日期、先后或持续关系的时间信息；细粒度时间可以在不改变事实顺序和因果关系时概括为粗粒度时间段，例如将昨天 14:05、15:20、16:40 的相关记忆合并为“昨天下午发生的事情”，但不能变成完全无时间的陈述。`longTermMemoryAdditions` 是新增长期事实的字符串数组，没有应当新增的事实时返回空数组；它只能依据整份工作记忆生成，不能提出改写、合并、删除、归档或遗忘既有长期记忆。`dreamDescription` 是非空的虚构梦境正文，不能作为现实事实或长期记忆来源。
 
 模型必须在内部推理中判断压缩是否保留有效信息、候选事实是否值得长期保存，以及零新增是否具有正当依据；这些判断过程、原因文本和决策码都不能进入最终 JSON。宿主仅记录 requested、added、duplicate 与 unavailable 数量，不向 Dream 历史输出原因。启动迁移会清除旧 Dream 提示词中的单项工作记忆、来源 ID、显式原因与决策字段合同。
 

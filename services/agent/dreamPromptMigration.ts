@@ -12,6 +12,7 @@ import {
   LEGACY_DREAM_OUTPUT_CONTRACT_V6,
   LEGACY_DREAM_OUTPUT_CONTRACT_V7,
   LEGACY_DREAM_OUTPUT_CONTRACT_V8,
+  LEGACY_DREAM_OUTPUT_CONTRACT_V9,
   LEGACY_DREAM_IDENTITY_ALIAS_GUIDANCE,
   LEGACY_DREAM_FLEX_RESPONSE,
   LEGACY_DREAM_CONTRACT_V3,
@@ -180,6 +181,10 @@ export function migrateDreamMinimalContractTemplate(
       );
       changed = true;
     }
+    if (content.includes(LEGACY_DREAM_OUTPUT_CONTRACT_V9)) {
+      content = content.replaceAll(LEGACY_DREAM_OUTPUT_CONTRACT_V9, DREAM_OUTPUT_CONTRACT);
+      changed = true;
+    }
     for (const legacy of [
       LEGACY_DREAM_CONTRACT_V6,
       LEGACY_DREAM_CONTRACT_V4,
@@ -254,7 +259,8 @@ export function migrateDreamCanonicalOutputContractTemplate(
       + occurrenceCount(content, LEGACY_DREAM_FLEX_RESPONSE)
       + occurrenceCount(content, LEGACY_DREAM_OUTPUT_CONTRACT_V6)
       + occurrenceCount(content, LEGACY_DREAM_OUTPUT_CONTRACT_V7)
-      + occurrenceCount(content, LEGACY_DREAM_OUTPUT_CONTRACT_V8), 0);
+      + occurrenceCount(content, LEGACY_DREAM_OUTPUT_CONTRACT_V8)
+      + occurrenceCount(content, LEGACY_DREAM_OUTPUT_CONTRACT_V9), 0);
   if (
     systemContents[0]!.includes(DREAM_OUTPUT_CONTRACT)
     && fullContractCount === 1
@@ -295,6 +301,7 @@ export function migrateDreamCanonicalOutputContractTemplate(
 function stripDreamCanonicalOutputContract(content: string) {
   const withoutKnownContracts = content
     .replaceAll(DREAM_OUTPUT_CONTRACT, "")
+    .replaceAll(LEGACY_DREAM_OUTPUT_CONTRACT_V9, "")
     .replaceAll(LEGACY_DREAM_OUTPUT_CONTRACT_V8, "")
     .replaceAll(LEGACY_DREAM_OUTPUT_CONTRACT_V7, "")
     .replaceAll(LEGACY_DREAM_OUTPUT_CONTRACT_V6, "")
@@ -333,6 +340,7 @@ export function assertDreamCanonicalOutputContractTemplate(
     || content.includes(LEGACY_DREAM_OUTPUT_CONTRACT_V6)
     || content.includes(LEGACY_DREAM_OUTPUT_CONTRACT_V7)
     || content.includes(LEGACY_DREAM_OUTPUT_CONTRACT_V8)
+    || content.includes(LEGACY_DREAM_OUTPUT_CONTRACT_V9)
     || content.includes(LEGACY_DREAM_REASONLESS_OUTPUT_CONTRACT_MARKER)
     || content.includes(LEGACY_DREAM_MINIMAL_OUTPUT_CONTRACT_MARKER)
     || content.includes(LEGACY_DREAM_OUTPUT_CONTRACT_MARKER)

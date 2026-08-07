@@ -70,6 +70,7 @@
 | `docs/user-tests/add-workmemory-direct-write.md` | 主对话模型同轮调用 `add_workmemory` 直写短期工作记忆的用户用例 | 修改工作记忆工具、主回复工具调用规则或直写审计前读取 |
 | `docs/user-tests/add-user-profile-tool.md` | 主对话模型同轮调用 `add_user_profile` 更新当前发言者聚合画像的用户用例 | 修改用户画像工具、主回复画像决策或画像持久化前读取 |
 | `docs/user-tests/sampled-dream.md` | 运行中测试账号 V2 样本的内容无关 Dream 模板 | 从只读样本派生真实数据 Dream case 时读取 |
+| `docs/user-tests/dream-time-preserving-compression.md` | Dream 工作记忆压缩保留时间语义并安全降低时间粒度 | 修改 Dream 工作记忆压缩提示词或时间保留规则时读取 |
 | `docs/user-tests/cases/admin-console/web-chat-deadline-cancellation.md` | Web Chat 十分钟硬截止、客户端断开与服务关闭取消 | 修改 Web Chat 回复期限、请求取消或关闭生命周期时读取 |
 | `docs/user-tests/cases/admin-console/log-business-node-filtering.md` | 日志业务节点筛选、失败重试标识与请求详情 | 修改日志分类、请求日志 API、日志详情或日志页时读取 |
 | `docs/user-tests/cases/admin-console/qq-account-automatic-transfer.md` | 已绑定 QQ 登录其他 Agent 时自动退出旧账号并转移唯一归属 | 修改 QQ 身份绑定、NapCat 登录退出或账号转移前读取 |

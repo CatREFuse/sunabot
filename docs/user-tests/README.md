@@ -87,6 +87,7 @@ Dream runs report their success state and fail the mechanical gate when Dream do
 Executable branch examples:
 
 - [`dream-minimal-memory-cycle.md`](./dream-minimal-memory-cycle.md)
+- [`dream-time-preserving-compression.md`](./dream-time-preserving-compression.md)
 - [`dream-smoke.md`](./dream-smoke.md)
 - [`dream-scheduled-task-recovery.md`](./dream-scheduled-task-recovery.md)
 - [`dream-soft-link-recovery.md`](./dream-soft-link-recovery.md)

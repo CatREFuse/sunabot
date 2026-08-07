@@ -122,11 +122,27 @@ export const LEGACY_DREAM_OUTPUT_CONTRACT_V8 = [
   })
 ].join("\n\n");
 
+export const LEGACY_DREAM_OUTPUT_CONTRACT_V9 = [
+  DREAM_OUTPUT_CONTRACT_MARKER,
+  "只输出一个合法 JSON 对象，不要输出 Markdown、代码围栏、说明、原因、决策码、内部推理或额外字段。三个顶层字段必须按 workingMemoryCompression、longTermMemoryAdditions、dreamDescription 的顺序出现。",
+  "先在内部推理中判断如何无损压缩整份工作记忆、哪些事实值得长期保存，以及零新增是否具有正当依据。只输出最终结果，不输出判断过程或理由。",
+  "workingMemoryCompression 必须是压缩后的完整工作记忆正文字符串，最多 4000 个字符，直接替换整份工作记忆。payload.workingMemory 为空时允许输出空字符串；不得输出 items、工作记忆 ID、来源映射或逐项动作。",
+  "longTermMemoryAdditions 必须是新增长期事实的字符串数组。每个元素是一条非空事实，只能依据 payload.workingMemory，不能引用梦境，不能改写、合并、归档、删除或遗忘 payload.longTermMemories；没有应当新增的长期事实时输出空数组。",
+  "dreamDescription 必须是非空梦境正文。梦境可以象征和轻微超现实，但不能宣称梦中事件真实发生，不能作为长期记忆事实、人格或场域知识。",
+  "唯一允许的形状示例：",
+  JSON.stringify({
+    workingMemoryCompression: "压缩后仍完整保留原因、变化、结果、承诺和下一步的工作记忆。",
+    longTermMemoryAdditions: ["会持续影响未来回复的长期事实。"],
+    dreamDescription: "梦境正文"
+  })
+].join("\n\n");
+
 export const DREAM_OUTPUT_CONTRACT = [
   DREAM_OUTPUT_CONTRACT_MARKER,
   "只输出一个合法 JSON 对象，不要输出 Markdown、代码围栏、说明、原因、决策码、内部推理或额外字段。三个顶层字段必须按 workingMemoryCompression、longTermMemoryAdditions、dreamDescription 的顺序出现。",
   "先在内部推理中判断如何无损压缩整份工作记忆、哪些事实值得长期保存，以及零新增是否具有正当依据。只输出最终结果，不输出判断过程或理由。",
   "workingMemoryCompression 必须是压缩后的完整工作记忆正文字符串，最多 4000 个字符，直接替换整份工作记忆。payload.workingMemory 为空时允许输出空字符串；不得输出 items、工作记忆 ID、来源映射或逐项动作。",
+  "工作记忆压缩不得丢失时间语义：每个事件或合并事件都必须保留可判断发生时段、日期、先后或持续关系的时间信息。细粒度时间可以在不改变事实顺序和因果关系的前提下概括为粗粒度时间段，例如把多条“昨天 14:05、15:20、16:40”的相关记忆合并为“昨天下午发生的事情”；不得把带时间的记忆压缩成完全无时间的陈述。",
   "longTermMemoryAdditions 必须是新增长期事实的字符串数组。每个元素是一条非空事实，只能依据 payload.workingMemory，不能引用梦境，不能改写、合并、归档、删除或遗忘 payload.longTermMemories；没有应当新增的长期事实时输出空数组。",
   "dreamDescription 必须是非空梦境正文。梦境可以象征和轻微超现实，但不能宣称梦中事件真实发生，不能作为长期记忆事实、人格或场域知识。",
   "唯一允许的形状示例：",

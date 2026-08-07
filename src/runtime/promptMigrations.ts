@@ -237,12 +237,19 @@ function runtimePromptMigrations(config: AppConfig, selfiePromptDefault: string)
     () => migrateDreamMinimalContractPrompt(config, DREAM_PROMPT_FILE),
     [dreamNoVisibleReasonId, dreamSourcePartitionId]
   );
-  add(
+  const dreamMinimalV9RepairId = add(
     "dream-minimal-contract-v9-repair-v1",
     "system",
     DREAM_PROMPT_FILE,
     () => migrateDreamMinimalContractPrompt(config, DREAM_PROMPT_FILE),
     [dreamMinimalV9Id]
+  );
+  add(
+    "dream-working-memory-time-preservation-v1",
+    "system",
+    DREAM_PROMPT_FILE,
+    () => migrateDreamMinimalContractPrompt(config, DREAM_PROMPT_FILE),
+    [dreamMinimalV9RepairId]
   );
   add(
     "scheduled-agent-loop-v2",
