@@ -41,6 +41,7 @@
 | `docs/operations/sqlite-backup-recovery.md` | 默认 Plana 与全部 Agent 业务库/queue 数据库对的一致恢复点、7/30 天保留、恢复校验、季度演练和故障门禁 | 执行每日备份、恢复、保留清理或故障演练时读取 |
 | `docs/references/README.md` | OneBot v11、v12 协议资料的来源、版本和本地入口 | 核对 OneBot 事件、消息段、动作或兼容性时读取 |
 | `docs/user-tests/README.md` | user test harness、用例文档、隔离 workspace、质量评审与上线门禁 | 开发任何功能、编写 user test case 或执行上线前验证时读取 |
+| `docs/user-tests/bash-skill-repository-install.md` | 管理员通过 Native Bash 完成 Skill 安装、审查、启用与回读 | 修改 Bash Skill 仓库命令、安装流程或系统提示词时读取 |
 | `docs/user-tests/workbench-image-reference.md` | workbench 图片相对路径直接进入生图工具的用户用例 | 修改 workbench 图片参数或生图参考解析时读取 |
 | `docs/user-tests/workbench-image-native-absolute-reference.md` | Native workbench 真实绝对路径直接进入生图工具的用户用例 | 修改 Native workbench 绝对路径参数解析时读取 |
 | `docs/user-tests/workbench-image-docker-absolute-reference.md` | Docker `/workbench` 绝对路径直接进入生图工具的用户用例 | 修改 Docker workbench 绝对路径参数解析时读取 |

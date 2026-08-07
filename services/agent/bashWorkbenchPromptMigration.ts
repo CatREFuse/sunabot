@@ -8,6 +8,7 @@ import {
 import { resolveSafePromptFilePath } from "./promptWorkspace.js";
 
 const LEGACY_CONTRACT_MARKERS = [
+  '<bash_workbench_contract version="7">',
   '<bash_workbench_contract version="6">',
   '<bash_workbench_contract version="5">',
   '<bash_workbench_contract version="4">',
@@ -15,7 +16,7 @@ const LEGACY_CONTRACT_MARKERS = [
   '<bash_workbench_contract version="2">',
   '<bash_workbench_contract version="1">'
 ];
-const CONTRACT_MARKER = '<bash_workbench_contract version="7">';
+const CONTRACT_MARKER = '<bash_workbench_contract version="8">';
 const LEGACY_CONFIGURATION_INDEX_MARKERS = [
   '<configuration_directory_index_contract version="4">',
   '<configuration_directory_index_contract version="3">',
@@ -31,6 +32,8 @@ export const BASH_WORKBENCH_CONTRACT = [
   "`native_bash` 仅管理员私聊和已认证管理员 Web Chat 可用。`docker_bash` 使用隔离工作区，真实 QQ 会话均可按本轮工具权限使用；它可以在 `/workbench` 内读取、创建、修改、移动和删除文件，也可以从网络下载业务所需文件，但 Native workbench 投影、Skill 和 MCP 始终只读，且不能访问 Docker socket 或其他宿主路径。不得借此扩大工具实际授予的会话权限或路径权限。",
   "`generate_img` 和 `selfie` 的 `referenceImagePaths` 可以直接接收 Bash 返回的当前 Agent 授权 Workbench 图片路径；相对路径或该 Workbench 内的绝对路径都可原样传入。Native Bash 使用宿主真实绝对路径，Docker Bash 使用 `/workbench/...`，Native 只读投影使用 `/workbench/native-workbench/...`。不得改写为 URL、Base64、媒体句柄，也不得猜测或传入其他宿主路径。",
   "任务涉及制定或维护计划文件、聊天文件、网络下载、文件转换、压缩打包或其他需要文件系统落盘的工作时，优先使用本轮可用的 Bash 工具在该 cwd 内完成。聊天文件先用 `export_chat_media` 导出，Docker Bash 如需修改则从 `native-workbench/` 复制到 `/workbench`；完成后使用 `send_file` 把当前会话 workbench 内的成品返回当前单聊或群聊，不要把应交付的文件只留在临时目录、聊天正文或其他路径。",
+  "管理员要求安装 Skill 时，在 `native_bash` 的当前 Native workbench 内准备并检查来源，把包含 `SKILL.md` 的 Skill 目录打成 ZIP，然后依次运行 `sunabot-skill install --archive <relative-zip>`、`sunabot-skill review --skill <skill-id> --approve`、`sunabot-skill enable --skill <skill-id>` 和 `sunabot-skill status --skill <skill-id>`。替换同 ID Skill 时只在管理员明确要求后给 install 增加 `--replace`。每一步都使用前一步返回的真实 `skillId`，失败时停止并报告错误码，不得直接编辑 `skills/index.json` 或声称只能完成源码准备。",
+  "`sunabot-skill` 是 Native Bash 中当前 Agent 的受管 Skill 仓库命令，只对管理员私聊和已认证管理员 Web Chat 开放；安装只读取 Native workbench 内无符号链接、无多硬链接且不超过 16 MiB 的相对 ZIP，审查会独立检查完整内容并把批准绑定到摘要，启用后从下一轮通过 `activate_skill` 使用。当前轮的 Skill 目录与工具定义已冻结，不能把本轮刚安装的 Skill 当成本轮已经激活。",
   "开始文件工作前，先检查 cwd 根目录是否存在 `index.md`；存在时优先读取，并把它作为当前文件工作区的入口说明。",
   "</bash_workbench_contract>"
 ].join("\n");

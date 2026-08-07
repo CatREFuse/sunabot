@@ -60,6 +60,11 @@ interface RestrictedParseResult {
   reason: string;
 }
 
+export interface BashSingleArgvParseResult {
+  argv?: string[];
+  reason: string;
+}
+
 const decimal = (value: string) => /^\d+$/.test(value);
 const byteCount = (value: string) => /^\d+[bkmgtpezy]?$/i.test(value);
 const safeDirectoryMode = (value: string) => {
@@ -207,7 +212,7 @@ export function restrictedDenialReason(command: string) {
 }
 
 export function parseRestrictedCommand(command: string): RestrictedParseResult {
-  const parsed = parseSingleArgv(command);
+  const parsed = parseBashSingleArgv(command);
   if (!parsed.argv) return { reason: parsed.reason };
   const [name, ...args] = parsed.argv;
   if (!name || /^[A-Za-z_][A-Za-z0-9_]*=/.test(name)) {
@@ -228,7 +233,7 @@ export function parseRestrictedCommand(command: string): RestrictedParseResult {
   };
 }
 
-function parseSingleArgv(command: string): { argv?: string[]; reason: string } {
+export function parseBashSingleArgv(command: string): BashSingleArgvParseResult {
   if (/[\u0000\r\n;&|<>`\\$*?\[\]{}()!#~]/.test(command)) {
     return { reason: "受限 Bash 不允许 shell 连接、重定向、展开、通配符或转义。" };
   }

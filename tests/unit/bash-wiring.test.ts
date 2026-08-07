@@ -40,6 +40,7 @@ import type { ProviderCompleteOptions } from "../../adapters/model/openaiProvide
 import { RegistryProviderToolExecutor } from "../../adapters/model/provider/toolExecutor.js";
 import { BashApprovalStore, type BashAuditInput, type BashAuditResult } from "../../services/tools/bashAudit.js";
 import type { RuntimeToolCapabilityResolver } from "../../services/tools/bashCapability.js";
+import type { BashSkillRepositoryPort } from "../../services/tools/bashSkillRepository.js";
 import { runWorkspaceBash } from "../../services/tools/bashTool.js";
 import { SessionStore } from "../../services/sessions/sessionStore.js";
 import { SunaRuntime } from "../../src/runtime.js";
@@ -136,6 +137,26 @@ describe("workspace Bash runtime wiring", () => {
       undefined,
       "native"
     )).resolves.toBeUndefined();
+    harness.close();
+  });
+
+  it("binds the managed Skill repository only to the Native Bash handle", async () => {
+    const skillRepository = {
+      install: vi.fn(),
+      review: vi.fn(),
+      enable: vi.fn(),
+      status: vi.fn()
+    } as unknown as BashSkillRepositoryPort;
+    const harness = createRuntimeHarness(undefined, skillRepository);
+    const incoming = adminPrivateIncoming(harness.config);
+
+    const [native, docker] = await Promise.all([
+      harness.runtime.resolveProviderBashHandle(incoming, undefined, "native"),
+      harness.runtime.resolveProviderBashHandle(incoming, undefined, "docker")
+    ]);
+
+    expect(native?.skillRepository).toBe(skillRepository);
+    expect(docker).not.toHaveProperty("skillRepository");
     harness.close();
   });
 
@@ -737,7 +758,10 @@ describe("workspace Bash runtime wiring", () => {
   });
 });
 
-function createRuntimeHarness(capabilityResolver?: RuntimeToolCapabilityResolver) {
+function createRuntimeHarness(
+  capabilityResolver?: RuntimeToolCapabilityResolver,
+  bashSkillRepository?: BashSkillRepositoryPort
+) {
   const config = createAdminTestConfig("/tmp/sunabot-bash-wiring-runtime");
   const capabilityProbe = capabilityResolver ?? vi.fn(async () => ({ codex: true, workspaceBash: true }));
   const auditPort: RuntimeBashAuditPort = {
@@ -749,7 +773,8 @@ function createRuntimeHarness(capabilityResolver?: RuntimeToolCapabilityResolver
     attachmentService: {} as never,
     sessionStore: store,
     resolveToolCapabilities: capabilityProbe,
-    bashAudit: auditPort
+    bashAudit: auditPort,
+    bashSkillRepository
   });
   return { config, runtime, capabilityProbe: vi.mocked(capabilityProbe), auditPort, close: () => runtime.close() };
 }

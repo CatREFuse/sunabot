@@ -126,6 +126,7 @@ Tone delivery:
 Workbench resources:
 
 - [`dual-workbench-resource-addressing.md`](./dual-workbench-resource-addressing.md)
+- [`bash-skill-repository-install.md`](./bash-skill-repository-install.md)
 
 Codex artifacts:
 

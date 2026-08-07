@@ -43,6 +43,8 @@ describe("independent Bash audit", () => {
       .toContain("native backend runs as the Sunabot runtime OS user after approval");
     expect(nativeRequest.messages[0]?.content)
       .toContain("outsideAccesses must list only absolute paths outside every declared workbench");
+    expect(nativeRequest.messages[0]?.content)
+      .toContain("sunabot-skill is a host-managed current-Agent Skill repository command");
     expect(nativeRequest.messages[1]?.content).toContain('"docker":{"path":"$SUNABOT_DOCKER_WORKBENCH","access":"read-write"}');
     expect(request.messages[1]?.content).toContain('"native":{"path":"/workbench/native-workbench","access":"read-only"}');
   });

@@ -1,0 +1,1 @@
+export const MAX_SKILL_ARCHIVE_BYTES = 16 * 1024 * 1024;

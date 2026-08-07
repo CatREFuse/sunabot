@@ -32,6 +32,7 @@ export async function executeProviderBash(
     audit: bash.audit,
     approvalContext: bash.approvalContext,
     runtime: bash.runtime,
+    skillRepository: bash.skillRepository,
     ...(bash.confirmedApprovalId ? { confirmedApprovalId: bash.confirmedApprovalId } : {}),
     ...(options.signal ? { abortSignal: options.signal } : {})
   });

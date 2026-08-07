@@ -17,13 +17,14 @@ import {
   type AgentSkillIndex,
   type AgentSkillRecord
 } from "../../packages/contracts/extensions/agentExtensions.js";
+import { MAX_SKILL_ARCHIVE_BYTES } from "../../packages/contracts/extensions/agentExtensionLimits.js";
 import {
   DeterministicSkillReviewAuditRunner,
   type SkillReviewAuditRunnerPort,
   type SkillReviewPreparation
 } from "./skillReview.js";
 
-export const MAX_SKILL_ARCHIVE_BYTES = 16 * 1024 * 1024;
+export { MAX_SKILL_ARCHIVE_BYTES } from "../../packages/contracts/extensions/agentExtensionLimits.js";
 
 export interface AgentMcpCredentialStatusQuery {
   agentId: string;

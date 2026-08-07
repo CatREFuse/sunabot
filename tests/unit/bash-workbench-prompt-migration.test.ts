@@ -31,6 +31,11 @@ describe("conversation Bash workbench prompt contract", () => {
       expect((system as { content: string }).content).toContain("`referenceImagePaths`");
       expect((system as { content: string }).content).toContain("原样传入");
       expect((system as { content: string }).content).toContain("`selfie/references.jsonl`");
+      expect((system as { content: string }).content).toContain("`sunabot-skill install --archive <relative-zip>`");
+      expect((system as { content: string }).content).toContain("`sunabot-skill review --skill <skill-id> --approve`");
+      expect((system as { content: string }).content).toContain("`sunabot-skill enable --skill <skill-id>`");
+      expect((system as { content: string }).content).toContain("`sunabot-skill status --skill <skill-id>`");
+      expect((system as { content: string }).content).toContain("下一轮");
     }
   );
 
@@ -90,7 +95,7 @@ describe("conversation Bash workbench prompt contract", () => {
     const content = (migrated.messages[0] as { content: string }).content;
 
     expect(content).toContain("管理员自定义规则");
-    expect(content).toContain('<bash_workbench_contract version="7">');
+    expect(content).toContain('<bash_workbench_contract version="8">');
     expect(content).toContain('<configuration_directory_index_contract version="5">');
     expect(content).toContain("`selfie/references.jsonl`");
     expect(content).not.toContain('<bash_workbench_contract version="1">');
@@ -114,7 +119,7 @@ describe("conversation Bash workbench prompt contract", () => {
     const content = (migrated.messages[0] as { content: string }).content;
 
     expect(content).toContain("管理员自定义规则");
-    expect(content).toContain('<bash_workbench_contract version="7">');
+    expect(content).toContain('<bash_workbench_contract version="8">');
     expect(content).toContain("`export_chat_media`");
     expect(content).toContain("`send_file`");
     expect(content).not.toContain('<bash_workbench_contract version="3">');
@@ -137,7 +142,7 @@ describe("conversation Bash workbench prompt contract", () => {
     const content = (migrated.messages[0] as { content: string }).content;
 
     expect(content).toContain("管理员自定义规则");
-    expect(content).toContain('<bash_workbench_contract version="7">');
+    expect(content).toContain('<bash_workbench_contract version="8">');
     expect(content).toContain("`generate_img`");
     expect(content).toContain("`selfie`");
     expect(content).toContain("`referenceImagePaths`");
@@ -157,5 +162,27 @@ describe("conversation Bash workbench prompt contract", () => {
       { role: "developer", content: BASH_WORKBENCH_CONTRACT },
       { role: "user", content: "@{user.input}" }
     ]);
+  });
+
+  it("upgrades the persisted v7 contract to the managed Skill repository flow", () => {
+    const template: FinalPromptTemplate = {
+      messages: [{
+        role: "system",
+        content: [
+          "管理员自定义规则",
+          '<bash_workbench_contract version="7">\n旧 Workbench 规则\n</bash_workbench_contract>'
+        ].join("\n\n")
+      }],
+      tools: [],
+      response_format: { type: "text" }
+    };
+
+    const migrated = migrateConversationBashWorkbenchTemplate(template);
+    const content = (migrated.messages[0] as { content: string }).content;
+
+    expect(content).toContain("管理员自定义规则");
+    expect(content).toContain('<bash_workbench_contract version="8">');
+    expect(content).toContain("`sunabot-skill install --archive <relative-zip>`");
+    expect(content).not.toContain('<bash_workbench_contract version="7">');
   });
 });

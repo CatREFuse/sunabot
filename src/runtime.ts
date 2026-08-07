@@ -66,6 +66,7 @@ import type { BashExecutionBackend } from "../services/tools/bashAudit.js";
 import type { ConversationCapabilityContextV1 } from "../services/conversations/conversationCapability.js";
 import type { SystemConfigRuntimePort } from "../services/tools/systemConfigTool.js";
 import type { WorkspaceBashRuntimePort } from "../services/tools/bashRuntime.js";
+import type { BashSkillRepositoryPort } from "../services/tools/bashSkillRepository.js";
 import type { ReplyTaskGate } from "../services/orchestration/broadcastStormDetector.js";
 import { runWithAgentRuntimeContext } from "../packages/platform/runtimeAgentContext.js";
 import type { RuntimeAgentExtensionsPort } from "./runtime/agentExtensions.js";
@@ -107,6 +108,7 @@ export class SunaRuntime {
   readonly dreams: RuntimeDreams;
   readonly bashAudit?: RuntimeBashAuditPort;
   readonly bashRuntime?: WorkspaceBashRuntimePort;
+  readonly bashSkillRepository?: BashSkillRepositoryPort;
   private readonly rawToolCapabilityResolver?: RuntimeToolCapabilityResolver;
   readonly systemConfig?: SystemConfigRuntimePort;
   readonly agentExtensions?: RuntimeAgentExtensionsPort;
@@ -133,6 +135,7 @@ export class SunaRuntime {
       this.rawToolCapabilityResolver = options.resolveToolCapabilities;
       this.bashAudit = options.bashAudit;
       this.bashRuntime = options.bashRuntime;
+      this.bashSkillRepository = options.bashSkillRepository;
       this.systemConfig = options.systemConfig;
       this.agentExtensions = options.agentExtensions;
       this.replyTaskGate = options.replyTaskGate ?? { canCreateTaskFor: () => true };

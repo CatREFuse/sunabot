@@ -38,11 +38,7 @@ import {
   type WorkspaceBashReadOnlyMounts,
   type WorkspaceBashSandboxOptions
 } from "./bashSandbox.js";
-import {
-  type WorkspaceBashRuntimeErrorCode,
-  type WorkspaceBashRuntimeExecutionResult,
-  type WorkspaceBashRuntimePort
-} from "./bashRuntime.js";
+import type { WorkspaceBashRuntimePort } from "./bashRuntime.js";
 import {
   isBashConfigurationCurrent,
   normalizeBashCommand,
@@ -50,6 +46,25 @@ import {
   normalizeBashUserRequest,
   validateBasicBashCommand
 } from "./bashToolInput.js";
+import {
+  OUTSIDE_READ_APPROVAL_GUARANTEE,
+  blockedResult,
+  configurationStaleResult,
+  runtimeExecutionResult,
+  sanitizeAuditResult,
+  truncateOutput,
+  visibleBashText,
+  withOutsideReadApprovalGuarantee,
+  type WorkspaceBashResult
+} from "./bashToolResult.js";
+import {
+  BashSkillRepositoryCommandError,
+  executeBashSkillRepositoryCommand,
+  isBashSkillRepositoryPort,
+  parseBashSkillRepositoryCommand,
+  type BashSkillRepositoryCommand,
+  type BashSkillRepositoryPort
+} from "./bashSkillRepository.js";
 import {
   dockerBashTool,
   nativeBashTool
@@ -62,38 +77,12 @@ export {
   nativeBashTool
 } from "./bashToolDefinition.js";
 
-const MAX_OUTPUT_CHARS = 24_000;
-const OUTSIDE_READ_APPROVAL_GUARANTEE = "仅授权读取既存 canonical regular file；完整父链身份已冻结，并会在只读 bind 前复验。";
-
 export interface WorkspaceBashInput {
   command?: unknown;
   timeoutMs?: unknown;
 }
 
-export interface WorkspaceBashResult {
-  ok: boolean;
-  command: string;
-  cwd: string;
-  backend: BashExecutionBackend;
-  accessMode: BashAccessMode;
-  exitCode: number | null;
-  signal: string | null;
-  timedOut: boolean;
-  stdout: string;
-  stderr: string;
-  audit?: BashAuditResult;
-  approvalRequired?: boolean;
-  approvalId?: string;
-  approvalExpiresAt?: string;
-  confirmationText?: string;
-  approvalSummary?: string;
-  approvalAccesses?: Array<{ path: string; access: "read" | "write" | "delete" }>;
-  cleanupAttempted?: boolean;
-  cleanupSucceeded?: boolean;
-  cleanupError?: "BASH_DOCKER_CLEANUP_FAILED";
-  errorCode?: WorkspaceBashRuntimeErrorCode;
-  retryAfterMs?: number;
-}
+export type { WorkspaceBashResult } from "./bashToolResult.js";
 
 export interface WorkspaceBashOptions {
   backend?: BashExecutionBackend;
@@ -109,6 +98,7 @@ export interface WorkspaceBashOptions {
   isCurrent?: () => boolean;
   sandbox?: WorkspaceBashSandboxOptions;
   runtime?: WorkspaceBashRuntimePort;
+  skillRepository?: BashSkillRepositoryPort;
   /** @deprecated Retained until the runtime configuration migration is committed. */
   workspaceOnly?: boolean;
   /** @deprecated Deterministic policy and the audit agent replace keyword matching. */
@@ -128,6 +118,7 @@ export interface WorkspaceBashProviderOptions {
   approvalContext: BashApprovalContext;
   confirmedApprovalId?: string;
   runtime?: WorkspaceBashRuntimePort;
+  skillRepository?: BashSkillRepositoryPort;
 }
 
 /** @deprecated Use dockerBashTool. */
@@ -152,7 +143,8 @@ export function isWorkspaceBashProviderOptions(value: unknown): value is Workspa
     "audit",
     "approvalContext",
     "confirmedApprovalId",
-    "runtime"
+    "runtime",
+    "skillRepository"
   ]);
   if (Object.keys(options).some((key) => !allowedKeys.has(key))) return false;
   if (
@@ -182,6 +174,10 @@ export function isWorkspaceBashProviderOptions(value: unknown): value is Workspa
     !options.runtime
     || typeof options.runtime !== "object"
     || typeof (options.runtime as WorkspaceBashRuntimePort).execute !== "function"
+  )) return false;
+  if (options.skillRepository !== undefined && !isBashSkillRepositoryPort(options.skillRepository)) return false;
+  if (options.skillRepository !== undefined && (
+    options.backend !== "native" || options.accessMode !== "admin" || options.isAdmin !== true
   )) return false;
   return options.confirmedApprovalId === undefined
     || (typeof options.confirmedApprovalId === "string" && /^bash-[a-f0-9]{24}$/.test(options.confirmedApprovalId));
@@ -232,6 +228,39 @@ export async function runWorkspaceBash(
   const basicReason = validateBasicBashCommand(command);
   if (basicReason) return blockedResult(command, workbenchRoot, backend, accessMode, basicReason);
 
+  let skillRepositoryCommand: BashSkillRepositoryCommand | undefined;
+  try {
+    skillRepositoryCommand = parseBashSkillRepositoryCommand(command);
+  } catch (error) {
+    if (error instanceof BashSkillRepositoryCommandError) {
+      return blockedResult(
+        command,
+        workbenchRoot,
+        backend,
+        accessMode,
+        `${error.code}: ${error.message}`
+      );
+    }
+    throw error;
+  }
+  if (skillRepositoryCommand && (
+    backend !== "native"
+    || accessMode !== "admin"
+    || !isAdmin
+    || !options.approvalContext
+    || !isValidBashApprovalContext(options.approvalContext)
+    || options.approvalContext.backend !== "native"
+    || !options.skillRepository
+  )) {
+    return blockedResult(
+      command,
+      workbenchRoot,
+      backend,
+      accessMode,
+      "BASH_SKILL_REPOSITORY_NATIVE_ADMIN_REQUIRED: Skill repository commands require Native Bash in an administrator private conversation."
+    );
+  }
+
   if (!options.audit) {
     return blockedResult(command, workbenchRoot, backend, accessMode, "BASH_AUDIT_UNAVAILABLE: no independent audit runner is configured.");
   }
@@ -272,6 +301,46 @@ export async function runWorkspaceBash(
   });
   if (policy.decision === "deny") {
     return blockedResult(command, workbenchRoot, backend, accessMode, policy.reason, audit);
+  }
+  if (skillRepositoryCommand && policy.decision !== "allow") {
+    return blockedResult(
+      command,
+      workbenchRoot,
+      backend,
+      accessMode,
+      "BASH_SKILL_REPOSITORY_AUDIT_DENIED: managed Skill repository commands require an allow audit decision.",
+      audit
+    );
+  }
+
+  if (skillRepositoryCommand && options.skillRepository && options.approvalContext) {
+    if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
+    try {
+      await verifyWorkbenchIdentities(workbenchIdentities);
+    } catch {
+      if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
+      return blockedResult(
+        command,
+        workbenchRoot,
+        backend,
+        accessMode,
+        "BASH_WORKBENCH_CHANGED: current Agent workbench changed before execution.",
+        audit
+      );
+    }
+    if (!isBashConfigurationCurrent(options.isCurrent)) return stale(audit);
+    return executeBashSkillRepositoryCommand({
+      command,
+      managed: skillRepositoryCommand,
+      agentId: options.approvalContext.agentId,
+      workbenchRoot,
+      backend,
+      accessMode,
+      audit,
+      repository: options.skillRepository,
+      abortSignal: options.abortSignal,
+      isCurrent: options.isCurrent
+    });
   }
 
   let frozenRestrictedPaths: FrozenRestrictedPath[] = [];
@@ -684,109 +753,4 @@ function cleanupInvocation(cleanup: NonNullable<WorkspaceBashInvocation["cleanup
       finish(false);
     }
   });
-}
-
-function runtimeExecutionResult(
-  result: WorkspaceBashRuntimeExecutionResult,
-  options: Pick<ExecuteCommandOptions, "command" | "workbenchRoot" | "backend" | "accessMode" | "audit">
-): WorkspaceBashResult {
-  const cleanupFailed = result.cleanupAttempted === true && result.cleanupSucceeded === false;
-  const stderr = cleanupFailed && !result.stderr.includes("BASH_DOCKER_CLEANUP_FAILED")
-    ? [result.stderr, "BASH_DOCKER_CLEANUP_FAILED: Docker container cleanup could not be verified."].filter(Boolean).join("\n")
-    : result.stderr;
-  return {
-    ok: result.ok,
-    command: sanitizeHostText(options.command, options.workbenchRoot),
-    cwd: WORKSPACE_BASH_VIRTUAL_ROOT,
-    backend: options.backend,
-    accessMode: options.accessMode,
-    exitCode: result.exitCode,
-    signal: result.signal,
-    timedOut: result.timedOut,
-    stdout: truncateOutput(sanitizeHostText(result.stdout, options.workbenchRoot)),
-    stderr: truncateOutput(sanitizeHostText(stderr, options.workbenchRoot)),
-    audit: sanitizeAuditResult(options.audit, options.workbenchRoot),
-    cleanupAttempted: result.cleanupAttempted,
-    cleanupSucceeded: result.cleanupSucceeded,
-    cleanupError: cleanupFailed ? "BASH_DOCKER_CLEANUP_FAILED" : undefined,
-    errorCode: result.errorCode,
-    retryAfterMs: result.retryAfterMs
-  };
-}
-
-function configurationStaleResult(
-  command: string,
-  workbenchRoot: string,
-  backend: BashExecutionBackend,
-  accessMode: BashAccessMode,
-  audit?: BashAuditResult
-) {
-  return blockedResult(
-    command,
-    workbenchRoot,
-    backend,
-    accessMode,
-    "BASH_CONFIGURATION_STALE: Bash configuration changed before execution.",
-    audit
-  );
-}
-
-function blockedResult(
-  command: string,
-  workbenchRoot: string,
-  backend: BashExecutionBackend,
-  accessMode: BashAccessMode,
-  reason: string,
-  audit?: BashAuditResult
-): WorkspaceBashResult {
-  return {
-    ok: false,
-    command: sanitizeHostText(command, workbenchRoot),
-    cwd: WORKSPACE_BASH_VIRTUAL_ROOT,
-    backend,
-    accessMode,
-    exitCode: null,
-    signal: null,
-    timedOut: false,
-    stdout: "",
-    stderr: sanitizeHostText(reason, workbenchRoot),
-    audit: audit ? sanitizeAuditResult(audit, workbenchRoot) : undefined
-  };
-}
-
-function sanitizeAuditResult(audit: BashAuditResult, workbenchRoot: string): BashAuditResult {
-  return {
-    ...audit,
-    outsideAccesses: audit.outsideAccesses.map((access) => ({
-      ...access,
-      path: sanitizeHostText(access.path, workbenchRoot)
-    })),
-    violations: audit.violations.map((violation) => sanitizeHostText(violation, workbenchRoot)),
-    summary: sanitizeHostText(audit.summary, workbenchRoot)
-  };
-}
-
-function withOutsideReadApprovalGuarantee(audit: BashAuditResult): BashAuditResult {
-  if (audit.summary.includes(OUTSIDE_READ_APPROVAL_GUARANTEE)) return audit;
-  return { ...audit, summary: `${audit.summary} ${OUTSIDE_READ_APPROVAL_GUARANTEE}` };
-}
-
-function sanitizeHostText(value: string, workbenchRoot: string) {
-  if (!workbenchRoot) return value;
-  const agentWorkspace = path.dirname(workbenchRoot);
-  return [
-    [workbenchRoot, WORKSPACE_BASH_VIRTUAL_ROOT],
-    [agentWorkspace, "/agent-workspace"]
-  ].reduce((text, [hostPath, virtualPath]) => hostPath && hostPath !== "/"
-    ? text.split(hostPath).join(virtualPath)
-    : text, value);
-}
-
-function visibleBashText(value: string, options: Pick<ExecuteCommandOptions, "exposeHostPaths" | "workbenchRoot">) {
-  return options.exposeHostPaths ? value : sanitizeHostText(value, options.workbenchRoot);
-}
-
-function truncateOutput(value: string) {
-  if (value.length <= MAX_OUTPUT_CHARS) return value;
-  return `${value.slice(0, MAX_OUTPUT_CHARS)}\n[truncated]`;
 }

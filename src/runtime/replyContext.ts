@@ -10,6 +10,7 @@ import {
 } from "../../services/tools/bashAudit.js";
 import type { RuntimeToolCapabilityResolver } from "../../services/tools/bashCapability.js";
 import type { WorkspaceBashRuntimePort } from "../../services/tools/bashRuntime.js";
+import type { BashSkillRepositoryPort } from "../../services/tools/bashSkillRepository.js";
 import {
   resolveConversationWorkbench,
   type ConversationCapabilityContextV1
@@ -42,6 +43,7 @@ interface RuntimeReplyContextHost extends RuntimeConfigPort {
   readonly attachmentService: Pick<AttachmentService, "cache">;
   readonly bashAudit?: RuntimeBashAuditPort;
   readonly bashRuntime?: WorkspaceBashRuntimePort;
+  readonly bashSkillRepository?: BashSkillRepositoryPort;
   adminIdentity(): AdminIdentity;
   contextMessageLimit(): number;
   loadMessageDetails(
@@ -324,6 +326,9 @@ export async function runtime_resolveProviderBashHandle(
         return result;
       },
       ...(this.bashRuntime ? { runtime: this.bashRuntime } : {}),
+      ...(candidate.backend === "native" && this.bashSkillRepository
+        ? { skillRepository: this.bashSkillRepository }
+        : {}),
       ...(candidate.confirmedApprovalId ? { confirmedApprovalId: candidate.confirmedApprovalId } : {})
     });
     if (this.configEpoch !== epoch) continue;

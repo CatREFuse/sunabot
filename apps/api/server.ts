@@ -225,6 +225,7 @@ export async function buildApp(options: CreateAppOptions = {}): Promise<BuiltApp
     resolveToolCapabilities,
     bashAudit,
     bashRuntime,
+    bashSkillRepository: agentExtensions.bashSkillRepository,
     systemConfig: systemConfigRuntime,
     agentExtensions: runtimeAgentExtensions,
     replyTaskGate: broadcastStormDetector,

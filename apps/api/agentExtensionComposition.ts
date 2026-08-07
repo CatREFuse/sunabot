@@ -20,12 +20,17 @@ import {
 } from "../../adapters/mcp/public.js";
 import {
   AgentExtensionService,
+  AgentExtensionServiceError,
   AgentMcpHost,
   McpToolApprovalTransactions,
   SkillActivationService,
   buildSkillCatalog,
   type McpRuntimeClientFactory
 } from "../../services/extensions/public.js";
+import {
+  projectBashSkillRepositoryRecord,
+  type BashSkillRepositoryPort
+} from "../../services/tools/bashSkillRepository.js";
 import {
   BUILTIN_SKILL_TOOL_CAPABILITIES,
   UNAVAILABLE_SKILL_TOOL_CAPABILITIES,
@@ -126,6 +131,42 @@ export function buildAgentExtensionComposition(options: AgentExtensionCompositio
     } : undefined
   );
   const mcpRuntimeService = new McpRuntimeService(store, host, options.agentExists, approvals);
+  const bashSkillRepository: BashSkillRepositoryPort = {
+    async install(input) {
+      const record = await service.installSkill({
+        agentId: input.agentId,
+        archive: input.archive,
+        replace: input.replace
+      });
+      await notifyAgentChanged(input.agentId);
+      return projectBashSkillRepositoryRecord(record);
+    },
+    async review(input) {
+      const record = await service.reviewSkill({
+        agentId: input.agentId,
+        skillId: input.skillId,
+        approve: true
+      });
+      await notifyAgentChanged(input.agentId);
+      return projectBashSkillRepositoryRecord(record);
+    },
+    async enable(input) {
+      const record = await service.setSkillEnabled({
+        agentId: input.agentId,
+        skillId: input.skillId,
+        enabled: true
+      });
+      await notifyAgentChanged(input.agentId);
+      return projectBashSkillRepositoryRecord(record);
+    },
+    async status(input) {
+      const record = (await service.overview(input.agentId)).skills.find((skill) => skill.id === input.skillId);
+      if (!record) {
+        throw new AgentExtensionServiceError(404, "SKILL_NOT_FOUND", "Skill 不存在。", "skillId");
+      }
+      return projectBashSkillRepositoryRecord(record);
+    }
+  };
   const mcpOAuthService = oauth ? new McpOAuthAdminService({
     repository: store,
     oauth: oauth.service,
@@ -136,6 +177,7 @@ export function buildAgentExtensionComposition(options: AgentExtensionCompositio
   return {
     service,
     runtime,
+    bashSkillRepository,
     mcpRuntimeService,
     mcpOAuthService,
     ensureBundledSkills(agentId: string) {
