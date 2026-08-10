@@ -117,6 +117,7 @@ Current-message media:
 - [`parse-failed-attachment-export.md`](./parse-failed-attachment-export.md)
 - [`user-private-attachment-docker-workbench.md`](./user-private-attachment-docker-workbench.md)
 - [`current-message-image-reference.md`](./current-message-image-reference.md)
+- [`external-reference-image-addresses.md`](./external-reference-image-addresses.md)
 - [`current-message-image-4k-retry-budget.md`](./current-message-image-4k-retry-budget.md)
 - [`generated-image-aspect-preservation.md`](./generated-image-aspect-preservation.md)
 - [`cases/workbench-resources/admin-group-imports.md`](./cases/workbench-resources/admin-group-imports.md)

@@ -8,7 +8,7 @@
 
 ## 1. 目标
 
-新增内置 `webfetch` 工具，使 Agent 可以读取单个公开网页的主要内容，并以有界 Markdown 返回给当前 Provider turn。能力必须覆盖服务端直出 HTML 和依赖 JavaScript 渲染的动态网页，同时控制模型输入 token，阻止 SSRF、重定向绕过、DNS rebinding、网页提示词注入和本地数据外发组合。
+新增内置 `webfetch` 工具，使 Agent 可以读取任意 HTTP(S) 网页的主要内容，并以有界 Markdown 返回给当前 Provider turn。能力必须覆盖服务端直出 HTML 和依赖 JavaScript 渲染的动态网页，同时控制模型输入 token、重定向次数、响应预算和网页提示词注入。
 
 本次设计固定以下产品边界：
 
@@ -177,17 +177,17 @@ flowchart TD
 所有请求优先走 Core 的轻量静态抓取：
 
 1. 使用 WHATWG `URL` 解析并生成 canonical URL；移除 fragment，保留页面查询参数；
-2. 禁止 userinfo，端口仅允许空、80 或 443；
-3. 解析全部 A/AAAA 记录并完成公共地址校验，再将本次连接绑定到已校验地址；
-4. 每次重定向重新解析、重新校验并重新绑定，最多 5 跳；
+2. 接受任意带主机名的 HTTP(S) URL，不按地址、端口、userinfo、DNS 或 Fake-IP 筛除目标；
+3. 使用常规网络解析和连接；
+4. 每次重定向重新解析 HTTP(S) URL，最多 5 跳；
 5. 不携带用户 Cookie、Authorization、Referer 或浏览器历史，只发送固定 User-Agent、`Accept: text/html` 与受限语言头；
-6. 单次连接超时 10 秒，首次连接失败后最多重试 3 次；DNS、重定向、全部连接尝试和正文读取共享静态阶段 90 秒总预算，解压后响应正文最多 4 MiB；
+6. 单次连接超时 10 秒，首次连接失败后最多重试 3 次；重定向、全部连接尝试和正文读取共享静态阶段 90 秒总预算，解压后响应正文最多 4 MiB；
 7. 只接受最终响应为 HTML 的内容类型，拒绝下载附件和 MIME 嗅探得到的二进制；
 8. 将 HTML 交给 Defuddle，启用 Markdown、正文评分、隐藏元素移除、导航清理和小图移除，固定 `useAsync: false`；
 9. 绝对化正文链接，去除 `data:` 图片、跟踪参数、空链接、表单控件、脚本、样式、隐藏文本与重复导航；
 10. 得到标准化 Markdown、标题、正文长度与质量信号。
 
-Core 不能使用普通 `fetch(url)` 完成安全抓取后再信任结果。安全 adapter 必须控制 DNS、实际连接地址、重定向和流式字节上限，保证检查目标与连接目标一致。
+静态 adapter 直接使用解析后的 URL 建立连接，并负责重定向、请求超时和流式字节上限。
 
 ### 4.2 动态页面识别
 
@@ -199,7 +199,7 @@ Core 不能使用普通 `fetch(url)` 完成安全抓取后再信任结果。安�
 - JSON-LD、标题或 description 表明页面存在正文，但抽取结果没有对应内容；
 - 静态抽取只得到导航、登录提示或加载占位，正文质量分低于阈值。
 
-以下情况不能触发动态降级：URL、安全解析、DNS、重定向、响应体积或 MIME 校验失败。动态浏览器不能成为绕过静态安全门禁的第二条任意访问路径。
+以下情况不能触发动态降级：URL 协议、重定向、响应体积或 MIME 校验失败。动态浏览器不改变这些资源边界。
 
 静态与动态结果都存在时按同一质量函数比较，保留标题一致、正文密度更高、重复更少的一份。不能拼接两份正文，避免重复内容消耗 token。
 
@@ -310,21 +310,11 @@ score = 0.55 × BM25
 
 ### 7.1 URL 与网络边界
 
-静态 adapter、动态服务和动态服务的强制代理必须独立执行同一 URL policy：
-
-- 拒绝 loopback、private、link-local、multicast、unspecified、benchmark、documentation、reserved、IPv4-mapped IPv6、NAT64 映射私网及云 metadata 地址；
-- 拒绝十进制、八进制、十六进制、混合编码、尾点、Unicode 混淆和超长 hostname 绕过；
-- 校验 DNS 返回的全部地址，任一地址不公开则整次拒绝；
-- 系统 DNS 不可用或全部结果命中 Clash `198.18.0.0/15` Fake-IP 时，通过证书覆盖的固定 Cloudflare DoH IP 重新取得 A/AAAA；已验证公网结果使用 15 秒、最多 256 域名的进程内 LRU，并合并同域并发解析，随后仍按同一公网地址规则校验并固定连接；直接输入或普通 DNS 返回该保留网段继续拒绝；
-- 每次跳转和每个浏览器子请求重新校验；
-- DNS 校验结果与实际 socket 目标绑定，不能在校验后重新按 hostname 自由解析；
-- 禁止请求宿主回环服务、Compose 私有服务、NapCat、OneBot、管理台、动态服务自身、云 metadata 和 Agent MCP 服务；
-- 只允许安全方法 GET，不接受请求体，不自动重试非幂等行为；
-- 所有解压、DOM 构造和 Markdown 转换均受字节、节点数、深度、时间和内存限制。
+静态 adapter、动态服务和动态服务的代理接受所有带主机名的 HTTP(S) 地址来源，包括回环、私网、保留网段、云 metadata、IPv4-mapped IPv6 和 Fake-IP；不执行公共地址判定、DoH 回退、DNS 固定或目标服务黑名单。每次跳转和浏览器子请求都保留各自的 URL 协议解析。代理只允许 GET、不接受请求体、不自动重试非幂等行为；所有解压、DOM 构造和 Markdown 转换仍受字节、节点数、深度、时间和内存限制。
 
 ### 7.2 工具组合边界
 
-`webfetch` 不参与工具组合互斥。它可与 `read_file`、`write_file`、`send_file`、`native_bash`、`docker_bash`、`memory_recall`、Skill 本地资源、`system_config`、`cron`、MCP 和 deferred 工具在同一 Provider turn 的不同模型轮次顺序执行；每次调用继续独立执行 URL、DNS、重定向和响应预算校验。
+`webfetch` 不参与工具组合互斥。它可与 `read_file`、`write_file`、`send_file`、`native_bash`、`docker_bash`、`memory_recall`、Skill 本地资源、`system_config`、`cron`、MCP 和 deferred 工具在同一 Provider turn 的不同模型轮次顺序执行；每次调用继续独立执行 URL 协议、重定向和响应预算校验。
 
 `websearch` 后使用 `webfetch` 属于两个出站网络工具，可以在同一 turn 顺序执行；它们仍受全局工具调用上限、取消信号和响应预算限制。
 
@@ -383,7 +373,7 @@ NapCat 继续使用独立容器。`webfetch-renderer` 不进入 NapCat、Core �
 | 工具目录与执行接线 | `services/tools/toolRegistry.ts`, `adapters/model/provider/contracts.ts`, `adapters/model/provider/toolExecutor.ts` | capability、inline 执行和五种 Provider 共用入口 |
 | 工具组合 | `adapters/model/provider/toolRound.ts`, `adapters/model/provider/toolExecutor.ts` | 与其他已启用工具顺序执行，不设置来源分类互斥 |
 | 领域服务 | `services/webfetch/webFetchService.ts`, `services/webfetch/contentBlocks.ts`, `services/webfetch/relevanceSelector.ts` | 流程编排、分块、匹配、预算和结果契约 |
-| 静态 adapter | `adapters/webfetch/safeHttpFetcher.ts`, `adapters/webfetch/defuddleExtractor.ts` | DNS-pinned HTTP、重定向、字节限制和正文抽取 |
+| 静态 adapter | `adapters/webfetch/safeHttpFetcher.ts`, `adapters/webfetch/defuddleExtractor.ts` | 直接 HTTP(S) 请求、重定向、字节限制和正文抽取 |
 | 动态 client | `adapters/webfetch/dynamicRendererClient.ts` | 有界内部调用、取消、错误映射和健康检查 |
 | 动态 service | `apps/webfetch-renderer/` | Chromium 生命周期、请求拦截、DOM 稳定判断和有界输出 |
 | 运行与打包 | `deploy/docker/`, `tooling/runtime/launcher.mjs`, `tooling/runtime/native-webfetch-renderer*.mjs`, `sunabot.sh` | 平台选择、renderer 镜像与 Native 进程、鉴权、缓存、回环端口、残留回收和 doctor |
@@ -398,12 +388,12 @@ NapCat 继续使用独立容器。`webfetch-renderer` 不进入 NapCat、Core �
 
 - 注册 `webfetch`，加入 Agent 工具目录、会话工具策略和不可覆盖的 canonical schema；
 - 实现 discriminated-union 输入校验和稳定错误码；
-- 实现 DNS-pinned GET、逐跳重定向、MIME、超时和响应体限制；
+- 实现直接 GET、逐跳重定向、MIME、超时和响应体限制；
 - 接入 Defuddle，锁定依赖版本并禁用第三方 async fallback；
 - 实现 Markdown 规范化、固定结果预算、进程内缓存和请求日志安全投影；
 - 将工具加入 outbound-network preflight，并完成五种 Provider 合同测试。
 
-阶段验收：普通静态文章可以返回有界 Markdown；全部非法参数与 SSRF 样例在网络请求前失败；网页恶意指令只能出现在不可信正文中。
+阶段验收：普通静态文章可以返回有界 Markdown；非 HTTP(S) 地址在网络请求前失败，回环、私网和 Fake-IP 地址会进入实际请求；网页恶意指令只能出现在不可信正文中。
 
 ### 阶段二：相关内容匹配
 
@@ -422,7 +412,7 @@ NapCat 继续使用独立容器。`webfetch-renderer` 不进入 NapCat、Core �
 - 扩展 `sunabot.sh`、launcher、status、logs 和 doctor；
 - 完成无 workspace/secret 挂载、非 root、只读文件系统及资源上限检查。
 
-阶段验收：测试 SPA 在服务端空壳、客户端填充正文后可以抓取；轮询页面不会因等待 `networkidle` 卡死；动态服务停机时返回明确降级状态；浏览器子请求不能访问私网目标。
+阶段验收：测试 SPA 在服务端空壳、客户端填充正文后可以抓取；轮询页面不会因等待 `networkidle` 卡死；动态服务停机时返回明确降级状态；浏览器 HTTP 子请求保持请求数和字节预算。
 
 ### 阶段四：全链路验证与规范收口
 
@@ -441,7 +431,7 @@ NapCat 继续使用独立容器。`webfetch-renderer` 不进入 NapCat、Core �
 | 动态网页 | SPA 空壳、延迟 XHR、持续轮询、客户端重定向、渲染超时 | 正文可读，等待有绝对上限，失败码稳定，不返回浏览器诊断正文 |
 | 语义匹配 | 精确词、同标题、多段命中、中文无空格、无命中、长代码块 | 相关块召回、文档顺序稳定、邻接上下文有界，无命中不回退整页 |
 | Token | 原始 HTML、完整清理正文、匹配正文三组统计 | 95 分位严格低于宿主预算；匹配模式的中位返回 token 不高于完整正文的 40% |
-| SSRF | IPv4/IPv6 私网、metadata、混合编码、恶意 DNS、跳转到私网、动态子请求私网 | 静态、动态和代理三层均失败关闭，实际 socket 不连接被拒绝目标 |
+| 地址来源 | IPv4/IPv6 私网、metadata、混合编码、Fake-IP、跳转到私网、动态子请求私网 | 静态、动态和代理三层均接受地址并发起请求，重定向、超时与字节边界保持生效 |
 | 注入 | 页面正文伪装 system/developer/tool、要求泄露本地文件、伪造 evidencePolicy | 内容保留为外部证据，宿主策略不可覆盖，模型不得执行网页指令 |
 | 工具组合 | webfetch 与文件/Bash/记忆/Skill/MCP 本地资源同批及跨轮；websearch 后 webfetch | 全部组合可按调用上限顺序执行，各工具保留自身参数与权限校验 |
 | 取消与并发 | 调用方取消、同 URL 合并、全部等待者取消、动态服务重启 | 无悬挂请求、浏览器 context 或未清理临时数据；单个等待者取消不破坏其他等待者 |
@@ -465,7 +455,7 @@ NapCat 继续使用独立容器。`webfetch-renderer` 不进入 NapCat、Core �
 - 模型侧只有约定的三个字段，且 `query` 的条件关系由宿主强制执行；
 - 静态与动态网页均通过真实冒烟，动态服务具有清晰的独立部署和故障状态；
 - 语义匹配在标注语料上达到召回和 token 门槛；
-- SSRF、DNS rebinding、重定向、子资源、响应炸弹和提示词注入专项全部通过；
+- HTTP(S) 地址来源、重定向、子资源、响应炸弹和提示词注入专项全部通过；
 - 五种 Provider 使用同一执行和 preflight 安全语义；
 - `npm run runtime:contract`、相关单元/集成测试、`npm run check`、`npm run build` 和 `npm run verify` 通过；
 - 当前规范、功能—代码文件索引、验证标准和部署文档已同步；

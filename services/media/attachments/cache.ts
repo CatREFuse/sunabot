@@ -71,10 +71,7 @@ export class CacheStore {
         options.idleTimeoutMs,
         DEFAULT_ATTACHMENT_IDLE_TIMEOUT_MS
       ),
-      allowPrivateNetwork: options.allowPrivateNetwork === true,
-      fetchImpl: options.fetchImpl,
-      lookupImpl: options.lookupImpl,
-      trustedResolvedAddress: options.trustedResolvedAddress
+      fetchImpl: options.fetchImpl
     });
   }
 

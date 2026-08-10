@@ -3,7 +3,7 @@ import {
   type DynamicRendererPort
 } from "../../services/webfetch/public.js";
 import { readRendererAuthToken, validateRendererAuthToken } from "./rendererAuth.js";
-import { resolvePublicWebTarget } from "./urlPolicy.js";
+import { resolveWebTarget } from "./urlPolicy.js";
 
 const RENDER_TIMEOUT_MS = 15_000;
 const MAX_RENDER_RESPONSE_BYTES = 4 * 1024 * 1024;
@@ -57,7 +57,7 @@ export class HttpDynamicRendererClient implements DynamicRendererPort {
       throw new WebFetchError("DYNAMIC_RENDER_FAILED", "Renderer returned an invalid response.");
     }
     try {
-      const finalUrl = (await resolvePublicWebTarget(value.finalUrl)).url.href;
+      const finalUrl = resolveWebTarget(value.finalUrl).url.href;
       return { html: value.html, finalUrl };
     } catch {
       throw new WebFetchError("URL_NOT_ALLOWED", "Renderer returned an invalid URL.");

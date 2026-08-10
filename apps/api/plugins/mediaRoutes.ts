@@ -6,7 +6,6 @@ import { lookup } from "node:dns/promises";
 import { Agent, fetch as undiciFetch } from "undici";
 import type { FastifyInstance } from "fastify";
 import { applicationDataStore } from "../../../adapters/sqlite/applicationDataStore.js";
-import { isTrustedQqFakeIp } from "../../../adapters/onebot/qqMedia.js";
 import { WORKSPACE_LAYOUT } from "../../../packages/platform/workspaceLayout.js";
 import type {
   RequestLogBusinessNode,
@@ -310,7 +309,7 @@ async function loadRemoteImage(
   const signal = AbortSignal.timeout(REMOTE_IMAGE_TIMEOUT_MS);
 
   for (let redirectCount = 0; redirectCount <= REMOTE_IMAGE_MAX_REDIRECTS; redirectCount += 1) {
-    const addresses = await assertPublicRemoteUrl(currentUrl, signal, lookupHostname);
+    const addresses = await resolveRemoteImageUrl(currentUrl, signal, lookupHostname);
     let transport: Awaited<ReturnType<MediaPinnedRequest>>;
     try {
       transport = await requestRemoteImage(currentUrl, {
@@ -372,17 +371,14 @@ async function loadRemoteImage(
   throw new AdminApiError(502, "IMAGE_LOAD_FAILED", "图片加载失败。");
 }
 
-async function assertPublicRemoteUrl(url: URL, signal: AbortSignal, lookupHostname: MediaHostnameLookup) {
-  if ((url.protocol !== "http:" && url.protocol !== "https:") || url.username || url.password) {
+async function resolveRemoteImageUrl(url: URL, signal: AbortSignal, lookupHostname: MediaHostnameLookup) {
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
     badRequest("IMAGE_URL_INVALID", "图片地址无效。", "url");
   }
 
   const hostname = url.hostname.replace(/^\[|\]$/g, "").replace(/\.$/, "").toLowerCase();
-  if (!hostname || hostname === "localhost" || hostname.endsWith(".localhost") || hostname.endsWith(".local")) {
-    badRequest("IMAGE_URL_PRIVATE", "图片地址不能指向本地网络。", "url");
-  }
+  if (!hostname) badRequest("IMAGE_URL_INVALID", "图片地址无效。", "url");
   if (net.isIP(hostname)) {
-    if (!isPublicIpAddress(hostname)) badRequest("IMAGE_URL_PRIVATE", "图片地址不能指向本地网络。", "url");
     return [{ address: hostname, family: net.isIP(hostname) as 4 | 6 }];
   }
 
@@ -395,9 +391,8 @@ async function assertPublicRemoteUrl(url: URL, signal: AbortSignal, lookupHostna
   }
   const pinned = addresses.map(({ address, family }) => ({ address, family: (family ?? net.isIP(address)) as 4 | 6 }));
   if (!pinned.length || pinned.some(({ address, family }) =>
-    (family !== 4 && family !== 6) || net.isIP(address) !== family ||
-    (!isPublicIpAddress(address) && !isTrustedQqFakeIp(hostname, address)))) {
-    badRequest("IMAGE_URL_PRIVATE", "图片地址不能指向本地网络。", "url");
+    (family !== 4 && family !== 6) || net.isIP(address) !== family)) {
+    throw new AdminApiError(502, "IMAGE_LOAD_FAILED", "图片域名无法解析。");
   }
   return pinned;
 }
@@ -441,37 +436,6 @@ async function promiseWithAbort<T>(operation: Promise<T>, signal: AbortSignal) {
   });
 }
 
-function isPublicIpAddress(address: string) {
-  const family = net.isIP(address);
-  if (family === 4) return isPublicIpv4(address);
-  if (family !== 6) return false;
-
-  const normalized = address.toLowerCase();
-  const mapped = normalized.match(/^(?:0*:)*ffff:(?:(\d+\.\d+\.\d+\.\d+)|([0-9a-f]{1,4}):([0-9a-f]{1,4}))$/i);
-  if (mapped?.[1]) return isPublicIpv4(mapped[1]);
-  if (mapped?.[2] && mapped[3]) {
-    const high = Number.parseInt(mapped[2], 16);
-    const low = Number.parseInt(mapped[3], 16);
-    return isPublicIpv4(`${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`);
-  }
-
-  const firstHextet = Number.parseInt(normalized.split(":", 1)[0] || "0", 16);
-  return firstHextet >= 0x2000 && firstHextet <= 0x3fff && !normalized.startsWith("2001:db8:") && !normalized.startsWith("2002:");
-}
-
-function isPublicIpv4(address: string) {
-  const octets = address.split(".").map(Number);
-  if (octets.length !== 4 || octets.some((value) => !Number.isInteger(value) || value < 0 || value > 255)) return false;
-  const [a = 0, b = 0, c = 0] = octets;
-  if (a === 0 || a === 10 || a === 127 || a >= 224) return false;
-  if (a === 100 && b >= 64 && b <= 127) return false;
-  if (a === 169 && b === 254) return false;
-  if (a === 172 && b >= 16 && b <= 31) return false;
-  if (a === 192 && (b === 0 || b === 168 || (b === 88 && c === 99))) return false;
-  if (a === 198 && (b === 18 || b === 19 || (b === 51 && c === 100))) return false;
-  if (a === 203 && b === 0 && c === 113) return false;
-  return true;
-}
 
 async function readLimitedResponseBody(response: Response, maxBytes: number) {
   if (!response.body) throw new AdminApiError(502, "IMAGE_LOAD_FAILED", "图片响应为空。");

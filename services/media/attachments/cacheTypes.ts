@@ -14,7 +14,6 @@ export type AttachmentCacheErrorCode =
   | "redirect_limit"
   | "storage_exhausted"
   | "too_large"
-  | "unsafe_url"
   | "write_failed";
 
 export class AttachmentCacheError extends Error {
@@ -82,22 +81,10 @@ export interface CacheStoreOptions {
   idleTimeoutMs?: number;
   minimumFreeBytes?: number;
   unreferencedTtlMs?: number;
-  allowPrivateNetwork?: boolean;
   fetchImpl?: typeof fetch;
-  lookupImpl?: AttachmentDnsLookup;
   statfsImpl?: AttachmentStatFs;
   now?: () => Date;
-  trustedResolvedAddress?: (hostname: string, address: string) => boolean;
 }
-
-export interface AttachmentDnsLookupRecord {
-  address: string;
-  family: number;
-}
-
-export type AttachmentDnsLookup = (
-  hostname: string
-) => Promise<readonly AttachmentDnsLookupRecord[]>;
 
 export interface AttachmentStatFsSnapshot {
   bavail: number | bigint;

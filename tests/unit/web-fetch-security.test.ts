@@ -1,10 +1,8 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import {
-  isPublicIp,
-  lookupWebFetchDns,
-  parsePublicWebUrl,
-  resolvePublicWebTarget
+  parseWebUrl,
+  resolveWebTarget
 } from "../../adapters/webfetch/urlPolicy.js";
 import {
   fetchSafeHtml,
@@ -16,7 +14,7 @@ import { RendererLimiter, RendererQueueFullError } from "../../apps/webfetch-ren
 import { rejectConnect } from "../../apps/webfetch-renderer/safeProxy.js";
 import { Readable, type Duplex } from "node:stream";
 
-describe("WebFetch URL policy", () => {
+describe("WebFetch URL handling", () => {
   it("allows up to 90 seconds for the complete static fetch", () => {
     expect(WEBFETCH_STATIC_TIMEOUT_MS).toBe(90_000);
     expect(WEBFETCH_CONNECT_TIMEOUT_MS).toBe(10_000);
@@ -35,7 +33,6 @@ describe("WebFetch URL policy", () => {
       });
 
     await expect(fetchSafeHtml("https://retry.test/", {
-      lookup: async () => [{ address: "93.184.216.34", family: 4 }],
       request
     })).resolves.toMatchObject({ status: 200 });
     expect(request).toHaveBeenCalledTimes(4);
@@ -45,163 +42,52 @@ describe("WebFetch URL policy", () => {
     const request = vi.fn(async () => { throw new Error("ECONNRESET"); });
 
     await expect(fetchSafeHtml("https://retry.test/", {
-      lookup: async () => [{ address: "93.184.216.34", family: 4 }],
       request
     })).rejects.toMatchObject({ code: "CONTENT_EXTRACTION_FAILED" });
     expect(request).toHaveBeenCalledTimes(4);
   });
 
-  it("rejects non-web schemes, credentials, custom ports and trailing-dot hosts", () => {
+  it("accepts every HTTP(S) address form", () => {
     for (const url of [
-      "file:///etc/passwd",
-      "ftp://example.com/file",
+      "http://127.0.0.1:19090/file",
       "https://user:secret@example.com/",
       "https://example.com:8443/",
       "https://example.com./",
       "https://ｅxample.com/"
-    ]) expect(() => parsePublicWebUrl(url)).toThrow();
+    ]) expect(() => parseWebUrl(url)).not.toThrow();
   });
 
-  it("rejects private, mapped and transition addresses", () => {
-    for (const address of [
-      "127.0.0.1",
-      "10.0.0.1",
-      "169.254.169.254",
-      "::1",
-      "fc00::1",
-      "::ffff:127.0.0.1",
-      "::ffff:5db8:d822",
-      "64:ff9b::7f00:1",
-      "2002:7f00:1::",
-      "2001:0:4136:e378:8000:63bf:3fff:fdd2"
-    ]) expect(isPublicIp(address), address).toBe(false);
-    expect(isPublicIp("93.184.216.34")).toBe(true);
-    expect(isPublicIp("2606:2800:220:1:248:1893:25c8:1946")).toBe(true);
+  it("rejects only unsupported URL schemes", () => {
+    for (const url of ["file:///etc/passwd", "ftp://example.com/file", "not-a-url"]) {
+      expect(() => parseWebUrl(url)).toThrow();
+    }
   });
 
-  it("fails closed when any DNS answer is private or its family is inconsistent", async () => {
-    await expect(resolvePublicWebTarget("https://example.com", async () => [
-      { address: "93.184.216.34", family: 4 },
-      { address: "127.0.0.1", family: 4 }
-    ])).rejects.toMatchObject({ code: "TARGET_NOT_PUBLIC" });
-
-    await expect(resolvePublicWebTarget("https://example.com", async () => [
-      { address: "2606:2800:220:1:248:1893:25c8:1946", family: 4 }
-    ])).rejects.toMatchObject({ code: "TARGET_NOT_PUBLIC" });
-
-    await expect(resolvePublicWebTarget("https://example.com", async () => [
-      { address: "93.184.216.34", family: 0 }
-    ])).rejects.toMatchObject({ code: "TARGET_NOT_PUBLIC" });
-
-    await expect(resolvePublicWebTarget("https://example.com", async () => [
-      { address: "93.184.216.34", family: 4 }
-    ])).resolves.toMatchObject({
-      url: expect.objectContaining({ protocol: "https:" }),
-      addresses: [{ address: "93.184.216.34", family: 4 }]
-    });
+  it("accepts loopback, private, reserved and Fake-IP targets without DNS filtering", () => {
+    for (const url of [
+      "http://127.0.0.1/",
+      "http://10.0.0.1/",
+      "http://169.254.169.254/latest/meta-data",
+      "http://192.168.1.2/",
+      "http://198.18.2.186/",
+      "http://[::1]/",
+      "http://[fc00::1]/"
+    ]) expect(resolveWebTarget(url).url.href).toBe(url);
   });
 
-  it("replaces Clash Fake-IP DNS answers through bounded DoH without weakening literal IP policy", async () => {
-    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
-      const type = new URL(String(input)).searchParams.get("type");
-      return new Response(JSON.stringify({
-        Status: 0,
-        Answer: type === "1"
-          ? [{ type: 1, data: "93.184.216.34" }]
-          : [{ type: 28, data: "2606:2800:220:1:248:1893:25c8:1946" }]
-      }), { headers: { "content-type": "application/dns-json" } });
-    });
-    const records = await lookupWebFetchDns(
-      "example.com",
-      async () => [{ address: "198.18.2.186", family: 4 }],
-      fetchImpl as typeof fetch
-    );
-
-    expect(records).toEqual([
-      { address: "93.184.216.34", family: 4 },
-      { address: "2606:2800:220:1:248:1893:25c8:1946", family: 6 }
-    ]);
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
-    expect(() => parsePublicWebUrl("http://198.18.2.186/")).not.toThrow();
-    await expect(resolvePublicWebTarget("http://198.18.2.186/"))
-      .rejects.toMatchObject({ code: "TARGET_NOT_PUBLIC" });
-  });
-
-  it("single-flights and briefly caches verified public DoH answers", async () => {
-    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
-      await Promise.resolve();
-      const type = new URL(String(input)).searchParams.get("type");
-      return new Response(JSON.stringify({
-        Status: 0,
-        Answer: type === "1"
-          ? [{ type: 1, data: "93.184.216.34" }]
-          : [{ type: 28, data: "2606:2800:220:1:248:1893:25c8:1946" }]
-      }));
-    });
-    const systemLookup = vi.fn(async () => [{ address: "198.18.9.9", family: 4 }]);
-
-    const [first, second] = await Promise.all([
-      lookupWebFetchDns("singleflight-webfetch.test", systemLookup, fetchImpl as typeof fetch),
-      lookupWebFetchDns("singleflight-webfetch.test", systemLookup, fetchImpl as typeof fetch)
-    ]);
-    const third = await lookupWebFetchDns(
-      "singleflight-webfetch.test",
-      systemLookup,
-      fetchImpl as typeof fetch
-    );
-
-    expect(first).toEqual(second);
-    expect(third).toEqual(first);
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
-    expect(systemLookup).toHaveBeenCalledTimes(3);
-  });
-
-  it("falls back to bounded DoH when system DNS is unavailable", async () => {
-    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
-      const type = new URL(String(input)).searchParams.get("type");
-      return new Response(JSON.stringify({
-        Status: 0,
-        Answer: type === "1"
-          ? [{ type: 1, data: "93.184.216.34" }]
-          : []
-      }));
-    });
-
-    await expect(lookupWebFetchDns(
-      "system-dns-unavailable.test",
-      async () => { throw new Error("ENOTFOUND"); },
-      fetchImpl as typeof fetch
-    )).resolves.toEqual([{ address: "93.184.216.34", family: 4 }]);
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
-  });
-
-  it("uses a verified public family when the other DoH family times out", async () => {
-    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
-      const type = new URL(String(input)).searchParams.get("type");
-      if (type === "28") throw new Error("AAAA timeout");
-      return new Response(JSON.stringify({
-        Status: 0,
-        Answer: [{ type: 1, data: "93.184.216.34" }]
-      }));
-    });
-
-    await expect(lookupWebFetchDns(
-      "partial-doh-family.test",
-      async () => [],
-      fetchImpl as typeof fetch
-    )).resolves.toEqual([{ address: "93.184.216.34", family: 4 }]);
-  });
-
-  it("includes DNS resolution in the static fetch deadline", async () => {
-    const lookup = vi.fn((_hostname: string, signal?: AbortSignal) => new Promise<never>((_resolve, reject) => {
+  it("uses the supplied target directly and keeps the static fetch deadline", async () => {
+    const request = vi.fn((_target: unknown, signal: AbortSignal) => new Promise<never>((_resolve, reject) => {
       signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
     }));
 
-    await expect(fetchSafeHtml("https://dns-timeout.test/", {
-      lookup,
+    await expect(fetchSafeHtml("http://127.0.0.1:19090/reference.html", {
+      request,
       timeoutMs: 20
     })).rejects.toMatchObject({ code: "FETCH_TIMEOUT" });
-    expect(lookup).toHaveBeenCalledWith("dns-timeout.test", expect.any(AbortSignal));
+    expect(request).toHaveBeenCalledWith(
+      expect.objectContaining({ url: expect.objectContaining({ hostname: "127.0.0.1", port: "19090" }) }),
+      expect.any(AbortSignal)
+    );
   });
 });
 

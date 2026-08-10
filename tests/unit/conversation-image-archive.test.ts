@@ -215,7 +215,6 @@ describe("conversation image archive", () => {
         })) as unknown as typeof fetch;
     const cache = new CacheStore(path.join(root, "cache"), {
       fetchImpl,
-      lookupImpl: async () => [{ address: "93.184.216.34", family: 4 }],
       minimumFreeBytes: 0,
       statfsImpl: async () => ({ bavail: 1_000_000, bsize: 4_096 })
     });

@@ -1,7 +1,7 @@
 import http from "node:http";
 import { randomUUID } from "node:crypto";
 import type { Duplex } from "node:stream";
-import { resolvePublicWebTarget } from "../../adapters/webfetch/urlPolicy.js";
+import { normalizedHostname, resolveWebTarget } from "../../adapters/webfetch/urlPolicy.js";
 
 const MAX_PROXY_RESPONSE_BYTES = 4 * 1024 * 1024;
 const MAX_RENDER_REQUESTS = 32;
@@ -71,14 +71,12 @@ async function proxyHttpRequest(
     return;
   }
   budget.requests += 1;
-  const target = await resolvePublicWebTarget(request.url ?? "");
+  const target = resolveWebTarget(request.url ?? "");
   if (target.url.protocol !== "http:") throw new Error("absolute HTTP proxy URL required");
-  const selected = target.addresses[0]!;
   const headers = sanitizedHeaders(request.headers, target.url.host);
   const upstream = http.request({
-    hostname: selected.address,
-    family: selected.family,
-    port: 80,
+    hostname: normalizedHostname(target.url),
+    port: target.url.port ? Number(target.url.port) : 80,
     method: "GET",
     path: `${target.url.pathname}${target.url.search}`,
     headers

@@ -57,6 +57,7 @@
 | `docs/user-tests/conversation-message-32-group.md` | 验证群聊默认提示词只接收最近 32 条原序历史消息 | 修改群聊上下文窗口、群聊提示词变量或默认上下文数量时读取 |
 | `docs/user-tests/card-message-conversation-history.md` | QQ 卡片标题、正文、群名、群号与动作进入可读对话历史 | 修改 JSON/XML/小程序等卡片消息解析或会话历史投影时读取 |
 | `docs/user-tests/current-message-image-reference.md` | 当前群消息图片以精确媒体句柄进入异步生图的用户用例 | 修改当前图片句柄、dispatch 快照或参考图解析时读取 |
+| `docs/user-tests/external-reference-image-addresses.md` | 外部参考图使用本地网络地址进入异步生图的用户用例 | 修改远程参考图下载地址处理时读取 |
 | `docs/user-tests/current-message-image-4k-retry-budget.md` | 当前私聊图片在预处理后以完整回复重试预算进入 4K 异步生图的用户用例 | 修改图片预处理、普通回复超时或 4K 生图派发时读取 |
 | `docs/user-tests/generated-image-aspect-preservation.md` | 生图结果完整适配目标画布并保持 QQ 出站字节一致的用户用例 | 修改生成图尺寸适配、落盘或 OneBot 图片外发时读取 |
 | `docs/user-tests/tone-segmented-more-than-three.md` | Tone 在内容需要时生成并发送三个以上文字气泡的用户用例 | 修改 Tone 气泡数量建议、分段门禁或发送时读取 |

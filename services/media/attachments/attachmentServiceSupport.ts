@@ -62,8 +62,7 @@ export function shouldTryGetFileFallback(error: unknown) {
     "idle_timeout",
     "invalid_url",
     "missing_response_body",
-    "redirect_limit",
-    "unsafe_url"
+    "redirect_limit"
   ].includes(error.code);
 }
 

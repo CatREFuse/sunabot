@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import Fastify from "fastify";
 import { chromium, type Browser, type Page } from "playwright";
-import { resolvePublicWebTarget } from "../../adapters/webfetch/urlPolicy.js";
+import { resolveWebTarget } from "../../adapters/webfetch/urlPolicy.js";
 import { readRendererAuthToken, rendererRequestAuthorized } from "../../adapters/webfetch/rendererAuth.js";
 import { RendererLimiter, RendererQueueFullError } from "./rendererLimiter.js";
 import { startSafeWebProxy } from "./safeProxy.js";
@@ -49,7 +49,7 @@ app.post<{ Body: { url?: unknown } }>("/render", async (request, reply) => {
   }
   let url: string;
   try {
-    url = (await resolvePublicWebTarget(request.body.url.trim())).url.href;
+    url = resolveWebTarget(request.body.url.trim()).url.href;
   } catch {
     reply.code(400).send({ ok: false, code: "URL_NOT_ALLOWED" });
     return;
@@ -151,7 +151,7 @@ async function render(
     try {
       parsed = new URL(request.url());
       if (parsed.protocol !== "http:") throw new Error("protocol");
-      await resolvePublicWebTarget(parsed, undefined, signal);
+      resolveWebTarget(parsed);
     } catch {
       await route.abort("blockedbyclient");
       return;
@@ -176,7 +176,7 @@ async function render(
     }).catch(() => undefined);
     await waitForStableBody(page, deadline);
     if (signal.aborted) throw signal.reason ?? new Error("Renderer request aborted.");
-    const finalUrl = (await resolvePublicWebTarget(page.url(), undefined, signal)).url.href;
+    const finalUrl = resolveWebTarget(page.url()).url.href;
     const html = await page.content();
     if (Buffer.byteLength(html, "utf8") > MAX_DOM_BYTES) throw new Error("rendered DOM too large");
     return { html, finalUrl };

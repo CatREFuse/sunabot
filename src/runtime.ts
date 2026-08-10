@@ -22,7 +22,6 @@ import { appendRequestLog } from "../adapters/observability/requestLog.js";
 import { WORKSPACE_LAYOUT } from "../packages/platform/workspaceLayout.js";
 import { SenderNameResolver } from "../services/conversations/senderName.js";
 import { cleanupPersistedCodexProcess, CodexToolRunner } from "../adapters/codex/codexTool.js";
-import { isTrustedQqFakeIp } from "../adapters/onebot/qqMedia.js";
 import {
   OutboxDisconnectedError,
   SessionCoordinator
@@ -141,8 +140,7 @@ export class SunaRuntime {
       this.replyTaskGate = options.replyTaskGate ?? { canCreateTaskFor: () => true };
       this.resolveAdminNotificationAccountId = options.resolveAdminNotificationAccountId;
       this.attachmentService = options.attachmentService ?? new AttachmentService(getRootDir(), {
-        cacheRoot: getAgentPrivatePath(config, WORKSPACE_LAYOUT.attachmentCache, "cache", "attachments"),
-        cacheOptions: { trustedResolvedAddress: isTrustedQqFakeIp }
+        cacheRoot: getAgentPrivatePath(config, WORKSPACE_LAYOUT.attachmentCache, "cache", "attachments")
       });
       this.ownsSessionStore = !options.sessionStore;
       this.sessionStore = options.sessionStore ?? new SessionStore({

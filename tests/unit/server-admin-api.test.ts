@@ -445,22 +445,25 @@ describe("admin API smoke", () => {
     "http://10.1.2.3/image.png",
     "http://192.168.1.10/image.png",
     "http://[::1]/image.png"
-  ])("rejects private image proxy targets: %s", async (imageUrl) => {
-    const app = await createApp(testAppOptions());
+  ])("loads local and private image proxy targets: %s", async (imageUrl) => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(new Uint8Array([1, 2, 3]), {
+      status: 200,
+      headers: { "content-type": "image/png", "content-length": "3" }
+    }));
+    const app = await createApp(testAppOptions({ mediaPinnedRequest: requestThroughGlobalFetch }));
     const response = await app.inject({
       method: "GET",
       url: `/api/media/image?url=${encodeURIComponent(imageUrl)}`,
       headers: ADMIN_HEADERS
     });
 
-    expect(response.statusCode).toBe(400);
-    expect(response.json()).toMatchObject({
-      error: { code: "IMAGE_URL_PRIVATE", field: "url" }
-    });
+    expect(response.statusCode).toBe(200);
+    expect(fetchMock).toHaveBeenCalledWith(new URL(imageUrl), expect.objectContaining({ redirect: "manual" }));
+    fetchMock.mockRestore();
     await app.close();
   });
 
-  it("loads QQ message images when the trusted CDN resolves through Clash fake IP", async () => {
+  it("loads QQ message images when the CDN resolves through Clash fake IP", async () => {
     const imageUrl = "https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=fixture&rkey=fixture";
     const mediaHostnameLookup = vi.fn(async () => [{ address: "198.18.0.226" }]);
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(new Uint8Array([1, 2, 3]), {
@@ -501,7 +504,7 @@ describe("admin API smoke", () => {
     await app.close();
   });
 
-  it("loads QQ user and group avatars through the dedicated trusted proxy", async () => {
+  it("loads QQ user and group avatars through the dedicated proxy", async () => {
     const mediaHostnameLookup = vi.fn(async () => [{ address: "8.8.8.8" }]);
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(new Uint8Array([1, 2, 3]), {
       status: 200,

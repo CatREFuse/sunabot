@@ -284,7 +284,7 @@ describe("AttachmentService integration", () => {
     expect(wrongSecond!.status).toBe("unsupported");
   }, 30_000);
 
-  it("falls back to adapter-provided file content when a resolved download URL is unsafe", async () => {
+  it("falls back to adapter-provided file content when a remote download fails", async () => {
     const body = Buffer.from("Fallback content from NapCat Base64", "utf8");
     const gateway = new FakeAttachmentSourcePort(undefined, {
       kind: "base64",
@@ -292,13 +292,12 @@ describe("AttachmentService integration", () => {
       via: "file_content"
     });
     const fetchMock = vi.fn(async () => {
-      throw new Error("Unsafe URL must be rejected before fetch.");
+      throw new Error("Remote download failed.");
     });
     const fetchImpl = fetchMock as unknown as typeof fetch;
     const cacheRoot = path.join(temporaryDirectory, "unsafe-url-fallback-cache");
     const cacheStore = new CacheStore(cacheRoot, {
       fetchImpl,
-      lookupImpl: async () => [{ address: "127.0.0.1", family: 4 }],
       minimumFreeBytes: 0
     });
     const service = new AttachmentService(temporaryDirectory, { cacheRoot, cacheStore });
@@ -313,7 +312,7 @@ describe("AttachmentService integration", () => {
 
     expect(attachment).toMatchObject({ status: "ready", format: "txt" });
     expect(context.text).toContain("Fallback content from NapCat Base64");
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledOnce();
     expect(gateway.fallbackCalls).toEqual([{ fileId: "fallback-file-id", file: undefined }]);
   }, 30_000);
 
@@ -570,7 +569,6 @@ function officeExtractCalls(workerRun: { mock: { calls: Array<readonly unknown[]
 function createAttachmentService(cacheName: string) {
   const cacheRoot = path.join(temporaryDirectory, cacheName);
   const cacheStore = new CacheStore(cacheRoot, {
-    allowPrivateNetwork: true,
     minimumFreeBytes: 0
   });
   return {

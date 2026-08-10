@@ -4,10 +4,9 @@ import { Transform, type Readable } from "node:stream";
 import { createBrotliDecompress, createGunzip, createInflate } from "node:zlib";
 import { WebFetchError } from "../../services/webfetch/contracts.js";
 import {
-  resolvePublicWebTarget,
+  resolveWebTarget,
   normalizedHostname,
-  type ResolvedPublicTarget,
-  type WebFetchDnsLookup
+  type ResolvedWebTarget
 } from "./urlPolicy.js";
 
 export const WEBFETCH_STATIC_TIMEOUT_MS = 90_000;
@@ -29,13 +28,12 @@ export interface SafeHttpResponse {
 }
 
 export type PinnedRequest = (
-  target: ResolvedPublicTarget,
+  target: ResolvedWebTarget,
   signal: AbortSignal
 ) => Promise<SafeHttpResponse>;
 
 export interface SafeHtmlFetchOptions {
   signal?: AbortSignal;
-  lookup?: WebFetchDnsLookup;
   request?: PinnedRequest;
   maxBytes?: number;
   timeoutMs?: number;
@@ -48,7 +46,7 @@ export async function fetchSafeHtml(input: string, options: SafeHtmlFetchOptions
   const request = options.request ?? requestPinnedTarget;
   try {
     for (let redirect = 0; redirect <= WEBFETCH_MAX_REDIRECTS; redirect += 1) {
-      const target = await resolvePublicWebTarget(current, options.lookup, signal);
+      const target = resolveWebTarget(current);
       const response = await requestWithRetries(target, signal, request);
       if (isRedirect(response.status)) {
         response.body.destroy();
@@ -93,7 +91,7 @@ export async function fetchSafeHtml(input: string, options: SafeHtmlFetchOptions
 }
 
 async function requestWithRetries(
-  target: ResolvedPublicTarget,
+  target: ResolvedWebTarget,
   signal: AbortSignal,
   request: PinnedRequest
 ) {
@@ -109,20 +107,20 @@ async function requestWithRetries(
 }
 
 export async function requestPinnedTarget(
-  target: ResolvedPublicTarget,
+  target: ResolvedWebTarget,
   signal: AbortSignal
 ): Promise<SafeHttpResponse> {
-  const selected = target.addresses[0]!;
   const transport = target.url.protocol === "https:" ? https : http;
+  const hostname = normalizedHostname(target.url);
+  const port = target.url.port ? Number(target.url.port) : target.url.protocol === "https:" ? 443 : 80;
   return new Promise((resolve, reject) => {
     const request = transport.request({
       protocol: target.url.protocol,
-      hostname: selected.address,
-      family: selected.family,
-      port: target.url.protocol === "https:" ? 443 : 80,
+      hostname,
+      port,
       path: `${target.url.pathname}${target.url.search}`,
       method: "GET",
-      servername: normalizedHostname(target.url),
+      ...(target.url.protocol === "https:" ? { servername: hostname } : {}),
       headers: {
         host: target.url.host,
         accept: "text/html,application/xhtml+xml;q=0.9",

@@ -8,7 +8,7 @@ import {
 } from "./defuddleExtractor.js";
 import { HttpDynamicRendererClient } from "./dynamicRendererClient.js";
 import { fetchSafeHtml } from "./safeHttpFetcher.js";
-import { parsePublicWebUrl, resolvePublicWebTarget } from "./urlPolicy.js";
+import { parseWebUrl, resolveWebTarget } from "./urlPolicy.js";
 
 export * from "./defuddleExtractor.js";
 export * from "./dynamicRendererClient.js";
@@ -25,10 +25,8 @@ export function createWebFetchService(options: WebFetchCompositionOptions = {}) 
     staticFetch: options.staticFetch ?? ((url, fetchOptions) => fetchSafeHtml(url, fetchOptions)),
     extract: options.extract ?? extractWebContent,
     contentIsSufficient: options.contentIsSufficient ?? webContentIsSufficient,
-    canonicalizeUrl: options.canonicalizeUrl ?? ((url) => parsePublicWebUrl(url).href),
-    validateRenderedUrl: options.validateRenderedUrl ?? (async (url) => (
-      await resolvePublicWebTarget(url)
-    ).url.href),
+    canonicalizeUrl: options.canonicalizeUrl ?? ((url) => parseWebUrl(url).href),
+    validateRenderedUrl: options.validateRenderedUrl ?? (async (url) => resolveWebTarget(url).url.href),
     now: options.now
   });
 }

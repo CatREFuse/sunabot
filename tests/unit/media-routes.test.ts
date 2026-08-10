@@ -17,16 +17,25 @@ afterEach(async () => {
 });
 
 describe("media API plugin", () => {
-  it("rejects private addresses from an injected DNS lookup before fetch", async () => {
+  it("loads private addresses returned by an injected DNS lookup", async () => {
     const app = Fastify();
     apps.push(app);
-    const fetchMock = vi.spyOn(globalThis, "fetch");
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(new Uint8Array([1, 2, 3]), {
+      status: 200,
+      headers: { "content-type": "image/jpeg", "content-length": "3" }
+    }));
     const lookupHostname = vi.fn(async () => [{ address: "127.0.0.1" }]);
+    const requestRemoteImage = vi.fn(async (url: URL, init: RequestInit) => ({
+      response: await fetch(url, init),
+      close: async () => undefined,
+      destroy: async () => undefined
+    }));
 
     registerMediaRoutes(app, {
       getConfig: () => defaultConfig(),
       runtime: {} as SunaRuntime,
-      lookupHostname
+      lookupHostname,
+      requestRemoteImage
     });
     const response = await app.inject({
       method: "GET",
@@ -34,8 +43,13 @@ describe("media API plugin", () => {
     });
 
     expect(lookupHostname).toHaveBeenCalledWith("media.example");
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect(response.statusCode).toBe(400);
+    expect(requestRemoteImage).toHaveBeenCalledWith(
+      new URL("https://media.example/image.jpg"),
+      expect.any(Object),
+      [{ address: "127.0.0.1", family: 4 }]
+    );
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(response.statusCode).toBe(200);
   });
 
   it("registers schemas, proxies binary media and records generated images", async () => {
