@@ -16,14 +16,14 @@
 
 ## 每日备份
 
-先使用统一入口停止 Core 与 NapCat，并确认没有第二个实例写数据库。需要保持显式 Core 模式时，在停止和恢复启动时使用相同的 `SUNABOT_CORE_MODE`：
+使用统一入口停止 Native Core 与全部 NapCat，并确认没有第二个实例写数据库：
 
 ```bash
-SUNABOT_CORE_MODE=docker ./sunabot.sh down
+./sunabot.sh down
 ./sunabot.sh doctor
 SUNABOT_WORKSPACE=/srv/sunabot/workspace npm run backup:create -- --quiesced
 SUNABOT_WORKSPACE=/srv/sunabot/workspace npm run backup:prune
-SUNABOT_CORE_MODE=docker ./sunabot.sh up
+./sunabot.sh up
 ```
 
 `backup:prune` 默认只输出计划。人工核对后才执行：
