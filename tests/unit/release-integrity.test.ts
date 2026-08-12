@@ -226,6 +226,7 @@ describe("Native release integrity", () => {
     expect(workflow).toContain("platform: linux-arm64");
     expect(workflow).toContain("npm run runtime:release -- --output=release");
     expect(workflow).toContain("Verify release artifact manifest");
+    expect(workflow).toContain("maxBuffer:16*1024*1024");
     expect(workflow).toContain("softprops/action-gh-release@v2");
     expect(workflow).toContain("tag_name: ${{ env.RELEASE_TAG }}");
     expect(workflow).toContain("files: release/*");
